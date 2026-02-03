@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+
+{% block title %}AI提问 - 天气健康风险预测系统{% endblock %}
+
+{% block content %}
+<div class="container">
+    <div class="row justify-content-center">
+        <div class="col-lg-8">
+            <div class="card shadow-sm">
+                <div class="card-body text-center py-5">
+                    <i class="bi bi-chat-dots display-5 text-primary"></i>
+                    <h3 class="mt-3">AI问答已升级为全站悬浮助手</h3>
+                    <p class="text-muted mb-4">请使用页面右下角的AI按钮进行提问，支持模型选择与对话记录。</p>
+                    <button class="btn btn-primary" id="openAiChat">
+                        <i class="bi bi-robot"></i> 打开AI助手
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+{% block extra_js %}
+<script>
+document.getElementById('openAiChat').addEventListener('click', function() {
+    if (window.AIChat && typeof window.AIChat.open === 'function') {
+        window.AIChat.open();
+    }
+});
+</script>
+{% endblock %}
+{% endblock %}

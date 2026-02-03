@@ -28,7 +28,7 @@ numpy==1.26.4
 scipy>=1.11.0
 
 # 机器学习（可选）
-scikit-learn>=1.3.0
+scikit-learn==1.7.2
 joblib>=1.3.0
 
 # 日期时间

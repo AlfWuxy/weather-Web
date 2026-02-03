@@ -101,6 +101,7 @@ def test_forecast_cache_prefers_redis(app, db_session):
 def test_short_code_action_resolve_pair(app, db_session):
     from services import public_service
     from core.db_models import PairLink, User
+    from core.extensions import db
     from core.security import hash_pair_token, hash_short_code
 
     with app.app_context():
@@ -130,7 +131,7 @@ def test_short_code_action_resolve_pair(app, db_session):
         assert pair is not None
         assert pair.short_code == short_code
 
-        refreshed = PairLink.query.get(link.id)
+        refreshed = db.session.get(PairLink, link.id)
         assert refreshed.status == 'redeemed'
         assert refreshed.redeemed_at is not None
 

@@ -141,9 +141,11 @@ remote_exec "cd $PROJECT_DIR && python3 -m venv $VENV_DIR && $VENV_DIR/bin/pip i
 
 echo ""
 echo "步骤6: 创建环境配置文件(如果不存在)..."
-remote_exec "if [ ! -f $PROJECT_DIR/.env ]; then SECRET_KEY_GEN=\$(python3 -c 'import secrets; print(secrets.token_hex(32))'); cat > $PROJECT_DIR/.env << EOF
+remote_exec "if [ ! -f $PROJECT_DIR/.env ]; then SECRET_KEY_GEN=\$(python3 -c 'import secrets; print(secrets.token_hex(32))'); PAIR_TOKEN_PEPPER_GEN=\$(python3 -c 'import secrets; print(secrets.token_hex(32))'); cat > $PROJECT_DIR/.env << EOF
 FLASK_ENV=production
+DEBUG=false
 SECRET_KEY=\$SECRET_KEY_GEN
+PAIR_TOKEN_PEPPER=\$PAIR_TOKEN_PEPPER_GEN
 QWEATHER_KEY=
 AMAP_KEY=
 EOF

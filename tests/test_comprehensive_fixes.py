@@ -104,6 +104,7 @@ def test_short_code_length_8(db_session):
 
 def test_redeemed_at_only_set_once(db_session):
     from core.db_models import PairLink, User
+    from core.extensions import db
     from core.security import hash_pair_token, hash_short_code
     from core.time_utils import utcnow_naive
     from services.public_service import _resolve_pair
@@ -131,7 +132,7 @@ def test_redeemed_at_only_set_once(db_session):
     assert pair is None
     assert error is not None
 
-    refreshed = PairLink.query.get(link.id)
+    refreshed = db.session.get(PairLink, link.id)
     assert refreshed.redeemed_at == original_redeemed_at
 
 
