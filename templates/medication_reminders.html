@@ -1,0 +1,157 @@
+{% extends "base.html" %}
+
+{% block title %}用药提醒管理 - 天气健康风险预测系统{% endblock %}
+
+{% block content %}
+<div class="container">
+    <div class="row mb-4">
+        <div class="col-12">
+            <h2><i class="bi bi-capsule"></i> 用药提醒管理</h2>
+            <p class="text-muted">根据天气变化提醒慢病患者用药</p>
+        </div>
+    </div>
+
+    <div class="row">
+        <div class="col-lg-5 mb-4">
+            <div class="card shadow-sm">
+                <div class="card-header bg-primary text-white">
+                    <h5 class="mb-0">添加提醒</h5>
+                </div>
+                <div class="card-body">
+                    <form method="POST" action="{{ url_for('health.medication_reminders') }}">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <div class="mb-3">
+                            <label class="form-label">药品名称</label>
+                            <input type="text" class="form-control" name="medicine_name" required>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">剂量/说明</label>
+                            <input type="text" class="form-control" name="dosage" placeholder="如：1片/次">
+                        </div>
+                        <div class="row">
+                            <div class="col-6 mb-3">
+                                <label class="form-label">频率</label>
+                                <select class="form-select" name="frequency">
+                                    <option value="daily">每日</option>
+                                    <option value="weekly">每周</option>
+                                </select>
+                            </div>
+                            <div class="col-6 mb-3">
+                                <label class="form-label">提醒时间</label>
+                                <input type="time" class="form-control" name="time_of_day">
+                            </div>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">适用成员</label>
+                            <select class="form-select" name="member_id">
+                                <option value="">本人</option>
+                                {% for member in members %}
+                                    <option value="{{ member.id }}">{{ member.name }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label">天气触发条件</label>
+                            <div class="row g-2">
+                                <div class="col-6">
+                                    <input type="number" class="form-control" name="high_temp" placeholder="高温≥(°C)">
+                                </div>
+                                <div class="col-6">
+                                    <input type="number" class="form-control" name="low_temp" placeholder="低温≤(°C)">
+                                </div>
+                                <div class="col-6">
+                                    <input type="number" class="form-control" name="high_humidity" placeholder="湿度≥(%)">
+                                </div>
+                                <div class="col-6">
+                                    <input type="number" class="form-control" name="high_aqi" placeholder="AQI≥">
+                                </div>
+                            </div>
+                            <small class="text-muted">满足任一条件即可触发提醒</small>
+                        </div>
+                        <button class="btn btn-primary w-100">添加提醒</button>
+                    </form>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-lg-7">
+            <div class="card shadow-sm">
+                <div class="card-header bg-light">
+                    <h5 class="mb-0">提醒列表</h5>
+                </div>
+                <div class="card-body">
+                    <div class="table-responsive">
+                        <table class="table table-striped align-middle">
+                            <thead>
+                                <tr>
+                                    <th>药品</th>
+                                    <th>剂量</th>
+                                    <th>频率</th>
+                                    <th>时间</th>
+                                    <th>成员</th>
+                                    <th>触发条件</th>
+                                    <th>操作</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for reminder in reminders %}
+                                <tr>
+                                    <td>{{ reminder.medicine_name }}</td>
+                                    <td>{{ reminder.dosage or '-' }}</td>
+                                    <td>{{ reminder.frequency or '-' }}</td>
+                                    <td>{{ reminder.time_of_day or '-' }}</td>
+                                    <td>
+                                        {% if reminder.member_id %}
+                                            {% if reminder.member_id in member_map %}
+                                                {{ member_map[reminder.member_id] }}
+                                            {% else %}
+                                                已删除成员
+                                            {% endif %}
+                                        {% else %}
+                                            本人
+                                        {% endif %}
+                                    </td>
+                                    <td>
+                                        {% if reminder.weather_triggers %}
+                                            {% set triggers = reminder.weather_triggers|from_json %}
+                                            {% if triggers.high_temp %}高温≥{{ triggers.high_temp }}°C {% endif %}
+                                            {% if triggers.low_temp %}低温≤{{ triggers.low_temp }}°C {% endif %}
+                                            {% if triggers.high_humidity %}湿度≥{{ triggers.high_humidity }}% {% endif %}
+                                            {% if triggers.high_aqi %}AQI≥{{ triggers.high_aqi }}{% endif %}
+                                        {% else %}
+                                            -
+                                        {% endif %}
+                                    </td>
+                                    <td>
+                                        <form method="POST" action="{{ url_for('health.medication_reminder_delete', reminder_id=reminder.id) }}" style="display:inline;">
+                                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                            <button class="btn btn-sm btn-outline-danger js-confirm-delete-reminder" type="submit">删除</button>
+                                        </form>
+                                    </td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                    {% if reminders|length == 0 %}
+                        <p class="text-muted mb-0">暂无提醒记录</p>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+document.querySelectorAll('.js-confirm-delete-reminder').forEach(button => {
+    button.addEventListener('click', function(event) {
+        if (!confirm('确定删除该提醒？')) {
+            event.preventDefault();
+        }
+    });
+});
+</script>
+{% endblock %}

@@ -1,0 +1,286 @@
+{% extends "base.html" %}
+
+{% block title %}编辑家庭成员 - 天气健康风险预测系统{% endblock %}
+
+{% block content %}
+<div class="container">
+    <div class="row mb-4">
+        <div class="col-12 d-flex justify-content-between align-items-center">
+            <h2><i class="bi bi-pencil"></i> 编辑家庭成员</h2>
+            <a class="btn btn-outline-secondary" href="{{ url_for('health.family_members') }}">返回列表</a>
+        </div>
+    </div>
+
+    <div class="card shadow-sm">
+        <div class="card-body">
+            <form method="POST" action="{{ url_for('health.family_member_edit', member_id=member.id) }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <div class="accordion" id="editMemberAccordion">
+                    <div class="accordion-item">
+                        <h2 class="accordion-header" id="editBasicHeading">
+                            <button class="accordion-button" type="button" data-bs-toggle="collapse" data-bs-target="#editBasic">
+                                基础信息
+                            </button>
+                        </h2>
+                        <div id="editBasic" class="accordion-collapse collapse show" data-bs-parent="#editMemberAccordion">
+                            <div class="accordion-body">
+                                <div class="mb-3">
+                                    <label class="form-label">姓名</label>
+                                    <input type="text" class="form-control" name="name" value="{{ member.name }}" required>
+                                </div>
+                                <div class="mb-3">
+                                    <label class="form-label">关系</label>
+                                    <input type="text" class="form-control" name="relation" value="{{ member.relation or '' }}">
+                                </div>
+                                <div class="row">
+                                    <div class="col-6 mb-3">
+                                        <label class="form-label">年龄</label>
+                                        <input type="number" class="form-control" name="age" value="{{ member.age or '' }}" min="0" max="120">
+                                    </div>
+                                    <div class="col-6 mb-3">
+                                        <label class="form-label">性别</label>
+                                        <select class="form-select" name="gender">
+                                            <option value="">请选择</option>
+                                            <option value="男性" {% if member.gender == '男性' %}selected{% endif %}>男性</option>
+                                            <option value="女性" {% if member.gender == '女性' %}selected{% endif %}>女性</option>
+                                        </select>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="accordion-item">
+                        <h2 class="accordion-header" id="editHealthHeading">
+                            <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#editHealth">
+                                健康信息
+                            </button>
+                        </h2>
+                        <div id="editHealth" class="accordion-collapse collapse" data-bs-parent="#editMemberAccordion">
+                            <div class="accordion-body">
+                                <div class="mb-3">
+                                    <label class="form-label">慢性病</label>
+                                    <div class="d-flex flex-wrap gap-2">
+                                        {% for item in chronic_options %}
+                                            <div class="form-check">
+                                                <input class="form-check-input" type="checkbox" name="chronic_diseases" value="{{ item }}" id="cd_edit_{{ loop.index }}"
+                                                       {% if item in chronic_diseases_list %}checked{% endif %}>
+                                                <label class="form-check-label" for="cd_edit_{{ loop.index }}">{{ item }}</label>
+                                            </div>
+                                        {% endfor %}
+                                    </div>
+                                    {% set other = namespace(items=[]) %}
+                                    {% for disease in chronic_diseases_list %}
+                                        {% if disease not in chronic_options %}
+                                            {% set _ = other.items.append(disease) %}
+                                        {% endif %}
+                                    {% endfor %}
+                                    <input type="text" class="form-control mt-2" name="chronic_disease_other" placeholder="其他慢性病（可选）" value="{{ other.items|join('、') }}">
+                                </div>
+                                <div class="mb-3">
+                                    <label class="form-label">过敏史</label>
+                                    <input type="text" class="form-control" name="allergies" value="{{ profile.allergies }}">
+                                </div>
+                                <div class="mb-3">
+                                    <label class="form-label">常用药</label>
+                                    <input type="text" class="form-control" name="medications" value="{{ profile.medications }}">
+                                </div>
+                                <div class="mb-3">
+                                    <label class="form-label">风险标签</label>
+                                    <div class="d-flex flex-wrap gap-2">
+                                        {% for item in risk_tag_options %}
+                                            <div class="form-check">
+                                                <input class="form-check-input" type="checkbox" name="risk_tags" value="{{ item }}" id="rt_edit_{{ loop.index }}"
+                                                       {% if item in profile.risk_tags %}checked{% endif %}>
+                                                <label class="form-check-label" for="rt_edit_{{ loop.index }}">{{ item }}</label>
+                                            </div>
+                                        {% endfor %}
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="accordion-item">
+                        <h2 class="accordion-header" id="editMetricsHeading">
+                            <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#editMetrics">
+                                体征指标
+                            </button>
+                        </h2>
+                        <div id="editMetrics" class="accordion-collapse collapse" data-bs-parent="#editMemberAccordion">
+                            <div class="accordion-body">
+                                {% set bp = profile.metrics.get('blood_pressure', '') %}
+                                {% set bp_sys = bp.split('/')[0] if '/' in bp else '' %}
+                                {% set bp_dia = bp.split('/')[1] if '/' in bp else '' %}
+                                <div class="row">
+                                    <div class="col-6 mb-3">
+                                        <label class="form-label">收缩压</label>
+                                        <input type="number" class="form-control" name="bp_sys" value="{{ bp_sys }}">
+                                    </div>
+                                    <div class="col-6 mb-3">
+                                        <label class="form-label">舒张压</label>
+                                        <input type="number" class="form-control" name="bp_dia" value="{{ bp_dia }}">
+                                    </div>
+                                </div>
+                                <div class="row">
+                                    <div class="col-6 mb-3">
+                                        <label class="form-label">血糖(mmol/L)</label>
+                                        <input type="number" step="0.1" class="form-control" name="blood_sugar" value="{{ profile.metrics.get('blood_sugar', '') }}">
+                                    </div>
+                                    <div class="col-6 mb-3">
+                                        <label class="form-label">心率(次/分)</label>
+                                        <input type="number" class="form-control" name="heart_rate" value="{{ profile.metrics.get('heart_rate', '') }}">
+                                    </div>
+                                </div>
+                                <div class="mb-3">
+                                    <label class="form-label">体重(kg)</label>
+                                    <input type="number" step="0.1" class="form-control" name="weight" value="{{ profile.metrics.get('weight', '') }}">
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="accordion-item">
+                        <h2 class="accordion-header" id="editWeatherHeading">
+                            <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#editWeather">
+                                天气敏感阈值与通知
+                            </button>
+                        </h2>
+                        <div id="editWeather" class="accordion-collapse collapse" data-bs-parent="#editMemberAccordion">
+                            <div class="accordion-body">
+                                <div class="row">
+                                    <div class="col-6 mb-3">
+                                        <label class="form-label">高温触发(°C)</label>
+                                        <input type="number" class="form-control" name="threshold_high_temp" value="{{ profile.weather_thresholds.get('high_temp', '') }}">
+                                    </div>
+                                    <div class="col-6 mb-3">
+                                        <label class="form-label">低温触发(°C)</label>
+                                        <input type="number" class="form-control" name="threshold_low_temp" value="{{ profile.weather_thresholds.get('low_temp', '') }}">
+                                    </div>
+                                    <div class="col-6 mb-3">
+                                        <label class="form-label">湿度触发(%)</label>
+                                        <input type="number" class="form-control" name="threshold_high_humidity" value="{{ profile.weather_thresholds.get('high_humidity', '') }}">
+                                    </div>
+                                    <div class="col-6 mb-3">
+                                        <label class="form-label">AQI触发</label>
+                                        <input type="number" class="form-control" name="threshold_high_aqi" value="{{ profile.weather_thresholds.get('high_aqi', '') }}">
+                                    </div>
+                                </div>
+                                {% set channels = profile.contact_prefs.get('channels', []) %}
+                                <div class="mb-3">
+                                    <label class="form-label">通知渠道</label>
+                                    <div class="d-flex flex-wrap gap-2">
+                                        <div class="form-check">
+                                            <input class="form-check-input" type="checkbox" name="notify_channels" value="站内通知" id="notify_site_edit" {% if '站内通知' in channels %}checked{% endif %}>
+                                            <label class="form-check-label" for="notify_site_edit">站内通知</label>
+                                        </div>
+                                        <div class="form-check">
+                                            <input class="form-check-input" type="checkbox" name="notify_channels" value="邮件" id="notify_email_edit" {% if '邮件' in channels %}checked{% endif %}>
+                                            <label class="form-check-label" for="notify_email_edit">邮件</label>
+                                        </div>
+                                        <div class="form-check">
+                                            <input class="form-check-input" type="checkbox" name="notify_channels" value="短信" id="notify_sms_edit" {% if '短信' in channels %}checked{% endif %}>
+                                            <label class="form-check-label" for="notify_sms_edit">短信</label>
+                                        </div>
+                                        <div class="form-check">
+                                            <input class="form-check-input" type="checkbox" name="notify_channels" value="微信" id="notify_wechat_edit" {% if '微信' in channels %}checked{% endif %}>
+                                            <label class="form-check-label" for="notify_wechat_edit">微信</label>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="row">
+                                    <div class="col-6 mb-3">
+                                        <label class="form-label">通知频率</label>
+                                        <select class="form-select" name="notify_frequency">
+                                            <option value="重要提醒" {% if profile.contact_prefs.get('frequency') == '重要提醒' %}selected{% endif %}>重要提醒</option>
+                                            <option value="每日" {% if profile.contact_prefs.get('frequency') == '每日' %}selected{% endif %}>每日</option>
+                                            <option value="每周" {% if profile.contact_prefs.get('frequency') == '每周' %}selected{% endif %}>每周</option>
+                                        </select>
+                                    </div>
+                                    <div class="col-6 mb-3">
+                                        <label class="form-label">静默时段</label>
+                                        <input type="text" class="form-control" name="quiet_hours" value="{{ profile.quiet_hours }}">
+                                    </div>
+                                </div>
+                                <div class="row">
+                                    <div class="col-6 mb-3">
+                                        <label class="form-label">高风险连续N天升级</label>
+                                        <input type="number" class="form-control" name="escalation_days" min="1" max="30" value="{{ profile.contact_prefs.get('escalation_days', '') }}">
+                                    </div>
+                                    <div class="col-6 mb-3">
+                                        <label class="form-label">同步通知家属</label>
+                                        <div class="form-check form-switch">
+                                            <input class="form-check-input" type="checkbox" name="notify_family" id="notify_family_edit" {% if profile.contact_prefs.get('notify_family') %}checked{% endif %}>
+                                            <label class="form-check-label" for="notify_family_edit">开启</label>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="form-check form-switch">
+                                    <input class="form-check-input" type="checkbox" name="alert_enabled" id="alert_enabled_edit" {% if profile.alert_enabled %}checked{% endif %}>
+                                    <label class="form-check-label" for="alert_enabled_edit">启用成员预警</label>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="accordion-item">
+                        <h2 class="accordion-header" id="editPrivacyHeading">
+                            <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#editPrivacy">
+                                隐私与共享
+                            </button>
+                        </h2>
+                        <div id="editPrivacy" class="accordion-collapse collapse" data-bs-parent="#editMemberAccordion">
+                            <div class="accordion-body">
+                                <div class="mb-3">
+                                    <label class="form-label">隐私级别</label>
+                                    <select class="form-select" name="privacy_level">
+                                        <option value="family" {% if profile.privacy_level == 'family' %}selected{% endif %}>家庭可见</option>
+                                        <option value="private" {% if profile.privacy_level == 'private' %}selected{% endif %}>仅本人可见</option>
+                                        <option value="doctor" {% if profile.privacy_level == 'doctor' %}selected{% endif %}>授权医生可见</option>
+                                        <option value="community" {% if profile.privacy_level == 'community' %}selected{% endif %}>社区管理员可见</option>
+                                    </select>
+                                </div>
+                                <div class="row">
+                                    <div class="col-6 mb-3">
+                                        <label class="form-label">联系人电话</label>
+                                        <input type="text" class="form-control" name="contact_phone" value="{{ profile.contact_prefs.get('phone', '') }}">
+                                    </div>
+                                    <div class="col-6 mb-3">
+                                        <label class="form-label">微信号</label>
+                                        <input type="text" class="form-control" name="contact_wechat" value="{{ profile.contact_prefs.get('wechat', '') }}">
+                                    </div>
+                                </div>
+                                <div class="row">
+                                    <div class="col-6 mb-3">
+                                        <label class="form-label">紧急联系人</label>
+                                        <input type="text" class="form-control" name="emergency_name" value="{{ profile.contact_prefs.get('emergency_name', '') }}">
+                                    </div>
+                                    <div class="col-6 mb-3">
+                                        <label class="form-label">紧急电话</label>
+                                        <input type="text" class="form-control" name="emergency_phone" value="{{ profile.contact_prefs.get('emergency_phone', '') }}">
+                                    </div>
+                                </div>
+                                <div class="d-flex flex-wrap gap-3">
+                                    <div class="form-check">
+                                        <input class="form-check-input" type="checkbox" name="share_with_doctor" id="share_doctor_edit" {% if profile.share_with_doctor %}checked{% endif %}>
+                                        <label class="form-check-label" for="share_doctor_edit">授权医生查看</label>
+                                    </div>
+                                    <div class="form-check">
+                                        <input class="form-check-input" type="checkbox" name="share_with_community" id="share_community_edit" {% if profile.share_with_community %}checked{% endif %}>
+                                        <label class="form-check-label" for="share_community_edit">授权社区查看</label>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="d-flex gap-2 mt-4">
+                    <button class="btn btn-primary">保存</button>
+                    <a class="btn btn-outline-secondary" href="{{ url_for('health.family_members') }}">取消</a>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+{% endblock %}

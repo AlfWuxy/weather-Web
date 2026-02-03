@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+
+{% block title %}添加社区 - 管理后台{% endblock %}
+
+{% block content %}
+<div class="container">
+    <div class="row mb-4">
+        <div class="col-12">
+            <h2><i class="bi bi-plus-circle"></i> 添加社区</h2>
+            <nav aria-label="breadcrumb">
+                <ol class="breadcrumb">
+                    <li class="breadcrumb-item"><a href="{{ url_for('admin.admin_dashboard') }}">管理后台</a></li>
+                    <li class="breadcrumb-item"><a href="{{ url_for('admin.admin_communities') }}">社区管理</a></li>
+                    <li class="breadcrumb-item active">添加社区</li>
+                </ol>
+            </nav>
+        </div>
+    </div>
+
+    <div class="row">
+        <div class="col-md-8">
+            <div class="card shadow-sm">
+                <div class="card-body">
+                    <form method="POST" action="{{ url_for('admin.admin_add_community') }}">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <div class="mb-3">
+                            <label for="name" class="form-label">社区名称 <span class="text-danger">*</span></label>
+                            <input type="text" class="form-control" id="name" name="name" required>
+                        </div>
+
+                        <div class="mb-3">
+                            <label for="location" class="form-label">位置</label>
+                            <input type="text" class="form-control" id="location" name="location" placeholder="例如：北京市朝阳区xxx街道">
+                        </div>
+
+                        <div class="row">
+                            <div class="col-md-6 mb-3">
+                                <label for="latitude" class="form-label">纬度</label>
+                                <input type="number" step="0.000001" class="form-control" id="latitude" name="latitude" placeholder="例如：39.9042">
+                                <small class="text-muted">用于地图定位</small>
+                            </div>
+                            <div class="col-md-6 mb-3">
+                                <label for="longitude" class="form-label">经度</label>
+                                <input type="number" step="0.000001" class="form-control" id="longitude" name="longitude" placeholder="例如：116.4074">
+                                <small class="text-muted">用于地图定位</small>
+                            </div>
+                        </div>
+
+                        <div class="row">
+                            <div class="col-md-4 mb-3">
+                                <label for="population" class="form-label">人口数量</label>
+                                <input type="number" class="form-control" id="population" name="population" min="0" placeholder="例如：5000">
+                            </div>
+                            <div class="col-md-4 mb-3">
+                                <label for="elderly_ratio" class="form-label">老年人比例</label>
+                                <input type="number" step="0.01" class="form-control" id="elderly_ratio" name="elderly_ratio" value="0" min="0" max="1" placeholder="0.25">
+                                <small class="text-muted">0-1之间的小数（如0.25表示25%）</small>
+                            </div>
+                            <div class="col-md-4 mb-3">
+                                <label for="chronic_disease_ratio" class="form-label">慢性病比例</label>
+                                <input type="number" step="0.01" class="form-control" id="chronic_disease_ratio" name="chronic_disease_ratio" value="0" min="0" max="1" placeholder="0.15">
+                                <small class="text-muted">0-1之间的小数（如0.15表示15%）</small>
+                            </div>
+                        </div>
+
+                        <div class="alert alert-info">
+                            <i class="bi bi-info-circle"></i> 保存后系统将自动计算社区的脆弱性指数和风险等级
+                        </div>
+
+                        <hr>
+
+                        <div class="d-flex gap-2">
+                            <button type="submit" class="btn btn-primary">
+                                <i class="bi bi-check-circle"></i> 保存社区
+                            </button>
+                            <a href="{{ url_for('admin.admin_communities') }}" class="btn btn-outline-secondary">取消</a>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+
+

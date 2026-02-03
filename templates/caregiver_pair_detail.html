@@ -1,0 +1,255 @@
+{% extends "base.html" %}
+
+{% block title %}照护详情 - 天气健康风险预测系统{% endblock %}
+
+{% block content %}
+<div class="container my-4">
+    <div class="row mb-3">
+        <div class="col-12 d-flex flex-wrap justify-content-between align-items-center">
+            <div>
+                <h2><i class="bi bi-people"></i> 照护详情</h2>
+                <p class="text-muted mb-0">仅记录短码与行动状态，不含个人身份信息。</p>
+            </div>
+            <div class="d-flex gap-2">
+                <a class="btn btn-outline-secondary" href="{{ url_for('user.caregiver_dashboard') }}">
+                    <i class="bi bi-arrow-left"></i> 返回列表
+                </a>
+                {% if wechat_template_url %}
+                    <a class="btn btn-outline-success" href="{{ wechat_template_url }}">
+                        <i class="bi bi-wechat"></i> 微信模板
+                    </a>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+
+    <div class="row g-4">
+        <div class="col-lg-5">
+            <div class="card shadow-sm mb-3">
+                <div class="card-header bg-light">
+                    <h5 class="mb-0">照护关系</h5>
+                </div>
+                <div class="card-body">
+                    <div class="mb-2"><span class="text-muted">短码：</span><strong>{{ pair.short_code }}</strong></div>
+                    <div class="mb-2"><span class="text-muted">社区：</span>{{ pair.community_code }}</div>
+                    <div class="mb-2"><span class="text-muted">状态：</span>{{ pair.status }}</div>
+                    <div class="mb-2"><span class="text-muted">创建时间：</span>{{ pair.created_at.strftime('%Y-%m-%d %H:%M') if pair.created_at else '-' }}</div>
+                    <div class="mb-0"><span class="text-muted">最近活跃：</span>{{ pair.last_active_at.strftime('%Y-%m-%d %H:%M') if pair.last_active_at else '-' }}</div>
+                </div>
+            </div>
+
+            <div class="card shadow-sm mb-3">
+                <div class="card-header bg-light">
+                    <h5 class="mb-0">今日状态</h5>
+                </div>
+                <div class="card-body">
+                    {% if status_today %}
+                        <div class="mb-2"><span class="text-muted">风险等级：</span>{{ status_today.risk_level or '-' }}</div>
+                        <div class="mb-2"><span class="text-muted">确认时间：</span>{{ status_today.confirmed_at.strftime('%H:%M') if status_today.confirmed_at else '未确认' }}</div>
+                        <div class="mb-2"><span class="text-muted">求助：</span>{{ '是' if status_today.help_flag else '否' }}</div>
+                        <div class="mb-2"><span class="text-muted">完成项数：</span>{{ status_today.actions_done_count or 0 }}</div>
+                        <div class="mb-2"><span class="text-muted">升级链：</span>{{ status_today.relay_stage or 'none' }}</div>
+                        <div class="mb-0"><span class="text-muted">复盘关联：</span>{{ '是' if status_today.debrief_optin else '否' }}</div>
+                    {% else %}
+                        <div class="text-muted">今日暂无记录。</div>
+                    {% endif %}
+                    <form method="POST" action="{{ url_for('user.caregiver_relay_escalate') }}" class="mt-3">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <input type="hidden" name="pair_id" value="{{ pair.id }}">
+                        <button class="btn btn-outline-warning w-100" type="submit">
+                            <i class="bi bi-arrow-up-right"></i> 升级链推进
+                        </button>
+                    </form>
+                </div>
+            </div>
+
+            <div class="card shadow-sm mb-3">
+                <div class="card-header bg-light">
+                    <h5 class="mb-0">行动记录</h5>
+                </div>
+                <div class="card-body">
+                    {% if actions_today or caregiver_note %}
+                        {% if actions_today %}
+                            <div class="mb-2">
+                                <span class="text-muted">已记录行动：</span>
+                                {% for opt in action_options %}
+                                    {% if opt['id'] in actions_today %}
+                                        <span class="badge bg-light text-dark me-1">{{ opt['label'] }}</span>
+                                    {% endif %}
+                                {% endfor %}
+                            </div>
+                        {% endif %}
+                        {% if caregiver_note %}
+                            <div class="mb-2"><span class="text-muted">备注：</span>{{ caregiver_note }}</div>
+                        {% endif %}
+                    {% else %}
+                        <div class="text-muted">今日暂无记录。</div>
+                    {% endif %}
+                    <form method="POST" action="{{ url_for('user.caregiver_action_log', pair_id=pair.id) }}" class="mt-3">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <div class="mb-2 text-muted small">勾选已执行的行动（不包含个人身份信息）。</div>
+                        {% for opt in action_options %}
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" name="caregiver_actions" value="{{ opt['id'] }}"
+                                       id="care-action-{{ opt['id'] }}"
+                                       {% if opt['id'] in actions_today %}checked{% endif %}>
+                                <label class="form-check-label" for="care-action-{{ opt['id'] }}">
+                                    {{ opt['label'] }}
+                                </label>
+                            </div>
+                        {% endfor %}
+                        <div class="mt-3">
+                            <label class="form-label">备注（可选）</label>
+                            <textarea class="form-control" name="caregiver_note" rows="2" placeholder="请勿填写姓名/电话等个人信息">{{ caregiver_note or '' }}</textarea>
+                        </div>
+                        <button class="btn btn-outline-primary w-100 mt-3" type="submit">
+                            <i class="bi bi-journal-check"></i> 保存行动记录
+                        </button>
+                        <div class="text-muted small mt-2">仅记录行动类型与备注，不包含电话/姓名等个人信息。</div>
+                    </form>
+                </div>
+            </div>
+
+            <div class="card shadow-sm">
+                <div class="card-header bg-light">
+                    <h5 class="mb-0">社区概览</h5>
+                </div>
+                <div class="card-body">
+                    <div class="mb-2"><span class="text-muted">总覆盖：</span>{{ community_snapshot.total_people }}</div>
+                    <div class="mb-2"><span class="text-muted">确认率：</span>{{ (community_snapshot.confirm_rate * 100)|round(1) }}%</div>
+                    <div class="mb-2"><span class="text-muted">升级率：</span>{{ (community_snapshot.escalation_rate * 100)|round(1) }}%</div>
+                    <div class="mb-0 text-muted small">{{ community_snapshot.outreach_summary }}</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-lg-7">
+            <div class="card shadow-sm mb-3">
+                <div class="card-header bg-light">
+                    <h5 class="mb-0">近7日行动记录</h5>
+                </div>
+                <div class="card-body">
+                    <div class="mb-3">
+                        <div id="recentChartEmpty" class="text-muted small mb-2">暂无近7天数据，完成确认后将显示趋势。</div>
+                        <canvas id="caregiverRecentChart" height="160"></canvas>
+                    </div>
+                    {% if recent_statuses %}
+                        <div class="table-responsive">
+                            <table class="table table-sm align-middle">
+                                <thead>
+                                    <tr>
+                                        <th>日期</th>
+                                        <th>风险</th>
+                                        <th>确认</th>
+                                        <th>求助</th>
+                                        <th>升级链</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {% for item in recent_statuses %}
+                                        <tr>
+                                            <td>{{ item.status_date.strftime('%Y-%m-%d') }}</td>
+                                            <td>{{ item.risk_level or '-' }}</td>
+                                            <td>{{ '是' if item.confirmed_at else '否' }}</td>
+                                            <td>{{ '是' if item.help_flag else '否' }}</td>
+                                            <td>{{ item.relay_stage or 'none' }}</td>
+                                        </tr>
+                                    {% endfor %}
+                                </tbody>
+                            </table>
+                        </div>
+                    {% else %}
+                        <div class="text-muted">暂无记录。</div>
+                    {% endif %}
+                </div>
+            </div>
+
+            <div class="card shadow-sm">
+                <div class="card-header bg-light">
+                    <h5 class="mb-0">今日复盘（如已关联）</h5>
+                </div>
+                <div class="card-body">
+                    {% if debrief_today %}
+                        <div class="mb-2"><span class="text-muted">完成度：</span>{{ debrief_today.question_1 or '-' }}</div>
+                        <div class="mb-2"><span class="text-muted">支持来源：</span>{{ debrief_today.question_2 or '-' }}</div>
+                        <div class="mb-2"><span class="text-muted">需要支持：</span>{{ debrief_today.question_3 or '-' }}</div>
+                        <div class="mb-0"><span class="text-muted">困难：</span>{{ debrief_today.difficulty or '-' }}</div>
+                    {% else %}
+                        <div class="text-muted">未提交或未选择关联。</div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+    const series = {{ recent_series|default([])|tojson }};
+    const chartCanvas = document.getElementById('caregiverRecentChart');
+    const emptyState = document.getElementById('recentChartEmpty');
+    if (chartCanvas && Array.isArray(series)) {
+        const labels = series.map(item => item.date);
+        const riskValues = series.map(item => item.risk_value || 0);
+        const confirmedValues = series.map(item => item.confirmed || 0);
+        const hasData = riskValues.some(v => v > 0) || confirmedValues.some(v => v > 0);
+        if (!hasData) {
+            chartCanvas.style.display = 'none';
+        } else {
+            if (emptyState) {
+                emptyState.style.display = 'none';
+            }
+            new Chart(chartCanvas.getContext('2d'), {
+                data: {
+                    labels: labels,
+                    datasets: [
+                        {
+                            type: 'line',
+                            label: '风险等级',
+                            data: riskValues,
+                            borderColor: '#dc2626',
+                            backgroundColor: 'rgba(220, 38, 38, 0.15)',
+                            tension: 0.3,
+                            yAxisID: 'y'
+                        },
+                        {
+                            type: 'bar',
+                            label: '确认',
+                            data: confirmedValues,
+                            backgroundColor: 'rgba(14, 159, 110, 0.6)',
+                            yAxisID: 'y1'
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    plugins: {
+                        legend: { position: 'top' }
+                    },
+                    scales: {
+                        y: {
+                            min: 0,
+                            max: 4,
+                            ticks: {
+                                stepSize: 1,
+                                callback: value => ({0: '', 1: '低', 2: '中', 3: '高', 4: '极'}[value] || '')
+                            }
+                        },
+                        y1: {
+                            min: 0,
+                            max: 1,
+                            position: 'right',
+                            grid: { drawOnChartArea: false },
+                            ticks: {
+                                stepSize: 1,
+                                callback: value => (value === 1 ? '已确认' : '')
+                            }
+                        }
+                    }
+                }
+            });
+        }
+    }
+});
+</script>
+{% endblock %}

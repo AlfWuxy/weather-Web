@@ -1,0 +1,184 @@
+{% extends "base.html" %}
+
+{% block title %}社区工作台 - 天气健康风险预测系统{% endblock %}
+
+{% block content %}
+<div class="container my-4">
+    <div class="row mb-3">
+        <div class="col-12">
+            <h2><i class="bi bi-building"></i> 社区工作台</h2>
+            <p class="text-muted mb-0">展示社区层面的行动汇总，不含个人身份信息。</p>
+        </div>
+    </div>
+
+    {% if snapshots %}
+        <div class="row g-4">
+            {% for item in snapshots %}
+                <div class="col-12">
+                    <div class="card shadow-sm">
+                        <div class="card-header bg-light d-flex align-items-center justify-content-between flex-wrap gap-2">
+                            <div>
+                                <h5 class="mb-0">{{ item.community.name }} · 今日概览</h5>
+                                <div class="text-muted small">{{ status_date.strftime('%Y-%m-%d') }}</div>
+                            </div>
+                            <div class="d-flex gap-2">
+                                <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('user.community_wechat', community_code=item.community.name) }}">
+                                    <i class="bi bi-wechat"></i> 微信模板
+                                </a>
+                                <a class="btn btn-sm btn-outline-primary" href="{{ url_for('user.community_announce', community=item.community.name) }}">
+                                    <i class="bi bi-megaphone"></i> 公共传播包
+                                </a>
+                                <a class="btn btn-sm btn-outline-primary" href="{{ url_for('user.community_detail', community_code=item.community.name) }}">
+                                    查看详情
+                                </a>
+                            </div>
+                        </div>
+                        <div class="card-body">
+                            <div class="row g-3">
+                                <div class="col-lg-4">
+                                    <div class="mb-2">
+                                        <span class="badge bg-success">低 {{ item.risk_counts['低风险'] }}</span>
+                                        <span class="badge bg-warning text-dark">中 {{ item.risk_counts['中风险'] }}</span>
+                                        <span class="badge bg-danger">高 {{ item.risk_counts['高风险'] }}</span>
+                                        <span class="badge bg-dark">极 {{ item.risk_counts['极高'] }}</span>
+                                    </div>
+                                    <div class="text-muted small mb-2">{{ item.outreach_summary }}</div>
+                                    <div class="mb-3">
+                                        <div class="d-flex justify-content-between small">
+                                            <span>确认覆盖率</span>
+                                            <span>{{ (item.confirm_rate * 100)|round(1) }}%</span>
+                                        </div>
+                                        <div class="progress" style="height: 6px;">
+                                            <div class="progress-bar bg-success" style="width: {{ (item.confirm_rate * 100)|round(1) }}%"></div>
+                                        </div>
+                                    </div>
+                                    <div class="mb-3">
+                                        <div class="d-flex justify-content-between small">
+                                            <span>升级触发率</span>
+                                            <span>{{ (item.escalation_rate * 100)|round(1) }}%</span>
+                                        </div>
+                                        <div class="progress" style="height: 6px;">
+                                            <div class="progress-bar bg-warning" style="width: {{ (item.escalation_rate * 100)|round(1) }}%"></div>
+                                        </div>
+                                    </div>
+                                    <div class="mb-3">
+                                        <div class="d-flex justify-content-between small">
+                                            <span>求助率</span>
+                                            <span>{{ (item.help_rate * 100)|round(1) }}%</span>
+                                        </div>
+                                        <div class="progress" style="height: 6px;">
+                                            <div class="progress-bar bg-danger" style="width: {{ (item.help_rate * 100)|round(1) }}%"></div>
+                                        </div>
+                                    </div>
+                                    <div class="d-flex justify-content-between small">
+                                        <span>今日需外展数量(Flag)</span>
+                                        <span class="fw-semibold">{{ item.flag_count }}</span>
+                                    </div>
+                                    <div class="text-muted small mt-3">公平摘要：覆盖、升级与求助率用于观察行动可及性。</div>
+                                </div>
+                                <div class="col-lg-4">
+                                    <div class="mb-2 text-muted small">今日风险分布与确认覆盖</div>
+                                    <div id="communityChartEmpty-{{ loop.index }}" class="text-muted small mb-2">暂无今日数据。</div>
+                                    <canvas id="communityChart-{{ loop.index }}"
+                                            data-risk='{{ item.risk_counts | tojson }}'
+                                            data-confirmed='{{ item.confirmed_counts | tojson }}'
+                                            height="180"></canvas>
+                                    <div class="text-muted small mt-2">数据来源：行动确认记录；无数据时仅提示。</div>
+                                </div>
+                                <div class="col-lg-4">
+                                    <h6 class="mb-2">外展建议清单</h6>
+                                    {% if item.outreach_suggestions %}
+                                        <ul class="text-muted small mb-3">
+                                            {% for suggestion in item.outreach_suggestions %}
+                                                <li>{{ suggestion }}</li>
+                                            {% endfor %}
+                                        </ul>
+                                    {% else %}
+                                        <div class="text-muted small mb-3">暂无建议。</div>
+                                    {% endif %}
+                                    <h6 class="mb-2">群发模板复制</h6>
+                                    <textarea class="form-control mb-2" rows="5" id="groupMessage-{{ loop.index }}" readonly>{{ item.group_message }}</textarea>
+                                    <button class="btn btn-outline-primary btn-sm copy-community" data-target="groupMessage-{{ loop.index }}">
+                                        <i class="bi bi-clipboard"></i> 复制群发模板
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            {% endfor %}
+        </div>
+    {% else %}
+        <div class="text-muted">暂无可用数据。</div>
+    {% endif %}
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+    document.querySelectorAll('canvas[id^="communityChart-"]').forEach(canvas => {
+        const risk = JSON.parse(canvas.dataset.risk || '{}');
+        const confirmed = JSON.parse(canvas.dataset.confirmed || '{}');
+        const labels = ['低风险', '中风险', '高风险', '极高'];
+        const totals = labels.map(label => risk[label] || 0);
+        const confirmedValues = labels.map(label => confirmed[label] || 0);
+        const unconfirmedValues = totals.map((total, idx) => Math.max(total - confirmedValues[idx], 0));
+        const hasData = totals.some(v => v > 0);
+        const empty = document.getElementById(`communityChartEmpty-${canvas.id.split('-').pop()}`);
+        if (!hasData) {
+            canvas.style.display = 'none';
+            return;
+        }
+        if (empty) {
+            empty.style.display = 'none';
+        }
+        new Chart(canvas.getContext('2d'), {
+            type: 'bar',
+            data: {
+                labels: labels,
+                datasets: [
+                    {
+                        label: '已确认',
+                        data: confirmedValues,
+                        backgroundColor: 'rgba(14, 159, 110, 0.7)'
+                    },
+                    {
+                        label: '未确认',
+                        data: unconfirmedValues,
+                        backgroundColor: 'rgba(107, 114, 128, 0.4)'
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                plugins: {
+                    legend: { position: 'top' }
+                },
+                scales: {
+                    x: { stacked: true },
+                    y: { stacked: true, beginAtZero: true }
+                }
+            }
+        });
+    });
+
+    document.querySelectorAll('.copy-community').forEach(btn => {
+        btn.addEventListener('click', async () => {
+            const targetId = btn.dataset.target;
+            const textarea = document.getElementById(targetId);
+            if (!textarea) return;
+            try {
+                await navigator.clipboard.writeText(textarea.value);
+                btn.classList.add('btn-success');
+                btn.textContent = '已复制';
+                setTimeout(() => {
+                    btn.classList.remove('btn-success');
+                    btn.innerHTML = '<i class="bi bi-clipboard"></i> 复制群发模板';
+                }, 1200);
+            } catch (err) {
+                alert('复制失败，请手动选择文本');
+            }
+        });
+    });
+});
+</script>
+{% endblock %}

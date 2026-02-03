@@ -1,0 +1,209 @@
+{% extends "base.html" %}
+
+{% block title %}个人设置 - 天气健康风险预测系统{% endblock %}
+
+{% block content %}
+<div class="container">
+    <div class="row">
+        <div class="col-12 mb-4">
+            <h2><i class="bi bi-gear"></i> 个人设置</h2>
+            <p class="text-muted">管理您的账户信息和健康档案</p>
+        </div>
+    </div>
+
+    <div class="row">
+        <div class="col-md-8">
+            <div class="card shadow-sm mb-4">
+                <div class="card-header">
+                    <h5 class="mb-0">基本信息</h5>
+                </div>
+                <div class="card-body">
+                    <form method="POST" action="{{ url_for('user.profile') }}">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <div class="row">
+                            <div class="col-md-6 mb-3">
+                                <label for="username" class="form-label">用户名</label>
+                                <input type="text" class="form-control" id="username" value="{{ current_user.username }}" readonly>
+                                <small class="text-muted">用户名不可更改</small>
+                            </div>
+                            <div class="col-md-6 mb-3">
+                                <label for="email" class="form-label">邮箱</label>
+                                <input type="email" class="form-control" id="email" name="email" value="{{ current_user.email or '' }}">
+                            </div>
+                        </div>
+
+                        <div class="row">
+                            <div class="col-md-4 mb-3">
+                                <label for="age" class="form-label">年龄</label>
+                                <input type="number" class="form-control" id="age" name="age" value="{{ current_user.age or '' }}" min="1" max="120">
+                            </div>
+                            <div class="col-md-4 mb-3">
+                                <label for="gender" class="form-label">性别</label>
+                                <select class="form-select" id="gender" name="gender">
+                                    <option value="">请选择</option>
+                                    <option value="男性" {% if current_user.gender == '男性' %}selected{% endif %}>男性</option>
+                                    <option value="女性" {% if current_user.gender == '女性' %}selected{% endif %}>女性</option>
+                                </select>
+                            </div>
+                            <div class="col-md-4 mb-3">
+                                <label for="community" class="form-label">所属社区</label>
+                                <select class="form-select" id="community" name="community">
+                                    <option value="">请选择</option>
+                                    {% for comm in communities %}
+                                        <option value="{{ comm.name }}" {% if current_user.community == comm.name %}selected{% endif %}>{{ comm.name }}</option>
+                                    {% endfor %}
+                                </select>
+                            </div>
+                        </div>
+
+                        <hr class="my-4">
+
+                        <h6 class="mb-3">健康信息</h6>
+                        <div class="mb-3">
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" id="has_chronic_disease" name="has_chronic_disease" {% if current_user.has_chronic_disease %}checked{% endif %}>
+                                <label class="form-check-label" for="has_chronic_disease">
+                                    患有慢性疾病
+                                </label>
+                            </div>
+                        </div>
+
+                        <div id="chronic_diseases_section" style="display: {% if current_user.has_chronic_disease %}block{% else %}none{% endif %};">
+                            <label class="form-label">慢性疾病类型（可多选）</label>
+                            <div class="row">
+                                <div class="col-md-6 mb-2">
+                                    <div class="form-check">
+                                        <input class="form-check-input" type="checkbox" name="chronic_diseases" value="高血压" id="cd1" {% if '高血压' in chronic_diseases_list %}checked{% endif %}>
+                                        <label class="form-check-label" for="cd1">高血压</label>
+                                    </div>
+                                </div>
+                                <div class="col-md-6 mb-2">
+                                    <div class="form-check">
+                                        <input class="form-check-input" type="checkbox" name="chronic_diseases" value="糖尿病" id="cd2" {% if '糖尿病' in chronic_diseases_list %}checked{% endif %}>
+                                        <label class="form-check-label" for="cd2">糖尿病</label>
+                                    </div>
+                                </div>
+                                <div class="col-md-6 mb-2">
+                                    <div class="form-check">
+                                        <input class="form-check-input" type="checkbox" name="chronic_diseases" value="冠心病" id="cd3" {% if '冠心病' in chronic_diseases_list %}checked{% endif %}>
+                                        <label class="form-check-label" for="cd3">冠心病</label>
+                                    </div>
+                                </div>
+                                <div class="col-md-6 mb-2">
+                                    <div class="form-check">
+                                        <input class="form-check-input" type="checkbox" name="chronic_diseases" value="慢性呼吸道疾病" id="cd4" {% if '慢性呼吸道疾病' in chronic_diseases_list %}checked{% endif %}>
+                                        <label class="form-check-label" for="cd4">慢性呼吸道疾病</label>
+                                    </div>
+                                </div>
+                                <div class="col-md-6 mb-2">
+                                    <div class="form-check">
+                                        <input class="form-check-input" type="checkbox" name="chronic_diseases" value="关节炎" id="cd5" {% if '关节炎' in chronic_diseases_list %}checked{% endif %}>
+                                        <label class="form-check-label" for="cd5">关节炎</label>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="d-grid gap-2 mt-4">
+                            <button type="submit" class="btn btn-primary">保存更改</button>
+                            <a href="{{ url_for('admin.admin_dashboard') if current_user.role == 'admin' else url_for('user.user_dashboard') }}" class="btn btn-outline-secondary">取消</a>
+                        </div>
+                    </form>
+                </div>
+            </div>
+
+            <div class="card shadow-sm">
+                <div class="card-header">
+                    <h5 class="mb-0">修改密码</h5>
+                </div>
+                <div class="card-body">
+                    <form method="POST" action="{{ url_for('user.profile') }}">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <div class="mb-3">
+                            <label for="new_password" class="form-label">新密码</label>
+                            <input type="password" class="form-control" id="new_password" name="new_password">
+                            <small class="text-muted">留空表示不修改密码</small>
+                        </div>
+                        <div class="mb-3">
+                            <label for="confirm_password" class="form-label">确认新密码</label>
+                            <input type="password" class="form-control" id="confirm_password">
+                        </div>
+                        <button type="submit" class="btn btn-warning">修改密码</button>
+                    </form>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-md-4">
+            <div class="card shadow-sm mb-4">
+                <div class="card-header bg-primary text-white">
+                    <h5 class="mb-0">账户信息</h5>
+                </div>
+                <div class="card-body">
+                    <dl class="row mb-0">
+                        <dt class="col-sm-5">用户名：</dt>
+                        <dd class="col-sm-7">{{ current_user.username }}</dd>
+                        
+                        <dt class="col-sm-5">账户类型：</dt>
+                        <dd class="col-sm-7">
+                            {% if current_user.role == 'admin' %}
+                                <span class="badge bg-danger">管理员</span>
+                            {% elif current_user.role == 'caregiver' %}
+                                <span class="badge bg-info">照护人</span>
+                            {% elif current_user.role == 'community' %}
+                                <span class="badge bg-warning">社区人员</span>
+                            {% else %}
+                                <span class="badge bg-primary">普通用户</span>
+                            {% endif %}
+                        </dd>
+                        
+                        <dt class="col-sm-5">注册时间：</dt>
+                        <dd class="col-sm-7">{{ current_user.created_at.strftime('%Y-%m-%d') if current_user.created_at else '-' }}</dd>
+                        
+                        <dt class="col-sm-5">最后登录：</dt>
+                        <dd class="col-sm-7 mb-0">{{ current_user.last_login.strftime('%Y-%m-%d %H:%M') if current_user.last_login else '首次登录' }}</dd>
+                    </dl>
+                </div>
+            </div>
+
+            <div class="card shadow-sm">
+                <div class="card-header bg-info text-white">
+                    <h5 class="mb-0">温馨提示</h5>
+                </div>
+                <div class="card-body">
+                    <ul class="small mb-0">
+                        <li>完善个人信息有助于系统提供更精准的健康风险评估</li>
+                        <li>如实填写健康状况，以便获得更准确的预警</li>
+                        <li>定期更新您的健康信息</li>
+                        <li>妥善保管您的账户密码</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+document.getElementById('has_chronic_disease').addEventListener('change', function() {
+    document.getElementById('chronic_diseases_section').style.display = this.checked ? 'block' : 'none';
+});
+
+// 密码确认验证
+const form = document.querySelector('form');
+form.addEventListener('submit', function(e) {
+    const newPassword = document.getElementById('new_password').value;
+    const confirmPassword = document.getElementById('confirm_password').value;
+    
+    if (newPassword && newPassword !== confirmPassword) {
+        e.preventDefault();
+        alert('两次输入的密码不一致！');
+    }
+});
+</script>
+{% endblock %}
+
+
+
+
+
+

@@ -1,0 +1,172 @@
+{% extends "base.html" %}
+
+{% block title %}历史数据回溯分析 - 天气健康风险预测系统{% endblock %}
+
+{% block content %}
+<div class="container">
+    <div class="row mb-4">
+        <div class="col-12">
+            <h2><i class="bi bi-clock-history"></i> 历史数据回溯分析</h2>
+            <p class="text-muted">选择历史日期区间，查看天气与病例关系</p>
+        </div>
+    </div>
+
+    <div class="card shadow-sm mb-4">
+        <div class="card-body">
+            <form method="POST" action="{{ url_for('analysis.analysis_history') }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <div class="row g-3">
+                    <div class="col-md-3">
+                        <label class="form-label">开始日期</label>
+                        <input type="date" class="form-control" name="start_date" value="{{ start_date }}">
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label">结束日期</label>
+                        <input type="date" class="form-control" name="end_date" value="{{ end_date }}">
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label">社区</label>
+                        <select class="form-select" name="community">
+                            <option value="">全部</option>
+                            {% for comm in communities %}
+                                <option value="{{ comm.name }}" {% if community_filter == comm.name %}selected{% endif %}>{{ comm.name }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label">疾病分类</label>
+                        <select class="form-select" name="disease">
+                            <option value="">全部</option>
+                            {% for disease in diseases %}
+                                <option value="{{ disease }}" {% if disease_filter == disease %}selected{% endif %}>{{ disease }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                </div>
+                <div class="mt-3">
+                    <button class="btn btn-primary">开始分析</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    {% if data_notes %}
+    <div class="alert alert-warning border-0 mb-4">
+        <i class="bi bi-info-circle me-1"></i>{{ data_notes|join('；') }}
+    </div>
+    {% endif %}
+
+    <div class="card shadow-sm mb-4">
+        <div class="card-body">
+            <div class="row g-3 text-center">
+                <div class="col-md-3">
+                    <div class="text-muted small">时间跨度</div>
+                    <div>{{ data_summary.total_days }} 天</div>
+                </div>
+                <div class="col-md-3">
+                    <div class="text-muted small">门诊记录</div>
+                    <div>{{ data_summary.total_visits }} 次 / {{ data_summary.visit_days }} 天</div>
+                </div>
+                <div class="col-md-3">
+                    <div class="text-muted small">天气覆盖</div>
+                    <div>{{ data_summary.weather_days }} 天（{{ data_summary.weather_source }}）</div>
+                </div>
+                <div class="col-md-3">
+                    <div class="text-muted small">重叠天数</div>
+                    <div>{{ data_summary.overlap_days }} 天</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row mb-4">
+        <div class="col-md-6">
+            <div class="card shadow-sm h-100">
+                <div class="card-body">
+                    <h6>相关性指标</h6>
+                    <p class="mb-1">
+                        病例-温度相关系数：{{ '%.3f'|format(temp_corr) if temp_corr is not none else '--' }}
+                        <small class="text-muted">n={{ temp_n }}</small>
+                    </p>
+                    <p class="mb-0">
+                        病例-湿度相关系数：{{ '%.3f'|format(hum_corr) if hum_corr is not none else '--' }}
+                        <small class="text-muted">n={{ hum_n }}</small>
+                    </p>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-6">
+            <div class="card shadow-sm h-100">
+                <div class="card-body text-muted">
+                    <small>提示：相关系数用于衡量天气因素与病例数量的线性关系，需结合样本量和专业判断。</small>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="card shadow-sm">
+        <div class="card-body">
+            <canvas id="historyChart" height="120"></canvas>
+        </div>
+    </div>
+</div>
+
+{% block extra_js %}
+<script>
+const labels = {{ dates|tojson }};
+const visits = {{ visits|tojson }};
+const temps = {{ temperatures|tojson }};
+const hums = {{ humidities|tojson }};
+
+const ctx = document.getElementById('historyChart').getContext('2d');
+new Chart(ctx, {
+    type: 'bar',
+    data: {
+        labels: labels,
+        datasets: [
+            {
+                label: '病例数',
+                data: visits,
+                backgroundColor: 'rgba(54, 162, 235, 0.4)',
+                borderColor: 'rgba(54, 162, 235, 1)',
+                yAxisID: 'y'
+            },
+            {
+                label: '平均温度(°C)',
+                data: temps,
+                type: 'line',
+                borderColor: 'rgba(255, 99, 132, 0.9)',
+                backgroundColor: 'rgba(255, 99, 132, 0.2)',
+                yAxisID: 'y1',
+                spanGaps: true
+            },
+            {
+                label: '平均湿度(%)',
+                data: hums,
+                type: 'line',
+                borderColor: 'rgba(75, 192, 192, 0.9)',
+                backgroundColor: 'rgba(75, 192, 192, 0.2)',
+                yAxisID: 'y1',
+                spanGaps: true
+            }
+        ]
+    },
+    options: {
+        responsive: true,
+        interaction: { mode: 'index', intersect: false },
+        scales: {
+            y: {
+                title: { display: true, text: '病例数' },
+                beginAtZero: true
+            },
+            y1: {
+                position: 'right',
+                title: { display: true, text: '温度/湿度' },
+                grid: { drawOnChartArea: false }
+            }
+        }
+    }
+});
+</script>
+{% endblock %}
+{% endblock %}

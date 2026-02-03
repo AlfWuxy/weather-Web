@@ -1,0 +1,634 @@
+{% extends "base.html" %}
+
+{% block title %}我的主页 - 天气健康风险预测系统{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <div class="row">
+        <div class="col-12 mb-4">
+            <h2>
+                <i class="bi bi-house-door"></i> 我的健康仪表板
+                {% if demo_mode %}
+                    <span class="badge bg-warning-subtle text-warning border ms-2">演示模式</span>
+                {% endif %}
+            </h2>
+            <p class="text-muted">欢迎回来，{{ current_user.username }}！</p>
+            {% if is_guest %}
+                <div class="alert alert-warning mb-0">
+                    <i class="bi bi-info-circle me-2"></i>
+                    当前为游客模式，评估记录不会保存，建议注册/登录获得完整功能。
+                </div>
+            {% endif %}
+        </div>
+    </div>
+
+    <div class="row">
+        <!-- 当前天气卡片 -->
+        <div class="col-md-4 mb-4">
+            <div class="card shadow-sm h-100">
+                <div class="card-header bg-primary text-white">
+                    <h5 class="mb-0"><i class="bi bi-cloud-sun"></i> 当前天气</h5>
+                </div>
+                <div class="card-body">
+                    {% if weather %}
+                        <div class="text-center mb-2">
+                            <span class="badge bg-info-subtle text-info border">来源：{{ weather_source_city }}</span>
+                            {% if weather_is_mock %}
+                                <span class="badge bg-warning-subtle text-warning border">模拟数据</span>
+                            {% endif %}
+                        </div>
+                        <div class="text-center mb-3">
+                            <h2 class="display-3">{{ weather.temperature|round(1) }}°C</h2>
+                            <p class="fs-5 text-muted">{{ weather.weather_condition }}</p>
+                        </div>
+                        <hr>
+                        <div class="row text-center">
+                            <div class="col-6 mb-2">
+                                <i class="bi bi-thermometer-high text-danger"></i>
+                                <p class="mb-0 small">最高温度</p>
+                                <p class="fw-bold">{{ weather.temperature_max|round(1) }}°C</p>
+                            </div>
+                            <div class="col-6 mb-2">
+                                <i class="bi bi-thermometer-low text-info"></i>
+                                <p class="mb-0 small">最低温度</p>
+                                <p class="fw-bold">{{ weather.temperature_min|round(1) }}°C</p>
+                            </div>
+                            <div class="col-6 mb-2">
+                                <i class="bi bi-droplet text-primary"></i>
+                                <p class="mb-0 small">湿度</p>
+                                <p class="fw-bold">{{ weather.humidity|round(1) }}%</p>
+                            </div>
+                            <div class="col-6 mb-2">
+                                <i class="bi bi-wind text-success"></i>
+                                <p class="mb-0 small">风速</p>
+                                <p class="fw-bold">{{ weather.wind_speed|round(1) }} m/s</p>
+                            </div>
+                        </div>
+                        {% if weather.is_extreme %}
+                            <div class="alert alert-danger mt-3">
+                                <i class="bi bi-exclamation-triangle-fill"></i> 
+                                <strong>极端天气预警</strong><br>
+                                {{ weather.extreme_type }}
+                            </div>
+                        {% endif %}
+                    {% else %}
+                        <p class="text-muted">暂无天气数据</p>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+
+        <!-- 健康风险评估卡片 -->
+        <div class="col-md-4 mb-4">
+            <div class="card shadow-sm h-100">
+                <div class="card-header bg-success text-white">
+                    <h5 class="mb-0"><i class="bi bi-heart-pulse"></i> 健康风险评估</h5>
+                </div>
+                <div class="card-body">
+                    {% if assessment %}
+                        <div class="text-center mb-3">
+                            {% if assessment.risk_level == '高风险' %}
+                                <div class="badge bg-danger fs-3 p-3">{{ assessment.risk_level }}</div>
+                            {% elif assessment.risk_level == '中风险' %}
+                                <div class="badge bg-warning fs-3 p-3">{{ assessment.risk_level }}</div>
+                            {% else %}
+                                <div class="badge bg-success fs-3 p-3">{{ assessment.risk_level }}</div>
+                            {% endif %}
+                        </div>
+                        <div class="progress mb-3" style="height: 25px;">
+                            {% if assessment.risk_score < 30 %}
+                                <div class="progress-bar bg-success" style="width: {{ assessment.risk_score }}%">
+                            {% elif assessment.risk_score < 60 %}
+                                <div class="progress-bar bg-warning" style="width: {{ assessment.risk_score }}%">
+                            {% else %}
+                                <div class="progress-bar bg-danger" style="width: {{ assessment.risk_score }}%">
+                            {% endif %}
+                                    {{ assessment.risk_score|round(1) }}
+                                </div>
+                        </div>
+                        <p class="text-muted small">评估时间：{{ assessment.assessment_date.strftime('%Y-%m-%d %H:%M') }}</p>
+                        <a href="{{ url_for('user.health_assessment') }}" class="btn btn-outline-success w-100">
+                            <i class="bi bi-arrow-repeat"></i> 重新评估
+                        </a>
+                    {% else %}
+                        <p class="text-center text-muted my-5">尚未进行健康风险评估</p>
+                        <a href="{{ url_for('user.health_assessment') }}" class="btn btn-success w-100">
+                            <i class="bi bi-clipboard-pulse"></i> 开始评估
+                        </a>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+
+        <!-- 天气预警卡片 -->
+        <div class="col-md-4 mb-4">
+            <div class="card shadow-sm h-100">
+                <div class="card-header bg-warning text-dark">
+                    <h5 class="mb-0"><i class="bi bi-exclamation-triangle"></i> 天气预警</h5>
+                </div>
+                <div class="card-body" style="max-height: 400px; overflow-y: auto;">
+                    {% if alerts %}
+                        {% for alert in alerts %}
+                            <div class="alert alert-warning mb-2">
+                                <h6 class="alert-heading">
+                                    <i class="bi bi-geo-alt"></i> {{ alert.location }}
+                                </h6>
+                                <p class="mb-1"><strong>{{ alert.alert_type }}</strong></p>
+                                <p class="mb-0 small text-muted">{{ alert.alert_date.strftime('%m-%d %H:%M') }}</p>
+                            </div>
+                        {% endfor %}
+                    {% else %}
+                        <p class="text-center text-muted my-5">暂无预警信息</p>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 行动型热健康预警 -->
+    <div class="row">
+        <div class="col-12 mb-4">
+            {% set heat_color = 'dark' if heat_risk_label == '极高' else 'danger' if heat_risk_label == '高风险' else 'warning' if heat_risk_label == '中风险' else 'success' %}
+            <div class="card shadow-sm">
+                <div class="card-header bg-{{ heat_color }} text-white">
+                    <h5 class="mb-0"><i class="bi bi-thermometer-sun"></i> 行动型热健康预警</h5>
+                </div>
+                <div class="card-body">
+                    <div class="d-flex flex-wrap align-items-center gap-3 mb-3">
+                        <span class="badge bg-{{ heat_color }} fs-6">{{ heat_risk_label }}</span>
+                        {% if heat_result %}
+                            <span class="text-muted small">综合评分：{{ heat_result.risk_score if heat_result.risk_score is not none else '--' }}</span>
+                            <span class="text-muted small">体感热：{{ heat_result.heat_index if heat_result.heat_index is not none else '--' }}</span>
+                            <span class="text-muted small">夜间最低：{{ heat_result.night_min if heat_result.night_min is not none else '--' }}°C</span>
+                            <span class="text-muted small">连续高温：{{ heat_result.consecutive_hot_days if heat_result.consecutive_hot_days is not none else 0 }}天</span>
+                        {% endif %}
+                        <span class="text-muted small">提示：仅提供通用热健康行动建议</span>
+                    </div>
+                    <div class="d-flex flex-wrap align-items-center gap-2 mb-3" id="heatRiskAdjustDashboard" data-heat-risk-score="{{ heat_result.risk_score if heat_result and heat_result.risk_score is not none else 0 }}">
+                        <span class="text-muted small">个人阈值</span>
+                        <div class="btn-group btn-group-sm" role="group" aria-label="Heat threshold adjust">
+                            <input type="radio" class="btn-check" name="heatAdjustDashboard" id="heatAdjustDashLow" value="-0.1" data-heat-adjust>
+                            <label class="btn btn-outline-secondary" for="heatAdjustDashLow">-0.1</label>
+                            <input type="radio" class="btn-check" name="heatAdjustDashboard" id="heatAdjustDashMid" value="0" data-heat-adjust>
+                            <label class="btn btn-outline-secondary" for="heatAdjustDashMid">0</label>
+                            <input type="radio" class="btn-check" name="heatAdjustDashboard" id="heatAdjustDashHigh" value="0.1" data-heat-adjust>
+                            <label class="btn btn-outline-secondary" for="heatAdjustDashHigh">+0.1</label>
+                        </div>
+                        <span class="badge bg-secondary" id="heatAdjustedBadgeDashboard">--</span>
+                        <span class="text-muted small">仅保存在本机</span>
+                    </div>
+                    <div class="row">
+                        {% for item in heat_actions %}
+                            <div class="col-md-4 mb-2">
+                                <div class="d-flex align-items-start">
+                                    <i class="bi bi-check-circle-fill text-success me-2 mt-1"></i>
+                                    <div>
+                                        <strong>{{ item.title }}</strong>
+                                        <div class="text-muted small">{{ item.detail }}</div>
+                                    </div>
+                                </div>
+                            </div>
+                        {% endfor %}
+                    </div>
+                    <div class="d-flex flex-wrap gap-2 mt-3">
+                        <a class="btn btn-outline-primary" href="{{ url_for('user.pair_management') }}">
+                            <i class="bi bi-people"></i> 管理照护绑定
+                        </a>
+                        <a class="btn btn-outline-secondary" href="{{ url_for('public.action_check') }}">
+                            <i class="bi bi-clipboard-check"></i> 短码行动打卡
+                        </a>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 健康建议 -->
+    <div class="row">
+        <div class="col-12">
+            <div class="card shadow-sm">
+                <div class="card-header bg-info text-white">
+                    <h5 class="mb-0"><i class="bi bi-lightbulb"></i> 个性化健康建议</h5>
+                </div>
+                <div class="card-body">
+                    {% if assessment and assessment.recommendations %}
+                        <div class="row">
+                            {% set recommendations = assessment.recommendations|from_json %}
+                            {% for rec in recommendations %}
+                                <div class="col-md-6 mb-3">
+                                    <div class="d-flex align-items-start">
+                                        <i class="bi bi-check-circle-fill text-success me-2 mt-1"></i>
+                                        <div>
+                                            <strong>{{ rec.category }}</strong>
+                                            <p class="mb-0 text-muted">{{ rec.advice }}</p>
+                                        </div>
+                                    </div>
+                                </div>
+                            {% endfor %}
+                        </div>
+                    {% else %}
+                        <p class="text-muted mb-0">完成健康评估后，系统将为您生成个性化健康建议</p>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+
+    {% if assessment_explain and assessment_explain.get('explain') %}
+    <div class="row mt-4">
+        <div class="col-12">
+            <div class="card shadow-sm">
+                <div class="card-header bg-light">
+                    <h5 class="mb-0"><i class="bi bi-card-checklist"></i> 原因与提醒</h5>
+                </div>
+                <div class="card-body">
+                    <div class="row g-3">
+                        <div class="col-md-4">
+                            <h6>原因</h6>
+                            <ul class="mb-0">
+                                {% for item in assessment_explain.explain.reasons %}
+                                    <li class="mb-1">{{ item }}</li>
+                                {% endfor %}
+                                {% if not assessment_explain.explain.reasons %}
+                                    <li class="text-muted">暂无明显触发原因</li>
+                                {% endif %}
+                            </ul>
+                        </div>
+                        <div class="col-md-4">
+                            <h6>今天怎么做</h6>
+                            <ul class="mb-0">
+                                {% for item in assessment_explain.explain.actions %}
+                                    <li class="mb-1">{{ item }}</li>
+                                {% endfor %}
+                                {% if not assessment_explain.explain.actions %}
+                                    <li class="text-muted">保持规律作息</li>
+                                {% endif %}
+                            </ul>
+                        </div>
+                        <div class="col-md-4">
+                            <h6>什么时候要找人</h6>
+                            <ul class="mb-0">
+                                {% for item in assessment_explain.explain.escalation %}
+                                    <li class="mb-1">{{ item }}</li>
+                                {% endfor %}
+                                {% if not assessment_explain.explain.escalation %}
+                                    <li class="text-muted">出现严重不适请及时就医</li>
+                                {% endif %}
+                            </ul>
+                        </div>
+                    </div>
+                    <div class="small text-muted mt-3">风险提示不是诊断，紧急情况优先就医。</div>
+                </div>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+    {% if notifications %}
+    <div class="row mt-4">
+        <div class="col-12">
+            <div class="card shadow-sm">
+                <div class="card-header bg-warning text-dark">
+                    <h5 class="mb-0"><i class="bi bi-bell"></i> 站内提醒</h5>
+                </div>
+                <div class="card-body">
+                    <ul class="list-group">
+                        {% for note in notifications %}
+                            <li class="list-group-item d-flex justify-content-between align-items-start">
+                                <div>
+                                    <div class="fw-bold">{{ note.title }}</div>
+                                    <div class="text-muted small">{{ note.message }}</div>
+                                </div>
+                                <span class="badge bg-{{ 'danger' if note.level == 'danger' else 'warning' if note.level == 'warning' else 'info' }}">
+                                    {{ note.created_at.strftime('%m-%d %H:%M') }}
+                                </span>
+                            </li>
+                        {% endfor %}
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- 用药提醒 -->
+    <div class="row mt-4">
+        <div class="col-12">
+            <div class="card shadow-sm">
+                <div class="card-header bg-warning text-dark">
+                    <h5 class="mb-0"><i class="bi bi-capsule"></i> 用药提醒</h5>
+                </div>
+                <div class="card-body">
+                    {% if reminders and reminders|length > 0 %}
+                        <ul class="list-group">
+                            {% for reminder in reminders %}
+                                <li class="list-group-item d-flex justify-content-between align-items-center">
+                                    <div>
+                                        <strong>{{ reminder.medicine_name }}</strong>
+                                        {% if reminder.dosage %}<span class="text-muted">（{{ reminder.dosage }}）</span>{% endif %}
+                                        <div class="small text-muted">触发原因：{{ reminder.reason }}</div>
+                                    </div>
+                                    <span class="badge bg-danger">
+                                        {% if reminder.time_of_day %}{{ reminder.time_of_day }}{% else %}今日{% endif %}
+                                    </span>
+                                </li>
+                            {% endfor %}
+                        </ul>
+                    {% else %}
+                        <p class="text-muted mb-0">暂无触发的用药提醒</p>
+                    {% endif %}
+                    <div class="mt-3">
+                        <a href="{{ url_for('health.medication_reminders') }}" class="btn btn-outline-warning btn-sm">
+                            管理用药提醒
+                        </a>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 7天健康预测快速入口 -->
+    <div class="row mt-4">
+        <div class="col-md-6 mb-4">
+            <div class="card shadow-sm h-100 border-primary">
+                <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center">
+                    <h5 class="mb-0"><i class="bi bi-calendar-week"></i> 未来7天健康预测</h5>
+                    <a href="{{ url_for('tools.forecast_7day') }}" class="btn btn-light btn-sm">
+                        查看详情 <i class="bi bi-arrow-right"></i>
+                    </a>
+                </div>
+                <div class="card-body" id="forecast7dayPreview">
+                    <div class="text-center py-3">
+                        <div class="spinner-border spinner-border-sm text-primary me-2"></div>
+                        加载预测数据...
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="col-md-6 mb-4">
+            <div class="card shadow-sm h-100 border-success">
+                <div class="card-header bg-success text-white d-flex justify-content-between align-items-center">
+                    <h5 class="mb-0"><i class="bi bi-heart-pulse"></i> 慢病风险评估</h5>
+                    <a href="{{ url_for('tools.chronic_risk') }}" class="btn btn-light btn-sm">
+                        开始评估 <i class="bi bi-arrow-right"></i>
+                    </a>
+                </div>
+                <div class="card-body">
+                    <p class="text-muted">基于您的年龄、慢性病史和当前天气条件，进行个性化健康风险评估。</p>
+                    {% if is_guest %}
+                        <div class="alert alert-info mb-0 py-2">
+                            <i class="bi bi-info-circle me-1"></i>
+                            游客模式无法保存健康档案，注册后可获得更精准的评估结果。
+                        </div>
+                    {% elif current_user.has_chronic_disease %}
+                        <div class="alert alert-info mb-0 py-2">
+                            <i class="bi bi-info-circle me-1"></i>
+                            您已登记慢性病信息，可获得更精准的风险评估
+                        </div>
+                    {% else %}
+                        <div class="alert alert-warning mb-0 py-2">
+                            <i class="bi bi-exclamation-triangle me-1"></i>
+                            建议在<a href="{{ url_for('user.profile') }}">个人设置</a>中完善健康信息
+                        </div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 社区风险概览 -->
+    <div class="row">
+        <div class="col-12">
+            <div class="card shadow-sm">
+                <div class="card-header bg-secondary text-white d-flex justify-content-between align-items-center">
+                    <h5 class="mb-0"><i class="bi bi-map"></i> 社区风险概览</h5>
+                    <a href="{{ url_for('user.community_risk') }}" class="btn btn-light btn-sm">
+                        查看详细地图 <i class="bi bi-arrow-right"></i>
+                    </a>
+                </div>
+                <div class="card-body">
+                    <p class="text-muted">您的社区：<strong>{{ current_user.community or '未设置' }}</strong></p>
+                    <p class="mb-0">点击上方按钮查看所有社区的风险分布地图</p>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+{% block extra_js %}
+<script>
+function clearElement(element) {
+    while (element && element.firstChild) {
+        element.removeChild(element.firstChild);
+    }
+}
+
+function safeText(value, fallback) {
+    if (value === undefined || value === null) {
+        return fallback || '';
+    }
+    return String(value);
+}
+
+function toNumber(value, fallback) {
+    if (value === undefined || value === null || value === '') {
+        return fallback;
+    }
+    const num = Number(value);
+    if (!Number.isFinite(num)) {
+        return fallback;
+    }
+    return num;
+}
+
+function formatNumber(value, digits, fallbackText) {
+    const num = toNumber(value, null);
+    if (num === null) {
+        return fallbackText;
+    }
+    return num.toFixed(digits);
+}
+
+// 添加from_json过滤器的支持
+{% if assessment and assessment.recommendations %}
+try {
+    const recommendationsPayload = {{ assessment.recommendations|tojson }};
+    let recommendations = [];
+    if (typeof recommendationsPayload === 'string' && recommendationsPayload.trim()) {
+        const parsed = JSON.parse(recommendationsPayload);
+        if (Array.isArray(parsed)) {
+            recommendations = parsed;
+        }
+    } else if (Array.isArray(recommendationsPayload)) {
+        recommendations = recommendationsPayload;
+    }
+    console.log('推荐建议:', recommendations);
+} catch(e) {
+    console.error('解析推荐建议失败:', e);
+}
+{% endif %}
+
+// 加载7天预测预览
+document.addEventListener('DOMContentLoaded', function() {
+    fetch('/api/forecast/7day', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({})
+    })
+    .then(response => response.json())
+    .then(data => {
+        const previewDiv = document.getElementById('forecast7dayPreview');
+        if (!previewDiv) {
+            return;
+        }
+        clearElement(previewDiv);
+        if (data.success) {
+            const summary = data.summary || {};
+            const forecasts = Array.isArray(data.forecasts) ? data.forecasts.slice(0, 3) : [];
+            const totalVisitsText = formatNumber(summary.total_expected_visits, 0, '--');
+            const totalVisitsValue = toNumber(summary.total_expected_visits, null);
+            const highRiskDaysValue = toNumber(summary.high_risk_days, 0);
+            const highRiskDaysText = formatNumber(summary.high_risk_days, 0, '--');
+            const avgVisitsText = totalVisitsValue === null ? '--' : String(Math.round(totalVisitsValue / 7));
+
+            const row = document.createElement('div');
+            row.className = 'row text-center mb-3';
+
+            const totalCol = document.createElement('div');
+            totalCol.className = 'col-4';
+            const totalValue = document.createElement('div');
+            totalValue.className = 'h4 text-primary mb-0';
+            totalValue.textContent = totalVisitsText;
+            const totalLabel = document.createElement('small');
+            totalLabel.className = 'text-muted';
+            totalLabel.textContent = '预计总门诊';
+            totalCol.appendChild(totalValue);
+            totalCol.appendChild(totalLabel);
+
+            const riskCol = document.createElement('div');
+            riskCol.className = 'col-4';
+            const riskValue = document.createElement('div');
+            const riskClass = highRiskDaysValue >= 2 ? 'text-danger' :
+                highRiskDaysValue >= 1 ? 'text-warning' : 'text-success';
+            riskValue.className = 'h4 ' + riskClass + ' mb-0';
+            riskValue.textContent = highRiskDaysText;
+            const riskLabel = document.createElement('small');
+            riskLabel.className = 'text-muted';
+            riskLabel.textContent = '高风险天数';
+            riskCol.appendChild(riskValue);
+            riskCol.appendChild(riskLabel);
+
+            const avgCol = document.createElement('div');
+            avgCol.className = 'col-4';
+            const avgValue = document.createElement('div');
+            avgValue.className = 'h4 mb-0';
+            avgValue.textContent = avgVisitsText;
+            const avgLabel = document.createElement('small');
+            avgLabel.className = 'text-muted';
+            avgLabel.textContent = '日均门诊';
+            avgCol.appendChild(avgValue);
+            avgCol.appendChild(avgLabel);
+
+            row.appendChild(totalCol);
+            row.appendChild(riskCol);
+            row.appendChild(avgCol);
+            previewDiv.appendChild(row);
+
+            const cardsRow = document.createElement('div');
+            cardsRow.className = 'd-flex justify-content-between';
+            forecasts.forEach(f => {
+                const riskLevel = safeText(f.risk_level, '--');
+                const badgeClass = riskLevel.includes('红') ? 'danger' :
+                    riskLevel.includes('橙') ? 'warning' :
+                    riskLevel.includes('黄') ? 'info' : 'success';
+                const card = document.createElement('div');
+                card.className = 'text-center p-2 border rounded';
+                card.style.minWidth = '80px';
+
+                const dayText = document.createElement('div');
+                dayText.className = 'small text-muted';
+                dayText.textContent = safeText(f.day_of_week, '--');
+                const tempText = document.createElement('div');
+                tempText.className = 'fw-bold';
+                tempText.textContent = formatNumber(f.temperature && f.temperature.corrected, 0, '--') + '°C';
+                const badge = document.createElement('span');
+                badge.className = 'badge bg-' + badgeClass;
+                badge.style.fontSize = '0.7rem';
+                badge.textContent = riskLevel;
+
+                card.appendChild(dayText);
+                card.appendChild(tempText);
+                card.appendChild(badge);
+                cardsRow.appendChild(card);
+            });
+            previewDiv.appendChild(cardsRow);
+        } else {
+            const empty = document.createElement('p');
+            empty.className = 'text-muted text-center mb-0';
+            empty.textContent = '预测数据加载失败';
+            previewDiv.appendChild(empty);
+        }
+    })
+    .catch(error => {
+        const previewDiv = document.getElementById('forecast7dayPreview');
+        if (!previewDiv) {
+            return;
+        }
+        clearElement(previewDiv);
+        const empty = document.createElement('p');
+        empty.className = 'text-muted text-center mb-0';
+        empty.textContent = '预测服务暂不可用';
+        previewDiv.appendChild(empty);
+    });
+
+    const adjustContainer = document.getElementById('heatRiskAdjustDashboard');
+    if (adjustContainer) {
+        const storageKey = 'heat_threshold_adjust';
+        const score = parseFloat(adjustContainer.dataset.heatRiskScore || '0');
+        const badge = document.getElementById('heatAdjustedBadgeDashboard');
+        const inputs = adjustContainer.querySelectorAll('[data-heat-adjust]');
+        const badgeClass = {
+            '低风险': 'bg-success',
+            '中风险': 'bg-warning text-dark',
+            '高风险': 'bg-danger',
+            '极高': 'bg-dark'
+        };
+        const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
+        const computeLevel = (scoreValue, adjust) => {
+            const norm = scoreValue / 100;
+            const t1 = clamp(0.35 + adjust, 0.05, 0.9);
+            const t2 = clamp(0.55 + adjust, t1 + 0.05, 0.95);
+            const t3 = clamp(0.75 + adjust, t2 + 0.05, 0.98);
+            if (norm >= t3) return '极高';
+            if (norm >= t2) return '高风险';
+            if (norm >= t1) return '中风险';
+            return '低风险';
+        };
+        const applyAdjust = (adjust) => {
+            const level = computeLevel(score, adjust);
+            if (badge) {
+                badge.textContent = level;
+                badge.className = `badge ${badgeClass[level] || 'bg-secondary'}`;
+            }
+        };
+        let storedAdjust = parseFloat(localStorage.getItem(storageKey) || '0');
+        if (![-0.1, 0, 0.1].includes(storedAdjust)) {
+            storedAdjust = 0;
+        }
+        inputs.forEach(input => {
+            if (parseFloat(input.value) === storedAdjust) {
+                input.checked = true;
+            }
+            input.addEventListener('change', () => {
+                const value = parseFloat(input.value);
+                localStorage.setItem(storageKey, value);
+                applyAdjust(value);
+            });
+        });
+        applyAdjust(storedAdjust);
+    }
+});
+</script>
+{% endblock %}
+{% endblock %}

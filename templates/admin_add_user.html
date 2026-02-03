@@ -1,0 +1,98 @@
+{% extends "base.html" %}
+
+{% block title %}添加用户 - 管理后台{% endblock %}
+
+{% block content %}
+<div class="container">
+    <div class="row mb-4">
+        <div class="col-12">
+            <h2><i class="bi bi-person-plus"></i> 添加用户</h2>
+            <nav aria-label="breadcrumb">
+                <ol class="breadcrumb">
+                    <li class="breadcrumb-item"><a href="{{ url_for('admin.admin_dashboard') }}">管理后台</a></li>
+                    <li class="breadcrumb-item"><a href="{{ url_for('admin.admin_users') }}">用户管理</a></li>
+                    <li class="breadcrumb-item active">添加用户</li>
+                </ol>
+            </nav>
+        </div>
+    </div>
+
+    <div class="row">
+        <div class="col-md-8">
+            <div class="card shadow-sm">
+                <div class="card-body">
+                    <form method="POST" action="{{ url_for('admin.admin_add_user') }}">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <div class="row">
+                            <div class="col-md-6 mb-3">
+                                <label for="username" class="form-label">用户名 *</label>
+                                <input type="text" class="form-control" id="username" name="username" required>
+                            </div>
+                            <div class="col-md-6 mb-3">
+                                <label for="email" class="form-label">邮箱</label>
+                                <input type="email" class="form-control" id="email" name="email">
+                            </div>
+                        </div>
+
+                        <div class="row">
+                            <div class="col-md-6 mb-3">
+                                <label for="password" class="form-label">密码 *</label>
+                                <input type="password" class="form-control" id="password" name="password" required>
+                            </div>
+                            <div class="col-md-6 mb-3">
+                                <label for="role" class="form-label">角色</label>
+                                <select class="form-select" id="role" name="role">
+                                    <option value="user">普通用户</option>
+                                    <option value="caregiver">照护人</option>
+                                    <option value="community">社区人员</option>
+                                    <option value="admin">管理员</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <div class="row">
+                            <div class="col-md-4 mb-3">
+                                <label for="age" class="form-label">年龄</label>
+                                <input type="number" class="form-control" id="age" name="age">
+                            </div>
+                            <div class="col-md-4 mb-3">
+                                <label for="gender" class="form-label">性别</label>
+                                <select class="form-select" id="gender" name="gender">
+                                    <option value="">请选择</option>
+                                    <option value="男性">男性</option>
+                                    <option value="女性">女性</option>
+                                </select>
+                            </div>
+                            <div class="col-md-4 mb-3">
+                                <label for="community" class="form-label">所属社区</label>
+                                <select class="form-select" id="community" name="community">
+                                    <option value="">请选择</option>
+                                    {% for comm in communities %}
+                                        <option value="{{ comm.name }}">{{ comm.name }}</option>
+                                    {% endfor %}
+                                </select>
+                            </div>
+                        </div>
+
+                        <hr>
+
+                        <div class="d-flex gap-2">
+                            <button type="submit" class="btn btn-primary">
+                                <i class="bi bi-check-circle"></i> 添加用户
+                            </button>
+                            <a href="{{ url_for('admin.admin_users') }}" class="btn btn-outline-secondary">取消</a>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+
+
+
+
+
+

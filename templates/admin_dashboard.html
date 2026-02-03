@@ -1,0 +1,313 @@
+{% extends "base.html" %}
+
+{% block title %}管理后台 - 天气健康风险预测系统{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <div class="row mb-4">
+        <div class="col-12">
+            <h2><i class="bi bi-speedometer2"></i> 管理后台仪表板</h2>
+            <p class="text-muted">系统概览与数据统计</p>
+        </div>
+    </div>
+
+    <!-- 统计卡片 -->
+    <div class="row">
+        <div class="col-md-3 mb-4">
+            <div class="card shadow-sm border-start border-primary border-4">
+                <div class="card-body">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <div>
+                            <h6 class="text-muted mb-1">用户总数</h6>
+                            <h3 class="mb-0">{{ total_users }}</h3>
+                        </div>
+                        <div class="text-primary">
+                            <i class="bi bi-people fs-1"></i>
+                        </div>
+                    </div>
+                </div>
+                <div class="card-footer bg-light">
+                    <a href="{{ url_for('admin.admin_users') }}" class="text-decoration-none small">
+                        查看详情 <i class="bi bi-arrow-right"></i>
+                    </a>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-md-3 mb-4">
+            <div class="card shadow-sm border-start border-success border-4">
+                <div class="card-body">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <div>
+                            <h6 class="text-muted mb-1">病历记录</h6>
+                            <h3 class="mb-0">{{ total_records }}</h3>
+                        </div>
+                        <div class="text-success">
+                            <i class="bi bi-file-medical fs-1"></i>
+                        </div>
+                    </div>
+                </div>
+                <div class="card-footer bg-light">
+                    <a href="{{ url_for('admin.admin_records') }}" class="text-decoration-none small">
+                        查看详情 <i class="bi bi-arrow-right"></i>
+                    </a>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-md-3 mb-4">
+            <div class="card shadow-sm border-start border-info border-4">
+                <div class="card-body">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <div>
+                            <h6 class="text-muted mb-1">社区数量</h6>
+                            <h3 class="mb-0">{{ total_communities }}</h3>
+                        </div>
+                        <div class="text-info">
+                            <i class="bi bi-geo-alt fs-1"></i>
+                        </div>
+                    </div>
+                </div>
+                <div class="card-footer bg-light">
+                    <a href="{{ url_for('admin.admin_communities') }}" class="text-decoration-none small">
+                        查看详情 <i class="bi bi-arrow-right"></i>
+                    </a>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-md-3 mb-4">
+            <div class="card shadow-sm border-start border-warning border-4">
+                <div class="card-body">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <div>
+                            <h6 class="text-muted mb-1">活跃预警</h6>
+                            <h3 class="mb-0">{{ active_alerts }}</h3>
+                        </div>
+                        <div class="text-warning">
+                            <i class="bi bi-exclamation-triangle fs-1"></i>
+                        </div>
+                    </div>
+                </div>
+                <div class="card-footer bg-light">
+                    <span class="text-muted small">最近24小时</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 图表区域 -->
+    <div class="row">
+        <div class="col-md-12 mb-4">
+            <div class="card shadow-sm">
+                <div class="card-header bg-white">
+                    <h5 class="mb-0"><i class="bi bi-graph-up"></i> 病例趋势分析</h5>
+                    <small class="text-muted">数据时间范围：2023-12 至 2025-01（共13个月）</small>
+                </div>
+                <div class="card-body">
+                    <canvas id="casesTrendChart" height="120"></canvas>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-md-12 mb-4">
+            <div class="card shadow-sm">
+                <div class="card-header bg-white">
+                    <h5 class="mb-0"><i class="bi bi-pie-chart"></i> 疾病分类分布</h5>
+                    <small class="text-muted">共48种疾病分类</small>
+                </div>
+                <div class="card-body">
+                    <div class="d-flex justify-content-center">
+                        <div style="max-width: 600px; width: 100%;">
+                            <canvas id="diseaseDistChart" height="250"></canvas>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 快捷操作 -->
+    <div class="row">
+        <div class="col-12">
+            <div class="card shadow-sm">
+                <div class="card-header bg-white">
+                    <h5 class="mb-0"><i class="bi bi-lightning"></i> 快捷操作</h5>
+                </div>
+                <div class="card-body">
+                    <div class="row">
+                        <div class="col-md-3 mb-3">
+                            <a href="{{ url_for('admin.admin_users') }}" class="btn btn-outline-primary w-100">
+                                <i class="bi bi-people"></i><br>
+                                <span class="mt-2">用户管理</span>
+                            </a>
+                        </div>
+                        <div class="col-md-3 mb-3">
+                            <a href="{{ url_for('admin.admin_records') }}" class="btn btn-outline-success w-100">
+                                <i class="bi bi-file-medical"></i><br>
+                                <span class="mt-2">病历管理</span>
+                            </a>
+                        </div>
+                        <div class="col-md-3 mb-3">
+                            <a href="{{ url_for('admin.admin_communities') }}" class="btn btn-outline-info w-100">
+                                <i class="bi bi-geo-alt"></i><br>
+                                <span class="mt-2">社区管理</span>
+                            </a>
+                        </div>
+                        <div class="col-md-3 mb-3">
+                            <a href="{{ url_for('admin.admin_cooling_resources') }}" class="btn btn-outline-info w-100">
+                                <i class="bi bi-sun"></i><br>
+                                <span class="mt-2">避暑资源</span>
+                            </a>
+                        </div>
+                        <div class="col-md-3 mb-3">
+                            <a href="{{ url_for('admin.admin_statistics') }}" class="btn btn-outline-warning w-100">
+                                <i class="bi bi-bar-chart"></i><br>
+                                <span class="mt-2">统计分析</span>
+                            </a>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+// 等待DOM加载完成
+document.addEventListener('DOMContentLoaded', function() {
+    console.log('管理后台图表初始化...');
+    console.log('月度数据:', {{ month_labels|tojson|safe }}, {{ month_trend|tojson|safe }});
+    console.log('疾病数据:', {{ disease_labels|tojson|safe }}, {{ disease_counts|tojson|safe }});
+    
+    // 病例趋势图表 - 真实数据
+    const ctxTrend = document.getElementById('casesTrendChart');
+    console.log('趋势图表元素:', ctxTrend);
+    if (ctxTrend) {
+    new Chart(ctxTrend.getContext('2d'), {
+        type: 'line',
+        data: {
+            labels: {{ month_labels|tojson|safe }},
+            datasets: [{
+                label: '病例数',
+                data: {{ month_trend|tojson|safe }},
+                borderColor: '#1a56db',
+                backgroundColor: 'rgba(26, 86, 219, 0.1)',
+                borderWidth: 3,
+                tension: 0.4,
+                fill: true,
+                pointRadius: 4,
+                pointHoverRadius: 6,
+                pointBackgroundColor: '#1a56db'
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: {
+                    display: false
+                },
+                title: {
+                    display: false
+                },
+                tooltip: {
+                    callbacks: {
+                        label: function(context) {
+                            return '病例数: ' + context.parsed.y + ' 条';
+                        }
+                    }
+                }
+            },
+            scales: {
+                x: {
+                    grid: {
+                        display: false
+                    },
+                    ticks: {
+                        maxRotation: 45,
+                        minRotation: 45,
+                        font: {
+                            size: 11
+                        }
+                    }
+                },
+                y: {
+                    beginAtZero: true,
+                    ticks: {
+                        precision: 0,
+                        callback: function(value) {
+                            return value;
+                        }
+                    },
+                    grid: {
+                        color: 'rgba(0, 0, 0, 0.05)'
+                    }
+                }
+            }
+        }
+    });
+}
+
+// 疾病分类分布图表 - Top10
+const ctxDist = document.getElementById('diseaseDistChart');
+if (ctxDist) {
+    new Chart(ctxDist.getContext('2d'), {
+        type: 'doughnut',
+        data: {
+            labels: {{ disease_labels|tojson|safe }},
+            datasets: [{
+                data: {{ disease_counts|tojson|safe }},
+                backgroundColor: [
+                    '#1a56db',
+                    '#0e9f6e',
+                    '#dc2626',
+                    '#d97706',
+                    '#0284c7',
+                    '#7c3aed',
+                    '#db2777',
+                    '#059669',
+                    '#ea580c',
+                    '#6366f1'
+                ],
+                borderWidth: 2,
+                borderColor: '#fff'
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: true,
+            aspectRatio: 2,
+            plugins: {
+                legend: {
+                    position: 'right',
+                    labels: {
+                        padding: 10,
+                        font: {
+                            size: 10
+                        },
+                        boxWidth: 12
+                    }
+                },
+                tooltip: {
+                    callbacks: {
+                        label: function(context) {
+                            const label = context.label || '';
+                            const value = context.parsed || 0;
+                            const total = context.dataset.data.reduce((a, b) => a + b, 0);
+                            const percentage = ((value / total) * 100).toFixed(1);
+                            return label + ': ' + value + ' 条 (' + percentage + '%)';
+                        }
+                    }
+                }
+            }
+        }
+    });
+}
+
+    console.log('管理后台图表初始化完成');
+});
+</script>
+{% endblock %}

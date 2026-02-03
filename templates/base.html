@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="csrf-token" content="{{ csrf_token() }}">
+    <title>{% block title %}天气健康风险预测系统{% endblock %}</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/animations.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/page-transitions.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/ai-floating-chat.css') }}">
+    {% block extra_css %}{% endblock %}
+</head>
+<body>
+    <!-- 页面加载动画 -->
+    <div class="page-loader" id="pageLoader">
+        <div class="loader-spinner"></div>
+        <div class="loader-text">加载中...</div>
+    </div>
+
+    <!-- 导航栏 -->
+    <nav class="navbar navbar-expand-lg navbar-dark bg-primary sticky-top">
+        <div class="container-fluid">
+            <a class="navbar-brand" href="/">
+                <i class="bi bi-cloud-sun"></i> 天气健康风险预测系统
+            </a>
+            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
+                <span class="navbar-toggler-icon"></span>
+            </button>
+            <div class="collapse navbar-collapse" id="navbarNav">
+                <ul class="navbar-nav ms-auto">
+                    <li class="nav-item">
+                        <a class="nav-link" href="{{ url_for('public.index') }}">
+                            <i class="bi bi-house-door"></i> 首页
+                        </a>
+                    </li>
+                    {% if current_user.is_authenticated %}
+                        <li class="nav-item">
+                            <a class="nav-link" href="{{ url_for('user.user_dashboard') }}">
+                                <i class="bi bi-house-door"></i> 我的主页
+                            </a>
+                        </li>
+                    {% endif %}
+                    <li class="nav-item dropdown">
+                        <a class="nav-link dropdown-toggle" href="#" role="button" data-bs-toggle="dropdown">
+                            <i class="bi bi-info-circle"></i> 入口与公共信息
+                        </a>
+                        <ul class="dropdown-menu">
+                            <li><a class="dropdown-item" href="{{ url_for('public.public_risk') }}">
+                                <i class="bi bi-thermometer-sun me-2"></i>风险说明
+                            </a></li>
+                            <li><a class="dropdown-item" href="{{ url_for('public.cooling_resources') }}">
+                                <i class="bi bi-geo-alt me-2"></i>避暑资源
+                            </a></li>
+                            <li><a class="dropdown-item" href="{{ url_for('public.transparency') }}">
+                                <i class="bi bi-shield-check me-2"></i>透明度
+                            </a></li>
+                        </ul>
+                    </li>
+                    <li class="nav-item dropdown">
+                        <a class="nav-link dropdown-toggle" href="#" role="button" data-bs-toggle="dropdown">
+                            <i class="bi bi-clipboard-check"></i> 风险预警与行动
+                        </a>
+                        <ul class="dropdown-menu">
+                            <li><a class="dropdown-item" href="{{ url_for('public.action_check') }}">
+                                <i class="bi bi-clipboard-check me-2"></i>行动打卡
+                            </a></li>
+                            {% if current_user.is_authenticated %}
+                                <li><a class="dropdown-item" href="{{ url_for('user.community_risk') }}">
+                                    <i class="bi bi-map me-2"></i>社区风险地图
+                                </a></li>
+                            {% endif %}
+                        </ul>
+                    </li>
+                    {% if current_user.is_authenticated %}
+                        <li class="nav-item dropdown">
+                            <a class="nav-link dropdown-toggle" href="#" role="button" data-bs-toggle="dropdown">
+                                <i class="bi bi-graph-up"></i> 智能预测与评估
+                            </a>
+                            <ul class="dropdown-menu">
+                                <li><a class="dropdown-item" href="{{ url_for('user.health_assessment') }}">健康评估</a></li>
+                                <li><a class="dropdown-item" href="{{ url_for('tools.ml_prediction') }}">
+                                    <i class="bi bi-cpu me-2"></i>AI疾病预测
+                                </a></li>
+                                <li><a class="dropdown-item" href="{{ url_for('tools.forecast_7day') }}">
+                                    <i class="bi bi-calendar-week me-2"></i>7天健康预测
+                                </a></li>
+                                <li><a class="dropdown-item" href="{{ url_for('tools.chronic_risk') }}">
+                                    <i class="bi bi-heart-pulse me-2"></i>慢病风险评估
+                                </a></li>
+                                <li><a class="dropdown-item" href="{{ url_for('tools.ai_qa') }}">
+                                    <i class="bi bi-chat-dots me-2"></i>AI提问
+                                </a></li>
+                            </ul>
+                        </li>
+                        <li class="nav-item dropdown">
+                            <a class="nav-link dropdown-toggle" href="#" role="button" data-bs-toggle="dropdown">
+                                <i class="bi bi-heart"></i> 健康管理与照护
+                            </a>
+                            <ul class="dropdown-menu">
+                                {% if current_user.role in ['caregiver', 'admin'] %}
+                                    <li><a class="dropdown-item" href="{{ url_for('user.caregiver_dashboard') }}">
+                                        <i class="bi bi-people me-2"></i>照护工作台
+                                    </a></li>
+                                {% else %}
+                                    <li><a class="dropdown-item" href="{{ url_for('user.pair_management') }}">
+                                        <i class="bi bi-people me-2"></i>照护绑定
+                                    </a></li>
+                                {% endif %}
+                                <li><hr class="dropdown-divider"></li>
+                                <li><a class="dropdown-item" href="{{ url_for('health.family_members') }}">家庭成员</a></li>
+                                <li><a class="dropdown-item" href="{{ url_for('health.health_diary') }}">健康日记</a></li>
+                                <li><a class="dropdown-item" href="{{ url_for('health.medication_reminders') }}">用药提醒</a></li>
+                                <li><a class="dropdown-item" href="{{ url_for('analysis.annual_report') }}">年度健康报告</a></li>
+                            </ul>
+                        </li>
+                        {% if current_user.role in ['community', 'admin'] %}
+                            <li class="nav-item dropdown">
+                                <a class="nav-link dropdown-toggle" href="#" role="button" data-bs-toggle="dropdown">
+                                    <i class="bi bi-building"></i> 社区与群体
+                                </a>
+                                <ul class="dropdown-menu">
+                                    <li><a class="dropdown-item" href="{{ url_for('user.community_dashboard') }}">
+                                        <i class="bi bi-building me-2"></i>社区看板
+                                    </a></li>
+                                </ul>
+                            </li>
+                        {% endif %}
+                        <li class="nav-item dropdown">
+                            <a class="nav-link dropdown-toggle" href="#" role="button" data-bs-toggle="dropdown">
+                                <i class="bi bi-bar-chart"></i> 数据分析与后台
+                            </a>
+                            <ul class="dropdown-menu">
+                                {% if current_user.role == 'admin' %}
+                                    <li><a class="dropdown-item" href="{{ url_for('admin.admin_dashboard') }}">
+                                        <i class="bi bi-speedometer2 me-2"></i>管理后台
+                                    </a></li>
+                                    <li><a class="dropdown-item" href="{{ url_for('admin.admin_users') }}">用户管理</a></li>
+                                    <li><a class="dropdown-item" href="{{ url_for('admin.admin_records') }}">病历管理</a></li>
+                                    <li><a class="dropdown-item" href="{{ url_for('admin.admin_communities') }}">社区管理</a></li>
+                                    <li><a class="dropdown-item" href="{{ url_for('admin.admin_cooling_resources') }}">避暑资源</a></li>
+                                    <li><a class="dropdown-item" href="{{ url_for('admin.admin_statistics') }}">统计分析</a></li>
+                                    <li><hr class="dropdown-divider"></li>
+                                {% endif %}
+                                <li><a class="dropdown-item" href="{{ url_for('analysis.analysis_history') }}">历史回溯分析</a></li>
+                                <li><a class="dropdown-item" href="{{ url_for('analysis.analysis_heatmap') }}">相关性热力图</a></li>
+                                <li><a class="dropdown-item" href="{{ url_for('analysis.analysis_lag') }}">滞后效应</a></li>
+                                <li><a class="dropdown-item" href="{{ url_for('analysis.analysis_community_compare') }}">社区对比</a></li>
+                                <li><a class="dropdown-item" href="{{ url_for('analysis.alerts_history') }}">预警历史</a></li>
+                                <li><a class="dropdown-item" href="{{ url_for('analysis.alerts_accuracy') }}">预警准确率</a></li>
+                                <li><hr class="dropdown-divider"></li>
+                                <li><a class="dropdown-item" href="{{ url_for('analysis.reports_center') }}">
+                                    <i class="bi bi-file-earmark-arrow-down me-2"></i>报告导出
+                                </a></li>
+                            </ul>
+                        </li>
+                        <li class="nav-item dropdown">
+                            <a class="nav-link dropdown-toggle" href="#" role="button" data-bs-toggle="dropdown">
+                                <i class="bi bi-geo-alt"></i> {{ current_location or '设置位置' }}
+                            </a>
+                            <div class="dropdown-menu dropdown-menu-end p-3" style="min-width: 280px;">
+                                <form method="POST" action="{{ url_for('user.update_location') }}">
+                                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                    <label class="form-label small mb-1">选择当前所在地</label>
+                                    <input class="form-control" name="location" list="locationOptions" value="{{ current_location }}">
+                                    <datalist id="locationOptions">
+                                        {% for loc in location_options %}
+                                            <option value="{{ loc }}"></option>
+                                        {% endfor %}
+                                    </datalist>
+                                    <div class="text-muted small mt-2">支持城市/社区名称（如：都昌县、北京）</div>
+                                    <button class="btn btn-primary btn-sm w-100 mt-2">更新定位</button>
+                                </form>
+                            </div>
+                        </li>
+                        {% if feature_flags.elder_mode %}
+                        <li class="nav-item d-flex align-items-center ms-2">
+                            <div class="form-check form-switch text-white mb-0">
+                                <input class="form-check-input" type="checkbox" id="elderModeToggle">
+                                <label class="form-check-label" for="elderModeToggle">大字/高对比</label>
+                            </div>
+                        </li>
+                        {% endif %}
+                        <li class="nav-item dropdown">
+                            <a class="nav-link dropdown-toggle" href="#" id="navbarDropdown" role="button" data-bs-toggle="dropdown">
+                                <i class="bi bi-person-circle"></i> {{ current_user.username }}
+                            </a>
+                            <ul class="dropdown-menu dropdown-menu-end">
+                                {% if current_user.role == 'admin' %}
+                                    <li><a class="dropdown-item" href="{{ url_for('public.index') }}"><i class="bi bi-house-door me-2"></i>返回首页</a></li>
+                                    <li><hr class="dropdown-divider"></li>
+                                {% endif %}
+                                {% if current_user.role != 'guest' %}
+                                    <li><a class="dropdown-item" href="{{ url_for('user.profile') }}"><i class="bi bi-gear me-2"></i>个人设置</a></li>
+                                    {% if feature_flags.elder_mode %}
+                                        <li><a class="dropdown-item" href="{{ url_for('user.elder_dashboard') }}"><i class="bi bi-eyeglasses me-2"></i>老人模式</a></li>
+                                    {% endif %}
+                                    <li><hr class="dropdown-divider"></li>
+                                {% else %}
+                                    <li><a class="dropdown-item" href="{{ url_for('public.register') }}"><i class="bi bi-person-plus me-2"></i>注册账号</a></li>
+                                    <li><hr class="dropdown-divider"></li>
+                                {% endif %}
+                                <li><a class="dropdown-item" href="{{ url_for('public.logout') }}"><i class="bi bi-box-arrow-right me-2"></i>退出登录</a></li>
+                            </ul>
+                        </li>
+                    {% else %}
+                        <li class="nav-item">
+                            <a class="nav-link" href="{{ url_for('public.login') }}">
+                                <i class="bi bi-box-arrow-in-right"></i> 登录
+                            </a>
+                        </li>
+                        <li class="nav-item">
+                            <a class="nav-link" href="{{ url_for('public.register') }}">
+                                <i class="bi bi-person-plus"></i> 注册
+                            </a>
+                        </li>
+                    {% endif %}
+                </ul>
+            </div>
+        </div>
+    </nav>
+
+    <!-- 消息提示 -->
+    {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+            <div class="container mt-3">
+                {% for category, message in messages %}
+                    <div class="alert alert-{{ 'danger' if category == 'error' else 'success' }} alert-dismissible fade show" role="alert">
+                        {{ message }}
+                        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+                    </div>
+                {% endfor %}
+            </div>
+        {% endif %}
+    {% endwith %}
+
+    <!-- 主要内容 -->
+    <main class="container-fluid py-4">
+        {% block content %}{% endblock %}
+    </main>
+
+    {% include 'partials/ai_floating_chat.html' %}
+
+    <!-- 页脚 -->
+    <footer class="bg-light text-center text-muted py-4 mt-5">
+        <div class="container">
+            <p class="mb-0">© 2025 | 天气健康风险预测系统 | 宜老天气通</p>
+        </div>
+    </footer>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    
+    <!-- 页面加载和跳转优化 -->
+    <script>
+        // 多重保险机制确保加载动画关闭
+        function hideLoader() {
+            const loader = document.getElementById('pageLoader');
+            if (loader) {
+                loader.classList.add('hidden');
+            }
+        }
+
+        // 1. DOMContentLoaded时隐藏（最快）
+        document.addEventListener('DOMContentLoaded', function() {
+            setTimeout(hideLoader, 100);
+        });
+
+        // 2. load事件时隐藏（备用）
+        window.addEventListener('load', function() {
+            setTimeout(hideLoader, 100);
+        });
+
+        // 3. 超时保护 - 最多3秒后强制关闭
+        setTimeout(hideLoader, 3000);
+
+        // 表单提交时的加载状态
+        document.addEventListener('DOMContentLoaded', function() {
+            const forms = document.querySelectorAll('form');
+            forms.forEach(form => {
+                form.addEventListener('submit', function(e) {
+                    const submitBtn = this.querySelector('button[type="submit"]');
+                    if (submitBtn && !submitBtn.classList.contains('no-loading')) {
+                        submitBtn.disabled = true;
+                        const originalText = submitBtn.innerHTML;
+                        submitBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>处理中...';
+                        
+                        // 3秒后恢复按钮（防止卡住）
+                        setTimeout(function() {
+                            submitBtn.disabled = false;
+                            submitBtn.innerHTML = originalText;
+                        }, 3000);
+                    }
+                });
+            });
+        });
+
+        // 捕获所有可能的错误，确保加载动画关闭
+        window.addEventListener('error', function() {
+            hideLoader();
+        });
+    </script>
+
+    <script>
+        (function() {
+            const elderMode = localStorage.getItem('elderMode') === '1';
+            if (elderMode) {
+                document.body.classList.add('elder-mode');
+            }
+            const toggle = document.getElementById('elderModeToggle');
+            if (!toggle) {
+                return;
+            }
+            toggle.checked = elderMode;
+            toggle.addEventListener('change', function() {
+                if (toggle.checked) {
+                    localStorage.setItem('elderMode', '1');
+                    document.body.classList.add('elder-mode');
+                } else {
+                    localStorage.removeItem('elderMode');
+                    document.body.classList.remove('elder-mode');
+                }
+            });
+        })();
+    </script>
+
+    <script>
+        (function() {
+            const meta = document.querySelector('meta[name="csrf-token"]');
+            if (!meta) {
+                return;
+            }
+            const csrfToken = meta.getAttribute('content');
+            if (!csrfToken) {
+                return;
+            }
+            const originalFetch = window.fetch;
+            window.fetch = function(input, init) {
+                init = init || {};
+                const method = (init.method || 'GET').toUpperCase();
+                if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) {
+                    const headers = new Headers(init.headers || {});
+                    headers.set('X-CSRF-Token', csrfToken);
+                    init.headers = headers;
+                }
+                return originalFetch(input, init);
+            };
+        })();
+    </script>
+
+    <script src="{{ url_for('static', filename='js/ai-floating-chat.js') }}"></script>
+    
+    {% block extra_js %}{% endblock %}
+</body>
+</html>

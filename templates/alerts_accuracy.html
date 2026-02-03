@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+
+{% block title %}预警准确率统计 - 天气健康风险预测系统{% endblock %}
+
+{% block content %}
+<div class="container">
+    <div class="row mb-4">
+        <div class="col-12">
+            <h2><i class="bi bi-clipboard-data"></i> 预警准确率统计</h2>
+            <p class="text-muted">评估预警系统预测准确性（近90天）</p>
+        </div>
+    </div>
+
+    <div class="row g-4">
+        <div class="col-md-4">
+            <div class="card shadow-sm h-100">
+                <div class="card-body text-center">
+                    <div class="display-6">{{ total_alerts }}</div>
+                    <div class="text-muted">预警总数</div>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-4">
+            <div class="card shadow-sm h-100">
+                <div class="card-body text-center">
+                    <div class="display-6">{{ hit_count }}</div>
+                    <div class="text-muted">命中次数</div>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-4">
+            <div class="card shadow-sm h-100">
+                <div class="card-body text-center">
+                    <div class="display-6">
+                        {{ '%.1f'|format(accuracy) if accuracy is not none else '--' }}{% if accuracy is not none %}%{% endif %}
+                    </div>
+                    <div class="text-muted">准确率</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    {% if data_notes %}
+    <div class="alert alert-warning border-0 mt-4">
+        <i class="bi bi-info-circle me-1"></i>{{ data_notes|join('；') }}
+    </div>
+    {% endif %}
+
+    <div class="card shadow-sm mt-4">
+        <div class="card-body text-muted">
+            统计区间：{{ start_date }} 至 {{ end_date }}。命中定义：预警发布后1-3天内门诊量超过社区历史P90阈值。
+        </div>
+    </div>
+</div>
+{% endblock %}

@@ -1,0 +1,103 @@
+{% extends "base.html" %}
+
+{% block title %}透明度说明 - 天气健康风险预测系统{% endblock %}
+
+{% block content %}
+<div class="container my-4">
+    <div class="row mb-3">
+        <div class="col-12">
+            <h2><i class="bi bi-shield-check"></i> 透明度说明</h2>
+            <p class="text-muted mb-0">说明数据来源、隐私保护与公平原则（不提供医疗诊断或治疗建议）。</p>
+        </div>
+    </div>
+
+    <div class="row g-4">
+        <div class="col-lg-6">
+            <div class="card shadow-sm h-100">
+                <div class="card-header bg-light">
+                    <h5 class="mb-0"><i class="bi bi-cloud-sun"></i> 数据来源</h5>
+                </div>
+                <div class="card-body">
+                    <ul class="mb-0 text-muted">
+                        <li>天气数据：和风天气（QWeather）API，结合缓存与自动同步脚本（如 scripts/weather_sync.sh）。</li>
+                        <li>社区资源：由社区/管理员维护（避暑点信息）。</li>
+                        <li>行动数据：仅记录短码、社区与行动状态，不含个人身份信息。</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+        <div class="col-lg-6">
+            <div class="card shadow-sm h-100">
+                <div class="card-header bg-light">
+                    <h5 class="mb-0"><i class="bi bi-diagram-3"></i> 模型版本</h5>
+                </div>
+                <div class="card-body">
+                    <ul class="mb-0 text-muted">
+                        <li>热风险规则：HeatActionService v2（体感热 + 夜间最低温 + 连续高温天数）。</li>
+                        <li>解释方式：展示三项贡献权重，帮助理解风险来源。</li>
+                        <li>个人阈值：-0.1/0/+0.1，仅保存在本机浏览器。</li>
+                        <li>版本更新：记录在发布日志与迁移说明中。</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+        <div class="col-lg-6">
+            <div class="card shadow-sm h-100">
+                <div class="card-header bg-light">
+                    <h5 class="mb-0"><i class="bi bi-lock"></i> 隐私最小化</h5>
+                </div>
+                <div class="card-body">
+                    <ul class="mb-0 text-muted">
+                        <li>不存老人姓名、电话、慢病、精确住址。</li>
+                        <li>备选联系人仅保存在本机浏览器（localStorage）。</li>
+                        <li>个人阈值拨片仅本机可见，不上传服务器。</li>
+                        <li>复盘数据可选择关联绑定（opt-in），否则匿名汇总（至少社区）。</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+        <div class="col-lg-6">
+            <div class="card shadow-sm h-100">
+                <div class="card-header bg-light">
+                    <h5 class="mb-0"><i class="bi bi-exclamation-circle"></i> 局限与适用范围</h5>
+                </div>
+                <div class="card-body">
+                    <ul class="mb-0 text-muted">
+                        <li>仅提供通用热健康行动建议，不提供医疗诊断、处方或治疗建议。</li>
+                        <li>连续高温天数依赖历史天气同步，缺失时可能低估风险。</li>
+                        <li>风险评分用于行动提醒，无法替代现场医疗判断。</li>
+                        <li>短码输入、确认/求助、升级链与登录均进行限流防滥用。</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+        <div class="col-lg-6">
+            <div class="card shadow-sm h-100">
+                <div class="card-header bg-light">
+                    <h5 class="mb-0"><i class="bi bi-people"></i> 公平与可及性</h5>
+                </div>
+                <div class="card-body">
+                    <ul class="mb-0 text-muted">
+                        <li>统一的热风险阈值与行动建议，避免对特定人群贴标签。</li>
+                        <li>社区层面汇总，支持按社区管理行动资源。</li>
+                        <li>界面提供简洁入口与大字模式（如已启用）。</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+        <div class="col-lg-6">
+            <div class="card shadow-sm h-100">
+                <div class="card-header bg-light">
+                    <h5 class="mb-0"><i class="bi bi-chat-square-text"></i> 反馈入口</h5>
+                </div>
+                <div class="card-body">
+                    <p class="text-muted mb-2">欢迎反馈数据问题、行动建议或公平性建议。</p>
+                    <a class="btn btn-outline-primary btn-sm" href="mailto:wuxy.alf2024@gdhfi.com">
+                        <i class="bi bi-envelope"></i> 邮件反馈
+                    </a>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

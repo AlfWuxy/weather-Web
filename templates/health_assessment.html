@@ -1,0 +1,153 @@
+{% extends "base.html" %}
+
+{% block title %}健康风险评估 - 天气健康风险预测系统{% endblock %}
+
+{% block content %}
+<div class="container">
+    <div class="row justify-content-center">
+        <div class="col-md-8">
+            <div class="card shadow-lg">
+                <div class="card-header bg-success text-white text-center py-4">
+                    <h3><i class="bi bi-clipboard-pulse"></i> 健康风险评估</h3>
+                    <p class="mb-0">基于当前天气和个人健康状况进行风险评估</p>
+                </div>
+                <div class="card-body p-4">
+                    <div class="alert alert-info">
+                        <i class="bi bi-info-circle"></i> 
+                        <strong>评估说明：</strong>
+                        系统将综合考虑以下因素进行风险评估：
+                        <ul class="mb-0 mt-2">
+                            <li>当前天气条件（温度、湿度、空气质量等）</li>
+                            <li>您的年龄和性别</li>
+                            <li>是否患有慢性疾病</li>
+                            <li>所在社区的整体健康状况</li>
+                        </ul>
+                    </div>
+
+                    <form method="POST" action="{{ url_for('user.health_assessment') }}">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <div class="mb-4">
+                            <h5><i class="bi bi-person-badge"></i> 基本信息</h5>
+                            <div class="row">
+                                <div class="col-md-6 mb-3">
+                                    <label class="form-label">年龄</label>
+                                    <input type="text" class="form-control" value="{{ current_user.age or '未设置' }}" readonly>
+                                </div>
+                                <div class="col-md-6 mb-3">
+                                    <label class="form-label">性别</label>
+                                    <input type="text" class="form-control" value="{{ current_user.gender or '未设置' }}" readonly>
+                                </div>
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label">所属社区</label>
+                                <input type="text" class="form-control" value="{{ current_user.community or '未设置' }}" readonly>
+                            </div>
+                        </div>
+
+                        <div class="mb-4">
+                            <h5><i class="bi bi-heart"></i> 健康状况</h5>
+                            <div class="mb-3">
+                                <label class="form-label">是否患有慢性疾病</label>
+                                <div class="form-check">
+                                    <input class="form-check-input" type="checkbox" id="has_chronic" disabled 
+                                           {% if current_user.has_chronic_disease %}checked{% endif %}>
+                                    <label class="form-check-label" for="has_chronic">
+                                        {{ '是' if current_user.has_chronic_disease else '否' }}
+                                    </label>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="alert alert-warning">
+                            <i class="bi bi-exclamation-triangle"></i>
+                            <strong>温馨提示：</strong>
+                            如需更新个人信息，请前往个人设置页面
+                        </div>
+
+                        <div class="d-grid gap-2">
+                            <button type="submit" class="btn btn-success btn-lg">
+                                <i class="bi bi-clipboard-check"></i> 开始评估
+                            </button>
+                            <a href="{{ url_for('user.user_dashboard') }}" class="btn btn-outline-secondary">
+                                <i class="bi bi-arrow-left"></i> 返回主页
+                            </a>
+                        </div>
+                    </form>
+                </div>
+            </div>
+
+            <div class="card shadow-sm mt-4">
+                <div class="card-header">
+                    <h5 class="mb-0"><i class="bi bi-question-circle"></i> 评估指标说明</h5>
+                </div>
+                <div class="card-body">
+                    <dl class="row mb-0">
+                        <dt class="col-sm-3">低风险</dt>
+                        <dd class="col-sm-9">当前天气条件对您的健康影响较小，可正常活动</dd>
+                        
+                        <dt class="col-sm-3">中风险</dt>
+                        <dd class="col-sm-9">天气条件可能对健康产生一定影响，建议适当注意防护</dd>
+                        
+                        <dt class="col-sm-3">高风险</dt>
+                        <dd class="col-sm-9 mb-0">天气条件对健康影响较大，建议减少外出，加强防护措施</dd>
+                    </dl>
+                </div>
+            </div>
+
+            {% if assessment_explain and assessment_explain.get('explain') %}
+            <div class="card shadow-sm mt-4">
+                <div class="card-header bg-light">
+                    <h5 class="mb-0"><i class="bi bi-journal-check"></i> 结果解读</h5>
+                </div>
+                <div class="card-body">
+                    <div class="row g-3">
+                        <div class="col-md-4">
+                            <h6 class="mb-2">原因</h6>
+                            <ul class="mb-0">
+                                {% for item in assessment_explain.explain.reasons %}
+                                    <li class="mb-1">{{ item }}</li>
+                                {% endfor %}
+                                {% if not assessment_explain.explain.reasons %}
+                                    <li class="text-muted">暂无明显触发原因</li>
+                                {% endif %}
+                            </ul>
+                        </div>
+                        <div class="col-md-4">
+                            <h6 class="mb-2">今天怎么做</h6>
+                            <ul class="mb-0">
+                                {% for item in assessment_explain.explain.actions %}
+                                    <li class="mb-1">{{ item }}</li>
+                                {% endfor %}
+                                {% if not assessment_explain.explain.actions %}
+                                    <li class="text-muted">保持规律作息，按时饮水</li>
+                                {% endif %}
+                            </ul>
+                        </div>
+                        <div class="col-md-4">
+                            <h6 class="mb-2">什么时候要找人</h6>
+                            <ul class="mb-0">
+                                {% for item in assessment_explain.explain.escalation %}
+                                    <li class="mb-1">{{ item }}</li>
+                                {% endfor %}
+                                {% if not assessment_explain.explain.escalation %}
+                                    <li class="text-muted">出现胸痛、呼吸困难等请及时就医</li>
+                                {% endif %}
+                            </ul>
+                        </div>
+                    </div>
+                    <div class="small text-muted mt-3">风险提示不是诊断，紧急情况优先就医。</div>
+                </div>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+
+
+
+
+
+
+

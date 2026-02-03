@@ -1,0 +1,142 @@
+{% extends "base.html" %}
+
+{% block title %}热风险与行动建议 - 天气健康风险预测系统{% endblock %}
+
+{% block content %}
+<div class="container my-4">
+    <div class="row mb-3">
+        <div class="col-12">
+            <h2><i class="bi bi-thermometer-sun"></i> 热风险与行动建议</h2>
+            <p class="text-muted mb-0">基于当前天气的通用行动提示（不提供医疗诊断或治疗建议）。</p>
+        </div>
+    </div>
+
+    <div class="row g-4">
+        <div class="col-lg-7">
+            {% set heat_color = 'dark' if risk_label == '极高' else 'danger' if risk_label == '高风险' else 'warning' if risk_label == '中风险' else 'success' %}
+            <div class="card shadow-sm">
+                <div class="card-header bg-{{ heat_color }} text-white">
+                    <h5 class="mb-0">当前风险：{{ risk_label }}</h5>
+                </div>
+                <div class="card-body">
+                    <div class="mb-2 text-muted">地区：{{ location }}</div>
+                    <div class="mb-3">
+                        <span class="badge bg-light text-dark">综合评分 {{ heat_result.risk_score if heat_result and heat_result.risk_score is not none else '--' }}</span>
+                        <span class="badge bg-light text-dark">体感热 {{ heat_result.heat_index if heat_result and heat_result.heat_index is not none else '--' }}</span>
+                        <span class="badge bg-light text-dark">夜间最低 {{ heat_result.night_min if heat_result and heat_result.night_min is not none else '--' }}°C</span>
+                        <span class="badge bg-light text-dark">连续高温 {{ heat_result.consecutive_hot_days if heat_result and heat_result.consecutive_hot_days is not none else 0 }}天</span>
+                    </div>
+                    <div class="mb-3" id="heatRiskAdjust" data-heat-risk-score="{{ heat_result.risk_score if heat_result and heat_result.risk_score is not none else 0 }}">
+                        <div class="d-flex flex-wrap align-items-center gap-2">
+                            <span class="text-muted small">个人阈值</span>
+                            <div class="btn-group btn-group-sm" role="group" aria-label="Heat threshold adjust">
+                                <input type="radio" class="btn-check" name="heatAdjustRisk" id="heatAdjustRiskLow" value="-0.1" data-heat-adjust>
+                                <label class="btn btn-outline-secondary" for="heatAdjustRiskLow">-0.1</label>
+                                <input type="radio" class="btn-check" name="heatAdjustRisk" id="heatAdjustRiskMid" value="0" data-heat-adjust>
+                                <label class="btn btn-outline-secondary" for="heatAdjustRiskMid">0</label>
+                                <input type="radio" class="btn-check" name="heatAdjustRisk" id="heatAdjustRiskHigh" value="0.1" data-heat-adjust>
+                                <label class="btn btn-outline-secondary" for="heatAdjustRiskHigh">+0.1</label>
+                            </div>
+                            <span class="badge bg-secondary" id="heatAdjustedBadge">--</span>
+                            <span class="text-muted small">仅保存在本机</span>
+                        </div>
+                    </div>
+                    <h6 class="mb-2">为什么危险</h6>
+                    {% if risk_reasons and risk_reasons|length > 0 %}
+                        {% for reason in risk_reasons %}
+                            <div class="mb-2">
+                                <div class="d-flex justify-content-between small">
+                                    <span>{{ reason.label }}</span>
+                                    <span class="text-muted">{{ reason.value }}</span>
+                                </div>
+                                <div class="progress" style="height: 8px;">
+                                    <div class="progress-bar bg-{{ heat_color }}" style="width: {{ reason.weight }}%"></div>
+                                </div>
+                            </div>
+                        {% endfor %}
+                    {% else %}
+                        <div class="text-muted small mb-3">暂无足够数据解释风险来源。</div>
+                    {% endif %}
+                    <h6 class="mb-2">建议行动</h6>
+                    <ul class="mb-0">
+                        {% for item in actions %}
+                            <li><strong>{{ item.title }}</strong>：{{ item.detail }}</li>
+                        {% endfor %}
+                    </ul>
+                </div>
+            </div>
+        </div>
+        <div class="col-lg-5">
+            <div class="card shadow-sm mb-3">
+                <div class="card-body">
+                    <h6 class="mb-2"><i class="bi bi-clipboard-check"></i> 去行动打卡</h6>
+                    <p class="text-muted small">使用短码完成今日确认或求助。</p>
+                    <a class="btn btn-primary w-100" href="{{ url_for('public.elder_entry') }}">
+                        进入行动入口
+                    </a>
+                </div>
+            </div>
+            <div class="card shadow-sm">
+                <div class="card-body">
+                    <h6 class="mb-2"><i class="bi bi-shield-check"></i> 统一免责声明</h6>
+                    {% include "partials/disclaimer_block.html" %}
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+    const adjustContainer = document.getElementById('heatRiskAdjust');
+    if (!adjustContainer) {
+        return;
+    }
+    const storageKey = 'heat_threshold_adjust';
+    const score = parseFloat(adjustContainer.dataset.heatRiskScore || '0');
+    const badge = document.getElementById('heatAdjustedBadge');
+    const inputs = adjustContainer.querySelectorAll('[data-heat-adjust]');
+    const badgeClass = {
+        '低风险': 'bg-success',
+        '中风险': 'bg-warning text-dark',
+        '高风险': 'bg-danger',
+        '极高': 'bg-dark'
+    };
+    const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
+    const computeLevel = (scoreValue, adjust) => {
+        const norm = scoreValue / 100;
+        const t1 = clamp(0.35 + adjust, 0.05, 0.9);
+        const t2 = clamp(0.55 + adjust, t1 + 0.05, 0.95);
+        const t3 = clamp(0.75 + adjust, t2 + 0.05, 0.98);
+        if (norm >= t3) return '极高';
+        if (norm >= t2) return '高风险';
+        if (norm >= t1) return '中风险';
+        return '低风险';
+    };
+    const applyAdjust = (adjust) => {
+        const level = computeLevel(score, adjust);
+        if (badge) {
+            badge.textContent = level;
+            badge.className = `badge ${badgeClass[level] || 'bg-secondary'}`;
+        }
+    };
+    let storedAdjust = parseFloat(localStorage.getItem(storageKey) || '0');
+    if (![-0.1, 0, 0.1].includes(storedAdjust)) {
+        storedAdjust = 0;
+    }
+    inputs.forEach(input => {
+        if (parseFloat(input.value) === storedAdjust) {
+            input.checked = true;
+        }
+        input.addEventListener('change', () => {
+            const value = parseFloat(input.value);
+            localStorage.setItem(storageKey, value);
+            applyAdjust(value);
+        });
+    });
+    applyAdjust(storedAdjust);
+});
+</script>
+{% endblock %}

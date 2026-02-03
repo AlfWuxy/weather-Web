@@ -1,0 +1,558 @@
+{% extends "base.html" %}
+
+{% block title %}家庭成员管理 - 天气健康风险预测系统{% endblock %}
+
+{% block content %}
+<div class="container">
+    <div class="row mb-4 align-items-center">
+        <div class="col-lg-7">
+            <h2><i class="bi bi-people"></i> 家庭成员管理</h2>
+            <p class="text-muted">完善家庭成员健康档案，联动天气预警与用药提醒</p>
+        </div>
+        <div class="col-lg-5 text-lg-end">
+            <div class="d-flex align-items-center justify-content-lg-end gap-3">
+                <div class="form-check form-switch">
+                    <input class="form-check-input" type="checkbox" id="elderModeSwitch">
+                    <label class="form-check-label" for="elderModeSwitch">适老模式</label>
+                </div>
+                <a href="{{ url_for('health.health_diary') }}" class="btn btn-outline-secondary btn-sm">
+                    <i class="bi bi-journal"></i> 健康日记
+                </a>
+                <a href="{{ url_for('analysis.annual_report') }}" class="btn btn-outline-primary btn-sm">
+                    <i class="bi bi-journal-text"></i> 年度报告
+                </a>
+            </div>
+        </div>
+    </div>
+
+    <div class="row g-3 mb-4">
+        <div class="col-md-3">
+            <div class="card shadow-sm h-100">
+                <div class="card-body">
+                    <div class="text-muted">家庭成员</div>
+                    <div class="display-6">{{ total_members }}</div>
+                    <div class="text-muted small">慢病成员 {{ chronic_count }} 人</div>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card shadow-sm h-100">
+                <div class="card-body">
+                    <div class="text-muted">预警触发</div>
+                    <div class="display-6">{{ alert_trigger_count }}</div>
+                    <div class="text-muted small">基于今日天气阈值</div>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card shadow-sm h-100">
+                <div class="card-body">
+                    <div class="text-muted">档案完善度</div>
+                    <div class="display-6">{{ avg_completion }}%</div>
+                    <div class="text-muted small">家庭整体平均</div>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card shadow-sm h-100">
+                <div class="card-body">
+                    <div class="text-muted">今日天气</div>
+                    <div class="display-6">{{ today_weather.temperature|round(1) }}°C</div>
+                    <div class="text-muted small">湿度 {{ today_weather.humidity|round(0) }}% · AQI {{ today_weather.aqi or '--' }}</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row g-3 mb-4">
+        <div class="col-lg-8">
+            <div class="card shadow-sm h-100">
+                <div class="card-body">
+                    <div class="d-flex justify-content-between align-items-center mb-3">
+                        <h6 class="mb-0">成员检索</h6>
+                        <small class="text-muted">支持姓名/关系筛选</small>
+                    </div>
+                    <form method="GET" action="{{ url_for('health.family_members') }}" class="row g-2">
+                        <div class="col-md-6">
+                            <input type="text" class="form-control" name="q" placeholder="输入姓名或关系" value="{{ search_query }}">
+                        </div>
+                        <div class="col-md-4">
+                            <select class="form-select" name="risk_level">
+                                <option value="">风险等级（全部）</option>
+                                <option value="low" {% if risk_filter == 'low' %}selected{% endif %}>低风险</option>
+                                <option value="medium" {% if risk_filter == 'medium' %}selected{% endif %}>中风险</option>
+                                <option value="high" {% if risk_filter == 'high' %}selected{% endif %}>高风险</option>
+                            </select>
+                        </div>
+                        <div class="col-md-2">
+                            <button class="btn btn-outline-primary w-100">筛选</button>
+                        </div>
+                    </form>
+                    <div class="mt-3">
+                        <div class="text-muted small">家庭关系概览：</div>
+                        <div class="d-flex flex-wrap gap-2 mt-2">
+                            {% for label, count in relation_counts.items() %}
+                                <span class="badge bg-light text-dark border">{{ label }} {{ count }}</span>
+                            {% endfor %}
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-lg-4">
+            <div class="card shadow-sm h-100">
+                <div class="card-body">
+                    <h6 class="mb-3">风险分布</h6>
+                    <canvas id="riskChart" height="180"></canvas>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row">
+        <div class="col-lg-5 mb-4">
+            <div class="card shadow-sm">
+                <div class="card-header bg-primary text-white d-flex align-items-center justify-content-between">
+                    <h5 class="mb-0">添加成员</h5>
+                    <button class="btn btn-light btn-sm" id="copySelfBtn" type="button">复制本人信息</button>
+                </div>
+                <div class="card-body">
+                    <form method="POST" action="{{ url_for('health.family_members') }}">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <div class="accordion" id="memberFormAccordion">
+                            <div class="accordion-item">
+                                <h2 class="accordion-header" id="headingBasic">
+                                    <button class="accordion-button" type="button" data-bs-toggle="collapse" data-bs-target="#collapseBasic">
+                                        基础信息
+                                    </button>
+                                </h2>
+                                <div id="collapseBasic" class="accordion-collapse collapse show" data-bs-parent="#memberFormAccordion">
+                                    <div class="accordion-body">
+                                        <div class="mb-3">
+                                            <label class="form-label">姓名</label>
+                                            <input type="text" class="form-control" name="name" id="memberName" required>
+                                        </div>
+                                        <div class="mb-3">
+                                            <label class="form-label">关系</label>
+                                            <input type="text" class="form-control" name="relation" id="memberRelation" placeholder="如：父亲/母亲/配偶/子女">
+                                        </div>
+                                        <div class="row">
+                                            <div class="col-6 mb-3">
+                                                <label class="form-label">年龄</label>
+                                                <input type="number" class="form-control" name="age" id="memberAge" min="0" max="120">
+                                            </div>
+                                            <div class="col-6 mb-3">
+                                                <label class="form-label">性别</label>
+                                                <select class="form-select" name="gender" id="memberGender">
+                                                    <option value="">请选择</option>
+                                                    <option value="男性">男性</option>
+                                                    <option value="女性">女性</option>
+                                                </select>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="accordion-item">
+                                <h2 class="accordion-header" id="headingHealth">
+                                    <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapseHealth">
+                                        健康信息
+                                    </button>
+                                </h2>
+                                <div id="collapseHealth" class="accordion-collapse collapse" data-bs-parent="#memberFormAccordion">
+                                    <div class="accordion-body">
+                                        <div class="mb-3">
+                                            <label class="form-label">慢性病</label>
+                                            <div class="d-flex flex-wrap gap-2">
+                                                {% for item in chronic_options %}
+                                                    <div class="form-check">
+                                                        <input class="form-check-input" type="checkbox" name="chronic_diseases" value="{{ item }}" id="cd_{{ loop.index }}">
+                                                        <label class="form-check-label" for="cd_{{ loop.index }}">{{ item }}</label>
+                                                    </div>
+                                                {% endfor %}
+                                            </div>
+                                            <input type="text" class="form-control mt-2" name="chronic_disease_other" placeholder="其他慢性病（可选）">
+                                        </div>
+                                        <div class="mb-3">
+                                            <label class="form-label">过敏史</label>
+                                            <input type="text" class="form-control" name="allergies" placeholder="如：青霉素、花粉">
+                                        </div>
+                                        <div class="mb-3">
+                                            <label class="form-label">常用药</label>
+                                            <input type="text" class="form-control" name="medications" placeholder="如：降压药、胰岛素">
+                                        </div>
+                                        <div class="mb-3">
+                                            <label class="form-label">风险标签</label>
+                                            <div class="d-flex flex-wrap gap-2">
+                                                {% for item in risk_tag_options %}
+                                                    <div class="form-check">
+                                                        <input class="form-check-input" type="checkbox" name="risk_tags" value="{{ item }}" id="rt_{{ loop.index }}">
+                                                        <label class="form-check-label" for="rt_{{ loop.index }}">{{ item }}</label>
+                                                    </div>
+                                                {% endfor %}
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="accordion-item">
+                                <h2 class="accordion-header" id="headingMetrics">
+                                    <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapseMetrics">
+                                        体征指标
+                                    </button>
+                                </h2>
+                                <div id="collapseMetrics" class="accordion-collapse collapse" data-bs-parent="#memberFormAccordion">
+                                    <div class="accordion-body">
+                                        <div class="row">
+                                            <div class="col-6 mb-3">
+                                                <label class="form-label">收缩压</label>
+                                                <input type="number" class="form-control" name="bp_sys" placeholder="如：120">
+                                            </div>
+                                            <div class="col-6 mb-3">
+                                                <label class="form-label">舒张压</label>
+                                                <input type="number" class="form-control" name="bp_dia" placeholder="如：80">
+                                            </div>
+                                        </div>
+                                        <div class="row">
+                                            <div class="col-6 mb-3">
+                                                <label class="form-label">血糖(mmol/L)</label>
+                                                <input type="number" step="0.1" class="form-control" name="blood_sugar" placeholder="如：5.6">
+                                            </div>
+                                            <div class="col-6 mb-3">
+                                                <label class="form-label">心率(次/分)</label>
+                                                <input type="number" class="form-control" name="heart_rate" placeholder="如：72">
+                                            </div>
+                                        </div>
+                                        <div class="mb-3">
+                                            <label class="form-label">体重(kg)</label>
+                                            <input type="number" step="0.1" class="form-control" name="weight" placeholder="如：65">
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="accordion-item">
+                                <h2 class="accordion-header" id="headingWeather">
+                                    <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapseWeather">
+                                        天气敏感阈值与通知
+                                    </button>
+                                </h2>
+                                <div id="collapseWeather" class="accordion-collapse collapse" data-bs-parent="#memberFormAccordion">
+                                    <div class="accordion-body">
+                                        <div class="row">
+                                            <div class="col-6 mb-3">
+                                                <label class="form-label">高温触发(°C)</label>
+                                                <input type="number" class="form-control" name="threshold_high_temp" placeholder="如：33">
+                                            </div>
+                                            <div class="col-6 mb-3">
+                                                <label class="form-label">低温触发(°C)</label>
+                                                <input type="number" class="form-control" name="threshold_low_temp" placeholder="如：5">
+                                            </div>
+                                            <div class="col-6 mb-3">
+                                                <label class="form-label">湿度触发(%)</label>
+                                                <input type="number" class="form-control" name="threshold_high_humidity" placeholder="如：80">
+                                            </div>
+                                            <div class="col-6 mb-3">
+                                                <label class="form-label">AQI触发</label>
+                                                <input type="number" class="form-control" name="threshold_high_aqi" placeholder="如：120">
+                                            </div>
+                                        </div>
+                                        <div class="mb-3">
+                                            <label class="form-label">通知渠道</label>
+                                            <div class="d-flex flex-wrap gap-2">
+                                                <div class="form-check">
+                                                    <input class="form-check-input" type="checkbox" name="notify_channels" value="站内通知" id="notify_site" checked>
+                                                    <label class="form-check-label" for="notify_site">站内通知</label>
+                                                </div>
+                                                <div class="form-check">
+                                                    <input class="form-check-input" type="checkbox" name="notify_channels" value="邮件" id="notify_email">
+                                                    <label class="form-check-label" for="notify_email">邮件</label>
+                                                </div>
+                                                <div class="form-check">
+                                                    <input class="form-check-input" type="checkbox" name="notify_channels" value="短信" id="notify_sms">
+                                                    <label class="form-check-label" for="notify_sms">短信</label>
+                                                </div>
+                                                <div class="form-check">
+                                                    <input class="form-check-input" type="checkbox" name="notify_channels" value="微信" id="notify_wechat">
+                                                    <label class="form-check-label" for="notify_wechat">微信</label>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <div class="row">
+                                            <div class="col-6 mb-3">
+                                                <label class="form-label">通知频率</label>
+                                                <select class="form-select" name="notify_frequency">
+                                                    <option value="重要提醒">重要提醒</option>
+                                                    <option value="每日">每日</option>
+                                                    <option value="每周">每周</option>
+                                                </select>
+                                            </div>
+                                            <div class="col-6 mb-3">
+                                                <label class="form-label">静默时段</label>
+                                                <input type="text" class="form-control" name="quiet_hours" placeholder="22:00-07:00">
+                                            </div>
+                                        </div>
+                                        <div class="row">
+                                            <div class="col-6 mb-3">
+                                                <label class="form-label">高风险连续N天升级</label>
+                                                <input type="number" class="form-control" name="escalation_days" placeholder="如：3" min="1" max="30">
+                                            </div>
+                                            <div class="col-6 mb-3">
+                                                <label class="form-label">同步通知家属</label>
+                                                <div class="form-check form-switch">
+                                                    <input class="form-check-input" type="checkbox" name="notify_family" id="notify_family" checked>
+                                                    <label class="form-check-label" for="notify_family">开启</label>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <div class="form-check form-switch">
+                                            <input class="form-check-input" type="checkbox" name="alert_enabled" id="alert_enabled" checked>
+                                            <label class="form-check-label" for="alert_enabled">启用成员预警</label>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="accordion-item">
+                                <h2 class="accordion-header" id="headingPrivacy">
+                                    <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapsePrivacy">
+                                        隐私与共享
+                                    </button>
+                                </h2>
+                                <div id="collapsePrivacy" class="accordion-collapse collapse" data-bs-parent="#memberFormAccordion">
+                                    <div class="accordion-body">
+                                        <div class="mb-3">
+                                            <label class="form-label">隐私级别</label>
+                                            <select class="form-select" name="privacy_level">
+                                                <option value="family">家庭可见</option>
+                                                <option value="private">仅本人可见</option>
+                                                <option value="doctor">授权医生可见</option>
+                                                <option value="community">社区管理员可见</option>
+                                            </select>
+                                        </div>
+                                        <div class="row">
+                                            <div class="col-6 mb-3">
+                                                <label class="form-label">联系人电话</label>
+                                                <input type="text" class="form-control" name="contact_phone" placeholder="可选">
+                                            </div>
+                                            <div class="col-6 mb-3">
+                                                <label class="form-label">微信号</label>
+                                                <input type="text" class="form-control" name="contact_wechat" placeholder="可选">
+                                            </div>
+                                        </div>
+                                        <div class="row">
+                                            <div class="col-6 mb-3">
+                                                <label class="form-label">紧急联系人</label>
+                                                <input type="text" class="form-control" name="emergency_name" placeholder="可选">
+                                            </div>
+                                            <div class="col-6 mb-3">
+                                                <label class="form-label">紧急电话</label>
+                                                <input type="text" class="form-control" name="emergency_phone" placeholder="可选">
+                                            </div>
+                                        </div>
+                                        <div class="d-flex flex-wrap gap-3">
+                                            <div class="form-check">
+                                                <input class="form-check-input" type="checkbox" name="share_with_doctor" id="share_doctor">
+                                                <label class="form-check-label" for="share_doctor">授权医生查看</label>
+                                            </div>
+                                            <div class="form-check">
+                                                <input class="form-check-input" type="checkbox" name="share_with_community" id="share_community">
+                                                <label class="form-check-label" for="share_community">授权社区查看</label>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        <button class="btn btn-primary w-100 mt-3">添加成员</button>
+                    </form>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-lg-7">
+            <div class="d-flex justify-content-between align-items-center mb-3">
+                <h5 class="mb-0">成员列表</h5>
+                <span class="text-muted small">共 {{ members|length }} 人</span>
+            </div>
+            <div class="row g-3">
+                {% for member in members %}
+                <div class="col-12">
+                    <div class="card shadow-sm member-card risk-{{ member.risk.level }}">
+                        <div class="card-body">
+                            <div class="d-flex align-items-start justify-content-between">
+                                <div class="d-flex align-items-center gap-3">
+                                    <div class="member-avatar">{{ member.name[:1] }}</div>
+                                    <div>
+                                        <h5 class="mb-1">{{ member.name }}</h5>
+                                        <div class="text-muted small">
+                                            {{ member.relation or '关系未填' }} · {{ member.age or '-' }}岁 · {{ member.gender or '-' }}
+                                        </div>
+                                    </div>
+                                </div>
+                                <span class="badge risk-badge risk-{{ member.risk.level }}">{{ member.risk.label }}</span>
+                            </div>
+
+                            <div class="mt-3">
+                                <div class="d-flex align-items-center justify-content-between">
+                                    <span class="text-muted small">档案完善度</span>
+                                    <span class="text-muted small">{{ member.completion.percent }}%</span>
+                                </div>
+                                <div class="progress profile-progress">
+                                    <div class="progress-bar" role="progressbar" style="width: {{ member.completion.percent }}%"></div>
+                                </div>
+                            </div>
+
+                            <div class="mt-3">
+                                <div class="text-muted small mb-1">慢病标签</div>
+                                <div class="d-flex flex-wrap gap-2">
+                                    {% if member.chronic_diseases %}
+                                        {% for disease in member.chronic_diseases %}
+                                            <span class="badge bg-light text-dark border">{{ disease }}</span>
+                                        {% endfor %}
+                                    {% else %}
+                                        <span class="text-muted small">暂无记录</span>
+                                    {% endif %}
+                                </div>
+                            </div>
+
+                            <div class="mt-3">
+                                <div class="text-muted small mb-1">风险标签</div>
+                                <div class="d-flex flex-wrap gap-2">
+                                    {% if member.profile.risk_tags %}
+                                        {% for tag in member.profile.risk_tags %}
+                                            <span class="badge bg-warning-subtle text-dark border">{{ tag }}</span>
+                                        {% endfor %}
+                                    {% else %}
+                                        <span class="text-muted small">未设置</span>
+                                    {% endif %}
+                                </div>
+                            </div>
+
+                            <div class="mt-3">
+                                {% if member.alerts %}
+                                    <span class="badge bg-danger">今日触发：{{ member.alerts|join('、') }}</span>
+                                {% else %}
+                                    <span class="badge bg-success-subtle text-success border">今日未触发</span>
+                                {% endif %}
+                                {% if not member.profile.weather_thresholds %}
+                                    <span class="badge bg-secondary-subtle text-muted border">未设置阈值</span>
+                                {% endif %}
+                            </div>
+
+                            <div class="row mt-3 small text-muted">
+                                <div class="col-md-6">
+                                    最近日记：
+                                    {% if member.last_diary %}
+                                        {{ member.last_diary.entry_date }} / {{ member.last_diary.severity or '未填写' }}
+                                    {% else %}
+                                        暂无
+                                    {% endif %}
+                                </div>
+                                <div class="col-md-6">
+                                    最近提醒：
+                                    {% if member.last_reminder %}
+                                        {{ member.last_reminder.medicine_name }}
+                                    {% else %}
+                                        暂无
+                                    {% endif %}
+                                </div>
+                            </div>
+
+                            <div class="d-flex flex-wrap gap-2 mt-3">
+                                <a class="btn btn-sm btn-outline-primary" href="{{ url_for('health.family_member_detail', member_id=member.id) }}">查看详情</a>
+                                <a class="btn btn-sm btn-outline-warning" href="{{ url_for('health.family_member_edit', member_id=member.id) }}">编辑</a>
+                                <form method="POST" action="{{ url_for('health.family_member_toggle_alert', member_id=member.id) }}" style="display:inline;">
+                                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                    <button class="btn btn-sm {% if member.profile.alert_enabled %}btn-outline-success{% else %}btn-outline-secondary{% endif %}">
+                                        {% if member.profile.alert_enabled %}预警启用{% else %}预警已停{% endif %}
+                                    </button>
+                                </form>
+                                <form method="POST" action="{{ url_for('health.family_member_delete', member_id=member.id) }}" style="display:inline;">
+                                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                    <button class="btn btn-sm btn-outline-danger js-confirm-delete-member" type="submit">删除</button>
+                                </form>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+            {% if members|length == 0 %}
+                <p class="text-muted mb-0">暂无成员，请先添加</p>
+            {% endif %}
+        </div>
+    </div>
+</div>
+
+{% block extra_js %}
+<script>
+const riskLabels = {{ risk_chart_labels|tojson }};
+const riskValues = {{ risk_chart_values|tojson }};
+const riskCtx = document.getElementById('riskChart');
+if (riskCtx) {
+    new Chart(riskCtx.getContext('2d'), {
+        type: 'doughnut',
+        data: {
+            labels: riskLabels,
+            datasets: [{
+                data: riskValues,
+                backgroundColor: ['rgba(34,197,94,0.7)', 'rgba(250,204,21,0.7)', 'rgba(239,68,68,0.7)'],
+                borderWidth: 0
+            }]
+        },
+        options: {
+            responsive: true,
+            plugins: {
+                legend: { position: 'bottom' }
+            }
+        }
+    });
+}
+
+const elderSwitch = document.getElementById('elderModeSwitch');
+if (elderSwitch) {
+    elderSwitch.checked = localStorage.getItem('elderMode') === '1';
+    elderSwitch.addEventListener('change', function() {
+        if (this.checked) {
+            localStorage.setItem('elderMode', '1');
+            document.body.classList.add('elder-mode');
+        } else {
+            localStorage.removeItem('elderMode');
+            document.body.classList.remove('elder-mode');
+        }
+    });
+}
+
+const copyBtn = document.getElementById('copySelfBtn');
+if (copyBtn) {
+    copyBtn.addEventListener('click', function() {
+        const ageInput = document.getElementById('memberAge');
+        const genderSelect = document.getElementById('memberGender');
+        const relationInput = document.getElementById('memberRelation');
+        if (ageInput) ageInput.value = '{{ current_user.age or '' }}';
+        if (genderSelect) genderSelect.value = '{{ current_user.gender or '' }}';
+        if (relationInput && !relationInput.value) relationInput.value = '本人';
+
+        const chronicList = {{ (current_user.chronic_diseases|from_json)|tojson }};
+        chronicList.forEach(item => {
+            const checkbox = document.querySelector(`input[name="chronic_diseases"][value="${item}"]`);
+            if (checkbox) {
+                checkbox.checked = true;
+            }
+        });
+    });
+}
+
+document.querySelectorAll('.js-confirm-delete-member').forEach(button => {
+    button.addEventListener('click', function(event) {
+        if (!confirm('确定删除该成员？')) {
+            event.preventDefault();
+        }
+    });
+});
+</script>
+{% endblock %}
+{% endblock %}

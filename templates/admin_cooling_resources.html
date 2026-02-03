@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+
+{% block title %}避暑资源管理 - 管理后台{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <div class="row mb-4">
+        <div class="col-12">
+            <h2><i class="bi bi-geo-alt"></i> 避暑资源管理</h2>
+            <p class="text-muted">维护避暑点信息与可达性字段</p>
+        </div>
+    </div>
+
+    <div class="card shadow-sm">
+        <div class="card-header bg-white d-flex justify-content-between align-items-center flex-wrap gap-2">
+            <form method="get" class="d-flex align-items-center gap-2">
+                <select class="form-select" name="community" style="min-width: 180px;">
+                    <option value="">全部社区</option>
+                    {% for community in communities %}
+                        <option value="{{ community.name }}" {% if community.name == selected_community %}selected{% endif %}>{{ community.name }}</option>
+                    {% endfor %}
+                </select>
+                <button class="btn btn-outline-secondary" type="submit">筛选</button>
+                <a class="btn btn-outline-secondary" href="{{ url_for('admin.admin_cooling_resources') }}">重置</a>
+            </form>
+            <a href="{{ url_for('admin.admin_add_cooling_resource') }}" class="btn btn-primary">
+                <i class="bi bi-plus-circle"></i> 添加资源
+            </a>
+        </div>
+        <div class="card-body p-0">
+            <div class="table-responsive">
+                <table class="table table-hover mb-0">
+                    <thead class="table-light">
+                        <tr>
+                            <th>社区</th>
+                            <th>名称</th>
+                            <th>类型</th>
+                            <th>开放时间</th>
+                            <th>空调</th>
+                            <th>无障碍</th>
+                            <th>坐标</th>
+                            <th>状态</th>
+                            <th>操作</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for item in resources %}
+                        <tr>
+                            <td>{{ item.community_code }}</td>
+                            <td>{{ item.name }}</td>
+                            <td>{{ item.resource_type or '-' }}</td>
+                            <td>{{ item.open_hours or '-' }}</td>
+                            <td>
+                                {% if item.has_ac %}
+                                    <span class="badge bg-success">有</span>
+                                {% else %}
+                                    <span class="badge bg-secondary">无</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if item.is_accessible %}
+                                    <span class="badge bg-primary">支持</span>
+                                {% else %}
+                                    <span class="badge bg-secondary">不支持</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if item.latitude is not none and item.longitude is not none %}
+                                    {{ item.latitude|round(4) }}, {{ item.longitude|round(4) }}
+                                {% else %}
+                                    -
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if item.is_active %}
+                                    <span class="badge bg-success">启用</span>
+                                {% else %}
+                                    <span class="badge bg-secondary">停用</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                <a href="{{ url_for('admin.admin_edit_cooling_resource', resource_id=item.id) }}" class="btn btn-sm btn-outline-warning">
+                                    <i class="bi bi-pencil"></i>
+                                </a>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        {% if not resources %}
+            <div class="card-footer bg-white text-muted small">暂无避暑资源。</div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

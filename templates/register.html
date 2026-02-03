@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+
+{% block title %}注册 - 天气健康风险预测系统{% endblock %}
+
+{% block content %}
+<div class="container">
+    <div class="row justify-content-center align-items-center" style="min-height: 80vh;">
+        <div class="col-md-7 col-lg-6">
+            <div class="text-center mb-4">
+                <div class="d-inline-flex align-items-center justify-content-center bg-success bg-opacity-10 rounded-circle mb-3" style="width: 64px; height: 64px;">
+                    <i class="bi bi-person-plus-fill text-success" style="font-size: 2rem;"></i>
+                </div>
+                <h2 class="fw-bold mb-2">注册账户</h2>
+                <p class="text-secondary mb-0">创建您的健康风险预测账户</p>
+            </div>
+            
+            <div class="card shadow-sm">
+                <div class="card-body p-4">
+                    <form method="POST" action="{{ url_for('public.register') }}">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <div class="row">
+                            <div class="col-md-6 mb-3">
+                                <label for="username" class="form-label">
+                                    <i class="bi bi-person"></i> 用户名 *
+                                </label>
+                                <input type="text" class="form-control" id="username" name="username" required>
+                            </div>
+                            <div class="col-md-6 mb-3">
+                                <label for="email" class="form-label">
+                                    <i class="bi bi-envelope"></i> 邮箱
+                                </label>
+                                <input type="email" class="form-control" id="email" name="email">
+                            </div>
+                        </div>
+
+                        <div class="row">
+                            <div class="col-md-6 mb-3">
+                                <label for="password" class="form-label">
+                                    <i class="bi bi-lock"></i> 密码 *
+                                </label>
+                                <input type="password" class="form-control" id="password" name="password" required>
+                            </div>
+                            <div class="col-md-6 mb-3">
+                                <label for="confirm_password" class="form-label">
+                                    <i class="bi bi-lock-fill"></i> 确认密码 *
+                                </label>
+                                <input type="password" class="form-control" id="confirm_password" name="confirm_password" required>
+                            </div>
+                        </div>
+
+                        <div class="row">
+                            <div class="col-md-4 mb-3">
+                                <label for="age" class="form-label">
+                                    <i class="bi bi-calendar"></i> 年龄
+                                </label>
+                                <input type="number" class="form-control" id="age" name="age" min="1" max="120">
+                            </div>
+                            <div class="col-md-4 mb-3">
+                                <label for="gender" class="form-label">
+                                    <i class="bi bi-gender-ambiguous"></i> 性别
+                                </label>
+                                <select class="form-select" id="gender" name="gender">
+                                    <option value="">请选择</option>
+                                    <option value="男性">男性</option>
+                                    <option value="女性">女性</option>
+                                </select>
+                            </div>
+                            <div class="col-md-4 mb-3">
+                                <label for="community" class="form-label">
+                                    <i class="bi bi-geo-alt"></i> 所属社区
+                                </label>
+                                <select class="form-select" id="community" name="community">
+                                    <option value="">请选择</option>
+                                    {% for comm in communities %}
+                                        <option value="{{ comm.name }}">{{ comm.name }}</option>
+                                    {% endfor %}
+                                </select>
+                            </div>
+                        </div>
+
+                        <div class="alert alert-info">
+                            <i class="bi bi-info-circle"></i> 提示：完善个人信息有助于系统提供更精准的健康风险评估
+                        </div>
+
+                        <div class="d-grid mb-3">
+                            <button type="submit" class="btn btn-success btn-lg">
+                                注册
+                            </button>
+                        </div>
+                        <div class="text-center">
+                            <span class="text-secondary small">已有账号？</span>
+                            <a href="{{ url_for('public.login') }}" class="text-decoration-none small fw-semibold">立即登录</a>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

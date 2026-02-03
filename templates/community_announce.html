@@ -1,0 +1,126 @@
+{% extends "base.html" %}
+
+{% block title %}公共传播包 - 天气健康风险预测系统{% endblock %}
+
+{% block content %}
+<div class="container my-4">
+    <div class="row mb-3">
+        <div class="col-12 d-flex flex-wrap justify-content-between align-items-center gap-2">
+            <div>
+                <h2><i class="bi bi-megaphone"></i> 公共传播包生成器</h2>
+                <p class="text-muted mb-1">面向老人、家属与社区的传播文案，可直接复制/打印。</p>
+                <div class="text-muted small">
+                    地点：{{ location }} · 今日热风险：{{ risk_label }} · 更新时间：{{ updated_at.strftime('%Y-%m-%d %H:%M') }}
+                </div>
+            </div>
+            <div class="d-flex flex-wrap gap-2">
+                <button class="btn btn-outline-secondary" type="button" id="printAnnounce">
+                    <i class="bi bi-printer"></i> 导出PDF
+                </button>
+                <a class="btn btn-outline-primary" href="{{ url_for('public.transparency') }}">
+                    <i class="bi bi-shield-check"></i> 透明度说明
+                </a>
+            </div>
+        </div>
+    </div>
+
+    <div class="row g-4">
+        <div class="col-lg-4">
+            <div class="card shadow-sm h-100">
+                <div class="card-header bg-light">
+                    <h5 class="mb-0"><i class="bi bi-person"></i> 老人版</h5>
+                </div>
+                <div class="card-body">
+                    <textarea class="form-control" rows="12" id="announceElder" readonly>{{ messages.elder }}</textarea>
+                    <button class="btn btn-primary mt-3 copy-message" type="button" data-target="announceElder">
+                        <i class="bi bi-clipboard"></i> 复制文本
+                    </button>
+                </div>
+            </div>
+        </div>
+        <div class="col-lg-4">
+            <div class="card shadow-sm h-100">
+                <div class="card-header bg-light">
+                    <h5 class="mb-0"><i class="bi bi-people"></i> 家属版</h5>
+                </div>
+                <div class="card-body">
+                    <textarea class="form-control" rows="12" id="announceCaregiver" readonly>{{ messages.caregiver }}</textarea>
+                    <button class="btn btn-outline-success mt-3 copy-message" type="button" data-target="announceCaregiver">
+                        <i class="bi bi-clipboard"></i> 复制文本
+                    </button>
+                </div>
+            </div>
+        </div>
+        <div class="col-lg-4">
+            <div class="card shadow-sm h-100">
+                <div class="card-header bg-light">
+                    <h5 class="mb-0"><i class="bi bi-building"></i> 社区版</h5>
+                </div>
+                <div class="card-body">
+                    <textarea class="form-control" rows="12" id="announceCommunity" readonly>{{ messages.community }}</textarea>
+                    <button class="btn btn-outline-info mt-3 copy-message" type="button" data-target="announceCommunity">
+                        <i class="bi bi-clipboard"></i> 复制文本
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row g-4 mt-2">
+        <div class="col-lg-6">
+            <div class="card shadow-sm">
+                <div class="card-header bg-light">
+                    <h6 class="mb-0"><i class="bi bi-shield-check"></i> 统一免责声明</h6>
+                </div>
+                <div class="card-body">
+                    {% include "partials/disclaimer_block.html" %}
+                </div>
+            </div>
+        </div>
+        <div class="col-lg-6">
+            <div class="card shadow-sm">
+                <div class="card-header bg-light">
+                    <h6 class="mb-0"><i class="bi bi-cloud-sun"></i> 数据来源</h6>
+                </div>
+                <div class="card-body">
+                    <ul class="text-muted small mb-0">
+                        {% for line in source_lines %}
+                            <li>{{ line }}</li>
+                        {% endfor %}
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+    const copyButtons = document.querySelectorAll('.copy-message');
+    copyButtons.forEach(btn => {
+        btn.addEventListener('click', async () => {
+            const targetId = btn.getAttribute('data-target');
+            const target = document.getElementById(targetId);
+            if (!target) return;
+            try {
+                await navigator.clipboard.writeText(target.value);
+            } catch (err) {
+                target.select();
+                document.execCommand('copy');
+            }
+            btn.classList.add('btn-success');
+            btn.textContent = '已复制';
+            setTimeout(() => {
+                btn.classList.remove('btn-success');
+                btn.innerHTML = '<i class="bi bi-clipboard"></i> 复制文本';
+            }, 1200);
+        });
+    });
+
+    const printBtn = document.getElementById('printAnnounce');
+    if (printBtn) {
+        printBtn.addEventListener('click', () => window.print());
+    }
+});
+</script>
+{% endblock %}

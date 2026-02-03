@@ -1,0 +1,125 @@
+{% extends "base.html" %}
+
+{% block title %}用户管理 - 管理后台{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <div class="row mb-4">
+        <div class="col-12">
+            <h2><i class="bi bi-people"></i> 用户管理</h2>
+            <p class="text-muted">查看和管理系统用户</p>
+        </div>
+    </div>
+
+    <div class="card shadow-sm">
+        <div class="card-header bg-white d-flex justify-content-between align-items-center">
+            <h5 class="mb-0">用户列表</h5>
+            <div class="d-flex gap-2">
+                <input type="text" class="form-control" placeholder="搜索用户..." id="searchUser" style="width: 200px;">
+                <a href="{{ url_for('admin.admin_add_user') }}" class="btn btn-primary">
+                    <i class="bi bi-plus-circle"></i> 添加用户
+                </a>
+            </div>
+        </div>
+        <div class="card-body p-0">
+            <div class="table-responsive">
+                <table class="table table-hover mb-0">
+                    <thead class="table-light">
+                        <tr>
+                            <th>ID</th>
+                            <th>用户名</th>
+                            <th>邮箱</th>
+                            <th>角色</th>
+                            <th>年龄</th>
+                            <th>性别</th>
+                            <th>社区</th>
+                            <th>慢性病</th>
+                            <th>注册时间</th>
+                            <th>最后登录</th>
+                            <th>操作</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for user in users.items %}
+                        <tr>
+                            <td>{{ user.id }}</td>
+                            <td>
+                                <i class="bi bi-person-circle"></i> {{ user.username }}
+                            </td>
+                            <td>{{ user.email or '-' }}</td>
+                            <td>
+                                {% if user.role == 'admin' %}
+                                    <span class="badge bg-danger">管理员</span>
+                                {% elif user.role == 'caregiver' %}
+                                    <span class="badge bg-info">照护人</span>
+                                {% elif user.role == 'community' %}
+                                    <span class="badge bg-warning">社区人员</span>
+                                {% else %}
+                                    <span class="badge bg-primary">普通用户</span>
+                                {% endif %}
+                            </td>
+                            <td>{{ user.age or '-' }}</td>
+                            <td>{{ user.gender or '-' }}</td>
+                            <td>{{ user.community or '-' }}</td>
+                            <td>
+                                {% if user.has_chronic_disease %}
+                                    <span class="badge bg-warning">是</span>
+                                {% else %}
+                                    <span class="badge bg-success">否</span>
+                                {% endif %}
+                            </td>
+                            <td>{{ user.created_at.strftime('%Y-%m-%d') if user.created_at else '-' }}</td>
+                            <td>{{ user.last_login.strftime('%Y-%m-%d %H:%M') if user.last_login else '未登录' }}</td>
+                            <td>
+                                <a href="{{ url_for('admin.admin_edit_user', user_id=user.id) }}" class="btn btn-sm btn-outline-warning" title="编辑">
+                                    <i class="bi bi-pencil"></i>
+                                </a>
+                                {% if user.role != 'admin' %}
+                                <form method="POST" action="{{ url_for('admin.admin_delete_user', user_id=user.id) }}" style="display: inline;" onsubmit="return confirm('确定要删除用户 {{ user.username }} 吗？');">
+                                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                    <button type="submit" class="btn btn-sm btn-outline-danger" title="删除">
+                                        <i class="bi bi-trash"></i>
+                                    </button>
+                                </form>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        <div class="card-footer bg-white">
+            <!-- 分页 -->
+            <nav>
+                <ul class="pagination mb-0">
+                    {% if users.has_prev %}
+                        <li class="page-item">
+                            <a class="page-link" href="{{ url_for('admin.admin_users', page=users.prev_num) }}">上一页</a>
+                        </li>
+                    {% endif %}
+                    
+                    {% for page_num in users.iter_pages(left_edge=1, right_edge=1, left_current=1, right_current=2) %}
+                        {% if page_num %}
+                            <li class="page-item {{ 'active' if page_num == users.page else '' }}">
+                                <a class="page-link" href="{{ url_for('admin.admin_users', page=page_num) }}">{{ page_num }}</a>
+                            </li>
+                        {% else %}
+                            <li class="page-item disabled"><span class="page-link">...</span></li>
+                        {% endif %}
+                    {% endfor %}
+                    
+                    {% if users.has_next %}
+                        <li class="page-item">
+                            <a class="page-link" href="{{ url_for('admin.admin_users', page=users.next_num) }}">下一页</a>
+                        </li>
+                    {% endif %}
+                </ul>
+            </nav>
+            <p class="text-muted mb-0 mt-2 small">
+                共 {{ users.total }} 个用户，当前第 {{ users.page }} / {{ users.pages }} 页
+            </p>
+        </div>
+    </div>
+</div>
+{% endblock %}

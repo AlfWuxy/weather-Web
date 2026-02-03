@@ -1,0 +1,287 @@
+{% extends "base.html" %}
+
+{% block title %}照护行动 - 天气健康风险预测系统{% endblock %}
+
+{% block content %}
+<div class="container my-4">
+    <div class="row mb-3">
+        <div class="col-12">
+            <h2><i class="bi bi-people"></i> 子女首页 · 照护行动工作台</h2>
+            <p class="text-muted mb-0">为家人创建短码绑定与每日行动提醒，系统不存储姓名/电话/慢病/精确住址。</p>
+            {% if current_user.role in ['caregiver', 'admin'] %}
+                <a class="btn btn-sm btn-outline-primary mt-2" href="{{ url_for('user.community_announce') }}">
+                    <i class="bi bi-megaphone"></i> 公共传播包
+                </a>
+            {% endif %}
+        </div>
+    </div>
+
+    <div class="row g-4">
+        <div class="col-lg-4">
+            <div class="card shadow-sm">
+                <div class="card-header bg-light">
+                    <h5 class="mb-0"><i class="bi bi-link-45deg"></i> 生成绑定短码</h5>
+                </div>
+                <div class="card-body">
+                    <form method="POST" action="{{ pair_create_action or url_for('user.pair_management') }}">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <div class="mb-3">
+                            <label class="form-label">社区</label>
+                            <input class="form-control" name="community_code" list="communityOptions" placeholder="选择或填写社区名称">
+                            <datalist id="communityOptions">
+                                {% for community in communities %}
+                                    <option value="{{ community.name }}"></option>
+                                {% endfor %}
+                            </datalist>
+                            <div class="text-muted small mt-2">社区仅用于聚合统计，不保存精确地址。</div>
+                        </div>
+                        <button class="btn btn-primary w-100" type="submit">
+                            <i class="bi bi-plus-circle"></i> 生成短码
+                        </button>
+                    </form>
+                </div>
+            </div>
+
+            {% if created_link and created_token %}
+                <div class="card shadow-sm mt-4">
+                    <div class="card-header bg-success text-white">
+                        <h6 class="mb-0"><i class="bi bi-check-circle"></i> 已生成绑定信息</h6>
+                    </div>
+                    <div class="card-body">
+                        <div class="mb-2">
+                            <div class="text-muted small">短码</div>
+                            <div class="fs-3 fw-bold">{{ created_link.short_code }}</div>
+                        </div>
+                        <div class="mb-3">
+                            <div class="text-muted small">绑定链接（含令牌）</div>
+                            <input class="form-control" value="{{ created_link_url or url_for('public.action_check', token=created_token, _external=True) }}" readonly>
+                        </div>
+                        <div class="d-flex flex-wrap gap-2 align-items-center">
+                            <div class="text-muted small">令牌仅显示一次，请及时转发。</div>
+                            {% if wechat_template_url %}
+                                <a class="btn btn-outline-secondary btn-sm" href="{{ wechat_template_url }}">
+                                    <i class="bi bi-wechat"></i> 微信模板
+                                </a>
+                            {% endif %}
+                        </div>
+                    </div>
+                </div>
+            {% endif %}
+
+            <div class="card shadow-sm mt-4" id="alt-contact-card">
+                <div class="card-header bg-light">
+                    <h6 class="mb-0"><i class="bi bi-person-plus"></i> 本地备选联系人</h6>
+                </div>
+                <div class="card-body">
+                    <div class="mb-2">
+                        <label class="form-label small">联系人姓名</label>
+                        <input class="form-control" id="altContactName" placeholder="仅保存在本机">
+                    </div>
+                    <div class="mb-2">
+                        <label class="form-label small">联系方式</label>
+                        <input class="form-control" id="altContactPhone" placeholder="仅保存在本机">
+                    </div>
+                    <button class="btn btn-outline-secondary btn-sm w-100" type="button" id="addAltContact">
+                        <i class="bi bi-device-ssd"></i> 添加到本机列表
+                    </button>
+                    <ul class="list-group list-group-flush mt-3" id="altContactList"></ul>
+                    <div class="text-muted small mt-2">备选联系人不会写入后台数据库。</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-lg-8">
+            <div class="card shadow-sm">
+                <div class="card-header bg-light">
+                    <div class="d-flex align-items-center justify-content-between flex-wrap gap-2">
+                        <h5 class="mb-0"><i class="bi bi-list-check"></i> 老人卡片（{{ status_date.strftime('%Y-%m-%d') }}）</h5>
+                        <span class="text-muted small">倒计时默认至每日 20:00</span>
+                    </div>
+                </div>
+                <div class="card-body">
+                    {% if pair_cards and pair_cards|length > 0 %}
+                        <div class="row g-3">
+                            {% for item in pair_cards %}
+                                {% set status = item.status %}
+                                {% set risk_color = 'danger' if item.risk_label == '高风险' else 'warning' if item.risk_label == '中风险' else 'success' %}
+                                <div class="col-md-6">
+                                    <div class="card border-0 shadow-sm h-100">
+                                        <div class="card-body">
+                                            <div class="d-flex justify-content-between align-items-start">
+                                                <div>
+                                                    <div class="text-muted small">短码 {{ item.pair.short_code }}</div>
+                                                    <div class="fs-4 fw-bold text-{{ risk_color }}">{{ item.risk_label }}</div>
+                                                    <div class="text-muted small">社区 {{ item.pair.community_code }}</div>
+                                                </div>
+                                                <div class="text-end">
+                                                    {% if status and status.confirmed_at %}
+                                                        <span class="badge bg-success">已确认</span>
+                                                        <div class="text-muted small">{{ status.confirmed_at.strftime('%H:%M') }}</div>
+                                                    {% else %}
+                                                        <span class="badge bg-secondary">未确认</span>
+                                                    {% endif %}
+                                                </div>
+                                            </div>
+                                            <div class="text-muted small mt-2">
+                                                倒计时 <span class="countdown" data-deadline-hour="20"></span>
+                                            </div>
+                                            {% if item.help_flag or item.relay_stage_label or item.is_overdue %}
+                                                <div class="d-flex flex-wrap gap-2 mt-2">
+                                                    {% if item.help_flag %}
+                                                        <span class="badge bg-danger">求助</span>
+                                                    {% endif %}
+                                                    {% if item.relay_stage_label %}
+                                                        <span class="badge bg-warning text-dark">升级链 {{ item.relay_stage_label }}</span>
+                                                    {% endif %}
+                                                    {% if item.is_overdue %}
+                                                        <span class="badge bg-secondary">超时未响应</span>
+                                                    {% endif %}
+                                                </div>
+                                            {% endif %}
+                                            <div class="d-flex flex-wrap gap-2 mt-3">
+                                                <button class="btn btn-outline-primary btn-sm copy-reminder"
+                                                        type="button"
+                                                        data-message="{{ item.reminder_message | replace('\n', '\\n') | e }}">
+                                                    <i class="bi bi-clipboard"></i> 复制提醒话术
+                                                </button>
+                                                <form method="POST" action="{{ pair_backup_action or url_for('user.pair_backup_contact', pair_id=item.pair.id) }}">
+                                                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                                    {% if pair_backup_requires_id %}
+                                                        <input type="hidden" name="pair_id" value="{{ item.pair.id }}">
+                                                    {% endif %}
+                                                    <button class="btn btn-outline-secondary btn-sm" type="submit">
+                                                        <i class="bi bi-telephone"></i> 已联系备选联系人
+                                                    </button>
+                                                </form>
+                                                <form method="POST" action="{{ pair_escalate_action or url_for('user.pair_escalate', pair_id=item.pair.id) }}">
+                                                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                                    {% if pair_escalate_requires_id %}
+                                                        <input type="hidden" name="pair_id" value="{{ item.pair.id }}">
+                                                    {% endif %}
+                                                    <button class="btn btn-outline-warning btn-sm" type="submit">
+                                                        <i class="bi bi-arrow-up-right"></i> 升级链按钮
+                                                    </button>
+                                                </form>
+                                                {% if pair_detail_endpoint %}
+                                                    <a class="btn btn-outline-secondary btn-sm" href="{{ url_for(pair_detail_endpoint, pair_id=item.pair.id) }}">
+                                                        <i class="bi bi-eye"></i> 详情
+                                                    </a>
+                                                {% endif %}
+                                            </div>
+                                            <div class="text-muted small mt-2">
+                                                行动入口：<a href="{{ item.action_link }}" target="_blank">打开短码页</a>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            {% endfor %}
+                        </div>
+                        <div class="text-muted small mt-3">升级链仅记录状态，请结合实际情况与社区沟通。</div>
+                    {% else %}
+                        <div class="text-muted">暂无绑定记录，请先生成短码。</div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+    const listEl = document.getElementById('altContactList');
+    const nameInput = document.getElementById('altContactName');
+    const phoneInput = document.getElementById('altContactPhone');
+    const addBtn = document.getElementById('addAltContact');
+    const storageKey = 'heat_action_alt_contacts';
+
+    let contacts = JSON.parse(localStorage.getItem(storageKey) || '[]');
+
+    const renderList = () => {
+        if (!listEl) return;
+        listEl.innerHTML = '';
+        if (!contacts.length) {
+            const empty = document.createElement('li');
+            empty.className = 'list-group-item px-0 text-muted small';
+            empty.textContent = '暂无本地联系人';
+            listEl.appendChild(empty);
+            return;
+        }
+        contacts.forEach((item, index) => {
+            const li = document.createElement('li');
+            li.className = 'list-group-item px-0 d-flex justify-content-between align-items-center';
+            const text = document.createElement('div');
+            const nameEl = document.createElement('strong');
+            nameEl.textContent = item.name || '联系人';
+            const phoneEl = document.createElement('div');
+            phoneEl.className = 'text-muted small';
+            phoneEl.textContent = item.phone || '';
+            text.appendChild(nameEl);
+            text.appendChild(phoneEl);
+            const btn = document.createElement('button');
+            btn.className = 'btn btn-sm btn-outline-danger';
+            btn.textContent = '删除';
+            btn.addEventListener('click', () => {
+                contacts = contacts.filter((_, idx) => idx !== index);
+                localStorage.setItem(storageKey, JSON.stringify(contacts));
+                renderList();
+            });
+            li.appendChild(text);
+            li.appendChild(btn);
+            listEl.appendChild(li);
+        });
+    };
+    renderList();
+
+    if (addBtn && nameInput && phoneInput) {
+        addBtn.addEventListener('click', () => {
+            const name = nameInput.value.trim();
+            const phone = phoneInput.value.trim();
+            if (!name && !phone) {
+                return;
+            }
+            contacts = [...contacts, { name, phone }];
+            localStorage.setItem(storageKey, JSON.stringify(contacts));
+            nameInput.value = '';
+            phoneInput.value = '';
+            renderList();
+        });
+    }
+
+    const updateCountdowns = () => {
+        const now = new Date();
+        document.querySelectorAll('.countdown').forEach(el => {
+            const hour = parseInt(el.dataset.deadlineHour || '20', 10);
+            const deadline = new Date();
+            deadline.setHours(hour, 0, 0, 0);
+            if (deadline < now) {
+                deadline.setDate(deadline.getDate() + 1);
+            }
+            const diff = Math.max(0, deadline - now);
+            const hours = Math.floor(diff / (1000 * 60 * 60));
+            const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+            el.textContent = `${hours}小时${minutes}分钟`;
+        });
+    };
+    updateCountdowns();
+    setInterval(updateCountdowns, 60000);
+
+    document.querySelectorAll('.copy-reminder').forEach(btn => {
+        btn.addEventListener('click', async () => {
+            const raw = btn.dataset.message || '';
+            const message = raw.replace(/\\n/g, '\n');
+            try {
+                await navigator.clipboard.writeText(message);
+                btn.classList.add('btn-success');
+                btn.textContent = '已复制';
+                setTimeout(() => {
+                    btn.classList.remove('btn-success');
+                    btn.innerHTML = '<i class="bi bi-clipboard"></i> 复制提醒话术';
+                }, 1200);
+            } catch (err) {
+                alert('复制失败，请手动选择文本');
+            }
+        });
+    });
+});
+</script>
+{% endblock %}
