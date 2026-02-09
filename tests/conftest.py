@@ -67,8 +67,15 @@ def app():
 
     # 确保使用内存存储（避免速率限制干扰测试）
     app.config['RATE_LIMIT_STORAGE_URI'] = 'memory://'
+    app.config['RATELIMIT_STORAGE_URI'] = 'memory://'
 
-    return app
+    yield app
+
+    # 统一释放数据库连接，避免 ResourceWarning: unclosed database
+    from core.extensions import db
+    with app.app_context():
+        db.session.remove()
+        db.engine.dispose()
 
 
 @pytest.fixture(scope='function')

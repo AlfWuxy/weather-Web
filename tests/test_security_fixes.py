@@ -285,5 +285,25 @@ def test_safe_next_url_blocks_scheme_relative():
         assert _safe_next_url(url) is None
 
 
+def test_create_notification_fails_closed_on_quota_error(app, monkeypatch):
+    """通知配额检查异常时应阻止发送（fail-closed）"""
+    from core import notifications
+
+    app.config['FEATURE_NOTIFICATIONS'] = True
+
+    with app.app_context():
+        def _raise_error(_user_id):
+            raise RuntimeError('quota-check-failed')
+
+        monkeypatch.setattr(notifications, '_notification_daily_count', _raise_error)
+        result = notifications.create_notification(
+            user_id=1,
+            title='title',
+            message='message'
+        )
+
+    assert result is None
+
+
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])

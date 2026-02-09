@@ -53,6 +53,9 @@ def register_hooks(app):
     def csrf_protect():
         """统一CSRF校验"""
         if request.method in ('POST', 'PUT', 'PATCH', 'DELETE'):
+            # MiniProgram API uses Bearer token auth and must not require CSRF.
+            if request.path.startswith('/mp/api/'):
+                return None
             if not validate_csrf():
                 return csrf_failure_response()
 

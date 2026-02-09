@@ -12,6 +12,7 @@ from core.extensions import db
 from core.guest import build_guest_profile, get_guest_assessment, is_guest_user
 from core.notifications import create_notification
 from core.time_utils import utcnow
+from core.usage import create_api_token
 from core.weather import ensure_user_location_valid, get_weather_with_cache, normalize_location_name
 from utils.parsers import json_or_none, safe_json_loads
 from utils.validators import (
@@ -159,6 +160,34 @@ def profile():
         flash('游客模式无法修改个人信息，请注册/登录正式账号', 'error')
         return redirect(url_for('user.user_dashboard'))
     if request.method == 'POST':
+        form_id = sanitize_input(request.form.get('form_id'), max_length=30) or 'basic'
+
+        if form_id == 'api_token':
+            token_name = sanitize_input(request.form.get('token_name'), max_length=80)
+            try:
+                plain = create_api_token(current_user.id, name=token_name)
+                session['last_api_token_plain'] = plain
+                flash('API Token 已生成（仅展示一次，请立即复制保存）', 'success')
+            except Exception:
+                logger.exception("API token create failed")
+                flash('生成失败，请稍后重试。', 'error')
+            return redirect(url_for('user.profile'))
+
+        if form_id == 'password':
+            new_password = request.form.get('new_password')
+            if new_password:
+                valid, result = validate_password(new_password)
+                if not valid:
+                    flash(result, 'error')
+                    return redirect(url_for('user.profile'))
+                current_user.set_password(result)
+                db.session.commit()
+                flash('密码已更新', 'success')
+            else:
+                flash('未填写新密码', 'info')
+            return redirect(url_for('user.profile'))
+
+        # default: basic profile update
         # 验证年龄
         valid, result = validate_age(request.form.get('age'))
         if not valid:
@@ -185,13 +214,7 @@ def profile():
         current_user.email = result
 
         # 更新密码
-        new_password = request.form.get('new_password')
-        if new_password:
-            valid, result = validate_password(new_password)
-            if not valid:
-                flash(result, 'error')
-                return redirect(url_for('user.profile'))
-            current_user.set_password(new_password)
+        # 密码更新已拆分到 form_id=password
 
         # 更新慢性病信息
         has_chronic = request.form.get('has_chronic_disease') == 'on'
@@ -205,6 +228,15 @@ def profile():
         else:
             current_user.chronic_diseases = None
 
+        # 试点推送设置
+        wx_uid = sanitize_input(request.form.get('wxpusher_uid'), max_length=80)
+        current_user.wxpusher_uid = (wx_uid.strip() if isinstance(wx_uid, str) else None) or None
+        push_enabled = request.form.get('push_enabled') == 'on'
+        if push_enabled and not current_user.wxpusher_uid:
+            push_enabled = False
+            flash('已关闭自动推送：需要先填写 WxPusher UID', 'warning')
+        current_user.push_enabled = bool(push_enabled)
+
         db.session.commit()
         logger.info("用户更新个人信息: %s", current_user.username)
         flash('个人信息更新成功', 'success')
@@ -213,7 +245,13 @@ def profile():
     communities = Community.query.all()
     chronic_diseases_list = safe_json_loads(current_user.chronic_diseases, [])
 
-    return render_template('profile.html', communities=communities, chronic_diseases_list=chronic_diseases_list)
+    last_api_token_plain = session.pop('last_api_token_plain', None)
+    return render_template(
+        'profile.html',
+        communities=communities,
+        chronic_diseases_list=chronic_diseases_list,
+        last_api_token_plain=last_api_token_plain
+    )
 
 
 def update_location():

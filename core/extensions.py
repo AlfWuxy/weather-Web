@@ -27,6 +27,10 @@ def init_extensions(app):
 
     rate_limits = app.config.get('RATE_LIMITS', '200 per minute')
     rate_storage = app.config.get('RATE_LIMIT_STORAGE_URI', 'memory://')
+    # Flask-Limiter uses RATELIMIT_* config keys internally.
+    # Mirror our app-level keys so storage is treated as explicitly configured.
+    app.config['RATELIMIT_STORAGE_URI'] = rate_storage
+    app.config['RATELIMIT_DEFAULT'] = rate_limits
     limiter.default_limits = [rate_limits]
     limiter.storage_uri = rate_storage
     limiter.init_app(app)

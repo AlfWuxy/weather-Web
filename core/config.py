@@ -17,6 +17,7 @@ from utils.parsers import parse_bool, parse_float, parse_int
 
 QWEATHER_API_BASE_DEFAULT = 'https://mj76x98pfn.re.qweatherapi.com/v7'
 SILICONFLOW_API_BASE_DEFAULT = 'https://api.siliconflow.cn/v1'
+WXPUSHER_API_BASE_DEFAULT = 'https://wxpusher.zjiecode.com/api'
 
 
 def _contains_weak_keyword(value):
@@ -24,6 +25,12 @@ def _contains_weak_keyword(value):
         return False
     lowered = value.lower()
     return any(keyword in lowered for keyword in WEAK_SECRET_KEYWORDS)
+
+
+def _is_memory_storage_uri(uri):
+    if not isinstance(uri, str):
+        return False
+    return uri.strip().lower().startswith('memory://')
 
 
 def resolve_database_uri():
@@ -34,12 +41,52 @@ def resolve_database_uri():
     instance_db = repo_root / 'instance' / 'health_weather.db'
 
     if env_uri:
-        return env_uri
+        return _normalize_sqlite_uri(env_uri, repo_root)
     if storage_db.exists():
         return f"sqlite:///{storage_db.as_posix()}"
     if instance_db.exists():
         return f"sqlite:///{instance_db.as_posix()}"
     return 'sqlite:///health_weather.db'
+
+
+def _normalize_sqlite_uri(database_uri, repo_root):
+    """Normalize sqlite URIs to avoid Flask-SQLAlchemy "double instance/" paths.
+
+    Flask-SQLAlchemy treats relative sqlite paths as relative to app.instance_path.
+    Many configs use DATABASE_URI=sqlite:///instance/xxx.db expecting repo-root-relative,
+    which becomes instance/instance/xxx.db at runtime and fails to open.
+
+    We interpret sqlite paths that include subdirectories as repo-root-relative and
+    convert them to absolute paths to keep behavior consistent and predictable.
+    """
+    if not isinstance(database_uri, str):
+        return database_uri
+    uri = database_uri.strip()
+    if not uri:
+        return uri
+
+    # Handle common sqlite drivernames; keep any query string intact.
+    for scheme in ('sqlite:///', 'sqlite+pysqlite:///'):
+        if not uri.startswith(scheme):
+            continue
+        path_and_query = uri[len(scheme):]
+        path_part, sep, query = path_and_query.partition('?')
+        if not path_part or path_part == ':memory:':
+            return uri
+        if path_part.startswith('/'):
+            return uri
+
+        # If the path contains a directory, make it absolute relative to repo_root to
+        # avoid being re-rooted under Flask's instance_path.
+        if '/' in path_part or '\\' in path_part:
+            abs_path = (repo_root / path_part).resolve()
+            normalized = f"{scheme}{abs_path.as_posix()}"
+            if sep:
+                normalized += f"?{query}"
+            return normalized
+        return uri
+
+    return uri
 
 
 def resolve_engine_options(database_uri):
@@ -62,6 +109,8 @@ def validate_production_config():
     debug_value = parse_bool(os.getenv('DEBUG'), default=False)
     secret_key_env = (os.getenv('SECRET_KEY') or '').strip()
     pair_token_pepper = (os.getenv('PAIR_TOKEN_PEPPER') or '').strip()
+    rate_limit_storage_env = (os.getenv('RATE_LIMIT_STORAGE_URI') or '').strip()
+    redis_url = (os.getenv('REDIS_URL') or '').strip()
 
     if not debug_value:
         if not secret_key_env:
@@ -83,6 +132,12 @@ def validate_production_config():
             )
         if pair_token_pepper in ('your-pair-token-pepper-here',):
             raise RuntimeError("PAIR_TOKEN_PEPPER 使用了示例值，必须替换为真实的随机密钥！")
+
+        effective_rate_limit_uri = rate_limit_storage_env or redis_url or 'memory://'
+        if _is_memory_storage_uri(effective_rate_limit_uri):
+            raise RuntimeError(
+                "生产环境禁止使用 memory:// 作为限流存储，请配置 REDIS_URL 或 RATE_LIMIT_STORAGE_URI。"
+            )
 
     database_uri = resolve_database_uri()
     if database_uri.startswith('sqlite:///'):
@@ -151,6 +206,9 @@ def configure_app(app, logger):
     amap_security_js_code = _normalized_env_value('AMAP_SECURITY_JS_CODE', '')
     siliconflow_key = _normalized_env_value('SILICONFLOW_API_KEY', '')
     siliconflow_base = _normalized_env_value('SILICONFLOW_API_BASE', SILICONFLOW_API_BASE_DEFAULT)
+    wxpusher_app_token = _normalized_env_value('WXPUSHER_APP_TOKEN', '')
+    wxpusher_api_base = _normalized_env_value('WXPUSHER_API_BASE', WXPUSHER_API_BASE_DEFAULT)
+    public_base_url = _normalized_env_value('PUBLIC_BASE_URL', '')
     pair_token_pepper = _normalized_env_value('PAIR_TOKEN_PEPPER', '')
     demo_mode = os.getenv('DEMO_MODE')
     default_city = _normalized_env_value('DEFAULT_CITY', DEFAULT_CITY)
@@ -179,6 +237,9 @@ def configure_app(app, logger):
     app.config['AMAP_SECURITY_JS_CODE'] = amap_security_js_code
     app.config['SILICONFLOW_API_KEY'] = siliconflow_key
     app.config['SILICONFLOW_API_BASE'] = siliconflow_base
+    app.config['WXPUSHER_APP_TOKEN'] = wxpusher_app_token
+    app.config['WXPUSHER_API_BASE'] = wxpusher_api_base
+    app.config['PUBLIC_BASE_URL'] = public_base_url
     app.config['AI_ALLOWED_MODELS'] = AI_ALLOWED_MODELS
     app.config['DEFAULT_CITY'] = default_city or DEFAULT_CITY_LABEL
     app.config['DEFAULT_LOCATION'] = default_location or DEFAULT_LOCATION

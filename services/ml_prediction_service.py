@@ -13,6 +13,7 @@ from core.time_utils import now_local
 logger = logging.getLogger(__name__)
 
 GENERIC_ERROR_MESSAGE = '服务暂时不可用，请稍后再试'
+EXPECTED_SKLEARN_VERSION = os.getenv('ML_EXPECTED_SKLEARN_VERSION', '1.7.2')
 _ml_service_instance = None
 _ml_service_lock = threading.Lock()
 
@@ -25,6 +26,17 @@ def get_ml_service():
             if _ml_service_instance is None:
                 _ml_service_instance = MLPredictionService()
     return _ml_service_instance
+
+
+def _major_minor_version(version):
+    parts = str(version).strip().split('.')
+    if len(parts) < 2:
+        return str(version).strip()
+    return '.'.join(parts[:2])
+
+
+def _is_sklearn_compatible(runtime_version, expected_version):
+    return _major_minor_version(runtime_version) == _major_minor_version(expected_version)
 
 class MLPredictionService:
     """基于机器学习模型的多分类预测服务"""
@@ -65,6 +77,19 @@ class MLPredictionService:
     def _load_model(self):
         """加载训练好的模型"""
         try:
+            import sklearn
+            runtime_sklearn_version = sklearn.__version__
+            self.model_info['runtime_sklearn_version'] = runtime_sklearn_version
+            self.model_info['expected_sklearn_version'] = EXPECTED_SKLEARN_VERSION
+            if not _is_sklearn_compatible(runtime_sklearn_version, EXPECTED_SKLEARN_VERSION):
+                self.model_info['error'] = (
+                    f"scikit-learn 版本不兼容: runtime={runtime_sklearn_version}, "
+                    f"expected={EXPECTED_SKLEARN_VERSION}"
+                )
+                logger.error(self.model_info['error'])
+                self.model_loaded = False
+                return
+
             base_path = os.path.dirname(os.path.dirname(__file__))
             models_path = os.path.join(base_path, 'models')
             
@@ -76,16 +101,22 @@ class MLPredictionService:
             import json
             with open(os.path.join(models_path, 'feature_config.json'), 'r', encoding='utf-8') as f:
                 self.model_info = json.load(f)
+            self.model_info['runtime_sklearn_version'] = runtime_sklearn_version
+            self.model_info['expected_sklearn_version'] = EXPECTED_SKLEARN_VERSION
+            self.model_info['sklearn_compatible'] = True
             
             self.model_loaded = True
-            print("✅ ML模型加载成功！")
-            print(f"   模型类型: {self.model_info.get('model_name', 'Unknown')}")
-            print(f"   分类类型: {self.model_info.get('model_type', 'unknown')}")
-            print(f"   准确率: {self.model_info.get('accuracy', 0)*100:.2f}%")
-            print(f"   疾病类别数: {len(self.model_info.get('classes', []))}")
+            logger.info(
+                "ML模型加载成功: type=%s, mode=%s, accuracy=%.2f%%, classes=%s",
+                self.model_info.get('model_name', 'Unknown'),
+                self.model_info.get('model_type', 'unknown'),
+                self.model_info.get('accuracy', 0) * 100,
+                len(self.model_info.get('classes', []))
+            )
             
         except Exception as e:
-            print(f"⚠️ ML模型加载失败: {e}")
+            logger.warning("ML模型加载失败: %s", e)
+            self.model_info['error'] = str(e)
             self.model_loaded = False
     
     def _get_season(self, month):
@@ -895,7 +926,11 @@ class MLPredictionService:
             'classes': self.model_info.get('classes', []),
             'feature_cols': self.model_info.get('feature_cols', []),
             'weather_features': self.model_info.get('weather_features', []),
-            'description': self.model_info.get('description', '')
+            'description': self.model_info.get('description', ''),
+            'runtime_sklearn_version': self.model_info.get('runtime_sklearn_version', ''),
+            'expected_sklearn_version': self.model_info.get('expected_sklearn_version', EXPECTED_SKLEARN_VERSION),
+            'sklearn_compatible': self.model_info.get('sklearn_compatible', self.model_loaded),
+            'error': self.model_info.get('error', '')
         }
 
 

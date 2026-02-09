@@ -259,3 +259,12 @@ def api_v1_comprehensive_alert():
 def api_comprehensive_alert():
     """获取综合健康预警（兼容）"""
     return api_v1_comprehensive_alert()
+
+
+# ======================== Pilot 埋点API ========================
+
+@bp.route('/api/v1/events', methods=['POST'], endpoint='api_v1_events')
+@login_required
+def api_v1_events():
+    """写入试点埋点事件（v1）"""
+    return api_service._api_usage_event()

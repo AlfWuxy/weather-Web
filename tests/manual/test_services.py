@@ -45,13 +45,12 @@ def test_dlnm_service():
             print(f"  {event['type']}: {event['description']}")
         
         print("\n✅ DLNM服务测试通过")
-        return True
         
     except Exception as e:
         print(f"\n❌ DLNM服务测试失败: {e}")
         import traceback
         traceback.print_exc()
-        return False
+        pytest.fail(f"DLNM服务测试失败: {e}")
 
 
 def test_forecast_service():
@@ -87,13 +86,12 @@ def test_forecast_service():
                   f"{f['risk_level']}")
         
         print("\n✅ 预报服务测试通过")
-        return True
         
     except Exception as e:
         print(f"\n❌ 预报服务测试失败: {e}")
         import traceback
         traceback.print_exc()
-        return False
+        pytest.fail(f"预报服务测试失败: {e}")
 
 
 def test_community_service():
@@ -130,13 +128,12 @@ def test_community_service():
                   f"(风险分数: {result['rankings'][0]['risk_score']})")
         
         print("\n✅ 社区服务测试通过")
-        return True
         
     except Exception as e:
         print(f"\n❌ 社区服务测试失败: {e}")
         import traceback
         traceback.print_exc()
-        return False
+        pytest.fail(f"社区服务测试失败: {e}")
 
 
 def test_chronic_service():
@@ -179,13 +176,12 @@ def test_chronic_service():
             print(f"  首要建议: {result2['recommendations'][0]['advice'][:50]}...")
         
         print("\n✅ 慢病服务测试通过")
-        return True
         
     except Exception as e:
         print(f"\n❌ 慢病服务测试失败: {e}")
         import traceback
         traceback.print_exc()
-        return False
+        pytest.fail(f"慢病服务测试失败: {e}")
 
 
 def test_integration():
@@ -247,12 +243,20 @@ def test_integration():
         print(f"\n综合预警级别: {alert}")
         
         print("\n✅ 集成测试通过")
-        return True
         
     except Exception as e:
         print(f"\n❌ 集成测试失败: {e}")
         import traceback
         traceback.print_exc()
+        pytest.fail(f"集成测试失败: {e}")
+
+
+def _run_manual_case(test_func):
+    """Allow running pytest-style tests from __main__ for manual smoke checks."""
+    try:
+        test_func()
+        return True
+    except BaseException:
         return False
 
 
@@ -263,11 +267,11 @@ def main():
     print("=" * 70)
     
     results = {
-        'DLNM风险函数': test_dlnm_service(),
-        '天气预报与健康预测': test_forecast_service(),
-        '社区风险评估': test_community_service(),
-        '慢病风险预测': test_chronic_service(),
-        '服务集成': test_integration()
+        'DLNM风险函数': _run_manual_case(test_dlnm_service),
+        '天气预报与健康预测': _run_manual_case(test_forecast_service),
+        '社区风险评估': _run_manual_case(test_community_service),
+        '慢病风险预测': _run_manual_case(test_chronic_service),
+        '服务集成': _run_manual_case(test_integration)
     }
     
     # 汇总结果

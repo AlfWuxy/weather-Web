@@ -19,10 +19,12 @@
                         <div class="icon-box bg-primary bg-opacity-10 text-primary rounded p-2 me-2">
                             <i class="bi bi-person"></i>
                         </div>
-                        <h5 class="mb-0">老人</h5>
+                        <h5 class="mb-0">老人（可选）</h5>
                     </div>
-                    <p class="text-muted small flex-grow-1">使用短码完成今日确认或求助。</p>
-                    <a class="btn btn-primary w-100" href="{{ elder_target }}">
+                    <p class="text-muted small flex-grow-1">
+                        如果老人会用手机，可用短码完成今日确认或求助；不影响试点核心闭环。
+                    </p>
+                    <a class="btn btn-outline-primary w-100" href="{{ elder_target }}">
                         进入行动入口
                     </a>
                 </div>
@@ -35,13 +37,15 @@
                         <div class="icon-box bg-success bg-opacity-10 text-success rounded p-2 me-2">
                             <i class="bi bi-people"></i>
                         </div>
-                        <h5 class="mb-0">子女照护者</h5>
+                        <h5 class="mb-0">子女照护者（主入口）</h5>
                     </div>
-                    <p class="text-muted small flex-grow-1">管理短码、查看行动状态、推进升级链。</p>
+                    <p class="text-muted small flex-grow-1">
+                        为家中老人设置所在地与慢病类别（可选），当出现高温/寒潮预警时自动推送给你，并一键复制提醒话术。
+                    </p>
                     {% if caregiver_requires_login %}
                         <div class="text-muted small mb-2">需登录后进入照护工作台。</div>
                     {% endif %}
-                    <a class="btn btn-outline-success w-100" href="{{ caregiver_target }}">
+                    <a class="btn btn-success w-100" href="{{ caregiver_target }}">
                         进入照护工作台
                     </a>
                 </div>

@@ -41,7 +41,9 @@ def admin_dashboard():
     # 统计数据中所有月份的病例趋势（完整时间范围）
     from sqlalchemy import func
 
-    dialect = db.session.bind.dialect.name
+    # Flask-SQLAlchemy (SQLAlchemy 2.x) may leave db.session.bind unset.
+    # Use db.engine to reliably detect the active dialect.
+    dialect = db.engine.dialect.name
     if dialect == 'postgresql':
         month_expr = func.to_char(MedicalRecord.visit_time, 'YYYY-MM')
     elif dialect == 'mysql':
@@ -376,7 +378,8 @@ def admin_statistics():
     if community_filter:
         trend_query = trend_query.filter(MedicalRecord.community == community_filter)
 
-    dialect = db.session.bind.dialect.name
+    # Flask-SQLAlchemy (SQLAlchemy 2.x) may leave db.session.bind unset.
+    dialect = db.engine.dialect.name
     if dialect == 'postgresql':
         month_expr = db.func.to_char(MedicalRecord.visit_time, 'YYYY-MM')
     else:

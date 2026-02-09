@@ -19,6 +19,7 @@ from core.health_profiles import (
     profile_to_context
 )
 from core.time_utils import today_local
+from core.usage import log_usage_event
 from core.weather import ensure_user_location_valid, get_weather_with_cache
 from core.db_models import FamilyMember, FamilyMemberProfile, HealthDiary, MedicationReminder
 from utils.parsers import parse_int, parse_date, parse_float, safe_json_loads
@@ -73,6 +74,13 @@ def family_members():
         )
         db.session.add(profile)
         db.session.commit()
+        log_usage_event(
+            'elder_profile_created',
+            user_id=current_user.id,
+            member_id=member.id,
+            source='web',
+            meta={'via': 'family_members'},
+        )
         flash('家庭成员已添加', 'success')
         return redirect(url_for('health.family_members'))
 
@@ -211,6 +219,13 @@ def family_member_edit(member_id):
             db.session.add(profile)
 
         db.session.commit()
+        log_usage_event(
+            'elder_profile_updated',
+            user_id=current_user.id,
+            member_id=member.id,
+            source='web',
+            meta={'via': 'family_member_edit'},
+        )
         flash('家庭成员信息已更新', 'success')
         return redirect(url_for('health.family_members'))
 

@@ -34,6 +34,10 @@ class User(UserMixin, db.Model):
     has_chronic_disease = db.Column(db.Boolean, default=False)
     chronic_diseases = db.Column(db.Text)  # JSON格式存储多个慢性病
 
+    # 试点推送设置（子女端）
+    wxpusher_uid = db.Column(db.String(80))
+    push_enabled = db.Column(db.Boolean, default=False)
+
     def set_password(self, password):
         self.password_hash = generate_password_hash(password)
 
@@ -300,6 +304,10 @@ class Pair(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     caregiver_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
     community_code = db.Column(db.String(100), nullable=False)
+    # 关联到家庭成员（老人档案，可选）
+    member_id = db.Column(db.Integer, db.ForeignKey('family_members.id'))
+    # 原始自由输入的地点（如“九江某乡镇”），用于地理编码与多地区支持
+    location_query = db.Column(db.String(200))
     elder_code = db.Column(db.String(40), unique=True, nullable=False)
     short_code = db.Column(db.String(12), unique=True, nullable=False)
     short_code_hash = db.Column(db.String(64))
@@ -311,6 +319,7 @@ class Pair(db.Model):
         db.Index('ix_pairs_caregiver_id', 'caregiver_id'),
         db.Index('ix_pairs_community_code', 'community_code'),
         db.Index('ix_pairs_short_code_hash', 'short_code_hash'),
+        db.Index('ix_pairs_member_id', 'member_id'),
     )
 
     @property
@@ -406,4 +415,78 @@ class Debrief(db.Model):
     __table_args__ = (
         db.Index('ix_debriefs_community_date', 'community_code', 'date'),
         db.Index('ix_debriefs_pair_date', 'pair_id', 'date'),
+    )
+
+
+class ApiToken(db.Model):
+    """API Token（用于小程序绑定；仅存哈希，明文仅展示一次）"""
+    __tablename__ = 'api_tokens'
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    name = db.Column(db.String(80))
+    token_hash = db.Column(db.String(64), nullable=False)
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    last_used_at = db.Column(db.DateTime)
+    revoked_at = db.Column(db.DateTime)
+
+    __table_args__ = (
+        db.Index('ix_api_tokens_user_id', 'user_id'),
+        db.Index('ix_api_tokens_token_hash', 'token_hash'),
+    )
+
+
+class UsageEvent(db.Model):
+    """试点埋点事件（用于打开率/触发/反馈等指标）"""
+    __tablename__ = 'usage_events'
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'))
+    pair_id = db.Column(db.Integer, db.ForeignKey('pairs.id'))
+    member_id = db.Column(db.Integer, db.ForeignKey('family_members.id'))
+    event_type = db.Column(db.String(50), nullable=False)
+    meta_json = db.Column(db.Text)
+    source = db.Column(db.String(20))
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+
+    __table_args__ = (
+        db.Index('ix_usage_events_user_id', 'user_id'),
+        db.Index('ix_usage_events_event_type', 'event_type'),
+        db.Index('ix_usage_events_created_at', 'created_at'),
+    )
+
+
+class AlertDelivery(db.Model):
+    """预警投递记录（推送发送/点击追踪）"""
+    __tablename__ = 'alert_deliveries'
+    id = db.Column(db.Integer, primary_key=True)
+    alert_id = db.Column(db.Integer, db.ForeignKey('weather_alerts.id'), nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    pair_id = db.Column(db.Integer, db.ForeignKey('pairs.id'))
+    channel = db.Column(db.String(20))
+    status = db.Column(db.String(20))  # sent/failed
+    error = db.Column(db.Text)
+    delivery_token = db.Column(db.String(64), unique=True, nullable=False)
+    sent_at = db.Column(db.DateTime)
+    clicked_at = db.Column(db.DateTime)
+
+    __table_args__ = (
+        db.Index('ix_alert_deliveries_alert_user', 'alert_id', 'user_id'),
+        db.Index('ix_alert_deliveries_delivery_token', 'delivery_token'),
+    )
+
+
+class LocationCache(db.Model):
+    """地点解析缓存（输入->location_code，经纬度/城市ID）"""
+    __tablename__ = 'location_cache'
+    id = db.Column(db.Integer, primary_key=True)
+    # NOTE: cannot name the Python attribute `query` (conflicts with Flask-SQLAlchemy Model.query).
+    query_text = db.Column('query', db.String(200), nullable=False)
+    location_code = db.Column(db.String(100), nullable=False)
+    provider = db.Column(db.String(20))
+    raw_json = db.Column(db.Text)
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+    __table_args__ = (
+        db.Index('ix_location_cache_query', query_text),
+        db.Index('ix_location_cache_updated_at', 'updated_at'),
     )

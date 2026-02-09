@@ -6,13 +6,15 @@ from datetime import datetime, timedelta
 from flask import flash, redirect, render_template, request, session, url_for
 from flask_login import current_user
 
-from core.db_models import Community, DailyStatus, Debrief, Pair, PairLink
+from core.db_models import Community, DailyStatus, Debrief, FamilyMember, Pair, PairLink
 from core.extensions import db
 from core.guest import is_guest_user
 from core.security import hash_pair_token, hash_short_code
 from core.time_utils import today_local, utcnow, local_datetime_to_utc
 from core.weather import get_consecutive_hot_days, get_weather_with_cache, is_demo_mode, normalize_location_name
+from core.usage import log_usage_event
 from services.heat_action_service import HeatActionService
+from services.location_resolver import resolve_location
 from utils.audit_log import log_security_event
 from utils.database import atomic_transaction
 from utils.parsers import json_or_none, safe_json_loads
@@ -70,22 +72,63 @@ def _create_pair_link(community_code):
     return link, token
 
 
-def _load_created_link():
-    created_link = None
-    created_token = None
+def _create_pair(location_query, member_id=None):
+    """Create a Pair directly (pilot default: child creates without elder redemption)."""
+    location_query = sanitize_input(location_query, max_length=200) or ''
+    location_query = location_query.strip()
+    if not location_query:
+        raise ValueError('location_query is required')
+
+    short_code = _generate_short_code()
+    pair = Pair(
+        caregiver_id=current_user.id,
+        community_code=location_query[:100],
+        location_query=location_query,
+        member_id=member_id,
+        elder_code=_generate_elder_code(),
+        short_code=short_code,
+        short_code_hash=hash_short_code(short_code),
+        status='active',
+        last_active_at=utcnow(),
+        created_at=utcnow(),
+    )
+    with atomic_transaction():
+        db.session.add(pair)
+        db.session.flush()
+    # one-time banner
+    session['created_pair_id'] = pair.id
+    log_usage_event(
+        'pair_created',
+        user_id=current_user.id,
+        pair_id=pair.id,
+        member_id=member_id,
+        source='web',
+        meta={'location_query': location_query},
+    )
+    return pair
+
+
+def _load_created_pair():
+    created_pair = None
     created_id = request.args.get('created', type=int)
-    if created_id and session.get('pair_link_id') == created_id:
-        created_link = PairLink.query.filter_by(id=created_id, caregiver_id=current_user.id).first()
-        created_token = session.pop('pair_link_token', None)
-        session.pop('pair_link_id', None)
-    return created_link, created_token
+    if created_id and session.get('created_pair_id') == created_id:
+        created_pair = Pair.query.filter_by(id=created_id, caregiver_id=current_user.id).first()
+        session.pop('created_pair_id', None)
+    return created_pair
 
 
 def _build_pair_management_context(caregiver_mode=False):
-    created_link, created_token = _load_created_link()
+    created_pair = _load_created_pair()
     status_date = today_local()
     pairs = Pair.query.filter_by(caregiver_id=current_user.id).order_by(Pair.created_at.desc()).all()
     communities = Community.query.order_by(Community.name).all()
+    family_members = []
+    try:
+        family_members = FamilyMember.query.filter_by(user_id=current_user.id).order_by(
+            FamilyMember.created_at.desc()
+        ).all()
+    except Exception:
+        db.session.rollback()
     if is_demo_mode() and not pairs:
         demo_community = normalize_location_name(getattr(current_user, 'community', None))
         if not demo_community and communities:
@@ -103,65 +146,111 @@ def _build_pair_management_context(caregiver_mode=False):
         ).all()
         _auto_escalate_overdue_statuses(statuses, status_date)
         status_map = {status.pair_id: status for status in statuses}
-    created_link_url = None
-    wechat_template_url = None
-    if created_link and created_token:
-        created_link_url = url_for(
-            'public.elder_token_entry',
-            token=created_token,
-            short_code=created_link.short_code,
+    created_action_link = None
+    if created_pair:
+        created_action_link = url_for(
+            'public.elder_entry',
+            short_code=created_pair.short_code,
             _external=True
         )
-        if getattr(current_user, 'role', None) in ('caregiver', 'admin'):
-            wechat_template_url = url_for(
-                'user.caregiver_wechat_template',
-                short_code=created_link.short_code,
-                token=created_token,
-                community_code=created_link.community_code
-            )
 
-    risk_by_community = {}
+    # Resolve per-location once (supports arbitrary CN input via AMap)
+    location_meta = {}
+    weather_by_code = {}
     if pairs:
-        heat_service = HeatActionService()
         for pair in pairs:
-            code = pair.community_code
-            if not code or code in risk_by_community:
+            label = (pair.location_query or pair.community_code or '').strip()
+            resolved = resolve_location(label)
+            code = resolved.get('location_code') or ''
+            if not code:
                 continue
-            location = normalize_location_name(code)
-            weather_data, _ = get_weather_with_cache(location)
-            consecutive_hot_days = get_consecutive_hot_days(
-                location,
-                today_max=weather_data.get('temperature_max')
-            )
-            heat_result = heat_service.calculate_heat_risk(
-                weather_data,
-                consecutive_hot_days=consecutive_hot_days
-            )
-            risk_by_community[code] = HEAT_RISK_LABELS.get(heat_result['risk_level'], '低风险')
+            if code not in location_meta:
+                location_meta[code] = resolved
+        for code in list(location_meta.keys()):
+            try:
+                weather_data, _ = get_weather_with_cache(code)
+                weather_by_code[code] = weather_data or {}
+            except Exception:
+                weather_by_code[code] = {}
 
     pair_cards = []
     now = utcnow()
     # 计算本地时间晚上8点的 UTC 时间
     local_deadline = datetime.combine(status_date, datetime.min.time()).replace(hour=20)
     deadline = local_datetime_to_utc(local_deadline)
+    member_map = {}
+    member_ids = [p.member_id for p in pairs if getattr(p, 'member_id', None)]
+    if member_ids:
+        try:
+            members = FamilyMember.query.filter(
+                FamilyMember.user_id == current_user.id,
+                FamilyMember.id.in_(member_ids)
+            ).all()
+            member_map = {m.id: m for m in members}
+        except Exception:
+            db.session.rollback()
+
+    heat_service = HeatActionService()
+
     for pair in pairs:
         status = status_map.get(pair.id)
-        risk_label = status.risk_level if status and status.risk_level else risk_by_community.get(
-            pair.community_code,
-            '低风险'
-        )
+
+        label = (pair.location_query or pair.community_code or '').strip()
+        resolved = resolve_location(label)
+        code = resolved.get('location_code') or ''
+        display_name = resolved.get('display_name') or label or code
+        weather_data = weather_by_code.get(code, {}) if code else {}
+
+        # Heat risk label (legacy) for dashboard continuity
+        risk_label = status.risk_level if status and status.risk_level else '低风险'
+        try:
+            consecutive_hot_days = get_consecutive_hot_days(
+                code or normalize_location_name(pair.community_code),
+                today_max=weather_data.get('temperature_max')
+            )
+            heat_result = heat_service.calculate_heat_risk(
+                weather_data,
+                consecutive_hot_days=consecutive_hot_days
+            )
+            risk_label = HEAT_RISK_LABELS.get(heat_result['risk_level'], risk_label)
+        except Exception:
+            pass
+
+        # Pilot alert label (heat/cold threshold)
+        alert_kind = None
+        alert_label = '暂无预警'
+        try:
+            tmax = weather_data.get('temperature_max')
+            tmin = weather_data.get('temperature_min')
+            if tmax is not None and float(tmax) >= 35:
+                alert_kind = 'heat'
+                alert_label = f'高温（{float(tmax):.0f}°C）'
+            elif tmin is not None and float(tmin) <= 5:
+                alert_kind = 'cold'
+                alert_label = f'寒潮（{float(tmin):.0f}°C）'
+        except Exception:
+            alert_kind = None
+            alert_label = '暂无预警'
+
         confirmed = bool(status and status.confirmed_at)
         is_overdue = bool(now >= deadline and not confirmed)
         relay_stage = status.relay_stage if status else None
         relay_stage_label = None
         if relay_stage and relay_stage != 'none':
             relay_stage_label = RELAY_STAGE_LABELS.get(relay_stage, relay_stage)
+        member = member_map.get(pair.member_id) if getattr(pair, 'member_id', None) else None
         pair_cards.append({
             'pair': pair,
             'status': status,
             'risk_label': risk_label,
+            'alert_kind': alert_kind,
+            'alert_label': alert_label,
+            'location_display': display_name,
+            'temperature_max': weather_data.get('temperature_max'),
+            'temperature_min': weather_data.get('temperature_min'),
+            'elder_name': (member.name if member else None),
             'action_link': url_for('public.elder_entry', short_code=pair.short_code, _external=True),
-            'reminder_message': _build_caregiver_message(pair, risk_label),
+            'reminder_message': _build_caregiver_message(pair, alert_kind=alert_kind, weather_data=weather_data, member=member),
             'help_flag': bool(status and status.help_flag),
             'is_overdue': is_overdue,
             'relay_stage': relay_stage,
@@ -169,14 +258,13 @@ def _build_pair_management_context(caregiver_mode=False):
         })
 
     context = {
-        'created_link': created_link,
-        'created_token': created_token,
-        'created_link_url': created_link_url,
-        'wechat_template_url': wechat_template_url,
+        'created_pair': created_pair,
+        'created_action_link': created_action_link,
         'pairs': pairs,
         'pair_cards': pair_cards,
         'status_map': status_map,
         'communities': communities,
+        'family_members': family_members,
         'status_date': status_date
     }
 
@@ -200,15 +288,31 @@ def pair_management():
         return redirect(url_for('user.user_dashboard'))
 
     if request.method == 'POST':
-        community_code = sanitize_input(request.form.get('community_code'), max_length=100)
-        if not community_code:
-            community_code = normalize_location_name(current_user.community)
-        if not community_code:
-            flash('请填写社区', 'error')
+        location_query = sanitize_input(request.form.get('location_query'), max_length=200)
+        if not location_query:
+            # backward-compatible name
+            location_query = sanitize_input(request.form.get('community_code'), max_length=100)
+        location_query = (location_query or '').strip()
+        if not location_query:
+            flash('请填写老人所在地（支持任意中文地点）', 'error')
             return redirect(url_for('user.pair_management'))
 
-        link, _ = _create_pair_link(community_code)
-        return redirect(url_for('user.pair_management', created=link.id))
+        member_id = request.form.get('member_id')
+        try:
+            member_id = int(member_id) if member_id and str(member_id).strip() else None
+        except Exception:
+            member_id = None
+        if member_id:
+            member = FamilyMember.query.filter_by(id=member_id, user_id=current_user.id).first()
+            if not member:
+                member_id = None
+
+        try:
+            pair = _create_pair(location_query, member_id=member_id)
+        except Exception:
+            flash('创建失败，请检查输入后重试。', 'error')
+            return redirect(url_for('user.pair_management'))
+        return redirect(url_for('user.pair_management', created=pair.id))
 
     context = _build_pair_management_context()
     return render_template('pair_management.html', **context)
@@ -228,21 +332,34 @@ def caregiver_dashboard():
 
 def caregiver_pair_create():
     """照护人创建绑定短码"""
-    if not _require_roles('caregiver', 'admin'):
-        return redirect(url_for('user.user_dashboard'))
     if is_guest_user(current_user):
         flash('游客模式无法创建绑定', 'error')
-        return redirect(url_for('user.user_dashboard'))
-
-    community_code = sanitize_input(request.form.get('community_code'), max_length=100)
-    if not community_code:
-        community_code = normalize_location_name(current_user.community)
-    if not community_code:
-        flash('请填写社区', 'error')
         return redirect(url_for('user.caregiver_dashboard'))
 
-    link, _ = _create_pair_link(community_code)
-    return redirect(url_for('user.caregiver_dashboard', created=link.id))
+    location_query = sanitize_input(request.form.get('location_query'), max_length=200)
+    if not location_query:
+        location_query = sanitize_input(request.form.get('community_code'), max_length=100)
+    location_query = (location_query or '').strip()
+    if not location_query:
+        flash('请填写老人所在地（支持任意中文地点）', 'error')
+        return redirect(url_for('user.caregiver_dashboard'))
+
+    member_id = request.form.get('member_id')
+    try:
+        member_id = int(member_id) if member_id and str(member_id).strip() else None
+    except Exception:
+        member_id = None
+    if member_id:
+        member = FamilyMember.query.filter_by(id=member_id, user_id=current_user.id).first()
+        if not member:
+            member_id = None
+
+    try:
+        pair = _create_pair(location_query, member_id=member_id)
+    except Exception:
+        flash('创建失败，请检查输入后重试。', 'error')
+        return redirect(url_for('user.caregiver_dashboard'))
+    return redirect(url_for('user.caregiver_dashboard', created=pair.id))
 
 
 def caregiver_pair_detail(pair_id):
@@ -333,6 +450,14 @@ def caregiver_action_log(pair_id):
     status.caregiver_actions = json_or_none(actions)
     status.caregiver_note = note or None
     db.session.commit()
+    log_usage_event(
+        'feedback_submitted',
+        user_id=current_user.id,
+        pair_id=pair.id,
+        member_id=getattr(pair, 'member_id', None),
+        source='web',
+        meta={'caregiver_actions_count': len(actions), 'has_note': bool(note)},
+    )
     flash('行动记录已保存。', 'success')
     return redirect(url_for('user.caregiver_pair_detail', pair_id=pair.id))
 

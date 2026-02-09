@@ -1,10 +1,14 @@
 # -*- coding: utf-8 -*-
 """Public and auth routes."""
 from flask import Blueprint, current_app, redirect, render_template, request, url_for
-from flask_login import login_required
+from flask_login import current_user, login_required
 
 from core.extensions import limiter
+from core.extensions import db
 from core.security import rate_limit_key
+from core.time_utils import utcnow
+from core.usage import log_usage_event
+from core.db_models import AlertDelivery
 from core.time_utils import today_local
 from services.public_service import (
     render_role_entry,
@@ -192,3 +196,61 @@ def guest_login():
 def logout():
     """登出"""
     return handle_logout()
+
+
+@bp.route('/t/<delivery_token>', endpoint='track_delivery')
+def track_delivery(delivery_token):
+    """Push click tracking endpoint.
+
+    Records click (CTR) then redirects user to the caregiver dashboard (login if needed).
+    """
+    token = sanitize_input(delivery_token, max_length=80) or ''
+    token = token.strip()
+    if not token:
+        return redirect(url_for('public.index'))
+
+    delivery = AlertDelivery.query.filter_by(delivery_token=token).first()
+    if not delivery:
+        return redirect(url_for('public.index'))
+
+    try:
+        if not delivery.clicked_at:
+            delivery.clicked_at = utcnow()
+            db.session.commit()
+            log_usage_event(
+                'push_click',
+                user_id=delivery.user_id,
+                pair_id=delivery.pair_id,
+                source='web',
+                meta={'alert_id': delivery.alert_id, 'channel': delivery.channel},
+            )
+    except Exception:
+        db.session.rollback()
+
+    target = url_for('user.pair_management')
+    if current_user.is_authenticated:
+        return redirect(target)
+    return redirect(url_for('public.login', next=target))
+
+
+@bp.route('/wxoa', endpoint='wxoa_landing')
+def wxoa_landing():
+    """WeChat official account landing page (source tracking)."""
+    source = sanitize_input(request.args.get('from'), max_length=30) or ''
+    article = sanitize_input(request.args.get('article'), max_length=60) or ''
+    try:
+        log_usage_event(
+            'wxoa_land',
+            user_id=(current_user.id if current_user.is_authenticated else None),
+            source='web',
+            meta={'from': source, 'article': article},
+        )
+    except Exception:
+        pass
+    return render_template('wxoa_landing.html', source=source, article=article)
+
+
+@bp.route('/about/trust-network', endpoint='about_trust_network')
+def about_trust_network():
+    """Explain the 'trust network' design logic (thesis loop)."""
+    return render_template('about_trust_network.html')

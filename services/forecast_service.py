@@ -30,6 +30,7 @@ class ForecastService:
         self.qm_params = {}  # Quantile Mapping参数
         self.emos_params = {}  # EMOS参数
         self.visit_threshold_p90 = None  # 门诊量P90阈值
+        self.max_observed_daily_visits = None  # 历史最大日门诊量（用于护栏）
         
         # 加载历史数据
         self._load_historical_data()
@@ -121,6 +122,10 @@ class ForecastService:
             df['date'] = df['就诊时间'].dt.date
             
             daily_visits = df.groupby('date').size()
+            try:
+                self.max_observed_daily_visits = int(daily_visits.max()) if len(daily_visits) else None
+            except Exception:
+                self.max_observed_daily_visits = None
             
             self.visit_threshold_p90 = daily_visits.quantile(0.90)
             self.visit_threshold_p75 = daily_visits.quantile(0.75)
@@ -138,6 +143,7 @@ class ForecastService:
             self.visit_threshold_p90 = 15
             self.visit_mean = 10
             self.visit_std = 5
+            self.max_observed_daily_visits = 30
     
     def quantile_mapping(self, forecast_temp, lead_day=1):
         """
@@ -307,13 +313,42 @@ class ForecastService:
         else:
             prob_high = 0.1
         
+        # --- Safety guardrail: clamp implausible outliers (pilot reliability) ---
+        max_cap = None
+        try:
+            if self.max_observed_daily_visits is not None:
+                max_cap = float(self.max_observed_daily_visits) * 2.0
+        except Exception:
+            max_cap = None
+
+        def _clamp(value):
+            if value is None:
+                return None
+            try:
+                v = float(value)
+            except Exception:
+                return value
+            if v < 0:
+                v = 0.0
+            if max_cap is not None and v > max_cap:
+                v = max_cap
+            return v
+
+        point_estimate = _clamp(point_estimate)
+        lower_bound = _clamp(lower_bound)
+        upper_bound = _clamp(upper_bound)
+
+        p10 = _clamp(max(0, (point_estimate or 0) - 1.28 * std_estimate))
+        p50 = _clamp(point_estimate)
+        p90 = _clamp((point_estimate or 0) + 1.28 * std_estimate)
+
         return {
-            'point_estimate': round(point_estimate, 1),
-            'lower_bound': round(lower_bound, 1),
-            'upper_bound': round(upper_bound, 1),
-            'p10': round(max(0, point_estimate - 1.28 * std_estimate), 1),
-            'p50': round(point_estimate, 1),
-            'p90': round(point_estimate + 1.28 * std_estimate, 1),
+            'point_estimate': round(point_estimate, 1) if point_estimate is not None else None,
+            'lower_bound': round(lower_bound, 1) if lower_bound is not None else None,
+            'upper_bound': round(upper_bound, 1) if upper_bound is not None else None,
+            'p10': round(p10, 1) if p10 is not None else None,
+            'p50': round(p50, 1) if p50 is not None else None,
+            'p90': round(p90, 1) if p90 is not None else None,
             'probability_exceed_p90': round(prob_high, 3),
             'probability_exceed_p75': round(min(1, prob_high * 1.5), 3),
             'rr': round(rr, 3),

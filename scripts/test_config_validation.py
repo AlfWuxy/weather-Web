@@ -43,12 +43,16 @@ def main():
             # 如果重新加载config，validate_production_config会在模块导入时被调用
             # 但是由于已经导入，我们直接调用函数
             config_module.validate_production_config()
-            print(f"⚠️  弱密钥 '{weak_key}' 未被检测（可能是 DEBUG=true）")
+            print(f"❌ 弱密钥 '{weak_key}' 未被拒绝")
+            return 1
         except RuntimeError as e:
-            if "示例值" in str(e):
-                print(f"✅ 弱密钥 '{weak_key}' 被正确拒绝")
+            msg = str(e)
+            expected_fragments = ('示例值', '长度过短', '弱关键词')
+            if any(fragment in msg for fragment in expected_fragments):
+                print(f"✅ 弱密钥 '{weak_key}' 被正确拒绝: {msg}")
             else:
-                print(f"❌ 错误消息不符合预期: {e}")
+                print(f"❌ 弱密钥拒绝原因不在预期范围: {msg}")
+                return 1
 
     # 恢复环境
     os.environ['DEBUG'] = 'true'

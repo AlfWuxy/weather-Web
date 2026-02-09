@@ -20,6 +20,7 @@
                 <div class="card-body">
                     <form method="POST" action="{{ url_for('user.profile') }}">
                         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <input type="hidden" name="form_id" value="basic">
                         <div class="row">
                             <div class="col-md-6 mb-3">
                                 <label for="username" class="form-label">用户名</label>
@@ -104,6 +105,21 @@
                             </div>
                         </div>
 
+                        <hr class="my-4">
+
+                        <h6 class="mb-3">试点推送设置（子女端）</h6>
+                        <div class="mb-3">
+                            <label for="wxpusher_uid" class="form-label">WxPusher UID</label>
+                            <input type="text" class="form-control" id="wxpusher_uid" name="wxpusher_uid" value="{{ current_user.wxpusher_uid or '' }}" placeholder="例如：UID_xxxxx">
+                            <small class="text-muted">试点阶段使用 WxPusher 推送；关注应用后可在 WxPusher 获取 UID。</small>
+                        </div>
+                        <div class="mb-3 form-check">
+                            <input class="form-check-input" type="checkbox" id="push_enabled" name="push_enabled" {% if current_user.push_enabled %}checked{% endif %}>
+                            <label class="form-check-label" for="push_enabled">
+                                开启自动推送（高温/寒潮预警触发时）
+                            </label>
+                        </div>
+
                         <div class="d-grid gap-2 mt-4">
                             <button type="submit" class="btn btn-primary">保存更改</button>
                             <a href="{{ url_for('admin.admin_dashboard') if current_user.role == 'admin' else url_for('user.user_dashboard') }}" class="btn btn-outline-secondary">取消</a>
@@ -117,8 +133,9 @@
                     <h5 class="mb-0">修改密码</h5>
                 </div>
                 <div class="card-body">
-                    <form method="POST" action="{{ url_for('user.profile') }}">
+                    <form method="POST" action="{{ url_for('user.profile') }}" id="passwordForm">
                         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <input type="hidden" name="form_id" value="password">
                         <div class="mb-3">
                             <label for="new_password" class="form-label">新密码</label>
                             <input type="password" class="form-control" id="new_password" name="new_password">
@@ -135,6 +152,34 @@
         </div>
 
         <div class="col-md-4">
+            <div class="card shadow-sm mb-4">
+                <div class="card-header bg-light">
+                    <h5 class="mb-0">小程序绑定 Token（试点）</h5>
+                </div>
+                <div class="card-body">
+                    <p class="text-muted small mb-2">
+                        试点阶段先用 Web 生成的 API Token 在小程序里绑定（避免等待微信登录/审核）。Token 仅展示一次。
+                    </p>
+                    {% if last_api_token_plain %}
+                        <div class="alert alert-warning small">
+                            <div class="fw-semibold">请立即复制保存（仅显示一次）</div>
+                            <input class="form-control mt-2" value="{{ last_api_token_plain }}" readonly>
+                        </div>
+                    {% endif %}
+                    <form method="POST" action="{{ url_for('user.profile') }}">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <input type="hidden" name="form_id" value="api_token">
+                        <div class="mb-2">
+                            <label class="form-label small">备注（可选）</label>
+                            <input class="form-control" name="token_name" placeholder="例如：我的手机">
+                        </div>
+                        <button type="submit" class="btn btn-outline-primary w-100">
+                            <i class="bi bi-key"></i> 生成 API Token
+                        </button>
+                    </form>
+                </div>
+            </div>
+
             <div class="card shadow-sm mb-4">
                 <div class="card-header bg-primary text-white">
                     <h5 class="mb-0">账户信息</h5>
@@ -189,19 +234,19 @@ document.getElementById('has_chronic_disease').addEventListener('change', functi
 });
 
 // 密码确认验证
-const form = document.querySelector('form');
-form.addEventListener('submit', function(e) {
-    const newPassword = document.getElementById('new_password').value;
-    const confirmPassword = document.getElementById('confirm_password').value;
-    
-    if (newPassword && newPassword !== confirmPassword) {
-        e.preventDefault();
-        alert('两次输入的密码不一致！');
-    }
-});
+const passwordForm = document.getElementById('passwordForm');
+if (passwordForm) {
+    passwordForm.addEventListener('submit', function(e) {
+        const newPassword = document.getElementById('new_password').value;
+        const confirmPassword = document.getElementById('confirm_password').value;
+        if (newPassword && newPassword !== confirmPassword) {
+            e.preventDefault();
+            alert('两次输入的密码不一致！');
+        }
+    });
+}
 </script>
 {% endblock %}
-
 
 
 

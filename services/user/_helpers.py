@@ -114,24 +114,79 @@ def _build_outreach_suggestions(total_people, confirmed_count, help_count, escal
     return suggestions[:3]
 
 
-def _build_caregiver_message(pair, risk_label):
-    action_link = url_for(
-        'public.elder_entry',
-        short_code=pair.short_code,
-        _external=True
-    )
-    lines = [
-        '【高温行动提醒】',
-        f'社区：{pair.community_code}',
-        f'今日热风险：{risk_label}',
-        f'行动链接：{action_link}',
-        f'短码：{pair.short_code}',
-        '行动建议（非医疗诊断/治疗）：'
-    ]
-    for item in _action_plan(risk_label):
-        lines.append(f'- {item["title"]}：{item["detail"]}')
-    lines.append('如需帮助请在页面内点击“我需要帮助”。')
-    return '\n'.join(lines)
+def _personalized_care_notes(chronic_diseases):
+    diseases = chronic_diseases or []
+    text = '、'.join([d for d in diseases if d])
+    if not text:
+        return []
+    notes = [f'慢病提示（可选登记）：{text}']
+    # Light personalization only; avoid medical claims.
+    cold_sensitive = any('呼吸' in d or '慢阻肺' in d or '支气管' in d for d in diseases)
+    heat_sensitive = any('高血压' in d or '冠心病' in d or '脑卒中' in d for d in diseases)
+    if cold_sensitive:
+        notes.append('寒冷时更要注意保暖、减少外出，预防感冒与呼吸道不适。')
+    if heat_sensitive:
+        notes.append('高温时注意补水、避免暴晒和剧烈活动，留意头晕胸闷等不适。')
+    return notes
+
+
+def _build_caregiver_message(pair, alert_kind=None, weather_data=None, member=None):
+    """Build a one-click message the caregiver can forward to the elder."""
+    weather_data = weather_data or {}
+    location = (getattr(pair, 'location_query', None) or getattr(pair, 'community_code', None) or '').strip()
+    elder_name = getattr(member, 'name', None) if member else None
+    relation = (getattr(member, 'relation', None) or '').strip() if member else ''
+
+    # Pick a natural address term.
+    address = '你'
+    if relation in ('母亲', '妈妈', '妈'):
+        address = '妈'
+    elif relation in ('父亲', '爸爸', '爸'):
+        address = '爸'
+    elif elder_name:
+        address = elder_name
+
+    try:
+        tmax = weather_data.get('temperature_max')
+        tmin = weather_data.get('temperature_min')
+        tmax_s = f"{float(tmax):.0f}" if tmax is not None else None
+        tmin_s = f"{float(tmin):.0f}" if tmin is not None else None
+    except Exception:
+        tmax_s = None
+        tmin_s = None
+
+    action_link = url_for('public.elder_entry', short_code=pair.short_code, _external=True)
+
+    lines = []
+    if alert_kind == 'cold':
+        lines.append('【寒潮行动提醒】')
+        summary = f'{address}，我看到你那边今天可能比较冷'
+        if tmin_s is not None:
+            summary += f'（最低约 {tmin_s}°C）'
+        summary += '。'
+        lines.append(summary)
+        lines.append('建议：尽量少出门，外出注意保暖防滑；室内注意保暖，别受凉。')
+    elif alert_kind == 'heat':
+        lines.append('【高温行动提醒】')
+        summary = f'{address}，我看到你那边今天可能会很热'
+        if tmax_s is not None:
+            summary += f'（最高约 {tmax_s}°C）'
+        summary += '。'
+        lines.append(summary)
+        lines.append('建议：避开中午外出，多喝水；室内开风扇/空调或找阴凉处休息。')
+    else:
+        lines.append('【日常提醒】')
+        lines.append(f'{address}，我这边看看你那边天气有变化，注意劳逸结合，出门记得带水/外套。')
+
+    if location:
+        lines.append(f'地点：{location}')
+
+    chronic_diseases = safe_json_loads(getattr(member, 'chronic_diseases', None), []) if member else []
+    lines.extend(_personalized_care_notes(chronic_diseases))
+
+    lines.append('说明：这是行动提醒，不提供医疗诊断/治疗建议；如明显不适请及时就医。')
+    lines.append(f'（可选）行动页：{action_link}  短码：{pair.short_code}')
+    return '\n'.join([line for line in lines if line])
 
 
 def _build_community_message(community_code, risk_label, resources):

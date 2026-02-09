@@ -118,23 +118,24 @@ def main():
         print("❌ core/hooks.py 未找到")
         return 1
 
-    # 6. 验证 redeemed_at 检查
-    print("\n[6/6] 验证 redeemed_at 重复检查...")
+    # 6. 验证短码赎回安全检查
+    print("\n[6/6] 验证短码赎回安全检查...")
     try:
-        with open(os.path.join(root_dir, 'blueprints', 'public.py'), 'r', encoding='utf-8') as f:
-            public_content = f.read()
+        service_path = os.path.join(root_dir, 'services', 'public_service.py')
+        with open(service_path, 'r', encoding='utf-8') as f:
+            service_content = f.read()
 
-        if 'if link.redeemed_at:' in public_content and '短码已被赎回' in public_content:
-            print("✅ blueprints/public.py 包含 redeemed_at 重复检查")
+        if 'if link.redeemed_at:' in service_content and '短码已被赎回' in service_content:
+            print("✅ services/public_service.py 包含 redeemed_at 重复检查")
         else:
-            print("⚠️  blueprints/public.py 未找到 redeemed_at 检查")
+            print("⚠️  services/public_service.py 未找到 redeemed_at 检查")
 
-        if 'hasattr(link, \'pair_id\')' in public_content:
-            print("✅ blueprints/public.py 包含 pair_id 安全检查")
+        if 'hasattr(link, \'pair_id\')' in service_content:
+            print("✅ services/public_service.py 包含 pair_id 安全检查")
         else:
-            print("⚠️  blueprints/public.py 未找到 pair_id 安全检查")
+            print("⚠️  services/public_service.py 未找到 pair_id 安全检查")
     except FileNotFoundError:
-        print("❌ blueprints/public.py 未找到")
+        print("❌ services/public_service.py 未找到")
         return 1
 
     print("\n" + "=" * 60)

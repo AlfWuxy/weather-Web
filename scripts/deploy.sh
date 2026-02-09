@@ -87,6 +87,8 @@ upload_files() {
             --exclude 'instance' \
             --exclude 'storage' \
             --exclude 'health_weather.db' \
+            --exclude 'data/research/*.xlsx' \
+            --exclude 'data/research/*.xls' \
             --exclude '.git' \
             --exclude 'venv' \
             --exclude '.venv' \
@@ -101,7 +103,7 @@ upload_files() {
         expect -c "
             set timeout 600
             set password \$env(SSHPASS)
-        spawn rsync -avz --exclude '__pycache__' --exclude '*.pyc' --exclude 'instance' --exclude 'storage' --exclude 'health_weather.db' --exclude '.git' --exclude 'venv' --exclude '.venv' --exclude '.venv2' --exclude '.env' --exclude '.env.local' -e ssh $LOCAL_DIR/ $USER@$SERVER:$PROJECT_DIR/
+        spawn rsync -avz --exclude '__pycache__' --exclude '*.pyc' --exclude 'instance' --exclude 'storage' --exclude 'health_weather.db' --exclude 'data/research/*.xlsx' --exclude 'data/research/*.xls' --exclude '.git' --exclude 'venv' --exclude '.venv' --exclude '.venv2' --exclude '.env' --exclude '.env.local' -e ssh $LOCAL_DIR/ $USER@$SERVER:$PROJECT_DIR/
         expect {
                 \"*password:\" {
                     send \"\$password\r\"
@@ -117,7 +119,7 @@ upload_files() {
         return
     fi
 
-    rsync -avz --exclude '__pycache__' --exclude '*.pyc' --exclude 'instance' --exclude 'storage' --exclude 'health_weather.db' --exclude '.git' --exclude 'venv' --exclude '.venv' --exclude '.venv2' --exclude '.env' --exclude '.env.local' -e ssh "$LOCAL_DIR/" "$USER@$SERVER:$PROJECT_DIR/"
+    rsync -avz --exclude '__pycache__' --exclude '*.pyc' --exclude 'instance' --exclude 'storage' --exclude 'health_weather.db' --exclude 'data/research/*.xlsx' --exclude 'data/research/*.xls' --exclude '.git' --exclude 'venv' --exclude '.venv' --exclude '.venv2' --exclude '.env' --exclude '.env.local' -e ssh "$LOCAL_DIR/" "$USER@$SERVER:$PROJECT_DIR/"
 }
 
 echo "步骤1: 测试服务器连接..."
@@ -125,7 +127,11 @@ remote_exec "echo '连接成功'"
 
 echo ""
 echo "步骤2: 安装系统依赖..."
-remote_exec "apt-get update && apt-get install -y python3 python3-pip python3-venv rsync"
+remote_exec "apt-get update && apt-get install -y python3 python3-pip python3-venv rsync redis-server"
+
+echo ""
+echo "步骤2.1: 启动 Redis（用于生产环境限流存储）..."
+remote_exec "systemctl enable --now redis-server || true"
 
 echo ""
 echo "步骤3: 创建项目目录..."
@@ -146,8 +152,13 @@ FLASK_ENV=production
 DEBUG=false
 SECRET_KEY=\$SECRET_KEY_GEN
 PAIR_TOKEN_PEPPER=\$PAIR_TOKEN_PEPPER_GEN
+REDIS_URL=redis://127.0.0.1:6379/0
+RATE_LIMIT_STORAGE_URI=redis://127.0.0.1:6379/0
 QWEATHER_KEY=
 AMAP_KEY=
+WXPUSHER_APP_TOKEN=
+WXPUSHER_API_BASE=https://wxpusher.zjiecode.com/api
+PUBLIC_BASE_URL=
 EOF
 echo '已创建新的 .env 文件'; else echo '.env 文件已存在，跳过创建'; fi"
 

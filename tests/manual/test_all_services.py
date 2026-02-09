@@ -34,11 +34,11 @@ def test_dlnm_service():
         if dlnm.mmt:
             print(f'   MMT: {dlnm.mmt:.1f}°C')
         
-        return True
+        return
     except Exception as e:
         print(f'   ❌ 错误: {e}')
         traceback.print_exc()
-        return False
+        pytest.fail(f"DLNM风险服务测试失败: {e}")
 
 def test_forecast_service():
     """测试预报服务"""
@@ -56,11 +56,11 @@ def test_forecast_service():
         print(f'   ✅ 7天预测成功: 高风险天数={summary["high_risk_days"]}')
         print(f'   预计总门诊: {summary["total_expected_visits"]:.0f}人次')
         
-        return True
+        return
     except Exception as e:
         print(f'   ❌ 错误: {e}')
         traceback.print_exc()
-        return False
+        pytest.fail(f"预报服务测试失败: {e}")
 
 def test_community_service():
     """测试社区风险服务"""
@@ -84,11 +84,11 @@ def test_community_service():
         result = cs.generate_community_risk_map({'temperature': 30})
         print(f'   ✅ 风险地图生成: {len(result.get("rankings", []))}个社区排名')
         
-        return True
+        return
     except Exception as e:
         print(f'   ❌ 错误: {e}')
         traceback.print_exc()
-        return False
+        pytest.fail(f"社区风险服务测试失败: {e}")
 
 def test_chronic_service():
     """测试慢病风险服务"""
@@ -110,11 +110,11 @@ def test_chronic_service():
         pop_result = cr.predict_population_risk({}, {'temperature': 35})
         print(f'   ✅ 人群风险预测: 最高风险群体={pop_result["overall_summary"]["highest_risk_group"]}')
         
-        return True
+        return
     except Exception as e:
         print(f'   ❌ 错误: {e}')
         traceback.print_exc()
-        return False
+        pytest.fail(f"慢病风险服务测试失败: {e}")
 
 def test_weather_service():
     """测试天气服务"""
@@ -131,10 +131,19 @@ def test_weather_service():
         extreme = ws.identify_extreme_weather(weather)
         print(f'   ✅ 极端天气识别: 是否极端={extreme["is_extreme"]}')
         
-        return True
+        return
     except Exception as e:
         print(f'   ❌ 错误: {e}')
         traceback.print_exc()
+        pytest.fail(f"天气服务测试失败: {e}")
+
+
+def _run_manual_case(test_func):
+    """Allow running pytest-style tests from __main__ for manual smoke checks."""
+    try:
+        test_func()
+        return True
+    except BaseException:
         return False
 
 if __name__ == '__main__':
@@ -143,11 +152,11 @@ if __name__ == '__main__':
     print('=' * 60)
     
     results = {
-        'DLNM风险服务': test_dlnm_service(),
-        '预报服务': test_forecast_service(),
-        '社区风险服务': test_community_service(),
-        '慢病风险服务': test_chronic_service(),
-        '天气服务': test_weather_service()
+        'DLNM风险服务': _run_manual_case(test_dlnm_service),
+        '预报服务': _run_manual_case(test_forecast_service),
+        '社区风险服务': _run_manual_case(test_community_service),
+        '慢病风险服务': _run_manual_case(test_chronic_service),
+        '天气服务': _run_manual_case(test_weather_service)
     }
     
     print('\n' + '=' * 60)

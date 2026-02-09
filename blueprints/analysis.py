@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 """Analysis and report routes."""
+import csv
 import io
+import json
 import logging
 import math
 from datetime import timedelta
@@ -14,10 +16,13 @@ from core.guest import is_guest_user
 from core.analytics import pearson_corr
 from core.audit import log_audit
 from core.db_models import (
+    AlertDelivery,
     Community,
     HealthDiary,
     HealthRiskAssessment,
     MedicalRecord,
+    Pair,
+    UsageEvent,
     WeatherAlert,
     WeatherData
 )
@@ -28,6 +33,13 @@ from utils.validators import sanitize_input
 logger = logging.getLogger(__name__)
 
 bp = Blueprint('analysis', __name__)
+
+
+def _require_admin():
+    if getattr(current_user, 'role', None) != 'admin':
+        flash('权限不足', 'error')
+        return False
+    return True
 
 
 def _default_city():
@@ -821,3 +833,146 @@ def annual_report():
         diary_count=len(diary_entries),
         severity_counts=severity_counts
     )
+
+
+@bp.route('/analysis/pilot', endpoint='pilot_dashboard')
+@login_required
+def pilot_dashboard():
+    """试点数据看板（管理员）"""
+    if not _require_admin():
+        return redirect(url_for('user.user_dashboard'))
+
+    days = request.args.get('days', default=30, type=int)
+    days = max(1, min(days, 365))
+
+    now = utcnow()
+    start_ts = now - timedelta(days=days)
+    start_7d = now - timedelta(days=7)
+    start_30d = now - timedelta(days=30)
+
+    pairs_total = Pair.query.filter_by(status='active').count()
+    elders_total = Pair.query.filter(Pair.status == 'active', Pair.member_id.isnot(None)).count()
+
+    # 活跃 caregiver：近N天有 usage_events
+    active_7d = db.session.query(db.func.count(db.func.distinct(UsageEvent.user_id))).filter(
+        UsageEvent.user_id.isnot(None),
+        UsageEvent.created_at >= start_7d
+    ).scalar() or 0
+    active_30d = db.session.query(db.func.count(db.func.distinct(UsageEvent.user_id))).filter(
+        UsageEvent.user_id.isnot(None),
+        UsageEvent.created_at >= start_30d
+    ).scalar() or 0
+
+    # 推送投递与CTR
+    sent = AlertDelivery.query.filter(AlertDelivery.sent_at >= start_ts, AlertDelivery.status == 'sent').count()
+    failed = AlertDelivery.query.filter(AlertDelivery.sent_at >= start_ts, AlertDelivery.status == 'failed').count()
+    clicked = AlertDelivery.query.filter(AlertDelivery.sent_at >= start_ts, AlertDelivery.clicked_at.isnot(None)).count()
+    ctr = round(clicked / sent, 4) if sent else 0.0
+
+    template_copy = UsageEvent.query.filter(
+        UsageEvent.created_at >= start_ts,
+        UsageEvent.event_type == 'template_copy'
+    ).count()
+    template_pairs = db.session.query(db.func.count(db.func.distinct(UsageEvent.pair_id))).filter(
+        UsageEvent.created_at >= start_ts,
+        UsageEvent.event_type == 'template_copy',
+        UsageEvent.pair_id.isnot(None)
+    ).scalar() or 0
+
+    feedback_count = UsageEvent.query.filter(
+        UsageEvent.created_at >= start_ts,
+        UsageEvent.event_type == 'feedback_submitted'
+    ).count()
+
+    wxoa_land = UsageEvent.query.filter(
+        UsageEvent.created_at >= start_ts,
+        UsageEvent.event_type == 'wxoa_land'
+    ).count()
+
+    location_expr = db.func.coalesce(Pair.location_query, Pair.community_code).label('location')
+    cnt_expr = db.func.count(Pair.id).label('cnt')
+    location_rows = db.session.query(
+        location_expr,
+        cnt_expr
+    ).filter(
+        Pair.status == 'active'
+    ).group_by(location_expr).order_by(cnt_expr.desc()).limit(20).all()
+    location_coverage = [{'location': r[0] or '', 'count': int(r[1] or 0)} for r in location_rows]
+
+    return render_template(
+        'analysis_pilot.html',
+        days=days,
+        pairs_total=pairs_total,
+        elders_total=elders_total,
+        active_7d=active_7d,
+        active_30d=active_30d,
+        push_sent=sent,
+        push_failed=failed,
+        push_clicked=clicked,
+        push_ctr=ctr,
+        template_copy=template_copy,
+        template_pairs=template_pairs,
+        feedback_count=feedback_count,
+        wxoa_land=wxoa_land,
+        location_coverage=location_coverage,
+    )
+
+
+@bp.route('/analysis/pilot/export.csv', endpoint='pilot_export_csv')
+@login_required
+def pilot_export_csv():
+    """导出试点埋点（CSV）"""
+    if not _require_admin():
+        return redirect(url_for('user.user_dashboard'))
+
+    days = request.args.get('days', default=30, type=int)
+    days = max(1, min(days, 365))
+    start_ts = utcnow() - timedelta(days=days)
+
+    events = UsageEvent.query.filter(
+        UsageEvent.created_at >= start_ts
+    ).order_by(UsageEvent.created_at.desc()).all()
+
+    out = io.StringIO()
+    writer = csv.writer(out)
+    writer.writerow(['created_at', 'event_type', 'user_id', 'pair_id', 'member_id', 'source', 'meta_json'])
+    for e in events:
+        writer.writerow([
+            e.created_at.isoformat() if e.created_at else '',
+            e.event_type or '',
+            e.user_id or '',
+            e.pair_id or '',
+            e.member_id or '',
+            e.source or '',
+            e.meta_json or '',
+        ])
+
+    data = out.getvalue().encode('utf-8-sig')  # Excel-friendly
+    return send_file(
+        io.BytesIO(data),
+        mimetype='text/csv',
+        as_attachment=True,
+        download_name=f'pilot_events_last_{days}d.csv',
+    )
+
+
+@bp.route('/analysis/model-quality', endpoint='model_quality')
+@login_required
+def model_quality():
+    """模型可靠性（护栏 + 回测报告）"""
+    if not _require_admin():
+        return redirect(url_for('user.user_dashboard'))
+
+    from pathlib import Path
+
+    base_dir = Path(__file__).resolve().parents[1]
+    report_path = base_dir / 'tmp' / 'backtest_report.json'
+
+    report = None
+    if report_path.exists():
+        try:
+            report = json.loads(report_path.read_text(encoding='utf-8'))
+        except Exception:
+            report = None
+
+    return render_template('analysis_model_quality.html', report=report, report_path=str(report_path))

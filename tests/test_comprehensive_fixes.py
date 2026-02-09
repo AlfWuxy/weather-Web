@@ -275,6 +275,40 @@ def test_sqlalchemy_engine_options_sqlite(tmp_path):
         _reload_config()
 
 
+def test_validate_production_config_rejects_memory_rate_limit(tmp_path):
+    original = _set_env({
+        'SECRET_KEY': 'strongkey1234567890strongkey123456',
+        'PAIR_TOKEN_PEPPER': 'pepper-1234567890pepper-1234567890',
+        'DEBUG': 'false',
+        'DATABASE_URI': f"sqlite:///{tmp_path/'prod_rate_limit.db'}",
+        'RATE_LIMIT_STORAGE_URI': 'memory://',
+        'REDIS_URL': '',
+    })
+    try:
+        config = _reload_config()
+        with pytest.raises(RuntimeError, match='memory://'):
+            config.validate_production_config()
+    finally:
+        _restore_env(original)
+        _reload_config()
+
+
+def test_validate_production_config_accepts_redis_rate_limit(tmp_path):
+    original = _set_env({
+        'SECRET_KEY': 'strongkey1234567890strongkey123456',
+        'PAIR_TOKEN_PEPPER': 'pepper-1234567890pepper-1234567890',
+        'DEBUG': 'false',
+        'DATABASE_URI': f"sqlite:///{tmp_path/'prod_rate_limit_ok.db'}",
+        'RATE_LIMIT_STORAGE_URI': 'redis://localhost:6379/0',
+    })
+    try:
+        config = _reload_config()
+        config.validate_production_config()
+    finally:
+        _restore_env(original)
+        _reload_config()
+
+
 def test_error_handler_classification():
     from utils.error_handlers import classify_exception
 

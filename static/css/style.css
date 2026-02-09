@@ -77,7 +77,7 @@ main {
     font-size: 1.5rem;
 }
 
-.navbar-dark .navbar-nav .nav-link {
+.navbar .navbar-nav .nav-link {
     color: var(--text-primary) !important;
     font-weight: 500;
     font-size: 0.9375rem;
@@ -87,14 +87,86 @@ main {
     margin: 0 0.25rem;
 }
 
-.navbar-dark .navbar-nav .nav-link:hover {
+.navbar .navbar-nav .nav-link:hover {
     color: var(--primary-color) !important;
     background: var(--background-tertiary);
 }
 
-.navbar-dark .navbar-nav .nav-link.active {
+.navbar .navbar-nav .nav-link.active {
     color: var(--primary-color) !important;
     background: rgba(26, 86, 219, 0.1);
+}
+
+.navbar-brand {
+    white-space: nowrap;
+}
+
+/* Offcanvas navigation drawer */
+.app-offcanvas {
+    background: var(--glass-bg-strong);
+    backdrop-filter: blur(var(--glass-blur));
+    -webkit-backdrop-filter: blur(var(--glass-blur));
+    border-left: 1px solid var(--glass-border);
+    --bs-offcanvas-width: min(92vw, 420px);
+}
+
+.app-offcanvas .offcanvas-header {
+    border-bottom: 1px solid var(--glass-border);
+}
+
+.app-offcanvas .accordion-item {
+    background: transparent;
+    border: 0;
+    border-bottom: 1px solid var(--glass-border);
+}
+
+.app-offcanvas .accordion-button {
+    background: transparent;
+    color: var(--text-primary);
+    font-weight: 600;
+    padding-left: 0;
+    padding-right: 0;
+}
+
+.app-offcanvas .accordion-button:focus {
+    box-shadow: none;
+}
+
+.app-offcanvas .accordion-button:not(.collapsed) {
+    color: var(--text-primary);
+    box-shadow: none;
+}
+
+.app-offcanvas .accordion-body {
+    padding-left: 0;
+    padding-right: 0;
+    padding-top: 0.25rem;
+    padding-bottom: 0.75rem;
+}
+
+.app-offcanvas .app-nav-link {
+    color: var(--text-primary);
+    border-radius: 10px;
+    padding: 0.5rem 0.75rem;
+    margin: 0.125rem 0;
+    white-space: normal;
+    word-break: break-word;
+}
+
+.app-offcanvas .app-nav-link:hover,
+.app-offcanvas .app-nav-link:focus {
+    color: var(--text-primary);
+    background: rgba(255, 255, 255, 0.4);
+}
+
+.app-offcanvas .app-nav-meta {
+    color: var(--text-secondary);
+    font-size: 0.875rem;
+}
+
+.app-offcanvas hr {
+    border-color: var(--glass-border);
+    opacity: 1;
 }
 
 /* 卡片样式 - 专业商务设计 */

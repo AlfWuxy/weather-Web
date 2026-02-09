@@ -1,0 +1,32 @@
+page {
+  background: #f5f7fb;
+  color: #111827;
+  font-size: 14px;
+}
+
+.card {
+  background: #ffffff;
+  border-radius: 12px;
+  padding: 14px;
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.06);
+}
+
+.muted {
+  color: #6b7280;
+}
+
+.btn-primary {
+  background: #16a34a;
+  color: #ffffff;
+  border-radius: 10px;
+  padding: 10px 14px;
+}
+
+.btn-outline {
+  background: transparent;
+  color: #111827;
+  border: 1px solid #d1d5db;
+  border-radius: 10px;
+  padding: 10px 14px;
+}
+

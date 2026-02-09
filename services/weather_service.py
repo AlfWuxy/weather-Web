@@ -46,6 +46,16 @@ class WeatherService:
     
     def _get_location(self, city):
         """获取城市的location参数"""
+        city = str(city).strip() if city is not None else ''
+        if not city:
+            return self.default_location
+
+        # Allow passing raw QWeather location id or lon,lat coordinates directly.
+        if city.isdigit():
+            return city
+        if self._parse_lon_lat(city):
+            return city
+
         # 首先从映射中查找
         if city in self.city_map:
             return self.city_map[city]

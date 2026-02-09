@@ -17,7 +17,9 @@ from core.constants import CHRONIC_OPTIONS, DEFAULT_CITY_LABEL, GUEST_ID_PREFIX,
 from core.extensions import db, init_extensions, login_manager
 from core.hooks import register_hooks
 from core.db_models import (
+    AlertDelivery,
     AuditLog,
+    ApiToken,
     Community,
     CommunityDaily,
     CoolingResource,
@@ -30,10 +32,12 @@ from core.db_models import (
     HealthRiskAssessment,
     MedicalRecord,
     MedicationReminder,
+    LocationCache,
     Notification,
     Pair,
     PairLink,
     User,
+    UsageEvent,
     WeatherAlert,
     WeatherCache,
     WeatherData
@@ -83,6 +87,7 @@ def register_blueprints(app):
     from blueprints.admin import bp as admin_bp
     from blueprints.tools import bp as tools_bp
     from blueprints.api import bp as api_bp
+    from blueprints.mp_api import bp as mp_api_bp
 
     app.register_blueprint(public_bp)
     app.register_blueprint(user_bp)
@@ -91,6 +96,7 @@ def register_blueprints(app):
     app.register_blueprint(admin_bp)
     app.register_blueprint(tools_bp)
     app.register_blueprint(api_bp)
+    app.register_blueprint(mp_api_bp)
 
 
 _register_blueprints = register_blueprints

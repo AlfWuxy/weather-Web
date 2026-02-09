@@ -14,6 +14,7 @@ from core.constants import GUEST_ID_PREFIX
 from core.extensions import db
 from core.security import hash_identifier, hash_short_code, rate_limit_key, verify_pair_token
 from core.time_utils import today_local, utcnow, ensure_utc_aware
+from core.usage import log_usage_event
 from core.weather import get_weather_with_cache, normalize_location_name, get_consecutive_hot_days
 from core.guest import GuestUser, is_guest_user
 from core.db_models import (
@@ -528,6 +529,14 @@ def _handle_action_confirm(token=None, confirm_action=None, debrief_action=None)
     status.confirmed_at = utcnow()
     pair.last_active_at = utcnow()
     db.session.commit()
+    log_usage_event(
+        'checkin_confirmed',
+        user_id=pair.caregiver_id,
+        pair_id=pair.id,
+        member_id=getattr(pair, 'member_id', None),
+        source='web',
+        meta={'actions_done_count': len(actions_done)},
+    )
     _refresh_community_daily(pair.community_code, status_date)
     flash('已记录今日确认。', 'success')
     action_routes = _resolve_action_routes(confirm_action=confirm_action, debrief_action=debrief_action)
@@ -562,6 +571,14 @@ def _handle_action_help(token=None, confirm_action=None, debrief_action=None):
         status.relay_stage = 'caregiver'
     pair.last_active_at = utcnow()
     db.session.commit()
+    log_usage_event(
+        'help_flagged',
+        user_id=pair.caregiver_id,
+        pair_id=pair.id,
+        member_id=getattr(pair, 'member_id', None),
+        source='web',
+        meta={'relay_stage': status.relay_stage},
+    )
     _refresh_community_daily(pair.community_code, status_date)
     flash('已记录求助，照护人将收到提醒。', 'success')
     action_routes = _resolve_action_routes(confirm_action=confirm_action, debrief_action=debrief_action)
@@ -614,6 +631,14 @@ def _handle_action_debrief(token=None, confirm_action=None, debrief_action=None,
     status = _get_or_create_daily_status(pair, status_date, None)
     status.debrief_optin = optin
     db.session.commit()
+    log_usage_event(
+        'feedback_submitted',
+        user_id=pair.caregiver_id,
+        pair_id=pair.id,
+        member_id=getattr(pair, 'member_id', None),
+        source='web',
+        meta={'optin': bool(optin), 'difficulty_len': len(difficulty or '')},
+    )
     _refresh_community_daily(pair.community_code, status_date)
     flash('复盘已提交，感谢反馈。', 'success')
 
@@ -637,7 +662,8 @@ def _handle_action_debrief(token=None, confirm_action=None, debrief_action=None,
 
 def render_role_entry():
     is_real_user = current_user.is_authenticated and not is_guest_user(current_user)
-    caregiver_next = url_for('user.caregiver_dashboard')
+    # Pilot定位：老人不一定会用网页；主要入口是子女端（照护工作台）
+    caregiver_next = url_for('user.pair_management')
     community_next = url_for('user.community_dashboard')
     caregiver_target = caregiver_next if is_real_user else url_for('public.login', next=caregiver_next)
     community_target = community_next if is_real_user else url_for('public.login', next=community_next)

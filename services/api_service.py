@@ -16,7 +16,9 @@ from core.weather import (
     get_weather_with_cache,
     normalize_location_name
 )
-from core.db_models import Community
+from core.db_models import Community, FamilyMember, Pair
+from core.extensions import db
+from core.usage import log_usage_event
 from utils.parsers import safe_json_loads
 from utils.error_handlers import handle_api_exception
 from utils.validators import sanitize_input
@@ -29,6 +31,21 @@ GENERIC_ERROR_MESSAGE = '服务暂时不可用，请稍后再试'
 INPUT_EXCEPTIONS = (ValueError, KeyError, TypeError, json.JSONDecodeError)
 SERVICE_EXCEPTIONS = (RuntimeError, FileNotFoundError, OSError, TimeoutError)
 API_EXCEPTIONS = INPUT_EXCEPTIONS + SERVICE_EXCEPTIONS
+
+_PILOT_EVENT_TYPES = {
+    'pair_created',
+    'elder_profile_created',
+    'elder_profile_updated',
+    'template_view',
+    'template_copy',
+    'push_sent',
+    'push_failed',
+    'push_click',
+    'feedback_submitted',
+    'help_flagged',
+    'checkin_confirmed',
+    'wxoa_land',
+}
 
 
 def _handle_api_error(exc, context_msg, include_details=None):
@@ -211,7 +228,7 @@ def _api_ml_predict_community():
         # 获取社区信息
         community_id = data.get('community_id')
         if community_id:
-            community = Community.query.get(community_id)
+            community = db.session.get(Community, community_id)
             if community:
                 community_info = {
                     'name': community.name,
@@ -851,3 +868,56 @@ def api_v1_comprehensive_alert():
 def api_comprehensive_alert():
     """获取综合健康预警（兼容）"""
     return api_v1_comprehensive_alert()
+
+
+def _api_usage_event():
+    """Write pilot usage event (server-side validation, CSRF-protected)."""
+    try:
+        payload = request.get_json(silent=True) or {}
+        event_type = sanitize_input(payload.get('event_type'), max_length=50) or ''
+        if event_type not in _PILOT_EVENT_TYPES:
+            return jsonify({'success': False, 'error': 'invalid event_type'}), 400
+
+        pair_id = payload.get('pair_id')
+        member_id = payload.get('member_id')
+        source = sanitize_input(payload.get('source'), max_length=20) or 'web'
+        meta = payload.get('meta') if isinstance(payload.get('meta'), (dict, list)) else None
+
+        resolved_pair_id = None
+        if pair_id is not None:
+            try:
+                pair_id_int = int(pair_id)
+            except Exception:
+                pair_id_int = None
+            if pair_id_int:
+                q = Pair.query.filter_by(id=pair_id_int)
+                if getattr(current_user, 'role', None) != 'admin':
+                    q = q.filter_by(caregiver_id=current_user.id)
+                pair = q.first()
+                if pair:
+                    resolved_pair_id = pair.id
+
+        resolved_member_id = None
+        if member_id is not None:
+            try:
+                member_id_int = int(member_id)
+            except Exception:
+                member_id_int = None
+            if member_id_int:
+                member = FamilyMember.query.filter_by(id=member_id_int, user_id=current_user.id).first()
+                if member:
+                    resolved_member_id = member.id
+
+        log_usage_event(
+            event_type,
+            user_id=current_user.id,
+            pair_id=resolved_pair_id,
+            member_id=resolved_member_id,
+            source=source,
+            meta=meta,
+        )
+        return jsonify({'success': True})
+    except INPUT_EXCEPTIONS as exc:
+        return handle_api_exception(exc, "usage event 参数错误", log=logger, status_code=400)
+    except SERVICE_EXCEPTIONS as exc:
+        return handle_api_exception(exc, "usage event 写入失败", log=logger)

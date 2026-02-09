@@ -214,6 +214,19 @@ def normalize_location_name(location):
     location = location.strip()
     if not location:
         return default_city
+    # Allow passing raw QWeather location id (digits) or lon,lat.
+    if location.isdigit():
+        return location
+    if ',' in location:
+        parts = [p.strip() for p in location.split(',')]
+        if len(parts) == 2:
+            try:
+                lon = float(parts[0])
+                lat = float(parts[1])
+                if -180 <= lon <= 180 and -90 <= lat <= 90:
+                    return f'{lon},{lat}'
+            except (TypeError, ValueError):
+                pass
     city_map = current_app.config.get('CITY_LOCATION_MAP', {})
     if location in city_map:
         return location
