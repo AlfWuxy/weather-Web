@@ -192,39 +192,42 @@ def elders_create():
     chronic = [sanitize_input(item, max_length=50) for item in chronic if item]
     chronic = [c for c in chronic if c]
 
-    member = FamilyMember(
-        user_id=g.api_user_id,
-        name=name,
-        relation=relation,
-        age=age,
-        gender=gender,
-        chronic_diseases=(json.dumps(chronic, ensure_ascii=False) if chronic else None),
-        created_at=utcnow(),
-    )
-    db.session.add(member)
-    db.session.commit()
+    try:
+        member = FamilyMember(
+            user_id=g.api_user_id,
+            name=name,
+            relation=relation,
+            age=age,
+            gender=gender,
+            chronic_diseases=(json.dumps(chronic, ensure_ascii=False) if chronic else None),
+            created_at=utcnow(),
+        )
+        db.session.add(member)
+        db.session.flush()  # 获取 member.id，但不提交
 
-    profile = FamilyMemberProfile.query.filter_by(member_id=member.id).first()
-    if not profile:
-        profile = FamilyMemberProfile(member_id=member.id, alert_enabled=True)
-        db.session.add(profile)
+        profile = FamilyMemberProfile.query.filter_by(member_id=member.id).first()
+        if not profile:
+            profile = FamilyMemberProfile(member_id=member.id, alert_enabled=True)
+            db.session.add(profile)
+
+        short_code = _generate_short_code()
+        pair = Pair(
+            caregiver_id=g.api_user_id,
+            community_code=location_query[:100],
+            location_query=location_query,
+            member_id=member.id,
+            elder_code=_generate_elder_code(),
+            short_code=short_code,
+            short_code_hash=hash_short_code(short_code),
+            status="active",
+            last_active_at=utcnow(),
+            created_at=utcnow(),
+        )
+        db.session.add(pair)
         db.session.commit()
-
-    short_code = _generate_short_code()
-    pair = Pair(
-        caregiver_id=g.api_user_id,
-        community_code=location_query[:100],
-        location_query=location_query,
-        member_id=member.id,
-        elder_code=_generate_elder_code(),
-        short_code=short_code,
-        short_code_hash=hash_short_code(short_code),
-        status="active",
-        last_active_at=utcnow(),
-        created_at=utcnow(),
-    )
-    db.session.add(pair)
-    db.session.commit()
+    except Exception:
+        db.session.rollback()
+        return jsonify({"success": False, "error": "create_failed"}), 500
 
     log_usage_event(
         "elder_profile_created",

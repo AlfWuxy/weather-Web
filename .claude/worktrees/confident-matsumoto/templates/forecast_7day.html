@@ -1,0 +1,549 @@
+{% extends "base.html" %}
+
+{% block title %}7天健康预测 - 天气健康风险预测系统{% endblock %}
+
+{% block content %}
+<div class="container-fluid py-4">
+    <div class="row mb-4">
+        <div class="col-12">
+            <div class="d-flex justify-content-between align-items-center">
+                <div>
+                    <h2><i class="bi bi-calendar-week me-2"></i>未来7天健康预测</h2>
+                    <p class="text-muted mb-0">基于DLNM风险函数，预测未来7天门诊需求与健康风险</p>
+                </div>
+                <button class="btn btn-primary" id="refreshForecast" type="button">
+                    <i class="bi bi-arrow-clockwise me-1"></i>刷新预测
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 预警摘要 -->
+    <div class="row mb-4">
+        <div class="col-12">
+            <div class="card shadow-sm" id="alertCard">
+                <div class="card-body">
+                    <div class="row align-items-center">
+                        <div class="col-md-2 text-center">
+                            <div id="alertLevel" class="display-6 fw-bold">
+                                <i class="bi bi-hourglass-split"></i>
+                            </div>
+                        </div>
+                        <div class="col-md-10">
+                            <h5 id="alertTitle">正在加载预测数据...</h5>
+                            <p id="alertDesc" class="mb-0 text-muted">请稍候</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 7天预测卡片 -->
+    <div class="row mb-4" id="forecastCards">
+        {% for i in range(7) %}
+        <div class="col-md-3 col-lg mb-3">
+            <div class="card shadow-sm h-100 forecast-card" data-day="{{ i }}">
+                <div class="card-header text-center py-2">
+                    <small class="text-muted">加载中...</small>
+                    <div class="fw-bold">--</div>
+                </div>
+                <div class="card-body text-center py-3">
+                    <div class="display-6 mb-2">--°C</div>
+                    <div class="mb-2">
+                        <span class="badge bg-secondary">--</span>
+                    </div>
+                    <div class="small text-muted">
+                        预计门诊: -- 人次
+                    </div>
+                </div>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+
+    <div class="row">
+        <!-- 详细预测表 -->
+        <div class="col-lg-8 mb-4">
+            <div class="card shadow-sm">
+                <div class="card-header bg-primary text-white">
+                    <h5 class="mb-0"><i class="bi bi-table me-2"></i>详细预测数据</h5>
+                </div>
+                <div class="card-body p-0">
+                    <div class="table-responsive">
+                        <table class="table table-hover mb-0">
+                            <thead class="table-light">
+                                <tr>
+                                    <th>日期</th>
+                                    <th>温度</th>
+                                    <th>预计门诊</th>
+                                    <th>预测区间</th>
+                                    <th>超阈值概率</th>
+                                    <th>风险等级</th>
+                                    <th>置信度</th>
+                                </tr>
+                            </thead>
+                            <tbody id="forecastTable">
+                                <tr>
+                                    <td colspan="7" class="text-center py-4">
+                                        <div class="spinner-border spinner-border-sm text-primary me-2"></div>
+                                        加载中...
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 建议与极端天气 -->
+        <div class="col-lg-4 mb-4">
+            <!-- 管理建议 -->
+            <div class="card shadow-sm mb-4">
+                <div class="card-header bg-success text-white">
+                    <h5 class="mb-0"><i class="bi bi-lightbulb me-2"></i>管理建议</h5>
+                </div>
+                <div class="card-body" id="recommendationsDiv">
+                    <div class="text-center py-3 text-muted">
+                        <i class="bi bi-hourglass-split"></i> 加载中...
+                    </div>
+                </div>
+            </div>
+
+            <!-- 极端天气预警 -->
+            <div class="card shadow-sm">
+                <div class="card-header bg-warning">
+                    <h5 class="mb-0"><i class="bi bi-exclamation-triangle me-2"></i>极端天气预警</h5>
+                </div>
+                <div class="card-body" id="extremeEventsDiv">
+                    <div class="text-center py-3 text-muted">
+                        <i class="bi bi-hourglass-split"></i> 加载中...
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- DLNM模型信息 -->
+    <div class="row">
+        <div class="col-12">
+            <div class="card shadow-sm">
+                <div class="card-header">
+                    <h5 class="mb-0"><i class="bi bi-graph-up me-2"></i>DLNM风险模型信息</h5>
+                </div>
+                <div class="card-body">
+                    <div class="row" id="modelInfo">
+                        <div class="col-md-3 text-center mb-3">
+                            <div class="text-muted small">最低风险温度(MMT)</div>
+                            <div class="h4 fw-bold text-success" id="mmtValue">--°C</div>
+                        </div>
+                        <div class="col-md-3 text-center mb-3">
+                            <div class="text-muted small">高温预警阈值</div>
+                            <div class="h4 fw-bold text-danger" id="heatThreshold">--°C</div>
+                        </div>
+                        <div class="col-md-3 text-center mb-3">
+                            <div class="text-muted small">低温预警阈值</div>
+                            <div class="h4 fw-bold text-info" id="coldThreshold">--°C</div>
+                        </div>
+                        <div class="col-md-3 text-center mb-3">
+                            <div class="text-muted small">门诊量P90阈值</div>
+                            <div class="h4 fw-bold text-warning" id="visitThreshold">--人次</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<style>
+.forecast-card {
+    transition: transform 0.2s, box-shadow 0.2s;
+}
+.forecast-card:hover {
+    transform: translateY(-5px);
+    box-shadow: 0 0.5rem 1rem rgba(0,0,0,0.15) !important;
+}
+.forecast-card.risk-high {
+    border-left: 4px solid #dc3545;
+    border-color: #dc3545;
+}
+.forecast-card.risk-medium {
+    border-left: 4px solid #fd7e14;
+    border-color: #fd7e14;
+}
+.forecast-card.risk-yellow {
+    border-left: 4px solid #ffc107;
+    border-color: #ffc107;
+}
+.forecast-card.risk-low {
+    border-left: 4px solid #198754;
+    border-color: #198754;
+}
+.forecast-card.risk-blue {
+    border-left: 4px solid #0dcaf0;
+    border-color: #0dcaf0;
+}
+.bg-orange {
+    background-color: #fd7e14 !important;
+}
+</style>
+
+<script>
+function clearElement(element) {
+    while (element && element.firstChild) {
+        element.removeChild(element.firstChild);
+    }
+}
+
+function safeText(value, fallback) {
+    if (value === undefined || value === null) {
+        return fallback || '';
+    }
+    return String(value);
+}
+
+function toNumber(value, fallback) {
+    if (value === undefined || value === null || value === '') {
+        return fallback;
+    }
+    const num = Number(value);
+    if (!Number.isFinite(num)) {
+        return fallback;
+    }
+    return num;
+}
+
+function formatNumber(value, digits, fallbackText) {
+    const num = toNumber(value, null);
+    if (num === null) {
+        return fallbackText;
+    }
+    return num.toFixed(digits);
+}
+
+function setAlertLevel(element, className, iconClass, label) {
+    clearElement(element);
+    const span = document.createElement('span');
+    span.className = className;
+    const icon = document.createElement('i');
+    icon.className = iconClass;
+    span.appendChild(icon);
+    span.appendChild(document.createTextNode(' ' + label));
+    element.appendChild(span);
+}
+
+// 页面加载时获取预测
+document.addEventListener('DOMContentLoaded', function() {
+    const refreshButton = document.getElementById('refreshForecast');
+    if (refreshButton) {
+        refreshButton.addEventListener('click', loadForecast);
+    }
+    loadForecast();
+    loadModelInfo();
+});
+
+function loadForecast() {
+    // 显示加载状态
+    document.getElementById('alertTitle').textContent = '正在加载预测数据...';
+    
+    fetch('/api/forecast/7day', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({})
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            displayForecast(data.forecasts, data.summary);
+        } else {
+            showError('加载失败: ' + (data.error || '未知错误'));
+        }
+    })
+    .catch(error => {
+        showError('请求失败: ' + error);
+    });
+}
+
+function loadModelInfo() {
+    fetch('/api/dlnm/summary')
+    .then(response => response.json())
+    .then(data => {
+        if (data.success && data.summary) {
+            const s = data.summary;
+            const mmtValue = toNumber(s.mmt, null);
+            if (mmtValue !== null) {
+                document.getElementById('mmtValue').textContent = mmtValue.toFixed(1) + '°C';
+            }
+            if (s.risk_thresholds) {
+                const heatWarning = toNumber(s.risk_thresholds.heat_warning, 32);
+                const coldWarning = toNumber(s.risk_thresholds.cold_warning, 5);
+                document.getElementById('heatThreshold').textContent = heatWarning.toFixed(1) + '°C';
+                document.getElementById('coldThreshold').textContent = coldWarning.toFixed(1) + '°C';
+            }
+        }
+    });
+}
+
+function displayForecast(forecasts, summary) {
+    // 更新预警摘要
+    const alertCard = document.getElementById('alertCard');
+    const alertLevel = document.getElementById('alertLevel');
+    const alertTitle = document.getElementById('alertTitle');
+    const alertDesc = document.getElementById('alertDesc');
+    const summaryData = summary || {};
+    const highRiskDaysValue = toNumber(summaryData.high_risk_days, 0);
+    const highRiskDaysText = formatNumber(summaryData.high_risk_days, 0, '--');
+    const totalVisitsValue = toNumber(summaryData.total_expected_visits, null);
+    const totalVisitsText = formatNumber(summaryData.total_expected_visits, 0, '--');
+    const forecastPeriod = summaryData.forecast_period || {};
+    const periodStart = safeText(forecastPeriod.start, '--');
+    const periodEnd = safeText(forecastPeriod.end, '--');
+
+    if (highRiskDaysValue >= 3) {
+        alertCard.className = 'card shadow-sm border-danger';
+        setAlertLevel(alertLevel, 'text-danger', 'bi bi-exclamation-octagon-fill', '红色预警');
+        alertTitle.textContent = '未来一周健康风险较高';
+    } else if (highRiskDaysValue >= 1) {
+        alertCard.className = 'card shadow-sm border-warning';
+        setAlertLevel(alertLevel, 'text-warning', 'bi bi-exclamation-triangle-fill', '橙色预警');
+        alertTitle.textContent = '部分日期健康风险偏高';
+    } else {
+        alertCard.className = 'card shadow-sm border-success';
+        setAlertLevel(alertLevel, 'text-success', 'bi bi-check-circle-fill', '正常');
+        alertTitle.textContent = '未来一周健康风险正常';
+    }
+
+    clearElement(alertDesc);
+    alertDesc.appendChild(document.createTextNode('预测期间: ' + periodStart + ' ~ ' + periodEnd + ' | 预计总门诊: '));
+    const totalStrong = document.createElement('strong');
+    totalStrong.textContent = totalVisitsText;
+    alertDesc.appendChild(totalStrong);
+    alertDesc.appendChild(document.createTextNode(' 人次 | 高风险天数: '));
+    const highRiskStrong = document.createElement('strong');
+    highRiskStrong.textContent = highRiskDaysText;
+    alertDesc.appendChild(highRiskStrong);
+    alertDesc.appendChild(document.createTextNode(' 天'));
+
+    const averageVisits = totalVisitsValue === null ? '--' : String(Math.round(totalVisitsValue / 7));
+    document.getElementById('visitThreshold').textContent = averageVisits + '人次/天';
+
+    // 更新7天卡片
+    const forecastList = Array.isArray(forecasts) ? forecasts : [];
+    forecastList.forEach((f, i) => {
+        const card = document.querySelector('.forecast-card[data-day="' + i + '"]');
+        if (!card) return;
+
+        const riskLevel = safeText(f.risk_level, '--');
+        const riskClass = riskLevel.includes('红') ? 'risk-high' :
+                         riskLevel.includes('橙') ? 'risk-medium' :
+                         riskLevel.includes('黄') ? 'risk-yellow' :
+                         riskLevel.includes('蓝') ? 'risk-blue' : 'risk-low';
+        card.className = 'card shadow-sm h-100 forecast-card ' + riskClass;
+
+        const badgeClass = riskLevel.includes('红') ? 'danger' :
+                          riskLevel.includes('橙') ? 'orange' :
+                          riskLevel.includes('黄') ? 'warning' :
+                          riskLevel.includes('蓝') ? 'info' : 'success';
+
+        const dateText = safeText(f.date, '--');
+        const dayText = safeText(f.day_of_week, '--');
+        const tempText = formatNumber(f.temperature && f.temperature.corrected, 0, '--');
+        const visitsText = formatNumber(f.visits && f.visits.point_estimate, 0, '--');
+        const probText = formatNumber(f.probability_high_visits, 0, '--');
+        const probDisplay = probText === '--' ? '--' : probText + '%';
+
+        clearElement(card);
+        const header = document.createElement('div');
+        header.className = 'card-header text-center py-2';
+        const dateSmall = document.createElement('small');
+        dateSmall.className = 'text-muted';
+        dateSmall.textContent = dateText;
+        const dayDiv = document.createElement('div');
+        dayDiv.className = 'fw-bold';
+        dayDiv.textContent = dayText;
+        header.appendChild(dateSmall);
+        header.appendChild(dayDiv);
+
+        const body = document.createElement('div');
+        body.className = 'card-body text-center py-3';
+        const tempDiv = document.createElement('div');
+        tempDiv.className = 'display-6 mb-2';
+        tempDiv.textContent = tempText + '°C';
+        const badgeWrap = document.createElement('div');
+        badgeWrap.className = 'mb-2';
+        const badge = document.createElement('span');
+        badge.className = 'badge bg-' + badgeClass;
+        badge.textContent = riskLevel;
+        badgeWrap.appendChild(badge);
+        const visitsDiv = document.createElement('div');
+        visitsDiv.className = 'small text-muted';
+        visitsDiv.textContent = '预计门诊: ' + visitsText + ' 人次';
+        const probDiv = document.createElement('div');
+        probDiv.className = 'small text-muted';
+        probDiv.textContent = '超阈值概率: ' + probDisplay;
+
+        body.appendChild(tempDiv);
+        body.appendChild(badgeWrap);
+        body.appendChild(visitsDiv);
+        body.appendChild(probDiv);
+
+        card.appendChild(header);
+        card.appendChild(body);
+    });
+
+    // 更新表格
+    const tableBody = document.getElementById('forecastTable');
+    clearElement(tableBody);
+
+    forecastList.forEach(f => {
+        const riskLevel = safeText(f.risk_level, '--');
+        const badgeClass = riskLevel.includes('红') ? 'danger' :
+                          riskLevel.includes('橙') ? 'orange' :
+                          riskLevel.includes('黄') ? 'warning' :
+                          riskLevel.includes('蓝') ? 'info' : 'success';
+
+        const row = document.createElement('tr');
+
+        const dateCell = document.createElement('td');
+        const dateStrong = document.createElement('strong');
+        dateStrong.textContent = safeText(f.date, '--');
+        const daySmall = document.createElement('small');
+        daySmall.className = 'text-muted';
+        daySmall.textContent = safeText(f.day_of_week, '--');
+        dateCell.appendChild(dateStrong);
+        dateCell.appendChild(document.createElement('br'));
+        dateCell.appendChild(daySmall);
+
+        const tempCell = document.createElement('td');
+        const correctedText = formatNumber(f.temperature && f.temperature.corrected, 1, '--');
+        const lowerText = formatNumber(f.temperature && f.temperature.uncertainty_lower, 0, '--');
+        const upperText = formatNumber(f.temperature && f.temperature.uncertainty_upper, 0, '--');
+        tempCell.appendChild(document.createTextNode(correctedText + '°C'));
+        const rangeSmall = document.createElement('small');
+        rangeSmall.className = 'text-muted';
+        rangeSmall.textContent = lowerText + '~' + upperText + '°C';
+        tempCell.appendChild(document.createElement('br'));
+        tempCell.appendChild(rangeSmall);
+
+        const visitCell = document.createElement('td');
+        const visitStrong = document.createElement('strong');
+        const visitText = formatNumber(f.visits && f.visits.point_estimate, 0, '--');
+        visitStrong.textContent = visitText;
+        visitCell.appendChild(visitStrong);
+        visitCell.appendChild(document.createTextNode(' 人次'));
+
+        const intervalCell = document.createElement('td');
+        const lowerBoundText = formatNumber(f.visits && f.visits.lower_bound, 0, '--');
+        const upperBoundText = formatNumber(f.visits && f.visits.upper_bound, 0, '--');
+        intervalCell.textContent = lowerBoundText + ' ~ ' + upperBoundText;
+
+        const probCell = document.createElement('td');
+        const probValue = toNumber(f.probability_high_visits, 0);
+        const probText = formatNumber(f.probability_high_visits, 0, '--');
+        const probDisplay = probText === '--' ? '--' : probText + '%';
+        const probWidth = Math.max(0, Math.min(100, probValue));
+        const progress = document.createElement('div');
+        progress.className = 'progress';
+        progress.style.height = '20px';
+        const progressBar = document.createElement('div');
+        progressBar.className = 'progress-bar bg-' + badgeClass;
+        progressBar.style.width = probWidth + '%';
+        progressBar.textContent = probDisplay;
+        progress.appendChild(progressBar);
+        probCell.appendChild(progress);
+
+        const riskCell = document.createElement('td');
+        const riskBadge = document.createElement('span');
+        riskBadge.className = 'badge bg-' + badgeClass;
+        riskBadge.textContent = riskLevel;
+        riskCell.appendChild(riskBadge);
+
+        const confidenceCell = document.createElement('td');
+        const confidenceValue = safeText(f.confidence, '');
+        const confidenceLabel = confidenceValue === 'high' ? '高' : confidenceValue === 'medium' ? '中' : '低';
+        const confidenceClass = confidenceValue === 'high' ? 'success' : confidenceValue === 'medium' ? 'warning' : 'secondary';
+        const confidenceBadge = document.createElement('span');
+        confidenceBadge.className = 'badge bg-' + confidenceClass;
+        confidenceBadge.textContent = confidenceLabel;
+        confidenceCell.appendChild(confidenceBadge);
+
+        row.appendChild(dateCell);
+        row.appendChild(tempCell);
+        row.appendChild(visitCell);
+        row.appendChild(intervalCell);
+        row.appendChild(probCell);
+        row.appendChild(riskCell);
+        row.appendChild(confidenceCell);
+        tableBody.appendChild(row);
+    });
+
+    // 更新建议
+    const recDiv = document.getElementById('recommendationsDiv');
+    clearElement(recDiv);
+
+    if (Array.isArray(summaryData.recommendations) && summaryData.recommendations.length > 0) {
+        summaryData.recommendations.forEach(rec => {
+            const priority = safeText(rec.priority, '');
+            const priorityClass = priority === 'high' ? 'danger' :
+                                 priority === 'medium' ? 'warning' : 'secondary';
+            const div = document.createElement('div');
+            div.className = 'alert alert-' + priorityClass + ' py-2 mb-2';
+            const strong = document.createElement('strong');
+            strong.textContent = safeText(rec.category, '');
+            const small = document.createElement('small');
+            small.textContent = safeText(rec.advice, '');
+            div.appendChild(strong);
+            div.appendChild(document.createElement('br'));
+            div.appendChild(small);
+            recDiv.appendChild(div);
+        });
+    } else {
+        const empty = document.createElement('p');
+        empty.className = 'text-muted mb-0';
+        empty.textContent = '暂无特别建议';
+        recDiv.appendChild(empty);
+    }
+
+    // 更新极端天气
+    const extremeDiv = document.getElementById('extremeEventsDiv');
+    clearElement(extremeDiv);
+
+    let hasExtremeEvents = false;
+    forecastList.forEach(f => {
+        if (Array.isArray(f.extreme_events) && f.extreme_events.length > 0) {
+            hasExtremeEvents = true;
+            f.extreme_events.forEach(e => {
+                const div = document.createElement('div');
+                div.className = 'alert alert-warning py-2 mb-2';
+                const strong = document.createElement('strong');
+                strong.textContent = safeText(f.date, '--') + ': ' + safeText(e.type, '--');
+                const small = document.createElement('small');
+                small.textContent = safeText(e.description, '');
+                div.appendChild(strong);
+                div.appendChild(document.createElement('br'));
+                div.appendChild(small);
+                extremeDiv.appendChild(div);
+            });
+        }
+    });
+
+    if (!hasExtremeEvents) {
+        const empty = document.createElement('p');
+        empty.className = 'text-success mb-0';
+        const icon = document.createElement('i');
+        icon.className = 'bi bi-check-circle me-1';
+        empty.appendChild(icon);
+        empty.appendChild(document.createTextNode('未来7天无极端天气预警'));
+        extremeDiv.appendChild(empty);
+    }
+}
+
+function showError(msg) {
+    document.getElementById('alertTitle').textContent = msg;
+    document.getElementById('alertCard').className = 'card shadow-sm border-danger';
+}
+</script>
+{% endblock %}
+

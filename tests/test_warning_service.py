@@ -43,4 +43,6 @@ def test_warning_service_parses_payload(app, monkeypatch):
         assert item["title"] == "高温黄色预警"
         assert item["type"] == "高温"
         assert "text" in item
-
+        assert item["severity"] == "Minor"
+        assert item["certainty"] == "Likely"
+        assert item["urgency"] == "Expected"

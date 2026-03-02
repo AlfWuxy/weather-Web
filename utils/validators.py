@@ -82,6 +82,7 @@ def sanitize_input(text, max_length=200):
 
     使用 bleach 库进行严格的 HTML 清理：
     - 移除所有 HTML 标签
+    - 额外移除 script/style 标签及其内容（防止保留脚本文本片段）
     - 禁止 javascript: data: vbscript: 等危险协议
     - 剥离所有事件属性 (onclick, onerror 等)
     - 保留长度限制与非字符串输入处理
@@ -90,6 +91,18 @@ def sanitize_input(text, max_length=200):
         return None
     if not isinstance(text, str):
         return str(text)[:max_length]
+
+    # 先移除 <script>/<style> 及其内容。bleach.strip=True 会移除标签但保留内容；
+    # 对于脚本/样式内容，保留文本没有意义且容易在其它上下文被误用。
+    try:
+        text = re.sub(
+            r'(?is)<\s*(script|style)[^>]*>.*?<\s*/\s*\1\s*>',
+            '',
+            text,
+        )
+    except Exception:
+        # 正则失败时继续走 bleach 兜底即可
+        pass
 
     # 使用 bleach 进行严格清理（不允许任何标签）
     try:

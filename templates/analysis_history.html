@@ -1,30 +1,333 @@
 {% extends "base.html" %}
+{% set needs_chartjs = true %}
 
 {% block title %}历史数据回溯分析 - 天气健康风险预测系统{% endblock %}
 
+{% block extra_css %}
+<style>
+.history-wireframe-page {
+    --wf-border: #b9c0c8;
+    --wf-bg: #f7f9fb;
+    --wf-accent: #28628a;
+    --wf-muted: #6c7b88;
+    --wf-danger: #c55555;
+    --wf-success: #2d8550;
+}
+
+.history-wireframe-page .wf-card {
+    border: 1px dashed var(--wf-border);
+    background: #fff;
+    border-radius: 14px;
+}
+
+.history-wireframe-page .wf-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    border-radius: 999px;
+    border: 1px solid var(--wf-border);
+    color: var(--wf-muted);
+    font-size: 12px;
+    letter-spacing: 0.02em;
+    background: var(--wf-bg);
+}
+
+.history-wireframe-page .wf-header {
+    background:
+        linear-gradient(135deg, rgba(40, 98, 138, 0.08), rgba(40, 98, 138, 0)),
+        #fff;
+    border: 1px solid #d9e1e7;
+    border-radius: 14px;
+    padding: 20px;
+}
+
+.history-wireframe-page .wf-header p {
+    margin: 8px 0 0;
+    color: var(--wf-muted);
+}
+
+.history-wireframe-page .wf-quick-btn {
+    min-width: 96px;
+}
+
+.history-wireframe-page .wf-kpi {
+    border: 1px dashed var(--wf-border);
+    border-radius: 12px;
+    padding: 14px 12px;
+    background: #fff;
+    height: 100%;
+}
+
+.history-wireframe-page .wf-kpi .wf-kpi-name {
+    color: var(--wf-muted);
+    font-size: 13px;
+    margin-bottom: 6px;
+}
+
+.history-wireframe-page .wf-kpi .wf-kpi-value {
+    font-size: 26px;
+    line-height: 1.15;
+    font-weight: 700;
+    color: #1f2f3f;
+}
+
+.history-wireframe-page .wf-kpi .wf-kpi-sub {
+    color: var(--wf-muted);
+    font-size: 12px;
+}
+
+.history-wireframe-page .wf-map {
+    position: relative;
+    min-height: 300px;
+    border: 1px dashed var(--wf-border);
+    border-radius: 12px;
+    background:
+        linear-gradient(to right, rgba(167, 177, 188, 0.22) 1px, transparent 1px) 0 0 / 24px 24px,
+        linear-gradient(to bottom, rgba(167, 177, 188, 0.22) 1px, transparent 1px) 0 0 / 24px 24px,
+        #fdfefe;
+    overflow: hidden;
+}
+
+.history-wireframe-page .wf-map::before {
+    content: "地图热力占位";
+    position: absolute;
+    top: 12px;
+    left: 12px;
+    font-size: 12px;
+    color: var(--wf-muted);
+    border: 1px solid var(--wf-border);
+    border-radius: 999px;
+    padding: 3px 10px;
+    background: #fff;
+}
+
+.history-wireframe-page .wf-hotspot {
+    position: absolute;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    border: 2px solid #fff;
+    box-shadow: 0 0 0 1px rgba(42, 66, 88, 0.15);
+}
+
+.history-wireframe-page .wf-hotspot.hot {
+    background: rgba(197, 85, 85, 0.85);
+}
+
+.history-wireframe-page .wf-hotspot.mid {
+    background: rgba(242, 159, 70, 0.85);
+}
+
+.history-wireframe-page .wf-hotspot.low {
+    background: rgba(61, 143, 84, 0.85);
+}
+
+.history-wireframe-page .wf-map-legend {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-top: 10px;
+    color: var(--wf-muted);
+    font-size: 12px;
+}
+
+.history-wireframe-page .wf-dot {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    margin-right: 5px;
+}
+
+.history-wireframe-page .wf-dot.hot {
+    background: var(--wf-danger);
+}
+
+.history-wireframe-page .wf-dot.mid {
+    background: #f29f46;
+}
+
+.history-wireframe-page .wf-dot.low {
+    background: var(--wf-success);
+}
+
+.history-wireframe-page .wf-note-list {
+    padding-left: 18px;
+    margin-bottom: 0;
+}
+
+.history-wireframe-page .wf-note-list li {
+    margin-bottom: 6px;
+    color: #495866;
+}
+
+.history-wireframe-page .wf-state-btn.is-active {
+    background: #1f2f3f;
+    border-color: #1f2f3f;
+    color: #fff;
+}
+
+.history-wireframe-page .wf-preview-panel {
+    border: 1px dashed var(--wf-border);
+    border-radius: 12px;
+    padding: 14px;
+    background: #fff;
+}
+
+.history-wireframe-page .wf-preview-bars {
+    display: grid;
+    grid-template-columns: repeat(6, 1fr);
+    gap: 8px;
+    align-items: end;
+    height: 90px;
+    margin-top: 10px;
+}
+
+.history-wireframe-page .wf-preview-bars span {
+    display: block;
+    background: #dae2ea;
+    border-radius: 4px 4px 0 0;
+}
+
+.history-wireframe-page .wf-preview-panel.is-loading .wf-preview-bars span {
+    animation: wfPulse 1s ease-in-out infinite alternate;
+}
+
+.history-wireframe-page .wf-preview-panel.is-empty .wf-preview-bars {
+    display: none;
+}
+
+.history-wireframe-page .wf-preview-empty {
+    display: none;
+    color: var(--wf-muted);
+    margin-top: 10px;
+    font-size: 14px;
+}
+
+.history-wireframe-page .wf-preview-panel.is-empty .wf-preview-empty {
+    display: block;
+}
+
+.history-wireframe-page .wf-layer-switch .btn.active {
+    background: #1f2f3f;
+    border-color: #1f2f3f;
+    color: #fff;
+}
+
+.history-wireframe-page .wf-nowcast-timeline .wf-nowcast-row {
+    margin-bottom: 8px;
+}
+
+.history-wireframe-page .wf-nowcast-timeline .progress {
+    height: 8px;
+}
+
+.history-wireframe-page .wf-matrix-table th,
+.history-wireframe-page .wf-matrix-table td {
+    text-align: center;
+    vertical-align: middle;
+}
+
+.history-wireframe-page .wf-chart-wrap {
+    position: relative;
+    width: 100%;
+    height: 280px;
+}
+
+.history-wireframe-page .wf-chart-wrap.wf-chart-wrap-hero {
+    height: 340px;
+}
+
+.history-wireframe-page .wf-chart-wrap canvas {
+    width: 100% !important;
+    height: 100% !important;
+}
+
+.history-wireframe-page .wf-matrix-wrap {
+    overflow-x: auto;
+}
+
+.history-wireframe-page .wf-matrix-table {
+    width: 100%;
+    min-width: 420px;
+    border-collapse: collapse;
+}
+
+.history-wireframe-page .wf-matrix-table th,
+.history-wireframe-page .wf-matrix-table td {
+    border: 1px solid #d8e0e7;
+    white-space: nowrap;
+}
+
+.history-wireframe-page .wf-matrix-table thead th {
+    background: #f3f6f9;
+}
+
+.history-wireframe-page .wf-cap-grid {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 8px;
+}
+
+.history-wireframe-page .wf-cap-item {
+    border: 1px dashed var(--wf-border);
+    border-radius: 10px;
+    padding: 10px 12px;
+    background: #fff;
+}
+
+@keyframes wfPulse {
+    from { opacity: 0.45; }
+    to { opacity: 1; }
+}
+
+@media (max-width: 768px) {
+    .history-wireframe-page .wf-chart-wrap.wf-chart-wrap-hero {
+        height: 260px;
+    }
+
+    .history-wireframe-page .wf-chart-wrap {
+        height: 220px;
+    }
+}
+</style>
+{% endblock %}
+
 {% block content %}
-<div class="container">
-    <div class="row mb-4">
-        <div class="col-12">
-            <h2><i class="bi bi-clock-history"></i> 历史数据回溯分析</h2>
-            <p class="text-muted">选择历史日期区间，查看天气与病例关系</p>
+<div class="container history-wireframe-page">
+    <div class="wf-header mb-4">
+        <div class="d-flex flex-wrap justify-content-between align-items-start gap-3">
+            <div>
+                <h2 class="mb-1"><i class="bi bi-clock-history me-1"></i>历史数据回溯分析</h2>
+                <p>低保真线框：围绕“时间回溯 + 关系分析 + 数据可信度”重排模块。</p>
+                <p class="mb-0 small text-muted">
+                    页面版本：<code>{{ ui_version }}</code> |
+                    应用路径：<code>{{ runtime_root }}</code>
+                </p>
+            </div>
+            <span class="wf-label"><i class="bi bi-grid-3x3-gap"></i>线框预览版</span>
         </div>
     </div>
 
-    <div class="card shadow-sm mb-4">
+    <div class="card wf-card mb-4">
         <div class="card-body">
-            <form method="POST" action="{{ url_for('analysis.analysis_history') }}">
+            <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+                <h6 class="mb-0">分析控制条</h6>
+                <span class="wf-label">字段 + 快捷交互</span>
+            </div>
+            <form id="analysisForm" method="POST" action="{{ url_for('analysis.analysis_history') }}">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <div class="row g-3">
-                    <div class="col-md-3">
+                    <div class="col-lg-2 col-md-4">
                         <label class="form-label">开始日期</label>
-                        <input type="date" class="form-control" name="start_date" value="{{ start_date }}">
+                        <input id="startDateInput" type="date" class="form-control" name="start_date" value="{{ start_date }}">
                     </div>
-                    <div class="col-md-3">
+                    <div class="col-lg-2 col-md-4">
                         <label class="form-label">结束日期</label>
-                        <input type="date" class="form-control" name="end_date" value="{{ end_date }}">
+                        <input id="endDateInput" type="date" class="form-control" name="end_date" value="{{ end_date }}">
                     </div>
-                    <div class="col-md-3">
+                    <div class="col-lg-2 col-md-4">
                         <label class="form-label">社区</label>
                         <select class="form-select" name="community">
                             <option value="">全部</option>
@@ -33,8 +336,8 @@
                             {% endfor %}
                         </select>
                     </div>
-                    <div class="col-md-3">
-                        <label class="form-label">疾病分类</label>
+                    <div class="col-lg-2 col-md-4">
+                        <label class="form-label">病种</label>
                         <select class="form-select" name="disease">
                             <option value="">全部</option>
                             {% for disease in diseases %}
@@ -42,9 +345,29 @@
                             {% endfor %}
                         </select>
                     </div>
+                    <div class="col-lg-2 col-md-4">
+                        <label class="form-label">天气因子（前端切换）</label>
+                        <select id="factorSelect" class="form-select">
+                            <option value="temperature">温度</option>
+                            <option value="humidity">湿度</option>
+                        </select>
+                    </div>
+                    <div class="col-lg-2 col-md-4">
+                        <label class="form-label">时间粒度（线框占位）</label>
+                        <select class="form-select" disabled>
+                            <option>按日</option>
+                            <option>按周</option>
+                            <option>按月</option>
+                        </select>
+                    </div>
                 </div>
-                <div class="mt-3">
-                    <button class="btn btn-primary">开始分析</button>
+                <div class="d-flex flex-wrap align-items-center gap-2 mt-3">
+                    <span class="text-muted small">快捷范围：</span>
+                    <button type="button" class="btn btn-sm btn-outline-secondary wf-quick-btn" data-range-days="30">近30天</button>
+                    <button type="button" class="btn btn-sm btn-outline-secondary wf-quick-btn" data-range-days="90">近90天</button>
+                    <button type="button" class="btn btn-sm btn-outline-secondary wf-quick-btn" data-range-days="180">近180天</button>
+                    <button type="button" class="btn btn-sm btn-outline-secondary wf-quick-btn" data-range-days="custom">自定义</button>
+                    <button type="submit" class="btn btn-primary ms-auto">更新分析</button>
                 </div>
             </form>
         </div>
@@ -56,60 +379,235 @@
     </div>
     {% endif %}
 
-    <div class="card shadow-sm mb-4">
-        <div class="card-body">
-            <div class="row g-3 text-center">
-                <div class="col-md-3">
-                    <div class="text-muted small">时间跨度</div>
-                    <div>{{ data_summary.total_days }} 天</div>
-                </div>
-                <div class="col-md-3">
-                    <div class="text-muted small">门诊记录</div>
-                    <div>{{ data_summary.total_visits }} 次 / {{ data_summary.visit_days }} 天</div>
-                </div>
-                <div class="col-md-3">
-                    <div class="text-muted small">天气覆盖</div>
-                    <div>{{ data_summary.weather_days }} 天（{{ data_summary.weather_source }}）</div>
-                </div>
-                <div class="col-md-3">
-                    <div class="text-muted small">重叠天数</div>
-                    <div>{{ data_summary.overlap_days }} 天</div>
-                </div>
+    <div class="row g-3 mb-4">
+        <div class="col-lg-3 col-md-6">
+            <div class="wf-kpi">
+                <div class="wf-kpi-name">病例总量</div>
+                <div class="wf-kpi-value">{{ data_summary.total_visits }}</div>
+                <div class="wf-kpi-sub">{{ data_summary.total_days }} 天窗口</div>
+            </div>
+        </div>
+        <div class="col-lg-3 col-md-6">
+            <div class="wf-kpi">
+                <div class="wf-kpi-name">天气异常天数</div>
+                <div class="wf-kpi-value" id="anomalyDays">--</div>
+                <div class="wf-kpi-sub">按当前天气因子自动计算</div>
+            </div>
+        </div>
+        <div class="col-lg-3 col-md-6">
+            <div class="wf-kpi">
+                <div class="wf-kpi-name">相关系数 r</div>
+                <div class="wf-kpi-value" id="kpiCorr">--</div>
+                <div class="wf-kpi-sub">样本 n=<span id="kpiCorrN">--</span></div>
+            </div>
+        </div>
+        <div class="col-lg-3 col-md-6">
+            <div class="wf-kpi">
+                <div class="wf-kpi-name">最强滞后天数</div>
+                <div class="wf-kpi-value" id="bestLag">--</div>
+                <div class="wf-kpi-sub">最大绝对相关滞后</div>
             </div>
         </div>
     </div>
 
-    <div class="row mb-4">
-        <div class="col-md-6">
-            <div class="card shadow-sm h-100">
+    <div class="row g-3 mb-4">
+        <div class="col-xl-8">
+            <div class="card wf-card">
                 <div class="card-body">
-                    <h6>相关性指标</h6>
-                    <p class="mb-1">
-                        病例-温度相关系数：{{ '%.3f'|format(temp_corr) if temp_corr is not none else '--' }}
-                        <small class="text-muted">n={{ temp_n }}</small>
-                    </p>
-                    <p class="mb-0">
-                        病例-湿度相关系数：{{ '%.3f'|format(hum_corr) if hum_corr is not none else '--' }}
-                        <small class="text-muted">n={{ hum_n }}</small>
-                    </p>
+                    <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
+                        <h6 class="mb-0">主图 A：病例-天气双轴趋势</h6>
+                        <span class="wf-label">刷选联动入口</span>
+                    </div>
+                    <div class="wf-chart-wrap wf-chart-wrap-hero">
+                        <canvas id="historyChart"></canvas>
+                    </div>
                 </div>
             </div>
         </div>
-        <div class="col-md-6">
-            <div class="card shadow-sm h-100">
-                <div class="card-body text-muted">
-                    <small>提示：相关系数用于衡量天气因素与病例数量的线性关系，需结合样本量和专业判断。</small>
+        <div class="col-xl-4">
+            <div class="card wf-card h-100">
+                <div class="card-body">
+                    <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
+                        <h6 class="mb-0">主图 B：图层地图 + 短临时间轴</h6>
+                        <span class="wf-label">雷达 / 卫星 / Severe / Health</span>
+                    </div>
+                    <div class="wf-layer-switch btn-group btn-group-sm mb-2" role="group" aria-label="map layers">
+                        <button type="button" class="btn btn-outline-secondary active" data-layer="radar">Radar</button>
+                        <button type="button" class="btn btn-outline-secondary" data-layer="satellite">Satellite</button>
+                        <button type="button" class="btn btn-outline-secondary" data-layer="severe">Severe</button>
+                        <button type="button" class="btn btn-outline-secondary" data-layer="health">Health</button>
+                    </div>
+                    <div class="wf-map">
+                        <span class="wf-hotspot hot" style="left: 66%; top: 26%;"></span>
+                        <span class="wf-hotspot mid" style="left: 45%; top: 54%;"></span>
+                        <span class="wf-hotspot low" style="left: 27%; top: 39%;"></span>
+                        <span class="wf-hotspot mid" style="left: 74%; top: 63%;"></span>
+                        <span class="wf-hotspot hot" style="left: 54%; top: 70%;"></span>
+                    </div>
+                    <div class="wf-map-legend">
+                        <span><i class="wf-dot hot"></i>高风险</span>
+                        <span><i class="wf-dot mid"></i>中风险</span>
+                        <span><i class="wf-dot low"></i>低风险</span>
+                    </div>
+                    <div class="text-muted small mt-2" id="mapLayerStatus">当前图层：Radar（占位演示）</div>
+                    <hr class="my-3">
+                    <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
+                        <h6 class="mb-0">未来6小时降水时间轴</h6>
+                        <span class="wf-label">短临决策窗口</span>
+                    </div>
+                    <div id="historyNowcast" class="wf-nowcast-timeline small text-muted">加载中...</div>
                 </div>
             </div>
         </div>
     </div>
 
-    <div class="card shadow-sm">
+    <div class="row g-3 mb-4">
+        <div class="col-xl-7">
+            <div class="card wf-card h-100">
+                <div class="card-body">
+                    <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
+                        <h6 class="mb-0">影响 × 可能性矩阵（历史回溯）</h6>
+                        <span class="wf-label">用于选取干预阈值</span>
+                    </div>
+                    <div class="table-responsive wf-matrix-wrap">
+                        <table class="table table-sm table-bordered wf-matrix-table mb-0">
+                            <thead>
+                                <tr>
+                                    <th>影响\可能性</th>
+                                    <th>低</th>
+                                    <th>中</th>
+                                    <th>高</th>
+                                </tr>
+                            </thead>
+                            <tbody id="impactLikelihoodBody">
+                                <tr><td colspan="4" class="text-muted">等待数据...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                    <div class="text-muted small mt-2">说明：基于病例强度（影响）与天气异常程度（可能性）的历史分箱统计。</div>
+                </div>
+            </div>
+        </div>
+        <div class="col-xl-5">
+            <div class="card wf-card h-100">
+                <div class="card-body">
+                    <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
+                        <h6 class="mb-0">CAP 语义对照（预警解释）</h6>
+                        <span class="wf-label">severity / certainty / urgency</span>
+                    </div>
+                    <div class="wf-cap-grid">
+                        <div class="wf-cap-item">
+                            <strong>Severity（严重性）</strong>
+                            <div class="text-muted small">Minor / Moderate / Severe / Extreme</div>
+                        </div>
+                        <div class="wf-cap-item">
+                            <strong>Certainty（确定性）</strong>
+                            <div class="text-muted small">Possible / Likely / Observed</div>
+                        </div>
+                        <div class="wf-cap-item">
+                            <strong>Urgency（紧迫性）</strong>
+                            <div class="text-muted small">Future / Expected / Immediate</div>
+                        </div>
+                    </div>
+                    <div class="text-muted small mt-2">用于把“预警文本”映射成“行动优先级”规则。</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row g-3 mb-4">
+        <div class="col-xl-6">
+            <div class="card wf-card h-100">
+                <div class="card-body">
+                    <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
+                        <h6 class="mb-0">关系分析：散点图（天气 vs 病例）</h6>
+                        <span class="wf-label" id="scatterFactorBadge">因子：温度</span>
+                    </div>
+                    <div class="wf-chart-wrap">
+                        <canvas id="scatterChart"></canvas>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-xl-6">
+            <div class="card wf-card h-100">
+                <div class="card-body">
+                    <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
+                        <h6 class="mb-0">滞后分析（0-21 天）</h6>
+                        <span class="wf-label">当前滞后 <span id="lagValue">7</span> 天</span>
+                    </div>
+                    <input id="lagSlider" class="form-range mb-2" type="range" min="0" max="21" step="1" value="7">
+                    <div class="wf-chart-wrap">
+                        <canvas id="lagChart"></canvas>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row g-3 mb-4">
+        <div class="col-xl-6">
+            <div class="card wf-card h-100">
+                <div class="card-body">
+                    <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
+                        <h6 class="mb-0">说明卡（帮助理解）</h6>
+                        <span class="wf-label">文本解释层</span>
+                    </div>
+                    <ul class="wf-note-list">
+                        <li>相关系数仅描述线性关系，不代表因果。</li>
+                        <li>建议结合样本量与业务事件（节假日、突发天气）解读。</li>
+                        <li>滞后峰值可用于预警提前量的候选参数。</li>
+                        <li>地图、趋势、散点建议共享同一筛选条件以减少认知切换。</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+        <div class="col-xl-6">
+            <div class="card wf-card h-100">
+                <div class="card-body">
+                    <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
+                        <h6 class="mb-0">数据状态与可信度</h6>
+                        <span class="wf-label">质量栏</span>
+                    </div>
+                    <div class="small">
+                        <p class="mb-2">天气来源：<strong>{{ data_summary.weather_source }}</strong></p>
+                        <p class="mb-2">天气覆盖：<strong>{{ data_summary.weather_days }}</strong> / {{ data_summary.total_days }} 天</p>
+                        <p class="mb-2">病例覆盖：<strong>{{ data_summary.visit_days }}</strong> / {{ data_summary.total_days }} 天</p>
+                        <p class="mb-2">重叠天数：<strong>{{ data_summary.overlap_days }}</strong> 天</p>
+                        <p class="mb-0">当前分析窗口：{{ start_date }} 至 {{ end_date }}</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="card wf-card mb-4">
         <div class="card-body">
-            <canvas id="historyChart" height="120"></canvas>
+            <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
+                <h6 class="mb-0">交互状态演示（低保真）</h6>
+                <span class="wf-label">默认 / 加载中 / 空数据</span>
+            </div>
+            <div class="d-flex flex-wrap gap-2 mb-3">
+                <button type="button" class="btn btn-sm btn-outline-secondary wf-state-btn is-active" data-preview-state="normal">默认状态</button>
+                <button type="button" class="btn btn-sm btn-outline-secondary wf-state-btn" data-preview-state="loading">加载中</button>
+                <button type="button" class="btn btn-sm btn-outline-secondary wf-state-btn" data-preview-state="empty">空数据</button>
+            </div>
+            <div id="previewPanel" class="wf-preview-panel">
+                <div class="small text-muted">状态说明：<span id="previewStateText">图表与指标可用，支持继续钻取。</span></div>
+                <div class="wf-preview-bars">
+                    <span style="height: 22%;"></span>
+                    <span style="height: 44%;"></span>
+                    <span style="height: 35%;"></span>
+                    <span style="height: 61%;"></span>
+                    <span style="height: 70%;"></span>
+                    <span style="height: 48%;"></span>
+                </div>
+                <div class="wf-preview-empty">当前筛选没有可用样本，建议放宽日期区间或清空病种过滤。</div>
+            </div>
         </div>
     </div>
 </div>
+{% endblock %}
 
 {% block extra_js %}
 <script>
@@ -117,56 +615,517 @@ const labels = {{ dates|tojson }};
 const visits = {{ visits|tojson }};
 const temps = {{ temperatures|tojson }};
 const hums = {{ humidities|tojson }};
+const tempCorr = {{ temp_corr|tojson }};
+const humCorr = {{ hum_corr|tojson }};
+const tempN = {{ temp_n|tojson }};
+const humN = {{ hum_n|tojson }};
+const selectedCommunity = {{ community_filter|tojson }};
 
-const ctx = document.getElementById('historyChart').getContext('2d');
-new Chart(ctx, {
-    type: 'bar',
-    data: {
-        labels: labels,
-        datasets: [
-            {
-                label: '病例数',
-                data: visits,
-                backgroundColor: 'rgba(54, 162, 235, 0.4)',
-                borderColor: 'rgba(54, 162, 235, 1)',
-                yAxisID: 'y'
-            },
-            {
-                label: '平均温度(°C)',
-                data: temps,
-                type: 'line',
-                borderColor: 'rgba(255, 99, 132, 0.9)',
-                backgroundColor: 'rgba(255, 99, 132, 0.2)',
-                yAxisID: 'y1',
-                spanGaps: true
-            },
-            {
-                label: '平均湿度(%)',
-                data: hums,
-                type: 'line',
-                borderColor: 'rgba(75, 192, 192, 0.9)',
-                backgroundColor: 'rgba(75, 192, 192, 0.2)',
-                yAxisID: 'y1',
-                spanGaps: true
-            }
-        ]
-    },
-    options: {
-        responsive: true,
-        interaction: { mode: 'index', intersect: false },
-        scales: {
-            y: {
-                title: { display: true, text: '病例数' },
-                beginAtZero: true
-            },
-            y1: {
-                position: 'right',
-                title: { display: true, text: '温度/湿度' },
-                grid: { drawOnChartArea: false }
-            }
+let historyChart = null;
+let scatterChart = null;
+let lagChart = null;
+
+function toNumber(v) {
+    if (typeof v === 'number' && Number.isFinite(v)) return v;
+    return null;
+}
+
+function formatCorr(value) {
+    if (typeof value !== 'number' || !Number.isFinite(value)) return '--';
+    return value.toFixed(3);
+}
+
+function calcCorrelation(xs, ys) {
+    if (!xs.length || xs.length !== ys.length) return null;
+    const n = xs.length;
+    const avgX = xs.reduce((a, b) => a + b, 0) / n;
+    const avgY = ys.reduce((a, b) => a + b, 0) / n;
+    let num = 0;
+    let dx = 0;
+    let dy = 0;
+    for (let i = 0; i < n; i += 1) {
+        const cx = xs[i] - avgX;
+        const cy = ys[i] - avgY;
+        num += cx * cy;
+        dx += cx * cx;
+        dy += cy * cy;
+    }
+    if (dx <= 0 || dy <= 0) return null;
+    return num / Math.sqrt(dx * dy);
+}
+
+function calcAnomalyDays(series) {
+    const valid = series.map(toNumber).filter((v) => v !== null);
+    if (valid.length < 2) return 0;
+    const avg = valid.reduce((a, b) => a + b, 0) / valid.length;
+    const variance = valid.reduce((acc, value) => acc + ((value - avg) ** 2), 0) / valid.length;
+    const std = Math.sqrt(variance);
+    if (std === 0) return 0;
+    return valid.filter((value) => Math.abs((value - avg) / std) >= 1).length;
+}
+
+function calcLagCorrelations(series, maxLag) {
+    const correlations = [];
+    for (let lag = 0; lag <= maxLag; lag += 1) {
+        const xs = [];
+        const ys = [];
+        for (let i = lag; i < visits.length; i += 1) {
+            const weatherVal = toNumber(series[i - lag]);
+            const visitVal = toNumber(visits[i]);
+            if (weatherVal === null || visitVal === null) continue;
+            xs.push(weatherVal);
+            ys.push(visitVal);
+        }
+        correlations.push(calcCorrelation(xs, ys));
+    }
+    return correlations;
+}
+
+function bestLagFrom(correlations) {
+    let bestLag = null;
+    let bestAbs = -1;
+    for (let i = 0; i < correlations.length; i += 1) {
+        const value = correlations[i];
+        if (typeof value !== 'number' || !Number.isFinite(value)) continue;
+        const absVal = Math.abs(value);
+        if (absVal > bestAbs) {
+            bestAbs = absVal;
+            bestLag = i;
         }
     }
-});
+    return bestLag;
+}
+
+function currentSeries(factor) {
+    return factor === 'humidity' ? hums : temps;
+}
+
+function currentCorr(factor) {
+    return factor === 'humidity'
+        ? { value: humCorr, n: humN }
+        : { value: tempCorr, n: tempN };
+}
+
+function seriesStats(values) {
+    const valid = values.map(toNumber).filter((v) => v !== null);
+    if (!valid.length) return null;
+    const avg = valid.reduce((a, b) => a + b, 0) / valid.length;
+    const variance = valid.reduce((acc, value) => acc + ((value - avg) ** 2), 0) / valid.length;
+    return { mean: avg, std: Math.sqrt(variance) };
+}
+
+function impactBand(value, stats) {
+    if (!stats || stats.std <= 0) return 'low';
+    const z = (value - stats.mean) / stats.std;
+    if (z >= 1.0) return 'high';
+    if (z >= 0.3) return 'medium';
+    return 'low';
+}
+
+function likelihoodBand(value, stats) {
+    if (!stats || stats.std <= 0) return 'low';
+    const z = Math.abs((value - stats.mean) / stats.std);
+    if (z >= 1.2) return 'high';
+    if (z >= 0.6) return 'medium';
+    return 'low';
+}
+
+function calcImpactLikelihoodMatrix(series) {
+    const matrix = {
+        high: { high: 0, medium: 0, low: 0 },
+        medium: { high: 0, medium: 0, low: 0 },
+        low: { high: 0, medium: 0, low: 0 }
+    };
+    const visitStats = seriesStats(visits);
+    const weatherStats = seriesStats(series);
+    for (let i = 0; i < labels.length; i += 1) {
+        const v = toNumber(visits[i]);
+        const w = toNumber(series[i]);
+        if (v === null || w === null) continue;
+        const impact = impactBand(v, visitStats);
+        const likelihood = likelihoodBand(w, weatherStats);
+        matrix[impact][likelihood] += 1;
+    }
+    return matrix;
+}
+
+function renderImpactLikelihoodMatrix(factor) {
+    const body = document.getElementById('impactLikelihoodBody');
+    if (!body) return;
+    body.innerHTML = '';
+    const matrix = calcImpactLikelihoodMatrix(currentSeries(factor));
+    const rows = [
+        { key: 'high', label: '高影响' },
+        { key: 'medium', label: '中影响' },
+        { key: 'low', label: '低影响' }
+    ];
+    const cols = ['low', 'medium', 'high'];
+    rows.forEach((row) => {
+        const tr = document.createElement('tr');
+        const th = document.createElement('th');
+        th.scope = 'row';
+        th.textContent = row.label;
+        tr.appendChild(th);
+        cols.forEach((col) => {
+            const td = document.createElement('td');
+            const value = matrix[row.key][col];
+            td.textContent = String(value);
+            if (row.key === 'high' && col === 'high' && value > 0) td.className = 'text-danger fw-bold';
+            if (row.key !== 'low' && col !== 'low' && value > 0 && !(row.key === 'high' && col === 'high')) {
+                td.className = 'text-warning fw-semibold';
+            }
+            tr.appendChild(td);
+        });
+        body.appendChild(tr);
+    });
+}
+
+function initLayerSwitcher() {
+    const status = document.getElementById('mapLayerStatus');
+    const buttons = document.querySelectorAll('[data-layer]');
+    const labelsByLayer = {
+        radar: 'Radar（降水回波）',
+        satellite: 'Satellite（云图）',
+        severe: 'Severe（预警）',
+        health: 'Health（健康风险）'
+    };
+    buttons.forEach((btn) => {
+        btn.addEventListener('click', () => {
+            buttons.forEach((b) => b.classList.remove('active'));
+            btn.classList.add('active');
+            const layer = btn.dataset.layer;
+            if (status) status.textContent = `当前图层：${labelsByLayer[layer] || layer}（占位演示）`;
+        });
+    });
+}
+
+function renderHistoryNowcast(data) {
+    const container = document.getElementById('historyNowcast');
+    if (!container) return;
+    container.innerHTML = '';
+    const timeline = Array.isArray(data.timeline) ? data.timeline : [];
+    if (!timeline.length) {
+        container.textContent = '暂无短临时间轴数据';
+        return;
+    }
+    timeline.forEach((item) => {
+        const row = document.createElement('div');
+        row.className = 'wf-nowcast-row';
+        const header = document.createElement('div');
+        header.className = 'd-flex justify-content-between';
+        const t = document.createElement('span');
+        t.textContent = (String(item.time || '--')).slice(11, 16);
+        const p = document.createElement('span');
+        const prob = toNumber(item.precipitation_probability) || 0;
+        p.textContent = `${Math.round(prob)}%`;
+        header.appendChild(t);
+        header.appendChild(p);
+        const progress = document.createElement('div');
+        progress.className = 'progress';
+        const bar = document.createElement('div');
+        bar.className = `progress-bar ${prob >= 70 ? 'bg-danger' : prob >= 40 ? 'bg-warning' : 'bg-info'}`;
+        bar.style.width = `${Math.min(100, Math.max(0, prob))}%`;
+        progress.appendChild(bar);
+        row.appendChild(header);
+        row.appendChild(progress);
+        container.appendChild(row);
+    });
+}
+
+function loadHistoryNowcast() {
+    let url = '/api/weather/nowcast?hours=6';
+    if (selectedCommunity) {
+        url += `&location=${encodeURIComponent(selectedCommunity)}`;
+    }
+    fetch(url)
+        .then((resp) => resp.json())
+        .then((payload) => {
+            if (payload && payload.success) {
+                renderHistoryNowcast(payload.data || {});
+            } else {
+                renderHistoryNowcast({ timeline: [] });
+            }
+        })
+        .catch(() => renderHistoryNowcast({ timeline: [] }));
+}
+
+function buildHistoryChart() {
+    const ctx = document.getElementById('historyChart').getContext('2d');
+    if (historyChart) historyChart.destroy();
+    historyChart = new Chart(ctx, {
+        type: 'bar',
+        data: {
+            labels,
+            datasets: [
+                {
+                    label: '病例数',
+                    data: visits,
+                    backgroundColor: 'rgba(58, 97, 133, 0.30)',
+                    borderColor: 'rgba(58, 97, 133, 0.95)',
+                    borderWidth: 1,
+                    yAxisID: 'y'
+                },
+                {
+                    label: '温度(°C)',
+                    data: temps,
+                    type: 'line',
+                    borderColor: 'rgba(197, 85, 85, 0.95)',
+                    backgroundColor: 'rgba(197, 85, 85, 0.15)',
+                    borderWidth: 2,
+                    pointRadius: 0,
+                    spanGaps: true,
+                    yAxisID: 'y1'
+                },
+                {
+                    label: '湿度(%)',
+                    data: hums,
+                    type: 'line',
+                    borderColor: 'rgba(52, 142, 112, 0.95)',
+                    backgroundColor: 'rgba(52, 142, 112, 0.15)',
+                    borderWidth: 2,
+                    pointRadius: 0,
+                    spanGaps: true,
+                    yAxisID: 'y1'
+                }
+            ]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            resizeDelay: 120,
+            interaction: { mode: 'index', intersect: false },
+            plugins: {
+                legend: { position: 'top' }
+            },
+            scales: {
+                x: {
+                    ticks: {
+                        autoSkip: true,
+                        maxTicksLimit: 10,
+                        maxRotation: 0
+                    },
+                    grid: { display: false }
+                },
+                y: {
+                    beginAtZero: true,
+                    title: { display: true, text: '病例数' }
+                },
+                y1: {
+                    position: 'right',
+                    title: { display: true, text: '天气因子' },
+                    grid: { drawOnChartArea: false }
+                }
+            }
+        }
+    });
+}
+
+function buildScatterChart(factor) {
+    const series = currentSeries(factor);
+    const points = [];
+    for (let i = 0; i < labels.length; i += 1) {
+        const x = toNumber(series[i]);
+        const y = toNumber(visits[i]);
+        if (x === null || y === null) continue;
+        points.push({ x, y });
+    }
+
+    const ctx = document.getElementById('scatterChart').getContext('2d');
+    if (scatterChart) scatterChart.destroy();
+    scatterChart = new Chart(ctx, {
+        type: 'scatter',
+        data: {
+            datasets: [{
+                label: factor === 'humidity' ? '湿度 vs 病例' : '温度 vs 病例',
+                data: points,
+                pointRadius: 5,
+                pointHoverRadius: 6,
+                backgroundColor: factor === 'humidity'
+                    ? 'rgba(52, 142, 112, 0.55)'
+                    : 'rgba(197, 85, 85, 0.55)',
+                borderColor: factor === 'humidity'
+                    ? 'rgba(52, 142, 112, 1)'
+                    : 'rgba(197, 85, 85, 1)'
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            resizeDelay: 120,
+            scales: {
+                x: {
+                    title: {
+                        display: true,
+                        text: factor === 'humidity' ? '湿度(%)' : '温度(°C)'
+                    }
+                },
+                y: {
+                    beginAtZero: true,
+                    title: { display: true, text: '病例数' }
+                }
+            }
+        }
+    });
+}
+
+function buildLagChart(factor, selectedLag) {
+    const correlations = calcLagCorrelations(currentSeries(factor), 21);
+    const lagLabels = Array.from({ length: correlations.length }, (_, i) => i);
+    const lagData = correlations.map((v) => (typeof v === 'number' ? Number(v.toFixed(3)) : null));
+    const ctx = document.getElementById('lagChart').getContext('2d');
+    if (lagChart) lagChart.destroy();
+    lagChart = new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: lagLabels,
+            datasets: [{
+                label: '滞后相关系数 r',
+                data: lagData,
+                borderColor: '#28628a',
+                backgroundColor: 'rgba(40, 98, 138, 0.14)',
+                pointRadius: lagLabels.map((lag) => (lag === selectedLag ? 5 : 3)),
+                pointBackgroundColor: lagLabels.map((lag) => (lag === selectedLag ? '#c55555' : '#28628a')),
+                tension: 0.25,
+                spanGaps: true
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            resizeDelay: 120,
+            scales: {
+                y: {
+                    min: -1,
+                    max: 1,
+                    title: { display: true, text: 'r' }
+                },
+                x: {
+                    title: { display: true, text: '滞后天数' }
+                }
+            }
+        }
+    });
+    return correlations;
+}
+
+function updateKPIs(factor, selectedLag) {
+    const corr = currentCorr(factor);
+    const series = currentSeries(factor);
+    const anomalyDays = calcAnomalyDays(series);
+    const lagCorrs = calcLagCorrelations(series, 21);
+    const bestLag = bestLagFrom(lagCorrs);
+
+    const corrText = formatCorr(corr.value);
+    document.getElementById('kpiCorr').textContent = corrText;
+    document.getElementById('kpiCorrN').textContent = corr.n ?? '--';
+    document.getElementById('anomalyDays').textContent = String(anomalyDays);
+    document.getElementById('bestLag').textContent = bestLag === null ? '--' : `${bestLag} 天`;
+    document.getElementById('lagValue').textContent = String(selectedLag);
+    document.getElementById('scatterFactorBadge').textContent = `因子：${factor === 'humidity' ? '湿度' : '温度'}`;
+    renderImpactLikelihoodMatrix(factor);
+}
+
+function initQuickRangeButtons() {
+    const startInput = document.getElementById('startDateInput');
+    const endInput = document.getElementById('endDateInput');
+    const form = document.getElementById('analysisForm');
+    const rangeButtons = document.querySelectorAll('[data-range-days]');
+
+    const formatDateLocal = (dateObj) => {
+        const y = dateObj.getFullYear();
+        const m = String(dateObj.getMonth() + 1).padStart(2, '0');
+        const d = String(dateObj.getDate()).padStart(2, '0');
+        return `${y}-${m}-${d}`;
+    };
+
+    const parseInputDate = (value) => {
+        if (!value) return null;
+        const parts = value.split('-').map((v) => parseInt(v, 10));
+        if (parts.length !== 3 || parts.some((v) => Number.isNaN(v))) return null;
+        return new Date(parts[0], parts[1] - 1, parts[2]);
+    };
+
+    rangeButtons.forEach((btn) => {
+        btn.addEventListener('click', () => {
+            const range = btn.dataset.rangeDays;
+            rangeButtons.forEach((other) => other.classList.remove('active'));
+            btn.classList.add('active');
+            if (range === 'custom') {
+                startInput.focus();
+                return;
+            }
+            const endDate = parseInputDate(endInput.value) || new Date();
+            const days = parseInt(range, 10);
+            const startDate = new Date(endDate);
+            startDate.setDate(endDate.getDate() - (days - 1));
+            startInput.value = formatDateLocal(startDate);
+            endInput.value = formatDateLocal(endDate);
+            form.submit();
+        });
+    });
+
+    if (startInput.value && endInput.value) {
+        const startDate = parseInputDate(startInput.value);
+        const endDate = parseInputDate(endInput.value);
+        if (!startDate || !endDate) return;
+        const diff = Math.round((endDate - startDate) / (24 * 60 * 60 * 1000)) + 1;
+        const matched = document.querySelector(`[data-range-days="${diff}"]`);
+        if (matched) matched.classList.add('active');
+    }
+}
+
+function initPreviewStateButtons() {
+    const panel = document.getElementById('previewPanel');
+    const text = document.getElementById('previewStateText');
+    const buttons = document.querySelectorAll('[data-preview-state]');
+    const messages = {
+        normal: '图表与指标可用，支持继续钻取。',
+        loading: '正在加载和计算，请保持筛选条件不变。',
+        empty: '没有可用数据，建议扩大日期范围。'
+    };
+
+    buttons.forEach((btn) => {
+        btn.addEventListener('click', () => {
+            const state = btn.dataset.previewState;
+            buttons.forEach((other) => other.classList.remove('is-active'));
+            btn.classList.add('is-active');
+            panel.classList.remove('is-loading', 'is-empty');
+            if (state === 'loading') panel.classList.add('is-loading');
+            if (state === 'empty') panel.classList.add('is-empty');
+            text.textContent = messages[state] || messages.normal;
+        });
+    });
+}
+
+function initWireframePage() {
+    const factorSelect = document.getElementById('factorSelect');
+    const lagSlider = document.getElementById('lagSlider');
+    let currentFactor = factorSelect.value;
+    let currentLag = parseInt(lagSlider.value, 10);
+
+    buildHistoryChart();
+    buildScatterChart(currentFactor);
+    buildLagChart(currentFactor, currentLag);
+    updateKPIs(currentFactor, currentLag);
+    initLayerSwitcher();
+    loadHistoryNowcast();
+    initQuickRangeButtons();
+    initPreviewStateButtons();
+
+    factorSelect.addEventListener('change', () => {
+        currentFactor = factorSelect.value;
+        buildScatterChart(currentFactor);
+        buildLagChart(currentFactor, currentLag);
+        updateKPIs(currentFactor, currentLag);
+    });
+
+    lagSlider.addEventListener('input', () => {
+        currentLag = parseInt(lagSlider.value, 10);
+        buildLagChart(currentFactor, currentLag);
+        updateKPIs(currentFactor, currentLag);
+    });
+}
+
+initWireframePage();
 </script>
-{% endblock %}
 {% endblock %}

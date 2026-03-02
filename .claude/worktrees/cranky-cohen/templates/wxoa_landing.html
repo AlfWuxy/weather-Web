@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+
+{% block title %}公众号入口 - 宜老天气通{% endblock %}
+
+{% block content %}
+<div class="container my-4">
+  <div class="row justify-content-center">
+    <div class="col-lg-8">
+      <div class="card shadow-sm">
+        <div class="card-body p-4">
+          <div class="d-flex align-items-center gap-2 mb-2">
+            <span class="badge bg-success">公众号入口</span>
+            {% if source %}<span class="badge bg-light text-muted">from={{ source }}</span>{% endif %}
+            {% if article %}<span class="badge bg-light text-muted">article={{ article }}</span>{% endif %}
+          </div>
+          <h2 class="mb-2">宜老天气通</h2>
+          <p class="text-muted mb-3">
+            给<strong>在外地工作的子女</strong>用：远程关注家中老人所在地的高温/寒潮风险，
+            由你作为“可信节点”把行动建议转述给家人。
+          </p>
+
+          <div class="alert alert-info mb-3">
+            <div class="fw-semibold mb-1">你可以做什么</div>
+            <ul class="mb-0">
+              <li>添加老人档案（慢病类别可选）</li>
+              <li>设置老人所在地（支持任意中文地点输入）</li>
+              <li>当出现预警时收到推送，并一键复制提醒话术给老人</li>
+            </ul>
+          </div>
+
+          <div class="d-flex flex-wrap gap-2">
+            {% if current_user.is_authenticated %}
+              <a class="btn btn-primary" href="{{ url_for('user.pair_management') }}">
+                <i class="bi bi-people"></i> 进入照护工作台
+              </a>
+            {% else %}
+              <a class="btn btn-primary" href="{{ url_for('public.login', next=url_for('user.pair_management')) }}">
+                <i class="bi bi-box-arrow-in-right"></i> 登录后开始
+              </a>
+              <a class="btn btn-outline-secondary" href="{{ url_for('public.register') }}">
+                注册
+              </a>
+            {% endif %}
+            <a class="btn btn-outline-success" href="{{ url_for('public.about_trust_network') }}">
+              <i class="bi bi-diagram-3"></i> 设计逻辑（论文闭环）
+            </a>
+          </div>
+
+          <hr class="my-4">
+          <div class="text-muted small">
+            免责声明：本工具提供通用行动建议，不提供医疗诊断/治疗建议；请结合家庭实际情况与专业意见使用。
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+

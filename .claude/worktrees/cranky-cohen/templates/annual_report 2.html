@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+
+{% block title %}年度健康报告 - 天气健康风险预测系统{% endblock %}
+
+{% block content %}
+<div class="container">
+    <div class="row mb-4">
+        <div class="col-12">
+            <h2><i class="bi bi-journal-text"></i> 年度健康报告</h2>
+            <p class="text-muted">汇总个人年度健康风险与日记记录</p>
+        </div>
+    </div>
+
+    <div class="row g-4">
+        <div class="col-md-4">
+            <div class="card shadow-sm h-100">
+                <div class="card-body text-center">
+                    <div class="display-6">{{ total_assessments }}</div>
+                    <div class="text-muted">评估次数</div>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-4">
+            <div class="card shadow-sm h-100">
+                <div class="card-body text-center">
+                    <div class="display-6">{{ avg_risk if avg_risk is not none else '--' }}</div>
+                    <div class="text-muted">平均风险分</div>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-4">
+            <div class="card shadow-sm h-100">
+                <div class="card-body text-center">
+                    <div class="display-6">{{ diary_count }}</div>
+                    <div class="text-muted">健康日记条数</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="card shadow-sm mt-4">
+        <div class="card-body">
+            <h6>风险等级分布</h6>
+            <ul class="mb-0">
+                {% for level, count in level_counts.items() %}
+                    <li>{{ level }}：{{ count }}</li>
+                {% endfor %}
+            </ul>
+        </div>
+    </div>
+
+    <div class="card shadow-sm mt-4">
+        <div class="card-body">
+            <h6>日记严重程度分布</h6>
+            <ul class="mb-0">
+                {% for level, count in severity_counts.items() %}
+                    <li>{{ level }}：{{ count }}</li>
+                {% endfor %}
+            </ul>
+        </div>
+    </div>
+
+    <div class="card shadow-sm mt-4">
+        <div class="card-body text-muted">
+            统计区间：{{ start_date }} 至 {{ end_date }}
+        </div>
+    </div>
+</div>
+{% endblock %}

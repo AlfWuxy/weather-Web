@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+
+{% block title %}报告导出 - 天气健康风险预测系统{% endblock %}
+
+{% block content %}
+<div class="container">
+    <div class="row mb-4">
+        <div class="col-12">
+            <h2><i class="bi bi-file-earmark-arrow-down"></i> 报告导出</h2>
+            <p class="text-muted">生成PDF/Excel周报/月报，便于汇报与归档</p>
+        </div>
+    </div>
+
+    <div class="card shadow-sm">
+        <div class="card-body">
+            <form method="POST" action="{{ url_for('analysis.reports_export') }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <div class="row g-3">
+                    <div class="col-md-6">
+                        <label class="form-label">报告类型</label>
+                        <select class="form-select" name="report_type">
+                            <option value="weekly">周报（近7天）</option>
+                            <option value="monthly">月报（近30天）</option>
+                        </select>
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label">导出格式</label>
+                        <select class="form-select" name="format">
+                            <option value="excel">Excel</option>
+                            <option value="pdf">PDF</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="mt-3">
+                    <button class="btn btn-primary"><i class="bi bi-download"></i> 导出报告</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+{% endblock %}

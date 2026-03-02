@@ -1,0 +1,114 @@
+{% extends "base.html" %}
+
+{% block title %}健康日记 - 天气健康风险预测系统{% endblock %}
+
+{% block content %}
+<div class="container">
+    <div class="row mb-4">
+        <div class="col-12">
+            <h2><i class="bi bi-journal"></i> 健康日记</h2>
+            <p class="text-muted">记录每日身体状况，与天气关联分析</p>
+        </div>
+    </div>
+
+    <div class="row">
+        <div class="col-lg-5 mb-4">
+            <div class="card shadow-sm">
+                <div class="card-header bg-primary text-white">
+                    <h5 class="mb-0">记录日记</h5>
+                </div>
+                <div class="card-body">
+                    <form method="POST" action="{{ url_for('health.health_diary') }}">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <div class="mb-3">
+                            <label class="form-label">日期</label>
+                            <input type="date" class="form-control" name="entry_date">
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">成员</label>
+                            <select class="form-select" name="member_id">
+                                <option value="">本人</option>
+                                {% for member in members %}
+                                    <option value="{{ member.id }}">{{ member.name }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">严重程度</label>
+                            <select class="form-select" name="severity">
+                                <option value="">请选择</option>
+                                <option value="轻微">轻微</option>
+                                <option value="中等">中等</option>
+                                <option value="严重">严重</option>
+                            </select>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">症状描述</label>
+                            <textarea class="form-control" name="symptoms" rows="3"></textarea>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">备注</label>
+                            <textarea class="form-control" name="notes" rows="2"></textarea>
+                        </div>
+                        <button class="btn btn-primary w-100">保存记录</button>
+                    </form>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-lg-7">
+            <div class="card shadow-sm">
+                <div class="card-header bg-light">
+                    <h5 class="mb-0">日记列表</h5>
+                </div>
+                <div class="card-body">
+                    <div class="table-responsive">
+                        <table class="table table-striped align-middle">
+                            <thead>
+                                <tr>
+                                    <th>日期</th>
+                                    <th>成员</th>
+                                    <th>严重程度</th>
+                                    <th>天气</th>
+                                    <th>症状</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for entry in entries %}
+                                <tr>
+                                    <td>{{ entry.entry_date }}</td>
+                                    <td>
+                                        {% if entry.member_id %}
+                                            {% if entry.member_id in member_map %}
+                                                {{ member_map[entry.member_id] }}
+                                            {% else %}
+                                                已删除成员
+                                            {% endif %}
+                                        {% else %}
+                                            本人
+                                        {% endif %}
+                                    </td>
+                                    <td>{{ entry.severity or '-' }}</td>
+                                    <td>
+                                        {% set w = weather_map.get(entry.entry_date) %}
+                                        {% if w %}
+                                            {{ w.temperature|round(1) }}°C / {{ w.humidity|round(0) }}%
+                                        {% else %}
+                                            -
+                                        {% endif %}
+                                    </td>
+                                    <td>{{ entry.symptoms or '-' }}</td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                    {% if entries|length == 0 %}
+                        <p class="text-muted mb-0">暂无日记记录</p>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

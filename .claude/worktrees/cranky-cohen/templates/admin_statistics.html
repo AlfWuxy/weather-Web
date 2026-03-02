@@ -1,0 +1,600 @@
+{% extends "base.html" %}
+
+{% block title %}统计分析 - 管理后台{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <div class="row mb-4">
+        <div class="col-12">
+            <h2><i class="bi bi-bar-chart"></i> 统计分析</h2>
+            <p class="text-muted">数据统计与可视化分析</p>
+        </div>
+    </div>
+
+    <!-- 时间范围选择 -->
+    <div class="row mb-4">
+        <div class="col-12">
+            <div class="card shadow-sm">
+                <div class="card-body">
+                    <form method="GET" action="{{ url_for('admin.admin_statistics') }}" class="row align-items-end g-2">
+                        <div class="col-md-2">
+                            <label class="form-label fw-semibold">开始日期：</label>
+                            <input type="date" 
+                                   class="form-control" 
+                                   name="start_date" 
+                                   value="{{ start_date_str }}"
+                                   min="2023-12-01"
+                                   max="2025-01-31">
+                        </div>
+                        <div class="col-md-2">
+                            <label class="form-label fw-semibold">结束日期：</label>
+                            <input type="date" 
+                                   class="form-control" 
+                                   name="end_date" 
+                                   value="{{ end_date_str }}"
+                                   min="2023-12-01"
+                                   max="2025-01-31">
+                        </div>
+                        <div class="col-md-2">
+                            <label class="form-label fw-semibold">村庄：</label>
+                            <select class="form-select" name="community">
+                                <option value="" {% if not community_filter %}selected{% endif %}>全部村庄</option>
+                                {% for comm in all_communities %}
+                                    <option value="{{ comm.name }}" {% if comm.name == community_filter %}selected{% endif %}>
+                                        {{ comm.name }}
+                                    </option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="col-md-2">
+                            <button type="submit" class="btn btn-primary w-100">
+                                <i class="bi bi-search"></i> 筛选
+                            </button>
+                        </div>
+                        <div class="col-md-2">
+                            <button type="button" class="btn btn-outline-info w-100" id="clearDateRange">
+                                <i class="bi bi-calendar-x"></i> 全部时间
+                            </button>
+                        </div>
+                        {% if start_date_str or end_date_str or community_filter %}
+                        <div class="col-md-2">
+                            <a href="{{ url_for('admin.admin_statistics') }}" class="btn btn-outline-secondary w-100">
+                                <i class="bi bi-x-circle"></i> 清除
+                            </a>
+                        </div>
+                        {% endif %}
+                    </form>
+                    
+                    <!-- 当前筛选提示 -->
+                    {% if start_date_str or end_date_str or community_filter %}
+                    <div class="mt-3 alert alert-info mb-0">
+                        <i class="bi bi-info-circle me-2"></i>
+                        <strong>当前筛选：</strong>
+                        {% if start_date_str and end_date_str %}
+                            {{ start_date_str }} 至 {{ end_date_str }}
+                        {% elif start_date_str %}
+                            {{ start_date_str }} 之后
+                        {% elif end_date_str %}
+                            {{ end_date_str }} 之前
+                        {% else %}
+                            全部时间
+                        {% endif %}
+                        {% if community_filter %} | {{ community_filter }}{% endif %}
+                        | 共 <strong>{{ total_filtered }}</strong> 条匹配记录
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 统计概览 -->
+    <div class="row mb-4">
+        <div class="col-md-3 mb-3">
+            <div class="card shadow-sm border-start border-primary border-3">
+                <div class="card-body">
+                    <h6 class="text-secondary mb-2">
+                        {% if start_date_str or end_date_str or community_filter %}筛选后病例{% else %}总病例数{% endif %}
+                    </h6>
+                    <h3 class="mb-0 text-primary">{{ total_filtered }}</h3>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3 mb-3">
+            <div class="card shadow-sm border-start border-success border-3">
+                <div class="card-body">
+                    <h6 class="text-secondary mb-2">疾病分类</h6>
+                    <h3 class="mb-0 text-success">{{ disease_labels|length }}</h3>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3 mb-3">
+            <div class="card shadow-sm border-start border-info border-3">
+                <div class="card-body">
+                    <h6 class="text-secondary mb-2">社区覆盖</h6>
+                    <h3 class="mb-0 text-info">{{ community_labels|length }}</h3>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3 mb-3">
+            <div class="card shadow-sm border-start border-warning border-3">
+                <div class="card-body">
+                    <h6 class="text-secondary mb-2">最近月份</h6>
+                    <h3 class="mb-0 text-warning">{{ month_counts[-1] if month_counts else 0 }}</h3>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 图表 -->
+    <div class="row">
+        <div class="col-md-6 mb-4">
+            <div class="card shadow-sm">
+                <div class="card-header">
+                    <h5 class="mb-0"><i class="bi bi-pie-chart me-2"></i>疾病分类统计</h5>
+                </div>
+                <div class="card-body">
+                    {% if disease_labels %}
+                        <canvas id="diseaseChart" height="300"></canvas>
+                    {% else %}
+                        <p class="text-center text-muted my-5">暂无数据</p>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+
+        <div class="col-md-6 mb-4">
+            <div class="card shadow-sm">
+                <div class="card-header">
+                    <h5 class="mb-0"><i class="bi bi-bar-chart me-2"></i>年龄分布统计</h5>
+                </div>
+                <div class="card-body">
+                    <canvas id="ageChart" height="300"></canvas>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-md-12 mb-4">
+            <div class="card shadow-sm">
+                <div class="card-header">
+                    <h5 class="mb-0"><i class="bi bi-graph-up me-2"></i>月度就诊趋势</h5>
+                    <small class="text-muted d-block">
+                        {% if start_date_str and end_date_str %}
+                            {{ start_date_str }} 至 {{ end_date_str }}
+                        {% elif start_date_str %}
+                            {{ start_date_str }} 之后
+                        {% elif end_date_str %}
+                            {{ end_date_str }} 之前
+                        {% else %}
+                            完整数据（2023-12 至 2025-01）
+                        {% endif %}
+                        {% if community_filter %} | {{ community_filter }}{% endif %}
+                    </small>
+                </div>
+                <div class="card-body">
+                    <canvas id="trendChart" height="150"></canvas>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-md-6 mb-4">
+            <div class="card shadow-sm">
+                <div class="card-header">
+                    <h5 class="mb-0"><i class="bi bi-radar me-2"></i>天气与疾病相关性</h5>
+                    <small class="text-muted">相关系数分析（基于历史数据）</small>
+                </div>
+                <div class="card-body">
+                    <canvas id="weatherDiseaseChart" height="300"></canvas>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-md-6 mb-4">
+            <div class="card shadow-sm">
+                <div class="card-header">
+                    <h5 class="mb-0"><i class="bi bi-building me-2"></i>村庄风险对比</h5>
+                </div>
+                <div class="card-body">
+                    <canvas id="communityRiskChart" height="300"></canvas>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-md-6 mb-4">
+            <div class="card shadow-sm">
+                <div class="card-header">
+                    <h5 class="mb-0"><i class="bi bi-geo-alt me-2"></i>村庄病例分布</h5>
+                </div>
+                <div class="card-body">
+                    {% if community_labels %}
+                        <canvas id="communityDistChart" height="300"></canvas>
+                    {% else %}
+                        <p class="text-center text-muted my-5">暂无数据</p>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+
+        <div class="col-md-6 mb-4">
+            <div class="card shadow-sm">
+                <div class="card-header">
+                    <h5 class="mb-0"><i class="bi bi-gender-ambiguous me-2"></i>性别分布</h5>
+                </div>
+                <div class="card-body">
+                    <div class="row text-center">
+                        {% for gender, count in gender_stats %}
+                        <div class="col">
+                            <div class="p-3 border rounded">
+                                <i class="bi bi-{% if gender == '男性' %}gender-male text-primary{% else %}gender-female text-danger{% endif %} fs-1"></i>
+                                <h4 class="mt-2 mb-1">{{ count }}</h4>
+                                <p class="text-muted mb-0">{{ gender }}</p>
+                            </div>
+                        </div>
+                        {% endfor %}
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-md-12 mb-4">
+            <div class="card shadow-sm">
+                <div class="card-header">
+                    <h5 class="mb-0"><i class="bi bi-gender-ambiguous me-2"></i>村庄性别分布统计</h5>
+                    <small class="text-muted">各村庄按性别分类的病例数</small>
+                </div>
+                <div class="card-body">
+                    <canvas id="communityGenderChart" height="120"></canvas>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- 数据说明 -->
+    <div class="row">
+        <div class="col-12">
+            <div class="alert alert-info border-0">
+                <h6 class="alert-heading"><i class="bi bi-info-circle me-2"></i>数据说明</h6>
+                <ul class="mb-0 small">
+                    <li><strong>病例数据：</strong>来自导入的Excel文件，共{{ disease_counts|sum if disease_counts else 0 }}条真实病历记录</li>
+                    <li><strong>社区数据：</strong>{{ community_labels|length }}个示例社区，脆弱性指数基于老龄化率、慢性病率等指标计算</li>
+                    <li><strong>天气数据：</strong>当前使用模拟数据，可接入真实天气API（如高德天气、和风天气等）</li>
+                    <li><strong>相关性分析：</strong>基于医学研究文献的天气与疾病相关系数</li>
+                </ul>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+// 等待DOM完全加载
+document.addEventListener('DOMContentLoaded', function() {
+    console.log('开始初始化图表...');
+
+    const clearButton = document.getElementById('clearDateRange');
+    if (clearButton) {
+        clearButton.addEventListener('click', function() {
+            const startInput = document.getElementsByName('start_date')[0];
+            const endInput = document.getElementsByName('end_date')[0];
+            if (startInput) startInput.value = '';
+            if (endInput) endInput.value = '';
+        });
+    }
+    
+    // 疾病分类统计 - 真实数据
+    const diseaseCtx = document.getElementById('diseaseChart');
+    console.log('疾病图表元素:', diseaseCtx);
+    console.log('疾病数据:', {{ disease_labels|tojson|safe }}, {{ disease_counts|tojson|safe }});
+    
+    if (diseaseCtx) {
+        new Chart(diseaseCtx.getContext('2d'), {
+            type: 'doughnut',
+            data: {
+                labels: {{ disease_labels|tojson|safe }},
+                datasets: [{
+                    data: {{ disease_counts|tojson|safe }},
+                    backgroundColor: [
+                        '#1a56db', '#0e9f6e', '#dc2626', '#d97706', '#0284c7',
+                        '#7c3aed', '#db2777', '#059669', '#ea580c', '#6366f1',
+                        '#ec4899', '#8b5cf6', '#10b981', '#f59e0b', '#3b82f6',
+                        '#14b8a6', '#f97316', '#6366f1', '#84cc16', '#a855f7',
+                        '#ef4444', '#22c55e', '#eab308', '#06b6d4', '#8b5cf6',
+                        '#f472b6', '#4ade80', '#fb923c', '#60a5fa', '#34d399',
+                        '#fbbf24', '#38bdf8', '#a78bfa', '#fb7185', '#86efac',
+                        '#fcd34d', '#7dd3fc', '#c4b5fd', '#fda4af', '#bbf7d0',
+                        '#fde047', '#bae6fd', '#ddd6fe', '#fecaca', '#d9f99d',
+                        '#e0f2fe', '#ede9fe', '#fee2e2', '#ecfccb'
+                    ]
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: true,
+                plugins: {
+                    legend: {
+                        position: 'right',
+                        labels: {
+                            font: { size: 10 },
+                            padding: 8,
+                            boxWidth: 12
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    // 年龄分布统计 - 真实数据
+    const ageCtx = document.getElementById('ageChart');
+    if (ageCtx) {
+        new Chart(ageCtx.getContext('2d'), {
+            type: 'bar',
+            data: {
+                labels: {{ age_labels|tojson|safe }},
+                datasets: [{
+                    label: '病例数',
+                    data: {{ age_counts|tojson|safe }},
+                    backgroundColor: '#1a56db',
+                    borderRadius: 6
+                }]
+            },
+            options: {
+                responsive: true,
+                plugins: {
+                    legend: { display: false }
+                },
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        ticks: {
+                            precision: 0
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    // 就诊趋势 - 真实月度数据
+    const trendCtx = document.getElementById('trendChart');
+    if (trendCtx) {
+        new Chart(trendCtx.getContext('2d'), {
+            type: 'line',
+            data: {
+                labels: {{ month_labels|tojson|safe }},
+                datasets: [{
+                    label: '就诊人数',
+                    data: {{ month_counts|tojson|safe }},
+                    borderColor: '#0e9f6e',
+                    backgroundColor: 'rgba(14, 159, 110, 0.2)',
+                    borderWidth: 3,
+                    tension: 0.3,
+                    fill: true,
+                    pointRadius: 5,
+                    pointHoverRadius: 7,
+                    pointBackgroundColor: '#0e9f6e',
+                    pointBorderColor: '#fff',
+                    pointBorderWidth: 2
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { 
+                        display: true,
+                        position: 'top'
+                    },
+                    title: {
+                        display: false
+                    },
+                    tooltip: {
+                        callbacks: {
+                            label: function(context) {
+                                return '就诊人数: ' + context.parsed.y + ' 人';
+                            }
+                        }
+                    }
+                },
+                scales: {
+                    x: {
+                        grid: {
+                            display: false
+                        },
+                        ticks: {
+                            maxRotation: 45,
+                            minRotation: 45,
+                            font: {
+                                size: 11
+                            }
+                        }
+                    },
+                    y: {
+                        beginAtZero: true,
+                        ticks: {
+                            precision: 0,
+                            callback: function(value) {
+                                return value + ' 人';
+                            }
+                        },
+                        grid: {
+                            color: 'rgba(0, 0, 0, 0.05)'
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    // 天气疾病相关性 - 基于分析的相关系数
+    const weatherCtx = document.getElementById('weatherDiseaseChart');
+    if (weatherCtx) {
+        new Chart(weatherCtx.getContext('2d'), {
+            type: 'radar',
+            data: {
+                labels: ['高温', '低温', '高湿度', '空气污染', '温差大'],
+                datasets: [{
+                    label: '呼吸道疾病',
+                    data: [35, 75, 65, 85, 70],
+                    borderColor: '#dc2626',
+                    backgroundColor: 'rgba(220, 38, 38, 0.2)',
+                    borderWidth: 2
+                }, {
+                    label: '心血管疾病',
+                    data: [72, 68, 45, 60, 65],
+                    borderColor: '#1a56db',
+                    backgroundColor: 'rgba(26, 86, 219, 0.2)',
+                    borderWidth: 2
+                }, {
+                    label: '关节疾病',
+                    data: [45, 70, 78, 40, 62],
+                    borderColor: '#d97706',
+                    backgroundColor: 'rgba(217, 119, 6, 0.2)',
+                    borderWidth: 2
+                }]
+            },
+            options: {
+                responsive: true,
+                scales: {
+                    r: {
+                        beginAtZero: true,
+                        max: 100
+                    }
+                }
+            }
+        });
+    }
+
+    // 社区风险对比 - 真实数据
+    const communityCtx = document.getElementById('communityRiskChart');
+    if (communityCtx) {
+        new Chart(communityCtx.getContext('2d'), {
+            type: 'bar',
+            data: {
+                labels: {{ community_risk_labels|tojson|safe }},
+                datasets: [{
+                    label: '脆弱性指数',
+                    data: {{ community_risk_values|tojson|safe }},
+                    backgroundColor: {{ community_risk_values|tojson|safe }}.map(val => {
+                        if (val >= 60) return '#dc2626';
+                        if (val >= 30) return '#d97706';
+                        return '#0e9f6e';
+                    }),
+                    borderRadius: 6
+                }]
+            },
+            options: {
+                responsive: true,
+                plugins: {
+                    legend: { display: false }
+                },
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        max: 100,
+                        ticks: {
+                            callback: function(value) {
+                                return value;
+                            }
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    // 社区病例分布
+    const communityDistCtx = document.getElementById('communityDistChart');
+    if (communityDistCtx) {
+        new Chart(communityDistCtx.getContext('2d'), {
+            type: 'pie',
+            data: {
+                labels: {{ community_labels|tojson|safe }},
+                datasets: [{
+                    data: {{ community_counts|tojson|safe }},
+                    backgroundColor: [
+                        '#1a56db',
+                        '#0e9f6e',
+                        '#dc2626',
+                        '#d97706',
+                        '#0284c7'
+                    ]
+                }]
+            },
+            options: {
+                responsive: true,
+                plugins: {
+                    legend: {
+                        position: 'bottom'
+                    }
+                }
+            }
+        });
+    }
+
+    // 村庄性别分布统计
+    const communityGenderCtx = document.getElementById('communityGenderChart');
+    if (communityGenderCtx) {
+        const communityGenderData = {{ community_gender_stats|tojson|safe }};
+        const communities = {{ community_labels|tojson|safe }};
+        
+        const maleData = communities.map(c => communityGenderData[c]?.male || 0);
+        const femaleData = communities.map(c => communityGenderData[c]?.female || 0);
+        
+        new Chart(communityGenderCtx.getContext('2d'), {
+            type: 'bar',
+            data: {
+                labels: communities,
+                datasets: [
+                    {
+                        label: '男性',
+                        data: maleData,
+                        backgroundColor: '#3b82f6',
+                        borderRadius: 6
+                    },
+                    {
+                        label: '女性',
+                        data: femaleData,
+                        backgroundColor: '#ec4899',
+                        borderRadius: 6
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                indexAxis: 'y',  // 横向柱状图
+                plugins: {
+                    legend: { 
+                        display: true,
+                        position: 'top'
+                    },
+                    tooltip: {
+                        callbacks: {
+                            label: function(context) {
+                                return context.dataset.label + ': ' + context.parsed.x + '人';
+                            }
+                        }
+                    }
+                },
+                scales: {
+                    x: {
+                        stacked: false,
+                        beginAtZero: true,
+                        ticks: {
+                            precision: 0
+                        }
+                    },
+                    y: {
+                        stacked: false
+                    }
+                }
+            }
+        });
+    }
+
+    console.log('所有图表初始化完成');
+});
+</script>
+{% endblock %}

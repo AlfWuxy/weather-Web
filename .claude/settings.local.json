@@ -3,7 +3,11 @@
     "allow": [
       "Bash(grep:*)",
       "Bash(python3:*)",
-      "Bash(bash:*)"
+      "Bash(bash:*)",
+      "mcp__Desktop_Commander__list_directory",
+      "Bash(ls:*)",
+      "Bash(source:*)",
+      "Bash(python -m pytest:*)"
     ]
   }
 }

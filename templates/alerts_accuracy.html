@@ -1,55 +1,1036 @@
 {% extends "base.html" %}
+{% set needs_chartjs = true %}
 
-{% block title %}预警准确率统计 - 天气健康风险预测系统{% endblock %}
+{% block title %}预警准确率统计{% endblock %}
+
+{% block extra_css %}
+<style>
+.alerts-accuracy-page {
+    --aa-border: #cfd8e3;
+    --aa-muted: #64748b;
+    --aa-soft: #f8fafc;
+}
+
+.alerts-accuracy-page .aa-card {
+    border: 1px dashed var(--aa-border);
+    border-radius: 14px;
+    background: #fff;
+}
+
+.alerts-accuracy-page .aa-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    border: 1px solid var(--aa-border);
+    border-radius: 999px;
+    background: var(--aa-soft);
+    color: var(--aa-muted);
+    font-size: 12px;
+    padding: 4px 10px;
+}
+
+.alerts-accuracy-page .aa-kpi {
+    border: 1px dashed var(--aa-border);
+    border-radius: 12px;
+    background: #fff;
+    padding: 12px;
+    height: 100%;
+}
+
+.alerts-accuracy-page .aa-kpi .name {
+    color: var(--aa-muted);
+    font-size: 12px;
+}
+
+.alerts-accuracy-page .aa-kpi .value {
+    margin-top: 4px;
+    color: #1f2937;
+    font-size: 24px;
+    font-weight: 700;
+}
+
+.alerts-accuracy-page .aa-kpi .sub {
+    margin-top: 3px;
+    color: var(--aa-muted);
+    font-size: 12px;
+}
+
+.alerts-accuracy-page .aa-chart-wrap {
+    position: relative;
+    width: 100%;
+    height: 300px;
+}
+
+.alerts-accuracy-page .aa-chart-wrap canvas {
+    width: 100% !important;
+    height: 100% !important;
+}
+
+.alerts-accuracy-page .aa-table-wrap {
+    overflow: auto;
+    border: 1px solid #d8e1ea;
+    border-radius: 10px;
+}
+
+.alerts-accuracy-page .aa-table {
+    min-width: 1080px;
+    margin-bottom: 0;
+}
+
+.alerts-accuracy-page .aa-table th,
+.alerts-accuracy-page .aa-table td {
+    border: 1px solid #dbe4ed;
+    text-align: center;
+    vertical-align: middle;
+}
+
+.alerts-accuracy-page .aa-table thead th {
+    background: #f2f6fa;
+    position: sticky;
+    top: 0;
+    z-index: 1;
+}
+
+.alerts-accuracy-page .aa-badge {
+    border-radius: 999px;
+    font-size: 11px;
+    padding: 2px 8px;
+    border: 1px solid #d2dde6;
+    background: #f8fafc;
+}
+
+.alerts-accuracy-page .aa-badge.hit {
+    color: #166534;
+    border-color: #86efac;
+    background: #f0fdf4;
+}
+
+.alerts-accuracy-page .aa-badge.false {
+    color: #b91c1c;
+    border-color: #fecaca;
+    background: #fef2f2;
+}
+
+.alerts-accuracy-page .aa-badge.na {
+    color: #64748b;
+}
+
+.alerts-accuracy-page .aa-mini-table th,
+.alerts-accuracy-page .aa-mini-table td {
+    font-size: 13px;
+}
+
+.alerts-accuracy-page .aa-list {
+    max-height: 280px;
+    overflow: auto;
+}
+
+.alerts-accuracy-page .aa-list-item {
+    border-bottom: 1px dashed #dbe4ed;
+    padding: 8px 0;
+}
+
+.alerts-accuracy-page .aa-list-item:last-child {
+    border-bottom: none;
+}
+
+@media (max-width: 992px) {
+    .alerts-accuracy-page .aa-chart-wrap {
+        height: 250px;
+    }
+}
+</style>
+{% endblock %}
 
 {% block content %}
-<div class="container">
+<div class="container alerts-accuracy-page">
     <div class="row mb-4">
-        <div class="col-12">
-            <h2><i class="bi bi-clipboard-data"></i> 预警准确率统计</h2>
-            <p class="text-muted">评估预警系统预测准确性（近90天）</p>
+        <div class="col-12 d-flex flex-wrap justify-content-between align-items-start gap-2">
+            <div>
+                <h2 class="mb-1"><i class="bi bi-clipboard-data me-1"></i>预警准确率统计</h2>
+                <p class="text-muted mb-0">按学术常用核验框架评估预警性能：分类指标、可靠性与阈值敏感性。</p>
+            </div>
+            <div class="d-flex flex-wrap gap-2">
+                <span class="aa-chip">核验窗口：{{ follow_days }} 天</span>
+                <span class="aa-chip">阈值分位：P{{ (threshold_q * 100)|round(0)|int }}</span>
+                <span class="aa-chip">最小样本：{{ min_days }} 天</span>
+            </div>
         </div>
     </div>
 
-    <div class="row g-4">
-        <div class="col-md-4">
-            <div class="card shadow-sm h-100">
-                <div class="card-body text-center">
-                    <div class="display-6">{{ total_alerts }}</div>
-                    <div class="text-muted">预警总数</div>
-                </div>
-            </div>
-        </div>
-        <div class="col-md-4">
-            <div class="card shadow-sm h-100">
-                <div class="card-body text-center">
-                    <div class="display-6">{{ hit_count }}</div>
-                    <div class="text-muted">命中次数</div>
-                </div>
-            </div>
-        </div>
-        <div class="col-md-4">
-            <div class="card shadow-sm h-100">
-                <div class="card-body text-center">
-                    <div class="display-6">
-                        {{ '%.1f'|format(accuracy) if accuracy is not none else '--' }}{% if accuracy is not none %}%{% endif %}
+    <div class="card aa-card mb-4">
+        <div class="card-body">
+            <form method="POST" action="{{ url_for('analysis.alerts_accuracy') }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <div class="row g-3">
+                    <div class="col-xl-2 col-md-4">
+                        <label class="form-label">开始日期</label>
+                        <input type="date" class="form-control" name="start_date" value="{{ start_date }}">
                     </div>
-                    <div class="text-muted">准确率</div>
+                    <div class="col-xl-2 col-md-4">
+                        <label class="form-label">结束日期</label>
+                        <input type="date" class="form-control" name="end_date" value="{{ end_date }}">
+                    </div>
+                    <div class="col-xl-2 col-md-4">
+                        <label class="form-label">地点检索</label>
+                        <input type="text" class="form-control" name="location" value="{{ location_filter }}" placeholder="支持模糊匹配">
+                    </div>
+                    <div class="col-xl-2 col-md-4">
+                        <label class="form-label">预警类型</label>
+                        <select class="form-select" name="alert_type">
+                            <option value="">全部</option>
+                            {% for item in alert_type_options %}
+                                <option value="{{ item }}" {% if alert_type_filter == item %}selected{% endif %}>{{ item }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-xl-2 col-md-4">
+                        <label class="form-label">预警等级</label>
+                        <select class="form-select" name="alert_level">
+                            <option value="">全部</option>
+                            {% for item in alert_level_options %}
+                                <option value="{{ item }}" {% if alert_level_filter == item %}selected{% endif %}>{{ item }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-xl-2 col-md-4">
+                        <label class="form-label">核验窗口(天)</label>
+                        <select class="form-select" name="follow_days">
+                            {% for option in follow_days_options %}
+                                <option value="{{ option }}" {% if follow_days == option %}selected{% endif %}>{{ option }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-xl-2 col-md-4">
+                        <label class="form-label">阈值分位</label>
+                        <select class="form-select" name="threshold_q">
+                            {% for option in threshold_q_options %}
+                                <option value="{{ option }}" {% if threshold_q == option %}selected{% endif %}>P{{ (option * 100)|round(0)|int }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-xl-2 col-md-4">
+                        <label class="form-label">最小样本天</label>
+                        <select class="form-select" name="min_days">
+                            {% for option in min_days_options %}
+                                <option value="{{ option }}" {% if min_days == option %}selected{% endif %}>{{ option }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
                 </div>
-            </div>
+                <div class="mt-3">
+                    <button class="btn btn-primary">刷新统计</button>
+                </div>
+            </form>
         </div>
     </div>
 
     {% if data_notes %}
-    <div class="alert alert-warning border-0 mt-4">
+    <div class="alert alert-warning border-0 mb-4">
         <i class="bi bi-info-circle me-1"></i>{{ data_notes|join('；') }}
     </div>
     {% endif %}
 
-    <div class="card shadow-sm mt-4">
-        <div class="card-body text-muted">
-            统计区间：{{ start_date }} 至 {{ end_date }}。命中定义：预警发布后1-3天内门诊量超过社区历史P90阈值。
+    <div class="row g-3 mb-4">
+        <div class="col-xl-3 col-md-6">
+            <div class="aa-kpi">
+                <div class="name">预警总量</div>
+                <div class="value">{{ data_summary.total_alerts }}</div>
+                <div class="sub">筛选后预警条数</div>
+            </div>
+        </div>
+        <div class="col-xl-3 col-md-6">
+            <div class="aa-kpi">
+                <div class="name">可核验预警</div>
+                <div class="value">{{ data_summary.evaluable_alerts }}</div>
+                <div class="sub">样本不足 {{ data_summary.insufficient_alerts }} 条</div>
+            </div>
+        </div>
+        <div class="col-xl-3 col-md-6">
+            <div class="aa-kpi">
+                <div class="name">Alert Hit Rate</div>
+                <div class="value">{% if data_summary.alert_hit_rate is none %}--{% else %}{{ "%.1f"|format(data_summary.alert_hit_rate) }}%{% endif %}</div>
+                <div class="sub">命中 {% if data_summary.evaluable_alerts %}{{ data_summary.hit_alerts }}{% else %}--{% endif %} / 空报 {% if data_summary.evaluable_alerts %}{{ data_summary.false_alarm_alerts }}{% else %}--{% endif %}</div>
+            </div>
+        </div>
+        <div class="col-xl-3 col-md-6">
+            <div class="aa-kpi">
+                <div class="name">事件命中率 POD</div>
+                <div class="value">{% if data_summary.pod is none %}--{% else %}{{ "%.1f"|format(data_summary.pod) }}%{% endif %}</div>
+                <div class="sub">事件 {{ data_summary.event_total }}，漏报 {{ data_summary.event_miss }}</div>
+            </div>
+        </div>
+        <div class="col-xl-3 col-md-6">
+            <div class="aa-kpi">
+                <div class="name">空报率 FAR</div>
+                <div class="value">{% if data_summary.far is none %}--{% else %}{{ "%.1f"|format(data_summary.far) }}%{% endif %}</div>
+                <div class="sub">日级混淆矩阵口径</div>
+            </div>
+        </div>
+        <div class="col-xl-3 col-md-6">
+            <div class="aa-kpi">
+                <div class="name">CSI（Critical Success Index）</div>
+                <div class="value">{% if data_summary.csi is none %}--{% else %}{{ "%.1f"|format(data_summary.csi) }}%{% endif %}</div>
+                <div class="sub">命中 / (命中+空报+漏报)</div>
+            </div>
+        </div>
+        <div class="col-xl-3 col-md-6">
+            <div class="aa-kpi">
+                <div class="name">HSS（Heidke Skill Score）</div>
+                <div class="value">{% if data_summary.hss is none %}--{% else %}{{ "%.3f"|format(data_summary.hss) }}{% endif %}</div>
+                <div class="sub">相对随机预警的技巧评分</div>
+            </div>
+        </div>
+        <div class="col-xl-3 col-md-6">
+            <div class="aa-kpi">
+                <div class="name">Brier Score</div>
+                <div class="value">{% if data_summary.brier_score is none %}--{% else %}{{ "%.3f"|format(data_summary.brier_score) }}{% endif %}</div>
+                <div class="sub">CAP certainty 概率映射样本 {{ data_summary.reliability_n }}</div>
+            </div>
+        </div>
+        <div class="col-xl-3 col-md-6">
+            <div class="aa-kpi">
+                <div class="name">ROC AUC</div>
+                <div class="value">{% if data_summary.roc_auc is none %}--{% else %}{{ "%.3f"|format(data_summary.roc_auc) }}{% endif %}</div>
+                <div class="sub">概率排序能力（越接近1越好）</div>
+            </div>
+        </div>
+        <div class="col-xl-3 col-md-6">
+            <div class="aa-kpi">
+                <div class="name">Sharpness</div>
+                <div class="value">{% if data_summary.sharpness is none %}--{% else %}{{ "%.3f"|format(data_summary.sharpness) }}{% endif %}</div>
+                <div class="sub">概率分布离散度（可分辨能力）</div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row g-3 mb-4">
+        <div class="col-xl-5">
+            <div class="card aa-card h-100">
+                <div class="card-body">
+                    <h6 class="mb-2">混淆矩阵（2×2）</h6>
+                    <div class="table-responsive">
+                        <table class="table table-sm aa-mini-table mb-0">
+                            <thead>
+                                <tr>
+                                    <th>观测 \ 预警</th>
+                                    <th>已预警</th>
+                                    <th>未预警</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <th>事件发生</th>
+                                    <td><strong>{{ contingency.hit }}</strong>（Hit）</td>
+                                    <td><strong>{{ contingency.miss }}</strong>（Miss）</td>
+                                </tr>
+                                <tr>
+                                    <th>事件未发生</th>
+                                    <td><strong>{{ contingency.false_alarm }}</strong>（False Alarm）</td>
+                                    <td><strong>{{ contingency.correct_negative }}</strong>（Correct Negative）</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-xl-7">
+            <div class="card aa-card h-100">
+                <div class="card-body">
+                    <h6 class="mb-2">技能评分（Categorical Verification）</h6>
+                    <div class="table-responsive">
+                        <table class="table table-sm aa-mini-table mb-0">
+                            <thead>
+                                <tr>
+                                    <th>指标</th>
+                                    <th>当前值</th>
+                                    <th>说明</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td>POD</td>
+                                    <td>{% if data_summary.pod is none %}--{% else %}{{ "%.1f"|format(data_summary.pod) }}%{% endif %}</td>
+                                    <td class="text-start">越高越好，表示事件被提前覆盖比例。</td>
+                                </tr>
+                                <tr>
+                                    <td>FAR</td>
+                                    <td>{% if data_summary.far is none %}--{% else %}{{ "%.1f"|format(data_summary.far) }}%{% endif %}</td>
+                                    <td class="text-start">越低越好，表示预警但无事件的比例。</td>
+                                </tr>
+                                <tr>
+                                    <td>CSI</td>
+                                    <td>{% if data_summary.csi is none %}--{% else %}{{ "%.1f"|format(data_summary.csi) }}%{% endif %}</td>
+                                    <td class="text-start">综合命中/空报/漏报，常用于灾害预警核验。</td>
+                                </tr>
+                                <tr>
+                                    <td>ETS</td>
+                                    <td>{% if data_summary.ets is none %}--{% else %}{{ "%.3f"|format(data_summary.ets) }}{% endif %}</td>
+                                    <td class="text-start">考虑随机命中的技巧评分。</td>
+                                </tr>
+                                <tr>
+                                    <td>HSS</td>
+                                    <td>{% if data_summary.hss is none %}--{% else %}{{ "%.3f"|format(data_summary.hss) }}{% endif %}</td>
+                                    <td class="text-start">相对随机基线的整体提升幅度。</td>
+                                </tr>
+                                <tr>
+                                    <td>TSS</td>
+                                    <td>{% if data_summary.tss is none %}--{% else %}{{ "%.3f"|format(data_summary.tss) }}{% endif %}</td>
+                                    <td class="text-start">命中能力与误报倾向的差值（POD-POFD）。</td>
+                                </tr>
+                                <tr>
+                                    <td>Bias</td>
+                                    <td>{% if data_summary.bias is none %}--{% else %}{{ "%.3f"|format(data_summary.bias) }}{% endif %}</td>
+                                    <td class="text-start">&gt;1 偏“多报”，&lt;1 偏“少报”。</td>
+                                </tr>
+                                <tr>
+                                    <td>准确率 Accuracy</td>
+                                    <td>{% if data_summary.accuracy is none %}--{% else %}{{ "%.1f"|format(data_summary.accuracy) }}%{% endif %}</td>
+                                    <td class="text-start">(Hit+Correct Negative)/总样本。</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row g-3 mb-4">
+        <div class="col-xl-6">
+            <div class="card aa-card h-100">
+                <div class="card-body">
+                    <h6 class="mb-2">可靠性图（Reliability Diagram）</h6>
+                    <p class="text-muted small mb-2">将 CAP certainty 映射为概率后，比较预测概率与实际命中频率；理想状态落在对角线附近。</p>
+                    <div class="aa-chart-wrap">
+                        <canvas id="reliabilityChart"></canvas>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-xl-6">
+            <div class="card aa-card h-100">
+                <div class="card-body">
+                    <h6 class="mb-2">阈值敏感性（分位数）</h6>
+                    <p class="text-muted small mb-2">比较不同阈值（P75~P95）下的 Alert Hit Rate / POD / CSI，观察评估结论稳健性。</p>
+                    <div class="aa-chart-wrap">
+                        <canvas id="sensitivityChart"></canvas>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row g-3 mb-4">
+        <div class="col-xl-6">
+            <div class="card aa-card h-100">
+                <div class="card-body">
+                    <h6 class="mb-2">周度校准跟踪（自动）</h6>
+                    <p class="text-muted small mb-2">按 ISO 周聚合，持续跟踪概率校准质量（Brier/Sharpness/ROC）。</p>
+                    <div class="aa-chart-wrap">
+                        <canvas id="weeklyCalibrationChart"></canvas>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-xl-6">
+            <div class="card aa-card h-100">
+                <div class="card-body">
+                    <h6 class="mb-2">周度指标表</h6>
+                    <div class="table-responsive">
+                        <table class="table table-sm aa-mini-table mb-0">
+                            <thead>
+                                <tr>
+                                    <th>周次</th>
+                                    <th>样本</th>
+                                    <th>平均概率</th>
+                                    <th>实际命中率</th>
+                                    <th>Brier</th>
+                                    <th>Sharpness</th>
+                                    <th>ROC AUC</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for row in weekly_calibration_rows %}
+                                <tr>
+                                    <td>{{ row.week_key }}</td>
+                                    <td>{{ row.sample_count }}</td>
+                                    <td>{{ "%.1f"|format(row.avg_probability * 100) }}%</td>
+                                    <td>{{ "%.1f"|format(row.observed_rate * 100) }}%</td>
+                                    <td>{{ "%.3f"|format(row.brier_score) }}</td>
+                                    <td>{{ "%.3f"|format(row.sharpness) }}</td>
+                                    <td>{% if row.roc_auc is none %}--{% else %}{{ "%.3f"|format(row.roc_auc) }}{% endif %}</td>
+                                </tr>
+                                {% else %}
+                                <tr><td colspan="7" class="text-muted">暂无周度样本</td></tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row g-3 mb-4">
+        <div class="col-xl-5">
+            <div class="card aa-card h-100">
+                <div class="card-body">
+                    <h6 class="mb-2">提前量分布（命中预警）</h6>
+                    <div class="aa-chart-wrap">
+                        <canvas id="leadChart"></canvas>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-xl-7">
+            <div class="card aa-card h-100">
+                <div class="card-body">
+                    <h6 class="mb-2">时间趋势（预警/命中/事件）</h6>
+                    <div class="aa-chart-wrap">
+                        <canvas id="trendChart"></canvas>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row g-3 mb-4">
+        <div class="col-xl-6">
+            <div class="card aa-card h-100">
+                <div class="card-body">
+                    <h6 class="mb-2">分预警等级表现</h6>
+                    <div class="table-responsive">
+                        <table class="table table-sm aa-mini-table mb-0">
+                            <thead>
+                                <tr>
+                                    <th>预警等级</th>
+                                    <th>条数</th>
+                                    <th>Hit Rate</th>
+                                    <th>FAR</th>
+                                    <th>平均提前量</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for row in level_rows %}
+                                <tr>
+                                    <td>{{ row.name }}</td>
+                                    <td>{{ row.alerts }}</td>
+                                    <td>{% if row.hit_rate is none %}--{% else %}{{ "%.1f"|format(row.hit_rate * 100) }}%{% endif %}</td>
+                                    <td>{% if row.far is none %}--{% else %}{{ "%.1f"|format(row.far * 100) }}%{% endif %}</td>
+                                    <td>{% if row.avg_lead_hours is none %}--{% else %}{{ "%.1f"|format(row.avg_lead_hours) }}h{% endif %}</td>
+                                </tr>
+                                {% else %}
+                                <tr><td colspan="5" class="text-muted">暂无可核验等级数据</td></tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-xl-6">
+            <div class="card aa-card h-100">
+                <div class="card-body">
+                    <h6 class="mb-2">分预警类型表现</h6>
+                    <div class="table-responsive">
+                        <table class="table table-sm aa-mini-table mb-0">
+                            <thead>
+                                <tr>
+                                    <th>预警类型</th>
+                                    <th>条数</th>
+                                    <th>Hit Rate</th>
+                                    <th>FAR</th>
+                                    <th>平均提前量</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for row in type_rows %}
+                                <tr>
+                                    <td>{{ row.name }}</td>
+                                    <td>{{ row.alerts }}</td>
+                                    <td>{% if row.hit_rate is none %}--{% else %}{{ "%.1f"|format(row.hit_rate * 100) }}%{% endif %}</td>
+                                    <td>{% if row.far is none %}--{% else %}{{ "%.1f"|format(row.far * 100) }}%{% endif %}</td>
+                                    <td>{% if row.avg_lead_hours is none %}--{% else %}{{ "%.1f"|format(row.avg_lead_hours) }}h{% endif %}</td>
+                                </tr>
+                                {% else %}
+                                <tr><td colspan="5" class="text-muted">暂无可核验类型数据</td></tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row g-3 mb-4">
+        <div class="col-xl-6">
+            <div class="card aa-card h-100">
+                <div class="card-body">
+                    <h6 class="mb-2">CAP certainty 校准表</h6>
+                    <div class="table-responsive">
+                        <table class="table table-sm aa-mini-table mb-0">
+                            <thead>
+                                <tr>
+                                    <th>certainty</th>
+                                    <th>映射概率</th>
+                                    <th>样本数</th>
+                                    <th>实际命中率</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for row in certainty_rows %}
+                                <tr>
+                                    <td>{{ row.label }}</td>
+                                    <td>{{ "%.2f"|format(row.probability) }}</td>
+                                    <td>{{ row.alerts }}</td>
+                                    <td>{% if row.observed_rate is none %}--{% else %}{{ "%.1f"|format(row.observed_rate * 100) }}%{% endif %}</td>
+                                </tr>
+                                {% else %}
+                                <tr><td colspan="4" class="text-muted">暂无 certainty 校准样本</td></tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-xl-6">
+            <div class="card aa-card h-100">
+                <div class="card-body">
+                    <h6 class="mb-2">可靠性分箱明细</h6>
+                    <div class="table-responsive">
+                        <table class="table table-sm aa-mini-table mb-0">
+                            <thead>
+                                <tr>
+                                    <th>概率分箱</th>
+                                    <th>样本数</th>
+                                    <th>平均预测概率</th>
+                                    <th>实际命中率</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for row in reliability_rows %}
+                                <tr>
+                                    <td>{{ row.label }}</td>
+                                    <td>{{ row.count }}</td>
+                                    <td>{% if row.avg_probability is none %}--{% else %}{{ "%.1f"|format(row.avg_probability * 100) }}%{% endif %}</td>
+                                    <td>{% if row.observed_rate is none %}--{% else %}{{ "%.1f"|format(row.observed_rate * 100) }}%{% endif %}</td>
+                                </tr>
+                                {% endfor %}
+                                <tr>
+                                    <td><strong>总体</strong></td>
+                                    <td><strong>{{ data_summary.reliability_n }}</strong></td>
+                                    <td><strong>{% if data_summary.climatology is none %}--{% else %}{{ "%.1f"|format(data_summary.climatology) }}%{% endif %}</strong></td>
+                                    <td><strong>Brier Skill {% if data_summary.brier_skill is none %}--{% else %}{{ "%.3f"|format(data_summary.brier_skill) }}{% endif %}</strong></td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row g-3 mb-4">
+        <div class="col-xl-6">
+            <div class="card aa-card h-100">
+                <div class="card-body">
+                    <h6 class="mb-2">重点空报（Top）</h6>
+                    <div class="aa-list">
+                        {% for row in top_false_alerts %}
+                            <div class="aa-list-item">
+                                <div class="small text-muted">{{ row.alert_time_text }} · {{ row.location }} · {{ row.alert_type }} {{ row.alert_level }}</div>
+                                <div>窗口峰值 {{ row.peak_visits }}，阈值 {% if row.threshold is none %}--{% else %}{{ "%.2f"|format(row.threshold) }}{% endif %}，结果：<span class="aa-badge false">{{ row.outcome_label }}</span></div>
+                            </div>
+                        {% else %}
+                            <div class="text-muted small">暂无空报样本。</div>
+                        {% endfor %}
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-xl-6">
+            <div class="card aa-card h-100">
+                <div class="card-body">
+                    <h6 class="mb-2">重点漏报事件（Top）</h6>
+                    <div class="aa-list">
+                        {% for item in miss_rows %}
+                            <div class="aa-list-item">
+                                <div class="small text-muted">{{ item.date_text }} · {{ item.location }}</div>
+                                <div>病例 {{ item.visits }} / 阈值 {{ "%.2f"|format(item.threshold) }}，超阈比 {% if item.exceed_ratio is none %}--{% else %}{{ "%.2f"|format(item.exceed_ratio) }}{% endif %}</div>
+                            </div>
+                        {% else %}
+                            <div class="text-muted small">暂无漏报事件。</div>
+                        {% endfor %}
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="card aa-card mb-4">
+        <div class="card-body">
+            <h6 class="mb-2">预警明细（用于核验追溯）</h6>
+            <div class="aa-table-wrap">
+                <table class="table aa-table">
+                    <thead>
+                        <tr>
+                            <th>时间</th>
+                            <th>地点</th>
+                            <th>类型</th>
+                            <th>等级</th>
+                            <th>certainty/概率</th>
+                            <th>核验结果</th>
+                            <th>阈值</th>
+                            <th>窗口峰值</th>
+                            <th>提前量</th>
+                            <th>峰值/阈值比</th>
+                            <th>CAP语义</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for row in rows %}
+                        <tr>
+                            <td>{{ row.alert_time_text }}</td>
+                            <td>{{ row.location }}</td>
+                            <td>{{ row.alert_type }}</td>
+                            <td>{{ row.alert_level }}</td>
+                            <td>{{ row.certainty_label }} / {{ "%.2f"|format(row.probability) }}</td>
+                            <td>
+                                {% if row.outcome == 'hit' %}
+                                    <span class="aa-badge hit">{{ row.outcome_label }}</span>
+                                {% elif row.outcome == 'false_alarm' %}
+                                    <span class="aa-badge false">{{ row.outcome_label }}</span>
+                                {% else %}
+                                    <span class="aa-badge na">{{ row.outcome_label }}</span>
+                                {% endif %}
+                            </td>
+                            <td>{% if row.threshold is none %}--{% else %}{{ "%.2f"|format(row.threshold) }}{% endif %}</td>
+                            <td>{{ row.peak_visits }}</td>
+                            <td>{% if row.lead_hours is none %}--{% else %}{{ row.lead_hours }}h{% endif %}</td>
+                            <td>{% if row.observed_ratio is none %}--{% else %}{{ "%.2f"|format(row.observed_ratio) }}{% endif %}</td>
+                            <td>{{ row.severity_label }} / {{ row.certainty_label }} / {{ row.urgency_label }}</td>
+                        </tr>
+                        {% else %}
+                        <tr><td colspan="11" class="text-muted">暂无预警记录</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <div class="card aa-card">
+        <div class="card-body text-muted small">
+            方法说明：
+            1) 分类核验基于日级网格（社区/全局 × 日期）构建 2×2 混淆矩阵并计算 POD/FAR/CSI/ETS/HSS/TSS。
+            2) 预警命中按“发布后 0~{{ follow_days }} 天内是否超阈值”定义；阈值取病例日序列分位数（当前 P{{ (threshold_q * 100)|round(0)|int }}）。
+            3) 可靠性图将 CAP certainty 映射为概率并使用 Brier Score/Brier Skill 评估概率一致性。
         </div>
     </div>
 </div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+const chartPayload = {{ chart_payload|tojson }};
+
+function createLineColor(alpha) {
+    return `rgba(37, 99, 235, ${alpha})`;
+}
+
+function drawReliabilityChart() {
+    const canvas = document.getElementById('reliabilityChart');
+    if (!canvas || !window.Chart) {
+        return;
+    }
+    const points = (chartPayload.reliability && chartPayload.reliability.points) || [];
+    const pointData = points.map((item) => ({
+        x: item.x,
+        y: item.y,
+        label: item.label,
+        count: item.count
+    }));
+
+    new Chart(canvas.getContext('2d'), {
+        type: 'scatter',
+        data: {
+            datasets: [
+                {
+                    type: 'line',
+                    label: '理想校准线',
+                    data: [{x: 0, y: 0}, {x: 100, y: 100}],
+                    borderColor: '#64748b',
+                    borderDash: [5, 5],
+                    pointRadius: 0,
+                    tension: 0
+                },
+                {
+                    label: '分箱观测点',
+                    data: pointData,
+                    backgroundColor: 'rgba(30, 64, 175, 0.65)',
+                    borderColor: '#1e40af',
+                    pointRadius: (ctx) => {
+                        const point = ctx.raw || {};
+                        const count = Number(point.count || 0);
+                        return Math.max(4, Math.min(10, 3 + count));
+                    }
+                }
+            ]
+        },
+        options: {
+            maintainAspectRatio: false,
+            responsive: true,
+            scales: {
+                x: {
+                    type: 'linear',
+                    min: 0,
+                    max: 100,
+                    title: {display: true, text: '平均预测概率 (%)'}
+                },
+                y: {
+                    min: 0,
+                    max: 100,
+                    title: {display: true, text: '实际命中率 (%)'}
+                }
+            },
+            plugins: {
+                tooltip: {
+                    callbacks: {
+                        label: function(context) {
+                            const raw = context.raw || {};
+                            if (!raw.label) {
+                                return `${context.parsed.x.toFixed(1)}%, ${context.parsed.y.toFixed(1)}%`;
+                            }
+                            return `${raw.label} | 预测 ${context.parsed.x.toFixed(1)}% | 实际 ${context.parsed.y.toFixed(1)}% | n=${raw.count}`;
+                        }
+                    }
+                }
+            }
+        }
+    });
+}
+
+function drawSensitivityChart() {
+    const canvas = document.getElementById('sensitivityChart');
+    if (!canvas || !window.Chart) {
+        return;
+    }
+    const payload = chartPayload.sensitivity || {labels: [], alert_hit_rate: [], pod: [], csi: []};
+
+    new Chart(canvas.getContext('2d'), {
+        type: 'line',
+        data: {
+            labels: payload.labels || [],
+            datasets: [
+                {
+                    label: 'Alert Hit Rate',
+                    data: payload.alert_hit_rate || [],
+                    borderColor: '#2563eb',
+                    backgroundColor: createLineColor(0.12),
+                    tension: 0.25,
+                    pointRadius: 3
+                },
+                {
+                    label: 'POD',
+                    data: payload.pod || [],
+                    borderColor: '#16a34a',
+                    backgroundColor: 'rgba(22, 163, 74, 0.12)',
+                    tension: 0.25,
+                    pointRadius: 3
+                },
+                {
+                    label: 'CSI',
+                    data: payload.csi || [],
+                    borderColor: '#dc2626',
+                    backgroundColor: 'rgba(220, 38, 38, 0.12)',
+                    tension: 0.25,
+                    pointRadius: 3
+                }
+            ]
+        },
+        options: {
+            maintainAspectRatio: false,
+            responsive: true,
+            scales: {
+                y: {
+                    min: 0,
+                    max: 100,
+                    ticks: {
+                        callback: (value) => `${value}%`
+                    }
+                }
+            }
+        }
+    });
+}
+
+function drawLeadChart() {
+    const canvas = document.getElementById('leadChart');
+    if (!canvas || !window.Chart) {
+        return;
+    }
+    const payload = chartPayload.lead || {labels: [], counts: []};
+    new Chart(canvas.getContext('2d'), {
+        type: 'bar',
+        data: {
+            labels: payload.labels || [],
+            datasets: [{
+                label: '命中预警数',
+                data: payload.counts || [],
+                backgroundColor: 'rgba(59, 130, 246, 0.55)',
+                borderColor: '#2563eb',
+                borderWidth: 1.2
+            }]
+        },
+        options: {
+            maintainAspectRatio: false,
+            responsive: true,
+            plugins: {
+                legend: {display: false}
+            },
+            scales: {
+                y: {
+                    beginAtZero: true,
+                    ticks: {precision: 0}
+                }
+            }
+        }
+    });
+}
+
+function drawTrendChart() {
+    const canvas = document.getElementById('trendChart');
+    if (!canvas || !window.Chart) {
+        return;
+    }
+    const payload = chartPayload.trend || {labels: [], alerts: [], hits: [], events: [], warned_events: []};
+
+    new Chart(canvas.getContext('2d'), {
+        type: 'line',
+        data: {
+            labels: payload.labels || [],
+            datasets: [
+                {
+                    label: '可核验预警',
+                    data: payload.alerts || [],
+                    borderColor: '#2563eb',
+                    backgroundColor: 'rgba(37, 99, 235, 0.10)',
+                    tension: 0.25,
+                    pointRadius: 1.8
+                },
+                {
+                    label: '命中预警',
+                    data: payload.hits || [],
+                    borderColor: '#16a34a',
+                    backgroundColor: 'rgba(22, 163, 74, 0.10)',
+                    tension: 0.25,
+                    pointRadius: 1.8
+                },
+                {
+                    label: '观测事件',
+                    data: payload.events || [],
+                    borderColor: '#dc2626',
+                    backgroundColor: 'rgba(220, 38, 38, 0.10)',
+                    tension: 0.25,
+                    pointRadius: 1.8
+                },
+                {
+                    label: '被覆盖事件',
+                    data: payload.warned_events || [],
+                    borderColor: '#f59e0b',
+                    backgroundColor: 'rgba(245, 158, 11, 0.10)',
+                    tension: 0.25,
+                    pointRadius: 1.8
+                }
+            ]
+        },
+        options: {
+            maintainAspectRatio: false,
+            responsive: true,
+            scales: {
+                y: {
+                    beginAtZero: true,
+                    ticks: {precision: 0}
+                },
+                x: {
+                    ticks: {maxTicksLimit: 16}
+                }
+            }
+        }
+    });
+}
+
+function drawWeeklyCalibrationChart() {
+    const canvas = document.getElementById('weeklyCalibrationChart');
+    if (!canvas || !window.Chart) {
+        return;
+    }
+    const payload = chartPayload.weekly_calibration || {labels: [], brier: [], sharpness: [], roc_auc: []};
+    new Chart(canvas.getContext('2d'), {
+        type: 'line',
+        data: {
+            labels: payload.labels || [],
+            datasets: [
+                {
+                    label: 'Brier',
+                    data: payload.brier || [],
+                    borderColor: '#dc2626',
+                    backgroundColor: 'rgba(220, 38, 38, 0.12)',
+                    yAxisID: 'y',
+                    tension: 0.22,
+                    pointRadius: 2
+                },
+                {
+                    label: 'Sharpness',
+                    data: payload.sharpness || [],
+                    borderColor: '#2563eb',
+                    backgroundColor: 'rgba(37, 99, 235, 0.12)',
+                    yAxisID: 'y',
+                    tension: 0.22,
+                    pointRadius: 2
+                },
+                {
+                    label: 'ROC AUC',
+                    data: payload.roc_auc || [],
+                    borderColor: '#16a34a',
+                    backgroundColor: 'rgba(22, 163, 74, 0.12)',
+                    yAxisID: 'y2',
+                    tension: 0.22,
+                    pointRadius: 2
+                }
+            ]
+        },
+        options: {
+            maintainAspectRatio: false,
+            responsive: true,
+            scales: {
+                y: {
+                    beginAtZero: true,
+                    suggestedMax: 0.5,
+                    position: 'left'
+                },
+                y2: {
+                    beginAtZero: true,
+                    min: 0,
+                    max: 1,
+                    position: 'right',
+                    grid: {drawOnChartArea: false}
+                }
+            }
+        }
+    });
+}
+
+document.addEventListener('DOMContentLoaded', function() {
+    drawReliabilityChart();
+    drawSensitivityChart();
+    drawLeadChart();
+    drawTrendChart();
+    drawWeeklyCalibrationChart();
+});
+</script>
 {% endblock %}

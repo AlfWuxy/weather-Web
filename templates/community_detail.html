@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% set needs_chartjs = true %}
 
 {% block title %}社区详情 - 天气健康风险预测系统{% endblock %}
 
@@ -212,7 +213,12 @@ document.addEventListener('DOMContentLoaded', function () {
     if (copyBtn && messageEl) {
         copyBtn.addEventListener('click', async () => {
             try {
-                await navigator.clipboard.writeText(messageEl.value);
+                const ok = window.CWClipboard && typeof window.CWClipboard.copyText === 'function'
+                    ? await window.CWClipboard.copyText(messageEl.value)
+                    : false;
+                if (!ok) {
+                    throw new Error('copy_failed');
+                }
                 copyBtn.classList.add('btn-success');
                 copyBtn.textContent = '已复制';
                 setTimeout(() => {

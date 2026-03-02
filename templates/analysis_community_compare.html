@@ -1,28 +1,232 @@
 {% extends "base.html" %}
+{% set needs_chartjs = true %}
 
-{% block title %}社区对比分析 - 天气健康风险预测系统{% endblock %}
+{% block title %}社区对比分析{% endblock %}
+
+{% block extra_css %}
+<style>
+.community-compare-page {
+    --cc-border: #cbd5df;
+    --cc-muted: #64748b;
+    --cc-soft-bg: #f8fafc;
+}
+
+.community-compare-page .cc-card {
+    border: 1px dashed var(--cc-border);
+    border-radius: 14px;
+    background: #fff;
+}
+
+.community-compare-page .cc-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    border: 1px solid var(--cc-border);
+    border-radius: 999px;
+    background: var(--cc-soft-bg);
+    color: var(--cc-muted);
+    padding: 4px 10px;
+    font-size: 12px;
+}
+
+.community-compare-page .cc-kpi {
+    border: 1px dashed var(--cc-border);
+    border-radius: 12px;
+    padding: 12px;
+    background: #fff;
+    height: 100%;
+}
+
+.community-compare-page .cc-kpi .name {
+    color: var(--cc-muted);
+    font-size: 12px;
+}
+
+.community-compare-page .cc-kpi .value {
+    margin-top: 4px;
+    font-size: 24px;
+    font-weight: 700;
+    color: #1f2937;
+}
+
+.community-compare-page .cc-kpi .sub {
+    margin-top: 3px;
+    font-size: 12px;
+    color: var(--cc-muted);
+}
+
+.community-compare-page .cc-chart-wrap {
+    position: relative;
+    width: 100%;
+    height: 340px;
+}
+
+.community-compare-page .cc-chart-wrap canvas {
+    width: 100% !important;
+    height: 100% !important;
+}
+
+.community-compare-page .cc-table-wrap {
+    overflow: auto;
+    border: 1px solid #d7e1ea;
+    border-radius: 10px;
+}
+
+.community-compare-page .cc-table {
+    min-width: 1250px;
+    margin-bottom: 0;
+}
+
+.community-compare-page .cc-table th,
+.community-compare-page .cc-table td {
+    border: 1px solid #dde5ed;
+    text-align: center;
+    vertical-align: middle;
+    white-space: nowrap;
+}
+
+.community-compare-page .cc-table thead th {
+    background: #f1f5f9;
+    position: sticky;
+    top: 0;
+    z-index: 1;
+}
+
+.community-compare-page .cc-row-clickable {
+    cursor: pointer;
+}
+
+.community-compare-page .cc-row-clickable:hover {
+    background: #f8fafc;
+}
+
+.community-compare-page .cc-row-clickable.is-selected {
+    box-shadow: inset 0 0 0 2px #1f2937;
+}
+
+.community-compare-page .cc-badge {
+    border-radius: 999px;
+    padding: 2px 8px;
+    font-size: 11px;
+    border: 1px solid #d2dce5;
+    background: #f8fafc;
+}
+
+.community-compare-page .cc-badge.alert {
+    color: #b45309;
+    border-color: #fcd34d;
+    background: #fffbeb;
+}
+
+.community-compare-page .cc-badge.danger {
+    color: #b91c1c;
+    border-color: #fecaca;
+    background: #fef2f2;
+}
+
+.community-compare-page .cc-detail {
+    border: 1px dashed var(--cc-border);
+    border-radius: 12px;
+    padding: 12px;
+    background: #fff;
+    height: 100%;
+}
+
+.community-compare-page .cc-detail-label {
+    color: var(--cc-muted);
+    font-size: 12px;
+}
+
+.community-compare-page .cc-detail-value {
+    font-size: 15px;
+    color: #1f2937;
+    font-weight: 600;
+}
+
+.community-compare-page .cc-list li {
+    margin-bottom: 6px;
+}
+
+@media (max-width: 992px) {
+    .community-compare-page .cc-chart-wrap {
+        height: 280px;
+    }
+}
+</style>
+{% endblock %}
 
 {% block content %}
-<div class="container">
+{% set certainty_map = {'high': '高', 'medium': '中', 'low': '低', 'insufficient': '样本不足'} %}
+<div class="container community-compare-page">
     <div class="row mb-4">
-        <div class="col-12">
-            <h2><i class="bi bi-bar-chart"></i> 社区对比分析</h2>
-            <p class="text-muted">对比不同村庄的健康风险差异</p>
+        <div class="col-12 d-flex flex-wrap justify-content-between align-items-start gap-2">
+            <div>
+                <h2 class="mb-1"><i class="bi bi-diagram-3 me-1"></i>社区对比分析</h2>
+                <p class="text-muted mb-0">按人时分母标准化，比较不同村庄/社区的健康风险差异。</p>
+            </div>
+            <div class="d-flex flex-wrap gap-2">
+                <span class="cc-chip">方法：SIR + 95%CI</span>
+                <span class="cc-chip">分层：{{ stratum_labels[stratum] }}</span>
+                <span class="cc-chip">平滑强度 α={{ smoothing_alpha }}</span>
+            </div>
         </div>
     </div>
 
-    <div class="card shadow-sm mb-4">
+    <div class="card cc-card mb-4">
         <div class="card-body">
             <form method="POST" action="{{ url_for('analysis.analysis_community_compare') }}">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <div class="row g-3">
-                    <div class="col-md-6">
+                    <div class="col-xl-2 col-md-4">
                         <label class="form-label">开始日期</label>
                         <input type="date" class="form-control" name="start_date" value="{{ start_date }}">
                     </div>
-                    <div class="col-md-6">
+                    <div class="col-xl-2 col-md-4">
                         <label class="form-label">结束日期</label>
                         <input type="date" class="form-control" name="end_date" value="{{ end_date }}">
+                    </div>
+                    <div class="col-xl-2 col-md-4">
+                        <label class="form-label">疾病分类</label>
+                        <select class="form-select" name="disease">
+                            <option value="">全部</option>
+                            {% for disease in diseases %}
+                                <option value="{{ disease }}" {% if disease_filter == disease %}selected{% endif %}>{{ disease }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-xl-2 col-md-4">
+                        <label class="form-label">人群分层</label>
+                        <select class="form-select" name="stratum">
+                            <option value="all" {% if stratum == 'all' %}selected{% endif %}>全人群</option>
+                            <option value="elderly" {% if stratum == 'elderly' %}selected{% endif %}>老年人(>=65)</option>
+                            <option value="non_elderly" {% if stratum == 'non_elderly' %}selected{% endif %}>非老年(&lt;65)</option>
+                            <option value="male" {% if stratum == 'male' %}selected{% endif %}>男性</option>
+                            <option value="female" {% if stratum == 'female' %}selected{% endif %}>女性</option>
+                        </select>
+                    </div>
+                    <div class="col-xl-2 col-md-4">
+                        <label class="form-label">最小样本天数</label>
+                        <select class="form-select" name="min_days">
+                            {% for option in min_days_options %}
+                                <option value="{{ option }}" {% if min_days == option %}selected{% endif %}>{{ option }} 天</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-xl-1 col-md-4">
+                        <label class="form-label">平滑 α</label>
+                        <select class="form-select" name="smoothing_alpha">
+                            {% for option in smoothing_alpha_options %}
+                                <option value="{{ option }}" {% if smoothing_alpha == option %}selected{% endif %}>{{ option }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-xl-1 col-md-4">
+                        <label class="form-label">排序条数</label>
+                        <select class="form-select" name="top_n">
+                            {% for option in top_n_options %}
+                                <option value="{{ option }}" {% if top_n == option %}selected{% endif %}>{{ option }}</option>
+                            {% endfor %}
+                        </select>
                     </div>
                 </div>
                 <div class="mt-3">
@@ -38,81 +242,591 @@
     </div>
     {% endif %}
 
-    <div class="card shadow-sm mb-4">
-        <div class="card-body">
-            <div class="row g-3 text-center">
-                <div class="col-md-6">
-                    <div class="text-muted small">社区数量</div>
-                    <div>{{ data_summary.community_count }}</div>
+    <div class="row g-3 mb-4">
+        <div class="col-xl-2 col-md-4">
+            <div class="cc-kpi">
+                <div class="name">对比社区数</div>
+                <div class="value">{{ data_summary.community_count }}</div>
+                <div class="sub">有分母 {{ data_summary.population_covered_count }} 个</div>
+            </div>
+        </div>
+        <div class="col-xl-2 col-md-4">
+            <div class="cc-kpi">
+                <div class="name">总病例</div>
+                <div class="value">{{ data_summary.total_visits }}</div>
+                <div class="sub">窗口 {{ data_summary.total_days }} 天</div>
+            </div>
+        </div>
+        <div class="col-xl-2 col-md-4">
+            <div class="cc-kpi">
+                <div class="name">覆盖人口</div>
+                <div class="value">{{ data_summary.total_population }}</div>
+                <div class="sub">来自有分母社区</div>
+            </div>
+        </div>
+        <div class="col-xl-2 col-md-4">
+            <div class="cc-kpi">
+                <div class="name">基准发病率</div>
+                <div class="value">
+                    {% if data_summary.baseline_rate_per_10k_pd is none %}--{% else %}{{ "%.2f"|format(data_summary.baseline_rate_per_10k_pd) }}{% endif %}
                 </div>
-                <div class="col-md-6">
-                    <div class="text-muted small">总门诊量</div>
-                    <div>{{ data_summary.total_visits }}</div>
+                <div class="sub">每万人·日</div>
+            </div>
+        </div>
+        <div class="col-xl-2 col-md-4">
+            <div class="cc-kpi">
+                <div class="name">漏斗图离群</div>
+                <div class="value">{{ data_summary.outlier_95 }}</div>
+                <div class="sub">其中 99.8% 外：{{ data_summary.outlier_998 }}</div>
+            </div>
+        </div>
+        <div class="col-xl-2 col-md-4">
+            <div class="cc-kpi">
+                <div class="name">不平等指标</div>
+                <div class="value">
+                    {% if data_summary.p90_p10_ratio is none %}--{% else %}{{ "%.2f"|format(data_summary.p90_p10_ratio) }}{% endif %}
+                </div>
+                <div class="sub">P90/P10；Gini {% if data_summary.gini_rate is none %}--{% else %}{{ "%.2f"|format(data_summary.gini_rate) }}{% endif %}</div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row g-3 mb-4">
+        <div class="col-xl-7">
+            <div class="card cc-card h-100">
+                <div class="card-body">
+                    <div class="d-flex justify-content-between align-items-center mb-2">
+                        <h6 class="mb-0">社区间标准化风险排序（SIR）</h6>
+                        <span class="cc-chip">柱 = 平滑SIR；误差线 = SIR 95%CI</span>
+                    </div>
+                    <div class="cc-chart-wrap">
+                        <canvas id="rankChart"></canvas>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-xl-5">
+            <div class="card cc-card h-100">
+                <div class="card-body">
+                    <div class="d-flex justify-content-between align-items-center mb-2">
+                        <h6 class="mb-0">漏斗图（Funnel Plot）</h6>
+                        <span class="cc-chip">控制线：95% / 99.8%</span>
+                    </div>
+                    <div class="cc-chart-wrap">
+                        <canvas id="funnelChart"></canvas>
+                    </div>
                 </div>
             </div>
         </div>
     </div>
 
-    <div class="card shadow-sm mb-4">
-        <div class="card-body">
-            <canvas id="communityChart" height="120"></canvas>
+    <div class="row g-3 mb-4">
+        <div class="col-xl-6">
+            <div class="card cc-card h-100">
+                <div class="card-body">
+                    <h6 class="mb-2">高风险社区（Top 5）</h6>
+                    <ol class="cc-list mb-0">
+                        {% for row in top_risk_communities %}
+                            <li>
+                                <strong>{{ row.name }}</strong>
+                                {% if row.smoothed_sir is not none %}
+                                    平滑SIR {{ "%.2f"|format(row.smoothed_sir) }}
+                                {% elif row.sir is not none %}
+                                    SIR {{ "%.2f"|format(row.sir) }}
+                                {% else %}
+                                    SIR --
+                                {% endif %}
+                                ，病例 {{ row.observed }}
+                            </li>
+                        {% else %}
+                            <li class="text-muted">暂无可排序数据</li>
+                        {% endfor %}
+                    </ol>
+                    <hr>
+                    <h6 class="mb-2">低风险社区（Bottom 5）</h6>
+                    <ol class="cc-list mb-0">
+                        {% for row in low_risk_communities %}
+                            <li>
+                                <strong>{{ row.name }}</strong>
+                                {% if row.smoothed_sir is not none %}
+                                    平滑SIR {{ "%.2f"|format(row.smoothed_sir) }}
+                                {% elif row.sir is not none %}
+                                    SIR {{ "%.2f"|format(row.sir) }}
+                                {% else %}
+                                    SIR --
+                                {% endif %}
+                                ，病例 {{ row.observed }}
+                            </li>
+                        {% else %}
+                            <li class="text-muted">暂无可排序数据</li>
+                        {% endfor %}
+                    </ol>
+                </div>
+            </div>
+        </div>
+        <div class="col-xl-6">
+            <div class="cc-detail" id="communityDetail">
+                <h6 class="mb-3">选中社区详情</h6>
+                <div class="row g-2">
+                    <div class="col-md-6">
+                        <div class="cc-detail-label">社区</div>
+                        <div class="cc-detail-value" id="ccDetailName">--</div>
+                    </div>
+                    <div class="col-md-6">
+                        <div class="cc-detail-label">排名</div>
+                        <div class="cc-detail-value" id="ccDetailRank">--</div>
+                    </div>
+                    <div class="col-md-6">
+                        <div class="cc-detail-label">病例 / 期望</div>
+                        <div class="cc-detail-value" id="ccDetailOE">--</div>
+                    </div>
+                    <div class="col-md-6">
+                        <div class="cc-detail-label">SIR（95%CI）</div>
+                        <div class="cc-detail-value" id="ccDetailSir">--</div>
+                    </div>
+                    <div class="col-md-6">
+                        <div class="cc-detail-label">平滑SIR</div>
+                        <div class="cc-detail-value" id="ccDetailSmoothed">--</div>
+                    </div>
+                    <div class="col-md-6">
+                        <div class="cc-detail-label">发病率（每万人·日）</div>
+                        <div class="cc-detail-value" id="ccDetailRate">--</div>
+                    </div>
+                    <div class="col-md-6">
+                        <div class="cc-detail-label">漏斗图判定</div>
+                        <div class="cc-detail-value" id="ccDetailFunnel">--</div>
+                    </div>
+                    <div class="col-md-6">
+                        <div class="cc-detail-label">建议动作</div>
+                        <div class="cc-detail-value" id="ccDetailAction">--</div>
+                    </div>
+                </div>
+            </div>
         </div>
     </div>
 
-    <div class="card shadow-sm">
+    <div class="card cc-card mb-4">
         <div class="card-body">
-            <div class="table-responsive">
-                <table class="table table-striped align-middle">
+            <div class="d-flex justify-content-between align-items-center mb-2">
+                <h6 class="mb-0">社区对比明细（标准化与不确定性）</h6>
+                <span class="text-muted small">点击任一行可在右侧查看详情</span>
+            </div>
+            <div class="cc-table-wrap">
+                <table class="table cc-table">
                     <thead>
                         <tr>
+                            <th>排名</th>
                             <th>社区</th>
-                            <th>门诊量</th>
+                            <th>病例 O</th>
+                            <th>期望 E</th>
+                            <th>SIR（95%CI）</th>
+                            <th>平滑SIR</th>
+                            <th>发病率<br>每万人·日</th>
+                            <th>超额病例 O-E</th>
+                            <th>确定性</th>
+                            <th>漏斗判定</th>
+                            <th>动作建议</th>
                             <th>人口</th>
+                            <th>脆弱性</th>
                             <th>风险等级</th>
-                            <th>脆弱性指数</th>
                         </tr>
                     </thead>
                     <tbody>
                         {% for row in stats %}
-                        <tr>
-                            <td>{{ row.name }}</td>
-                            <td>{{ row.visits }}</td>
-                            <td>{{ row.population }}</td>
-                            <td>{{ row.risk_level }}</td>
-                            <td>{{ '%.2f'|format(row.vulnerability_index) }}</td>
-                        </tr>
+                            {% if row.funnel_flag == 'outside_998' %}
+                                {% set funnel_cls = 'danger' %}
+                            {% elif row.funnel_flag == 'outside_95' %}
+                                {% set funnel_cls = 'alert' %}
+                            {% else %}
+                                {% set funnel_cls = '' %}
+                            {% endif %}
+                            <tr class="cc-row-clickable" data-name="{{ row.name }}">
+                                <td>{{ row.rank }}</td>
+                                <td>{{ row.name }}</td>
+                                <td>{{ row.observed }}</td>
+                                <td>{% if row.expected is none %}--{% else %}{{ "%.2f"|format(row.expected) }}{% endif %}</td>
+                                <td>
+                                    {% if row.sir is none %}
+                                        --
+                                    {% else %}
+                                        {{ "%.2f"|format(row.sir) }}
+                                        {% if row.ci_low is not none and row.ci_high is not none %}
+                                            <br><span class="text-muted small">[{{ "%.2f"|format(row.ci_low) }}, {{ "%.2f"|format(row.ci_high) }}]</span>
+                                        {% endif %}
+                                    {% endif %}
+                                </td>
+                                <td>{% if row.smoothed_sir is none %}--{% else %}{{ "%.2f"|format(row.smoothed_sir) }}{% endif %}</td>
+                                <td>{% if row.incidence_rate is none %}--{% else %}{{ "%.2f"|format(row.incidence_rate) }}{% endif %}</td>
+                                <td>{% if row.excess_cases is none %}--{% else %}{{ "%.2f"|format(row.excess_cases) }}{% endif %}</td>
+                                <td>{{ certainty_map[row.certainty] }}</td>
+                                <td><span class="cc-badge {{ funnel_cls }}">{{ funnel_flag_labels[row.funnel_flag] }}</span></td>
+                                <td>
+                                    {% if row.action == '立即行动' %}
+                                        <span class="cc-badge danger">{{ row.action }}</span>
+                                    {% elif row.action == '准备干预' %}
+                                        <span class="cc-badge alert">{{ row.action }}</span>
+                                    {% else %}
+                                        <span class="cc-badge">{{ row.action }}</span>
+                                    {% endif %}
+                                </td>
+                                <td>{% if row.population %}{{ row.population }}{% else %}--{% endif %}</td>
+                                <td>{% if row.vulnerability_index is none %}--{% else %}{{ "%.2f"|format(row.vulnerability_index) }}{% endif %}</td>
+                                <td>{{ row.risk_level }}</td>
+                            </tr>
+                        {% else %}
+                            <tr><td colspan="14" class="text-muted">暂无可分析数据</td></tr>
                         {% endfor %}
                     </tbody>
                 </table>
             </div>
         </div>
     </div>
+
+    <div class="card cc-card">
+        <div class="card-body">
+            <h6 class="mb-2">方法说明（本页实现）</h6>
+            <ul class="mb-0 text-muted">
+                <li>采用人时分母（人口 × 观察天数）计算发病率，避免仅比病例总数造成的大社区偏置。</li>
+                <li>采用 SIR（Observed / Expected）评估相对风险，并提供 95% 置信区间。</li>
+                <li>采用经验平滑（平滑参数 α）稳定小样本社区的波动，减少“极端值误判”。</li>
+                <li>采用漏斗图控制限（95%/99.8%）识别显著离群社区，并提供 P90/P10 与 Gini 的不平等概览。</li>
+            </ul>
+        </div>
+    </div>
 </div>
+{% endblock %}
 
 {% block extra_js %}
 <script>
-const labels = {{ labels|tojson }};
-const values = {{ values|tojson }};
+const rankingPayload = {{ ranking_payload|tojson }};
+const funnelPoints = {{ funnel_points|tojson }};
+const funnelUpper95 = {{ funnel_upper_95|tojson }};
+const funnelLower95 = {{ funnel_lower_95|tojson }};
+const funnelUpper998 = {{ funnel_upper_998|tojson }};
+const funnelLower998 = {{ funnel_lower_998|tojson }};
+const funnelCenter = {{ funnel_center|tojson }};
+const allRows = {{ stats|tojson }};
+const funnelFlagLabels = {{ funnel_flag_labels|tojson }};
+const funnelYMax = {{ funnel_y_max|tojson }};
 
-const ctx = document.getElementById('communityChart').getContext('2d');
-new Chart(ctx, {
-    type: 'bar',
-    data: {
-        labels: labels,
-        datasets: [{
-            label: '门诊量',
-            data: values,
-            backgroundColor: 'rgba(255, 159, 64, 0.5)',
-            borderColor: 'rgba(255, 159, 64, 1)'
-        }]
-    },
-    options: {
-        responsive: true,
-        scales: {
-            y: { beginAtZero: true }
-        }
+function fmtNumber(value, digits = 2) {
+    if (value === null || value === undefined) {
+        return '--';
     }
+    const num = Number(value);
+    if (!Number.isFinite(num)) {
+        return '--';
+    }
+    return num.toFixed(digits);
+}
+
+function drawRankChart() {
+    const canvas = document.getElementById('rankChart');
+    if (!canvas || !window.Chart) {
+        return;
+    }
+
+    const ccErrorBars = {
+        id: 'ccErrorBars',
+        afterDatasetsDraw(chart, _args, pluginOptions) {
+            const datasetIndex = (pluginOptions && pluginOptions.datasetIndex) || 0;
+            const ciLow = (pluginOptions && pluginOptions.ciLow) || [];
+            const ciHigh = (pluginOptions && pluginOptions.ciHigh) || [];
+            const color = (pluginOptions && pluginOptions.color) || '#1f2937';
+            const meta = chart.getDatasetMeta(datasetIndex);
+            const yScale = chart.scales.y;
+            if (!meta || !yScale) {
+                return;
+            }
+            const capWidth = 5;
+            const ctx = chart.ctx;
+            ctx.save();
+            ctx.strokeStyle = color;
+            ctx.lineWidth = 1;
+            for (let i = 0; i < meta.data.length; i += 1) {
+                const low = ciLow[i];
+                const high = ciHigh[i];
+                if (low === null || high === null || low === undefined || high === undefined) {
+                    continue;
+                }
+                const element = meta.data[i];
+                if (!element) {
+                    continue;
+                }
+                const x = element.x;
+                const yLow = yScale.getPixelForValue(low);
+                const yHigh = yScale.getPixelForValue(high);
+                ctx.beginPath();
+                ctx.moveTo(x, yLow);
+                ctx.lineTo(x, yHigh);
+                ctx.stroke();
+                ctx.beginPath();
+                ctx.moveTo(x - capWidth, yLow);
+                ctx.lineTo(x + capWidth, yLow);
+                ctx.moveTo(x - capWidth, yHigh);
+                ctx.lineTo(x + capWidth, yHigh);
+                ctx.stroke();
+            }
+            ctx.restore();
+        }
+    };
+
+    Chart.register(ccErrorBars);
+    const values = (rankingPayload.values || []).map(item => (item === null ? null : Number(item)));
+    const ciHigh = (rankingPayload.ci_high || []).filter(item => item !== null && item !== undefined).map(Number);
+    const valueMax = values.filter(item => item !== null && item !== undefined).reduce((acc, value) => Math.max(acc, value), 1.0);
+    const ciMax = ciHigh.reduce((acc, value) => Math.max(acc, value), valueMax);
+
+    new Chart(canvas.getContext('2d'), {
+        type: 'bar',
+        data: {
+            labels: rankingPayload.labels || [],
+            datasets: [
+                {
+                    label: '平滑SIR',
+                    data: values,
+                    borderColor: '#1f6f8b',
+                    backgroundColor: 'rgba(31, 111, 139, 0.45)',
+                    borderWidth: 1.2
+                },
+                {
+                    type: 'line',
+                    label: '基线=1',
+                    data: (rankingPayload.labels || []).map(() => 1),
+                    borderColor: '#ef4444',
+                    borderWidth: 1.1,
+                    pointRadius: 0,
+                    borderDash: [6, 4]
+                }
+            ]
+        },
+        options: {
+            maintainAspectRatio: false,
+            responsive: true,
+            scales: {
+                y: {
+                    beginAtZero: true,
+                    suggestedMax: Math.max(1.6, ciMax * 1.12),
+                    title: {
+                        display: true,
+                        text: '风险比（SIR）'
+                    }
+                },
+                x: {
+                    ticks: {
+                        maxRotation: 40,
+                        minRotation: 0
+                    }
+                }
+            },
+            plugins: {
+                legend: {
+                    display: true
+                },
+                tooltip: {
+                    callbacks: {
+                        label(context) {
+                            if (context.datasetIndex !== 0) {
+                                return context.dataset.label || '';
+                            }
+                            const i = context.dataIndex;
+                            const observed = rankingPayload.observed ? rankingPayload.observed[i] : null;
+                            const expected = rankingPayload.expected ? rankingPayload.expected[i] : null;
+                            const ciLow = rankingPayload.ci_low ? rankingPayload.ci_low[i] : null;
+                            const ciHigh = rankingPayload.ci_high ? rankingPayload.ci_high[i] : null;
+                            const rate = rankingPayload.incidence_rate ? rankingPayload.incidence_rate[i] : null;
+                            return [
+                                `平滑SIR: ${fmtNumber(context.raw, 2)}`,
+                                `SIR 95%CI: [${fmtNumber(ciLow, 2)}, ${fmtNumber(ciHigh, 2)}]`,
+                                `病例/期望: ${observed === null || observed === undefined ? '--' : observed} / ${fmtNumber(expected, 2)}`,
+                                `发病率: ${fmtNumber(rate, 2)} 每万人·日`
+                            ];
+                        }
+                    }
+                },
+                ccErrorBars: {
+                    datasetIndex: 0,
+                    ciLow: rankingPayload.ci_low || [],
+                    ciHigh: rankingPayload.ci_high || [],
+                    color: '#1f2937'
+                }
+            }
+        }
+    });
+}
+
+function drawFunnelChart() {
+    const canvas = document.getElementById('funnelChart');
+    if (!canvas || !window.Chart) {
+        return;
+    }
+
+    new Chart(canvas.getContext('2d'), {
+        type: 'scatter',
+        data: {
+            datasets: [
+                {
+                    label: '社区点',
+                    data: funnelPoints,
+                    pointRadius: 4.5,
+                    pointHoverRadius: 6,
+                    pointBackgroundColor(context) {
+                        const raw = context.raw || {};
+                        if (raw.funnel_flag === 'outside_998') {
+                            return '#dc2626';
+                        }
+                        if (raw.funnel_flag === 'outside_95') {
+                            return '#d97706';
+                        }
+                        return '#1f6f8b';
+                    }
+                },
+                {
+                    type: 'line',
+                    label: '上限99.8%',
+                    data: funnelUpper998,
+                    borderColor: '#dc2626',
+                    borderWidth: 1.1,
+                    pointRadius: 0
+                },
+                {
+                    type: 'line',
+                    label: '下限99.8%',
+                    data: funnelLower998,
+                    borderColor: '#dc2626',
+                    borderWidth: 1.1,
+                    pointRadius: 0
+                },
+                {
+                    type: 'line',
+                    label: '上限95%',
+                    data: funnelUpper95,
+                    borderColor: '#f59e0b',
+                    borderWidth: 1.1,
+                    pointRadius: 0,
+                    borderDash: [6, 4]
+                },
+                {
+                    type: 'line',
+                    label: '下限95%',
+                    data: funnelLower95,
+                    borderColor: '#f59e0b',
+                    borderWidth: 1.1,
+                    pointRadius: 0,
+                    borderDash: [6, 4]
+                },
+                {
+                    type: 'line',
+                    label: '基线=1',
+                    data: funnelCenter,
+                    borderColor: '#334155',
+                    borderWidth: 1.0,
+                    pointRadius: 0,
+                    borderDash: [4, 4]
+                }
+            ]
+        },
+        options: {
+            maintainAspectRatio: false,
+            responsive: true,
+            scales: {
+                x: {
+                    type: 'linear',
+                    beginAtZero: true,
+                    title: {
+                        display: true,
+                        text: '期望病例 E'
+                    }
+                },
+                y: {
+                    beginAtZero: true,
+                    suggestedMax: Math.max(1.5, Number(funnelYMax) || 1.5),
+                    title: {
+                        display: true,
+                        text: '风险比（SIR）'
+                    }
+                }
+            },
+            plugins: {
+                tooltip: {
+                    callbacks: {
+                        label(context) {
+                            const raw = context.raw || {};
+                            if (!raw.name) {
+                                return `${context.dataset.label}: (${fmtNumber(raw.x, 2)}, ${fmtNumber(raw.y, 2)})`;
+                            }
+                            return [
+                                `${raw.name}`,
+                                `平滑SIR: ${fmtNumber(raw.y, 2)}`,
+                                `SIR: ${fmtNumber(raw.sir, 2)}`,
+                                `病例/期望: ${raw.observed} / ${fmtNumber(raw.expected, 2)}`,
+                                `${funnelFlagLabels[raw.funnel_flag] || raw.funnel_flag}`
+                            ];
+                        }
+                    }
+                }
+            }
+        }
+    });
+}
+
+function bindTableDetail() {
+    const detailName = document.getElementById('ccDetailName');
+    const detailRank = document.getElementById('ccDetailRank');
+    const detailOE = document.getElementById('ccDetailOE');
+    const detailSir = document.getElementById('ccDetailSir');
+    const detailSmoothed = document.getElementById('ccDetailSmoothed');
+    const detailRate = document.getElementById('ccDetailRate');
+    const detailFunnel = document.getElementById('ccDetailFunnel');
+    const detailAction = document.getElementById('ccDetailAction');
+    if (!detailName) {
+        return;
+    }
+
+    const rowMap = new Map();
+    allRows.forEach(item => {
+        if (item && item.name) {
+            rowMap.set(item.name, item);
+        }
+    });
+
+    function renderDetail(item) {
+        if (!item) {
+            return;
+        }
+        detailName.textContent = item.name || '--';
+        detailRank.textContent = item.rank || '--';
+        detailOE.textContent = `${item.observed || 0} / ${fmtNumber(item.expected, 2)}`;
+        if (item.sir === null || item.sir === undefined) {
+            detailSir.textContent = '--';
+        } else {
+            detailSir.textContent = `${fmtNumber(item.sir, 2)} [${fmtNumber(item.ci_low, 2)}, ${fmtNumber(item.ci_high, 2)}]`;
+        }
+        detailSmoothed.textContent = fmtNumber(item.smoothed_sir, 2);
+        detailRate.textContent = fmtNumber(item.incidence_rate, 2);
+        detailFunnel.textContent = funnelFlagLabels[item.funnel_flag] || '--';
+        detailAction.textContent = item.action || '--';
+    }
+
+    const rows = Array.from(document.querySelectorAll('.cc-row-clickable'));
+    rows.forEach(row => {
+        row.addEventListener('click', () => {
+            rows.forEach(item => item.classList.remove('is-selected'));
+            row.classList.add('is-selected');
+            const name = row.getAttribute('data-name');
+            renderDetail(rowMap.get(name));
+        });
+    });
+
+    if (rows.length > 0) {
+        rows[0].click();
+    }
+}
+
+document.addEventListener('DOMContentLoaded', function() {
+    drawRankChart();
+    drawFunnelChart();
+    bindTableDetail();
 });
 </script>
-{% endblock %}
 {% endblock %}

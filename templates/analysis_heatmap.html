@@ -1,30 +1,249 @@
 {% extends "base.html" %}
+{% set needs_chartjs = false %}
 
-{% block title %}相关性热力图 - 天气健康风险预测系统{% endblock %}
+{% block title %}天气-疾病相关性热力图{% endblock %}
+
+{% block extra_css %}
+<style>
+.heatmap-lab-page {
+    --hm-border: #cad3dc;
+    --hm-muted: #6c7b89;
+    --hm-bg: #f7fafc;
+}
+
+.heatmap-lab-page .hm-card {
+    border: 1px dashed var(--hm-border);
+    border-radius: 14px;
+    background: #fff;
+}
+
+.heatmap-lab-page .hm-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    border: 1px solid var(--hm-border);
+    border-radius: 999px;
+    background: var(--hm-bg);
+    padding: 4px 10px;
+    font-size: 12px;
+    color: var(--hm-muted);
+}
+
+.heatmap-lab-page .hm-kpi {
+    border: 1px dashed var(--hm-border);
+    border-radius: 12px;
+    padding: 12px;
+    background: #fff;
+    height: 100%;
+}
+
+.heatmap-lab-page .hm-kpi .name {
+    color: var(--hm-muted);
+    font-size: 12px;
+}
+
+.heatmap-lab-page .hm-kpi .value {
+    margin-top: 5px;
+    font-size: 24px;
+    font-weight: 700;
+    color: #1d2a37;
+}
+
+.heatmap-lab-page .hm-kpi .sub {
+    margin-top: 3px;
+    color: var(--hm-muted);
+    font-size: 12px;
+}
+
+.heatmap-lab-page .hm-table-wrap {
+    overflow: auto;
+    border: 1px solid #d7e0e8;
+    border-radius: 10px;
+    background: #fff;
+}
+
+.heatmap-lab-page .hm-table {
+    min-width: 840px;
+    margin-bottom: 0;
+    border-collapse: collapse;
+}
+
+.heatmap-lab-page .hm-table th,
+.heatmap-lab-page .hm-table td {
+    border: 1px solid #dbe3ea;
+    text-align: center;
+    vertical-align: middle;
+}
+
+.heatmap-lab-page .hm-table thead th {
+    background: #f0f4f8;
+    position: sticky;
+    top: 0;
+    z-index: 1;
+}
+
+.heatmap-lab-page .hm-row-header {
+    background: #f7f9fc;
+    white-space: nowrap;
+}
+
+.heatmap-lab-page .heatmap-cell {
+    min-width: 118px;
+    height: 86px;
+    cursor: pointer;
+    transition: transform 0.15s ease, box-shadow 0.15s ease;
+    position: relative;
+}
+
+.heatmap-lab-page .heatmap-cell:hover {
+    transform: translateY(-1px);
+    box-shadow: inset 0 0 0 1px rgba(35, 50, 65, 0.18);
+}
+
+.heatmap-lab-page .heatmap-cell.is-selected {
+    box-shadow: inset 0 0 0 2px #1f2f3f;
+}
+
+.heatmap-lab-page .heatmap-cell.is-significant::after {
+    content: "";
+    position: absolute;
+    right: 4px;
+    top: 4px;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #111827;
+}
+
+.heatmap-lab-page .heatmap-cell .rr {
+    font-size: 15px;
+    font-weight: 700;
+    color: #1c2734;
+    line-height: 1.2;
+}
+
+.heatmap-lab-page .heatmap-cell .ci {
+    margin-top: 2px;
+    font-size: 11px;
+    color: #334155;
+}
+
+.heatmap-lab-page .heatmap-cell .meta {
+    margin-top: 3px;
+    font-size: 11px;
+    color: #475569;
+}
+
+.heatmap-lab-page .hm-detail {
+    border: 1px dashed var(--hm-border);
+    border-radius: 12px;
+    padding: 12px;
+    background: #fff;
+}
+
+.heatmap-lab-page .hm-detail .label {
+    color: var(--hm-muted);
+    font-size: 12px;
+}
+
+.heatmap-lab-page .hm-detail .value {
+    font-size: 15px;
+    color: #1e293b;
+    font-weight: 600;
+}
+
+.heatmap-lab-page .hm-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    font-size: 12px;
+    color: #475569;
+}
+
+.heatmap-lab-page .hm-legend .box {
+    display: inline-block;
+    width: 12px;
+    height: 12px;
+    border-radius: 3px;
+    margin-right: 4px;
+}
+
+.heatmap-lab-page .hm-risk-list li {
+    margin-bottom: 6px;
+}
+
+.heatmap-lab-page .hm-cert-badge {
+    border: 1px solid #d2dbe3;
+    border-radius: 999px;
+    padding: 2px 8px;
+    font-size: 11px;
+}
+
+.heatmap-lab-page .hm-action-badge {
+    border-radius: 999px;
+    padding: 2px 8px;
+    font-size: 11px;
+    border: 1px solid #ced7e0;
+    background: #f8fafc;
+}
+
+.heatmap-lab-page .hm-action-badge.action-now {
+    color: #b91c1c;
+    border-color: #fecaca;
+    background: #fef2f2;
+}
+
+.heatmap-lab-page .hm-action-badge.action-prepare {
+    color: #a16207;
+    border-color: #fde68a;
+    background: #fffbeb;
+}
+
+.heatmap-lab-page .hm-action-badge.action-watch {
+    color: #334155;
+}
+
+@media (max-width: 991px) {
+    .heatmap-lab-page .heatmap-cell {
+        min-width: 104px;
+    }
+}
+</style>
+{% endblock %}
 
 {% block content %}
-<div class="container">
+{% set certainty_map = {'high': '高', 'medium': '中', 'low': '低', 'insufficient': '样本不足'} %}
+<div class="container heatmap-lab-page">
     <div class="row mb-4">
         <div class="col-12">
-            <h2><i class="bi bi-grid-1x2"></i> 天气-疾病相关性热力图</h2>
-            <p class="text-muted">可视化不同温度、湿度区间下的发病强度</p>
+            <div class="d-flex flex-wrap justify-content-between align-items-start gap-2">
+                <div>
+                    <h2 class="mb-1"><i class="bi bi-grid-3x3-gap me-1"></i>天气-疾病相关性热力图</h2>
+                    <p class="text-muted mb-0">使用分箱暴露矩阵展示 RR（相对风险）+ 95%CI，并支持滞后窗口与人群分层。</p>
+                </div>
+                <div class="d-flex flex-wrap gap-2">
+                    <span class="hm-chip">指标：RR / 95%CI</span>
+                    <span class="hm-chip">滞后窗口：{{ lag_window }}天</span>
+                    <span class="hm-chip">分层：{{ stratum_labels[stratum] }}</span>
+                </div>
+            </div>
         </div>
     </div>
 
-    <div class="card shadow-sm mb-4">
+    <div class="card hm-card mb-4">
         <div class="card-body">
             <form method="POST" action="{{ url_for('analysis.analysis_heatmap') }}">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <div class="row g-3">
-                    <div class="col-md-3">
+                    <div class="col-xl-2 col-md-4">
                         <label class="form-label">开始日期</label>
                         <input type="date" class="form-control" name="start_date" value="{{ start_date }}">
                     </div>
-                    <div class="col-md-3">
+                    <div class="col-xl-2 col-md-4">
                         <label class="form-label">结束日期</label>
                         <input type="date" class="form-control" name="end_date" value="{{ end_date }}">
                     </div>
-                    <div class="col-md-3">
+                    <div class="col-xl-2 col-md-4">
                         <label class="form-label">社区</label>
                         <select class="form-select" name="community">
                             <option value="">全部</option>
@@ -33,7 +252,7 @@
                             {% endfor %}
                         </select>
                     </div>
-                    <div class="col-md-3">
+                    <div class="col-xl-2 col-md-4">
                         <label class="form-label">疾病分类</label>
                         <select class="form-select" name="disease">
                             <option value="">全部</option>
@@ -42,9 +261,43 @@
                             {% endfor %}
                         </select>
                     </div>
+                    <div class="col-xl-2 col-md-4">
+                        <label class="form-label">人群分层</label>
+                        <select class="form-select" name="stratum">
+                            <option value="all" {% if stratum == 'all' %}selected{% endif %}>全人群</option>
+                            <option value="elderly" {% if stratum == 'elderly' %}selected{% endif %}>老年人(>=65)</option>
+                            <option value="non_elderly" {% if stratum == 'non_elderly' %}selected{% endif %}>非老年(&lt;65)</option>
+                            <option value="male" {% if stratum == 'male' %}selected{% endif %}>男性</option>
+                            <option value="female" {% if stratum == 'female' %}selected{% endif %}>女性</option>
+                        </select>
+                    </div>
+                    <div class="col-xl-2 col-md-4">
+                        <label class="form-label">滞后窗口</label>
+                        <select class="form-select" name="lag_window">
+                            {% for option in lag_options %}
+                                <option value="{{ option }}" {% if lag_window == option %}selected{% endif %}>{{ option }} 天</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-xl-2 col-md-4">
+                        <label class="form-label">分箱策略</label>
+                        <select class="form-select" name="binning">
+                            <option value="fixed" {% if binning == 'fixed' %}selected{% endif %}>固定阈值</option>
+                            <option value="quantile" {% if binning == 'quantile' %}selected{% endif %}>分位数</option>
+                        </select>
+                    </div>
+                    <div class="col-xl-2 col-md-4">
+                        <label class="form-label">最小样本天数</label>
+                        <select class="form-select" name="min_days">
+                            {% for option in min_days_options %}
+                                <option value="{{ option }}" {% if min_days == option %}selected{% endif %}>{{ option }} 天</option>
+                            {% endfor %}
+                        </select>
+                    </div>
                 </div>
-                <div class="mt-3">
+                <div class="mt-3 d-flex flex-wrap align-items-center gap-2">
                     <button class="btn btn-primary">生成热力图</button>
+                    <span class="text-muted small">当前分箱：{{ binning_labels[binning] }}</span>
                 </div>
             </form>
         </div>
@@ -56,61 +309,238 @@
     </div>
     {% endif %}
 
-    <div class="card shadow-sm mb-4">
-        <div class="card-body">
-            <div class="row g-3 text-center">
-                <div class="col-md-3">
-                    <div class="text-muted small">时间跨度</div>
-                    <div>{{ data_summary.total_days }} 天</div>
+    <div class="row g-3 mb-4">
+        <div class="col-xl-3 col-md-6">
+            <div class="hm-kpi">
+                <div class="name">分析样本天数（可建模）</div>
+                <div class="value">{{ data_summary.valid_exposure_days }}</div>
+                <div class="sub">总窗口 {{ data_summary.total_days }} 天</div>
+            </div>
+        </div>
+        <div class="col-xl-3 col-md-6">
+            <div class="hm-kpi">
+                <div class="name">病例记录</div>
+                <div class="value">{{ data_summary.total_visits }}</div>
+                <div class="sub">{{ data_summary.filtered_record_count }} 条筛选后样本</div>
+            </div>
+        </div>
+        <div class="col-xl-3 col-md-6">
+            <div class="hm-kpi">
+                <div class="name">基线日均病例</div>
+                <div class="value">{{ "%.2f"|format(data_summary.baseline_daily_rate or 0) }}</div>
+                <div class="sub">源：{{ data_summary.weather_source }}</div>
+            </div>
+        </div>
+        <div class="col-xl-3 col-md-6">
+            <div class="hm-kpi">
+                <div class="name">高风险格子 (RR ≥ 1.2)</div>
+                <div class="value">{{ data_summary.high_risk_cells }}</div>
+                <div class="sub">最大 RR {{ "%.2f"|format(data_summary.max_rr or 0) }}</div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row g-3 mb-4">
+        <div class="col-xl-9">
+            <div class="card hm-card">
+                <div class="card-body">
+                    <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
+                        <h6 class="mb-0">温度 × 湿度 复合暴露矩阵（RR）</h6>
+                        <span class="hm-chip">黑点 = CI 不跨 1（统计显著）</span>
+                    </div>
+                    <div class="hm-table-wrap">
+                        <table class="table hm-table">
+                            <thead>
+                                <tr>
+                                    <th>温度 \ 湿度</th>
+                                    {% for label in hum_labels %}
+                                        <th>{{ label }}</th>
+                                    {% endfor %}
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for i in range(temp_labels|length) %}
+                                    <tr>
+                                        <th class="hm-row-header">{{ temp_labels[i] }}</th>
+                                        {% for cell in heatmap_rows[i] %}
+                                            {% if cell.rr is none %}
+                                                {% set rr_text = '--' %}
+                                            {% else %}
+                                                {% set rr_text = "%.2f"|format(cell.rr) %}
+                                            {% endif %}
+                                            {% if cell.ci_low is none or cell.ci_high is none %}
+                                                {% set ci_text = '--' %}
+                                            {% else %}
+                                                {% set ci_text = "[" ~ ("%.2f"|format(cell.ci_low)) ~ ", " ~ ("%.2f"|format(cell.ci_high)) ~ "]" %}
+                                            {% endif %}
+                                            <td
+                                                class="heatmap-cell {% if cell.days >= min_days and cell.rr is not none %}has-data{% endif %} {% if cell.significant %}is-significant{% endif %}"
+                                                style="background-color: {{ cell.bg_color }};"
+                                                data-temp="{{ cell.temp_label }}"
+                                                data-hum="{{ cell.hum_label }}"
+                                                data-rr="{{ rr_text }}"
+                                                data-ci="{{ ci_text }}"
+                                                data-days="{{ cell.days }}"
+                                                data-visits="{{ cell.visits }}"
+                                                data-expected="{{ '%.2f'|format(cell.expected or 0) }}"
+                                                data-certainty="{{ certainty_map[cell.certainty] }}"
+                                                data-significant="{{ '是' if cell.significant else '否' }}"
+                                                data-action="{{ cell.action }}"
+                                            >
+                                                <div class="rr">RR {{ rr_text }}</div>
+                                                <div class="ci">{{ ci_text }}</div>
+                                                <div class="meta">天数 {{ cell.days }} | 例数 {{ cell.visits }}</div>
+                                            </td>
+                                        {% endfor %}
+                                    </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                    <div class="hm-legend mt-3">
+                        <span><i class="box" style="background: rgba(201,72,72,0.55);"></i>高于基线风险</span>
+                        <span><i class="box" style="background: rgba(52,120,189,0.55);"></i>低于基线风险</span>
+                        <span><i class="box" style="background: rgba(148,163,184,0.20);"></i>样本不足</span>
+                    </div>
                 </div>
-                <div class="col-md-3">
-                    <div class="text-muted small">门诊记录</div>
-                    <div>{{ data_summary.total_visits }} 次 / {{ data_summary.visit_days }} 天</div>
+            </div>
+        </div>
+        <div class="col-xl-3">
+            <div class="hm-detail h-100">
+                <h6 class="mb-3">单元详情（点击热力格）</h6>
+                <div class="mb-2">
+                    <div class="label">温度区间</div>
+                    <div class="value" id="detailTemp">--</div>
                 </div>
-                <div class="col-md-3">
-                    <div class="text-muted small">天气覆盖</div>
-                    <div>{{ data_summary.weather_days }} 天（{{ data_summary.weather_source }}）</div>
+                <div class="mb-2">
+                    <div class="label">湿度区间</div>
+                    <div class="value" id="detailHum">--</div>
                 </div>
-                <div class="col-md-3">
-                    <div class="text-muted small">重叠天数</div>
-                    <div>{{ data_summary.overlap_days }} 天</div>
+                <div class="mb-2">
+                    <div class="label">RR 与置信区间</div>
+                    <div class="value" id="detailRR">--</div>
+                    <div class="text-muted small" id="detailCI">--</div>
+                </div>
+                <div class="mb-2">
+                    <div class="label">样本天数 / 病例数</div>
+                    <div class="value"><span id="detailDays">--</span> 天 / <span id="detailVisits">--</span> 例</div>
+                </div>
+                <div class="mb-2">
+                    <div class="label">不确定性（certainty）</div>
+                    <div class="value" id="detailCertainty">--</div>
+                </div>
+                <div class="mb-2">
+                    <div class="label">统计显著</div>
+                    <div class="value" id="detailSignificant">--</div>
+                </div>
+                <div>
+                    <div class="label mb-1">行动语义</div>
+                    <span class="hm-action-badge action-watch" id="detailAction">--</span>
                 </div>
             </div>
         </div>
     </div>
 
-    <div class="card shadow-sm">
-        <div class="card-body">
-            <div class="table-responsive">
-                <table class="table table-bordered text-center align-middle">
-                    <thead class="table-light">
-                        <tr>
-                            <th>温度 \\ 湿度</th>
-                            {% for label in hum_labels %}
-                                <th>{{ label }}</th>
-                            {% endfor %}
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {% for i in range(temp_labels|length) %}
-                        <tr>
-                            <th class="table-light">{{ temp_labels[i] }}</th>
-                            {% for value in matrix[i] %}
-                                {% set intensity = (value / max_value) if max_value else 0 %}
-                                <td style="background-color: rgba(255, 99, 132, {{ intensity }});">
-                                    {{ value }}
-                                </td>
-                            {% endfor %}
-                        </tr>
-                        {% endfor %}
-                    </tbody>
-                </table>
+    <div class="row g-3">
+        <div class="col-xl-4">
+            <div class="card hm-card h-100">
+                <div class="card-body">
+                    <h6>不确定性分布</h6>
+                    <p class="text-muted small mb-2">按单元格 certainty 统计（基于样本天数 + 置信区间宽度）。</p>
+                    <div class="d-flex flex-wrap gap-2">
+                        <span class="hm-cert-badge">高：{{ certainty_counts.high }}</span>
+                        <span class="hm-cert-badge">中：{{ certainty_counts.medium }}</span>
+                        <span class="hm-cert-badge">低：{{ certainty_counts.low }}</span>
+                        <span class="hm-cert-badge">样本不足：{{ certainty_counts.insufficient }}</span>
+                    </div>
+                </div>
             </div>
-            <small class="text-muted">数值越大表示该温湿度区间内病例量越高。</small>
-            {% if max_value == 0 %}
-                <p class="text-muted mb-0 mt-2">暂无可用数据或覆盖不足</p>
-            {% endif %}
+        </div>
+        <div class="col-xl-4">
+            <div class="card hm-card h-100">
+                <div class="card-body">
+                    <h6>高风险格子（Top 5）</h6>
+                    <ol class="small hm-risk-list ps-3 mb-0">
+                        {% if top_risk_cells %}
+                            {% for cell in top_risk_cells %}
+                                <li>
+                                    {{ cell.temp_label }} × {{ cell.hum_label }}：
+                                    RR {{ "%.2f"|format(cell.rr or 0) }}，
+                                    {{ cell.days }}天/{{ cell.visits }}例，
+                                    <span class="hm-action-badge {% if cell.action == '立即行动' %}action-now{% elif cell.action == '准备干预' %}action-prepare{% else %}action-watch{% endif %}">{{ cell.action }}</span>
+                                </li>
+                            {% endfor %}
+                        {% else %}
+                            <li class="text-muted">暂无达到阈值的高风险格子。</li>
+                        {% endif %}
+                    </ol>
+                </div>
+            </div>
+        </div>
+        <div class="col-xl-4">
+            <div class="card hm-card h-100">
+                <div class="card-body">
+                    <h6>方法说明</h6>
+                    <ul class="small mb-0">
+                        <li>指标：按 cell 计算 Observed / Expected（RR）。</li>
+                        <li>Expected：按 month × weekday 的基线日均病例校正。</li>
+                        <li>CI：基于 Poisson 近似，显示 95% 置信区间。</li>
+                        <li>滞后：当前为 0~{{ lag_window }} 天平均暴露。</li>
+                        <li>建议：当 RR 较高且 certainty 高时提升到“立即行动”。</li>
+                    </ul>
+                </div>
+            </div>
         </div>
     </div>
 </div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+(function initHeatmapDetails() {
+    const cells = Array.from(document.querySelectorAll('.heatmap-cell'));
+    if (!cells.length) return;
+
+    const refs = {
+        temp: document.getElementById('detailTemp'),
+        hum: document.getElementById('detailHum'),
+        rr: document.getElementById('detailRR'),
+        ci: document.getElementById('detailCI'),
+        days: document.getElementById('detailDays'),
+        visits: document.getElementById('detailVisits'),
+        certainty: document.getElementById('detailCertainty'),
+        significant: document.getElementById('detailSignificant'),
+        action: document.getElementById('detailAction')
+    };
+
+    function actionClass(actionText) {
+        if (actionText === '立即行动') return 'hm-action-badge action-now';
+        if (actionText === '准备干预') return 'hm-action-badge action-prepare';
+        return 'hm-action-badge action-watch';
+    }
+
+    function selectCell(cell) {
+        cells.forEach((item) => item.classList.remove('is-selected'));
+        cell.classList.add('is-selected');
+        refs.temp.textContent = cell.dataset.temp || '--';
+        refs.hum.textContent = cell.dataset.hum || '--';
+        refs.rr.textContent = cell.dataset.rr ? `RR ${cell.dataset.rr}` : '--';
+        refs.ci.textContent = cell.dataset.ci || '--';
+        refs.days.textContent = cell.dataset.days || '--';
+        refs.visits.textContent = cell.dataset.visits || '--';
+        refs.certainty.textContent = cell.dataset.certainty || '--';
+        refs.significant.textContent = cell.dataset.significant || '--';
+        const actionText = cell.dataset.action || '--';
+        refs.action.textContent = actionText;
+        refs.action.className = actionClass(actionText);
+    }
+
+    cells.forEach((cell) => {
+        cell.addEventListener('click', () => selectCell(cell));
+    });
+
+    const preferred = document.querySelector('.heatmap-cell.has-data') || cells[0];
+    selectCell(preferred);
+})();
+</script>
 {% endblock %}

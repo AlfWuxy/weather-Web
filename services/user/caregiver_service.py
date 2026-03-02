@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
 """Caregiver-related routes and helpers."""
+import logging
 import secrets
 from datetime import datetime, timedelta
 
-from flask import flash, redirect, render_template, request, session, url_for
+from flask import current_app, flash, redirect, render_template, request, session, url_for
 from flask_login import current_user
 
 from core.db_models import Community, DailyStatus, Debrief, FamilyMember, Pair, PairLink
@@ -39,6 +40,8 @@ from ._helpers import (
     _ensure_demo_statuses,
     _refresh_community_daily
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _create_pair_link(community_code):
@@ -129,6 +132,7 @@ def _build_pair_management_context(caregiver_mode=False):
         ).all()
     except Exception:
         db.session.rollback()
+        logger.warning("加载家庭成员失败，已降级为空列表", exc_info=True)
     if is_demo_mode() and not pairs:
         demo_community = normalize_location_name(getattr(current_user, 'community', None))
         if not demo_community and communities:
@@ -172,6 +176,7 @@ def _build_pair_management_context(caregiver_mode=False):
                 weather_by_code[code] = weather_data or {}
             except Exception:
                 weather_by_code[code] = {}
+                logger.warning("加载天气缓存失败，code=%s", code, exc_info=True)
 
     pair_cards = []
     now = utcnow()
@@ -189,6 +194,7 @@ def _build_pair_management_context(caregiver_mode=False):
             member_map = {m.id: m for m in members}
         except Exception:
             db.session.rollback()
+            logger.warning("加载成员映射失败，已降级为空映射", exc_info=True)
 
     heat_service = HeatActionService()
 
@@ -214,7 +220,7 @@ def _build_pair_management_context(caregiver_mode=False):
             )
             risk_label = HEAT_RISK_LABELS.get(heat_result['risk_level'], risk_label)
         except Exception:
-            pass
+            logger.debug("热风险计算失败，使用默认风险标签", exc_info=True)
 
         # Pilot alert label (heat/cold threshold)
         alert_kind = None
@@ -231,6 +237,7 @@ def _build_pair_management_context(caregiver_mode=False):
         except Exception:
             alert_kind = None
             alert_label = '暂无预警'
+            logger.debug("预警标签计算失败，已降级为暂无预警", exc_info=True)
 
         confirmed = bool(status and status.confirmed_at)
         is_overdue = bool(now >= deadline and not confirmed)
@@ -257,6 +264,7 @@ def _build_pair_management_context(caregiver_mode=False):
             'relay_stage_label': relay_stage_label
         })
 
+    push_channel_ready = bool((current_app.config.get('WXPUSHER_APP_TOKEN') or '').strip())
     context = {
         'created_pair': created_pair,
         'created_action_link': created_action_link,
@@ -265,7 +273,8 @@ def _build_pair_management_context(caregiver_mode=False):
         'status_map': status_map,
         'communities': communities,
         'family_members': family_members,
-        'status_date': status_date
+        'status_date': status_date,
+        'push_channel_ready': push_channel_ready,
     }
 
     if caregiver_mode:
@@ -300,7 +309,7 @@ def pair_management():
         member_id = request.form.get('member_id')
         try:
             member_id = int(member_id) if member_id and str(member_id).strip() else None
-        except Exception:
+        except (TypeError, ValueError):
             member_id = None
         if member_id:
             member = FamilyMember.query.filter_by(id=member_id, user_id=current_user.id).first()
@@ -310,6 +319,7 @@ def pair_management():
         try:
             pair = _create_pair(location_query, member_id=member_id)
         except Exception:
+            logger.warning("创建绑定失败(location_query=%s)", location_query[:80], exc_info=True)
             flash('创建失败，请检查输入后重试。', 'error')
             return redirect(url_for('user.pair_management'))
         return redirect(url_for('user.pair_management', created=pair.id))
@@ -347,7 +357,7 @@ def caregiver_pair_create():
     member_id = request.form.get('member_id')
     try:
         member_id = int(member_id) if member_id and str(member_id).strip() else None
-    except Exception:
+    except (TypeError, ValueError):
         member_id = None
     if member_id:
         member = FamilyMember.query.filter_by(id=member_id, user_id=current_user.id).first()
@@ -357,6 +367,7 @@ def caregiver_pair_create():
     try:
         pair = _create_pair(location_query, member_id=member_id)
     except Exception:
+        logger.warning("照护端创建绑定失败(location_query=%s)", location_query[:80], exc_info=True)
         flash('创建失败，请检查输入后重试。', 'error')
         return redirect(url_for('user.caregiver_dashboard'))
     return redirect(url_for('user.caregiver_dashboard', created=pair.id))

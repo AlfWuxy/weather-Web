@@ -1,0 +1,742 @@
+{% extends "base.html" %}
+
+{% block title %}AI智能预测 - 天气健康风险预测系统{% endblock %}
+
+{% block content %}
+<div class="container-fluid py-4">
+    <div class="row mb-4">
+        <div class="col-12">
+            <div class="d-flex justify-content-between align-items-center">
+                <div>
+                    <h2><i class="fas fa-brain me-2"></i>AI智能疾病风险预测</h2>
+                    <p class="text-muted mb-0">基于机器学习模型，结合天气数据进行精准健康风险评估</p>
+                </div>
+                <div id="modelStatus" class="badge bg-secondary">
+                    <i class="fas fa-spinner fa-spin me-1"></i>加载模型中...
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row">
+        <!-- 左侧：输入参数 -->
+        <div class="col-lg-4 mb-4">
+            <div class="card shadow-sm">
+                <div class="card-header bg-primary text-white">
+                    <h5 class="mb-0"><i class="fas fa-sliders-h me-2"></i>预测参数</h5>
+                </div>
+                <div class="card-body">
+                    <!-- 预测类型选择 -->
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">预测类型</label>
+                        <div class="btn-group w-100" role="group">
+                            <input type="radio" class="btn-check" name="predType" id="predIndividual" value="individual" checked>
+                            <label class="btn btn-outline-primary" for="predIndividual">
+                                <i class="fas fa-user me-1"></i>个人预测
+                            </label>
+                            <input type="radio" class="btn-check" name="predType" id="predCommunity" value="community">
+                            <label class="btn btn-outline-primary" for="predCommunity">
+                                <i class="fas fa-building me-1"></i>社区预测
+                            </label>
+                        </div>
+                    </div>
+
+                    <!-- 个人信息 -->
+                    <div id="individualParams">
+                        <h6 class="text-muted mb-3"><i class="fas fa-user me-1"></i>个人信息</h6>
+                        <div class="row">
+                            <div class="col-6 mb-3">
+                                <label class="form-label">年龄</label>
+                                <input type="number" class="form-control" id="inputAge" value="{{ current_user.age or 40 }}" min="0" max="120">
+                            </div>
+                            <div class="col-6 mb-3">
+                                <label class="form-label">性别</label>
+                                <select class="form-select" id="inputGender">
+                                    <option value="男" {% if current_user.gender == '男' or current_user.gender == '男性' %}selected{% endif %}>男</option>
+                                    <option value="女" {% if current_user.gender == '女' or current_user.gender == '女性' %}selected{% endif %}>女</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 社区选择 -->
+                    <div id="communityParams" style="display:none;">
+                        <h6 class="text-muted mb-3"><i class="fas fa-building me-1"></i>社区信息</h6>
+                        <div class="mb-3">
+                            <label class="form-label">选择社区</label>
+                            <select class="form-select" id="inputCommunity">
+                                {% for comm in communities %}
+                                <option value="{{ comm.id }}" data-elderly="{{ comm.elderly_ratio }}" data-population="{{ comm.population }}">
+                                    {{ comm.name }} (人口:{{ comm.population }})
+                                </option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                    </div>
+
+                    <hr>
+
+                    <!-- 天气参数 - 扩展版 -->
+                    <h6 class="text-muted mb-3"><i class="fas fa-cloud-sun me-1"></i>天气条件</h6>
+                    
+                    <!-- 温度 -->
+                    <div class="mb-3">
+                        <label class="form-label">温度 (°C)</label>
+                        <input type="range" class="form-range" id="inputTemp" min="-10" max="45" value="20">
+                        <div class="d-flex justify-content-between">
+                            <small class="text-muted">-10°C</small>
+                            <span class="badge bg-info" id="tempValue">20°C</span>
+                            <small class="text-muted">45°C</small>
+                        </div>
+                    </div>
+                    
+                    <!-- 最高/最低温度 -->
+                    <div class="row mb-3">
+                        <div class="col-6">
+                            <label class="form-label"><small>最低温度 (°C)</small></label>
+                            <input type="number" class="form-control form-control-sm" id="inputTmin" value="15" min="-20" max="40">
+                        </div>
+                        <div class="col-6">
+                            <label class="form-label"><small>最高温度 (°C)</small></label>
+                            <input type="number" class="form-control form-control-sm" id="inputTmax" value="25" min="-10" max="50">
+                        </div>
+                    </div>
+                    
+                    <!-- 相对湿度 -->
+                    <div class="mb-3">
+                        <label class="form-label">相对湿度 (%)</label>
+                        <input type="range" class="form-range" id="inputHumidity" min="10" max="100" value="70">
+                        <div class="d-flex justify-content-between">
+                            <small class="text-muted">10% 干燥</small>
+                            <span class="badge bg-primary" id="humidityValue">70%</span>
+                            <small class="text-muted">100% 潮湿</small>
+                        </div>
+                    </div>
+                    
+                    <!-- 空气质量指数 -->
+                    <div class="mb-3">
+                        <label class="form-label">空气质量指数 (AQI)</label>
+                        <input type="range" class="form-range" id="inputAQI" min="0" max="300" value="50">
+                        <div class="d-flex justify-content-between">
+                            <small class="text-muted">0 优</small>
+                            <span class="badge bg-success" id="aqiValue">50</span>
+                            <small class="text-muted">300 严重污染</small>
+                        </div>
+                    </div>
+                    
+                    <!-- 风速 -->
+                    <div class="mb-3">
+                        <label class="form-label">风速 (m/s)</label>
+                        <input type="range" class="form-range" id="inputWindSpeed" min="0" max="20" value="2" step="0.5">
+                        <div class="d-flex justify-content-between">
+                            <small class="text-muted">0 无风</small>
+                            <span class="badge bg-secondary" id="windSpeedValue">2.0 m/s</span>
+                            <small class="text-muted">20 大风</small>
+                        </div>
+                    </div>
+                    
+                    <!-- 降水量 -->
+                    <div class="mb-3">
+                        <label class="form-label">降水量 (mm)</label>
+                        <input type="range" class="form-range" id="inputPrecipitation" min="0" max="100" value="0">
+                        <div class="d-flex justify-content-between">
+                            <small class="text-muted">0 无雨</small>
+                            <span class="badge bg-info" id="precipitationValue">0 mm</span>
+                            <small class="text-muted">100 暴雨</small>
+                        </div>
+                    </div>
+                    
+                    <!-- 月份 -->
+                    <div class="mb-3">
+                        <label class="form-label">月份</label>
+                        <select class="form-select" id="inputMonth">
+                            <option value="1" {% if now().month == 1 %}selected{% endif %}>1月 (冬季)</option>
+                            <option value="2" {% if now().month == 2 %}selected{% endif %}>2月 (冬季)</option>
+                            <option value="3" {% if now().month == 3 %}selected{% endif %}>3月 (春季)</option>
+                            <option value="4" {% if now().month == 4 %}selected{% endif %}>4月 (春季)</option>
+                            <option value="5" {% if now().month == 5 %}selected{% endif %}>5月 (春季)</option>
+                            <option value="6" {% if now().month == 6 %}selected{% endif %}>6月 (夏季)</option>
+                            <option value="7" {% if now().month == 7 %}selected{% endif %}>7月 (夏季)</option>
+                            <option value="8" {% if now().month == 8 %}selected{% endif %}>8月 (夏季)</option>
+                            <option value="9" {% if now().month == 9 %}selected{% endif %}>9月 (秋季)</option>
+                            <option value="10" {% if now().month == 10 %}selected{% endif %}>10月 (秋季)</option>
+                            <option value="11" {% if now().month == 11 %}selected{% endif %}>11月 (秋季)</option>
+                            <option value="12" {% if now().month == 12 %}selected{% endif %}>12月 (冬季)</option>
+                        </select>
+                    </div>
+
+                    <button class="btn btn-primary w-100 btn-lg" id="runPredictionBtn" type="button">
+                        <i class="fas fa-play me-2"></i>开始预测
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- 右侧：预测结果 -->
+        <div class="col-lg-8">
+            <!-- 加载中 -->
+            <div id="loadingResult" class="card shadow-sm mb-4" style="display:none;">
+                <div class="card-body text-center py-5">
+                    <div class="spinner-border text-primary mb-3" role="status">
+                        <span class="visually-hidden">预测中...</span>
+                    </div>
+                    <h5>AI模型正在分析...</h5>
+                    <p class="text-muted">正在结合天气数据和个人信息进行风险评估</p>
+                </div>
+            </div>
+
+            <!-- 预测结果 -->
+            <div id="predictionResult" style="display:none;">
+                <!-- 风险概览 -->
+                <div class="card shadow-sm mb-4">
+                    <div class="card-header">
+                        <h5 class="mb-0"><i class="fas fa-chart-pie me-2"></i>风险评估结果</h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="row align-items-center">
+                            <div class="col-md-4 text-center">
+                                <div id="riskGauge" class="mb-3">
+                                    <div class="display-1 fw-bold" id="riskScoreDisplay">--</div>
+                                    <div class="h5" id="riskLevelDisplay">--</div>
+                                </div>
+                            </div>
+                            <div class="col-md-8">
+                                <h6>风险因素</h6>
+                                <ul id="riskFactorsList" class="list-unstyled">
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- 天气影响分析 -->
+                <div class="card shadow-sm mb-4">
+                    <div class="card-header">
+                        <h5 class="mb-0"><i class="fas fa-cloud-sun me-2"></i>天气影响分析</h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="row">
+                            <div class="col-md-6">
+                                <div id="weatherImpact">
+                                    <p class="mb-2"><strong>影响等级：</strong><span id="weatherImpactLevel">--</span></p>
+                                    <p class="mb-2"><strong>当前条件：</strong></p>
+                                    <ul id="weatherConditionsList" class="list-unstyled small"></ul>
+                                </div>
+                            </div>
+                            <div class="col-md-6">
+                                <p class="mb-2"><strong>影响因素：</strong></p>
+                                <ul id="weatherFactorsList" class="list-unstyled small"></ul>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 疾病预测（多分类） -->
+                <div class="card shadow-sm mb-4">
+                    <div class="card-header">
+                        <h5 class="mb-0"><i class="fas fa-stethoscope me-2"></i>疾病风险预测</h5>
+                    </div>
+                    <div class="card-body">
+                        <div id="diseasePredictions">
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 健康建议 -->
+                <div class="card shadow-sm mb-4">
+                    <div class="card-header bg-success text-white">
+                        <h5 class="mb-0"><i class="fas fa-lightbulb me-2"></i>健康建议</h5>
+                    </div>
+                    <div class="card-body">
+                        <div id="recommendationsList">
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 可解释输出 -->
+                <div class="card shadow-sm mb-4" id="explainCard" style="display:none;">
+                    <div class="card-header bg-light">
+                        <h5 class="mb-0"><i class="fas fa-clipboard-list me-2"></i>原因与提醒</h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="row g-3">
+                            <div class="col-md-4">
+                                <h6>原因</h6>
+                                <ul id="explainReasons" class="mb-0"></ul>
+                            </div>
+                            <div class="col-md-4">
+                                <h6>今天怎么做</h6>
+                                <ul id="explainActions" class="mb-0"></ul>
+                            </div>
+                            <div class="col-md-4">
+                                <h6>什么时候要找人</h6>
+                                <ul id="explainEscalation" class="mb-0"></ul>
+                            </div>
+                        </div>
+                        <div class="small text-muted mt-3" id="explainDisclaimer"></div>
+                    </div>
+                </div>
+
+                <!-- 模型信息 -->
+                <div class="card shadow-sm">
+                    <div class="card-body">
+                        <div class="row text-center">
+                            <div class="col-md-3">
+                                <small class="text-muted">模型类型</small>
+                                <div id="modelType" class="fw-bold">--</div>
+                            </div>
+                            <div class="col-md-3">
+                                <small class="text-muted">分类类型</small>
+                                <div id="classType" class="fw-bold">--</div>
+                            </div>
+                            <div class="col-md-3">
+                                <small class="text-muted">模型准确率</small>
+                                <div id="modelAccuracy" class="fw-bold text-success">--</div>
+                            </div>
+                            <div class="col-md-3">
+                                <small class="text-muted">预测时间</small>
+                                <div id="predictionTime" class="fw-bold">--</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 初始提示 -->
+            <div id="initialPrompt" class="card shadow-sm">
+                <div class="card-body text-center py-5">
+                    <i class="fas fa-brain fa-4x text-muted mb-3"></i>
+                    <h4>AI智能多分类预测</h4>
+                    <p class="text-muted">
+                        基于 <strong>2258条真实病历</strong> 训练的机器学习模型<br>
+                        结合 <strong>8种天气因素</strong>，预测 <strong>多种疾病</strong> 风险
+                    </p>
+                    <div class="row justify-content-center mt-4">
+                        <div class="col-md-8">
+                            <div class="row text-center">
+                                <div class="col-4">
+                                    <i class="fas fa-temperature-high fa-2x text-danger mb-2"></i>
+                                    <p class="small mb-0">温度因素</p>
+                                </div>
+                                <div class="col-4">
+                                    <i class="fas fa-tint fa-2x text-primary mb-2"></i>
+                                    <p class="small mb-0">湿度因素</p>
+                                </div>
+                                <div class="col-4">
+                                    <i class="fas fa-wind fa-2x text-info mb-2"></i>
+                                    <p class="small mb-0">风速因素</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <p class="text-muted mt-4">
+                        请在左侧设置参数，然后点击"开始预测"
+                    </p>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<style>
+.progress {
+    height: 25px;
+    border-radius: 12px;
+}
+.progress-bar {
+    border-radius: 12px;
+    transition: width 0.6s ease;
+}
+#riskGauge .display-1 {
+    font-size: 4rem;
+}
+.alert-light {
+    background-color: #f8f9fa;
+    border-left: 4px solid #007bff;
+}
+.priority-high {
+    border-left-color: #dc3545 !important;
+}
+.priority-medium {
+    border-left-color: #ffc107 !important;
+}
+.priority-low {
+    border-left-color: #28a745 !important;
+}
+</style>
+
+<script>
+// 更新滑块显示值
+document.getElementById('inputTemp').addEventListener('input', function() {
+    document.getElementById('tempValue').textContent = this.value + '°C';
+    // 自动更新最高最低温度
+    const temp = parseInt(this.value);
+    document.getElementById('inputTmin').value = temp - 5;
+    document.getElementById('inputTmax').value = temp + 5;
+});
+
+document.getElementById('inputHumidity').addEventListener('input', function() {
+    document.getElementById('humidityValue').textContent = this.value + '%';
+});
+
+document.getElementById('inputAQI').addEventListener('input', function() {
+    const aqi = parseInt(this.value);
+    const badge = document.getElementById('aqiValue');
+    badge.textContent = aqi;
+    if (aqi <= 50) {
+        badge.className = 'badge bg-success';
+    } else if (aqi <= 100) {
+        badge.className = 'badge bg-info';
+    } else if (aqi <= 150) {
+        badge.className = 'badge bg-warning';
+    } else {
+        badge.className = 'badge bg-danger';
+    }
+});
+
+document.getElementById('inputWindSpeed').addEventListener('input', function() {
+    document.getElementById('windSpeedValue').textContent = parseFloat(this.value).toFixed(1) + ' m/s';
+});
+
+document.getElementById('inputPrecipitation').addEventListener('input', function() {
+    document.getElementById('precipitationValue').textContent = this.value + ' mm';
+});
+
+document.getElementById('runPredictionBtn').addEventListener('click', runPrediction);
+
+function clearElement(element) {
+    while (element.firstChild) {
+        element.removeChild(element.firstChild);
+    }
+}
+
+function appendIconText(container, iconClass, text) {
+    const icon = document.createElement('i');
+    icon.className = iconClass;
+    container.appendChild(icon);
+    container.appendChild(document.createTextNode(text));
+}
+
+function populateList(listElement, items, emptyText) {
+    clearElement(listElement);
+    if (items && items.length) {
+        items.forEach(item => {
+            const li = document.createElement('li');
+            li.textContent = item;
+            listElement.appendChild(li);
+        });
+        return;
+    }
+
+    const li = document.createElement('li');
+    li.className = 'text-muted';
+    li.textContent = emptyText;
+    listElement.appendChild(li);
+}
+
+// 切换预测类型
+document.querySelectorAll('input[name="predType"]').forEach(function(radio) {
+    radio.addEventListener('change', function() {
+        if (this.value === 'individual') {
+            document.getElementById('individualParams').style.display = 'block';
+            document.getElementById('communityParams').style.display = 'none';
+        } else {
+            document.getElementById('individualParams').style.display = 'none';
+            document.getElementById('communityParams').style.display = 'block';
+        }
+    });
+});
+
+// 加载模型状态
+fetch('/api/ml/status')
+    .then(response => response.json())
+    .then(data => {
+        const modelStatus = document.getElementById('modelStatus');
+        if (data.success && data.status.loaded) {
+            const modelType = data.status.model_type || 'binary';
+            const typeText = modelType === 'multiclass' ? '多分类' : '二分类';
+            const classCount = data.status.classes ? data.status.classes.length : 2;
+            
+            modelStatus.className = 'badge bg-success';
+            const accuracy = data.status.accuracy ? (data.status.accuracy * 100).toFixed(1) : '--';
+            clearElement(modelStatus);
+            appendIconText(
+                modelStatus,
+                'fas fa-check-circle me-1',
+                '模型已加载 (' + typeText + ', ' + classCount + '类, 准确率:' + accuracy + '%)'
+            );
+        } else {
+            modelStatus.className = 'badge bg-danger';
+            clearElement(modelStatus);
+            appendIconText(modelStatus, 'fas fa-times-circle me-1', '模型加载失败');
+        }
+    });
+
+// 执行预测
+function runPrediction() {
+    const predType = document.querySelector('input[name="predType"]:checked').value;
+    
+    document.getElementById('initialPrompt').style.display = 'none';
+    document.getElementById('predictionResult').style.display = 'none';
+    document.getElementById('loadingResult').style.display = 'block';
+    
+    // 收集所有天气数据
+    const weatherData = {
+        temperature: parseInt(document.getElementById('inputTemp').value),
+        tmean: parseInt(document.getElementById('inputTemp').value),
+        tmin: parseInt(document.getElementById('inputTmin').value),
+        tmax: parseInt(document.getElementById('inputTmax').value),
+        humidity: parseInt(document.getElementById('inputHumidity').value),
+        aqi: parseInt(document.getElementById('inputAQI').value),
+        wind_speed: parseFloat(document.getElementById('inputWindSpeed').value),
+        precipitation: parseFloat(document.getElementById('inputPrecipitation').value),
+        month: parseInt(document.getElementById('inputMonth').value)
+    };
+    
+    let url, requestData;
+    
+    if (predType === 'individual') {
+        url = '/api/ml/predict';
+        requestData = {
+            age: parseInt(document.getElementById('inputAge').value),
+            gender: document.getElementById('inputGender').value,
+            ...weatherData
+        };
+    } else {
+        url = '/api/ml/predict-community';
+        requestData = {
+            community_id: parseInt(document.getElementById('inputCommunity').value),
+            ...weatherData
+        };
+    }
+    
+    fetch(url, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(requestData)
+    })
+    .then(response => response.json())
+    .then(data => {
+        document.getElementById('loadingResult').style.display = 'none';
+        document.getElementById('predictionResult').style.display = 'block';
+        
+        if (data.success) {
+            displayResults(data, predType);
+        } else {
+            alert('预测失败: ' + (data.error || '未知错误'));
+        }
+    })
+    .catch(error => {
+        document.getElementById('loadingResult').style.display = 'none';
+        alert('请求失败: ' + error);
+    });
+}
+
+function displayResults(data, predType) {
+    // 风险分数 - 安全处理
+    const riskScore = data.risk_score !== undefined ? Math.round(data.risk_score) : 0;
+    const riskColor = data.risk_color || 'secondary';
+    const riskLevel = data.risk_level || '未知';
+    
+    document.getElementById('riskScoreDisplay').textContent = riskScore;
+    document.getElementById('riskScoreDisplay').className = 'display-1 fw-bold text-' + riskColor;
+    document.getElementById('riskLevelDisplay').textContent = riskLevel;
+    document.getElementById('riskLevelDisplay').className = 'h5 text-' + riskColor;
+    
+    // 风险因素
+    const factorsList = document.getElementById('riskFactorsList');
+    clearElement(factorsList);
+    (data.risk_factors || []).forEach(factor => {
+        const li = document.createElement('li');
+        li.className = 'mb-2';
+        const icon = document.createElement('i');
+        icon.className = 'fas fa-exclamation-triangle text-warning me-2';
+        li.appendChild(icon);
+        li.appendChild(document.createTextNode(factor));
+        factorsList.appendChild(li);
+    });
+    
+    // 天气影响分析
+    if (data.weather_impact) {
+        const impact = data.weather_impact;
+        const impactLevel = document.getElementById('weatherImpactLevel');
+        clearElement(impactLevel);
+        const impactBadge = document.createElement('span');
+        impactBadge.className = 'badge bg-' + (impact.color || 'secondary');
+        impactBadge.textContent = impact.level || '--';
+        impactLevel.appendChild(impactBadge);
+        
+        // 天气条件
+        const conditionsList = document.getElementById('weatherConditionsList');
+        clearElement(conditionsList);
+        if (data.weather_conditions) {
+            const wc = data.weather_conditions;
+            const formatNum = (val, decimals = 1) => {
+                if (val === null || val === undefined) return '--';
+                return typeof val === 'number' ? val.toFixed(decimals) : val;
+            };
+            const conditions = [
+                {
+                    icon: 'fas fa-thermometer-half text-danger me-1',
+                    label: '温度',
+                    value: formatNum(wc.temperature, 1) + '°C'
+                },
+                {
+                    icon: 'fas fa-temperature-low text-info me-1',
+                    label: '体感温度',
+                    value: formatNum(wc.feels_like, 1) + '°C'
+                },
+                {
+                    icon: 'fas fa-tint text-primary me-1',
+                    label: '湿度',
+                    value: formatNum(wc.humidity, 0) + '%'
+                },
+                {
+                    icon: 'fas fa-wind text-secondary me-1',
+                    label: '风速',
+                    value: formatNum(wc.wind_speed, 1) + 'm/s'
+                },
+                {
+                    icon: 'fas fa-cloud-rain text-info me-1',
+                    label: '降水',
+                    value: formatNum(wc.precipitation, 1) + 'mm'
+                },
+                {
+                    icon: 'fas fa-calendar me-1',
+                    label: '季节',
+                    value: wc.season || '--'
+                }
+            ];
+
+            conditions.forEach(item => {
+                const li = document.createElement('li');
+                const icon = document.createElement('i');
+                icon.className = item.icon;
+                li.appendChild(icon);
+                li.appendChild(document.createTextNode(item.label + ': ' + item.value));
+                conditionsList.appendChild(li);
+            });
+        }
+        
+        // 天气因素
+        const factorsList2 = document.getElementById('weatherFactorsList');
+        clearElement(factorsList2);
+        (impact.factors || []).forEach(f => {
+            const li = document.createElement('li');
+            const icon = document.createElement('i');
+            icon.className = 'fas fa-check-circle text-' + (impact.color || 'info') + ' me-1';
+            li.appendChild(icon);
+            li.appendChild(document.createTextNode(f));
+            factorsList2.appendChild(li);
+        });
+    }
+    
+    // 疾病预测
+    const diseaseDiv = document.getElementById('diseasePredictions');
+    clearElement(diseaseDiv);
+    
+    const predictions = data.predictions || data.disease_risks || [];
+    predictions.forEach((pred, index) => {
+        // 安全获取概率值，处理 undefined/null 情况
+        let prob = 0;
+        if (pred.probability !== undefined && pred.probability !== null) {
+            prob = pred.probability * 100;
+        } else if (pred.risk !== undefined && pred.risk !== null) {
+            prob = pred.risk;
+        } else if (pred.percentage) {
+            prob = parseFloat(pred.percentage) || 0;
+        }
+        
+        let colorClass;
+        if (prob > 40) {
+            colorClass = 'danger';
+        } else if (prob > 25) {
+            colorClass = 'warning';
+        } else if (prob > 15) {
+            colorClass = 'info';
+        } else {
+            colorClass = 'success';
+        }
+        
+        const row = document.createElement('div');
+        row.className = 'mb-3';
+        const header = document.createElement('div');
+        header.className = 'd-flex justify-content-between mb-1';
+        const nameSpan = document.createElement('span');
+        nameSpan.textContent = pred.disease || '未知疾病';
+        const valueSpan = document.createElement('span');
+        valueSpan.className = 'text-' + colorClass;
+        valueSpan.textContent = prob.toFixed(1) + '%';
+        header.appendChild(nameSpan);
+        header.appendChild(valueSpan);
+
+        const progress = document.createElement('div');
+        progress.className = 'progress';
+        const bar = document.createElement('div');
+        bar.className = 'progress-bar bg-' + colorClass;
+        bar.style.width = Math.min(prob, 100) + '%';
+        progress.appendChild(bar);
+
+        row.appendChild(header);
+        row.appendChild(progress);
+        diseaseDiv.appendChild(row);
+    });
+    
+    // 健康建议
+    const recList = document.getElementById('recommendationsList');
+    clearElement(recList);
+    (data.recommendations || []).forEach(rec => {
+        const card = document.createElement('div');
+        const priority = rec.priority || 'low';
+        card.className = 'alert alert-light mb-2 priority-' + priority;
+        if (typeof rec === 'object' && rec !== null) {
+            if (priority === 'high' || priority === 'medium') {
+                const badge = document.createElement('span');
+                badge.className = 'badge ' + (priority === 'high' ? 'bg-danger' : 'bg-warning') + ' me-2';
+                badge.textContent = priority === 'high' ? '重要' : '注意';
+                card.appendChild(badge);
+            }
+
+            const strong = document.createElement('strong');
+            strong.textContent = (rec.category || '') + ':';
+            card.appendChild(strong);
+            card.appendChild(document.createTextNode(' ' + (rec.advice || '')));
+        } else {
+            const icon = document.createElement('i');
+            icon.className = 'fas fa-check-circle text-success me-2';
+            card.appendChild(icon);
+            card.appendChild(document.createTextNode(rec));
+        }
+        recList.appendChild(card);
+    });
+
+    // 可解释输出
+    const explainCard = document.getElementById('explainCard');
+    if (data.explain) {
+        const reasons = data.explain.reasons || [];
+        const actions = data.explain.actions || [];
+        const escalation = data.explain.escalation || [];
+        populateList(document.getElementById('explainReasons'), reasons, '暂无明显触发原因');
+        populateList(document.getElementById('explainActions'), actions, '保持规律作息');
+        populateList(document.getElementById('explainEscalation'), escalation, '出现严重不适请及时就医');
+        document.getElementById('explainDisclaimer').textContent =
+            data.explain.disclaimer || '风险提示不是诊断，紧急情况优先就医。';
+        explainCard.style.display = 'block';
+    } else {
+        explainCard.style.display = 'none';
+    }
+    
+    // 模型信息
+    if (data.model_info) {
+        document.getElementById('modelType').textContent = data.model_info.model_type;
+        document.getElementById('classType').textContent = 
+            data.model_info.classification_type === 'multiclass' ? 
+            `多分类(${data.model_info.total_classes}类)` : '二分类';
+        document.getElementById('modelAccuracy').textContent = data.model_info.accuracy;
+    } else if (data.model_accuracy) {
+        document.getElementById('modelAccuracy').textContent = data.model_accuracy;
+    }
+    document.getElementById('predictionTime').textContent = new Date().toLocaleTimeString();
+}
+</script>
+{% endblock %}

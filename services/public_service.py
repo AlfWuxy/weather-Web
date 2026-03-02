@@ -87,6 +87,100 @@ def _short_code_guard_config():
     return max_failures, window_minutes, lock_minutes
 
 
+def _normalize_login_identifier(username):
+    normalized = (str(username or '')).strip().lower()
+    return normalized
+
+
+def _login_lockout_key(username):
+    normalized = _normalize_login_identifier(username)
+    if not normalized:
+        return None
+    return f'login_failures:{normalized}'
+
+
+def _login_attempt_key_hash(username):
+    """按用户名生成登录失败计数键（哈希后落库）。"""
+    normalized = _normalize_login_identifier(username)
+    if not normalized:
+        return None
+    return hash_identifier(f"login:{normalized}")
+
+
+def _get_login_attempt_record(username):
+    key_hash = _login_attempt_key_hash(username)
+    if not key_hash:
+        return None
+    attempt = ShortCodeAttempt.query.filter_by(key_hash=key_hash).order_by(ShortCodeAttempt.id.desc()).first()
+    if attempt is None:
+        attempt = ShortCodeAttempt(key_hash=key_hash, failed_count=0)
+        db.session.add(attempt)
+    return attempt
+
+
+def _get_login_lock_state_from_db(username, max_failures, lockout_seconds):
+    """Redis 不可用时，使用数据库兜底登录锁定。"""
+    attempt = _get_login_attempt_record(username)
+    if attempt is None:
+        return False, 0
+
+    now = utcnow()
+    last_failed_at = ensure_utc_aware(attempt.last_failed_at) if attempt.last_failed_at else None
+    locked_until = ensure_utc_aware(attempt.locked_until) if attempt.locked_until else None
+
+    if last_failed_at and (now - last_failed_at > timedelta(seconds=max(lockout_seconds, 1))):
+        attempt.failed_count = 0
+        attempt.first_failed_at = None
+        attempt.last_failed_at = None
+        attempt.locked_until = None
+        db.session.commit()
+        return False, 0
+
+    if locked_until and locked_until > now:
+        remaining = max(0, int((locked_until - now).total_seconds()))
+        return True, remaining
+
+    if locked_until and locked_until <= now and (attempt.failed_count or 0) >= max_failures:
+        attempt.failed_count = 0
+        attempt.first_failed_at = None
+        attempt.last_failed_at = None
+        attempt.locked_until = None
+        db.session.commit()
+    return False, 0
+
+
+def _record_login_failure_db(username, max_failures, lockout_seconds):
+    attempt = _get_login_attempt_record(username)
+    if attempt is None:
+        return
+
+    now = utcnow()
+    last_failed_at = ensure_utc_aware(attempt.last_failed_at) if attempt.last_failed_at else None
+    if last_failed_at and (now - last_failed_at > timedelta(seconds=max(lockout_seconds, 1))):
+        attempt.failed_count = 0
+        attempt.first_failed_at = None
+        attempt.locked_until = None
+
+    attempt.failed_count = int(attempt.failed_count or 0) + 1
+    if attempt.first_failed_at is None:
+        attempt.first_failed_at = now
+    attempt.last_failed_at = now
+    if attempt.failed_count >= max_failures:
+        attempt.locked_until = now + timedelta(seconds=lockout_seconds)
+    db.session.commit()
+
+
+def _clear_login_failures_db(username):
+    attempt = _get_login_attempt_record(username)
+    if attempt is None:
+        return
+    attempt.failed_count = 0
+    attempt.first_failed_at = None
+    attempt.last_failed_at = None
+    attempt.locked_until = None
+    db.session.commit()
+
+
 def _short_code_attempt_key_hash():
     key = rate_limit_key()
     if not key:
@@ -681,7 +775,9 @@ def handle_login(next_url):
     if request.method == 'POST':
         # 输入验证
         username = request.form.get('username', '').strip()
+        normalized_username = _normalize_login_identifier(username)
         password = request.form.get('password', '')
+        remember_flag = request.form.get('remember') in ('1', 'on', 'true', 'yes')
 
         # 基本验证
         if not username or not password:
@@ -695,8 +791,58 @@ def handle_login(next_url):
 
         user = User.query.filter_by(username=username).first()
 
+        # 账户锁定检查（防暴力破解）
+        lockout_key = _login_lockout_key(normalized_username)
+        max_failures = current_app.config.get('LOGIN_MAX_FAILURES', 5)
+        lockout_seconds = current_app.config.get('LOGIN_LOCKOUT_SECONDS', 300)
+        redis_client = None
+        try:
+            from core.weather import _get_redis_client
+            redis_client = _get_redis_client()
+        except Exception:
+            logger.warning("Redis 客户端初始化失败，登录锁定将回退数据库兜底", exc_info=True)
+
+        if redis_client:
+            try:
+                fail_count = int(redis_client.get(lockout_key) or 0)
+                if fail_count >= max_failures:
+                    ttl = redis_client.ttl(lockout_key)
+                    remaining = max(ttl, 0)
+                    logger.warning("账户被锁定(redis): %s (剩余%ds)", username, remaining)
+                    flash(f'登录失败次数过多，请 {remaining // 60 + 1} 分钟后再试', 'error')
+                    return render_template('login.html', next=next_url)
+            except Exception:
+                logger.warning("Redis 锁定检查失败，回退数据库兜底", exc_info=True)
+                redis_client = None
+
+        if not redis_client:
+            try:
+                db_locked, db_remaining = _get_login_lock_state_from_db(normalized_username, max_failures, lockout_seconds)
+                if db_locked:
+                    logger.warning("账户被锁定(db): %s (剩余%ds)", username, db_remaining)
+                    flash(f'登录失败次数过多，请 {db_remaining // 60 + 1} 分钟后再试', 'error')
+                    return render_template('login.html', next=next_url)
+            except Exception:
+                logger.warning("数据库锁定检查失败", exc_info=True)
+
         if user and user.check_password(password):
-            login_user(user)
+            # 登录成功，清除失败计数
+            if redis_client:
+                try:
+                    redis_client.delete(lockout_key)
+                except Exception:
+                    logger.warning("Redis 清除失败计数失败，回退数据库兜底", exc_info=True)
+                    redis_client = None
+            if not redis_client:
+                try:
+                    _clear_login_failures_db(normalized_username)
+                except Exception:
+                    logger.warning("数据库清除失败计数失败", exc_info=True)
+            login_user(
+                user,
+                remember=remember_flag,
+                duration=timedelta(days=30) if remember_flag else None,
+            )
             user.last_login = utcnow()
             db.session.commit()
             logger.info("用户登录成功: %s", username)
@@ -708,6 +854,22 @@ def handle_login(next_url):
             if user.role == 'admin':
                 return redirect(url_for('admin.admin_dashboard'))
             return redirect(url_for('user.user_dashboard'))
+
+        # 登录失败，递增失败计数
+        if redis_client:
+            try:
+                pipe = redis_client.pipeline()
+                pipe.incr(lockout_key)
+                pipe.expire(lockout_key, lockout_seconds)
+                pipe.execute()
+            except Exception:
+                logger.warning("Redis 递增失败计数失败，回退数据库兜底", exc_info=True)
+                redis_client = None
+        if not redis_client:
+            try:
+                _record_login_failure_db(normalized_username, max_failures, lockout_seconds)
+            except Exception:
+                logger.warning("数据库递增失败计数失败", exc_info=True)
 
         logger.warning("登录失败: %s", username)
         flash('用户名或密码错误', 'error')

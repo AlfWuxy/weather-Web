@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+
+{% block title %}照护人微信模板 - 天气健康风险预测系统{% endblock %}
+
+{% block content %}
+<div class="container my-4">
+    <div class="row mb-3">
+        <div class="col-12 d-flex flex-wrap justify-content-between align-items-center">
+            <div>
+                <h2><i class="bi bi-wechat"></i> 照护人微信模板</h2>
+                <p class="text-muted mb-0">仅包含短码与行动链接，不含个人身份信息。</p>
+            </div>
+            <a class="btn btn-outline-secondary" href="{{ url_for('user.caregiver_dashboard') }}">
+                <i class="bi bi-arrow-left"></i> 返回工作台
+            </a>
+        </div>
+    </div>
+
+    <div class="card shadow-sm">
+        <div class="card-header bg-light">
+            <h5 class="mb-0">可直接转发的文本</h5>
+        </div>
+        <div class="card-body">
+            <textarea class="form-control" rows="10" id="wechatMessage" readonly>{{ message }}</textarea>
+            <button class="btn btn-primary mt-3" type="button" id="copyMessage">
+                <i class="bi bi-clipboard"></i> 复制文本
+            </button>
+            <div class="text-muted small mt-2">建议提醒对方进入链接并输入短码完成确认。</div>
+        </div>
+    </div>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+    const btn = document.getElementById('copyMessage');
+    const textarea = document.getElementById('wechatMessage');
+    if (!btn || !textarea) return;
+    btn.addEventListener('click', function () {
+        textarea.select();
+        document.execCommand('copy');
+        btn.classList.add('btn-success');
+        btn.textContent = '已复制';
+        setTimeout(() => {
+            btn.classList.remove('btn-success');
+            btn.innerHTML = '<i class="bi bi-clipboard"></i> 复制文本';
+        }, 1200);
+    });
+});
+</script>
+{% endblock %}

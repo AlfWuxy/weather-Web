@@ -268,12 +268,22 @@
     align-items: center;
     z-index: 9999;
     transition: opacity 0.3s ease, visibility 0.3s ease;
+    /* Fail-safe: if JS fails to run, still hide the overlay after a few seconds. */
+    animation: cwLoaderFailSafe 0.01s linear 3s forwards;
 }
 
 .page-loader.hidden {
     opacity: 0;
     visibility: hidden;
     pointer-events: none;
+}
+
+@keyframes cwLoaderFailSafe {
+    to {
+        opacity: 0;
+        visibility: hidden;
+        pointer-events: none;
+    }
 }
 
 .loader-spinner {

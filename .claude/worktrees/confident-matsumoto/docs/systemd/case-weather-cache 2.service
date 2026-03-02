@@ -1,0 +1,14 @@
+[Unit]
+Description=Case Weather cache sync
+After=network.target
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/opt/case-weather
+EnvironmentFile=/opt/case-weather/.env
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/bin/bash /opt/case-weather/scripts/weather_cache_sync.sh
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,47 @@
+<view style="padding: 16px;">
+  <view class="card">
+    <view style="font-size: 18px; font-weight: 700;">
+      {{mode === 'create' ? '新增老人' : '编辑老人'}}
+    </view>
+    <view class="muted" style="margin-top: 6px; font-size: 12px;">
+      慢病信息仅填写“类别”（可选），用于生成更贴近实际的提醒话术。
+    </view>
+
+    <block wx:if="{{mode === 'create'}}">
+      <view style="margin-top: 14px;">
+        <view class="muted" style="font-size: 12px;">姓名/称呼</view>
+        <input value="{{name}}" bindinput="onName" placeholder="例如：妈妈/爸爸" style="border: 1px solid #e5e7eb; border-radius: 10px; padding: 10px 12px; background:#fff;" />
+      </view>
+      <view style="margin-top: 10px;">
+        <view class="muted" style="font-size: 12px;">关系（可选）</view>
+        <input value="{{relation}}" bindinput="onRelation" placeholder="例如：母亲/父亲" style="border: 1px solid #e5e7eb; border-radius: 10px; padding: 10px 12px; background:#fff;" />
+      </view>
+      <view style="margin-top: 10px; display:flex; gap:10px;">
+        <view style="flex:1;">
+          <view class="muted" style="font-size: 12px;">年龄（可选）</view>
+          <input type="number" value="{{age}}" bindinput="onAge" placeholder="例如：68" style="border: 1px solid #e5e7eb; border-radius: 10px; padding: 10px 12px; background:#fff;" />
+        </view>
+        <view style="flex:1;">
+          <view class="muted" style="font-size: 12px;">性别（可选）</view>
+          <input value="{{gender}}" bindinput="onGender" placeholder="男性/女性" style="border: 1px solid #e5e7eb; border-radius: 10px; padding: 10px 12px; background:#fff;" />
+        </view>
+      </view>
+    </block>
+
+    <view style="margin-top: 14px;">
+      <view class="muted" style="font-size: 12px;">所在地</view>
+      <input value="{{locationQuery}}" bindinput="onLocation" placeholder="例如：九江市都昌县/九江某乡镇" style="border: 1px solid #e5e7eb; border-radius: 10px; padding: 10px 12px; background:#fff;" />
+    </view>
+
+    <view style="margin-top: 10px;">
+      <view class="muted" style="font-size: 12px;">慢病类别（逗号分隔，可选）</view>
+      <input value="{{chronicText}}" bindinput="onChronic" placeholder="例如：高血压, 糖尿病" style="border: 1px solid #e5e7eb; border-radius: 10px; padding: 10px 12px; background:#fff;" />
+    </view>
+
+    <view style="display:flex; gap: 10px; margin-top: 14px;">
+      <button class="btn-primary" style="flex:1;" bindtap="onSave">{{mode === 'create' ? '创建' : '保存'}}</button>
+      <button class="btn-outline" style="flex:1;" bindtap="onCancel">取消</button>
+    </view>
+  </view>
+</view>
+

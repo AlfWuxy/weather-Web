@@ -1,0 +1,229 @@
+{% extends "base.html" %}
+
+{% block title %}社区详情 - 天气健康风险预测系统{% endblock %}
+
+{% block content %}
+<div class="container my-4">
+    <div class="row mb-3">
+        <div class="col-12 d-flex flex-wrap justify-content-between align-items-center">
+            <div>
+                <h2><i class="bi bi-building"></i> {{ community.name }} 社区详情</h2>
+                <p class="text-muted mb-0">仅展示社区层面行动状态，不含个人身份信息。</p>
+            </div>
+            <div class="d-flex gap-2">
+                <a class="btn btn-outline-secondary" href="{{ url_for('user.community_dashboard') }}">
+                    <i class="bi bi-arrow-left"></i> 返回列表
+                </a>
+                <a class="btn btn-outline-success" href="{{ url_for('user.community_wechat', community_code=community.name) }}">
+                    <i class="bi bi-wechat"></i> 微信模板
+                </a>
+            </div>
+        </div>
+    </div>
+
+    <div class="row g-4">
+        <div class="col-lg-5">
+            <div class="card shadow-sm mb-3">
+                <div class="card-header bg-light">
+                    <h5 class="mb-0">今日概览（{{ status_date.strftime('%Y-%m-%d') }}）</h5>
+                </div>
+                <div class="card-body">
+                    <div class="mb-2"><span class="text-muted">覆盖：</span>{{ snapshot.total_people }}</div>
+                    <div class="mb-2"><span class="text-muted">确认率：</span>{{ (snapshot.confirm_rate * 100)|round(1) }}%</div>
+                    <div class="mb-2"><span class="text-muted">升级触发率：</span>{{ (snapshot.escalation_rate * 100)|round(1) }}%</div>
+                    <div class="mb-2">
+                        <span class="badge bg-success">低 {{ snapshot.risk_distribution['低风险'] }}</span>
+                        <span class="badge bg-warning text-dark">中 {{ snapshot.risk_distribution['中风险'] }}</span>
+                        <span class="badge bg-danger">高 {{ snapshot.risk_distribution['高风险'] }}</span>
+                        <span class="badge bg-dark">极 {{ snapshot.risk_distribution['极高'] }}</span>
+                    </div>
+                    <div class="text-muted small">{{ snapshot.outreach_summary }}</div>
+                </div>
+            </div>
+
+            <div class="card shadow-sm mb-3">
+                <div class="card-header bg-light">
+                    <h5 class="mb-0">今日风险分布与确认覆盖</h5>
+                </div>
+                <div class="card-body">
+                    <div id="communityDetailChartEmpty" class="text-muted small mb-2">暂无今日数据。</div>
+                    <canvas id="communityDetailChart"
+                            data-risk='{{ risk_counts | tojson }}'
+                            data-confirmed='{{ confirmed_counts | tojson }}'
+                            height="180"></canvas>
+                </div>
+            </div>
+
+            <div class="card shadow-sm">
+                <div class="card-header bg-light">
+                    <h5 class="mb-0">复盘统计</h5>
+                </div>
+                <div class="card-body">
+                    <div class="mb-2"><span class="text-muted">提交数量：</span>{{ debrief_total }}</div>
+                    <div class="mb-0"><span class="text-muted">关联数量：</span>{{ debrief_optin }}</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-lg-7">
+            {% if current_user.role == 'admin' %}
+                <div class="card shadow-sm mb-3">
+                    <div class="card-header bg-light">
+                        <h5 class="mb-0">今日行动列表</h5>
+                    </div>
+                    <div class="card-body">
+                        {% if statuses %}
+                            <div class="table-responsive">
+                                <table class="table table-sm align-middle">
+                                    <thead>
+                                        <tr>
+                                            <th>短码</th>
+                                            <th>风险</th>
+                                            <th>确认</th>
+                                            <th>求助</th>
+                                            <th>完成</th>
+                                            <th>升级链</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {% for item in statuses %}
+                                            {% set pair = pair_map.get(item.pair_id) %}
+                                            <tr>
+                                                <td>{{ pair.short_code if pair else '-' }}</td>
+                                                <td>{{ item.risk_level or '-' }}</td>
+                                                <td>{{ '是' if item.confirmed_at else '否' }}</td>
+                                                <td>{{ '是' if item.help_flag else '否' }}</td>
+                                                <td>{{ item.actions_done_count or 0 }}</td>
+                                                <td>{{ item.relay_stage or 'none' }}</td>
+                                            </tr>
+                                        {% endfor %}
+                                    </tbody>
+                                </table>
+                            </div>
+                        {% else %}
+                            <div class="text-muted">今日暂无行动记录。</div>
+                        {% endif %}
+                    </div>
+                </div>
+            {% endif %}
+
+            <div class="card shadow-sm mb-3">
+                <div class="card-header bg-light">
+                    <h5 class="mb-0">外展建议与群发模板</h5>
+                </div>
+                <div class="card-body">
+                    <h6 class="mb-2">外展建议清单</h6>
+                    {% if outreach_suggestions %}
+                        <ul class="text-muted small">
+                            {% for suggestion in outreach_suggestions %}
+                                <li>{{ suggestion }}</li>
+                            {% endfor %}
+                        </ul>
+                    {% else %}
+                        <div class="text-muted small">暂无建议。</div>
+                    {% endif %}
+                    <h6 class="mt-3 mb-2">群发模板复制</h6>
+                    <textarea class="form-control mb-2" rows="5" id="detailGroupMessage" readonly>{{ group_message }}</textarea>
+                    <button class="btn btn-outline-primary btn-sm" id="copyDetailMessage">
+                        <i class="bi bi-clipboard"></i> 复制群发模板
+                    </button>
+                </div>
+            </div>
+
+            <div class="card shadow-sm">
+                <div class="card-header bg-light">
+                    <h5 class="mb-0">避暑资源</h5>
+                </div>
+                <div class="card-body">
+                    {% if resources %}
+                        <ul class="list-group list-group-flush">
+                            {% for item in resources %}
+                                <li class="list-group-item px-0">
+                                    <strong>{{ item.name }}</strong>
+                                    {% if item.address_hint %}
+                                        <div class="text-muted small">{{ item.address_hint }}</div>
+                                    {% endif %}
+                                    {% if item.open_hours %}
+                                        <div class="text-muted small">开放时间：{{ item.open_hours }}</div>
+                                    {% endif %}
+                                </li>
+                            {% endfor %}
+                        </ul>
+                    {% else %}
+                        <div class="text-muted">暂无避暑点数据。</div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+    const canvas = document.getElementById('communityDetailChart');
+    const emptyState = document.getElementById('communityDetailChartEmpty');
+    if (canvas) {
+        const risk = JSON.parse(canvas.dataset.risk || '{}');
+        const confirmed = JSON.parse(canvas.dataset.confirmed || '{}');
+        const labels = ['低风险', '中风险', '高风险', '极高'];
+        const totals = labels.map(label => risk[label] || 0);
+        const confirmedValues = labels.map(label => confirmed[label] || 0);
+        const unconfirmedValues = totals.map((total, idx) => Math.max(total - confirmedValues[idx], 0));
+        const hasData = totals.some(v => v > 0);
+        if (!hasData) {
+            canvas.style.display = 'none';
+        } else {
+            if (emptyState) {
+                emptyState.style.display = 'none';
+            }
+            new Chart(canvas.getContext('2d'), {
+                type: 'bar',
+                data: {
+                    labels: labels,
+                    datasets: [
+                        {
+                            label: '已确认',
+                            data: confirmedValues,
+                            backgroundColor: 'rgba(14, 159, 110, 0.7)'
+                        },
+                        {
+                            label: '未确认',
+                            data: unconfirmedValues,
+                            backgroundColor: 'rgba(107, 114, 128, 0.4)'
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    plugins: {
+                        legend: { position: 'top' }
+                    },
+                    scales: {
+                        x: { stacked: true },
+                        y: { stacked: true, beginAtZero: true }
+                    }
+                }
+            });
+        }
+    }
+
+    const copyBtn = document.getElementById('copyDetailMessage');
+    const messageEl = document.getElementById('detailGroupMessage');
+    if (copyBtn && messageEl) {
+        copyBtn.addEventListener('click', async () => {
+            try {
+                await navigator.clipboard.writeText(messageEl.value);
+                copyBtn.classList.add('btn-success');
+                copyBtn.textContent = '已复制';
+                setTimeout(() => {
+                    copyBtn.classList.remove('btn-success');
+                    copyBtn.innerHTML = '<i class="bi bi-clipboard"></i> 复制群发模板';
+                }, 1200);
+            } catch (err) {
+                alert('复制失败，请手动选择文本');
+            }
+        });
+    }
+});
+</script>
+{% endblock %}

@@ -1,0 +1,933 @@
+{% extends "base.html" %}
+
+{% block title %}社区风险地图 - 天气健康风险预测系统{% endblock %}
+
+{% block extra_css %}
+<style>
+    #map {
+        height: 600px;
+        border-radius: 8px;
+        border: 1px solid var(--border-color);
+    }
+    .amap-marker {
+        cursor: pointer;
+    }
+    .info-window {
+        min-width: 250px;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <div class="row mb-4">
+        <div class="col-12">
+            <h2><i class="bi bi-map"></i> 社区健康风险地图</h2>
+            <p class="text-muted">直观展示各社区的健康风险分布情况</p>
+        </div>
+    </div>
+
+    <div class="row">
+        <div class="col-md-9 mb-4">
+            <div class="card shadow-sm">
+                <div class="card-header bg-primary text-white">
+                    <h5 class="mb-0"><i class="bi bi-geo-alt"></i> 风险分布地图</h5>
+                </div>
+                <div class="card-body p-3">
+                    <div id="map"></div>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-md-3 mb-4">
+            <div class="card shadow-sm mb-3">
+                <div class="card-header bg-secondary text-white">
+                    <h5 class="mb-0"><i class="bi bi-info-circle"></i> 图例说明</h5>
+                </div>
+                <div class="card-body">
+                    <div class="mb-2">
+                        <span class="badge bg-success">低风险</span>
+                        <p class="small text-muted mb-0">脆弱性指数 < 30</p>
+                    </div>
+                    <div class="mb-2">
+                        <span class="badge bg-warning">中风险</span>
+                        <p class="small text-muted mb-0">脆弱性指数 30-60</p>
+                    </div>
+                    <div class="mb-2">
+                        <span class="badge bg-danger">高风险</span>
+                        <p class="small text-muted mb-0">脆弱性指数 > 60</p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card shadow-sm mb-3">
+                <div class="card-header bg-info text-white d-flex justify-content-between align-items-center">
+                    <h5 class="mb-0"><i class="bi bi-list"></i> 社区风险排名</h5>
+                    <button class="btn btn-light btn-sm" id="refreshRiskMap" type="button">
+                        <i class="bi bi-arrow-clockwise"></i>
+                    </button>
+                </div>
+                <div class="card-body p-0" style="max-height: 400px; overflow-y: auto;">
+                    <div class="list-group list-group-flush" id="community-list">
+                        {% for community in communities %}
+                            <a href="#" class="list-group-item list-group-item-action" 
+                               data-lat="{{ community.latitude }}" 
+                               data-lng="{{ community.longitude }}">
+                                <div class="d-flex w-100 justify-content-between">
+                                    <h6 class="mb-1">{{ community.name }}</h6>
+                                    {% if community.risk_level == '高' %}
+                                        <span class="badge bg-danger">{{ community.risk_level }}</span>
+                                    {% elif community.risk_level == '中' %}
+                                        <span class="badge bg-warning">{{ community.risk_level }}</span>
+                                    {% else %}
+                                        <span class="badge bg-success">{{ community.risk_level }}</span>
+                                    {% endif %}
+                                </div>
+                                <p class="mb-1 small text-muted">
+                                    人口：{{ community.population or 'N/A' }}
+                                </p>
+                                <small class="text-muted">
+                                    脆弱性指数：{{ community.vulnerability_index|round(2) if community.vulnerability_index else 'N/A' }}
+                                </small>
+                            </a>
+                        {% endfor %}
+                    </div>
+                </div>
+            </div>
+            
+            <!-- 管控建议 -->
+            <div class="card shadow-sm">
+                <div class="card-header bg-warning">
+                    <h5 class="mb-0"><i class="bi bi-lightbulb"></i> 管控建议</h5>
+                </div>
+                <div class="card-body p-2" id="managementSuggestions">
+                    <p class="text-muted small mb-0">点击刷新按钮加载建议...</p>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+{% if amap_security_js_code %}
+<script type="text/javascript">
+    window._AMapSecurityConfig = {
+        securityJsCode: {{ amap_security_js_code|tojson }}
+    };
+</script>
+{% endif %}
+<script src="https://webapi.amap.com/maps?v=2.0&key={{ amap_key|urlencode }}&plugin=AMap.Scale,AMap.ToolBar"></script>
+<script>
+// 社区数据
+var communities = {{ communities|tojson|safe }};
+
+// 初始化高德地图（都昌县中心 - 江西省九江市）
+var map = new AMap.Map('map', {
+    zoom: 12,
+    center: [116.2, 29.27],  // 都昌县坐标
+    mapStyle: 'amap://styles/normal',
+    viewMode: '2D'
+});
+
+// 异步加载控件插件
+AMap.plugin(['AMap.Scale', 'AMap.ToolBar'], function() {
+    map.addControl(new AMap.Scale());
+    map.addControl(new AMap.ToolBar());
+});
+
+// 根据风险等级获取颜色
+function getRiskColor(riskLevel) {
+    switch(riskLevel) {
+        case '高': return '#dc2626';
+        case '中': return '#d97706';
+        case '低': return '#0e9f6e';
+        default: return '#6b7280';
+    }
+}
+
+// 存储所有标记
+var markers = [];
+var riskMarkers = [];  // 风险数据标记
+var riskMarkerCoords = {};
+var baseMarkersCleared = false;
+
+// 都昌县各社区/村镇坐标数据（GCJ-02）
+var communityCoords = {{ community_coords|tojson|safe }};
+
+function toRadians(value) {
+    return value * Math.PI / 180;
+}
+
+function haversineDistance(a, b) {
+    var lon1 = toRadians(a[0]);
+    var lat1 = toRadians(a[1]);
+    var lon2 = toRadians(b[0]);
+    var lat2 = toRadians(b[1]);
+    var dlon = lon2 - lon1;
+    var dlat = lat2 - lat1;
+    var sinDlat = Math.sin(dlat / 2);
+    var sinDlon = Math.sin(dlon / 2);
+    var aa = sinDlat * sinDlat + Math.cos(lat1) * Math.cos(lat2) * sinDlon * sinDlon;
+    return 2 * 6371000 * Math.asin(Math.sqrt(aa));
+}
+
+function computeBoundaryRadii(coordsMap) {
+    var names = Object.keys(coordsMap || {});
+    var radii = {};
+    var maxRadius = 1200;
+
+    names.forEach(function(name) {
+        var center = coordsMap[name];
+        if (!center || center.length !== 2) {
+            return;
+        }
+        var minDistance = Infinity;
+        names.forEach(function(other) {
+            if (other === name) {
+                return;
+            }
+            var target = coordsMap[other];
+            if (!target || target.length !== 2) {
+                return;
+            }
+            var dist = haversineDistance(center, target);
+            if (dist < minDistance) {
+                minDistance = dist;
+            }
+        });
+
+        var radius = Math.floor(minDistance * 0.45);
+        if (!isFinite(radius) || radius <= 0) {
+            radius = 600;
+        }
+        radii[name] = Math.min(radius, maxRadius);
+    });
+
+    return radii;
+}
+
+var communityBoundaryRadii = computeBoundaryRadii(communityCoords);
+
+function getBoundaryRadius(name) {
+    return communityBoundaryRadii[name] || 600;
+}
+
+function clearBaseMarkers() {
+    if (baseMarkersCleared) {
+        return;
+    }
+    markers.forEach(function(item) {
+        if (item.circle) {
+            map.remove(item.circle);
+        }
+        if (item.text) {
+            map.remove(item.text);
+        }
+    });
+    markers = [];
+    baseMarkersCleared = true;
+}
+
+function safeText(value, fallback) {
+    if (value === undefined || value === null) {
+        return fallback || '';
+    }
+    return String(value);
+}
+
+function toNumber(value, fallback) {
+    if (value === undefined || value === null || value === '') {
+        return fallback;
+    }
+    var num = Number(value);
+    if (!Number.isFinite(num)) {
+        return fallback;
+    }
+    return num;
+}
+
+function formatNumber(value, digits, fallbackText) {
+    var num = toNumber(value, null);
+    if (num === null) {
+        return fallbackText;
+    }
+    return num.toFixed(digits);
+}
+
+function escapeHtml(value) {
+    return safeText(value, '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
+function createMarkerWithContent(options, contentData) {
+    var fallback = contentData ? contentData.fallback : '';
+    if (contentData && contentData.node) {
+        options.content = contentData.node;
+    }
+    try {
+        var marker = new AMap.Marker(options);
+        if (fallback && marker.getContent) {
+            var content = marker.getContent();
+            if (typeof content === 'string' && content.indexOf('[object') === 0) {
+                marker.setContent(fallback);
+            }
+        }
+        return marker;
+    } catch (error) {
+        if (fallback) {
+            options.content = fallback;
+            return new AMap.Marker(options);
+        }
+        throw error;
+    }
+}
+
+function createInfoWindowWithContent(options, contentData) {
+    var fallback = contentData ? contentData.fallback : '';
+    if (contentData && contentData.node) {
+        options.content = contentData.node;
+    } else if (fallback) {
+        options.content = fallback;
+    }
+    try {
+        var infoWindow = new AMap.InfoWindow(options);
+        if (fallback && infoWindow.getContent) {
+            var content = infoWindow.getContent();
+            if (typeof content === 'string' && content.indexOf('[object') === 0) {
+                infoWindow.setContent(fallback);
+            }
+        }
+        return infoWindow;
+    } catch (error) {
+        if (fallback) {
+            options.content = fallback;
+            return new AMap.InfoWindow(options);
+        }
+        throw error;
+    }
+}
+
+// 创建自定义标注样式
+function createMarkerContent(name, riskLevel, score) {
+    var levelText = safeText(riskLevel, '');
+    var bgColor = levelText === '高风险' ? '#dc2626' :
+                  levelText === '中风险' ? '#d97706' : '#0e9f6e';
+    var nameText = safeText(name, '');
+    var shortName = nameText.length > 4 ? nameText.substring(0, 4) : nameText;
+    var scoreText = formatNumber(score, 0, '--');
+
+    var container = document.createElement('div');
+    container.style.cssText = [
+        'background:' + bgColor,
+        'color:white',
+        'padding:6px 10px',
+        'border-radius:20px',
+        'font-size:12px',
+        'font-weight:bold',
+        'white-space:nowrap',
+        'box-shadow:0 2px 8px rgba(0,0,0,0.3)',
+        'border:2px solid white',
+        'text-align:center',
+        'min-width:60px'
+    ].join(';');
+
+    var nameDiv = document.createElement('div');
+    nameDiv.textContent = shortName;
+    var scoreDiv = document.createElement('div');
+    scoreDiv.style.fontSize = '10px';
+    scoreDiv.style.opacity = '0.9';
+    scoreDiv.textContent = scoreText + '分';
+
+    container.appendChild(nameDiv);
+    container.appendChild(scoreDiv);
+
+    var fallbackHtml = '<div style="' +
+        'background:' + bgColor + ';' +
+        'color:white;' +
+        'padding:6px 10px;' +
+        'border-radius:20px;' +
+        'font-size:12px;' +
+        'font-weight:bold;' +
+        'white-space:nowrap;' +
+        'box-shadow:0 2px 8px rgba(0,0,0,0.3);' +
+        'border:2px solid white;' +
+        'text-align:center;' +
+        'min-width:60px;' +
+        '">' +
+        '<div>' + escapeHtml(shortName) + '</div>' +
+        '<div style="font-size:10px;opacity:0.9;">' + escapeHtml(scoreText) + '分</div>' +
+        '</div>';
+
+    return {
+        node: container,
+        fallback: fallbackHtml
+    };
+}
+
+function buildCommunityInfoContent(community, markerColor) {
+    var nameText = safeText(community && community.name, '--');
+    var riskText = safeText(community && community.risk_level, '--');
+    var populationValue = toNumber(community && community.population, null);
+    var populationText = populationValue === null ? 'N/A' : Math.round(populationValue).toLocaleString();
+    var vulnerabilityText = formatNumber(community && community.vulnerability_index, 2, 'N/A');
+
+    var wrapper = document.createElement('div');
+    wrapper.className = 'p-3';
+    wrapper.style.minWidth = '280px';
+
+    var title = document.createElement('h6');
+    title.className = 'fw-bold mb-3';
+    title.style.color = markerColor;
+    title.style.borderBottom = '2px solid ' + markerColor;
+    title.style.paddingBottom = '8px';
+    title.textContent = '📍 ' + nameText;
+
+    var riskRow = document.createElement('div');
+    riskRow.className = 'mb-2';
+    var riskLabel = document.createElement('span');
+    riskLabel.className = 'text-secondary';
+    riskLabel.textContent = '风险等级：';
+    var riskBadge = document.createElement('span');
+    riskBadge.className = 'badge';
+    riskBadge.style.backgroundColor = markerColor;
+    riskBadge.style.fontSize = '0.85rem';
+    riskBadge.textContent = riskText + '风险';
+    riskRow.appendChild(riskLabel);
+    riskRow.appendChild(riskBadge);
+
+    var populationRow = document.createElement('div');
+    populationRow.className = 'mb-2';
+    var populationLabel = document.createElement('span');
+    populationLabel.className = 'text-secondary';
+    populationLabel.textContent = '人口数量：';
+    var populationStrong = document.createElement('strong');
+    populationStrong.textContent = populationText;
+    populationRow.appendChild(populationLabel);
+    populationRow.appendChild(populationStrong);
+    populationRow.appendChild(document.createTextNode(' 人'));
+
+    var viRow = document.createElement('div');
+    viRow.className = 'mb-2';
+    var viLabel = document.createElement('span');
+    viLabel.className = 'text-secondary';
+    viLabel.textContent = '脆弱性指数：';
+    var viStrong = document.createElement('strong');
+    viStrong.style.color = markerColor;
+    viStrong.textContent = vulnerabilityText;
+    viRow.appendChild(viLabel);
+    viRow.appendChild(viStrong);
+
+    wrapper.appendChild(title);
+    wrapper.appendChild(riskRow);
+    wrapper.appendChild(populationRow);
+    wrapper.appendChild(viRow);
+
+    var fallbackHtml = '<div class="p-3" style="min-width: 280px;">' +
+        '<h6 class="fw-bold mb-3" style="color: ' + markerColor + '; border-bottom: 2px solid ' + markerColor + '; padding-bottom: 8px;">' +
+        '📍 ' + escapeHtml(nameText) +
+        '</h6>' +
+        '<div class="mb-2">' +
+        '<span class="text-secondary">风险等级：</span>' +
+        '<span class="badge" style="background-color: ' + markerColor + '; font-size: 0.85rem;">' +
+        escapeHtml(riskText) + '风险</span>' +
+        '</div>' +
+        '<div class="mb-2">' +
+        '<span class="text-secondary">人口数量：</span>' +
+        '<strong>' + escapeHtml(populationText) + '</strong> 人' +
+        '</div>' +
+        '<div class="mb-2">' +
+        '<span class="text-secondary">脆弱性指数：</span>' +
+        '<strong style="color: ' + markerColor + ';">' + escapeHtml(vulnerabilityText) + '</strong>' +
+        '</div>' +
+        '</div>';
+
+    return {
+        node: wrapper,
+        fallback: fallbackHtml
+    };
+}
+
+function buildRiskInfoContent(riskItem, bgColor) {
+    var nameText = safeText(riskItem && riskItem.community, '--');
+    var levelText = safeText(riskItem && riskItem.risk_level, '--');
+    var scoreText = formatNumber(riskItem && riskItem.risk_score, 1, '--');
+    var relativeText = formatNumber(riskItem && riskItem.relative_index, 1, '--');
+    var percentileText = formatNumber(riskItem && riskItem.percentile_rank, 1, '--');
+    var populationValue = toNumber(riskItem && riskItem.population, null);
+    var populationText = populationValue === null ? '--' : Math.round(populationValue).toLocaleString();
+    var excessText = formatNumber(riskItem && riskItem.expected_excess_visits, 1, '--');
+    var rankText = formatNumber(riskItem && riskItem.rank, 0, '--');
+
+    var wrapper = document.createElement('div');
+    wrapper.style.padding = '15px';
+    wrapper.style.minWidth = '250px';
+
+    var title = document.createElement('h6');
+    title.style.color = bgColor;
+    title.style.borderBottom = '2px solid ' + bgColor;
+    title.style.paddingBottom = '8px';
+    title.style.marginBottom = '12px';
+    title.textContent = '🏘️ ' + nameText;
+    wrapper.appendChild(title);
+
+    var levelRow = document.createElement('div');
+    levelRow.style.marginBottom = '8px';
+    var levelLabel = document.createElement('span');
+    levelLabel.style.color = '#666';
+    levelLabel.textContent = '风险等级：';
+    var levelBadge = document.createElement('span');
+    levelBadge.style.background = bgColor;
+    levelBadge.style.color = 'white';
+    levelBadge.style.padding = '2px 8px';
+    levelBadge.style.borderRadius = '10px';
+    levelBadge.style.fontSize = '12px';
+    levelBadge.textContent = levelText;
+    levelRow.appendChild(levelLabel);
+    levelRow.appendChild(levelBadge);
+    wrapper.appendChild(levelRow);
+
+    var scoreRow = document.createElement('div');
+    scoreRow.style.marginBottom = '8px';
+    var scoreLabel = document.createElement('span');
+    scoreLabel.style.color = '#666';
+    scoreLabel.textContent = '风险分数：';
+    var scoreStrong = document.createElement('strong');
+    scoreStrong.style.color = bgColor;
+    scoreStrong.style.fontSize = '18px';
+    scoreStrong.textContent = scoreText;
+    scoreRow.appendChild(scoreLabel);
+    scoreRow.appendChild(scoreStrong);
+    wrapper.appendChild(scoreRow);
+
+    var relativeRow = document.createElement('div');
+    relativeRow.style.marginBottom = '8px';
+    var relativeLabel = document.createElement('span');
+    relativeLabel.style.color = '#666';
+    relativeLabel.textContent = '相对指数：';
+    var relativeStrong = document.createElement('strong');
+    relativeStrong.textContent = relativeText;
+    relativeRow.appendChild(relativeLabel);
+    relativeRow.appendChild(relativeStrong);
+    wrapper.appendChild(relativeRow);
+
+    var percentileRow = document.createElement('div');
+    percentileRow.style.marginBottom = '8px';
+    var percentileLabel = document.createElement('span');
+    percentileLabel.style.color = '#666';
+    percentileLabel.textContent = '分位：';
+    var percentileStrong = document.createElement('strong');
+    percentileStrong.textContent = percentileText === '--' ? '--' : percentileText + '%';
+    percentileRow.appendChild(percentileLabel);
+    percentileRow.appendChild(percentileStrong);
+    wrapper.appendChild(percentileRow);
+
+    var populationRow = document.createElement('div');
+    populationRow.style.marginBottom = '8px';
+    var populationLabel = document.createElement('span');
+    populationLabel.style.color = '#666';
+    populationLabel.textContent = '人口数量：';
+    var populationStrong = document.createElement('strong');
+    populationStrong.textContent = populationText;
+    populationRow.appendChild(populationLabel);
+    populationRow.appendChild(populationStrong);
+    populationRow.appendChild(document.createTextNode(' 人'));
+    wrapper.appendChild(populationRow);
+
+    var excessRow = document.createElement('div');
+    excessRow.style.marginBottom = '8px';
+    var excessLabel = document.createElement('span');
+    excessLabel.style.color = '#666';
+    excessLabel.textContent = '预计额外就诊：';
+    var excessStrong = document.createElement('strong');
+    excessStrong.style.color = '#e74c3c';
+    excessStrong.textContent = excessText;
+    excessRow.appendChild(excessLabel);
+    excessRow.appendChild(excessStrong);
+    excessRow.appendChild(document.createTextNode(' 人次'));
+    wrapper.appendChild(excessRow);
+
+    var rankRow = document.createElement('div');
+    rankRow.style.marginTop = '10px';
+    rankRow.style.paddingTop = '8px';
+    rankRow.style.borderTop = '1px dashed #ddd';
+    rankRow.style.fontSize = '11px';
+    rankRow.style.color = '#888';
+    rankRow.textContent = '排名：第 ' + rankText + ' 位';
+    wrapper.appendChild(rankRow);
+
+    var fallbackHtml = '<div style="padding: 15px; min-width: 250px;">' +
+        '<h6 style="color: ' + bgColor + '; border-bottom: 2px solid ' + bgColor + '; padding-bottom: 8px; margin-bottom: 12px;">' +
+        '🏘️ ' + escapeHtml(nameText) + '</h6>' +
+        '<div style="margin-bottom: 8px;">' +
+        '<span style="color: #666;">风险等级：</span>' +
+        '<span style="background: ' + bgColor + '; color: white; padding: 2px 8px; border-radius: 10px; font-size: 12px;">' +
+        escapeHtml(levelText) + '</span>' +
+        '</div>' +
+        '<div style="margin-bottom: 8px;">' +
+        '<span style="color: #666;">风险分数：</span>' +
+        '<strong style="color: ' + bgColor + '; font-size: 18px;">' + escapeHtml(scoreText) + '</strong>' +
+        '</div>' +
+        '<div style="margin-bottom: 8px;">' +
+        '<span style="color: #666;">相对指数：</span>' +
+        '<strong>' + escapeHtml(relativeText) + '</strong>' +
+        '</div>' +
+        '<div style="margin-bottom: 8px;">' +
+        '<span style="color: #666;">分位：</span>' +
+        '<strong>' + escapeHtml(percentileText === '--' ? '--' : percentileText + '%') + '</strong>' +
+        '</div>' +
+        '<div style="margin-bottom: 8px;">' +
+        '<span style="color: #666;">人口数量：</span>' +
+        '<strong>' + escapeHtml(populationText) + '</strong> 人' +
+        '</div>' +
+        '<div style="margin-bottom: 8px;">' +
+        '<span style="color: #666;">预计额外就诊：</span>' +
+        '<strong style="color: #e74c3c;">' + escapeHtml(excessText) + '</strong> 人次' +
+        '</div>' +
+        '<div style="margin-top: 10px; padding-top: 8px; border-top: 1px dashed #ddd; font-size: 11px; color: #888;">' +
+        '排名：第 ' + escapeHtml(rankText) + ' 位' +
+        '</div>' +
+        '</div>';
+
+    return {
+        node: wrapper,
+        fallback: fallbackHtml
+    };
+}
+
+// 添加初始社区标记（如果有坐标）
+communities.forEach(function(community, index) {
+    var lat = toNumber(community && community.latitude, null);
+    var lng = toNumber(community && community.longitude, null);
+    if (Number.isFinite(lat) && Number.isFinite(lng)) {
+        var markerColor = getRiskColor(community.risk_level);
+        
+        // 创建圆形覆盖物（表示风险范围）
+        var circle = new AMap.Circle({
+            center: [lng, lat],
+            radius: getBoundaryRadius(community.name),
+            strokeColor: markerColor,
+            strokeWeight: 2,
+            strokeOpacity: 0.8,
+            fillColor: markerColor,
+            fillOpacity: 0.25,
+            zIndex: 50
+        });
+        
+        // 创建文字标注
+        var text = new AMap.Text({
+            text: community.name,
+            position: [lng, lat],
+            style: {
+                'background-color': markerColor,
+                'border': '2px solid white',
+                'border-radius': '15px',
+                'color': 'white',
+                'font-size': '12px',
+                'font-weight': 'bold',
+                'padding': '4px 10px',
+                'box-shadow': '0 2px 6px rgba(0,0,0,0.3)'
+            },
+            offset: new AMap.Pixel(-30, -15)
+        });
+        
+        // 创建信息窗体内容
+        var infoContent = buildCommunityInfoContent(community, markerColor);
+        var infoWindow = createInfoWindowWithContent({
+            isCustom: false,
+            offset: new AMap.Pixel(0, -25)
+        }, infoContent);
+        
+        text.on('click', function(e) {
+            infoWindow.open(map, [lng, lat]);
+        });
+        
+        circle.on('click', function(e) {
+            infoWindow.open(map, [lng, lat]);
+        });
+        
+        map.add([circle, text]);
+        markers[index] = {
+            circle: circle,
+            text: text,
+            infoWindow: infoWindow,
+            community: community
+        };
+    }
+});
+
+// 添加风险数据标记到地图
+function addRiskMarkers(rankings) {
+    // 清除旧标记
+    riskMarkers.forEach(function(item) {
+        map.remove(item.circle);
+        map.remove(item.marker);
+    });
+    riskMarkers = [];
+    riskMarkerCoords = {};
+    
+    rankings.forEach(function(r, index) {
+        var coords = communityCoords[r.community];
+        if (!coords) {
+            // 如果没有预设坐标，在都昌县范围内随机生成
+            coords = [
+                116.10 + Math.random() * 0.30,
+                29.15 + Math.random() * 0.30
+            ];
+        }
+        
+        var bgColor = r.risk_level === '高风险' ? '#dc2626' : 
+                      r.risk_level === '中风险' ? '#d97706' : '#0e9f6e';
+        
+        // 创建风险范围圆圈
+        var circle = new AMap.Circle({
+            center: coords,
+            radius: getBoundaryRadius(r.community),
+            strokeColor: bgColor,
+            strokeWeight: 2,
+            strokeOpacity: 0.9,
+            fillColor: bgColor,
+            fillOpacity: 0.3,
+            zIndex: 50
+        });
+        
+        // 创建自定义标记
+        var markerContent = createMarkerContent(r.community, r.risk_level, r.risk_score);
+        var marker = createMarkerWithContent({
+            position: coords,
+            offset: new AMap.Pixel(-40, -25),
+            zIndex: 100
+        }, markerContent);
+        
+        // 信息窗口
+        var infoContent = buildRiskInfoContent(r, bgColor);
+        var infoWindow = createInfoWindowWithContent({
+            isCustom: false,
+            offset: new AMap.Pixel(0, -30)
+        }, infoContent);
+        
+        marker.on('click', function() {
+            infoWindow.open(map, coords);
+        });
+        
+        circle.on('click', function() {
+            infoWindow.open(map, coords);
+        });
+        
+        map.add([circle, marker]);
+        if (r.community) {
+            riskMarkerCoords[r.community] = coords;
+        }
+        riskMarkers.push({
+            circle: circle,
+            marker: marker,
+            infoWindow: infoWindow,
+            coords: coords,
+            community: r.community
+        });
+    });
+    
+    // 调整地图视野以包含所有标记
+    if (riskMarkers.length > 0) {
+        map.setFitView();
+    }
+}
+
+// 社区列表点击事件
+document.querySelectorAll('#community-list .list-group-item').forEach(function(item, index) {
+    item.addEventListener('click', function(e) {
+        e.preventDefault();
+        var lat = toNumber(this.dataset.lat, null);
+        var lng = toNumber(this.dataset.lng, null);
+        if (Number.isFinite(lat) && Number.isFinite(lng)) {
+            map.setZoomAndCenter(14, [lng, lat]);
+            
+            // 打开对应标记的信息窗体
+            if (markers[index] && markers[index].infoWindow) {
+                markers[index].infoWindow.open(map, [lng, lat]);
+            }
+        }
+    });
+});
+
+// 地图加载完成提示
+map.on('complete', function() {
+    console.log('地图加载完成');
+    // 自动加载风险地图数据
+    loadRiskMap();
+});
+
+// 加载实时风险地图数据
+function loadRiskMap() {
+    fetch('/api/community/risk-map-v2', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({})
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            updateRiskDisplay(data);
+        }
+    })
+    .catch(error => {
+        console.error('加载风险数据失败:', error);
+    });
+}
+
+function clearElement(element) {
+    while (element.firstChild) {
+        element.removeChild(element.firstChild);
+    }
+}
+
+const refreshButton = document.getElementById('refreshRiskMap');
+if (refreshButton) {
+    refreshButton.addEventListener('click', loadRiskMap);
+}
+
+function updateRiskDisplay(data) {
+    const formatNumber = (value, decimals, fallback) => {
+        if (value === undefined || value === null || Number.isNaN(value)) {
+            return fallback;
+        }
+        const num = typeof value === 'number' ? value : parseFloat(value);
+        if (Number.isNaN(num)) {
+            return fallback;
+        }
+        return num.toFixed(decimals);
+    };
+
+    // 更新地图标记
+    if (data.rankings && data.rankings.length > 0) {
+        clearBaseMarkers();
+        addRiskMarkers(data.rankings);
+    }
+    
+    // 更新社区列表
+    const listDiv = document.getElementById('community-list');
+    if (data.rankings && data.rankings.length > 0) {
+        clearElement(listDiv);
+        data.rankings.forEach((r, i) => {
+            const badgeClass = r.risk_level === '高风险' ? 'danger' : 
+                              r.risk_level === '中风险' ? 'warning' : 'success';
+            const bgColor = r.risk_level === '高风险' ? '#dc2626' : 
+                           r.risk_level === '中风险' ? '#d97706' : '#0e9f6e';
+
+            const item = document.createElement('div');
+            item.className = 'list-group-item list-group-item-action';
+            item.style.cursor = 'pointer';
+            item.style.borderLeft = '4px solid ' + bgColor;
+            item.addEventListener('click', function() {
+                focusOnCommunity(r.community, i);
+            });
+
+            const header = document.createElement('div');
+            header.className = 'd-flex justify-content-between align-items-center';
+
+            const left = document.createElement('div');
+            const rankBadge = document.createElement('span');
+            rankBadge.className = 'badge bg-secondary me-2';
+            rankBadge.textContent = '#' + (r.rank !== undefined && r.rank !== null ? r.rank : '--');
+            const nameStrong = document.createElement('strong');
+            nameStrong.textContent = r.community || '--';
+            left.appendChild(rankBadge);
+            left.appendChild(nameStrong);
+
+            const riskBadge = document.createElement('span');
+            riskBadge.className = 'badge bg-' + badgeClass;
+            riskBadge.textContent = r.risk_level || '--';
+
+            header.appendChild(left);
+            header.appendChild(riskBadge);
+
+            const info = document.createElement('div');
+            info.className = 'small text-muted mt-1';
+            const riskScoreText = formatNumber(r.risk_score, 1, '--');
+            const relativeIndexText = formatNumber(r.relative_index, 1, '--');
+            const percentileText = formatNumber(r.percentile_rank, 1, '--');
+            const populationText = (r.population === undefined || r.population === null) ? '--' : String(r.population);
+            const excessText = formatNumber(r.expected_excess_visits, 1, '--');
+
+            const riskScoreStrong = document.createElement('strong');
+            riskScoreStrong.style.color = bgColor;
+            riskScoreStrong.textContent = riskScoreText;
+
+            info.appendChild(document.createTextNode('风险分数: '));
+            info.appendChild(riskScoreStrong);
+            info.appendChild(document.createTextNode(' | 相对指数: '));
+            info.appendChild(document.createTextNode(relativeIndexText));
+            info.appendChild(document.createTextNode(' | 分位: '));
+            info.appendChild(document.createTextNode(percentileText === '--' ? '--' : percentileText + '%'));
+            info.appendChild(document.createTextNode(' | 人口: '));
+            info.appendChild(document.createTextNode(populationText));
+            info.appendChild(document.createTextNode(' | 额外就诊: '));
+            info.appendChild(document.createTextNode(excessText === '--' ? '--' : excessText + '人次'));
+
+            item.appendChild(header);
+            item.appendChild(info);
+            listDiv.appendChild(item);
+        });
+    }
+    
+    // 更新管控建议
+    const suggestDiv = document.getElementById('managementSuggestions');
+    clearElement(suggestDiv);
+    if (data.management_suggestions && data.management_suggestions.length > 0) {
+        data.management_suggestions.forEach(s => {
+            const priorityClass = s.priority === 'high' ? 'danger' : 
+                                 s.priority === 'medium' ? 'warning' : 'info';
+            const icon = s.priority === 'high' ? '🚨' : 
+                        s.priority === 'medium' ? '⚠️' : '💡';
+
+            const alertDiv = document.createElement('div');
+            alertDiv.className = 'alert alert-' + priorityClass + ' py-2 mb-2';
+
+            const title = document.createElement('strong');
+            title.textContent = icon + ' ' + (s.category || '');
+
+            const advice = document.createElement('small');
+            advice.textContent = s.advice || '';
+
+            alertDiv.appendChild(title);
+            alertDiv.appendChild(document.createElement('br'));
+            alertDiv.appendChild(advice);
+            suggestDiv.appendChild(alertDiv);
+        });
+    } else {
+        const empty = document.createElement('p');
+        empty.className = 'text-muted small mb-0';
+        empty.textContent = '暂无管控建议';
+        suggestDiv.appendChild(empty);
+    }
+    
+    // 显示摘要
+    if (data.summary) {
+        console.log('风险摘要:', data.summary);
+    }
+}
+
+// 点击列表项聚焦到对应社区
+function focusOnCommunity(communityName, index) {
+    var coords = null;
+    if (riskMarkers[index] && riskMarkers[index].coords) {
+        coords = riskMarkers[index].coords;
+    } else if (communityName && riskMarkerCoords[communityName]) {
+        coords = riskMarkerCoords[communityName];
+    } else if (communityName) {
+        coords = communityCoords[communityName];
+    }
+    if (coords && coords.length === 2 && Number.isFinite(coords[0]) && Number.isFinite(coords[1])) {
+        map.setZoomAndCenter(14, coords);
+        // 打开对应标记的信息窗口
+        if (riskMarkers[index] && riskMarkers[index].infoWindow) {
+            riskMarkers[index].infoWindow.open(map, coords);
+        }
+    }
+}
+</script>
+{% endblock %}

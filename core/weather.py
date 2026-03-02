@@ -136,11 +136,14 @@ def is_demo_mode():
     demo_arg = request.args.get('demo')
     if demo_arg is not None:
         enabled = parse_bool(demo_arg, default=False)
-        if enabled:
-            session['demo_mode'] = True
-        else:
-            session.pop('demo_mode', None)
-        return enabled
+        # 仅允许管理员通过 URL 参数切换 demo 模式
+        if hasattr(current_user, 'role') and current_user.is_authenticated and current_user.role == 'admin':
+            if enabled:
+                session['demo_mode'] = True
+            else:
+                session.pop('demo_mode', None)
+            return enabled
+        # 非管理员忽略 demo 参数
     return bool(session.get('demo_mode'))
 
 

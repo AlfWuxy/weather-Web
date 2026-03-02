@@ -30,6 +30,19 @@ def api_current_weather():
     return api_v1_current_weather()
 
 
+@bp.route('/api/v1/weather/nowcast', endpoint='api_v1_weather_nowcast')
+@limiter.limit(lambda: current_app.config.get('RATE_LIMIT_WEATHER', '120 per minute'), key_func=rate_limit_key)
+def api_v1_weather_nowcast():
+    """获取短临小时级降水时间轴（v1）"""
+    return api_service._api_weather_nowcast()
+
+
+@bp.route('/api/weather/nowcast', endpoint='api_weather_nowcast')
+def api_weather_nowcast():
+    """获取短临小时级降水时间轴（兼容）"""
+    return api_v1_weather_nowcast()
+
+
 @bp.route('/api/v1/community/risk-map', endpoint='api_v1_community_risk_map')
 def api_v1_community_risk_map():
     """获取社区风险地图数据（v1）"""
@@ -140,6 +153,7 @@ def api_forecast_7day():
 
 
 @bp.route('/api/v1/forecast/daily', methods=['POST'], endpoint='api_v1_forecast_daily')
+@login_required
 @limiter.limit(lambda: current_app.config.get('RATE_LIMIT_FORECAST', '60 per minute'), key_func=rate_limit_key)
 def api_v1_forecast_daily():
     """获取单日门诊预测（v1）"""
@@ -208,6 +222,7 @@ def api_chronic_individual():
 
 
 @bp.route('/api/v1/chronic/population', methods=['POST'], endpoint='api_v1_chronic_population')
+@login_required
 def api_v1_chronic_population():
     """人群分层慢病风险预测（v1）"""
     return api_service._api_chronic_population()
@@ -250,6 +265,8 @@ def api_chronic_rules_version():
 # ======================== 综合预警API ========================
 
 @bp.route('/api/v1/alert/comprehensive', methods=['POST'], endpoint='api_v1_comprehensive_alert')
+@login_required
+@limiter.limit(lambda: current_app.config.get('RATE_LIMIT_FORECAST', '60 per minute'), key_func=rate_limit_key)
 def api_v1_comprehensive_alert():
     """获取综合健康预警（v1）"""
     return api_service._api_comprehensive_alert()

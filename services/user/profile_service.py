@@ -30,10 +30,10 @@ def health_assessment():
     """健康风险评估"""
     if request.method == 'POST':
         try:
-            # 执行风险评估 - 简化版本
-            from services.weather_service import WeatherService
+            # 执行风险评估（多路径融合版）
+            from services.health_risk_service import HealthRiskService
 
-            weather_service = WeatherService()
+            health_service = HealthRiskService()
             user_location = ensure_user_location_valid()
             weather_data, _ = get_weather_with_cache(user_location)
 
@@ -41,58 +41,61 @@ def health_assessment():
             user_health_profile = {
                 'age': current_user.age or 30,
                 'gender': current_user.gender or '未知',
+                'community': current_user.community or '',
                 'has_chronic_disease': current_user.has_chronic_disease or False,
                 'chronic_diseases': safe_json_loads(current_user.chronic_diseases, [])
             }
 
-            # 计算天气健康风险
-            risk_result = weather_service.calculate_risk_index(weather_data, user_health_profile)
+            # 个人即时筛查（可选项）
+            def _select(name, allowed, default):
+                value = sanitize_input(request.form.get(name), max_length=20) or default
+                value = value.strip().lower()
+                return value if value in allowed else default
 
-            # 生成健康建议
-            recommendations = []
-            if risk_result['risk_score'] > 60:
-                recommendations.append({'category': '高风险提醒', 'advice': '当前天气条件对您的健康影响较大，建议减少外出，加强防护措施'})
-            elif risk_result['risk_score'] > 30:
-                recommendations.append({'category': '中风险提醒', 'advice': '天气条件可能对健康产生一定影响，建议适当注意防护'})
-            else:
-                recommendations.append({'category': '低风险', 'advice': '当前天气条件对您的健康影响较小，可正常活动'})
+            screening = {
+                'outdoor_exposure': _select('outdoor_exposure', {'low', 'medium', 'high'}, 'medium'),
+                'symptom_level': _select('symptom_level', {'none', 'mild', 'moderate', 'severe'}, 'none'),
+                'hydration': _select('hydration', {'good', 'normal', 'poor'}, 'normal'),
+                'medication_adherence': _select('medication_adherence', {'good', 'partial', 'poor'}, 'good'),
+                'sleep_quality': _select('sleep_quality', {'good', 'fair', 'poor'}, 'good')
+            }
 
-            explain_payload = None
-            if current_app.config.get('FEATURE_EXPLAIN_OUTPUT'):
-                try:
-                    from services.chronic_risk_service import ChronicRiskService
-                    chronic_service = ChronicRiskService()
-                    rr_proxy = 1.0 + (min(max(risk_result['risk_score'], 0), 100) / 100.0) * 0.8
-                    chronic_diseases = user_health_profile.get('chronic_diseases', [])
-                    explain_context = {
-                        'age': user_health_profile.get('age', 30),
-                        'temperature': weather_data.get('temperature', 20),
-                        'rr': rr_proxy,
-                        'disease_type': 'general',
-                        'chronic_diseases': chronic_diseases,
-                        'has_chronic_disease': user_health_profile.get('has_chronic_disease', False),
-                        'disease_count': len(chronic_diseases),
-                        'aqi': weather_data.get('aqi', 50),
-                        'hot_night': weather_data.get('temperature_min', 15) >= 22,
-                        'hot_night_temp': weather_data.get('temperature_min', 22),
-                        'heat_wave_days': weather_data.get('heat_wave_days', 0),
-                        'cold_wave_days': weather_data.get('cold_wave_days', 0)
-                    }
-                    explain, triggered_rules = chronic_service.build_explain(explain_context, recommendations)
-                    explain_payload = {
-                        'explain': explain,
-                        'rule_version': chronic_service.rules_version,
-                        'triggered_rules': triggered_rules
-                    }
-                except Exception:
-                    explain_payload = None
+            risk_result = health_service.assess_personal_weather_health_risk(
+                user_health_profile,
+                weather_data,
+                screening=screening
+            )
+
+            recommendations = risk_result.get('recommendations', [])
+            disease_risks = risk_result.get('disease_risks', {})
+
+            explain_payload = {
+                'explain': risk_result.get('explain', {}),
+                'rule_version': risk_result.get('rule_version'),
+                'triggered_rules': risk_result.get('triggered_rules', []),
+                'academic_profile': {
+                    'model_version': risk_result.get('model_version'),
+                    'risk_interval': risk_result.get('risk_interval', {}),
+                    'risk_probabilities': risk_result.get('risk_probabilities', {}),
+                    'high_risk_probability': risk_result.get('high_risk_probability'),
+                    'cap_semantics': risk_result.get('cap_semantics', {}),
+                    'impact_likelihood': risk_result.get('impact_likelihood', {}),
+                    'model_paths': risk_result.get('model_paths', []),
+                    'component_scores': risk_result.get('component_scores', {}),
+                    'community_context': risk_result.get('community_context', {}),
+                    'screening': risk_result.get('screening', {}),
+                    'weather': risk_result.get('weather', {}),
+                    'methodology': risk_result.get('methodology', []),
+                    'rr_breakdown': risk_result.get('rr_breakdown', {})
+                }
+            }
 
             if is_guest_user(current_user):
                 session['guest_assessment'] = {
                     'assessment_date': utcnow().isoformat(),
                     'risk_score': risk_result['risk_score'],
                     'risk_level': risk_result['risk_level'],
-                    'recommendations': json.dumps(recommendations),
+                    'recommendations': json.dumps(recommendations, ensure_ascii=False),
                     'explain': json_or_none(explain_payload)
                 }
                 flash('健康风险评估完成（游客模式不保存记录）', 'success')
@@ -104,8 +107,8 @@ def health_assessment():
                     weather_condition=json.dumps(weather_data),
                     risk_score=risk_result['risk_score'],
                     risk_level=risk_result['risk_level'],
-                    disease_risks=json.dumps({}),
-                    recommendations=json.dumps(recommendations),
+                    disease_risks=json.dumps(disease_risks, ensure_ascii=False),
+                    recommendations=json.dumps(recommendations, ensure_ascii=False),
                     explain=json_or_none(explain_payload)
                 )
 
@@ -139,7 +142,7 @@ def health_assessment():
             logger.exception("健康风险评估失败")
             flash('评估过程出现异常，请稍后重试。', 'error')
 
-        return redirect(url_for('user.user_dashboard'))
+        return redirect(url_for('user.health_assessment'))
 
     latest_assessment = None
     if is_guest_user(current_user):
@@ -149,9 +152,24 @@ def health_assessment():
             user_id=current_user.id
         ).order_by(HealthRiskAssessment.assessment_date.desc()).first()
     explain_data = {}
+    disease_risks_data = {}
+    academic_profile = {}
     if latest_assessment and getattr(latest_assessment, 'explain', None):
         explain_data = safe_json_loads(latest_assessment.explain, {})
-    return render_template('health_assessment.html', assessment=latest_assessment, assessment_explain=explain_data)
+    if latest_assessment and getattr(latest_assessment, 'disease_risks', None):
+        disease_risks_data = safe_json_loads(latest_assessment.disease_risks, {})
+    if isinstance(explain_data, dict):
+        academic_profile = explain_data.get('academic_profile', {})
+    if not isinstance(disease_risks_data, dict):
+        disease_risks_data = {}
+
+    return render_template(
+        'health_assessment.html',
+        assessment=latest_assessment,
+        assessment_explain=explain_data,
+        assessment_disease_risks=disease_risks_data,
+        assessment_academic=academic_profile
+    )
 
 
 def profile():
@@ -174,7 +192,14 @@ def profile():
             return redirect(url_for('user.profile'))
 
         if form_id == 'password':
+            old_password = request.form.get('old_password', '')
             new_password = request.form.get('new_password')
+            if not old_password:
+                flash('请输入当前密码', 'error')
+                return redirect(url_for('user.profile'))
+            if not current_user.check_password(old_password):
+                flash('当前密码不正确', 'error')
+                return redirect(url_for('user.profile'))
             if new_password:
                 valid, result = validate_password(new_password)
                 if not valid:

@@ -1,0 +1,17 @@
+Heat Action Weather Sync (QWeather)
+=================================
+
+CLI
+- python services/pipelines/sync_weather_data.py --daily --action-daily
+- python services/pipelines/sync_weather_data.py --action-daily --community "YourCommunity"
+
+Shell
+- ./scripts/weather_sync.sh
+- ./scripts/weather_sync.sh 2025-01-15
+
+Cron example (runs at 07:00/12:00/18:00)
+- 0 7,12,18 * * * /path/to/case-weather/scripts/weather_sync.sh >> /path/to/logs/weather_sync.log 2>&1
+
+Notes
+- Set QWEATHER_KEY and DEFAULT_CITY (or CITY_LOCATION_MAP) in env or config.py.
+- The script writes WeatherData + DailyStatus/CommunityDaily for action dashboards.

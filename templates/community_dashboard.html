@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% set needs_chartjs = true %}
 
 {% block title %}社区工作台 - 天气健康风险预测系统{% endblock %}
 
@@ -167,7 +168,12 @@ document.addEventListener('DOMContentLoaded', function () {
             const textarea = document.getElementById(targetId);
             if (!textarea) return;
             try {
-                await navigator.clipboard.writeText(textarea.value);
+                const ok = window.CWClipboard && typeof window.CWClipboard.copyText === 'function'
+                    ? await window.CWClipboard.copyText(textarea.value)
+                    : false;
+                if (!ok) {
+                    throw new Error('copy_failed');
+                }
                 btn.classList.add('btn-success');
                 btn.textContent = '已复制';
                 setTimeout(() => {

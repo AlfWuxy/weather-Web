@@ -3,9 +3,20 @@
 {% block title %}健康风险评估 - 天气健康风险预测系统{% endblock %}
 
 {% block content %}
+{% set academic = assessment_academic if assessment_academic else {} %}
+{% set risk_interval = academic.get('risk_interval', {}) if academic else {} %}
+{% set probabilities = academic.get('risk_probabilities', {}) if academic else {} %}
+{% set cap = academic.get('cap_semantics', {}) if academic else {} %}
+{% set matrix = academic.get('impact_likelihood', {}) if academic else {} %}
+{% set model_paths = academic.get('model_paths', []) if academic else [] %}
+{% set component_scores = academic.get('component_scores', {}) if academic else {} %}
+{% set community_ctx = academic.get('community_context', {}) if academic else {} %}
+{% set screening_ctx = academic.get('screening', {}) if academic else {} %}
+{% set methodology = academic.get('methodology', []) if academic else [] %}
+{% set recommendations = assessment.recommendations|from_json if assessment and assessment.recommendations else [] %}
 <div class="container">
     <div class="row justify-content-center">
-        <div class="col-md-8">
+        <div class="col-xl-10 col-lg-11">
             <div class="card shadow-lg">
                 <div class="card-header bg-success text-white text-center py-4">
                     <h3><i class="bi bi-clipboard-pulse"></i> 健康风险评估</h3>
@@ -13,7 +24,7 @@
                 </div>
                 <div class="card-body p-4">
                     <div class="alert alert-info">
-                        <i class="bi bi-info-circle"></i> 
+                        <i class="bi bi-info-circle"></i>
                         <strong>评估说明：</strong>
                         系统将综合考虑以下因素进行风险评估：
                         <ul class="mb-0 mt-2">
@@ -49,13 +60,66 @@
                             <div class="mb-3">
                                 <label class="form-label">是否患有慢性疾病</label>
                                 <div class="form-check">
-                                    <input class="form-check-input" type="checkbox" id="has_chronic" disabled 
+                                    <input class="form-check-input" type="checkbox" id="has_chronic" disabled
                                            {% if current_user.has_chronic_disease %}checked{% endif %}>
                                     <label class="form-check-label" for="has_chronic">
                                         {{ '是' if current_user.has_chronic_disease else '否' }}
                                     </label>
                                 </div>
                             </div>
+                        </div>
+
+                        <div class="mb-4">
+                            <h5><i class="bi bi-clipboard2-data"></i> 即时状态筛查</h5>
+                            <div class="row g-3">
+                                <div class="col-md-6">
+                                    <label class="form-label">今日户外暴露</label>
+                                    <select class="form-select" name="outdoor_exposure">
+                                        {% set current_exposure = screening_ctx.get('outdoor_exposure', 'medium') %}
+                                        <option value="low" {% if current_exposure == 'low' %}selected{% endif %}>低（主要室内）</option>
+                                        <option value="medium" {% if current_exposure == 'medium' %}selected{% endif %}>中（约1-3小时）</option>
+                                        <option value="high" {% if current_exposure == 'high' %}selected{% endif %}>高（超过3小时）</option>
+                                    </select>
+                                </div>
+                                <div class="col-md-6">
+                                    <label class="form-label">当前不适症状</label>
+                                    {% set current_symptom = screening_ctx.get('symptom_level', 'none') %}
+                                    <select class="form-select" name="symptom_level">
+                                        <option value="none" {% if current_symptom == 'none' %}selected{% endif %}>无明显不适</option>
+                                        <option value="mild" {% if current_symptom == 'mild' %}selected{% endif %}>轻微</option>
+                                        <option value="moderate" {% if current_symptom == 'moderate' %}selected{% endif %}>中等</option>
+                                        <option value="severe" {% if current_symptom == 'severe' %}selected{% endif %}>明显/严重</option>
+                                    </select>
+                                </div>
+                                <div class="col-md-4">
+                                    <label class="form-label">饮水情况</label>
+                                    {% set current_hydration = screening_ctx.get('hydration', 'normal') %}
+                                    <select class="form-select" name="hydration">
+                                        <option value="good" {% if current_hydration == 'good' %}selected{% endif %}>充足</option>
+                                        <option value="normal" {% if current_hydration == 'normal' %}selected{% endif %}>一般</option>
+                                        <option value="poor" {% if current_hydration == 'poor' %}selected{% endif %}>不足</option>
+                                    </select>
+                                </div>
+                                <div class="col-md-4">
+                                    <label class="form-label">近24小时睡眠</label>
+                                    {% set current_sleep = screening_ctx.get('sleep_quality', 'good') %}
+                                    <select class="form-select" name="sleep_quality">
+                                        <option value="good" {% if current_sleep == 'good' %}selected{% endif %}>良好</option>
+                                        <option value="fair" {% if current_sleep == 'fair' %}selected{% endif %}>一般</option>
+                                        <option value="poor" {% if current_sleep == 'poor' %}selected{% endif %}>较差</option>
+                                    </select>
+                                </div>
+                                <div class="col-md-4">
+                                    <label class="form-label">慢病用药依从</label>
+                                    {% set current_med = screening_ctx.get('medication_adherence', 'good') %}
+                                    <select class="form-select" name="medication_adherence">
+                                        <option value="good" {% if current_med == 'good' %}selected{% endif %}>规律服药</option>
+                                        <option value="partial" {% if current_med == 'partial' %}selected{% endif %}>偶尔漏服</option>
+                                        <option value="poor" {% if current_med == 'poor' %}selected{% endif %}>经常漏服</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <div class="form-text mt-2">这些筛查项用于即时风险修正，可随每次评估更新。</div>
                         </div>
 
                         <div class="alert alert-warning">
@@ -76,6 +140,209 @@
                 </div>
             </div>
 
+            {% if assessment %}
+            <div class="card shadow-sm mt-4">
+                <div class="card-header bg-light">
+                    <h5 class="mb-0"><i class="bi bi-activity"></i> 最新评估结果</h5>
+                </div>
+                <div class="card-body">
+                    <div class="row g-3 align-items-stretch">
+                        <div class="col-lg-4">
+                            <div class="border rounded p-3 h-100">
+                                <div class="text-muted small">评估时间</div>
+                                <div class="mb-2">{{ assessment.assessment_date.strftime('%Y-%m-%d %H:%M') }}</div>
+                                <div class="d-flex align-items-center gap-2 mb-2">
+                                    {% if assessment.risk_level == '高风险' %}
+                                        <span class="badge bg-danger">{{ assessment.risk_level }}</span>
+                                    {% elif assessment.risk_level == '中风险' %}
+                                        <span class="badge bg-warning text-dark">{{ assessment.risk_level }}</span>
+                                    {% else %}
+                                        <span class="badge bg-success">{{ assessment.risk_level }}</span>
+                                    {% endif %}
+                                    <span class="fw-bold fs-4">{{ assessment.risk_score|round(1) }}</span>
+                                    <span class="text-muted">/100</span>
+                                </div>
+                                <div class="progress mb-2" style="height: 10px;">
+                                    {% if assessment.risk_score >= 70 %}
+                                    <div class="progress-bar bg-danger" style="width: {{ assessment.risk_score }}%"></div>
+                                    {% elif assessment.risk_score >= 40 %}
+                                    <div class="progress-bar bg-warning" style="width: {{ assessment.risk_score }}%"></div>
+                                    {% else %}
+                                    <div class="progress-bar bg-success" style="width: {{ assessment.risk_score }}%"></div>
+                                    {% endif %}
+                                </div>
+                                {% if risk_interval %}
+                                <div class="small text-muted">
+                                    风险区间：{{ risk_interval.get('low', 0) }} - {{ risk_interval.get('high', 0) }}
+                                    （不确定性：{{ risk_interval.get('label', '中') }}）
+                                </div>
+                                {% endif %}
+                            </div>
+                        </div>
+                        <div class="col-lg-4">
+                            <div class="border rounded p-3 h-100">
+                                <div class="text-muted small mb-2">概率化输出</div>
+                                <div class="small mb-2">高风险概率：<strong>{{ (probabilities.get('high', 0) * 100)|round(1) }}%</strong></div>
+                                <div class="small mb-2">中风险概率：<strong>{{ (probabilities.get('medium', 0) * 100)|round(1) }}%</strong></div>
+                                <div class="small mb-3">低风险概率：<strong>{{ (probabilities.get('low', 0) * 100)|round(1) }}%</strong></div>
+                                <div class="d-flex flex-wrap gap-2">
+                                    <span class="badge bg-secondary">severity: {{ cap.get('severity', 'minor') }}</span>
+                                    <span class="badge bg-secondary">certainty: {{ cap.get('certainty', 'possible') }}</span>
+                                    <span class="badge bg-secondary">urgency: {{ cap.get('urgency', 'future') }}</span>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-lg-4">
+                            <div class="border rounded p-3 h-100">
+                                <div class="text-muted small mb-2">Impact × Likelihood</div>
+                                <div class="small mb-1">Impact：<strong>{{ matrix.get('impact_bucket', 'low') }}</strong></div>
+                                <div class="small mb-1">Likelihood：<strong>{{ matrix.get('likelihood_bucket', 'low') }}</strong></div>
+                                <div class="small">矩阵得分：<strong>{{ matrix.get('matrix_score', 1) }}</strong> / 16</div>
+                                <hr>
+                                <div class="small text-muted mb-1">社区上下文</div>
+                                <div class="small">社区：{{ community_ctx.get('community', current_user.community or '未设置') }}</div>
+                                <div class="small">脆弱性指数：{{ community_ctx.get('vulnerability_index', '-') }}</div>
+                                <div class="small">30天病例数：{{ community_ctx.get('cases_30d', 0) }}</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="row g-3 mt-1">
+                        <div class="col-lg-6">
+                            <div class="border rounded p-3 h-100">
+                                <h6><i class="bi bi-diagram-3"></i> 融合模型路径</h6>
+                                <div class="table-responsive">
+                                    <table class="table table-sm align-middle mb-0">
+                                        <thead>
+                                            <tr>
+                                                <th>模型路径</th>
+                                                <th>分值</th>
+                                                <th>融合权重</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {% for path in model_paths %}
+                                            <tr>
+                                                <td>{{ path.get('name') }}</td>
+                                                <td>{{ path.get('score') }}</td>
+                                                <td>{{ (path.get('weight', 0) * 100)|round(0) }}%</td>
+                                            </tr>
+                                            {% endfor %}
+                                            {% if not model_paths %}
+                                            <tr><td colspan="3" class="text-muted">暂无模型分解</td></tr>
+                                            {% endif %}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-lg-6">
+                            <div class="border rounded p-3 h-100">
+                                <h6><i class="bi bi-sliders"></i> 因子贡献</h6>
+                                {% for name, value in component_scores.items() %}
+                                <div class="small d-flex justify-content-between">
+                                    <span>{{ name }}</span><span>{{ value }}</span>
+                                </div>
+                                <div class="progress mb-2" style="height: 7px;">
+                                    {% if value >= 70 %}
+                                    <div class="progress-bar bg-danger" style="width: {{ value }}%"></div>
+                                    {% elif value >= 40 %}
+                                    <div class="progress-bar bg-warning" style="width: {{ value }}%"></div>
+                                    {% else %}
+                                    <div class="progress-bar bg-success" style="width: {{ value }}%"></div>
+                                    {% endif %}
+                                </div>
+                                {% endfor %}
+                                {% if not component_scores %}
+                                <div class="text-muted small">暂无因子分解</div>
+                                {% endif %}
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="row g-3 mt-1">
+                        <div class="col-lg-6">
+                            <div class="border rounded p-3 h-100">
+                                <h6><i class="bi bi-heart-pulse"></i> 病种风险</h6>
+                                <div class="table-responsive">
+                                    <table class="table table-sm mb-0">
+                                        <thead>
+                                            <tr>
+                                                <th>病种</th>
+                                                <th>个人RR</th>
+                                                <th>风险等级</th>
+                                                <th>风险分</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {% for disease, item in assessment_disease_risks.items() %}
+                                            <tr>
+                                                <td>{{ disease }}</td>
+                                                <td>{{ item.get('personal_rr', '-') }}</td>
+                                                <td>{{ item.get('risk_level', '-') }}</td>
+                                                <td>{{ item.get('risk_score', '-') }}</td>
+                                            </tr>
+                                            {% endfor %}
+                                            {% if not assessment_disease_risks %}
+                                            <tr><td colspan="4" class="text-muted">暂无病种细分</td></tr>
+                                            {% endif %}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-lg-6">
+                            <div class="border rounded p-3 h-100">
+                                <h6><i class="bi bi-grid-3x3-gap"></i> 风险矩阵定位</h6>
+                                {% set impact_levels = ['low', 'medium', 'high', 'very_high'] %}
+                                {% set likelihood_levels = ['low', 'medium', 'high', 'very_high'] %}
+                                {% set level_name = {'low': '低', 'medium': '中', 'high': '高', 'very_high': '很高'} %}
+                                <div class="table-responsive">
+                                    <table class="table table-bordered text-center table-sm mb-0">
+                                        <thead>
+                                            <tr>
+                                                <th>Impact \ Likelihood</th>
+                                                {% for like in likelihood_levels %}
+                                                <th>{{ level_name.get(like) }}</th>
+                                                {% endfor %}
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {% for impact in impact_levels %}
+                                            <tr>
+                                                <th>{{ level_name.get(impact) }}</th>
+                                                {% for like in likelihood_levels %}
+                                                {% set active = matrix.get('impact_bucket') == impact and matrix.get('likelihood_bucket') == like %}
+                                                <td class="{% if active %}table-danger fw-bold{% endif %}">
+                                                    {% if active %}当前{% else %}-{% endif %}
+                                                </td>
+                                                {% endfor %}
+                                            </tr>
+                                            {% endfor %}
+                                        </tbody>
+                                    </table>
+                                </div>
+                                <div class="small text-muted mt-2">矩阵用于决策优先级分层，不替代临床诊断。</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    {% if recommendations %}
+                    <div class="border rounded p-3 mt-3">
+                        <h6><i class="bi bi-list-check"></i> 行动建议</h6>
+                        <ul class="mb-0">
+                            {% for rec in recommendations %}
+                            <li class="mb-1">
+                                <span class="fw-semibold">{{ rec.get('category', '建议') }}：</span>{{ rec.get('advice', '') }}
+                            </li>
+                            {% endfor %}
+                        </ul>
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+            {% endif %}
+
             <div class="card shadow-sm mt-4">
                 <div class="card-header">
                     <h5 class="mb-0"><i class="bi bi-question-circle"></i> 评估指标说明</h5>
@@ -93,6 +360,21 @@
                     </dl>
                 </div>
             </div>
+
+            {% if methodology %}
+            <div class="card shadow-sm mt-4">
+                <div class="card-header bg-light">
+                    <h5 class="mb-0"><i class="bi bi-mortarboard"></i> 方法学说明</h5>
+                </div>
+                <div class="card-body">
+                    <ul class="mb-0">
+                        {% for line in methodology %}
+                        <li class="mb-1">{{ line }}</li>
+                        {% endfor %}
+                    </ul>
+                </div>
+            </div>
+            {% endif %}
 
             {% if assessment_explain and assessment_explain.get('explain') %}
             <div class="card shadow-sm mt-4">
@@ -143,7 +425,6 @@
     </div>
 </div>
 {% endblock %}
-
 
 
 

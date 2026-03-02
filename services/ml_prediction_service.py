@@ -57,6 +57,7 @@ class MLPredictionService:
             'humidity': 70.0,
             'wind_speed': 2.5,
             'precipitation': 0.0,
+            # 历史字段名为 sunshine_hours，但训练集单位实际为秒
             'sunshine_hours': 20000.0
         }
         
@@ -241,8 +242,8 @@ class MLPredictionService:
                 # 降水量
                 precipitation = weather_info.get('precipitation', self.weather_defaults['precipitation'])
                 
-                # 日照时数
-                sunshine_hours = weather_info.get('sunshine_hours', self.weather_defaults['sunshine_hours'])
+                # 日照时长（统一为秒）
+                sunshine_hours = self._normalize_sunshine_seconds(weather_info)
             else:
                 tmean = self.weather_defaults['tmean']
                 tmin = self.weather_defaults['tmin']
@@ -251,7 +252,7 @@ class MLPredictionService:
                 humidity = self.weather_defaults['humidity']
                 wind_speed = self.weather_defaults['wind_speed']
                 precipitation = self.weather_defaults['precipitation']
-                sunshine_hours = self.weather_defaults['sunshine_hours']
+                sunshine_hours = self._normalize_sunshine_seconds(None)
             
             # 检查模型特征列
             feature_cols = self.model_info.get('feature_cols', [])
@@ -865,6 +866,44 @@ class MLPredictionService:
                 'success': False,
                 'error': GENERIC_ERROR_MESSAGE
             }
+
+    def _normalize_sunshine_seconds(self, weather_info):
+        """Normalize sunshine duration to seconds for model features."""
+        default_seconds = self.weather_defaults['sunshine_hours']
+        if not isinstance(weather_info, dict):
+            return default_seconds
+
+        legacy_hours = False
+        if weather_info.get('sunshine_duration_seconds') is not None:
+            raw = weather_info.get('sunshine_duration_seconds')
+            as_hours = False
+        elif weather_info.get('sunshine_duration_hours') is not None:
+            raw = weather_info.get('sunshine_duration_hours')
+            as_hours = True
+        elif weather_info.get('sunshine_hours') is not None:
+            raw = weather_info.get('sunshine_hours')
+            as_hours = True
+            legacy_hours = True
+        else:
+            raw = default_seconds
+            as_hours = False
+
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            return default_seconds
+
+        if as_hours:
+            if legacy_hours and value > 24.0:
+                logger.warning(
+                    "收到歧义 legacy 字段 sunshine_hours=%s，已回退默认秒值；"
+                    "请改用 sunshine_duration_seconds/hours。",
+                    value
+                )
+                return default_seconds
+            value *= 3600.0
+
+        return max(0.0, min(value, 86400.0))
     
     def _generate_community_recommendations(self, elderly_ratio, weather_info, disease_risks):
         """生成社区健康建议"""

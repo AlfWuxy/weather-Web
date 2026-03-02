@@ -250,12 +250,19 @@ def family_member_delete(member_id):
         return redirect(url_for('user.user_dashboard'))
 
     member = FamilyMember.query.filter_by(id=member_id, user_id=current_user.id).first_or_404()
-    profile = FamilyMemberProfile.query.filter_by(member_id=member.id).first()
-    if profile:
-        db.session.delete(profile)
-    db.session.delete(member)
-    db.session.commit()
-    flash('家庭成员已删除', 'success')
+    try:
+        # 先清理关联的健康日记和用药提醒
+        HealthDiary.query.filter_by(member_id=member.id, user_id=current_user.id).delete()
+        MedicationReminder.query.filter_by(member_id=member.id, user_id=current_user.id).delete()
+        profile = FamilyMemberProfile.query.filter_by(member_id=member.id).first()
+        if profile:
+            db.session.delete(profile)
+        db.session.delete(member)
+        db.session.commit()
+        flash('家庭成员已删除', 'success')
+    except Exception:
+        db.session.rollback()
+        flash('删除失败，请稍后重试', 'error')
     return redirect(url_for('health.family_members'))
 
 
@@ -336,6 +343,13 @@ def health_diary():
         severity = sanitize_input(request.form.get('severity'), max_length=20)
         notes = sanitize_input(request.form.get('notes'), max_length=500)
 
+        # 校验 member_id 归属当前用户
+        if member_id:
+            member = FamilyMember.query.filter_by(id=member_id, user_id=current_user.id).first()
+            if not member:
+                flash('无效的家庭成员', 'error')
+                return redirect(url_for('health.health_diary'))
+
         diary = HealthDiary(
             user_id=current_user.id,
             member_id=member_id,
@@ -372,6 +386,13 @@ def medication_reminders():
         dosage = sanitize_input(request.form.get('dosage'), max_length=100)
         frequency = sanitize_input(request.form.get('frequency'), max_length=20) or 'daily'
         time_of_day = sanitize_input(request.form.get('time_of_day'), max_length=10)
+
+        # 校验 member_id 归属当前用户
+        if member_id:
+            member = FamilyMember.query.filter_by(id=member_id, user_id=current_user.id).first()
+            if not member:
+                flash('无效的家庭成员', 'error')
+                return redirect(url_for('health.medication_reminders'))
 
         triggers = {}
         triggers['high_temp'] = parse_float(request.form.get('high_temp'))

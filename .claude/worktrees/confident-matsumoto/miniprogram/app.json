@@ -1,0 +1,18 @@
+{
+  "pages": [
+    "pages/bind-token/index",
+    "pages/elders/index",
+    "pages/elder-edit/index",
+    "pages/alerts/index",
+    "pages/template/index",
+    "pages/settings/index"
+  ],
+  "window": {
+    "navigationBarTitleText": "宜老天气通",
+    "navigationBarBackgroundColor": "#ffffff",
+    "navigationBarTextStyle": "black",
+    "backgroundColor": "#f5f7fb"
+  },
+  "style": "v2"
+}
+

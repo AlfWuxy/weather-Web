@@ -23,6 +23,7 @@ from scipy import stats
 from scipy.interpolate import UnivariateSpline
 from collections import defaultdict
 import json
+import os
 from pathlib import Path
 
 
@@ -107,6 +108,22 @@ LITERATURE_PRIORS = {
 }
 
 
+def _to_bool(value, default=False):
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    try:
+        text = str(value).strip().lower()
+    except Exception:
+        return default
+    if text in ('1', 'true', 't', 'yes', 'y', 'on'):
+        return True
+    if text in ('0', 'false', 'f', 'no', 'n', 'off'):
+        return False
+    return default
+
+
 class DLNMRiskService:
     """DLNM分布式滞后非线性模型服务
 
@@ -114,7 +131,7 @@ class DLNMRiskService:
     当本地样本量不足时，自动向文献先验靠拢。
     """
 
-    def __init__(self, literature_weight=0.5):
+    def __init__(self, literature_weight=0.5, use_profile=None, profile_path=None):
         """
         初始化DLNM服务
 
@@ -134,6 +151,12 @@ class DLNMRiskService:
         self.seasonal_baseline = {}  # 季节基线
         # hot night threshold (optional)
         self.tmin_p90 = None
+        self.profile_loaded = False
+        self.profile_name = None
+        self.model_source = 'data_plus_literature'
+        self.model_profile_metrics = {}
+        self._profile_temp_grid = None
+        self._profile_rr_grid = None
 
         # 模型参数
         self.max_lag = 7  # 最大滞后天数 (热效应)
@@ -148,6 +171,12 @@ class DLNMRiskService:
         # RR上限
         self.rr_cap_single = LITERATURE_PRIORS['rr_caps']['single_day_morbidity']
         self.rr_cap_cumulative = LITERATURE_PRIORS['rr_caps']['cumulative_morbidity']
+        default_profile = Path(__file__).resolve().parents[1] / 'data' / 'models' / 'final_single_model_ar1_profile.json'
+        self.profile_path = Path(
+            profile_path or os.getenv('DLNM_PROFILE_PATH', str(default_profile))
+        )
+        env_use_profile = os.getenv('DLNM_USE_PROFILE')
+        self.use_profile = _to_bool(env_use_profile, True) if use_profile is None else bool(use_profile)
 
         # 本地数据样本量记录 (用于动态调整权重)
         self.sample_counts = {}
@@ -156,6 +185,90 @@ class DLNMRiskService:
         self._load_weather_data()
         self._load_medical_data()
         self._train_model()
+        if self.use_profile:
+            self._load_calibrated_profile()
+
+    def _load_calibrated_profile(self):
+        """加载外部校准模型曲线（优先于在线训练结果）"""
+        try:
+            if not self.profile_path.exists():
+                print(f"ℹ️ 未发现外部模型配置: {self.profile_path}")
+                return False
+
+            with self.profile_path.open('r', encoding='utf-8') as f:
+                profile = json.load(f)
+
+            curve = profile.get('curve')
+            if not isinstance(curve, list) or not curve:
+                print(f"⚠️ 外部模型配置缺少有效 curve: {self.profile_path}")
+                return False
+
+            curve_df = pd.DataFrame(curve)
+            required_cols = {'temp', 'rr'}
+            if not required_cols.issubset(set(curve_df.columns)):
+                print(f"⚠️ 外部模型配置缺少必要列 {required_cols}: {self.profile_path}")
+                return False
+
+            curve_df['temp'] = pd.to_numeric(curve_df['temp'], errors='coerce')
+            curve_df['rr'] = pd.to_numeric(curve_df['rr'], errors='coerce')
+            curve_df = curve_df.dropna(subset=['temp', 'rr']).sort_values('temp').drop_duplicates('temp')
+            if curve_df.empty:
+                print(f"⚠️ 外部模型曲线为空: {self.profile_path}")
+                return False
+
+            self.temperature_rr = {
+                round(float(row.temp), 2): max(0.01, float(row.rr))
+                for row in curve_df.itertuples(index=False)
+            }
+            self._profile_temp_grid = curve_df['temp'].to_numpy(dtype=float)
+            self._profile_rr_grid = curve_df['rr'].to_numpy(dtype=float)
+
+            self.mmt = float(profile.get('mmt', self.mmt if self.mmt is not None else 23.0))
+            self.max_lag = int(profile.get('max_lag', self.max_lag))
+            self.max_lag_cold = int(profile.get('max_lag_cold', self.max_lag_cold))
+
+            rr_caps = profile.get('rr_caps') or {}
+            self.rr_cap_single = float(rr_caps.get('single_day', self.rr_cap_single))
+            self.rr_cap_cumulative = float(rr_caps.get('cumulative', self.rr_cap_cumulative))
+
+            # 当缺失温度分位数时，用曲线温度分布近似填充
+            if not self.percentiles:
+                temps = curve_df['temp'].to_numpy(dtype=float)
+                self.percentiles = {
+                    'p1': float(np.quantile(temps, 0.01)),
+                    'p5': float(np.quantile(temps, 0.05)),
+                    'p10': float(np.quantile(temps, 0.10)),
+                    'p25': float(np.quantile(temps, 0.25)),
+                    'p50': float(np.quantile(temps, 0.50)),
+                    'p75': float(np.quantile(temps, 0.75)),
+                    'p90': float(np.quantile(temps, 0.90)),
+                    'p95': float(np.quantile(temps, 0.95)),
+                    'p99': float(np.quantile(temps, 0.99)),
+                    'min': float(np.min(temps)),
+                    'max': float(np.max(temps)),
+                    'mean': float(np.mean(temps)),
+                }
+
+            lag_weights = profile.get('lag_weights') or {}
+            if isinstance(lag_weights, dict):
+                if isinstance(lag_weights.get('heat'), list):
+                    self.lag_weights['heat'] = {i: float(v) for i, v in enumerate(lag_weights['heat'])}
+                if isinstance(lag_weights.get('cold'), list):
+                    self.lag_weights['cold'] = {i: float(v) for i, v in enumerate(lag_weights['cold'])}
+
+            self.profile_loaded = True
+            self.profile_name = profile.get('name', self.profile_path.stem)
+            self.model_profile_metrics = profile.get('metrics') or {}
+            self.model_source = 'calibrated_profile'
+            self.model_trained = True
+
+            print(f"✅ 已加载外部校准模型: {self.profile_name}")
+            print(f"   配置文件: {self.profile_path}")
+            print(f"   MMT: {self.mmt:.2f}°C, RR曲线点数: {len(self.temperature_rr)}")
+            return True
+        except Exception as e:
+            print(f"⚠️ 加载外部校准模型失败: {e}")
+            return False
 
     def _load_weather_data(self):
         """加载逐日天气数据"""
@@ -807,6 +920,16 @@ class DLNMRiskService:
     
     def _get_base_rr(self, temperature):
         """获取基础相对风险 (整合文献先验)"""
+        if self.profile_loaded and self._profile_temp_grid is not None and self._profile_rr_grid is not None:
+            rr = float(np.interp(
+                float(temperature),
+                self._profile_temp_grid,
+                self._profile_rr_grid,
+                left=self._profile_rr_grid[0],
+                right=self._profile_rr_grid[-1]
+            ))
+            return min(max(rr, 0.01), self.rr_cap_single)
+
         # 确保有MMT
         mmt = self.mmt if self.mmt is not None else 23.0
 
@@ -971,6 +1094,11 @@ class DLNMRiskService:
 
         return {
             'status': '模型已训练',
+            'model_source': self.model_source,
+            'profile_loaded': self.profile_loaded,
+            'profile_name': self.profile_name,
+            'profile_path': str(self.profile_path) if self.profile_path else None,
+            'profile_metrics': self.model_profile_metrics,
             'mmt': self.mmt,
             'local_mmt': getattr(self, '_local_mmt', None),
             'literature_mmt': self.literature_priors['mmt']['typical'],

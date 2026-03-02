@@ -1,0 +1,208 @@
+{% extends "base.html" %}
+
+{% block title %}成员详情 - 天气健康风险预测系统{% endblock %}
+
+{% block content %}
+<div class="container">
+    <div class="row mb-4">
+        <div class="col-12 d-flex align-items-center justify-content-between">
+            <div>
+                <h2><i class="bi bi-person-badge"></i> {{ member.name }} · {{ member.relation or '关系未填' }}</h2>
+                <p class="text-muted">成员健康画像与预警订阅概览</p>
+            </div>
+            <div class="d-flex gap-2">
+                <a class="btn btn-outline-secondary" href="{{ url_for('health.family_members') }}">返回列表</a>
+                <a class="btn btn-outline-warning" href="{{ url_for('health.family_member_edit', member_id=member.id) }}">编辑</a>
+            </div>
+        </div>
+    </div>
+
+    <div class="row g-3 mb-4">
+        <div class="col-lg-8">
+            <div class="card shadow-sm h-100">
+                <div class="card-body">
+                    <div class="d-flex align-items-start justify-content-between">
+                        <div>
+                            <h5 class="mb-1">基础信息</h5>
+                            <div class="text-muted">{{ member.gender or '-' }} · {{ member.age or '-' }}岁</div>
+                        </div>
+                        <span class="badge risk-badge risk-{{ risk.level }}">{{ risk.label }}</span>
+                    </div>
+                    <div class="mt-3">
+                        <div class="text-muted small mb-1">风险原因</div>
+                        <div class="d-flex flex-wrap gap-2">
+                            {% if risk.reasons %}
+                                {% for reason in risk.reasons %}
+                                    <span class="badge bg-warning-subtle text-dark border">{{ reason }}</span>
+                                {% endfor %}
+                            {% else %}
+                                <span class="text-muted small">暂无明显风险标签</span>
+                            {% endif %}
+                        </div>
+                    </div>
+                    <div class="mt-3">
+                        <div class="text-muted small mb-1">慢性病</div>
+                        <div class="d-flex flex-wrap gap-2">
+                            {% if member.chronic_diseases %}
+                                {% for disease in member.chronic_diseases|from_json %}
+                                    <span class="badge bg-light text-dark border">{{ disease }}</span>
+                                {% endfor %}
+                            {% else %}
+                                <span class="text-muted small">未记录</span>
+                            {% endif %}
+                        </div>
+                    </div>
+                    <div class="mt-3">
+                        <div class="text-muted small mb-1">风险标签</div>
+                        <div class="d-flex flex-wrap gap-2">
+                            {% if profile.risk_tags %}
+                                {% for tag in profile.risk_tags %}
+                                    <span class="badge bg-warning-subtle text-dark border">{{ tag }}</span>
+                                {% endfor %}
+                            {% else %}
+                                <span class="text-muted small">未设置</span>
+                            {% endif %}
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-lg-4">
+            <div class="card shadow-sm h-100">
+                <div class="card-body">
+                    <h6 class="mb-3">档案完善度</h6>
+                    <div class="progress profile-progress mb-2">
+                        <div class="progress-bar" role="progressbar" style="width: {{ completion.percent }}%"></div>
+                    </div>
+                    <div class="text-muted small">{{ completion.percent }}% · 已完善 {{ completion.filled }}/{{ completion.total }}</div>
+                    <div class="mt-3">
+                        <h6 class="mb-2">今日预警状态</h6>
+                        {% if alerts %}
+                            <span class="badge bg-danger">触发：{{ alerts|join('、') }}</span>
+                        {% else %}
+                            <span class="badge bg-success-subtle text-success border">未触发</span>
+                        {% endif %}
+                        <div class="text-muted small mt-2">天气：{{ weather.temperature|round(1) }}°C / 湿度 {{ weather.humidity|round(0) }}% / AQI {{ weather.aqi or '--' }}</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row g-3 mb-4">
+        <div class="col-lg-6">
+            <div class="card shadow-sm h-100">
+                <div class="card-body">
+                    <h6 class="mb-3">健康画像</h6>
+                    <p class="mb-2"><strong>过敏史：</strong>{{ profile.allergies or '未填写' }}</p>
+                    <p class="mb-2"><strong>常用药：</strong>{{ profile.medications or '未填写' }}</p>
+                    <p class="mb-2"><strong>血压：</strong>{{ profile.metrics.get('blood_pressure', '未填写') }}</p>
+                    <p class="mb-2"><strong>血糖：</strong>{{ profile.metrics.get('blood_sugar', '未填写') }}</p>
+                    <p class="mb-0"><strong>心率/体重：</strong>{{ profile.metrics.get('heart_rate', '未填写') }} / {{ profile.metrics.get('weight', '未填写') }}</p>
+                </div>
+            </div>
+        </div>
+        <div class="col-lg-6">
+            <div class="card shadow-sm h-100">
+                <div class="card-body">
+                    <h6 class="mb-3">预警与通知</h6>
+                    <p class="mb-2"><strong>预警开关：</strong>{{ '启用' if profile.alert_enabled else '已暂停' }}</p>
+                    <p class="mb-2"><strong>高温触发：</strong>{{ profile.weather_thresholds.get('high_temp', '未设置') }}</p>
+                    <p class="mb-2"><strong>低温触发：</strong>{{ profile.weather_thresholds.get('low_temp', '未设置') }}</p>
+                    <p class="mb-2"><strong>湿度触发：</strong>{{ profile.weather_thresholds.get('high_humidity', '未设置') }}</p>
+                    <p class="mb-2"><strong>AQI触发：</strong>{{ profile.weather_thresholds.get('high_aqi', '未设置') }}</p>
+                    <p class="mb-2"><strong>通知渠道：</strong>{{ profile.contact_prefs.get('channels', [])|join('、') if profile.contact_prefs.get('channels') else '未设置' }}</p>
+                    <p class="mb-2"><strong>通知频率：</strong>{{ profile.contact_prefs.get('frequency', '未设置') }}</p>
+                    <p class="mb-2"><strong>同步通知家属：</strong>{{ '是' if profile.contact_prefs.get('notify_family') else '否' }}</p>
+                    {% set escalation_days = profile.contact_prefs.get('escalation_days') %}
+                    <p class="mb-2"><strong>高风险升级：</strong>{{ escalation_days ~ '天' if escalation_days else '未设置' }}</p>
+                    <p class="mb-0"><strong>静默时段：</strong>{{ profile.quiet_hours or '未设置' }}</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row g-3 mb-4">
+        <div class="col-lg-6">
+            <div class="card shadow-sm h-100">
+                <div class="card-body">
+                    <h6 class="mb-3">隐私与共享</h6>
+                    {% set privacy_map = {'family': '家庭可见', 'private': '仅本人可见', 'doctor': '授权医生可见', 'community': '社区管理员可见'} %}
+                    <p class="mb-2"><strong>隐私级别：</strong>{{ privacy_map.get(profile.privacy_level, profile.privacy_level) }}</p>
+                    <p class="mb-2"><strong>授权医生查看：</strong>{{ '是' if profile.share_with_doctor else '否' }}</p>
+                    <p class="mb-2"><strong>授权社区查看：</strong>{{ '是' if profile.share_with_community else '否' }}</p>
+                    <p class="mb-2"><strong>联系人电话：</strong>{{ profile.contact_prefs.get('phone', '未填写') }}</p>
+                    <p class="mb-2"><strong>微信号：</strong>{{ profile.contact_prefs.get('wechat', '未填写') }}</p>
+                    <p class="mb-2"><strong>紧急联系人：</strong>{{ profile.contact_prefs.get('emergency_name', '未填写') }}</p>
+                    <p class="mb-0"><strong>紧急电话：</strong>{{ profile.contact_prefs.get('emergency_phone', '未填写') }}</p>
+                </div>
+            </div>
+        </div>
+        <div class="col-lg-6">
+            <div class="card shadow-sm h-100">
+                <div class="card-body">
+                    <h6 class="mb-3">最近健康日记</h6>
+                    <div class="table-responsive">
+                        <table class="table table-sm">
+                            <thead>
+                                <tr>
+                                    <th>日期</th>
+                                    <th>严重程度</th>
+                                    <th>症状</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for entry in diary_entries %}
+                                <tr>
+                                    <td>{{ entry.entry_date }}</td>
+                                    <td>{{ entry.severity or '-' }}</td>
+                                    <td>{{ entry.symptoms or '-' }}</td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                    {% if diary_entries|length == 0 %}
+                        <p class="text-muted mb-0">暂无日记记录</p>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row g-3">
+        <div class="col-lg-12">
+            <div class="card shadow-sm">
+                <div class="card-body">
+                    <h6 class="mb-3">用药提醒记录</h6>
+                    <div class="table-responsive">
+                        <table class="table table-sm">
+                            <thead>
+                                <tr>
+                                    <th>药品</th>
+                                    <th>剂量</th>
+                                    <th>频率</th>
+                                    <th>最近提醒</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for reminder in reminders %}
+                                <tr>
+                                    <td>{{ reminder.medicine_name }}</td>
+                                    <td>{{ reminder.dosage or '-' }}</td>
+                                    <td>{{ reminder.frequency or '-' }}</td>
+                                    <td>{{ reminder.last_notified_at.strftime('%Y-%m-%d %H:%M') if reminder.last_notified_at else '暂无' }}</td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                    {% if reminders|length == 0 %}
+                        <p class="text-muted mb-0">暂无用药提醒</p>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

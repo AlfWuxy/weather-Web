@@ -1,0 +1,173 @@
+{% extends "base.html" %}
+
+{% block title %}病历管理 - 管理后台{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <div class="row mb-4">
+        <div class="col-12">
+            <h2><i class="bi bi-file-medical"></i> 病历记录管理</h2>
+            <p class="text-muted">查看和管理医疗病历数据</p>
+        </div>
+    </div>
+
+    <div class="card shadow-sm">
+        <div class="card-header bg-white">
+            <h5 class="mb-3">病历列表</h5>
+            
+            <!-- 搜索和筛选表单 -->
+            <form method="GET" action="{{ url_for('admin.admin_records') }}" class="row g-2">
+                <div class="col-md-3">
+                    <input type="text" 
+                           class="form-control" 
+                           name="search" 
+                           placeholder="搜索姓名..." 
+                           value="{{ search_query }}">
+                </div>
+                <div class="col-md-2">
+                    <select class="form-select" name="department">
+                        <option value="">所有科室</option>
+                        {% for dept in departments %}
+                            <option value="{{ dept }}" {% if dept == department_filter %}selected{% endif %}>
+                                {{ dept }}
+                            </option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="col-md-2">
+                    <select class="form-select" name="community">
+                        <option value="">所有社区</option>
+                        {% for comm in communities_list %}
+                            <option value="{{ comm }}" {% if comm == community_filter %}selected{% endif %}>
+                                {{ comm }}
+                            </option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="col-md-3">
+                    <select class="form-select" name="disease">
+                        <option value="">所有疾病</option>
+                        {% for disease in diseases %}
+                            <option value="{{ disease }}" {% if disease == disease_filter %}selected{% endif %}>
+                                {{ disease }}
+                            </option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="col-md-2">
+                    <button type="submit" class="btn btn-primary w-100">
+                        <i class="bi bi-search"></i> 搜索
+                    </button>
+                </div>
+            </form>
+            
+            <!-- 当前筛选条件提示 -->
+            {% if search_query or department_filter or community_filter or disease_filter %}
+            <div class="mt-2">
+                <small class="text-muted">
+                    当前筛选：
+                    {% if search_query %}<span class="badge bg-secondary">姓名: {{ search_query }}</span>{% endif %}
+                    {% if department_filter %}<span class="badge bg-info ms-1">科室: {{ department_filter }}</span>{% endif %}
+                    {% if community_filter %}<span class="badge bg-success ms-1">社区: {{ community_filter }}</span>{% endif %}
+                    {% if disease_filter %}<span class="badge bg-warning ms-1">疾病: {{ disease_filter }}</span>{% endif %}
+                    <a href="{{ url_for('admin.admin_records') }}" class="btn btn-sm btn-outline-secondary ms-2">清除筛选</a>
+                </small>
+            </div>
+            {% endif %}
+        </div>
+        <div class="card-body p-0">
+            <div class="table-responsive">
+                <table class="table table-hover table-sm mb-0">
+                    <thead class="table-light">
+                        <tr>
+                            <th>ID</th>
+                            <th>患者姓名</th>
+                            <th>性别</th>
+                            <th>年龄</th>
+                            <th>就诊时间</th>
+                            <th>科室</th>
+                            <th>医生</th>
+                            <th>疾病分类</th>
+                            <th>诊断</th>
+                            <th>社区</th>
+                            <th>体温</th>
+                            <th>操作</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for record in records.items %}
+                        <tr>
+                            <td>{{ record.id }}</td>
+                            <td>{{ record.patient_name }}</td>
+                            <td>{{ record.gender }}</td>
+                            <td>{{ record.age }}</td>
+                            <td>{{ record.visit_time.strftime('%Y-%m-%d %H:%M') if record.visit_time else '-' }}</td>
+                            <td><span class="badge bg-info">{{ record.department or '-' }}</span></td>
+                            <td>{{ record.doctor or '-' }}</td>
+                            <td><span class="badge bg-warning text-dark">{{ record.disease_category or '-' }}</span></td>
+                            <td class="text-truncate" style="max-width: 150px;" title="{{ record.diagnosis }}">
+                                {{ record.diagnosis or '-' }}
+                            </td>
+                            <td>{{ record.community or '-' }}</td>
+                            <td>
+                                {% if record.temperature %}
+                                    {% if record.temperature > 37.5 %}
+                                        <span class="text-danger">{{ record.temperature }}°C</span>
+                                    {% else %}
+                                        {{ record.temperature }}°C
+                                    {% endif %}
+                                {% else %}
+                                    -
+                                {% endif %}
+                            </td>
+                            <td>
+                                <button class="btn btn-sm btn-outline-primary" title="查看详情" 
+                                        data-bs-toggle="modal" data-bs-target="#recordModal{{ record.id }}">
+                                    <i class="bi bi-eye"></i>
+                                </button>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        <div class="card-footer bg-white">
+            <!-- 分页 -->
+            <nav>
+                <ul class="pagination mb-0">
+                    {% if records.has_prev %}
+                        <li class="page-item">
+                            <a class="page-link" href="{{ url_for('admin.admin_records', page=records.prev_num, search=search_query, department=department_filter, community=community_filter, disease=disease_filter) }}">上一页</a>
+                        </li>
+                    {% endif %}
+                    
+                    {% for page_num in records.iter_pages(left_edge=1, right_edge=1, left_current=1, right_current=2) %}
+                        {% if page_num %}
+                            <li class="page-item {{ 'active' if page_num == records.page else '' }}">
+                                <a class="page-link" href="{{ url_for('admin.admin_records', page=page_num, search=search_query, department=department_filter, community=community_filter, disease=disease_filter) }}">{{ page_num }}</a>
+                            </li>
+                        {% else %}
+                            <li class="page-item disabled"><span class="page-link">...</span></li>
+                        {% endif %}
+                    {% endfor %}
+                    
+                    {% if records.has_next %}
+                        <li class="page-item">
+                            <a class="page-link" href="{{ url_for('admin.admin_records', page=records.next_num, search=search_query, department=department_filter, community=community_filter, disease=disease_filter) }}">下一页</a>
+                        </li>
+                    {% endif %}
+                </ul>
+            </nav>
+            <p class="text-muted mb-0 mt-2 small">
+                {% if search_query or department_filter or community_filter or disease_filter %}
+                    找到 <strong>{{ records.total }}</strong> 条匹配记录，当前第 {{ records.page }} / {{ records.pages }} 页
+                {% else %}
+                    共 <strong>{{ records.total }}</strong> 条病历，当前第 {{ records.page }} / {{ records.pages }} 页
+                {% endif %}
+            </p>
+        </div>
+    </div>
+</div>
+{% endblock %}
+

@@ -1,57 +1,54 @@
 # -*- coding: utf-8 -*-
 """
 模块二：健康风险评估服务
-功能：社区健康档案管理、社区脆弱性指数计算、空间风险与地图生成
+
+功能：
+1) 社区脆弱性指数计算（供管理后台使用）
+2) 个人健康风险评估（学术实践增强版）：
+   - 多路径融合（DLNM + 规则暴露 + 社区脆弱性）
+   - 概率化输出（低/中/高风险概率 + 不确定性区间）
+   - 事件语义（severity / certainty / urgency）
+   - Impact × Likelihood 矩阵化表达
 """
-import json
-from datetime import datetime
 import math
+from datetime import timedelta
+from statistics import pstdev
+
+from core.db_models import Community, MedicalRecord
+from core.time_utils import utcnow
+from utils.parsers import safe_json_loads
+
 
 class HealthRiskService:
     """健康风险评估服务类"""
-    
+
     def __init__(self):
-        pass
-    
+        self.model_version = 'health-risk-fusion-2.0'
+
+    # ---------------------------
+    # 社区脆弱性（兼容旧接口）
+    # ---------------------------
     def calculate_community_vulnerability_index(self, community_data):
         """
-        计算社区脆弱性指数
-        考虑因素：
-        1. 人口老龄化程度
-        2. 慢性病患病率
-        3. 医疗资源可达性
-        4. 社区环境质量
+        计算社区脆弱性指数（0-100）。
         """
-        # 老龄化指数 (权重: 0.3)
-        elderly_ratio = community_data.get('elderly_ratio', 0)
-        aging_score = min(elderly_ratio * 100, 100) * 0.3
-        
-        # 慢性病患病率 (权重: 0.35)
-        chronic_disease_ratio = community_data.get('chronic_disease_ratio', 0)
-        disease_score = min(chronic_disease_ratio * 100, 100) * 0.35
-        
-        # 医疗资源可达性 (权重: 0.2) - 值越大越好，需要反转
-        medical_accessibility = community_data.get('medical_accessibility', 50)
-        medical_score = (100 - medical_accessibility) * 0.2
-        
-        # 环境质量 (权重: 0.15) - 基于空气质量等
-        env_quality = community_data.get('env_quality_score', 50)
-        env_score = (100 - env_quality) * 0.15
-        
-        # 综合脆弱性指数 (0-100)
-        vulnerability_index = aging_score + disease_score + medical_score + env_score
-        
-        # 确定风险等级
-        if vulnerability_index < 30:
-            risk_level = '低'
-        elif vulnerability_index < 60:
-            risk_level = '中'
-        else:
-            risk_level = '高'
-        
+        elderly_ratio = self._clamp(self._to_float(community_data.get('elderly_ratio'), 0.0), 0.0, 1.0)
+        chronic_ratio = self._clamp(self._to_float(community_data.get('chronic_disease_ratio'), 0.0), 0.0, 1.0)
+        medical_accessibility = self._clamp(self._to_float(community_data.get('medical_accessibility'), 50.0), 0.0, 100.0)
+        env_quality = self._clamp(self._to_float(community_data.get('env_quality_score'), 50.0), 0.0, 100.0)
+
+        aging_score = elderly_ratio * 100.0 * 0.30
+        disease_score = chronic_ratio * 100.0 * 0.35
+        medical_score = (100.0 - medical_accessibility) * 0.20
+        env_score = (100.0 - env_quality) * 0.15
+
+        vulnerability_index = self._clamp(aging_score + disease_score + medical_score + env_score, 0.0, 100.0)
+        risk_level = self._bucket_three(vulnerability_index, low=30.0, high=60.0, labels=('低', '中', '高'))
+
         return {
             'vulnerability_index': round(vulnerability_index, 2),
             'risk_level': risk_level,
+            'level': risk_level,
             'breakdown': {
                 'aging_score': round(aging_score, 2),
                 'disease_score': round(disease_score, 2),
@@ -59,129 +56,634 @@ class HealthRiskService:
                 'env_score': round(env_score, 2)
             }
         }
-    
+
+    # ---------------------------
+    # 个人风险评估（主入口）
+    # ---------------------------
+    def assess_personal_weather_health_risk(self, user_profile, weather_data, screening=None):
+        """
+        学术实践增强版个人风险评估。
+
+        返回字段兼容旧逻辑：
+        - risk_score / risk_level / recommendations / disease_risks
+        同时增加：
+        - risk_probabilities / risk_interval / cap_semantics / impact_likelihood
+        - model_paths / component_scores / community_context / methodology
+        """
+        from services.chronic_risk_service import get_chronic_service
+        from services.dlnm_risk_service import get_dlnm_service
+        from services.weather_service import WeatherService
+
+        profile = self._normalize_user_profile(user_profile)
+        weather = self._normalize_weather_data(weather_data)
+        screening_data = self._normalize_screening(screening or {})
+
+        # 路径 A：DLNM 温度风险 + 个人易感性
+        dlnm = get_dlnm_service()
+        lag_temps = self._extract_lag_temperatures(weather_data, weather['temperature'])
+        base_rr, rr_breakdown = dlnm.calculate_rr(
+            weather['temperature'],
+            lag_temperatures=lag_temps,
+            disease_type='general',
+            age=profile['age']
+        )
+        temp_score = self._clamp((float(base_rr) - 1.0) / 1.2 * 100.0, 0.0, 100.0)
+        personal_susceptibility = self._calc_personal_susceptibility_score(profile)
+        model_a_score = self._clamp(
+            0.50 * temp_score + 0.28 * personal_susceptibility + 0.22 * self._aqi_score(weather['aqi']),
+            0.0,
+            100.0
+        )
+
+        # 路径 B：规则暴露（空气/湿度/极端天气）+ 即时筛查
+        weather_service = WeatherService()
+        extreme = weather_service.identify_extreme_weather(weather_data)
+        extreme_score = self._clamp(len(extreme.get('conditions', [])) * 25.0, 0.0, 100.0)
+        humidity_score = self._humidity_score(weather['humidity'])
+        aqi_score = self._aqi_score(weather['aqi'])
+        screening_score = self._screening_score(screening_data)
+        model_b_score = self._clamp(
+            0.30 * extreme_score + 0.30 * aqi_score + 0.15 * humidity_score + 0.25 * screening_score,
+            0.0,
+            100.0
+        )
+
+        # 路径 C：社区脆弱性 + 社区近期负担 + 个体基础敏感性
+        community_context = self._build_community_context(profile.get('community'))
+        community_score = self._clamp(
+            0.65 * community_context['vulnerability_index'] + 0.35 * community_context['burden_score'],
+            0.0,
+            100.0
+        )
+        model_c_score = self._clamp(
+            0.40 * community_score + 0.35 * personal_susceptibility + 0.25 * temp_score,
+            0.0,
+            100.0
+        )
+
+        # 慢病专项（用于病种风险与解释）
+        chronic_service = get_chronic_service()
+        chronic_result = chronic_service.predict_individual_risk(
+            {
+                'age': profile['age'],
+                'gender': profile['gender'],
+                'chronic_diseases': profile['chronic_diseases']
+            },
+            weather_data
+        )
+        chronic_overall_score = self._to_float(
+            (chronic_result.get('overall_risk') or {}).get('score'),
+            30.0
+        )
+
+        # 模型融合 + 不确定性
+        model_paths = [
+            {'name': 'DLNM个体模型', 'score': round(model_a_score, 1), 'weight': 0.45},
+            {'name': '规则暴露模型', 'score': round(model_b_score, 1), 'weight': 0.30},
+            {'name': '社区脆弱性模型', 'score': round(model_c_score, 1), 'weight': 0.25},
+        ]
+        fused_score = (
+            model_a_score * 0.45
+            + model_b_score * 0.30
+            + model_c_score * 0.25
+        )
+        fused_score = 0.85 * fused_score + 0.15 * chronic_overall_score
+        fused_score = self._clamp(fused_score, 0.0, 100.0)
+
+        spread = pstdev([model_a_score, model_b_score, model_c_score]) if len(model_paths) > 1 else 0.0
+        spread = max(spread, 4.0)
+        interval_half = self._clamp(spread * 1.45, 6.0, 22.0)
+        score_low = self._clamp(fused_score - interval_half, 0.0, 100.0)
+        score_high = self._clamp(fused_score + interval_half, 0.0, 100.0)
+        uncertainty_label = self._bucket_three(
+            spread, low=6.0, high=11.0, labels=('低', '中', '高')
+        )
+
+        probability = self._risk_probabilities(fused_score, sigma=max(6.0, spread + 5.0))
+        high_risk_probability = probability['high']
+
+        cap_semantics = self._cap_semantics(
+            score=fused_score,
+            high_probability=high_risk_probability,
+            uncertainty_label=uncertainty_label
+        )
+        impact_likelihood = self._impact_likelihood_bucket(
+            impact_score=0.7 * fused_score + 0.3 * screening_score,
+            likelihood_score=high_risk_probability * 100.0,
+            certainty=cap_semantics['certainty']
+        )
+
+        component_scores = {
+            '温度风险': round(temp_score, 1),
+            '空气质量风险': round(aqi_score, 1),
+            '湿度风险': round(humidity_score, 1),
+            '极端天气暴露': round(extreme_score, 1),
+            '个体易感性': round(personal_susceptibility, 1),
+            '即时健康筛查': round(screening_score, 1),
+            '社区脆弱性': round(community_context['vulnerability_index'], 1),
+            '社区病例负担': round(community_context['burden_score'], 1),
+        }
+
+        explain = chronic_result.get('explain') or {'reasons': [], 'actions': [], 'escalation': []}
+        explain['reasons'] = self._merge_unique(
+            explain.get('reasons', []),
+            self._top_component_reasons(component_scores)
+        )[:4]
+        explain['actions'] = self._merge_unique(
+            explain.get('actions', []),
+            self._matrix_actions(impact_likelihood)
+        )[:6]
+
+        recommendations = self._compose_recommendations(
+            chronic_result.get('recommendations', []),
+            cap_semantics,
+            impact_likelihood,
+            weather,
+            profile,
+            screening_data
+        )
+
+        risk_level = self._bucket_three(
+            fused_score,
+            low=40.0,
+            high=70.0,
+            labels=('低风险', '中风险', '高风险')
+        )
+
+        return {
+            'risk_score': round(fused_score, 1),
+            'risk_level': risk_level,
+            'risk_interval': {
+                'low': round(score_low, 1),
+                'high': round(score_high, 1),
+                'spread': round(spread, 2),
+                'label': uncertainty_label
+            },
+            'risk_probabilities': {
+                'low': round(probability['low'], 4),
+                'medium': round(probability['medium'], 4),
+                'high': round(probability['high'], 4)
+            },
+            'high_risk_probability': round(high_risk_probability, 4),
+            'cap_semantics': cap_semantics,
+            'impact_likelihood': impact_likelihood,
+            'model_paths': model_paths,
+            'component_scores': component_scores,
+            'community_context': community_context,
+            'screening': screening_data,
+            'weather': weather,
+            'disease_risks': chronic_result.get('disease_risks', {}),
+            'recommendations': recommendations,
+            'explain': explain,
+            'rule_version': chronic_result.get('rule_version'),
+            'triggered_rules': chronic_result.get('triggered_rules', []),
+            'methodology': [
+                '路径A: DLNM温度风险 + 年龄/慢病敏感性',
+                '路径B: 规则暴露(空气质量/湿度/极端天气) + 即时筛查',
+                '路径C: 社区脆弱性指数 + 30天病例负担',
+                '融合分数 = 0.45*A + 0.30*B + 0.25*C，并与慢病专项结果做轻量校准',
+                '概率化输出基于分数分布计算低/中/高风险概率，并给出区间与不确定性等级',
+                '行动优先级采用 Impact × Likelihood 四级矩阵（1-16分）'
+            ],
+            'model_version': self.model_version,
+            'rr_breakdown': rr_breakdown
+        }
+
+    # ---------------------------
+    # 兼容旧接口（已废弃）
+    # ---------------------------
     def assess_user_risk(self, user_id):
-        """
-        评估用户健康风险
-        注意：此方法已废弃，请直接在 app.py 中调用相关服务
-        """
+        """旧接口：保留兼容。"""
         return None
-    
-    def _analyze_disease_risks(self, user_profile, weather_data, community_risk):
-        """分析各类疾病风险"""
-        risks = {}
-        
-        # 呼吸道疾病风险
-        respiratory_risk = 30  # 基础风险
-        if weather_data.get('aqi', 0) > 100:
-            respiratory_risk += 30
-        if weather_data.get('temperature', 20) < 10:
-            respiratory_risk += 20
-        if '呼吸' in str(user_profile.get('chronic_diseases', [])):
-            respiratory_risk += 20
-        risks['呼吸道疾病'] = min(respiratory_risk, 100)
-        
-        # 心血管疾病风险
-        cardiovascular_risk = 25
-        temp = weather_data.get('temperature', 20)
-        if temp > 35 or temp < 0:
-            cardiovascular_risk += 35
-        if user_profile.get('age', 0) > 60:
-            cardiovascular_risk += 20
-        if '心血管' in str(user_profile.get('chronic_diseases', [])) or '高血压' in str(user_profile.get('chronic_diseases', [])):
-            cardiovascular_risk += 20
-        risks['心血管疾病'] = min(cardiovascular_risk, 100)
-        
-        # 关节疾病风险
-        joint_risk = 20
-        if weather_data.get('humidity', 0) > 80:
-            joint_risk += 25
-        if weather_data.get('temperature', 20) < 15:
-            joint_risk += 15
-        if '关节' in str(user_profile.get('chronic_diseases', [])):
-            joint_risk += 30
-        risks['关节疾病'] = min(joint_risk, 100)
-        
-        # 消化系统疾病风险
-        digestive_risk = 15
-        if weather_data.get('temperature', 20) > 30:
-            digestive_risk += 20
-        risks['消化系统疾病'] = min(digestive_risk, 100)
-        
-        return risks
-    
-    def _generate_health_recommendations(self, user_profile, weather_data, disease_risks):
-        """生成健康建议"""
-        recommendations = []
-        
-        # 基于年龄的建议
-        if user_profile.get('age', 0) > 65:
-            recommendations.append({
-                'category': '老年人健康',
-                'advice': '建议减少户外活动时间，注意保暖或防暑'
-            })
-        
-        # 基于天气的建议
-        aqi = weather_data.get('aqi', 0)
-        if aqi > 150:
-            recommendations.append({
-                'category': '空气质量',
-                'advice': '空气质量较差，建议佩戴口罩，减少户外活动'
-            })
-        
-        temp = weather_data.get('temperature', 20)
-        if temp > 35:
-            recommendations.append({
-                'category': '高温预防',
-                'advice': '高温天气，注意防暑降温，多饮水，避免中暑'
-            })
-        elif temp < 5:
-            recommendations.append({
-                'category': '低温预防',
-                'advice': '低温天气，注意保暖，预防感冒和冻伤'
-            })
-        
-        # 基于疾病风险的建议
-        for disease, risk in disease_risks.items():
-            if risk > 60:
-                if disease == '呼吸道疾病':
-                    recommendations.append({
-                        'category': '呼吸系统健康',
-                        'advice': '呼吸道疾病风险较高，建议减少外出，注意室内通风'
-                    })
-                elif disease == '心血管疾病':
-                    recommendations.append({
-                        'category': '心血管健康',
-                        'advice': '心血管疾病风险较高，避免剧烈运动，按时服药'
-                    })
-                elif disease == '关节疾病':
-                    recommendations.append({
-                        'category': '关节健康',
-                        'advice': '关节疾病风险较高，注意关节保暖，适当活动'
-                    })
-        
-        # 基于慢性病的建议
-        chronic_diseases = user_profile.get('chronic_diseases', [])
-        if chronic_diseases:
-            recommendations.append({
-                'category': '慢性病管理',
-                'advice': '定期监测健康指标，按时服药，如有不适及时就医'
-            })
-        
-        return recommendations
-    
-    def _get_risk_level(self, risk_score):
-        """根据风险评分确定风险等级"""
-        if risk_score < 30:
-            return '低风险'
-        elif risk_score < 60:
-            return '中风险'
-        else:
-            return '高风险'
-    
+
     def generate_community_risk_map_data(self):
-        """生成社区风险地图数据
-        注意：此方法已废弃，请直接在 app.py 中调用
-        """
+        """旧接口：保留兼容。"""
         return []
 
+    # ---------------------------
+    # 内部工具函数
+    # ---------------------------
+    def _normalize_user_profile(self, user_profile):
+        diseases = user_profile.get('chronic_diseases', [])
+        if isinstance(diseases, str):
+            parsed = safe_json_loads(diseases, [])
+            if isinstance(parsed, list):
+                diseases = parsed
+            elif diseases:
+                diseases = [diseases]
+            else:
+                diseases = []
+        if diseases is None:
+            diseases = []
+        if not isinstance(diseases, list):
+            diseases = [str(diseases)]
+
+        cleaned = [str(item).strip() for item in diseases if str(item).strip()]
+        has_chronic = bool(user_profile.get('has_chronic_disease')) or bool(cleaned)
+
+        return {
+            'age': self._to_int(user_profile.get('age'), 45, min_value=0, max_value=110),
+            'gender': str(user_profile.get('gender') or '未知'),
+            'community': str(user_profile.get('community') or '').strip(),
+            'has_chronic_disease': has_chronic,
+            'chronic_diseases': cleaned
+        }
+
+    def _normalize_weather_data(self, weather_data):
+        return {
+            'temperature': self._to_float(weather_data.get('temperature'), 20.0),
+            'humidity': self._clamp(self._to_float(weather_data.get('humidity'), 60.0), 0.0, 100.0),
+            'aqi': self._clamp(self._to_float(weather_data.get('aqi'), 50.0), 0.0, 500.0),
+            'pressure': self._to_float(weather_data.get('pressure'), 1013.0),
+            'wind_speed': self._to_float(weather_data.get('wind_speed'), 3.0),
+            'weather_condition': str(weather_data.get('weather_condition') or '')
+        }
+
+    def _normalize_screening(self, screening):
+        mapping = {
+            'outdoor_exposure': ({'low', 'medium', 'high'}, 'medium'),
+            'symptom_level': ({'none', 'mild', 'moderate', 'severe'}, 'none'),
+            'hydration': ({'good', 'normal', 'poor'}, 'normal'),
+            'medication_adherence': ({'good', 'partial', 'poor'}, 'good'),
+            'sleep_quality': ({'good', 'fair', 'poor'}, 'good')
+        }
+        data = {}
+        for key, pair in mapping.items():
+            allowed, default = pair
+            value = str(screening.get(key) or '').strip().lower()
+            data[key] = value if value in allowed else default
+        return data
+
+    def _screening_score(self, screening):
+        outdoor_map = {'low': 15.0, 'medium': 35.0, 'high': 60.0}
+        symptom_map = {'none': 0.0, 'mild': 35.0, 'moderate': 70.0, 'severe': 95.0}
+        hydration_map = {'good': 0.0, 'normal': 15.0, 'poor': 42.0}
+        adherence_map = {'good': 0.0, 'partial': 22.0, 'poor': 45.0}
+        sleep_map = {'good': 0.0, 'fair': 15.0, 'poor': 35.0}
+        score = (
+            0.30 * symptom_map.get(screening['symptom_level'], 0.0)
+            + 0.25 * outdoor_map.get(screening['outdoor_exposure'], 15.0)
+            + 0.15 * hydration_map.get(screening['hydration'], 0.0)
+            + 0.20 * adherence_map.get(screening['medication_adherence'], 0.0)
+            + 0.10 * sleep_map.get(screening['sleep_quality'], 0.0)
+        )
+        return self._clamp(score, 0.0, 100.0)
+
+    def _calc_personal_susceptibility_score(self, profile):
+        age = profile['age']
+        if age >= 80:
+            age_score = 95.0
+        elif age >= 70:
+            age_score = 78.0
+        elif age >= 60:
+            age_score = 62.0
+        elif age >= 45:
+            age_score = 45.0
+        else:
+            age_score = 28.0
+
+        disease_count = len(profile['chronic_diseases'])
+        chronic_score = 12.0 if disease_count == 0 else self._clamp(45.0 + disease_count * 14.0, 45.0, 98.0)
+
+        male_cardio_bonus = 8.0 if profile['gender'] == '男' and age >= 55 else 0.0
+        female_elder_bonus = 5.0 if profile['gender'] == '女' and age >= 70 else 0.0
+
+        return self._clamp(
+            0.55 * age_score + 0.40 * chronic_score + male_cardio_bonus + female_elder_bonus,
+            0.0,
+            100.0
+        )
+
+    def _extract_lag_temperatures(self, weather_data, current_temp):
+        keys = ('lag_temperatures', 'temperature_lags', 'temperature_history', 'historical_temperatures')
+        for key in keys:
+            values = weather_data.get(key)
+            if not isinstance(values, (list, tuple)) or not values:
+                continue
+            lag_temps = []
+            for value in values:
+                try:
+                    lag_temps.append(float(value))
+                except (TypeError, ValueError):
+                    continue
+            if not lag_temps:
+                continue
+            if abs(lag_temps[0] - float(current_temp)) > 0.01:
+                lag_temps.insert(0, float(current_temp))
+            return lag_temps
+        return None
+
+    def _build_community_context(self, community_name):
+        if not community_name:
+            return {
+                'community': '未设置',
+                'population': 0,
+                'elderly_ratio': 0.0,
+                'chronic_disease_ratio': 0.0,
+                'vulnerability_index': 40.0,
+                'vulnerability_level': '中',
+                'cases_30d': 0,
+                'burden_per_1000': 0.0,
+                'burden_score': 30.0
+            }
+
+        profile_data = None
+        try:
+            from services.community_risk_service import get_community_service
+            profile_data = get_community_service().get_community_profile(community_name)
+        except Exception:
+            profile_data = None
+
+        community_row = Community.query.filter_by(name=community_name).first()
+        population = 0
+        elderly_ratio = 0.0
+        chronic_ratio = 0.0
+        vulnerability_index = 45.0
+        vulnerability_level = '中'
+
+        if profile_data:
+            population = int(self._to_float(profile_data.get('population'), 0.0))
+            elderly_ratio = self._clamp(self._to_float(profile_data.get('elderly_ratio'), 0.0), 0.0, 1.0)
+            chronic_ratio = self._clamp(self._to_float(profile_data.get('chronic_disease_ratio'), 0.0), 0.0, 1.0)
+            details = profile_data.get('vulnerability_details') or {}
+            if details:
+                vulnerability_index = self._clamp(
+                    self._to_float(details.get('vulnerability_index'), vulnerability_index),
+                    0.0,
+                    100.0
+                )
+                vulnerability_level = details.get('level') or details.get('risk_level') or vulnerability_level
+
+        if community_row:
+            population = population or int(self._to_float(community_row.population, 0.0))
+            elderly_ratio = elderly_ratio or self._clamp(self._to_float(community_row.elderly_ratio, 0.0), 0.0, 1.0)
+            chronic_ratio = chronic_ratio or self._clamp(self._to_float(community_row.chronic_disease_ratio, 0.0), 0.0, 1.0)
+            if community_row.vulnerability_index is not None:
+                vulnerability_index = self._clamp(self._to_float(community_row.vulnerability_index), 0.0, 100.0)
+            if community_row.risk_level:
+                vulnerability_level = str(community_row.risk_level)
+
+        cases_30d, burden_per_1000 = self._community_recent_burden(community_name, population, window_days=30)
+        burden_score = self._clamp(burden_per_1000 * 8.0, 0.0, 100.0)
+
+        return {
+            'community': community_name,
+            'population': population,
+            'elderly_ratio': round(elderly_ratio, 4),
+            'chronic_disease_ratio': round(chronic_ratio, 4),
+            'vulnerability_index': round(vulnerability_index, 1),
+            'vulnerability_level': vulnerability_level,
+            'cases_30d': int(cases_30d),
+            'burden_per_1000': round(burden_per_1000, 3),
+            'burden_score': round(burden_score, 1)
+        }
+
+    def _community_recent_burden(self, community_name, population, window_days=30):
+        try:
+            start_time = utcnow() - timedelta(days=max(7, int(window_days or 30)))
+            query = MedicalRecord.query.filter(MedicalRecord.community == community_name)
+            query = query.filter(MedicalRecord.visit_time >= start_time)
+            cases = int(query.count())
+        except Exception:
+            cases = 0
+
+        pop = max(int(population or 0), 0)
+        if pop <= 0:
+            return cases, 0.0
+        return cases, cases * 1000.0 / pop
+
+    def _aqi_score(self, aqi):
+        aqi = self._clamp(self._to_float(aqi, 50.0), 0.0, 500.0)
+        if aqi <= 50:
+            return 8.0
+        if aqi <= 100:
+            return 24.0
+        if aqi <= 150:
+            return 48.0
+        if aqi <= 200:
+            return 72.0
+        if aqi <= 300:
+            return 88.0
+        return 96.0
+
+    def _humidity_score(self, humidity):
+        humidity = self._clamp(self._to_float(humidity, 60.0), 0.0, 100.0)
+        if humidity < 35:
+            return self._clamp((35.0 - humidity) * 2.4, 0.0, 100.0)
+        if humidity > 75:
+            return self._clamp((humidity - 75.0) * 2.6, 0.0, 100.0)
+        return 12.0
+
+    def _risk_probabilities(self, mean_score, sigma):
+        sigma = max(self._to_float(sigma, 10.0), 1.0)
+
+        def cdf(x):
+            z = (x - mean_score) / (sigma * math.sqrt(2.0))
+            return 0.5 * (1.0 + math.erf(z))
+
+        p_low = self._clamp(cdf(40.0), 0.0, 1.0)
+        p_high = self._clamp(1.0 - cdf(70.0), 0.0, 1.0)
+        p_medium = self._clamp(1.0 - p_low - p_high, 0.0, 1.0)
+
+        total = p_low + p_medium + p_high
+        if total <= 0:
+            return {'low': 0.33, 'medium': 0.34, 'high': 0.33}
+        return {
+            'low': p_low / total,
+            'medium': p_medium / total,
+            'high': p_high / total
+        }
+
+    def _cap_semantics(self, score, high_probability, uncertainty_label):
+        if score >= 85:
+            severity = 'extreme'
+        elif score >= 70:
+            severity = 'severe'
+        elif score >= 50:
+            severity = 'moderate'
+        else:
+            severity = 'minor'
+
+        if high_probability >= 0.7:
+            certainty = 'likely'
+        elif high_probability >= 0.45:
+            certainty = 'possible'
+        else:
+            certainty = 'unlikely'
+
+        if severity in ('extreme', 'severe') and certainty == 'likely':
+            urgency = 'immediate'
+        elif severity in ('severe', 'moderate'):
+            urgency = 'expected'
+        else:
+            urgency = 'future'
+
+        if uncertainty_label == '高' and certainty == 'likely':
+            certainty = 'possible'
+
+        return {
+            'severity': severity,
+            'certainty': certainty,
+            'urgency': urgency
+        }
+
+    def _impact_likelihood_bucket(self, impact_score, likelihood_score, certainty):
+        likelihood = self._clamp(self._to_float(likelihood_score, 0.0), 0.0, 100.0)
+        if certainty == 'likely':
+            likelihood = self._clamp(likelihood + 8.0, 0.0, 100.0)
+        elif certainty == 'unlikely':
+            likelihood = self._clamp(likelihood - 8.0, 0.0, 100.0)
+
+        impact_bucket = self._to_four_bucket(impact_score)
+        likelihood_bucket = self._to_four_bucket(likelihood)
+        rank = {'low': 1, 'medium': 2, 'high': 3, 'very_high': 4}
+        return {
+            'impact_bucket': impact_bucket,
+            'likelihood_bucket': likelihood_bucket,
+            'matrix_score': rank[impact_bucket] * rank[likelihood_bucket]
+        }
+
+    def _to_four_bucket(self, score):
+        score = self._clamp(self._to_float(score, 0.0), 0.0, 100.0)
+        if score >= 75:
+            return 'very_high'
+        if score >= 50:
+            return 'high'
+        if score >= 25:
+            return 'medium'
+        return 'low'
+
+    def _compose_recommendations(
+        self,
+        chronic_recommendations,
+        cap_semantics,
+        impact_likelihood,
+        weather,
+        profile,
+        screening
+    ):
+        result = []
+        seen = set()
+
+        def add_item(category, advice, priority='medium'):
+            if not advice:
+                return
+            key = f'{category}:{advice}'
+            if key in seen:
+                return
+            seen.add(key)
+            result.append({
+                'category': category,
+                'priority': priority,
+                'advice': advice
+            })
+
+        for item in chronic_recommendations or []:
+            if isinstance(item, dict):
+                add_item(
+                    item.get('category', '慢病管理'),
+                    item.get('advice', ''),
+                    item.get('priority', 'medium')
+                )
+
+        if weather['temperature'] >= 32:
+            add_item('高温防护', '减少午后外出，优先在阴凉或空调环境活动，主动补水。', 'high')
+        elif weather['temperature'] <= 5:
+            add_item('低温防护', '外出注意分层保暖，尤其关注头颈和四肢。', 'high')
+
+        if weather['aqi'] >= 150:
+            add_item('空气质量', '空气质量偏差，尽量减少户外运动，必要时佩戴防护口罩。', 'high')
+
+        if screening.get('symptom_level') in ('moderate', 'severe'):
+            add_item('症状管理', '已出现明显不适，请减少活动并监测症状变化。', 'high')
+
+        if screening.get('medication_adherence') in ('partial', 'poor') and profile.get('has_chronic_disease'):
+            add_item('用药依从', '请按医嘱规律服药，不要自行停药或减量。', 'high')
+
+        if cap_semantics['urgency'] == 'immediate':
+            add_item('紧急分流', '若出现胸痛、呼吸困难、意识模糊等症状，请立即就医。', 'urgent')
+        elif impact_likelihood['matrix_score'] >= 12:
+            add_item('行动升级', '当前风险已进入高优先级，请联系家属或村医协助观察。', 'high')
+
+        if not result:
+            add_item('日常管理', '保持规律作息、均衡饮食与适量活动，留意天气变化。', 'low')
+
+        priority_order = {'urgent': 0, 'high': 1, 'medium': 2, 'low': 3}
+        result.sort(key=lambda item: priority_order.get(item.get('priority', 'medium'), 9))
+        return result[:8]
+
+    def _top_component_reasons(self, component_scores):
+        labels = {
+            '温度风险': '温度暴露已偏离舒适区',
+            '空气质量风险': '空气质量因素导致风险上升',
+            '湿度风险': '湿度处于不利区间',
+            '极端天气暴露': '存在极端天气触发因素',
+            '个体易感性': '年龄/慢病使个体对天气更敏感',
+            '即时健康筛查': '即时状态筛查提示风险上升',
+            '社区脆弱性': '所在社区脆弱性较高',
+            '社区病例负担': '近期社区病例负担偏高'
+        }
+        sorted_items = sorted(component_scores.items(), key=lambda x: float(x[1]), reverse=True)
+        reasons = []
+        for name, score in sorted_items[:4]:
+            if float(score) < 40:
+                continue
+            reason = labels.get(name)
+            if reason:
+                reasons.append(reason)
+        return reasons
+
+    def _matrix_actions(self, impact_likelihood):
+        impact = impact_likelihood.get('impact_bucket')
+        likelihood = impact_likelihood.get('likelihood_bucket')
+        if impact in ('high', 'very_high') and likelihood in ('high', 'very_high'):
+            return ['建议立即执行高优先级防护并启动家庭/社区协同监测。']
+        if impact in ('high', 'very_high'):
+            return ['建议提前准备药物、补水和降温/保暖资源。']
+        if likelihood in ('high', 'very_high'):
+            return ['建议今天增加自我监测频次，必要时减少户外活动。']
+        return ['保持常规防护，关注后续天气与健康提示更新。']
+
+    @staticmethod
+    def _merge_unique(base_items, extra_items):
+        result = []
+        seen = set()
+        for item in (base_items or []) + (extra_items or []):
+            text = str(item).strip()
+            if not text or text in seen:
+                continue
+            seen.add(text)
+            result.append(text)
+        return result
+
+    @staticmethod
+    def _to_float(value, default=0.0):
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return float(default)
+
+    @staticmethod
+    def _to_int(value, default=0, min_value=None, max_value=None):
+        try:
+            result = int(value)
+        except (TypeError, ValueError):
+            result = int(default)
+        if min_value is not None:
+            result = max(int(min_value), result)
+        if max_value is not None:
+            result = min(int(max_value), result)
+        return result
+
+    @staticmethod
+    def _clamp(value, lower, upper):
+        return max(float(lower), min(float(upper), float(value)))
+
+    @staticmethod
+    def _bucket_three(score, low, high, labels):
+        score = float(score)
+        if score < low:
+            return labels[0]
+        if score < high:
+            return labels[1]
+        return labels[2]

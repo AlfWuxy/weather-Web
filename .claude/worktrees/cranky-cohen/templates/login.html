@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+
+{% block title %}登录 - 天气健康风险预测系统{% endblock %}
+
+{% block content %}
+<div class="container">
+    <div class="row justify-content-center align-items-center" style="min-height: 80vh;">
+        <div class="col-md-5 col-lg-4">
+            <div class="text-center mb-4">
+                <div class="d-inline-flex align-items-center justify-content-center bg-primary bg-opacity-10 rounded-circle mb-3" style="width: 64px; height: 64px;">
+                    <i class="bi bi-shield-lock-fill text-primary" style="font-size: 2rem;"></i>
+                </div>
+                <h2 class="fw-bold mb-2">登录系统</h2>
+                <p class="text-secondary mb-0">天气健康风险预测系统</p>
+            </div>
+            
+            <div class="card shadow-sm">
+                <div class="card-body p-4">
+                    <form method="POST" action="{{ url_for('public.login') }}">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        {% if next %}
+                            <input type="hidden" name="next" value="{{ next }}">
+                        {% endif %}
+                        <div class="mb-3">
+                            <label for="username" class="form-label text-secondary">用户名</label>
+                            <input type="text" class="form-control" id="username" name="username" placeholder="请输入用户名" required autofocus>
+                        </div>
+                        <div class="mb-3">
+                            <label for="password" class="form-label text-secondary">密码</label>
+                            <input type="password" class="form-control" id="password" name="password" placeholder="请输入密码" required>
+                        </div>
+                        <div class="mb-3 d-flex justify-content-between align-items-center">
+                            <div class="form-check">
+                                <input type="checkbox" class="form-check-input" id="remember">
+                                <label class="form-check-label small" for="remember">记住我</label>
+                            </div>
+                        </div>
+                        <div class="d-grid mb-3">
+                            <button type="submit" class="btn btn-primary btn-lg">
+                                登录
+                            </button>
+                        </div>
+                        <div class="d-grid mb-3">
+                            <a href="{{ url_for('public.guest_login') }}" class="btn btn-outline-primary">
+                                游客体验
+                            </a>
+                        </div>
+                        <div class="text-center">
+                            <span class="text-secondary small">还没有账号？</span>
+                            <a href="{{ url_for('public.register') }}" class="text-decoration-none small fw-semibold">立即注册</a>
+                        </div>
+                    </form>
+                </div>
+            </div>
+
+            <div class="text-center mt-4">
+                <div class="alert alert-light border">
+                    <i class="bi bi-info-circle me-2"></i>
+                    <small><strong>管理员账号：</strong>由系统配置创建</small>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

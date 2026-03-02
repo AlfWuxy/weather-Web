@@ -1,0 +1,42 @@
+<div id="ai-floating-chat" class="ai-floating-chat collapsed" data-authenticated="{{ '1' if current_user.is_authenticated else '0' }}">
+    <button type="button" class="ai-chat-toggle" aria-label="打开AI问答">
+        <i class="bi bi-robot"></i>
+    </button>
+
+    <div class="ai-chat-window shadow-lg">
+        <div class="ai-chat-header">
+            <div class="ai-chat-title">
+                <i class="bi bi-chat-dots"></i> AI问答
+            </div>
+            <select class="form-select form-select-sm ai-chat-model" id="ai-chat-model" aria-label="选择模型">
+                {% if ai_models %}
+                    {% for model in ai_models %}
+                        {% if 'DeepSeek' in model %}
+                            <option value="{{ model }}">DeepSeek-V3.2</option>
+                        {% elif 'Qwen3-VL' in model %}
+                            <option value="{{ model }}">Qwen3-VL-32B-Instruct</option>
+                        {% else %}
+                            <option value="{{ model }}">{{ model }}</option>
+                        {% endif %}
+                    {% endfor %}
+                {% else %}
+                    <option value="" disabled>暂无可用模型</option>
+                {% endif %}
+            </select>
+            <button type="button" class="btn btn-sm btn-link ai-chat-close" aria-label="关闭">
+                <i class="bi bi-x-lg"></i>
+            </button>
+        </div>
+
+        <div class="ai-chat-body">
+            <div class="ai-chat-messages" id="ai-chat-messages" aria-live="polite"></div>
+        </div>
+
+        <div class="ai-chat-footer">
+            <textarea class="form-control ai-chat-input" id="ai-chat-input" rows="2" placeholder="输入问题..." aria-label="输入问题"></textarea>
+            <button type="button" class="btn btn-primary ai-chat-send" id="ai-chat-send" aria-label="发送">
+                <i class="bi bi-send"></i>
+            </button>
+        </div>
+    </div>
+</div>

@@ -347,7 +347,8 @@
         </div>
     </div>
 
-    <!-- 7天健康预测快速入口 -->
+    {% if current_user.role == 'admin' %}
+    <!-- 7天健康预测快速入口（管理员/研究功能） -->
     <div class="row mt-4">
         <div class="col-md-6 mb-4">
             <div class="card shadow-sm h-100 border-primary">
@@ -396,6 +397,7 @@
             </div>
         </div>
     </div>
+    {% endif %}
 
     <!-- 社区风险概览 -->
     <div class="row">
@@ -469,118 +471,113 @@ try {
 }
 {% endif %}
 
-// 加载7天预测预览
+// 加载7天预测预览（管理员/研究功能）
 document.addEventListener('DOMContentLoaded', function() {
-    fetch('/api/forecast/7day', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({})
-    })
-    .then(response => response.json())
-    .then(data => {
-        const previewDiv = document.getElementById('forecast7dayPreview');
-        if (!previewDiv) {
-            return;
-        }
-        clearElement(previewDiv);
-        if (data.success) {
-            const summary = data.summary || {};
-            const forecasts = Array.isArray(data.forecasts) ? data.forecasts.slice(0, 3) : [];
-            const totalVisitsText = formatNumber(summary.total_expected_visits, 0, '--');
-            const totalVisitsValue = toNumber(summary.total_expected_visits, null);
-            const highRiskDaysValue = toNumber(summary.high_risk_days, 0);
-            const highRiskDaysText = formatNumber(summary.high_risk_days, 0, '--');
-            const avgVisitsText = totalVisitsValue === null ? '--' : String(Math.round(totalVisitsValue / 7));
+    const previewDiv = document.getElementById('forecast7dayPreview');
+    if (previewDiv) {
+        fetch('/api/forecast/7day', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({})
+        })
+        .then(response => response.json())
+        .then(data => {
+            clearElement(previewDiv);
+            if (data.success) {
+                const summary = data.summary || {};
+                const forecasts = Array.isArray(data.forecasts) ? data.forecasts.slice(0, 3) : [];
+                const totalVisitsText = formatNumber(summary.total_expected_visits, 0, '--');
+                const totalVisitsValue = toNumber(summary.total_expected_visits, null);
+                const highRiskDaysValue = toNumber(summary.high_risk_days, 0);
+                const highRiskDaysText = formatNumber(summary.high_risk_days, 0, '--');
+                const avgVisitsText = totalVisitsValue === null ? '--' : String(Math.round(totalVisitsValue / 7));
 
-            const row = document.createElement('div');
-            row.className = 'row text-center mb-3';
+                const row = document.createElement('div');
+                row.className = 'row text-center mb-3';
 
-            const totalCol = document.createElement('div');
-            totalCol.className = 'col-4';
-            const totalValue = document.createElement('div');
-            totalValue.className = 'h4 text-primary mb-0';
-            totalValue.textContent = totalVisitsText;
-            const totalLabel = document.createElement('small');
-            totalLabel.className = 'text-muted';
-            totalLabel.textContent = '预计总门诊';
-            totalCol.appendChild(totalValue);
-            totalCol.appendChild(totalLabel);
+                const totalCol = document.createElement('div');
+                totalCol.className = 'col-4';
+                const totalValue = document.createElement('div');
+                totalValue.className = 'h4 text-primary mb-0';
+                totalValue.textContent = totalVisitsText;
+                const totalLabel = document.createElement('small');
+                totalLabel.className = 'text-muted';
+                totalLabel.textContent = '预计总门诊';
+                totalCol.appendChild(totalValue);
+                totalCol.appendChild(totalLabel);
 
-            const riskCol = document.createElement('div');
-            riskCol.className = 'col-4';
-            const riskValue = document.createElement('div');
-            const riskClass = highRiskDaysValue >= 2 ? 'text-danger' :
-                highRiskDaysValue >= 1 ? 'text-warning' : 'text-success';
-            riskValue.className = 'h4 ' + riskClass + ' mb-0';
-            riskValue.textContent = highRiskDaysText;
-            const riskLabel = document.createElement('small');
-            riskLabel.className = 'text-muted';
-            riskLabel.textContent = '高风险天数';
-            riskCol.appendChild(riskValue);
-            riskCol.appendChild(riskLabel);
+                const riskCol = document.createElement('div');
+                riskCol.className = 'col-4';
+                const riskValue = document.createElement('div');
+                const riskClass = highRiskDaysValue >= 2 ? 'text-danger' :
+                    highRiskDaysValue >= 1 ? 'text-warning' : 'text-success';
+                riskValue.className = 'h4 ' + riskClass + ' mb-0';
+                riskValue.textContent = highRiskDaysText;
+                const riskLabel = document.createElement('small');
+                riskLabel.className = 'text-muted';
+                riskLabel.textContent = '高风险天数';
+                riskCol.appendChild(riskValue);
+                riskCol.appendChild(riskLabel);
 
-            const avgCol = document.createElement('div');
-            avgCol.className = 'col-4';
-            const avgValue = document.createElement('div');
-            avgValue.className = 'h4 mb-0';
-            avgValue.textContent = avgVisitsText;
-            const avgLabel = document.createElement('small');
-            avgLabel.className = 'text-muted';
-            avgLabel.textContent = '日均门诊';
-            avgCol.appendChild(avgValue);
-            avgCol.appendChild(avgLabel);
+                const avgCol = document.createElement('div');
+                avgCol.className = 'col-4';
+                const avgValue = document.createElement('div');
+                avgValue.className = 'h4 mb-0';
+                avgValue.textContent = avgVisitsText;
+                const avgLabel = document.createElement('small');
+                avgLabel.className = 'text-muted';
+                avgLabel.textContent = '日均门诊';
+                avgCol.appendChild(avgValue);
+                avgCol.appendChild(avgLabel);
 
-            row.appendChild(totalCol);
-            row.appendChild(riskCol);
-            row.appendChild(avgCol);
-            previewDiv.appendChild(row);
+                row.appendChild(totalCol);
+                row.appendChild(riskCol);
+                row.appendChild(avgCol);
+                previewDiv.appendChild(row);
 
-            const cardsRow = document.createElement('div');
-            cardsRow.className = 'd-flex justify-content-between';
-            forecasts.forEach(f => {
-                const riskLevel = safeText(f.risk_level, '--');
-                const badgeClass = riskLevel.includes('红') ? 'danger' :
-                    riskLevel.includes('橙') ? 'warning' :
-                    riskLevel.includes('黄') ? 'info' : 'success';
-                const card = document.createElement('div');
-                card.className = 'text-center p-2 border rounded';
-                card.style.minWidth = '80px';
+                const cardsRow = document.createElement('div');
+                cardsRow.className = 'd-flex justify-content-between';
+                forecasts.forEach(f => {
+                    const riskLevel = safeText(f.risk_level, '--');
+                    const badgeClass = riskLevel.includes('红') ? 'danger' :
+                        riskLevel.includes('橙') ? 'warning' :
+                        riskLevel.includes('黄') ? 'info' : 'success';
+                    const card = document.createElement('div');
+                    card.className = 'text-center p-2 border rounded';
+                    card.style.minWidth = '80px';
 
-                const dayText = document.createElement('div');
-                dayText.className = 'small text-muted';
-                dayText.textContent = safeText(f.day_of_week, '--');
-                const tempText = document.createElement('div');
-                tempText.className = 'fw-bold';
-                tempText.textContent = formatNumber(f.temperature && f.temperature.corrected, 0, '--') + '°C';
-                const badge = document.createElement('span');
-                badge.className = 'badge bg-' + badgeClass;
-                badge.style.fontSize = '0.7rem';
-                badge.textContent = riskLevel;
+                    const dayText = document.createElement('div');
+                    dayText.className = 'small text-muted';
+                    dayText.textContent = safeText(f.day_of_week, '--');
+                    const tempText = document.createElement('div');
+                    tempText.className = 'fw-bold';
+                    tempText.textContent = formatNumber(f.temperature && f.temperature.corrected, 0, '--') + '°C';
+                    const badge = document.createElement('span');
+                    badge.className = 'badge bg-' + badgeClass;
+                    badge.style.fontSize = '0.7rem';
+                    badge.textContent = riskLevel;
 
-                card.appendChild(dayText);
-                card.appendChild(tempText);
-                card.appendChild(badge);
-                cardsRow.appendChild(card);
-            });
-            previewDiv.appendChild(cardsRow);
-        } else {
+                    card.appendChild(dayText);
+                    card.appendChild(tempText);
+                    card.appendChild(badge);
+                    cardsRow.appendChild(card);
+                });
+                previewDiv.appendChild(cardsRow);
+            } else {
+                const empty = document.createElement('p');
+                empty.className = 'text-muted text-center mb-0';
+                empty.textContent = '预测数据加载失败';
+                previewDiv.appendChild(empty);
+            }
+        })
+        .catch(error => {
+            clearElement(previewDiv);
             const empty = document.createElement('p');
             empty.className = 'text-muted text-center mb-0';
-            empty.textContent = '预测数据加载失败';
+            empty.textContent = '预测服务暂不可用';
             previewDiv.appendChild(empty);
-        }
-    })
-    .catch(error => {
-        const previewDiv = document.getElementById('forecast7dayPreview');
-        if (!previewDiv) {
-            return;
-        }
-        clearElement(previewDiv);
-        const empty = document.createElement('p');
-        empty.className = 'text-muted text-center mb-0';
-        empty.textContent = '预测服务暂不可用';
-        previewDiv.appendChild(empty);
-    });
+        });
+    }
 
     const adjustContainer = document.getElementById('heatRiskAdjustDashboard');
     if (adjustContainer) {

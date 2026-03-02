@@ -1,0 +1,370 @@
+{% extends "base.html" %}
+
+{% block title %}照护工作台 - 宜老天气通{% endblock %}
+
+{% block content %}
+<div class="container my-4">
+    <div class="row mb-3">
+        <div class="col-12">
+            <h2><i class="bi bi-people"></i> 子女首页 · 照护行动工作台</h2>
+            <p class="text-muted mb-0">
+                为家中老人设置所在地（任意中文输入），高温/寒潮触发时自动推送给你；慢病类别可选登记用于个性化提醒。
+                系统不存储精确住址/电话。
+            </p>
+            {% if not current_user.push_enabled or not current_user.wxpusher_uid %}
+                <div class="alert alert-warning mt-3 mb-0">
+                    <div class="fw-semibold">尚未开启自动推送</div>
+                    <div class="small">
+                        请到「<a href="{{ url_for('user.profile') }}">个人设置</a>」填写 WxPusher UID 并开启推送（试点阶段优先）。
+                    </div>
+                </div>
+            {% endif %}
+            {% if current_user.role in ['caregiver', 'admin'] %}
+                <a class="btn btn-sm btn-outline-primary mt-2" href="{{ url_for('user.community_announce') }}">
+                    <i class="bi bi-megaphone"></i> 公共传播包
+                </a>
+            {% endif %}
+        </div>
+    </div>
+
+    <div class="row g-4">
+        <div class="col-lg-4">
+            <div class="card shadow-sm">
+                <div class="card-header bg-light">
+                    <h5 class="mb-0"><i class="bi bi-person-plus"></i> 新增监测对象（老人）</h5>
+                </div>
+                <div class="card-body">
+                    <form method="POST" action="{{ pair_create_action or url_for('user.pair_management') }}">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <div class="mb-3">
+                            <label class="form-label">关联老人档案（可选）</label>
+                            <select class="form-select" name="member_id">
+                                <option value="">暂不关联</option>
+                                {% for member in family_members %}
+                                    <option value="{{ member.id }}">{{ member.relation or '家人' }} · {{ member.name }}</option>
+                                {% endfor %}
+                            </select>
+                            <div class="text-muted small mt-2">
+                                老人档案在「健康管理与照护 → <a href="{{ url_for('health.family_members') }}">家庭成员</a>」里维护（可登记慢病类别）。
+                            </div>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">老人所在地</label>
+                            <input class="form-control" name="location_query" list="communityOptions" placeholder="例如：九江市都昌县/九江某乡镇">
+                            <datalist id="communityOptions">
+                                {% for community in communities %}
+                                    <option value="{{ community.name }}"></option>
+                                {% endfor %}
+                            </datalist>
+                            <div class="text-muted small mt-2">会用高德地理编码解析为经纬度，用于拉取天气预警。</div>
+                        </div>
+                        <button class="btn btn-primary w-100" type="submit">
+                            <i class="bi bi-plus-circle"></i> 添加监测对象
+                        </button>
+                    </form>
+                </div>
+            </div>
+
+            {% if created_pair %}
+                <div class="card shadow-sm mt-4">
+                    <div class="card-header bg-success text-white">
+                        <h6 class="mb-0"><i class="bi bi-check-circle"></i> 已创建监测对象</h6>
+                    </div>
+                    <div class="card-body">
+                        <div class="mb-2">
+                            <div class="text-muted small">短码</div>
+                            <div class="fs-3 fw-bold">{{ created_pair.short_code }}</div>
+                        </div>
+                        <div class="mb-3">
+                            <div class="text-muted small">行动页（可选，老人会用再发）</div>
+                            <input class="form-control" value="{{ created_action_link }}" readonly>
+                        </div>
+                        <div class="text-muted small">提示：试点核心闭环是“推送→点击→话术复制→反馈”。老人不必操作网页。</div>
+                    </div>
+                </div>
+            {% endif %}
+
+            <div class="card shadow-sm mt-4" id="alt-contact-card">
+                <div class="card-header bg-light">
+                    <h6 class="mb-0"><i class="bi bi-person-plus"></i> 本地备选联系人</h6>
+                </div>
+                <div class="card-body">
+                    <div class="mb-2">
+                        <label class="form-label small">联系人姓名</label>
+                        <input class="form-control" id="altContactName" placeholder="仅保存在本机">
+                    </div>
+                    <div class="mb-2">
+                        <label class="form-label small">联系方式</label>
+                        <input class="form-control" id="altContactPhone" placeholder="仅保存在本机">
+                    </div>
+                    <button class="btn btn-outline-secondary btn-sm w-100" type="button" id="addAltContact">
+                        <i class="bi bi-device-ssd"></i> 添加到本机列表
+                    </button>
+                    <ul class="list-group list-group-flush mt-3" id="altContactList"></ul>
+                    <div class="text-muted small mt-2">备选联系人不会写入后台数据库。</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-lg-8">
+            <div class="card shadow-sm">
+                <div class="card-header bg-light">
+                    <div class="d-flex align-items-center justify-content-between flex-wrap gap-2">
+                        <h5 class="mb-0"><i class="bi bi-list-check"></i> 老人卡片（{{ status_date.strftime('%Y-%m-%d') }}）</h5>
+                        <span class="text-muted small">倒计时默认至每日 20:00</span>
+                    </div>
+                </div>
+                <div class="card-body">
+                    {% if pair_cards and pair_cards|length > 0 %}
+                        <div class="row g-3">
+                            {% for item in pair_cards %}
+                                {% set status = item.status %}
+                                {% set alert_badge = 'danger' if item.alert_kind == 'heat' else 'primary' if item.alert_kind == 'cold' else 'secondary' %}
+                                <div class="col-md-6">
+                                    <div class="card border-0 shadow-sm h-100">
+                                        <div class="card-body">
+                                            <div class="d-flex justify-content-between align-items-start">
+                                                <div>
+                                                    <div class="text-muted small">短码 {{ item.pair.short_code }}</div>
+                                                    <div class="fs-5 fw-bold">{{ item.elder_name or '老人' }}</div>
+                                                    <div class="text-muted small">地点 {{ item.location_display or item.pair.community_code }}</div>
+                                                    <div class="mt-2">
+                                                        <span class="badge bg-{{ alert_badge }}">{{ item.alert_label }}</span>
+                                                        <span class="text-muted small ms-2">
+                                                            Tmax {{ item.temperature_max if item.temperature_max is not none else '-' }} ·
+                                                            Tmin {{ item.temperature_min if item.temperature_min is not none else '-' }}
+                                                        </span>
+                                                    </div>
+                                                    <div class="text-muted small mt-1">热风险（旧口径）：{{ item.risk_label }}</div>
+                                                </div>
+                                                <div class="text-end">
+                                                    {% if status and status.confirmed_at %}
+                                                        <span class="badge bg-success">已确认</span>
+                                                        <div class="text-muted small">{{ status.confirmed_at.strftime('%H:%M') }}</div>
+                                                    {% else %}
+                                                        <span class="badge bg-secondary">未确认</span>
+                                                    {% endif %}
+                                                </div>
+                                            </div>
+                                            <div class="text-muted small mt-2">
+                                                倒计时 <span class="countdown" data-deadline-hour="20"></span>
+                                            </div>
+                                            {% if item.help_flag or item.relay_stage_label or item.is_overdue %}
+                                                <div class="d-flex flex-wrap gap-2 mt-2">
+                                                    {% if item.help_flag %}
+                                                        <span class="badge bg-danger">求助</span>
+                                                    {% endif %}
+                                                    {% if item.relay_stage_label %}
+                                                        <span class="badge bg-warning text-dark">升级链 {{ item.relay_stage_label }}</span>
+                                                    {% endif %}
+                                                    {% if item.is_overdue %}
+                                                        <span class="badge bg-secondary">超时未响应</span>
+                                                    {% endif %}
+                                                </div>
+                                            {% endif %}
+                                            <div class="d-flex flex-wrap gap-2 mt-3">
+                                                <button class="btn btn-outline-primary btn-sm copy-reminder"
+                                                        type="button"
+                                                        data-pair-id="{{ item.pair.id }}"
+                                                        data-member-id="{{ item.pair.member_id or '' }}"
+                                                        data-alert-kind="{{ item.alert_kind or '' }}"
+                                                        data-message="{{ item.reminder_message | replace('\n', '\\n') | e }}">
+                                                    <i class="bi bi-clipboard"></i> 复制提醒话术
+                                                </button>
+                                                <button class="btn btn-outline-success btn-sm feedback-btn"
+                                                        type="button"
+                                                        data-kind="reminded"
+                                                        data-pair-id="{{ item.pair.id }}"
+                                                        data-member-id="{{ item.pair.member_id or '' }}">
+                                                    <i class="bi bi-check2"></i> 我已提醒
+                                                </button>
+                                                <button class="btn btn-outline-success btn-sm feedback-btn"
+                                                        type="button"
+                                                        data-kind="acted"
+                                                        data-pair-id="{{ item.pair.id }}"
+                                                        data-member-id="{{ item.pair.member_id or '' }}">
+                                                    <i class="bi bi-person-check"></i> 已采取行动
+                                                </button>
+                                                <form method="POST" action="{{ pair_backup_action or url_for('user.pair_backup_contact', pair_id=item.pair.id) }}">
+                                                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                                    {% if pair_backup_requires_id %}
+                                                        <input type="hidden" name="pair_id" value="{{ item.pair.id }}">
+                                                    {% endif %}
+                                                    <button class="btn btn-outline-secondary btn-sm" type="submit">
+                                                        <i class="bi bi-telephone"></i> 已联系备选联系人
+                                                    </button>
+                                                </form>
+                                                <form method="POST" action="{{ pair_escalate_action or url_for('user.pair_escalate', pair_id=item.pair.id) }}">
+                                                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                                    {% if pair_escalate_requires_id %}
+                                                        <input type="hidden" name="pair_id" value="{{ item.pair.id }}">
+                                                    {% endif %}
+                                                    <button class="btn btn-outline-warning btn-sm" type="submit">
+                                                        <i class="bi bi-arrow-up-right"></i> 升级链按钮
+                                                    </button>
+                                                </form>
+                                                {% if pair_detail_endpoint %}
+                                                    <a class="btn btn-outline-secondary btn-sm" href="{{ url_for(pair_detail_endpoint, pair_id=item.pair.id) }}">
+                                                        <i class="bi bi-eye"></i> 详情
+                                                    </a>
+                                                {% endif %}
+                                            </div>
+                                            <div class="text-muted small mt-2">
+                                                行动入口：<a href="{{ item.action_link }}" target="_blank">打开短码页</a>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            {% endfor %}
+                        </div>
+                        <div class="text-muted small mt-3">升级链仅记录状态，请结合实际情况与社区沟通。</div>
+                    {% else %}
+                        <div class="text-muted">暂无监测对象，请先在左侧添加老人并设置所在地。</div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+    const listEl = document.getElementById('altContactList');
+    const nameInput = document.getElementById('altContactName');
+    const phoneInput = document.getElementById('altContactPhone');
+    const addBtn = document.getElementById('addAltContact');
+    const storageKey = 'heat_action_alt_contacts';
+
+    let contacts = JSON.parse(localStorage.getItem(storageKey) || '[]');
+
+    const renderList = () => {
+        if (!listEl) return;
+        listEl.innerHTML = '';
+        if (!contacts.length) {
+            const empty = document.createElement('li');
+            empty.className = 'list-group-item px-0 text-muted small';
+            empty.textContent = '暂无本地联系人';
+            listEl.appendChild(empty);
+            return;
+        }
+        contacts.forEach((item, index) => {
+            const li = document.createElement('li');
+            li.className = 'list-group-item px-0 d-flex justify-content-between align-items-center';
+            const text = document.createElement('div');
+            const nameEl = document.createElement('strong');
+            nameEl.textContent = item.name || '联系人';
+            const phoneEl = document.createElement('div');
+            phoneEl.className = 'text-muted small';
+            phoneEl.textContent = item.phone || '';
+            text.appendChild(nameEl);
+            text.appendChild(phoneEl);
+            const btn = document.createElement('button');
+            btn.className = 'btn btn-sm btn-outline-danger';
+            btn.textContent = '删除';
+            btn.addEventListener('click', () => {
+                contacts = contacts.filter((_, idx) => idx !== index);
+                localStorage.setItem(storageKey, JSON.stringify(contacts));
+                renderList();
+            });
+            li.appendChild(text);
+            li.appendChild(btn);
+            listEl.appendChild(li);
+        });
+    };
+    renderList();
+
+    if (addBtn && nameInput && phoneInput) {
+        addBtn.addEventListener('click', () => {
+            const name = nameInput.value.trim();
+            const phone = phoneInput.value.trim();
+            if (!name && !phone) {
+                return;
+            }
+            contacts = [...contacts, { name, phone }];
+            localStorage.setItem(storageKey, JSON.stringify(contacts));
+            nameInput.value = '';
+            phoneInput.value = '';
+            renderList();
+        });
+    }
+
+    const updateCountdowns = () => {
+        const now = new Date();
+        document.querySelectorAll('.countdown').forEach(el => {
+            const hour = parseInt(el.dataset.deadlineHour || '20', 10);
+            const deadline = new Date();
+            deadline.setHours(hour, 0, 0, 0);
+            if (deadline < now) {
+                deadline.setDate(deadline.getDate() + 1);
+            }
+            const diff = Math.max(0, deadline - now);
+            const hours = Math.floor(diff / (1000 * 60 * 60));
+            const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+            el.textContent = `${hours}小时${minutes}分钟`;
+        });
+    };
+    updateCountdowns();
+    setInterval(updateCountdowns, 60000);
+
+    const csrfTokenEl = document.querySelector('meta[name="csrf-token"]');
+    const csrfToken = csrfTokenEl ? (csrfTokenEl.getAttribute('content') || '') : '';
+    const logEvent = async (eventType, data) => {
+        if (!csrfToken) return;
+        try {
+            await fetch('/api/v1/events', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRF-Token': csrfToken
+                },
+                body: JSON.stringify(Object.assign({ event_type: eventType, source: 'web' }, data || {}))
+            });
+        } catch (e) {
+            // fail open
+        }
+    };
+
+    document.querySelectorAll('.copy-reminder').forEach(btn => {
+        btn.addEventListener('click', async () => {
+            const raw = btn.dataset.message || '';
+            const message = raw.replace(/\\n/g, '\n');
+            try {
+                await navigator.clipboard.writeText(message);
+                const pairId = btn.dataset.pairId ? parseInt(btn.dataset.pairId, 10) : null;
+                const memberId = btn.dataset.memberId ? parseInt(btn.dataset.memberId, 10) : null;
+                const alertKind = btn.dataset.alertKind || '';
+                await logEvent('template_copy', {
+                    pair_id: pairId,
+                    member_id: memberId,
+                    meta: { alert_kind: alertKind }
+                });
+                btn.classList.add('btn-success');
+                btn.textContent = '已复制';
+                setTimeout(() => {
+                    btn.classList.remove('btn-success');
+                    btn.innerHTML = '<i class="bi bi-clipboard"></i> 复制提醒话术';
+                }, 1200);
+            } catch (err) {
+                alert('复制失败，请手动选择文本');
+            }
+        });
+    });
+
+    document.querySelectorAll('.feedback-btn').forEach(btn => {
+        btn.addEventListener('click', async () => {
+            const kind = btn.dataset.kind || '';
+            const pairId = btn.dataset.pairId ? parseInt(btn.dataset.pairId, 10) : null;
+            const memberId = btn.dataset.memberId ? parseInt(btn.dataset.memberId, 10) : null;
+            await logEvent('feedback_submitted', {
+                pair_id: pairId,
+                member_id: memberId,
+                meta: { kind }
+            });
+            btn.classList.add('btn-success');
+            btn.textContent = '已记录';
+            btn.disabled = true;
+        });
+    });
+});
+</script>
+{% endblock %}

@@ -137,6 +137,10 @@
                         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                         <input type="hidden" name="form_id" value="password">
                         <div class="mb-3">
+                            <label for="old_password" class="form-label">当前密码</label>
+                            <input type="password" class="form-control" id="old_password" name="old_password" required>
+                        </div>
+                        <div class="mb-3">
                             <label for="new_password" class="form-label">新密码</label>
                             <input type="password" class="form-control" id="new_password" name="new_password">
                             <small class="text-muted">留空表示不修改密码</small>

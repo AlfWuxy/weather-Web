@@ -1,67 +1,758 @@
 {% extends "base.html" %}
+{% set needs_chartjs = true %}
 
-{% block title %}预警历史记录 - 天气健康风险预测系统{% endblock %}
+{% block title %}预警历史记录{% endblock %}
+
+{% block extra_css %}
+<style>
+.alerts-history-page {
+    --ah-border: #ccd5df;
+    --ah-muted: #64748b;
+    --ah-soft-bg: #f8fafc;
+}
+
+.alerts-history-page .ah-card {
+    border: 1px dashed var(--ah-border);
+    border-radius: 14px;
+    background: #fff;
+}
+
+.alerts-history-page .ah-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    border: 1px solid var(--ah-border);
+    border-radius: 999px;
+    background: var(--ah-soft-bg);
+    color: var(--ah-muted);
+    padding: 4px 10px;
+    font-size: 12px;
+}
+
+.alerts-history-page .ah-kpi {
+    border: 1px dashed var(--ah-border);
+    border-radius: 12px;
+    padding: 12px;
+    background: #fff;
+    height: 100%;
+}
+
+.alerts-history-page .ah-kpi .name {
+    color: var(--ah-muted);
+    font-size: 12px;
+}
+
+.alerts-history-page .ah-kpi .value {
+    margin-top: 4px;
+    font-size: 24px;
+    font-weight: 700;
+    color: #1f2937;
+}
+
+.alerts-history-page .ah-kpi .sub {
+    margin-top: 3px;
+    color: var(--ah-muted);
+    font-size: 12px;
+}
+
+.alerts-history-page .ah-chart-wrap {
+    position: relative;
+    width: 100%;
+    height: 300px;
+}
+
+.alerts-history-page .ah-chart-wrap canvas {
+    width: 100% !important;
+    height: 100% !important;
+}
+
+.alerts-history-page .ah-table-wrap {
+    overflow: auto;
+    border: 1px solid #d8e1e9;
+    border-radius: 10px;
+}
+
+.alerts-history-page .ah-table {
+    min-width: 1260px;
+    margin-bottom: 0;
+}
+
+.alerts-history-page .ah-table th,
+.alerts-history-page .ah-table td {
+    border: 1px solid #dde6ee;
+    text-align: center;
+    vertical-align: middle;
+}
+
+.alerts-history-page .ah-table thead th {
+    background: #f1f5f9;
+    position: sticky;
+    top: 0;
+    z-index: 1;
+}
+
+.alerts-history-page .ah-row {
+    cursor: pointer;
+}
+
+.alerts-history-page .ah-row:hover {
+    background: #f8fafc;
+}
+
+.alerts-history-page .ah-row.is-selected {
+    box-shadow: inset 0 0 0 2px #0f172a;
+}
+
+.alerts-history-page .ah-badge {
+    border: 1px solid #d2dce5;
+    border-radius: 999px;
+    padding: 2px 8px;
+    font-size: 11px;
+    background: #f8fafc;
+}
+
+.alerts-history-page .ah-badge.hit {
+    color: #166534;
+    border-color: #86efac;
+    background: #f0fdf4;
+}
+
+.alerts-history-page .ah-badge.false {
+    color: #b91c1c;
+    border-color: #fecaca;
+    background: #fef2f2;
+}
+
+.alerts-history-page .ah-badge.na {
+    color: #64748b;
+}
+
+.alerts-history-page .ah-badge.cap-high {
+    color: #b91c1c;
+    border-color: #fecaca;
+    background: #fef2f2;
+}
+
+.alerts-history-page .ah-badge.cap-mid {
+    color: #a16207;
+    border-color: #fde68a;
+    background: #fffbeb;
+}
+
+.alerts-history-page .ah-detail {
+    border: 1px dashed var(--ah-border);
+    border-radius: 12px;
+    padding: 12px;
+    background: #fff;
+    height: 100%;
+}
+
+.alerts-history-page .ah-detail .label {
+    color: var(--ah-muted);
+    font-size: 12px;
+}
+
+.alerts-history-page .ah-detail .value {
+    font-size: 15px;
+    color: #1f2937;
+    font-weight: 600;
+}
+
+.alerts-history-page .ah-timeline {
+    max-height: 330px;
+    overflow: auto;
+    border: 1px solid #d8e1e9;
+    border-radius: 10px;
+    padding: 8px 0;
+}
+
+.alerts-history-page .ah-timeline-item {
+    padding: 9px 12px;
+    border-bottom: 1px dashed #e2e8f0;
+}
+
+.alerts-history-page .ah-timeline-item:last-child {
+    border-bottom: none;
+}
+
+.alerts-history-page .ah-timeline-item .meta {
+    font-size: 12px;
+    color: #64748b;
+}
+
+.alerts-history-page .ah-timeline-item .title {
+    margin-top: 2px;
+    font-size: 14px;
+    color: #1f2937;
+    font-weight: 600;
+}
+
+.alerts-history-page .ah-risk-matrix td {
+    min-width: 80px;
+}
+
+@media (max-width: 992px) {
+    .alerts-history-page .ah-chart-wrap {
+        height: 250px;
+    }
+}
+</style>
+{% endblock %}
 
 {% block content %}
-<div class="container">
+<div class="container alerts-history-page">
     <div class="row mb-4">
-        <div class="col-12">
-            <h2><i class="bi bi-bell"></i> 预警历史记录</h2>
-            <p class="text-muted">查看过去预警及实际情况</p>
+        <div class="col-12 d-flex flex-wrap justify-content-between align-items-start gap-2">
+            <div>
+                <h2 class="mb-1"><i class="bi bi-journal-medical me-1"></i>预警历史记录</h2>
+                <p class="text-muted mb-0">查看过去预警及实际情况</p>
+            </div>
+            <div class="d-flex flex-wrap gap-2">
+                <span class="ah-chip">CAP语义：severity / certainty / urgency</span>
+                <span class="ah-chip">核验窗口：{{ follow_days }} 天</span>
+                <span class="ah-chip">阈值分位：P{{ (threshold_q * 100)|round(0)|int }}</span>
+            </div>
         </div>
     </div>
 
-    <div class="card shadow-sm mb-4">
+    <div class="card ah-card mb-4">
         <div class="card-body">
             <form method="POST" action="{{ url_for('analysis.alerts_history') }}">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <div class="row g-3">
-                    <div class="col-md-6">
+                    <div class="col-xl-2 col-md-4">
                         <label class="form-label">开始日期</label>
                         <input type="date" class="form-control" name="start_date" value="{{ start_date }}">
                     </div>
-                    <div class="col-md-6">
+                    <div class="col-xl-2 col-md-4">
                         <label class="form-label">结束日期</label>
                         <input type="date" class="form-control" name="end_date" value="{{ end_date }}">
                     </div>
+                    <div class="col-xl-2 col-md-4">
+                        <label class="form-label">地点检索</label>
+                        <input type="text" class="form-control" name="location" value="{{ location_filter }}" placeholder="支持模糊匹配">
+                    </div>
+                    <div class="col-xl-2 col-md-4">
+                        <label class="form-label">预警类型</label>
+                        <select class="form-select" name="alert_type">
+                            <option value="">全部</option>
+                            {% for item in alert_type_options %}
+                                <option value="{{ item }}" {% if alert_type_filter == item %}selected{% endif %}>{{ item }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-xl-2 col-md-4">
+                        <label class="form-label">预警等级</label>
+                        <select class="form-select" name="alert_level">
+                            <option value="">全部</option>
+                            {% for item in alert_level_options %}
+                                <option value="{{ item }}" {% if alert_level_filter == item %}selected{% endif %}>{{ item }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-xl-2 col-md-4">
+                        <label class="form-label">核验结果</label>
+                        <select class="form-select" name="outcome">
+                            <option value="all" {% if outcome_filter == 'all' %}selected{% endif %}>全部</option>
+                            <option value="hit" {% if outcome_filter == 'hit' %}selected{% endif %}>命中</option>
+                            <option value="false_alarm" {% if outcome_filter == 'false_alarm' %}selected{% endif %}>空报</option>
+                            <option value="insufficient" {% if outcome_filter == 'insufficient' %}selected{% endif %}>样本不足</option>
+                        </select>
+                    </div>
+                    <div class="col-xl-2 col-md-4">
+                        <label class="form-label">核验窗口(天)</label>
+                        <select class="form-select" name="follow_days">
+                            {% for option in follow_days_options %}
+                                <option value="{{ option }}" {% if follow_days == option %}selected{% endif %}>{{ option }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-xl-2 col-md-4">
+                        <label class="form-label">阈值分位</label>
+                        <select class="form-select" name="threshold_q">
+                            {% for option in threshold_q_options %}
+                                <option value="{{ option }}" {% if threshold_q == option %}selected{% endif %}>P{{ (option * 100)|round(0)|int }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-xl-2 col-md-4">
+                        <label class="form-label">最小样本天</label>
+                        <select class="form-select" name="min_days">
+                            {% for option in min_days_options %}
+                                <option value="{{ option }}" {% if min_days == option %}selected{% endif %}>{{ option }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
                 </div>
                 <div class="mt-3">
-                    <button class="btn btn-primary">筛选</button>
+                    <button class="btn btn-primary">刷新分析</button>
                 </div>
             </form>
         </div>
     </div>
 
-    <div class="card shadow-sm">
+    {% if data_notes %}
+    <div class="alert alert-warning border-0 mb-4">
+        <i class="bi bi-info-circle me-1"></i>{{ data_notes|join('；') }}
+    </div>
+    {% endif %}
+
+    <div class="row g-3 mb-4">
+        <div class="col-xl-2 col-md-4">
+            <div class="ah-kpi">
+                <div class="name">预警条数</div>
+                <div class="value">{{ data_summary.total_alerts }}</div>
+                <div class="sub">当前筛选后</div>
+            </div>
+        </div>
+        <div class="col-xl-2 col-md-4">
+            <div class="ah-kpi">
+                <div class="name">可核验预警</div>
+                <div class="value">{{ data_summary.evaluable_count }}</div>
+                <div class="sub">有足够病例样本</div>
+            </div>
+        </div>
+        <div class="col-xl-2 col-md-4">
+            <div class="ah-kpi">
+                <div class="name">命中率（Alert Hit Rate）</div>
+                <div class="value">
+                    {% if data_summary.hit_rate is none %}--{% else %}{{ "%.1f"|format(data_summary.hit_rate) }}%{% endif %}
+                </div>
+                <div class="sub">命中 {% if data_summary.evaluable_count %}{{ data_summary.hit_count }}{% else %}--{% endif %} 条</div>
+            </div>
+        </div>
+        <div class="col-xl-2 col-md-4">
+            <div class="ah-kpi">
+                <div class="name">空报率（FAR）</div>
+                <div class="value">
+                    {% if data_summary.far is none %}--{% else %}{{ "%.1f"|format(data_summary.far) }}%{% endif %}
+                </div>
+                <div class="sub">空报 {% if data_summary.evaluable_count %}{{ data_summary.false_alarm_count }}{% else %}--{% endif %} 条</div>
+            </div>
+        </div>
+        <div class="col-xl-2 col-md-4">
+            <div class="ah-kpi">
+                <div class="name">平均提前量</div>
+                <div class="value">
+                    {% if data_summary.avg_lead_hours is none %}--{% else %}{{ "%.1f"|format(data_summary.avg_lead_hours) }}h{% endif %}
+                </div>
+                <div class="sub">仅统计命中预警</div>
+            </div>
+        </div>
+        <div class="col-xl-2 col-md-4">
+            <div class="ah-kpi">
+                <div class="name">事件命中率（POD）</div>
+                <div class="value">
+                    {% if data_summary.pod is none %}--{% else %}{{ "%.1f"|format(data_summary.pod) }}%{% endif %}
+                </div>
+                <div class="sub">事件 {{ data_summary.total_events }}，漏报 {{ data_summary.miss_count }}</div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row g-3 mb-4">
+        <div class="col-xl-5">
+            <div class="card ah-card h-100">
+                <div class="card-body">
+                    <h6 class="mb-2">预警结果分布</h6>
+                    <div class="ah-chart-wrap">
+                        <canvas id="outcomeChart"></canvas>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-xl-7">
+            <div class="card ah-card h-100">
+                <div class="card-body">
+                    <h6 class="mb-2">时间趋势（预警/命中/实况超阈）</h6>
+                    <div class="ah-chart-wrap">
+                        <canvas id="trendChart"></canvas>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row g-3 mb-4">
+        <div class="col-xl-4">
+            <div class="card ah-card h-100">
+                <div class="card-body">
+                    <h6 class="mb-2">高风险预警（Top 5）</h6>
+                    <ol class="mb-0">
+                        {% for row in top_risk_alerts %}
+                            <li class="mb-2">
+                                <strong>{{ row.alert_time_text }}</strong> {{ row.location }}<br>
+                                {{ row.alert_type }} {{ row.alert_level }}，
+                                峰值/阈值 {% if row.observed_ratio is none %}--{% else %}{{ "%.2f"|format(row.observed_ratio) }}{% endif %}
+                            </li>
+                        {% else %}
+                            <li class="text-muted">暂无可排序预警</li>
+                        {% endfor %}
+                    </ol>
+                </div>
+            </div>
+        </div>
+        <div class="col-xl-4">
+            <div class="card ah-card h-100">
+                <div class="card-body">
+                    <h6 class="mb-2">影响 × 可能性 矩阵</h6>
+                    <div class="table-responsive">
+                        <table class="table table-sm ah-risk-matrix mb-0">
+                            <thead>
+                                <tr>
+                                    <th>影响\可能性</th>
+                                    <th>高</th>
+                                    <th>中</th>
+                                    <th>低</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <th>高</th>
+                                    <td>{{ matrix_counts.high.high }}</td>
+                                    <td>{{ matrix_counts.high.medium }}</td>
+                                    <td>{{ matrix_counts.high.low }}</td>
+                                </tr>
+                                <tr>
+                                    <th>中</th>
+                                    <td>{{ matrix_counts.medium.high }}</td>
+                                    <td>{{ matrix_counts.medium.medium }}</td>
+                                    <td>{{ matrix_counts.medium.low }}</td>
+                                </tr>
+                                <tr>
+                                    <th>低</th>
+                                    <td>{{ matrix_counts.low.high }}</td>
+                                    <td>{{ matrix_counts.low.medium }}</td>
+                                    <td>{{ matrix_counts.low.low }}</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-xl-4">
+            <div class="card ah-card h-100">
+                <div class="card-body">
+                    <h6 class="mb-2">实况超阈值事件</h6>
+                    <div class="ah-timeline">
+                        {% for item in event_rows %}
+                            <div class="ah-timeline-item">
+                                <div class="meta">{{ item.date_text }} · {{ item.location }}</div>
+                                <div class="title">病例 {{ item.visits }} / 阈值 {{ "%.2f"|format(item.threshold) }}</div>
+                                <div class="text-muted small">{% if item.matched %}已被预警覆盖{% else %}未被预警覆盖{% endif %}</div>
+                            </div>
+                        {% else %}
+                            <div class="px-3 py-2 text-muted small">当前条件下暂无超阈值事件</div>
+                        {% endfor %}
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row g-3 mb-4">
+        <div class="col-xl-8">
+            <div class="card ah-card h-100">
+                <div class="card-body">
+                    <h6 class="mb-2">预警时间线（发布 vs 实况）</h6>
+                    <div class="ah-timeline">
+                        {% for item in timeline_rows %}
+                            <div class="ah-timeline-item">
+                                <div class="meta">{{ item.time }} · {{ item.location }} · {{ item.kind_label }}</div>
+                                <div class="title">{{ item.title }}</div>
+                                <div class="text-muted small">{{ item.detail }}</div>
+                            </div>
+                        {% else %}
+                            <div class="px-3 py-2 text-muted small">暂无时间线数据</div>
+                        {% endfor %}
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-xl-4">
+            <div class="ah-detail">
+                <h6 class="mb-3">预警详情（点击表格行）</h6>
+                <div class="row g-2">
+                    <div class="col-6">
+                        <div class="label">时间</div>
+                        <div class="value" id="detailTime">--</div>
+                    </div>
+                    <div class="col-6">
+                        <div class="label">地点</div>
+                        <div class="value" id="detailLocation">--</div>
+                    </div>
+                    <div class="col-6">
+                        <div class="label">预警类型</div>
+                        <div class="value" id="detailType">--</div>
+                    </div>
+                    <div class="col-6">
+                        <div class="label">预警等级</div>
+                        <div class="value" id="detailLevel">--</div>
+                    </div>
+                    <div class="col-6">
+                        <div class="label">核验结果</div>
+                        <div class="value" id="detailOutcome">--</div>
+                    </div>
+                    <div class="col-6">
+                        <div class="label">阈值来源/值</div>
+                        <div class="value" id="detailThreshold">--</div>
+                    </div>
+                    <div class="col-6">
+                        <div class="label">提前量</div>
+                        <div class="value" id="detailLead">--</div>
+                    </div>
+                    <div class="col-6">
+                        <div class="label">峰值/阈值比</div>
+                        <div class="value" id="detailRatio">--</div>
+                    </div>
+                    <div class="col-12">
+                        <div class="label">CAP语义</div>
+                        <div class="value" id="detailCap">--</div>
+                    </div>
+                    <div class="col-12">
+                        <div class="label">行动建议</div>
+                        <div class="value" id="detailAction">--</div>
+                    </div>
+                    <div class="col-12">
+                        <div class="label">窗口实况</div>
+                        <div class="value" id="detailWindow">--</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="card ah-card">
         <div class="card-body">
-            <div class="table-responsive">
-                <table class="table table-striped align-middle">
+            <h6 class="mb-2">预警明细（含 CAP 语义与核验）</h6>
+            <div class="ah-table-wrap">
+                <table class="table ah-table">
                     <thead>
                         <tr>
                             <th>时间</th>
                             <th>地点</th>
-                            <th>预警等级</th>
-                            <th>预警类型</th>
+                            <th>类型</th>
+                            <th>等级</th>
+                            <th>CAP语义</th>
+                            <th>结果</th>
+                            <th>阈值</th>
+                            <th>窗口峰值</th>
+                            <th>提前量</th>
+                            <th>建议动作</th>
                             <th>描述</th>
                         </tr>
                     </thead>
                     <tbody>
-                        {% for alert in alerts %}
-                        <tr>
-                            <td>{{ alert.alert_date.strftime('%Y-%m-%d %H:%M') if alert.alert_date else '-' }}</td>
-                            <td>{{ alert.location }}</td>
-                            <td>{{ alert.alert_level }}</td>
-                            <td>{{ alert.alert_type }}</td>
-                            <td>{{ alert.description }}</td>
-                        </tr>
+                        {% for row in rows %}
+                            <tr class="ah-row" data-alert-id="{{ row.id }}">
+                                <td>{{ row.alert_time_text }}</td>
+                                <td>{{ row.location }}</td>
+                                <td>{{ row.alert_type }}</td>
+                                <td>{{ row.alert_level }}</td>
+                                <td>
+                                    {% if row.severity in ['Extreme', 'Severe'] %}
+                                        <span class="ah-badge cap-high">{{ row.severity_label }}</span>
+                                    {% elif row.severity == 'Moderate' %}
+                                        <span class="ah-badge cap-mid">{{ row.severity_label }}</span>
+                                    {% else %}
+                                        <span class="ah-badge">{{ row.severity_label }}</span>
+                                    {% endif %}
+                                    /
+                                    {{ row.certainty_label }}
+                                    /
+                                    {{ row.urgency_label }}
+                                </td>
+                                <td>
+                                    {% if row.outcome == 'hit' %}
+                                        <span class="ah-badge hit">{{ row.outcome_label }}</span>
+                                    {% elif row.outcome == 'false_alarm' %}
+                                        <span class="ah-badge false">{{ row.outcome_label }}</span>
+                                    {% else %}
+                                        <span class="ah-badge na">{{ row.outcome_label }}</span>
+                                    {% endif %}
+                                </td>
+                                <td>{% if row.threshold is none %}--{% else %}{{ "%.2f"|format(row.threshold) }}{% endif %}</td>
+                                <td>{{ row.peak_visits }}</td>
+                                <td>{% if row.lead_hours is none %}--{% else %}{{ row.lead_hours }}h{% endif %}</td>
+                                <td>{{ row.action_text }}</td>
+                                <td class="text-start">{{ row.description }}</td>
+                            </tr>
+                        {% else %}
+                            <tr>
+                                <td colspan="11" class="text-muted">暂无预警记录</td>
+                            </tr>
                         {% endfor %}
                     </tbody>
                 </table>
             </div>
-            {% if alerts|length == 0 %}
-                <p class="text-muted mb-0">暂无预警记录</p>
-            {% endif %}
         </div>
     </div>
 </div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+const chartPayload = {{ chart_payload|tojson }};
+const rowDetailMap = {{ row_detail_payload|tojson }};
+
+function fmtNumber(value, digits = 2) {
+    if (value === null || value === undefined) {
+        return '--';
+    }
+    const num = Number(value);
+    if (!Number.isFinite(num)) {
+        return '--';
+    }
+    return num.toFixed(digits);
+}
+
+function drawOutcomeChart() {
+    const canvas = document.getElementById('outcomeChart');
+    if (!canvas || !window.Chart) {
+        return;
+    }
+    const payload = chartPayload.outcome || {labels: [], values: []};
+    new Chart(canvas.getContext('2d'), {
+        type: 'bar',
+        data: {
+            labels: payload.labels || [],
+            datasets: [{
+                label: '数量',
+                data: payload.values || [],
+                backgroundColor: ['rgba(34, 197, 94, 0.55)', 'rgba(239, 68, 68, 0.55)', 'rgba(148, 163, 184, 0.55)'],
+                borderColor: ['#16a34a', '#dc2626', '#64748b'],
+                borderWidth: 1.2
+            }]
+        },
+        options: {
+            maintainAspectRatio: false,
+            responsive: true,
+            scales: {
+                y: {
+                    beginAtZero: true,
+                    ticks: { precision: 0 }
+                }
+            },
+            plugins: {
+                legend: { display: false }
+            }
+        }
+    });
+}
+
+function drawTrendChart() {
+    const canvas = document.getElementById('trendChart');
+    if (!canvas || !window.Chart) {
+        return;
+    }
+    const payload = chartPayload.trend || {labels: [], alerts: [], hits: [], events: []};
+    const labels = payload.labels || [];
+    new Chart(canvas.getContext('2d'), {
+        type: 'line',
+        data: {
+            labels,
+            datasets: [
+                {
+                    label: '预警数',
+                    data: payload.alerts || [],
+                    borderColor: '#2563eb',
+                    backgroundColor: 'rgba(37, 99, 235, 0.18)',
+                    pointRadius: 1.8,
+                    tension: 0.25
+                },
+                {
+                    label: '命中预警',
+                    data: payload.hits || [],
+                    borderColor: '#16a34a',
+                    backgroundColor: 'rgba(22, 163, 74, 0.18)',
+                    pointRadius: 1.8,
+                    tension: 0.25
+                },
+                {
+                    label: '实况超阈值事件',
+                    data: payload.events || [],
+                    borderColor: '#dc2626',
+                    backgroundColor: 'rgba(220, 38, 38, 0.18)',
+                    pointRadius: 1.8,
+                    tension: 0.25
+                }
+            ]
+        },
+        options: {
+            maintainAspectRatio: false,
+            responsive: true,
+            scales: {
+                y: {
+                    beginAtZero: true,
+                    ticks: { precision: 0 }
+                },
+                x: {
+                    ticks: {
+                        maxTicksLimit: 16
+                    }
+                }
+            }
+        }
+    });
+}
+
+function bindDetailPanel() {
+    const refs = {
+        time: document.getElementById('detailTime'),
+        location: document.getElementById('detailLocation'),
+        type: document.getElementById('detailType'),
+        level: document.getElementById('detailLevel'),
+        outcome: document.getElementById('detailOutcome'),
+        threshold: document.getElementById('detailThreshold'),
+        lead: document.getElementById('detailLead'),
+        ratio: document.getElementById('detailRatio'),
+        cap: document.getElementById('detailCap'),
+        action: document.getElementById('detailAction'),
+        window: document.getElementById('detailWindow')
+    };
+
+    function renderDetail(payload) {
+        if (!payload) {
+            return;
+        }
+        refs.time.textContent = payload.time || '--';
+        refs.location.textContent = payload.location || '--';
+        refs.type.textContent = payload.alert_type || '--';
+        refs.level.textContent = payload.alert_level || '--';
+        refs.outcome.textContent = payload.outcome_label || '--';
+        refs.threshold.textContent = `${payload.threshold_source || '--'} / ${fmtNumber(payload.threshold, 2)}`;
+        refs.lead.textContent = payload.lead_hours === null || payload.lead_hours === undefined ? '--' : `${payload.lead_hours}h`;
+        refs.ratio.textContent = fmtNumber(payload.observed_ratio, 2);
+        refs.cap.textContent = `${payload.severity_label || payload.severity} / ${payload.certainty_label || payload.certainty} / ${payload.urgency_label || payload.urgency}`;
+        refs.action.textContent = payload.action_text || '--';
+        const points = payload.window_points || [];
+        if (!points.length) {
+            refs.window.textContent = '--';
+        } else {
+            refs.window.textContent = points.map(item => `${item.day}:${item.visits}`).join(' | ');
+        }
+    }
+
+    const rows = Array.from(document.querySelectorAll('.ah-row'));
+    rows.forEach(row => {
+        row.addEventListener('click', () => {
+            rows.forEach(item => item.classList.remove('is-selected'));
+            row.classList.add('is-selected');
+            const id = row.getAttribute('data-alert-id');
+            const payload = rowDetailMap[id];
+            renderDetail(payload);
+        });
+    });
+    if (rows.length > 0) {
+        rows[0].click();
+    }
+}
+
+document.addEventListener('DOMContentLoaded', function() {
+    drawOutcomeChart();
+    drawTrendChart();
+    bindDetailPanel();
+});
+</script>
 {% endblock %}

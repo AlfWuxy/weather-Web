@@ -270,7 +270,12 @@ document.addEventListener('DOMContentLoaded', function () {
             const raw = btn.dataset.message || '';
             const message = raw.replace(/\\n/g, '\n');
             try {
-                await navigator.clipboard.writeText(message);
+                const ok = window.CWClipboard && typeof window.CWClipboard.copyText === 'function'
+                    ? await window.CWClipboard.copyText(message)
+                    : false;
+                if (!ok) {
+                    throw new Error('copy_failed');
+                }
                 btn.classList.add('btn-success');
                 btn.textContent = '已复制';
                 setTimeout(() => {

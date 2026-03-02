@@ -3,7 +3,7 @@
 from flask import current_app, flash, redirect, render_template, request, url_for
 from flask_login import current_user
 
-from core.db_models import Community, CommunityDaily, CoolingResource, DailyStatus, Debrief, Pair
+from core.db_models import Community, CommunityDaily, CoolingResource, DailyStatus, Debrief, MedicalRecord, Pair
 from core.time_utils import now_local, today_local
 from core.weather import get_consecutive_hot_days, get_weather_with_cache, is_demo_mode, normalize_location_name
 from services.heat_action_service import HeatActionService
@@ -338,6 +338,16 @@ def community_risk():
     """社区风险地图"""
     coords_map = current_app.config.get('COMMUNITY_COORDS_GCJ', {})
     communities = Community.query.all()
+    disease_options = [
+        row[0] for row in (
+            MedicalRecord.query.with_entities(MedicalRecord.disease_category)
+            .filter(MedicalRecord.disease_category.isnot(None))
+            .distinct()
+            .order_by(MedicalRecord.disease_category)
+            .all()
+        ) if row[0]
+    ]
+
     # 转换为字典列表，避免JSON序列化错误
     communities_data = []
     for comm in communities:
@@ -360,4 +370,7 @@ def community_risk():
         })
     return render_template('community_risk.html',
                            communities=communities_data,
-                           community_coords=coords_map)
+                           community_coords=coords_map,
+                           disease_options=disease_options,
+                           default_analysis_date=today_local().isoformat(),
+                           default_window_days=30)

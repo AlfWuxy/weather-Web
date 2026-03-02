@@ -1,35 +1,253 @@
 {% extends "base.html" %}
+{% set needs_chartjs = true %}
 
-{% block title %}滞后效应可视化 - 天气健康风险预测系统{% endblock %}
+{% block title %}滞后效应可视化{% endblock %}
+
+{% block extra_css %}
+<style>
+.lag-lab-page {
+    --lg-border: #c9d3dd;
+    --lg-muted: #64748b;
+    --lg-bg: #f7fafc;
+}
+
+.lag-lab-page .lg-card {
+    border: 1px dashed var(--lg-border);
+    border-radius: 14px;
+    background: #fff;
+}
+
+.lag-lab-page .lg-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    border: 1px solid var(--lg-border);
+    border-radius: 999px;
+    background: var(--lg-bg);
+    color: var(--lg-muted);
+    padding: 4px 10px;
+    font-size: 12px;
+}
+
+.lag-lab-page .lg-kpi {
+    border: 1px dashed var(--lg-border);
+    border-radius: 12px;
+    padding: 12px;
+    background: #fff;
+    height: 100%;
+}
+
+.lag-lab-page .lg-kpi .name {
+    color: var(--lg-muted);
+    font-size: 12px;
+}
+
+.lag-lab-page .lg-kpi .value {
+    margin-top: 4px;
+    font-size: 23px;
+    font-weight: 700;
+    color: #1f2937;
+}
+
+.lag-lab-page .lg-kpi .sub {
+    margin-top: 2px;
+    color: var(--lg-muted);
+    font-size: 12px;
+}
+
+.lag-lab-page .lg-chart-wrap {
+    position: relative;
+    width: 100%;
+    height: 320px;
+}
+
+.lag-lab-page .lg-chart-wrap canvas {
+    width: 100% !important;
+    height: 100% !important;
+}
+
+.lag-lab-page .lg-table-wrap {
+    overflow: auto;
+    border: 1px solid #d6dfe8;
+    border-radius: 10px;
+}
+
+.lag-lab-page .lg-table {
+    min-width: 760px;
+    margin-bottom: 0;
+    border-collapse: collapse;
+}
+
+.lag-lab-page .lg-table th,
+.lag-lab-page .lg-table td {
+    text-align: center;
+    vertical-align: middle;
+    border: 1px solid #dce5ec;
+}
+
+.lag-lab-page .lg-table thead th {
+    background: #f1f5f9;
+    position: sticky;
+    top: 0;
+    z-index: 1;
+}
+
+.lag-lab-page .lag-heatmap td {
+    min-width: 88px;
+    height: 74px;
+    cursor: pointer;
+}
+
+.lag-lab-page .lag-heatmap td.is-significant {
+    box-shadow: inset 0 0 0 2px rgba(30, 41, 59, 0.65);
+}
+
+.lag-lab-page .lag-heatmap td.is-selected {
+    box-shadow: inset 0 0 0 2px #0f172a;
+}
+
+.lag-lab-page .lag-heatmap .rr {
+    font-weight: 700;
+    font-size: 14px;
+    line-height: 1.1;
+}
+
+.lag-lab-page .lag-heatmap .meta {
+    font-size: 11px;
+    color: #475569;
+    margin-top: 2px;
+}
+
+.lag-lab-page .lg-detail {
+    border: 1px dashed var(--lg-border);
+    border-radius: 12px;
+    padding: 12px;
+    background: #fff;
+    height: 100%;
+}
+
+.lag-lab-page .lg-detail .label {
+    color: var(--lg-muted);
+    font-size: 12px;
+}
+
+.lag-lab-page .lg-detail .value {
+    font-size: 15px;
+    font-weight: 600;
+    color: #1e293b;
+}
+
+.lag-lab-page .lg-cap-grid {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 8px;
+}
+
+.lag-lab-page .lg-cap-item {
+    border: 1px dashed var(--lg-border);
+    border-radius: 10px;
+    padding: 10px 12px;
+    background: #fff;
+}
+
+.lag-lab-page .lg-action {
+    border-radius: 999px;
+    padding: 2px 8px;
+    border: 1px solid #d4dde6;
+    background: #f8fafc;
+    font-size: 12px;
+}
+
+.lag-lab-page .lg-action.now {
+    color: #b91c1c;
+    border-color: #fecaca;
+    background: #fef2f2;
+}
+
+.lag-lab-page .lg-action.prepare {
+    color: #92400e;
+    border-color: #fde68a;
+    background: #fffbeb;
+}
+
+@media (max-width: 992px) {
+    .lag-lab-page .lg-chart-wrap {
+        height: 260px;
+    }
+}
+</style>
+{% endblock %}
 
 {% block content %}
-<div class="container">
+<div class="container lag-lab-page">
     <div class="row mb-4">
-        <div class="col-12">
-            <h2><i class="bi bi-graph-up-arrow"></i> 滞后效应可视化</h2>
-            <p class="text-muted">展示温度变化后1-7天的健康影响相关性</p>
+        <div class="col-12 d-flex flex-wrap justify-content-between align-items-start gap-2">
+            <div>
+                <h2 class="mb-1"><i class="bi bi-hourglass-split me-1"></i>滞后效应可视化</h2>
+                <p class="text-muted mb-0">展示 lag-response（相关与风险切片）、累计滞后窗口和温度×滞后矩阵。</p>
+            </div>
+            <div class="d-flex flex-wrap gap-2">
+                <span class="lg-chip">最大滞后：{{ max_lag }} 天</span>
+                <span class="lg-chip">分层：{{ stratum_labels[stratum] }}</span>
+                <span class="lg-chip">最小样本：{{ min_days }} 天</span>
+            </div>
         </div>
     </div>
 
-    <div class="card shadow-sm mb-4">
+    <div class="card lg-card mb-4">
         <div class="card-body">
             <form method="POST" action="{{ url_for('analysis.analysis_lag') }}">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <div class="row g-3">
-                    <div class="col-md-4">
+                    <div class="col-xl-2 col-md-4">
                         <label class="form-label">开始日期</label>
                         <input type="date" class="form-control" name="start_date" value="{{ start_date }}">
                     </div>
-                    <div class="col-md-4">
+                    <div class="col-xl-2 col-md-4">
                         <label class="form-label">结束日期</label>
                         <input type="date" class="form-control" name="end_date" value="{{ end_date }}">
                     </div>
-                    <div class="col-md-4">
+                    <div class="col-xl-2 col-md-4">
                         <label class="form-label">社区</label>
                         <select class="form-select" name="community">
                             <option value="">全部</option>
                             {% for comm in communities %}
                                 <option value="{{ comm.name }}" {% if community_filter == comm.name %}selected{% endif %}>{{ comm.name }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-xl-2 col-md-4">
+                        <label class="form-label">疾病分类</label>
+                        <select class="form-select" name="disease">
+                            <option value="">全部</option>
+                            {% for disease in diseases %}
+                                <option value="{{ disease }}" {% if disease_filter == disease %}selected{% endif %}>{{ disease }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-xl-2 col-md-4">
+                        <label class="form-label">人群分层</label>
+                        <select class="form-select" name="stratum">
+                            <option value="all" {% if stratum == 'all' %}selected{% endif %}>全人群</option>
+                            <option value="elderly" {% if stratum == 'elderly' %}selected{% endif %}>老年人(>=65)</option>
+                            <option value="non_elderly" {% if stratum == 'non_elderly' %}selected{% endif %}>非老年(&lt;65)</option>
+                            <option value="male" {% if stratum == 'male' %}selected{% endif %}>男性</option>
+                            <option value="female" {% if stratum == 'female' %}selected{% endif %}>女性</option>
+                        </select>
+                    </div>
+                    <div class="col-xl-1 col-md-3">
+                        <label class="form-label">最大滞后</label>
+                        <select class="form-select" name="max_lag">
+                            {% for option in max_lag_options %}
+                                <option value="{{ option }}" {% if max_lag == option %}selected{% endif %}>{{ option }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-xl-1 col-md-3">
+                        <label class="form-label">最小样本天</label>
+                        <select class="form-select" name="min_days">
+                            {% for option in min_days_options %}
+                                <option value="{{ option }}" {% if min_days == option %}selected{% endif %}>{{ option }}</option>
                             {% endfor %}
                         </select>
                     </div>
@@ -47,79 +265,432 @@
     </div>
     {% endif %}
 
-    <div class="card shadow-sm mb-4">
-        <div class="card-body">
-            <div class="row g-3 text-center">
-                <div class="col-md-3">
-                    <div class="text-muted small">时间跨度</div>
-                    <div>{{ data_summary.total_days }} 天</div>
+    <div class="row g-3 mb-4">
+        <div class="col-xl-3 col-md-6">
+            <div class="lg-kpi">
+                <div class="name">病例记录</div>
+                <div class="value">{{ data_summary.total_visits }}</div>
+                <div class="sub">{{ data_summary.filtered_record_count }} 条分层样本</div>
+            </div>
+        </div>
+        <div class="col-xl-3 col-md-6">
+            <div class="lg-kpi">
+                <div class="name">时间覆盖</div>
+                <div class="value">{{ data_summary.total_days }}天</div>
+                <div class="sub">天气 {{ data_summary.weather_days }} 天</div>
+            </div>
+        </div>
+        <div class="col-xl-3 col-md-6">
+            <div class="lg-kpi">
+                <div class="name">基线日均</div>
+                <div class="value">{{ "%.2f"|format(data_summary.overall_baseline or 0) }}</div>
+                <div class="sub">{{ data_summary.weather_source }}</div>
+            </div>
+        </div>
+        <div class="col-xl-3 col-md-6">
+            <div class="lg-kpi">
+                <div class="name">峰值滞后</div>
+                <div class="value">{% if data_summary.peak_lag is not none %}L{{ data_summary.peak_lag }}{% else %}--{% endif %}</div>
+                <div class="sub">{% if data_summary.peak_rr is not none %}RR {{ "%.2f"|format(data_summary.peak_rr) }}{% else %}暂无峰值{% endif %}</div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row g-3 mb-4">
+        <div class="col-xl-6">
+            <div class="card lg-card h-100">
+                <div class="card-body">
+                    <div class="d-flex justify-content-between align-items-center mb-2">
+                        <h6 class="mb-0">Lag-Response 相关曲线（温度 vs 病例）</h6>
+                        <span class="lg-chip">含 Fisher-z 95%CI</span>
+                    </div>
+                    <div class="lg-chart-wrap">
+                        <canvas id="lagCorrChart"></canvas>
+                    </div>
                 </div>
-                <div class="col-md-3">
-                    <div class="text-muted small">门诊记录</div>
-                    <div>{{ data_summary.total_visits }} 次 / {{ data_summary.visit_days }} 天</div>
-                </div>
-                <div class="col-md-3">
-                    <div class="text-muted small">天气覆盖</div>
-                    <div>{{ data_summary.weather_days }} 天（{{ data_summary.weather_source }}）</div>
-                </div>
-                <div class="col-md-3">
-                    <div class="text-muted small">重叠天数</div>
-                    <div>{{ data_summary.overlap_days }} 天</div>
+            </div>
+        </div>
+        <div class="col-xl-6">
+            <div class="card lg-card h-100">
+                <div class="card-body">
+                    <div class="d-flex justify-content-between align-items-center mb-2">
+                        <h6 class="mb-0">Lag Slices（热暴露/冷暴露 RR）</h6>
+                        <span class="lg-chip">参考线 RR=1</span>
+                    </div>
+                    <div class="lg-chart-wrap">
+                        <canvas id="lagSliceChart"></canvas>
+                    </div>
                 </div>
             </div>
         </div>
     </div>
 
-    <div class="card shadow-sm">
-        <div class="card-body">
-            <canvas id="lagChart" height="120"></canvas>
+    <div class="row g-3 mb-4">
+        <div class="col-xl-8">
+            <div class="card lg-card h-100">
+                <div class="card-body">
+                    <div class="d-flex justify-content-between align-items-center mb-2">
+                        <h6 class="mb-0">温度分箱 × 滞后天数 矩阵（RR）</h6>
+                        <span class="lg-chip">黑框 = 显著，点击查看详情</span>
+                    </div>
+                    <div class="lg-table-wrap">
+                        <table class="table lg-table lag-heatmap">
+                            <thead>
+                                <tr>
+                                    <th>温度\\滞后</th>
+                                    {% for lag in lag_axis %}
+                                        <th>L{{ lag }}</th>
+                                    {% endfor %}
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for i in range(temp_labels|length) %}
+                                    <tr>
+                                        <th>{{ temp_labels[i] }}</th>
+                                        {% for cell in lag_heatmap[i] %}
+                                            {% if cell.rr is none %}
+                                                {% set rr_text = '--' %}
+                                            {% else %}
+                                                {% set rr_text = "%.2f"|format(cell.rr) %}
+                                            {% endif %}
+                                            {% if cell.ci_low is none or cell.ci_high is none %}
+                                                {% set ci_text = '--' %}
+                                            {% else %}
+                                                {% set ci_text = "[" ~ ("%.2f"|format(cell.ci_low)) ~ ", " ~ ("%.2f"|format(cell.ci_high)) ~ "]" %}
+                                            {% endif %}
+                                            <td
+                                                class="{% if cell.significant %}is-significant{% endif %}"
+                                                style="background: {{ cell.bg_color }}"
+                                                data-temp="{{ cell.temp_label }}"
+                                                data-lag="{{ cell.lag }}"
+                                                data-rr="{{ rr_text }}"
+                                                data-ci="{{ ci_text }}"
+                                                data-days="{{ cell.days }}"
+                                                data-visits="{{ cell.visits }}"
+                                                data-certainty="{{ cell.certainty }}"
+                                                data-action="{{ cell.action }}"
+                                            >
+                                                <div class="rr">{{ rr_text }}</div>
+                                                <div class="meta">{{ cell.days }}天</div>
+                                            </td>
+                                        {% endfor %}
+                                    </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-xl-4">
+            <div class="lg-detail">
+                <h6 class="mb-3">矩阵单元详情</h6>
+                <div class="mb-2">
+                    <div class="label">温度区间</div>
+                    <div class="value" id="lagDetailTemp">--</div>
+                </div>
+                <div class="mb-2">
+                    <div class="label">滞后</div>
+                    <div class="value" id="lagDetailLag">--</div>
+                </div>
+                <div class="mb-2">
+                    <div class="label">RR / CI</div>
+                    <div class="value" id="lagDetailRR">--</div>
+                    <div class="text-muted small" id="lagDetailCI">--</div>
+                </div>
+                <div class="mb-2">
+                    <div class="label">样本天 / 例数</div>
+                    <div class="value"><span id="lagDetailDays">--</span> / <span id="lagDetailVisits">--</span></div>
+                </div>
+                <div class="mb-2">
+                    <div class="label">certainty</div>
+                    <div class="value" id="lagDetailCertainty">--</div>
+                </div>
+                <div>
+                    <div class="label">行动</div>
+                    <span class="lg-action" id="lagDetailAction">--</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row g-3 mb-4">
+        <div class="col-xl-7">
+            <div class="card lg-card h-100">
+                <div class="card-body">
+                    <h6>累计窗口效应（0~k 天平均温度）</h6>
+                    <div class="lg-table-wrap">
+                        <table class="table lg-table">
+                            <thead>
+                                <tr>
+                                    <th>窗口</th>
+                                    <th>样本天</th>
+                                    <th>热暴露 RR [95%CI]</th>
+                                    <th>冷暴露 RR [95%CI]</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for item in cumulative_results %}
+                                    <tr>
+                                        <td>0~{{ item.window }}天</td>
+                                        <td>{{ item.sample_days }}</td>
+                                        <td>
+                                            {% if item.heat_rr is none %}
+                                                --
+                                            {% else %}
+                                                {{ "%.2f"|format(item.heat_rr) }} [{{ "%.2f"|format(item.heat_ci_low) }}, {{ "%.2f"|format(item.heat_ci_high) }}]
+                                            {% endif %}
+                                        </td>
+                                        <td>
+                                            {% if item.cold_rr is none %}
+                                                --
+                                            {% else %}
+                                                {{ "%.2f"|format(item.cold_rr) }} [{{ "%.2f"|format(item.cold_ci_low) }}, {{ "%.2f"|format(item.cold_ci_high) }}]
+                                            {% endif %}
+                                        </td>
+                                    </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-xl-5">
+            <div class="card lg-card h-100">
+                <div class="card-body">
+                    <h6 class="mb-2">事件语义映射（CAP）</h6>
+                    <div class="lg-cap-grid">
+                        <div class="lg-cap-item">
+                            <strong>Severity</strong>
+                            <div class="text-muted small">{{ action_semantics.severity }}</div>
+                        </div>
+                        <div class="lg-cap-item">
+                            <strong>Certainty</strong>
+                            <div class="text-muted small">{{ action_semantics.certainty }}</div>
+                        </div>
+                        <div class="lg-cap-item">
+                            <strong>Urgency</strong>
+                            <div class="text-muted small">{{ action_semantics.urgency }}</div>
+                        </div>
+                        <div class="lg-cap-item">
+                            <strong>建议行动</strong>
+                            {% set action_cls = 'lg-action' %}
+                            {% if action_semantics.action == '立即行动' %}
+                                {% set action_cls = action_cls ~ ' now' %}
+                            {% elif action_semantics.action == '准备干预' %}
+                                {% set action_cls = action_cls ~ ' prepare' %}
+                            {% endif %}
+                            <div class="mt-1"><span class="{{ action_cls }}">{{ action_semantics.action }}</span></div>
+                            <div class="text-muted small mt-1">
+                                {% if action_semantics.peak_type %}
+                                    主导暴露：{{ action_semantics.peak_type }} / L{{ action_semantics.peak_lag }} / RR {{ "%.2f"|format(action_semantics.peak_rr or 0) }}
+                                {% else %}
+                                    当前无稳定峰值
+                                {% endif %}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
         </div>
     </div>
 </div>
+{% endblock %}
 
 {% block extra_js %}
 <script>
 const lagResults = {{ lag_results|tojson }};
-const labels = lagResults.map(item => `滞后${item.lag}天`);
-const values = lagResults.map(item => item.corr !== null ? item.corr : null);
 
-const ctx = document.getElementById('lagChart').getContext('2d');
-new Chart(ctx, {
-    type: 'line',
-    data: {
-        labels: labels,
-        datasets: [{
-            label: '温度-病例相关系数',
-            data: values,
-            borderColor: 'rgba(54, 162, 235, 0.9)',
-            backgroundColor: 'rgba(54, 162, 235, 0.2)',
-            fill: true,
-            tension: 0.3
-        }]
-    },
-    options: {
-        responsive: true,
-        scales: {
-            y: {
-                suggestedMin: -1,
-                suggestedMax: 1
-            }
+(function buildLagCorrChart() {
+    const labels = lagResults.map((item) => `L${item.lag}`);
+    const corr = lagResults.map((item) => item.corr);
+    const corrLow = lagResults.map((item) => item.corr_low);
+    const corrHigh = lagResults.map((item) => item.corr_high);
+    const ctx = document.getElementById('lagCorrChart').getContext('2d');
+
+    new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels,
+            datasets: [
+                {
+                    label: '相关系数 r',
+                    data: corr,
+                    borderColor: '#1f77b4',
+                    backgroundColor: 'rgba(31,119,180,0.18)',
+                    borderWidth: 2,
+                    tension: 0.25,
+                    pointRadius: 3,
+                    spanGaps: true
+                },
+                {
+                    label: '95%CI 下界',
+                    data: corrLow,
+                    borderColor: 'rgba(31,119,180,0.55)',
+                    borderDash: [5, 5],
+                    borderWidth: 1,
+                    tension: 0.2,
+                    pointRadius: 0,
+                    spanGaps: true
+                },
+                {
+                    label: '95%CI 上界',
+                    data: corrHigh,
+                    borderColor: 'rgba(31,119,180,0.55)',
+                    borderDash: [5, 5],
+                    borderWidth: 1,
+                    tension: 0.2,
+                    pointRadius: 0,
+                    spanGaps: true
+                }
+            ]
         },
-        plugins: {
-            tooltip: {
-                callbacks: {
-                    label: function(context) {
-                        const item = lagResults[context.dataIndex];
-                        if (!item || item.corr === null) {
-                            return '样本不足';
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            resizeDelay: 120,
+            interaction: { mode: 'index', intersect: false },
+            scales: {
+                y: {
+                    min: -1,
+                    max: 1,
+                    title: { display: true, text: '相关系数 r' }
+                },
+                x: {
+                    title: { display: true, text: '滞后天数' }
+                }
+            },
+            plugins: {
+                tooltip: {
+                    callbacks: {
+                        afterBody: (items) => {
+                            const idx = items[0]?.dataIndex;
+                            const row = lagResults[idx];
+                            return row ? `样本 n=${row.n}` : '';
                         }
-                        return `相关系数: ${item.corr.toFixed(3)} (n=${item.n})`;
                     }
                 }
             }
         }
+    });
+})();
+
+(function buildLagSliceChart() {
+    const labels = lagResults.map((item) => `L${item.lag}`);
+    const heatRR = lagResults.map((item) => item.heat_rr);
+    const coldRR = lagResults.map((item) => item.cold_rr);
+    const baseline = labels.map(() => 1);
+    const ctx = document.getElementById('lagSliceChart').getContext('2d');
+
+    new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels,
+            datasets: [
+                {
+                    label: '热暴露 RR',
+                    data: heatRR,
+                    borderColor: '#c2410c',
+                    backgroundColor: 'rgba(194,65,12,0.15)',
+                    borderWidth: 2,
+                    pointRadius: 3,
+                    tension: 0.25,
+                    spanGaps: true
+                },
+                {
+                    label: '冷暴露 RR',
+                    data: coldRR,
+                    borderColor: '#1d4ed8',
+                    backgroundColor: 'rgba(29,78,216,0.15)',
+                    borderWidth: 2,
+                    pointRadius: 3,
+                    tension: 0.25,
+                    spanGaps: true
+                },
+                {
+                    label: 'RR=1',
+                    data: baseline,
+                    borderColor: 'rgba(30,41,59,0.45)',
+                    borderDash: [4, 4],
+                    borderWidth: 1,
+                    pointRadius: 0,
+                    tension: 0
+                }
+            ]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            resizeDelay: 120,
+            interaction: { mode: 'index', intersect: false },
+            scales: {
+                y: {
+                    min: 0,
+                    suggestedMax: 2.5,
+                    title: { display: true, text: '相对风险 RR' }
+                },
+                x: {
+                    title: { display: true, text: '滞后天数' }
+                }
+            },
+            plugins: {
+                tooltip: {
+                    callbacks: {
+                        afterBody: (items) => {
+                            const idx = items[0]?.dataIndex;
+                            const row = lagResults[idx];
+                            if (!row) return '';
+                            return [
+                                `热暴露样本天: ${row.heat_days}`,
+                                `冷暴露样本天: ${row.cold_days}`
+                            ];
+                        }
+                    }
+                }
+            }
+        }
+    });
+})();
+
+(function initLagHeatmapDetails() {
+    const cells = Array.from(document.querySelectorAll('.lag-heatmap td[data-temp]'));
+    if (!cells.length) return;
+
+    const refs = {
+        temp: document.getElementById('lagDetailTemp'),
+        lag: document.getElementById('lagDetailLag'),
+        rr: document.getElementById('lagDetailRR'),
+        ci: document.getElementById('lagDetailCI'),
+        days: document.getElementById('lagDetailDays'),
+        visits: document.getElementById('lagDetailVisits'),
+        certainty: document.getElementById('lagDetailCertainty'),
+        action: document.getElementById('lagDetailAction')
+    };
+
+    function actionClass(action) {
+        if (action === '立即行动') return 'lg-action now';
+        if (action === '准备干预') return 'lg-action prepare';
+        return 'lg-action';
     }
-});
+
+    function selectCell(cell) {
+        cells.forEach((el) => el.classList.remove('is-selected'));
+        cell.classList.add('is-selected');
+        refs.temp.textContent = cell.dataset.temp || '--';
+        refs.lag.textContent = `L${cell.dataset.lag || '--'}`;
+        refs.rr.textContent = cell.dataset.rr || '--';
+        refs.ci.textContent = cell.dataset.ci || '--';
+        refs.days.textContent = cell.dataset.days || '--';
+        refs.visits.textContent = cell.dataset.visits || '--';
+        refs.certainty.textContent = cell.dataset.certainty || '--';
+        refs.action.textContent = cell.dataset.action || '--';
+        refs.action.className = actionClass(cell.dataset.action || '');
+    }
+
+    cells.forEach((cell) => cell.addEventListener('click', () => selectCell(cell)));
+    const first = document.querySelector('.lag-heatmap td[data-temp]');
+    if (first) selectCell(first);
+})();
 </script>
-{% endblock %}
 {% endblock %}

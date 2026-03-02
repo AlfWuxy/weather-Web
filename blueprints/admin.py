@@ -322,19 +322,20 @@ def admin_statistics():
     if community_filter:
         age_query = age_query.filter(MedicalRecord.community == community_filter)
 
-    all_records = age_query.all()
-    for record in all_records:
-        age = record.age
-        if age <= 18:
-            age_ranges['0-18岁'] += 1
-        elif age <= 35:
-            age_ranges['19-35岁'] += 1
-        elif age <= 50:
-            age_ranges['36-50岁'] += 1
-        elif age <= 65:
-            age_ranges['51-65岁'] += 1
-        else:
-            age_ranges['65岁以上'] += 1
+    age_case = db.case(
+        (MedicalRecord.age <= 18, '0-18岁'),
+        (MedicalRecord.age <= 35, '19-35岁'),
+        (MedicalRecord.age <= 50, '36-50岁'),
+        (MedicalRecord.age <= 65, '51-65岁'),
+        else_='65岁以上'
+    )
+    age_stats = age_query.with_entities(
+        age_case.label('age_group'),
+        db.func.count(MedicalRecord.id)
+    ).group_by(age_case).all()
+    for group, count in age_stats:
+        if group in age_ranges:
+            age_ranges[group] = count
 
     # 性别统计（根据筛选条件）
     gender_query = db.session.query(
@@ -469,9 +470,13 @@ def admin_delete_user(user_id):
         flash('不能删除管理员账户', 'error')
         return redirect(url_for('admin.admin_users'))
 
-    db.session.delete(user)
-    db.session.commit()
-    flash(f'用户 {user.username} 已删除', 'success')
+    try:
+        db.session.delete(user)
+        db.session.commit()
+        flash(f'用户 {user.username} 已删除', 'success')
+    except Exception:
+        db.session.rollback()
+        flash('删除失败：该用户仍有关联数据，请先清理相关记录', 'error')
     return redirect(url_for('admin.admin_users'))
 
 

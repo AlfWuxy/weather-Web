@@ -1,0 +1,431 @@
+{% extends "base.html" %}
+
+{% block title %}行动打卡 - 天气健康风险预测系统{% endblock %}
+
+{% block content %}
+<div class="container my-4">
+    <div class="row mb-3">
+        <div class="col-12">
+            <h2><i class="bi bi-clipboard-check"></i> 行动型热健康预警</h2>
+            <p class="text-muted mb-0">输入短码即可完成今日确认或求助（不含医疗诊断/治疗建议）。</p>
+        </div>
+    </div>
+
+    {% if stage == 'lookup' %}
+        <div class="row">
+            <div class="col-lg-6">
+                <div class="card shadow-sm">
+                    <div class="card-header bg-light">
+                        <h5 class="mb-0"><i class="bi bi-key"></i> 短码确认</h5>
+                    </div>
+                    <div class="card-body">
+                        <form method="POST" action="{{ entry_action or url_for('public.action_check') }}">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                            <div class="mb-3">
+                                <label class="form-label">短码</label>
+                                <input class="form-control" name="short_code" value="{{ short_code or '' }}" placeholder="例如 123456" maxlength="12" required>
+                            </div>
+                            <div class="text-muted small mb-3">短码仅用于行动确认，不包含个人身份信息。</div>
+                            <button class="btn btn-primary w-100" type="submit">
+                                <i class="bi bi-arrow-right-circle"></i> 进入行动页面
+                            </button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+            <div class="col-lg-6 mt-4 mt-lg-0">
+                <div class="card shadow-sm">
+                    <div class="card-header bg-light">
+                        <h5 class="mb-0"><i class="bi bi-shield-check"></i> 统一免责声明</h5>
+                    </div>
+                    <div class="card-body">
+                        {% include "partials/disclaimer_block.html" %}
+                    </div>
+                </div>
+            </div>
+        </div>
+    {% else %}
+        <div class="row g-4">
+            <div class="col-lg-8">
+                {% set heat_color = 'dark' if risk_label == '极高' else 'danger' if risk_label == '高风险' else 'warning' if risk_label == '中风险' else 'success' %}
+                <div class="card shadow-sm mb-4">
+                    <div class="card-header bg-{{ heat_color }} text-white">
+                        <div class="d-flex align-items-center justify-content-between flex-wrap gap-2">
+                            <h5 class="mb-0"><i class="bi bi-thermometer-sun"></i> 今日热风险</h5>
+                            {% if heat_result %}
+                                <div class="d-flex flex-wrap gap-2">
+                                    <span class="badge bg-light text-dark">综合评分 {{ heat_result.risk_score if heat_result.risk_score is not none else '--' }}</span>
+                                    <span class="badge bg-light text-dark">体感热 {{ heat_result.heat_index if heat_result.heat_index is not none else '--' }}</span>
+                                    <span class="badge bg-light text-dark">夜间最低 {{ heat_result.night_min if heat_result.night_min is not none else '--' }}°C</span>
+                                    <span class="badge bg-light text-dark">连续高温 {{ heat_result.consecutive_hot_days if heat_result.consecutive_hot_days is not none else 0 }}天</span>
+                                </div>
+                            {% endif %}
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        <div class="row g-3 align-items-center">
+                            <div class="col-md-7">
+                                <div class="text-muted small">风险等级</div>
+                                <div class="display-4 fw-bold text-{{ heat_color }}">{{ risk_label }}</div>
+                                <div class="text-muted small">
+                                    {% if weather %}
+                                        气温 {{ weather.temperature|round(1) }}°C · 最高 {{ weather.temperature_max|round(1) }}°C · 湿度 {{ weather.humidity|round(0) }}%
+                                    {% else %}
+                                        今日天气数据暂缺
+                                    {% endif %}
+                                </div>
+                                <div class="mt-2" id="heatRiskAdjust" data-heat-risk-score="{{ heat_result.risk_score if heat_result and heat_result.risk_score is not none else 0 }}">
+                                    <div class="d-flex flex-wrap align-items-center gap-2">
+                                        <span class="text-muted small">个人阈值</span>
+                                        <div class="btn-group btn-group-sm" role="group" aria-label="Heat threshold adjust">
+                                            <input type="radio" class="btn-check" name="heatAdjust" id="heatAdjustLow" value="-0.1" data-heat-adjust>
+                                            <label class="btn btn-outline-secondary" for="heatAdjustLow">-0.1</label>
+                                            <input type="radio" class="btn-check" name="heatAdjust" id="heatAdjustMid" value="0" data-heat-adjust>
+                                            <label class="btn btn-outline-secondary" for="heatAdjustMid">0</label>
+                                            <input type="radio" class="btn-check" name="heatAdjust" id="heatAdjustHigh" value="0.1" data-heat-adjust>
+                                            <label class="btn btn-outline-secondary" for="heatAdjustHigh">+0.1</label>
+                                        </div>
+                                        <span class="badge bg-secondary" id="heatAdjustedBadge">--</span>
+                                        <span class="text-muted small">仅保存在本机</span>
+                                    </div>
+                                </div>
+                                <div class="mt-3">
+                                    <h6 class="mb-2">为什么危险</h6>
+                                    {% if risk_reasons and risk_reasons|length > 0 %}
+                                        {% for reason in risk_reasons %}
+                                            <div class="mb-2">
+                                                <div class="d-flex justify-content-between small">
+                                                    <span>{{ reason.label }}</span>
+                                                    <span class="text-muted">{{ reason.value }}</span>
+                                                </div>
+                                                <div class="progress" style="height: 8px;">
+                                                    <div class="progress-bar bg-{{ heat_color }}" style="width: {{ reason.weight }}%"></div>
+                                                </div>
+                                            </div>
+                                        {% endfor %}
+                                    {% else %}
+                                        <div class="text-muted small">暂无足够数据解释风险来源。</div>
+                                    {% endif %}
+                                </div>
+                            </div>
+                            <div class="col-md-5">
+                                <div class="d-flex flex-column gap-2">
+                                    <a class="btn btn-outline-primary" href="{{ url_for('public.cooling_resources') }}">
+                                        <i class="bi bi-geo-alt"></i> 避暑资源入口
+                                    </a>
+                                    <a class="btn btn-outline-secondary" href="#debrief-section">
+                                        <i class="bi bi-chat-square-text"></i> 复盘入口
+                                    </a>
+                                    <div class="text-muted small">仅提供通用热健康行动建议。</div>
+                                </div>
+                            </div>
+                        </div>
+                        <hr>
+                        <form method="POST" action="{{ confirm_action or url_for('public.action_confirm') }}">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                            <input type="hidden" name="short_code" value="{{ pair.short_code }}">
+                            <div class="mb-3">
+                                <h6 class="mb-2">3步行动清单</h6>
+                                {% for item in actions %}
+                                    <div class="form-check">
+                                        <input class="form-check-input" type="checkbox" name="actions_done" value="{{ item.id }}" id="action-{{ item.id }}">
+                                        <label class="form-check-label" for="action-{{ item.id }}">
+                                            <span class="badge bg-light text-dark me-2">{{ loop.index }}</span>
+                                            <strong>{{ item.title }}</strong>
+                                            <span class="text-muted small"> - {{ item.detail }}</span>
+                                        </label>
+                                    </div>
+                                {% endfor %}
+                            </div>
+                            <div class="d-flex flex-wrap gap-2 align-items-center">
+                                <button class="btn btn-success btn-lg" type="submit">
+                                    <i class="bi bi-check-circle"></i> 我很安全
+                                </button>
+                                <span class="text-muted small">确认后记录今日完成情况。</span>
+                            </div>
+                        </form>
+                        <hr>
+                        <form method="POST" action="{{ help_action or url_for('public.action_help') }}">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                            <input type="hidden" name="short_code" value="{{ pair.short_code }}">
+                            <div class="d-flex flex-wrap gap-2 align-items-center">
+                                <button class="btn btn-danger btn-lg" type="submit">
+                                    <i class="bi bi-life-preserver"></i> 我需要帮助
+                                </button>
+                                <span class="text-muted small">仅用于触发协助流程，不包含医疗处置。</span>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+
+                <div class="card shadow-sm mb-4">
+                    <div class="card-header bg-light">
+                        <h5 class="mb-0"><i class="bi bi-graph-up"></i> 近7天风险与确认</h5>
+                    </div>
+                    <div class="card-body">
+                        <div id="recentRiskEmpty" class="text-muted small mb-2">
+                            暂无近7天数据，完成今日确认后将显示趋势。
+                        </div>
+                        <canvas id="recentRiskChart" height="170"></canvas>
+                        <div class="text-muted small mt-2">数据来源：行动确认记录；空数据仅显示提示。</div>
+                    </div>
+                </div>
+
+                <div class="card shadow-sm" id="debrief-section">
+                    <div class="card-header bg-light">
+                        <h5 class="mb-0"><i class="bi bi-chat-square-text"></i> 今日复盘（可选）</h5>
+                    </div>
+                    <div class="card-body">
+                        <form method="POST" action="{{ debrief_action or url_for('public.action_debrief') }}">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                            <input type="hidden" name="short_code" value="{{ pair.short_code }}">
+                            <div class="row g-3">
+                                <div class="col-md-4">
+                                    <label class="form-label">今天行动完成度</label>
+                                    <select class="form-select" name="question_1">
+                                        <option value="">请选择</option>
+                                        <option value="完成">完成</option>
+                                        <option value="部分完成">部分完成</option>
+                                        <option value="未完成">未完成</option>
+                                    </select>
+                                </div>
+                                <div class="col-md-4">
+                                    <label class="form-label">主要支持来源</label>
+                                    <select class="form-select" name="question_2">
+                                        <option value="">请选择</option>
+                                        <option value="家人">家人</option>
+                                        <option value="邻里">邻里</option>
+                                        <option value="社区服务">社区服务</option>
+                                        <option value="无">无</option>
+                                    </select>
+                                </div>
+                                <div class="col-md-4">
+                                    <label class="form-label">是否需要更多支持</label>
+                                    <select class="form-select" name="question_3">
+                                        <option value="">请选择</option>
+                                        <option value="需要">需要</option>
+                                        <option value="不需要">不需要</option>
+                                        <option value="不确定">不确定</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <div class="mt-3">
+                                <label class="form-label">今天遇到的困难（可选）</label>
+                                <textarea class="form-control" name="difficulty" rows="3" placeholder="例如：天气太热、路程不便、缺少降温物品"></textarea>
+                            </div>
+                            <div class="form-check mt-3">
+                                <input class="form-check-input" type="checkbox" value="1" id="debriefOptin" name="debrief_optin">
+                                <label class="form-check-label" for="debriefOptin">
+                                    允许将复盘与绑定关系关联（用于改进服务）
+                                </label>
+                            </div>
+                            <button class="btn btn-outline-primary mt-3" type="submit">
+                                <i class="bi bi-send"></i> 提交复盘
+                            </button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-lg-4">
+                <div class="card shadow-sm mb-4">
+                    <div class="card-header bg-light">
+                        <h6 class="mb-0"><i class="bi bi-geo-alt"></i> 备选联系人（仅本机保存）</h6>
+                    </div>
+                    <div class="card-body">
+                        <div class="mb-2">
+                            <label class="form-label small">联系人姓名</label>
+                            <input class="form-control" id="localContactName" placeholder="不上传服务器">
+                        </div>
+                        <div class="mb-2">
+                            <label class="form-label small">联系方式</label>
+                            <input class="form-control" id="localContactPhone" placeholder="仅保存在本机">
+                        </div>
+                        <button class="btn btn-outline-secondary btn-sm w-100" type="button" id="saveLocalContact">
+                            <i class="bi bi-device-ssd"></i> 保存到本机
+                        </button>
+                        <div class="text-muted small mt-2">此信息不会写入后台数据库。</div>
+                    </div>
+                </div>
+
+                <div class="card shadow-sm" id="cooling-resources">
+                    <div class="card-header bg-light d-flex align-items-center justify-content-between">
+                        <h6 class="mb-0"><i class="bi bi-sunrise"></i> 附近避暑点</h6>
+                        <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('public.cooling_resources') }}">全部资源</a>
+                    </div>
+                    <div class="card-body">
+                        {% if resources and resources|length > 0 %}
+                            <ul class="list-group list-group-flush">
+                                {% for item in resources %}
+                                    <li class="list-group-item px-0">
+                                        <strong>{{ item.name }}</strong>
+                                        {% if item.resource_type %}
+                                            <span class="badge bg-info-subtle text-info ms-1">{{ item.resource_type }}</span>
+                                        {% endif %}
+                                        {% if item.address_hint %}
+                                            <div class="text-muted small">{{ item.address_hint }}</div>
+                                        {% endif %}
+                                        {% if item.open_hours %}
+                                            <div class="text-muted small">开放时间：{{ item.open_hours }}</div>
+                                        {% endif %}
+                                        {% if item.contact_hint %}
+                                            <div class="text-muted small">联系信息：{{ item.contact_hint }}</div>
+                                        {% endif %}
+                                    </li>
+                                {% endfor %}
+                            </ul>
+                        {% else %}
+                            <div class="text-muted">暂无避暑点数据，可由社区管理员维护。</div>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+        </div>
+    {% endif %}
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+    const nameInput = document.getElementById('localContactName');
+    const phoneInput = document.getElementById('localContactPhone');
+    const saveBtn = document.getElementById('saveLocalContact');
+    if (nameInput && phoneInput && saveBtn) {
+        const stored = JSON.parse(localStorage.getItem('heat_action_contact') || '{}');
+        if (stored.name) nameInput.value = stored.name;
+        if (stored.phone) phoneInput.value = stored.phone;
+        saveBtn.addEventListener('click', function () {
+            const payload = {
+                name: nameInput.value || '',
+                phone: phoneInput.value || ''
+            };
+            localStorage.setItem('heat_action_contact', JSON.stringify(payload));
+            saveBtn.classList.add('btn-success');
+            saveBtn.textContent = '已保存';
+            setTimeout(() => {
+                saveBtn.classList.remove('btn-success');
+                saveBtn.textContent = '保存到本机';
+            }, 1200);
+        });
+    }
+
+    const adjustContainer = document.getElementById('heatRiskAdjust');
+    if (adjustContainer) {
+        const storageKey = 'heat_threshold_adjust';
+        const score = parseFloat(adjustContainer.dataset.heatRiskScore || '0');
+        const badge = document.getElementById('heatAdjustedBadge');
+        const inputs = adjustContainer.querySelectorAll('[data-heat-adjust]');
+        const badgeClass = {
+            '低风险': 'bg-success',
+            '中风险': 'bg-warning text-dark',
+            '高风险': 'bg-danger',
+            '极高': 'bg-dark'
+        };
+        const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
+        const computeLevel = (scoreValue, adjust) => {
+            const norm = scoreValue / 100;
+            const t1 = clamp(0.35 + adjust, 0.05, 0.9);
+            const t2 = clamp(0.55 + adjust, t1 + 0.05, 0.95);
+            const t3 = clamp(0.75 + adjust, t2 + 0.05, 0.98);
+            if (norm >= t3) return '极高';
+            if (norm >= t2) return '高风险';
+            if (norm >= t1) return '中风险';
+            return '低风险';
+        };
+        const applyAdjust = (adjust) => {
+            const level = computeLevel(score, adjust);
+            if (badge) {
+                badge.textContent = level;
+                badge.className = `badge ${badgeClass[level] || 'bg-secondary'}`;
+            }
+        };
+        let storedAdjust = parseFloat(localStorage.getItem(storageKey) || '0');
+        if (![-0.1, 0, 0.1].includes(storedAdjust)) {
+            storedAdjust = 0;
+        }
+        inputs.forEach(input => {
+            if (parseFloat(input.value) === storedAdjust) {
+                input.checked = true;
+            }
+            input.addEventListener('change', () => {
+                const value = parseFloat(input.value);
+                localStorage.setItem(storageKey, value);
+                applyAdjust(value);
+            });
+        });
+        applyAdjust(storedAdjust);
+    }
+
+    const recentSeries = {{ recent_series|default([])|tojson }};
+    const chartCanvas = document.getElementById('recentRiskChart');
+    const emptyState = document.getElementById('recentRiskEmpty');
+    if (chartCanvas && Array.isArray(recentSeries)) {
+        const labels = recentSeries.map(item => item.date);
+        const riskValues = recentSeries.map(item => item.risk_value || 0);
+        const confirmedValues = recentSeries.map(item => item.confirmed || 0);
+        const hasData = riskValues.some(v => v > 0) || confirmedValues.some(v => v > 0);
+        if (!hasData) {
+            chartCanvas.style.display = 'none';
+        } else {
+            if (emptyState) {
+                emptyState.style.display = 'none';
+            }
+            new Chart(chartCanvas.getContext('2d'), {
+                data: {
+                    labels: labels,
+                    datasets: [
+                        {
+                            type: 'line',
+                            label: '风险等级',
+                            data: riskValues,
+                            borderColor: '#dc2626',
+                            backgroundColor: 'rgba(220, 38, 38, 0.15)',
+                            tension: 0.3,
+                            yAxisID: 'y'
+                        },
+                        {
+                            type: 'bar',
+                            label: '确认',
+                            data: confirmedValues,
+                            backgroundColor: 'rgba(14, 159, 110, 0.6)',
+                            yAxisID: 'y1'
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    plugins: {
+                        legend: { position: 'top' }
+                    },
+                    scales: {
+                        y: {
+                            min: 0,
+                            max: 4,
+                            ticks: {
+                                stepSize: 1,
+                                callback: value => ({0: '', 1: '低', 2: '中', 3: '高', 4: '极'}[value] || '')
+                            }
+                        },
+                        y1: {
+                            min: 0,
+                            max: 1,
+                            position: 'right',
+                            grid: { drawOnChartArea: false },
+                            ticks: {
+                                stepSize: 1,
+                                callback: value => (value === 1 ? '已确认' : '')
+                            }
+                        }
+                    }
+                }
+            });
+        }
+    }
+    {% if focus_debrief %}
+    const debriefSection = document.getElementById('debrief-section');
+    if (debriefSection) {
+        debriefSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+    {% endif %}
+});
+</script>
+{% endblock %}

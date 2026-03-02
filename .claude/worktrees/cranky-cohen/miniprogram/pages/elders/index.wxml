@@ -1,0 +1,55 @@
+<view style="padding: 16px;">
+  <view class="card">
+    <view style="display:flex; align-items:center; justify-content: space-between;">
+      <view style="font-size: 18px; font-weight: 700;">监测对象</view>
+      <button size="mini" class="btn-outline" bindtap="goSettings">设置</button>
+    </view>
+    <view class="muted" style="margin-top: 6px; font-size: 12px;">
+      支持多地区；预警触发逻辑以“官方预警 + 阈值规则”为主。
+    </view>
+    <view style="margin-top: 12px;">
+      <button class="btn-primary" bindtap="goCreate">新增老人</button>
+    </view>
+  </view>
+
+  <view style="height: 12px;"></view>
+
+  <block wx:if="{{loading}}">
+    <view class="muted" style="text-align:center; padding: 20px;">加载中…</view>
+  </block>
+
+  <block wx:if="{{!loading && elders.length === 0}}">
+    <view class="muted" style="text-align:center; padding: 20px;">暂无老人，请先新增或在网页端添加。</view>
+  </block>
+
+  <block wx:for="{{elders}}" wx:key="pair_id">
+    <view class="card" style="margin-bottom: 12px;">
+      <view style="display:flex; justify-content: space-between; gap: 10px;">
+        <view style="flex:1;">
+          <view style="font-weight: 700; font-size: 16px;">
+            {{item.member && item.member.name ? item.member.name : '老人'}}
+            <text class="muted" style="font-size: 12px;">{{item.member && item.member.relation ? ' · ' + item.member.relation : ''}}</text>
+          </view>
+          <view class="muted" style="margin-top: 4px;">
+            地点：{{item.location_query || item.community_code || '-'}}
+          </view>
+          <view class="muted" style="margin-top: 4px; font-size: 12px;">
+            Tmax {{item.today.temperature_max || '-'}} · Tmin {{item.today.temperature_min || '-'}}
+          </view>
+        </view>
+        <view>
+          <view wx:if="{{item.today.trigger === 'heat'}}" style="background:#fee2e2; color:#991b1b; padding:4px 8px; border-radius: 999px; font-size: 12px;">高温</view>
+          <view wx:elif="{{item.today.trigger === 'cold'}}" style="background:#dbeafe; color:#1d4ed8; padding:4px 8px; border-radius: 999px; font-size: 12px;">寒潮</view>
+          <view wx:else style="background:#f3f4f6; color:#374151; padding:4px 8px; border-radius: 999px; font-size: 12px;">正常</view>
+        </view>
+      </view>
+
+      <view style="display:flex; gap: 10px; margin-top: 12px; flex-wrap: wrap;">
+        <button size="mini" class="btn-outline" data-pair-id="{{item.pair_id}}" bindtap="goAlerts">预警</button>
+        <button size="mini" class="btn-outline" data-pair-id="{{item.pair_id}}" bindtap="goTemplate">话术</button>
+        <button size="mini" class="btn-outline" data-pair-id="{{item.pair_id}}" bindtap="goEdit">编辑</button>
+      </view>
+    </view>
+  </block>
+</view>
+

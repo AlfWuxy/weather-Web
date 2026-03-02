@@ -1,0 +1,503 @@
+{% extends "base.html" %}
+
+{% block title %}慢病风险预测 - 天气健康风险预测系统{% endblock %}
+
+{% block content %}
+<div class="container-fluid py-4">
+    <div class="row mb-4">
+        <div class="col-12">
+            <h2><i class="bi bi-heart-pulse me-2"></i>个性化慢病风险预测</h2>
+            <p class="text-muted mb-0">基于DLNM风险函数，结合年龄和慢性病状况进行精准风险评估</p>
+        </div>
+    </div>
+
+    <div class="row">
+        <!-- 左侧：用户信息输入 -->
+        <div class="col-lg-4 mb-4">
+            <div class="card shadow-sm">
+                <div class="card-header bg-primary text-white">
+                    <h5 class="mb-0"><i class="bi bi-person-circle me-2"></i>个人健康信息</h5>
+                </div>
+                <div class="card-body">
+                    <div class="mb-3">
+                        <label class="form-label">年龄</label>
+                        <input type="number" class="form-control" id="inputAge" 
+                               value="{{ current_user.age or 50 }}" min="0" max="120">
+                    </div>
+                    
+                    <div class="mb-3">
+                        <label class="form-label">性别</label>
+                        <select class="form-select" id="inputGender">
+                            <option value="男" {% if current_user.gender == '男' %}selected{% endif %}>男</option>
+                            <option value="女" {% if current_user.gender == '女' %}selected{% endif %}>女</option>
+                        </select>
+                    </div>
+                    
+                    <div class="mb-3">
+                        <label class="form-label">慢性病（可多选）</label>
+                        <div class="form-check">
+                            <input class="form-check-input chronic-check" type="checkbox" value="高血压" id="ck1">
+                            <label class="form-check-label" for="ck1">高血压</label>
+                        </div>
+                        <div class="form-check">
+                            <input class="form-check-input chronic-check" type="checkbox" value="糖尿病" id="ck2">
+                            <label class="form-check-label" for="ck2">糖尿病</label>
+                        </div>
+                        <div class="form-check">
+                            <input class="form-check-input chronic-check" type="checkbox" value="冠心病" id="ck3">
+                            <label class="form-check-label" for="ck3">冠心病</label>
+                        </div>
+                        <div class="form-check">
+                            <input class="form-check-input chronic-check" type="checkbox" value="COPD" id="ck4">
+                            <label class="form-check-label" for="ck4">慢性阻塞性肺病(COPD)</label>
+                        </div>
+                        <div class="form-check">
+                            <input class="form-check-input chronic-check" type="checkbox" value="哮喘" id="ck5">
+                            <label class="form-check-label" for="ck5">哮喘</label>
+                        </div>
+                        <div class="form-check">
+                            <input class="form-check-input chronic-check" type="checkbox" value="慢性支气管炎" id="ck6">
+                            <label class="form-check-label" for="ck6">慢性支气管炎</label>
+                        </div>
+                        <div class="form-check">
+                            <input class="form-check-input chronic-check" type="checkbox" value="关节炎" id="ck7">
+                            <label class="form-check-label" for="ck7">关节炎</label>
+                        </div>
+                    </div>
+                    
+                    <hr>
+                    
+                    <h6 class="text-muted mb-3"><i class="bi bi-cloud-sun me-1"></i>天气条件</h6>
+                    
+                    <div class="mb-3">
+                        <label class="form-label">温度 (°C): <span id="tempValue" class="badge bg-info">20</span></label>
+                        <input type="range" class="form-range" id="inputTemp" min="-10" max="45" value="20">
+                    </div>
+                    
+                    <div class="mb-3">
+                        <label class="form-label">空气质量指数(AQI): <span id="aqiValue" class="badge bg-info">50</span></label>
+                        <input type="range" class="form-range" id="inputAqi" min="0" max="300" value="50">
+                    </div>
+                    
+                    <div class="mb-3">
+                        <label class="form-label">湿度 (%): <span id="humidityValue" class="badge bg-info">60</span></label>
+                        <input type="range" class="form-range" id="inputHumidity" min="20" max="100" value="60">
+                    </div>
+                    
+                    <button class="btn btn-primary w-100 btn-lg" id="runPredictionBtn" type="button">
+                        <i class="bi bi-play-fill me-1"></i>开始评估
+                    </button>
+                </div>
+            </div>
+        </div>
+        
+        <!-- 右侧：预测结果 -->
+        <div class="col-lg-8">
+            <!-- 加载中 -->
+            <div id="loadingDiv" class="card shadow-sm mb-4" style="display:none;">
+                <div class="card-body text-center py-5">
+                    <div class="spinner-border text-primary mb-3"></div>
+                    <h5>正在进行风险评估...</h5>
+                </div>
+            </div>
+            
+            <!-- 初始提示 -->
+            <div id="initialPrompt" class="card shadow-sm">
+                <div class="card-body text-center py-5">
+                    <i class="bi bi-heart-pulse display-1 text-muted mb-3"></i>
+                    <h4>慢病风险精准预测</h4>
+                    <p class="text-muted">
+                        基于DLNM风险函数模型<br>
+                        结合您的年龄、慢性病史和当前天气条件<br>
+                        提供个性化的健康风险评估和建议
+                    </p>
+                    <p class="text-muted">
+                        请在左侧填写您的健康信息，然后点击"开始评估"
+                    </p>
+                </div>
+            </div>
+            
+            <!-- 预测结果 -->
+            <div id="resultDiv" style="display:none;">
+                <!-- 总体风险 -->
+                <div class="card shadow-sm mb-4">
+                    <div class="card-header">
+                        <h5 class="mb-0"><i class="bi bi-speedometer me-2"></i>总体风险评估</h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="row align-items-center">
+                            <div class="col-md-4 text-center">
+                                <div id="riskScoreDisplay" class="display-1 fw-bold">--</div>
+                                <div id="riskLevelDisplay" class="h4">--</div>
+                            </div>
+                            <div class="col-md-8">
+                                <h6>风险分解</h6>
+                                <div id="riskBreakdown"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- 分病种风险 -->
+                <div class="card shadow-sm mb-4">
+                    <div class="card-header">
+                        <h5 class="mb-0"><i class="bi bi-bar-chart me-2"></i>分病种风险</h5>
+                    </div>
+                    <div class="card-body" id="diseaseRisksDiv">
+                    </div>
+                </div>
+                
+                <!-- 个性化建议 -->
+                <div class="card shadow-sm mb-4">
+                    <div class="card-header bg-success text-white">
+                        <h5 class="mb-0"><i class="bi bi-lightbulb me-2"></i>个性化健康建议</h5>
+                    </div>
+                    <div class="card-body" id="recommendationsDiv">
+                    </div>
+                </div>
+
+                <!-- 可解释输出 -->
+                <div class="card shadow-sm mb-4" id="explainCard" style="display:none;">
+                    <div class="card-header bg-light">
+                        <h5 class="mb-0"><i class="bi bi-card-checklist me-2"></i>原因与提醒</h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="row g-3">
+                            <div class="col-md-4">
+                                <h6>原因</h6>
+                                <ul id="explainReasons" class="mb-0"></ul>
+                            </div>
+                            <div class="col-md-4">
+                                <h6>今天怎么做</h6>
+                                <ul id="explainActions" class="mb-0"></ul>
+                            </div>
+                            <div class="col-md-4">
+                                <h6>什么时候要找人</h6>
+                                <ul id="explainEscalation" class="mb-0"></ul>
+                            </div>
+                        </div>
+                        <div class="small text-muted mt-3" id="explainDisclaimer"></div>
+                    </div>
+                </div>
+                
+                <!-- 用户档案 -->
+                <div class="card shadow-sm">
+                    <div class="card-body">
+                        <div class="row text-center" id="userProfileDiv">
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+// 更新滑块显示
+document.getElementById('inputTemp').addEventListener('input', function() {
+    document.getElementById('tempValue').textContent = this.value;
+});
+document.getElementById('inputAqi').addEventListener('input', function() {
+    document.getElementById('aqiValue').textContent = this.value;
+});
+document.getElementById('inputHumidity').addEventListener('input', function() {
+    document.getElementById('humidityValue').textContent = this.value;
+});
+
+document.getElementById('runPredictionBtn').addEventListener('click', runPrediction);
+
+function clearElement(element) {
+    while (element.firstChild) {
+        element.removeChild(element.firstChild);
+    }
+}
+
+function formatNumber(value, decimals, fallback) {
+    if (value === undefined || value === null || Number.isNaN(value)) {
+        return fallback;
+    }
+    const num = typeof value === 'number' ? value : parseFloat(value);
+    if (Number.isNaN(num)) {
+        return fallback;
+    }
+    return num.toFixed(decimals);
+}
+
+function populateList(listElement, items, emptyText) {
+    clearElement(listElement);
+    if (items && items.length) {
+        items.forEach(item => {
+            const li = document.createElement('li');
+            li.textContent = item;
+            listElement.appendChild(li);
+        });
+        return;
+    }
+
+    const li = document.createElement('li');
+    li.className = 'text-muted';
+    li.textContent = emptyText;
+    listElement.appendChild(li);
+}
+
+function runPrediction() {
+    // 收集慢性病
+    const chronicDiseases = [];
+    document.querySelectorAll('.chronic-check:checked').forEach(cb => {
+        chronicDiseases.push(cb.value);
+    });
+    
+    const requestData = {
+        age: parseInt(document.getElementById('inputAge').value),
+        gender: document.getElementById('inputGender').value,
+        chronic_diseases: chronicDiseases,
+        weather: {
+            temperature: parseInt(document.getElementById('inputTemp').value),
+            aqi: parseInt(document.getElementById('inputAqi').value),
+            humidity: parseInt(document.getElementById('inputHumidity').value)
+        }
+    };
+    
+    // 显示加载
+    document.getElementById('initialPrompt').style.display = 'none';
+    document.getElementById('resultDiv').style.display = 'none';
+    document.getElementById('loadingDiv').style.display = 'block';
+    
+    fetch('/api/chronic/individual', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(requestData)
+    })
+    .then(response => response.json())
+    .then(data => {
+        document.getElementById('loadingDiv').style.display = 'none';
+        
+        if (data.success) {
+            displayResult(data.result);
+        } else {
+            alert('评估失败: ' + (data.error || '未知错误'));
+            document.getElementById('initialPrompt').style.display = 'block';
+        }
+    })
+    .catch(error => {
+        document.getElementById('loadingDiv').style.display = 'none';
+        alert('请求失败: ' + error);
+        document.getElementById('initialPrompt').style.display = 'block';
+    });
+}
+
+function displayResult(result) {
+    document.getElementById('resultDiv').style.display = 'block';
+    
+    const overall = result.overall_risk;
+    
+    // 总体风险
+    document.getElementById('riskScoreDisplay').textContent = overall.score.toFixed(0);
+    document.getElementById('riskScoreDisplay').className = `display-1 fw-bold text-${overall.color}`;
+    document.getElementById('riskLevelDisplay').textContent = overall.level;
+    document.getElementById('riskLevelDisplay').className = `h4 text-${overall.color}`;
+    
+    // 风险分解
+    const breakdownDiv = document.getElementById('riskBreakdown');
+    clearElement(breakdownDiv);
+    
+    for (const [diseaseType, data] of Object.entries(result.disease_risks || {})) {
+        const colorClass = data.risk_level === '高风险' ? 'danger' : 
+                          data.risk_level === '中风险' ? 'warning' : 'success';
+        const riskScoreValue = Number.isFinite(Number(data.risk_score)) ? Number(data.risk_score) : 0;
+        const riskScoreText = formatNumber(riskScoreValue, 0, '0');
+        const rrText = formatNumber(data.personal_rr, 2, '--');
+        const baseText = formatNumber(data.base_rr, 2, '--');
+        const ageText = formatNumber(data.age_amplifier, 2, '--');
+        const comorbText = formatNumber(data.comorbidity_amplifier, 2, '--');
+
+        const wrapper = document.createElement('div');
+        wrapper.className = 'mb-2';
+
+        const header = document.createElement('div');
+        header.className = 'd-flex justify-content-between mb-1';
+        const nameSpan = document.createElement('span');
+        nameSpan.textContent = diseaseType;
+        const rrSpan = document.createElement('span');
+        rrSpan.className = 'text-' + colorClass;
+        rrSpan.textContent = 'RR=' + rrText;
+        header.appendChild(nameSpan);
+        header.appendChild(rrSpan);
+
+        const progress = document.createElement('div');
+        progress.className = 'progress';
+        progress.style.height = '20px';
+        const bar = document.createElement('div');
+        bar.className = 'progress-bar bg-' + colorClass;
+        bar.style.width = Math.min(Math.max(riskScoreValue, 0), 100) + '%';
+        bar.textContent = riskScoreText + '%';
+        progress.appendChild(bar);
+
+        const small = document.createElement('small');
+        small.className = 'text-muted';
+        small.textContent = '基础RR: ' + baseText + ' × 年龄系数: ' + ageText + ' × 共病系数: ' + comorbText;
+
+        wrapper.appendChild(header);
+        wrapper.appendChild(progress);
+        wrapper.appendChild(small);
+        breakdownDiv.appendChild(wrapper);
+    }
+    
+    // 分病种详情
+    const diseaseDiv = document.getElementById('diseaseRisksDiv');
+    clearElement(diseaseDiv);
+    
+    for (const [diseaseType, data] of Object.entries(result.disease_risks || {})) {
+        const colorClass = data.risk_level === '高风险' ? 'danger' : 
+                          data.risk_level === '中风险' ? 'warning' : 'success';
+        const riskScoreValue = Number.isFinite(Number(data.risk_score)) ? Number(data.risk_score) : 0;
+        const baseText = formatNumber(data.base_rr, 3, '--');
+        const ageText = formatNumber(data.age_amplifier, 2, '--');
+        const comorbText = formatNumber(data.comorbidity_amplifier, 2, '--');
+        const rrText = formatNumber(data.personal_rr, 3, '--');
+
+        const row = document.createElement('div');
+        row.className = 'row mb-3 p-3 border rounded';
+
+        const leftCol = document.createElement('div');
+        leftCol.className = 'col-md-3 text-center';
+        const score = document.createElement('div');
+        score.className = 'h2 fw-bold text-' + colorClass;
+        score.textContent = formatNumber(riskScoreValue, 0, '--');
+        const badge = document.createElement('span');
+        badge.className = 'badge bg-' + colorClass;
+        badge.textContent = data.risk_level || '--';
+        leftCol.appendChild(score);
+        leftCol.appendChild(badge);
+
+        const rightCol = document.createElement('div');
+        rightCol.className = 'col-md-9';
+        const title = document.createElement('h6');
+        title.textContent = diseaseType;
+        const table = document.createElement('table');
+        table.className = 'table table-sm mb-0';
+
+        const addRow = (label, value, emphasize) => {
+            const tr = document.createElement('tr');
+            const tdLabel = document.createElement('td');
+            const tdValue = document.createElement('td');
+            if (emphasize) {
+                const strongLabel = document.createElement('strong');
+                strongLabel.textContent = label;
+                tdLabel.appendChild(strongLabel);
+                const strongValue = document.createElement('strong');
+                strongValue.textContent = value;
+                tdValue.appendChild(strongValue);
+            } else {
+                tdLabel.textContent = label;
+                tdValue.textContent = value;
+            }
+            tr.appendChild(tdLabel);
+            tr.appendChild(tdValue);
+            table.appendChild(tr);
+        };
+
+        addRow('基础相对风险(RR)', baseText);
+        addRow('年龄放大系数', '×' + ageText);
+        addRow('共病放大系数', '×' + comorbText);
+        addRow('最终RR', rrText, true);
+
+        rightCol.appendChild(title);
+        rightCol.appendChild(table);
+
+        row.appendChild(leftCol);
+        row.appendChild(rightCol);
+        diseaseDiv.appendChild(row);
+    }
+    
+    // 建议
+    const recDiv = document.getElementById('recommendationsDiv');
+    clearElement(recDiv);
+    
+    (result.recommendations || []).forEach(rec => {
+        const priorityClass = rec.priority === 'urgent' ? 'danger' :
+                             rec.priority === 'high' ? 'warning' : 'info';
+        const alertDiv = document.createElement('div');
+        alertDiv.className = 'alert alert-' + priorityClass + ' mb-2';
+
+        const title = document.createElement('strong');
+        const icon = document.createElement('i');
+        icon.className = 'bi bi-' + (rec.priority === 'urgent' ? 'exclamation-octagon' : 'lightbulb') + ' me-1';
+        title.appendChild(icon);
+        title.appendChild(document.createTextNode(rec.category || ''));
+
+        const advice = document.createElement('p');
+        advice.className = 'mb-0';
+        advice.textContent = rec.advice || '';
+
+        alertDiv.appendChild(title);
+        alertDiv.appendChild(advice);
+        recDiv.appendChild(alertDiv);
+    });
+    
+    // 用户档案
+    const profileDiv = document.getElementById('userProfileDiv');
+    const profile = result.user_profile || {};
+    const weather = result.weather || {};
+    clearElement(profileDiv);
+
+    const profileItems = [
+        {
+            label: '年龄',
+            value: (profile.age !== undefined && profile.age !== null ? profile.age + '岁' : '--') +
+                (profile.age_group ? ' (' + profile.age_group + ')' : '')
+        },
+        {
+            label: '慢性病数量',
+            value: profile.disease_count !== undefined && profile.disease_count !== null ?
+                profile.disease_count + '种' : '--'
+        },
+        {
+            label: '当前温度',
+            value: weather.temperature !== undefined && weather.temperature !== null ?
+                weather.temperature + '°C' : '--'
+        },
+        {
+            label: '空气质量',
+            value: 'AQI ' + (weather.aqi !== undefined && weather.aqi !== null ? weather.aqi : '--')
+        }
+    ];
+
+    profileItems.forEach(item => {
+        const col = document.createElement('div');
+        col.className = 'col-md-3';
+        const small = document.createElement('small');
+        small.className = 'text-muted';
+        small.textContent = item.label;
+        const value = document.createElement('div');
+        value.className = 'fw-bold';
+        value.textContent = item.value;
+        col.appendChild(small);
+        col.appendChild(value);
+        profileDiv.appendChild(col);
+    });
+
+    // 可解释输出
+    const explainCard = document.getElementById('explainCard');
+    if (result.explain) {
+        const reasons = result.explain.reasons || [];
+        const actions = result.explain.actions || [];
+        const escalation = result.explain.escalation || [];
+
+        const reasonsList = document.getElementById('explainReasons');
+        const actionsList = document.getElementById('explainActions');
+        const escalationList = document.getElementById('explainEscalation');
+        const disclaimer = document.getElementById('explainDisclaimer');
+
+        populateList(reasonsList, reasons, '暂无明显触发原因');
+        populateList(actionsList, actions, '保持规律作息');
+        populateList(escalationList, escalation, '出现严重不适请及时就医');
+        disclaimer.textContent = result.explain.disclaimer || '风险提示不是诊断，紧急情况优先就医。';
+        explainCard.style.display = 'block';
+    } else {
+        explainCard.style.display = 'none';
+    }
+}
+</script>
+{% endblock %}
+

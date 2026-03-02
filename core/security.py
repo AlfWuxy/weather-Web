@@ -1,10 +1,13 @@
 # -*- coding: utf-8 -*-
 """Security helpers."""
 import hashlib
+import logging
 import os
 import secrets
 
 from flask import abort, current_app, has_app_context, jsonify, request, session
+
+logger = logging.getLogger(__name__)
 from flask_login import current_user
 from flask_limiter.util import get_remote_address
 
@@ -47,12 +50,26 @@ def csrf_failure_response():
     abort(400)
 
 
+_AUTO_PEPPER: str | None = None  # 进程级自动生成的 pepper 回退
+
+
 def _pair_token_pepper():
+    global _AUTO_PEPPER
     if has_app_context():
         pepper = current_app.config.get('PAIR_TOKEN_PEPPER')
         if pepper:
             return pepper
-    return os.getenv('PAIR_TOKEN_PEPPER') or ''
+    env_pepper = os.getenv('PAIR_TOKEN_PEPPER') or ''
+    if env_pepper:
+        return env_pepper
+    # 未配置 pepper —— 自动生成进程级随机 pepper，确保同一进程内哈希一致
+    if _AUTO_PEPPER is None:
+        _AUTO_PEPPER = secrets.token_urlsafe(32)
+        logger.warning(
+            "PAIR_TOKEN_PEPPER 未配置，已自动生成进程级随机 pepper。"
+            "重启后哈希将变化，生产环境必须显式配置此变量。"
+        )
+    return _AUTO_PEPPER
 
 
 def hash_pair_token(token):

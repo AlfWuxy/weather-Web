@@ -1,7 +1,11 @@
 # -*- coding: utf-8 -*-
 """Public and auth routes."""
+import logging
+
 from flask import Blueprint, current_app, redirect, render_template, request, url_for
 from flask_login import current_user, login_required
+
+logger = logging.getLogger(__name__)
 
 from core.extensions import limiter
 from core.extensions import db
@@ -246,7 +250,7 @@ def wxoa_landing():
             meta={'from': source, 'article': article},
         )
     except Exception:
-        pass
+        logger.debug("wxoa_land 埋点写入失败", exc_info=True)
     return render_template('wxoa_landing.html', source=source, article=article)
 
 

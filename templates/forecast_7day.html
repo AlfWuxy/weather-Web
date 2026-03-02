@@ -11,10 +11,21 @@
                     <h2><i class="bi bi-calendar-week me-2"></i>未来7天健康预测</h2>
                     <p class="text-muted mb-0">基于DLNM风险函数，预测未来7天门诊需求与健康风险</p>
                 </div>
-                <button class="btn btn-primary" id="refreshForecast" type="button">
-                    <i class="bi bi-arrow-clockwise me-1"></i>刷新预测
-                </button>
+                <div class="d-flex flex-wrap gap-2 justify-content-end">
+                    <div class="btn-group" role="group" aria-label="scenario">
+                        <button class="btn btn-outline-secondary active" id="scenarioBaselineBtn" type="button">
+                            基线情景
+                        </button>
+                        <button class="btn btn-outline-danger" id="scenarioWorstBtn" type="button">
+                            最坏情景
+                        </button>
+                    </div>
+                    <button class="btn btn-primary" id="refreshForecast" type="button">
+                        <i class="bi bi-arrow-clockwise me-1"></i>刷新预测
+                    </button>
+                </div>
             </div>
+            <div class="text-muted small mt-2">当前视图：<span id="scenarioModeLabel">基线情景（P50）</span></div>
         </div>
     </div>
 
@@ -54,7 +65,7 @@
                         <span class="badge bg-secondary">--</span>
                     </div>
                     <div class="small text-muted">
-                        预计门诊: -- 人次
+                        预计门诊(P50): -- 人次
                     </div>
                 </div>
             </div>
@@ -77,15 +88,18 @@
                                     <th>日期</th>
                                     <th>温度</th>
                                     <th>预计门诊</th>
+                                    <th>P10/P50/P90</th>
                                     <th>预测区间</th>
-                                    <th>超阈值概率</th>
+                                    <th>超阈值概率(P90/P75)</th>
+                                    <th>复合暴露</th>
                                     <th>风险等级</th>
+                                    <th>可预报性</th>
                                     <th>置信度</th>
                                 </tr>
                             </thead>
                             <tbody id="forecastTable">
                                 <tr>
-                                    <td colspan="7" class="text-center py-4">
+                                    <td colspan="10" class="text-center py-4">
                                         <div class="spinner-border spinner-border-sm text-primary me-2"></div>
                                         加载中...
                                     </td>
@@ -122,6 +136,18 @@
                     </div>
                 </div>
             </div>
+
+            <!-- 未来6小时短临时间轴 -->
+            <div class="card shadow-sm mt-4">
+                <div class="card-header bg-info text-white">
+                    <h5 class="mb-0"><i class="bi bi-clock-history me-2"></i>未来6小时降水时间轴</h5>
+                </div>
+                <div class="card-body" id="nowcastDiv">
+                    <div class="text-center py-3 text-muted">
+                        <i class="bi bi-hourglass-split"></i> 加载中...
+                    </div>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -151,6 +177,58 @@
                             <div class="h4 fw-bold text-warning" id="visitThreshold">--人次</div>
                         </div>
                     </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 影响 × 可能性矩阵 -->
+    <div class="row mt-2">
+        <div class="col-12">
+            <div class="card shadow-sm">
+                <div class="card-header bg-light">
+                    <h5 class="mb-0"><i class="bi bi-grid-3x3 me-2"></i>影响 × 可能性矩阵</h5>
+                </div>
+                <div class="card-body">
+                    <p class="text-muted small mb-3">用于快速识别“高影响且高可能”的重点干预日期。</p>
+                    <div class="table-responsive">
+                        <table class="table table-sm align-middle mb-0">
+                            <thead>
+                                <tr>
+                                    <th>影响\可能性</th>
+                                    <th>低</th>
+                                    <th>中</th>
+                                    <th>高</th>
+                                </tr>
+                            </thead>
+                            <tbody id="impactMatrixBody">
+                                <tr><td colspan="4" class="text-muted">等待预测数据...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row mt-3">
+        <div class="col-lg-6 mb-3">
+            <div class="card shadow-sm h-100">
+                <div class="card-header bg-light">
+                    <h5 class="mb-0"><i class="bi bi-person-check me-2"></i>角色行动卡</h5>
+                </div>
+                <div class="card-body" id="roleActionCards">
+                    <p class="text-muted mb-0">等待预测数据...</p>
+                </div>
+            </div>
+        </div>
+        <div class="col-lg-6 mb-3">
+            <div class="card shadow-sm h-100">
+                <div class="card-header bg-light">
+                    <h5 class="mb-0"><i class="bi bi-layers me-2"></i>复合暴露风险（热+PM2.5+湿度+热夜）</h5>
+                </div>
+                <div class="card-body" id="compositeExposureBoard">
+                    <p class="text-muted mb-0">等待预测数据...</p>
                 </div>
             </div>
         </div>
@@ -234,15 +312,59 @@ function setAlertLevel(element, className, iconClass, label) {
     element.appendChild(span);
 }
 
+let currentScenarioMode = 'baseline';
+let latestForecastRows = [];
+let latestSummaryData = {};
+let nowcastTimelineRows = [];
+let nowcastReplayTimer = null;
+let nowcastFrameIndex = 0;
+
 // 页面加载时获取预测
 document.addEventListener('DOMContentLoaded', function() {
     const refreshButton = document.getElementById('refreshForecast');
     if (refreshButton) {
-        refreshButton.addEventListener('click', loadForecast);
+        refreshButton.addEventListener('click', function() {
+            loadForecast();
+            loadNowcast();
+        });
+    }
+    const baselineBtn = document.getElementById('scenarioBaselineBtn');
+    const worstBtn = document.getElementById('scenarioWorstBtn');
+    if (baselineBtn) {
+        baselineBtn.addEventListener('click', function() {
+            setScenarioMode('baseline');
+        });
+    }
+    if (worstBtn) {
+        worstBtn.addEventListener('click', function() {
+            setScenarioMode('worst');
+        });
     }
     loadForecast();
     loadModelInfo();
+    loadNowcast();
 });
+
+function setScenarioMode(mode) {
+    currentScenarioMode = mode === 'worst' ? 'worst' : 'baseline';
+    const baselineBtn = document.getElementById('scenarioBaselineBtn');
+    const worstBtn = document.getElementById('scenarioWorstBtn');
+    if (baselineBtn) {
+        baselineBtn.classList.toggle('active', currentScenarioMode === 'baseline');
+    }
+    if (worstBtn) {
+        worstBtn.classList.toggle('active', currentScenarioMode === 'worst');
+    }
+    const modeLabel = document.getElementById('scenarioModeLabel');
+    if (modeLabel) {
+        modeLabel.textContent = currentScenarioMode === 'worst'
+            ? '最坏情景（P90）'
+            : '基线情景（P50）';
+    }
+    if (latestForecastRows.length > 0) {
+        displayForecast(latestForecastRows, latestSummaryData);
+    }
+}
 
 function loadForecast() {
     // 显示加载状态
@@ -256,7 +378,9 @@ function loadForecast() {
     .then(response => response.json())
     .then(data => {
         if (data.success) {
-            displayForecast(data.forecasts, data.summary);
+            latestForecastRows = Array.isArray(data.forecasts) ? data.forecasts : [];
+            latestSummaryData = data.summary || {};
+            displayForecast(latestForecastRows, latestSummaryData);
         } else {
             showError('加载失败: ' + (data.error || '未知错误'));
         }
@@ -286,6 +410,150 @@ function loadModelInfo() {
     });
 }
 
+function loadNowcast() {
+    fetch('/api/weather/nowcast?hours=6')
+    .then(response => response.json())
+    .then(payload => {
+        if (payload && payload.success) {
+            renderNowcast(payload.data || {});
+        } else {
+            renderNowcast({available: false, timeline: []});
+        }
+    })
+    .catch(() => {
+        renderNowcast({available: false, timeline: []});
+    });
+}
+
+function renderNowcast(data) {
+    const container = document.getElementById('nowcastDiv');
+    if (!container) return;
+    clearElement(container);
+    if (nowcastReplayTimer) {
+        clearInterval(nowcastReplayTimer);
+        nowcastReplayTimer = null;
+    }
+
+    const timeline = Array.isArray(data.timeline) ? data.timeline : [];
+    nowcastTimelineRows = timeline;
+    if (!timeline.length) {
+        const p = document.createElement('p');
+        p.className = 'text-muted mb-0';
+        p.textContent = '暂无小时级降水时间轴数据';
+        container.appendChild(p);
+        return;
+    }
+
+    const controls = document.createElement('div');
+    controls.className = 'd-flex flex-wrap align-items-center gap-2 mb-3';
+
+    const playBtn = document.createElement('button');
+    playBtn.type = 'button';
+    playBtn.className = 'btn btn-sm btn-outline-primary';
+    playBtn.textContent = '回放';
+    controls.appendChild(playBtn);
+
+    const slider = document.createElement('input');
+    slider.type = 'range';
+    slider.className = 'form-range flex-grow-1 mb-0';
+    slider.min = '0';
+    slider.max = String(Math.max(0, timeline.length - 1));
+    slider.value = '0';
+    controls.appendChild(slider);
+
+    const frameLabel = document.createElement('span');
+    frameLabel.className = 'small text-muted';
+    controls.appendChild(frameLabel);
+    container.appendChild(controls);
+
+    const listWrap = document.createElement('div');
+    container.appendChild(listWrap);
+
+    timeline.forEach((item, idx) => {
+        const row = document.createElement('div');
+        row.className = 'mb-2';
+        row.dataset.frame = String(idx);
+
+        const top = document.createElement('div');
+        top.className = 'd-flex justify-content-between small';
+        const t = document.createElement('span');
+        t.textContent = safeText(item.time, '--').slice(11, 16);
+        const v = document.createElement('span');
+        const p = formatNumber(item.precipitation_probability, 0, '--');
+        v.textContent = p + '%';
+        top.appendChild(t);
+        top.appendChild(v);
+
+        const bar = document.createElement('div');
+        bar.className = 'progress';
+        bar.style.height = '10px';
+        const barInner = document.createElement('div');
+        const prob = toNumber(item.precipitation_probability, 0);
+        barInner.className = 'progress-bar ' + (prob >= 70 ? 'bg-danger' : prob >= 40 ? 'bg-warning' : 'bg-info');
+        barInner.style.width = Math.max(0, Math.min(100, prob)) + '%';
+        bar.appendChild(barInner);
+
+        row.appendChild(top);
+        row.appendChild(bar);
+        listWrap.appendChild(row);
+    });
+
+    function setFrame(index) {
+        const safeIndex = Math.max(0, Math.min(timeline.length - 1, Number(index)));
+        nowcastFrameIndex = safeIndex;
+        slider.value = String(safeIndex);
+        const frame = timeline[safeIndex] || {};
+        const t = safeText(frame.time, '--').slice(11, 16);
+        frameLabel.textContent = `${safeIndex + 1}/${timeline.length} · ${t}`;
+        Array.from(listWrap.querySelectorAll('[data-frame]')).forEach(node => {
+            const active = Number(node.dataset.frame) === safeIndex;
+            node.classList.toggle('border', active);
+            node.classList.toggle('border-primary', active);
+            node.classList.toggle('rounded', active);
+            node.classList.toggle('p-1', active);
+        });
+    }
+
+    slider.addEventListener('input', function() {
+        setFrame(this.value);
+    });
+
+    playBtn.addEventListener('click', function() {
+        if (nowcastReplayTimer) {
+            clearInterval(nowcastReplayTimer);
+            nowcastReplayTimer = null;
+            playBtn.textContent = '回放';
+            return;
+        }
+        playBtn.textContent = '暂停';
+        nowcastReplayTimer = setInterval(() => {
+            let next = nowcastFrameIndex + 1;
+            if (next >= timeline.length) {
+                next = 0;
+            }
+            setFrame(next);
+        }, 900);
+    });
+
+    setFrame(0);
+
+    const rainWindow = data.rain_window || null;
+    if (rainWindow && rainWindow.start_time) {
+        const rainInfo = document.createElement('div');
+        rainInfo.className = 'alert alert-light py-2 mt-2 mb-2';
+        rainInfo.innerHTML = [
+            `<strong>预计降水窗口：</strong>${safeText(rainWindow.start_time, '--').slice(11, 16)} - ${safeText(rainWindow.end_time, '--').slice(11, 16)}`,
+            `，峰值概率 ${formatNumber(rainWindow.max_probability, 0, '--')}%`
+        ].join('');
+        container.appendChild(rainInfo);
+    }
+
+    const foot = document.createElement('div');
+    foot.className = 'text-muted small mt-2';
+    foot.textContent = '数据源: ' + safeText(data.source, '--') + ' | 支持 0-6 小时时间线回放';
+    container.appendChild(foot);
+}
+
 function displayForecast(forecasts, summary) {
     // 更新预警摘要
     const alertCard = document.getElementById('alertCard');
@@ -295,8 +563,13 @@ function displayForecast(forecasts, summary) {
     const summaryData = summary || {};
     const highRiskDaysValue = toNumber(summaryData.high_risk_days, 0);
     const highRiskDaysText = formatNumber(summaryData.high_risk_days, 0, '--');
-    const totalVisitsValue = toNumber(summaryData.total_expected_visits, null);
-    const totalVisitsText = formatNumber(summaryData.total_expected_visits, 0, '--');
+    const scenarioTotals = summaryData.scenario_totals || {};
+    const baselineTotal = toNumber(scenarioTotals.baseline_total, toNumber(summaryData.total_expected_visits, null));
+    const worstTotal = toNumber(scenarioTotals.worst_case_total, baselineTotal);
+    const optimisticTotal = toNumber(scenarioTotals.optimistic_total, baselineTotal);
+    const useWorst = currentScenarioMode === 'worst';
+    const totalVisitsValue = useWorst ? worstTotal : baselineTotal;
+    const totalVisitsText = totalVisitsValue === null ? '--' : String(Math.round(totalVisitsValue));
     const forecastPeriod = summaryData.forecast_period || {};
     const periodStart = safeText(forecastPeriod.start, '--');
     const periodEnd = safeText(forecastPeriod.end, '--');
@@ -304,15 +577,15 @@ function displayForecast(forecasts, summary) {
     if (highRiskDaysValue >= 3) {
         alertCard.className = 'card shadow-sm border-danger';
         setAlertLevel(alertLevel, 'text-danger', 'bi bi-exclamation-octagon-fill', '红色预警');
-        alertTitle.textContent = '未来一周健康风险较高';
+        alertTitle.textContent = useWorst ? '最坏情景下未来一周健康风险较高' : '未来一周健康风险较高';
     } else if (highRiskDaysValue >= 1) {
         alertCard.className = 'card shadow-sm border-warning';
         setAlertLevel(alertLevel, 'text-warning', 'bi bi-exclamation-triangle-fill', '橙色预警');
-        alertTitle.textContent = '部分日期健康风险偏高';
+        alertTitle.textContent = useWorst ? '最坏情景下部分日期风险偏高' : '部分日期健康风险偏高';
     } else {
         alertCard.className = 'card shadow-sm border-success';
         setAlertLevel(alertLevel, 'text-success', 'bi bi-check-circle-fill', '正常');
-        alertTitle.textContent = '未来一周健康风险正常';
+        alertTitle.textContent = useWorst ? '最坏情景下风险总体可控' : '未来一周健康风险正常';
     }
 
     clearElement(alertDesc);
@@ -325,6 +598,19 @@ function displayForecast(forecasts, summary) {
     highRiskStrong.textContent = highRiskDaysText;
     alertDesc.appendChild(highRiskStrong);
     alertDesc.appendChild(document.createTextNode(' 天'));
+    const avgPredictability = formatNumber(summaryData.predictability && summaryData.predictability.average_score, 0, null);
+    if (avgPredictability !== null) {
+        alertDesc.appendChild(document.createTextNode(' | 可预报性均值: '));
+        const predStrong = document.createElement('strong');
+        predStrong.textContent = avgPredictability;
+        alertDesc.appendChild(predStrong);
+    }
+    if (optimisticTotal !== null && worstTotal !== null) {
+        alertDesc.appendChild(document.createTextNode(' | 区间总量: '));
+        const rangeStrong = document.createElement('strong');
+        rangeStrong.textContent = `${Math.round(optimisticTotal)}~${Math.round(worstTotal)}`;
+        alertDesc.appendChild(rangeStrong);
+    }
 
     const averageVisits = totalVisitsValue === null ? '--' : String(Math.round(totalVisitsValue / 7));
     document.getElementById('visitThreshold').textContent = averageVisits + '人次/天';
@@ -350,9 +636,16 @@ function displayForecast(forecasts, summary) {
         const dateText = safeText(f.date, '--');
         const dayText = safeText(f.day_of_week, '--');
         const tempText = formatNumber(f.temperature && f.temperature.corrected, 0, '--');
-        const visitsText = formatNumber(f.visits && f.visits.point_estimate, 0, '--');
+        const baselineVisit = toNumber(f.visits && f.visits.point_estimate, null);
+        const worstVisit = toNumber(f.visits && f.visits.p90, baselineVisit);
+        const scenarioVisit = currentScenarioMode === 'worst' ? worstVisit : baselineVisit;
+        const visitsText = scenarioVisit === null ? '--' : String(Math.round(scenarioVisit));
         const probText = formatNumber(f.probability_high_visits, 0, '--');
         const probDisplay = probText === '--' ? '--' : probText + '%';
+        const predictabilityScore = formatNumber(f.predictability && f.predictability.score, 0, '--');
+        const predictabilityLabel = safeText(f.predictability && f.predictability.label, '--');
+        const composite = f.composite_exposure || {};
+        const compositeText = safeText(composite.level, '--') + ' ' + formatNumber(composite.score, 0, '--');
 
         clearElement(card);
         const header = document.createElement('div');
@@ -379,15 +672,23 @@ function displayForecast(forecasts, summary) {
         badgeWrap.appendChild(badge);
         const visitsDiv = document.createElement('div');
         visitsDiv.className = 'small text-muted';
-        visitsDiv.textContent = '预计门诊: ' + visitsText + ' 人次';
+        visitsDiv.textContent = (currentScenarioMode === 'worst' ? '最坏情景门诊: ' : '预计门诊: ') + visitsText + ' 人次';
         const probDiv = document.createElement('div');
         probDiv.className = 'small text-muted';
         probDiv.textContent = '超阈值概率: ' + probDisplay;
+        const compDiv = document.createElement('div');
+        compDiv.className = 'small text-muted';
+        compDiv.textContent = '复合暴露: ' + compositeText;
+        const predDiv = document.createElement('div');
+        predDiv.className = 'small text-muted';
+        predDiv.textContent = '可预报性: ' + predictabilityLabel + ' (' + predictabilityScore + ')';
 
         body.appendChild(tempDiv);
         body.appendChild(badgeWrap);
         body.appendChild(visitsDiv);
         body.appendChild(probDiv);
+        body.appendChild(compDiv);
+        body.appendChild(predDiv);
 
         card.appendChild(header);
         card.appendChild(body);
@@ -429,10 +730,19 @@ function displayForecast(forecasts, summary) {
 
         const visitCell = document.createElement('td');
         const visitStrong = document.createElement('strong');
-        const visitText = formatNumber(f.visits && f.visits.point_estimate, 0, '--');
+        const baseVisit = toNumber(f.visits && f.visits.point_estimate, null);
+        const worstVisit = toNumber(f.visits && f.visits.p90, baseVisit);
+        const usedVisit = currentScenarioMode === 'worst' ? worstVisit : baseVisit;
+        const visitText = usedVisit === null ? '--' : String(Math.round(usedVisit));
         visitStrong.textContent = visitText;
         visitCell.appendChild(visitStrong);
         visitCell.appendChild(document.createTextNode(' 人次'));
+
+        const quantileCell = document.createElement('td');
+        const p10Text = formatNumber(f.visits && f.visits.p10, 0, '--');
+        const p50Text = formatNumber(f.visits && f.visits.p50, 0, '--');
+        const p90Text = formatNumber(f.visits && f.visits.p90, 0, '--');
+        quantileCell.textContent = `${p10Text} / ${p50Text} / ${p90Text}`;
 
         const intervalCell = document.createElement('td');
         const lowerBoundText = formatNumber(f.visits && f.visits.lower_bound, 0, '--');
@@ -443,6 +753,7 @@ function displayForecast(forecasts, summary) {
         const probValue = toNumber(f.probability_high_visits, 0);
         const probText = formatNumber(f.probability_high_visits, 0, '--');
         const probDisplay = probText === '--' ? '--' : probText + '%';
+        const probP75 = toNumber(f.visits && f.visits.probability_exceed_p75, null);
         const probWidth = Math.max(0, Math.min(100, probValue));
         const progress = document.createElement('div');
         progress.className = 'progress';
@@ -453,12 +764,38 @@ function displayForecast(forecasts, summary) {
         progressBar.textContent = probDisplay;
         progress.appendChild(progressBar);
         probCell.appendChild(progress);
+        if (probP75 !== null) {
+            const meta = document.createElement('div');
+            meta.className = 'small text-muted mt-1';
+            meta.textContent = 'P75: ' + (probP75 * 100).toFixed(0) + '%';
+            probCell.appendChild(meta);
+        }
+
+        const compositeCell = document.createElement('td');
+        const composite = f.composite_exposure || {};
+        const compLevel = safeText(composite.level, '--');
+        const compScore = formatNumber(composite.score, 0, '--');
+        const compBadge = document.createElement('span');
+        const compClass = compLevel === '高' ? 'danger' : compLevel === '中' ? 'warning' : 'success';
+        compBadge.className = 'badge bg-' + compClass;
+        compBadge.textContent = compLevel + ' (' + compScore + ')';
+        compositeCell.appendChild(compBadge);
 
         const riskCell = document.createElement('td');
         const riskBadge = document.createElement('span');
         riskBadge.className = 'badge bg-' + badgeClass;
         riskBadge.textContent = riskLevel;
         riskCell.appendChild(riskBadge);
+
+        const predictabilityCell = document.createElement('td');
+        const predictability = f.predictability || {};
+        const predLabel = safeText(predictability.label, '--');
+        const predScore = formatNumber(predictability.score, 0, '--');
+        const predBadge = document.createElement('span');
+        const predClass = predLabel === '高' ? 'success' : predLabel === '中' ? 'warning' : 'secondary';
+        predBadge.className = 'badge bg-' + predClass;
+        predBadge.textContent = predLabel + ' (' + predScore + ')';
+        predictabilityCell.appendChild(predBadge);
 
         const confidenceCell = document.createElement('td');
         const confidenceValue = safeText(f.confidence, '');
@@ -472,9 +809,12 @@ function displayForecast(forecasts, summary) {
         row.appendChild(dateCell);
         row.appendChild(tempCell);
         row.appendChild(visitCell);
+        row.appendChild(quantileCell);
         row.appendChild(intervalCell);
         row.appendChild(probCell);
+        row.appendChild(compositeCell);
         row.appendChild(riskCell);
+        row.appendChild(predictabilityCell);
         row.appendChild(confidenceCell);
         tableBody.appendChild(row);
     });
@@ -538,6 +878,125 @@ function displayForecast(forecasts, summary) {
         empty.appendChild(document.createTextNode('未来7天无极端天气预警'));
         extremeDiv.appendChild(empty);
     }
+
+    renderImpactMatrix(summaryData.impact_likelihood_matrix || {});
+    renderRoleActionCards(summaryData.role_action_cards || {});
+    renderCompositeExposureBoard(forecastList, summaryData);
+}
+
+function renderRoleActionCards(cards) {
+    const container = document.getElementById('roleActionCards');
+    if (!container) return;
+    clearElement(container);
+
+    const groups = [
+        {key: 'resident', label: '居民'},
+        {key: 'doctor', label: '村医'},
+        {key: 'community', label: '社区干部'}
+    ];
+
+    groups.forEach(group => {
+        const entries = Array.isArray(cards[group.key]) ? cards[group.key] : [];
+        const block = document.createElement('div');
+        block.className = 'mb-3';
+        const title = document.createElement('h6');
+        title.className = 'mb-1';
+        title.textContent = group.label;
+        block.appendChild(title);
+
+        if (!entries.length) {
+            const empty = document.createElement('div');
+            empty.className = 'small text-muted';
+            empty.textContent = '暂无行动建议';
+            block.appendChild(empty);
+        } else {
+            entries.slice(0, 2).forEach(item => {
+                const priority = safeText(item.priority, 'medium');
+                const cls = priority === 'high' ? 'danger' : priority === 'urgent' ? 'danger' : priority === 'medium' ? 'warning' : 'secondary';
+                const alert = document.createElement('div');
+                alert.className = 'alert alert-' + cls + ' py-2 px-3 mb-2';
+                alert.innerHTML = `<strong>${safeText(item.title, '行动建议')}</strong><br><small>${safeText(item.action, '')}</small>`;
+                block.appendChild(alert);
+            });
+        }
+        container.appendChild(block);
+    });
+}
+
+function renderCompositeExposureBoard(forecasts, summary) {
+    const container = document.getElementById('compositeExposureBoard');
+    if (!container) return;
+    clearElement(container);
+
+    const summaryExposure = (summary && summary.composite_exposure) || {};
+    const avg = formatNumber(summaryExposure.average_score, 1, '--');
+    const highDays = formatNumber(summaryExposure.high_risk_days, 0, '--');
+
+    const summaryDiv = document.createElement('div');
+    summaryDiv.className = 'd-flex justify-content-between align-items-center mb-2';
+    summaryDiv.innerHTML = `<span class="small text-muted">周均复合暴露分</span><strong>${avg}</strong>`;
+    container.appendChild(summaryDiv);
+    const subDiv = document.createElement('div');
+    subDiv.className = 'small text-muted mb-3';
+    subDiv.textContent = `高复合暴露天数: ${highDays}`;
+    container.appendChild(subDiv);
+
+    (forecasts || []).forEach(item => {
+        const exposure = item.composite_exposure || {};
+        const score = toNumber(exposure.score, 0) || 0;
+        const row = document.createElement('div');
+        row.className = 'mb-2';
+
+        const top = document.createElement('div');
+        top.className = 'd-flex justify-content-between small';
+        top.innerHTML = `<span>${safeText(item.date, '--')}</span><span>${safeText(exposure.level, '--')} ${formatNumber(exposure.score, 0, '--')}</span>`;
+
+        const bar = document.createElement('div');
+        bar.className = 'progress';
+        bar.style.height = '10px';
+        const inner = document.createElement('div');
+        inner.className = 'progress-bar ' + (score >= 70 ? 'bg-danger' : score >= 45 ? 'bg-warning' : 'bg-success');
+        inner.style.width = Math.max(0, Math.min(100, score)) + '%';
+        bar.appendChild(inner);
+
+        row.appendChild(top);
+        row.appendChild(bar);
+        container.appendChild(row);
+    });
+}
+
+function renderImpactMatrix(matrixData) {
+    const body = document.getElementById('impactMatrixBody');
+    if (!body) return;
+    clearElement(body);
+
+    const cells = matrixData.cells || {};
+    const impactRows = [
+        {key: 'low', label: '低影响'},
+        {key: 'medium', label: '中影响'},
+        {key: 'high', label: '高影响'}
+    ];
+    const likelihoodCols = ['low', 'medium', 'high'];
+
+    impactRows.forEach(rowInfo => {
+        const tr = document.createElement('tr');
+        const name = document.createElement('td');
+        name.textContent = rowInfo.label;
+        tr.appendChild(name);
+
+        likelihoodCols.forEach(col => {
+            const td = document.createElement('td');
+            const value = toNumber(cells[rowInfo.key] && cells[rowInfo.key][col], 0);
+            td.textContent = String(value);
+            if (rowInfo.key === 'high' && col === 'high' && value > 0) {
+                td.className = 'text-danger fw-bold';
+            } else if (rowInfo.key !== 'low' && col !== 'low' && value > 0) {
+                td.className = 'text-warning fw-semibold';
+            }
+            tr.appendChild(td);
+        });
+        body.appendChild(tr);
+    });
 }
 
 function showError(msg) {

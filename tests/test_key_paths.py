@@ -39,6 +39,22 @@ class DummyWeatherFetcher:
             for idx in range(days)
         ]
 
+    def get_short_term_nowcast(self, city="北京", hours=6):
+        return {
+            'available': True,
+            'source': 'test',
+            'timeline': [
+                {
+                    'time': '2026-02-13T10:00',
+                    'precipitation_probability': 20.0,
+                    'precipitation_mm': 0.0,
+                    'temperature': 20.0,
+                    'condition': '多云',
+                    'risk_level': '低'
+                }
+            ][:hours]
+        }
+
 
 class FakeRedis:
     def __init__(self):
@@ -146,6 +162,16 @@ def test_api_current_weather_structure(client):
         assert key in data
 
 
+def test_api_nowcast_structure(client):
+    response = client.get('/api/weather/nowcast')
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload['success'] is True
+    data = payload.get('data') or {}
+    assert 'available' in data
+    assert 'timeline' in data
+
+
 def test_api_forecast_structure(authenticated_client):
     with authenticated_client.session_transaction() as session:
         session['_csrf_token'] = 'csrf-token'
@@ -160,3 +186,17 @@ def test_api_forecast_structure(authenticated_client):
     assert payload['success'] is True
     assert 'forecasts' in payload
     assert 'summary' in payload
+    forecasts = payload.get('forecasts') or []
+    assert len(forecasts) >= 1
+    first = forecasts[0]
+    assert 'composite_exposure' in first
+    assert 'cap_semantics' in first
+    assert 'scenarios' in first
+    assert 'p10' in (first.get('visits') or {})
+    assert 'p50' in (first.get('visits') or {})
+    assert 'p90' in (first.get('visits') or {})
+
+    summary = payload.get('summary') or {}
+    assert 'role_action_cards' in summary
+    assert 'scenario_totals' in summary
+    assert 'probability_products' in summary

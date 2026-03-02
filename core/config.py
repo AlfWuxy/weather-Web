@@ -257,6 +257,7 @@ def configure_app(app, logger):
     app.config.setdefault('FEATURE_NOTIFICATIONS', parse_bool(os.getenv('FEATURE_NOTIFICATIONS', '0'), default=False))
     app.config.setdefault('FEATURE_AUDIT_LOGS', parse_bool(os.getenv('FEATURE_AUDIT_LOGS', '0'), default=False))
     app.config.setdefault('FEATURE_STRUCTURED_LOGS', parse_bool(os.getenv('FEATURE_STRUCTURED_LOGS', '1'), default=True))
+    app.config.setdefault('TRUSTED_PROXY_CIDRS', os.getenv('TRUSTED_PROXY_CIDRS', '127.0.0.1/32,::1/128'))
     app.config.setdefault(
         'FORECAST_CACHE_TTL_MINUTES',
         parse_int(os.getenv('FORECAST_CACHE_TTL_MINUTES', '20'), default=20)
@@ -287,6 +288,8 @@ def configure_app(app, logger):
     app.config.setdefault('RATE_LIMIT_ML', os.getenv('RATE_LIMIT_ML', app.config['RATE_LIMITS']))
     app.config.setdefault('RATE_LIMIT_AI', os.getenv('RATE_LIMIT_AI', '20 per minute'))
     app.config.setdefault('RATE_LIMIT_LOGIN', os.getenv('RATE_LIMIT_LOGIN', '5 per 5 minutes'))
+    app.config.setdefault('LOGIN_MAX_FAILURES', parse_int(os.getenv('LOGIN_MAX_FAILURES', '5'), default=5))
+    app.config.setdefault('LOGIN_LOCKOUT_SECONDS', parse_int(os.getenv('LOGIN_LOCKOUT_SECONDS', '300'), default=300))
     app.config.setdefault('RATE_LIMIT_SHORT_CODE', os.getenv('RATE_LIMIT_SHORT_CODE', '3 per hour'))
     app.config.setdefault('RATE_LIMIT_CONFIRM', os.getenv('RATE_LIMIT_CONFIRM', '30 per hour'))
     app.config.setdefault('RATE_LIMIT_HELP', os.getenv('RATE_LIMIT_HELP', '10 per hour'))
@@ -372,3 +375,9 @@ def configure_app(app, logger):
     app.config.setdefault('SENTRY_SEND_PII', parse_bool(os.getenv('SENTRY_SEND_PII', '0'), default=False))
 
     _configure_sentry(app, logger)
+
+    # Static caching (safe with template-level cache busting via url_for(..., v=...)).
+    app.config.setdefault(
+        'STATIC_CACHE_MAX_AGE_SECONDS',
+        parse_int(os.getenv('STATIC_CACHE_MAX_AGE_SECONDS', '2592000'), default=2592000)  # 30 days
+    )

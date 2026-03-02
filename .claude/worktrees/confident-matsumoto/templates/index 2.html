@@ -1,0 +1,229 @@
+{% extends "base.html" %}
+
+{% block title %}首页 - 天气健康风险预测系统{% endblock %}
+
+{% block content %}
+<div class="container">
+    <!-- 首页横幅 - 专业商务设计 -->
+    <div class="hero-section bg-white border rounded shadow-sm p-5 mb-5">
+        <div class="row align-items-center">
+            <div class="col-lg-6 mb-4 mb-lg-0">
+                <div class="mb-3">
+                    <span class="badge bg-primary">专业 · 可靠 · 智能</span>
+                </div>
+                <h1 class="display-4 fw-bold mb-3" style="color: var(--text-primary);">
+                    天气健康风险<br>预测系统
+                </h1>
+                <p class="lead text-secondary mb-4">
+                    基于大数据与人工智能技术，为社区居民提供精准的健康风险评估与预警服务
+                </p>
+                
+                <div class="d-flex flex-wrap gap-3 mb-4">
+                    <div class="d-flex align-items-center">
+                        <div class="icon-box bg-primary bg-opacity-10 text-primary rounded p-2 me-2">
+                            <i class="bi bi-shield-check"></i>
+                        </div>
+                        <span class="text-secondary small">实时监测</span>
+                    </div>
+                    <div class="d-flex align-items-center">
+                        <div class="icon-box bg-success bg-opacity-10 text-success rounded p-2 me-2">
+                            <i class="bi bi-graph-up-arrow"></i>
+                        </div>
+                        <span class="text-secondary small">数据分析</span>
+                    </div>
+                    <div class="d-flex align-items-center">
+                        <div class="icon-box bg-info bg-opacity-10 text-info rounded p-2 me-2">
+                            <i class="bi bi-bullseye"></i>
+                        </div>
+                        <span class="text-secondary small">精准预警</span>
+                    </div>
+                </div>
+                
+                {% if not current_user.is_authenticated %}
+                    <div class="d-flex gap-2">
+                        <a href="{{ url_for('public.register') }}" class="btn btn-primary btn-lg">
+                            立即注册
+                        </a>
+                        <a href="{{ url_for('public.login') }}" class="btn btn-outline-secondary btn-lg">
+                            用户登录
+                        </a>
+                        <a href="{{ url_for('public.role_entry') }}" class="btn btn-outline-success btn-lg">
+                            角色入口
+                        </a>
+                        <a href="{{ url_for('public.guest_login') }}" class="btn btn-outline-primary btn-lg">
+                            游客体验
+                        </a>
+                    </div>
+                {% else %}
+                    <a href="{{ url_for('public.role_entry') }}" class="btn btn-primary btn-lg">
+                        进入系统
+                    </a>
+                {% endif %}
+            </div>
+            
+            <div class="col-lg-6">
+                <div class="card border-0" style="background: linear-gradient(135deg, #1a56db 0%, #0284c7 100%);">
+                    <div class="card-body text-white p-4">
+                        <h5 class="card-title mb-4">系统核心优势</h5>
+                        <div class="row g-3">
+                            <div class="col-6">
+                                <div class="text-center p-3 bg-white bg-opacity-10 rounded">
+                                    <h3 class="fw-bold mb-1">2000+</h3>
+                                    <small>病例数据</small>
+                                </div>
+                            </div>
+                            <div class="col-6">
+                                <div class="text-center p-3 bg-white bg-opacity-10 rounded">
+                                    <h3 class="fw-bold mb-1">5个</h3>
+                                    <small>覆盖社区</small>
+                                </div>
+                            </div>
+                            <div class="col-6">
+                                <div class="text-center p-3 bg-white bg-opacity-10 rounded">
+                                    <h3 class="fw-bold mb-1">24/7</h3>
+                                    <small>实时监控</small>
+                                </div>
+                            </div>
+                            <div class="col-6">
+                                <div class="text-center p-3 bg-white bg-opacity-10 rounded">
+                                    <h3 class="fw-bold mb-1">AI</h3>
+                                    <small>智能预测</small>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 功能介绍 -->
+    <div class="row mb-5">
+        <div class="col-md-12 mb-4">
+            <h2 class="text-center mb-4">
+                <i class="bi bi-grid-3x3-gap"></i> 核心功能模块
+            </h2>
+        </div>
+
+        <div class="col-md-4 mb-4">
+            <div class="card h-100">
+                <div class="card-body p-4">
+                    <div class="d-flex align-items-center mb-3">
+                        <div class="icon-box bg-primary bg-opacity-10 text-primary rounded p-3 me-3" style="width: 60px; height: 60px; display: flex; align-items: center; justify-content: center;">
+                            <i class="bi bi-cloud-rain fs-3"></i>
+                        </div>
+                        <h3 class="card-title h5 mb-0">天气预警模块</h3>
+                    </div>
+                    <p class="card-text text-muted">
+                        自动获取天气数据，识别极端天气条件，分析天气与疾病的相关性，及时发布健康预警。
+                    </p>
+                    <ul class="list-unstyled text-start">
+                        <li><i class="bi bi-check-circle text-success"></i> 实时天气数据采集</li>
+                        <li><i class="bi bi-check-circle text-success"></i> 极端天气自动识别</li>
+                        <li><i class="bi bi-check-circle text-success"></i> 天气疾病相关分析</li>
+                        <li><i class="bi bi-check-circle text-success"></i> 气象风险预警发布</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-md-4 mb-4">
+            <div class="card h-100">
+                <div class="card-body p-4">
+                    <div class="d-flex align-items-center mb-3">
+                        <div class="icon-box bg-success bg-opacity-10 text-success rounded p-3 me-3" style="width: 60px; height: 60px; display: flex; align-items: center; justify-content: center;">
+                            <i class="bi bi-heart-pulse fs-3"></i>
+                        </div>
+                        <h3 class="card-title h5 mb-0">健康风险评估</h3>
+                    </div>
+                    <p class="card-text text-muted">
+                        管理社区健康档案，计算脆弱性指数，评估不同天气下的健康风险，生成风险地图。
+                    </p>
+                    <ul class="list-unstyled text-start">
+                        <li><i class="bi bi-check-circle text-success"></i> 社区健康档案管理</li>
+                        <li><i class="bi bi-check-circle text-success"></i> 脆弱性指数计算</li>
+                        <li><i class="bi bi-check-circle text-success"></i> 空间风险地图生成</li>
+                        <li><i class="bi bi-check-circle text-success"></i> 高风险人群识别</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-md-4 mb-4">
+            <div class="card h-100">
+                <div class="card-body p-4">
+                    <div class="d-flex align-items-center mb-3">
+                        <div class="icon-box bg-info bg-opacity-10 text-info rounded p-3 me-3" style="width: 60px; height: 60px; display: flex; align-items: center; justify-content: center;">
+                            <i class="bi bi-activity fs-3"></i>
+                        </div>
+                        <h3 class="card-title h5 mb-0">慢性病风险预测</h3>
+                    </div>
+                    <p class="card-text text-muted">
+                        建立慢性病专项预测模型，提供个性化风险评估，生成精准预警和健康建议。
+                    </p>
+                    <ul class="list-unstyled text-start">
+                        <li><i class="bi bi-check-circle text-success"></i> 慢性病专项模型</li>
+                        <li><i class="bi bi-check-circle text-success"></i> 个性化风险评估</li>
+                        <li><i class="bi bi-check-circle text-success"></i> 精准预警生成</li>
+                        <li><i class="bi bi-check-circle text-success"></i> 健康建议推送</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 系统特色 -->
+    <div class="row bg-white border rounded shadow-sm p-4 mb-5">
+        <div class="col-md-12 mb-4">
+            <h2 class="text-center fw-bold">系统核心特色</h2>
+            <p class="text-center text-secondary">专业、可靠、高效的健康风险管理解决方案</p>
+        </div>
+        <div class="col-md-3 mb-3">
+            <div class="text-center p-3 border rounded h-100">
+                <div class="icon-box bg-primary bg-opacity-10 text-primary rounded-circle mx-auto mb-3" style="width: 64px; height: 64px; display: flex; align-items: center; justify-content: center;">
+                    <i class="bi bi-lightning-charge fs-3"></i>
+                </div>
+                <h6 class="fw-semibold">实时监测</h6>
+                <p class="text-secondary small mb-0">24小时自动获取天气数据</p>
+            </div>
+        </div>
+        <div class="col-md-3 mb-3">
+            <div class="text-center p-3 border rounded h-100">
+                <div class="icon-box bg-success bg-opacity-10 text-success rounded-circle mx-auto mb-3" style="width: 64px; height: 64px; display: flex; align-items: center; justify-content: center;">
+                    <i class="bi bi-cpu fs-3"></i>
+                </div>
+                <h6 class="fw-semibold">智能分析</h6>
+                <p class="text-secondary small mb-0">AI算法精准预测风险</p>
+            </div>
+        </div>
+        <div class="col-md-3 mb-3">
+            <div class="text-center p-3 border rounded h-100">
+                <div class="icon-box bg-info bg-opacity-10 text-info rounded-circle mx-auto mb-3" style="width: 64px; height: 64px; display: flex; align-items: center; justify-content: center;">
+                    <i class="bi bi-person-badge fs-3"></i>
+                </div>
+                <h6 class="fw-semibold">个性化服务</h6>
+                <p class="text-secondary small mb-0">基于个人健康状况定制</p>
+            </div>
+        </div>
+        <div class="col-md-3 mb-3">
+            <div class="text-center p-3 border rounded h-100">
+                <div class="icon-box bg-warning bg-opacity-10 text-warning rounded-circle mx-auto mb-3" style="width: 64px; height: 64px; display: flex; align-items: center; justify-content: center;">
+                    <i class="bi bi-geo-alt fs-3"></i>
+                </div>
+                <h6 class="fw-semibold">可视化地图</h6>
+                <p class="text-secondary small mb-0">直观展示社区风险分布</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<style>
+.hover-card {
+    transition: transform 0.3s ease, box-shadow 0.3s ease;
+}
+.hover-card:hover {
+    transform: translateY(-10px);
+    box-shadow: 0 10px 30px rgba(0,0,0,0.15) !important;
+}
+</style>
+{% endblock %}
