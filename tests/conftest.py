@@ -139,4 +139,28 @@ def authenticated_client(client, db_session):
     yield client
 
     # 登出
-    client.get('/logout', follow_redirects=True)
+    client.post('/logout', data={'csrf_token': csrf_token}, follow_redirects=False)
+
+
+@pytest.fixture(scope='function')
+def admin_client(client, db_session):
+    """提供已登录的管理员测试客户端"""
+    from core.db_models import User
+
+    admin = User(username='adminuser', role='admin')
+    admin.set_password('testpass')
+    db_session.add(admin)
+    db_session.commit()
+
+    csrf_token = 'test-csrf-token'
+    with client.session_transaction() as session:
+        session['_csrf_token'] = csrf_token
+    client.post('/login', data={
+        'username': 'adminuser',
+        'password': 'testpass',
+        'csrf_token': csrf_token
+    }, follow_redirects=True)
+
+    yield client
+
+    client.post('/logout', data={'csrf_token': csrf_token}, follow_redirects=False)

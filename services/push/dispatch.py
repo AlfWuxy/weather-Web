@@ -207,6 +207,9 @@ def dispatch_alerts(now=None, dedupe_hours: int = 6) -> Dict[str, Any]:
     for pair in pairs:
         query = (pair.location_query or pair.community_code or "").strip()
         resolved = resolve_location(query)
+        if query and resolved.get("provider") == "fallback":
+            logger.warning("跳过未成功解析地点的推送分组，pair_id=%s query=%s", getattr(pair, "id", None), query)
+            continue
         code = resolved.get("location_code") or ""
         if not code:
             continue
@@ -344,4 +347,3 @@ def dispatch_alerts(now=None, dedupe_hours: int = 6) -> Dict[str, Any]:
                 )
 
     return stats
-

@@ -43,8 +43,8 @@ def _seed_alerts_accuracy_data(db_session):
     db_session.commit()
 
 
-def test_alerts_accuracy_get_shows_academic_sections(authenticated_client):
-    response = authenticated_client.get('/alerts/accuracy')
+def test_alerts_accuracy_get_shows_academic_sections(admin_client):
+    response = admin_client.get('/alerts/accuracy')
     assert response.status_code == 200
     html = response.get_data(as_text=True)
     assert '预警准确率统计' in html
@@ -53,10 +53,10 @@ def test_alerts_accuracy_get_shows_academic_sections(authenticated_client):
     assert '混淆矩阵（2×2）' in html
 
 
-def test_alerts_accuracy_post_renders_verification_metrics(authenticated_client, db_session):
+def test_alerts_accuracy_post_renders_verification_metrics(admin_client, db_session):
     _seed_alerts_accuracy_data(db_session)
 
-    response = authenticated_client.post(
+    response = admin_client.post(
         '/alerts/accuracy',
         data={
             'start_date': '2025-10-01',

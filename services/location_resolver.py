@@ -103,10 +103,11 @@ def resolve_location(query, ttl_days=30):
     amap_key = current_app.config.get('AMAP_KEY') or ''
     if not amap_key:
         default_location = current_app.config.get('DEFAULT_LOCATION', '116.20,29.27')
+        default_city = current_app.config.get('DEFAULT_CITY', '都昌')
         return {
             'location_code': default_location,
             'provider': 'fallback',
-            'display_name': query,
+            'display_name': default_city,
             'raw_json': None
         }
 
@@ -119,10 +120,11 @@ def resolve_location(query, ttl_days=30):
     except Exception as exc:
         logger.warning("AMap geocode failed for %s: %s", query, exc)
         default_location = current_app.config.get('DEFAULT_LOCATION', '116.20,29.27')
+        default_city = current_app.config.get('DEFAULT_CITY', '都昌')
         return {
             'location_code': default_location,
             'provider': 'fallback',
-            'display_name': query,
+            'display_name': default_city,
             'raw_json': None
         }
 
@@ -146,10 +148,11 @@ def resolve_location(query, ttl_days=30):
     except Exception as exc:
         logger.warning("AMap geocode parse failed for %s: %s", query, exc)
         default_location = current_app.config.get('DEFAULT_LOCATION', '116.20,29.27')
+        default_city = current_app.config.get('DEFAULT_CITY', '都昌')
         return {
             'location_code': default_location,
             'provider': 'fallback',
-            'display_name': query,
+            'display_name': default_city,
             'raw_json': None
         }
 

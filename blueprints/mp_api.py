@@ -19,13 +19,12 @@ from flask import Blueprint, g, jsonify, request
 
 from core.db_models import FamilyMember, FamilyMemberProfile, Pair, User
 from core.extensions import db
-from core.security import hash_short_code
 from core.time_utils import utcnow
 from core.usage import log_usage_event, verify_api_token
 from core.weather import get_weather_with_cache
 from services.location_resolver import resolve_location
 from services.warning_service import get_qweather_warnings
-from services.user._common import _generate_elder_code, _generate_short_code
+from services.user._common import _create_pair_record
 from utils.parsers import safe_json_loads
 from utils.validators import sanitize_input
 
@@ -210,20 +209,12 @@ def elders_create():
             profile = FamilyMemberProfile(member_id=member.id, alert_enabled=True)
             db.session.add(profile)
 
-        short_code = _generate_short_code()
-        pair = Pair(
+        pair = _create_pair_record(
             caregiver_id=g.api_user_id,
-            community_code=location_query[:100],
             location_query=location_query,
             member_id=member.id,
-            elder_code=_generate_elder_code(),
-            short_code=short_code,
-            short_code_hash=hash_short_code(short_code),
-            status="active",
-            last_active_at=utcnow(),
-            created_at=utcnow(),
+            flush=True
         )
-        db.session.add(pair)
         db.session.commit()
     except Exception:
         db.session.rollback()

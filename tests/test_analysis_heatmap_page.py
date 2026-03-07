@@ -39,8 +39,8 @@ def _seed_heatmap_data(db_session):
     db_session.commit()
 
 
-def test_heatmap_page_renders_new_controls(authenticated_client):
-    response = authenticated_client.get('/analysis/heatmap')
+def test_heatmap_page_renders_new_controls(admin_client):
+    response = admin_client.get('/analysis/heatmap')
     assert response.status_code == 200
     html = response.get_data(as_text=True)
     assert '天气-疾病相关性热力图' in html
@@ -49,10 +49,10 @@ def test_heatmap_page_renders_new_controls(authenticated_client):
     assert 'name="binning"' in html
 
 
-def test_heatmap_page_post_with_rr_sections(authenticated_client, db_session):
+def test_heatmap_page_post_with_rr_sections(admin_client, db_session):
     _seed_heatmap_data(db_session)
 
-    response = authenticated_client.post(
+    response = admin_client.post(
         '/analysis/heatmap',
         data={
             'start_date': '2025-11-10',

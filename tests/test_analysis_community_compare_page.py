@@ -46,8 +46,8 @@ def _seed_community_compare_data(db_session):
     db_session.commit()
 
 
-def test_community_compare_get_shows_academic_controls(authenticated_client):
-    response = authenticated_client.get('/analysis/community-compare')
+def test_community_compare_get_shows_academic_controls(admin_client):
+    response = admin_client.get('/analysis/community-compare')
     assert response.status_code == 200
     html = response.get_data(as_text=True)
     assert '社区对比分析' in html
@@ -56,10 +56,10 @@ def test_community_compare_get_shows_academic_controls(authenticated_client):
     assert 'name="min_days"' in html
 
 
-def test_community_compare_post_renders_risk_sections(authenticated_client, db_session):
+def test_community_compare_post_renders_risk_sections(admin_client, db_session):
     _seed_community_compare_data(db_session)
 
-    response = authenticated_client.post(
+    response = admin_client.post(
         '/analysis/community-compare',
         data={
             'start_date': '2025-09-10',

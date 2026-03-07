@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 """Caregiver-related routes and helpers."""
 import logging
-import secrets
 from datetime import datetime, timedelta
 
 from flask import current_app, flash, redirect, render_template, request, session, url_for
@@ -10,7 +9,6 @@ from flask_login import current_user
 from core.db_models import Community, DailyStatus, Debrief, FamilyMember, Pair, PairLink
 from core.extensions import db
 from core.guest import is_guest_user
-from core.security import hash_pair_token, hash_short_code
 from core.time_utils import today_local, utcnow, local_datetime_to_utc
 from core.weather import get_consecutive_hot_days, get_weather_with_cache, is_demo_mode, normalize_location_name
 from core.usage import log_usage_event
@@ -28,7 +26,8 @@ from ._common import (
     RELAY_STAGE_LABELS,
     RELAY_STAGE_ORDER,
     _action_plan,
-    _generate_short_code,
+    _create_pair_link_record,
+    _create_pair_record,
     _relay_stage_rank,
     _require_roles
 )
@@ -45,20 +44,13 @@ logger = logging.getLogger(__name__)
 
 
 def _create_pair_link(community_code):
-    short_code = _generate_short_code()
-    short_code_hash = hash_short_code(short_code)
-    token = secrets.token_urlsafe(16)
-    link = PairLink(
-        caregiver_id=current_user.id,
-        short_code=short_code,
-        short_code_hash=short_code_hash,
-        token_hash=hash_pair_token(token),
-        community_code=community_code,
-        expires_at=utcnow() + timedelta(days=3)
-    )
     with atomic_transaction():
-        db.session.add(link)
-        db.session.flush()
+        link, token = _create_pair_link_record(
+            caregiver_id=current_user.id,
+            community_code=community_code,
+            expires_after=timedelta(days=3),
+            flush=True
+        )
         log_security_event(
             action='short_code_generated',
             actor_id=getattr(current_user, 'id', None),
@@ -67,7 +59,7 @@ def _create_pair_link(community_code):
             resource_id=str(link.id),
             extra_data={
                 'community_code': community_code,
-                'short_code_hash': short_code_hash
+                'short_code_hash': link.short_code_hash
             }
         )
     session['pair_link_token'] = token
@@ -82,22 +74,13 @@ def _create_pair(location_query, member_id=None):
     if not location_query:
         raise ValueError('location_query is required')
 
-    short_code = _generate_short_code()
-    pair = Pair(
-        caregiver_id=current_user.id,
-        community_code=location_query[:100],
-        location_query=location_query,
-        member_id=member_id,
-        elder_code=_generate_elder_code(),
-        short_code=short_code,
-        short_code_hash=hash_short_code(short_code),
-        status='active',
-        last_active_at=utcnow(),
-        created_at=utcnow(),
-    )
     with atomic_transaction():
-        db.session.add(pair)
-        db.session.flush()
+        pair = _create_pair_record(
+            caregiver_id=current_user.id,
+            location_query=location_query,
+            member_id=member_id,
+            flush=True
+        )
     # one-time banner
     session['created_pair_id'] = pair.id
     log_usage_event(
@@ -436,7 +419,7 @@ def caregiver_action_log(pair_id):
     status_date = today_local()
     status = DailyStatus.query.filter_by(pair_id=pair.id, status_date=status_date).first()
     if not status:
-        location = normalize_location_name(pair.community_code)
+        location = normalize_location_name(pair.location_query or pair.community_code)
         weather_data, _ = get_weather_with_cache(location)
         consecutive_hot_days = get_consecutive_hot_days(
             location,
@@ -551,7 +534,7 @@ def _handle_pair_escalate(pair_id, redirect_url, target_stage=None):
     status = DailyStatus.query.filter_by(pair_id=pair.id, status_date=status_date).first()
 
     if not status:
-        location = normalize_location_name(pair.community_code)
+        location = normalize_location_name(pair.location_query or pair.community_code)
         weather_data, _ = get_weather_with_cache(location)
         consecutive_hot_days = get_consecutive_hot_days(
             location,

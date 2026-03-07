@@ -144,7 +144,7 @@ def elder_token_debrief(token):
     status, actions, resources, weather_data, heat_result, risk_label, risk_reasons = _build_action_context(
         pair, status_date
     )
-    action_routes = _resolve_action_routes()
+    action_routes = _resolve_action_routes(token=token)
     return _render_action_page(
         pair,
         status,
@@ -195,7 +195,7 @@ def guest_login():
     return handle_guest_login()
 
 
-@bp.route('/logout', endpoint='logout')
+@bp.route('/logout', methods=['POST'], endpoint='logout')
 @login_required
 def logout():
     """登出"""

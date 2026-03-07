@@ -17,7 +17,7 @@
     <noscript><style>.page-loader{display:none !important;}</style></noscript>
     {% block extra_css %}{% endblock %}
 </head>
-<body>
+<body class="{% block body_class %}{% endblock %}">
     <!-- 页面加载动画 -->
     <div class="page-loader" id="pageLoader">
         <div class="loader-spinner"></div>
@@ -31,10 +31,11 @@
                 <i class="bi bi-cloud-sun"></i>
                 <span class="brand-short d-inline d-md-none">宜老天气通</span>
                 <span class="brand-full d-none d-md-inline">宜老天气通</span>
+                <span class="brand-tagline d-none d-xl-inline">天气预警与照护提醒</span>
             </a>
 
             <!-- Desktop quick links (JS-free fallback for navigation) -->
-            <div class="d-none d-md-flex align-items-center gap-2 ms-auto">
+            <div class="desktop-nav-actions d-none d-md-flex align-items-center gap-2 ms-auto">
                 {% if current_user.is_authenticated %}
                     <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('user.user_dashboard') }}">我的主页</a>
                     {% if current_user.role in ['caregiver', 'admin'] %}
@@ -45,14 +46,17 @@
                     {% if current_user.role == 'admin' %}
                         <a class="btn btn-sm btn-outline-dark" href="{{ url_for('admin.admin_dashboard') }}">管理后台</a>
                     {% endif %}
-                    <a class="btn btn-sm btn-outline-danger" href="{{ url_for('public.logout') }}">退出</a>
+                    <form method="POST" action="{{ url_for('public.logout') }}" class="d-inline">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <button class="btn btn-sm btn-outline-danger" type="submit">退出</button>
+                    </form>
                 {% else %}
                     <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('public.login') }}">登录</a>
                     <a class="btn btn-sm btn-primary" href="{{ url_for('public.register') }}">注册</a>
                 {% endif %}
             </div>
 
-            <button class="navbar-toggler d-flex align-items-center gap-1 ms-2" type="button" data-bs-toggle="offcanvas" data-bs-target="#appNavDrawer" aria-controls="appNavDrawer" aria-label="打开菜单">
+            <button class="navbar-toggler app-nav-toggle d-flex align-items-center gap-1 ms-2" type="button" data-bs-toggle="offcanvas" data-bs-target="#appNavDrawer" aria-controls="appNavDrawer" aria-label="打开菜单">
                 <span class="navbar-toggler-icon"></span>
                 <span class="small d-none d-sm-inline">菜单</span>
             </button>
@@ -246,17 +250,19 @@
                                     <hr class="my-2">
                                 {% endif %}
 
-                                <div class="app-nav-meta mt-1 mb-1">分析</div>
-                                <a class="nav-link app-nav-link" href="{{ url_for('analysis.analysis_history') }}">历史回溯分析</a>
-                                <a class="nav-link app-nav-link" href="{{ url_for('analysis.analysis_heatmap') }}">相关性热力图</a>
-                                <a class="nav-link app-nav-link" href="{{ url_for('analysis.analysis_lag') }}">滞后效应</a>
-                                <a class="nav-link app-nav-link" href="{{ url_for('analysis.analysis_community_compare') }}">社区对比</a>
-                                <a class="nav-link app-nav-link" href="{{ url_for('analysis.alerts_history') }}">预警历史</a>
-                                <a class="nav-link app-nav-link" href="{{ url_for('analysis.alerts_accuracy') }}">预警准确率</a>
-                                <hr class="my-2">
-                                <a class="nav-link app-nav-link" href="{{ url_for('analysis.reports_center') }}">
-                                    <i class="bi bi-file-earmark-arrow-down me-2"></i>报告导出
-                                </a>
+                                {% if current_user.role == 'admin' %}
+                                    <div class="app-nav-meta mt-1 mb-1">分析</div>
+                                    <a class="nav-link app-nav-link" href="{{ url_for('analysis.analysis_history') }}">历史回溯分析</a>
+                                    <a class="nav-link app-nav-link" href="{{ url_for('analysis.analysis_heatmap') }}">相关性热力图</a>
+                                    <a class="nav-link app-nav-link" href="{{ url_for('analysis.analysis_lag') }}">滞后效应</a>
+                                    <a class="nav-link app-nav-link" href="{{ url_for('analysis.analysis_community_compare') }}">社区对比</a>
+                                    <a class="nav-link app-nav-link" href="{{ url_for('analysis.alerts_history') }}">预警历史</a>
+                                    <a class="nav-link app-nav-link" href="{{ url_for('analysis.alerts_accuracy') }}">预警准确率</a>
+                                    <hr class="my-2">
+                                    <a class="nav-link app-nav-link" href="{{ url_for('analysis.reports_center') }}">
+                                        <i class="bi bi-file-earmark-arrow-down me-2"></i>报告导出
+                                    </a>
+                                {% endif %}
                             </nav>
                         </div>
 	                    </div>
@@ -325,9 +331,12 @@
                                         </a>
                                     {% endif %}
                                     <hr class="my-2">
-                                    <a class="nav-link app-nav-link" href="{{ url_for('public.logout') }}">
-                                        <i class="bi bi-box-arrow-right me-2"></i>退出登录
-                                    </a>
+                                    <form method="POST" action="{{ url_for('public.logout') }}">
+                                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                        <button class="nav-link app-nav-link w-100 text-start border-0 bg-transparent" type="submit">
+                                            <i class="bi bi-box-arrow-right me-2"></i>退出登录
+                                        </button>
+                                    </form>
                                 </nav>
                             {% else %}
                                 <nav class="nav flex-column">
@@ -361,16 +370,16 @@
     {% endwith %}
 
     <!-- 主要内容 -->
-    <main class="container-fluid py-4">
+    <main class="page-shell container-fluid py-4">
         {% block content %}{% endblock %}
     </main>
 
     {% include 'partials/ai_floating_chat.html' %}
 
     <!-- 页脚 -->
-    <footer class="bg-light text-center text-muted py-4 mt-5">
+    <footer class="site-footer text-center text-muted py-4 mt-5">
         <div class="container">
-            <p class="mb-0">© 2025 | 天气健康风险预测系统 | 宜老天气通</p>
+            <p class="footer-note mb-0">© 2025 | 天气健康风险预测系统 | 宜老天气通</p>
         </div>
     </footer>
 

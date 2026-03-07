@@ -682,7 +682,7 @@ class ForecastService:
                 (start_date + timedelta(days=i)): self._normalize_forecast_entry(temp)
                 for i, temp in enumerate(forecast_temps)
             }
-        else:
+        elif isinstance(forecast_temps, dict):
             # 标准化键为 date 对象，值统一转 entry
             forecast_temps_dict = {}
             for k, v in forecast_temps.items():
@@ -693,6 +693,8 @@ class ForecastService:
                 else:
                     key = k
                 forecast_temps_dict[key] = self._normalize_forecast_entry(v)
+        else:
+            raise ValueError("forecast_temps must be a list or dict")
         
         forecasts = []
         total_expected_visits = 0
@@ -720,7 +722,7 @@ class ForecastService:
             elif lead_day <= len(temp_values):
                 selected_entry = self._normalize_forecast_entry(temp_values[lead_day - 1])
             else:
-                selected_entry = self._normalize_forecast_entry(15.0)
+                raise ValueError(f"insufficient forecast data for day {lead_day}")
             raw_temp = selected_entry.get('temp', 15.0)
             model_spread = selected_entry.get('model_spread')
             model_count = selected_entry.get('model_count', 1)

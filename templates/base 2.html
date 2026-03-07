@@ -145,16 +145,18 @@
                                     <li><a class="dropdown-item" href="{{ url_for('admin.admin_statistics') }}">统计分析</a></li>
                                     <li><hr class="dropdown-divider"></li>
                                 {% endif %}
-                                <li><a class="dropdown-item" href="{{ url_for('analysis.analysis_history') }}">历史回溯分析</a></li>
-                                <li><a class="dropdown-item" href="{{ url_for('analysis.analysis_heatmap') }}">相关性热力图</a></li>
-                                <li><a class="dropdown-item" href="{{ url_for('analysis.analysis_lag') }}">滞后效应</a></li>
-                                <li><a class="dropdown-item" href="{{ url_for('analysis.analysis_community_compare') }}">社区对比</a></li>
-                                <li><a class="dropdown-item" href="{{ url_for('analysis.alerts_history') }}">预警历史</a></li>
-                                <li><a class="dropdown-item" href="{{ url_for('analysis.alerts_accuracy') }}">预警准确率</a></li>
-                                <li><hr class="dropdown-divider"></li>
-                                <li><a class="dropdown-item" href="{{ url_for('analysis.reports_center') }}">
-                                    <i class="bi bi-file-earmark-arrow-down me-2"></i>报告导出
-                                </a></li>
+                                {% if current_user.role == 'admin' %}
+                                    <li><a class="dropdown-item" href="{{ url_for('analysis.analysis_history') }}">历史回溯分析</a></li>
+                                    <li><a class="dropdown-item" href="{{ url_for('analysis.analysis_heatmap') }}">相关性热力图</a></li>
+                                    <li><a class="dropdown-item" href="{{ url_for('analysis.analysis_lag') }}">滞后效应</a></li>
+                                    <li><a class="dropdown-item" href="{{ url_for('analysis.analysis_community_compare') }}">社区对比</a></li>
+                                    <li><a class="dropdown-item" href="{{ url_for('analysis.alerts_history') }}">预警历史</a></li>
+                                    <li><a class="dropdown-item" href="{{ url_for('analysis.alerts_accuracy') }}">预警准确率</a></li>
+                                    <li><hr class="dropdown-divider"></li>
+                                    <li><a class="dropdown-item" href="{{ url_for('analysis.reports_center') }}">
+                                        <i class="bi bi-file-earmark-arrow-down me-2"></i>报告导出
+                                    </a></li>
+                                {% endif %}
                             </ul>
                         </li>
                         <li class="nav-item dropdown">
@@ -203,7 +205,12 @@
                                     <li><a class="dropdown-item" href="{{ url_for('public.register') }}"><i class="bi bi-person-plus me-2"></i>注册账号</a></li>
                                     <li><hr class="dropdown-divider"></li>
                                 {% endif %}
-                                <li><a class="dropdown-item" href="{{ url_for('public.logout') }}"><i class="bi bi-box-arrow-right me-2"></i>退出登录</a></li>
+                                <li>
+                                    <form method="POST" action="{{ url_for('public.logout') }}">
+                                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                        <button class="dropdown-item" type="submit"><i class="bi bi-box-arrow-right me-2"></i>退出登录</button>
+                                    </form>
+                                </li>
                             </ul>
                         </li>
                     {% else %}

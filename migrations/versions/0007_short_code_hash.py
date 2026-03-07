@@ -5,14 +5,12 @@ Revises: 0006_cooling_resource_fields
 Create Date: 2025-02-05 00:00:00.000000
 """
 
+import os
 import hashlib
 
 from alembic import op
 import sqlalchemy as sa
 from sqlalchemy import inspect
-
-from core.app import create_app
-
 
 # revision identifiers, used by Alembic.
 revision = '0007_short_code_hash'
@@ -21,8 +19,7 @@ branch_labels = None
 depends_on = None
 
 
-_APP = create_app()
-_PAIR_TOKEN_PEPPER = _APP.config.get('PAIR_TOKEN_PEPPER', '') or ''
+_PAIR_TOKEN_PEPPER = os.getenv('PAIR_TOKEN_PEPPER', '') or ''
 
 
 def _table_exists(inspector, table_name):

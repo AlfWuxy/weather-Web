@@ -45,8 +45,8 @@ def _seed_alerts_history_data(db_session):
     db_session.commit()
 
 
-def test_alerts_history_get_shows_new_controls(authenticated_client):
-    response = authenticated_client.get('/alerts/history')
+def test_alerts_history_get_shows_new_controls(admin_client):
+    response = admin_client.get('/alerts/history')
     assert response.status_code == 200
     html = response.get_data(as_text=True)
     assert '预警历史记录' in html
@@ -55,10 +55,10 @@ def test_alerts_history_get_shows_new_controls(authenticated_client):
     assert 'name="outcome"' in html
 
 
-def test_alerts_history_post_renders_verification_sections(authenticated_client, db_session):
+def test_alerts_history_post_renders_verification_sections(admin_client, db_session):
     _seed_alerts_history_data(db_session)
 
-    response = authenticated_client.post(
+    response = admin_client.post(
         '/alerts/history',
         data={
             'start_date': '2025-11-01',

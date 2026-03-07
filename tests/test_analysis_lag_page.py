@@ -42,8 +42,8 @@ def _seed_lag_data(db_session):
     db_session.commit()
 
 
-def test_lag_page_get_shows_new_controls(authenticated_client):
-    response = authenticated_client.get('/analysis/lag')
+def test_lag_page_get_shows_new_controls(admin_client):
+    response = admin_client.get('/analysis/lag')
     assert response.status_code == 200
     html = response.get_data(as_text=True)
     assert '滞后效应可视化' in html
@@ -52,10 +52,10 @@ def test_lag_page_get_shows_new_controls(authenticated_client):
     assert 'name="disease"' in html
 
 
-def test_lag_page_post_renders_academic_sections(authenticated_client, db_session):
+def test_lag_page_post_renders_academic_sections(admin_client, db_session):
     _seed_lag_data(db_session)
 
-    response = authenticated_client.post(
+    response = admin_client.post(
         '/analysis/lag',
         data={
             'start_date': '2025-10-10',

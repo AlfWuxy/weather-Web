@@ -490,13 +490,21 @@ def _api_forecast_7day():
             forecast_temps = data['forecast_temps']
             # 验证并转换温度数据
             try:
-                forecast_temps = [float(t) for t in forecast_temps[:7]]  # 最多7天
-                if len(forecast_temps) < 7:
-                    # 补齐到7天
-                    last_temp = forecast_temps[-1] if forecast_temps else 15.0
-                    forecast_temps.extend([last_temp] * (7 - len(forecast_temps)))
+                if not isinstance(forecast_temps, list):
+                    raise TypeError('forecast_temps must be a list')
+                forecast_temps = [float(t) for t in forecast_temps]
             except (TypeError, ValueError):
-                forecast_temps = [15.0] * 7
+                return jsonify({
+                    'success': False,
+                    'error': 'invalid_forecast_temps',
+                    'message': 'forecast_temps 必须是 7 个数字'
+                }), 400
+            if len(forecast_temps) != 7:
+                return jsonify({
+                    'success': False,
+                    'error': 'invalid_forecast_temps_length',
+                    'message': 'forecast_temps 必须提供完整 7 天'
+                }), 400
         else:
             # 从天气API获取预报（带缓存）
             city = sanitize_input(data.get('city'), max_length=100)
@@ -534,7 +542,18 @@ def _api_forecast_7day():
                     })
             except (ValueError, TypeError, RuntimeError, OSError) as exc:
                 logger.warning("Forecast cache unavailable: %s", exc)
-                forecast_temps = [15.0] * 7
+                return jsonify({
+                    'success': False,
+                    'error': 'forecast_unavailable',
+                    'message': '天气预报暂不可用，请稍后重试'
+                }), 503
+            if len(forecast_temps) != 7:
+                logger.warning("Forecast data incomplete for city=%s, count=%s", city, len(forecast_temps))
+                return jsonify({
+                    'success': False,
+                    'error': 'forecast_data_incomplete',
+                    'message': '天气预报数据不完整，暂无法生成7天预测'
+                }), 503
 
         # 生成7天预测
         forecasts, summary = forecast_service.generate_7day_forecast(
@@ -796,7 +815,14 @@ def _api_chronic_population():
         if 'weather' in data:
             weather_data = data['weather']
         else:
-            weather_data, _ = get_weather_with_cache('北京')
+            city = sanitize_input(data.get('city'), max_length=100)
+            if city:
+                city = normalize_location_name(city)
+            elif current_user.is_authenticated:
+                city = ensure_user_location_valid()
+            else:
+                city = current_app.config.get('DEFAULT_CITY', DEFAULT_CITY_LABEL) or DEFAULT_CITY_LABEL
+            weather_data, _ = get_weather_with_cache(city)
 
         # 预测
         result = chronic_service.predict_population_risk({}, weather_data)

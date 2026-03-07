@@ -530,6 +530,8 @@ def _compute_date_overlap(start_a, end_a, start_b, end_b):
 @login_required
 def analysis_history():
     """历史数据回溯分析"""
+    if not _require_admin():
+        return redirect(url_for('user.user_dashboard'))
     community_filter = sanitize_input(request.values.get('community'), max_length=100)
     disease_filter = sanitize_input(request.values.get('disease'), max_length=100)
     start_raw = request.values.get('start_date')
@@ -679,6 +681,8 @@ def analysis_history():
 @login_required
 def analysis_heatmap():
     """天气-疾病相关性热力图（RR + 滞后 + 不确定性）"""
+    if not _require_admin():
+        return redirect(url_for('user.user_dashboard'))
     community_filter = sanitize_input(request.values.get('community'), max_length=100)
     disease_filter = sanitize_input(request.values.get('disease'), max_length=100)
     stratum = sanitize_input(request.values.get('stratum'), max_length=30) or 'all'
@@ -977,6 +981,8 @@ def analysis_heatmap():
 @login_required
 def analysis_lag():
     """滞后效应可视化（lag-response + cumulative + risk semantics）"""
+    if not _require_admin():
+        return redirect(url_for('user.user_dashboard'))
     community_filter = sanitize_input(request.values.get('community'), max_length=100)
     disease_filter = sanitize_input(request.values.get('disease'), max_length=100)
     stratum = sanitize_input(request.values.get('stratum'), max_length=30) or 'all'
@@ -1412,6 +1418,8 @@ def analysis_lag():
 @login_required
 def analysis_community_compare():
     """社区对比分析（SIR + 漏斗图 + 不平等指标）"""
+    if not _require_admin():
+        return redirect(url_for('user.user_dashboard'))
     disease_filter = sanitize_input(request.values.get('disease'), max_length=100)
     stratum = sanitize_input(request.values.get('stratum'), max_length=30) or 'all'
     if stratum not in {'all', 'elderly', 'non_elderly', 'male', 'female'}:
@@ -1757,6 +1765,8 @@ def analysis_community_compare():
 @login_required
 def alerts_history():
     """预警历史记录（预警-实况核验）"""
+    if not _require_admin():
+        return redirect(url_for('user.user_dashboard'))
     location_filter = sanitize_input(request.values.get('location'), max_length=100)
     alert_type_filter = sanitize_input(request.values.get('alert_type'), max_length=60)
     alert_level_filter = sanitize_input(request.values.get('alert_level'), max_length=30)
@@ -2241,6 +2251,8 @@ def alerts_history():
 @login_required
 def alerts_accuracy():
     """预警准确率统计（分类核验 + 可靠性 + 阈值敏感性）"""
+    if not _require_admin():
+        return redirect(url_for('user.user_dashboard'))
     location_filter = sanitize_input(request.values.get('location'), max_length=100)
     alert_type_filter = sanitize_input(request.values.get('alert_type'), max_length=60)
     alert_level_filter = sanitize_input(request.values.get('alert_level'), max_length=30)
@@ -3033,6 +3045,8 @@ def alerts_accuracy():
 @login_required
 def reports_center():
     """报告导出"""
+    if not _require_admin():
+        return redirect(url_for('user.user_dashboard'))
     return render_template('reports.html')
 
 
@@ -3040,6 +3054,8 @@ def reports_center():
 @login_required
 def reports_export():
     """导出周报/月报"""
+    if not _require_admin():
+        return redirect(url_for('user.user_dashboard'))
     report_type = request.form.get('report_type', 'weekly')
     report_format = request.form.get('format', 'excel')
 

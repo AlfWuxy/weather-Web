@@ -6,8 +6,10 @@ from datetime import timedelta
 from flask import flash
 from flask_login import current_user
 
+from core.extensions import db
 from core.db_models import Pair, PairLink
-from core.security import hash_short_code
+from core.security import hash_pair_token, hash_short_code
+from core.time_utils import utcnow
 from utils.validators import sanitize_input
 
 
@@ -108,6 +110,56 @@ def _generate_elder_code():
         if not Pair.query.filter_by(elder_code=candidate).first():
             return candidate
     raise RuntimeError('老人码生成失败，请重试')
+
+
+def _create_pair_record(caregiver_id, location_query, member_id=None, flush=False):
+    """创建 Pair 记录，供 Web/小程序统一复用。"""
+    location_query = sanitize_input(location_query, max_length=200) or ''
+    location_query = location_query.strip()
+    if not location_query:
+        raise ValueError('location_query is required')
+
+    short_code = _generate_short_code()
+    pair = Pair(
+        caregiver_id=caregiver_id,
+        community_code=location_query[:100],
+        location_query=location_query,
+        member_id=member_id,
+        elder_code=_generate_elder_code(),
+        short_code=short_code,
+        short_code_hash=hash_short_code(short_code),
+        status='active',
+        last_active_at=utcnow(),
+        created_at=utcnow(),
+    )
+    db.session.add(pair)
+    if flush:
+        db.session.flush()
+    return pair
+
+
+def _create_pair_link_record(caregiver_id, community_code, expires_after=None, flush=False):
+    """创建 PairLink 记录，统一短码/token 生成逻辑。"""
+    community_code = sanitize_input(community_code, max_length=100) or ''
+    community_code = community_code.strip()
+    if not community_code:
+        raise ValueError('community_code is required')
+
+    short_code = _generate_short_code()
+    token = secrets.token_urlsafe(16)
+    expires_after = expires_after or timedelta(days=3)
+    link = PairLink(
+        caregiver_id=caregiver_id,
+        short_code=short_code,
+        short_code_hash=hash_short_code(short_code),
+        token_hash=hash_pair_token(token),
+        community_code=community_code,
+        expires_at=utcnow() + expires_after,
+    )
+    db.session.add(link)
+    if flush:
+        db.session.flush()
+    return link, token
 
 
 def _normalize_code(value):
