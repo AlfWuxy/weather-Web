@@ -1052,3 +1052,8 @@ body.elder-mode .badge {
 body.elder-mode .elder-card {
     padding: 0.25rem;
 }
+
+.auth-shell {
+    max-width: 1200px;
+    padding-top: 0.5rem;
+}

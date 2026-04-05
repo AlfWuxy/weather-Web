@@ -682,6 +682,7 @@ def handle_login(next_url):
         # 输入验证
         username = request.form.get('username', '').strip()
         password = request.form.get('password', '')
+        remember_flag = request.form.get('remember') in ('1', 'on', 'true', 'yes')
 
         # 基本验证
         if not username or not password:
@@ -696,7 +697,11 @@ def handle_login(next_url):
         user = User.query.filter_by(username=username).first()
 
         if user and user.check_password(password):
-            login_user(user)
+            login_user(
+                user,
+                remember=remember_flag,
+                duration=timedelta(days=30) if remember_flag else None,
+            )
             user.last_login = utcnow()
             db.session.commit()
             logger.info("用户登录成功: %s", username)

@@ -2,63 +2,314 @@
 
 {% block title %}登录 - 天气健康风险预测系统{% endblock %}
 
-{% block content %}
-<div class="container">
-    <div class="row justify-content-center align-items-center" style="min-height: 80vh;">
-        <div class="col-md-5 col-lg-4">
-            <div class="text-center mb-4">
-                <div class="d-inline-flex align-items-center justify-content-center bg-primary bg-opacity-10 rounded-circle mb-3" style="width: 64px; height: 64px;">
-                    <i class="bi bi-shield-lock-fill text-primary" style="font-size: 2rem;"></i>
-                </div>
-                <h2 class="fw-bold mb-2">登录系统</h2>
-                <p class="text-secondary mb-0">天气健康风险预测系统</p>
-            </div>
-            
-            <div class="card shadow-sm">
-                <div class="card-body p-4">
-                    <form method="POST" action="{{ url_for('public.login') }}">
-                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                        {% if next %}
-                            <input type="hidden" name="next" value="{{ next }}">
-                        {% endif %}
-                        <div class="mb-3">
-                            <label for="username" class="form-label text-secondary">用户名</label>
-                            <input type="text" class="form-control" id="username" name="username" placeholder="请输入用户名" required autofocus>
-                        </div>
-                        <div class="mb-3">
-                            <label for="password" class="form-label text-secondary">密码</label>
-                            <input type="password" class="form-control" id="password" name="password" placeholder="请输入密码" required>
-                        </div>
-                        <div class="mb-3 d-flex justify-content-between align-items-center">
-                            <div class="form-check">
-                                <input type="checkbox" class="form-check-input" id="remember">
-                                <label class="form-check-label small" for="remember">记住我</label>
-                            </div>
-                        </div>
-                        <div class="d-grid mb-3">
-                            <button type="submit" class="btn btn-primary btn-lg">
-                                登录
-                            </button>
-                        </div>
-                        <div class="d-grid mb-3">
-                            <a href="{{ url_for('public.guest_login') }}" class="btn btn-outline-primary">
-                                游客体验
-                            </a>
-                        </div>
-                        <div class="text-center">
-                            <span class="text-secondary small">还没有账号？</span>
-                            <a href="{{ url_for('public.register') }}" class="text-decoration-none small fw-semibold">立即注册</a>
-                        </div>
-                    </form>
-                </div>
-            </div>
+{% block extra_css %}
+<style>
+.auth-hero-shell {
+    max-width: 1180px;
+}
 
-            <div class="text-center mt-4">
-                <div class="alert alert-light border">
-                    <i class="bi bi-info-circle me-2"></i>
-                    <small><strong>管理员账号：</strong>由系统配置创建</small>
+.auth-shell {
+    max-width: 1200px;
+    padding-top: 0.5rem;
+}
+
+.auth-story {
+    padding: clamp(1.8rem, 3vw, 2.6rem);
+    border-radius: 32px;
+    border: 1px solid rgba(114, 146, 179, 0.18);
+    background:
+        radial-gradient(420px 240px at 100% 0%, rgba(255, 236, 190, 0.48), transparent 75%),
+        linear-gradient(145deg, rgba(255, 255, 255, 0.96), rgba(241, 248, 255, 0.9));
+    box-shadow: 0 22px 48px rgba(22, 71, 120, 0.1);
+}
+
+.hero-kicker,
+.section-kicker {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.38rem 0.85rem;
+    border-radius: 999px;
+    font-size: 0.82rem;
+    font-weight: 700;
+    color: #1657a1;
+    background: rgba(47, 128, 237, 0.08);
+}
+
+.auth-title {
+    margin: 0.95rem 0 0.9rem;
+    font-size: clamp(2rem, 4vw, 3.3rem);
+    line-height: 1.08;
+    color: #16324a;
+}
+
+.auth-subtitle {
+    margin-bottom: 1.4rem;
+    color: #567089;
+    font-size: 1.02rem;
+    line-height: 1.8;
+}
+
+.auth-highlight-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 1rem;
+    margin-bottom: 1.35rem;
+}
+
+.auth-highlight-card,
+.auth-guide-card,
+.auth-form-card,
+.auth-note {
+    border: 1px solid rgba(114, 146, 179, 0.18);
+    background: rgba(255, 255, 255, 0.84);
+    box-shadow: 0 18px 40px rgba(22, 71, 120, 0.08);
+}
+
+.auth-highlight-card {
+    display: flex;
+    gap: 0.85rem;
+    align-items: flex-start;
+    padding: 1rem;
+    border-radius: 20px;
+}
+
+.auth-highlight-card i,
+.auth-icon-wrap {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: #fff;
+    background: linear-gradient(135deg, #67c8ff, #2f80ed 68%, #1657a1);
+    box-shadow: 0 16px 32px rgba(47, 128, 237, 0.24);
+}
+
+.auth-highlight-card i {
+    width: 42px;
+    height: 42px;
+    border-radius: 14px;
+    font-size: 1.1rem;
+}
+
+.auth-highlight-card strong,
+.auth-guide-card h2 {
+    color: #16324a;
+}
+
+.auth-highlight-card p,
+.auth-panel-head p,
+.auth-note,
+.auth-subtitle,
+.auth-quicklist {
+    color: #567089;
+}
+
+.auth-highlight-card p,
+.auth-note {
+    margin-bottom: 0;
+    line-height: 1.7;
+}
+
+.auth-guide-card {
+    padding: 1.3rem 1.4rem;
+    border-radius: 24px;
+    margin-bottom: 1.2rem;
+}
+
+.section-heading h2 {
+    margin: 0.65rem 0 0;
+    font-size: 1.55rem;
+    line-height: 1.28;
+}
+
+.auth-quicklist {
+    margin: 1rem 0 0;
+    padding-left: 1.2rem;
+    line-height: 1.85;
+}
+
+.auth-link-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.85rem;
+}
+
+.auth-panel-head {
+    margin-bottom: 1rem;
+}
+
+.auth-panel-head h2 {
+    margin-bottom: 0.45rem;
+    color: #16324a;
+}
+
+.auth-icon-wrap {
+    width: 74px;
+    height: 74px;
+    margin: 0 auto 1rem;
+    border-radius: 24px;
+    font-size: 2rem;
+}
+
+.auth-form-card {
+    border-radius: 28px;
+    background: rgba(255, 255, 255, 0.9);
+}
+
+.auth-form-card .form-control {
+    min-height: 50px;
+    border-radius: 16px;
+}
+
+.auth-note {
+    display: flex;
+    gap: 0.6rem;
+    align-items: center;
+    margin-top: 1rem;
+    padding: 0.95rem 1rem;
+    border-radius: 18px;
+}
+
+.auth-note i {
+    color: #2f80ed;
+}
+
+@media (max-width: 991.98px) {
+    .auth-highlight-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+@media (max-width: 767.98px) {
+    .auth-story,
+    .auth-form-card {
+        padding: 1.25rem;
+        border-radius: 22px;
+    }
+
+    .auth-link-row .btn {
+        width: 100%;
+    }
+}
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container auth-shell auth-hero-shell">
+    <div class="row g-4 align-items-start">
+        <div class="col-lg-7 order-2 order-lg-1">
+            <section class="auth-story">
+                <span class="hero-kicker">登录后开始配置你的照护提醒</span>
+                <h1 class="auth-title">在天气真正影响家人之前，先替他们想一步。</h1>
+                <p class="auth-subtitle">
+                    登录后你可以配置老人所在地、查看风险提醒、复制沟通话术，并把后续反馈记录下来，
+                    让这个系统既有真实使用价值，也能沉淀试点数据。
+                </p>
+
+                <div class="auth-highlight-grid">
+                    <div class="auth-highlight-card">
+                        <i class="bi bi-geo-alt"></i>
+                        <div>
+                            <strong>多地配置</strong>
+                            <p>适合异地子女同时关注多位家人。</p>
+                        </div>
+                    </div>
+                    <div class="auth-highlight-card">
+                        <i class="bi bi-chat-left-text"></i>
+                        <div>
+                            <strong>沟通更省力</strong>
+                            <p>风险提醒能直接转成家人更容易理解的话术。</p>
+                        </div>
+                    </div>
+                    <div class="auth-highlight-card">
+                        <i class="bi bi-clipboard-check"></i>
+                        <div>
+                            <strong>结果可记录</strong>
+                            <p>提醒是否执行、后续感受都可以继续追踪。</p>
+                        </div>
+                    </div>
                 </div>
-            </div>
+
+                <div class="auth-guide-card">
+                    <div class="section-heading compact mb-0">
+                        <span class="section-kicker">首次使用</span>
+                        <h2>5 分钟打通一条最基础的预警闭环。</h2>
+                    </div>
+                    <ol class="auth-quicklist">
+                        <li>登录或注册进入系统。</li>
+                        <li>进入“照护工作台”，添加需要关注的家人。</li>
+                        <li>设置所在地和慢病类别。</li>
+                        <li>在“个人设置”填写推送信息并开启提醒。</li>
+                        <li>收到提醒后复制话术，并记录反馈。</li>
+                    </ol>
+                </div>
+
+                <div class="auth-link-row">
+                    <a class="btn btn-outline-secondary" href="{{ url_for('public.public_risk') }}">
+                        <i class="bi bi-thermometer-sun me-1"></i>风险说明
+                    </a>
+                    <a class="btn btn-outline-secondary" href="{{ url_for('public.transparency') }}">
+                        <i class="bi bi-shield-check me-1"></i>透明度
+                    </a>
+                    <a class="btn btn-outline-secondary" href="{{ url_for('public.role_entry') }}">
+                        <i class="bi bi-diagram-3 me-1"></i>角色入口
+                    </a>
+                    <a class="btn btn-outline-success" href="{{ url_for('public.wxoa_landing', from='wxoa') }}">
+                        <i class="bi bi-chat-left-text me-1"></i>公众号入口
+                    </a>
+                </div>
+            </section>
+        </div>
+
+        <div class="col-lg-5 col-xl-4 order-1 order-lg-2">
+            <section class="auth-panel">
+                <div class="auth-panel-head text-center">
+                    <div class="auth-icon-wrap">
+                        <i class="bi bi-shield-lock-fill"></i>
+                    </div>
+                    <h2>登录系统</h2>
+                    <p>继续使用你的照护与天气预警工具</p>
+                </div>
+
+                <div class="card auth-form-card shadow-sm">
+                    <div class="card-body p-4">
+                        <form method="POST" action="{{ url_for('public.login') }}">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                            {% if next %}
+                                <input type="hidden" name="next" value="{{ next }}">
+                            {% endif %}
+                            <div class="mb-3">
+                                <label for="username" class="form-label text-secondary">用户名</label>
+                                <input type="text" class="form-control" id="username" name="username" placeholder="请输入用户名" required autofocus>
+                            </div>
+                            <div class="mb-3">
+                                <label for="password" class="form-label text-secondary">密码</label>
+                                <input type="password" class="form-control" id="password" name="password" placeholder="请输入密码" required>
+                            </div>
+                            <div class="mb-3 d-flex justify-content-between align-items-center">
+                                <div class="form-check">
+                                    <input type="checkbox" class="form-check-input" id="remember" name="remember" value="1">
+                                    <label class="form-check-label small" for="remember">记住我（30 天）</label>
+                                </div>
+                            </div>
+                            <div class="d-grid mb-3">
+                                <button type="submit" class="btn btn-primary btn-lg">登录</button>
+                            </div>
+                            <div class="d-grid mb-3">
+                                <a href="{{ url_for('public.guest_login') }}" class="btn btn-outline-primary">游客体验</a>
+                            </div>
+                            <div class="text-center">
+                                <span class="text-secondary small">还没有账号？</span>
+                                <a href="{{ url_for('public.register') }}" class="text-decoration-none small fw-semibold">立即注册</a>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+
+                <div class="auth-note">
+                    <i class="bi bi-info-circle"></i>
+                    <span><strong>管理员账号：</strong>由系统配置创建</span>
+                </div>
+            </section>
         </div>
     </div>
 </div>
