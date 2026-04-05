@@ -1,5 +1,8 @@
 #!/bin/bash
 # 部署脚本 - 将项目部署到远程服务器
+set -e
+
+# 一旦远程命令或测试失败，立即中止部署，避免把“半成功”误判为完成。
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -48,6 +51,42 @@ use_expect() {
 echo "=== 开始部署 case-weather 项目 ==="
 
 SSH_OPTS="${SSH_OPTS:--o BatchMode=yes}"
+LOCAL_QWEATHER_KEY=""
+LOCAL_QWEATHER_API_BASE=""
+LOCAL_AMAP_KEY=""
+LOCAL_AMAP_JS_API_KEY=""
+LOCAL_AMAP_WEB_SERVICE_KEY=""
+LOCAL_AMAP_SECURITY_JS_CODE=""
+LOCAL_WXPUSHER_APP_TOKEN=""
+
+load_local_api_keys() {
+    [ -f "$ENV_FILE" ] || return 0
+    while IFS='=' read -r key value; do
+        case "$key" in
+            ''|\#*) continue ;;
+            QWEATHER_KEY|QWEATHER_API_BASE|AMAP_KEY|AMAP_JS_API_KEY|AMAP_WEB_SERVICE_KEY|AMAP_SECURITY_JS_CODE|WXPUSHER_APP_TOKEN)
+                value="${value%%#*}"
+                value="${value%"${value##*[![:space:]]}"}"
+                value="${value#"${value%%[![:space:]]*}"}"
+                if [[ "$value" == \"*\" && "$value" == *\" ]]; then
+                    value="${value:1:${#value}-2}"
+                fi
+                case "$key" in
+                    QWEATHER_KEY) LOCAL_QWEATHER_KEY="$value" ;;
+                    QWEATHER_API_BASE) LOCAL_QWEATHER_API_BASE="$value" ;;
+                    AMAP_KEY) LOCAL_AMAP_KEY="$value" ;;
+                    AMAP_JS_API_KEY) LOCAL_AMAP_JS_API_KEY="$value" ;;
+                    AMAP_WEB_SERVICE_KEY) LOCAL_AMAP_WEB_SERVICE_KEY="$value" ;;
+                    AMAP_SECURITY_JS_CODE) LOCAL_AMAP_SECURITY_JS_CODE="$value" ;;
+                    WXPUSHER_APP_TOKEN) LOCAL_WXPUSHER_APP_TOKEN="$value" ;;
+                esac
+                ;;
+        esac
+    done < "$ENV_FILE"
+}
+
+load_local_api_keys
+
 # 使用 expect 执行远程命令的函数
 remote_exec() {
     if use_sshpass && [ -n "$SSHPASS" ]; then
@@ -156,11 +195,43 @@ REDIS_URL=redis://127.0.0.1:6379/0
 RATE_LIMIT_STORAGE_URI=redis://127.0.0.1:6379/0
 QWEATHER_KEY=
 AMAP_KEY=
+AMAP_JS_API_KEY=
+AMAP_WEB_SERVICE_KEY=
+AMAP_SECURITY_JS_CODE=
 WXPUSHER_APP_TOKEN=
 WXPUSHER_API_BASE=https://wxpusher.zjiecode.com/api
 PUBLIC_BASE_URL=
 EOF
 echo '已创建新的 .env 文件'; else echo '.env 文件已存在，跳过创建'; fi"
+
+if [ -n "$LOCAL_QWEATHER_KEY" ]; then
+    remote_exec "grep -q '^QWEATHER_KEY=' $PROJECT_DIR/.env || echo 'QWEATHER_KEY=' >> $PROJECT_DIR/.env"
+    remote_exec "if grep -q '^QWEATHER_KEY=$' $PROJECT_DIR/.env; then sed -i 's|^QWEATHER_KEY=$|QWEATHER_KEY=$LOCAL_QWEATHER_KEY|' $PROJECT_DIR/.env; fi"
+fi
+if [ -n "$LOCAL_QWEATHER_API_BASE" ]; then
+    remote_exec "grep -q '^QWEATHER_API_BASE=' $PROJECT_DIR/.env || echo 'QWEATHER_API_BASE=' >> $PROJECT_DIR/.env"
+    remote_exec "if grep -q '^QWEATHER_API_BASE=$' $PROJECT_DIR/.env; then sed -i 's|^QWEATHER_API_BASE=$|QWEATHER_API_BASE=$LOCAL_QWEATHER_API_BASE|' $PROJECT_DIR/.env; fi"
+fi
+if [ -n "$LOCAL_AMAP_KEY" ]; then
+    remote_exec "grep -q '^AMAP_KEY=' $PROJECT_DIR/.env || echo 'AMAP_KEY=' >> $PROJECT_DIR/.env"
+    remote_exec "if grep -q '^AMAP_KEY=$' $PROJECT_DIR/.env; then sed -i 's|^AMAP_KEY=$|AMAP_KEY=$LOCAL_AMAP_KEY|' $PROJECT_DIR/.env; fi"
+fi
+if [ -n "$LOCAL_AMAP_JS_API_KEY" ]; then
+    remote_exec "grep -q '^AMAP_JS_API_KEY=' $PROJECT_DIR/.env || echo 'AMAP_JS_API_KEY=' >> $PROJECT_DIR/.env"
+    remote_exec "if grep -q '^AMAP_JS_API_KEY=$' $PROJECT_DIR/.env; then sed -i 's|^AMAP_JS_API_KEY=$|AMAP_JS_API_KEY=$LOCAL_AMAP_JS_API_KEY|' $PROJECT_DIR/.env; fi"
+fi
+if [ -n "$LOCAL_AMAP_WEB_SERVICE_KEY" ]; then
+    remote_exec "grep -q '^AMAP_WEB_SERVICE_KEY=' $PROJECT_DIR/.env || echo 'AMAP_WEB_SERVICE_KEY=' >> $PROJECT_DIR/.env"
+    remote_exec "if grep -q '^AMAP_WEB_SERVICE_KEY=$' $PROJECT_DIR/.env; then sed -i 's|^AMAP_WEB_SERVICE_KEY=$|AMAP_WEB_SERVICE_KEY=$LOCAL_AMAP_WEB_SERVICE_KEY|' $PROJECT_DIR/.env; fi"
+fi
+if [ -n "$LOCAL_AMAP_SECURITY_JS_CODE" ]; then
+    remote_exec "grep -q '^AMAP_SECURITY_JS_CODE=' $PROJECT_DIR/.env || echo 'AMAP_SECURITY_JS_CODE=' >> $PROJECT_DIR/.env"
+    remote_exec "if grep -q '^AMAP_SECURITY_JS_CODE=$' $PROJECT_DIR/.env; then sed -i 's|^AMAP_SECURITY_JS_CODE=$|AMAP_SECURITY_JS_CODE=$LOCAL_AMAP_SECURITY_JS_CODE|' $PROJECT_DIR/.env; fi"
+fi
+if [ -n "$LOCAL_WXPUSHER_APP_TOKEN" ]; then
+    remote_exec "grep -q '^WXPUSHER_APP_TOKEN=' $PROJECT_DIR/.env || echo 'WXPUSHER_APP_TOKEN=' >> $PROJECT_DIR/.env"
+    remote_exec "if grep -q '^WXPUSHER_APP_TOKEN=$' $PROJECT_DIR/.env; then sed -i 's|^WXPUSHER_APP_TOKEN=$|WXPUSHER_APP_TOKEN=$LOCAL_WXPUSHER_APP_TOKEN|' $PROJECT_DIR/.env; fi"
+fi
 
 echo ""
 echo "步骤7: 创建 systemd 服务..."
