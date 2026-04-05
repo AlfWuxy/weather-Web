@@ -33,15 +33,40 @@ def setup_test_environment():
         'DATABASE_URI': f'sqlite:///{temp_db_path}',
         'SECRET_KEY': 'test-secret-key-for-pytest',
         'DEBUG': 'true',
+        'REDIS_URL': '',  # 测试中禁用 Redis，避免与本地服务互相影响
+        'WEATHER_CACHE_REDIS_URL': '',
+        'RATE_LIMIT_STORAGE_URI': 'memory://',
+        'RATELIMIT_STORAGE_URI': 'memory://',
         'QWEATHER_KEY': '',  # 测试中禁用外部 API
         'AMAP_KEY': '',
+        'AMAP_JS_API_KEY': '',
+        'AMAP_WEB_SERVICE_KEY': '',
+        'AMAP_SECURITY_JS_CODE': '',
         'SILICONFLOW_API_KEY': '',
         'DEMO_MODE': '1',  # 启用演示模式，使用 mock 数据
+    }
+
+    # 强制清空可能来自开发环境的真实密钥，保证测试隔离。
+    forced_test_env = {
+        'REDIS_URL': '',
+        'WEATHER_CACHE_REDIS_URL': '',
+        'RATE_LIMIT_STORAGE_URI': 'memory://',
+        'RATELIMIT_STORAGE_URI': 'memory://',
+        'QWEATHER_KEY': '',
+        'AMAP_KEY': '',
+        'AMAP_JS_API_KEY': '',
+        'AMAP_WEB_SERVICE_KEY': '',
+        'AMAP_SECURITY_JS_CODE': '',
+        'SILICONFLOW_API_KEY': '',
+        'DEMO_MODE': '1',
     }
 
     for key, value in test_env.items():
         if key not in os.environ:
             os.environ[key] = value
+
+    for key, value in forced_test_env.items():
+        os.environ[key] = value
 
     yield temp_db_path
 

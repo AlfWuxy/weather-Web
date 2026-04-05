@@ -203,6 +203,11 @@ def configure_app(app, logger):
     qweather_key = _normalized_env_value('QWEATHER_KEY', '')
     qweather_api_base = _normalized_env_value('QWEATHER_API_BASE', QWEATHER_API_BASE_DEFAULT)
     amap_key = _normalized_env_value('AMAP_KEY', '')
+    amap_js_api_key = _normalized_env_value('AMAP_JS_API_KEY', amap_key)
+    amap_web_service_key = _normalized_env_value(
+        'AMAP_WEB_SERVICE_KEY',
+        _normalized_env_value('AMAP_WEB_KEY', amap_key)
+    )
     amap_security_js_code = _normalized_env_value('AMAP_SECURITY_JS_CODE', '')
     siliconflow_key = _normalized_env_value('SILICONFLOW_API_KEY', '')
     siliconflow_base = _normalized_env_value('SILICONFLOW_API_BASE', SILICONFLOW_API_BASE_DEFAULT)
@@ -233,7 +238,10 @@ def configure_app(app, logger):
     app.config['SECRET_KEY'] = secret_key
     app.config['QWEATHER_KEY'] = qweather_key
     app.config['QWEATHER_API_BASE'] = qweather_api_base
-    app.config['AMAP_KEY'] = amap_key
+    # 兼容旧配置：AMAP_KEY 继续作为前端地图 Key 的别名。
+    app.config['AMAP_KEY'] = amap_js_api_key
+    app.config['AMAP_JS_API_KEY'] = amap_js_api_key
+    app.config['AMAP_WEB_SERVICE_KEY'] = amap_web_service_key
     app.config['AMAP_SECURITY_JS_CODE'] = amap_security_js_code
     app.config['SILICONFLOW_API_KEY'] = siliconflow_key
     app.config['SILICONFLOW_API_BASE'] = siliconflow_base
@@ -355,8 +363,10 @@ def configure_app(app, logger):
 
     if not qweather_key:
         logger.warning("QWEATHER_KEY 未配置，天气API将无法使用（可回退 Open-Meteo）。")
-    if not amap_key:
-        logger.warning("AMAP_KEY 未配置，地图API将无法使用")
+    if not amap_js_api_key:
+        logger.warning("AMAP_JS_API_KEY 未配置，地图API将无法使用（兼容回退 AMAP_KEY）。")
+    if not amap_web_service_key:
+        logger.warning("AMAP_WEB_SERVICE_KEY 未配置，地址地理编码将回退默认地点（兼容回退 AMAP_KEY）。")
     if not amap_security_js_code:
         logger.warning("AMAP_SECURITY_JS_CODE 未配置，地图安全密钥将无法使用")
     if not siliconflow_key:

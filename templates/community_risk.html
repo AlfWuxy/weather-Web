@@ -9,6 +9,18 @@
         border-radius: 8px;
         border: 1px solid var(--border-color);
     }
+    .map-fallback {
+        min-height: 600px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 24px;
+        border-radius: 8px;
+        border: 1px solid var(--border-color);
+        background: linear-gradient(135deg, #f8fbff 0%, #eef5ff 100%);
+        color: var(--bs-secondary-color, #6c757d);
+        text-align: center;
+    }
     .amap-marker {
         cursor: pointer;
     }
@@ -34,7 +46,16 @@
                     <h5 class="mb-0"><i class="bi bi-geo-alt"></i> 风险分布地图</h5>
                 </div>
                 <div class="card-body p-3">
+                    {% if amap_key|default('', true) %}
                     <div id="map"></div>
+                    {% else %}
+                    <div class="map-fallback">
+                        <div>
+                            <div class="fw-semibold mb-2">未配置地图 Key</div>
+                            <div class="small">地图已隐藏，右侧分析结果仍可正常查看。</div>
+                        </div>
+                    </div>
+                    {% endif %}
                 </div>
             </div>
         </div>
@@ -110,31 +131,37 @@
 {% endblock %}
 
 {% block extra_js %}
-{% if amap_security_js_code %}
+{% if amap_key|default('', true) and amap_service_host|default('', true) %}
 <script type="text/javascript">
     window._AMapSecurityConfig = {
-        securityJsCode: {{ amap_security_js_code|tojson }}
+        serviceHost: {{ amap_service_host|tojson }}
     };
 </script>
 {% endif %}
+{% if amap_key|default('', true) %}
 <script src="https://webapi.amap.com/maps?v=2.0&key={{ amap_key|urlencode }}&plugin=AMap.Scale,AMap.ToolBar"></script>
+{% endif %}
 <script>
 // 社区数据
 var communities = {{ communities|tojson|safe }};
+var amapEnabled = {{ (amap_key|default('', true))|tojson }};
 
 // 初始化高德地图（都昌县中心 - 江西省九江市）
-var map = new AMap.Map('map', {
-    zoom: 12,
-    center: [116.2, 29.27],  // 都昌县坐标
-    mapStyle: 'amap://styles/normal',
-    viewMode: '2D'
-});
+var map = null;
+if (amapEnabled && typeof AMap !== 'undefined') {
+    map = new AMap.Map('map', {
+        zoom: 12,
+        center: [116.2, 29.27],  // 都昌县坐标
+        mapStyle: 'amap://styles/normal',
+        viewMode: '2D'
+    });
 
-// 异步加载控件插件
-AMap.plugin(['AMap.Scale', 'AMap.ToolBar'], function() {
-    map.addControl(new AMap.Scale());
-    map.addControl(new AMap.ToolBar());
-});
+    // 异步加载控件插件
+    AMap.plugin(['AMap.Scale', 'AMap.ToolBar'], function() {
+        map.addControl(new AMap.Scale());
+        map.addControl(new AMap.ToolBar());
+    });
+}
 
 // 根据风险等级获取颜色
 function getRiskColor(riskLevel) {
@@ -214,6 +241,11 @@ function getBoundaryRadius(name) {
 }
 
 function clearBaseMarkers() {
+    if (!map) {
+        markers = [];
+        baseMarkersCleared = true;
+        return;
+    }
     if (baseMarkersCleared) {
         return;
     }
@@ -600,68 +632,75 @@ function buildRiskInfoContent(riskItem, bgColor) {
 }
 
 // 添加初始社区标记（如果有坐标）
-communities.forEach(function(community, index) {
-    var lat = toNumber(community && community.latitude, null);
-    var lng = toNumber(community && community.longitude, null);
-    if (Number.isFinite(lat) && Number.isFinite(lng)) {
-        var markerColor = getRiskColor(community.risk_level);
-        
-        // 创建圆形覆盖物（表示风险范围）
-        var circle = new AMap.Circle({
-            center: [lng, lat],
-            radius: getBoundaryRadius(community.name),
-            strokeColor: markerColor,
-            strokeWeight: 2,
-            strokeOpacity: 0.8,
-            fillColor: markerColor,
-            fillOpacity: 0.25,
-            zIndex: 50
-        });
-        
-        // 创建文字标注
-        var text = new AMap.Text({
-            text: community.name,
-            position: [lng, lat],
-            style: {
-                'background-color': markerColor,
-                'border': '2px solid white',
-                'border-radius': '15px',
-                'color': 'white',
-                'font-size': '12px',
-                'font-weight': 'bold',
-                'padding': '4px 10px',
-                'box-shadow': '0 2px 6px rgba(0,0,0,0.3)'
-            },
-            offset: new AMap.Pixel(-30, -15)
-        });
-        
-        // 创建信息窗体内容
-        var infoContent = buildCommunityInfoContent(community, markerColor);
-        var infoWindow = createInfoWindowWithContent({
-            isCustom: false,
-            offset: new AMap.Pixel(0, -25)
-        }, infoContent);
-        
-        text.on('click', function(e) {
-            infoWindow.open(map, [lng, lat]);
-        });
-        
-        circle.on('click', function(e) {
-            infoWindow.open(map, [lng, lat]);
-        });
-        
-        map.add([circle, text]);
-        markers[index] = {
-            circle: circle,
-            text: text,
-            infoWindow: infoWindow,
-            community: community
-        };
-    }
-});
+if (map) {
+    communities.forEach(function(community, index) {
+        var lat = toNumber(community && community.latitude, null);
+        var lng = toNumber(community && community.longitude, null);
+        if (Number.isFinite(lat) && Number.isFinite(lng)) {
+            var markerColor = getRiskColor(community.risk_level);
+
+            // 创建圆形覆盖物（表示风险范围）
+            var circle = new AMap.Circle({
+                center: [lng, lat],
+                radius: getBoundaryRadius(community.name),
+                strokeColor: markerColor,
+                strokeWeight: 2,
+                strokeOpacity: 0.8,
+                fillColor: markerColor,
+                fillOpacity: 0.25,
+                zIndex: 50
+            });
+
+            // 创建文字标注
+            var text = new AMap.Text({
+                text: community.name,
+                position: [lng, lat],
+                style: {
+                    'background-color': markerColor,
+                    'border': '2px solid white',
+                    'border-radius': '15px',
+                    'color': 'white',
+                    'font-size': '12px',
+                    'font-weight': 'bold',
+                    'padding': '4px 10px',
+                    'box-shadow': '0 2px 6px rgba(0,0,0,0.3)'
+                },
+                offset: new AMap.Pixel(-30, -15)
+            });
+
+            // 创建信息窗体内容
+            var infoContent = buildCommunityInfoContent(community, markerColor);
+            var infoWindow = createInfoWindowWithContent({
+                isCustom: false,
+                offset: new AMap.Pixel(0, -25)
+            }, infoContent);
+
+            text.on('click', function(e) {
+                infoWindow.open(map, [lng, lat]);
+            });
+
+            circle.on('click', function(e) {
+                infoWindow.open(map, [lng, lat]);
+            });
+
+            map.add([circle, text]);
+            markers[index] = {
+                circle: circle,
+                text: text,
+                infoWindow: infoWindow,
+                community: community
+            };
+        }
+    });
+}
 
 // 添加风险数据标记到地图
 function addRiskMarkers(rankings) {
+    if (!map) {
+        riskMarkers = [];
+        riskMarkerCoords = {};
+        return;
+    }
     // 清除旧标记
     riskMarkers.forEach(function(item) {
         map.remove(item.circle);
@@ -741,6 +780,9 @@ function addRiskMarkers(rankings) {
 document.querySelectorAll('#community-list .list-group-item').forEach(function(item, index) {
     item.addEventListener('click', function(e) {
         e.preventDefault();
+        if (!map) {
+            return;
+        }
         var lat = toNumber(this.dataset.lat, null);
         var lng = toNumber(this.dataset.lng, null);
         if (Number.isFinite(lat) && Number.isFinite(lng)) {
@@ -754,12 +796,16 @@ document.querySelectorAll('#community-list .list-group-item').forEach(function(i
     });
 });
 
-// 地图加载完成提示
-map.on('complete', function() {
-    console.log('地图加载完成');
-    // 自动加载风险地图数据
+if (map) {
+    // 地图加载完成提示
+    map.on('complete', function() {
+        console.log('地图加载完成');
+        // 自动加载风险地图数据
+        loadRiskMap();
+    });
+} else {
     loadRiskMap();
-});
+}
 
 // 加载实时风险地图数据
 function loadRiskMap() {
@@ -913,6 +959,9 @@ function updateRiskDisplay(data) {
 
 // 点击列表项聚焦到对应社区
 function focusOnCommunity(communityName, index) {
+    if (!map) {
+        return;
+    }
     var coords = null;
     if (riskMarkers[index] && riskMarkers[index].coords) {
         coords = riskMarkers[index].coords;

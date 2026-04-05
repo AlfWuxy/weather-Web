@@ -41,7 +41,7 @@ def test_location_resolver_amap_mock_and_cache(app, db_session, monkeypatch):
     monkeypatch.setattr("services.location_resolver.requests.get", fake_get)
 
     with app.app_context():
-        app.config["AMAP_KEY"] = "fake-key"
+        app.config["AMAP_WEB_SERVICE_KEY"] = "fake-key"
         app.config["CITY_LOCATION_MAP"] = {}
 
         result1 = resolve_location("杭州市测试地")

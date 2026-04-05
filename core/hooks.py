@@ -6,7 +6,7 @@ import secrets
 import time
 from datetime import datetime
 
-from flask import g, request, session
+from flask import g, request, session, url_for as flask_url_for
 from flask_login import current_user
 
 from core.security import csrf_failure_response, generate_csrf_token, validate_csrf
@@ -132,14 +132,14 @@ def register_hooks(app):
         map_paths = {'/community-risk', '/cooling'}
         needs_map_keys = request.endpoint in map_endpoints or request.path in map_paths
         if needs_map_keys:
-            amap_key = app.config.get('AMAP_KEY', '')
+            amap_key = app.config.get('AMAP_JS_API_KEY') or app.config.get('AMAP_KEY', '')
             amap_code = app.config.get('AMAP_SECURITY_JS_CODE', '')
             if _valid_key_length(amap_key):
                 payload['amap_key'] = amap_key
             elif amap_key:
-                logger.warning("Invalid AMAP_KEY length; skipping template injection")
+                logger.warning("Invalid AMAP_JS_API_KEY length; skipping template injection")
             if _valid_key_length(amap_code):
-                payload['amap_security_js_code'] = amap_code
+                payload['amap_service_host'] = flask_url_for('public.amap_service_proxy_root').rstrip('/')
             elif amap_code:
                 logger.warning("Invalid AMAP_SECURITY_JS_CODE length; skipping template injection")
         return payload

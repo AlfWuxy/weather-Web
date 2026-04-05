@@ -835,8 +835,10 @@ def render_cooling_resources_page(community, resource_type, has_ac_raw, is_acces
                 'lng': item.longitude
             })
 
-    amap_key = current_app.config.get('AMAP_KEY')
-    amap_security_js_code = current_app.config.get('AMAP_SECURITY_JS_CODE')
+    amap_key = current_app.config.get('AMAP_JS_API_KEY') or current_app.config.get('AMAP_KEY')
+    amap_service_host = ''
+    if amap_key and current_app.config.get('AMAP_SECURITY_JS_CODE'):
+        amap_service_host = url_for('public.amap_service_proxy_root').rstrip('/')
     return render_template(
         'cooling.html',
         resources_by_community=grouped,
@@ -850,7 +852,7 @@ def render_cooling_resources_page(community, resource_type, has_ac_raw, is_acces
         open_only=open_only_flag,
         map_points=map_points,
         amap_key=amap_key,
-        amap_security_js_code=amap_security_js_code
+        amap_service_host=amap_service_host
     )
 
 

@@ -100,7 +100,11 @@ def resolve_location(query, ttl_days=30):
         }
 
     # 4) AMap geocode
-    amap_key = current_app.config.get('AMAP_KEY') or ''
+    amap_key = (
+        current_app.config.get('AMAP_WEB_SERVICE_KEY')
+        or current_app.config.get('AMAP_KEY')
+        or ''
+    )
     if not amap_key:
         default_location = current_app.config.get('DEFAULT_LOCATION', '116.20,29.27')
         return {
