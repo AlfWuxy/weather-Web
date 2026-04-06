@@ -1,12 +1,13 @@
 # -*- coding: utf-8 -*-
 """Request/response hooks and template helpers."""
+import os
 import json
 import logging
 import secrets
 import time
 from datetime import datetime
 
-from flask import g, request, session
+from flask import g, request, session, url_for as flask_url_for
 from flask_login import current_user
 
 from core.security import csrf_failure_response, generate_csrf_token, validate_csrf
@@ -111,12 +112,33 @@ def register_hooks(app):
             return []
         return parsed
 
+    def _versioned_static_url_for(endpoint, **values):
+        """Append a cache-busting `v=` parameter for static assets.
+
+        This allows us to set longer cache headers on /static without risking
+        stale assets after deployments.
+        """
+        if endpoint == 'static':
+            filename = values.get('filename')
+            if filename:
+                try:
+                    file_path = os.path.join(app.static_folder, filename)
+                    values['v'] = int(os.stat(file_path).st_mtime)
+                except OSError:
+                    # If file missing (e.g. optional assets), fall back to plain url_for.
+                    pass
+        return flask_url_for(endpoint, **values)
+
+    @app.context_processor
+    def override_url_for():
+        return dict(url_for=_versioned_static_url_for)
+
     @app.context_processor
     def inject_now():
         """注入当前时间到模板"""
         current_location = normalize_location_name(get_user_location_value())
         payload = {
-            'now': datetime.now,
+            'now': lambda: datetime.now(tz=__import__('zoneinfo').ZoneInfo('Asia/Shanghai')),
             'csrf_token': generate_csrf_token,
             'current_location': current_location,
             'location_options': get_location_options(),
@@ -132,16 +154,31 @@ def register_hooks(app):
         map_paths = {'/community-risk', '/cooling'}
         needs_map_keys = request.endpoint in map_endpoints or request.path in map_paths
         if needs_map_keys:
-            amap_key = app.config.get('AMAP_KEY', '')
+            amap_key = app.config.get('AMAP_JS_API_KEY') or app.config.get('AMAP_KEY', '')
             amap_code = app.config.get('AMAP_SECURITY_JS_CODE', '')
             if _valid_key_length(amap_key):
                 payload['amap_key'] = amap_key
             elif amap_key:
-                logger.warning("Invalid AMAP_KEY length; skipping template injection")
+                logger.warning("Invalid AMAP_JS_API_KEY length; skipping template injection")
             if _valid_key_length(amap_code):
-                payload['amap_security_js_code'] = amap_code
+                payload['amap_service_host'] = flask_url_for('public.amap_service_proxy_root').rstrip('/')
             elif amap_code:
                 logger.warning("Invalid AMAP_SECURITY_JS_CODE length; skipping template injection")
         return payload
 
     app.jinja_env.globals['csrf_token'] = generate_csrf_token
+
+    static_max_age = app.config.get('STATIC_CACHE_MAX_AGE_SECONDS', 0)
+    try:
+        static_max_age = int(static_max_age) if static_max_age is not None else 0
+    except (TypeError, ValueError):
+        static_max_age = 0
+
+    if static_max_age > 0:
+        def _get_send_file_max_age(filename):  # noqa: ANN001 - Flask hook signature
+            # Apply only to Flask's built-in /static endpoint.
+            if (request.path or '').startswith('/static/'):
+                return static_max_age
+            return None
+        # Instance override (Flask uses this hook when serving static and send_file).
+        app.get_send_file_max_age = _get_send_file_max_age

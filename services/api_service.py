@@ -13,13 +13,14 @@ from core.time_utils import now_local
 from core.weather import (
     ensure_user_location_valid,
     get_forecast_with_cache,
+    get_weather_fetcher,
     get_weather_with_cache,
     normalize_location_name
 )
 from core.db_models import Community, FamilyMember, Pair
 from core.extensions import db
 from core.usage import log_usage_event
-from utils.parsers import safe_json_loads
+from utils.parsers import parse_date, parse_int, safe_json_loads
 from utils.error_handlers import handle_api_exception
 from utils.validators import sanitize_input
 
@@ -48,6 +49,29 @@ _PILOT_EVENT_TYPES = {
 }
 
 
+def _build_community_risk_weather_signature(weather_data):
+    """提取会影响社区风险结果的关键天气字段。"""
+    if not isinstance(weather_data, dict):
+        return {}
+
+    signature = {}
+    for key in (
+        'temperature',
+        'temperature_max',
+        'temperature_min',
+        'humidity',
+        'aqi',
+        'weather_condition',
+        'wind_speed',
+    ):
+        value = weather_data.get(key)
+        if isinstance(value, float):
+            signature[key] = round(value, 3)
+        elif value is not None:
+            signature[key] = value
+    return signature
+
+
 def _handle_api_error(exc, context_msg, include_details=None):
     """统一处理API异常（兼容旧调用）"""
     return handle_api_exception(
@@ -61,6 +85,51 @@ def _handle_api_error(exc, context_msg, include_details=None):
 def _api_csrf_protect():
     if request.method == 'POST' and not validate_csrf():
         return csrf_failure_response()
+
+
+def _normalize_sunshine_seconds(payload):
+    """Normalize sunshine duration to seconds.
+
+    Accepted input fields (API contract):
+    - sunshine_duration_seconds (preferred)
+    - sunshine_duration_hours
+
+    Legacy compatibility:
+    - sunshine_hours is treated as *hours* only.
+    - values > 24 are considered ambiguous and rejected to avoid unit confusion.
+    """
+    default_seconds = 20000.0
+    if not isinstance(payload, dict):
+        return default_seconds
+
+    if payload.get('sunshine_duration_seconds') is not None:
+        raw = payload.get('sunshine_duration_seconds')
+        as_hours = False
+    elif payload.get('sunshine_duration_hours') is not None:
+        raw = payload.get('sunshine_duration_hours')
+        as_hours = True
+    elif payload.get('sunshine_hours') is not None:
+        raw = payload.get('sunshine_hours')
+        as_hours = True
+    else:
+        raw = default_seconds
+        as_hours = False
+
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return default_seconds
+
+    if as_hours:
+        if value > 24.0:
+            raise ValueError(
+                "sunshine_hours 已废弃且存在单位歧义；请改用 "
+                "sunshine_duration_seconds 或 sunshine_duration_hours"
+            )
+        value *= 3600.0
+
+    value = max(0.0, min(value, 86400.0))
+    return value
 
 
 # ======================== 天气/社区基础API ========================
@@ -93,6 +162,33 @@ def _api_current_weather():
         })
 
     return jsonify({'success': False, 'message': '暂无天气数据'})
+
+
+def _api_weather_nowcast():
+    """获取未来小时级降水时间轴（短临预报）"""
+    location = sanitize_input(request.args.get('location'), max_length=100)
+    if location:
+        location = normalize_location_name(location)
+    else:
+        location = ensure_user_location_valid()
+
+    try:
+        hours = int(request.args.get('hours', 6))
+    except Exception:
+        hours = 6
+    hours = max(1, min(hours, 24))
+
+    weather_service = get_weather_fetcher()
+    if weather_service is None or not hasattr(weather_service, 'get_short_term_nowcast'):
+        return jsonify({'success': False, 'message': '短临服务未启用', 'data': {'available': False, 'timeline': []}})
+
+    try:
+        nowcast = weather_service.get_short_term_nowcast(location, hours=hours)
+    except (ValueError, TypeError, RuntimeError, OSError) as exc:
+        logger.warning("Nowcast fetch failed: %s", exc)
+        nowcast = {'available': False, 'timeline': [], 'reason': 'fetch_failed'}
+
+    return jsonify({'success': True, 'data': nowcast})
 
 
 def api_v1_current_weather():
@@ -165,6 +261,7 @@ def _api_ml_predict():
             'gender': data.get('gender') or current_user.gender or '男'
         }
 
+        sunshine_seconds = _normalize_sunshine_seconds(data)
         # 获取天气信息（扩展版本，支持更多天气因素）
         weather_info = {
             # 温度相关
@@ -179,8 +276,9 @@ def _api_ml_predict():
             'wind_speed': data.get('wind_speed', 2.5),
             # 降水量
             'precipitation': data.get('precipitation', 0),
-            # 日照
-            'sunshine_hours': data.get('sunshine_hours', 20000),
+            # 训练特征沿用 sunshine_hours 字段名，但单位统一为秒
+            'sunshine_hours': sunshine_seconds,
+            'sunshine_duration_seconds': sunshine_seconds,
             # 空气质量
             'aqi': data.get('aqi', 50),
             # 时间
@@ -246,6 +344,7 @@ def _api_ml_predict_community():
                 'population': data.get('population', 100)
             }
 
+        sunshine_seconds = _normalize_sunshine_seconds(data)
         # 获取天气信息（扩展版本）
         weather_info = {
             # 温度相关
@@ -260,6 +359,9 @@ def _api_ml_predict_community():
             'wind_speed': data.get('wind_speed', 2.5),
             # 降水量
             'precipitation': data.get('precipitation', 0),
+            # 日照时长（秒）
+            'sunshine_hours': sunshine_seconds,
+            'sunshine_duration_seconds': sunshine_seconds,
             # 空气质量
             'aqi': data.get('aqi', 50),
             # 时间
@@ -404,19 +506,28 @@ def _api_forecast_7day():
         forecast_service = get_forecast_service()
 
         data = request.get_json() or {}
+        forecast_context = {}
 
         # 获取天气预报温度
         if 'forecast_temps' in data and data['forecast_temps']:
             forecast_temps = data['forecast_temps']
             # 验证并转换温度数据
             try:
-                forecast_temps = [float(t) for t in forecast_temps[:7]]  # 最多7天
-                if len(forecast_temps) < 7:
-                    # 补齐到7天
-                    last_temp = forecast_temps[-1] if forecast_temps else 15.0
-                    forecast_temps.extend([last_temp] * (7 - len(forecast_temps)))
+                if not isinstance(forecast_temps, list):
+                    raise TypeError('forecast_temps must be a list')
+                forecast_temps = [float(t) for t in forecast_temps]
             except (TypeError, ValueError):
-                forecast_temps = [15.0] * 7
+                return jsonify({
+                    'success': False,
+                    'error': 'invalid_forecast_temps',
+                    'message': 'forecast_temps 必须是 7 个数字'
+                }), 400
+            if len(forecast_temps) != 7:
+                return jsonify({
+                    'success': False,
+                    'error': 'invalid_forecast_temps_length',
+                    'message': 'forecast_temps 必须提供完整 7 天'
+                }), 400
         else:
             # 从天气API获取预报（带缓存）
             city = sanitize_input(data.get('city'), max_length=100)
@@ -426,16 +537,52 @@ def _api_forecast_7day():
                 city = ensure_user_location_valid()
             try:
                 weather_forecast, _ = get_forecast_with_cache(city, days=7)
-                forecast_temps = [
-                    (f.get('temperature_max', 20) + f.get('temperature_min', 10)) / 2
-                    for f in weather_forecast
-                ]
+                # 当前空气质量作为复合暴露的背景场（小时级无稳定AQI预报时）
+                current_weather, _ = get_weather_with_cache(city)
+                forecast_context = {
+                    'aqi': current_weather.get('aqi') if isinstance(current_weather, dict) else None,
+                    'pm25': current_weather.get('pm25') if isinstance(current_weather, dict) else None
+                }
+                forecast_temps = []
+                for f in weather_forecast:
+                    if not isinstance(f, dict):
+                        continue
+                    forecast_temps.append({
+                        'temperature': (
+                            f.get('temperature_ensemble_p50')
+                            if f.get('temperature_ensemble_p50') is not None
+                            else (f.get('temperature_max', 20) + f.get('temperature_min', 10)) / 2
+                        ),
+                        'temperature_ensemble_std': f.get('temperature_ensemble_std'),
+                        'model_count': f.get('model_count'),
+                        'model_names': f.get('model_names'),
+                        'predictability_score': f.get('predictability_score'),
+                        'data_source': f.get('data_source', ''),
+                        'temperature_ensemble_p10': f.get('temperature_ensemble_p10'),
+                        'temperature_ensemble_p90': f.get('temperature_ensemble_p90'),
+                        'humidity': f.get('humidity'),
+                        'precip_probability': f.get('precip_probability')
+                    })
             except (ValueError, TypeError, RuntimeError, OSError) as exc:
                 logger.warning("Forecast cache unavailable: %s", exc)
-                forecast_temps = [15.0] * 7
+                return jsonify({
+                    'success': False,
+                    'error': 'forecast_unavailable',
+                    'message': '天气预报暂不可用，请稍后重试'
+                }), 503
+            if len(forecast_temps) != 7:
+                logger.warning("Forecast data incomplete for city=%s, count=%s", city, len(forecast_temps))
+                return jsonify({
+                    'success': False,
+                    'error': 'forecast_data_incomplete',
+                    'message': '天气预报数据不完整，暂无法生成7天预测'
+                }), 503
 
         # 生成7天预测
-        forecasts, summary = forecast_service.generate_7day_forecast(forecast_temps)
+        forecasts, summary = forecast_service.generate_7day_forecast(
+            forecast_temps,
+            context=forecast_context
+        )
 
         return jsonify({
             'success': True,
@@ -501,10 +648,16 @@ def _api_community_risk_map_v2():
     """获取社区风险地图数据（改进版）"""
     try:
         from services.community_risk_service import get_community_service
+        from services.community_risk_cache import get_or_build_community_risk_result
 
         community_service = get_community_service()
 
         data = request.get_json() or {}
+        target_date = parse_date(data.get('analysis_date')) or parse_date(data.get('target_date'))
+        window_days = parse_int(data.get('window_days'), 30)
+        disease_filter = sanitize_input(data.get('disease'), max_length=100)
+        if disease_filter in ('', 'all', '全部'):
+            disease_filter = ''
 
         # 获取天气数据
         if 'weather' in data and isinstance(data['weather'], dict):
@@ -524,14 +677,35 @@ def _api_community_risk_map_v2():
                 logger.warning("Community risk map weather fallback: %s", exc)
                 weather_data = {'temperature': 20, 'humidity': 60, 'aqi': 50}
 
-        # 生成风险地图
-        result = community_service.generate_community_risk_map(weather_data)
+        cache_params = {
+            'version': 1,
+            'analysis_date': target_date.isoformat() if target_date else '',
+            'window_days': int(window_days or 30),
+            'disease_filter': disease_filter or '',
+            'weather': _build_community_risk_weather_signature(weather_data),
+        }
+
+        def _build_result():
+            return community_service.generate_community_risk_map(
+                weather_data,
+                target_date=target_date,
+                window_days=window_days,
+                disease_filter=disease_filter
+            )
+
+        result, cache_hit = get_or_build_community_risk_result(cache_params, _build_result)
 
         return jsonify({
             'success': True,
+            'cache_hit': bool(cache_hit),
             'map_data': result.get('map_data', {}),
             'rankings': result.get('rankings', []),
             'summary': result.get('summary', {}),
+            'macro_weather': result.get('macro_weather', {}),
+            'layers': result.get('layers', {}),
+            'impact_likelihood_matrix': result.get('impact_likelihood_matrix', {}),
+            'equity_stratification': result.get('equity_stratification', {}),
+            'methodology': result.get('methodology', []),
             'management_suggestions': result.get('management_suggestions', [])
         })
     except API_EXCEPTIONS as exc:
@@ -676,7 +850,14 @@ def _api_chronic_population():
         if 'weather' in data:
             weather_data = data['weather']
         else:
-            weather_data, _ = get_weather_with_cache('北京')
+            city = sanitize_input(data.get('city'), max_length=100)
+            if city:
+                city = normalize_location_name(city)
+            elif current_user.is_authenticated:
+                city = ensure_user_location_valid()
+            else:
+                city = current_app.config.get('DEFAULT_CITY', DEFAULT_CITY_LABEL) or DEFAULT_CITY_LABEL
+            weather_data, _ = get_weather_with_cache(city)
 
         # 预测
         result = chronic_service.predict_population_risk({}, weather_data)
@@ -822,7 +1003,11 @@ def _api_comprehensive_alert():
 
         # 获取7天预报（带缓存）
         weather_forecast, _ = get_forecast_with_cache(city, days=7)
-        forecast_temps = [(f['temperature_max'] + f['temperature_min']) / 2 for f in weather_forecast]
+        forecast_temps = [
+            (f.get('temperature_max', 20) + f.get('temperature_min', 10)) / 2
+            for f in weather_forecast
+            if isinstance(f, dict)
+        ]
         forecasts, summary = forecast_service.generate_7day_forecast(forecast_temps)
 
         # 社区风险

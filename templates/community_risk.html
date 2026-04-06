@@ -1,258 +1,675 @@
 {% extends "base.html" %}
+{% set needs_chartjs = true %}
 
 {% block title %}社区风险地图 - 天气健康风险预测系统{% endblock %}
 
 {% block extra_css %}
 <style>
-    #map {
-        height: 600px;
-        border-radius: 8px;
-        border: 1px solid var(--border-color);
+.community-risk-page {
+    --cr-border: #d7e1ea;
+    --cr-muted: #64748b;
+    --cr-soft: #f8fafc;
+}
+
+.community-risk-page .cr-card {
+    border: 1px dashed var(--cr-border);
+    border-radius: 14px;
+    background: #fff;
+}
+
+.community-risk-page .cr-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    border: 1px solid var(--cr-border);
+    border-radius: 999px;
+    padding: 4px 10px;
+    font-size: 12px;
+    color: var(--cr-muted);
+    background: var(--cr-soft);
+}
+
+.community-risk-page .cr-map-wrap {
+    position: relative;
+    height: 620px;
+    min-height: 620px;
+    border-radius: 10px;
+    border: 1px solid #cbd5e1;
+    overflow: hidden;
+}
+
+.community-risk-page #map {
+    width: 100%;
+    height: 100%;
+}
+
+.community-risk-page .cr-map-fallback {
+    position: absolute;
+    inset: 0;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    text-align: center;
+    color: var(--cr-muted);
+    background: linear-gradient(135deg, #f8fbff 0%, #eef5ff 100%);
+}
+
+.community-risk-page .cr-kpi-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+}
+
+.community-risk-page .cr-kpi {
+    border: 1px solid #e2e8f0;
+    border-radius: 10px;
+    padding: 10px;
+    background: #fcfdff;
+}
+
+.community-risk-page .cr-kpi .name {
+    font-size: 12px;
+    color: var(--cr-muted);
+}
+
+.community-risk-page .cr-kpi .value {
+    margin-top: 4px;
+    font-weight: 700;
+    font-size: 22px;
+    color: #1f2937;
+}
+
+.community-risk-page .cr-kpi .sub {
+    margin-top: 2px;
+    font-size: 11px;
+    color: #94a3b8;
+}
+
+.community-risk-page .cr-rank-list {
+    max-height: 420px;
+    overflow-y: auto;
+}
+
+.community-risk-page .cr-rank-item {
+    cursor: pointer;
+    border-left: 4px solid #94a3b8;
+}
+
+.community-risk-page .cr-rank-item:hover {
+    background: #f8fafc;
+}
+
+.community-risk-page .cr-legend-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    margin-bottom: 6px;
+}
+
+.community-risk-page .cr-legend-color {
+    width: 12px;
+    height: 12px;
+    border-radius: 3px;
+    border: 1px solid rgba(15, 23, 42, 0.15);
+}
+
+.community-risk-page .cr-chart-wrap {
+    height: 310px;
+}
+
+.community-risk-page .cr-chart-wrap canvas {
+    width: 100% !important;
+    height: 100% !important;
+}
+
+.community-risk-page .cr-table-wrap {
+    overflow: auto;
+    border: 1px solid #dbe5ef;
+    border-radius: 10px;
+}
+
+.community-risk-page .cr-table {
+    min-width: 1180px;
+    margin-bottom: 0;
+}
+
+.community-risk-page .cr-table th,
+.community-risk-page .cr-table td {
+    border: 1px solid #e2e8f0;
+    text-align: center;
+    vertical-align: middle;
+    white-space: nowrap;
+}
+
+.community-risk-page .cr-table thead th {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    background: #f1f5f9;
+}
+
+.community-risk-page .cr-matrix td,
+.community-risk-page .cr-matrix th {
+    text-align: center;
+    vertical-align: middle;
+}
+
+.community-risk-page .cr-matrix-cell {
+    min-width: 72px;
+    border-radius: 8px;
+    font-weight: 600;
+    color: #1f2937;
+}
+
+.community-risk-page .cr-matrix-low {
+    background: #dcfce7;
+}
+
+.community-risk-page .cr-matrix-medium {
+    background: #fef9c3;
+}
+
+.community-risk-page .cr-matrix-high {
+    background: #fed7aa;
+}
+
+.community-risk-page .cr-matrix-vhigh {
+    background: #fecaca;
+}
+
+@media (max-width: 992px) {
+    .community-risk-page .cr-map-wrap {
+        height: 460px;
     }
-    .amap-marker {
-        cursor: pointer;
+
+    .community-risk-page .cr-kpi-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
     }
-    .info-window {
-        min-width: 250px;
+
+    .community-risk-page .cr-chart-wrap {
+        height: 260px;
     }
+}
 </style>
 {% endblock %}
 
 {% block content %}
-<div class="container-fluid">
-    <div class="row mb-4">
-        <div class="col-12">
-            <h2><i class="bi bi-map"></i> 社区健康风险地图</h2>
-            <p class="text-muted">直观展示各社区的健康风险分布情况</p>
+<div class="container-fluid community-risk-page">
+    <div class="row mb-3">
+        <div class="col-12 d-flex flex-wrap justify-content-between gap-2 align-items-start">
+            <div>
+                <h2 class="mb-1"><i class="bi bi-map"></i> 社区健康风险地图</h2>
+                <p class="text-muted mb-0">直观展示各社区的健康风险分布情况</p>
+            </div>
+            <div class="d-flex flex-wrap gap-2">
+                <span class="cr-chip">方法：SIR + 95%CI + 经验贝叶斯平滑</span>
+                <span class="cr-chip">空间：Gi* 热点显著性</span>
+                <span class="cr-chip">决策：Impact × Likelihood 矩阵</span>
+            </div>
         </div>
     </div>
 
-    <div class="row">
-        <div class="col-md-9 mb-4">
-            <div class="card shadow-sm">
-                <div class="card-header bg-primary text-white">
-                    <h5 class="mb-0"><i class="bi bi-geo-alt"></i> 风险分布地图</h5>
+    <div class="card cr-card mb-3">
+        <div class="card-body">
+            <form id="riskFilterForm" class="row g-3 align-items-end">
+                <div class="col-xl-2 col-md-4">
+                    <label class="form-label">分析日期</label>
+                    <input type="date" class="form-control" id="analysisDate" value="{{ default_analysis_date }}">
                 </div>
-                <div class="card-body p-3">
-                    <div id="map"></div>
+                <div class="col-xl-2 col-md-4">
+                    <label class="form-label">回溯窗口</label>
+                    <select class="form-select" id="windowDays">
+                        {% for option in [14, 30, 60, 90] %}
+                            <option value="{{ option }}" {% if default_window_days == option %}selected{% endif %}>{{ option }} 天</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="col-xl-3 col-md-4">
+                    <label class="form-label">疾病分类</label>
+                    <select class="form-select" id="diseaseFilter">
+                        <option value="">全部疾病</option>
+                        {% for disease in disease_options %}
+                            <option value="{{ disease }}">{{ disease }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="col-xl-3 col-md-6">
+                    <label class="form-label">地图图层</label>
+                    <select class="form-select" id="layerSelect">
+                        <option value="risk_index">综合风险（0-100）</option>
+                        <option value="vulnerability">脆弱性分位（SVI-like）</option>
+                        <option value="uncertainty">不确定性指数（CI宽度）</option>
+                        <option value="hotspot">热点显著性（Gi*）</option>
+                    </select>
+                </div>
+                <div class="col-xl-2 col-md-6 d-grid">
+                    <button class="btn btn-primary" id="refreshRiskMap" type="submit">
+                        <i class="bi bi-arrow-repeat me-1"></i>刷新分析
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <div class="row g-3 mb-3 align-items-start">
+        <div class="col-xl-8 col-lg-7">
+            <div class="card cr-card">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <h6 class="mb-0"><i class="bi bi-geo-alt"></i> 风险分布地图</h6>
+                    <span class="text-muted small" id="analysisMeta">等待载入...</span>
+                </div>
+                <div class="card-body p-2">
+                    <div class="cr-map-wrap">
+                        <div id="map" {% if not amap_key|default('', true) %}class="d-none"{% endif %}></div>
+                        <div id="mapFallback" class="cr-map-fallback{% if amap_key|default('', true) %} d-none{% endif %}">
+                            <div>
+                                <div class="fw-semibold mb-2" id="mapFallbackTitle">
+                                    {% if amap_key|default('', true) %}地图加载失败{% else %}未配置地图 Key{% endif %}
+                                </div>
+                                <div class="small" id="mapFallbackMessage">
+                                    {% if amap_key|default('', true) %}
+                                        地图加载失败，请检查高德 Web 端 Key 或域名白名单；右侧分析结果仍可查看。
+                                    {% else %}
+                                        地图已隐藏，右侧分析结果仍可正常查看。
+                                    {% endif %}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
 
-        <div class="col-md-3 mb-4">
-            <div class="card shadow-sm mb-3">
-                <div class="card-header bg-secondary text-white">
-                    <h5 class="mb-0"><i class="bi bi-info-circle"></i> 图例说明</h5>
+        <div class="col-xl-4 col-lg-5">
+            <div class="card cr-card">
+                <div class="card-header">
+                    <h6 class="mb-0"><i class="bi bi-bar-chart"></i> 核心指标</h6>
                 </div>
                 <div class="card-body">
-                    <div class="mb-2">
-                        <span class="badge bg-success">低风险</span>
-                        <p class="small text-muted mb-0">脆弱性指数 < 30</p>
-                    </div>
-                    <div class="mb-2">
-                        <span class="badge bg-warning">中风险</span>
-                        <p class="small text-muted mb-0">脆弱性指数 30-60</p>
-                    </div>
-                    <div class="mb-2">
-                        <span class="badge bg-danger">高风险</span>
-                        <p class="small text-muted mb-0">脆弱性指数 > 60</p>
+                    <div class="cr-kpi-grid">
+                        <div class="cr-kpi">
+                            <div class="name">社区数</div>
+                            <div class="value" id="kpiCommunities">--</div>
+                            <div class="sub">本次参与分析</div>
+                        </div>
+                        <div class="cr-kpi">
+                            <div class="name">高风险社区</div>
+                            <div class="value" id="kpiHighRisk">--</div>
+                            <div class="sub">HeatRisk 3-4 级</div>
+                        </div>
+                        <div class="cr-kpi">
+                            <div class="name">公平性优先社区</div>
+                            <div class="value" id="kpiEquityPriority">--</div>
+                            <div class="sub">Q4 且风险偏高</div>
+                        </div>
+                        <div class="cr-kpi">
+                            <div class="name">显著热点</div>
+                            <div class="value" id="kpiHotspot">--</div>
+                            <div class="sub">Gi* 95%/99%</div>
+                        </div>
+                        <div class="cr-kpi">
+                            <div class="name">数据覆盖</div>
+                            <div class="value" id="kpiCoverage">--</div>
+                            <div class="sub">病例匹配社区比例</div>
+                        </div>
+                        <div class="cr-kpi">
+                            <div class="name">中位不确定性</div>
+                            <div class="value" id="kpiUncertainty">--</div>
+                            <div class="sub">CI宽度综合指数</div>
+                        </div>
+                        <div class="cr-kpi">
+                            <div class="name">预计额外就诊</div>
+                            <div class="value" id="kpiExcess">--</div>
+                            <div class="sub">天气增量估计</div>
+                        </div>
                     </div>
                 </div>
             </div>
+        </div>
+    </div>
 
-            <div class="card shadow-sm mb-3">
-                <div class="card-header bg-info text-white d-flex justify-content-between align-items-center">
-                    <h5 class="mb-0"><i class="bi bi-list"></i> 社区风险排名</h5>
-                    <button class="btn btn-light btn-sm" id="refreshRiskMap" type="button">
-                        <i class="bi bi-arrow-clockwise"></i>
-                    </button>
+    <div class="row g-3 mb-3 align-items-start">
+        <div class="col-lg-4">
+            <div class="card cr-card">
+                <div class="card-header">
+                    <h6 class="mb-0"><i class="bi bi-palette"></i> 图层图例</h6>
                 </div>
-                <div class="card-body p-0" style="max-height: 400px; overflow-y: auto;">
-                    <div class="list-group list-group-flush" id="community-list">
-                        {% for community in communities %}
-                            <a href="#" class="list-group-item list-group-item-action" 
-                               data-lat="{{ community.latitude }}" 
-                               data-lng="{{ community.longitude }}">
-                                <div class="d-flex w-100 justify-content-between">
-                                    <h6 class="mb-1">{{ community.name }}</h6>
-                                    {% if community.risk_level == '高' %}
-                                        <span class="badge bg-danger">{{ community.risk_level }}</span>
-                                    {% elif community.risk_level == '中' %}
-                                        <span class="badge bg-warning">{{ community.risk_level }}</span>
-                                    {% else %}
-                                        <span class="badge bg-success">{{ community.risk_level }}</span>
-                                    {% endif %}
-                                </div>
-                                <p class="mb-1 small text-muted">
-                                    人口：{{ community.population or 'N/A' }}
-                                </p>
-                                <small class="text-muted">
-                                    脆弱性指数：{{ community.vulnerability_index|round(2) if community.vulnerability_index else 'N/A' }}
-                                </small>
-                            </a>
-                        {% endfor %}
+                <div class="card-body" id="layerLegend"></div>
+            </div>
+        </div>
+
+        <div class="col-lg-4">
+            <div class="card cr-card">
+                <div class="card-header">
+                    <h6 class="mb-0"><i class="bi bi-list-ol"></i> 社区风险排名</h6>
+                </div>
+                <div class="card-body p-0 cr-rank-list" id="community-list"></div>
+            </div>
+        </div>
+
+        <div class="col-lg-4">
+            <div class="card cr-card">
+                <div class="card-header">
+                    <h6 class="mb-0"><i class="bi bi-lightbulb"></i> 管控建议</h6>
+                </div>
+                <div class="card-body" id="managementSuggestions">
+                    <p class="text-muted small mb-0">等待载入建议...</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row g-3 mb-3">
+        <div class="col-lg-4">
+            <div class="card cr-card h-100">
+                <div class="card-header">
+                    <h6 class="mb-0"><i class="bi bi-grid-3x3-gap"></i> Impact × Likelihood</h6>
+                </div>
+                <div class="card-body">
+                    <div class="table-responsive">
+                        <table class="table table-sm cr-matrix mb-0">
+                            <thead>
+                                <tr>
+                                    <th>影响\\可能性</th>
+                                    <th>低</th>
+                                    <th>中</th>
+                                    <th>高</th>
+                                    <th>极高</th>
+                                </tr>
+                            </thead>
+                            <tbody id="impactLikelihoodBody">
+                                <tr><td colspan="5" class="text-muted">等待载入...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                    <p class="text-muted small mt-2 mb-0">矩阵分值=影响等级×可能性等级（1-16），便于自动决策分流。</p>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-lg-8">
+            <div class="card cr-card h-100">
+                <div class="card-body">
+                    <div class="row g-3">
+                        <div class="col-md-6">
+                            <div class="d-flex justify-content-between align-items-center mb-1">
+                                <h6 class="mb-0">HeatRisk 等级分布</h6>
+                                <span class="text-muted small">0-4</span>
+                            </div>
+                            <div class="cr-chart-wrap">
+                                <canvas id="riskLevelChart"></canvas>
+                            </div>
+                        </div>
+                        <div class="col-md-6">
+                            <div class="d-flex justify-content-between align-items-center mb-1">
+                                <h6 class="mb-0">脆弱性-风险散点</h6>
+                                <span class="text-muted small">X=SVI分位，Y=综合风险</span>
+                            </div>
+                            <div class="cr-chart-wrap">
+                                <canvas id="vulnScatterChart"></canvas>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>
-            
-            <!-- 管控建议 -->
-            <div class="card shadow-sm">
-                <div class="card-header bg-warning">
-                    <h5 class="mb-0"><i class="bi bi-lightbulb"></i> 管控建议</h5>
+        </div>
+    </div>
+
+    <div class="card cr-card mb-3">
+        <div class="card-header d-flex justify-content-between align-items-center">
+            <h6 class="mb-0"><i class="bi bi-people"></i> 公平性分层（脆弱社区优先）</h6>
+            <span class="text-muted small">Q4 为最高脆弱分层</span>
+        </div>
+        <div class="card-body">
+            <div class="row g-3">
+                <div class="col-lg-6">
+                    <div class="table-responsive">
+                        <table class="table table-sm mb-0">
+                            <thead>
+                                <tr>
+                                    <th>分层</th>
+                                    <th>社区数</th>
+                                    <th>平均风险</th>
+                                    <th>高HeatRisk数</th>
+                                    <th>平均不确定性</th>
+                                </tr>
+                            </thead>
+                            <tbody id="equityQuartileBody">
+                                <tr><td colspan="5" class="text-muted">等待载入...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
                 </div>
-                <div class="card-body p-2" id="managementSuggestions">
-                    <p class="text-muted small mb-0">点击刷新按钮加载建议...</p>
+                <div class="col-lg-6">
+                    <h6 class="mb-2">优先干预社区</h6>
+                    <div id="equityPriorityList">
+                        <p class="text-muted small mb-0">等待载入...</p>
+                    </div>
                 </div>
             </div>
+        </div>
+    </div>
+
+    <div class="card cr-card mb-3">
+        <div class="card-header d-flex justify-content-between align-items-center">
+            <h6 class="mb-0"><i class="bi bi-table"></i> 社区风险明细</h6>
+            <span class="text-muted small">点击排名项可定位地图</span>
+        </div>
+        <div class="card-body">
+            <div class="cr-table-wrap">
+                <table class="table cr-table">
+                    <thead>
+                        <tr>
+                            <th>排名</th>
+                            <th>社区</th>
+                            <th>HeatRisk</th>
+                            <th>综合风险</th>
+                            <th>SVI分位</th>
+                            <th>SIR [95%CI]</th>
+                            <th>平滑SIR</th>
+                            <th>P(RR&gt;1)</th>
+                            <th>热点显著性</th>
+                            <th>影响×可能性</th>
+                            <th>矩阵分值</th>
+                            <th>不确定性</th>
+                            <th>预计额外就诊</th>
+                        </tr>
+                    </thead>
+                    <tbody id="detailTableBody">
+                        <tr><td colspan="13" class="text-muted">等待载入...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <div class="card cr-card">
+        <div class="card-body">
+            <h6 class="mb-2"><i class="bi bi-journal-text"></i> 方法说明（本页实现）</h6>
+            <ul class="mb-0 text-muted" id="methodologyList">
+                <li>社区风险 = 天气危险度 + 脆弱性 + 历史负担，面向行动排序。</li>
+                <li>历史负担默认展示 SIR 及 95%CI，并在小样本场景进行平滑。</li>
+                <li>地图支持不确定性与热点图层，避免只给单一风险分数。</li>
+            </ul>
         </div>
     </div>
 </div>
 {% endblock %}
 
 {% block extra_js %}
-{% if amap_security_js_code %}
+{% if amap_key|default('', true) and amap_service_host|default('', true) %}
 <script type="text/javascript">
     window._AMapSecurityConfig = {
-        securityJsCode: {{ amap_security_js_code|tojson }}
+        serviceHost: {{ amap_service_host|tojson }}
     };
 </script>
 {% endif %}
+{% if amap_key|default('', true) %}
 <script src="https://webapi.amap.com/maps?v=2.0&key={{ amap_key|urlencode }}&plugin=AMap.Scale,AMap.ToolBar"></script>
+{% endif %}
 <script>
-// 社区数据
-var communities = {{ communities|tojson|safe }};
+const communities = {{ communities|tojson|safe }};
+const communityCoords = {{ community_coords|tojson|safe }};
+const amapJsKey = {{ amap_key|default('', true)|tojson }};
+const amapServiceHost = {{ amap_service_host|default('', true)|tojson }};
+const amapEnabled = {{ (amap_key|default('', true))|tojson }};
+const mapElement = document.getElementById('map');
+const mapFallback = document.getElementById('mapFallback');
+const mapFallbackTitle = document.getElementById('mapFallbackTitle');
+const mapFallbackMessage = document.getElementById('mapFallbackMessage');
+const mapRuntimeFailureMessage = '地图加载失败，请检查高德 Web 端 Key 或域名白名单；右侧分析结果仍可查看。';
 
-// 初始化高德地图（都昌县中心 - 江西省九江市）
-var map = new AMap.Map('map', {
-    zoom: 12,
-    center: [116.2, 29.27],  // 都昌县坐标
-    mapStyle: 'amap://styles/normal',
-    viewMode: '2D'
-});
+let map = null;
+let riskOverlays = [];
+let riskRows = [];
+let riskCoords = {};
+let riskLevelChart = null;
+let vulnScatterChart = null;
 
-// 异步加载控件插件
-AMap.plugin(['AMap.Scale', 'AMap.ToolBar'], function() {
-    map.addControl(new AMap.Scale());
-    map.addControl(new AMap.ToolBar());
-});
-
-// 根据风险等级获取颜色
-function getRiskColor(riskLevel) {
-    switch(riskLevel) {
-        case '高': return '#dc2626';
-        case '中': return '#d97706';
-        case '低': return '#0e9f6e';
-        default: return '#6b7280';
+function showMapFallback(title = '地图加载失败', message = mapRuntimeFailureMessage) {
+    if (mapElement) {
+        mapElement.classList.add('d-none');
+    }
+    if (mapFallback) {
+        mapFallback.classList.remove('d-none');
+    }
+    if (mapFallbackTitle) {
+        mapFallbackTitle.textContent = title;
+    }
+    if (mapFallbackMessage) {
+        mapFallbackMessage.textContent = message;
     }
 }
 
-// 存储所有标记
-var markers = [];
-var riskMarkers = [];  // 风险数据标记
-var riskMarkerCoords = {};
-var baseMarkersCleared = false;
-
-// 都昌县各社区/村镇坐标数据（GCJ-02）
-var communityCoords = {{ community_coords|tojson|safe }};
-
-function toRadians(value) {
-    return value * Math.PI / 180;
+function hideMapFallback() {
+    if (mapElement) {
+        mapElement.classList.remove('d-none');
+    }
+    if (mapFallback) {
+        mapFallback.classList.add('d-none');
+    }
 }
 
-function haversineDistance(a, b) {
-    var lon1 = toRadians(a[0]);
-    var lat1 = toRadians(a[1]);
-    var lon2 = toRadians(b[0]);
-    var lat2 = toRadians(b[1]);
-    var dlon = lon2 - lon1;
-    var dlat = lat2 - lat1;
-    var sinDlat = Math.sin(dlat / 2);
-    var sinDlon = Math.sin(dlon / 2);
-    var aa = sinDlat * sinDlat + Math.cos(lat1) * Math.cos(lat2) * sinDlon * sinDlon;
-    return 2 * 6371000 * Math.asin(Math.sqrt(aa));
-}
+async function preflightAmapBaseMap() {
+    if (!amapEnabled || !amapJsKey || !amapServiceHost) {
+        return { ok: false, reason: 'missing_config' };
+    }
 
-function computeBoundaryRadii(coordsMap) {
-    var names = Object.keys(coordsMap || {});
-    var radii = {};
-    var maxRadius = 1200;
-
-    names.forEach(function(name) {
-        var center = coordsMap[name];
-        if (!center || center.length !== 2) {
-            return;
+    try {
+        const response = await fetch(`/_AMapService/v4/map/styles?key=${encodeURIComponent(amapJsKey)}`, {
+            method: 'GET'
+        });
+        const payload = await response.text();
+        const errorTokens = ['INVALID_USER_KEY', 'INVALID_USER_SCODE', 'USERKEY_PLAT_NOMATCH'];
+        if (!response.ok || errorTokens.some(token => payload.includes(token))) {
+            return { ok: false, reason: 'invalid_key', payload };
         }
-        var minDistance = Infinity;
-        names.forEach(function(other) {
-            if (other === name) {
-                return;
-            }
-            var target = coordsMap[other];
-            if (!target || target.length !== 2) {
-                return;
-            }
-            var dist = haversineDistance(center, target);
-            if (dist < minDistance) {
-                minDistance = dist;
-            }
+        return { ok: true };
+    } catch (error) {
+        return { ok: false, reason: 'network_error', error };
+    }
+}
+
+async function initMap() {
+    if (!amapEnabled) {
+        showMapFallback('未配置地图 Key', '地图已隐藏，右侧分析结果仍可正常查看。');
+        return false;
+    }
+
+    if (!amapServiceHost) {
+        console.error('社区风险地图缺少高德安全代理配置');
+        showMapFallback();
+        return false;
+    }
+
+    if (!mapElement || typeof AMap === 'undefined') {
+        console.error('社区风险地图 SDK 未正常加载');
+        showMapFallback();
+        return false;
+    }
+
+    const preflight = await preflightAmapBaseMap();
+    if (!preflight.ok) {
+        console.error('社区风险地图预检失败:', preflight.reason, preflight.payload || preflight.error || '');
+        showMapFallback();
+        return false;
+    }
+
+    try {
+        hideMapFallback();
+        map = new AMap.Map('map', {
+            zoom: 12,
+            center: [116.2, 29.27],
+            mapStyle: 'amap://styles/normal',
+            viewMode: '2D'
         });
 
-        var radius = Math.floor(minDistance * 0.45);
-        if (!isFinite(radius) || radius <= 0) {
-            radius = 600;
+        AMap.plugin(['AMap.Scale', 'AMap.ToolBar'], function() {
+            map.addControl(new AMap.Scale());
+            map.addControl(new AMap.ToolBar());
+        });
+
+        if (riskRows && riskRows.length > 0) {
+            const activeLayerKey = document.getElementById('layerSelect')?.value || 'risk_index';
+            addRiskOverlays(riskRows, activeLayerKey);
         }
-        radii[name] = Math.min(radius, maxRadius);
-    });
-
-    return radii;
-}
-
-var communityBoundaryRadii = computeBoundaryRadii(communityCoords);
-
-function getBoundaryRadius(name) {
-    return communityBoundaryRadii[name] || 600;
-}
-
-function clearBaseMarkers() {
-    if (baseMarkersCleared) {
-        return;
+        return true;
+    } catch (error) {
+        console.error('初始化社区风险地图失败:', error);
+        showMapFallback();
+        return false;
     }
-    markers.forEach(function(item) {
-        if (item.circle) {
-            map.remove(item.circle);
-        }
-        if (item.text) {
-            map.remove(item.text);
-        }
-    });
-    markers = [];
-    baseMarkersCleared = true;
 }
 
-function safeText(value, fallback) {
-    if (value === undefined || value === null) {
-        return fallback || '';
+const impactLevelLabels = {
+    low: '低',
+    medium: '中',
+    high: '高',
+    very_high: '极高'
+};
+
+const likelihoodLevelLabels = {
+    low: '低',
+    medium: '中',
+    high: '高',
+    very_high: '极高'
+};
+
+function safeText(value, fallback = '--') {
+    if (value === undefined || value === null || value === '') {
+        return fallback;
     }
     return String(value);
 }
 
-function toNumber(value, fallback) {
+function toNumber(value, fallback = null) {
     if (value === undefined || value === null || value === '') {
         return fallback;
     }
-    var num = Number(value);
+    const num = Number(value);
     if (!Number.isFinite(num)) {
         return fallback;
     }
     return num;
 }
 
-function formatNumber(value, digits, fallbackText) {
-    var num = toNumber(value, null);
+function formatNumber(value, digits = 1, fallback = '--') {
+    const num = toNumber(value, null);
     if (num === null) {
-        return fallbackText;
+        return fallback;
     }
     return num.toFixed(digits);
+}
+
+function formatPercent(value, digits = 1) {
+    const num = toNumber(value, null);
+    if (num === null) {
+        return '--';
+    }
+    return `${num.toFixed(digits)}%`;
 }
 
 function escapeHtml(value) {
@@ -264,670 +681,796 @@ function escapeHtml(value) {
         .replace(/'/g, '&#39;');
 }
 
-function createMarkerWithContent(options, contentData) {
-    var fallback = contentData ? contentData.fallback : '';
-    if (contentData && contentData.node) {
-        options.content = contentData.node;
-    }
-    try {
-        var marker = new AMap.Marker(options);
-        if (fallback && marker.getContent) {
-            var content = marker.getContent();
-            if (typeof content === 'string' && content.indexOf('[object') === 0) {
-                marker.setContent(fallback);
-            }
-        }
-        return marker;
-    } catch (error) {
-        if (fallback) {
-            options.content = fallback;
-            return new AMap.Marker(options);
-        }
-        throw error;
-    }
-}
-
-function createInfoWindowWithContent(options, contentData) {
-    var fallback = contentData ? contentData.fallback : '';
-    if (contentData && contentData.node) {
-        options.content = contentData.node;
-    } else if (fallback) {
-        options.content = fallback;
-    }
-    try {
-        var infoWindow = new AMap.InfoWindow(options);
-        if (fallback && infoWindow.getContent) {
-            var content = infoWindow.getContent();
-            if (typeof content === 'string' && content.indexOf('[object') === 0) {
-                infoWindow.setContent(fallback);
-            }
-        }
-        return infoWindow;
-    } catch (error) {
-        if (fallback) {
-            options.content = fallback;
-            return new AMap.InfoWindow(options);
-        }
-        throw error;
-    }
-}
-
-// 创建自定义标注样式
-function createMarkerContent(name, riskLevel, score) {
-    var levelText = safeText(riskLevel, '');
-    var bgColor = levelText === '高风险' ? '#dc2626' :
-                  levelText === '中风险' ? '#d97706' : '#0e9f6e';
-    var nameText = safeText(name, '');
-    var shortName = nameText.length > 4 ? nameText.substring(0, 4) : nameText;
-    var scoreText = formatNumber(score, 0, '--');
-
-    var container = document.createElement('div');
-    container.style.cssText = [
-        'background:' + bgColor,
-        'color:white',
-        'padding:6px 10px',
-        'border-radius:20px',
-        'font-size:12px',
-        'font-weight:bold',
-        'white-space:nowrap',
-        'box-shadow:0 2px 8px rgba(0,0,0,0.3)',
-        'border:2px solid white',
-        'text-align:center',
-        'min-width:60px'
-    ].join(';');
-
-    var nameDiv = document.createElement('div');
-    nameDiv.textContent = shortName;
-    var scoreDiv = document.createElement('div');
-    scoreDiv.style.fontSize = '10px';
-    scoreDiv.style.opacity = '0.9';
-    scoreDiv.textContent = scoreText + '分';
-
-    container.appendChild(nameDiv);
-    container.appendChild(scoreDiv);
-
-    var fallbackHtml = '<div style="' +
-        'background:' + bgColor + ';' +
-        'color:white;' +
-        'padding:6px 10px;' +
-        'border-radius:20px;' +
-        'font-size:12px;' +
-        'font-weight:bold;' +
-        'white-space:nowrap;' +
-        'box-shadow:0 2px 8px rgba(0,0,0,0.3);' +
-        'border:2px solid white;' +
-        'text-align:center;' +
-        'min-width:60px;' +
-        '">' +
-        '<div>' + escapeHtml(shortName) + '</div>' +
-        '<div style="font-size:10px;opacity:0.9;">' + escapeHtml(scoreText) + '分</div>' +
-        '</div>';
-
-    return {
-        node: container,
-        fallback: fallbackHtml
-    };
-}
-
-function buildCommunityInfoContent(community, markerColor) {
-    var nameText = safeText(community && community.name, '--');
-    var riskText = safeText(community && community.risk_level, '--');
-    var populationValue = toNumber(community && community.population, null);
-    var populationText = populationValue === null ? 'N/A' : Math.round(populationValue).toLocaleString();
-    var vulnerabilityText = formatNumber(community && community.vulnerability_index, 2, 'N/A');
-
-    var wrapper = document.createElement('div');
-    wrapper.className = 'p-3';
-    wrapper.style.minWidth = '280px';
-
-    var title = document.createElement('h6');
-    title.className = 'fw-bold mb-3';
-    title.style.color = markerColor;
-    title.style.borderBottom = '2px solid ' + markerColor;
-    title.style.paddingBottom = '8px';
-    title.textContent = '📍 ' + nameText;
-
-    var riskRow = document.createElement('div');
-    riskRow.className = 'mb-2';
-    var riskLabel = document.createElement('span');
-    riskLabel.className = 'text-secondary';
-    riskLabel.textContent = '风险等级：';
-    var riskBadge = document.createElement('span');
-    riskBadge.className = 'badge';
-    riskBadge.style.backgroundColor = markerColor;
-    riskBadge.style.fontSize = '0.85rem';
-    riskBadge.textContent = riskText + '风险';
-    riskRow.appendChild(riskLabel);
-    riskRow.appendChild(riskBadge);
-
-    var populationRow = document.createElement('div');
-    populationRow.className = 'mb-2';
-    var populationLabel = document.createElement('span');
-    populationLabel.className = 'text-secondary';
-    populationLabel.textContent = '人口数量：';
-    var populationStrong = document.createElement('strong');
-    populationStrong.textContent = populationText;
-    populationRow.appendChild(populationLabel);
-    populationRow.appendChild(populationStrong);
-    populationRow.appendChild(document.createTextNode(' 人'));
-
-    var viRow = document.createElement('div');
-    viRow.className = 'mb-2';
-    var viLabel = document.createElement('span');
-    viLabel.className = 'text-secondary';
-    viLabel.textContent = '脆弱性指数：';
-    var viStrong = document.createElement('strong');
-    viStrong.style.color = markerColor;
-    viStrong.textContent = vulnerabilityText;
-    viRow.appendChild(viLabel);
-    viRow.appendChild(viStrong);
-
-    wrapper.appendChild(title);
-    wrapper.appendChild(riskRow);
-    wrapper.appendChild(populationRow);
-    wrapper.appendChild(viRow);
-
-    var fallbackHtml = '<div class="p-3" style="min-width: 280px;">' +
-        '<h6 class="fw-bold mb-3" style="color: ' + markerColor + '; border-bottom: 2px solid ' + markerColor + '; padding-bottom: 8px;">' +
-        '📍 ' + escapeHtml(nameText) +
-        '</h6>' +
-        '<div class="mb-2">' +
-        '<span class="text-secondary">风险等级：</span>' +
-        '<span class="badge" style="background-color: ' + markerColor + '; font-size: 0.85rem;">' +
-        escapeHtml(riskText) + '风险</span>' +
-        '</div>' +
-        '<div class="mb-2">' +
-        '<span class="text-secondary">人口数量：</span>' +
-        '<strong>' + escapeHtml(populationText) + '</strong> 人' +
-        '</div>' +
-        '<div class="mb-2">' +
-        '<span class="text-secondary">脆弱性指数：</span>' +
-        '<strong style="color: ' + markerColor + ';">' + escapeHtml(vulnerabilityText) + '</strong>' +
-        '</div>' +
-        '</div>';
-
-    return {
-        node: wrapper,
-        fallback: fallbackHtml
-    };
-}
-
-function buildRiskInfoContent(riskItem, bgColor) {
-    var nameText = safeText(riskItem && riskItem.community, '--');
-    var levelText = safeText(riskItem && riskItem.risk_level, '--');
-    var scoreText = formatNumber(riskItem && riskItem.risk_score, 1, '--');
-    var relativeText = formatNumber(riskItem && riskItem.relative_index, 1, '--');
-    var percentileText = formatNumber(riskItem && riskItem.percentile_rank, 1, '--');
-    var populationValue = toNumber(riskItem && riskItem.population, null);
-    var populationText = populationValue === null ? '--' : Math.round(populationValue).toLocaleString();
-    var excessText = formatNumber(riskItem && riskItem.expected_excess_visits, 1, '--');
-    var rankText = formatNumber(riskItem && riskItem.rank, 0, '--');
-
-    var wrapper = document.createElement('div');
-    wrapper.style.padding = '15px';
-    wrapper.style.minWidth = '250px';
-
-    var title = document.createElement('h6');
-    title.style.color = bgColor;
-    title.style.borderBottom = '2px solid ' + bgColor;
-    title.style.paddingBottom = '8px';
-    title.style.marginBottom = '12px';
-    title.textContent = '🏘️ ' + nameText;
-    wrapper.appendChild(title);
-
-    var levelRow = document.createElement('div');
-    levelRow.style.marginBottom = '8px';
-    var levelLabel = document.createElement('span');
-    levelLabel.style.color = '#666';
-    levelLabel.textContent = '风险等级：';
-    var levelBadge = document.createElement('span');
-    levelBadge.style.background = bgColor;
-    levelBadge.style.color = 'white';
-    levelBadge.style.padding = '2px 8px';
-    levelBadge.style.borderRadius = '10px';
-    levelBadge.style.fontSize = '12px';
-    levelBadge.textContent = levelText;
-    levelRow.appendChild(levelLabel);
-    levelRow.appendChild(levelBadge);
-    wrapper.appendChild(levelRow);
-
-    var scoreRow = document.createElement('div');
-    scoreRow.style.marginBottom = '8px';
-    var scoreLabel = document.createElement('span');
-    scoreLabel.style.color = '#666';
-    scoreLabel.textContent = '风险分数：';
-    var scoreStrong = document.createElement('strong');
-    scoreStrong.style.color = bgColor;
-    scoreStrong.style.fontSize = '18px';
-    scoreStrong.textContent = scoreText;
-    scoreRow.appendChild(scoreLabel);
-    scoreRow.appendChild(scoreStrong);
-    wrapper.appendChild(scoreRow);
-
-    var relativeRow = document.createElement('div');
-    relativeRow.style.marginBottom = '8px';
-    var relativeLabel = document.createElement('span');
-    relativeLabel.style.color = '#666';
-    relativeLabel.textContent = '相对指数：';
-    var relativeStrong = document.createElement('strong');
-    relativeStrong.textContent = relativeText;
-    relativeRow.appendChild(relativeLabel);
-    relativeRow.appendChild(relativeStrong);
-    wrapper.appendChild(relativeRow);
-
-    var percentileRow = document.createElement('div');
-    percentileRow.style.marginBottom = '8px';
-    var percentileLabel = document.createElement('span');
-    percentileLabel.style.color = '#666';
-    percentileLabel.textContent = '分位：';
-    var percentileStrong = document.createElement('strong');
-    percentileStrong.textContent = percentileText === '--' ? '--' : percentileText + '%';
-    percentileRow.appendChild(percentileLabel);
-    percentileRow.appendChild(percentileStrong);
-    wrapper.appendChild(percentileRow);
-
-    var populationRow = document.createElement('div');
-    populationRow.style.marginBottom = '8px';
-    var populationLabel = document.createElement('span');
-    populationLabel.style.color = '#666';
-    populationLabel.textContent = '人口数量：';
-    var populationStrong = document.createElement('strong');
-    populationStrong.textContent = populationText;
-    populationRow.appendChild(populationLabel);
-    populationRow.appendChild(populationStrong);
-    populationRow.appendChild(document.createTextNode(' 人'));
-    wrapper.appendChild(populationRow);
-
-    var excessRow = document.createElement('div');
-    excessRow.style.marginBottom = '8px';
-    var excessLabel = document.createElement('span');
-    excessLabel.style.color = '#666';
-    excessLabel.textContent = '预计额外就诊：';
-    var excessStrong = document.createElement('strong');
-    excessStrong.style.color = '#e74c3c';
-    excessStrong.textContent = excessText;
-    excessRow.appendChild(excessLabel);
-    excessRow.appendChild(excessStrong);
-    excessRow.appendChild(document.createTextNode(' 人次'));
-    wrapper.appendChild(excessRow);
-
-    var rankRow = document.createElement('div');
-    rankRow.style.marginTop = '10px';
-    rankRow.style.paddingTop = '8px';
-    rankRow.style.borderTop = '1px dashed #ddd';
-    rankRow.style.fontSize = '11px';
-    rankRow.style.color = '#888';
-    rankRow.textContent = '排名：第 ' + rankText + ' 位';
-    wrapper.appendChild(rankRow);
-
-    var fallbackHtml = '<div style="padding: 15px; min-width: 250px;">' +
-        '<h6 style="color: ' + bgColor + '; border-bottom: 2px solid ' + bgColor + '; padding-bottom: 8px; margin-bottom: 12px;">' +
-        '🏘️ ' + escapeHtml(nameText) + '</h6>' +
-        '<div style="margin-bottom: 8px;">' +
-        '<span style="color: #666;">风险等级：</span>' +
-        '<span style="background: ' + bgColor + '; color: white; padding: 2px 8px; border-radius: 10px; font-size: 12px;">' +
-        escapeHtml(levelText) + '</span>' +
-        '</div>' +
-        '<div style="margin-bottom: 8px;">' +
-        '<span style="color: #666;">风险分数：</span>' +
-        '<strong style="color: ' + bgColor + '; font-size: 18px;">' + escapeHtml(scoreText) + '</strong>' +
-        '</div>' +
-        '<div style="margin-bottom: 8px;">' +
-        '<span style="color: #666;">相对指数：</span>' +
-        '<strong>' + escapeHtml(relativeText) + '</strong>' +
-        '</div>' +
-        '<div style="margin-bottom: 8px;">' +
-        '<span style="color: #666;">分位：</span>' +
-        '<strong>' + escapeHtml(percentileText === '--' ? '--' : percentileText + '%') + '</strong>' +
-        '</div>' +
-        '<div style="margin-bottom: 8px;">' +
-        '<span style="color: #666;">人口数量：</span>' +
-        '<strong>' + escapeHtml(populationText) + '</strong> 人' +
-        '</div>' +
-        '<div style="margin-bottom: 8px;">' +
-        '<span style="color: #666;">预计额外就诊：</span>' +
-        '<strong style="color: #e74c3c;">' + escapeHtml(excessText) + '</strong> 人次' +
-        '</div>' +
-        '<div style="margin-top: 10px; padding-top: 8px; border-top: 1px dashed #ddd; font-size: 11px; color: #888;">' +
-        '排名：第 ' + escapeHtml(rankText) + ' 位' +
-        '</div>' +
-        '</div>';
-
-    return {
-        node: wrapper,
-        fallback: fallbackHtml
-    };
-}
-
-// 添加初始社区标记（如果有坐标）
-communities.forEach(function(community, index) {
-    var lat = toNumber(community && community.latitude, null);
-    var lng = toNumber(community && community.longitude, null);
-    if (Number.isFinite(lat) && Number.isFinite(lng)) {
-        var markerColor = getRiskColor(community.risk_level);
-        
-        // 创建圆形覆盖物（表示风险范围）
-        var circle = new AMap.Circle({
-            center: [lng, lat],
-            radius: getBoundaryRadius(community.name),
-            strokeColor: markerColor,
-            strokeWeight: 2,
-            strokeOpacity: 0.8,
-            fillColor: markerColor,
-            fillOpacity: 0.25,
-            zIndex: 50
-        });
-        
-        // 创建文字标注
-        var text = new AMap.Text({
-            text: community.name,
-            position: [lng, lat],
-            style: {
-                'background-color': markerColor,
-                'border': '2px solid white',
-                'border-radius': '15px',
-                'color': 'white',
-                'font-size': '12px',
-                'font-weight': 'bold',
-                'padding': '4px 10px',
-                'box-shadow': '0 2px 6px rgba(0,0,0,0.3)'
-            },
-            offset: new AMap.Pixel(-30, -15)
-        });
-        
-        // 创建信息窗体内容
-        var infoContent = buildCommunityInfoContent(community, markerColor);
-        var infoWindow = createInfoWindowWithContent({
-            isCustom: false,
-            offset: new AMap.Pixel(0, -25)
-        }, infoContent);
-        
-        text.on('click', function(e) {
-            infoWindow.open(map, [lng, lat]);
-        });
-        
-        circle.on('click', function(e) {
-            infoWindow.open(map, [lng, lat]);
-        });
-        
-        map.add([circle, text]);
-        markers[index] = {
-            circle: circle,
-            text: text,
-            infoWindow: infoWindow,
-            community: community
-        };
-    }
-});
-
-// 添加风险数据标记到地图
-function addRiskMarkers(rankings) {
-    // 清除旧标记
-    riskMarkers.forEach(function(item) {
-        map.remove(item.circle);
-        map.remove(item.marker);
-    });
-    riskMarkers = [];
-    riskMarkerCoords = {};
-    
-    rankings.forEach(function(r, index) {
-        var coords = communityCoords[r.community];
-        if (!coords) {
-            // 如果没有预设坐标，在都昌县范围内随机生成
-            coords = [
-                116.10 + Math.random() * 0.30,
-                29.15 + Math.random() * 0.30
-            ];
-        }
-        
-        var bgColor = r.risk_level === '高风险' ? '#dc2626' : 
-                      r.risk_level === '中风险' ? '#d97706' : '#0e9f6e';
-        
-        // 创建风险范围圆圈
-        var circle = new AMap.Circle({
-            center: coords,
-            radius: getBoundaryRadius(r.community),
-            strokeColor: bgColor,
-            strokeWeight: 2,
-            strokeOpacity: 0.9,
-            fillColor: bgColor,
-            fillOpacity: 0.3,
-            zIndex: 50
-        });
-        
-        // 创建自定义标记
-        var markerContent = createMarkerContent(r.community, r.risk_level, r.risk_score);
-        var marker = createMarkerWithContent({
-            position: coords,
-            offset: new AMap.Pixel(-40, -25),
-            zIndex: 100
-        }, markerContent);
-        
-        // 信息窗口
-        var infoContent = buildRiskInfoContent(r, bgColor);
-        var infoWindow = createInfoWindowWithContent({
-            isCustom: false,
-            offset: new AMap.Pixel(0, -30)
-        }, infoContent);
-        
-        marker.on('click', function() {
-            infoWindow.open(map, coords);
-        });
-        
-        circle.on('click', function() {
-            infoWindow.open(map, coords);
-        });
-        
-        map.add([circle, marker]);
-        if (r.community) {
-            riskMarkerCoords[r.community] = coords;
-        }
-        riskMarkers.push({
-            circle: circle,
-            marker: marker,
-            infoWindow: infoWindow,
-            coords: coords,
-            community: r.community
-        });
-    });
-    
-    // 调整地图视野以包含所有标记
-    if (riskMarkers.length > 0) {
-        map.setFitView();
-    }
-}
-
-// 社区列表点击事件
-document.querySelectorAll('#community-list .list-group-item').forEach(function(item, index) {
-    item.addEventListener('click', function(e) {
-        e.preventDefault();
-        var lat = toNumber(this.dataset.lat, null);
-        var lng = toNumber(this.dataset.lng, null);
-        if (Number.isFinite(lat) && Number.isFinite(lng)) {
-            map.setZoomAndCenter(14, [lng, lat]);
-            
-            // 打开对应标记的信息窗体
-            if (markers[index] && markers[index].infoWindow) {
-                markers[index].infoWindow.open(map, [lng, lat]);
-            }
-        }
-    });
-});
-
-// 地图加载完成提示
-map.on('complete', function() {
-    console.log('地图加载完成');
-    // 自动加载风险地图数据
-    loadRiskMap();
-});
-
-// 加载实时风险地图数据
-function loadRiskMap() {
-    fetch('/api/community/risk-map-v2', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({})
-    })
-    .then(response => response.json())
-    .then(data => {
-        if (data.success) {
-            updateRiskDisplay(data);
-        }
-    })
-    .catch(error => {
-        console.error('加载风险数据失败:', error);
-    });
-}
-
 function clearElement(element) {
-    while (element.firstChild) {
+    while (element && element.firstChild) {
         element.removeChild(element.firstChild);
     }
 }
 
-const refreshButton = document.getElementById('refreshRiskMap');
-if (refreshButton) {
-    refreshButton.addEventListener('click', loadRiskMap);
+function haversineDistanceMeters(coordA, coordB) {
+    if (!coordA || !coordB) return null;
+    const lon1 = toNumber(coordA[0], null);
+    const lat1 = toNumber(coordA[1], null);
+    const lon2 = toNumber(coordB[0], null);
+    const lat2 = toNumber(coordB[1], null);
+    if (lon1 === null || lat1 === null || lon2 === null || lat2 === null) {
+        return null;
+    }
+    const toRad = (deg) => deg * Math.PI / 180;
+    const dLat = toRad(lat2 - lat1);
+    const dLon = toRad(lon2 - lon1);
+    const a = Math.sin(dLat / 2) * Math.sin(dLat / 2)
+        + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2))
+        * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return 6371000 * c;
 }
 
-function updateRiskDisplay(data) {
-    const formatNumber = (value, decimals, fallback) => {
-        if (value === undefined || value === null || Number.isNaN(value)) {
-            return fallback;
-        }
-        const num = typeof value === 'number' ? value : parseFloat(value);
-        if (Number.isNaN(num)) {
-            return fallback;
-        }
-        return num.toFixed(decimals);
-    };
-
-    // 更新地图标记
-    if (data.rankings && data.rankings.length > 0) {
-        clearBaseMarkers();
-        addRiskMarkers(data.rankings);
+function computeCircleRadii(candidates) {
+    // 目标：每个村庄尽量覆盖更大范围，同时严格避免重叠
+    // 1) 先按风险/人口给目标半径
+    // 2) 再受“最近邻间距的一半”约束
+    // 3) 最后做迭代缩放，消除数值误差导致的重叠
+    const count = candidates.length;
+    const radii = new Array(count).fill(0);
+    if (!count) {
+        return radii;
     }
-    
-    // 更新社区列表
-    const listDiv = document.getElementById('community-list');
-    if (data.rankings && data.rankings.length > 0) {
-        clearElement(listDiv);
-        data.rankings.forEach((r, i) => {
-            const badgeClass = r.risk_level === '高风险' ? 'danger' : 
-                              r.risk_level === '中风险' ? 'warning' : 'success';
-            const bgColor = r.risk_level === '高风险' ? '#dc2626' : 
-                           r.risk_level === '中风险' ? '#d97706' : '#0e9f6e';
 
-            const item = document.createElement('div');
-            item.className = 'list-group-item list-group-item-action';
-            item.style.cursor = 'pointer';
-            item.style.borderLeft = '4px solid ' + bgColor;
-            item.addEventListener('click', function() {
-                focusOnCommunity(r.community, i);
-            });
+    const safetyGap = 26; // 米，圈与圈留出最小安全间隙
+    const absoluteMax = 2200; // 米，防止圈过大影响可读性
+    const absoluteMin = 35; // 米，保证可见
 
-            const header = document.createElement('div');
-            header.className = 'd-flex justify-content-between align-items-center';
+    for (let i = 0; i < count; i += 1) {
+        const row = candidates[i].row || {};
+        const risk = toNumber(row.risk_index, 55) || 55;
+        const population = Math.max(0, toNumber(row.population, 0) || 0);
 
-            const left = document.createElement('div');
-            const rankBadge = document.createElement('span');
-            rankBadge.className = 'badge bg-secondary me-2';
-            rankBadge.textContent = '#' + (r.rank !== undefined && r.rank !== null ? r.rank : '--');
-            const nameStrong = document.createElement('strong');
-            nameStrong.textContent = r.community || '--';
-            left.appendChild(rankBadge);
-            left.appendChild(nameStrong);
+        // 风险和人口越大，目标覆盖半径越大（但后续会被无重叠约束裁剪）
+        const target = 360 + Math.min(980, risk * 7.0) + Math.min(520, Math.sqrt(population) * 3.4);
 
-            const riskBadge = document.createElement('span');
-            riskBadge.className = 'badge bg-' + badgeClass;
-            riskBadge.textContent = r.risk_level || '--';
-
-            header.appendChild(left);
-            header.appendChild(riskBadge);
-
-            const info = document.createElement('div');
-            info.className = 'small text-muted mt-1';
-            const riskScoreText = formatNumber(r.risk_score, 1, '--');
-            const relativeIndexText = formatNumber(r.relative_index, 1, '--');
-            const percentileText = formatNumber(r.percentile_rank, 1, '--');
-            const populationText = (r.population === undefined || r.population === null) ? '--' : String(r.population);
-            const excessText = formatNumber(r.expected_excess_visits, 1, '--');
-
-            const riskScoreStrong = document.createElement('strong');
-            riskScoreStrong.style.color = bgColor;
-            riskScoreStrong.textContent = riskScoreText;
-
-            info.appendChild(document.createTextNode('风险分数: '));
-            info.appendChild(riskScoreStrong);
-            info.appendChild(document.createTextNode(' | 相对指数: '));
-            info.appendChild(document.createTextNode(relativeIndexText));
-            info.appendChild(document.createTextNode(' | 分位: '));
-            info.appendChild(document.createTextNode(percentileText === '--' ? '--' : percentileText + '%'));
-            info.appendChild(document.createTextNode(' | 人口: '));
-            info.appendChild(document.createTextNode(populationText));
-            info.appendChild(document.createTextNode(' | 额外就诊: '));
-            info.appendChild(document.createTextNode(excessText === '--' ? '--' : excessText + '人次'));
-
-            item.appendChild(header);
-            item.appendChild(info);
-            listDiv.appendChild(item);
-        });
+        let nearest = null;
+        for (let j = 0; j < count; j += 1) {
+            if (i === j) continue;
+            const d = haversineDistanceMeters(candidates[i].coords, candidates[j].coords);
+            if (d === null) continue;
+            if (nearest === null || d < nearest) {
+                nearest = d;
+            }
+        }
+        const noOverlapCap = nearest === null ? absoluteMax : Math.max(0, nearest / 2 - safetyGap);
+        radii[i] = Math.max(absoluteMin, Math.min(target, noOverlapCap, absoluteMax));
     }
-    
-    // 更新管控建议
-    const suggestDiv = document.getElementById('managementSuggestions');
-    clearElement(suggestDiv);
-    if (data.management_suggestions && data.management_suggestions.length > 0) {
-        data.management_suggestions.forEach(s => {
-            const priorityClass = s.priority === 'high' ? 'danger' : 
-                                 s.priority === 'medium' ? 'warning' : 'info';
-            const icon = s.priority === 'high' ? '🚨' : 
-                        s.priority === 'medium' ? '⚠️' : '💡';
 
-            const alertDiv = document.createElement('div');
-            alertDiv.className = 'alert alert-' + priorityClass + ' py-2 mb-2';
+    // 迭代校正：成对检查，一旦发现重叠就等比例收缩双方
+    for (let iter = 0; iter < 8; iter += 1) {
+        let changed = false;
+        for (let i = 0; i < count; i += 1) {
+            for (let j = i + 1; j < count; j += 1) {
+                const d = haversineDistanceMeters(candidates[i].coords, candidates[j].coords);
+                if (d === null || d <= 0) continue;
+                const limit = Math.max(0, d - safetyGap);
+                const sum = radii[i] + radii[j];
+                if (sum > limit) {
+                    const scale = limit / sum;
+                    radii[i] = Math.max(absoluteMin, radii[i] * scale);
+                    radii[j] = Math.max(absoluteMin, radii[j] * scale);
+                    changed = true;
+                }
+            }
+        }
+        if (!changed) break;
+    }
 
-            const title = document.createElement('strong');
-            title.textContent = icon + ' ' + (s.category || '');
+    return radii;
+}
 
-            const advice = document.createElement('small');
-            advice.textContent = s.advice || '';
+function getCoordForCommunity(name, row) {
+    // 坐标优先级：
+    // 1) 你原有的 community_coords（保持原坐标体系）
+    // 2) 页面初始化 communities（已按原逻辑映射）
+    // 3) 后端动态返回坐标（仅兜底）
+    if (name && communityCoords[name] && communityCoords[name].length === 2) {
+        return [toNumber(communityCoords[name][0], null), toNumber(communityCoords[name][1], null)];
+    }
 
-            alertDiv.appendChild(title);
-            alertDiv.appendChild(document.createElement('br'));
-            alertDiv.appendChild(advice);
-            suggestDiv.appendChild(alertDiv);
-        });
+    const match = communities.find(item => item.name === name);
+    if (match) {
+        const lng = toNumber(match.longitude, null);
+        const lat = toNumber(match.latitude, null);
+        if (lng !== null && lat !== null) {
+            return [lng, lat];
+        }
+    }
+
+    const rowLng = toNumber(row && row.longitude, null);
+    const rowLat = toNumber(row && row.latitude, null);
+    if (rowLng !== null && rowLat !== null) {
+        return [rowLng, rowLat];
+    }
+
+    return null;
+}
+
+function getLayerStyle(row, layerKey) {
+    const riskIndex = toNumber(row.risk_index, 0) || 0;
+    const vulnValue = toNumber(row.svi_percentile, 0) || 0;
+    const uncertainty = toNumber(row.uncertainty_index, 0) || 0;
+    const hotspotCategory = safeText(row.hotspot_category, '无显著');
+
+    if (layerKey === 'vulnerability') {
+        if (vulnValue >= 80) {
+            return { color: '#1e3a8a', label: '脆弱性极高', valueText: `${formatNumber(vulnValue, 0)}%` };
+        }
+        if (vulnValue >= 60) {
+            return { color: '#2563eb', label: '脆弱性较高', valueText: `${formatNumber(vulnValue, 0)}%` };
+        }
+        if (vulnValue >= 40) {
+            return { color: '#0ea5e9', label: '脆弱性中等', valueText: `${formatNumber(vulnValue, 0)}%` };
+        }
+        return { color: '#22c55e', label: '脆弱性较低', valueText: `${formatNumber(vulnValue, 0)}%` };
+    }
+
+    if (layerKey === 'uncertainty') {
+        if (uncertainty >= 75) {
+            return { color: '#b91c1c', label: '不确定性很高', valueText: `${formatNumber(uncertainty, 0)}` };
+        }
+        if (uncertainty >= 55) {
+            return { color: '#ea580c', label: '不确定性较高', valueText: `${formatNumber(uncertainty, 0)}` };
+        }
+        if (uncertainty >= 35) {
+            return { color: '#f59e0b', label: '不确定性中等', valueText: `${formatNumber(uncertainty, 0)}` };
+        }
+        return { color: '#22c55e', label: '不确定性较低', valueText: `${formatNumber(uncertainty, 0)}` };
+    }
+
+    if (layerKey === 'hotspot') {
+        if (hotspotCategory.indexOf('热点(99%)') >= 0) {
+            return { color: '#b91c1c', label: hotspotCategory, valueText: `z=${formatNumber(row.hotspot_z, 2)}` };
+        }
+        if (hotspotCategory.indexOf('热点(95%)') >= 0) {
+            return { color: '#ef4444', label: hotspotCategory, valueText: `z=${formatNumber(row.hotspot_z, 2)}` };
+        }
+        if (hotspotCategory.indexOf('冷点(99%)') >= 0) {
+            return { color: '#1d4ed8', label: hotspotCategory, valueText: `z=${formatNumber(row.hotspot_z, 2)}` };
+        }
+        if (hotspotCategory.indexOf('冷点(95%)') >= 0) {
+            return { color: '#3b82f6', label: hotspotCategory, valueText: `z=${formatNumber(row.hotspot_z, 2)}` };
+        }
+        return { color: '#64748b', label: hotspotCategory, valueText: `z=${formatNumber(row.hotspot_z, 2)}` };
+    }
+
+    if (riskIndex >= 80) {
+        return { color: '#7f1d1d', label: 'HeatRisk 4', valueText: `${formatNumber(riskIndex, 1)}` };
+    }
+    if (riskIndex >= 60) {
+        return { color: '#dc2626', label: 'HeatRisk 3', valueText: `${formatNumber(riskIndex, 1)}` };
+    }
+    if (riskIndex >= 40) {
+        return { color: '#f59e0b', label: 'HeatRisk 2', valueText: `${formatNumber(riskIndex, 1)}` };
+    }
+    if (riskIndex >= 20) {
+        return { color: '#84cc16', label: 'HeatRisk 1', valueText: `${formatNumber(riskIndex, 1)}` };
+    }
+    return { color: '#16a34a', label: 'HeatRisk 0', valueText: `${formatNumber(riskIndex, 1)}` };
+}
+
+function renderLayerLegend(layerKey) {
+    const legend = document.getElementById('layerLegend');
+    clearElement(legend);
+
+    let items = [];
+    if (layerKey === 'vulnerability') {
+        items = [
+            { color: '#1e3a8a', text: '>=80：脆弱性极高' },
+            { color: '#2563eb', text: '60-79：脆弱性较高' },
+            { color: '#0ea5e9', text: '40-59：脆弱性中等' },
+            { color: '#22c55e', text: '<40：脆弱性较低' }
+        ];
+    } else if (layerKey === 'uncertainty') {
+        items = [
+            { color: '#b91c1c', text: '>=75：不确定性很高' },
+            { color: '#ea580c', text: '55-74：不确定性较高' },
+            { color: '#f59e0b', text: '35-54：不确定性中等' },
+            { color: '#22c55e', text: '<35：不确定性较低' }
+        ];
+    } else if (layerKey === 'hotspot') {
+        items = [
+            { color: '#b91c1c', text: '热点(99%)' },
+            { color: '#ef4444', text: '热点(95%)' },
+            { color: '#3b82f6', text: '冷点(95%)' },
+            { color: '#1d4ed8', text: '冷点(99%)' },
+            { color: '#64748b', text: '无显著/样本不足' }
+        ];
     } else {
+        items = [
+            { color: '#16a34a', text: '0-19：HeatRisk 0' },
+            { color: '#84cc16', text: '20-39：HeatRisk 1' },
+            { color: '#f59e0b', text: '40-59：HeatRisk 2' },
+            { color: '#dc2626', text: '60-79：HeatRisk 3' },
+            { color: '#7f1d1d', text: '80-100：HeatRisk 4' }
+        ];
+    }
+
+    items.forEach(item => {
+        const row = document.createElement('div');
+        row.className = 'cr-legend-item';
+
+        const color = document.createElement('span');
+        color.className = 'cr-legend-color';
+        color.style.backgroundColor = item.color;
+
+        const text = document.createElement('span');
+        text.textContent = item.text;
+
+        row.appendChild(color);
+        row.appendChild(text);
+        legend.appendChild(row);
+    });
+}
+
+function buildInfoWindowHtml(row, style) {
+    const rrText = row.sir === null || row.sir === undefined ? '--' : formatNumber(row.sir, 2);
+    const ciText = (row.ci_low === null || row.ci_low === undefined || row.ci_high === null || row.ci_high === undefined)
+        ? '--'
+        : `[${formatNumber(row.ci_low, 2)}, ${formatNumber(row.ci_high, 2)}]`;
+
+    return [
+        '<div style="min-width:260px;padding:10px;">',
+        `<div style="font-weight:700;color:${style.color};margin-bottom:8px;">🏘️ ${escapeHtml(row.community || '--')}</div>`,
+        `<div style="font-size:12px;margin-bottom:4px;">图层标签：<strong>${escapeHtml(style.label)}</strong></div>`,
+        `<div style="font-size:12px;margin-bottom:4px;">HeatRisk：<strong>${escapeHtml(String(row.heatrisk_level ?? '--'))}</strong> (${escapeHtml(row.heatrisk_label || '--')})</div>`,
+        `<div style="font-size:12px;margin-bottom:4px;">综合风险：<strong>${escapeHtml(formatNumber(row.risk_index, 1))}</strong></div>`,
+        `<div style="font-size:12px;margin-bottom:4px;">SVI分位：<strong>${escapeHtml(formatNumber(row.svi_percentile, 1))}%</strong></div>`,
+        `<div style="font-size:12px;margin-bottom:4px;">SIR [95%CI]：<strong>${escapeHtml(rrText)}</strong> ${escapeHtml(ciText)}</div>`,
+        `<div style="font-size:12px;margin-bottom:4px;">P(RR>1)：<strong>${escapeHtml(formatPercent((row.probability_exceed_baseline || 0) * 100, 1))}</strong></div>`,
+        `<div style="font-size:12px;margin-bottom:4px;">热点：<strong>${escapeHtml(row.hotspot_category || '--')}</strong></div>`,
+        `<div style="font-size:12px;">不确定性：<strong>${escapeHtml(formatNumber(row.uncertainty_index, 1))}</strong></div>`,
+        '</div>'
+    ].join('');
+}
+
+function clearRiskOverlays() {
+    if (!map) {
+        riskOverlays = [];
+        riskCoords = {};
+        return;
+    }
+    riskOverlays.forEach(item => {
+        if (item.circle) {
+            map.remove(item.circle);
+        }
+        if (item.marker) {
+            map.remove(item.marker);
+        }
+    });
+    riskOverlays = [];
+    riskCoords = {};
+}
+
+function addRiskOverlays(rankings, layerKey) {
+    clearRiskOverlays();
+    if (!map) {
+        return;
+    }
+
+    const candidates = [];
+    rankings.forEach(row => {
+        const coords = getCoordForCommunity(row.community, row);
+        if (!coords || coords.length !== 2 || !Number.isFinite(coords[0]) || !Number.isFinite(coords[1])) {
+            return;
+        }
+        candidates.push({ row, coords });
+    });
+
+    const radii = computeCircleRadii(candidates);
+
+    const points = [];
+    candidates.forEach((item, index) => {
+        const row = item.row;
+        const coords = item.coords;
+
+        const style = getLayerStyle(row, layerKey);
+        const radius = Math.max(20, toNumber(radii[index], 120) || 120);
+        const circle = new AMap.Circle({
+            center: coords,
+            radius: radius,
+            strokeColor: style.color,
+            strokeWeight: 2,
+            strokeOpacity: 0.9,
+            fillColor: style.color,
+            fillOpacity: 0.24,
+            zIndex: 60
+        });
+
+        const shortName = safeText(row.community, '').slice(0, 4);
+        const markerHtml = [
+            `<div style="background:${style.color};color:#fff;border:2px solid #fff;border-radius:16px;`,
+            'padding:4px 8px;font-size:11px;font-weight:700;box-shadow:0 2px 8px rgba(0,0,0,0.3);',
+            'text-align:center;min-width:58px;">',
+            `<div>${escapeHtml(shortName)}</div>`,
+            `<div style="font-size:10px;opacity:0.9;">${escapeHtml(style.valueText)}</div>`,
+            '</div>'
+        ].join('');
+
+        const marker = new AMap.Marker({
+            position: coords,
+            offset: new AMap.Pixel(-30, -20),
+            content: markerHtml,
+            zIndex: 120
+        });
+
+        const infoWindow = new AMap.InfoWindow({
+            isCustom: false,
+            offset: new AMap.Pixel(0, -25),
+            content: buildInfoWindowHtml(row, style)
+        });
+
+        marker.on('click', () => infoWindow.open(map, coords));
+        circle.on('click', () => infoWindow.open(map, coords));
+
+        map.add([circle, marker]);
+        riskOverlays.push({ circle, marker, coords, infoWindow, community: row.community });
+        riskCoords[row.community] = coords;
+        points.push(coords);
+    });
+
+    if (points.length > 0) {
+        map.setFitView();
+    }
+}
+
+function focusOnCommunity(communityName, index) {
+    if (!map) {
+        return;
+    }
+    let coords = null;
+    if (riskOverlays[index] && riskOverlays[index].coords) {
+        coords = riskOverlays[index].coords;
+    } else if (communityName && riskCoords[communityName]) {
+        coords = riskCoords[communityName];
+    }
+
+    if (coords && coords.length === 2) {
+        map.setZoomAndCenter(14, coords);
+        if (riskOverlays[index] && riskOverlays[index].infoWindow) {
+            riskOverlays[index].infoWindow.open(map, coords);
+        }
+    }
+}
+
+function renderRanking(rankings, layerKey) {
+    const container = document.getElementById('community-list');
+    clearElement(container);
+
+    if (!rankings || rankings.length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'text-muted p-3';
+        empty.textContent = '暂无社区风险数据';
+        container.appendChild(empty);
+        return;
+    }
+
+    rankings.forEach((row, index) => {
+        const style = getLayerStyle(row, layerKey);
+        const item = document.createElement('div');
+        item.className = 'list-group-item cr-rank-item';
+        item.style.borderLeftColor = style.color;
+
+        const title = document.createElement('div');
+        title.className = 'd-flex justify-content-between align-items-center';
+
+        const left = document.createElement('div');
+        const badge = document.createElement('span');
+        badge.className = 'badge bg-secondary me-2';
+        badge.textContent = `#${row.rank || index + 1}`;
+        const strong = document.createElement('strong');
+        strong.textContent = row.community || '--';
+        left.appendChild(badge);
+        left.appendChild(strong);
+
+        const level = document.createElement('span');
+        level.className = 'badge';
+        level.style.backgroundColor = style.color;
+        level.textContent = style.label;
+
+        title.appendChild(left);
+        title.appendChild(level);
+
+        const info = document.createElement('div');
+        info.className = 'small text-muted mt-1';
+        info.textContent = [
+            `综合风险 ${formatNumber(row.risk_index, 1)}`,
+            `SIR ${row.sir === null || row.sir === undefined ? '--' : formatNumber(row.sir, 2)}`,
+            `P(RR>1) ${formatPercent((row.probability_exceed_baseline || 0) * 100, 1)}`
+        ].join(' | ');
+
+        item.appendChild(title);
+        item.appendChild(info);
+        item.addEventListener('click', () => focusOnCommunity(row.community, index));
+        container.appendChild(item);
+    });
+}
+
+function renderSuggestions(suggestions) {
+    const container = document.getElementById('managementSuggestions');
+    clearElement(container);
+
+    if (!suggestions || suggestions.length === 0) {
         const empty = document.createElement('p');
         empty.className = 'text-muted small mb-0';
-        empty.textContent = '暂无管控建议';
-        suggestDiv.appendChild(empty);
+        empty.textContent = '暂无建议';
+        container.appendChild(empty);
+        return;
     }
-    
-    // 显示摘要
-    if (data.summary) {
-        console.log('风险摘要:', data.summary);
+
+    suggestions.forEach(item => {
+        const priorityClass = item.priority === 'high' ? 'danger'
+            : item.priority === 'medium' ? 'warning'
+            : 'secondary';
+        const div = document.createElement('div');
+        div.className = `alert alert-${priorityClass} py-2 mb-2`;
+        div.innerHTML = `<strong>${escapeHtml(item.category || '建议')}</strong><br><small>${escapeHtml(item.advice || '')}</small>`;
+        container.appendChild(div);
+    });
+}
+
+function renderSummary(summary) {
+    const total = toNumber(summary.total_communities, 0) || 0;
+    const heatCounts = summary.heatrisk_counts || {};
+    const hotspotCounts = summary.hotspot_counts || {};
+    const highRisk = (toNumber(heatCounts['3'], 0) || 0) + (toNumber(heatCounts['4'], 0) || 0);
+    const hotspotSig = (toNumber(hotspotCounts['热点(95%)'], 0) || 0)
+        + (toNumber(hotspotCounts['热点(99%)'], 0) || 0)
+        + (toNumber(hotspotCounts['冷点(95%)'], 0) || 0)
+        + (toNumber(hotspotCounts['冷点(99%)'], 0) || 0);
+
+    document.getElementById('kpiCommunities').textContent = total;
+    document.getElementById('kpiHighRisk').textContent = highRisk;
+    document.getElementById('kpiEquityPriority').textContent = safeText(summary.equity_priority_count, '--');
+    document.getElementById('kpiHotspot').textContent = hotspotSig;
+
+    const coverage = toNumber(summary.data_coverage_ratio, null);
+    document.getElementById('kpiCoverage').textContent = coverage === null ? '--' : `${(coverage * 100).toFixed(1)}%`;
+
+    document.getElementById('kpiUncertainty').textContent = formatNumber(summary.median_uncertainty_index, 1, '--');
+    document.getElementById('kpiExcess').textContent = formatNumber(summary.total_expected_excess, 1, '--');
+
+    const metaParts = [];
+    if (summary.analysis_date) {
+        metaParts.push(`日期 ${summary.analysis_date}`);
+    }
+    if (summary.window_days) {
+        metaParts.push(`窗口 ${summary.window_days} 天`);
+    }
+    if (summary.matched_records !== undefined && summary.total_records !== undefined) {
+        metaParts.push(`病例 ${summary.matched_records}/${summary.total_records}`);
+    }
+    document.getElementById('analysisMeta').textContent = metaParts.length ? metaParts.join(' | ') : '分析完成';
+}
+
+function matrixClassByScore(score) {
+    if (score >= 12) {
+        return 'cr-matrix-vhigh';
+    }
+    if (score >= 8) {
+        return 'cr-matrix-high';
+    }
+    if (score >= 4) {
+        return 'cr-matrix-medium';
+    }
+    return 'cr-matrix-low';
+}
+
+function renderImpactLikelihoodMatrix(matrix) {
+    const body = document.getElementById('impactLikelihoodBody');
+    clearElement(body);
+
+    const impactLevels = (matrix && matrix.impact_levels) || ['low', 'medium', 'high', 'very_high'];
+    const likelihoodLevels = (matrix && matrix.likelihood_levels) || ['low', 'medium', 'high', 'very_high'];
+    const counts = (matrix && matrix.counts) || {};
+
+    impactLevels.forEach((impactKey, impactIdx) => {
+        const tr = document.createElement('tr');
+
+        const th = document.createElement('th');
+        th.textContent = impactLevelLabels[impactKey] || impactKey;
+        tr.appendChild(th);
+
+        likelihoodLevels.forEach((likeKey, likeIdx) => {
+            const td = document.createElement('td');
+            const cellCount = toNumber(counts[impactKey] && counts[impactKey][likeKey], 0) || 0;
+            const score = (impactIdx + 1) * (likeIdx + 1);
+            td.className = `cr-matrix-cell ${matrixClassByScore(score)}`;
+            td.innerHTML = `<div>${cellCount}</div><div class="small text-muted">${score}</div>`;
+            tr.appendChild(td);
+        });
+
+        body.appendChild(tr);
+    });
+}
+
+function renderEquityStratification(data) {
+    const quartileBody = document.getElementById('equityQuartileBody');
+    const priorityList = document.getElementById('equityPriorityList');
+    clearElement(quartileBody);
+    clearElement(priorityList);
+
+    const quartiles = Array.isArray(data && data.quartiles) ? data.quartiles : [];
+    const priorities = Array.isArray(data && data.priority_communities) ? data.priority_communities : [];
+
+    if (!quartiles.length) {
+        const tr = document.createElement('tr');
+        tr.innerHTML = '<td colspan="5" class="text-muted">暂无分层数据</td>';
+        quartileBody.appendChild(tr);
+    } else {
+        quartiles.forEach(item => {
+            const tr = document.createElement('tr');
+            tr.innerHTML = [
+                `<td>${escapeHtml(item.stratum || '--')}（${escapeHtml(item.label || '--')}）</td>`,
+                `<td>${escapeHtml(String(item.count ?? '--'))}</td>`,
+                `<td>${escapeHtml(formatNumber(item.avg_risk_index, 1, '--'))}</td>`,
+                `<td>${escapeHtml(String(item.high_heatrisk_count ?? '--'))}</td>`,
+                `<td>${escapeHtml(formatNumber(item.avg_uncertainty, 1, '--'))}</td>`
+            ].join('');
+            quartileBody.appendChild(tr);
+        });
+    }
+
+    if (!priorities.length) {
+        const empty = document.createElement('p');
+        empty.className = 'text-muted small mb-0';
+        empty.textContent = '暂无优先干预社区。';
+        priorityList.appendChild(empty);
+    } else {
+        priorities.forEach(item => {
+            const div = document.createElement('div');
+            div.className = 'alert alert-warning py-2 mb-2';
+            div.innerHTML = [
+                `<strong>${escapeHtml(item.community || '--')}</strong>`,
+                `<div class="small">分层 ${escapeHtml(item.equity_stratum || '--')} · SVI ${escapeHtml(formatNumber(item.svi_percentile, 1, '--'))}% · 风险 ${escapeHtml(formatNumber(item.risk_index, 1, '--'))}</div>`,
+                `<div class="small">${escapeHtml(item.recommended_action || '')}</div>`
+            ].join('');
+            priorityList.appendChild(div);
+        });
     }
 }
 
-// 点击列表项聚焦到对应社区
-function focusOnCommunity(communityName, index) {
-    var coords = null;
-    if (riskMarkers[index] && riskMarkers[index].coords) {
-        coords = riskMarkers[index].coords;
-    } else if (communityName && riskMarkerCoords[communityName]) {
-        coords = riskMarkerCoords[communityName];
-    } else if (communityName) {
-        coords = communityCoords[communityName];
+function renderDetailTable(rankings) {
+    const body = document.getElementById('detailTableBody');
+    clearElement(body);
+
+    if (!rankings || rankings.length === 0) {
+        const tr = document.createElement('tr');
+        tr.innerHTML = '<td colspan="13" class="text-muted">暂无可显示数据</td>';
+        body.appendChild(tr);
+        return;
     }
-    if (coords && coords.length === 2 && Number.isFinite(coords[0]) && Number.isFinite(coords[1])) {
-        map.setZoomAndCenter(14, coords);
-        // 打开对应标记的信息窗口
-        if (riskMarkers[index] && riskMarkers[index].infoWindow) {
-            riskMarkers[index].infoWindow.open(map, coords);
-        }
+
+    rankings.forEach((row, idx) => {
+        const tr = document.createElement('tr');
+        tr.style.cursor = 'pointer';
+        tr.addEventListener('click', () => focusOnCommunity(row.community, idx));
+
+        const sirText = row.sir === null || row.sir === undefined ? '--' : formatNumber(row.sir, 2);
+        const ciText = (row.ci_low === null || row.ci_low === undefined || row.ci_high === null || row.ci_high === undefined)
+            ? '--'
+            : `[${formatNumber(row.ci_low, 2)}, ${formatNumber(row.ci_high, 2)}]`;
+
+        const cells = [
+            row.rank || (idx + 1),
+            row.community || '--',
+            `${safeText(row.heatrisk_level, '--')} (${safeText(row.heatrisk_label, '--')})`,
+            formatNumber(row.risk_index, 1, '--'),
+            formatPercent(row.svi_percentile, 1),
+            `${sirText} ${ciText}`,
+            formatNumber(row.smoothed_sir, 2, '--'),
+            formatPercent((row.probability_exceed_baseline || 0) * 100, 1),
+            row.hotspot_category || '--',
+            `${impactLevelLabels[row.impact_bucket] || row.impact_bucket || '--'} × ${likelihoodLevelLabels[row.likelihood_bucket] || row.likelihood_bucket || '--'}`,
+            safeText(row.matrix_score, '--'),
+            formatNumber(row.uncertainty_index, 1, '--'),
+            formatNumber(row.expected_excess_visits, 1, '--')
+        ];
+
+        cells.forEach(cell => {
+            const td = document.createElement('td');
+            td.textContent = cell;
+            tr.appendChild(td);
+        });
+
+        body.appendChild(tr);
+    });
+}
+
+function renderMethodology(lines) {
+    const ul = document.getElementById('methodologyList');
+    clearElement(ul);
+
+    const methods = Array.isArray(lines) && lines.length > 0
+        ? lines
+        : ['暂无方法说明'];
+
+    methods.forEach(line => {
+        const li = document.createElement('li');
+        li.textContent = line;
+        ul.appendChild(li);
+    });
+}
+
+function destroyCharts() {
+    if (riskLevelChart) {
+        riskLevelChart.destroy();
+        riskLevelChart = null;
+    }
+    if (vulnScatterChart) {
+        vulnScatterChart.destroy();
+        vulnScatterChart = null;
     }
 }
+
+function renderCharts(rankings, summary) {
+    if (!window.Chart) {
+        return;
+    }
+
+    destroyCharts();
+
+    const riskCanvas = document.getElementById('riskLevelChart');
+    const scatterCanvas = document.getElementById('vulnScatterChart');
+    if (!riskCanvas || !scatterCanvas) {
+        return;
+    }
+
+    const heatCounts = summary.heatrisk_counts || {};
+    riskLevelChart = new Chart(riskCanvas.getContext('2d'), {
+        type: 'bar',
+        data: {
+            labels: ['0', '1', '2', '3', '4'],
+            datasets: [{
+                label: '社区数量',
+                data: ['0', '1', '2', '3', '4'].map(key => toNumber(heatCounts[key], 0) || 0),
+                backgroundColor: ['#16a34a', '#84cc16', '#f59e0b', '#dc2626', '#7f1d1d'],
+                borderColor: '#334155',
+                borderWidth: 1
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: { display: false }
+            },
+            scales: {
+                y: {
+                    beginAtZero: true,
+                    ticks: { precision: 0 }
+                }
+            }
+        }
+    });
+
+    const scatterData = rankings.map(row => ({
+        x: toNumber(row.svi_percentile, 0) || 0,
+        y: toNumber(row.risk_index, 0) || 0,
+        r: Math.max(4, Math.min(16, Math.sqrt((toNumber(row.population, 0) || 0) / 120))),
+        label: row.community || '--'
+    }));
+
+    vulnScatterChart = new Chart(scatterCanvas.getContext('2d'), {
+        type: 'bubble',
+        data: {
+            datasets: [{
+                label: '社区',
+                data: scatterData,
+                backgroundColor: 'rgba(37, 99, 235, 0.45)',
+                borderColor: '#1d4ed8',
+                borderWidth: 1.1
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            scales: {
+                x: {
+                    min: 0,
+                    max: 100,
+                    title: {
+                        display: true,
+                        text: 'SVI-like 分位'
+                    }
+                },
+                y: {
+                    min: 0,
+                    max: 100,
+                    title: {
+                        display: true,
+                        text: '综合风险指数'
+                    }
+                }
+            },
+            plugins: {
+                tooltip: {
+                    callbacks: {
+                        label(context) {
+                            const raw = context.raw || {};
+                            return `${raw.label || '--'}：SVI ${formatNumber(raw.x, 1)}%，风险 ${formatNumber(raw.y, 1)}`;
+                        }
+                    }
+                }
+            }
+        }
+    });
+}
+
+function loadRiskMap() {
+    const analysisDate = document.getElementById('analysisDate').value;
+    const windowDays = document.getElementById('windowDays').value;
+    const disease = document.getElementById('diseaseFilter').value;
+    const layerKey = document.getElementById('layerSelect').value;
+
+    const payload = {
+        analysis_date: analysisDate,
+        window_days: Number(windowDays || 30),
+        disease: disease || ''
+    };
+
+    fetch('/api/community/risk-map-v2', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(payload)
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (!data || !data.success) {
+            throw new Error(data && data.message ? data.message : '风险数据请求失败');
+        }
+
+        riskRows = Array.isArray(data.rankings) ? data.rankings : [];
+        renderLayerLegend(layerKey);
+        addRiskOverlays(riskRows, layerKey);
+        renderRanking(riskRows, layerKey);
+        renderSummary(data.summary || {});
+        renderImpactLikelihoodMatrix(data.impact_likelihood_matrix || {});
+        renderEquityStratification(data.equity_stratification || {});
+        renderDetailTable(riskRows);
+        renderCharts(riskRows, data.summary || {});
+        renderMethodology(data.methodology || []);
+        renderSuggestions(data.management_suggestions || []);
+    })
+    .catch(error => {
+        console.error('加载社区风险地图失败:', error);
+        const list = document.getElementById('community-list');
+        clearElement(list);
+        document.getElementById('analysisMeta').textContent = '分析加载失败';
+        const div = document.createElement('div');
+        div.className = 'text-danger p-3';
+        div.textContent = `加载失败：${error.message || error}`;
+        list.appendChild(div);
+    });
+}
+
+const filterForm = document.getElementById('riskFilterForm');
+if (filterForm) {
+    filterForm.addEventListener('submit', function(event) {
+        event.preventDefault();
+        loadRiskMap();
+    });
+}
+
+const layerSelect = document.getElementById('layerSelect');
+if (layerSelect) {
+    layerSelect.addEventListener('change', function() {
+        renderLayerLegend(this.value);
+        if (riskRows && riskRows.length > 0) {
+            addRiskOverlays(riskRows, this.value);
+            renderRanking(riskRows, this.value);
+        }
+    });
+}
+
+renderLayerLegend(layerSelect ? layerSelect.value : 'risk_index');
+initMap();
+loadRiskMap();
 </script>
 {% endblock %}

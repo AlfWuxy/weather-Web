@@ -21,7 +21,7 @@ from core.health_profiles import (
 from core.time_utils import today_local
 from core.usage import log_usage_event
 from core.weather import ensure_user_location_valid, get_weather_with_cache
-from core.db_models import FamilyMember, FamilyMemberProfile, HealthDiary, MedicationReminder
+from core.db_models import FamilyMember, FamilyMemberProfile, HealthDiary, MedicationReminder, WeatherData
 from utils.parsers import parse_int, parse_date, parse_float, safe_json_loads
 from utils.validators import sanitize_input, validate_gender
 
@@ -250,12 +250,19 @@ def family_member_delete(member_id):
         return redirect(url_for('user.user_dashboard'))
 
     member = FamilyMember.query.filter_by(id=member_id, user_id=current_user.id).first_or_404()
-    profile = FamilyMemberProfile.query.filter_by(member_id=member.id).first()
-    if profile:
-        db.session.delete(profile)
-    db.session.delete(member)
-    db.session.commit()
-    flash('家庭成员已删除', 'success')
+    try:
+        # 先清理关联的健康日记和用药提醒
+        HealthDiary.query.filter_by(member_id=member.id, user_id=current_user.id).delete()
+        MedicationReminder.query.filter_by(member_id=member.id, user_id=current_user.id).delete()
+        profile = FamilyMemberProfile.query.filter_by(member_id=member.id).first()
+        if profile:
+            db.session.delete(profile)
+        db.session.delete(member)
+        db.session.commit()
+        flash('家庭成员已删除', 'success')
+    except Exception:
+        db.session.rollback()
+        flash('删除失败，请稍后重试', 'error')
     return redirect(url_for('health.family_members'))
 
 
@@ -336,6 +343,13 @@ def health_diary():
         severity = sanitize_input(request.form.get('severity'), max_length=20)
         notes = sanitize_input(request.form.get('notes'), max_length=500)
 
+        # 校验 member_id 归属当前用户
+        if member_id:
+            member = FamilyMember.query.filter_by(id=member_id, user_id=current_user.id).first()
+            if not member:
+                flash('无效的家庭成员', 'error')
+                return redirect(url_for('health.health_diary'))
+
         diary = HealthDiary(
             user_id=current_user.id,
             member_id=member_id,
@@ -350,8 +364,28 @@ def health_diary():
         return redirect(url_for('health.health_diary'))
 
     members = FamilyMember.query.filter_by(user_id=current_user.id).order_by(FamilyMember.created_at.desc()).all()
+    member_map = {member.id: member.name for member in members}
     entries = HealthDiary.query.filter_by(user_id=current_user.id).order_by(HealthDiary.entry_date.desc()).all()
-    return render_template('health_diary.html', members=members, entries=entries)
+
+    weather_map = {}
+    entry_dates = sorted({entry.entry_date for entry in entries if entry.entry_date})
+    if entry_dates:
+        # 健康日记展示“当天历史天气”，查不到时模板显示“-”。
+        user_location = ensure_user_location_valid()
+        weather_rows = WeatherData.query.filter(
+            WeatherData.location == user_location,
+            WeatherData.date.in_(entry_dates)
+        ).order_by(WeatherData.date.desc(), WeatherData.id.desc()).all()
+        for row in weather_rows:
+            weather_map.setdefault(row.date, row)
+
+    return render_template(
+        'health_diary.html',
+        members=members,
+        member_map=member_map,
+        entries=entries,
+        weather_map=weather_map
+    )
 
 
 @bp.route('/medication-reminders', methods=['GET', 'POST'], endpoint='medication_reminders')
@@ -372,6 +406,13 @@ def medication_reminders():
         dosage = sanitize_input(request.form.get('dosage'), max_length=100)
         frequency = sanitize_input(request.form.get('frequency'), max_length=20) or 'daily'
         time_of_day = sanitize_input(request.form.get('time_of_day'), max_length=10)
+
+        # 校验 member_id 归属当前用户
+        if member_id:
+            member = FamilyMember.query.filter_by(id=member_id, user_id=current_user.id).first()
+            if not member:
+                flash('无效的家庭成员', 'error')
+                return redirect(url_for('health.medication_reminders'))
 
         triggers = {}
         triggers['high_temp'] = parse_float(request.form.get('high_temp'))

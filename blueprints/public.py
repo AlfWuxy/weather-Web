@@ -1,7 +1,14 @@
 # -*- coding: utf-8 -*-
 """Public and auth routes."""
-from flask import Blueprint, current_app, redirect, render_template, request, url_for
+import logging
+import re
+
+import requests
+
+from flask import Blueprint, Response, abort, current_app, redirect, render_template, request, url_for
 from flask_login import current_user, login_required
+
+logger = logging.getLogger(__name__)
 
 from core.extensions import limiter
 from core.extensions import db
@@ -30,6 +37,26 @@ from services.public_service import (
 from utils.validators import sanitize_input
 
 bp = Blueprint('public', __name__)
+AMAP_PROXY_PATH_RE = re.compile(r'^[A-Za-z0-9._/-]+$')
+
+
+def _normalize_amap_proxy_path(proxy_path):
+    """规范化高德代理路径，避免变成开放代理。"""
+    cleaned = (proxy_path or '').lstrip('/')
+    if not cleaned or '..' in cleaned:
+        return None
+    if not AMAP_PROXY_PATH_RE.fullmatch(cleaned):
+        return None
+    return cleaned
+
+
+def _build_amap_remote_url(proxy_path):
+    normalized_path = _normalize_amap_proxy_path(proxy_path)
+    if not normalized_path:
+        return None
+    if normalized_path == 'v4/map/styles':
+        return f'https://webapi.amap.com/{normalized_path}'
+    return f'https://restapi.amap.com/{normalized_path}'
 
 
 @bp.route('/', endpoint='index')
@@ -140,7 +167,7 @@ def elder_token_debrief(token):
     status, actions, resources, weather_data, heat_result, risk_label, risk_reasons = _build_action_context(
         pair, status_date
     )
-    action_routes = _resolve_action_routes()
+    action_routes = _resolve_action_routes(token=token)
     return _render_action_page(
         pair,
         status,
@@ -159,6 +186,35 @@ def elder_token_debrief(token):
 def transparency():
     """透明度说明"""
     return render_template('transparency.html')
+
+
+@bp.route('/_AMapService/', defaults={'proxy_path': ''}, endpoint='amap_service_proxy_root')
+@bp.route('/_AMapService/<path:proxy_path>', methods=['GET'], endpoint='amap_service_proxy')
+def amap_service_proxy(proxy_path):
+    """高德 JS API 安全密钥代理，避免在前端明文暴露 securityJsCode。"""
+    security_code = (current_app.config.get('AMAP_SECURITY_JS_CODE') or '').strip()
+    if not security_code:
+        abort(404)
+
+    remote_url = _build_amap_remote_url(proxy_path)
+    if not remote_url:
+        abort(404)
+
+    params = [(key, value) for key, value in request.args.items(multi=True) if key != 'jscode']
+    params.append(('jscode', security_code))
+
+    try:
+        resp = requests.get(remote_url, params=params, timeout=10)
+    except requests.RequestException as exc:
+        logger.warning("AMap proxy failed for %s: %s", proxy_path, exc)
+        abort(502)
+
+    response = Response(resp.content, status=resp.status_code)
+    for header in ('Content-Type', 'Cache-Control', 'Expires', 'Last-Modified', 'ETag'):
+        header_value = resp.headers.get(header)
+        if header_value:
+            response.headers[header] = header_value
+    return response
 
 
 @bp.route('/cooling', endpoint='cooling_resources')
@@ -191,7 +247,7 @@ def guest_login():
     return handle_guest_login()
 
 
-@bp.route('/logout', endpoint='logout')
+@bp.route('/logout', methods=['POST'], endpoint='logout')
 @login_required
 def logout():
     """登出"""
@@ -246,7 +302,7 @@ def wxoa_landing():
             meta={'from': source, 'article': article},
         )
     except Exception:
-        pass
+        logger.debug("wxoa_land 埋点写入失败", exc_info=True)
     return render_template('wxoa_landing.html', source=source, article=article)
 
 

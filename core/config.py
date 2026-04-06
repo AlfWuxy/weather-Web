@@ -203,6 +203,11 @@ def configure_app(app, logger):
     qweather_key = _normalized_env_value('QWEATHER_KEY', '')
     qweather_api_base = _normalized_env_value('QWEATHER_API_BASE', QWEATHER_API_BASE_DEFAULT)
     amap_key = _normalized_env_value('AMAP_KEY', '')
+    amap_js_api_key = _normalized_env_value('AMAP_JS_API_KEY', amap_key)
+    amap_web_service_key = _normalized_env_value(
+        'AMAP_WEB_SERVICE_KEY',
+        _normalized_env_value('AMAP_WEB_KEY', amap_key)
+    )
     amap_security_js_code = _normalized_env_value('AMAP_SECURITY_JS_CODE', '')
     siliconflow_key = _normalized_env_value('SILICONFLOW_API_KEY', '')
     siliconflow_base = _normalized_env_value('SILICONFLOW_API_BASE', SILICONFLOW_API_BASE_DEFAULT)
@@ -233,7 +238,10 @@ def configure_app(app, logger):
     app.config['SECRET_KEY'] = secret_key
     app.config['QWEATHER_KEY'] = qweather_key
     app.config['QWEATHER_API_BASE'] = qweather_api_base
-    app.config['AMAP_KEY'] = amap_key
+    # 兼容旧配置：AMAP_KEY 继续作为前端地图 Key 的别名。
+    app.config['AMAP_KEY'] = amap_js_api_key
+    app.config['AMAP_JS_API_KEY'] = amap_js_api_key
+    app.config['AMAP_WEB_SERVICE_KEY'] = amap_web_service_key
     app.config['AMAP_SECURITY_JS_CODE'] = amap_security_js_code
     app.config['SILICONFLOW_API_KEY'] = siliconflow_key
     app.config['SILICONFLOW_API_BASE'] = siliconflow_base
@@ -257,6 +265,7 @@ def configure_app(app, logger):
     app.config.setdefault('FEATURE_NOTIFICATIONS', parse_bool(os.getenv('FEATURE_NOTIFICATIONS', '0'), default=False))
     app.config.setdefault('FEATURE_AUDIT_LOGS', parse_bool(os.getenv('FEATURE_AUDIT_LOGS', '0'), default=False))
     app.config.setdefault('FEATURE_STRUCTURED_LOGS', parse_bool(os.getenv('FEATURE_STRUCTURED_LOGS', '1'), default=True))
+    app.config.setdefault('TRUSTED_PROXY_CIDRS', os.getenv('TRUSTED_PROXY_CIDRS', '127.0.0.1/32,::1/128'))
     app.config.setdefault(
         'FORECAST_CACHE_TTL_MINUTES',
         parse_int(os.getenv('FORECAST_CACHE_TTL_MINUTES', '20'), default=20)
@@ -264,6 +273,22 @@ def configure_app(app, logger):
     app.config.setdefault(
         'WEATHER_CACHE_TTL_MINUTES',
         parse_int(os.getenv('WEATHER_CACHE_TTL_MINUTES', str(WEATHER_CACHE_TTL_MINUTES)), default=WEATHER_CACHE_TTL_MINUTES)
+    )
+    app.config.setdefault(
+        'COMMUNITY_RISK_CACHE_TTL_SECONDS',
+        parse_int(os.getenv('COMMUNITY_RISK_CACHE_TTL_SECONDS', '1500'), default=1500)
+    )
+    app.config.setdefault(
+        'COMMUNITY_RISK_CACHE_LOCK_SECONDS',
+        parse_int(os.getenv('COMMUNITY_RISK_CACHE_LOCK_SECONDS', '20'), default=20)
+    )
+    app.config.setdefault(
+        'COMMUNITY_RISK_CACHE_WAIT_SECONDS',
+        parse_float(os.getenv('COMMUNITY_RISK_CACHE_WAIT_SECONDS', '1.2'), default=1.2)
+    )
+    app.config.setdefault(
+        'LOCATION_CACHE_TTL_DAYS',
+        parse_int(os.getenv('LOCATION_CACHE_TTL_DAYS', '90'), default=90)
     )
     app.config.setdefault('NOTIFICATION_ESCALATION_DAYS', parse_int(os.getenv('NOTIFICATION_ESCALATION_DAYS', '3'), default=3))
     app.config.setdefault('NOTIFICATION_MAX_DAILY', parse_int(os.getenv('NOTIFICATION_MAX_DAILY', '5'), default=5))
@@ -287,6 +312,8 @@ def configure_app(app, logger):
     app.config.setdefault('RATE_LIMIT_ML', os.getenv('RATE_LIMIT_ML', app.config['RATE_LIMITS']))
     app.config.setdefault('RATE_LIMIT_AI', os.getenv('RATE_LIMIT_AI', '20 per minute'))
     app.config.setdefault('RATE_LIMIT_LOGIN', os.getenv('RATE_LIMIT_LOGIN', '5 per 5 minutes'))
+    app.config.setdefault('LOGIN_MAX_FAILURES', parse_int(os.getenv('LOGIN_MAX_FAILURES', '5'), default=5))
+    app.config.setdefault('LOGIN_LOCKOUT_SECONDS', parse_int(os.getenv('LOGIN_LOCKOUT_SECONDS', '300'), default=300))
     app.config.setdefault('RATE_LIMIT_SHORT_CODE', os.getenv('RATE_LIMIT_SHORT_CODE', '3 per hour'))
     app.config.setdefault('RATE_LIMIT_CONFIRM', os.getenv('RATE_LIMIT_CONFIRM', '30 per hour'))
     app.config.setdefault('RATE_LIMIT_HELP', os.getenv('RATE_LIMIT_HELP', '10 per hour'))
@@ -355,8 +382,10 @@ def configure_app(app, logger):
 
     if not qweather_key:
         logger.warning("QWEATHER_KEY 未配置，天气API将无法使用（可回退 Open-Meteo）。")
-    if not amap_key:
-        logger.warning("AMAP_KEY 未配置，地图API将无法使用")
+    if not amap_js_api_key:
+        logger.warning("AMAP_JS_API_KEY 未配置，地图API将无法使用（兼容回退 AMAP_KEY）。")
+    if not amap_web_service_key:
+        logger.warning("AMAP_WEB_SERVICE_KEY 未配置，地址地理编码将回退默认地点（兼容回退 AMAP_KEY）。")
     if not amap_security_js_code:
         logger.warning("AMAP_SECURITY_JS_CODE 未配置，地图安全密钥将无法使用")
     if not siliconflow_key:
@@ -372,3 +401,9 @@ def configure_app(app, logger):
     app.config.setdefault('SENTRY_SEND_PII', parse_bool(os.getenv('SENTRY_SEND_PII', '0'), default=False))
 
     _configure_sentry(app, logger)
+
+    # Static caching (safe with template-level cache busting via url_for(..., v=...)).
+    app.config.setdefault(
+        'STATIC_CACHE_MAX_AGE_SECONDS',
+        parse_int(os.getenv('STATIC_CACHE_MAX_AGE_SECONDS', '2592000'), default=2592000)  # 30 days
+    )

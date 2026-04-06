@@ -165,10 +165,10 @@
 
 {% block extra_js %}
 {% if has_map %}
-    {% if amap_security_js_code %}
+    {% if amap_service_host %}
     <script type="text/javascript">
         window._AMapSecurityConfig = {
-            securityJsCode: {{ amap_security_js_code|tojson }}
+            serviceHost: {{ amap_service_host|tojson }}
         };
     </script>
     {% endif %}

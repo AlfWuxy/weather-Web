@@ -33,15 +33,40 @@ def setup_test_environment():
         'DATABASE_URI': f'sqlite:///{temp_db_path}',
         'SECRET_KEY': 'test-secret-key-for-pytest',
         'DEBUG': 'true',
+        'REDIS_URL': '',  # 测试中禁用 Redis，避免与服务器状态相互影响
+        'WEATHER_CACHE_REDIS_URL': '',
+        'RATE_LIMIT_STORAGE_URI': 'memory://',
+        'RATELIMIT_STORAGE_URI': 'memory://',
         'QWEATHER_KEY': '',  # 测试中禁用外部 API
         'AMAP_KEY': '',
+        'AMAP_JS_API_KEY': '',
+        'AMAP_WEB_SERVICE_KEY': '',
+        'AMAP_SECURITY_JS_CODE': '',
         'SILICONFLOW_API_KEY': '',
         'DEMO_MODE': '1',  # 启用演示模式，使用 mock 数据
+    }
+
+    # 外部 API 与演示开关在测试中强制隔离，避免读取到开发者本地真实密钥。
+    forced_test_env = {
+        'REDIS_URL': '',
+        'WEATHER_CACHE_REDIS_URL': '',
+        'RATE_LIMIT_STORAGE_URI': 'memory://',
+        'RATELIMIT_STORAGE_URI': 'memory://',
+        'QWEATHER_KEY': '',
+        'AMAP_KEY': '',
+        'AMAP_JS_API_KEY': '',
+        'AMAP_WEB_SERVICE_KEY': '',
+        'AMAP_SECURITY_JS_CODE': '',
+        'SILICONFLOW_API_KEY': '',
+        'DEMO_MODE': '1',
     }
 
     for key, value in test_env.items():
         if key not in os.environ:
             os.environ[key] = value
+
+    for key, value in forced_test_env.items():
+        os.environ[key] = value
 
     yield temp_db_path
 
@@ -139,4 +164,28 @@ def authenticated_client(client, db_session):
     yield client
 
     # 登出
-    client.get('/logout', follow_redirects=True)
+    client.post('/logout', data={'csrf_token': csrf_token}, follow_redirects=False)
+
+
+@pytest.fixture(scope='function')
+def admin_client(client, db_session):
+    """提供已登录的管理员测试客户端"""
+    from core.db_models import User
+
+    admin = User(username='adminuser', role='admin')
+    admin.set_password('testpass')
+    db_session.add(admin)
+    db_session.commit()
+
+    csrf_token = 'test-csrf-token'
+    with client.session_transaction() as session:
+        session['_csrf_token'] = csrf_token
+    client.post('/login', data={
+        'username': 'adminuser',
+        'password': 'testpass',
+        'csrf_token': csrf_token
+    }, follow_redirects=True)
+
+    yield client
+
+    client.post('/logout', data={'csrf_token': csrf_token}, follow_redirects=False)
