@@ -1,6 +1,0 @@
-App({
-  globalData: {
-    apiToken: null,
-  },
-});
-

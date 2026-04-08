@@ -22,74 +22,58 @@ wheels/
 
 # 虚拟环境
 venv/
+.venv/
 ENV/
 env/
 
-# Flask
+# Flask / 数据库
 instance/
 .webassets-cache
-
-# 数据库
 *.db
 *.sqlite
 *.sqlite3
+storage/*.db
 
-# IDE
+# 测试与缓存
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage*
+
+# 本地 Agent / IDE
+.claude/
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
 
+# 浏览器与调试产物
+.playwright-cli/
+output/playwright/
+
+# 日志与临时文件
+*.log
+*.tmp
+*.bak
+backups/
+*.gz
+
+# 环境变量与本地密钥
+.env
+.env.*
+!.env.example
+
 # 系统文件
 .DS_Store
 Thumbs.db
 
-# 日志
-*.log
+# 模型与敏感数据
+models/*.pkl
+data/research/*.xlsx
 
-# 临时文件
-*.tmp
-*.bak
+# 历史分析脚本与本地备份
 数据分析结果.txt
 analyze_data.py
 check_columns.py
-
-# 环境变量
-.env
-.env.local
-
-
-
-
-
-
-
-
-# Python env / cache
-venv/
-.venv/
-__pycache__/
-.pytest_cache/
-
-# Secrets
-.env
-.env.*
-
-# Local runtime data
-instance/*.db
-storage/*.db
-*.sqlite
-
-# Sensitive datasets (medical)
-data/research/*.xlsx
-
-# Backups
-backups/
-*.gz
-
-# Model artifacts (optional:建议移到制品库)
-models/*.pkl
-
-# Local backups
-.env.backup
