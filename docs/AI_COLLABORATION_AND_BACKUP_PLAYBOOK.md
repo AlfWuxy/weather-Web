@@ -65,6 +65,8 @@
 - release
 - issue / 备注
 
+云端保护设置的手动步骤见 `docs/GITHUB_PROTECTION_CHECKLIST.md`。
+
 ### 本地仓库
 
 负责“实际开发和第一层保护”：
@@ -327,12 +329,13 @@ git rm --cached <path>
 ### 模板与责任边界
 
 - 保留 PR 模板
-- 后续可以增加 `CODEOWNERS`
+- 保留 `CODEOWNERS`
 
 说明：
 
 - 当前个人仓库也适合做这些基础保护
 - 如果以后多人长期协作，迁到 GitHub Organization 后，权限和规则会更好管
+- GitHub 网页端逐步设置清单见 `docs/GITHUB_PROTECTION_CHECKLIST.md`
 
 ## 给 AI 助手的执行清单
 

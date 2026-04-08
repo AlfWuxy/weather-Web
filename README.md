@@ -119,6 +119,7 @@ scripts/              部署与维护脚本
 ## 文档入口
 
 - AI 协作与备份主说明：[`docs/AI_COLLABORATION_AND_BACKUP_PLAYBOOK.md`](./docs/AI_COLLABORATION_AND_BACKUP_PLAYBOOK.md)
+- GitHub 保护设置清单：[`docs/GITHUB_PROTECTION_CHECKLIST.md`](./docs/GITHUB_PROTECTION_CHECKLIST.md)
 - 项目总览：[`docs/PROJECT_CATALOG.md`](./docs/PROJECT_CATALOG.md)
 - 架构说明：[`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md)
 - 重构计划：[`docs/REFACTOR_PLAN.md`](./docs/REFACTOR_PLAN.md)
