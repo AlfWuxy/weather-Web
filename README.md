@@ -63,6 +63,13 @@ python app.py
 
 - Web: `http://127.0.0.1:5000`
 
+首次进入仓库后，建议启用本地 Git 护栏：
+
+```bash
+git config core.hooksPath .githooks
+chmod +x .githooks/pre-push
+```
+
 ## 测试
 
 运行默认测试集：
@@ -99,7 +106,7 @@ scripts/              部署与维护脚本
 5. 验证通过后使用 squash merge 合并回 `main`
 6. 回到 Notion 更新状态、分支名和 PR 链接
 
-更多约定见 [CONTRIBUTING.md](./CONTRIBUTING.md)。
+更完整的人工 / AI 协作与备份规则见 [docs/AI_COLLABORATION_AND_BACKUP_PLAYBOOK.md](./docs/AI_COLLABORATION_AND_BACKUP_PLAYBOOK.md)。
 
 ## Commit 规范
 
@@ -111,7 +118,8 @@ scripts/              部署与维护脚本
 
 ## 文档入口
 
-- 项目总览：[`PROJECT_OVERVIEW.md`](./PROJECT_OVERVIEW.md)
+- AI 协作与备份主说明：[`docs/AI_COLLABORATION_AND_BACKUP_PLAYBOOK.md`](./docs/AI_COLLABORATION_AND_BACKUP_PLAYBOOK.md)
+- 项目总览：[`docs/PROJECT_CATALOG.md`](./docs/PROJECT_CATALOG.md)
 - 架构说明：[`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md)
 - 重构计划：[`docs/REFACTOR_PLAN.md`](./docs/REFACTOR_PLAN.md)
 - 仓库边界与清理分类：[`docs/REPO_BOUNDARY_AND_CLEANUP.md`](./docs/REPO_BOUNDARY_AND_CLEANUP.md)
@@ -131,6 +139,8 @@ scripts/              部署与维护脚本
 - 测试快照与浏览器产物
 - 重复备份文件（如 `* 2.*`）
 - 与天气网站主线无关的历史资料
+
+如果需要多人或多 AI 助手同时工作，优先使用 `git worktree` 或独立工作副本，不要共用同一个开发目录直接轮流改。
 
 ## 说明
 

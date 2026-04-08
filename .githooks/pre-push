@@ -1,0 +1,20 @@
+#!/bin/sh
+
+# 中文说明：
+# 这个 hook 用来阻止把当前分支直接推送到远端 main/master。
+# 目标不是限制正常开发，而是强制使用：
+# 新分支 -> commit -> push 分支 -> PR -> squash merge
+
+while read local_ref local_sha remote_ref remote_sha
+do
+  case "$remote_ref" in
+    refs/heads/main|refs/heads/master)
+      echo "拒绝直接 push 到 ${remote_ref#refs/heads/}。" >&2
+      echo "请改为：新建分支 -> 提交 -> 推送分支 -> 创建 PR -> 使用 squash merge 合并。" >&2
+      echo "如确实需要绕过本地检查，可显式使用 git push --no-verify，但默认不建议。" >&2
+      exit 1
+      ;;
+  esac
+done
+
+exit 0

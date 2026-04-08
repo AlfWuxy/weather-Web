@@ -43,6 +43,12 @@
 - `.DS_Store`
 - `.env.backup`
 
+### 忽略规则分层
+
+- 整个项目都不该提交的内容，写进仓库根目录 `.gitignore`
+- 只属于某一台电脑或某个执行者的临时文件，写进 `.git/info/exclude`
+- 已经被 Git 跟踪过的噪音文件，先 `git rm --cached <path>`，再交给 ignore 规则处理
+
 ## 4. 第一阶段处理规则
 
 ### 保留
@@ -83,3 +89,14 @@
 - `/Users/imac/Desktop/老家/weather-web-archive-staging`
 
 这个目录用于暂存从主仓库移出的重复文件和无关历史材料，后续可再推送为独立 GitHub 归档仓。
+
+## 7. 与协作流程的关系
+
+仓库边界和 Git 工作流必须一起看：
+
+- `main` 只保留成品历史
+- 日常开发一律在分支中进行
+- 多 AI 助手同时工作时，优先使用 `git worktree` 或独立副本隔离
+- 日常备份以“分支 push + Draft PR + Notion 回填”为准
+
+具体执行细节见 `docs/AI_COLLABORATION_AND_BACKUP_PLAYBOOK.md`。
