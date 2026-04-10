@@ -26,11 +26,23 @@ load_deploy_env() {
 
 load_deploy_env
 
-SERVER="${DEPLOY_SERVER:-172.245.126.42}"
-USER="${DEPLOY_USER:-root}"
+SERVER="${DEPLOY_SERVER:-}"
+USER="${DEPLOY_USER:-}"
 PROJECT_DIR="${DEPLOY_PROJECT_DIR:-/opt/case-weather}"
 LOCAL_DIR="${DEPLOY_LOCAL_DIR:-$ROOT_DIR}"
 PASSWORD="${DEPLOY_PASSWORD:-${SSHPASS:-}}"
+
+require_env_value() {
+    local name="$1"
+    local value="$2"
+    if [ -z "$value" ]; then
+        echo "缺少必填环境变量: $name" >&2
+        exit 1
+    fi
+}
+
+require_env_value "DEPLOY_SERVER" "$SERVER"
+require_env_value "DEPLOY_USER" "$USER"
 
 if [ -z "$SSHPASS" ] && [ -n "$PASSWORD" ]; then
     export SSHPASS="$PASSWORD"

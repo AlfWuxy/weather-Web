@@ -280,12 +280,12 @@ AuditLog (审计日志)
 
 | 项目 | 值 |
 |------|------|
-| 服务器IP | 172.245.126.42 |
+| 服务器IP | `<managed-in-private-ops>` |
 | 操作系统 | Debian 12 |
-| 项目路径 | /opt/case-weather |
+| 项目路径 | /opt/your-app |
 | Python版本 | 3.11.2 |
-| 虚拟环境 | /opt/case-weather/venv |
-| 数据库 | /opt/case-weather/storage/health_weather.db |
+| 虚拟环境 | /opt/your-app/venv |
+| 数据库 | /opt/your-app/storage/health_weather.db |
 | 服务名称 | case-weather.service |
 | 端口 | 5000 |
 
@@ -324,14 +324,14 @@ rsync -avz \
   --exclude ".env" \
   --exclude "instance/health_weather.db" \
   --exclude "storage" \
-  /Users/imac/Downloads/case-weather/ \
-  root@172.245.126.42:/opt/case-weather/
+  /path/to/your-local-repo/ \
+  deploy-user@your-server-host:/opt/your-app/
 
 # 重启服务使更新生效
-ssh root@172.245.126.42 "systemctl restart case-weather"
+ssh deploy-user@your-server-host "systemctl restart case-weather"
 ```
 
-**重要**：`.env` 被排除，不会被覆盖。数据库默认位于 `/opt/case-weather/storage/health_weather.db`（仓库外）；若本地存在 `storage/` 目录也会被排除。
+**重要**：`.env` 被排除，不会被覆盖。数据库默认位于 `/opt/your-app/storage/health_weather.db`（仓库外）；若本地存在 `storage/` 目录也会被排除。
 
 ### 7.4 数据库备份策略
 
@@ -339,17 +339,17 @@ ssh root@172.245.126.42 "systemctl restart case-weather"
 
 | 项目 | 详情 |
 |------|------|
-| 备份位置 | `/opt/case-weather/backups/` |
+| 备份位置 | `/opt/your-app/backups/` |
 | 备份频率 | 每天凌晨3点自动执行 (Cron) |
 | 保留天数 | 30天（自动删除旧备份） |
 | 备份格式 | `.db.gz` (SQLite + gzip压缩) |
 
-#### 备份脚本 (`/opt/case-weather/scripts/backup.sh`)
+#### 备份脚本 (`/opt/your-app/scripts/backup.sh`)
 
 ```bash
 #!/bin/bash
-BACKUP_DIR=/opt/case-weather/backups
-DB_FILE=/opt/case-weather/storage/health_weather.db
+BACKUP_DIR=/opt/your-app/backups
+DB_FILE=/opt/your-app/storage/health_weather.db
 DATE=$(date +%Y%m%d_%H%M%S)
 BACKUP_FILE=$BACKUP_DIR/health_weather_$DATE.db
 
@@ -366,28 +366,25 @@ find $BACKUP_DIR -name "*.gz" -mtime +30 -delete
 crontab -l
 
 # 当前配置（每天凌晨3点执行）
-0 3 * * * /opt/case-weather/scripts/backup.sh >> /opt/case-weather/backups/backup.log 2>&1
+0 3 * * * /opt/your-app/scripts/backup.sh >> /opt/your-app/backups/backup.log 2>&1
 ```
 
 #### 手动备份
 
 ```bash
 # 在服务器上执行
-/opt/case-weather/scripts/backup.sh
+/opt/your-app/scripts/backup.sh
 
 # 查看备份列表
-ls -lh /opt/case-weather/backups/
+ls -lh /opt/your-app/backups/
 ```
 
 #### 下载备份到本地
 
 ```bash
-# 在本地执行
-cd /Users/imac/Downloads/case-weather
-./scripts/download_backup.sh
-
-# 或手动下载
-scp root@172.245.126.42:/opt/case-weather/backups/*.gz ./backups/
+# 建议在私有 ops 文档或私有脚本目录中执行下载流程
+# 公开仓库只保留手动示例
+scp deploy-user@your-server-host:/opt/your-app/backups/*.gz ./backups/
 ```
 
 #### 恢复数据库
@@ -397,14 +394,14 @@ scp root@172.245.126.42:/opt/case-weather/backups/*.gz ./backups/
 systemctl stop case-weather
 
 # 2. 解压备份
-cd /opt/case-weather/backups
+cd /opt/your-app/backups
 gunzip health_weather_YYYYMMDD_HHMMSS.db.gz
 
 # 3. 备份当前数据库（以防万一）
-cp /opt/case-weather/storage/health_weather.db /opt/case-weather/storage/health_weather.db.old
+cp /opt/your-app/storage/health_weather.db /opt/your-app/storage/health_weather.db.old
 
 # 4. 恢复数据库
-cp health_weather_YYYYMMDD_HHMMSS.db /opt/case-weather/storage/health_weather.db
+cp health_weather_YYYYMMDD_HHMMSS.db /opt/your-app/storage/health_weather.db
 
 # 5. 重启服务
 systemctl restart case-weather
@@ -412,7 +409,7 @@ systemctl restart case-weather
 
 ### 7.5 环境变量配置
 
-环境变量存储在 `/opt/case-weather/.env` 文件中（权限 600）：
+环境变量存储在 `/opt/your-app/.env` 文件中（权限 600）：
 
 ```bash
 # Flask配置
@@ -421,7 +418,7 @@ SECRET_KEY=your_secret_key
 
 # 和风天气API（主来源）
 QWEATHER_KEY=YOUR_QWEATHER_KEY
-QWEATHER_API_BASE=https://mj76x98pfn.re.qweatherapi.com/v7
+QWEATHER_API_BASE=https://your-qweather-host.example.com/v7
 
 # Open-Meteo（兜底，无需 Key）
 # 无需配置，系统会在 QWeather 失败时自动启用
@@ -433,15 +430,14 @@ AMAP_KEY=your_amap_key
 SILICONFLOW_API_KEY=your_siliconflow_key
 
 # 本地部署/同步（不上传服务器）
-DEPLOY_SERVER=172.245.126.42
-DEPLOY_USER=root
-DEPLOY_PROJECT_DIR=/opt/case-weather
-DEPLOY_LOCAL_DIR=/path/to/case-weather
-# 推荐使用 SSH Key；无需保存密码
-# SSHPASS=your_ssh_password
+DEPLOY_SERVER=your-server-host
+DEPLOY_USER=deploy-user
+DEPLOY_PROJECT_DIR=/opt/your-app
+DEPLOY_LOCAL_DIR=/path/to/your-local-repo
+# 推荐使用 SSH Key；不要把密码式运维流程写进公开仓库
 ```
 
-`scripts/deploy.sh` / `scripts/sync.sh` / `scripts/download_backup.sh` 会读取本地 `.env`，优先使用 SSH Key；如需密码方式再配置 `SSHPASS`。`.env` 不会被同步到服务器。
+`scripts/deploy.sh` / `scripts/sync.sh` 会读取本地 `.env` 中的部署变量。公开仓库只记录 SSH Key 方式；其他运维细节放到私有 ops 文档。
 
 ### 7.6 常见问题排查
 
@@ -477,7 +473,7 @@ with app.app_context(): db.create_all(); print('Done')"
 
 ```bash
 # 测试API
-curl -s --compressed "https://mj76x98pfn.re.qweatherapi.com/v7/weather/now?key=YOUR_KEY&location=116.20,29.27"
+curl -s --compressed "https://your-qweather-host.example.com/v7/weather/now?key=YOUR_KEY&location=116.20,29.27"
 ```
 
 ---

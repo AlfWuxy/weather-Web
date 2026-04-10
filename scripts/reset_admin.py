@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
 """重置 admin 密码"""
+import argparse
+import getpass
 import os
 import sqlite3
 from pathlib import Path
 from werkzeug.security import generate_password_hash
-
-DEFAULT_DB_FILE = Path('/opt/case-weather/storage/health_weather.db')
 
 
 def _load_database_uri():
     env_uri = (os.getenv('DATABASE_URI') or '').strip()
     if env_uri:
         return env_uri
-    env_path = Path(__file__).resolve().parents[2] / '.env'
+    env_path = Path(__file__).resolve().parents[1] / '.env'
     if not env_path.exists():
         return ''
     for line in env_path.read_text(encoding='utf-8').splitlines():
@@ -43,13 +43,52 @@ def _parse_sqlite_path(uri):
     return path or None
 
 
-db_uri = _load_database_uri()
-db_file = _parse_sqlite_path(db_uri) or str(DEFAULT_DB_FILE)
-db_path = Path(db_file)
-conn = sqlite3.connect(db_path)
-cursor = conn.cursor()
-new_hash = generate_password_hash('Admin123')
-cursor.execute('UPDATE users SET password_hash = ? WHERE username = ?', (new_hash, 'admin'))
-conn.commit()
-print(f'已重置 admin 密码, 更新行数: {cursor.rowcount}')
-conn.close()
+def _resolve_new_password(cli_password):
+    if cli_password:
+        return cli_password
+
+    env_password = (os.getenv('NEW_ADMIN_PASSWORD') or '').strip()
+    if env_password:
+        return env_password
+
+    if not os.isatty(0):
+        raise RuntimeError('请通过 --password 或 NEW_ADMIN_PASSWORD 提供新密码。')
+
+    first = getpass.getpass('请输入新的 admin 密码: ')
+    second = getpass.getpass('请再次输入新的 admin 密码: ')
+    if not first:
+        raise RuntimeError('新密码不能为空。')
+    if first != second:
+        raise RuntimeError('两次输入的密码不一致。')
+    return first
+
+
+def main():
+    parser = argparse.ArgumentParser(description='重置 admin 密码')
+    parser.add_argument('--password', help='直接传入新密码。更推荐使用 NEW_ADMIN_PASSWORD 环境变量或交互输入。')
+    parser.add_argument('--db-path', help='显式指定 sqlite 数据库路径。')
+    args = parser.parse_args()
+
+    new_password = _resolve_new_password(args.password)
+    if len(new_password) < 8:
+        raise RuntimeError('新密码长度至少为 8 个字符。')
+
+    db_uri = _load_database_uri()
+    db_file = args.db_path or _parse_sqlite_path(db_uri) or str(Path(__file__).resolve().parents[1] / 'storage' / 'health_weather.db')
+    db_path = Path(db_file)
+
+    conn = sqlite3.connect(db_path)
+    try:
+        cursor = conn.cursor()
+        new_hash = generate_password_hash(new_password)
+        cursor.execute('UPDATE users SET password_hash = ? WHERE username = ?', (new_hash, 'admin'))
+        conn.commit()
+        print(f'已重置 admin 密码, 更新行数: {cursor.rowcount}')
+    finally:
+        conn.close()
+
+    return 0
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())

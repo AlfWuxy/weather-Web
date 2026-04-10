@@ -15,7 +15,7 @@ from config import (
 from core.constants import DEFAULT_CITY_LABEL, WEATHER_CACHE_TTL_MINUTES
 from utils.parsers import parse_bool, parse_float, parse_int
 
-QWEATHER_API_BASE_DEFAULT = 'https://mj76x98pfn.re.qweatherapi.com/v7'
+QWEATHER_API_BASE_DEFAULT = 'https://your-qweather-host.example.com/v7'
 SILICONFLOW_API_BASE_DEFAULT = 'https://api.siliconflow.cn/v1'
 WXPUSHER_API_BASE_DEFAULT = 'https://wxpusher.zjiecode.com/api'
 

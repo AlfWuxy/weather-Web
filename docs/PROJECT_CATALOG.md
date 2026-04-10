@@ -18,7 +18,7 @@ case-weather/
 │   ├── backup.sh                   # 数据库自动备份脚本（保留30天）
 │   ├── start.bat                   # Windows启动脚本
 │   ├── sync.sh                     # 快速同步脚本
-│   ├── download_backup.sh          # 下载备份脚本
+│   ├── (moved to private ops)      # 生产备份下载脚本不再留在公开仓库
 │   ├── weather_sync.sh             # 天气同步脚本
 │   ├── weather_cache_sync.sh       # 天气缓存同步脚本
 │   ├── quick_fix.sh                # 快速修复脚本
@@ -40,14 +40,7 @@ case-weather/
 ├── test_all_services.py            # 全服务测试脚本 [TEST, SCRIPT] ⚠️ DUPLICATE
 ├── test_weather_api.py             # 天气API测试 [TEST, SCRIPT]
 │
-├── 使用说明.txt                     # 使用文档 [DOC]
-├── 天气API集成说明.txt              # API集成文档 [DOC]
-├── 快速测试.txt                     # 测试说明 [DOC]
-├── 数据分析结果.txt                 # 分析结果 [DOC]
-├── 数据真实性说明.txt               # 数据说明 [DOC]
-├── 模块完成度检查.txt               # 完成度检查 [DOC]
-├── 系统完成说明.md                  # 系统说明 [DOC]
-├── CODE_REVIEW.md                   # 代码审查报告 [DOC]
+├── （historical docs moved out）    # 历史说明、状态文档、重复副本已迁出公开仓库
 │
 ├── 数据.xlsx                        # 原始病历数据 [DATA]
 ├── 逐日数据.csv                     # 逐日天气数据 [DATA]

@@ -124,9 +124,9 @@ if __name__ != '__main__':
 ```
 
 **安全行动检查清单**:
-- [ ] 从和风天气控制台撤销旧的 `QWEATHER_KEY=73684be4bf0141c7842e14c91953558b`
-- [ ] 从高德地图控制台撤销旧的 `AMAP_KEY=f6731a71632294f8e32eefea73f7aa1c`
-- [ ] 从 SiliconFlow 控制台撤销旧的 `SILICONFLOW_API_KEY=sk-ecby...`
+- [ ] 从和风天气控制台撤销旧的 `QWEATHER_KEY=<已脱敏旧密钥>`
+- [ ] 从高德地图控制台撤销旧的 `AMAP_KEY=<已脱敏旧密钥>`
+- [ ] 从 SiliconFlow 控制台撤销旧的 `SILICONFLOW_API_KEY=OLD_TOKEN_REDACTED`
 - [ ] 重新生成 `SECRET_KEY` 和 `PAIR_TOKEN_PEPPER`
 - [ ] 更新服务器部署凭证
 - [ ] 确认 `.env` 不在 git 历史中（如果在，需要 BFG Repo-Cleaner）

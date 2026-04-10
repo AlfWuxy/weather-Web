@@ -649,9 +649,9 @@ python app.py
 
 ## 维护联系
 
-- 项目目录：`/Users/imac/Downloads/04_Research_Projects/Climate_Health/天气预警网站`
-- 服务器地址：172.245.126.42
-- 部署目录：`/opt/case-weather`
+- 本地仓库根目录：`<your-local-workspace>/weather-web`
+- 服务器地址：`<managed-in-private-ops>`
+- 部署目录：`<managed-in-private-ops>`
 
 ---
 

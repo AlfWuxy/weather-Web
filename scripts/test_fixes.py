@@ -94,8 +94,9 @@ def main():
         else:
             print("✅ .env.example 包含所有必需配置项")
 
-        # 检查是否不包含真实密钥
-        if 'sk-ecbyvvsxsicjyrnq' in env_example or '73684be4bf0141c7' in env_example:
+        # 检查是否不包含可疑的旧密钥片段
+        suspicious_markers = ['sk-', '73684be4bf0141c7']
+        if any(marker in env_example for marker in suspicious_markers):
             print("❌ .env.example 包含真实密钥！")
             return 1
         else:

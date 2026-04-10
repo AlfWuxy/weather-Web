@@ -258,6 +258,22 @@ git clone --mirror <repo-url>
 - 日常开发
 - 替代分支 + PR 工作流
 
+### 本地归档最小规则
+
+当某些文件需要“保留证据，但不能继续留在公开产品仓库”时，使用本地归档目录，而不是继续塞回 Git 历史。
+
+最小要求：
+
+1. 先记录当前 `origin/main` 的 commit SHA
+2. 归档目录必须区分：
+   - `current-worktree/`
+   - `origin-main-snapshot/`
+3. 归档目录必须包含 `manifest.json`
+4. 归档目录至少要有一份人类可读说明
+5. PR 或清理记录里必须回填归档路径
+
+本仓库的内容去向判断，优先遵循 `docs/REPOSITORY_CONTENT_POLICY.md`。
+
 ## 多个 AI 助手同时工作时怎么隔离
 
 如果 Codex、Claude Code、你本人可能同时碰这个仓库，推荐每个执行者一个 `worktree`。

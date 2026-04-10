@@ -9,8 +9,8 @@
 - `app.py`、`core/`、`blueprints/`、`services/`、`utils/`
 - `templates/`、`static/`、`miniprogram/`
 - `tests/`
-- `scripts/` 中仍用于部署、同步、维护的脚本
-- `docs/` 中与产品架构、状态、测试、评审相关的正式文档
+- `scripts/` 中仍用于部署、同步、维护的脚本模板
+- `docs/` 中与产品架构、仓库边界、协作流程相关的长期文档
 - `requirements.txt`、`pytest.ini`、`.env.example` 等工程配置
 
 ## 2. 归档到主仓库之外的内容
@@ -19,6 +19,7 @@
 
 - `.claude/` 下的本地 Agent 配置和工作树副本
 - 所有 `* 2.*` 重复备份文件
+- 含真实病历样例、默认口令、真实服务器信息的内部材料
 - 根目录中的非产品型历史材料，如：
   - `var_lpf2_cascade.m`
   - `项目大纲.docx`
@@ -29,6 +30,13 @@
 - `docs/**/* 2.*`
 - `static/**/* 2.*`
 - `templates/**/* 2.*`
+- `docs/data/`
+- `docs/guides/使用说明*.txt`
+- `docs/guides/天气API集成说明*.txt`
+- `docs/guides/快速测试*.txt`
+- `docs/status/`
+- `.learnings/ERRORS.md`
+- `BUG_FIX_PROMPT.md`
 - `var_lpf2_cascade.m`
 - `项目大纲.docx`
 
@@ -84,13 +92,26 @@
 - 不碰仍在使用的主版本文件
 - 不直接粗暴删除历史内容，先归档再移出主仓库
 
-当前已建立的本地归档预备目录：
+当前已建立的本地归档目录：
 
-- `/Users/imac/Desktop/老家/weather-web-archive-staging`
+- `/Users/imac/Desktop/老家/weather-web-github-archive-2026-04-10`
 
-这个目录用于暂存从主仓库移出的重复文件和无关历史材料，后续可再推送为独立 GitHub 归档仓。
+这个目录用于保存两类内容：
 
-## 7. 与协作流程的关系
+- 当前工作树中已从产品仓库移出的内部材料
+- `origin/main` 快照里曾存在、但已在治理分支中删除的重复文件
+
+后续如需长期保留，可再推送为独立 GitHub 归档仓或私有 ops 仓。
+
+## 7. 2026-04-10 清理补充
+
+本轮清理新增了三条更严格的边界：
+
+- 含真实病历样例或姓名预览的资料，不留在公开产品仓库
+- 默认管理员口令、真实服务器地址、专属第三方 Host，不留在公开产品仓库
+- 部署/同步脚本可保留模板，但不能内置真实默认目标
+
+## 8. 与协作流程的关系
 
 仓库边界和 Git 工作流必须一起看：
 
@@ -100,3 +121,5 @@
 - 日常备份以“分支 push + Draft PR + Notion 回填”为准
 
 具体执行细节见 `docs/AI_COLLABORATION_AND_BACKUP_PLAYBOOK.md`。
+
+文件应该留在哪个位置，优先遵循 `docs/REPOSITORY_CONTENT_POLICY.md`。
