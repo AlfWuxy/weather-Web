@@ -35,6 +35,14 @@ logger = logging.getLogger(__name__)
 bp = Blueprint('analysis', __name__)
 
 
+def _csv_safe_cell(value):
+    """Neutralize spreadsheet formula prefixes in exported CSV cells."""
+    text = str(value or '')
+    if text.startswith(('=', '+', '-', '@')):
+        return f"'{text}"
+    return text
+
+
 def _require_admin():
     if getattr(current_user, 'role', None) != 'admin':
         flash('权限不足', 'error')
@@ -939,7 +947,7 @@ def pilot_export_csv():
     for e in events:
         writer.writerow([
             e.created_at.isoformat() if e.created_at else '',
-            e.event_type or '',
+            _csv_safe_cell(e.event_type),
             e.user_id or '',
             e.pair_id or '',
             e.member_id or '',
