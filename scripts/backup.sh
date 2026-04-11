@@ -2,9 +2,10 @@
 # 数据库自动备份脚本
 # 每天保留30天的备份
 
-BACKUP_DIR="${BACKUP_DIR:-/opt/your-app/backups}"
 ENV_FILE="${ENV_FILE:-/opt/your-app/.env}"
-DEFAULT_DB_FILE="${DEFAULT_DB_FILE:-/opt/your-app/instance/health_weather.db}"
+PROJECT_DIR="${PROJECT_DIR:-$(dirname "$ENV_FILE")}"
+BACKUP_DIR="${BACKUP_DIR:-$PROJECT_DIR/backups}"
+DEFAULT_DB_FILE="${DEFAULT_DB_FILE:-$PROJECT_DIR/instance/health_weather.db}"
 DB_FILE=$DEFAULT_DB_FILE
 DATE=$(date +%Y%m%d_%H%M%S)
 BACKUP_FILE=$BACKUP_DIR/health_weather_$DATE.db
@@ -44,30 +45,43 @@ parse_sqlite_path() {
     fi
     path="${path%%\?*}"
     [ -n "$path" ] || return 1
+    if [[ "$path" != /* ]]; then
+        if [[ "$path" == */* || "$path" == *\\* ]]; then
+            path="$PROJECT_DIR/$path"
+        else
+            path="$PROJECT_DIR/instance/$path"
+        fi
+    fi
     echo "$path"
 }
 
-if load_database_uri; then
-    parsed_path="$(parse_sqlite_path "$DATABASE_URI")"
-    if [ -n "$parsed_path" ]; then
-        DB_FILE="$parsed_path"
+main() {
+    if load_database_uri; then
+        parsed_path="$(parse_sqlite_path "$DATABASE_URI")"
+        if [ -n "$parsed_path" ]; then
+            DB_FILE="$parsed_path"
+        fi
     fi
+
+    # 创建备份目录
+    mkdir -p "$BACKUP_DIR"
+
+    # 创建备份（使用SQLite的.backup命令保证一致性）
+    sqlite3 "$DB_FILE" ".backup $BACKUP_FILE"
+
+    # 压缩备份
+    gzip "$BACKUP_FILE"
+
+    echo "[$(date)] 备份完成: ${BACKUP_FILE}.gz"
+
+    # 删除30天前的备份
+    find "$BACKUP_DIR" -name "*.gz" -mtime +30 -delete
+
+    # 显示当前备份列表
+    echo "当前备份文件:"
+    ls -lh "$BACKUP_DIR"/*.gz 2>/dev/null | tail -5
+}
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    main "$@"
 fi
-
-# 创建备份目录
-mkdir -p "$BACKUP_DIR"
-
-# 创建备份（使用SQLite的.backup命令保证一致性）
-sqlite3 "$DB_FILE" ".backup $BACKUP_FILE"
-
-# 压缩备份
-gzip "$BACKUP_FILE"
-
-echo "[$(date)] 备份完成: ${BACKUP_FILE}.gz"
-
-# 删除30天前的备份
-find "$BACKUP_DIR" -name "*.gz" -mtime +30 -delete
-
-# 显示当前备份列表
-echo "当前备份文件:"
-ls -lh "$BACKUP_DIR"/*.gz 2>/dev/null | tail -5
