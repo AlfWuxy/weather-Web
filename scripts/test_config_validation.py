@@ -29,7 +29,7 @@ def main():
 
     # 测试2: 检查弱密钥是否被拒绝（在生产模式下）
     print("\n[测试2] 检查弱密钥检测")
-    weak_keys = ['your-secret-key-here', 'your-secret-key-change-in-production']
+    weak_keys = ['your-secret-key-here', 'your-secret-key-change-in-production', 'change-me-min-32-chars']
     for weak_key in weak_keys:
         os.environ['SECRET_KEY'] = weak_key
         os.environ['DEBUG'] = 'false'

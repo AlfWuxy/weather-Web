@@ -43,7 +43,7 @@ fi
 # 2. 检查 SECRET_KEY
 echo -e "\n${YELLOW}[2/5] 检查 SECRET_KEY...${NC}"
 if [ -f .env ]; then
-    if grep -q "^SECRET_KEY=your-secret-key" .env; then
+    if grep -q "^SECRET_KEY=change-me-min-32-chars" .env; then
         echo -e "${RED}❌ SECRET_KEY 使用示例值${NC}"
         read -p "是否生成新的 SECRET_KEY? (y/n) " -n 1 -r
         echo
@@ -73,7 +73,7 @@ fi
 # 3. 检查 PAIR_TOKEN_PEPPER
 echo -e "\n${YELLOW}[3/5] 检查 PAIR_TOKEN_PEPPER...${NC}"
 if [ -f .env ]; then
-    if grep -q "^PAIR_TOKEN_PEPPER=your-pair-token-pepper" .env; then
+    if grep -q "^PAIR_TOKEN_PEPPER=change-me-min-32-chars" .env; then
         echo -e "${RED}❌ PAIR_TOKEN_PEPPER 使用示例值${NC}"
         read -p "是否生成新的 PAIR_TOKEN_PEPPER? (y/n) " -n 1 -r
         echo
@@ -144,7 +144,7 @@ echo -e "${GREEN}手动步骤辅助脚本执行完成！${NC}"
 echo -e "${GREEN}============================================================${NC}"
 echo -e "\n后续步骤:"
 echo -e "  1. 审查 .env 文件，确保所有密钥已正确配置"
-echo -e "  2. 运行完整测试: ${YELLOW}pytest tests/ -v${NC}"
+echo -e "  2. 运行默认自动测试: ${YELLOW}pytest tests/ -v${NC}"
 echo -e "  3. 审查异常处理: ${YELLOW}grep -rn 'except Exception' blueprints/ services/${NC}"
 echo -e "  4. 历史安全修复报告已归档，不再保留在产品仓库中${NC}"
 

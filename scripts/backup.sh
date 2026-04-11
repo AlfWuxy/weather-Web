@@ -2,9 +2,9 @@
 # 数据库自动备份脚本
 # 每天保留30天的备份
 
-BACKUP_DIR=/opt/case-weather/backups
-ENV_FILE="${ENV_FILE:-/opt/case-weather/.env}"
-DEFAULT_DB_FILE=/opt/case-weather/storage/health_weather.db
+BACKUP_DIR="${BACKUP_DIR:-/opt/your-app/backups}"
+ENV_FILE="${ENV_FILE:-/opt/your-app/.env}"
+DEFAULT_DB_FILE="${DEFAULT_DB_FILE:-/opt/your-app/instance/health_weather.db}"
 DB_FILE=$DEFAULT_DB_FILE
 DATE=$(date +%Y%m%d_%H%M%S)
 BACKUP_FILE=$BACKUP_DIR/health_weather_$DATE.db

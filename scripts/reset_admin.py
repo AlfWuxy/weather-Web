@@ -12,7 +12,7 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
-from core.config import resolve_sqlite_db_path
+from core.config import resolve_database_uri, resolve_sqlite_db_path
 
 
 def _load_database_uri():
@@ -40,12 +40,12 @@ def _resolve_db_path(cli_db_path):
     if cli_db_path:
         return Path(cli_db_path).expanduser().resolve()
 
-    db_uri = _load_database_uri()
+    db_uri = _load_database_uri() or resolve_database_uri()
     resolved = resolve_sqlite_db_path(db_uri, ROOT_DIR)
     if resolved is not None:
         return resolved
 
-    return (ROOT_DIR / 'storage' / 'health_weather.db').resolve()
+    return (ROOT_DIR / 'instance' / 'health_weather.db').resolve()
 
 
 def _resolve_new_password(cli_password):

@@ -187,7 +187,7 @@ def main():
     print("✅ 所有核心修复已验证")
     print("\n建议:")
     print("  1. 从 .env.backup 恢复 .env 文件（或使用 .env.example）")
-    print("  2. 运行完整测试: pytest tests/ -v")
+    print("  2. 运行默认自动测试: pytest tests/ -v")
     print("  3. 审查异常处理: grep -rn 'except Exception' blueprints/ services/")
     print("  4. 配置更严格的速率限制")
 

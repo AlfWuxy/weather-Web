@@ -89,11 +89,14 @@ def _normalize_sqlite_uri(database_uri, repo_root):
     return uri
 
 
-def resolve_sqlite_db_path(database_uri, repo_root=None):
+def resolve_sqlite_db_path(database_uri, repo_root=None, instance_dir=None):
     """将 sqlite URI 解析为稳定的本地路径。"""
     if repo_root is None:
         repo_root = Path(__file__).resolve().parents[1]
     repo_root = Path(repo_root)
+    if instance_dir is None:
+        instance_dir = repo_root / 'instance'
+    instance_dir = Path(instance_dir)
     normalized_uri = _normalize_sqlite_uri(database_uri, repo_root)
     if not isinstance(normalized_uri, str):
         return None
@@ -107,7 +110,8 @@ def resolve_sqlite_db_path(database_uri, repo_root=None):
             return None
         if path_part.startswith('/'):
             return Path(path_part)
-        return (repo_root / path_part).resolve()
+        # Flask-SQLAlchemy 会把 sqlite 相对路径放到 instance_path 下。
+        return (instance_dir / path_part).resolve()
 
     return None
 
@@ -145,7 +149,7 @@ def validate_production_config():
             raise RuntimeError("SECRET_KEY 长度过短，生产环境必须 >= 32 位。")
         if _contains_weak_keyword(secret_key_env):
             raise RuntimeError("SECRET_KEY 包含弱关键词（dev/test/secret 等），请更换随机密钥。")
-        if secret_key_env in ('your-secret-key-here', 'your-secret-key-change-in-production'):
+        if secret_key_env in ('your-secret-key-here', 'your-secret-key-change-in-production', 'change-me-min-32-chars'):
             raise RuntimeError("SECRET_KEY 使用了示例值，必须替换为真实的随机密钥！")
 
         if not pair_token_pepper:
@@ -153,7 +157,7 @@ def validate_production_config():
                 "PAIR_TOKEN_PEPPER 未设置！生产环境必须配置。\n"
                 "  生成方式: python3 -c 'import secrets; print(secrets.token_hex(32))'"
             )
-        if pair_token_pepper in ('your-pair-token-pepper-here',):
+        if pair_token_pepper in ('your-pair-token-pepper-here', 'change-me-min-32-chars'):
             raise RuntimeError("PAIR_TOKEN_PEPPER 使用了示例值，必须替换为真实的随机密钥！")
 
         effective_rate_limit_uri = rate_limit_storage_env or redis_url or 'memory://'

@@ -2,18 +2,32 @@
 
 本项目当前主要由个人维护，但开发流程按正式产品仓库执行。目标不是“随手改完就算”，而是让每次改动都能被回看、被验证、被复盘。
 
-完整主说明见 `docs/AI_COLLABORATION_AND_BACKUP_PLAYBOOK.md`。如果和其他文档冲突，以那份作业手册为准。
+进入仓库前，先读这些文件：
+
+1. `docs/REPO_OPERATION_PROTOCOL.md`
+2. `docs/REPOSITORY_CONTENT_POLICY.md`
+3. `docs/AI_COLLABORATION_AND_BACKUP_PLAYBOOK.md`
+4. `README.md`
+
+如果和其他文档冲突，优先级如下：
+
+1. `docs/REPO_OPERATION_PROTOCOL.md`
+2. `docs/REPOSITORY_CONTENT_POLICY.md`
+3. `docs/AI_COLLABORATION_AND_BACKUP_PLAYBOOK.md`
+4. `README.md`
 
 ## 一条迭代的标准路径
 
-1. 先在 Notion“网站迭代库”中创建或确认条目
-2. 明确本次只解决一件事
-3. 从 `main` 拉出分支
-4. 在分支上开发并小步提交
-5. 补充测试或验证记录
-6. 提交 PR
-7. 通过后使用 squash merge 合并
-8. 回 Notion 更新状态、PR 链接和验证结果
+1. 先同步本地基线：`git fetch origin --prune`，必要时在 `main` 上执行 `git pull --ff-only`
+2. 先在 Notion“网站迭代库”中创建或确认条目
+3. 如果当前执行者没有 Notion 访问能力，先在 PR 描述里写清条目占位和后续回填责任
+4. 明确本次只解决一件事
+5. 从 `main` 拉出分支
+6. 在分支上开发并小步提交
+7. 补充测试或验证记录
+8. 未验证完成前先提交 Draft PR
+9. 通过后使用 squash merge 合并
+10. 回 Notion 更新状态、PR 链接和验证结果
 
 ## 分支命名
 
@@ -91,6 +105,7 @@ docs: 补充仓库开发流程说明
 常用命令：
 
 ```bash
+git fetch origin --prune
 pytest
 python app.py
 ```
@@ -100,6 +115,7 @@ python app.py
 每次开始前，先运行：
 
 ```bash
+git fetch origin --prune
 git branch --show-current
 git status --short
 git diff --staged
@@ -129,6 +145,6 @@ git worktree add ../weather-web-claude -b claude/feature/<short-name> main
 - `__pycache__/`、`.DS_Store` 等本地缓存
 - `* 2.*` 这类重复备份文件
 
-如需保留历史参考，请迁移到归档仓或本地归档区，不要继续污染主仓库历史。
+如需保留历史参考，请迁移到本地归档区或私有 ops 仓，不要继续污染主仓库历史。
 
 本地只属于你自己的临时文件，优先放进 `.git/info/exclude`，不要一律塞进仓库共享的 `.gitignore`。

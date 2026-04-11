@@ -65,7 +65,7 @@ load_local_api_keys
 
 SERVER="${DEPLOY_SERVER:-}"
 USER="${DEPLOY_USER:-}"
-PROJECT_DIR="${DEPLOY_PROJECT_DIR:-/opt/case-weather}"
+PROJECT_DIR="${DEPLOY_PROJECT_DIR:-/opt/your-app}"
 LOCAL_DIR="${DEPLOY_LOCAL_DIR:-$ROOT_DIR}"
 VENV_DIR="${DEPLOY_VENV_DIR:-$PROJECT_DIR/.venv2}"
 PASSWORD="${DEPLOY_PASSWORD:-${SSHPASS:-}}"
@@ -200,7 +200,7 @@ FLASK_ENV=production
 DEBUG=false
 SECRET_KEY=\$SECRET_KEY_GEN
 PAIR_TOKEN_PEPPER=\$PAIR_TOKEN_PEPPER_GEN
-DATABASE_URI=sqlite:///instance/health_weather.db
+DATABASE_URI=sqlite:///health_weather.db
 REDIS_URL=redis://127.0.0.1:6379/0
 RATE_LIMIT_STORAGE_URI=redis://127.0.0.1:6379/0
 QWEATHER_KEY=
@@ -213,7 +213,7 @@ echo '已创建新的 .env 文件'; else echo '.env 文件已存在，跳过创�
 
 echo ""
 echo "步骤6.1: 确保数据库目录与关键配置存在..."
-remote_exec "mkdir -p $PROJECT_DIR/instance && (grep -q '^DATABASE_URI=' $PROJECT_DIR/.env || echo 'DATABASE_URI=sqlite:///instance/health_weather.db' >> $PROJECT_DIR/.env)"
+remote_exec "mkdir -p $PROJECT_DIR/instance && (grep -q '^DATABASE_URI=' $PROJECT_DIR/.env || echo 'DATABASE_URI=sqlite:///health_weather.db' >> $PROJECT_DIR/.env)"
 
 echo ""
 echo "步骤6.1.1: 写入必要的 API Key（仅在服务器端为空/缺失时写入）..."

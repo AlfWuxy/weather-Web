@@ -54,6 +54,7 @@ cp .env.example .env
 - `PAIR_TOKEN_PEPPER`
 - `DATABASE_URI`
 - `QWEATHER_KEY` 或接受 Open-Meteo 兜底
+- 如需官方预警和推送链路，`QWEATHER_KEY` 与 `QWEATHER_API_BASE` 需要成对配置
 
 ### 3. 初始化数据库
 
@@ -111,12 +112,14 @@ scripts/              部署与维护脚本
 
 本仓库从第一阶段 officialization 起，默认使用以下流程：
 
-1. 在 Notion“网站迭代库”中创建或领取一条条目
-2. 从 `main` 拉出功能分支
-3. 小步提交，使用规范化 commit 标题
-4. 提交 PR，说明“改了什么 / 为什么改 / 怎么验证”
-5. 验证通过后使用 squash merge 合并回 `main`
-6. 回到 Notion 更新状态、分支名和 PR 链接
+1. 先同步本地基线：`git fetch origin --prune`，必要时在 `main` 上执行 `git pull --ff-only`
+2. 在 Notion“网站迭代库”中创建或领取一条条目
+3. 如果当前执行者没有 Notion 访问能力，先在 PR 描述里记录条目占位，后续再回填
+4. 从 `main` 拉出功能分支
+5. 小步提交，使用规范化 commit 标题
+6. 未验证完成前先提交 Draft PR，说明“改了什么 / 为什么改 / 怎么验证”
+7. 验证通过后使用 squash merge 合并回 `main`
+8. 回到 Notion 更新状态、分支名和 PR 链接
 
 更完整的人工 / AI 协作与备份规则见 [docs/AI_COLLABORATION_AND_BACKUP_PLAYBOOK.md](./docs/AI_COLLABORATION_AND_BACKUP_PLAYBOOK.md)。
 

@@ -1,18 +1,19 @@
 # AI 协作与备份作业手册
 
-> 最后审阅：2026-04-08
+> 最后审阅：2026-04-11
 > 适用范围：本仓库内所有人工开发、Codex、Claude Code、其他 AI 助手
 > 目标：把“个人项目式开发”变成“可回看、可验证、可交接、可备份”的正式流程
 
 ## 先读这个
 
-以后任何人或 AI 助手，只要准备在这个仓库里改代码、备份改动、开分支、提 PR，都必须先读下面 5 个文件：
+以后任何人或 AI 助手，只要准备在这个仓库里改代码、备份改动、开分支、提 PR，都必须先读下面 6 个文件：
 
 1. `docs/REPO_OPERATION_PROTOCOL.md`
-2. `docs/AI_COLLABORATION_AND_BACKUP_PLAYBOOK.md`
-3. `CONTRIBUTING.md`
-4. `docs/REPO_BOUNDARY_AND_CLEANUP.md`
-5. `README.md`
+2. `docs/REPOSITORY_CONTENT_POLICY.md`
+3. `docs/AI_COLLABORATION_AND_BACKUP_PLAYBOOK.md`
+4. `CONTRIBUTING.md`
+5. `docs/REPO_BOUNDARY_AND_CLEANUP.md`
+6. `README.md`
 
 如果这些文件之间有冲突，以 `docs/REPO_OPERATION_PROTOCOL.md` 为准。
 
@@ -103,9 +104,10 @@ chmod +x .githooks/pre-push
 
 ### 1. 开工前
 
-先跑这 4 个命令：
+先跑这 5 个命令：
 
 ```bash
+git fetch origin --prune
 git branch --show-current
 git status --short
 git remote -v
@@ -125,6 +127,12 @@ git diff --staged
 - 这次到底解决什么问题
 - 这次最小可交付版本是什么
 - 这次对应哪个分支
+
+如果当前执行者没有 Notion 访问能力，先在 PR 描述中补三项占位信息：
+
+- Notion 条目待回填
+- 当前执行者是谁
+- 谁负责会后回填
 
 ### 3. 再开分支
 
@@ -358,14 +366,14 @@ git rm --cached <path>
 
 任何 AI 助手在这个仓库里工作前，都应按下面顺序执行：
 
-1. 阅读本文件、`CONTRIBUTING.md`、`docs/REPO_BOUNDARY_AND_CLEANUP.md`
-2. 运行 `git branch --show-current` 和 `git status --short`
+1. 阅读 `docs/REPO_OPERATION_PROTOCOL.md`、`docs/REPOSITORY_CONTENT_POLICY.md`、本文件、`CONTRIBUTING.md`
+2. 运行 `git fetch origin --prune`、`git branch --show-current` 和 `git status --short`
 3. 如果当前在 `main` 且需要修改文件，先创建新分支
 4. 如果存在别人的未提交改动，不主动回滚，不顺手清理
 5. 只修改当前任务直接相关的文件
 6. commit 前先看 `git diff --staged`
 7. push 后创建或更新 Draft PR
-8. 如有对应条目，回 Notion 更新分支、PR、验证信息
+8. 如有对应条目，回 Notion 更新分支、PR、验证信息；如果当前无 Notion 权限，在 PR 描述中留待回填说明
 
 ## 出错时怎么补救
 

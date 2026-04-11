@@ -50,11 +50,13 @@ case-weather/
 │
 ├── docs/
 │   ├── ARCHITECTURE.md             # 架构文档 [DOC]
-│   ├── PROJECT_CATALOG.md          # 本文件 [DOC]
-│   └── reports/                    # 修复/测试报告 [DOC]
+│   ├── REPO_OPERATION_PROTOCOL.md  # 仓库操作硬规则 [DOC]
+│   ├── REPOSITORY_CONTENT_POLICY.md # 文件去向政策 [DOC]
+│   ├── AI_COLLABORATION_AND_BACKUP_PLAYBOOK.md # AI协作与备份手册 [DOC]
+│   └── PROJECT_CATALOG.md          # 本文件 [DOC]
 │
 ├── instance/
-│   └── health_weather.db           # SQLite数据库（生产路径见 /opt/case-weather/storage/health_weather.db） [DATA]
+│   └── health_weather.db           # SQLite数据库（实例路径由运行时配置决定） [DATA]
 │
 ├── migrations/
 │   ├── env.py                      # Alembic环境 [CONFIG, SCRIPT]

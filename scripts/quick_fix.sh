@@ -12,13 +12,10 @@ echo "======================================"
 # 1. Ensure database directory exists
 echo ""
 echo "[1/4] Checking database directory..."
-mkdir -p storage
+mkdir -p instance
 
-if [ ! -f storage/health_weather.db ] && [ -f instance/health_weather.db ]; then
-    cp instance/health_weather.db storage/health_weather.db
-    echo "✅ Database copied to storage/"
-elif [ -f storage/health_weather.db ]; then
-    echo "✅ storage/health_weather.db exists"
+if [ -f instance/health_weather.db ]; then
+    echo "✅ instance/health_weather.db exists"
 else
     echo "⚠️  No existing database found"
 fi

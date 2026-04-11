@@ -464,7 +464,7 @@ POST /api/v1/ai/ask                             # AI 问答
 SECRET_KEY=<至少32位随机字符串>
 
 # 数据库
-DATABASE_URI=sqlite:///storage/health_weather.db
+DATABASE_URI=sqlite:///health_weather.db
 
 # 配对令牌加密
 PAIR_TOKEN_PEPPER=<独立的加密盐>

@@ -268,7 +268,7 @@ AuditLog (审计日志)
                      │
 ┌────────────────────┴────────────────────┐
 │           SQLite / PostgreSQL           │
-│          storage/health_weather.db      │
+│          instance/health_weather.db     │
 └─────────────────────────────────────────┘
 ```
 
@@ -285,7 +285,7 @@ AuditLog (审计日志)
 | 项目路径 | /opt/your-app |
 | Python版本 | 3.11.2 |
 | 虚拟环境 | /opt/your-app/venv |
-| 数据库 | /opt/your-app/storage/health_weather.db |
+| 数据库 | /opt/your-app/instance/health_weather.db |
 | 服务名称 | case-weather.service |
 | 端口 | 5000 |
 
@@ -331,7 +331,7 @@ rsync -avz \
 ssh deploy-user@your-server-host "systemctl restart case-weather"
 ```
 
-**重要**：`.env` 被排除，不会被覆盖。数据库默认位于 `/opt/your-app/storage/health_weather.db`（仓库外）；若本地存在 `storage/` 目录也会被排除。
+**重要**：`.env` 被排除，不会被覆盖。数据库默认位于 `/opt/your-app/instance/health_weather.db`；若本地存在 `instance/` 或 `storage/` 目录也会被排除。
 
 ### 7.4 数据库备份策略
 
@@ -349,7 +349,7 @@ ssh deploy-user@your-server-host "systemctl restart case-weather"
 ```bash
 #!/bin/bash
 BACKUP_DIR=/opt/your-app/backups
-DB_FILE=/opt/your-app/storage/health_weather.db
+DB_FILE=/opt/your-app/instance/health_weather.db
 DATE=$(date +%Y%m%d_%H%M%S)
 BACKUP_FILE=$BACKUP_DIR/health_weather_$DATE.db
 
@@ -398,10 +398,10 @@ cd /opt/your-app/backups
 gunzip health_weather_YYYYMMDD_HHMMSS.db.gz
 
 # 3. 备份当前数据库（以防万一）
-cp /opt/your-app/storage/health_weather.db /opt/your-app/storage/health_weather.db.old
+cp /opt/your-app/instance/health_weather.db /opt/your-app/instance/health_weather.db.old
 
 # 4. 恢复数据库
-cp health_weather_YYYYMMDD_HHMMSS.db /opt/your-app/storage/health_weather.db
+cp health_weather_YYYYMMDD_HHMMSS.db /opt/your-app/instance/health_weather.db
 
 # 5. 重启服务
 systemctl restart case-weather
@@ -448,22 +448,22 @@ DEPLOY_LOCAL_DIR=/path/to/your-local-repo
 journalctl -u case-weather --no-pager -n 100 | grep -E "(ERROR|Exception)"
 
 # 手动测试应用
-cd /opt/case-weather
-/opt/case-weather/venv/bin/python -c "from app import app; print('OK')"
+cd /opt/your-app
+/opt/your-app/venv/bin/python -c "from app import app; print('OK')"
 ```
 
 #### 2. 数据库列缺失错误
 
 ```bash
 # 检查表结构
-sqlite3 /opt/case-weather/storage/health_weather.db "PRAGMA table_info(表名);"
+sqlite3 /opt/your-app/instance/health_weather.db "PRAGMA table_info(表名);"
 
 # 添加缺失列
-sqlite3 /opt/case-weather/storage/health_weather.db "ALTER TABLE 表名 ADD COLUMN 列名 TEXT;"
+sqlite3 /opt/your-app/instance/health_weather.db "ALTER TABLE 表名 ADD COLUMN 列名 TEXT;"
 
 # 或使用 db.create_all() 同步所有表
-cd /opt/case-weather
-/opt/case-weather/venv/bin/python -c "from app import app, db; 
+cd /opt/your-app
+/opt/your-app/venv/bin/python -c "from app import app, db;
 with app.app_context(): db.create_all(); print('Done')"
 ```
 
