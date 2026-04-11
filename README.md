@@ -2,6 +2,14 @@
 
 一个面向高温风险与脆弱人群保护场景的 Flask 产品仓库。项目聚焦“天气预警 + 健康风险评估 + 社区行动支持”，目标是把原来的个人 Demo 持续升级为可维护、可验证、可迭代的正式工程项目。
 
+## 先读这个
+
+如果你准备在这个仓库里改代码、改文档、开分支、做备份，先读这份短协议：
+
+- [`docs/REPO_OPERATION_PROTOCOL.md`](./docs/REPO_OPERATION_PROTOCOL.md)
+
+它是当前仓库最短、最硬的执行入口。人工和 AI 助手都按它执行。
+
 ## 当前定位
 
 - 产品方向：帮助老人、家属与社区在高温和极端天气下更快做出行动决策
@@ -93,7 +101,7 @@ templates/            Jinja2 模板
 static/               CSS / JS / vendor 静态资源
 miniprogram/          微信小程序端
 tests/                自动化测试
-docs/                 架构、重构、评审与状态文档
+docs/                 架构、流程与治理文档
 scripts/              部署与维护脚本
 ```
 
@@ -122,6 +130,7 @@ scripts/              部署与维护脚本
 
 ## 文档入口
 
+- 仓库操作硬规则：[`docs/REPO_OPERATION_PROTOCOL.md`](./docs/REPO_OPERATION_PROTOCOL.md)
 - AI 协作与备份主说明：[`docs/AI_COLLABORATION_AND_BACKUP_PLAYBOOK.md`](./docs/AI_COLLABORATION_AND_BACKUP_PLAYBOOK.md)
 - 内容去向政策：[`docs/REPOSITORY_CONTENT_POLICY.md`](./docs/REPOSITORY_CONTENT_POLICY.md)
 - GitHub 保护设置清单：[`docs/GITHUB_PROTECTION_CHECKLIST.md`](./docs/GITHUB_PROTECTION_CHECKLIST.md)

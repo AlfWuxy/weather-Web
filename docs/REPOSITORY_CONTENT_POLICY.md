@@ -102,6 +102,7 @@
 - `CHANGELOG.md`
 - `.github/`
 - `docs/ARCHITECTURE.md`
+- `docs/REPO_OPERATION_PROTOCOL.md`
 - `docs/REPO_BOUNDARY_AND_CLEANUP.md`
 - `docs/AI_COLLABORATION_AND_BACKUP_PLAYBOOK.md`
 - `docs/GITHUB_PROTECTION_CHECKLIST.md`
@@ -124,6 +125,8 @@
 - `.learnings/ERRORS.md`
 - `docs/reports/*`
 - `docs/status/*`
+- `docs/GITHUB_CLEANUP_2026-04-10.md`
+- `docs/WIP_CHANGE_CLASSIFICATION.md`
 
 ## Move To Private Ops Repo
 

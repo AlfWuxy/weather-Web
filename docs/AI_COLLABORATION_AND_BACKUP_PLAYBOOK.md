@@ -6,14 +6,15 @@
 
 ## 先读这个
 
-以后任何人或 AI 助手，只要准备在这个仓库里改代码、备份改动、开分支、提 PR，都必须先读下面 4 个文件：
+以后任何人或 AI 助手，只要准备在这个仓库里改代码、备份改动、开分支、提 PR，都必须先读下面 5 个文件：
 
-1. `docs/AI_COLLABORATION_AND_BACKUP_PLAYBOOK.md`
-2. `CONTRIBUTING.md`
-3. `docs/REPO_BOUNDARY_AND_CLEANUP.md`
-4. `README.md`
+1. `docs/REPO_OPERATION_PROTOCOL.md`
+2. `docs/AI_COLLABORATION_AND_BACKUP_PLAYBOOK.md`
+3. `CONTRIBUTING.md`
+4. `docs/REPO_BOUNDARY_AND_CLEANUP.md`
+5. `README.md`
 
-如果这 4 个文件之间有冲突，以本文件为准。
+如果这些文件之间有冲突，以 `docs/REPO_OPERATION_PROTOCOL.md` 为准。
 
 ## 不可打破的规则
 

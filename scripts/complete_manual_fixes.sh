@@ -146,6 +146,6 @@ echo -e "\n后续步骤:"
 echo -e "  1. 审查 .env 文件，确保所有密钥已正确配置"
 echo -e "  2. 运行完整测试: ${YELLOW}pytest tests/ -v${NC}"
 echo -e "  3. 审查异常处理: ${YELLOW}grep -rn 'except Exception' blueprints/ services/${NC}"
-echo -e "  4. 阅读详细报告: ${YELLOW}docs/reports/SECURITY_FIXES_2025.md${NC}"
+echo -e "  4. 历史安全修复报告已归档，不再保留在产品仓库中${NC}"
 
 exit 0
