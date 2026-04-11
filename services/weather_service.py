@@ -35,10 +35,10 @@ class WeatherService:
                 app_config = {}
 
         self.qweather_key = app_config.get('QWEATHER_KEY') or os.getenv('QWEATHER_KEY')
-        self.api_base_url = (
-            app_config.get('QWEATHER_API_BASE')
-            or os.getenv('QWEATHER_API_BASE', 'https://your-qweather-host.example.com/v7')
-        )
+        configured_api_base = app_config.get('QWEATHER_API_BASE')
+        if configured_api_base is None:
+            configured_api_base = os.getenv('QWEATHER_API_BASE')
+        self.api_base_url = (configured_api_base or '').strip()
         self.city_map = app_config.get('CITY_LOCATION_MAP') or {}
         self.default_location = (
             app_config.get('DEFAULT_LOCATION')

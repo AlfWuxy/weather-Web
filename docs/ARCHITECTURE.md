@@ -418,7 +418,7 @@ SECRET_KEY=your_secret_key
 
 # 和风天气API（主来源）
 QWEATHER_KEY=YOUR_QWEATHER_KEY
-QWEATHER_API_BASE=https://your-qweather-host.example.com/v7
+QWEATHER_API_BASE=<在本地或私有 ops 中显式配置的 QWeather Host>
 
 # Open-Meteo（兜底，无需 Key）
 # 无需配置，系统会在 QWeather 失败时自动启用
@@ -469,11 +469,12 @@ with app.app_context(): db.create_all(); print('Done')"
 
 #### 3. 天气API返回模拟数据
 
-检查 `.env` 文件中的 `QWEATHER_KEY` 和 `QWEATHER_API_BASE` 是否正确配置；若 QWeather 失败，系统会自动回退 Open-Meteo。
+检查 `.env` 文件中的 `QWEATHER_KEY` 和 `QWEATHER_API_BASE` 是否正确配置；若未配置 QWeather，系统会自动回退 Open-Meteo。
 
 ```bash
-# 测试API
-curl -s --compressed "https://your-qweather-host.example.com/v7/weather/now?key=YOUR_KEY&location=116.20,29.27"
+# 先在当前 shell 中提供真实 Host，再测试 API
+export QWEATHER_API_BASE="https://your-real-qweather-host/v7"
+curl -s --compressed "${QWEATHER_API_BASE}/weather/now?key=YOUR_KEY&location=116.20,29.27"
 ```
 
 ---

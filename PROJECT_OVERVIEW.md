@@ -475,7 +475,7 @@ PAIR_TOKEN_PEPPER=<独立的加密盐>
 ```bash
 # 和风天气 API
 QWEATHER_KEY=<你的和风天气 API 密钥>
-QWEATHER_API_BASE=https://devapi.qweather.com
+QWEATHER_API_BASE=<在本地环境中显式配置的 QWeather Host>
 
 # 高德地图
 AMAP_KEY=<你的高德地图 API 密钥>

@@ -15,7 +15,7 @@ from config import (
 from core.constants import DEFAULT_CITY_LABEL, WEATHER_CACHE_TTL_MINUTES
 from utils.parsers import parse_bool, parse_float, parse_int
 
-QWEATHER_API_BASE_DEFAULT = 'https://your-qweather-host.example.com/v7'
+QWEATHER_API_BASE_DEFAULT = ''
 SILICONFLOW_API_BASE_DEFAULT = 'https://api.siliconflow.cn/v1'
 WXPUSHER_API_BASE_DEFAULT = 'https://wxpusher.zjiecode.com/api'
 
@@ -89,6 +89,29 @@ def _normalize_sqlite_uri(database_uri, repo_root):
     return uri
 
 
+def resolve_sqlite_db_path(database_uri, repo_root=None):
+    """将 sqlite URI 解析为稳定的本地路径。"""
+    if repo_root is None:
+        repo_root = Path(__file__).resolve().parents[1]
+    repo_root = Path(repo_root)
+    normalized_uri = _normalize_sqlite_uri(database_uri, repo_root)
+    if not isinstance(normalized_uri, str):
+        return None
+
+    for scheme in ('sqlite:///', 'sqlite+pysqlite:///'):
+        if not normalized_uri.startswith(scheme):
+            continue
+        path_and_query = normalized_uri[len(scheme):]
+        path_part, _, _query = path_and_query.partition('?')
+        if not path_part or path_part == ':memory:':
+            return None
+        if path_part.startswith('/'):
+            return Path(path_part)
+        return (repo_root / path_part).resolve()
+
+    return None
+
+
 def resolve_engine_options(database_uri):
     if database_uri.startswith('sqlite'):
         return {}
@@ -140,12 +163,8 @@ def validate_production_config():
             )
 
     database_uri = resolve_database_uri()
-    if database_uri.startswith('sqlite:///'):
-        db_path = database_uri.replace('sqlite:///', '')
-        if not db_path.startswith('/'):
-            db_path = Path(__file__).resolve().parents[1] / db_path
-        else:
-            db_path = Path(db_path)
+    db_path = resolve_sqlite_db_path(database_uri, Path(__file__).resolve().parents[1])
+    if db_path is not None:
         db_dir = db_path.parent
         if not db_dir.exists():
             try:
@@ -266,6 +285,10 @@ def configure_app(app, logger):
         'WEATHER_CACHE_TTL_MINUTES',
         parse_int(os.getenv('WEATHER_CACHE_TTL_MINUTES', str(WEATHER_CACHE_TTL_MINUTES)), default=WEATHER_CACHE_TTL_MINUTES)
     )
+    if qweather_key and not qweather_api_base:
+        logger.warning("QWEATHER_KEY 已配置但 QWEATHER_API_BASE 未配置，将跳过 QWeather Host 相关调用并使用兜底链路。")
+    if qweather_api_base and not qweather_key:
+        logger.warning("QWEATHER_API_BASE 已配置但 QWEATHER_KEY 未配置，QWeather 不会生效。")
     app.config.setdefault('NOTIFICATION_ESCALATION_DAYS', parse_int(os.getenv('NOTIFICATION_ESCALATION_DAYS', '3'), default=3))
     app.config.setdefault('NOTIFICATION_MAX_DAILY', parse_int(os.getenv('NOTIFICATION_MAX_DAILY', '5'), default=5))
     app.config.setdefault('HEAT_HOT_DAY_THRESHOLD', parse_float(os.getenv('HEAT_HOT_DAY_THRESHOLD', '35'), default=35.0))

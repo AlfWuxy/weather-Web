@@ -5,6 +5,34 @@ import sys
 import os
 
 
+def _load_active_env_values(text):
+    values = {}
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith('#') or '=' not in line:
+            continue
+        key, value = line.split('=', 1)
+        values[key.strip()] = value.strip()
+    return values
+
+
+def _is_placeholder_secret(value):
+    text = (value or '').strip()
+    if not text:
+        return True
+    lowered = text.lower()
+    placeholder_prefixes = ('your-', 'your_', 'change-me', 'example')
+    placeholder_values = {
+        'your-qweather-api-key',
+        'your-amap-js-api-key',
+        'your-amap-security-code',
+        'your-amap-web-service-key',
+        'your-siliconflow-api-key',
+        'change-me-min-32-chars',
+    }
+    return lowered.startswith(placeholder_prefixes) or lowered in placeholder_values
+
+
 def main():
     # 设置环境变量
     os.environ['DEBUG'] = 'true'
@@ -94,13 +122,27 @@ def main():
         else:
             print("✅ .env.example 包含所有必需配置项")
 
-        # 检查是否不包含可疑的旧密钥片段
-        suspicious_markers = ['sk-', '73684be4bf0141c7']
-        if any(marker in env_example for marker in suspicious_markers):
-            print("❌ .env.example 包含真实密钥！")
+        env_values = _load_active_env_values(env_example)
+        if any(marker in env_example for marker in ['73684be4bf0141c7', '172.245.126.42', 'mj76x98pfn.re.qweatherapi.com']):
+            print("❌ .env.example 仍包含已知敏感片段！")
             return 1
-        else:
-            print("✅ .env.example 不包含真实密钥")
+
+        secret_like_keys = [
+            'SECRET_KEY',
+            'PAIR_TOKEN_PEPPER',
+            'QWEATHER_KEY',
+            'AMAP_JS_API_KEY',
+            'AMAP_SECURITY_JS_CODE',
+            'AMAP_WEB_SERVICE_KEY',
+            'SILICONFLOW_API_KEY',
+            'WXPUSHER_APP_TOKEN',
+        ]
+        leaked_keys = [key for key in secret_like_keys if not _is_placeholder_secret(env_values.get(key, ''))]
+        if leaked_keys:
+            print(f"❌ .env.example 存在非示例密钥字段: {', '.join(leaked_keys)}")
+            return 1
+
+        print("✅ .env.example 不包含真实密钥")
     except FileNotFoundError:
         print("❌ .env.example 未找到")
         return 1

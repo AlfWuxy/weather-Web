@@ -2,6 +2,10 @@ const { API_BASE_URL } = require('../config');
 
 function request({ method, path, token, data }) {
   return new Promise((resolve, reject) => {
+    if (!API_BASE_URL) {
+      reject(new Error('miniapp_api_base_missing'));
+      return;
+    }
     wx.request({
       url: `${API_BASE_URL}${path}`,
       method: method || 'GET',
@@ -30,4 +34,3 @@ async function api({ method, path, token, data }) {
 }
 
 module.exports = { api };
-

@@ -4,8 +4,15 @@ import argparse
 import getpass
 import os
 import sqlite3
+import sys
 from pathlib import Path
 from werkzeug.security import generate_password_hash
+
+ROOT_DIR = Path(__file__).resolve().parents[1]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+
+from core.config import resolve_sqlite_db_path
 
 
 def _load_database_uri():
@@ -29,18 +36,16 @@ def _load_database_uri():
     return ''
 
 
-def _parse_sqlite_path(uri):
-    if not uri:
-        return None
-    if uri.startswith('sqlite:////'):
-        path = f"/{uri[len('sqlite:////'):]}"
-    elif uri.startswith('sqlite:///'):
-        path = uri[len('sqlite:///'):]
-    else:
-        return None
-    if '?' in path:
-        path = path.split('?', 1)[0]
-    return path or None
+def _resolve_db_path(cli_db_path):
+    if cli_db_path:
+        return Path(cli_db_path).expanduser().resolve()
+
+    db_uri = _load_database_uri()
+    resolved = resolve_sqlite_db_path(db_uri, ROOT_DIR)
+    if resolved is not None:
+        return resolved
+
+    return (ROOT_DIR / 'storage' / 'health_weather.db').resolve()
 
 
 def _resolve_new_password(cli_password):
@@ -73,15 +78,21 @@ def main():
     if len(new_password) < 8:
         raise RuntimeError('新密码长度至少为 8 个字符。')
 
-    db_uri = _load_database_uri()
-    db_file = args.db_path or _parse_sqlite_path(db_uri) or str(Path(__file__).resolve().parents[1] / 'storage' / 'health_weather.db')
-    db_path = Path(db_file)
+    db_path = _resolve_db_path(args.db_path)
+    if not db_path.exists():
+        raise RuntimeError(f'数据库文件不存在: {db_path}')
 
-    conn = sqlite3.connect(db_path)
+    try:
+        conn = sqlite3.connect(db_path)
+    except sqlite3.OperationalError as exc:
+        raise RuntimeError(f'无法打开数据库文件: {db_path} ({exc})') from exc
     try:
         cursor = conn.cursor()
         new_hash = generate_password_hash(new_password)
-        cursor.execute('UPDATE users SET password_hash = ? WHERE username = ?', (new_hash, 'admin'))
+        try:
+            cursor.execute('UPDATE users SET password_hash = ? WHERE username = ?', (new_hash, 'admin'))
+        except sqlite3.OperationalError as exc:
+            raise RuntimeError(f'更新 admin 密码失败，请检查 users 表是否存在: {exc}') from exc
         conn.commit()
         print(f'已重置 admin 密码, 更新行数: {cursor.rowcount}')
     finally:

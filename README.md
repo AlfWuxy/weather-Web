@@ -80,6 +80,8 @@ pytest
 
 手动测试类用例默认不会执行；如需单独运行，请查看 `tests/manual/`。
 
+小程序调试 / 联调前，必须先在 `miniprogram/config.js` 中填写真实 HTTPS API 地址。公开仓库默认留空，未配置时小程序请求会直接报错，不会再偷偷打到占位域名。
+
 ## 仓库结构
 
 ```text
@@ -94,6 +96,8 @@ tests/                自动化测试
 docs/                 架构、重构、评审与状态文档
 scripts/              部署与维护脚本
 ```
+
+如果你要启用 QWeather，请在本地 `.env` 中显式设置 `QWEATHER_KEY` 和 `QWEATHER_API_BASE`。公开仓库默认不再内置 QWeather Host；未配置时系统会走 Open-Meteo / 阈值规则兜底。
 
 ## 标准开发流程
 
