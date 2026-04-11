@@ -15,16 +15,23 @@ def test_qweather_api():
     print("和风天气API测试")
     print("=" * 50)
     
-    # API配置（如使用付费订阅版，请在本地环境变量里提供专属域名）
+    # API配置（如使用付费订阅版，请在本地环境变量里显式提供专属域名）
     key = os.getenv("QWEATHER_KEY")
-    base_url = os.getenv("QWEATHER_API_BASE", "https://your-qweather-host.example.com/v7")
+    base_url = os.getenv("QWEATHER_API_BASE")
     location = "116.20,29.27"  # 都昌县
 
     if not key:
         print("❌ 未设置环境变量 QWEATHER_KEY，无法测试。")
         return
+    if not base_url:
+        print("❌ 未设置环境变量 QWEATHER_API_BASE，无法测试。")
+        return
+    if "your-qweather-host.example.com" in base_url:
+        print("❌ QWEATHER_API_BASE 仍是占位值，请先改成真实 Host。")
+        return
     
     print(f"\nAPI Key: {key[:6]}...{key[-4:]}")
+    print(f"Base URL: {base_url}")
     print(f"Location: {location}")
     
     # 测试1: 实时天气
