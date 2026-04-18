@@ -1,19 +1,20 @@
 {% extends "base.html" %}
 
-{% block title %}登录 - 天气健康风险预测系统{% endblock %}
+{% block title %}登录 · 宜老天气通{% endblock %}
 {% block body_class %}login-page{% endblock %}
 
 {% block content %}
 <div class="container auth-shell">
-    <div class="row g-4 align-items-center">
-        <!-- 左侧：产品说明 -->
+    <div class="row g-5 align-items-start">
+
+        {# 左:叙事 #}
         <div class="col-lg-7 order-2 order-lg-1">
-            <section class="auth-story">
-                <span class="hero-kicker">登录后开始配置你的照护提醒</span>
-                <h1 class="auth-title">在天气真正影响家人之前，先替他们想一步。</h1>
+            <section class="yl-fade-up">
+                <span class="section-kicker">登录,开始配置你的照护提醒</span>
+                <h1 class="auth-title mt-2 mb-3">在天气真正影响到家人之前,先替他们想一步。</h1>
                 <p class="auth-subtitle">
-                    登录后你可以配置老人所在地、查看风险提醒、复制沟通话术，并把后续反馈记录下来，
-                    让这个系统既有真实使用价值，也能沉淀试点数据。
+                    登录后可以配置老人所在地、查看风险提醒、复制话术,把后续反馈记录下来。
+                    既是真实可用的工具,也能沉淀试点数据。
                 </p>
 
                 <div class="auth-highlight-grid">
@@ -21,88 +22,73 @@
                         <i class="bi bi-geo-alt"></i>
                         <div>
                             <strong>多地配置</strong>
-                            <p>适合异地子女同时关注多位家人</p>
+                            <p>异地子女同时关注多位家人</p>
                         </div>
                     </div>
                     <div class="auth-highlight-card">
                         <i class="bi bi-chat-left-text"></i>
                         <div>
                             <strong>沟通更省力</strong>
-                            <p>风险提醒能直接转成家人听得懂的话术</p>
+                            <p>风险提醒直接转成家人听得懂的话术</p>
                         </div>
                     </div>
                     <div class="auth-highlight-card">
                         <i class="bi bi-clipboard-check"></i>
                         <div>
                             <strong>结果可记录</strong>
-                            <p>提醒是否执行可以继续追踪和分析</p>
+                            <p>提醒是否执行,可以继续追踪分析</p>
                         </div>
                     </div>
                 </div>
 
                 <div class="auth-guide-card">
-                    <div class="section-heading compact mb-0">
-                        <span class="section-kicker">首次使用</span>
-                        <h2>5 分钟打通一条最基础的预警闭环。</h2>
-                    </div>
+                    <span class="section-kicker">首次使用</span>
+                    <h4 class="mt-2 mb-0" style="font-size:1.15rem;">5 分钟打通一条最基础的预警闭环。</h4>
                     <ol class="auth-quicklist">
                         <li>登录或注册进入系统。</li>
-                        <li>进入“照护工作台”，添加需要关注的家人。</li>
-                        <li>设置所在地和慢病类别（慢病可选）。</li>
-                        <li>在“个人设置”填写 WxPusher UID 并开启推送。</li>
-                        <li>收到提醒后复制话术，并记录后续反馈。</li>
+                        <li>进入"照护工作台",添加需要关注的家人。</li>
+                        <li>设置所在地和慢病类别(慢病可选)。</li>
+                        <li>在"个人设置"填写 WxPusher UID 并开启推送。</li>
+                        <li>收到提醒后复制话术,并记录后续反馈。</li>
                     </ol>
                 </div>
 
                 <div class="auth-link-row">
-                    <a class="btn btn-outline-secondary" href="{{ url_for('public.public_risk') }}">
-                        <i class="bi bi-thermometer-sun me-1"></i>风险说明
-                    </a>
-                    <a class="btn btn-outline-secondary" href="{{ url_for('public.transparency') }}">
-                        <i class="bi bi-shield-check me-1"></i>透明度
-                    </a>
-                    <a class="btn btn-outline-secondary" href="{{ url_for('public.role_entry') }}">
-                        <i class="bi bi-diagram-3 me-1"></i>角色入口
-                    </a>
-                    <a class="btn btn-outline-success" href="{{ url_for('public.wxoa_landing', from='wxoa') }}">
-                        <i class="bi bi-chat-left-text me-1"></i>公众号入口
-                    </a>
+                    <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('public.public_risk') }}"><i class="bi bi-thermometer-sun me-1"></i>风险说明</a>
+                    <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('public.transparency') }}"><i class="bi bi-shield-check me-1"></i>透明度</a>
+                    <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('public.cooling_resources') }}"><i class="bi bi-geo-alt me-1"></i>避暑资源</a>
                 </div>
             </section>
         </div>
 
-        <!-- 右侧：登录表单 -->
+        {# 右:表单 #}
         <div class="col-lg-5 col-xl-4 order-1 order-lg-2">
-            <section class="auth-panel">
+            <section class="auth-panel yl-fade-up yl-fade-up-d1">
                 <div class="auth-panel-head text-center">
-                    <div class="auth-icon-wrap">
-                        <i class="bi bi-shield-lock-fill"></i>
-                    </div>
-                    <h2>登录系统</h2>
-                    <p>继续使用你的照护与天气预警工具</p>
+                    <div class="auth-icon-wrap"><i class="bi bi-shield-lock-fill"></i></div>
+                    <h2>登录</h2>
+                    <p>继续使用你的照护工具</p>
                 </div>
 
-                <div class="card auth-form-card shadow-sm">
+                <div class="card auth-form-card">
                     <div class="card-body p-4">
                         <form method="POST" action="{{ url_for('public.login') }}">
                             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                            {% if next %}
-                                <input type="hidden" name="next" value="{{ next }}">
-                            {% endif %}
+                            {% if next %}<input type="hidden" name="next" value="{{ next }}">{% endif %}
 
                             <div class="mb-3">
-                                <label for="username" class="form-label text-secondary">用户名</label>
+                                <label for="username" class="form-label">用户名</label>
                                 <input type="text" class="form-control" id="username" name="username" placeholder="请输入用户名" required autofocus>
                             </div>
                             <div class="mb-3">
-                                <label for="password" class="form-label text-secondary">密码</label>
+                                <label for="password" class="form-label">密码</label>
                                 <input type="password" class="form-control" id="password" name="password" placeholder="请输入密码" required>
                             </div>
 
                             <div class="mb-3 d-flex justify-content-between align-items-center">
                                 <div class="form-check">
                                     <input type="checkbox" class="form-check-input" id="remember" name="remember" value="1">
-                                    <label class="form-check-label small" for="remember">记住我（30 天）</label>
+                                    <label class="form-check-label" for="remember" style="font-size:.9rem;">记住我(30 天)</label>
                                 </div>
                             </div>
 
@@ -114,8 +100,8 @@
                             </div>
 
                             <div class="text-center">
-                                <span class="text-secondary small">还没有账号？</span>
-                                <a href="{{ url_for('public.register') }}" class="text-decoration-none small fw-semibold">立即注册</a>
+                                <span class="text-muted" style="font-size:.88rem;">还没有账号?</span>
+                                <a href="{{ url_for('public.register') }}" class="text-decoration-none fw-semibold" style="font-size:.88rem;">立即注册</a>
                             </div>
                         </form>
                     </div>
@@ -123,7 +109,7 @@
 
                 <div class="auth-note">
                     <i class="bi bi-info-circle"></i>
-                    <span><strong>管理员账号：</strong>由系统配置创建</span>
+                    <span><strong>管理员账号:</strong>由系统配置创建</span>
                 </div>
             </section>
         </div>
