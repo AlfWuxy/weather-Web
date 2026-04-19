@@ -20,24 +20,24 @@
                     <select name="member_id" class="form-select">
                         <option value="">我本人</option>
                         {% for m in (family_members or []) %}
-                        <option value="{{ m.id }}" {% if request.args.get('member_id')|int == m.id %}selected{% endif %}>{{ m.name }}</option>
+                        <option value="{{ m.id }}" {% if form_state and form_state.member_id|string == m.id|string %}selected{% endif %}>{{ m.name }}</option>
                         {% endfor %}
                     </select>
                 </div>
                 <div class="mb-3">
                     <label class="form-label">所在地</label>
-                    <input type="text" class="form-control" name="location" value="{{ current_location or '' }}" list="locOpts">
+                    <input type="text" class="form-control" name="location" value="{{ form_state.location if form_state else (current_location or '') }}" list="locOpts">
                     <datalist id="locOpts">{% for loc in (location_options or []) %}<option value="{{ loc }}"></option>{% endfor %}</datalist>
                 </div>
                 <div class="mb-3">
                     <label class="form-label">年龄</label>
-                    <input type="number" class="form-control" name="age" value="{{ age or 65 }}" min="1" max="120">
+                    <input type="number" class="form-control" name="age" value="{{ form_state.age if form_state else (age or 65) }}" min="1" max="120">
                 </div>
                 <div class="mb-3">
                     <label class="form-label">已有慢病(可多选)</label>
                     <select name="chronic" class="form-select" multiple size="6">
-                        {% for c in ['高血压','糖尿病','冠心病','慢阻肺','脑卒中史','慢性肾病','骨关节病'] %}
-                        <option value="{{ c }}">{{ c }}</option>
+                        {% for c in ['高血压','糖尿病','冠心病','慢阻肺','哮喘','脑卒中','慢性肾病','关节炎'] %}
+                        <option value="{{ c }}" {% if form_state and c in (form_state.chronic or []) %}selected{% endif %}>{{ c }}</option>
                         {% endfor %}
                     </select>
                     <div class="form-text">按住 Ctrl/⌘ 多选</div>
@@ -47,6 +47,11 @@
         </div>
 
         <div class="col-lg-8">
+            {% if prediction_error %}
+            <section class="yl-section yl-fade-up yl-fade-up-d2 mb-3">
+                <div class="alert alert-danger mb-0">{{ prediction_error }}</div>
+            </section>
+            {% endif %}
             {% if prediction %}
             <section class="yl-section yl-fade-up yl-fade-up-d2 mb-3">
                 <h4 style="font-size:1.1rem;">未来 3 天风险预测</h4>

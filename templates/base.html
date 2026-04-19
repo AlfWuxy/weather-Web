@@ -88,9 +88,9 @@
                 <span>宜老天气通</span>
             </a>
 
-            {# 高频 5 项 —— 仅登录后显示在桌面端 #}
+            {# 高频入口 —— 仅登录后显示在桌面端 #}
             {% if current_user.is_authenticated %}
-                <div class="d-none d-lg-flex align-items-center gap-1 mx-auto">
+                <div class="app-desktop-nav d-none d-lg-flex align-items-center gap-1 mx-auto">
                     <a class="nav-link {% if request.endpoint == 'user.user_dashboard' %}active{% endif %}"
                        href="{{ url_for('user.user_dashboard') }}">我的主页</a>
 
@@ -108,9 +108,71 @@
                     <a class="nav-link {% if request.endpoint == 'user.community_risk' %}active{% endif %}"
                        href="{{ url_for('user.community_risk') }}">社区风险</a>
 
-                    <a class="nav-link" data-bs-toggle="offcanvas" href="#appNavDrawer" role="button" aria-controls="appNavDrawer">
-                        更多 <i class="bi bi-chevron-down small"></i>
-                    </a>
+                    <a class="nav-link {% if request.endpoint == 'tools.ml_prediction' %}active{% endif %}"
+                       href="{{ url_for('tools.ml_prediction') }}">AI 疾病预测</a>
+
+                    <a class="nav-link {% if request.endpoint == 'tools.ai_qa' %}active{% endif %}"
+                       href="{{ url_for('tools.ai_qa') }}">AI 提问</a>
+
+                    <a class="nav-link {% if request.endpoint == 'user.health_assessment' %}active{% endif %}"
+                       href="{{ url_for('user.health_assessment') }}">健康评估</a>
+
+                    <a class="nav-link {% if 'family' in (request.endpoint or '') %}active{% endif %}"
+                       href="{{ url_for('health.family_members') }}">家庭成员</a>
+
+                    <div class="app-more-menu" id="appMoreMenu">
+                        <button type="button"
+                                class="nav-link app-more-trigger"
+                                data-nav-more-trigger="desktop"
+                                aria-expanded="false"
+                                aria-controls="appMegaMenu">
+                            更多 <i class="bi bi-chevron-down small"></i>
+                        </button>
+
+                        <div class="app-mega-menu" id="appMegaMenu" aria-label="更多功能" aria-hidden="true">
+                            <div class="app-mega-grid">
+                                <section class="app-mega-group">
+                                    <div class="app-mega-kicker">公共信息</div>
+                                    <a class="app-mega-link" href="{{ url_for('public.public_risk') }}">风险说明</a>
+                                    <a class="app-mega-link" href="{{ url_for('public.cooling_resources') }}">避暑资源</a>
+                                    <a class="app-mega-link" href="{{ url_for('public.transparency') }}">透明度</a>
+                                    <a class="app-mega-link" href="{{ url_for('public.action_check') }}">行动打卡</a>
+                                </section>
+
+                                <section class="app-mega-group">
+                                    <div class="app-mega-kicker">健康管理</div>
+                                    <a class="app-mega-link" href="{{ url_for('tools.chronic_risk') }}">慢病风险评估</a>
+                                    <a class="app-mega-link" href="{{ url_for('health.health_diary') }}">健康日记</a>
+                                    <a class="app-mega-link" href="{{ url_for('health.medication_reminders') }}">用药提醒</a>
+                                    <a class="app-mega-link" href="{{ url_for('analysis.annual_report') }}">年度健康报告</a>
+                                </section>
+
+                                {% if current_user.role in ['community', 'admin'] %}
+                                <section class="app-mega-group">
+                                    <div class="app-mega-kicker">社区与群体</div>
+                                    <a class="app-mega-link" href="{{ url_for('user.community_dashboard') }}">社区看板</a>
+                                    {% if current_user.role == 'admin' %}
+                                        <a class="app-mega-link" href="{{ url_for('admin.admin_dashboard') }}">管理后台</a>
+                                        <a class="app-mega-link" href="{{ url_for('analysis.pilot_dashboard') }}">试点数据看板</a>
+                                        <a class="app-mega-link" href="{{ url_for('analysis.reports_center') }}">报告导出</a>
+                                    {% endif %}
+                                </section>
+                                {% endif %}
+
+                                <section class="app-mega-group">
+                                    <div class="app-mega-kicker">账号与设置</div>
+                                    {% if current_user.role != 'guest' %}
+                                        <a class="app-mega-link" href="{{ url_for('user.profile') }}">个人设置</a>
+                                        {% if feature_flags.elder_mode %}
+                                            <a class="app-mega-link" href="{{ url_for('user.elder_dashboard') }}">老人模式</a>
+                                        {% endif %}
+                                    {% else %}
+                                        <a class="app-mega-link" href="{{ url_for('public.register') }}">注册账号</a>
+                                    {% endif %}
+                                </section>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             {% endif %}
 
@@ -355,6 +417,83 @@
                 }
                 if (typeof window.__syncViewportTier === 'function') {
                     window.__syncViewportTier();
+                }
+            });
+        })();
+    </script>
+
+    <script>
+        (function() {
+            const menuRoot = document.getElementById('appMoreMenu');
+            if (!menuRoot) return;
+
+            const trigger = menuRoot.querySelector('[data-nav-more-trigger="desktop"]');
+            const panel = document.getElementById('appMegaMenu');
+            let closeTimer = null;
+
+            function setOpen(nextOpen) {
+                menuRoot.classList.toggle('is-open', nextOpen);
+                if (trigger) {
+                    trigger.setAttribute('aria-expanded', nextOpen ? 'true' : 'false');
+                }
+                if (panel) {
+                    panel.setAttribute('aria-hidden', nextOpen ? 'false' : 'true');
+                }
+            }
+
+            function clearCloseTimer() {
+                if (closeTimer !== null) {
+                    clearTimeout(closeTimer);
+                    closeTimer = null;
+                }
+            }
+
+            function scheduleClose() {
+                clearCloseTimer();
+                closeTimer = window.setTimeout(function() {
+                    setOpen(false);
+                }, 120);
+            }
+
+            menuRoot.addEventListener('mouseenter', function() {
+                clearCloseTimer();
+                setOpen(true);
+            });
+
+            menuRoot.addEventListener('mouseleave', scheduleClose);
+
+            menuRoot.addEventListener('focusin', function() {
+                clearCloseTimer();
+                setOpen(true);
+            });
+
+            menuRoot.addEventListener('focusout', function(event) {
+                if (event.relatedTarget && menuRoot.contains(event.relatedTarget)) {
+                    return;
+                }
+                scheduleClose();
+            });
+
+            if (trigger) {
+                trigger.addEventListener('click', function(event) {
+                    event.preventDefault();
+                    clearCloseTimer();
+                    setOpen(!menuRoot.classList.contains('is-open'));
+                });
+            }
+
+            document.addEventListener('pointerdown', function(event) {
+                if (!menuRoot.contains(event.target)) {
+                    setOpen(false);
+                }
+            });
+
+            document.addEventListener('keydown', function(event) {
+                if (event.key === 'Escape') {
+                    setOpen(false);
+                    if (trigger) {
+                        trigger.blur();
+                    }
                 }
             });
         })();
