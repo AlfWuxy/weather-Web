@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}首页 - 宜老天气通{% endblock %}
+{% block title %}首页 · 宜老天气通{% endblock %}
 {% block body_class %}home-page{% endblock %}
 
 {% block content %}
@@ -8,244 +8,161 @@
     {% if current_user.role in ['caregiver', 'admin'] %}
         {% set workspace_url = url_for('user.caregiver_dashboard') %}
     {% else %}
-        {% set workspace_url = url_for('user.pair_management') %}
+        {% set workspace_url = url_for('health.family_members') %}
     {% endif %}
 {% endif %}
 
-<div class="container home-shell">
-    <!-- 首页主视觉 -->
-    <section class="home-hero mb-5">
-        <div class="row g-4 align-items-center">
-            <div class="col-xl-7">
-                <span class="hero-kicker">异地子女也能更早一步守护家中老人</span>
-                <h1 class="hero-title">
-                    把天气预警，
-                    <span class="text-gradient">变成今天就能执行的照护提醒。</span>
-                </h1>
-                <p class="hero-subtitle">
-                    宜老天气通把高温、寒潮等天气风险转换成更容易理解的提醒建议，帮助子女或照护者及时联系家人，
-                    不再只“看到天气”，而是知道“下一步要怎么做”。
-                </p>
+<div class="container" style="max-width: 1160px;">
 
-                <div class="hero-badges">
-                    <span class="hero-badge">
-                        <i class="bi bi-broadcast-pin"></i>
-                        官方预警优先
-                    </span>
-                    <span class="hero-badge">
-                        <i class="bi bi-chat-square-text"></i>
-                        一键复制提醒话术
-                    </span>
-                    <span class="hero-badge">
-                        <i class="bi bi-clipboard-data"></i>
-                        行动反馈可回收
-                    </span>
-                </div>
+    {# ============== Hero ============== #}
+    <section class="yl-hero yl-fade-up">
+        <span class="hero-kicker"><i class="bi bi-broadcast-pin"></i> 给异地子女的一条线</span>
+        <h1>把天气预警,变成今天就能做的那一句话。</h1>
+        <p class="hero-lead">
+            气压骤降、高温连日、寒潮来袭——这些对老人都是风险。我们把它翻译成一句"今天别出门"或"记得多喝水",
+            子女能直接转给家里人,不再只是看天气,而是知道下一步。
+        </p>
 
-                {% if not current_user.is_authenticated %}
-                    <div class="hero-actions">
-                        <a href="{{ url_for('public.register') }}" class="btn btn-primary btn-lg">立即注册</a>
-                        <a href="{{ url_for('public.login') }}" class="btn btn-outline-secondary btn-lg">用户登录</a>
-                        <a href="{{ url_for('public.wxoa_landing', from='web') }}" class="btn btn-outline-success btn-lg">公众号入口</a>
-                        <a href="{{ url_for('public.guest_login') }}" class="btn btn-outline-primary btn-lg">游客体验</a>
-                    </div>
-                    <p class="hero-note">老人不必学会使用网站，子女收到提醒后即可直接转述和跟进。</p>
-                {% else %}
-                    <div class="hero-actions">
-                        <a href="{{ workspace_url }}" class="btn btn-primary btn-lg">进入照护工作台</a>
-                        <a href="{{ url_for('public.about_trust_network') }}" class="btn btn-outline-secondary btn-lg">查看论文闭环说明</a>
-                        <a href="{{ url_for('public.public_risk') }}" class="btn btn-outline-primary btn-lg">查看风险说明</a>
-                    </div>
-                    <p class="hero-note">当前更适合先从“照护工作台”进入，配置老人所在地和提醒方式。</p>
-                {% endif %}
+        {% if not current_user.is_authenticated %}
+            <div class="hero-actions">
+                <a href="{{ url_for('public.register') }}" class="btn btn-primary btn-lg">立即注册</a>
+                <a href="{{ url_for('public.login') }}" class="btn btn-outline-secondary btn-lg">登录</a>
+                <a href="{{ url_for('public.guest_login') }}" class="btn btn-light btn-lg">游客体验</a>
             </div>
+            <p class="text-muted mt-3 mb-0" style="font-size:.9rem;">
+                <i class="bi bi-info-circle me-1"></i>老人不用学新 App——子女收到提醒,转述一句就够了。
+            </p>
+        {% else %}
+            <div class="hero-actions">
+                <a href="{{ workspace_url }}" class="btn btn-primary btn-lg">进入照护工作台</a>
+                <a href="{{ url_for('user.user_dashboard') }}" class="btn btn-outline-secondary btn-lg">我的主页</a>
+                <a href="{{ url_for('public.public_risk') }}" class="btn btn-light btn-lg">风险说明</a>
+            </div>
+        {% endif %}
+    </section>
 
-            <div class="col-xl-5">
-                <div class="hero-panel">
-                    <div class="hero-panel-header">
-                        <span class="hero-panel-chip">今日照护节奏</span>
-                        <h2>从天气变化到行动反馈，站内形成一条轻量闭环。</h2>
-                        <p>既适合课程答辩展示，也适合真实试点阶段使用。</p>
-                    </div>
+    {# ============== 闭环流程 ============== #}
+    <section class="section-heading yl-fade-up yl-fade-up-d1">
+        <span class="section-kicker">使用流程</span>
+        <h2>一个预警从出现到执行,大约走这 4 步。</h2>
+    </section>
 
-                    <div class="hero-journey">
-                        <div class="hero-journey-item">
-                            <span class="hero-journey-index">01</span>
-                            <div>
-                                <h3>天气风险触发</h3>
-                                <p>官方预警优先，无预警时用阈值机制兜底，降低漏提醒概率。</p>
-                            </div>
-                        </div>
-                        <div class="hero-journey-item">
-                            <span class="hero-journey-index">02</span>
-                            <div>
-                                <h3>子女收到提醒</h3>
-                                <p>通过网站或公众号入口查看提醒内容，不需要老人亲自操作。</p>
-                            </div>
-                        </div>
-                        <div class="hero-journey-item">
-                            <span class="hero-journey-index">03</span>
-                            <div>
-                                <h3>一键复制话术</h3>
-                                <p>把复杂信息翻译成更适合家人沟通的语句，减少“知道但不会说”。</p>
-                            </div>
-                        </div>
-                        <div class="hero-journey-item">
-                            <span class="hero-journey-index">04</span>
-                            <div>
-                                <h3>记录后续反馈</h3>
-                                <p>形成试点数据，便于后续分析预警效果和真实使用情况。</p>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="hero-stats-grid">
-                        <div class="hero-stat">
-                            <span>核心能力</span>
-                            <strong>多地区预警</strong>
-                            <p>支持多个老人所在地配置</p>
-                        </div>
-                        <div class="hero-stat">
-                            <span>沟通效率</span>
-                            <strong>提醒话术</strong>
-                            <p>把风险转成可执行语言</p>
-                        </div>
-                        <div class="hero-stat">
-                            <span>项目价值</span>
-                            <strong>试点闭环</strong>
-                            <p>便于答辩展示与后续优化</p>
-                        </div>
-                    </div>
+    <div class="row g-3 mb-5 yl-fade-up yl-fade-up-d2">
+        {% for step in [
+            ('01', '天气风险触发', '优先用官方预警,无预警时由阈值兜底,尽量不漏提醒。'),
+            ('02', '子女收到提醒', '网站或公众号都能接收,老人不用自己打开手机操作。'),
+            ('03', '一键复制话术', '把"气压 24h 下降 12 hPa"翻成"妈今天别去跳广场舞"。'),
+            ('04', '记录后续反馈', '是否提醒、是否执行,都能沉淀下来做后续优化。'),
+        ] %}
+        <div class="col-md-6 col-lg-3">
+            <div class="card h-100">
+                <div class="card-body">
+                    <div style="font-size:.8rem; color:var(--yl-orange-600); font-weight:700; letter-spacing:.1em;">{{ step[0] }}</div>
+                    <h3 class="mt-2" style="font-size:1.1rem;">{{ step[1] }}</h3>
+                    <p class="mb-0" style="font-size:.9rem;">{{ step[2] }}</p>
                 </div>
             </div>
         </div>
+        {% endfor %}
+    </div>
+
+    {# ============== 核心能力 ============== #}
+    <section class="section-heading yl-fade-up">
+        <span class="section-kicker">核心能力</span>
+        <h2>一眼看懂:这个网站能帮谁、帮什么。</h2>
+        <p>不是模块堆叠——把价值点、使用场景和结果一次讲清楚。</p>
     </section>
 
-    <!-- 功能卡片 -->
-    <section class="section-heading">
-        <span class="section-kicker">核心功能</span>
-        <h2>先让访问者一眼看懂，这个网站到底能帮谁、帮什么。</h2>
-        <p class="section-subtitle">首页不再只是“模块堆叠”，而是把价值点、使用场景和结果用更容易扫读的方式呈现出来。</p>
-    </section>
-
-    <section class="row g-4 mb-5">
+    <div class="row g-4 mb-5">
         <div class="col-lg-4">
-            <article class="feature-card h-100">
-                <div class="feature-icon feature-icon-primary">
-                    <i class="bi bi-cloud-sun"></i>
-                </div>
-                <div class="feature-copy">
-                    <span class="feature-label">预警能力</span>
-                    <h3>多地区天气风险提醒</h3>
-                    <p>为多位老人设置所在地，在高温或寒潮风险出现时及时向子女发出提醒。</p>
-                    <ul class="feature-list">
-                        <li>官方预警优先，阈值策略兜底</li>
-                        <li>支持中文地点输入</li>
-                        <li>保留点击和触发记录，便于回看</li>
+            <article class="card h-100 yl-fade-up">
+                <div class="card-body">
+                    <div class="yl-feature-icon mb-3" style="width:52px; height:52px; font-size:1.5rem;">
+                        <i class="bi bi-cloud-sun"></i>
+                    </div>
+                    <span class="section-kicker" style="margin-bottom:10px;">预警能力</span>
+                    <h3 style="font-size:1.15rem;">多地天气风险提醒</h3>
+                    <p>为多位老人设置所在地,高温或寒潮风险出现时及时通知子女。</p>
+                    <ul class="mb-0" style="color:var(--yl-ink-soft); font-size:.9rem; padding-left:18px;">
+                        <li>官方预警优先,阈值策略兜底</li>
+                        <li>支持中文地名(街道、县、城市)</li>
+                        <li>保留点击与触发记录,可回看</li>
                     </ul>
                 </div>
             </article>
         </div>
 
         <div class="col-lg-4">
-            <article class="feature-card h-100">
-                <div class="feature-icon feature-icon-success">
-                    <i class="bi bi-chat-heart"></i>
-                </div>
-                <div class="feature-copy">
-                    <span class="feature-label">沟通效率</span>
-                    <h3>提醒话术和行动反馈</h3>
-                    <p>把风险说明转成更自然的沟通内容，降低子女“知道了但不知道该怎么说”的成本。</p>
-                    <ul class="feature-list">
+            <article class="card h-100 yl-fade-up yl-fade-up-d1">
+                <div class="card-body">
+                    <div class="yl-feature-icon mb-3" style="width:52px; height:52px; font-size:1.5rem; background:var(--yl-success-50); color:var(--yl-success);">
+                        <i class="bi bi-chat-heart"></i>
+                    </div>
+                    <span class="section-kicker" style="margin-bottom:10px; background:var(--yl-success-50); color:var(--yl-success);">沟通效率</span>
+                    <h3 style="font-size:1.15rem;">话术与行动反馈</h3>
+                    <p>把风险说明转成家人听得懂的语言,省去"知道了但不知道怎么说"的那一步。</p>
+                    <ul class="mb-0" style="color:var(--yl-ink-soft); font-size:.9rem; padding-left:18px;">
                         <li>一键复制提醒语句</li>
-                        <li>记录是否已通知家人</li>
-                        <li>回收行动反馈，形成试点数据</li>
+                        <li>标记是否已通知到家人</li>
+                        <li>沉淀行动反馈,形成试点数据</li>
                     </ul>
                 </div>
             </article>
         </div>
 
         <div class="col-lg-4">
-            <article class="feature-card h-100">
-                <div class="feature-icon feature-icon-info">
-                    <i class="bi bi-shield-check"></i>
-                </div>
-                <div class="feature-copy">
-                    <span class="feature-label">可信设计</span>
-                    <h3>尽量少采集敏感信息</h3>
-                    <p>系统更关注天气风险、照护动作和试点反馈，不要求输入过细的隐私数据。</p>
-                    <ul class="feature-list">
-                        <li>不依赖精确住址和电话</li>
-                        <li>慢病信息可选填写</li>
-                        <li>透明度页面单独说明数据边界</li>
+            <article class="card h-100 yl-fade-up yl-fade-up-d2">
+                <div class="card-body">
+                    <div class="yl-feature-icon mb-3" style="width:52px; height:52px; font-size:1.5rem; background:var(--yl-info-50); color:var(--yl-info);">
+                        <i class="bi bi-shield-check"></i>
+                    </div>
+                    <span class="section-kicker" style="margin-bottom:10px; background:var(--yl-info-50); color:var(--yl-info);">可信设计</span>
+                    <h3 style="font-size:1.15rem;">尽量少采集敏感信息</h3>
+                    <p>我们更关注天气风险和照护动作,不要求精确到门牌的住址或电话。</p>
+                    <ul class="mb-0" style="color:var(--yl-ink-soft); font-size:.9rem; padding-left:18px;">
+                        <li>不依赖精确地址与手机号</li>
+                        <li>慢病信息选填</li>
+                        <li>透明度页面独立说明数据边界</li>
                     </ul>
                 </div>
             </article>
         </div>
+    </div>
+
+    {# ============== 角色入口 ============== #}
+    {% if not current_user.is_authenticated %}
+    <section class="section-heading yl-fade-up">
+        <span class="section-kicker">角色入口</span>
+        <h2>你是谁?选一条最合适的路径开始。</h2>
     </section>
 
-    <!-- 流程说明 -->
-    <section class="journey-card mb-5">
-        <div class="section-heading compact">
-            <span class="section-kicker">使用流程</span>
-            <h2>一个预警从出现到执行，大致会经过这 4 步。</h2>
+    <div class="row g-3 mb-5">
+        <div class="col-md-4">
+            <a href="{{ url_for('public.register') }}" class="yl-role-card variant-family">
+                <div class="yl-role-icon"><i class="bi bi-people"></i></div>
+                <h3>家属 / 子女</h3>
+                <p>关注家里老人的天气风险,收到提醒后转述一句。</p>
+                <span class="role-cta">去注册 <i class="bi bi-arrow-right"></i></span>
+            </a>
         </div>
+        <div class="col-md-4">
+            <a href="{{ url_for('public.guest_login') }}" class="yl-role-card variant-elder">
+                <div class="yl-role-icon"><i class="bi bi-eyeglasses"></i></div>
+                <h3>老人自用</h3>
+                <p>大字号、高对比,只保留最必要的风险和行动提示。</p>
+                <span class="role-cta">游客体验 <i class="bi bi-arrow-right"></i></span>
+            </a>
+        </div>
+        <div class="col-md-4">
+            <a href="{{ url_for('public.login') }}" class="yl-role-card variant-doctor">
+                <div class="yl-role-icon"><i class="bi bi-hospital"></i></div>
+                <h3>社区医生</h3>
+                <p>跨患者队列、风险预警、诊疗工具,一个工作台。</p>
+                <span class="role-cta">登录进入 <i class="bi bi-arrow-right"></i></span>
+            </a>
+        </div>
+    </div>
+    {% endif %}
 
-        <div class="row g-3">
-            <div class="col-md-6 col-xl-3">
-                <div class="journey-step">
-                    <span class="journey-step-number">1</span>
-                    <h3>录入老人信息</h3>
-                    <p>填写所在地、基础信息和可选慢病类别，建立个体化风险背景。</p>
-                </div>
-            </div>
-            <div class="col-md-6 col-xl-3">
-                <div class="journey-step">
-                    <span class="journey-step-number">2</span>
-                    <h3>系统监测天气</h3>
-                    <p>自动获取天气与预警数据，在风险升高时触发提醒逻辑。</p>
-                </div>
-            </div>
-            <div class="col-md-6 col-xl-3">
-                <div class="journey-step">
-                    <span class="journey-step-number">3</span>
-                    <h3>子女联系家人</h3>
-                    <p>复制建议话术，通过电话或微信提醒老人及时调整活动安排。</p>
-                </div>
-            </div>
-            <div class="col-md-6 col-xl-3">
-                <div class="journey-step">
-                    <span class="journey-step-number">4</span>
-                    <h3>记录实际反馈</h3>
-                    <p>回收是否提醒、是否执行等结果，为试点评估和后续优化提供依据。</p>
-                </div>
-            </div>
-        </div>
-    </section>
-
-    <!-- 信任与展示价值 -->
-    <section class="row g-4 mb-4">
-        <div class="col-lg-4">
-            <div class="trust-card h-100">
-                <span class="trust-label">适合答辩展示</span>
-                <h3>不是单纯天气站，而是有“人”的产品场景。</h3>
-                <p>核心叙事清楚：异地子女是可信节点，系统帮助他们更好地守护家中老人。</p>
-            </div>
-        </div>
-        <div class="col-lg-4">
-            <div class="trust-card h-100">
-                <span class="trust-label">适合继续扩展</span>
-                <h3>后续可以平滑扩到看板、分析页和公众号联动。</h3>
-                <p>这一版先把首页和入口页的视觉语言拉齐，后面再往功能页复用组件就会轻松很多。</p>
-            </div>
-        </div>
-        <div class="col-lg-4">
-            <div class="trust-card h-100">
-                <span class="trust-label">适合真实使用</span>
-                <h3>比“功能很多”更重要的是，让人知道先点哪里。</h3>
-                <p>主按钮、流程说明和信息层级更清楚，第一次进入网站时不容易迷路。</p>
-            </div>
-        </div>
-    </section>
 </div>
 {% endblock %}
