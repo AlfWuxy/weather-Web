@@ -625,6 +625,7 @@ def _api_community_risk_map_v2():
     """获取社区风险地图数据（改进版）"""
     try:
         from services.community_risk_service import get_community_service
+        from services.community_risk_cache import get_or_build_community_risk_result
 
         community_service = get_community_service()
 
@@ -653,16 +654,31 @@ def _api_community_risk_map_v2():
                 logger.warning("Community risk map weather fallback: %s", exc)
                 weather_data = {'temperature': 20, 'humidity': 60, 'aqi': 50}
 
-        # 生成风险地图
-        result = community_service.generate_community_risk_map(
-            weather_data,
-            target_date=target_date,
-            window_days=window_days,
-            disease_filter=disease_filter
-        )
+        cache_params = {
+            'analysis_date': target_date.isoformat() if target_date else '',
+            'window_days': window_days,
+            'disease_filter': disease_filter,
+            'city': city if 'city' in locals() else '',
+            'weather': {
+                'temperature': weather_data.get('temperature'),
+                'humidity': weather_data.get('humidity'),
+                'aqi': weather_data.get('aqi'),
+            },
+        }
+
+        def _build_result():
+            return community_service.generate_community_risk_map(
+                weather_data,
+                target_date=target_date,
+                window_days=window_days,
+                disease_filter=disease_filter
+            )
+
+        result, cache_hit = get_or_build_community_risk_result(cache_params, _build_result)
 
         return jsonify({
             'success': True,
+            'cache_hit': cache_hit,
             'map_data': result.get('map_data', {}),
             'rankings': result.get('rankings', []),
             'summary': result.get('summary', {}),

@@ -126,6 +126,12 @@ remote_exec() {
     ssh $SSH_OPTS "$USER@$SERVER" "$1"
 }
 
+check_remote_unit_active() {
+    local unit="$1"
+    remote_exec "systemctl is-active --quiet $unit"
+    echo "已确认 systemd 单元运行中: $unit"
+}
+
 # 使用 rsync/scp 上传文件的函数
 upload_files() {
     if use_sshpass && [ -n "$SSHPASS" ]; then
@@ -242,7 +248,7 @@ fi
 echo ""
 echo "步骤6.2: 初始化/迁移数据库（安全 stamp + upgrade）..."
 remote_exec "cd $PROJECT_DIR && mkdir -p backups && if [ -f instance/health_weather.db ]; then cp -a instance/health_weather.db backups/health_weather.db.$(date +%Y%m%d_%H%M%S); echo '已备份 instance/health_weather.db'; else echo '未发现 instance/health_weather.db，跳过备份'; fi"
-remote_exec "systemctl stop case-weather || true; systemctl stop case-weather-dispatch.timer || true"
+remote_exec "systemctl stop case-weather || true; systemctl stop case-weather-dispatch.timer || true; systemctl stop case-weather-risk-precompute.timer || true"
 remote_exec "cd $PROJECT_DIR && VENV_PY=$VENV_DIR/bin/python bash scripts/server_migrate.sh"
 
 echo ""
@@ -299,12 +305,53 @@ WantedBy=timers.target
 EOF"
 
 echo ""
+echo "步骤7.2: 创建社区风险预计算定时任务（systemd timer）..."
+remote_exec "cat > /etc/systemd/system/case-weather-risk-precompute.service << 'EOF'
+[Unit]
+Description=Case Weather - precompute community risk cache
+After=network.target case-weather.service
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=$PROJECT_DIR
+EnvironmentFile=$PROJECT_DIR/.env
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/bin/bash $PROJECT_DIR/scripts/community_risk_precompute.sh
+EOF
+
+cat > /etc/systemd/system/case-weather-risk-precompute.timer << 'EOF'
+[Unit]
+Description=Case Weather - precompute community risk cache hourly
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=60min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF"
+
+echo ""
 echo "步骤8: 启动服务..."
-remote_exec "systemctl daemon-reload && systemctl enable --now case-weather && systemctl restart case-weather && systemctl status --no-pager case-weather || true"
+remote_exec "systemctl daemon-reload"
+remote_exec "systemctl enable --now case-weather"
+remote_exec "systemctl restart case-weather"
+remote_exec "systemctl status --no-pager case-weather"
+check_remote_unit_active "case-weather"
 
 echo ""
 echo "步骤8.1: 启动定时器..."
-remote_exec "systemctl daemon-reload && systemctl enable --now case-weather-dispatch.timer && systemctl status --no-pager case-weather-dispatch.timer || true"
+remote_exec "systemctl enable --now case-weather-dispatch.timer"
+remote_exec "systemctl status --no-pager case-weather-dispatch.timer"
+check_remote_unit_active "case-weather-dispatch.timer"
+
+echo ""
+echo "步骤8.2: 启动社区风险预计算定时器..."
+remote_exec "systemctl enable --now case-weather-risk-precompute.timer"
+remote_exec "systemctl status --no-pager case-weather-risk-precompute.timer"
+check_remote_unit_active "case-weather-risk-precompute.timer"
 
 echo ""
 echo "=== 部署完成 ==="

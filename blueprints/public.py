@@ -1,8 +1,10 @@
 # -*- coding: utf-8 -*-
 """Public and auth routes."""
 import logging
+from urllib.parse import parse_qsl
 
-from flask import Blueprint, current_app, redirect, render_template, request, url_for
+import requests
+from flask import Blueprint, Response, abort, current_app, redirect, render_template, request, url_for
 from flask_login import current_user, login_required
 
 logger = logging.getLogger(__name__)
@@ -180,6 +182,30 @@ def cooling_resources():
         is_accessible_raw=is_accessible_raw,
         open_only=open_only
     )
+
+
+@bp.route('/_AMapService/<path:proxy_path>')
+def amap_proxy(proxy_path):
+    """高德 Web 服务代理。
+
+    前端只暴露公开 key，安全码始终在服务端补写。
+    """
+    safe_path = (proxy_path or '').lstrip('/')
+    if not safe_path or '..' in safe_path.split('/'):
+        abort(404)
+
+    params = [(key, value) for key, value in parse_qsl(request.query_string.decode('utf-8'), keep_blank_values=True) if key != 'jscode']
+    security_code = current_app.config.get('AMAP_SECURITY_JS_CODE')
+    if security_code:
+        params.append(('jscode', security_code))
+
+    upstream = requests.get(
+        f'https://restapi.amap.com/{safe_path}',
+        params=params,
+        timeout=10
+    )
+    content_type = upstream.headers.get('Content-Type', 'application/json; charset=utf-8')
+    return Response(upstream.content, status=upstream.status_code, content_type=content_type)
 
 
 @bp.route('/risk', endpoint='public_risk')

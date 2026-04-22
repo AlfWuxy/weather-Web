@@ -21,13 +21,65 @@ from core.health_profiles import (
 from core.time_utils import today_local
 from core.usage import log_usage_event
 from core.weather import ensure_user_location_valid, get_weather_with_cache
-from core.db_models import FamilyMember, FamilyMemberProfile, HealthDiary, MedicationReminder
+from core.db_models import FamilyMember, FamilyMemberProfile, HealthDiary, MedicationReminder, WeatherData
 from utils.parsers import parse_int, parse_date, parse_float, safe_json_loads
 from utils.validators import sanitize_input, validate_gender
 
 logger = logging.getLogger(__name__)
 
 bp = Blueprint('health', __name__)
+
+
+def _empty_family_member():
+    """构造空白成员对象，供新增表单复用。"""
+    return SimpleNamespace(
+        id=None,
+        name='',
+        relation='',
+        age=None,
+        gender='',
+        chronic_diseases=None
+    )
+
+
+def _apply_family_member_form(member):
+    """将表单内容写回成员对象，并返回画像载荷。"""
+    member.name = sanitize_input(request.form.get('name'), max_length=50)
+    member.relation = sanitize_input(request.form.get('relation'), max_length=20)
+    member.age = parse_int(request.form.get('age'))
+
+    raw_gender = request.form.get('gender')
+    member.gender = sanitize_input(raw_gender, max_length=10)
+
+    chronic_diseases = _parse_chronic_diseases_from_form(request.form)
+    member.chronic_diseases = json.dumps(chronic_diseases, ensure_ascii=False) if chronic_diseases else None
+
+    if not member.name:
+        return None, '成员姓名不能为空'
+
+    valid, gender = validate_gender(raw_gender)
+    if not valid:
+        return None, gender
+    member.gender = gender
+    return _build_member_profile_form_payload(request.form), None
+
+
+def _render_family_member_form(member, profile=None, *, is_create_mode=False):
+    """统一渲染新增/编辑成员表单。"""
+    chronic_diseases = safe_json_loads(getattr(member, 'chronic_diseases', None), [])
+    return render_template(
+        'family_member_edit.html',
+        member=member,
+        profile=profile_to_context(profile),
+        chronic_diseases=chronic_diseases,
+        chronic_diseases_list=chronic_diseases,
+        risk_tag_options=RISK_TAG_OPTIONS,
+        chronic_options=CHRONIC_OPTIONS,
+        is_create_mode=is_create_mode,
+        page_title='添加家庭成员' if is_create_mode else '编辑家庭成员',
+        submit_label='创建成员' if is_create_mode else '保存修改',
+        action_url=url_for('health.family_member_new') if is_create_mode else url_for('health.family_member_edit', member_id=member.id)
+    )
 
 
 @bp.route('/family-members', methods=['GET', 'POST'], endpoint='family_members')
@@ -42,32 +94,15 @@ def family_members():
     chronic_options = CHRONIC_OPTIONS
 
     if request.method == 'POST':
-        name = sanitize_input(request.form.get('name'), max_length=50)
-        if not name:
-            flash('成员姓名不能为空', 'error')
+        member = FamilyMember(user_id=current_user.id)
+        profile_payload, error_message = _apply_family_member_form(member)
+        if error_message:
+            flash(error_message, 'error')
             return redirect(url_for('health.family_members'))
 
-        valid, gender = validate_gender(request.form.get('gender'))
-        if not valid:
-            flash(gender, 'error')
-            return redirect(url_for('health.family_members'))
-
-        age = parse_int(request.form.get('age'))
-        relation = sanitize_input(request.form.get('relation'), max_length=20)
-        chronic_diseases = _parse_chronic_diseases_from_form(request.form)
-
-        member = FamilyMember(
-            user_id=current_user.id,
-            name=name,
-            relation=relation,
-            age=age,
-            gender=gender,
-            chronic_diseases=json.dumps(chronic_diseases, ensure_ascii=False) if chronic_diseases else None
-        )
         db.session.add(member)
-        db.session.commit()
+        db.session.flush()
 
-        profile_payload = _build_member_profile_form_payload(request.form)
         profile = FamilyMemberProfile(
             member_id=member.id,
             **profile_payload
@@ -138,10 +173,16 @@ def family_members():
             'age': member.age,
             'gender': member.gender,
             'chronic_diseases': diseases,
+            'chronic': diseases,
+            'location': user_location,
             'risk': risk,
+            'risk_level': risk['level'],
+            'risk_label': risk['label'],
             'completion': completion,
+            'completion_percent': completion['percent'],
             'profile': profile_ctx,
             'alerts': alerts,
+            'today_tip': alerts[0] if alerts else None,
             'last_diary': last_diary_map.get(member.id),
             'last_reminder': last_reminder_map.get(member.id)
         })
@@ -170,12 +211,16 @@ def family_members():
     return render_template(
         'family_members.html',
         members=filtered_cards,
+        family_members=filtered_cards,
         total_members=len(members),
         risk_counts=risk_counts,
+        high_risk_count=risk_counts['high'],
         chronic_count=chronic_count,
         avg_completion=avg_completion,
+        feedback_rate=avg_completion,
         relation_counts=relation_counts,
         alert_trigger_count=alert_trigger_count,
+        notified_count=alert_trigger_count,
         today_weather=weather,
         search_query=search_query,
         risk_filter=risk_filter,
@@ -186,6 +231,40 @@ def family_members():
     )
 
 
+@bp.route('/family-members/new', methods=['GET', 'POST'], endpoint='family_member_new')
+@login_required
+def family_member_new():
+    """新增家庭成员。"""
+    if is_guest_user(current_user):
+        flash('游客模式无法管理家庭成员，请注册/登录正式账号', 'error')
+        return redirect(url_for('user.user_dashboard'))
+
+    if request.method == 'POST':
+        member = FamilyMember(user_id=current_user.id)
+        profile_payload, error_message = _apply_family_member_form(member)
+        if error_message:
+            flash(error_message, 'error')
+            return _render_family_member_form(member, None, is_create_mode=True)
+
+        db.session.add(member)
+        db.session.flush()
+
+        profile = FamilyMemberProfile(member_id=member.id, **profile_payload)
+        db.session.add(profile)
+        db.session.commit()
+        log_usage_event(
+            'elder_profile_created',
+            user_id=current_user.id,
+            member_id=member.id,
+            source='web',
+            meta={'via': 'family_member_new'},
+        )
+        flash('家庭成员已添加', 'success')
+        return redirect(url_for('health.family_members'))
+
+    return _render_family_member_form(_empty_family_member(), None, is_create_mode=True)
+
+
 @bp.route('/family-members/<int:member_id>/edit', methods=['GET', 'POST'], endpoint='family_member_edit')
 @login_required
 def family_member_edit(member_id):
@@ -194,23 +273,18 @@ def family_member_edit(member_id):
         flash('游客模式无法管理家庭成员，请注册/登录正式账号', 'error')
         return redirect(url_for('user.user_dashboard'))
 
+    if member_id == 0:
+        return redirect(url_for('health.family_member_new'))
+
     member = FamilyMember.query.filter_by(id=member_id, user_id=current_user.id).first_or_404()
     profile = FamilyMemberProfile.query.filter_by(member_id=member.id).first()
 
     if request.method == 'POST':
-        member.name = sanitize_input(request.form.get('name'), max_length=50)
-        member.relation = sanitize_input(request.form.get('relation'), max_length=20)
-        member.age = parse_int(request.form.get('age'))
-        valid, gender = validate_gender(request.form.get('gender'))
-        if not valid:
-            flash(gender, 'error')
+        profile_payload, error_message = _apply_family_member_form(member)
+        if error_message:
+            flash(error_message, 'error')
             return redirect(url_for('health.family_member_edit', member_id=member_id))
-        member.gender = gender
-        member.chronic_diseases = json.dumps(
-            _parse_chronic_diseases_from_form(request.form), ensure_ascii=False
-        )
 
-        profile_payload = _build_member_profile_form_payload(request.form)
         if profile:
             for key, value in profile_payload.items():
                 setattr(profile, key, value)
@@ -229,16 +303,7 @@ def family_member_edit(member_id):
         flash('家庭成员信息已更新', 'success')
         return redirect(url_for('health.family_members'))
 
-    profile_ctx = profile_to_context(profile)
-    chronic_diseases = safe_json_loads(member.chronic_diseases, [])
-    return render_template(
-        'family_member_edit.html',
-        member=member,
-        profile=profile_ctx,
-        chronic_diseases=chronic_diseases,
-        risk_tag_options=RISK_TAG_OPTIONS,
-        chronic_options=CHRONIC_OPTIONS
-    )
+    return _render_family_member_form(member, profile, is_create_mode=False)
 
 
 @bp.route('/family-members/<int:member_id>/delete', methods=['POST'], endpoint='family_member_delete')
@@ -365,7 +430,24 @@ def health_diary():
 
     members = FamilyMember.query.filter_by(user_id=current_user.id).order_by(FamilyMember.created_at.desc()).all()
     entries = HealthDiary.query.filter_by(user_id=current_user.id).order_by(HealthDiary.entry_date.desc()).all()
-    return render_template('health_diary.html', members=members, entries=entries)
+    member_map = {member.id: member.name for member in members}
+
+    entry_dates = sorted({entry.entry_date for entry in entries if entry.entry_date})
+    weather_map = {}
+    if entry_dates and current_user.community:
+        weather_rows = WeatherData.query.filter(
+            WeatherData.location == current_user.community,
+            WeatherData.date.in_(entry_dates)
+        ).all()
+        weather_map = {item.date: item for item in weather_rows}
+
+    return render_template(
+        'health_diary.html',
+        members=members,
+        entries=entries,
+        member_map=member_map,
+        weather_map=weather_map
+    )
 
 
 @bp.route('/medication-reminders', methods=['GET', 'POST'], endpoint='medication_reminders')
