@@ -525,24 +525,36 @@ a:hover { color: var(--yl-orange-500); }
 
 /* 今日一屏 Hero(user_dashboard) */
 .yl-hero-today {
-    background: linear-gradient(140deg, #FFF6E4 0%, #FFE4C2 60%, #F5A25C 150%);
+    background:
+        radial-gradient(circle at 84% 8%, var(--yl-hero-ring, rgba(238, 126, 45, .18)) 0%, var(--yl-hero-ring, rgba(238, 126, 45, .18)) 18%, transparent 19%),
+        linear-gradient(140deg, var(--yl-hero-primary, #FFF6E4) 0%, var(--yl-hero-secondary, #FFE4C2) 62%, var(--yl-hero-soft, #F5A25C) 122%);
     border-radius: 24px;
     padding: 32px 36px;
     border: 1px solid var(--yl-orange-200);
     position: relative;
     overflow: hidden;
     margin-bottom: 24px;
+    color: var(--yl-hero-text, var(--yl-ink));
+    box-shadow: 0 18px 44px rgba(66, 48, 28, var(--yl-hero-shadow-alpha, .05));
 }
 .yl-hero-today .today-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    width: fit-content;
+    padding: 6px 11px;
+    border-radius: 999px;
+    background: var(--yl-hero-chip-bg, rgba(255,255,255,.66));
+    border: 1px solid var(--yl-hero-panel-border, rgba(255,255,255,.72));
     font-size: .85rem;
-    color: var(--yl-orange-600);
+    color: var(--yl-hero-label-color, var(--yl-orange-600));
     font-weight: 600;
     letter-spacing: .04em;
     text-transform: uppercase;
 }
 .yl-hero-today .today-location {
     font-size: 1rem;
-    color: var(--yl-ink-soft);
+    color: var(--yl-hero-muted, var(--yl-ink-soft));
     margin-top: 4px;
 }
 .yl-hero-today .today-temp {
@@ -550,39 +562,44 @@ a:hover { color: var(--yl-orange-500); }
     font-weight: 300;
     letter-spacing: -0.04em;
     line-height: 1;
-    color: var(--yl-ink);
+    color: var(--yl-hero-text, var(--yl-ink));
     margin: 12px 0 4px;
     font-variant-numeric: tabular-nums;
 }
-.yl-hero-today .today-temp .unit { font-size: 2rem; color: var(--yl-ink-soft); margin-left: 4px; }
+.yl-hero-today .today-temp .unit { font-size: 2rem; color: var(--yl-hero-muted, var(--yl-ink-soft)); margin-left: 4px; }
 .yl-hero-today .today-condition {
-    font-size: 1.2rem; color: var(--yl-ink-soft); margin-bottom: 18px;
+    font-size: 1.2rem; color: var(--yl-hero-muted, var(--yl-ink-soft)); margin-bottom: 18px;
 }
 .yl-hero-today .today-meta {
     display: flex; flex-wrap: wrap; gap: 18px;
     padding: 16px 20px;
-    background: rgba(255,255,255,.6);
+    background: var(--yl-hero-panel-bg, rgba(255,255,255,.6));
+    border: 1px solid var(--yl-hero-panel-border, rgba(255,255,255,.7));
     border-radius: 14px;
     backdrop-filter: blur(10px);
 }
 .yl-hero-today .today-meta-item { min-width: 80px; }
-.yl-hero-today .today-meta-item .k { font-size: .78rem; color: var(--yl-muted); }
+.yl-hero-today .today-meta-item .k { font-size: .78rem; color: var(--yl-hero-muted, var(--yl-muted)); }
 .yl-hero-today .today-meta-item .v {
-    font-size: 1.1rem; color: var(--yl-ink); font-weight: 600;
+    font-size: 1.1rem; color: var(--yl-hero-text, var(--yl-ink)); font-weight: 600;
     font-variant-numeric: tabular-nums;
 }
 .yl-hero-today .risk-dial {
     text-align: center;
     padding: 20px;
-    background: rgba(255,255,255,.7);
+    background: var(--yl-hero-panel-bg, rgba(255,255,255,.7));
+    border: 1px solid var(--yl-hero-panel-border, rgba(255,255,255,.7));
     border-radius: 20px;
     backdrop-filter: blur(10px);
 }
 .yl-hero-today .risk-dial .score {
     font-size: 3rem; font-weight: 600; line-height: 1;
-    color: var(--yl-risk-mid); font-variant-numeric: tabular-nums;
+    color: var(--yl-hero-score, var(--yl-risk-mid)); font-variant-numeric: tabular-nums;
 }
-.yl-hero-today .risk-dial .label { font-size: .9rem; color: var(--yl-ink-soft); margin-top: 6px; }
+.yl-hero-today .risk-dial .score.is-risk-low { color: var(--yl-hero-score-low, var(--yl-success)); }
+.yl-hero-today .risk-dial .score.is-risk-mid { color: var(--yl-hero-score-mid, var(--yl-risk-mid)); }
+.yl-hero-today .risk-dial .score.is-risk-high { color: var(--yl-hero-score-high, var(--yl-risk-high)); }
+.yl-hero-today .risk-dial .label { font-size: .9rem; color: var(--yl-hero-muted, var(--yl-ink-soft)); margin-top: 6px; }
 
 /* 指标小卡(概览) */
 .yl-stat-card {
@@ -796,7 +813,8 @@ a:hover { color: var(--yl-orange-500); }
 .yl-hero-today .today-meta-item {
     min-width: 0;
     padding: 12px 14px;
-    background: rgba(255,255,255,.45);
+    background: var(--yl-hero-panel-bg, rgba(255,255,255,.45));
+    border: 1px solid var(--yl-hero-panel-border, rgba(255,255,255,.58));
     border-radius: 12px;
 }
 .yl-hero-today .risk-dial {

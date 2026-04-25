@@ -36,6 +36,66 @@ from ._common import HEAT_RISK_LABELS, _action_plan
 logger = logging.getLogger(__name__)
 
 
+def _clamp(value, lower=0.0, upper=1.0):
+    return max(lower, min(upper, value))
+
+
+def _lerp(start, end, amount):
+    return start + (end - start) * amount
+
+
+def _dashboard_hero_theme(temperature):
+    """按当天温度线性生成首页首屏橙色主题。"""
+    try:
+        temp = float(temperature)
+    except (TypeError, ValueError):
+        temp = None
+
+    effective_temp = temp if temp is not None else 22.0
+    intensity = _clamp((effective_temp - 8.0) / 27.0)
+
+    hue = round(_lerp(34, 22, intensity))
+    primary_sat = round(_lerp(56, 82, intensity))
+    primary_light = round(_lerp(84, 61, intensity))
+    secondary_sat = round(_lerp(62, 78, intensity))
+    secondary_light = round(_lerp(91, 70, intensity))
+    soft_sat = round(_lerp(72, 82, intensity))
+    soft_light = round(_lerp(97, 82, intensity))
+
+    hot_hero = intensity >= 0.62
+    readable_text = '#FFFFFF' if hot_hero else 'var(--yl-ink)'
+    readable_muted = 'rgba(255, 255, 255, .84)' if hot_hero else 'var(--yl-ink-soft)'
+    panel_bg = 'rgba(255, 255, 255, .20)' if hot_hero else 'rgba(255, 255, 255, .62)'
+    panel_border = 'rgba(255, 255, 255, .30)' if hot_hero else 'rgba(255, 255, 255, .72)'
+    label_bg = 'rgba(255, 255, 255, .18)' if hot_hero else 'rgba(255, 255, 255, .66)'
+    score_color = '#FFFFFF' if hot_hero else 'var(--yl-risk-mid)'
+
+    css_vars = {
+        'primary': f'hsl({hue}, {primary_sat}%, {primary_light}%)',
+        'secondary': f'hsl({hue + 6}, {secondary_sat}%, {secondary_light}%)',
+        'soft': f'hsl({hue + 11}, {soft_sat}%, {soft_light}%)',
+        'ring': 'rgba(255, 255, 255, .20)' if hot_hero else 'rgba(238, 126, 45, .18)',
+        'text': readable_text,
+        'muted': readable_muted,
+        'label-color': readable_text if hot_hero else 'var(--yl-orange-600)',
+        'chip-bg': label_bg,
+        'panel-bg': panel_bg,
+        'panel-border': panel_border,
+        'score': score_color,
+        'score-low': score_color if hot_hero else 'var(--yl-success)',
+        'score-mid': score_color if hot_hero else 'var(--yl-risk-mid)',
+        'score-high': score_color if hot_hero else 'var(--yl-risk-high)',
+        'shadow-alpha': f'{_lerp(0.05, 0.14, intensity):.3f}',
+    }
+    style = '; '.join(f'--yl-hero-{name}: {value}' for name, value in css_vars.items()) + ';'
+    return {
+        'temperature': temp,
+        'effective_temperature': effective_temp,
+        'intensity': round(intensity, 3),
+        'style': style,
+    }
+
+
 def user_dashboard():
     """用户仪表板"""
     elder_mode = request.args.get('mode') == 'elder' and current_app.config.get('FEATURE_ELDER_MODE')
@@ -97,6 +157,7 @@ def user_dashboard():
     )
     heat_risk_label = HEAT_RISK_LABELS.get(heat_result['risk_level'], '低风险')
     heat_actions = _action_plan(heat_risk_label)
+    dashboard_hero_theme = _dashboard_hero_theme(getattr(weather, 'temperature', None))
 
     # 如果是极端天气，生成预警（避免重复）
     if extreme_result['is_extreme'] and not used_cache:
@@ -257,6 +318,7 @@ def user_dashboard():
                          heat_result=heat_result,
                          heat_risk_label=heat_risk_label,
                          heat_actions=heat_actions,
+                         dashboard_hero_theme=dashboard_hero_theme,
                          alerts=alerts,
                          reminders=reminders,
                          notifications=notifications,
