@@ -9,6 +9,11 @@ def _load_deploy_script():
     return script_path.read_text(encoding="utf-8")
 
 
+def _load_precompute_script():
+    script_path = Path(__file__).resolve().parents[1] / "scripts" / "community_risk_precompute.sh"
+    return script_path.read_text(encoding="utf-8")
+
+
 def test_deploy_script_checks_units_with_is_active():
     content = _load_deploy_script()
 
@@ -24,3 +29,16 @@ def test_deploy_script_no_longer_swallows_systemctl_failures():
     assert 'case-weather && systemctl restart case-weather && systemctl status --no-pager case-weather || true' not in content
     assert 'case-weather-dispatch.timer && systemctl status --no-pager case-weather-dispatch.timer || true' not in content
     assert 'case-weather-risk-precompute.timer && systemctl status --no-pager case-weather-risk-precompute.timer || true' not in content
+
+
+def test_deploy_script_sets_precompute_python_path():
+    content = _load_deploy_script()
+
+    assert 'Environment=VENV_PY=$VENV_DIR/bin/python' in content
+
+
+def test_precompute_script_respects_deploy_venv_dir():
+    content = _load_precompute_script()
+
+    assert '${DEPLOY_VENV_DIR:+$DEPLOY_VENV_DIR/bin/python}' in content
+    assert 'VENV_PY="${VENV_PY:-python3}"' in content

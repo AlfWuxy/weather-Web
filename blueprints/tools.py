@@ -8,7 +8,7 @@ from core.db_models import FamilyMember
 from core.weather import ensure_user_location_valid, get_weather_with_cache, normalize_location_name
 from services.chronic_risk_service import get_chronic_service
 from services.ml_prediction_service import get_ml_service
-from utils.parsers import parse_int, safe_json_loads
+from utils.parsers import parse_float, parse_int, safe_json_loads
 from utils.validators import sanitize_input
 
 bp = Blueprint('tools', __name__)
@@ -141,6 +141,15 @@ def _build_chronic_breakdown(result, adherence, symptoms):
             'level': _level_bucket(risk_score),
         })
 
+    vital_adjustment = result.get('vital_adjustment') or {}
+    if vital_adjustment.get('score_adjustment'):
+        vital_score = min(100, max(20, int(round(vital_adjustment.get('score_adjustment', 0) * 5))))
+        breakdown.append({
+            'name': '血压/血糖修正',
+            'value': vital_score,
+            'level': _level_bucket(vital_score),
+        })
+
     adherence_scores = {
         'strict': 22,
         'loose': 52,
@@ -163,6 +172,30 @@ def _build_chronic_breakdown(result, adherence, symptoms):
     })
 
     return breakdown[:4]
+
+
+def _parse_chronic_vitals(form_state):
+    """解析慢病表单中的自测血压/血糖。"""
+    sbp = parse_float(form_state.get('sbp'))
+    fbg = parse_float(form_state.get('fbg'))
+    vitals = {}
+    if sbp is not None and 60 <= sbp <= 260:
+        vitals['sbp'] = sbp
+    if fbg is not None and 2 <= fbg <= 30:
+        vitals['fbg'] = fbg
+    return vitals
+
+
+def _normalize_chronic_suggestions(items):
+    suggestions = []
+    for item in items or []:
+        if isinstance(item, dict):
+            text = item.get('advice') or item.get('category')
+        else:
+            text = str(item) if item else ''
+        if text and text not in suggestions:
+            suggestions.append(text)
+    return suggestions
 
 
 @bp.route('/ml-prediction', methods=['GET', 'POST'], endpoint='ml_prediction')
@@ -273,11 +306,15 @@ def chronic_risk():
         }
 
         weather_data, _ = get_weather_with_cache(ensure_user_location_valid())
+        vitals = _parse_chronic_vitals(form_state)
         result = get_chronic_service().predict_individual_risk(
             {
                 'age': current_user.age or 65,
                 'gender': current_user.gender or '未知',
                 'chronic_diseases': [CHRONIC_FORM_LABELS[disease_key]],
+                'vitals': vitals,
+                'sbp': vitals.get('sbp'),
+                'fbg': vitals.get('fbg'),
             },
             weather_data,
         )
@@ -288,8 +325,11 @@ def chronic_risk():
         risk_comment = (
             f"当前以{CHRONIC_FORM_LABELS[disease_key]}为重点观察对象，结合天气条件判定为{risk_level}。"
         )
+        vital_factors = ((result.get('vital_adjustment') or {}).get('factors') or [])
+        if vital_factors:
+            risk_comment = f"{risk_comment} 已参考{'；'.join(vital_factors[:2])}。"
         breakdown = _build_chronic_breakdown(result, form_state['adherence'], form_state['symptoms'])
-        suggestions = (result.get('recommendations') or [])[:5]
+        suggestions = _normalize_chronic_suggestions(result.get('recommendations'))[:5]
 
     return render_template(
         'chronic_risk.html',

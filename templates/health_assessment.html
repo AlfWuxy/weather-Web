@@ -21,6 +21,17 @@
     <form method="POST" action="{{ url_for('user.health_assessment') }}" id="assessForm" class="yl-fade-up yl-fade-up-d2">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 
+        <style>
+            .assess-choice {
+                border-radius: 999px;
+            }
+            .assess-choice.active {
+                background: var(--yl-orange-500);
+                border-color: var(--yl-orange-500);
+                color: #fff;
+            }
+        </style>
+
         <div class="section-heading mb-3">
             <span class="section-kicker"><i class="bi bi-clipboard2-pulse"></i> 即时状态筛查</span>
             <p>根据你今天的状态与近几天感受,快速完成这份筛查。</p>
@@ -43,7 +54,7 @@
                         <div class="fw-semibold mb-3">{{ q.text }}</div>
                         <div class="d-flex flex-wrap gap-2">
                             {% for val, label in q.options %}
-                            <label class="btn btn-outline-secondary" style="border-radius:999px;">
+                            <label class="btn btn-outline-secondary assess-choice">
                                 <input type="radio" name="{{ q.id }}" value="{{ val }}" class="d-none assess-opt">
                                 {{ label }}
                             </label>
@@ -173,6 +184,12 @@
 <script>
 (function(){
     const total = {{ questions|length }};
+    function syncGroup(name) {
+        document.querySelectorAll(`.assess-opt[name="${name}"]`).forEach(input => {
+            const label = input.closest('label');
+            label.classList.toggle('active', input.checked);
+        });
+    }
     function update() {
         const done = new Set();
         document.querySelectorAll('.assess-opt:checked').forEach(i => done.add(i.name));
@@ -182,13 +199,10 @@
     }
     document.querySelectorAll('.assess-opt').forEach(input => {
         input.addEventListener('change', () => {
-            document.querySelectorAll(`.assess-opt[name="${input.name}"]`).forEach(i => i.closest('label').classList.remove('active', 'btn-primary'));
-            input.closest('label').classList.add('active');
-            input.closest('label').style.background = 'var(--yl-orange-500)';
-            input.closest('label').style.color = '#fff';
-            input.closest('label').style.borderColor = 'var(--yl-orange-500)';
+            syncGroup(input.name);
             update();
         });
+        syncGroup(input.name);
     });
 })();
 </script>

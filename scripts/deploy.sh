@@ -317,6 +317,7 @@ User=root
 WorkingDirectory=$PROJECT_DIR
 EnvironmentFile=$PROJECT_DIR/.env
 Environment=PYTHONUNBUFFERED=1
+Environment=VENV_PY=$VENV_DIR/bin/python
 ExecStart=/bin/bash $PROJECT_DIR/scripts/community_risk_precompute.sh
 EOF
 

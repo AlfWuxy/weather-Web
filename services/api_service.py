@@ -625,7 +625,10 @@ def _api_community_risk_map_v2():
     """获取社区风险地图数据（改进版）"""
     try:
         from services.community_risk_service import get_community_service
-        from services.community_risk_cache import get_or_build_community_risk_result
+        from services.community_risk_cache import (
+            build_community_risk_cache_params,
+            get_or_build_community_risk_result,
+        )
 
         community_service = get_community_service()
 
@@ -636,6 +639,9 @@ def _api_community_risk_map_v2():
         if disease_filter in ('', 'all', '全部'):
             disease_filter = ''
 
+        city = sanitize_input(data.get('city'), max_length=100)
+        city = normalize_location_name(city) if city else ''
+
         # 获取天气数据
         if 'weather' in data and isinstance(data['weather'], dict):
             weather_data = data['weather']
@@ -643,10 +649,7 @@ def _api_community_risk_map_v2():
             if 'temperature' not in weather_data:
                 weather_data['temperature'] = 20
         else:
-            city = sanitize_input(data.get('city'), max_length=100)
-            if city:
-                city = normalize_location_name(city)
-            else:
+            if not city:
                 city = ensure_user_location_valid()
             try:
                 weather_data, _ = get_weather_with_cache(city)
@@ -654,17 +657,13 @@ def _api_community_risk_map_v2():
                 logger.warning("Community risk map weather fallback: %s", exc)
                 weather_data = {'temperature': 20, 'humidity': 60, 'aqi': 50}
 
-        cache_params = {
-            'analysis_date': target_date.isoformat() if target_date else '',
-            'window_days': window_days,
-            'disease_filter': disease_filter,
-            'city': city if 'city' in locals() else '',
-            'weather': {
-                'temperature': weather_data.get('temperature'),
-                'humidity': weather_data.get('humidity'),
-                'aqi': weather_data.get('aqi'),
-            },
-        }
+        cache_params = build_community_risk_cache_params(
+            analysis_date=target_date,
+            window_days=window_days,
+            disease_filter=disease_filter,
+            city=city,
+            weather_data=weather_data,
+        )
 
         def _build_result():
             return community_service.generate_community_risk_map(

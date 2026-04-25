@@ -37,6 +37,10 @@ def test_health_assessment_page_has_screening_controls(authenticated_client, db_
     assert 'name="hydration"' in html
     assert 'name="medication_adherence"' in html
     assert 'name="sleep_quality"' in html
+    assert 'type="radio" name="outdoor_exposure"' in html
+    assert 'class="btn btn-outline-secondary assess-choice"' in html
+    assert 'function syncGroup(name)' in html
+    assert "style.background = 'var(--yl-orange-500)'" not in html
 
 
 def test_health_assessment_post_persists_academic_payload(authenticated_client, db_session):

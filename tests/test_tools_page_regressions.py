@@ -138,16 +138,23 @@ def test_ml_prediction_selected_member_chronic_aliases_refill_selected(client, d
 def test_chronic_risk_post_no_longer_returns_405(client, db_session, monkeypatch):
     user = _create_user(db_session, username='chronic_user')
     _login_as(client, user.id)
+    captured = {}
 
     class FakeChronicService:
         def predict_individual_risk(self, user_info, weather_data, target_diseases=None):
+            captured['user_info'] = user_info
             return {
                 'overall_risk': {'score': 66, 'level': '中风险'},
                 'disease_risks': {
-                    'cardiovascular': {'risk_score': 66, 'risk_level': '中风险'},
+                    'cardiovascular': {'risk_score': 66, 'risk_level': '中风险', 'vital_adjustment': 8},
                     'respiratory': {'risk_score': 34, 'risk_level': '低风险'},
                 },
-                'recommendations': ['按时服药', '本周内复诊'],
+                'recommendations': [{'advice': '按时服药'}, {'advice': '本周内复诊'}],
+                'vital_adjustment': {
+                    'score_adjustment': 8,
+                    'factors': ['近7天最高收缩压142mmHg，血压略高'],
+                    'recommendations': ['建议连续记录血压']
+                },
             }
 
     monkeypatch.setattr('blueprints.tools.get_chronic_service', lambda: FakeChronicService())
@@ -170,3 +177,26 @@ def test_chronic_risk_post_no_longer_returns_405(client, db_session, monkeypatch
     assert 'Method Not Allowed' not in body
     assert '综合风险评分' in body
     assert '按时服药' in body
+    assert '血压/血糖修正' in body
+    assert '近7天最高收缩压142mmHg' in body
+    assert captured['user_info']['vitals'] == {'sbp': 142.0, 'fbg': 7.8}
+
+
+def test_chronic_risk_service_uses_submitted_vitals():
+    from services.chronic_risk_service import ChronicRiskService
+
+    service = ChronicRiskService()
+    weather = {'temperature': 24, 'humidity': 60, 'aqi': 45}
+    base = service.predict_individual_risk(
+        {'age': 45, 'gender': '男', 'chronic_diseases': [], 'vitals': {'sbp': 120, 'fbg': 5.2}},
+        weather,
+        target_diseases=['general'],
+    )
+    high = service.predict_individual_risk(
+        {'age': 45, 'gender': '男', 'chronic_diseases': [], 'vitals': {'sbp': 178, 'fbg': 9.2}},
+        weather,
+        target_diseases=['general'],
+    )
+
+    assert high['overall_risk']['score'] > base['overall_risk']['score']
+    assert high['vital_adjustment']['score_adjustment'] > base['vital_adjustment']['score_adjustment']

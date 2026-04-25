@@ -8,33 +8,13 @@ from core.app import create_app
 from core.constants import DEFAULT_CITY_LABEL  # noqa: E402
 from core.time_utils import today_local  # noqa: E402
 from core.weather import get_weather_with_cache, normalize_location_name  # noqa: E402
-from services.community_risk_cache import get_or_build_community_risk_result  # noqa: E402
+from services.community_risk_cache import (  # noqa: E402
+    build_community_risk_cache_params,
+    get_or_build_community_risk_result,
+)
 from services.community_risk_service import get_community_service  # noqa: E402
 
 logger = logging.getLogger(__name__)
-
-
-def _weather_signature(weather_data):
-    """提取会影响社区风险结果的关键天气字段。"""
-    if not isinstance(weather_data, dict):
-        return {}
-
-    signature = {}
-    for key in (
-        'temperature',
-        'temperature_max',
-        'temperature_min',
-        'humidity',
-        'aqi',
-        'weather_condition',
-        'wind_speed',
-    ):
-        value = weather_data.get(key)
-        if isinstance(value, float):
-            signature[key] = round(value, 3)
-        elif value is not None:
-            signature[key] = value
-    return signature
 
 
 def _normalize_disease_filter(value):
@@ -126,17 +106,16 @@ def precompute_community_risk(app=None, locations=None, window_days_list=None, d
             if weather_from_cache:
                 summary['weather_cache_hits'] += 1
 
-            cache_weather = _weather_signature(weather_data)
             for window_days in window_days_list:
                 for disease_filter in disease_filters:
                     disease_filter = _normalize_disease_filter(disease_filter)
-                    cache_params = {
-                        'version': 1,
-                        'analysis_date': target_date.isoformat(),
-                        'window_days': int(window_days),
-                        'disease_filter': disease_filter,
-                        'weather': cache_weather,
-                    }
+                    cache_params = build_community_risk_cache_params(
+                        analysis_date=target_date,
+                        window_days=window_days,
+                        disease_filter=disease_filter,
+                        city=location,
+                        weather_data=weather_data,
+                    )
 
                     def _build_result():
                         return community_service.generate_community_risk_map(

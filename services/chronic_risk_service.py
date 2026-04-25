@@ -212,6 +212,66 @@ class ChronicRiskService:
         
         # 多病叠加效应
         return max_amplifier + additional_factor
+
+    def _parse_vital_number(self, value, lower, upper):
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            return None
+        if parsed < lower or parsed > upper:
+            return None
+        return parsed
+
+    def _analyze_submitted_vitals(self, user_info):
+        """保守评估用户本次提交的血压/血糖指标。"""
+        vitals = user_info.get('vitals') if isinstance(user_info.get('vitals'), dict) else {}
+        sbp = self._parse_vital_number(user_info.get('sbp', vitals.get('sbp')), 60, 260)
+        fbg = self._parse_vital_number(user_info.get('fbg', vitals.get('fbg')), 2.0, 30.0)
+
+        score_adjustment = 0.0
+        factors = []
+        recommendations = []
+
+        if sbp is not None:
+            if sbp >= 180:
+                score_adjustment += 14
+                factors.append(f'近7天最高收缩压{sbp:g}mmHg，已按明显偏高处理')
+                recommendations.append('近7天最高血压明显偏高，建议尽快联系社区医生复核。')
+            elif sbp >= 160:
+                score_adjustment += 10
+                factors.append(f'近7天最高收缩压{sbp:g}mmHg，血压控制偏高')
+                recommendations.append('建议连续记录早晚血压，并按医嘱调整复诊计划。')
+            elif sbp >= 140:
+                score_adjustment += 6
+                factors.append(f'近7天最高收缩压{sbp:g}mmHg，血压略高')
+
+        if fbg is not None:
+            if fbg >= 11.1:
+                score_adjustment += 12
+                factors.append(f'近7天空腹血糖{fbg:g}mmol/L，已按明显偏高处理')
+                recommendations.append('空腹血糖明显偏高，建议尽快复测并咨询医生。')
+            elif fbg >= 7.0:
+                score_adjustment += 8
+                factors.append(f'近7天空腹血糖{fbg:g}mmol/L，血糖控制偏高')
+                recommendations.append('建议记录空腹血糖变化，减少高糖饮食并按医嘱复诊。')
+            elif fbg >= 6.1:
+                score_adjustment += 4
+                factors.append(f'近7天空腹血糖{fbg:g}mmol/L，血糖略高')
+
+        return {
+            'sbp': sbp,
+            'fbg': fbg,
+            'score_adjustment': min(score_adjustment, 18.0),
+            'factors': factors,
+            'recommendations': recommendations,
+        }
+
+    def _get_score_risk_level(self, score):
+        if score >= 70:
+            return '高风险'
+        if score >= 40:
+            return '中风险'
+        return '低风险'
     
     def predict_individual_risk(self, user_info, weather_data, target_diseases=None):
         """
@@ -267,6 +327,7 @@ class ChronicRiskService:
         
         risks = {}
         max_risk = {'rr': 1.0, 'disease_type': 'general'}
+        vital_adjustment = self._analyze_submitted_vitals(user_info)
         
         for disease_type in target_diseases:
             # 获取病种专项RR
@@ -293,6 +354,16 @@ class ChronicRiskService:
                 'risk_level': self._get_risk_level(personal_rr),
                 'risk_score': min(100, round(personal_rr * 30, 1))
             }
+
+            if vital_adjustment['score_adjustment']:
+                relevance = 1.0 if disease_type in ('cardiovascular', 'general') else 0.4
+                adjusted_score = min(
+                    100,
+                    risks[disease_type]['risk_score'] + vital_adjustment['score_adjustment'] * relevance
+                )
+                risks[disease_type]['risk_score'] = round(adjusted_score, 1)
+                risks[disease_type]['vital_adjustment'] = round(vital_adjustment['score_adjustment'] * relevance, 1)
+                risks[disease_type]['risk_level'] = self._get_score_risk_level(adjusted_score)
             
             if personal_rr > max_risk['rr']:
                 max_risk = {'rr': personal_rr, 'disease_type': disease_type}
@@ -314,18 +385,40 @@ class ChronicRiskService:
         }
         
         recommendations = self._generate_recommendations(context, risks)
+        if vital_adjustment['recommendations']:
+            existing_advice = {
+                item.get('advice')
+                for item in recommendations
+                if isinstance(item, dict)
+            }
+            for advice in vital_adjustment['recommendations']:
+                if advice in existing_advice:
+                    continue
+                recommendations.append({
+                    'rule_id': 'submitted_vitals',
+                    'category': '自测指标',
+                    'priority': 'medium',
+                    'advice': advice,
+                    'applicable_diseases': ['cardiovascular', 'general']
+                })
+                existing_advice.add(advice)
         explain, triggered_rules = self.build_explain(context, recommendations)
         
         # 确定总体风险等级
         overall_rr = max(r['personal_rr'] for r in risks.values()) if risks else 1.0
-        overall_level = self._get_risk_level(overall_rr)
+        overall_score = max((r.get('risk_score', 0) for r in risks.values()), default=round(overall_rr * 30, 1))
+        overall_level = self._get_score_risk_level(overall_score)
         
         return {
             'user_profile': {
                 'age': age,
                 'age_group': self._get_age_group_name(age),
                 'chronic_diseases': chronic_diseases,
-                'disease_count': len(chronic_diseases)
+                'disease_count': len(chronic_diseases),
+                'vitals': {
+                    'sbp': vital_adjustment['sbp'],
+                    'fbg': vital_adjustment['fbg']
+                }
             },
             'weather': {
                 'temperature': temperature,
@@ -337,9 +430,10 @@ class ChronicRiskService:
                 'rr': round(overall_rr, 3),
                 'level': overall_level,
                 'color': 'danger' if overall_level == '高风险' else 'warning' if overall_level == '中风险' else 'success',
-                'score': min(100, round(overall_rr * 30, 1))
+                'score': min(100, round(overall_score, 1))
             },
             'recommendations': recommendations,
+            'vital_adjustment': vital_adjustment,
             'explain': explain,
             'rule_version': self.rules_version,
             'triggered_rules': triggered_rules,
@@ -684,4 +778,3 @@ if __name__ == '__main__':
     print("  高危人群:")
     for group in pop_result['high_risk_groups']:
         print(f"    - {group['group']}: RR={group['rr']:.2f}")
-

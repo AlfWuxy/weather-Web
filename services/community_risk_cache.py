@@ -13,11 +13,103 @@ logger = logging.getLogger(__name__)
 
 _LOCAL_COMMUNITY_RISK_CACHE = {}
 _LOCAL_CACHE_MAX_ITEMS = 128
+_WEATHER_SIGNATURE_KEYS = (
+    'temperature',
+    'temperature_max',
+    'temperature_min',
+    'humidity',
+    'aqi',
+    'weather_condition',
+    'wind_speed',
+)
+_LAG_TEMPERATURE_KEYS = (
+    'lag_temperatures',
+    'temperature_lags',
+    'temperature_history',
+    'historical_temperatures',
+)
 
 
 def clear_local_community_risk_cache():
     """清空进程内缓存，便于测试隔离。"""
     _LOCAL_COMMUNITY_RISK_CACHE.clear()
+
+
+def _normalize_cache_value(value):
+    if isinstance(value, float):
+        return round(value, 3)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, (list, tuple)):
+        normalized = []
+        for item in value:
+            if item is None:
+                continue
+            normalized.append(_normalize_cache_value(item))
+        return normalized
+    if isinstance(value, dict):
+        return {
+            str(key): _normalize_cache_value(item)
+            for key, item in sorted(value.items())
+            if item is not None
+        }
+    return value
+
+
+def build_community_weather_signature(weather_data):
+    """提取社区风险计算实际依赖的天气字段，供缓存键复用。"""
+    if not isinstance(weather_data, dict):
+        return {}
+
+    signature = {}
+    for key in _WEATHER_SIGNATURE_KEYS:
+        value = weather_data.get(key)
+        if value is not None:
+            signature[key] = _normalize_cache_value(value)
+
+    for key in _LAG_TEMPERATURE_KEYS:
+        value = weather_data.get(key)
+        if isinstance(value, (list, tuple)) and value:
+            signature['lag_temperatures'] = _normalize_cache_value(value)
+            break
+
+    return signature
+
+
+def _normalize_window_days(window_days):
+    try:
+        return max(7, min(int(window_days or 30), 120))
+    except (TypeError, ValueError):
+        return 30
+
+
+def _normalize_disease_filter(value):
+    value = (value or '').strip()
+    return '' if value in ('', 'all', '全部') else value
+
+
+def build_community_risk_cache_params(
+    analysis_date=None,
+    window_days=30,
+    disease_filter='',
+    city='',
+    weather_data=None,
+):
+    """统一生成 API 与预计算任务共享的社区风险缓存参数。"""
+    if hasattr(analysis_date, 'isoformat'):
+        analysis_date = analysis_date.isoformat()
+    elif analysis_date is None:
+        analysis_date = ''
+    else:
+        analysis_date = str(analysis_date)
+
+    return {
+        'analysis_date': analysis_date,
+        'window_days': _normalize_window_days(window_days),
+        'disease_filter': _normalize_disease_filter(disease_filter),
+        'city': str(city or '').strip(),
+        'weather': build_community_weather_signature(weather_data),
+    }
 
 
 def _now_ts():
