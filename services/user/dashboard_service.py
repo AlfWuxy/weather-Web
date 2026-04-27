@@ -15,6 +15,7 @@ from core.time_utils import today_local, utcnow
 from core.weather import (
     ensure_user_location_valid,
     get_consecutive_hot_days,
+    get_qweather_forecast_with_cache,
     get_weather_with_cache,
     is_demo_mode,
     resolve_weather_city_label
@@ -29,6 +30,8 @@ from core.db_models import (
     WeatherData
 )
 from services.heat_action_service import HeatActionService
+from services.forecast_cards import build_forecast_cards
+from services.forecast_service import get_forecast_service
 from utils.parsers import safe_json_loads
 
 from ._common import HEAT_RISK_LABELS, _action_plan
@@ -175,6 +178,30 @@ def _dashboard_metric_cards(user_id):
     return [cards[key] for key in ('sbp', 'heart_rate', 'blood_sugar') if key in cards]
 
 
+def _dashboard_forecast_days(location, start_date):
+    """首页 7 日预测只使用和风实时预报，失败时不展示演示风险。"""
+    qweather_days, _, meta = get_qweather_forecast_with_cache(location, days=7)
+    if len(qweather_days or []) < 7:
+        logger.warning(
+            "首页和风7日预报不可用: location=%s meta=%s count=%s",
+            location,
+            meta,
+            len(qweather_days or []),
+        )
+        return []
+
+    health_forecasts = []
+    try:
+        health_forecasts, _ = get_forecast_service().generate_7day_forecast(
+            qweather_days,
+            start_date=start_date,
+            context={},
+        )
+    except Exception as exc:
+        logger.warning("首页7日健康预测生成失败，仅展示和风天气: %s", exc)
+    return build_forecast_cards(qweather_days, health_forecasts, start_date)
+
+
 def user_dashboard():
     """用户仪表板"""
     elder_mode = request.args.get('mode') == 'elder' and current_app.config.get('FEATURE_ELDER_MODE')
@@ -192,11 +219,14 @@ def user_dashboard():
 
     from services.weather_service import WeatherService
     weather_service = WeatherService()
-    try:
-        extreme_result = weather_service.identify_extreme_weather(weather_data)
-    except Exception as exc:
-        logger.warning("极端天气识别失败，已跳过: %s", exc)
+    if weather_is_mock:
         extreme_result = {'is_extreme': False, 'conditions': []}
+    else:
+        try:
+            extreme_result = weather_service.identify_extreme_weather(weather_data)
+        except Exception as exc:
+            logger.warning("极端天气识别失败，已跳过: %s", exc)
+            extreme_result = {'is_extreme': False, 'conditions': []}
 
     weather = WeatherData.query.filter_by(
         date=today,
@@ -226,18 +256,26 @@ def user_dashboard():
         weather.extreme_type = '、'.join([c['type'] for c in extreme_result['conditions']]) if extreme_result['is_extreme'] else None
 
     heat_service = HeatActionService()
-    consecutive_hot_days = get_consecutive_hot_days(
-        user_location,
-        today_max=weather_data.get('temperature_max')
+    if weather_is_mock:
+        heat_result = None
+        heat_risk_label = '暂不可用'
+        heat_actions = []
+    else:
+        consecutive_hot_days = get_consecutive_hot_days(
+            user_location,
+            today_max=weather_data.get('temperature_max')
+        )
+        heat_result = heat_service.calculate_heat_risk(
+            weather_data,
+            consecutive_hot_days=consecutive_hot_days
+        )
+        heat_risk_label = HEAT_RISK_LABELS.get(heat_result['risk_level'], '低风险')
+        heat_actions = _action_plan(heat_risk_label)
+    dashboard_hero_theme = _dashboard_hero_theme(
+        None if weather_is_mock else getattr(weather, 'temperature', None)
     )
-    heat_result = heat_service.calculate_heat_risk(
-        weather_data,
-        consecutive_hot_days=consecutive_hot_days
-    )
-    heat_risk_label = HEAT_RISK_LABELS.get(heat_result['risk_level'], '低风险')
-    heat_actions = _action_plan(heat_risk_label)
-    dashboard_hero_theme = _dashboard_hero_theme(getattr(weather, 'temperature', None))
     dashboard_metric_cards = [] if is_guest else _dashboard_metric_cards(current_user.id)
+    forecast_days = _dashboard_forecast_days(user_location, today)
 
     # 如果是极端天气，生成预警（避免重复）
     if extreme_result['is_extreme'] and not used_cache:
@@ -400,6 +438,7 @@ def user_dashboard():
                          heat_actions=heat_actions,
                          dashboard_hero_theme=dashboard_hero_theme,
                          dashboard_metric_cards=dashboard_metric_cards,
+                         forecast_days=forecast_days,
                          alerts=alerts,
                          reminders=reminders,
                          notifications=notifications,

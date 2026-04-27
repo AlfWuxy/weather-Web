@@ -1097,6 +1097,7 @@ a:hover { color: var(--yl-orange-500); }
 .yl-forecast-row .day .rk.low  { background: var(--yl-success-50); color: var(--yl-success); }
 .yl-forecast-row .day .rk.mid  { background: var(--yl-warn-50); color: #8A5A12; }
 .yl-forecast-row .day .rk.high { background: var(--yl-danger-50); color: var(--yl-danger); }
+.yl-forecast-row .day .rk.unknown { background: #F0F1F3; color: var(--yl-muted); }
 
 /* ============================================================
    pair_management 专用

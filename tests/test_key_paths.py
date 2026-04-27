@@ -41,12 +41,17 @@ class DummyWeatherFetcher:
         ]
 
     def get_qweather_daily_forecast(self, location, days=7):
+        from datetime import timedelta
+
+        from core.time_utils import today_local
+
         self.qweather_forecast_calls += 1
+        start = today_local()
         return {
             'success': True,
             'daily': [
                 {
-                    'date': f'qweather-day-{idx + 1}',
+                    'date': (start + timedelta(days=idx)).strftime('%Y-%m-%d'),
                     'temperature_max': 26,
                     'temperature_min': 18,
                     'temperature_mean': 22,
@@ -168,8 +173,49 @@ def test_qweather_only_forecast_ignores_legacy_mock_cache(app, db_session):
 
         assert from_cache is False
         assert fetcher.qweather_forecast_calls == 1
-        assert data[0]['date'] == 'qweather-day-1'
         assert data[0]['data_source'] == 'QWeather'
+        assert meta['source'] == 'QWeather'
+
+
+def test_qweather_only_forecast_ignores_stale_date_cache(app, db_session):
+    from datetime import timedelta
+
+    from core.db_models import ForecastCache
+    from core.extensions import db
+    from core.time_utils import today_local, utcnow
+    from core.weather import get_qweather_forecast_with_cache, register_weather_fetcher
+
+    with app.app_context():
+        app.config['DEMO_MODE'] = False
+        app.extensions['redis_client'] = None
+        stale_start = today_local() - timedelta(days=1)
+        stale_daily = [
+            {
+                'date': (stale_start + timedelta(days=idx)).strftime('%Y-%m-%d'),
+                'temperature_max': 31,
+                'temperature_min': 24,
+                'data_source': 'QWeather',
+                'is_mock': False,
+            }
+            for idx in range(7)
+        ]
+        db.session.add(ForecastCache(
+            location='qweather-only:都昌',
+            days=7,
+            fetched_at=utcnow(),
+            payload=json.dumps({'daily': stale_daily, 'meta': {'source': 'QWeather'}}, ensure_ascii=False),
+            is_mock=False,
+        ))
+        db.session.commit()
+
+        fetcher = DummyWeatherFetcher()
+        register_weather_fetcher(fetcher)
+
+        data, from_cache, meta = get_qweather_forecast_with_cache('都昌', days=7)
+
+        assert from_cache is False
+        assert fetcher.qweather_forecast_calls == 1
+        assert data[0]['date'] == today_local().strftime('%Y-%m-%d')
         assert meta['source'] == 'QWeather'
 
 

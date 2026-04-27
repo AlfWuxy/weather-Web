@@ -4,10 +4,11 @@
 {% block body_class %}dashboard-page{% endblock %}
 
 {% block content %}
+{% set weather_available = weather and not weather_is_mock %}
 {% set risk_score = heat_result.risk_score if heat_result else none %}
 {% set risk_level = heat_result.risk_level if heat_result else none %}
 {% set risk_score_class = 'is-risk-high' if risk_score and risk_score >= 70 else 'is-risk-mid' if risk_score and risk_score >= 40 else 'is-risk-low' %}
-{% set hero_temperature = weather.temperature if weather and weather.temperature is not none else none %}
+{% set hero_temperature = weather.temperature if weather_available and weather.temperature is not none else none %}
 {% set hero_motion_risk = 'high' if risk_score and risk_score >= 70 else 'cold' if hero_temperature is not none and hero_temperature|float < 10 else '' %}
 {% set hero_motion_weather = 'rain' if weather and weather.weather_condition and '雨' in weather.weather_condition else '' %}
 <div class="yl-dashboard-shell">
@@ -25,16 +26,20 @@
                 <div class="today-label"><i class="bi bi-sun"></i> 家庭照护今日页 · {{ today_date or '今天' }}</div>
                 <div class="today-location"><i class="bi bi-geo-alt"></i> {{ current_location or '未设置' }}</div>
                 <div class="today-temp">
-                    {% if weather and weather.temperature is not none %}
+                    {% if weather_available and weather.temperature is not none %}
                         <span class="yl-count" data-target="{{ weather.temperature }}" data-decimals="0">{{ weather.temperature }}</span>
                     {% else %}
                         --
                     {% endif %}<span class="unit">°C</span>
                 </div>
                 <div class="today-condition">
-                    {{ weather.weather_condition if weather and weather.weather_condition else '--' }}
-                    {% if weather and weather.temperature_max is not none %}
+                    {% if weather_available %}
+                    {{ weather.weather_condition if weather.weather_condition else '--' }}
+                    {% if weather.temperature_max is not none %}
                         · 最高 {{ weather.temperature_max }}° / 最低 {{ weather.temperature_min if weather.temperature_min is not none else '--' }}°
+                    {% endif %}
+                    {% else %}
+                    实时天气暂不可用
                     {% endif %}
                 </div>
 
@@ -62,19 +67,19 @@
                 <div class="today-meta">
                     <div class="today-meta-item">
                         <div class="k">湿度</div>
-                        <div class="v">{{ weather.humidity if weather and weather.humidity is not none else '--' }}%</div>
+                        <div class="v">{{ weather.humidity if weather_available and weather.humidity is not none else '--' }}{% if weather_available and weather.humidity is not none %}%{% endif %}</div>
                     </div>
                     <div class="today-meta-item">
                         <div class="k">气压</div>
-                        <div class="v">{{ weather.pressure if weather and weather.pressure is not none else '--' }} hPa</div>
+                        <div class="v">{{ weather.pressure if weather_available and weather.pressure is not none else '--' }}{% if weather_available and weather.pressure is not none %} hPa{% endif %}</div>
                     </div>
                     <div class="today-meta-item">
                         <div class="k">风速</div>
-                        <div class="v">{{ weather.wind_speed if weather and weather.wind_speed is not none else '--' }} m/s</div>
+                        <div class="v">{{ weather.wind_speed if weather_available and weather.wind_speed is not none else '--' }}{% if weather_available and weather.wind_speed is not none %} m/s{% endif %}</div>
                     </div>
                     <div class="today-meta-item">
                         <div class="k">AQI</div>
-                        <div class="v">{{ weather.aqi if weather and weather.aqi is not none else '--' }}</div>
+                        <div class="v">{{ weather.aqi if weather_available and weather.aqi is not none else '--' }}</div>
                     </div>
                 </div>
             </div>
@@ -94,6 +99,8 @@
                             <span class="badge bg-danger-subtle">高风险</span>
                         {% elif risk_level == 'medium' %}
                             <span class="badge bg-warning-subtle">中等风险</span>
+                        {% elif not weather_available %}
+                            <span class="badge bg-secondary-subtle">待实时天气</span>
                         {% else %}
                             <span class="badge bg-success-subtle">低风险</span>
                         {% endif %}
@@ -141,7 +148,15 @@
                 <a class="btn btn-sm btn-outline-primary" href="{{ url_for('public.action_check') }}">打卡 <i class="bi bi-arrow-right"></i></a>
             </div>
             <div class="yl-action-list mt-3">
-                {% if heat_actions %}
+                {% if not weather_available %}
+                    <div class="yl-action">
+                        <i class="bi bi-cloud-slash"></i>
+                        <div>
+                            <strong>等待实时天气</strong>
+                            <div class="detail">当前不展示 fallback 天气建议，和风天气恢复后自动更新。</div>
+                        </div>
+                    </div>
+                {% elif heat_actions %}
                     {% for act in heat_actions %}
                     <div class="yl-action">
                         <i class="bi bi-{{ act.icon or 'check-circle' }}"></i>
@@ -265,20 +280,19 @@
                         <div class="dow">{{ d.dow }}</div>
                         <div class="t">{{ d.temp_high }}° / {{ d.temp_low }}°</div>
                         <div class="mt-1" style="font-size:.78rem; color:var(--yl-muted);">{{ d.condition }}</div>
-                        <span class="rk {{ d.risk_level or 'low' }}">{{ d.risk_label or '低' }}</span>
-                        <div class="why-tip">风险 {{ d.risk_label or '低' }} · {{ d.condition }} · {{ d.temp_high }}°/{{ d.temp_low }}°</div>
+                        <span class="rk {{ d.risk_level or 'unknown' }}">{{ d.risk_label or '待计算' }}</span>
+                        <div class="why-tip">风险 {{ d.risk_label or '待计算' }} · {{ d.condition }} · {{ d.temp_high }}°/{{ d.temp_low }}°</div>
                     </div>
                     {% endfor %}
                 {% else %}
-                    {% for d in [('今','32°/25°','多云','mid','中'),('明','34°/26°','晴','high','高'),('三','30°/24°','雷阵雨','mid','中'),('四','29°/23°','小雨','low','低'),('五','31°/24°','多云','low','低'),('六','33°/25°','晴','mid','中'),('日','34°/26°','晴','high','高')] %}
-                    <div class="day" data-risk="{{ d[3] }}">
-                        <div class="dow">{{ d[0] }}</div>
-                        <div class="t">{{ d[1] }}</div>
-                        <div class="mt-1" style="font-size:.78rem; color:var(--yl-muted);">{{ d[2] }}</div>
-                        <span class="rk {{ d[3] }}">{{ d[4] }}</span>
-                        <div class="why-tip">演示风险 {{ d[4] }} · {{ d[2] }} · {{ d[1] }}</div>
+                    <div class="yl-empty-micro" style="width:100%;">
+                        <i class="bi bi-cloud-slash"></i>
+                        <div>
+                            <strong>暂无实时 7 日预报</strong>
+                            <p>首页只展示和风天气实时预报结果，接口暂不可用时不会显示演示高温风险。</p>
+                        </div>
+                        <a class="btn btn-sm btn-outline-primary" href="{{ url_for('tools.forecast_7day') }}">重新生成</a>
                     </div>
-                    {% endfor %}
                 {% endif %}
             </div>
         </section>

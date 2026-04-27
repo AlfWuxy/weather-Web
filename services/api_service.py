@@ -9,10 +9,10 @@ from flask_login import current_user, login_required
 from core.constants import DEFAULT_CITY_LABEL
 from core.notifications import create_notification
 from core.security import csrf_failure_response, validate_csrf
-from core.time_utils import now_local
+from core.time_utils import now_local, today_local
 from core.weather import (
     ensure_user_location_valid,
-    get_forecast_with_cache,
+    get_qweather_forecast_with_cache,
     get_weather_fetcher,
     get_weather_with_cache,
     normalize_location_name
@@ -484,6 +484,7 @@ def _api_forecast_7day():
 
         data = request.get_json() or {}
         forecast_context = {}
+        forecast_start_date = None
 
         # 获取天气预报温度
         if 'forecast_temps' in data and data['forecast_temps']:
@@ -506,40 +507,23 @@ def _api_forecast_7day():
                     'message': 'forecast_temps 必须提供完整 7 天'
                 }), 400
         else:
-            # 从天气API获取预报（带缓存）
+            # 页面默认链路只使用和风 7 日预报，避免融合或 mock 数据影响风险判断。
             city = sanitize_input(data.get('city'), max_length=100)
             if city:
                 city = normalize_location_name(city)
             else:
                 city = ensure_user_location_valid()
             try:
-                weather_forecast, _ = get_forecast_with_cache(city, days=7)
+                weather_forecast, _, forecast_meta = get_qweather_forecast_with_cache(city, days=7)
                 # 当前空气质量作为复合暴露的背景场（小时级无稳定AQI预报时）
                 current_weather, _ = get_weather_with_cache(city)
-                forecast_context = {
-                    'aqi': current_weather.get('aqi') if isinstance(current_weather, dict) else None,
-                    'pm25': current_weather.get('pm25') if isinstance(current_weather, dict) else None
-                }
-                forecast_temps = []
-                for f in weather_forecast:
-                    if not isinstance(f, dict):
-                        continue
-                    forecast_temps.append({
-                        'temperature': (
-                            f.get('temperature_ensemble_p50')
-                            if f.get('temperature_ensemble_p50') is not None
-                            else (f.get('temperature_max', 20) + f.get('temperature_min', 10)) / 2
-                        ),
-                        'temperature_ensemble_std': f.get('temperature_ensemble_std'),
-                        'model_count': f.get('model_count'),
-                        'model_names': f.get('model_names'),
-                        'predictability_score': f.get('predictability_score'),
-                        'data_source': f.get('data_source', ''),
-                        'temperature_ensemble_p10': f.get('temperature_ensemble_p10'),
-                        'temperature_ensemble_p90': f.get('temperature_ensemble_p90'),
-                        'humidity': f.get('humidity'),
-                        'precip_probability': f.get('precip_probability')
-                    })
+                if isinstance(current_weather, dict) and not current_weather.get('is_mock'):
+                    forecast_context = {
+                        'aqi': current_weather.get('aqi'),
+                        'pm25': current_weather.get('pm25')
+                    }
+                forecast_temps = [f for f in weather_forecast if isinstance(f, dict)]
+                forecast_start_date = today_local()
             except (ValueError, TypeError, RuntimeError, OSError) as exc:
                 logger.warning("Forecast cache unavailable: %s", exc)
                 return jsonify({
@@ -548,23 +532,30 @@ def _api_forecast_7day():
                     'message': '天气预报暂不可用，请稍后重试'
                 }), 503
             if len(forecast_temps) != 7:
-                logger.warning("Forecast data incomplete for city=%s, count=%s", city, len(forecast_temps))
+                logger.warning(
+                    "QWeather forecast data incomplete for city=%s, count=%s, meta=%s",
+                    city,
+                    len(forecast_temps),
+                    forecast_meta,
+                )
                 return jsonify({
                     'success': False,
                     'error': 'forecast_data_incomplete',
-                    'message': '天气预报数据不完整，暂无法生成7天预测'
+                    'message': '和风天气预报数据不完整，暂无法生成7天预测'
                 }), 503
 
         # 生成7天预测
         forecasts, summary = forecast_service.generate_7day_forecast(
             forecast_temps,
+            start_date=forecast_start_date,
             context=forecast_context
         )
 
         return jsonify({
             'success': True,
             'forecasts': forecasts,
-            'summary': summary
+            'summary': summary,
+            'data_source': 'QWeather' if forecast_start_date else 'provided_forecast_temps'
         })
     except API_EXCEPTIONS as exc:
         return handle_api_exception(exc, "7天预测失败", log=logger)
@@ -975,20 +966,41 @@ def _api_comprehensive_alert():
 
         # 获取当前天气
         current_weather, _ = get_weather_with_cache(city)
+        if isinstance(current_weather, dict) and current_weather.get('is_mock'):
+            return jsonify({
+                'success': False,
+                'error': 'weather_unavailable',
+                'message': '实时天气暂不可用，暂无法生成综合预警'
+            }), 503
         temperature = current_weather.get('temperature', 20)
 
         # 计算当前风险
         rr, _ = dlnm.calculate_rr(temperature)
         extreme_events = dlnm.identify_extreme_weather_events(temperature)
 
-        # 获取7天预报（带缓存）
-        weather_forecast, _ = get_forecast_with_cache(city, days=7)
-        forecast_temps = [
-            (f.get('temperature_max', 20) + f.get('temperature_min', 10)) / 2
-            for f in weather_forecast
-            if isinstance(f, dict)
-        ]
-        forecasts, summary = forecast_service.generate_7day_forecast(forecast_temps)
+        # 获取7天预报：综合预警只使用和风天气，避免 mock 或融合缓存抬高风险。
+        weather_forecast, _, forecast_meta = get_qweather_forecast_with_cache(city, days=7)
+        forecast_temps = [f for f in weather_forecast if isinstance(f, dict)]
+        if len(forecast_temps) != 7:
+            logger.warning(
+                "综合预警和风7日预报不可用: city=%s count=%s meta=%s",
+                city,
+                len(forecast_temps),
+                forecast_meta,
+            )
+            return jsonify({
+                'success': False,
+                'error': 'forecast_data_incomplete',
+                'message': '和风天气预报数据不完整，暂无法生成综合预警'
+            }), 503
+        forecasts, summary = forecast_service.generate_7day_forecast(
+            forecast_temps,
+            start_date=today_local(),
+            context={
+                'aqi': current_weather.get('aqi'),
+                'pm25': current_weather.get('pm25'),
+            },
+        )
 
         # 社区风险
         community_result = community_service.generate_community_risk_map(current_weather)

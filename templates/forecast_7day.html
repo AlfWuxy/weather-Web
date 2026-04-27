@@ -52,7 +52,7 @@
         {% for d in forecast_days %}
         <div class="col">
             <div class="card h-100 text-center day"
-                 data-risk="{{ d.risk_level or 'low' }}"
+                 data-risk="{{ d.risk_level or 'unknown' }}"
                  {% if d.risk_level == 'high' %}style="border:1px solid #F0C4B9; background:var(--yl-danger-50);"{% elif d.risk_level == 'mid' %}style="border:1px solid #F1DFB1; background:var(--yl-warn-50);"{% endif %}>
                 <div class="card-body p-3">
                     <div class="text-muted" style="font-size:.82rem;">{{ d.date }}</div>
@@ -61,10 +61,12 @@
                     <div style="font-size:1rem; font-weight:600;">{{ d.temp_high }}° / {{ d.temp_low }}°</div>
                     <div class="text-muted" style="font-size:.78rem;">{{ d.condition }}</div>
                     <div class="mt-2">
-                        <span class="badge risk-badge {% if d.risk_level=='high' %}bg-danger-subtle{% elif d.risk_level=='mid' %}bg-warning-subtle{% else %}bg-success-subtle{% endif %}"
-                              data-detail="温度 {{ d.temp_high }}°/{{ d.temp_low }}° · {{ d.condition }}">风险 {{ d.risk_score }}</span>
+                        <span class="badge risk-badge {% if d.risk_level=='high' %}bg-danger-subtle{% elif d.risk_level=='mid' %}bg-warning-subtle{% elif d.risk_level=='low' %}bg-success-subtle{% else %}bg-secondary-subtle{% endif %}"
+                              data-detail="温度 {{ d.temp_high }}°/{{ d.temp_low }}° · {{ d.condition }}">
+                            {% if d.risk_available %}风险 {{ d.risk_score }}{% else %}风险待计算{% endif %}
+                        </span>
                     </div>
-                    <div class="why-tip">风险 {{ d.risk_score }} · {{ d.condition }} · {{ d.temp_high }}°/{{ d.temp_low }}°</div>
+                    <div class="why-tip">风险 {{ d.risk_score if d.risk_available else '待计算' }} · {{ d.condition }} · {{ d.temp_high }}°/{{ d.temp_low }}°</div>
                 </div>
             </div>
         </div>
@@ -91,8 +93,11 @@
                 <p class="text-muted" style="font-size:.9rem;">以下日期风险评分 ≥ 70,建议重点准备。</p>
                 <ul class="list-unstyled mt-3 mb-0">
                     {% set high_risk_count = namespace(value=0) %}
+                    {% set unknown_risk_count = namespace(value=0) %}
                     {% for d in forecast_days %}
-                        {% if (d.risk_score or 0) >= 70 %}
+                        {% if not d.risk_available %}
+                        {% set unknown_risk_count.value = unknown_risk_count.value + 1 %}
+                        {% elif (d.risk_score or 0) >= 70 %}
                         {% set high_risk_count.value = high_risk_count.value + 1 %}
                         <li class="d-flex justify-content-between py-2 border-bottom">
                             <span><strong>{{ d.date }}</strong> · {{ d.condition }}</span>
@@ -100,7 +105,9 @@
                         </li>
                         {% endif %}
                     {% endfor %}
-                    {% if high_risk_count.value == 0 %}
+                    {% if unknown_risk_count.value == forecast_days|length %}
+                    <li class="text-muted py-2">风险预测暂不可用。</li>
+                    {% elif high_risk_count.value == 0 %}
                     <li class="text-muted py-2">本周暂无高风险日。</li>
                     {% endif %}
                 </ul>

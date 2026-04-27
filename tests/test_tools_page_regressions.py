@@ -117,6 +117,211 @@ def test_forecast_page_qweather_failure_does_not_render_demo_heat(client, db_ses
     assert '35° / 27°' not in body
 
 
+def test_forecast_api_default_uses_qweather_only_data(client, db_session, monkeypatch):
+    from datetime import timedelta
+
+    from core.time_utils import today_local
+
+    user = _create_user(db_session, username='forecast_api_qweather_user')
+    _login_as(client, user.id)
+    start = today_local()
+
+    qweather_days = []
+    for idx in range(7):
+        day = start + timedelta(days=idx)
+        qweather_days.append({
+            'date': day.strftime('%Y-%m-%d'),
+            'temperature_max': 24 + idx,
+            'temperature_min': 14 + idx,
+            'temperature_mean': 19 + idx,
+            'condition': '多云',
+            'humidity': 70,
+            'aqi': 42,
+            'data_source': 'QWeather',
+            'is_mock': False,
+        })
+
+    captured = {}
+
+    def fake_qweather(location, days=7):
+        captured['location'] = location
+        captured['days'] = days
+        return qweather_days, False, {'source': 'QWeather'}
+
+    class FakeForecastService:
+        def generate_7day_forecast(self, forecast_temps, start_date=None, context=None):
+            captured['forecast_temps'] = forecast_temps
+            captured['start_date'] = start_date
+            captured['context'] = context
+            return [
+                {
+                    'date': (start + timedelta(days=idx)).strftime('%Y-%m-%d'),
+                    'composite_exposure': {'score': 22 + idx, 'level': '低'},
+                }
+                for idx in range(7)
+            ], {'recommendations': [], 'high_risk_days': 0}
+
+    monkeypatch.setattr('services.api_service.get_qweather_forecast_with_cache', fake_qweather, raising=False)
+    monkeypatch.setattr(
+        'services.api_service.get_weather_with_cache',
+        lambda location: ({'aqi': 42, 'pm25': 18, 'is_mock': False}, False),
+        raising=False,
+    )
+    monkeypatch.setattr('services.forecast_service.get_forecast_service', lambda: FakeForecastService(), raising=False)
+
+    with client.session_transaction() as session:
+        session['_csrf_token'] = 'forecast-csrf'
+
+    response = client.post(
+        '/api/forecast/7day',
+        json={'city': '都昌'},
+        headers={'X-CSRF-Token': 'forecast-csrf'},
+    )
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload['success'] is True
+    assert payload['data_source'] == 'QWeather'
+    assert captured['location'] == '都昌'
+    assert captured['days'] == 7
+    assert captured['forecast_temps'] == qweather_days
+    assert captured['start_date'] == start
+    assert captured['context'] == {'aqi': 42, 'pm25': 18}
+
+
+def test_comprehensive_alert_rejects_mock_current_weather(client, db_session, monkeypatch):
+    user = _create_user(db_session, username='alert_mock_weather_user')
+    _login_as(client, user.id)
+
+    monkeypatch.setattr(
+        'services.api_service.get_weather_with_cache',
+        lambda location: ({'temperature': 36, 'is_mock': True}, False),
+        raising=False,
+    )
+
+    with client.session_transaction() as session:
+        session['_csrf_token'] = 'alert-csrf'
+
+    response = client.post(
+        '/api/alert/comprehensive',
+        json={'city': '都昌'},
+        headers={'X-CSRF-Token': 'alert-csrf'},
+    )
+
+    assert response.status_code == 503
+    payload = response.get_json()
+    assert payload['error'] == 'weather_unavailable'
+
+
+def test_comprehensive_alert_rejects_incomplete_qweather_forecast(client, db_session, monkeypatch):
+    user = _create_user(db_session, username='alert_incomplete_forecast_user')
+    _login_as(client, user.id)
+
+    monkeypatch.setattr(
+        'services.api_service.get_weather_with_cache',
+        lambda location: ({'temperature': 24, 'aqi': 35, 'pm25': 12, 'is_mock': False}, False),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        'services.api_service.get_qweather_forecast_with_cache',
+        lambda location, days=7: ([], False, {'error': 'qweather_unavailable'}),
+        raising=False,
+    )
+
+    with client.session_transaction() as session:
+        session['_csrf_token'] = 'alert-csrf'
+
+    response = client.post(
+        '/api/alert/comprehensive',
+        json={'city': '都昌'},
+        headers={'X-CSRF-Token': 'alert-csrf'},
+    )
+
+    assert response.status_code == 503
+    payload = response.get_json()
+    assert payload['error'] == 'forecast_data_incomplete'
+
+
+def test_comprehensive_alert_uses_qweather_forecast_with_today_start(client, db_session, monkeypatch):
+    from datetime import timedelta
+
+    from core.time_utils import today_local
+
+    user = _create_user(db_session, username='alert_qweather_user')
+    _login_as(client, user.id)
+    start = today_local()
+    qweather_days = [
+        {
+            'date': (start + timedelta(days=idx)).strftime('%Y-%m-%d'),
+            'temperature_max': 25 + idx,
+            'temperature_min': 15 + idx,
+            'temperature_mean': 20 + idx,
+            'condition': '多云',
+            'humidity': 66,
+            'aqi': 38,
+            'data_source': 'QWeather',
+            'is_mock': False,
+        }
+        for idx in range(7)
+    ]
+    captured = {}
+
+    class FakeDlnmService:
+        def calculate_rr(self, temperature):
+            return 1.0, {}
+
+        def identify_extreme_weather_events(self, temperature):
+            return []
+
+    class FakeForecastService:
+        def generate_7day_forecast(self, forecast_temps, start_date=None, context=None):
+            captured['forecast_temps'] = forecast_temps
+            captured['start_date'] = start_date
+            captured['context'] = context
+            return [
+                {
+                    'date': (start + timedelta(days=idx)).strftime('%Y-%m-%d'),
+                    'composite_exposure': {'score': 20 + idx, 'level': '低'},
+                }
+                for idx in range(7)
+            ], {'high_risk_days': 0, 'recommendations': []}
+
+    class FakeCommunityService:
+        def generate_community_risk_map(self, current_weather):
+            return {'summary': {'total': 0}, 'rankings': []}
+
+    monkeypatch.setattr(
+        'services.api_service.get_weather_with_cache',
+        lambda location: ({'temperature': 24, 'aqi': 38, 'pm25': 14, 'is_mock': False}, False),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        'services.api_service.get_qweather_forecast_with_cache',
+        lambda location, days=7: (qweather_days, False, {'source': 'QWeather'}),
+        raising=False,
+    )
+    monkeypatch.setattr('services.dlnm_risk_service.get_dlnm_service', lambda: FakeDlnmService(), raising=False)
+    monkeypatch.setattr('services.forecast_service.get_forecast_service', lambda: FakeForecastService(), raising=False)
+    monkeypatch.setattr('services.community_risk_service.get_community_service', lambda: FakeCommunityService(), raising=False)
+
+    with client.session_transaction() as session:
+        session['_csrf_token'] = 'alert-csrf'
+
+    response = client.post(
+        '/api/alert/comprehensive',
+        json={'city': '都昌'},
+        headers={'X-CSRF-Token': 'alert-csrf'},
+    )
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload['success'] is True
+    assert payload['alert']['text'] == '蓝色预警'
+    assert captured['forecast_temps'] == qweather_days
+    assert captured['start_date'] == start
+    assert captured['context'] == {'aqi': 38, 'pm25': 14}
+
+
 def test_authenticated_nav_uses_desktop_mega_menu(client, db_session):
     user = _create_user(db_session, username='nav_user')
     _login_as(client, user.id)
