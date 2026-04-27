@@ -96,6 +96,85 @@ def _dashboard_hero_theme(temperature):
     }
 
 
+def _parse_float(value):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _parse_systolic(value):
+    """从画像指标里提取收缩压，支持 138/82 或单个数字。"""
+    if isinstance(value, str) and '/' in value:
+        value = value.split('/', 1)[0]
+    return _parse_float(value)
+
+
+def _flat_metric_series(value, length=30):
+    """没有历史序列时，仅用当前登记值形成定位线，避免伪造趋势。"""
+    numeric = _parse_float(value)
+    if numeric is None:
+        return '[]'
+    return json.dumps([round(numeric, 1)] * length)
+
+
+def _dashboard_metric_cards(user_id):
+    """构造首页健康指标动效卡，只使用家庭成员画像中的已登记数值。"""
+    members = FamilyMember.query.filter_by(user_id=user_id).order_by(
+        FamilyMember.created_at.desc()
+    ).all()
+    if not members:
+        return []
+
+    profiles = FamilyMemberProfile.query.filter(
+        FamilyMemberProfile.member_id.in_([member.id for member in members])
+    ).all()
+    profile_map = {profile.member_id: profile for profile in profiles}
+    cards = {}
+
+    def add_card(key, member, value, display_value, band_min, band_max, label, unit, icon, color):
+        if key in cards or value is None:
+            return
+        anomaly_idx = [29] if value < band_min or value > band_max else []
+        cards[key] = {
+            'label': label,
+            'unit': unit,
+            'icon': icon,
+            'color': color,
+            'member_name': member.name,
+            'current_display': display_value,
+            'values_json': _flat_metric_series(value),
+            'band_min': band_min,
+            'band_max': band_max,
+            'anomalies_json': json.dumps(anomaly_idx),
+        }
+
+    for member in members:
+        profile = profile_map.get(member.id)
+        metrics = safe_json_loads(profile.metrics, {}) if profile and profile.metrics else {}
+        if not isinstance(metrics, dict):
+            continue
+
+        sbp = _parse_systolic(metrics.get('blood_pressure'))
+        if sbp is not None:
+            raw_bp = metrics.get('blood_pressure')
+            display = f"{raw_bp} mmHg" if raw_bp else f"{sbp:g} mmHg"
+            add_card('sbp', member, sbp, display, 90, 135, '收缩压', 'mmHg', 'heart-pulse', '#C7472E')
+
+        heart_rate = _parse_float(metrics.get('heart_rate'))
+        if heart_rate is not None:
+            add_card('heart_rate', member, heart_rate, f"{heart_rate:g} bpm", 60, 100, '心率', 'bpm', 'activity', '#E8A23C')
+
+        blood_sugar = _parse_float(metrics.get('blood_sugar'))
+        if blood_sugar is not None:
+            add_card('blood_sugar', member, blood_sugar, f"{blood_sugar:g} mmol/L", 3.9, 6.1, '空腹血糖', 'mmol/L', 'droplet-half', '#4A89C4')
+
+        if len(cards) == 3:
+            break
+
+    return [cards[key] for key in ('sbp', 'heart_rate', 'blood_sugar') if key in cards]
+
+
 def user_dashboard():
     """用户仪表板"""
     elder_mode = request.args.get('mode') == 'elder' and current_app.config.get('FEATURE_ELDER_MODE')
@@ -158,6 +237,7 @@ def user_dashboard():
     heat_risk_label = HEAT_RISK_LABELS.get(heat_result['risk_level'], '低风险')
     heat_actions = _action_plan(heat_risk_label)
     dashboard_hero_theme = _dashboard_hero_theme(getattr(weather, 'temperature', None))
+    dashboard_metric_cards = [] if is_guest else _dashboard_metric_cards(current_user.id)
 
     # 如果是极端天气，生成预警（避免重复）
     if extreme_result['is_extreme'] and not used_cache:
@@ -319,6 +399,7 @@ def user_dashboard():
                          heat_risk_label=heat_risk_label,
                          heat_actions=heat_actions,
                          dashboard_hero_theme=dashboard_hero_theme,
+                         dashboard_metric_cards=dashboard_metric_cards,
                          alerts=alerts,
                          reminders=reminders,
                          notifications=notifications,

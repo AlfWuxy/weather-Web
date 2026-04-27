@@ -14,11 +14,7 @@ from pathlib import Path
 
 @pytest.fixture(scope='session', autouse=True)
 def setup_test_environment():
-    """
-    自动设置测试环境变量（在所有测试之前执行）
-
-    优先级：显式环境变量 > conftest 默认值
-    """
+    """自动设置测试环境变量（在所有测试之前执行）。"""
     # 创建临时数据库文件
     temp_db = tempfile.NamedTemporaryFile(
         prefix='test_health_weather_',
@@ -37,11 +33,13 @@ def setup_test_environment():
         'AMAP_KEY': '',
         'SILICONFLOW_API_KEY': '',
         'DEMO_MODE': '1',  # 启用演示模式，使用 mock 数据
+        # 测试必须隔离生产 Redis 限流状态，避免远端 .env 影响登录/API 用例。
+        'RATE_LIMIT_STORAGE_URI': 'memory://',
+        'REDIS_URL': '',
     }
 
     for key, value in test_env.items():
-        if key not in os.environ:
-            os.environ[key] = value
+        os.environ[key] = value
 
     yield temp_db_path
 

@@ -1,12 +1,22 @@
 # -*- coding: utf-8 -*-
 """Tooling and prediction pages."""
+from datetime import datetime
+
 from flask import Blueprint, current_app, flash, render_template, request
 from flask_login import current_user, login_required
 
 from core.constants import CHRONIC_OPTIONS
 from core.db_models import FamilyMember
-from core.weather import ensure_user_location_valid, get_weather_with_cache, normalize_location_name
+from core.time_utils import today_local
+from core.weather import (
+    ensure_user_location_valid,
+    get_location_options,
+    get_qweather_forecast_with_cache,
+    get_weather_with_cache,
+    normalize_location_name,
+)
 from services.chronic_risk_service import get_chronic_service
+from services.forecast_service import get_forecast_service
 from services.ml_prediction_service import get_ml_service
 from utils.parsers import parse_float, parse_int, safe_json_loads
 from utils.validators import sanitize_input
@@ -88,6 +98,79 @@ def _level_bucket(score):
     if score >= 40:
         return 'mid'
     return 'low'
+
+
+def _forecast_date(value):
+    """解析和风日期字段。"""
+    try:
+        return datetime.strptime(str(value), '%Y-%m-%d').date()
+    except Exception:
+        return None
+
+
+def _forecast_temp(value):
+    parsed = parse_float(value)
+    if parsed is None:
+        return None
+    if float(parsed).is_integer():
+        return int(parsed)
+    return round(parsed, 1)
+
+
+def _forecast_day_labels(day, start_date):
+    """生成卡片用的“今/明/周几”标签。"""
+    delta = (day - start_date).days
+    if delta == 0:
+        return '今', '今天'
+    if delta == 1:
+        return '明', '明天'
+    weekday = ['一', '二', '三', '四', '五', '六', '日'][day.weekday()]
+    return weekday, f'周{weekday}'
+
+
+def _format_qweather_update_time(raw_value):
+    if not raw_value:
+        return ''
+    try:
+        normalized = str(raw_value).replace('Z', '+00:00')
+        return datetime.fromisoformat(normalized).strftime('%Y-%m-%d %H:%M')
+    except Exception:
+        return str(raw_value)
+
+
+def _build_forecast_cards(qweather_days, health_forecasts, start_date):
+    """把和风日预报与健康预测合并为模板卡片。"""
+    health_by_date = {
+        item.get('date'): item
+        for item in (health_forecasts or [])
+        if isinstance(item, dict) and item.get('date')
+    }
+    cards = []
+    for entry in qweather_days or []:
+        if not isinstance(entry, dict):
+            continue
+        day = _forecast_date(entry.get('date') or entry.get('forecast_date'))
+        if not day:
+            continue
+        dow, date_label = _forecast_day_labels(day, start_date)
+        health = health_by_date.get(day.strftime('%Y-%m-%d'), {})
+        composite = health.get('composite_exposure') or {}
+        score = parse_float(composite.get('score'))
+        if score is None:
+            score = parse_float(health.get('probability_high_visits'), default=0)
+        score = max(0, min(100, int(round(score or 0))))
+        cards.append({
+            'dow': dow,
+            'date': date_label,
+            'full_date': day.strftime('%Y-%m-%d'),
+            'temp_high': _forecast_temp(entry.get('temperature_max')),
+            'temp_low': _forecast_temp(entry.get('temperature_min')),
+            'condition': entry.get('condition') or entry.get('condition_night') or '未知',
+            'risk_level': _level_bucket(score),
+            'risk_score': score,
+            'risk_label': _score_level(score),
+        })
+    return cards
 
 
 def _build_ml_factor_cards(result, age, weather_info):
@@ -272,9 +355,52 @@ def ai_qa():
 @login_required
 def forecast_7day():
     """7天健康预测页面"""
+    current_location = _normalized_location(request.args.get('location'))
+    start_date = today_local()
+    forecast_days = []
+    weekly_tips = None
+    forecast_error = None
+    forecast_meta = {'source': 'QWeather'}
+    qweather_days, from_cache, forecast_meta = get_qweather_forecast_with_cache(current_location, days=7)
+    forecast_meta = dict(forecast_meta or {})
+    forecast_meta['source_label'] = '和风天气'
+    forecast_meta['from_cache'] = bool(from_cache)
+    forecast_meta['update_time_label'] = _format_qweather_update_time(forecast_meta.get('update_time'))
+
+    if len(qweather_days or []) < 7:
+        forecast_error = '和风天气暂不可用，或返回的 7 天预报数据不完整。请稍后重试。'
+    else:
+        health_forecasts = []
+        try:
+            health_forecasts, summary = get_forecast_service().generate_7day_forecast(
+                qweather_days,
+                start_date=start_date,
+                context={}
+            )
+            recommendations = (summary or {}).get('recommendations') or []
+            if recommendations:
+                weekly_tips = [
+                    {
+                        'icon': 'lightbulb',
+                        'title': item.get('category') or item.get('priority') or '健康提醒',
+                        'detail': item.get('advice') or item.get('description') or '',
+                    }
+                    for item in recommendations[:4]
+                    if isinstance(item, dict)
+                ] or None
+        except Exception as exc:
+            current_app.logger.warning("7天健康预测生成失败，仅展示和风天气: %s", exc)
+        forecast_days = _build_forecast_cards(qweather_days, health_forecasts, start_date)
+
     return render_template(
         'forecast_7day.html',
         family_members=_tool_family_members(),
+        current_location=current_location,
+        location_options=get_location_options(),
+        forecast_days=forecast_days,
+        forecast_error=forecast_error,
+        forecast_meta=forecast_meta,
+        weekly_tips=weekly_tips,
     )
 
 

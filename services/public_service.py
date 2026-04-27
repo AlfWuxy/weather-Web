@@ -981,6 +981,17 @@ def handle_register():
 
 def render_cooling_resources_page(community, resource_type, has_ac_raw, is_accessible_raw, open_only):
     open_only_flag = parse_bool(open_only, default=False)
+    location_query = sanitize_input(request.args.get('location'), max_length=100)
+    weather_location = normalize_location_name(community or location_query or None)
+    cooling_weather = {}
+    try:
+        cooling_weather, _ = get_weather_with_cache(weather_location)
+    except Exception as exc:
+        logger.warning("避暑资源页天气读取失败，已隐藏室外温度计: %s", exc)
+        cooling_weather = {}
+    outdoor_temp = None
+    if cooling_weather and not cooling_weather.get('is_mock'):
+        outdoor_temp = cooling_weather.get('temperature')
 
     query = CoolingResource.query.filter_by(is_active=True)
     if community:
@@ -1044,7 +1055,10 @@ def render_cooling_resources_page(community, resource_type, has_ac_raw, is_acces
         open_only=open_only_flag,
         map_points=map_points,
         amap_key=amap_key,
-        amap_security_js_code=amap_security_js_code
+        amap_security_js_code=amap_security_js_code,
+        cooling_weather=cooling_weather,
+        cooling_weather_location=weather_location,
+        outdoor_temp=outdoor_temp
     )
 
 

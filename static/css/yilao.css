@@ -817,6 +817,17 @@ a:hover { color: var(--yl-orange-500); }
     border: 1px solid var(--yl-hero-panel-border, rgba(255,255,255,.58));
     border-radius: 12px;
 }
+.yl-hero-thermo {
+    max-width: 620px;
+    margin-top: 26px;
+    margin-bottom: 20px;
+}
+.yl-hero-thermo .fx-thermo-labels {
+    color: var(--yl-hero-muted, var(--yl-muted));
+}
+.yl-hero-thermo .fx-thermo-zone-tag {
+    background: var(--yl-hero-chip-bg, rgba(255,255,255,.66));
+}
 .yl-hero-today .risk-dial {
     width: 100%;
     min-height: 100%;
@@ -851,6 +862,9 @@ a:hover { color: var(--yl-orange-500); }
 .yl-panel-forecast {
     flex-grow: 1.15;
 }
+.yl-panel-vitals {
+    flex: 1.35 1 420px;
+}
 .yl-panel-shortcuts .yl-feature-grid {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
@@ -867,6 +881,76 @@ a:hover { color: var(--yl-orange-500); }
 .yl-panel-family .list-group-item {
     margin-bottom: 0 !important;
 }
+.yl-vital-note {
+    color: var(--yl-muted);
+    font-size: .76rem;
+}
+.yl-vitals-grid {
+    display: grid;
+    gap: 12px;
+}
+.yl-vital-spark-card {
+    padding: 12px 14px;
+    border: 1px solid rgba(238, 126, 45, .12);
+    border-radius: 16px;
+    background: linear-gradient(135deg, rgba(255,255,255,.82), rgba(255, 245, 235, .72));
+}
+.yl-vital-meta {
+    display: flex;
+    justify-content: space-between;
+    gap: 14px;
+    align-items: flex-start;
+    margin-bottom: 6px;
+}
+.yl-vital-label {
+    color: var(--yl-ink-soft);
+    font-size: .88rem;
+    font-weight: 650;
+}
+.yl-vital-source {
+    color: var(--yl-muted);
+    font-size: .75rem;
+    margin-top: 2px;
+}
+.yl-vital-meta strong {
+    color: var(--yl-ink);
+    font-size: .9rem;
+    white-space: nowrap;
+}
+.yl-empty-micro {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 14px;
+    border-radius: 16px;
+    background: var(--yl-orange-50);
+    color: var(--yl-ink-soft);
+}
+.yl-empty-micro i {
+    color: var(--yl-orange-500);
+    font-size: 1.4rem;
+}
+.yl-empty-micro p {
+    margin: 2px 0 0;
+    color: var(--yl-muted);
+    font-size: .84rem;
+}
+.yl-cooling-meter {
+    background:
+        radial-gradient(circle at 12% 16%, rgba(238,126,45,.16), transparent 34%),
+        linear-gradient(135deg, rgba(255,255,255,.92), rgba(255,247,238,.88));
+}
+.yl-temp-status {
+    display: inline-flex;
+    align-items: center;
+    border-radius: 999px;
+    padding: 6px 12px;
+    font-size: .82rem;
+    font-weight: 700;
+}
+.yl-temp-status.is-danger { background: rgba(199,71,46,.14); color: #C7472E; }
+.yl-temp-status.is-hot { background: rgba(243,155,90,.18); color: #C9651E; }
+.yl-temp-status.is-comfort { background: rgba(78,139,73,.14); color: #4E8B49; }
 
 .yl-section-head-illustrated {
     display: flex;

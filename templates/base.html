@@ -69,11 +69,14 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='css/ai-floating-chat.css') }}">
     {# 新的视觉主题 —— 放在最后,覆盖旧样式 #}
     <link rel="stylesheet" href="{{ url_for('static', filename='css/yilao.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/yilao-motion.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/yilao-data-fx.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/yilao-data-fx-extra.css') }}">
 
-    <noscript><style>.page-loader{display:none !important;}</style></noscript>
+    <noscript><style>.page-loader{display:none !important;}[data-motion] .yl-fade-up,[data-motion] .yl-section,[data-motion] .narrative-step,[data-motion] [data-animate-in]{opacity:1 !important;transform:none !important;}</style></noscript>
     {% block extra_css %}{% endblock %}
 </head>
-<body class="{% block body_class %}{% endblock %}" data-viewport-tier="wide">
+<body class="{% block body_class %}{% endblock %}" data-viewport-tier="wide" data-motion="m1 m2 m4 m5">
 
     <div class="page-loader" id="pageLoader">
         <div class="loader-spinner"></div>
@@ -519,6 +522,67 @@
 
     <script src="{{ url_for('static', filename='js/clipboard.js') }}"></script>
     <script src="{{ url_for('static', filename='js/ai-floating-chat.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/yilao-motion.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/yilao-data-fx.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/yilao-data-fx-extra.js') }}"></script>
+
+    {% if show_motion_switcher|default(false) or request.args.get('motion_switcher') == '1' %}
+    <button type="button" class="motion-trigger" id="motionTrigger" title="动效模板" aria-label="动效模板">
+        <i class="bi bi-magic"></i>
+    </button>
+    <div class="motion-switcher" id="motionSwitcher" role="dialog" aria-label="动效模板">
+        <div class="ms-head">
+            <strong><i class="bi bi-magic me-1" style="color:var(--yl-orange-500);"></i>动效模板</strong>
+            <button type="button" class="ms-close" id="motionClose" aria-label="关闭"><i class="bi bi-x-lg"></i></button>
+        </div>
+        <div class="ms-row" data-combo="m1 m2 m4 m5"><i class="bi bi-stars"></i><span>推荐组合</span><span class="badge bg-light ms-auto">默认</span></div>
+        <div class="ms-meta">入场、数据脉动、触感反馈、天气氛围</div>
+        <div class="ms-row" data-combo="m1 m4"><i class="bi bi-1-circle"></i><span>轻动效</span></div>
+        <div class="ms-meta">只保留原来的渐入和触感反馈</div>
+        <div class="ms-row" data-combo="m2 m4"><i class="bi bi-2-circle"></i><span>数据脉动</span></div>
+        <div class="ms-meta">高风险日脉冲、hover 解释气泡</div>
+        <div class="ms-row" data-combo="m3 m4"><i class="bi bi-3-circle"></i><span>首页叙事</span></div>
+        <div class="ms-meta">流程卡片分步叙事动画</div>
+        <div class="ms-row" data-combo="m1 m2 m3 m4 m5"><i class="bi bi-asterisk"></i><span>全部叠加</span></div>
+    </div>
+    <script>
+        (function() {
+            const trigger = document.getElementById('motionTrigger');
+            const switcher = document.getElementById('motionSwitcher');
+            const closeButton = document.getElementById('motionClose');
+            if (!trigger || !switcher || !closeButton) return;
+
+            function syncActive() {
+                const current = document.body.getAttribute('data-motion') || '';
+                switcher.querySelectorAll('.ms-row').forEach(function(row) {
+                    row.classList.toggle('active', row.dataset.combo === current);
+                });
+            }
+
+            trigger.addEventListener('click', function() {
+                switcher.classList.add('open');
+                trigger.classList.add('hidden');
+                syncActive();
+            });
+
+            closeButton.addEventListener('click', function() {
+                switcher.classList.remove('open');
+                trigger.classList.remove('hidden');
+            });
+
+            switcher.querySelectorAll('.ms-row').forEach(function(row) {
+                row.addEventListener('click', function() {
+                    if (window.setMotion) {
+                        window.setMotion(row.dataset.combo);
+                    }
+                    syncActive();
+                });
+            });
+
+            syncActive();
+        })();
+    </script>
+    {% endif %}
 
     {% block extra_js %}{% endblock %}
 </body>

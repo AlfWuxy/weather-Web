@@ -9,6 +9,41 @@
         <p>高温天,可以带老人去这些地方避暑。多数免费开放,部分需登记身份证。</p>
     </section>
 
+    {% if outdoor_temp is not none %}
+    <section class="yl-section yl-fade-up yl-fade-up-d1 mb-4 yl-cooling-meter">
+        <div class="row g-4 align-items-center">
+            <div class="col-md-auto">
+                <div class="fx-thermometer" data-fx="thermometer"
+                     data-temp="{{ outdoor_temp }}" data-min="-5" data-max="45">
+                    <div class="fx-thermometer-tube">
+                        <div class="fx-thermometer-mercury"></div>
+                        <div class="fx-thermometer-bulb"></div>
+                    </div>
+                    <div class="fx-thermometer-info">
+                        <div class="v"><span class="num">0</span><span class="unit">°C</span></div>
+                        <div class="k">{{ cooling_weather_location or current_location or '当前位置' }} · 当前室外</div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md">
+                {% if outdoor_temp >= 35 %}
+                    <span class="yl-temp-status is-danger">高温危险</span>
+                    <h4 class="mt-2 mb-1" style="font-size:1.15rem; color:var(--yl-risk-high);">建议优先选择室内纳凉点</h4>
+                    <p class="text-muted mb-0" style="font-size:.9rem;">当前室外温度偏高,高血压、心脑血管病人建议减少户外停留,下方可筛选空调开放点。</p>
+                {% elif outdoor_temp >= 28 %}
+                    <span class="yl-temp-status is-hot">炎热</span>
+                    <h4 class="mt-2 mb-1" style="font-size:1.15rem;">户外注意补水与遮阳</h4>
+                    <p class="text-muted mb-0" style="font-size:.9rem;">外出建议随身携带水壶和遮阳伞,尽量避开午后高温时段。</p>
+                {% else %}
+                    <span class="yl-temp-status is-comfort">凉爽舒适</span>
+                    <h4 class="mt-2 mb-1" style="font-size:1.15rem;">当前适合短时户外活动</h4>
+                    <p class="text-muted mb-0" style="font-size:.9rem;">仍建议关注老人补水和行走安全,根据体感灵活安排出门时间。</p>
+                {% endif %}
+            </div>
+        </div>
+    </section>
+    {% endif %}
+
     <form method="GET" class="yl-section mb-4 yl-fade-up yl-fade-up-d1">
         <div class="row g-3 align-items-end">
             <div class="col-md-5">

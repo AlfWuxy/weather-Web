@@ -1,5 +1,6 @@
 #!/bin/bash
 # 部署脚本 - 将项目部署到远程服务器
+set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -82,7 +83,7 @@ require_env_value() {
 require_env_value "DEPLOY_SERVER" "$SERVER"
 require_env_value "DEPLOY_USER" "$USER"
 
-if [ -z "$SSHPASS" ] && [ -n "$PASSWORD" ]; then
+if [ -z "${SSHPASS:-}" ] && [ -n "$PASSWORD" ]; then
     export SSHPASS="$PASSWORD"
 fi
 
@@ -98,12 +99,12 @@ echo "=== 开始部署 case-weather 项目 ==="
 
 # 使用 expect 执行远程命令的函数
 remote_exec() {
-    if use_sshpass && [ -n "$SSHPASS" ]; then
+    if use_sshpass && [ -n "${SSHPASS:-}" ]; then
         SSHPASS="${SSHPASS:-$PASSWORD}" sshpass -e ssh $SSH_OPTS "$USER@$SERVER" "$1"
         return
     fi
 
-    if use_expect && [ -n "$SSHPASS" ]; then
+    if use_expect && [ -n "${SSHPASS:-}" ]; then
         expect -c "
             set timeout 300
             set password \$env(SSHPASS)
@@ -134,7 +135,7 @@ check_remote_unit_active() {
 
 # 使用 rsync/scp 上传文件的函数
 upload_files() {
-    if use_sshpass && [ -n "$SSHPASS" ]; then
+    if use_sshpass && [ -n "${SSHPASS:-}" ]; then
         SSHPASS="${SSHPASS:-$PASSWORD}" sshpass -e rsync -avz \
             --exclude '__pycache__' \
             --exclude '*.pyc' \
@@ -144,20 +145,30 @@ upload_files() {
             --exclude 'data/research/*.xlsx' \
             --exclude 'data/research/*.xls' \
             --exclude '.git' \
+            --exclude '.claude' \
             --exclude 'venv' \
             --exclude '.venv' \
             --exclude '.venv2' \
             --exclude '.env' \
             --exclude '.env.local' \
+            --exclude '.superpowers' \
+            --exclude '.pytest_cache' \
+            --exclude '.playwright-cli' \
+            --exclude '.vscode' \
+            --exclude '.DS_Store' \
+            --exclude 'backups' \
+            --exclude 'tmp' \
+            --exclude 'output' \
+            --exclude 'blueprints/tools 2.py' \
             -e "ssh $SSH_OPTS" "$LOCAL_DIR/" "$USER@$SERVER:$PROJECT_DIR/"
         return
     fi
 
-    if use_expect && [ -n "$SSHPASS" ]; then
+    if use_expect && [ -n "${SSHPASS:-}" ]; then
         expect -c "
             set timeout 600
             set password \$env(SSHPASS)
-        spawn rsync -avz --exclude '__pycache__' --exclude '*.pyc' --exclude 'instance' --exclude 'storage' --exclude 'health_weather.db' --exclude 'data/research/*.xlsx' --exclude 'data/research/*.xls' --exclude '.git' --exclude 'venv' --exclude '.venv' --exclude '.venv2' --exclude '.env' --exclude '.env.local' -e \"ssh $SSH_OPTS\" $LOCAL_DIR/ $USER@$SERVER:$PROJECT_DIR/
+        spawn rsync -avz --exclude '__pycache__' --exclude '*.pyc' --exclude 'instance' --exclude 'storage' --exclude 'health_weather.db' --exclude 'data/research/*.xlsx' --exclude 'data/research/*.xls' --exclude '.git' --exclude '.claude' --exclude 'venv' --exclude '.venv' --exclude '.venv2' --exclude '.env' --exclude '.env.local' --exclude '.superpowers' --exclude '.pytest_cache' --exclude '.playwright-cli' --exclude '.vscode' --exclude '.DS_Store' --exclude 'backups' --exclude 'tmp' --exclude 'output' --exclude 'blueprints/tools 2.py' -e \"ssh $SSH_OPTS\" $LOCAL_DIR/ $USER@$SERVER:$PROJECT_DIR/
         expect {
                 \"*password:\" {
                     send \"\$password\r\"
@@ -173,7 +184,7 @@ upload_files() {
         return
     fi
 
-    rsync -avz --exclude '__pycache__' --exclude '*.pyc' --exclude 'instance' --exclude 'storage' --exclude 'health_weather.db' --exclude 'data/research/*.xlsx' --exclude 'data/research/*.xls' --exclude '.git' --exclude 'venv' --exclude '.venv' --exclude '.venv2' --exclude '.env' --exclude '.env.local' -e "ssh $SSH_OPTS" "$LOCAL_DIR/" "$USER@$SERVER:$PROJECT_DIR/"
+    rsync -avz --exclude '__pycache__' --exclude '*.pyc' --exclude 'instance' --exclude 'storage' --exclude 'health_weather.db' --exclude 'data/research/*.xlsx' --exclude 'data/research/*.xls' --exclude '.git' --exclude '.claude' --exclude 'venv' --exclude '.venv' --exclude '.venv2' --exclude '.env' --exclude '.env.local' --exclude '.superpowers' --exclude '.pytest_cache' --exclude '.playwright-cli' --exclude '.vscode' --exclude '.DS_Store' --exclude 'backups' --exclude 'tmp' --exclude 'output' --exclude 'blueprints/tools 2.py' -e "ssh $SSH_OPTS" "$LOCAL_DIR/" "$USER@$SERVER:$PROJECT_DIR/"
 }
 
 echo "步骤1: 测试服务器连接..."

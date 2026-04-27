@@ -8,6 +8,8 @@
 {% set risk_level = heat_result.risk_level if heat_result else none %}
 {% set risk_score_class = 'is-risk-high' if risk_score and risk_score >= 70 else 'is-risk-mid' if risk_score and risk_score >= 40 else 'is-risk-low' %}
 {% set hero_temperature = weather.temperature if weather and weather.temperature is not none else none %}
+{% set hero_motion_risk = 'high' if risk_score and risk_score >= 70 else 'cold' if hero_temperature is not none and hero_temperature|float < 10 else '' %}
+{% set hero_motion_weather = 'rain' if weather and weather.weather_condition and '雨' in weather.weather_condition else '' %}
 <div class="yl-dashboard-shell">
 
     {# ============== 今日一屏 ============== #}
@@ -15,13 +17,19 @@
              data-temp-theme="dynamic"
              data-temperature="{{ hero_temperature if hero_temperature is not none else '' }}"
              data-temp-intensity="{{ dashboard_hero_theme.intensity if dashboard_hero_theme else '' }}"
+             data-risk="{{ hero_motion_risk }}"
+             data-weather="{{ hero_motion_weather }}"
              {% if dashboard_hero_theme %}style="{{ dashboard_hero_theme.style }}"{% endif %}>
         <div class="yl-hero-today-grid">
             <div class="yl-hero-copy">
                 <div class="today-label"><i class="bi bi-sun"></i> 家庭照护今日页 · {{ today_date or '今天' }}</div>
                 <div class="today-location"><i class="bi bi-geo-alt"></i> {{ current_location or '未设置' }}</div>
                 <div class="today-temp">
-                    {{ weather.temperature if weather and weather.temperature is not none else '--' }}<span class="unit">°C</span>
+                    {% if weather and weather.temperature is not none %}
+                        <span class="yl-count" data-target="{{ weather.temperature }}" data-decimals="0">{{ weather.temperature }}</span>
+                    {% else %}
+                        --
+                    {% endif %}<span class="unit">°C</span>
                 </div>
                 <div class="today-condition">
                     {{ weather.weather_condition if weather and weather.weather_condition else '--' }}
@@ -29,6 +37,27 @@
                         · 最高 {{ weather.temperature_max }}° / 最低 {{ weather.temperature_min if weather.temperature_min is not none else '--' }}°
                     {% endif %}
                 </div>
+
+                {% if hero_temperature is not none %}
+                <div class="fx-thermo yl-hero-thermo" data-fx="thermo-bar"
+                     data-temp="{{ hero_temperature }}" data-min="-5" data-max="40"
+                     aria-label="今日温度区间">
+                    <div class="fx-thermo-track">
+                        <div class="fx-thermo-divider" style="left:30%;"></div>
+                        <div class="fx-thermo-divider" style="left:55.5%;"></div>
+                        <div class="fx-thermo-divider" style="left:73.3%;"></div>
+                        <div class="fx-thermo-divider" style="left:88.9%;"></div>
+                        <div class="fx-thermo-value">{{ hero_temperature }}°C</div>
+                        <div class="fx-thermo-marker"></div>
+                    </div>
+                    <div class="fx-thermo-labels">
+                        <span>寒冷</span><span>凉爽</span><span>适宜</span><span>炎热</span><span>高温</span>
+                    </div>
+                    <div class="text-center mt-1">
+                        <span class="fx-thermo-zone-tag"></span>
+                    </div>
+                </div>
+                {% endif %}
 
                 <div class="today-meta">
                     <div class="today-meta-item">
@@ -53,7 +82,11 @@
             <div class="yl-hero-side">
                 <div class="risk-dial">
                     <div class="score {{ risk_score_class }}">
-                        {{ risk_score if risk_score is not none else '--' }}
+                        {% if risk_score is not none %}
+                            <span class="yl-count" data-target="{{ risk_score }}" data-decimals="0">{{ risk_score }}</span>
+                        {% else %}
+                            --
+                        {% endif %}
                     </div>
                     <div class="label">今日健康风险</div>
                     <div class="mt-2">
@@ -175,6 +208,46 @@
             </div>
         </section>
 
+        {# 已登记健康指标：只展示真实画像数值，暂无历史时用当前值做定位线 #}
+        <section class="yl-section yl-fade-up yl-fade-up-d2 mb-3 yl-panel yl-panel-vitals">
+            <div class="section-heading compact d-flex justify-content-between align-items-center flex-wrap gap-2">
+                <div>
+                    <span class="section-kicker">照护指标</span>
+                    <h3 style="font-size:1.2rem; margin:4px 0 0;">已登记健康指标</h3>
+                </div>
+                <span class="yl-vital-note">橙线 = 当前登记值定位</span>
+            </div>
+
+            {% if dashboard_metric_cards %}
+            <div class="yl-vitals-grid mt-3">
+                {% for metric in dashboard_metric_cards %}
+                <div class="yl-vital-spark-card">
+                    <div class="yl-vital-meta">
+                        <div>
+                            <span class="yl-vital-label"><i class="bi bi-{{ metric.icon }}" style="color:{{ metric.color }};"></i> {{ metric.label }}</span>
+                            <div class="yl-vital-source">{{ metric.member_name }} · 当前登记</div>
+                        </div>
+                        <strong>{{ metric.current_display }}</strong>
+                    </div>
+                    <div class="fx-spark" data-fx="sparkline"
+                         data-values='{{ metric.values_json }}'
+                         data-band-min="{{ metric.band_min }}" data-band-max="{{ metric.band_max }}"
+                         data-anomaly-idx='{{ metric.anomalies_json }}'></div>
+                </div>
+                {% endfor %}
+            </div>
+            {% else %}
+            <div class="yl-empty-micro mt-3">
+                <i class="bi bi-clipboard2-pulse"></i>
+                <div>
+                    <strong>暂无家庭成员健康指标</strong>
+                    <p>添加血压、心率或血糖后，这里会显示精简动效卡。</p>
+                </div>
+                <a class="btn btn-sm btn-outline-primary" href="{{ url_for('health.family_members') }}">去补充</a>
+            </div>
+            {% endif %}
+        </section>
+
         {# 7 日预测 #}
         <section class="yl-section yl-fade-up yl-fade-up-d3 yl-panel yl-panel-forecast">
             <div class="section-heading compact d-flex justify-content-between align-items-center flex-wrap gap-3 yl-section-head">
@@ -188,20 +261,22 @@
             <div class="yl-forecast-row mt-3">
                 {% if forecast_days %}
                     {% for d in forecast_days %}
-                    <div class="day">
+                    <div class="day" data-risk="{{ d.risk_level or 'low' }}">
                         <div class="dow">{{ d.dow }}</div>
                         <div class="t">{{ d.temp_high }}° / {{ d.temp_low }}°</div>
                         <div class="mt-1" style="font-size:.78rem; color:var(--yl-muted);">{{ d.condition }}</div>
                         <span class="rk {{ d.risk_level or 'low' }}">{{ d.risk_label or '低' }}</span>
+                        <div class="why-tip">风险 {{ d.risk_label or '低' }} · {{ d.condition }} · {{ d.temp_high }}°/{{ d.temp_low }}°</div>
                     </div>
                     {% endfor %}
                 {% else %}
                     {% for d in [('今','32°/25°','多云','mid','中'),('明','34°/26°','晴','high','高'),('三','30°/24°','雷阵雨','mid','中'),('四','29°/23°','小雨','low','低'),('五','31°/24°','多云','low','低'),('六','33°/25°','晴','mid','中'),('日','34°/26°','晴','high','高')] %}
-                    <div class="day">
+                    <div class="day" data-risk="{{ d[3] }}">
                         <div class="dow">{{ d[0] }}</div>
                         <div class="t">{{ d[1] }}</div>
                         <div class="mt-1" style="font-size:.78rem; color:var(--yl-muted);">{{ d[2] }}</div>
                         <span class="rk {{ d[3] }}">{{ d[4] }}</span>
+                        <div class="why-tip">演示风险 {{ d[4] }} · {{ d[2] }} · {{ d[1] }}</div>
                     </div>
                     {% endfor %}
                 {% endif %}

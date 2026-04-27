@@ -31,6 +31,92 @@ def test_forecast_page_loads_chartjs(client, db_session):
     assert '/static/vendor/chartjs/chart.umd.min.js' in body
 
 
+def test_forecast_page_uses_qweather_only_data(client, db_session, monkeypatch):
+    from datetime import timedelta
+
+    from core.time_utils import today_local
+
+    user = _create_user(db_session, username='forecast_qweather_user')
+    _login_as(client, user.id)
+    start = today_local()
+
+    qweather_days = []
+    for idx in range(7):
+        day = start + timedelta(days=idx)
+        qweather_days.append({
+            'date': day.strftime('%Y-%m-%d'),
+            'temperature_max': 24 + idx,
+            'temperature_min': 14 + idx,
+            'temperature_mean': 19 + idx,
+            'condition': '阴' if idx == 1 else '多云',
+            'condition_night': '中雨' if idx == 1 else '多云',
+            'humidity': 72,
+            'wind_speed': 3.2,
+            'data_source': 'QWeather',
+            'is_mock': False,
+        })
+    qweather_days[1]['temperature_max'] = 26
+    qweather_days[1]['temperature_min'] = 18
+
+    captured = {}
+
+    def fake_qweather(location, days=7):
+        captured['location'] = location
+        captured['days'] = days
+        return qweather_days, False, {
+            'source': 'QWeather',
+            'update_time': '2026-04-26T19:43+08:00',
+        }
+
+    class FakeForecastService:
+        def generate_7day_forecast(self, forecast_temps, start_date=None, context=None):
+            captured['start_date'] = start_date
+            forecasts = []
+            for idx, entry in enumerate(forecast_temps):
+                day = start + timedelta(days=idx)
+                forecasts.append({
+                    'date': day.strftime('%Y-%m-%d'),
+                    'probability_high_visits': 12 + idx,
+                    'composite_exposure': {'score': 20 + idx, 'level': '低'},
+                })
+            return forecasts, {'recommendations': []}
+
+    monkeypatch.setattr('blueprints.tools.get_qweather_forecast_with_cache', fake_qweather, raising=False)
+    monkeypatch.setattr('blueprints.tools.get_forecast_service', lambda: FakeForecastService(), raising=False)
+
+    response = client.get('/forecast-7day?location=都昌')
+
+    assert response.status_code == 200
+    body = response.get_data(as_text=True)
+    assert captured['location'] == '都昌'
+    assert captured['days'] == 7
+    assert captured['start_date'] == start
+    assert '26° / 18°' in body
+    assert '来源：和风天气' in body
+    assert '2026-04-26 19:43' in body
+    assert '34° / 26°' not in body
+    assert 'value="都昌"' in body
+
+
+def test_forecast_page_qweather_failure_does_not_render_demo_heat(client, db_session, monkeypatch):
+    user = _create_user(db_session, username='forecast_qweather_fail_user')
+    _login_as(client, user.id)
+
+    monkeypatch.setattr(
+        'blueprints.tools.get_qweather_forecast_with_cache',
+        lambda location, days=7: ([], False, {'error': 'qweather_unavailable'}),
+        raising=False,
+    )
+
+    response = client.get('/forecast-7day?location=都昌')
+
+    assert response.status_code == 200
+    body = response.get_data(as_text=True)
+    assert '和风天气暂不可用' in body
+    assert '34° / 26°' not in body
+    assert '35° / 27°' not in body
+
+
 def test_authenticated_nav_uses_desktop_mega_menu(client, db_session):
     user = _create_user(db_session, username='nav_user')
     _login_as(client, user.id)

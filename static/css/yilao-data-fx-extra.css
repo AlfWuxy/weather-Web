@@ -1,0 +1,559 @@
+/* ========================================================================
+   yilao-data-fx-extra.css
+   扩展数据动效 —— 在 yilao-data-fx.css 之后引入,补充 6 类新动效
+   D: data-fx="thermo-bar"   横向温度计条(用户主页 + cooling)
+   E: data-fx="trend-line"   折线图绘制(forecast_7day)
+   F: data-fx="shap-bar"     SHAP 双向贡献条(chronic_risk + ml_prediction)
+   G: data-fx="sparkline"    心率/血压历史 sparkline(user / detail)
+   H: data-fx="alert-list"   stagger 滑入 + 呼吸灯(doctor_dashboard)
+   I: data-fx="radar"        雷达图绘制(health_assessment)
+   J: data-fx="thermometer"  温度计水银柱(cooling 室外温度)
+   ======================================================================== */
+
+/* ===================== D · 横向温度计条 ===================== */
+
+.fx-thermo {
+    position: relative;
+    width: 100%;
+    margin: 14px 0 8px;
+    user-select: none;
+}
+.fx-thermo-track {
+    position: relative;
+    height: 16px;
+    border-radius: 999px;
+    background: linear-gradient(
+        90deg,
+        #6BA8E0 0%,
+        #9DC798 22%,
+        #F4D58D 50%,
+        #F39B5A 75%,
+        #C7472E 100%
+    );
+    box-shadow: inset 0 1px 3px rgba(0,0,0,.08);
+    overflow: visible;
+}
+.fx-thermo-zones {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    pointer-events: none;
+}
+.fx-thermo-divider {
+    position: absolute;
+    top: -2px;
+    bottom: -2px;
+    width: 2px;
+    background: rgba(255,255,255,.7);
+}
+.fx-thermo-marker {
+    position: absolute;
+    top: 50%;
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+    background: #fff;
+    border: 3px solid var(--fx-orange-500);
+    box-shadow: 0 3px 10px rgba(0,0,0,.18);
+    transform: translate(-50%, -50%);
+    transition: left 1.4s cubic-bezier(.34,1.4,.64,1), border-color .5s;
+    z-index: 3;
+}
+.fx-thermo-marker::after {
+    content: '';
+    position: absolute;
+    inset: -6px;
+    border-radius: 50%;
+    border: 2px solid var(--fx-orange-500);
+    opacity: 0;
+    animation: fxThermoPulse 1.6s ease-out infinite;
+}
+@keyframes fxThermoPulse {
+    0% { transform: scale(.8); opacity: .8; }
+    100% { transform: scale(1.6); opacity: 0; }
+}
+.fx-thermo-marker[data-zone="cold"] { border-color: #4A89C4; }
+.fx-thermo-marker[data-zone="cold"]::after { border-color: #4A89C4; }
+.fx-thermo-marker[data-zone="cool"] { border-color: #4E8B49; }
+.fx-thermo-marker[data-zone="cool"]::after { border-color: #4E8B49; }
+.fx-thermo-marker[data-zone="warm"] { border-color: #E8A23C; }
+.fx-thermo-marker[data-zone="warm"]::after { border-color: #E8A23C; }
+.fx-thermo-marker[data-zone="hot"]  { border-color: #F39B5A; }
+.fx-thermo-marker[data-zone="hot"]::after  { border-color: #F39B5A; }
+.fx-thermo-marker[data-zone="danger"] { border-color: #C7472E; }
+.fx-thermo-marker[data-zone="danger"]::after { border-color: #C7472E; animation-duration: 1s; }
+
+.fx-thermo-value {
+    position: absolute;
+    transform: translate(-50%, -100%);
+    background: var(--fx-ink);
+    color: #fff;
+    font-size: .8rem;
+    font-weight: 600;
+    padding: 3px 9px;
+    border-radius: 6px;
+    margin-top: -10px;
+    white-space: nowrap;
+    transition: left 1.4s cubic-bezier(.34,1.4,.64,1);
+    z-index: 2;
+}
+.fx-thermo-value::after {
+    content: '';
+    position: absolute;
+    bottom: -4px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 0; height: 0;
+    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
+    border-top: 4px solid var(--fx-ink);
+}
+.fx-thermo-labels {
+    display: flex;
+    justify-content: space-between;
+    margin-top: 8px;
+    font-size: .72rem;
+    color: var(--fx-muted);
+}
+.fx-thermo-labels span {
+    flex: 1;
+    text-align: center;
+}
+.fx-thermo-zone-tag {
+    display: inline-block;
+    padding: 4px 10px;
+    border-radius: 999px;
+    font-size: .78rem;
+    font-weight: 600;
+    margin-top: 4px;
+}
+.fx-thermo-zone-tag[data-zone="cold"] { background: rgba(74,137,196,.14); color: #4A89C4; }
+.fx-thermo-zone-tag[data-zone="cool"] { background: rgba(78,139,73,.14); color: #4E8B49; }
+.fx-thermo-zone-tag[data-zone="warm"] { background: rgba(232,162,60,.14); color: #B07820; }
+.fx-thermo-zone-tag[data-zone="hot"]  { background: rgba(243,155,90,.18); color: #C9651E; }
+.fx-thermo-zone-tag[data-zone="danger"] { background: rgba(199,71,46,.14); color: #C7472E; }
+
+/* ===================== E · 折线图绘制 ===================== */
+
+.fx-trend {
+    width: 100%;
+    height: 280px;
+    position: relative;
+}
+.fx-trend svg {
+    width: 100%;
+    height: 100%;
+    overflow: visible;
+}
+.fx-trend-grid line {
+    stroke: var(--fx-line);
+    stroke-width: 1;
+    stroke-dasharray: 2 4;
+}
+.fx-trend-area {
+    fill: rgba(238,126,45,.12);
+    opacity: 0;
+    transition: opacity 1s ease 1s;
+}
+.fx-trend-area.fx-shown { opacity: 1; }
+
+.fx-trend-line {
+    fill: none;
+    stroke: var(--fx-orange-500);
+    stroke-width: 3;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    stroke-dasharray: 1500;
+    stroke-dashoffset: 1500;
+    transition: stroke-dashoffset 1.8s cubic-bezier(.65,0,.35,1);
+}
+.fx-trend-line.fx-shown { stroke-dashoffset: 0; }
+
+.fx-trend-line.temp {
+    stroke: #C7472E;
+    stroke-dasharray: 1500;
+    stroke-dashoffset: 1500;
+}
+
+.fx-trend-dot {
+    fill: #fff;
+    stroke: var(--fx-orange-500);
+    stroke-width: 2.5;
+    opacity: 0;
+    transform: scale(0);
+    transform-origin: center;
+    transform-box: fill-box;
+    transition: opacity .4s, transform .4s cubic-bezier(.34,1.56,.64,1);
+}
+.fx-trend-dot.fx-shown {
+    opacity: 1;
+    transform: scale(1);
+}
+.fx-trend-dot[data-level="high"] { stroke: #C7472E; }
+.fx-trend-dot[data-level="mid"]  { stroke: #E8A23C; }
+.fx-trend-dot[data-level="low"]  { stroke: #4E8B49; }
+
+.fx-trend-label {
+    font-size: 11px;
+    fill: var(--fx-muted);
+    text-anchor: middle;
+}
+.fx-trend-value {
+    font-size: 12px;
+    font-weight: 600;
+    fill: var(--fx-ink);
+    text-anchor: middle;
+    opacity: 0;
+    transition: opacity .4s;
+}
+.fx-trend-value.fx-shown { opacity: 1; }
+
+.fx-trend-legend {
+    display: flex;
+    gap: 20px;
+    margin-bottom: 12px;
+    font-size: .82rem;
+    color: var(--fx-ink-soft);
+}
+.fx-trend-legend .swatch {
+    display: inline-block;
+    width: 18px;
+    height: 3px;
+    margin-right: 6px;
+    vertical-align: middle;
+    border-radius: 2px;
+}
+
+/* ===================== F · SHAP 双向贡献条 ===================== */
+
+.fx-shap-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+.fx-shap-row {
+    display: grid;
+    grid-template-columns: 130px 1fr 60px;
+    align-items: center;
+    gap: 12px;
+    font-size: .85rem;
+}
+.fx-shap-row .feat {
+    color: var(--fx-ink-soft);
+    text-align: right;
+    font-weight: 500;
+}
+.fx-shap-row .val {
+    font-variant-numeric: tabular-nums;
+    font-weight: 600;
+    font-size: .82rem;
+}
+.fx-shap-row .val.pos { color: var(--fx-danger); }
+.fx-shap-row .val.neg { color: var(--fx-success); }
+
+.fx-shap-bar-wrap {
+    position: relative;
+    height: 22px;
+    background: var(--fx-line);
+    border-radius: 6px;
+    overflow: hidden;
+}
+.fx-shap-axis {
+    position: absolute;
+    top: 0; bottom: 0;
+    left: 50%;
+    width: 2px;
+    background: rgba(140,123,110,.4);
+    z-index: 2;
+}
+.fx-shap-bar {
+    position: absolute;
+    top: 4px; bottom: 4px;
+    border-radius: 4px;
+    transform-origin: left center;
+    transform: scaleX(0);
+    opacity: 0;
+    transition: transform 1s cubic-bezier(.4,1.2,.4,1), opacity .4s;
+}
+.fx-shap-bar.pos {
+    left: 50%;
+    background: linear-gradient(90deg, rgba(199,71,46,.4), var(--fx-danger));
+}
+.fx-shap-bar.neg {
+    right: 50%;
+    background: linear-gradient(270deg, rgba(78,139,73,.4), var(--fx-success));
+    transform-origin: right center;
+}
+.fx-shap-bar.fx-shown {
+    transform: scaleX(1);
+    opacity: 1;
+}
+
+/* ===================== G · Sparkline ===================== */
+
+.fx-spark {
+    width: 100%;
+    height: 70px;
+    position: relative;
+}
+.fx-spark svg {
+    width: 100%;
+    height: 100%;
+    overflow: visible;
+}
+.fx-spark-line {
+    fill: none;
+    stroke: var(--fx-orange-500);
+    stroke-width: 2.2;
+    stroke-linecap: round;
+    stroke-dasharray: 800;
+    stroke-dashoffset: 800;
+    transition: stroke-dashoffset 1.4s cubic-bezier(.65,0,.35,1);
+}
+.fx-spark-line.fx-shown { stroke-dashoffset: 0; }
+
+.fx-spark-area {
+    fill: rgba(238,126,45,.12);
+    opacity: 0;
+    transition: opacity .8s ease .8s;
+}
+.fx-spark-area.fx-shown { opacity: 1; }
+
+.fx-spark-band {
+    fill: rgba(78,139,73,.08);
+    stroke: rgba(78,139,73,.3);
+    stroke-width: 1;
+    stroke-dasharray: 2 3;
+}
+.fx-spark-anomaly {
+    fill: var(--fx-danger);
+    transform-origin: center;
+    transform-box: fill-box;
+    animation: fxAnomalyPulse 1.4s ease-in-out infinite;
+}
+@keyframes fxAnomalyPulse {
+    0%, 100% { transform: scale(1); opacity: .9; }
+    50% { transform: scale(1.5); opacity: .4; }
+}
+.fx-spark-meta {
+    display: flex;
+    justify-content: space-between;
+    font-size: .72rem;
+    color: var(--fx-muted);
+    margin-top: 2px;
+}
+.fx-spark-meta .cur {
+    color: var(--fx-ink);
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+}
+
+/* ===================== H · Alert List Stagger + 呼吸灯 ===================== */
+
+.fx-alert-item {
+    opacity: 0;
+    transform: translateX(20px);
+    animation: fxAlertSlide .5s cubic-bezier(.34,1.4,.64,1) forwards;
+}
+@keyframes fxAlertSlide {
+    from { opacity: 0; transform: translateX(20px); }
+    to   { opacity: 1; transform: translateX(0); }
+}
+
+.fx-alert-pulse {
+    position: relative;
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--fx-danger);
+    flex-shrink: 0;
+}
+.fx-alert-pulse::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: 50%;
+    background: var(--fx-danger);
+    opacity: .5;
+    animation: fxAlertBreath 1.6s ease-out infinite;
+}
+@keyframes fxAlertBreath {
+    0% { transform: scale(1); opacity: .5; }
+    100% { transform: scale(2.8); opacity: 0; }
+}
+.fx-alert-pulse.warn { background: var(--fx-warn); }
+.fx-alert-pulse.warn::before { background: var(--fx-warn); }
+
+.fx-alert-resolved {
+    opacity: .55;
+    transition: opacity .6s;
+}
+.fx-alert-resolved .fx-alert-pulse::before { animation: none; }
+
+/* ===================== I · 雷达图绘制 ===================== */
+
+.fx-radar {
+    width: 100%;
+    max-width: 360px;
+    margin: 0 auto;
+}
+.fx-radar svg {
+    width: 100%;
+    overflow: visible;
+}
+.fx-radar-grid {
+    fill: none;
+    stroke: var(--fx-line);
+    stroke-width: 1;
+}
+.fx-radar-axis {
+    stroke: var(--fx-line);
+    stroke-width: 1;
+}
+.fx-radar-prev {
+    fill: rgba(140,123,110,.1);
+    stroke: rgba(140,123,110,.5);
+    stroke-width: 1.5;
+    stroke-dasharray: 4 3;
+    opacity: 0;
+    transition: opacity .8s ease .4s;
+}
+.fx-radar-prev.fx-shown { opacity: 1; }
+
+.fx-radar-shape {
+    fill: rgba(238,126,45,.22);
+    stroke: var(--fx-orange-500);
+    stroke-width: 2.4;
+    stroke-linejoin: round;
+    transform-origin: center;
+    transform-box: fill-box;
+    transform: scale(0);
+    opacity: 0;
+    transition: transform 1.2s cubic-bezier(.34,1.4,.64,1), opacity .6s;
+}
+.fx-radar-shape.fx-shown {
+    transform: scale(1);
+    opacity: 1;
+}
+.fx-radar-vertex {
+    fill: var(--fx-orange-500);
+    opacity: 0;
+    transition: opacity .4s;
+}
+.fx-radar-vertex.fx-shown { opacity: 1; }
+
+.fx-radar-label {
+    font-size: 12px;
+    font-weight: 600;
+    fill: var(--fx-ink);
+    text-anchor: middle;
+}
+.fx-radar-score {
+    font-size: 10px;
+    fill: var(--fx-muted);
+    text-anchor: middle;
+}
+
+/* ===================== J · 温度计水银柱 ===================== */
+
+.fx-thermometer {
+    display: inline-flex;
+    align-items: flex-end;
+    gap: 18px;
+    padding: 16px 20px;
+    background: #fff;
+    border: 1px solid var(--fx-line);
+    border-radius: 14px;
+}
+.fx-thermometer-tube {
+    position: relative;
+    width: 22px;
+    height: 140px;
+    background: var(--fx-line);
+    border-radius: 11px 11px 5px 5px;
+    overflow: hidden;
+    border: 1px solid rgba(0,0,0,.05);
+}
+.fx-thermometer-mercury {
+    position: absolute;
+    left: 0; right: 0; bottom: 0;
+    height: 0;
+    background: linear-gradient(180deg, #F39B5A, var(--fx-orange-500));
+    border-radius: 11px 11px 5px 5px;
+    transition: height 1.6s cubic-bezier(.4,1.2,.4,1), background 1s;
+}
+.fx-thermometer-mercury[data-zone="cold"]   { background: linear-gradient(180deg, #93C2EA, #4A89C4); }
+.fx-thermometer-mercury[data-zone="cool"]   { background: linear-gradient(180deg, #B5D8B0, #4E8B49); }
+.fx-thermometer-mercury[data-zone="warm"]   { background: linear-gradient(180deg, #F4D58D, #E8A23C); }
+.fx-thermometer-mercury[data-zone="hot"]    { background: linear-gradient(180deg, #F39B5A, var(--fx-orange-500)); }
+.fx-thermometer-mercury[data-zone="danger"] { background: linear-gradient(180deg, #ED7252, var(--fx-danger)); }
+
+.fx-thermometer-bulb {
+    position: absolute;
+    left: 50%;
+    bottom: -16px;
+    transform: translateX(-50%);
+    width: 38px;
+    height: 38px;
+    border-radius: 50%;
+    background: var(--fx-orange-500);
+    border: 1px solid rgba(0,0,0,.05);
+    transition: background 1s;
+}
+.fx-thermometer-bulb[data-zone="cold"]   { background: #4A89C4; }
+.fx-thermometer-bulb[data-zone="cool"]   { background: #4E8B49; }
+.fx-thermometer-bulb[data-zone="warm"]   { background: #E8A23C; }
+.fx-thermometer-bulb[data-zone="hot"]    { background: var(--fx-orange-500); }
+.fx-thermometer-bulb[data-zone="danger"] { background: var(--fx-danger); }
+
+.fx-thermometer-info {
+    padding-bottom: 16px;
+}
+.fx-thermometer-info .v {
+    font-size: 2.3rem;
+    font-weight: 700;
+    color: var(--fx-ink);
+    line-height: 1;
+    font-variant-numeric: tabular-nums;
+}
+.fx-thermometer-info .v .unit {
+    font-size: 1rem;
+    color: var(--fx-muted);
+    margin-left: 4px;
+}
+.fx-thermometer-info .k {
+    font-size: .8rem;
+    color: var(--fx-muted);
+    margin-top: 6px;
+}
+
+/* 危险区"热浪波纹" */
+.fx-thermometer.danger-active .fx-thermometer-tube::before {
+    content: '';
+    position: absolute;
+    top: -16px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 40px;
+    height: 24px;
+    background: radial-gradient(ellipse at center, rgba(199,71,46,.4), transparent 60%);
+    animation: fxHeatWave 1.8s ease-in-out infinite;
+}
+@keyframes fxHeatWave {
+    0%, 100% { transform: translateX(-50%) translateY(0) scale(1); opacity: .7; }
+    50% { transform: translateX(-50%) translateY(-8px) scale(1.15); opacity: .3; }
+}
+
+/* prefers-reduced-motion */
+@media (prefers-reduced-motion: reduce) {
+    .fx-thermo-marker::after,
+    .fx-alert-pulse::before,
+    .fx-spark-anomaly,
+    .fx-thermometer.danger-active .fx-thermometer-tube::before {
+        animation: none !important;
+    }
+    .fx-trend-line, .fx-spark-line { transition: none !important; stroke-dashoffset: 0 !important; }
+    .fx-shap-bar, .fx-radar-shape { transition: none !important; transform: scaleX(1) scale(1) !important; opacity: 1 !important; }
+}

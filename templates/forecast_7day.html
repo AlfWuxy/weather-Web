@@ -32,20 +32,28 @@
         </div>
     </form>
 
+    <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3 yl-fade-up yl-fade-up-d2">
+        <div class="text-muted" style="font-size:.9rem;">
+            来源：{{ forecast_meta.source_label or '和风天气' }}
+            {% if forecast_meta.update_time_label %} · 更新时间：{{ forecast_meta.update_time_label }}{% endif %}
+            {% if forecast_meta.from_cache %} · 缓存{% endif %}
+        </div>
+    </div>
+
+    {% if forecast_error %}
+    <div class="alert alert-warning yl-fade-up yl-fade-up-d2" role="alert">
+        <i class="bi bi-exclamation-triangle me-1"></i>{{ forecast_error }}
+    </div>
+    {% endif %}
+
     {# 7 天横向卡 #}
+    {% if forecast_days %}
     <div class="row g-3 mb-4 yl-fade-up yl-fade-up-d2">
-        {% set default_days = [
-            {'dow':'今','date':'今天','temp_high':32,'temp_low':25,'condition':'多云','risk_level':'mid','risk_score':55,'risk_label':'中'},
-            {'dow':'明','date':'明天','temp_high':34,'temp_low':26,'condition':'晴','risk_level':'high','risk_score':72,'risk_label':'高'},
-            {'dow':'三','date':'周三','temp_high':30,'temp_low':24,'condition':'雷阵雨','risk_level':'mid','risk_score':48,'risk_label':'中'},
-            {'dow':'四','date':'周四','temp_high':29,'temp_low':23,'condition':'小雨','risk_level':'low','risk_score':32,'risk_label':'低'},
-            {'dow':'五','date':'周五','temp_high':31,'temp_low':24,'condition':'多云','risk_level':'low','risk_score':35,'risk_label':'低'},
-            {'dow':'六','date':'周六','temp_high':33,'temp_low':25,'condition':'晴','risk_level':'mid','risk_score':52,'risk_label':'中'},
-            {'dow':'日','date':'周日','temp_high':35,'temp_low':27,'condition':'晴','risk_level':'high','risk_score':78,'risk_label':'高'}
-        ] %}
-        {% for d in (forecast_days or default_days) %}
+        {% for d in forecast_days %}
         <div class="col">
-            <div class="card h-100 text-center" {% if d.risk_level == 'high' %}style="border:1px solid #F0C4B9; background:var(--yl-danger-50);"{% elif d.risk_level == 'mid' %}style="border:1px solid #F1DFB1; background:var(--yl-warn-50);"{% endif %}>
+            <div class="card h-100 text-center day"
+                 data-risk="{{ d.risk_level or 'low' }}"
+                 {% if d.risk_level == 'high' %}style="border:1px solid #F0C4B9; background:var(--yl-danger-50);"{% elif d.risk_level == 'mid' %}style="border:1px solid #F1DFB1; background:var(--yl-warn-50);"{% endif %}>
                 <div class="card-body p-3">
                     <div class="text-muted" style="font-size:.82rem;">{{ d.date }}</div>
                     <div class="fw-semibold mt-1">{{ d.dow }}</div>
@@ -53,13 +61,22 @@
                     <div style="font-size:1rem; font-weight:600;">{{ d.temp_high }}° / {{ d.temp_low }}°</div>
                     <div class="text-muted" style="font-size:.78rem;">{{ d.condition }}</div>
                     <div class="mt-2">
-                        <span class="badge {% if d.risk_level=='high' %}bg-danger-subtle{% elif d.risk_level=='mid' %}bg-warning-subtle{% else %}bg-success-subtle{% endif %}">风险 {{ d.risk_score }}</span>
+                        <span class="badge risk-badge {% if d.risk_level=='high' %}bg-danger-subtle{% elif d.risk_level=='mid' %}bg-warning-subtle{% else %}bg-success-subtle{% endif %}"
+                              data-detail="温度 {{ d.temp_high }}°/{{ d.temp_low }}° · {{ d.condition }}">风险 {{ d.risk_score }}</span>
                     </div>
+                    <div class="why-tip">风险 {{ d.risk_score }} · {{ d.condition }} · {{ d.temp_high }}°/{{ d.temp_low }}°</div>
                 </div>
             </div>
         </div>
         {% endfor %}
     </div>
+    {% else %}
+    <section class="yl-section text-center yl-fade-up yl-fade-up-d2">
+        <div style="font-size:2rem; color:var(--yl-orange-500);"><i class="bi bi-cloud-slash"></i></div>
+        <h4 class="mt-2" style="font-size:1.05rem;">暂无 7 天预报</h4>
+        <p class="text-muted mb-0">当前页面只使用和风天气。接口恢复后会自动显示真实高低温。</p>
+    </section>
+    {% endif %}
 
     <div class="row g-4 mb-4">
         <div class="col-lg-8">
@@ -73,14 +90,19 @@
                 <h4 style="font-size:1.1rem;">本周高风险日</h4>
                 <p class="text-muted" style="font-size:.9rem;">以下日期风险评分 ≥ 70,建议重点准备。</p>
                 <ul class="list-unstyled mt-3 mb-0">
-                    {% for d in (forecast_days or default_days) %}
+                    {% set high_risk_count = namespace(value=0) %}
+                    {% for d in forecast_days %}
                         {% if (d.risk_score or 0) >= 70 %}
+                        {% set high_risk_count.value = high_risk_count.value + 1 %}
                         <li class="d-flex justify-content-between py-2 border-bottom">
                             <span><strong>{{ d.date }}</strong> · {{ d.condition }}</span>
                             <span class="badge bg-danger-subtle">{{ d.risk_score }}</span>
                         </li>
                         {% endif %}
                     {% endfor %}
+                    {% if high_risk_count.value == 0 %}
+                    <li class="text-muted py-2">本周暂无高风险日。</li>
+                    {% endif %}
                 </ul>
             </section>
         </div>
@@ -111,9 +133,10 @@
 document.addEventListener('DOMContentLoaded', function() {
     const ctx = document.getElementById('forecastChart');
     if (!ctx || typeof Chart === 'undefined') return;
-    const labels = {{ ((forecast_days or default_days) | map(attribute='date') | list)|tojson }};
-    const scores = {{ ((forecast_days or default_days) | map(attribute='risk_score') | list)|tojson }};
-    const highs  = {{ ((forecast_days or default_days) | map(attribute='temp_high') | list)|tojson }};
+    const labels = {{ ((forecast_days or []) | map(attribute='date') | list)|tojson }};
+    const scores = {{ ((forecast_days or []) | map(attribute='risk_score') | list)|tojson }};
+    const highs  = {{ ((forecast_days or []) | map(attribute='temp_high') | list)|tojson }};
+    if (!labels.length) return;
     new Chart(ctx, {
         type: 'line',
         data: { labels, datasets: [

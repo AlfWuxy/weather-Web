@@ -17,7 +17,7 @@
     {# ============== Hero ============== #}
     <section class="yl-hero yl-fade-up">
         <span class="hero-kicker"><i class="bi bi-broadcast-pin"></i> 给异地子女的一条线</span>
-        <h1>把天气预警,变成今天就能做的那一句话。</h1>
+        <h1 data-words>把天气预警,变成今天就能做的那一句话。</h1>
         <p class="hero-lead">
             气压骤降、高温连日、寒潮来袭——这些对老人都是风险。我们把它翻译成一句"今天别出门"或"记得多喝水",
             子女能直接转给家里人,不再只是看天气,而是知道下一步。
@@ -55,7 +55,7 @@
             ('04', '记录后续反馈', '是否提醒、是否执行,都能沉淀下来做后续优化。'),
         ] %}
         <div class="col-md-6 col-lg-3">
-            <div class="card h-100">
+            <div class="card h-100 narrative-step yl-fade-up" data-step="{{ step[0] }}">
                 <div class="card-body">
                     <div style="font-size:.8rem; color:var(--yl-orange-600); font-weight:700; letter-spacing:.1em;">{{ step[0] }}</div>
                     <h3 class="mt-2" style="font-size:1.1rem;">{{ step[1] }}</h3>

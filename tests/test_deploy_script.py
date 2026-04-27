@@ -37,6 +37,18 @@ def test_deploy_script_sets_precompute_python_path():
     assert 'Environment=VENV_PY=$VENV_DIR/bin/python' in content
 
 
+def test_deploy_script_excludes_local_design_drafts():
+    content = _load_deploy_script()
+
+    assert "--exclude '.claude'" in content
+    assert "--exclude '.superpowers'" in content
+    assert "--exclude '.pytest_cache'" in content
+    assert "--exclude 'backups'" in content
+    assert "--exclude 'output'" in content
+    assert "--exclude 'tmp'" in content
+    assert "--exclude 'blueprints/tools 2.py'" in content
+
+
 def test_precompute_script_respects_deploy_venv_dir():
     content = _load_precompute_script()
 
