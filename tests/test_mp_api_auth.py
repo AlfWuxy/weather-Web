@@ -46,3 +46,59 @@ def test_mp_api_me_and_patch(app, client, db_session):
 
     resp3 = client.get("/mp/api/v1/me", headers={"Authorization": f"Bearer {plain}"})
     assert resp3.status_code == 401
+
+
+def test_mp_api_rate_limit_key_uses_bearer_token(app):
+    from blueprints.mp_api import _mp_rate_limit_key
+
+    with app.test_request_context("/mp/api/v1/me", headers={"Authorization": "Bearer token-a"}):
+        key_a = _mp_rate_limit_key()
+
+    with app.test_request_context("/mp/api/v1/me", headers={"Authorization": "Bearer token-b"}):
+        key_b = _mp_rate_limit_key()
+
+    assert key_a.startswith("mp-token:")
+    assert key_b.startswith("mp-token:")
+    assert key_a != key_b
+
+
+def test_mp_api_events_rejects_invalid_event_type(app, client, db_session):
+    from core.db_models import User
+    from core.usage import create_api_token
+
+    with app.app_context():
+        user = User(username="mp_event_user", role="user")
+        user.set_password("pw123456")
+        db_session.add(user)
+        db_session.commit()
+        plain = create_api_token(user.id, name="events")
+
+    resp = client.post(
+        "/mp/api/v1/events",
+        json={"event_type": "free_form_noise"},
+        headers={"Authorization": f"Bearer {plain}"},
+    )
+
+    assert resp.status_code == 400
+    assert resp.get_json()["error"] == "invalid_event_type"
+
+
+def test_mp_api_events_rejects_large_meta(app, client, db_session):
+    from core.db_models import User
+    from core.usage import create_api_token
+
+    with app.app_context():
+        user = User(username="mp_event_meta_user", role="user")
+        user.set_password("pw123456")
+        db_session.add(user)
+        db_session.commit()
+        plain = create_api_token(user.id, name="events")
+
+    resp = client.post(
+        "/mp/api/v1/events",
+        json={"event_type": "template_view", "meta": {"payload": "x" * 3000}},
+        headers={"Authorization": f"Bearer {plain}"},
+    )
+
+    assert resp.status_code == 400
+    assert resp.get_json()["error"] == "meta_too_large"

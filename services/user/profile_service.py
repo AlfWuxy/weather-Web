@@ -2,6 +2,7 @@
 """Profile and assessment routes."""
 import json
 import logging
+from urllib.parse import urlparse
 
 from flask import current_app, flash, redirect, render_template, request, session, url_for
 from flask_login import current_user
@@ -24,6 +25,24 @@ from utils.validators import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _safe_referrer_or_dashboard():
+    referrer = request.referrer or ''
+    fallback = url_for('user.user_dashboard')
+    if not referrer or '\r' in referrer or '\n' in referrer:
+        return fallback
+    parsed = urlparse(referrer)
+    if parsed.scheme or parsed.netloc:
+        if parsed.scheme not in ('http', 'https') or parsed.netloc != request.host:
+            return fallback
+        path = parsed.path or fallback
+        if parsed.query:
+            path = f'{path}?{parsed.query}'
+        return path
+    if not referrer.startswith('/') or referrer.startswith(("//", "\\\\", "/\\")):
+        return fallback
+    return referrer
 
 
 def health_assessment():
@@ -284,7 +303,7 @@ def update_location():
     location = sanitize_input(request.form.get('location'), max_length=100)
     if not location:
         flash('请填写有效的地点', 'error')
-        return redirect(request.referrer or url_for('user.user_dashboard'))
+        return redirect(_safe_referrer_or_dashboard())
 
     normalized = normalize_location_name(location)
     if normalized != location:
@@ -299,4 +318,4 @@ def update_location():
         db.session.commit()
 
     flash(f'定位已更新为 {normalized}', 'success')
-    return redirect(request.referrer or url_for('user.user_dashboard'))
+    return redirect(_safe_referrer_or_dashboard())

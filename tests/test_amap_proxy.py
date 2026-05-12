@@ -37,3 +37,26 @@ def test_amap_proxy_rejects_invalid_path(client, app):
 
     response = client.get('/_AMapService/../../etc/passwd')
     assert response.status_code == 404
+
+
+def test_amap_proxy_rejects_unlisted_path(client, app):
+    with app.app_context():
+        app.config['AMAP_SECURITY_JS_CODE'] = 'server-side-security-code-123456'
+
+    response = client.get('/_AMapService/v3/weather/weatherInfo?city=110000')
+    assert response.status_code == 404
+
+
+def test_amap_proxy_rejects_oversized_response(client, app, monkeypatch):
+    class FakeResp:
+        status_code = 200
+        headers = {'Content-Type': 'application/json; charset=utf-8'}
+        content = b'{' + (b'"x":' + b'"a"' * (256 * 1024)) + b'}'
+
+    monkeypatch.setattr('blueprints.public.requests.get', lambda *args, **kwargs: FakeResp())
+
+    with app.app_context():
+        app.config['AMAP_SECURITY_JS_CODE'] = 'server-side-security-code-123456'
+
+    response = client.get('/_AMapService/v3/place/text?key=frontend-visible-key&keywords=test')
+    assert response.status_code == 502

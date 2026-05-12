@@ -130,7 +130,7 @@ def _personalized_care_notes(chronic_diseases):
     return notes
 
 
-def _build_caregiver_message(pair, alert_kind=None, weather_data=None, member=None):
+def _build_caregiver_message(pair, alert_kind=None, weather_data=None, member=None, action_link=None):
     """Build a one-click message the caregiver can forward to the elder."""
     weather_data = weather_data or {}
     location = (getattr(pair, 'location_query', None) or getattr(pair, 'community_code', None) or '').strip()
@@ -155,7 +155,8 @@ def _build_caregiver_message(pair, alert_kind=None, weather_data=None, member=No
         tmax_s = None
         tmin_s = None
 
-    action_link = url_for('public.elder_entry', short_code=pair.short_code, _external=True)
+    if not action_link:
+        action_link = url_for('public.elder_entry', short_code=pair.short_code, _external=True)
 
     lines = []
     if alert_kind == 'cold':

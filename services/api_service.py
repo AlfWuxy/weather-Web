@@ -33,7 +33,7 @@ INPUT_EXCEPTIONS = (ValueError, KeyError, TypeError, json.JSONDecodeError)
 SERVICE_EXCEPTIONS = (RuntimeError, FileNotFoundError, OSError, TimeoutError)
 API_EXCEPTIONS = INPUT_EXCEPTIONS + SERVICE_EXCEPTIONS
 
-_PILOT_EVENT_TYPES = {
+PILOT_EVENT_TYPES = {
     'pair_created',
     'elder_profile_created',
     'elder_profile_updated',
@@ -47,6 +47,7 @@ _PILOT_EVENT_TYPES = {
     'checkin_confirmed',
     'wxoa_land',
 }
+_PILOT_EVENT_TYPES = PILOT_EVENT_TYPES
 
 
 def _handle_api_error(exc, context_msg, include_details=None):

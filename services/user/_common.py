@@ -3,11 +3,11 @@
 import secrets
 from datetime import timedelta
 
-from flask import flash
+from flask import current_app, flash, has_app_context, url_for
 from flask_login import current_user
 
 from core.extensions import db
-from core.db_models import Pair, PairLink
+from core.db_models import Pair, PairActionToken, PairLink
 from core.security import hash_pair_token, hash_short_code
 from core.time_utils import utcnow
 from utils.validators import sanitize_input
@@ -29,6 +29,8 @@ RELAY_STAGE_LABELS = {
 }
 AUTO_ESCALATE_AFTER = timedelta(hours=2)
 AUTO_ESCALATE_STAGE = 'backup'
+DEFAULT_ACTION_TOKEN_TTL_DAYS = 90
+DEFAULT_SHORT_CODE_TTL_DAYS = 90
 
 CARE_ACTION_OPTIONS = [
     {'id': 'remind', 'label': '提醒'},
@@ -112,6 +114,24 @@ def _generate_elder_code():
     raise RuntimeError('老人码生成失败，请重试')
 
 
+def _configured_ttl_days(key, default):
+    if not has_app_context():
+        return default
+    try:
+        value = int(current_app.config.get(key, default))
+    except (TypeError, ValueError):
+        return default
+    return max(1, value)
+
+
+def _short_code_expires_at():
+    return utcnow() + timedelta(days=_configured_ttl_days('SHORT_CODE_TTL_DAYS', DEFAULT_SHORT_CODE_TTL_DAYS))
+
+
+def _action_token_expires_at():
+    return utcnow() + timedelta(days=_configured_ttl_days('PAIR_ACTION_TOKEN_TTL_DAYS', DEFAULT_ACTION_TOKEN_TTL_DAYS))
+
+
 def _create_pair_record(caregiver_id, location_query, member_id=None, flush=False):
     """创建 Pair 记录，供 Web/小程序统一复用。"""
     location_query = sanitize_input(location_query, max_length=200) or ''
@@ -128,6 +148,7 @@ def _create_pair_record(caregiver_id, location_query, member_id=None, flush=Fals
         elder_code=_generate_elder_code(),
         short_code=short_code,
         short_code_hash=hash_short_code(short_code),
+        short_code_expires_at=_short_code_expires_at(),
         status='active',
         last_active_at=utcnow(),
         created_at=utcnow(),
@@ -136,6 +157,34 @@ def _create_pair_record(caregiver_id, location_query, member_id=None, flush=Fals
     if flush:
         db.session.flush()
     return pair
+
+
+def _create_pair_action_token(pair, flush=False):
+    """创建行动链接 token，只把哈希写入数据库。"""
+    if not pair or not getattr(pair, 'id', None):
+        raise ValueError('pair id is required')
+    token = secrets.token_urlsafe(24)
+    record = PairActionToken(
+        pair_id=pair.id,
+        token_hash=hash_pair_token(token),
+        expires_at=_action_token_expires_at(),
+        created_at=utcnow(),
+    )
+    db.session.add(record)
+    if flush:
+        db.session.flush()
+    return record, token
+
+
+def _build_pair_action_link(pair, external=True):
+    """为照护提醒生成带 token 的行动链接。"""
+    _, token = _create_pair_action_token(pair, flush=True)
+    return url_for(
+        'public.elder_token_entry',
+        token=token,
+        short_code=pair.short_code,
+        _external=external
+    )
 
 
 def _create_pair_link_record(caregiver_id, community_code, expires_after=None, flush=False):

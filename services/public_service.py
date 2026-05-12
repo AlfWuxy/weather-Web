@@ -12,7 +12,7 @@ from sqlalchemy import or_
 
 from core.constants import GUEST_ID_PREFIX
 from core.extensions import db
-from core.security import hash_identifier, hash_short_code, rate_limit_key, verify_pair_token
+from core.security import hash_identifier, hash_pair_token, hash_short_code, rate_limit_key, verify_pair_token
 from core.time_utils import today_local, utcnow, ensure_utc_aware
 from core.usage import log_usage_event
 from core.weather import get_weather_with_cache, normalize_location_name, get_consecutive_hot_days
@@ -23,6 +23,7 @@ from core.db_models import (
     DailyStatus,
     Debrief,
     Pair,
+    PairActionToken,
     PairLink,
     ShortCodeAttempt,
     User
@@ -294,6 +295,10 @@ def _resolve_pair(short_code, token):
     short_code_hash = hash_short_code(short_code)
     pair = Pair.query.filter_by(short_code_hash=short_code_hash, status='active').first()
     if pair:
+        if not _pair_short_code_is_valid(pair):
+            return None, '短码已过期，请联系照护人重新生成'
+        if token and not _validate_pair_token_binding(pair, short_code, token):
+            return None, '绑定令牌不匹配'
         return pair, None
 
     link = PairLink.query.filter_by(short_code_hash=short_code_hash, status='active').first()
@@ -330,6 +335,7 @@ def _resolve_pair(short_code, token):
                 elder_code=elder_code,
                 short_code=link.short_code,
                 short_code_hash=link.short_code_hash or short_code_hash,
+                short_code_expires_at=_short_code_expires_at(),
                 status='active',
                 last_active_at=utcnow()
             )
@@ -352,6 +358,45 @@ def _resolve_pair(short_code, token):
             }
         )
     return pair, None
+
+
+def _pair_short_code_is_valid(pair):
+    if not pair:
+        return False
+    expires_at = getattr(pair, 'short_code_expires_at', None)
+    if not expires_at:
+        return True
+    return ensure_utc_aware(expires_at) >= utcnow()
+
+
+def _short_code_expires_at():
+    try:
+        days = int(current_app.config.get('SHORT_CODE_TTL_DAYS', 90))
+    except (TypeError, ValueError):
+        days = 90
+    return utcnow() + timedelta(days=max(1, days))
+
+
+def _validate_pair_action_token(pair, short_code, token):
+    token = (token or '').strip()
+    short_code = (short_code or '').replace(' ', '').strip()
+    if not pair or not token or not short_code:
+        return False
+    if hash_short_code(short_code) != getattr(pair, 'short_code_hash', None):
+        return False
+    token_hash = hash_pair_token(token)
+    record = PairActionToken.query.filter_by(token_hash=token_hash).order_by(PairActionToken.id.desc()).first()
+    if not record:
+        return False
+    if record.pair_id != pair.id:
+        return False
+    if record.revoked_at:
+        return False
+    if ensure_utc_aware(record.expires_at) < utcnow():
+        return False
+    if not record.used_at:
+        record.used_at = utcnow()
+    return True
 
 
 def _get_or_create_daily_status(pair, status_date, risk_label):
@@ -598,21 +643,33 @@ def _handle_action_lookup(token=None, entry_action=None, confirm_action=None, he
 
 def _resolve_pair_from_session_or_code(short_code):
     pair = None
+    short_code = (short_code or '').replace(' ', '').strip()
     session_pair_id = session.get('pair_session_id')
+    session_pair_code = session.get('pair_session_code')
     if session_pair_id:
+        if not short_code:
+            return None
+        if session_pair_code and session_pair_code != short_code:
+            return None
         pair = Pair.query.filter_by(id=session_pair_id, status='active').first()
+        if pair and not _pair_short_code_is_valid(pair):
+            return None
     if not pair and short_code:
         short_code_hash = hash_short_code(short_code)
         pair = Pair.query.filter_by(short_code_hash=short_code_hash, status='active').first()
+        if pair and not _pair_short_code_is_valid(pair):
+            return None
     return pair
 
 
 def _validate_pair_token_binding(pair, short_code, token):
-    """校验 /e/<token>/... 动作与 PairLink 绑定关系。"""
+    """校验 /e/<token>/... 动作与绑定关系。"""
     token = (token or '').strip()
     short_code = (short_code or '').replace(' ', '').strip()
     if not token or not short_code:
         return False
+    if _validate_pair_action_token(pair, short_code, token):
+        return True
     short_code_hash = hash_short_code(short_code)
     link = PairLink.query.filter_by(short_code_hash=short_code_hash).order_by(PairLink.id.desc()).first()
     if not link:
@@ -657,7 +714,7 @@ def _handle_action_confirm(token=None, confirm_action=None, debrief_action=None)
     )
     _refresh_community_daily(pair.community_code, status_date)
     flash('已记录今日确认。', 'success')
-    action_routes = _resolve_action_routes(confirm_action=confirm_action, debrief_action=debrief_action)
+    action_routes = _resolve_action_routes(token=token, confirm_action=confirm_action, debrief_action=debrief_action)
     return _render_action_page(
         pair,
         status,
@@ -703,7 +760,7 @@ def _handle_action_help(token=None, confirm_action=None, debrief_action=None):
     )
     _refresh_community_daily(pair.community_code, status_date)
     flash('已记录求助，照护人将收到提醒。', 'success')
-    action_routes = _resolve_action_routes(confirm_action=confirm_action, debrief_action=debrief_action)
+    action_routes = _resolve_action_routes(token=token, confirm_action=confirm_action, debrief_action=debrief_action)
     return _render_action_page(
         pair,
         status,
@@ -771,7 +828,7 @@ def _handle_action_debrief(token=None, confirm_action=None, debrief_action=None,
     status, actions, resources, weather_data, heat_result, risk_label, risk_reasons = _build_action_context(
         pair, status_date
     )
-    action_routes = _resolve_action_routes(confirm_action=confirm_action, debrief_action=debrief_action)
+    action_routes = _resolve_action_routes(token=token, confirm_action=confirm_action, debrief_action=debrief_action)
     return _render_action_page(
         pair,
         status,

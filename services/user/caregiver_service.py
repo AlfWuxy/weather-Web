@@ -26,6 +26,7 @@ from ._common import (
     RELAY_STAGE_LABELS,
     RELAY_STAGE_ORDER,
     _action_plan,
+    _build_pair_action_link,
     _create_pair_link_record,
     _create_pair_record,
     _relay_stage_rank,
@@ -135,11 +136,7 @@ def _build_pair_management_context(caregiver_mode=False):
         status_map = {status.pair_id: status for status in statuses}
     created_action_link = None
     if created_pair:
-        created_action_link = url_for(
-            'public.elder_entry',
-            short_code=created_pair.short_code,
-            _external=True
-        )
+        created_action_link = _build_pair_action_link(created_pair)
 
     # Resolve per-location once (supports arbitrary CN input via AMap)
     location_meta = {}
@@ -229,6 +226,7 @@ def _build_pair_management_context(caregiver_mode=False):
         if relay_stage and relay_stage != 'none':
             relay_stage_label = RELAY_STAGE_LABELS.get(relay_stage, relay_stage)
         member = member_map.get(pair.member_id) if getattr(pair, 'member_id', None) else None
+        action_link = _build_pair_action_link(pair)
         pair_cards.append({
             'pair': pair,
             'status': status,
@@ -239,13 +237,22 @@ def _build_pair_management_context(caregiver_mode=False):
             'temperature_max': weather_data.get('temperature_max'),
             'temperature_min': weather_data.get('temperature_min'),
             'elder_name': (member.name if member else None),
-            'action_link': url_for('public.elder_entry', short_code=pair.short_code, _external=True),
-            'reminder_message': _build_caregiver_message(pair, alert_kind=alert_kind, weather_data=weather_data, member=member),
+            'action_link': action_link,
+            'reminder_message': _build_caregiver_message(
+                pair,
+                alert_kind=alert_kind,
+                weather_data=weather_data,
+                member=member,
+                action_link=action_link
+            ),
             'help_flag': bool(status and status.help_flag),
             'is_overdue': is_overdue,
             'relay_stage': relay_stage,
             'relay_stage_label': relay_stage_label
         })
+
+    if pair_cards or created_action_link:
+        db.session.commit()
 
     push_channel_ready = bool((current_app.config.get('WXPUSHER_APP_TOKEN') or '').strip())
     context = {
@@ -377,9 +384,12 @@ def caregiver_pair_detail(pair_id):
     recent_series = _build_recent_series(pair.id, days=7)
     debrief_today = Debrief.query.filter_by(pair_id=pair.id, date=status_date).first()
     community_snapshot = _build_community_snapshot(pair.community_code, status_date)
+    action_link = _build_pair_action_link(pair)
+    db.session.commit()
     wechat_template_url = url_for(
         'user.caregiver_wechat_template',
         short_code=pair.short_code,
+        token=action_link.rsplit('/e/', 1)[-1].split('?', 1)[0] if '/e/' in action_link else None,
         community_code=pair.community_code
     )
     actions_today = safe_json_loads(status_today.caregiver_actions, []) if status_today else []
@@ -464,6 +474,16 @@ def caregiver_wechat_template():
     short_code = sanitize_input(request.args.get('short_code'), max_length=12)
     token = sanitize_input(request.args.get('token'), max_length=200)
     community_code = sanitize_input(request.args.get('community_code'), max_length=100)
+
+    if not token and short_code:
+        pair_query = Pair.query.filter_by(short_code=short_code, status='active')
+        if getattr(current_user, 'role', None) != 'admin':
+            pair_query = pair_query.filter_by(caregiver_id=current_user.id)
+        pair = pair_query.first()
+        if pair:
+            action_link = _build_pair_action_link(pair)
+            db.session.commit()
+            token = action_link.rsplit('/e/', 1)[-1].split('?', 1)[0] if '/e/' in action_link else None
 
     if token:
         action_link = url_for(

@@ -18,6 +18,8 @@ LOCAL_QWEATHER_KEY=""
 LOCAL_QWEATHER_API_BASE=""
 LOCAL_AMAP_KEY=""
 LOCAL_WXPUSHER_APP_TOKEN=""
+LOCAL_PUBLIC_BASE_URL=""
+LOCAL_ALLOW_INSECURE_PUBLIC_BASE_URL="${ALLOW_INSECURE_PUBLIC_BASE_URL:-}"
 
 load_deploy_env() {
     [ -f "$ENV_FILE" ] || return 0
@@ -44,7 +46,7 @@ load_local_api_keys() {
     while IFS='=' read -r key value; do
         case "$key" in
             ''|\#*) continue ;;
-            QWEATHER_KEY|QWEATHER_API_BASE|AMAP_KEY|WXPUSHER_APP_TOKEN)
+            QWEATHER_KEY|QWEATHER_API_BASE|AMAP_KEY|WXPUSHER_APP_TOKEN|PUBLIC_BASE_URL|ALLOW_INSECURE_PUBLIC_BASE_URL)
                 value="${value%%#*}"
                 value="${value%"${value##*[![:space:]]}"}"
                 value="${value#"${value%%[![:space:]]*}"}"
@@ -56,6 +58,8 @@ load_local_api_keys() {
                     QWEATHER_API_BASE) LOCAL_QWEATHER_API_BASE="$value" ;;
                     AMAP_KEY) LOCAL_AMAP_KEY="$value" ;;
                     WXPUSHER_APP_TOKEN) LOCAL_WXPUSHER_APP_TOKEN="$value" ;;
+                    PUBLIC_BASE_URL) LOCAL_PUBLIC_BASE_URL="$value" ;;
+                    ALLOW_INSECURE_PUBLIC_BASE_URL) LOCAL_ALLOW_INSECURE_PUBLIC_BASE_URL="$value" ;;
                 esac
                 ;;
         esac
@@ -234,10 +238,22 @@ remote_exec "mkdir -p $PROJECT_DIR/instance && (grep -q '^DATABASE_URI=' $PROJEC
 
 echo ""
 echo "步骤6.1.1: 写入必要的 API Key（仅在服务器端为空/缺失时写入）..."
-# PUBLIC_BASE_URL: by default point to the server IP:5000 for click tracking.
-DEFAULT_PUBLIC_BASE_URL="http://$SERVER:5000"
+# PUBLIC_BASE_URL 必须优先使用 HTTPS。HTTP/IP 只允许显式临时豁免。
+DEFAULT_PUBLIC_BASE_URL=""
+if [ "${LOCAL_ALLOW_INSECURE_PUBLIC_BASE_URL:-}" = "1" ]; then
+    DEFAULT_PUBLIC_BASE_URL="http://$SERVER:5000"
+fi
 remote_exec "grep -q '^PUBLIC_BASE_URL=' $PROJECT_DIR/.env || echo 'PUBLIC_BASE_URL=' >> $PROJECT_DIR/.env"
-remote_exec "if grep -q '^PUBLIC_BASE_URL=$' $PROJECT_DIR/.env; then sed -i 's|^PUBLIC_BASE_URL=$|PUBLIC_BASE_URL=$DEFAULT_PUBLIC_BASE_URL|' $PROJECT_DIR/.env; fi"
+remote_exec "grep -q '^ALLOW_INSECURE_PUBLIC_BASE_URL=' $PROJECT_DIR/.env || echo 'ALLOW_INSECURE_PUBLIC_BASE_URL=' >> $PROJECT_DIR/.env"
+if [ -n "$LOCAL_PUBLIC_BASE_URL" ]; then
+    remote_exec "sed -i 's|^PUBLIC_BASE_URL=.*|PUBLIC_BASE_URL=$LOCAL_PUBLIC_BASE_URL|' $PROJECT_DIR/.env"
+elif [ -n "$DEFAULT_PUBLIC_BASE_URL" ]; then
+    remote_exec "if grep -q '^PUBLIC_BASE_URL=$' $PROJECT_DIR/.env; then sed -i 's|^PUBLIC_BASE_URL=$|PUBLIC_BASE_URL=$DEFAULT_PUBLIC_BASE_URL|' $PROJECT_DIR/.env; fi"
+fi
+if [ -n "${LOCAL_ALLOW_INSECURE_PUBLIC_BASE_URL:-}" ]; then
+    remote_exec "sed -i 's|^ALLOW_INSECURE_PUBLIC_BASE_URL=.*|ALLOW_INSECURE_PUBLIC_BASE_URL=$LOCAL_ALLOW_INSECURE_PUBLIC_BASE_URL|' $PROJECT_DIR/.env"
+fi
+remote_exec "PUBLIC_BASE_URL_CURRENT=\$(grep '^PUBLIC_BASE_URL=' $PROJECT_DIR/.env | tail -n 1 | cut -d= -f2-); ALLOW_INSECURE_PUBLIC_BASE_URL_CURRENT=\$(grep '^ALLOW_INSECURE_PUBLIC_BASE_URL=' $PROJECT_DIR/.env | tail -n 1 | cut -d= -f2-); if [ -z \"\$PUBLIC_BASE_URL_CURRENT\" ]; then echo 'PUBLIC_BASE_URL 未配置，生产推送链接需要 HTTPS 域名。' >&2; exit 1; fi; case \"\$PUBLIC_BASE_URL_CURRENT\" in https://*) exit 0 ;; http://*) if [ \"\$ALLOW_INSECURE_PUBLIC_BASE_URL_CURRENT\" = '1' ]; then echo '警告：ALLOW_INSECURE_PUBLIC_BASE_URL=1，临时允许 HTTP PUBLIC_BASE_URL。' >&2; exit 0; fi; echo 'PUBLIC_BASE_URL 必须使用 HTTPS，或临时设置 ALLOW_INSECURE_PUBLIC_BASE_URL=1。' >&2; exit 1 ;; *) echo 'PUBLIC_BASE_URL 必须是 HTTPS URL。' >&2; exit 1 ;; esac"
 
 if [ -n "$LOCAL_QWEATHER_KEY" ]; then
     remote_exec "grep -q '^QWEATHER_KEY=' $PROJECT_DIR/.env || echo 'QWEATHER_KEY=' >> $PROJECT_DIR/.env"

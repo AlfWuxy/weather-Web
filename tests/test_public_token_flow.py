@@ -3,7 +3,7 @@
 
 from datetime import timedelta
 
-from core.db_models import DailyStatus, Pair, PairLink, User
+from core.db_models import DailyStatus, Pair, PairActionToken, PairLink, User
 from core.security import hash_pair_token, hash_short_code
 from core.time_utils import today_local, utcnow
 from core.extensions import db
@@ -57,6 +57,7 @@ def test_pair_management_can_create_pair(app, client):
         assert pair is not None
         assert bool(pair.elder_code)
         assert bool(pair.short_code)
+        assert pair.short_code_expires_at is not None
 
 
 def test_token_route_rejects_mismatched_token(app, client):
@@ -161,3 +162,220 @@ def test_token_route_accepts_valid_token(app, client):
         status = DailyStatus.query.filter_by(pair_id=pair_id, status_date=today_local()).first()
         assert status is not None
         assert status.confirmed_at is not None
+
+
+def test_pair_action_token_route_accepts_valid_token(app, client):
+    """新的行动 token 表应支持带 token 的确认路径。"""
+    with app.app_context():
+        db.create_all()
+        user = _create_user("action_token_user", "action_token_pass")
+
+        short_code = "77889900"
+        pair = Pair(
+            caregiver_id=user.id,
+            community_code="都昌",
+            location_query="都昌",
+            elder_code="elder-action-token",
+            short_code=short_code,
+            short_code_hash=hash_short_code(short_code),
+            short_code_expires_at=utcnow() + timedelta(days=90),
+            status="active",
+            created_at=utcnow(),
+            last_active_at=utcnow(),
+        )
+        db.session.add(pair)
+        db.session.flush()
+
+        db.session.add(PairActionToken(
+            pair_id=pair.id,
+            token_hash=hash_pair_token("valid-action-token"),
+            expires_at=utcnow() + timedelta(days=90),
+            created_at=utcnow(),
+        ))
+        db.session.commit()
+        pair_id = pair.id
+
+    with client.session_transaction() as sess:
+        sess["_csrf_token"] = "action-token-csrf"
+
+    resp = client.post(
+        "/e/valid-action-token/checkin",
+        data={"short_code": "77889900", "csrf_token": "action-token-csrf"},
+        follow_redirects=False,
+    )
+
+    assert resp.status_code == 200
+    with app.app_context():
+        status = DailyStatus.query.filter_by(pair_id=pair_id, status_date=today_local()).first()
+        assert status is not None
+        assert status.confirmed_at is not None
+
+
+def test_pair_action_token_route_rejects_expired_token(app, client):
+    """过期行动 token 不能提交确认。"""
+    with app.app_context():
+        db.create_all()
+        user = _create_user("expired_action_token_user", "expired_action_token_pass")
+
+        short_code = "11224466"
+        pair = Pair(
+            caregiver_id=user.id,
+            community_code="都昌",
+            location_query="都昌",
+            elder_code="elder-expired-token",
+            short_code=short_code,
+            short_code_hash=hash_short_code(short_code),
+            short_code_expires_at=utcnow() + timedelta(days=90),
+            status="active",
+            created_at=utcnow(),
+            last_active_at=utcnow(),
+        )
+        db.session.add(pair)
+        db.session.flush()
+        db.session.add(PairActionToken(
+            pair_id=pair.id,
+            token_hash=hash_pair_token("expired-action-token"),
+            expires_at=utcnow() - timedelta(seconds=1),
+            created_at=utcnow() - timedelta(days=91),
+        ))
+        db.session.commit()
+        pair_id = pair.id
+
+    with client.session_transaction() as sess:
+        sess["_csrf_token"] = "expired-action-token-csrf"
+
+    resp = client.post(
+        "/e/expired-action-token/checkin",
+        data={"short_code": "11224466", "csrf_token": "expired-action-token-csrf"},
+        follow_redirects=False,
+    )
+
+    assert resp.status_code == 302
+    with app.app_context():
+        status = DailyStatus.query.filter_by(pair_id=pair_id, status_date=today_local()).first()
+        assert status is None or status.confirmed_at is None
+
+
+def test_token_debrief_get_rejects_mismatched_token(app, client):
+    """复盘 GET 页面也必须校验 token 与短码绑定。"""
+    with app.app_context():
+        db.create_all()
+        user = _create_user("debrief_get_user", "debrief_get_pass")
+        pair = Pair(
+            caregiver_id=user.id,
+            community_code="都昌",
+            location_query="都昌",
+            elder_code="elder-debrief-get",
+            short_code="33445566",
+            short_code_hash=hash_short_code("33445566"),
+            short_code_expires_at=utcnow() + timedelta(days=90),
+            status="active",
+            created_at=utcnow(),
+            last_active_at=utcnow(),
+        )
+        db.session.add(pair)
+        db.session.flush()
+        db.session.add(PairActionToken(
+            pair_id=pair.id,
+            token_hash=hash_pair_token("right-debrief-token"),
+            expires_at=utcnow() + timedelta(days=90),
+            created_at=utcnow(),
+        ))
+        db.session.commit()
+        pair_id = pair.id
+
+    with client.session_transaction() as sess:
+        sess["pair_session_id"] = pair_id
+        sess["pair_session_code"] = "33445566"
+
+    resp = client.get("/e/wrong-debrief-token/debrief?short_code=33445566", follow_redirects=False)
+
+    assert resp.status_code == 302
+    assert "/e/wrong-debrief-token" in resp.headers["Location"]
+
+
+def test_legacy_short_code_rejects_expired_pair(app, client):
+    """旧短码入口超过过渡期后不能提交行动。"""
+    with app.app_context():
+        db.create_all()
+        user = _create_user("expired_short_code_user", "expired_short_code_pass")
+        pair = Pair(
+            caregiver_id=user.id,
+            community_code="都昌",
+            location_query="都昌",
+            elder_code="elder-expired-short",
+            short_code="66554433",
+            short_code_hash=hash_short_code("66554433"),
+            short_code_expires_at=utcnow() - timedelta(seconds=1),
+            status="active",
+            created_at=utcnow() - timedelta(days=91),
+            last_active_at=utcnow(),
+        )
+        db.session.add(pair)
+        db.session.commit()
+        pair_id = pair.id
+
+    with client.session_transaction() as sess:
+        sess["_csrf_token"] = "expired-short-csrf"
+
+    resp = client.post(
+        "/action/confirm",
+        data={"short_code": "66554433", "csrf_token": "expired-short-csrf"},
+        follow_redirects=False,
+    )
+
+    assert resp.status_code == 302
+    with app.app_context():
+        status = DailyStatus.query.filter_by(pair_id=pair_id, status_date=today_local()).first()
+        assert status is None or status.confirmed_at is None
+
+
+def test_session_pair_must_match_submitted_short_code(app, client):
+    """旧 session 不能覆盖表单里提交的另一个短码。"""
+    with app.app_context():
+        db.create_all()
+        user = _create_user("session_mismatch_user", "session_mismatch_pass")
+        pair_a = Pair(
+            caregiver_id=user.id,
+            community_code="都昌",
+            location_query="都昌",
+            elder_code="elder-session-a",
+            short_code="10101010",
+            short_code_hash=hash_short_code("10101010"),
+            short_code_expires_at=utcnow() + timedelta(days=90),
+            status="active",
+            created_at=utcnow(),
+            last_active_at=utcnow(),
+        )
+        pair_b = Pair(
+            caregiver_id=user.id,
+            community_code="都昌",
+            location_query="都昌",
+            elder_code="elder-session-b",
+            short_code="20202020",
+            short_code_hash=hash_short_code("20202020"),
+            short_code_expires_at=utcnow() + timedelta(days=90),
+            status="active",
+            created_at=utcnow(),
+            last_active_at=utcnow(),
+        )
+        db.session.add_all([pair_a, pair_b])
+        db.session.commit()
+        pair_a_id = pair_a.id
+        pair_b_id = pair_b.id
+
+    with client.session_transaction() as sess:
+        sess["_csrf_token"] = "session-mismatch-csrf"
+        sess["pair_session_id"] = pair_a_id
+        sess["pair_session_code"] = "10101010"
+
+    resp = client.post(
+        "/action/confirm",
+        data={"short_code": "20202020", "csrf_token": "session-mismatch-csrf"},
+        follow_redirects=False,
+    )
+
+    assert resp.status_code == 302
+    with app.app_context():
+        assert DailyStatus.query.filter_by(pair_id=pair_a_id, status_date=today_local()).first() is None
+        assert DailyStatus.query.filter_by(pair_id=pair_b_id, status_date=today_local()).first() is None

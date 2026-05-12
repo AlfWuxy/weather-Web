@@ -49,6 +49,15 @@ def test_deploy_script_excludes_local_design_drafts():
     assert "--exclude 'blueprints/tools 2.py'" in content
 
 
+def test_deploy_script_requires_https_public_base_url():
+    content = _load_deploy_script()
+
+    assert 'ALLOW_INSECURE_PUBLIC_BASE_URL' in content
+    assert 'PUBLIC_BASE_URL 必须使用 HTTPS' in content
+    assert 'ALLOW_INSECURE_PUBLIC_BASE_URL=1' in content
+    assert 'DEFAULT_PUBLIC_BASE_URL="http://$SERVER:5000"' in content
+
+
 def test_precompute_script_respects_deploy_venv_dir():
     content = _load_precompute_script()
 

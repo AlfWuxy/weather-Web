@@ -29,6 +29,7 @@ from services.public_service import (
     _handle_action_help,
     _handle_action_debrief,
     _resolve_pair_from_session_or_code,
+    _validate_pair_token_binding,
     _build_action_context,
     _resolve_action_routes,
     _render_action_page
@@ -36,6 +37,8 @@ from services.public_service import (
 from utils.validators import sanitize_input
 
 bp = Blueprint('public', __name__)
+ALLOWED_AMAP_PROXY_PATHS = {'v3/place/text'}
+AMAP_PROXY_MAX_BYTES = 256 * 1024
 
 
 @bp.route('/', endpoint='index')
@@ -139,7 +142,7 @@ def elder_token_debrief(token):
 
     short_code = sanitize_input(request.args.get('short_code'), max_length=12)
     pair = _resolve_pair_from_session_or_code(short_code)
-    if not pair:
+    if not pair or not _validate_pair_token_binding(pair, short_code, token):
         return redirect(url_for('public.elder_token_entry', token=token))
 
     status_date = today_local()
@@ -171,7 +174,10 @@ def transparency():
 def cooling_resources():
     """避暑资源公开页"""
     community = sanitize_input(request.args.get('community'), max_length=100)
-    resource_type = sanitize_input(request.args.get('resource_type'), max_length=50)
+    resource_type = sanitize_input(
+        request.args.get('resource_type') or request.args.get('type'),
+        max_length=50
+    )
     has_ac_raw = request.args.get('has_ac')
     is_accessible_raw = request.args.get('is_accessible')
     open_only = request.args.get('open_only')
@@ -185,6 +191,7 @@ def cooling_resources():
 
 
 @bp.route('/_AMapService/<path:proxy_path>')
+@limiter.limit(lambda: current_app.config.get('RATE_LIMIT_AMAP_PROXY', '30 per minute'), key_func=rate_limit_key)
 def amap_proxy(proxy_path):
     """高德 Web 服务代理。
 
@@ -192,6 +199,8 @@ def amap_proxy(proxy_path):
     """
     safe_path = (proxy_path or '').lstrip('/')
     if not safe_path or '..' in safe_path.split('/'):
+        abort(404)
+    if safe_path not in ALLOWED_AMAP_PROXY_PATHS:
         abort(404)
 
     params = [(key, value) for key, value in parse_qsl(request.query_string.decode('utf-8'), keep_blank_values=True) if key != 'jscode']
@@ -205,6 +214,10 @@ def amap_proxy(proxy_path):
         timeout=10
     )
     content_type = upstream.headers.get('Content-Type', 'application/json; charset=utf-8')
+    if len(upstream.content or b'') > AMAP_PROXY_MAX_BYTES:
+        abort(502)
+    if 'json' not in content_type.lower():
+        abort(502)
     return Response(upstream.content, status=upstream.status_code, content_type=content_type)
 
 

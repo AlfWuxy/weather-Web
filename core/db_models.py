@@ -311,6 +311,7 @@ class Pair(db.Model):
     elder_code = db.Column(db.String(40), unique=True, nullable=False)
     short_code = db.Column(db.String(12), unique=True, nullable=False)
     short_code_hash = db.Column(db.String(64))
+    short_code_expires_at = db.Column(db.DateTime)
     status = db.Column(db.String(20), default='active')  # active/inactive
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
     last_active_at = db.Column(db.DateTime)
@@ -329,6 +330,30 @@ class Pair(db.Model):
     @property
     def is_active(self):
         return self.status == 'active'
+
+
+class PairActionToken(db.Model):
+    """行动链接令牌（只保存哈希）"""
+    __tablename__ = 'pair_action_tokens'
+    id = db.Column(db.Integer, primary_key=True)
+    pair_id = db.Column(db.Integer, db.ForeignKey('pairs.id'), nullable=False)
+    token_hash = db.Column(db.String(128), nullable=False, unique=True)
+    expires_at = db.Column(db.DateTime, nullable=False)
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    used_at = db.Column(db.DateTime)
+    revoked_at = db.Column(db.DateTime)
+
+    __table_args__ = (
+        db.Index('ix_pair_action_tokens_pair_id', 'pair_id'),
+        db.Index('ix_pair_action_tokens_token_hash', 'token_hash'),
+        db.Index('ix_pair_action_tokens_expires_at', 'expires_at'),
+    )
+
+    @property
+    def is_active(self):
+        if self.revoked_at:
+            return False
+        return ensure_utc_aware(self.expires_at) >= utcnow()
 
 
 class DailyStatus(db.Model):
