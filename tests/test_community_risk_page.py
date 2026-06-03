@@ -55,7 +55,14 @@ def test_community_risk_api_returns_extended_fields(authenticated_client, db_ses
         json={
             'analysis_date': '2025-10-30',
             'window_days': 30,
-            'disease': '呼吸系统'
+            'disease': '呼吸系统',
+            'weather': {
+                'temperature': 30,
+                'humidity': 65,
+                'aqi': 45,
+                'data_source': 'QWeather',
+                'is_mock': False,
+            }
         },
         headers={'X-CSRF-Token': 'test-csrf-token'}
     )

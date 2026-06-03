@@ -153,7 +153,8 @@ class WeatherService:
                     'aqi': 0,
                     'location': city,
                     'update_time': now.get('obsTime', datetime.now().strftime('%Y-%m-%d %H:%M')),
-                    'is_mock': False
+                    'is_mock': False,
+                    'data_source': 'QWeather'
                 }
 
                 tmax, tmin, range_source, range_confidence = self._resolve_qweather_current_temperature_range(location)

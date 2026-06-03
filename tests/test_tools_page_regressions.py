@@ -164,7 +164,7 @@ def test_forecast_api_default_uses_qweather_only_data(client, db_session, monkey
     monkeypatch.setattr('services.api_service.get_qweather_forecast_with_cache', fake_qweather, raising=False)
     monkeypatch.setattr(
         'services.api_service.get_weather_with_cache',
-        lambda location: ({'aqi': 42, 'pm25': 18, 'is_mock': False}, False),
+        lambda location: ({'temperature': 24, 'aqi': 42, 'pm25': 18, 'data_source': 'QWeather', 'is_mock': False}, False),
         raising=False,
     )
     monkeypatch.setattr('services.forecast_service.get_forecast_service', lambda: FakeForecastService(), raising=False)

@@ -7,7 +7,12 @@ import os
 from core.app import create_app
 from core.constants import DEFAULT_CITY_LABEL  # noqa: E402
 from core.time_utils import today_local  # noqa: E402
-from core.weather import get_weather_with_cache, normalize_location_name  # noqa: E402
+from core.weather import (  # noqa: E402
+    get_weather_with_cache,
+    is_qweather_online_weather,
+    normalize_location_name,
+    weather_source_label,
+)
 from services.community_risk_cache import (  # noqa: E402
     build_community_risk_cache_params,
     get_or_build_community_risk_result,
@@ -96,6 +101,7 @@ def precompute_community_risk(app=None, locations=None, window_days_list=None, d
             'window_days_list': window_days_list,
             'disease_filters': disease_filters,
             'weather_cache_hits': 0,
+            'weather_skipped': 0,
             'risk_cache_hits': 0,
             'computed': 0,
             'combinations': 0,
@@ -103,6 +109,15 @@ def precompute_community_risk(app=None, locations=None, window_days_list=None, d
 
         for location in locations:
             weather_data, weather_from_cache = get_weather_with_cache(location)
+            if not is_qweather_online_weather(weather_data):
+                summary['weather_skipped'] += 1
+                logger.warning(
+                    "跳过社区风险预计算：非和风真实天气 location=%s source=%s is_mock=%s",
+                    location,
+                    weather_source_label(weather_data),
+                    weather_data.get('is_mock') if isinstance(weather_data, dict) else None,
+                )
+                continue
             if weather_from_cache:
                 summary['weather_cache_hits'] += 1
 

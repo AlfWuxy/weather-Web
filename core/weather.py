@@ -160,8 +160,37 @@ def get_demo_weather_data():
         'pm25': 55,
         'aqi': 90,
         'is_mock': True,
-        'is_demo': True
+        'is_demo': True,
+        'data_source': 'Demo'
     }
+
+
+def weather_source_label(weather_data):
+    """返回天气来源标签，避免 mock 数据被误标成和风。"""
+    if not isinstance(weather_data, dict):
+        return ''
+    source = str(weather_data.get('data_source') or weather_data.get('source') or '').strip()
+    if source:
+        return source
+    if weather_data.get('is_demo'):
+        return 'Demo'
+    if weather_data.get('is_mock'):
+        return 'Mock'
+    return 'QWeather'
+
+
+def is_qweather_online_weather(weather_data):
+    """判断当前天气是否可用于生产风险计算。"""
+    if not isinstance(weather_data, dict):
+        return False
+    if weather_data.get('is_mock') or weather_data.get('is_demo'):
+        return False
+    if weather_data.get('temperature') is None:
+        return False
+    source = str(weather_data.get('data_source') or weather_data.get('source') or '').strip()
+    if source and source != 'QWeather':
+        return False
+    return True
 
 
 def get_demo_forecast_data(days=7):
