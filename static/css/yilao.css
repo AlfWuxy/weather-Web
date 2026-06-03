@@ -117,6 +117,22 @@ a:hover { color: var(--yl-orange-500); }
     display: inline-flex; align-items: center; gap: 8px;
     font-weight: 700; font-size: 1.1rem; color: var(--yl-ink) !important;
 }
+.yl-brand-avatar,
+.yl-drawer-brand-avatar {
+    display: inline-block;
+    flex-shrink: 0;
+    object-fit: cover;
+    border-radius: 9px;
+    box-shadow: 0 1px 4px rgba(66, 48, 28, .12);
+}
+.yl-brand-avatar {
+    width: 34px;
+    height: 34px;
+}
+.yl-drawer-brand-avatar {
+    width: 30px;
+    height: 30px;
+}
 .navbar-brand i, .navbar-brand .bi {
     color: var(--yl-orange-500);
     font-size: 1.4rem;

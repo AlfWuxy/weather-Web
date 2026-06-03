@@ -57,6 +57,8 @@
         })();
     </script>
     <title>{% block title %}宜老天气通{% endblock %}</title>
+    <link rel="icon" type="image/png" href="{{ url_for('static', filename='brand/yilao-avatar.png') }}">
+    <link rel="apple-touch-icon" href="{{ url_for('static', filename='brand/yilao-avatar.png') }}">
 
     <link rel="stylesheet" href="{{ url_for('static', filename='vendor/bootstrap/bootstrap.min.css') }}">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css">
@@ -87,7 +89,7 @@
     <nav class="navbar sticky-top">
         <div class="container-fluid">
             <a class="navbar-brand" href="{{ url_for('public.index') }}">
-                <i class="bi bi-cloud-sun"></i>
+                <img class="yl-brand-avatar" src="{{ url_for('static', filename='brand/yilao-avatar.png') }}" alt="" width="34" height="34">
                 <span>宜老天气通</span>
             </a>
 
@@ -204,7 +206,7 @@
     <div class="offcanvas offcanvas-end" tabindex="-1" id="appNavDrawer" aria-labelledby="appNavDrawerLabel" style="width: 340px;">
         <div class="offcanvas-header" style="border-bottom:1px solid var(--yl-line-soft);">
             <div class="d-flex align-items-center gap-2">
-                <i class="bi bi-cloud-sun" style="color:var(--yl-orange-500); font-size:1.3rem;"></i>
+                <img class="yl-drawer-brand-avatar" src="{{ url_for('static', filename='brand/yilao-avatar.png') }}" alt="" width="30" height="30">
                 <h5 class="offcanvas-title mb-0" id="appNavDrawerLabel">宜老天气通 · 更多</h5>
             </div>
             <button type="button" class="btn-close" data-bs-dismiss="offcanvas" aria-label="关闭"></button>
