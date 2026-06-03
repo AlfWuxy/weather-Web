@@ -106,9 +106,12 @@ docs: 补充仓库开发流程说明
 
 ```bash
 git fetch origin --prune
-pytest
+conda run -n case-weather-py312 python -m pytest -q
+conda run -n case-weather-py312 python -m pytest -q -m manual
 python app.py
 ```
+
+当前 macOS 本机以 `case-weather-py312` 为 canonical 测试环境。不要把裸 `pytest`、仓库 `.venv` 或 `venv` 当作默认验证入口；如需验证 Python 3.12 弃用警告，用 `conda run -n case-weather-py312 python -m pytest -q -W error::DeprecationWarning` 单独执行。若只剩 Flask-Login 0.6.3 的三方 remember-cookie warning，使用 `-W ignore::DeprecationWarning:flask_login.login_manager` 做命令级精确过滤，不写入全局 pytest 配置。
 
 ## 开工前检查
 

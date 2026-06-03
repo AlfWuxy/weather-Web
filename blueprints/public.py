@@ -39,6 +39,28 @@ from utils.validators import sanitize_input
 bp = Blueprint('public', __name__)
 ALLOWED_AMAP_PROXY_PATHS = {'v3/place/text'}
 AMAP_PROXY_MAX_BYTES = 256 * 1024
+ROBOTS_TXT = """User-agent: *
+Allow: /
+Disallow: /admin
+Disallow: /api/
+Disallow: /mp-api/
+Disallow: /logout
+Disallow: /profile
+Disallow: /family-members
+Disallow: /pair-management
+Disallow: /medication-reminders
+Disallow: /health-diary
+Disallow: /reports
+Disallow: /action
+Disallow: /elder
+Disallow: /e/
+"""
+
+
+@bp.route('/robots.txt', endpoint='robots_txt')
+def robots_txt():
+    """允许搜索与 AI 爬虫抓取公开页面。"""
+    return Response(ROBOTS_TXT, content_type='text/plain; charset=utf-8')
 
 
 @bp.route('/', endpoint='index')

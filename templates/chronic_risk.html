@@ -49,17 +49,24 @@
     </form>
 
     {# 结果 #}
+    {% if risk_score is none %}
+    <section class="yl-section text-center yl-fade-up yl-fade-up-d2">
+        <div style="font-size:2rem; color:var(--yl-orange-500);"><i class="bi bi-clipboard2-pulse"></i></div>
+        <h4 class="mt-2" style="font-size:1.1rem;">填写信息后生成评估</h4>
+        <p class="text-muted mb-0" style="font-size:.9rem;">这里不会展示示例评分或示例医疗建议。提交自测指标后,系统会基于你的数据生成结果。</p>
+    </section>
+    {% else %}
     <div class="row g-4">
         <div class="col-lg-5">
             <section class="yl-section text-center yl-fade-up yl-fade-up-d2">
                 <div class="text-muted" style="font-size:.85rem;">综合风险评分</div>
-                <div class="my-3" style="font-size:4rem; font-weight:600; color:{% if (risk_score or 0)>=70 %}var(--yl-risk-high){% elif (risk_score or 0)>=40 %}var(--yl-risk-mid){% else %}var(--yl-success){% endif %};">
-                    {{ risk_score or 58 }}
+                <div class="my-3" style="font-size:4rem; font-weight:600; color:{% if risk_score>=70 %}var(--yl-risk-high){% elif risk_score>=40 %}var(--yl-risk-mid){% else %}var(--yl-success){% endif %};">
+                    {{ risk_score }}
                 </div>
-                <span class="badge {% if (risk_score or 0)>=70 %}bg-danger-subtle{% elif (risk_score or 0)>=40 %}bg-warning-subtle{% else %}bg-success-subtle{% endif %}" style="font-size:.95rem;">
-                    {% if (risk_score or 0)>=70 %}高风险{% elif (risk_score or 0)>=40 %}中等风险{% else %}低风险{% endif %}
+                <span class="badge {% if risk_score>=70 %}bg-danger-subtle{% elif risk_score>=40 %}bg-warning-subtle{% else %}bg-success-subtle{% endif %}" style="font-size:.95rem;">
+                    {% if risk_score>=70 %}高风险{% elif risk_score>=40 %}中等风险{% else %}低风险{% endif %}
                 </span>
-                <p class="text-muted mt-3 mb-0" style="font-size:.9rem;">{{ risk_comment or '综合当前数据,控制偏向偏松,建议本周内门诊复诊。' }}</p>
+                <p class="text-muted mt-3 mb-0" style="font-size:.9rem;">{{ risk_comment or '本次评估已完成,暂无补充说明。' }}</p>
             </section>
         </div>
 
@@ -67,32 +74,36 @@
             <section class="yl-section yl-fade-up yl-fade-up-d3 mb-3">
                 <h4 style="font-size:1.1rem;">风险分解</h4>
                 <div class="mt-3">
-                    {% for f in (breakdown or [
-                        {'name':'血压波动','value':75,'level':'high'},
-                        {'name':'用药依从','value':40,'level':'mid'},
-                        {'name':'近期气象压力','value':62,'level':'mid'},
-                        {'name':'自觉症状','value':30,'level':'low'}
-                    ]) %}
-                    <div class="mb-3">
-                        <div class="d-flex justify-content-between" style="font-size:.9rem;">
-                            <span>{{ f.name }}</span>
-                            <span class="fw-semibold">{{ f.value }}</span>
+                    {% if breakdown %}
+                        {% for f in breakdown %}
+                        <div class="mb-3">
+                            <div class="d-flex justify-content-between" style="font-size:.9rem;">
+                                <span>{{ f.name }}</span>
+                                <span class="fw-semibold">{{ f.value }}</span>
+                            </div>
+                            <div class="progress"><div class="progress-bar {% if f.level=='high' %}bg-danger{% elif f.level=='mid' %}bg-warning{% else %}bg-success{% endif %}" style="width:{{ f.value }}%"></div></div>
                         </div>
-                        <div class="progress"><div class="progress-bar {% if f.level=='high' %}bg-danger{% elif f.level=='mid' %}bg-warning{% else %}bg-success{% endif %}" style="width:{{ f.value }}%"></div></div>
-                    </div>
-                    {% endfor %}
+                        {% endfor %}
+                    {% else %}
+                    <p class="text-muted mb-0" style="font-size:.9rem;">暂无可用分解。</p>
+                    {% endif %}
                 </div>
             </section>
 
             <section class="yl-section yl-fade-up yl-fade-up-d3">
                 <h4 style="font-size:1.1rem;">行动建议</h4>
+                {% if suggestions %}
                 <ul class="mb-0" style="color:var(--yl-ink-soft); line-height:1.8;">
-                    {% for s in (suggestions or ['本周内到社区医生处复诊','早晚各测一次血压,连测 5 天','坚持服药,若漏服不要补两次','限盐 < 5g/天,多喝温水','高温高湿天尽量避免外出']) %}
+                    {% for s in suggestions %}
                     <li>{{ s }}</li>
                     {% endfor %}
                 </ul>
+                {% else %}
+                <p class="text-muted mb-0" style="font-size:.9rem;">暂无可用建议。</p>
+                {% endif %}
             </section>
         </div>
     </div>
+    {% endif %}
 </div>
 {% endblock %}

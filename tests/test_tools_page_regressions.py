@@ -473,6 +473,22 @@ def test_chronic_risk_post_no_longer_returns_405(client, db_session, monkeypatch
     assert captured['user_info']['vitals'] == {'sbp': 142.0, 'fbg': 7.8}
 
 
+def test_chronic_risk_get_shows_empty_state_without_synthetic_result(client, db_session):
+    user = _create_user(db_session, username='chronic_empty_user')
+    _login_as(client, user.id)
+
+    response = client.get('/chronic-risk')
+
+    assert response.status_code == 200
+    body = response.get_data(as_text=True)
+    assert '填写信息后生成评估' in body
+    assert '这里不会展示示例评分或示例医疗建议' in body
+    assert '>58<' not in body
+    assert '本周内到社区医生处复诊' not in body
+    assert '综合当前数据,控制偏向偏松' not in body
+    assert '血压波动' not in body
+
+
 def test_chronic_risk_service_uses_submitted_vitals():
     from services.chronic_risk_service import ChronicRiskService
 
@@ -491,3 +507,123 @@ def test_chronic_risk_service_uses_submitted_vitals():
 
     assert high['overall_risk']['score'] > base['overall_risk']['score']
     assert high['vital_adjustment']['score_adjustment'] > base['vital_adjustment']['score_adjustment']
+
+
+def test_cooling_page_empty_database_does_not_render_default_resources(client, db_session, monkeypatch):
+    monkeypatch.setattr(
+        'services.public_service.get_weather_with_cache',
+        lambda location: ({'temperature': 27.5, 'is_mock': False, 'data_source': 'QWeather'}, False),
+    )
+
+    response = client.get('/cooling?location=都昌')
+
+    assert response.status_code == 200
+    body = response.get_data(as_text=True)
+    assert '暂无录入的避暑资源' in body
+    assert '都昌县图书馆' not in body
+    assert '万达广场' not in body
+    assert '人民公园纳凉亭' not in body
+
+
+def test_cooling_page_renders_real_resources_only(client, db_session, monkeypatch):
+    from core.db_models import CoolingResource
+
+    monkeypatch.setattr(
+        'services.public_service.get_weather_with_cache',
+        lambda location: ({'temperature': 27.5, 'is_mock': False, 'data_source': 'QWeather'}, False),
+    )
+    db_session.add(CoolingResource(
+        community_code='都昌',
+        name='真实图书馆',
+        resource_type='图书馆',
+        address_hint='真实路 1 号',
+        open_hours='09:00-18:00',
+        has_ac=True,
+        is_accessible=True,
+        contact_hint='服务台登记',
+        notes='仅展示真实录入信息',
+        is_active=True,
+    ))
+    db_session.commit()
+
+    response = client.get('/cooling?location=都昌')
+
+    assert response.status_code == 200
+    body = response.get_data(as_text=True)
+    assert '真实图书馆' in body
+    assert '真实路 1 号' in body
+    assert '09:00-18:00' in body
+    assert '服务台登记' in body
+    assert '仅展示真实录入信息' in body
+    assert '距你' not in body
+    assert '都昌县图书馆' not in body
+    assert '万达广场' not in body
+
+
+def test_cooling_resource_type_filter_accepts_legacy_type_alias(client, db_session, monkeypatch):
+    from core.db_models import CoolingResource
+
+    monkeypatch.setattr(
+        'services.public_service.get_weather_with_cache',
+        lambda location: ({'temperature': 27.5, 'is_mock': False, 'data_source': 'QWeather'}, False),
+    )
+    db_session.add_all([
+        CoolingResource(
+            community_code='都昌',
+            name='真实图书馆',
+            resource_type='图书馆',
+            address_hint='真实路 1 号',
+            is_active=True,
+        ),
+        CoolingResource(
+            community_code='都昌',
+            name='真实商场',
+            resource_type='商场',
+            address_hint='商业路 2 号',
+            is_active=True,
+        ),
+    ])
+    db_session.commit()
+
+    response = client.get('/cooling?type=图书馆')
+
+    assert response.status_code == 200
+    body = response.get_data(as_text=True)
+    assert '真实图书馆' in body
+    assert '真实商场' not in body
+    assert 'name="resource_type"' in body
+    assert '<option value="图书馆" selected>' in body
+
+
+def test_cooling_resource_type_takes_precedence_over_legacy_type(client, db_session, monkeypatch):
+    from core.db_models import CoolingResource
+
+    monkeypatch.setattr(
+        'services.public_service.get_weather_with_cache',
+        lambda location: ({'temperature': 27.5, 'is_mock': False, 'data_source': 'QWeather'}, False),
+    )
+    db_session.add_all([
+        CoolingResource(
+            community_code='都昌',
+            name='真实图书馆',
+            resource_type='图书馆',
+            address_hint='真实路 1 号',
+            is_active=True,
+        ),
+        CoolingResource(
+            community_code='都昌',
+            name='真实商场',
+            resource_type='商场',
+            address_hint='商业路 2 号',
+            is_active=True,
+        ),
+    ])
+    db_session.commit()
+
+    response = client.get('/cooling?resource_type=商场&type=图书馆')
+
+    assert response.status_code == 200
+    body = response.get_data(as_text=True)
+    assert '真实商场' in body
+    assert '真实图书馆' not in body
+    assert '<option value="商场" selected>' in body

@@ -1,0 +1,135 @@
+<h2>C 方向细化：更像品牌海报页</h2>
+<p class="subtitle">你给的 Apple 参考有一个关键点：首屏不是“介绍功能”，而是先建立品牌气氛。功能解释被拆到首屏下方的独立段落里。</p>
+
+<div class="cards" style="grid-template-columns: repeat(3, minmax(0, 1fr));">
+  <div class="card" data-choice="c1" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div class="mockup">
+        <div class="mockup-header">C1. 居中海报式</div>
+        <div class="mockup-body" style="padding:0; background:#f3f3ef;">
+          <div style="position:relative; min-height:420px; overflow:hidden; border-radius:24px; background:linear-gradient(180deg,#f4f4f0 0%,#eceeea 100%);">
+            <div style="position:absolute; inset:0; background:radial-gradient(circle at 50% 76%, rgba(189,199,208,0.42), transparent 30%), radial-gradient(circle at 50% 8%, rgba(255,255,255,0.7), transparent 24%);"></div>
+            <div style="position:absolute; top:26px; left:0; width:100%; text-align:center; color:#111827;">
+              <div style="font-size:11px; letter-spacing:0.14em; text-transform:uppercase; color:#6b7280; margin-bottom:12px;">Poster Hero</div>
+              <div style="font-size:38px; line-height:1.04; font-weight:700; max-width:8.2em; margin:0 auto 12px;">先把天气提醒做成更有人情味的照护行动</div>
+              <div style="font-size:14px; line-height:1.6; color:#4b5563; max-width:28em; margin:0 auto 16px;">标题、按钮、主图全部居中，像一张安静的产品海报。当前首页的徽章、流程、统计全部下沉到首屏之后。</div>
+              <div style="display:flex; justify-content:center; gap:10px;">
+                <div style="padding:10px 16px; border-radius:999px; background:#111827; color:#fff; font-size:12px;">立即开始</div>
+                <div style="padding:10px 16px; border-radius:999px; border:1px solid rgba(17,24,39,0.14); background:rgba(255,255,255,0.72); color:#111827; font-size:12px;">了解逻辑</div>
+              </div>
+            </div>
+            <div style="position:absolute; left:50%; transform:translateX(-50%); bottom:0; width:42%; height:74%; border-radius:200px 200px 0 0; background:linear-gradient(180deg,#fafaf8 0%,#d2d8de 100%); box-shadow:0 24px 44px rgba(102,117,132,0.12);"></div>
+            <div style="position:absolute; left:50%; transform:translateX(-50%) rotate(8deg); top:35%; width:14%; height:28%; border-radius:100px; background:linear-gradient(180deg,#ffffff,#e3e8ee);"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>C1</h3>
+      <p>品牌海报感最强。优点是高级、干净、记忆点强。缺点是首屏的信息效率最低。</p>
+    </div>
+  </div>
+
+  <div class="card" data-choice="c2" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div class="mockup">
+        <div class="mockup-header">C2. 海报首屏 + 下方证明条</div>
+        <div class="mockup-body" style="padding:0; background:#f3f4f1;">
+          <div style="border-radius:24px; overflow:hidden; background:#f3f4f1;">
+            <div style="position:relative; min-height:330px; background:linear-gradient(180deg,#f5f5f1 0%,#eceeea 100%);">
+              <div style="position:absolute; inset:0; background:radial-gradient(circle at 50% 72%, rgba(189,199,208,0.38), transparent 29%);"></div>
+              <div style="position:absolute; left:28px; top:26px; width:48%; color:#111827;">
+                <div style="font-size:11px; letter-spacing:0.14em; text-transform:uppercase; color:#6b7280; margin-bottom:12px;">Brand + Utility</div>
+                <div style="font-size:34px; line-height:1.05; font-weight:700; margin-bottom:12px;">首屏只负责气氛，说明紧跟在下一行</div>
+                <div style="font-size:14px; line-height:1.6; color:#4b5563; margin-bottom:16px;">保留 Apple 式纯净主视觉，同时把最重要的 3 个价值点压缩成首屏下方的一条证明带。</div>
+              </div>
+              <div style="position:absolute; right:9%; bottom:0; width:34%; height:76%; border-radius:180px 180px 0 0; background:linear-gradient(180deg,#fbfbf9 0%,#d3d8de 100%); box-shadow:0 22px 40px rgba(102,117,132,0.12);"></div>
+              <div style="position:absolute; right:18%; top:34%; width:11%; height:24%; border-radius:100px; background:linear-gradient(180deg,#ffffff,#e3e8ee); transform:rotate(7deg);"></div>
+            </div>
+            <div style="display:grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap:0; border-top:1px solid rgba(17,24,39,0.06); background:rgba(255,255,255,0.72);">
+              <div style="padding:16px 14px; border-right:1px solid rgba(17,24,39,0.06);">
+                <div style="font-size:11px; letter-spacing:0.08em; text-transform:uppercase; color:#6b7280; margin-bottom:6px;">预警优先</div>
+                <div style="font-size:15px; line-height:1.45; color:#111827;">官方预警优先，阈值补位</div>
+              </div>
+              <div style="padding:16px 14px; border-right:1px solid rgba(17,24,39,0.06);">
+                <div style="font-size:11px; letter-spacing:0.08em; text-transform:uppercase; color:#6b7280; margin-bottom:6px;">沟通更轻</div>
+                <div style="font-size:15px; line-height:1.45; color:#111827;">自动转成家人能听懂的话术</div>
+              </div>
+              <div style="padding:16px 14px;">
+                <div style="font-size:11px; letter-spacing:0.08em; text-transform:uppercase; color:#6b7280; margin-bottom:6px;">闭环记录</div>
+                <div style="font-size:15px; line-height:1.45; color:#111827;">提醒后的反馈能继续回收</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>C2</h3>
+      <p>我最推荐。优点是 Apple 味已经够强，同时不会让首页变成只有气氛没有信息。</p>
+    </div>
+  </div>
+
+  <div class="card" data-choice="c3" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div class="mockup">
+        <div class="mockup-header">C3. 海报首屏 + 暗色转场</div>
+        <div class="mockup-body" style="padding:0; background:#f2f3ef;">
+          <div style="border-radius:24px; overflow:hidden; background:#f2f3ef;">
+            <div style="position:relative; min-height:310px; background:linear-gradient(180deg,#f5f5f1 0%,#eceeea 100%);">
+              <div style="position:absolute; left:0; width:100%; top:26px; text-align:center; color:#111827;">
+                <div style="font-size:11px; letter-spacing:0.14em; text-transform:uppercase; color:#6b7280; margin-bottom:12px;">Poster + Dark Chapter</div>
+                <div style="font-size:35px; line-height:1.05; font-weight:700; max-width:7.8em; margin:0 auto 12px;">首屏极简，第二屏立刻切到深色章节</div>
+                <div style="font-size:14px; line-height:1.6; color:#4b5563; max-width:28em; margin:0 auto;">类似 Apple 那种“浅色海报开场，然后进入一段更有重量的深色说明区”。</div>
+              </div>
+              <div style="position:absolute; left:50%; transform:translateX(-50%); bottom:0; width:40%; height:62%; border-radius:180px 180px 0 0; background:linear-gradient(180deg,#fbfbf9 0%,#d3d8de 100%);"></div>
+            </div>
+            <div style="padding:18px; background:#121417; color:#fff;">
+              <div style="font-size:11px; letter-spacing:0.12em; text-transform:uppercase; color:rgba(255,255,255,0.56); margin-bottom:8px;">Dark Proof Section</div>
+              <div style="font-size:24px; line-height:1.2; font-weight:700; margin-bottom:14px;">从天气变化，到家人真正行动</div>
+              <div style="display:grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap:10px;">
+                <div style="padding:12px; border-radius:16px; background:rgba(255,255,255,0.05); color:rgba(255,255,255,0.9);">天气触发</div>
+                <div style="padding:12px; border-radius:16px; background:rgba(255,255,255,0.05); color:rgba(255,255,255,0.9);">子女转述</div>
+                <div style="padding:12px; border-radius:16px; background:rgba(255,255,255,0.05); color:rgba(255,255,255,0.9);">反馈回收</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>C3</h3>
+      <p>戏剧性最强。优点是节奏很品牌化。缺点是你的站点会明显更像宣传页，需要更大改动。</p>
+    </div>
+  </div>
+</div>
+
+<div class="section" style="margin-top:24px;">
+  <div class="mockup">
+    <div class="mockup-header">Apple 参考拆解到你这个网站</div>
+    <div class="mockup-body" style="padding:20px 22px;">
+      <div style="display:grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap:12px;">
+        <div style="padding:14px; border-radius:16px; background:#f7f7f5;">
+          <div class="label">1</div>
+          <h3 style="font-size:18px; margin:4px 0 8px;">首屏只做一件事</h3>
+          <p style="margin:0;">建立“这不是工具站，而是品牌产品”的第一印象。</p>
+        </div>
+        <div style="padding:14px; border-radius:16px; background:#f7f7f5;">
+          <div class="label">2</div>
+          <h3 style="font-size:18px; margin:4px 0 8px;">主图必须像海报</h3>
+          <p style="margin:0;">人物、留白、纯色背景都要足够安静，不能像资讯配图。</p>
+        </div>
+        <div style="padding:14px; border-radius:16px; background:#f7f7f5;">
+          <div class="label">3</div>
+          <h3 style="font-size:18px; margin:4px 0 8px;">功能解释下沉</h3>
+          <p style="margin:0;">现有徽章、闭环、统计不应该继续挤在首屏。</p>
+        </div>
+        <div style="padding:14px; border-radius:16px; background:#f7f7f5;">
+          <div class="label">4</div>
+          <h3 style="font-size:18px; margin:4px 0 8px;">一段暗色章节可选</h3>
+          <p style="margin:0;">如果你想更像品牌发布页，可以让第二段进入深色，制造节奏反差。</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>

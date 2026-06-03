@@ -1,0 +1,111 @@
+<h2>首页首屏主视觉摆法</h2>
+<p class="subtitle">目标是更像品牌页，不像功能卡片区。下面 3 个方向都基于你现在的文案结构，只调整主图与信息的关系。</p>
+
+<div class="cards" style="grid-template-columns: repeat(3, minmax(0, 1fr));">
+  <div class="card" data-choice="a" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div class="mockup">
+        <div class="mockup-header">A. 全幅海报式主图</div>
+        <div class="mockup-body" style="padding:0; background:#f4f6f8;">
+          <div style="position:relative; min-height:360px; overflow:hidden; border-radius:22px; background:linear-gradient(145deg,#f8f8f6 0%,#edf2f7 45%,#dfe9f5 100%);">
+            <div style="position:absolute; inset:0; background:radial-gradient(circle at 78% 28%, rgba(202,217,234,0.95), rgba(233,239,246,0.25) 28%, transparent 46%), radial-gradient(circle at 72% 70%, rgba(176,194,212,0.82), transparent 33%), linear-gradient(180deg, rgba(255,255,255,0.4), rgba(255,255,255,0));"></div>
+            <div style="position:absolute; right:20px; bottom:0; width:50%; height:90%; border-radius:180px 180px 0 0; background:linear-gradient(180deg, rgba(232,236,241,0.98), rgba(187,197,210,0.98)); filter:blur(0.2px);"></div>
+            <div style="position:absolute; right:16%; top:18%; width:18%; height:36%; border-radius:100px; background:linear-gradient(180deg, rgba(255,255,255,0.92), rgba(210,219,229,0.92)); transform:rotate(8deg);"></div>
+            <div style="position:absolute; left:28px; top:28px; width:43%; color:#111;">
+              <div style="font-size:11px; letter-spacing:0.12em; text-transform:uppercase; color:#6b7280; margin-bottom:10px;">Brand Poster Hero</div>
+              <div style="font-size:34px; line-height:1.04; font-weight:700; margin-bottom:12px;">文字直接压在整张纯净大图上</div>
+              <div style="font-size:14px; line-height:1.6; color:#4b5563;">右侧保留大面积艺术照片，左侧只留一列文案和按钮，首屏更像产品发布页。</div>
+            </div>
+            <div style="position:absolute; left:28px; bottom:28px; display:flex; gap:10px;">
+              <div style="padding:10px 16px; border-radius:999px; background:#111827; color:#fff; font-size:12px;">主按钮</div>
+              <div style="padding:10px 16px; border-radius:999px; border:1px solid rgba(17,24,39,0.16); background:rgba(255,255,255,0.7); color:#111827; font-size:12px;">次按钮</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>方案 A</h3>
+      <p>最接近 Apple 官网发布页。图像成为主角，信息被压缩成一列。</p>
+    </div>
+  </div>
+
+  <div class="card" data-choice="b" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div class="mockup">
+        <div class="mockup-header">B. 左文案 + 右艺术图台座</div>
+        <div class="mockup-body" style="padding:0; background:#f7f8fb;">
+          <div style="display:grid; grid-template-columns: 1.02fr 0.98fr; min-height:360px; overflow:hidden; border-radius:22px; background:linear-gradient(180deg,#ffffff 0%,#f5f7fa 100%);">
+            <div style="padding:32px 28px; display:flex; flex-direction:column; justify-content:center;">
+              <div style="font-size:11px; letter-spacing:0.12em; text-transform:uppercase; color:#6b7280; margin-bottom:12px;">Calm Brand Layout</div>
+              <div style="font-size:34px; line-height:1.05; font-weight:700; margin-bottom:14px; color:#111827;">文案和图像分区，但依然保持大片留白</div>
+              <div style="font-size:14px; line-height:1.7; color:#4b5563; margin-bottom:18px;">保留左侧现有标题、说明和按钮区，右侧改成一个真正的品牌级艺术图舞台。</div>
+              <div style="display:flex; gap:10px;">
+                <div style="padding:10px 16px; border-radius:999px; background:#111827; color:#fff; font-size:12px;">主按钮</div>
+                <div style="padding:10px 16px; border-radius:999px; border:1px solid rgba(17,24,39,0.14); background:#fff; color:#111827; font-size:12px;">辅助入口</div>
+              </div>
+            </div>
+            <div style="position:relative; padding:18px 18px 18px 0; display:flex; align-items:center; justify-content:center;">
+              <div style="position:absolute; inset:12% 10% 10% 0; border-radius:28px; background:radial-gradient(circle at 62% 24%, rgba(255,255,255,0.78), transparent 24%), linear-gradient(150deg,#d8e2ee 0%,#eef2f7 45%,#c5d3e2 100%);"></div>
+              <div style="position:relative; width:66%; height:78%; border-radius:180px 180px 30px 30px; background:linear-gradient(180deg, rgba(246,248,251,0.96), rgba(181,193,207,0.98)); box-shadow:0 28px 50px rgba(107,128,150,0.18);"></div>
+              <div style="position:absolute; right:18%; top:23%; width:16%; height:33%; border-radius:100px; background:linear-gradient(180deg,#ffffff,#dce4ec); transform:rotate(9deg);"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>方案 B</h3>
+      <p>最稳。能保住你现在的信息量，同时把右侧变成品牌视觉锚点。</p>
+    </div>
+  </div>
+
+  <div class="card" data-choice="c" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div class="mockup">
+        <div class="mockup-header">C. 单色舞台 + 中央人物雕塑感</div>
+        <div class="mockup-body" style="padding:0; background:#f4f4f2;">
+          <div style="position:relative; min-height:360px; overflow:hidden; border-radius:22px; background:linear-gradient(180deg,#f5f5f3 0%,#eceeea 100%);">
+            <div style="position:absolute; inset:0; background:radial-gradient(circle at 50% 76%, rgba(194,205,216,0.54), transparent 28%);"></div>
+            <div style="position:absolute; left:50%; transform:translateX(-50%); bottom:0; width:40%; height:82%; border-radius:180px 180px 0 0; background:linear-gradient(180deg,#fcfcfb 0%,#d3d9df 100%); box-shadow:0 24px 44px rgba(102,117,132,0.12);"></div>
+            <div style="position:absolute; left:50%; transform:translateX(-50%) rotate(8deg); top:18%; width:13%; height:31%; border-radius:100px; background:linear-gradient(180deg,#ffffff,#e3e8ee);"></div>
+            <div style="position:absolute; top:26px; left:0; width:100%; text-align:center; color:#111827;">
+              <div style="font-size:11px; letter-spacing:0.12em; text-transform:uppercase; color:#6b7280; margin-bottom:10px;">Monochrome Stage</div>
+              <div style="font-size:34px; line-height:1.06; font-weight:700; max-width:8em; margin:0 auto 12px;">更像品牌海报，功能信息下沉</div>
+              <div style="font-size:14px; line-height:1.6; color:#4b5563; max-width:29em; margin:0 auto;">首屏极简，只有一句最强标题和一张近乎雕塑感的照片。副信息放到首屏下方。</div>
+            </div>
+            <div style="position:absolute; left:50%; bottom:24px; transform:translateX(-50%); display:flex; gap:10px;">
+              <div style="padding:10px 16px; border-radius:999px; background:#111827; color:#fff; font-size:12px;">主按钮</div>
+              <div style="padding:10px 16px; border-radius:999px; border:1px solid rgba(17,24,39,0.14); background:rgba(255,255,255,0.72); color:#111827; font-size:12px;">次按钮</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>方案 C</h3>
+      <p>品牌味最强，极简感最重，但你现在首屏里的信息要删很多。</p>
+    </div>
+  </div>
+</div>
+
+<div class="section" style="margin-top:24px;">
+  <div class="pros-cons">
+    <div class="pros">
+      <h4>我推荐 B</h4>
+      <ul>
+        <li>最容易直接嫁接到你现有首页结构</li>
+        <li>既有品牌图，又不需要把说明信息砍得太狠</li>
+        <li>更适合你的产品现阶段，兼顾答辩展示和真实访问者理解</li>
+      </ul>
+    </div>
+    <div class="cons">
+      <h4>各方案代价</h4>
+      <ul>
+        <li>A：图很强，首屏右侧现有蓝色信息面板基本要删掉</li>
+        <li>B：品牌感强，但没有 A 和 C 那么激进</li>
+        <li>C：最像艺术宣传页，但会牺牲现在的功能解释效率</li>
+      </ul>
+    </div>
+  </div>
+</div>

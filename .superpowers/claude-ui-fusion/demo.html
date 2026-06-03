@@ -1,0 +1,970 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Claude UI 融合方案预览</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.5/font/bootstrap-icons.css">
+  <style>
+    :root {
+      --orange-600: #d66a1e;
+      --orange-500: #ee7e2d;
+      --orange-400: #f5a25c;
+      --orange-200: #fbdcc0;
+      --orange-100: #fbf1dc;
+      --orange-50: #fef8ee;
+      --ink: #2a2620;
+      --ink-soft: #57504a;
+      --muted: #8a837c;
+      --line: #ece3d6;
+      --line-soft: #f4eddf;
+      --surface: #fff;
+      --bg: #fbf7ee;
+      --success: #4e8b49;
+      --warn: #d98b1e;
+      --danger: #c7472e;
+      --blue: #2f6fed;
+      --radius-lg: 18px;
+      --radius: 14px;
+      --shadow-sm: 0 1px 2px rgba(66, 48, 28, .04);
+      --shadow: 0 10px 26px rgba(66, 48, 28, .08);
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, -apple-system, sans-serif;
+      font-size: 15px;
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+    }
+    a { color: inherit; text-decoration: none; }
+    img { display: block; max-width: 100%; }
+
+    .page-shell {
+      max-width: 1360px;
+      margin: 0 auto;
+      padding: 28px;
+    }
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      background: rgba(255, 255, 255, .88);
+      backdrop-filter: saturate(180%) blur(16px);
+      border-bottom: 1px solid var(--line-soft);
+    }
+    .topbar-inner {
+      max-width: 1360px;
+      margin: 0 auto;
+      padding: 12px 28px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+    }
+    .brand {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      font-weight: 700;
+    }
+    .brand i {
+      color: var(--orange-500);
+      font-size: 1.35rem;
+    }
+    .nav {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+    .nav a {
+      padding: 8px 12px;
+      border-radius: 999px;
+      color: var(--ink-soft);
+      font-size: .9rem;
+    }
+    .nav a:hover,
+    .nav a.active {
+      background: var(--orange-50);
+      color: var(--orange-600);
+    }
+
+    .intro {
+      padding: 38px 0 22px;
+      display: grid;
+      grid-template-columns: minmax(0, 1.25fr) minmax(280px, .75fr);
+      gap: 24px;
+      align-items: end;
+    }
+    .intro h1 {
+      margin: 0 0 12px;
+      font-size: 2.2rem;
+      line-height: 1.18;
+      letter-spacing: 0;
+    }
+    .intro p {
+      margin: 0;
+      color: var(--ink-soft);
+      max-width: 780px;
+      font-size: 1rem;
+    }
+    .summary-card {
+      background: var(--surface);
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius-lg);
+      padding: 18px;
+      box-shadow: var(--shadow-sm);
+    }
+    .summary-card strong {
+      display: block;
+      margin-bottom: 8px;
+    }
+    .summary-card ul {
+      margin: 0;
+      padding-left: 18px;
+      color: var(--ink-soft);
+      font-size: .9rem;
+    }
+
+    .analysis-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 14px;
+      margin: 8px 0 26px;
+    }
+    .analysis-card {
+      background: var(--surface);
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius-lg);
+      padding: 18px;
+    }
+    .analysis-card .k {
+      color: var(--orange-600);
+      font-size: .78rem;
+      font-weight: 700;
+      letter-spacing: .04em;
+      margin-bottom: 8px;
+    }
+    .analysis-card h2 {
+      margin: 0 0 8px;
+      font-size: 1.05rem;
+    }
+    .analysis-card p {
+      margin: 0;
+      color: var(--ink-soft);
+      font-size: .9rem;
+    }
+
+    .demo-block {
+      margin: 26px 0 34px;
+      background: rgba(255, 255, 255, .52);
+      border: 1px solid var(--line);
+      border-radius: 24px;
+      padding: 18px;
+      box-shadow: var(--shadow-sm);
+    }
+    .demo-title {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 16px;
+      margin: 2px 4px 16px;
+    }
+    .demo-title h2 {
+      margin: 0 0 4px;
+      font-size: 1.25rem;
+      letter-spacing: 0;
+    }
+    .demo-title p {
+      margin: 0;
+      color: var(--ink-soft);
+      max-width: 760px;
+    }
+    .tag {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 10px;
+      border-radius: 999px;
+      background: var(--orange-50);
+      color: var(--orange-600);
+      border: 1px solid var(--orange-200);
+      font-size: .82rem;
+      white-space: nowrap;
+    }
+
+    .mock-app {
+      background: var(--bg);
+      border: 1px solid var(--line-soft);
+      border-radius: 20px;
+      overflow: hidden;
+    }
+    .mock-nav {
+      height: 58px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      padding: 0 22px;
+      background: rgba(255, 255, 255, .88);
+      border-bottom: 1px solid var(--line-soft);
+    }
+    .mock-nav .links {
+      display: flex;
+      gap: 8px;
+      color: var(--ink-soft);
+      font-size: .85rem;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+    .mock-nav .links span {
+      padding: 6px 9px;
+      border-radius: 10px;
+    }
+    .mock-nav .links .on {
+      background: var(--orange-100);
+      color: var(--orange-600);
+    }
+    .mock-content {
+      padding: 22px;
+    }
+
+    .hero-today {
+      background: linear-gradient(135deg, #fff7e6 0%, #fbdcc0 100%);
+      border: 1px solid var(--orange-200);
+      border-radius: 20px;
+      padding: 26px;
+      position: relative;
+      overflow: hidden;
+      box-shadow: var(--shadow-sm);
+    }
+    .hero-today::before {
+      content: "";
+      position: absolute;
+      right: -80px;
+      top: -120px;
+      width: 260px;
+      height: 260px;
+      border-radius: 50%;
+      background: rgba(255, 255, 255, .38);
+    }
+    .hero-grid {
+      position: relative;
+      display: grid;
+      grid-template-columns: minmax(0, 1.8fr) minmax(220px, .8fr);
+      gap: 20px;
+      align-items: stretch;
+    }
+    .label {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 10px;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, .56);
+      color: var(--orange-600);
+      font-size: .82rem;
+      font-weight: 700;
+    }
+    .temp {
+      margin: 12px 0 0;
+      font-size: 4.8rem;
+      line-height: 1;
+      font-weight: 700;
+      letter-spacing: 0;
+    }
+    .temp small {
+      font-size: 1.8rem;
+      color: var(--ink-soft);
+      font-weight: 500;
+    }
+    .condition {
+      color: var(--ink-soft);
+      font-size: 1.04rem;
+      margin-top: 8px;
+    }
+    .meta-row {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 18px;
+    }
+    .mini-stat {
+      background: rgba(255, 255, 255, .52);
+      border: 1px solid rgba(255, 255, 255, .58);
+      border-radius: 12px;
+      padding: 11px;
+    }
+    .mini-stat .k {
+      color: var(--muted);
+      font-size: .76rem;
+    }
+    .mini-stat .v {
+      margin-top: 2px;
+      font-weight: 700;
+    }
+    .risk-dial {
+      background: rgba(255, 255, 255, .74);
+      border: 1px solid rgba(255, 255, 255, .65);
+      border-radius: 18px;
+      padding: 22px;
+      display: grid;
+      place-items: center;
+      text-align: center;
+      min-height: 100%;
+    }
+    .risk-dial .score {
+      color: var(--orange-500);
+      font-size: 3.2rem;
+      line-height: 1;
+      font-weight: 700;
+    }
+    .risk-dial .sub {
+      color: var(--ink-soft);
+      margin-top: 6px;
+      font-size: .9rem;
+    }
+
+    .two-col {
+      display: grid;
+      grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr);
+      gap: 16px;
+      margin-top: 16px;
+    }
+    .panel-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 16px;
+      margin-top: 16px;
+    }
+    .panel {
+      background: var(--surface);
+      border: 1px solid var(--line-soft);
+      border-radius: 18px;
+      padding: 18px;
+      min-width: 0;
+      box-shadow: var(--shadow-sm);
+    }
+    .panel-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 14px;
+    }
+    .panel h3 {
+      margin: 0;
+      font-size: 1.05rem;
+      letter-spacing: 0;
+    }
+    .eyebrow {
+      display: inline-block;
+      margin-bottom: 5px;
+      padding: 4px 9px;
+      border-radius: 999px;
+      background: var(--orange-50);
+      color: var(--orange-600);
+      font-size: .76rem;
+      font-weight: 700;
+    }
+    .art {
+      width: 86px;
+      height: 86px;
+      flex: 0 0 auto;
+      border-radius: 18px;
+      padding: 8px;
+      background: linear-gradient(180deg, #fff 0%, var(--orange-50) 100%);
+      border: 1px solid rgba(238, 126, 45, .14);
+    }
+    .art img {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+    }
+    .action-list {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }
+    .action-item {
+      display: flex;
+      gap: 9px;
+      align-items: flex-start;
+      background: var(--orange-50);
+      border: 1px solid var(--orange-200);
+      border-radius: 12px;
+      padding: 11px;
+    }
+    .action-item i {
+      color: var(--orange-500);
+      margin-top: 2px;
+    }
+    .action-item strong {
+      display: block;
+      font-size: .9rem;
+    }
+    .action-item span {
+      display: block;
+      color: var(--ink-soft);
+      font-size: .8rem;
+    }
+    .feature-list {
+      display: grid;
+      gap: 10px;
+    }
+    .feature {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      padding: 13px;
+      background: #fff;
+      border: 1px solid var(--line-soft);
+      border-radius: 14px;
+    }
+    .feature-copy {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      min-width: 0;
+    }
+    .icon {
+      width: 38px;
+      height: 38px;
+      display: grid;
+      place-items: center;
+      border-radius: 12px;
+      background: var(--orange-50);
+      color: var(--orange-500);
+      flex: 0 0 auto;
+    }
+    .feature h4 {
+      margin: 0;
+      font-size: .95rem;
+      letter-spacing: 0;
+    }
+    .feature p {
+      margin: 1px 0 0;
+      color: var(--muted);
+      font-size: .82rem;
+    }
+    .feature .thumb-art {
+      width: 70px;
+      height: 70px;
+      border-radius: 14px;
+      padding: 6px;
+      background: var(--orange-50);
+      flex: 0 0 auto;
+    }
+    .feature .thumb-art img {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+    }
+    .forecast-row {
+      display: grid;
+      grid-template-columns: repeat(7, minmax(0, 1fr));
+      gap: 8px;
+    }
+    .day {
+      text-align: center;
+      background: #fff;
+      border: 1px solid var(--line-soft);
+      border-radius: 12px;
+      padding: 10px 6px;
+      min-width: 0;
+    }
+    .day .dow {
+      color: var(--muted);
+      font-size: .76rem;
+    }
+    .day .t {
+      font-weight: 700;
+      margin-top: 2px;
+      font-size: .9rem;
+    }
+    .day .risk {
+      display: inline-block;
+      margin-top: 5px;
+      padding: 1px 7px;
+      border-radius: 999px;
+      color: var(--orange-600);
+      background: var(--orange-50);
+      font-size: .72rem;
+    }
+
+    .variant-b .mock-content {
+      padding: 18px;
+    }
+    .variant-b .hero-today {
+      padding: 22px;
+    }
+    .variant-b .panel-grid {
+      grid-template-columns: repeat(4, minmax(220px, 1fr));
+      overflow-x: auto;
+      padding-bottom: 4px;
+    }
+    .variant-b .panel {
+      min-width: 220px;
+    }
+    .variant-b .panel-head {
+      align-items: flex-start;
+    }
+    .variant-b .art {
+      width: 76px;
+      height: 76px;
+    }
+
+    .variant-ac .demo-title h2 {
+      color: #b94710;
+    }
+    .variant-ac .tag {
+      background: #fff2df;
+      color: #c54c12;
+      border-color: rgba(245, 117, 31, .28);
+    }
+    .variant-ac .mock-app {
+      background: linear-gradient(180deg, #fff6e7 0%, #fbf7ee 44%, #fff 100%);
+      border-color: rgba(238, 126, 45, .18);
+    }
+    .variant-ac .mock-nav {
+      background: rgba(255, 250, 241, .9);
+    }
+    .variant-ac .mock-nav .links .on {
+      background: #ff6a1f;
+      color: #fff;
+    }
+    .variant-ac .hero-today {
+      min-height: 326px;
+      display: flex;
+      align-items: center;
+      background:
+        radial-gradient(circle at 82% 12%, rgba(255, 255, 255, .24) 0 90px, transparent 92px),
+        linear-gradient(120deg, #ef7b42 0%, #f49a59 48%, #ffd7a6 100%);
+      border-color: rgba(255, 122, 36, .34);
+      color: #fff;
+      box-shadow: 0 20px 42px rgba(204, 74, 18, .12);
+    }
+    .variant-ac .hero-today::before {
+      width: 540px;
+      height: 540px;
+      right: -180px;
+      top: -170px;
+      background: rgba(255, 255, 255, .16);
+    }
+    .variant-ac .hero-grid {
+      width: 100%;
+    }
+    .variant-ac .label,
+    .variant-ac .mini-stat,
+    .variant-ac .risk-dial {
+      background: rgba(255, 255, 255, .18);
+      color: #fff;
+      border-color: rgba(255, 255, 255, .26);
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, .18);
+    }
+    .variant-ac .condition,
+    .variant-ac .temp small,
+    .variant-ac .mini-stat .k,
+    .variant-ac .risk-dial .sub {
+      color: rgba(255, 255, 255, .82);
+    }
+    .variant-ac .risk-dial .score {
+      color: #fff;
+    }
+    .variant-ac .panel {
+      border-color: rgba(238, 126, 45, .13);
+      box-shadow: 0 10px 24px rgba(66, 48, 28, .06);
+    }
+    .variant-ac .eyebrow,
+    .variant-ac .icon,
+    .variant-ac .feature .thumb-art {
+      background: #fff2df;
+      color: #e85e19;
+    }
+    .variant-ac .action-item {
+      background: #fff7eb;
+      border-color: rgba(245, 117, 31, .18);
+    }
+    .variant-ac .art {
+      background: linear-gradient(180deg, #fff 0%, #fff0dd 100%);
+      border-color: rgba(245, 117, 31, .18);
+    }
+
+    .variant-c .mock-app {
+      background: linear-gradient(180deg, #fff8ee 0%, #fbf7ee 54%, #fff 100%);
+    }
+    .variant-c .hero-today {
+      min-height: 330px;
+      display: flex;
+      align-items: center;
+      background:
+        linear-gradient(120deg, rgba(238, 126, 45, .96) 0%, rgba(245, 162, 92, .92) 46%, rgba(251, 220, 192, .92) 100%);
+      color: #fff;
+    }
+    .variant-c .hero-today::before {
+      width: 520px;
+      height: 520px;
+      right: -150px;
+      top: -150px;
+      background: rgba(255, 255, 255, .18);
+    }
+    .variant-c .label,
+    .variant-c .mini-stat,
+    .variant-c .risk-dial {
+      background: rgba(255, 255, 255, .18);
+      color: #fff;
+      border-color: rgba(255, 255, 255, .24);
+    }
+    .variant-c .condition,
+    .variant-c .temp small,
+    .variant-c .mini-stat .k,
+    .variant-c .risk-dial .sub {
+      color: rgba(255, 255, 255, .82);
+    }
+    .variant-c .risk-dial .score {
+      color: #fff;
+    }
+    .variant-c .floating-strip {
+      margin-top: -34px;
+      position: relative;
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+    }
+    .variant-c .strip-card {
+      background: #fff;
+      border: 1px solid var(--line-soft);
+      border-radius: 18px;
+      padding: 16px;
+      box-shadow: var(--shadow);
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .variant-c .strip-card img {
+      width: 68px;
+      height: 68px;
+      object-fit: contain;
+      border-radius: 14px;
+      background: var(--orange-50);
+    }
+
+    .decision {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 14px;
+      margin-top: 18px;
+    }
+    .decision-card {
+      background: #fff;
+      border: 1px solid var(--line-soft);
+      border-radius: 16px;
+      padding: 16px;
+    }
+    .decision-card strong {
+      display: block;
+      margin-bottom: 7px;
+    }
+    .decision-card p {
+      margin: 0;
+      color: var(--ink-soft);
+      font-size: .9rem;
+    }
+
+    @media (max-width: 980px) {
+      .intro,
+      .analysis-grid,
+      .two-col,
+      .hero-grid,
+      .decision,
+      .variant-c .floating-strip {
+        grid-template-columns: 1fr;
+      }
+      .panel-grid {
+        grid-template-columns: 1fr;
+      }
+      .meta-row,
+      .action-list,
+      .forecast-row {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+      .temp {
+        font-size: 3.7rem;
+      }
+      .mock-nav {
+        height: auto;
+        padding: 12px 16px;
+        align-items: flex-start;
+        flex-direction: column;
+      }
+    }
+    @media (max-width: 640px) {
+      .page-shell {
+        padding: 16px;
+      }
+      .topbar-inner {
+        padding: 10px 16px;
+        align-items: flex-start;
+        flex-direction: column;
+      }
+      .intro h1 {
+        font-size: 1.7rem;
+      }
+      .demo-block {
+        padding: 12px;
+        border-radius: 18px;
+      }
+      .demo-title {
+        flex-direction: column;
+      }
+      .mock-content {
+        padding: 14px;
+      }
+      .hero-today {
+        padding: 18px;
+      }
+      .meta-row,
+      .action-list,
+      .forecast-row {
+        grid-template-columns: 1fr;
+      }
+      .feature {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <a class="brand" href="#"><i class="bi bi-cloud-sun"></i><span>宜老天气通 · Claude UI 融合预览</span></a>
+      <nav class="nav">
+        <a class="active" href="#compare">差异判断</a>
+        <a href="#a">A+C 推荐</a>
+        <a href="#b">方案 B</a>
+        <a href="#c">方案 C</a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="page-shell">
+    <section class="intro" id="compare">
+      <div>
+        <h1>把 Claude 的暖橙视觉系统，融合进当前已上线的照护功能页。</h1>
+        <p>这页不是正式改动，只是给你看方向。它保留了之前生成的“今日行动、照护工作台、AI 疾病预测、新增监测对象、备选联系人”等小插图，同时吸收 Claude 版更活力、更干净的橙色系统。</p>
+      </div>
+      <aside class="summary-card">
+        <strong>我的初步判断</strong>
+        <ul>
+          <li>Claude 的配色和卡片质感更好，适合继续吸收。</li>
+          <li>Claude 的模板变量和当前后端不完全一致，不能直接覆盖。</li>
+          <li>当前版本的插图资产和响应式保护更完整，应该保留。</li>
+        </ul>
+      </aside>
+    </section>
+
+    <section class="analysis-grid">
+      <article class="analysis-card">
+        <div class="k">CLAUDE 优化点</div>
+        <h2>更统一的暖橙系统</h2>
+        <p>背景从偏白变成奶油暖底，按钮、表单、卡片、导航都使用同一组双橙 token，视觉比当前版本更轻快。</p>
+      </article>
+      <article class="analysis-card">
+        <div class="k">和当前版本不同</div>
+        <h2>结构更像 2 栏工作台</h2>
+        <p>Claude 把“今日行动”和“7 日预测”放左边，把快捷入口和家人概览放右边。当前版本更像自适应卡片流。</p>
+      </article>
+      <article class="analysis-card">
+        <div class="k">需要谨慎</div>
+        <h2>老人端不能太小太淡</h2>
+        <p>Claude 的精致感主要来自小字号、浅边框和轻阴影。年轻人喜欢，老人端需要保留更大字号和更明确按钮。</p>
+      </article>
+    </section>
+
+    <section class="demo-block variant-ac" id="a">
+      <div class="demo-title">
+        <div>
+          <h2>方案 A+C · 饱和橙主视觉双栏融合</h2>
+          <p>保留 A 的 2 栏工作台结构，把 C 的橙色品牌感放到顶部主视觉。这里先把 32°C 的橙色调淡，真实页面会按温度线性调整饱和度。</p>
+        </div>
+        <span class="tag"><i class="bi bi-star-fill"></i> 当前推荐</span>
+      </div>
+
+      <div class="mock-app">
+        <div class="mock-nav">
+          <a class="brand" href="#"><i class="bi bi-cloud-sun"></i><span>宜老天气通</span></a>
+          <div class="links"><span class="on">我的主页</span><span>照护工作台</span><span>健康工具</span><span>更多</span></div>
+        </div>
+        <div class="mock-content">
+          <section class="hero-today">
+            <div class="hero-grid">
+              <div>
+                <span class="label"><i class="bi bi-sun"></i> 九江 · 家庭照护今日页</span>
+                <div class="temp">32<small>°C</small></div>
+                <div class="condition">把天气风险转成今天可以执行的照护动作。</div>
+                <div class="meta-row">
+                  <div class="mini-stat"><div class="k">今日行动</div><div class="v">4 件</div></div>
+                  <div class="mini-stat"><div class="k">关注家人</div><div class="v">3 位</div></div>
+                  <div class="mini-stat"><div class="k">备选联系人</div><div class="v">2 人</div></div>
+                  <div class="mini-stat"><div class="k">风险趋势</div><div class="v">上升</div></div>
+                </div>
+              </div>
+              <div class="risk-dial"><div class="score">56</div><div class="sub">中等风险<br>建议今天主动提醒</div></div>
+            </div>
+          </section>
+
+          <div class="two-col">
+            <div>
+              <article class="panel">
+                <div class="panel-head">
+                  <div><span class="eyebrow">给你的一些建议</span><h3>今天可以做的 4 件小事</h3></div>
+                  <div class="art"><img src="/static/illustrations/dashboard/today-actions.png" alt=""></div>
+                </div>
+                <div class="action-list">
+                  <div class="action-item"><i class="bi bi-cup-hot"></i><div><strong>多喝温水</strong><span>少量多次，不等口渴</span></div></div>
+                  <div class="action-item"><i class="bi bi-sun"></i><div><strong>避开午后</strong><span>11:00-15:00 少外出</span></div></div>
+                  <div class="action-item"><i class="bi bi-heart-pulse"></i><div><strong>关注血压</strong><span>早晚各测一次</span></div></div>
+                  <div class="action-item"><i class="bi bi-capsule"></i><div><strong>按时服药</strong><span>别漏降压药</span></div></div>
+                </div>
+              </article>
+
+              <article class="panel" style="margin-top:16px;">
+                <div class="panel-head"><div><span class="eyebrow">7 日健康预测</span><h3>接下来一周的风险趋势</h3></div></div>
+                <div class="forecast-row">
+                  <div class="day"><div class="dow">今</div><div class="t">32/25°</div><span class="risk">中</span></div>
+                  <div class="day"><div class="dow">明</div><div class="t">34/26°</div><span class="risk">高</span></div>
+                  <div class="day"><div class="dow">三</div><div class="t">30/24°</div><span class="risk">中</span></div>
+                  <div class="day"><div class="dow">四</div><div class="t">29/23°</div><span class="risk">低</span></div>
+                  <div class="day"><div class="dow">五</div><div class="t">31/24°</div><span class="risk">低</span></div>
+                  <div class="day"><div class="dow">六</div><div class="t">33/25°</div><span class="risk">中</span></div>
+                  <div class="day"><div class="dow">日</div><div class="t">34/26°</div><span class="risk">高</span></div>
+                </div>
+              </article>
+            </div>
+
+            <aside class="panel">
+              <div class="panel-head">
+                <div><span class="eyebrow">常用入口</span><h3>快捷入口</h3></div>
+                <div class="art"><img src="/static/illustrations/dashboard/quick-entries.png" alt=""></div>
+              </div>
+              <div class="feature-list">
+                <div class="feature"><div class="feature-copy"><span class="icon"><i class="bi bi-people"></i></span><div><h4>照护工作台</h4><p>管理家人</p></div></div><span class="thumb-art"><img src="/static/illustrations/dashboard/care-workbench.png" alt=""></span></div>
+                <div class="feature"><div class="feature-copy"><span class="icon"><i class="bi bi-cpu"></i></span><div><h4>AI 疾病预测</h4><p>基于天气的个性化预测</p></div></div><span class="thumb-art"><img src="/static/illustrations/dashboard/ai-prediction.png" alt=""></span></div>
+                <div class="feature"><div class="feature-copy"><span class="icon"><i class="bi bi-heart-pulse"></i></span><div><h4>慢病风险评估</h4><p>评估当前慢病状态</p></div></div></div>
+                <div class="feature"><div class="feature-copy"><span class="icon"><i class="bi bi-snow2"></i></span><div><h4>避暑资源</h4><p>周边纳凉点</p></div></div></div>
+              </div>
+            </aside>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="demo-block variant-b" id="b">
+      <div class="demo-title">
+        <div>
+          <h2>方案 B · 当前结构升级皮肤</h2>
+          <p>保留你现在上线的自适应卡片流，只把 Claude 的暖色、导航、表单、卡片质感融合进来。风险最低，适合快速落地。</p>
+        </div>
+        <span class="tag"><i class="bi bi-shield-check"></i> 最稳</span>
+      </div>
+
+      <div class="mock-app">
+        <div class="mock-nav">
+          <a class="brand" href="#"><i class="bi bi-cloud-sun"></i><span>宜老天气通</span></a>
+          <div class="links"><span class="on">我的主页</span><span>预警</span><span>健康工具</span><span>照护</span></div>
+        </div>
+        <div class="mock-content">
+          <section class="hero-today">
+            <div class="hero-grid">
+              <div>
+                <span class="label"><i class="bi bi-sun"></i> 今日 · 九江</span>
+                <div class="temp">32<small>°C</small></div>
+                <div class="condition">晴 · 最高 35° / 最低 26°</div>
+                <div class="meta-row">
+                  <div class="mini-stat"><div class="k">湿度</div><div class="v">62%</div></div>
+                  <div class="mini-stat"><div class="k">气压</div><div class="v">1008</div></div>
+                  <div class="mini-stat"><div class="k">风速</div><div class="v">2.8</div></div>
+                  <div class="mini-stat"><div class="k">AQI</div><div class="v">41</div></div>
+                </div>
+              </div>
+              <div class="risk-dial"><div class="score">56</div><div class="sub">今日健康风险<br>中等风险</div></div>
+            </div>
+          </section>
+
+          <div class="panel-grid">
+            <article class="panel">
+              <div class="panel-head"><div><span class="eyebrow">建议</span><h3>今日行动</h3></div><div class="art"><img src="/static/illustrations/dashboard/today-actions.png" alt=""></div></div>
+              <div class="action-list" style="grid-template-columns:1fr;"><div class="action-item"><i class="bi bi-cup-hot"></i><div><strong>多喝温水</strong><span>建议 1.5L</span></div></div><div class="action-item"><i class="bi bi-sun"></i><div><strong>避开午后</strong><span>中午少外出</span></div></div></div>
+            </article>
+            <article class="panel">
+              <div class="panel-head"><div><span class="eyebrow">常用</span><h3>快捷入口</h3></div><div class="art"><img src="/static/illustrations/dashboard/quick-entries.png" alt=""></div></div>
+              <div class="feature-list"><div class="feature"><div class="feature-copy"><span class="icon"><i class="bi bi-people"></i></span><div><h4>照护工作台</h4><p>管理家人</p></div></div></div><div class="feature"><div class="feature-copy"><span class="icon"><i class="bi bi-cpu"></i></span><div><h4>AI 疾病预测</h4><p>天气预测</p></div></div></div></div>
+            </article>
+            <article class="panel">
+              <div class="panel-head"><div><span class="eyebrow">预测</span><h3>7 日趋势</h3></div></div>
+              <div class="forecast-row" style="grid-template-columns:repeat(2,1fr);"><div class="day"><div class="dow">明</div><div class="t">34/26°</div><span class="risk">高</span></div><div class="day"><div class="dow">三</div><div class="t">30/24°</div><span class="risk">中</span></div></div>
+            </article>
+            <article class="panel">
+              <div class="panel-head"><div><span class="eyebrow">照护</span><h3>本地协助链</h3></div><div class="art"><img src="/static/illustrations/dashboard/backup-contact.png" alt=""></div></div>
+              <div class="feature-list"><div class="feature"><div class="feature-copy"><span class="icon"><i class="bi bi-person-plus"></i></span><div><h4>新增监测对象</h4><p>九江乡镇</p></div></div></div></div>
+            </article>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="demo-block variant-c" id="c">
+      <div class="demo-title">
+        <div>
+          <h2>方案 C · 活力入口型</h2>
+          <p>更适合年轻人第一眼，但对老人来说会稍微“宣传页化”。如果你想让产品更像品牌应用，可以作为首页或登录后首屏方向。</p>
+        </div>
+        <span class="tag"><i class="bi bi-lightning-charge-fill"></i> 品牌感最强</span>
+      </div>
+
+      <div class="mock-app">
+        <div class="mock-nav">
+          <a class="brand" href="#"><i class="bi bi-cloud-sun"></i><span>宜老天气通</span></a>
+          <div class="links"><span class="on">今日</span><span>照护</span><span>风险</span><span>资源</span></div>
+        </div>
+        <div class="mock-content">
+          <section class="hero-today">
+            <div class="hero-grid">
+              <div>
+                <span class="label"><i class="bi bi-sun"></i> 九江 · 家庭照护今日页</span>
+                <div class="temp">32<small>°C</small></div>
+                <div class="condition">天气风险已经转成今天可以执行的照护动作。</div>
+                <div class="meta-row">
+                  <div class="mini-stat"><div class="k">今日行动</div><div class="v">4 件</div></div>
+                  <div class="mini-stat"><div class="k">关注家人</div><div class="v">3 位</div></div>
+                  <div class="mini-stat"><div class="k">备选联系人</div><div class="v">2 人</div></div>
+                  <div class="mini-stat"><div class="k">风险趋势</div><div class="v">上升</div></div>
+                </div>
+              </div>
+              <div class="risk-dial"><div class="score">56</div><div class="sub">中等风险<br>建议今天主动提醒</div></div>
+            </div>
+          </section>
+
+          <div class="floating-strip">
+            <div class="strip-card"><img src="/static/illustrations/dashboard/today-actions.png" alt=""><div><strong>今日行动</strong><div style="color:var(--ink-soft);font-size:.86rem;">把天气转成四件小事</div></div></div>
+            <div class="strip-card"><img src="/static/illustrations/dashboard/care-workbench.png" alt=""><div><strong>照护工作台</strong><div style="color:var(--ink-soft);font-size:.86rem;">管理家人和确认状态</div></div></div>
+            <div class="strip-card"><img src="/static/illustrations/dashboard/ai-prediction.png" alt=""><div><strong>AI 疾病预测</strong><div style="color:var(--ink-soft);font-size:.86rem;">看天气变化下的风险</div></div></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="decision">
+      <article class="decision-card"><strong>我建议先落 A+C</strong><p>它保留 A 的可用结构，同时把 C 的品牌橙集中在首屏，年轻感更强，老人阅读压力也可控。</p></article>
+      <article class="decision-card"><strong>B 是最小风险版本</strong><p>如果你担心上线后页面变化太大，B 可以作为第一版合入。</p></article>
+      <article class="decision-card"><strong>C 适合公开入口</strong><p>C 更像品牌应用首屏，可以后续用在首页或登录页，不建议直接替换工作台。</p></article>
+    </section>
+  </main>
+</body>
+</html>

@@ -263,6 +263,13 @@ def configure_app(app, logger):
     app.config['WXPUSHER_APP_TOKEN'] = wxpusher_app_token
     app.config['WXPUSHER_API_BASE'] = wxpusher_api_base
     app.config['PUBLIC_BASE_URL'] = public_base_url
+    app.config['PREFERRED_URL_SCHEME'] = 'https' if not app.config['DEBUG'] else 'http'
+    app.config['SESSION_COOKIE_SECURE'] = not app.config['DEBUG']
+    app.config['SESSION_COOKIE_HTTPONLY'] = True
+    app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+    app.config['REMEMBER_COOKIE_SECURE'] = not app.config['DEBUG']
+    app.config['REMEMBER_COOKIE_HTTPONLY'] = True
+    app.config['REMEMBER_COOKIE_SAMESITE'] = 'Lax'
     app.config['AI_ALLOWED_MODELS'] = AI_ALLOWED_MODELS
     app.config['DEFAULT_CITY'] = default_city or DEFAULT_CITY_LABEL
     app.config['DEFAULT_LOCATION'] = default_location or DEFAULT_LOCATION

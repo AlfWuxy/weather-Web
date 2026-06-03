@@ -27,6 +27,15 @@ git remote -v
 git diff --staged
 ```
 
+本机测试入口固定为 Conda 环境：
+
+```bash
+conda run -n case-weather-py312 python -m pytest -q
+conda run -n case-weather-py312 python -m pytest -q -m manual
+```
+
+不要默认使用仓库里的 `.venv` 或 `venv` 作为测试解释器；当前 macOS 基线以 `case-weather-py312` 为准。
+
 ## 不可打破的规则
 
 1. `main` 只保存已经合并完成的成品历史。
@@ -39,6 +48,18 @@ git diff --staged
 8. 一次性报告、WIP 清单、AI 提示词、历史快照不留在主仓库，进入本地归档区或私有仓。
 9. 多个 AI 助手不能共用同一个开发分支，优先一个助手一个 `worktree`。
 10. 未完成验证的分支只开 Draft PR，不直接合并。
+
+## 线上只读 smoke 边界
+
+允许匿名 `GET` 这些公开路径，并且只记录 `path`、`http_status`、`content_type`、`redirect_location` 与时间戳：
+
+- `/`
+- `/robots.txt`
+- `/login`
+- `/admin`
+- `/register`
+
+不要在 smoke 中执行 `POST`、真实登录、管理员操作、数据库迁移、服务重启、读取生产 `.env`、输出 Cookie/CSRF/API key，或访问可能写天气缓存的天气接口。
 
 ## 文件去向规则
 

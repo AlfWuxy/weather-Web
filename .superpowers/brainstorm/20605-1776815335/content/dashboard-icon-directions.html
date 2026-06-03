@@ -1,0 +1,180 @@
+<h2>功能页图标升级方向</h2>
+<p class="subtitle">目标不是把整站“插画化”，而是在不影响操作效率的前提下，让“我的主页 / 照护工作台”多一点精致度和品牌识别。下面 3 个方向从保守到激进。</p>
+
+<div class="cards" style="grid-template-columns: repeat(3, minmax(0, 1fr));">
+  <div class="card" data-choice="a" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div class="mockup">
+        <div class="mockup-header">A. 只换模块级图标</div>
+        <div class="mockup-body" style="padding:18px;">
+          <div style="display:grid; gap:12px;">
+            <div style="padding:16px; border-radius:18px; background:#f7f5f1; border:1px solid rgba(17,24,39,0.06);">
+              <div style="display:flex; align-items:center; gap:10px; margin-bottom:10px;">
+                <div style="width:34px; height:34px; border-radius:12px; background:#fff; border:1px solid rgba(17,24,39,0.08); position:relative;">
+                  <div style="position:absolute; inset:8px; border:1.5px solid #d09b42; border-radius:10px;"></div>
+                  <div style="position:absolute; left:12px; top:5px; width:10px; height:10px; border:1.5px solid #d09b42; border-radius:50%; background:rgba(208,155,66,0.08);"></div>
+                </div>
+                <div style="font-weight:600; color:#111827;">今日一屏 / 常用入口 / 新增监测对象</div>
+              </div>
+              <div style="font-size:13px; color:#6b7280; line-height:1.6;">只替换大模块、卡片标题和快捷入口的图标。按钮和状态标识继续用系统图标。</div>
+            </div>
+            <div style="display:grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap:10px;">
+              <div style="padding:14px; border-radius:16px; background:#fff; border:1px solid rgba(17,24,39,0.06); text-align:center;">
+                <div style="margin:0 auto 8px; width:34px; height:34px; border-radius:12px; border:1.5px solid #d09b42; position:relative;">
+                  <div style="position:absolute; left:7px; right:7px; bottom:8px; height:1.5px; background:#d09b42;"></div>
+                  <div style="position:absolute; left:11px; top:8px; width:12px; height:12px; border:1.5px solid #d09b42; border-radius:50%;"></div>
+                </div>
+                <div style="font-size:12px; color:#4b5563;">快捷入口</div>
+              </div>
+              <div style="padding:14px; border-radius:16px; background:#fff; border:1px solid rgba(17,24,39,0.06); text-align:center;">
+                <div style="margin:0 auto 8px; width:34px; height:34px; border-radius:12px; border:1.5px solid #6b9fb4; position:relative;">
+                  <div style="position:absolute; left:8px; top:12px; width:18px; height:1.5px; background:#6b9fb4;"></div>
+                  <div style="position:absolute; left:8px; top:18px; width:12px; height:1.5px; background:#6b9fb4;"></div>
+                </div>
+                <div style="font-size:12px; color:#4b5563;">模块标题</div>
+              </div>
+              <div style="padding:14px; border-radius:16px; background:#fff; border:1px solid rgba(17,24,39,0.06); text-align:center;">
+                <div style="margin:0 auto 8px; width:34px; height:34px; border-radius:12px; border:1.5px solid #8ea66d; position:relative;">
+                  <div style="position:absolute; left:9px; top:9px; width:14px; height:14px; border:1.5px solid #8ea66d; border-radius:50%;"></div>
+                  <div style="position:absolute; left:14px; top:14px; width:4px; height:4px; background:#8ea66d; border-radius:50%;"></div>
+                </div>
+                <div style="font-size:12px; color:#4b5563;">卡片分区</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>A. 点到即止</h3>
+      <p>优点是稳，几乎不影响操作。缺点是变化感最弱，品牌感提升有限。</p>
+    </div>
+  </div>
+
+  <div class="card" data-choice="b" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div class="mockup">
+        <div class="mockup-header">B. 双系统，推荐</div>
+        <div class="mockup-body" style="padding:18px;">
+          <div style="display:grid; gap:12px;">
+            <div style="padding:16px; border-radius:18px; background:linear-gradient(180deg,#f8f6f2 0%,#f3f4f7 100%); border:1px solid rgba(17,24,39,0.06);">
+              <div style="display:flex; align-items:center; justify-content:space-between; gap:12px;">
+                <div>
+                  <div style="display:flex; align-items:center; gap:10px; margin-bottom:10px;">
+                    <div style="width:36px; height:36px; position:relative;">
+                      <div style="position:absolute; inset:3px; border-radius:14px; border:1.5px solid #d29c45;"></div>
+                      <div style="position:absolute; left:10px; top:8px; width:16px; height:12px; border:1.5px solid #d29c45; border-bottom-left-radius:10px; border-bottom-right-radius:10px; border-top-left-radius:8px; border-top-right-radius:8px;"></div>
+                      <div style="position:absolute; left:14px; top:5px; width:8px; height:5px; border:1.5px solid #d29c45; border-bottom:none; border-top-left-radius:8px; border-top-right-radius:8px;"></div>
+                    </div>
+                    <div style="font-weight:600; color:#111827;">今天可以做的 4 件小事</div>
+                  </div>
+                  <div style="font-size:13px; color:#6b7280; line-height:1.6;">模块、快捷入口、空状态、重要场景卡片用定制迷你线条插图。按钮、标签、反馈动作仍然保留系统图标。</div>
+                </div>
+                <div style="padding:8px 12px; border-radius:999px; background:#fff; border:1px solid rgba(17,24,39,0.08); font-size:12px; color:#4b5563;">推荐</div>
+              </div>
+            </div>
+            <div style="display:grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap:10px;">
+              <div style="padding:14px; border-radius:16px; background:#fff; border:1px solid rgba(17,24,39,0.06);">
+                <div style="display:flex; align-items:center; gap:10px; margin-bottom:8px;">
+                  <div style="width:30px; height:30px; position:relative;">
+                    <div style="position:absolute; inset:3px; border-radius:10px; border:1.5px solid #7a9fc7;"></div>
+                    <div style="position:absolute; left:7px; top:15px; width:16px; height:1.5px; background:#7a9fc7;"></div>
+                    <div style="position:absolute; left:10px; top:10px; width:10px; height:8px; border:1.5px solid #7a9fc7; border-radius:8px 8px 10px 10px;"></div>
+                  </div>
+                  <div style="font-size:13px; font-weight:600;">快捷入口</div>
+                </div>
+                <div style="font-size:12px; color:#6b7280;">可以换成更有辨识度的小插图。</div>
+              </div>
+              <div style="padding:14px; border-radius:16px; background:#fff; border:1px solid rgba(17,24,39,0.06);">
+                <div style="display:flex; align-items:center; gap:10px; margin-bottom:8px;">
+                  <div style="width:30px; height:30px; position:relative;">
+                    <div style="position:absolute; inset:3px; border-radius:10px; border:1.5px solid #92a96d;"></div>
+                    <div style="position:absolute; left:8px; top:8px; width:14px; height:10px; border:1.5px solid #92a96d; border-radius:10px 10px 8px 8px;"></div>
+                    <div style="position:absolute; left:12px; top:5px; width:6px; height:4px; border:1.5px solid #92a96d; border-bottom:none; border-top-left-radius:6px; border-top-right-radius:6px;"></div>
+                  </div>
+                  <div style="font-size:13px; font-weight:600;">老人卡片标题</div>
+                </div>
+                <div style="font-size:12px; color:#6b7280;">强化模块识别，但不干扰内容阅读。</div>
+              </div>
+              <div style="padding:14px; border-radius:16px; background:#f7f7f5; border:1px dashed rgba(17,24,39,0.14);">
+                <div style="font-size:13px; font-weight:600; margin-bottom:8px;">保留系统图标</div>
+                <div style="font-size:12px; color:#6b7280; line-height:1.6;">复制提醒话术、我已提醒、已采取行动、详情、返回、删除。</div>
+              </div>
+              <div style="padding:14px; border-radius:16px; background:#f7f7f5; border:1px dashed rgba(17,24,39,0.14);">
+                <div style="font-size:13px; font-weight:600; margin-bottom:8px;">适合生图的点</div>
+                <div style="font-size:12px; color:#6b7280; line-height:1.6;">“今日行动”“照护工作台”“新增对象”“备选联系人”“风险提示”。</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>B. 双系统</h3>
+      <p>优点是最平衡，功能页仍然像工具，不会失去操作直觉，同时品牌质感会明显上来。</p>
+    </div>
+  </div>
+
+  <div class="card" data-choice="c" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div class="mockup">
+        <div class="mockup-header">C. 全页面插图化</div>
+        <div class="mockup-body" style="padding:18px;">
+          <div style="display:grid; gap:12px;">
+            <div style="padding:16px; border-radius:18px; background:#f7f5f1; border:1px solid rgba(17,24,39,0.06);">
+              <div style="display:flex; align-items:center; gap:10px; margin-bottom:10px;">
+                <div style="width:36px; height:36px; position:relative;">
+                  <div style="position:absolute; inset:3px; border-radius:14px; border:1.5px solid #d29c45;"></div>
+                  <div style="position:absolute; left:7px; top:9px; width:22px; height:14px; border:1.5px solid #d29c45; border-radius:14px;"></div>
+                  <div style="position:absolute; left:14px; top:6px; width:8px; height:5px; border:1.5px solid #d29c45; border-bottom:none; border-top-left-radius:6px; border-top-right-radius:6px;"></div>
+                </div>
+                <div style="font-weight:600; color:#111827;">所有模块、按钮、动作都变成定制图</div>
+              </div>
+              <div style="font-size:13px; color:#6b7280; line-height:1.6;">包括按钮动作、状态标签、快捷入口、表单、模块标题一起换成品牌小图系统。</div>
+            </div>
+            <div style="display:grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap:10px;">
+              <div style="padding:12px; border-radius:16px; background:#fff; border:1px solid rgba(17,24,39,0.06); text-align:center;">
+                <div style="margin:0 auto 8px; width:30px; height:30px; border-radius:12px; border:1.5px solid #d29c45;"></div>
+                <div style="font-size:12px; color:#4b5563;">模块</div>
+              </div>
+              <div style="padding:12px; border-radius:16px; background:#fff; border:1px solid rgba(17,24,39,0.06); text-align:center;">
+                <div style="margin:0 auto 8px; width:30px; height:30px; border-radius:12px; border:1.5px solid #7a9fc7;"></div>
+                <div style="font-size:12px; color:#4b5563;">按钮</div>
+              </div>
+              <div style="padding:12px; border-radius:16px; background:#fff; border:1px solid rgba(17,24,39,0.06); text-align:center;">
+                <div style="margin:0 auto 8px; width:30px; height:30px; border-radius:12px; border:1.5px solid #92a96d;"></div>
+                <div style="font-size:12px; color:#4b5563;">状态</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>C. 全量替换</h3>
+      <p>优点是风格最统一。缺点是功能页面容易失去“快速扫一眼就懂”的效率，成本也最高。</p>
+    </div>
+  </div>
+</div>
+
+<div class="section" style="margin-top:24px;">
+  <div class="pros-cons">
+    <div class="pros">
+      <h4>推荐 B</h4>
+      <ul>
+        <li>最适合功能页，不会把工作台做成宣传页</li>
+        <li>能明显提升质感，同时保留按钮操作的直觉识别</li>
+        <li>后面用图像生成做 6 到 8 张迷你插图也最容易控质量</li>
+      </ul>
+    </div>
+    <div class="cons">
+      <h4>我建议先别碰</h4>
+      <ul>
+        <li>导航菜单图标</li>
+        <li>按钮里的操作图标</li>
+        <li>风险标签、成功失败状态图标</li>
+        <li>表单字段前的小功能图标</li>
+      </ul>
+    </div>
+  </div>
+</div>
