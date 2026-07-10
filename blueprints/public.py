@@ -195,7 +195,11 @@ def transparency():
 @bp.route('/cooling', endpoint='cooling_resources')
 def cooling_resources():
     """避暑资源公开页"""
-    community = sanitize_input(request.args.get('community'), max_length=100)
+    # 兼容旧版 location 参数，同时统一交给后端查询，避免地图数据仍混入其他社区。
+    community = sanitize_input(
+        request.args.get('community') or request.args.get('location'),
+        max_length=100,
+    )
     resource_type = sanitize_input(
         request.args.get('resource_type') or request.args.get('type'),
         max_length=50
@@ -230,11 +234,16 @@ def amap_proxy(proxy_path):
     if security_code:
         params.append(('jscode', security_code))
 
-    upstream = requests.get(
-        f'https://restapi.amap.com/{safe_path}',
-        params=params,
-        timeout=10
-    )
+    try:
+        upstream = requests.get(
+            f'https://restapi.amap.com/{safe_path}',
+            params=params,
+            timeout=10
+        )
+    except requests.RequestException:
+        # 上游网络异常统一收口，避免错误细节泄露给前端。
+        logger.warning("高德地图上游请求失败")
+        abort(502)
     content_type = upstream.headers.get('Content-Type', 'application/json; charset=utf-8')
     if len(upstream.content or b'') > AMAP_PROXY_MAX_BYTES:
         abort(502)

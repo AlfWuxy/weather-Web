@@ -316,9 +316,10 @@ def _resolve_pair(short_code, token):
     short_code_hash = hash_short_code(short_code)
     pair = Pair.query.filter_by(short_code_hash=short_code_hash, status='active').first()
     if pair:
-        if not _pair_short_code_is_valid(pair):
+        action_token_valid = bool(token) and _validate_pair_action_token(pair, short_code, token)
+        if not _pair_short_code_is_valid(pair) and not action_token_valid:
             return None, '短码已过期，请联系照护人重新生成'
-        if token and not _validate_pair_token_binding(pair, short_code, token):
+        if token and not action_token_valid and not _validate_pair_token_binding(pair, short_code, token):
             return None, '绑定令牌不匹配'
         return pair, None
 
@@ -462,13 +463,21 @@ def _refresh_community_daily(community_code, status_date):
     from core.db_models import CommunityDaily
 
     total_people = Pair.query.filter_by(status='active', community_code=community_code).count()
-    statuses = DailyStatus.query.filter_by(
-        community_code=community_code,
-        status_date=status_date
+    statuses = DailyStatus.query.join(
+        Pair,
+        Pair.id == DailyStatus.pair_id,
+    ).filter(
+        DailyStatus.community_code == community_code,
+        DailyStatus.status_date == status_date,
+        Pair.community_code == community_code,
+        Pair.status == 'active',
     ).all()
-    confirmed_count = sum(1 for s in statuses if s.confirmed_at)
+    confirmed_count = min(sum(1 for s in statuses if s.confirmed_at), total_people)
     help_count = sum(1 for s in statuses if s.help_flag)
-    escalation_count = sum(1 for s in statuses if s.relay_stage in ('backup', 'community', 'emergency'))
+    escalation_count = min(
+        sum(1 for s in statuses if s.relay_stage in ('backup', 'community', 'emergency')),
+        total_people,
+    )
     risk_dist = {'低风险': 0, '中风险': 0, '高风险': 0, '极高': 0}
     for status in statuses:
         if status.risk_level in risk_dist:
@@ -476,7 +485,7 @@ def _refresh_community_daily(community_code, status_date):
     if total_people <= 0:
         summary = '暂无可用行动数据。'
     else:
-        pending = total_people - confirmed_count
+        pending = max(total_people - confirmed_count, 0)
         if escalation_count > 0:
             summary = f'已有{escalation_count}个家庭进入升级链，优先安排社区跟进。'
         elif help_count > 0:
@@ -666,9 +675,12 @@ def _handle_action_lookup(token=None, entry_action=None, confirm_action=None, he
     )
 
 
-def _resolve_pair_from_session_or_code(short_code):
+def _resolve_pair_from_session_or_code(short_code, token=None):
     pair = None
     short_code = (short_code or '').replace(' ', '').strip()
+    if token is None:
+        route_token = (request.view_args or {}).get('token')
+        token = route_token or _get_pair_token()
     session_pair_id = session.get('pair_session_id')
     session_pair_code = session.get('pair_session_code')
     if session_pair_id:
@@ -677,12 +689,20 @@ def _resolve_pair_from_session_or_code(short_code):
         if session_pair_code and session_pair_code != short_code:
             return None
         pair = Pair.query.filter_by(id=session_pair_id, status='active').first()
-        if pair and not _pair_short_code_is_valid(pair):
+        if (
+            pair
+            and not _pair_short_code_is_valid(pair)
+            and not _validate_pair_action_token(pair, short_code, token)
+        ):
             return None
     if not pair and short_code:
         short_code_hash = hash_short_code(short_code)
         pair = Pair.query.filter_by(short_code_hash=short_code_hash, status='active').first()
-        if pair and not _pair_short_code_is_valid(pair):
+        if (
+            pair
+            and not _pair_short_code_is_valid(pair)
+            and not _validate_pair_action_token(pair, short_code, token)
+        ):
             return None
     return pair
 
@@ -711,12 +731,12 @@ def _validate_pair_token_binding(pair, short_code, token):
 def _handle_action_confirm(token=None, confirm_action=None, debrief_action=None):
     short_code = sanitize_input(request.form.get('short_code'), max_length=12) or ''
     short_code = short_code.replace(' ', '').strip()
-    pair = _resolve_pair_from_session_or_code(short_code)
+    token = sanitize_input(request.form.get('token') or token, max_length=200)
+    pair = _resolve_pair_from_session_or_code(short_code, token=token)
     if not pair:
         flash('短码无效或已失效', 'error')
         return redirect(url_for('public.action_check'))
 
-    token = sanitize_input(request.form.get('token') or token, max_length=200)
     if (token or request.path.startswith('/e/')) and not _validate_pair_token_binding(pair, short_code, token):
         flash('短码或令牌无效，请联系照护人确认。', 'error')
         return redirect(url_for('public.action_check'))
@@ -756,12 +776,12 @@ def _handle_action_confirm(token=None, confirm_action=None, debrief_action=None)
 def _handle_action_help(token=None, confirm_action=None, debrief_action=None):
     short_code = sanitize_input(request.form.get('short_code'), max_length=12) or ''
     short_code = short_code.replace(' ', '').strip()
-    pair = _resolve_pair_from_session_or_code(short_code)
+    token = sanitize_input(request.form.get('token') or token, max_length=200)
+    pair = _resolve_pair_from_session_or_code(short_code, token=token)
     if not pair:
         flash('短码无效或已失效', 'error')
         return redirect(url_for('public.action_check'))
 
-    token = sanitize_input(request.form.get('token') or token, max_length=200)
     if (token or request.path.startswith('/e/')) and not _validate_pair_token_binding(pair, short_code, token):
         flash('短码或令牌无效，请联系照护人确认。', 'error')
         return redirect(url_for('public.action_check'))
@@ -769,7 +789,6 @@ def _handle_action_help(token=None, confirm_action=None, debrief_action=None):
     status, actions, resources, weather_data, heat_result, risk_label, risk_reasons = _build_action_context(
         pair, status_date
     )
-    status.confirmed_at = utcnow()
     status.help_flag = True
     if not status.relay_stage or status.relay_stage == 'none':
         status.relay_stage = 'caregiver'
@@ -802,12 +821,12 @@ def _handle_action_help(token=None, confirm_action=None, debrief_action=None):
 def _handle_action_debrief(token=None, confirm_action=None, debrief_action=None, focus_debrief=False):
     short_code = sanitize_input(request.form.get('short_code'), max_length=12) or ''
     short_code = short_code.replace(' ', '').strip()
-    pair = _resolve_pair_from_session_or_code(short_code)
+    token = sanitize_input(request.form.get('token') or token, max_length=200)
+    pair = _resolve_pair_from_session_or_code(short_code, token=token)
     if not pair:
         flash('短码无效或已失效', 'error')
         return redirect(url_for('public.action_check'))
 
-    token = sanitize_input(request.form.get('token') or token, max_length=200)
     if (token or request.path.startswith('/e/')) and not _validate_pair_token_binding(pair, short_code, token):
         flash('短码或令牌无效，请联系照护人确认。', 'error')
         return redirect(url_for('public.action_check'))

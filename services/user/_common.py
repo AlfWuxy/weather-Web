@@ -8,7 +8,7 @@ from flask_login import current_user
 
 from core.extensions import db
 from core.db_models import Pair, PairActionToken, PairLink
-from core.security import hash_pair_token, hash_short_code
+from core.security import hash_identifier, hash_pair_token, hash_short_code
 from core.time_utils import utcnow
 from utils.validators import sanitize_input
 
@@ -160,18 +160,53 @@ def _create_pair_record(caregiver_id, location_query, member_id=None, flush=Fals
     return pair
 
 
+def _derive_pair_action_token(record):
+    """从令牌记录与服务端 pepper 派生可重复生成的明文 token。"""
+    if not record or not getattr(record, 'id', None) or not getattr(record, 'pair_id', None):
+        return None
+    return hash_identifier(f'pair-action-record:{record.pair_id}:{record.id}')
+
+
 def _create_pair_action_token(pair, flush=False):
-    """创建行动链接 token，只把哈希写入数据库。"""
+    """创建或复用行动链接 token，数据库始终只保存哈希。"""
     if not pair or not getattr(pair, 'id', None):
         raise ValueError('pair id is required')
-    token = secrets.token_urlsafe(24)
+
+    now = utcnow()
+    reusable = PairActionToken.query.filter(
+        PairActionToken.pair_id == pair.id,
+        PairActionToken.revoked_at.is_(None),
+        PairActionToken.expires_at >= now,
+    ).order_by(PairActionToken.id.desc()).first()
+    if reusable:
+        token = _derive_pair_action_token(reusable)
+        expected_hash = hash_pair_token(token)
+        if (
+            token
+            and expected_hash
+            and reusable.token_hash
+            and secrets.compare_digest(expected_hash, reusable.token_hash)
+        ):
+            return reusable, token
+
+    # 清理已经失效的历史记录，避免长期运行后表持续增长。
+    PairActionToken.query.filter(
+        PairActionToken.pair_id == pair.id,
+        PairActionToken.expires_at < now,
+    ).delete(synchronize_session=False)
+
+    # 先写入一次性占位哈希取得记录 ID，再用 ID 派生可重建 token。
+    placeholder = secrets.token_urlsafe(32)
     record = PairActionToken(
         pair_id=pair.id,
-        token_hash=hash_pair_token(token),
+        token_hash=hash_pair_token(f'pending:{placeholder}'),
         expires_at=_action_token_expires_at(),
-        created_at=utcnow(),
+        created_at=now,
     )
     db.session.add(record)
+    db.session.flush()
+    token = _derive_pair_action_token(record)
+    record.token_hash = hash_pair_token(token)
     if flush:
         db.session.flush()
     return record, token

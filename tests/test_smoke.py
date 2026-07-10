@@ -5,7 +5,8 @@ import tempfile
 import pytest
 
 
-TEST_DB_PATH = os.path.join(tempfile.gettempdir(), "case_weather_test.db")
+# 每个 pytest 进程使用独立数据库，避免未来并行 CI 互相删表。
+TEST_DB_PATH = os.path.join(tempfile.gettempdir(), f"case_weather_test_{os.getpid()}.db")
 os.environ["DATABASE_URI"] = f"sqlite:///{TEST_DB_PATH}"
 os.environ["QWEATHER_KEY"] = ""
 os.environ["AMAP_KEY"] = ""

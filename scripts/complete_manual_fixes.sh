@@ -5,17 +5,150 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-cd "$ROOT_DIR"
-
-echo "============================================================"
-echo "安全修复 - 手动步骤辅助脚本"
-echo "============================================================"
 
 # 颜色定义
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 RED='\033[0;31m'
 NC='\033[0m' # No Color
+
+trim_whitespace() {
+    local value="${1:-}"
+    value="${value#"${value%%[![:space:]]*}"}"
+    value="${value%"${value##*[![:space:]]}"}"
+    printf '%s' "$value"
+}
+
+normalize_env_value() {
+    local value
+    local remainder
+    value="$(trim_whitespace "${1:-}")"
+    case "$value" in
+        \"*)
+            value="${value#\"}"
+            [[ "$value" == *\"* ]] || return 1
+            remainder="${value#*\"}"
+            value="${value%%\"*}"
+            ;;
+        \'*)
+            value="${value#\'}"
+            [[ "$value" == *\'* ]] || return 1
+            remainder="${value#*\'}"
+            value="${value%%\'*}"
+            ;;
+        *)
+            value="${value%%#*}"
+            remainder=""
+            ;;
+    esac
+    remainder="$(trim_whitespace "$remainder")"
+    if [ -n "$remainder" ] && [[ "$remainder" != \#* ]]; then
+        return 1
+    fi
+    trim_whitespace "$value"
+}
+
+read_env_value() {
+    local target="$1"
+    local env_file="$2"
+    local line key value found=1
+    while IFS= read -r line || [ -n "$line" ]; do
+        line="$(trim_whitespace "$line")"
+        case "$line" in ''|\#*) continue ;; esac
+        [[ "$line" == *=* ]] || continue
+        key="$(trim_whitespace "${line%%=*}")"
+        [ "$key" = "$target" ] || continue
+        if ! value="$(normalize_env_value "${line#*=}")"; then
+            value=""
+        fi
+        found=0
+    done < "$env_file"
+    [ "$found" -eq 0 ] || return 1
+    printf '%s' "$value"
+}
+
+is_placeholder_secret() {
+    local value lowered
+    if ! value="$(normalize_env_value "${1:-}")"; then
+        return 0
+    fi
+    lowered="$(printf '%s' "$value" | tr '[:upper:]' '[:lower:]')"
+    case "$lowered" in
+        ''|your-*|your_*|change-me*|change_me*|changeme*|example*|placeholder*|replace-me*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+write_env_value() {
+    local key="$1"
+    local value="$2"
+    local env_file="$3"
+    local tmp_file="${env_file}.tmp"
+    awk -v wanted="$key" -v replacement="$key=$value" '
+        BEGIN { updated = 0 }
+        {
+            line = $0
+            trimmed = line
+            sub(/^[[:space:]]*/, "", trimmed)
+            if (trimmed !~ /^#/ && index(trimmed, "=") > 0) {
+                candidate = substr(trimmed, 1, index(trimmed, "=") - 1)
+                gsub(/[[:space:]]/, "", candidate)
+                if (candidate == wanted) {
+                    if (!updated) {
+                        print replacement
+                        updated = 1
+                    }
+                    # 后续重复键直接丢弃，确保最终配置只有一个有效值。
+                    next
+                }
+            }
+            print line
+        }
+        END { if (!updated) print replacement }
+    ' "$env_file" > "$tmp_file"
+    # 新文件固定为仅当前用户可读写，避免密钥轮换时放宽原有权限。
+    chmod 600 "$tmp_file"
+    mv "$tmp_file" "$env_file"
+}
+
+check_or_generate_secret() {
+    local key="$1"
+    local value=""
+    local prompt_text=""
+    local generated=""
+    local reply=""
+
+    if value="$(read_env_value "$key" .env)"; then
+        if ! is_placeholder_secret "$value"; then
+            echo -e "${GREEN}✅ $key 已配置${NC}"
+            return 0
+        fi
+        echo -e "${RED}❌ $key 为空或使用示例值${NC}"
+        prompt_text="是否生成新的 $key? (y/n) "
+    else
+        echo -e "${YELLOW}⚠️  $key 未找到${NC}"
+        prompt_text="是否生成 $key? (y/n) "
+    fi
+
+    read -p "$prompt_text" -n 1 -r reply
+    echo
+    if [[ "$reply" =~ ^[Yy]$ ]]; then
+        generated="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
+        write_env_value "$key" "$generated" .env
+        echo -e "${GREEN}✅ $key 已生成${NC}"
+    fi
+}
+
+# 被测试脚本 source 时只暴露辅助函数，不进入交互流程。
+if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then
+    return 0
+fi
+
+cd "$ROOT_DIR"
+
+echo "============================================================"
+echo "安全修复 - 手动步骤辅助脚本"
+echo "============================================================"
 
 # 1. 检查 .env 文件
 echo -e "\n${YELLOW}[1/5] 检查 .env 文件...${NC}"
@@ -43,29 +176,7 @@ fi
 # 2. 检查 SECRET_KEY
 echo -e "\n${YELLOW}[2/5] 检查 SECRET_KEY...${NC}"
 if [ -f .env ]; then
-    if grep -q "^SECRET_KEY=change-me-min-32-chars" .env; then
-        echo -e "${RED}❌ SECRET_KEY 使用示例值${NC}"
-        read -p "是否生成新的 SECRET_KEY? (y/n) " -n 1 -r
-        echo
-        if [[ $REPLY =~ ^[Yy]$ ]]; then
-            NEW_KEY=$(python3 -c 'import secrets; print(secrets.token_hex(32))')
-            # 使用临时文件替换
-            sed "s/^SECRET_KEY=.*/SECRET_KEY=$NEW_KEY/" .env > .env.tmp
-            mv .env.tmp .env
-            echo -e "${GREEN}✅ SECRET_KEY 已生成${NC}"
-        fi
-    elif grep -q "^SECRET_KEY=" .env; then
-        echo -e "${GREEN}✅ SECRET_KEY 已配置${NC}"
-    else
-        echo -e "${YELLOW}⚠️  SECRET_KEY 未找到${NC}"
-        read -p "是否生成 SECRET_KEY? (y/n) " -n 1 -r
-        echo
-        if [[ $REPLY =~ ^[Yy]$ ]]; then
-            NEW_KEY=$(python3 -c 'import secrets; print(secrets.token_hex(32))')
-            echo "SECRET_KEY=$NEW_KEY" >> .env
-            echo -e "${GREEN}✅ SECRET_KEY 已添加${NC}"
-        fi
-    fi
+    check_or_generate_secret "SECRET_KEY"
 else
     echo -e "${RED}❌ .env 文件不存在，跳过检查${NC}"
 fi
@@ -73,28 +184,7 @@ fi
 # 3. 检查 PAIR_TOKEN_PEPPER
 echo -e "\n${YELLOW}[3/5] 检查 PAIR_TOKEN_PEPPER...${NC}"
 if [ -f .env ]; then
-    if grep -q "^PAIR_TOKEN_PEPPER=change-me-min-32-chars" .env; then
-        echo -e "${RED}❌ PAIR_TOKEN_PEPPER 使用示例值${NC}"
-        read -p "是否生成新的 PAIR_TOKEN_PEPPER? (y/n) " -n 1 -r
-        echo
-        if [[ $REPLY =~ ^[Yy]$ ]]; then
-            NEW_PEPPER=$(python3 -c 'import secrets; print(secrets.token_hex(32))')
-            sed "s/^PAIR_TOKEN_PEPPER=.*/PAIR_TOKEN_PEPPER=$NEW_PEPPER/" .env > .env.tmp
-            mv .env.tmp .env
-            echo -e "${GREEN}✅ PAIR_TOKEN_PEPPER 已生成${NC}"
-        fi
-    elif grep -q "^PAIR_TOKEN_PEPPER=" .env; then
-        echo -e "${GREEN}✅ PAIR_TOKEN_PEPPER 已配置${NC}"
-    else
-        echo -e "${YELLOW}⚠️  PAIR_TOKEN_PEPPER 未找到${NC}"
-        read -p "是否生成 PAIR_TOKEN_PEPPER? (y/n) " -n 1 -r
-        echo
-        if [[ $REPLY =~ ^[Yy]$ ]]; then
-            NEW_PEPPER=$(python3 -c 'import secrets; print(secrets.token_hex(32))')
-            echo "PAIR_TOKEN_PEPPER=$NEW_PEPPER" >> .env
-            echo -e "${GREEN}✅ PAIR_TOKEN_PEPPER 已添加${NC}"
-        fi
-    fi
+    check_or_generate_secret "PAIR_TOKEN_PEPPER"
 else
     echo -e "${RED}❌ .env 文件不存在，跳过检查${NC}"
 fi

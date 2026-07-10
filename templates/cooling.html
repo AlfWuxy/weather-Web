@@ -48,8 +48,8 @@
         <div class="row g-3 align-items-end">
             <div class="col-md-5">
                 <label class="form-label">所在地</label>
-                <input type="text" class="form-control" name="location" value="{{ request.args.get('location', current_location) }}" list="locOpts">
-                <datalist id="locOpts">{% for loc in (location_options or []) %}<option value="{{ loc }}"></option>{% endfor %}</datalist>
+                <input type="text" class="form-control" name="community" value="{{ selected_community or current_location or '' }}" list="locOpts">
+                <datalist id="locOpts">{% for loc in (communities or location_options or []) %}<option value="{{ loc }}"></option>{% endfor %}</datalist>
             </div>
             <div class="col-md-4">
                 <label class="form-label">类型</label>

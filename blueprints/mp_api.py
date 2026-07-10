@@ -17,6 +17,7 @@ from functools import wraps
 
 from flask import Blueprint, current_app, g, jsonify, request
 
+from core.audit import _get_client_ip
 from core.db_models import FamilyMember, FamilyMemberProfile, Pair, User
 from core.extensions import db, limiter
 from core.security import hash_identifier
@@ -45,10 +46,9 @@ def _bearer_token() -> str:
 
 
 def _mp_rate_limit_key() -> str:
-    token = _bearer_token()
-    if token:
-        return f"mp-token:{hash_identifier(token)}"
-    return request.remote_addr or "mp-anonymous"
+    """外层限流使用稳定客户端 IP，避免轮换无效 Bearer 换桶。"""
+    client_ip = _get_client_ip() or request.remote_addr or "unknown"
+    return f"mp-ip:{hash_identifier(client_ip)}"
 
 
 def require_api_token(fn):

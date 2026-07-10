@@ -24,13 +24,13 @@
 | 用户认证 | Flask-Login | 0.6.3 |
 | 速率限制 | Flask-Limiter | 3.7.0 |
 | XSS 防护 | bleach | 6.2.0 |
-| 机器学习 | scikit-learn | ≥1.3.0 |
+| 机器学习 | scikit-learn | 1.7.2 |
 | 科学计算 | scipy | ≥1.11.0 |
 | 数据处理 | pandas | 2.1.3 |
 | 数值计算 | numpy | 1.26.4 |
 | PDF 导出 | reportlab | 4.2.2 |
-| Excel 导出 | openpyxl | 3.1.2 |
-| HTTP 请求 | requests | 2.31.0 |
+| Excel 导出 | openpyxl | 3.1.5 |
+| HTTP 请求 | requests | 2.32.4 |
 | 数据库迁移 | alembic | 1.13.1 |
 | 测试框架 | pytest | 8.2.2 |
 | 生产部署 | gunicorn + nginx + systemd | - |
@@ -609,7 +609,7 @@ python app.py
 
 ```bash
 # 运行部署脚本
-./deploy.sh
+./scripts/deploy.sh
 ```
 
 ---

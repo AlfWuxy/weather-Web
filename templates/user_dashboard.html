@@ -166,11 +166,11 @@
             </div>
             <div class="yl-alert-list mt-3">
                 {% for a in alerts %}
-                <div class="yl-alert-item {% if a.level == 'high' %}level-high{% endif %}">
+                <div class="yl-alert-item {% if a.is_high %}level-high{% endif %}">
                     <span class="dot"></span>
                     <div class="body">
-                        <strong>{{ a.title or a.event }}</strong>
-                        <div class="meta">{{ a.start_time or '' }} · {{ a.region or current_location }}</div>
+                        <strong>{{ a.alert_type }} · {{ a.alert_level }}</strong>
+                        <div class="meta">{{ a.alert_date_local }} · {{ a.location }}</div>
                         {% if a.description %}<div class="mt-1" style="font-size:.88rem; color:var(--yl-ink-soft);">{{ a.description }}</div>{% endif %}
                     </div>
                 </div>

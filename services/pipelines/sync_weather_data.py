@@ -2,6 +2,7 @@
 """Weather data sync pipeline (CSV backfill + daily API update)."""
 import argparse
 import json
+import math
 from datetime import date, datetime
 from pathlib import Path
 
@@ -13,7 +14,7 @@ from core.app import create_app
 from core.constants import DEFAULT_CITY_LABEL  # noqa: E402
 from core.db_models import CommunityDaily, DailyStatus, Pair, WeatherData  # noqa: E402
 from core.extensions import db  # noqa: E402
-from core.weather import get_consecutive_hot_days  # noqa: E402
+from core.weather import get_consecutive_hot_days, is_qweather_online_weather  # noqa: E402
 from core.time_utils import today_local  # noqa: E402
 from services.heat_action_service import HeatActionService  # noqa: E402
 from services.weather_service import WeatherService  # noqa: E402
@@ -30,6 +31,73 @@ CSV_RENAME_MAP = {
 }
 
 DEFAULT_CSV_PATH = ROOT_DIR / 'data' / 'raw' / '逐日数据.csv'
+REQUIRED_ACTION_WEATHER_FIELDS = (
+    'temperature',
+    'temperature_max',
+    'temperature_min',
+    'humidity',
+)
+ESCALATED_RELAY_STAGES = {'backup', 'community', 'emergency'}
+
+
+def _validate_action_weather(weather_data):
+    """仅允许字段完整的真实和风天气写入风险与行动状态。"""
+    if not isinstance(weather_data, dict) or not weather_data:
+        return {
+            'valid': False,
+            'reason': 'weather_unavailable',
+            'weather_source': 'unknown',
+            'missing_fields': list(REQUIRED_ACTION_WEATHER_FIELDS),
+        }
+
+    source = str(
+        weather_data.get('data_source') or weather_data.get('source') or 'unknown'
+    ).strip()
+    if weather_data.get('is_mock') or weather_data.get('is_demo'):
+        return {
+            'valid': False,
+            'reason': 'mock_weather',
+            'weather_source': source,
+            'missing_fields': [],
+        }
+    if source != 'QWeather':
+        return {
+            'valid': False,
+            'reason': 'untrusted_weather_source',
+            'weather_source': source,
+            'missing_fields': [],
+        }
+
+    missing_fields = []
+    for field in REQUIRED_ACTION_WEATHER_FIELDS:
+        try:
+            value = float(weather_data.get(field))
+        except (TypeError, ValueError):
+            missing_fields.append(field)
+            continue
+        if not math.isfinite(value):
+            missing_fields.append(field)
+
+    if missing_fields:
+        return {
+            'valid': False,
+            'reason': 'incomplete_weather',
+            'weather_source': source,
+            'missing_fields': missing_fields,
+        }
+    if not is_qweather_online_weather(weather_data):
+        return {
+            'valid': False,
+            'reason': 'untrusted_weather_source',
+            'weather_source': source,
+            'missing_fields': [],
+        }
+    return {
+        'valid': True,
+        'reason': None,
+        'weather_source': source,
+        'missing_fields': [],
+    }
 
 
 def _normalize_location(location):
@@ -124,13 +192,30 @@ def sync_daily_weather(target_date=None, location=None, overwrite=True):
         location = _normalize_location(location)
         weather_service = WeatherService()
         weather_data = weather_service.get_current_weather(location)
-        if not weather_data:
-            return {'location': location, 'date': target_date, 'updated': False}
+        validation = _validate_action_weather(weather_data)
+        if not validation['valid']:
+            return {
+                'location': location,
+                'date': target_date,
+                'updated': False,
+                'skipped': True,
+                'reason': validation['reason'],
+                'weather_source': validation['weather_source'],
+                'missing_fields': validation['missing_fields'],
+            }
 
         extreme = weather_service.identify_extreme_weather(weather_data)
         record = WeatherData.query.filter_by(date=target_date, location=location).first()
         if record and not overwrite:
-            return {'location': location, 'date': target_date, 'updated': False}
+            return {
+                'location': location,
+                'date': target_date,
+                'updated': False,
+                'skipped': True,
+                'reason': 'existing_record',
+                'weather_source': validation['weather_source'],
+                'missing_fields': [],
+            }
         if record is None:
             record = WeatherData(date=target_date, location=location)
             db.session.add(record)
@@ -148,7 +233,15 @@ def sync_daily_weather(target_date=None, location=None, overwrite=True):
         record.extreme_type = '、'.join([c['type'] for c in extreme.get('conditions', [])]) if extreme.get('is_extreme') else None
 
         db.session.commit()
-        return {'location': location, 'date': target_date, 'updated': True}
+        return {
+            'location': location,
+            'date': target_date,
+            'updated': True,
+            'skipped': False,
+            'reason': None,
+            'weather_source': validation['weather_source'],
+            'missing_fields': [],
+        }
 
 
 def _map_heat_level(level):
@@ -182,7 +275,15 @@ def sync_action_daily(target_date=None, community_code=None, overwrite=False):
             query = query.filter_by(community_code=community_code)
         pairs = query.all()
         if not pairs:
-            return {'date': target_date, 'updated': 0, 'communities': 0}
+            return {
+                'date': target_date,
+                'updated': 0,
+                'communities': 0,
+                'processed_communities': 0,
+                'skipped': True,
+                'reason': 'no_active_pairs',
+                'skipped_communities': {},
+            }
 
         heat_service = HeatActionService()
         weather_service = WeatherService()
@@ -192,8 +293,19 @@ def sync_action_daily(target_date=None, community_code=None, overwrite=False):
             communities.setdefault(pair.community_code, []).append(pair)
 
         updated = 0
+        processed_communities = []
+        skipped_communities = {}
         for code, members in communities.items():
             weather_data = weather_service.get_current_weather(code)
+            validation = _validate_action_weather(weather_data)
+            if not validation['valid']:
+                skipped_communities[code] = {
+                    'reason': validation['reason'],
+                    'weather_source': validation['weather_source'],
+                    'missing_fields': validation['missing_fields'],
+                }
+                continue
+
             consecutive_hot_days = get_consecutive_hot_days(
                 code,
                 target_date=target_date,
@@ -238,18 +350,25 @@ def sync_action_daily(target_date=None, community_code=None, overwrite=False):
                     db.session.add(status)
                 status.risk_level = risk_level
                 updated += 1
+            processed_communities.append(code)
 
         db.session.commit()
 
-        for code in communities.keys():
-            total_people = Pair.query.filter_by(status='active', community_code=code).count()
-            statuses = DailyStatus.query.filter_by(
-                community_code=code,
-                status_date=target_date
-            ).all()
+        for code in processed_communities:
+            active_pair_ids = {pair.id for pair in communities[code]}
+            total_people = len(active_pair_ids)
+            statuses = []
+            if active_pair_ids:
+                statuses = DailyStatus.query.filter(
+                    DailyStatus.community_code == code,
+                    DailyStatus.status_date == target_date,
+                    DailyStatus.pair_id.in_(active_pair_ids),
+                ).all()
             confirmed_count = sum(1 for s in statuses if s.confirmed_at)
             help_count = sum(1 for s in statuses if s.help_flag)
-            escalation_count = sum(1 for s in statuses if s.relay_stage in ('community', 'emergency'))
+            escalation_count = sum(
+                1 for s in statuses if s.relay_stage in ESCALATED_RELAY_STAGES
+            )
             risk_dist = {'低风险': 0, '中风险': 0, '高风险': 0, '极高': 0}
             for status in statuses:
                 if status.risk_level in risk_dist:
@@ -276,7 +395,22 @@ def sync_action_daily(target_date=None, community_code=None, overwrite=False):
             record.outreach_summary = summary
 
         db.session.commit()
-        return {'date': target_date, 'updated': updated, 'communities': len(communities)}
+        skipped = bool(skipped_communities)
+        if skipped and not processed_communities:
+            reason = 'weather_unavailable_for_all_communities'
+        elif skipped:
+            reason = 'some_communities_skipped'
+        else:
+            reason = None
+        return {
+            'date': target_date,
+            'updated': updated,
+            'communities': len(communities),
+            'processed_communities': len(processed_communities),
+            'skipped': skipped,
+            'reason': reason,
+            'skipped_communities': skipped_communities,
+        }
 
 
 def main():

@@ -1,6 +1,9 @@
 # -*- coding: utf-8 -*-
 import json
 
+import pytest
+import requests
+
 
 def test_amap_proxy_appends_server_side_jscode(client, app, monkeypatch):
     class FakeResp:
@@ -60,3 +63,27 @@ def test_amap_proxy_rejects_oversized_response(client, app, monkeypatch):
 
     response = client.get('/_AMapService/v3/place/text?key=frontend-visible-key&keywords=test')
     assert response.status_code == 502
+
+
+@pytest.mark.parametrize(
+    'error_type',
+    [requests.Timeout, requests.ConnectionError, requests.RequestException],
+)
+def test_amap_proxy_returns_safe_502_for_upstream_request_errors(
+    client,
+    app,
+    monkeypatch,
+    error_type,
+):
+    def fake_get(*args, **kwargs):
+        raise error_type('upstream-sensitive-detail')
+
+    monkeypatch.setattr('blueprints.public.requests.get', fake_get)
+
+    with app.app_context():
+        app.config['AMAP_SECURITY_JS_CODE'] = 'server-side-security-code-123456'
+
+    response = client.get('/_AMapService/v3/place/text?key=frontend-visible-key&keywords=test')
+
+    assert response.status_code == 502
+    assert 'upstream-sensitive-detail' not in response.get_data(as_text=True)

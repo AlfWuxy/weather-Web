@@ -3,7 +3,7 @@
 
 from datetime import timedelta
 
-from core.db_models import DailyStatus, Pair, PairActionToken, PairLink, User
+from core.db_models import CommunityDaily, DailyStatus, Pair, PairActionToken, PairLink, User
 from core.security import hash_pair_token, hash_short_code
 from core.time_utils import today_local, utcnow
 from core.extensions import db
@@ -300,6 +300,100 @@ def test_pair_action_token_route_rejects_expired_token(app, client):
     with app.app_context():
         status = DailyStatus.query.filter_by(pair_id=pair_id, status_date=today_local()).first()
         assert status is None or status.confirmed_at is None
+
+
+def test_generated_action_token_survives_short_code_expiry_and_is_reused(app, client):
+    """新行动 token 使用自己的有效期，重复渲染链接不应持续新增记录。"""
+    from services.user._common import _build_pair_action_link
+
+    with app.app_context():
+        db.create_all()
+        user = _create_user("generated_token_user", "generated_token_pass")
+        pair = Pair(
+            caregiver_id=user.id,
+            community_code="都昌",
+            location_query="都昌",
+            elder_code="elder-generated-token",
+            short_code="55667788",
+            short_code_hash=hash_short_code("55667788"),
+            short_code_expires_at=utcnow() - timedelta(seconds=1),
+            status="active",
+            created_at=utcnow() - timedelta(days=91),
+            last_active_at=utcnow(),
+        )
+        db.session.add(pair)
+        db.session.flush()
+        pair_id = pair.id
+
+        with app.test_request_context("/pairs"):
+            first_link = _build_pair_action_link(pair, external=False)
+        db.session.commit()
+        db.session.expire_all()
+
+        pair = db.session.get(Pair, pair_id)
+        with app.test_request_context("/pairs"):
+            second_link = _build_pair_action_link(pair, external=False)
+        db.session.commit()
+
+        assert first_link == second_link
+        assert PairActionToken.query.filter_by(pair_id=pair_id).count() == 1
+        token = first_link.rsplit("/e/", 1)[-1].split("?", 1)[0]
+
+    with client.session_transaction() as sess:
+        sess["_csrf_token"] = "generated-token-csrf"
+
+    response = client.post(
+        f"/e/{token}/checkin",
+        data={"short_code": "55667788", "csrf_token": "generated-token-csrf"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 200
+    with app.app_context():
+        status = DailyStatus.query.filter_by(pair_id=pair_id, status_date=today_local()).one()
+        assert status.confirmed_at is not None
+        assert PairActionToken.query.filter_by(pair_id=pair_id).count() == 1
+
+
+def test_help_does_not_count_as_confirmation(app, client):
+    """求助只写 help_flag，不能抬高行动确认率。"""
+    with app.app_context():
+        db.create_all()
+        user = _create_user("help_only_user", "help_only_pass")
+        pair = Pair(
+            caregiver_id=user.id,
+            community_code="求助口径社区",
+            location_query="都昌",
+            elder_code="elder-help-only",
+            short_code="44332211",
+            short_code_hash=hash_short_code("44332211"),
+            status="active",
+            created_at=utcnow(),
+            last_active_at=utcnow(),
+        )
+        db.session.add(pair)
+        db.session.commit()
+        pair_id = pair.id
+
+    with client.session_transaction() as sess:
+        sess["_csrf_token"] = "help-only-csrf"
+
+    response = client.post(
+        "/action/help",
+        data={"short_code": "44332211", "csrf_token": "help-only-csrf"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 200
+    with app.app_context():
+        status = DailyStatus.query.filter_by(pair_id=pair_id, status_date=today_local()).one()
+        aggregate = CommunityDaily.query.filter_by(
+            community_code="求助口径社区",
+            date=today_local(),
+        ).one()
+        assert status.help_flag is True
+        assert status.confirmed_at is None
+        assert aggregate.confirm_rate == 0
 
 
 def test_token_debrief_get_rejects_mismatched_token(app, client):

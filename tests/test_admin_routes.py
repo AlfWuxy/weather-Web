@@ -62,3 +62,37 @@ def test_admin_statistics_renders(client, db_session):
     assert '相关系数分析（基于历史数据）' not in body
     assert 'data: [35, 75, 65, 85, 70]' not in body
     assert 'min="2023-12-01"' not in body
+
+
+def test_pilot_dashboard_renders_for_admin(client, db_session):
+    from core.db_models import User
+
+    admin = User(username='admin_pilot', role='admin')
+    admin.set_password('testpass')
+    db_session.add(admin)
+    db_session.commit()
+
+    _login_as(client, admin.id)
+    response = client.get('/analysis/pilot?days=30')
+
+    assert response.status_code == 200
+    assert '试点数据看板' in response.get_data(as_text=True)
+
+
+def test_pilot_export_csv_returns_empty_export_for_admin(client, db_session):
+    from core.db_models import User
+
+    admin = User(username='admin_pilot_export', role='admin')
+    admin.set_password('testpass')
+    db_session.add(admin)
+    db_session.commit()
+
+    _login_as(client, admin.id)
+    response = client.get('/analysis/pilot/export.csv?days=30')
+
+    assert response.status_code == 200
+    assert response.mimetype == 'text/csv'
+    assert 'pilot_events_last_30d.csv' in response.headers['Content-Disposition']
+    assert response.get_data(as_text=True).startswith(
+        '\ufeffcreated_at,event_type,user_id,pair_id,member_id,source,meta_json'
+    )

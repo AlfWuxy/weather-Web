@@ -120,7 +120,7 @@ def test_multimodel_forecast_contract_preserves_provider_names(app):
 
 
 def test_qweather_production_guard_rejects_non_finite_temperature():
-    from core.weather import is_qweather_online_weather
+    from core.weather import is_qweather_online_weather, weather_source_label
 
     assert is_qweather_online_weather({
         'temperature': 31,
@@ -137,10 +137,12 @@ def test_qweather_production_guard_rejects_non_finite_temperature():
         'data_source': 'QWeather',
         'is_mock': False,
     }) is False
-    assert is_qweather_online_weather({
+    missing_provenance = {
         'temperature': 31,
         'is_mock': False,
-    }) is False
+    }
+    assert weather_source_label(missing_provenance) == ''
+    assert is_qweather_online_weather(missing_provenance) is False
 
 
 def test_dlnm_profile_contract_is_frozen_json_artifact():
