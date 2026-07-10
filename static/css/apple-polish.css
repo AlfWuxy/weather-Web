@@ -12,7 +12,7 @@
     --yl-orange-500: var(--yl-orange-action);
     --yl-orange-600: var(--yl-orange-ink);
     --brand: var(--yl-orange-action);
-    --brand-deep: var(--yl-orange-action-hover);
+    --brand-deep: var(--yl-orange-ink);
     --yl-muted: #746E68;
     --yl-success: #477F42;
     --ok: var(--yl-success);
@@ -26,6 +26,7 @@
     --text-tertiary: var(--yl-muted);
     --bs-primary: var(--yl-orange-action);
     --bs-primary-rgb: 246, 139, 51;
+    --bs-primary-text-emphasis: var(--yl-orange-ink);
     --bs-link-color: var(--yl-orange-ink);
     --bs-link-hover-color: var(--yl-orange-ink-hover);
 }
@@ -87,15 +88,26 @@ a:hover {
 }
 
 .btn-outline-primary {
-    border-color: var(--yl-orange-action);
+    border-color: var(--yl-focus-ring);
     color: var(--yl-orange-ink);
 }
 
 .btn-outline-primary:hover,
 .btn-outline-primary:focus-visible {
     background: rgba(246, 139, 51, .14);
-    border-color: var(--yl-orange-action);
+    border-color: var(--yl-focus-ring);
     color: var(--yl-orange-ink-hover);
+}
+
+/* 亮橙用于大面积操作，深橙承担读取和选中状态。 */
+.text-primary {
+    color: var(--yl-orange-ink) !important;
+}
+
+.form-check-input:checked,
+.form-switch .form-check-input:checked {
+    background-color: var(--yl-orange-ink);
+    border-color: var(--yl-orange-ink);
 }
 
 .ai-chat-message--user .ai-chat-bubble {
