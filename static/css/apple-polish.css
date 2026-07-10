@@ -99,6 +99,20 @@ a:hover {
     color: var(--yl-orange-ink-hover);
 }
 
+.btn-outline-primary:focus-visible {
+    box-shadow: none !important;
+}
+
+.btn-outline-primary.active,
+.btn-outline-primary:active,
+.btn-check:checked + .btn-outline-primary,
+.show > .btn-outline-primary.dropdown-toggle {
+    background: var(--yl-orange-action) !important;
+    border-color: var(--yl-focus-ring) !important;
+    color: #2A1A0F !important;
+    box-shadow: none !important;
+}
+
 /* 亮橙用于大面积操作，深橙承担读取和选中状态。 */
 .text-primary {
     color: var(--yl-orange-ink) !important;
@@ -108,6 +122,27 @@ a:hover {
 .form-switch .form-check-input:checked {
     background-color: var(--yl-orange-ink);
     border-color: var(--yl-orange-ink);
+}
+
+/* 小面积品牌底也使用深色字，避免亮橙配白字。 */
+.auth-quicklist li::before {
+    background: var(--yl-orange-action);
+    color: #2A1A0F;
+}
+
+.member-avatar {
+    background: linear-gradient(135deg, var(--yl-orange-action-hover), var(--yl-orange-action));
+    color: #2A1A0F;
+}
+
+.pagination {
+    --bs-pagination-color: var(--yl-orange-ink);
+    --bs-pagination-hover-color: var(--yl-orange-ink-hover);
+    --bs-pagination-focus-color: var(--yl-orange-ink-hover);
+    --bs-pagination-focus-box-shadow: 0 0 0 .2rem rgba(216, 91, 22, .18);
+    --bs-pagination-active-color: #2A1A0F;
+    --bs-pagination-active-bg: var(--yl-orange-action);
+    --bs-pagination-active-border-color: var(--yl-focus-ring);
 }
 
 .ai-chat-message--user .ai-chat-bubble {
@@ -273,6 +308,14 @@ body.motion-ready[data-motion~="m1"] .yl-feature-icon {
         padding-top: 10px;
         padding-bottom: 10px;
         border-radius: 10px;
+    }
+
+    #appNavDrawer .nav-link.active,
+    #appNavDrawer .nav-link[aria-current="page"] {
+        background: rgba(246, 139, 51, .14);
+        color: var(--yl-orange-ink-hover);
+        font-weight: 600;
+        box-shadow: inset 3px 0 0 var(--yl-focus-ring);
     }
 
     #appNavDrawer .btn-close {

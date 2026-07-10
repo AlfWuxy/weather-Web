@@ -409,6 +409,12 @@ def test_apple_polish_uses_accessible_action_and_muted_colors(client):
     assert '.form-check-input:checked' in css
     assert 'background-color: var(--yl-orange-ink);' in css
     assert 'border-color: var(--yl-focus-ring);' in css
+    assert '.btn-outline-primary.active' in css
+    assert '.auth-quicklist li::before' in css
+    assert '.member-avatar' in css
+    assert '--bs-pagination-active-bg: var(--yl-orange-action);' in css
+    assert '#appNavDrawer .nav-link[aria-current="page"]' in css
+    assert 'box-shadow: inset 3px 0 0 var(--yl-focus-ring);' in css
     assert '@media (hover: hover) and (pointer: fine)' in css
     assert 'transform: translateY(-1px);' in css
     assert 'body.motion-ready[data-motion~="m1"] .yl-feature-icon' in css
