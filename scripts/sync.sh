@@ -1,6 +1,8 @@
 #!/bin/bash
 # 快速同步脚本 - 仅上传代码并重启服务（不修改配置）
 
+set -euo pipefail
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
@@ -31,6 +33,7 @@ USER="${DEPLOY_USER:-}"
 PROJECT_DIR="${DEPLOY_PROJECT_DIR:-/opt/your-app}"
 LOCAL_DIR="${DEPLOY_LOCAL_DIR:-$ROOT_DIR}"
 PASSWORD="${DEPLOY_PASSWORD:-${SSHPASS:-}}"
+SSHPASS="${SSHPASS:-}"
 
 require_env_value() {
     local name="$1"
@@ -90,6 +93,8 @@ elif use_expect && [ -n "$SSHPASS" ]; then
             }
             eof
         }
+        set wait_result [wait]
+        exit [lindex \$wait_result 3]
     "
 else
     rsync -avz --exclude __pycache__ --exclude *.pyc --exclude instance --exclude storage --exclude health_weather.db --exclude .git --exclude venv --exclude .venv --exclude .venv2 --exclude .env --exclude .env.local -e ssh "$LOCAL_DIR/" "$USER@$SERVER:$PROJECT_DIR/"
@@ -116,6 +121,8 @@ elif use_expect && [ -n "$SSHPASS" ]; then
             }
             eof
         }
+        set wait_result [wait]
+        exit [lindex \$wait_result 3]
     "
 else
     ssh -o StrictHostKeyChecking=no "$USER@$SERVER" "systemctl restart case-weather && systemctl status case-weather --no-pager"

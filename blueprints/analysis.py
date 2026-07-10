@@ -27,7 +27,7 @@ from core.db_models import (
     WeatherAlert,
     WeatherData
 )
-from core.time_utils import today_local, date_to_utc_start, date_to_utc_end, utc_to_local_date
+from core.time_utils import today_local, date_to_utc_start, date_to_utc_end, utc_to_local_date, utcnow
 from utils.parsers import parse_date
 from utils.validators import sanitize_input
 

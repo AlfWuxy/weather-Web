@@ -98,3 +98,36 @@ def test_refresh_persists_active_pair_denominator_and_numerators(db_session):
     assert record.escalation_rate == 0
     risk_distribution = json.loads(record.risk_distribution)
     assert risk_distribution == {'低风险': 1, '中风险': 0, '高风险': 0, '极高': 0}
+
+
+def test_public_refresh_uses_the_same_active_pair_population(db_session):
+    from services.public_service import _refresh_community_daily
+
+    status_date = _seed_active_and_inactive_statuses(db_session)
+
+    _refresh_community_daily('行动率测试社区', status_date)
+    record = CommunityDaily.query.filter_by(
+        community_code='行动率测试社区',
+        date=status_date,
+    ).one()
+
+    assert record.total_people == 1
+    assert record.confirm_rate == 0
+    assert record.escalation_rate == 0
+    assert record.confirm_rate <= 1
+    assert json.loads(record.risk_distribution) == {
+        '低风险': 1,
+        '中风险': 0,
+        '高风险': 0,
+        '极高': 0,
+    }
+
+    active_status = DailyStatus.query.join(Pair).filter(
+        Pair.status == 'active',
+        DailyStatus.status_date == status_date,
+    ).one()
+    active_status.relay_stage = 'backup'
+    db_session.commit()
+
+    _refresh_community_daily('行动率测试社区', status_date)
+    assert record.escalation_rate == 1

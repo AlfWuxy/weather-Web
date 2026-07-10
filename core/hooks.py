@@ -27,6 +27,21 @@ MAX_JSON_BYTES = 10 * 1024
 MAX_JSON_DEPTH = 5
 
 
+def _redact_sensitive_path(path):
+    """结构化日志不得记录行动链接或点击追踪 token。"""
+    path = str(path or '')
+    for prefix in ('/e/', '/t/'):
+        if not path.startswith(prefix):
+            continue
+        remainder = path[len(prefix):]
+        suffix = ''
+        if '/' in remainder:
+            _, tail = remainder.split('/', 1)
+            suffix = f'/{tail}'
+        return f'{prefix}<token>{suffix}'
+    return path
+
+
 def _exceeds_json_depth(value, max_depth, current_depth=1):
     if current_depth > max_depth:
         return True
@@ -83,7 +98,7 @@ def register_hooks(app):
                 'user_id': user_id,
                 'user_role': user_role,
                 'method': request.method,
-                'path': request.path,
+                'path': _redact_sensitive_path(request.path),
                 'endpoint': request.endpoint,
                 'status': response.status_code,
                 'duration_ms': duration_ms,

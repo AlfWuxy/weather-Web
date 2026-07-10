@@ -12,7 +12,7 @@ from flask_login import current_user
 from core.extensions import db
 from core.guest import get_guest_assessment, is_guest_user
 from core.health_profiles import reminder_triggered
-from core.time_utils import today_local, utcnow
+from core.time_utils import today_local, utc_to_local_date, utcnow
 from core.weather import (
     ensure_user_location_valid,
     get_consecutive_hot_days,
@@ -105,6 +105,24 @@ def _dashboard_hero_theme(temperature):
         'effective_temperature': effective_temp,
         'intensity': round(intensity, 3),
         'style': style,
+    }
+
+
+def _dashboard_alert_card(alert):
+    """将 WeatherAlert 真字段转换成首页展示字段。"""
+    local_date = utc_to_local_date(alert.alert_date)
+    level_text = (alert.alert_level or '未分级').strip()
+    normalized_level = level_text.lower()
+    is_high = normalized_level in {'high', 'severe', 'red'} or any(
+        marker in level_text for marker in ('高', '严重', '红', '橙')
+    )
+    return {
+        'alert_type': alert.alert_type or '天气预警',
+        'alert_level': level_text,
+        'alert_date_local': local_date.strftime('%Y-%m-%d') if local_date else '日期未标注',
+        'location': alert.location or '地点未标注',
+        'description': alert.description,
+        'is_high': is_high,
     }
 
 
@@ -463,6 +481,8 @@ def user_dashboard(force_elder=False):
             is_guest=is_guest
         )
 
+    alert_cards = [_dashboard_alert_card(alert) for alert in alerts]
+
     return render_template('user_dashboard.html',
                          weather=weather if weather_available else None,
                          weather_source_city=weather_source_city,
@@ -477,7 +497,7 @@ def user_dashboard(force_elder=False):
                          dashboard_hero_theme=dashboard_hero_theme,
                          dashboard_metric_cards=dashboard_metric_cards,
                          forecast_days=forecast_days,
-                         alerts=alerts,
+                         alerts=alert_cards,
                          reminders=reminders,
                          notifications=notifications,
                          is_guest=is_guest)

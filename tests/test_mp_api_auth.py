@@ -48,18 +48,72 @@ def test_mp_api_me_and_patch(app, client, db_session):
     assert resp3.status_code == 401
 
 
-def test_mp_api_rate_limit_key_uses_bearer_token(app):
+def test_mp_api_rate_limit_key_uses_stable_client_ip(app):
     from blueprints.mp_api import _mp_rate_limit_key
 
-    with app.test_request_context("/mp/api/v1/me", headers={"Authorization": "Bearer token-a"}):
+    same_ip = {"REMOTE_ADDR": "203.0.113.10"}
+    other_ip = {"REMOTE_ADDR": "203.0.113.11"}
+    with app.test_request_context(
+        "/mp/api/v1/me",
+        headers={"Authorization": "Bearer token-a"},
+        environ_base=same_ip,
+    ):
         key_a = _mp_rate_limit_key()
 
-    with app.test_request_context("/mp/api/v1/me", headers={"Authorization": "Bearer token-b"}):
+    with app.test_request_context(
+        "/mp/api/v1/me",
+        headers={"Authorization": "Bearer token-b"},
+        environ_base=same_ip,
+    ):
         key_b = _mp_rate_limit_key()
 
-    assert key_a.startswith("mp-token:")
-    assert key_b.startswith("mp-token:")
-    assert key_a != key_b
+    with app.test_request_context(
+        "/mp/api/v1/me",
+        headers={"Authorization": "Bearer token-a"},
+        environ_base=other_ip,
+    ):
+        key_other_ip = _mp_rate_limit_key()
+
+    assert key_a.startswith("mp-ip:")
+    assert key_a == key_b
+    assert key_other_ip != key_a
+
+
+def test_mp_api_invalid_bearer_rotation_cannot_bypass_ip_limit(
+    app,
+    client,
+    db_session,
+):
+    """同一 IP 轮换无效 Bearer 仍应命中同一个外层限流桶。"""
+    from core.extensions import limiter
+
+    app.config['RATE_LIMIT_MP_READ'] = '1 per minute'
+    limiter.reset()
+    same_ip = {'REMOTE_ADDR': '203.0.113.20'}
+    other_ip = {'REMOTE_ADDR': '203.0.113.21'}
+
+    try:
+        first = client.get(
+            '/mp/api/v1/me',
+            headers={'Authorization': 'Bearer invalid-a'},
+            environ_overrides=same_ip,
+        )
+        rotated = client.get(
+            '/mp/api/v1/me',
+            headers={'Authorization': 'Bearer invalid-b'},
+            environ_overrides=same_ip,
+        )
+        separate_ip = client.get(
+            '/mp/api/v1/me',
+            headers={'Authorization': 'Bearer invalid-c'},
+            environ_overrides=other_ip,
+        )
+
+        assert first.status_code == 401
+        assert rotated.status_code == 429
+        assert separate_ip.status_code == 401
+    finally:
+        limiter.reset()
 
 
 def test_mp_api_events_rejects_invalid_event_type(app, client, db_session):

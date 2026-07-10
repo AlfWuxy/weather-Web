@@ -167,7 +167,7 @@ def get_demo_weather_data():
 
 
 def weather_source_label(weather_data):
-    """返回天气来源标签，避免 mock 数据被误标成和风。"""
+    """返回显式天气来源标签，缺少 provenance 时保持未知。"""
     if not isinstance(weather_data, dict):
         return ''
     source = str(weather_data.get('data_source') or weather_data.get('source') or '').strip()
@@ -177,7 +177,7 @@ def weather_source_label(weather_data):
         return 'Demo'
     if weather_data.get('is_mock'):
         return 'Mock'
-    return 'QWeather'
+    return ''
 
 
 def is_qweather_online_weather(weather_data):

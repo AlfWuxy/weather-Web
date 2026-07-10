@@ -196,7 +196,7 @@ remote_exec "echo '连接成功'"
 
 echo ""
 echo "步骤2: 安装系统依赖..."
-remote_exec "apt-get update && apt-get install -y python3 python3-pip python3-venv rsync redis-server"
+remote_exec "apt-get update && apt-get install -y python3 python3-pip python3-venv rsync redis-server sqlite3"
 
 echo ""
 echo "步骤2.1: 启动 Redis（用于生产环境限流存储）..."
@@ -274,7 +274,7 @@ fi
 
 echo ""
 echo "步骤6.2: 初始化/迁移数据库（安全 stamp + upgrade）..."
-remote_exec "cd $PROJECT_DIR && mkdir -p backups && if [ -f instance/health_weather.db ]; then cp -a instance/health_weather.db backups/health_weather.db.$(date +%Y%m%d_%H%M%S); echo '已备份 instance/health_weather.db'; else echo '未发现 instance/health_weather.db，跳过备份'; fi"
+remote_exec "cd '$PROJECT_DIR' && PROJECT_DIR='$PROJECT_DIR' ENV_FILE='$PROJECT_DIR/.env' bash scripts/backup.sh --if-present"
 remote_exec "systemctl stop case-weather || true; systemctl stop case-weather-dispatch.timer || true; systemctl stop case-weather-risk-precompute.timer || true"
 remote_exec "cd $PROJECT_DIR && VENV_PY=$VENV_DIR/bin/python bash scripts/server_migrate.sh"
 

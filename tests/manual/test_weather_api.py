@@ -21,16 +21,13 @@ def test_qweather_api():
     location = "116.20,29.27"  # 都昌县
 
     if not key:
-        print("❌ 未设置环境变量 QWEATHER_KEY，无法测试。")
-        return
+        pytest.skip("未设置 QWEATHER_KEY")
     if not base_url:
-        print("❌ 未设置环境变量 QWEATHER_API_BASE，无法测试。")
-        return
+        pytest.skip("未设置 QWEATHER_API_BASE")
     if "your-qweather-host.example.com" in base_url:
-        print("❌ QWEATHER_API_BASE 仍是占位值，请先改成真实 Host。")
-        return
+        pytest.skip("QWEATHER_API_BASE 仍是占位值")
     
-    print(f"\nAPI Key: {key[:6]}...{key[-4:]}")
+    print("\nAPI Key: 已配置")
     print(f"Base URL: {base_url}")
     print(f"Location: {location}")
     
@@ -48,31 +45,16 @@ def test_qweather_api():
         
         print(f"HTTP状态码: {response.status_code}")
         
-        if response.status_code == 200:
-            data = response.json()
-            code = data.get('code')
-            print(f"API返回码: {code}")
+        assert response.status_code == 200, f"实况天气 HTTP {response.status_code}"
+        data = response.json()
+        code = data.get('code')
+        assert code == '200', f"实况天气业务码 {code}"
+        now = data.get('now') or {}
+        assert now.get('temp') is not None
+        assert now.get('humidity') is not None
             
-            if code == '200':
-                now = data.get('now', {})
-                print(f"✅ 成功！")
-                print(f"   温度: {now.get('temp')}°C")
-                print(f"   天气: {now.get('text')}")
-                print(f"   湿度: {now.get('humidity')}%")
-                print(f"   风速: {now.get('windSpeed')} km/h")
-            else:
-                print(f"❌ API返回错误码: {code}")
-                print(f"   完整响应: {data}")
-        else:
-            print(f"❌ HTTP错误: {response.status_code}")
-            print(f"   响应内容: {response.text[:500]}")
-            
-    except requests.exceptions.Timeout:
-        print("❌ 请求超时")
-    except requests.exceptions.ConnectionError as e:
-        print(f"❌ 连接错误: {e}")
-    except Exception as e:
-        print(f"❌ 未知错误: {e}")
+    except requests.RequestException as exc:
+        pytest.fail(f"实况天气请求失败: {type(exc).__name__}")
     
     # 测试2: 7天预报
     print("\n" + "-" * 40)
@@ -86,23 +68,15 @@ def test_qweather_api():
         response = requests.get(url, params=params, timeout=10)
         print(f"HTTP状态码: {response.status_code}")
         
-        if response.status_code == 200:
-            data = response.json()
-            code = data.get('code')
-            print(f"API返回码: {code}")
+        assert response.status_code == 200, f"7天预报 HTTP {response.status_code}"
+        data = response.json()
+        code = data.get('code')
+        assert code == '200', f"7天预报业务码 {code}"
+        daily = data.get('daily') or []
+        assert len(daily) >= 7
             
-            if code == '200':
-                daily = data.get('daily', [])
-                print(f"✅ 成功！获取到 {len(daily)} 天预报")
-                for day in daily[:3]:
-                    print(f"   {day.get('fxDate')}: {day.get('tempMin')}~{day.get('tempMax')}°C, {day.get('textDay')}")
-            else:
-                print(f"❌ API返回错误码: {code}")
-        else:
-            print(f"❌ HTTP错误")
-            
-    except Exception as e:
-        print(f"❌ 错误: {e}")
+    except requests.RequestException as exc:
+        pytest.fail(f"7天预报请求失败: {type(exc).__name__}")
     
     # 测试3: 空气质量
     print("\n" + "-" * 40)
@@ -116,24 +90,17 @@ def test_qweather_api():
         response = requests.get(url, params=params, timeout=10)
         print(f"HTTP状态码: {response.status_code}")
         
-        if response.status_code == 200:
-            data = response.json()
-            code = data.get('code')
-            print(f"API返回码: {code}")
+        assert response.status_code == 200, f"空气质量 HTTP {response.status_code}"
+        data = response.json()
+        code = data.get('code')
+        assert code in {'200', '204'}, f"空气质量业务码 {code}"
+        if code == '200':
+            now = data.get('now') or {}
+            assert now.get('aqi') is not None
+            assert now.get('pm2p5') is not None
             
-            if code == '200':
-                now = data.get('now', {})
-                print(f"✅ 成功！")
-                print(f"   AQI: {now.get('aqi')}")
-                print(f"   PM2.5: {now.get('pm2p5')}")
-                print(f"   空气质量: {now.get('category')}")
-            else:
-                print(f"⚠️ API返回码: {code} (空气质量数据可能不可用)")
-        else:
-            print(f"❌ HTTP错误")
-            
-    except Exception as e:
-        print(f"❌ 错误: {e}")
+    except requests.RequestException as exc:
+        pytest.fail(f"空气质量请求失败: {type(exc).__name__}")
     
     print("\n" + "=" * 50)
     print("测试完成")

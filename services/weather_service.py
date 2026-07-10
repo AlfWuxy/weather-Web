@@ -86,11 +86,22 @@ class WeatherService:
         if not (-180 <= lon <= 180 and -90 <= lat <= 90):
             return None
         return lon, lat
+
+    def _get_fallback_weather(self, city, logger=None):
+        """按 Open-Meteo、Mock 的顺序返回兜底天气。"""
+        logger = logger or logging.getLogger(__name__)
+        if self.use_openmeteo_fallback:
+            logger.info("尝试使用Open-Meteo备用API...")
+            openmeteo_result = self._get_openmeteo_weather(city)
+            if openmeteo_result:
+                return openmeteo_result
+
+        logger.error("所有天气API均失败，使用模拟数据")
+        return self._get_mock_weather()
     
     def get_current_weather(self, city="都昌"):
         """
-        获取当前天气数据 - 使用和风天气API
-        如果API调用失败，返回模拟数据
+        获取当前天气数据，依次尝试和风天气、Open-Meteo 与模拟数据。
         """
         logger = logging.getLogger(__name__)
         # 尝试调用和风天气API
@@ -112,30 +123,42 @@ class WeatherService:
                 
                 # 检查HTTP状态码
                 if weather_response.status_code != 200:
-                    logger.warning("API HTTP状态码: %s，使用模拟数据", weather_response.status_code)
-                    return self._get_mock_weather()
+                    logger.warning("API HTTP状态码: %s，尝试备用API", weather_response.status_code)
+                    return self._get_fallback_weather(city, logger)
                 
                 try:
                     weather_data = weather_response.json()
                 except Exception as json_error:
-                    logger.warning("JSON解析失败: %s，使用模拟数据", json_error)
+                    logger.warning("JSON解析失败: %s，尝试备用API", json_error)
                     logger.debug("响应内容: %s", weather_response.text[:200])
-                    return self._get_mock_weather()
+                    return self._get_fallback_weather(city, logger)
                 
                 # 检查返回状态
                 code = weather_data.get('code')
                 if code != '200':
                     if code is None:
-                        logger.warning("和风天气API响应格式异常，使用模拟数据")
+                        logger.warning("和风天气API响应格式异常，尝试备用API")
                         logger.debug("响应内容: %s", str(weather_data)[:200])
                     else:
                         error_msg = self._get_error_message(code)
-                        logger.warning("和风天气API返回错误[%s]: %s，使用模拟数据", code, error_msg)
-                    return self._get_mock_weather()
+                        logger.warning("和风天气API返回错误[%s]: %s，尝试备用API", code, error_msg)
+                    return self._get_fallback_weather(city, logger)
                 
                 # 解析天气数据
-                now = weather_data.get('now', {})
-                temp_val = float(now.get('temp', 20))
+                now = weather_data.get('now')
+                if not isinstance(now, dict):
+                    logger.warning("和风天气API缺少实况字段，尝试备用API")
+                    return self._get_fallback_weather(city, logger)
+                temp_val = self._safe_float(now.get('temp'))
+                humidity_val = self._safe_float(now.get('humidity'))
+                if (
+                    temp_val is None
+                    or humidity_val is None
+                    or not math.isfinite(temp_val)
+                    or not math.isfinite(humidity_val)
+                ):
+                    logger.warning("和风天气API关键实况字段不完整，尝试备用API")
+                    return self._get_fallback_weather(city, logger)
                 result = {
                     'temperature': temp_val,
                     # 优先使用真实日极值，必要时回退到小时序列推导
@@ -144,12 +167,12 @@ class WeatherService:
                     'temperature_estimated': True,
                     'temperature_range_source': 'unavailable',
                     'temperature_range_confidence': 'none',
-                    'humidity': float(now.get('humidity', 60)),
-                    'pressure': float(now.get('pressure', 1013)),
+                    'humidity': humidity_val,
+                    'pressure': self._safe_float(now.get('pressure')),
                     'weather_condition': now.get('text', '晴'),
-                    'wind_speed': float(now.get('windSpeed', 3)),
+                    'wind_speed': self._safe_float(now.get('windSpeed')),
                     'wind_dir': now.get('windDir', ''),
-                    'feels_like': float(now.get('feelsLike', now.get('temp', 20))),
+                    'feels_like': self._safe_float(now.get('feelsLike'), temp_val),
                     'pm25': None,
                     'aqi': None,
                     'location': city,
@@ -211,16 +234,7 @@ class WeatherService:
         else:
             logger.warning("未配置和风天气API，尝试备用API")
         
-        # 和风天气API失败，尝试Open-Meteo备用API
-        if self.use_openmeteo_fallback:
-            logger.info("尝试使用Open-Meteo备用API...")
-            openmeteo_result = self._get_openmeteo_weather(city)
-            if openmeteo_result:
-                return openmeteo_result
-        
-        # 所有API都失败，返回模拟数据
-        logger.error("所有天气API均失败，使用模拟数据")
-        return self._get_mock_weather()
+        return self._get_fallback_weather(city, logger)
     
     def _get_error_message(self, code):
         """获取错误码对应的说明"""

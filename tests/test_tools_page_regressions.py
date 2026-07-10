@@ -726,3 +726,43 @@ def test_cooling_resource_type_takes_precedence_over_legacy_type(client, db_sess
     assert '真实商场' in body
     assert '真实图书馆' not in body
     assert '<option value="商场" selected>' in body
+
+
+def test_cooling_community_filter_supports_new_and_legacy_query_names(client, db_session, monkeypatch):
+    from core.db_models import CoolingResource
+
+    monkeypatch.setattr(
+        'services.public_service.get_weather_with_cache',
+        lambda location: ({'temperature': 27.5, 'is_mock': False, 'data_source': 'QWeather'}, False),
+    )
+    db_session.add_all([
+        CoolingResource(
+            community_code='甲村',
+            name='甲村纳凉点',
+            resource_type='活动中心',
+            is_active=True,
+        ),
+        CoolingResource(
+            community_code='乙村',
+            name='乙村纳凉点',
+            resource_type='活动中心',
+            is_active=True,
+        ),
+    ])
+    db_session.commit()
+
+    response = client.get('/cooling?community=甲村')
+    body = response.get_data(as_text=True)
+    assert response.status_code == 200
+    assert '甲村纳凉点' in body
+    assert '乙村纳凉点' not in body
+    assert 'name="community"' in body
+    assert 'value="甲村"' in body
+
+    legacy_response = client.get('/cooling?location=乙村')
+    legacy_body = legacy_response.get_data(as_text=True)
+    assert legacy_response.status_code == 200
+    assert '乙村纳凉点' in legacy_body
+    assert '甲村纳凉点' not in legacy_body
+    assert 'name="community"' in legacy_body
+    assert 'value="乙村"' in legacy_body

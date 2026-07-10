@@ -19,7 +19,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from flask import current_app, has_app_context
 
-from core.db_models import AlertDelivery, FamilyMember, Pair, User, WeatherAlert
+from core.db_models import AlertDelivery, FamilyMemberProfile, Pair, User, WeatherAlert
 from core.extensions import db
 from core.time_utils import utcnow
 from core.usage import log_usage_event
@@ -137,12 +137,38 @@ def _get_or_create_weather_alert(
     return record
 
 
-def _load_family_member_map(pairs: List[Pair]) -> Dict[int, FamilyMember]:
+def _load_family_member_profile_map(pairs: List[Pair]) -> Dict[int, FamilyMemberProfile]:
+    """只加载推送授权所需画像，避免读取不必要的成员身份信息。"""
     member_ids = sorted({p.member_id for p in pairs if getattr(p, "member_id", None)})
     if not member_ids:
         return {}
-    rows = FamilyMember.query.filter(FamilyMember.id.in_(member_ids)).all()
-    return {m.id: m for m in rows}
+    rows = FamilyMemberProfile.query.filter(
+        FamilyMemberProfile.member_id.in_(member_ids)
+    ).all()
+    return {profile.member_id: profile for profile in rows}
+
+
+def _pair_allows_family_push(pair: Pair, profile_map: Dict[int, FamilyMemberProfile]) -> bool:
+    """成员级开关和隐私级别必须先于第三方推送生效。"""
+    member_id = getattr(pair, "member_id", None)
+    if not member_id:
+        return True
+    profile = profile_map.get(member_id)
+    if profile is None:
+        return True
+    if getattr(profile, "alert_enabled", True) is False:
+        return False
+    privacy_level = str(getattr(profile, "privacy_level", None) or "family").strip().lower()
+    return privacy_level == "family"
+
+
+def _push_location_label(resolved: Dict[str, Any]) -> str:
+    """第三方推送只使用静态公开地点标签，地址解析结果统一降为泛称。"""
+    provider = str((resolved or {}).get("provider") or "").strip().lower()
+    display_name = str((resolved or {}).get("display_name") or "").strip()
+    if provider in {"map", "default"} and display_name:
+        return display_name
+    return "所在地区"
 
 
 def _render_push_content(
@@ -198,15 +224,16 @@ def dispatch_alerts(now=None, dedupe_hours: int = 6) -> Dict[str, Any]:
     if not pairs:
         return {"pairs": 0, "locations": 0, "alerts": 0, "deliveries": 0, "sent": 0, "failed": 0}
 
-    caregiver_ids = sorted({p.caregiver_id for p in pairs if getattr(p, "caregiver_id", None)})
+    profile_map = _load_family_member_profile_map(pairs)
+    eligible_pairs = [pair for pair in pairs if _pair_allows_family_push(pair, profile_map)]
+
+    caregiver_ids = sorted({p.caregiver_id for p in eligible_pairs if getattr(p, "caregiver_id", None)})
     users = User.query.filter(User.id.in_(caregiver_ids)).all() if caregiver_ids else []
     user_map = {u.id: u for u in users}
 
-    member_map = _load_family_member_map(pairs)
-
     # Resolve and group by location_code (QWeather compatible)
     groups: Dict[str, Dict[str, Any]] = {}
-    for pair in pairs:
+    for pair in eligible_pairs:
         query = (pair.location_query or pair.community_code or "").strip()
         resolved = resolve_location(query)
         if query and resolved.get("provider") == "fallback":
@@ -222,7 +249,7 @@ def dispatch_alerts(now=None, dedupe_hours: int = 6) -> Dict[str, Any]:
 
     for location_code, group in groups.items():
         resolved = group.get("resolved") or {}
-        display_name = resolved.get("display_name") or location_code
+        display_name = _push_location_label(resolved)
 
         # Prefer official warnings.
         warnings = get_qweather_warnings(location_code)
@@ -276,23 +303,14 @@ def dispatch_alerts(now=None, dedupe_hours: int = 6) -> Dict[str, Any]:
                 continue
 
             # Build content
-            elder_names = []
-            location_query = ""
-            for p in user_pairs:
-                if not location_query:
-                    location_query = (p.location_query or p.community_code or "").strip()
-                mid = getattr(p, "member_id", None)
-                member = member_map.get(mid) if mid else None
-                if member and member.name:
-                    elder_names.append(member.name)
-
             threshold_desc = threshold[2] if (not primary_warning and threshold) else None
             title, content = _render_push_content(
                 display_name=display_name,
-                elder_names=elder_names,
+                # WxPusher 是第三方渠道，不外发老人姓名或细粒度地址。
+                elder_names=[],
                 warning=primary_warning,
                 threshold_desc=threshold_desc,
-                location_query=location_query,
+                location_query=display_name,
             )
 
             delivery_token = _generate_delivery_token()

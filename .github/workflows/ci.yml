@@ -1,0 +1,89 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 配置 Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip check
+
+      - name: 检查 Python 与 Shell 语法
+        run: |
+          python -m compileall -q app.py blueprints core services utils
+          for file in scripts/*.sh .githooks/*; do
+            bash -n "$file"
+          done
+
+      - name: 检查变更与仓库边界
+        shell: bash
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+            git diff --check "origin/${GITHUB_BASE_REF}...HEAD"
+          else
+            git show --check --oneline --no-renames HEAD
+          fi
+
+          forbidden=$(
+            git ls-files \
+              | grep -E '(^\.env($|\.)|^\.claude/|^\.superpowers/|^\.playwright-cli/|^output/|^backups/| 2\.|\.DS_Store$)' \
+              | grep -v '^\.env\.example$' \
+              || true
+          )
+          if [ -n "$forbidden" ]; then
+            printf '发现禁止提交的文件：\n%s\n' "$forbidden" >&2
+            exit 1
+          fi
+
+          if git grep -nE \
+            '(AKIA[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9]{20,}|sk-[A-Za-z0-9_-]{20,}|BEGIN (RSA|OPENSSH|EC) PRIVATE KEY)' \
+            -- . ':(exclude)tests/**' ':(exclude).github/workflows/ci.yml'; then
+            echo '发现疑似真实密钥或私钥。' >&2
+            exit 1
+          fi
+
+          oversized=0
+          while IFS= read -r -d '' file; do
+            bytes=$(wc -c < "$file")
+            if [ "$bytes" -gt 10485760 ]; then
+              echo "文件超过 10 MB: $file ($bytes bytes)" >&2
+              oversized=1
+            fi
+          done < <(git ls-files -z)
+          test "$oversized" -eq 0
+
+      - name: 运行默认测试
+        run: python -m pytest -q
+
+      - name: 检查弃用警告
+        run: >-
+          python -m pytest -q
+          -W error::DeprecationWarning
+          -W ignore::DeprecationWarning:flask_login.login_manager
+
+      - name: 运行手工契约测试
+        run: python -m pytest -q -m manual

@@ -333,5 +333,22 @@ def test_create_notification_fails_closed_on_quota_error(app, monkeypatch):
     assert result is None
 
 
+def test_structured_logs_redact_action_and_tracking_tokens(app, client, monkeypatch):
+    """高熵链接凭据不能进入结构化请求日志。"""
+    from core.hooks import _redact_sensitive_path
+
+    assert _redact_sensitive_path('/e/action-secret/checkin') == '/e/<token>/checkin'
+    assert _redact_sensitive_path('/t/tracking-secret') == '/t/<token>'
+    assert _redact_sensitive_path('/dashboard') == '/dashboard'
+
+    app.config['FEATURE_STRUCTURED_LOGS'] = True
+    messages = []
+    monkeypatch.setattr('core.hooks.logger.info', lambda message, *args: messages.append(message))
+    client.get('/e/action-secret')
+
+    assert any('"path": "/e/<token>"' in message for message in messages)
+    assert all('action-secret' not in message for message in messages)
+
+
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])

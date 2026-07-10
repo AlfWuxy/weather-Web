@@ -37,6 +37,16 @@ def test_deploy_script_sets_precompute_python_path():
     assert 'Environment=VENV_PY=$VENV_DIR/bin/python' in content
 
 
+def test_deploy_script_uses_shared_database_backup_resolver():
+    content = _load_deploy_script()
+
+    assert "bash scripts/backup.sh --if-present" in content
+    assert "PROJECT_DIR='$PROJECT_DIR'" in content
+    assert "ENV_FILE='$PROJECT_DIR/.env'" in content
+    assert "cp -a instance/health_weather.db" not in content
+    assert "redis-server sqlite3" in content
+
+
 def test_deploy_script_excludes_local_design_drafts():
     content = _load_deploy_script()
 
