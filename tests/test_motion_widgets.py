@@ -389,10 +389,16 @@ def test_apple_polish_uses_accessible_action_and_muted_colors(client):
 
     assert response.status_code == 200
     css = response.get_data(as_text=True)
-    assert '--yl-orange-action: #B45309;' in css
+    assert '--yl-orange-action: #F68B33;' in css
+    assert '--yl-orange-action-hover: #F67932;' in css
+    assert '--yl-orange-ink: #A74407;' in css
+    assert '--yl-focus-ring: #D85B16;' in css
     assert '--yl-muted: #746E68;' in css
     assert '--yl-success: #477F42;' in css
-    assert _contrast_ratio('#B45309', '#FFFFFF') >= 4.5
+    assert _contrast_ratio('#F68B33', '#2A1A0F') >= 4.5
+    assert _contrast_ratio('#F67932', '#2A1A0F') >= 4.5
+    assert _contrast_ratio('#A74407', '#FFFFFF') >= 4.5
+    assert _contrast_ratio('#D85B16', '#FFFFFF') >= 3.0
     assert _contrast_ratio('#746E68', '#FBF7EE') >= 4.5
     assert _contrast_ratio('#477F42', '#FFFFFF') >= 4.5
     assert '.skip-link:focus-visible' in css

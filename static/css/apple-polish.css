@@ -4,14 +4,19 @@
    ============================================================ */
 
 :root {
-    /* 亮橙继续用于装饰，深橙专用于承载文字的交互控件。 */
-    --yl-orange-action: #B45309;
-    --yl-orange-action-hover: #92400E;
-    --yl-orange-600: var(--yl-orange-action);
+    /* 交互主色取自头像主橙；文字使用独立深橙，兼顾品牌一致性和对比度。 */
+    --yl-orange-action: #F68B33;
+    --yl-orange-action-hover: #F67932;
+    --yl-orange-ink: #A74407;
+    --yl-orange-ink-hover: #843403;
+    --yl-orange-500: var(--yl-orange-action);
+    --yl-orange-600: var(--yl-orange-ink);
+    --brand: var(--yl-orange-action);
+    --brand-deep: var(--yl-orange-action-hover);
     --yl-muted: #746E68;
     --yl-success: #477F42;
     --ok: var(--yl-success);
-    --yl-focus-ring: #B45309;
+    --yl-focus-ring: #D85B16;
     --yl-font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC",
         "Hiragino Sans GB", "Microsoft YaHei", "HarmonyOS Sans SC", system-ui,
         "Segoe UI", Roboto, sans-serif;
@@ -19,8 +24,10 @@
     /* 同步仍由旧组件读取的兼容变量。 */
     --ink-3: var(--yl-muted);
     --text-tertiary: var(--yl-muted);
-    --bs-link-color: var(--yl-orange-action);
-    --bs-link-hover-color: var(--yl-orange-action-hover);
+    --bs-primary: var(--yl-orange-action);
+    --bs-primary-rgb: 246, 139, 51;
+    --bs-link-color: var(--yl-orange-ink);
+    --bs-link-hover-color: var(--yl-orange-ink-hover);
 }
 
 html,
@@ -29,14 +36,14 @@ body {
 }
 
 a {
-    color: var(--yl-orange-action);
+    color: var(--yl-orange-ink);
 }
 
 a:hover {
-    color: var(--yl-orange-action-hover);
+    color: var(--yl-orange-ink-hover);
 }
 
-/* 主操作使用通过普通字号对比度要求的深橙。 */
+/* 头像亮橙搭配深色文字，让主操作更轻盈并保持清晰。 */
 .btn {
     transition:
         background-color .16s ease,
@@ -52,7 +59,7 @@ a:hover {
 .badge.bg-primary {
     background: var(--yl-orange-action) !important;
     border-color: var(--yl-orange-action) !important;
-    color: #fff !important;
+    color: #2A1A0F !important;
 }
 
 .btn-primary {
@@ -68,7 +75,7 @@ a:hover {
 .ai-chat-send:hover {
     background: var(--yl-orange-action-hover) !important;
     border-color: var(--yl-orange-action-hover) !important;
-    color: #fff !important;
+    color: #2A1A0F !important;
     box-shadow:
         0 1px 2px rgba(66, 48, 28, .10),
         0 6px 16px rgba(66, 48, 28, .14);
@@ -81,19 +88,19 @@ a:hover {
 
 .btn-outline-primary {
     border-color: var(--yl-orange-action);
-    color: var(--yl-orange-action);
+    color: var(--yl-orange-ink);
 }
 
 .btn-outline-primary:hover,
 .btn-outline-primary:focus-visible {
-    background: rgba(180, 83, 9, .08);
+    background: rgba(246, 139, 51, .14);
     border-color: var(--yl-orange-action);
-    color: var(--yl-orange-action-hover);
+    color: var(--yl-orange-ink-hover);
 }
 
 .ai-chat-message--user .ai-chat-bubble {
     background: var(--yl-orange-action);
-    color: #fff;
+    color: #2A1A0F;
 }
 
 /* 黄色实底搭配深色文字，避免小字号徽章出现低对比。 */
@@ -130,10 +137,10 @@ a:hover {
     left: max(12px, env(safe-area-inset-left));
     z-index: 1200;
     padding: 10px 16px;
-    border: 1px solid rgba(180, 83, 9, .25);
+    border: 1px solid rgba(246, 139, 51, .32);
     border-radius: 12px;
     background: #fff;
-    color: var(--yl-orange-action-hover);
+    color: var(--yl-orange-ink-hover);
     box-shadow: 0 10px 28px rgba(42, 38, 32, .14);
     font-weight: 600;
     opacity: 0;
