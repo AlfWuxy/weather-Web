@@ -52,6 +52,7 @@ htmlcov/
 # 浏览器与调试产物
 .playwright-cli/
 output/playwright/
+analysis/duchang_health_weather/outputs/
 
 # 日志与临时文件
 *.log

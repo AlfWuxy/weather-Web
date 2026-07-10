@@ -833,7 +833,7 @@ class DLNMRiskService:
         
         返回:
         - rr: 相对风险值
-        - breakdown: 详细分解
+        - breakdown: RawDLNMRR、DLNM病种修正、DLNM年龄修正、限幅与最终值
         """
         # 确保温度为数值类型
         try:
@@ -846,7 +846,23 @@ class DLNMRiskService:
             # 简化RR计算：偏离20度越多，风险越高
             deviation = abs(temperature - 20)
             rr = 1.0 + 0.015 * deviation
-            return rr, {'error': '模型未训练，使用简化公式', 'base_rr': rr}
+            return rr, {
+                'error': '模型未训练，使用简化公式',
+                'calculation_branch': 'untrained_fallback',
+                'base_rr': rr,
+                'raw_dlnm_rr': rr,
+                'disease_modifier': 1.0,
+                'dlnm_disease_modifier': 1.0,
+                'age_modifier': 1.0,
+                'dlnm_age_modifier': 1.0,
+                'uncapped_final_rr': rr,
+                'dlnm_adjusted_rr': rr,
+                'rr_cap': None,
+                'rr_cap_applied': False,
+                'final_rr': rr,
+                'temperature': temperature,
+                'deviation_from_mmt': deviation,
+            }
         
         # 获取MMT，如果未计算则使用默认值
         mmt = self.mmt if self.mmt is not None else 20.0
@@ -901,21 +917,28 @@ class DLNMRiskService:
             except (TypeError, ValueError):
                 pass
 
-        final_rr = rr * disease_modifier * age_modifier
+        uncapped_final_rr = rr * disease_modifier * age_modifier
 
         # 应用最终RR上限
-        final_rr = min(final_rr, self.rr_cap_cumulative)
+        final_rr = min(uncapped_final_rr, self.rr_cap_cumulative)
 
         return final_rr, {
             'base_rr': rr,
+            'raw_dlnm_rr': rr,
             'disease_modifier': disease_modifier,
+            'dlnm_disease_modifier': disease_modifier,
             'age_modifier': age_modifier,
+            'dlnm_age_modifier': age_modifier,
+            'uncapped_final_rr': uncapped_final_rr,
+            'dlnm_adjusted_rr': final_rr,
+            'rr_cap': self.rr_cap_cumulative,
             'final_rr': final_rr,
             'mmt': mmt,
             'temperature': temperature,
             'deviation_from_mmt': abs(temperature - mmt),
             'literature_weight': self.literature_weight,
-            'rr_cap_applied': final_rr >= self.rr_cap_cumulative
+            'calculation_branch': 'trained_model',
+            'rr_cap_applied': uncapped_final_rr > self.rr_cap_cumulative
         }
     
     def _get_base_rr(self, temperature):

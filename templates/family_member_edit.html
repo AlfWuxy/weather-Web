@@ -1,19 +1,19 @@
 {% extends "base.html" %}
 
-{% block title %}编辑家庭成员 - 天气健康风险预测系统{% endblock %}
+{% block title %}{{ page_title or '编辑家庭成员' }} · 宜老天气通{% endblock %}
 
 {% block content %}
 <div class="container">
     <div class="row mb-4">
         <div class="col-12 d-flex justify-content-between align-items-center">
-            <h2><i class="bi bi-pencil"></i> 编辑家庭成员</h2>
+            <h2><i class="bi bi-{% if is_create_mode %}person-plus{% else %}pencil{% endif %}"></i> {{ page_title or '编辑家庭成员' }}</h2>
             <a class="btn btn-outline-secondary" href="{{ url_for('health.family_members') }}">返回列表</a>
         </div>
     </div>
 
     <div class="card shadow-sm">
         <div class="card-body">
-            <form method="POST" action="{{ url_for('health.family_member_edit', member_id=member.id) }}">
+            <form method="POST" action="{{ action_url }}">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <div class="accordion" id="editMemberAccordion">
                     <div class="accordion-item">
@@ -26,7 +26,7 @@
                             <div class="accordion-body">
                                 <div class="mb-3">
                                     <label class="form-label">姓名</label>
-                                    <input type="text" class="form-control" name="name" value="{{ member.name }}" required>
+                                    <input type="text" class="form-control" name="name" value="{{ member.name or '' }}" required>
                                 </div>
                                 <div class="mb-3">
                                     <label class="form-label">关系</label>
@@ -64,13 +64,13 @@
                                         {% for item in chronic_options %}
                                             <div class="form-check">
                                                 <input class="form-check-input" type="checkbox" name="chronic_diseases" value="{{ item }}" id="cd_edit_{{ loop.index }}"
-                                                       {% if item in chronic_diseases_list %}checked{% endif %}>
+                                                       {% if item in chronic_diseases %}checked{% endif %}>
                                                 <label class="form-check-label" for="cd_edit_{{ loop.index }}">{{ item }}</label>
                                             </div>
                                         {% endfor %}
                                     </div>
                                     {% set other = namespace(items=[]) %}
-                                    {% for disease in chronic_diseases_list %}
+                                    {% for disease in chronic_diseases %}
                                         {% if disease not in chronic_options %}
                                             {% set _ = other.items.append(disease) %}
                                         {% endif %}
@@ -276,7 +276,7 @@
                 </div>
 
                 <div class="d-flex gap-2 mt-4">
-                    <button class="btn btn-primary">保存</button>
+                    <button class="btn btn-primary">{{ submit_label or '保存' }}</button>
                     <a class="btn btn-outline-secondary" href="{{ url_for('health.family_members') }}">取消</a>
                 </div>
             </form>

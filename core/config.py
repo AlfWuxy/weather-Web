@@ -263,6 +263,13 @@ def configure_app(app, logger):
     app.config['WXPUSHER_APP_TOKEN'] = wxpusher_app_token
     app.config['WXPUSHER_API_BASE'] = wxpusher_api_base
     app.config['PUBLIC_BASE_URL'] = public_base_url
+    app.config['PREFERRED_URL_SCHEME'] = 'https' if not app.config['DEBUG'] else 'http'
+    app.config['SESSION_COOKIE_SECURE'] = not app.config['DEBUG']
+    app.config['SESSION_COOKIE_HTTPONLY'] = True
+    app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+    app.config['REMEMBER_COOKIE_SECURE'] = not app.config['DEBUG']
+    app.config['REMEMBER_COOKIE_HTTPONLY'] = True
+    app.config['REMEMBER_COOKIE_SAMESITE'] = 'Lax'
     app.config['AI_ALLOWED_MODELS'] = AI_ALLOWED_MODELS
     app.config['DEFAULT_CITY'] = default_city or DEFAULT_CITY_LABEL
     app.config['DEFAULT_LOCATION'] = default_location or DEFAULT_LOCATION
@@ -321,6 +328,13 @@ def configure_app(app, logger):
     app.config.setdefault('RATE_LIMIT_CONFIRM', os.getenv('RATE_LIMIT_CONFIRM', '30 per hour'))
     app.config.setdefault('RATE_LIMIT_HELP', os.getenv('RATE_LIMIT_HELP', '10 per hour'))
     app.config.setdefault('RATE_LIMIT_ESCALATE', os.getenv('RATE_LIMIT_ESCALATE', '10 per hour'))
+    app.config.setdefault('RATE_LIMIT_AMAP_PROXY', os.getenv('RATE_LIMIT_AMAP_PROXY', '30 per minute'))
+    app.config.setdefault('RATE_LIMIT_MP_READ', os.getenv('RATE_LIMIT_MP_READ', '120 per minute'))
+    app.config.setdefault('RATE_LIMIT_MP_WRITE', os.getenv('RATE_LIMIT_MP_WRITE', '30 per minute'))
+    app.config.setdefault('RATE_LIMIT_MP_ALERTS', os.getenv('RATE_LIMIT_MP_ALERTS', '30 per minute'))
+    app.config.setdefault('RATE_LIMIT_MP_EVENTS', os.getenv('RATE_LIMIT_MP_EVENTS', '60 per minute'))
+    app.config.setdefault('PAIR_ACTION_TOKEN_TTL_DAYS', parse_int(os.getenv('PAIR_ACTION_TOKEN_TTL_DAYS', '90'), default=90))
+    app.config.setdefault('SHORT_CODE_TTL_DAYS', parse_int(os.getenv('SHORT_CODE_TTL_DAYS', '90'), default=90))
 
     if not app.config['DEBUG'] and app.config['RATE_LIMIT_STORAGE_URI'].startswith('memory://'):
         logger.warning(

@@ -1,11 +1,19 @@
 # -*- coding: utf-8 -*-
 """Community-related routes."""
+import logging
+import math
+
 from flask import current_app, flash, redirect, render_template, request, url_for
 from flask_login import current_user
 
 from core.db_models import Community, CommunityDaily, CoolingResource, DailyStatus, Debrief, MedicalRecord, Pair
 from core.time_utils import now_local, today_local
-from core.weather import get_consecutive_hot_days, get_weather_with_cache, is_demo_mode, normalize_location_name
+from core.weather import (
+    get_consecutive_hot_days,
+    get_weather_with_cache,
+    is_qweather_online_weather,
+    normalize_location_name,
+)
 from services.heat_action_service import HeatActionService
 from utils.validators import sanitize_input
 
@@ -27,8 +35,52 @@ from ._helpers import (
     _build_outreach_suggestions,
     _build_risk_counts,
     _community_access_allowed,
-    _ensure_demo_statuses
 )
+
+logger = logging.getLogger(__name__)
+
+_REQUIRED_HEAT_WEATHER_FIELDS = (
+    'temperature',
+    'temperature_max',
+    'temperature_min',
+    'humidity',
+)
+_WEATHER_WAITING_LABEL = '等待真实天气'
+
+
+def _heat_weather_available(weather_data):
+    """仅允许字段完整的真实和风天气进入社区热风险计算。"""
+    if not is_qweather_online_weather(weather_data):
+        return False
+    for field in _REQUIRED_HEAT_WEATHER_FIELDS:
+        try:
+            value = float(weather_data.get(field))
+        except (AttributeError, TypeError, ValueError):
+            return False
+        if not math.isfinite(value):
+            return False
+    return True
+
+
+def _load_heat_risk(location):
+    """读取真实天气并计算热风险；失败时不输出风险结论。"""
+    weather_data, _ = get_weather_with_cache(location)
+    if not _heat_weather_available(weather_data):
+        return weather_data, None, None
+    try:
+        consecutive_hot_days = get_consecutive_hot_days(
+            location,
+            today_max=weather_data.get('temperature_max')
+        )
+        heat_result = HeatActionService().calculate_heat_risk(
+            weather_data,
+            consecutive_hot_days=consecutive_hot_days
+        )
+    except Exception:
+        logger.warning("真实天气热风险计算失败，已停止输出结论", exc_info=True)
+        return weather_data, None, None
+    risk_label = HEAT_RISK_LABELS.get(heat_result['risk_level'], '低风险')
+    return weather_data, heat_result, risk_label
 
 
 def community_dashboard():
@@ -46,18 +98,18 @@ def community_dashboard():
             return redirect(url_for('user.user_dashboard'))
         communities = Community.query.filter_by(name=community_code).all()
 
-    if is_demo_mode():
-        for comm in communities:
-            _ensure_demo_statuses(comm.name, status_date, caregiver_id=current_user.id)
-
     community_codes = [comm.name for comm in communities]
     statuses_by_comm = {code: [] for code in community_codes}
     community_daily_by_comm = {code: None for code in community_codes}
     resources_by_comm = {code: [] for code in community_codes}
     if community_codes:
-        statuses = DailyStatus.query.filter(
+        statuses = DailyStatus.query.join(
+            Pair,
+            Pair.id == DailyStatus.pair_id,
+        ).filter(
             DailyStatus.community_code.in_(community_codes),
-            DailyStatus.status_date == status_date
+            DailyStatus.status_date == status_date,
+            Pair.status == 'active',
         ).all()
         _auto_escalate_overdue_statuses(statuses, status_date)
         for status in statuses:
@@ -77,7 +129,6 @@ def community_dashboard():
         for resource in resources:
             resources_by_comm.setdefault(resource.community_code, []).append(resource)
 
-    heat_service = HeatActionService()
     snapshots = []
     for comm in communities:
         statuses = statuses_by_comm.get(comm.name, [])
@@ -87,8 +138,12 @@ def community_dashboard():
             record=community_daily_by_comm.get(comm.name),
             statuses=statuses
         )
-        risk_counts, confirmed_counts = _build_risk_counts(statuses)
-        confirmed_total = sum(confirmed_counts.values())
+        risk_statuses = [
+            status for status in statuses
+            if status.risk_level in HEAT_RISK_LABELS.values()
+        ]
+        risk_counts, confirmed_counts = _build_risk_counts(risk_statuses)
+        confirmed_total = sum(1 for status in statuses if status.confirmed_at)
         help_count = sum(1 for s in statuses if s.help_flag)
         escalation_count = sum(
             1 for s in statuses if _relay_stage_rank(s.relay_stage) >= _relay_stage_rank(AUTO_ESCALATE_STAGE)
@@ -97,16 +152,10 @@ def community_dashboard():
         help_rate = (help_count / total_people) if total_people else 0
 
         location = normalize_location_name(comm.name)
-        weather_data, _ = get_weather_with_cache(location)
-        consecutive_hot_days = get_consecutive_hot_days(
-            location,
-            today_max=weather_data.get('temperature_max')
-        )
-        heat_result = heat_service.calculate_heat_risk(
-            weather_data,
-            consecutive_hot_days=consecutive_hot_days
-        )
-        risk_label = HEAT_RISK_LABELS.get(heat_result['risk_level'], '低风险')
+        _weather_data, _heat_result, risk_label = _load_heat_risk(location)
+        weather_available = risk_label is not None
+        if not weather_available:
+            risk_label = _WEATHER_WAITING_LABEL
         resources = resources_by_comm.get(comm.name, [])
         outreach_suggestions = _build_outreach_suggestions(
             snapshot.get('total_people', 0),
@@ -126,8 +175,12 @@ def community_dashboard():
             'help_rate': round(help_rate, 4),
             'flag_count': escalation_count,
             'risk_label': risk_label,
+            'weather_available': weather_available,
             'outreach_suggestions': outreach_suggestions,
-            'group_message': _build_community_message(comm.name, risk_label, resources)
+            'group_message': (
+                _build_community_message(comm.name, risk_label, resources)
+                if weather_available else None
+            )
         })
 
     return render_template(
@@ -151,9 +204,13 @@ def community_detail(community_code):
     status_date = today_local()
     is_admin = getattr(current_user, 'role', None) == 'admin'
     snapshot = _build_community_snapshot(community_code, status_date)
-    statuses = DailyStatus.query.filter_by(
-        community_code=community_code,
-        status_date=status_date
+    statuses = DailyStatus.query.join(
+        Pair,
+        Pair.id == DailyStatus.pair_id,
+    ).filter(
+        DailyStatus.community_code == community_code,
+        DailyStatus.status_date == status_date,
+        Pair.status == 'active',
     ).order_by(DailyStatus.updated_at.desc()).all()
     pair_map = {}
     if is_admin:
@@ -161,24 +218,22 @@ def community_detail(community_code):
         pairs = Pair.query.filter(Pair.id.in_(pair_ids)).all() if pair_ids else []
         pair_map = {pair.id: pair for pair in pairs}
 
-    risk_counts, confirmed_counts = _build_risk_counts(statuses)
-    confirmed_total = sum(confirmed_counts.values())
+    risk_statuses = [
+        status for status in statuses
+        if status.risk_level in HEAT_RISK_LABELS.values()
+    ]
+    risk_counts, confirmed_counts = _build_risk_counts(risk_statuses)
+    confirmed_total = sum(1 for status in statuses if status.confirmed_at)
     help_count = sum(1 for s in statuses if s.help_flag)
     escalation_count = sum(
         1 for s in statuses if _relay_stage_rank(s.relay_stage) >= _relay_stage_rank(AUTO_ESCALATE_STAGE)
     )
 
     location = normalize_location_name(community_code)
-    weather_data, _ = get_weather_with_cache(location)
-    consecutive_hot_days = get_consecutive_hot_days(
-        location,
-        today_max=weather_data.get('temperature_max')
-    )
-    heat_result = HeatActionService().calculate_heat_risk(
-        weather_data,
-        consecutive_hot_days=consecutive_hot_days
-    )
-    risk_label = HEAT_RISK_LABELS.get(heat_result['risk_level'], '低风险')
+    _weather_data, _heat_result, risk_label = _load_heat_risk(location)
+    weather_available = risk_label is not None
+    if not weather_available:
+        risk_label = _WEATHER_WAITING_LABEL
 
     debrief_total = Debrief.query.filter_by(
         community_code=community_code,
@@ -212,9 +267,16 @@ def community_detail(community_code):
         resources=resources,
         risk_counts=risk_counts,
         confirmed_counts=confirmed_counts,
+        confirmed_total=confirmed_total,
+        help_count=help_count,
+        escalation_count=escalation_count,
         risk_label=risk_label,
+        weather_available=weather_available,
         outreach_suggestions=outreach_suggestions,
-        group_message=_build_community_message(community_code, risk_label, resources),
+        group_message=(
+            _build_community_message(community_code, risk_label, resources)
+            if weather_available else None
+        ),
         status_date=status_date
     )
 
@@ -230,44 +292,39 @@ def community_wechat(community_code):
         return redirect(url_for('user.community_dashboard'))
 
     location = normalize_location_name(community_code)
-    weather_data, _ = get_weather_with_cache(location)
-    consecutive_hot_days = get_consecutive_hot_days(
-        location,
-        today_max=weather_data.get('temperature_max')
-    )
-    heat_result = HeatActionService().calculate_heat_risk(
-        weather_data,
-        consecutive_hot_days=consecutive_hot_days
-    )
-    risk_label = HEAT_RISK_LABELS.get(heat_result['risk_level'], '低风险')
-    actions = _action_plan(risk_label)
+    _weather_data, _heat_result, risk_label = _load_heat_risk(location)
+    weather_available = risk_label is not None
+    actions = _action_plan(risk_label) if weather_available else []
     resources = CoolingResource.query.filter_by(
         community_code=community_code,
         is_active=True
     ).all()
 
-    message_lines = [
-        '【社区高温行动提醒】',
-        f'社区：{community_code}',
-        f'今日热风险：{risk_label}',
-        '行动建议（非医疗诊断/治疗）：'
-    ]
-    for item in actions:
-        message_lines.append(f'- {item["title"]}：{item["detail"]}')
-    if resources:
-        message_lines.append('附近避暑点可参考：')
-        for item in resources[:3]:
-            name_line = f'- {item.name}'
-            if item.address_hint:
-                name_line += f'（{item.address_hint}）'
-            message_lines.append(name_line)
-    message_lines.append('如需帮助请联系社区服务人员。')
+    message_lines = []
+    if weather_available:
+        message_lines = [
+            '【社区高温行动提醒】',
+            f'社区：{community_code}',
+            f'今日热风险：{risk_label}',
+            '行动建议（非医疗诊断/治疗）：'
+        ]
+        for item in actions:
+            message_lines.append(f'- {item["title"]}：{item["detail"]}')
+        if resources:
+            message_lines.append('附近避暑点可参考：')
+            for item in resources[:3]:
+                name_line = f'- {item.name}'
+                if item.address_hint:
+                    name_line += f'（{item.address_hint}）'
+                message_lines.append(name_line)
+        message_lines.append('如需帮助请联系社区服务人员。')
 
     return render_template(
         'community_wechat.html',
         message='\n'.join(message_lines),
         community_code=community_code,
-        risk_label=risk_label,
+        risk_label=risk_label if weather_available else _WEATHER_WAITING_LABEL,
+        weather_available=weather_available,
         actions=actions,
         resources=resources
     )
@@ -283,51 +340,46 @@ def community_announce():
         community_code = getattr(current_user, 'community', None)
     location = normalize_location_name(community_code)
     display_location = community_code or location
-    weather_data, _ = get_weather_with_cache(location)
-    consecutive_hot_days = get_consecutive_hot_days(
-        location,
-        today_max=weather_data.get('temperature_max')
-    )
-    heat_result = HeatActionService().calculate_heat_risk(
-        weather_data,
-        consecutive_hot_days=consecutive_hot_days
-    )
-    risk_label = HEAT_RISK_LABELS.get(heat_result['risk_level'], '低风险')
-    actions = _action_plan(risk_label)
+    _weather_data, _heat_result, risk_label = _load_heat_risk(location)
+    weather_available = risk_label is not None
+    actions = _action_plan(risk_label) if weather_available else []
     updated_at = now_local()
 
-    messages = {
-        'elder': _build_announce_message(
-            '高温提醒｜老人版',
-            display_location,
-            risk_label,
-            actions,
-            extra_lines=['如有不适请及时联系家人或社区。'],
-            updated_at=updated_at
-        ),
-        'caregiver': _build_announce_message(
-            '高温提醒｜家属照护版',
-            display_location,
-            risk_label,
-            actions,
-            extra_lines=['请联系老人确认状态，提醒补水与避暑。'],
-            updated_at=updated_at
-        ),
-        'community': _build_announce_message(
-            '社区高温行动提醒｜社区版',
-            display_location,
-            risk_label,
-            actions,
-            extra_lines=['请优先关注高风险家庭与未确认对象。'],
-            updated_at=updated_at
-        )
-    }
+    messages = {}
+    if weather_available:
+        messages = {
+            'elder': _build_announce_message(
+                '高温提醒｜老人版',
+                display_location,
+                risk_label,
+                actions,
+                extra_lines=['如有不适请及时联系家人或社区。'],
+                updated_at=updated_at
+            ),
+            'caregiver': _build_announce_message(
+                '高温提醒｜家属照护版',
+                display_location,
+                risk_label,
+                actions,
+                extra_lines=['请联系老人确认状态，提醒补水与避暑。'],
+                updated_at=updated_at
+            ),
+            'community': _build_announce_message(
+                '社区高温行动提醒｜社区版',
+                display_location,
+                risk_label,
+                actions,
+                extra_lines=['请优先关注高风险家庭与未确认对象。'],
+                updated_at=updated_at
+            )
+        }
 
     return render_template(
         'community_announce.html',
         messages=messages,
         location=display_location,
-        risk_label=risk_label,
+        risk_label=risk_label if weather_available else _WEATHER_WAITING_LABEL,
+        weather_available=weather_available,
         updated_at=updated_at,
         disclaimer_lines=ANNOUNCE_DISCLAIMER_LINES,
         source_lines=ANNOUNCE_SOURCE_LINES

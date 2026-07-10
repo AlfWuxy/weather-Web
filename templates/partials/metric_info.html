@@ -1,0 +1,14 @@
+{% macro metric_info(key, context=none, class_name='', label=none) -%}
+    {% set metric = metric_explanations.get(key) if metric_explanations else none %}
+    {% if metric %}
+    <button type="button"
+            class="yl-metric-info {{ class_name }}"
+            data-metric-info="{{ key }}"
+            {% if context %}data-metric-context='{{ context|tojson }}'{% endif %}
+            data-details-url="{{ url_for('public.transparency') }}#{{ metric.anchor }}"
+            aria-label="{{ label or ('查看“' ~ metric.title ~ '”的计算说明') }}"
+            aria-expanded="false">
+        <i class="bi bi-info-circle" aria-hidden="true"></i>
+    </button>
+    {% endif %}
+{%- endmacro %}

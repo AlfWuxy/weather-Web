@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "partials/metric_info.html" import metric_info with context %}
 {% set needs_chartjs = true %}
 
 {% block title %}社区对比分析{% endblock %}
@@ -162,10 +163,10 @@
         <div class="col-12 d-flex flex-wrap justify-content-between align-items-start gap-2">
             <div>
                 <h2 class="mb-1"><i class="bi bi-diagram-3 me-1"></i>社区对比分析</h2>
-                <p class="text-muted mb-0">按人时分母标准化，比较不同村庄/社区的健康风险差异。</p>
+                <p class="text-muted mb-0">按人口 × 观察天数校正，比较不同村庄/社区的门诊记录负担差异。</p>
             </div>
             <div class="d-flex flex-wrap gap-2">
-                <span class="cc-chip">方法：SIR + 95%CI</span>
+                <span class="cc-chip">方法：门诊记录 O/E + 95%CI {{ metric_info('sir') }}</span>
                 <span class="cc-chip">分层：{{ stratum_labels[stratum] }}</span>
                 <span class="cc-chip">平滑强度 α={{ smoothing_alpha }}</span>
             </div>
@@ -252,7 +253,7 @@
         </div>
         <div class="col-xl-2 col-md-4">
             <div class="cc-kpi">
-                <div class="name">总病例</div>
+                <div class="name">门诊记录总数</div>
                 <div class="value">{{ data_summary.total_visits }}</div>
                 <div class="sub">窗口 {{ data_summary.total_days }} 天</div>
             </div>
@@ -266,7 +267,7 @@
         </div>
         <div class="col-xl-2 col-md-4">
             <div class="cc-kpi">
-                <div class="name">基准发病率</div>
+                <div class="name">基准门诊记录率</div>
                 <div class="value">
                     {% if data_summary.baseline_rate_per_10k_pd is none %}--{% else %}{{ "%.2f"|format(data_summary.baseline_rate_per_10k_pd) }}{% endif %}
                 </div>
@@ -296,8 +297,8 @@
             <div class="card cc-card h-100">
                 <div class="card-body">
                     <div class="d-flex justify-content-between align-items-center mb-2">
-                        <h6 class="mb-0">社区间标准化风险排序（SIR）</h6>
-                        <span class="cc-chip">柱 = 平滑SIR；误差线 = SIR 95%CI</span>
+                        <h6 class="mb-0">社区间门诊记录 O/E 排序 {{ metric_info('sir') }}</h6>
+                        <span class="cc-chip">柱 = 加 α 平滑 O/E；误差线 = O/E 95%CI</span>
                     </div>
                     <div class="cc-chart-wrap">
                         <canvas id="rankChart"></canvas>
@@ -330,13 +331,13 @@
                             <li>
                                 <strong>{{ row.name }}</strong>
                                 {% if row.smoothed_sir is not none %}
-                                    平滑SIR {{ "%.2f"|format(row.smoothed_sir) }}
+                                    平滑 O/E {{ "%.2f"|format(row.smoothed_sir) }}
                                 {% elif row.sir is not none %}
-                                    SIR {{ "%.2f"|format(row.sir) }}
+                                    O/E {{ "%.2f"|format(row.sir) }}
                                 {% else %}
-                                    SIR --
+                                    O/E --
                                 {% endif %}
-                                ，病例 {{ row.observed }}
+                                ，门诊记录 {{ row.observed }}
                             </li>
                         {% else %}
                             <li class="text-muted">暂无可排序数据</li>
@@ -349,13 +350,13 @@
                             <li>
                                 <strong>{{ row.name }}</strong>
                                 {% if row.smoothed_sir is not none %}
-                                    平滑SIR {{ "%.2f"|format(row.smoothed_sir) }}
+                                    平滑 O/E {{ "%.2f"|format(row.smoothed_sir) }}
                                 {% elif row.sir is not none %}
-                                    SIR {{ "%.2f"|format(row.sir) }}
+                                    O/E {{ "%.2f"|format(row.sir) }}
                                 {% else %}
-                                    SIR --
+                                    O/E --
                                 {% endif %}
-                                ，病例 {{ row.observed }}
+                                ，门诊记录 {{ row.observed }}
                             </li>
                         {% else %}
                             <li class="text-muted">暂无可排序数据</li>
@@ -377,19 +378,19 @@
                         <div class="cc-detail-value" id="ccDetailRank">--</div>
                     </div>
                     <div class="col-md-6">
-                        <div class="cc-detail-label">病例 / 期望</div>
+                        <div class="cc-detail-label">门诊记录 / 期望</div>
                         <div class="cc-detail-value" id="ccDetailOE">--</div>
                     </div>
                     <div class="col-md-6">
-                        <div class="cc-detail-label">SIR（95%CI）</div>
+                        <div class="cc-detail-label">O/E（95%CI）</div>
                         <div class="cc-detail-value" id="ccDetailSir">--</div>
                     </div>
                     <div class="col-md-6">
-                        <div class="cc-detail-label">平滑SIR</div>
+                        <div class="cc-detail-label">加 α 平滑 O/E</div>
                         <div class="cc-detail-value" id="ccDetailSmoothed">--</div>
                     </div>
                     <div class="col-md-6">
-                        <div class="cc-detail-label">发病率（每万人·日）</div>
+                        <div class="cc-detail-label">门诊记录率（每万人·日）</div>
                         <div class="cc-detail-value" id="ccDetailRate">--</div>
                     </div>
                     <div class="col-md-6">
@@ -408,7 +409,7 @@
     <div class="card cc-card mb-4">
         <div class="card-body">
             <div class="d-flex justify-content-between align-items-center mb-2">
-                <h6 class="mb-0">社区对比明细（标准化与不确定性）</h6>
+                <h6 class="mb-0">社区对比明细（人口天数校正与不确定性）</h6>
                 <span class="text-muted small">点击任一行可在右侧查看详情</span>
             </div>
             <div class="cc-table-wrap">
@@ -417,12 +418,12 @@
                         <tr>
                             <th>排名</th>
                             <th>社区</th>
-                            <th>病例 O</th>
+                            <th>门诊记录 O</th>
                             <th>期望 E</th>
-                            <th>SIR（95%CI）</th>
-                            <th>平滑SIR</th>
-                            <th>发病率<br>每万人·日</th>
-                            <th>超额病例 O-E</th>
+                            <th>O/E（95%CI） {{ metric_info('sir') }}</th>
+                            <th>加 α 平滑 O/E</th>
+                            <th>门诊记录率<br>每万人·日</th>
+                            <th>超额记录 O-E</th>
                             <th>确定性</th>
                             <th>漏斗判定</th>
                             <th>动作建议</th>
@@ -486,8 +487,9 @@
         <div class="card-body">
             <h6 class="mb-2">方法说明（本页实现）</h6>
             <ul class="mb-0 text-muted">
-                <li>采用人时分母（人口 × 观察天数）计算发病率，避免仅比病例总数造成的大社区偏置。</li>
-                <li>采用 SIR（Observed / Expected）评估相对风险，并提供 95% 置信区间。</li>
+                <li>采用人时分母（人口 × 观察天数）计算门诊记录率，避免只比较记录总数造成的大社区偏置。</li>
+                <li>采用门诊记录 O/E（Observed Records / Expected Records）评估相对负担，并提供 95% 置信区间；该值没有按年龄或性别分层标准化。</li>
+                <li>页面平滑值使用 (Observed + α) / (Expected + α)，与社区风险地图的经验贝叶斯权重平滑是两套实现。</li>
                 <li>采用经验平滑（平滑参数 α）稳定小样本社区的波动，减少“极端值误判”。</li>
                 <li>采用漏斗图控制限（95%/99.8%）识别显著离群社区，并提供 P90/P10 与 Gini 的不平等概览。</li>
             </ul>
@@ -583,7 +585,7 @@ function drawRankChart() {
             labels: rankingPayload.labels || [],
             datasets: [
                 {
-                    label: '平滑SIR',
+                    label: '加 α 平滑 O/E',
                     data: values,
                     borderColor: '#1f6f8b',
                     backgroundColor: 'rgba(31, 111, 139, 0.45)',
@@ -609,7 +611,7 @@ function drawRankChart() {
                     suggestedMax: Math.max(1.6, ciMax * 1.12),
                     title: {
                         display: true,
-                        text: '风险比（SIR）'
+                        text: '门诊记录 O/E'
                     }
                 },
                 x: {
@@ -636,10 +638,10 @@ function drawRankChart() {
                             const ciHigh = rankingPayload.ci_high ? rankingPayload.ci_high[i] : null;
                             const rate = rankingPayload.incidence_rate ? rankingPayload.incidence_rate[i] : null;
                             return [
-                                `平滑SIR: ${fmtNumber(context.raw, 2)}`,
-                                `SIR 95%CI: [${fmtNumber(ciLow, 2)}, ${fmtNumber(ciHigh, 2)}]`,
-                                `病例/期望: ${observed === null || observed === undefined ? '--' : observed} / ${fmtNumber(expected, 2)}`,
-                                `发病率: ${fmtNumber(rate, 2)} 每万人·日`
+                                `平滑 O/E: ${fmtNumber(context.raw, 2)}`,
+                                `O/E 95%CI: [${fmtNumber(ciLow, 2)}, ${fmtNumber(ciHigh, 2)}]`,
+                                `门诊记录/期望: ${observed === null || observed === undefined ? '--' : observed} / ${fmtNumber(expected, 2)}`,
+                                `门诊记录率: ${fmtNumber(rate, 2)} 每万人·日`
                             ];
                         }
                     }
@@ -735,7 +737,7 @@ function drawFunnelChart() {
                     beginAtZero: true,
                     title: {
                         display: true,
-                        text: '期望病例 E'
+                        text: '期望门诊记录 E'
                     }
                 },
                 y: {
@@ -743,7 +745,7 @@ function drawFunnelChart() {
                     suggestedMax: Math.max(1.5, Number(funnelYMax) || 1.5),
                     title: {
                         display: true,
-                        text: '风险比（SIR）'
+                        text: '门诊记录 O/E'
                     }
                 }
             },
@@ -757,9 +759,9 @@ function drawFunnelChart() {
                             }
                             return [
                                 `${raw.name}`,
-                                `平滑SIR: ${fmtNumber(raw.y, 2)}`,
-                                `SIR: ${fmtNumber(raw.sir, 2)}`,
-                                `病例/期望: ${raw.observed} / ${fmtNumber(raw.expected, 2)}`,
+                                `平滑 O/E: ${fmtNumber(raw.y, 2)}`,
+                                `O/E: ${fmtNumber(raw.sir, 2)}`,
+                                `门诊记录/期望: ${raw.observed} / ${fmtNumber(raw.expected, 2)}`,
                                 `${funnelFlagLabels[raw.funnel_flag] || raw.funnel_flag}`
                             ];
                         }

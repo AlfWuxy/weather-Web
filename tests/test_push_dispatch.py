@@ -31,6 +31,18 @@ def test_dispatch_alerts_dedupes_success(app, db_session, monkeypatch):
 
         # Force WxPusher send success without network
         monkeypatch.setattr(dispatch_mod, "wxpusher_send", lambda *args, **kwargs: {"ok": True, "msg_id": "1"})
+        monkeypatch.setattr(dispatch_mod, "get_qweather_warnings", lambda _location: [])
+        monkeypatch.setattr(
+            dispatch_mod,
+            "get_weather_with_cache",
+            lambda _location: ({
+                "temperature": 36,
+                "temperature_max": 38,
+                "temperature_min": 27,
+                "data_source": "QWeather",
+                "is_mock": False,
+            }, False),
+        )
 
         result1 = dispatch_mod.dispatch_alerts()
         assert result1["deliveries"] == 1
@@ -41,6 +53,24 @@ def test_dispatch_alerts_dedupes_success(app, db_session, monkeypatch):
         result2 = dispatch_mod.dispatch_alerts()
         assert AlertDelivery.query.count() == 1
         assert result2["deliveries"] == 0 or result2["sent"] == 0
+
+
+def test_threshold_alert_rejects_mock_weather():
+    from services.push.dispatch import _threshold_alert
+
+    assert _threshold_alert({
+        "temperature_max": 39,
+        "temperature_min": 29,
+        "data_source": "Demo",
+        "is_mock": True,
+    }) is None
+    assert _threshold_alert({
+        "temperature": 36,
+        "temperature_max": 39,
+        "temperature_min": 29,
+        "data_source": "QWeather",
+        "is_mock": False,
+    }) is not None
 
 
 def test_tracking_route_marks_clicked(client, app, db_session):
@@ -98,4 +128,3 @@ def test_tracking_route_marks_clicked(client, app, db_session):
         assert refreshed is not None
         assert refreshed.clicked_at is not None
         assert UsageEvent.query.filter_by(event_type="push_click").count() == 1
-

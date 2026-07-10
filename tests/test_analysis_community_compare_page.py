@@ -76,10 +76,11 @@ def test_community_compare_post_renders_risk_sections(admin_client, db_session):
 
     assert response.status_code == 200
     html = response.get_data(as_text=True)
-    assert '社区间标准化风险排序（SIR）' in html
+    assert '社区间门诊记录 O/E 排序' in html
     assert '漏斗图（Funnel Plot）' in html
-    assert '社区对比明细（标准化与不确定性）' in html
-    assert '平滑SIR' in html
+    assert '社区对比明细（人口天数校正与不确定性）' in html
+    assert '加 α 平滑 O/E' in html
+    assert '标准化发病比' not in html
     assert 'P90/P10' in html
     assert '甲村' in html
     assert '乙村' in html

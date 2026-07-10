@@ -130,7 +130,7 @@ def _personalized_care_notes(chronic_diseases):
     return notes
 
 
-def _build_caregiver_message(pair, alert_kind=None, weather_data=None, member=None):
+def _build_caregiver_message(pair, alert_kind=None, weather_data=None, member=None, action_link=None):
     """Build a one-click message the caregiver can forward to the elder."""
     weather_data = weather_data or {}
     location = (getattr(pair, 'location_query', None) or getattr(pair, 'community_code', None) or '').strip()
@@ -155,7 +155,8 @@ def _build_caregiver_message(pair, alert_kind=None, weather_data=None, member=No
         tmax_s = None
         tmin_s = None
 
-    action_link = url_for('public.elder_entry', short_code=pair.short_code, _external=True)
+    if not action_link:
+        action_link = url_for('public.elder_entry', short_code=pair.short_code, _external=True)
 
     lines = []
     if alert_kind == 'cold':
@@ -296,16 +297,30 @@ def _community_access_allowed(community_code):
 
 
 def _build_community_snapshot(community_code, status_date, record=_MISSING, statuses=_MISSING):
+    active_pair_ids = {
+        row[0]
+        for row in Pair.query.with_entities(Pair.id).filter_by(
+            status='active',
+            community_code=community_code,
+        ).all()
+    }
     if record is _MISSING:
         record = CommunityDaily.query.filter_by(
             community_code=community_code,
             date=status_date
         ).first()
     if statuses is _MISSING:
-        statuses = DailyStatus.query.filter_by(
-            community_code=community_code,
-            status_date=status_date
-        ).all()
+        statuses = []
+        if active_pair_ids:
+            statuses = DailyStatus.query.filter(
+                DailyStatus.community_code == community_code,
+                DailyStatus.status_date == status_date,
+                DailyStatus.pair_id.in_(active_pair_ids),
+            ).all()
+    else:
+        # 调用方可能传入同社区全部状态，这里仍以 active Pair 作为统一统计集合。
+        statuses = [status for status in statuses if status.pair_id in active_pair_ids]
+    total_people = len(active_pair_ids)
     confirmed_count = sum(1 for s in statuses if s.confirmed_at)
     help_count = sum(1 for s in statuses if s.help_flag)
     flag_count = sum(
@@ -318,19 +333,19 @@ def _build_community_snapshot(community_code, status_date, record=_MISSING, stat
         )
         for key in ('低风险', '中风险', '高风险', '极高'):
             risk_dist.setdefault(key, 0)
-        total_people = record.total_people or 0
+        confirm_rate = (confirmed_count / total_people) if total_people else 0
+        escalation_rate = (flag_count / total_people) if total_people else 0
         help_rate = (help_count / total_people) if total_people else 0
         return {
             'total_people': total_people,
-            'confirm_rate': record.confirm_rate or 0,
-            'escalation_rate': record.escalation_rate or 0,
+            'confirm_rate': round(confirm_rate, 4),
+            'escalation_rate': round(escalation_rate, 4),
             'risk_distribution': risk_dist,
             'outreach_summary': record.outreach_summary or '',
             'help_rate': round(help_rate, 4),
             'flag_count': flag_count
         }
 
-    total_people = Pair.query.filter_by(status='active', community_code=community_code).count()
     escalation_count = flag_count
     risk_dist = {'低风险': 0, '中风险': 0, '高风险': 0, '极高': 0}
     for status in statuses:
@@ -365,11 +380,21 @@ def _build_community_snapshot(community_code, status_date, record=_MISSING, stat
 
 
 def _refresh_community_daily(community_code, status_date):
-    total_people = Pair.query.filter_by(status='active', community_code=community_code).count()
-    statuses = DailyStatus.query.filter_by(
-        community_code=community_code,
-        status_date=status_date
-    ).all()
+    active_pair_ids = {
+        row[0]
+        for row in Pair.query.with_entities(Pair.id).filter_by(
+            status='active',
+            community_code=community_code,
+        ).all()
+    }
+    total_people = len(active_pair_ids)
+    statuses = []
+    if active_pair_ids:
+        statuses = DailyStatus.query.filter(
+            DailyStatus.community_code == community_code,
+            DailyStatus.status_date == status_date,
+            DailyStatus.pair_id.in_(active_pair_ids),
+        ).all()
     confirmed_count = sum(1 for s in statuses if s.confirmed_at)
     help_count = sum(1 for s in statuses if s.help_flag)
     escalation_count = sum(

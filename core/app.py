@@ -129,6 +129,17 @@ def run_migrations(app):
     if db_url:
         alembic_config.set_main_option('sqlalchemy.url', db_url)
     alembic_config.set_main_option('script_location', str(PROJECT_ROOT / 'migrations'))
+
+    # 历史首个迁移依赖早期业务表，无法直接作用于完全空白的数据库。
+    # 空库使用当前模型创建完整结构后标记到最新版本；已有数据库仍走标准升级链。
+    with app.app_context():
+        table_names = set(inspect(db.engine).get_table_names())
+        is_empty_database = not (table_names - {'alembic_version'})
+        if is_empty_database:
+            db.create_all()
+            command.stamp(alembic_config, 'head', purge=True)
+            return
+
     command.upgrade(alembic_config, 'head')
 
 

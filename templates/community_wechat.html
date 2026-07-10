@@ -21,11 +21,18 @@
             <h5 class="mb-0">可直接转发的文本</h5>
         </div>
         <div class="card-body">
+            {% if weather_available %}
             <textarea class="form-control" rows="10" id="wechatMessage" readonly>{{ message }}</textarea>
             <button class="btn btn-primary mt-3" type="button" id="copyMessage">
                 <i class="bi bi-clipboard"></i> 复制文本
             </button>
             <div class="text-muted small mt-2">仅提供通用行动建议，不包含医疗诊断或治疗建议。</div>
+            {% else %}
+            <div class="alert alert-warning mb-0" role="status">
+                <strong>等待真实天气</strong><br>
+                实时和风天气或关键输入暂不可用，当前不生成社区热风险等级、行动建议或可转发风险文案。
+            </div>
+            {% endif %}
         </div>
     </div>
 </div>

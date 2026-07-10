@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "partials/metric_info.html" import metric_info with context %}
 
 {% block title %}热风险与行动建议 - 天气健康风险预测系统{% endblock %}
 
@@ -13,22 +14,29 @@
 
     <div class="row g-4">
         <div class="col-lg-7">
+            {% if heat_result and risk_label %}
             {% set heat_color = 'dark' if risk_label == '极高' else 'danger' if risk_label == '高风险' else 'warning' if risk_label == '中风险' else 'success' %}
             <div class="card shadow-sm">
                 <div class="card-header bg-{{ heat_color }} text-white">
-                    <h5 class="mb-0">当前风险：{{ risk_label }}</h5>
+                    {% set heat_context = {
+                        '综合分': heat_result.risk_score if heat_result and heat_result.risk_score is not none else '--',
+                        '体感热': ((heat_result.heat_index|string) ~ '°C') if heat_result and heat_result.heat_index is not none else '--',
+                        '夜间最低温': ((heat_result.night_min|string) ~ '°C') if heat_result and heat_result.night_min is not none else '--',
+                        '连续高温': ((heat_result.consecutive_hot_days|string) ~ '天') if heat_result and heat_result.consecutive_hot_days is not none else '0天'
+                    } %}
+                    <h5 class="mb-0">当前风险：{{ risk_label }} {{ metric_info('heat_risk_score', heat_context, 'is-light') }}</h5>
                 </div>
                 <div class="card-body">
                     <div class="mb-2 text-muted">地区：{{ location }}</div>
                     <div class="mb-3">
-                        <span class="badge bg-light text-dark">综合评分 {{ heat_result.risk_score if heat_result and heat_result.risk_score is not none else '--' }}</span>
-                        <span class="badge bg-light text-dark">体感热 {{ heat_result.heat_index if heat_result and heat_result.heat_index is not none else '--' }}</span>
+                        <span class="badge bg-light text-dark">综合评分 {{ heat_result.risk_score if heat_result and heat_result.risk_score is not none else '--' }} {{ metric_info('heat_risk_score', heat_context) }}</span>
+                        <span class="badge bg-light text-dark">体感热 {{ heat_result.heat_index if heat_result and heat_result.heat_index is not none else '--' }} {{ metric_info('heat_index', {'当前气温': (weather.temperature|string ~ '°C') if weather and weather.temperature is not none else '--', '当前湿度': (weather.humidity|string ~ '%') if weather and weather.humidity is not none else '--', '计算体感热': (heat_result.heat_index|string ~ '°C') if heat_result and heat_result.heat_index is not none else '--'}) }}</span>
                         <span class="badge bg-light text-dark">夜间最低 {{ heat_result.night_min if heat_result and heat_result.night_min is not none else '--' }}°C</span>
                         <span class="badge bg-light text-dark">连续高温 {{ heat_result.consecutive_hot_days if heat_result and heat_result.consecutive_hot_days is not none else 0 }}天</span>
                     </div>
                     <div class="mb-3" id="heatRiskAdjust" data-heat-risk-score="{{ heat_result.risk_score if heat_result and heat_result.risk_score is not none else 0 }}">
                         <div class="d-flex flex-wrap align-items-center gap-2">
-                            <span class="text-muted small">个人阈值</span>
+                            <span class="text-muted small">个人阈值 {{ metric_info('personal_threshold') }}</span>
                             <div class="btn-group btn-group-sm" role="group" aria-label="Heat threshold adjust">
                                 <input type="radio" class="btn-check" name="heatAdjustRisk" id="heatAdjustRiskLow" value="-0.1" data-heat-adjust>
                                 <label class="btn btn-outline-secondary" for="heatAdjustRiskLow">-0.1</label>
@@ -41,7 +49,7 @@
                             <span class="text-muted small">仅保存在本机</span>
                         </div>
                     </div>
-                    <h6 class="mb-2">为什么危险</h6>
+                    <h6 class="mb-2">为什么危险 {{ metric_info('heat_risk_score', heat_context) }}</h6>
                     {% if risk_reasons and risk_reasons|length > 0 %}
                         {% for reason in risk_reasons %}
                             <div class="mb-2">
@@ -65,6 +73,18 @@
                     </ul>
                 </div>
             </div>
+            {% else %}
+            <div class="card shadow-sm border-warning">
+                <div class="card-header bg-warning-subtle text-warning-emphasis">
+                    <h5 class="mb-0"><i class="bi bi-cloud-slash"></i> 等待真实天气</h5>
+                </div>
+                <div class="card-body">
+                    <div class="mb-2 text-muted">地区：{{ location }}</div>
+                    <p class="mb-2">实时天气来源暂不可用，或计算所需的气温、最高温、最低温、湿度尚未齐全。</p>
+                    <p class="text-muted small mb-0">本页已停止生成风险等级、综合分和行动清单。模拟值与默认值不会显示成真实观测结果。</p>
+                </div>
+            </div>
+            {% endif %}
         </div>
         <div class="col-lg-5">
             <div class="card shadow-sm mb-3">

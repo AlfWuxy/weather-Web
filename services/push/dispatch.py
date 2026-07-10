@@ -23,7 +23,7 @@ from core.db_models import AlertDelivery, FamilyMember, Pair, User, WeatherAlert
 from core.extensions import db
 from core.time_utils import utcnow
 from core.usage import log_usage_event
-from core.weather import get_weather_with_cache
+from core.weather import get_weather_with_cache, is_qweather_online_weather
 from services.location_resolver import resolve_location
 from services.warning_service import get_qweather_warnings
 from services.push.wxpusher import send as wxpusher_send
@@ -80,6 +80,8 @@ def _choose_primary_warning(warnings: List[Dict[str, Any]]) -> Optional[Dict[str
 
 def _threshold_alert(weather_data: Dict[str, Any]) -> Optional[Tuple[str, str, str]]:
     """Return (alert_type, alert_level, description) for threshold rules."""
+    if not is_qweather_online_weather(weather_data):
+        return None
     try:
         tmax = weather_data.get("temperature_max")
         tmin = weather_data.get("temperature_min")

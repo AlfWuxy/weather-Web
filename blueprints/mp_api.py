@@ -15,13 +15,15 @@ from __future__ import annotations
 import json
 from functools import wraps
 
-from flask import Blueprint, g, jsonify, request
+from flask import Blueprint, current_app, g, jsonify, request
 
 from core.db_models import FamilyMember, FamilyMemberProfile, Pair, User
-from core.extensions import db
+from core.extensions import db, limiter
+from core.security import hash_identifier
 from core.time_utils import utcnow
 from core.usage import log_usage_event, verify_api_token
-from core.weather import get_weather_with_cache
+from core.weather import get_weather_with_cache, is_qweather_online_weather
+from services.api_service import PILOT_EVENT_TYPES
 from services.location_resolver import resolve_location
 from services.warning_service import get_qweather_warnings
 from services.user._common import _create_pair_record
@@ -29,6 +31,7 @@ from utils.parsers import safe_json_loads
 from utils.validators import sanitize_input
 
 bp = Blueprint("mp_api", __name__, url_prefix="/mp/api/v1")
+MP_EVENT_META_MAX_CHARS = 2048
 
 
 def _bearer_token() -> str:
@@ -39,6 +42,13 @@ def _bearer_token() -> str:
     if auth.lower().startswith("bearer "):
         return auth[7:].strip()
     return ""
+
+
+def _mp_rate_limit_key() -> str:
+    token = _bearer_token()
+    if token:
+        return f"mp-token:{hash_identifier(token)}"
+    return request.remote_addr or "mp-anonymous"
 
 
 def require_api_token(fn):
@@ -68,6 +78,7 @@ def _pair_for_user(pair_id: int):
 
 
 @bp.route("/me", endpoint="me")
+@limiter.limit(lambda: current_app.config.get("RATE_LIMIT_MP_READ", "120 per minute"), key_func=_mp_rate_limit_key)
 @require_api_token
 def me():
     user = db.session.get(User, g.api_user_id)
@@ -87,6 +98,7 @@ def me():
 
 
 @bp.route("/me", methods=["PATCH"], endpoint="me_patch")
+@limiter.limit(lambda: current_app.config.get("RATE_LIMIT_MP_WRITE", "30 per minute"), key_func=_mp_rate_limit_key)
 @require_api_token
 def me_patch():
     """Update pilot push settings (WxPusher UID + enabled flag)."""
@@ -113,6 +125,7 @@ def me_patch():
 
 
 @bp.route("/elders", endpoint="elders_list")
+@limiter.limit(lambda: current_app.config.get("RATE_LIMIT_MP_READ", "120 per minute"), key_func=_mp_rate_limit_key)
 @require_api_token
 def elders_list():
     pairs = Pair.query.filter_by(caregiver_id=g.api_user_id, status="active").order_by(Pair.created_at.desc()).all()
@@ -130,15 +143,26 @@ def elders_list():
         weather_data, _ = get_weather_with_cache(code or label)
         # Lightweight summary; detailed warnings via /alerts
         trigger = None
+        tmax_value = None
+        tmin_value = None
         try:
             tmax = weather_data.get("temperature_max")
             tmin = weather_data.get("temperature_min")
-            if tmax is not None and float(tmax) >= 35:
+            tmax_value = float(tmax) if tmax is not None else None
+            tmin_value = float(tmin) if tmin is not None else None
+        except (AttributeError, TypeError, ValueError):
+            tmax_value = None
+            tmin_value = None
+        weather_available = (
+            is_qweather_online_weather(weather_data)
+            and tmax_value is not None
+            and tmin_value is not None
+        )
+        if weather_available:
+            if tmax_value >= 35:
                 trigger = "heat"
-            elif tmin is not None and float(tmin) <= 5:
+            elif tmin_value <= 5:
                 trigger = "cold"
-        except Exception:
-            trigger = None
 
         member = member_map.get(p.member_id) if p.member_id else None
         result.append(
@@ -160,8 +184,9 @@ def elders_list():
                 ),
                 "today": {
                     "trigger": trigger,
-                    "temperature_max": weather_data.get("temperature_max"),
-                    "temperature_min": weather_data.get("temperature_min"),
+                    "temperature_max": tmax_value if weather_available else None,
+                    "temperature_min": tmin_value if weather_available else None,
+                    "weather_available": weather_available,
                     "is_mock": bool(weather_data.get("is_mock")),
                 },
             }
@@ -171,6 +196,7 @@ def elders_list():
 
 
 @bp.route("/elders", methods=["POST"], endpoint="elders_create")
+@limiter.limit(lambda: current_app.config.get("RATE_LIMIT_MP_WRITE", "30 per minute"), key_func=_mp_rate_limit_key)
 @require_api_token
 def elders_create():
     payload = request.get_json(silent=True) or {}
@@ -240,6 +266,7 @@ def elders_create():
 
 
 @bp.route("/elders/<int:pair_id>", methods=["PATCH"], endpoint="elders_patch")
+@limiter.limit(lambda: current_app.config.get("RATE_LIMIT_MP_WRITE", "30 per minute"), key_func=_mp_rate_limit_key)
 @require_api_token
 def elders_patch(pair_id: int):
     pair = _pair_for_user(pair_id)
@@ -275,6 +302,7 @@ def elders_patch(pair_id: int):
 
 
 @bp.route("/alerts", endpoint="alerts_list")
+@limiter.limit(lambda: current_app.config.get("RATE_LIMIT_MP_ALERTS", "30 per minute"), key_func=_mp_rate_limit_key)
 @require_api_token
 def alerts_list():
     pair_id = request.args.get("pair_id", type=int)
@@ -289,6 +317,7 @@ def alerts_list():
     code = resolved.get("location_code") or ""
     warnings = get_qweather_warnings(code) if code else []
     weather_data, _ = get_weather_with_cache(code or label)
+    weather_available = is_qweather_online_weather(weather_data)
 
     return jsonify(
         {
@@ -297,8 +326,9 @@ def alerts_list():
                 "location": {"query": label, "code": code, "provider": resolved.get("provider")},
                 "warnings": warnings,
                 "weather": {
-                    "temperature_max": weather_data.get("temperature_max"),
-                    "temperature_min": weather_data.get("temperature_min"),
+                    "temperature_max": weather_data.get("temperature_max") if weather_available else None,
+                    "temperature_min": weather_data.get("temperature_min") if weather_available else None,
+                    "weather_available": weather_available,
                     "is_mock": bool(weather_data.get("is_mock")),
                 },
             },
@@ -307,13 +337,23 @@ def alerts_list():
 
 
 @bp.route("/events", methods=["POST"], endpoint="events")
+@limiter.limit(lambda: current_app.config.get("RATE_LIMIT_MP_EVENTS", "60 per minute"), key_func=_mp_rate_limit_key)
 @require_api_token
 def events():
     payload = request.get_json(silent=True) or {}
     event_type = sanitize_input(payload.get("event_type"), max_length=50) or ""
+    if event_type not in PILOT_EVENT_TYPES:
+        return jsonify({"success": False, "error": "invalid_event_type"}), 400
     pair_id = payload.get("pair_id")
     member_id = payload.get("member_id")
     meta = payload.get("meta") if isinstance(payload.get("meta"), (dict, list)) else None
+    if meta is not None:
+        try:
+            meta_json = json.dumps(meta, ensure_ascii=False)
+        except (TypeError, ValueError):
+            return jsonify({"success": False, "error": "invalid_meta"}), 400
+        if len(meta_json) > MP_EVENT_META_MAX_CHARS:
+            return jsonify({"success": False, "error": "meta_too_large"}), 400
 
     resolved_pair_id = None
     if pair_id is not None:

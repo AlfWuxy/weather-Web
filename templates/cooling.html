@@ -1,236 +1,120 @@
 {% extends "base.html" %}
-
-{% block title %}避暑资源 - 天气健康风险预测系统{% endblock %}
-
-{% set has_map = map_points|length > 0 and amap_key %}
-
-{% block extra_css %}
-<style>
-    #coolingMap {
-        height: 520px;
-        border-radius: 8px;
-        border: 1px solid var(--border-color);
-    }
-</style>
-{% endblock %}
+{% block title %}避暑资源 · 宜老天气通{% endblock %}
 
 {% block content %}
-<div class="container my-4">
-    <div class="row mb-3">
-        <div class="col-12">
-            <h2><i class="bi bi-geo-alt"></i> 避暑资源</h2>
-            <p class="text-muted mb-0">按社区展示可用避暑点信息（不含精确住址）。</p>
-        </div>
-    </div>
+<div class="container" style="max-width:1160px;">
+    <section class="section-heading yl-fade-up">
+        <span class="section-kicker"><i class="bi bi-snow2"></i> 避暑资源</span>
+        <h2>离你最近的纳凉点</h2>
+        <p>高温天,可以带老人去这些地方避暑。多数免费开放,部分需登记身份证。</p>
+    </section>
 
-    <div class="card shadow-sm mb-4">
-        <div class="card-header bg-light">
-            <h6 class="mb-0"><i class="bi bi-funnel"></i> 筛选条件</h6>
-        </div>
-        <div class="card-body">
-            <form method="get" class="row g-3 align-items-end">
-                <div class="col-md-3">
-                    <label class="form-label small">社区</label>
-                    <select class="form-select" name="community">
-                        <option value="">全部社区</option>
-                        {% for item in communities %}
-                            <option value="{{ item }}" {% if item == selected_community %}selected{% endif %}>{{ item }}</option>
-                        {% endfor %}
-                    </select>
-                </div>
-                <div class="col-md-3">
-                    <label class="form-label small">资源类型</label>
-                    <select class="form-select" name="resource_type">
-                        <option value="">全部类型</option>
-                        {% for item in resource_types %}
-                            <option value="{{ item }}" {% if item == selected_resource_type %}selected{% endif %}>{{ item }}</option>
-                        {% endfor %}
-                    </select>
-                </div>
-                <div class="col-md-2">
-                    <label class="form-label small">空调</label>
-                    <select class="form-select" name="has_ac">
-                        <option value="" {% if selected_has_ac == '' %}selected{% endif %}>不限</option>
-                        <option value="1" {% if selected_has_ac in ['1', 'true', 'True'] %}selected{% endif %}>有空调</option>
-                        <option value="0" {% if selected_has_ac in ['0', 'false', 'False'] %}selected{% endif %}>无空调</option>
-                    </select>
-                </div>
-                <div class="col-md-2">
-                    <label class="form-label small">无障碍</label>
-                    <select class="form-select" name="is_accessible">
-                        <option value="" {% if selected_is_accessible == '' %}selected{% endif %}>不限</option>
-                        <option value="1" {% if selected_is_accessible in ['1', 'true', 'True'] %}selected{% endif %}>支持</option>
-                        <option value="0" {% if selected_is_accessible in ['0', 'false', 'False'] %}selected{% endif %}>不支持</option>
-                    </select>
-                </div>
-                <div class="col-md-2">
-                    <div class="form-check">
-                        <input class="form-check-input" type="checkbox" name="open_only" value="1" id="openOnlyCheck" {% if open_only %}checked{% endif %}>
-                        <label class="form-check-label small" for="openOnlyCheck">
-                            仅显示有开放时间
-                        </label>
+    {% if outdoor_temp is not none %}
+    <section class="yl-section yl-fade-up yl-fade-up-d1 mb-4 yl-cooling-meter">
+        <div class="row g-4 align-items-center">
+            <div class="col-md-auto">
+                <div class="fx-thermometer" data-fx="thermometer"
+                     data-temp="{{ outdoor_temp }}" data-min="-5" data-max="45">
+                    <div class="fx-thermometer-tube">
+                        <div class="fx-thermometer-mercury"></div>
+                        <div class="fx-thermometer-bulb"></div>
+                    </div>
+                    <div class="fx-thermometer-info">
+                        <div class="v"><span class="num">0</span><span class="unit">°C</span></div>
+                        <div class="k">{{ cooling_weather_location or current_location or '当前位置' }} · 当前室外</div>
                     </div>
                 </div>
-                <div class="col-12 d-flex flex-wrap gap-2">
-                    <button class="btn btn-primary" type="submit">
-                        <i class="bi bi-search"></i> 应用筛选
-                    </button>
-                    <a class="btn btn-outline-secondary" href="{{ url_for('public.cooling_resources') }}">
-                        重置
-                    </a>
-                </div>
-            </form>
-        </div>
-    </div>
-
-    <div class="d-flex align-items-center justify-content-between mb-3">
-        <div class="text-muted small">共 {{ total }} 条资源</div>
-        <div class="btn-group" role="group" id="viewToggle">
-            <button class="btn btn-outline-secondary active" type="button" data-target="listView">
-                <i class="bi bi-list-ul"></i> 列表
-            </button>
-            {% if has_map %}
-                <button class="btn btn-outline-secondary" type="button" data-target="mapView">
-                    <i class="bi bi-map"></i> 地图
-                </button>
-            {% endif %}
-        </div>
-    </div>
-
-    <div id="listView">
-        {% if total and total > 0 %}
-            {% for community, items in resources_by_community.items() %}
-                <div class="card shadow-sm mb-3">
-                    <div class="card-header bg-light">
-                        <h5 class="mb-0"><i class="bi bi-geo-alt"></i> {{ community }}</h5>
-                    </div>
-                    <div class="card-body">
-                        <div class="list-group list-group-flush">
-                            {% for item in items %}
-                                <div class="list-group-item px-0">
-                                    <div class="d-flex align-items-center justify-content-between flex-wrap gap-2">
-                                        <strong>{{ item.name }}</strong>
-                                        <div class="d-flex flex-wrap gap-2">
-                                            {% if item.resource_type %}
-                                                <span class="badge bg-info-subtle text-info">{{ item.resource_type }}</span>
-                                            {% endif %}
-                                            {% if item.has_ac %}
-                                                <span class="badge bg-success-subtle text-success">空调</span>
-                                            {% endif %}
-                                            {% if item.is_accessible %}
-                                                <span class="badge bg-primary-subtle text-primary">无障碍</span>
-                                            {% endif %}
-                                        </div>
-                                    </div>
-                                    {% if item.address_hint %}
-                                        <div class="text-muted small">位置提示：{{ item.address_hint }}</div>
-                                    {% endif %}
-                                    {% if item.open_hours %}
-                                        <div class="text-muted small">开放时间：{{ item.open_hours }}</div>
-                                    {% endif %}
-                                    {% if item.contact_hint %}
-                                        <div class="text-muted small">联系提示：{{ item.contact_hint }}</div>
-                                    {% endif %}
-                                    {% if item.notes %}
-                                        <div class="text-muted small">备注：{{ item.notes }}</div>
-                                    {% endif %}
-                                </div>
-                            {% endfor %}
-                        </div>
-                    </div>
-                </div>
-            {% endfor %}
-        {% else %}
-            <div class="alert alert-info">
-                暂无避暑资源数据，请联系社区管理员补充。
             </div>
+            <div class="col-md">
+                {% if outdoor_temp >= 35 %}
+                    <span class="yl-temp-status is-danger">高温危险</span>
+                    <h4 class="mt-2 mb-1" style="font-size:1.15rem; color:var(--yl-risk-high);">建议优先选择室内纳凉点</h4>
+                    <p class="text-muted mb-0" style="font-size:.9rem;">当前室外温度偏高,高血压、心脑血管病人建议减少户外停留,下方可筛选空调开放点。</p>
+                {% elif outdoor_temp >= 28 %}
+                    <span class="yl-temp-status is-hot">炎热</span>
+                    <h4 class="mt-2 mb-1" style="font-size:1.15rem;">户外注意补水与遮阳</h4>
+                    <p class="text-muted mb-0" style="font-size:.9rem;">外出建议随身携带水壶和遮阳伞,尽量避开午后高温时段。</p>
+                {% else %}
+                    <span class="yl-temp-status is-comfort">凉爽舒适</span>
+                    <h4 class="mt-2 mb-1" style="font-size:1.15rem;">当前适合短时户外活动</h4>
+                    <p class="text-muted mb-0" style="font-size:.9rem;">仍建议关注老人补水和行走安全,根据体感灵活安排出门时间。</p>
+                {% endif %}
+            </div>
+        </div>
+    </section>
+    {% endif %}
+
+    <form method="GET" class="yl-section mb-4 yl-fade-up yl-fade-up-d1">
+        <div class="row g-3 align-items-end">
+            <div class="col-md-5">
+                <label class="form-label">所在地</label>
+                <input type="text" class="form-control" name="location" value="{{ request.args.get('location', current_location) }}" list="locOpts">
+                <datalist id="locOpts">{% for loc in (location_options or []) %}<option value="{{ loc }}"></option>{% endfor %}</datalist>
+            </div>
+            <div class="col-md-4">
+                <label class="form-label">类型</label>
+                <select name="resource_type" class="form-select">
+                    <option value="">全部</option>
+                    {% for item_type in (resource_types or []) %}
+                    <option value="{{ item_type }}" {% if selected_resource_type == item_type %}selected{% endif %}>{{ item_type }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-md-3 d-grid">
+                <button class="btn btn-primary"><i class="bi bi-search me-1"></i>查找</button>
+            </div>
+        </div>
+    </form>
+
+    <div class="row g-3 yl-fade-up yl-fade-up-d2">
+        {% if total and total > 0 %}
+        {% for community, items in resources_by_community.items() %}
+        {% for r in items %}
+        <div class="col-md-6 col-lg-4">
+            <div class="card h-100">
+                <div class="card-body">
+                    <div class="d-flex justify-content-between align-items-start mb-2">
+                        <h5 class="mb-0" style="font-size:1.05rem;">{{ r.name }}</h5>
+                        <span class="badge {% if r.has_ac %}bg-success-subtle{% else %}bg-secondary-subtle{% endif %}">{{ '有空调' if r.has_ac else '未标注空调' }}</span>
+                    </div>
+                    <div class="text-muted" style="font-size:.85rem;">{{ r.resource_type or '避暑资源' }} · {{ community }}</div>
+
+                    <div class="mt-3" style="font-size:.88rem; color:var(--yl-ink-soft);">
+                        <div class="mb-1"><i class="bi bi-clock me-1 text-muted"></i>{{ r.open_hours or '开放时间未标注' }}</div>
+                        <div><i class="bi bi-geo-alt me-1 text-muted"></i>{{ r.address_hint or '地址未标注' }}</div>
+                        {% if r.is_accessible %}
+                        <div class="mt-1"><i class="bi bi-universal-access me-1 text-muted"></i>适合行动不便老人</div>
+                        {% endif %}
+                        {% if r.contact_hint %}
+                        <div class="mt-1"><i class="bi bi-telephone me-1 text-muted"></i>{{ r.contact_hint }}</div>
+                        {% endif %}
+                        {% if r.notes %}
+                        <div class="mt-1"><i class="bi bi-info-circle me-1 text-muted"></i>{{ r.notes }}</div>
+                        {% endif %}
+                    </div>
+
+                    <div class="d-flex gap-2 mt-3">
+                        <span class="btn btn-sm btn-outline-primary flex-grow-1 disabled"><i class="bi bi-geo-alt me-1"></i>以实际地址为准</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+        {% endfor %}
+        {% endfor %}
+        {% else %}
+        <div class="col-12">
+            <section class="yl-section text-center mb-0">
+                <div style="font-size:2rem; color:var(--yl-orange-500);"><i class="bi bi-geo-alt"></i></div>
+                <h4 class="mt-2" style="font-size:1.05rem;">暂无录入的避暑资源</h4>
+                <p class="text-muted mb-0" style="font-size:.9rem;">当前筛选条件下没有可展示的真实资源。请调整地区或类型,或等待管理员补充数据。</p>
+            </section>
+        </div>
         {% endif %}
     </div>
 
-    {% if has_map %}
-        <div id="mapView" class="d-none">
-            <div class="card shadow-sm">
-                <div class="card-header bg-light">
-                    <h5 class="mb-0"><i class="bi bi-map"></i> 避暑资源地图</h5>
-                </div>
-                <div class="card-body">
-                    <div id="coolingMap"></div>
-                    <div class="text-muted small mt-2">仅展示已填写坐标的避暑点。</div>
-                </div>
-            </div>
-        </div>
-    {% endif %}
+    <section class="alert alert-primary mt-4 yl-fade-up">
+        <i class="bi bi-info-circle me-1"></i>
+        高温天(35°C 以上)建议带老人上午 10 点前或傍晚 6 点后出门,并随身带水和遮阳伞。
+    </section>
 </div>
-{% endblock %}
-
-{% block extra_js %}
-{% if has_map %}
-    {% if amap_security_js_code %}
-    <script type="text/javascript">
-        window._AMapSecurityConfig = {
-            securityJsCode: {{ amap_security_js_code|tojson }}
-        };
-    </script>
-    {% endif %}
-    <script src="https://webapi.amap.com/maps?v=2.0&key={{ amap_key|urlencode }}&plugin=AMap.Scale,AMap.ToolBar"></script>
-{% endif %}
-<script>
-document.addEventListener('DOMContentLoaded', function () {
-    const buttons = document.querySelectorAll('#viewToggle button[data-target]');
-    buttons.forEach(btn => {
-        btn.addEventListener('click', () => {
-            buttons.forEach(item => item.classList.remove('active'));
-            btn.classList.add('active');
-            const target = btn.getAttribute('data-target');
-            const listView = document.getElementById('listView');
-            const mapView = document.getElementById('mapView');
-            if (target === 'mapView') {
-                if (listView) listView.classList.add('d-none');
-                if (mapView) mapView.classList.remove('d-none');
-            } else {
-                if (mapView) mapView.classList.add('d-none');
-                if (listView) listView.classList.remove('d-none');
-            }
-        });
-    });
-
-    {% if has_map %}
-    const mapData = {{ map_points|tojson|safe }};
-    if (mapData.length) {
-        const center = [mapData[0].lng, mapData[0].lat];
-        const map = new AMap.Map('coolingMap', {
-            zoom: 13,
-            center: center,
-            mapStyle: 'amap://styles/normal',
-            viewMode: '2D'
-        });
-        AMap.plugin(['AMap.Scale', 'AMap.ToolBar'], function() {
-            map.addControl(new AMap.Scale());
-            map.addControl(new AMap.ToolBar());
-        });
-        mapData.forEach(item => {
-            const marker = new AMap.Marker({
-                position: [item.lng, item.lat],
-                title: item.name
-            });
-            const details = [];
-            if (item.community) details.push(`社区：${item.community}`);
-            if (item.type) details.push(`类型：${item.type}`);
-            if (item.open_hours) details.push(`开放时间：${item.open_hours}`);
-            if (item.address) details.push(`位置提示：${item.address}`);
-            if (item.has_ac) details.push('空调：有');
-            if (item.is_accessible) details.push('无障碍：支持');
-            const infoWindow = new AMap.InfoWindow({
-                content: `<div class="small"><strong>${item.name}</strong><br>${details.join('<br>')}</div>`,
-                offset: new AMap.Pixel(0, -28)
-            });
-            marker.on('click', () => {
-                infoWindow.open(map, marker.getPosition());
-            });
-            map.add(marker);
-        });
-    }
-    {% endif %}
-});
-</script>
 {% endblock %}

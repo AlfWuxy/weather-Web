@@ -2,6 +2,8 @@
 """Profile and assessment routes."""
 import json
 import logging
+import math
+from urllib.parse import urlparse
 
 from flask import current_app, flash, redirect, render_template, request, session, url_for
 from flask_login import current_user
@@ -13,7 +15,12 @@ from core.guest import build_guest_profile, get_guest_assessment, is_guest_user
 from core.notifications import create_notification
 from core.time_utils import utcnow
 from core.usage import create_api_token
-from core.weather import ensure_user_location_valid, get_weather_with_cache, normalize_location_name
+from core.weather import (
+    ensure_user_location_valid,
+    get_weather_with_cache,
+    is_qweather_online_weather,
+    normalize_location_name,
+)
 from utils.parsers import json_or_none, safe_json_loads
 from utils.validators import (
     sanitize_input,
@@ -26,6 +33,35 @@ from utils.validators import (
 logger = logging.getLogger(__name__)
 
 
+def _personal_weather_available(weather_data):
+    """个人评估只接受来源明确且温度可计算的真实和风天气。"""
+    if not is_qweather_online_weather(weather_data):
+        return False
+    try:
+        temperature = float(weather_data.get('temperature'))
+    except (AttributeError, TypeError, ValueError):
+        return False
+    return math.isfinite(temperature)
+
+
+def _safe_referrer_or_dashboard():
+    referrer = request.referrer or ''
+    fallback = url_for('user.user_dashboard')
+    if not referrer or '\r' in referrer or '\n' in referrer:
+        return fallback
+    parsed = urlparse(referrer)
+    if parsed.scheme or parsed.netloc:
+        if parsed.scheme not in ('http', 'https') or parsed.netloc != request.host:
+            return fallback
+        path = parsed.path or fallback
+        if parsed.query:
+            path = f'{path}?{parsed.query}'
+        return path
+    if not referrer.startswith('/') or referrer.startswith(("//", "\\\\", "/\\")):
+        return fallback
+    return referrer
+
+
 def health_assessment():
     """健康风险评估"""
     if request.method == 'POST':
@@ -33,9 +69,15 @@ def health_assessment():
             # 执行风险评估（多路径融合版）
             from services.health_risk_service import HealthRiskService
 
-            health_service = HealthRiskService()
             user_location = ensure_user_location_valid()
             weather_data, _ = get_weather_with_cache(user_location)
+            if not _personal_weather_available(weather_data):
+                flash(
+                    '当前等待真实和风天气及有效温度，本次未生成评估、未保存记录、未发送通知。',
+                    'warning'
+                )
+                return redirect(url_for('user.health_assessment'))
+            health_service = HealthRiskService()
 
             # 构建用户健康档案
             user_health_profile = {
@@ -81,6 +123,7 @@ def health_assessment():
                     'cap_semantics': risk_result.get('cap_semantics', {}),
                     'impact_likelihood': risk_result.get('impact_likelihood', {}),
                     'model_paths': risk_result.get('model_paths', []),
+                    'fusion_breakdown': risk_result.get('fusion_breakdown', {}),
                     'component_scores': risk_result.get('component_scores', {}),
                     'community_context': risk_result.get('community_context', {}),
                     'screening': risk_result.get('screening', {}),
@@ -284,7 +327,7 @@ def update_location():
     location = sanitize_input(request.form.get('location'), max_length=100)
     if not location:
         flash('请填写有效的地点', 'error')
-        return redirect(request.referrer or url_for('user.user_dashboard'))
+        return redirect(_safe_referrer_or_dashboard())
 
     normalized = normalize_location_name(location)
     if normalized != location:
@@ -299,4 +342,4 @@ def update_location():
         db.session.commit()
 
     flash(f'定位已更新为 {normalized}', 'success')
-    return redirect(request.referrer or url_for('user.user_dashboard'))
+    return redirect(_safe_referrer_or_dashboard())

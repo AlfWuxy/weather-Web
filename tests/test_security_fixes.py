@@ -285,6 +285,34 @@ def test_safe_next_url_blocks_scheme_relative():
         assert _safe_next_url(url) is None
 
 
+def test_location_update_blocks_external_referrer(app, client, db_session):
+    """定位更新后不应跳到外部 Referer。"""
+    from core.db_models import User
+
+    user = User(username='location_user', role='user')
+    user.set_password('testpass')
+    db_session.add(user)
+    db_session.commit()
+
+    with client.session_transaction() as session:
+        session['_csrf_token'] = 'csrf-location'
+    client.post(
+        '/login',
+        data={'username': 'location_user', 'password': 'testpass', 'csrf_token': 'csrf-location'},
+        follow_redirects=False,
+    )
+
+    resp = client.post(
+        '/location',
+        data={'location': '都昌', 'csrf_token': 'csrf-location'},
+        headers={'Referer': 'https://evil.example/phish'},
+        follow_redirects=False,
+    )
+
+    assert resp.status_code == 302
+    assert resp.headers['Location'].endswith('/dashboard')
+
+
 def test_create_notification_fails_closed_on_quota_error(app, monkeypatch):
     """通知配额检查异常时应阻止发送（fail-closed）"""
     from core import notifications

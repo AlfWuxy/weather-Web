@@ -4,6 +4,7 @@
 功能：自动天气数据采集、极端天气识别与定义、天气疾病相关分析、宏观气象风险预警
 """
 import logging
+import math
 import os
 import requests
 from datetime import datetime, timedelta
@@ -149,11 +150,12 @@ class WeatherService:
                     'wind_speed': float(now.get('windSpeed', 3)),
                     'wind_dir': now.get('windDir', ''),
                     'feels_like': float(now.get('feelsLike', now.get('temp', 20))),
-                    'pm25': 0,
-                    'aqi': 0,
+                    'pm25': None,
+                    'aqi': None,
                     'location': city,
                     'update_time': now.get('obsTime', datetime.now().strftime('%Y-%m-%d %H:%M')),
-                    'is_mock': False
+                    'is_mock': False,
+                    'data_source': 'QWeather'
                 }
 
                 tmax, tmin, range_source, range_confidence = self._resolve_qweather_current_temperature_range(location)
@@ -500,16 +502,21 @@ class WeatherService:
 
     def _normalize_qweather_daily_entry(self, day):
         """将和风天气 daily 条目标准化为统一结构"""
-        tmax = self._safe_float(day.get('tempMax'), 25.0)
-        tmin = self._safe_float(day.get('tempMin'), 15.0)
+        tmax = self._safe_float(day.get('tempMax'))
+        tmin = self._safe_float(day.get('tempMin'))
+        humidity = self._safe_float(day.get('humidity'))
+        tmax = tmax if tmax is not None and math.isfinite(tmax) else None
+        tmin = tmin if tmin is not None and math.isfinite(tmin) else None
+        humidity = humidity if humidity is not None and math.isfinite(humidity) else None
+        temperature_mean = round((tmax + tmin) / 2, 2) if tmax is not None and tmin is not None else None
         return {
             'date': day.get('fxDate', ''),
             'temperature_max': tmax,
             'temperature_min': tmin,
-            'temperature_mean': round((tmax + tmin) / 2, 2),
+            'temperature_mean': temperature_mean,
             'condition': day.get('textDay', '晴'),
             'condition_night': day.get('textNight', '晴'),
-            'humidity': self._safe_float(day.get('humidity'), 60.0),
+            'humidity': humidity,
             'wind_dir': day.get('windDirDay', ''),
             'wind_speed': self._safe_float(day.get('windSpeedDay'), 3.0),
             'uv_index': day.get('uvIndex', ''),
@@ -519,6 +526,93 @@ class WeatherService:
             'data_source': 'QWeather',
             'is_mock': False,
         }
+
+    def get_qweather_daily_forecast(self, city="都昌", days=7):
+        """只获取和风天气 7 日预报，不启用备用源或模拟数据。"""
+        logger = logging.getLogger(__name__)
+        try:
+            days = max(1, min(int(days or 7), 7))
+        except Exception:
+            days = 7
+
+        meta = {'source': 'QWeather'}
+        if not self.qweather_key or not self.api_base_url:
+            meta['error'] = 'qweather_not_configured'
+            logger.warning("和风天气预报未配置，跳过和风-only预报")
+            return {'success': False, 'daily': [], 'meta': meta}
+
+        location = self._get_location(city)
+        meta['location'] = city
+        meta['location_code'] = location
+        try:
+            forecast_url = f"{self.api_base_url}/weather/7d"
+            forecast_params = {
+                'key': self.qweather_key,
+                'location': location
+            }
+            start_ts = time.perf_counter()
+            response = requests.get(forecast_url, params=forecast_params, timeout=10)
+            _record_external_api_timing(
+                'qweather_forecast_only',
+                (time.perf_counter() - start_ts) * 1000,
+                response.status_code
+            )
+            if response.status_code != 200:
+                meta['error'] = f'http_{response.status_code}'
+                logger.warning("和风-only预报HTTP状态码: %s", response.status_code)
+                return {'success': False, 'daily': [], 'meta': meta}
+
+            try:
+                payload = response.json()
+            except Exception as exc:
+                meta['error'] = 'invalid_json'
+                logger.warning("和风-only预报JSON解析失败: %s", exc)
+                return {'success': False, 'daily': [], 'meta': meta}
+
+            code = payload.get('code')
+            if code != '200':
+                meta['error'] = f'qweather_{code or "unknown"}'
+                meta['error_message'] = self._get_error_message(code or 'unknown')
+                logger.warning("和风-only预报返回错误[%s]: %s", code, meta['error_message'])
+                return {'success': False, 'daily': [], 'meta': meta}
+
+            daily = [
+                self._normalize_qweather_daily_entry(day)
+                for day in (payload.get('daily') or [])[:days]
+                if isinstance(day, dict)
+            ]
+            for entry in daily:
+                entry['forecast_date'] = entry.get('date')
+                entry['update_time'] = payload.get('updateTime')
+            meta['update_time'] = payload.get('updateTime')
+            meta['fx_link'] = payload.get('fxLink')
+            required_fields = ('temperature_max', 'temperature_min', 'temperature_mean', 'humidity')
+            data_complete = len(daily) == days and all(
+                all(
+                    isinstance(entry.get(field), (int, float))
+                    and math.isfinite(float(entry.get(field)))
+                    for field in required_fields
+                )
+                for entry in daily
+            )
+            if not data_complete:
+                meta['error'] = 'qweather_data_incomplete'
+                logger.warning("和风-only预报关键字段不完整，整组数据不进入缓存: city=%s count=%s", city, len(daily))
+                return {'success': False, 'daily': [], 'meta': meta}
+            return {'success': True, 'daily': daily, 'meta': meta}
+        except requests.exceptions.Timeout:
+            meta['error'] = 'timeout'
+            logger.warning("和风-only预报请求超时")
+        except requests.exceptions.ConnectionError:
+            meta['error'] = 'connection_error'
+            logger.warning("和风-only预报网络连接失败")
+        except requests.exceptions.RequestException as exc:
+            meta['error'] = 'request_exception'
+            logger.warning("和风-only预报请求异常: %s", exc)
+        except Exception as exc:
+            meta['error'] = 'exception'
+            logger.exception("和风-only预报调用失败: %s", exc)
+        return {'success': False, 'daily': [], 'meta': meta}
 
     def _get_openmeteo_forecast(self, city="都昌", days=7):
         """Open-Meteo 逐日预报（用于多模型融合）"""
