@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "partials/metric_info.html" import metric_info with context %}
 {% set needs_chartjs = true %}
 
 {% block title %}社区详情 - 天气健康风险预测系统{% endblock %}
@@ -22,6 +23,12 @@
         </div>
     </div>
 
+    {% if not weather_available %}
+    <div class="alert alert-warning" role="status">
+        <strong>等待真实天气</strong>：实时和风天气或关键输入暂不可用，当前不生成社区热风险等级或群发风险文案。
+    </div>
+    {% endif %}
+
     <div class="row g-4">
         <div class="col-lg-5">
             <div class="card shadow-sm mb-3">
@@ -29,9 +36,16 @@
                     <h5 class="mb-0">今日概览（{{ status_date.strftime('%Y-%m-%d') }}）</h5>
                 </div>
                 <div class="card-body">
+                    {% set action_context = {
+                        '有效监测对象': snapshot.total_people,
+                        '当天已确认': confirmed_total,
+                        '当天已升级': escalation_count,
+                        '当天已求助': help_count
+                    } %}
                     <div class="mb-2"><span class="text-muted">覆盖：</span>{{ snapshot.total_people }}</div>
-                    <div class="mb-2"><span class="text-muted">确认率：</span>{{ (snapshot.confirm_rate * 100)|round(1) }}%</div>
-                    <div class="mb-2"><span class="text-muted">升级触发率：</span>{{ (snapshot.escalation_rate * 100)|round(1) }}%</div>
+                    <div class="mb-2"><span class="text-muted">确认率 {{ metric_info('action_confirmation_rate', action_context) }}：</span>{% if snapshot.total_people %}{{ (snapshot.confirm_rate * 100)|round(1) }}%{% else %}--{% endif %}</div>
+                    <div class="mb-2"><span class="text-muted">升级触发率 {{ metric_info('action_escalation_rate', action_context) }}：</span>{% if snapshot.total_people %}{{ (snapshot.escalation_rate * 100)|round(1) }}%{% else %}--{% endif %}</div>
+                    <div class="mb-2"><span class="text-muted">求助率 {{ metric_info('action_help_rate', action_context) }}：</span>{% if snapshot.total_people %}{{ (snapshot.help_rate * 100)|round(1) }}%{% else %}--{% endif %}</div>
                     <div class="mb-2">
                         <span class="badge bg-success">低 {{ snapshot.risk_distribution['低风险'] }}</span>
                         <span class="badge bg-warning text-dark">中 {{ snapshot.risk_distribution['中风险'] }}</span>
@@ -124,10 +138,14 @@
                         <div class="text-muted small">暂无建议。</div>
                     {% endif %}
                     <h6 class="mt-3 mb-2">群发模板复制</h6>
+                    {% if weather_available %}
                     <textarea class="form-control mb-2" rows="5" id="detailGroupMessage" readonly>{{ group_message }}</textarea>
                     <button class="btn btn-outline-primary btn-sm" id="copyDetailMessage">
                         <i class="bi bi-clipboard"></i> 复制群发模板
                     </button>
+                    {% else %}
+                    <div class="text-muted small">真实天气恢复后才会生成可复制的风险文案。</div>
+                    {% endif %}
                 </div>
             </div>
 

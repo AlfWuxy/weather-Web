@@ -241,7 +241,7 @@ class MLPredictionService:
                 
                 # 降水量
                 precipitation = weather_info.get('precipitation', self.weather_defaults['precipitation'])
-                
+
                 # 日照时长（统一为秒）
                 sunshine_hours = self._normalize_sunshine_seconds(weather_info)
             else:
@@ -284,12 +284,21 @@ class MLPredictionService:
                 adjusted_prob = self._adjust_probability_by_weather(
                     disease_name, prob, weather_info
                 )
-                
+                original_prob = float(prob)
+                applied_multiplier = (
+                    float(adjusted_prob) / original_prob
+                    if original_prob > 0
+                    else 1.0
+                )
+
                 predictions.append({
                     'disease': disease_name,
                     'probability': float(adjusted_prob),
                     'percentage': f"{adjusted_prob*100:.1f}%",
-                    'original_probability': float(prob)
+                    'original_probability': original_prob,
+                    # 天气调整后各类别没有再次归一化，所以页面按关注分展示。
+                    'weather_multiplier': round(applied_multiplier, 4),
+                    'weather_adjusted_score': round(float(adjusted_prob) * 100.0, 2),
                 })
             
             # 按概率排序
@@ -377,7 +386,8 @@ class MLPredictionService:
                     'accuracy': f"{self.model_info.get('accuracy', 0)*100:.1f}%",
                     'model_type': self.model_info.get('model_name', 'RandomForest'),
                     'classification_type': self.model_info.get('model_type', 'multiclass'),
-                    'total_classes': len(self.label_encoder.classes_)
+                    'total_classes': len(self.label_encoder.classes_),
+                    'feature_importance': self.model_info.get('feature_importance', {})
                 },
                 'weather_conditions': {
                     'temperature': tmean,

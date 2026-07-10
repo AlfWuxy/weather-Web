@@ -10,6 +10,10 @@ from datetime import datetime
 from flask import g, request, session, url_for as flask_url_for
 from flask_login import current_user
 
+from core.metric_explanations import (
+    get_metric_explanation_groups,
+    get_metric_explanations,
+)
 from core.security import csrf_failure_response, generate_csrf_token, validate_csrf
 from core.weather import (
     get_location_options,
@@ -143,6 +147,8 @@ def register_hooks(app):
             'current_location': current_location,
             'location_options': get_location_options(),
             'ai_models': app.config.get('AI_ALLOWED_MODELS', []),
+            'metric_explanations': get_metric_explanations(),
+            'metric_explanation_groups': get_metric_explanation_groups(),
             'feature_flags': {
                 'explain_output': app.config.get('FEATURE_EXPLAIN_OUTPUT'),
                 'emergency_triage': app.config.get('FEATURE_EMERGENCY_TRIAGE'),

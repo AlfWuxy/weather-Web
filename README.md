@@ -36,11 +36,13 @@
 
 ### 1. 安装依赖
 
+本机现行测试基线使用 Conda 环境 `case-weather-py312`：
+
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
+conda run -n case-weather-py312 python -m pip install -r requirements.txt
 ```
+
+不要默认使用仓库里的 `.venv` 或 `venv` 跑测试，避免拿到缺少 pytest 或平台不匹配的解释器。新机器可以创建等价的 Python 3.12 隔离环境后再安装 `requirements.txt`。
 
 ### 2. 配置环境变量
 
@@ -84,10 +86,26 @@ chmod +x .githooks/pre-push
 运行默认测试集：
 
 ```bash
-pytest
+conda run -n case-weather-py312 python -m pytest -q
 ```
 
-手动测试类用例默认不会执行；如需单独运行，请查看 `tests/manual/`。
+手动测试类用例默认不会执行；如需单独运行：
+
+```bash
+conda run -n case-weather-py312 python -m pytest -q -m manual
+```
+
+Python 3.12 兼容性专项检查可单独运行：
+
+```bash
+conda run -n case-weather-py312 python -m pytest -q -W error::DeprecationWarning
+```
+
+如 Flask-Login 0.6.3 的三方 remember-cookie warning 阻塞专项检查，只在专项命令里追加精确过滤，不写入全局 pytest 配置。
+
+```bash
+conda run -n case-weather-py312 python -m pytest -q -W error::DeprecationWarning -W ignore::DeprecationWarning:flask_login.login_manager
+```
 
 小程序调试 / 联调前，必须先在 `miniprogram/config.js` 中填写真实 HTTPS API 地址。公开仓库默认留空，未配置时小程序请求会直接报错，不会再偷偷打到占位域名。
 

@@ -309,6 +309,35 @@ def test_validate_production_config_accepts_redis_rate_limit(tmp_path):
         _reload_config()
 
 
+def test_configure_app_sets_secure_cookie_defaults_for_production(tmp_path):
+    original = _set_env({
+        'SECRET_KEY': 'strongkey1234567890strongkey123456',
+        'PAIR_TOKEN_PEPPER': 'pepper-1234567890pepper-1234567890',
+        'DEBUG': 'false',
+        'DATABASE_URI': f"sqlite:///{tmp_path/'prod_cookie.db'}",
+        'RATE_LIMIT_STORAGE_URI': 'redis://localhost:6379/0',
+        'PUBLIC_BASE_URL': 'https://yilaoweather.org',
+    })
+    try:
+        from flask import Flask
+        import logging
+
+        config = _reload_config()
+        app = Flask(__name__)
+        config.configure_app(app, logging.getLogger(__name__))
+
+        assert app.config['SESSION_COOKIE_SECURE'] is True
+        assert app.config['REMEMBER_COOKIE_SECURE'] is True
+        assert app.config['SESSION_COOKIE_HTTPONLY'] is True
+        assert app.config['REMEMBER_COOKIE_HTTPONLY'] is True
+        assert app.config['SESSION_COOKIE_SAMESITE'] == 'Lax'
+        assert app.config['REMEMBER_COOKIE_SAMESITE'] == 'Lax'
+        assert app.config['PREFERRED_URL_SCHEME'] == 'https'
+    finally:
+        _restore_env(original)
+        _reload_config()
+
+
 def test_error_handler_classification():
     from utils.error_handlers import classify_exception
 

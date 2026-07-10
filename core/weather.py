@@ -3,6 +3,7 @@
 from datetime import datetime, timedelta
 import json
 import logging
+import math
 import time
 
 from flask import current_app, session, has_app_context, has_request_context, request
@@ -160,8 +161,43 @@ def get_demo_weather_data():
         'pm25': 55,
         'aqi': 90,
         'is_mock': True,
-        'is_demo': True
+        'is_demo': True,
+        'data_source': 'Demo'
     }
+
+
+def weather_source_label(weather_data):
+    """返回天气来源标签，避免 mock 数据被误标成和风。"""
+    if not isinstance(weather_data, dict):
+        return ''
+    source = str(weather_data.get('data_source') or weather_data.get('source') or '').strip()
+    if source:
+        return source
+    if weather_data.get('is_demo'):
+        return 'Demo'
+    if weather_data.get('is_mock'):
+        return 'Mock'
+    return 'QWeather'
+
+
+def is_qweather_online_weather(weather_data):
+    """判断当前天气是否可用于生产风险计算。"""
+    if not isinstance(weather_data, dict):
+        return False
+    if weather_data.get('is_mock') or weather_data.get('is_demo'):
+        return False
+    if weather_data.get('temperature') is None:
+        return False
+    try:
+        temperature = float(weather_data.get('temperature'))
+    except (TypeError, ValueError):
+        return False
+    if not math.isfinite(temperature):
+        return False
+    source = str(weather_data.get('data_source') or weather_data.get('source') or '').strip()
+    if source != 'QWeather':
+        return False
+    return True
 
 
 def get_demo_forecast_data(days=7):
@@ -425,6 +461,154 @@ def get_forecast_with_cache(location, days=7, ttl_minutes=None):
         logger.warning("预报缓存写入失败，已忽略: %s", exc)
         db.session.rollback()
     return forecast_data, False
+
+
+def _qweather_forecast_date(value):
+    try:
+        return datetime.strptime(str(value), '%Y-%m-%d').date()
+    except Exception:
+        return None
+
+
+def _valid_qweather_only_forecast(forecast_data, days=None, expected_start_date=None):
+    """校验缓存是否确实来自和风天气，避免复用 mock 或融合缓存。"""
+    if not isinstance(forecast_data, list) or not forecast_data:
+        return False
+    if days is not None and len(forecast_data) < int(days):
+        return False
+    if expected_start_date is not None:
+        expected_start_date = _qweather_forecast_date(expected_start_date)
+    for index, item in enumerate(forecast_data[:days or len(forecast_data)]):
+        if not isinstance(item, dict):
+            return False
+        if item.get('is_mock'):
+            return False
+        if item.get('data_source') != 'QWeather':
+            return False
+        for field in ('temperature_max', 'temperature_min', 'temperature_mean', 'humidity'):
+            try:
+                value = float(item.get(field))
+            except (TypeError, ValueError):
+                return False
+            if not math.isfinite(value):
+                return False
+        if expected_start_date is not None:
+            item_date = _qweather_forecast_date(item.get('date') or item.get('forecast_date'))
+            if item_date != expected_start_date + timedelta(days=index):
+                return False
+    return True
+
+
+def _parse_qweather_only_cache_payload(payload, days, expected_start_date=None):
+    if not isinstance(payload, dict):
+        return None, None
+    forecast_data = payload.get('daily') or payload.get('forecast')
+    meta = payload.get('meta') or {}
+    if not _valid_qweather_only_forecast(
+        forecast_data,
+        days=days,
+        expected_start_date=expected_start_date,
+    ):
+        return None, None
+    return forecast_data[:days], meta
+
+
+def get_qweather_forecast_with_cache(location, days=7, ttl_minutes=None):
+    """获取和风-only天气预报，失败时返回空数据而不是模拟预报。"""
+    try:
+        days = max(1, min(int(days or 7), 7))
+    except Exception:
+        days = 7
+    if is_demo_mode():
+        return [], False, {'source': 'QWeather', 'error': 'demo_mode'}
+
+    location = normalize_location_name(location)
+    if ttl_minutes is None:
+        ttl_minutes = current_app.config.get('FORECAST_CACHE_TTL_MINUTES', 20)
+    ttl_seconds = max(int(ttl_minutes * 60), 60)
+    cache_location = f'qweather-only:{location}'
+    expected_start_date = today_local()
+    redis_client = _get_redis_client()
+    redis_key = _redis_cache_key('weather:qweather_forecast', location, days)
+    redis_payload = _redis_get_json(redis_client, redis_key, {})
+    forecast_data, meta = _parse_qweather_only_cache_payload(
+        redis_payload,
+        days,
+        expected_start_date=expected_start_date,
+    )
+    if forecast_data is not None:
+        return forecast_data, True, meta
+
+    now = utcnow()
+    cache = None
+    try:
+        cache = ForecastCache.query.filter_by(location=cache_location, days=days).order_by(
+            ForecastCache.fetched_at.desc(),
+            ForecastCache.id.desc()
+        ).first()
+        if cache and cache.fetched_at:
+            if now - ensure_utc_aware(cache.fetched_at) <= timedelta(minutes=ttl_minutes):
+                forecast_data, meta = _parse_qweather_only_cache_payload(
+                    safe_json_loads(cache.payload, {}),
+                    days,
+                    expected_start_date=expected_start_date,
+                )
+                if forecast_data is not None:
+                    return forecast_data, True, meta
+    except Exception as exc:
+        logger.warning("和风-only预报缓存不可用，已跳过缓存: %s", exc)
+        db.session.rollback()
+
+    weather_service = get_weather_fetcher()
+    meta = {'source': 'QWeather'}
+    forecast_data = []
+    try:
+        if weather_service is None or not hasattr(weather_service, 'get_qweather_daily_forecast'):
+            raise RuntimeError("QWeather forecast fetcher not configured")
+        result = weather_service.get_qweather_daily_forecast(location, days=days)
+        if isinstance(result, dict):
+            forecast_data = result.get('daily') or []
+            meta = result.get('meta') or meta
+            if not result.get('success') and not forecast_data:
+                return [], False, meta
+        else:
+            forecast_data = result or []
+    except Exception as exc:
+        logger.warning("获取和风-only预报失败: %s", exc)
+        return [], False, {'source': 'QWeather', 'error': 'fetch_failed'}
+
+    if not _valid_qweather_only_forecast(
+        forecast_data,
+        days=days,
+        expected_start_date=expected_start_date,
+    ):
+        meta.setdefault('error', 'qweather_data_incomplete')
+        return [], False, meta
+
+    cache_payload = {
+        'daily': forecast_data[:days],
+        'meta': meta,
+    }
+    try:
+        _redis_set_json(redis_client, redis_key, ttl_seconds, cache_payload)
+        if cache:
+            cache.payload = json.dumps(cache_payload, ensure_ascii=False)
+            cache.fetched_at = now
+            cache.is_mock = False
+        else:
+            cache = ForecastCache(
+                location=cache_location,
+                days=days,
+                fetched_at=now,
+                payload=json.dumps(cache_payload, ensure_ascii=False),
+                is_mock=False
+            )
+            db.session.add(cache)
+        db.session.commit()
+    except Exception as exc:
+        logger.warning("和风-only预报缓存写入失败，已忽略: %s", exc)
+        db.session.rollback()
+    return forecast_data[:days], False, meta
 
 
 def get_consecutive_hot_days(location, target_date=None, today_max=None, threshold=None, max_days=7):

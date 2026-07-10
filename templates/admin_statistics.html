@@ -23,18 +23,14 @@
                             <input type="date" 
                                    class="form-control" 
                                    name="start_date" 
-                                   value="{{ start_date_str }}"
-                                   min="2023-12-01"
-                                   max="2025-01-31">
+                                   value="{{ start_date_str }}">
                         </div>
                         <div class="col-md-2">
                             <label class="form-label fw-semibold">结束日期：</label>
                             <input type="date" 
                                    class="form-control" 
                                    name="end_date" 
-                                   value="{{ end_date_str }}"
-                                   min="2023-12-01"
-                                   max="2025-01-31">
+                                   value="{{ end_date_str }}">
                         </div>
                         <div class="col-md-2">
                             <label class="form-label fw-semibold">村庄：</label>
@@ -166,8 +162,10 @@
                             {{ start_date_str }} 之后
                         {% elif end_date_str %}
                             {{ end_date_str }} 之前
+                        {% elif month_labels %}
+                            已载入记录：{{ month_labels[0] }} 至 {{ month_labels[-1] }}
                         {% else %}
-                            完整数据（2023-12 至 2025-01）
+                            当前没有可展示的月度记录
                         {% endif %}
                         {% if community_filter %} | {{ community_filter }}{% endif %}
                     </small>
@@ -182,10 +180,16 @@
             <div class="card shadow-sm">
                 <div class="card-header">
                     <h5 class="mb-0"><i class="bi bi-radar me-2"></i>天气与疾病相关性</h5>
-                    <small class="text-muted">相关系数分析（基于历史数据）</small>
+                    <small class="text-muted">需要按日期对齐的真实天气与病例数据</small>
                 </div>
                 <div class="card-body">
-                    <canvas id="weatherDiseaseChart" height="300"></canvas>
+                    <div class="text-center text-muted py-5" role="status" data-testid="weather-disease-empty-state">
+                        <i class="bi bi-bar-chart-line fs-1 d-block mb-3" aria-hidden="true"></i>
+                        <h6 class="text-body-secondary">暂无可计算数据</h6>
+                        <p class="small mb-0 mx-auto" style="max-width: 34rem;">
+                            本页尚未接入按同一日期对齐的天气与病例序列，也没有通过样本量与缺失值检查的相关系数，因此暂不绘制图表。
+                        </p>
+                    </div>
                 </div>
             </div>
         </div>
@@ -258,8 +262,8 @@
                 <ul class="mb-0 small">
                     <li><strong>病例数据：</strong>来自导入的Excel文件，共{{ disease_counts|sum if disease_counts else 0 }}条真实病历记录</li>
                     <li><strong>社区数据：</strong>{{ community_labels|length }}个示例社区，脆弱性指数基于老龄化率、慢性病率等指标计算</li>
-                    <li><strong>天气数据：</strong>当前使用模拟数据，可接入真实天气API（如高德天气、和风天气等）</li>
-                    <li><strong>相关性分析：</strong>基于医学研究文献的天气与疾病相关系数</li>
+                    <li><strong>天气数据：</strong>本页尚未接入与筛选病例按日期对齐的天气序列</li>
+                    <li><strong>相关性分析：</strong>暂无可计算结果；获得配对数据并完成样本量、缺失值与统计方法检查后再展示</li>
                 </ul>
             </div>
         </div>
@@ -422,45 +426,6 @@ document.addEventListener('DOMContentLoaded', function() {
                         grid: {
                             color: 'rgba(0, 0, 0, 0.05)'
                         }
-                    }
-                }
-            }
-        });
-    }
-
-    // 天气疾病相关性 - 基于分析的相关系数
-    const weatherCtx = document.getElementById('weatherDiseaseChart');
-    if (weatherCtx) {
-        new Chart(weatherCtx.getContext('2d'), {
-            type: 'radar',
-            data: {
-                labels: ['高温', '低温', '高湿度', '空气污染', '温差大'],
-                datasets: [{
-                    label: '呼吸道疾病',
-                    data: [35, 75, 65, 85, 70],
-                    borderColor: '#dc2626',
-                    backgroundColor: 'rgba(220, 38, 38, 0.2)',
-                    borderWidth: 2
-                }, {
-                    label: '心血管疾病',
-                    data: [72, 68, 45, 60, 65],
-                    borderColor: '#1a56db',
-                    backgroundColor: 'rgba(26, 86, 219, 0.2)',
-                    borderWidth: 2
-                }, {
-                    label: '关节疾病',
-                    data: [45, 70, 78, 40, 62],
-                    borderColor: '#d97706',
-                    backgroundColor: 'rgba(217, 119, 6, 0.2)',
-                    borderWidth: 2
-                }]
-            },
-            options: {
-                responsive: true,
-                scales: {
-                    r: {
-                        beginAtZero: true,
-                        max: 100
                     }
                 }
             }

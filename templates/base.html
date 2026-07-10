@@ -2,9 +2,64 @@
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <meta name="csrf-token" content="{{ csrf_token() }}">
+    <script>
+        (function() {
+            const root = document.documentElement;
+
+            function syncViewportTier() {
+                const viewport = window.visualViewport;
+                const width = Math.round(viewport ? viewport.width : window.innerWidth);
+                const height = Math.round(viewport ? viewport.height : window.innerHeight);
+                const scale = viewport && viewport.scale ? viewport.scale : 1;
+                let tier = 'wide';
+
+                if (width <= 680) {
+                    tier = 'tight';
+                } else if (width <= 980) {
+                    tier = 'compact';
+                }
+
+                root.dataset.viewportTier = tier;
+                root.style.setProperty('--app-vw', width + 'px');
+                root.style.setProperty('--app-vh', height + 'px');
+                root.style.setProperty('--app-scale', String(scale));
+
+                if (document.body) {
+                    document.body.dataset.viewportTier = tier;
+                }
+            }
+
+            let rafToken = null;
+            function scheduleViewportSync() {
+                if (rafToken !== null) {
+                    cancelAnimationFrame(rafToken);
+                }
+                rafToken = requestAnimationFrame(function() {
+                    rafToken = null;
+                    syncViewportTier();
+                });
+            }
+
+            window.__syncViewportTier = scheduleViewportSync;
+            syncViewportTier();
+
+            window.addEventListener('resize', scheduleViewportSync, { passive: true });
+            window.addEventListener('orientationchange', scheduleViewportSync, { passive: true });
+
+            if (window.visualViewport) {
+                window.visualViewport.addEventListener('resize', scheduleViewportSync, { passive: true });
+                window.visualViewport.addEventListener('scroll', scheduleViewportSync, { passive: true });
+            }
+
+            document.addEventListener('DOMContentLoaded', syncViewportTier);
+        })();
+    </script>
     <title>{% block title %}宜老天气通{% endblock %}</title>
+    <link rel="icon" type="image/png" href="{{ url_for('static', filename='brand/yilao-avatar.png') }}">
+    <link rel="apple-touch-icon" href="{{ url_for('static', filename='brand/yilao-avatar.png') }}">
+
     <link rel="stylesheet" href="{{ url_for('static', filename='vendor/bootstrap/bootstrap.min.css') }}">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css">
     {% if needs_fontawesome %}
@@ -14,440 +69,348 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='css/animations.css') }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/page-transitions.css') }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/ai-floating-chat.css') }}">
-    <noscript><style>.page-loader{display:none !important;}</style></noscript>
+    {# 新的视觉主题,放在最后覆盖旧样式 #}
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/yilao.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/yilao-motion.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/yilao-data-fx.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/yilao-data-fx-extra.css') }}">
+
+    <noscript><style>.page-loader{display:none !important;}[data-motion] .yl-fade-up,[data-motion] .yl-section,[data-motion] .narrative-step,[data-motion] [data-animate-in]{opacity:1 !important;transform:none !important;}</style></noscript>
     {% block extra_css %}{% endblock %}
 </head>
-<body class="{% block body_class %}{% endblock %}">
-    <!-- 页面加载动画 -->
+<body class="{% block body_class %}{% endblock %}" data-viewport-tier="wide" data-motion="m1 m2 m4 m5">
+
     <div class="page-loader" id="pageLoader">
         <div class="loader-spinner"></div>
-        <div class="loader-text">加载中...</div>
+        <div class="loader-text">加载中…</div>
     </div>
 
-    <!-- 导航栏 -->
-    <nav class="navbar navbar-light sticky-top">
+    {# ===================== 顶部导航 ===================== #}
+    <nav class="navbar sticky-top">
         <div class="container-fluid">
             <a class="navbar-brand" href="{{ url_for('public.index') }}">
-                <i class="bi bi-cloud-sun"></i>
-                <span class="brand-short d-inline d-md-none">宜老天气通</span>
-                <span class="brand-full d-none d-md-inline">宜老天气通</span>
-                <span class="brand-tagline d-none d-xl-inline">天气预警与照护提醒</span>
+                <img class="yl-brand-avatar" src="{{ url_for('static', filename='brand/yilao-avatar.png') }}" alt="" width="34" height="34">
+                <span>宜老天气通</span>
             </a>
 
-            <!-- Desktop quick links (JS-free fallback for navigation) -->
-            <div class="desktop-nav-actions d-none d-md-flex align-items-center gap-2 ms-auto">
-                {% if current_user.is_authenticated %}
-                    <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('user.user_dashboard') }}">我的主页</a>
+            {# 高频入口,仅登录后显示在桌面端 #}
+            {% if current_user.is_authenticated %}
+                <div class="app-desktop-nav d-none d-lg-flex align-items-center gap-1 mx-auto">
+                    <a class="nav-link {% if request.endpoint == 'user.user_dashboard' %}active{% endif %}"
+                       href="{{ url_for('user.user_dashboard') }}">今天</a>
+
                     {% if current_user.role in ['caregiver', 'admin'] %}
-                        <a class="btn btn-sm btn-outline-primary" href="{{ url_for('user.caregiver_dashboard') }}">照护工作台</a>
+                        <a class="nav-link {% if request.endpoint == 'user.caregiver_dashboard' %}active{% endif %}"
+                           href="{{ url_for('user.caregiver_dashboard') }}">照护</a>
                     {% else %}
-                        <a class="btn btn-sm btn-outline-primary" href="{{ url_for('user.pair_management') }}">照护工作台</a>
+                        <a class="nav-link {% if 'family' in (request.endpoint or '') or 'pair' in (request.endpoint or '') %}active{% endif %}"
+                           href="{{ url_for('health.family_members') }}">照护</a>
                     {% endif %}
+
+                    <a class="nav-link {% if request.endpoint == 'tools.forecast_7day' %}active{% endif %}"
+                       href="{{ url_for('tools.forecast_7day') }}">7 天预报</a>
+
+                    <a class="nav-link {% if request.endpoint == 'user.community_risk' %}active{% endif %}"
+                       href="{{ url_for('user.community_risk') }}">社区</a>
+
+                    {% if feature_flags.elder_mode %}
+                        <a class="nav-link {% if request.endpoint == 'user.elder_dashboard' %}active{% endif %}"
+                           href="{{ url_for('user.elder_dashboard') }}">老人模式</a>
+                    {% endif %}
+
+                    <div class="app-more-menu" id="appMoreMenu">
+                        <button type="button"
+                                class="nav-link app-more-trigger"
+                                data-nav-more-trigger="desktop"
+                                aria-expanded="false"
+                                aria-controls="appMegaMenu">
+                            更多 <i class="bi bi-chevron-down small"></i>
+                        </button>
+
+                        <div class="app-mega-menu" id="appMegaMenu" aria-label="更多功能" aria-hidden="true">
+                            <div class="app-mega-grid">
+                                <section class="app-mega-group">
+                                    <div class="app-mega-kicker">天气与行动</div>
+                                    <a class="app-mega-link" href="{{ url_for('public.public_risk') }}">风险说明</a>
+                                    <a class="app-mega-link" href="{{ url_for('public.cooling_resources') }}">避暑资源</a>
+                                    <a class="app-mega-link" href="{{ url_for('public.transparency') }}">透明度</a>
+                                    <a class="app-mega-link" href="{{ url_for('public.action_check') }}">行动打卡</a>
+                                </section>
+
+                                <section class="app-mega-group">
+                                    <div class="app-mega-kicker">健康</div>
+                                    <a class="app-mega-link" href="{{ url_for('user.health_assessment') }}">健康评估</a>
+                                    <a class="app-mega-link" href="{{ url_for('tools.ml_prediction') }}">AI 疾病预测</a>
+                                    <a class="app-mega-link" href="{{ url_for('tools.ai_qa') }}">AI 提问</a>
+                                    <a class="app-mega-link" href="{{ url_for('tools.chronic_risk') }}">慢病风险评估</a>
+                                    <a class="app-mega-link" href="{{ url_for('health.health_diary') }}">健康日记</a>
+                                    <a class="app-mega-link" href="{{ url_for('health.medication_reminders') }}">用药提醒</a>
+                                </section>
+
+                                {% if current_user.role in ['community', 'admin'] %}
+                                <section class="app-mega-group">
+                                    <div class="app-mega-kicker">社区与群体</div>
+                                    <a class="app-mega-link" href="{{ url_for('user.community_dashboard') }}">社区看板</a>
+                                    {% if current_user.role == 'admin' %}
+                                        <a class="app-mega-link" href="{{ url_for('admin.admin_dashboard') }}">管理后台</a>
+                                        <a class="app-mega-link" href="{{ url_for('analysis.pilot_dashboard') }}">试点数据看板</a>
+                                        <a class="app-mega-link" href="{{ url_for('analysis.reports_center') }}">报告导出</a>
+                                    {% endif %}
+                                </section>
+                                {% endif %}
+
+                                <section class="app-mega-group">
+                                    <div class="app-mega-kicker">账号与设置</div>
+                                    {% if current_user.role != 'guest' %}
+                                        <a class="app-mega-link" href="{{ url_for('user.profile') }}">个人设置</a>
+                                        {% if feature_flags.elder_mode %}
+                                            <a class="app-mega-link" href="{{ url_for('user.elder_dashboard') }}">老人模式</a>
+                                        {% endif %}
+                                    {% else %}
+                                        <a class="app-mega-link" href="{{ url_for('public.register') }}">注册账号</a>
+                                    {% endif %}
+                                </section>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            {% endif %}
+
+            <div class="d-flex align-items-center gap-2 ms-auto">
+                {% if current_user.is_authenticated %}
                     {% if current_user.role == 'admin' %}
-                        <a class="btn btn-sm btn-outline-dark" href="{{ url_for('admin.admin_dashboard') }}">管理后台</a>
+                        <a class="btn btn-sm btn-outline-secondary d-none d-md-inline-flex" href="{{ url_for('admin.admin_dashboard') }}">
+                            <i class="bi bi-speedometer2 me-1"></i>后台
+                        </a>
                     {% endif %}
-                    <form method="POST" action="{{ url_for('public.logout') }}" class="d-inline">
+                    <span class="text-muted small d-none d-xl-inline">
+                        <i class="bi bi-geo-alt"></i> {{ current_location or '未设置' }}
+                    </span>
+                    <form method="POST" action="{{ url_for('public.logout') }}" class="d-none d-md-inline m-0">
                         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                        <button class="btn btn-sm btn-outline-danger" type="submit">退出</button>
+                        <button class="btn btn-sm btn-outline-secondary" type="submit">退出</button>
                     </form>
                 {% else %}
                     <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('public.login') }}">登录</a>
                     <a class="btn btn-sm btn-primary" href="{{ url_for('public.register') }}">注册</a>
                 {% endif %}
-            </div>
 
-            <button class="navbar-toggler app-nav-toggle d-flex align-items-center gap-1 ms-2" type="button" data-bs-toggle="offcanvas" data-bs-target="#appNavDrawer" aria-controls="appNavDrawer" aria-label="打开菜单">
-                <span class="navbar-toggler-icon"></span>
-                <span class="small d-none d-sm-inline">菜单</span>
-            </button>
+                <button class="navbar-toggler d-lg-none" type="button" data-bs-toggle="offcanvas" data-bs-target="#appNavDrawer" aria-controls="appNavDrawer" aria-label="打开菜单">
+                    <i class="bi bi-list" style="font-size:1.4rem;"></i>
+                </button>
+            </div>
         </div>
     </nav>
 
-    <!-- Offcanvas drawer placed outside the sticky navbar to avoid z-index stacking issues on mobile -->
-    <div class="offcanvas offcanvas-end app-offcanvas" tabindex="-1" id="appNavDrawer" aria-labelledby="appNavDrawerLabel">
-        <div class="offcanvas-header">
+    {# ===================== 抽屉 (更多 / 移动端菜单) ===================== #}
+    <div class="offcanvas offcanvas-end" tabindex="-1" id="appNavDrawer" aria-labelledby="appNavDrawerLabel" style="width: 340px;">
+        <div class="offcanvas-header" style="border-bottom:1px solid var(--yl-line-soft);">
             <div class="d-flex align-items-center gap-2">
-                <i class="bi bi-cloud-sun text-primary fs-5"></i>
-                <h5 class="offcanvas-title mb-0" id="appNavDrawerLabel">菜单</h5>
+                <img class="yl-drawer-brand-avatar" src="{{ url_for('static', filename='brand/yilao-avatar.png') }}" alt="" width="30" height="30">
+                <h5 class="offcanvas-title mb-0" id="appNavDrawerLabel">宜老天气通 · 更多</h5>
             </div>
             <button type="button" class="btn-close" data-bs-dismiss="offcanvas" aria-label="关闭"></button>
         </div>
         <div class="offcanvas-body">
-            <div class="accordion accordion-flush" id="appNavAccordion">
-                <!-- 基础 -->
-                <div class="accordion-item">
-                    <h2 class="accordion-header" id="navBasicHeading">
-                        <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#navBasic" aria-expanded="false" aria-controls="navBasic">
-                            基础
-                        </button>
-                    </h2>
-                    <div id="navBasic" class="accordion-collapse collapse" aria-labelledby="navBasicHeading" data-bs-parent="#appNavAccordion">
-                        <div class="accordion-body">
-                            <nav class="nav flex-column">
-                                <a class="nav-link app-nav-link" href="{{ url_for('public.index') }}">
-                                    <i class="bi bi-house-door me-2"></i>首页
-                                </a>
-                                {% if current_user.is_authenticated %}
-                                    <a class="nav-link app-nav-link" href="{{ url_for('user.user_dashboard') }}">
-                                        <i class="bi bi-house-door me-2"></i>我的主页
-                                    </a>
-                                {% endif %}
-                            </nav>
-                        </div>
+
+            {% if current_user.is_authenticated %}
+                <div class="mb-3 p-3" style="background:var(--yl-orange-50); border-radius:12px;">
+                    <div class="small text-muted">当前账号</div>
+                    <div class="fw-semibold"><i class="bi bi-person-circle me-1"></i>{{ current_user.username }}</div>
+                    <div class="small text-muted mt-1">
+                        <i class="bi bi-geo-alt"></i> {{ current_location or '未设置定位' }}
                     </div>
                 </div>
+            {% endif %}
 
-                <!-- 入口与公共信息 -->
-                <div class="accordion-item">
-                    <h2 class="accordion-header" id="navPublicHeading">
-                        <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#navPublic" aria-expanded="false" aria-controls="navPublic">
-                            入口与公共信息
-                        </button>
-                    </h2>
-                    <div id="navPublic" class="accordion-collapse collapse" aria-labelledby="navPublicHeading" data-bs-parent="#appNavAccordion">
-                        <div class="accordion-body">
-                            <nav class="nav flex-column">
-                                <a class="nav-link app-nav-link" href="{{ url_for('public.public_risk') }}">
-                                    <i class="bi bi-thermometer-sun me-2"></i>风险说明
-                                </a>
-                                <a class="nav-link app-nav-link" href="{{ url_for('public.cooling_resources') }}">
-                                    <i class="bi bi-geo-alt me-2"></i>避暑资源
-                                </a>
-                                <a class="nav-link app-nav-link" href="{{ url_for('public.transparency') }}">
-                                    <i class="bi bi-shield-check me-2"></i>透明度
-                                </a>
-                            </nav>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- 风险预警与行动 -->
-                <div class="accordion-item">
-                    <h2 class="accordion-header" id="navActionHeading">
-                        <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#navAction" aria-expanded="false" aria-controls="navAction">
-                            风险预警与行动
-                        </button>
-                    </h2>
-                    <div id="navAction" class="accordion-collapse collapse" aria-labelledby="navActionHeading" data-bs-parent="#appNavAccordion">
-                        <div class="accordion-body">
-                            <nav class="nav flex-column">
-                                <a class="nav-link app-nav-link" href="{{ url_for('public.action_check') }}">
-                                    <i class="bi bi-clipboard-check me-2"></i>行动打卡
-                                </a>
-                                {% if current_user.is_authenticated %}
-                                    <a class="nav-link app-nav-link" href="{{ url_for('user.community_risk') }}">
-                                        <i class="bi bi-map me-2"></i>社区风险地图
-                                    </a>
-                                {% endif %}
-                            </nav>
-                        </div>
-                    </div>
-                </div>
-
-	                {% if current_user.is_authenticated %}
-	                <!-- 智能预测与评估（管理员/研究功能） -->
-	                <div class="accordion-item">
-	                    <h2 class="accordion-header" id="navToolsHeading">
-	                        <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#navTools" aria-expanded="false" aria-controls="navTools">
-	                            智能预测与评估（研究）
-                        </button>
-                    </h2>
-                    <div id="navTools" class="accordion-collapse collapse" aria-labelledby="navToolsHeading" data-bs-parent="#appNavAccordion">
-                        <div class="accordion-body">
-                            <nav class="nav flex-column">
-                                <a class="nav-link app-nav-link" href="{{ url_for('tools.ml_prediction') }}">
-                                    <i class="bi bi-cpu me-2"></i>AI疾病预测
-                                </a>
-                                <a class="nav-link app-nav-link" href="{{ url_for('tools.forecast_7day') }}">
-                                    <i class="bi bi-calendar-week me-2"></i>7天健康预测
-                                </a>
-                                <a class="nav-link app-nav-link" href="{{ url_for('tools.chronic_risk') }}">
-                                    <i class="bi bi-heart-pulse me-2"></i>慢病风险评估
-                                </a>
-                                <a class="nav-link app-nav-link" href="{{ url_for('tools.ai_qa') }}">
-                                    <i class="bi bi-chat-dots me-2"></i>AI提问
-                                </a>
-                            </nav>
-	                        </div>
-	                    </div>
-	                </div>
-
-	                <!-- 健康管理与照护 -->
-	                <div class="accordion-item">
-                    <h2 class="accordion-header" id="navHealthHeading">
-                        <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#navHealth" aria-expanded="false" aria-controls="navHealth">
-                            健康管理与照护
-                        </button>
-                    </h2>
-                    <div id="navHealth" class="accordion-collapse collapse" aria-labelledby="navHealthHeading" data-bs-parent="#appNavAccordion">
-                        <div class="accordion-body">
-                            <nav class="nav flex-column">
-                                {% if current_user.role in ['caregiver', 'admin'] %}
-                                    <a class="nav-link app-nav-link" href="{{ url_for('user.caregiver_dashboard') }}">
-                                        <i class="bi bi-people me-2"></i>照护工作台
-                                    </a>
-                                {% else %}
-                                    <a class="nav-link app-nav-link" href="{{ url_for('user.pair_management') }}">
-                                        <i class="bi bi-people me-2"></i>照护工作台
-                                    </a>
-                                {% endif %}
-                                <a class="nav-link app-nav-link" href="{{ url_for('user.health_assessment') }}">健康评估</a>
-                                <a class="nav-link app-nav-link" href="{{ url_for('health.family_members') }}">家庭成员</a>
-                                <a class="nav-link app-nav-link" href="{{ url_for('health.health_diary') }}">健康日记</a>
-                                <a class="nav-link app-nav-link" href="{{ url_for('health.medication_reminders') }}">用药提醒</a>
-                                <a class="nav-link app-nav-link" href="{{ url_for('analysis.annual_report') }}">年度健康报告</a>
-                            </nav>
-                        </div>
-                    </div>
-                </div>
-
-                {% if current_user.role in ['community', 'admin'] %}
-                <!-- 社区与群体 -->
-                <div class="accordion-item">
-                    <h2 class="accordion-header" id="navCommunityHeading">
-                        <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#navCommunity" aria-expanded="false" aria-controls="navCommunity">
-                            社区与群体
-                        </button>
-                    </h2>
-                    <div id="navCommunity" class="accordion-collapse collapse" aria-labelledby="navCommunityHeading" data-bs-parent="#appNavAccordion">
-                        <div class="accordion-body">
-                            <nav class="nav flex-column">
-                                <a class="nav-link app-nav-link" href="{{ url_for('user.community_dashboard') }}">
-                                    <i class="bi bi-building me-2"></i>社区看板
-                                </a>
-                            </nav>
-                        </div>
-                    </div>
-                </div>
+            {# ----- 今天 ----- #}
+            <div class="mb-2" style="font-size:.72rem; color:var(--yl-muted); text-transform:uppercase; letter-spacing:.05em; padding:0 4px;">今天</div>
+            <nav class="nav flex-column mb-3">
+                <a class="nav-link" href="{{ url_for('public.index') }}"><i class="bi bi-house-door me-2"></i>首页</a>
+                {% if current_user.is_authenticated %}
+                    <a class="nav-link" href="{{ url_for('user.user_dashboard') }}"><i class="bi bi-heart-pulse me-2"></i>今日主页</a>
+                    {% if feature_flags.elder_mode %}
+                        <a class="nav-link" href="{{ url_for('user.elder_dashboard') }}"><i class="bi bi-eyeglasses me-2"></i>老人模式</a>
+                    {% endif %}
                 {% endif %}
+            </nav>
 
-	                <!-- 数据分析与后台（研究） -->
-	                <div class="accordion-item">
-	                    <h2 class="accordion-header" id="navAnalysisHeading">
-	                        <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#navAnalysis" aria-expanded="false" aria-controls="navAnalysis">
-	                            数据分析与后台（研究）
-                        </button>
-                    </h2>
-                    <div id="navAnalysis" class="accordion-collapse collapse" aria-labelledby="navAnalysisHeading" data-bs-parent="#appNavAccordion">
-                        <div class="accordion-body">
-                            <nav class="nav flex-column">
-                                {% if current_user.role == 'admin' %}
-                                    <div class="app-nav-meta mt-1 mb-1">管理后台</div>
-                                    <a class="nav-link app-nav-link" href="{{ url_for('admin.admin_dashboard') }}">
-                                        <i class="bi bi-speedometer2 me-2"></i>管理后台
-                                    </a>
-                                    <a class="nav-link app-nav-link" href="{{ url_for('analysis.pilot_dashboard') }}">
-                                        <i class="bi bi-bar-chart-line me-2"></i>试点数据看板
-                                    </a>
-                                    <a class="nav-link app-nav-link" href="{{ url_for('analysis.model_quality') }}">
-                                        <i class="bi bi-shield-check me-2"></i>模型可靠性
-                                    </a>
-                                    <a class="nav-link app-nav-link" href="{{ url_for('admin.admin_users') }}">用户管理</a>
-                                    <a class="nav-link app-nav-link" href="{{ url_for('admin.admin_records') }}">病历管理</a>
-                                    <a class="nav-link app-nav-link" href="{{ url_for('admin.admin_communities') }}">社区管理</a>
-                                    <a class="nav-link app-nav-link" href="{{ url_for('admin.admin_cooling_resources') }}">避暑资源</a>
-                                    <a class="nav-link app-nav-link" href="{{ url_for('admin.admin_statistics') }}">统计分析</a>
-                                    <hr class="my-2">
-                                {% endif %}
+            {# ----- 照护 ----- #}
+            {% if current_user.is_authenticated %}
+            <div class="mb-2" style="font-size:.72rem; color:var(--yl-muted); text-transform:uppercase; letter-spacing:.05em; padding:0 4px;">照护</div>
+            <nav class="nav flex-column mb-3">
+                    <a class="nav-link" href="{{ url_for('health.family_members') }}"><i class="bi bi-people me-2"></i>照护工作台</a>
+                    <a class="nav-link" href="{{ url_for('public.action_check') }}"><i class="bi bi-clipboard-check me-2"></i>行动打卡</a>
+            </nav>
+            {% endif %}
 
-                                {% if current_user.role == 'admin' %}
-                                    <div class="app-nav-meta mt-1 mb-1">分析</div>
-                                    <a class="nav-link app-nav-link" href="{{ url_for('analysis.analysis_history') }}">历史回溯分析</a>
-                                    <a class="nav-link app-nav-link" href="{{ url_for('analysis.analysis_heatmap') }}">相关性热力图</a>
-                                    <a class="nav-link app-nav-link" href="{{ url_for('analysis.analysis_lag') }}">滞后效应</a>
-                                    <a class="nav-link app-nav-link" href="{{ url_for('analysis.analysis_community_compare') }}">社区对比</a>
-                                    <a class="nav-link app-nav-link" href="{{ url_for('analysis.alerts_history') }}">预警历史</a>
-                                    <a class="nav-link app-nav-link" href="{{ url_for('analysis.alerts_accuracy') }}">预警准确率</a>
-                                    <hr class="my-2">
-                                    <a class="nav-link app-nav-link" href="{{ url_for('analysis.reports_center') }}">
-                                        <i class="bi bi-file-earmark-arrow-down me-2"></i>报告导出
-                                    </a>
-                                {% endif %}
-                            </nav>
-                        </div>
-	                    </div>
-	                </div>
+            {# ----- 天气 ----- #}
+            <div class="mb-2" style="font-size:.72rem; color:var(--yl-muted); text-transform:uppercase; letter-spacing:.05em; padding:0 4px;">天气</div>
+            <nav class="nav flex-column mb-3">
+                <a class="nav-link" href="{{ url_for('public.public_risk') }}"><i class="bi bi-thermometer-sun me-2"></i>风险说明</a>
+                <a class="nav-link" href="{{ url_for('public.cooling_resources') }}"><i class="bi bi-geo-alt me-2"></i>避暑资源</a>
+                <a class="nav-link" href="{{ url_for('public.transparency') }}"><i class="bi bi-shield-check me-2"></i>透明度</a>
+            </nav>
 
-	                <!-- 定位设置 -->
-	                <div class="accordion-item">
-                    <h2 class="accordion-header" id="navLocationHeading">
-                        <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#navLocation" aria-expanded="false" aria-controls="navLocation">
-                            定位设置
-                        </button>
-                    </h2>
-                    <div id="navLocation" class="accordion-collapse collapse" aria-labelledby="navLocationHeading" data-bs-parent="#appNavAccordion">
-                        <div class="accordion-body">
-                            <div class="app-nav-meta mb-2">
-                                当前：{{ current_location or '未设置' }}
-                            </div>
-                            <form method="POST" action="{{ url_for('user.update_location') }}">
-                                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                                <label class="form-label small mb-1">选择当前所在地</label>
-                                <input class="form-control" name="location" list="locationOptions" value="{{ current_location }}">
-                                <datalist id="locationOptions">
-                                    {% for loc in location_options %}
-                                        <option value="{{ loc }}"></option>
-                                    {% endfor %}
-                                </datalist>
-                                <div class="text-muted small mt-2">支持城市/社区名称（如：都昌县、北京）</div>
-                                <button class="btn btn-primary btn-sm w-100 mt-2">更新定位</button>
-                            </form>
-                        </div>
-                    </div>
-                </div>
+            {% if current_user.is_authenticated %}
+            {# ----- 健康 ----- #}
+            <div class="mb-2" style="font-size:.72rem; color:var(--yl-muted); text-transform:uppercase; letter-spacing:.05em; padding:0 4px;">健康</div>
+            <nav class="nav flex-column mb-3">
+                <a class="nav-link" href="{{ url_for('user.health_assessment') }}"><i class="bi bi-clipboard-pulse me-2"></i>健康评估</a>
+                <a class="nav-link" href="{{ url_for('tools.ml_prediction') }}"><i class="bi bi-cpu me-2"></i>AI 疾病预测</a>
+                <a class="nav-link" href="{{ url_for('tools.forecast_7day') }}"><i class="bi bi-calendar-week me-2"></i>7 天健康预测</a>
+                <a class="nav-link" href="{{ url_for('tools.chronic_risk') }}"><i class="bi bi-heart-pulse me-2"></i>慢病风险评估</a>
+                <a class="nav-link" href="{{ url_for('tools.ai_qa') }}"><i class="bi bi-chat-dots me-2"></i>AI 提问</a>
+                <a class="nav-link" href="{{ url_for('health.health_diary') }}"><i class="bi bi-journal me-2"></i>健康日记</a>
+                <a class="nav-link" href="{{ url_for('health.medication_reminders') }}"><i class="bi bi-capsule me-2"></i>用药提醒</a>
+                <a class="nav-link" href="{{ url_for('analysis.annual_report') }}"><i class="bi bi-journal-text me-2"></i>年度健康报告</a>
+            </nav>
 
-                {% endif %}
+            {% if current_user.role in ['community', 'admin'] %}
+            <div class="mb-2" style="font-size:.72rem; color:var(--yl-muted); text-transform:uppercase; letter-spacing:.05em; padding:0 4px;">社区</div>
+            <nav class="nav flex-column mb-3">
+                <a class="nav-link" href="{{ url_for('user.community_dashboard') }}"><i class="bi bi-building me-2"></i>社区看板</a>
+            </nav>
+            {% endif %}
 
-                <!-- 账号 -->
-                <div class="accordion-item">
-                    <h2 class="accordion-header" id="navAccountHeading">
-                        <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#navAccount" aria-expanded="false" aria-controls="navAccount">
-                            账号
-                        </button>
-                    </h2>
-                    <div id="navAccount" class="accordion-collapse collapse" aria-labelledby="navAccountHeading" data-bs-parent="#appNavAccordion">
-                        <div class="accordion-body">
-                            {% if current_user.is_authenticated %}
-                                <div class="app-nav-meta mb-2">
-                                    <i class="bi bi-person-circle me-1"></i>{{ current_user.username }}
-                                </div>
-                                <nav class="nav flex-column">
-                                    {% if current_user.role != 'guest' %}
-                                        <a class="nav-link app-nav-link" href="{{ url_for('user.profile') }}">
-                                            <i class="bi bi-gear me-2"></i>个人设置
-                                        </a>
-                                        {% if feature_flags.elder_mode %}
-                                            <a class="nav-link app-nav-link" href="{{ url_for('user.elder_dashboard') }}">
-                                                <i class="bi bi-eyeglasses me-2"></i>老人模式
-                                            </a>
-                                            <div class="form-check form-switch mt-2">
-                                                <input class="form-check-input" type="checkbox" id="elderModeToggle">
-                                                <label class="form-check-label" for="elderModeToggle">大字/高对比</label>
-                                            </div>
-                                        {% endif %}
-                                    {% else %}
-                                        <a class="nav-link app-nav-link" href="{{ url_for('public.register') }}">
-                                            <i class="bi bi-person-plus me-2"></i>注册账号
-                                        </a>
-                                    {% endif %}
-                                    <hr class="my-2">
-                                    <form method="POST" action="{{ url_for('public.logout') }}">
-                                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                                        <button class="nav-link app-nav-link w-100 text-start border-0 bg-transparent" type="submit">
-                                            <i class="bi bi-box-arrow-right me-2"></i>退出登录
-                                        </button>
-                                    </form>
-                                </nav>
-                            {% else %}
-                                <nav class="nav flex-column">
-                                    <a class="nav-link app-nav-link" href="{{ url_for('public.login') }}">
-                                        <i class="bi bi-box-arrow-in-right me-2"></i>登录
-                                    </a>
-                                    <a class="nav-link app-nav-link" href="{{ url_for('public.register') }}">
-                                        <i class="bi bi-person-plus me-2"></i>注册
-                                    </a>
-                                </nav>
-                            {% endif %}
-                        </div>
-                    </div>
-                </div>
+            {% if current_user.role == 'admin' %}
+            <div class="mb-2" style="font-size:.72rem; color:var(--yl-muted); text-transform:uppercase; letter-spacing:.05em; padding:0 4px;">管理后台</div>
+            <nav class="nav flex-column mb-3">
+                <a class="nav-link" href="{{ url_for('admin.admin_dashboard') }}"><i class="bi bi-speedometer2 me-2"></i>管理后台</a>
+                <a class="nav-link" href="{{ url_for('admin.admin_users') }}">用户管理</a>
+                <a class="nav-link" href="{{ url_for('admin.admin_records') }}">病历管理</a>
+                <a class="nav-link" href="{{ url_for('admin.admin_communities') }}">社区管理</a>
+                <a class="nav-link" href="{{ url_for('admin.admin_cooling_resources') }}">避暑资源</a>
+                <a class="nav-link" href="{{ url_for('admin.admin_statistics') }}">统计分析</a>
+            </nav>
+
+            <div class="mb-2" style="font-size:.72rem; color:var(--yl-muted); text-transform:uppercase; letter-spacing:.05em; padding:0 4px;">研究分析</div>
+            <nav class="nav flex-column mb-3">
+                <a class="nav-link" href="{{ url_for('analysis.pilot_dashboard') }}">试点数据看板</a>
+                <a class="nav-link" href="{{ url_for('analysis.model_quality') }}">模型可靠性</a>
+                <a class="nav-link" href="{{ url_for('analysis.analysis_history') }}">历史回溯分析</a>
+                <a class="nav-link" href="{{ url_for('analysis.analysis_heatmap') }}">相关性热力图</a>
+                <a class="nav-link" href="{{ url_for('analysis.analysis_lag') }}">滞后效应</a>
+                <a class="nav-link" href="{{ url_for('analysis.analysis_community_compare') }}">社区对比</a>
+                <a class="nav-link" href="{{ url_for('analysis.alerts_history') }}">预警历史</a>
+                <a class="nav-link" href="{{ url_for('analysis.alerts_accuracy') }}">预警准确率</a>
+                <a class="nav-link" href="{{ url_for('analysis.reports_center') }}"><i class="bi bi-file-earmark-arrow-down me-2"></i>报告导出</a>
+            </nav>
+            {% endif %}
+
+            {# ----- 定位 ----- #}
+            <div class="mb-2" style="font-size:.72rem; color:var(--yl-muted); text-transform:uppercase; letter-spacing:.05em; padding:0 4px;">定位设置</div>
+            <div class="p-3 mb-3" style="background:#fff; border:1px solid var(--yl-line-soft); border-radius:12px;">
+                <form method="POST" action="{{ url_for('user.update_location') }}">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <label class="form-label small mb-1">当前所在地</label>
+                    <input class="form-control form-control-sm" name="location" list="locationOptions" value="{{ current_location }}">
+                    <datalist id="locationOptions">
+                        {% for loc in location_options %}
+                            <option value="{{ loc }}"></option>
+                        {% endfor %}
+                    </datalist>
+                    <div class="text-muted small mt-2">输入城市或社区名</div>
+                    <button class="btn btn-primary btn-sm w-100 mt-2">更新定位</button>
+                </form>
             </div>
+
+            {# ----- 账号 ----- #}
+            <div class="mb-2" style="font-size:.72rem; color:var(--yl-muted); text-transform:uppercase; letter-spacing:.05em; padding:0 4px;">账号</div>
+            <nav class="nav flex-column">
+                {% if current_user.role != 'guest' %}
+                    <a class="nav-link" href="{{ url_for('user.profile') }}"><i class="bi bi-gear me-2"></i>个人设置</a>
+                    {% if feature_flags.elder_mode %}
+                        <a class="nav-link" href="{{ url_for('user.elder_dashboard') }}"><i class="bi bi-eyeglasses me-2"></i>老人模式</a>
+                        <div class="form-check form-switch px-3 mt-2">
+                            <input class="form-check-input" type="checkbox" id="elderModeToggle">
+                            <label class="form-check-label" for="elderModeToggle">大字 / 高对比</label>
+                        </div>
+                    {% endif %}
+                {% else %}
+                    <a class="nav-link" href="{{ url_for('public.register') }}"><i class="bi bi-person-plus me-2"></i>注册账号</a>
+                {% endif %}
+                <form method="POST" action="{{ url_for('public.logout') }}" class="mt-2">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <button class="btn btn-outline-secondary btn-sm w-100" type="submit"><i class="bi bi-box-arrow-right me-1"></i>退出登录</button>
+                </form>
+            </nav>
+            {% else %}
+            <nav class="nav flex-column">
+                <a class="nav-link" href="{{ url_for('public.login') }}"><i class="bi bi-box-arrow-in-right me-2"></i>登录</a>
+                <a class="nav-link" href="{{ url_for('public.register') }}"><i class="bi bi-person-plus me-2"></i>注册</a>
+            </nav>
+            {% endif %}
         </div>
     </div>
 
-    <!-- 消息提示 -->
+    {# ===================== Flash ===================== #}
     {% with messages = get_flashed_messages(with_categories=true) %}
         {% if messages %}
             <div class="container mt-3">
                 {% for category, message in messages %}
                     <div class="alert alert-{{ 'danger' if category == 'error' else 'success' }} alert-dismissible fade show" role="alert">
                         {{ message }}
-                        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+                        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="关闭提示"></button>
                     </div>
                 {% endfor %}
             </div>
         {% endif %}
     {% endwith %}
 
-    <!-- 主要内容 -->
+    {# ===================== Content ===================== #}
     <main class="page-shell container-fluid py-4">
         {% block content %}{% endblock %}
     </main>
 
     {% include 'partials/ai_floating_chat.html' %}
 
-    <!-- 页脚 -->
-    <footer class="site-footer text-center text-muted py-4 mt-5">
+    <footer class="site-footer text-center py-4 mt-5" style="color:var(--yl-muted); border-top:1px solid var(--yl-line-soft);">
         <div class="container">
-            <p class="footer-note mb-0">© 2025 | 天气健康风险预测系统 | 宜老天气通</p>
+            <p class="mb-0">© {{ now().year }} · 宜老天气通 · 把天气变成照护提醒</p>
         </div>
     </footer>
 
     <script src="{{ url_for('static', filename='vendor/bootstrap/bootstrap.bundle.min.js') }}"></script>
+    <script id="metricExplanationCatalog" type="application/json">{{ metric_explanations|tojson }}</script>
     {% if needs_chartjs %}
         <script src="{{ url_for('static', filename='vendor/chartjs/chart.umd.min.js') }}"></script>
     {% endif %}
-    
-    <!-- 页面加载和跳转优化 -->
+
     <script>
-        // 多重保险机制确保加载动画关闭
         function hideLoader() {
             const loader = document.getElementById('pageLoader');
-            if (loader) {
-                loader.classList.add('hidden');
-            }
+            if (loader) loader.classList.add('hidden');
         }
-
-        // 1. DOMContentLoaded时隐藏（最快）
-        document.addEventListener('DOMContentLoaded', function() {
-            setTimeout(hideLoader, 100);
-        });
-
-        // 2. load事件时隐藏（备用）
-        window.addEventListener('load', function() {
-            setTimeout(hideLoader, 100);
-        });
-
-        // 3. 超时保护 - 最多3秒后强制关闭
+        document.addEventListener('DOMContentLoaded', function() { setTimeout(hideLoader, 100); });
+        window.addEventListener('load', function() { setTimeout(hideLoader, 100); });
         setTimeout(hideLoader, 3000);
 
-        // 表单提交时的加载状态
         document.addEventListener('DOMContentLoaded', function() {
-            const forms = document.querySelectorAll('form');
-            forms.forEach(form => {
-                form.addEventListener('submit', function(e) {
+            document.querySelectorAll('form').forEach(form => {
+                form.addEventListener('submit', function() {
                     const submitBtn = this.querySelector('button[type="submit"]');
                     if (submitBtn && !submitBtn.classList.contains('no-loading')) {
                         submitBtn.disabled = true;
                         const originalText = submitBtn.innerHTML;
-                        submitBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>处理中...';
-                        
-                        // 3秒后恢复按钮（防止卡住）
-                        setTimeout(function() {
-                            submitBtn.disabled = false;
-                            submitBtn.innerHTML = originalText;
-                        }, 3000);
+                        submitBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>处理中…';
+                        setTimeout(() => { submitBtn.disabled = false; submitBtn.innerHTML = originalText; }, 3000);
                     }
                 });
             });
         });
-
-        // 捕获所有可能的错误，确保加载动画关闭
-        window.addEventListener('error', function() {
-            hideLoader();
-        });
+        window.addEventListener('error', function() { hideLoader(); });
     </script>
 
     <script>
         (function() {
             const elderMode = localStorage.getItem('elderMode') === '1';
-            if (elderMode) {
-                document.body.classList.add('elder-mode');
-            }
+            if (elderMode) document.body.classList.add('elder-mode');
             const toggle = document.getElementById('elderModeToggle');
-            if (!toggle) {
-                return;
+            if (typeof window.__syncViewportTier === 'function') {
+                window.__syncViewportTier();
             }
+            if (!toggle) return;
             toggle.checked = elderMode;
             toggle.addEventListener('change', function() {
                 if (toggle.checked) {
@@ -457,6 +420,83 @@
                     localStorage.removeItem('elderMode');
                     document.body.classList.remove('elder-mode');
                 }
+                if (typeof window.__syncViewportTier === 'function') {
+                    window.__syncViewportTier();
+                }
+            });
+        })();
+    </script>
+
+    <script>
+        (function() {
+            const menuRoot = document.getElementById('appMoreMenu');
+            if (!menuRoot) return;
+
+            const trigger = menuRoot.querySelector('[data-nav-more-trigger="desktop"]');
+            const panel = document.getElementById('appMegaMenu');
+            let closeTimer = null;
+            let pinnedOpen = false;
+
+            function setOpen(nextOpen) {
+                menuRoot.classList.toggle('is-open', nextOpen);
+                if (trigger) {
+                    trigger.setAttribute('aria-expanded', nextOpen ? 'true' : 'false');
+                }
+                if (panel) {
+                    panel.setAttribute('aria-hidden', nextOpen ? 'false' : 'true');
+                }
+            }
+
+            function clearCloseTimer() {
+                if (closeTimer !== null) {
+                    clearTimeout(closeTimer);
+                    closeTimer = null;
+                }
+            }
+
+            function scheduleClose() {
+                clearCloseTimer();
+                closeTimer = window.setTimeout(function() {
+                    if (pinnedOpen) return;
+                    setOpen(false);
+                }, 120);
+            }
+
+            menuRoot.addEventListener('mouseenter', function() {
+                clearCloseTimer();
+                setOpen(true);
+            });
+
+            menuRoot.addEventListener('mouseleave', function() {
+                if (!pinnedOpen) {
+                    scheduleClose();
+                }
+            });
+
+            if (trigger) {
+                trigger.addEventListener('click', function(event) {
+                    event.preventDefault();
+                    clearCloseTimer();
+                    pinnedOpen = !pinnedOpen;
+                    setOpen(pinnedOpen);
+                });
+            }
+
+            document.addEventListener('pointerdown', function(event) {
+                if (!menuRoot.contains(event.target)) {
+                    pinnedOpen = false;
+                    setOpen(false);
+                }
+            });
+
+            document.addEventListener('keydown', function(event) {
+                if (event.key === 'Escape') {
+                    pinnedOpen = false;
+                    setOpen(false);
+                    if (trigger) {
+                        trigger.blur();
+                    }
+                }
             });
         })();
     </script>
@@ -464,16 +504,10 @@
     <script>
         (function() {
             const meta = document.querySelector('meta[name="csrf-token"]');
-            if (!meta) {
-                return;
-            }
+            if (!meta) return;
             const csrfToken = meta.getAttribute('content');
-            if (!csrfToken) {
-                return;
-            }
-            if (typeof window.fetch !== 'function' || typeof Headers === 'undefined') {
-                return;
-            }
+            if (!csrfToken) return;
+            if (typeof window.fetch !== 'function' || typeof Headers === 'undefined') return;
             const originalFetch = window.fetch;
             window.fetch = function(input, init) {
                 init = init || {};
@@ -489,8 +523,70 @@
     </script>
 
     <script src="{{ url_for('static', filename='js/clipboard.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/metric-explanations.js') }}"></script>
     <script src="{{ url_for('static', filename='js/ai-floating-chat.js') }}"></script>
-    
+    <script src="{{ url_for('static', filename='js/yilao-motion.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/yilao-data-fx.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/yilao-data-fx-extra.js') }}"></script>
+
+    {% if show_motion_switcher|default(false) or request.args.get('motion_switcher') == '1' %}
+    <button type="button" class="motion-trigger" id="motionTrigger" title="动效模板" aria-label="动效模板">
+        <i class="bi bi-magic"></i>
+    </button>
+    <div class="motion-switcher" id="motionSwitcher" role="dialog" aria-label="动效模板">
+        <div class="ms-head">
+            <strong><i class="bi bi-magic me-1" style="color:var(--yl-orange-500);"></i>动效模板</strong>
+            <button type="button" class="ms-close" id="motionClose" aria-label="关闭"><i class="bi bi-x-lg"></i></button>
+        </div>
+        <div class="ms-row" data-combo="m1 m2 m4 m5"><i class="bi bi-stars"></i><span>推荐组合</span><span class="badge bg-light ms-auto">默认</span></div>
+        <div class="ms-meta">入场、数据脉动、触感反馈、天气氛围</div>
+        <div class="ms-row" data-combo="m1 m4"><i class="bi bi-1-circle"></i><span>轻动效</span></div>
+        <div class="ms-meta">只保留原来的渐入和触感反馈</div>
+        <div class="ms-row" data-combo="m2 m4"><i class="bi bi-2-circle"></i><span>数据脉动</span></div>
+        <div class="ms-meta">高风险日脉冲、hover 解释气泡</div>
+        <div class="ms-row" data-combo="m3 m4"><i class="bi bi-3-circle"></i><span>首页叙事</span></div>
+        <div class="ms-meta">流程卡片分步叙事动画</div>
+        <div class="ms-row" data-combo="m1 m2 m3 m4 m5"><i class="bi bi-asterisk"></i><span>全部叠加</span></div>
+    </div>
+    <script>
+        (function() {
+            const trigger = document.getElementById('motionTrigger');
+            const switcher = document.getElementById('motionSwitcher');
+            const closeButton = document.getElementById('motionClose');
+            if (!trigger || !switcher || !closeButton) return;
+
+            function syncActive() {
+                const current = document.body.getAttribute('data-motion') || '';
+                switcher.querySelectorAll('.ms-row').forEach(function(row) {
+                    row.classList.toggle('active', row.dataset.combo === current);
+                });
+            }
+
+            trigger.addEventListener('click', function() {
+                switcher.classList.add('open');
+                trigger.classList.add('hidden');
+                syncActive();
+            });
+
+            closeButton.addEventListener('click', function() {
+                switcher.classList.remove('open');
+                trigger.classList.remove('hidden');
+            });
+
+            switcher.querySelectorAll('.ms-row').forEach(function(row) {
+                row.addEventListener('click', function() {
+                    if (window.setMotion) {
+                        window.setMotion(row.dataset.combo);
+                    }
+                    syncActive();
+                });
+            });
+
+            syncActive();
+        })();
+    </script>
+    {% endif %}
+
     {% block extra_js %}{% endblock %}
 </body>
 </html>

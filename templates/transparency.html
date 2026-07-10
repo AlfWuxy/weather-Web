@@ -1,103 +1,213 @@
 {% extends "base.html" %}
 
-{% block title %}透明度说明 - 天气健康风险预测系统{% endblock %}
+{% block title %}计算方法与透明度 - 宜老天气通{% endblock %}
 
 {% block content %}
-<div class="container my-4">
-    <div class="row mb-3">
-        <div class="col-12">
-            <h2><i class="bi bi-shield-check"></i> 透明度说明</h2>
-            <p class="text-muted mb-0">说明数据来源、隐私保护与公平原则（不提供医疗诊断或治疗建议）。</p>
+<div class="container my-4" style="max-width:1180px;">
+    <section class="yl-transparency-hero mb-4">
+        <div class="row g-4 align-items-center">
+            <div class="col-lg-8">
+                <span class="section-kicker"><i class="bi bi-calculator"></i> 计算方法与透明度</span>
+                <h1 class="h2 mt-2">每一个风险数字都应该能被解释</h1>
+                <p class="text-muted mb-3">
+                    本页公开网站当前实际执行的公式、变量、权重、阈值、时间窗口、缺失值处理和局限。
+                    页面数字旁的 <i class="bi bi-info-circle" aria-hidden="true"></i> 可以先看短解释，再回到这里核对完整方法。
+                </p>
+                <div class="yl-transparency-nav" aria-label="计算方法目录">
+                    {% for group in metric_explanation_groups %}
+                    <a href="#{{ group.id }}">{{ group.title }}</a>
+                    {% endfor %}
+                    <a href="#data-provenance">数据与版本</a>
+                    <a href="#known-limits">已知局限</a>
+                </div>
+            </div>
+            <div class="col-lg-4">
+                <div class="card border-0 shadow-sm">
+                    <div class="card-body">
+                        <div class="fw-semibold mb-2"><i class="bi bi-question-circle text-warning me-1"></i>为什么同样 10°C 会有不同结果？</div>
+                        <p class="small text-muted mb-0">
+                            温度只是一个输入。湿度、夜间最低温、前几天温度、年龄、慢病、社区脆弱性、历史病例窗口和数据完整度都可能改变结果。
+                            主要风险与行动结果页会同时展示本次使用的关键输入，便于逐项核对。
+                        </p>
+                    </div>
+                </div>
+            </div>
         </div>
+    </section>
+
+    <div class="alert alert-warning" role="note">
+        <strong>适用范围：</strong>所有分数用于公共健康行动提醒、家庭照护或社区资源排序。它们不提供医疗诊断、处方或治疗建议；出现明显不适时应及时寻求专业帮助。
     </div>
 
-    <div class="row g-4">
-        <div class="col-lg-6">
-            <div class="card shadow-sm h-100">
-                <div class="card-header bg-light">
-                    <h5 class="mb-0"><i class="bi bi-cloud-sun"></i> 数据来源</h5>
+    {% for group in metric_explanation_groups %}
+    <section class="yl-method-group my-5" id="{{ group.id }}" aria-labelledby="{{ group.id }}-title">
+        <div class="section-heading mb-3">
+            <span class="section-kicker">方法 {{ loop.index }}</span>
+            <h2 class="h3" id="{{ group.id }}-title">{{ group.title }}</h2>
+            <p>{{ group.description }}</p>
+        </div>
+        <div class="row g-3">
+            {% for key in group['keys'] %}
+                {% set metric = metric_explanations.get(key) %}
+                {% if metric %}
+                <div class="col-12 {% if group['keys']|length > 2 %}col-xl-6{% endif %}">
+                    <article class="card shadow-sm yl-method-card" id="{{ metric.anchor }}">
+                        <div class="card-body p-4">
+                            <div class="d-flex flex-wrap justify-content-between gap-2 align-items-start mb-2">
+                                <h3 class="h5 mb-0">{{ metric.title }}</h3>
+                                <span class="badge text-bg-light">{{ metric.method }}</span>
+                            </div>
+                            <p class="text-muted">{{ metric.summary }}</p>
+
+                            <div class="yl-method-formula mb-3">
+                                <div class="small text-muted fw-semibold mb-1">当前公式</div>
+                                <code>{{ metric.formula }}</code>
+                            </div>
+
+                            {% if metric.variables %}
+                            <div class="mb-3">
+                                <div class="small text-muted fw-semibold mb-1">变量与权重</div>
+                                <ul class="small mb-0">
+                                    {% for item in metric.variables %}<li>{{ item }}</li>{% endfor %}
+                                </ul>
+                            </div>
+                            {% endif %}
+
+                            {% if metric.thresholds %}
+                            <div class="mb-3">
+                                <div class="small text-muted fw-semibold mb-1">分级与阈值</div>
+                                <div class="d-flex flex-wrap gap-1">
+                                    {% for item in metric.thresholds %}<span class="badge rounded-pill text-bg-light">{{ item }}</span>{% endfor %}
+                                </div>
+                            </div>
+                            {% endif %}
+
+                            <div class="yl-method-meta small mb-3">
+                                <div><span class="text-muted d-block">时间窗口</span>{{ metric.window }}</div>
+                                <div><span class="text-muted d-block">缺失值处理</span>{{ metric.missing }}</div>
+                            </div>
+
+                            {% if metric.limitations %}
+                            <div class="small">
+                                <span class="text-muted fw-semibold">局限：</span>{{ metric.limitations|join('；') }}
+                            </div>
+                            {% endif %}
+                            <div class="small text-muted mt-2">实现位置：<code>{{ metric.source_file }}</code></div>
+                        </div>
+                    </article>
                 </div>
-                <div class="card-body">
-                    <ul class="mb-0 text-muted">
-                        <li>天气数据：和风天气（QWeather）API，结合缓存与自动同步脚本（如 scripts/weather_sync.sh）。</li>
-                        <li>社区资源：由社区/管理员维护（避暑点信息）。</li>
-                        <li>行动数据：仅记录短码、社区与行动状态，不含个人身份信息。</li>
-                    </ul>
+                {% endif %}
+            {% endfor %}
+        </div>
+    </section>
+    {% endfor %}
+
+    <section class="my-5 yl-method-group" id="data-provenance">
+        <div class="section-heading mb-3">
+            <span class="section-kicker"><i class="bi bi-database-check"></i> 数据与模型版本</span>
+            <h2 class="h3">输入从哪里来，在线到底算什么</h2>
+        </div>
+        <div class="row g-3">
+            <div class="col-lg-6">
+                <div class="card shadow-sm h-100">
+                    <div class="card-body p-4">
+                        <h3 class="h5"><i class="bi bi-cloud-sun me-1"></i>天气与空气质量</h3>
+                        <ul class="small text-muted mb-0">
+                            <li>实时天气和 7 天预报以和风天气（QWeather）为主要来源。</li>
+                            <li>部分非核心天气读取允许 Open-Meteo 兜底；页面会标记来源、缓存和更新时间。</li>
+                            <li>公开风险、行动、照护、社区、个人评估、慢病和 ML 等生产风险链在天气不可用时停止输出结论，不用演示天气代替。</li>
+                            <li>和风 7 日预报逐日最高温、最低温、平均温或湿度缺失、NaN、无穷时，整组预报会被拒绝，不缓存也不计算风险。</li>
+                            <li>PM2.5 依次使用未来日直接值、当前实况 PM2.5、未来日 AQI 代理、当前实况 AQI 代理；这些都缺失时才使用“默认 AQI 50 代理”，浮层会显示具体分支。</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+            <div class="col-lg-6">
+                <div class="card shadow-sm h-100">
+                    <div class="card-body p-4">
+                        <h3 class="h5"><i class="bi bi-activity me-1"></i>DLNM 在线链路</h3>
+                        <ul class="small text-muted mb-0">
+                            <li>离线模型属于 quasi-Poisson 广义线性回归，DLNM cross-basis 表达温度的非线性和滞后效应。</li>
+                            <li>网站在线请求不会重新拟合回归；它读取 <code>final_single_model_ar1_profile.json</code> 中导出的温度–RR 曲线并插值。</li>
+                            <li>当前 profile 版本为 2026-02-11，参考温度 MMT 为 23.8°C；profile 元数据记录冷效应最长 14 天，网站当前在线滞后循环实际使用 0–7 天。</li>
+                            <li>当前 production profile 的单日 RR 上限为 2.6，profile 未加载时文献先验单日上限为 2.2；累计上限均为 3.5。</li>
+                            <li>模型未训练时使用 RR=1+0.015×|T−20| 的简化分支，并跳过病种与年龄修正；结果明细会标记该分支。</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+            <div class="col-lg-6">
+                <div class="card shadow-sm h-100">
+                    <div class="card-body p-4">
+                        <h3 class="h5"><i class="bi bi-hospital me-1"></i>健康与社区数据</h3>
+                        <ul class="small text-muted mb-0">
+                            <li>历史模型数据覆盖 2023-12-13 至 2025-01-30，共 2,258 条门诊记录；60 岁以上 1,213 条。</li>
+                            <li>社区风险使用社区人口、老龄率、慢病率、绿地、热岛、医疗可达性和历史病例。</li>
+                            <li>Community 表为空或查询失败时，社区地图返回空结果并显示数据不可用，不加载内置 8 村演示档案。</li>
+                            <li>已有社区缺少实测绿地、热岛和医疗可达性时，系统使用稳定的中性代理值，并在页面标明局限。</li>
+                            <li>病例覆盖率只表示社区字段成功匹配比例，不代表诊断编码已完全验证。</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+            <div class="col-lg-6">
+                <div class="card shadow-sm h-100">
+                    <div class="card-body p-4">
+                        <h3 class="h5"><i class="bi bi-cpu me-1"></i>RandomForest 分类器</h3>
+                        <ul class="small text-muted mb-0">
+                            <li>模型为 13 类疾病多分类器，输入包括年龄、性别、时间和天气特征。</li>
+                            <li>现有模型元数据记录准确率约 65.3%，F1 约 64.2%。</li>
+                            <li>原始 RandomForest 输出是类别概率；天气规则调整后没有再次归一化，页面因此显示“关注分”，不会把它解释为未来发病概率。</li>
+                            <li>没有真实推理结果时，页面不会再展示虚构的示例贡献条。</li>
+                        </ul>
+                    </div>
                 </div>
             </div>
         </div>
-        <div class="col-lg-6">
-            <div class="card shadow-sm h-100">
-                <div class="card-header bg-light">
-                    <h5 class="mb-0"><i class="bi bi-diagram-3"></i> 模型版本</h5>
-                </div>
-                <div class="card-body">
-                    <ul class="mb-0 text-muted">
-                        <li>热风险规则：HeatActionService v2（体感热 + 夜间最低温 + 连续高温天数）。</li>
-                        <li>解释方式：展示三项贡献权重，帮助理解风险来源。</li>
-                        <li>个人阈值：-0.1/0/+0.1，仅保存在本机浏览器。</li>
-                        <li>版本更新：记录在发布日志与迁移说明中。</li>
-                    </ul>
-                </div>
+    </section>
+
+    <section class="my-5 yl-method-group" id="known-limits">
+        <div class="section-heading mb-3">
+            <span class="section-kicker"><i class="bi bi-exclamation-triangle"></i> 已知局限</span>
+            <h2 class="h3">当前仍需要继续验证的地方</h2>
+        </div>
+        <div class="card shadow-sm">
+            <div class="card-body p-4">
+                <ul class="mb-0 text-muted">
+                    <li>当前 production RR profile 的残差仍存在自相关，应该继续做按时间切分的回测与校准。</li>
+                    <li>仓库内可复现的 v1 DLNM 报告把 MMT 标记为搜索边界值，不应直接替换线上 profile。</li>
+                    <li>社区原始脆弱性字段存在 0–1 与 0–100 单位混用警告，绿地、热岛、慢病率和医疗可达性仍需更可靠的实测数据。</li>
+                    <li>个人、慢病和 7 天评分包含人工设定的可审计权重；这些权重用于行动筛查，尚未完成临床校准。</li>
+                    <li>慢病评分当前叠乘 DLNM 年龄修正与慢病层年龄修正，页面会逐层显示，真实试点前仍需校准这一双层放大。</li>
+                    <li>数据缺失、代理值、模型回退或天气 API 不可用时，页面必须显示状态，不能把默认值包装成真实观测。</li>
+                </ul>
             </div>
         </div>
-        <div class="col-lg-6">
-            <div class="card shadow-sm h-100">
-                <div class="card-header bg-light">
-                    <h5 class="mb-0"><i class="bi bi-lock"></i> 隐私最小化</h5>
-                </div>
-                <div class="card-body">
-                    <ul class="mb-0 text-muted">
-                        <li>不存老人姓名、电话、慢病、精确住址。</li>
-                        <li>备选联系人仅保存在本机浏览器（localStorage）。</li>
-                        <li>个人阈值拨片仅本机可见，不上传服务器。</li>
-                        <li>复盘数据可选择关联绑定（opt-in），否则匿名汇总（至少社区）。</li>
-                    </ul>
-                </div>
+    </section>
+
+    <section class="my-5 yl-method-group" id="privacy">
+        <div class="section-heading mb-3">
+            <span class="section-kicker"><i class="bi bi-lock"></i> 隐私与使用边界</span>
+            <h2 class="h3">系统会保存什么</h2>
+        </div>
+        <div class="card shadow-sm">
+            <div class="card-body p-4">
+                <ul class="mb-0 text-muted">
+                    <li>注册与照护功能会在账号权限范围内保存用户名、家庭成员档案、健康字段、评估记录和行动记录。</li>
+                    <li>短码和行动令牌使用哈希与有效期保护；公开页面不应暴露原始健康档案。</li>
+                    <li>个人阈值拨片只保存在当前浏览器，不上传服务器。</li>
+                    <li>历史建模输出应使用去标识或聚合数据；原始病历字段不进入公开页面和公开报告。</li>
+                    <li>“分享给医生/社区”的字段不等同于完整授权体系，真实医生试点前仍需补充角色、授权、审计和数据最小化。</li>
+                </ul>
             </div>
         </div>
-        <div class="col-lg-6">
-            <div class="card shadow-sm h-100">
-                <div class="card-header bg-light">
-                    <h5 class="mb-0"><i class="bi bi-exclamation-circle"></i> 局限与适用范围</h5>
-                </div>
-                <div class="card-body">
-                    <ul class="mb-0 text-muted">
-                        <li>仅提供通用热健康行动建议，不提供医疗诊断、处方或治疗建议。</li>
-                        <li>连续高温天数依赖历史天气同步，缺失时可能低估风险。</li>
-                        <li>风险评分用于行动提醒，无法替代现场医疗判断。</li>
-                        <li>短码输入、确认/求助、升级链与登录均进行限流防滥用。</li>
-                    </ul>
-                </div>
-            </div>
-        </div>
-        <div class="col-lg-6">
-            <div class="card shadow-sm h-100">
-                <div class="card-header bg-light">
-                    <h5 class="mb-0"><i class="bi bi-people"></i> 公平与可及性</h5>
-                </div>
-                <div class="card-body">
-                    <ul class="mb-0 text-muted">
-                        <li>统一的热风险阈值与行动建议，避免对特定人群贴标签。</li>
-                        <li>社区层面汇总，支持按社区管理行动资源。</li>
-                        <li>界面提供简洁入口与大字模式（如已启用）。</li>
-                    </ul>
-                </div>
-            </div>
-        </div>
-        <div class="col-lg-6">
-            <div class="card shadow-sm h-100">
-                <div class="card-header bg-light">
-                    <h5 class="mb-0"><i class="bi bi-chat-square-text"></i> 反馈入口</h5>
-                </div>
-                <div class="card-body">
-                    <p class="text-muted mb-2">欢迎反馈数据问题、行动建议或公平性建议。</p>
-                    <a class="btn btn-outline-primary btn-sm" href="mailto:wuxy.alf2024@gdhfi.com">
-                        <i class="bi bi-envelope"></i> 邮件反馈
-                    </a>
-                </div>
-            </div>
-        </div>
+    </section>
+
+    <div class="d-flex flex-wrap gap-2 justify-content-between align-items-center border-top pt-4">
+        <p class="text-muted small mb-0">发现公式、数值或页面解释不一致时，请附上页面、指标名、时间和截图。</p>
+        <a class="btn btn-outline-primary btn-sm" href="mailto:wuxy.alf2024@gdhfi.com">
+            <i class="bi bi-envelope me-1"></i>反馈数据问题
+        </a>
     </div>
 </div>
 {% endblock %}

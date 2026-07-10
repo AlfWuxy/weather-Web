@@ -1,1008 +1,205 @@
+{% set needs_chartjs = true %}
 {% extends "base.html" %}
-
-{% block title %}7天健康预测 - 天气健康风险预测系统{% endblock %}
+{% from "partials/metric_info.html" import metric_info with context %}
+{% block title %}7 天健康预测 · 宜老天气通{% endblock %}
 
 {% block content %}
-<div class="container-fluid py-4">
-    <div class="row mb-4">
-        <div class="col-12">
-            <div class="d-flex justify-content-between align-items-center">
-                <div>
-                    <h2><i class="bi bi-calendar-week me-2"></i>未来7天健康预测</h2>
-                    <p class="text-muted mb-0">基于DLNM风险函数，预测未来7天门诊需求与健康风险</p>
-                </div>
-                <div class="d-flex flex-wrap gap-2 justify-content-end">
-                    <div class="btn-group" role="group" aria-label="scenario">
-                        <button class="btn btn-outline-secondary active" id="scenarioBaselineBtn" type="button">
-                            基线情景
-                        </button>
-                        <button class="btn btn-outline-danger" id="scenarioWorstBtn" type="button">
-                            最坏情景
-                        </button>
-                    </div>
-                    <button class="btn btn-primary" id="refreshForecast" type="button">
-                        <i class="bi bi-arrow-clockwise me-1"></i>刷新预测
-                    </button>
-                </div>
+<div class="container" style="max-width:1160px;">
+    <section class="section-heading yl-fade-up">
+        <span class="section-kicker"><i class="bi bi-calendar-week"></i> 7 天健康预测</span>
+        <h2>接下来一周,哪几天要特别留心?</h2>
+        <p>风险评分综合温度、PM2.5、湿度与热夜。当前是地区级暴露评分，不使用个人慢病资料。</p>
+    </section>
+
+    <form method="GET" class="yl-section mb-4 yl-fade-up yl-fade-up-d1">
+        <div class="row g-3 align-items-end">
+            <div class="col-md-8">
+                <label class="form-label">所在地</label>
+                <input type="text" class="form-control" name="location" value="{{ request.args.get('location', current_location) }}" list="locOpts">
+                <datalist id="locOpts">{% for loc in (location_options or []) %}<option value="{{ loc }}"></option>{% endfor %}</datalist>
             </div>
-            <div class="text-muted small mt-2">当前视图：<span id="scenarioModeLabel">基线情景（P50）</span></div>
+            <div class="col-md-4 d-grid">
+                <button class="btn btn-primary" type="submit"><i class="bi bi-graph-up me-1"></i>生成预测</button>
+            </div>
+        </div>
+    </form>
+
+    <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3 yl-fade-up yl-fade-up-d2">
+        <div class="text-muted" style="font-size:.9rem;">
+            来源：{{ forecast_meta.source_label or '和风天气' }}
+            {% if forecast_meta.update_time_label %} · 更新时间：{{ forecast_meta.update_time_label }}{% endif %}
+            {% if forecast_meta.from_cache %} · 缓存{% endif %}
         </div>
     </div>
 
-    <!-- 预警摘要 -->
-    <div class="row mb-4">
-        <div class="col-12">
-            <div class="card shadow-sm" id="alertCard">
-                <div class="card-body">
-                    <div class="row align-items-center">
-                        <div class="col-md-2 text-center">
-                            <div id="alertLevel" class="display-6 fw-bold">
-                                <i class="bi bi-hourglass-split"></i>
-                            </div>
-                        </div>
-                        <div class="col-md-10">
-                            <h5 id="alertTitle">正在加载预测数据...</h5>
-                            <p id="alertDesc" class="mb-0 text-muted">请稍候</p>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
+    {% if forecast_error %}
+    <div class="alert alert-warning yl-fade-up yl-fade-up-d2" role="alert">
+        <i class="bi bi-exclamation-triangle me-1"></i>{{ forecast_error }}
     </div>
+    {% endif %}
 
-    <!-- 7天预测卡片 -->
-    <div class="row mb-4" id="forecastCards">
-        {% for i in range(7) %}
-        <div class="col-md-3 col-lg mb-3">
-            <div class="card shadow-sm h-100 forecast-card" data-day="{{ i }}">
-                <div class="card-header text-center py-2">
-                    <small class="text-muted">加载中...</small>
-                    <div class="fw-bold">--</div>
-                </div>
-                <div class="card-body text-center py-3">
-                    <div class="display-6 mb-2">--°C</div>
-                    <div class="mb-2">
-                        <span class="badge bg-secondary">--</span>
+    {# 7 天横向卡 #}
+    {% if forecast_days %}
+    <div class="row g-3 mb-4 yl-fade-up yl-fade-up-d2">
+        {% for d in forecast_days %}
+        <div class="col">
+            <div class="card h-100 text-center day"
+                 data-risk="{{ d.risk_level or 'unknown' }}"
+                 {% if d.risk_level == 'high' %}style="border:1px solid #F0C4B9; background:var(--yl-danger-50);"{% elif d.risk_level == 'mid' %}style="border:1px solid #F1DFB1; background:var(--yl-warn-50);"{% endif %}>
+                <div class="card-body p-3">
+                    <div class="text-muted" style="font-size:.82rem;">{{ d.date }}</div>
+                    <div class="fw-semibold mt-1">{{ d.dow }}</div>
+                    <div class="my-2" style="font-size:1.8rem; color:var(--yl-orange-500);"><i class="bi bi-cloud-sun"></i></div>
+                    <div style="font-size:1rem; font-weight:600;">{{ d.temp_high }}° / {{ d.temp_low }}°</div>
+                    <div class="text-muted" style="font-size:.78rem;">{{ d.condition }}</div>
+                    <div class="mt-2">
+                        {% set forecast_context = {
+                            '限幅前评分': d.composite_pre_clip_score if d.composite_pre_clip_score is not none else '--',
+                            '最终评分': d.composite_final_score if d.composite_final_score is not none else '--',
+                            '协同加分': d.composite_synergy_bonus if d.composite_synergy_bonus is not none else '--',
+                            '热分项': d.risk_components.heat if d.risk_components.heat is not none else '--',
+                            'PM2.5分项': d.risk_components.pm25 if d.risk_components.pm25 is not none else '--',
+                            '湿度分项': d.risk_components.humidity if d.risk_components.humidity is not none else '--',
+                            '热夜分项': d.risk_components.hot_night if d.risk_components.hot_night is not none else '--',
+                            'PM2.5实际使用': ((d.pm25_used|string) ~ ' μg/m³') if d.pm25_used is not none else '--',
+                            'PM2.5来源': ('未来日直接值' if d.pm25_source == 'direct' else '当前实况复用（非未来预报）' if d.pm25_source == 'current_observation_reuse' else '未来日AQI×0.65代理' if d.pm25_source == 'aqi_proxy' else '当前实况AQI×0.65代理' if d.pm25_source == 'current_observation_aqi_proxy' else '默认AQI 50代理' if d.pm25_source == 'default_aqi_50' else '--'),
+                            'AQI代理输入': d.pm25_aqi_used if d.pm25_source in ['aqi_proxy', 'current_observation_aqi_proxy', 'default_aqi_50'] and d.pm25_aqi_used is not none else '--',
+                            '湿度实际使用': ((d.humidity_used|string) ~ '%' ~ ('（插补）' if d.humidity_imputed else '（直接）')) if d.humidity_used is not none else '--',
+                            '夜间最低温实际使用': ((d.temp_min_used|string) ~ '°C' ~ ('（插补）' if d.temp_min_imputed else '（直接）')) if d.temp_min_used is not none else '--'
+                        } %}
+                        <span class="badge risk-badge {% if d.risk_level=='high' %}bg-danger-subtle{% elif d.risk_level=='mid' %}bg-warning-subtle{% elif d.risk_level=='low' %}bg-success-subtle{% else %}bg-secondary-subtle{% endif %}"
+                              data-detail="温度 {{ d.temp_high }}°/{{ d.temp_low }}° · {{ d.condition }}">
+                            {% if d.risk_available %}风险 {{ d.risk_score }}{% else %}风险待计算{% endif %}
+                        </span>
+                        {{ metric_info('forecast_exposure_score', forecast_context) }}
                     </div>
-                    <div class="small text-muted">
-                        预计门诊(P50): -- 人次
+                    {% if d.probability_high_visits is not none or d.predictability_score is not none %}
+                    <div class="text-muted mt-2" style="font-size:.72rem; line-height:1.45;">
+                        {% if d.probability_high_visits is not none %}
+                            {% set visit_context = {
+                                '本日概率': (d.probability_high_visits|round(1)|string) ~ '%',
+                                '概率所用原始门诊量': d.visit_raw_point_estimate if d.visit_raw_point_estimate is not none else '--',
+                                '页面门诊量': d.visit_point_estimate if d.visit_point_estimate is not none else '--',
+                                '温度RR': d.visit_rr if d.visit_rr is not none else '--',
+                                '季节基线': d.visit_baseline if d.visit_baseline is not none else '--',
+                                '星期系数': d.visit_dow_factor if d.visit_dow_factor is not none else '--',
+                                '历史P90阈值': d.visit_threshold_p90 if d.visit_threshold_p90 is not none else '--',
+                                '概率标准差': d.visit_std_estimate if d.visit_std_estimate is not none else '--',
+                                '概率路径': ('正态近似' if d.visit_probability_method == 'normal_approximation' else '10%回退' if d.visit_probability_method == 'fallback_0.1' else '--'),
+                                '页面限幅': ('是，上限 ' ~ (d.visit_guardrail_cap|string) if d.visit_guardrail_applied else '否' if d.visit_guardrail_applied is not none else '--')
+                            } %}
+                            高负荷 {{ d.probability_high_visits|round(1) }}% {{ metric_info('forecast_visit_probability', visit_context) }}
+                        {% endif %}
+                        {% if d.predictability_score is not none %}
+                            {% set predictability_context = {
+                                '本日评分': d.predictability_score|round(1),
+                                '等级': d.predictability_label or '--',
+                                '计算分支': ('上游外部分数' if d.predictability_branch == 'external' else '本地推导公式' if d.predictability_branch == 'derived' else '--'),
+                                '限幅前分数': d.predictability_raw_score if d.predictability_raw_score is not none else '--',
+                                '外部分数输入': d.predictability_external_score if d.predictability_external_score is not none else '--',
+                                '模型温差': d.predictability_model_spread if d.predictability_model_spread is not none else '--',
+                                '提前天数': d.predictability_lead_day if d.predictability_lead_day is not none else '--',
+                                '模型数量': d.predictability_model_count if d.predictability_model_count is not none else '--',
+                                '提前期惩罚': d.predictability_lead_penalty if d.predictability_lead_penalty is not none else '--',
+                                '多模型奖励': d.predictability_model_bonus if d.predictability_model_bonus is not none else '--'
+                            } %}
+                            <br>可预报性 {{ d.predictability_score|round(0) }} {{ metric_info('forecast_predictability', predictability_context) }}
+                        {% endif %}
                     </div>
+                    {% endif %}
+                    <div class="why-tip">风险 {{ d.risk_score if d.risk_available else '待计算' }} · {{ d.condition }} · {{ d.temp_high }}°/{{ d.temp_low }}°</div>
                 </div>
             </div>
         </div>
         {% endfor %}
     </div>
+    {% else %}
+    <section class="yl-section text-center yl-fade-up yl-fade-up-d2">
+        <div style="font-size:2rem; color:var(--yl-orange-500);"><i class="bi bi-cloud-slash"></i></div>
+        <h4 class="mt-2" style="font-size:1.05rem;">暂无 7 天预报</h4>
+        <p class="text-muted mb-0">当前页面只使用和风天气。接口恢复后会自动显示真实高低温。</p>
+    </section>
+    {% endif %}
 
-    <div class="row">
-        <!-- 详细预测表 -->
-        <div class="col-lg-8 mb-4">
-            <div class="card shadow-sm">
-                <div class="card-header bg-primary text-white">
-                    <h5 class="mb-0"><i class="bi bi-table me-2"></i>详细预测数据</h5>
-                </div>
-                <div class="card-body p-0">
-                    <div class="table-responsive">
-                        <table class="table table-hover mb-0">
-                            <thead class="table-light">
-                                <tr>
-                                    <th>日期</th>
-                                    <th>温度</th>
-                                    <th>预计门诊</th>
-                                    <th>P10/P50/P90</th>
-                                    <th>预测区间</th>
-                                    <th>超阈值概率(P90/P75)</th>
-                                    <th>复合暴露</th>
-                                    <th>风险等级</th>
-                                    <th>可预报性</th>
-                                    <th>置信度</th>
-                                </tr>
-                            </thead>
-                            <tbody id="forecastTable">
-                                <tr>
-                                    <td colspan="10" class="text-center py-4">
-                                        <div class="spinner-border spinner-border-sm text-primary me-2"></div>
-                                        加载中...
-                                    </td>
-                                </tr>
-                            </tbody>
-                        </table>
-                    </div>
-                </div>
-            </div>
+    <div class="row g-4 mb-4">
+        <div class="col-lg-8">
+            <section class="yl-section yl-fade-up yl-fade-up-d3">
+                <h4 style="font-size:1.1rem;">风险走势 {{ metric_info('forecast_exposure_score') }}</h4>
+                <canvas id="forecastChart" height="260" class="mt-3"></canvas>
+            </section>
         </div>
-
-        <!-- 建议与极端天气 -->
-        <div class="col-lg-4 mb-4">
-            <!-- 管理建议 -->
-            <div class="card shadow-sm mb-4">
-                <div class="card-header bg-success text-white">
-                    <h5 class="mb-0"><i class="bi bi-lightbulb me-2"></i>管理建议</h5>
-                </div>
-                <div class="card-body" id="recommendationsDiv">
-                    <div class="text-center py-3 text-muted">
-                        <i class="bi bi-hourglass-split"></i> 加载中...
-                    </div>
-                </div>
-            </div>
-
-            <!-- 极端天气预警 -->
-            <div class="card shadow-sm">
-                <div class="card-header bg-warning">
-                    <h5 class="mb-0"><i class="bi bi-exclamation-triangle me-2"></i>极端天气预警</h5>
-                </div>
-                <div class="card-body" id="extremeEventsDiv">
-                    <div class="text-center py-3 text-muted">
-                        <i class="bi bi-hourglass-split"></i> 加载中...
-                    </div>
-                </div>
-            </div>
-
-            <!-- 未来6小时短临时间轴 -->
-            <div class="card shadow-sm mt-4">
-                <div class="card-header bg-info text-white">
-                    <h5 class="mb-0"><i class="bi bi-clock-history me-2"></i>未来6小时降水时间轴</h5>
-                </div>
-                <div class="card-body" id="nowcastDiv">
-                    <div class="text-center py-3 text-muted">
-                        <i class="bi bi-hourglass-split"></i> 加载中...
-                    </div>
-                </div>
-            </div>
+        <div class="col-lg-4">
+            <section class="yl-section h-100 yl-fade-up yl-fade-up-d3">
+                <h4 style="font-size:1.1rem;">本周高风险日</h4>
+                <p class="text-muted" style="font-size:.9rem;">以下日期风险评分 ≥ 70,建议重点准备。</p>
+                <ul class="list-unstyled mt-3 mb-0">
+                    {% set high_risk_count = namespace(value=0) %}
+                    {% set unknown_risk_count = namespace(value=0) %}
+                    {% for d in forecast_days %}
+                        {% if not d.risk_available %}
+                        {% set unknown_risk_count.value = unknown_risk_count.value + 1 %}
+                        {% elif (d.risk_score or 0) >= 70 %}
+                        {% set high_risk_count.value = high_risk_count.value + 1 %}
+                        <li class="d-flex justify-content-between py-2 border-bottom">
+                            <span><strong>{{ d.date }}</strong> · {{ d.condition }}</span>
+                            <span class="badge bg-danger-subtle">{{ d.risk_score }}</span>
+                        </li>
+                        {% endif %}
+                    {% endfor %}
+                    {% if unknown_risk_count.value == forecast_days|length %}
+                    <li class="text-muted py-2">风险预测暂不可用。</li>
+                    {% elif high_risk_count.value == 0 %}
+                    <li class="text-muted py-2">本周暂无高风险日。</li>
+                    {% endif %}
+                </ul>
+            </section>
         </div>
     </div>
 
-    <!-- DLNM模型信息 -->
-    <div class="row">
-        <div class="col-12">
-            <div class="card shadow-sm">
-                <div class="card-header">
-                    <h5 class="mb-0"><i class="bi bi-graph-up me-2"></i>DLNM风险模型信息</h5>
-                </div>
-                <div class="card-body">
-                    <div class="row" id="modelInfo">
-                        <div class="col-md-3 text-center mb-3">
-                            <div class="text-muted small">最低风险温度(MMT)</div>
-                            <div class="h4 fw-bold text-success" id="mmtValue">--°C</div>
-                        </div>
-                        <div class="col-md-3 text-center mb-3">
-                            <div class="text-muted small">高温预警阈值</div>
-                            <div class="h4 fw-bold text-danger" id="heatThreshold">--°C</div>
-                        </div>
-                        <div class="col-md-3 text-center mb-3">
-                            <div class="text-muted small">低温预警阈值</div>
-                            <div class="h4 fw-bold text-info" id="coldThreshold">--°C</div>
-                        </div>
-                        <div class="col-md-3 text-center mb-3">
-                            <div class="text-muted small">门诊量P90阈值</div>
-                            <div class="h4 fw-bold text-warning" id="visitThreshold">--人次</div>
-                        </div>
-                    </div>
+    {# 建议 #}
+    <section class="yl-section yl-fade-up">
+        <h4 style="font-size:1.1rem;"><i class="bi bi-lightbulb text-warning me-1"></i>本周建议</h4>
+        <div class="row g-3 mt-1">
+            {% for tip in (weekly_tips or [
+                {'icon':'sun','title':'避开午后外出','detail':'11:00–15:00 紫外线最强,尽量安排室内活动。'},
+                {'icon':'cup-hot','title':'补水 1.5L+','detail':'少量多次,别等口渴才喝。'},
+                {'icon':'heart-pulse','title':'早晚测血压','detail':'高温天血压波动大,发现异常及时就医。'},
+                {'icon':'capsule','title':'带好常用药','detail':'外出时别忘了慢病药和急救药。'}
+            ]) %}
+            <div class="col-md-6 col-lg-3">
+                <div class="yl-action h-100">
+                    <i class="bi bi-{{ tip.icon }}"></i>
+                    <div><strong>{{ tip.title }}</strong><div class="detail">{{ tip.detail }}</div></div>
                 </div>
             </div>
+            {% endfor %}
         </div>
-    </div>
-
-    <!-- 影响 × 可能性矩阵 -->
-    <div class="row mt-2">
-        <div class="col-12">
-            <div class="card shadow-sm">
-                <div class="card-header bg-light">
-                    <h5 class="mb-0"><i class="bi bi-grid-3x3 me-2"></i>影响 × 可能性矩阵</h5>
-                </div>
-                <div class="card-body">
-                    <p class="text-muted small mb-3">用于快速识别“高影响且高可能”的重点干预日期。</p>
-                    <div class="table-responsive">
-                        <table class="table table-sm align-middle mb-0">
-                            <thead>
-                                <tr>
-                                    <th>影响\可能性</th>
-                                    <th>低</th>
-                                    <th>中</th>
-                                    <th>高</th>
-                                </tr>
-                            </thead>
-                            <tbody id="impactMatrixBody">
-                                <tr><td colspan="4" class="text-muted">等待预测数据...</td></tr>
-                            </tbody>
-                        </table>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <div class="row mt-3">
-        <div class="col-lg-6 mb-3">
-            <div class="card shadow-sm h-100">
-                <div class="card-header bg-light">
-                    <h5 class="mb-0"><i class="bi bi-person-check me-2"></i>角色行动卡</h5>
-                </div>
-                <div class="card-body" id="roleActionCards">
-                    <p class="text-muted mb-0">等待预测数据...</p>
-                </div>
-            </div>
-        </div>
-        <div class="col-lg-6 mb-3">
-            <div class="card shadow-sm h-100">
-                <div class="card-header bg-light">
-                    <h5 class="mb-0"><i class="bi bi-layers me-2"></i>复合暴露风险（热+PM2.5+湿度+热夜）</h5>
-                </div>
-                <div class="card-body" id="compositeExposureBoard">
-                    <p class="text-muted mb-0">等待预测数据...</p>
-                </div>
-            </div>
-        </div>
-    </div>
+    </section>
 </div>
 
-<style>
-.forecast-card {
-    transition: transform 0.2s, box-shadow 0.2s;
-}
-.forecast-card:hover {
-    transform: translateY(-5px);
-    box-shadow: 0 0.5rem 1rem rgba(0,0,0,0.15) !important;
-}
-.forecast-card.risk-high {
-    border-left: 4px solid #dc3545;
-    border-color: #dc3545;
-}
-.forecast-card.risk-medium {
-    border-left: 4px solid #fd7e14;
-    border-color: #fd7e14;
-}
-.forecast-card.risk-yellow {
-    border-left: 4px solid #ffc107;
-    border-color: #ffc107;
-}
-.forecast-card.risk-low {
-    border-left: 4px solid #198754;
-    border-color: #198754;
-}
-.forecast-card.risk-blue {
-    border-left: 4px solid #0dcaf0;
-    border-color: #0dcaf0;
-}
-.bg-orange {
-    background-color: #fd7e14 !important;
-}
-</style>
-
 <script>
-function clearElement(element) {
-    while (element && element.firstChild) {
-        element.removeChild(element.firstChild);
-    }
-}
-
-function safeText(value, fallback) {
-    if (value === undefined || value === null) {
-        return fallback || '';
-    }
-    return String(value);
-}
-
-function toNumber(value, fallback) {
-    if (value === undefined || value === null || value === '') {
-        return fallback;
-    }
-    const num = Number(value);
-    if (!Number.isFinite(num)) {
-        return fallback;
-    }
-    return num;
-}
-
-function formatNumber(value, digits, fallbackText) {
-    const num = toNumber(value, null);
-    if (num === null) {
-        return fallbackText;
-    }
-    return num.toFixed(digits);
-}
-
-function setAlertLevel(element, className, iconClass, label) {
-    clearElement(element);
-    const span = document.createElement('span');
-    span.className = className;
-    const icon = document.createElement('i');
-    icon.className = iconClass;
-    span.appendChild(icon);
-    span.appendChild(document.createTextNode(' ' + label));
-    element.appendChild(span);
-}
-
-let currentScenarioMode = 'baseline';
-let latestForecastRows = [];
-let latestSummaryData = {};
-let nowcastTimelineRows = [];
-let nowcastReplayTimer = null;
-let nowcastFrameIndex = 0;
-
-// 页面加载时获取预测
 document.addEventListener('DOMContentLoaded', function() {
-    const refreshButton = document.getElementById('refreshForecast');
-    if (refreshButton) {
-        refreshButton.addEventListener('click', function() {
-            loadForecast();
-            loadNowcast();
-        });
-    }
-    const baselineBtn = document.getElementById('scenarioBaselineBtn');
-    const worstBtn = document.getElementById('scenarioWorstBtn');
-    if (baselineBtn) {
-        baselineBtn.addEventListener('click', function() {
-            setScenarioMode('baseline');
-        });
-    }
-    if (worstBtn) {
-        worstBtn.addEventListener('click', function() {
-            setScenarioMode('worst');
-        });
-    }
-    loadForecast();
-    loadModelInfo();
-    loadNowcast();
+    const ctx = document.getElementById('forecastChart');
+    if (!ctx || typeof Chart === 'undefined') return;
+    const labels = {{ ((forecast_days or []) | map(attribute='date') | list)|tojson }};
+    const scores = {{ ((forecast_days or []) | map(attribute='risk_score') | list)|tojson }};
+    const highs  = {{ ((forecast_days or []) | map(attribute='temp_high') | list)|tojson }};
+    if (!labels.length) return;
+    new Chart(ctx, {
+        type: 'line',
+        data: { labels, datasets: [
+            { label: '风险评分', data: scores, borderColor:'#EE7E2D', backgroundColor:'rgba(238,126,45,0.12)', fill:true, tension:0.4, yAxisID:'y' },
+            { label: '最高气温', data: highs, borderColor:'#C7472E', borderDash:[4,4], tension:0.4, yAxisID:'y1' }
+        ]},
+        options: {
+            responsive: true,
+            interaction: { mode:'index', intersect:false },
+            scales: {
+                y: { beginAtZero:true, max:100, title:{display:true,text:'风险评分'}, grid:{color:'#F4EDDF'} },
+                y1:{ position:'right', grid:{display:false}, title:{display:true,text:'气温 °C'} }
+            }
+        }
+    });
 });
-
-function setScenarioMode(mode) {
-    currentScenarioMode = mode === 'worst' ? 'worst' : 'baseline';
-    const baselineBtn = document.getElementById('scenarioBaselineBtn');
-    const worstBtn = document.getElementById('scenarioWorstBtn');
-    if (baselineBtn) {
-        baselineBtn.classList.toggle('active', currentScenarioMode === 'baseline');
-    }
-    if (worstBtn) {
-        worstBtn.classList.toggle('active', currentScenarioMode === 'worst');
-    }
-    const modeLabel = document.getElementById('scenarioModeLabel');
-    if (modeLabel) {
-        modeLabel.textContent = currentScenarioMode === 'worst'
-            ? '最坏情景（P90）'
-            : '基线情景（P50）';
-    }
-    if (latestForecastRows.length > 0) {
-        displayForecast(latestForecastRows, latestSummaryData);
-    }
-}
-
-function loadForecast() {
-    // 显示加载状态
-    document.getElementById('alertTitle').textContent = '正在加载预测数据...';
-    
-    fetch('/api/forecast/7day', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({})
-    })
-    .then(response => response.json())
-    .then(data => {
-        if (data.success) {
-            latestForecastRows = Array.isArray(data.forecasts) ? data.forecasts : [];
-            latestSummaryData = data.summary || {};
-            displayForecast(latestForecastRows, latestSummaryData);
-        } else {
-            showError('加载失败: ' + (data.error || '未知错误'));
-        }
-    })
-    .catch(error => {
-        showError('请求失败: ' + error);
-    });
-}
-
-function loadModelInfo() {
-    fetch('/api/dlnm/summary')
-    .then(response => response.json())
-    .then(data => {
-        if (data.success && data.summary) {
-            const s = data.summary;
-            const mmtValue = toNumber(s.mmt, null);
-            if (mmtValue !== null) {
-                document.getElementById('mmtValue').textContent = mmtValue.toFixed(1) + '°C';
-            }
-            if (s.risk_thresholds) {
-                const heatWarning = toNumber(s.risk_thresholds.heat_warning, 32);
-                const coldWarning = toNumber(s.risk_thresholds.cold_warning, 5);
-                document.getElementById('heatThreshold').textContent = heatWarning.toFixed(1) + '°C';
-                document.getElementById('coldThreshold').textContent = coldWarning.toFixed(1) + '°C';
-            }
-        }
-    });
-}
-
-function loadNowcast() {
-    fetch('/api/weather/nowcast?hours=6')
-    .then(response => response.json())
-    .then(payload => {
-        if (payload && payload.success) {
-            renderNowcast(payload.data || {});
-        } else {
-            renderNowcast({available: false, timeline: []});
-        }
-    })
-    .catch(() => {
-        renderNowcast({available: false, timeline: []});
-    });
-}
-
-function renderNowcast(data) {
-    const container = document.getElementById('nowcastDiv');
-    if (!container) return;
-    clearElement(container);
-    if (nowcastReplayTimer) {
-        clearInterval(nowcastReplayTimer);
-        nowcastReplayTimer = null;
-    }
-
-    const timeline = Array.isArray(data.timeline) ? data.timeline : [];
-    nowcastTimelineRows = timeline;
-    if (!timeline.length) {
-        const p = document.createElement('p');
-        p.className = 'text-muted mb-0';
-        p.textContent = '暂无小时级降水时间轴数据';
-        container.appendChild(p);
-        return;
-    }
-
-    const controls = document.createElement('div');
-    controls.className = 'd-flex flex-wrap align-items-center gap-2 mb-3';
-
-    const playBtn = document.createElement('button');
-    playBtn.type = 'button';
-    playBtn.className = 'btn btn-sm btn-outline-primary';
-    playBtn.textContent = '回放';
-    controls.appendChild(playBtn);
-
-    const slider = document.createElement('input');
-    slider.type = 'range';
-    slider.className = 'form-range flex-grow-1 mb-0';
-    slider.min = '0';
-    slider.max = String(Math.max(0, timeline.length - 1));
-    slider.value = '0';
-    controls.appendChild(slider);
-
-    const frameLabel = document.createElement('span');
-    frameLabel.className = 'small text-muted';
-    controls.appendChild(frameLabel);
-    container.appendChild(controls);
-
-    const listWrap = document.createElement('div');
-    container.appendChild(listWrap);
-
-    timeline.forEach((item, idx) => {
-        const row = document.createElement('div');
-        row.className = 'mb-2';
-        row.dataset.frame = String(idx);
-
-        const top = document.createElement('div');
-        top.className = 'd-flex justify-content-between small';
-        const t = document.createElement('span');
-        t.textContent = safeText(item.time, '--').slice(11, 16);
-        const v = document.createElement('span');
-        const p = formatNumber(item.precipitation_probability, 0, '--');
-        v.textContent = p + '%';
-        top.appendChild(t);
-        top.appendChild(v);
-
-        const bar = document.createElement('div');
-        bar.className = 'progress';
-        bar.style.height = '10px';
-        const barInner = document.createElement('div');
-        const prob = toNumber(item.precipitation_probability, 0);
-        barInner.className = 'progress-bar ' + (prob >= 70 ? 'bg-danger' : prob >= 40 ? 'bg-warning' : 'bg-info');
-        barInner.style.width = Math.max(0, Math.min(100, prob)) + '%';
-        bar.appendChild(barInner);
-
-        row.appendChild(top);
-        row.appendChild(bar);
-        listWrap.appendChild(row);
-    });
-
-    function setFrame(index) {
-        const safeIndex = Math.max(0, Math.min(timeline.length - 1, Number(index)));
-        nowcastFrameIndex = safeIndex;
-        slider.value = String(safeIndex);
-        const frame = timeline[safeIndex] || {};
-        const t = safeText(frame.time, '--').slice(11, 16);
-        frameLabel.textContent = `${safeIndex + 1}/${timeline.length} · ${t}`;
-        Array.from(listWrap.querySelectorAll('[data-frame]')).forEach(node => {
-            const active = Number(node.dataset.frame) === safeIndex;
-            node.classList.toggle('border', active);
-            node.classList.toggle('border-primary', active);
-            node.classList.toggle('rounded', active);
-            node.classList.toggle('p-1', active);
-        });
-    }
-
-    slider.addEventListener('input', function() {
-        setFrame(this.value);
-    });
-
-    playBtn.addEventListener('click', function() {
-        if (nowcastReplayTimer) {
-            clearInterval(nowcastReplayTimer);
-            nowcastReplayTimer = null;
-            playBtn.textContent = '回放';
-            return;
-        }
-        playBtn.textContent = '暂停';
-        nowcastReplayTimer = setInterval(() => {
-            let next = nowcastFrameIndex + 1;
-            if (next >= timeline.length) {
-                next = 0;
-            }
-            setFrame(next);
-        }, 900);
-    });
-
-    setFrame(0);
-
-    const rainWindow = data.rain_window || null;
-    if (rainWindow && rainWindow.start_time) {
-        const rainInfo = document.createElement('div');
-        rainInfo.className = 'alert alert-light py-2 mt-2 mb-2';
-        rainInfo.innerHTML = [
-            `<strong>预计降水窗口：</strong>${safeText(rainWindow.start_time, '--').slice(11, 16)} - ${safeText(rainWindow.end_time, '--').slice(11, 16)}`,
-            `，峰值概率 ${formatNumber(rainWindow.max_probability, 0, '--')}%`
-        ].join('');
-        container.appendChild(rainInfo);
-    }
-
-    const foot = document.createElement('div');
-    foot.className = 'text-muted small mt-2';
-    foot.textContent = '数据源: ' + safeText(data.source, '--') + ' | 支持 0-6 小时时间线回放';
-    container.appendChild(foot);
-}
-
-function displayForecast(forecasts, summary) {
-    // 更新预警摘要
-    const alertCard = document.getElementById('alertCard');
-    const alertLevel = document.getElementById('alertLevel');
-    const alertTitle = document.getElementById('alertTitle');
-    const alertDesc = document.getElementById('alertDesc');
-    const summaryData = summary || {};
-    const highRiskDaysValue = toNumber(summaryData.high_risk_days, 0);
-    const highRiskDaysText = formatNumber(summaryData.high_risk_days, 0, '--');
-    const scenarioTotals = summaryData.scenario_totals || {};
-    const baselineTotal = toNumber(scenarioTotals.baseline_total, toNumber(summaryData.total_expected_visits, null));
-    const worstTotal = toNumber(scenarioTotals.worst_case_total, baselineTotal);
-    const optimisticTotal = toNumber(scenarioTotals.optimistic_total, baselineTotal);
-    const useWorst = currentScenarioMode === 'worst';
-    const totalVisitsValue = useWorst ? worstTotal : baselineTotal;
-    const totalVisitsText = totalVisitsValue === null ? '--' : String(Math.round(totalVisitsValue));
-    const forecastPeriod = summaryData.forecast_period || {};
-    const periodStart = safeText(forecastPeriod.start, '--');
-    const periodEnd = safeText(forecastPeriod.end, '--');
-
-    if (highRiskDaysValue >= 3) {
-        alertCard.className = 'card shadow-sm border-danger';
-        setAlertLevel(alertLevel, 'text-danger', 'bi bi-exclamation-octagon-fill', '红色预警');
-        alertTitle.textContent = useWorst ? '最坏情景下未来一周健康风险较高' : '未来一周健康风险较高';
-    } else if (highRiskDaysValue >= 1) {
-        alertCard.className = 'card shadow-sm border-warning';
-        setAlertLevel(alertLevel, 'text-warning', 'bi bi-exclamation-triangle-fill', '橙色预警');
-        alertTitle.textContent = useWorst ? '最坏情景下部分日期风险偏高' : '部分日期健康风险偏高';
-    } else {
-        alertCard.className = 'card shadow-sm border-success';
-        setAlertLevel(alertLevel, 'text-success', 'bi bi-check-circle-fill', '正常');
-        alertTitle.textContent = useWorst ? '最坏情景下风险总体可控' : '未来一周健康风险正常';
-    }
-
-    clearElement(alertDesc);
-    alertDesc.appendChild(document.createTextNode('预测期间: ' + periodStart + ' ~ ' + periodEnd + ' | 预计总门诊: '));
-    const totalStrong = document.createElement('strong');
-    totalStrong.textContent = totalVisitsText;
-    alertDesc.appendChild(totalStrong);
-    alertDesc.appendChild(document.createTextNode(' 人次 | 高风险天数: '));
-    const highRiskStrong = document.createElement('strong');
-    highRiskStrong.textContent = highRiskDaysText;
-    alertDesc.appendChild(highRiskStrong);
-    alertDesc.appendChild(document.createTextNode(' 天'));
-    const avgPredictability = formatNumber(summaryData.predictability && summaryData.predictability.average_score, 0, null);
-    if (avgPredictability !== null) {
-        alertDesc.appendChild(document.createTextNode(' | 可预报性均值: '));
-        const predStrong = document.createElement('strong');
-        predStrong.textContent = avgPredictability;
-        alertDesc.appendChild(predStrong);
-    }
-    if (optimisticTotal !== null && worstTotal !== null) {
-        alertDesc.appendChild(document.createTextNode(' | 区间总量: '));
-        const rangeStrong = document.createElement('strong');
-        rangeStrong.textContent = `${Math.round(optimisticTotal)}~${Math.round(worstTotal)}`;
-        alertDesc.appendChild(rangeStrong);
-    }
-
-    const averageVisits = totalVisitsValue === null ? '--' : String(Math.round(totalVisitsValue / 7));
-    document.getElementById('visitThreshold').textContent = averageVisits + '人次/天';
-
-    // 更新7天卡片
-    const forecastList = Array.isArray(forecasts) ? forecasts : [];
-    forecastList.forEach((f, i) => {
-        const card = document.querySelector('.forecast-card[data-day="' + i + '"]');
-        if (!card) return;
-
-        const riskLevel = safeText(f.risk_level, '--');
-        const riskClass = riskLevel.includes('红') ? 'risk-high' :
-                         riskLevel.includes('橙') ? 'risk-medium' :
-                         riskLevel.includes('黄') ? 'risk-yellow' :
-                         riskLevel.includes('蓝') ? 'risk-blue' : 'risk-low';
-        card.className = 'card shadow-sm h-100 forecast-card ' + riskClass;
-
-        const badgeClass = riskLevel.includes('红') ? 'danger' :
-                          riskLevel.includes('橙') ? 'orange' :
-                          riskLevel.includes('黄') ? 'warning' :
-                          riskLevel.includes('蓝') ? 'info' : 'success';
-
-        const dateText = safeText(f.date, '--');
-        const dayText = safeText(f.day_of_week, '--');
-        const tempText = formatNumber(f.temperature && f.temperature.corrected, 0, '--');
-        const baselineVisit = toNumber(f.visits && f.visits.point_estimate, null);
-        const worstVisit = toNumber(f.visits && f.visits.p90, baselineVisit);
-        const scenarioVisit = currentScenarioMode === 'worst' ? worstVisit : baselineVisit;
-        const visitsText = scenarioVisit === null ? '--' : String(Math.round(scenarioVisit));
-        const probText = formatNumber(f.probability_high_visits, 0, '--');
-        const probDisplay = probText === '--' ? '--' : probText + '%';
-        const predictabilityScore = formatNumber(f.predictability && f.predictability.score, 0, '--');
-        const predictabilityLabel = safeText(f.predictability && f.predictability.label, '--');
-        const composite = f.composite_exposure || {};
-        const compositeText = safeText(composite.level, '--') + ' ' + formatNumber(composite.score, 0, '--');
-
-        clearElement(card);
-        const header = document.createElement('div');
-        header.className = 'card-header text-center py-2';
-        const dateSmall = document.createElement('small');
-        dateSmall.className = 'text-muted';
-        dateSmall.textContent = dateText;
-        const dayDiv = document.createElement('div');
-        dayDiv.className = 'fw-bold';
-        dayDiv.textContent = dayText;
-        header.appendChild(dateSmall);
-        header.appendChild(dayDiv);
-
-        const body = document.createElement('div');
-        body.className = 'card-body text-center py-3';
-        const tempDiv = document.createElement('div');
-        tempDiv.className = 'display-6 mb-2';
-        tempDiv.textContent = tempText + '°C';
-        const badgeWrap = document.createElement('div');
-        badgeWrap.className = 'mb-2';
-        const badge = document.createElement('span');
-        badge.className = 'badge bg-' + badgeClass;
-        badge.textContent = riskLevel;
-        badgeWrap.appendChild(badge);
-        const visitsDiv = document.createElement('div');
-        visitsDiv.className = 'small text-muted';
-        visitsDiv.textContent = (currentScenarioMode === 'worst' ? '最坏情景门诊: ' : '预计门诊: ') + visitsText + ' 人次';
-        const probDiv = document.createElement('div');
-        probDiv.className = 'small text-muted';
-        probDiv.textContent = '超阈值概率: ' + probDisplay;
-        const compDiv = document.createElement('div');
-        compDiv.className = 'small text-muted';
-        compDiv.textContent = '复合暴露: ' + compositeText;
-        const predDiv = document.createElement('div');
-        predDiv.className = 'small text-muted';
-        predDiv.textContent = '可预报性: ' + predictabilityLabel + ' (' + predictabilityScore + ')';
-
-        body.appendChild(tempDiv);
-        body.appendChild(badgeWrap);
-        body.appendChild(visitsDiv);
-        body.appendChild(probDiv);
-        body.appendChild(compDiv);
-        body.appendChild(predDiv);
-
-        card.appendChild(header);
-        card.appendChild(body);
-    });
-
-    // 更新表格
-    const tableBody = document.getElementById('forecastTable');
-    clearElement(tableBody);
-
-    forecastList.forEach(f => {
-        const riskLevel = safeText(f.risk_level, '--');
-        const badgeClass = riskLevel.includes('红') ? 'danger' :
-                          riskLevel.includes('橙') ? 'orange' :
-                          riskLevel.includes('黄') ? 'warning' :
-                          riskLevel.includes('蓝') ? 'info' : 'success';
-
-        const row = document.createElement('tr');
-
-        const dateCell = document.createElement('td');
-        const dateStrong = document.createElement('strong');
-        dateStrong.textContent = safeText(f.date, '--');
-        const daySmall = document.createElement('small');
-        daySmall.className = 'text-muted';
-        daySmall.textContent = safeText(f.day_of_week, '--');
-        dateCell.appendChild(dateStrong);
-        dateCell.appendChild(document.createElement('br'));
-        dateCell.appendChild(daySmall);
-
-        const tempCell = document.createElement('td');
-        const correctedText = formatNumber(f.temperature && f.temperature.corrected, 1, '--');
-        const lowerText = formatNumber(f.temperature && f.temperature.uncertainty_lower, 0, '--');
-        const upperText = formatNumber(f.temperature && f.temperature.uncertainty_upper, 0, '--');
-        tempCell.appendChild(document.createTextNode(correctedText + '°C'));
-        const rangeSmall = document.createElement('small');
-        rangeSmall.className = 'text-muted';
-        rangeSmall.textContent = lowerText + '~' + upperText + '°C';
-        tempCell.appendChild(document.createElement('br'));
-        tempCell.appendChild(rangeSmall);
-
-        const visitCell = document.createElement('td');
-        const visitStrong = document.createElement('strong');
-        const baseVisit = toNumber(f.visits && f.visits.point_estimate, null);
-        const worstVisit = toNumber(f.visits && f.visits.p90, baseVisit);
-        const usedVisit = currentScenarioMode === 'worst' ? worstVisit : baseVisit;
-        const visitText = usedVisit === null ? '--' : String(Math.round(usedVisit));
-        visitStrong.textContent = visitText;
-        visitCell.appendChild(visitStrong);
-        visitCell.appendChild(document.createTextNode(' 人次'));
-
-        const quantileCell = document.createElement('td');
-        const p10Text = formatNumber(f.visits && f.visits.p10, 0, '--');
-        const p50Text = formatNumber(f.visits && f.visits.p50, 0, '--');
-        const p90Text = formatNumber(f.visits && f.visits.p90, 0, '--');
-        quantileCell.textContent = `${p10Text} / ${p50Text} / ${p90Text}`;
-
-        const intervalCell = document.createElement('td');
-        const lowerBoundText = formatNumber(f.visits && f.visits.lower_bound, 0, '--');
-        const upperBoundText = formatNumber(f.visits && f.visits.upper_bound, 0, '--');
-        intervalCell.textContent = lowerBoundText + ' ~ ' + upperBoundText;
-
-        const probCell = document.createElement('td');
-        const probValue = toNumber(f.probability_high_visits, 0);
-        const probText = formatNumber(f.probability_high_visits, 0, '--');
-        const probDisplay = probText === '--' ? '--' : probText + '%';
-        const probP75 = toNumber(f.visits && f.visits.probability_exceed_p75, null);
-        const probWidth = Math.max(0, Math.min(100, probValue));
-        const progress = document.createElement('div');
-        progress.className = 'progress';
-        progress.style.height = '20px';
-        const progressBar = document.createElement('div');
-        progressBar.className = 'progress-bar bg-' + badgeClass;
-        progressBar.style.width = probWidth + '%';
-        progressBar.textContent = probDisplay;
-        progress.appendChild(progressBar);
-        probCell.appendChild(progress);
-        if (probP75 !== null) {
-            const meta = document.createElement('div');
-            meta.className = 'small text-muted mt-1';
-            meta.textContent = 'P75: ' + (probP75 * 100).toFixed(0) + '%';
-            probCell.appendChild(meta);
-        }
-
-        const compositeCell = document.createElement('td');
-        const composite = f.composite_exposure || {};
-        const compLevel = safeText(composite.level, '--');
-        const compScore = formatNumber(composite.score, 0, '--');
-        const compBadge = document.createElement('span');
-        const compClass = compLevel === '高' ? 'danger' : compLevel === '中' ? 'warning' : 'success';
-        compBadge.className = 'badge bg-' + compClass;
-        compBadge.textContent = compLevel + ' (' + compScore + ')';
-        compositeCell.appendChild(compBadge);
-
-        const riskCell = document.createElement('td');
-        const riskBadge = document.createElement('span');
-        riskBadge.className = 'badge bg-' + badgeClass;
-        riskBadge.textContent = riskLevel;
-        riskCell.appendChild(riskBadge);
-
-        const predictabilityCell = document.createElement('td');
-        const predictability = f.predictability || {};
-        const predLabel = safeText(predictability.label, '--');
-        const predScore = formatNumber(predictability.score, 0, '--');
-        const predBadge = document.createElement('span');
-        const predClass = predLabel === '高' ? 'success' : predLabel === '中' ? 'warning' : 'secondary';
-        predBadge.className = 'badge bg-' + predClass;
-        predBadge.textContent = predLabel + ' (' + predScore + ')';
-        predictabilityCell.appendChild(predBadge);
-
-        const confidenceCell = document.createElement('td');
-        const confidenceValue = safeText(f.confidence, '');
-        const confidenceLabel = confidenceValue === 'high' ? '高' : confidenceValue === 'medium' ? '中' : '低';
-        const confidenceClass = confidenceValue === 'high' ? 'success' : confidenceValue === 'medium' ? 'warning' : 'secondary';
-        const confidenceBadge = document.createElement('span');
-        confidenceBadge.className = 'badge bg-' + confidenceClass;
-        confidenceBadge.textContent = confidenceLabel;
-        confidenceCell.appendChild(confidenceBadge);
-
-        row.appendChild(dateCell);
-        row.appendChild(tempCell);
-        row.appendChild(visitCell);
-        row.appendChild(quantileCell);
-        row.appendChild(intervalCell);
-        row.appendChild(probCell);
-        row.appendChild(compositeCell);
-        row.appendChild(riskCell);
-        row.appendChild(predictabilityCell);
-        row.appendChild(confidenceCell);
-        tableBody.appendChild(row);
-    });
-
-    // 更新建议
-    const recDiv = document.getElementById('recommendationsDiv');
-    clearElement(recDiv);
-
-    if (Array.isArray(summaryData.recommendations) && summaryData.recommendations.length > 0) {
-        summaryData.recommendations.forEach(rec => {
-            const priority = safeText(rec.priority, '');
-            const priorityClass = priority === 'high' ? 'danger' :
-                                 priority === 'medium' ? 'warning' : 'secondary';
-            const div = document.createElement('div');
-            div.className = 'alert alert-' + priorityClass + ' py-2 mb-2';
-            const strong = document.createElement('strong');
-            strong.textContent = safeText(rec.category, '');
-            const small = document.createElement('small');
-            small.textContent = safeText(rec.advice, '');
-            div.appendChild(strong);
-            div.appendChild(document.createElement('br'));
-            div.appendChild(small);
-            recDiv.appendChild(div);
-        });
-    } else {
-        const empty = document.createElement('p');
-        empty.className = 'text-muted mb-0';
-        empty.textContent = '暂无特别建议';
-        recDiv.appendChild(empty);
-    }
-
-    // 更新极端天气
-    const extremeDiv = document.getElementById('extremeEventsDiv');
-    clearElement(extremeDiv);
-
-    let hasExtremeEvents = false;
-    forecastList.forEach(f => {
-        if (Array.isArray(f.extreme_events) && f.extreme_events.length > 0) {
-            hasExtremeEvents = true;
-            f.extreme_events.forEach(e => {
-                const div = document.createElement('div');
-                div.className = 'alert alert-warning py-2 mb-2';
-                const strong = document.createElement('strong');
-                strong.textContent = safeText(f.date, '--') + ': ' + safeText(e.type, '--');
-                const small = document.createElement('small');
-                small.textContent = safeText(e.description, '');
-                div.appendChild(strong);
-                div.appendChild(document.createElement('br'));
-                div.appendChild(small);
-                extremeDiv.appendChild(div);
-            });
-        }
-    });
-
-    if (!hasExtremeEvents) {
-        const empty = document.createElement('p');
-        empty.className = 'text-success mb-0';
-        const icon = document.createElement('i');
-        icon.className = 'bi bi-check-circle me-1';
-        empty.appendChild(icon);
-        empty.appendChild(document.createTextNode('未来7天无极端天气预警'));
-        extremeDiv.appendChild(empty);
-    }
-
-    renderImpactMatrix(summaryData.impact_likelihood_matrix || {});
-    renderRoleActionCards(summaryData.role_action_cards || {});
-    renderCompositeExposureBoard(forecastList, summaryData);
-}
-
-function renderRoleActionCards(cards) {
-    const container = document.getElementById('roleActionCards');
-    if (!container) return;
-    clearElement(container);
-
-    const groups = [
-        {key: 'resident', label: '居民'},
-        {key: 'doctor', label: '村医'},
-        {key: 'community', label: '社区干部'}
-    ];
-
-    groups.forEach(group => {
-        const entries = Array.isArray(cards[group.key]) ? cards[group.key] : [];
-        const block = document.createElement('div');
-        block.className = 'mb-3';
-        const title = document.createElement('h6');
-        title.className = 'mb-1';
-        title.textContent = group.label;
-        block.appendChild(title);
-
-        if (!entries.length) {
-            const empty = document.createElement('div');
-            empty.className = 'small text-muted';
-            empty.textContent = '暂无行动建议';
-            block.appendChild(empty);
-        } else {
-            entries.slice(0, 2).forEach(item => {
-                const priority = safeText(item.priority, 'medium');
-                const cls = priority === 'high' ? 'danger' : priority === 'urgent' ? 'danger' : priority === 'medium' ? 'warning' : 'secondary';
-                const alert = document.createElement('div');
-                alert.className = 'alert alert-' + cls + ' py-2 px-3 mb-2';
-                alert.innerHTML = `<strong>${safeText(item.title, '行动建议')}</strong><br><small>${safeText(item.action, '')}</small>`;
-                block.appendChild(alert);
-            });
-        }
-        container.appendChild(block);
-    });
-}
-
-function renderCompositeExposureBoard(forecasts, summary) {
-    const container = document.getElementById('compositeExposureBoard');
-    if (!container) return;
-    clearElement(container);
-
-    const summaryExposure = (summary && summary.composite_exposure) || {};
-    const avg = formatNumber(summaryExposure.average_score, 1, '--');
-    const highDays = formatNumber(summaryExposure.high_risk_days, 0, '--');
-
-    const summaryDiv = document.createElement('div');
-    summaryDiv.className = 'd-flex justify-content-between align-items-center mb-2';
-    summaryDiv.innerHTML = `<span class="small text-muted">周均复合暴露分</span><strong>${avg}</strong>`;
-    container.appendChild(summaryDiv);
-    const subDiv = document.createElement('div');
-    subDiv.className = 'small text-muted mb-3';
-    subDiv.textContent = `高复合暴露天数: ${highDays}`;
-    container.appendChild(subDiv);
-
-    (forecasts || []).forEach(item => {
-        const exposure = item.composite_exposure || {};
-        const score = toNumber(exposure.score, 0) || 0;
-        const row = document.createElement('div');
-        row.className = 'mb-2';
-
-        const top = document.createElement('div');
-        top.className = 'd-flex justify-content-between small';
-        top.innerHTML = `<span>${safeText(item.date, '--')}</span><span>${safeText(exposure.level, '--')} ${formatNumber(exposure.score, 0, '--')}</span>`;
-
-        const bar = document.createElement('div');
-        bar.className = 'progress';
-        bar.style.height = '10px';
-        const inner = document.createElement('div');
-        inner.className = 'progress-bar ' + (score >= 70 ? 'bg-danger' : score >= 45 ? 'bg-warning' : 'bg-success');
-        inner.style.width = Math.max(0, Math.min(100, score)) + '%';
-        bar.appendChild(inner);
-
-        row.appendChild(top);
-        row.appendChild(bar);
-        container.appendChild(row);
-    });
-}
-
-function renderImpactMatrix(matrixData) {
-    const body = document.getElementById('impactMatrixBody');
-    if (!body) return;
-    clearElement(body);
-
-    const cells = matrixData.cells || {};
-    const impactRows = [
-        {key: 'low', label: '低影响'},
-        {key: 'medium', label: '中影响'},
-        {key: 'high', label: '高影响'}
-    ];
-    const likelihoodCols = ['low', 'medium', 'high'];
-
-    impactRows.forEach(rowInfo => {
-        const tr = document.createElement('tr');
-        const name = document.createElement('td');
-        name.textContent = rowInfo.label;
-        tr.appendChild(name);
-
-        likelihoodCols.forEach(col => {
-            const td = document.createElement('td');
-            const value = toNumber(cells[rowInfo.key] && cells[rowInfo.key][col], 0);
-            td.textContent = String(value);
-            if (rowInfo.key === 'high' && col === 'high' && value > 0) {
-                td.className = 'text-danger fw-bold';
-            } else if (rowInfo.key !== 'low' && col !== 'low' && value > 0) {
-                td.className = 'text-warning fw-semibold';
-            }
-            tr.appendChild(td);
-        });
-        body.appendChild(tr);
-    });
-}
-
-function showError(msg) {
-    document.getElementById('alertTitle').textContent = msg;
-    document.getElementById('alertCard').className = 'card shadow-sm border-danger';
-}
 </script>
 {% endblock %}
-

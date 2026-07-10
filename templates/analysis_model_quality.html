@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "partials/metric_info.html" import metric_info with context %}
 
 {% block title %}模型可靠性 - 宜老天气通{% endblock %}
 
@@ -25,7 +26,7 @@
       <div class="col-md-3">
         <div class="card shadow-sm h-100">
           <div class="card-body">
-            <div class="text-muted small">MAE</div>
+            <div class="text-muted small">MAE {{ metric_info('mae', {'本次 MAE': report.mae}) }}</div>
             <div class="fs-3 fw-bold">{{ report.mae }}</div>
           </div>
         </div>
@@ -33,7 +34,7 @@
       <div class="col-md-3">
         <div class="card shadow-sm h-100">
           <div class="card-body">
-            <div class="text-muted small">RMSE</div>
+            <div class="text-muted small">RMSE {{ metric_info('rmse', {'本次 RMSE': report.rmse}) }}</div>
             <div class="fs-3 fw-bold">{{ report.rmse }}</div>
           </div>
         </div>
@@ -41,7 +42,7 @@
       <div class="col-md-3">
         <div class="card shadow-sm h-100">
           <div class="card-body">
-            <div class="text-muted small">区间覆盖率</div>
+            <div class="text-muted small">区间覆盖率 {{ metric_info('interval_coverage', {'本次覆盖率': ((report.interval_coverage * 100)|round(1)|string ~ '%') if report.interval_coverage is not none else '--'}) }}</div>
             <div class="fs-3 fw-bold">
               {% if report.interval_coverage is not none %}
                 {{ (report.interval_coverage * 100) | round(1) }}%
@@ -110,4 +111,3 @@
   {% endif %}
 </div>
 {% endblock %}
-

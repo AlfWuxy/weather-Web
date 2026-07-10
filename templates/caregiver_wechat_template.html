@@ -21,9 +21,15 @@
             <h5 class="mb-0">可直接转发的文本</h5>
         </div>
         <div class="card-body">
+            {% if not weather_available %}
+            <div class="alert alert-warning" role="status">
+                <strong>等待真实天气</strong><br>
+                实时和风天气或关键输入暂不可用，下面只保留行动链接与短码说明，不包含热风险等级或天气行动建议。
+            </div>
+            {% endif %}
             <textarea class="form-control" rows="10" id="wechatMessage" readonly>{{ message }}</textarea>
             <button class="btn btn-primary mt-3" type="button" id="copyMessage">
-                <i class="bi bi-clipboard"></i> 复制文本
+                <i class="bi bi-clipboard"></i> {% if weather_available %}复制文本{% else %}复制行动链接说明{% endif %}
             </button>
             <div class="text-muted small mt-2">建议提醒对方进入链接并输入短码完成确认。</div>
         </div>

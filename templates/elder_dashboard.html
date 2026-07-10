@@ -1,119 +1,140 @@
 {% extends "base.html" %}
+{% from "partials/metric_info.html" import metric_info with context %}
 
-{% block title %}极简模式 - 天气健康风险预测系统{% endblock %}
+{% block title %}老人模式 · 宜老天气通{% endblock %}
+{% block body_class %}elder-focus-page{% endblock %}
 
 {% block content %}
-<div class="container py-3">
-    <div class="row mb-3">
-        <div class="col-12">
-            <h2 class="mb-1"><i class="bi bi-heart"></i> 今日健康小结</h2>
-            <p class="text-muted mb-0">简单、清晰、好操作</p>
-        </div>
-    </div>
+{% set weather_available = weather and weather_available %}
+{% set risk_score = heat_result.risk_score if heat_result else none %}
+{% set risk_level = heat_result.risk_level if heat_result else none %}
+{% set action_items = elder_actions if elder_actions else heat_actions %}
+{% set elder_risk_context = {
+    '今日分数': risk_score if risk_score is not none else '--',
+    '体感热': ((heat_result.heat_index|string) ~ '°C') if heat_result and heat_result.heat_index is not none else '--',
+    '夜间最低温': ((heat_result.night_min|string) ~ '°C') if heat_result and heat_result.night_min is not none else '--',
+    '连续高温': ((heat_result.consecutive_hot_days|string) ~ '天') if heat_result and heat_result.consecutive_hot_days is not none else '0天'
+} %}
 
-    <div class="row g-3">
-        <div class="col-lg-6">
-            <div class="card shadow-sm elder-card">
-                <div class="card-header bg-primary text-white">
-                    <h5 class="mb-0"><i class="bi bi-cloud-sun"></i> 今日天气</h5>
-                </div>
-                <div class="card-body">
-                    {% if weather %}
-                        <div class="display-4 fw-bold">{{ weather.temperature|round(1) }}°C</div>
-                        <div class="fs-5 text-muted">{{ weather.weather_condition }}</div>
-                        <div class="mt-3">
-                            <div>湿度：{{ weather.humidity|round(0) }}%</div>
-                            <div>AQI：{{ weather.aqi or '--' }}</div>
-                        </div>
-                        {% if weather.is_extreme %}
-                            <div class="alert alert-danger mt-3 mb-0">
-                                极端天气：{{ weather.extreme_type }}
-                            </div>
-                        {% endif %}
-                    {% else %}
-                        <div class="text-muted">暂无天气数据</div>
-                    {% endif %}
-                </div>
-            </div>
+<div class="yl-elder-shell">
+    <section class="yl-elder-hero yl-fade-up" aria-label="今日健康小结">
+        <div class="yl-elder-status">
+            <span>今天</span>
+            <h1>
+                {% if risk_level in ['high', 'extreme'] %}
+                    先别急着出门
+                {% elif risk_level == 'medium' %}
+                    出门前先准备好
+                {% elif not weather_available %}
+                    等一下天气数据
+                {% else %}
+                    可以按平常来
+                {% endif %}
+            </h1>
+            <p>
+                {% if weather_available %}
+                    {{ weather.weather_condition if weather.weather_condition else '天气未知' }},
+                    当前 {{ weather.temperature|round(0) if weather.temperature is not none else '--' }}°C,
+                    {{ heat_risk_label or '风险待计算' }}。
+                {% else %}
+                    实时和风天气或关键输入暂不可用，先按平常照护节奏来，页面不会显示默认温度或风险结论。
+                {% endif %}
+            </p>
         </div>
-        <div class="col-lg-6">
-            <div class="card shadow-sm elder-card">
-                <div class="card-header bg-success text-white">
-                    <h5 class="mb-0"><i class="bi bi-activity"></i> 今日风险</h5>
-                </div>
-                <div class="card-body">
-                    {% if assessment %}
-                        {% set level = assessment.risk_level %}
-                        {% if level == '高风险' %}
-                            <span class="badge bg-danger fs-4 px-3 py-2">高风险</span>
-                        {% elif level == '中风险' %}
-                            <span class="badge bg-warning fs-4 px-3 py-2">中风险</span>
-                        {% else %}
-                            <span class="badge bg-success fs-4 px-3 py-2">低风险</span>
-                        {% endif %}
-                        <div class="text-muted mt-2">评估时间：{{ assessment.assessment_date.strftime('%Y-%m-%d %H:%M') }}</div>
-                    {% else %}
-                        <div class="text-muted">还没有评估记录</div>
-                        <a href="{{ url_for('user.health_assessment') }}" class="btn btn-success mt-3">开始评估</a>
-                    {% endif %}
-                </div>
-            </div>
-        </div>
-    </div>
 
-    <div class="row g-3 mt-1">
-        <div class="col-lg-6">
-            <div class="card shadow-sm elder-card">
-                <div class="card-header bg-info text-white">
-                    <h5 class="mb-0"><i class="bi bi-lightbulb"></i> 今天怎么做</h5>
-                </div>
-                <div class="card-body">
-                    {% if elder_actions %}
-                        <ul class="mb-0">
-                            {% for action in elder_actions %}
-                                <li class="mb-2">{{ action }}</li>
-                            {% endfor %}
-                        </ul>
-                    {% else %}
-                        <p class="mb-0 text-muted">保持规律作息，注意补水，外出看天气。</p>
-                    {% endif %}
-                </div>
-            </div>
+        <div class="yl-elder-risk-card">
+            <span>今日风险 {{ metric_info('heat_risk_score', elder_risk_context, label='查看今日风险怎么算') }}</span>
+            <strong>
+                {% if risk_score is not none %}
+                    {{ risk_score|round(0) }}
+                {% elif assessment and weather_available %}
+                    {{ assessment.risk_level }}
+                {% else %}
+                    --
+                {% endif %}
+            </strong>
+            <em>{% if weather_available %}{{ heat_risk_label or '暂无评估' }}{% else %}等待真实天气{% endif %}</em>
         </div>
-        <div class="col-lg-6">
-            <div class="card shadow-sm elder-card">
-                <div class="card-header bg-warning">
-                    <h5 class="mb-0"><i class="bi bi-bell"></i> 什么时候要找人</h5>
-                </div>
-                <div class="card-body">
-                    <p class="mb-0">感到明显不适或无法自行处理时，请及时联系家人/社区求助。</p>
-                    <div class="small text-muted mt-2">提示仅供行动参考，不替代专业判断。</div>
-                </div>
-            </div>
-        </div>
-    </div>
+    </section>
 
-    <div class="row mt-3">
-        <div class="col-12">
-            <div class="card shadow-sm elder-card">
-                <div class="card-body d-flex flex-column flex-md-row align-items-md-center justify-content-between">
-                    <div class="mb-3 mb-md-0">
-                        <h5 class="mb-1"><i class="bi bi-telephone"></i> 紧急联系</h5>
-                        {% if emergency_contact %}
-                            <div class="text-muted">联系人：{{ emergency_contact.name }}</div>
-                            <div class="text-muted">电话：{{ emergency_contact.phone }}</div>
-                        {% else %}
-                            <div class="text-muted">还没有设置紧急联系人</div>
-                        {% endif %}
+    <section class="yl-elder-actions yl-fade-up yl-fade-up-d1" aria-label="今天怎么做">
+        <div class="yl-elder-section-head">
+            <h2>现在做这几件事</h2>
+            <p>不用看复杂解释,照着做就可以。</p>
+        </div>
+
+        <div class="yl-elder-action-list">
+            {% if not weather_available %}
+                <div class="yl-elder-action">
+                    <i class="bi bi-cloud-slash"></i>
+                    <div>
+                        <strong>先等天气更新</strong>
+                        <p>页面现在没有可靠的实时天气，暂不生成天气风险行动。</p>
                     </div>
-                    {% if emergency_contact %}
-                        <a class="btn btn-danger btn-lg" href="tel:{{ emergency_contact.phone }}">一键拨打</a>
-                    {% else %}
-                        <a class="btn btn-outline-secondary btn-lg disabled" href="#">一键拨打</a>
-                    {% endif %}
                 </div>
-            </div>
+            {% elif action_items %}
+                {% for action in action_items[:3] %}
+                    <div class="yl-elder-action">
+                        <i class="bi bi-check2"></i>
+                        <div>
+                            {% if action is mapping %}
+                                <strong>{{ action.title }}</strong>
+                                <p>{{ action.detail }}</p>
+                            {% else %}
+                                <strong>{{ action }}</strong>
+                                <p>完成后可以告诉家人一声。</p>
+                            {% endif %}
+                        </div>
+                    </div>
+                {% endfor %}
+            {% else %}
+                <div class="yl-elder-action">
+                    <i class="bi bi-cup-straw"></i>
+                    <div>
+                        <strong>身边放一杯水</strong>
+                        <p>少量多次喝,别等口渴。</p>
+                    </div>
+                </div>
+                <div class="yl-elder-action">
+                    <i class="bi bi-house-heart"></i>
+                    <div>
+                        <strong>先待在阴凉处</strong>
+                        <p>中午前后少去太阳下。</p>
+                    </div>
+                </div>
+                <div class="yl-elder-action">
+                    <i class="bi bi-telephone"></i>
+                    <div>
+                        <strong>不舒服就找人</strong>
+                        <p>头晕、胸闷、乏力时马上联系家人。</p>
+                    </div>
+                </div>
+            {% endif %}
         </div>
-    </div>
+    </section>
+
+    <section class="yl-elder-help-grid yl-fade-up yl-fade-up-d2">
+        <div class="yl-elder-help-card">
+            <h2>什么时候要找人</h2>
+            <p>明显头晕、胸闷、心慌、站不稳,先坐下休息,马上联系家人或社区。</p>
+        </div>
+
+        <div class="yl-elder-call-card">
+            <h2>一键联系</h2>
+            {% if emergency_contact %}
+                <p>{{ emergency_contact.name }}</p>
+                <a class="btn btn-danger btn-lg" href="tel:{{ emergency_contact.phone }}">
+                    <i class="bi bi-telephone-fill"></i> 现在拨打
+                </a>
+            {% else %}
+                <p>还没有设置紧急联系人。</p>
+                <a class="btn btn-outline-secondary btn-lg" href="{{ url_for('health.family_members') }}">
+                    去设置联系人
+                </a>
+            {% endif %}
+        </div>
+    </section>
+
+    <p class="yl-elder-disclaimer">提示只用于日常行动参考,身体明显不舒服时请及时寻求专业帮助。</p>
 </div>
 {% endblock %}

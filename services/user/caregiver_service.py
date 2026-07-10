@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """Caregiver-related routes and helpers."""
 import logging
+import math
 from datetime import datetime, timedelta
 
 from flask import current_app, flash, redirect, render_template, request, session, url_for
@@ -10,7 +11,12 @@ from core.db_models import Community, DailyStatus, Debrief, FamilyMember, Pair, 
 from core.extensions import db
 from core.guest import is_guest_user
 from core.time_utils import today_local, utcnow, local_datetime_to_utc
-from core.weather import get_consecutive_hot_days, get_weather_with_cache, is_demo_mode, normalize_location_name
+from core.weather import (
+    get_consecutive_hot_days,
+    get_weather_with_cache,
+    is_qweather_online_weather,
+    normalize_location_name,
+)
 from core.usage import log_usage_event
 from services.heat_action_service import HeatActionService
 from services.location_resolver import resolve_location
@@ -26,6 +32,7 @@ from ._common import (
     RELAY_STAGE_LABELS,
     RELAY_STAGE_ORDER,
     _action_plan,
+    _build_pair_action_link,
     _create_pair_link_record,
     _create_pair_record,
     _relay_stage_rank,
@@ -36,11 +43,66 @@ from ._helpers import (
     _build_caregiver_message,
     _build_community_snapshot,
     _build_recent_series,
-    _ensure_demo_statuses,
     _refresh_community_daily
 )
 
 logger = logging.getLogger(__name__)
+
+_REQUIRED_HEAT_WEATHER_FIELDS = (
+    'temperature',
+    'temperature_max',
+    'temperature_min',
+    'humidity',
+)
+_WEATHER_WAITING_LABEL = '等待真实天气'
+
+
+def _heat_weather_available(weather_data):
+    """仅允许字段完整的真实和风天气进入热风险计算。"""
+    if not is_qweather_online_weather(weather_data):
+        return False
+    for field in _REQUIRED_HEAT_WEATHER_FIELDS:
+        try:
+            value = float(weather_data.get(field))
+        except (AttributeError, TypeError, ValueError):
+            return False
+        if not math.isfinite(value):
+            return False
+    return True
+
+
+def _build_weather_waiting_message(pair, action_link):
+    """天气不可用时只保留行动入口，不生成风险结论或风险建议。"""
+    location = (pair.location_query or pair.community_code or '').strip()
+    lines = [
+        '【天气数据待更新】',
+        '实时和风天气或关键输入暂不可用，当前不生成热风险等级或天气行动建议。',
+    ]
+    if location:
+        lines.append(f'地点：{location}')
+    lines.append(f'（可选）行动页：{action_link}  短码：{pair.short_code}')
+    return '\n'.join(lines)
+
+
+def _load_heat_risk(location):
+    """读取真实天气并计算热风险；任一步失败都返回不可用状态。"""
+    weather_data, _ = get_weather_with_cache(location)
+    if not _heat_weather_available(weather_data):
+        return weather_data, None, None
+    try:
+        consecutive_hot_days = get_consecutive_hot_days(
+            location,
+            today_max=weather_data.get('temperature_max')
+        )
+        heat_result = HeatActionService().calculate_heat_risk(
+            weather_data,
+            consecutive_hot_days=consecutive_hot_days
+        )
+    except Exception:
+        logger.warning("真实天气热风险计算失败，已停止输出结论", exc_info=True)
+        return weather_data, None, None
+    risk_label = HEAT_RISK_LABELS.get(heat_result['risk_level'], '低风险')
+    return weather_data, heat_result, risk_label
 
 
 def _create_pair_link(community_code):
@@ -116,14 +178,6 @@ def _build_pair_management_context(caregiver_mode=False):
     except Exception:
         db.session.rollback()
         logger.warning("加载家庭成员失败，已降级为空列表", exc_info=True)
-    if is_demo_mode() and not pairs:
-        demo_community = normalize_location_name(getattr(current_user, 'community', None))
-        if not demo_community and communities:
-            demo_community = communities[0].name
-        if demo_community:
-            _ensure_demo_statuses(demo_community, status_date, caregiver_id=current_user.id)
-            pairs = Pair.query.filter_by(caregiver_id=current_user.id).order_by(Pair.created_at.desc()).all()
-
     pair_ids = [pair.id for pair in pairs]
     status_map = {}
     if pair_ids:
@@ -135,11 +189,7 @@ def _build_pair_management_context(caregiver_mode=False):
         status_map = {status.pair_id: status for status in statuses}
     created_action_link = None
     if created_pair:
-        created_action_link = url_for(
-            'public.elder_entry',
-            short_code=created_pair.short_code,
-            _external=True
-        )
+        created_action_link = _build_pair_action_link(created_pair)
 
     # Resolve per-location once (supports arbitrary CN input via AMap)
     location_meta = {}
@@ -190,25 +240,30 @@ def _build_pair_management_context(caregiver_mode=False):
         display_name = resolved.get('display_name') or label or code
         weather_data = weather_by_code.get(code, {}) if code else {}
 
-        # Heat risk label (legacy) for dashboard continuity
-        risk_label = status.risk_level if status and status.risk_level else '低风险'
-        try:
-            consecutive_hot_days = get_consecutive_hot_days(
-                code or normalize_location_name(pair.community_code),
-                today_max=weather_data.get('temperature_max')
-            )
-            heat_result = heat_service.calculate_heat_risk(
-                weather_data,
-                consecutive_hot_days=consecutive_hot_days
-            )
-            risk_label = HEAT_RISK_LABELS.get(heat_result['risk_level'], risk_label)
-        except Exception:
-            logger.debug("热风险计算失败，使用默认风险标签", exc_info=True)
+        weather_available = _heat_weather_available(weather_data)
+        risk_label = _WEATHER_WAITING_LABEL
+        heat_result = {}
+        if weather_available:
+            try:
+                consecutive_hot_days = get_consecutive_hot_days(
+                    code or normalize_location_name(pair.community_code),
+                    today_max=weather_data.get('temperature_max')
+                )
+                heat_result = heat_service.calculate_heat_risk(
+                    weather_data,
+                    consecutive_hot_days=consecutive_hot_days
+                )
+                risk_label = HEAT_RISK_LABELS.get(heat_result['risk_level'], '低风险')
+            except Exception:
+                weather_available = False
+                heat_result = {}
+                risk_label = _WEATHER_WAITING_LABEL
+                logger.warning("真实天气热风险计算失败，已停止输出结论", exc_info=True)
 
         # Pilot alert label (heat/cold threshold)
         alert_kind = None
-        alert_label = '暂无预警'
-        try:
+        alert_label = '天气待更新'
+        if weather_available:
             tmax = weather_data.get('temperature_max')
             tmin = weather_data.get('temperature_min')
             if tmax is not None and float(tmax) >= 35:
@@ -217,10 +272,8 @@ def _build_pair_management_context(caregiver_mode=False):
             elif tmin is not None and float(tmin) <= 5:
                 alert_kind = 'cold'
                 alert_label = f'寒潮（{float(tmin):.0f}°C）'
-        except Exception:
-            alert_kind = None
-            alert_label = '暂无预警'
-            logger.debug("预警标签计算失败，已降级为暂无预警", exc_info=True)
+            else:
+                alert_label = '暂无预警'
 
         confirmed = bool(status and status.confirmed_at)
         is_overdue = bool(now >= deadline and not confirmed)
@@ -229,23 +282,40 @@ def _build_pair_management_context(caregiver_mode=False):
         if relay_stage and relay_stage != 'none':
             relay_stage_label = RELAY_STAGE_LABELS.get(relay_stage, relay_stage)
         member = member_map.get(pair.member_id) if getattr(pair, 'member_id', None) else None
+        action_link = _build_pair_action_link(pair)
+        reminder_message = (
+            _build_caregiver_message(
+                pair,
+                alert_kind=alert_kind,
+                weather_data=weather_data,
+                member=member,
+                action_link=action_link
+            )
+            if weather_available
+            else _build_weather_waiting_message(pair, action_link)
+        )
         pair_cards.append({
             'pair': pair,
             'status': status,
             'risk_label': risk_label,
+            'heat_result': heat_result,
+            'weather_available': weather_available,
             'alert_kind': alert_kind,
             'alert_label': alert_label,
             'location_display': display_name,
-            'temperature_max': weather_data.get('temperature_max'),
-            'temperature_min': weather_data.get('temperature_min'),
+            'temperature_max': weather_data.get('temperature_max') if weather_available else None,
+            'temperature_min': weather_data.get('temperature_min') if weather_available else None,
             'elder_name': (member.name if member else None),
-            'action_link': url_for('public.elder_entry', short_code=pair.short_code, _external=True),
-            'reminder_message': _build_caregiver_message(pair, alert_kind=alert_kind, weather_data=weather_data, member=member),
+            'action_link': action_link,
+            'reminder_message': reminder_message,
             'help_flag': bool(status and status.help_flag),
             'is_overdue': is_overdue,
             'relay_stage': relay_stage,
             'relay_stage_label': relay_stage_label
         })
+
+    if pair_cards or created_action_link:
+        db.session.commit()
 
     push_channel_ready = bool((current_app.config.get('WXPUSHER_APP_TOKEN') or '').strip())
     context = {
@@ -377,9 +447,12 @@ def caregiver_pair_detail(pair_id):
     recent_series = _build_recent_series(pair.id, days=7)
     debrief_today = Debrief.query.filter_by(pair_id=pair.id, date=status_date).first()
     community_snapshot = _build_community_snapshot(pair.community_code, status_date)
+    action_link = _build_pair_action_link(pair)
+    db.session.commit()
     wechat_template_url = url_for(
         'user.caregiver_wechat_template',
         short_code=pair.short_code,
+        token=action_link.rsplit('/e/', 1)[-1].split('?', 1)[0] if '/e/' in action_link else None,
         community_code=pair.community_code
     )
     actions_today = safe_json_loads(status_today.caregiver_actions, []) if status_today else []
@@ -418,18 +491,11 @@ def caregiver_action_log(pair_id):
 
     status_date = today_local()
     status = DailyStatus.query.filter_by(pair_id=pair.id, status_date=status_date).first()
+    weather_waiting = False
     if not status:
         location = normalize_location_name(pair.location_query or pair.community_code)
-        weather_data, _ = get_weather_with_cache(location)
-        consecutive_hot_days = get_consecutive_hot_days(
-            location,
-            today_max=weather_data.get('temperature_max')
-        )
-        heat_result = HeatActionService().calculate_heat_risk(
-            weather_data,
-            consecutive_hot_days=consecutive_hot_days
-        )
-        risk_label = HEAT_RISK_LABELS.get(heat_result['risk_level'], '低风险')
+        _weather_data, _heat_result, risk_label = _load_heat_risk(location)
+        weather_waiting = risk_label is None
         status = DailyStatus(
             pair_id=pair.id,
             status_date=status_date,
@@ -452,7 +518,10 @@ def caregiver_action_log(pair_id):
         source='web',
         meta={'caregiver_actions_count': len(actions), 'has_note': bool(note)},
     )
-    flash('行动记录已保存。', 'success')
+    if weather_waiting:
+        flash('行动记录已保存；实时和风天气不可用，今日风险等级未写入。', 'warning')
+    else:
+        flash('行动记录已保存。', 'success')
     return redirect(url_for('user.caregiver_pair_detail', pair_id=pair.id))
 
 
@@ -464,6 +533,16 @@ def caregiver_wechat_template():
     short_code = sanitize_input(request.args.get('short_code'), max_length=12)
     token = sanitize_input(request.args.get('token'), max_length=200)
     community_code = sanitize_input(request.args.get('community_code'), max_length=100)
+
+    if not token and short_code:
+        pair_query = Pair.query.filter_by(short_code=short_code, status='active')
+        if getattr(current_user, 'role', None) != 'admin':
+            pair_query = pair_query.filter_by(caregiver_id=current_user.id)
+        pair = pair_query.first()
+        if pair:
+            action_link = _build_pair_action_link(pair)
+            db.session.commit()
+            token = action_link.rsplit('/e/', 1)[-1].split('?', 1)[0] if '/e/' in action_link else None
 
     if token:
         action_link = url_for(
@@ -480,35 +559,36 @@ def caregiver_wechat_template():
         )
 
     risk_label = None
-    actions = _action_plan('低风险')
+    actions = []
     weather_data = None
+    weather_available = False
     if community_code:
         location = normalize_location_name(community_code)
-        weather_data, _ = get_weather_with_cache(location)
-        consecutive_hot_days = get_consecutive_hot_days(
-            location,
-            today_max=weather_data.get('temperature_max')
-        )
-        heat_result = HeatActionService().calculate_heat_risk(
-            weather_data,
-            consecutive_hot_days=consecutive_hot_days
-        )
-        risk_label = HEAT_RISK_LABELS.get(heat_result['risk_level'], '低风险')
-        actions = _action_plan(risk_label)
+        weather_data, _heat_result, risk_label = _load_heat_risk(location)
+        weather_available = risk_label is not None
+        if weather_available:
+            actions = _action_plan(risk_label)
 
-    message_lines = [
-        '【高温行动提醒】',
-        f'行动链接：{action_link}',
-        f'短码：{short_code or "请填写"}'
-    ]
-    if community_code:
-        message_lines.insert(1, f'社区：{community_code}')
-    if risk_label:
+    if weather_available:
+        message_lines = [
+            '【高温行动提醒】',
+            f'行动链接：{action_link}',
+            f'短码：{short_code or "请填写"}'
+        ]
+        if community_code:
+            message_lines.insert(1, f'社区：{community_code}')
         message_lines.append(f'今日热风险：{risk_label}')
-    message_lines.append('行动建议（非医疗诊断/治疗）：')
-    for item in actions:
-        message_lines.append(f'- {item["title"]}：{item["detail"]}')
-    message_lines.append('如需帮助请在页面内点击“我需要帮助”。')
+        message_lines.append('行动建议（非医疗诊断/治疗）：')
+        for item in actions:
+            message_lines.append(f'- {item["title"]}：{item["detail"]}')
+        message_lines.append('如需帮助请在页面内点击“我需要帮助”。')
+    else:
+        message_lines = [
+            '【天气数据待更新】',
+            '实时和风天气或关键输入暂不可用，当前不生成热风险等级或天气行动建议。',
+            f'行动链接：{action_link}',
+            f'短码：{short_code or "请填写"}',
+        ]
 
     return render_template(
         'caregiver_wechat_template.html',
@@ -516,7 +596,8 @@ def caregiver_wechat_template():
         action_link=action_link,
         short_code=short_code,
         community_code=community_code,
-        weather=weather_data
+        weather=weather_data,
+        weather_available=weather_available,
     )
 
 
@@ -535,16 +616,7 @@ def _handle_pair_escalate(pair_id, redirect_url, target_stage=None):
 
     if not status:
         location = normalize_location_name(pair.location_query or pair.community_code)
-        weather_data, _ = get_weather_with_cache(location)
-        consecutive_hot_days = get_consecutive_hot_days(
-            location,
-            today_max=weather_data.get('temperature_max')
-        )
-        heat_result = HeatActionService().calculate_heat_risk(
-            weather_data,
-            consecutive_hot_days=consecutive_hot_days
-        )
-        risk_label = HEAT_RISK_LABELS.get(heat_result['risk_level'], '低风险')
+        _weather_data, _heat_result, risk_label = _load_heat_risk(location)
         status = DailyStatus(
             pair_id=pair.id,
             status_date=status_date,

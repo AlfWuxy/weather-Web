@@ -103,10 +103,20 @@
             <div class="card shadow-sm">
                 <div class="card-header bg-white">
                     <h5 class="mb-0"><i class="bi bi-graph-up"></i> 病例趋势分析</h5>
-                    <small class="text-muted">数据时间范围：2023-12 至 2025-01（共13个月）</small>
+                    <small class="text-muted">
+                        {% if month_labels %}
+                            数据时间范围：{{ month_labels[0] }} 至 {{ month_labels[-1] }}（{{ month_labels|length }} 个有记录月份）
+                        {% else %}
+                            暂无可展示的病例月份数据
+                        {% endif %}
+                    </small>
                 </div>
                 <div class="card-body">
-                    <canvas id="casesTrendChart" height="120"></canvas>
+                    {% if month_labels %}
+                        <canvas id="casesTrendChart" height="120"></canvas>
+                    {% else %}
+                        <p class="text-center text-muted my-5">暂无数据</p>
+                    {% endif %}
                 </div>
             </div>
         </div>
@@ -115,14 +125,24 @@
             <div class="card shadow-sm">
                 <div class="card-header bg-white">
                     <h5 class="mb-0"><i class="bi bi-pie-chart"></i> 疾病分类分布</h5>
-                    <small class="text-muted">共48种疾病分类</small>
+                    <small class="text-muted">
+                        {% if disease_labels %}
+                            当前展示病例数最多的 {{ disease_labels|length }} 个分类
+                        {% else %}
+                            暂无疾病分类数据
+                        {% endif %}
+                    </small>
                 </div>
                 <div class="card-body">
-                    <div class="d-flex justify-content-center">
-                        <div style="max-width: 600px; width: 100%;">
-                            <canvas id="diseaseDistChart" height="250"></canvas>
+                    {% if disease_labels %}
+                        <div class="d-flex justify-content-center">
+                            <div style="max-width: 600px; width: 100%;">
+                                <canvas id="diseaseDistChart" height="250"></canvas>
+                            </div>
                         </div>
-                    </div>
+                    {% else %}
+                        <p class="text-center text-muted my-5">暂无数据</p>
+                    {% endif %}
                 </div>
             </div>
         </div>

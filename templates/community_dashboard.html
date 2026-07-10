@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "partials/metric_info.html" import metric_info with context %}
 {% set needs_chartjs = true %}
 
 {% block title %}社区工作台 - 天气健康风险预测系统{% endblock %}
@@ -35,8 +36,19 @@
                             </div>
                         </div>
                         <div class="card-body">
+                            {% if not item.weather_available %}
+                            <div class="alert alert-warning py-2 px-3" role="status">
+                                <strong>等待真实天气</strong>：实时和风天气或关键输入暂不可用，当前不生成社区热风险等级、群发模板或公共传播包。
+                            </div>
+                            {% endif %}
                             <div class="row g-3">
                                 <div class="col-lg-4">
+                                    {% set action_context = {
+                                        '有效监测对象': item.total_people,
+                                        '当天已确认': item.confirmed_total,
+                                        '当天已升级': item.escalation_count,
+                                        '当天已求助': item.help_count
+                                    } %}
                                     <div class="mb-2">
                                         <span class="badge bg-success">低 {{ item.risk_counts['低风险'] }}</span>
                                         <span class="badge bg-warning text-dark">中 {{ item.risk_counts['中风险'] }}</span>
@@ -46,8 +58,8 @@
                                     <div class="text-muted small mb-2">{{ item.outreach_summary }}</div>
                                     <div class="mb-3">
                                         <div class="d-flex justify-content-between small">
-                                            <span>确认覆盖率</span>
-                                            <span>{{ (item.confirm_rate * 100)|round(1) }}%</span>
+                                            <span>确认覆盖率 {{ metric_info('action_confirmation_rate', action_context) }}</span>
+                                            <span>{% if item.total_people %}{{ (item.confirm_rate * 100)|round(1) }}%{% else %}--{% endif %}</span>
                                         </div>
                                         <div class="progress" style="height: 6px;">
                                             <div class="progress-bar bg-success" style="width: {{ (item.confirm_rate * 100)|round(1) }}%"></div>
@@ -55,8 +67,8 @@
                                     </div>
                                     <div class="mb-3">
                                         <div class="d-flex justify-content-between small">
-                                            <span>升级触发率</span>
-                                            <span>{{ (item.escalation_rate * 100)|round(1) }}%</span>
+                                            <span>升级触发率 {{ metric_info('action_escalation_rate', action_context) }}</span>
+                                            <span>{% if item.total_people %}{{ (item.escalation_rate * 100)|round(1) }}%{% else %}--{% endif %}</span>
                                         </div>
                                         <div class="progress" style="height: 6px;">
                                             <div class="progress-bar bg-warning" style="width: {{ (item.escalation_rate * 100)|round(1) }}%"></div>
@@ -64,8 +76,8 @@
                                     </div>
                                     <div class="mb-3">
                                         <div class="d-flex justify-content-between small">
-                                            <span>求助率</span>
-                                            <span>{{ (item.help_rate * 100)|round(1) }}%</span>
+                                            <span>求助率 {{ metric_info('action_help_rate', action_context) }}</span>
+                                            <span>{% if item.total_people %}{{ (item.help_rate * 100)|round(1) }}%{% else %}--{% endif %}</span>
                                         </div>
                                         <div class="progress" style="height: 6px;">
                                             <div class="progress-bar bg-danger" style="width: {{ (item.help_rate * 100)|round(1) }}%"></div>
@@ -98,10 +110,14 @@
                                         <div class="text-muted small mb-3">暂无建议。</div>
                                     {% endif %}
                                     <h6 class="mb-2">群发模板复制</h6>
+                                    {% if item.weather_available %}
                                     <textarea class="form-control mb-2" rows="5" id="groupMessage-{{ loop.index }}" readonly>{{ item.group_message }}</textarea>
                                     <button class="btn btn-outline-primary btn-sm copy-community" data-target="groupMessage-{{ loop.index }}">
                                         <i class="bi bi-clipboard"></i> 复制群发模板
                                     </button>
+                                    {% else %}
+                                    <div class="text-muted small">真实天气恢复后才会生成可复制的风险文案。</div>
+                                    {% endif %}
                                 </div>
                             </div>
                         </div>

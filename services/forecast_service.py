@@ -146,9 +146,10 @@ class ForecastService:
 
     def _safe_float(self, value, default=None):
         try:
-            return float(value)
+            parsed = float(value)
         except Exception:
             return default
+        return parsed if np.isfinite(parsed) else default
 
     def _normalize_forecast_entry(self, entry):
         """
@@ -231,19 +232,70 @@ class ForecastService:
         base['source'] = str(entry.get('data_source') or '')
         return base
 
-    def _composite_exposure_risk(self, temperature, temp_min, humidity, pm25=None, aqi=None):
+    def _composite_exposure_risk(
+        self,
+        temperature,
+        temp_min,
+        humidity,
+        pm25=None,
+        aqi=None,
+        *,
+        temp_min_fallback=None,
+        pm25_origin=None,
+        aqi_origin=None,
+    ):
         """
         复合暴露风险：热 + PM2.5 + 湿度 + 热夜（学术实践增强版简化实现）。
         输出 0-100 及分项贡献。
         """
-        temp = self._safe_float(temperature, 20.0) or 20.0
-        tmin = self._safe_float(temp_min, temp - 4.0) or (temp - 4.0)
-        hum = self._safe_float(humidity, 60.0) or 60.0
+        temp_input = self._safe_float(temperature, None)
+        temp_imputed = temp_input is None
+        temp = 20.0 if temp_imputed else temp_input
+
+        tmin_input = self._safe_float(temp_min, None)
+        temp_min_imputed = tmin_input is None
+        if temp_min_imputed:
+            fallback_value = self._safe_float(temp_min_fallback, None)
+            if fallback_value is None:
+                tmin = temp - 4.0
+                temp_min_source = 'temperature_minus_4'
+            else:
+                tmin = fallback_value
+                temp_min_source = 'temperature_uncertainty_lower'
+        else:
+            tmin = tmin_input
+            temp_min_source = 'direct'
+
+        humidity_input = self._safe_float(humidity, None)
+        humidity_imputed = humidity_input is None
+        hum = 60.0 if humidity_imputed else humidity_input
+
         pm = self._safe_float(pm25, None)
+        aqi_used = None
+        aqi_imputed = False
         if pm is None:
-            aqi_v = self._safe_float(aqi, 50.0) or 50.0
+            aqi_input = self._safe_float(aqi, None)
+            aqi_imputed = aqi_input is None
+            aqi_v = 50.0 if aqi_imputed else aqi_input
             # AQI 到 PM2.5 的保守近似（用于无PM预报时）
             pm = max(5.0, min(220.0, aqi_v * 0.65))
+            if aqi_imputed:
+                pm25_source = 'default_aqi_50'
+                pm25_detail_source = 'default_aqi_50'
+            elif aqi_origin == 'current_weather_context':
+                pm25_source = 'current_observation_aqi_proxy'
+                pm25_detail_source = 'current_weather_context'
+            else:
+                pm25_source = 'aqi_proxy'
+                pm25_detail_source = 'day_aqi_input'
+            aqi_used = aqi_v
+        elif pm25_origin == 'current_weather_context':
+            # 未来日没有污染物预报时复用当前实况，必须与未来日直接预报区分。
+            pm25_source = 'current_observation_reuse'
+            pm25_detail_source = 'current_weather_context'
+        else:
+            pm25_source = 'direct'
+            pm25_detail_source = pm25_origin or 'forecast_input'
 
         heat_score = float(np.clip((temp - 28.0) * 6.0, 0.0, 100.0))
         pollution_score = float(np.clip((pm - 35.0) * 1.8, 0.0, 100.0))
@@ -258,23 +310,27 @@ class ForecastService:
         if hot_night_score >= 70 and pollution_score >= 35:
             synergy_bonus += 4.0
 
-        score = (
+        pre_clip_score = (
             0.34 * heat_score
             + 0.28 * pollution_score
             + 0.18 * humidity_score
             + 0.20 * hot_night_score
             + synergy_bonus
         )
-        score = float(np.clip(score, 0.0, 100.0))
-        if score >= 70:
+        final_score = float(np.clip(pre_clip_score, 0.0, 100.0))
+        if final_score >= 70:
             level = '高'
-        elif score >= 45:
+        elif final_score >= 45:
             level = '中'
         else:
             level = '低'
 
         return {
-            'score': round(score, 1),
+            # score 保留为兼容字段，final_score 明确表示经过 0-100 限幅后的结果。
+            'score': round(final_score, 1),
+            'pre_clip_score': round(pre_clip_score, 1),
+            'final_score': round(final_score, 1),
+            'synergy_bonus': round(synergy_bonus, 1),
             'level': level,
             'components': {
                 'heat': round(heat_score, 1),
@@ -283,7 +339,34 @@ class ForecastService:
                 'hot_night': round(hot_night_score, 1)
             },
             'hot_night': bool(tmin >= 22),
-            'pm25_proxy': round(pm, 1)
+            # pm25_proxy 保留旧接口语义；来源请以 pm25_source 为准。
+            'pm25_proxy': round(pm, 1),
+            'pm25_source': pm25_source,
+            'inputs': {
+                'temperature': {
+                    'used_value': round(temp, 1),
+                    'imputed': temp_imputed,
+                    'source': 'default_20' if temp_imputed else 'corrected_forecast',
+                },
+                'temp_min': {
+                    'used_value': round(tmin, 1),
+                    'imputed': temp_min_imputed,
+                    'source': temp_min_source,
+                },
+                'humidity': {
+                    'used_value': round(hum, 1),
+                    'imputed': humidity_imputed,
+                    'source': 'default_60' if humidity_imputed else 'forecast_input',
+                },
+                'pm25': {
+                    'used_value': round(pm, 1),
+                    'imputed': pm25_source != 'direct',
+                    'source': pm25_source,
+                    'detail_source': pm25_detail_source,
+                    'aqi_used': round(aqi_used, 1) if aqi_used is not None else None,
+                    'aqi_imputed': aqi_imputed,
+                },
+            },
         }
 
     def _cap_semantics_for_forecast(self, prob_high_percent, composite_level):
@@ -379,14 +462,17 @@ class ForecastService:
         - 提前期越长，分数越低
         - 模型成员数越多，分数略有提升（信息增益）
         """
+        spread = max(0.0, float(model_spread)) if model_spread is not None else 0.0
+        lead_penalty = max(0, int(lead_day) - 1) * 3.0
+        model_bonus = min(8.0, max(0, int(model_count) - 1) * 2.0)
         if external_score is not None:
-            score = max(0.0, min(100.0, float(external_score)))
+            branch = 'external'
+            raw_score = float(external_score)
+            score = max(0.0, min(100.0, raw_score))
         else:
-            spread = max(0.0, float(model_spread)) if model_spread is not None else 0.0
-            lead_penalty = max(0, int(lead_day) - 1) * 3.0
-            model_bonus = min(8.0, max(0, int(model_count) - 1) * 2.0)
-            score = 100.0 - spread * 16.0 - lead_penalty + model_bonus
-            score = max(5.0, min(99.0, score))
+            branch = 'derived'
+            raw_score = 100.0 - spread * 16.0 - lead_penalty + model_bonus
+            score = max(5.0, min(99.0, raw_score))
 
         if score >= 75:
             label = '高'
@@ -394,7 +480,21 @@ class ForecastService:
             label = '中'
         else:
             label = '低'
-        return {'score': round(score, 1), 'label': label}
+        return {
+            'score': round(score, 1),
+            'label': label,
+            'branch': branch,
+            'raw_score': round(raw_score, 1),
+            'inputs': {
+                'external_score': round(float(external_score), 1) if external_score is not None else None,
+                'lead_day': int(lead_day),
+                'model_spread': round(spread, 3),
+                'model_count': max(1, int(model_count)),
+                # 外部分支不会应用下面两个调整，保留输入便于解释分支差异。
+                'lead_penalty': round(lead_penalty, 1) if branch == 'derived' else None,
+                'model_bonus': round(model_bonus, 1) if branch == 'derived' else None,
+            },
+        }
 
     def _build_impact_likelihood_matrix(self, forecasts):
         """
@@ -597,8 +697,9 @@ class ForecastService:
             elif dow == 0:  # 周一略高
                 dow_factor = 1.1
         
-        # 点预测
+        # 点预测。保留限幅前数值，概率计算始终使用这一原始均值。
         point_estimate = baseline * rr * dow_factor
+        raw_point_estimate = float(point_estimate)
         
         # 预测区间（基于Negative Binomial分布的不确定性）
         # 使用过度离散参数 theta
@@ -609,12 +710,15 @@ class ForecastService:
         upper_bound = point_estimate + 1.96 * std_estimate
         
         # 超阈值概率 P(Y >= P90)
-        if self.visit_threshold_p90:
+        visit_threshold_p90 = self._safe_float(self.visit_threshold_p90, None)
+        if visit_threshold_p90 is not None and visit_threshold_p90 > 0:
             # 使用正态近似
-            z = (self.visit_threshold_p90 - point_estimate) / std_estimate if std_estimate > 0 else 0
+            z = (visit_threshold_p90 - raw_point_estimate) / std_estimate if std_estimate > 0 else 0
             prob_high = 1 - stats.norm.cdf(z)
+            probability_method = 'normal_approximation'
         else:
             prob_high = 0.1
+            probability_method = 'fallback_0.1'
         
         # --- Safety guardrail: clamp implausible outliers (pilot reliability) ---
         max_cap = None
@@ -637,9 +741,13 @@ class ForecastService:
                 v = max_cap
             return v
 
-        point_estimate = _clamp(point_estimate)
+        point_estimate = _clamp(raw_point_estimate)
         lower_bound = _clamp(lower_bound)
         upper_bound = _clamp(upper_bound)
+        guardrail_applied = bool(
+            point_estimate is not None
+            and abs(float(point_estimate) - raw_point_estimate) > 1e-9
+        )
 
         p10 = _clamp(max(0, (point_estimate or 0) - 1.28 * std_estimate))
         p50 = _clamp(point_estimate)
@@ -656,6 +764,13 @@ class ForecastService:
             'probability_exceed_p75': round(min(1, prob_high * 1.5), 3),
             'rr': round(rr, 3),
             'baseline': round(baseline, 1),
+            'dow_factor': round(dow_factor, 3),
+            'raw_point_estimate': round(raw_point_estimate, 4),
+            'visit_threshold_p90': round(visit_threshold_p90, 4) if visit_threshold_p90 is not None else None,
+            'std_estimate': round(float(std_estimate), 4),
+            'probability_method': probability_method,
+            'guardrail_cap': round(max_cap, 1) if max_cap is not None else None,
+            'guardrail_applied': guardrail_applied,
             'temperature': temperature
         }
     
@@ -730,11 +845,16 @@ class ForecastService:
             humidity = selected_entry.get('humidity')
             temp_min = selected_entry.get('temp_min')
             pm25 = selected_entry.get('pm25')
+            pm25_origin = 'forecast_input' if pm25 is not None else None
             aqi = selected_entry.get('aqi')
+            aqi_origin = 'forecast_input' if aqi is not None else None
             if pm25 is None:
                 pm25 = context_pm25
-            if aqi is None:
+                if pm25 is not None:
+                    pm25_origin = 'current_weather_context'
+            if pm25 is None and aqi is None and context_aqi is not None:
                 aqi = context_aqi
+                aqi_origin = 'current_weather_context'
             if selected_entry.get('source'):
                 model_sources.add(selected_entry.get('source'))
             
@@ -802,10 +922,13 @@ class ForecastService:
             # 复合暴露风险（热 + PM2.5 + 湿度 + 热夜）
             composite_exposure = self._composite_exposure_risk(
                 corrected_temp,
-                temp_min=temp_min if temp_min is not None else uncertainty.get('lower'),
-                humidity=humidity if humidity is not None else 60.0,
+                temp_min=temp_min,
+                humidity=humidity,
                 pm25=pm25,
-                aqi=aqi
+                aqi=aqi,
+                temp_min_fallback=uncertainty.get('lower'),
+                pm25_origin=pm25_origin,
+                aqi_origin=aqi_origin,
             )
             composite_scores.append(self._safe_float(composite_exposure.get('score'), 0.0) or 0.0)
             if composite_exposure.get('level') == '高':

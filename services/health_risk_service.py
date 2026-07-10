@@ -137,17 +137,42 @@ class HealthRiskService:
         )
 
         # 模型融合 + 不确定性
-        model_paths = [
-            {'name': 'DLNM个体模型', 'score': round(model_a_score, 1), 'weight': 0.45},
-            {'name': '规则暴露模型', 'score': round(model_b_score, 1), 'weight': 0.30},
-            {'name': '社区脆弱性模型', 'score': round(model_c_score, 1), 'weight': 0.25},
-        ]
-        fused_score = (
+        path_fused_score = (
             model_a_score * 0.45
             + model_b_score * 0.30
             + model_c_score * 0.25
         )
-        fused_score = 0.85 * fused_score + 0.15 * chronic_overall_score
+        model_paths = [
+            {
+                'name': 'DLNM个体模型',
+                'score': round(model_a_score, 1),
+                'path_weight': 0.45,
+                'weight': 0.85 * 0.45,
+                'contribution': round(model_a_score * 0.85 * 0.45, 2),
+            },
+            {
+                'name': '规则暴露模型',
+                'score': round(model_b_score, 1),
+                'path_weight': 0.30,
+                'weight': 0.85 * 0.30,
+                'contribution': round(model_b_score * 0.85 * 0.30, 2),
+            },
+            {
+                'name': '社区脆弱性模型',
+                'score': round(model_c_score, 1),
+                'path_weight': 0.25,
+                'weight': 0.85 * 0.25,
+                'contribution': round(model_c_score * 0.85 * 0.25, 2),
+            },
+            {
+                'name': '慢病专项模型',
+                'score': round(chronic_overall_score, 1),
+                'path_weight': 1.0,
+                'weight': 0.15,
+                'contribution': round(chronic_overall_score * 0.15, 2),
+            },
+        ]
+        fused_score = 0.85 * path_fused_score + 0.15 * chronic_overall_score
         fused_score = self._clamp(fused_score, 0.0, 100.0)
 
         spread = pstdev([model_a_score, model_b_score, model_c_score]) if len(model_paths) > 1 else 0.0
@@ -167,9 +192,11 @@ class HealthRiskService:
             high_probability=high_risk_probability,
             uncertainty_label=uncertainty_label
         )
+        impact_input_score = 0.7 * fused_score + 0.3 * screening_score
+        likelihood_input_score = high_risk_probability * 100.0
         impact_likelihood = self._impact_likelihood_bucket(
-            impact_score=0.7 * fused_score + 0.3 * screening_score,
-            likelihood_score=high_risk_probability * 100.0,
+            impact_score=impact_input_score,
+            likelihood_score=likelihood_input_score,
             certainty=cap_semantics['certainty']
         )
 
@@ -228,6 +255,12 @@ class HealthRiskService:
             'cap_semantics': cap_semantics,
             'impact_likelihood': impact_likelihood,
             'model_paths': model_paths,
+            'fusion_breakdown': {
+                'path_fused_score': round(path_fused_score, 2),
+                'chronic_overall_score': round(chronic_overall_score, 2),
+                'final_score': round(fused_score, 1),
+                'contribution_total': round(sum(path['contribution'] for path in model_paths), 2),
+            },
             'component_scores': component_scores,
             'community_context': community_context,
             'screening': screening_data,
@@ -374,17 +407,33 @@ class HealthRiskService:
         return None
 
     def _build_community_context(self, community_name):
+        default_vi = 45.0
+        default_burden_score = 30.0
         if not community_name:
             return {
                 'community': '未设置',
-                'population': 0,
-                'elderly_ratio': 0.0,
-                'chronic_disease_ratio': 0.0,
-                'vulnerability_index': 40.0,
+                'population': None,
+                'elderly_ratio': None,
+                'chronic_disease_ratio': None,
+                'vulnerability_index': default_vi,
                 'vulnerability_level': '中',
-                'cases_30d': 0,
-                'burden_per_1000': 0.0,
-                'burden_score': 30.0
+                'cases_30d': None,
+                'burden_per_1000': None,
+                'burden_score': default_burden_score,
+                'source': 'user_profile_missing',
+                'source_label': '个人资料未设置社区',
+                'vulnerability_source': 'default_proxy',
+                'vulnerability_source_label': '默认中性 VI 代理值',
+                'population_source': 'missing',
+                'burden_source': 'unavailable_no_community',
+                'population_available': False,
+                'burden_available': False,
+                'imputed': True,
+                'imputed_fields': ['vulnerability_index', 'burden_score'],
+                'warnings': [
+                    '个人资料未设置社区，社区 VI 使用 45 分中性代理值。',
+                    '社区名缺失，30 日门诊记录与每千人负担无法计算，模型使用 30 分中性负担代理值。'
+                ]
             }
 
         profile_data = None
@@ -395,47 +444,103 @@ class HealthRiskService:
             profile_data = None
 
         community_row = Community.query.filter_by(name=community_name).first()
-        population = 0
-        elderly_ratio = 0.0
-        chronic_ratio = 0.0
-        vulnerability_index = 45.0
+        population = None
+        elderly_ratio = None
+        chronic_ratio = None
+        vulnerability_index = default_vi
         vulnerability_level = '中'
-
-        if profile_data:
-            population = int(self._to_float(profile_data.get('population'), 0.0))
-            elderly_ratio = self._clamp(self._to_float(profile_data.get('elderly_ratio'), 0.0), 0.0, 1.0)
-            chronic_ratio = self._clamp(self._to_float(profile_data.get('chronic_disease_ratio'), 0.0), 0.0, 1.0)
-            details = profile_data.get('vulnerability_details') or {}
-            if details:
-                vulnerability_index = self._clamp(
-                    self._to_float(details.get('vulnerability_index'), vulnerability_index),
-                    0.0,
-                    100.0
-                )
-                vulnerability_level = details.get('level') or details.get('risk_level') or vulnerability_level
+        source = 'unmatched_community'
+        source_label = '未匹配社区表或内置档案'
+        population_source = 'missing'
+        vulnerability_source = 'default_proxy'
+        vulnerability_source_label = '默认中性 VI 代理值'
+        imputed_fields = []
+        warnings = []
 
         if community_row:
-            population = population or int(self._to_float(community_row.population, 0.0))
-            elderly_ratio = elderly_ratio or self._clamp(self._to_float(community_row.elderly_ratio, 0.0), 0.0, 1.0)
-            chronic_ratio = chronic_ratio or self._clamp(self._to_float(community_row.chronic_disease_ratio, 0.0), 0.0, 1.0)
+            source = 'community_table'
+            source_label = '社区表实时记录'
+            raw_population = int(self._to_float(community_row.population, 0.0))
+            if raw_population > 0:
+                population = raw_population
+                population_source = 'community_table'
+            else:
+                imputed_fields.append('population')
+                warnings.append('社区表缺少有效人口，每千人负担无法计算。')
+            if community_row.elderly_ratio is not None:
+                elderly_ratio = self._clamp(self._to_float(community_row.elderly_ratio), 0.0, 1.0)
+            if community_row.chronic_disease_ratio is not None:
+                chronic_ratio = self._clamp(self._to_float(community_row.chronic_disease_ratio), 0.0, 1.0)
             if community_row.vulnerability_index is not None:
                 vulnerability_index = self._clamp(self._to_float(community_row.vulnerability_index), 0.0, 100.0)
-            if community_row.risk_level:
-                vulnerability_level = str(community_row.risk_level)
+                vulnerability_source = 'community_table'
+                vulnerability_source_label = '社区表 VI'
+                if community_row.risk_level:
+                    vulnerability_level = str(community_row.risk_level)
+            else:
+                imputed_fields.append('vulnerability_index')
+                warnings.append('社区表缺少 VI，当前使用 45 分中性代理值。')
+        elif profile_data:
+            source = 'bundled_profile'
+            source_label = '内置社区档案'
+            raw_population = int(self._to_float(profile_data.get('population'), 0.0))
+            if raw_population > 0:
+                population = raw_population
+                population_source = 'bundled_profile'
+            if profile_data.get('elderly_ratio') is not None:
+                elderly_ratio = self._clamp(self._to_float(profile_data.get('elderly_ratio')), 0.0, 1.0)
+            if profile_data.get('chronic_disease_ratio') is not None:
+                chronic_ratio = self._clamp(self._to_float(profile_data.get('chronic_disease_ratio')), 0.0, 1.0)
+            imputed_fields.append('vulnerability_index')
+            warnings.append('未匹配社区表 VI，当前使用 45 分中性代理值。')
+        else:
+            imputed_fields.extend(['population', 'vulnerability_index'])
+            warnings.extend([
+                '未匹配社区表或内置档案，社区 VI 使用 45 分中性代理值。',
+                '人口数缺失，每千人负担无法计算。'
+            ])
 
-        cases_30d, burden_per_1000 = self._community_recent_burden(community_name, population, window_days=30)
-        burden_score = self._clamp(burden_per_1000 * 8.0, 0.0, 100.0)
+        burden = self._community_recent_burden(community_name, population, window_days=30)
+        cases_30d = burden['cases']
+        burden_per_1000 = burden['per_1000']
+        burden_available = burden['available']
+        if burden_available:
+            burden_score = self._clamp(burden_per_1000 * 8.0, 0.0, 100.0)
+            burden_source = 'medical_records_30d_per_1000'
+        else:
+            burden_score = default_burden_score
+            burden_source = burden['reason']
+            imputed_fields.append('burden_score')
+            if burden['reason'] == 'unavailable_query_failed':
+                warnings.append('30 日门诊记录查询失败，模型使用 30 分中性负担代理值。')
+            else:
+                warnings.append('因人口数缺失，30 日每千人负担无法计算，模型使用 30 分中性负担代理值。')
+
+        # 保持字段顺序稳定，方便页面与导出结果审计。
+        imputed_fields = list(dict.fromkeys(imputed_fields))
+        warnings = list(dict.fromkeys(warnings))
 
         return {
             'community': community_name,
             'population': population,
-            'elderly_ratio': round(elderly_ratio, 4),
-            'chronic_disease_ratio': round(chronic_ratio, 4),
+            'elderly_ratio': round(elderly_ratio, 4) if elderly_ratio is not None else None,
+            'chronic_disease_ratio': round(chronic_ratio, 4) if chronic_ratio is not None else None,
             'vulnerability_index': round(vulnerability_index, 1),
             'vulnerability_level': vulnerability_level,
-            'cases_30d': int(cases_30d),
-            'burden_per_1000': round(burden_per_1000, 3),
-            'burden_score': round(burden_score, 1)
+            'cases_30d': int(cases_30d) if cases_30d is not None else None,
+            'burden_per_1000': round(burden_per_1000, 3) if burden_per_1000 is not None else None,
+            'burden_score': round(burden_score, 1),
+            'source': source,
+            'source_label': source_label,
+            'vulnerability_source': vulnerability_source,
+            'vulnerability_source_label': vulnerability_source_label,
+            'population_source': population_source,
+            'burden_source': burden_source,
+            'population_available': population is not None and population > 0,
+            'burden_available': burden_available,
+            'imputed': bool(imputed_fields),
+            'imputed_fields': imputed_fields,
+            'warnings': warnings
         }
 
     def _community_recent_burden(self, community_name, population, window_days=30):
@@ -445,12 +550,27 @@ class HealthRiskService:
             query = query.filter(MedicalRecord.visit_time >= start_time)
             cases = int(query.count())
         except Exception:
-            cases = 0
+            return {
+                'cases': None,
+                'per_1000': None,
+                'available': False,
+                'reason': 'unavailable_query_failed'
+            }
 
         pop = max(int(population or 0), 0)
         if pop <= 0:
-            return cases, 0.0
-        return cases, cases * 1000.0 / pop
+            return {
+                'cases': cases,
+                'per_1000': None,
+                'available': False,
+                'reason': 'unavailable_missing_population'
+            }
+        return {
+            'cases': cases,
+            'per_1000': cases * 1000.0 / pop,
+            'available': True,
+            'reason': 'medical_records_30d_per_1000'
+        }
 
     def _aqi_score(self, aqi):
         aqi = self._clamp(self._to_float(aqi, 50.0), 0.0, 500.0)
@@ -528,11 +648,14 @@ class HealthRiskService:
         }
 
     def _impact_likelihood_bucket(self, impact_score, likelihood_score, certainty):
-        likelihood = self._clamp(self._to_float(likelihood_score, 0.0), 0.0, 100.0)
+        raw_likelihood = self._clamp(self._to_float(likelihood_score, 0.0), 0.0, 100.0)
+        likelihood = raw_likelihood
+        certainty_adjustment = 0.0
         if certainty == 'likely':
-            likelihood = self._clamp(likelihood + 8.0, 0.0, 100.0)
+            certainty_adjustment = 8.0
         elif certainty == 'unlikely':
-            likelihood = self._clamp(likelihood - 8.0, 0.0, 100.0)
+            certainty_adjustment = -8.0
+        likelihood = self._clamp(likelihood + certainty_adjustment, 0.0, 100.0)
 
         impact_bucket = self._to_four_bucket(impact_score)
         likelihood_bucket = self._to_four_bucket(likelihood)
@@ -540,7 +663,11 @@ class HealthRiskService:
         return {
             'impact_bucket': impact_bucket,
             'likelihood_bucket': likelihood_bucket,
-            'matrix_score': rank[impact_bucket] * rank[likelihood_bucket]
+            'matrix_score': rank[impact_bucket] * rank[likelihood_bucket],
+            'impact_score': round(self._clamp(self._to_float(impact_score), 0.0, 100.0), 1),
+            'likelihood_raw_score': round(raw_likelihood, 1),
+            'certainty_adjustment': round(certainty_adjustment, 1),
+            'likelihood_score': round(likelihood, 1),
         }
 
     def _to_four_bucket(self, score):

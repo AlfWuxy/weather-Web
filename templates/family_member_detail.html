@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "partials/metric_info.html" import metric_info with context %}
 
 {% block title %}成员详情 - 天气健康风险预测系统{% endblock %}
 
@@ -27,6 +28,7 @@
                             <div class="text-muted">{{ member.gender or '-' }} · {{ member.age or '-' }}岁</div>
                         </div>
                         <span class="badge risk-badge risk-{{ risk.level }}">{{ risk.label }}</span>
+                        {{ metric_info('member_risk_score', {'本次得分': risk.score, '原因': risk.reasons|join('、') if risk.reasons else '暂无加分原因'}) }}
                     </div>
                     <div class="mt-3">
                         <div class="text-muted small mb-1">风险原因</div>
@@ -70,19 +72,25 @@
         <div class="col-lg-4">
             <div class="card shadow-sm h-100">
                 <div class="card-body">
-                    <h6 class="mb-3">档案完善度</h6>
+                    <h6 class="mb-3">档案完善度 {{ metric_info('profile_completion', {'已填写': completion.filled, '检查项': completion.total, '完善度': (completion.percent|string) ~ '%'}) }}</h6>
                     <div class="progress profile-progress mb-2">
                         <div class="progress-bar" role="progressbar" style="width: {{ completion.percent }}%"></div>
                     </div>
                     <div class="text-muted small">{{ completion.percent }}% · 已完善 {{ completion.filled }}/{{ completion.total }}</div>
                     <div class="mt-3">
                         <h6 class="mb-2">今日预警状态</h6>
-                        {% if alerts %}
+                        {% if not weather_available %}
+                            <span class="badge bg-warning-subtle text-warning-emphasis border">等待真实天气</span>
+                        {% elif alerts %}
                             <span class="badge bg-danger">触发：{{ alerts|join('、') }}</span>
                         {% else %}
                             <span class="badge bg-success-subtle text-success border">未触发</span>
                         {% endif %}
-                        <div class="text-muted small mt-2">天气：{{ weather.temperature|round(1) }}°C / 湿度 {{ weather.humidity|round(0) }}% / AQI {{ weather.aqi or '--' }}</div>
+                        {% if weather_available and weather %}
+                            <div class="text-muted small mt-2">天气：{{ weather.temperature|round(1) }}°C / 湿度 {{ weather.humidity|round(0) }}% / AQI {{ weather.aqi or '--' }}</div>
+                        {% else %}
+                            <div class="text-muted small mt-2">实时天气暂不可用，当前不计算阈值触发。</div>
+                        {% endif %}
                     </div>
                 </div>
             </div>

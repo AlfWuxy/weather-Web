@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "partials/metric_info.html" import metric_info with context %}
 
 {% block title %}照护工作台 - 宜老天气通{% endblock %}
 
@@ -9,7 +10,7 @@
             <h2><i class="bi bi-people"></i> 子女首页 · 照护行动工作台</h2>
             <p class="text-muted mb-0">
                 为家中老人设置所在地（任意中文输入），高温/寒潮触发时自动推送给你；慢病类别可选登记用于个性化提醒。
-                系统不存储精确住址/电话。
+                监测对象所在地和关联档案会保存到服务器，用于天气查询与提醒。请勿填写超出提醒所需的精确门牌信息。
             </p>
             {% if not current_user.push_enabled or not current_user.wxpusher_uid %}
                 <div class="alert alert-warning mt-3 mb-0">
@@ -37,9 +38,15 @@
 
     <div class="row g-4">
         <div class="col-lg-4">
-            <div class="card shadow-sm">
-                <div class="card-header bg-light">
-                    <h5 class="mb-0"><i class="bi bi-person-plus"></i> 新增监测对象（老人）</h5>
+            <div class="card shadow-sm yl-workbench-card">
+                <div class="card-header bg-light yl-card-head-art">
+                    <div class="yl-card-head-copy">
+                        <div class="yl-card-kicker">照护关系建立</div>
+                        <h5 class="mb-0"><i class="bi bi-person-plus"></i> 新增监测对象（老人）</h5>
+                    </div>
+                    <div class="yl-card-art" aria-hidden="true">
+                        <img src="{{ url_for('static', filename='illustrations/dashboard/add-monitoring.png') }}" alt="">
+                    </div>
                 </div>
                 <div class="card-body">
                     <form method="POST" action="{{ pair_create_action or url_for('user.pair_management') }}">
@@ -92,9 +99,15 @@
                 </div>
             {% endif %}
 
-            <div class="card shadow-sm mt-4" id="alt-contact-card">
-                <div class="card-header bg-light">
-                    <h6 class="mb-0"><i class="bi bi-person-plus"></i> 本地备选联系人</h6>
+            <div class="card shadow-sm mt-4 yl-workbench-card" id="alt-contact-card">
+                <div class="card-header bg-light yl-card-head-art">
+                    <div class="yl-card-head-copy">
+                        <div class="yl-card-kicker">本地协助链</div>
+                        <h6 class="mb-0"><i class="bi bi-person-plus"></i> 本地备选联系人</h6>
+                    </div>
+                    <div class="yl-card-art" aria-hidden="true">
+                        <img src="{{ url_for('static', filename='illustrations/dashboard/backup-contact.png') }}" alt="">
+                    </div>
                 </div>
                 <div class="card-body">
                     <div class="mb-2">
@@ -136,6 +149,7 @@
                                                     <div class="text-muted small">短码 {{ item.pair.short_code }}</div>
                                                     <div class="fs-5 fw-bold">{{ item.elder_name or '老人' }}</div>
                                                     <div class="text-muted small">地点 {{ item.location_display or item.pair.community_code }}</div>
+                                                    {% if item.weather_available %}
                                                     <div class="mt-2">
                                                         <span class="badge bg-{{ alert_badge }}">{{ item.alert_label }}</span>
                                                         <span class="text-muted small ms-2">
@@ -143,7 +157,19 @@
                                                             Tmin {{ item.temperature_min if item.temperature_min is not none else '-' }}
                                                         </span>
                                                     </div>
-                                                    <div class="text-muted small mt-1">热风险（旧口径）：{{ item.risk_label }}</div>
+                                                    {% set pair_heat_context = {
+                                                        '综合分': item.heat_result.risk_score if item.heat_result and item.heat_result.risk_score is not none else '--',
+                                                        '体感热': ((item.heat_result.heat_index|string) ~ '°C') if item.heat_result and item.heat_result.heat_index is not none else '--',
+                                                        '夜间最低温': ((item.heat_result.night_min|string) ~ '°C') if item.heat_result and item.heat_result.night_min is not none else '--',
+                                                        '连续高温': ((item.heat_result.consecutive_hot_days|string) ~ '天') if item.heat_result and item.heat_result.consecutive_hot_days is not none else '--'
+                                                    } %}
+                                                    <div class="text-muted small mt-1">热风险：{{ item.risk_label }} {{ metric_info('heat_risk_score', pair_heat_context) }}</div>
+                                                    {% else %}
+                                                    <div class="alert alert-warning py-2 px-3 mt-2 mb-0 small" role="status">
+                                                        <strong>等待真实天气</strong><br>
+                                                        实时和风天气或关键输入暂不可用，当前不会生成热风险等级或天气行动建议。
+                                                    </div>
+                                                    {% endif %}
                                                 </div>
                                                 <div class="text-end">
                                                     {% if status and status.confirmed_at %}
@@ -177,7 +203,7 @@
                                                         data-member-id="{{ item.pair.member_id or '' }}"
                                                         data-alert-kind="{{ item.alert_kind or '' }}"
                                                         data-message="{{ item.reminder_message | replace('\n', '\\n') | e }}">
-                                                    <i class="bi bi-clipboard"></i> 复制提醒话术
+                                                    <i class="bi bi-clipboard"></i> {% if item.weather_available %}复制提醒话术{% else %}复制行动链接说明{% endif %}
                                                 </button>
                                                 <button class="btn btn-outline-success btn-sm feedback-btn"
                                                         type="button"
