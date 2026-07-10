@@ -85,8 +85,9 @@ def test_family_members_page_does_not_trigger_alerts_from_mock_weather(client, d
 
     assert response.status_code == 200
     body = response.get_data(as_text=True)
-    assert '等待真实天气' in body
-    assert '模拟值不会触发通知' in body
+    assert '天气正在更新' in body
+    assert '家庭成员的阈值提醒稍后恢复' in body
+    assert '模拟值不会触发通知' not in body
     assert '今日触发' in body
     assert '触发：高温' not in body
 

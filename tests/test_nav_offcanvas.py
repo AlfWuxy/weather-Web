@@ -134,9 +134,43 @@ def test_home_copy_is_capability_focused_and_community_icon_exists(client):
     assert '页面只把需要行动的部分放到前面' not in body
 
 
+def test_anonymous_elder_card_enters_guest_elder_mode(client):
+    body = client.get('/').get_data(as_text=True)
+    assert 'href="/guest?next=/elder-mode" class="yl-role-card variant-elder"' in body
+
+    response = client.get('/guest?next=/elder-mode', follow_redirects=False)
+    assert response.status_code == 302
+    assert response.headers['Location'].endswith('/elder-mode')
+
+
+def test_community_navigation_has_one_workspace_entry_per_view(client, db_session):
+    _set_logged_in_user(client, db_session, username='community-single-entry', role='community')
+    body = client.get('/community').get_data(as_text=True)
+    drawer = body.split('id="appNavDrawer"', 1)[1]
+
+    assert '<div class="app-mega-kicker">社区与群体</div>' not in body
+    assert 'data-nav-key="community-workspace"' not in drawer
+    assert body.count('aria-current="page"') == 2
+
+
+def test_admin_more_trigger_is_active_without_claiming_current_page(client, db_session):
+    _set_logged_in_user(client, db_session, username='admin-community-more', role='admin')
+    body = client.get('/community').get_data(as_text=True)
+    trigger = body.split('data-nav-more-trigger="desktop"', 1)[0].rsplit('<button', 1)[1]
+
+    assert 'app-more-trigger active' in trigger
+    assert 'aria-current="page"' not in trigger
+    assert 'data-nav-key="community-workspace" aria-current="page"' in body
+
+
 def test_role_entry_uses_consistent_community_role_name(client):
     body = client.get('/entry').get_data(as_text=True)
     assert '<h5 class="mb-0">社区人员</h5>' in body
+    assert '<h5 class="mb-0">老人自用</h5>' in body
+    assert '<h5 class="mb-0">家属 / 子女</h5>' in body
+    assert '选择适合你的入口' in body
+    assert '家属也能代为记录' in body
+    assert '试点核心闭环' not in body
 
 
 @pytest.mark.parametrize(

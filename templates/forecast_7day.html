@@ -28,13 +28,13 @@
         <div class="text-muted" style="font-size:.9rem;">
             来源：{{ forecast_meta.source_label or '和风天气' }}
             {% if forecast_meta.update_time_label %} · 更新时间：{{ forecast_meta.update_time_label }}{% endif %}
-            {% if forecast_meta.from_cache %} · 缓存{% endif %}
+            {% if forecast_meta.from_cache %} · 最近一次有效数据{% endif %}
         </div>
     </div>
 
     {% if forecast_error %}
     <div class="alert alert-warning yl-fade-up yl-fade-up-d2" role="alert">
-        <i class="bi bi-exclamation-triangle me-1"></i>{{ forecast_error }}
+        <i class="bi bi-exclamation-triangle me-1"></i>7 天天气正在更新，预报暂不显示。请稍后重试。
     </div>
     {% endif %}
 
@@ -88,7 +88,7 @@
                                 '概率路径': ('正态近似' if d.visit_probability_method == 'normal_approximation' else '10%回退' if d.visit_probability_method == 'fallback_0.1' else '--'),
                                 '页面限幅': ('是，上限 ' ~ (d.visit_guardrail_cap|string) if d.visit_guardrail_applied else '否' if d.visit_guardrail_applied is not none else '--')
                             } %}
-                            高负荷 {{ d.probability_high_visits|round(1) }}% {{ metric_info('forecast_visit_probability', visit_context) }}
+                            就诊负担升高 {{ d.probability_high_visits|round(1) }}% {{ metric_info('forecast_visit_probability', visit_context) }}
                         {% endif %}
                         {% if d.predictability_score is not none %}
                             {% set predictability_context = {
@@ -103,7 +103,7 @@
                                 '提前期惩罚': d.predictability_lead_penalty if d.predictability_lead_penalty is not none else '--',
                                 '多模型奖励': d.predictability_model_bonus if d.predictability_model_bonus is not none else '--'
                             } %}
-                            <br>可预报性 {{ d.predictability_score|round(0) }} {{ metric_info('forecast_predictability', predictability_context) }}
+                            <br>预报可信度 {{ d.predictability_score|round(0) }} {{ metric_info('forecast_predictability', predictability_context) }}
                         {% endif %}
                     </div>
                     {% endif %}
@@ -116,8 +116,8 @@
     {% else %}
     <section class="yl-section text-center yl-fade-up yl-fade-up-d2">
         <div style="font-size:2rem; color:var(--yl-orange-500);"><i class="bi bi-cloud-slash"></i></div>
-        <h4 class="mt-2" style="font-size:1.05rem;">暂无 7 天预报</h4>
-        <p class="text-muted mb-0">当前页面只使用和风天气。接口恢复后会自动显示真实高低温。</p>
+        <h4 class="mt-2" style="font-size:1.05rem;">7 天预报正在更新</h4>
+        <p class="text-muted mb-0">7 天天气正在更新。稍后重试，也可先查看今日风险和通用防护。</p>
     </section>
     {% endif %}
 
@@ -147,7 +147,7 @@
                         {% endif %}
                     {% endfor %}
                     {% if unknown_risk_count.value == forecast_days|length %}
-                    <li class="text-muted py-2">风险预测暂不可用。</li>
+                    <li class="text-muted py-2">风险趋势正在更新。</li>
                     {% elif high_risk_count.value == 0 %}
                     <li class="text-muted py-2">本周暂无高风险日。</li>
                     {% endif %}

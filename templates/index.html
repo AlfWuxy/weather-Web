@@ -108,7 +108,7 @@
             <p>管理家人所在地、查看今日风险、复制提醒话术。</p>
             <span class="role-cta">进入照护路径 <i class="bi bi-arrow-right"></i></span>
         </a>
-        <a href="{{ url_for('public.guest_login') if not current_user.is_authenticated else url_for('user.elder_dashboard') }}" class="yl-role-card variant-elder">
+        <a href="{{ url_for('public.guest_login', next=url_for('user.elder_dashboard')) if not current_user.is_authenticated else url_for('user.elder_dashboard') }}" class="yl-role-card variant-elder">
             <div class="yl-role-icon"><i class="bi bi-eyeglasses"></i></div>
             <h3>老人自用</h3>
             <p>大字号、高对比，只看今天风险和该做的事。</p>

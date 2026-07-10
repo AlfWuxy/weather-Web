@@ -266,7 +266,7 @@ def ml_prediction():
 
         weather_info, _ = get_weather_with_cache(form_state['location'])
         if not is_qweather_online_weather(weather_info):
-            prediction_error = '实时天气暂不可用，本次类别线索未计算。模拟值不会进入模型。'
+            prediction_error = '天气正在更新，类别线索暂不显示。请稍后再试。'
         else:
             user_info = {
                 'age': form_state['age'],
@@ -331,7 +331,7 @@ def forecast_7day():
     forecast_meta['update_time_label'] = _format_qweather_update_time(forecast_meta.get('update_time'))
 
     if len(qweather_days or []) < 7:
-        forecast_error = '和风天气暂不可用，或返回的 7 天预报数据不完整。请稍后重试。'
+        forecast_error = '7 天天气正在更新，预报暂不显示。请稍后重试。'
     else:
         health_forecasts = []
         current_weather, _ = get_weather_with_cache(current_location)
@@ -357,7 +357,7 @@ def forecast_7day():
             current_app.logger.warning("7天健康预测生成失败，仅展示和风天气: %s", exc)
         forecast_days = build_forecast_cards(qweather_days, health_forecasts, start_date)
         if not forecast_days:
-            forecast_error = '和风天气暂不可用，7 天预报的最高温、最低温或湿度字段不完整。请稍后重试。'
+            forecast_error = '7 天天气正在更新，预报暂不显示。请稍后重试。'
 
     return render_template(
         'forecast_7day.html',
@@ -401,7 +401,7 @@ def chronic_risk():
 
         weather_data, _ = get_weather_with_cache(ensure_user_location_valid())
         if not is_qweather_online_weather(weather_data):
-            risk_error = '实时天气暂不可用，本次慢病天气风险未计算。模拟值不会进入评分。'
+            risk_error = '天气正在更新，慢病风险提示暂不显示。请稍后再试。'
         else:
             vitals = _parse_chronic_vitals(form_state)
             result = get_chronic_service().predict_individual_risk(

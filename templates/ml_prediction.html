@@ -7,7 +7,7 @@
     <section class="section-heading yl-fade-up">
         <span class="section-kicker"><i class="bi bi-cpu"></i> AI 疾病类别线索</span>
         <h2>基于年龄、性别与当前天气的类别排序</h2>
-        <p>模型先给出训练类别概率，再按天气敏感规则调整为关注分。各类分数没有重新归一化，合计可能超过 100；结果不代表未来发病率，也不用于诊断。</p>
+        <p>根据年龄、性别和当前天气，整理需要优先关注的健康类别。分数用于安排日常观察，不代表发病概率，也不能用于诊断。</p>
     </section>
 
     <div class="row g-4">
@@ -35,7 +35,7 @@
                     <input type="number" class="form-control" name="age" value="{{ form_state.age if form_state else (age or 65) }}" min="1" max="120">
                 </div>
                 <div class="alert alert-light border small" role="note">
-                    当前分类器没有把慢病档案作为训练特征。慢病专项请使用“慢病风险评估”。
+                    慢病档案不会参与这项类别排序。需要查看慢病与天气的关系，请使用“慢病风险评估”。
                 </div>
                 <button type="submit" class="btn btn-primary w-100"><i class="bi bi-magic me-1"></i>生成类别线索</button>
             </form>
@@ -44,7 +44,7 @@
         <div class="col-lg-8">
             {% if prediction_error %}
             <section class="yl-section yl-fade-up yl-fade-up-d2 mb-3">
-                <div class="alert alert-danger mb-0">{{ prediction_error }}</div>
+                <div class="alert alert-warning mb-0">健康关注线索暂时无法生成，请稍后再试。</div>
             </section>
             {% endif %}
             {% if prediction %}
@@ -59,9 +59,9 @@
                                 <div style="font-size:2.2rem; font-weight:600; color:var(--yl-orange-600);" class="my-2 mt-3">
                                     {{ p.score }}/100 {{ metric_info('ml_class_probability', {
                                         '类别': p.disease,
-                                        '原始RF概率': (p.original_score|string) ~ '%',
-                                        '实际天气倍率': '×' ~ (p.weather_multiplier|string),
-                                        '最终关注分': (p.score|string) ~ '/100',
+                                        '基础关注度': (p.original_score|string) ~ '%',
+                                        '天气影响': '×' ~ (p.weather_multiplier|string),
+                                        '本次关注分': (p.score|string) ~ '/100',
                                         '排序': p.label
                                     }) }}
                                 </div>
@@ -77,14 +77,14 @@
             <div class="yl-section text-center yl-fade-up yl-fade-up-d2" style="padding:56px 30px;">
                 <div style="font-size:3rem; color:var(--yl-orange-400);"><i class="bi bi-graph-up-arrow"></i></div>
                 <h4 class="mt-3">填写左侧信息后查看类别线索</h4>
-                <p class="text-muted mb-0">页面只在真实模型推理完成后展示结果，不显示示例分数或示例因子。</p>
+                <p class="text-muted mb-0">填写所在地和年龄后，可查看需要优先留意的健康类别。</p>
             </div>
             {% endif %}
 
             {% if factors %}
             <section class="yl-section yl-fade-up yl-fade-up-d3">
-                <h4 style="font-size:1.1rem;">模型全局特征重要性 {{ metric_info('ml_feature_importance') }}</h4>
-                <p class="text-muted" style="font-size:.88rem;">来自模型元数据，反映整个训练集中的全局分裂重要性，不是本次个人贡献。</p>
+                <h4 style="font-size:1.1rem;">影响排序的主要因素 {{ metric_info('ml_feature_importance') }}</h4>
+                <p class="text-muted" style="font-size:.88rem;">这些因素用于解释整体类别排序，不代表本次个人诊断结果。</p>
                 <div class="mt-3">
                     {% for f in factors %}
                     <div class="mb-2">

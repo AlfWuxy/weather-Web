@@ -125,7 +125,7 @@ def test_forecast_page_qweather_failure_does_not_render_demo_heat(client, db_ses
 
     assert response.status_code == 200
     body = response.get_data(as_text=True)
-    assert '和风天气暂不可用' in body
+    assert '7 天天气正在更新' in body
     assert '34° / 26°' not in body
     assert '35° / 27°' not in body
 
@@ -400,7 +400,7 @@ def test_ml_prediction_post_renders_result_and_preserves_form(client, db_session
     assert 'value="72"' in body
     assert 'value="都昌"' in body
     assert 'name="chronic"' not in body
-    assert '当前分类器没有把慢病档案作为训练特征' in body
+    assert '慢病档案不会参与这项类别排序' in body
     assert captured['user_info'] == {'age': 72, 'gender': '男'}
 
 
@@ -566,8 +566,10 @@ def test_ml_and_chronic_pages_reject_mock_weather(client, db_session, monkeypatc
 
     assert ml_response.status_code == 200
     assert chronic_response.status_code == 200
-    assert '实时天气暂不可用，本次类别线索未计算' in ml_response.get_data(as_text=True)
-    assert '本次慢病天气风险未计算' in chronic_response.get_data(as_text=True)
+    assert '健康关注线索暂时无法生成' in ml_response.get_data(as_text=True)
+    assert '天气正在更新，本次提醒暂未生成' in chronic_response.get_data(as_text=True)
+    assert '模拟值不会进入' not in ml_response.get_data(as_text=True)
+    assert '模拟值不会进入' not in chronic_response.get_data(as_text=True)
     assert '本次天气调整关注分' not in ml_response.get_data(as_text=True)
     assert '综合风险评分' not in chronic_response.get_data(as_text=True)
 
@@ -581,7 +583,8 @@ def test_chronic_risk_get_shows_empty_state_without_synthetic_result(client, db_
     assert response.status_code == 200
     body = response.get_data(as_text=True)
     assert '填写信息后生成评估' in body
-    assert '这里不会展示示例评分或示例医疗建议' in body
+    assert '可查看风险提示与行动建议' in body
+    assert '示例评分或示例医疗建议' not in body
     assert '>58<' not in body
     assert '本周内到社区医生处复诊' not in body
     assert '综合当前数据,控制偏向偏松' not in body

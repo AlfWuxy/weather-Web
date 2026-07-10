@@ -1243,7 +1243,7 @@ def render_public_risk_page(location):
     )
 
 
-def handle_guest_login():
+def handle_guest_login(next_url=None):
     if current_user.is_authenticated and not is_guest_user(current_user):
         return redirect(url_for('user.user_dashboard'))
 
@@ -1261,7 +1261,8 @@ def handle_guest_login():
     guest_user = GuestUser(guest_id, session['guest_profile'])
     login_user(guest_user)
     flash('已进入游客模式（数据不会保存）', 'success')
-    return redirect(url_for('user.user_dashboard'))
+    safe_next = _safe_next_url(next_url)
+    return redirect(safe_next or url_for('user.user_dashboard'))
 
 
 def handle_logout():

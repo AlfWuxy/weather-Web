@@ -95,8 +95,8 @@ def test_health_assessment_post_persists_academic_payload(
     assert response.status_code == 200
     html = response.get_data(as_text=True)
     assert '最新评估结果' in html
-    assert '融合模型路径' in html
-    assert '风险矩阵定位' in html
+    assert '评估依据' in html
+    assert '风险分布' in html
 
     assessment = HealthRiskAssessment.query.order_by(HealthRiskAssessment.id.desc()).first()
     assert assessment is not None
@@ -131,11 +131,13 @@ def test_health_assessment_post_persists_academic_payload(
     assert community_context['burden_available'] is True
     assert community_context['burden_per_1000'] == pytest.approx(0.833, abs=0.001)
     assert community_context['imputed'] is False
-    assert '社区上下文' in html
-    assert '社区表实时记录' in html
-    assert '社区表 VI' in html
+    assert '所在社区的参考情况' in html
+    assert '社区资料' in html
+    assert '社区脆弱性' in html
     assert '1 条' in html
     assert '0.833 条 / 千人' in html
+    assert '路径 C' not in html
+    assert '代理值' not in html
     assert 'methodology' in academic
     assert len(academic['methodology']) >= 4
 
@@ -215,8 +217,8 @@ def test_health_assessment_post_waits_for_real_weather_without_side_effects(
 
     assert response.status_code == 200
     html = response.get_data(as_text=True)
-    assert '当前等待真实和风天气及有效温度' in html
-    assert '本次未生成评估、未保存记录、未发送通知' in html
+    assert '天气正在更新，本次评估暂未完成' in html
+    assert '未保存记录' not in html
     assert HealthRiskAssessment.query.count() == 0
 
 
@@ -282,8 +284,8 @@ def test_legacy_assessment_without_matrix_does_not_render_false_low_bucket(
 
     assert response.status_code == 200
     html = response.get_data(as_text=True)
-    assert '历史记录未包含矩阵拆解，当前不可回算' in html
-    assert 'Impact：<strong>--</strong>' in html
-    assert 'Likelihood：<strong>--</strong>' in html
-    assert '矩阵得分 -- / 16' in html
-    assert 'Impact：<strong>low</strong>' not in html
+    assert '这条历史记录没有完整的评估依据' in html
+    assert '影响程度：<strong>--</strong>' in html
+    assert '发生可能性：<strong>--</strong>' in html
+    assert '综合位置 -- / 16' in html
+    assert '影响程度：<strong>low</strong>' not in html

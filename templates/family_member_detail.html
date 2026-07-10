@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% from "partials/metric_info.html" import metric_info with context %}
 
-{% block title %}成员详情 - 天气健康风险预测系统{% endblock %}
+{% block title %}成员详情 · 宜老天气通{% endblock %}
 
 {% block content %}
 <div class="container">
@@ -80,7 +80,7 @@
                     <div class="mt-3">
                         <h6 class="mb-2">今日预警状态</h6>
                         {% if not weather_available %}
-                            <span class="badge bg-warning-subtle text-warning-emphasis border">等待真实天气</span>
+                            <span class="badge bg-warning-subtle text-warning-emphasis border">天气更新中</span>
                         {% elif alerts %}
                             <span class="badge bg-danger">触发：{{ alerts|join('、') }}</span>
                         {% else %}
@@ -89,7 +89,7 @@
                         {% if weather_available and weather %}
                             <div class="text-muted small mt-2">天气：{{ weather.temperature|round(1) }}°C / 湿度 {{ weather.humidity|round(0) }}% / AQI {{ weather.aqi or '--' }}</div>
                         {% else %}
-                            <div class="text-muted small mt-2">实时天气暂不可用，当前不计算阈值触发。</div>
+                            <div class="text-muted small mt-2">风险提醒将在天气更新后显示。现在可先查看档案和日常防护建议。</div>
                         {% endif %}
                     </div>
                 </div>

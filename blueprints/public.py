@@ -279,7 +279,9 @@ def public_risk():
 @bp.route('/guest', endpoint='guest_login')
 def guest_login():
     """游客模式入口"""
-    return handle_guest_login()
+    raw_next = request.args.get('next')
+    next_url = str(raw_next)[:200] if raw_next else None
+    return handle_guest_login(next_url)
 
 
 @bp.route('/logout', methods=['POST'], endpoint='logout')

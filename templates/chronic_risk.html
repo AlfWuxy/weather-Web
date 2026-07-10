@@ -7,7 +7,7 @@
     <section class="section-heading yl-fade-up">
         <span class="section-kicker"><i class="bi bi-heart-pulse"></i> 慢病风险评估</span>
         <h2>你当前的慢病控制得怎么样?</h2>
-        <p>结合当前天气相对风险、年龄、共病和近 7 天血压/血糖,给出行动筛查分级。用药与症状作为补充观察。</p>
+        <p>填写近 7 天血压、血糖和当前状态，结合天气查看今天需要留意的事项。结果只用于日常照护参考。</p>
     </section>
 
     <form method="POST" action="{{ url_for('tools.chronic_risk') }}" class="yl-section mb-4 yl-fade-up yl-fade-up-d1">
@@ -51,7 +51,7 @@
 
     {% if risk_error %}
     <div class="alert alert-warning yl-fade-up yl-fade-up-d2" role="status">
-        <i class="bi bi-cloud-slash me-1"></i>{{ risk_error }}
+        <i class="bi bi-cloud-slash me-1"></i>天气正在更新，本次提醒暂未生成。请稍后再试。
     </div>
     {% endif %}
 
@@ -60,7 +60,7 @@
     <section class="yl-section text-center yl-fade-up yl-fade-up-d2">
         <div style="font-size:2rem; color:var(--yl-orange-500);"><i class="bi bi-clipboard2-pulse"></i></div>
         <h4 class="mt-2" style="font-size:1.1rem;">填写信息后生成评估</h4>
-        <p class="text-muted mb-0" style="font-size:.9rem;">这里不会展示示例评分或示例医疗建议。提交自测指标后,系统会基于你的数据生成结果。</p>
+        <p class="text-muted mb-0" style="font-size:.9rem;">填写近 7 天指标和当前状态后，可查看风险提示与行动建议。</p>
     </section>
     {% else %}
     <div class="row g-4">

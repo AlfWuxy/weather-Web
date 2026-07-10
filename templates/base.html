@@ -149,8 +149,7 @@
                                 data-nav-more-trigger="desktop"
                                 data-nav-key="more"
                                 aria-expanded="false"
-                                aria-controls="appMegaMenu"
-                                {% if current_user.role == 'admin' and nav_community_workspace_active %}aria-current="page"{% endif %}>
+                                aria-controls="appMegaMenu">
                             更多 <i class="bi bi-chevron-down small"></i>
                         </button>
 
@@ -177,15 +176,13 @@
                                     {% endif %}
                                 </section>
 
-                                {% if current_user.role in ['community', 'admin'] %}
+                                {% if current_user.role == 'admin' %}
                                 <section class="app-mega-group">
                                     <div class="app-mega-kicker">社区与群体</div>
                                     <a class="app-mega-link {% if nav_community_workspace_active %}active{% endif %}" href="{{ url_for('user.community_dashboard') }}" {% if nav_community_workspace_active %}aria-current="page"{% endif %}>社区看板</a>
-                                    {% if current_user.role == 'admin' %}
-                                        <a class="app-mega-link" href="{{ url_for('admin.admin_dashboard') }}">管理后台</a>
-                                        <a class="app-mega-link" href="{{ url_for('analysis.pilot_dashboard') }}">试点数据看板</a>
-                                        <a class="app-mega-link" href="{{ url_for('analysis.reports_center') }}">报告导出</a>
-                                    {% endif %}
+                                    <a class="app-mega-link" href="{{ url_for('admin.admin_dashboard') }}">管理后台</a>
+                                    <a class="app-mega-link" href="{{ url_for('analysis.pilot_dashboard') }}">试点数据看板</a>
+                                    <a class="app-mega-link" href="{{ url_for('analysis.reports_center') }}">报告导出</a>
                                 </section>
                                 {% endif %}
 
@@ -302,7 +299,7 @@
                 {% endif %}
             </nav>
 
-            {% if current_user.role in ['community', 'admin'] %}
+            {% if current_user.role == 'admin' %}
             <div class="mb-2" style="font-size:.72rem; color:var(--yl-muted); text-transform:uppercase; letter-spacing:.05em; padding:0 4px;">社区</div>
             <nav class="nav flex-column mb-3" aria-label="社区">
                 <a class="nav-link {% if nav_community_workspace_active %}active{% endif %}" href="{{ url_for('user.community_dashboard') }}" data-nav-key="community-workspace" {% if nav_community_workspace_active %}aria-current="page"{% endif %}><i class="bi bi-building me-2"></i>社区看板</a>
