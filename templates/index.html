@@ -4,12 +4,35 @@
 {% block body_class %}home-page{% endblock %}
 
 {% block content %}
-{% if current_user.is_authenticated %}
-    {% if current_user.role in ['caregiver', 'admin'] %}
-        {% set workspace_url = url_for('user.caregiver_dashboard') %}
-    {% else %}
-        {% set workspace_url = url_for('health.family_members') %}
-    {% endif %}
+{% if not current_user.is_authenticated or current_user.role == 'guest' %}
+    {% set workspace_url = url_for('public.register') %}
+    {% set workspace_label = '注册开启照护' %}
+{% elif current_user.role == 'community' %}
+    {% set workspace_url = url_for('user.community_dashboard') %}
+    {% set workspace_label = '进入社区工作台' %}
+{% elif current_user.role in ['caregiver', 'admin'] %}
+    {% set workspace_url = url_for('user.caregiver_dashboard') %}
+    {% set workspace_label = '进入照护工作台' %}
+{% else %}
+    {% set workspace_url = url_for('user.pair_management') %}
+    {% set workspace_label = '进入照护工作台' %}
+{% endif %}
+{% if current_user.is_authenticated and current_user.role in ['community', 'admin'] %}
+    {% set community_url = url_for('user.community_dashboard') %}
+    {% set community_cta = '进入社区工作台' %}
+{% elif current_user.is_authenticated %}
+    {% set community_url = url_for('user.community_risk') %}
+    {% set community_cta = '查看社区风险' %}
+{% else %}
+    {% set community_url = url_for('public.login', next=url_for('user.community_dashboard')) %}
+    {% set community_cta = '社区人员登录' %}
+{% endif %}
+{% if not current_user.is_authenticated or current_user.role == 'guest' %}
+    {% set family_role_url = url_for('public.register') %}
+{% elif current_user.role in ['caregiver', 'admin'] %}
+    {% set family_role_url = url_for('user.caregiver_dashboard') %}
+{% else %}
+    {% set family_role_url = url_for('user.pair_management') %}
 {% endif %}
 
 <div class="yl-home-shell">
@@ -19,7 +42,7 @@
         <div class="yl-lifestyle-copy">
             <h1 data-words>把天气预警变成今天能做的事。</h1>
             <p class="hero-lead">
-                高温、寒潮、气压变化对老人不是抽象天气。宜老天气通把风险翻译成清楚行动,
+                高温、寒潮、气压变化对老人不是抽象天气。宜老天气通把风险翻译成清楚行动，
                 让家属、老人和社区都知道下一步。
             </p>
 
@@ -30,7 +53,7 @@
                 </div>
             {% else %}
                 <div class="hero-actions">
-                    <a href="{{ workspace_url }}" class="btn btn-primary btn-lg">进入照护工作台</a>
+                    <a href="{{ workspace_url }}" class="btn btn-primary btn-lg">{{ workspace_label }}</a>
                     <a href="{{ url_for('user.user_dashboard') }}" class="btn btn-outline-secondary btn-lg">查看今日主页</a>
                 </div>
             {% endif %}
@@ -43,22 +66,22 @@
         </div>
 
         <figure class="yl-lifestyle-media yl-parallax-media">
-            <img src="{{ url_for('static', filename='illustrations/lifestyle/home-hero-elder-window.jpg') }}" alt="老人坐在窗边,桌上有水杯和手机">
+            <img src="{{ url_for('static', filename='illustrations/lifestyle/home-hero-elder-window.jpg') }}" alt="老人坐在窗边，桌上有水杯和手机" width="1536" height="1024" loading="eager" decoding="async" fetchpriority="high">
         </figure>
     </section>
 
     {# ============== 行动叙事 ============== #}
     <section class="yl-home-section-head yl-fade-up yl-fade-up-d1">
-        <h2>从天气到照护,只保留最必要的判断。</h2>
-        <p>页面不追求堆满功能,每一步都回答一个问题: 今天有没有风险,该告诉谁,现在做什么。</p>
+        <h2>今天的风险、提醒和行动，一眼看清。</h2>
+        <p>先看风险，再提醒家人或社区，并记录是否已经做到。</p>
     </section>
 
     <section class="yl-home-story">
         {% for item in [
-            ('01', '识别风险', '优先读取官方预警,再用温度、气压、湿度等阈值兜底。页面只把需要行动的部分放到前面。', 'weather-action-water-phone.jpg'),
-            ('02', '翻成一句话', '把复杂指标变成家人能直接说出口的话,例如今天少出门、身边放水、午后别暴晒。', 'family-care-video-call.jpg'),
-            ('03', '记录是否做到', '家属、老人或社区可以留下是否提醒、是否执行的反馈,后续再看哪些提醒真的有用。', 'weather-action-water-phone.jpg'),
-            ('04', '连接社区资源', '当家里降温条件不足,页面会把避暑点和社区行动放到同一条路径里。', 'community-cooling-room.jpg')
+            ('01', '识别风险', '结合官方预警和实时天气，判断今天是否需要加强防护。', 'weather-action-water-phone.jpg'),
+            ('02', '发出提醒', '生成可以直接转发的话，清楚告诉家人现在该做什么。', 'family-care-video-call.jpg'),
+            ('03', '记录行动', '记录是否已提醒、是否已做到，方便家人继续跟进。', 'weather-action-water-phone.jpg'),
+            ('04', '找到避暑点', '家里降温条件不足时，查看附近避暑点和社区支持。', 'community-cooling-room.jpg')
         ] %}
         <article class="yl-story-row yl-fade-up {% if loop.index is odd %}is-reversed{% endif %}" data-step="{{ item[0] }}">
             <div class="yl-story-copy">
@@ -67,7 +90,7 @@
                 <p>{{ item[2] }}</p>
             </div>
             <figure class="yl-story-image yl-parallax-media">
-                <img src="{{ url_for('static', filename='illustrations/lifestyle/' ~ item[3]) }}" alt="">
+                <img src="{{ url_for('static', filename='illustrations/lifestyle/' ~ item[3]) }}" alt="" width="1536" height="1024" loading="lazy" decoding="async">
             </figure>
         </article>
         {% endfor %}
@@ -75,11 +98,11 @@
 
     {# ============== 角色入口 ============== #}
     <section class="yl-home-section-head yl-fade-up">
-        <h2>按角色进入,每个人只看自己需要的东西。</h2>
+        <h2>选择适合你的入口。</h2>
     </section>
 
     <div class="yl-role-strip">
-        <a href="{{ url_for('public.register') if not current_user.is_authenticated else url_for('health.family_members') }}" class="yl-role-card variant-family">
+        <a href="{{ family_role_url }}" class="yl-role-card variant-family" data-role-card="family">
             <div class="yl-role-icon"><i class="bi bi-people"></i></div>
             <h3>家属 / 子女</h3>
             <p>管理家人所在地、查看今日风险、复制提醒话术。</p>
@@ -88,14 +111,14 @@
         <a href="{{ url_for('public.guest_login') if not current_user.is_authenticated else url_for('user.elder_dashboard') }}" class="yl-role-card variant-elder">
             <div class="yl-role-icon"><i class="bi bi-eyeglasses"></i></div>
             <h3>老人自用</h3>
-            <p>大字号、高对比,只看今天风险和该做的事。</p>
+            <p>大字号、高对比，只看今天风险和该做的事。</p>
             <span class="role-cta">打开极简模式 <i class="bi bi-arrow-right"></i></span>
         </a>
-        <a href="{{ url_for('public.login') if not current_user.is_authenticated else url_for('user.community_risk') }}" class="yl-role-card variant-doctor">
-            <div class="yl-role-icon"><i class="bi bi-building-heart"></i></div>
-            <h3>社区 / 医生</h3>
-            <p>查看社区风险、避暑资源和群体行动支持。</p>
-            <span class="role-cta">查看社区风险 <i class="bi bi-arrow-right"></i></span>
+        <a href="{{ community_url }}" class="yl-role-card variant-doctor" data-role-card="community">
+            <div class="yl-role-icon"><i class="bi bi-building"></i></div>
+            <h3>社区人员</h3>
+            <p>查看社区风险，安排提醒、走访和避暑资源。</p>
+            <span class="role-cta">{{ community_cta }} <i class="bi bi-arrow-right"></i></span>
         </a>
     </div>
 

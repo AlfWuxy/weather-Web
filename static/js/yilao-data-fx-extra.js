@@ -9,16 +9,32 @@
     'use strict';
 
     function ease(t) { return 1 - Math.pow(1 - t, 3); }
+
+    function prefersReducedMotion() {
+        return Boolean(
+            window.matchMedia &&
+            window.matchMedia('(prefers-reduced-motion: reduce)').matches
+        );
+    }
+
+    function renderNumber(el, value, decimals) {
+        const factor = Math.pow(10, decimals);
+        el.textContent = (Math.round(value * factor) / factor).toFixed(decimals);
+    }
+
     function animateNumber(el, from, to, opts) {
         opts = opts || {};
         const duration = opts.duration || 900;
         const decimals = opts.decimals || 0;
+        if (prefersReducedMotion()) {
+            renderNumber(el, to, decimals);
+            return;
+        }
         const start = performance.now();
-        const factor = Math.pow(10, decimals);
         function step(now) {
             const t = Math.min((now - start) / duration, 1);
             const cur = from + (to - from) * ease(t);
-            el.textContent = (Math.round(cur * factor) / factor).toFixed(decimals);
+            renderNumber(el, cur, decimals);
             if (t < 1) requestAnimationFrame(step);
         }
         requestAnimationFrame(step);
@@ -48,16 +64,25 @@
         const marker = el.querySelector('.fx-thermo-marker');
         const valTip = el.querySelector('.fx-thermo-value');
         const tag = el.querySelector('.fx-thermo-zone-tag');
+        const reduceMotion = prefersReducedMotion();
 
         if (marker) {
-            marker.style.left = '0%';
             marker.dataset.zone = zone;
-            requestAnimationFrame(() => { marker.style.left = pct + '%'; });
+            if (reduceMotion) {
+                marker.style.left = pct + '%';
+            } else {
+                marker.style.left = '0%';
+                requestAnimationFrame(() => { marker.style.left = pct + '%'; });
+            }
         }
         if (valTip) {
-            valTip.style.left = '0%';
             valTip.textContent = t + '°C';
-            requestAnimationFrame(() => { valTip.style.left = pct + '%'; });
+            if (reduceMotion) {
+                valTip.style.left = pct + '%';
+            } else {
+                valTip.style.left = '0%';
+                requestAnimationFrame(() => { valTip.style.left = pct + '%'; });
+            }
         }
         if (tag) {
             tag.dataset.zone = zone;
@@ -126,24 +151,38 @@
         const areaEl = el.querySelector('.fx-trend-area');
         const dots = el.querySelectorAll('.fx-trend-dot');
         const vals = el.querySelectorAll('.fx-trend-value');
+        const reduceMotion = prefersReducedMotion();
 
         // total length for stroke-dashoffset
         if (line && line.getTotalLength) {
             const len = line.getTotalLength();
             line.style.strokeDasharray = len;
-            line.style.strokeDashoffset = len;
-            requestAnimationFrame(() => {
+            if (reduceMotion) {
                 line.classList.add('fx-shown');
                 line.style.strokeDashoffset = '0';
-            });
+            } else {
+                line.style.strokeDashoffset = len;
+                requestAnimationFrame(() => {
+                    line.classList.add('fx-shown');
+                    line.style.strokeDashoffset = '0';
+                });
+            }
         }
-        setTimeout(() => areaEl && areaEl.classList.add('fx-shown'), 700);
-        dots.forEach((d, i) => {
-            setTimeout(() => {
+        if (reduceMotion) {
+            if (areaEl) areaEl.classList.add('fx-shown');
+            dots.forEach((d, i) => {
                 d.classList.add('fx-shown');
                 if (vals[i]) vals[i].classList.add('fx-shown');
-            }, 1100 + i * 130);
-        });
+            });
+        } else {
+            setTimeout(() => areaEl && areaEl.classList.add('fx-shown'), 700);
+            dots.forEach((d, i) => {
+                setTimeout(() => {
+                    d.classList.add('fx-shown');
+                    if (vals[i]) vals[i].classList.add('fx-shown');
+                }, 1100 + i * 130);
+            });
+        }
     }
 
     // ========== F · SHAP 双向贡献条 ==========
@@ -173,7 +212,11 @@
         el.innerHTML = html;
         const bars = el.querySelectorAll('.fx-shap-bar');
         bars.forEach((b, i) => {
-            setTimeout(() => b.classList.add('fx-shown'), 200 + i * 90);
+            if (prefersReducedMotion()) {
+                b.classList.add('fx-shown');
+            } else {
+                setTimeout(() => b.classList.add('fx-shown'), 200 + i * 90);
+            }
         });
     }
 
@@ -224,16 +267,26 @@
 
         const line = el.querySelector('.fx-spark-line');
         const areaEl = el.querySelector('.fx-spark-area');
+        const reduceMotion = prefersReducedMotion();
         if (line && line.getTotalLength) {
             const len = line.getTotalLength();
             line.style.strokeDasharray = len;
-            line.style.strokeDashoffset = len;
-            requestAnimationFrame(() => {
+            if (reduceMotion) {
                 line.classList.add('fx-shown');
                 line.style.strokeDashoffset = '0';
-            });
+            } else {
+                line.style.strokeDashoffset = len;
+                requestAnimationFrame(() => {
+                    line.classList.add('fx-shown');
+                    line.style.strokeDashoffset = '0';
+                });
+            }
         }
-        setTimeout(() => areaEl && areaEl.classList.add('fx-shown'), 600);
+        if (reduceMotion) {
+            if (areaEl) areaEl.classList.add('fx-shown');
+        } else {
+            setTimeout(() => areaEl && areaEl.classList.add('fx-shown'), 600);
+        }
     }
 
     // ========== H · Alert List Stagger ==========
@@ -241,7 +294,7 @@
     function initAlertList(el) {
         const items = el.querySelectorAll('.fx-alert-item, [data-alert-item]');
         items.forEach((item, i) => {
-            item.style.animationDelay = (i * 60) + 'ms';
+            item.style.animationDelay = prefersReducedMotion() ? '0ms' : (i * 60) + 'ms';
         });
     }
 
@@ -312,9 +365,15 @@
         const prevEl = el.querySelector('.fx-radar-prev');
         const shape = el.querySelector('.fx-radar-shape');
         const verts = el.querySelectorAll('.fx-radar-vertex');
-        setTimeout(() => prevEl && prevEl.classList.add('fx-shown'), 200);
-        setTimeout(() => shape && shape.classList.add('fx-shown'), 600);
-        verts.forEach((v, i) => setTimeout(() => v.classList.add('fx-shown'), 1400 + i*80));
+        if (prefersReducedMotion()) {
+            if (prevEl) prevEl.classList.add('fx-shown');
+            if (shape) shape.classList.add('fx-shown');
+            verts.forEach(v => v.classList.add('fx-shown'));
+        } else {
+            setTimeout(() => prevEl && prevEl.classList.add('fx-shown'), 200);
+            setTimeout(() => shape && shape.classList.add('fx-shown'), 600);
+            verts.forEach((v, i) => setTimeout(() => v.classList.add('fx-shown'), 1400 + i*80));
+        }
     }
 
     // ========== J · 温度计水银柱 ==========
@@ -332,11 +391,16 @@
         const valEl = el.querySelector('.fx-thermometer-info .v .num');
         // 用像素高度避免 absolute 元素在部分浏览器里百分比高度失效。
         const tubeH = (tube && tube.offsetHeight) || 140;
+        const reduceMotion = prefersReducedMotion();
 
         if (merc) {
-            merc.style.height = '0px';
             merc.dataset.zone = zone;
-            requestAnimationFrame(() => { merc.style.height = (pct / 100 * tubeH) + 'px'; });
+            if (reduceMotion) {
+                merc.style.height = (pct / 100 * tubeH) + 'px';
+            } else {
+                merc.style.height = '0px';
+                requestAnimationFrame(() => { merc.style.height = (pct / 100 * tubeH) + 'px'; });
+            }
         }
         if (bulb) bulb.dataset.zone = zone;
         if (valEl) animateNumber(valEl, 0, t, { duration: 1500, decimals: 1 });
@@ -379,10 +443,11 @@
 
     function initAll(root) {
         root = root || document;
+        const reduceMotion = prefersReducedMotion();
         const els = root.querySelectorAll(
             '[data-fx="thermo-bar"], [data-fx="trend-line"], [data-fx="shap-bar"], [data-fx="sparkline"], [data-fx="alert-list"], [data-fx="radar"], [data-fx="thermometer"]'
         );
-        if ('IntersectionObserver' in window) {
+        if ('IntersectionObserver' in window && !reduceMotion) {
             const io = new IntersectionObserver((es) => {
                 es.forEach(en => {
                     if (en.isIntersecting) { bootstrap(en.target); io.unobserve(en.target); }

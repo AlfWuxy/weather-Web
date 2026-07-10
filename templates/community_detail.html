@@ -2,7 +2,7 @@
 {% from "partials/metric_info.html" import metric_info with context %}
 {% set needs_chartjs = true %}
 
-{% block title %}社区详情 - 天气健康风险预测系统{% endblock %}
+{% block title %}社区详情 · 宜老天气通{% endblock %}
 
 {% block content %}
 <div class="container my-4">
@@ -12,7 +12,7 @@
                 <h2><i class="bi bi-building"></i> {{ community.name }} 社区详情</h2>
                 <p class="text-muted mb-0">仅展示社区层面行动状态，不含个人身份信息。</p>
             </div>
-            <div class="d-flex gap-2">
+            <div class="d-flex flex-wrap gap-2">
                 <a class="btn btn-outline-secondary" href="{{ url_for('user.community_dashboard') }}">
                     <i class="bi bi-arrow-left"></i> 返回列表
                 </a>
@@ -25,7 +25,7 @@
 
     {% if not weather_available %}
     <div class="alert alert-warning" role="status">
-        <strong>等待真实天气</strong>：实时和风天气或关键输入暂不可用，当前不生成社区热风险等级或群发风险文案。
+        <strong>天气更新中</strong>：风险等级和转发内容暂缓更新。仍可查看今日确认、求助和外展情况。
     </div>
     {% endif %}
 

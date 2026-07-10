@@ -54,7 +54,7 @@ _REQUIRED_HEAT_WEATHER_FIELDS = (
     'temperature_min',
     'humidity',
 )
-_WEATHER_WAITING_LABEL = '等待真实天气'
+_WEATHER_WAITING_LABEL = '天气更新中'
 
 
 def _heat_weather_available(weather_data):
@@ -75,8 +75,8 @@ def _build_weather_waiting_message(pair, action_link):
     """天气不可用时只保留行动入口，不生成风险结论或风险建议。"""
     location = (pair.location_query or pair.community_code or '').strip()
     lines = [
-        '【天气数据待更新】',
-        '实时和风天气或关键输入暂不可用，当前不生成热风险等级或天气行动建议。',
+        '【天气更新中】',
+        '风险等级暂不显示。仍可打开行动页完成安全确认或求助。',
     ]
     if location:
         lines.append(f'地点：{location}')
@@ -519,7 +519,7 @@ def caregiver_action_log(pair_id):
         meta={'caregiver_actions_count': len(actions), 'has_note': bool(note)},
     )
     if weather_waiting:
-        flash('行动记录已保存；实时和风天气不可用，今日风险等级未写入。', 'warning')
+        flash('行动记录已保存。天气更新后会补充今日风险。', 'warning')
     else:
         flash('行动记录已保存。', 'success')
     return redirect(url_for('user.caregiver_pair_detail', pair_id=pair.id))
@@ -584,8 +584,8 @@ def caregiver_wechat_template():
         message_lines.append('如需帮助请在页面内点击“我需要帮助”。')
     else:
         message_lines = [
-            '【天气数据待更新】',
-            '实时和风天气或关键输入暂不可用，当前不生成热风险等级或天气行动建议。',
+            '【天气更新中】',
+            '风险等级暂不显示。仍可打开行动页完成安全确认或求助。',
             f'行动链接：{action_link}',
             f'短码：{short_code or "请填写"}',
         ]

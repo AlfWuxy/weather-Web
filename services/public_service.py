@@ -888,19 +888,58 @@ def _handle_action_debrief(token=None, confirm_action=None, debrief_action=None,
 
 
 def render_role_entry():
-    is_real_user = current_user.is_authenticated and not is_guest_user(current_user)
+    is_authenticated = current_user.is_authenticated
+    is_guest = is_authenticated and is_guest_user(current_user)
+    is_real_user = is_authenticated and not is_guest
+    role = getattr(current_user, 'role', None) if is_authenticated else None
     # Pilot定位：老人不一定会用网页；主要入口是子女端（照护工作台）
-    caregiver_next = url_for('user.pair_management')
+    default_caregiver_next = url_for('user.pair_management')
+    caregiver_next = (
+        url_for('user.caregiver_dashboard')
+        if role in ('caregiver', 'admin')
+        else default_caregiver_next
+    )
     community_next = url_for('user.community_dashboard')
-    caregiver_target = caregiver_next if is_real_user else url_for('public.login', next=caregiver_next)
-    community_target = community_next if is_real_user else url_for('public.login', next=community_next)
+
+    if is_guest:
+        caregiver_target = url_for('public.register')
+        caregiver_action_label = '注册开启照护'
+        caregiver_requires_login = False
+    elif is_real_user:
+        caregiver_target = caregiver_next
+        caregiver_action_label = '进入照护工作台'
+        caregiver_requires_login = False
+    else:
+        caregiver_target = url_for('public.login', next=default_caregiver_next)
+        caregiver_action_label = '进入照护工作台'
+        caregiver_requires_login = True
+
+    if is_real_user:
+        if role in ('community', 'admin'):
+            community_target = community_next
+            community_action_label = '进入社区看板'
+        else:
+            community_target = url_for('user.community_risk')
+            community_action_label = '查看社区风险'
+        community_requires_login = False
+    elif is_guest:
+        community_target = url_for('user.community_risk')
+        community_action_label = '查看社区风险'
+        community_requires_login = False
+    else:
+        community_target = url_for('public.login', next=community_next)
+        community_action_label = '进入社区看板'
+        community_requires_login = True
+
     return render_template(
         'role_entry.html',
         elder_target=url_for('public.elder_entry'),
         caregiver_target=caregiver_target,
         community_target=community_target,
-        caregiver_requires_login=not is_real_user,
-        community_requires_login=not is_real_user
+        caregiver_action_label=caregiver_action_label,
+        community_action_label=community_action_label,
+        caregiver_requires_login=caregiver_requires_login,
+        community_requires_login=community_requires_login,
     )
 
 
@@ -984,9 +1023,13 @@ def handle_login(next_url):
             if safe_next:
                 return redirect(safe_next)
 
-            if user.role == 'admin':
-                return redirect(url_for('admin.admin_dashboard'))
-            return redirect(url_for('user.user_dashboard'))
+            # 没有显式 next 时，让每种角色直达自己的主工作台。
+            landing_endpoint = {
+                'admin': 'admin.admin_dashboard',
+                'caregiver': 'user.caregiver_dashboard',
+                'community': 'user.community_dashboard',
+            }.get(user.role, 'user.user_dashboard')
+            return redirect(url_for(landing_endpoint))
 
         # 登录失败，递增失败计数
         if redis_client:

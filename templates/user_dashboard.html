@@ -6,6 +6,31 @@
 
 {% block content %}
 {% set weather_available = weather and weather_available %}
+{% if current_user.role == 'guest' %}
+    {% set dashboard_care_url = url_for('public.register') %}
+    {% set dashboard_care_title = '注册开启照护' %}
+    {% set dashboard_care_detail = '保存家人档案与提醒' %}
+    {% set dashboard_care_icon = 'person-plus' %}
+    {% set dashboard_family_url = url_for('public.register') %}
+{% elif current_user.role == 'community' %}
+    {% set dashboard_care_url = url_for('user.community_dashboard') %}
+    {% set dashboard_care_title = '社区工作台' %}
+    {% set dashboard_care_detail = '查看社区行动' %}
+    {% set dashboard_care_icon = 'building' %}
+    {% set dashboard_family_url = url_for('health.family_members') %}
+{% elif current_user.role in ['caregiver', 'admin'] %}
+    {% set dashboard_care_url = url_for('user.caregiver_dashboard') %}
+    {% set dashboard_care_title = '照护工作台' %}
+    {% set dashboard_care_detail = '管理照护行动' %}
+    {% set dashboard_care_icon = 'people' %}
+    {% set dashboard_family_url = url_for('health.family_members') %}
+{% else %}
+    {% set dashboard_care_url = url_for('user.pair_management') %}
+    {% set dashboard_care_title = '照护工作台' %}
+    {% set dashboard_care_detail = '管理照护行动' %}
+    {% set dashboard_care_icon = 'people' %}
+    {% set dashboard_family_url = url_for('health.family_members') %}
+{% endif %}
 {% set risk_score = heat_result.risk_score if heat_result else none %}
 {% set risk_level = heat_result.risk_level if heat_result else none %}
 {% set risk_score_class = 'is-risk-high' if risk_level in ['high', 'extreme'] else 'is-risk-mid' if risk_level == 'medium' else 'is-risk-low' %}
@@ -42,17 +67,17 @@
                     {% elif risk_level == 'medium' %}
                         今天适合提前做一点防护。
                     {% elif not weather_available %}
-                        等待实时天气后再给出结论。
+                        天气正在更新，先按日常防护安排。
                     {% else %}
-                        今天风险较低,保持日常照护。
+                        今天风险较低，保持日常照护。
                     {% endif %}
                 </h1>
                 <p>
                     {% if weather_available %}
-                        当前天气是 {{ weather.weather_condition if weather.weather_condition else '未知' }},
-                        健康风险为 {{ heat_risk_label or '待计算' }}。页面优先展示可执行动作,完整数据放在下方。
+                        当前天气为 {{ weather.weather_condition if weather.weather_condition else '未知' }}，
+                        今日天气健康风险为 {{ heat_risk_label or '待计算' }}。先完成下方行动，需要时再查看详细指标。
                     {% else %}
-                        实时天气暂不可用：和风天气或计算所需的最高温、最低温、湿度等关键输入不完整，页面不会用默认值替代真实观测。
+                        天气正在更新，风险等级暂不显示。你仍可查看通用防护和附近避暑资源。
                     {% endif %}
                 </p>
 
@@ -100,7 +125,7 @@
                                 · {{ weather.temperature_min if weather.temperature_min is not none else '--' }}° 到 {{ weather.temperature_max }}°
                             {% endif %}
                         {% else %}
-                            实时天气暂不可用
+                            天气更新中
                         {% endif %}
                     </em>
                 </div>
@@ -124,13 +149,13 @@
                     </div>
                     <div class="yl-risk-label">
                         {% if risk_level in ['high', 'extreme'] %}
-                            高风险,优先执行今日行动
+                            高风险，优先执行今日行动
                         {% elif risk_level == 'medium' %}
-                            中等风险,提前准备更稳
+                            中等风险，提前准备更稳
                         {% elif not weather_available %}
-                            等待实时天气
+                            天气更新中
                         {% else %}
-                            低风险,保持日常节奏
+                            低风险，保持日常节奏
                         {% endif %}
                     </div>
                 </div>
@@ -188,7 +213,7 @@
                         <h3 style="font-size:1.2rem; margin:4px 0 0;">今天优先做的事</h3>
                     </div>
                     <div class="yl-section-art" aria-hidden="true">
-                        <img src="{{ url_for('static', filename='illustrations/dashboard/today-actions.png') }}" alt="">
+                        <img src="{{ url_for('static', filename='illustrations/dashboard/today-actions.png') }}" alt="" width="1254" height="1254" loading="lazy" decoding="async">
                     </div>
                 </div>
                 <a class="btn btn-sm btn-outline-primary" href="{{ url_for('public.action_check') }}">打卡 <i class="bi bi-arrow-right"></i></a>
@@ -198,8 +223,8 @@
                     <div class="yl-action">
                         <i class="bi bi-cloud-slash"></i>
                         <div>
-                            <strong>等待实时天气</strong>
-                            <div class="detail">当前不展示 fallback 或缺字段天气建议，和风天气关键输入完整后自动更新。</div>
+                            <strong>先做好日常防护</strong>
+                            <div class="detail">补水、留意体感，需要降温时查看附近避暑资源。</div>
                         </div>
                     </div>
                 {% elif heat_actions %}
@@ -213,8 +238,8 @@
                     </div>
                     {% endfor %}
                 {% else %}
-                    {# 兜底,保证页面始终有内容可看 #}
-                    <div class="yl-action"><i class="bi bi-cup-hot"></i><div><strong>多喝温水</strong><div class="detail">建议 1.5L,少量多次</div></div></div>
+                    {# 兜底，保证页面始终有内容可看 #}
+                    <div class="yl-action"><i class="bi bi-cup-hot"></i><div><strong>多喝温水</strong><div class="detail">建议 1.5L，少量多次</div></div></div>
                     <div class="yl-action"><i class="bi bi-sun"></i><div><strong>避开午后外出</strong><div class="detail">11:00–15:00 紫外线强</div></div></div>
                     <div class="yl-action"><i class="bi bi-heart-pulse"></i><div><strong>关注血压</strong><div class="detail">早晚各测一次</div></div></div>
                     <div class="yl-action"><i class="bi bi-capsule"></i><div><strong>按时服药</strong><div class="detail">别漏降压药</div></div></div>
@@ -231,18 +256,18 @@
                         <h4 style="font-size:1.05rem; margin:4px 0 0;">快捷入口</h4>
                     </div>
                     <div class="yl-section-art yl-section-art-sm" aria-hidden="true">
-                        <img src="{{ url_for('static', filename='illustrations/dashboard/quick-entries.png') }}" alt="">
+                        <img src="{{ url_for('static', filename='illustrations/dashboard/quick-entries.png') }}" alt="" width="1254" height="1254" loading="lazy" decoding="async">
                     </div>
                 </div>
             </div>
             <div class="yl-feature-grid mt-3">
-                <a href="{{ url_for('health.family_members') }}" class="yl-feature yl-feature-spotlight">
+                <a href="{{ dashboard_care_url }}" class="yl-feature yl-feature-spotlight">
                     <div class="yl-feature-copy">
-                        <div class="yl-feature-icon yl-feature-icon-badge"><i class="bi bi-people"></i></div>
-                        <div><h5>照护工作台</h5><p>管理家人</p></div>
+                        <div class="yl-feature-icon yl-feature-icon-badge"><i class="bi bi-{{ dashboard_care_icon }}"></i></div>
+                        <div><h5>{{ dashboard_care_title }}</h5><p>{{ dashboard_care_detail }}</p></div>
                     </div>
                     <div class="yl-feature-figure" aria-hidden="true">
-                        <img src="{{ url_for('static', filename='illustrations/dashboard/care-workbench.png') }}" alt="">
+                        <img src="{{ url_for('static', filename='illustrations/dashboard/care-workbench.png') }}" alt="" width="1254" height="1254" loading="lazy" decoding="async">
                     </div>
                 </a>
                 <a href="{{ url_for('tools.ml_prediction') }}" class="yl-feature yl-feature-spotlight">
@@ -251,7 +276,7 @@
                         <div><h5>AI 疾病预测</h5><p>基于天气的个性化预测</p></div>
                     </div>
                     <div class="yl-feature-figure" aria-hidden="true">
-                        <img src="{{ url_for('static', filename='illustrations/dashboard/ai-prediction.png') }}" alt="">
+                        <img src="{{ url_for('static', filename='illustrations/dashboard/ai-prediction.png') }}" alt="" width="1254" height="1254" loading="lazy" decoding="async">
                     </div>
                 </a>
                 <a href="{{ url_for('tools.chronic_risk') }}" class="yl-feature">
@@ -304,7 +329,7 @@
                     <strong>暂无家庭成员健康指标</strong>
                     <p>添加血压、心率或血糖后，这里会显示精简动效卡。</p>
                 </div>
-                <a class="btn btn-sm btn-outline-primary" href="{{ url_for('health.family_members') }}">去补充</a>
+                <a class="btn btn-sm btn-outline-primary" href="{{ dashboard_family_url }}">{% if current_user.role == 'guest' %}注册后补充{% else %}去补充{% endif %}</a>
             </div>
             {% endif %}
         </section>
@@ -383,9 +408,9 @@
                         <i class="bi bi-cloud-slash"></i>
                         <div>
                             <strong>暂无实时 7 日预报</strong>
-                            <p>首页只展示和风天气实时预报结果，接口暂不可用时不会显示演示高温风险。</p>
+                            <p>天气更新后会自动显示 7 日趋势。现在可先查看今天的行动建议。</p>
                         </div>
-                        <a class="btn btn-sm btn-outline-primary" href="{{ url_for('tools.forecast_7day') }}">重新生成</a>
+                        <a class="btn btn-sm btn-outline-primary" href="{{ url_for('tools.forecast_7day') }}">稍后再试</a>
                     </div>
                 {% endif %}
             </div>

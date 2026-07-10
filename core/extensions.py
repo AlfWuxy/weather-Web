@@ -24,6 +24,7 @@ def init_extensions(app):
     login_manager.init_app(app)
     login_manager.login_view = 'public.login'
     login_manager.login_message = '请先登录'
+    login_manager.login_message_category = 'warning'
 
     rate_limits = app.config.get('RATE_LIMITS', '200 per minute')
     rate_storage = app.config.get('RATE_LIMIT_STORAGE_URI', 'memory://')

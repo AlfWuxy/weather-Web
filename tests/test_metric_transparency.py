@@ -85,7 +85,7 @@ def test_public_risk_exposes_current_inputs_in_info_button(client, monkeypatch):
     assert '3天' in body
     assert 'aria-label="查看' in body
     assert '系统不存老人姓名、电话、慢病或精确住址' not in body
-    assert '主动填写的信息会保存在服务器' in body
+    assert '你主动填写的账户和家庭资料会保存在服务器' in body
 
 
 def test_public_risk_fails_closed_for_mock_weather(client, monkeypatch):
@@ -106,10 +106,11 @@ def test_public_risk_fails_closed_for_mock_weather(client, monkeypatch):
 
     assert response.status_code == 200
     body = response.get_data(as_text=True)
-    assert '等待真实天气' in body
+    assert '天气更新中' in body
     assert '当前风险：低风险' not in body
     assert '综合评分 0.0' not in body
-    assert '本页已停止生成风险等级、综合分和行动清单' in body
+    assert '风险等级暂不显示' in body
+    assert '附近避暑资源' in body
 
 
 def test_public_risk_fails_closed_when_required_weather_field_is_missing(client, monkeypatch):
@@ -130,7 +131,7 @@ def test_public_risk_fails_closed_when_required_weather_field_is_missing(client,
 
     assert response.status_code == 200
     body = response.get_data(as_text=True)
-    assert '等待真实天气' in body
+    assert '天气更新中' in body
     assert '当前风险：' not in body
 
 

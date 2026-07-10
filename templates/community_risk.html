@@ -2,7 +2,7 @@
 {% set needs_chartjs = true %}
 {% from "partials/metric_info.html" import metric_info with context %}
 
-{% block title %}社区风险地图 - 天气健康风险预测系统{% endblock %}
+{% block title %}社区风险与行动地图 · 宜老天气通{% endblock %}
 
 {% block extra_css %}
 <style>
@@ -179,6 +179,18 @@
         height: 260px;
     }
 }
+
+@media (max-width: 575.98px) {
+    .community-risk-page .cr-map-wrap {
+        height: 380px;
+    }
+
+    .community-risk-page .card-header.d-flex {
+        align-items: flex-start !important;
+        flex-wrap: wrap;
+        gap: 6px;
+    }
+}
 </style>
 {% endblock %}
 
@@ -187,13 +199,13 @@
     <div class="row mb-3">
         <div class="col-12 d-flex flex-wrap justify-content-between gap-2 align-items-start">
             <div>
-                <h2 class="mb-1"><i class="bi bi-map"></i> 社区健康风险地图</h2>
-                <p class="text-muted mb-0">直观展示各社区的健康风险分布情况</p>
+                <h2 class="mb-1"><i class="bi bi-map"></i> 社区风险与行动地图</h2>
+                <p class="text-muted mb-0">查看哪些社区需要优先提醒、走访和安排避暑资源。</p>
             </div>
             <div class="d-flex flex-wrap gap-2">
-                <span class="cr-chip">方法：门诊记录 O/E + 95%CI + 经验贝叶斯平滑 {{ metric_info('sir') }}</span>
-                <span class="cr-chip">空间：Gi* 热点显著性 {{ metric_info('gistar') }}</span>
-                <span class="cr-chip">决策：Impact × Likelihood 矩阵 {{ metric_info('community_impact_likelihood') }}</span>
+                <span class="cr-chip"><i class="bi bi-cloud-sun"></i> 天气与预警 {{ metric_info('community_weather_hazard') }}</span>
+                <span class="cr-chip"><i class="bi bi-people"></i> 社区脆弱性 {{ metric_info('community_svi') }}</span>
+                <span class="cr-chip"><i class="bi bi-clock-history"></i> 历史健康负担 {{ metric_info('sir') }}</span>
             </div>
         </div>
     </div>
@@ -202,11 +214,11 @@
         <div class="card-body">
             <form id="riskFilterForm" class="row g-3 align-items-end">
                 <div class="col-xl-2 col-md-4">
-                    <label class="form-label">分析日期</label>
+                    <label class="form-label">查看日期</label>
                     <input type="date" class="form-control" id="analysisDate" value="{{ default_analysis_date }}">
                 </div>
                 <div class="col-xl-2 col-md-4">
-                    <label class="form-label">回溯窗口</label>
+                    <label class="form-label">参考时段</label>
                     <select class="form-select" id="windowDays">
                         {% for option in [14, 30, 60, 90] %}
                             <option value="{{ option }}" {% if default_window_days == option %}selected{% endif %}>{{ option }} 天</option>
@@ -214,7 +226,7 @@
                     </select>
                 </div>
                 <div class="col-xl-3 col-md-4">
-                    <label class="form-label">疾病分类</label>
+                    <label class="form-label">健康类别</label>
                     <select class="form-select" id="diseaseFilter">
                         <option value="">全部疾病</option>
                         {% for disease in disease_options %}
@@ -223,7 +235,7 @@
                     </select>
                 </div>
                 <div class="col-xl-3 col-md-6">
-                    <label class="form-label">地图图层</label>
+                    <label class="form-label">地图显示</label>
                     <select class="form-select" id="layerSelect">
                         <option value="risk_index">综合风险（0-100）</option>
                         <option value="vulnerability">脆弱性分位（SVI-like）</option>
@@ -233,12 +245,12 @@
                 </div>
                 <div class="col-xl-2 col-md-6 d-grid">
                     <button class="btn btn-primary" id="refreshRiskMap" type="submit">
-                        <i class="bi bi-arrow-repeat me-1"></i>刷新分析
+                        <i class="bi bi-arrow-repeat me-1"></i>查看社区风险
                     </button>
                 </div>
             </form>
             <div class="alert alert-warning mt-3 mb-0 d-none" id="weatherUnavailableAlert" role="alert">
-                实时和风天气暂不可用，当前不会生成社区健康风险结论。
+                天气正在更新，社区风险暂不显示。你仍可查看避暑资源和居民反馈。
             </div>
         </div>
     </div>
@@ -246,7 +258,7 @@
     <div class="row g-3 mb-3">
         <div class="col-lg-8">
             <div class="card cr-card h-100">
-                <div class="card-header d-flex justify-content-between align-items-center">
+                <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
                     <h6 class="mb-0"><i class="bi bi-geo-alt"></i> 风险分布地图</h6>
                     <span class="text-muted small" id="analysisMeta">等待载入...</span>
                 </div>
@@ -386,7 +398,7 @@
     </div>
 
     <div class="card cr-card mb-3">
-        <div class="card-header d-flex justify-content-between align-items-center">
+        <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
             <h6 class="mb-0"><i class="bi bi-people"></i> 公平性分层（脆弱社区优先）</h6>
             <span class="text-muted small">Q4 为最高脆弱分层</span>
         </div>
@@ -421,7 +433,7 @@
     </div>
 
     <div class="card cr-card mb-3">
-        <div class="card-header d-flex justify-content-between align-items-center">
+        <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
             <h6 class="mb-0"><i class="bi bi-table"></i> 社区风险明细</h6>
             <span class="text-muted small">点击排名项可定位地图</span>
         </div>
@@ -455,7 +467,8 @@
 
     <div class="card cr-card">
         <div class="card-body">
-            <h6 class="mb-2"><i class="bi bi-journal-text"></i> 方法说明（本页实现）</h6>
+            <details>
+            <summary class="fw-semibold"><i class="bi bi-journal-text"></i> 查看计算说明</summary>
             <ul class="mb-0 text-muted" id="methodologyList">
                 <li>天气危险度上游 {{ metric_info('community_weather_hazard') }}：Excess=max(Weather RR-1, 0)×VI×BaselineVisits；Hazard=clip((1-exp(-Excess/Efold))×100, 0, 100)，本次实际输入可在地图弹窗查看。</li>
                 <li>历史分量可用时：社区风险 = 45% 天气危险度 + 35% SVI-like 脆弱性 + 20% 历史负担；高不确定性时乘 0.93。</li>
@@ -464,6 +477,7 @@
                 <li>历史分量可用时展示不确定性与热点图层；缺失时显示数据不足。</li>
                 <li>缺少实测绿地、热岛或医疗可达性时使用稳定的中性代理值，相关排序需谨慎解读。</li>
             </ul>
+            </details>
         </div>
     </div>
 </div>
@@ -804,69 +818,23 @@ function buildInfoWindowHtml(row, style) {
     const rrText = historicalAvailable && row.sir !== null && row.sir !== undefined
         ? formatNumber(row.sir, 2)
         : '数据不足';
-    const ciText = (row.ci_low === null || row.ci_low === undefined || row.ci_high === null || row.ci_high === undefined)
-        ? '--'
-        : `[${formatNumber(row.ci_low, 2)}, ${formatNumber(row.ci_high, 2)}]`;
-    const probabilityText = historicalAvailable && row.probability_exceed_baseline !== null
-        && row.probability_exceed_baseline !== undefined
-        ? formatPercent(row.probability_exceed_baseline * 100, 1)
-        : '数据不足';
-    const uncertaintyText = historicalAvailable
-        ? formatNumber(row.uncertainty_index, 1, '--')
-        : '数据不足';
-    const burdenText = historicalAvailable
-        ? formatNumber(row.burden_percentile, 1, '--')
-        : '数据不足';
-    const penalty = toNumber(row.uncertainty_penalty, 1.0);
-    const weights = row.risk_weights || {};
-    const weatherWeight = toNumber(weights.weather, null);
-    const sviWeight = toNumber(weights.svi, null);
-    const burdenWeight = toNumber(weights.burden, null);
-    const weatherWeightText = weatherWeight === null ? '--' : `${(weatherWeight * 100).toFixed(2)}%`;
-    const sviWeightText = sviWeight === null ? '--' : `${(sviWeight * 100).toFixed(2)}%`;
-    const burdenWeightText = burdenWeight === null ? '--' : `${(burdenWeight * 100).toFixed(2)}%`;
-    const contributions = row.risk_contributions || {};
-    const hazardFormula = row.hazard_formula || {};
-    const formulaWeatherRr = toNumber(hazardFormula.weather_rr, null);
-    const formulaVi = toNumber(hazardFormula.vi, null);
-    const formulaBaseline = toNumber(hazardFormula.baseline_visits, null);
-    const formulaExcess = toNumber(hazardFormula.excess, null);
-    const formulaEfold = toNumber(hazardFormula.efold, null);
-    const formulaHazard = toNumber(hazardFormula.hazard, null);
-    const hazardFormulaAvailable = [
-        formulaWeatherRr,
-        formulaVi,
-        formulaBaseline,
-        formulaExcess,
-        formulaEfold,
-        formulaHazard
-    ].every(value => value !== null);
-    const hazardFormulaHtml = hazardFormulaAvailable
-        ? [
-            `<div style="font-size:11px;line-height:1.45;">Weather RR ${escapeHtml(formatNumber(formulaWeatherRr, 4))} · VI ${escapeHtml(formatNumber(formulaVi, 3))} · BaselineVisits ${escapeHtml(formatNumber(formulaBaseline, 3))}</div>`,
-            `<div style="font-size:11px;line-height:1.45;">Excess=max(RR-1,0)×VI×BaselineVisits = <strong>${escapeHtml(formatNumber(formulaExcess, 4))}</strong></div>`,
-            `<div style="font-size:11px;line-height:1.45;">Hazard=clip((1-exp(-Excess/${escapeHtml(formatNumber(formulaEfold, 3))}))×100,0,100) = <strong>${escapeHtml(formatNumber(formulaHazard, 4))}</strong></div>`
-        ].join('')
-        : '<div style="font-size:11px;color:#64748b;">天气危险度回算输入暂不完整。</div>';
+    const riskIndex = toNumber(row.risk_index, null);
+    const actionHint = riskIndex !== null && riskIndex >= 70
+        ? '优先安排提醒和走访。'
+        : riskIndex !== null && riskIndex >= 40
+            ? '持续关注，并提前确认避暑安排。'
+            : '保持日常关注。';
 
     return [
-        '<div style="min-width:300px;padding:10px;">',
-        `<div style="font-weight:700;color:${style.color};margin-bottom:8px;">🏘️ ${escapeHtml(row.community || '--')}</div>`,
-        `<div style="font-size:12px;margin-bottom:4px;">图层标签：<strong>${escapeHtml(style.label)}</strong></div>`,
-        `<div style="font-size:12px;margin-bottom:4px;">项目综合风险等级 0-4：<strong>${escapeHtml(String(row.heatrisk_level ?? '--'))}</strong> (${escapeHtml(row.heatrisk_label || '--')})</div>`,
+        '<div class="cr-info-window" style="width:min(300px,calc(100vw - 72px));max-width:300px;padding:10px;">',
+        `<div style="font-weight:700;color:${style.color};margin-bottom:8px;">${escapeHtml(row.community || '--')}</div>`,
+        `<div style="font-size:12px;margin-bottom:4px;">天气关注：<strong>${escapeHtml(style.label)}</strong></div>`,
+        `<div style="font-size:12px;margin-bottom:4px;">风险等级：<strong>${escapeHtml(row.heatrisk_label || '--')}</strong></div>`,
         `<div style="font-size:12px;margin-bottom:4px;">综合风险：<strong>${escapeHtml(formatNumber(row.risk_index, 1))}</strong></div>`,
-        `<div style="font-size:12px;margin-bottom:4px;">SVI分位：<strong>${escapeHtml(formatNumber(row.svi_percentile, 1))}%</strong></div>`,
-        `<div style="font-size:12px;margin-bottom:4px;">门诊记录 O/E [95%CI]：<strong>${escapeHtml(rrText)}</strong> ${escapeHtml(ciText)}</div>`,
-        `<div style="font-size:12px;margin-bottom:4px;">P(O/E>1)：<strong>${escapeHtml(probabilityText)}</strong></div>`,
-        `<div style="font-size:12px;margin-bottom:4px;">热点：<strong>${escapeHtml(row.hotspot_category || '--')}</strong></div>`,
-        `<div style="font-size:12px;">不确定性：<strong>${escapeHtml(uncertaintyText)}</strong></div>`,
-        '<div style="margin:8px 0 5px;border-top:1px solid #e5e7eb;"></div>',
-        '<div style="font-size:11px;color:#64748b;margin-bottom:3px;">天气危险度上游回算</div>',
-        hazardFormulaHtml,
-        '<div style="margin:8px 0 5px;border-top:1px solid #e5e7eb;"></div>',
-        '<div style="font-size:11px;color:#64748b;margin-bottom:3px;">本次综合公式</div>',
-        `<div style="font-size:11px;line-height:1.45;">(${weatherWeightText}×天气 ${escapeHtml(formatNumber(row.weather_hazard_score, 1))} + ${sviWeightText}×SVI ${escapeHtml(formatNumber(row.svi_percentile, 1))} + ${burdenWeightText}×历史负担 ${escapeHtml(burdenText)}) × ${penalty.toFixed(2)}</div>`,
-        `<div style="font-size:11px;line-height:1.45;color:#64748b;">贡献：天气 ${escapeHtml(formatNumber(contributions.weather, 2))} + SVI ${escapeHtml(formatNumber(contributions.svi, 2))} + 负担 ${escapeHtml(formatNumber(contributions.burden, 2))}</div>`,
+        `<div style="font-size:12px;margin-bottom:4px;">社区脆弱性：<strong>${escapeHtml(formatNumber(row.svi_percentile, 1))}%</strong></div>`,
+        `<div style="font-size:12px;margin-bottom:4px;">历史健康负担：<strong>${escapeHtml(rrText)}</strong></div>`,
+        `<div style="font-size:12px;margin-bottom:6px;">热点状态：<strong>${escapeHtml(row.hotspot_category || '--')}</strong></div>`,
+        `<div style="font-size:12px;color:#475569;border-top:1px solid #e5e7eb;padding-top:6px;">${escapeHtml(actionHint)}</div>`,
         '</div>'
     ].join('');
 }
@@ -1362,7 +1330,7 @@ function loadRiskMap() {
     const weatherAlert = document.getElementById('weatherUnavailableAlert');
     if (weatherAlert) {
         weatherAlert.classList.add('d-none');
-        weatherAlert.textContent = '实时和风天气暂不可用，当前不会生成社区健康风险结论。';
+        weatherAlert.textContent = '天气正在更新，社区风险暂不显示。你仍可查看避暑资源和居民反馈。';
     }
 
     const payload = {
@@ -1379,7 +1347,7 @@ function loadRiskMap() {
     .then(async response => {
         const data = await response.json();
         if (!response.ok && data && data.error === 'weather_unavailable') {
-            const err = new Error(data.message || '实时和风天气暂不可用，当前不会生成社区健康风险结论。');
+            const err = new Error(data.message || '天气正在更新，社区风险暂不显示。请稍后再试。');
             err.code = data.error;
             throw err;
         }
@@ -1403,20 +1371,24 @@ function loadRiskMap() {
         renderSuggestions(data.management_suggestions || []);
     })
     .catch(error => {
-        console.warn('社区风险地图当前不可用:', error);
+        if (error.code !== 'weather_unavailable') {
+            console.warn('社区风险地图当前不可用:', error);
+        }
         if (weatherAlert && error.code === 'weather_unavailable') {
-            weatherAlert.textContent = error.message || weatherAlert.textContent;
+            weatherAlert.textContent = '天气正在更新，社区风险暂不显示。你仍可查看避暑资源和居民反馈。';
             weatherAlert.classList.remove('d-none');
         }
         const meta = document.getElementById('analysisMeta');
         if (meta && error.code === 'weather_unavailable') {
-            meta.textContent = '实时天气不可用';
+            meta.textContent = '天气更新中';
         }
         const list = document.getElementById('community-list');
         clearElement(list);
         const div = document.createElement('div');
         div.className = error.code === 'weather_unavailable' ? 'text-warning p-3' : 'text-danger p-3';
-        div.textContent = `加载失败：${error.message || error}`;
+        div.textContent = error.code === 'weather_unavailable'
+            ? '社区排序将在天气更新后显示。'
+            : '暂时无法加载社区风险，请稍后再试。';
         list.appendChild(div);
     });
 }

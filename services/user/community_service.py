@@ -45,7 +45,7 @@ _REQUIRED_HEAT_WEATHER_FIELDS = (
     'temperature_min',
     'humidity',
 )
-_WEATHER_WAITING_LABEL = '等待真实天气'
+_WEATHER_WAITING_LABEL = '天气更新中'
 
 
 def _heat_weather_available(weather_data):
