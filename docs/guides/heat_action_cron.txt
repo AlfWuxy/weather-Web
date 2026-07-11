@@ -2,8 +2,8 @@ Heat Action Weather Sync (QWeather)
 =================================
 
 CLI
-- python services/pipelines/sync_weather_data.py --daily --action-daily
-- python services/pipelines/sync_weather_data.py --action-daily --community "YourCommunity"
+- python -m services.pipelines.sync_weather_data --daily --action-daily
+- python -m services.pipelines.sync_weather_data --action-daily --community "YourCommunity"
 
 Shell
 - ./scripts/weather_sync.sh

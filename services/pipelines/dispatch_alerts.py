@@ -3,9 +3,16 @@
 
 import argparse
 import logging
+from pathlib import Path
+import sys
 
-from core.app import create_app
-from services.push.dispatch import dispatch_alerts
+ROOT_DIR = Path(__file__).resolve().parents[2]
+if str(ROOT_DIR) not in sys.path:
+    # 兼容旧定时任务和手工命令从任意目录直接执行脚本。
+    sys.path.insert(0, str(ROOT_DIR))
+
+from core.app import create_app  # noqa: E402
+from services.push.dispatch import dispatch_alerts  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -24,4 +31,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

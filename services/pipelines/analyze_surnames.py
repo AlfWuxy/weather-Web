@@ -3,10 +3,17 @@
 分析姓氏和社区分配情况
 """
 from collections import Counter
+from pathlib import Path
+import sys
 
-from core.app import create_app
-from core.db_models import MedicalRecord
-from core.extensions import db
+ROOT_DIR = Path(__file__).resolve().parents[2]
+if str(ROOT_DIR) not in sys.path:
+    # 兼容旧定时任务和手工命令从任意目录直接执行脚本。
+    sys.path.insert(0, str(ROOT_DIR))
+
+from core.app import create_app  # noqa: E402
+from core.db_models import MedicalRecord  # noqa: E402
+from core.extensions import db  # noqa: E402
 
 app = create_app(register_blueprints=False)
 

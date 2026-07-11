@@ -15,4 +15,7 @@ fi
 
 VENV_PY="${VENV_PY:-python}"
 
-exec "$VENV_PY" "$ROOT_DIR/services/pipelines/sync_weather_cache.py" "$@"
+cd "$ROOT_DIR"
+export PYTHONPATH="$ROOT_DIR${PYTHONPATH:+:$PYTHONPATH}"
+
+exec "$VENV_PY" -m services.pipelines.sync_weather_cache "$@"

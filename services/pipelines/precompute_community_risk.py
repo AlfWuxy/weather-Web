@@ -3,8 +3,15 @@
 import argparse
 import logging
 import os
+from pathlib import Path
+import sys
 
-from core.app import create_app
+ROOT_DIR = Path(__file__).resolve().parents[2]
+if str(ROOT_DIR) not in sys.path:
+    # 兼容旧定时任务和手工命令从任意目录直接执行脚本。
+    sys.path.insert(0, str(ROOT_DIR))
+
+from core.app import create_app  # noqa: E402
 from core.constants import DEFAULT_CITY_LABEL  # noqa: E402
 from core.time_utils import today_local  # noqa: E402
 from core.weather import (  # noqa: E402
