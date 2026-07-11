@@ -77,8 +77,33 @@
 
     <noscript><style>.page-loader{display:none !important;}[data-motion] .yl-fade-up,[data-motion] .yl-section,[data-motion] .narrative-step,[data-motion] [data-animate-in]{opacity:1 !important;transform:none !important;}</style></noscript>
     {% block extra_css %}{% endblock %}
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/apple-polish.css') }}">
 </head>
 <body class="{% block body_class %}{% endblock %}" data-viewport-tier="wide" data-motion="m1 m2 m4 m5">
+    {% set nav_endpoint = request.endpoint or '' %}
+    {% set nav_is_guest = current_user.is_authenticated and current_user.role == 'guest' %}
+    {% set nav_family_active = 'family_member' in nav_endpoint %}
+    {% set nav_community_workspace_active = nav_endpoint in ['user.community_dashboard', 'user.community_detail', 'user.community_wechat', 'user.community_announce'] %}
+    {% if nav_is_guest or not current_user.is_authenticated %}
+        {% set nav_care_url = url_for('public.register') %}
+        {% set nav_care_label = '注册开启照护' %}
+        {% set nav_care_primary_active = nav_endpoint == 'public.register' %}
+    {% elif current_user.role == 'community' %}
+        {% set nav_care_url = url_for('user.community_dashboard') %}
+        {% set nav_care_label = '社区工作台' %}
+        {% set nav_care_primary_active = nav_endpoint in ['user.community_dashboard', 'user.community_detail', 'user.community_wechat', 'user.community_announce'] %}
+    {% elif current_user.role in ['caregiver', 'admin'] %}
+        {% set nav_care_url = url_for('user.caregiver_dashboard') %}
+        {% set nav_care_label = '照护' %}
+        {% set nav_care_primary_active = nav_endpoint.startswith('user.caregiver') or nav_endpoint.startswith('user.pair_') %}
+    {% else %}
+        {% set nav_care_url = url_for('user.pair_management') %}
+        {% set nav_care_label = '照护' %}
+        {% set nav_care_primary_active = nav_endpoint.startswith('user.pair_') %}
+    {% endif %}
+    {% set nav_care_active = nav_care_primary_active or nav_family_active %}
+
+    <a class="visually-hidden-focusable skip-link" href="#main-content">跳到主要内容</a>
 
     <div class="page-loader" id="pageLoader">
         <div class="loader-spinner"></div>
@@ -86,10 +111,10 @@
     </div>
 
     {# ===================== 顶部导航 ===================== #}
-    <nav class="navbar sticky-top">
+    <nav class="navbar sticky-top" aria-label="主导航">
         <div class="container-fluid">
             <a class="navbar-brand" href="{{ url_for('public.index') }}">
-                <img class="yl-brand-avatar" src="{{ url_for('static', filename='brand/yilao-avatar.png') }}" alt="" width="34" height="34">
+                <img class="yl-brand-avatar" src="{{ url_for('static', filename='brand/yilao-avatar.png') }}" alt="" width="34" height="34" decoding="async">
                 <span>宜老天气通</span>
             </a>
 
@@ -97,31 +122,32 @@
             {% if current_user.is_authenticated %}
                 <div class="app-desktop-nav d-none d-lg-flex align-items-center gap-1 mx-auto">
                     <a class="nav-link {% if request.endpoint == 'user.user_dashboard' %}active{% endif %}"
-                       href="{{ url_for('user.user_dashboard') }}">今天</a>
+                       href="{{ url_for('user.user_dashboard') }}" data-nav-key="today"
+                       {% if request.endpoint == 'user.user_dashboard' %}aria-current="page"{% endif %}>今天</a>
 
-                    {% if current_user.role in ['caregiver', 'admin'] %}
-                        <a class="nav-link {% if request.endpoint == 'user.caregiver_dashboard' %}active{% endif %}"
-                           href="{{ url_for('user.caregiver_dashboard') }}">照护</a>
-                    {% else %}
-                        <a class="nav-link {% if 'family' in (request.endpoint or '') or 'pair' in (request.endpoint or '') %}active{% endif %}"
-                           href="{{ url_for('health.family_members') }}">照护</a>
-                    {% endif %}
+                    <a class="nav-link {% if nav_care_active %}active{% endif %}"
+                       href="{{ nav_care_url }}" data-nav-key="care"
+                       {% if nav_care_active %}aria-current="page"{% endif %}>{{ nav_care_label }}</a>
 
                     <a class="nav-link {% if request.endpoint == 'tools.forecast_7day' %}active{% endif %}"
-                       href="{{ url_for('tools.forecast_7day') }}">7 天预报</a>
+                       href="{{ url_for('tools.forecast_7day') }}" data-nav-key="forecast"
+                       {% if request.endpoint == 'tools.forecast_7day' %}aria-current="page"{% endif %}>7 天预报</a>
 
                     <a class="nav-link {% if request.endpoint == 'user.community_risk' %}active{% endif %}"
-                       href="{{ url_for('user.community_risk') }}">社区</a>
+                       href="{{ url_for('user.community_risk') }}" data-nav-key="community-risk"
+                       {% if request.endpoint == 'user.community_risk' %}aria-current="page"{% endif %}>社区风险</a>
 
                     {% if feature_flags.elder_mode %}
                         <a class="nav-link {% if request.endpoint == 'user.elder_dashboard' %}active{% endif %}"
-                           href="{{ url_for('user.elder_dashboard') }}">老人模式</a>
+                           href="{{ url_for('user.elder_dashboard') }}" data-nav-key="elder"
+                           {% if request.endpoint == 'user.elder_dashboard' %}aria-current="page"{% endif %}>老人模式</a>
                     {% endif %}
 
                     <div class="app-more-menu" id="appMoreMenu">
                         <button type="button"
-                                class="nav-link app-more-trigger"
+                                class="nav-link app-more-trigger {% if current_user.role == 'admin' and nav_community_workspace_active %}active{% endif %}"
                                 data-nav-more-trigger="desktop"
+                                data-nav-key="more"
                                 aria-expanded="false"
                                 aria-controls="appMegaMenu">
                             更多 <i class="bi bi-chevron-down small"></i>
@@ -143,19 +169,20 @@
                                     <a class="app-mega-link" href="{{ url_for('tools.ml_prediction') }}">AI 疾病预测</a>
                                     <a class="app-mega-link" href="{{ url_for('tools.ai_qa') }}">AI 提问</a>
                                     <a class="app-mega-link" href="{{ url_for('tools.chronic_risk') }}">慢病风险评估</a>
-                                    <a class="app-mega-link" href="{{ url_for('health.health_diary') }}">健康日记</a>
-                                    <a class="app-mega-link" href="{{ url_for('health.medication_reminders') }}">用药提醒</a>
+                                    {% if not nav_is_guest %}
+                                        <a class="app-mega-link" href="{{ url_for('health.health_diary') }}">健康日记</a>
+                                        <a class="app-mega-link" href="{{ url_for('health.medication_reminders') }}">用药提醒</a>
+                                        <a class="app-mega-link" href="{{ url_for('analysis.annual_report') }}">年度健康报告</a>
+                                    {% endif %}
                                 </section>
 
-                                {% if current_user.role in ['community', 'admin'] %}
+                                {% if current_user.role == 'admin' %}
                                 <section class="app-mega-group">
                                     <div class="app-mega-kicker">社区与群体</div>
-                                    <a class="app-mega-link" href="{{ url_for('user.community_dashboard') }}">社区看板</a>
-                                    {% if current_user.role == 'admin' %}
-                                        <a class="app-mega-link" href="{{ url_for('admin.admin_dashboard') }}">管理后台</a>
-                                        <a class="app-mega-link" href="{{ url_for('analysis.pilot_dashboard') }}">试点数据看板</a>
-                                        <a class="app-mega-link" href="{{ url_for('analysis.reports_center') }}">报告导出</a>
-                                    {% endif %}
+                                    <a class="app-mega-link {% if nav_community_workspace_active %}active{% endif %}" href="{{ url_for('user.community_dashboard') }}" {% if nav_community_workspace_active %}aria-current="page"{% endif %}>社区看板</a>
+                                    <a class="app-mega-link" href="{{ url_for('admin.admin_dashboard') }}">管理后台</a>
+                                    <a class="app-mega-link" href="{{ url_for('analysis.pilot_dashboard') }}">试点数据看板</a>
+                                    <a class="app-mega-link" href="{{ url_for('analysis.reports_center') }}">报告导出</a>
                                 </section>
                                 {% endif %}
 
@@ -192,7 +219,7 @@
                     </form>
                 {% else %}
                     <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('public.login') }}">登录</a>
-                    <a class="btn btn-sm btn-primary" href="{{ url_for('public.register') }}">注册</a>
+                    <a class="btn btn-sm btn-primary nav-auth-register" data-nav-auth="register" href="{{ url_for('public.register') }}">注册</a>
                 {% endif %}
 
                 <button class="navbar-toggler d-lg-none" type="button" data-bs-toggle="offcanvas" data-bs-target="#appNavDrawer" aria-controls="appNavDrawer" aria-label="打开菜单">
@@ -206,7 +233,7 @@
     <div class="offcanvas offcanvas-end" tabindex="-1" id="appNavDrawer" aria-labelledby="appNavDrawerLabel" style="width: 340px;">
         <div class="offcanvas-header" style="border-bottom:1px solid var(--yl-line-soft);">
             <div class="d-flex align-items-center gap-2">
-                <img class="yl-drawer-brand-avatar" src="{{ url_for('static', filename='brand/yilao-avatar.png') }}" alt="" width="30" height="30">
+                <img class="yl-drawer-brand-avatar" src="{{ url_for('static', filename='brand/yilao-avatar.png') }}" alt="" width="30" height="30" loading="lazy" decoding="async">
                 <h5 class="offcanvas-title mb-0" id="appNavDrawerLabel">宜老天气通 · 更多</h5>
             </div>
             <button type="button" class="btn-close" data-bs-dismiss="offcanvas" aria-label="关闭"></button>
@@ -225,12 +252,12 @@
 
             {# ----- 今天 ----- #}
             <div class="mb-2" style="font-size:.72rem; color:var(--yl-muted); text-transform:uppercase; letter-spacing:.05em; padding:0 4px;">今天</div>
-            <nav class="nav flex-column mb-3">
-                <a class="nav-link" href="{{ url_for('public.index') }}"><i class="bi bi-house-door me-2"></i>首页</a>
+            <nav class="nav flex-column mb-3" aria-label="今天">
+                <a class="nav-link {% if nav_endpoint == 'public.index' %}active{% endif %}" href="{{ url_for('public.index') }}" data-nav-key="home" {% if nav_endpoint == 'public.index' %}aria-current="page"{% endif %}><i class="bi bi-house-door me-2"></i>首页</a>
                 {% if current_user.is_authenticated %}
-                    <a class="nav-link" href="{{ url_for('user.user_dashboard') }}"><i class="bi bi-heart-pulse me-2"></i>今日主页</a>
+                    <a class="nav-link {% if nav_endpoint == 'user.user_dashboard' %}active{% endif %}" href="{{ url_for('user.user_dashboard') }}" data-nav-key="today" {% if nav_endpoint == 'user.user_dashboard' %}aria-current="page"{% endif %}><i class="bi bi-heart-pulse me-2"></i>今日主页</a>
                     {% if feature_flags.elder_mode %}
-                        <a class="nav-link" href="{{ url_for('user.elder_dashboard') }}"><i class="bi bi-eyeglasses me-2"></i>老人模式</a>
+                        <a class="nav-link {% if nav_endpoint == 'user.elder_dashboard' %}active{% endif %}" href="{{ url_for('user.elder_dashboard') }}" data-nav-key="elder" {% if nav_endpoint == 'user.elder_dashboard' %}aria-current="page"{% endif %}><i class="bi bi-eyeglasses me-2"></i>老人模式</a>
                     {% endif %}
                 {% endif %}
             </nav>
@@ -238,38 +265,44 @@
             {# ----- 照护 ----- #}
             {% if current_user.is_authenticated %}
             <div class="mb-2" style="font-size:.72rem; color:var(--yl-muted); text-transform:uppercase; letter-spacing:.05em; padding:0 4px;">照护</div>
-            <nav class="nav flex-column mb-3">
-                    <a class="nav-link" href="{{ url_for('health.family_members') }}"><i class="bi bi-people me-2"></i>照护工作台</a>
-                    <a class="nav-link" href="{{ url_for('public.action_check') }}"><i class="bi bi-clipboard-check me-2"></i>行动打卡</a>
+            <nav class="nav flex-column mb-3" aria-label="照护">
+                    <a class="nav-link {% if nav_care_primary_active %}active{% endif %}" href="{{ nav_care_url }}" data-nav-key="care" {% if nav_care_primary_active %}aria-current="page"{% endif %}><i class="bi bi-people me-2"></i>{{ nav_care_label }}</a>
+                    {% if not nav_is_guest and current_user.role != 'community' %}
+                        <a class="nav-link {% if nav_family_active %}active{% endif %}" href="{{ url_for('health.family_members') }}" data-nav-key="family" {% if nav_family_active %}aria-current="page"{% endif %}><i class="bi bi-person-vcard me-2"></i>家人档案</a>
+                    {% endif %}
+                    <a class="nav-link {% if nav_endpoint == 'public.action_check' %}active{% endif %}" href="{{ url_for('public.action_check') }}" data-nav-key="action" {% if nav_endpoint == 'public.action_check' %}aria-current="page"{% endif %}><i class="bi bi-clipboard-check me-2"></i>行动打卡</a>
             </nav>
             {% endif %}
 
             {# ----- 天气 ----- #}
             <div class="mb-2" style="font-size:.72rem; color:var(--yl-muted); text-transform:uppercase; letter-spacing:.05em; padding:0 4px;">天气</div>
-            <nav class="nav flex-column mb-3">
-                <a class="nav-link" href="{{ url_for('public.public_risk') }}"><i class="bi bi-thermometer-sun me-2"></i>风险说明</a>
-                <a class="nav-link" href="{{ url_for('public.cooling_resources') }}"><i class="bi bi-geo-alt me-2"></i>避暑资源</a>
-                <a class="nav-link" href="{{ url_for('public.transparency') }}"><i class="bi bi-shield-check me-2"></i>透明度</a>
+            <nav class="nav flex-column mb-3" aria-label="天气">
+                <a class="nav-link {% if nav_endpoint == 'public.public_risk' %}active{% endif %}" href="{{ url_for('public.public_risk') }}" {% if nav_endpoint == 'public.public_risk' %}aria-current="page"{% endif %}><i class="bi bi-thermometer-sun me-2"></i>风险说明</a>
+                <a class="nav-link {% if nav_endpoint == 'public.cooling_resources' %}active{% endif %}" href="{{ url_for('public.cooling_resources') }}" {% if nav_endpoint == 'public.cooling_resources' %}aria-current="page"{% endif %}><i class="bi bi-geo-alt me-2"></i>避暑资源</a>
+                <a class="nav-link {% if nav_endpoint == 'user.community_risk' %}active{% endif %}" href="{{ url_for('user.community_risk') }}" data-nav-key="community-risk" {% if nav_endpoint == 'user.community_risk' %}aria-current="page"{% endif %}><i class="bi bi-map me-2"></i>社区风险</a>
+                <a class="nav-link {% if nav_endpoint == 'public.transparency' %}active{% endif %}" href="{{ url_for('public.transparency') }}" {% if nav_endpoint == 'public.transparency' %}aria-current="page"{% endif %}><i class="bi bi-shield-check me-2"></i>透明度</a>
             </nav>
 
             {% if current_user.is_authenticated %}
             {# ----- 健康 ----- #}
             <div class="mb-2" style="font-size:.72rem; color:var(--yl-muted); text-transform:uppercase; letter-spacing:.05em; padding:0 4px;">健康</div>
-            <nav class="nav flex-column mb-3">
-                <a class="nav-link" href="{{ url_for('user.health_assessment') }}"><i class="bi bi-clipboard-pulse me-2"></i>健康评估</a>
-                <a class="nav-link" href="{{ url_for('tools.ml_prediction') }}"><i class="bi bi-cpu me-2"></i>AI 疾病预测</a>
-                <a class="nav-link" href="{{ url_for('tools.forecast_7day') }}"><i class="bi bi-calendar-week me-2"></i>7 天健康预测</a>
-                <a class="nav-link" href="{{ url_for('tools.chronic_risk') }}"><i class="bi bi-heart-pulse me-2"></i>慢病风险评估</a>
-                <a class="nav-link" href="{{ url_for('tools.ai_qa') }}"><i class="bi bi-chat-dots me-2"></i>AI 提问</a>
-                <a class="nav-link" href="{{ url_for('health.health_diary') }}"><i class="bi bi-journal me-2"></i>健康日记</a>
-                <a class="nav-link" href="{{ url_for('health.medication_reminders') }}"><i class="bi bi-capsule me-2"></i>用药提醒</a>
-                <a class="nav-link" href="{{ url_for('analysis.annual_report') }}"><i class="bi bi-journal-text me-2"></i>年度健康报告</a>
+            <nav class="nav flex-column mb-3" aria-label="健康">
+                <a class="nav-link {% if nav_endpoint == 'user.health_assessment' %}active{% endif %}" href="{{ url_for('user.health_assessment') }}" data-nav-key="assessment" {% if nav_endpoint == 'user.health_assessment' %}aria-current="page"{% endif %}><i class="bi bi-clipboard-pulse me-2"></i>健康评估</a>
+                <a class="nav-link {% if nav_endpoint == 'tools.ml_prediction' %}active{% endif %}" href="{{ url_for('tools.ml_prediction') }}" data-nav-key="ml-prediction" {% if nav_endpoint == 'tools.ml_prediction' %}aria-current="page"{% endif %}><i class="bi bi-cpu me-2"></i>AI 疾病预测</a>
+                <a class="nav-link {% if nav_endpoint == 'tools.forecast_7day' %}active{% endif %}" href="{{ url_for('tools.forecast_7day') }}" data-nav-key="forecast" {% if nav_endpoint == 'tools.forecast_7day' %}aria-current="page"{% endif %}><i class="bi bi-calendar-week me-2"></i>7 天健康预测</a>
+                <a class="nav-link {% if nav_endpoint == 'tools.chronic_risk' %}active{% endif %}" href="{{ url_for('tools.chronic_risk') }}" data-nav-key="chronic-risk" {% if nav_endpoint == 'tools.chronic_risk' %}aria-current="page"{% endif %}><i class="bi bi-heart-pulse me-2"></i>慢病风险评估</a>
+                <a class="nav-link {% if nav_endpoint == 'tools.ai_qa' %}active{% endif %}" href="{{ url_for('tools.ai_qa') }}" data-nav-key="ai-qa" {% if nav_endpoint == 'tools.ai_qa' %}aria-current="page"{% endif %}><i class="bi bi-chat-dots me-2"></i>AI 提问</a>
+                {% if not nav_is_guest %}
+                    <a class="nav-link {% if nav_endpoint == 'health.health_diary' %}active{% endif %}" href="{{ url_for('health.health_diary') }}" data-nav-key="health-diary" {% if nav_endpoint == 'health.health_diary' %}aria-current="page"{% endif %}><i class="bi bi-journal me-2"></i>健康日记</a>
+                    <a class="nav-link {% if nav_endpoint == 'health.medication_reminders' %}active{% endif %}" href="{{ url_for('health.medication_reminders') }}" data-nav-key="medication" {% if nav_endpoint == 'health.medication_reminders' %}aria-current="page"{% endif %}><i class="bi bi-capsule me-2"></i>用药提醒</a>
+                    <a class="nav-link {% if nav_endpoint == 'analysis.annual_report' %}active{% endif %}" href="{{ url_for('analysis.annual_report') }}" data-nav-key="annual-report" {% if nav_endpoint == 'analysis.annual_report' %}aria-current="page"{% endif %}><i class="bi bi-journal-text me-2"></i>年度健康报告</a>
+                {% endif %}
             </nav>
 
-            {% if current_user.role in ['community', 'admin'] %}
+            {% if current_user.role == 'admin' %}
             <div class="mb-2" style="font-size:.72rem; color:var(--yl-muted); text-transform:uppercase; letter-spacing:.05em; padding:0 4px;">社区</div>
-            <nav class="nav flex-column mb-3">
-                <a class="nav-link" href="{{ url_for('user.community_dashboard') }}"><i class="bi bi-building me-2"></i>社区看板</a>
+            <nav class="nav flex-column mb-3" aria-label="社区">
+                <a class="nav-link {% if nav_community_workspace_active %}active{% endif %}" href="{{ url_for('user.community_dashboard') }}" data-nav-key="community-workspace" {% if nav_community_workspace_active %}aria-current="page"{% endif %}><i class="bi bi-building me-2"></i>社区看板</a>
             </nav>
             {% endif %}
 
@@ -349,7 +382,8 @@
         {% if messages %}
             <div class="container mt-3">
                 {% for category, message in messages %}
-                    <div class="alert alert-{{ 'danger' if category == 'error' else 'success' }} alert-dismissible fade show" role="alert">
+                    {% set alert_class = {'error': 'danger', 'danger': 'danger', 'warning': 'warning', 'info': 'info', 'message': 'info', 'success': 'success'}.get(category, 'info') %}
+                    <div class="alert alert-{{ alert_class }} alert-dismissible fade show" role="alert">
                         {{ message }}
                         <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="关闭提示"></button>
                     </div>
@@ -359,7 +393,7 @@
     {% endwith %}
 
     {# ===================== Content ===================== #}
-    <main class="page-shell container-fluid py-4">
+    <main class="page-shell container-fluid py-4" id="main-content" tabindex="-1">
         {% block content %}{% endblock %}
     </main>
 
@@ -367,6 +401,12 @@
 
     <footer class="site-footer text-center py-4 mt-5" style="color:var(--yl-muted); border-top:1px solid var(--yl-line-soft);">
         <div class="container">
+            <nav class="d-flex flex-wrap justify-content-center gap-3 mb-2 small" aria-label="页脚导航">
+                <a href="{{ url_for('public.public_risk') }}">风险说明</a>
+                <a href="{{ url_for('public.cooling_resources') }}">避暑资源</a>
+                <a href="{{ url_for('public.transparency') }}">计算与透明度</a>
+                <a href="{{ url_for('public.transparency') }}#privacy">隐私边界</a>
+            </nav>
             <p class="mb-0">© {{ now().year }} · 宜老天气通 · 把天气变成照护提醒</p>
         </div>
     </footer>
@@ -490,11 +530,12 @@
             });
 
             document.addEventListener('keydown', function(event) {
-                if (event.key === 'Escape') {
+                if (event.key === 'Escape' && menuRoot.classList.contains('is-open')) {
+                    event.preventDefault();
                     pinnedOpen = false;
                     setOpen(false);
                     if (trigger) {
-                        trigger.blur();
+                        trigger.focus();
                     }
                 }
             });

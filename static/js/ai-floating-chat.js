@@ -14,6 +14,7 @@
 
     const toggleButton = chatRoot.querySelector('.ai-chat-toggle');
     const closeButton = chatRoot.querySelector('.ai-chat-close');
+    const chatWindow = chatRoot.querySelector('.ai-chat-window');
     const header = chatRoot.querySelector('.ai-chat-header');
     const messagesEl = chatRoot.querySelector('#ai-chat-messages');
     const inputEl = chatRoot.querySelector('#ai-chat-input');
@@ -24,6 +25,8 @@
     let chatHistory = [];
     let dragState = null;
     let skipToggle = false;
+    let focusReturnTarget = toggleButton;
+    let focusTimer = null;
 
     function isMobileView() {
         return window.matchMedia('(max-width: 767.98px)').matches;
@@ -94,15 +97,50 @@
         messagesEl.scrollTop = messagesEl.scrollHeight;
     }
 
-    function setOpen(open) {
+    function focusWithoutScrolling(element) {
+        if (!element || typeof element.focus !== 'function' || !document.contains(element)) {
+            return;
+        }
+        try {
+            element.focus({ preventScroll: true });
+        } catch (error) {
+            element.focus();
+        }
+    }
+
+    function setOpen(open, options) {
+        options = options || {};
         chatRoot.classList.toggle('open', open);
         chatRoot.classList.toggle('collapsed', !open);
-        writeStorage(STORAGE_KEYS.open, open ? 1 : 0);
-        if (open && inputEl) {
-            setTimeout(() => inputEl.focus(), 120);
+        toggleButton.setAttribute('aria-expanded', open ? 'true' : 'false');
+        chatWindow.setAttribute('aria-hidden', open ? 'false' : 'true');
+
+        if (options.persist !== false) {
+            writeStorage(STORAGE_KEYS.open, open ? 1 : 0);
         }
+
+        if (open) {
+            if (options.returnFocusTarget) {
+                focusReturnTarget = options.returnFocusTarget;
+            }
+            if (options.focusInput !== false) {
+                window.clearTimeout(focusTimer);
+                focusTimer = window.setTimeout(function() {
+                    const target = inputEl && !inputEl.disabled ? inputEl : closeButton;
+                    focusWithoutScrolling(target || chatWindow);
+                }, 120);
+            }
+        }
+
         if (!open) {
+            window.clearTimeout(focusTimer);
+            focusTimer = null;
             skipToggle = false;
+            if (options.restoreFocus) {
+                window.requestAnimationFrame(function() {
+                    focusWithoutScrolling(focusReturnTarget || toggleButton);
+                });
+            }
         }
     }
 
@@ -156,7 +194,11 @@
             return;
         }
         const isOpen = chatRoot.classList.contains('open');
-        setOpen(!isOpen);
+        setOpen(!isOpen, {
+            focusInput: !isOpen,
+            restoreFocus: isOpen,
+            returnFocusTarget: toggleButton
+        });
     }
 
     function handleDocumentClick(event) {
@@ -169,7 +211,16 @@
         if (chatRoot.contains(event.target)) {
             return;
         }
-        setOpen(false);
+        // 点击浮窗外时保留用户刚刚选择的焦点目标。
+        setOpen(false, { restoreFocus: false });
+    }
+
+    function handleDocumentKeyDown(event) {
+        if (event.key !== 'Escape' || !chatRoot.classList.contains('open')) {
+            return;
+        }
+        event.preventDefault();
+        setOpen(false, { restoreFocus: true });
     }
 
     function sendMessage() {
@@ -237,6 +288,9 @@
         if (event.button !== 0) {
             return;
         }
+        if (event.currentTarget === header && event.target.closest('button, select, input, textarea, a, label')) {
+            return;
+        }
         const rect = chatRoot.getBoundingClientRect();
         dragState = {
             offsetX: event.clientX - rect.left,
@@ -293,20 +347,26 @@
         chatHistory = [];
         renderHistory();
         applySavedPosition();
-        const open = readStorage(STORAGE_KEYS.open, 0) === 1;
-        setOpen(open);
         restoreModel();
         if (!isAuthenticated) {
             inputEl.setAttribute('disabled', 'disabled');
             sendButton.setAttribute('disabled', 'disabled');
         }
+        const open = readStorage(STORAGE_KEYS.open, 0) === 1;
+        // 恢复上次状态时不抢走页面原有焦点。
+        setOpen(open, {
+            focusInput: false,
+            persist: false,
+            returnFocusTarget: toggleButton
+        });
     }
 
     toggleButton.addEventListener('click', handleToggle);
-    closeButton.addEventListener('click', () => setOpen(false));
+    closeButton.addEventListener('click', () => setOpen(false, { restoreFocus: true }));
     sendButton.addEventListener('click', sendMessage);
     inputEl.addEventListener('keydown', handleKeyDown);
     document.addEventListener('click', handleDocumentClick);
+    document.addEventListener('keydown', handleDocumentKeyDown);
 
     modelSelect.addEventListener('change', function() {
         writeStorage(STORAGE_KEYS.model, modelSelect.value);
@@ -324,10 +384,14 @@
 
     window.AIChat = {
         open: function() {
-            setOpen(true);
+            const active = document.activeElement;
+            setOpen(true, {
+                focusInput: true,
+                returnFocusTarget: active && active !== document.body ? active : toggleButton
+            });
         },
         close: function() {
-            setOpen(false);
+            setOpen(false, { restoreFocus: true });
         }
     };
 

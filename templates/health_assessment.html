@@ -24,7 +24,7 @@
 
         <div class="alert alert-light border small" role="note">
             <i class="bi bi-cloud-check me-1" aria-hidden="true"></i>
-            提交时会读取实时和风天气。若真实天气或有效温度暂不可用，页面会显示“等待真实天气”，并停止本次评估、保存与通知。
+            提交后会结合当前天气生成行动参考。天气更新期间，请稍后再试。
         </div>
 
         <style>
@@ -118,7 +118,7 @@
                 <div class="card h-100 border-0 shadow-sm">
                     <div class="card-body">
                         <div class="text-muted small mb-2">天气参考</div>
-                        <div class="fw-semibold mb-2">{{ weather_ref.get('condition', '以系统最新天气为准') }}</div>
+                        <div class="fw-semibold mb-2">{{ weather_ref.get('condition', '以最近一次可用天气为准') }}</div>
                         <div class="text-muted small">
                             温度 {{ weather_ref.get('temperature', '--') }}°C / 湿度 {{ weather_ref.get('humidity', '--') }}%
                         </div>
@@ -146,10 +146,10 @@
             <div class="card-body">
                 <div class="d-flex flex-wrap justify-content-between align-items-start gap-2 mb-3">
                     <div>
-                        <div class="fw-semibold">社区上下文</div>
-                        <div class="text-muted small">用于路径 C 的社区 VI 与近 30 日门诊负担。</div>
+                        <div class="fw-semibold">所在社区的参考情况</div>
+                        <div class="text-muted small">帮助判断高温期间是否需要更多社区支持。</div>
                     </div>
-                    <span class="badge text-bg-light border">{{ community_context.get('source_label', '历史记录未包含来源') }}</span>
+                    <span class="badge text-bg-light border">{% if community_context.get('source') == 'community_table' %}社区资料{% elif community_context.get('source') == 'bundled_profile' %}社区参考资料{% else %}一般参考{% endif %}</span>
                 </div>
                 <div class="row g-3 small">
                     <div class="col-6 col-lg-3">
@@ -157,15 +157,15 @@
                         <div class="fw-semibold">{{ community_context.get('community', '未设置') }}</div>
                     </div>
                     <div class="col-6 col-lg-3">
-                        <div class="text-muted">社区 VI</div>
+                        <div class="text-muted">社区脆弱性</div>
                         <div class="fw-semibold">
                             {{ community_context.get('vulnerability_index', '--') }}
                             <span class="text-muted fw-normal">{{ community_context.get('vulnerability_level', '') }}</span>
                         </div>
-                        <div class="text-muted">{{ community_context.get('vulnerability_source_label', '来源未记录') }}</div>
+                        <div class="text-muted">{% if community_context.get('vulnerability_source') == 'community_table' %}社区资料{% else %}估算参考{% endif %}</div>
                     </div>
                     <div class="col-6 col-lg-3">
-                        <div class="text-muted">30 日门诊记录</div>
+                        <div class="text-muted">近 30 日就诊记录</div>
                         <div class="fw-semibold">
                             {% if community_context.get('cases_30d') is not none %}
                                 {{ community_context.get('cases_30d') }} 条
@@ -175,24 +175,20 @@
                         </div>
                     </div>
                     <div class="col-6 col-lg-3">
-                        <div class="text-muted">30 日每千人负担</div>
+                        <div class="text-muted">近 30 日就诊情况</div>
                         <div class="fw-semibold">
                             {% if community_context.get('burden_available') or (community_context.get('burden_available') is none and community_context.get('burden_per_1000') is not none) %}
                                 {{ community_context.get('burden_per_1000') }} 条 / 千人
                             {% else %}
-                                无法计算
+                                资料不足
                             {% endif %}
                         </div>
                     </div>
                 </div>
                 {% if community_context.get('warnings') %}
                 <div class="alert alert-warning small mt-3 mb-0" role="note">
-                    <div class="fw-semibold mb-1"><i class="bi bi-exclamation-triangle me-1" aria-hidden="true"></i>来源或代理值提示</div>
-                    <ul class="mb-0 ps-3">
-                        {% for warning in community_context.get('warnings', []) %}
-                        <li>{{ warning }}</li>
-                        {% endfor %}
-                    </ul>
+                    <div class="fw-semibold mb-1"><i class="bi bi-exclamation-triangle me-1" aria-hidden="true"></i>数据说明</div>
+                    <p class="mb-0">部分社区资料尚未完善，相关结果采用一般参考，请结合实际情况使用。</p>
                 </div>
                 {% endif %}
             </div>
@@ -217,7 +213,7 @@
             <div class="col-md-6">
                 <div class="card h-100 border-0 shadow-sm">
                     <div class="card-body">
-                        <div class="fw-semibold mb-3">融合模型路径 {{ metric_info('personal_health_score', health_context) }}</div>
+                        <div class="fw-semibold mb-3">评估依据 {{ metric_info('personal_health_score', health_context) }}</div>
                         {% if model_paths %}
                         <div class="d-grid gap-2">
                             {% for path in model_paths %}
@@ -234,7 +230,7 @@
                             {% endif %}
                         </div>
                         {% else %}
-                        <p class="text-muted mb-0">当前暂无模型路径拆解。</p>
+                        <p class="text-muted mb-0">暂时没有更多评估依据。</p>
                         {% endif %}
                     </div>
                 </div>
@@ -242,7 +238,7 @@
             <div class="col-md-6">
                 <div class="card h-100 border-0 shadow-sm">
                     <div class="card-body">
-                        <div class="fw-semibold mb-3">风险矩阵定位 {{ metric_info('personal_impact_likelihood', {
+                        <div class="fw-semibold mb-3">风险分布 {{ metric_info('personal_impact_likelihood', {
                             'Impact连续分': matrix.get('impact_score', '--'),
                             'Likelihood原始分': matrix.get('likelihood_raw_score', '--'),
                             '确定性修正': matrix.get('certainty_adjustment', '--'),
@@ -250,14 +246,14 @@
                             '矩阵得分': matrix.get('matrix_score', '--')
                         }) }}</div>
                         {% if matrix and matrix.get('matrix_score') is not none %}
-                            <div class="small mb-2">Impact：<strong>{{ matrix.get('impact_bucket', '--') }}</strong>（{{ matrix.get('impact_score', '--') }}）</div>
-                            <div class="small mb-2">Likelihood：<strong>{{ matrix.get('likelihood_bucket', '--') }}</strong>（{{ matrix.get('likelihood_score', '--') }}）</div>
-                            <div class="small text-muted">矩阵得分 {{ matrix.get('matrix_score') }} / 16</div>
+                            <div class="small mb-2">影响程度：<strong>{{ matrix.get('impact_bucket', '--') }}</strong>（{{ matrix.get('impact_score', '--') }}）</div>
+                            <div class="small mb-2">发生可能性：<strong>{{ matrix.get('likelihood_bucket', '--') }}</strong>（{{ matrix.get('likelihood_score', '--') }}）</div>
+                            <div class="small text-muted">综合位置 {{ matrix.get('matrix_score') }} / 16</div>
                         {% else %}
-                            <div class="small mb-2">Impact：<strong>--</strong>（--）</div>
-                            <div class="small mb-2">Likelihood：<strong>--</strong>（--）</div>
-                            <div class="small text-muted">矩阵得分 -- / 16</div>
-                            <div class="alert alert-light border small mt-3 mb-0" role="note">历史记录未包含矩阵拆解，当前不可回算。</div>
+                            <div class="small mb-2">影响程度：<strong>--</strong>（--）</div>
+                            <div class="small mb-2">发生可能性：<strong>--</strong>（--）</div>
+                            <div class="small text-muted">综合位置 -- / 16</div>
+                            <div class="alert alert-light border small mt-3 mb-0" role="note">这条历史记录没有完整的评估依据，详细分布暂不显示。</div>
                         {% endif %}
                     </div>
                 </div>

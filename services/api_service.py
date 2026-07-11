@@ -42,7 +42,7 @@ def _weather_unavailable_response(weather_data=None, message=None):
     payload = {
         'success': False,
         'error': 'weather_unavailable',
-        'message': message or '实时和风天气暂不可用，暂无法生成健康风险结论',
+        'message': message or '天气正在更新，风险等级暂不显示，请稍后再试。',
         'weather_source': source or 'unknown',
         'is_mock': bool(weather_data.get('is_mock')) if isinstance(weather_data, dict) else None,
     }

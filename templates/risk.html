@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% from "partials/metric_info.html" import metric_info with context %}
 
-{% block title %}热风险与行动建议 - 天气健康风险预测系统{% endblock %}
+{% block title %}热风险与行动建议 · 宜老天气通{% endblock %}
 
 {% block content %}
 <div class="container my-4">
@@ -76,12 +76,11 @@
             {% else %}
             <div class="card shadow-sm border-warning">
                 <div class="card-header bg-warning-subtle text-warning-emphasis">
-                    <h5 class="mb-0"><i class="bi bi-cloud-slash"></i> 等待真实天气</h5>
+                    <h5 class="mb-0"><i class="bi bi-cloud-slash"></i> 天气更新中</h5>
                 </div>
                 <div class="card-body">
                     <div class="mb-2 text-muted">地区：{{ location }}</div>
-                    <p class="mb-2">实时天气来源暂不可用，或计算所需的气温、最高温、最低温、湿度尚未齐全。</p>
-                    <p class="text-muted small mb-0">本页已停止生成风险等级、综合分和行动清单。模拟值与默认值不会显示成真实观测结果。</p>
+                    <p class="mb-0">风险等级暂不显示。你可以先查看通用防护和附近避暑资源。</p>
                 </div>
             </div>
             {% endif %}

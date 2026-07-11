@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """Regression tests for login 'remember me' functionality."""
+import pytest
 
 
 def _extract_set_cookie(resp):
@@ -62,6 +63,69 @@ def test_login_does_not_set_remember_cookie_by_default(client, db_session):
     assert resp.status_code in (302, 303)
     set_cookie = _extract_set_cookie(resp)
     assert 'remember_token=' not in set_cookie
+
+
+@pytest.mark.parametrize(
+    ('role', 'expected_path'),
+    [
+        ('user', '/dashboard'),
+        ('caregiver', '/caregiver'),
+        ('community', '/community'),
+        ('admin', '/admin'),
+    ],
+)
+def test_login_uses_role_aware_default_landing(client, db_session, role, expected_path):
+    from core.db_models import User
+
+    user = User(username=f'landing-{role}', role=role, community='朝阳社区')
+    user.set_password('testpass')
+    db_session.add(user)
+    db_session.commit()
+
+    csrf = f'csrf-{role}'
+    with client.session_transaction() as session:
+        session['_csrf_token'] = csrf
+
+    response = client.post(
+        '/login',
+        data={
+            'username': user.username,
+            'password': 'testpass',
+            'csrf_token': csrf,
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code in (302, 303)
+    assert response.headers['Location'].endswith(expected_path)
+
+
+def test_safe_next_keeps_multiple_query_parameters_and_takes_precedence(client, db_session):
+    from core.db_models import User
+
+    user = User(username='next-community', role='community')
+    user.set_password('testpass')
+    db_session.add(user)
+    db_session.commit()
+
+    csrf = 'csrf-next-query'
+    with client.session_transaction() as session:
+        session['_csrf_token'] = csrf
+
+    expected = '/forecast-7day?location=duchang&view=compact'
+    response = client.post(
+        '/login',
+        query_string={'next': expected},
+        data={
+            'username': user.username,
+            'password': 'testpass',
+            'csrf_token': csrf,
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code in (302, 303)
+    assert response.headers['Location'] == expected
 
 
 class _FakeRedisPipeline:

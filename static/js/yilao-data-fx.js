@@ -11,18 +11,34 @@
 
     function easeOutCubic(t) { return 1 - Math.pow(1 - t, 3); }
 
+    function prefersReducedMotion() {
+        return Boolean(
+            window.matchMedia &&
+            window.matchMedia('(prefers-reduced-motion: reduce)').matches
+        );
+    }
+
+    function renderNumber(el, value, decimals) {
+        const factor = Math.pow(10, decimals);
+        el.textContent = (Math.round(value * factor) / factor).toFixed(decimals);
+    }
+
     function animateNumber(el, from, to, opts) {
         opts = opts || {};
         const duration = opts.duration || 900;
         const decimals = opts.decimals || 0;
+        if (prefersReducedMotion()) {
+            renderNumber(el, to, decimals);
+            if (opts.onDone) opts.onDone();
+            return;
+        }
         const start = performance.now();
-        const factor = Math.pow(10, decimals);
 
         function step(now) {
             const t = Math.min((now - start) / duration, 1);
             const eased = easeOutCubic(t);
             const cur = from + (to - from) * eased;
-            el.textContent = (Math.round(cur * factor) / factor).toFixed(decimals);
+            renderNumber(el, cur, decimals);
             if (t < 1) requestAnimationFrame(step);
             else if (opts.onDone) opts.onDone();
         }
@@ -52,21 +68,26 @@
             const newVal = parseFloat(newValue);
             const diff = newVal - oldValue;
             el.dataset.value = newVal;
+            const reduceMotion = prefersReducedMotion();
 
             animateNumber(num, oldValue, newVal, { duration: 900, decimals });
 
             // 数字跳动 + 高亮
             num.classList.remove('fx-jump', 'fx-highlight');
-            void num.offsetWidth;
-            num.classList.add('fx-jump', 'fx-highlight');
-            setTimeout(() => num.classList.remove('fx-jump'), 500);
-            setTimeout(() => num.classList.remove('fx-highlight'), 1400);
+            if (!reduceMotion) {
+                void num.offsetWidth;
+                num.classList.add('fx-jump', 'fx-highlight');
+                setTimeout(() => num.classList.remove('fx-jump'), 500);
+                setTimeout(() => num.classList.remove('fx-highlight'), 1400);
+            }
 
             // 闪光
             el.classList.remove('fx-flashing');
-            void el.offsetWidth;
-            el.classList.add('fx-flashing');
-            setTimeout(() => el.classList.remove('fx-flashing'), 700);
+            if (!reduceMotion) {
+                void el.offsetWidth;
+                el.classList.add('fx-flashing');
+                setTimeout(() => el.classList.remove('fx-flashing'), 700);
+            }
 
             // 差值徽章
             if (delta && Math.abs(diff) > 0.001) {
@@ -78,9 +99,11 @@
                 delta.textContent = sign + (diff > 0 ? diff : -diff).toFixed(decimals) + unit;
                 delta.classList.remove('up', 'down', 'neutral', 'show');
                 delta.classList.add(cls);
-                void delta.offsetWidth;
+                if (!reduceMotion) void delta.offsetWidth;
                 delta.classList.add('show');
-                setTimeout(() => delta.classList.remove('show'), 2400);
+                if (!reduceMotion) {
+                    setTimeout(() => delta.classList.remove('show'), 2400);
+                }
             }
         };
     }
@@ -101,19 +124,30 @@
         const initVal = parseFloat(el.dataset.value || '0');
 
         // 入场动画:从 0 长到 initVal
-        fill.style.width = '0%';
-        requestAnimationFrame(() => {
+        if (prefersReducedMotion()) {
             fill.style.width = initVal + '%';
-        });
+        } else {
+            fill.style.width = '0%';
+            requestAnimationFrame(() => {
+                fill.style.width = initVal + '%';
+            });
+        }
 
         el._fxUpdate = function (newValue, options) {
             options = options || {};
             const oldVal = parseFloat(el.dataset.value || '0');
             const newVal = parseFloat(newValue);
             const newLevel = options.level || el.dataset.level;
+            const reduceMotion = prefersReducedMotion();
+
+            if (reduceMotion) {
+                fill.style.width = newVal + '%';
+                if (newLevel) fill.dataset.level = newLevel;
+                if (ghost) ghost.classList.remove('show', 'fading');
+            }
 
             // 残影
-            if (ghost) {
+            if (ghost && !reduceMotion) {
                 ghost.style.transition = 'none';
                 ghost.style.width = oldVal + '%';
                 ghost.classList.remove('fading');
@@ -124,10 +158,12 @@
             }
 
             // 新条延伸
-            requestAnimationFrame(() => {
-                fill.style.width = newVal + '%';
-                if (newLevel) fill.dataset.level = newLevel;
-            });
+            if (!reduceMotion) {
+                requestAnimationFrame(() => {
+                    fill.style.width = newVal + '%';
+                    if (newLevel) fill.dataset.level = newLevel;
+                });
+            }
 
             // 数字徽章
             if (hint) {
@@ -138,14 +174,18 @@
                     hint.style.left = ((oldVal + newVal) / 2) + '%';
                     hint.classList.remove('down', 'show');
                     if (diff < 0) hint.classList.add('down');
-                    void hint.offsetWidth;
-                    setTimeout(() => hint.classList.add('show'), 250);
-                    setTimeout(() => hint.classList.remove('show'), 2800);
+                    if (reduceMotion) {
+                        hint.classList.add('show');
+                    } else {
+                        void hint.offsetWidth;
+                        setTimeout(() => hint.classList.add('show'), 250);
+                        setTimeout(() => hint.classList.remove('show'), 2800);
+                    }
                 }
             }
 
             // 残影淡出
-            if (ghost) {
+            if (ghost && !reduceMotion) {
                 setTimeout(() => ghost.classList.add('fading'), 1800);
             }
 
@@ -182,20 +222,25 @@
             mid:  el.querySelector('[data-arc="mid"]'),
             high: el.querySelector('[data-arc="high"]')
         };
+        const reduceMotion = prefersReducedMotion();
 
         // 入场
         if (needle) {
             needle.style.transition = 'none';
-            needle.style.transform = `rotate(${angleOf(0)}deg)`;
-            requestAnimationFrame(() => {
-                needle.style.transition = '';
+            if (reduceMotion) {
                 needle.style.transform = `rotate(${angleOf(initScore)}deg)`;
-            });
+            } else {
+                needle.style.transform = `rotate(${angleOf(0)}deg)`;
+                requestAnimationFrame(() => {
+                    needle.style.transition = '';
+                    needle.style.transform = `rotate(${angleOf(initScore)}deg)`;
+                });
+            }
         }
         if (numEl) animateNumber(numEl, 0, initScore, { duration: 1300 });
 
         const lv = levelOf(initScore);
-        if (arcs[lv.key]) {
+        if (arcs[lv.key] && !reduceMotion) {
             setTimeout(() => arcs[lv.key].classList.add('fx-active'), 1300);
             setTimeout(() => arcs[lv.key].classList.remove('fx-active'), 4500);
         }
@@ -208,6 +253,7 @@
             const old = parseFloat(el.dataset.value || '0');
             const nv = parseFloat(newScore);
             el.dataset.value = nv;
+            const reduceUpdateMotion = prefersReducedMotion();
 
             if (needle) needle.style.transform = `rotate(${angleOf(nv)}deg)`;
             if (numEl)  animateNumber(numEl, old, nv, { duration: 1300 });
@@ -216,15 +262,21 @@
             const lvNew = levelOf(nv);
             const lvOld = levelOf(old);
             Object.values(arcs).forEach(a => a && a.classList.remove('fx-active'));
-            setTimeout(() => {
-                if (arcs[lvNew.key]) arcs[lvNew.key].classList.add('fx-active');
-            }, 600);
-            setTimeout(() => {
-                if (arcs[lvNew.key]) arcs[lvNew.key].classList.remove('fx-active');
-            }, 4000);
+            if (!reduceUpdateMotion) {
+                setTimeout(() => {
+                    if (arcs[lvNew.key]) arcs[lvNew.key].classList.add('fx-active');
+                }, 600);
+                setTimeout(() => {
+                    if (arcs[lvNew.key]) arcs[lvNew.key].classList.remove('fx-active');
+                }, 4000);
+            }
 
             // 等级标签
             if (tagWrap) {
+                if (reduceUpdateMotion) {
+                    tagWrap.innerHTML = '<span class="fx-level-tag ' + lvNew.key + '">' + lvNew.name + '</span>';
+                    return;
+                }
                 if (lvNew.key !== lvOld.key) {
                     tagWrap.innerHTML =
                         '<span class="fx-level-jump">' +
@@ -255,6 +307,7 @@
     function initAll(root) {
         root = root || document;
         const supportsIO = 'IntersectionObserver' in window;
+        const reduceMotion = prefersReducedMotion();
 
         function bootstrap(el) {
             if (el._fxInit) return;
@@ -270,7 +323,7 @@
         }
 
         const els = root.querySelectorAll('[data-fx]');
-        if (supportsIO) {
+        if (supportsIO && !reduceMotion) {
             const io = new IntersectionObserver((entries) => {
                 entries.forEach(en => {
                     if (en.isIntersecting) {

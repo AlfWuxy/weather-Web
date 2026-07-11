@@ -41,8 +41,12 @@ def test_community_risk_page_has_academic_sections(authenticated_client):
     assert response.status_code == 200
 
     html = response.get_data(as_text=True)
-    assert '社区健康风险地图' in html
-    assert '地图图层' in html
+    assert '社区风险与行动地图' in html
+    assert '查看哪些社区需要优先提醒、走访和安排避暑资源' in html
+    assert '地图显示' in html
+    assert '天气与预警' in html
+    assert '社区脆弱性' in html
+    assert '历史健康负担' in html
     assert 'Impact × Likelihood' in html
     assert '公平性分层（脆弱社区优先）' in html
     assert 'id="layerSelect"' in html
@@ -54,10 +58,12 @@ def test_community_risk_page_has_academic_sections(authenticated_client):
     assert '人工分流、核查与行动排序' in html
     assert '自动决策' not in html
     assert 'probability_exceed_baseline || 0' not in html
-    assert 'row.probability_exceed_baseline === null' in html
-    assert 'toNumber(row.uncertainty_index, null)' in html
-    assert '天气危险度上游回算' in html
-    assert 'hazard_formula' in html
+    assert '查看计算说明' in html
+    assert 'width:min(300px,calc(100vw - 72px))' in html
+    assert 'min-width:300px' not in html
+    assert '优先安排提醒和走访' in html
+    assert '社区排序将在天气更新后显示' in html
+    assert '加载失败：' not in html
     assert 'BaselineVisits' in html
 
 

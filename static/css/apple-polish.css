@@ -1,0 +1,384 @@
+/* ============================================================
+   宜老天气通 · Apple 式微调覆盖层
+   仅收敛可读性、焦点、触感和安全区，不改变现有信息架构。
+   ============================================================ */
+
+:root {
+    /* 交互主色取自头像主橙；文字使用独立深橙，兼顾品牌一致性和对比度。 */
+    --yl-orange-action: #F68B33;
+    --yl-orange-action-hover: #F67932;
+    --yl-orange-ink: #A74407;
+    --yl-orange-ink-hover: #843403;
+    --yl-orange-500: var(--yl-orange-action);
+    --yl-orange-600: var(--yl-orange-ink);
+    --brand: var(--yl-orange-action);
+    --brand-deep: var(--yl-orange-ink);
+    --yl-muted: #746E68;
+    --yl-success: #477F42;
+    --ok: var(--yl-success);
+    --yl-focus-ring: #D85B16;
+    --yl-font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC",
+        "Hiragino Sans GB", "Microsoft YaHei", "HarmonyOS Sans SC", system-ui,
+        "Segoe UI", Roboto, sans-serif;
+
+    /* 同步仍由旧组件读取的兼容变量。 */
+    --ink-3: var(--yl-muted);
+    --text-tertiary: var(--yl-muted);
+    --bs-primary: var(--yl-orange-action);
+    --bs-primary-rgb: 246, 139, 51;
+    --bs-primary-text-emphasis: var(--yl-orange-ink);
+    --bs-link-color: var(--yl-orange-ink);
+    --bs-link-hover-color: var(--yl-orange-ink-hover);
+}
+
+html,
+body {
+    font-family: var(--yl-font);
+}
+
+a {
+    color: var(--yl-orange-ink);
+}
+
+a:hover {
+    color: var(--yl-orange-ink-hover);
+}
+
+/* 头像亮橙搭配深色文字，让主操作更轻盈并保持清晰。 */
+.btn {
+    transition:
+        background-color .16s ease,
+        border-color .16s ease,
+        color .16s ease,
+        box-shadow .16s ease,
+        transform .12s cubic-bezier(.2, .8, .2, 1);
+}
+
+.btn-primary,
+.ai-chat-toggle,
+.ai-chat-send,
+.badge.bg-primary {
+    background: var(--yl-orange-action) !important;
+    border-color: var(--yl-orange-action) !important;
+    color: #2A1A0F !important;
+}
+
+.btn-primary {
+    box-shadow:
+        0 1px 2px rgba(66, 48, 28, .08),
+        0 4px 12px rgba(66, 48, 28, .10);
+}
+
+.btn-primary:hover,
+.btn-primary:focus-visible,
+.btn-primary:active,
+.ai-chat-toggle:hover,
+.ai-chat-send:hover {
+    background: var(--yl-orange-action-hover) !important;
+    border-color: var(--yl-orange-action-hover) !important;
+    color: #2A1A0F !important;
+    box-shadow:
+        0 1px 2px rgba(66, 48, 28, .10),
+        0 6px 16px rgba(66, 48, 28, .14);
+}
+
+.btn-primary:disabled,
+.btn-primary.disabled {
+    box-shadow: none;
+}
+
+.btn-outline-primary {
+    border-color: var(--yl-focus-ring);
+    color: var(--yl-orange-ink);
+}
+
+.btn-outline-primary:hover,
+.btn-outline-primary:focus-visible {
+    background: rgba(246, 139, 51, .14);
+    border-color: var(--yl-focus-ring);
+    color: var(--yl-orange-ink-hover);
+}
+
+.btn-outline-primary:focus-visible {
+    box-shadow: none !important;
+}
+
+.btn-outline-primary.active,
+.btn-outline-primary:active,
+.btn-check:checked + .btn-outline-primary,
+.show > .btn-outline-primary.dropdown-toggle {
+    background: var(--yl-orange-action) !important;
+    border-color: var(--yl-focus-ring) !important;
+    color: #2A1A0F !important;
+    box-shadow: none !important;
+}
+
+/* 亮橙用于大面积操作，深橙承担读取和选中状态。 */
+.text-primary {
+    color: var(--yl-orange-ink) !important;
+}
+
+.form-check-input:checked,
+.form-switch .form-check-input:checked {
+    background-color: var(--yl-orange-ink);
+    border-color: var(--yl-orange-ink);
+}
+
+/* 小面积品牌底也使用深色字，避免亮橙配白字。 */
+.auth-quicklist li::before {
+    background: var(--yl-orange-action);
+    color: #2A1A0F;
+}
+
+.member-avatar {
+    background: linear-gradient(135deg, var(--yl-orange-action-hover), var(--yl-orange-action));
+    color: #2A1A0F;
+}
+
+.pagination {
+    --bs-pagination-color: var(--yl-orange-ink);
+    --bs-pagination-hover-color: var(--yl-orange-ink-hover);
+    --bs-pagination-focus-color: var(--yl-orange-ink-hover);
+    --bs-pagination-focus-box-shadow: 0 0 0 .2rem rgba(216, 91, 22, .18);
+    --bs-pagination-active-color: #2A1A0F;
+    --bs-pagination-active-bg: var(--yl-orange-action);
+    --bs-pagination-active-border-color: var(--yl-focus-ring);
+}
+
+.ai-chat-message--user .ai-chat-bubble {
+    background: var(--yl-orange-action);
+    color: #2A1A0F;
+}
+
+/* 黄色实底搭配深色文字，避免小字号徽章出现低对比。 */
+.btn-warning,
+.badge.bg-warning {
+    color: #3F2B08 !important;
+}
+
+/* 全站键盘焦点统一，鼠标点击时不额外显示焦点环。 */
+:is(
+    a[href],
+    button,
+    input:not([type="hidden"]),
+    select,
+    textarea,
+    [tabindex]:not([tabindex="-1"])
+):focus-visible,
+.form-control:focus-visible,
+.form-select:focus-visible,
+.form-check-input:focus-visible,
+.btn-check:focus-visible + .btn {
+    outline: 3px solid var(--yl-focus-ring) !important;
+    outline-offset: 2px;
+}
+
+.navbar-toggler:focus-visible {
+    box-shadow: none;
+}
+
+/* 跳过导航链接平时藏在视口外，获得焦点时清晰出现。 */
+.skip-link {
+    position: fixed;
+    top: max(8px, env(safe-area-inset-top));
+    left: max(12px, env(safe-area-inset-left));
+    z-index: 1200;
+    padding: 10px 16px;
+    border: 1px solid rgba(246, 139, 51, .32);
+    border-radius: 12px;
+    background: #fff;
+    color: var(--yl-orange-ink-hover);
+    box-shadow: 0 10px 28px rgba(42, 38, 32, .14);
+    font-weight: 600;
+    opacity: 0;
+    transform: translateY(calc(-100% - 24px));
+    transition: opacity .14s ease, transform .14s ease;
+}
+
+.skip-link:focus,
+.skip-link:focus-visible {
+    opacity: 1;
+    transform: translateY(0);
+}
+
+/* 静态信息卡保持稳定，仅明确可点击的卡片提供轻微抬升。 */
+.card,
+.yl-action,
+.yl-stat-card,
+.yl-elder-action,
+.yl-feature,
+.yl-role-card,
+.yl-forecast-row .day {
+    transition:
+        border-color .18s ease,
+        box-shadow .18s ease,
+        transform .18s cubic-bezier(.2, .8, .2, 1);
+}
+
+.yl-feature:hover,
+.yl-role-card:hover,
+.member-card:hover,
+.ai-chat-toggle:hover {
+    transform: none;
+}
+
+body.motion-ready[data-motion~="m4"] .card:hover,
+body.motion-ready[data-motion~="m4"] .yl-action:hover,
+body.motion-ready[data-motion~="m4"] .yl-stat-card:hover,
+body.motion-ready[data-motion~="m4"] .yl-elder-action:hover,
+body.motion-ready[data-motion~="m2"] .yl-forecast-row .day:hover {
+    transform: none;
+}
+
+.card:not(a):not([data-clickable]):hover,
+body.motion-ready[data-motion~="m4"] .card:not(a):not([data-clickable]):hover {
+    border-color: var(--yl-line-soft);
+    box-shadow: var(--yl-shadow-sm);
+}
+
+body.motion-ready[data-motion~="m4"] .yl-action:hover,
+body.motion-ready[data-motion~="m4"] .yl-stat-card:hover,
+body.motion-ready[data-motion~="m4"] .yl-elder-action:hover,
+body.motion-ready[data-motion~="m2"] .yl-forecast-row .day:hover {
+    box-shadow: none;
+}
+
+@media (hover: hover) and (pointer: fine) {
+    .yl-feature:hover,
+    .yl-role-card:hover,
+    a.card:hover,
+    .card[data-clickable]:hover,
+    body.motion-ready[data-motion~="m4"] .yl-feature:hover,
+    body.motion-ready[data-motion~="m4"] .yl-role-card:hover,
+    body.motion-ready[data-motion~="m4"] a.card:hover,
+    body.motion-ready[data-motion~="m4"] .card[data-clickable]:hover,
+    .ai-chat-toggle:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 10px 26px rgba(66, 48, 28, .08);
+    }
+}
+
+/* 功能入口停止永久呼吸，风险状态仍可使用独立风险动效。 */
+body.motion-ready[data-motion~="m1"] .yl-feature-icon {
+    animation: none;
+}
+
+/* 首页只调整排版节奏和照片深度。 */
+.yl-lifestyle-copy h1 {
+    line-height: 1.04;
+    letter-spacing: -.015em;
+}
+
+.yl-lifestyle-media,
+.yl-story-image {
+    box-shadow:
+        0 1px 2px rgba(25, 34, 42, .05),
+        0 18px 48px rgba(25, 34, 42, .09);
+}
+
+/* AI 浮窗使用动态视口和设备安全区。 */
+.ai-floating-chat {
+    right: max(16px, env(safe-area-inset-right));
+    bottom: max(16px, env(safe-area-inset-bottom));
+}
+
+.ai-chat-window {
+    background: rgba(255, 255, 255, .94);
+    border-radius: 20px;
+    box-shadow:
+        0 1px 2px rgba(15, 23, 42, .05),
+        0 18px 48px rgba(15, 23, 42, .16);
+}
+
+.ai-chat-close,
+.ai-chat-send {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 44px;
+    min-height: 44px;
+    padding: 0;
+}
+
+@media (max-width: 991.98px) {
+    #appNavDrawer .nav-link {
+        display: flex;
+        align-items: center;
+        min-height: 44px;
+        padding-top: 10px;
+        padding-bottom: 10px;
+        border-radius: 10px;
+    }
+
+    #appNavDrawer .nav-link.active,
+    #appNavDrawer .nav-link[aria-current="page"] {
+        background: rgba(246, 139, 51, .14);
+        color: var(--yl-orange-ink-hover);
+        font-weight: 600;
+        box-shadow: inset 3px 0 0 var(--yl-focus-ring);
+    }
+
+    #appNavDrawer .btn-close {
+        width: 44px;
+        height: 44px;
+        padding: 0;
+        background-size: 16px;
+    }
+}
+
+@media (max-width: 767.98px) {
+    .ai-floating-chat:not(.open) {
+        right: max(16px, env(safe-area-inset-right));
+        bottom: max(16px, env(safe-area-inset-bottom));
+    }
+
+    .ai-floating-chat.open {
+        width: 100vw;
+        height: 100vh;
+        height: 100dvh;
+    }
+
+    .ai-floating-chat.open .ai-chat-window {
+        width: 100%;
+        height: 100%;
+        max-height: 100dvh;
+        border-radius: 0;
+    }
+
+    .ai-floating-chat.open .ai-chat-header {
+        padding-top: calc(10px + env(safe-area-inset-top));
+        padding-right: max(12px, env(safe-area-inset-right));
+        padding-left: max(12px, env(safe-area-inset-left));
+    }
+
+    .ai-floating-chat.open .ai-chat-footer {
+        padding-right: max(12px, env(safe-area-inset-right));
+        padding-bottom: calc(10px + env(safe-area-inset-bottom));
+        padding-left: max(12px, env(safe-area-inset-left));
+    }
+}
+
+/* 极窄屏把注册入口收进抽屉，顶栏仍保留登录和菜单。 */
+@media (max-width: 359.98px) {
+    .navbar .nav-auth-register {
+        display: none;
+    }
+}
+
+/* 减少动态效果时，滚动和所有视觉过渡立即完成。 */
+@media (prefers-reduced-motion: reduce) {
+    html,
+    html:focus-within {
+        scroll-behavior: auto !important;
+    }
+
+    *,
+    *::before,
+    *::after {
+        animation-duration: .01ms !important;
+        animation-iteration-count: 1 !important;
+        scroll-behavior: auto !important;
+        transition-delay: 0ms !important;
+        transition-duration: .01ms !important;
+    }
+}

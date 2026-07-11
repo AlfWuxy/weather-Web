@@ -111,8 +111,9 @@ def test_caregiver_dashboard_does_not_calculate_mock_weather(
 
     assert response.status_code == 200
     body = response.get_data(as_text=True)
-    assert '等待真实天气' in body
-    assert '当前不会生成热风险等级或天气行动建议' in body
+    assert '天气更新中' in body
+    assert '风险等级暂不显示' in body
+    assert '仍可发送行动链接并记录确认结果' in body
     assert '复制行动链接说明' in body
     assert '热风险：极高' not in body
     assert '高温（39°C）' not in body
@@ -182,19 +183,22 @@ def test_community_pages_do_not_generate_mock_risk_messages(
 
     assert dashboard.status_code == 200
     dashboard_body = dashboard.get_data(as_text=True)
-    assert '等待真实天气' in dashboard_body
+    assert '天气更新中' in dashboard_body
+    assert '风险等级和转发内容暂缓更新' in dashboard_body
+    assert 'd-flex flex-wrap gap-2 community-card-actions' in dashboard_body
     assert 'id="groupMessage-1"' not in dashboard_body
     assert 'class="btn btn-outline-primary btn-sm copy-community"' not in dashboard_body
 
     assert wechat.status_code == 200
     wechat_body = wechat.get_data(as_text=True)
-    assert '等待真实天气' in wechat_body
+    assert '天气更新中' in wechat_body
+    assert '可转发提醒暂缓更新' in wechat_body
     assert 'id="wechatMessage"' not in wechat_body
     assert '今日热风险：极高' not in wechat_body
 
     assert announce.status_code == 200
     announce_body = announce.get_data(as_text=True)
-    assert '状态：等待真实天气' in announce_body
+    assert '状态：天气更新中' in announce_body
     assert 'class="btn btn-primary mt-3 copy-message"' not in announce_body
     assert '今日热风险：极高' not in announce_body
     assert DailyStatus.query.count() == 0
@@ -236,10 +240,10 @@ def test_real_qweather_still_generates_caregiver_and_community_risk(
     caregiver_body = caregiver.get_data(as_text=True)
     assert '热风险：极高' in caregiver_body
     assert '复制提醒话术' in caregiver_body
-    assert '等待真实天气' not in caregiver_body
+    assert '天气更新中' not in caregiver_body
 
     assert community.status_code == 200
     community_body = community.get_data(as_text=True)
     assert 'id="groupMessage-1"' in community_body
     assert '今日热风险：极高' in community_body
-    assert '等待真实天气' not in community_body
+    assert '天气更新中' not in community_body

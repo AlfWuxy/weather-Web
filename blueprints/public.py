@@ -43,17 +43,32 @@ ROBOTS_TXT = """User-agent: *
 Allow: /
 Disallow: /admin
 Disallow: /api/
-Disallow: /mp-api/
+Disallow: /mp/api/
+Disallow: /dashboard
+Disallow: /caregiver
+Disallow: /community
+Disallow: /community-risk
 Disallow: /logout
 Disallow: /profile
 Disallow: /family-members
-Disallow: /pair-management
+Disallow: /pairs
+Disallow: /location
+Disallow: /health-assessment
 Disallow: /medication-reminders
 Disallow: /health-diary
+Disallow: /forecast-7day
+Disallow: /ml-prediction
+Disallow: /ai-qa
+Disallow: /chronic-risk
+Disallow: /annual-report
+Disallow: /analysis/
+Disallow: /alerts/
 Disallow: /reports
+Disallow: /guest
 Disallow: /action
 Disallow: /elder
 Disallow: /e/
+Disallow: /t/
 """
 
 
@@ -79,7 +94,9 @@ def role_entry():
 @limiter.limit(lambda: current_app.config.get('RATE_LIMIT_LOGIN', '5 per 5 minutes'), methods=['POST'], key_func=rate_limit_key)
 def login():
     """登录"""
-    next_url = sanitize_input(request.args.get('next') or request.form.get('next'), max_length=200)
+    # URL 不经过 HTML 清理，避免把 & 重复转义为 &amp;。
+    raw_next = request.args.get('next') or request.form.get('next')
+    next_url = str(raw_next)[:200] if raw_next else None
     return handle_login(next_url)
 
 
@@ -262,7 +279,9 @@ def public_risk():
 @bp.route('/guest', endpoint='guest_login')
 def guest_login():
     """游客模式入口"""
-    return handle_guest_login()
+    raw_next = request.args.get('next')
+    next_url = str(raw_next)[:200] if raw_next else None
+    return handle_guest_login(next_url)
 
 
 @bp.route('/logout', methods=['POST'], endpoint='logout')

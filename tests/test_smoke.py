@@ -55,9 +55,15 @@ def test_db_roundtrip(client):
 
 
 def test_public_pages(client):
-    assert client.get("/").status_code == 200
-    assert client.get("/login").status_code == 200
+    home = client.get("/")
+    login = client.get("/login")
+    assert home.status_code == 200
+    assert login.status_code == 200
     assert client.get("/register").status_code == 200
+    login_body = login.get_data(as_text=True)
+    assert "查看风险提醒" in login_body
+    assert "沉淀试点数据" not in login_body
+    assert "管理员账号" not in login_body
 
     robots = client.get("/robots.txt")
     assert robots.status_code == 200
@@ -71,7 +77,11 @@ def test_authenticated_pages(client):
     assert client.get("/dashboard").status_code == 200
     assert client.get("/health-assessment").status_code == 200
     assert client.get("/community-risk").status_code == 200
-    assert client.get("/ai-qa").status_code == 200
+    ai_response = client.get("/ai-qa")
+    assert ai_response.status_code == 200
+    ai_body = ai_response.get_data(as_text=True)
+    assert "查询天气信息和通用行动建议" in ai_body
+    assert "全站悬浮助手" not in ai_body
 
 
 def test_key_api_endpoints(client):

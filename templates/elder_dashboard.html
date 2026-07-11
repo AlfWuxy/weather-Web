@@ -26,7 +26,7 @@
                 {% elif risk_level == 'medium' %}
                     出门前先准备好
                 {% elif not weather_available %}
-                    等一下天气数据
+                    天气更新中
                 {% else %}
                     可以按平常来
                 {% endif %}
@@ -37,7 +37,7 @@
                     当前 {{ weather.temperature|round(0) if weather.temperature is not none else '--' }}°C,
                     {{ heat_risk_label or '风险待计算' }}。
                 {% else %}
-                    实时和风天气或关键输入暂不可用，先按平常照护节奏来，页面不会显示默认温度或风险结论。
+                    先补水、通风并避免暴晒，不舒服时及时联系家人。
                 {% endif %}
             </p>
         </div>
@@ -53,14 +53,14 @@
                     --
                 {% endif %}
             </strong>
-            <em>{% if weather_available %}{{ heat_risk_label or '暂无评估' }}{% else %}等待真实天气{% endif %}</em>
+            <em>{% if weather_available %}{{ heat_risk_label or '暂无评估' }}{% else %}天气更新中{% endif %}</em>
         </div>
     </section>
 
     <section class="yl-elder-actions yl-fade-up yl-fade-up-d1" aria-label="今天怎么做">
         <div class="yl-elder-section-head">
             <h2>现在做这几件事</h2>
-            <p>不用看复杂解释,照着做就可以。</p>
+            <p>不用看复杂解释，照着做就可以。</p>
         </div>
 
         <div class="yl-elder-action-list">
@@ -68,8 +68,8 @@
                 <div class="yl-elder-action">
                     <i class="bi bi-cloud-slash"></i>
                     <div>
-                        <strong>先等天气更新</strong>
-                        <p>页面现在没有可靠的实时天气，暂不生成天气风险行动。</p>
+                        <strong>先做好日常防护</strong>
+                        <p>补水、通风并避免暴晒，不舒服时及时联系家人。</p>
                     </div>
                 </div>
             {% elif action_items %}
@@ -92,7 +92,7 @@
                     <i class="bi bi-cup-straw"></i>
                     <div>
                         <strong>身边放一杯水</strong>
-                        <p>少量多次喝,别等口渴。</p>
+                        <p>少量多次喝，别等口渴。</p>
                     </div>
                 </div>
                 <div class="yl-elder-action">
@@ -116,7 +116,7 @@
     <section class="yl-elder-help-grid yl-fade-up yl-fade-up-d2">
         <div class="yl-elder-help-card">
             <h2>什么时候要找人</h2>
-            <p>明显头晕、胸闷、心慌、站不稳,先坐下休息,马上联系家人或社区。</p>
+            <p>明显头晕、胸闷、心慌、站不稳，先坐下休息，马上联系家人或社区。</p>
         </div>
 
         <div class="yl-elder-call-card">
@@ -128,13 +128,13 @@
                 </a>
             {% else %}
                 <p>还没有设置紧急联系人。</p>
-                <a class="btn btn-outline-secondary btn-lg" href="{{ url_for('health.family_members') }}">
-                    去设置联系人
+                <a class="btn btn-outline-secondary btn-lg" href="{{ url_for('public.register') if current_user.role == 'guest' else url_for('health.family_members') }}">
+                    {% if current_user.role == 'guest' %}注册后设置{% else %}去设置联系人{% endif %}
                 </a>
             {% endif %}
         </div>
     </section>
 
-    <p class="yl-elder-disclaimer">提示只用于日常行动参考,身体明显不舒服时请及时寻求专业帮助。</p>
+    <p class="yl-elder-disclaimer">提示只用于日常行动参考，身体明显不舒服时请及时寻求专业帮助。</p>
 </div>
 {% endblock %}

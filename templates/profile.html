@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}个人设置 - 天气健康风险预测系统{% endblock %}
+{% block title %}个人设置 · 宜老天气通{% endblock %}
 
 {% block content %}
 <div class="container">
@@ -107,11 +107,11 @@
 
                         <hr class="my-4">
 
-                        <h6 class="mb-3">试点推送设置（子女端）</h6>
+                        <h6 class="mb-3">消息提醒（子女端）</h6>
                         <div class="mb-3">
-                            <label for="wxpusher_uid" class="form-label">WxPusher UID</label>
+                            <label for="wxpusher_uid" class="form-label">WxPusher 接收码</label>
                             <input type="text" class="form-control" id="wxpusher_uid" name="wxpusher_uid" value="{{ current_user.wxpusher_uid or '' }}" placeholder="例如：UID_xxxxx">
-                            <small class="text-muted">试点阶段使用 WxPusher 推送；关注应用后可在 WxPusher 获取 UID。</small>
+                            <small class="text-muted">关注 WxPusher 后，将收到的 UID 粘贴到这里。</small>
                         </div>
                         <div class="mb-3 form-check">
                             <input class="form-check-input" type="checkbox" id="push_enabled" name="push_enabled" {% if current_user.push_enabled %}checked{% endif %}>
@@ -158,11 +158,11 @@
         <div class="col-md-4">
             <div class="card shadow-sm mb-4">
                 <div class="card-header bg-light">
-                    <h5 class="mb-0">小程序绑定 Token（试点）</h5>
+                    <h5 class="mb-0">小程序绑定凭证</h5>
                 </div>
                 <div class="card-body">
                     <p class="text-muted small mb-2">
-                        试点阶段先用 Web 生成的 API Token 在小程序里绑定（避免等待微信登录/审核）。Token 仅展示一次。
+                        为小程序生成一次性绑定凭证。凭证只显示一次，请妥善保存。
                     </p>
                     {% if last_api_token_plain %}
                         <div class="alert alert-warning small">
@@ -178,7 +178,7 @@
                             <input class="form-control" name="token_name" placeholder="例如：我的手机">
                         </div>
                         <button type="submit" class="btn btn-outline-primary w-100">
-                            <i class="bi bi-key"></i> 生成 API Token
+                            <i class="bi bi-key"></i> 生成绑定凭证
                         </button>
                     </form>
                 </div>
@@ -221,8 +221,8 @@
                 </div>
                 <div class="card-body">
                     <ul class="small mb-0">
-                        <li>完善个人信息有助于系统提供更精准的健康风险评估</li>
-                        <li>如实填写健康状况，以便获得更准确的预警</li>
+                        <li>补充年龄和慢病情况，可让天气提醒更贴合日常照护需要</li>
+                        <li>请按实际情况填写，并定期检查提醒设置</li>
                         <li>定期更新您的健康信息</li>
                         <li>妥善保管您的账户密码</li>
                     </ul>
@@ -251,8 +251,6 @@ if (passwordForm) {
 }
 </script>
 {% endblock %}
-
-
 
 
 

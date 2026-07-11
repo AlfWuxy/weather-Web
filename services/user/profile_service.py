@@ -73,7 +73,7 @@ def health_assessment():
             weather_data, _ = get_weather_with_cache(user_location)
             if not _personal_weather_available(weather_data):
                 flash(
-                    '当前等待真实和风天气及有效温度，本次未生成评估、未保存记录、未发送通知。',
+                    '天气正在更新，本次评估暂未完成。请稍后再试；身体明显不适时请及时就医。',
                     'warning'
                 )
                 return redirect(url_for('user.health_assessment'))

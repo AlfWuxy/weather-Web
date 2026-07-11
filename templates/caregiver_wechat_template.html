@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}照护人微信模板 - 天气健康风险预测系统{% endblock %}
+{% block title %}照护人微信模板 · 宜老天气通{% endblock %}
 
 {% block content %}
 <div class="container my-4">
@@ -23,8 +23,8 @@
         <div class="card-body">
             {% if not weather_available %}
             <div class="alert alert-warning" role="status">
-                <strong>等待真实天气</strong><br>
-                实时和风天气或关键输入暂不可用，下面只保留行动链接与短码说明，不包含热风险等级或天气行动建议。
+                <strong>天气更新中</strong><br>
+                风险等级暂不显示。你仍可复制行动链接和短码，提醒对方完成安全确认或求助。
             </div>
             {% endif %}
             <textarea class="form-control" rows="10" id="wechatMessage" readonly>{{ message }}</textarea>

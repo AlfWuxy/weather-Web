@@ -271,6 +271,9 @@ def test_safe_next_url_blocks_scheme_relative():
     from services.public_service import _safe_next_url
 
     assert _safe_next_url('/dashboard') == '/dashboard'
+    assert _safe_next_url('/forecast-7day?location=duchang&view=compact') == (
+        '/forecast-7day?location=duchang&view=compact'
+    )
 
     unsafe_urls = [
         '//evil.com',
@@ -283,6 +286,16 @@ def test_safe_next_url_blocks_scheme_relative():
 
     for url in unsafe_urls:
         assert _safe_next_url(url) is None
+
+
+def test_robots_use_current_private_route_paths(client):
+    """robots.txt 应与当前真实路由保持一致。"""
+    body = client.get('/robots.txt').get_data(as_text=True)
+
+    for path in ('/pairs', '/mp/api/', '/guest', '/t/', '/dashboard', '/caregiver'):
+        assert f'Disallow: {path}' in body
+    assert 'Disallow: /pair-management' not in body
+    assert 'Disallow: /mp-api/' not in body
 
 
 def test_location_update_blocks_external_referrer(app, client, db_session):

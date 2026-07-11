@@ -2,8 +2,34 @@
 """首页与避暑页数据动效回归测试。"""
 import json
 from datetime import timedelta
+from pathlib import Path
 
 from core.time_utils import today_local
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+
+def _relative_luminance(hex_color):
+    """计算十六进制颜色的 WCAG 相对亮度。"""
+    channels = [int(hex_color[index:index + 2], 16) / 255 for index in (1, 3, 5)]
+
+    def linearize(channel):
+        if channel <= 0.04045:
+            return channel / 12.92
+        return ((channel + 0.055) / 1.055) ** 2.4
+
+    red, green, blue = [linearize(channel) for channel in channels]
+    return 0.2126 * red + 0.7152 * green + 0.0722 * blue
+
+
+def _contrast_ratio(first, second):
+    """返回两种颜色的 WCAG 对比度。"""
+    lighter, darker = sorted(
+        (_relative_luminance(first), _relative_luminance(second)),
+        reverse=True,
+    )
+    return (lighter + 0.05) / (darker + 0.05)
 
 
 def _login_as(client, user_id, csrf_token='test-csrf-token'):
@@ -258,9 +284,8 @@ def test_dashboard_current_risk_does_not_use_mock_weather(client, db_session, mo
 
     assert response.status_code == 200
     body = response.get_data(as_text=True)
-    assert '实时天气暂不可用' in body
-    assert '待实时天气' in body
-    assert '等待实时天气' in body
+    assert '天气正在更新，风险等级暂不显示' in body
+    assert '天气更新中' in body
     assert '36.5' not in body
     assert '高风险' not in body
     assert WeatherData.query.filter_by(date=today_local(), location='都昌').count() == 0
@@ -307,16 +332,16 @@ def test_dashboard_missing_critical_qweather_fields_stays_unavailable_and_does_n
 
     assert response.status_code == 200
     body = response.get_data(as_text=True)
-    assert '实时天气暂不可用' in body
-    assert '关键输入不完整' in body
+    assert '天气正在更新，风险等级暂不显示' in body
+    assert '附近避暑资源' in body
     assert '36.5' not in body
     assert '39°' not in body
     assert WeatherData.query.filter_by(date=today_local(), location='都昌').count() == 0
 
     assert elder_response.status_code == 200
     elder_body = elder_response.get_data(as_text=True)
-    assert '等待真实天气' in elder_body
-    assert '默认温度或风险结论' in elder_body
+    assert '天气更新中' in elder_body
+    assert '补水、通风并避免暴晒' in elder_body
     assert '36.5' not in elder_body
 
 
@@ -357,3 +382,92 @@ def test_cooling_page_hides_thermometer_for_mock_weather(client, db_session, mon
     body = response.get_data(as_text=True)
     assert 'data-fx="thermometer"' not in body
     assert 'data-temp="36.5"' not in body
+
+
+def test_apple_polish_uses_accessible_action_and_muted_colors(client):
+    response = client.get('/static/css/apple-polish.css')
+
+    assert response.status_code == 200
+    css = response.get_data(as_text=True)
+    assert '--yl-orange-action: #F68B33;' in css
+    assert '--yl-orange-action-hover: #F67932;' in css
+    assert '--yl-orange-ink: #A74407;' in css
+    assert '--brand-deep: var(--yl-orange-ink);' in css
+    assert '--bs-primary-text-emphasis: var(--yl-orange-ink);' in css
+    assert '--yl-focus-ring: #D85B16;' in css
+    assert '--yl-muted: #746E68;' in css
+    assert '--yl-success: #477F42;' in css
+    assert _contrast_ratio('#F68B33', '#2A1A0F') >= 4.5
+    assert _contrast_ratio('#F67932', '#2A1A0F') >= 4.5
+    assert _contrast_ratio('#A74407', '#FFFFFF') >= 4.5
+    assert _contrast_ratio('#D85B16', '#FFFFFF') >= 3.0
+    assert _contrast_ratio('#D85B16', '#FBF7EE') >= 3.0
+    assert _contrast_ratio('#746E68', '#FBF7EE') >= 4.5
+    assert _contrast_ratio('#477F42', '#FFFFFF') >= 4.5
+    assert '.skip-link:focus-visible' in css
+    assert ':focus-visible' in css
+    assert '.form-check-input:checked' in css
+    assert 'background-color: var(--yl-orange-ink);' in css
+    assert 'border-color: var(--yl-focus-ring);' in css
+    assert '.btn-outline-primary.active' in css
+    assert '.auth-quicklist li::before' in css
+    assert '.member-avatar' in css
+    assert '--bs-pagination-active-bg: var(--yl-orange-action);' in css
+    assert '#appNavDrawer .nav-link[aria-current="page"]' in css
+    assert 'box-shadow: inset 3px 0 0 var(--yl-focus-ring);' in css
+    assert '@media (hover: hover) and (pointer: fine)' in css
+    assert 'transform: translateY(-1px);' in css
+    assert 'body.motion-ready[data-motion~="m1"] .yl-feature-icon' in css
+    assert 'animation: none;' in css
+
+
+def test_home_loads_polish_layer_and_accessible_chat_markup(client):
+    response = client.get('/')
+
+    assert response.status_code == 200
+    body = response.get_data(as_text=True)
+    assert '/static/css/apple-polish.css' in body
+    assert 'class="visually-hidden-focusable skip-link"' in body
+    assert 'href="#main-content"' in body
+    assert 'id="ai-chat-window"' in body
+    assert 'role="dialog"' in body
+    assert 'aria-labelledby="ai-chat-title"' in body
+    assert 'aria-hidden="true"' in body
+    assert 'aria-controls="ai-chat-window"' in body
+    assert 'aria-expanded="false"' in body
+    assert 'role="log"' in body
+
+
+def test_ai_chat_script_keeps_aria_and_focus_state_in_sync():
+    script = (PROJECT_ROOT / 'static/js/ai-floating-chat.js').read_text(encoding='utf-8')
+
+    assert "toggleButton.setAttribute('aria-expanded', open ? 'true' : 'false')" in script
+    assert "chatWindow.setAttribute('aria-hidden', open ? 'false' : 'true')" in script
+    assert "event.key !== 'Escape'" in script
+    assert "setOpen(false, { restoreFocus: true })" in script
+    assert "setOpen(false, { restoreFocus: false })" in script
+    assert 'focusInput: false' in script
+    assert 'focusWithoutScrolling(focusReturnTarget || toggleButton)' in script
+
+
+def test_data_effect_scripts_render_immediately_for_reduced_motion():
+    primary = (PROJECT_ROOT / 'static/js/yilao-data-fx.js').read_text(encoding='utf-8')
+    extra = (PROJECT_ROOT / 'static/js/yilao-data-fx-extra.js').read_text(encoding='utf-8')
+
+    for script in (primary, extra):
+        assert "window.matchMedia('(prefers-reduced-motion: reduce)').matches" in script
+        assert 'function renderNumber' in script
+        assert 'if (prefersReducedMotion())' in script
+
+    assert 'renderNumber(el, to, decimals);' in primary
+    assert 'if (supportsIO && !reduceMotion)' in primary
+    assert "merc.style.height = (pct / 100 * tubeH) + 'px';" in extra
+    assert "marker.style.left = pct + '%';" in extra
+    assert "if ('IntersectionObserver' in window && !reduceMotion)" in extra
+
+
+def test_action_checkin_reduced_motion_uses_instant_scroll():
+    template = (PROJECT_ROOT / 'templates/action_checkin.html').read_text(encoding='utf-8')
+
+    assert "window.matchMedia('(prefers-reduced-motion: reduce)').matches" in template
+    assert "behavior: reduceMotion ? 'auto' : 'smooth'" in template

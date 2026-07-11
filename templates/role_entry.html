@@ -1,13 +1,13 @@
 {% extends "base.html" %}
 
-{% block title %}角色入口 - 天气健康风险预测系统{% endblock %}
+{% block title %}选择入口 · 宜老天气通{% endblock %}
 
 {% block content %}
 <div class="container my-4">
     <div class="row mb-3">
         <div class="col-12">
-            <h2><i class="bi bi-diagram-3"></i> 角色选择入口</h2>
-            <p class="text-muted mb-0">请先选择身份，再进入对应流程。</p>
+            <h2><i class="bi bi-diagram-3"></i> 选择适合你的入口</h2>
+            <p class="text-muted mb-0">老人看今天行动，家属跟进提醒，社区人员安排走访和资源。</p>
         </div>
     </div>
 
@@ -19,13 +19,13 @@
                         <div class="icon-box bg-primary bg-opacity-10 text-primary rounded p-2 me-2">
                             <i class="bi bi-person"></i>
                         </div>
-                        <h5 class="mb-0">老人（可选）</h5>
+                        <h5 class="mb-0">老人自用</h5>
                     </div>
                     <p class="text-muted small flex-grow-1">
-                        如果老人会用手机，可用短码完成今日确认或求助；不影响试点核心闭环。
+                        如果老人会用手机，可用照护码完成今日确认或求助；家属也能代为记录。
                     </p>
-                    <a class="btn btn-outline-primary w-100" href="{{ elder_target }}">
-                        进入行动入口
+                    <a class="btn btn-outline-primary w-100" data-entry-key="elder" href="{{ elder_target }}">
+                        查看今天行动
                     </a>
                 </div>
             </div>
@@ -37,16 +37,16 @@
                         <div class="icon-box bg-success bg-opacity-10 text-success rounded p-2 me-2">
                             <i class="bi bi-people"></i>
                         </div>
-                        <h5 class="mb-0">子女照护者（主入口）</h5>
+                        <h5 class="mb-0">家属 / 子女</h5>
                     </div>
                     <p class="text-muted small flex-grow-1">
-                        为家中老人设置所在地与慢病类别（可选），当出现高温/寒潮预警时自动推送给你，并一键复制提醒话术。
+                        关注家人所在地，查看风险提醒，复制沟通话术并记录是否完成。
                     </p>
                     {% if caregiver_requires_login %}
                         <div class="text-muted small mb-2">需登录后进入照护工作台。</div>
                     {% endif %}
-                    <a class="btn btn-success w-100" href="{{ caregiver_target }}">
-                        进入照护工作台
+                    <a class="btn btn-success w-100" data-entry-key="care" href="{{ caregiver_target }}">
+                        {{ caregiver_action_label }}
                     </a>
                 </div>
             </div>
@@ -58,14 +58,14 @@
                         <div class="icon-box bg-info bg-opacity-10 text-info rounded p-2 me-2">
                             <i class="bi bi-building"></i>
                         </div>
-                        <h5 class="mb-0">社区</h5>
+                        <h5 class="mb-0">社区人员</h5>
                     </div>
-                    <p class="text-muted small flex-grow-1">查看社区风险、行动覆盖与外联建议。</p>
+                    <p class="text-muted small flex-grow-1">查看哪些社区需要优先提醒、走访和安排避暑资源。</p>
                     {% if community_requires_login %}
                         <div class="text-muted small mb-2">需登录后进入社区看板。</div>
                     {% endif %}
-                    <a class="btn btn-outline-info w-100" href="{{ community_target }}">
-                        进入社区看板
+                    <a class="btn btn-outline-info w-100" data-entry-key="community" href="{{ community_target }}">
+                        {{ community_action_label }}
                     </a>
                 </div>
             </div>
@@ -76,7 +76,7 @@
         <div class="col-12">
             <div class="card shadow-sm">
                 <div class="card-header bg-light">
-                    <h6 class="mb-0"><i class="bi bi-shield-check"></i> 统一免责声明</h6>
+                    <h6 class="mb-0"><i class="bi bi-shield-check"></i> 使用提醒</h6>
                 </div>
                 <div class="card-body">
                     {% include "partials/disclaimer_block.html" %}

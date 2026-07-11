@@ -1,12 +1,22 @@
 <div id="ai-floating-chat" class="ai-floating-chat collapsed" data-authenticated="{{ '1' if current_user.is_authenticated else '0' }}">
-    <button type="button" class="ai-chat-toggle" aria-label="打开AI问答">
+    <button type="button"
+            class="ai-chat-toggle"
+            aria-label="打开 AI 问答"
+            aria-controls="ai-chat-window"
+            aria-expanded="false">
         <i class="bi bi-robot"></i>
     </button>
 
-    <div class="ai-chat-window shadow-lg">
+    <div class="ai-chat-window shadow-lg"
+         id="ai-chat-window"
+         role="dialog"
+         aria-modal="false"
+         aria-labelledby="ai-chat-title"
+         aria-hidden="true"
+         tabindex="-1">
         <div class="ai-chat-header">
-            <div class="ai-chat-title">
-                <i class="bi bi-chat-dots"></i> AI问答
+            <div class="ai-chat-title" id="ai-chat-title">
+                <i class="bi bi-chat-dots"></i> AI 问答
             </div>
             <select class="form-select form-select-sm ai-chat-model" id="ai-chat-model" aria-label="选择模型">
                 {% if ai_models %}
@@ -29,7 +39,12 @@
         </div>
 
         <div class="ai-chat-body">
-            <div class="ai-chat-messages" id="ai-chat-messages" aria-live="polite"></div>
+            <div class="ai-chat-messages"
+                 id="ai-chat-messages"
+                 role="log"
+                 aria-live="polite"
+                 aria-relevant="additions text"
+                 aria-atomic="false"></div>
         </div>
 
         <div class="ai-chat-footer">

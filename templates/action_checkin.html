@@ -63,7 +63,7 @@
                                 {% if heat_result and risk_label %}
                                     <i class="bi bi-thermometer-sun"></i> 今日热风险 {{ metric_info('heat_risk_score', heat_context, 'is-light') }}
                                 {% else %}
-                                    <i class="bi bi-cloud-slash"></i> 等待真实天气
+                                    <i class="bi bi-cloud-slash"></i> 天气更新中
                                 {% endif %}
                             </h5>
                             {% if heat_result %}
@@ -141,8 +141,8 @@
                         </div>
                         {% else %}
                         <div class="alert alert-warning mb-3" role="status">
-                            <strong>实时天气暂不可用。</strong>
-                            计算所需的气温、最高温、最低温或湿度尚未齐全。当前不生成风险等级、综合分与风险驱动行动清单，也不会把模拟天气写成“低风险”。
+                            <strong>天气正在更新。</strong>
+                            风险等级暂不显示。你仍可完成安全确认、发出求助或查看避暑资源。
                         </div>
                         <div class="d-flex flex-wrap gap-2">
                             <a class="btn btn-outline-primary" href="{{ url_for('public.cooling_resources') }}">
@@ -461,7 +461,14 @@ document.addEventListener('DOMContentLoaded', function () {
     {% if focus_debrief %}
     const debriefSection = document.getElementById('debrief-section');
     if (debriefSection) {
-        debriefSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        const reduceMotion = Boolean(
+            window.matchMedia &&
+            window.matchMedia('(prefers-reduced-motion: reduce)').matches
+        );
+        debriefSection.scrollIntoView({
+            behavior: reduceMotion ? 'auto' : 'smooth',
+            block: 'start'
+        });
     }
     {% endif %}
 });

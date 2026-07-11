@@ -9,22 +9,22 @@
         <div class="col-12">
             <h2><i class="bi bi-people"></i> 子女首页 · 照护行动工作台</h2>
             <p class="text-muted mb-0">
-                为家中老人设置所在地（任意中文输入），高温/寒潮触发时自动推送给你；慢病类别可选登记用于个性化提醒。
-                监测对象所在地和关联档案会保存到服务器，用于天气查询与提醒。请勿填写超出提醒所需的精确门牌信息。
+                为家中老人设置所在地，高温或寒潮来临时及时收到提醒。慢病类别可选填，用于提供更贴合的日常建议。
+                所在地和关联档案仅用于天气查询与提醒，请勿填写精确门牌信息。
             </p>
             {% if not current_user.push_enabled or not current_user.wxpusher_uid %}
                 <div class="alert alert-warning mt-3 mb-0">
                     <div class="fw-semibold">尚未开启自动推送</div>
                     <div class="small">
-                        请到「<a href="{{ url_for('user.profile') }}">个人设置</a>」填写 WxPusher UID 并开启推送（试点阶段优先）。
+                        请到「<a href="{{ url_for('user.profile') }}">个人设置</a>」填写 WxPusher UID 并开启推送。
                     </div>
                 </div>
             {% endif %}
             {% if not push_channel_ready %}
                 <div class="alert alert-danger mt-3 mb-0">
-                    <div class="fw-semibold">推送通道尚未配置</div>
+                    <div class="fw-semibold">自动推送暂不可用</div>
                     <div class="small">
-                        服务器缺少 <code>WXPUSHER_APP_TOKEN</code>，定时推送会失败。请在服务器部署目录下的 <code>.env</code> 配置后重启服务。
+                        你仍可复制提醒话术并手动发送，行动记录不会受到影响。
                     </div>
                 </div>
             {% endif %}
@@ -71,7 +71,7 @@
                                     <option value="{{ community.name }}"></option>
                                 {% endfor %}
                             </datalist>
-                            <div class="text-muted small mt-2">会用高德地理编码解析为经纬度，用于拉取天气预警。</div>
+                            <div class="text-muted small mt-2">填写县、市或乡镇即可，用于查询当地天气预警。</div>
                         </div>
                         <button class="btn btn-primary w-100" type="submit">
                             <i class="bi bi-plus-circle"></i> 添加监测对象
@@ -91,10 +91,10 @@
                             <div class="fs-3 fw-bold">{{ created_pair.short_code }}</div>
                         </div>
                         <div class="mb-3">
-                            <div class="text-muted small">行动页（可选，老人会用再发）</div>
+                            <div class="text-muted small">行动链接（需要时转发）</div>
                             <input class="form-control" value="{{ created_action_link }}" readonly>
                         </div>
-                        <div class="text-muted small">提示：试点核心闭环是“推送→点击→话术复制→反馈”。老人不必操作网页。</div>
+                        <div class="text-muted small">把行动链接发给家人后，可在这里继续查看是否已确认。</div>
                     </div>
                 </div>
             {% endif %}
@@ -122,7 +122,7 @@
                         <i class="bi bi-device-ssd"></i> 添加到本机列表
                     </button>
                     <ul class="list-group list-group-flush mt-3" id="altContactList"></ul>
-                    <div class="text-muted small mt-2">备选联系人不会写入后台数据库。</div>
+                    <div class="text-muted small mt-2">备选联系人仅保存在当前设备。</div>
                 </div>
             </div>
         </div>
@@ -166,8 +166,8 @@
                                                     <div class="text-muted small mt-1">热风险：{{ item.risk_label }} {{ metric_info('heat_risk_score', pair_heat_context) }}</div>
                                                     {% else %}
                                                     <div class="alert alert-warning py-2 px-3 mt-2 mb-0 small" role="status">
-                                                        <strong>等待真实天气</strong><br>
-                                                        实时和风天气或关键输入暂不可用，当前不会生成热风险等级或天气行动建议。
+                                                        <strong>天气更新中</strong><br>
+                                                        风险等级暂不显示。仍可发送行动链接并记录确认结果。
                                                     </div>
                                                     {% endif %}
                                                 </div>
