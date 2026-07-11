@@ -22,4 +22,7 @@ if [ -n "$TARGET_DATE" ]; then
   ARGS+=("--date" "$TARGET_DATE")
 fi
 
-exec "$VENV_PY" "$ROOT_DIR/services/pipelines/sync_weather_data.py" "${ARGS[@]}"
+cd "$ROOT_DIR"
+export PYTHONPATH="$ROOT_DIR${PYTHONPATH:+:$PYTHONPATH}"
+
+exec "$VENV_PY" -m services.pipelines.sync_weather_data "${ARGS[@]}"

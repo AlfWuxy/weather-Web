@@ -5,12 +5,16 @@ import json
 import math
 from datetime import date, datetime
 from pathlib import Path
+import sys
 
 import pandas as pd
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
+if str(ROOT_DIR) not in sys.path:
+    # 兼容旧定时任务和手工命令从任意目录直接执行脚本。
+    sys.path.insert(0, str(ROOT_DIR))
 
-from core.app import create_app
+from core.app import create_app  # noqa: E402
 from core.constants import DEFAULT_CITY_LABEL  # noqa: E402
 from core.db_models import CommunityDaily, DailyStatus, Pair, WeatherData  # noqa: E402
 from core.extensions import db  # noqa: E402

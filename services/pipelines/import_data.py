@@ -6,16 +6,20 @@ from collections import Counter
 from datetime import datetime
 from pathlib import Path
 import random
+import sys
 
 import pandas as pd
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
+if str(ROOT_DIR) not in sys.path:
+    # 兼容旧定时任务和手工命令从任意目录直接执行脚本。
+    sys.path.insert(0, str(ROOT_DIR))
 DATA_PATH = ROOT_DIR / 'data' / 'research' / '数据.xlsx'
 
-from core.app import create_app
-from core.db_models import MedicalRecord, Community, WeatherData
-from core.extensions import db
-from core.time_utils import local_datetime_to_utc, today_local
+from core.app import create_app  # noqa: E402
+from core.db_models import MedicalRecord, Community, WeatherData  # noqa: E402
+from core.extensions import db  # noqa: E402
+from core.time_utils import local_datetime_to_utc, today_local  # noqa: E402
 
 app = create_app(register_blueprints=False)
 
