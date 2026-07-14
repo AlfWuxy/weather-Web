@@ -74,8 +74,10 @@ Page({
       const elderName = item.member && item.member.name ? item.member.name : '';
       const relation = item.member && item.member.relation ? item.member.relation : '';
       const locationText = item.location_query || item.community_code || '';
-      const tmax = item.today && item.today.temperature_max ? String(item.today.temperature_max) : '';
-      const tmin = item.today && item.today.temperature_min ? String(item.today.temperature_min) : '';
+      const tmax = item.today && (item.today.temperature_max || item.today.temperature_max === 0)
+        ? String(item.today.temperature_max) : '';
+      const tmin = item.today && (item.today.temperature_min || item.today.temperature_min === 0)
+        ? String(item.today.temperature_min) : '';
       const trigger = item.today && item.today.trigger ? item.today.trigger : '';
       const message = buildMessage({ trigger, elderName, relation, locationText, tmax, tmin });
       this.setData({ message, locationText, elderName, relation, tmax, tmin, trigger });
@@ -121,4 +123,3 @@ Page({
     wx.navigateBack();
   },
 });
-

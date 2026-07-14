@@ -77,6 +77,19 @@ def _pair_for_user(pair_id: int):
     return q.first()
 
 
+def _parse_strict_bool(value) -> bool:
+    """严格解析布尔值，同时兼容小程序可能提交的字符串形式。"""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized == "true":
+            return True
+        if normalized == "false":
+            return False
+    raise ValueError("push_enabled must be a boolean")
+
+
 @bp.route("/me", endpoint="me")
 @limiter.limit(lambda: current_app.config.get("RATE_LIMIT_MP_READ", "120 per minute"), key_func=_mp_rate_limit_key)
 @require_api_token
@@ -105,22 +118,44 @@ def me_patch():
     user = db.session.get(User, g.api_user_id)
     if not user:
         return jsonify({"success": False, "error": "user_not_found"}), 404
-    payload = request.get_json(silent=True) or {}
-    wx_uid = sanitize_input(payload.get("wxpusher_uid"), max_length=80)
-    wx_uid = (wx_uid.strip() if isinstance(wx_uid, str) else None) or None
-    push_enabled = bool(payload.get("push_enabled"))
-    if push_enabled and not wx_uid:
-        push_enabled = False
+    payload = request.get_json(silent=True)
+    if payload is None:
+        payload = {}
+    if not isinstance(payload, dict):
+        return jsonify({"success": False, "error": "invalid_payload"}), 400
 
-    user.wxpusher_uid = wx_uid
-    user.push_enabled = bool(push_enabled)
-    db.session.commit()
-    log_usage_event(
-        "settings_updated",
-        user_id=user.id,
-        source="miniprogram",
-        meta={"fields": ["wxpusher_uid", "push_enabled"]},
-    )
+    updated_fields = []
+    wx_uid = user.wxpusher_uid
+    push_enabled = bool(user.push_enabled)
+
+    if "wxpusher_uid" in payload:
+        wx_uid = sanitize_input(payload.get("wxpusher_uid"), max_length=80)
+        wx_uid = (wx_uid.strip() if isinstance(wx_uid, str) else None) or None
+        updated_fields.append("wxpusher_uid")
+
+    if "push_enabled" in payload:
+        try:
+            push_enabled = _parse_strict_bool(payload.get("push_enabled"))
+        except ValueError:
+            return jsonify({"success": False, "error": "invalid_push_enabled"}), 400
+        updated_fields.append("push_enabled")
+
+    # UID 被移除时必须关闭推送，避免保留无法投递的开启状态。
+    if not wx_uid:
+        push_enabled = False
+        if "wxpusher_uid" in updated_fields and "push_enabled" not in updated_fields:
+            updated_fields.append("push_enabled")
+
+    if updated_fields:
+        user.wxpusher_uid = wx_uid
+        user.push_enabled = push_enabled
+        db.session.commit()
+        log_usage_event(
+            "settings_updated",
+            user_id=user.id,
+            source="miniprogram",
+            meta={"fields": updated_fields},
+        )
     return jsonify({"success": True, "data": {"wxpusher_uid": user.wxpusher_uid, "push_enabled": bool(user.push_enabled)}})
 
 
@@ -377,7 +412,7 @@ def events():
             if member:
                 resolved_member_id = member.id
 
-    log_usage_event(
+    event = log_usage_event(
         event_type,
         user_id=g.api_user_id,
         pair_id=resolved_pair_id,
@@ -385,4 +420,6 @@ def events():
         source="miniprogram",
         meta=meta,
     )
+    if event is None:
+        return jsonify({"success": False, "error": "event_write_failed"}), 503
     return jsonify({"success": True})
