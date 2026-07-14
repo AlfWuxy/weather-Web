@@ -187,13 +187,13 @@ def ensure_db_ready(app=None):
     init_db(app)
 
 
-def main():
+def main(app_instance=None):
     """Run the Flask development server."""
-    app = create_app()
-    ensure_db_ready(app)
+    target_app = app_instance if app_instance is not None else create_app()
+    ensure_db_ready(target_app)
     host = os.getenv('FLASK_HOST', '0.0.0.0')
     port = parse_int(os.getenv('FLASK_PORT'), default=5000)
-    app.run(debug=app.config.get('DEBUG', False), host=host, port=port)
+    target_app.run(debug=target_app.config.get('DEBUG', False), host=host, port=port)
 
 
 if __name__ == '__main__':
