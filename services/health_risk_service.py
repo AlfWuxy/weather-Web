@@ -378,8 +378,9 @@ class HealthRiskService:
         disease_count = len(profile['chronic_diseases'])
         chronic_score = 12.0 if disease_count == 0 else self._clamp(45.0 + disease_count * 14.0, 45.0, 98.0)
 
-        male_cardio_bonus = 8.0 if profile['gender'] == '男' and age >= 55 else 0.0
-        female_elder_bonus = 5.0 if profile['gender'] == '女' and age >= 70 else 0.0
+        gender = profile['gender']
+        male_cardio_bonus = 8.0 if gender in {'男', '男性'} and age >= 55 else 0.0
+        female_elder_bonus = 5.0 if gender in {'女', '女性'} and age >= 70 else 0.0
 
         return self._clamp(
             0.55 * age_score + 0.40 * chronic_score + male_cardio_bonus + female_elder_bonus,

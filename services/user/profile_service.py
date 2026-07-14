@@ -7,9 +7,10 @@ from urllib.parse import urlparse
 
 from flask import current_app, flash, redirect, render_template, request, session, url_for
 from flask_login import current_user
+from sqlalchemy.exc import IntegrityError
 
 from core.analytics import get_high_risk_streak
-from core.db_models import Community, HealthRiskAssessment
+from core.db_models import Community, HealthRiskAssessment, User
 from core.extensions import db
 from core.guest import build_guest_profile, get_guest_assessment, is_guest_user
 from core.notifications import create_notification
@@ -65,6 +66,22 @@ def _safe_referrer_or_dashboard():
 def health_assessment():
     """健康风险评估"""
     if request.method == 'POST':
+        screening_options = {
+            'outdoor_exposure': {'low', 'medium', 'high'},
+            'symptom_level': {'none', 'mild', 'moderate', 'severe'},
+            'hydration': {'good', 'normal', 'poor'},
+            'medication_adherence': {'good', 'partial', 'poor'},
+            'sleep_quality': {'good', 'fair', 'poor'},
+        }
+        screening = {}
+        for name, allowed in screening_options.items():
+            value = sanitize_input(request.form.get(name), max_length=20)
+            value = value.strip().lower() if isinstance(value, str) else ''
+            if value not in allowed:
+                flash('请完整选择全部 5 项健康筛查后再提交。', 'error')
+                return redirect(url_for('user.health_assessment'))
+            screening[name] = value
+
         try:
             # 执行风险评估（多路径融合版）
             from services.health_risk_service import HealthRiskService
@@ -86,20 +103,6 @@ def health_assessment():
                 'community': current_user.community or '',
                 'has_chronic_disease': current_user.has_chronic_disease or False,
                 'chronic_diseases': safe_json_loads(current_user.chronic_diseases, [])
-            }
-
-            # 个人即时筛查（可选项）
-            def _select(name, allowed, default):
-                value = sanitize_input(request.form.get(name), max_length=20) or default
-                value = value.strip().lower()
-                return value if value in allowed else default
-
-            screening = {
-                'outdoor_exposure': _select('outdoor_exposure', {'low', 'medium', 'high'}, 'medium'),
-                'symptom_level': _select('symptom_level', {'none', 'mild', 'moderate', 'severe'}, 'none'),
-                'hydration': _select('hydration', {'good', 'normal', 'poor'}, 'normal'),
-                'medication_adherence': _select('medication_adherence', {'good', 'partial', 'poor'}, 'good'),
-                'sleep_quality': _select('sleep_quality', {'good', 'fair', 'poor'}, 'good')
             }
 
             risk_result = health_service.assess_personal_weather_health_risk(
@@ -261,25 +264,39 @@ def profile():
         if not valid:
             flash(result, 'error')
             return redirect(url_for('user.profile'))
-        current_user.age = result
+        age = result
 
         # 验证性别
         valid, result = validate_gender(request.form.get('gender'))
         if not valid:
             flash(result, 'error')
             return redirect(url_for('user.profile'))
-        current_user.gender = result
+        gender = result
 
         # 清理社区输入并校验
         community_value = sanitize_input(request.form.get('community'), max_length=100)
-        current_user.community = normalize_location_name(community_value)
+        community = normalize_location_name(community_value)
 
         # 验证邮箱
         valid, result = validate_email(request.form.get('email'))
         if not valid:
             flash(result, 'error')
             return redirect(url_for('user.profile'))
-        current_user.email = result
+        email = result
+        duplicate_email = None
+        if email:
+            duplicate_email = User.query.filter(
+                User.id != current_user.id,
+                db.func.lower(User.email) == email.lower()
+            ).first()
+        if duplicate_email:
+            flash('该邮箱已被其他账号使用，请更换邮箱。', 'error')
+            return redirect(url_for('user.profile'))
+
+        current_user.age = age
+        current_user.gender = gender
+        current_user.community = community
+        current_user.email = email
 
         # 更新密码
         # 密码更新已拆分到 form_id=password
@@ -305,7 +322,13 @@ def profile():
             flash('已关闭自动推送：需要先填写 WxPusher UID', 'warning')
         current_user.push_enabled = bool(push_enabled)
 
-        db.session.commit()
+        try:
+            db.session.commit()
+        except IntegrityError:
+            # 并发更新时仍以数据库唯一约束为最终防线。
+            db.session.rollback()
+            flash('该邮箱已被其他账号使用，请更换邮箱。', 'error')
+            return redirect(url_for('user.profile'))
         logger.info("用户更新个人信息: %s", current_user.username)
         flash('个人信息更新成功', 'success')
         return redirect(url_for('user.profile'))
