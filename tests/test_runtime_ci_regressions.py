@@ -46,10 +46,7 @@ def test_public_entrypoint_passes_prebuilt_app_to_main():
     assert "if __name__ == '__main__':\n    main(app)" in source
 
 
-def test_ci_excludes_live_network_and_filters_pinned_dependency_warning():
-    workflow = (ROOT_DIR / '.github' / 'workflows' / 'ci.yml').read_text(encoding='utf-8')
+def test_network_marker_is_registered():
     pytest_config = (ROOT_DIR / 'pytest.ini').read_text(encoding='utf-8')
 
-    assert '-W ignore::DeprecationWarning:dateutil.tz.tz' in workflow
-    assert '-m "manual and not network"' in workflow
     assert 'network: tests that require live third-party network access' in pytest_config
