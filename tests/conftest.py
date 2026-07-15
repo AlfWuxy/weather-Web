@@ -33,6 +33,7 @@ def setup_test_environment():
         'AMAP_KEY': '',
         'SILICONFLOW_API_KEY': '',
         'DEMO_MODE': '1',  # 启用演示模式，使用 mock 数据
+        'FEATURE_HEAT_EXPOSURE_GIS': '1',
         # 测试必须隔离生产 Redis 限流状态，避免远端 .env 影响登录/API 用例。
         'RATE_LIMIT_STORAGE_URI': 'memory://',
         'REDIS_URL': '',

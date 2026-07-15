@@ -168,7 +168,8 @@ def register_hooks(app):
                 'explain_output': app.config.get('FEATURE_EXPLAIN_OUTPUT'),
                 'emergency_triage': app.config.get('FEATURE_EMERGENCY_TRIAGE'),
                 'elder_mode': app.config.get('FEATURE_ELDER_MODE'),
-                'notifications': app.config.get('FEATURE_NOTIFICATIONS')
+                'notifications': app.config.get('FEATURE_NOTIFICATIONS'),
+                'heat_exposure_gis': app.config.get('FEATURE_HEAT_EXPOSURE_GIS')
             }
         }
         map_endpoints = {'user.community_risk', 'public.cooling_resources'}
