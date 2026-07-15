@@ -1,7 +1,9 @@
 # -*- coding: utf-8 -*-
 """都昌县热暴露 GIS 页面、数据口径与隐私边界回归测试。"""
 
+import hashlib
 import json
+import math
 from pathlib import Path
 
 import pytest
@@ -51,7 +53,12 @@ def test_heat_exposure_gis_page_has_academic_contract(authenticated_client):
     assert "程序复核不代表外部机构认证" in html
     assert "生成方法与关键限制" in html
     assert "原始编码乘 0.02 后减 273.15" in html
-    assert "科研展示 v1.1" in html
+    assert "科研展示 v1.2" in html
+    assert 'role="group" aria-label="网格显示几何"' in html
+    assert 'data-geometry-mode="rectified" aria-pressed="true"' in html
+    assert 'data-geometry-mode="native" aria-pressed="false"' in html
+    assert 'id="gisCellGeometryMode"' in html
+    assert "下载 GeoJSON 始终保留原生四角" in html
     assert "综合风险分" not in html
     assert "自动决策" not in html
 
@@ -61,6 +68,7 @@ def test_heat_exposure_gis_uses_shared_metric_info_contract(authenticated_client
 
     expected_keys = {
         "gis_native_grid",
+        "gis_display_geometry",
         "gis_age65_share",
         "gis_lst_mean",
         "gis_q3_coverage",
@@ -133,6 +141,27 @@ def test_heat_exposure_geojson_selected_cell_matches_frozen_inputs():
     assert properties["mean_elevation_m"] == 66.5247
     assert selected["geometry"]["type"] == "Polygon"
     assert len(selected["geometry"]["coordinates"][0]) == 5
+    assert selected["geometry"]["coordinates"][0] == [
+        [116.188957768, 29.325],
+        [116.198515925, 29.325],
+        [116.189024174, 29.316666667],
+        [116.179466798, 29.316666667],
+        [116.188957768, 29.325],
+    ]
+
+
+def test_heat_exposure_geojson_preserves_all_native_feature_geometries():
+    collection = _load_geojson()
+    geometry_payload = json.dumps(
+        [
+            {"id": feature.get("id"), "geometry": feature["geometry"]}
+            for feature in collection["features"]
+        ],
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+
+    assert hashlib.sha256(geometry_payload).hexdigest() == "25edd26ff9c825496e59dbde6116521a6cc0795408e2dcf4807e159fc7562eef"
 
 
 def test_heat_exposure_geojson_hides_unresolved_counts_and_local_paths():
@@ -180,9 +209,102 @@ def test_heat_exposure_geojson_has_traceable_layer_metadata():
     assert metadata["layers"]["age65_share_pct"]["missing_cells"] == 872
     assert all(len(layer["breaks"]) == 7 for layer in metadata["layers"].values())
     assert all(len(layer["palette"]) == 6 for layer in metadata["layers"].values())
-    assert metadata["schema_version"] == "1.1.0"
+    assert metadata["schema_version"] == "1.2.0"
     assert all(layer["metric_key"].startswith("gis_") for layer in metadata["layers"].values())
     assert all(layer["details_anchor"].startswith("gis-") for layer in metadata["layers"].values())
+
+
+def test_heat_exposure_geojson_declares_dual_display_geometry():
+    metadata = _load_geojson()["metadata"]
+    spatial = metadata["spatial_definition"]
+    display = spatial["display_geometry"]
+
+    assert spatial["native_sphere_radius_m"] == 6371007.181
+    assert spatial["native_nominal_resolution_m"] == 926.6254331391661
+    assert display["default_mode"] == "rectified"
+    assert display["available_modes"] == ["rectified", "native"]
+    assert display["native_geometry_preserved"] is True
+    assert display["native_geometry_field"] == "feature.geometry"
+    assert display["rectified_geometry_analysis_use"] is False
+    assert display["rectified_formula"] == (
+        "delta_lat_deg=(p/(2R))*180/pi; "
+        "delta_lon_deg=delta_lat_deg/cos(latitude_center_rad)"
+    )
+
+
+def test_rectified_display_formula_preserves_selected_cell_center_and_scale():
+    collection = _load_geojson()
+    spatial = collection["metadata"]["spatial_definition"]
+    selected = next(feature for feature in collection["features"] if feature.get("id") == "h28v06-r0081-c0156")
+    properties = selected["properties"]
+    radius = spatial["native_sphere_radius_m"]
+    resolution = spatial["native_nominal_resolution_m"]
+    center_lon = properties["center_lon_wgs84"]
+    center_lat = properties["center_lat_wgs84"]
+
+    half_lat = resolution / (2 * radius) * 180 / math.pi
+    half_lon = half_lat / math.cos(math.radians(center_lat))
+    west, east = center_lon - half_lon, center_lon + half_lon
+    south, north = center_lat - half_lat, center_lat + half_lat
+
+    assert math.isclose((west + east) / 2, center_lon, abs_tol=1e-12)
+    assert math.isclose((south + north) / 2, center_lat, abs_tol=1e-12)
+    assert math.isclose(north - south, resolution / radius * 180 / math.pi, abs_tol=1e-12)
+    assert math.isclose((east - west) * math.cos(math.radians(center_lat)), north - south, abs_tol=1e-12)
+    assert math.isclose(west, 116.184211782, abs_tol=1e-9)
+    assert math.isclose(east, 116.193769548, abs_tol=1e-9)
+
+
+def test_rectified_display_max_corner_shift_is_recomputed_for_all_cells():
+    collection = _load_geojson()
+    spatial = collection["metadata"]["spatial_definition"]
+    audit = spatial["display_geometry"]["rectified_corner_shift_audit"]
+    radius = spatial["native_sphere_radius_m"]
+    resolution = spatial["native_nominal_resolution_m"]
+    corner_labels = ("NW", "NE", "SE", "SW")
+    maximum = (-1.0, None, None)
+    audited_cells = 0
+
+    for feature in collection["features"]:
+        if feature["properties"].get("feature_type") != "modis_cell":
+            continue
+        audited_cells += 1
+        properties = feature["properties"]
+        center_lon = properties["center_lon_wgs84"]
+        center_lat = properties["center_lat_wgs84"]
+        half_lat = resolution / (2 * radius) * 180 / math.pi
+        half_lon = half_lat / math.cos(math.radians(center_lat))
+        rectified_corners = (
+            (center_lon - half_lon, center_lat + half_lat),
+            (center_lon + half_lon, center_lat + half_lat),
+            (center_lon + half_lon, center_lat - half_lat),
+            (center_lon - half_lon, center_lat - half_lat),
+        )
+        native_corners = feature["geometry"]["coordinates"][0][:4]
+
+        for label, native, rectified in zip(corner_labels, native_corners, rectified_corners):
+            lon_a, lat_a = map(math.radians, native)
+            lon_b, lat_b = map(math.radians, rectified)
+            delta_lon = lon_b - lon_a
+            delta_lat = lat_b - lat_a
+            haversine = (
+                math.sin(delta_lat / 2) ** 2
+                + math.cos(lat_a) * math.cos(lat_b) * math.sin(delta_lon / 2) ** 2
+            )
+            distance_m = 2 * radius * math.asin(min(1, math.sqrt(haversine)))
+            if distance_m > maximum[0]:
+                maximum = (distance_m, feature["id"], label)
+
+    assert audited_cells == 2593
+    assert math.isclose(maximum[0], 465.805852, abs_tol=1e-6)
+    assert maximum[1:] == ("h28v06-r0044-c0152", "NE")
+    assert audit == {
+        "max_corner_shift_m": 465.805852,
+        "max_corner_shift_cell_id": "h28v06-r0044-c0152",
+        "max_corner_shift_corner": "NE",
+        "distance_method": "MODIS 球体上的同名角大圆表面距离",
+        "audited_cells": 2593,
+    }
 
 
 @pytest.mark.parametrize(
@@ -238,5 +360,12 @@ def test_heat_exposure_gis_script_keeps_controls_accessible_and_fails_closed():
     assert "instance.hide()" in script
     assert "window.initMetricInfo" in script
     assert "duplicatePointAlreadyShown" in script
+    assert "geometryModes = new Set(['rectified', 'native'])" in script
+    assert "featureForDisplay(selected)" in script
+    assert "features: cellsForDisplay()" in script
+    assert "app.dataset.activeGeometry = state.geometryMode" in script
+    assert "url.searchParams.set('geometry', state.geometryMode)" in script
+    assert "state.map.invalidateSize({pan: false})" in script
+    assert "button.disabled = true" in script
     assert "ui.tableToggle.disabled = true" in script
     assert "GeoJSON 网格数与元数据不一致" in script

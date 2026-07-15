@@ -1,6 +1,6 @@
 # 都昌县 1 km 网格级热暴露 GIS 方法说明
 
-版本：v1.1 研究原型
+版本：v1.2 研究原型
 
 生成日期：2026-07-15
 展示坐标系：WGS84，EPSG:4326
@@ -15,11 +15,27 @@
 - 正弦投影球半径：6,371,007.181 m。
 - 原生像元边长：约 926.625 m。
 - 县域纳入规则：网格中心点严格位于 geoBoundaries 都昌县 ADM3 研究边界内。
-- 展示规则：保留完整原生网格，不沿县界裁切。
+- GeoJSON 几何规则：保留完整原生网格，不沿县界裁切。
+- 页面默认显示：中心保持、经纬轴对齐的局部等边近似显示格，可切换到原生几何。
 - 最终县域中心网格：2,593 格。
 - 正人口支持网格：1,721 格；零人口支持网格：872 格。
 
-地图几何通过原生正弦投影仿射参数计算四角，再转换为 WGS84。生成器会逐格比较计算中心点与冻结 `cell_universe.csv` 中心点，容差为 1e-6 度，任何超限都会终止构建。
+GeoJSON 几何通过原生正弦投影仿射参数计算四角，再转换为 WGS84。生成器会逐格比较计算中心点与冻结 `cell_universe.csv` 中心点，容差为 1e-6 度，任何超限都会终止构建。正弦投影的固定 x 列线转换到经纬度后会随纬度偏移，所以原生模式在北向上地图中呈斜格，这是投影性质。
+
+### 2.1 页面显示几何
+
+页面提供两种显示模式。`原生几何` 直接读取 `feature.geometry`，适用于核对真实四角。`正交显示` 是默认的局部等边近似，只在浏览器内根据原生中心点生成经纬轴对齐方格：
+
+```text
+δlat = p / (2R)
+δlon = p / (2R × cos φc)
+NW = (λc − δlon, φc + δlat)
+NE = (λc + δlon, φc + δlat)
+SE = (λc + δlon, φc − δlat)
+SW = (λc − δlon, φc − δlat)
+```
+
+其中 `p = 926.625433 m`，`R = 6,371,007.181 m`，`(λc, φc)` 是冻结网格中心点。角度量先以弧度计算，再转换为经纬度。两种模式共享同一 cell ID、中心点、指标值、图层、选择状态和数据表。逐格比较全部 2,593 格的原生四角与近似显示格同名角，并按 MODIS 球体上的大圆表面距离计算，最大位移为 465.805852 m，位于 `h28v06-r0044-c0152` 的东北角。正交模式只用于页面阅读、点击和颜色比较。点落格、县界相交、面积计算和下载分析必须使用原生 GeoJSON 几何。
 
 ## 3. 时间与地表温度
 
@@ -92,20 +108,22 @@ GeoJSON 不写入本机绝对路径，避免暴露本地目录结构。
 
 ## 8. 数据与文献
 
-1. NASA Aqua MODIS MYD11A1.061. DOI: [10.5067/MODIS/MYD11A1.061](https://doi.org/10.5067/MODIS/MYD11A1.061)
-2. Duan et al. (2019). Validation of Collection 6 MODIS land surface temperature product. *Remote Sensing of Environment*. DOI: [10.1016/j.rse.2019.02.020](https://doi.org/10.1016/j.rse.2019.02.020)
-3. ASPECT age-structured population dataset. *Scientific Data* (2025). DOI: [10.1038/s41597-025-05401-1](https://doi.org/10.1038/s41597-025-05401-1)
-4. ESA WorldCover 2020 v100. DOI: [10.5281/zenodo.5571936](https://doi.org/10.5281/zenodo.5571936)
-5. Copernicus DEM GLO-30. DOI: [10.5270/ESA-c5d3d65](https://doi.org/10.5270/ESA-c5d3d65)
-6. Runfola et al. (2020). geoBoundaries. *PLOS ONE*. DOI: [10.1371/journal.pone.0231866](https://doi.org/10.1371/journal.pone.0231866)
-7. WHO. [Climate change: Heat and health](https://www.who.int/news-room/fact-sheets/detail/climate-change-heat-and-health)
-8. Reid et al. (2009). [Mapping community determinants of heat vulnerability](https://pubmed.ncbi.nlm.nih.gov/20049125/)
+1. NASA MODIS Land Team. [MODLAND projection parameters](https://modis-land.gsfc.nasa.gov/GCTP.html) and [tile/grid calculator](https://landweb.modaps.eosdis.nasa.gov/tilecalc).
+2. NASA Aqua MODIS MYD11A1.061. DOI: [10.5067/MODIS/MYD11A1.061](https://doi.org/10.5067/MODIS/MYD11A1.061)
+3. Duan et al. (2019). Validation of Collection 6 MODIS land surface temperature product. *Remote Sensing of Environment*. DOI: [10.1016/j.rse.2019.02.020](https://doi.org/10.1016/j.rse.2019.02.020)
+4. ASPECT age-structured population dataset. *Scientific Data* (2025). DOI: [10.1038/s41597-025-05401-1](https://doi.org/10.1038/s41597-025-05401-1)
+5. ESA WorldCover 2020 v100. DOI: [10.5281/zenodo.5571936](https://doi.org/10.5281/zenodo.5571936)
+6. Copernicus DEM GLO-30. DOI: [10.5270/ESA-c5d3d65](https://doi.org/10.5270/ESA-c5d3d65)
+7. Runfola et al. (2020). geoBoundaries. *PLOS ONE*. DOI: [10.1371/journal.pone.0231866](https://doi.org/10.1371/journal.pone.0231866)
+8. WHO. [Climate change: Heat and health](https://www.who.int/news-room/fact-sheets/detail/climate-change-heat-and-health)
+9. Reid et al. (2009). [Mapping community determinants of heat vulnerability](https://pubmed.ncbi.nlm.nih.gov/20049125/)
 
 ## 9. 运行、公开范围与回滚
 
 - 页面入口和登录后路由由 `FEATURE_HEAT_EXPOSURE_GIS` 控制。设为 `0` 并重启应用即可隐藏“更多”入口并让页面返回 404。
 - GeoJSON 由开放遥感、模型化人口与研究边界聚合而成，不含个人健康记录、逐户人口或本机路径，因此作为可下载研究产物放在静态目录。关闭页面开关不会删除这一公开文件。
 - Leaflet 1.9.4 固定在仓库 `static/vendor/leaflet/`，地图运行不依赖外部 CDN。
+- URL 参数 `geometry=rectified|native` 保存显示模式。正交显示不会覆盖或导出新的几何文件。
 - 代码发布前应创建独立 release 快照。若开关回滚仍不足，再恢复前一代码版本并重启；完整撤回公开产物时还需移除本次新增静态文件并清理对应边缘缓存。
 
 ## 10. 后续升级条件

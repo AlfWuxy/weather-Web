@@ -309,7 +309,8 @@
     pointer-events: none;
 }
 
-.gis-map-toolbar span {
+.gis-map-toolbar > span,
+.gis-map-period {
     padding: 6px 9px;
     border: 1px solid rgba(132, 151, 160, .72);
     background: rgba(255, 255, 255, .92);
@@ -319,10 +320,72 @@
     font-weight: 700;
 }
 
+.gis-map-toolbar-actions {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 8px;
+    min-width: 0;
+}
+
 .gis-map-toolbar .gis-map-period {
     color: var(--gis-muted);
     font-size: .72rem;
     letter-spacing: .08em;
+    white-space: nowrap;
+}
+
+.gis-geometry-control {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 44px;
+    padding: 3px 6px 3px 9px;
+    border: 1px solid rgba(132, 151, 160, .72);
+    background: rgba(255, 255, 255, .96);
+    box-shadow: 0 2px 7px rgba(15, 38, 59, .08);
+    pointer-events: auto;
+}
+
+.gis-geometry-label {
+    color: var(--gis-muted);
+    font-size: .68rem;
+    font-weight: 700;
+    white-space: nowrap;
+}
+
+.gis-geometry-switch {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(44px, 1fr));
+    padding: 2px;
+    border: 1px solid var(--gis-line);
+    background: #edf2f3;
+}
+
+.gis-geometry-switch button {
+    min-width: 44px;
+    min-height: 36px;
+    padding: 4px 8px;
+    border: 0;
+    background: transparent;
+    color: var(--gis-muted);
+    font-size: .7rem;
+    font-weight: 700;
+    line-height: 1;
+}
+
+.gis-geometry-switch button:hover {
+    color: var(--gis-navy);
+}
+
+.gis-geometry-switch button[aria-pressed="true"] {
+    background: var(--gis-navy);
+    color: white;
+    box-shadow: 0 1px 3px rgba(9, 29, 50, .18);
+}
+
+.gis-geometry-control > .yl-metric-info {
+    flex: 0 0 auto;
 }
 
 .gis-map {
@@ -1074,11 +1137,38 @@
 
     .gis-map-toolbar {
         left: 50px;
+        right: 8px;
+        gap: 8px;
+    }
+
+    .gis-map-toolbar > #gisMapLayerTitle {
+        max-width: 45%;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
     }
 
     .gis-map-toolbar .gis-map-period,
     .gis-north-arrow {
         display: none;
+    }
+
+    .gis-geometry-label {
+        display: none;
+    }
+
+    .gis-geometry-control {
+        gap: 4px;
+        padding-left: 5px;
+    }
+
+    .gis-geometry-switch {
+        grid-template-columns: repeat(2, minmax(40px, 1fr));
+    }
+
+    .gis-geometry-switch button {
+        min-width: 40px;
+        padding-inline: 6px;
     }
 
     .gis-legend {

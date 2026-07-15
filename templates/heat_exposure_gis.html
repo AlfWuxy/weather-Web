@@ -19,7 +19,7 @@
         <div>
             <div class="gis-eyebrow">DUCHANG COUNTY · RESEARCH PROTOTYPE 01</div>
             <h1 id="gisTitle">都昌县 1 km 网格级热暴露 GIS</h1>
-            <p class="gis-lede">把晴空地表温度、老年人口空间分布、地表覆盖和高程放到同一套原生 MODIS 网格中，支持逐格查看与来源追溯。</p>
+            <p class="gis-lede">把晴空地表温度、老年人口空间分布、地表覆盖和高程放到同一套可追溯 MODIS 网格中，支持逐格查看与来源追溯。</p>
         </div>
         <div class="gis-status-group" aria-label="数据状态">
             <span class="gis-status gis-status--pass"><i class="bi bi-check-circle-fill" aria-hidden="true"></i>独立复核程序通过</span>
@@ -69,9 +69,20 @@
         </aside>
 
         <div class="gis-map-stage">
-            <div class="gis-map-toolbar" aria-label="地图说明">
+            <div class="gis-map-toolbar" aria-label="地图说明与显示控制">
                 <span id="gisMapLayerTitle" aria-live="polite">65 岁及以上人口比例</span>
-                <span class="gis-map-period">2020–2024 JJA</span>
+                <div class="gis-map-toolbar-actions">
+                    <span class="gis-map-period">2020–2024 JJA</span>
+                    <div class="gis-geometry-control">
+                        <span class="gis-geometry-label">网格显示</span>
+                        <div class="gis-geometry-switch" role="group" aria-label="网格显示几何">
+                            <button type="button" data-geometry-mode="rectified" aria-pressed="true">正交</button>
+                            <button type="button" data-geometry-mode="native" aria-pressed="false">原生</button>
+                        </div>
+                        {{ metric_info('gis_display_geometry') }}
+                    </div>
+                </div>
+                <span class="visually-hidden" id="gisGeometryLive" aria-live="polite">当前使用正交显示</span>
             </div>
             <div id="gisMap"
                  class="gis-map"
@@ -123,6 +134,7 @@
                 <p><span>MODIS tile</span><code id="gisCellTile">h28v06</code></p>
                 <p><span>0-based row / col</span><code id="gisCellRowCol">81 / 156</code></p>
                 <p><span>网格纳入规则</span><strong>中心点在县界内</strong></p>
+                <p><span>当前显示几何</span><strong id="gisCellGeometryMode">正交显示</strong></p>
             </div>
             <div class="gis-cell-actions" aria-label="切换选中网格">
                 <button type="button" id="gisPreviousCell" aria-label="上一个网格"><i class="bi bi-arrow-left"></i></button>
@@ -142,8 +154,8 @@
         <div class="gis-method-grid">
             <article>
                 <span class="gis-method-index">01</span>
-                <h3>原生空间单位 {{ metric_info('gis_native_grid') }}</h3>
-                <p>使用 MYD11A1 h28v06 原生正弦投影网格，像元边长约 926.6 m。县域集合以网格中心点落入研究边界为准，共 2,593 格，地图显示完整网格。</p>
+                <h3>空间单位与显示几何 {{ metric_info('gis_display_geometry') }}</h3>
+                <p>分析单位仍是 MYD11A1 h28v06 原生正弦投影网格。地图默认以中心保持的正交方格显示，可切回原生几何；下载 GeoJSON 始终保留原生四角。</p>
             </article>
             <article>
                 <span class="gis-method-index">02</span>
@@ -269,7 +281,7 @@
     </section>
 
     <footer class="gis-page-footer">
-        <p><strong>原型状态：</strong>科研展示 v1.1 · 聚合、去标识化输出 · 不含个人健康记录或逐户人口数据</p>
+        <p><strong>原型状态：</strong>科研展示 v1.2 · 聚合、去标识化输出 · 不含个人健康记录或逐户人口数据</p>
         <p id="gisBuildTimestamp">正在读取数据构建时间…</p>
     </footer>
 </div>
