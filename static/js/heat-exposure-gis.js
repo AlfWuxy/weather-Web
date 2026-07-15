@@ -34,12 +34,20 @@
         mean_elevation_m: 'Copernicus GLO-30'
     };
 
+    const geometryModes = new Set(['rectified', 'native']);
+    const geometryModeLabels = {
+        rectified: '正交显示',
+        native: '原生几何'
+    };
+
     const ui = {
         map: document.getElementById('gisMap'),
         mapLoading: document.getElementById('gisMapLoading'),
         mapFallback: document.getElementById('gisMapFallback'),
         mapLayerTitle: document.getElementById('gisMapLayerTitle'),
         coordinateReadout: document.getElementById('gisCoordinateReadout'),
+        geometryButtons: Array.from(document.querySelectorAll('[data-geometry-mode]')),
+        geometryLive: document.getElementById('gisGeometryLive'),
         legend: document.getElementById('gisLegend'),
         layerButtons: document.getElementById('gisLayerButtons'),
         layerSelect: document.getElementById('gisLayerSelect'),
@@ -60,6 +68,7 @@
         metricElevation: document.getElementById('gisMetricElevation'),
         cellTile: document.getElementById('gisCellTile'),
         cellRowCol: document.getElementById('gisCellRowCol'),
+        cellGeometryMode: document.getElementById('gisCellGeometryMode'),
         previousCell: document.getElementById('gisPreviousCell'),
         nextCell: document.getElementById('gisNextCell'),
         zoomCell: document.getElementById('gisZoomCell'),
@@ -85,6 +94,7 @@
         metadata: null,
         boundary: null,
         cells: [],
+        rectifiedCells: [],
         cellById: new Map(),
         sortedValues: new Map(),
         activeLayer: 'age65_share_pct',
@@ -93,10 +103,13 @@
         cellLayer: null,
         boundaryLayer: null,
         selectedLayer: null,
+        cellRenderer: null,
         countyBounds: null,
         tableRows: [],
         tablePage: 1,
-        tablePageSize: 50
+        tablePageSize: 50,
+        geometryMode: 'rectified',
+        resizeFrame: null
     };
 
     function isFiniteNumber(value) {
@@ -120,6 +133,64 @@
     function formatWithUnit(value, digits, unit) {
         if (!isFiniteNumber(value)) return '无数据';
         return `${formatNumber(value, digits)}${unit}`;
+    }
+
+    function rectifiedFeature(feature) {
+        const spatial = state.metadata.spatial_definition;
+        const properties = feature.properties;
+        const radius = spatial.native_sphere_radius_m;
+        const resolution = spatial.native_nominal_resolution_m;
+        const centerLon = properties.center_lon_wgs84;
+        const centerLat = properties.center_lat_wgs84;
+        if (![radius, resolution, centerLon, centerLat].every(isFiniteNumber) || radius <= 0 || resolution <= 0) {
+            throw new Error(`正交显示参数无效：${properties.cell_id || '未知网格'}`);
+        }
+
+        // 只替换浏览器制图几何，原生 GeoJSON、网格 ID、中心点和指标值保持不变。
+        const halfLatitude = resolution / (2 * radius) * 180 / Math.PI;
+        const halfLongitude = halfLatitude / Math.cos(centerLat * Math.PI / 180);
+        const west = Number((centerLon - halfLongitude).toFixed(9));
+        const east = Number((centerLon + halfLongitude).toFixed(9));
+        const north = Number((centerLat + halfLatitude).toFixed(9));
+        const south = Number((centerLat - halfLatitude).toFixed(9));
+        return {
+            ...feature,
+            geometry: {
+                type: 'Polygon',
+                coordinates: [[
+                    [west, north],
+                    [east, north],
+                    [east, south],
+                    [west, south],
+                    [west, north]
+                ]]
+            }
+        };
+    }
+
+    function featureForDisplay(feature) {
+        if (state.geometryMode === 'native') return feature;
+        const index = state.cellById.get(feature.properties.cell_id);
+        return state.rectifiedCells[index] || feature;
+    }
+
+    function cellsForDisplay() {
+        return state.geometryMode === 'native' ? state.cells : state.rectifiedCells;
+    }
+
+    function geometryReadoutLabel() {
+        return state.geometryMode === 'native' ? '原生几何' : '正交显示近似';
+    }
+
+    function syncGeometryControls() {
+        const label = geometryModeLabels[state.geometryMode];
+        ui.geometryButtons.forEach((button) => {
+            button.setAttribute('aria-pressed', String(button.dataset.geometryMode === state.geometryMode));
+        });
+        app.dataset.activeGeometry = state.geometryMode;
+        ui.geometryLive.textContent = `当前使用${label}`;
+        ui.cellGeometryMode.textContent = label;
+        ui.coordinateReadout.textContent = `WGS84 · ${geometryReadoutLabel()}`;
     }
 
     function colorForValue(value, spec) {
@@ -163,6 +234,7 @@
         const url = new URL(window.location.href);
         url.searchParams.set('layer', state.activeLayer);
         url.searchParams.set('cell', selected.properties.cell_id);
+        url.searchParams.set('geometry', state.geometryMode);
         window.history.replaceState({}, '', url);
     }
 
@@ -359,7 +431,7 @@
         if (!state.map || !window.L) return;
         if (state.selectedLayer) state.selectedLayer.remove();
         const selected = state.cells[state.selectedIndex];
-        state.selectedLayer = window.L.geoJSON(selected, {
+        state.selectedLayer = window.L.geoJSON(featureForDisplay(selected), {
             pane: 'selectionPane',
             interactive: false,
             style: {
@@ -369,6 +441,41 @@
                 fill: false
             }
         }).addTo(state.map);
+    }
+
+    function bindCellInteractions(feature, layer) {
+        layer.on({
+            click: function () {
+                const index = state.cellById.get(feature.properties.cell_id);
+                selectCell(index);
+            },
+            mouseover: function () {
+                layer.setStyle({color: '#102b49', weight: 1.4, opacity: 1});
+            },
+            mouseout: function () {
+                layer.setStyle(baseCellStyle(feature));
+            }
+        });
+        layer.bindTooltip(function () {
+            return createTooltip(feature.properties);
+        }, {sticky: true, className: 'gis-cell-tooltip', direction: 'top'});
+    }
+
+    function renderCellGeometry() {
+        if (!state.map || !window.L) return;
+        const collection = {type: 'FeatureCollection', features: cellsForDisplay()};
+        if (!state.cellLayer) {
+            state.cellLayer = window.L.geoJSON(collection, {
+                pane: 'cellPane',
+                renderer: state.cellRenderer,
+                style: baseCellStyle,
+                onEachFeature: bindCellInteractions
+            }).addTo(state.map);
+        } else {
+            state.cellLayer.clearLayers();
+            state.cellLayer.addData(collection);
+        }
+        drawSelection();
     }
 
     function selectCell(index, options) {
@@ -396,6 +503,16 @@
         if (state.cellLayer) state.cellLayer.setStyle(baseCellStyle);
         renderLegend();
         updateInspector();
+        updateUrl();
+    }
+
+    function setGeometryMode(mode) {
+        if (!geometryModes.has(mode)) return;
+        closeMetricPopovers(false);
+        const changed = state.geometryMode !== mode;
+        state.geometryMode = mode;
+        syncGeometryControls();
+        if (changed && state.map) renderCellGeometry();
         updateUrl();
     }
 
@@ -436,29 +553,8 @@
             }
         }).addTo(state.map);
 
-        const renderer = L.canvas({padding: .5, tolerance: 6, pane: 'cellPane'});
-        state.cellLayer = L.geoJSON({type: 'FeatureCollection', features: state.cells}, {
-            pane: 'cellPane',
-            renderer: renderer,
-            style: baseCellStyle,
-            onEachFeature: function (feature, layer) {
-                layer.on({
-                    click: function () {
-                        const index = state.cellById.get(feature.properties.cell_id);
-                        selectCell(index);
-                    },
-                    mouseover: function () {
-                        layer.setStyle({color: '#102b49', weight: 1.4, opacity: 1});
-                    },
-                    mouseout: function () {
-                        layer.setStyle(baseCellStyle(feature));
-                    }
-                });
-                layer.bindTooltip(function () {
-                    return createTooltip(feature.properties);
-                }, {sticky: true, className: 'gis-cell-tooltip', direction: 'top'});
-            }
-        }).addTo(state.map);
+        state.cellRenderer = L.canvas({padding: .5, tolerance: 6, pane: 'cellPane'});
+        renderCellGeometry();
 
         state.countyBounds = state.boundaryLayer.getBounds();
         state.map.fitBounds(state.countyBounds, {padding: [28, 28]});
@@ -467,13 +563,12 @@
         const attribution = L.control.attribution({position: 'bottomright', prefix: false}).addTo(state.map);
         attribution.addAttribution('NASA · ASPECT · ESA · Copernicus · geoBoundaries');
         state.map.on('mousemove', function (event) {
-            ui.coordinateReadout.textContent = `${event.latlng.lng.toFixed(5)}°E · ${event.latlng.lat.toFixed(5)}°N · WGS84`;
+            ui.coordinateReadout.textContent = `${event.latlng.lng.toFixed(5)}°E · ${event.latlng.lat.toFixed(5)}°N · WGS84 · ${geometryReadoutLabel()}`;
         });
         state.map.on('mouseout', function () {
-            ui.coordinateReadout.textContent = 'WGS84 · EPSG:4326';
+            ui.coordinateReadout.textContent = `WGS84 · ${geometryReadoutLabel()}`;
         });
         ui.mapLoading.hidden = true;
-        drawSelection();
 
         window.setTimeout(function () {
             state.map.invalidateSize();
@@ -560,6 +655,12 @@
         ui.layerSelect.addEventListener('change', function () {
             setActiveLayer(ui.layerSelect.value);
         });
+        ui.geometryButtons.forEach((button) => {
+            button.addEventListener('click', function (event) {
+                event.stopPropagation();
+                setGeometryMode(button.dataset.geometryMode);
+            });
+        });
         ui.resetView.addEventListener('click', function () {
             if (state.map && state.countyBounds) state.map.fitBounds(state.countyBounds, {padding: [28, 28]});
         });
@@ -603,6 +704,22 @@
             throw new Error('GeoJSON 缺少 GIS 元数据');
         }
         state.metadata = collection.metadata;
+        const spatial = state.metadata.spatial_definition;
+        const displayGeometry = spatial.display_geometry;
+        if (
+            !isFiniteNumber(spatial.native_sphere_radius_m)
+            || !isFiniteNumber(spatial.native_nominal_resolution_m)
+            || spatial.native_sphere_radius_m <= 0
+            || spatial.native_nominal_resolution_m <= 0
+            || !displayGeometry
+            || !geometryModes.has(displayGeometry.default_mode)
+            || !Array.isArray(displayGeometry.available_modes)
+            || [...geometryModes].some((mode) => !displayGeometry.available_modes.includes(mode))
+            || displayGeometry.native_geometry_preserved !== true
+            || displayGeometry.rectified_geometry_analysis_use !== false
+        ) {
+            throw new Error('GeoJSON 显示几何元数据不完整');
+        }
         state.boundary = collection.features.find((feature) => feature.properties.feature_type === 'study_boundary');
         state.cells = collection.features.filter((feature) => feature.properties.feature_type === 'modis_cell');
         if (!state.boundary || !state.cells.length) {
@@ -618,6 +735,7 @@
         if (state.cellById.size !== state.cells.length) {
             throw new Error('GeoJSON cell ID 存在重复');
         }
+        state.rectifiedCells = state.cells.map(rectifiedFeature);
         state.tableRows = state.cells.slice();
 
         layerOrder.forEach((field) => {
@@ -630,14 +748,19 @@
         const parameters = new URLSearchParams(window.location.search);
         const requestedLayer = parameters.get('layer');
         const requestedCell = parameters.get('cell') || app.dataset.defaultCell;
+        const requestedGeometry = parameters.get('geometry');
         if (requestedLayer && state.metadata.layers[requestedLayer]) state.activeLayer = requestedLayer;
         if (state.cellById.has(requestedCell)) state.selectedIndex = state.cellById.get(requestedCell);
+        state.geometryMode = geometryModes.has(requestedGeometry)
+            ? requestedGeometry
+            : displayGeometry.default_mode;
 
         buildLayerControls();
         renderLegend();
         renderFingerprints();
         bindInterfaceEvents();
         updateInspector();
+        syncGeometryControls();
         ui.mapLayerTitle.textContent = state.metadata.layers[state.activeLayer].label;
         ui.statCellCount.textContent = state.metadata.spatial_definition.county_center_cells.toLocaleString('zh-CN');
         ui.statPopulationCells.textContent = state.metadata.spatial_definition.positive_population_support_cells.toLocaleString('zh-CN');
@@ -661,6 +784,7 @@
             ui.mapFallback.querySelector('strong').textContent = 'GIS 数据载入失败';
             ui.mapFallback.querySelector('p').textContent = '地图和网格数据表已停止使用，请稍后重试。';
             ui.layerSelect.disabled = true;
+            ui.geometryButtons.forEach((button) => { button.disabled = true; });
             ui.resetView.disabled = true;
             ui.previousCell.disabled = true;
             ui.nextCell.disabled = true;
@@ -671,5 +795,13 @@
             console.error('热暴露 GIS 初始化失败', error);
         });
 
-    window.addEventListener('resize', () => closeMetricPopovers(false));
+    window.addEventListener('resize', function () {
+        closeMetricPopovers(false);
+        if (!state.map) return;
+        if (state.resizeFrame) window.cancelAnimationFrame(state.resizeFrame);
+        state.resizeFrame = window.requestAnimationFrame(function () {
+            state.map.invalidateSize({pan: false});
+            state.resizeFrame = null;
+        });
+    });
 })();

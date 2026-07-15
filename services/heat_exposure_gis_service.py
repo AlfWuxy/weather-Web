@@ -12,9 +12,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
-from flask import current_app, render_template, url_for
-
-
 MODIS_RADIUS_M = 6_371_007.181
 MODIS_X_ORIGIN_M = 11_119_505.197665
 MODIS_Y_ORIGIN_M = 3_335_851.5593
@@ -140,6 +137,64 @@ def _cell_polygon(row: int, column: int) -> list[list[list[float]]]:
     ]
     ring.append(ring[0])
     return [ring]
+
+
+def _great_circle_distance_m(point_a: list[float], point_b: list[float]) -> float:
+    """按 MODIS 球体计算两个经纬度点之间的表面距离。"""
+    lon_a, lat_a = map(math.radians, point_a)
+    lon_b, lat_b = map(math.radians, point_b)
+    delta_lon = lon_b - lon_a
+    delta_lat = lat_b - lat_a
+    haversine = (
+        math.sin(delta_lat / 2) ** 2
+        + math.cos(lat_a) * math.cos(lat_b) * math.sin(delta_lon / 2) ** 2
+    )
+    return 2 * MODIS_RADIUS_M * math.asin(min(1, math.sqrt(haversine)))
+
+
+def _rectified_ring(center_lon: float, center_lat: float) -> list[list[float]]:
+    """生成中心保持、经纬轴对齐的局部等边近似显示格四角。"""
+    half_lat_deg = MODIS_PIXEL_WIDTH_M / (2 * MODIS_RADIUS_M) * 180 / math.pi
+    half_lon_deg = half_lat_deg / math.cos(math.radians(center_lat))
+    return [
+        [center_lon - half_lon_deg, center_lat + half_lat_deg],
+        [center_lon + half_lon_deg, center_lat + half_lat_deg],
+        [center_lon + half_lon_deg, center_lat - half_lat_deg],
+        [center_lon - half_lon_deg, center_lat - half_lat_deg],
+    ]
+
+
+def _rectified_corner_shift_summary(features: Iterable[dict[str, Any]]) -> dict[str, Any]:
+    """逐格比较近似显示格与原生同名四角，记录最大表面位移。"""
+    feature_list = list(features)
+    corner_labels = ("NW", "NE", "SE", "SW")
+    maximum = {"distance_m": -1.0, "cell_id": None, "corner": None}
+    for feature in feature_list:
+        properties = feature["properties"]
+        rectified_corners = _rectified_ring(
+            properties["center_lon_wgs84"],
+            properties["center_lat_wgs84"],
+        )
+        native_corners = feature["geometry"]["coordinates"][0][:4]
+        for label, native_corner, rectified_corner in zip(
+            corner_labels,
+            native_corners,
+            rectified_corners,
+        ):
+            distance_m = _great_circle_distance_m(native_corner, rectified_corner)
+            if distance_m > maximum["distance_m"]:
+                maximum = {
+                    "distance_m": distance_m,
+                    "cell_id": feature["id"],
+                    "corner": label,
+                }
+    return {
+        "max_corner_shift_m": round(maximum["distance_m"], 6),
+        "max_corner_shift_cell_id": maximum["cell_id"],
+        "max_corner_shift_corner": maximum["corner"],
+        "distance_method": "MODIS 球体上的同名角大圆表面距离",
+        "audited_cells": len(feature_list),
+    }
 
 
 def _float(value: str | None) -> float | None:
@@ -279,6 +334,7 @@ def build_public_geojson(
     layer_statistics = _layer_statistics(cell_features)
     positive_cells = sum(feature["properties"]["positive_population_support"] for feature in cell_features)
     total_q3_cell_days = sum(feature["properties"]["q3_dates"] for feature in cell_features)
+    rectified_corner_shift = _rectified_corner_shift_summary(cell_features)
 
     source_boundary = boundary_collection["features"][0]
     boundary_feature = {
@@ -297,7 +353,7 @@ def build_public_geojson(
 
     metadata = {
         "title": "都昌县 1 km 网格级热暴露 GIS",
-        "schema_version": "1.1.0",
+        "schema_version": "1.2.0",
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
         "study_period": {
             "start": "2020-06-01",
@@ -310,9 +366,21 @@ def build_public_geojson(
         "spatial_definition": {
             "display_crs": "EPSG:4326 (WGS84)",
             "native_grid_crs": "MODIS Sinusoidal, sphere radius 6371007.181 m",
-            "native_nominal_resolution_m": 926.6254331391661,
+            "native_sphere_radius_m": MODIS_RADIUS_M,
+            "native_nominal_resolution_m": MODIS_PIXEL_WIDTH_M,
             "selection_rule": "MODIS h28v06 原生网格中心点严格位于都昌县研究边界内",
-            "geometry_rule": "展示完整原生网格，不沿县界裁切",
+            "geometry_rule": "GeoJSON 保留完整原生网格且不沿县界裁切；网页可切换制图显示几何",
+            "display_geometry": {
+                "default_mode": "rectified",
+                "available_modes": ["rectified", "native"],
+                "rectified_method": "以原生网格中心为锚点，生成中心保持、经纬轴对齐的局部等边近似显示格",
+                "rectified_formula": "delta_lat_deg=(p/(2R))*180/pi; delta_lon_deg=delta_lat_deg/cos(latitude_center_rad)",
+                "rectified_corner_shift_audit": rectified_corner_shift,
+                "native_geometry_preserved": True,
+                "native_geometry_field": "feature.geometry",
+                "rectified_geometry_analysis_use": False,
+                "limitation": "近似显示格仅用于页面制图、点击和比较；点落格、边界相交与精确空间分析应使用原生 GeoJSON 几何",
+            },
             "county_center_cells": len(cell_features),
             "positive_population_support_cells": positive_cells,
             "zero_population_support_cells": len(cell_features) - positive_cells,
@@ -361,6 +429,9 @@ def build_public_geojson(
 
 def render_heat_exposure_gis():
     """渲染登录后的学术 GIS 原型。"""
+    # 构建器无需 Flask 环境，页面依赖在渲染时再加载。
+    from flask import current_app, render_template, url_for
+
     static_path = Path(current_app.static_folder) / PUBLIC_GEOJSON_FILENAME
     try:
         static_version = int(static_path.stat().st_mtime)
