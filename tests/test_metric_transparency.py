@@ -50,6 +50,11 @@ def test_transparency_page_renders_formula_index(client):
     assert 'Score = 100 × [0.50×HI_norm + 0.30×Night_norm + 0.20×Streak_norm]' in body
     assert 'id="community-risk-index"' in body
     assert 'id="sir"' in body
+    assert 'id="gis-native-grid"' in body
+    assert 'id="gis-lst-mean"' in body
+    assert 'id="gis-validation"' in body
+    assert 'LST_C = Raw×0.02−273.15；Mean = ΣLST_C / n_Q3' in body
+    assert 'Publish = 1{validation_pass = true ∧ status = pass ∧ hard_failures = 0}' in body
     assert '缺失值处理' in body
     assert '已知局限' in body
     assert 'Open-Meteo' in body

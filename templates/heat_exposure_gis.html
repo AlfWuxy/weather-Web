@@ -1,0 +1,281 @@
+{% extends "base.html" %}
+{% from "partials/metric_info.html" import metric_info with context %}
+
+{% block title %}都昌县热暴露 GIS｜宜老天气通{% endblock %}
+
+{% block body_class %}heat-exposure-gis-page{% endblock %}
+
+{% block extra_css %}
+<link rel="stylesheet" href="{{ url_for('static', filename='vendor/leaflet/dist/leaflet.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/heat-exposure-gis.css') }}">
+{% endblock %}
+
+{% block content %}
+<div class="gis-page" id="heatExposureGisApp"
+     data-geojson-url="{{ gis_data_url }}"
+     data-default-cell="{{ default_cell_id }}"
+     data-transparency-url="{{ url_for('public.transparency') }}">
+    <header class="gis-hero" aria-labelledby="gisTitle">
+        <div>
+            <div class="gis-eyebrow">DUCHANG COUNTY · RESEARCH PROTOTYPE 01</div>
+            <h1 id="gisTitle">都昌县 1 km 网格级热暴露 GIS</h1>
+            <p class="gis-lede">把晴空地表温度、老年人口空间分布、地表覆盖和高程放到同一套原生 MODIS 网格中，支持逐格查看与来源追溯。</p>
+        </div>
+        <div class="gis-status-group" aria-label="数据状态">
+            <span class="gis-status gis-status--pass"><i class="bi bi-check-circle-fill" aria-hidden="true"></i>独立复核程序通过</span>
+            <span class="gis-status"><i class="bi bi-globe2" aria-hidden="true"></i>WGS84</span>
+            <span class="gis-status"><i class="bi bi-shield-lock" aria-hidden="true"></i>聚合数据</span>
+        </div>
+    </header>
+
+    <section class="gis-statline" aria-label="研究数据摘要">
+        <div><strong id="gisStatCellCount">2,593</strong><span>县域中心网格</span></div>
+        <div><strong id="gisStatPopulationCells">1,721</strong><span>正人口支持网格</span></div>
+        <div><strong id="gisStatQ3Days">250,270</strong><span>Q3 有效网格日</span></div>
+        <div><strong id="gisStatPeriod">2020–2024</strong><span>夏季研究期</span></div>
+        <div><strong id="gisStatScenes">448</strong><span>本地冻结场景</span></div>
+    </section>
+
+    <aside class="gis-interpretation-notice" aria-label="解释边界">
+        <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>
+        <div>
+            <strong>解释边界</strong>
+            <span>本页展示模型化人口与 Aqua 白天晴空地表温度。结果不代表个人健康风险、2 米气温、室内温度或因果效应。</span>
+        </div>
+    </aside>
+
+    <div class="gis-mobile-layer-control">
+        <label for="gisLayerSelect">地图图层</label>
+        <div class="gis-mobile-layer-field">
+            <select id="gisLayerSelect" class="form-select"></select>
+            <span id="gisMobileLayerInfo">{{ metric_info('gis_age65_share') }}</span>
+        </div>
+    </div>
+
+    <section class="gis-workspace" aria-label="交互式热暴露地图">
+        <aside class="gis-layer-rail" aria-labelledby="layerRailTitle">
+            <div class="gis-panel-heading">
+                <span class="gis-panel-kicker">MAP LAYERS</span>
+                <h2 id="layerRailTitle">空间图层</h2>
+            </div>
+            <div id="gisLayerButtons" class="gis-layer-buttons" role="list"></div>
+            <div class="gis-layer-note">
+                <i class="bi bi-info-circle" aria-hidden="true"></i>
+                <p>色阶按当前图层的全县有效网格分布生成。灰色网格表示该指标无值。</p>
+            </div>
+            <button type="button" class="gis-quiet-button" id="gisResetView">
+                <i class="bi bi-arrows-angle-contract" aria-hidden="true"></i>恢复县域视图
+            </button>
+        </aside>
+
+        <div class="gis-map-stage">
+            <div class="gis-map-toolbar" aria-label="地图说明">
+                <span id="gisMapLayerTitle" aria-live="polite">65 岁及以上人口比例</span>
+                <span class="gis-map-period">2020–2024 JJA</span>
+            </div>
+            <div id="gisMap"
+                 class="gis-map"
+                 tabindex="0"
+                 aria-label="都昌县 1 km 网格交互地图。使用地图可缩放和平移，使用数据表可通过键盘访问全部网格。"></div>
+            <div class="gis-map-loading" id="gisMapLoading" role="status" aria-live="polite">
+                <span class="spinner-border spinner-border-sm" aria-hidden="true"></span>
+                正在载入 2,593 个网格…
+            </div>
+            <div class="gis-map-fallback" id="gisMapFallback" hidden>
+                <strong>地图组件暂时无法载入</strong>
+                <p>下面的数据表和方法信息仍可正常使用。</p>
+            </div>
+            <div class="gis-north-arrow" aria-hidden="true"><span>N</span><i></i></div>
+            <div class="gis-coordinate-readout" id="gisCoordinateReadout" aria-live="polite">WGS84</div>
+            <div class="gis-legend" id="gisLegend" aria-label="地图图例"></div>
+        </div>
+
+        <aside class="gis-inspector" aria-labelledby="inspectorTitle">
+            <div class="gis-panel-heading">
+                <span class="gis-panel-kicker">CELL INSPECTOR</span>
+                <h2 id="inspectorTitle">网格详情</h2>
+            </div>
+            <div class="gis-cell-identity" aria-live="polite">
+                <code id="gisCellId">{{ default_cell_id }}</code>
+                <span id="gisCellPosition">116.188991°E · 29.320833°N</span>
+            </div>
+            <div class="gis-primary-reading">
+                <div class="gis-primary-label-row">
+                    <span id="gisPrimaryLabel">65 岁及以上人口比例</span>
+                    <span id="gisPrimaryInfo">{{ metric_info('gis_age65_share') }}</span>
+                </div>
+                <strong id="gisPrimaryValue">15.1%</strong>
+                <small id="gisPrimaryRank">正在计算全县位置…</small>
+            </div>
+            <p class="gis-active-definition" id="gisActiveDefinition">ASPECT 模型化 65 岁及以上人口占模型化总人口的比例，仅在正人口支持网格显示。</p>
+
+            <dl class="gis-metric-list" id="gisMetricList">
+                <div><dt><span>Aqua 晴空地表温度</span>{{ metric_info('gis_lst_mean') }}</dt><dd id="gisMetricLst">32.4 °C</dd></div>
+                <div><dt><span>Q3 合格观测</span>{{ metric_info('gis_q3_coverage') }}</dt><dd id="gisMetricCoverage">82 / 448 天</dd></div>
+                <div><dt><span>树木覆盖</span>{{ metric_info('gis_tree_cover') }}</dt><dd id="gisMetricTree">89.7%</dd></div>
+                <div><dt><span>建成区覆盖</span>{{ metric_info('gis_built_up') }}</dt><dd id="gisMetricBuilt">0.0%</dd></div>
+                <div><dt><span>近似永久水域</span>{{ metric_info('gis_permanent_water') }}</dt><dd id="gisMetricWater">6.5%</dd></div>
+                <div><dt><span>平均表面高程</span>{{ metric_info('gis_mean_elevation') }}</dt><dd id="gisMetricElevation">66.5 m</dd></div>
+            </dl>
+
+            <div class="gis-cell-provenance">
+                <h3>空间追溯</h3>
+                <p><span>MODIS tile</span><code id="gisCellTile">h28v06</code></p>
+                <p><span>0-based row / col</span><code id="gisCellRowCol">81 / 156</code></p>
+                <p><span>网格纳入规则</span><strong>中心点在县界内</strong></p>
+            </div>
+            <div class="gis-cell-actions" aria-label="切换选中网格">
+                <button type="button" id="gisPreviousCell" aria-label="上一个网格"><i class="bi bi-arrow-left"></i></button>
+                <button type="button" id="gisZoomCell"><i class="bi bi-crosshair"></i>定位此格</button>
+                <button type="button" id="gisNextCell" aria-label="下一个网格"><i class="bi bi-arrow-right"></i></button>
+            </div>
+        </aside>
+    </section>
+
+    <section class="gis-method-section" aria-labelledby="methodTitle">
+        <div class="gis-section-intro">
+            <span class="gis-panel-kicker">METHOD & PROVENANCE</span>
+            <h2 id="methodTitle">方法、来源与复核入口</h2>
+            <p>每一层都保留数据集版本、定义和限制。GeoJSON 内嵌四个生成输入的 SHA-256 指纹，可用于核对冻结产物。</p>
+        </div>
+
+        <div class="gis-method-grid">
+            <article>
+                <span class="gis-method-index">01</span>
+                <h3>原生空间单位 {{ metric_info('gis_native_grid') }}</h3>
+                <p>使用 MYD11A1 h28v06 原生正弦投影网格，像元边长约 926.6 m。县域集合以网格中心点落入研究边界为准，共 2,593 格，地图显示完整网格。</p>
+            </article>
+            <article>
+                <span class="gis-method-index">02</span>
+                <h3>温度质量口径 {{ metric_info('gis_lst_mean') }}</h3>
+                <p>研究期为 2020 至 2024 年每年 6 至 8 月。Q3 接受 mandatory QA 00 或 01 且原始 LST 编码有效的 Aqua 白天晴空观测。</p>
+            </article>
+            <article>
+                <span class="gis-method-index">03</span>
+                <h3>人口与环境协变量 {{ metric_info('gis_age65_share') }}</h3>
+                <p>ASPECT 只展示 65+ 人口比例。WorldCover 展示源像元覆盖权重比例。Copernicus DEM 提供数字表面模型高程。网页读取冻结上游产物，不会在线重新估计这些图层。</p>
+            </article>
+            <article>
+                <span class="gis-method-index">04</span>
+                <h3>独立失败关闭复核 {{ metric_info('gis_validation') }}</h3>
+                <p>复核程序逐项核对网格全集、460 个日历日期、448 个本地场景、资产完整性及抽样面板重算；硬失败数为 0。程序复核不代表外部机构认证。</p>
+            </article>
+        </div>
+
+        <div class="gis-source-ledger" aria-labelledby="sourceLedgerTitle">
+            <div class="gis-source-ledger-head">
+                <div>
+                    <h3 id="sourceLedgerTitle">数据与文献账本</h3>
+                    <p>链接指向数据生产机构、国际组织或同行评审论文。</p>
+                </div>
+                <div class="gis-source-actions">
+                    <a class="gis-download-link" href="{{ gis_data_url }}" download="duchang_heat_exposure_cells.geojson">
+                        <i class="bi bi-download" aria-hidden="true"></i>下载 GeoJSON
+                    </a>
+                    <button type="button" class="gis-quiet-button" id="gisFingerprintToggle" aria-expanded="false" aria-controls="gisFingerprints">
+                        查看 SHA-256 指纹
+                    </button>
+                </div>
+            </div>
+            <div class="gis-fingerprints" id="gisFingerprints" hidden></div>
+
+            <div class="gis-source-table-wrap">
+                <table class="gis-source-table">
+                    <thead>
+                        <tr><th>用途</th><th>数据或文献</th><th>版本 / DOI</th><th>生成方法与关键限制</th></tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><strong>晴空地表温度</strong>{{ metric_info('gis_lst_mean') }}</td>
+                            <td><a href="https://www.earthdata.nasa.gov/data/catalog/lpcloud-myd11a1-061" target="_blank" rel="noreferrer">NASA Aqua MYD11A1</a></td>
+                            <td>Collection 6.1<br><a href="https://doi.org/10.5067/MODIS/MYD11A1.061" target="_blank" rel="noreferrer">10.5067/MODIS/MYD11A1.061</a></td>
+                            <td>原始编码乘 0.02 后减 273.15，Q3 逐日筛选再求网格均值。晴空采样、云边缘和气溶胶会影响结果。</td>
+                        </tr>
+                        <tr>
+                            <td><strong>年龄结构人口</strong>{{ metric_info('gis_age65_share') }}</td>
+                            <td><a href="https://www.nature.com/articles/s41597-025-05401-1" target="_blank" rel="noreferrer">ASPECT, Scientific Data</a></td>
+                            <td>2020 · 100 m<br><a href="https://doi.org/10.1038/s41597-025-05401-1" target="_blank" rel="noreferrer">10.1038/s41597-025-05401-1</a></td>
+                            <td>随机森林空间分配结果按 MODIS 网格聚合，本页只发布正人口支持网格的 65+ 比例。</td>
+                        </tr>
+                        <tr>
+                            <td><strong>地表覆盖</strong>{{ metric_info('gis_tree_cover') }}</td>
+                            <td><a href="https://esa-worldcover.org/en/data-access" target="_blank" rel="noreferrer">ESA WorldCover</a></td>
+                            <td>2020 v100 · 10 m<br><a href="https://doi.org/10.5281/zenodo.5571936" target="_blank" rel="noreferrer">10.5281/zenodo.5571936</a></td>
+                            <td>10 m 分类像元按覆盖权重聚合树木、建成区和永久水体类别。全球总体准确率 74.4%。</td>
+                        </tr>
+                        <tr>
+                            <td><strong>表面高程</strong>{{ metric_info('gis_mean_elevation') }}</td>
+                            <td><a href="https://dataspace.copernicus.eu/explore-data/data-collections/copernicus-contributing-missions/collections-description/COP-DEM" target="_blank" rel="noreferrer">Copernicus DEM GLO-30</a></td>
+                            <td>30 m DSM<br><a href="https://doi.org/10.5270/ESA-c5d3d65" target="_blank" rel="noreferrer">10.5270/ESA-c5d3d65</a></td>
+                            <td>有效源像元按覆盖权重求平均。数字表面模型包含地物高度，不能直接解释为裸地地形。</td>
+                        </tr>
+                        <tr>
+                            <td><strong>研究边界</strong>{{ metric_info('gis_native_grid') }}</td>
+                            <td><a href="https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0231866" target="_blank" rel="noreferrer">geoBoundaries</a></td>
+                            <td>ADM3 research boundary<br><a href="https://doi.org/10.1371/journal.pone.0231866" target="_blank" rel="noreferrer">10.1371/journal.pone.0231866</a></td>
+                            <td>以网格中心点严格位于开放研究边界内作为纳入规则，边缘显示完整网格；不能作为法定边界凭证。</td>
+                        </tr>
+                        <tr>
+                            <td>健康解释边界</td>
+                            <td><a href="https://www.who.int/news-room/fact-sheets/detail/climate-change-heat-and-health" target="_blank" rel="noreferrer">WHO Heat and Health</a><br><a href="https://pubmed.ncbi.nlm.nih.gov/20049125/" target="_blank" rel="noreferrer">Reid et al. (2009)</a></td>
+                            <td>公共卫生背景文献</td>
+                            <td>脆弱性由年龄、健康、社会和暴露条件共同形成。</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </section>
+
+    <section class="gis-data-section" aria-labelledby="dataTableTitle">
+        <div class="gis-data-section-head">
+            <div>
+                <span class="gis-panel-kicker">ACCESSIBLE DATA VIEW</span>
+                <h2 id="dataTableTitle">网格数据表</h2>
+                <p>地图之外的键盘可访问路径。搜索 cell ID、经纬度或数值，每页显示 50 格。</p>
+            </div>
+            <button type="button" class="gis-primary-button" id="gisTableToggle" aria-expanded="false" aria-controls="gisDataPanel">打开数据表</button>
+        </div>
+        <div class="gis-data-panel" id="gisDataPanel" hidden>
+            <div class="gis-table-tools">
+                <label for="gisTableSearch">筛选网格</label>
+                <input id="gisTableSearch" class="form-control" type="search" placeholder="例如 h28v06-r0081-c0156">
+                <span id="gisTableCount" aria-live="polite"></span>
+            </div>
+            <div class="gis-data-table-wrap">
+                <table class="gis-data-table">
+                    <thead>
+                        <tr>
+                            <th scope="col">cell ID</th>
+                            <th scope="col">中心点 WGS84</th>
+                            <th scope="col">65+ 比例</th>
+                            <th scope="col">LST 均值</th>
+                            <th scope="col">Q3 天数</th>
+                            <th scope="col">树木</th>
+                            <th scope="col">建成区</th>
+                            <th scope="col">永久水域</th>
+                            <th scope="col">表面高程</th>
+                        </tr>
+                    </thead>
+                    <tbody id="gisDataTableBody"></tbody>
+                </table>
+            </div>
+            <div class="gis-pagination">
+                <button type="button" id="gisTablePrevious">上一页</button>
+                <span id="gisTablePage">第 1 页</span>
+                <button type="button" id="gisTableNext">下一页</button>
+            </div>
+        </div>
+    </section>
+
+    <footer class="gis-page-footer">
+        <p><strong>原型状态：</strong>科研展示 v1.1 · 聚合、去标识化输出 · 不含个人健康记录或逐户人口数据</p>
+        <p id="gisBuildTimestamp">正在读取数据构建时间…</p>
+    </footer>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script src="{{ url_for('static', filename='vendor/leaflet/dist/leaflet.js') }}"></script>
+<script src="{{ url_for('static', filename='js/heat-exposure-gis.js') }}"></script>
+{% endblock %}

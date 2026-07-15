@@ -84,6 +84,7 @@
     {% set nav_is_guest = current_user.is_authenticated and current_user.role == 'guest' %}
     {% set nav_family_active = 'family_member' in nav_endpoint %}
     {% set nav_community_workspace_active = nav_endpoint in ['user.community_dashboard', 'user.community_detail', 'user.community_wechat', 'user.community_announce'] %}
+    {% set nav_more_active = (current_user.is_authenticated and current_user.role == 'admin' and nav_community_workspace_active) or nav_endpoint == 'user.heat_exposure_gis' %}
     {% if nav_is_guest or not current_user.is_authenticated %}
         {% set nav_care_url = url_for('public.register') %}
         {% set nav_care_label = '注册开启照护' %}
@@ -145,7 +146,7 @@
 
                     <div class="app-more-menu" id="appMoreMenu">
                         <button type="button"
-                                class="nav-link app-more-trigger {% if current_user.role == 'admin' and nav_community_workspace_active %}active{% endif %}"
+                                class="nav-link app-more-trigger {% if nav_more_active %}active{% endif %}"
                                 data-nav-more-trigger="desktop"
                                 data-nav-key="more"
                                 aria-expanded="false"
@@ -160,6 +161,12 @@
                                     <a class="app-mega-link" href="{{ url_for('public.public_risk') }}">风险说明</a>
                                     <a class="app-mega-link" href="{{ url_for('public.cooling_resources') }}">避暑资源</a>
                                     <a class="app-mega-link" href="{{ url_for('public.transparency') }}">透明度</a>
+                                    {% if feature_flags.heat_exposure_gis %}
+                                        <a class="app-mega-link {% if nav_endpoint == 'user.heat_exposure_gis' %}active{% endif %}"
+                                           href="{{ url_for('user.heat_exposure_gis') }}"
+                                           data-nav-key="heat-exposure-gis"
+                                           {% if nav_endpoint == 'user.heat_exposure_gis' %}aria-current="page"{% endif %}>热暴露 GIS</a>
+                                    {% endif %}
                                     <a class="app-mega-link" href="{{ url_for('public.action_check') }}">行动打卡</a>
                                 </section>
 
@@ -280,6 +287,9 @@
                 <a class="nav-link {% if nav_endpoint == 'public.public_risk' %}active{% endif %}" href="{{ url_for('public.public_risk') }}" {% if nav_endpoint == 'public.public_risk' %}aria-current="page"{% endif %}><i class="bi bi-thermometer-sun me-2"></i>风险说明</a>
                 <a class="nav-link {% if nav_endpoint == 'public.cooling_resources' %}active{% endif %}" href="{{ url_for('public.cooling_resources') }}" {% if nav_endpoint == 'public.cooling_resources' %}aria-current="page"{% endif %}><i class="bi bi-geo-alt me-2"></i>避暑资源</a>
                 <a class="nav-link {% if nav_endpoint == 'user.community_risk' %}active{% endif %}" href="{{ url_for('user.community_risk') }}" data-nav-key="community-risk" {% if nav_endpoint == 'user.community_risk' %}aria-current="page"{% endif %}><i class="bi bi-map me-2"></i>社区风险</a>
+                {% if feature_flags.heat_exposure_gis %}
+                    <a class="nav-link {% if nav_endpoint == 'user.heat_exposure_gis' %}active{% endif %}" href="{{ url_for('user.heat_exposure_gis') }}" data-nav-key="heat-exposure-gis" {% if nav_endpoint == 'user.heat_exposure_gis' %}aria-current="page"{% endif %}><i class="bi bi-grid-3x3-gap me-2"></i>热暴露 GIS</a>
+                {% endif %}
                 <a class="nav-link {% if nav_endpoint == 'public.transparency' %}active{% endif %}" href="{{ url_for('public.transparency') }}" {% if nav_endpoint == 'public.transparency' %}aria-current="page"{% endif %}><i class="bi bi-shield-check me-2"></i>透明度</a>
             </nav>
 
