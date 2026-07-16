@@ -1,9 +1,9 @@
 [Unit]
-Description=Run Case Weather cache sync every 5 minutes
+Description=Run Case Weather cache sync every 30 minutes
 
 [Timer]
 OnBootSec=2min
-OnUnitActiveSec=5min
+OnUnitActiveSec=30min
 Persistent=true
 Unit=case-weather-cache.service
 

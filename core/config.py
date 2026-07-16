@@ -236,6 +236,10 @@ def configure_app(app, logger):
     demo_mode = os.getenv('DEMO_MODE')
     default_city = _normalized_env_value('DEFAULT_CITY', DEFAULT_CITY)
     default_location = _normalized_env_value('DEFAULT_LOCATION', DEFAULT_LOCATION)
+    qweather_canonical_location = _normalized_env_value(
+        'QWEATHER_CANONICAL_LOCATION',
+        default_location,
+    )
     redis_url = _normalized_env_value('REDIS_URL', '')
     weather_cache_redis_url = _normalized_env_value('WEATHER_CACHE_REDIS_URL', redis_url)
 
@@ -256,6 +260,7 @@ def configure_app(app, logger):
     app.config['SECRET_KEY'] = secret_key
     app.config['QWEATHER_KEY'] = qweather_key
     app.config['QWEATHER_API_BASE'] = qweather_api_base
+    app.config['QWEATHER_CANONICAL_LOCATION'] = qweather_canonical_location
     app.config['AMAP_KEY'] = amap_key
     app.config['AMAP_SECURITY_JS_CODE'] = amap_security_js_code
     app.config['SILICONFLOW_API_KEY'] = siliconflow_key
@@ -291,11 +296,29 @@ def configure_app(app, logger):
     app.config.setdefault('TRUSTED_PROXY_CIDRS', os.getenv('TRUSTED_PROXY_CIDRS', '127.0.0.1/32,::1/128'))
     app.config.setdefault(
         'FORECAST_CACHE_TTL_MINUTES',
-        parse_int(os.getenv('FORECAST_CACHE_TTL_MINUTES', '20'), default=20)
+        max(parse_int(os.getenv('FORECAST_CACHE_TTL_MINUTES', '30'), default=30), 10)
     )
     app.config.setdefault(
         'WEATHER_CACHE_TTL_MINUTES',
-        parse_int(os.getenv('WEATHER_CACHE_TTL_MINUTES', str(WEATHER_CACHE_TTL_MINUTES)), default=WEATHER_CACHE_TTL_MINUTES)
+        max(
+            parse_int(
+                os.getenv('WEATHER_CACHE_TTL_MINUTES', str(WEATHER_CACHE_TTL_MINUTES)),
+                default=WEATHER_CACHE_TTL_MINUTES,
+            ),
+            10,
+        )
+    )
+    app.config.setdefault(
+        'QWEATHER_WARNING_CACHE_TTL_MINUTES',
+        max(parse_int(os.getenv('QWEATHER_WARNING_CACHE_TTL_MINUTES', '30'), default=30), 10)
+    )
+    app.config.setdefault(
+        'QWEATHER_MONTHLY_REQUEST_LIMIT',
+        max(parse_int(os.getenv('QWEATHER_MONTHLY_REQUEST_LIMIT', '40000'), default=40000), 0)
+    )
+    app.config.setdefault(
+        'QWEATHER_BUDGET_FAIL_CLOSED',
+        parse_bool(os.getenv('QWEATHER_BUDGET_FAIL_CLOSED', '1'), default=True)
     )
     if qweather_key and not qweather_api_base:
         logger.warning("QWEATHER_KEY 已配置但 QWEATHER_API_BASE 未配置，将跳过 QWeather Host 相关调用并使用兜底链路。")

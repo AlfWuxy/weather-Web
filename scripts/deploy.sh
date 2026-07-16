@@ -225,6 +225,14 @@ DATABASE_URI=sqlite:///health_weather.db
 REDIS_URL=redis://127.0.0.1:6379/0
 RATE_LIMIT_STORAGE_URI=redis://127.0.0.1:6379/0
 QWEATHER_KEY=
+QWEATHER_API_BASE=
+QWEATHER_CANONICAL_LOCATION=116.20,29.27
+QWEATHER_MONTHLY_REQUEST_LIMIT=40000
+QWEATHER_BUDGET_FAIL_CLOSED=1
+WEATHER_CACHE_TTL_MINUTES=30
+FORECAST_CACHE_TTL_MINUTES=30
+QWEATHER_WARNING_CACHE_TTL_MINUTES=30
+WEATHER_SYNC_LOCATIONS=都昌县
 AMAP_KEY=
 WXPUSHER_APP_TOKEN=
 WXPUSHER_API_BASE=https://wxpusher.zjiecode.com/api
@@ -235,6 +243,13 @@ echo '已创建新的 .env 文件'; else echo '.env 文件已存在，跳过创�
 echo ""
 echo "步骤6.1: 确保数据库目录与关键配置存在..."
 remote_exec "mkdir -p $PROJECT_DIR/instance && (grep -q '^DATABASE_URI=' $PROJECT_DIR/.env || echo 'DATABASE_URI=sqlite:///health_weather.db' >> $PROJECT_DIR/.env)"
+remote_exec "grep -q '^QWEATHER_CANONICAL_LOCATION=' $PROJECT_DIR/.env || echo 'QWEATHER_CANONICAL_LOCATION=116.20,29.27' >> $PROJECT_DIR/.env"
+remote_exec "grep -q '^QWEATHER_MONTHLY_REQUEST_LIMIT=' $PROJECT_DIR/.env || echo 'QWEATHER_MONTHLY_REQUEST_LIMIT=40000' >> $PROJECT_DIR/.env"
+remote_exec "grep -q '^QWEATHER_BUDGET_FAIL_CLOSED=' $PROJECT_DIR/.env || echo 'QWEATHER_BUDGET_FAIL_CLOSED=1' >> $PROJECT_DIR/.env"
+remote_exec "grep -q '^WEATHER_CACHE_TTL_MINUTES=' $PROJECT_DIR/.env || echo 'WEATHER_CACHE_TTL_MINUTES=30' >> $PROJECT_DIR/.env"
+remote_exec "grep -q '^FORECAST_CACHE_TTL_MINUTES=' $PROJECT_DIR/.env || echo 'FORECAST_CACHE_TTL_MINUTES=30' >> $PROJECT_DIR/.env"
+remote_exec "grep -q '^QWEATHER_WARNING_CACHE_TTL_MINUTES=' $PROJECT_DIR/.env || echo 'QWEATHER_WARNING_CACHE_TTL_MINUTES=30' >> $PROJECT_DIR/.env"
+remote_exec "grep -q '^WEATHER_SYNC_LOCATIONS=' $PROJECT_DIR/.env || echo 'WEATHER_SYNC_LOCATIONS=都昌县' >> $PROJECT_DIR/.env"
 
 echo ""
 echo "步骤6.1.1: 写入必要的 API Key（仅在服务器端为空/缺失时写入）..."
@@ -275,7 +290,7 @@ fi
 echo ""
 echo "步骤6.2: 初始化/迁移数据库（安全 stamp + upgrade）..."
 remote_exec "cd '$PROJECT_DIR' && PROJECT_DIR='$PROJECT_DIR' ENV_FILE='$PROJECT_DIR/.env' bash scripts/backup.sh --if-present"
-remote_exec "systemctl stop case-weather || true; systemctl stop case-weather-dispatch.timer || true; systemctl stop case-weather-risk-precompute.timer || true"
+remote_exec "systemctl stop case-weather || true; systemctl stop case-weather-cache.timer || true; systemctl stop case-weather-dispatch.timer || true; systemctl stop case-weather-risk-precompute.timer || true"
 remote_exec "cd $PROJECT_DIR && VENV_PY=$VENV_DIR/bin/python bash scripts/server_migrate.sh"
 
 echo ""
@@ -303,7 +318,38 @@ WantedBy=multi-user.target
 EOF"
 
 echo ""
-echo "步骤7.1: 创建预警推送定时任务（systemd timer）..."
+echo "步骤7.1: 创建天气缓存定时任务（systemd timer）..."
+remote_exec "cat > /etc/systemd/system/case-weather-cache.service << 'EOF'
+[Unit]
+Description=Case Weather - refresh Duchang weather cache
+After=network.target case-weather.service
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=$PROJECT_DIR
+EnvironmentFile=$PROJECT_DIR/.env
+Environment=PYTHONUNBUFFERED=1
+Environment=VENV_PY=$VENV_DIR/bin/python
+ExecStart=/bin/bash $PROJECT_DIR/scripts/weather_cache_sync.sh
+EOF
+
+cat > /etc/systemd/system/case-weather-cache.timer << 'EOF'
+[Unit]
+Description=Case Weather - refresh Duchang weather cache every 30 minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=30min
+Persistent=true
+Unit=case-weather-cache.service
+
+[Install]
+WantedBy=timers.target
+EOF"
+
+echo ""
+echo "步骤7.2: 创建预警推送定时任务（systemd timer）..."
 remote_exec "cat > /etc/systemd/system/case-weather-dispatch.service << 'EOF'
 [Unit]
 Description=Case Weather - dispatch alerts (WxPusher)
@@ -332,7 +378,7 @@ WantedBy=timers.target
 EOF"
 
 echo ""
-echo "步骤7.2: 创建社区风险预计算定时任务（systemd timer）..."
+echo "步骤7.3: 创建社区风险预计算定时任务（systemd timer）..."
 remote_exec "cat > /etc/systemd/system/case-weather-risk-precompute.service << 'EOF'
 [Unit]
 Description=Case Weather - precompute community risk cache
@@ -370,13 +416,19 @@ remote_exec "systemctl status --no-pager case-weather"
 check_remote_unit_active "case-weather"
 
 echo ""
-echo "步骤8.1: 启动定时器..."
+echo "步骤8.1: 启动天气缓存定时器..."
+remote_exec "systemctl enable --now case-weather-cache.timer"
+remote_exec "systemctl status --no-pager case-weather-cache.timer"
+check_remote_unit_active "case-weather-cache.timer"
+
+echo ""
+echo "步骤8.2: 启动预警推送定时器..."
 remote_exec "systemctl enable --now case-weather-dispatch.timer"
 remote_exec "systemctl status --no-pager case-weather-dispatch.timer"
 check_remote_unit_active "case-weather-dispatch.timer"
 
 echo ""
-echo "步骤8.2: 启动社区风险预计算定时器..."
+echo "步骤8.3: 启动社区风险预计算定时器..."
 remote_exec "systemctl enable --now case-weather-risk-precompute.timer"
 remote_exec "systemctl status --no-pager case-weather-risk-precompute.timer"
 check_remote_unit_active "case-weather-risk-precompute.timer"
