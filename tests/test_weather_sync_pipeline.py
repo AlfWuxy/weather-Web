@@ -167,6 +167,176 @@ def test_qweather_budget_guard_blocks_http_and_uses_fallback(monkeypatch):
     assert service.get_current_weather('都昌') == fallback
 
 
+def test_qweather_air_quality_v1_uses_origin_and_lat_lon(monkeypatch):
+    """空气质量 v1 应去掉 /v7，并按纬度、经度顺序请求。"""
+    from services import weather_service as weather_module
+
+    service = weather_module.WeatherService()
+    service.qweather_key = 'test-key'
+    service.api_base_url = 'https://api.qweather.invalid/v7'
+    service.canonical_location = '116.20,29.27'
+    calls = []
+    reserved_endpoints = []
+
+    weather_response = _Response(200, {
+        'code': '200',
+        'now': {
+            'temp': '30',
+            'humidity': '70',
+            'pressure': '1005',
+            'text': '晴',
+            'windSpeed': '3',
+            'feelsLike': '33',
+        },
+    })
+    air_response = _Response(200, {
+        'indexes': [
+            {'code': 'cn-mee-1h', 'aqi': 99, 'category': '良'},
+            {'code': 'qaqi', 'aqi': 2.4, 'category': 'Good'},
+            {'code': 'cn-mee', 'aqi': 83, 'category': '良'},
+        ],
+        'pollutants': [
+            {'code': 'pm2p5', 'concentration': {'value': 27.5, 'unit': 'μg/m3'}},
+        ],
+    })
+
+    def fake_get(url, **kwargs):
+        calls.append((url, kwargs))
+        return weather_response if len(calls) == 1 else air_response
+
+    monkeypatch.setattr(weather_module.requests, 'get', fake_get)
+    monkeypatch.setattr(weather_module, '_record_external_api_timing', lambda *_args: None)
+    monkeypatch.setattr(
+        weather_module,
+        'reserve_qweather_request',
+        lambda endpoint: reserved_endpoints.append(endpoint) or True,
+    )
+    monkeypatch.setattr(
+        service,
+        '_resolve_qweather_current_temperature_range',
+        lambda _location: (34.0, 25.0, 'daily', 'high'),
+    )
+
+    result = service.get_current_weather('牛家垄周村')
+
+    assert result['aqi'] == 83
+    assert result['pm25'] == 27.5
+    assert result['air_quality'] == '良'
+    assert calls[0][0] == 'https://api.qweather.invalid/v7/weather/now'
+    assert calls[1][0] == 'https://api.qweather.invalid/airquality/v1/current/29.27/116.20'
+    assert calls[1][1]['params'] == {'lang': 'zh'}
+    assert calls[1][1]['headers'] == {'X-QW-Api-Key': 'test-key'}
+    assert reserved_endpoints == ['weather_now', 'airquality_v1_current']
+
+
+def test_qweather_air_quality_failure_keeps_weather_available(monkeypatch):
+    """空气质量失败时，已成功取得的天气实况仍应返回。"""
+    from services import weather_service as weather_module
+
+    service = weather_module.WeatherService()
+    service.qweather_key = 'test-key'
+    service.api_base_url = 'https://api.qweather.invalid/v7'
+    service.canonical_location = '116.20,29.27'
+    responses = iter([
+        _Response(200, {
+            'code': '200',
+            'now': {'temp': '30', 'humidity': '70', 'text': '晴'},
+        }),
+        _Response(403, {}),
+    ])
+
+    monkeypatch.setattr(weather_module.requests, 'get', lambda *_args, **_kwargs: next(responses))
+    monkeypatch.setattr(weather_module, '_record_external_api_timing', lambda *_args: None)
+    monkeypatch.setattr(weather_module, 'reserve_qweather_request', lambda _endpoint: True)
+    monkeypatch.setattr(
+        service,
+        '_resolve_qweather_current_temperature_range',
+        lambda _location: (34.0, 25.0, 'daily', 'high'),
+    )
+    monkeypatch.setattr(
+        service,
+        '_get_fallback_weather',
+        lambda *_args: pytest.fail('空气质量失败不应让天气实况降级'),
+    )
+
+    result = service.get_current_weather('都昌')
+
+    assert result['data_source'] == 'QWeather'
+    assert result['temperature'] == 30.0
+    assert result['aqi'] is None
+    assert result['pm25'] is None
+
+
+def test_qweather_air_quality_does_not_use_generic_qaqi(monkeypatch):
+    """通用 QAQI 的量纲不得进入本地 0-500 AQI 健康阈值。"""
+    from services import weather_service as weather_module
+
+    service = weather_module.WeatherService()
+    service.qweather_key = 'test-key'
+    service.api_base_url = 'https://api.qweather.invalid/v7'
+    response = _Response(200, {
+        'indexes': [{'code': 'qaqi', 'aqi': 2.1, 'category': 'Good'}],
+        'pollutants': [
+            {'code': 'pm2p5', 'concentration': {'value': 18, 'unit': 'μg/m3'}},
+        ],
+    })
+
+    monkeypatch.setattr(weather_module.requests, 'get', lambda *_args, **_kwargs: response)
+    monkeypatch.setattr(weather_module, '_record_external_api_timing', lambda *_args: None)
+    monkeypatch.setattr(weather_module, 'reserve_qweather_request', lambda _endpoint: True)
+
+    result = service._get_qweather_air_quality('116.20,29.27')
+
+    assert result == {'pm25': 18.0}
+
+
+def test_qweather_air_quality_budget_guard_skips_http(monkeypatch):
+    """空气质量预算被阻断后，不得继续发送 HTTP 请求。"""
+    from services import weather_service as weather_module
+
+    service = weather_module.WeatherService()
+    service.qweather_key = 'test-key'
+    service.api_base_url = 'https://api.qweather.invalid/v7'
+
+    monkeypatch.setattr(weather_module, 'reserve_qweather_request', lambda _endpoint: False)
+    monkeypatch.setattr(
+        weather_module.requests,
+        'get',
+        lambda *_args, **_kwargs: pytest.fail('预算阻断后不应发送空气质量请求'),
+    )
+
+    assert service._get_qweather_air_quality('116.20,29.27') == {}
+
+
+@pytest.mark.parametrize(
+    'response',
+    [
+        _Response(200, json_error=ValueError('invalid json')),
+        _Response(200, {'indexes': None, 'pollutants': None}),
+        _Response(200, {
+            'indexes': [{'code': 'cn-mee', 'aqi': float('inf'), 'category': ''}],
+            'pollutants': [
+                {'code': 'pm2p5', 'concentration': {'value': float('nan')}},
+            ],
+        }),
+    ],
+    ids=['invalid-json', 'empty-lists', 'non-finite-values'],
+)
+def test_qweather_air_quality_invalid_payload_stays_unknown(monkeypatch, response):
+    """无效空气质量响应应保持未知，不能伪装为零值。"""
+    from services import weather_service as weather_module
+
+    service = weather_module.WeatherService()
+    service.qweather_key = 'test-key'
+    service.api_base_url = 'https://api.qweather.invalid/v7'
+
+    monkeypatch.setattr(weather_module.requests, 'get', lambda *_args, **_kwargs: response)
+    monkeypatch.setattr(weather_module, '_record_external_api_timing', lambda *_args: None)
+    monkeypatch.setattr(weather_module, 'reserve_qweather_request', lambda _endpoint: True)
+
+    assert service._get_qweather_air_quality('116.20,29.27') == {}
+
+
 @pytest.mark.parametrize(
     ('payload', 'reason'),
     [

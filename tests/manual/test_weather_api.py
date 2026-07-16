@@ -4,6 +4,7 @@
 用于诊断API调用问题
 """
 import os
+from urllib.parse import urlsplit
 import requests
 import pytest
 
@@ -26,6 +27,10 @@ def test_qweather_api():
         pytest.skip("未设置 QWEATHER_API_BASE")
     if "your-qweather-host.example.com" in base_url:
         pytest.skip("QWEATHER_API_BASE 仍是占位值")
+
+    parsed_base = urlsplit(base_url)
+    api_origin = f"{parsed_base.scheme}://{parsed_base.netloc}"
+    headers = {'X-QW-Api-Key': key}
     
     print("\nAPI Key: 已配置")
     print(f"Base URL: {base_url}")
@@ -38,10 +43,10 @@ def test_qweather_api():
     
     try:
         url = f"{base_url}/weather/now"
-        params = {'key': key, 'location': location}
+        params = {'location': location}
         
         print(f"请求URL: {url}")
-        response = requests.get(url, params=params, timeout=10)
+        response = requests.get(url, params=params, headers=headers, timeout=10)
         
         print(f"HTTP状态码: {response.status_code}")
         
@@ -63,9 +68,9 @@ def test_qweather_api():
     
     try:
         url = f"{base_url}/weather/7d"
-        params = {'key': key, 'location': location}
+        params = {'location': location}
         
-        response = requests.get(url, params=params, timeout=10)
+        response = requests.get(url, params=params, headers=headers, timeout=10)
         print(f"HTTP状态码: {response.status_code}")
         
         assert response.status_code == 200, f"7天预报 HTTP {response.status_code}"
@@ -80,24 +85,23 @@ def test_qweather_api():
     
     # 测试3: 空气质量
     print("\n" + "-" * 40)
-    print("测试3: 空气质量 (/air/now)")
+    print("测试3: 空气质量 (/airquality/v1/current)")
     print("-" * 40)
     
     try:
-        url = f"{base_url}/air/now"
-        params = {'key': key, 'location': location}
+        lon, lat = location.split(',')
+        url = f"{api_origin}/airquality/v1/current/{lat}/{lon}"
+        params = {'lang': 'zh'}
         
-        response = requests.get(url, params=params, timeout=10)
+        response = requests.get(url, params=params, headers=headers, timeout=10)
         print(f"HTTP状态码: {response.status_code}")
         
         assert response.status_code == 200, f"空气质量 HTTP {response.status_code}"
         data = response.json()
-        code = data.get('code')
-        assert code in {'200', '204'}, f"空气质量业务码 {code}"
-        if code == '200':
-            now = data.get('now') or {}
-            assert now.get('aqi') is not None
-            assert now.get('pm2p5') is not None
+        indexes = data.get('indexes') or []
+        pollutants = data.get('pollutants') or []
+        assert any(item.get('code') in {'cn-mee', 'cn-mee-1h'} for item in indexes)
+        assert any(item.get('code') == 'pm2p5' for item in pollutants)
             
     except requests.RequestException as exc:
         pytest.fail(f"空气质量请求失败: {type(exc).__name__}")
