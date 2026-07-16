@@ -65,6 +65,8 @@ backups/
 .env
 .env.*
 !.env.example
+*.pem
+*.key
 
 # 系统文件
 .DS_Store

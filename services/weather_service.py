@@ -14,6 +14,12 @@ from statistics import mean, pstdev
 from urllib.parse import urlsplit
 from flask import current_app, has_app_context
 from services.external_api import record_external_api_timing as _record_external_api_timing
+from services.qweather_auth import (
+    QWeatherAuthError,
+    get_qweather_request_headers,
+    invalidate_qweather_token,
+    is_qweather_configured,
+)
 from services.qweather_budget import reserve_qweather_request
 from core.time_utils import today_local
 
@@ -21,7 +27,11 @@ class WeatherService:
     """天气服务类"""
     
     def __init__(self):
+        self.qweather_auth_mode = 'api_key'
         self.qweather_key = None
+        self.qweather_jwt_kid = None
+        self.qweather_jwt_project_id = None
+        self.qweather_jwt_private_key_path = None
         self.api_base_url = None
         self.city_map = {}
         self.default_location = '116.20,29.27'  # 都昌县
@@ -38,7 +48,23 @@ class WeatherService:
             except Exception:
                 app_config = {}
 
+        configured_auth_mode = app_config.get('QWEATHER_AUTH_MODE')
+        if configured_auth_mode is None:
+            configured_auth_mode = os.getenv('QWEATHER_AUTH_MODE', 'api_key')
+        self.qweather_auth_mode = str(configured_auth_mode or 'api_key').strip().lower()
         self.qweather_key = app_config.get('QWEATHER_KEY') or os.getenv('QWEATHER_KEY')
+        self.qweather_jwt_kid = (
+            app_config.get('QWEATHER_JWT_KID')
+            or os.getenv('QWEATHER_JWT_KID')
+        )
+        self.qweather_jwt_project_id = (
+            app_config.get('QWEATHER_JWT_PROJECT_ID')
+            or os.getenv('QWEATHER_JWT_PROJECT_ID')
+        )
+        self.qweather_jwt_private_key_path = (
+            app_config.get('QWEATHER_JWT_PRIVATE_KEY_PATH')
+            or os.getenv('QWEATHER_JWT_PRIVATE_KEY_PATH')
+        )
         configured_api_base = app_config.get('QWEATHER_API_BASE')
         if configured_api_base is None:
             configured_api_base = os.getenv('QWEATHER_API_BASE')
@@ -54,9 +80,25 @@ class WeatherService:
             or self.default_location
         )
 
+    def _qweather_auth_config(self):
+        """返回当前实例的认证配置，不包含任何日志输出。"""
+        return {
+            'QWEATHER_AUTH_MODE': self.qweather_auth_mode,
+            'QWEATHER_KEY': self.qweather_key,
+            'QWEATHER_JWT_KID': self.qweather_jwt_kid,
+            'QWEATHER_JWT_PROJECT_ID': self.qweather_jwt_project_id,
+            'QWEATHER_JWT_PRIVATE_KEY_PATH': self.qweather_jwt_private_key_path,
+        }
+
+    def _qweather_is_configured(self):
+        return bool(self.api_base_url) and is_qweather_configured(self._qweather_auth_config())
+
     def _qweather_headers(self):
-        """通过请求头发送密钥，避免密钥出现在 URL 与代理日志中。"""
-        return {'X-QW-Api-Key': self.qweather_key}
+        """生成单一认证请求头，并在预占额度前完成签名与 Host 校验。"""
+        return get_qweather_request_headers(
+            self._qweather_auth_config(),
+            api_base=self.api_base_url,
+        )
     
     def _get_location(self, city):
         """获取城市的location参数"""
@@ -119,7 +161,7 @@ class WeatherService:
         """
         logger = logging.getLogger(__name__)
         # 尝试调用和风天气API
-        if self.qweather_key and self.api_base_url:
+        if self._qweather_is_configured():
             try:
                 # 获取城市location
                 location = self._get_location(city)
@@ -130,6 +172,7 @@ class WeatherService:
                     'location': location
                 }
 
+                headers = self._qweather_headers()
                 if not reserve_qweather_request('weather_now'):
                     logger.warning("和风天气月度额度保护：跳过实况请求并使用备用源")
                     return self._get_fallback_weather(city, logger)
@@ -137,13 +180,15 @@ class WeatherService:
                 weather_response = requests.get(
                     weather_url,
                     params=weather_params,
-                    headers=self._qweather_headers(),
+                    headers=headers,
                     timeout=10,
                 )
                 _record_external_api_timing('qweather_now', (time.perf_counter() - start_ts) * 1000, weather_response.status_code)
                 
                 # 检查HTTP状态码
                 if weather_response.status_code != 200:
+                    if weather_response.status_code == 401:
+                        invalidate_qweather_token()
                     logger.warning("API HTTP状态码: %s，尝试备用API", weather_response.status_code)
                     return self._get_fallback_weather(city, logger)
                 
@@ -157,6 +202,8 @@ class WeatherService:
                 # 检查返回状态
                 code = weather_data.get('code')
                 if code != '200':
+                    if str(code) == '401':
+                        invalidate_qweather_token()
                     if code is None:
                         logger.warning("和风天气API响应格式异常，尝试备用API")
                         logger.debug("响应内容: %s", str(weather_data)[:200])
@@ -218,6 +265,8 @@ class WeatherService:
                 logger.info("成功获取%s的真实天气数据 (温度: %s°C)", city, result['temperature'])
                 return result
                     
+            except QWeatherAuthError as auth_error:
+                logger.warning("和风天气认证失败: %s，尝试备用API", auth_error)
             except requests.exceptions.Timeout:
                 logger.warning("和风天气API请求超时，尝试备用API")
             except requests.exceptions.ConnectionError:
@@ -235,7 +284,7 @@ class WeatherService:
         """获取错误码对应的说明"""
         error_codes = {
             '400': '请求错误',
-            '401': 'API密钥无效或过期',
+            '401': 'API认证无效或过期',
             '402': '超过访问次数限制',
             '403': '无访问权限',
             '404': '查询的数据不存在',
@@ -261,16 +310,16 @@ class WeatherService:
         api_origin = f"{parsed_base.scheme}://{parsed_base.netloc}"
         air_url = f"{api_origin}/airquality/v1/current/{lat:.2f}/{lon:.2f}"
 
-        if not reserve_qweather_request('airquality_v1_current'):
-            logger.debug("和风天气月度额度保护：跳过空气质量请求")
-            return {}
-
         try:
+            headers = self._qweather_headers()
+            if not reserve_qweather_request('airquality_v1_current'):
+                logger.debug("和风天气月度额度保护：跳过空气质量请求")
+                return {}
             start_ts = time.perf_counter()
             response = requests.get(
                 air_url,
                 params={'lang': 'zh'},
-                headers=self._qweather_headers(),
+                headers=headers,
                 timeout=10,
             )
             _record_external_api_timing(
@@ -279,6 +328,8 @@ class WeatherService:
                 response.status_code,
             )
             if response.status_code != 200:
+                if response.status_code == 401:
+                    invalidate_qweather_token()
                 logger.debug("空气质量 v1 HTTP 状态码: %s", response.status_code)
                 return {}
 
@@ -481,20 +532,21 @@ class WeatherService:
     def _get_qweather_hourly_extremes(self, location):
         """从和风 24 小时温度序列推导温差。"""
         logger = logging.getLogger(__name__)
-        if not self.qweather_key or not self.api_base_url:
+        if not self._qweather_is_configured():
             return None, None, 'none'
         try:
             hourly_url = f"{self.api_base_url}/weather/24h"
             hourly_params = {
                 'location': location
             }
+            headers = self._qweather_headers()
             if not reserve_qweather_request('weather_24h_current_range'):
                 return None, None, 'none'
             start_ts = time.perf_counter()
             response = requests.get(
                 hourly_url,
                 params=hourly_params,
-                headers=self._qweather_headers(),
+                headers=headers,
                 timeout=10,
             )
             _record_external_api_timing(
@@ -503,9 +555,13 @@ class WeatherService:
                 response.status_code
             )
             if response.status_code != 200:
+                if response.status_code == 401:
+                    invalidate_qweather_token()
                 return None, None, 'none'
             payload = response.json()
             if payload.get('code') != '200':
+                if str(payload.get('code')) == '401':
+                    invalidate_qweather_token()
                 return None, None, 'none'
             hourly = payload.get('hourly') or []
             temps = [item.get('temp') for item in hourly if isinstance(item, dict)]
@@ -565,20 +621,21 @@ class WeatherService:
     def _get_qweather_today_extremes(self, location):
         """获取和风当日最高/最低温（用于修正实况无日温差的问题）。"""
         logger = logging.getLogger(__name__)
-        if not self.qweather_key or not self.api_base_url:
+        if not self._qweather_is_configured():
             return None, None
         try:
             forecast_url = f"{self.api_base_url}/weather/7d"
             forecast_params = {
                 'location': location
             }
+            headers = self._qweather_headers()
             if not reserve_qweather_request('weather_7d_current_range'):
                 return None, None
             start_ts = time.perf_counter()
             response = requests.get(
                 forecast_url,
                 params=forecast_params,
-                headers=self._qweather_headers(),
+                headers=headers,
                 timeout=10,
             )
             _record_external_api_timing(
@@ -587,9 +644,13 @@ class WeatherService:
                 response.status_code
             )
             if response.status_code != 200:
+                if response.status_code == 401:
+                    invalidate_qweather_token()
                 return None, None
             payload = response.json()
             if payload.get('code') != '200':
+                if str(payload.get('code')) == '401':
+                    invalidate_qweather_token()
                 return None, None
             daily = payload.get('daily') or []
             if not daily:
@@ -659,7 +720,7 @@ class WeatherService:
             days = 7
 
         meta = {'source': 'QWeather'}
-        if not self.qweather_key or not self.api_base_url:
+        if not self._qweather_is_configured():
             meta['error'] = 'qweather_not_configured'
             logger.warning("和风天气预报未配置，跳过和风-only预报")
             return {'success': False, 'daily': [], 'meta': meta}
@@ -672,6 +733,7 @@ class WeatherService:
             forecast_params = {
                 'location': location
             }
+            headers = self._qweather_headers()
             if not reserve_qweather_request('weather_7d_forecast'):
                 meta['error'] = 'qweather_budget_exhausted'
                 return {'success': False, 'daily': [], 'meta': meta}
@@ -679,7 +741,7 @@ class WeatherService:
             response = requests.get(
                 forecast_url,
                 params=forecast_params,
-                headers=self._qweather_headers(),
+                headers=headers,
                 timeout=10,
             )
             _record_external_api_timing(
@@ -688,6 +750,8 @@ class WeatherService:
                 response.status_code
             )
             if response.status_code != 200:
+                if response.status_code == 401:
+                    invalidate_qweather_token()
                 meta['error'] = f'http_{response.status_code}'
                 logger.warning("和风-only预报HTTP状态码: %s", response.status_code)
                 return {'success': False, 'daily': [], 'meta': meta}
@@ -701,6 +765,8 @@ class WeatherService:
 
             code = payload.get('code')
             if code != '200':
+                if str(code) == '401':
+                    invalidate_qweather_token()
                 meta['error'] = f'qweather_{code or "unknown"}'
                 meta['error_message'] = self._get_error_message(code or 'unknown')
                 logger.warning("和风-only预报返回错误[%s]: %s", code, meta['error_message'])
@@ -730,6 +796,9 @@ class WeatherService:
                 logger.warning("和风-only预报关键字段不完整，整组数据不进入缓存: city=%s count=%s", city, len(daily))
                 return {'success': False, 'daily': [], 'meta': meta}
             return {'success': True, 'daily': daily, 'meta': meta}
+        except QWeatherAuthError as auth_error:
+            meta['error'] = str(auth_error)
+            logger.warning("和风-only预报认证失败: %s", auth_error)
         except requests.exceptions.Timeout:
             meta['error'] = 'timeout'
             logger.warning("和风-only预报请求超时")
@@ -1023,7 +1092,7 @@ class WeatherService:
         # 限制最多7天
         days = min(days, 7)
         qweather_forecast = []
-        if self.qweather_key and self.api_base_url:
+        if self._qweather_is_configured():
             try:
                 location = self._get_location(city)
 
@@ -1033,13 +1102,14 @@ class WeatherService:
                     'location': location
                 }
 
+                headers = self._qweather_headers()
                 if not reserve_qweather_request('weather_7d_forecast'):
                     raise RuntimeError('qweather_budget_exhausted')
                 start_ts = time.perf_counter()
                 response = requests.get(
                     forecast_url,
                     params=forecast_params,
-                    headers=self._qweather_headers(),
+                    headers=headers,
                     timeout=10,
                 )
                 _record_external_api_timing(
@@ -1056,10 +1126,16 @@ class WeatherService:
                         ]
                         logger.info("成功获取%s的和风%s天预报数据", city, len(qweather_forecast))
                     else:
+                        if str(data.get('code')) == '401':
+                            invalidate_qweather_token()
                         error_msg = self._get_error_message(data.get('code', 'unknown'))
                         logger.warning("和风预报获取失败: %s", error_msg)
                 else:
+                    if response.status_code == 401:
+                        invalidate_qweather_token()
                     logger.warning("和风预报HTTP状态码: %s", response.status_code)
+            except QWeatherAuthError as auth_error:
+                logger.warning("和风预报认证失败: %s", auth_error)
             except requests.exceptions.Timeout:
                 logger.warning("和风预报请求超时")
             except requests.exceptions.ConnectionError:

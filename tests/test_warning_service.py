@@ -88,3 +88,74 @@ def test_warning_service_reuses_duchang_cache_and_hides_key_from_url(app, monkey
     _url, kwargs = calls[0]
     assert kwargs["params"] == {"location": "116.20,29.27"}
     assert kwargs["headers"] == {"X-QW-Api-Key": "secret-test-key"}
+
+
+def test_warning_service_uses_only_jwt_header(app, monkeypatch):
+    from services import warning_service
+
+    calls = []
+
+    class FakeResp:
+        status_code = 200
+
+        def json(self):
+            return {"code": "200", "warning": []}
+
+    monkeypatch.setattr(
+        warning_service,
+        "get_qweather_request_headers",
+        lambda **_kwargs: {"Authorization": "Bearer unit-test-token"},
+    )
+    monkeypatch.setattr(
+        warning_service.requests,
+        "get",
+        lambda url, **kwargs: calls.append((url, kwargs)) or FakeResp(),
+    )
+
+    with app.app_context():
+        app.config.update(
+            QWEATHER_AUTH_MODE="jwt",
+            QWEATHER_API_BASE="https://unit-test.qweatherapi.com/v7",
+            QWEATHER_JWT_KID="KID1234567",
+            QWEATHER_JWT_PROJECT_ID="PROJECT1234",
+            QWEATHER_JWT_PRIVATE_KEY_PATH="/server-only/private.pem",
+            QWEATHER_CANONICAL_LOCATION="116.20,29.27",
+        )
+        assert warning_service.get_qweather_warnings("任意村庄") == []
+
+    assert len(calls) == 1
+    assert calls[0][1]["headers"] == {"Authorization": "Bearer unit-test-token"}
+
+
+def test_warning_auth_failure_does_not_use_budget_or_network(app, monkeypatch):
+    from services import warning_service
+    from services.qweather_auth import QWeatherAuthError
+
+    budget_calls = []
+    monkeypatch.setattr(
+        warning_service,
+        "get_qweather_request_headers",
+        lambda **_kwargs: (_ for _ in ()).throw(QWeatherAuthError("qweather_jwt_sign_failed")),
+    )
+    monkeypatch.setattr(
+        warning_service,
+        "reserve_qweather_request",
+        lambda endpoint: budget_calls.append(endpoint) or True,
+    )
+    monkeypatch.setattr(
+        warning_service.requests,
+        "get",
+        lambda *_args, **_kwargs: pytest.fail("认证失败后不应发送网络请求"),
+    )
+
+    with app.app_context():
+        app.config.update(
+            QWEATHER_AUTH_MODE="jwt",
+            QWEATHER_API_BASE="https://unit-test.qweatherapi.com/v7",
+            QWEATHER_JWT_KID="KID1234567",
+            QWEATHER_JWT_PROJECT_ID="PROJECT1234",
+            QWEATHER_JWT_PRIVATE_KEY_PATH="/server-only/private.pem",
+        )
+        assert warning_service.get_qweather_warnings("116.20,29.27") == []
+
+    assert budget_calls == []

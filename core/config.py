@@ -225,6 +225,14 @@ def configure_app(app, logger):
     secret_key_env = _normalized_env_value('SECRET_KEY')
     qweather_key = _normalized_env_value('QWEATHER_KEY', '')
     qweather_api_base = _normalized_env_value('QWEATHER_API_BASE', QWEATHER_API_BASE_DEFAULT)
+    qweather_auth_mode = _normalized_env_value('QWEATHER_AUTH_MODE', '').lower()
+    if not qweather_auth_mode:
+        qweather_auth_mode = 'api_key' if qweather_key else 'disabled'
+    if qweather_auth_mode not in {'api_key', 'jwt', 'disabled'}:
+        raise RuntimeError("QWEATHER_AUTH_MODE 必须是 api_key、jwt 或 disabled。")
+    qweather_jwt_kid = _normalized_env_value('QWEATHER_JWT_KID', '')
+    qweather_jwt_project_id = _normalized_env_value('QWEATHER_JWT_PROJECT_ID', '')
+    qweather_jwt_private_key_path = _normalized_env_value('QWEATHER_JWT_PRIVATE_KEY_PATH', '')
     amap_key = _normalized_env_value('AMAP_KEY', '')
     amap_security_js_code = _normalized_env_value('AMAP_SECURITY_JS_CODE', '')
     siliconflow_key = _normalized_env_value('SILICONFLOW_API_KEY', '')
@@ -260,6 +268,10 @@ def configure_app(app, logger):
     app.config['SECRET_KEY'] = secret_key
     app.config['QWEATHER_KEY'] = qweather_key
     app.config['QWEATHER_API_BASE'] = qweather_api_base
+    app.config['QWEATHER_AUTH_MODE'] = qweather_auth_mode
+    app.config['QWEATHER_JWT_KID'] = qweather_jwt_kid
+    app.config['QWEATHER_JWT_PROJECT_ID'] = qweather_jwt_project_id
+    app.config['QWEATHER_JWT_PRIVATE_KEY_PATH'] = qweather_jwt_private_key_path
     app.config['QWEATHER_CANONICAL_LOCATION'] = qweather_canonical_location
     app.config['AMAP_KEY'] = amap_key
     app.config['AMAP_SECURITY_JS_CODE'] = amap_security_js_code
@@ -320,10 +332,22 @@ def configure_app(app, logger):
         'QWEATHER_BUDGET_FAIL_CLOSED',
         parse_bool(os.getenv('QWEATHER_BUDGET_FAIL_CLOSED', '1'), default=True)
     )
-    if qweather_key and not qweather_api_base:
-        logger.warning("QWEATHER_KEY 已配置但 QWEATHER_API_BASE 未配置，将跳过 QWeather Host 相关调用并使用兜底链路。")
-    if qweather_api_base and not qweather_key:
-        logger.warning("QWEATHER_API_BASE 已配置但 QWEATHER_KEY 未配置，QWeather 不会生效。")
+    if qweather_auth_mode != 'disabled' and not qweather_api_base:
+        logger.warning("QWEATHER_API_BASE 未配置，将跳过 QWeather Host 相关调用并使用兜底链路。")
+    if qweather_auth_mode == 'api_key' and not qweather_key:
+        logger.warning("QWEATHER_AUTH_MODE=api_key 但 QWEATHER_KEY 未配置，QWeather 不会生效。")
+    if qweather_auth_mode == 'jwt':
+        missing_jwt_fields = [
+            name
+            for name, value in (
+                ('QWEATHER_JWT_KID', qweather_jwt_kid),
+                ('QWEATHER_JWT_PROJECT_ID', qweather_jwt_project_id),
+                ('QWEATHER_JWT_PRIVATE_KEY_PATH', qweather_jwt_private_key_path),
+            )
+            if not value
+        ]
+        if missing_jwt_fields:
+            logger.warning("QWeather JWT 配置不完整，缺少: %s", ', '.join(missing_jwt_fields))
     app.config.setdefault('NOTIFICATION_ESCALATION_DAYS', parse_int(os.getenv('NOTIFICATION_ESCALATION_DAYS', '3'), default=3))
     app.config.setdefault('NOTIFICATION_MAX_DAILY', parse_int(os.getenv('NOTIFICATION_MAX_DAILY', '5'), default=5))
     app.config.setdefault('HEAT_HOT_DAY_THRESHOLD', parse_float(os.getenv('HEAT_HOT_DAY_THRESHOLD', '35'), default=35.0))
@@ -421,8 +445,8 @@ def configure_app(app, logger):
     else:
         app.config.pop('SQLALCHEMY_ENGINE_OPTIONS', None)
 
-    if not qweather_key:
-        logger.warning("QWEATHER_KEY 未配置，天气API将无法使用（可回退 Open-Meteo）。")
+    if qweather_auth_mode == 'disabled':
+        logger.warning("QWeather 已禁用，天气API将使用 Open-Meteo 或规则兜底。")
     if not amap_key:
         logger.warning("AMAP_KEY 未配置，地图API将无法使用")
     if not amap_security_js_code:
