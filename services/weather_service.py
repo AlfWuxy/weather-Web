@@ -11,6 +11,7 @@ from datetime import datetime, timedelta
 import json
 import time
 from statistics import mean, pstdev
+from urllib.parse import urlsplit
 from flask import current_app, has_app_context
 from services.external_api import record_external_api_timing as _record_external_api_timing
 from services.qweather_budget import reserve_qweather_request
@@ -209,42 +210,10 @@ class WeatherService:
                     result['temperature_range_source'] = range_source
                     result['temperature_range_confidence'] = range_confidence
                 
-                # 尝试获取空气质量数据
-                try:
-                    air_url = f"{self.api_base_url}/air/now"
-                    air_params = {
-                        'location': location
-                    }
-
-                    if not reserve_qweather_request('air_now'):
-                        raise RuntimeError('qweather_budget_exhausted')
-                    air_start = time.perf_counter()
-                    air_response = requests.get(
-                        air_url,
-                        params=air_params,
-                        headers=self._qweather_headers(),
-                        timeout=10,
-                    )
-                    _record_external_api_timing('qweather_air', (time.perf_counter() - air_start) * 1000, air_response.status_code)
-                    try:
-                        air_data = air_response.json()
-                    except Exception as json_error:
-                        logger.debug("空气质量JSON解析失败: %s", json_error)
-                        air_data = {}
-                    
-                    if air_data.get('code') == '200' and 'now' in air_data:
-                        air_now = air_data['now']
-                        result['pm25'] = float(air_now.get('pm2p5', 0))
-                        result['aqi'] = int(air_now.get('aqi', 0))
-                        result['air_quality'] = air_now.get('category', '良')
-                except requests.exceptions.Timeout:
-                    logger.debug("空气质量请求超时")
-                except requests.exceptions.ConnectionError:
-                    logger.debug("空气质量网络连接失败")
-                except requests.exceptions.RequestException as air_error:
-                    logger.debug("空气质量请求失败: %s", air_error)
-                except Exception as air_error:
-                    logger.debug("空气质量解析失败: %s", air_error)
+                # 空气质量失败不影响实时天气主链路。
+                air_quality = self._get_qweather_air_quality(location, logger)
+                if air_quality:
+                    result.update(air_quality)
                 
                 logger.info("成功获取%s的真实天气数据 (温度: %s°C)", city, result['temperature'])
                 return result
@@ -274,6 +243,108 @@ class WeatherService:
             '204': '请求成功，但无数据返回'
         }
         return error_codes.get(str(code), f'未知错误(代码:{code})')
+
+    def _get_qweather_air_quality(self, location, logger=None):
+        """调用新版空气质量接口，返回本地标准 AQI 与 PM2.5。"""
+        logger = logger or logging.getLogger(__name__)
+        coordinates = self._parse_lon_lat(location)
+        if not coordinates:
+            logger.debug("空气质量 v1 需要经纬度，当前 location 无法解析")
+            return {}
+
+        parsed_base = urlsplit(self.api_base_url or '')
+        if parsed_base.scheme not in {'http', 'https'} or not parsed_base.netloc:
+            logger.debug("空气质量 v1 缺少有效 API Host")
+            return {}
+
+        lon, lat = coordinates
+        api_origin = f"{parsed_base.scheme}://{parsed_base.netloc}"
+        air_url = f"{api_origin}/airquality/v1/current/{lat:.2f}/{lon:.2f}"
+
+        if not reserve_qweather_request('airquality_v1_current'):
+            logger.debug("和风天气月度额度保护：跳过空气质量请求")
+            return {}
+
+        try:
+            start_ts = time.perf_counter()
+            response = requests.get(
+                air_url,
+                params={'lang': 'zh'},
+                headers=self._qweather_headers(),
+                timeout=10,
+            )
+            _record_external_api_timing(
+                'qweather_air_v1',
+                (time.perf_counter() - start_ts) * 1000,
+                response.status_code,
+            )
+            if response.status_code != 200:
+                logger.debug("空气质量 v1 HTTP 状态码: %s", response.status_code)
+                return {}
+
+            payload = response.json()
+            if not isinstance(payload, dict):
+                return {}
+
+            indexes = payload.get('indexes') or []
+            # 健康风险阈值优先采用中国 AQI 标准，不能依赖上游数组顺序。
+            local_index = None
+            for preferred_code in ('cn-mee', 'cn-mee-1h'):
+                local_index = next(
+                    (
+                        item for item in indexes
+                        if isinstance(item, dict)
+                        and str(item.get('code') or '').lower() == preferred_code
+                    ),
+                    None,
+                )
+                if local_index:
+                    break
+            if local_index is None:
+                # 非中国部署仍允许使用当地标准，排除 0-10 量纲的通用 QAQI。
+                local_index = next(
+                    (
+                        item for item in indexes
+                        if isinstance(item, dict)
+                        and str(item.get('code') or '').lower() != 'qaqi'
+                    ),
+                    None,
+                )
+
+            result = {}
+            if local_index:
+                aqi = self._safe_float(local_index.get('aqi'))
+                if aqi is not None and math.isfinite(aqi) and 0 <= aqi <= 500:
+                    result['aqi'] = int(round(aqi))
+                category = str(local_index.get('category') or '').strip()
+                if category:
+                    result['air_quality'] = category
+
+            pollutants = payload.get('pollutants') or []
+            pm25_item = next(
+                (
+                    item for item in pollutants
+                    if isinstance(item, dict)
+                    and str(item.get('code') or '').lower() == 'pm2p5'
+                ),
+                None,
+            )
+            concentration = pm25_item.get('concentration') if pm25_item else None
+            pm25 = self._safe_float(
+                concentration.get('value') if isinstance(concentration, dict) else None
+            )
+            if pm25 is not None and math.isfinite(pm25) and pm25 >= 0:
+                result['pm25'] = pm25
+            return result
+        except requests.exceptions.Timeout:
+            logger.debug("空气质量 v1 请求超时")
+        except requests.exceptions.ConnectionError:
+            logger.debug("空气质量 v1 网络连接失败")
+        except requests.exceptions.RequestException as air_error:
+            logger.debug("空气质量 v1 请求失败: %s", air_error)
+        except Exception as air_error:
+            logger.debug("空气质量 v1 解析失败: %s", air_error)
+        return {}
     
     def _get_openmeteo_weather(self, city="都昌"):
         """使用Open-Meteo免费API获取天气数据（无需API Key）"""
