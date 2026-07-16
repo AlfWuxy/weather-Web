@@ -8,6 +8,13 @@ from urllib.parse import urlsplit
 import requests
 import pytest
 
+from services.qweather_auth import (
+    QWeatherAuthError,
+    get_qweather_auth_mode,
+    get_qweather_request_headers,
+    is_qweather_configured,
+)
+
 pytestmark = pytest.mark.manual
 
 def test_qweather_api():
@@ -17,12 +24,11 @@ def test_qweather_api():
     print("=" * 50)
     
     # API配置（如使用付费订阅版，请在本地环境变量里显式提供专属域名）
-    key = os.getenv("QWEATHER_KEY")
     base_url = os.getenv("QWEATHER_API_BASE")
     location = "116.20,29.27"  # 都昌县
 
-    if not key:
-        pytest.skip("未设置 QWEATHER_KEY")
+    if not is_qweather_configured():
+        pytest.skip("未完整配置 QWeather 认证")
     if not base_url:
         pytest.skip("未设置 QWEATHER_API_BASE")
     if "your-qweather-host.example.com" in base_url:
@@ -30,9 +36,12 @@ def test_qweather_api():
 
     parsed_base = urlsplit(base_url)
     api_origin = f"{parsed_base.scheme}://{parsed_base.netloc}"
-    headers = {'X-QW-Api-Key': key}
+    try:
+        headers = get_qweather_request_headers(api_base=base_url)
+    except QWeatherAuthError as exc:
+        pytest.fail(f"QWeather 认证配置错误: {exc}")
     
-    print("\nAPI Key: 已配置")
+    print(f"\n认证模式: {get_qweather_auth_mode()}")
     print(f"Base URL: {base_url}")
     print(f"Location: {location}")
     

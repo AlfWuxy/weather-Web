@@ -18,6 +18,12 @@ import requests
 from flask import current_app, has_app_context
 
 from services.external_api import record_external_api_timing as _record_external_api_timing
+from services.qweather_auth import (
+    QWeatherAuthError,
+    get_qweather_request_headers,
+    invalidate_qweather_token,
+    is_qweather_configured,
+)
 from services.qweather_budget import get_qweather_redis_client, reserve_qweather_request
 from utils.parsers import parse_int
 
@@ -147,9 +153,8 @@ def get_qweather_warnings(location_code: str) -> List[Dict[str, Any]]:
 
     location_code = _canonical_location(location_code)
 
-    qweather_key = (_cfg("QWEATHER_KEY") or "").strip()
     api_base = (_cfg("QWEATHER_API_BASE") or "").strip()
-    if not qweather_key or not api_base:
+    if not api_base or not is_qweather_configured():
         return []
 
     cached = _get_cached_warnings(location_code)
@@ -158,7 +163,12 @@ def get_qweather_warnings(location_code: str) -> List[Dict[str, Any]]:
 
     url = f"{api_base.rstrip('/')}/warning/now"
     params = {"location": location_code}
-    headers = {"X-QW-Api-Key": qweather_key}
+
+    try:
+        headers = get_qweather_request_headers(api_base=api_base)
+    except QWeatherAuthError as exc:
+        logger.warning("QWeather warning auth failed: %s", exc)
+        return []
 
     if not reserve_qweather_request("warning_now"):
         logger.warning("和风天气月度额度保护：跳过官方预警请求")
@@ -169,6 +179,8 @@ def get_qweather_warnings(location_code: str) -> List[Dict[str, Any]]:
         resp = requests.get(url, params=params, headers=headers, timeout=10)
         _record_external_api_timing("qweather_warning_now", (time.perf_counter() - start_ts) * 1000, resp.status_code)
         if resp.status_code != 200:
+            if resp.status_code == 401:
+                invalidate_qweather_token()
             logger.info("QWeather warning http=%s for location=%s", resp.status_code, location_code)
             return []
         payload = resp.json()
@@ -178,6 +190,8 @@ def get_qweather_warnings(location_code: str) -> List[Dict[str, Any]]:
 
     try:
         if str(payload.get("code")) != "200":
+            if str(payload.get("code")) == "401":
+                invalidate_qweather_token()
             return []
         raw_list = payload.get("warning") or payload.get("warnings") or []
         if not isinstance(raw_list, list):
