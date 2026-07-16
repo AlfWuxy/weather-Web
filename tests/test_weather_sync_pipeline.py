@@ -147,6 +147,26 @@ def test_qweather_and_openmeteo_failure_then_use_mock(monkeypatch):
     assert service.get_current_weather('都昌') == mock_weather
 
 
+def test_qweather_budget_guard_blocks_http_and_uses_fallback(monkeypatch):
+    """月度保护触发后不得再发和风请求。"""
+    from services import weather_service as weather_module
+
+    service = weather_module.WeatherService()
+    service.qweather_key = 'test-key'
+    service.api_base_url = 'https://qweather.invalid'
+    fallback = {'is_mock': False, 'data_source': 'Open-Meteo'}
+
+    monkeypatch.setattr(weather_module, 'reserve_qweather_request', lambda _endpoint: False)
+    monkeypatch.setattr(
+        weather_module.requests,
+        'get',
+        lambda *_args, **_kwargs: pytest.fail('预算保护后不应发送和风请求'),
+    )
+    monkeypatch.setattr(service, '_get_openmeteo_weather', lambda _city: fallback)
+
+    assert service.get_current_weather('都昌') == fallback
+
+
 @pytest.mark.parametrize(
     ('payload', 'reason'),
     [

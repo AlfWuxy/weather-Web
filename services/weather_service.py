@@ -13,6 +13,7 @@ import time
 from statistics import mean, pstdev
 from flask import current_app, has_app_context
 from services.external_api import record_external_api_timing as _record_external_api_timing
+from services.qweather_budget import reserve_qweather_request
 from core.time_utils import today_local
 
 class WeatherService:
@@ -23,6 +24,7 @@ class WeatherService:
         self.api_base_url = None
         self.city_map = {}
         self.default_location = '116.20,29.27'  # 都昌县
+        self.canonical_location = self.default_location
         self.use_openmeteo_fallback = True  # 启用Open-Meteo备用API
 
         self._load_config()
@@ -45,9 +47,20 @@ class WeatherService:
             app_config.get('DEFAULT_LOCATION')
             or os.getenv('DEFAULT_LOCATION', self.default_location)
         )
+        self.canonical_location = (
+            app_config.get('QWEATHER_CANONICAL_LOCATION')
+            or os.getenv('QWEATHER_CANONICAL_LOCATION')
+            or self.default_location
+        )
+
+    def _qweather_headers(self):
+        """通过请求头发送密钥，避免密钥出现在 URL 与代理日志中。"""
+        return {'X-QW-Api-Key': self.qweather_key}
     
     def _get_location(self, city):
         """获取城市的location参数"""
+        if self.canonical_location:
+            return str(self.canonical_location).strip()
         city = str(city).strip() if city is not None else ''
         if not city:
             return self.default_location
@@ -113,12 +126,19 @@ class WeatherService:
                 # 调用实况天气API
                 weather_url = f"{self.api_base_url}/weather/now"
                 weather_params = {
-                    'key': self.qweather_key,
                     'location': location
                 }
-                
+
+                if not reserve_qweather_request('weather_now'):
+                    logger.warning("和风天气月度额度保护：跳过实况请求并使用备用源")
+                    return self._get_fallback_weather(city, logger)
                 start_ts = time.perf_counter()
-                weather_response = requests.get(weather_url, params=weather_params, timeout=10)
+                weather_response = requests.get(
+                    weather_url,
+                    params=weather_params,
+                    headers=self._qweather_headers(),
+                    timeout=10,
+                )
                 _record_external_api_timing('qweather_now', (time.perf_counter() - start_ts) * 1000, weather_response.status_code)
                 
                 # 检查HTTP状态码
@@ -193,12 +213,18 @@ class WeatherService:
                 try:
                     air_url = f"{self.api_base_url}/air/now"
                     air_params = {
-                        'key': self.qweather_key,
                         'location': location
                     }
-                    
+
+                    if not reserve_qweather_request('air_now'):
+                        raise RuntimeError('qweather_budget_exhausted')
                     air_start = time.perf_counter()
-                    air_response = requests.get(air_url, params=air_params, timeout=10)
+                    air_response = requests.get(
+                        air_url,
+                        params=air_params,
+                        headers=self._qweather_headers(),
+                        timeout=10,
+                    )
                     _record_external_api_timing('qweather_air', (time.perf_counter() - air_start) * 1000, air_response.status_code)
                     try:
                         air_data = air_response.json()
@@ -389,11 +415,17 @@ class WeatherService:
         try:
             hourly_url = f"{self.api_base_url}/weather/24h"
             hourly_params = {
-                'key': self.qweather_key,
                 'location': location
             }
+            if not reserve_qweather_request('weather_24h_current_range'):
+                return None, None, 'none'
             start_ts = time.perf_counter()
-            response = requests.get(hourly_url, params=hourly_params, timeout=10)
+            response = requests.get(
+                hourly_url,
+                params=hourly_params,
+                headers=self._qweather_headers(),
+                timeout=10,
+            )
             _record_external_api_timing(
                 'qweather_hourly_for_now',
                 (time.perf_counter() - start_ts) * 1000,
@@ -467,11 +499,17 @@ class WeatherService:
         try:
             forecast_url = f"{self.api_base_url}/weather/7d"
             forecast_params = {
-                'key': self.qweather_key,
                 'location': location
             }
+            if not reserve_qweather_request('weather_7d_current_range'):
+                return None, None
             start_ts = time.perf_counter()
-            response = requests.get(forecast_url, params=forecast_params, timeout=10)
+            response = requests.get(
+                forecast_url,
+                params=forecast_params,
+                headers=self._qweather_headers(),
+                timeout=10,
+            )
             _record_external_api_timing(
                 'qweather_daily_for_now',
                 (time.perf_counter() - start_ts) * 1000,
@@ -561,11 +599,18 @@ class WeatherService:
         try:
             forecast_url = f"{self.api_base_url}/weather/7d"
             forecast_params = {
-                'key': self.qweather_key,
                 'location': location
             }
+            if not reserve_qweather_request('weather_7d_forecast'):
+                meta['error'] = 'qweather_budget_exhausted'
+                return {'success': False, 'daily': [], 'meta': meta}
             start_ts = time.perf_counter()
-            response = requests.get(forecast_url, params=forecast_params, timeout=10)
+            response = requests.get(
+                forecast_url,
+                params=forecast_params,
+                headers=self._qweather_headers(),
+                timeout=10,
+            )
             _record_external_api_timing(
                 'qweather_forecast_only',
                 (time.perf_counter() - start_ts) * 1000,
@@ -914,12 +959,18 @@ class WeatherService:
                 # 调用7天预报API
                 forecast_url = f"{self.api_base_url}/weather/7d"
                 forecast_params = {
-                    'key': self.qweather_key,
                     'location': location
                 }
 
+                if not reserve_qweather_request('weather_7d_forecast'):
+                    raise RuntimeError('qweather_budget_exhausted')
                 start_ts = time.perf_counter()
-                response = requests.get(forecast_url, params=forecast_params, timeout=10)
+                response = requests.get(
+                    forecast_url,
+                    params=forecast_params,
+                    headers=self._qweather_headers(),
+                    timeout=10,
+                )
                 _record_external_api_timing(
                     'qweather_forecast',
                     (time.perf_counter() - start_ts) * 1000,

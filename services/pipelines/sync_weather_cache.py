@@ -17,7 +17,7 @@ from core.app import create_app  # noqa: E402
 from core.constants import DEFAULT_CITY_LABEL  # noqa: E402
 from core.db_models import WeatherCache, WeatherData  # noqa: E402
 from core.extensions import db  # noqa: E402
-from core.weather import get_location_options, normalize_location_name  # noqa: E402
+from core.weather import normalize_location_name  # noqa: E402
 from core.time_utils import today_local, utcnow  # noqa: E402
 from services.weather_service import WeatherService  # noqa: E402
 
@@ -79,9 +79,7 @@ def _resolve_locations(locations):
     env_locations = os.getenv('WEATHER_SYNC_LOCATIONS', '').strip()
     if env_locations:
         return [item.strip() for item in env_locations.split(',') if item.strip()]
-    options = get_location_options()
-    if options:
-        return options
+    # 后台默认只预热都昌县。村庄与页面选项共享县级缓存，禁止把 UI 选项批量当成 API 任务。
     return [DEFAULT_CITY_LABEL]
 
 

@@ -216,7 +216,12 @@ def get_demo_forecast_data(days=7):
 def get_location_options():
     """获取可选地点列表"""
     options = set()
-    options.update(current_app.config.get('CITY_LOCATION_MAP', {}).keys())
+    canonical_location = current_app.config.get('QWEATHER_CANONICAL_LOCATION')
+    if canonical_location:
+        # 网站只服务都昌县：保留县内社区名称，移除北京、上海等旧测试城市。
+        options.update(current_app.config.get('COMMUNITY_COORDS_GCJ', {}).keys())
+    else:
+        options.update(current_app.config.get('CITY_LOCATION_MAP', {}).keys())
     try:
         communities = Community.query.with_entities(Community.name).all()
         options.update([c[0] for c in communities if c and c[0]])
@@ -224,8 +229,12 @@ def get_location_options():
         logger.warning("Failed to load community locations: %s", exc)
     options = {opt.strip() for opt in options if opt and isinstance(opt, str)}
     default_city = current_app.config.get('DEFAULT_CITY', DEFAULT_CITY_LABEL) or DEFAULT_CITY_LABEL
+    options.update({default_city, DEFAULT_CITY_LABEL})
     ordered = []
-    for item in (default_city, DEFAULT_CITY_LABEL, '北京', '上海', '广州', '深圳'):
+    preferred = (default_city, DEFAULT_CITY_LABEL)
+    if not canonical_location:
+        preferred += ('北京', '上海', '广州', '深圳')
+    for item in preferred:
         if item in options and item not in ordered:
             ordered.append(item)
             options.discard(item)
@@ -315,6 +324,8 @@ def ensure_user_location_valid():
 
 def resolve_weather_city_label(location):
     """显示天气来源城市"""
+    if current_app.config.get('QWEATHER_CANONICAL_LOCATION'):
+        return DEFAULT_CITY_LABEL
     default_city = current_app.config.get('DEFAULT_CITY', DEFAULT_CITY_LABEL) or DEFAULT_CITY_LABEL
     default_location = current_app.config.get('DEFAULT_LOCATION', '116.20,29.27')
     city_map = current_app.config.get('CITY_LOCATION_MAP', {})
@@ -330,11 +341,19 @@ def resolve_weather_city_label(location):
     return location
 
 
+def _weather_cache_location(location):
+    """把所有县内页面请求归并到唯一的都昌县天气缓存。"""
+    normalized = normalize_location_name(location)
+    if current_app.config.get('QWEATHER_CANONICAL_LOCATION'):
+        return DEFAULT_CITY_LABEL
+    return normalized
+
+
 def get_weather_with_cache(location, ttl_minutes=None):
     """获取带缓存的天气数据"""
     if is_demo_mode():
         return get_demo_weather_data(), False
-    location = normalize_location_name(location)
+    location = _weather_cache_location(location)
     if ttl_minutes is None:
         ttl_minutes = current_app.config.get('WEATHER_CACHE_TTL_MINUTES', WEATHER_CACHE_TTL_MINUTES)
     ttl_seconds = max(int(ttl_minutes * 60), 60)
@@ -408,7 +427,7 @@ def get_forecast_with_cache(location, days=7, ttl_minutes=None):
     """获取带缓存的天气预报"""
     if is_demo_mode():
         return get_demo_forecast_data(days=days), True
-    location = normalize_location_name(location)
+    location = _weather_cache_location(location)
     if ttl_minutes is None:
         ttl_minutes = current_app.config.get('FORECAST_CACHE_TTL_MINUTES', 20)
     ttl_seconds = max(int(ttl_minutes * 60), 60)
@@ -522,7 +541,7 @@ def get_qweather_forecast_with_cache(location, days=7, ttl_minutes=None):
     if is_demo_mode():
         return [], False, {'source': 'QWeather', 'error': 'demo_mode'}
 
-    location = normalize_location_name(location)
+    location = _weather_cache_location(location)
     if ttl_minutes is None:
         ttl_minutes = current_app.config.get('FORECAST_CACHE_TTL_MINUTES', 20)
     ttl_seconds = max(int(ttl_minutes * 60), 60)
