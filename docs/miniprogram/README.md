@@ -4,7 +4,7 @@
 
 ## 产品范围
 
-普通用户打开后可直接查看都昌县天气、七日预报、官方预警、行动建议、社区脆弱性、避暑点和 1 km 热暴露 GIS。照护、健康评估、健康日记和用药记录在用户主动登录并同意隐私说明后启用。
+普通用户打开后可直接查看都昌县天气、七日预报、官方预警、行动建议、社区脆弱性、避暑点和 1 km 热暴露 GIS。家人档案、天气行动评估、生活记录和日常用品服用备忘在用户主动登录并同意隐私说明与用户协议后启用。
 
 后台用户管理、原始病历、研究导出和高权限运营操作继续留在 Web 管理面。小程序只接收聚合或去标识数据。
 
@@ -38,6 +38,8 @@
 - `QWEATHER_BUDGET_FAIL_CLOSED=1`
 - `RATE_LIMIT_MP_PUBLIC=600 per minute`
 
+产品分析只使用服务端固定事件和登录后的最小匿名维度，保存 30 天；公开浏览不接入第三方统计 SDK。指标定义、事件边界和验证 SQL 见 [ANALYTICS_SPEC.md](./ANALYTICS_SPEC.md)。
+
 AppSecret 只允许出现在服务器环境变量。小程序包、日志、错误消息和 Git 历史都不能包含 AppSecret、QWeather key 或微信 CI 私钥。
 
 新 Web Token 会绑定生成时的隐私版本并在 30 天后过期。历史无期限 Token 在迁移后必须轮换；隐私版本升级也会让旧 Token 返回 428。用药和求助只保存记录，不承诺自动送达。
@@ -66,4 +68,4 @@ git diff --check
 
 ## 发布入口
 
-上架前按 [RELEASE_CHECKLIST.md](./RELEASE_CHECKLIST.md) 完成账号侧配置，并按 [TEST_PLAN.md](./TEST_PLAN.md) 留存验收结果。隐私文案初稿见 [PRIVACY_NOTICE_TEMPLATE.md](./PRIVACY_NOTICE_TEMPLATE.md)。
+上架前按 [RELEASE_CHECKLIST.md](./RELEASE_CHECKLIST.md) 完成账号侧配置，并按 [TEST_PLAN.md](./TEST_PLAN.md) 留存验收结果。隐私文案见 [PRIVACY_NOTICE_TEMPLATE.md](./PRIVACY_NOTICE_TEMPLATE.md)，服务规则见 [USER_AGREEMENT_TEMPLATE.md](./USER_AGREEMENT_TEMPLATE.md)。
