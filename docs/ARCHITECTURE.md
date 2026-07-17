@@ -276,7 +276,7 @@ AuditLog (审计日志)
 
 | 链路 | 当前边界 |
 |------|----------|
-| 公共天气 | 小程序只读取服务端持久化的都昌县快照。服务端 cache timer 每 30 分钟刷新，客户端公共快照缓存 30 分钟；普通页面访问和 `/healthz` 不触发上游天气请求。 |
+| 公共天气 | 小程序只读取服务端持久化的都昌县快照。bootstrap timer 在部署或开机后完整等待 30 分钟，首次同步结束后启动 recurring timer；客户端公共快照缓存 30 分钟。网络闸门在正式服务启动前设置，普通页面、风险预计算和 `/healthz` 不触发额外上游请求。 |
 | 微信登录 | 正式 AppID、AppSecret 和隐私版本由本机私密发布表单进入受控服务器环境。AppSecret、OpenID pepper 和会话密钥不进入小程序包；pepper 与会话密钥在服务器内生成。 |
 | 分享与换号 | 只有“分享给家人”按钮生成固定 `from=family_share`。普通分享不带归因，个人页回退到公开首页；登录成功后一次性消费来源，退出和账号注销清理本机会话与来源上下文。 |
 | 匿名分析 | 公开浏览使用微信公众平台聚合统计。自有事件只接受固定枚举和最小账号级维度，原始事件保留 30 天，管理看板与 CSV 只输出聚合结果并排除配置的测试账号。地区聚合只使用社区编码，`ANALYTICS_MIN_LOCATION_COUNT` 在生产环境最小强制为 3。 |
@@ -343,7 +343,7 @@ WECHAT_RELEASE_FORM_FILE=/absolute/path/to/.env.wechat-release \
 
 正式发布时，私密部署配置中的 `DEPLOY_REQUIRE_WECHAT_READY=1` 会要求发布表单通过权限、个人主体、类目、运营资料、AppID、AppSecret 与隐私版本校验。`WECHAT_CATEGORY_CONFIRMED` 只能在发布当天保存正式个人主体类目截图并人工复核后设为 `1`；`WECHAT_FORM_READY` 必须最后开启。
 
-`deploy.sh` 会创建不可变 release、独立虚拟环境和候选配置，先跑全量测试，再在本机隔离端口验活。激活事务负责备份数据库与环境、执行 Alembic、原子切换 `current`、替换 systemd 单元并启动 timer。禁止把代码 rsync 到持久化状态目录后手工重启，这会绕过预检、迁移校验和回滚边界。
+`deploy.sh` 会创建不可变 release、独立虚拟环境和候选配置，上传时排除所有 `.env*` 与 `project.private.config.json`，先跑全量测试，再在本机隔离端口验活。激活事务负责备份数据库与环境、执行 Alembic、原子切换 `current`、替换 systemd 单元、设置 30 分钟 QWeather 网络闸门并启动 bootstrap timer。禁止把代码 rsync 到持久化状态目录后手工重启，这会绕过预检、迁移校验和回滚边界。
 
 ### 7.4 数据库备份策略
 
@@ -459,10 +459,11 @@ cd /opt/your-app-deploy/current/app
 ```bash
 python3 /opt/your-app-deploy/current/app/scripts/validate_release_env.py \
   --file /opt/your-app/.env --require-wechat 1
+systemctl status case-weather-cache-bootstrap.timer --no-pager
 systemctl status case-weather-cache.timer --no-pager
 journalctl -u case-weather-cache.service --no-pager -n 50
 ```
 
-正式首发只执行一次受控 `case-weather-cache.service` 同步，并核对调用前后的预算计数。后续由 30 分钟 timer 统一刷新。
+部署或开机后由 bootstrap timer 完整等待 30 分钟，再执行首次 `case-weather-cache.service` 同步；同步尝试结束后才启动 recurring timer。正式凭据就绪后的唯一一次受控真实联调需要单独记录调用前后的预算计数，普通部署与健康检查不得消耗该次数。
 
 ---

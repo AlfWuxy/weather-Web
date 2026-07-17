@@ -8,6 +8,7 @@ from datetime import datetime
 import logging
 import os
 import threading
+import time
 
 from flask import current_app, has_app_context
 
@@ -55,6 +56,45 @@ def _fail_closed():
         _config_value("QWEATHER_BUDGET_FAIL_CLOSED", "1"),
         default=True,
     )
+
+
+def _log_network_gate_blocked_once(reason):
+    """记录网络闸门状态，不输出原始配置值。"""
+    key = ("network-gate", reason)
+    if key in _BLOCKED_LOGGED:
+        return
+    _BLOCKED_LOGGED.add(key)
+    if reason == "invalid":
+        logger.error("和风天气网络闸门配置无效，已按关闭策略阻断请求。")
+        return
+    logger.warning("和风天气网络闸门尚未开放，已阻断请求。")
+
+
+def _network_gate_allows_request(now_epoch=None):
+    """按 Unix 秒闸门决定是否允许访问和风天气网络。"""
+    raw_value = _config_value("QWEATHER_NETWORK_NOT_BEFORE_EPOCH", "")
+    if raw_value is None:
+        return True
+    value = str(raw_value).strip()
+    if not value:
+        return True
+
+    try:
+        # bool 是 int 的子类，但不应被当作合法的 Unix 秒配置。
+        if isinstance(raw_value, bool):
+            raise ValueError("boolean epoch is invalid")
+        not_before_epoch = int(value, 10)
+        if not_before_epoch < 0:
+            raise ValueError("negative epoch is invalid")
+    except (TypeError, ValueError, OverflowError):
+        _log_network_gate_blocked_once("invalid")
+        return False
+
+    current_epoch = time.time() if now_epoch is None else float(now_epoch)
+    if current_epoch < not_before_epoch:
+        _log_network_gate_blocked_once("future")
+        return False
+    return True
 
 
 def _month_key(now=None):
@@ -124,6 +164,10 @@ def _reserve_local(month, endpoint, limit):
 
 def reserve_qweather_request(endpoint):
     """在发出一次和风请求前预占月度额度。"""
+    # 网络闸门必须先于 Redis 和进程内计数，阻断期不消耗任何预算。
+    if not _network_gate_allows_request():
+        return False
+
     endpoint = str(endpoint or "unknown").strip() or "unknown"
     limit = _monthly_limit()
     if limit <= 0:

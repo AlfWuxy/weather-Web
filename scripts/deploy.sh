@@ -296,8 +296,8 @@ upload_files() {
             --exclude 'venv' \
             --exclude '.venv' \
             --exclude '.venv2' \
-            --exclude '.env' \
-            --exclude '.env.local' \
+            --exclude '.env*' \
+            --exclude 'project.private.config.json' \
             --exclude '.superpowers' \
             --exclude '.pytest_cache' \
             --exclude '.playwright-cli' \
@@ -316,7 +316,7 @@ upload_files() {
         return 64
     fi
 
-    rsync -avz --exclude '__pycache__' --exclude '*.pyc' --exclude 'instance' --exclude 'storage' --exclude 'health_weather.db' --exclude 'data/research/*.xlsx' --exclude 'data/research/*.xls' --exclude '.git' --exclude '.claude' --exclude 'venv' --exclude '.venv' --exclude '.venv2' --exclude '.env' --exclude '.env.local' --exclude '.superpowers' --exclude '.pytest_cache' --exclude '.playwright-cli' --exclude '.vscode' --exclude '.DS_Store' --exclude 'backups' --exclude 'tmp' --exclude 'output' --exclude 'blueprints/tools 2.py' -e "ssh $SSH_OPTS" "$LOCAL_DIR/" "$USER@$SERVER:$remote_target/"
+    rsync -avz --exclude '__pycache__' --exclude '*.pyc' --exclude 'instance' --exclude 'storage' --exclude 'health_weather.db' --exclude 'data/research/*.xlsx' --exclude 'data/research/*.xls' --exclude '.git' --exclude '.claude' --exclude 'venv' --exclude '.venv' --exclude '.venv2' --exclude '.env*' --exclude 'project.private.config.json' --exclude '.superpowers' --exclude '.pytest_cache' --exclude '.playwright-cli' --exclude '.vscode' --exclude '.DS_Store' --exclude 'backups' --exclude 'tmp' --exclude 'output' --exclude 'blueprints/tools 2.py' -e "ssh $SSH_OPTS" "$LOCAL_DIR/" "$USER@$SERVER:$remote_target/"
 }
 
 echo "步骤1: 测试服务器连接..."
@@ -324,7 +324,7 @@ remote_exec "echo '连接成功'"
 
 echo ""
 echo "步骤2: 检查服务器依赖（常规发布不修改全局软件）..."
-remote_exec "for REQUIRED_COMMAND in python3 rsync sqlite3 curl flock systemctl; do command -v \"\$REQUIRED_COMMAND\" >/dev/null || { echo \"缺少服务器依赖: \$REQUIRED_COMMAND，请先执行一次性服务器初始化。\" >&2; exit 1; }; done"
+remote_exec "for REQUIRED_COMMAND in python3 rsync sqlite3 curl flock systemctl busctl; do command -v \"\$REQUIRED_COMMAND\" >/dev/null || { echo \"缺少服务器依赖: \$REQUIRED_COMMAND，请先执行一次性服务器初始化。\" >&2; exit 1; }; done"
 
 echo ""
 echo "步骤2.1: 检查 Redis（用于生产环境限流存储）..."
@@ -509,6 +509,7 @@ EnvironmentFile=$PROJECT_DIR/.env
 Environment=PYTHONUNBUFFERED=1
 Environment=VENV_PY=$CURRENT_LINK/venv/bin/python
 ExecStart=/bin/bash $CURRENT_LINK/app/scripts/weather_cache_sync.sh
+TimeoutStartSec=15min
 EOF
 
 cat > $NEW_RELEASE/systemd/case-weather-cache.timer << 'EOF'
@@ -518,8 +519,38 @@ Description=Case Weather - refresh Duchang weather cache every 30 minutes
 [Timer]
 OnActiveSec=30min
 OnUnitActiveSec=30min
-Persistent=true
+AccuracySec=1s
 Unit=case-weather-cache.service
+
+[Install]
+WantedBy=timers.target
+EOF"
+
+remote_exec "cat > $NEW_RELEASE/systemd/case-weather-cache-bootstrap.service << 'EOF'
+[Unit]
+Description=Case Weather - start the first cache refresh after a full 30-minute delay
+Wants=case-weather-cache.service
+After=network.target case-weather.service case-weather-cache.service
+OnSuccess=case-weather-cache.timer
+
+[Service]
+Type=oneshot
+User=root
+UMask=0077
+# 真实同步由 Wants 拉起；本单元在同步结束后成功退出，再启动常规定时器。
+ExecStart=/usr/bin/true
+TimeoutStartSec=16min
+EOF
+
+cat > $NEW_RELEASE/systemd/case-weather-cache-bootstrap.timer << 'EOF'
+[Unit]
+Description=Case Weather - delay the first cache refresh for 30 minutes
+
+[Timer]
+OnActiveSec=30min
+AccuracySec=1s
+RemainAfterElapse=no
+Unit=case-weather-cache-bootstrap.service
 
 [Install]
 WantedBy=timers.target
@@ -612,11 +643,17 @@ remote_exec "STATE_DIR=$PROJECT_DIR RELEASE_ROOT=$RELEASE_ROOT NEW_RELEASE=$NEW_
 echo ""
 echo "步骤8: 复核服务、定时器与当前版本..."
 check_remote_unit_active "case-weather.service"
-check_remote_unit_active "case-weather-cache.timer"
+check_remote_unit_active "case-weather-cache-bootstrap.timer"
+remote_exec "BOOTSTRAP_STATE=\$(systemctl is-enabled case-weather-cache-bootstrap.timer 2>/dev/null || true); test \"\$BOOTSTRAP_STATE\" = enabled || { echo \"bootstrap timer 状态应为 enabled，实际为 \${BOOTSTRAP_STATE:-unknown}。\" >&2; exit 1; }"
+remote_exec "NEXT_US=\$(busctl get-property org.freedesktop.systemd1 /org/freedesktop/systemd1/unit/case_2dweather_2dcache_2dbootstrap_2etimer org.freedesktop.systemd1.Timer NextElapseUSecMonotonic | awk '{print \$2}'); UPTIME_US=\$(awk '{printf \"%.0f\", \$1 * 1000000}' /proc/uptime); REMAINING_US=\$((NEXT_US - UPTIME_US)); if [ \"\$REMAINING_US\" -lt 1700000000 ] || [ \"\$REMAINING_US\" -gt 1810000000 ]; then echo 'bootstrap timer 未保留完整的首轮 30 分钟等待窗口。' >&2; exit 1; fi"
+remote_exec "systemctl cat case-weather-cache.timer >/dev/null; test \"\$(systemctl show case-weather-cache.timer --property=LoadState --value)\" = loaded"
+remote_exec "RECURRING_STATE=\$(systemctl is-enabled case-weather-cache.timer 2>/dev/null || true); test \"\$RECURRING_STATE\" = disabled || { echo \"常规天气缓存 timer 状态应为 disabled，实际为 \${RECURRING_STATE:-unknown}。\" >&2; exit 1; }"
+remote_exec "if systemctl is-active --quiet case-weather-cache.timer; then echo '常规天气缓存 timer 在首轮等待期间不应提前运行。' >&2; exit 1; fi"
 check_remote_unit_active "case-weather-risk-precompute.timer"
 check_remote_unit_active "case-weather-usage-cleanup.timer"
 remote_exec "systemctl cat case-weather-dispatch.service >/dev/null"
 remote_exec "systemctl show case-weather-cache.service --property=OnSuccess --value | grep -qw 'case-weather-dispatch.service'"
+remote_exec "systemctl show case-weather-cache-bootstrap.service --property=OnSuccess --value | grep -qw 'case-weather-cache.timer'"
 remote_exec "if systemctl is-active --quiet case-weather-dispatch.timer || systemctl cat case-weather-dispatch.timer >/dev/null 2>&1; then echo '旧 dispatch.timer 仍存在，拒绝完成发布。' >&2; exit 1; fi"
 remote_exec "test \"\$(readlink $CURRENT_LINK)\" = '$NEW_RELEASE'"
 remote_exec "test ! -e $STAGED_ENV_FILE"

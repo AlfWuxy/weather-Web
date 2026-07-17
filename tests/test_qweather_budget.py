@@ -2,6 +2,7 @@
 """和风天气单地点缓存与月度预算保护测试。"""
 
 import logging
+import time
 
 from flask import Flask
 
@@ -51,6 +52,7 @@ def test_monthly_budget_blocks_after_safety_limit(app, monkeypatch):
     with app.app_context():
         app.config["REDIS_URL"] = ""
         app.config["WEATHER_CACHE_REDIS_URL"] = ""
+        app.config["QWEATHER_NETWORK_NOT_BEFORE_EPOCH"] = ""
         app.config["QWEATHER_MONTHLY_REQUEST_LIMIT"] = 2
 
         assert budget.reserve_qweather_request("weather_now") is True
@@ -70,6 +72,7 @@ def test_budget_fails_closed_when_configured_redis_is_unavailable(app, monkeypat
     monkeypatch.setattr(budget, "get_qweather_redis_client", lambda: None)
     with app.app_context():
         app.config["REDIS_URL"] = "redis://127.0.0.1:6379/0"
+        app.config["QWEATHER_NETWORK_NOT_BEFORE_EPOCH"] = ""
         app.config["QWEATHER_BUDGET_FAIL_CLOSED"] = True
 
         assert budget.reserve_qweather_request("weather_now") is False
@@ -82,6 +85,7 @@ def test_zero_budget_disables_qweather(app, monkeypatch):
     monkeypatch.setattr(budget, "get_qweather_redis_client", lambda: None)
     with app.app_context():
         app.config["REDIS_URL"] = ""
+        app.config["QWEATHER_NETWORK_NOT_BEFORE_EPOCH"] = ""
         app.config["QWEATHER_MONTHLY_REQUEST_LIMIT"] = 0
 
         assert budget.reserve_qweather_request("weather_now") is False
@@ -99,6 +103,7 @@ def test_legacy_provider_total_does_not_block_app_counter(app, monkeypatch):
     with app.app_context():
         app.config["REDIS_URL"] = "redis://127.0.0.1:6379/0"
         app.config["WEATHER_CACHE_REDIS_URL"] = ""
+        app.config["QWEATHER_NETWORK_NOT_BEFORE_EPOCH"] = ""
         app.config["QWEATHER_MONTHLY_REQUEST_LIMIT"] = 40000
 
         assert budget.reserve_qweather_request("weather_7d_forecast") is True
@@ -111,6 +116,88 @@ def test_legacy_provider_total_does_not_block_app_counter(app, monkeypatch):
     assert snapshot["endpoints"] == {"weather_7d_forecast": 1}
 
 
+def test_future_network_gate_blocks_before_any_budget_counter(app, monkeypatch):
+    from services import qweather_budget as budget
+
+    _reset_local_budget(budget)
+    fake_redis = _FakeBudgetRedis()
+    redis_calls = []
+
+    def fake_get_redis_client():
+        redis_calls.append(True)
+        return fake_redis
+
+    monkeypatch.setattr(budget, "get_qweather_redis_client", fake_get_redis_client)
+    with app.app_context():
+        app.config["REDIS_URL"] = "redis://127.0.0.1:6379/0"
+        app.config["WEATHER_CACHE_REDIS_URL"] = ""
+        app.config["QWEATHER_NETWORK_NOT_BEFORE_EPOCH"] = str(int(time.time()) + 3600)
+        app.config["QWEATHER_MONTHLY_REQUEST_LIMIT"] = 40000
+
+        assert budget.reserve_qweather_request("weather_now") is False
+
+    assert redis_calls == []
+    assert fake_redis.values == {}
+    assert fake_redis.hashes == {}
+    assert dict(budget._LOCAL_TOTALS) == {}
+    assert dict(budget._LOCAL_ENDPOINTS) == {}
+
+
+def test_invalid_network_gate_fails_closed_without_logging_raw_value(app, monkeypatch):
+    from services import qweather_budget as budget
+
+    _reset_local_budget(budget)
+    raw_value = "private-invalid-gate-value"
+    error_messages = []
+    monkeypatch.setattr(budget, "get_qweather_redis_client", lambda: None)
+    monkeypatch.setattr(
+        budget.logger,
+        "error",
+        lambda message, *args: error_messages.append(message % args if args else message),
+    )
+    with app.app_context():
+        app.config["REDIS_URL"] = ""
+        app.config["WEATHER_CACHE_REDIS_URL"] = ""
+        app.config["QWEATHER_NETWORK_NOT_BEFORE_EPOCH"] = raw_value
+        app.config["QWEATHER_MONTHLY_REQUEST_LIMIT"] = 40000
+        app.config["QWEATHER_BUDGET_FAIL_CLOSED"] = False
+
+        assert budget.reserve_qweather_request("weather_now") is False
+
+    assert dict(budget._LOCAL_TOTALS) == {}
+    assert raw_value not in "\n".join(error_messages)
+    assert any("网络闸门配置无效" in message for message in error_messages)
+
+
+def test_expired_network_gate_allows_budget_reservation(app, monkeypatch):
+    from services import qweather_budget as budget
+
+    _reset_local_budget(budget)
+    monkeypatch.setattr(budget, "get_qweather_redis_client", lambda: None)
+    with app.app_context():
+        app.config["REDIS_URL"] = ""
+        app.config["WEATHER_CACHE_REDIS_URL"] = ""
+        app.config["QWEATHER_NETWORK_NOT_BEFORE_EPOCH"] = str(int(time.time()) - 1)
+        app.config["QWEATHER_MONTHLY_REQUEST_LIMIT"] = 2
+
+        assert budget.reserve_qweather_request("weather_now") is True
+        snapshot = budget.get_qweather_budget_snapshot()
+
+    assert snapshot["used"] == 1
+    assert snapshot["endpoints"] == {"weather_now": 1}
+
+
+def test_network_gate_opens_at_exact_not_before_second(app):
+    from services import qweather_budget as budget
+
+    with app.app_context():
+        app.config["QWEATHER_NETWORK_NOT_BEFORE_EPOCH"] = "1800"
+
+        assert budget._network_gate_allows_request(now_epoch=1799) is False
+        assert budget._network_gate_allows_request(now_epoch=1800) is True
+        assert budget._network_gate_allows_request(now_epoch=1801) is True
+
+
 def test_cache_ttl_has_ten_minute_floor(monkeypatch):
     from core import config
 
@@ -118,6 +205,7 @@ def test_cache_ttl_has_ten_minute_floor(monkeypatch):
     monkeypatch.setenv("WEATHER_CACHE_TTL_MINUTES", "1")
     monkeypatch.setenv("FORECAST_CACHE_TTL_MINUTES", "2")
     monkeypatch.setenv("QWEATHER_WARNING_CACHE_TTL_MINUTES", "3")
+    monkeypatch.setenv("QWEATHER_NETWORK_NOT_BEFORE_EPOCH", "1234567890")
 
     app = Flask(__name__)
     config.configure_app(app, logging.getLogger(__name__))
@@ -125,6 +213,7 @@ def test_cache_ttl_has_ten_minute_floor(monkeypatch):
     assert app.config["WEATHER_CACHE_TTL_MINUTES"] == 10
     assert app.config["FORECAST_CACHE_TTL_MINUTES"] == 10
     assert app.config["QWEATHER_WARNING_CACHE_TTL_MINUTES"] == 10
+    assert app.config["QWEATHER_NETWORK_NOT_BEFORE_EPOCH"] == "1234567890"
 
 
 def test_weather_cache_uses_one_duchang_key(app):

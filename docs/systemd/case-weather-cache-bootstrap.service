@@ -1,0 +1,13 @@
+[Unit]
+Description=Case Weather - start the first cache refresh after a full 30-minute delay
+Wants=case-weather-cache.service
+After=network.target case-weather.service case-weather-cache.service
+OnSuccess=case-weather-cache.timer
+
+[Service]
+Type=oneshot
+User=root
+UMask=0077
+# 真实同步由 Wants 拉起；本单元在同步结束后成功退出，再启动常规定时器。
+ExecStart=/usr/bin/true
+TimeoutStartSec=16min

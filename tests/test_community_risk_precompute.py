@@ -1,4 +1,10 @@
 # -*- coding: utf-8 -*-
+from datetime import timedelta
+import json
+
+import pytest
+
+
 def test_precompute_community_risk_builds_and_reuses_cache(app, monkeypatch):
     from services.community_risk_cache import clear_local_community_risk_cache
     from services.pipelines.precompute_community_risk import precompute_community_risk
@@ -6,7 +12,7 @@ def test_precompute_community_risk_builds_and_reuses_cache(app, monkeypatch):
     clear_local_community_risk_cache()
     app.config['COMMUNITY_RISK_CACHE_TTL_SECONDS'] = 1500
 
-    calls = {'weather': 0, 'risk': 0}
+    calls = {'weather': 0, 'risk': 0, 'cache_only': []}
 
     class FakeCommunityService:
         def generate_community_risk_map(self, weather_data, target_date=None, window_days=None, disease_filter=None):
@@ -23,8 +29,9 @@ def test_precompute_community_risk_builds_and_reuses_cache(app, monkeypatch):
                 'management_suggestions': [],
             }
 
-    def fake_get_weather_with_cache(location):
+    def fake_get_weather_with_cache(location, cache_only=False):
         calls['weather'] += 1
+        calls['cache_only'].append(cache_only)
         return ({'temperature': 31.0, 'humidity': 70, 'aqi': 60, 'data_source': 'QWeather', 'is_mock': False}, True)
 
     monkeypatch.setattr('services.pipelines.precompute_community_risk.get_weather_with_cache', fake_get_weather_with_cache)
@@ -51,6 +58,7 @@ def test_precompute_community_risk_builds_and_reuses_cache(app, monkeypatch):
     assert result2['risk_cache_hits'] == 1
     assert calls['risk'] == 1
     assert calls['weather'] == 2
+    assert calls['cache_only'] == [True, True]
 
     clear_local_community_risk_cache()
 
@@ -70,7 +78,10 @@ def test_precompute_community_risk_skips_mock_weather(app, monkeypatch):
 
     monkeypatch.setattr(
         'services.pipelines.precompute_community_risk.get_weather_with_cache',
-        lambda location: ({'temperature': 37.0, 'humidity': 70, 'aqi': 90, 'is_mock': True, 'data_source': 'Demo'}, False),
+        lambda location, cache_only=False: (
+            {'temperature': 37.0, 'humidity': 70, 'aqi': 90, 'is_mock': True, 'data_source': 'Demo'},
+            False,
+        ),
     )
     monkeypatch.setattr('services.pipelines.precompute_community_risk.get_community_service', lambda: FakeCommunityService())
 
@@ -84,5 +95,95 @@ def test_precompute_community_risk_skips_mock_weather(app, monkeypatch):
     assert result['weather_skipped'] == 1
     assert result['combinations'] == 0
     assert calls['risk'] == 0
+
+    clear_local_community_risk_cache()
+
+
+def test_precompute_reads_expired_real_cache_without_fetcher(app, db_session, monkeypatch):
+    from core.db_models import WeatherCache
+    from core.time_utils import utcnow
+    from services.community_risk_cache import clear_local_community_risk_cache
+    from services.pipelines.precompute_community_risk import precompute_community_risk
+
+    clear_local_community_risk_cache()
+    app.config['DEMO_MODE'] = False
+    app.config['WEATHER_CACHE_TTL_MINUTES'] = 10
+    app.extensions['redis_client'] = None
+    weather = {
+        'temperature': 32.0,
+        'humidity': 68,
+        'aqi': 58,
+        'data_source': 'QWeather',
+        'is_mock': False,
+    }
+    db_session.add(WeatherCache(
+        location='都昌县',
+        fetched_at=utcnow() - timedelta(hours=2),
+        payload=json.dumps(weather, ensure_ascii=False),
+        is_mock=False,
+    ))
+    db_session.commit()
+
+    class FakeCommunityService:
+        def generate_community_risk_map(self, weather_data, target_date=None, window_days=None, disease_filter=None):
+            assert weather_data == weather
+            return {'map_data': {'cache_only': True}}
+
+    monkeypatch.setattr(
+        'core.weather.get_weather_fetcher',
+        lambda: pytest.fail('cache-only 预计算不应访问天气 fetcher'),
+    )
+    monkeypatch.setattr(
+        'services.pipelines.precompute_community_risk.get_community_service',
+        lambda: FakeCommunityService(),
+    )
+
+    result = precompute_community_risk(
+        app=app,
+        locations=['都昌'],
+        window_days_list=[30],
+        disease_filters=[''],
+    )
+
+    assert result['weather_cache_hits'] == 1
+    assert result['weather_skipped'] == 0
+    assert result['computed'] == 1
+    assert result['combinations'] == 1
+
+    clear_local_community_risk_cache()
+
+
+def test_precompute_missing_cache_never_fetches_or_writes_fallback(app, db_session, monkeypatch):
+    from core.db_models import WeatherCache
+    from services.community_risk_cache import clear_local_community_risk_cache
+    from services.pipelines.precompute_community_risk import precompute_community_risk
+
+    clear_local_community_risk_cache()
+    app.config['DEMO_MODE'] = False
+    app.extensions['redis_client'] = None
+
+    class FakeCommunityService:
+        def generate_community_risk_map(self, weather_data, target_date=None, window_days=None, disease_filter=None):
+            pytest.fail('缺少真实天气缓存时不应计算社区风险')
+
+    monkeypatch.setattr(
+        'core.weather.get_weather_fetcher',
+        lambda: pytest.fail('cache-only 预计算不应访问天气 fetcher'),
+    )
+    monkeypatch.setattr(
+        'services.pipelines.precompute_community_risk.get_community_service',
+        lambda: FakeCommunityService(),
+    )
+
+    result = precompute_community_risk(
+        app=app,
+        locations=['都昌'],
+        window_days_list=[30],
+        disease_filters=[''],
+    )
+
+    assert result['weather_skipped'] == 1
+    assert result['combinations'] == 0
+    assert WeatherCache.query.count() == 0
 
     clear_local_community_risk_cache()

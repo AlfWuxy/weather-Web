@@ -1,0 +1,11 @@
+[Unit]
+Description=Case Weather - delay the first cache refresh for 30 minutes
+
+[Timer]
+OnActiveSec=30min
+AccuracySec=1s
+RemainAfterElapse=no
+Unit=case-weather-cache-bootstrap.service
+
+[Install]
+WantedBy=timers.target

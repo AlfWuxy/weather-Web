@@ -399,6 +399,10 @@ def configure_app(app, logger):
         'QWEATHER_BUDGET_FAIL_CLOSED',
         parse_bool(os.getenv('QWEATHER_BUDGET_FAIL_CLOSED', '1'), default=True)
     )
+    app.config.setdefault(
+        'QWEATHER_NETWORK_NOT_BEFORE_EPOCH',
+        _normalized_env_value('QWEATHER_NETWORK_NOT_BEFORE_EPOCH', '')
+    )
     if qweather_auth_mode != 'disabled' and not qweather_api_base:
         logger.warning("QWEATHER_API_BASE 未配置，将跳过 QWeather Host 相关调用并使用兜底链路。")
     if qweather_auth_mode == 'api_key' and not qweather_key:

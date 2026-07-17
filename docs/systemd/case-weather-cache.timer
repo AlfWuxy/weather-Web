@@ -4,7 +4,7 @@ Description=Run Case Weather cache sync every 30 minutes
 [Timer]
 OnActiveSec=30min
 OnUnitActiveSec=30min
-Persistent=true
+AccuracySec=1s
 Unit=case-weather-cache.service
 
 [Install]

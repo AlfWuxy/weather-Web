@@ -10,11 +10,13 @@
 ## 数据链路
 
 ```text
-30 分钟 systemd timer
+部署或开机后 bootstrap timer 完整等待 30 分钟
+        ↓
+首次都昌同步完成后启动 recurring timer
         ↓
 服务器单次都昌同步周期
         ↓
-预算预占与 fail-closed 检查
+部署期网络闸门 + 预算预占与 fail-closed 检查
         ↓
 Redis / 数据库持久化 MiniProgramSnapshot
         ↓
@@ -27,15 +29,17 @@ GET /mp/api/v1/bootstrap 只读快照
 
 ## 服务端规则
 
-1. `case-weather-cache.timer` 每 30 分钟触发一次。
+1. `case-weather-cache-bootstrap.timer` 在部署或开机后完整等待 30 分钟，再拉起首次同步；首次尝试结束后才启动 `case-weather-cache.timer`，此后每 30 分钟触发一次。
 2. 默认预热列表只能包含都昌县。
 3. 普通 HTTP 请求不能触发上游 QWeather 刷新。
-4. 每次上游请求前必须通过月度预算预占。
+4. 每次上游请求前必须先通过 `QWEATHER_NETWORK_NOT_BEFORE_EPOCH` 网络闸门，再通过月度预算预占；闸门阻断不得增加 Redis 或本地预算计数。
 5. Redis 已配置且不可用时，`QWEATHER_BUDGET_FAIL_CLOSED=1` 会阻断请求。
 6. 快照保留抓取时间、过期时间、来源、缺失字段和 stale 状态。
 7. 无真实数据时返回“正在更新”，禁止用 mock 数据生成生产风险结论。
 8. 离线读取旧数据库缓存时必须继承原始 `fetched_at`，禁止把旧天气重新包装成新鲜快照。
 9. 官方预警必须区分“成功返回空列表”和“配置、额度、认证、网络或解析失败”。
+10. 社区风险预计算只能读取现有真实天气缓存，缓存缺失或仅有 mock 数据时跳过，禁止自行访问上游。
+11. 不可变 release 上传必须排除所有 `.env*` 和 `project.private.config.json`。
 
 ## 客户端规则
 
@@ -56,6 +60,8 @@ GET /mp/api/v1/bootstrap 只读快照
 - 所有社区名称都映射到同一都昌快照。
 - 测试进程拦截 QWeather host，出现访问即失败。
 - 月预算为 0 时，系统可启动、页面可展示缓存状态、QWeather 请求数为 0。
+- 部署完成后 bootstrap timer 为 active，recurring timer 为 inactive 且 disabled；30 分钟窗口内预算计数保持不变。
+- 网络闸门值无效时 fail-closed，过期后无需清变量或重启即可自动放行。
 
 ## 单次真实联调
 

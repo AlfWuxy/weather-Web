@@ -393,9 +393,11 @@ def _weather_cache_location(location):
     return normalized
 
 
-def get_weather_with_cache(location, ttl_minutes=None):
-    """获取带缓存的天气数据"""
+def get_weather_with_cache(location, ttl_minutes=None, cache_only=False):
+    """获取带缓存的天气数据，可选择只读真实缓存。"""
     if is_demo_mode():
+        if cache_only:
+            return {}, False
         return get_demo_weather_data(), False
     location = _weather_cache_location(location)
     if ttl_minutes is None:
@@ -405,7 +407,8 @@ def get_weather_with_cache(location, ttl_minutes=None):
     redis_key = _redis_cache_key('weather:current', location)
     redis_payload = _redis_get_json(redis_client, redis_key, {})
     if redis_payload is not None:
-        return redis_payload, True
+        if not cache_only or is_qweather_online_weather(redis_payload):
+            return redis_payload, True
     now = utcnow()
     cache = None
     try:
@@ -414,12 +417,24 @@ def get_weather_with_cache(location, ttl_minutes=None):
             WeatherCache.id.desc()
         ).first()
         if cache and cache.fetched_at:
+            cached_weather = safe_json_loads(cache.payload, {})
+            cached_weather_is_real = (
+                not bool(cache.is_mock)
+                and is_qweather_online_weather(cached_weather)
+            )
             # 确保从数据库读取的 datetime 是 UTC aware 的
             if now - ensure_utc_aware(cache.fetched_at) <= timedelta(minutes=ttl_minutes):
-                return safe_json_loads(cache.payload, {}), True
+                if not cache_only or cached_weather_is_real:
+                    return cached_weather, True
+            # 预热任务允许读取最后一条过期的真实缓存，避免自行访问外网。
+            if cache_only and cached_weather_is_real:
+                return cached_weather, True
     except Exception as exc:
         logger.warning("天气缓存不可用，已跳过缓存: %s", exc)
         db.session.rollback()
+    if cache_only:
+        # cache-only 缺少真实缓存时直接返回，不调用 fetcher，也不写入 fallback。
+        return {}, False
     weather_service = get_weather_fetcher()
     try:
         if weather_service is None:

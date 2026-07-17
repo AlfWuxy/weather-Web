@@ -91,9 +91,10 @@ git check-ignore .env.wechat-release
 
 ### 30 分钟刷新
 
-1. 确认服务端天气缓存 timer 的首次等待和固定间隔均为 30 分钟，客户端公共快照缓存也为 30 分钟。
-2. 正式首发只由发布执行方受控触发一次即时同步，并记录同步前后预算计数、快照时间和数据来源。
-3. 连续打开首页、预报、预警和社区页面，确认普通访问与 `/healthz` 不会触发上游天气请求。网络异常时保留旧快照并明确显示 stale。
+1. 确认 bootstrap timer 在部署或开机后完整等待 30 分钟，首次同步尝试结束后才启动 recurring cache timer；客户端公共快照缓存也为 30 分钟。
+2. 确认正式服务启动前已设置 30 分钟 QWeather 网络闸门；窗口内任何意外入口都会在预算计数前被阻断，过期后自动恢复。
+3. 正式 AppID、AppSecret 与天气认证全部就绪后，由发布执行方完成唯一一次受控真实联调，并记录调用前后预算计数、快照时间和数据来源。
+4. 连续打开首页、预报、预警和社区页面，确认普通访问、风险预计算与 `/healthz` 不会触发额外上游天气请求。网络异常时保留旧快照并明确显示 stale。
 
 ### 分享与换账号
 
@@ -114,7 +115,7 @@ git check-ignore .env.wechat-release
 
 1. 发布执行方确认账号已完成个人主体注册，检查时遮盖所有敏感字段。
 2. 首次发布前人工核对服务器指纹并登记到本机 `known_hosts`；随后在受控服务器环境完成正式账号配置，并保持凭据不进入仓库。
-3. 将 `DEPLOY_REQUIRE_WECHAT_READY=1`，通过不可变 release 流程部署小程序后端；发布脚本会执行 `alembic upgrade head` 并强制核对数据库版本等于唯一 head。
+3. 将 `DEPLOY_REQUIRE_WECHAT_READY=1`，通过不可变 release 流程部署小程序后端；发布脚本会排除所有 `.env*` 与 `project.private.config.json`，执行 `alembic upgrade head` 并强制核对数据库版本等于唯一 head。
 4. 验证 `https://yilaoweather.org/mp/api/v1/bootstrap`，再配置 request 合法域名。
 5. 在微信开发者工具选择正式账号、导入工程并编译。
 6. 执行唯一一次受控真实天气同步和预算计数核验。
@@ -125,7 +126,7 @@ git check-ignore .env.wechat-release
 ## 发布、观察与回滚确认
 
 - 最终确认单至少写明：待发布版本、审核通过时间、目标 commit、后端 release ID、隐私版本、当前线上版本、平台可回退版本、负责人和确认时间。确认单只记录非秘密标识。
-- 发布后先观察 401、5xx、bootstrap 延迟、快照年龄、30 分钟 timer、预算计数、匿名漏斗护栏和推送人工复核队列。
+- 发布后先观察 401、5xx、bootstrap 延迟、快照年龄、两阶段 30 分钟 timer、网络闸门、预算计数、匿名漏斗护栏和推送人工复核队列。
 - 小程序端出现严重问题时，优先使用平台当时可用的版本管理能力回退小程序，并保留 Web 公共服务。后台实际没有可用回退版本时停止发布，先准备修复包和用户告知方案。
 - 后端在公网切换前失败时，激活事务会恢复数据库、旧 release 与原 systemd 状态。公网服务已经尝试启动后进入向前修复区间，保留新数据库与新 release，避免覆盖可能已经确认的用户写入。
 - 发现 `ROLLBACK_REQUIRED.txt` 或 `POST_COMMIT_ATTENTION.txt` 时停止下一次部署。人工核对数据库、`current` 链接、systemd 状态和事务目录后，才可用指向该精确事务目录的 `DEPLOY_RECOVERY_ACKNOWLEDGED_TRANSACTION` 登记恢复确认。

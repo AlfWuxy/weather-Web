@@ -12,3 +12,4 @@ EnvironmentFile=/opt/your-app/.env
 Environment=PYTHONUNBUFFERED=1
 Environment=VENV_PY=/opt/your-app-deploy/current/venv/bin/python
 ExecStart=/bin/bash /opt/your-app-deploy/current/app/scripts/weather_cache_sync.sh
+TimeoutStartSec=15min

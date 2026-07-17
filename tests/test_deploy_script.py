@@ -23,7 +23,10 @@ def test_deploy_script_checks_units_with_is_active():
     content = _load_deploy_script()
 
     assert 'check_remote_unit_active "case-weather.service"' in content
-    assert 'check_remote_unit_active "case-weather-cache.timer"' in content
+    assert 'check_remote_unit_active "case-weather-cache-bootstrap.timer"' in content
+    assert "常规天气缓存 timer 在首轮等待期间不应提前运行" in content
+    assert "常规天气缓存 timer 状态应为 disabled" in content
+    assert "bootstrap timer 状态应为 enabled" in content
     assert 'check_remote_unit_active "case-weather-dispatch.timer"' not in content
     assert 'check_remote_unit_active "case-weather-risk-precompute.timer"' in content
     assert "旧 dispatch.timer 仍存在，拒绝完成发布" in content
@@ -52,6 +55,36 @@ def test_deploy_script_pins_duchang_cache_to_free_tier_budget():
     assert 'ExecStart=/bin/bash $CURRENT_LINK/app/scripts/weather_cache_sync.sh' in content
 
 
+def test_deploy_script_delays_first_cache_refresh_then_starts_recurring_timer():
+    content = _load_deploy_script()
+    recurring_start = content.index(
+        "cat > $NEW_RELEASE/systemd/case-weather-cache.timer << 'EOF'"
+    )
+    recurring_end = content.index('EOF"', recurring_start)
+    recurring_block = content[recurring_start:recurring_end]
+    bootstrap_start = content.index(
+        "cat > $NEW_RELEASE/systemd/case-weather-cache-bootstrap.service << 'EOF'"
+    )
+    bootstrap_end = content.index('EOF"', bootstrap_start)
+    bootstrap_block = content[bootstrap_start:bootstrap_end]
+
+    assert 'OnActiveSec=30min' in recurring_block
+    assert 'OnUnitActiveSec=30min' in recurring_block
+    assert '[Install]' in recurring_block
+    assert 'WantedBy=timers.target' in recurring_block
+    assert 'Wants=case-weather-cache.service' in bootstrap_block
+    assert 'After=network.target case-weather.service case-weather-cache.service' in bootstrap_block
+    assert 'OnSuccess=case-weather-cache.timer' in bootstrap_block
+    assert 'ExecStart=/usr/bin/true' in bootstrap_block
+    assert 'OnActiveSec=30min' in content[bootstrap_start:]
+    assert 'RemainAfterElapse=no' in content[bootstrap_start:]
+    assert 'NextElapseUSecMonotonic' in content
+    assert 'REMAINING_US' in content
+    assert 'bootstrap timer 未保留完整的首轮 30 分钟等待窗口' in content
+    assert "--property=LoadState --value" in content
+    assert "case-weather-cache-bootstrap.service --property=OnSuccess" in content
+
+
 def test_deploy_script_sets_precompute_python_path():
     content = _load_deploy_script()
 
@@ -69,6 +102,7 @@ def test_deploy_script_uses_isolated_release_and_server_transaction():
     assert 'apt-get' not in content
     assert 'enable --now redis-server' not in content
     assert 'systemctl is-active --quiet redis-server' in content
+    assert 'systemctl busctl' in content
     assert 'DB_BACKUP="$TRANSACTION_DIR/database-before.db"' in activate
     assert 'ENV_BACKUP="$TRANSACTION_DIR/environment-before.env"' in activate
     assert 'STAGED_ENV_FILE="$NEW_RELEASE/staged.env"' in content
@@ -90,16 +124,24 @@ def test_activate_transaction_stops_every_writer_and_commits_last():
     for unit in (
         'case-weather.service',
         'case-weather-cache.service',
+        'case-weather-cache-bootstrap.service',
         'case-weather-dispatch.service',
         'case-weather-risk-precompute.service',
         'case-weather-usage-cleanup.service',
         'case-weather-cache.timer',
+        'case-weather-cache-bootstrap.timer',
         'case-weather-dispatch.timer',
         'case-weather-risk-precompute.timer',
         'case-weather-usage-cleanup.timer',
     ):
         assert unit in content
     assert content.index('start_candidate_release\n') < content.index('LINK_MUTATED=1')
+    assert content.index('install_new_units\n') < content.index(
+        'prepare_release_timer_states\n'
+    )
+    assert content.index('prepare_release_timer_states\n') < content.index(
+        'arm_qweather_network_gate\n'
+    )
     assert content.index('wait_for_health "$HEALTH_URL"') < content.index('COMMITTED=1')
     assert content.index('start_new_release\n') < content.index('COMMITTED=1')
     assert content.index('FORWARD_ONLY=1') < content.index('COMMITTED=1')
@@ -116,6 +158,10 @@ def test_deploy_script_excludes_local_design_drafts():
     assert "--exclude 'output'" in content
     assert "--exclude 'tmp'" in content
     assert "--exclude 'blueprints/tools 2.py'" in content
+    assert content.count("--exclude '.env*'") == 2
+    assert content.count("--exclude 'project.private.config.json'") == 2
+    assert "--exclude '.env'" not in content
+    assert "--exclude '.env.local'" not in content
 
 
 def test_deploy_script_requires_https_public_base_url():
@@ -150,7 +196,7 @@ def test_deploy_only_supports_key_or_sshpass_and_locks_private_files():
 
     assert 'expect -c' not in content
     assert '密码部署需要 sshpass' in content
-    assert content.count('UMask=0077') == 5
+    assert content.count('UMask=0077') == 6
     assert 'chmod 0700 $PROJECT_DIR/instance' in content
 
 
@@ -200,6 +246,15 @@ def test_deploy_requires_exact_recovery_transaction_acknowledgement():
     assert 'ROLLBACK_REQUIRED.txt' in activate
     assert 'RECOVERY_CONFIRMED' in activate
     assert '尚未人工确认的部署恢复事务' in activate
+
+
+def test_activation_arms_qweather_gate_immediately_before_public_restart():
+    content = _load_activate_script()
+
+    assert '--key QWEATHER_NETWORK_NOT_BEFORE_EPOCH' in content
+    assert 'not_before_epoch=$((now_epoch + 1800))' in content
+    assert content.index('arm_qweather_network_gate\n') < content.index('start_new_release\n')
+    assert content.index('start_candidate_release\n') < content.index('arm_qweather_network_gate\n')
 
 
 def test_precompute_script_respects_deploy_venv_dir():

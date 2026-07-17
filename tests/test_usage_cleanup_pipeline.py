@@ -190,7 +190,7 @@ def test_deploy_installs_independent_daily_cleanup_timer_idempotently():
     assert 'StartLimitBurst=20' in deploy_content
     assert 'Environment=DEPLOY_STATE_DIR=$PROJECT_DIR' in deploy_content
     assert 'case-weather-usage-cleanup.timer' in activate_content
-    assert 'for unit in "${NEW_TIMER_UNITS[@]}"' in activate_content
+    assert 'for unit in "${START_TIMER_UNITS[@]}"' in activate_content
     assert '"$SYSTEMCTL_BIN" enable "$unit"' in activate_content
     assert '"$SYSTEMCTL_BIN" restart "$unit"' in activate_content
     assert '"$SYSTEMCTL_BIN" is-active --quiet "$unit"' in activate_content
@@ -199,9 +199,18 @@ def test_deploy_installs_independent_daily_cleanup_timer_idempotently():
     activation_tail = activate_content.split('switch_current_link "$NEW_RELEASE"', 1)[1]
     assert activation_tail.index('install_new_units') < activation_tail.index('start_new_release')
     start_block = activate_content.split('start_new_release() {', 1)[1].split('\n}', 1)[0]
-    timer_block = activate_content.split('start_release_timers() {', 1)[1].split('\n}', 1)[0]
+    prepare_block = activate_content.split(
+        'prepare_release_timer_states() {', 1
+    )[1].split('\n}', 1)[0]
+    timer_block = activate_content.split(
+        'start_release_timers() {', 1
+    )[1].split('\n}', 1)[0]
     assert 'wait_for_health' in start_block
-    assert 'for unit in "${NEW_TIMER_UNITS[@]}"' in timer_block
+    assert 'for unit in "${START_TIMER_UNITS[@]}"' in prepare_block
+    assert '"$SYSTEMCTL_BIN" enable "$unit"' in prepare_block
+    assert 'for unit in "${START_TIMER_UNITS[@]}"' in timer_block
+    assert '"$SYSTEMCTL_BIN" enable "$unit"' not in timer_block
+    assert '"$SYSTEMCTL_BIN" restart "$unit"' in timer_block
 
 
 def test_deploy_rejects_password_fallback_without_sshpass():

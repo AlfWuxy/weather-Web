@@ -37,22 +37,27 @@ STARTED_MARKER="$TRANSACTION_DIR/ACTIVATION_STARTED"
 ROLLED_BACK_MARKER="$TRANSACTION_DIR/ROLLED_BACK"
 RECOVERY_CONFIRMED_MARKER_NAME="RECOVERY_CONFIRMED"
 
-NEW_TIMER_UNITS=(
-    case-weather-cache.timer
+START_TIMER_UNITS=(
+    case-weather-cache-bootstrap.timer
     case-weather-risk-precompute.timer
     case-weather-usage-cleanup.timer
 )
+DEFERRED_TIMER_UNITS=(
+    case-weather-cache.timer
+)
+MANAGED_TIMER_UNITS=("${START_TIMER_UNITS[@]}" "${DEFERRED_TIMER_UNITS[@]}")
 LEGACY_UNITS=(
     case-weather-dispatch.timer
 )
 SERVICE_UNITS=(
+    case-weather-cache-bootstrap.service
     case-weather-cache.service
     case-weather-dispatch.service
     case-weather-risk-precompute.service
     case-weather-usage-cleanup.service
     case-weather.service
 )
-INSTALL_UNITS=("${NEW_TIMER_UNITS[@]}" "${SERVICE_UNITS[@]}")
+INSTALL_UNITS=("${MANAGED_TIMER_UNITS[@]}" "${SERVICE_UNITS[@]}")
 ALL_UNITS=("${INSTALL_UNITS[@]}" "${LEGACY_UNITS[@]}")
 
 COMMITTED=0
@@ -311,6 +316,23 @@ apply_staged_environment() {
     chmod 0600 "$ENV_FILE"
 }
 
+arm_qweather_network_gate() {
+    local now_epoch not_before_epoch
+    now_epoch="$(date +%s)"
+    if [[ ! "$now_epoch" =~ ^[0-9]+$ ]]; then
+        fail "服务器时间无法转换为 Unix 秒"
+        return 1
+    fi
+    not_before_epoch=$((now_epoch + 1800))
+    printf '%s' "$not_before_epoch" \
+        | "$VENV_DIR/bin/python" "$APP_DIR/scripts/update_env_value.py" \
+            --file "$ENV_FILE" \
+            --key QWEATHER_NETWORK_NOT_BEFORE_EPOCH \
+            --mode always
+    chmod 0600 "$ENV_FILE"
+    log "已设置 QWeather 部署保护窗口，从当前切换点起 30 分钟内禁止出网"
+}
+
 switch_current_link() {
     local target="$1"
     local next_link="$CURRENT_LINK.next.$$"
@@ -390,13 +412,67 @@ start_new_release() {
     wait_for_health "$HEALTH_URL"
 }
 
+prepare_release_timer_states() {
+    local unit unit_file_state
+    # 在公网切换前固定开机状态，失败时仍可由事务恢复旧配置。
+    for unit in "${DEFERRED_TIMER_UNITS[@]}"; do
+        "$SYSTEMCTL_BIN" disable "$unit" >/dev/null 2>&1 || true
+        unit_exists "$unit" || {
+            fail "延迟 timer 未正确安装: $unit"
+            return 1
+        }
+        unit_file_state="$($SYSTEMCTL_BIN is-enabled "$unit" 2>/dev/null || true)"
+        if [ "$unit_file_state" != disabled ]; then
+            fail "延迟 timer 状态应为 disabled，实际为 ${unit_file_state:-unknown}: $unit"
+            return 1
+        fi
+        if "$SYSTEMCTL_BIN" is-active --quiet "$unit"; then
+            fail "延迟 timer 在首轮等待前已运行: $unit"
+            return 1
+        fi
+    done
+    for unit in "${START_TIMER_UNITS[@]}"; do
+        "$SYSTEMCTL_BIN" enable "$unit"
+        unit_file_state="$($SYSTEMCTL_BIN is-enabled "$unit" 2>/dev/null || true)"
+        if [ "$unit_file_state" != enabled ]; then
+            fail "开机 timer 状态应为 enabled，实际为 ${unit_file_state:-unknown}: $unit"
+            return 1
+        fi
+        if "$SYSTEMCTL_BIN" is-active --quiet "$unit"; then
+            fail "开机 timer 在正式提交前不应运行: $unit"
+            return 1
+        fi
+    done
+}
+
 start_release_timers() {
     local unit
-    for unit in "${NEW_TIMER_UNITS[@]}"; do
-        "$SYSTEMCTL_BIN" enable "$unit"
+    for unit in "${START_TIMER_UNITS[@]}"; do
         "$SYSTEMCTL_BIN" restart "$unit"
         "$SYSTEMCTL_BIN" is-active --quiet "$unit"
     done
+}
+
+captured_unit_active() {
+    local wanted="$1"
+    awk -F '\t' -v wanted="$wanted" '
+        $1 == wanted && $2 == "1" && $4 == "active" { found = 1 }
+        END { exit(found ? 0 : 1) }
+    ' "$STATE_FILE"
+}
+
+captured_unit_running() {
+    local wanted="$1"
+    awk -F '\t' -v wanted="$wanted" '
+        $1 == wanted && $2 == "1" && ($4 == "active" || $4 == "activating" || $4 == "reloading") { found = 1 }
+        END { exit(found ? 0 : 1) }
+    ' "$STATE_FILE"
+}
+
+restore_start_unit() {
+    local unit="$1"
+    "$SYSTEMCTL_BIN" start "$unit" || return 1
+    "$SYSTEMCTL_BIN" is-active --quiet "$unit" || return 1
 }
 
 restore_database() {
@@ -461,6 +537,10 @@ restore_unit_files() {
             cp -a "$TRANSACTION_DIR/units/$unit" "$UNIT_DIR/$unit.restore.$$" || return 1
             mv -f "$UNIT_DIR/$unit.restore.$$" "$UNIT_DIR/$unit" || return 1
         elif [ -e "$UNIT_DIR/$unit" ] || [ -L "$UNIT_DIR/$unit" ]; then
+            # 首次发布失败时先清掉新 timer 的 enable 链接，避免留下悬空开机入口。
+            if [[ "$unit" == *.timer ]]; then
+                "$SYSTEMCTL_BIN" disable "$unit" >/dev/null 2>&1 || return 1
+            fi
             mv "$UNIT_DIR/$unit" "$removed_dir/$unit" || return 1
         fi
     done < "$STATE_FILE"
@@ -468,30 +548,41 @@ restore_unit_files() {
 }
 
 restore_unit_states() {
-    local unit exists enabled active state_line
+    local unit exists enabled active
     while IFS=$'\t' read -r unit exists enabled active; do
         [ "$exists" = 1 ] || continue
         case "$enabled" in
-            enabled|enabled-runtime) "$SYSTEMCTL_BIN" enable "$unit" >/dev/null || return 1 ;;
+            enabled) "$SYSTEMCTL_BIN" enable "$unit" >/dev/null || return 1 ;;
+            enabled-runtime) "$SYSTEMCTL_BIN" enable --runtime "$unit" >/dev/null || return 1 ;;
             disabled) "$SYSTEMCTL_BIN" disable "$unit" >/dev/null || return 1 ;;
         esac
     done < "$STATE_FILE"
-    for unit in case-weather.service \
-        case-weather-cache.service \
-        case-weather-dispatch.service \
-        case-weather-risk-precompute.service \
-        case-weather-usage-cleanup.service \
-        "${NEW_TIMER_UNITS[@]}" \
+
+    # 先恢复公网应用，再恢复 timer。被中断的 oneshot writer 不直接重跑，避免重复写入或额外天气调用。
+    if captured_unit_running case-weather.service; then
+        restore_start_unit case-weather.service || return 1
+    fi
+
+    for unit in case-weather-risk-precompute.timer \
+        case-weather-usage-cleanup.timer \
         "${LEGACY_UNITS[@]}"; do
-        state_line="$(awk -F '\t' -v wanted="$unit" '$1 == wanted { print; exit }' "$STATE_FILE")"
-        [ -n "$state_line" ] || continue
-        IFS=$'\t' read -r _unit exists _enabled active <<< "$state_line"
-        [ "$exists" = 1 ] || continue
-        if [ "$active" = active ]; then
-            "$SYSTEMCTL_BIN" start "$unit" || return 1
-            "$SYSTEMCTL_BIN" is-active --quiet "$unit" || return 1
+        if captured_unit_active "$unit"; then
+            restore_start_unit "$unit" || return 1
         fi
     done
+
+    # 天气调度只恢复一个阶段，防止 bootstrap 与 recurring 双重触发。
+    if captured_unit_active case-weather-cache.timer; then
+        restore_start_unit case-weather-cache.timer || return 1
+    elif captured_unit_active case-weather-cache-bootstrap.timer; then
+        restore_start_unit case-weather-cache-bootstrap.timer || return 1
+    elif captured_unit_running case-weather-cache-bootstrap.service \
+        || captured_unit_running case-weather-cache.service; then
+        if unit_exists case-weather-cache-bootstrap.timer; then
+            restore_start_unit case-weather-cache-bootstrap.timer || return 1
+            log "检测到被中断的天气同步，已改为 30 分钟后安全重试"
+        fi
+    fi
 }
 
 rollback_release() {
@@ -596,6 +687,7 @@ fi
 require_file "$ENV_FILE"
 require_file "$STAGED_ENV_FILE"
 require_file "$APP_DIR/scripts/server_migrate.sh"
+require_file "$APP_DIR/scripts/update_env_value.py"
 require_executable "$VENV_DIR/bin/python"
 require_executable "$VENV_DIR/bin/gunicorn"
 command -v "$SYSTEMCTL_BIN" >/dev/null 2>&1 || require_executable "$SYSTEMCTL_BIN"
@@ -642,6 +734,8 @@ start_candidate_release
 LINK_MUTATED=1
 switch_current_link "$NEW_RELEASE"
 install_new_units
+prepare_release_timer_states
+arm_qweather_network_gate
 start_new_release
 
 mkdir -p "$STATE_DIR/deployments"
