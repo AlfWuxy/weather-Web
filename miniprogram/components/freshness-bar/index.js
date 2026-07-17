@@ -4,6 +4,7 @@ Component({
     stale: { type: Boolean, value: false },
     source: { type: String, value: '' },
     refreshDeferred: { type: Boolean, value: false },
+    refreshStarted: { type: Boolean, value: false },
   },
   data: {
     isOnline: true,

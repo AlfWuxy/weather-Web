@@ -11,7 +11,7 @@
 .page-copy {
   margin-top: 10rpx;
   color: #66736c;
-  font-size: 26rpx;
+  font-size: 14px;
   line-height: 1.65;
 }
 
@@ -31,6 +31,19 @@
   text-align: center;
 }
 
+.error-state {
+  color: #8e413a;
+}
+
+.retry-button {
+  width: 220rpx;
+  margin-top: 18rpx;
+  border: 1rpx solid #d7aaa5;
+  background: #ffffff;
+  color: #8e413a;
+  font-size: 14px;
+}
+
 .account-card {
   display: flex;
   align-items: center;
@@ -40,7 +53,7 @@
   width: 86rpx;
   height: 86rpx;
   border-radius: 26rpx;
-  background: #168a4a;
+  background: #167a43;
   color: #ffffff;
   font-size: 36rpx;
   font-weight: 700;
@@ -54,14 +67,14 @@
 
 .account-name {
   color: #20372a;
-  font-size: 32rpx;
+  font-size: 16px;
   font-weight: 700;
 }
 
 .account-status {
   margin-top: 7rpx;
   color: #68766e;
-  font-size: 24rpx;
+  font-size: 14px;
 }
 
 .menu-card {
@@ -84,10 +97,15 @@
   border: 0;
 }
 
+.agreement-row {
+  border-top: 1rpx solid #e2e9e5;
+  border-radius: 0;
+}
+
 .menu-title,
 .summary-title {
   color: #2a4034;
-  font-size: 29rpx;
+  font-size: 14.5px;
   font-weight: 700;
 }
 
@@ -96,13 +114,15 @@
 .danger-copy {
   margin-top: 7rpx;
   color: #68766e;
-  font-size: 24rpx;
+  font-size: 14px;
   line-height: 1.65;
 }
 
-.chevron {
-  color: #86938c;
-  font-size: 40rpx;
+.chevron-icon {
+  flex: 0 0 auto;
+  width: 40rpx;
+  height: 40rpx;
+  opacity: 0.62;
 }
 
 .privacy-summary {
@@ -118,7 +138,7 @@
   border-radius: 18rpx;
   background: #ffffff;
   color: #315340;
-  font-size: 29rpx;
+  font-size: 14.5px;
   line-height: 90rpx;
 }
 
@@ -129,7 +149,7 @@
 
 .danger-title {
   color: #8e2f27;
-  font-size: 29rpx;
+  font-size: 14.5px;
   font-weight: 700;
 }
 
@@ -139,17 +159,17 @@
   border-radius: 14rpx;
   background: #fff5f3;
   color: #8e413a;
-  font-size: 23rpx;
+  font-size: 14px;
   line-height: 1.55;
 }
 
 .delete-button {
-  min-height: 82rpx;
+  min-height: 88rpx;
   margin-top: 22rpx;
   border: 1rpx solid #d7aaa5;
   border-radius: 16rpx;
   background: #ffffff;
   color: #9b2c24;
-  font-size: 27rpx;
-  line-height: 82rpx;
+  font-size: 14px;
+  line-height: 88rpx;
 }

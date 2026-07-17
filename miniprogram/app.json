@@ -16,6 +16,7 @@
     "pages/gis/index",
     "pages/transparency/index",
     "pages/privacy/index",
+    "pages/agreement/index",
     "pages/about/index",
     "pages/bind-token/index",
     "pages/elder-edit/index",
@@ -31,20 +32,41 @@
   },
   "tabBar": {
     "color": "#6f6259",
-    "selectedColor": "#d85d19",
+    "selectedColor": "#b64815",
     "backgroundColor": "#fffdf9",
     "borderStyle": "black",
     "list": [
-      { "pagePath": "pages/home/index", "text": "首页" },
-      { "pagePath": "pages/forecast/index", "text": "预报" },
-      { "pagePath": "pages/elders/index", "text": "照护" },
-      { "pagePath": "pages/community/index", "text": "社区" },
-      { "pagePath": "pages/settings/index", "text": "我的" }
+      {
+        "pagePath": "pages/home/index",
+        "text": "首页",
+        "iconPath": "assets/icons/tab-home.png",
+        "selectedIconPath": "assets/icons/tab-home.png"
+      },
+      {
+        "pagePath": "pages/forecast/index",
+        "text": "预报",
+        "iconPath": "assets/icons/tab-forecast.png",
+        "selectedIconPath": "assets/icons/tab-forecast.png"
+      },
+      {
+        "pagePath": "pages/elders/index",
+        "text": "照护",
+        "iconPath": "assets/icons/tab-care.png",
+        "selectedIconPath": "assets/icons/tab-care-selected.png"
+      },
+      {
+        "pagePath": "pages/community/index",
+        "text": "社区",
+        "iconPath": "assets/icons/tab-community.png",
+        "selectedIconPath": "assets/icons/tab-community-selected.png"
+      },
+      {
+        "pagePath": "pages/settings/index",
+        "text": "我的",
+        "iconPath": "assets/icons/tab-settings.png",
+        "selectedIconPath": "assets/icons/tab-settings.png"
+      }
     ]
-  },
-  "usingComponents": {
-    "status-card": "/components/status-card/index",
-    "freshness-bar": "/components/freshness-bar/index"
   },
   "sitemapLocation": "sitemap.json",
   "__usePrivacyCheck__": true,

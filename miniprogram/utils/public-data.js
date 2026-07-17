@@ -16,7 +16,7 @@ const RESOURCE_CONFIG = {
   community: {
     key: CACHE_KEYS.community,
     path: '/mp/api/v1/public/community',
-    staleRetryMs: 0,
+    staleRetryMs: 60 * 1000,
   },
 };
 
@@ -65,18 +65,26 @@ function loaderFor(resource) {
 
 function resultFrom(result) {
   const inspection = result.inspection || {};
-  return {
+  const mapped = {
     data: result.data,
     meta: {
       source: result.source,
       stale: result.source === 'stale-cache' || Boolean(inspection.valid && !inspection.fresh),
       ageMs: inspection.ageMs,
       storedAt: inspection.storedAt,
+      absoluteExpiresAt: inspection.absoluteExpiresAt,
+      effectiveExpiresAt: inspection.effectiveExpiresAt,
+      retryAfter: inspection.retryAfter,
       ttlMs: PUBLIC_CACHE_TTL_MS,
       refreshDeferred: Boolean(result.refreshDeferred),
+      refreshStarted: Boolean(result.refreshStarted),
       networkError: result.error && (result.error.errMsg || result.error.message) || '',
     },
   };
+  if (result.revalidated && typeof result.revalidated.then === 'function') {
+    mapped.revalidated = result.revalidated.then(resultFrom);
+  }
+  return mapped;
 }
 
 function getCachedPublic(resource, options) {
@@ -86,7 +94,20 @@ function getCachedPublic(resource, options) {
   } catch (error) {
     return Promise.reject(error);
   }
-  return loader(options).then(resultFrom);
+  return loader(options).then((result) => {
+    const mapped = resultFrom(result);
+    if (mapped.revalidated && options && typeof options.onRevalidated === 'function') {
+      mapped.revalidated.then(
+        (freshResult) => options.onRevalidated(freshResult),
+        (error) => {
+          if (typeof options.onRevalidationError === 'function') options.onRevalidationError(error);
+        }
+      ).catch(() => {
+        // 页面回调异常不影响缓存状态，也不产生未处理的 Promise 拒绝。
+      });
+    }
+    return mapped;
+  });
 }
 
 function getBootstrap(options) {

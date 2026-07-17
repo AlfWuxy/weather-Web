@@ -21,10 +21,19 @@
     <view class="risk-badge safe" wx:else>日常留意</view>
   </view>
 
-  <button class="add-button" bindtap="goCreate">＋ 添加家中老人</button>
+  <button class="add-button" bindtap="goCreate">
+    <image class="add-button-icon" src="/assets/icons/add-white.png" mode="aspectFit" aria-hidden="true" />
+    <text>添加家中老人</text>
+  </button>
 
-  <view wx:if="{{loading}}" class="state-box">正在加载照护资料…</view>
-  <view wx:elif="{{loadError}}" class="state-box error-state">
+  <view wx:if="{{loading && elders.length}}" class="inline-refresh" role="status" aria-role="status" aria-live="polite">正在刷新照护资料…</view>
+  <view wx:if="{{loadError && elders.length}}" class="inline-warning" role="status" aria-role="status" aria-live="polite">
+    <view>{{loadError}}</view>
+    <button class="retry-button inline-retry" bindtap="loadCareHome">重新刷新</button>
+  </view>
+
+  <view wx:if="{{loading && !elders.length}}" class="state-box">正在加载照护资料…</view>
+  <view wx:elif="{{loadError && !elders.length}}" class="state-box error-state">
     <view>{{loadError}}</view>
     <button class="retry-button" bindtap="loadCareHome">重新加载</button>
   </view>

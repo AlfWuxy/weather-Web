@@ -6,13 +6,13 @@
     <view class="two-column">
       <view class="column-field">
         <view class="field-label">日期</view>
-        <picker mode="date" value="{{entryDate}}" end="{{todayDate}}" bindchange="onDateChange">
+        <picker mode="date" value="{{entryDate}}" end="{{todayDate}}" bindchange="onDateChange" aria-label="健康日记日期">
           <view class="picker-field">{{entryDate}}</view>
         </picker>
       </view>
       <view class="column-field">
         <view class="field-label">不适程度</view>
-        <picker range="{{severityOptions}}" value="{{severityIndex}}" bindchange="onSeverityChange">
+        <picker range="{{severityOptions}}" value="{{severityIndex}}" bindchange="onSeverityChange" aria-label="今天的不适程度">
           <view class="picker-field severity-{{severityIndex}}">{{severity}}</view>
         </picker>
       </view>
@@ -20,12 +20,12 @@
 
     <view class="field-group">
       <view class="field-label">今天哪里不舒服？</view>
-      <textarea class="text-area" maxlength="200" value="{{symptoms}}" bindinput="onSymptoms" placeholder="例如：下午有点头晕，休息后缓解" />
+      <textarea class="text-area" maxlength="200" value="{{symptoms}}" bindinput="onSymptoms" placeholder="例如：下午有点头晕，休息后缓解" aria-label="今天哪里不舒服" />
     </view>
 
     <view class="field-group">
       <view class="field-label">补充备注</view>
-      <textarea class="text-area short" maxlength="500" value="{{notes}}" bindinput="onNotes" placeholder="例如：今天喝水较少，已告知家人" />
+      <textarea class="text-area short" maxlength="500" value="{{notes}}" bindinput="onNotes" placeholder="例如：今天喝水较少，已告知家人" aria-label="健康日记补充备注" />
     </view>
 
     <button class="save-button" loading="{{busy}}" disabled="{{busy}}" bindtap="saveEntry">保存今天的记录</button>

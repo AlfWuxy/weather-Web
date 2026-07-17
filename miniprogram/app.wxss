@@ -3,16 +3,40 @@ page {
   background: #fff8f0;
   color: #2f2925;
   font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
-  font-size: 32rpx;
+  font-size: 16px;
 }
 
-view, text, button, navigator, input, scroll-view, canvas {
+@keyframes rise-in {
+  from { opacity: 0; transform: translateY(8rpx); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+view, text, button, navigator, picker, input, textarea, label, scroll-view, canvas {
   box-sizing: border-box;
 }
 
+button,
+navigator,
+picker,
+input,
+textarea,
+label {
+  min-height: 88rpx;
+}
+
+button,
+input,
+textarea {
+  font-size: 16px;
+}
+
 button {
-  font-size: 32rpx;
   line-height: 1.4;
+}
+
+button,
+navigator {
+  transition: opacity 120ms ease-out, transform 120ms ease-out;
 }
 
 button::after {
@@ -26,11 +50,12 @@ button::after {
 .hero {
   overflow: hidden;
   position: relative;
-  padding: 36rpx;
+  padding: 30rpx;
   border-radius: 32rpx;
   color: #fff;
-  background: linear-gradient(145deg, #f07a2a 0%, #ce4c14 100%);
+  background: linear-gradient(145deg, #9f3a12 0%, #b64815 100%);
   box-shadow: 0 18rpx 44rpx rgba(171, 69, 17, 0.2);
+  animation: rise-in 220ms ease-out both;
 }
 
 .hero::after {
@@ -51,22 +76,25 @@ button::after {
   border-radius: 999rpx;
   color: #8a350f;
   background: #fff2df;
-  font-size: 25rpx;
+  font-size: 14px;
   font-weight: 700;
 }
 
 .hero-title {
-  margin-top: 22rpx;
-  font-size: 50rpx;
+  margin-top: 18rpx;
+  font-size: 46rpx;
   line-height: 1.18;
   font-weight: 800;
 }
 
 .hero-subtitle {
-  margin-top: 16rpx;
-  color: rgba(255, 255, 255, 0.9);
-  font-size: 29rpx;
-  line-height: 1.65;
+  margin-top: 12rpx;
+  padding: 12rpx 16rpx;
+  border-radius: 16rpx;
+  color: #fff;
+  background: #6f290d;
+  font-size: 15px;
+  line-height: 1.58;
 }
 
 .section-title {
@@ -79,7 +107,7 @@ button::after {
 .section-subtitle {
   margin: -8rpx 4rpx 18rpx;
   color: #786d65;
-  font-size: 27rpx;
+  font-size: 14px;
   line-height: 1.6;
 }
 
@@ -90,6 +118,10 @@ button::after {
   border-radius: 26rpx;
   background: #fffdf9;
   box-shadow: 0 10rpx 28rpx rgba(87, 54, 31, 0.07);
+}
+
+.motion-enter {
+  animation: rise-in 200ms ease-out both;
 }
 
 .card-title {
@@ -103,7 +135,7 @@ button::after {
 }
 
 .small {
-  font-size: 25rpx;
+  font-size: 14px;
   line-height: 1.55;
 }
 
@@ -141,7 +173,7 @@ button::after {
 
 .metric-label {
   color: #7a6558;
-  font-size: 25rpx;
+  font-size: 14px;
 }
 
 .metric-value {
@@ -159,7 +191,7 @@ button::after {
   border-radius: 999rpx;
   color: #6e5443;
   background: #f8eadf;
-  font-size: 25rpx;
+  font-size: 14px;
   font-weight: 650;
 }
 
@@ -191,15 +223,16 @@ button::after {
   padding: 20rpx 26rpx;
   border-radius: 20rpx;
   font-weight: 750;
+  transition: opacity 150ms ease, transform 150ms ease;
 }
 
 .primary-button {
   color: #fff;
-  background: #d85d19;
+  background: #b64815;
 }
 
 .secondary-button {
-  color: #a34216;
+  color: #8d3511;
   background: #fff1df;
   border: 1rpx solid #efc7a9;
 }
@@ -214,6 +247,7 @@ button::after {
   border-radius: 24rpx;
   color: #332a25;
   background: #fffdf9;
+  transition: opacity 150ms ease, transform 150ms ease;
 }
 
 .link-icon {
@@ -224,9 +258,32 @@ button::after {
   width: 72rpx;
   height: 72rpx;
   border-radius: 20rpx;
-  color: #a34216;
   background: #fff0dc;
-  font-size: 36rpx;
+}
+
+.link-icon-image,
+.inline-icon,
+.button-icon {
+  width: 38rpx;
+  height: 38rpx;
+  opacity: 0.72;
+}
+
+.button-icon {
+  width: 34rpx;
+  height: 34rpx;
+  margin-right: 12rpx;
+}
+
+.button-pressed {
+  opacity: 0.88;
+  transform: scale(0.99);
+}
+
+.menu-row.button-pressed {
+  opacity: 1;
+  transform: none;
+  background: #f3f8f5;
 }
 
 .divider {
@@ -241,10 +298,58 @@ button::after {
   border-radius: 18rpx;
   color: #654d3e;
   background: #fff0df;
-  font-size: 27rpx;
+  font-size: 14px;
   line-height: 1.65;
 }
 
 .empty-space {
   height: 18rpx;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hero,
+  .motion-enter {
+    animation: none;
+  }
+
+  button,
+  navigator,
+  .primary-button,
+  .secondary-button,
+  .link-card,
+  .hero-share,
+  .quick-card {
+    transition: none;
+  }
+
+  .button-pressed {
+    transform: none;
+  }
+}
+
+@media screen and (max-width: 340px) {
+  button,
+  navigator,
+  picker,
+  input,
+  textarea,
+  label,
+  switch,
+  checkbox,
+  radio,
+  checkbox-group,
+  radio-group {
+    min-height: 44px !important;
+  }
+
+  switch,
+  checkbox,
+  radio,
+  checkbox-group,
+  radio-group {
+    min-width: 44px !important;
+  }
+
+  .grid-two { grid-template-columns: 1fr; }
+  .row-between { flex-wrap: wrap; }
 }

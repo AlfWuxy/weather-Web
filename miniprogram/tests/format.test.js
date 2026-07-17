@@ -54,6 +54,42 @@ test('预警列表为空时区分暂无预警与来源不可用', () => {
   assert.equal(unknownSource.warningsSourceAvailable, false);
 });
 
+test('预警保留发布单位、发布时间和生效时间', () => {
+  const result = normalizeBootstrap({
+    warnings: [{
+      title: '高温黄色预警',
+      start_time: '2026-07-17T08:30:00+08:00',
+      raw: {
+        sender: '都昌县气象台',
+        pubTime: '2026-07-17T08:00:00+08:00',
+        effectiveTime: '2026-07-17T08:30:00+08:00',
+        expireTime: '2026-07-17T20:00:00+08:00',
+      },
+    }],
+  });
+  const warning = result.warnings[0];
+  assert.equal(warning.issuer, '都昌县气象台');
+  assert.equal(warning.issuedAt, '2026-07-17T08:00:00+08:00');
+  assert.equal(warning.effectiveAt, '2026-07-17T08:30:00+08:00');
+  assert.equal(warning.expiresAt, '2026-07-17T20:00:00+08:00');
+  assert.match(warning.issuedText, /08:00/);
+  assert.match(warning.effectiveText, /08:30/);
+
+  const objectSender = normalizeBootstrap({
+    warnings: [{ raw: { sender: { name: '九江市气象台' } } }],
+  });
+  assert.equal(objectSender.warnings[0].issuer, '九江市气象台');
+
+  const publishedOnly = normalizeBootstrap({
+    warnings: [{
+      start_time: '2026-07-17T08:00:00+08:00',
+      raw: { pubTime: '2026-07-17T08:00:00+08:00' },
+    }],
+  });
+  assert.equal(publishedOnly.warnings[0].issuedText, '07月17日 08:00');
+  assert.equal(publishedOnly.warnings[0].effectiveText, '未提供');
+});
+
 test('0 到 1 脆弱性指数转换为 0 到 100 显示', () => {
   const result = normalizeCommunity({
     communities: [{ name: '测试社区', vulnerability_index: 0.43 }],

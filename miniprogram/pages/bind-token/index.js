@@ -8,6 +8,7 @@ const {
   tokenApi,
 } = require('../elders/care-session');
 const { PRIVACY_CONSENT_VERSION } = require('../../config');
+const { clearAcquisitionContext, readAcquisitionSource } = require('../../utils/share');
 
 function requiresPrivacyRefresh(error) {
   const statusCode = Number(error && (error.statusCode || error.status_code || error.status));
@@ -32,6 +33,7 @@ Page({
   },
 
   async onLoad() {
+    this._unloaded = false;
     if (getToken()) {
       wx.switchTab({ url: '/pages/elders/index' });
       return;
@@ -39,9 +41,14 @@ Page({
     await this.loadRequiredPrivacyVersion();
   },
 
+  onUnload() {
+    this._unloaded = true;
+  },
+
   async loadRequiredPrivacyVersion(options) {
     try {
       const snapshot = await getSnapshot(options);
+      if (this._unloaded) return this.data.requiredPrivacyVersion || PRIVACY_CONSENT_VERSION;
       const version = extractRequiredPrivacyVersion(snapshot, this.data.requiredPrivacyVersion || PRIVACY_CONSENT_VERSION);
       if (version && version !== this.data.requiredPrivacyVersion) {
         this.setData({ requiredPrivacyVersion: version });
@@ -55,13 +62,19 @@ Page({
 
   onConsentChange(event) {
     const values = event.detail.value || [];
-    this.setData({ privacyAgreed: values.includes('agreed') });
+    const privacyAgreed = values.includes('agreed');
+    this.setData({
+      privacyAgreed,
+      loginHint: privacyAgreed && /隐私说明和用户协议/.test(this.data.loginHint) ? '' : this.data.loginHint,
+    });
   },
 
   openPrivacy() {
     if (typeof wx.openPrivacyContract === 'function') {
       wx.openPrivacyContract({
-        fail: () => this.showLocalPrivacy(),
+        fail: () => {
+          if (!this._unloaded) this.showLocalPrivacy();
+        },
       });
       return;
     }
@@ -69,17 +82,17 @@ Page({
   },
 
   showLocalPrivacy() {
-    wx.showModal({
-      title: '隐私说明',
-      content: '登录后仅保存完成天气提醒和照护功能所需的账号标识、老人资料与主动填写的健康记录。健康信息不会用于医疗诊断。你可以在“账号与隐私”中退出并清理本机登录状态。',
-      showCancel: false,
-      confirmText: '我知道了',
-    });
+    wx.navigateTo({ url: '/pages/privacy/index' });
+  },
+
+  openAgreement() {
+    wx.navigateTo({ url: '/pages/agreement/index' });
   },
 
   requireConsent() {
     if (this.data.privacyAgreed) return true;
-    wx.showToast({ title: '请先阅读并同意隐私说明', icon: 'none' });
+    this.setData({ loginHint: '请先阅读并勾选同意《隐私说明》和《用户协议》，再继续登录。' });
+    wx.showToast({ title: '请先同意协议', icon: 'none' });
     return false;
   },
 
@@ -93,15 +106,20 @@ Page({
       );
       if (!consentVersion) throw new Error('privacy_consent_version_missing');
       const loginResult = await wxLogin();
+      if (this._unloaded) return;
       if (!loginResult.code) throw new Error('missing_wechat_code');
+      const loginPayload = {
+        code: loginResult.code,
+        privacy_consent_version: consentVersion,
+      };
+      const acquisitionSource = readAcquisitionSource();
+      if (acquisitionSource) loginPayload.acquisition_source = acquisitionSource;
       const data = await publicApi({
         method: 'POST',
         path: '/mp/api/v1/auth/wechat',
-        data: {
-          code: loginResult.code,
-          privacy_consent_version: consentVersion,
-        },
+        data: loginPayload,
       });
+      if (this._unloaded) return;
       const token = extractAuthToken(data);
       if (!token) throw new Error('missing_session_token');
       saveToken(token, {
@@ -110,18 +128,23 @@ Page({
         expires_at: data.expires_at || '',
         expires_in: data.expires_in || null,
       });
+      // 登录成功后消费来源标记，避免共享设备上的下一位用户继承归因。
+      clearAcquisitionContext();
       wx.showToast({ title: '登录成功', icon: 'success' });
       wx.switchTab({ url: '/pages/elders/index' });
     } catch (error) {
+      if (this._unloaded) return;
       if (requiresPrivacyRefresh(error)) {
         let requiredPrivacyVersion = extractRequiredPrivacyVersion(
           error && error.data,
           this.data.requiredPrivacyVersion || PRIVACY_CONSENT_VERSION
         );
         if (!requiredPrivacyVersion || requiredPrivacyVersion === this.data.requiredPrivacyVersion) {
-          const refreshedVersion = await this.loadRequiredPrivacyVersion({ force: true });
+          const refreshedVersion = await this.loadRequiredPrivacyVersion({ revalidate: true });
+          if (this._unloaded) return;
           requiredPrivacyVersion = refreshedVersion || requiredPrivacyVersion;
         }
+        if (this._unloaded) return;
         this.setData({
           privacyAgreed: false,
           requiredPrivacyVersion,
@@ -132,17 +155,20 @@ Page({
           content: '请重新阅读最新隐私说明，并在返回后主动勾选同意。系统不会替你自动同意。',
           showCancel: false,
           confirmText: '去阅读',
-          success: () => this.openPrivacy(),
+          success: () => {
+            if (!this._unloaded) this.openPrivacy();
+          },
         });
         return;
       }
+      if (this._unloaded) return;
       this.setData({
         showTokenFallback: true,
-        loginHint: '微信登录暂未可用，可以先使用网页端生成的旧版 Token 绑定。',
+        loginHint: '微信登录暂未可用，可以先使用网页端生成的备用登录码。',
       });
       wx.showToast({ title: '微信登录暂不可用', icon: 'none' });
     } finally {
-      this.setData({ busy: false });
+      if (!this._unloaded) this.setData({ busy: false });
     }
   },
 
@@ -166,24 +192,27 @@ Page({
     if (this.data.busy || !this.requireConsent()) return;
     const token = String(this.data.tokenInput || '').trim();
     if (!token) {
-      wx.showToast({ title: '请粘贴完整 Token', icon: 'none' });
+      wx.showToast({ title: '请粘贴完整登录码', icon: 'none' });
       return;
     }
     this.setData({ busy: true });
     try {
       await tokenApi(token, { method: 'GET', path: '/mp/api/v1/me' });
+      if (this._unloaded) return;
       const consentVersion = extractRequiredPrivacyVersion(
         { required_privacy_consent_version: this.data.requiredPrivacyVersion },
         PRIVACY_CONSENT_VERSION
       );
       saveToken(token, { login_method: 'legacy_token', privacy_consent_version: consentVersion });
+      clearAcquisitionContext();
       this.setData({ tokenInput: '' });
       wx.showToast({ title: '绑定成功', icon: 'success' });
       wx.switchTab({ url: '/pages/elders/index' });
     } catch (error) {
-      wx.showToast({ title: '绑定失败，请检查 Token', icon: 'none' });
+      if (this._unloaded) return;
+      wx.showToast({ title: '验证失败，请检查登录码', icon: 'none' });
     } finally {
-      this.setData({ busy: false });
+      if (!this._unloaded) this.setData({ busy: false });
     }
   },
 });

@@ -53,17 +53,8 @@ function inspectEnvelope(envelope, now, fallbackTtlMs) {
 function createCachedResourceLoader(options) {
   const settings = options || {};
   let pending = null;
-  return function load(loadOptions) {
-    const now = settings.now();
-    const cached = inspectEnvelope(settings.read(), now, settings.ttlMs);
-    if (cached.valid && (cached.fresh || cached.retryGuarded)) {
-      return Promise.resolve({
-        data: cached.data,
-        inspection: cached,
-        source: cached.fresh ? 'cache' : 'stale-cache',
-        refreshDeferred: Boolean(loadOptions && loadOptions.force),
-      });
-    }
+
+  function refresh(cached) {
     if (pending) return pending;
     pending = Promise.resolve()
       .then(() => settings.fetch())
@@ -102,6 +93,43 @@ function createCachedResourceLoader(options) {
       (error) => { pending = null; throw error; }
     );
     return pending;
+  }
+
+  return function load(loadOptions) {
+    const now = settings.now();
+    const cached = inspectEnvelope(settings.read(), now, settings.ttlMs);
+    if (loadOptions && loadOptions.revalidate) {
+      // 只供服务端明确要求纠正版本时使用；普通刷新继续遵守 30 分钟硬缓存。
+      return refresh(cached);
+    }
+    if (cached.valid && (cached.fresh || cached.retryGuarded)) {
+      return Promise.resolve({
+        data: cached.data,
+        inspection: cached,
+        source: cached.fresh ? 'cache' : 'stale-cache',
+        refreshDeferred: Boolean(loadOptions && loadOptions.force),
+      });
+    }
+    if (cached.valid) {
+      const refreshPromise = refresh(cached);
+      if (loadOptions && loadOptions.force) {
+        // 用户主动刷新时等待本轮请求完成，让页面拿到确定的新结果。
+        return refreshPromise;
+      }
+      // 过期缓存先立即展示，后台刷新由 pending 保证同一时刻只有一个请求。
+      refreshPromise.catch(() => {
+        // 后台刷新异常不能打断已经返回的旧数据，下一次读取仍可重试。
+      });
+      return Promise.resolve({
+        data: cached.data,
+        inspection: cached,
+        source: 'stale-cache',
+        refreshStarted: true,
+        revalidated: refreshPromise,
+      });
+    }
+    if (pending) return pending;
+    return refresh(cached);
   };
 }
 

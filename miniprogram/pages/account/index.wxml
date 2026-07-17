@@ -3,11 +3,15 @@
   <view class="page-copy">管理本机登录状态，查看隐私边界，或提交账号注销申请。</view>
 
   <view wx:if="{{loading}}" class="state-box">正在加载账号信息…</view>
-  <view wx:else class="account-card">
+  <view wx:elif="{{loadError}}" class="state-box error-state" role="status" aria-role="status" aria-live="polite">
+    <view>{{loadError}}</view>
+    <button class="retry-button" bindtap="loadAccount">重新验证</button>
+  </view>
+  <view wx:elif="{{accountVerified}}" class="account-card">
     <view class="account-avatar">微</view>
     <view class="account-main">
       <view class="account-name">{{me.display_name || me.nickname || '微信用户'}}</view>
-      <view class="account-status">已登录 · 都昌县服务</view>
+      <view class="account-status">账号信息已验证 · 都昌县服务</view>
     </view>
   </view>
 
@@ -17,7 +21,14 @@
         <view class="menu-title">隐私说明</view>
         <view class="menu-copy">查看收集范围、使用目的和账号权利</view>
       </view>
-      <view class="chevron">›</view>
+      <image class="chevron-icon" src="/assets/icons/chevron-right.png" mode="aspectFit" aria-hidden="true" />
+    </button>
+    <button class="menu-row agreement-row" bindtap="openAgreement">
+      <view>
+        <view class="menu-title">用户协议</view>
+        <view class="menu-copy">查看服务范围、使用规则和责任边界</view>
+      </view>
+      <image class="chevron-icon" src="/assets/icons/chevron-right.png" mode="aspectFit" aria-hidden="true" />
     </button>
     <view class="privacy-summary">
       <view class="summary-title">健康信息使用边界</view>
@@ -31,6 +42,7 @@
     <view class="danger-title">注销账号</view>
     <view class="danger-copy">提交前会进行两次确认。注销后的数据处理范围和进度以服务端返回说明为准。</view>
     <view wx:if="{{!canDeleteAccount}}" class="legacy-note">当前为旧版 Token 绑定。请先退出，再使用微信快捷登录后提交注销申请。</view>
-    <button class="delete-button" loading="{{busy}}" disabled="{{busy}}" bindtap="requestAccountDeletion">申请注销账号</button>
+    <view wx:elif="{{!accountVerified}}" class="legacy-note">请先重新验证账号信息，再提交注销申请。</view>
+    <button class="delete-button" loading="{{busy}}" disabled="{{busy || !accountVerified}}" bindtap="requestAccountDeletion">申请注销账号</button>
   </view>
 </view>

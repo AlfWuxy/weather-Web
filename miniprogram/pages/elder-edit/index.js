@@ -21,10 +21,17 @@ Page({
 
   async onLoad(options) {
     if (!requireToken()) return;
+    this._unloaded = false;
     const pairId = Number(options.pair_id || 0) || null;
     const mode = options.mode === 'create' || !pairId ? 'create' : 'edit';
     this.setData({ mode, pairId });
     if (mode === 'edit') await this.loadElder();
+  },
+
+  onUnload() {
+    this._unloaded = true;
+    if (this._returnTimer) clearTimeout(this._returnTimer);
+    this._returnTimer = null;
   },
 
   async loadElder() {
@@ -73,16 +80,23 @@ Page({
         ? { method: 'POST', path: '/mp/api/v1/elders', data: validation.payload }
         : { method: 'PATCH', path: `/mp/api/v1/elders/${this.data.pairId}`, data: validation.payload };
       await authApi(options);
+      if (this._unloaded) return;
       wx.showToast({ title: this.data.mode === 'create' ? '已添加' : '已保存', icon: 'success' });
-      setTimeout(() => wx.navigateBack(), 300);
+      if (this._returnTimer) clearTimeout(this._returnTimer);
+      this._returnTimer = setTimeout(() => {
+        this._returnTimer = null;
+        if (!this._unloaded) wx.navigateBack();
+      }, 300);
     } catch (error) {
-      wx.showToast({ title: '保存失败，请稍后再试', icon: 'none' });
+      if (!this._unloaded) wx.showToast({ title: '保存失败，请稍后再试', icon: 'none' });
     } finally {
-      this.setData({ busy: false });
+      if (!this._unloaded) this.setData({ busy: false });
     }
   },
 
   onCancel() {
+    if (this._returnTimer) clearTimeout(this._returnTimer);
+    this._returnTimer = null;
     wx.navigateBack();
   },
 });

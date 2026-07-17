@@ -9,18 +9,18 @@
   <status-card wx:elif="{{error && !allCommunities.length}}" state="error" title="社区数据暂不可用" detail="{{error}}" action-label="重试" bind:action="retry" />
 
   <block wx:if="{{allCommunities.length}}">
-    <freshness-bar updated-text="{{freshness.updatedText}}" stale="{{freshness.stale}}" source="{{freshness.source}}" refresh-deferred="{{freshness.refreshDeferred}}" />
+    <freshness-bar updated-text="{{freshness.updatedText}}" stale="{{freshness.stale}}" source="{{freshness.source}}" refresh-deferred="{{freshness.refreshDeferred}}" refresh-started="{{freshness.refreshStarted}}" />
     <view class="grid-two community-summary">
       <view class="metric"><view class="metric-label">纳入社区</view><view class="metric-value">{{counts.all}}</view></view>
       <view class="metric"><view class="metric-label">高脆弱性社区</view><view class="metric-value">{{counts.high}}</view></view>
     </view>
 
     <scroll-view class="filters" scroll-x="true" show-scrollbar="false">
-      <view class="filter-row">
-        <button class="filter-pill {{filter === 'all' ? 'active' : ''}}" data-filter="all" bindtap="chooseFilter">全部 {{counts.all}}</button>
-        <button class="filter-pill {{filter === 'high' ? 'active' : ''}}" data-filter="high" bindtap="chooseFilter">高脆弱性 {{counts.high}}</button>
-        <button class="filter-pill {{filter === 'mid' ? 'active' : ''}}" data-filter="mid" bindtap="chooseFilter">中等脆弱性 {{counts.mid}}</button>
-        <button class="filter-pill {{filter === 'low' ? 'active' : ''}}" data-filter="low" bindtap="chooseFilter">较低脆弱性 {{counts.low}}</button>
+      <view class="filter-row" role="tablist" aria-role="tablist" aria-label="按社区脆弱性筛选">
+        <button class="filter-pill {{filter === 'all' ? 'active' : ''}}" role="tab" aria-role="tab" aria-selected="{{filter === 'all'}}" aria-pressed="{{filter === 'all'}}" aria-label="全部 {{counts.all}}，{{filter === 'all' ? '已选择' : '未选择'}}" data-filter="all" bindtap="chooseFilter"><image wx:if="{{filter === 'all'}}" src="/assets/icons/check-white.png" mode="aspectFit" aria-hidden="true" />全部 {{counts.all}}</button>
+        <button class="filter-pill {{filter === 'high' ? 'active' : ''}}" role="tab" aria-role="tab" aria-selected="{{filter === 'high'}}" aria-pressed="{{filter === 'high'}}" aria-label="高脆弱性 {{counts.high}}，{{filter === 'high' ? '已选择' : '未选择'}}" data-filter="high" bindtap="chooseFilter"><image wx:if="{{filter === 'high'}}" src="/assets/icons/check-white.png" mode="aspectFit" aria-hidden="true" />高脆弱性 {{counts.high}}</button>
+        <button class="filter-pill {{filter === 'mid' ? 'active' : ''}}" role="tab" aria-role="tab" aria-selected="{{filter === 'mid'}}" aria-pressed="{{filter === 'mid'}}" aria-label="中等脆弱性 {{counts.mid}}，{{filter === 'mid' ? '已选择' : '未选择'}}" data-filter="mid" bindtap="chooseFilter"><image wx:if="{{filter === 'mid'}}" src="/assets/icons/check-white.png" mode="aspectFit" aria-hidden="true" />中等脆弱性 {{counts.mid}}</button>
+        <button class="filter-pill {{filter === 'low' ? 'active' : ''}}" role="tab" aria-role="tab" aria-selected="{{filter === 'low'}}" aria-pressed="{{filter === 'low'}}" aria-label="较低脆弱性 {{counts.low}}，{{filter === 'low' ? '已选择' : '未选择'}}" data-filter="low" bindtap="chooseFilter"><image wx:if="{{filter === 'low'}}" src="/assets/icons/check-white.png" mode="aspectFit" aria-hidden="true" />较低脆弱性 {{counts.low}}</button>
       </view>
     </scroll-view>
 
@@ -33,7 +33,7 @@
         </view>
         <view class="community-metrics">
           <view><text class="small muted">{{item.metricLabel}}</text><text class="community-value">{{item.scoreText}}</text></view>
-          <view><text class="small muted">65+ 人口</text><text class="community-value">{{item.elderlyText}}</text></view>
+          <view><text class="small muted">65+ 人口占比</text><text class="community-value">{{item.elderlyText}}</text></view>
           <view wx:if="{{item.uncertainty !== null}}"><text class="small muted">不确定性</text><text class="community-value">{{item.uncertainty}}</text></view>
         </view>
         <view wx:if="{{item.hotspot}}" class="small muted hotspot">空间复核：{{item.hotspot}}</view>

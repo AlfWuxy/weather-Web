@@ -3,24 +3,39 @@
     <view class="hero-kicker">都昌县 · 适老天气服务</view>
     <view class="hero-title">把天气预警变成今天能做的事。</view>
     <view class="hero-subtitle">先看风险，再照着行动。老人、家属和社区都能快速打开。</view>
+    <button class="hero-share" open-type="share" data-share-source="family_share" hover-class="button-pressed" aria-label="分享宜老天气通给家人">
+      <image class="hero-share-icon" src="/assets/icons/share.png" mode="aspectFit" aria-hidden="true" />
+      <text>分享给家人</text>
+    </button>
+  </view>
+
+  <view wx:if="{{familyShareEntry}}" class="family-share-card card" role="region" aria-role="region" aria-label="家人分享提醒">
+    <view class="family-share-heading">
+      <view class="family-share-icon"><image src="/assets/icons/share.png" mode="aspectFit" aria-hidden="true" /></view>
+      <view>
+        <view class="family-share-title">家人把这份天气提醒分享给你</view>
+        <view class="family-share-copy">可以先直接看今天的天气和行动。需要一起记录照护时，再主动登录并添加家人。</view>
+      </view>
+    </view>
+    <button class="primary-button family-share-action" bindtap="startFamilyCare" hover-class="button-pressed">登录并开启家庭照护</button>
   </view>
 
   <status-card wx:if="{{loading}}" state="loading" title="正在读取最近一次天气" detail="同一份天气数据 30 分钟内只获取一次。" />
   <status-card wx:elif="{{error && !snapshot}}" state="error" title="今日天气暂不可用" detail="{{error}}" action-label="重试" bind:action="retry" />
 
   <block wx:if="{{snapshot}}">
-    <freshness-bar updated-text="{{freshness.updatedText}}" stale="{{freshness.stale}}" source="{{freshness.source}}" refresh-deferred="{{freshness.refreshDeferred}}" />
+    <freshness-bar updated-text="{{freshness.updatedText}}" stale="{{freshness.stale}}" source="{{freshness.source}}" refresh-deferred="{{freshness.refreshDeferred}}" refresh-started="{{freshness.refreshStarted}}" />
 
     <status-card wx:if="{{!snapshot.available || !snapshot.current.available}}" state="empty" title="实时天气正在更新" detail="页面不会用演示天气代替真实观测。你仍可查看通用防护和避暑资源。" />
 
-    <view class="today-card card">
+    <view class="today-card card motion-enter">
       <view class="row-between">
         <view>
           <view class="small muted">{{snapshot.location.name}} · 当前</view>
           <view class="temperature">{{snapshot.current.temperatureText}}</view>
           <view class="condition">{{snapshot.current.condition}}</view>
         </view>
-        <view class="risk-bubble risk-{{snapshot.risk.tone}}">
+        <view class="risk-bubble risk-{{snapshot.risk.tone}}" role="group" aria-role="group" aria-label="今日风险 {{snapshot.risk.label}}，分数 {{snapshot.risk.scoreText}}">
           <view class="risk-label">{{snapshot.risk.label}}</view>
           <view class="risk-score">{{snapshot.risk.scoreText}}</view>
         </view>
@@ -34,23 +49,23 @@
     </view>
 
     <view class="quick-grid">
-      <navigator class="quick-card" url="/pages/forecast/index" open-type="switchTab">
-        <view class="quick-icon">☀</view>
+      <navigator class="quick-card" url="/pages/forecast/index" open-type="switchTab" hover-class="button-pressed" aria-label="查看七天天气预报">
+        <view class="quick-icon"><image src="/assets/icons/sunny.png" mode="aspectFit" aria-hidden="true" /></view>
         <view class="strong">7 天预报</view>
         <view class="small muted">哪几天要留心</view>
       </navigator>
-      <navigator class="quick-card" url="/pages/alerts/index">
-        <view class="quick-icon">!</view>
+      <navigator class="quick-card" url="/pages/alerts/index" hover-class="button-pressed" aria-label="查看官方天气预警">
+        <view class="quick-icon"><image src="/assets/icons/warning.png" mode="aspectFit" aria-hidden="true" /></view>
         <view class="strong">官方预警</view>
         <view class="small muted">{{snapshot.warnings.length ? snapshot.warnings.length + ' 条有效信息' : '当前暂无预警'}}</view>
       </navigator>
-      <navigator class="quick-card" url="/pages/actions/index">
-        <view class="quick-icon">✓</view>
+      <navigator class="quick-card" url="/pages/actions/index" hover-class="button-pressed" aria-label="查看今日行动清单">
+        <view class="quick-icon"><image src="/assets/icons/checklist.png" mode="aspectFit" aria-hidden="true" /></view>
         <view class="strong">今日行动</view>
         <view class="small muted">照着做并打勾</view>
       </navigator>
-      <navigator class="quick-card" url="/pages/cooling/index">
-        <view class="quick-icon">⌂</view>
+      <navigator class="quick-card" url="/pages/cooling/index" hover-class="button-pressed" aria-label="查看避暑资源">
+        <view class="quick-icon"><image src="/assets/icons/place.png" mode="aspectFit" aria-hidden="true" /></view>
         <view class="strong">避暑资源</view>
         <view class="small muted">条件不足时求助</view>
       </navigator>
@@ -65,16 +80,16 @@
           <view wx:if="{{item.detail}}" class="small muted action-detail">{{item.detail}}</view>
         </view>
       </view>
-      <navigator class="primary-button" url="/pages/actions/index">打开完整行动清单</navigator>
+      <navigator class="primary-button" url="/pages/actions/index" hover-class="button-pressed">打开完整行动清单</navigator>
     </block>
     <status-card wx:else state="empty" title="个性化行动待更新" detail="天气可用后会给出与今日风险匹配的行动。当前可先查看通用防护。" />
 
     <view class="section-title">更多公开服务</view>
     <view class="grid-two">
-      <navigator class="link-card" url="/pages/gis/index"><view class="link-icon">▦</view><view><view class="strong">热暴露 GIS</view><view class="small muted">1 km 网格</view></view></navigator>
-      <navigator class="link-card" url="/pages/transparency/index"><view class="link-icon">i</view><view><view class="strong">计算透明度</view><view class="small muted">公式与边界</view></view></navigator>
-      <navigator class="link-card" url="/pages/about/index"><view class="link-icon">心</view><view><view class="strong">为什么这样做</view><view class="small muted">信任网络</view></view></navigator>
-      <navigator class="link-card" url="/pages/privacy/index"><view class="link-icon">锁</view><view><view class="strong">隐私说明</view><view class="small muted">数据最小化</view></view></navigator>
+      <navigator class="link-card" url="/pages/gis/index" hover-class="button-pressed"><view class="link-icon"><image class="link-icon-image" src="/assets/icons/map.png" mode="aspectFit" aria-hidden="true" /></view><view><view class="strong">热暴露 GIS</view><view class="small muted">1 km 网格</view></view></navigator>
+      <navigator class="link-card" url="/pages/transparency/index" hover-class="button-pressed"><view class="link-icon"><image class="link-icon-image" src="/assets/icons/info.png" mode="aspectFit" aria-hidden="true" /></view><view><view class="strong">计算透明度</view><view class="small muted">公式与边界</view></view></navigator>
+      <navigator class="link-card" url="/pages/about/index" hover-class="button-pressed"><view class="link-icon"><image class="link-icon-image" src="/assets/icons/care.png" mode="aspectFit" aria-hidden="true" /></view><view><view class="strong">为什么这样做</view><view class="small muted">信任网络</view></view></navigator>
+      <navigator class="link-card" url="/pages/privacy/index" hover-class="button-pressed"><view class="link-icon"><image class="link-icon-image" src="/assets/icons/lock.png" mode="aspectFit" aria-hidden="true" /></view><view><view class="strong">隐私说明</view><view class="small muted">数据最小化</view></view></navigator>
     </view>
 
     <view class="safe-note home-note">本工具用于公共健康行动提醒，不提供医疗诊断或治疗建议。出现胸闷、意识不清、持续高热等明显不适时，请立即寻求专业帮助。</view>

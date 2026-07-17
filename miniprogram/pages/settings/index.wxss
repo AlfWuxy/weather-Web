@@ -3,7 +3,7 @@
 }
 
 .page-title {
-  color: #14251c;
+  color: #2f2925;
   font-size: 42rpx;
   font-weight: 700;
 }
@@ -11,7 +11,7 @@
 .page-copy {
   margin-top: 10rpx;
   color: #66736c;
-  font-size: 26rpx;
+  font-size: 14px;
   line-height: 1.65;
 }
 
@@ -33,26 +33,36 @@
 
 .guest-title {
   color: #2f2925;
-  font-size: 32rpx;
+  font-size: 16px;
   font-weight: 700;
 }
 
 .guest-copy {
   margin-top: 10rpx;
   color: #786d65;
-  font-size: 25rpx;
+  font-size: 14px;
   line-height: 1.65;
 }
 
 .login-button {
+  width: 100%;
+  min-width: 100%;
   min-height: 90rpx;
   margin-top: 24rpx;
   border-radius: 18rpx;
-  background: #d85d19;
+  background: #b64815;
   color: #ffffff;
-  font-size: 29rpx;
+  font-size: 14.5px;
   font-weight: 700;
   line-height: 90rpx;
+}
+
+.fallback-note {
+  margin-top: 14rpx;
+  color: #786d65;
+  font-size: 14px;
+  line-height: 1.55;
+  text-align: center;
 }
 
 .state-box {
@@ -71,7 +81,7 @@
   width: 86rpx;
   height: 86rpx;
   border-radius: 26rpx;
-  background: #168a4a;
+  background: #167a43;
   color: #ffffff;
   font-size: 38rpx;
   font-weight: 700;
@@ -81,14 +91,26 @@
 
 .policy-main {
   flex: 1;
+  min-width: 0;
   margin-left: 20rpx;
+}
+
+.consent-copy,
+.menu-row > view,
+.switch-row > view {
+  min-width: 0;
+}
+
+.menu-row > view,
+.switch-row > view {
+  flex: 1;
 }
 
 .policy-title,
 .section-title {
   margin: 0;
   color: #25402f;
-  font-size: 30rpx;
+  font-size: 16px;
   font-weight: 700;
 }
 
@@ -98,51 +120,81 @@
 .switch-copy {
   margin-top: 8rpx;
   color: #627168;
-  font-size: 24rpx;
+  font-size: 14px;
   line-height: 1.6;
 }
 
 .field-label {
   margin: 24rpx 0 12rpx;
   color: #33483c;
-  font-size: 27rpx;
+  font-size: 14px;
   font-weight: 600;
 }
 
 .text-input {
   box-sizing: border-box;
   width: 100%;
-  min-height: 86rpx;
+  min-height: 88rpx;
   padding: 20rpx 22rpx;
   border: 2rpx solid #ced9d2;
   border-radius: 16rpx;
   background: #ffffff;
-  font-size: 28rpx;
+  font-size: 15px;
 }
 
 .switch-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  min-height: 88rpx;
   margin-top: 24rpx;
   padding-top: 22rpx;
   border-top: 1rpx solid #e2e9e5;
 }
 
+.third-party-consent {
+  display: flex;
+  align-items: flex-start;
+  min-height: 88rpx;
+  margin-top: 20rpx;
+  padding: 22rpx;
+  border: 2rpx solid #b8d7c5;
+  border-radius: 16rpx;
+  background: #f3faf6;
+}
+
+.third-party-consent checkbox-group {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 64rpx;
+  min-height: 64rpx;
+}
+
+.consent-copy {
+  flex: 1;
+  margin-left: 10rpx;
+  color: #41574b;
+  font-size: 14px;
+  line-height: 1.65;
+}
+
 .switch-title,
 .menu-title {
   color: #30473a;
-  font-size: 28rpx;
+  font-size: 14px;
   font-weight: 600;
 }
 
 .save-button {
+  width: 100%;
+  min-width: 100%;
   min-height: 88rpx;
   margin-top: 26rpx;
   border-radius: 18rpx;
-  background: #168a4a;
+  background: #b64815;
   color: #ffffff;
-  font-size: 29rpx;
+  font-size: 14.5px;
   font-weight: 700;
   line-height: 88rpx;
 }
@@ -156,6 +208,7 @@
   align-items: center;
   justify-content: space-between;
   width: 100%;
+  min-width: 100%;
   min-height: 120rpx;
   margin: 0;
   padding: 20rpx 0;
@@ -173,17 +226,21 @@
 }
 
 .chevron {
-  color: #86938c;
-  font-size: 40rpx;
+  flex: 0 0 40rpx;
+  width: 40rpx;
+  height: 40rpx;
+  opacity: 0.42;
 }
 
 .logout-button {
+  width: 100%;
+  min-width: 100%;
   min-height: 88rpx;
   margin-top: 24rpx;
   border: 1rpx solid #d7aaa5;
   border-radius: 18rpx;
   background: #ffffff;
   color: #9b2c24;
-  font-size: 28rpx;
+  font-size: 14px;
   line-height: 88rpx;
 }

@@ -5,35 +5,38 @@
   <view class="form-card">
     <view class="field-group first-field">
       <view class="field-label">药品名称 <text>*</text></view>
-      <input class="text-input" maxlength="100" value="{{medicineName}}" bindinput="onMedicineName" placeholder="请按药盒或医嘱填写" />
+      <input class="text-input" maxlength="100" value="{{medicineName}}" bindinput="onMedicineName" placeholder="请按药盒或医嘱填写" aria-label="药品名称，必填" />
     </view>
     <view class="field-group">
       <view class="field-label">剂量或说明</view>
-      <input class="text-input" maxlength="100" value="{{dosage}}" bindinput="onDosage" placeholder="例如：每次 1 片，饭后" />
+      <input class="text-input" maxlength="100" value="{{dosage}}" bindinput="onDosage" placeholder="例如：每次 1 片，饭后" aria-label="用药剂量或说明" />
     </view>
     <view class="two-column">
       <view class="column-field">
         <view class="field-label">频率</view>
-        <picker range="{{frequencyOptions}}" value="{{frequencyIndex}}" bindchange="onFrequencyChange">
+        <picker range="{{frequencyOptions}}" value="{{frequencyIndex}}" bindchange="onFrequencyChange" aria-label="用药频率">
           <view class="picker-field">{{frequencyOptions[frequencyIndex]}}</view>
         </picker>
       </view>
       <view class="column-field">
         <view class="field-label">计划时间（仅供记录）</view>
-        <picker mode="time" value="{{timeOfDay}}" bindchange="onTimeChange">
+        <picker mode="time" value="{{timeOfDay}}" bindchange="onTimeChange" aria-label="计划用药时间，仅供记录">
           <view class="picker-field">{{timeOfDay}}</view>
         </picker>
       </view>
     </view>
 
-    <button class="trigger-toggle" bindtap="toggleWeatherTriggers">{{showWeatherTriggers ? '收起天气条件' : '＋ 添加可选天气条件'}}</button>
+    <button class="trigger-toggle" bindtap="toggleWeatherTriggers">
+      <image class="trigger-icon {{showWeatherTriggers ? 'expanded' : ''}}" src="{{showWeatherTriggers ? '/assets/icons/arrow-down.png' : '/assets/icons/add.png'}}" mode="aspectFit" aria-hidden="true" />
+      <text>{{showWeatherTriggers ? '收起天气条件' : '添加可选天气条件'}}</text>
+    </button>
     <view wx:if="{{showWeatherTriggers}}" class="trigger-panel">
       <view class="trigger-copy">天气条件只作为记录标签，不会触发或加强提醒，也不会发送通知。</view>
       <view class="trigger-grid">
-        <input class="small-input" type="digit" value="{{highTemp}}" bindinput="onHighTemp" placeholder="高温 ≥ °C" />
-        <input class="small-input" type="digit" value="{{lowTemp}}" bindinput="onLowTemp" placeholder="低温 ≤ °C" />
-        <input class="small-input" type="number" value="{{highHumidity}}" bindinput="onHighHumidity" placeholder="湿度 ≥ %" />
-        <input class="small-input" type="number" value="{{highAqi}}" bindinput="onHighAqi" placeholder="AQI ≥" />
+        <input class="small-input" type="digit" value="{{highTemp}}" bindinput="onHighTemp" placeholder="高温 ≥ °C" aria-label="可选记录条件：高温摄氏度阈值" />
+        <input class="small-input" type="digit" value="{{lowTemp}}" bindinput="onLowTemp" placeholder="低温 ≤ °C" aria-label="可选记录条件：低温摄氏度阈值" />
+        <input class="small-input" type="number" value="{{highHumidity}}" bindinput="onHighHumidity" placeholder="湿度 ≥ %" aria-label="可选记录条件：高湿度百分比阈值" />
+        <input class="small-input" type="number" value="{{highAqi}}" bindinput="onHighAqi" placeholder="AQI ≥" aria-label="可选记录条件：空气质量指数阈值" />
       </view>
     </view>
 

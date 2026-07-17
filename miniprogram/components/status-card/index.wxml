@@ -1,8 +1,12 @@
-<view class="state-card state-{{state}}" role="status">
-  <view class="state-icon">{{state === 'loading' ? '◌' : (state === 'error' ? '!' : 'i')}}</view>
+<view class="state-card state-{{state}}" role="status" aria-role="status" aria-live="polite">
+  <view class="state-icon">
+    <image wx:if="{{state === 'loading'}}" class="state-icon-image loading-icon" src="/assets/icons/sync.png" mode="aspectFit" aria-hidden="true" />
+    <image wx:elif="{{state === 'error'}}" class="state-icon-image" src="/assets/icons/error.png" mode="aspectFit" aria-hidden="true" />
+    <image wx:else class="state-icon-image" src="/assets/icons/info.png" mode="aspectFit" aria-hidden="true" />
+  </view>
   <view class="state-copy">
     <view class="state-title">{{title || (state === 'loading' ? '正在加载' : '暂无数据')}}</view>
     <view wx:if="{{detail}}" class="state-detail">{{detail}}</view>
-    <button wx:if="{{actionLabel}}" class="state-action" bindtap="onAction">{{actionLabel}}</button>
+    <button wx:if="{{actionLabel}}" class="state-action" bindtap="onAction" hover-class="button-pressed">{{actionLabel}}</button>
   </view>
 </view>

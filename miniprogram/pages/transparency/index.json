@@ -1,5 +1,9 @@
 {
   "navigationBarTitleText": "计算方法与透明度",
   "enablePullDownRefresh": true,
-  "backgroundTextStyle": "dark"
+  "backgroundTextStyle": "dark",
+  "usingComponents": {
+    "status-card": "/components/status-card/index",
+    "freshness-bar": "/components/freshness-bar/index"
+  }
 }

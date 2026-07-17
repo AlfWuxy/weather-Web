@@ -21,12 +21,17 @@ const ACTION_PLANS = {
 
 const COMPLETION_OPTIONS = ['全部完成', '完成一部分', '暂时没完成'];
 
+function actionPlan(trigger) {
+  return (ACTION_PLANS[trigger] || ACTION_PLANS.normal)
+    .map((item) => ({ ...item, checked: false }));
+}
+
 Page({
   data: {
     pairId: null,
     elderName: '家人',
     weather: normalizeSnapshot({}),
-    actions: ACTION_PLANS.normal,
+    actions: actionPlan('normal'),
     selectedActions: [],
     confirmed: false,
     helpRecorded: false,
@@ -67,7 +72,9 @@ Page({
       this.setData({
         elderName: elder.member && elder.member.name ? elder.member.name : '家人',
         weather,
-        actions: ACTION_PLANS[weather.trigger] || ACTION_PLANS.normal,
+        actions: actionPlan(weather.trigger),
+        selectedActions: [],
+        confirmed: false,
       });
     } catch (error) {
       wx.showToast({ title: '行动清单加载失败', icon: 'none' });
@@ -77,7 +84,16 @@ Page({
   },
 
   onActionsChange(event) {
-    this.setData({ selectedActions: event.detail.value || [] });
+    const allowed = new Set(this.data.actions.map((item) => item.id));
+    const selectedActions = Array.isArray(event.detail.value)
+      ? event.detail.value.filter((value) => allowed.has(value))
+      : [];
+    const selected = new Set(selectedActions);
+    this.setData({
+      selectedActions,
+      confirmed: false,
+      actions: this.data.actions.map((item) => ({ ...item, checked: selected.has(item.id) })),
+    });
   },
 
   onHelpNote(event) { this.setData({ helpNote: event.detail.value || '' }); },
@@ -93,15 +109,21 @@ Page({
 
   async confirmActions() {
     if (this.data.busyAction) return;
+    const allowed = new Set(this.data.actions.map((item) => item.id));
+    const selectedActions = this.data.selectedActions.filter((value) => allowed.has(value));
+    if (!selectedActions.length) {
+      wx.showToast({ title: '请至少勾选一项', icon: 'none' });
+      return;
+    }
     this.setData({ busyAction: 'confirm' });
     try {
       await authApi({
         method: 'POST',
         path: `/mp/api/v1/actions/${this.data.pairId}/confirm`,
-        data: { actions_done: this.data.selectedActions },
+        data: { actions_done: selectedActions },
       });
       this.setData({ confirmed: true });
-      wx.showToast({ title: '今日行动已确认', icon: 'success' });
+      wx.showToast({ title: '今日行动已记录', icon: 'success' });
     } catch (error) {
       wx.showToast({ title: '确认失败，请稍后再试', icon: 'none' });
     } finally {

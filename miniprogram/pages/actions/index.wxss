@@ -1,14 +1,20 @@
-.actions-hero { background: linear-gradient(145deg, #ec762b 0%, #bc551d 100%); }
+.actions-hero { background: linear-gradient(145deg, #9f3a12 0%, #bc551d 100%); }
 .progress-card { margin-top: 20rpx; }
-.progress-number { margin-top: 8rpx; color: #a34216; font-size: 54rpx; font-weight: 850; }
-.progress-ring { display: flex; align-items: center; justify-content: center; width: 120rpx; height: 120rpx; border: 12rpx solid #f0ad7f; border-radius: 50%; color: #9e3e12; font-size: 27rpx; font-weight: 800; }
-.check-card { display: flex; align-items: flex-start; gap: 22rpx; width: 100%; margin: 0 0 18rpx; padding: 26rpx; border: 1rpx solid #f0ded0; border-radius: 24rpx; color: #332a25; background: #fffdf9; text-align: left; }
-.check-card.checked { opacity: 0.72; background: #f2f7f3; border-color: #c7dfce; }
-.check-box { display: flex; flex: 0 0 54rpx; align-items: center; justify-content: center; width: 54rpx; height: 54rpx; border: 3rpx solid #d85d19; border-radius: 16rpx; color: #fff; font-size: 32rpx; font-weight: 800; }
-.checked .check-box { background: #438b60; border-color: #438b60; }
+.progress-number { margin-top: 8rpx; color: #8d3511; font-size: 54rpx; font-weight: 850; }
+.progress-percent { display: flex; align-items: center; justify-content: center; min-width: 112rpx; min-height: 72rpx; padding: 10rpx 18rpx; border-radius: 999rpx; color: #8d3511; background: #fff0df; font-size: 15px; font-weight: 800; }
+.action-progress { display: block; margin-top: 22rpx; }
+.check-card { display: flex; align-items: flex-start; gap: 22rpx; width: 100%; min-width: 100%; max-width: 100%; margin: 0 0 18rpx; padding: 26rpx; border: 1rpx solid #f0ded0; border-radius: 24rpx; color: #332a25; background: #fffdf9; text-align: left; }
+.check-card.checked { background: #f2f8f4; border-color: #b9d8c3; }
+.check-box { display: flex; flex: 0 0 60rpx; align-items: center; justify-content: center; width: 60rpx; height: 60rpx; border: 3rpx solid #b64815; border-radius: 17rpx; }
+.check-box image { width: 38rpx; height: 38rpx; opacity: 0.78; }
+.checked .check-box { background: #dff1e5; border-color: #137947; }
 .check-copy { flex: 1; min-width: 0; }
-.check-title { font-size: 32rpx; line-height: 1.45; font-weight: 750; }
+.check-title { font-size: 16px; line-height: 1.45; font-weight: 750; }
 .checked .check-title { text-decoration: line-through; }
-.check-detail { margin-top: 8rpx; color: #786d65; font-size: 27rpx; line-height: 1.6; }
-.copy-button { width: 100%; margin-bottom: 18rpx; }
+.check-detail { margin-top: 8rpx; color: #786d65; font-size: 14px; line-height: 1.6; }
+.check-state { margin-top: 10rpx; color: #8d3511; font-size: 14px; font-weight: 700; }
+.checked .check-state { color: #137947; }
+.copy-button, .share-button { width: 100%; min-width: 100%; margin-right: 0; margin-left: 0; }
+.copy-button { margin-bottom: 18rpx; }
+.share-button { margin-bottom: 18rpx; }
 .action-note { margin-top: 24rpx; }

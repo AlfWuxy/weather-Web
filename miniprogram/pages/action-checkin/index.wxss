@@ -11,7 +11,7 @@
 .page-copy {
   margin-top: 10rpx;
   color: #66736c;
-  font-size: 26rpx;
+  font-size: 14px;
   line-height: 1.65;
 }
 
@@ -47,20 +47,20 @@
 
 .weather-title {
   color: #26513a;
-  font-size: 31rpx;
+  font-size: 15.5px;
   font-weight: 700;
 }
 
 .weather-detail {
   margin-top: 8rpx;
   color: #5d6f65;
-  font-size: 25rpx;
+  font-size: 14px;
 }
 
 .section-title {
   margin: 0;
   color: #243c2f;
-  font-size: 32rpx;
+  font-size: 16px;
   font-weight: 700;
 }
 
@@ -83,14 +83,20 @@
 
 .action-title {
   color: #2a4034;
-  font-size: 29rpx;
+  font-size: 14.5px;
   font-weight: 600;
 }
 
 .action-detail {
   margin-top: 6rpx;
   color: #6a776f;
-  font-size: 24rpx;
+  font-size: 14px;
+}
+
+.selection-hint {
+  margin-top: 18rpx;
+  color: #72514d;
+  font-size: 14px;
 }
 
 .confirm-button,
@@ -98,9 +104,9 @@
   min-height: 90rpx;
   margin-top: 24rpx;
   border-radius: 18rpx;
-  background: #168a4a;
+  background: #167a43;
   color: #ffffff;
-  font-size: 29rpx;
+  font-size: 14.5px;
   font-weight: 700;
   line-height: 90rpx;
 }
@@ -112,7 +118,7 @@
 .help-disclaimer {
   margin-top: 14rpx;
   color: #72514d;
-  font-size: 24rpx;
+  font-size: 14px;
   line-height: 1.65;
 }
 
@@ -128,7 +134,21 @@
   border-radius: 16rpx;
   background: #ffffff;
   color: #24362c;
-  font-size: 27rpx;
+  font-size: 14px;
+}
+
+.picker-field {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 88rpx;
+}
+
+.picker-icon {
+  flex: 0 0 auto;
+  width: 36rpx;
+  height: 36rpx;
+  opacity: 0.62;
 }
 
 .help-input,
@@ -145,11 +165,11 @@
 .help-button,
 .emergency-button {
   flex: 1;
-  min-height: 82rpx;
+  min-height: 88rpx;
   margin: 0;
   border-radius: 16rpx;
-  font-size: 25rpx;
-  line-height: 82rpx;
+  font-size: 14px;
+  line-height: 88rpx;
 }
 
 .help-button {
@@ -166,7 +186,7 @@
 .field-label {
   margin-top: 22rpx;
   color: #354a3e;
-  font-size: 27rpx;
+  font-size: 14px;
   font-weight: 600;
 }
 
@@ -176,16 +196,17 @@
 
 .picker-field,
 .text-input {
-  min-height: 84rpx;
+  min-height: 88rpx;
 }
 
 .optin-row {
   display: flex;
   align-items: center;
   gap: 14rpx;
+  min-height: 88rpx;
   margin-top: 24rpx;
   color: #52645a;
-  font-size: 25rpx;
+  font-size: 14px;
 }
 
 .medical-note {
@@ -194,6 +215,6 @@
   border-radius: 18rpx;
   background: #fff9ed;
   color: #6f5b35;
-  font-size: 24rpx;
+  font-size: 14px;
   line-height: 1.65;
 }

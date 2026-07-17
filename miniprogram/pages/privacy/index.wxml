@@ -7,15 +7,15 @@
 
   <view class="section-title">公开浏览</view>
   <view class="card privacy-card">
-    <view class="privacy-icon">公</view>
+    <view class="privacy-icon"><image src="/assets/icons/sunny.png" mode="aspectFit" aria-hidden="true" /></view>
     <view><view class="card-title">首页直接可看</view><view class="privacy-text">今日天气、预报、预警、通用行动、社区公开结果和 GIS 不要求登录。</view></view>
   </view>
   <view class="card privacy-card">
-    <view class="privacy-icon">缓</view>
-    <view><view class="card-title">本机 30 分钟缓存</view><view class="privacy-text">缓存保存公共天气快照和社区公开数据，用于减少重复请求并支持短时离线阅读。</view></view>
+    <view class="privacy-icon"><image src="/assets/icons/sync.png" mode="aspectFit" aria-hidden="true" /></view>
+    <view><view class="card-title">30 分钟新鲜度期限</view><view class="privacy-text">本机缓存公共天气快照和社区公开数据。网络异常时可能继续展示上一份快照，页面会明确标注更新时间和旧数据状态，刷新成功后覆盖。</view></view>
   </view>
   <view class="card privacy-card">
-    <view class="privacy-icon">清</view>
+    <view class="privacy-icon"><image src="/assets/icons/check.png" mode="aspectFit" aria-hidden="true" /></view>
     <view><view class="card-title">今日打勾记录</view><view class="privacy-text">行动清单的完成状态只保存在当前微信设备中，不会上传服务器。</view></view>
   </view>
 
@@ -28,6 +28,21 @@
     <view>• 小程序端不保存天气服务 API Key，也不会直接请求第三方天气域名。</view>
   </view>
 
+  <view class="section-title">产品改进数据</view>
+  <view class="card list-card">
+    <view>• 公开天气浏览不接入第三方统计 SDK，也不创建跨应用设备画像。</view>
+    <view>• 只有登录并主动使用家庭照护功能时，服务器才记录固定枚举的关键事件，例如创建家人档案、确认有效行动和复制提醒话术。</view>
+    <view>• 产品分析事件不写入姓名、电话、IP、设备标识、自由文本、个人定位或完整健康记录，且会在 30 天后自动删除。</view>
+    <view>• 服务器为故障回滚生成的私有部署副本最多保留 30 天，仅服务器管理员可访问；超期故障副本只保留去敏提示。</view>
+    <view>• 从家庭分享链接进入时，落地提示最多显示 30 分钟；独立的本机来源标记最多保留 30 天。登录后，服务端仅把账号首次来源固定为“直接访问”或“家庭分享”，保存至账号注销，用于汇总判断分享是否帮助家人启用服务。</view>
+  </view>
+
+  <view class="section-title">可选第三方推送</view>
+  <view class="card list-card">
+    <view>WxPusher 默认关闭。只有你在设置页明确勾选第三方传输说明并开启后，服务器才会发送 WxPusher UID、都昌县级预警标题与正文及一次性点击链接。</view>
+    <view>不会向 WxPusher 发送家人姓名、健康日记、用药记录或家庭地址。你可以随时关闭推送并清空 UID。</view>
+  </view>
+
   <view class="section-title">地图数据</view>
   <view class="card list-card">
     <view>GIS 只包含公开、聚合的地区网格指标，不包含个人定位轨迹、家庭地址或病历。</view>
@@ -35,5 +50,11 @@
   </view>
 
   <view class="safe-note">请避免在昵称、备注和反馈中填写无关的身份证号、完整病历或其他敏感信息。</view>
-  <navigator class="secondary-button privacy-link" url="/pages/transparency/index">查看计算方法</navigator>
+  <view class="card operator-card">
+    <view class="card-title">运营与联系</view>
+    <view class="privacy-text">可在“我的 → 账号、隐私与注销”管理账号，并通过微信小程序右上角菜单中的“反馈与投诉”提交问题。运营者姓名、专用联系邮箱与生效日期会在正式提交前同步到微信平台隐私保护指引，以平台展示的认证信息为准。</view>
+  </view>
+  <view class="privacy-version">当前版本：2026-07-18 · 生效后如有重要变化，会再次请你阅读并主动同意。</view>
+  <navigator class="secondary-button privacy-link" url="/pages/agreement/index" hover-class="button-pressed">查看用户协议</navigator>
+  <navigator class="secondary-button privacy-link" url="/pages/transparency/index" hover-class="button-pressed">查看计算方法</navigator>
 </view>

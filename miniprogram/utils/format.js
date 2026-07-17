@@ -124,9 +124,55 @@ function normalizeForecastItem(item, index) {
   };
 }
 
+function warningValue(source, raw, keys, fallback) {
+  const direct = firstDefined(source, keys, '');
+  if (direct !== '') return direct;
+  return firstDefined(raw, keys, fallback);
+}
+
+function formatOptionalDateTime(value) {
+  return value ? formatDateTime(value) : '未提供';
+}
+
+function warningIssuer(source, raw) {
+  const value = warningValue(
+    source,
+    raw,
+    ['issuer', 'issuer_name', 'sender', 'senderName', 'publisher', 'publisherName'],
+    ''
+  );
+  if (value && typeof value === 'object') {
+    return String(firstDefined(value, ['name', 'label', 'title', 'senderName', 'publisherName'], ''));
+  }
+  return String(value || '');
+}
+
 function normalizeWarning(item, index) {
   const source = item && typeof item === 'object' ? item : {};
+  const raw = source.raw && typeof source.raw === 'object' ? source.raw : {};
   const level = String(firstDefined(source, ['level', 'severity', 'severityColor'], ''));
+  const issuedAt = String(warningValue(
+    source,
+    raw,
+    ['issued_at', 'issue_time', 'issued_time', 'published_at', 'pub_time', 'pubTime', 'issuedTime', 'sent_at', 'sentTime', 'sent'],
+    ''
+  ));
+  const explicitEffectiveAt = warningValue(
+    source,
+    raw,
+    ['effective_at', 'effective_time', 'onset_time', 'onsetTime', 'effectiveTime', 'startTime', 'effective', 'start'],
+    ''
+  );
+  const hasRaw = Object.keys(raw).length > 0;
+  const effectiveAt = String(explicitEffectiveAt || ((!hasRaw || !issuedAt)
+    ? firstDefined(source, ['start_time'], '')
+    : ''));
+  const expiresAt = String(warningValue(
+    source,
+    raw,
+    ['expires_at', 'expire_time', 'end_time', 'expireTime', 'endTime', 'expires', 'end'],
+    ''
+  ));
   return {
     id: String(firstDefined(source, ['id', 'warning_id', 'title'], index)),
     title: String(firstDefined(source, ['title', 'headline', 'typeName'], '天气预警')),
@@ -134,8 +180,16 @@ function normalizeWarning(item, index) {
     level,
     tone: riskTone(level, null),
     text: String(firstDefined(source, ['text', 'description', 'detail'], '请留意官方最新信息。')),
-    start: String(firstDefined(source, ['start_time', 'pubTime', 'effective'], '')),
-    end: String(firstDefined(source, ['end_time', 'expireTime', 'expires'], '')),
+    issuer: warningIssuer(source, raw),
+    issuedAt,
+    issuedText: formatOptionalDateTime(issuedAt),
+    effectiveAt,
+    effectiveText: formatOptionalDateTime(effectiveAt),
+    expiresAt,
+    expiresText: formatOptionalDateTime(expiresAt),
+    // 兼容已有页面字段，同时保留发布、生效和结束时间的明确语义。
+    start: effectiveAt,
+    end: expiresAt,
   };
 }
 
@@ -330,6 +384,7 @@ function freshnessView(resultMeta, snapshot) {
     stale: Boolean(meta.stale || data.stale),
     source: meta.source || 'unknown',
     refreshDeferred: Boolean(meta.refreshDeferred),
+    refreshStarted: Boolean(meta.refreshStarted),
   };
 }
 
@@ -345,6 +400,7 @@ module.exports = {
   normalizeBootstrap,
   normalizeCommunity,
   normalizeForecastItem,
+  normalizeWarning,
   riskLabel,
   riskTone,
   warningSourceAvailable,

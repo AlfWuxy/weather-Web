@@ -7,8 +7,8 @@
     <view class="person-card">
       <view>
         <view class="person-label">正在为谁筛查</view>
-        <picker range="{{elderNames}}" value="{{elderIndex}}" bindchange="onElderChange">
-          <view class="person-picker">{{elderNames[elderIndex]}}　›</view>
+        <picker range="{{elderNames}}" value="{{elderIndex}}" bindchange="onElderChange" disabled="{{busy || loading}}" aria-label="选择要进行健康筛查的家人">
+          <view class="person-picker"><text>{{elderNames[elderIndex]}}</text><image class="person-picker-icon" src="/assets/icons/chevron-right.png" mode="aspectFit" aria-hidden="true" /></view>
         </picker>
       </view>
       <view class="progress-text">{{completedCount}} / 5</view>
@@ -24,6 +24,7 @@
               data-id="{{question.id}}"
               data-value="{{option.value}}"
               bindtap="onSelect"
+              disabled="{{busy}}"
             >{{option.label}}</button>
           </block>
         </view>

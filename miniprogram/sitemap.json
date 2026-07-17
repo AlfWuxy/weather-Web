@@ -10,6 +10,7 @@
     { "action": "allow", "page": "pages/gis/index" },
     { "action": "allow", "page": "pages/transparency/index" },
     { "action": "allow", "page": "pages/privacy/index" },
+    { "action": "allow", "page": "pages/agreement/index" },
     { "action": "allow", "page": "pages/about/index" },
     { "action": "disallow", "page": "pages/elders/index" },
     { "action": "disallow", "page": "pages/elder-edit/index" },

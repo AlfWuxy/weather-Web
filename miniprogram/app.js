@@ -1,3 +1,5 @@
+const { rememberAcquisitionSource } = require('./utils/share');
+
 App({
   globalData: {
     apiToken: null,
@@ -5,7 +7,8 @@ App({
     networkType: 'unknown',
   },
 
-  onLaunch() {
+  onLaunch(options) {
+    rememberAcquisitionSource(options && options.query);
     this._networkListeners = [];
     wx.getNetworkType({
       success: (result) => {
@@ -15,6 +18,10 @@ App({
     wx.onNetworkStatusChange((result) => {
       this._setNetwork(result.isConnected, result.networkType);
     });
+  },
+
+  onShow(options) {
+    rememberAcquisitionSource(options && options.query);
   },
 
   _setNetwork(isOnline, networkType) {

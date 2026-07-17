@@ -6,22 +6,22 @@
   <view wx:else class="form-card">
     <view class="field-group">
       <view class="field-label">姓名或家中称呼 <text class="required">*</text></view>
-      <input class="text-input" maxlength="50" value="{{name}}" bindinput="onName" placeholder="例如：妈妈、张奶奶" />
+      <input class="text-input" maxlength="50" value="{{name}}" bindinput="onName" placeholder="例如：妈妈、张奶奶" aria-label="姓名或家中称呼，必填" />
     </view>
 
     <view class="field-group">
       <view class="field-label">与你的关系</view>
-      <input class="text-input" maxlength="20" value="{{relation}}" bindinput="onRelation" placeholder="例如：母亲、爷爷" />
+      <input class="text-input" maxlength="20" value="{{relation}}" bindinput="onRelation" placeholder="例如：母亲、爷爷" aria-label="这位家人与你的关系" />
     </view>
 
     <view class="two-column">
       <view class="field-group column-field">
         <view class="field-label">年龄</view>
-        <input class="text-input" type="number" maxlength="3" value="{{age}}" bindinput="onAge" placeholder="例如：68" />
+        <input class="text-input" type="number" maxlength="3" value="{{age}}" bindinput="onAge" placeholder="例如：68" aria-label="这位家人的年龄" />
       </view>
       <view class="field-group column-field">
         <view class="field-label">性别</view>
-        <picker range="{{genderOptions}}" value="{{genderIndex}}" bindchange="onGender">
+        <picker range="{{genderOptions}}" value="{{genderIndex}}" bindchange="onGender" aria-label="这位家人的性别">
           <view class="picker-field">{{gender}}</view>
         </picker>
       </view>
@@ -35,7 +35,7 @@
 
     <view class="field-group">
       <view class="field-label">慢病类别</view>
-      <textarea class="text-area" maxlength="300" value="{{chronicText}}" bindinput="onChronic" placeholder="例如：高血压、糖尿病。请勿填写病历号或身份证号。" />
+      <textarea class="text-area" maxlength="300" value="{{chronicText}}" bindinput="onChronic" placeholder="例如：高血压、糖尿病。请勿填写病历号或身份证号。" aria-label="这位家人的慢病类别" />
     </view>
 
     <view class="button-row">

@@ -11,7 +11,7 @@
 .page-copy {
   margin-top: 10rpx;
   color: #66736c;
-  font-size: 26rpx;
+  font-size: 14px;
   line-height: 1.65;
 }
 
@@ -40,14 +40,24 @@
 .person-label,
 .result-label {
   color: #6a776f;
-  font-size: 24rpx;
+  font-size: 14px;
 }
 
 .person-picker {
+  display: flex;
+  align-items: center;
+  gap: 8rpx;
+  min-height: 88rpx;
   margin-top: 8rpx;
   color: #176d40;
-  font-size: 31rpx;
+  font-size: 15.5px;
   font-weight: 700;
+}
+
+.person-picker-icon {
+  width: 36rpx;
+  height: 36rpx;
+  opacity: 0.62;
 }
 
 .progress-text {
@@ -55,7 +65,7 @@
   border-radius: 999rpx;
   background: #edf7f1;
   color: #176d40;
-  font-size: 26rpx;
+  font-size: 14px;
   font-weight: 600;
 }
 
@@ -63,7 +73,7 @@
   display: flex;
   align-items: center;
   color: #20372a;
-  font-size: 30rpx;
+  font-size: 15px;
   font-weight: 700;
 }
 
@@ -73,7 +83,7 @@
   margin-right: 16rpx;
   border-radius: 16rpx;
   background: #e8f5ed;
-  color: #168a4a;
+  color: #167a43;
   line-height: 52rpx;
   text-align: center;
 }
@@ -86,18 +96,19 @@
 }
 
 .option-button {
+  min-height: 88rpx;
   margin: 0;
   padding: 0 24rpx;
   border: 1rpx solid #ccd8d1;
   border-radius: 999rpx;
   background: #ffffff;
   color: #42544a;
-  font-size: 26rpx;
+  font-size: 14px;
 }
 
 .option-button.active {
-  border-color: #168a4a;
-  background: #168a4a;
+  border-color: #167a43;
+  background: #167a43;
   color: #ffffff;
 }
 
@@ -105,9 +116,9 @@
   min-height: 94rpx;
   margin-top: 28rpx;
   border-radius: 20rpx;
-  background: #168a4a;
+  background: #167a43;
   color: #ffffff;
-  font-size: 30rpx;
+  font-size: 15px;
   font-weight: 700;
   line-height: 94rpx;
 }
@@ -126,20 +137,20 @@
 .result-score {
   margin-top: 6rpx;
   color: #66736c;
-  font-size: 25rpx;
+  font-size: 14px;
 }
 
 .recommend-title {
   margin-top: 24rpx;
   color: #2c4035;
-  font-size: 28rpx;
+  font-size: 14px;
   font-weight: 700;
 }
 
 .recommend-row {
   margin-top: 12rpx;
   color: #42544a;
-  font-size: 27rpx;
+  font-size: 14px;
   line-height: 1.65;
 }
 
@@ -148,6 +159,6 @@
   padding-top: 20rpx;
   border-top: 1rpx solid #e2e9e5;
   color: #6b776f;
-  font-size: 24rpx;
+  font-size: 14px;
   line-height: 1.65;
 }

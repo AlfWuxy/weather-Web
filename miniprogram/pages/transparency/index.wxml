@@ -46,7 +46,7 @@
   <view class="section-title">当前数据源状态</view>
   <status-card wx:if="{{sourceLoading}}" state="loading" title="正在读取状态" />
   <block wx:elif="{{sources.length}}">
-    <freshness-bar updated-text="{{freshness.updatedText}}" stale="{{freshness.stale}}" source="{{freshness.source}}" refresh-deferred="{{freshness.refreshDeferred}}" />
+    <freshness-bar updated-text="{{freshness.updatedText}}" stale="{{freshness.stale}}" source="{{freshness.source}}" refresh-deferred="{{freshness.refreshDeferred}}" refresh-started="{{freshness.refreshStarted}}" />
     <view wx:for="{{sources}}" wx:key="id" class="source-row card">
       <view class="strong">{{item.name}}</view>
       <view class="small muted">{{item.status}}</view>

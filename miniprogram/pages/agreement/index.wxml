@@ -1,0 +1,45 @@
+<view class="page-shell">
+  <view class="hero agreement-hero">
+    <view class="hero-kicker">宜老天气通用户协议</view>
+    <view class="hero-title">把服务范围和责任边界说清楚。</view>
+    <view class="hero-subtitle">使用前请阅读。继续登录或使用照护功能，表示你理解并同意本协议。</view>
+  </view>
+
+  <view class="agreement-card">
+    <view class="section-title">一、服务内容</view>
+    <view class="agreement-text">本小程序提供都昌县级天气、七天预报、气象预警、通用防护行动、社区公开背景、避暑资源和热暴露地图。登录后可自愿保存家人档案、日常健康观察、用药记录和照护行动。</view>
+  </view>
+
+  <view class="agreement-card">
+    <view class="section-title">二、账号与授权</view>
+    <view class="agreement-text">请使用本人有权管理的微信账号和家庭资料。涉及家人信息时，应事先取得对方同意。请妥善保管登录状态和备用登录码，不要转发给他人。</view>
+  </view>
+
+  <view class="agreement-card">
+    <view class="section-title">三、信息与数据来源</view>
+    <view class="agreement-text">天气、预警和地图结果以页面标注的数据来源、发布时间、更新时间和适用范围为准。网络异常时可能展示明确标记的上一份快照。请在重要决定前核对当地官方最新信息。</view>
+  </view>
+
+  <view class="agreement-card warning-card">
+    <view class="section-title">四、健康与紧急情况</view>
+    <view class="agreement-text">健康筛查、日记、用药和行动清单只作家庭记录与日常行动参考，不提供诊断、处方、在线问诊或治疗建议。出现胸痛、意识异常、呼吸困难、严重中暑等紧急情况时，请立即联系当地急救或线下医疗机构。</view>
+  </view>
+
+  <view class="agreement-card">
+    <view class="section-title">五、可选第三方服务</view>
+    <view class="agreement-text">WxPusher 默认关闭。你明确同意并开启后，系统才按隐私说明列明的最小范围传输预警内容。你可随时关闭并清空 UID。</view>
+  </view>
+
+  <view class="agreement-card">
+    <view class="section-title">六、使用规则</view>
+    <view class="agreement-text">请勿提交违法内容、冒用他人身份、尝试绕过权限、攻击服务或滥用接口。因维护、安全风险或不可抗力需要暂停部分服务时，公开天气页面会尽量提供可理解的状态说明。</view>
+  </view>
+
+  <view class="agreement-card">
+    <view class="section-title">七、变更、退出与联系</view>
+    <view class="agreement-text">重要协议或隐私规则变化会通过版本更新提示。你可退出登录或在“账号与隐私”申请注销，也可通过微信小程序右上角菜单中的“反馈与投诉”提交问题。运营者与联系渠道以微信平台隐私保护指引展示的认证信息为准。</view>
+  </view>
+
+  <view class="effective-date">版本与生效日期：2026-07-18</view>
+  <navigator class="secondary-button" url="/pages/privacy/index" hover-class="button-pressed">查看隐私说明</navigator>
+</view>

@@ -19,7 +19,7 @@
 .page-subtitle {
   margin-top: 8rpx;
   color: #66736c;
-  font-size: 25rpx;
+  font-size: 14px;
 }
 
 .header-button,
@@ -29,7 +29,7 @@
   border-radius: 16rpx;
   background: #ffffff;
   color: #315340;
-  font-size: 26rpx;
+  font-size: 14px;
 }
 
 .weather-strip {
@@ -49,7 +49,7 @@
 
 .weather-label {
   color: #496157;
-  font-size: 25rpx;
+  font-size: 14px;
 }
 
 .weather-value {
@@ -62,12 +62,12 @@
 .weather-range {
   margin-left: 12rpx;
   color: #496157;
-  font-size: 24rpx;
+  font-size: 14px;
   font-weight: 400;
 }
 
 .weather-wait {
-  font-size: 30rpx;
+  font-size: 15px;
 }
 
 .risk-badge {
@@ -75,7 +75,7 @@
   border-radius: 999rpx;
   background: #fff4ed;
   color: #b54708;
-  font-size: 24rpx;
+  font-size: 14px;
   font-weight: 600;
 }
 
@@ -90,14 +90,23 @@
 }
 
 .add-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12rpx;
   min-height: 92rpx;
   margin: 24rpx 0;
   border-radius: 20rpx;
-  background: #168a4a;
+  background: #167a43;
   color: #ffffff;
-  font-size: 30rpx;
+  font-size: 15px;
   font-weight: 700;
-  line-height: 92rpx;
+  line-height: 1.4;
+}
+
+.add-button-icon {
+  width: 34rpx;
+  height: 34rpx;
 }
 
 .state-box,
@@ -115,6 +124,32 @@
   text-align: center;
 }
 
+.inline-refresh,
+.inline-warning {
+  margin-bottom: 22rpx;
+  padding: 20rpx 24rpx;
+  border-radius: 18rpx;
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.inline-refresh {
+  background: #f2f5f3;
+  color: #65736b;
+}
+
+.inline-warning {
+  background: #fff5ed;
+  color: #8a421f;
+}
+
+.inline-retry {
+  width: 210rpx;
+  margin: 14rpx 0 0;
+  border-color: #dfb99f;
+  color: #8a421f;
+}
+
 .error-state {
   color: #9c2f24;
 }
@@ -125,7 +160,7 @@
   border: 1rpx solid #d8b3ae;
   background: #ffffff;
   color: #9c2f24;
-  font-size: 26rpx;
+  font-size: 14px;
 }
 
 .empty-title {
@@ -138,7 +173,7 @@
 .empty-copy {
   margin-top: 14rpx;
   color: #67756d;
-  font-size: 27rpx;
+  font-size: 14px;
   line-height: 1.7;
   text-align: center;
 }
@@ -177,7 +212,7 @@
 .elder-meta {
   margin-top: 6rpx;
   color: #6b776f;
-  font-size: 24rpx;
+  font-size: 14px;
 }
 
 .edit-button {
@@ -196,15 +231,15 @@
 .tool-button {
   margin: 0;
   border-radius: 16rpx;
-  font-size: 25rpx;
+  font-size: 14px;
 }
 
 .primary-action {
-  min-height: 78rpx;
+  min-height: 88rpx;
   background: #edf7f1;
   color: #176d40;
   font-weight: 600;
-  line-height: 78rpx;
+  line-height: 88rpx;
 }
 
 .warning-action {
@@ -213,18 +248,18 @@
 }
 
 .tool-button {
-  min-height: 70rpx;
+  min-height: 88rpx;
   border: 1rpx solid #d7e0db;
   background: #ffffff;
   color: #43564b;
-  line-height: 70rpx;
+  line-height: 88rpx;
 }
 
 .delete-link {
   margin-top: 20rpx;
   background: transparent;
   color: #9a554f;
-  font-size: 24rpx;
+  font-size: 14px;
 }
 
 .delete-link::after,
@@ -239,6 +274,11 @@
   border-radius: 18rpx;
   background: #f2f5f3;
   color: #65736b;
-  font-size: 24rpx;
+  font-size: 14px;
   line-height: 1.7;
+}
+
+@media screen and (max-width: 340px) {
+  .primary-actions,
+  .care-tools { grid-template-columns: 1fr; }
 }

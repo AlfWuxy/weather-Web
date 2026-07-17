@@ -26,6 +26,18 @@ test('app 首屏、隐私检查与 tabBar 完整', () => {
   ]);
 });
 
+test('自定义组件只在实际使用的页面按需注册', () => {
+  assert.equal(appConfig.usingComponents, undefined);
+  const componentPages = ['home', 'forecast', 'community', 'actions', 'alerts', 'cooling', 'gis', 'transparency'];
+  componentPages.forEach((name) => {
+    const config = JSON.parse(fs.readFileSync(path.join(miniRoot, 'pages', name, 'index.json'), 'utf8'));
+    assert.deepEqual(config.usingComponents, {
+      'status-card': '/components/status-card/index',
+      'freshness-bar': '/components/freshness-bar/index',
+    }, `${name} 应按需注册公共组件`);
+  });
+});
+
 test('根目录工程配置可按游客模式导入并开启域名校验', () => {
   const project = JSON.parse(fs.readFileSync(path.resolve(miniRoot, '..', 'project.config.json'), 'utf8'));
   assert.equal(project.miniprogramRoot, 'miniprogram/');
@@ -67,6 +79,7 @@ test('sitemap 只允许公共页面并排除照护页面', () => {
   assert.deepEqual(allowed, [
     'pages/about/index',
     'pages/actions/index',
+    'pages/agreement/index',
     'pages/alerts/index',
     'pages/community/index',
     'pages/cooling/index',
@@ -86,6 +99,18 @@ test('登录页提供返回公共首页的明确入口', () => {
   const loginView = fs.readFileSync(path.join(miniRoot, 'pages/bind-token/index.wxml'), 'utf8');
   assert.match(loginView, /bindtap="goPublicHome"/);
   assert.match(loginView, /先查看公共天气/);
+  assert.match(loginView, /《隐私说明》/);
+  assert.match(loginView, /《用户协议》/);
+  assert.equal(appConfig.pages.includes('pages/agreement/index'), true);
+});
+
+test('WxPusher 开启前展示完整第三方传输范围', () => {
+  const settingsView = fs.readFileSync(path.join(miniRoot, 'pages/settings/index.wxml'), 'utf8');
+  const settingsScript = fs.readFileSync(path.join(miniRoot, 'pages/settings/index.js'), 'utf8');
+  assert.match(settingsView, /发送 UID、都昌县级预警标题与正文及一次性点击链接/);
+  assert.match(settingsView, /不会发送家人姓名、健康日记、用药记录或家庭地址/);
+  assert.match(settingsView, /bindchange="onWxPusherConsent"/);
+  assert.match(settingsScript, /wxpusher_consent/);
 });
 
 test('用药与求助文案明确为仅记录能力', () => {

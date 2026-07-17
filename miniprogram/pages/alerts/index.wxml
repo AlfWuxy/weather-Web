@@ -9,7 +9,7 @@
   <status-card wx:elif="{{error && !current}}" state="error" title="预警暂不可用" detail="{{error}}" action-label="重试" bind:action="retry" />
 
   <block wx:if="{{current}}">
-    <freshness-bar updated-text="{{freshness.updatedText}}" stale="{{freshness.stale}}" source="{{freshness.source}}" refresh-deferred="{{freshness.refreshDeferred}}" />
+    <freshness-bar updated-text="{{freshness.updatedText}}" stale="{{freshness.stale}}" source="{{freshness.source}}" refresh-deferred="{{freshness.refreshDeferred}}" refresh-started="{{freshness.refreshStarted}}" />
     <view class="card weather-strip">
       <view><view class="small muted">当前</view><view class="strip-value">{{current.temperatureText}}</view></view>
       <view><view class="small muted">最高</view><view class="strip-value">{{current.highText}}</view></view>
@@ -24,7 +24,12 @@
       </view>
       <view wx:if="{{item.type}}" class="small muted warning-type">{{item.type}}</view>
       <view class="warning-text">{{item.text}}</view>
-      <view wx:if="{{item.start || item.end}}" class="small muted warning-time">{{item.start}} {{item.end ? '至 ' + item.end : ''}}</view>
+      <view class="small muted warning-meta">
+        <view>发布单位：{{item.issuer || '未提供，请以当地主管部门通知为准'}}</view>
+        <view>发布时间：{{item.issuedText}}</view>
+        <view>生效时间：{{item.effectiveText}}</view>
+        <view wx:if="{{item.expiresAt}}">结束时间：{{item.expiresText}}</view>
+      </view>
     </view>
     <status-card wx:if="{{!warningsSourceAvailable}}" state="error" title="官方预警来源暂不可用" detail="当前无法确认是否存在有效预警，请同时查看当地主管部门的最新通知。" />
     <status-card wx:elif="{{!warnings.length}}" state="empty" title="当前暂无官方预警" detail="没有官方预警仍可能出现高温、低温或空气质量风险，请继续查看今日风险和行动。" />

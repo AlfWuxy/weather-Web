@@ -1,5 +1,20 @@
 const { getBootstrap } = require('../../utils/public-data');
 const { freshnessView, normalizeBootstrap } = require('../../utils/format');
+const { prefersReducedMotion } = require('../../utils/motion');
+const {
+  beginPublicPage,
+  hidePublicPage,
+  pageCanRender,
+  schedulePublicRefresh,
+  showPublicPage,
+  unloadPublicPage,
+} = require('../../utils/public-page-lifecycle');
+const {
+  createPageShare,
+  createTimelineShare,
+  showPublicShareMenu,
+  sourceFromShareEvent,
+} = require('../../utils/share');
 
 const GENERAL_ACTIONS = [
   { id: 'general-water', title: '少量多次补水', detail: '不要等到明显口渴才喝水。心肾疾病患者按医生要求控制饮水。' },
@@ -34,10 +49,27 @@ Page({
     generalMode: false,
     freshness: {},
     locationName: '都昌县',
+    reduceMotion: false,
   },
 
   onLoad() {
-    this.loadData();
+    beginPublicPage(this);
+    this.setData({ reduceMotion: prefersReducedMotion() });
+    showPublicShareMenu();
+  },
+
+  onShow() {
+    const reduceMotion = prefersReducedMotion();
+    if (reduceMotion !== this.data.reduceMotion) this.setData({ reduceMotion });
+    showPublicPage(this, () => this.loadData());
+  },
+
+  onHide() {
+    hidePublicPage(this);
+  },
+
+  onUnload() {
+    unloadPublicPage(this);
   },
 
   async onPullDownRefresh() {
@@ -53,22 +85,15 @@ Page({
   async loadData(options) {
     if (!this.data.actions.length) this.setData({ loading: true, error: '' });
     try {
-      const result = await getBootstrap(options);
-      const snapshot = normalizeBootstrap(result.data);
-      const generalMode = !snapshot.available || !snapshot.actions.length;
-      const sourceActions = generalMode ? GENERAL_ACTIONS : snapshot.actions;
-      const actions = this.mergeChecked(sourceActions);
-      this.setData({
-        loading: false,
-        error: '',
-        actions,
-        completedCount: actions.filter((item) => item.checked).length,
-        progressPercent: actions.length ? Math.round(actions.filter((item) => item.checked).length / actions.length * 100) : 0,
-        generalMode,
-        locationName: snapshot.location.name,
-        freshness: freshnessView(result.meta, snapshot),
+      const requestOptions = Object.assign({}, options, {
+        onRevalidated: (freshResult) => {
+          if (pageCanRender(this)) this.renderActions(freshResult);
+        },
       });
+      const result = await getBootstrap(requestOptions);
+      if (pageCanRender(this)) this.renderActions(result);
     } catch (error) {
+      if (!pageCanRender(this)) return;
       const actions = this.mergeChecked(GENERAL_ACTIONS);
       this.setData({
         loading: false,
@@ -79,6 +104,25 @@ Page({
         generalMode: true,
       });
     }
+  },
+
+  renderActions(result) {
+    const snapshot = normalizeBootstrap(result.data);
+    const generalMode = !snapshot.available || !snapshot.actions.length;
+    const sourceActions = generalMode ? GENERAL_ACTIONS : snapshot.actions;
+    const actions = this.mergeChecked(sourceActions);
+    const completedCount = actions.filter((item) => item.checked).length;
+    this.setData({
+      loading: false,
+      error: '',
+      actions,
+      completedCount,
+      progressPercent: actions.length ? Math.round(completedCount / actions.length * 100) : 0,
+      generalMode,
+      locationName: snapshot.location.name,
+      freshness: freshnessView(result.meta, snapshot),
+    });
+    schedulePublicRefresh(this, result.meta, () => this.loadData());
   },
 
   toggleAction(event) {
@@ -108,7 +152,15 @@ Page({
     wx.setClipboardData({ data: text });
   },
 
-  onShareAppMessage() {
-    return { title: `${this.data.locationName}今日防护清单`, path: '/pages/actions/index' };
+  onShareAppMessage(options) {
+    return createPageShare({
+      title: `${this.data.locationName}今日防护清单`,
+      route: '/pages/actions/index',
+      source: sourceFromShareEvent(options),
+    });
+  },
+
+  onShareTimeline() {
+    return createTimelineShare({ title: `${this.data.locationName}今日防护清单` });
   },
 });

@@ -11,7 +11,7 @@
 .page-copy {
   margin-top: 10rpx;
   color: #66736c;
-  font-size: 26rpx;
+  font-size: 14px;
   line-height: 1.65;
 }
 
@@ -40,19 +40,19 @@
 
 .location {
   color: #176d40;
-  font-size: 29rpx;
+  font-size: 14.5px;
   font-weight: 700;
 }
 
 .weather-summary {
   color: #637168;
-  font-size: 24rpx;
+  font-size: 14px;
 }
 
 .message-text {
   margin-top: 24rpx;
   color: #21372b;
-  font-size: 30rpx;
+  font-size: 15px;
   line-height: 1.85;
   white-space: pre-wrap;
 }
@@ -61,14 +61,14 @@
 .checkin-button {
   min-height: 90rpx;
   border-radius: 18rpx;
-  font-size: 29rpx;
+  font-size: 14.5px;
   font-weight: 600;
   line-height: 90rpx;
 }
 
 .copy-button {
   margin-top: 28rpx;
-  background: #168a4a;
+  background: #167a43;
   color: #ffffff;
 }
 
@@ -86,14 +86,14 @@
 
 .safety-title {
   color: #8c5a0a;
-  font-size: 28rpx;
+  font-size: 14px;
   font-weight: 700;
 }
 
 .safety-copy {
   margin-top: 10rpx;
   color: #6f5b35;
-  font-size: 25rpx;
+  font-size: 14px;
   line-height: 1.7;
 }
 
@@ -101,7 +101,7 @@
   margin-top: 22rpx;
   background: transparent;
   color: #52645a;
-  font-size: 26rpx;
+  font-size: 14px;
 }
 
 .back-link::after {

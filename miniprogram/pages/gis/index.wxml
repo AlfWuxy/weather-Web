@@ -1,4 +1,5 @@
 <view class="page-shell">
+  <view class="sr-only" role="status" aria-role="status" aria-live="polite">{{announcement}}</view>
   <view class="hero gis-hero">
     <view class="hero-kicker">开放研究数据 · 1 km 网格</view>
     <view class="hero-title">看见高温暴露背后的空间差异。</view>
@@ -9,41 +10,110 @@
   <status-card wx:elif="{{metaError}}" state="error" title="GIS 信息暂不可用" detail="{{metaError}}" action-label="重试" bind:action="retryMetadata" />
 
   <block wx:if="{{!metaLoading && !metaError}}">
-    <freshness-bar updated-text="{{freshness.updatedText}}" stale="{{freshness.stale}}" source="{{freshness.source}}" refresh-deferred="{{freshness.refreshDeferred}}" />
+    <freshness-bar updated-text="{{freshness.updatedText}}" stale="{{freshness.stale}}" source="{{freshness.source}}" refresh-deferred="{{freshness.refreshDeferred}}" refresh-started="{{freshness.refreshStarted}}" />
     <view class="download-card card">
       <view class="row-between">
         <view class="download-copy">
           <view class="card-title">{{gisInfo.title || '都昌县热暴露网格'}}</view>
           <view class="small muted download-meta">{{sizeText}} · schema {{gisInfo.schema_version || '待确认'}}</view>
         </view>
-        <view class="download-icon">▦</view>
+        <view class="download-icon"><image class="download-icon-image" src="/assets/icons/map.png" mode="aspectFit" aria-hidden="true" /></view>
       </view>
       <view class="small muted download-note">为保证首屏流畅，GeoJSON 只在你点击后从宜老天气通后端下载。本数据不会打包进小程序。</view>
-      <button wx:if="{{mapState === 'idle'}}" class="primary-button" bindtap="loadMap">加载交互地图</button>
-      <button wx:elif="{{mapState === 'error'}}" class="secondary-button" bindtap="retryMap">重新加载地图</button>
+      <view wx:if="{{mapState === 'idle' || mapState === 'loading' || mapState === 'error'}}" class="download-warning" role="note" aria-role="note" aria-label="下载流量提示">下载提示：文件大小 {{sizeText}}。弱网下可能需要较长时间，下载期间可随时取消。完整下载并校验前不会显示地图或列表。</view>
+      <view wx:if="{{mapState === 'drawing' || mapState === 'ready'}}" class="download-ready" role="status" aria-role="status">已完整加载 {{cellCount}} 个网格，本次打开有效。</view>
+      <button wx:if="{{mapState === 'idle'}}" class="primary-button" bindtap="loadMap">加载地图与可读列表</button>
+      <button wx:elif="{{mapState === 'error'}}" class="secondary-button" bindtap="retryMap">重新加载网格数据</button>
     </view>
 
-    <status-card wx:if="{{mapState === 'loading'}}" state="loading" title="正在下载网格数据" detail="数据约 {{sizeText}}，仅本次打开使用。请保持网络连接。" />
-    <status-card wx:if="{{mapState === 'error'}}" state="error" title="地图加载失败" detail="{{mapError}}" />
+    <view wx:if="{{mapNotice}}" class="map-notice" role="status" aria-role="status">{{mapNotice}}</view>
+    <status-card wx:if="{{mapState === 'loading'}}" state="loading" title="正在下载网格数据" detail="文件大小 {{sizeText}}，仅本次打开使用。弱网下可取消后重试。" />
+    <button wx:if="{{mapState === 'loading'}}" class="cancel-download-button" bindtap="cancelMapLoad" aria-label="取消 GIS 网格数据下载">取消下载</button>
+    <status-card wx:if="{{mapState === 'error'}}" state="error" title="网格数据加载失败" detail="{{mapError}}" />
 
     <view wx:if="{{mapState === 'drawing' || mapState === 'ready'}}" class="map-section">
       <view class="section-title">{{activeLayerLabel}}</view>
       <view class="small muted source-line">来源：{{activeSource || '请查看下方数据来源'}}</view>
 
-      <scroll-view class="layer-scroll" scroll-x="true" show-scrollbar="false">
-        <view class="layer-row">
-          <button wx:for="{{layerOptions}}" wx:key="key" class="layer-button {{activeLayer === item.key ? 'active' : ''}}" data-key="{{item.key}}" bindtap="chooseLayer">{{item.label}}</button>
+      <view class="mode-row" role="tablist" aria-role="tablist" aria-label="地图查看方式">
+        <button class="mode-button {{viewMode === 'map' ? 'active' : ''}} {{!canvasAvailable ? 'unavailable' : ''}}" data-mode="map" bindtap="chooseMode" disabled="{{!canvasAvailable}}" role="tab" aria-role="tab" aria-pressed="{{viewMode === 'map'}}" aria-selected="{{viewMode === 'map'}}" aria-disabled="{{!canvasAvailable}}" aria-label="地图模式，{{viewMode === 'map' ? '已选择' : (canvasAvailable ? '未选择' : '不可用')}}"><image wx:if="{{viewMode === 'map'}}" class="control-icon" src="/assets/icons/check.png" mode="aspectFit" aria-hidden="true" /><text wx:else class="control-label" aria-hidden="true">{{canvasAvailable ? '未选' : '不可用'}}</text><text>地图模式</text></button>
+        <button class="mode-button {{viewMode === 'list' ? 'active' : ''}}" data-mode="list" bindtap="chooseMode" role="tab" aria-role="tab" aria-pressed="{{viewMode === 'list'}}" aria-selected="{{viewMode === 'list'}}" aria-label="可读列表模式，{{viewMode === 'list' ? '已选择' : '未选择'}}"><image wx:if="{{viewMode === 'list'}}" class="control-icon" src="/assets/icons/check.png" mode="aspectFit" aria-hidden="true" /><text wx:else class="control-label" aria-hidden="true">未选</text><text>可读列表</text></button>
+      </view>
+
+      <scroll-view class="layer-scroll" scroll-x="true" show-scrollbar="false" aria-label="数据图层选择">
+        <view class="layer-row" role="tablist" aria-role="tablist" aria-label="数据图层">
+          <button wx:for="{{layerOptions}}" wx:key="key" class="layer-button {{activeLayer === item.key ? 'active' : ''}}" data-key="{{item.key}}" bindtap="chooseLayer" role="tab" aria-role="tab" aria-pressed="{{activeLayer === item.key}}" aria-selected="{{activeLayer === item.key}}" aria-label="{{item.label}}，{{activeLayer === item.key ? '已选择' : '未选择'}}"><image wx:if="{{activeLayer === item.key}}" class="control-icon" src="/assets/icons/check-white.png" mode="aspectFit" aria-hidden="true" /><text wx:else class="control-label" aria-hidden="true">未选</text><text>{{item.label}}</text></button>
         </view>
       </scroll-view>
 
-      <view class="canvas-wrap">
-        <canvas id="gisCanvas" type="2d" class="gis-canvas" bindtouchend="onCanvasTap" catchtouchmove="blockCanvasMove"></canvas>
+      <view wx:if="{{mapError && mapState === 'ready'}}" class="map-fallback-note" role="status" aria-role="status">{{mapError}}</view>
+
+      <view class="canvas-wrap" hidden="{{viewMode !== 'map'}}">
+        <canvas id="gisCanvas" type="2d" class="gis-canvas" bindtouchstart="onCanvasTouchStart" bindtouchend="onCanvasTap" role="img" aria-role="img" aria-label="都昌县 1 km 网格{{activeLayerLabel}}地图。轻点网格可查看该格的完整数值，上下滑动可继续滚动页面，使用读屏时可切换到可读列表。"></canvas>
         <view wx:if="{{mapState === 'drawing'}}" class="draw-overlay">
           <view class="draw-number">{{drawProgress}}%</view>
           <view class="small">正在分批绘制 {{cellCount}} 个网格</view>
         </view>
       </view>
-      <view class="small muted map-hint">点击网格可查看该格数值。边界用于研究展示，不作为法定行政边界凭证。</view>
+      <view wx:if="{{viewMode === 'map'}}" class="small muted map-hint">点击网格可查看该格数值。边界用于研究展示，不作为法定行政边界凭证。</view>
+
+      <view wx:if="{{viewMode === 'list'}}" class="representative-section">
+        <view class="list-intro">先按当前图层数值从高到低列出 8 个快捷网格。下方支持按编号搜索，并可逐页阅读全部 {{cellCount}} 个网格。</view>
+        <view class="list-subtitle">最高值快捷入口</view>
+        <view wx:if="{{representativeRows.length}}" class="representative-list" role="list" aria-role="list" aria-label="{{activeLayerLabel}}最高值代表网格">
+          <view wx:for="{{representativeRows}}" wx:key="id" class="representative-card card" role="listitem" aria-role="listitem" aria-label="第 {{item.rank}} 位，{{item.ariaLabel}}">
+            <view class="row-between representative-heading">
+              <view><view class="rank-label">第 {{item.rank}} 位</view><view class="card-title">网格 {{item.id}}</view></view>
+              <view class="pill"><text class="value-marker">当前</text>{{item.activeLabel}} {{item.activeValue}}</view>
+            </view>
+            <view class="selected-grid representative-grid">
+              <view><text>65+ 人口</text><text class="selected-value">{{item.age}}</text></view>
+              <view><text>地表温度</text><text class="selected-value">{{item.temperature}}</text></view>
+              <view><text>观测覆盖</text><text class="selected-value">{{item.coverage}}</text></view>
+              <view><text>树木覆盖</text><text class="selected-value">{{item.tree}}</text></view>
+              <view><text>建成区</text><text class="selected-value">{{item.built}}</text></view>
+              <view><text>永久水域</text><text class="selected-value">{{item.water}}</text></view>
+              <view><text>表面高程</text><text class="selected-value">{{item.elevation}}</text></view>
+            </view>
+          </view>
+        </view>
+        <status-card wx:else state="empty" title="当前图层没有可读数值" detail="可切换其他图层继续查看。" />
+
+        <view class="all-grid-section" role="region" aria-role="region" aria-label="全部网格逐页阅读">
+          <view class="list-subtitle">全部网格逐页阅读</view>
+          <view class="grid-search-row">
+            <input class="grid-search-input" value="{{gridSearchInput}}" bindinput="onGridSearchInput" bindconfirm="searchGrid" confirm-type="search" maxlength="80" placeholder="输入网格编号，例如 cell-a" aria-label="按网格编号搜索" />
+            <button class="grid-search-button" bindtap="searchGrid" aria-label="搜索网格编号">搜索</button>
+          </view>
+          <button wx:if="{{gridSearch}}" class="clear-search-button" bindtap="clearGridSearch" aria-label="清除网格编号搜索">清除搜索“{{gridSearch}}”</button>
+          <view class="grid-page-summary" role="status" aria-role="status" aria-live="polite">
+            <text wx:if="{{gridPageTotal}}">第 {{gridPage}} / {{gridPageCount}} 页，共 {{gridPageTotal}} 个网格</text>
+            <text wx:else>没有找到匹配的网格</text>
+          </view>
+          <view wx:if="{{gridPageRows.length}}" class="all-grid-list" role="list" aria-role="list" aria-label="{{activeLayerLabel}}全部网格第 {{gridPage}} 页">
+            <view wx:for="{{gridPageRows}}" wx:key="id" class="grid-page-card card" role="listitem" aria-role="listitem" aria-label="第 {{item.position}} 个，{{item.ariaLabel}}">
+              <view class="row-between grid-page-heading">
+                <view><view class="rank-label">列表第 {{item.position}} 个</view><view class="card-title">网格 {{item.id}}</view></view>
+                <view class="pill">{{item.activeLabel}} {{item.activeValue}}</view>
+              </view>
+              <view class="selected-grid">
+                <view><text>65+ 人口</text><text class="selected-value">{{item.age}}</text></view>
+                <view><text>地表温度</text><text class="selected-value">{{item.temperature}}</text></view>
+                <view><text>观测覆盖</text><text class="selected-value">{{item.coverage}}</text></view>
+                <view><text>树木覆盖</text><text class="selected-value">{{item.tree}}</text></view>
+                <view><text>建成区</text><text class="selected-value">{{item.built}}</text></view>
+                <view><text>永久水域</text><text class="selected-value">{{item.water}}</text></view>
+                <view><text>表面高程</text><text class="selected-value">{{item.elevation}}</text></view>
+              </view>
+            </view>
+          </view>
+          <view wx:if="{{gridPageCount > 1}}" class="grid-pager" role="group" aria-role="group" aria-label="网格列表翻页">
+            <button class="pager-button" bindtap="previousGridPage" disabled="{{!gridHasPrevious}}" aria-disabled="{{!gridHasPrevious}}" aria-label="上一页网格">上一页</button>
+            <view class="pager-position" aria-hidden="true">{{gridPage}} / {{gridPageCount}}</view>
+            <button class="pager-button" bindtap="nextGridPage" disabled="{{!gridHasNext}}" aria-disabled="{{!gridHasNext}}" aria-label="下一页网格">下一页</button>
+          </view>
+        </view>
+      </view>
 
       <view class="legend card">
         <view class="strong">图例</view>
@@ -52,7 +122,7 @@
         </view>
       </view>
 
-      <view wx:if="{{selected}}" class="selected-card card">
+      <view wx:if="{{selected}}" id="selectedDetail" class="selected-card card" role="region" aria-role="region" focusable="true" aria-label="{{selected.ariaLabel}}">
         <view class="row-between"><view class="card-title">网格 {{selected.id}}</view><view class="pill">{{selected.activeLabel}} {{selected.activeValue}}</view></view>
         <view class="selected-grid">
           <view><text>65+ 人口</text><text class="selected-value">{{selected.age}}</text></view>

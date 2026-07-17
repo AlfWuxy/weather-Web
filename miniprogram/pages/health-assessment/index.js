@@ -46,14 +46,28 @@ Page({
 
   async onLoad(options) {
     if (!requireToken()) return;
+    this._unloaded = false;
+    this._latestRequestToken = 0;
+    this._pageRequestToken = 0;
+    this._submitRequestToken = 0;
     this.requestedPairId = Number(options.pair_id || 0) || null;
     await this.loadPage();
   },
 
+  onUnload() {
+    this._unloaded = true;
+    this._latestRequestToken += 1;
+    this._pageRequestToken += 1;
+    this._submitRequestToken += 1;
+  },
+
   async loadPage() {
+    const pageToken = (this._pageRequestToken || 0) + 1;
+    this._pageRequestToken = pageToken;
     this.setData({ loading: true });
     try {
       const elderData = await authApi({ method: 'GET', path: '/mp/api/v1/elders' });
+      if (this._unloaded || pageToken !== this._pageRequestToken) return;
       const elders = normalizeList(elderData, ['items', 'elders']);
       if (!elders.length) {
         wx.showModal({
@@ -75,33 +89,60 @@ Page({
       });
       await this.loadLatest();
     } catch (error) {
-      wx.showToast({ title: '筛查页面加载失败', icon: 'none' });
+      if (!this._unloaded && pageToken === this._pageRequestToken) {
+        wx.showToast({ title: '筛查页面加载失败', icon: 'none' });
+      }
     } finally {
-      this.setData({ loading: false });
+      if (!this._unloaded && pageToken === this._pageRequestToken) this.setData({ loading: false });
     }
   },
 
   async loadLatest() {
-    if (!this.data.pairId) return;
+    const requestedPairId = Number(this.data.pairId);
+    if (!requestedPairId) return;
+    const requestToken = (this._latestRequestToken || 0) + 1;
+    this._latestRequestToken = requestToken;
     try {
       const data = await authApi({
         method: 'GET',
-        path: `/mp/api/v1/health/assessment?pair_id=${this.data.pairId}`,
+        path: `/mp/api/v1/health/assessment?pair_id=${requestedPairId}`,
       });
+      if (
+        this._unloaded
+        || requestToken !== this._latestRequestToken
+        || Number(this.data.pairId) !== requestedPairId
+      ) return;
       this.setData({ latest: normalizeAssessment(data && data.latest) });
     } catch (error) {
-      this.setData({ latest: null });
+      if (
+        !this._unloaded
+        && requestToken === this._latestRequestToken
+        && Number(this.data.pairId) === requestedPairId
+      ) this.setData({ latest: null });
     }
   },
 
   async onElderChange(event) {
+    if (this.data.busy || this.data.loading) return;
     const elderIndex = Number(event.detail.value || 0);
-    const pairId = Number(this.data.elders[elderIndex].pair_id);
-    this.setData({ elderIndex, pairId, latest: null });
+    const elder = this.data.elders[elderIndex];
+    if (!elder) return;
+    const pairId = Number(elder.pair_id);
+    if (!pairId || pairId === Number(this.data.pairId)) return;
+    this._latestRequestToken = (this._latestRequestToken || 0) + 1;
+    this.setData({
+      elderIndex,
+      pairId,
+      latest: null,
+      questions: freshQuestions(),
+      answers: {},
+      completedCount: 0,
+    });
     await this.loadLatest();
   },
 
   onSelect(event) {
+    if (this.data.busy || this.data.loading) return;
     const id = event.currentTarget.dataset.id;
     const value = event.currentTarget.dataset.value;
     const answers = Object.assign({}, this.data.answers, { [id]: value });
@@ -125,24 +166,38 @@ Page({
 
   async submitAssessment() {
     if (this.data.busy) return;
+    const submittedPairId = Number(this.data.pairId);
+    if (!submittedPairId) {
+      wx.showToast({ title: '请先选择家人', icon: 'none' });
+      return;
+    }
     const validation = validateAssessment(this.data.answers);
     if (!validation.valid) {
       wx.showToast({ title: validation.error, icon: 'none' });
       return;
     }
+    const submitToken = (this._submitRequestToken || 0) + 1;
+    this._submitRequestToken = submitToken;
     this.setData({ busy: true });
     try {
       const data = await authApi({
         method: 'POST',
         path: '/mp/api/v1/health/assessment',
-        data: Object.assign({ pair_id: this.data.pairId }, validation.payload),
+        data: Object.assign({ pair_id: submittedPairId }, validation.payload),
       });
+      if (
+        this._unloaded
+        || submitToken !== this._submitRequestToken
+        || Number(this.data.pairId) !== submittedPairId
+      ) return;
       this.setData({ latest: normalizeAssessment(data), questions: freshQuestions(), answers: {}, completedCount: 0 });
       wx.showToast({ title: '筛查已保存', icon: 'success' });
     } catch (error) {
-      wx.showToast({ title: '提交失败，请稍后再试', icon: 'none' });
+      if (!this._unloaded && submitToken === this._submitRequestToken) {
+        wx.showToast({ title: '提交失败，请稍后再试', icon: 'none' });
+      }
     } finally {
-      this.setData({ busy: false });
+      if (!this._unloaded && submitToken === this._submitRequestToken) this.setData({ busy: false });
     }
   },
 });

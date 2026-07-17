@@ -1,4 +1,5 @@
 const { authApi, clear, getMeta, requireToken } = require('../elders/care-session');
+const { clearAcquisitionContext } = require('../../utils/share');
 
 function publicHome() {
   wx.reLaunch({ url: '/pages/home/index' });
@@ -6,35 +7,51 @@ function publicHome() {
 
 Page({
   data: {
-    me: {},
+    me: null,
+    accountVerified: false,
+    loadError: '',
     canDeleteAccount: false,
-    loading: false,
+    loading: true,
     busy: false,
   },
 
   async onShow() {
     if (!requireToken()) return;
+    this._unloaded = false;
     const meta = getMeta();
     this.setData({ canDeleteAccount: meta.login_method === 'wechat' });
     await this.loadAccount();
   },
 
+  onUnload() {
+    this._unloaded = true;
+  },
+
   async loadAccount() {
-    this.setData({ loading: true });
+    this.setData({ loading: true, loadError: '', accountVerified: false, me: null });
     try {
       const me = await authApi({ method: 'GET', path: '/mp/api/v1/me' });
-      this.setData({ me: me || {} });
+      if (this._unloaded) return;
+      if (!me || typeof me !== 'object') throw new Error('invalid_account_response');
+      this.setData({ me, accountVerified: true });
     } catch (error) {
-      wx.showToast({ title: '账号信息加载失败', icon: 'none' });
+      if (this._unloaded) return;
+      this.setData({
+        me: null,
+        accountVerified: false,
+        loadError: '账号信息没有验证成功，请检查网络后重试。',
+      });
     } finally {
-      this.setData({ loading: false });
+      if (!this._unloaded) this.setData({ loading: false });
     }
   },
 
   openPrivacy() {
     if (typeof wx.openPrivacyContract === 'function') {
       wx.openPrivacyContract({
-        fail: () => this.showLocalPrivacy(),
+        fail: () => {
+          if (!this._unloaded) this.showLocalPrivacy();
+        },
       });
       return;
     }
@@ -42,12 +59,11 @@ Page({
   },
 
   showLocalPrivacy() {
-    wx.showModal({
-      title: '账号与健康信息说明',
-      content: '系统仅保存提供天气提醒、家庭照护和健康记录所需的信息。健康筛查不作医疗诊断。退出登录会清理本机登录状态，服务端记录按隐私规则处理。',
-      showCancel: false,
-      confirmText: '我知道了',
-    });
+    wx.navigateTo({ url: '/pages/privacy/index' });
+  },
+
+  openAgreement() {
+    wx.navigateTo({ url: '/pages/agreement/index' });
   },
 
   logout() {
@@ -65,6 +81,7 @@ Page({
           // 网络异常时仍清理本机状态，避免共享设备继续显示账号资料。
         } finally {
           clear();
+          clearAcquisitionContext();
           this.setData({ busy: false });
           publicHome();
         }
@@ -74,6 +91,10 @@ Page({
 
   requestAccountDeletion() {
     if (this.data.busy) return;
+    if (!this.data.accountVerified) {
+      wx.showToast({ title: '请先重新验证账号信息', icon: 'none' });
+      return;
+    }
     if (!this.data.canDeleteAccount) {
       wx.showModal({
         title: '请先使用微信登录',
@@ -105,6 +126,7 @@ Page({
               });
               const message = '注销处理已完成，账号身份已匿名化，当前会话已退出。关联照护数据已按服务端规则处理。';
               clear();
+              clearAcquisitionContext();
               wx.showModal({
                 title: '服务端处理结果',
                 content: message,

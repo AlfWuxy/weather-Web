@@ -12,13 +12,13 @@
       <view class="card-title">识别风险</view>
       <view class="trust-text">把天气、官方预警和地区风险分开呈现。</view>
     </view>
-    <view class="flow-arrow">↓</view>
+    <view class="flow-arrow"><image src="/assets/icons/arrow-down.png" mode="aspectFit" aria-hidden="true" /></view>
     <view class="trust-card">
       <view class="trust-number">2</view>
       <view class="card-title">可信转述</view>
       <view class="trust-text">家属把信息翻译成老人熟悉、愿意采用的话。</view>
     </view>
-    <view class="flow-arrow">↓</view>
+    <view class="flow-arrow"><image src="/assets/icons/arrow-down.png" mode="aspectFit" aria-hidden="true" /></view>
     <view class="trust-card">
       <view class="trust-number">3</view>
       <view class="card-title">完成行动</view>
@@ -28,10 +28,10 @@
 
   <view class="section-title">三个设计原则</view>
   <view class="grid-two">
-    <view class="principle card"><view class="principle-icon">大</view><view class="strong">老人看得清</view><view class="small muted">大字号、高对比、少层级</view></view>
-    <view class="principle card"><view class="principle-icon">简</view><view class="strong">家属说得明白</view><view class="small muted">建议具体、可以转述</view></view>
-    <view class="principle card"><view class="principle-icon">实</view><view class="strong">社区做得到</view><view class="small muted">支持排序、走访和资源</view></view>
-    <view class="principle card"><view class="principle-icon">明</view><view class="strong">依据可核对</view><view class="small muted">来源、缓存、局限透明</view></view>
+    <view class="principle card"><view class="principle-icon"><image src="/assets/icons/accessibility.png" mode="aspectFit" aria-hidden="true" /></view><view class="strong">老人看得清</view><view class="small muted">大字号、高对比、少层级</view></view>
+    <view class="principle card"><view class="principle-icon"><image src="/assets/icons/checklist.png" mode="aspectFit" aria-hidden="true" /></view><view class="strong">家属说得明白</view><view class="small muted">建议具体、可以转述</view></view>
+    <view class="principle card"><view class="principle-icon"><image src="/assets/icons/care.png" mode="aspectFit" aria-hidden="true" /></view><view class="strong">社区做得到</view><view class="small muted">支持排序、走访和资源</view></view>
+    <view class="principle card"><view class="principle-icon"><image src="/assets/icons/info.png" mode="aspectFit" aria-hidden="true" /></view><view class="strong">依据可核对</view><view class="small muted">来源、缓存、局限透明</view></view>
   </view>
 
   <view class="section-title">使用边界</view>

@@ -34,9 +34,9 @@ Page({
       // 都昌县天气只读取共享 30 分钟快照，不按老人重复请求。
       const [elderData, snapshot] = await Promise.all([
         authApi({ method: 'GET', path: '/mp/api/v1/elders' }),
-        getSnapshot().catch(() => ({})),
+        getSnapshot().catch(() => null),
       ]);
-      const weather = normalizeSnapshot(snapshot);
+      const weather = snapshot ? normalizeSnapshot(snapshot) : this.data.weather;
       const elders = normalizeList(elderData, ['items', 'elders']).map((item) => ({
         ...item,
         displayName: memberName(item),
@@ -47,7 +47,10 @@ Page({
       }));
       this.setData({ elders, weather });
     } catch (error) {
-      this.setData({ loadError: '照护资料暂时没有加载出来，请稍后再试。' });
+      const loadError = this.data.elders.length
+        ? '刷新失败，以下仍显示上次成功加载的照护资料。'
+        : '照护资料暂时没有加载出来，请稍后再试。';
+      this.setData({ loadError });
     } finally {
       this.setData({ loading: false });
     }

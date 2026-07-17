@@ -1,4 +1,17 @@
 .state-card {
+  animation: state-enter 180ms ease-out both;
+}
+
+@keyframes state-enter {
+  from { opacity: 0; transform: translateY(8rpx); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes state-spin {
+  to { transform: rotate(360deg); }
+}
+
+.state-card {
   display: flex;
   align-items: flex-start;
   gap: 20rpx;
@@ -17,14 +30,18 @@
   width: 58rpx;
   height: 58rpx;
   border-radius: 50%;
-  color: #a34216;
   background: #fff0df;
-  font-size: 34rpx;
-  font-weight: 800;
 }
+.state-icon-image { width: 34rpx; height: 34rpx; opacity: 0.68; }
+.state-icon .loading-icon { animation: state-spin 900ms linear infinite; }
 .state-loading .state-icon { color: #6f6259; background: #f1ede9; }
 .state-error .state-icon { color: #a0281a; background: #ffe6df; }
 .state-copy { flex: 1; min-width: 0; }
-.state-title { font-size: 32rpx; line-height: 1.4; font-weight: 750; }
-.state-detail { margin-top: 8rpx; color: #786d65; font-size: 27rpx; line-height: 1.6; }
-.state-action { display: inline-flex; margin: 18rpx 0 0; padding: 12rpx 22rpx; color: #a34216; background: #fff0df; border-radius: 16rpx; font-size: 27rpx; }
+.state-title { font-size: 16px; line-height: 1.4; font-weight: 750; }
+.state-detail { margin-top: 8rpx; color: #786d65; font-size: 14px; line-height: 1.6; }
+.state-action { display: inline-flex; min-height: 88rpx; margin: 18rpx 0 0; padding: 14rpx 24rpx; color: #8d3511; background: #fff0df; border-radius: 16rpx; font-size: 14px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .state-card,
+  .state-icon .loading-icon { animation: none; }
+}

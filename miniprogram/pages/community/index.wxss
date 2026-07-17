@@ -1,14 +1,15 @@
-.community-hero { background: linear-gradient(145deg, #ec762b 0%, #9f4c1c 100%); }
+.community-hero { background: linear-gradient(145deg, #9f3a12 0%, #9f4c1c 100%); }
 .community-summary { margin: 20rpx 0; }
 .filters { width: 100%; margin: 12rpx 0 22rpx; white-space: nowrap; }
 .filter-row { display: inline-flex; gap: 14rpx; padding: 2rpx; }
-.filter-pill { min-height: 72rpx; margin: 0; padding: 14rpx 24rpx; border-radius: 999rpx; color: #685a51; background: #f3e8df; font-size: 27rpx; }
-.filter-pill.active { color: #fff; background: #d85d19; }
+.filter-pill { display: inline-flex; align-items: center; justify-content: center; gap: 10rpx; min-height: 88rpx; margin: 0; padding: 14rpx 24rpx; border-radius: 999rpx; color: #685a51; background: #f3e8df; font-size: 14px; }
+.filter-pill image { width: 34rpx; height: 34rpx; }
+.filter-pill.active { color: #fff; background: #b64815; }
 .community-card { display: flex; align-items: flex-start; gap: 20rpx; }
 .rank { display: flex; flex: 0 0 54rpx; align-items: center; justify-content: center; width: 54rpx; height: 54rpx; border-radius: 16rpx; color: #a34216; background: #fff0df; font-weight: 800; }
 .community-copy { flex: 1; min-width: 0; }
 .community-metrics { display: flex; flex-wrap: wrap; gap: 24rpx; margin-top: 20rpx; padding-top: 18rpx; border-top: 1rpx solid #efe2d8; }
 .community-metrics > view { display: flex; gap: 7rpx; flex-direction: column; }
-.community-value { color: #8f3b16; font-size: 30rpx; font-weight: 800; }
+.community-value { color: #8f3b16; font-size: 15px; font-weight: 800; }
 .hotspot { margin-top: 16rpx; }
 .community-links { margin: 24rpx 0; }

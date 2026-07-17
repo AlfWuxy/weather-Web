@@ -7,13 +7,14 @@ Page({
     loggedIn: false,
     wxpusherUid: '',
     pushEnabled: false,
+    wxpusherConsent: false,
   },
 
   async onShow() {
     const loggedIn = !!getToken();
     this.setData({ loggedIn });
     if (!loggedIn) {
-      this.setData({ loading: false, wxpusherUid: '', pushEnabled: false });
+      this.setData({ loading: false, wxpusherUid: '', pushEnabled: false, wxpusherConsent: false });
       return;
     }
     await this.loadSettings();
@@ -26,6 +27,7 @@ Page({
       this.setData({
         wxpusherUid: me.wxpusher_uid || '',
         pushEnabled: !!me.push_enabled,
+        wxpusherConsent: false,
       });
     } catch (error) {
       wx.showToast({ title: '设置加载失败', icon: 'none' });
@@ -35,12 +37,23 @@ Page({
   },
 
   onUid(event) { this.setData({ wxpusherUid: String(event.detail.value || '').trim() }); },
-  onToggle(event) { this.setData({ pushEnabled: !!event.detail.value }); },
+  onToggle(event) {
+    const pushEnabled = !!event.detail.value;
+    this.setData({ pushEnabled, wxpusherConsent: pushEnabled ? this.data.wxpusherConsent : false });
+  },
+  onWxPusherConsent(event) {
+    const values = event.detail.value || [];
+    this.setData({ wxpusherConsent: values.includes('agreed') });
+  },
 
   async saveSettings() {
     if (this.data.busy) return;
     if (this.data.pushEnabled && !this.data.wxpusherUid) {
       wx.showToast({ title: '请先填写 WxPusher UID', icon: 'none' });
+      return;
+    }
+    if (this.data.pushEnabled && !this.data.wxpusherConsent) {
+      wx.showToast({ title: '请先确认第三方传输说明', icon: 'none' });
       return;
     }
     this.setData({ busy: true });
@@ -51,6 +64,7 @@ Page({
         data: {
           wxpusher_uid: this.data.wxpusherUid,
           push_enabled: this.data.pushEnabled,
+          wxpusher_consent: this.data.pushEnabled && this.data.wxpusherConsent,
         },
       });
       wx.showToast({ title: '设置已保存', icon: 'success' });
@@ -75,6 +89,10 @@ Page({
 
   goPrivacy() {
     wx.navigateTo({ url: '/pages/privacy/index' });
+  },
+
+  goAgreement() {
+    wx.navigateTo({ url: '/pages/agreement/index' });
   },
 
   goAbout() {

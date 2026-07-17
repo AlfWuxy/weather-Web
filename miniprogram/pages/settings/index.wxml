@@ -12,8 +12,9 @@
 
   <view wx:if="{{!loggedIn}}" class="guest-card">
     <view class="guest-title">登录开启家庭照护</view>
-    <view class="guest-copy">登录后可添加老人、记录健康日记、保存用药记录和完成行动确认。查看公共天气、隐私说明和方法透明度无需登录。</view>
-    <button class="login-button" bindtap="goLogin">微信登录或绑定 Token</button>
+    <view class="guest-copy">登录后可添加家人、保存每日照护记录、完成行动确认和设置提醒。查看公共天气、隐私说明和方法透明度无需登录。</view>
+    <button class="login-button" bindtap="goLogin" hover-class="button-pressed">微信登录</button>
+    <view class="fallback-note">微信登录暂不可用时，登录页也提供备用登录码。</view>
   </view>
 
   <view wx:if="{{loading}}" class="state-box">正在加载设置…</view>
@@ -21,58 +22,71 @@
 
     <view class="settings-card">
       <view class="section-title">网页端兼容推送</view>
-      <view class="section-copy">如你仍在网页端使用 WxPusher，可保留原有 UID。微信小程序通知权限由系统设置管理。</view>
+      <view class="section-copy">这是独立于微信系统通知的可选第三方通道，默认关闭。开启前请确认下方传输范围。</view>
       <view class="field-label">WxPusher UID</view>
-      <input class="text-input" maxlength="80" value="{{wxpusherUid}}" bindinput="onUid" placeholder="例如：UID_xxxxx" />
-      <view class="switch-row">
+      <input class="text-input" maxlength="80" value="{{wxpusherUid}}" bindinput="onUid" placeholder="例如：UID_xxxxx" aria-label="WxPusher UID" />
+      <label class="switch-row" for="wxpusherSwitch" aria-label="开启网页端兼容推送">
         <view>
           <view class="switch-title">开启兼容推送</view>
           <view class="switch-copy">UID 为空时不会开启</view>
         </view>
-        <switch checked="{{pushEnabled}}" color="#168a4a" bindchange="onToggle" />
-      </view>
-      <button class="save-button" loading="{{busy}}" disabled="{{busy}}" bindtap="saveSettings">保存推送设置</button>
+        <switch id="wxpusherSwitch" checked="{{pushEnabled}}" color="#137947" bindchange="onToggle" aria-label="开启网页端兼容推送" />
+      </label>
+      <label wx:if="{{pushEnabled}}" class="third-party-consent">
+        <checkbox-group bindchange="onWxPusherConsent">
+          <checkbox value="agreed" checked="{{wxpusherConsent}}" color="#137947" aria-label="同意 WxPusher 第三方传输说明" />
+        </checkbox-group>
+        <view class="consent-copy">我同意向 WxPusher 发送 UID、都昌县级预警标题与正文及一次性点击链接。不会发送家人姓名、健康日记、用药记录或家庭地址。</view>
+      </label>
+      <button class="save-button" loading="{{busy}}" disabled="{{busy}}" bindtap="saveSettings" hover-class="button-pressed">保存推送设置</button>
     </view>
 
   </block>
 
   <view class="menu-card">
-    <button class="menu-row" bindtap="goPrivacy">
+    <button class="menu-row" bindtap="goPrivacy" hover-class="button-pressed">
       <view>
         <view class="menu-title">隐私说明</view>
         <view class="menu-copy">无需登录即可查看数据收集与使用边界</view>
       </view>
-      <view class="chevron">›</view>
+      <image class="chevron" src="/assets/icons/chevron-right.png" mode="aspectFit" aria-hidden="true" />
     </button>
-    <button class="menu-row border-top" bindtap="goTransparency">
+    <button class="menu-row border-top" bindtap="goTransparency" hover-class="button-pressed">
       <view>
         <view class="menu-title">计算透明度</view>
         <view class="menu-copy">查看数据来源、计算方法和适用边界</view>
       </view>
-      <view class="chevron">›</view>
+      <image class="chevron" src="/assets/icons/chevron-right.png" mode="aspectFit" aria-hidden="true" />
     </button>
-    <button class="menu-row border-top" bindtap="goAbout">
+    <button class="menu-row border-top" bindtap="goAgreement" hover-class="button-pressed">
+      <view>
+        <view class="menu-title">用户协议</view>
+        <view class="menu-copy">查看服务范围、使用规则和责任边界</view>
+      </view>
+      <image class="chevron" src="/assets/icons/chevron-right.png" mode="aspectFit" aria-hidden="true" />
+    </button>
+    <button class="menu-row border-top" bindtap="goAbout" hover-class="button-pressed">
       <view>
         <view class="menu-title">关于宜老天气通</view>
         <view class="menu-copy">了解产品目标与信任网络</view>
       </view>
-      <view class="chevron">›</view>
+      <image class="chevron" src="/assets/icons/chevron-right.png" mode="aspectFit" aria-hidden="true" />
     </button>
-    <button wx:if="{{loggedIn}}" class="menu-row border-top" bindtap="openSystemSettings">
+    <button wx:if="{{loggedIn}}" class="menu-row border-top" bindtap="openSystemSettings" hover-class="button-pressed">
       <view>
         <view class="menu-title">微信通知权限</view>
         <view class="menu-copy">查看小程序通知和系统权限</view>
       </view>
-      <view class="chevron">›</view>
+      <image class="chevron" src="/assets/icons/chevron-right.png" mode="aspectFit" aria-hidden="true" />
     </button>
-    <button wx:if="{{loggedIn}}" class="menu-row border-top" bindtap="goAccount">
+    <button wx:if="{{loggedIn}}" class="menu-row border-top" bindtap="goAccount" hover-class="button-pressed">
         <view>
           <view class="menu-title">账号、隐私与注销</view>
           <view class="menu-copy">管理登录状态或申请注销账号</view>
         </view>
-        <view class="chevron">›</view>
+        <image class="chevron" src="/assets/icons/chevron-right.png" mode="aspectFit" aria-hidden="true" />
     </button>
   </view>
 
-  <button wx:if="{{loggedIn}}" class="logout-button" loading="{{busy}}" disabled="{{busy}}" bindtap="logout">退出登录</button>
+  <button wx:if="{{loggedIn}}" class="logout-button" loading="{{busy}}" disabled="{{busy}}" bindtap="logout" hover-class="button-pressed">退出登录</button>
 </view>
