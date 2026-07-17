@@ -2,7 +2,7 @@
 """Alert dispatch pipeline (pilot).
 
 Strategy:
-- Prefer official QWeather warnings (/warning/now)
+- Prefer official QWeather warnings (weatheralert v1)
 - Otherwise use simple threshold rules (heat/cold)
 - Deduplicate per (alert_id, user_id) for successful sends
 - Track deliveries and clicks (AlertDelivery + /t/<token>)
@@ -54,8 +54,8 @@ def _build_tracking_url(delivery_token: str) -> str:
     return f"{base.rstrip('/')}/t/{delivery_token}"
 
 
-def _warning_severity_rank(level: str) -> int:
-    # Common CN warning levels: 红色 > 橙色 > 黄色 > 蓝色
+def _warning_severity_rank(level: str, severity: str = "") -> int:
+    # 官方中文色级优先，其次使用 CAP 严重度。
     level = str(level or "")
     if "红" in level:
         return 4
@@ -65,7 +65,14 @@ def _warning_severity_rank(level: str) -> int:
         return 2
     if "蓝" in level:
         return 1
-    return 0
+    cap_rank = {
+        "extreme": 5,
+        "severe": 4,
+        "moderate": 3,
+        "minor": 2,
+        "unknown": 0,
+    }
+    return cap_rank.get(str(severity or "").strip().lower(), 0)
 
 
 def _choose_primary_warning(warnings: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
@@ -73,7 +80,10 @@ def _choose_primary_warning(warnings: List[Dict[str, Any]]) -> Optional[Dict[str
         return None
     return sorted(
         warnings,
-        key=lambda w: (_warning_severity_rank(w.get("level")), len(str(w.get("text") or ""))),
+        key=lambda w: (
+            _warning_severity_rank(w.get("level"), w.get("severity")),
+            len(str(w.get("text") or "")),
+        ),
         reverse=True,
     )[0]
 
@@ -114,10 +124,14 @@ def _get_or_create_weather_alert(
     description: str,
     dedupe_hours: int = 6,
 ) -> WeatherAlert:
+    # 查询与写入使用相同长度，避免 v1 长事件名绕过去重。
+    alert_type = str(alert_type or "")[:50]
+    alert_level = str(alert_level or "")[:20]
     cutoff = now - timedelta(hours=max(int(dedupe_hours), 1))
     recent = WeatherAlert.query.filter(
         WeatherAlert.location == location_key,
         WeatherAlert.alert_type == alert_type,
+        WeatherAlert.alert_level == alert_level,
         WeatherAlert.alert_date >= cutoff,
     ).order_by(WeatherAlert.alert_date.desc()).first()
     if recent:
@@ -126,8 +140,8 @@ def _get_or_create_weather_alert(
     record = WeatherAlert(
         alert_date=now,
         location=location_key,
-        alert_type=str(alert_type or "")[:50],
-        alert_level=str(alert_level or "")[:20],
+        alert_type=alert_type,
+        alert_level=alert_level,
         description=description,
         affected_communities=json.dumps([location_key], ensure_ascii=False),
         disease_correlation=json.dumps({}, ensure_ascii=False),
@@ -199,13 +213,14 @@ def _render_push_content(
         lines.append(f"地点：{display_name}")
 
     if warning:
-        level = warning.get("level") or ""
+        level = warning.get("level") or warning.get("severity") or ""
         wtype = warning.get("type") or ""
         if level or wtype:
             lines.append(f"官方预警：{wtype}{level}".strip())
         text = (warning.get("text") or "").strip()
         if text:
             lines.append(text[:220] + ("…" if len(text) > 220 else ""))
+        lines.append("数据来源：和风天气（QWeather）；预警可能延迟或过期，请以官方最新发布为准。")
     elif threshold_desc:
         lines.append(f"阈值触发：{threshold_desc}")
 
@@ -260,7 +275,7 @@ def dispatch_alerts(now=None, dedupe_hours: int = 6) -> Dict[str, Any]:
 
         if primary_warning:
             alert_type = primary_warning.get("type") or "qweather_warning"
-            alert_level = primary_warning.get("level") or ""
+            alert_level = primary_warning.get("level") or primary_warning.get("severity") or ""
             description = primary_warning.get("title") or primary_warning.get("text") or "官方预警"
         elif threshold:
             alert_type, alert_level, description = threshold

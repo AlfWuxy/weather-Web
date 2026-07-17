@@ -21,7 +21,7 @@ def test_warning_service_no_key_returns_empty(app):
         assert warnings == []
 
 
-def test_warning_service_parses_payload(app, monkeypatch):
+def test_warning_service_parses_weatheralert_v1_payload(app, monkeypatch):
     from services.warning_service import get_qweather_warnings
 
     class FakeResp:
@@ -29,15 +29,28 @@ def test_warning_service_parses_payload(app, monkeypatch):
 
         def json(self):
             return {
-                "code": "200",
-                "warning": [
+                "metadata": {
+                    "zeroResult": False,
+                    "attributions": [
+                        "https://developer.qweather.com/attribution.html",
+                        "Alert data may be delayed or out of date.",
+                    ],
+                },
+                "alerts": [
                     {
-                        "title": "高温黄色预警",
-                        "typeName": "高温",
-                        "level": "黄色",
-                        "text": "请注意防暑降温",
-                        "startTime": "2026-02-09T08:00+08:00",
-                        "endTime": "2026-02-09T20:00+08:00"
+                        "id": "alert-1",
+                        "messageType": {"code": "update", "supersedes": ["alert-0"]},
+                        "eventType": {"name": "高温", "code": "11B01"},
+                        "headline": "高温黄色预警",
+                        "description": "请注意防暑降温",
+                        "onsetTime": "2026-07-17T08:00+08:00",
+                        "expireTime": "2026-07-17T20:00+08:00",
+                        "color": {"code": "Yellow"},
+                        "severity": "Severe",
+                        "certainty": "Observed",
+                        "urgency": "Immediate",
+                        "responseTypes": ["Prepare", "Monitor"],
+                        "instruction": "减少户外活动",
                     }
                 ],
             }
@@ -53,10 +66,53 @@ def test_warning_service_parses_payload(app, monkeypatch):
         item = warnings[0]
         assert item["title"] == "高温黄色预警"
         assert item["type"] == "高温"
-        assert "text" in item
-        assert item["severity"] == "Minor"
-        assert item["certainty"] == "Likely"
-        assert item["urgency"] == "Expected"
+        assert item["level"] == "黄色"
+        assert item["text"] == "请注意防暑降温"
+        assert item["start_time"] == "2026-07-17T08:00+08:00"
+        assert item["end_time"] == "2026-07-17T20:00+08:00"
+        assert item["severity"] == "Severe"
+        assert item["certainty"] == "Observed"
+        assert item["urgency"] == "Immediate"
+        assert item["response"] == "Prepare,Monitor"
+        assert item["instruction"] == "减少户外活动"
+        assert item["source_id"] == "alert-1"
+        assert item["message_type"] == "update"
+        assert item["supersedes"] == ["alert-0"]
+        assert item["attributions"][0] == "https://developer.qweather.com/attribution.html"
+
+
+def test_warning_service_keeps_legacy_v7_payload_compatible(app, monkeypatch):
+    from services.warning_service import get_qweather_warnings
+
+    class FakeResp:
+        status_code = 200
+
+        def json(self):
+            return {
+                "code": "200",
+                "warning": [{
+                    "title": "高温黄色预警",
+                    "typeName": "高温",
+                    "level": "黄色",
+                    "text": "请注意防暑降温",
+                    "startTime": "2026-02-09T08:00+08:00",
+                    "endTime": "2026-02-09T20:00+08:00",
+                }],
+            }
+
+    monkeypatch.setattr("services.warning_service.requests.get", lambda *args, **kwargs: FakeResp())
+
+    with app.app_context():
+        app.config["QWEATHER_KEY"] = "x"
+        app.config["QWEATHER_API_BASE"] = "https://unit-test.qweatherapi.com/v7"
+        app.config["QWEATHER_CANONICAL_LOCATION"] = "116.20,29.27"
+
+        item = get_qweather_warnings("任意村庄")[0]
+
+    assert item["title"] == "高温黄色预警"
+    assert item["type"] == "高温"
+    assert item["level"] == "黄色"
+    assert item["severity"] == "Minor"
 
 
 def test_warning_service_reuses_duchang_cache_and_hides_key_from_url(app, monkeypatch):
@@ -68,7 +124,7 @@ def test_warning_service_reuses_duchang_cache_and_hides_key_from_url(app, monkey
         status_code = 200
 
         def json(self):
-            return {"code": "200", "warning": []}
+            return {"metadata": {"zeroResult": True}, "alerts": []}
 
     def fake_get(url, **kwargs):
         calls.append((url, kwargs))
@@ -78,16 +134,18 @@ def test_warning_service_reuses_duchang_cache_and_hides_key_from_url(app, monkey
 
     with app.app_context():
         app.config["QWEATHER_KEY"] = "secret-test-key"
-        app.config["QWEATHER_API_BASE"] = "https://example.com/v7"
+        app.config["QWEATHER_API_BASE"] = "https://unit-test.qweatherapi.com/v7"
         app.config["QWEATHER_CANONICAL_LOCATION"] = "116.20,29.27"
 
         assert get_qweather_warnings("101010100") == []
         assert get_qweather_warnings("101020100") == []
 
     assert len(calls) == 1
-    _url, kwargs = calls[0]
-    assert kwargs["params"] == {"location": "116.20,29.27"}
+    url, kwargs = calls[0]
+    assert url == "https://unit-test.qweatherapi.com/weatheralert/v1/current/29.27/116.20"
+    assert kwargs["params"] == {"localTime": "true", "lang": "zh"}
     assert kwargs["headers"] == {"X-QW-Api-Key": "secret-test-key"}
+    assert "secret-test-key" not in url
 
 
 def test_warning_service_uses_only_jwt_header(app, monkeypatch):
@@ -99,7 +157,7 @@ def test_warning_service_uses_only_jwt_header(app, monkeypatch):
         status_code = 200
 
         def json(self):
-            return {"code": "200", "warning": []}
+            return {"metadata": {"zeroResult": True}, "alerts": []}
 
     monkeypatch.setattr(
         warning_service,
@@ -124,6 +182,7 @@ def test_warning_service_uses_only_jwt_header(app, monkeypatch):
         assert warning_service.get_qweather_warnings("任意村庄") == []
 
     assert len(calls) == 1
+    assert calls[0][0] == "https://unit-test.qweatherapi.com/weatheralert/v1/current/29.27/116.20"
     assert calls[0][1]["headers"] == {"Authorization": "Bearer unit-test-token"}
 
 
@@ -159,3 +218,146 @@ def test_warning_auth_failure_does_not_use_budget_or_network(app, monkeypatch):
         assert warning_service.get_qweather_warnings("116.20,29.27") == []
 
     assert budget_calls == []
+
+
+def test_warning_invalid_canonical_coordinates_stop_before_auth_budget_and_network(app, monkeypatch):
+    from services import warning_service
+
+    monkeypatch.setattr(
+        warning_service,
+        "get_qweather_request_headers",
+        lambda **_kwargs: pytest.fail("无效坐标不应生成认证头"),
+    )
+    monkeypatch.setattr(
+        warning_service,
+        "reserve_qweather_request",
+        lambda _endpoint: pytest.fail("无效坐标不应消耗额度"),
+    )
+    monkeypatch.setattr(
+        warning_service.requests,
+        "get",
+        lambda *_args, **_kwargs: pytest.fail("无效坐标不应发送网络请求"),
+    )
+
+    with app.app_context():
+        app.config.update(
+            QWEATHER_KEY="x",
+            QWEATHER_API_BASE="https://unit-test.qweatherapi.com/v7",
+            QWEATHER_CANONICAL_LOCATION="invalid-location",
+        )
+        assert warning_service.get_qweather_warnings("任意村庄") == []
+
+
+def test_warning_http_401_invalidates_token_once_without_retry(app, monkeypatch):
+    from services import warning_service
+
+    calls = []
+    invalidations = []
+    budget_calls = []
+
+    class FakeResp:
+        status_code = 401
+
+    monkeypatch.setattr(
+        warning_service,
+        "reserve_qweather_request",
+        lambda endpoint: budget_calls.append(endpoint) or True,
+    )
+    monkeypatch.setattr(
+        warning_service,
+        "invalidate_qweather_token",
+        lambda: invalidations.append(True),
+    )
+    monkeypatch.setattr(
+        warning_service.requests,
+        "get",
+        lambda url, **kwargs: calls.append((url, kwargs)) or FakeResp(),
+    )
+
+    with app.app_context():
+        app.config.update(
+            QWEATHER_KEY="x",
+            QWEATHER_API_BASE="https://unit-test.qweatherapi.com/v7",
+            QWEATHER_CANONICAL_LOCATION="116.20,29.27",
+        )
+        assert warning_service.get_qweather_warnings("都昌县") == []
+
+    assert len(calls) == 1
+    assert invalidations == [True]
+    assert budget_calls == ["weatheralert_v1_current"]
+
+
+def test_warning_malformed_alerts_are_not_cached(app, monkeypatch):
+    from services import warning_service
+
+    calls = []
+
+    class FakeResp:
+        status_code = 200
+
+        def json(self):
+            return {"alerts": "invalid"}
+
+    monkeypatch.setattr(
+        warning_service.requests,
+        "get",
+        lambda *args, **kwargs: calls.append((args, kwargs)) or FakeResp(),
+    )
+
+    with app.app_context():
+        app.config.update(
+            QWEATHER_KEY="x",
+            QWEATHER_API_BASE="https://unit-test.qweatherapi.com/v7",
+            QWEATHER_CANONICAL_LOCATION="116.20,29.27",
+        )
+        assert warning_service.get_qweather_warnings("都昌") == []
+        assert warning_service.get_qweather_warnings("都昌县") == []
+
+    assert len(calls) == 2
+
+
+def test_warning_cancel_message_is_filtered_and_cached(app, monkeypatch):
+    from services import warning_service
+
+    calls = []
+
+    class FakeResp:
+        status_code = 200
+
+        def json(self):
+            return {
+                "metadata": {"zeroResult": False},
+                "alerts": [{
+                    "id": "cancel-1",
+                    "messageType": {"code": "cancel", "supersedes": ["alert-1"]},
+                    "eventType": {"name": "高温", "code": "11B01"},
+                    "headline": "高温预警解除",
+                    "severity": "minor",
+                }],
+            }
+
+    monkeypatch.setattr(
+        warning_service.requests,
+        "get",
+        lambda *args, **kwargs: calls.append((args, kwargs)) or FakeResp(),
+    )
+
+    with app.app_context():
+        app.config.update(
+            QWEATHER_KEY="x",
+            QWEATHER_API_BASE="https://unit-test.qweatherapi.com/v7",
+            QWEATHER_CANONICAL_LOCATION="116.20,29.27",
+        )
+        assert warning_service.get_qweather_warnings("村庄甲") == []
+        assert warning_service.get_qweather_warnings("村庄乙") == []
+
+    assert len(calls) == 1
+
+
+def test_weatheralert_url_rounds_coordinates_to_two_decimals():
+    from services.warning_service import _weatheralert_v1_url
+
+    assert _weatheralert_v1_url(
+        "https://unit-test.qweatherapi.com/v7",
+        "116.2044,29.2761",
+    ) == "https://unit-test.qweatherapi.com/weatheralert/v1/current/29.28/116.20"

@@ -186,7 +186,7 @@
         {% if alerts %}
         <section class="yl-section yl-fade-up yl-fade-up-d1 mb-3 yl-panel yl-panel-wide yl-panel-alerts">
             <div class="section-heading compact">
-                <span class="section-kicker"><i class="bi bi-exclamation-triangle"></i> 进行中的预警</span>
+                <span class="section-kicker"><i class="bi bi-exclamation-triangle"></i> 最近24小时天气提醒</span>
                 <h3 style="font-size:1.2rem; margin:4px 0 0;">共 {{ alerts|length }} 条需要关注</h3>
             </div>
             <div class="yl-alert-list mt-3">
@@ -200,6 +200,9 @@
                     </div>
                 </div>
                 {% endfor %}
+            </div>
+            <div class="text-muted small mt-2">
+                天气数据来源：<a href="https://developer.qweather.com/attribution.html" target="_blank" rel="noopener noreferrer">和风天气（QWeather）</a>。官方预警可能延迟或过期，请以官方最新发布为准。
             </div>
         </section>
         {% endif %}

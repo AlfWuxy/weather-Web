@@ -259,3 +259,94 @@ def test_dispatch_minimizes_identity_data_sent_to_third_party(app, db_session, m
         assert "不应外发的姓名" not in captured["content"]
         assert "都昌某路123号" not in captured["content"]
         assert "地点：所在地区" in captured["content"]
+
+
+def test_choose_primary_warning_supports_cap_severity():
+    from services.push.dispatch import _choose_primary_warning
+
+    warnings = [
+        {"title": "严重预警", "level": "", "severity": "Severe", "text": "较长说明"},
+        {"title": "极端预警", "level": "", "severity": "Extreme", "text": "短"},
+    ]
+
+    assert _choose_primary_warning(warnings)["title"] == "极端预警"
+
+
+def test_render_push_content_falls_back_to_cap_severity():
+    from services.push.dispatch import _render_push_content
+
+    _title, content = _render_push_content(
+        display_name="都昌县",
+        elder_names=[],
+        warning={
+            "title": "高温预警",
+            "type": "高温",
+            "level": "",
+            "severity": "Extreme",
+            "text": "减少户外活动",
+        },
+        threshold_desc=None,
+        location_query="都昌县",
+    )
+
+    assert "官方预警：高温Extreme" in content
+    assert "数据来源：和风天气（QWeather）" in content
+
+
+def test_weather_alert_dedupe_uses_database_field_lengths(app, db_session):
+    from core.db_models import WeatherAlert
+    from core.time_utils import utcnow
+    from services.push.dispatch import _get_or_create_weather_alert
+
+    long_type = "高温预警" * 30
+    long_level = "Extreme" * 10
+
+    with app.app_context():
+        now = utcnow()
+        first = _get_or_create_weather_alert(
+            now=now,
+            location_key="116.20,29.27",
+            alert_type=long_type,
+            alert_level=long_level,
+            description="第一次",
+        )
+        db_session.commit()
+        second = _get_or_create_weather_alert(
+            now=now,
+            location_key="116.20,29.27",
+            alert_type=long_type,
+            alert_level=long_level,
+            description="第二次",
+        )
+
+        assert first.id == second.id
+        assert WeatherAlert.query.count() == 1
+        assert len(first.alert_type) == 50
+        assert len(first.alert_level) == 20
+
+
+def test_weather_alert_level_upgrade_creates_new_delivery_record(app, db_session):
+    from core.db_models import WeatherAlert
+    from core.time_utils import utcnow
+    from services.push.dispatch import _get_or_create_weather_alert
+
+    with app.app_context():
+        now = utcnow()
+        first = _get_or_create_weather_alert(
+            now=now,
+            location_key="116.20,29.27",
+            alert_type="高温",
+            alert_level="黄色",
+            description="高温黄色预警",
+        )
+        db_session.commit()
+        upgraded = _get_or_create_weather_alert(
+            now=now,
+            location_key="116.20,29.27",
+            alert_type="高温",
+            alert_level="橙色",
+            description="高温橙色预警",
+        )
+
+        assert first.id != upgraded.id
+        assert WeatherAlert.query.count() == 2

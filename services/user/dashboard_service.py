@@ -6,7 +6,7 @@ import math
 from datetime import timedelta
 from types import SimpleNamespace
 
-from flask import current_app, render_template, request
+from flask import current_app, has_app_context, render_template, request
 from flask_login import current_user
 
 from core.extensions import db
@@ -113,17 +113,42 @@ def _dashboard_alert_card(alert):
     local_date = utc_to_local_date(alert.alert_date)
     level_text = (alert.alert_level or '未分级').strip()
     normalized_level = level_text.lower()
-    is_high = normalized_level in {'high', 'severe', 'red'} or any(
+    is_high = normalized_level in {'high', 'extreme', 'severe', 'moderate', 'red'} or any(
         marker in level_text for marker in ('高', '严重', '红', '橙')
     )
+    location = alert.location or '地点未标注'
+    if has_app_context():
+        canonical = str(
+            current_app.config.get('QWEATHER_CANONICAL_LOCATION')
+            or current_app.config.get('DEFAULT_LOCATION')
+            or ''
+        ).strip()
+        if canonical and location == canonical:
+            location = str(current_app.config.get('DEFAULT_CITY') or '都昌县').strip()
+            if location == '都昌':
+                location = '都昌县'
     return {
         'alert_type': alert.alert_type or '天气预警',
         'alert_level': level_text,
         'alert_date_local': local_date.strftime('%Y-%m-%d') if local_date else '日期未标注',
-        'location': alert.location or '地点未标注',
+        'location': location,
         'description': alert.description,
         'is_high': is_high,
     }
+
+
+def _dashboard_alert_locations(user_location):
+    """都昌页面同时读取县名和唯一 canonical 坐标写入的预警。"""
+    locations = [str(user_location or '').strip()]
+    canonical = str(
+        current_app.config.get('QWEATHER_CANONICAL_LOCATION')
+        or current_app.config.get('DEFAULT_LOCATION')
+        or ''
+    ).strip()
+    if canonical:
+        # 产品只提供都昌县天气，县内村庄同样复用县级官方预警。
+        locations.extend(['都昌', '都昌县', canonical])
+    return list(dict.fromkeys(location for location in locations if location))
 
 
 def _parse_float(value):
@@ -263,9 +288,7 @@ def user_dashboard(force_elder=False):
     # 获取当前天气
     today = today_local()
     user_location = ensure_user_location_valid()
-    alert_locations = [user_location]
-    if user_location in ('都昌', '都昌县'):
-        alert_locations = ['都昌', '都昌县']
+    alert_locations = _dashboard_alert_locations(user_location)
     weather_source_city = resolve_weather_city_label(user_location)
     weather_data, used_cache = get_weather_with_cache(user_location)
     weather_is_mock = bool(weather_data.get('is_mock'))

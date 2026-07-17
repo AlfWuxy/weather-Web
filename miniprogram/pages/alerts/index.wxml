@@ -2,7 +2,7 @@
   <view class="card">
     <view style="font-size: 18px; font-weight: 700;">预警</view>
     <view class="muted" style="margin-top: 6px; font-size: 12px;">
-      官方预警来自 QWeather；无官方预警时，页面仍会展示温度阈值信息供参考。
+      官方预警来自 QWeather（developer.qweather.com/attribution.html）；预警数据可能延迟或过期，请以官方最新发布为准。无官方预警时，页面仍会展示温度阈值信息供参考。
     </view>
     <view class="muted" style="margin-top: 10px;">
       地点：{{location.query || '-'}}
@@ -39,4 +39,3 @@
     </view>
   </view>
 </view>
-
