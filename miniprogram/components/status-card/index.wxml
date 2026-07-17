@@ -1,0 +1,8 @@
+<view class="state-card state-{{state}}" role="status">
+  <view class="state-icon">{{state === 'loading' ? '◌' : (state === 'error' ? '!' : 'i')}}</view>
+  <view class="state-copy">
+    <view class="state-title">{{title || (state === 'loading' ? '正在加载' : '暂无数据')}}</view>
+    <view wx:if="{{detail}}" class="state-detail">{{detail}}</view>
+    <button wx:if="{{actionLabel}}" class="state-action" bindtap="onAction">{{actionLabel}}</button>
+  </view>
+</view>

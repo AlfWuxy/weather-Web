@@ -1,0 +1,60 @@
+<view class="page-shell">
+  <view class="page-title">{{elderName}}的用药记录</view>
+  <view class="page-copy">本页只保存药名、剂量、频率、时间和天气条件，方便家人查看。系统不会定时提醒、不会发送订阅消息，也不会自动通知家人。</view>
+
+  <view class="form-card">
+    <view class="field-group first-field">
+      <view class="field-label">药品名称 <text>*</text></view>
+      <input class="text-input" maxlength="100" value="{{medicineName}}" bindinput="onMedicineName" placeholder="请按药盒或医嘱填写" />
+    </view>
+    <view class="field-group">
+      <view class="field-label">剂量或说明</view>
+      <input class="text-input" maxlength="100" value="{{dosage}}" bindinput="onDosage" placeholder="例如：每次 1 片，饭后" />
+    </view>
+    <view class="two-column">
+      <view class="column-field">
+        <view class="field-label">频率</view>
+        <picker range="{{frequencyOptions}}" value="{{frequencyIndex}}" bindchange="onFrequencyChange">
+          <view class="picker-field">{{frequencyOptions[frequencyIndex]}}</view>
+        </picker>
+      </view>
+      <view class="column-field">
+        <view class="field-label">计划时间（仅供记录）</view>
+        <picker mode="time" value="{{timeOfDay}}" bindchange="onTimeChange">
+          <view class="picker-field">{{timeOfDay}}</view>
+        </picker>
+      </view>
+    </view>
+
+    <button class="trigger-toggle" bindtap="toggleWeatherTriggers">{{showWeatherTriggers ? '收起天气条件' : '＋ 添加可选天气条件'}}</button>
+    <view wx:if="{{showWeatherTriggers}}" class="trigger-panel">
+      <view class="trigger-copy">天气条件只作为记录标签，不会触发或加强提醒，也不会发送通知。</view>
+      <view class="trigger-grid">
+        <input class="small-input" type="digit" value="{{highTemp}}" bindinput="onHighTemp" placeholder="高温 ≥ °C" />
+        <input class="small-input" type="digit" value="{{lowTemp}}" bindinput="onLowTemp" placeholder="低温 ≤ °C" />
+        <input class="small-input" type="number" value="{{highHumidity}}" bindinput="onHighHumidity" placeholder="湿度 ≥ %" />
+        <input class="small-input" type="number" value="{{highAqi}}" bindinput="onHighAqi" placeholder="AQI ≥" />
+      </view>
+    </view>
+
+    <button class="save-button" loading="{{busy}}" disabled="{{busy}}" bindtap="addMedication">保存用药记录</button>
+    <view class="medicine-warning">保存记录不代表会收到提醒。请自行设置可靠的服药提醒，并以医生或药师的用药指导为准。</view>
+  </view>
+
+  <view class="section-title">已保存的用药记录</view>
+  <view wx:if="{{loading}}" class="state-box">正在加载…</view>
+  <view wx:elif="{{medications.length === 0}}" class="state-box">还没有保存用药记录</view>
+  <block wx:for="{{medications}}" wx:key="id">
+    <view class="medicine-card">
+      <view class="medicine-top">
+        <view>
+          <view class="medicine-name">{{item.medicineName}}</view>
+          <view class="medicine-dose">{{item.dosage}}</view>
+        </view>
+        <view class="time-badge">{{item.timeOfDay}}</view>
+      </view>
+      <view class="medicine-meta">{{item.frequencyLabel}} · {{item.triggerText}}</view>
+      <button class="delete-link" data-id="{{item.id}}" data-name="{{item.medicineName}}" bindtap="deleteMedication">删除这条记录</button>
+    </view>
+  </block>
+</view>

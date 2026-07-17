@@ -1,0 +1,30 @@
+.state-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 20rpx;
+  margin: 20rpx 0;
+  padding: 28rpx;
+  border: 1rpx solid #ecdcd0;
+  border-radius: 24rpx;
+  color: #64574f;
+  background: #fffdf9;
+}
+.state-icon {
+  display: flex;
+  flex: 0 0 58rpx;
+  align-items: center;
+  justify-content: center;
+  width: 58rpx;
+  height: 58rpx;
+  border-radius: 50%;
+  color: #a34216;
+  background: #fff0df;
+  font-size: 34rpx;
+  font-weight: 800;
+}
+.state-loading .state-icon { color: #6f6259; background: #f1ede9; }
+.state-error .state-icon { color: #a0281a; background: #ffe6df; }
+.state-copy { flex: 1; min-width: 0; }
+.state-title { font-size: 32rpx; line-height: 1.4; font-weight: 750; }
+.state-detail { margin-top: 8rpx; color: #786d65; font-size: 27rpx; line-height: 1.6; }
+.state-action { display: inline-flex; margin: 18rpx 0 0; padding: 12rpx 22rpx; color: #a34216; background: #fff0df; border-radius: 16rpx; font-size: 27rpx; }

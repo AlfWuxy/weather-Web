@@ -1,0 +1,44 @@
+<view class="page-shell">
+  <view class="page-title">健康状态筛查</view>
+  <view class="page-copy">5 项快速筛查，帮助家人决定今天要多留意什么。筛查不作医疗诊断。</view>
+
+  <view wx:if="{{loading}}" class="state-box">正在加载…</view>
+  <block wx:else>
+    <view class="person-card">
+      <view>
+        <view class="person-label">正在为谁筛查</view>
+        <picker range="{{elderNames}}" value="{{elderIndex}}" bindchange="onElderChange">
+          <view class="person-picker">{{elderNames[elderIndex]}}　›</view>
+        </picker>
+      </view>
+      <view class="progress-text">{{completedCount}} / 5</view>
+    </view>
+
+    <block wx:for="{{questions}}" wx:key="id" wx:for-item="question">
+      <view class="question-card">
+        <view class="question-title"><text>{{question.number}}</text>{{question.title}}</view>
+        <view class="option-list">
+          <block wx:for="{{question.options}}" wx:key="value" wx:for-item="option">
+            <button
+              class="option-button {{option.active ? 'active' : ''}}"
+              data-id="{{question.id}}"
+              data-value="{{option.value}}"
+              bindtap="onSelect"
+            >{{option.label}}</button>
+          </block>
+        </view>
+      </view>
+    </block>
+
+    <button class="submit-button" loading="{{busy}}" disabled="{{busy}}" bindtap="submitAssessment">提交本次筛查</button>
+
+    <view wx:if="{{latest}}" class="result-card">
+      <view class="result-label">最近一次筛查结果</view>
+      <view class="result-level">{{latest.riskLevel}}</view>
+      <view wx:if="{{latest.riskScore !== ''}}" class="result-score">参考分值 {{latest.riskScore}}</view>
+      <view wx:if="{{latest.recommendations.length}}" class="recommend-title">今天可以这样做</view>
+      <view wx:for="{{latest.recommendations}}" wx:key="*this" class="recommend-row">{{index + 1}}. {{item}}</view>
+      <view class="result-note">结果只作行动参考。身体明显不适时，请及时联系家人并就医或求助。</view>
+    </view>
+  </block>
+</view>

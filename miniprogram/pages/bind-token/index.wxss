@@ -1,5 +1,166 @@
-.hint {
-  font-size: 12px;
-  color: #6b7280;
+.page-shell {
+  padding: 40rpx 28rpx calc(64rpx + env(safe-area-inset-bottom));
 }
 
+.welcome-card {
+  padding: 28rpx 12rpx 36rpx;
+  text-align: center;
+}
+
+.brand-mark {
+  width: 96rpx;
+  height: 96rpx;
+  margin: 0 auto 20rpx;
+  border-radius: 30rpx;
+  background: #168a4a;
+  color: #ffffff;
+  font-size: 48rpx;
+  font-weight: 700;
+  line-height: 96rpx;
+}
+
+.welcome-title {
+  color: #14251c;
+  font-size: 44rpx;
+  font-weight: 700;
+}
+
+.welcome-subtitle {
+  margin-top: 10rpx;
+  color: #66736c;
+  font-size: 28rpx;
+}
+
+.login-card {
+  padding: 32rpx;
+}
+
+.section-title {
+  color: #14251c;
+  font-size: 36rpx;
+  font-weight: 700;
+}
+
+.section-copy {
+  margin-top: 14rpx;
+  color: #5f6e65;
+  font-size: 28rpx;
+  line-height: 1.7;
+}
+
+.consent-row {
+  display: flex;
+  align-items: center;
+  margin: 28rpx 0;
+  min-height: 64rpx;
+}
+
+.consent-copy,
+.privacy-link {
+  font-size: 28rpx;
+}
+
+.consent-copy {
+  margin-left: 8rpx;
+  color: #36463d;
+}
+
+.privacy-link {
+  color: #137947;
+  font-weight: 600;
+}
+
+.wechat-button {
+  min-height: 96rpx;
+  border-radius: 20rpx;
+  background: #168a4a;
+  color: #ffffff;
+  font-size: 32rpx;
+  font-weight: 700;
+  line-height: 96rpx;
+}
+
+.fallback-link {
+  margin-top: 18rpx;
+  background: transparent;
+  color: #426252;
+  font-size: 27rpx;
+}
+
+.fallback-link::after {
+  border: 0;
+}
+
+.fallback-panel {
+  margin-top: 20rpx;
+  padding-top: 24rpx;
+  border-top: 1rpx solid #e2e9e5;
+}
+
+.field-label {
+  margin-bottom: 12rpx;
+  color: #32433a;
+  font-size: 28rpx;
+  font-weight: 600;
+}
+
+.text-input {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 88rpx;
+  padding: 20rpx 24rpx;
+  border: 2rpx solid #ced9d2;
+  border-radius: 16rpx;
+  background: #ffffff;
+  font-size: 28rpx;
+}
+
+.button-row {
+  display: flex;
+  gap: 16rpx;
+  margin-top: 22rpx;
+}
+
+.row-button {
+  flex: 1;
+  min-height: 84rpx;
+  font-size: 28rpx;
+  line-height: 84rpx;
+}
+
+.security-note,
+.status-hint,
+.public-note {
+  color: #69776f;
+  font-size: 24rpx;
+  line-height: 1.6;
+}
+
+.security-note,
+.status-hint {
+  margin-top: 16rpx;
+}
+
+.status-hint {
+  padding: 16rpx 20rpx;
+  border-radius: 14rpx;
+  background: #f3f8f5;
+  color: #345b45;
+}
+
+.public-note {
+  padding: 28rpx 20rpx 0;
+  text-align: center;
+}
+
+.public-home-button {
+  margin-top: 12rpx;
+  background: transparent;
+  color: #137947;
+  font-size: 28rpx;
+  font-weight: 600;
+}
+
+.public-home-button::after {
+  border: 0;
+}

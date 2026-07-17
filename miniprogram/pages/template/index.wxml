@@ -1,29 +1,22 @@
-<view style="padding: 16px;">
-  <view class="card">
-    <view style="font-size: 18px; font-weight: 700;">一键提醒话术</view>
-    <view class="muted" style="margin-top: 6px; font-size: 12px;">
-      你作为“可信节点”把行动建议转述给家人。话术为通用建议，不提供医疗诊断/治疗建议。
+<view class="page-shell">
+  <view class="page-title">给{{elderName}}的提醒</view>
+  <view class="page-copy">根据都昌县共享天气快照生成，可以直接复制到微信聊天。</view>
+
+  <view wx:if="{{loading}}" class="state-box">正在生成提醒…</view>
+  <view wx:else class="message-card">
+    <view class="weather-row">
+      <view class="location">都昌县</view>
+      <view class="weather-summary" wx:if="{{weather.available}}">最高 {{weather.temperatureMax === null ? '--' : weather.temperatureMax}}° · 最低 {{weather.temperatureMin === null ? '--' : weather.temperatureMin}}°</view>
+      <view class="weather-summary" wx:else>天气正在更新</view>
     </view>
+    <view class="message-text">{{message}}</view>
+    <button class="copy-button" bindtap="copyMessage">复制整段提醒</button>
+    <button class="checkin-button" bindtap="goCheckin">去记录今日行动</button>
   </view>
 
-  <view style="height: 12px;"></view>
-
-  <block wx:if="{{loading}}">
-    <view class="muted" style="text-align:center; padding: 20px;">加载中…</view>
-  </block>
-
-  <block wx:if="{{!loading}}">
-    <view class="card">
-      <view class="muted" style="font-size: 12px;">地点：{{locationText}}</view>
-      <view class="muted" style="font-size: 12px; margin-top: 4px;">
-        Tmax {{tmax || '-'}} · Tmin {{tmin || '-'}}
-      </view>
-      <view style="margin-top: 12px; white-space: pre-wrap; line-height: 1.7;">{{message}}</view>
-      <view style="display:flex; gap: 10px; margin-top: 14px;">
-        <button class="btn-primary" style="flex:1;" bindtap="copyMessage">一键复制</button>
-        <button class="btn-outline" style="flex:1;" bindtap="back">返回</button>
-      </view>
-    </view>
-  </block>
+  <view class="safety-card">
+    <view class="safety-title">使用边界</view>
+    <view class="safety-copy">提醒用于推动喝水、休息、保暖、联系家人等行动，不作医疗诊断。若出现胸痛、呼吸困难、意识异常、持续高热等严重症状，请及时就医或求助。</view>
+  </view>
+  <button class="back-link" bindtap="back">返回家庭照护</button>
 </view>
-

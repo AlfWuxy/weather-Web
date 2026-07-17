@@ -1,0 +1,68 @@
+<view class="page-shell">
+  <view class="hero method-hero">
+    <view class="hero-kicker">计算方法与透明度</view>
+    <view class="hero-title">每一个风险数字都应该能被解释。</view>
+    <view class="hero-subtitle">这里公开输入、计算路径、缓存策略、缺失值处理和使用边界。</view>
+  </view>
+
+  <view class="safe-note method-note">所有分数用于公共健康行动提醒、家庭照护或社区资源排序。它们不提供医疗诊断、处方或治疗建议。</view>
+
+  <view class="section-title">小程序怎样获取天气</view>
+  <view class="card method-card">
+    <view class="method-title">30 分钟硬缓存</view>
+    <view class="method-text">首页、预报、预警和行动共用一份后端快照。快照仍有效时，下拉刷新也直接读取本机缓存。</view>
+    <view class="formula">有效期 = min（本机写入时间 + 30 分钟，服务端 expires_at）</view>
+    <view class="method-text">过期后只允许一个进行中的请求。网络失败时可以显示最近缓存，并明确标记“已过期”或“离线”。</view>
+  </view>
+
+  <view class="section-title">风险和预报</view>
+  <view class="card method-card">
+    <view class="method-title">当前小程序规则分级</view>
+    <view class="method-text">逐日结果主要读取可用的最高温或当前温度，并在字段存在时考虑湿度与 AQI。当天存在官方预警时，总体风险会增加相应提醒权重。</view>
+    <view class="method-tag-row"><text>最高温</text><text>当前温度</text><text>湿度</text><text>AQI</text><text>官方预警</text></view>
+    <view class="method-text">关键温度缺失、数据为模拟值或快照不可用时，小程序停止给出风险分级。当前小程序规则没有使用 PM2.5 代理、热夜分项或个人慢病资料。</view>
+  </view>
+
+  <view class="card method-card">
+    <view class="method-title">Web 研究模块：DLNM 温度相对风险</view>
+    <view class="method-text">Web 版研究模块可以读取离线导出的温度与相对风险曲线并进行插值。该 DLNM 模块不参与当前小程序 bootstrap、首页风险或逐日预报结果。</view>
+    <view class="formula">Web 研究模块 = 已冻结 RR 曲线插值 + 规定滞后窗口</view>
+    <view class="method-text">该研究模块仍需要时间切分回测和真实试点校准。残差自相关、边界温度和双层年龄修正都属于已知复核重点。</view>
+  </view>
+
+  <view class="section-title">社区与 GIS</view>
+  <view class="card method-card">
+    <view class="method-title">社区排序</view>
+    <view class="method-text">社区结果用于安排提醒、走访和资源支持。人口结构、天气危险度、脆弱性和历史负担可能共同影响排序。</view>
+    <view class="method-text">社区档案为空时返回空结果。页面不会放入演示村庄，也不会把脆弱性指数解释为个人发病概率。</view>
+  </view>
+  <view class="card method-card">
+    <view class="method-title">1 km 热暴露 GIS</view>
+    <view class="method-text">图层包括模型化 65+ 人口比例、Aqua MODIS 晴空地表温度、观测覆盖、WorldCover 地表覆盖和 Copernicus 表面高程。</view>
+    <view class="method-text">GeoJSON 通过后端延迟加载。小程序包不保存大体积地图数据，也不会直接请求第三方天气服务。</view>
+    <navigator class="secondary-button method-link" url="/pages/gis/index">打开 GIS 页面</navigator>
+  </view>
+
+  <view class="section-title">当前数据源状态</view>
+  <status-card wx:if="{{sourceLoading}}" state="loading" title="正在读取状态" />
+  <block wx:elif="{{sources.length}}">
+    <freshness-bar updated-text="{{freshness.updatedText}}" stale="{{freshness.stale}}" source="{{freshness.source}}" refresh-deferred="{{freshness.refreshDeferred}}" />
+    <view wx:for="{{sources}}" wx:key="id" class="source-row card">
+      <view class="strong">{{item.name}}</view>
+      <view class="small muted">{{item.status}}</view>
+      <view wx:if="{{item.updated}}" class="small muted">{{item.updated}}</view>
+    </view>
+  </block>
+  <status-card wx:else state="empty" title="数据源状态暂不可读" detail="方法说明仍然有效，实时来源状态请稍后再查。" />
+
+  <view class="section-title">已知局限</view>
+  <view class="card limits-card">
+    <view>• 卫星地表温度与人体体感、室温存在差异。</view>
+    <view>• 模型化人口栅格不包含逐户普查微数据。</view>
+    <view>• 社区代理值和历史病例匹配仍需更可靠的本地实测。</view>
+    <view>• 天气缺失、模型回退和缓存过期必须在页面显示。</view>
+    <view>• 出现明显不适时应及时寻求专业帮助。</view>
+  </view>
+
+  <navigator class="secondary-button" url="/pages/privacy/index">查看隐私与数据边界</navigator>
+</view>

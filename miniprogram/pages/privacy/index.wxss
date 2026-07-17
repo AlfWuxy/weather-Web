@@ -1,0 +1,7 @@
+.privacy-hero { background: linear-gradient(145deg, #e9752d 0%, #765142 100%); }
+.privacy-card { display: grid; grid-template-columns: 74rpx 1fr; align-items: flex-start; gap: 20rpx; }
+.privacy-icon { display: flex; align-items: center; justify-content: center; width: 64rpx; height: 64rpx; border-radius: 18rpx; color: #a34216; background: #fff0df; font-size: 27rpx; font-weight: 800; }
+.privacy-text { margin-top: 10rpx; color: #66594f; font-size: 28rpx; line-height: 1.7; }
+.list-card view { color: #66594f; font-size: 28rpx; line-height: 1.72; }
+.list-card view + view { margin-top: 14rpx; }
+.privacy-link { margin-top: 22rpx; }

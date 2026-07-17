@@ -1,0 +1,45 @@
+<view class="page-shell">
+  <view class="hero about-hero">
+    <view class="hero-kicker">宜老天气通</view>
+    <view class="hero-title">天气信息有人看见，行动才真正开始。</view>
+    <view class="hero-subtitle">我们关注老人、家属和社区之间的信息传递，让预警变成清楚、可信、能跟进的行动。</view>
+  </view>
+
+  <view class="section-title">为什么以家属和社区为节点</view>
+  <view class="trust-flow">
+    <view class="trust-card">
+      <view class="trust-number">1</view>
+      <view class="card-title">识别风险</view>
+      <view class="trust-text">把天气、官方预警和地区风险分开呈现。</view>
+    </view>
+    <view class="flow-arrow">↓</view>
+    <view class="trust-card">
+      <view class="trust-number">2</view>
+      <view class="card-title">可信转述</view>
+      <view class="trust-text">家属把信息翻译成老人熟悉、愿意采用的话。</view>
+    </view>
+    <view class="flow-arrow">↓</view>
+    <view class="trust-card">
+      <view class="trust-number">3</view>
+      <view class="card-title">完成行动</view>
+      <view class="trust-text">补水、降温、调整外出、联系社区，并继续确认状态。</view>
+    </view>
+  </view>
+
+  <view class="section-title">三个设计原则</view>
+  <view class="grid-two">
+    <view class="principle card"><view class="principle-icon">大</view><view class="strong">老人看得清</view><view class="small muted">大字号、高对比、少层级</view></view>
+    <view class="principle card"><view class="principle-icon">简</view><view class="strong">家属说得明白</view><view class="small muted">建议具体、可以转述</view></view>
+    <view class="principle card"><view class="principle-icon">实</view><view class="strong">社区做得到</view><view class="small muted">支持排序、走访和资源</view></view>
+    <view class="principle card"><view class="principle-icon">明</view><view class="strong">依据可核对</view><view class="small muted">来源、缓存、局限透明</view></view>
+  </view>
+
+  <view class="section-title">使用边界</view>
+  <view class="card about-text">
+    <view>宜老天气通是一项公共健康行动辅助工具。它帮助家庭和社区更早注意天气风险，也帮助记录提醒有没有被看见和执行。</view>
+    <view>系统结果不能取代医生、急救人员或当地主管部门的专业判断。</view>
+  </view>
+
+  <navigator class="primary-button" url="/pages/home/index" open-type="switchTab">回到今日首页</navigator>
+  <navigator class="secondary-button about-link" url="/pages/transparency/index">查看方法与数据</navigator>
+</view>

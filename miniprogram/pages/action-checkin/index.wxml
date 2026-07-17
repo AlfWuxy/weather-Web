@@ -1,0 +1,58 @@
+<view class="page-shell">
+  <view class="page-title">{{elderName}}的今日行动</view>
+  <view class="page-copy">根据都昌县共享天气快照列出简单行动。勾选做过的事项，再确认平安。</view>
+
+  <view wx:if="{{loading}}" class="state-box">正在加载今日清单…</view>
+  <block wx:else>
+    <view class="weather-card {{weather.trigger || 'normal'}}">
+      <view class="weather-title">都昌县 · {{weather.trigger === 'heat' ? '高温留意' : weather.trigger === 'cold' ? '低温留意' : '日常留意'}}</view>
+      <view class="weather-detail" wx:if="{{weather.available}}">最高 {{weather.temperatureMax === null ? '--' : weather.temperatureMax}}° · 最低 {{weather.temperatureMin === null ? '--' : weather.temperatureMin}}°</view>
+      <view class="weather-detail" wx:else>天气正在更新，仍可完成安全确认或求助。</view>
+    </view>
+
+    <view class="action-card">
+      <view class="section-title">今天做到哪些？</view>
+      <checkbox-group bindchange="onActionsChange">
+        <label wx:for="{{actions}}" wx:key="id" class="action-row">
+          <checkbox value="{{item.id}}" color="#168a4a" />
+          <view class="action-copy">
+            <view class="action-title">{{item.title}}</view>
+            <view class="action-detail">{{item.detail}}</view>
+          </view>
+        </label>
+      </checkbox-group>
+      <button class="confirm-button" loading="{{busyAction === 'confirm'}}" disabled="{{busyAction !== ''}}" bindtap="confirmActions">{{confirmed ? '已确认今日平安' : '确认今日平安'}}</button>
+    </view>
+
+    <view class="help-card">
+      <view class="section-title danger-title">需要家人帮助？</view>
+      <view class="help-disclaimer">这里仅保存求助需求，不会自动通知照护人。请同时通过电话或微信直接联系家人，紧急时拨打 120。</view>
+      <textarea class="help-input" maxlength="300" value="{{helpNote}}" bindinput="onHelpNote" placeholder="可简单说明需要什么帮助，请勿填写身份证号" />
+      <view class="help-buttons">
+        <button class="help-button" loading="{{busyAction === 'help'}}" disabled="{{busyAction !== ''}}" bindtap="requestHelp">{{helpRecorded ? '求助需求已记录' : '记录求助需求'}}</button>
+        <button class="emergency-button" bindtap="callEmergency">紧急时拨打 120</button>
+      </view>
+    </view>
+
+    <view class="debrief-card">
+      <view class="section-title">简单复盘</view>
+      <view class="field-label">今天完成得怎么样？</view>
+      <picker range="{{completionOptions}}" value="{{completionIndex}}" bindchange="onCompletionChange">
+        <view class="picker-field">{{question1}}　›</view>
+      </picker>
+      <view class="field-label spaced">哪一项最容易做到？</view>
+      <input class="text-input" maxlength="200" value="{{question2}}" bindinput="onQuestion2" placeholder="例如：先喝一杯水" />
+      <view class="field-label spaced">下次希望家人怎么帮？</view>
+      <input class="text-input" maxlength="200" value="{{question3}}" bindinput="onQuestion3" placeholder="例如：中午打电话提醒" />
+      <view class="field-label spaced">还有什么困难？</view>
+      <textarea class="debrief-input" maxlength="500" value="{{difficulty}}" bindinput="onDifficulty" placeholder="可选填" />
+      <view class="optin-row">
+        <switch checked="{{debriefOptin}}" color="#168a4a" bindchange="onDebriefOptin" />
+        <view>关联到这位家人的今日记录</view>
+      </view>
+      <button class="debrief-button" loading="{{busyAction === 'debrief'}}" disabled="{{busyAction !== ''}}" bindtap="submitDebrief">保存复盘</button>
+    </view>
+  </block>
+
+  <view class="medical-note">本页是行动筛查与记录，不作医疗诊断或治疗建议。严重或持续不适时，请及时就医或求助。</view>
+</view>

@@ -1,0 +1,153 @@
+.page-shell {
+  padding: 30rpx 28rpx calc(70rpx + env(safe-area-inset-bottom));
+}
+
+.page-title {
+  color: #14251c;
+  font-size: 42rpx;
+  font-weight: 700;
+}
+
+.page-copy {
+  margin-top: 10rpx;
+  color: #66736c;
+  font-size: 26rpx;
+  line-height: 1.65;
+}
+
+.state-box,
+.person-card,
+.question-card,
+.result-card {
+  margin-top: 24rpx;
+  padding: 28rpx;
+  border-radius: 24rpx;
+  background: #ffffff;
+  box-shadow: 0 12rpx 32rpx rgba(25, 58, 39, 0.07);
+}
+
+.state-box {
+  color: #66736c;
+  text-align: center;
+}
+
+.person-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.person-label,
+.result-label {
+  color: #6a776f;
+  font-size: 24rpx;
+}
+
+.person-picker {
+  margin-top: 8rpx;
+  color: #176d40;
+  font-size: 31rpx;
+  font-weight: 700;
+}
+
+.progress-text {
+  padding: 10rpx 18rpx;
+  border-radius: 999rpx;
+  background: #edf7f1;
+  color: #176d40;
+  font-size: 26rpx;
+  font-weight: 600;
+}
+
+.question-title {
+  display: flex;
+  align-items: center;
+  color: #20372a;
+  font-size: 30rpx;
+  font-weight: 700;
+}
+
+.question-title text {
+  width: 52rpx;
+  height: 52rpx;
+  margin-right: 16rpx;
+  border-radius: 16rpx;
+  background: #e8f5ed;
+  color: #168a4a;
+  line-height: 52rpx;
+  text-align: center;
+}
+
+.option-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14rpx;
+  margin-top: 22rpx;
+}
+
+.option-button {
+  margin: 0;
+  padding: 0 24rpx;
+  border: 1rpx solid #ccd8d1;
+  border-radius: 999rpx;
+  background: #ffffff;
+  color: #42544a;
+  font-size: 26rpx;
+}
+
+.option-button.active {
+  border-color: #168a4a;
+  background: #168a4a;
+  color: #ffffff;
+}
+
+.submit-button {
+  min-height: 94rpx;
+  margin-top: 28rpx;
+  border-radius: 20rpx;
+  background: #168a4a;
+  color: #ffffff;
+  font-size: 30rpx;
+  font-weight: 700;
+  line-height: 94rpx;
+}
+
+.result-card {
+  border: 2rpx solid #d7ebde;
+}
+
+.result-level {
+  margin-top: 10rpx;
+  color: #176d40;
+  font-size: 42rpx;
+  font-weight: 700;
+}
+
+.result-score {
+  margin-top: 6rpx;
+  color: #66736c;
+  font-size: 25rpx;
+}
+
+.recommend-title {
+  margin-top: 24rpx;
+  color: #2c4035;
+  font-size: 28rpx;
+  font-weight: 700;
+}
+
+.recommend-row {
+  margin-top: 12rpx;
+  color: #42544a;
+  font-size: 27rpx;
+  line-height: 1.65;
+}
+
+.result-note {
+  margin-top: 22rpx;
+  padding-top: 20rpx;
+  border-top: 1rpx solid #e2e9e5;
+  color: #6b776f;
+  font-size: 24rpx;
+  line-height: 1.65;
+}

@@ -1,0 +1,14 @@
+.actions-hero { background: linear-gradient(145deg, #ec762b 0%, #bc551d 100%); }
+.progress-card { margin-top: 20rpx; }
+.progress-number { margin-top: 8rpx; color: #a34216; font-size: 54rpx; font-weight: 850; }
+.progress-ring { display: flex; align-items: center; justify-content: center; width: 120rpx; height: 120rpx; border: 12rpx solid #f0ad7f; border-radius: 50%; color: #9e3e12; font-size: 27rpx; font-weight: 800; }
+.check-card { display: flex; align-items: flex-start; gap: 22rpx; width: 100%; margin: 0 0 18rpx; padding: 26rpx; border: 1rpx solid #f0ded0; border-radius: 24rpx; color: #332a25; background: #fffdf9; text-align: left; }
+.check-card.checked { opacity: 0.72; background: #f2f7f3; border-color: #c7dfce; }
+.check-box { display: flex; flex: 0 0 54rpx; align-items: center; justify-content: center; width: 54rpx; height: 54rpx; border: 3rpx solid #d85d19; border-radius: 16rpx; color: #fff; font-size: 32rpx; font-weight: 800; }
+.checked .check-box { background: #438b60; border-color: #438b60; }
+.check-copy { flex: 1; min-width: 0; }
+.check-title { font-size: 32rpx; line-height: 1.45; font-weight: 750; }
+.checked .check-title { text-decoration: line-through; }
+.check-detail { margin-top: 8rpx; color: #786d65; font-size: 27rpx; line-height: 1.6; }
+.copy-button { width: 100%; margin-bottom: 18rpx; }
+.action-note { margin-top: 24rpx; }

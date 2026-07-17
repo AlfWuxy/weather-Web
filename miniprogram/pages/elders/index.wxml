@@ -1,54 +1,65 @@
-<view style="padding: 16px;">
-  <view class="card">
-    <view style="display:flex; align-items:center; justify-content: space-between;">
-      <view style="font-size: 18px; font-weight: 700;">监测对象</view>
-      <button size="mini" class="btn-outline" bindtap="goSettings">设置</button>
+<view class="page-shell">
+  <view class="page-header">
+    <view>
+      <view class="page-title">家庭照护</view>
+      <view class="page-subtitle">{{fixedLocation}} · 一份天气，多位家人共用</view>
     </view>
-    <view class="muted" style="margin-top: 6px; font-size: 12px;">
-      支持多地区；预警触发逻辑以“官方预警 + 阈值规则”为主。
-    </view>
-    <view style="margin-top: 12px;">
-      <button class="btn-primary" bindtap="goCreate">新增老人</button>
-    </view>
+    <button class="header-button" bindtap="goSettings">设置</button>
   </view>
 
-  <view style="height: 12px;"></view>
+  <view class="weather-strip {{weather.trigger || 'normal'}}">
+    <view>
+      <view class="weather-label">都昌县今日天气</view>
+      <view class="weather-value" wx:if="{{weather.available}}">
+        {{weather.temperature === null ? '--' : weather.temperature}}°
+        <text class="weather-range">最高 {{weather.temperatureMax === null ? '--' : weather.temperatureMax}}° · 最低 {{weather.temperatureMin === null ? '--' : weather.temperatureMin}}°</text>
+      </view>
+      <view class="weather-value weather-wait" wx:else>天气正在更新</view>
+    </view>
+    <view class="risk-badge" wx:if="{{weather.trigger === 'heat'}}">高温留意</view>
+    <view class="risk-badge cold" wx:elif="{{weather.trigger === 'cold'}}">低温留意</view>
+    <view class="risk-badge safe" wx:else>日常留意</view>
+  </view>
 
-  <block wx:if="{{loading}}">
-    <view class="muted" style="text-align:center; padding: 20px;">加载中…</view>
-  </block>
+  <button class="add-button" bindtap="goCreate">＋ 添加家中老人</button>
 
-  <block wx:if="{{!loading && elders.length === 0}}">
-    <view class="muted" style="text-align:center; padding: 20px;">暂无老人，请先新增或在网页端添加。</view>
-  </block>
+  <view wx:if="{{loading}}" class="state-box">正在加载照护资料…</view>
+  <view wx:elif="{{loadError}}" class="state-box error-state">
+    <view>{{loadError}}</view>
+    <button class="retry-button" bindtap="loadCareHome">重新加载</button>
+  </view>
+  <view wx:elif="{{elders.length === 0}}" class="empty-card">
+    <view class="empty-title">还没有添加家人</view>
+    <view class="empty-copy">添加后可以一起查看预警、提醒话术、健康记录和今日行动。</view>
+    <button class="primary-button empty-button" bindtap="goCreate">现在添加</button>
+  </view>
 
   <block wx:for="{{elders}}" wx:key="pair_id">
-    <view class="card" style="margin-bottom: 12px;">
-      <view style="display:flex; justify-content: space-between; gap: 10px;">
-        <view style="flex:1;">
-          <view style="font-weight: 700; font-size: 16px;">
-            {{item.member && item.member.name ? item.member.name : '老人'}}
-            <text class="muted" style="font-size: 12px;">{{item.member && item.member.relation ? ' · ' + item.member.relation : ''}}</text>
-          </view>
-          <view class="muted" style="margin-top: 4px;">
-            地点：{{item.location_query || item.community_code || '-'}}
-          </view>
-          <view class="muted" style="margin-top: 4px; font-size: 12px;">
-            Tmax {{item.today.temperature_max === 0 ? 0 : (item.today.temperature_max || '-')}} · Tmin {{item.today.temperature_min === 0 ? 0 : (item.today.temperature_min || '-')}}
-          </view>
+    <view class="elder-card">
+      <view class="elder-top">
+        <view class="elder-avatar">{{item.initial}}</view>
+        <view class="elder-main">
+          <view class="elder-name">{{item.displayName}}</view>
+          <view class="elder-meta">{{item.displayRelation}} · {{item.displayAge}} · 都昌县</view>
         </view>
-        <view>
-          <view wx:if="{{item.today.trigger === 'heat'}}" style="background:#fee2e2; color:#991b1b; padding:4px 8px; border-radius: 999px; font-size: 12px;">高温</view>
-          <view wx:elif="{{item.today.trigger === 'cold'}}" style="background:#dbeafe; color:#1d4ed8; padding:4px 8px; border-radius: 999px; font-size: 12px;">寒潮</view>
-          <view wx:else style="background:#f3f4f6; color:#374151; padding:4px 8px; border-radius: 999px; font-size: 12px;">正常</view>
-        </view>
+        <button class="edit-button" data-pair-id="{{item.pair_id}}" bindtap="goEdit">编辑</button>
       </view>
 
-      <view style="display:flex; gap: 10px; margin-top: 12px; flex-wrap: wrap;">
-        <button size="mini" class="btn-outline" data-pair-id="{{item.pair_id}}" bindtap="goAlerts">预警</button>
-        <button size="mini" class="btn-outline" data-pair-id="{{item.pair_id}}" bindtap="goTemplate">话术</button>
-        <button size="mini" class="btn-outline" data-pair-id="{{item.pair_id}}" bindtap="goEdit">编辑</button>
+      <view class="primary-actions">
+        <button class="primary-action warning-action" data-pair-id="{{item.pair_id}}" bindtap="goAlerts">查看预警</button>
+        <button class="primary-action" data-pair-id="{{item.pair_id}}" bindtap="goCheckin">今日行动</button>
+        <button class="primary-action" data-pair-id="{{item.pair_id}}" bindtap="goTemplate">提醒话术</button>
       </view>
+
+      <view class="care-tools">
+        <button class="tool-button" data-pair-id="{{item.pair_id}}" bindtap="goAssessment">健康筛查</button>
+        <button class="tool-button" data-pair-id="{{item.pair_id}}" bindtap="goDiary">健康日记</button>
+        <button class="tool-button" data-pair-id="{{item.pair_id}}" bindtap="goMedications">用药记录</button>
+      </view>
+
+      <button class="delete-link" data-pair-id="{{item.pair_id}}" data-name="{{item.displayName}}" bindtap="deleteElder">停止管理这位老人</button>
     </view>
   </block>
+
+  <view class="medical-note">健康功能用于行动筛查和日常记录，不作医疗诊断。若出现胸痛、呼吸困难、意识异常等严重症状，请及时就医或求助。</view>
 </view>

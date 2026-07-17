@@ -1,0 +1,10 @@
+<view class="freshness">
+  <view class="dot {{stale || !isOnline ? 'warn' : ''}}"></view>
+  <view class="fresh-copy">
+    <text>{{updatedText || '更新时间未知'}}</text>
+    <text wx:if="{{!isOnline}}"> · 当前离线，已优先显示本机缓存</text>
+    <text wx:elif="{{stale}}"> · 数据已过期，网络恢复后自动更新</text>
+    <text wx:elif="{{refreshDeferred}}"> · 30 分钟内无需重复获取</text>
+    <text wx:elif="{{source === 'cache'}}"> · 已使用 30 分钟缓存</text>
+  </view>
+</view>

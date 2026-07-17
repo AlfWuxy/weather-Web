@@ -1,0 +1,84 @@
+<view class="page-shell">
+  <view class="hero gis-hero">
+    <view class="hero-kicker">开放研究数据 · 1 km 网格</view>
+    <view class="hero-title">看见高温暴露背后的空间差异。</view>
+    <view class="hero-subtitle">地图描述地区暴露与背景条件，不能解释个人健康结果或因果关系。</view>
+  </view>
+
+  <status-card wx:if="{{metaLoading}}" state="loading" title="正在读取 GIS 说明" detail="首屏不下载大体积网格数据。" />
+  <status-card wx:elif="{{metaError}}" state="error" title="GIS 信息暂不可用" detail="{{metaError}}" action-label="重试" bind:action="retryMetadata" />
+
+  <block wx:if="{{!metaLoading && !metaError}}">
+    <freshness-bar updated-text="{{freshness.updatedText}}" stale="{{freshness.stale}}" source="{{freshness.source}}" refresh-deferred="{{freshness.refreshDeferred}}" />
+    <view class="download-card card">
+      <view class="row-between">
+        <view class="download-copy">
+          <view class="card-title">{{gisInfo.title || '都昌县热暴露网格'}}</view>
+          <view class="small muted download-meta">{{sizeText}} · schema {{gisInfo.schema_version || '待确认'}}</view>
+        </view>
+        <view class="download-icon">▦</view>
+      </view>
+      <view class="small muted download-note">为保证首屏流畅，GeoJSON 只在你点击后从宜老天气通后端下载。本数据不会打包进小程序。</view>
+      <button wx:if="{{mapState === 'idle'}}" class="primary-button" bindtap="loadMap">加载交互地图</button>
+      <button wx:elif="{{mapState === 'error'}}" class="secondary-button" bindtap="retryMap">重新加载地图</button>
+    </view>
+
+    <status-card wx:if="{{mapState === 'loading'}}" state="loading" title="正在下载网格数据" detail="数据约 {{sizeText}}，仅本次打开使用。请保持网络连接。" />
+    <status-card wx:if="{{mapState === 'error'}}" state="error" title="地图加载失败" detail="{{mapError}}" />
+
+    <view wx:if="{{mapState === 'drawing' || mapState === 'ready'}}" class="map-section">
+      <view class="section-title">{{activeLayerLabel}}</view>
+      <view class="small muted source-line">来源：{{activeSource || '请查看下方数据来源'}}</view>
+
+      <scroll-view class="layer-scroll" scroll-x="true" show-scrollbar="false">
+        <view class="layer-row">
+          <button wx:for="{{layerOptions}}" wx:key="key" class="layer-button {{activeLayer === item.key ? 'active' : ''}}" data-key="{{item.key}}" bindtap="chooseLayer">{{item.label}}</button>
+        </view>
+      </scroll-view>
+
+      <view class="canvas-wrap">
+        <canvas id="gisCanvas" type="2d" class="gis-canvas" bindtouchend="onCanvasTap" catchtouchmove="blockCanvasMove"></canvas>
+        <view wx:if="{{mapState === 'drawing'}}" class="draw-overlay">
+          <view class="draw-number">{{drawProgress}}%</view>
+          <view class="small">正在分批绘制 {{cellCount}} 个网格</view>
+        </view>
+      </view>
+      <view class="small muted map-hint">点击网格可查看该格数值。边界用于研究展示，不作为法定行政边界凭证。</view>
+
+      <view class="legend card">
+        <view class="strong">图例</view>
+        <view class="legend-list">
+          <view wx:for="{{legend}}" wx:key="label" class="legend-item"><text class="legend-color" style="background:{{item.color}}"></text><text>{{item.label}}</text></view>
+        </view>
+      </view>
+
+      <view wx:if="{{selected}}" class="selected-card card">
+        <view class="row-between"><view class="card-title">网格 {{selected.id}}</view><view class="pill">{{selected.activeLabel}} {{selected.activeValue}}</view></view>
+        <view class="selected-grid">
+          <view><text>65+ 人口</text><text class="selected-value">{{selected.age}}</text></view>
+          <view><text>地表温度</text><text class="selected-value">{{selected.temperature}}</text></view>
+          <view><text>观测覆盖</text><text class="selected-value">{{selected.coverage}}</text></view>
+          <view><text>树木覆盖</text><text class="selected-value">{{selected.tree}}</text></view>
+          <view><text>建成区</text><text class="selected-value">{{selected.built}}</text></view>
+          <view><text>永久水域</text><text class="selected-value">{{selected.water}}</text></view>
+          <view><text>表面高程</text><text class="selected-value">{{selected.elevation}}</text></view>
+        </view>
+      </view>
+    </view>
+
+    <view class="section-title">如何正确理解</view>
+    <view class="card method-card">
+      <view class="method-row"><view class="method-number">1</view><view><view class="strong">地表温度不等于气温</view><view class="small muted">卫星晴空地表温度不能直接代表室内温度或人体体感。</view></view></view>
+      <view class="method-row"><view class="method-number">2</view><view><view class="strong">人口比例来自模型化栅格</view><view class="small muted">它不包含个人记录或逐户普查微数据。</view></view></view>
+      <view class="method-row"><view class="method-number">3</view><view><view class="strong">联合阅读覆盖率</view><view class="small muted">云遮和质量筛选会让有效观测在空间上不均匀。</view></view></view>
+    </view>
+
+    <view wx:if="{{sourceVersions.length}}" class="section-title">数据来源</view>
+    <view wx:for="{{sourceVersions}}" wx:key="dataset" class="source-card card">
+      <view class="strong">{{item.dataset}}</view>
+      <view class="small muted">{{item.product || item.version || ''}}</view>
+      <view wx:if="{{item.doi}}" class="small source-doi">DOI {{item.doi}}</view>
+    </view>
+    <navigator class="secondary-button" url="/pages/transparency/index">查看完整方法与局限</navigator>
+  </block>
+</view>

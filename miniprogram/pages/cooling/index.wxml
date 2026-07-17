@@ -1,0 +1,44 @@
+<view class="page-shell">
+  <view class="hero cooling-hero">
+    <view class="hero-kicker">都昌县 · 避暑支持</view>
+    <view class="hero-title">家里降温条件不足，就近找帮助。</view>
+    <view class="hero-subtitle">出发前请先确认开放时间、接待条件和无障碍情况。</view>
+  </view>
+
+  <status-card wx:if="{{loading}}" state="loading" title="正在读取避暑资源" detail="资源由社区维护，页面会保留最近一次有效结果。" />
+  <status-card wx:elif="{{error && !allResources.length}}" state="error" title="避暑资源暂不可用" detail="{{error}}" action-label="重试" bind:action="retry" />
+
+  <block wx:if="{{allResources.length}}">
+    <freshness-bar updated-text="{{freshness.updatedText}}" stale="{{freshness.stale}}" source="{{freshness.source}}" refresh-deferred="{{freshness.refreshDeferred}}" />
+    <scroll-view class="filters" scroll-x="true" show-scrollbar="false">
+      <view class="filter-row">
+        <button class="filter-pill {{filter === 'all' ? 'active' : ''}}" data-filter="all" bindtap="chooseFilter">全部 {{counts.all}}</button>
+        <button class="filter-pill {{filter === 'ac' ? 'active' : ''}}" data-filter="ac" bindtap="chooseFilter">有空调 {{counts.ac}}</button>
+        <button class="filter-pill {{filter === 'accessible' ? 'active' : ''}}" data-filter="accessible" bindtap="chooseFilter">无障碍 {{counts.accessible}}</button>
+      </view>
+    </scroll-view>
+
+    <view wx:for="{{resources}}" wx:key="id" class="resource-card card">
+      <view class="row-between">
+        <view class="card-title resource-name">{{item.name}}</view>
+        <view class="pill">{{item.type}}</view>
+      </view>
+      <view class="small muted community-label">{{item.community}}</view>
+      <view class="resource-line"><text class="line-label">地址</text><text>{{item.address}}</text></view>
+      <view class="resource-line"><text class="line-label">开放</text><text>{{item.hours}}</text></view>
+      <view wx:if="{{item.contactHint}}" class="resource-line"><text class="line-label">联系</text><text>{{item.contactHint}}</text></view>
+      <view class="tags">
+        <text wx:if="{{item.hasAc}}" class="tag">有空调</text>
+        <text wx:if="{{item.accessible}}" class="tag">无障碍</text>
+      </view>
+      <view wx:if="{{item.note}}" class="small muted resource-note">{{item.note}}</view>
+      <view class="resource-actions">
+        <button class="secondary-button small-button" data-id="{{item.id}}" bindtap="copyAddress">复制地址</button>
+        <button wx:if="{{item.phone}}" class="primary-button small-button" data-phone="{{item.phone}}" bindtap="callResource">拨打电话</button>
+      </view>
+    </view>
+    <status-card wx:if="{{!resources.length}}" state="empty" title="该筛选下暂无资源" detail="可切换到“全部”继续查看。" />
+    <view class="safe-note">开放时间和设施可能临时变化。行动不便、独居或出现不适时，请优先联系家人、社区或急救服务。</view>
+  </block>
+  <status-card wx:elif="{{!loading && !error}}" state="empty" title="暂无录入的避暑资源" detail="系统不会显示虚构地点。请联系当地社区确认可用场所。" />
+</view>

@@ -1,0 +1,199 @@
+.page-shell {
+  padding: 30rpx 28rpx calc(70rpx + env(safe-area-inset-bottom));
+}
+
+.page-title {
+  color: #14251c;
+  font-size: 42rpx;
+  font-weight: 700;
+}
+
+.page-copy {
+  margin-top: 10rpx;
+  color: #66736c;
+  font-size: 26rpx;
+  line-height: 1.65;
+}
+
+.state-box,
+.weather-card,
+.action-card,
+.help-card,
+.debrief-card {
+  margin-top: 24rpx;
+  padding: 28rpx;
+  border-radius: 24rpx;
+  background: #ffffff;
+  box-shadow: 0 12rpx 32rpx rgba(25, 58, 39, 0.07);
+}
+
+.state-box {
+  color: #68766e;
+  text-align: center;
+}
+
+.weather-card {
+  background: #edf7f1;
+  box-shadow: none;
+}
+
+.weather-card.heat {
+  background: #fff0e8;
+}
+
+.weather-card.cold {
+  background: #eaf3ff;
+}
+
+.weather-title {
+  color: #26513a;
+  font-size: 31rpx;
+  font-weight: 700;
+}
+
+.weather-detail {
+  margin-top: 8rpx;
+  color: #5d6f65;
+  font-size: 25rpx;
+}
+
+.section-title {
+  margin: 0;
+  color: #243c2f;
+  font-size: 32rpx;
+  font-weight: 700;
+}
+
+.danger-title {
+  color: #8e2f27;
+}
+
+.action-row {
+  display: flex;
+  align-items: flex-start;
+  min-height: 92rpx;
+  padding: 22rpx 0;
+  border-bottom: 1rpx solid #e3eae6;
+}
+
+.action-copy {
+  flex: 1;
+  margin-left: 14rpx;
+}
+
+.action-title {
+  color: #2a4034;
+  font-size: 29rpx;
+  font-weight: 600;
+}
+
+.action-detail {
+  margin-top: 6rpx;
+  color: #6a776f;
+  font-size: 24rpx;
+}
+
+.confirm-button,
+.debrief-button {
+  min-height: 90rpx;
+  margin-top: 24rpx;
+  border-radius: 18rpx;
+  background: #168a4a;
+  color: #ffffff;
+  font-size: 29rpx;
+  font-weight: 700;
+  line-height: 90rpx;
+}
+
+.help-card {
+  border: 2rpx solid #f0d6d2;
+}
+
+.help-disclaimer {
+  margin-top: 14rpx;
+  color: #72514d;
+  font-size: 24rpx;
+  line-height: 1.65;
+}
+
+.help-input,
+.debrief-input,
+.text-input,
+.picker-field {
+  box-sizing: border-box;
+  width: 100%;
+  margin-top: 16rpx;
+  padding: 20rpx 22rpx;
+  border: 2rpx solid #ced9d2;
+  border-radius: 16rpx;
+  background: #ffffff;
+  color: #24362c;
+  font-size: 27rpx;
+}
+
+.help-input,
+.debrief-input {
+  min-height: 120rpx;
+}
+
+.help-buttons {
+  display: flex;
+  gap: 14rpx;
+  margin-top: 20rpx;
+}
+
+.help-button,
+.emergency-button {
+  flex: 1;
+  min-height: 82rpx;
+  margin: 0;
+  border-radius: 16rpx;
+  font-size: 25rpx;
+  line-height: 82rpx;
+}
+
+.help-button {
+  background: #b42318;
+  color: #ffffff;
+}
+
+.emergency-button {
+  border: 1rpx solid #d7aaa5;
+  background: #ffffff;
+  color: #9b2c24;
+}
+
+.field-label {
+  margin-top: 22rpx;
+  color: #354a3e;
+  font-size: 27rpx;
+  font-weight: 600;
+}
+
+.field-label.spaced {
+  margin-top: 24rpx;
+}
+
+.picker-field,
+.text-input {
+  min-height: 84rpx;
+}
+
+.optin-row {
+  display: flex;
+  align-items: center;
+  gap: 14rpx;
+  margin-top: 24rpx;
+  color: #52645a;
+  font-size: 25rpx;
+}
+
+.medical-note {
+  margin-top: 24rpx;
+  padding: 22rpx;
+  border-radius: 18rpx;
+  background: #fff9ed;
+  color: #6f5b35;
+  font-size: 24rpx;
+  line-height: 1.65;
+}

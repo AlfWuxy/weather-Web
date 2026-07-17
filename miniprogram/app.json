@@ -1,18 +1,53 @@
 {
   "pages": [
-    "pages/bind-token/index",
+    "pages/home/index",
+    "pages/forecast/index",
     "pages/elders/index",
-    "pages/elder-edit/index",
+    "pages/community/index",
+    "pages/settings/index",
+    "pages/health-assessment/index",
+    "pages/diary/index",
+    "pages/medications/index",
+    "pages/action-checkin/index",
+    "pages/account/index",
     "pages/alerts/index",
-    "pages/template/index",
-    "pages/settings/index"
+    "pages/actions/index",
+    "pages/cooling/index",
+    "pages/gis/index",
+    "pages/transparency/index",
+    "pages/privacy/index",
+    "pages/about/index",
+    "pages/bind-token/index",
+    "pages/elder-edit/index",
+    "pages/template/index"
   ],
   "window": {
     "navigationBarTitleText": "宜老天气通",
-    "navigationBarBackgroundColor": "#ffffff",
+    "navigationBarBackgroundColor": "#fff8f0",
     "navigationBarTextStyle": "black",
-    "backgroundColor": "#f5f7fb"
+    "backgroundColor": "#fff8f0",
+    "backgroundTextStyle": "dark",
+    "enablePullDownRefresh": false
   },
+  "tabBar": {
+    "color": "#6f6259",
+    "selectedColor": "#d85d19",
+    "backgroundColor": "#fffdf9",
+    "borderStyle": "black",
+    "list": [
+      { "pagePath": "pages/home/index", "text": "首页" },
+      { "pagePath": "pages/forecast/index", "text": "预报" },
+      { "pagePath": "pages/elders/index", "text": "照护" },
+      { "pagePath": "pages/community/index", "text": "社区" },
+      { "pagePath": "pages/settings/index", "text": "我的" }
+    ]
+  },
+  "usingComponents": {
+    "status-card": "/components/status-card/index",
+    "freshness-bar": "/components/freshness-bar/index"
+  },
+  "sitemapLocation": "sitemap.json",
+  "__usePrivacyCheck__": true,
+  "lazyCodeLoading": "requiredComponents",
   "style": "v2"
 }
-

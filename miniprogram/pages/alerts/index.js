@@ -1,45 +1,50 @@
-const { api } = require('../../utils/request');
+const { getBootstrap } = require('../../utils/public-data');
+const { freshnessView, normalizeBootstrap } = require('../../utils/format');
 
 Page({
   data: {
-    pairId: null,
-    loading: false,
+    loading: true,
+    error: '',
     warnings: [],
-    location: {},
-    weather: {},
+    warningsSourceAvailable: false,
+    current: null,
+    locationName: '都昌县',
+    freshness: {},
   },
 
-  getToken() {
-    return (wx.getStorageSync('api_token') || '').trim();
+  onLoad() {
+    this.loadData();
   },
 
-  async onLoad(options) {
-    const pairId = options.pair_id ? parseInt(options.pair_id, 10) : null;
-    this.setData({ pairId });
-    if (pairId) {
-      await this.loadAlerts(pairId);
-    }
+  async onPullDownRefresh() {
+    await this.loadData({ force: true });
+    wx.stopPullDownRefresh();
   },
 
-  async loadAlerts(pairId) {
-    const token = this.getToken();
-    if (!token) {
-      wx.reLaunch({ url: '/pages/bind-token/index' });
-      return;
-    }
-    this.setData({ loading: true });
+  async loadData(options) {
+    if (!this.data.current) this.setData({ loading: true, error: '' });
     try {
-      const data = await api({ method: 'GET', path: `/mp/api/v1/alerts?pair_id=${pairId}`, token });
+      const result = await getBootstrap(options);
+      const snapshot = normalizeBootstrap(result.data);
       this.setData({
-        warnings: data.warnings || [],
-        location: data.location || {},
-        weather: data.weather || {},
+        loading: false,
+        error: '',
+        warnings: snapshot.warnings,
+        warningsSourceAvailable: snapshot.warningsSourceAvailable,
+        current: snapshot.current,
+        locationName: snapshot.location.name,
+        freshness: freshnessView(result.meta, snapshot),
       });
-    } catch (e) {
-      wx.showToast({ title: '加载失败', icon: 'none' });
-    } finally {
-      this.setData({ loading: false });
+    } catch (error) {
+      this.setData({ loading: false, error: '预警信息暂时无法获取，请稍后再试。' });
     }
+  },
+
+  retry() {
+    this.loadData({ force: true });
+  },
+
+  onShareAppMessage() {
+    return { title: `${this.data.locationName}天气预警`, path: '/pages/alerts/index' };
   },
 });
-

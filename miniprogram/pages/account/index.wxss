@@ -1,0 +1,155 @@
+.page-shell {
+  padding: 30rpx 28rpx calc(70rpx + env(safe-area-inset-bottom));
+}
+
+.page-title {
+  color: #14251c;
+  font-size: 42rpx;
+  font-weight: 700;
+}
+
+.page-copy {
+  margin-top: 10rpx;
+  color: #66736c;
+  font-size: 26rpx;
+  line-height: 1.65;
+}
+
+.state-box,
+.account-card,
+.menu-card,
+.danger-card {
+  margin-top: 24rpx;
+  padding: 28rpx;
+  border-radius: 24rpx;
+  background: #ffffff;
+  box-shadow: 0 12rpx 32rpx rgba(25, 58, 39, 0.07);
+}
+
+.state-box {
+  color: #68766e;
+  text-align: center;
+}
+
+.account-card {
+  display: flex;
+  align-items: center;
+}
+
+.account-avatar {
+  width: 86rpx;
+  height: 86rpx;
+  border-radius: 26rpx;
+  background: #168a4a;
+  color: #ffffff;
+  font-size: 36rpx;
+  font-weight: 700;
+  line-height: 86rpx;
+  text-align: center;
+}
+
+.account-main {
+  margin-left: 20rpx;
+}
+
+.account-name {
+  color: #20372a;
+  font-size: 32rpx;
+  font-weight: 700;
+}
+
+.account-status {
+  margin-top: 7rpx;
+  color: #68766e;
+  font-size: 24rpx;
+}
+
+.menu-card {
+  padding: 0 28rpx 28rpx;
+}
+
+.menu-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  min-height: 118rpx;
+  margin: 0;
+  padding: 20rpx 0;
+  background: transparent;
+  text-align: left;
+}
+
+.menu-row::after {
+  border: 0;
+}
+
+.menu-title,
+.summary-title {
+  color: #2a4034;
+  font-size: 29rpx;
+  font-weight: 700;
+}
+
+.menu-copy,
+.summary-copy,
+.danger-copy {
+  margin-top: 7rpx;
+  color: #68766e;
+  font-size: 24rpx;
+  line-height: 1.65;
+}
+
+.chevron {
+  color: #86938c;
+  font-size: 40rpx;
+}
+
+.privacy-summary {
+  padding: 22rpx;
+  border-radius: 18rpx;
+  background: #f2f8f4;
+}
+
+.logout-button {
+  min-height: 90rpx;
+  margin-top: 24rpx;
+  border: 1rpx solid #c8d5cd;
+  border-radius: 18rpx;
+  background: #ffffff;
+  color: #315340;
+  font-size: 29rpx;
+  line-height: 90rpx;
+}
+
+.danger-card {
+  border: 2rpx solid #f0d6d2;
+  box-shadow: none;
+}
+
+.danger-title {
+  color: #8e2f27;
+  font-size: 29rpx;
+  font-weight: 700;
+}
+
+.legacy-note {
+  margin-top: 16rpx;
+  padding: 16rpx;
+  border-radius: 14rpx;
+  background: #fff5f3;
+  color: #8e413a;
+  font-size: 23rpx;
+  line-height: 1.55;
+}
+
+.delete-button {
+  min-height: 82rpx;
+  margin-top: 22rpx;
+  border: 1rpx solid #d7aaa5;
+  border-radius: 16rpx;
+  background: #ffffff;
+  color: #9b2c24;
+  font-size: 27rpx;
+  line-height: 82rpx;
+}

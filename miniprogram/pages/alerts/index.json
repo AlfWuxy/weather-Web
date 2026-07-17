@@ -1,4 +1,5 @@
 {
-  "navigationBarTitleText": "预警详情"
+  "navigationBarTitleText": "天气预警",
+  "enablePullDownRefresh": true,
+  "backgroundTextStyle": "dark"
 }
-

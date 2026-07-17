@@ -1,4 +1,109 @@
-.msg {
+.page-shell {
+  padding: 30rpx 28rpx calc(64rpx + env(safe-area-inset-bottom));
+}
+
+.page-title {
+  color: #14251c;
+  font-size: 42rpx;
+  font-weight: 700;
+}
+
+.page-copy {
+  margin-top: 10rpx;
+  color: #66736c;
+  font-size: 26rpx;
+  line-height: 1.65;
+}
+
+.state-box,
+.message-card,
+.safety-card {
+  margin-top: 26rpx;
+  padding: 30rpx;
+  border-radius: 24rpx;
+  background: #ffffff;
+  box-shadow: 0 12rpx 32rpx rgba(25, 58, 39, 0.07);
+}
+
+.state-box {
+  color: #66736c;
+  text-align: center;
+}
+
+.weather-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-bottom: 22rpx;
+  border-bottom: 1rpx solid #e3ebe6;
+}
+
+.location {
+  color: #176d40;
+  font-size: 29rpx;
+  font-weight: 700;
+}
+
+.weather-summary {
+  color: #637168;
+  font-size: 24rpx;
+}
+
+.message-text {
+  margin-top: 24rpx;
+  color: #21372b;
+  font-size: 30rpx;
+  line-height: 1.85;
   white-space: pre-wrap;
 }
 
+.copy-button,
+.checkin-button {
+  min-height: 90rpx;
+  border-radius: 18rpx;
+  font-size: 29rpx;
+  font-weight: 600;
+  line-height: 90rpx;
+}
+
+.copy-button {
+  margin-top: 28rpx;
+  background: #168a4a;
+  color: #ffffff;
+}
+
+.checkin-button {
+  margin-top: 14rpx;
+  border: 1rpx solid #cbd8d0;
+  background: #ffffff;
+  color: #315340;
+}
+
+.safety-card {
+  background: #fff9ed;
+  box-shadow: none;
+}
+
+.safety-title {
+  color: #8c5a0a;
+  font-size: 28rpx;
+  font-weight: 700;
+}
+
+.safety-copy {
+  margin-top: 10rpx;
+  color: #6f5b35;
+  font-size: 25rpx;
+  line-height: 1.7;
+}
+
+.back-link {
+  margin-top: 22rpx;
+  background: transparent;
+  color: #52645a;
+  font-size: 26rpx;
+}
+
+.back-link::after {
+  border: 0;
+}

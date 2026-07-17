@@ -1,0 +1,14 @@
+.cooling-hero { background: linear-gradient(145deg, #ee7d2f 0%, #b35924 100%); }
+.filters { width: 100%; margin: 20rpx 0; white-space: nowrap; }
+.filter-row { display: inline-flex; gap: 14rpx; padding: 2rpx; }
+.filter-pill { min-height: 72rpx; margin: 0; padding: 14rpx 24rpx; border-radius: 999rpx; color: #685a51; background: #f3e8df; font-size: 27rpx; }
+.filter-pill.active { color: #fff; background: #d85d19; }
+.resource-name { flex: 1; min-width: 0; }
+.community-label { margin-top: 8rpx; }
+.resource-line { display: grid; grid-template-columns: 92rpx 1fr; gap: 14rpx; margin-top: 18rpx; font-size: 28rpx; line-height: 1.6; }
+.line-label { color: #8b7466; font-weight: 700; }
+.tags { display: flex; flex-wrap: wrap; gap: 12rpx; margin-top: 18rpx; }
+.tag { padding: 7rpx 15rpx; border-radius: 999rpx; color: #276141; background: #e6f6ed; font-size: 24rpx; }
+.resource-note { margin-top: 16rpx; padding: 16rpx; border-radius: 14rpx; background: #f8f2ed; }
+.resource-actions { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14rpx; margin-top: 22rpx; }
+.small-button { min-height: 76rpx; padding: 14rpx 18rpx; font-size: 27rpx; }

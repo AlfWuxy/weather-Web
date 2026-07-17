@@ -1,129 +1,82 @@
-const { api } = require('../../utils/request');
+const { authApi, requireToken } = require('../elders/care-session');
+const { FIXED_LOCATION, normalizeList, validateElderInput } = require('../elders/care-logic');
 
-function splitChronic(text) {
-  const raw = (text || '').split(/[,，]/).map((s) => s.trim()).filter(Boolean);
-  // de-dupe
-  const seen = new Set();
-  const out = [];
-  raw.forEach((x) => {
-    if (seen.has(x)) return;
-    seen.add(x);
-    out.push(x);
-  });
-  return out;
-}
+const GENDER_OPTIONS = ['未填写', '女性', '男性'];
 
 Page({
   data: {
-    mode: 'edit',
+    mode: 'create',
     pairId: null,
     name: '',
     relation: '',
     age: '',
-    gender: '',
-    locationQuery: '',
+    gender: '未填写',
+    genderOptions: GENDER_OPTIONS,
+    genderIndex: 0,
     chronicText: '',
+    fixedLocation: FIXED_LOCATION,
+    loading: false,
     busy: false,
   },
 
-  getToken() {
-    return (wx.getStorageSync('api_token') || '').trim();
-  },
-
   async onLoad(options) {
-    const mode = options.mode === 'create' ? 'create' : 'edit';
-    const pairId = options.pair_id ? parseInt(options.pair_id, 10) : null;
+    if (!requireToken()) return;
+    const pairId = Number(options.pair_id || 0) || null;
+    const mode = options.mode === 'create' || !pairId ? 'create' : 'edit';
     this.setData({ mode, pairId });
-
-    if (mode === 'edit' && pairId) {
-      await this.loadPair(pairId);
-    }
+    if (mode === 'edit') await this.loadElder();
   },
 
-  async loadPair(pairId) {
-    const token = this.getToken();
-    if (!token) {
-      wx.reLaunch({ url: '/pages/bind-token/index' });
-      return;
-    }
+  async loadElder() {
+    this.setData({ loading: true });
     try {
-      const elders = await api({ method: 'GET', path: '/mp/api/v1/elders', token });
-      const item = (elders || []).find((x) => x.pair_id === pairId);
-      if (!item) {
-        wx.showToast({ title: '未找到该老人', icon: 'none' });
-        return;
-      }
-      const chronic = (item.member && item.member.chronic_diseases) ? item.member.chronic_diseases : [];
+      const data = await authApi({ method: 'GET', path: '/mp/api/v1/elders' });
+      const item = normalizeList(data, ['items', 'elders']).find((elder) => Number(elder.pair_id) === this.data.pairId);
+      if (!item) throw new Error('not_found');
+      const member = item.member || {};
+      const genderIndex = Math.max(0, GENDER_OPTIONS.indexOf(member.gender || '未填写'));
       this.setData({
-        locationQuery: item.location_query || item.community_code || '',
-        chronicText: (chronic || []).join(', '),
-        name: (item.member && item.member.name) ? item.member.name : '',
-        relation: (item.member && item.member.relation) ? item.member.relation : '',
-        age: (item.member && item.member.age) ? String(item.member.age) : '',
-        gender: (item.member && item.member.gender) ? item.member.gender : '',
+        name: member.name || '',
+        relation: member.relation || '',
+        age: member.age ? String(member.age) : '',
+        gender: GENDER_OPTIONS[genderIndex],
+        genderIndex,
+        chronicText: Array.isArray(member.chronic_diseases) ? member.chronic_diseases.join('、') : '',
       });
-    } catch (e) {
-      wx.showToast({ title: '加载失败', icon: 'none' });
+    } catch (error) {
+      wx.showToast({ title: '没有找到这位老人', icon: 'none' });
+    } finally {
+      this.setData({ loading: false });
     }
   },
 
-  onName(e) { this.setData({ name: (e.detail.value || '').trim() }); },
-  onRelation(e) { this.setData({ relation: (e.detail.value || '').trim() }); },
-  onAge(e) { this.setData({ age: (e.detail.value || '').trim() }); },
-  onGender(e) { this.setData({ gender: (e.detail.value || '').trim() }); },
-  onLocation(e) { this.setData({ locationQuery: (e.detail.value || '').trim() }); },
-  onChronic(e) { this.setData({ chronicText: e.detail.value || '' }); },
+  onName(event) { this.setData({ name: event.detail.value || '' }); },
+  onRelation(event) { this.setData({ relation: event.detail.value || '' }); },
+  onAge(event) { this.setData({ age: event.detail.value || '' }); },
+  onChronic(event) { this.setData({ chronicText: event.detail.value || '' }); },
+
+  onGender(event) {
+    const genderIndex = Number(event.detail.value || 0);
+    this.setData({ genderIndex, gender: GENDER_OPTIONS[genderIndex] });
+  },
 
   async onSave() {
     if (this.data.busy) return;
-    const token = this.getToken();
-    if (!token) {
-      wx.reLaunch({ url: '/pages/bind-token/index' });
-      return;
-    }
-    if (!this.data.locationQuery) {
-      wx.showToast({ title: '请填写所在地', icon: 'none' });
+    const validation = validateElderInput(this.data, { mode: this.data.mode });
+    if (!validation.valid) {
+      wx.showToast({ title: validation.error, icon: 'none' });
       return;
     }
     this.setData({ busy: true });
     try {
-      if (this.data.mode === 'create') {
-        if (!this.data.name) {
-          wx.showToast({ title: '请填写称呼/姓名', icon: 'none' });
-          return;
-        }
-        const chronic = splitChronic(this.data.chronicText);
-        await api({
-          method: 'POST',
-          path: '/mp/api/v1/elders',
-          token,
-          data: {
-            name: this.data.name,
-            relation: this.data.relation,
-            age: this.data.age ? parseInt(this.data.age, 10) : null,
-            gender: this.data.gender,
-            location_query: this.data.locationQuery,
-            chronic_diseases: chronic,
-          },
-        });
-        wx.showToast({ title: '已创建', icon: 'success' });
-        wx.navigateBack();
-      } else {
-        const chronic = splitChronic(this.data.chronicText);
-        await api({
-          method: 'PATCH',
-          path: `/mp/api/v1/elders/${this.data.pairId}`,
-          token,
-          data: {
-            location_query: this.data.locationQuery,
-            chronic_diseases: chronic,
-          },
-        });
-        wx.showToast({ title: '已保存', icon: 'success' });
-        wx.navigateBack();
-      }
-    } catch (e) {
-      wx.showToast({ title: '保存失败', icon: 'none' });
+      const options = this.data.mode === 'create'
+        ? { method: 'POST', path: '/mp/api/v1/elders', data: validation.payload }
+        : { method: 'PATCH', path: `/mp/api/v1/elders/${this.data.pairId}`, data: validation.payload };
+      await authApi(options);
+      wx.showToast({ title: this.data.mode === 'create' ? '已添加' : '已保存', icon: 'success' });
+      setTimeout(() => wx.navigateBack(), 300);
+    } catch (error) {
+      wx.showToast({ title: '保存失败，请稍后再试', icon: 'none' });
     } finally {
       this.setData({ busy: false });
     }
@@ -133,4 +86,3 @@ Page({
     wx.navigateBack();
   },
 });
-

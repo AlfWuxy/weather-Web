@@ -1,32 +1,250 @@
 page {
-  background: #f5f7fb;
-  color: #111827;
-  font-size: 14px;
+  min-height: 100%;
+  background: #fff8f0;
+  color: #2f2925;
+  font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
+  font-size: 32rpx;
+}
+
+view, text, button, navigator, input, scroll-view, canvas {
+  box-sizing: border-box;
+}
+
+button {
+  font-size: 32rpx;
+  line-height: 1.4;
+}
+
+button::after {
+  border: 0;
+}
+
+.page-shell {
+  padding: 28rpx 28rpx calc(48rpx + env(safe-area-inset-bottom));
+}
+
+.hero {
+  overflow: hidden;
+  position: relative;
+  padding: 36rpx;
+  border-radius: 32rpx;
+  color: #fff;
+  background: linear-gradient(145deg, #f07a2a 0%, #ce4c14 100%);
+  box-shadow: 0 18rpx 44rpx rgba(171, 69, 17, 0.2);
+}
+
+.hero::after {
+  content: "";
+  position: absolute;
+  right: -70rpx;
+  top: -90rpx;
+  width: 260rpx;
+  height: 260rpx;
+  border: 44rpx solid rgba(255, 255, 255, 0.12);
+  border-radius: 50%;
+}
+
+.hero-kicker {
+  display: inline-flex;
+  align-items: center;
+  padding: 8rpx 18rpx;
+  border-radius: 999rpx;
+  color: #8a350f;
+  background: #fff2df;
+  font-size: 25rpx;
+  font-weight: 700;
+}
+
+.hero-title {
+  margin-top: 22rpx;
+  font-size: 50rpx;
+  line-height: 1.18;
+  font-weight: 800;
+}
+
+.hero-subtitle {
+  margin-top: 16rpx;
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 29rpx;
+  line-height: 1.65;
+}
+
+.section-title {
+  margin: 38rpx 4rpx 18rpx;
+  font-size: 37rpx;
+  line-height: 1.35;
+  font-weight: 800;
+}
+
+.section-subtitle {
+  margin: -8rpx 4rpx 18rpx;
+  color: #786d65;
+  font-size: 27rpx;
+  line-height: 1.6;
 }
 
 .card {
-  background: #ffffff;
-  border-radius: 12px;
-  padding: 14px;
-  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.06);
+  margin-bottom: 20rpx;
+  padding: 28rpx;
+  border: 1rpx solid #f0ded0;
+  border-radius: 26rpx;
+  background: #fffdf9;
+  box-shadow: 0 10rpx 28rpx rgba(87, 54, 31, 0.07);
+}
+
+.card-title {
+  font-size: 34rpx;
+  line-height: 1.4;
+  font-weight: 750;
 }
 
 .muted {
-  color: #6b7280;
+  color: #786d65;
 }
 
-.btn-primary {
-  background: #16a34a;
-  color: #ffffff;
-  border-radius: 10px;
-  padding: 10px 14px;
+.small {
+  font-size: 25rpx;
+  line-height: 1.55;
 }
 
-.btn-outline {
-  background: transparent;
-  color: #111827;
-  border: 1px solid #d1d5db;
-  border-radius: 10px;
-  padding: 10px 14px;
+.strong {
+  font-weight: 750;
 }
 
+.row {
+  display: flex;
+  align-items: center;
+}
+
+.row-between {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20rpx;
+}
+
+.wrap {
+  flex-wrap: wrap;
+}
+
+.grid-two {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18rpx;
+}
+
+.metric {
+  padding: 24rpx;
+  border-radius: 22rpx;
+  background: #fff1df;
+}
+
+.metric-label {
+  color: #7a6558;
+  font-size: 25rpx;
+}
+
+.metric-value {
+  margin-top: 8rpx;
+  color: #9e3e12;
+  font-size: 40rpx;
+  font-weight: 800;
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 48rpx;
+  padding: 7rpx 17rpx;
+  border-radius: 999rpx;
+  color: #6e5443;
+  background: #f8eadf;
+  font-size: 25rpx;
+  font-weight: 650;
+}
+
+.pill.low, .risk-low {
+  color: #226744;
+  background: #e6f6ed;
+}
+
+.pill.mid, .risk-mid {
+  color: #845d00;
+  background: #fff3cf;
+}
+
+.pill.high, .risk-high {
+  color: #a0281a;
+  background: #ffe6df;
+}
+
+.pill.unknown, .risk-unknown {
+  color: #645f5b;
+  background: #eeeae6;
+}
+
+.primary-button, .secondary-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 92rpx;
+  padding: 20rpx 26rpx;
+  border-radius: 20rpx;
+  font-weight: 750;
+}
+
+.primary-button {
+  color: #fff;
+  background: #d85d19;
+}
+
+.secondary-button {
+  color: #a34216;
+  background: #fff1df;
+  border: 1rpx solid #efc7a9;
+}
+
+.link-card {
+  display: flex;
+  align-items: center;
+  gap: 20rpx;
+  min-height: 118rpx;
+  padding: 22rpx;
+  border: 1rpx solid #f0ded0;
+  border-radius: 24rpx;
+  color: #332a25;
+  background: #fffdf9;
+}
+
+.link-icon {
+  display: flex;
+  flex: 0 0 72rpx;
+  align-items: center;
+  justify-content: center;
+  width: 72rpx;
+  height: 72rpx;
+  border-radius: 20rpx;
+  color: #a34216;
+  background: #fff0dc;
+  font-size: 36rpx;
+}
+
+.divider {
+  height: 1rpx;
+  margin: 22rpx 0;
+  background: #efe2d8;
+}
+
+.safe-note {
+  padding: 22rpx 24rpx;
+  border-left: 8rpx solid #e7762e;
+  border-radius: 18rpx;
+  color: #654d3e;
+  background: #fff0df;
+  font-size: 27rpx;
+  line-height: 1.65;
+}
+
+.empty-space {
+  height: 18rpx;
+}

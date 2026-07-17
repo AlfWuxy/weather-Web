@@ -1,0 +1,178 @@
+.page-shell {
+  padding: 30rpx 28rpx calc(70rpx + env(safe-area-inset-bottom));
+}
+
+.page-title {
+  color: #14251c;
+  font-size: 42rpx;
+  font-weight: 700;
+}
+
+.page-copy {
+  margin-top: 10rpx;
+  color: #66736c;
+  font-size: 26rpx;
+  line-height: 1.65;
+}
+
+.form-card,
+.medicine-card,
+.state-box {
+  margin-top: 24rpx;
+  padding: 28rpx;
+  border-radius: 24rpx;
+  background: #ffffff;
+  box-shadow: 0 12rpx 32rpx rgba(25, 58, 39, 0.07);
+}
+
+.field-group {
+  margin-top: 24rpx;
+}
+
+.first-field {
+  margin-top: 0;
+}
+
+.field-label {
+  margin-bottom: 12rpx;
+  color: #2a3e33;
+  font-size: 28rpx;
+  font-weight: 600;
+}
+
+.field-label text {
+  color: #b42318;
+}
+
+.text-input,
+.picker-field,
+.small-input {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 86rpx;
+  padding: 21rpx 22rpx;
+  border: 2rpx solid #ced9d2;
+  border-radius: 16rpx;
+  background: #ffffff;
+  color: #1e3026;
+  font-size: 28rpx;
+}
+
+.two-column {
+  display: flex;
+  gap: 18rpx;
+  margin-top: 24rpx;
+}
+
+.column-field {
+  flex: 1;
+  min-width: 0;
+}
+
+.trigger-toggle {
+  margin: 24rpx 0 0;
+  background: transparent;
+  color: #176d40;
+  font-size: 27rpx;
+}
+
+.trigger-toggle::after,
+.delete-link::after {
+  border: 0;
+}
+
+.trigger-panel {
+  margin-top: 12rpx;
+  padding: 22rpx;
+  border-radius: 18rpx;
+  background: #f2f8f4;
+}
+
+.trigger-copy {
+  color: #5f7167;
+  font-size: 23rpx;
+  line-height: 1.6;
+}
+
+.trigger-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14rpx;
+  margin-top: 16rpx;
+}
+
+.small-input {
+  min-height: 78rpx;
+  padding: 18rpx;
+  font-size: 25rpx;
+}
+
+.save-button {
+  min-height: 92rpx;
+  margin-top: 26rpx;
+  border-radius: 18rpx;
+  background: #168a4a;
+  color: #ffffff;
+  font-size: 30rpx;
+  font-weight: 700;
+  line-height: 92rpx;
+}
+
+.medicine-warning {
+  margin-top: 16rpx;
+  color: #8a5d13;
+  font-size: 23rpx;
+  line-height: 1.6;
+  text-align: center;
+}
+
+.section-title {
+  margin-top: 38rpx;
+  color: #21372b;
+  font-size: 33rpx;
+  font-weight: 700;
+}
+
+.state-box {
+  color: #68766e;
+  text-align: center;
+}
+
+.medicine-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20rpx;
+}
+
+.medicine-name {
+  color: #243c2f;
+  font-size: 31rpx;
+  font-weight: 700;
+}
+
+.medicine-dose,
+.medicine-meta {
+  margin-top: 9rpx;
+  color: #65736b;
+  font-size: 25rpx;
+  line-height: 1.55;
+}
+
+.time-badge {
+  padding: 10rpx 16rpx;
+  border-radius: 999rpx;
+  background: #edf7f1;
+  color: #176d40;
+  font-size: 25rpx;
+  font-weight: 700;
+}
+
+.delete-link {
+  margin: 18rpx 0 0;
+  padding: 0;
+  background: transparent;
+  color: #9a554f;
+  font-size: 24rpx;
+  text-align: left;
+}

@@ -1,0 +1,12 @@
+.about-hero { background: linear-gradient(145deg, #ec762b 0%, #8b4929 100%); }
+.trust-flow { display: flex; align-items: stretch; flex-direction: column; }
+.trust-card { padding: 28rpx; border: 1rpx solid #f0ded0; border-radius: 24rpx; background: #fffdf9; }
+.trust-number { display: flex; align-items: center; justify-content: center; width: 54rpx; height: 54rpx; margin-bottom: 16rpx; border-radius: 50%; color: #fff; background: #d85d19; font-size: 26rpx; font-weight: 800; }
+.trust-text { margin-top: 10rpx; color: #66594f; font-size: 28rpx; line-height: 1.68; }
+.flow-arrow { padding: 6rpx; color: #d85d19; text-align: center; font-size: 38rpx; }
+.principle { margin: 0; }
+.principle-icon { display: flex; align-items: center; justify-content: center; width: 56rpx; height: 56rpx; margin-bottom: 15rpx; border-radius: 17rpx; color: #a34216; background: #fff0df; font-size: 27rpx; font-weight: 800; }
+.principle .muted { margin-top: 8rpx; }
+.about-text view { color: #66594f; font-size: 29rpx; line-height: 1.75; }
+.about-text view + view { margin-top: 16rpx; }
+.about-link { margin-top: 18rpx; }

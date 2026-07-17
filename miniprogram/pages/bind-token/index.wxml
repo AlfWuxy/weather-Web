@@ -1,27 +1,47 @@
-<view style="padding: 16px;">
-  <view class="card">
-    <view style="font-size: 18px; font-weight: 700;">绑定 API Token</view>
-    <view class="muted" style="margin-top: 8px;">
-      试点阶段先在网页端生成 Token，在这里输入完成绑定。
-    </view>
+<view class="page-shell">
+  <view class="welcome-card">
+    <view class="brand-mark">宜</view>
+    <view class="welcome-title">宜老天气通</view>
+    <view class="welcome-subtitle">都昌县天气预警与家庭照护</view>
+  </view>
 
-    <view style="margin-top: 14px;">
+  <view class="card login-card">
+    <view class="section-title">登录后管理家人</view>
+    <view class="section-copy">优先使用微信快捷登录。系统只读取登录所需的临时凭证，不读取你的聊天、通讯录或位置。</view>
+
+    <label class="consent-row">
+      <checkbox-group bindchange="onConsentChange">
+        <checkbox value="agreed" checked="{{privacyAgreed}}" color="#168a4a" />
+      </checkbox-group>
+      <view class="consent-copy">我已阅读并同意</view>
+      <view class="privacy-link" catchtap="openPrivacy">《隐私说明》</view>
+    </label>
+
+    <button class="wechat-button" loading="{{busy}}" disabled="{{busy}}" bindtap="onWechatLogin">微信快捷登录</button>
+    <view wx:if="{{loginHint}}" class="status-hint">{{loginHint}}</view>
+
+    <button class="fallback-link" bindtap="toggleTokenFallback">
+      {{showTokenFallback ? '收起旧版 Token 绑定' : '微信登录失败？使用旧版 Token'}}
+    </button>
+
+    <view wx:if="{{showTokenFallback}}" class="fallback-panel">
+      <view class="field-label">网页端 Token</view>
       <input
-        placeholder="粘贴 Web 生成的 Token"
+        class="text-input"
+        password="true"
+        maxlength="512"
+        placeholder="粘贴网页端生成的 Token"
         value="{{tokenInput}}"
-        bindinput="onInput"
-        style="border: 1px solid #e5e7eb; border-radius: 10px; padding: 10px 12px; background: #fff;"
+        bindinput="onTokenInput"
       />
-    </view>
-
-    <view style="display:flex; gap: 10px; margin-top: 14px;">
-      <button class="btn-primary" style="flex:1;" bindtap="onBind">绑定并进入</button>
-      <button class="btn-outline" style="flex:1;" bindtap="onClear">清空</button>
-    </view>
-
-    <view class="muted" style="margin-top: 10px; font-size: 12px;">
-      注意：小程序请求域名必须配置 HTTPS 合法域名，且与后端一致。
+      <view class="button-row">
+        <button class="primary-button row-button" loading="{{busy}}" disabled="{{busy}}" bindtap="onBind">绑定并进入</button>
+        <button class="secondary-button row-button" disabled="{{busy}}" bindtap="onClear">清空输入</button>
+      </view>
+      <view class="security-note">Token 仅用于登录本服务，不会显示在页面中。请勿转发给他人。</view>
     </view>
   </view>
-</view>
 
+  <view class="public-note">无需登录也可以从小程序首页查看都昌县公共天气和预警。</view>
+  <button class="public-home-button" bindtap="goPublicHome">先查看公共天气</button>
+</view>

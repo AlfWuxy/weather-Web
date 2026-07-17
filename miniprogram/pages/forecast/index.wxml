@@ -1,0 +1,44 @@
+<view class="page-shell">
+  <view class="hero forecast-hero">
+    <view class="hero-kicker">{{locationName}} · 未来 7 天</view>
+    <view class="hero-title">哪几天要特别留心？</view>
+    <view class="hero-subtitle">风险综合温度、湿度和空气质量等地区级输入，不使用个人慢病资料。</view>
+  </view>
+
+  <status-card wx:if="{{loading}}" state="loading" title="正在读取 7 天预报" detail="会优先使用 30 分钟内的有效缓存。" />
+  <status-card wx:elif="{{error && !forecast.length}}" state="error" title="7 天预报暂不可用" detail="{{error}}" action-label="重试" bind:action="retry" />
+
+  <block wx:if="{{forecast.length}}">
+    <freshness-bar updated-text="{{freshness.updatedText}}" stale="{{freshness.stale}}" source="{{freshness.source}}" refresh-deferred="{{freshness.refreshDeferred}}" />
+    <view class="week-summary card">
+      <view class="row-between">
+        <view>
+          <view class="small muted">本周需要重点准备</view>
+          <view class="summary-number">{{highRiskDays}}</view>
+          <view class="small muted">个高风险日</view>
+        </view>
+        <navigator class="secondary-button compact-button" url="/pages/actions/index">查看行动</navigator>
+      </view>
+    </view>
+
+    <view class="section-title">逐日预报</view>
+    <view wx:for="{{forecast}}" wx:key="id" class="forecast-card card risk-border-{{item.tone}}">
+      <view class="forecast-day">
+        <view class="day-label">{{item.dayLabel}}</view>
+        <view class="small muted">{{item.date}}</view>
+      </view>
+      <view class="forecast-weather">
+        <view class="strong">{{item.condition}}</view>
+        <view class="temp-range">{{item.highText}} / {{item.lowText}}</view>
+        <view wx:if="{{item.humidity !== null}}" class="small muted">湿度 {{item.humidity}}%</view>
+      </view>
+      <view class="day-risk risk-{{item.tone}}">
+        <view class="small">{{item.riskLabel}}</view>
+        <view class="day-score">{{item.scoreText}}</view>
+      </view>
+    </view>
+
+    <view class="safe-note">风险评分用于安排提醒、补水、降温和外出时间。评分待计算时，页面不会给出推断等级。</view>
+  </block>
+  <status-card wx:elif="{{!loading && !error}}" state="empty" title="预报数据正在更新" detail="稍后下拉刷新，也可以先查看今日通用防护。" />
+</view>

@@ -1,0 +1,26 @@
+.gis-hero { background: linear-gradient(145deg, #e9752d 0%, #884c2b 100%); }
+.download-card { margin-top: 20rpx; }
+.download-copy { flex: 1; min-width: 0; }
+.download-meta { margin-top: 8rpx; }
+.download-icon { display: flex; flex: 0 0 86rpx; align-items: center; justify-content: center; width: 86rpx; height: 86rpx; border-radius: 22rpx; color: #a34216; background: #fff0df; font-size: 46rpx; }
+.download-note { margin: 22rpx 0; padding-top: 18rpx; border-top: 1rpx solid #efe2d8; }
+.source-line { margin-top: -12rpx; }
+.layer-scroll { width: 100%; margin: 20rpx 0; white-space: nowrap; }
+.layer-row { display: inline-flex; gap: 12rpx; padding: 2rpx; }
+.layer-button { min-height: 68rpx; margin: 0; padding: 12rpx 22rpx; border-radius: 999rpx; color: #67594f; background: #f2e8df; font-size: 25rpx; }
+.layer-button.active { color: #fff; background: #d85d19; }
+.canvas-wrap { position: relative; overflow: hidden; width: 100%; height: 720rpx; border: 1rpx solid #e4d4c8; border-radius: 26rpx; background: #f6f1eb; box-shadow: inset 0 0 30rpx rgba(73, 49, 35, 0.08); }
+.gis-canvas { width: 100%; height: 100%; }
+.draw-overlay { display: flex; position: absolute; inset: 0; align-items: center; justify-content: center; color: #604b3e; background: rgba(255, 250, 244, 0.78); flex-direction: column; }
+.draw-number { color: #a34216; font-size: 54rpx; font-weight: 850; }
+.map-hint { margin: 14rpx 4rpx 22rpx; }
+.legend-list { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14rpx; margin-top: 18rpx; }
+.legend-item { display: flex; align-items: center; gap: 10rpx; color: #6c5d53; font-size: 23rpx; }
+.legend-color { flex: 0 0 28rpx; width: 28rpx; height: 28rpx; border-radius: 7rpx; }
+.selected-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14rpx; margin-top: 22rpx; }
+.selected-grid > view { display: flex; gap: 6rpx; padding: 16rpx; border-radius: 16rpx; color: #786d65; background: #f8f2ed; font-size: 24rpx; flex-direction: column; }
+.selected-value { color: #7e3517; font-size: 29rpx; font-weight: 800; }
+.method-row { display: flex; align-items: flex-start; gap: 18rpx; }
+.method-row + .method-row { margin-top: 22rpx; padding-top: 22rpx; border-top: 1rpx solid #efe2d8; }
+.method-number { display: flex; flex: 0 0 48rpx; align-items: center; justify-content: center; width: 48rpx; height: 48rpx; border-radius: 50%; color: #fff; background: #d85d19; font-size: 24rpx; font-weight: 800; }
+.source-doi { margin-top: 8rpx; color: #91502c; word-break: break-all; }

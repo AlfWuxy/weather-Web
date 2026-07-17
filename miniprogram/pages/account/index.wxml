@@ -1,0 +1,36 @@
+<view class="page-shell">
+  <view class="page-title">账号与隐私</view>
+  <view class="page-copy">管理本机登录状态，查看隐私边界，或提交账号注销申请。</view>
+
+  <view wx:if="{{loading}}" class="state-box">正在加载账号信息…</view>
+  <view wx:else class="account-card">
+    <view class="account-avatar">微</view>
+    <view class="account-main">
+      <view class="account-name">{{me.display_name || me.nickname || '微信用户'}}</view>
+      <view class="account-status">已登录 · 都昌县服务</view>
+    </view>
+  </view>
+
+  <view class="menu-card">
+    <button class="menu-row" bindtap="openPrivacy">
+      <view>
+        <view class="menu-title">隐私说明</view>
+        <view class="menu-copy">查看收集范围、使用目的和账号权利</view>
+      </view>
+      <view class="chevron">›</view>
+    </button>
+    <view class="privacy-summary">
+      <view class="summary-title">健康信息使用边界</view>
+      <view class="summary-copy">老人资料、日记、用药记录和行动记录仅用于你主动使用的照护功能。健康筛查用于行动参考，不作医疗诊断。</view>
+    </view>
+  </view>
+
+  <button class="logout-button" loading="{{busy}}" disabled="{{busy}}" bindtap="logout">退出登录</button>
+
+  <view class="danger-card">
+    <view class="danger-title">注销账号</view>
+    <view class="danger-copy">提交前会进行两次确认。注销后的数据处理范围和进度以服务端返回说明为准。</view>
+    <view wx:if="{{!canDeleteAccount}}" class="legacy-note">当前为旧版 Token 绑定。请先退出，再使用微信快捷登录后提交注销申请。</view>
+    <button class="delete-button" loading="{{busy}}" disabled="{{busy}}" bindtap="requestAccountDeletion">申请注销账号</button>
+  </view>
+</view>

@@ -1,0 +1,37 @@
+<view class="page-shell">
+  <view class="hero actions-hero">
+    <view class="hero-kicker">今日行动清单</view>
+    <view class="hero-title">一项一项做，做完就打勾。</view>
+    <view class="hero-subtitle">记录只保存在这台手机中，不上传个人行动。</view>
+  </view>
+
+  <status-card wx:if="{{loading}}" state="loading" title="正在生成今日行动" detail="天气快照 30 分钟内不会重复获取。" />
+
+  <block wx:if="{{!loading}}">
+    <freshness-bar wx:if="{{freshness.updatedText}}" updated-text="{{freshness.updatedText}}" stale="{{freshness.stale}}" source="{{freshness.source}}" refresh-deferred="{{freshness.refreshDeferred}}" />
+    <status-card wx:if="{{generalMode}}" state="empty" title="当前显示通用防护" detail="{{error || '天气或风险行动待更新，这些内容不代表当前风险等级。'}}" />
+
+    <view class="progress-card card">
+      <view class="row-between">
+        <view>
+          <view class="small muted">今日已完成</view>
+          <view class="progress-number">{{completedCount}} / {{actions.length}}</view>
+        </view>
+        <view class="progress-ring">{{progressPercent}}%</view>
+      </view>
+    </view>
+
+    <view class="section-title">行动清单</view>
+    <button wx:for="{{actions}}" wx:key="id" class="check-card {{item.checked ? 'checked' : ''}}" data-id="{{item.id}}" bindtap="toggleAction">
+      <view class="check-box">{{item.checked ? '✓' : ''}}</view>
+      <view class="check-copy">
+        <view class="check-title">{{item.title}}</view>
+        <view wx:if="{{item.detail}}" class="check-detail">{{item.detail}}</view>
+      </view>
+    </button>
+
+    <button class="secondary-button copy-button" bindtap="copyReminder">复制给家人的提醒</button>
+    <navigator class="primary-button" url="/pages/cooling/index">查看避暑资源</navigator>
+    <view class="safe-note action-note">行动建议用于日常防护。慢病患者的饮水、用药和活动安排应遵循医生给出的个体要求。</view>
+  </block>
+</view>
