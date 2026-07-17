@@ -24,6 +24,90 @@ DEFAULT_API_TOKEN_SCOPES = (
     "miniprogram:sensitive",
 )
 
+_USAGE_SOURCES = {'web', 'miniprogram', 'cron', 'system'}
+_USAGE_META_ENUMS = {
+    'via': {'family_members', 'family_member_new', 'family_member_edit', 'mp_api'},
+    'channel': {'web', 'wxpusher', 'wechat_miniprogram', 'wechat_official_account'},
+    'relay_stage': {'none', 'caregiver', 'backup', 'community', 'emergency'},
+    'from': {
+        'direct',
+        'wechat',
+        'wechat_official',
+        'wechat_official_account',
+        'wechat_miniprogram',
+        'family_share',
+        'community',
+        'community_poster',
+        'poster',
+        'qr',
+    },
+    'article': {
+        'launch',
+        'heat_alert',
+        'cold_alert',
+        'weather_alert',
+        'care_guide',
+        'community_guide',
+    },
+}
+_USAGE_META_BOOLEAN_KEYS = {'has_note', 'optin'}
+_USAGE_META_INTEGER_LIMITS = {
+    'alert_id': (1, 2_147_483_647),
+    'actions_done_count': (0, 1000),
+    'caregiver_actions_count': (0, 1000),
+    'difficulty_len': (0, 300),
+}
+_USAGE_META_PROFILE_FIELDS = {
+    'name',
+    'relation',
+    'age',
+    'gender',
+    'chronic_diseases',
+    'wxpusher_uid',
+    'push_enabled',
+}
+
+
+def _sanitize_usage_meta(meta):
+    """仅保留无法回推姓名、电话或自由地点的匿名分析维度。"""
+    if not isinstance(meta, dict):
+        return None
+
+    safe = {}
+    for key, allowed_values in _USAGE_META_ENUMS.items():
+        value = meta.get(key)
+        if isinstance(value, str) and value in allowed_values:
+            safe[key] = value
+
+    for key in _USAGE_META_BOOLEAN_KEYS:
+        value = meta.get(key)
+        if isinstance(value, bool):
+            safe[key] = value
+
+    for key, (minimum, maximum) in _USAGE_META_INTEGER_LIMITS.items():
+        value = meta.get(key)
+        if isinstance(value, int) and not isinstance(value, bool):
+            safe[key] = max(minimum, min(value, maximum))
+
+    for key in ('fields', 'updated_fields'):
+        value = meta.get(key)
+        if isinstance(value, (list, tuple)):
+            fields = []
+            for item in value:
+                if item in _USAGE_META_PROFILE_FIELDS and item not in fields:
+                    fields.append(item)
+            if fields:
+                safe[key] = fields
+
+    # 位置、预警和错误仅记录县域级或布尔级摘要，不保留原文。
+    if meta.get('location_query') or meta.get('location_code'):
+        safe['location_scope'] = 'duchang_county'
+    if meta.get('alert_type'):
+        safe['alert_scope'] = 'weather_alert'
+    if meta.get('error'):
+        safe['has_error'] = True
+    return safe or None
+
 
 def _token_ttl_days(value=None):
     if value is None and has_app_context():
@@ -123,15 +207,24 @@ def log_usage_event(event_type, user_id=None, pair_id=None, member_id=None, sour
         return None
     try:
         payload = None
-        if meta is not None:
-            payload = json.dumps(meta, ensure_ascii=False)
+        safe_meta = _sanitize_usage_meta(meta)
+        if safe_meta is not None:
+            payload = json.dumps(
+                safe_meta,
+                ensure_ascii=False,
+                separators=(',', ':'),
+                sort_keys=True,
+            )
+        normalized_source = str(source or '').strip().lower()
+        if normalized_source not in _USAGE_SOURCES:
+            normalized_source = 'web'
         event = UsageEvent(
             user_id=user_id,
             pair_id=pair_id,
             member_id=member_id,
             event_type=str(event_type)[:50],
             meta_json=payload,
-            source=(str(source)[:20] if source else None),
+            source=normalized_source,
             created_at=utcnow(),
         )
         db.session.add(event)

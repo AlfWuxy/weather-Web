@@ -2,6 +2,7 @@
 """API 与预报输入边界回归测试。"""
 
 from datetime import date
+import json
 import math
 from pathlib import Path
 
@@ -138,6 +139,47 @@ def test_web_events_reports_usage_write_failure(
         "success": False,
         "error": "event_write_failed",
     }
+
+
+def test_usage_event_metadata_keeps_only_anonymous_dimensions(app, db_session):
+    """自由文本和个人信息不得进入第一方产品分析事件。"""
+    from core.db_models import UsageEvent
+    from core.usage import log_usage_event
+
+    with app.app_context():
+        event = log_usage_event(
+            'template_view',
+            source='private@example.com',
+            meta={
+                'name': '某位老人',
+                'phone': '13800000000',
+                'location_query': '某村某组',
+                'error': 'private upstream response',
+                'actions_done_count': 3,
+                'has_note': True,
+                'relay_stage': 'caregiver',
+                'updated_fields': ['age', 'phone', 'age'],
+                'from': 'family_share',
+                'article': 'heat_alert',
+                'arbitrary': {'nested': 'private'},
+            },
+        )
+
+        stored = db_session.get(UsageEvent, event.id)
+        assert stored.source == 'web'
+        assert json.loads(stored.meta_json) == {
+            'actions_done_count': 3,
+            'article': 'heat_alert',
+            'from': 'family_share',
+            'has_error': True,
+            'has_note': True,
+            'location_scope': 'duchang_county',
+            'relay_stage': 'caregiver',
+            'updated_fields': ['age'],
+        }
+        assert '某位老人' not in stored.meta_json
+        assert '13800000000' not in stored.meta_json
+        assert '某村某组' not in stored.meta_json
 
 
 @pytest.mark.parametrize("invalid_temp", [float("nan"), float("inf"), float("-inf")])

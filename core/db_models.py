@@ -488,9 +488,12 @@ class UsageEvent(db.Model):
     """试点埋点事件（用于打开率/触发/反馈等指标）"""
     __tablename__ = 'usage_events'
     id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer, db.ForeignKey('users.id'))
-    pair_id = db.Column(db.Integer, db.ForeignKey('pairs.id'))
-    member_id = db.Column(db.Integer, db.ForeignKey('family_members.id'))
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id', ondelete='SET NULL'))
+    pair_id = db.Column(db.Integer, db.ForeignKey('pairs.id', ondelete='SET NULL'))
+    member_id = db.Column(
+        db.Integer,
+        db.ForeignKey('family_members.id', ondelete='SET NULL'),
+    )
     event_type = db.Column(db.String(50), nullable=False)
     meta_json = db.Column(db.Text)
     source = db.Column(db.String(20))

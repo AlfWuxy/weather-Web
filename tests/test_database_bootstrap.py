@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """空数据库初始化链路回归测试。"""
 from pathlib import Path
+import sqlite3
 
 from alembic import command
 from alembic.config import Config
@@ -145,3 +146,123 @@ def test_miniprogram_migration_round_trip_removes_member_id(monkeypatch, tmp_pat
         )
         assert owner_fk['referred_columns'] == ['id', 'user_id']
         assert owner_fk.get('options', {}).get('ondelete') == 'CASCADE'
+
+
+def test_usage_event_foreign_key_repair_anonymizes_orphans(monkeypatch, tmp_path):
+    """历史孤儿埋点应保留匿名计数，并持续允许父级安全删除。"""
+    database_path = tmp_path / 'usage-event-repair.db'
+    app = _create_test_app(monkeypatch, database_path)
+    initialized = app.test_cli_runner().invoke(args=['init-db'])
+    assert initialized.exit_code == 0, initialized.output
+    alembic_config = _alembic_config(app)
+
+    from core.db_models import UsageEvent, User
+    from core.extensions import db
+
+    with app.app_context():
+        valid_user = User(username='usage-event-valid-user')
+        valid_user.set_password('usage-event-valid-password')
+        db.session.add(valid_user)
+        db.session.flush()
+        valid_user_id = valid_user.id
+        db.session.add(
+            UsageEvent(
+                user_id=valid_user_id,
+                event_type='valid_event',
+                meta_json='{"kept":true}',
+                source='web',
+            )
+        )
+        db.session.commit()
+
+    with app.app_context():
+        db.session.remove()
+        db.engine.dispose()
+    command.downgrade(alembic_config, '0011_miniprogram_runtime')
+
+    # 复现旧版本关闭 SQLite 外键约束时分别遗留的三类孤儿引用。
+    with sqlite3.connect(database_path) as connection:
+        connection.execute('PRAGMA foreign_keys = OFF')
+        for column_name, missing_id, event_type in (
+            ('user_id', 99991, 'orphan_user_event'),
+            ('pair_id', 99992, 'orphan_pair_event'),
+            ('member_id', 99993, 'orphan_member_event'),
+        ):
+            connection.execute(
+                f'''
+                INSERT INTO usage_events (
+                    {column_name},
+                    event_type,
+                    meta_json,
+                    source
+                ) VALUES (?, ?, ?, ?)
+                ''',
+                (
+                    missing_id,
+                    event_type,
+                    '{"location_query":"private-location"}',
+                    'web',
+                ),
+            )
+        connection.commit()
+
+    command.upgrade(alembic_config, 'head')
+
+    with app.app_context():
+        repaired_rows = db.session.execute(
+            db.text(
+                '''
+                SELECT user_id, pair_id, member_id, event_type, meta_json
+                FROM usage_events
+                WHERE event_type LIKE 'orphan_%'
+                ORDER BY event_type
+                '''
+            )
+        ).all()
+        assert len(repaired_rows) == 3
+        for row in repaired_rows:
+            assert row.user_id is None
+            assert row.pair_id is None
+            assert row.member_id is None
+            assert row.meta_json is None
+
+        valid_row = db.session.execute(
+            db.text(
+                '''
+                SELECT user_id, meta_json
+                FROM usage_events
+                WHERE event_type = 'valid_event'
+                '''
+            )
+        ).one()
+        assert valid_row.user_id == valid_user_id
+        assert valid_row.meta_json is None
+
+        usage_event_fks = {
+            tuple(foreign_key.get('constrained_columns') or ()): foreign_key
+            for foreign_key in inspect(db.engine).get_foreign_keys('usage_events')
+        }
+        for column_name in ('user_id', 'pair_id', 'member_id'):
+            assert usage_event_fks[(column_name,)]['options']['ondelete'] == 'SET NULL'
+
+        violations = db.session.execute(db.text('PRAGMA foreign_key_check')).all()
+        assert violations == []
+
+        # 约束开启后，父级删除应自动匿名化引用并保持事件可计数。
+        db.session.execute(
+            db.text('DELETE FROM users WHERE id = :user_id'),
+            {'user_id': valid_user_id},
+        )
+        db.session.commit()
+        deleted_parent_event = db.session.execute(
+            db.text(
+                '''
+                SELECT user_id, event_type, meta_json
+                FROM usage_events
+                WHERE event_type = 'valid_event'
+                '''
+            )
+        ).one()
+        assert deleted_parent_event.user_id is None
+        assert deleted_parent_event.event_type == 'valid_event'
+        assert deleted_parent_event.meta_json is None
