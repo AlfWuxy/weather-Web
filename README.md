@@ -57,6 +57,8 @@ cp .env.example .env
 - `DATABASE_URI`
 - `QWEATHER_KEY` 或接受 Open-Meteo 兜底
 - 如需官方预警和推送链路，`QWEATHER_KEY` 与 `QWEATHER_API_BASE` 需要成对配置
+- 如需微信登录，配置 `WX_MINIPROGRAM_APPID`、`WX_MINIPROGRAM_SECRET`、独立 OpenID pepper 与会话密钥
+- 兼容 Web Token 默认 30 天过期，并绑定当前 `WX_MINIPROGRAM_PRIVACY_VERSION`
 
 ### 3. 初始化数据库
 
@@ -109,7 +111,17 @@ conda run -n case-weather-py312 python -m pytest -q -W error::DeprecationWarning
 conda run -n case-weather-py312 python -m pytest -q -W error::DeprecationWarning -W ignore::DeprecationWarning:flask_login.login_manager -W ignore::DeprecationWarning:dateutil.tz.tz
 ```
 
-小程序调试 / 联调前，必须先在 `miniprogram/config.js` 中填写真实 HTTPS API 地址。公开仓库默认留空，未配置时小程序请求会直接报错，不会再偷偷打到占位域名。
+小程序调试 / 联调前，参考 `miniprogram/config.example.js`，只在本机临时把正式 HTTPS API 地址填入 `miniprogram/config.runtime.js`。公开提交必须保持为空；未配置时请求会明确终止，不会误连占位域名。
+
+## Web 与小程序分支
+
+- `codex/web`：Web 页面、Flask 服务端、数据库迁移与共享小程序 API 的稳定基线。
+- `codex/miniprogram`：在 Web 共享后端之上提供完整微信原生客户端、客户端测试和小程序发布配置。
+- `main`：继续作为经过 PR 审核后再合并的正式基线，本轮不会直接改写。
+
+两个产品入口共享都昌县县级天气快照。后台定时任务每 30 分钟完成一次同步周期，小程序页面只读持久化快照；开发和自动化测试不访问真实天气服务。
+
+用药与求助在首个正式版中是记录能力，不承诺定时提醒、订阅消息或自动通知。紧急情况必须直接联系家人、社区或拨打 120。
 
 ## 仓库结构
 
@@ -161,6 +173,8 @@ scripts/              部署与维护脚本
 - 架构说明：[`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md)
 - 重构计划：[`docs/REFACTOR_PLAN.md`](./docs/REFACTOR_PLAN.md)
 - 仓库边界与清理分类：[`docs/REPO_BOUNDARY_AND_CLEANUP.md`](./docs/REPO_BOUNDARY_AND_CLEANUP.md)
+- 微信小程序开发与发布：[`docs/miniprogram/README.md`](./docs/miniprogram/README.md)
+- 微信小程序上架清单：[`docs/miniprogram/RELEASE_CHECKLIST.md`](./docs/miniprogram/RELEASE_CHECKLIST.md)
 
 ## 仓库边界
 

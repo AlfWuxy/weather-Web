@@ -69,6 +69,7 @@ backups/
 *.key
 miniprogram/config.private.js
 miniprogram/project.private.config.json
+/project.private.config.json
 
 # 系统文件
 .DS_Store
