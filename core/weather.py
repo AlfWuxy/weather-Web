@@ -200,6 +200,50 @@ def is_qweather_online_weather(weather_data):
     return True
 
 
+def compact_assessment_weather_condition(weather_data):
+    """生成可查询的紧凑天气摘要，严格适配历史 VARCHAR(100)。"""
+    source = weather_data if isinstance(weather_data, dict) else {}
+
+    def bounded(name, minimum, maximum, digits=1):
+        try:
+            value = float(source.get(name))
+        except (TypeError, ValueError):
+            return None
+        if not math.isfinite(value) or not minimum <= value <= maximum:
+            return None
+        return round(value, digits)
+
+    summary = {
+        't': bounded('temperature', -100, 100),
+        'hi': bounded('temperature_max', -100, 100),
+        'lo': bounded('temperature_min', -100, 100),
+        'rh': bounded('humidity', 0, 100),
+        'aqi': bounded('aqi', 0, 1000, 0),
+        'wx': str(
+            source.get('weather_condition')
+            or source.get('condition')
+            or ''
+        )[:12],
+    }
+    compact = json.dumps(
+        {key: value for key, value in summary.items() if value not in (None, '')},
+        ensure_ascii=False,
+        separators=(',', ':'),
+    )
+    if len(compact) <= 100:
+        return compact
+
+    # 极端输入下只保留核心数值，确保仍是完整 JSON。
+    return json.dumps(
+        {
+            key: summary[key]
+            for key in ('t', 'hi', 'lo', 'rh')
+            if summary[key] is not None
+        },
+        separators=(',', ':'),
+    )
+
+
 def get_demo_forecast_data(days=7):
     """演示用天气预报数据。"""
     base = get_demo_weather_data()

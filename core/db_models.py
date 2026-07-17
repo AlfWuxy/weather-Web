@@ -7,12 +7,28 @@
 - 显示给用户时，使用 core.time_utils 中的本地时区转换函数
 - 避免使用已废弃的 lambda: datetime.now(timezone.utc)()（返回 naive datetime）
 """
+import sqlite3
 from datetime import datetime, timezone
+
 from flask_login import UserMixin
+from sqlalchemy import event
+from sqlalchemy.engine import Engine
 from werkzeug.security import generate_password_hash, check_password_hash
 
 from core.extensions import db
 from core.time_utils import today_local, utcnow, ensure_utc_aware
+
+
+@event.listens_for(Engine, 'connect')
+def _enable_sqlite_foreign_keys(dbapi_connection, _connection_record):
+    """SQLite 每条连接都显式开启外键和级联约束。"""
+    if not isinstance(dbapi_connection, sqlite3.Connection):
+        return
+    cursor = dbapi_connection.cursor()
+    try:
+        cursor.execute('PRAGMA foreign_keys=ON')
+    finally:
+        cursor.close()
 
 
 class User(UserMixin, db.Model):
@@ -565,6 +581,11 @@ class MiniProgramIdentity(db.Model):
     last_login_at = db.Column(db.DateTime)
 
     __table_args__ = (
+        db.UniqueConstraint(
+            'id',
+            'user_id',
+            name='uq_miniprogram_identities_id_user_id',
+        ),
         db.Index('ix_miniprogram_identities_user_id', 'user_id'),
         db.Index('ix_miniprogram_identities_openid_hash', 'openid_hash'),
     )
@@ -574,16 +595,8 @@ class MiniProgramSession(db.Model):
     """可撤销、可过期的小程序签名会话，仅保存 token 哈希。"""
     __tablename__ = 'miniprogram_sessions'
     id = db.Column(db.Integer, primary_key=True)
-    identity_id = db.Column(
-        db.Integer,
-        db.ForeignKey('miniprogram_identities.id', ondelete='CASCADE'),
-        nullable=False,
-    )
-    user_id = db.Column(
-        db.Integer,
-        db.ForeignKey('users.id', ondelete='CASCADE'),
-        nullable=False,
-    )
+    identity_id = db.Column(db.Integer, nullable=False)
+    user_id = db.Column(db.Integer, nullable=False)
     token_hash = db.Column(db.String(64), nullable=False, unique=True)
     privacy_consent_version = db.Column(db.String(64), nullable=False)
     expires_at = db.Column(db.DateTime, nullable=False)
@@ -592,6 +605,12 @@ class MiniProgramSession(db.Model):
     revoked_at = db.Column(db.DateTime)
 
     __table_args__ = (
+        db.ForeignKeyConstraint(
+            ['identity_id', 'user_id'],
+            ['miniprogram_identities.id', 'miniprogram_identities.user_id'],
+            name='fk_miniprogram_sessions_identity_owner',
+            ondelete='CASCADE',
+        ),
         db.Index('ix_miniprogram_sessions_identity_id', 'identity_id'),
         db.Index('ix_miniprogram_sessions_user_id', 'user_id'),
         db.Index('ix_miniprogram_sessions_token_hash', 'token_hash'),

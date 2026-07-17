@@ -2,6 +2,8 @@
 """微信小程序运行时：快照、认证、owner scope 与输入边界。"""
 
 import json
+import threading
+import time
 from datetime import timedelta
 
 import pytest
@@ -539,6 +541,131 @@ def test_account_delete_rejects_cross_user_and_anonymizes_owner_data(
         assert MiniProgramSession.query.filter_by(user_id=user_id).count() == 0
 
 
+def test_account_delete_serializes_an_inflight_diary_write(
+    app,
+    client,
+    db_session,
+    monkeypatch,
+):
+    from core.db_models import HealthDiary
+    from blueprints import mp_api
+
+    login = _wechat_login(app, client, monkeypatch, openid="delete-race-openid")
+    data = login.get_json()["data"]
+    user_id = data["user"]["id"]
+    headers = {"Authorization": f"Bearer {data['session_token']}"}
+    writer_locked = threading.Event()
+    release_writer = threading.Event()
+    outcomes = {}
+    original_resolver = mp_api._resolve_owned_member
+
+    def blocked_resolver(*args, **kwargs):
+        writer_locked.set()
+        assert release_writer.wait(timeout=5)
+        return original_resolver(*args, **kwargs)
+
+    monkeypatch.setattr(mp_api, "_resolve_owned_member", blocked_resolver)
+
+    def write_diary():
+        with app.test_client() as thread_client:
+            outcomes["write"] = thread_client.post(
+                "/mp/api/v1/health/diary",
+                headers=headers,
+                json={"severity": "mild", "symptoms": "并发写入"},
+            )
+
+    def delete_account():
+        with app.test_client() as thread_client:
+            outcomes["delete"] = thread_client.delete(
+                "/mp/api/v1/me",
+                headers=headers,
+                json={"confirm": True, "user_id": user_id},
+            )
+
+    writer = threading.Thread(target=write_diary)
+    deleter = threading.Thread(target=delete_account)
+    writer.start()
+    assert writer_locked.wait(timeout=5)
+    deleter.start()
+    time.sleep(0.2)
+    assert deleter.is_alive()
+
+    release_writer.set()
+    writer.join(timeout=5)
+    deleter.join(timeout=5)
+
+    assert not writer.is_alive()
+    assert not deleter.is_alive()
+    assert outcomes["write"].status_code == 201
+    assert outcomes["delete"].status_code == 200
+    with app.app_context():
+        assert HealthDiary.query.filter_by(user_id=user_id).count() == 0
+
+
+def test_session_owner_is_enforced_by_sqlite_foreign_keys(app, db_session):
+    from sqlalchemy import inspect
+    from sqlalchemy.exc import IntegrityError
+
+    from core.db_models import MiniProgramIdentity, MiniProgramSession, User
+    from core.extensions import db
+
+    assert db.session.execute(db.text("PRAGMA foreign_keys")).scalar() == 1
+    owner_fk = next(
+        foreign_key
+        for foreign_key in inspect(db.engine).get_foreign_keys("miniprogram_sessions")
+        if foreign_key.get("constrained_columns") == ["identity_id", "user_id"]
+    )
+    assert owner_fk["referred_table"] == "miniprogram_identities"
+    assert owner_fk["referred_columns"] == ["id", "user_id"]
+    assert owner_fk.get("options", {}).get("ondelete") == "CASCADE"
+
+    first = User(username="session-owner-first", role="user")
+    second = User(username="session-owner-second", role="user")
+    first.set_password("safe-test-password")
+    second.set_password("safe-test-password")
+    db_session.add_all([first, second])
+    db_session.commit()
+    identity = MiniProgramIdentity(
+        user_id=first.id,
+        openid_hash="owner-invariant-openid",
+        privacy_consent_version="privacy-v1",
+        privacy_consented_at=utcnow(),
+    )
+    db_session.add(identity)
+    db_session.commit()
+    first_id = first.id
+    identity_id = identity.id
+
+    db_session.add(
+        MiniProgramSession(
+            identity_id=identity_id,
+            user_id=second.id,
+            token_hash="owner-invariant-invalid-token",
+            privacy_consent_version="privacy-v1",
+            expires_at=utcnow() + timedelta(hours=1),
+        )
+    )
+    with pytest.raises(IntegrityError):
+        db_session.commit()
+    db_session.rollback()
+
+    db_session.add(
+        MiniProgramSession(
+            identity_id=identity_id,
+            user_id=first_id,
+            token_hash="owner-invariant-valid-token",
+            privacy_consent_version="privacy-v1",
+            expires_at=utcnow() + timedelta(hours=1),
+        )
+    )
+    db_session.commit()
+    db_session.delete(db_session.get(User, first_id))
+    db_session.commit()
+
+    assert MiniProgramIdentity.query.filter_by(id=identity_id).count() == 0
+    assert MiniProgramSession.query.filter_by(identity_id=identity_id).count() == 0
+
+
 def test_admin_delete_removes_miniprogram_identity_and_invalidates_bearer(
     app,
     admin_client,
@@ -718,6 +845,29 @@ def test_snapshot_retention_stays_bounded_for_out_of_order_backfill(app, db_sess
 
     assert len(remaining) == 3
     assert returned.id in {item.id for item in remaining}
+
+
+def test_postgresql_snapshot_retention_uses_transaction_lock():
+    from services.miniprogram_service import _acquire_snapshot_retention_lock
+
+    calls = []
+
+    def capture(statement, params):
+        calls.append((str(statement), params))
+
+    assert _acquire_snapshot_retention_lock(
+        dialect_name="sqlite",
+        execute=capture,
+    ) is False
+    assert calls == []
+
+    assert _acquire_snapshot_retention_lock(
+        dialect_name="postgresql",
+        execute=capture,
+    ) is True
+    assert len(calls) == 1
+    assert "pg_advisory_xact_lock" in calls[0][0]
+    assert calls[0][1]["lock_id"] > 0
 
 
 def test_wechat_login_limits_active_sessions_per_identity(

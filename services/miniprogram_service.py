@@ -32,6 +32,20 @@ SNAPSHOT_TTL_SECONDS = 1800
 CANONICAL_LOCATION_NAME = DEFAULT_CITY_LABEL
 CANONICAL_LOCATION_CODE = "116.20,29.27"
 _GIS_METADATA_CACHE = {"mtime_ns": None, "payload": None}
+_SNAPSHOT_RETENTION_LOCK_ID = 1836086096
+
+
+def _acquire_snapshot_retention_lock(*, dialect_name=None, execute=None):
+    """PostgreSQL 中串行化快照写入，防止并发事务突破保留上限。"""
+    effective_dialect = dialect_name or db.engine.dialect.name
+    if effective_dialect != "postgresql":
+        return False
+    executor = execute or db.session.execute
+    executor(
+        db.text("SELECT pg_advisory_xact_lock(:lock_id)"),
+        {"lock_id": _SNAPSHOT_RETENTION_LOCK_ID},
+    )
+    return True
 
 
 def canonical_location() -> dict:
@@ -227,6 +241,7 @@ def persist_snapshot(
     warnings = warnings if isinstance(warnings, list) else []
     risk, actions = _risk_and_actions(current, warnings)
     location = canonical_location()
+    _acquire_snapshot_retention_lock()
     record = MiniProgramSnapshot(
         snapshot_id=str(uuid.uuid4()),
         location_name=location["name"],

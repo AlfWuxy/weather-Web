@@ -17,6 +17,7 @@ from core.notifications import create_notification
 from core.time_utils import utcnow
 from core.usage import create_api_token
 from core.weather import (
+    compact_assessment_weather_condition,
     ensure_user_location_valid,
     get_weather_with_cache,
     is_qweather_online_weather,
@@ -150,7 +151,7 @@ def health_assessment():
                 assessment = HealthRiskAssessment(
                     user_id=current_user.id,
                     assessment_date=utcnow(),
-                    weather_condition=json.dumps(weather_data),
+                    weather_condition=compact_assessment_weather_condition(weather_data),
                     risk_score=risk_result['risk_score'],
                     risk_level=risk_result['risk_level'],
                     disease_risks=json.dumps(disease_risks, ensure_ascii=False),

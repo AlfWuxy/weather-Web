@@ -45,7 +45,11 @@ from core.extensions import db, limiter
 from core.security import hash_identifier
 from core.time_utils import today_local, utcnow
 from core.usage import api_token_has_scope, log_usage_event, verify_api_token
-from core.weather import get_weather_with_cache, is_qweather_online_weather
+from core.weather import (
+    compact_assessment_weather_condition,
+    get_weather_with_cache,
+    is_qweather_online_weather,
+)
 from services.api_service import PILOT_EVENT_TYPES
 from services.location_resolver import resolve_location
 from services.warning_service import get_qweather_warnings
@@ -128,37 +132,6 @@ def _finite_or_none(value):
     except (TypeError, ValueError):
         return None
     return parsed if math.isfinite(parsed) else None
-
-
-def _compact_weather_condition(current):
-    """保存可查询的紧凑天气摘要，严格适配历史 VARCHAR(100)。"""
-    source = current if isinstance(current, dict) else {}
-
-    def bounded(name, minimum, maximum, digits=1):
-        value = _finite_or_none(source.get(name))
-        if value is None or not minimum <= value <= maximum:
-            return None
-        return round(value, digits)
-
-    summary = {
-        "t": bounded("temperature", -100, 100),
-        "hi": bounded("temperature_max", -100, 100),
-        "lo": bounded("temperature_min", -100, 100),
-        "rh": bounded("humidity", 0, 100),
-        "aqi": bounded("aqi", 0, 1000, 0),
-        "wx": str(source.get("weather_condition") or source.get("condition") or "")[:12],
-    }
-    compact = json.dumps(
-        {key: value for key, value in summary.items() if value not in (None, "")},
-        ensure_ascii=False,
-        separators=(",", ":"),
-    )
-    if len(compact) > 100:
-        compact = json.dumps(
-            {key: summary[key] for key in ("t", "hi", "lo", "rh") if summary[key] is not None},
-            separators=(",", ":"),
-        )
-    return compact
 
 
 def _list_of_text(payload, name, *, max_items, item_max_length):
@@ -1092,7 +1065,7 @@ def health_assessment():
             user_id=g.api_user_id,
             member_id=member.id if member else None,
             assessment_date=utcnow(),
-            weather_condition=_compact_weather_condition(current),
+            weather_condition=compact_assessment_weather_condition(current),
             risk_score=result.get("risk_score"),
             risk_level=result.get("risk_level"),
             disease_risks=json.dumps(result.get("disease_risks") or {}, ensure_ascii=False),

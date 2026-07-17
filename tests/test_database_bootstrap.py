@@ -2,6 +2,7 @@
 """空数据库初始化链路回归测试。"""
 from pathlib import Path
 
+from alembic import command
 from alembic.config import Config
 from alembic.migration import MigrationContext
 from alembic.script import ScriptDirectory
@@ -9,6 +10,14 @@ from sqlalchemy import inspect
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
+
+
+def _alembic_config(app):
+    """构造指向当前临时数据库的 Alembic 配置。"""
+    config = Config(str(ROOT_DIR / 'alembic.ini'))
+    config.set_main_option('sqlalchemy.url', app.config['SQLALCHEMY_DATABASE_URI'])
+    config.set_main_option('script_location', str(ROOT_DIR / 'migrations'))
+    return config
 
 
 def _create_test_app(monkeypatch, database_path):
@@ -37,12 +46,7 @@ def _assert_schema_is_at_head(app):
     """确认模型表已经创建，且 Alembic 版本位于当前 head。"""
     from core.extensions import db
 
-    alembic_config = Config(str(ROOT_DIR / 'alembic.ini'))
-    alembic_config.set_main_option(
-        'sqlalchemy.url',
-        app.config['SQLALCHEMY_DATABASE_URI'],
-    )
-    alembic_config.set_main_option('script_location', str(ROOT_DIR / 'migrations'))
+    alembic_config = _alembic_config(app)
     expected_head = ScriptDirectory.from_config(alembic_config).get_current_head()
 
     with app.app_context():
@@ -98,3 +102,46 @@ def test_init_db_recovers_empty_alembic_version_shell(monkeypatch, tmp_path):
     result = app.test_cli_runner().invoke(args=['init-db'])
     assert result.exit_code == 0, result.output
     _assert_schema_is_at_head(app)
+
+
+def test_miniprogram_migration_round_trip_removes_member_id(monkeypatch, tmp_path):
+    """0011 降级必须清理 member_id，再升级后恢复完整 owner 约束。"""
+    app = _create_test_app(monkeypatch, tmp_path / 'miniprogram-round-trip.db')
+    initialized = app.test_cli_runner().invoke(args=['init-db'])
+    assert initialized.exit_code == 0, initialized.output
+    alembic_config = _alembic_config(app)
+
+    from core.extensions import db
+
+    with app.app_context():
+        db.session.remove()
+        db.engine.dispose()
+    command.downgrade(alembic_config, '0010_action_token_hardening')
+
+    with app.app_context():
+        downgraded = inspect(db.engine)
+        assessment_columns = {
+            column['name']
+            for column in downgraded.get_columns('health_risk_assessments')
+        }
+        assert 'member_id' not in assessment_columns
+        assert 'miniprogram_sessions' not in downgraded.get_table_names()
+        db.session.remove()
+        db.engine.dispose()
+
+    command.upgrade(alembic_config, 'head')
+
+    with app.app_context():
+        upgraded = inspect(db.engine)
+        assessment_columns = {
+            column['name']
+            for column in upgraded.get_columns('health_risk_assessments')
+        }
+        assert 'member_id' in assessment_columns
+        owner_fk = next(
+            foreign_key
+            for foreign_key in upgraded.get_foreign_keys('miniprogram_sessions')
+            if foreign_key.get('constrained_columns') == ['identity_id', 'user_id']
+        )
+        assert owner_fk['referred_columns'] == ['id', 'user_id']
+        assert owner_fk.get('options', {}).get('ondelete') == 'CASCADE'
