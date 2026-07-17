@@ -247,29 +247,35 @@ def _extract_warning_list(payload):
     return (warnings, True) if isinstance(warnings, list) else ([], False)
 
 
-def get_qweather_warnings(location_code: str) -> List[Dict[str, Any]]:
-    """Fetch QWeather warnings and normalize fields.
+def _warning_result(*, available: bool, status: str, warnings=None) -> Dict[str, Any]:
+    """构造稳定的预警可用性结果。"""
+    return {
+        "available": available,
+        "status": status,
+        "warnings": warnings if isinstance(warnings, list) else [],
+    }
 
-    Returns a list of dicts (may be empty). Never raises for network/parse issues.
-    """
+
+def get_qweather_warnings_result(location_code: str) -> Dict[str, Any]:
+    """获取官方预警，并区分“无预警”和“上游不可用”。"""
     location_code = (str(location_code).strip() if location_code is not None else "")
     if not location_code:
-        return []
+        return _warning_result(available=False, status="invalid_location")
 
     location_code = _canonical_location(location_code)
 
     api_base = (_cfg("QWEATHER_API_BASE") or "").strip()
     if not api_base or not is_qweather_configured():
-        return []
+        return _warning_result(available=False, status="not_configured")
 
     url = _weatheralert_v1_url(api_base, location_code)
     if not url:
         logger.warning("QWeather 预警 canonical 坐标无效: %s", location_code)
-        return []
+        return _warning_result(available=False, status="invalid_location")
 
     cached = _get_cached_warnings(location_code)
     if cached is not _CACHE_MISS:
-        return cached
+        return _warning_result(available=True, status="ok", warnings=cached)
 
     params = {"localTime": "true", "lang": "zh"}
 
@@ -277,11 +283,11 @@ def get_qweather_warnings(location_code: str) -> List[Dict[str, Any]]:
         headers = get_qweather_request_headers(api_base=api_base)
     except QWeatherAuthError as exc:
         logger.warning("QWeather warning auth failed: %s", exc)
-        return []
+        return _warning_result(available=False, status="auth_error")
 
     if not reserve_qweather_request("weatheralert_v1_current"):
         logger.warning("和风天气月度额度保护：跳过官方预警请求")
-        return []
+        return _warning_result(available=False, status="budget_blocked")
 
     start_ts = time.perf_counter()
     try:
@@ -291,19 +297,34 @@ def get_qweather_warnings(location_code: str) -> List[Dict[str, Any]]:
             (time.perf_counter() - start_ts) * 1000,
             resp.status_code,
         )
-        if resp.status_code != 200:
-            if resp.status_code == 401:
-                invalidate_qweather_token()
-            logger.info("QWeather warning http=%s for location=%s", resp.status_code, location_code)
-            return []
-        payload = resp.json()
+    except requests.RequestException as exc:
+        logger.info("QWeather warning network failed for %s: %s", location_code, exc)
+        return _warning_result(available=False, status="network_error")
     except Exception as exc:
         logger.info("QWeather warning fetch failed for %s: %s", location_code, exc)
-        return []
+        return _warning_result(available=False, status="network_error")
+
+    if resp.status_code != 200:
+        if resp.status_code == 401:
+            invalidate_qweather_token()
+        logger.info("QWeather warning http=%s for location=%s", resp.status_code, location_code)
+        status = "auth_error" if resp.status_code == 401 else "http_error"
+        return _warning_result(available=False, status=status)
+
+    try:
+        payload = resp.json()
+    except Exception as exc:
+        logger.info("QWeather warning parse failed for %s: %s", location_code, exc)
+        return _warning_result(available=False, status="parse_error")
 
     raw_list, valid_payload = _extract_warning_list(payload)
     if not valid_payload:
-        return []
+        is_auth_error = (
+            isinstance(payload, dict)
+            and str(payload.get("code")) == "401"
+        )
+        status = "auth_error" if is_auth_error else "parse_error"
+        return _warning_result(available=False, status=status)
     attributions = _metadata_attributions(payload)
 
     normalized: List[Dict[str, Any]] = []
@@ -382,6 +403,17 @@ def get_qweather_warnings(location_code: str) -> List[Dict[str, Any]]:
                 "raw": item,
             }
         )
-    if not malformed_item:
-        _set_cached_warnings(location_code, normalized)
-    return normalized
+    if malformed_item:
+        return _warning_result(
+            available=False,
+            status="parse_error",
+            warnings=normalized,
+        )
+
+    _set_cached_warnings(location_code, normalized)
+    return _warning_result(available=True, status="ok", warnings=normalized)
+
+
+def get_qweather_warnings(location_code: str) -> List[Dict[str, Any]]:
+    """兼容旧调用，仅返回预警列表。"""
+    return get_qweather_warnings_result(location_code)["warnings"]

@@ -26,6 +26,8 @@ class User(UserMixin, db.Model):
     # 使用 timezone-aware UTC 时间戳（推荐做法）
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
     last_login = db.Column(db.DateTime)
+    # 注销墓碑用于阻断并发中的旧会话和后续写入。
+    deleted_at = db.Column(db.DateTime)
 
     # 个人健康信息
     age = db.Column(db.Integer)
@@ -132,6 +134,8 @@ class HealthRiskAssessment(db.Model):
     __tablename__ = 'health_risk_assessments'
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'))
+    # 小程序端可为本人或已绑定老人提交评估，始终由 user_id 做 owner scope。
+    member_id = db.Column(db.Integer, db.ForeignKey('family_members.id'))
     assessment_date = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
     weather_condition = db.Column(db.String(100))
     risk_score = db.Column(db.Float)  # 风险评分
@@ -451,12 +455,16 @@ class ApiToken(db.Model):
     name = db.Column(db.String(80))
     token_hash = db.Column(db.String(64), nullable=False)
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    expires_at = db.Column(db.DateTime)
+    scopes = db.Column(db.String(200))
+    privacy_consent_version = db.Column(db.String(64))
     last_used_at = db.Column(db.DateTime)
     revoked_at = db.Column(db.DateTime)
 
     __table_args__ = (
         db.Index('ix_api_tokens_user_id', 'user_id'),
         db.Index('ix_api_tokens_token_hash', 'token_hash'),
+        db.Index('ix_api_tokens_expires_at', 'expires_at'),
     )
 
 
@@ -514,4 +522,78 @@ class LocationCache(db.Model):
     __table_args__ = (
         db.Index('ix_location_cache_query', query_text),
         db.Index('ix_location_cache_updated_at', 'updated_at'),
+    )
+
+
+class MiniProgramSnapshot(db.Model):
+    """小程序只读天气快照，由 30 分钟后台任务统一写入。"""
+    __tablename__ = 'miniprogram_snapshots'
+    id = db.Column(db.Integer, primary_key=True)
+    snapshot_id = db.Column(db.String(36), nullable=False, unique=True)
+    location_name = db.Column(db.String(100), nullable=False, default='都昌县')
+    location_code = db.Column(db.String(100), nullable=False, default='116.20,29.27')
+    fetched_at = db.Column(db.DateTime, nullable=False)
+    expires_at = db.Column(db.DateTime, nullable=False)
+    available = db.Column(db.Boolean, nullable=False, default=False)
+    current_json = db.Column(db.Text)
+    forecast_json = db.Column(db.Text)
+    warnings_json = db.Column(db.Text)
+    risk_json = db.Column(db.Text)
+    actions_json = db.Column(db.Text)
+    source_status_json = db.Column(db.Text)
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+
+    __table_args__ = (
+        db.Index('ix_miniprogram_snapshots_fetched_at', 'fetched_at'),
+        db.Index('ix_miniprogram_snapshots_expires_at', 'expires_at'),
+    )
+
+
+class MiniProgramIdentity(db.Model):
+    """微信身份映射，仅保存带独立 pepper 的 OpenID 哈希。"""
+    __tablename__ = 'miniprogram_identities'
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(
+        db.Integer,
+        db.ForeignKey('users.id', ondelete='CASCADE'),
+        nullable=False,
+    )
+    openid_hash = db.Column(db.String(64), nullable=False, unique=True)
+    privacy_consent_version = db.Column(db.String(64), nullable=False)
+    privacy_consented_at = db.Column(db.DateTime, nullable=False)
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    last_login_at = db.Column(db.DateTime)
+
+    __table_args__ = (
+        db.Index('ix_miniprogram_identities_user_id', 'user_id'),
+        db.Index('ix_miniprogram_identities_openid_hash', 'openid_hash'),
+    )
+
+
+class MiniProgramSession(db.Model):
+    """可撤销、可过期的小程序签名会话，仅保存 token 哈希。"""
+    __tablename__ = 'miniprogram_sessions'
+    id = db.Column(db.Integer, primary_key=True)
+    identity_id = db.Column(
+        db.Integer,
+        db.ForeignKey('miniprogram_identities.id', ondelete='CASCADE'),
+        nullable=False,
+    )
+    user_id = db.Column(
+        db.Integer,
+        db.ForeignKey('users.id', ondelete='CASCADE'),
+        nullable=False,
+    )
+    token_hash = db.Column(db.String(64), nullable=False, unique=True)
+    privacy_consent_version = db.Column(db.String(64), nullable=False)
+    expires_at = db.Column(db.DateTime, nullable=False)
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    last_used_at = db.Column(db.DateTime)
+    revoked_at = db.Column(db.DateTime)
+
+    __table_args__ = (
+        db.Index('ix_miniprogram_sessions_identity_id', 'identity_id'),
+        db.Index('ix_miniprogram_sessions_user_id', 'user_id'),
+        db.Index('ix_miniprogram_sessions_token_hash', 'token_hash'),
+        db.Index('ix_miniprogram_sessions_expires_at', 'expires_at'),
     )

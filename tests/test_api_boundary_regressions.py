@@ -300,12 +300,16 @@ def test_forecast_normalization_never_propagates_nonfinite_optional_values():
 
 
 def test_miniprogram_temperature_views_preserve_zero_celsius():
-    template_js = (PROJECT_ROOT / "miniprogram/pages/template/index.js").read_text(encoding="utf-8")
-    elders_wxml = (PROJECT_ROOT / "miniprogram/pages/elders/index.wxml").read_text(encoding="utf-8")
-    alerts_wxml = (PROJECT_ROOT / "miniprogram/pages/alerts/index.wxml").read_text(encoding="utf-8")
+    care_logic = (PROJECT_ROOT / "miniprogram/pages/elders/care-logic.js").read_text(
+        encoding="utf-8"
+    )
+    public_format = (PROJECT_ROOT / "miniprogram/utils/format.js").read_text(
+        encoding="utf-8"
+    )
 
-    assert "item.today.temperature_max || item.today.temperature_max === 0" in template_js
-    assert "item.today.temperature_min || item.today.temperature_min === 0" in template_js
-    for source in (elders_wxml, alerts_wxml):
-        assert "temperature_max === 0" in source
-        assert "temperature_min === 0" in source
+    # 新小程序由共享纯函数归一化温度。这里只锁定结构，0°C 行为由 Node 测试执行验证。
+    assert "if (value === '' || value == null) return null;" in care_logic
+    assert "temperatureMax: tmax" in care_logic
+    assert "temperatureMin: tmin" in care_logic
+    assert "if (value === null || value === undefined || value === '') return null;" in public_format
+    assert "temperatureText: formatTemperature(temperature)" in public_format

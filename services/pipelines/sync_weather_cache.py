@@ -19,6 +19,11 @@ from core.db_models import WeatherCache, WeatherData  # noqa: E402
 from core.extensions import db  # noqa: E402
 from core.weather import normalize_location_name  # noqa: E402
 from core.time_utils import today_local, utcnow  # noqa: E402
+from services.miniprogram_service import (  # noqa: E402
+    CANONICAL_LOCATION_NAME,
+    qweather_runtime_configured,
+    refresh_snapshot_from_cycle,
+)
 from services.weather_service import WeatherService  # noqa: E402
 
 logger = logging.getLogger(__name__)
@@ -85,39 +90,55 @@ def _resolve_locations(locations):
 
 def sync_weather_cache(locations=None, update_daily=True):
     with app.app_context():
-        locations = list(_dedupe_locations(_resolve_locations(locations)))
-        if not locations:
-            locations = list(_dedupe_locations([DEFAULT_CITY_LABEL]))
-
-        weather_service = WeatherService()
+        # 小程序与 Web 共用唯一都昌县周期。即使旧命令传入多个地点，也不会形成 API fan-out。
+        requested_locations = list(_dedupe_locations(_resolve_locations(locations)))
+        locations = [CANONICAL_LOCATION_NAME]
+        weather_service = WeatherService() if qweather_runtime_configured() else None
         fetched_at = utcnow()
         target_date = today_local()
         updated = 0
 
-        for location in locations:
+        if weather_service is not None:
             try:
-                weather_data = weather_service.get_current_weather(location)
+                weather_data = weather_service.get_current_weather(
+                    CANONICAL_LOCATION_NAME,
+                    include_enrichment=False,
+                )
             except Exception as exc:
-                logger.exception("Weather sync failed for %s: %s", location, exc)
+                logger.exception("Weather sync failed for %s: %s", CANONICAL_LOCATION_NAME, exc)
                 db.session.rollback()
-                continue
-            if not weather_data:
-                logger.warning("No weather data returned for %s", location)
-                continue
+                weather_data = {}
+        else:
+            # QWeather 未配置时由快照层只读旧缓存并继承原始 fetched_at。
+            # 这里不回写 WeatherCache，避免旧数据被洗成刚抓取。
+            weather_data = {}
+
+        if weather_data:
             try:
-                _upsert_cache(location, weather_data, fetched_at)
+                _upsert_cache(CANONICAL_LOCATION_NAME, weather_data, fetched_at)
                 if update_daily:
-                    _upsert_daily(location, weather_data, target_date)
+                    _upsert_daily(CANONICAL_LOCATION_NAME, weather_data, target_date)
                 db.session.commit()
             except Exception as exc:
-                logger.exception("Weather cache upsert failed for %s: %s", location, exc)
+                logger.exception("Weather cache upsert failed for %s: %s", CANONICAL_LOCATION_NAME, exc)
                 db.session.rollback()
-                continue
-            updated += 1
+            else:
+                updated = 1
+        else:
+            logger.warning("No persisted weather data available for %s", CANONICAL_LOCATION_NAME)
+
+        snapshot = refresh_snapshot_from_cycle(
+            weather_data,
+            weather_service=weather_service,
+            fetched_at=fetched_at,
+        )
         return {
-            'locations': len(locations),
+            'locations': 1,
+            'requested_locations': len(requested_locations),
+            'canonical_location': CANONICAL_LOCATION_NAME,
             'updated': updated,
-            'update_daily': update_daily
+            'update_daily': update_daily,
+            'snapshot_id': snapshot.snapshot_id if snapshot else None,
         }
 
 

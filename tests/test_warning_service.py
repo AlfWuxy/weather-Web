@@ -21,6 +21,54 @@ def test_warning_service_no_key_returns_empty(app):
         assert warnings == []
 
 
+def test_warning_result_marks_unconfigured_service_unavailable(app):
+    from services.warning_service import get_qweather_warnings_result
+
+    with app.app_context():
+        app.config["QWEATHER_KEY"] = ""
+        app.config["QWEATHER_API_BASE"] = "https://unit-test.qweatherapi.com/v7"
+
+        assert get_qweather_warnings_result("116.20,29.27") == {
+            "available": False,
+            "status": "not_configured",
+            "warnings": [],
+        }
+
+
+def test_warning_result_marks_successful_empty_response_available(app, monkeypatch):
+    from services import warning_service
+
+    calls = []
+
+    class FakeResp:
+        status_code = 200
+
+        def json(self):
+            return {"metadata": {"zeroResult": True}, "alerts": []}
+
+    monkeypatch.setattr(
+        warning_service.requests,
+        "get",
+        lambda *args, **kwargs: calls.append((args, kwargs)) or FakeResp(),
+    )
+
+    with app.app_context():
+        app.config.update(
+            QWEATHER_KEY="x",
+            QWEATHER_API_BASE="https://unit-test.qweatherapi.com/v7",
+            QWEATHER_CANONICAL_LOCATION="116.20,29.27",
+        )
+
+        assert warning_service.get_qweather_warnings_result("都昌县") == {
+            "available": True,
+            "status": "ok",
+            "warnings": [],
+        }
+        assert warning_service.get_qweather_warnings("都昌县") == []
+
+    assert len(calls) == 1
+
+
 def test_warning_service_parses_weatheralert_v1_payload(app, monkeypatch):
     from services.warning_service import get_qweather_warnings
 
@@ -215,7 +263,11 @@ def test_warning_auth_failure_does_not_use_budget_or_network(app, monkeypatch):
             QWEATHER_JWT_PROJECT_ID="PROJECT1234",
             QWEATHER_JWT_PRIVATE_KEY_PATH="/server-only/private.pem",
         )
-        assert warning_service.get_qweather_warnings("116.20,29.27") == []
+        assert warning_service.get_qweather_warnings_result("116.20,29.27") == {
+            "available": False,
+            "status": "auth_error",
+            "warnings": [],
+        }
 
     assert budget_calls == []
 
@@ -245,7 +297,11 @@ def test_warning_invalid_canonical_coordinates_stop_before_auth_budget_and_netwo
             QWEATHER_API_BASE="https://unit-test.qweatherapi.com/v7",
             QWEATHER_CANONICAL_LOCATION="invalid-location",
         )
-        assert warning_service.get_qweather_warnings("任意村庄") == []
+        assert warning_service.get_qweather_warnings_result("任意村庄") == {
+            "available": False,
+            "status": "invalid_location",
+            "warnings": [],
+        }
 
 
 def test_warning_http_401_invalidates_token_once_without_retry(app, monkeypatch):
@@ -280,7 +336,11 @@ def test_warning_http_401_invalidates_token_once_without_retry(app, monkeypatch)
             QWEATHER_API_BASE="https://unit-test.qweatherapi.com/v7",
             QWEATHER_CANONICAL_LOCATION="116.20,29.27",
         )
-        assert warning_service.get_qweather_warnings("都昌县") == []
+        assert warning_service.get_qweather_warnings_result("都昌县") == {
+            "available": False,
+            "status": "auth_error",
+            "warnings": [],
+        }
 
     assert len(calls) == 1
     assert invalidations == [True]
@@ -310,10 +370,90 @@ def test_warning_malformed_alerts_are_not_cached(app, monkeypatch):
             QWEATHER_API_BASE="https://unit-test.qweatherapi.com/v7",
             QWEATHER_CANONICAL_LOCATION="116.20,29.27",
         )
-        assert warning_service.get_qweather_warnings("都昌") == []
+        assert warning_service.get_qweather_warnings_result("都昌") == {
+            "available": False,
+            "status": "parse_error",
+            "warnings": [],
+        }
         assert warning_service.get_qweather_warnings("都昌县") == []
 
     assert len(calls) == 2
+
+
+def test_warning_result_marks_budget_block_unavailable(app, monkeypatch):
+    from services import warning_service
+
+    monkeypatch.setattr(warning_service, "reserve_qweather_request", lambda _endpoint: False)
+    monkeypatch.setattr(
+        warning_service.requests,
+        "get",
+        lambda *_args, **_kwargs: pytest.fail("额度阻断后不应发送网络请求"),
+    )
+
+    with app.app_context():
+        app.config.update(
+            QWEATHER_KEY="x",
+            QWEATHER_API_BASE="https://unit-test.qweatherapi.com/v7",
+            QWEATHER_CANONICAL_LOCATION="116.20,29.27",
+        )
+
+        assert warning_service.get_qweather_warnings_result("都昌县") == {
+            "available": False,
+            "status": "budget_blocked",
+            "warnings": [],
+        }
+
+
+def test_warning_result_distinguishes_http_network_and_parse_failures(app, monkeypatch):
+    from services import warning_service
+
+    class HttpErrorResp:
+        status_code = 503
+
+    class ParseErrorResp:
+        status_code = 200
+
+        def json(self):
+            raise ValueError("invalid json")
+
+    with app.app_context():
+        app.config.update(
+            QWEATHER_KEY="x",
+            QWEATHER_API_BASE="https://unit-test.qweatherapi.com/v7",
+            QWEATHER_CANONICAL_LOCATION="116.20,29.27",
+        )
+
+        monkeypatch.setattr(
+            warning_service.requests,
+            "get",
+            lambda *_args, **_kwargs: HttpErrorResp(),
+        )
+        assert warning_service.get_qweather_warnings_result("都昌县") == {
+            "available": False,
+            "status": "http_error",
+            "warnings": [],
+        }
+
+        def raise_timeout(*_args, **_kwargs):
+            raise warning_service.requests.Timeout("offline")
+
+        monkeypatch.setattr(warning_service.requests, "get", raise_timeout)
+        assert warning_service.get_qweather_warnings_result("都昌县") == {
+            "available": False,
+            "status": "network_error",
+            "warnings": [],
+        }
+
+        monkeypatch.setattr(
+            warning_service.requests,
+            "get",
+            lambda *_args, **_kwargs: ParseErrorResp(),
+        )
+        assert warning_service.get_qweather_warnings_result("都昌县") == {
+            "available": False,
+            "status": "parse_error",
+            "warnings": [],
+        }
 
 
 def test_warning_cancel_message_is_filtered_and_cached(app, monkeypatch):

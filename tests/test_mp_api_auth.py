@@ -48,6 +48,81 @@ def test_mp_api_me_and_patch(app, client, db_session):
     assert resp3.status_code == 401
 
 
+def test_api_token_requires_expiry_and_sensitive_scope(app, client, db_session):
+    from datetime import timedelta
+
+    from core.db_models import ApiToken, User
+    from core.time_utils import utcnow
+    from core.usage import create_api_token
+
+    user = User(username="scoped_token_user", role="user")
+    user.set_password("pw123456")
+    db_session.add(user)
+    db_session.commit()
+    plain = create_api_token(
+        user.id,
+        name="read-only",
+        scopes=["miniprogram:read"],
+    )
+    headers = {"Authorization": f"Bearer {plain}"}
+
+    assert client.get("/mp/api/v1/me", headers=headers).status_code == 200
+    denied = client.get("/mp/api/v1/health/diary", headers=headers)
+    assert denied.status_code == 403
+    assert denied.get_json()["error"] == "insufficient_scope"
+
+    record = ApiToken.query.filter_by(user_id=user.id).one()
+    record.expires_at = utcnow() - timedelta(seconds=1)
+    db_session.commit()
+    assert client.get("/mp/api/v1/me", headers=headers).status_code == 401
+
+    # 迁移前的无期限 Token 必须轮换，不能继续访问敏感数据。
+    record.expires_at = None
+    db_session.commit()
+    assert client.get("/mp/api/v1/me", headers=headers).status_code == 401
+
+    record.expires_at = utcnow() + timedelta(days=1)
+    record.privacy_consent_version = "outdated-privacy-version"
+    db_session.commit()
+    privacy_refresh = client.get("/mp/api/v1/me", headers=headers)
+    assert privacy_refresh.status_code == 428
+    assert privacy_refresh.get_json()["data"]["required_privacy_consent_version"]
+
+
+def test_profile_requires_privacy_consent_before_generating_api_token(
+    app,
+    authenticated_client,
+    db_session,
+):
+    from core.db_models import ApiToken
+
+    missing_consent = authenticated_client.post(
+        "/profile",
+        data={
+            "csrf_token": "test-csrf-token",
+            "form_id": "api_token",
+            "token_name": "未同意设备",
+        },
+    )
+    assert missing_consent.status_code == 302
+    assert ApiToken.query.count() == 0
+
+    accepted = authenticated_client.post(
+        "/profile",
+        data={
+            "csrf_token": "test-csrf-token",
+            "form_id": "api_token",
+            "token_name": "本人手机",
+            "miniprogram_privacy_consent": "1",
+        },
+    )
+    assert accepted.status_code == 302
+    record = ApiToken.query.one()
+    assert record.expires_at is not None
+    assert record.scopes
+    assert record.privacy_consent_version == app.config["WX_MINIPROGRAM_PRIVACY_VERSION"]
+
+
 def test_mp_api_rate_limit_key_uses_stable_client_ip(app):
     from blueprints.mp_api import _mp_rate_limit_key
 

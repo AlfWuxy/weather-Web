@@ -155,9 +155,12 @@ class WeatherService:
         logger.error("所有天气API均失败，使用模拟数据")
         return self._get_mock_weather()
     
-    def get_current_weather(self, city="都昌"):
+    def get_current_weather(self, city="都昌", *, include_enrichment=True):
         """
         获取当前天气数据，依次尝试和风天气、Open-Meteo 与模拟数据。
+
+        后台统一快照周期会把 include_enrichment 设为 False，避免在实况请求内
+        重复拉取七日预报和空气质量。普通 Web 调用保持原有增强行为。
         """
         logger = logging.getLogger(__name__)
         # 尝试调用和风天气API
@@ -249,18 +252,19 @@ class WeatherService:
                     'data_source': 'QWeather'
                 }
 
-                tmax, tmin, range_source, range_confidence = self._resolve_qweather_current_temperature_range(location)
-                if tmax is not None and tmin is not None:
-                    result['temperature_max'] = tmax
-                    result['temperature_min'] = tmin
-                    result['temperature_estimated'] = (range_source != 'daily')
-                    result['temperature_range_source'] = range_source
-                    result['temperature_range_confidence'] = range_confidence
-                
-                # 空气质量失败不影响实时天气主链路。
-                air_quality = self._get_qweather_air_quality(location, logger)
-                if air_quality:
-                    result.update(air_quality)
+                if include_enrichment:
+                    tmax, tmin, range_source, range_confidence = self._resolve_qweather_current_temperature_range(location)
+                    if tmax is not None and tmin is not None:
+                        result['temperature_max'] = tmax
+                        result['temperature_min'] = tmin
+                        result['temperature_estimated'] = (range_source != 'daily')
+                        result['temperature_range_source'] = range_source
+                        result['temperature_range_confidence'] = range_confidence
+
+                    # 空气质量失败不影响实时天气主链路。
+                    air_quality = self._get_qweather_air_quality(location, logger)
+                    if air_quality:
+                        result.update(air_quality)
                 
                 logger.info("成功获取%s的真实天气数据 (温度: %s°C)", city, result['temperature'])
                 return result

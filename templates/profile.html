@@ -162,7 +162,7 @@
                 </div>
                 <div class="card-body">
                     <p class="text-muted small mb-2">
-                        为小程序生成一次性绑定凭证。凭证只显示一次，请妥善保存。
+                        为小程序生成短期绑定凭证。凭证只显示一次，隐私说明更新后需重新生成。
                     </p>
                     {% if last_api_token_plain %}
                         <div class="alert alert-warning small">
@@ -176,6 +176,12 @@
                         <div class="mb-2">
                             <label class="form-label small">备注（可选）</label>
                             <input class="form-control" name="token_name" placeholder="例如：我的手机">
+                        </div>
+                        <div class="form-check mb-3">
+                            <input class="form-check-input" type="checkbox" value="1" name="miniprogram_privacy_consent" id="miniprogramPrivacyConsent" required>
+                            <label class="form-check-label small" for="miniprogramPrivacyConsent">
+                                我已阅读并同意<a href="{{ url_for('public.transparency') }}#privacy" target="_blank" rel="noopener">隐私与使用边界</a>，并确认此凭证仅供本人设备绑定。
+                            </label>
                         </div>
                         <button type="submit" class="btn btn-outline-primary w-100">
                             <i class="bi bi-key"></i> 生成绑定凭证
@@ -251,6 +257,5 @@ if (passwordForm) {
 }
 </script>
 {% endblock %}
-
 
 

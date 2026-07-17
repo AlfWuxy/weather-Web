@@ -9,7 +9,16 @@ from flask_login import current_user, login_required
 
 from core.extensions import db
 from core.audit import log_audit
-from core.db_models import Community, CoolingResource, HealthRiskAssessment, MedicalRecord, User, WeatherAlert
+from core.db_models import (
+    Community,
+    CoolingResource,
+    HealthRiskAssessment,
+    MedicalRecord,
+    MiniProgramIdentity,
+    MiniProgramSession,
+    User,
+    WeatherAlert,
+)
 from core.time_utils import utcnow
 from utils.parsers import parse_bool, parse_float, parse_int
 from utils.validators import (
@@ -465,12 +474,15 @@ def admin_delete_user(user_id):
         flash('权限不足', 'error')
         return redirect(url_for('user.user_dashboard'))
 
-    user = User.query.get_or_404(user_id)
+    user = User.query.filter_by(id=user_id).with_for_update().first_or_404()
     if user.role == 'admin':
         flash('不能删除管理员账户', 'error')
         return redirect(url_for('admin.admin_users'))
 
     try:
+        # 显式清理可兼容未启用外键的旧 SQLite；新数据库同时有 CASCADE 兜底。
+        MiniProgramSession.query.filter_by(user_id=user.id).delete(synchronize_session=False)
+        MiniProgramIdentity.query.filter_by(user_id=user.id).delete(synchronize_session=False)
         db.session.delete(user)
         db.session.commit()
         flash(f'用户 {user.username} 已删除', 'success')

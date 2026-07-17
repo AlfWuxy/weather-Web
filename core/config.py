@@ -138,6 +138,12 @@ def validate_production_config():
     pair_token_pepper = (os.getenv('PAIR_TOKEN_PEPPER') or '').strip()
     rate_limit_storage_env = (os.getenv('RATE_LIMIT_STORAGE_URI') or '').strip()
     redis_url = (os.getenv('REDIS_URL') or '').strip()
+    wx_miniprogram_values = {
+        'WX_MINIPROGRAM_APPID': (os.getenv('WX_MINIPROGRAM_APPID') or '').strip(),
+        'WX_MINIPROGRAM_SECRET': (os.getenv('WX_MINIPROGRAM_SECRET') or '').strip(),
+        'WX_MINIPROGRAM_OPENID_PEPPER': (os.getenv('WX_MINIPROGRAM_OPENID_PEPPER') or '').strip(),
+        'WX_MINIPROGRAM_SESSION_SECRET': (os.getenv('WX_MINIPROGRAM_SESSION_SECRET') or '').strip(),
+    }
 
     if not debug_value:
         if not secret_key_env:
@@ -165,6 +171,16 @@ def validate_production_config():
             raise RuntimeError(
                 "生产环境禁止使用 memory:// 作为限流存储，请配置 REDIS_URL 或 RATE_LIMIT_STORAGE_URI。"
             )
+
+        # Web 可独立运行；一旦启用微信登录，四项服务端材料必须同时存在。
+        if any(wx_miniprogram_values.values()):
+            missing = [name for name, value in wx_miniprogram_values.items() if not value]
+            if missing:
+                raise RuntimeError("微信小程序认证配置不完整，缺少: " + ", ".join(missing))
+            for name in ('WX_MINIPROGRAM_OPENID_PEPPER', 'WX_MINIPROGRAM_SESSION_SECRET'):
+                value = wx_miniprogram_values[name]
+                if len(value) < 32 or _contains_weak_keyword(value):
+                    raise RuntimeError(f"{name} 必须使用至少 32 位的独立随机值。")
 
     database_uri = resolve_database_uri()
     db_path = resolve_sqlite_db_path(database_uri, Path(__file__).resolve().parents[1])
@@ -239,6 +255,14 @@ def configure_app(app, logger):
     siliconflow_base = _normalized_env_value('SILICONFLOW_API_BASE', SILICONFLOW_API_BASE_DEFAULT)
     wxpusher_app_token = _normalized_env_value('WXPUSHER_APP_TOKEN', '')
     wxpusher_api_base = _normalized_env_value('WXPUSHER_API_BASE', WXPUSHER_API_BASE_DEFAULT)
+    wx_miniprogram_appid = _normalized_env_value('WX_MINIPROGRAM_APPID', '')
+    wx_miniprogram_secret = _normalized_env_value('WX_MINIPROGRAM_SECRET', '')
+    wx_miniprogram_openid_pepper = _normalized_env_value('WX_MINIPROGRAM_OPENID_PEPPER', '')
+    wx_miniprogram_session_secret = _normalized_env_value('WX_MINIPROGRAM_SESSION_SECRET', '')
+    wx_miniprogram_privacy_version = _normalized_env_value(
+        'WX_MINIPROGRAM_PRIVACY_VERSION',
+        '2026-07-17',
+    )
     public_base_url = _normalized_env_value('PUBLIC_BASE_URL', '')
     pair_token_pepper = _normalized_env_value('PAIR_TOKEN_PEPPER', '')
     demo_mode = os.getenv('DEMO_MODE')
@@ -279,6 +303,29 @@ def configure_app(app, logger):
     app.config['SILICONFLOW_API_BASE'] = siliconflow_base
     app.config['WXPUSHER_APP_TOKEN'] = wxpusher_app_token
     app.config['WXPUSHER_API_BASE'] = wxpusher_api_base
+    app.config['WX_MINIPROGRAM_APPID'] = wx_miniprogram_appid
+    app.config['WX_MINIPROGRAM_SECRET'] = wx_miniprogram_secret
+    app.config['WX_MINIPROGRAM_OPENID_PEPPER'] = wx_miniprogram_openid_pepper
+    app.config['WX_MINIPROGRAM_SESSION_SECRET'] = wx_miniprogram_session_secret
+    app.config['WX_MINIPROGRAM_PRIVACY_VERSION'] = wx_miniprogram_privacy_version
+    app.config['WX_MINIPROGRAM_SESSION_TTL_SECONDS'] = max(
+        300,
+        min(
+            parse_int(os.getenv('WX_MINIPROGRAM_SESSION_TTL_SECONDS', '604800'), default=604800),
+            2592000,
+        ),
+    )
+    app.config['WX_MINIPROGRAM_MAX_ACTIVE_SESSIONS'] = max(
+        1,
+        min(
+            parse_int(os.getenv('WX_MINIPROGRAM_MAX_ACTIVE_SESSIONS', '5'), default=5),
+            20,
+        ),
+    )
+    app.config['WX_MINIPROGRAM_AUTH_TIMEOUT'] = max(
+        2.0,
+        min(parse_float(os.getenv('WX_MINIPROGRAM_AUTH_TIMEOUT', '8'), default=8.0), 15.0),
+    )
     app.config['PUBLIC_BASE_URL'] = public_base_url
     app.config['PREFERRED_URL_SCHEME'] = 'https' if not app.config['DEBUG'] else 'http'
     app.config['SESSION_COOKIE_SECURE'] = not app.config['DEBUG']
@@ -287,6 +334,13 @@ def configure_app(app, logger):
     app.config['REMEMBER_COOKIE_SECURE'] = not app.config['DEBUG']
     app.config['REMEMBER_COOKIE_HTTPONLY'] = True
     app.config['REMEMBER_COOKIE_SAMESITE'] = 'Lax'
+    app.config['MAX_CONTENT_LENGTH'] = max(
+        65536,
+        min(
+            parse_int(os.getenv('MAX_CONTENT_LENGTH_BYTES', '1048576'), default=1048576),
+            8 * 1024 * 1024,
+        ),
+    )
     app.config['AI_ALLOWED_MODELS'] = AI_ALLOWED_MODELS
     app.config['DEFAULT_CITY'] = default_city or DEFAULT_CITY_LABEL
     app.config['DEFAULT_LOCATION'] = default_location or DEFAULT_LOCATION
@@ -381,6 +435,22 @@ def configure_app(app, logger):
     app.config.setdefault('RATE_LIMIT_MP_WRITE', os.getenv('RATE_LIMIT_MP_WRITE', '30 per minute'))
     app.config.setdefault('RATE_LIMIT_MP_ALERTS', os.getenv('RATE_LIMIT_MP_ALERTS', '30 per minute'))
     app.config.setdefault('RATE_LIMIT_MP_EVENTS', os.getenv('RATE_LIMIT_MP_EVENTS', '60 per minute'))
+    app.config.setdefault('RATE_LIMIT_MP_AUTH', os.getenv('RATE_LIMIT_MP_AUTH', '10 per 5 minutes'))
+    app.config.setdefault('RATE_LIMIT_MP_PUBLIC', os.getenv('RATE_LIMIT_MP_PUBLIC', '600 per minute'))
+    app.config.setdefault(
+        'MINIPROGRAM_SNAPSHOT_RETENTION',
+        max(
+            2,
+            min(
+                parse_int(os.getenv('MINIPROGRAM_SNAPSHOT_RETENTION', '96'), default=96),
+                1000,
+            ),
+        ),
+    )
+    app.config.setdefault(
+        'API_TOKEN_TTL_DAYS',
+        max(1, min(parse_int(os.getenv('API_TOKEN_TTL_DAYS', '30'), default=30), 365)),
+    )
     app.config.setdefault('PAIR_ACTION_TOKEN_TTL_DAYS', parse_int(os.getenv('PAIR_ACTION_TOKEN_TTL_DAYS', '90'), default=90))
     app.config.setdefault('SHORT_CODE_TTL_DAYS', parse_int(os.getenv('SHORT_CODE_TTL_DAYS', '90'), default=90))
 

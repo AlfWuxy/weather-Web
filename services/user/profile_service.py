@@ -228,10 +228,23 @@ def profile():
 
         if form_id == 'api_token':
             token_name = sanitize_input(request.form.get('token_name'), max_length=80)
+            if request.form.get('miniprogram_privacy_consent') != '1':
+                flash('请先阅读并同意小程序隐私说明，再生成绑定凭证。', 'error')
+                return redirect(url_for('user.profile'))
             try:
-                plain = create_api_token(current_user.id, name=token_name)
+                plain = create_api_token(
+                    current_user.id,
+                    name=token_name,
+                    privacy_consent_version=current_app.config.get(
+                        'WX_MINIPROGRAM_PRIVACY_VERSION'
+                    ),
+                )
                 session['last_api_token_plain'] = plain
-                flash('API Token 已生成（仅展示一次，请立即复制保存）', 'success')
+                ttl_days = current_app.config.get('API_TOKEN_TTL_DAYS', 30)
+                flash(
+                    f'API Token 已生成，有效期 {ttl_days} 天（仅展示一次，请立即复制保存）',
+                    'success',
+                )
             except Exception:
                 logger.exception("API token create failed")
                 flash('生成失败，请稍后重试。', 'error')
