@@ -2,6 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const {
+  formatDateTime,
   freshnessView,
   normalizeBootstrap,
   normalizeCommunity,
@@ -27,6 +28,11 @@ test('更新时间优先采用服务端真实抓取时间', () => {
     { fetchedAt: '2026-07-17T08:00:00+08:00' }
   );
   assert.match(view.updatedText, /08:00/);
+});
+
+test('都昌县时间展示不受运行环境时区影响', () => {
+  assert.equal(formatDateTime('2026-07-17T00:00:00Z'), '07月17日 08:00');
+  assert.equal(formatDateTime('2026-07-17 08:00:00'), '07月17日 08:00');
 });
 
 test('预警列表为空时区分暂无预警与来源不可用', () => {

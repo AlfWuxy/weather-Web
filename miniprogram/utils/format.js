@@ -33,7 +33,13 @@ function parseDate(value) {
   }
   const text = String(value).trim();
   if (!text) return null;
-  const normalized = /^\d{4}-\d{2}-\d{2} /.test(text) ? text.replace(' ', 'T') : text;
+  let normalized = /^\d{4}-\d{2}-\d{2} /.test(text) ? text.replace(' ', 'T') : text;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(normalized)) {
+    normalized = `${normalized}T00:00:00+08:00`;
+  } else if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?$/.test(normalized)) {
+    // 后端旧数据若没有时区，按都昌县使用的中国标准时间解释。
+    normalized = `${normalized}+08:00`;
+  }
   const date = new Date(normalized);
   return Number.isFinite(date.getTime()) ? date : null;
 }
@@ -42,10 +48,23 @@ function pad2(value) {
   return String(value).padStart(2, '0');
 }
 
+function duchangDateParts(date) {
+  // 固定使用 UTC+8，避免设备或 CI 所在时区改变都昌县的更新时间。
+  const shifted = new Date(date.getTime() + (8 * 60 * 60 * 1000));
+  return {
+    month: shifted.getUTCMonth() + 1,
+    date: shifted.getUTCDate(),
+    day: shifted.getUTCDay(),
+    hours: shifted.getUTCHours(),
+    minutes: shifted.getUTCMinutes(),
+  };
+}
+
 function formatDateTime(value) {
   const date = parseDate(value);
   if (!date) return '更新时间未知';
-  return `${pad2(date.getMonth() + 1)}月${pad2(date.getDate())}日 ${pad2(date.getHours())}:${pad2(date.getMinutes())}`;
+  const parts = duchangDateParts(date);
+  return `${pad2(parts.month)}月${pad2(parts.date)}日 ${pad2(parts.hours)}:${pad2(parts.minutes)}`;
 }
 
 function formatDay(value, index) {
@@ -54,7 +73,8 @@ function formatDay(value, index) {
   if (index === 0) return '今天';
   if (index === 1) return '明天';
   const week = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
-  return `${date.getMonth() + 1}/${date.getDate()} ${week[date.getDay()]}`;
+  const parts = duchangDateParts(date);
+  return `${parts.month}/${parts.date} ${week[parts.day]}`;
 }
 
 function riskTone(level, score) {
