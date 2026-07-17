@@ -92,12 +92,41 @@ test('用药与求助文案明确为仅记录能力', () => {
   const medicationView = fs.readFileSync(path.join(miniRoot, 'pages/medications/index.wxml'), 'utf8');
   const medicationScript = fs.readFileSync(path.join(miniRoot, 'pages/medications/index.js'), 'utf8');
   const helpView = fs.readFileSync(path.join(miniRoot, 'pages/action-checkin/index.wxml'), 'utf8');
+  const medicationEntries = [
+    'pages/settings/index.wxml',
+    'pages/account/index.wxml',
+    'pages/elders/index.wxml',
+  ].map((file) => fs.readFileSync(path.join(miniRoot, file), 'utf8')).join('\n');
   assert.match(medicationView, /不会定时提醒/);
   assert.match(medicationView, /不会发送订阅消息/);
   assert.match(medicationView, /不会自动通知家人/);
   assert.doesNotMatch(`${medicationView}\n${medicationScript}`, /提醒已添加|满足任一条件时加强提醒|删除这条提醒/);
+  assert.match(medicationEntries, /用药记录/);
+  assert.doesNotMatch(medicationEntries, /用药提醒/);
   assert.match(helpView, /仅保存求助需求/);
   assert.match(helpView, /不会自动通知照护人/);
+});
+
+test('微信发布交接固定个人主体并隔离敏感材料', () => {
+  const handoff = fs.readFileSync(path.resolve(miniRoot, '..', 'docs/miniprogram/WECHAT_RELEASE_HANDOFF.md'), 'utf8');
+  assert.match(handoff, /已选个人主体/);
+  assert.match(handoff, /个人主体无需提供/);
+  ['营业执照', '统一社会信用代码', '法人身份资料'].forEach((field) => {
+    assert.match(handoff, new RegExp(field));
+  });
+  ['实名认证', '刷脸验证', '验证码', '页面实际显示缴费项目'].forEach((step) => {
+    assert.match(handoff, new RegExp(step));
+  });
+  assert.match(handoff, /本文档不预设费用/);
+  assert.match(handoff, /后台当时实际可选范围/);
+  assert.match(handoff, /\.env\.wechat-release/);
+  assert.match(handoff, /WECHAT_FORM_READY/);
+  assert.match(handoff, /AppID 和 AppSecret/);
+  assert.match(handoff, /权限保持 `0600`/);
+  ['身份证号码', '人脸信息', '验证码', '银行卡信息', '付款凭证'].forEach((field) => {
+    assert.match(handoff, new RegExp(field));
+  });
+  assert.doesNotMatch(handoff, /\b\d+(?:\.\d+)?\s*元\b/);
 });
 
 test('社区页不把静态脆弱性称为当前天气风险', () => {
