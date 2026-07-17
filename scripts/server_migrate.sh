@@ -63,7 +63,31 @@ fi
 
 echo "[server_migrate] alembic upgrade head..."
 "$VENV_PY" -m alembic upgrade head
-"$VENV_PY" -m alembic current || true
+
+echo "[server_migrate] verify current revision equals the single head..."
+"$VENV_PY" - <<'PY'
+from alembic.config import Config
+from alembic.runtime.migration import MigrationContext
+from alembic.script import ScriptDirectory
+from core.app import create_app
+from sqlalchemy import create_engine
+
+app = create_app(register_blueprints=False)
+config = Config("alembic.ini")
+script = ScriptDirectory.from_config(config)
+expected_heads = tuple(script.get_heads())
+if len(expected_heads) != 1:
+    raise SystemExit(f"expected exactly one Alembic head, got: {expected_heads}")
+
+engine = create_engine(app.config["SQLALCHEMY_DATABASE_URI"])
+with engine.connect() as connection:
+    current_heads = tuple(MigrationContext.configure(connection).get_current_heads())
+if current_heads != expected_heads:
+    raise SystemExit(
+        f"database revision mismatch: current={current_heads}, expected={expected_heads}"
+    )
+print("OK: alembic current == single head", expected_heads[0])
+PY
 
 echo "[server_migrate] sanity check key tables..."
 "$VENV_PY" - <<'PY'
@@ -86,12 +110,60 @@ needed = {
     "usage_events",
     "alert_deliveries",
     "location_cache",
+    "miniprogram_snapshots",
+    "miniprogram_identities",
+    "miniprogram_sessions",
 }
 missing = sorted(needed - tables)
 if missing:
     raise SystemExit("missing tables: " + ", ".join(missing))
+
+required_columns = {
+    "miniprogram_snapshots": {
+        "snapshot_id",
+        "fetched_at",
+        "expires_at",
+        "available",
+        "source_status_json",
+    },
+    "miniprogram_identities": {
+        "user_id",
+        "openid_hash",
+        "privacy_consent_version",
+        "acquisition_source",
+    },
+    "miniprogram_sessions": {
+        "identity_id",
+        "user_id",
+        "token_hash",
+        "expires_at",
+        "revoked_at",
+    },
+    "usage_events": {
+        "event_type",
+        "meta_json",
+        "source",
+        "created_at",
+    },
+    "alert_deliveries": {
+        "alert_id",
+        "user_id",
+        "channel",
+        "status",
+        "attempt_count",
+        "reviewed_at",
+        "reviewed_by_user_id",
+        "review_action",
+    },
+}
+for table_name, expected in required_columns.items():
+    present = {column["name"] for column in inspector.get_columns(table_name)}
+    missing_columns = sorted(expected - present)
+    if missing_columns:
+        raise SystemExit(
+            f"missing columns in {table_name}: " + ", ".join(missing_columns)
+        )
 print("OK: pilot tables present")
 PY
 
 echo "[server_migrate] done"
-

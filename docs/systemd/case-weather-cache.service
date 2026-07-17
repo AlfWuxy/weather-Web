@@ -1,14 +1,14 @@
 [Unit]
-Description=Case Weather cache sync
-After=network.target
+Description=Case Weather - refresh Duchang weather cache
+After=network.target case-weather.service
+OnSuccess=case-weather-dispatch.service
 
 [Service]
 Type=oneshot
 User=root
-WorkingDirectory=/opt/your-app
+UMask=0077
+WorkingDirectory=/opt/your-app-deploy/current/app
 EnvironmentFile=/opt/your-app/.env
 Environment=PYTHONUNBUFFERED=1
-ExecStart=/bin/bash /opt/your-app/scripts/weather_cache_sync.sh
-
-[Install]
-WantedBy=multi-user.target
+Environment=VENV_PY=/opt/your-app-deploy/current/venv/bin/python
+ExecStart=/bin/bash /opt/your-app-deploy/current/app/scripts/weather_cache_sync.sh
