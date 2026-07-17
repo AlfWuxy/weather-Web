@@ -175,7 +175,10 @@ class ForecastService:
             'source': ''
         }
         if isinstance(entry, (int, float)):
-            base['temp'] = float(entry)
+            parsed_temp = self._safe_float(entry)
+            if parsed_temp is None:
+                raise ValueError("forecast temperature must be finite")
+            base['temp'] = parsed_temp
             return base
         if not isinstance(entry, dict):
             return base
@@ -549,6 +552,10 @@ class ForecastService:
         - corrected_temp: 校正后的温度
         - uncertainty: 不确定性范围
         """
+        forecast_temp = self._safe_float(forecast_temp)
+        if forecast_temp is None:
+            raise ValueError("forecast temperature must be finite")
+
         if not self.qm_params:
             spread = self._safe_float(model_spread, 0.0) or 0.0
             width = 2.0 + min(3.0, spread * 0.6)
@@ -637,8 +644,9 @@ class ForecastService:
                     ]
                     if not obs.empty and 'tmean' in obs.columns:
                         temp = obs['tmean'].iloc[0]
-                        if pd.notna(temp):
-                            lag_profile.append(float(temp))
+                        parsed_temp = self._safe_float(temp)
+                        if parsed_temp is not None:
+                            lag_profile.append(parsed_temp)
                             data_sources.append('observation')
                             continue
                 except Exception:
@@ -646,14 +654,21 @@ class ForecastService:
             
             # 尝试从预报获取
             if normalized_forecast and check_date_only in normalized_forecast:
-                lag_profile.append(float(normalized_forecast[check_date_only]))
-                data_sources.append('forecast')
-                continue
+                parsed_temp = self._safe_float(normalized_forecast[check_date_only])
+                if parsed_temp is not None:
+                    lag_profile.append(parsed_temp)
+                    data_sources.append('forecast')
+                    continue
             
             # 如果都没有，使用气候态平均值
             if self.qm_params and 'mean' in self.qm_params:
-                lag_profile.append(float(self.qm_params['mean']))
-                data_sources.append('climatology')
+                climatology_temp = self._safe_float(self.qm_params['mean'])
+                if climatology_temp is not None:
+                    lag_profile.append(climatology_temp)
+                    data_sources.append('climatology')
+                else:
+                    lag_profile.append(15.0)
+                    data_sources.append('default')
             else:
                 lag_profile.append(15.0)  # 默认值
                 data_sources.append('default')

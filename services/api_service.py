@@ -2,6 +2,7 @@
 """API routes."""
 import json
 import logging
+import math
 
 from flask import current_app, jsonify, request
 from flask_login import current_user, login_required
@@ -421,7 +422,6 @@ def _api_dlnm_risk():
     """DLNM风险函数计算"""
     try:
         from services.dlnm_risk_service import get_dlnm_service
-        dlnm = get_dlnm_service()
 
         data = request.get_json() or {}
 
@@ -430,6 +430,12 @@ def _api_dlnm_risk():
             temperature = float(data.get('temperature', 20))
         except (TypeError, ValueError):
             temperature = 20.0
+        if not math.isfinite(temperature):
+            return jsonify({
+                'success': False,
+                'error': 'invalid_temperature',
+                'message': 'temperature 必须是有限数字'
+            }), 400
 
         disease_type = data.get('disease_type')
         if disease_type and disease_type not in ['respiratory', 'cardiovascular', 'digestive', 'general']:
@@ -446,7 +452,14 @@ def _api_dlnm_risk():
                 lag_temps = [float(t) for t in lag_temps]
             except (TypeError, ValueError):
                 lag_temps = None
+            if lag_temps is not None and not all(math.isfinite(value) for value in lag_temps):
+                return jsonify({
+                    'success': False,
+                    'error': 'invalid_lag_temperatures',
+                    'message': 'lag_temperatures 必须是有限数字列表'
+                }), 400
 
+        dlnm = get_dlnm_service()
         rr, breakdown = dlnm.calculate_rr(
             temperature,
             lag_temperatures=lag_temps,
@@ -523,6 +536,8 @@ def _api_forecast_7day():
                 if not isinstance(forecast_temps, list):
                     raise TypeError('forecast_temps must be a list')
                 forecast_temps = [float(t) for t in forecast_temps]
+                if not all(math.isfinite(t) for t in forecast_temps):
+                    raise ValueError('forecast_temps must contain finite numbers')
             except (TypeError, ValueError):
                 return jsonify({
                     'success': False,
@@ -608,14 +623,45 @@ def _api_forecast_daily():
     try:
         from services.forecast_service import get_forecast_service
 
-        forecast_service = get_forecast_service()
         data = request.get_json() or {}
 
         temperature = data.get('temperature', 20)
+        try:
+            parsed_temperature = float(temperature)
+        except (TypeError, ValueError):
+            pass
+        else:
+            if not math.isfinite(parsed_temperature):
+                return jsonify({
+                    'success': False,
+                    'error': 'invalid_temperature',
+                    'message': 'temperature 必须是有限数字'
+                }), 400
+            temperature = parsed_temperature
+
         lag_temps = data.get('lag_temperatures')
+        if isinstance(lag_temps, list):
+            has_nonfinite_lag = False
+            for value in lag_temps:
+                if value is None:
+                    continue
+                try:
+                    has_nonfinite_lag = not math.isfinite(float(value))
+                except (TypeError, ValueError):
+                    continue
+                if has_nonfinite_lag:
+                    break
+            if has_nonfinite_lag:
+                return jsonify({
+                    'success': False,
+                    'error': 'invalid_lag_temperatures',
+                    'message': 'lag_temperatures 必须是有限数字列表'
+                }), 400
+
         month = data.get('month', now_local().month)
         dow = data.get('day_of_week', now_local().weekday())
 
+        forecast_service = get_forecast_service()
         result = forecast_service.predict_daily_visits(
             temperature,
             lag_temps=lag_temps,
@@ -1125,7 +1171,7 @@ def _api_usage_event():
                 if member:
                     resolved_member_id = member.id
 
-        log_usage_event(
+        event = log_usage_event(
             event_type,
             user_id=current_user.id,
             pair_id=resolved_pair_id,
@@ -1133,6 +1179,8 @@ def _api_usage_event():
             source=source,
             meta=meta,
         )
+        if event is None:
+            return jsonify({'success': False, 'error': 'event_write_failed'}), 503
         return jsonify({'success': True})
     except INPUT_EXCEPTIONS as exc:
         return handle_api_exception(exc, "usage event 参数错误", log=logger, status_code=400)

@@ -328,9 +328,6 @@ document.addEventListener('DOMContentLoaded', function () {
             const hour = parseInt(el.dataset.deadlineHour || '20', 10);
             const deadline = new Date();
             deadline.setHours(hour, 0, 0, 0);
-            if (deadline < now) {
-                deadline.setDate(deadline.getDate() + 1);
-            }
             const diff = Math.max(0, deadline - now);
             const hours = Math.floor(diff / (1000 * 60 * 60));
             const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
@@ -343,9 +340,9 @@ document.addEventListener('DOMContentLoaded', function () {
     const csrfTokenEl = document.querySelector('meta[name="csrf-token"]');
     const csrfToken = csrfTokenEl ? (csrfTokenEl.getAttribute('content') || '') : '';
     const logEvent = async (eventType, data) => {
-        if (!csrfToken) return;
+        if (!csrfToken) return false;
         try {
-            await fetch('/api/v1/events', {
+            const response = await fetch('/api/v1/events', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -353,8 +350,13 @@ document.addEventListener('DOMContentLoaded', function () {
                 },
                 body: JSON.stringify(Object.assign({ event_type: eventType, source: 'web' }, data || {}))
             });
+            if (!response.ok) {
+                return false;
+            }
+            const result = await response.json();
+            return Boolean(result && result.success === true);
         } catch (e) {
-            // fail open
+            return false;
         }
     };
 
@@ -369,20 +371,23 @@ document.addEventListener('DOMContentLoaded', function () {
                 if (!ok) {
                     throw new Error('copy_failed');
                 }
-                const pairId = btn.dataset.pairId ? parseInt(btn.dataset.pairId, 10) : null;
-                const memberId = btn.dataset.memberId ? parseInt(btn.dataset.memberId, 10) : null;
-                const alertKind = btn.dataset.alertKind || '';
-                await logEvent('template_copy', {
-                    pair_id: pairId,
-                    member_id: memberId,
-                    meta: { alert_kind: alertKind }
-                });
+                const originalHtml = btn.innerHTML;
                 btn.classList.add('btn-success');
                 btn.textContent = '已复制';
                 setTimeout(() => {
                     btn.classList.remove('btn-success');
-                    btn.innerHTML = '<i class="bi bi-clipboard"></i> 复制提醒话术';
+                    btn.innerHTML = originalHtml;
                 }, 1200);
+
+                // 复制已成功时即刻反馈，埋点失败不影响复制结果。
+                const pairId = btn.dataset.pairId ? parseInt(btn.dataset.pairId, 10) : null;
+                const memberId = btn.dataset.memberId ? parseInt(btn.dataset.memberId, 10) : null;
+                const alertKind = btn.dataset.alertKind || '';
+                void logEvent('template_copy', {
+                    pair_id: pairId,
+                    member_id: memberId,
+                    meta: { alert_kind: alertKind }
+                });
             } catch (err) {
                 alert('复制失败，请手动选择文本');
             }
@@ -394,14 +399,21 @@ document.addEventListener('DOMContentLoaded', function () {
             const kind = btn.dataset.kind || '';
             const pairId = btn.dataset.pairId ? parseInt(btn.dataset.pairId, 10) : null;
             const memberId = btn.dataset.memberId ? parseInt(btn.dataset.memberId, 10) : null;
-            await logEvent('feedback_submitted', {
+            const originalHtml = btn.innerHTML;
+            btn.disabled = true;
+            const logged = await logEvent('feedback_submitted', {
                 pair_id: pairId,
                 member_id: memberId,
                 meta: { kind }
             });
-            btn.classList.add('btn-success');
-            btn.textContent = '已记录';
-            btn.disabled = true;
+            if (logged) {
+                btn.classList.add('btn-success');
+                btn.textContent = '已记录';
+                return;
+            }
+            btn.innerHTML = originalHtml;
+            btn.disabled = false;
+            alert('记录失败，请检查网络后重试。');
         });
     });
 });

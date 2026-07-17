@@ -89,11 +89,13 @@ chmod +x .githooks/pre-push
 conda run -n case-weather-py312 python -m pytest -q
 ```
 
-手动测试类用例默认不会执行；如需单独运行：
+手动契约测试默认不会执行；本地无网络回归可运行：
 
 ```bash
-conda run -n case-weather-py312 python -m pytest -q -m manual
+conda run -n case-weather-py312 python -m pytest -q -m "manual and not network"
 ```
+
+需要真实第三方 API 的诊断用例使用 `network` 标记，只在明确需要联网时单独运行 `-m "manual and network"`。
 
 Python 3.12 兼容性专项检查可单独运行：
 
@@ -101,10 +103,10 @@ Python 3.12 兼容性专项检查可单独运行：
 conda run -n case-weather-py312 python -m pytest -q -W error::DeprecationWarning
 ```
 
-如 Flask-Login 0.6.3 的三方 remember-cookie warning 阻塞专项检查，只在专项命令里追加精确过滤，不写入全局 pytest 配置。
+专项检查只过滤当前固定依赖中已知的 Flask-Login 与 python-dateutil 三方弃用警告，项目代码里的弃用警告仍按错误处理。
 
 ```bash
-conda run -n case-weather-py312 python -m pytest -q -W error::DeprecationWarning -W ignore::DeprecationWarning:flask_login.login_manager
+conda run -n case-weather-py312 python -m pytest -q -W error::DeprecationWarning -W ignore::DeprecationWarning:flask_login.login_manager -W ignore::DeprecationWarning:dateutil.tz.tz
 ```
 
 小程序调试 / 联调前，必须先在 `miniprogram/config.js` 中填写真实 HTTPS API 地址。公开仓库默认留空，未配置时小程序请求会直接报错，不会再偷偷打到占位域名。
