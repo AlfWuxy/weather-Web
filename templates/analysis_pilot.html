@@ -16,8 +16,134 @@
       <div class="btn-group btn-group-sm" role="group" aria-label="range">
         <a class="btn btn-outline-primary {% if days == 7 %}active{% endif %}" href="{{ url_for('analysis.pilot_dashboard', days=7) }}">7天</a>
         <a class="btn btn-outline-primary {% if days == 30 %}active{% endif %}" href="{{ url_for('analysis.pilot_dashboard', days=30) }}">30天</a>
-        <a class="btn btn-outline-primary {% if days == 90 %}active{% endif %}" href="{{ url_for('analysis.pilot_dashboard', days=90) }}">90天</a>
       </div>
+    </div>
+  </div>
+
+  <div class="card shadow-sm mt-3">
+    <div class="card-header bg-light d-flex flex-wrap justify-content-between gap-2">
+      <strong>微信小程序有效照护漏斗</strong>
+      <span class="text-muted small">D0 至 D6；本卡最长回看 30 天原始事件</span>
+    </div>
+    <div class="card-body">
+      <div class="row g-3">
+        <div class="col-md-3">
+          <div class="text-muted small">窗口内首次登录</div>
+          <div class="fs-4 fw-bold">{{ miniprogram_metrics.cohort_login_users }}</div>
+          <div class="text-muted small">完整 7 日观察：{{ miniprogram_metrics.activation_eligible_users }}</div>
+        </div>
+        <div class="col-md-3">
+          <div class="text-muted small">7 日内创建家人档案</div>
+          <div class="fs-4 fw-bold">{{ miniprogram_metrics.profile_created_users }}</div>
+          <div class="text-muted small">{{ (miniprogram_metrics.profile_creation_rate * 100) | round(1) }}%</div>
+        </div>
+        <div class="col-md-3">
+          <div class="text-muted small">7 日有效启用</div>
+          <div class="fs-4 fw-bold">{{ miniprogram_metrics.activated_users }}</div>
+          <div class="text-muted small">{{ (miniprogram_metrics.activation_rate * 100) | round(1) }}%</div>
+        </div>
+        <div class="col-md-3">
+          <div class="text-muted small">第二周行动留存</div>
+          <div class="fs-4 fw-bold">{{ miniprogram_metrics.retained_users }}</div>
+          <div class="text-muted small">成熟样本：{{ miniprogram_metrics.retention_eligible_users }}</div>
+        </div>
+      </div>
+      <hr>
+      <div class="d-flex flex-wrap justify-content-between gap-2 mb-3">
+        <span class="text-muted small">
+          来源未知占比：{{ (miniprogram_metrics.unknown_source_share * 100) | round(1) }}%
+          （{{ miniprogram_metrics.unknown_source_login_users }} / {{ miniprogram_metrics.cohort_login_users }}）
+        </span>
+        <span class="small {% if miniprogram_metrics.test_account_exclusion_enabled %}text-success{% else %}text-warning{% endif %}">
+          测试账号排除：
+          {% if miniprogram_metrics.test_account_exclusion_enabled %}
+            已启用，配置 {{ miniprogram_metrics.configured_test_account_ids }} 个，本窗口排除 {{ miniprogram_metrics.excluded_test_account_users }} 个
+          {% else %}
+            未配置
+          {% endif %}
+        </span>
+      </div>
+      <div class="table-responsive">
+        <table class="table table-sm align-middle mb-0">
+          <thead>
+            <tr>
+              <th>首次来源</th>
+              <th class="text-end">登录</th>
+              <th class="text-end">D7 成熟分母</th>
+              <th class="text-end">7 日启用</th>
+              <th class="text-end">D7 启用率</th>
+              <th class="text-end">D15 成熟分母</th>
+              <th class="text-end">第二周留存</th>
+              <th class="text-end">D15 留存率</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in miniprogram_metrics.source_breakdown %}
+            <tr>
+              <td>
+                {{ row.label }}
+                {% if row.source == 'direct' %}<span class="visually-hidden">直接访问 7 日启用率</span>{% endif %}
+                {% if row.source == 'family_share' %}<span class="visually-hidden">家庭分享 7 日启用率</span>{% endif %}
+              </td>
+              <td class="text-end">{{ row.login_users }}</td>
+              <td class="text-end">{{ row.d7_mature_users }}</td>
+              <td class="text-end">{{ row.activated_users }}</td>
+              <td class="text-end">{{ (row.activation_rate * 100) | round(1) }}%</td>
+              <td class="text-end">{{ row.d15_mature_users }}</td>
+              <td class="text-end">{{ row.retained_users }}</td>
+              <td class="text-end">{{ (row.retention_rate * 100) | round(1) }}%</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <div class="d-flex flex-wrap justify-content-between gap-2 mt-3">
+        <span>第二周行动留存：<strong>{{ miniprogram_metrics.retained_users }} / {{ miniprogram_metrics.retention_eligible_users }}</strong></span>
+        <span class="text-muted">{{ (miniprogram_metrics.week2_retention_rate * 100) | round(1) }}%</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="card shadow-sm mt-3">
+    <div class="card-header bg-light d-flex flex-wrap justify-content-between gap-2">
+      <strong>首次有效行动周 cohort</strong>
+      <span class="text-muted small">仅展示聚合人数；D15 成熟后计算第二周留存</span>
+    </div>
+    <div class="card-body">
+      {% if miniprogram_metrics.weekly_action_cohorts %}
+      <div class="table-responsive">
+        <table class="table table-sm align-middle mb-0">
+          <thead>
+            <tr>
+              <th>行动周</th>
+              <th class="text-end">有效启用</th>
+              <th class="text-end">D15 成熟分母</th>
+              <th class="text-end">第二周留存</th>
+              <th class="text-end">留存率</th>
+              <th>来源构成（直接 / 家庭 / 未知）</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in miniprogram_metrics.weekly_action_cohorts %}
+            <tr>
+              <td>{{ row.week_start }} 至 {{ row.week_end }}</td>
+              <td class="text-end">{{ row.activated_users }}</td>
+              <td class="text-end">{{ row.d15_mature_users }}</td>
+              <td class="text-end">{{ row.retained_users }}</td>
+              <td class="text-end">{{ (row.retention_rate * 100) | round(1) }}%</td>
+              <td>
+                {{ row.sources.direct.activated_users }} /
+                {{ row.sources.family_share.activated_users }} /
+                {{ row.sources.unknown.activated_users }}
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}
+      <div class="text-muted">当前窗口尚无已完成有效启用的成熟 cohort。</div>
+      {% endif %}
     </div>
   </div>
 
@@ -45,7 +171,8 @@
         <div class="card-body">
           <div class="text-muted small">推送</div>
           <div class="fs-3 fw-bold">{{ push_sent }}</div>
-          <div class="text-muted small">失败：{{ push_failed }} · 点击：{{ push_clicked }}</div>
+          <div class="text-muted small">确认失败：{{ push_failed }} · 不明确：{{ push_uncertain }}</div>
+          <div class="text-muted small">发送中：{{ push_sending }} · 待重试：{{ push_retry_ready }}</div>
         </div>
       </div>
     </div>
@@ -54,9 +181,82 @@
         <div class="card-body">
           <div class="text-muted small">点击率（CTR）</div>
           <div class="fs-3 fw-bold">{{ (push_ctr * 100) | round(1) }}%</div>
-          <div class="text-muted small">计算：clicked / sent</div>
+          <div class="text-muted small">确认点击 {{ push_clicked }} / 确认送达 {{ push_sent }}</div>
+          {% if push_uncertain_clicked %}<div class="text-warning small">另有 {{ push_uncertain_clicked }} 次不明确投递点击待复核</div>{% endif %}
         </div>
       </div>
+    </div>
+  </div>
+
+  <div class="card shadow-sm mt-3">
+    <div class="card-header bg-light d-flex flex-wrap justify-content-between gap-2">
+      <strong>推送人工复核队列</strong>
+      <span class="small {% if review_required_count %}text-warning{% else %}text-success{% endif %}">
+        需处理 {{ review_required_count }} 项
+      </span>
+    </div>
+    <div class="card-body">
+      {% if review_deliveries %}
+      <div class="table-responsive">
+        <table class="table table-sm align-middle mb-0">
+          <thead>
+            <tr>
+              <th>记录</th>
+              <th>状态</th>
+              <th>尝试</th>
+              <th>最近时间</th>
+              <th>证据</th>
+              <th>复核记录</th>
+              <th class="text-end">操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for delivery in review_deliveries %}
+            <tr>
+              <td>#{{ delivery.id }}</td>
+              <td><code>{{ delivery.status }}</code></td>
+              <td>{{ delivery.attempt_count or 1 }}</td>
+              <td>{{ delivery.sent_at or '待记录' }}</td>
+              <td>{% if delivery.clicked_at %}已点击{% else %}无点击{% endif %}</td>
+              <td>
+                {% if delivery.review_action %}
+                  {{ delivery.review_action }} · {{ delivery.reviewed_at or '' }}
+                {% else %}
+                  {{ (delivery.error or '等待调度结果') | truncate(80) }}
+                {% endif %}
+              </td>
+              <td class="text-end">
+                <div class="d-flex flex-wrap justify-content-end gap-1">
+                  <form method="post" action="{{ url_for('analysis.pilot_review_delivery', delivery_id=delivery.id) }}">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <input type="hidden" name="days" value="{{ days }}">
+                    <input type="hidden" name="action" value="confirm_sent">
+                    <button class="btn btn-outline-success btn-sm" type="submit">确认送达</button>
+                  </form>
+                  <form method="post" action="{{ url_for('analysis.pilot_review_delivery', delivery_id=delivery.id) }}">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <input type="hidden" name="days" value="{{ days }}">
+                    <input type="hidden" name="action" value="confirm_failed">
+                    <button class="btn btn-outline-secondary btn-sm" type="submit">确认未送达</button>
+                  </form>
+                  {% if delivery.status in ['failed', 'uncertain'] %}
+                  <form method="post" action="{{ url_for('analysis.pilot_review_delivery', delivery_id=delivery.id) }}">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <input type="hidden" name="days" value="{{ days }}">
+                    <input type="hidden" name="action" value="allow_retry">
+                    <button class="btn btn-outline-primary btn-sm" type="submit">允许重试一次</button>
+                  </form>
+                  {% endif %}
+                </div>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}
+      <div class="text-muted">最近 {{ days }} 天没有需要复核的投递。</div>
+      {% endif %}
     </div>
   </div>
 
@@ -72,8 +272,8 @@
             <div class="fw-semibold">{{ template_copy }}</div>
           </div>
           <div class="d-flex justify-content-between">
-            <div class="text-muted">覆盖到的监测对象</div>
-            <div class="fw-semibold">{{ template_pairs }}</div>
+            <div class="text-muted">复制账号数</div>
+            <div class="fw-semibold">{{ template_users }}</div>
           </div>
           <div class="text-muted small mt-2">口径：事件埋点 `template_copy`</div>
         </div>
@@ -111,7 +311,8 @@
 
   <div class="card shadow-sm mt-3">
     <div class="card-header bg-light">
-      <strong>地区覆盖（Top 20）</strong>
+      <strong>社区覆盖（Top 20）</strong>
+      <span class="text-muted small">仅展示至少 {{ location_min_count }} 个家庭的社区编码</span>
     </div>
     <div class="card-body">
       {% if location_coverage %}
@@ -134,10 +335,9 @@
           </table>
         </div>
       {% else %}
-        <div class="text-muted">暂无数据</div>
+        <div class="text-muted">当前没有达到 {{ location_min_count }} 个家庭隐私阈值的社区。</div>
       {% endif %}
     </div>
   </div>
 </div>
 {% endblock %}
-
