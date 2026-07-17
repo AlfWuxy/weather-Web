@@ -51,7 +51,7 @@ jobs:
           forbidden=$(
             git ls-files \
               | grep -E '(^\.env($|\.)|^\.claude/|^\.superpowers/|^\.playwright-cli/|^output/|^backups/| 2\.|\.DS_Store$)' \
-              | grep -v '^\.env\.example$' \
+              | grep -vE '^\.env\.(wechat-release\.)?example$' \
               || true
           )
           if [ -n "$forbidden" ]; then
