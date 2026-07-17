@@ -13,8 +13,8 @@
 1. 安装微信开发者工具。
 2. 导入仓库的 `miniprogram/` 目录。
 3. 把 `miniprogram/project.config.json` 中的 `appid` 从游客值替换成正式 AppID。个人本机设置放进 `project.private.config.json`，不要提交。
-4. 确认 `miniprogram/config.js` 的生产 API 为 `https://yilaoweather.org`。
-5. 开发环境可以通过私有配置覆盖 API 地址，禁止把密钥写进小程序代码。
+4. 参考 `miniprogram/config.example.js`，在本机临时把已经备案的正式 HTTPS API 域名填入 `miniprogram/config.runtime.js`。
+5. 上传完成后立即用 `git diff -- miniprogram/config.runtime.js` 复核，并恢复为空值；禁止把真实域名或密钥提交到公开分支。
 
 ## 后端配置
 
@@ -23,7 +23,7 @@
 - `WX_MINIPROGRAM_APPID`
 - `WX_MINIPROGRAM_SECRET`
 - `PAIR_TOKEN_PEPPER`
-- `PUBLIC_BASE_URL=https://yilaoweather.org`
+- `PUBLIC_BASE_URL`：填写与小程序合法域名一致的正式 HTTPS 地址
 - `QWEATHER_CANONICAL_LOCATION=116.20,29.27`
 - `WEATHER_CACHE_TTL_MINUTES=30`
 - `FORECAST_CACHE_TTL_MINUTES=30`
@@ -32,6 +32,8 @@
 - `QWEATHER_BUDGET_FAIL_CLOSED=1`
 
 AppSecret 只允许出现在服务器环境变量。小程序包、日志、错误消息和 Git 历史都不能包含 AppSecret、QWeather key 或微信 CI 私钥。
+
+`config.runtime.js` 始终保留在仓库中且默认值为空，保证源码可以正常编译。域名为空时请求层会明确终止，不会误连占位服务。
 
 ## 请求模型
 

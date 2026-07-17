@@ -5,10 +5,11 @@
 - [ ] 正式小程序账号已完成主体认证。
 - [ ] `project.config.json` 已替换为正式 AppID。
 - [ ] 服务器已配置同一 AppID 和 AppSecret。
-- [ ] `https://yilaoweather.org` 已加入 request 合法域名。
+- [ ] 本机临时写入 `config.runtime.js` 的正式 HTTPS API 域名已加入 request 合法域名。
 - [ ] 合法域名使用有效 HTTPS 证书、443 端口，无重定向到 HTTP。
 - [ ] 生产包没有 `project.private.config.json`、密钥、测试账号密码或本地地址。
 - [ ] 小程序名称、图标、简介、服务类目和版本号已在账号后台填写。
+- [ ] 已按 `LISTING_COPY.md` 复核头像、上架文案、审核路径和无隐私截图。
 
 ## 隐私与健康信息
 
@@ -51,6 +52,7 @@
 - [ ] 隐私说明、用户协议、数据来源和更新时间入口可达。
 - [ ] 体验版二维码已由至少一名非开发者完整走查。
 - [ ] 上传包版本号、提交说明、截图和回滚 commit 已记录。
+- [ ] 上传后已把本机 `config.runtime.js` 恢复为空，`git diff` 未发现正式域名。
 
 ## 发布后
 

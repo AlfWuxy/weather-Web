@@ -67,6 +67,8 @@ backups/
 !.env.example
 *.pem
 *.key
+miniprogram/config.private.js
+miniprogram/project.private.config.json
 
 # 系统文件
 .DS_Store
