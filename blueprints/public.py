@@ -4,7 +4,18 @@ import logging
 from urllib.parse import parse_qsl
 
 import requests
-from flask import Blueprint, Response, abort, current_app, redirect, render_template, request, url_for
+from flask import (
+    Blueprint,
+    Response,
+    abort,
+    current_app,
+    make_response,
+    redirect,
+    render_template,
+    request,
+    session,
+    url_for,
+)
 from flask_login import current_user, login_required
 
 logger = logging.getLogger(__name__)
@@ -71,6 +82,23 @@ Disallow: /e/
 Disallow: /t/
 """
 
+HOME_EDGE_CACHE_SECONDS = 60
+HOME_STALE_WHILE_REVALIDATE_SECONDS = 30
+
+
+def _is_cacheable_anonymous_home():
+    """仅允许无登录态、无认证 Cookie、无查询参数的首页进入边缘缓存。"""
+    session_cookie_name = current_app.config.get('SESSION_COOKIE_NAME', 'session')
+    remember_cookie_name = current_app.config.get('REMEMBER_COOKIE_NAME', 'remember_token')
+    private_cookie_names = {session_cookie_name, remember_cookie_name} - {None, ''}
+    has_private_cookie = any(name in request.cookies for name in private_cookie_names)
+    return (
+        request.method in {'GET', 'HEAD'}
+        and not request.query_string
+        and not has_private_cookie
+        and not current_user.is_authenticated
+    )
+
 
 @bp.route('/robots.txt', endpoint='robots_txt')
 def robots_txt():
@@ -81,7 +109,27 @@ def robots_txt():
 @bp.route('/', endpoint='index')
 def index():
     """首页"""
-    return render_template('index.html')
+    cacheable_anonymous = _is_cacheable_anonymous_home()
+    template_context = {}
+    if cacheable_anonymous:
+        # 匿名首页没有写操作，避免生成 CSRF Token 时创建 Session Cookie。
+        template_context['csrf_token'] = lambda: ''
+
+    response = make_response(render_template('index.html', **template_context))
+    if cacheable_anonymous and not session.modified:
+        # 浏览器不落盘，Cloudflare 边缘短缓存并在后台刷新。
+        response.headers['Cache-Control'] = 'no-store'
+        response.headers['Cloudflare-CDN-Cache-Control'] = (
+            f'public, max-age={HOME_EDGE_CACHE_SECONDS}, '
+            f'stale-while-revalidate={HOME_STALE_WHILE_REVALIDATE_SECONDS}'
+        )
+        # 已确认请求没有会话 Cookie，清除只读 Session 访问产生的 Vary: Cookie。
+        session.accessed = False
+    else:
+        # 登录态、已有会话或带查询参数的首页必须绕过所有共享缓存。
+        response.headers['Cache-Control'] = 'private, no-store'
+        response.headers['Cloudflare-CDN-Cache-Control'] = 'no-store'
+    return response
 
 
 @bp.route('/entry', endpoint='role_entry')
