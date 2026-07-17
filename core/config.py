@@ -261,7 +261,18 @@ def configure_app(app, logger):
     wx_miniprogram_session_secret = _normalized_env_value('WX_MINIPROGRAM_SESSION_SECRET', '')
     wx_miniprogram_privacy_version = _normalized_env_value(
         'WX_MINIPROGRAM_PRIVACY_VERSION',
-        '2026-07-17',
+        '2026-07-18',
+    )
+    analytics_test_user_ids = _normalized_env_value('ANALYTICS_TEST_USER_IDS', '')
+    analytics_min_location_count = max(
+        3,
+        min(
+            parse_int(
+                os.getenv('ANALYTICS_MIN_LOCATION_COUNT', '3'),
+                default=3,
+            ),
+            1000,
+        ),
     )
     public_base_url = _normalized_env_value('PUBLIC_BASE_URL', '')
     pair_token_pepper = _normalized_env_value('PAIR_TOKEN_PEPPER', '')
@@ -308,6 +319,8 @@ def configure_app(app, logger):
     app.config['WX_MINIPROGRAM_OPENID_PEPPER'] = wx_miniprogram_openid_pepper
     app.config['WX_MINIPROGRAM_SESSION_SECRET'] = wx_miniprogram_session_secret
     app.config['WX_MINIPROGRAM_PRIVACY_VERSION'] = wx_miniprogram_privacy_version
+    app.config['ANALYTICS_TEST_USER_IDS'] = analytics_test_user_ids
+    app.config['ANALYTICS_MIN_LOCATION_COUNT'] = analytics_min_location_count
     app.config['WX_MINIPROGRAM_SESSION_TTL_SECONDS'] = max(
         300,
         min(

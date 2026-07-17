@@ -2,7 +2,7 @@
 """Pilot-loop helpers: API tokens + usage events.
 
 These are product analytics (打开率/触发/反馈等) rather than security audit logs.
-We store only minimal structured metadata; avoid PII.
+只保存固定枚举元数据，不保存家庭或成员标识，并在 30 天后自动删除事件。
 """
 
 import json
@@ -11,6 +11,7 @@ import secrets
 from datetime import timedelta
 
 from flask import current_app, has_app_context
+from sqlalchemy import or_
 
 from core.db_models import ApiToken, UsageEvent, User
 from core.extensions import db
@@ -25,6 +26,27 @@ DEFAULT_API_TOKEN_SCOPES = (
 )
 
 _USAGE_SOURCES = {'web', 'miniprogram', 'cron', 'system'}
+USAGE_EVENT_RETENTION_DAYS = 30
+USAGE_EVENT_RETENTION_BATCH_SIZE = 1000
+USAGE_EVENT_RETENTION_MAX_BATCHES = 10
+_VALID_ACTION_EVENT_TYPE = 'checkin_confirmed'
+PILOT_EVENT_TYPES = frozenset({
+    'pair_created',
+    'elder_profile_created',
+    'elder_profile_updated',
+    'template_view',
+    'template_copy',
+    'push_sent',
+    'push_failed',
+    'push_click',
+    'feedback_submitted',
+    'help_flagged',
+    'checkin_confirmed',
+    'wxoa_land',
+    'wechat_login_success',
+})
+WEB_CLIENT_PILOT_EVENT_TYPES = frozenset({'template_copy', 'feedback_submitted'})
+MINIPROGRAM_CLIENT_PILOT_EVENT_TYPES = frozenset({'template_copy'})
 _USAGE_META_ENUMS = {
     'via': {'family_members', 'family_member_new', 'family_member_edit', 'mp_api'},
     'channel': {'web', 'wxpusher', 'wechat_miniprogram', 'wechat_official_account'},
@@ -57,15 +79,6 @@ _USAGE_META_INTEGER_LIMITS = {
     'caregiver_actions_count': (0, 1000),
     'difficulty_len': (0, 300),
 }
-_USAGE_META_PROFILE_FIELDS = {
-    'name',
-    'relation',
-    'age',
-    'gender',
-    'chronic_diseases',
-    'wxpusher_uid',
-    'push_enabled',
-}
 
 
 def _sanitize_usage_meta(meta):
@@ -88,16 +101,6 @@ def _sanitize_usage_meta(meta):
         value = meta.get(key)
         if isinstance(value, int) and not isinstance(value, bool):
             safe[key] = max(minimum, min(value, maximum))
-
-    for key in ('fields', 'updated_fields'):
-        value = meta.get(key)
-        if isinstance(value, (list, tuple)):
-            fields = []
-            for item in value:
-                if item in _USAGE_META_PROFILE_FIELDS and item not in fields:
-                    fields.append(item)
-            if fields:
-                safe[key] = fields
 
     # 位置、预警和错误仅记录县域级或布尔级摘要，不保留原文。
     if meta.get('location_query') or meta.get('location_code'):
@@ -202,12 +205,18 @@ def verify_api_token(plain_token):
 
 
 def log_usage_event(event_type, user_id=None, pair_id=None, member_id=None, source='web', meta=None):
-    """Best-effort usage event logging (fail open)."""
+    """Best-effort usage event logging；家庭和成员参数仅用于兼容旧调用。"""
     if not event_type:
         return None
     try:
+        normalized_event_type = str(event_type)[:50]
         payload = None
         safe_meta = _sanitize_usage_meta(meta)
+        # 行动激活只能由至少一项已完成行动构成，空确认不进入激活口径。
+        if normalized_event_type == _VALID_ACTION_EVENT_TYPE:
+            actions_done_count = (safe_meta or {}).get('actions_done_count')
+            if not isinstance(actions_done_count, int) or actions_done_count < 1:
+                return None
         if safe_meta is not None:
             payload = json.dumps(
                 safe_meta,
@@ -220,9 +229,10 @@ def log_usage_event(event_type, user_id=None, pair_id=None, member_id=None, sour
             normalized_source = 'web'
         event = UsageEvent(
             user_id=user_id,
-            pair_id=pair_id,
-            member_id=member_id,
-            event_type=str(event_type)[:50],
+            # 保留 pair_id/member_id 参数兼容旧调用，分析事件只做账号级聚合。
+            pair_id=None,
+            member_id=None,
+            event_type=normalized_event_type,
             meta_json=payload,
             source=normalized_source,
             created_at=utcnow(),
@@ -234,3 +244,51 @@ def log_usage_event(event_type, user_id=None, pair_id=None, member_id=None, sour
         logger.debug("usage event write failed: %s", exc)
         db.session.rollback()
         return None
+
+
+def delete_expired_usage_events(
+    *,
+    now=None,
+    batch_size=USAGE_EVENT_RETENTION_BATCH_SIZE,
+    max_batches=USAGE_EVENT_RETENTION_MAX_BATCHES,
+):
+    """按固定 30 天策略分批删除埋点，避免定时任务持有大范围写锁。"""
+    reference_time = ensure_utc_aware(now or utcnow())
+    cutoff = reference_time - timedelta(days=USAGE_EVENT_RETENTION_DAYS)
+    batch_size = max(1, min(int(batch_size), 10_000))
+    max_batches = max(1, min(int(max_batches), 100))
+    deleted_total = 0
+    complete = False
+
+    for _batch_number in range(max_batches):
+        expired_ids = [
+            row[0]
+            for row in db.session.query(UsageEvent.id)
+            .filter(
+                or_(
+                    UsageEvent.created_at.is_(None),
+                    UsageEvent.created_at < cutoff,
+                )
+            )
+            .order_by(UsageEvent.created_at.asc(), UsageEvent.id.asc())
+            .limit(batch_size)
+            .all()
+        ]
+        if not expired_ids:
+            complete = True
+            break
+
+        deleted = UsageEvent.query.filter(
+            UsageEvent.id.in_(expired_ids),
+        ).delete(synchronize_session=False)
+        db.session.commit()
+        deleted_total += int(deleted or 0)
+        if len(expired_ids) < batch_size:
+            complete = True
+            break
+
+    return {
+        'deleted': deleted_total,
+        'cutoff': cutoff,
+        'complete': complete,
+    }

@@ -513,16 +513,46 @@ class AlertDelivery(db.Model):
     alert_id = db.Column(db.Integer, db.ForeignKey('weather_alerts.id'), nullable=False)
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
     pair_id = db.Column(db.Integer, db.ForeignKey('pairs.id'))
-    channel = db.Column(db.String(20))
-    status = db.Column(db.String(20))  # sent/failed
+    channel = db.Column(
+        db.String(20),
+        nullable=False,
+        default='wxpusher',
+        server_default='wxpusher',
+    )
+    # sending 仅表示已占位且正在外呼；failed/uncertain 均需人工确认后才能重试。
+    status = db.Column(
+        db.String(20),
+        nullable=False,
+        default='uncertain',
+        server_default='uncertain',
+    )
     error = db.Column(db.Text)
     delivery_token = db.Column(db.String(64), unique=True, nullable=False)
     sent_at = db.Column(db.DateTime)
     clicked_at = db.Column(db.DateTime)
+    attempt_count = db.Column(
+        db.Integer,
+        nullable=False,
+        default=1,
+        server_default='1',
+    )
+    reviewed_at = db.Column(db.DateTime)
+    reviewed_by_user_id = db.Column(
+        db.Integer,
+        db.ForeignKey('users.id', ondelete='SET NULL'),
+    )
+    review_action = db.Column(db.String(20))
 
     __table_args__ = (
+        db.UniqueConstraint(
+            'alert_id',
+            'user_id',
+            'channel',
+            name='uq_alert_deliveries_alert_user_channel',
+        ),
         db.Index('ix_alert_deliveries_alert_user', 'alert_id', 'user_id'),
         db.Index('ix_alert_deliveries_delivery_token', 'delivery_token'),
+        db.Index('ix_alert_deliveries_status_sent_at', 'status', 'sent_at'),
     )
 
 
@@ -580,6 +610,8 @@ class MiniProgramIdentity(db.Model):
     openid_hash = db.Column(db.String(64), nullable=False, unique=True)
     privacy_consent_version = db.Column(db.String(64), nullable=False)
     privacy_consented_at = db.Column(db.DateTime, nullable=False)
+    # 首次登录来源只保留固定枚举，供聚合转化分析使用。
+    acquisition_source = db.Column(db.String(20), nullable=False, default='direct')
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
     last_login_at = db.Column(db.DateTime)
 
@@ -591,6 +623,7 @@ class MiniProgramIdentity(db.Model):
         ),
         db.Index('ix_miniprogram_identities_user_id', 'user_id'),
         db.Index('ix_miniprogram_identities_openid_hash', 'openid_hash'),
+        db.Index('ix_miniprogram_identities_created_at', 'created_at'),
     )
 
 

@@ -29,7 +29,7 @@ def test_mp_api_me_and_patch(app, client, db_session):
     # update push settings
     resp2 = client.patch(
         "/mp/api/v1/me",
-        json={"wxpusher_uid": "UID_X", "push_enabled": True},
+        json={"wxpusher_uid": "UID_X", "push_enabled": True, "wxpusher_consent": True},
         headers={"Authorization": f"Bearer {plain}"},
     )
     assert resp2.status_code == 200
@@ -87,6 +87,48 @@ def test_api_token_requires_expiry_and_sensitive_scope(app, client, db_session):
     privacy_refresh = client.get("/mp/api/v1/me", headers=headers)
     assert privacy_refresh.status_code == 428
     assert privacy_refresh.get_json()["data"]["required_privacy_consent_version"]
+
+
+def test_read_only_api_token_cannot_reach_any_authenticated_write_route(
+    app,
+    client,
+    db_session,
+):
+    from core.db_models import User
+    from core.usage import create_api_token
+
+    user = User(username="read_only_write_matrix", role="user")
+    user.set_password("pw123456")
+    db_session.add(user)
+    db_session.commit()
+    plain = create_api_token(
+        user.id,
+        name="read-only-matrix",
+        scopes=["miniprogram:read", "miniprogram:sensitive"],
+    )
+    headers = {"Authorization": f"Bearer {plain}"}
+    write_routes = (
+        ("post", "/mp/api/v1/auth/logout"),
+        ("patch", "/mp/api/v1/me"),
+        ("delete", "/mp/api/v1/me"),
+        ("post", "/mp/api/v1/elders"),
+        ("patch", "/mp/api/v1/elders/1"),
+        ("delete", "/mp/api/v1/elders/1"),
+        ("post", "/mp/api/v1/health/diary"),
+        ("post", "/mp/api/v1/medications"),
+        ("delete", "/mp/api/v1/medications"),
+        ("delete", "/mp/api/v1/medications/1"),
+        ("post", "/mp/api/v1/health/assessment"),
+        ("post", "/mp/api/v1/actions/1/confirm"),
+        ("post", "/mp/api/v1/actions/1/help"),
+        ("post", "/mp/api/v1/actions/1/debrief"),
+        ("post", "/mp/api/v1/events"),
+    )
+
+    for method, path in write_routes:
+        response = getattr(client, method)(path, json={}, headers=headers)
+        assert response.status_code == 403, (method, path, response.get_json())
+        assert response.get_json()["error"] == "insufficient_scope"
 
 
 def test_profile_requires_privacy_consent_before_generating_api_token(
@@ -225,7 +267,7 @@ def test_mp_api_events_rejects_large_meta(app, client, db_session):
 
     resp = client.post(
         "/mp/api/v1/events",
-        json={"event_type": "template_view", "meta": {"payload": "x" * 3000}},
+        json={"event_type": "template_copy", "meta": {"payload": "x" * 3000}},
         headers={"Authorization": f"Bearer {plain}"},
     )
 

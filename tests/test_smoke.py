@@ -71,6 +71,11 @@ def test_public_pages(client):
     assert "User-agent: *" in robots.get_data(as_text=True)
     assert "Disallow: /admin" in robots.get_data(as_text=True)
 
+    health = client.get('/healthz')
+    assert health.status_code == 200
+    assert health.get_json() == {'status': 'ok'}
+    assert health.headers['Cache-Control'] == 'no-store'
+
 
 def test_authenticated_pages(client):
     _login_as_guest(client)

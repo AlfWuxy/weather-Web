@@ -454,11 +454,24 @@ def refresh_snapshot_from_cycle(current, weather_service=None, *, fetched_at=Non
 def public_communities_payload() -> dict:
     """仅公开社区级聚合字段，小样本行动率统一抑制。"""
     communities = Community.query.order_by(Community.name.asc()).all()
-    latest_daily = {}
-    for record in CommunityDaily.query.order_by(
-        CommunityDaily.date.desc(), CommunityDaily.id.desc()
-    ).all():
-        latest_daily.setdefault(record.community_code, record)
+    # 先限定每个社区的最新日期，再用最大 id 兼容同日历史重复记录。
+    latest_dates = db.session.query(
+        CommunityDaily.community_code.label("community_code"),
+        db.func.max(CommunityDaily.date).label("latest_date"),
+    ).group_by(CommunityDaily.community_code).subquery()
+    latest_ids = db.session.query(
+        CommunityDaily.community_code.label("community_code"),
+        db.func.max(CommunityDaily.id).label("latest_id"),
+    ).join(
+        latest_dates,
+        (CommunityDaily.community_code == latest_dates.c.community_code)
+        & (CommunityDaily.date == latest_dates.c.latest_date),
+    ).group_by(CommunityDaily.community_code).subquery()
+    latest_records = CommunityDaily.query.join(
+        latest_ids,
+        CommunityDaily.id == latest_ids.c.latest_id,
+    ).all()
+    latest_daily = {record.community_code: record for record in latest_records}
     items = []
     for community in communities:
         daily = latest_daily.get(community.name)
@@ -478,7 +491,7 @@ def public_communities_payload() -> dict:
                 "latest_action_summary": (
                     {
                         "date": daily.date.isoformat(),
-                        "total_people": count,
+                        "total_people": None if sample_suppressed else count,
                         "confirm_rate": None if sample_suppressed else daily.confirm_rate,
                         "escalation_rate": None if sample_suppressed else daily.escalation_rate,
                         "sample_suppressed": sample_suppressed,
@@ -531,11 +544,16 @@ def public_gis_metadata_payload() -> dict:
         metadata = collection.get("metadata") if isinstance(collection, dict) else {}
         _GIS_METADATA_CACHE.update(mtime_ns=stat.st_mtime_ns, payload=metadata or {})
     metadata = _GIS_METADATA_CACHE.get("payload") or {}
+    url_values = {
+        "filename": PUBLIC_GEOJSON_FILENAME,
+        # 文件版本进入 URL，避免微信/CDN 在数据更新后继续返回旧 GeoJSON。
+        "v": stat.st_mtime_ns,
+    }
     return {
         "available": True,
         "scope": CANONICAL_LOCATION_NAME,
         # 返回同源相对路径，避免反向代理 Host/协议误配置污染小程序请求目标。
-        "geojson_url": url_for("static", filename=PUBLIC_GEOJSON_FILENAME, _external=False),
+        "geojson_url": url_for("static", _external=False, **url_values),
         "title": metadata.get("title"),
         "schema_version": metadata.get("schema_version"),
         "size_bytes": stat.st_size,

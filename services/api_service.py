@@ -20,9 +20,9 @@ from core.weather import (
     normalize_location_name,
     weather_source_label
 )
-from core.db_models import Community, FamilyMember, Pair
+from core.db_models import Community
 from core.extensions import db
-from core.usage import log_usage_event
+from core.usage import WEB_CLIENT_PILOT_EVENT_TYPES, log_usage_event
 from utils.parsers import parse_date, parse_int, safe_json_loads
 from utils.error_handlers import handle_api_exception
 from utils.validators import sanitize_input
@@ -61,23 +61,6 @@ def _validate_qweather_for_risk(weather_data, context):
         weather_data.get('is_mock') if isinstance(weather_data, dict) else None,
     )
     return _weather_unavailable_response(weather_data)
-
-PILOT_EVENT_TYPES = {
-    'pair_created',
-    'elder_profile_created',
-    'elder_profile_updated',
-    'template_view',
-    'template_copy',
-    'push_sent',
-    'push_failed',
-    'push_click',
-    'feedback_submitted',
-    'help_flagged',
-    'checkin_confirmed',
-    'wxoa_land',
-}
-_PILOT_EVENT_TYPES = PILOT_EVENT_TYPES
-
 
 def _handle_api_error(exc, context_msg, include_details=None):
     """统一处理API异常（兼容旧调用）"""
@@ -1136,47 +1119,25 @@ def api_comprehensive_alert():
 def _api_usage_event():
     """Write pilot usage event (server-side validation, CSRF-protected)."""
     try:
-        payload = request.get_json(silent=True) or {}
+        payload = request.get_json(silent=True)
+        if payload is None:
+            payload = {}
+        if not isinstance(payload, dict):
+            return jsonify({'success': False, 'error': 'invalid_payload'}), 400
         event_type = sanitize_input(payload.get('event_type'), max_length=50) or ''
-        if event_type not in _PILOT_EVENT_TYPES:
+        if event_type not in WEB_CLIENT_PILOT_EVENT_TYPES:
             return jsonify({'success': False, 'error': 'invalid event_type'}), 400
 
-        pair_id = payload.get('pair_id')
-        member_id = payload.get('member_id')
-        source = sanitize_input(payload.get('source'), max_length=20) or 'web'
-        meta = payload.get('meta') if isinstance(payload.get('meta'), (dict, list)) else None
-
-        resolved_pair_id = None
-        if pair_id is not None:
-            try:
-                pair_id_int = int(pair_id)
-            except Exception:
-                pair_id_int = None
-            if pair_id_int:
-                q = Pair.query.filter_by(id=pair_id_int)
-                if getattr(current_user, 'role', None) != 'admin':
-                    q = q.filter_by(caregiver_id=current_user.id)
-                pair = q.first()
-                if pair:
-                    resolved_pair_id = pair.id
-
-        resolved_member_id = None
-        if member_id is not None:
-            try:
-                member_id_int = int(member_id)
-            except Exception:
-                member_id_int = None
-            if member_id_int:
-                member = FamilyMember.query.filter_by(id=member_id_int, user_id=current_user.id).first()
-                if member:
-                    resolved_member_id = member.id
+        raw_meta = payload.get('meta')
+        if raw_meta is not None and not isinstance(raw_meta, dict):
+            return jsonify({'success': False, 'error': 'invalid_meta'}), 400
+        meta = raw_meta
 
         event = log_usage_event(
             event_type,
             user_id=current_user.id,
-            pair_id=resolved_pair_id,
-            member_id=resolved_member_id,
-            source=source,
+            # Web 客户端只能记录自己的交互来源，不能伪装定时或系统事件。
+            source='web',
             meta=meta,
         )
         if event is None:

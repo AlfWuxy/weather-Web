@@ -50,7 +50,7 @@ def test_mp_me_patch_preserves_omitted_fields_and_disables_push_when_uid_removed
 
     enable_response = client.patch(
         "/mp/api/v1/me",
-        json={"push_enabled": True},
+        json={"push_enabled": True, "wxpusher_consent": True},
         headers=headers,
     )
     assert enable_response.status_code == 200
@@ -99,6 +99,30 @@ def test_mp_me_patch_rejects_ambiguous_boolean_without_partial_update(
         assert user.push_enabled is True
 
 
+def test_mp_me_patch_requires_explicit_wxpusher_consent_without_partial_update(
+    app,
+    client,
+    db_session,
+):
+    user_id, token = _create_mp_user_and_token(app, db_session, push_enabled=False)
+
+    response = client.patch(
+        '/mp/api/v1/me',
+        json={'wxpusher_uid': 'UID_CHANGED', 'push_enabled': True},
+        headers={'Authorization': f'Bearer {token}'},
+    )
+
+    assert response.status_code == 400
+    assert response.get_json()['error'] == 'wxpusher_consent_required'
+
+    from core.db_models import User
+
+    with app.app_context():
+        user = db_session.get(User, user_id)
+        assert user.wxpusher_uid == 'UID_KEEP'
+        assert user.push_enabled is False
+
+
 def test_mp_events_reports_usage_write_failure(app, client, db_session, monkeypatch):
     import blueprints.mp_api as mp_api_module
 
@@ -107,7 +131,7 @@ def test_mp_events_reports_usage_write_failure(app, client, db_session, monkeypa
 
     response = client.post(
         "/mp/api/v1/events",
-        json={"event_type": "template_view"},
+        json={"event_type": "template_copy"},
         headers={"Authorization": f"Bearer {token}"},
     )
 
@@ -130,7 +154,7 @@ def test_web_events_reports_usage_write_failure(
 
     response = authenticated_client.post(
         "/api/v1/events",
-        json={"event_type": "template_view"},
+        json={"event_type": "template_copy"},
         headers={"X-CSRF-Token": "event-boundary-csrf"},
     )
 
@@ -175,11 +199,11 @@ def test_usage_event_metadata_keeps_only_anonymous_dimensions(app, db_session):
             'has_note': True,
             'location_scope': 'duchang_county',
             'relay_stage': 'caregiver',
-            'updated_fields': ['age'],
         }
         assert '某位老人' not in stored.meta_json
         assert '13800000000' not in stored.meta_json
         assert '某村某组' not in stored.meta_json
+        assert 'updated_fields' not in stored.meta_json
 
 
 @pytest.mark.parametrize("invalid_temp", [float("nan"), float("inf"), float("-inf")])

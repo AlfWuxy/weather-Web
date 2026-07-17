@@ -46,7 +46,7 @@ def _required_config(name: str) -> str:
 def current_privacy_version() -> str:
     return str(
         current_app.config.get("WX_MINIPROGRAM_PRIVACY_VERSION")
-        or "2026-07-17"
+        or "2026-07-18"
     ).strip()
 
 
@@ -162,7 +162,11 @@ def _create_wechat_user(openid_hash: str) -> User:
     return user
 
 
-def login_with_wechat_code(code: str, privacy_consent_version: str) -> dict:
+def login_with_wechat_code(
+    code: str,
+    privacy_consent_version: str,
+    acquisition_source: str = "direct",
+) -> dict:
     """校验隐私同意、完成 code2session，并签发可撤销会话。"""
     required_version = current_privacy_version()
     consent_version = str(privacy_consent_version or "").strip()
@@ -176,6 +180,9 @@ def login_with_wechat_code(code: str, privacy_consent_version: str) -> dict:
     openid = exchange_wechat_code(code)
     openid_digest = hash_openid(openid)
     now = utcnow()
+    normalized_acquisition = (
+        "family_share" if acquisition_source == "family_share" else "direct"
+    )
     identity = MiniProgramIdentity.query.filter_by(openid_hash=openid_digest).first()
 
     try:
@@ -186,6 +193,7 @@ def login_with_wechat_code(code: str, privacy_consent_version: str) -> dict:
                 openid_hash=openid_digest,
                 privacy_consent_version=required_version,
                 privacy_consented_at=now,
+                acquisition_source=normalized_acquisition,
                 created_at=now,
                 last_login_at=now,
             )
@@ -202,6 +210,12 @@ def login_with_wechat_code(code: str, privacy_consent_version: str) -> dict:
             identity.privacy_consent_version = required_version
             identity.privacy_consented_at = now
             identity.last_login_at = now
+            if identity.acquisition_source not in {
+                "direct",
+                "family_share",
+                "unknown",
+            }:
+                identity.acquisition_source = "unknown"
 
         # 每次登录清理本身份已失效会话，避免长期运行后表无限增长。
         MiniProgramSession.query.filter(

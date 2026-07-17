@@ -44,13 +44,17 @@ from core.db_models import (
 from core.extensions import db, limiter
 from core.security import hash_identifier
 from core.time_utils import today_local, utcnow
-from core.usage import api_token_has_scope, log_usage_event, verify_api_token
+from core.usage import (
+    MINIPROGRAM_CLIENT_PILOT_EVENT_TYPES,
+    api_token_has_scope,
+    log_usage_event,
+    verify_api_token,
+)
 from core.weather import (
     compact_assessment_weather_condition,
     get_weather_with_cache,
     is_qweather_online_weather,
 )
-from services.api_service import PILOT_EVENT_TYPES
 from services.location_resolver import resolve_location
 from services.warning_service import get_qweather_warnings
 from services.user._common import _create_pair_record
@@ -73,6 +77,7 @@ from utils.validators import sanitize_input
 bp = Blueprint("mp_api", __name__, url_prefix="/mp/api/v1")
 MP_EVENT_META_MAX_CHARS = 2048
 MAX_PAGE_SIZE = 50
+ACQUISITION_SOURCE_FAMILY_SHARE = "family_share"
 
 
 def _success(data=None, status=200):
@@ -260,6 +265,17 @@ def require_api_token(fn):
                 428,
                 data={"required_privacy_consent_version": current_privacy_version()},
             )
+        if (
+            g.auth_kind == "api_token"
+            and request.method in {"POST", "PUT", "PATCH", "DELETE"}
+            and not api_token_has_scope(g.api_token, "miniprogram:write")
+        ):
+            # 兼容 Token 的所有写请求统一收口，敏感接口还会继续校验 sensitive scope。
+            return _error(
+                "insufficient_scope",
+                "该 Token 没有写入权限，请重新生成。",
+                403,
+            )
         return fn(*args, **kwargs)
 
     return wrapper
@@ -383,6 +399,13 @@ def _parse_strict_bool(value) -> bool:
     raise ValueError("push_enabled must be a boolean")
 
 
+def _normalize_acquisition_source(payload) -> str:
+    """只接受固定家庭分享来源，所有其他输入统一归入直接访问。"""
+    if payload.get("acquisition_source") == ACQUISITION_SOURCE_FAMILY_SHARE:
+        return ACQUISITION_SOURCE_FAMILY_SHARE
+    return "direct"
+
+
 @bp.route("/bootstrap", endpoint="bootstrap")
 @limiter.limit(lambda: current_app.config.get("RATE_LIMIT_MP_PUBLIC", "120 per minute"), key_func=_mp_rate_limit_key)
 def bootstrap():
@@ -397,7 +420,8 @@ def wechat_login():
         payload = _json_payload()
         code = _strict_text(payload, "code", 128, required=True)
         consent = _strict_text(payload, "privacy_consent_version", 64, required=True)
-        result = login_with_wechat_code(code, consent)
+        acquisition_source = _normalize_acquisition_source(payload)
+        result = login_with_wechat_code(code, consent, acquisition_source)
     except ValueError as exc:
         return _error(str(exc), "登录请求格式不正确。", 400)
     except MiniProgramAuthError as exc:
@@ -405,6 +429,13 @@ def wechat_login():
         if exc.code == "privacy_consent_required":
             data = {"required_privacy_consent_version": current_privacy_version()}
         return _error(exc.code, exc.message, exc.status_code, data=data)
+    user_data = result.get("user") if isinstance(result, dict) else None
+    log_usage_event(
+        "wechat_login_success",
+        user_id=(user_data or {}).get("id"),
+        source="miniprogram",
+        meta={"from": acquisition_source},
+    )
     return _success(result)
 
 
@@ -500,6 +531,7 @@ def me_patch():
     updated_fields = []
     wx_uid = user.wxpusher_uid
     push_enabled = bool(user.push_enabled)
+    wxpusher_consent = False
 
     if "wxpusher_uid" in payload:
         wx_uid = sanitize_input(payload.get("wxpusher_uid"), max_length=80)
@@ -513,11 +545,21 @@ def me_patch():
             return jsonify({"success": False, "error": "invalid_push_enabled"}), 400
         updated_fields.append("push_enabled")
 
+    if "wxpusher_consent" in payload:
+        try:
+            wxpusher_consent = _parse_strict_bool(payload.get("wxpusher_consent"))
+        except ValueError:
+            return jsonify({"success": False, "error": "invalid_wxpusher_consent"}), 400
+
     # UID 被移除时必须关闭推送，避免保留无法投递的开启状态。
     if not wx_uid:
         push_enabled = False
         if "wxpusher_uid" in updated_fields and "push_enabled" not in updated_fields:
             updated_fields.append("push_enabled")
+
+    # 每次开启第三方推送都要求本次请求携带明确同意，不能沿用旧客户端状态。
+    if push_enabled and not wxpusher_consent:
+        return jsonify({"success": False, "error": "wxpusher_consent_required"}), 400
 
     if updated_fields:
         user.wxpusher_uid = wx_uid
@@ -1133,6 +1175,14 @@ def action_confirm(pair_id):
     except Exception:
         db.session.rollback()
         return _error("confirm_failed", "行动确认保存失败。", 503)
+    if actions_done:
+        log_usage_event(
+            "checkin_confirmed",
+            user_id=g.api_user_id,
+            pair_id=pair.id,
+            source="miniprogram",
+            meta={"actions_done_count": len(actions_done)},
+        )
     return _success({"pair_id": pair.id, "confirmed_at": status.confirmed_at.isoformat()})
 
 
@@ -1249,13 +1299,18 @@ def alerts_list():
 @limiter.limit(lambda: current_app.config.get("RATE_LIMIT_MP_EVENTS", "60 per minute"), key_func=_mp_rate_limit_key)
 @require_api_token
 def events():
-    payload = request.get_json(silent=True) or {}
+    payload = request.get_json(silent=True)
+    if payload is None:
+        payload = {}
+    if not isinstance(payload, dict):
+        return jsonify({"success": False, "error": "invalid_payload"}), 400
     event_type = sanitize_input(payload.get("event_type"), max_length=50) or ""
-    if event_type not in PILOT_EVENT_TYPES:
+    if event_type not in MINIPROGRAM_CLIENT_PILOT_EVENT_TYPES:
         return jsonify({"success": False, "error": "invalid_event_type"}), 400
-    pair_id = payload.get("pair_id")
-    member_id = payload.get("member_id")
-    meta = payload.get("meta") if isinstance(payload.get("meta"), (dict, list)) else None
+    raw_meta = payload.get("meta")
+    if raw_meta is not None and not isinstance(raw_meta, dict):
+        return jsonify({"success": False, "error": "invalid_meta"}), 400
+    meta = raw_meta
     if meta is not None:
         try:
             meta_json = json.dumps(meta, ensure_ascii=False)
@@ -1264,33 +1319,9 @@ def events():
         if len(meta_json) > MP_EVENT_META_MAX_CHARS:
             return jsonify({"success": False, "error": "meta_too_large"}), 400
 
-    resolved_pair_id = None
-    if pair_id is not None:
-        try:
-            pair_id_int = int(pair_id)
-        except Exception:
-            pair_id_int = None
-        if pair_id_int:
-            pair = _pair_for_user(pair_id_int)
-            if pair:
-                resolved_pair_id = pair.id
-
-    resolved_member_id = None
-    if member_id is not None:
-        try:
-            member_id_int = int(member_id)
-        except Exception:
-            member_id_int = None
-        if member_id_int:
-            member = FamilyMember.query.filter_by(id=member_id_int, user_id=g.api_user_id).first()
-            if member:
-                resolved_member_id = member.id
-
     event = log_usage_event(
         event_type,
         user_id=g.api_user_id,
-        pair_id=resolved_pair_id,
-        member_id=resolved_member_id,
         source="miniprogram",
         meta=meta,
     )

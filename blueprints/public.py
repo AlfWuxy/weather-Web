@@ -9,6 +9,7 @@ from flask import (
     Response,
     abort,
     current_app,
+    jsonify,
     make_response,
     redirect,
     render_template,
@@ -17,6 +18,8 @@ from flask import (
     url_for,
 )
 from flask_login import current_user, login_required
+from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
 
 logger = logging.getLogger(__name__)
 
@@ -104,6 +107,23 @@ def _is_cacheable_anonymous_home():
 def robots_txt():
     """允许搜索与 AI 爬虫抓取公开页面。"""
     return Response(ROBOTS_TXT, content_type='text/plain; charset=utf-8')
+
+
+@bp.route('/healthz', endpoint='healthz')
+@limiter.exempt
+def healthz():
+    """仅检查应用与数据库，不读取天气或其他外部服务。"""
+    try:
+        db.session.execute(text('SELECT 1')).scalar_one()
+    except SQLAlchemyError:
+        db.session.rollback()
+        logger.exception('健康检查数据库查询失败')
+        response = jsonify({'status': 'unavailable'})
+        response.status_code = 503
+    else:
+        response = jsonify({'status': 'ok'})
+    response.headers['Cache-Control'] = 'no-store'
+    return response
 
 
 @bp.route('/', endpoint='index')
@@ -356,7 +376,15 @@ def track_delivery(delivery_token):
 
     try:
         if not delivery.clicked_at:
-            delivery.clicked_at = utcnow()
+            clicked_at = utcnow()
+            delivery.clicked_at = clicked_at
+            # 不明确投递出现有效点击时，可确定消息已经到达，无需继续人工猜测。
+            if delivery.status in {'sending', 'uncertain'}:
+                delivery.status = 'sent'
+                delivery.error = None
+                delivery.sent_at = delivery.sent_at or clicked_at
+                delivery.reviewed_at = clicked_at
+                delivery.review_action = 'click_confirmed'
             db.session.commit()
             log_usage_event(
                 'push_click',

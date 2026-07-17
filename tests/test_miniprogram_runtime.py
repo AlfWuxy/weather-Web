@@ -180,15 +180,24 @@ def _configure_wechat(app):
     )
 
 
-def _wechat_login(app, client, monkeypatch, openid="openid-sensitive-value"):
+def _wechat_login(
+    app,
+    client,
+    monkeypatch,
+    openid="openid-sensitive-value",
+    acquisition_source=None,
+):
     _configure_wechat(app)
     monkeypatch.setattr(
         "services.miniprogram_auth.requests.get",
         lambda *_args, **_kwargs: _WechatResponse(openid),
     )
+    payload = {"code": "wx-login-code", "privacy_consent_version": "privacy-v1"}
+    if acquisition_source is not None:
+        payload["acquisition_source"] = acquisition_source
     return client.post(
         "/mp/api/v1/auth/wechat",
-        json={"code": "wx-login-code", "privacy_consent_version": "privacy-v1"},
+        json=payload,
     )
 
 
@@ -219,6 +228,75 @@ def test_wechat_login_hashes_openid_and_issues_expiring_signed_session(
         assert "openid-sensitive-value" not in identity.openid_hash
         assert session.token_hash != data["session_token"]
         assert verify_miniprogram_session(data["session_token"]).id == session.id
+
+
+def test_wechat_identity_keeps_first_acquisition_source(
+    app,
+    client,
+    db_session,
+    monkeypatch,
+):
+    from core.db_models import MiniProgramIdentity
+    from core.time_utils import ensure_utc_aware
+
+    first = _wechat_login(
+        app,
+        client,
+        monkeypatch,
+        openid="stable-acquisition-openid",
+        acquisition_source="family_share",
+    )
+    assert first.status_code == 200
+    identity = MiniProgramIdentity.query.one()
+    first_created_at = ensure_utc_aware(identity.created_at)
+    first_last_login = ensure_utc_aware(identity.last_login_at)
+
+    second = _wechat_login(
+        app,
+        client,
+        monkeypatch,
+        openid="stable-acquisition-openid",
+        acquisition_source="direct",
+    )
+    assert second.status_code == 200
+    db_session.expire_all()
+    identity = MiniProgramIdentity.query.one()
+
+    assert identity.acquisition_source == "family_share"
+    assert ensure_utc_aware(identity.created_at) == first_created_at
+    assert ensure_utc_aware(identity.last_login_at) >= first_last_login
+
+
+def test_wechat_identity_preserves_legacy_unknown_acquisition_source(
+    app,
+    client,
+    db_session,
+    monkeypatch,
+):
+    from core.db_models import MiniProgramIdentity
+
+    first = _wechat_login(
+        app,
+        client,
+        monkeypatch,
+        openid="legacy-unknown-acquisition-openid",
+    )
+    assert first.status_code == 200
+
+    identity = MiniProgramIdentity.query.one()
+    identity.acquisition_source = "unknown"
+    db_session.commit()
+
+    second = _wechat_login(
+        app,
+        client,
+        monkeypatch,
+        openid="legacy-unknown-acquisition-openid",
+        acquisition_source="direct",
+    )
+    assert second.status_code == 200
+    db_session.expire_all()
+    assert MiniProgramIdentity.query.one().acquisition_source == "unknown"
 
 
 def test_privacy_consent_is_required_before_code_exchange(app, client, db_session, monkeypatch):
@@ -468,6 +546,7 @@ def test_public_resources_are_aggregated_and_small_samples_suppressed(
     data = response.get_json()["data"]
     summary = data["communities"][0]["latest_action_summary"]
     assert summary["sample_suppressed"] is True
+    assert summary["total_people"] is None
     assert summary["confirm_rate"] is None
     assert data["cooling"][0]["name"] == "社区活动室"
     serialized = str(data).lower()
@@ -483,9 +562,45 @@ def test_public_gis_metadata_uses_same_origin_relative_url(app, client, db_sessi
     assert gis["available"] is True
     assert gis["geojson_url"].startswith("/static/")
     assert "://" not in gis["geojson_url"]
+    assert "?v=" in gis["geojson_url"]
     assert gis["size_bytes"] > 0
     assert gis["title"]
     assert app.config["RATE_LIMIT_MP_PUBLIC"] == "600 per minute"
+
+
+def test_public_gis_metadata_url_changes_with_file_version(app, tmp_path):
+    import json
+    import os
+
+    from services.miniprogram_service import public_gis_metadata_payload
+
+    static_root = tmp_path / "static"
+    geojson = static_root / "data" / "gis" / "duchang_heat_exposure_cells.geojson"
+    geojson.parent.mkdir(parents=True)
+    geojson.write_text(
+        json.dumps({"type": "FeatureCollection", "metadata": {"title": "版本一"}}),
+        encoding="utf-8",
+    )
+    first_ns = 1_800_000_000_000_000_000
+    second_ns = first_ns + 1_000_000_000
+    original_static_folder = app.static_folder
+    app.static_folder = str(static_root)
+    app.config["FEATURE_HEAT_EXPOSURE_GIS"] = True
+    try:
+        os.utime(geojson, ns=(first_ns, first_ns))
+        with app.test_request_context():
+            first_url = public_gis_metadata_payload()["geojson_url"]
+        os.utime(geojson, ns=(second_ns, second_ns))
+        with app.test_request_context():
+            second_url = public_gis_metadata_payload()["geojson_url"]
+    finally:
+        app.static_folder = original_static_folder
+
+    assert first_url.startswith("/static/")
+    assert "://" not in first_url
+    assert first_url != second_url
+    assert f"v={first_ns}" in first_url
+    assert f"v={second_ns}" in second_url
 
 
 def test_account_delete_rejects_cross_user_and_anonymizes_owner_data(
@@ -806,6 +921,90 @@ def test_sync_with_qweather_empty_never_instantiates_fetcher_or_uses_network(
     assert record.fetched_at == old_fetched_at.replace(tzinfo=None)
     cached = WeatherCache.query.filter_by(location="都昌县").one()
     assert cached.fetched_at == old_fetched_at.replace(tzinfo=None)
+
+
+def test_failed_current_cycle_does_not_reuse_fresh_snapshot_as_success(
+    app,
+    db_session,
+    monkeypatch,
+):
+    from services.miniprogram_service import persist_snapshot
+    from services.pipelines import sync_weather_cache as pipeline
+
+    with app.app_context():
+        existing = persist_snapshot(CURRENT, FORECAST, [], fetched_at=utcnow())
+        existing_snapshot_id = existing.snapshot_id
+
+    class FailingWeather:
+        def get_current_weather(self, *_args, **_kwargs):
+            raise RuntimeError("test current failure")
+
+    app.config.update(
+        QWEATHER_AUTH_MODE="api_key",
+        QWEATHER_KEY="test-only-key",
+        QWEATHER_API_BASE="https://qweather.invalid/v7",
+    )
+    monkeypatch.setattr(pipeline, "app", app)
+    monkeypatch.setattr(pipeline, "WeatherService", FailingWeather)
+    monkeypatch.setattr(
+        pipeline,
+        "refresh_snapshot_from_cycle",
+        lambda *_args, **_kwargs: __import__(
+            "services.miniprogram_service",
+            fromlist=["latest_snapshot_record"],
+        ).latest_snapshot_record(),
+    )
+
+    result = pipeline.sync_weather_cache(update_daily=False)
+
+    assert result["updated"] == 0
+    assert result["snapshot_id"] == existing_snapshot_id
+    assert result["snapshot_stale"] is False
+    assert result["snapshot_ready"] is False
+
+
+def test_mock_fallback_does_not_trigger_dispatch_success(
+    app,
+    db_session,
+    monkeypatch,
+):
+    from services.miniprogram_service import persist_snapshot
+    from services.pipelines import sync_weather_cache as pipeline
+
+    with app.app_context():
+        existing = persist_snapshot(CURRENT, FORECAST, [], fetched_at=utcnow())
+        existing_snapshot_id = existing.snapshot_id
+
+    class MockFallbackWeather:
+        def get_current_weather(self, *_args, **_kwargs):
+            return {
+                "temperature": 36,
+                "humidity": 60,
+                "is_mock": True,
+                "data_source": "Mock",
+            }
+
+    app.config.update(
+        QWEATHER_AUTH_MODE="api_key",
+        QWEATHER_KEY="test-only-key",
+        QWEATHER_API_BASE="https://qweather.invalid/v7",
+    )
+    monkeypatch.setattr(pipeline, "app", app)
+    monkeypatch.setattr(pipeline, "WeatherService", MockFallbackWeather)
+    monkeypatch.setattr(
+        pipeline,
+        "refresh_snapshot_from_cycle",
+        lambda *_args, **_kwargs: __import__(
+            "services.miniprogram_service",
+            fromlist=["latest_snapshot_record"],
+        ).latest_snapshot_record(),
+    )
+
+    result = pipeline.sync_weather_cache(update_daily=False)
+
+    assert result["updated"] == 0
+    assert result["snapshot_id"] == existing_snapshot_id
+    assert result["snapshot_ready"] is False
 
 
 def test_snapshot_retention_keeps_current_and_prunes_old_rows(app, db_session):

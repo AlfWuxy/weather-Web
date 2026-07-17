@@ -21,8 +21,10 @@ from core.weather import normalize_location_name  # noqa: E402
 from core.time_utils import today_local, utcnow  # noqa: E402
 from services.miniprogram_service import (  # noqa: E402
     CANONICAL_LOCATION_NAME,
+    latest_snapshot_record,
     qweather_runtime_configured,
     refresh_snapshot_from_cycle,
+    snapshot_payload,
 )
 from services.weather_service import WeatherService  # noqa: E402
 
@@ -94,6 +96,8 @@ def sync_weather_cache(locations=None, update_daily=True):
         requested_locations = list(_dedupe_locations(_resolve_locations(locations)))
         locations = [CANONICAL_LOCATION_NAME]
         weather_service = WeatherService() if qweather_runtime_configured() else None
+        previous_snapshot = latest_snapshot_record()
+        previous_snapshot_id = previous_snapshot.snapshot_id if previous_snapshot else None
         fetched_at = utcnow()
         target_date = today_local()
         updated = 0
@@ -113,7 +117,11 @@ def sync_weather_cache(locations=None, update_daily=True):
             # 这里不回写 WeatherCache，避免旧数据被洗成刚抓取。
             weather_data = {}
 
-        if weather_data:
+        weather_is_mock = bool(
+            isinstance(weather_data, dict)
+            and (weather_data.get('is_mock') or weather_data.get('is_demo'))
+        )
+        if weather_data and not weather_is_mock:
             try:
                 _upsert_cache(CANONICAL_LOCATION_NAME, weather_data, fetched_at)
                 if update_daily:
@@ -125,12 +133,24 @@ def sync_weather_cache(locations=None, update_daily=True):
             else:
                 updated = 1
         else:
-            logger.warning("No persisted weather data available for %s", CANONICAL_LOCATION_NAME)
+            logger.warning(
+                "No trustworthy persisted weather data available for %s",
+                CANONICAL_LOCATION_NAME,
+            )
 
         snapshot = refresh_snapshot_from_cycle(
-            weather_data,
+            {} if weather_is_mock else weather_data,
             weather_service=weather_service,
             fetched_at=fetched_at,
+        )
+        persisted = snapshot_payload(snapshot)
+        snapshot_ready = bool(
+            updated == 1
+            and persisted.get('snapshot_id')
+            and persisted.get('snapshot_id') != previous_snapshot_id
+            and persisted.get('available')
+            and not persisted.get('stale', True)
+            and not (persisted.get('current') or {}).get('is_mock', False)
         )
         return {
             'locations': 1,
@@ -139,21 +159,25 @@ def sync_weather_cache(locations=None, update_daily=True):
             'updated': updated,
             'update_daily': update_daily,
             'snapshot_id': snapshot.snapshot_id if snapshot else None,
+            'snapshot_ready': snapshot_ready,
+            'snapshot_stale': bool(persisted.get('stale', True)),
         }
 
 
-def main():
+def main(argv=None):
     parser = argparse.ArgumentParser(description='Sync minute-level weather cache.')
     parser.add_argument('--location', action='append', dest='locations', help='Location label override')
     parser.add_argument('--no-daily', action='store_true', help='Skip WeatherData daily upsert')
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     result = sync_weather_cache(
         locations=args.locations,
         update_daily=not args.no_daily
     )
     print(f"Cache sync: {result}")
+    # systemd 只会在新鲜快照形成后通过 OnSuccess 触发推送。
+    return 0 if result.get('snapshot_ready') else 2
 
 
 if __name__ == '__main__':
-    main()
+    raise SystemExit(main())
