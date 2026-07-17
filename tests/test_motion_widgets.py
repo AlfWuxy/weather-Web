@@ -386,9 +386,11 @@ def test_cooling_page_hides_thermometer_for_mock_weather(client, db_session, mon
 
 def test_apple_polish_uses_accessible_action_and_muted_colors(client):
     response = client.get('/static/css/apple-polish.css')
-
-    assert response.status_code == 200
-    css = response.get_data(as_text=True)
+    try:
+        assert response.status_code == 200
+        css = response.get_data(as_text=True)
+    finally:
+        response.close()
     assert '--yl-orange-action: #F68B33;' in css
     assert '--yl-orange-action-hover: #F67932;' in css
     assert '--yl-orange-ink: #A74407;' in css
