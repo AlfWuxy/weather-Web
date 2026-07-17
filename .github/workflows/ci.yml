@@ -85,5 +85,5 @@ jobs:
           -W error::DeprecationWarning
           -W ignore::DeprecationWarning:flask_login.login_manager
 
-      - name: 运行手工契约测试
-        run: python -m pytest -q -m manual
+      - name: 运行离线手工契约测试
+        run: python -m pytest -q -m "manual and not network"
