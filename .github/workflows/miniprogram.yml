@@ -50,7 +50,7 @@ jobs:
       - name: 检查公开发布配置
         shell: bash
         run: |
-          node -e "const runtime = require('./miniprogram/config.runtime.js'); if (runtime.API_BASE_URL !== '') throw new Error('公开配置不得包含生产 API 域名')"
+          node -e "const runtime = require('./miniprogram/config.runtime.js'); if (runtime.API_BASE_URL !== 'https://yilaoweather.org') throw new Error('正式分支必须固定审核通过的生产 API 域名')"
           test "$(jq -r '.appid' project.config.json)" = "touristappid"
           test "$(jq -r '.setting.urlCheck' project.config.json)" = "true"
           test "$(jq -r '.miniprogramRoot' project.config.json)" = "miniprogram/"

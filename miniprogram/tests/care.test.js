@@ -58,7 +58,7 @@ test('老人资料固定为都昌县并验证年龄', () => {
 });
 
 test('本地日期格式稳定且拒绝不存在的日期', () => {
-  assert.equal(formatLocalDate(new Date(2026, 6, 17, 23, 30)), '2026-07-17');
+  assert.equal(formatLocalDate(new Date('2026-07-17T23:30:00+08:00')), '2026-07-17');
   assert.equal(isValidDateText('2024-02-29'), true);
   assert.equal(isValidDateText('2025-02-29'), false);
   assert.equal(isValidDateText('2026-13-01'), false);
