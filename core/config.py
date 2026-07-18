@@ -169,6 +169,17 @@ def validate_production_config():
         'WX_MINIPROGRAM_SESSION_SECRET': (os.getenv('WX_MINIPROGRAM_SESSION_SECRET') or '').strip(),
     }
     wxpusher_app_token = (os.getenv('WXPUSHER_APP_TOKEN') or '').strip()
+    feature_wxpusher_env = os.getenv('FEATURE_WXPUSHER')
+    feature_wxpusher_raw = (
+        feature_wxpusher_env.strip()
+        if isinstance(feature_wxpusher_env, str)
+        else ''
+    )
+    # 兼容旧 Web-only 部署：未声明开关但已有 token 时维持原启用行为。
+    feature_wxpusher = parse_bool(
+        feature_wxpusher_raw,
+        default=bool(wxpusher_app_token),
+    )
     wxpusher_api_base = (os.getenv('WXPUSHER_API_BASE') or WXPUSHER_API_BASE_DEFAULT).strip()
     public_base_url = (os.getenv('PUBLIC_BASE_URL') or '').strip()
     insecure_public_base_allowed = (os.getenv('ALLOW_INSECURE_PUBLIC_BASE_URL') or '').strip()
@@ -177,6 +188,8 @@ def validate_production_config():
     siliconflow_api_key = (os.getenv('SILICONFLOW_API_KEY') or '').strip()
 
     if not debug_value:
+        if feature_wxpusher_raw and feature_wxpusher_raw not in {'0', '1'}:
+            raise RuntimeError("FEATURE_WXPUSHER 必须显式设置为 0 或 1。")
         if not secret_key_env:
             raise RuntimeError(
                 "SECRET_KEY 未设置！生产环境必须配置。\n"
@@ -235,11 +248,13 @@ def validate_production_config():
                 raise RuntimeError("微信正式模式的 PUBLIC_BASE_URL 必须使用固定正式 origin。")
             if insecure_public_base_allowed:
                 raise RuntimeError("微信正式模式禁止 ALLOW_INSECURE_PUBLIC_BASE_URL。")
-            if not WXPUSHER_APP_TOKEN_PATTERN.fullmatch(wxpusher_app_token):
-                raise RuntimeError("微信正式模式的 WXPUSHER_APP_TOKEN 格式或长度异常。")
+        if not feature_wxpusher and wxpusher_app_token:
+            raise RuntimeError("FEATURE_WXPUSHER=0 时必须清空 WXPUSHER_APP_TOKEN。")
 
         # WxPusher 也可能在 Web-only 运行时开启，启用后必须锁定正式跳转与官方 API。
-        if wxpusher_app_token:
+        if feature_wxpusher:
+            if not wxpusher_app_token:
+                raise RuntimeError("FEATURE_WXPUSHER=1 时必须配置 WXPUSHER_APP_TOKEN。")
             if public_base_url != PUBLIC_BASE_URL_FORMAL:
                 raise RuntimeError("启用 WxPusher 时 PUBLIC_BASE_URL 必须使用固定正式 origin。")
             if insecure_public_base_allowed:
@@ -249,7 +264,7 @@ def validate_production_config():
             if not WXPUSHER_APP_TOKEN_PATTERN.fullmatch(wxpusher_app_token):
                 raise RuntimeError("WXPUSHER_APP_TOKEN 格式或长度异常。")
 
-        if any(wx_miniprogram_values.values()) or wxpusher_app_token:
+        if any(wx_miniprogram_values.values()) or feature_wxpusher:
             if not dispatch_lock_path or not Path(dispatch_lock_path).is_absolute():
                 raise RuntimeError("微信或 WxPusher 正式运行时必须配置绝对 DISPATCH_LOCK_PATH。")
 
@@ -342,6 +357,10 @@ def configure_app(app, logger):
     siliconflow_base = _normalized_env_value('SILICONFLOW_API_BASE', SILICONFLOW_API_BASE_DEFAULT)
     feature_web_ai = parse_bool(os.getenv('FEATURE_WEB_AI'), default=False)
     wxpusher_app_token = _normalized_env_value('WXPUSHER_APP_TOKEN', '')
+    feature_wxpusher = parse_bool(
+        os.getenv('FEATURE_WXPUSHER'),
+        default=bool(wxpusher_app_token),
+    )
     wxpusher_api_base = _normalized_env_value('WXPUSHER_API_BASE', WXPUSHER_API_BASE_DEFAULT)
     push_tracking_link_ttl_days = max(
         PUSH_TRACKING_LINK_TTL_DAYS_MIN,
@@ -420,6 +439,7 @@ def configure_app(app, logger):
     app.config['SILICONFLOW_API_KEY'] = siliconflow_key
     app.config['SILICONFLOW_API_BASE'] = siliconflow_base
     app.config['FEATURE_WEB_AI'] = feature_web_ai
+    app.config['FEATURE_WXPUSHER'] = feature_wxpusher
     app.config['WXPUSHER_APP_TOKEN'] = wxpusher_app_token
     app.config['WXPUSHER_API_BASE'] = wxpusher_api_base
     app.config['PUSH_TRACKING_LINK_TTL_DAYS'] = push_tracking_link_ttl_days

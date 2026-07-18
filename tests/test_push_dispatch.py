@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 
 import sqlite3
+from io import StringIO
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -13,6 +14,57 @@ DISPATCH_CURRENT = {
     "data_source": "QWeather",
     "is_mock": False,
 }
+
+
+def test_dispatch_feature_disabled_returns_before_database_and_external_call(
+    app,
+    monkeypatch,
+):
+    from sqlalchemy import event
+
+    from core.extensions import db
+    from services.push import dispatch as dispatch_mod
+
+    def forbidden(*_args, **_kwargs):
+        pytest.fail("功能关闭时不得进入第三方外呼")
+
+    with app.app_context():
+        app.config["FEATURE_WXPUSHER"] = False
+        statements = []
+
+        def capture_statement(_conn, _cursor, statement, _parameters, _context, _many):
+            statements.append(statement)
+
+        event.listen(db.engine, "before_cursor_execute", capture_statement)
+        monkeypatch.setattr(dispatch_mod, "wxpusher_send", forbidden)
+        try:
+            result = dispatch_mod.dispatch_alerts()
+        finally:
+            event.remove(db.engine, "before_cursor_execute", capture_statement)
+
+    assert result == {
+        "status": "disabled",
+        "pairs": 0,
+        "locations": 0,
+        "alerts": 0,
+        "deliveries": 0,
+        "sent": 0,
+        "failed": 0,
+        "review_required": 0,
+        "recovered_stale_sending": 0,
+    }
+    assert statements == []
+
+
+def test_dispatch_cli_exits_zero_when_feature_disabled(app, monkeypatch, capsys):
+    from services.pipelines import dispatch_alerts as pipeline
+
+    app.config["FEATURE_WXPUSHER"] = False
+    monkeypatch.setattr(pipeline, "app", app)
+    monkeypatch.setattr(pipeline, "_acquire_dispatch_lock", lambda: StringIO())
+
+    assert pipeline.main([]) == 0
+    assert "'status': 'disabled'" in capsys.readouterr().out
 
 
 def _persist_dispatch_snapshot(*, current=None, warnings=None, fetched_at=None):

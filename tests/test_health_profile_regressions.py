@@ -379,8 +379,17 @@ def test_profile_wxpusher_controls_follow_runtime_capability(
     app,
     authenticated_client,
 ):
+    app.config['FEATURE_WXPUSHER'] = False
     app.config['WXPUSHER_APP_TOKEN'] = ''
 
+    disabled = authenticated_client.get('/profile')
+
+    disabled_html = disabled.get_data(as_text=True)
+    assert 'WxPusher 接收码' not in disabled_html
+    assert 'id="wxpusher_uid"' not in disabled_html
+    assert 'name="wxpusher_consent"' not in disabled_html
+
+    app.config['FEATURE_WXPUSHER'] = True
     unavailable = authenticated_client.get('/profile')
 
     unavailable_html = unavailable.get_data(as_text=True)
@@ -418,6 +427,45 @@ def test_profile_wxpusher_controls_follow_runtime_capability(
     assert '防重复投递状态和人工复核记录保留至账号注销' in available_html
     assert '说明版本和 UTC 同意时间在关闭推送后继续保留至账号注销' in available_html
     assert '不会发送家人姓名、健康筛查、健康日记、用药记录或家庭地址' in available_html
+
+
+def test_profile_wxpusher_disabled_rejects_collection_and_preserves_hidden_uid(
+    app,
+    authenticated_client,
+    db_session,
+):
+    app.config['FEATURE_WXPUSHER'] = False
+    app.config['WXPUSHER_APP_TOKEN'] = ''
+    current = User.query.filter_by(username='testuser').first()
+    current.age = 50
+    current.email = 'before@example.com'
+    current.wxpusher_uid = 'UID_HISTORICAL'
+    current.push_enabled = True
+    db_session.commit()
+
+    crafted = _profile_form('after@example.com')
+    crafted.update({'wxpusher_uid': 'UID_NEW', 'push_enabled': 'on'})
+    rejected = authenticated_client.post('/profile', data=crafted, follow_redirects=True)
+
+    assert rejected.status_code == 200
+    assert '首发版本暂未开放第三方推送设置，本次更改未保存' in rejected.get_data(as_text=True)
+    db_session.refresh(current)
+    assert current.age == 50
+    assert current.email == 'before@example.com'
+    assert current.wxpusher_uid == 'UID_HISTORICAL'
+    assert current.push_enabled is True
+
+    saved = authenticated_client.post(
+        '/profile',
+        data=_profile_form('after@example.com'),
+        follow_redirects=True,
+    )
+    assert saved.status_code == 200
+    assert '个人信息更新成功' in saved.get_data(as_text=True)
+    db_session.refresh(current)
+    assert current.email == 'after@example.com'
+    assert current.wxpusher_uid == 'UID_HISTORICAL'
+    assert current.push_enabled is False
 
 
 def test_web_family_member_delete_detaches_pair_and_removes_all_member_records(

@@ -394,7 +394,13 @@ def _build_pair_management_context(caregiver_mode=False):
             'relay_stage_label': relay_stage_label
         })
 
-    push_channel_ready = bool((current_app.config.get('WXPUSHER_APP_TOKEN') or '').strip())
+    wxpusher_feature_enabled = bool(
+        current_app.config.get('FEATURE_WXPUSHER', False)
+    )
+    push_channel_ready = bool(
+        wxpusher_feature_enabled
+        and (current_app.config.get('WXPUSHER_APP_TOKEN') or '').strip()
+    )
     context = {
         'created_pair': created_pair,
         'created_action_link': created_action_link,
@@ -404,6 +410,7 @@ def _build_pair_management_context(caregiver_mode=False):
         'communities': communities,
         'family_members': family_members,
         'status_date': status_date,
+        'wxpusher_feature_enabled': wxpusher_feature_enabled,
         'push_channel_ready': push_channel_ready,
     }
 

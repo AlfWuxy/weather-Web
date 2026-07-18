@@ -96,12 +96,18 @@ def test_deploy_script_pins_duchang_cache_to_free_tier_budget():
 def test_formal_deploy_propagates_full_feature_release_flags():
     content = _load_deploy_script()
 
-    assert 'WXPUSHER_APP_TOKEN|FEATURE_HEAT_EXPOSURE_GIS' in content
+    assert 'FEATURE_WXPUSHER|WXPUSHER_APP_TOKEN|FEATURE_HEAT_EXPOSURE_GIS' in content
+    assert 'LOCAL_FEATURE_WXPUSHER' in content
     assert 'LOCAL_FEATURE_HEAT_EXPOSURE_GIS' in content
+    assert 'FEATURE_WXPUSHER=0' in content
     assert 'FEATURE_HEAT_EXPOSURE_GIS=0' in content
+    assert 'remote_env_update "FEATURE_WXPUSHER" "0" "if-empty"' in content
+    assert 'remote_env_update "FEATURE_WXPUSHER" "$LOCAL_FEATURE_WXPUSHER" "always"' in content
     assert 'remote_env_update "FEATURE_HEAT_EXPOSURE_GIS" "0" "if-empty"' in content
     assert 'remote_env_update "FEATURE_HEAT_EXPOSURE_GIS" "$LOCAL_FEATURE_HEAT_EXPOSURE_GIS" "always"' in content
     assert '微信全功能正式发布必须启用 FEATURE_HEAT_EXPOSURE_GIS=1' in content
+    assert '1.0.0 微信正式发布必须固定 FEATURE_WXPUSHER=0' in content
+    assert 'FEATURE_WXPUSHER=0 时必须清空 WXPUSHER_APP_TOKEN' in content
 
 
 def test_deploy_script_delays_first_cache_refresh_then_starts_recurring_timer():
@@ -536,6 +542,7 @@ def test_explicit_credentials_rotate_and_auth_modes_clear_stale_values():
     assert 'remote_env_update "QWEATHER_JWT_PROJECT_ID" "$LOCAL_QWEATHER_JWT_PROJECT_ID" "always"' in content
     assert 'remote_env_update "QWEATHER_JWT_PRIVATE_KEY_PATH" "$LOCAL_QWEATHER_JWT_PRIVATE_KEY_PATH" "always"' in content
     assert 'remote_env_update "WXPUSHER_APP_TOKEN" "$LOCAL_WXPUSHER_APP_TOKEN" "always"' in content
+    assert 'remote_env_update "FEATURE_WXPUSHER" "$LOCAL_FEATURE_WXPUSHER" "always"' in content
     assert 'remote_env_update "QWEATHER_KEY" "" "always"' in content
     assert 'remote_env_update "QWEATHER_JWT_KID" "" "always"' in content
 

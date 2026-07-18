@@ -70,6 +70,8 @@ def app():
 
     app = create_app()
     app.config['TESTING'] = True
+    # 既有业务单元测试继续覆盖启用态；关闭态测试会在用例内显式覆盖。
+    app.config['FEATURE_WXPUSHER'] = True
 
     # 确保使用内存存储（避免速率限制干扰测试）
     app.config['RATE_LIMIT_STORAGE_URI'] = 'memory://'

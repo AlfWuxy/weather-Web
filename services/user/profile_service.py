@@ -383,11 +383,16 @@ def profile():
             return redirect(url_for('user.profile'))
 
         # 先完整校验第三方推送，再统一修改用户对象，避免配置缺失时部分保存档案。
+        wxpusher_feature_enabled = bool(
+            current_app.config.get('FEATURE_WXPUSHER', False)
+        )
+        wx_uid_field_present = 'wxpusher_uid' in request.form
         wx_uid = sanitize_input(request.form.get('wxpusher_uid'), max_length=80)
         wx_uid = (wx_uid.strip() if isinstance(wx_uid, str) else None) or None
         push_enabled = request.form.get('push_enabled') == 'on'
         wxpusher_available = bool(
-            (current_app.config.get('WXPUSHER_APP_TOKEN') or '').strip()
+            wxpusher_feature_enabled
+            and (current_app.config.get('WXPUSHER_APP_TOKEN') or '').strip()
         )
         required_wxpusher_version = current_privacy_version()
         submitted_wxpusher_version = request.form.get('wxpusher_consent_version')
@@ -399,6 +404,9 @@ def profile():
             )
             else None
         ) or None
+        if not wxpusher_feature_enabled and (wx_uid or push_enabled):
+            flash('首发版本暂未开放第三方推送设置，本次更改未保存。', 'error')
+            return redirect(url_for('user.profile'))
         if push_enabled and not wxpusher_available:
             flash('第三方推送服务暂不可用，本次更改未保存。', 'error')
             return redirect(url_for('user.profile'))
@@ -448,8 +456,14 @@ def profile():
                 else:
                     locked_user.chronic_diseases = None
 
-                locked_user.wxpusher_uid = wx_uid
-                locked_user.push_enabled = bool(push_enabled)
+                if wxpusher_feature_enabled:
+                    locked_user.wxpusher_uid = wx_uid
+                    locked_user.push_enabled = bool(push_enabled)
+                else:
+                    # 隐藏入口时保留历史接收码；显式清空仍可完成数据最小化。
+                    if wx_uid_field_present:
+                        locked_user.wxpusher_uid = None
+                    locked_user.push_enabled = False
                 if consent_required:
                     locked_user.wxpusher_consent_version = required_wxpusher_version
                     locked_user.wxpusher_consented_at = utcnow()
@@ -475,18 +489,24 @@ def profile():
     chronic_diseases_list = safe_json_loads(current_user.chronic_diseases, [])
 
     last_api_token_plain = session.pop('last_api_token_plain', None)
+    wxpusher_feature_enabled = bool(
+        current_app.config.get('FEATURE_WXPUSHER', False)
+    )
     required_wxpusher_version = current_privacy_version()
     return render_template(
         'profile.html',
         communities=communities,
         chronic_diseases_list=chronic_diseases_list,
         last_api_token_plain=last_api_token_plain,
+        wxpusher_feature_enabled=wxpusher_feature_enabled,
         wxpusher_available=bool(
-            (current_app.config.get('WXPUSHER_APP_TOKEN') or '').strip()
+            wxpusher_feature_enabled
+            and (current_app.config.get('WXPUSHER_APP_TOKEN') or '').strip()
         ),
         required_wxpusher_consent_version=required_wxpusher_version,
         wxpusher_reconsent_required=bool(
-            current_user.push_enabled
+            wxpusher_feature_enabled
+            and current_user.push_enabled
             and not _wxpusher_consent_is_current(
                 current_user,
                 required_wxpusher_version,

@@ -20,7 +20,7 @@
   <view wx:if="{{loading}}" class="state-box">正在加载设置…</view>
   <block wx:elif="{{loggedIn}}">
 
-    <view class="settings-card">
+    <view wx:if="{{wxpusherFeatureEnabled}}" class="settings-card">
       <view class="section-title">网页端兼容推送</view>
       <view class="section-copy">这是独立于微信系统通知的可选第三方通道，默认关闭。开启前请确认下方传输范围。</view>
       <view wx:if="{{!wxpusherAvailable}}" class="state-box">推送服务暂不可用，管理员尚未配置通道。你仍可关闭推送并清空已保存的 UID。</view>

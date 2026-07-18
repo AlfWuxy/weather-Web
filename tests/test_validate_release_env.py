@@ -137,6 +137,8 @@ def _write_env(tmp_path, extra=""):
         "PUBLIC_BASE_URL=https://yilaoweather.org\n"
         "ALLOW_INSECURE_PUBLIC_BASE_URL=\n"
         "WXPUSHER_API_BASE=https://wxpusher.zjiecode.com/api\n"
+        "FEATURE_WXPUSHER=0\n"
+        "WXPUSHER_APP_TOKEN=\n"
         f"DISPATCH_LOCK_PATH={tmp_path / 'case-weather-dispatch.lock'}\n"
         "ALLOW_WEATHER_UNAVAILABLE=1\n"
         "QWEATHER_AUTH_MODE=disabled\n"
@@ -188,7 +190,8 @@ def _write_wechat_release_form(tmp_path, **overrides):
         "WX_MINIPROGRAM_APPID": "wx12345678",
         "WX_MINIPROGRAM_SECRET": "1234567890abcdef",
         "WX_MINIPROGRAM_PRIVACY_VERSION": "2026-07-18",
-        "WXPUSHER_APP_TOKEN": "AT_release-test-token",
+        "FEATURE_WXPUSHER": "0",
+        "WXPUSHER_APP_TOKEN": "",
         "FEATURE_HEAT_EXPOSURE_GIS": "1",
         "QWEATHER_DEDICATED_CREDENTIAL_CONFIRMED": "1",
         "QWEATHER_CONSOLE_USAGE_MONTH": release_validator._expected_qweather_usage_month(),
@@ -211,6 +214,33 @@ def test_validator_allows_explicit_pending_wechat_for_preview(tmp_path):
     assert result["ok"] is True
     assert result["wechat_ready"] is False
     assert result["warnings"]
+
+
+def test_validator_supports_wxpusher_only_when_feature_and_token_match(tmp_path):
+    enabled = validate_release_env(
+        _write_env(
+            tmp_path,
+            "FEATURE_WXPUSHER=1\n"
+            "WXPUSHER_APP_TOKEN=AT_release-test-token\n",
+        ),
+        require_wechat=False,
+    )
+    assert enabled["ok"] is True
+    assert enabled["wxpusher_ready"] is True
+
+    disabled_with_token = validate_release_env(
+        _write_env(tmp_path, "WXPUSHER_APP_TOKEN=AT_release-test-token\n"),
+        require_wechat=False,
+    )
+    assert disabled_with_token["ok"] is False
+    assert any("必须清空" in error for error in disabled_with_token["errors"])
+
+    enabled_without_token = validate_release_env(
+        _write_env(tmp_path, "FEATURE_WXPUSHER=1\n"),
+        require_wechat=False,
+    )
+    assert enabled_without_token["ok"] is False
+    assert any("必须配置" in error for error in enabled_without_token["errors"])
 
 
 def test_release_validator_cli_parser_smoke_has_no_option_conflicts(tmp_path, capsys):
@@ -270,7 +300,6 @@ def test_validator_requires_all_wechat_values_for_formal_release(tmp_path):
         "WX_MINIPROGRAM_SECRET=1234567890abcdef\n"
         f"WX_MINIPROGRAM_OPENID_PEPPER={'p' * 32}\n"
         f"WX_MINIPROGRAM_SESSION_SECRET={'s' * 32}\n"
-        "WXPUSHER_APP_TOKEN=AT_release-test-token\n"
         "FEATURE_HEAT_EXPOSURE_GIS=1\n"
         "QWEATHER_AUTH_MODE=api_key\n"
         "QWEATHER_KEY=server-secret\n"
@@ -304,7 +333,6 @@ def test_formal_validator_requires_exact_duchang_budget_values(
         "WX_MINIPROGRAM_SECRET=1234567890abcdef\n"
         f"WX_MINIPROGRAM_OPENID_PEPPER={'p' * 32}\n"
         f"WX_MINIPROGRAM_SESSION_SECRET={'s' * 32}\n"
-        "WXPUSHER_APP_TOKEN=AT_release-test-token\n"
         "FEATURE_HEAT_EXPOSURE_GIS=1\n"
         "QWEATHER_AUTH_MODE=api_key\n"
         "QWEATHER_KEY=server-secret\n"
@@ -377,7 +405,6 @@ def test_formal_validator_requires_web_ai_to_stay_closed(
         "WX_MINIPROGRAM_SECRET=1234567890abcdef\n"
         f"WX_MINIPROGRAM_OPENID_PEPPER={'p' * 32}\n"
         f"WX_MINIPROGRAM_SESSION_SECRET={'s' * 32}\n"
-        "WXPUSHER_APP_TOKEN=AT_release-test-token\n"
         "FEATURE_HEAT_EXPOSURE_GIS=1\n"
         "QWEATHER_AUTH_MODE=api_key\n"
         "QWEATHER_KEY=server-secret\n"
@@ -392,7 +419,7 @@ def test_formal_validator_requires_web_ai_to_stay_closed(
     assert any(expected_error in error for error in result['errors'])
 
 
-def test_formal_server_validator_requires_gis_and_wxpusher(tmp_path):
+def test_formal_server_validator_requires_gis_and_wxpusher_disabled(tmp_path):
     base = (
         "WX_MINIPROGRAM_APPID=wx123456\n"
         "WX_MINIPROGRAM_SECRET=1234567890abcdef\n"
@@ -402,18 +429,17 @@ def test_formal_server_validator_requires_gis_and_wxpusher(tmp_path):
         "QWEATHER_KEY=server-secret\n"
         "QWEATHER_API_BASE=https://unit-test.qweatherapi.com/v7\n"
     )
-    missing_push = validate_release_env(
+    first_release = validate_release_env(
         _write_env(tmp_path, base + "FEATURE_HEAT_EXPOSURE_GIS=1\n"),
         require_wechat=True,
     )
-    assert missing_push["ok"] is False
-    assert any("WxPusher" in error for error in missing_push["errors"])
+    assert first_release["ok"] is True
+    assert first_release["wxpusher_ready"] is False
 
     disabled_gis = validate_release_env(
         _write_env(
             tmp_path,
             base
-            + "WXPUSHER_APP_TOKEN=AT_release-test-token\n"
             + "FEATURE_HEAT_EXPOSURE_GIS=0\n",
         ),
         require_wechat=True,
@@ -423,6 +449,19 @@ def test_formal_server_validator_requires_gis_and_wxpusher(tmp_path):
         "FEATURE_HEAT_EXPOSURE_GIS" in error
         for error in disabled_gis["errors"]
     )
+
+    enabled_push = validate_release_env(
+        _write_env(
+            tmp_path,
+            base
+            + "FEATURE_WXPUSHER=1\n"
+            + "WXPUSHER_APP_TOKEN=AT_release-test-token\n"
+            + "FEATURE_HEAT_EXPOSURE_GIS=1\n",
+        ),
+        require_wechat=True,
+    )
+    assert enabled_push["ok"] is False
+    assert any("FEATURE_WXPUSHER=0" in error for error in enabled_push["errors"])
 
 
 def test_validator_rejects_incomplete_qweather_or_insecure_public_url(tmp_path):
@@ -501,7 +540,6 @@ def test_validator_requires_persistent_budget_config_for_enabled_qweather(tmp_pa
         "WX_MINIPROGRAM_SECRET=1234567890abcdef\n"
         f"WX_MINIPROGRAM_OPENID_PEPPER={'p' * 32}\n"
         f"WX_MINIPROGRAM_SESSION_SECRET={'s' * 32}\n"
-        "WXPUSHER_APP_TOKEN=AT_release-test-token\n"
         "FEATURE_HEAT_EXPOSURE_GIS=1\n"
         "QWEATHER_AUTH_MODE=api_key\n"
         "QWEATHER_KEY=server-secret\n"
@@ -1570,7 +1608,13 @@ def test_wechat_release_form_binds_exact_name_to_every_frozen_artifact(tmp_path)
 
 def test_wechat_release_form_requires_full_feature_release_flags(tmp_path):
     cases = (
-        ("missing-wxpusher", {"WXPUSHER_APP_TOKEN": ""}, "WXPUSHER_APP_TOKEN"),
+        ("missing-wxpusher-flag", {"FEATURE_WXPUSHER": ""}, "FEATURE_WXPUSHER"),
+        ("enabled-wxpusher", {"FEATURE_WXPUSHER": "1"}, "FEATURE_WXPUSHER=0"),
+        (
+            "disabled-with-token",
+            {"WXPUSHER_APP_TOKEN": "AT_release-test-token"},
+            "清空 WXPUSHER_APP_TOKEN",
+        ),
         (
             "gis-disabled",
             {"FEATURE_HEAT_EXPOSURE_GIS": "0"},

@@ -98,7 +98,7 @@ WECHAT_FORM_REQUIRED_KEYS = (
     "WX_MINIPROGRAM_APPID",
     "WX_MINIPROGRAM_SECRET",
     "WX_MINIPROGRAM_PRIVACY_VERSION",
-    "WXPUSHER_APP_TOKEN",
+    "FEATURE_WXPUSHER",
     "FEATURE_HEAT_EXPOSURE_GIS",
     "QWEATHER_DEDICATED_CREDENTIAL_CONFIRMED",
     "QWEATHER_CONSOLE_USAGE_MONTH",
@@ -1086,6 +1086,8 @@ def validate_wechat_release_form(
         errors.append("WECHAT_CATEGORY_CONFIRMED 只能是 0 或 1。")
     if values.get("FEATURE_HEAT_EXPOSURE_GIS", "") not in {"", "0", "1"}:
         errors.append("FEATURE_HEAT_EXPOSURE_GIS 只能是 0 或 1。")
+    if values.get("FEATURE_WXPUSHER", "") not in {"", "0", "1"}:
+        errors.append("FEATURE_WXPUSHER 只能是 0 或 1。")
 
     must_be_complete = require_ready or form_ready
     category_evidence_present = any(
@@ -1216,6 +1218,10 @@ def validate_wechat_release_form(
             wxpusher_token
         ):
             errors.append("WXPUSHER_APP_TOKEN 格式或长度异常。")
+        if values.get("FEATURE_WXPUSHER") != "0":
+            errors.append("1.0.0 正式首发必须固定 FEATURE_WXPUSHER=0。")
+        if wxpusher_token:
+            errors.append("FEATURE_WXPUSHER=0 时必须清空 WXPUSHER_APP_TOKEN。")
         contact_email = values.get("WECHAT_CONTACT_EMAIL", "")
         if contact_email and not EMAIL_PATTERN.fullmatch(contact_email):
             errors.append("WECHAT_CONTACT_EMAIL 格式异常。")
@@ -1454,15 +1460,23 @@ def validate_release_env(path: Path, *, require_wechat=False):
         errors.append("FEATURE_HEAT_EXPOSURE_GIS 只能是 0 或 1。")
     elif require_wechat and feature_heat_exposure_gis != "1":
         errors.append("微信正式发布必须启用 FEATURE_HEAT_EXPOSURE_GIS=1。")
+    feature_wxpusher = values.get("FEATURE_WXPUSHER", "0")
+    if feature_wxpusher not in {"0", "1"}:
+        errors.append("FEATURE_WXPUSHER 只能是 0 或 1。")
     wxpusher_token = values.get("WXPUSHER_APP_TOKEN", "")
     wxpusher_ready = bool(
-        wxpusher_token
+        feature_wxpusher == "1"
+        and wxpusher_token
         and WXPUSHER_APP_TOKEN_PATTERN.fullmatch(wxpusher_token)
     )
-    if wxpusher_token and not wxpusher_ready:
+    if feature_wxpusher == "0" and wxpusher_token:
+        errors.append("FEATURE_WXPUSHER=0 时必须清空 WXPUSHER_APP_TOKEN。")
+    elif feature_wxpusher == "1" and not wxpusher_token:
+        errors.append("FEATURE_WXPUSHER=1 时必须配置 WXPUSHER_APP_TOKEN。")
+    elif wxpusher_token and not wxpusher_ready:
         errors.append("WXPUSHER_APP_TOKEN 格式或长度异常。")
-    if require_wechat and not wxpusher_ready:
-        errors.append("微信正式发布要求配置 WxPusher 试点推送通道。")
+    if require_wechat and feature_wxpusher != "0":
+        errors.append("1.0.0 微信正式发布必须固定 FEATURE_WXPUSHER=0。")
     return {
         "ok": not errors,
         "wechat_ready": wechat_ready,

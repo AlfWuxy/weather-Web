@@ -211,6 +211,7 @@ test('开关的文案与控件共用整行 label 触控区', () => {
   const settingsView = fs.readFileSync(path.join(miniRoot, 'pages/settings/index.wxml'), 'utf8');
   assert.match(checkinView, /<label class="optin-row" for="debriefOptinSwitch"[\s\S]*<switch id="debriefOptinSwitch"[\s\S]*<\/label>/);
   assert.match(settingsView, /<label class="switch-row" for="wxpusherSwitch"[\s\S]*<switch id="wxpusherSwitch"[\s\S]*<\/label>/);
+  assert.match(settingsView, /wx:if="\{\{wxpusherFeatureEnabled\}\}" class="settings-card"/);
 });
 
 test('所有 WXML role 同时声明小程序 aria-role', () => {

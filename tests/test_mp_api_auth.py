@@ -47,6 +47,7 @@ def test_mp_api_me_and_patch(app, client, db_session):
     body = resp.get_json()
     assert body["success"] is True
     assert body["data"]["username"] == "mp_user"
+    assert body["data"]["wxpusher_feature_enabled"] is True
     assert body["data"]["wxpusher_available"] is True
     assert body["data"]["required_wxpusher_consent_version"] == app.config[
         "WX_MINIPROGRAM_PRIVACY_VERSION"
@@ -81,6 +82,59 @@ def test_mp_api_me_and_patch(app, client, db_session):
 
     resp3 = client.get("/mp/api/v1/me", headers={"Authorization": f"Bearer {plain}"})
     assert resp3.status_code == 401
+
+
+def test_mp_api_wxpusher_disabled_masks_uid_and_rejects_collection(
+    app,
+    client,
+    db_session,
+):
+    from core.db_models import User
+    from core.usage import create_api_token
+
+    app.config["FEATURE_WXPUSHER"] = False
+    app.config["WXPUSHER_APP_TOKEN"] = ""
+    with app.app_context():
+        user = User(
+            username="mp_wxpusher_disabled",
+            role="user",
+            wxpusher_uid="UID_HISTORICAL",
+            push_enabled=True,
+        )
+        user.set_password("pw123456")
+        db_session.add(user)
+        db_session.commit()
+        user_id = user.id
+        plain = create_api_token(user_id, name="disabled-feature")
+
+    headers = {"Authorization": f"Bearer {plain}"}
+    response = client.get("/mp/api/v1/me", headers=headers)
+    assert response.status_code == 200
+    data = response.get_json()["data"]
+    assert data["wxpusher_feature_enabled"] is False
+    assert data["wxpusher_available"] is False
+    assert data["wxpusher_uid"] is None
+    assert data["push_enabled"] is False
+
+    for payload in (
+        {},
+        {"wxpusher_uid": ""},
+        {"wxpusher_uid": "UID_NEW"},
+        {"push_enabled": False},
+        {"push_enabled": True},
+        {"wxpusher_uid": "UID_NEW", "push_enabled": True},
+        {"wxpusher_consent": False},
+        {"wxpusher_consent": True},
+        {"wxpusher_consent_version": "privacy-v3"},
+    ):
+        rejected = client.patch("/mp/api/v1/me", headers=headers, json=payload)
+        assert rejected.status_code == 403
+        assert rejected.get_json()["error"] == "wxpusher_disabled"
+
+    with app.app_context():
+        unchanged = db_session.get(User, user_id)
+        assert unchanged.wxpusher_uid == "UID_HISTORICAL"
+        assert unchanged.push_enabled is True
 
 
 def test_api_token_get_persists_last_used_in_tail_transaction(app, client, db_session):

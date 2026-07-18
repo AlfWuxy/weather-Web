@@ -9,6 +9,7 @@ Page({
     wxpusherUid: '',
     pushEnabled: false,
     persistedPushEnabled: false,
+    wxpusherFeatureEnabled: false,
     wxpusherAvailable: false,
     wxpusherConsent: false,
     requiredWxpusherConsentVersion: '',
@@ -22,6 +23,7 @@ Page({
       wxpusherUid: '',
       pushEnabled: false,
       persistedPushEnabled: false,
+      wxpusherFeatureEnabled: false,
       wxpusherAvailable: false,
       wxpusherConsent: false,
       requiredWxpusherConsentVersion: '',
@@ -55,17 +57,19 @@ Page({
       const me = await authApi({ method: 'GET', path: '/mp/api/v1/me' });
       if (loadId !== this._settingsLoadId || getToken() !== sessionToken) return;
       if (!me || typeof me !== 'object') throw new Error('invalid_settings_response');
+      const featureEnabled = me.wxpusher_feature_enabled === true;
       const requiredVersion = String(me.required_wxpusher_consent_version || '').trim();
-      if (!requiredVersion) throw new Error('missing_wxpusher_consent_version');
+      if (featureEnabled && !requiredVersion) throw new Error('missing_wxpusher_consent_version');
       this._settingsVerifiedToken = sessionToken;
       this.setData({
-        wxpusherUid: me.wxpusher_uid || '',
-        pushEnabled: !!me.push_enabled,
-        persistedPushEnabled: !!me.push_enabled,
-        wxpusherAvailable: me.wxpusher_available === true,
+        wxpusherUid: featureEnabled ? (me.wxpusher_uid || '') : '',
+        pushEnabled: featureEnabled && !!me.push_enabled,
+        persistedPushEnabled: featureEnabled && !!me.push_enabled,
+        wxpusherFeatureEnabled: featureEnabled,
+        wxpusherAvailable: featureEnabled && me.wxpusher_available === true,
         wxpusherConsent: false,
         requiredWxpusherConsentVersion: requiredVersion,
-        wxpusherReconsentRequired: me.wxpusher_reconsent_required === true,
+        wxpusherReconsentRequired: featureEnabled && me.wxpusher_reconsent_required === true,
         settingsVerified: true,
       });
     } catch (error) {
@@ -79,8 +83,12 @@ Page({
     }
   },
 
-  onUid(event) { this.setData({ wxpusherUid: String(event.detail.value || '').trim() }); },
+  onUid(event) {
+    if (!this.data.wxpusherFeatureEnabled) return;
+    this.setData({ wxpusherUid: String(event.detail.value || '').trim() });
+  },
   onToggle(event) {
+    if (!this.data.wxpusherFeatureEnabled) return;
     const pushEnabled = !!event.detail.value;
     if (pushEnabled && !this.data.wxpusherAvailable) {
       this.setData({ pushEnabled: false, wxpusherConsent: false });
@@ -96,6 +104,10 @@ Page({
 
   async saveSettings() {
     if (this.data.busy) return;
+    if (!this.data.wxpusherFeatureEnabled) {
+      wx.showToast({ title: '首发版本暂未开放第三方推送', icon: 'none' });
+      return;
+    }
     const sessionToken = getToken();
     if (
       !sessionToken

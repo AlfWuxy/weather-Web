@@ -104,9 +104,17 @@ def _error(error, message, status=400, data=None):
     return jsonify(payload), status
 
 
+def _wxpusher_feature_enabled():
+    """首发关闭时统一隐藏入口，并阻止客户端保存第三方标识。"""
+    return bool(current_app.config.get("FEATURE_WXPUSHER", False))
+
+
 def _wxpusher_available():
     """只暴露推送通道是否可用，不向客户端返回任何凭证内容。"""
-    return bool((current_app.config.get("WXPUSHER_APP_TOKEN") or "").strip())
+    return bool(
+        _wxpusher_feature_enabled()
+        and (current_app.config.get("WXPUSHER_APP_TOKEN") or "").strip()
+    )
 
 
 def _wxpusher_consent_is_current(user, required_version=None):
@@ -644,16 +652,19 @@ def me():
     user = getattr(g, "api_user", None)
     if not user:
         return jsonify({"success": False, "error": "user_not_found"}), 404
+    wxpusher_feature_enabled = _wxpusher_feature_enabled()
     required_wxpusher_version = current_privacy_version()
     data = {
         "id": user.id,
         "display_name": "微信用户" if getattr(g, "auth_kind", None) == "miniprogram_session" else user.username,
-        "wxpusher_uid": user.wxpusher_uid,
-        "push_enabled": bool(user.push_enabled),
+        "wxpusher_uid": user.wxpusher_uid if wxpusher_feature_enabled else None,
+        "push_enabled": bool(user.push_enabled) if wxpusher_feature_enabled else False,
+        "wxpusher_feature_enabled": wxpusher_feature_enabled,
         "wxpusher_available": _wxpusher_available(),
         "required_wxpusher_consent_version": required_wxpusher_version,
         "wxpusher_reconsent_required": bool(
-            user.push_enabled
+            wxpusher_feature_enabled
+            and user.push_enabled
             and not _wxpusher_consent_is_current(user, required_wxpusher_version)
         ),
     }
@@ -673,6 +684,12 @@ def me_patch():
         payload = {}
     if not isinstance(payload, dict):
         return jsonify({"success": False, "error": "invalid_payload"}), 400
+    if not _wxpusher_feature_enabled():
+        return _error(
+            "wxpusher_disabled",
+            "首发版本暂未开放第三方推送设置。",
+            403,
+        )
 
     updated_fields = []
     requested_wx_uid = None

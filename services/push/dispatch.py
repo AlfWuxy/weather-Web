@@ -742,6 +742,20 @@ def dispatch_alerts(now=None, dedupe_hours: int = 6) -> Dict[str, Any]:
     if not has_app_context():
         raise RuntimeError("dispatch_alerts must run inside Flask app context")
 
+    # 功能关闭时必须在任何数据库查询、状态回收和第三方外呼之前返回。
+    if not bool(current_app.config.get("FEATURE_WXPUSHER", False)):
+        return {
+            "status": "disabled",
+            "pairs": 0,
+            "locations": 0,
+            "alerts": 0,
+            "deliveries": 0,
+            "sent": 0,
+            "failed": 0,
+            "review_required": 0,
+            "recovered_stale_sending": 0,
+        }
+
     fixed_reference_time = now is not None
     reference_time = ensure_utc_aware(now or utcnow())
     recovered_stale_sending = _recover_stale_sending(reference_time)

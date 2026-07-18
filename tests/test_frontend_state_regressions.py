@@ -57,6 +57,29 @@ def test_pair_copy_and_countdown_are_failure_safe():
     assert copy_handler.index("btn.textContent = '已复制';") < copy_handler.index("void logEvent('template_copy'")
 
 
+def test_pair_page_hides_third_party_push_when_feature_is_disabled(
+    app,
+    authenticated_client,
+):
+    app.config["FEATURE_WXPUSHER"] = False
+    app.config["WXPUSHER_APP_TOKEN"] = ""
+
+    disabled = authenticated_client.get("/pairs")
+    disabled_html = disabled.get_data(as_text=True)
+    assert disabled.status_code == 200
+    assert "填写 WxPusher UID 并开启推送" not in disabled_html
+    assert "自动推送暂不可用" not in disabled_html
+
+    app.config["FEATURE_WXPUSHER"] = True
+    app.config["WXPUSHER_APP_TOKEN"] = "AT_test-wxpusher-token"
+
+    enabled = authenticated_client.get("/pairs")
+    enabled_html = enabled.get_data(as_text=True)
+    assert enabled.status_code == 200
+    assert "填写 WxPusher UID 并开启推送" in enabled_html
+    assert "自动推送暂不可用" not in enabled_html
+
+
 def test_community_request_race_and_failure_cleanup_are_guarded():
     javascript = _inline_javascript(COMMUNITY_TEMPLATE)
     load_function = javascript[javascript.index("function loadRiskMap()"):

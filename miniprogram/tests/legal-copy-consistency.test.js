@@ -17,17 +17,10 @@ const FILES = {
   manifest: 'docs/miniprogram/REVIEW_SCREENSHOT_MANIFEST_TEMPLATE.md',
   privacyPage: 'miniprogram/pages/privacy/index.wxml',
   agreementPage: 'miniprogram/pages/agreement/index.wxml',
-  settingsPage: 'miniprogram/pages/settings/index.wxml',
   actionCheckinPage: 'miniprogram/pages/action-checkin/index.wxml',
   webActionCheckinPage: 'templates/action_checkin.html',
   careLogic: 'miniprogram/pages/elders/care-logic.js',
   mpApi: 'blueprints/mp_api.py',
-  publicRoutes: 'blueprints/public.py',
-  envExample: '.env.example',
-  staticConfig: 'config.py',
-  runtimeConfig: 'core/config.py',
-  usageCore: 'core/usage.py',
-  usageCleanup: 'services/pipelines/cleanup_usage_events.py',
   releaseValidator: 'scripts/validate_release_env.py',
 };
 
@@ -165,67 +158,42 @@ test('求助入口明确只记录并要求直接联系照护人', () => {
   }
 });
 
-test('隐私与协议统一 30 分钟新鲜度和 WxPusher 单独同意字段', () => {
+test('隐私与协议统一 30 分钟新鲜度和首发第三方消息边界', () => {
   for (const file of [FILES.privacyDoc, FILES.agreementDoc, FILES.privacyPage, FILES.agreementPage]) {
     const text = read(file);
     assert.match(text, /30 分钟.*新鲜度/s, `${file} 缺少 30 分钟新鲜度`);
     assert.match(text, /30 分钟.*(不表示|不是)个人数据保存期限/s, `${file} 混淆天气新鲜度和个人数据保存期限`);
-    assert.match(text, /WxPusher/);
-    assert.match(text, /单独勾选/);
-    assert.match(text, /WxPusher UID/);
-    assert.match(text, /都昌县级预警标题与正文/);
-    assert.match(text, /7\s*天内有效的(?:随机持有者)?(?:点击)?链接/);
+    assert.match(text, /当前版本不提供第三方消息推送/);
+    assert.match(text, /不收集第三方推送接收标识/);
   }
 });
 
-test('WxPusher 文案与配置锁定七天点击期限和健康筛查排除', () => {
-  const disclosureFiles = [
+test('首发材料排除第三方消息功能、共享数据和旧推送截图', () => {
+  const publicFiles = [
     FILES.privacyDoc,
     FILES.agreementDoc,
-    FILES.handoff,
-    FILES.manifest,
+    FILES.listing,
     FILES.privacyPage,
     FILES.agreementPage,
-    FILES.settingsPage,
   ];
-  for (const file of disclosureFiles) {
+  for (const file of publicFiles) {
     const text = read(file);
-    assert.match(text, /7\s*天(?:内有效的)?[^。\n]{0,12}链接/, `${file} 缺少七天链接期限`);
-    assert.doesNotMatch(text, /一次性点击链接/, `${file} 仍宣称链接一次性`);
+    assert.match(text, /当前版本不提供第三方消息推送/, `${file} 缺少首发关闭说明`);
+    assert.match(text, /不收集第三方推送接收标识/, `${file} 缺少接收标识排除说明`);
+    assert.doesNotMatch(text, /WxPusher|WXPUSHER|第三方传输同意/, `${file} 仍将第三方推送写成可用功能`);
   }
 
-  const settings = read(FILES.settingsPage);
-  assert.match(settings, /不会发送家人姓名、健康筛查、健康日记、用药记录或家庭地址/);
-  assert.match(settings, /打开或预览链接不会记为送达确认/);
-  assert.match(settings, /必要的访问安全日志/);
-  assert.match(settings, /页面无法核验实际点击者身份/);
-  assert.match(settings, /持有链接的人主动点击“我已看到这条提醒”后.*首次记录一次送达确认/);
-  assert.match(settings, /确认时间和自动确认标记满 30 天后由每日清理任务清空/);
-  assert.match(settings, /防重复投递状态和人工复核记录保留至账号注销/);
-  assert.match(settings, /说明版本和 UTC 同意时间在关闭推送后继续保留至账号注销/);
-  assert.match(settings, /当前说明版本/);
-
-  for (const file of [FILES.privacyDoc, FILES.privacyPage]) {
+  for (const file of [FILES.handoff, 'docs/miniprogram/RELEASE_CHECKLIST.md']) {
     const text = read(file);
-    assert.match(text, /确认时间和.*自动确认标记.*满 30 天后.*清空/s, `${file} 缺少主动确认记录清理口径`);
-    assert.match(text, /防重复投递状态和人工复核记录.*账号注销/s, `${file} 缺少投递记录生命周期`);
-    assert.match(text, /同意.*版本.*UTC.*时间.*账号注销/s, `${file} 缺少同意回执生命周期`);
-    assert.match(text, /消息.*状态.*7 天.*删除.*详情.*无法删除.*已经推送/s, `${file} 缺少服务商保存与删除边界`);
-    assert.match(text, /隐私政策或数据处理条款.*缺少.*通道.*关闭/s, `${file} 缺少服务商政策 URL 门禁`);
+    assert.match(text, /当前版本不提供第三方消息推送/, `${file} 缺少首发关闭门禁`);
+    assert.match(text, /不收集第三方推送接收标识/, `${file} 缺少平台数据排除门禁`);
+    assert.match(text, /WXPUSHER_APP_TOKEN.*为空/s, `${file} 缺少服务端空凭据门禁`);
   }
 
-  assert.match(read(FILES.usageCore), /ALERT_DELIVERY_CLICK_RETENTION_DAYS\s*=\s*30/);
-  assert.match(read(FILES.usageCleanup), /clear_expired_alert_delivery_clicks/);
-
-  const envExample = read(FILES.envExample);
-  const staticConfig = read(FILES.staticConfig);
-  const runtimeConfig = read(FILES.runtimeConfig);
-  const publicRoutes = read(FILES.publicRoutes);
-  assert.match(envExample, /^PUSH_TRACKING_LINK_TTL_DAYS=7$/m);
-  assert.match(staticConfig, /PUSH_TRACKING_LINK_TTL_DAYS_DEFAULT\s*=\s*7/);
-  assert.match(staticConfig, /PUSH_TRACKING_LINK_TTL_DAYS_MAX\s*=\s*7/);
-  assert.match(runtimeConfig, /app\.config\['PUSH_TRACKING_LINK_TTL_DAYS'\]/);
-  assert.match(publicRoutes, /PUSH_TRACKING_LINK_TTL_DAYS/);
+  const manifest = read(FILES.manifest);
+  assert.match(manifest, /\| P02 \| `02_stale_snapshot_state\.png`/);
+  assert.doesNotMatch(manifest, /wxpusher|WxPusher|02_wxpusher|单独同意/);
+  assert.match(manifest, /截图清单不要求第三方推送同意、接收标识或投递证据/);
 });
 
 test('上架文案使用高温行动并完整披露候选包功能', () => {
@@ -246,24 +214,38 @@ test('上架文案使用高温行动并完整披露候选包功能', () => {
     '家人行动确认',
     '求助',
     '复盘',
-    'WxPusher',
   ]) {
     assert.match(listing, new RegExp(feature), `类目材料缺少 ${feature}`);
   }
   assert.match(listing, /禁止通过缩窄描述、隐藏功能/);
-  assert.match(listing, /个人主体后台.*无法核验.*保持通道关闭.*停止全功能包提交/s);
+  assert.match(listing, /当前版本不提供第三方消息推送.*不得把第三方消息推送.*填写为首发功能/s);
 });
 
-test('发布材料精确锁定平台数据声明与 WxPusher 回执门禁', () => {
+test('发布材料精确锁定平台数据声明与第三方推送排除项', () => {
   const handoff = read(FILES.handoff);
-  for (const field of ['wx.login', 'OpenID 哈希', '家人档案与健康字段', 'WxPusher UID', '固定枚举产品事件', '必要安全限流']) {
+  for (const field of ['wx.login', 'OpenID 哈希', '家人档案与健康字段', '固定枚举产品事件', '必要安全限流']) {
     assert.match(handoff, new RegExp(field.replace('.', '\\.')), `交接缺少平台声明 ${field}`);
   }
-  for (const excluded of ['个人定位', '昵称头像', '手机号', '订阅消息']) {
+  for (const excluded of ['第三方推送接收标识', '个人定位', '昵称头像', '手机号', '订阅消息']) {
     assert.match(handoff, new RegExp(excluded), `交接缺少未调用声明 ${excluded}`);
   }
-  assert.match(handoff, /缺失、过期或无时间回执.*fail closed/s);
-  assert.match(handoff, /服务商当前有效的隐私政策或数据处理条款 URL/);
+  assert.match(handoff, /不向第三方消息服务发送预警或用户数据/);
+  assert.match(handoff, /平台隐私保护指引和审核材料均不声明对应第三方共享项/);
+});
+
+test('五份发布材料继续保持候选态且未提前冻结日期', () => {
+  for (const file of [
+    FILES.privacyDoc,
+    FILES.agreementDoc,
+    FILES.listing,
+    FILES.privacyPage,
+    FILES.agreementPage,
+  ]) {
+    const text = read(file);
+    assert.match(text, /候选/, `${file} 应继续标记为候选材料`);
+    assert.doesNotMatch(text, /<!-- WECHAT_RELEASE_STATUS: final -->/);
+    assert.doesNotMatch(text, /<!-- WECHAT_EFFECTIVE_DATE:/);
+  }
 });
 
 test('法律与上架文件具备正式冻结说明且门禁拒绝候选占位', () => {
@@ -311,7 +293,6 @@ test('审核截图清单登记设备证据并覆盖五项关键审核状态', ()
   }
   for (const evidence of [
     '隐私同意',
-    'WxPusher 单独同意',
     '旧数据状态',
     '数据来源',
     '医疗边界',

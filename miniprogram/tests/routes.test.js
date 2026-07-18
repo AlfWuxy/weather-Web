@@ -128,6 +128,7 @@ test('登录页提供返回公共首页的明确入口', () => {
 test('WxPusher 开启前展示完整第三方传输范围', () => {
   const settingsView = fs.readFileSync(path.join(miniRoot, 'pages/settings/index.wxml'), 'utf8');
   const settingsScript = fs.readFileSync(path.join(miniRoot, 'pages/settings/index.js'), 'utf8');
+  assert.match(settingsView, /wx:if="\{\{wxpusherFeatureEnabled\}\}" class="settings-card"/);
   assert.match(settingsView, /发送 UID、都昌县级预警标题与正文及 7\s*天内有效的点击链接/);
   assert.match(settingsView, /不会发送家人姓名、健康筛查、健康日记、用药记录或家庭地址/);
   assert.match(settingsView, /打开或预览链接不会记为送达确认/);
@@ -140,6 +141,7 @@ test('WxPusher 开启前展示完整第三方传输范围', () => {
   assert.match(settingsScript, /wxpusher_consent/);
   assert.match(settingsScript, /required_wxpusher_consent_version/);
   assert.match(settingsScript, /wxpusher_consent_version:\s*this\.data\.requiredWxpusherConsentVersion/);
+  assert.match(settingsScript, /me\.wxpusher_feature_enabled === true/);
   assert.doesNotMatch(settingsView, /微信通知权限/);
   assert.doesNotMatch(settingsScript, /wx\.openSetting|openSystemSettings/);
 });

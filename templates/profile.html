@@ -105,8 +105,8 @@
                             </div>
                         </div>
 
+                        {% if wxpusher_feature_enabled %}
                         <hr class="my-4">
-
                         <h6 class="mb-3">消息提醒（子女端）</h6>
                         {% if not wxpusher_available %}
                         <div class="alert alert-warning" role="status">
@@ -136,6 +136,7 @@
                                 我已阅读以上范围，并同意本次开启第三方推送
                             </label>
                         </div>
+                        {% endif %}
                         {% endif %}
 
                         <div class="d-grid gap-2 mt-4">
