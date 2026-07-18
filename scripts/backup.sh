@@ -89,6 +89,8 @@ load_database_uri() {
 parse_sqlite_path() {
     local uri
     local path=""
+    local parent_dir
+    local file_name
     uri="$(trim_whitespace "${1:-}")"
 
     case "$uri" in
@@ -111,6 +113,14 @@ parse_sqlite_path() {
         else
             path="$PROJECT_DIR/instance/$path"
         fi
+    fi
+
+    # 发布目录的 instance/storage 可能是持久化软链接，统一输出真实父目录便于审计与校验。
+    parent_dir="$(dirname "$path")"
+    file_name="$(basename "$path")"
+    if [ -d "$parent_dir" ]; then
+        parent_dir="$(cd "$parent_dir" && pwd -P)"
+        path="${parent_dir%/}/$file_name"
     fi
     printf '%s\n' "$path"
 }

@@ -61,6 +61,29 @@ def test_backup_script_parses_relative_sqlite_uri_to_instance_path():
     assert result.stdout.strip() == expected
 
 
+def test_backup_script_resolves_release_instance_symlink(tmp_path):
+    script_path = ROOT_DIR / "scripts" / "backup.sh"
+    persistent_instance = tmp_path / "persistent" / "instance"
+    persistent_instance.mkdir(parents=True)
+    release_app = tmp_path / "releases" / "candidate" / "app"
+    release_app.mkdir(parents=True)
+    (release_app / "instance").symlink_to(persistent_instance, target_is_directory=True)
+
+    command = (
+        f"source '{script_path}'; "
+        f"PROJECT_DIR='{release_app}'; "
+        "parse_sqlite_path 'sqlite:///health_weather.db'"
+    )
+    result = subprocess.run(
+        ["bash", "-c", command],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.stdout.strip() == str(persistent_instance / "health_weather.db")
+
+
 def _backup_env(**overrides):
     env = os.environ.copy()
     env.pop("DATABASE_URI", None)
