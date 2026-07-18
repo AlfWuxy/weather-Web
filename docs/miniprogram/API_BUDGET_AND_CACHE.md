@@ -18,9 +18,9 @@
         ↓
 部署期网络闸门 + 预算预占与 fail-closed 检查
         ↓
-Redis / 数据库持久化 MiniProgramSnapshot
+Redis / 数据库持久化当前天气、七日预报、预警、小时降水与 MiniProgramSnapshot
         ↓
-GET /mp/api/v1/bootstrap 只读快照
+小程序 bootstrap 与普通 Web 天气接口只读缓存
         ↓
 小程序本地 30 分钟缓存 + 并发去重
         ↓
@@ -31,7 +31,7 @@ GET /mp/api/v1/bootstrap 只读快照
 
 1. `case-weather-cache-bootstrap.timer` 在部署或开机后完整等待 30 分钟，再拉起首次同步；首次尝试结束后才启动 `case-weather-cache.timer`，此后每 30 分钟触发一次。
 2. 默认预热列表只能包含都昌县。
-3. 普通 HTTP 请求不能触发上游 QWeather 刷新。
+3. 普通 HTTP 请求不能触发上游 QWeather 刷新；即使调用方误传联网参数，请求上下文也必须强制只读，预算预占必须零计数拒绝。
 4. 每次上游请求前必须先通过 `QWEATHER_NETWORK_NOT_BEFORE_EPOCH` 网络闸门，再通过月度预算预占；闸门阻断不得增加 Redis 或本地预算计数。
 5. Redis 已配置且不可用时，`QWEATHER_BUDGET_FAIL_CLOSED=1` 会阻断请求。
 6. 快照保留抓取时间、过期时间、来源、缺失字段和 stale 状态。
@@ -40,6 +40,11 @@ GET /mp/api/v1/bootstrap 只读快照
 9. 官方预警必须区分“成功返回空列表”和“配置、额度、认证、网络或解析失败”。
 10. 社区风险预计算只能读取现有真实天气缓存，缓存缺失或仅有 mock 数据时跳过，禁止自行访问上游。
 11. 不可变 release 上传必须排除所有 `.env*` 和 `project.private.config.json`。
+12. 小程序快照与 Web 七日预报共享同一个 QWeather 周期；Web 小时降水时间轴由该周期额外写入 24 小时 Open-Meteo 缓存，页面访问不得临时抓取。
+13. 激活事务只有在服务、timer、`OnSuccess`、30 分钟剩余窗口、`current` 链接、暂存环境清理和公网健康检查全部通过后才能写入 `COMMITTED`。
+14. Web 实况与小时降水超过 30 分钟后必须返回“更新中”，禁止继续生成健康风险或展示已过期小时线；小程序可保留旧快照，但必须明确标记 stale 和原始更新时间。
+15. 七日预报缓存必须从都昌县本地今天开始连续 7 天、关键数值完整、逐项来源为 QWeather，且数据库记录未标记为 mock；任何条件不满足时整组拒绝写入和复用。
+16. 小时降水缓存只接受 Open-Meteo 的非 mock 结果；1 至 24 条时间必须有效、递增且不重复，概率、降水量、温度和风险等级必须在可信范围内。
 
 ## 客户端规则
 
@@ -59,9 +64,11 @@ GET /mp/api/v1/bootstrap 只读快照
 - 10 个老人、20 个页面并发读取只出现 1 个 bootstrap 请求。
 - 所有社区名称都映射到同一都昌快照。
 - 测试进程拦截 QWeather host，出现访问即失败。
+- 当前天气、七日预报和小时降水 HTTP 路由在空缓存或过期缓存下均不会调用 fetcher；过期实况和小时线不会继续参与展示或风险计算。
 - 月预算为 0 时，系统可启动、页面可展示缓存状态、QWeather 请求数为 0。
 - 部署完成后 bootstrap timer 为 active，recurring timer 为 inactive 且 disabled；30 分钟窗口内预算计数保持不变。
 - 网络闸门值无效时 fail-closed，过期后无需清变量或重启即可自动放行。
+- 原子激活完整状态复核失败时保留新数据库和 release，写入 `POST_COMMIT_ATTENTION.txt`，且下一次激活被阻断。
 
 ## 单次真实联调
 

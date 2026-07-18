@@ -65,6 +65,9 @@
 - [ ] 月度预算上限和 fail-closed 已启用。
 - [ ] 小程序客户端缓存为 30 分钟，并发请求已合并。
 - [ ] 普通 bootstrap 请求不会调用 QWeather。
+- [ ] Web 当前天气、七日预报和小时降水接口只读周期缓存；空缓存时返回更新中，且 fetcher 调用数为 0。
+- [ ] 小时降水缓存由 30 分钟周期写入，页面只截取所需小时数；超过 30 分钟后清空小时线并显示“正在更新”。
+- [ ] Web 实况超过 30 分钟后停止生成健康风险，返回“天气更新中”，且不会按请求刷新上游。
 - [ ] 旧数据库缓存不会被改写抓取时间；过期数据保持 stale。
 - [ ] 预警接口可区分“确认无预警”和“预警来源不可用”。
 - [ ] 多轮自动化、模拟器和视觉测试使用 fixture，真实 QWeather 调用数为 0。
@@ -95,6 +98,7 @@
 - [ ] 上传包版本号、提交说明、截图和回滚 commit 已记录。
 - [ ] 后端使用不可变 release 目录完成预检，生产目录未被 rsync 原地覆盖。
 - [ ] 发布后 `case-weather-cache-bootstrap.timer` 为 active，`case-weather-cache.timer` 在首轮等待期间为 inactive 且 disabled。
+- [ ] 激活事务在写入 `COMMITTED` 前已核对服务、timer、两条 `OnSuccess`、bootstrap 剩余窗口、`current` 链接、暂存环境清理与公网健康检查。
 - [ ] 激活事务已验证迁移失败和候选端口健康检查失败会恢复数据库、旧 release 与原 systemd 状态。
 - [ ] 公网服务启动后出现故障会保留向前迁移的数据库与新 release，并写入 `POST_COMMIT_ATTENTION.txt`，不会覆盖可能已经确认的用户写入。
 - [ ] `/healthz` 只执行应用与数据库检查，不会触发天气、地图、推送或其他外部 API。
