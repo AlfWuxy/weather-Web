@@ -34,13 +34,14 @@ def test_deploy_script_checks_units_with_is_active():
     activate = _load_activate_script()
 
     assert 'case-weather.service' in activate
+    assert 'case-weather-backup.timer' in activate
     assert 'case-weather-cache-bootstrap.timer' in activate
     assert "常规天气缓存 timer 在首轮等待期间不应提前运行" in activate
     assert "常规天气缓存 timer 状态应为 disabled" in activate
     assert "bootstrap timer 状态应为 enabled" in activate
     assert 'check_remote_unit_active "case-weather-dispatch.timer"' not in content
     assert 'case-weather-risk-precompute.timer' in activate
-    assert "旧 dispatch.timer 仍存在" in activate
+    assert "旧 systemd 单元仍存在" in activate
     assert '"$SYSTEMCTL_BIN" is-active --quiet "$unit"' in activate
 
 
@@ -153,7 +154,7 @@ def test_deploy_script_uses_isolated_release_and_server_transaction():
     assert 'apt-get' not in content
     assert 'enable --now redis-server' not in content
     assert 'systemctl is-active --quiet redis-server' in content
-    assert 'systemctl busctl' in content
+    assert 'systemctl systemd-run systemd-analyze busctl' in content
     assert 'DB_BACKUP="$TRANSACTION_DIR/database-before.db"' in activate
     assert 'ENV_BACKUP="$TRANSACTION_DIR/environment-before.env"' in activate
     assert 'STAGED_ENV_FILE="$NEW_RELEASE/staged.env"' in content
@@ -191,9 +192,13 @@ def test_formal_freeze_preflight_runs_before_remote_change_or_rsync():
 def test_deploy_keeps_control_directories_root_private_and_asserts_state():
     content = _load_deploy_script()
 
-    assert 'chown root:root $PROJECT_DIR/backups $PROJECT_DIR/deployments' in content
-    assert 'chmod 0700 $PROJECT_DIR/backups $PROJECT_DIR/deployments' in content
+    assert 'chown root:root $PROJECT_DIR/backups $PROJECT_DIR/backups/daily $PROJECT_DIR/backups/validation $PROJECT_DIR/deployments' in content
+    assert '$PROJECT_DIR/backups/daily' in content
+    assert '$PROJECT_DIR/backups/validation' in content
+    assert 'chmod 0700 $PROJECT_DIR/backups $PROJECT_DIR/backups/daily $PROJECT_DIR/backups/validation $PROJECT_DIR/deployments' in content
     assert "stat -c '%u:%g:%a' $PROJECT_DIR/backups" in content
+    assert "stat -c '%u:%g:%a' $PROJECT_DIR/backups/daily" in content
+    assert "stat -c '%u:%g:%a' $PROJECT_DIR/backups/validation" in content
     assert "stat -c '%u:%g:%a' $PROJECT_DIR/deployments" in content
     assert "'0:0:700'" in content
 
@@ -249,14 +254,18 @@ def test_activate_transaction_stops_every_writer_and_commits_last():
 
     for unit in (
         'case-weather.service',
+        'case-weather-backup.service',
         'case-weather-cache.service',
         'case-weather-cache-bootstrap.service',
         'case-weather-dispatch.service',
         'case-weather-risk-precompute.service',
         'case-weather-usage-cleanup.service',
         'case-weather-cache.timer',
+        'case-weather-backup.timer',
         'case-weather-cache-bootstrap.timer',
         'case-weather-dispatch.timer',
+        'case-weather-sync.timer',
+        'case-weather-sync.service',
         'case-weather-risk-precompute.timer',
         'case-weather-usage-cleanup.timer',
     ):
@@ -266,14 +275,31 @@ def test_activate_transaction_stops_every_writer_and_commits_last():
         'prepare_release_timer_states\n'
     )
     assert content.index('start_candidate_release\n') < content.index(
+        'LINK_MUTATED=1'
+    )
+    assert content.index('LINK_MUTATED=1') < content.index(
+        'prepare_release_timer_states\n'
+    )
+    assert content.index('prepare_release_timer_states\n') < content.index(
+        'validate_managed_backup_service\n'
+    )
+    assert content.index('validate_managed_backup_service\n') < content.index(
+        'validate_installed_backup_service\n'
+    )
+    assert content.index('validate_installed_backup_service\n') < content.index(
+        'verify_pre_request_quiescence\n'
+    )
+    assert content.index('verify_pre_request_quiescence\n') < content.index(
         'run_formal_cache_smoke\n'
     )
     assert content.index('run_formal_cache_smoke\n') < content.index(
         'arm_qweather_network_gate\n'
     )
-    assert content.index('arm_qweather_network_gate\n') < content.index('LINK_MUTATED=1')
-    assert content.index('LINK_MUTATED=1') < content.index(
-        'prepare_release_timer_states\n'
+    assert content.index('arm_qweather_network_gate\n') < content.index(
+        'start_new_release\n'
+    )
+    assert content.index('validate_managed_backup_service\n') < content.index(
+        'start_new_release\n'
     )
     assert content.index('wait_for_health "$HEALTH_URL"') < content.index('COMMITTED=1')
     assert content.index('start_new_release\n') < content.index('COMMITTED=1')
@@ -312,6 +338,9 @@ def test_deploy_script_excludes_local_design_drafts():
     assert "--exclude 'tmp'" in content
     assert "--exclude 'blueprints/tools 2.py'" in content
     assert content.count("--exclude '.env*'") == 2
+    assert content.count("--exclude '.secrets/'") == 2
+    assert content.count("--exclude '*.pem'") == 2
+    assert content.count("--exclude '*.key'") == 2
     assert content.count("--exclude 'project.private.config.json'") == 2
     assert "--exclude '.env'" not in content
     assert "--exclude '.env.local'" not in content
@@ -348,14 +377,15 @@ def test_deploy_only_supports_key_or_sshpass_and_locks_private_files():
 
     assert 'expect -c' not in content
     assert '密码部署需要 sshpass' in content
-    assert content.count('UMask=0077') == 6
+    assert content.count('UMask=0077') == 7
     assert 'chmod 0700 $PROJECT_DIR/instance $PROJECT_DIR/storage $PROJECT_DIR/run' in content
 
 
 def test_deploy_runs_all_runtime_units_as_hardened_service_user():
     content = _load_deploy_script()
 
-    assert 'User=root' not in content
+    assert content.count('User=root') == 1
+    assert content.count('Group=root') == 1
     assert content.count('User=case-weather') == 6
     assert content.count('Group=case-weather') == 6
     for directive in (
@@ -369,7 +399,8 @@ def test_deploy_runs_all_runtime_units_as_hardened_service_user():
         'CapabilityBoundingSet=',
         'ReadWritePaths=$PROJECT_DIR/instance $PROJECT_DIR/storage $PROJECT_DIR/run',
     ):
-        assert content.count(directive) == 6
+        expected_count = 6 if directive.startswith('ReadWritePaths=') else 7
+        assert content.count(directive) == expected_count
     assert 'DISPATCH_LOCK_PATH=$PROJECT_DIR/run/case-weather-dispatch.lock' in content
     assert 'useradd --system' in content
     assert 'RUNTIME_USER=$RUNTIME_USER RUNTIME_GROUP=$RUNTIME_GROUP' in content
@@ -387,6 +418,72 @@ def test_deploy_runs_all_runtime_units_as_hardened_service_user():
         'WXPUSHER_APP_TOKEN',
     ):
         assert inherited_secret not in runtime_block
+
+
+def test_deploy_generates_root_only_sandboxed_daily_backup_units():
+    content = _load_deploy_script()
+    service_start = content.index(
+        "cat > $NEW_RELEASE/systemd/case-weather-backup.service << 'EOF'"
+    )
+    timer_start = content.index(
+        "cat > $NEW_RELEASE/systemd/case-weather-backup.timer << 'EOF'",
+        service_start,
+    )
+    service_block = content[service_start:timer_start]
+    timer_end = content.index('EOF"', timer_start)
+    timer_block = content[timer_start:timer_end]
+
+    for directive in (
+        'Type=oneshot',
+        'User=root',
+        'Group=root',
+        'PrivateNetwork=true',
+        'NoNewPrivileges=true',
+        'ProtectSystem=strict',
+        'CapabilityBoundingSet=CAP_DAC_READ_SEARCH CAP_SETUID CAP_SETGID',
+        'RestrictAddressFamilies=AF_UNIX',
+        'ReadOnlyPaths=$CURRENT_LINK $PROJECT_DIR/.env',
+        'RequiresMountsFor=$PROJECT_DIR/instance $PROJECT_DIR/storage $PROJECT_DIR/backups/daily',
+        'ReadWritePaths=$PROJECT_DIR/backups/daily $PROJECT_DIR/instance $PROJECT_DIR/storage',
+        'InaccessiblePaths=$PROJECT_DIR/backups/deploy-transactions',
+        'Environment=BACKUP_RUNTIME_USER=$RUNTIME_USER',
+        'Environment=MKTEMP_BIN=mktemp',
+        'Environment=INSTALL_BIN=install',
+        'EnvironmentFile=$PROJECT_DIR/backups/backup-runtime.env',
+        'ExecStart=/bin/bash $CURRENT_LINK/app/scripts/backup.sh',
+        'TimeoutStartSec=15min',
+        'ConditionPathExists=|!$PROJECT_DIR/deployments/activation-in-progress',
+        'ConditionPathExists=|/run/case-weather/activation-permit',
+    ):
+        assert directive in service_block
+    assert 'OnCalendar=*-*-* 03:00:00 Asia/Shanghai' in timer_block
+    assert 'Persistent=true' in timer_block
+    assert 'Unit=case-weather-backup.service' in timer_block
+    assert 'ConditionPathExists=|!$PROJECT_DIR/deployments/activation-in-progress' in timer_block
+    assert 'ConditionPathExists=|/run/case-weather/activation-permit' in timer_block
+    assert 'systemctl systemd-run systemd-analyze busctl crontab pgrep runuser mktemp install findmnt sync' in content
+    assert 'systemd-analyze verify $NEW_RELEASE/systemd/*.service $NEW_RELEASE/systemd/*.timer' in content
+    assert 'InaccessiblePaths=$PROJECT_DIR/storage' not in service_block
+    assert 'backup-validation.env' not in service_block
+    assert '$CURRENT_LINK/app/scripts/backup.sh --if-present' not in service_block
+    for unit in (
+        'case-weather.service',
+        'case-weather-backup.service',
+        'case-weather-backup.timer',
+        'case-weather-cache.service',
+        'case-weather-cache.timer',
+        'case-weather-cache-bootstrap.service',
+        'case-weather-cache-bootstrap.timer',
+        'case-weather-dispatch.service',
+        'case-weather-dispatch.timer',
+        'case-weather-risk-precompute.service',
+        'case-weather-risk-precompute.timer',
+        'case-weather-usage-cleanup.service',
+        'case-weather-usage-cleanup.timer',
+        'case-weather-sync.service',
+        'case-weather-sync.timer',
+    ):
+        assert unit in content.split('步骤6.2.1: 给现有与新调度安装共享断电保护门', 1)[1]
 
 
 def test_deploy_verifies_ssh_host_and_keeps_gunicorn_private():

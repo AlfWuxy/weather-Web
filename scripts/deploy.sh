@@ -365,6 +365,9 @@ upload_files() {
             --exclude '.venv' \
             --exclude '.venv2' \
             --exclude '.env*' \
+            --exclude '.secrets/' \
+            --exclude '*.pem' \
+            --exclude '*.key' \
             --exclude 'project.private.config.json' \
             --exclude '.superpowers' \
             --exclude '.pytest_cache' \
@@ -384,7 +387,7 @@ upload_files() {
         return 64
     fi
 
-    rsync -avz --exclude '__pycache__' --exclude '*.pyc' --exclude 'instance' --exclude 'storage' --exclude 'health_weather.db' --exclude 'data/research/*.xlsx' --exclude 'data/research/*.xls' --exclude '.git' --exclude '.claude' --exclude 'venv' --exclude '.venv' --exclude '.venv2' --exclude '.env*' --exclude 'project.private.config.json' --exclude '.superpowers' --exclude '.pytest_cache' --exclude '.playwright-cli' --exclude '.vscode' --exclude '.DS_Store' --exclude 'backups' --exclude 'tmp' --exclude 'output' --exclude 'blueprints/tools 2.py' -e "ssh $SSH_OPTS" "$RELEASE_SOURCE_DIR/" "$USER@$SERVER:$remote_target/"
+    rsync -avz --exclude '__pycache__' --exclude '*.pyc' --exclude 'instance' --exclude 'storage' --exclude 'health_weather.db' --exclude 'data/research/*.xlsx' --exclude 'data/research/*.xls' --exclude '.git' --exclude '.claude' --exclude 'venv' --exclude '.venv' --exclude '.venv2' --exclude '.env*' --exclude '.secrets/' --exclude '*.pem' --exclude '*.key' --exclude 'project.private.config.json' --exclude '.superpowers' --exclude '.pytest_cache' --exclude '.playwright-cli' --exclude '.vscode' --exclude '.DS_Store' --exclude 'backups' --exclude 'tmp' --exclude 'output' --exclude 'blueprints/tools 2.py' -e "ssh $SSH_OPTS" "$RELEASE_SOURCE_DIR/" "$USER@$SERVER:$remote_target/"
 }
 
 echo "步骤1: 测试服务器连接..."
@@ -392,7 +395,7 @@ remote_exec "echo '连接成功'"
 
 echo ""
 echo "步骤2: 检查服务器依赖（常规发布不修改全局软件）..."
-remote_exec "for REQUIRED_COMMAND in python3 rsync sqlite3 curl flock systemctl busctl runuser getent groupadd useradd; do command -v \"\$REQUIRED_COMMAND\" >/dev/null || { echo \"缺少服务器依赖: \$REQUIRED_COMMAND，请先执行一次性服务器初始化。\" >&2; exit 1; }; done"
+remote_exec "for REQUIRED_COMMAND in python3 rsync sqlite3 curl flock systemctl systemd-run systemd-analyze busctl crontab pgrep runuser mktemp install findmnt sync getent groupadd useradd; do command -v \"\$REQUIRED_COMMAND\" >/dev/null || { echo \"缺少服务器依赖: \$REQUIRED_COMMAND，请先执行一次性服务器初始化。\" >&2; exit 1; }; done"
 
 echo ""
 echo "步骤2.1: 检查 Redis（用于生产环境限流存储）..."
@@ -408,7 +411,7 @@ remote_exec "getent group $RUNTIME_GROUP >/dev/null || groupadd --system $RUNTIM
 
 echo ""
 echo "步骤3: 创建不可变发布目录并上传代码..."
-remote_exec "mkdir -p $PROJECT_DIR/instance $PROJECT_DIR/storage $PROJECT_DIR/run $PROJECT_DIR/backups $PROJECT_DIR/deployments $RELEASE_ROOT/releases; chown $RUNTIME_USER:$RUNTIME_GROUP $PROJECT_DIR/instance $PROJECT_DIR/storage $PROJECT_DIR/run; chmod 0700 $PROJECT_DIR/instance $PROJECT_DIR/storage $PROJECT_DIR/run; chown root:root $PROJECT_DIR/backups $PROJECT_DIR/deployments; chmod 0700 $PROJECT_DIR/backups $PROJECT_DIR/deployments; [ \"\$(stat -c '%u:%g:%a' $PROJECT_DIR/backups)\" = '0:0:700' ] && [ \"\$(stat -c '%u:%g:%a' $PROJECT_DIR/deployments)\" = '0:0:700' ] || { echo 'backups/deployments 权限或所有者异常。' >&2; exit 1; }; chown root:$RUNTIME_GROUP $PROJECT_DIR $RELEASE_ROOT $RELEASE_ROOT/releases; chmod 0750 $PROJECT_DIR $RELEASE_ROOT $RELEASE_ROOT/releases"
+remote_exec "mkdir -p $PROJECT_DIR/instance $PROJECT_DIR/storage $PROJECT_DIR/run $PROJECT_DIR/backups/daily $PROJECT_DIR/backups/validation $PROJECT_DIR/deployments $RELEASE_ROOT/releases; chown $RUNTIME_USER:$RUNTIME_GROUP $PROJECT_DIR/instance $PROJECT_DIR/storage $PROJECT_DIR/run; chmod 0700 $PROJECT_DIR/instance $PROJECT_DIR/storage $PROJECT_DIR/run; chown root:root $PROJECT_DIR/backups $PROJECT_DIR/backups/daily $PROJECT_DIR/backups/validation $PROJECT_DIR/deployments; chmod 0700 $PROJECT_DIR/backups $PROJECT_DIR/backups/daily $PROJECT_DIR/backups/validation $PROJECT_DIR/deployments; [ \"\$(stat -c '%u:%g:%a' $PROJECT_DIR/backups)\" = '0:0:700' ] && [ \"\$(stat -c '%u:%g:%a' $PROJECT_DIR/backups/daily)\" = '0:0:700' ] && [ \"\$(stat -c '%u:%g:%a' $PROJECT_DIR/backups/validation)\" = '0:0:700' ] && [ \"\$(stat -c '%u:%g:%a' $PROJECT_DIR/deployments)\" = '0:0:700' ] || { echo 'backups/daily/validation/deployments 权限或所有者异常。' >&2; exit 1; }; chown root:$RUNTIME_GROUP $PROJECT_DIR $RELEASE_ROOT $RELEASE_ROOT/releases; chmod 0750 $PROJECT_DIR $RELEASE_ROOT $RELEASE_ROOT/releases"
 remote_exec "if [ -e $NEW_RELEASE ]; then echo '发布 ID 已存在，拒绝覆盖不可变版本: $NEW_RELEASE' >&2; exit 1; fi; mkdir -p $RELEASE_APP $NEW_RELEASE/systemd"
 upload_files "$RELEASE_APP"
 remote_exec "ln -s $PROJECT_DIR/instance $RELEASE_APP/instance && ln -s $PROJECT_DIR/storage $RELEASE_APP/storage && ln -s $PROJECT_DIR/backups $RELEASE_APP/backups"
@@ -556,6 +559,8 @@ echo "步骤6.2: 为新版本生成 systemd 单元模板..."
 remote_exec "cat > $NEW_RELEASE/systemd/case-weather.service << 'EOF'
 [Unit]
 Description=Case Weather Flask Application
+ConditionPathExists=|!$PROJECT_DIR/deployments/activation-in-progress
+ConditionPathExists=|/run/case-weather/activation-permit
 After=network.target
 
 [Service]
@@ -594,9 +599,80 @@ RestartSec=10
 WantedBy=multi-user.target
 EOF"
 
+remote_exec "cat > $NEW_RELEASE/systemd/case-weather-backup.service << 'EOF'
+[Unit]
+Description=Case Weather - root-only SQLite backup
+ConditionPathExists=|!$PROJECT_DIR/deployments/activation-in-progress
+ConditionPathExists=|/run/case-weather/activation-permit
+After=local-fs.target
+RequiresMountsFor=$PROJECT_DIR/instance $PROJECT_DIR/storage $PROJECT_DIR/backups/daily
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+PrivateNetwork=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+ProcSubset=pid
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+RestrictRealtime=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX
+CapabilityBoundingSet=CAP_DAC_READ_SEARCH CAP_SETUID CAP_SETGID
+ReadOnlyPaths=$CURRENT_LINK $PROJECT_DIR/.env
+ReadWritePaths=$PROJECT_DIR/backups/daily $PROJECT_DIR/instance $PROJECT_DIR/storage
+InaccessiblePaths=$PROJECT_DIR/backups/deploy-transactions $PROJECT_DIR/deployments $PROJECT_DIR/run
+WorkingDirectory=$CURRENT_LINK/app
+Environment=PROJECT_DIR=$PROJECT_DIR
+Environment=ENV_FILE=$PROJECT_DIR/.env
+Environment=BACKUP_DIR=$PROJECT_DIR/backups/daily
+Environment=DEFAULT_DB_FILE=$PROJECT_DIR/instance/health_weather.db
+Environment=BACKUP_RUNTIME_USER=$RUNTIME_USER
+Environment=RUNUSER_BIN=runuser
+Environment=SQLITE3_BIN=sqlite3
+Environment=MKTEMP_BIN=mktemp
+Environment=INSTALL_BIN=install
+EnvironmentFile=$PROJECT_DIR/backups/backup-runtime.env
+ExecStart=/bin/bash $CURRENT_LINK/app/scripts/backup.sh
+TimeoutStartSec=15min
+EOF
+
+cat > $NEW_RELEASE/systemd/case-weather-backup.timer << 'EOF'
+[Unit]
+Description=Case Weather - daily SQLite backup in Asia/Shanghai
+ConditionPathExists=|!$PROJECT_DIR/deployments/activation-in-progress
+ConditionPathExists=|/run/case-weather/activation-permit
+
+[Timer]
+OnCalendar=*-*-* 03:00:00 Asia/Shanghai
+Persistent=true
+AccuracySec=1min
+Unit=case-weather-backup.service
+
+[Install]
+WantedBy=timers.target
+EOF"
+
 remote_exec "cat > $NEW_RELEASE/systemd/case-weather-cache.service << 'EOF'
 [Unit]
 Description=Case Weather - refresh Duchang weather cache
+ConditionPathExists=|!$PROJECT_DIR/deployments/activation-in-progress
+ConditionPathExists=|/run/case-weather/activation-permit
 After=network.target case-weather.service
 OnSuccess=case-weather-dispatch.service
 
@@ -637,6 +713,8 @@ EOF
 cat > $NEW_RELEASE/systemd/case-weather-cache.timer << 'EOF'
 [Unit]
 Description=Case Weather - refresh Duchang weather cache every 30 minutes
+ConditionPathExists=|!$PROJECT_DIR/deployments/activation-in-progress
+ConditionPathExists=|/run/case-weather/activation-permit
 
 [Timer]
 OnActiveSec=30min
@@ -651,6 +729,8 @@ EOF"
 remote_exec "cat > $NEW_RELEASE/systemd/case-weather-cache-bootstrap.service << 'EOF'
 [Unit]
 Description=Case Weather - start the first cache refresh after a full 30-minute delay
+ConditionPathExists=|!$PROJECT_DIR/deployments/activation-in-progress
+ConditionPathExists=|/run/case-weather/activation-permit
 After=network.target case-weather.service
 OnSuccess=case-weather-cache.timer
 
@@ -692,6 +772,8 @@ EOF
 cat > $NEW_RELEASE/systemd/case-weather-cache-bootstrap.timer << 'EOF'
 [Unit]
 Description=Case Weather - delay the first cache refresh for 30 minutes
+ConditionPathExists=|!$PROJECT_DIR/deployments/activation-in-progress
+ConditionPathExists=|/run/case-weather/activation-permit
 
 [Timer]
 OnActiveSec=30min
@@ -706,6 +788,8 @@ EOF"
 remote_exec "cat > $NEW_RELEASE/systemd/case-weather-dispatch.service << 'EOF'
 [Unit]
 Description=Case Weather - dispatch alerts (WxPusher)
+ConditionPathExists=|!$PROJECT_DIR/deployments/activation-in-progress
+ConditionPathExists=|/run/case-weather/activation-permit
 After=network.target case-weather.service case-weather-cache.service
 
 [Service]
@@ -744,6 +828,8 @@ EOF"
 remote_exec "cat > $NEW_RELEASE/systemd/case-weather-risk-precompute.service << 'EOF'
 [Unit]
 Description=Case Weather - precompute community risk cache
+ConditionPathExists=|!$PROJECT_DIR/deployments/activation-in-progress
+ConditionPathExists=|/run/case-weather/activation-permit
 After=network.target case-weather.service
 
 [Service]
@@ -782,6 +868,8 @@ EOF
 cat > $NEW_RELEASE/systemd/case-weather-risk-precompute.timer << 'EOF'
 [Unit]
 Description=Case Weather - precompute community risk cache hourly
+ConditionPathExists=|!$PROJECT_DIR/deployments/activation-in-progress
+ConditionPathExists=|/run/case-weather/activation-permit
 
 [Timer]
 OnActiveSec=5min
@@ -796,6 +884,8 @@ EOF"
 remote_exec "cat > $NEW_RELEASE/systemd/case-weather-usage-cleanup.service << 'EOF'
 [Unit]
 Description=Case Weather - delete expired UsageEvent rows
+ConditionPathExists=|!$PROJECT_DIR/deployments/activation-in-progress
+ConditionPathExists=|/run/case-weather/activation-permit
 StartLimitIntervalSec=1h
 StartLimitBurst=20
 
@@ -837,6 +927,8 @@ EOF
 cat > $NEW_RELEASE/systemd/case-weather-usage-cleanup.timer << 'EOF'
 [Unit]
 Description=Case Weather - delete expired UsageEvent rows daily
+ConditionPathExists=|!$PROJECT_DIR/deployments/activation-in-progress
+ConditionPathExists=|/run/case-weather/activation-permit
 
 [Timer]
 OnCalendar=*-*-* 03:15:00
@@ -846,6 +938,12 @@ Unit=case-weather-usage-cleanup.service
 [Install]
 WantedBy=timers.target
 EOF"
+
+remote_exec "systemd-analyze verify $NEW_RELEASE/systemd/*.service $NEW_RELEASE/systemd/*.timer"
+
+echo ""
+echo "步骤6.2.1: 给现有与新调度安装共享断电保护门..."
+remote_exec "set -e; for UNIT in case-weather.service case-weather-backup.service case-weather-backup.timer case-weather-cache.service case-weather-cache.timer case-weather-cache-bootstrap.service case-weather-cache-bootstrap.timer case-weather-dispatch.service case-weather-dispatch.timer case-weather-risk-precompute.service case-weather-risk-precompute.timer case-weather-usage-cleanup.service case-weather-usage-cleanup.timer case-weather-sync.service case-weather-sync.timer; do DROPIN=/etc/systemd/system/\$UNIT.d; mkdir -p \$DROPIN; printf '%s\n' '[Unit]' 'ConditionPathExists=|!$PROJECT_DIR/deployments/activation-in-progress' 'ConditionPathExists=|/run/case-weather/activation-permit' > \$DROPIN/10-case-weather-activation-guard.conf; chown root:root \$DROPIN/10-case-weather-activation-guard.conf; chmod 0644 \$DROPIN/10-case-weather-activation-guard.conf; done; systemctl daemon-reload"
 
 echo ""
 echo "步骤6.3: 收敛发布文件与运行数据权限..."
