@@ -53,10 +53,11 @@ test('自定义组件只在实际使用的页面按需注册', () => {
   });
 });
 
-test('根目录工程配置可按游客模式导入并开启域名校验', () => {
+test('根目录工程配置可按正式项目导入并开启域名校验', () => {
   const project = JSON.parse(fs.readFileSync(path.resolve(miniRoot, '..', 'project.config.json'), 'utf8'));
   assert.equal(project.miniprogramRoot, 'miniprogram/');
-  assert.equal(project.appid, 'touristappid');
+  assert.match(project.appid, /^wx[a-f0-9]{16}$/);
+  assert.notEqual(project.appid, 'touristappid');
   assert.equal(project.setting.urlCheck, true);
   assert.equal(project.setting.es6, true);
   assert.equal(project.setting.enhance, true);
@@ -80,12 +81,13 @@ test('指向 tabBar 的 navigator 使用 switchTab', () => {
   assert.deepEqual(violations, []);
 });
 
-test('公开配置不包含真实生产域名', () => {
+test('正式分支固定公开生产域名且保留无密钥示例', () => {
   const files = ['config.js', 'config.runtime.js', 'config.example.js'];
   const text = files.map((file) => fs.readFileSync(path.join(miniRoot, file), 'utf8')).join('\n');
   assert.match(text, /https:\/\/api\.example\.com/);
   const runtimeConfig = require('../config.runtime');
-  assert.equal(runtimeConfig.API_BASE_URL, '');
+  assert.equal(runtimeConfig.API_BASE_URL, 'https://yilaoweather.org');
+  assert.doesNotMatch(text, /(AppSecret|QWEATHER_KEY)\s*[:=]\s*['"][^'"]+['"]/);
 });
 
 test('sitemap 只允许公共页面并排除照护页面', () => {
@@ -122,8 +124,11 @@ test('登录页提供返回公共首页的明确入口', () => {
 test('WxPusher 开启前展示完整第三方传输范围', () => {
   const settingsView = fs.readFileSync(path.join(miniRoot, 'pages/settings/index.wxml'), 'utf8');
   const settingsScript = fs.readFileSync(path.join(miniRoot, 'pages/settings/index.js'), 'utf8');
-  assert.match(settingsView, /发送 UID、都昌县级预警标题与正文及一次性点击链接/);
-  assert.match(settingsView, /不会发送家人姓名、健康日记、用药记录或家庭地址/);
+  assert.match(settingsView, /发送 UID、都昌县级预警标题与正文及 7\s*天内有效的点击链接/);
+  assert.match(settingsView, /不会发送家人姓名、健康筛查、健康日记、用药记录或家庭地址/);
+  assert.match(settingsView, /打开页面本身不会记录/);
+  assert.match(settingsView, /主动点击“我已看到这条提醒”/);
+  assert.doesNotMatch(settingsView, /一次性点击链接/);
   assert.match(settingsView, /bindchange="onWxPusherConsent"/);
   assert.match(settingsScript, /wxpusher_consent/);
 });

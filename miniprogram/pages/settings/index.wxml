@@ -23,6 +23,7 @@
     <view class="settings-card">
       <view class="section-title">网页端兼容推送</view>
       <view class="section-copy">这是独立于微信系统通知的可选第三方通道，默认关闭。开启前请确认下方传输范围。</view>
+      <view wx:if="{{!wxpusherAvailable}}" class="state-box">推送服务暂不可用，管理员尚未配置通道。你仍可关闭推送并清空已保存的 UID。</view>
       <view class="field-label">WxPusher UID</view>
       <input class="text-input" maxlength="80" value="{{wxpusherUid}}" disabled="{{busy || !settingsVerified}}" bindinput="onUid" placeholder="例如：UID_xxxxx" aria-label="WxPusher UID" />
       <label class="switch-row" for="wxpusherSwitch" aria-label="开启网页端兼容推送">
@@ -30,13 +31,13 @@
           <view class="switch-title">开启兼容推送</view>
           <view class="switch-copy">UID 为空时不会开启</view>
         </view>
-        <switch id="wxpusherSwitch" checked="{{pushEnabled}}" disabled="{{busy || !settingsVerified}}" color="#137947" bindchange="onToggle" aria-label="开启网页端兼容推送" />
+        <switch id="wxpusherSwitch" checked="{{pushEnabled}}" disabled="{{busy || !settingsVerified || (!wxpusherAvailable && !pushEnabled)}}" color="#137947" bindchange="onToggle" aria-label="开启网页端兼容推送" />
       </label>
-      <label wx:if="{{pushEnabled}}" class="third-party-consent">
+      <label wx:if="{{pushEnabled && wxpusherAvailable}}" class="third-party-consent">
         <checkbox-group bindchange="onWxPusherConsent">
-          <checkbox value="agreed" checked="{{wxpusherConsent}}" disabled="{{busy || !settingsVerified}}" color="#137947" aria-label="同意 WxPusher 第三方传输说明" />
+          <checkbox value="agreed" checked="{{wxpusherConsent}}" disabled="{{busy || !settingsVerified || !wxpusherAvailable}}" color="#137947" aria-label="同意 WxPusher 第三方传输说明" />
         </checkbox-group>
-        <view class="consent-copy">我同意向 WxPusher 发送 UID、都昌县级预警标题与正文及一次性点击链接。不会发送家人姓名、健康日记、用药记录或家庭地址。</view>
+        <view class="consent-copy">我同意向 WxPusher 发送 UID、都昌县级预警标题与正文及 7 天内有效的点击链接。打开页面本身不会记录；只有本人主动点击“我已看到这条提醒”后，服务器才首次记录一次送达确认。确认时间和自动确认标记满 30 天后由每日清理任务清空。不会发送家人姓名、健康筛查、健康日记、用药记录或家庭地址。</view>
       </label>
       <button class="save-button" loading="{{busy}}" disabled="{{busy || !settingsVerified}}" bindtap="saveSettings" hover-class="button-pressed">保存推送设置</button>
     </view>

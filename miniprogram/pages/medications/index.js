@@ -38,6 +38,22 @@ function normalizeMedication(item) {
   };
 }
 
+function lifecycleIsActive(page, lifecycle) {
+  return page._unloaded !== true && Number(page._lifecycleGeneration || 0) === lifecycle;
+}
+
+function beginLoad(page) {
+  page._loadRequestId = Number(page._loadRequestId || 0) + 1;
+  return {
+    lifecycle: Number(page._lifecycleGeneration || 0),
+    requestId: page._loadRequestId,
+  };
+}
+
+function loadIsActive(page, request) {
+  return lifecycleIsActive(page, request.lifecycle) && page._loadRequestId === request.requestId;
+}
+
 Page({
   data: {
     pairId: null,
@@ -54,16 +70,21 @@ Page({
     highHumidity: '',
     highAqi: '',
     medications: [],
+    contextReady: false,
+    loadError: '',
+    dataStale: false,
     loading: false,
     busy: false,
   },
 
   async onLoad(options) {
+    this._unloaded = false;
+    this._lifecycleGeneration = Number(this._lifecycleGeneration || 0) + 1;
     if (!requireToken()) return;
     const pairId = Number(options.pair_id || 0) || null;
-    this.setData({ pairId });
+    this.setData({ pairId, contextReady: false, loadError: '', dataStale: false });
     if (!pairId) {
-      wx.showToast({ title: '请选择一位家人', icon: 'none' });
+      this.setData({ loadError: '缺少家人信息，请返回家庭照护重新选择。' });
       return;
     }
     await this.loadMedications();
@@ -73,7 +94,16 @@ Page({
     requireToken();
   },
 
+  onUnload() {
+    this._unloaded = true;
+    this._lifecycleGeneration = Number(this._lifecycleGeneration || 0) + 1;
+    this._loadRequestId = Number(this._loadRequestId || 0) + 1;
+  },
+
   onSessionInvalidated() {
+    this._lifecycleGeneration = Number(this._lifecycleGeneration || 0) + 1;
+    this._loadRequestId = Number(this._loadRequestId || 0) + 1;
+    if (this._unloaded) return;
     this.setData({
       pairId: null,
       elderName: '家人',
@@ -88,28 +118,57 @@ Page({
       highHumidity: '',
       highAqi: '',
       medications: [],
+      contextReady: false,
+      loadError: '',
+      dataStale: false,
       loading: false,
       busy: false,
     });
   },
 
   async loadMedications() {
-    this.setData({ loading: true });
+    if (this._unloaded) return;
+    const request = beginLoad(this);
+    const pairId = Number(this.data.pairId || 0);
+    if (!pairId) {
+      this.setData({
+        contextReady: false,
+        loadError: '缺少家人信息，请返回家庭照护重新选择。',
+        dataStale: false,
+        loading: false,
+      });
+      return;
+    }
+    const hadVerifiedContext = this.data.contextReady === true;
+    this.setData({ loading: true, loadError: '', dataStale: false });
     try {
       const [elderData, medicationData] = await Promise.all([
         authApi({ method: 'GET', path: '/mp/api/v1/elders' }),
-        authApi({ method: 'GET', path: `/mp/api/v1/medications?pair_id=${this.data.pairId}` }),
+        authApi({ method: 'GET', path: `/mp/api/v1/medications?pair_id=${pairId}` }),
       ]);
       const elder = normalizeList(elderData, ['items', 'elders'])
-        .find((item) => Number(item.pair_id) === this.data.pairId);
+        .find((item) => Number(item.pair_id) === pairId);
+      if (!loadIsActive(this, request)) return;
+      if (!elder) throw new Error('elder_not_found');
       this.setData({
-        elderName: elder && elder.member && elder.member.name ? elder.member.name : '家人',
+        elderName: elder.member && elder.member.name ? elder.member.name : '家人',
         medications: normalizeList(medicationData, ['items', 'medications']).map(normalizeMedication),
+        contextReady: true,
+        loadError: '',
+        dataStale: false,
       });
     } catch (error) {
-      wx.showToast({ title: '用药记录加载失败', icon: 'none' });
+      if (loadIsActive(this, request)) {
+        this.setData({
+          contextReady: hadVerifiedContext,
+          loadError: hadVerifiedContext
+            ? '刷新失败，以下仍显示上次成功加载的用药记录。'
+            : '用药记录暂时没有加载出来，请检查网络后重试。',
+          dataStale: hadVerifiedContext,
+        });
+      }
     } finally {
-      this.setData({ loading: false });
+      if (loadIsActive(this, request)) this.setData({ loading: false });
     }
   },
 
@@ -127,23 +186,46 @@ Page({
   },
 
   toggleWeatherTriggers() {
+    if (!this.data.contextReady || this.data.busy) return;
     this.setData({ showWeatherTriggers: !this.data.showWeatherTriggers });
   },
 
   async addMedication() {
+    if (this._unloaded) return;
     if (this.data.busy) return;
+    if (!this.data.contextReady || !Number(this.data.pairId || 0)) {
+      wx.showToast({ title: '请先重新加载家人信息', icon: 'none' });
+      return;
+    }
     const validation = validateMedicationInput(this.data);
     if (!validation.valid) {
       wx.showToast({ title: validation.error, icon: 'none' });
       return;
     }
+    const lifecycle = Number(this._lifecycleGeneration || 0);
+    const pairId = Number(this.data.pairId || 0);
     this.setData({ busy: true });
     try {
-      await authApi({
+      const result = await authApi({
         method: 'POST',
         path: '/mp/api/v1/medications',
-        data: Object.assign({ pair_id: this.data.pairId }, validation.payload),
+        data: Object.assign({ pair_id: pairId }, validation.payload),
       });
+      if (!lifecycleIsActive(this, lifecycle)) return;
+      const directId = result && result.id;
+      const savedRecord = result && (
+        result.medication
+        || (directId !== undefined && directId !== null
+          ? Object.assign({}, validation.payload, { id: directId, is_active: true })
+          : null)
+      );
+      const savedMedication = savedRecord ? normalizeMedication(savedRecord) : null;
+      const hasAuthoritativeMedication = Boolean(
+        savedMedication && savedMedication.id !== undefined && savedMedication.id !== null
+      );
+      const medications = hasAuthoritativeMedication
+        ? [savedMedication].concat(this.data.medications.filter((item) => String(item.id) !== String(savedMedication.id)))
+        : this.data.medications;
       this.setData({
         medicineName: '',
         dosage: '',
@@ -155,32 +237,58 @@ Page({
         highHumidity: '',
         highAqi: '',
         showWeatherTriggers: false,
+        medications,
+        loadError: '',
+        dataStale: false,
       });
       wx.showToast({ title: '用药记录已保存', icon: 'success' });
-      await this.loadMedications();
+      // 服务端已返回权威记录时避免立即再发两个 GET。
+      if (!hasAuthoritativeMedication) await this.loadMedications();
     } catch (error) {
-      wx.showToast({ title: '保存失败，请稍后再试', icon: 'none' });
+      if (lifecycleIsActive(this, lifecycle)) wx.showToast({ title: '保存失败，请稍后再试', icon: 'none' });
     } finally {
-      this.setData({ busy: false });
+      if (lifecycleIsActive(this, lifecycle)) this.setData({ busy: false });
     }
   },
 
   deleteMedication(event) {
+    if (this._unloaded) return;
+    if (this.data.busy || !this.data.contextReady) return;
     const id = Number(event.currentTarget.dataset.id);
     const name = event.currentTarget.dataset.name || '这条记录';
+    const lifecycle = Number(this._lifecycleGeneration || 0);
     wx.showModal({
       title: '删除用药记录？',
       content: `确定删除“${name}”的用药记录吗？`,
       confirmText: '删除',
       confirmColor: '#b42318',
       success: async (result) => {
+        if (!lifecycleIsActive(this, lifecycle)) return;
         if (!result.confirm) return;
+        this.setData({ busy: true });
         try {
-          await authApi({ method: 'DELETE', path: `/mp/api/v1/medications/${id}` });
+          const deleteResult = await authApi({ method: 'DELETE', path: `/mp/api/v1/medications/${id}` });
+          if (!lifecycleIsActive(this, lifecycle)) return;
+          const deletedId = deleteResult && (
+            deleteResult.deleted_id !== undefined
+              ? deleteResult.deleted_id
+              : deleteResult.id
+          );
+          const hasAuthoritativeDelete = deletedId !== undefined
+            && deletedId !== null
+            && String(deletedId) === String(id);
+          // 服务端已确认删除后先本地移除，后续刷新失败也不会继续伪显示已删除记录。
+          this.setData({
+            medications: this.data.medications.filter((item) => Number(item.id) !== id),
+            loadError: '',
+            dataStale: false,
+          });
           wx.showToast({ title: '已删除', icon: 'success' });
-          await this.loadMedications();
+          if (!hasAuthoritativeDelete) await this.loadMedications();
         } catch (error) {
-          wx.showToast({ title: '删除失败', icon: 'none' });
+          if (lifecycleIsActive(this, lifecycle)) wx.showToast({ title: '删除失败', icon: 'none' });
+        } finally {
+          if (lifecycleIsActive(this, lifecycle)) this.setData({ busy: false });
         }
       },
     });

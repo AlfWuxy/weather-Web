@@ -51,22 +51,24 @@ Page({
         getSnapshot().catch(() => null),
       ]);
       const weather = snapshot ? normalizeSnapshot(snapshot) : markSnapshotStale(this.data.weather);
-      const elders = normalizeList(elderData, ['items', 'elders']).map((item) => ({
-        ...item,
-        displayName: memberName(item),
-        initial: memberName(item).slice(0, 1),
-        displayRelation: item.member && item.member.relation ? item.member.relation : '家人',
-        displayAge: item.member && item.member.age ? `${item.member.age} 岁` : '年龄未填写',
-        today: weather,
-      }));
+      const elders = normalizeList(elderData, ['items', 'elders']).map((item) => {
+        // 列表页不渲染当天私有记录，避免把完整状态重复写入视图层。
+        const { today: _unusedToday, ...elder } = item;
+        return {
+          ...elder,
+          displayName: memberName(item),
+          initial: memberName(item).slice(0, 1),
+          displayRelation: item.member && item.member.relation ? item.member.relation : '家人',
+          displayAge: item.member && item.member.age ? `${item.member.age} 岁` : '年龄未填写',
+        };
+      });
       this.setData({ elders, weather });
     } catch (error) {
       const loadError = this.data.elders.length
         ? '刷新失败，以下仍显示上次成功加载的照护资料。'
         : '照护资料暂时没有加载出来，请稍后再试。';
       const weather = markSnapshotStale(this.data.weather);
-      const elders = this.data.elders.map((item) => ({ ...item, today: weather }));
-      this.setData({ loadError, elders, weather });
+      this.setData({ loadError, weather });
     } finally {
       this.setData({ loading: false });
     }
@@ -80,9 +82,8 @@ Page({
     wx.switchTab({ url: '/pages/settings/index' });
   },
 
-  goAlerts(event) {
-    const pairId = event.currentTarget.dataset.pairId;
-    wx.navigateTo({ url: `/pages/alerts/index?pair_id=${pairId}` });
+  goAlerts() {
+    wx.navigateTo({ url: '/pages/alerts/index' });
   },
 
   goTemplate(event) {

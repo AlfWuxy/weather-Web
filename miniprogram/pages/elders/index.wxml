@@ -61,7 +61,7 @@
       </view>
 
       <view class="primary-actions">
-        <button class="primary-action warning-action" data-pair-id="{{item.pair_id}}" bindtap="goAlerts">查看预警</button>
+        <button class="primary-action warning-action" bindtap="goAlerts">查看预警</button>
         <button class="primary-action" data-pair-id="{{item.pair_id}}" bindtap="goCheckin">今日行动</button>
         <button class="primary-action" data-pair-id="{{item.pair_id}}" bindtap="goTemplate">提醒话术</button>
       </view>

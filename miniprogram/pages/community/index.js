@@ -30,7 +30,6 @@ Page({
   data: {
     loading: true,
     error: '',
-    allCommunities: [],
     communities: [],
     summary: {},
     freshness: {},
@@ -39,6 +38,7 @@ Page({
   },
 
   onLoad() {
+    this._allCommunities = [];
     beginPublicPage(this);
     showPublicShareMenu();
   },
@@ -53,6 +53,7 @@ Page({
 
   onUnload() {
     unloadPublicPage(this);
+    this._allCommunities = [];
   },
 
   async onPullDownRefresh() {
@@ -61,7 +62,9 @@ Page({
   },
 
   async loadData(options) {
-    if (!this.data.allCommunities.length) this.setData({ loading: true, error: '' });
+    if (!Array.isArray(this._allCommunities) || !this._allCommunities.length) {
+      this.setData({ loading: true, error: '' });
+    }
     try {
       const requestOptions = Object.assign({}, options, {
         onRevalidated: (freshResult) => {
@@ -88,15 +91,16 @@ Page({
       mid: allCommunities.filter((item) => item.tone === 'mid').length,
       low: allCommunities.filter((item) => item.tone === 'low').length,
     };
+    this._allCommunities = allCommunities;
+    const communities = this.filteredCommunities(this.data.filter);
     this.setData({
       loading: false,
       error: '',
-      allCommunities,
+      communities,
       summary: normalized.summary,
       freshness: freshnessView(result.meta, normalized),
       counts,
     });
-    this.applyFilter(this.data.filter);
     schedulePublicRefresh(this, result.meta, () => this.loadData());
   },
 
@@ -105,10 +109,15 @@ Page({
   },
 
   applyFilter(filter) {
-    const communities = filter === 'all'
-      ? this.data.allCommunities
-      : this.data.allCommunities.filter((item) => item.tone === filter);
+    const communities = this.filteredCommunities(filter);
     this.setData({ filter, communities });
+  },
+
+  filteredCommunities(filter) {
+    const allCommunities = Array.isArray(this._allCommunities) ? this._allCommunities : [];
+    return filter === 'all'
+      ? allCommunities
+      : allCommunities.filter((item) => item.tone === filter);
   },
 
   retry() {

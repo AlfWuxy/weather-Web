@@ -14,7 +14,6 @@ Page({
   data: {
     loading: true,
     error: '',
-    allResources: [],
     resources: [],
     freshness: {},
     filter: 'all',
@@ -22,6 +21,7 @@ Page({
   },
 
   onLoad() {
+    this._allResources = [];
     beginPublicPage(this);
     showPublicShareMenu();
   },
@@ -36,6 +36,7 @@ Page({
 
   onUnload() {
     unloadPublicPage(this);
+    this._allResources = [];
   },
 
   async onPullDownRefresh() {
@@ -44,7 +45,9 @@ Page({
   },
 
   async loadData(options) {
-    if (!this.data.allResources.length) this.setData({ loading: true, error: '' });
+    if (!Array.isArray(this._allResources) || !this._allResources.length) {
+      this.setData({ loading: true, error: '' });
+    }
     try {
       const requestOptions = Object.assign({}, options, {
         onRevalidated: (freshResult) => {
@@ -62,10 +65,12 @@ Page({
   renderResources(result) {
     const normalized = normalizeCommunity(result.data);
     const allResources = normalized.cooling;
+    this._allResources = allResources;
+    const resources = this.filteredResources(this.data.filter);
     this.setData({
       loading: false,
       error: '',
-      allResources,
+      resources,
       counts: {
         all: allResources.length,
         ac: allResources.filter((item) => item.hasAc).length,
@@ -73,7 +78,6 @@ Page({
       },
       freshness: freshnessView(result.meta, normalized),
     });
-    this.applyFilter(this.data.filter);
     schedulePublicRefresh(this, result.meta, () => this.loadData());
   },
 
@@ -82,14 +86,20 @@ Page({
   },
 
   applyFilter(filter) {
-    let resources = this.data.allResources;
-    if (filter === 'ac') resources = resources.filter((item) => item.hasAc);
-    if (filter === 'accessible') resources = resources.filter((item) => item.accessible);
+    const resources = this.filteredResources(filter);
     this.setData({ filter, resources });
   },
 
+  filteredResources(filter) {
+    let resources = Array.isArray(this._allResources) ? this._allResources : [];
+    if (filter === 'ac') resources = resources.filter((item) => item.hasAc);
+    if (filter === 'accessible') resources = resources.filter((item) => item.accessible);
+    return resources;
+  },
+
   copyAddress(event) {
-    const resource = this.data.allResources.find((item) => item.id === event.currentTarget.dataset.id);
+    const allResources = Array.isArray(this._allResources) ? this._allResources : [];
+    const resource = allResources.find((item) => item.id === event.currentTarget.dataset.id);
     if (!resource) return;
     wx.setClipboardData({ data: `${resource.name}\n${resource.address}\n${resource.hours}` });
   },

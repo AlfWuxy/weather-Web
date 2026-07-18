@@ -7,10 +7,10 @@
 ## 本地导入
 
 1. 在微信开发者工具中导入仓库根目录，工具会读取根目录 `project.config.json`。
-2. 游客预览可保留 `touristappid`。上传前在开发者工具中换成已认证的小程序 AppID。
-3. 参考 `config.example.js`，在本机把后端 HTTPS 域名临时填写到 `config.runtime.js`。
-4. 联调结束后运行 `git diff -- miniprogram/config.runtime.js`，确认真实域名不会进入公开提交。
-5. 在微信公众平台的“开发管理，开发设置，服务器域名”中，把同一后端域名加入 `request` 合法域名。
+2. 当前小程序发布分支已经在 `project.config.json` 固定正式 AppID，导入后核对项目名称和主体即可。AppSecret、代码上传密钥及会话密钥不得写入仓库。
+3. 正式分支已在 `config.runtime.js` 固定公开后端 `https://yilaoweather.org`，导入后无需临时改写。
+4. 在微信公众平台的“开发管理，开发设置，服务器域名”中，把 `https://yilaoweather.org` 加入 `request` 合法域名。
+5. AppSecret、代码上传密钥、QWeather 密钥和会话密钥只能进入私密表单或服务端环境，不能写入小程序包。
 
 小程序端不需要天气供应商 API Key。第三方天气认证材料只应保存在后端环境变量中。
 

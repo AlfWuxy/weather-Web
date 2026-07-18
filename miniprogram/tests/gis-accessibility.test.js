@@ -272,7 +272,14 @@ test('Canvas 上滑不会误选网格，轻点仍可选择', () => {
   let selected = 0;
   page.data.mapState = 'ready';
   page._canvasModel = {
-    cells: [{ id: 'grid-1', minX: 0, maxX: 20, minY: 0, maxY: 20 }],
+    cells: [{
+      id: 'grid-1',
+      minX: 0,
+      maxX: 20,
+      minY: 0,
+      maxY: 20,
+      path: [{ x: 0, y: 0 }, { x: 20, y: 0 }, { x: 20, y: 20 }, { x: 0, y: 20 }, { x: 0, y: 0 }],
+    }],
   };
   page.selectGrid = () => { selected += 1; };
 

@@ -1,8 +1,11 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const { execFileSync } = require('node:child_process');
 
 const {
+  duchangDateKey,
   formatDateTime,
+  formatDay,
   freshnessView,
   normalizeBootstrap,
   normalizeCommunity,
@@ -23,6 +26,24 @@ test('bootstrap 兼容正式天气字段与 reasons', () => {
   assert.equal(result.forecast[0].condition, '多云');
 });
 
+test('归一化结果不保留未使用的原始大对象镜像', () => {
+  const bootstrap = normalizeBootstrap({
+    forecast: [{ date: '2026-07-18', temperature_max: 36, provider_payload: { verbose: true } }],
+    source_status: { weather: { available: true } },
+  });
+  const community = normalizeCommunity({
+    communities: [{
+      name: '测试社区',
+      vulnerability_index: 0.42,
+      latest_action_summary: { total_people: 12, confirm_rate: 0.5 },
+    }],
+  });
+
+  assert.equal(Object.hasOwn(bootstrap, 'raw'), false);
+  assert.equal(Object.hasOwn(bootstrap.forecast[0], 'source'), false);
+  assert.equal(Object.hasOwn(community.communities[0], 'source'), false);
+});
+
 test('更新时间优先采用服务端真实抓取时间', () => {
   const view = freshnessView(
     { storedAt: Date.parse('2026-07-17T10:00:00+08:00') },
@@ -34,6 +55,29 @@ test('更新时间优先采用服务端真实抓取时间', () => {
 test('都昌县时间展示不受运行环境时区影响', () => {
   assert.equal(formatDateTime('2026-07-17T00:00:00Z'), '07月17日 08:00');
   assert.equal(formatDateTime('2026-07-17 08:00:00'), '07月17日 08:00');
+});
+
+test('预报标签按都昌日期判断今天明天和其他日期', () => {
+  const now = '2026-07-18T15:30:00Z';
+  assert.equal(formatDay('2026-07-17', 0, now), '7/17 周五');
+  assert.equal(formatDay('2026-07-18', 2, now), '今天');
+  assert.equal(formatDay('2026-07-19', 0, now), '明天');
+  assert.equal(formatDay('2026-07-20', 1, now), '7/20 周一');
+  assert.equal(formatDay('2026-08-01', 0, '2026-07-31T15:30:00Z'), '明天');
+});
+
+test('都昌日期键不受洛杉矶、檀香山或基里蒂马蒂设备时区影响', () => {
+  const modulePath = require.resolve('../utils/format');
+  const script = `const { duchangDateKey } = require(${JSON.stringify(modulePath)}); process.stdout.write(duchangDateKey('2026-07-18T16:30:00Z'));`;
+  ['America/Los_Angeles', 'Pacific/Honolulu', 'Pacific/Kiritimati'].forEach((timezone) => {
+    const output = execFileSync(process.execPath, ['-e', script], {
+      encoding: 'utf8',
+      env: { ...process.env, TZ: timezone },
+    });
+    assert.equal(output, '2026-07-19');
+  });
+  assert.equal(duchangDateKey('2026-07-18T15:59:59Z'), '2026-07-18');
+  assert.equal(duchangDateKey('2026-07-18T16:00:00Z'), '2026-07-19');
 });
 
 test('预警列表为空时区分暂无预警与来源不可用', () => {

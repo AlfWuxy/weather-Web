@@ -2,17 +2,27 @@
   <view class="page-title">{{elderName}}的健康日记</view>
   <view class="page-copy">记录当天感受，帮助家人回顾身体变化。只记需要的信息，请勿填写身份证号等敏感内容。</view>
 
+  <view wx:if="{{loading && !contextReady}}" class="state-box" role="status" aria-role="status">正在核对家人信息并加载健康日记…</view>
+  <view wx:elif="{{loadError && !contextReady}}" class="state-box error-state" role="alert" aria-role="alert">
+    <view>{{loadError}}</view>
+    <view class="state-actions">
+      <button wx:if="{{pairId}}" class="retry-button" bindtap="loadDiary">重新加载</button>
+      <navigator class="return-button" url="/pages/elders/index" open-type="switchTab">返回家庭照护</navigator>
+    </view>
+  </view>
+
+  <block wx:elif="{{contextReady}}">
   <view class="form-card">
     <view class="two-column">
       <view class="column-field">
         <view class="field-label">日期</view>
-        <picker mode="date" value="{{entryDate}}" end="{{todayDate}}" bindchange="onDateChange" aria-label="健康日记日期">
+        <picker mode="date" value="{{entryDate}}" end="{{todayDate}}" disabled="{{!contextReady || busy}}" bindchange="onDateChange" aria-label="健康日记日期">
           <view class="picker-field">{{entryDate}}</view>
         </picker>
       </view>
       <view class="column-field">
         <view class="field-label">不适程度</view>
-        <picker range="{{severityOptions}}" value="{{severityIndex}}" bindchange="onSeverityChange" aria-label="今天的不适程度">
+        <picker range="{{severityOptions}}" value="{{severityIndex}}" disabled="{{!contextReady || busy}}" bindchange="onSeverityChange" aria-label="今天的不适程度">
           <view class="picker-field severity-{{severityIndex}}">{{severity}}</view>
         </picker>
       </view>
@@ -20,20 +30,24 @@
 
     <view class="field-group">
       <view class="field-label">今天哪里不舒服？</view>
-      <textarea class="text-area" maxlength="200" value="{{symptoms}}" bindinput="onSymptoms" placeholder="例如：下午有点头晕，休息后缓解" aria-label="今天哪里不舒服" />
+      <textarea class="text-area" maxlength="200" value="{{symptoms}}" disabled="{{!contextReady || busy}}" bindinput="onSymptoms" placeholder="例如：下午有点头晕，休息后缓解" aria-label="今天哪里不舒服" />
     </view>
 
     <view class="field-group">
       <view class="field-label">补充备注</view>
-      <textarea class="text-area short" maxlength="500" value="{{notes}}" bindinput="onNotes" placeholder="例如：今天喝水较少，已告知家人" aria-label="健康日记补充备注" />
+      <textarea class="text-area short" maxlength="500" value="{{notes}}" disabled="{{!contextReady || busy}}" bindinput="onNotes" placeholder="例如：今天喝水较少，已告知家人" aria-label="健康日记补充备注" />
     </view>
 
-    <button class="save-button" loading="{{busy}}" disabled="{{busy}}" bindtap="saveEntry">保存今天的记录</button>
+    <button class="save-button" loading="{{busy}}" disabled="{{!contextReady || busy}}" bindtap="saveEntry">保存今天的记录</button>
   </view>
 
   <view class="section-title">最近记录</view>
-  <view wx:if="{{loading}}" class="state-box">正在加载…</view>
-  <view wx:elif="{{entries.length === 0}}" class="state-box">还没有健康日记</view>
+  <view wx:if="{{loading}}" class="inline-state" role="status" aria-role="status">正在刷新健康日记…</view>
+  <view wx:if="{{dataStale && loadError}}" class="inline-warning" role="status" aria-role="status" aria-live="polite">
+    <view>{{loadError}}</view>
+    <button class="retry-button inline-retry" bindtap="loadDiary">重新刷新</button>
+  </view>
+  <view wx:if="{{!loading && entries.length === 0}}" class="state-box">还没有健康日记</view>
   <block wx:for="{{entries}}" wx:key="id">
     <view class="entry-card">
       <view class="entry-top">
@@ -45,6 +59,9 @@
       <view wx:if="{{item.weatherText}}" class="entry-weather">当天都昌县天气：{{item.weatherText}}</view>
     </view>
   </block>
+  </block>
+
+  <view wx:else class="state-box">请返回家庭照护，重新选择需要记录的家人。</view>
 
   <view class="medical-note">健康日记用于行动记录，不作医疗诊断。严重或持续不适时，请及时就医或求助。</view>
 </view>

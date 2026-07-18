@@ -6,9 +6,9 @@
   </view>
 
   <status-card wx:if="{{loading}}" state="loading" title="正在读取避暑资源" detail="资源由社区维护，页面会保留最近一次有效结果。" />
-  <status-card wx:elif="{{error && !allResources.length}}" state="error" title="避暑资源暂不可用" detail="{{error}}" action-label="重试" bind:action="retry" />
+  <status-card wx:elif="{{error && !counts.all}}" state="error" title="避暑资源暂不可用" detail="{{error}}" action-label="重试" bind:action="retry" />
 
-  <block wx:if="{{allResources.length}}">
+  <block wx:if="{{counts.all}}">
     <freshness-bar updated-text="{{freshness.updatedText}}" stale="{{freshness.stale}}" source="{{freshness.source}}" refresh-deferred="{{freshness.refreshDeferred}}" refresh-started="{{freshness.refreshStarted}}" />
     <scroll-view class="filters" scroll-x="true" show-scrollbar="false" aria-label="避暑资源筛选">
       <view class="filter-row" role="tablist" aria-role="tablist" aria-label="避暑资源筛选条件">

@@ -2,8 +2,14 @@
   <view class="page-title">给{{elderName}}的提醒</view>
   <view class="page-copy">根据都昌县共享天气快照生成，可以直接复制到微信聊天。</view>
 
-  <view wx:if="{{loading}}" class="state-box">正在生成提醒…</view>
-  <view wx:else class="message-card">
+  <view wx:if="{{loading}}" class="state-box" role="status" aria-role="status">正在生成提醒…</view>
+  <view wx:elif="{{loadError}}" class="error-state" role="alert" aria-role="alert">
+    <view class="error-title">提醒暂未准备好</view>
+    <view class="error-copy">{{loadError}}</view>
+    <button wx:if="{{pairId}}" class="retry-button" bindtap="loadTemplate">重新生成</button>
+    <navigator class="return-button" url="/pages/elders/index" open-type="switchTab">返回家庭照护</navigator>
+  </view>
+  <view wx:elif="{{contextReady && message}}" class="message-card">
     <view class="weather-row">
       <view class="location">都昌县</view>
       <view class="weather-summary stale" wx:if="{{weather.available && weather.stale}}">较早：最高 {{weather.temperatureMax === null ? '--' : weather.temperatureMax}}° · 最低 {{weather.temperatureMin === null ? '--' : weather.temperatureMin}}°</view>
@@ -12,9 +18,10 @@
     </view>
     <view wx:if="{{weatherNotice}}" class="weather-notice {{weather.stale ? 'stale' : ''}}" role="status" aria-role="status">{{weatherNotice}}</view>
     <view class="message-text">{{message}}</view>
-    <button class="copy-button" bindtap="copyMessage">复制整段提醒</button>
-    <button class="checkin-button" bindtap="goCheckin">去记录今日行动</button>
+    <button class="copy-button" bindtap="copyMessage" disabled="{{!contextReady || !message}}">复制整段提醒</button>
+    <button class="checkin-button" bindtap="goCheckin" disabled="{{!contextReady || !message}}">去记录今日行动</button>
   </view>
+  <view wx:else class="state-box" role="status" aria-role="status">提醒内容正在准备，请稍后重试。</view>
 
   <view class="safety-card">
     <view class="safety-title">使用边界</view>

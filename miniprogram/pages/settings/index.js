@@ -8,6 +8,7 @@ Page({
     settingsVerified: false,
     wxpusherUid: '',
     pushEnabled: false,
+    wxpusherAvailable: false,
     wxpusherConsent: false,
   },
 
@@ -17,6 +18,7 @@ Page({
       settingsVerified: false,
       wxpusherUid: '',
       pushEnabled: false,
+      wxpusherAvailable: false,
       wxpusherConsent: false,
     }, overrides || {}));
   },
@@ -51,6 +53,7 @@ Page({
       this.setData({
         wxpusherUid: me.wxpusher_uid || '',
         pushEnabled: !!me.push_enabled,
+        wxpusherAvailable: me.wxpusher_available === true,
         wxpusherConsent: false,
         settingsVerified: true,
       });
@@ -68,6 +71,11 @@ Page({
   onUid(event) { this.setData({ wxpusherUid: String(event.detail.value || '').trim() }); },
   onToggle(event) {
     const pushEnabled = !!event.detail.value;
+    if (pushEnabled && !this.data.wxpusherAvailable) {
+      this.setData({ pushEnabled: false, wxpusherConsent: false });
+      wx.showToast({ title: '推送服务暂不可用', icon: 'none' });
+      return;
+    }
     this.setData({ pushEnabled, wxpusherConsent: pushEnabled ? this.data.wxpusherConsent : false });
   },
   onWxPusherConsent(event) {
@@ -85,6 +93,10 @@ Page({
     ) {
       this.clearPrivateSettings({ loggedIn: !!sessionToken, loading: false });
       wx.showToast({ title: '请先重新加载并验证设置', icon: 'none' });
+      return;
+    }
+    if (this.data.pushEnabled && !this.data.wxpusherAvailable) {
+      wx.showToast({ title: '推送服务暂不可用', icon: 'none' });
       return;
     }
     if (this.data.pushEnabled && !this.data.wxpusherUid) {

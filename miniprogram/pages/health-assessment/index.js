@@ -40,6 +40,8 @@ Page({
     answers: {},
     completedCount: 0,
     latest: null,
+    latestLoading: false,
+    latestError: '',
     loading: false,
     busy: false,
   },
@@ -72,6 +74,8 @@ Page({
       answers: {},
       completedCount: 0,
       latest: null,
+      latestLoading: false,
+      latestError: '',
       loading: false,
       busy: false,
     });
@@ -87,12 +91,37 @@ Page({
   async loadPage() {
     const pageToken = (this._pageRequestToken || 0) + 1;
     this._pageRequestToken = pageToken;
-    this.setData({ loading: true });
+    const requestedPairId = Number(this.requestedPairId || 0);
+    const latestToken = requestedPairId
+      ? (this._latestRequestToken || 0) + 1
+      : 0;
+    if (latestToken) this._latestRequestToken = latestToken;
+    this.setData(Object.assign(
+      { loading: true },
+      latestToken ? { latestLoading: true, latestError: '' } : {}
+    ));
     try {
-      const elderData = await authApi({ method: 'GET', path: '/mp/api/v1/elders' });
+      const latestRequest = requestedPairId
+        ? authApi({
+          method: 'GET',
+          path: `/mp/api/v1/health/assessment?pair_id=${requestedPairId}`,
+        }).then(
+          (data) => ({ ok: true, data }),
+          (error) => ({ ok: false, error })
+        )
+        : Promise.resolve(null);
+      // 路由已携带家人 ID 时，家人列表和最近筛查互不依赖，同步发起可节省一次 RTT。
+      const [elderData, prefetchedLatest] = await Promise.all([
+        authApi({ method: 'GET', path: '/mp/api/v1/elders' }),
+        latestRequest,
+      ]);
       if (this._unloaded || pageToken !== this._pageRequestToken) return;
       const elders = normalizeList(elderData, ['items', 'elders']);
       if (!elders.length) {
+        if (latestToken === this._latestRequestToken) {
+          this._latestRequestToken += 1;
+          this.setData({ latestLoading: false, latestError: '' });
+        }
         wx.showModal({
           title: '请先添加家人',
           content: '健康筛查需要关联一位家中老人。',
@@ -101,18 +130,45 @@ Page({
         });
         return;
       }
-      let elderIndex = elders.findIndex((item) => Number(item.pair_id) === this.requestedPairId);
+      let elderIndex = elders.findIndex((item) => Number(item.pair_id) === requestedPairId);
       if (elderIndex < 0) elderIndex = 0;
       const pairId = Number(elders[elderIndex].pair_id);
-      this.setData({
+      const prefetchedPairMatches = Boolean(
+        requestedPairId
+        && pairId === requestedPairId
+        && latestToken === this._latestRequestToken
+      );
+      const nextData = {
         elders,
         elderNames: elders.map((item) => (item.member && item.member.name) || '家中老人'),
         elderIndex,
         pairId,
-      });
-      await this.loadLatest();
+      };
+      if (prefetchedPairMatches) {
+        Object.assign(nextData, {
+          latest: prefetchedLatest && prefetchedLatest.ok
+            ? normalizeAssessment(prefetchedLatest.data && prefetchedLatest.data.latest)
+            : this.data.latest,
+          latestLoading: false,
+          latestError: prefetchedLatest && prefetchedLatest.ok
+            ? ''
+            : '最近一次筛查结果暂时无法读取，本次筛查仍可继续。',
+        });
+      }
+      this.setData(nextData);
+      if (!prefetchedPairMatches) {
+        if (latestToken === this._latestRequestToken) {
+          this._latestRequestToken += 1;
+          this.setData({ latestLoading: false, latestError: '' });
+        }
+        await this.loadLatest();
+      }
     } catch (error) {
       if (!this._unloaded && pageToken === this._pageRequestToken) {
+        if (latestToken === this._latestRequestToken) {
+          this._latestRequestToken += 1;
+          this.setData({ latestLoading: false });
+        }
         wx.showToast({ title: '筛查页面加载失败', icon: 'none' });
       }
     } finally {
@@ -122,9 +178,16 @@ Page({
 
   async loadLatest() {
     const requestedPairId = Number(this.data.pairId);
-    if (!requestedPairId) return;
+    if (!requestedPairId) {
+      this.setData({
+        latestLoading: false,
+        latestError: '缺少家人信息，暂时无法读取最近一次筛查结果。',
+      });
+      return;
+    }
     const requestToken = (this._latestRequestToken || 0) + 1;
     this._latestRequestToken = requestToken;
+    this.setData({ latestLoading: true, latestError: '' });
     try {
       const data = await authApi({
         method: 'GET',
@@ -135,13 +198,27 @@ Page({
         || requestToken !== this._latestRequestToken
         || Number(this.data.pairId) !== requestedPairId
       ) return;
-      this.setData({ latest: normalizeAssessment(data && data.latest) });
+      this.setData({
+        latest: normalizeAssessment(data && data.latest),
+        latestError: '',
+      });
     } catch (error) {
       if (
         !this._unloaded
         && requestToken === this._latestRequestToken
         && Number(this.data.pairId) === requestedPairId
-      ) this.setData({ latest: null });
+      ) {
+        // 历史结果读取失败时保留已经显示的结果，并明确本次筛查仍可继续。
+        this.setData({
+          latestError: '最近一次筛查结果暂时无法读取，本次筛查仍可继续。',
+        });
+      }
+    } finally {
+      if (
+        !this._unloaded
+        && requestToken === this._latestRequestToken
+        && Number(this.data.pairId) === requestedPairId
+      ) this.setData({ latestLoading: false });
     }
   },
 
@@ -157,6 +234,8 @@ Page({
       elderIndex,
       pairId,
       latest: null,
+      latestLoading: false,
+      latestError: '',
       questions: freshQuestions(),
       answers: {},
       completedCount: 0,
@@ -213,7 +292,14 @@ Page({
         || submitToken !== this._submitRequestToken
         || Number(this.data.pairId) !== submittedPairId
       ) return;
-      this.setData({ latest: normalizeAssessment(data), questions: freshQuestions(), answers: {}, completedCount: 0 });
+      this.setData({
+        latest: normalizeAssessment(data),
+        latestLoading: false,
+        latestError: '',
+        questions: freshQuestions(),
+        answers: {},
+        completedCount: 0,
+      });
       wx.showToast({ title: '筛查已保存', icon: 'success' });
     } catch (error) {
       if (!this._unloaded && submitToken === this._submitRequestToken) {

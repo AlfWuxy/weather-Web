@@ -1,4 +1,4 @@
-// 发布联调覆盖项。公开提交必须保持 API_BASE_URL 为空。
+// 正式小程序分支固定公开后端域名；这里严禁放入任何密钥。
 module.exports = {
-  API_BASE_URL: '',
+  API_BASE_URL: 'https://yilaoweather.org',
 };

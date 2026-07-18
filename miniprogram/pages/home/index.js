@@ -16,6 +16,20 @@ const {
   sourceFromShareEvent,
 } = require('../../utils/share');
 
+function homeSnapshotView(snapshot) {
+  const source = snapshot || {};
+  // 首页只跨逻辑层与视图层传递实际渲染字段，避免复制预报、来源等整份快照。
+  return {
+    available: source.available,
+    location: source.location,
+    current: source.current,
+    warnings: Array.isArray(source.warnings) ? source.warnings : [],
+    warningsSourceAvailable: source.warningsSourceAvailable === true,
+    warningsStatusText: source.warningsStatusText,
+    risk: source.risk,
+  };
+}
+
 Page({
   data: {
     loading: true,
@@ -124,7 +138,7 @@ Page({
     this.setData({
       loading: false,
       error: '',
-      snapshot: displaySnapshot,
+      snapshot: homeSnapshotView(displaySnapshot),
       topActions: freshness.stale ? [] : snapshot.actions.slice(0, 3),
       freshness,
     });

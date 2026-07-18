@@ -52,12 +52,20 @@ function duchangDateParts(date) {
   // 固定使用 UTC+8，避免设备或 CI 所在时区改变都昌县的更新时间。
   const shifted = new Date(date.getTime() + (8 * 60 * 60 * 1000));
   return {
+    year: shifted.getUTCFullYear(),
     month: shifted.getUTCMonth() + 1,
     date: shifted.getUTCDate(),
     day: shifted.getUTCDay(),
     hours: shifted.getUTCHours(),
     minutes: shifted.getUTCMinutes(),
   };
+}
+
+function duchangDateKey(value) {
+  const date = value === undefined ? new Date() : parseDate(value);
+  if (!date) return '';
+  const parts = duchangDateParts(date);
+  return `${parts.year}-${pad2(parts.month)}-${pad2(parts.date)}`;
 }
 
 function formatDateTime(value) {
@@ -67,11 +75,15 @@ function formatDateTime(value) {
   return `${pad2(parts.month)}月${pad2(parts.date)}日 ${pad2(parts.hours)}:${pad2(parts.minutes)}`;
 }
 
-function formatDay(value, index) {
+function formatDay(value, index, now) {
   const date = parseDate(value);
   if (!date) return index === 0 ? '今天' : `第 ${index + 1} 天`;
-  if (index === 0) return '今天';
-  if (index === 1) return '明天';
+  const current = now === undefined ? new Date() : parseDate(now);
+  if (current) {
+    const dateKey = duchangDateKey(date);
+    if (dateKey === duchangDateKey(current)) return '今天';
+    if (dateKey === duchangDateKey(new Date(current.getTime() + 24 * 60 * 60 * 1000))) return '明天';
+  }
   const week = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
   const parts = duchangDateParts(date);
   return `${parts.month}/${parts.date} ${week[parts.day]}`;
@@ -120,7 +132,6 @@ function normalizeForecastItem(item, index) {
     available,
     tone: riskTone(level, score),
     riskLabel: riskLabel(level, score, available),
-    source,
   };
 }
 
@@ -307,7 +318,6 @@ function normalizeBootstrap(payload) {
     },
     actions: actionsRaw.map(normalizeAction),
     sources: normalizeSources(data.source_status),
-    raw: data,
   };
 }
 
@@ -342,7 +352,6 @@ function normalizeCommunityItem(item, index) {
     elderlyText: elderlyRatio === null ? '待更新' : `${elderlyRatio <= 1 ? (elderlyRatio * 100).toFixed(1) : elderlyRatio.toFixed(1)}%`,
     uncertainty: finiteNumber(firstDefined(source, ['uncertainty_index'], null)),
     hotspot: String(firstDefined(source, ['hotspot_category'], '')),
-    source,
   };
 }
 
@@ -398,6 +407,7 @@ function freshnessView(resultMeta, snapshot) {
 }
 
 module.exports = {
+  duchangDateKey,
   finiteNumber,
   firstDefined,
   formatDateTime,

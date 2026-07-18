@@ -252,6 +252,38 @@ test('较早公共天气隐藏旧风险分数并退回通用行动', () => {
   assert.match(actionsView, /较早天气已切换为通用清单/);
 });
 
+test('首页只向视图层传递当前天气和前三项行动', () => {
+  const result = {
+    data: {
+      available: true,
+      location: { name: '都昌县' },
+      current: { temperature: 35, temperature_max: 38, temperature_min: 28 },
+      risk: { score: 72, level: '高风险' },
+      warnings: [],
+      source_status: { warnings: { available: true }, weather: { available: true } },
+      forecast: Array.from({ length: 7 }, (_, index) => ({
+        date: `2026-07-${String(index + 18).padStart(2, '0')}`,
+        temperature_max: 36 + index,
+      })),
+      actions: Array.from({ length: 6 }, (_, index) => ({
+        id: `action-${index + 1}`,
+        title: `行动 ${index + 1}`,
+      })),
+    },
+    meta: { source: 'network', stale: false },
+  };
+  const page = pageInstance(loadHomePageDefinition());
+
+  page.renderSnapshot.call(page, result);
+
+  assert.equal(page.data.snapshot.current.temperature, 35);
+  assert.equal(page.data.snapshot.warningsStatusText, '当前暂无预警');
+  assert.equal(Object.hasOwn(page.data.snapshot, 'forecast'), false);
+  assert.equal(Object.hasOwn(page.data.snapshot, 'actions'), false);
+  assert.equal(Object.hasOwn(page.data.snapshot, 'sources'), false);
+  assert.deepEqual(page.data.topActions.map((item) => item.id), ['action-1', 'action-2', 'action-3']);
+});
+
 test('较早预警和预报不继续展示有效风险结论', () => {
   const result = {
     data: {

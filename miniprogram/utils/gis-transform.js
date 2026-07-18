@@ -156,11 +156,47 @@ function legendEntries(spec) {
   });
 }
 
+function pointOnSegment(point, start, end) {
+  const epsilon = 1e-7;
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  const lengthSquared = dx * dx + dy * dy;
+  if (lengthSquared <= epsilon * epsilon) {
+    return Math.abs(point.x - start.x) <= epsilon && Math.abs(point.y - start.y) <= epsilon;
+  }
+  const cross = (point.x - start.x) * dy - (point.y - start.y) * dx;
+  if (Math.abs(cross) > epsilon * Math.max(1, Math.abs(dx) + Math.abs(dy))) return false;
+  const dot = (point.x - start.x) * dx + (point.y - start.y) * dy;
+  if (dot < -epsilon) return false;
+  return dot <= lengthSquared + epsilon;
+}
+
+function pointInPath(path, x, y) {
+  if (!Array.isArray(path) || path.length < 3) return false;
+  const point = { x, y };
+  let inside = false;
+  for (let index = 0, previous = path.length - 1; index < path.length; previous = index, index += 1) {
+    const start = path[previous];
+    const end = path[index];
+    if (!start || !end || !isFiniteNumber(start.x) || !isFiniteNumber(start.y)
+      || !isFiniteNumber(end.x) || !isFiniteNumber(end.y)) continue;
+    // 边界点视为命中；共享边界最终归属绘制顺序靠后的网格。
+    if (pointOnSegment(point, start, end)) return true;
+    const crossesScanline = (start.y > y) !== (end.y > y);
+    if (!crossesScanline) continue;
+    const intersectionX = start.x + ((y - start.y) * (end.x - start.x)) / (end.y - start.y);
+    if (x < intersectionX) inside = !inside;
+  }
+  return inside;
+}
+
 function hitTest(cells, x, y) {
+  if (!isFiniteNumber(x) || !isFiniteNumber(y)) return null;
   const list = cells || [];
   for (let index = list.length - 1; index >= 0; index -= 1) {
     const cell = list[index];
-    if (x >= cell.minX && x <= cell.maxX && y >= cell.minY && y <= cell.maxY) return cell;
+    if (x < cell.minX || x > cell.maxX || y < cell.minY || y > cell.maxY) continue;
+    if (pointInPath(cell.path, x, y)) return cell;
   }
   return null;
 }
@@ -182,5 +218,7 @@ module.exports = {
   hitTest,
   legendEntries,
   makeCanvasModel,
+  pointInPath,
+  project,
   resolveLayer,
 };

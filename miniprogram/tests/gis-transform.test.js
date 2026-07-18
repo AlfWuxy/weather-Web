@@ -1,10 +1,13 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
 
 const {
   colorForValue,
   hitTest,
   makeCanvasModel,
+  project,
   resolveLayer,
 } = require('../utils/gis-transform');
 
@@ -49,4 +52,54 @@ test('图层断点映射稳定', () => {
   assert.equal(colorForValue(0, spec), '#111111');
   assert.equal(colorForValue(15, spec), '#222222');
   assert.equal(colorForValue(null, spec), '#ddd8d3');
+});
+
+test('bbox 内但多边形外的点不会误命中', () => {
+  const triangle = {
+    id: 'triangle',
+    path: [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 0, y: 10 }, { x: 0, y: 0 }],
+    minX: 0,
+    maxX: 10,
+    minY: 0,
+    maxY: 10,
+  };
+  assert.equal(hitTest([triangle], 9, 9), null);
+  assert.equal(hitTest([triangle], 2, 2).id, 'triangle');
+});
+
+test('共享边界按绘制顺序确定归属', () => {
+  const left = {
+    id: 'left',
+    path: [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }, { x: 0, y: 10 }, { x: 0, y: 0 }],
+    minX: 0, maxX: 10, minY: 0, maxY: 10,
+  };
+  const right = {
+    id: 'right',
+    path: [{ x: 10, y: 0 }, { x: 20, y: 0 }, { x: 20, y: 10 }, { x: 10, y: 10 }, { x: 10, y: 0 }],
+    minX: 10, maxX: 20, minY: 0, maxY: 10,
+  };
+  assert.equal(hitTest([left, right], 10, 5).id, 'right');
+  assert.equal(hitTest([right, left], 10, 5).id, 'left');
+});
+
+test('真实都昌 GIS 的全部网格质心命中自身多边形', () => {
+  const fixturePath = path.resolve(__dirname, '../../static/data/gis/duchang_heat_exposure_cells.geojson');
+  const collection = JSON.parse(fs.readFileSync(fixturePath, 'utf8'));
+  const padding = 16;
+  const model = makeCanvasModel(collection, 'q3_lst_c_mean', 750, 900, padding);
+  const failures = [];
+  model.cells.forEach((cell) => {
+    const center = project(
+      Number(cell.properties.center_lon_wgs84),
+      Number(cell.properties.center_lat_wgs84),
+      model.bounds,
+      model.width,
+      model.height,
+      padding,
+    );
+    const matched = hitTest(model.cells, center.x, center.y);
+    if (!matched || matched.id !== cell.id) failures.push([cell.id, matched && matched.id]);
+  });
+  assert.equal(model.cells.length, 2593);
+  assert.deepEqual(failures, []);
 });

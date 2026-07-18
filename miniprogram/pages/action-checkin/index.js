@@ -1,5 +1,6 @@
 const { authApi, getSnapshot, requireToken } = require('../elders/care-session');
 const { normalizeList, normalizeSnapshot } = require('../elders/care-logic');
+const { duchangDateKey } = require('../../utils/format');
 
 const ACTION_PLANS = {
   heat: [
@@ -35,6 +36,45 @@ function weatherStatus(weather) {
   return '常规天气提示';
 }
 
+function restoreTodayActions(actions, today) {
+  const status = today && typeof today === 'object' ? today : {};
+  if (String(status.status_date || '') !== duchangDateKey()) {
+    return { actions, selectedActions: [], confirmed: false, helpRecorded: false };
+  }
+  const stored = new Set(
+    (Array.isArray(status.elder_actions) ? status.elder_actions : [])
+      .slice(0, 20)
+      .filter((item) => typeof item === 'string'),
+  );
+  // 只恢复当前清单仍认识的行动，旧版本 ID 不进入新的提交。
+  const selectedActions = actions
+    .map((item) => item.id)
+    .filter((itemId) => stored.has(itemId));
+  const selected = new Set(selectedActions);
+  return {
+    actions: actions.map((item) => ({ ...item, checked: selected.has(item.id) })),
+    selectedActions,
+    confirmed: typeof status.confirmed_at === 'string' && Boolean(status.confirmed_at.trim()),
+    helpRecorded: Boolean(status.help_flag),
+  };
+}
+
+function beginRequest(page, key) {
+  const requestId = Number(page[key] || 0) + 1;
+  page[key] = requestId;
+  return { requestId, lifecycle: Number(page._lifecycleGeneration || 0) };
+}
+
+function requestIsActive(page, key, request) {
+  return page._unloaded !== true
+    && Number(page._lifecycleGeneration || 0) === request.lifecycle
+    && Number(page[key] || 0) === request.requestId;
+}
+
+function lifecycleIsActive(page, lifecycle) {
+  return page._unloaded !== true && Number(page._lifecycleGeneration || 0) === lifecycle;
+}
+
 Page({
   data: {
     pairId: null,
@@ -60,6 +100,8 @@ Page({
   },
 
   async onLoad(options) {
+    this._unloaded = false;
+    this._lifecycleGeneration = Number(this._lifecycleGeneration || 0) + 1;
     if (!requireToken()) return;
     const pairId = Number(options.pair_id || 0) || null;
     this.setData({ pairId });
@@ -80,7 +122,16 @@ Page({
     requireToken();
   },
 
+  onUnload() {
+    this._unloaded = true;
+    this._lifecycleGeneration = Number(this._lifecycleGeneration || 0) + 1;
+    this._contextRequestId = Number(this._contextRequestId || 0) + 1;
+  },
+
   onSessionInvalidated() {
+    this._lifecycleGeneration = Number(this._lifecycleGeneration || 0) + 1;
+    this._contextRequestId = Number(this._contextRequestId || 0) + 1;
+    if (this._unloaded) return;
     this.setData({
       pairId: null,
       elderName: '家人',
@@ -105,6 +156,8 @@ Page({
   },
 
   async loadContext() {
+    if (this._unloaded) return;
+    const request = beginRequest(this, '_contextRequestId');
     const pairId = Number(this.data.pairId || 0);
     if (!pairId) {
       this.setData({
@@ -136,21 +189,26 @@ Page({
         getSnapshot().catch(() => ({})),
       ]);
       const elder = normalizeList(elderData, ['items', 'elders'])
-        .find((item) => Number(item.pair_id) === this.data.pairId);
+        .find((item) => Number(item.pair_id) === pairId);
+      if (!requestIsActive(this, '_contextRequestId', request)) return;
       if (!elder) throw new Error('not_found');
       const weather = normalizeSnapshot(snapshot);
+      const plan = actionPlan(weather.stale ? '' : weather.trigger);
+      const restored = restoreTodayActions(plan, elder.today);
       this.setData({
         elderName: elder.member && elder.member.name ? elder.member.name : '家人',
         weather,
         weatherStatus: weatherStatus(weather),
         // 较早天气只作可见参考，行动清单退回通用安全项，避免沿用过期风险判断。
-        actions: actionPlan(weather.stale ? '' : weather.trigger),
-        selectedActions: [],
+        actions: restored.actions,
+        selectedActions: restored.selectedActions,
         contextReady: true,
         loadError: '',
-        confirmed: false,
+        confirmed: restored.confirmed,
+        helpRecorded: restored.helpRecorded,
       });
     } catch (error) {
+      if (!requestIsActive(this, '_contextRequestId', request)) return;
       this.setData({
         elderName: '家人',
         weather: normalizeSnapshot({}),
@@ -163,17 +221,17 @@ Page({
         helpRecorded: false,
       });
     } finally {
-      this.setData({ loading: false });
+      if (requestIsActive(this, '_contextRequestId', request)) this.setData({ loading: false });
     }
   },
 
   hasVerifiedContext() {
-    return this.data.contextReady === true && Number(this.data.pairId || 0) > 0;
+    return this._unloaded !== true && this.data.contextReady === true && Number(this.data.pairId || 0) > 0;
   },
 
   ensureContextReady() {
     if (this.hasVerifiedContext()) return true;
-    wx.showToast({ title: '请先重新加载家人信息', icon: 'none' });
+    if (!this._unloaded) wx.showToast({ title: '请先重新加载家人信息', icon: 'none' });
     return false;
   },
 
@@ -211,60 +269,69 @@ Page({
       wx.showToast({ title: '请至少勾选一项', icon: 'none' });
       return;
     }
+    const lifecycle = Number(this._lifecycleGeneration || 0);
+    const pairId = Number(this.data.pairId);
     this.setData({ busyAction: 'confirm' });
     try {
       await authApi({
         method: 'POST',
-        path: `/mp/api/v1/actions/${this.data.pairId}/confirm`,
+        path: `/mp/api/v1/actions/${pairId}/confirm`,
         data: { actions_done: selectedActions },
       });
+      if (!lifecycleIsActive(this, lifecycle)) return;
       this.setData({ confirmed: true });
       wx.showToast({ title: '今日行动已记录', icon: 'success' });
     } catch (error) {
-      wx.showToast({ title: '确认失败，请稍后再试', icon: 'none' });
+      if (lifecycleIsActive(this, lifecycle)) wx.showToast({ title: '确认失败，请稍后再试', icon: 'none' });
     } finally {
-      this.setData({ busyAction: '' });
+      if (lifecycleIsActive(this, lifecycle)) this.setData({ busyAction: '' });
     }
   },
 
   requestHelp() {
     if (!this.ensureContextReady()) return;
     if (this.data.busyAction) return;
+    const lifecycle = Number(this._lifecycleGeneration || 0);
+    const updating = this.data.helpRecorded === true;
     wx.showModal({
-      title: '记录一条求助需求？',
-      content: '本操作只保存求助记录，不会通过微信、短信或电话自动通知家人。请同时直接联系家人，紧急情况请拨打 120。',
-      confirmText: '保存记录',
+      title: updating ? '更新求助说明？' : '记录一条求助需求？',
+      content: `${updating ? '本操作会更新已保存的求助说明' : '本操作只保存求助记录'}，不会通过微信、短信或电话自动通知家人。请同时直接联系家人，紧急情况请拨打 120。`,
+      confirmText: updating ? '更新说明' : '保存记录',
       confirmColor: '#b42318',
       success: async (result) => {
+        if (!lifecycleIsActive(this, lifecycle)) return;
         if (!result.confirm) return;
         // 弹窗停留期间上下文可能失效，真正写入前必须再次核验。
         if (!this.ensureContextReady() || this.data.busyAction) return;
         this.setData({ busyAction: 'help' });
+        const pairId = Number(this.data.pairId);
         try {
           await authApi({
             method: 'POST',
-            path: `/mp/api/v1/actions/${this.data.pairId}/help`,
+            path: `/mp/api/v1/actions/${pairId}/help`,
             data: { note: String(this.data.helpNote || '').trim().slice(0, 300) },
           });
+          if (!lifecycleIsActive(this, lifecycle)) return;
           this.setData({ helpRecorded: true });
-          wx.showToast({ title: '求助需求已记录', icon: 'success' });
+          wx.showToast({ title: updating ? '求助说明已更新' : '求助需求已记录', icon: 'success' });
         } catch (error) {
-          wx.showToast({ title: '记录失败，请直接联系家人', icon: 'none' });
+          if (lifecycleIsActive(this, lifecycle)) wx.showToast({ title: '记录失败，请直接联系家人', icon: 'none' });
         } finally {
-          this.setData({ busyAction: '' });
+          if (lifecycleIsActive(this, lifecycle)) this.setData({ busyAction: '' });
         }
       },
     });
   },
 
   callEmergency() {
+    const lifecycle = Number(this._lifecycleGeneration || 0);
     wx.showModal({
       title: '拨打 120',
       content: '如有胸痛、呼吸困难、意识异常等紧急情况，请立即求助。确认后将打开电话拨号。',
       confirmText: '拨打 120',
       confirmColor: '#b42318',
       success: (result) => {
-        if (result.confirm) wx.makePhoneCall({ phoneNumber: '120' });
+        if (lifecycleIsActive(this, lifecycle) && result.confirm) wx.makePhoneCall({ phoneNumber: '120' });
       },
     });
   },
@@ -276,11 +343,13 @@ Page({
       wx.showToast({ title: '请至少填写一项复盘内容', icon: 'none' });
       return;
     }
+    const lifecycle = Number(this._lifecycleGeneration || 0);
+    const pairId = Number(this.data.pairId);
     this.setData({ busyAction: 'debrief' });
     try {
       await authApi({
         method: 'POST',
-        path: `/mp/api/v1/actions/${this.data.pairId}/debrief`,
+        path: `/mp/api/v1/actions/${pairId}/debrief`,
         data: {
           question_1: this.data.question1,
           question_2: String(this.data.question2 || '').trim().slice(0, 200),
@@ -289,12 +358,13 @@ Page({
           debrief_optin: this.data.debriefOptin,
         },
       });
+      if (!lifecycleIsActive(this, lifecycle)) return;
       this.setData({ question2: '', question3: '', difficulty: '' });
       wx.showToast({ title: '复盘已保存', icon: 'success' });
     } catch (error) {
-      wx.showToast({ title: '复盘提交失败', icon: 'none' });
+      if (lifecycleIsActive(this, lifecycle)) wx.showToast({ title: '复盘提交失败', icon: 'none' });
     } finally {
-      this.setData({ busyAction: '' });
+      if (lifecycleIsActive(this, lifecycle)) this.setData({ busyAction: '' });
     }
   },
 });

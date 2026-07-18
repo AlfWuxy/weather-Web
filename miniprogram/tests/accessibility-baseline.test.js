@@ -49,11 +49,11 @@ test('所有小程序样式在 320px 设备上的阅读字号不小于 14px', ()
   assert.deepEqual(violations, []);
 });
 
-test('320px 设备为原生交互控件提供 44px 触控基线并降低公共双列布局', () => {
+test('374px 及以下设备为原生交互控件提供 44px 触控基线并降低公共双列布局', () => {
   const style = fs.readFileSync(path.join(miniRoot, 'app.wxss'), 'utf8');
-  assert.match(style, /@media screen and \(max-width: 340px\)[\s\S]*min-height:\s*44px\s*!important/);
-  assert.match(style, /@media screen and \(max-width: 340px\)[\s\S]*min-width:\s*44px\s*!important/);
-  assert.match(style, /@media screen and \(max-width: 340px\)[\s\S]*\.grid-two\s*\{\s*grid-template-columns:\s*1fr/);
+  assert.match(style, /@media screen and \(max-width: 374px\)[\s\S]*min-height:\s*44px\s*!important/);
+  assert.match(style, /@media screen and \(max-width: 374px\)[\s\S]*min-width:\s*44px\s*!important/);
+  assert.match(style, /@media screen and \(max-width: 374px\)[\s\S]*\.grid-two\s*\{\s*grid-template-columns:\s*1fr/);
 });
 
 function relativeLuminance(hex) {

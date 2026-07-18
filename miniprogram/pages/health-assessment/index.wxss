@@ -18,6 +18,8 @@
 .state-box,
 .person-card,
 .question-card,
+.history-state,
+.history-error,
 .result-card {
   margin-top: 24rpx;
   padding: 28rpx;
@@ -96,6 +98,10 @@
 }
 
 .option-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10rpx;
   min-height: 88rpx;
   margin: 0;
   padding: 0 24rpx;
@@ -112,6 +118,17 @@
   color: #ffffff;
 }
 
+.option-check {
+  flex: 0 0 30rpx;
+  width: 30rpx;
+  height: 30rpx;
+}
+
+.selected-label {
+  font-size: 14px;
+  font-weight: 700;
+}
+
 .submit-button {
   min-height: 94rpx;
   margin-top: 28rpx;
@@ -121,6 +138,31 @@
   font-size: 15px;
   font-weight: 700;
   line-height: 94rpx;
+}
+
+.history-state,
+.history-error {
+  color: #66736c;
+  line-height: 1.65;
+  text-align: center;
+}
+
+.history-error {
+  border: 1rpx solid #efc998;
+  background: #fff4e5;
+  color: #784116;
+}
+
+.history-retry {
+  min-height: 88rpx;
+  margin: 18rpx 0 0;
+  border: 1rpx solid #d6b078;
+  border-radius: 16rpx;
+  background: #ffffff;
+  color: #784116;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.4;
 }
 
 .result-card {

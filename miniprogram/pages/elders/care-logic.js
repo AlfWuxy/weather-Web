@@ -1,4 +1,4 @@
-const { formatDateTime } = require('../../utils/format');
+const { duchangDateKey, formatDateTime } = require('../../utils/format');
 
 const FIXED_LOCATION = '都昌县';
 
@@ -69,14 +69,13 @@ function splitChronic(text) {
 }
 
 function validateElderInput(input, options) {
-  const mode = options && options.mode === 'edit' ? 'edit' : 'create';
   const name = cleanText(input && input.name, 50);
   const relation = cleanText(input && input.relation, 20);
   const gender = cleanText(input && input.gender, 10);
   const rawAge = cleanText(input && input.age, 3);
   let age = null;
 
-  if (mode === 'create' && !name) {
+  if (!name) {
     return { valid: false, error: '请填写老人姓名或称呼' };
   }
   if (rawAge) {
@@ -103,20 +102,15 @@ function validateElderInput(input, options) {
 }
 
 function formatLocalDate(date) {
-  const target = date instanceof Date ? date : new Date(date || Date.now());
-  if (Number.isNaN(target.getTime())) return '';
-  const year = target.getFullYear();
-  const month = String(target.getMonth() + 1).padStart(2, '0');
-  const day = String(target.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
+  return duchangDateKey(date === undefined ? new Date() : date);
 }
 
 function isValidDateText(value) {
   const text = cleanText(value, 10);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) return false;
   const [year, month, day] = text.split('-').map(Number);
-  const date = new Date(year, month - 1, day);
-  return date.getFullYear() === year && date.getMonth() === month - 1 && date.getDate() === day;
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
 }
 
 function validateDiaryInput(input) {

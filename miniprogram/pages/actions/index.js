@@ -1,5 +1,5 @@
 const { getBootstrap } = require('../../utils/public-data');
-const { freshnessView, normalizeBootstrap } = require('../../utils/format');
+const { duchangDateKey, freshnessView, normalizeBootstrap } = require('../../utils/format');
 const { allowsJsMotion } = require('../../utils/motion');
 const {
   beginPublicPage,
@@ -24,10 +24,7 @@ const GENERAL_ACTIONS = [
 ];
 
 function todayKey() {
-  const date = new Date();
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
-  return `${date.getFullYear()}-${month}-${day}`;
+  return duchangDateKey();
 }
 
 function readChecked() {

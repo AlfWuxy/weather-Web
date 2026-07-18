@@ -16,6 +16,7 @@
 }
 
 .state-box,
+.error-state,
 .message-card,
 .safety-card {
   margin-top: 26rpx;
@@ -28,6 +29,48 @@
 .state-box {
   color: #66736c;
   text-align: center;
+}
+
+.error-state {
+  border: 1rpx solid #f0c7b9;
+  background: #fff7f2;
+}
+
+.error-title {
+  color: #8a321b;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.error-copy {
+  margin-top: 12rpx;
+  color: #744a3d;
+  font-size: 14px;
+  line-height: 1.65;
+}
+
+.retry-button,
+.return-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 88rpx;
+  border-radius: 18rpx;
+  font-size: 14px;
+  line-height: 88rpx;
+}
+
+.retry-button {
+  margin-top: 24rpx;
+  background: #167a43;
+  color: #ffffff;
+}
+
+.return-button {
+  margin-top: 14rpx;
+  border: 1rpx solid #cbd8d0;
+  background: #ffffff;
+  color: #315340;
 }
 
 .weather-row {

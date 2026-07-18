@@ -2,51 +2,65 @@
   <view class="page-title">{{elderName}}的用药记录</view>
   <view class="page-copy">本页只保存药名、剂量、频率、时间和天气条件，方便家人查看。系统不会定时提醒、不会发送订阅消息，也不会自动通知家人。</view>
 
+  <view wx:if="{{loading && !contextReady}}" class="state-box" role="status" aria-role="status">正在核对家人信息并加载用药记录…</view>
+  <view wx:elif="{{loadError && !contextReady}}" class="state-box error-state" role="alert" aria-role="alert">
+    <view>{{loadError}}</view>
+    <view class="state-actions">
+      <button wx:if="{{pairId}}" class="retry-button" bindtap="loadMedications">重新加载</button>
+      <navigator class="return-button" url="/pages/elders/index" open-type="switchTab">返回家庭照护</navigator>
+    </view>
+  </view>
+
+  <block wx:elif="{{contextReady}}">
   <view class="form-card">
     <view class="field-group first-field">
       <view class="field-label">药品名称 <text>*</text></view>
-      <input class="text-input" maxlength="100" value="{{medicineName}}" bindinput="onMedicineName" placeholder="请按药盒或医嘱填写" aria-label="药品名称，必填" />
+      <input class="text-input" maxlength="100" value="{{medicineName}}" disabled="{{!contextReady || busy}}" bindinput="onMedicineName" placeholder="请按药盒或医嘱填写" aria-label="药品名称，必填" />
     </view>
     <view class="field-group">
       <view class="field-label">剂量或说明</view>
-      <input class="text-input" maxlength="100" value="{{dosage}}" bindinput="onDosage" placeholder="例如：每次 1 片，饭后" aria-label="用药剂量或说明" />
+      <input class="text-input" maxlength="100" value="{{dosage}}" disabled="{{!contextReady || busy}}" bindinput="onDosage" placeholder="例如：每次 1 片，饭后" aria-label="用药剂量或说明" />
     </view>
     <view class="two-column">
       <view class="column-field">
         <view class="field-label">频率</view>
-        <picker range="{{frequencyOptions}}" value="{{frequencyIndex}}" bindchange="onFrequencyChange" aria-label="用药频率">
+        <picker range="{{frequencyOptions}}" value="{{frequencyIndex}}" disabled="{{!contextReady || busy}}" bindchange="onFrequencyChange" aria-label="用药频率">
           <view class="picker-field">{{frequencyOptions[frequencyIndex]}}</view>
         </picker>
       </view>
       <view class="column-field">
         <view class="field-label">计划时间（仅供记录）</view>
-        <picker mode="time" value="{{timeOfDay}}" bindchange="onTimeChange" aria-label="计划用药时间，仅供记录">
+        <picker mode="time" value="{{timeOfDay}}" disabled="{{!contextReady || busy}}" bindchange="onTimeChange" aria-label="计划用药时间，仅供记录">
           <view class="picker-field">{{timeOfDay}}</view>
         </picker>
       </view>
     </view>
 
-    <button class="trigger-toggle" bindtap="toggleWeatherTriggers">
+    <button class="trigger-toggle" disabled="{{!contextReady || busy}}" bindtap="toggleWeatherTriggers">
       <image class="trigger-icon {{showWeatherTriggers ? 'expanded' : ''}}" src="{{showWeatherTriggers ? '/assets/icons/arrow-down.png' : '/assets/icons/add.png'}}" mode="aspectFit" aria-hidden="true" />
       <text>{{showWeatherTriggers ? '收起天气条件' : '添加可选天气条件'}}</text>
     </button>
     <view wx:if="{{showWeatherTriggers}}" class="trigger-panel">
       <view class="trigger-copy">天气条件只作为记录标签，不会触发或加强提醒，也不会发送通知。</view>
       <view class="trigger-grid">
-        <input class="small-input" type="digit" value="{{highTemp}}" bindinput="onHighTemp" placeholder="高温 ≥ °C" aria-label="可选记录条件：高温摄氏度阈值" />
-        <input class="small-input" type="digit" value="{{lowTemp}}" bindinput="onLowTemp" placeholder="低温 ≤ °C" aria-label="可选记录条件：低温摄氏度阈值" />
-        <input class="small-input" type="number" value="{{highHumidity}}" bindinput="onHighHumidity" placeholder="湿度 ≥ %" aria-label="可选记录条件：高湿度百分比阈值" />
-        <input class="small-input" type="number" value="{{highAqi}}" bindinput="onHighAqi" placeholder="AQI ≥" aria-label="可选记录条件：空气质量指数阈值" />
+        <input class="small-input" type="digit" value="{{highTemp}}" disabled="{{!contextReady || busy}}" bindinput="onHighTemp" placeholder="高温 ≥ °C" aria-label="可选记录条件：高温摄氏度阈值" />
+        <input class="small-input" type="digit" value="{{lowTemp}}" disabled="{{!contextReady || busy}}" bindinput="onLowTemp" placeholder="低温 ≤ °C" aria-label="可选记录条件：低温摄氏度阈值" />
+        <input class="small-input" type="number" value="{{highHumidity}}" disabled="{{!contextReady || busy}}" bindinput="onHighHumidity" placeholder="湿度 ≥ %" aria-label="可选记录条件：高湿度百分比阈值" />
+        <input class="small-input" type="number" value="{{highAqi}}" disabled="{{!contextReady || busy}}" bindinput="onHighAqi" placeholder="AQI ≥" aria-label="可选记录条件：空气质量指数阈值" />
       </view>
     </view>
 
-    <button class="save-button" loading="{{busy}}" disabled="{{busy}}" bindtap="addMedication">保存用药记录</button>
+    <button class="save-button" loading="{{busy}}" disabled="{{!contextReady || busy}}" bindtap="addMedication">保存用药记录</button>
     <view class="medicine-warning">保存记录不代表会收到提醒。请自行设置可靠的服药提醒，并以医生或药师的用药指导为准。</view>
   </view>
 
   <view class="section-title">已保存的用药记录</view>
-  <view wx:if="{{loading}}" class="state-box">正在加载…</view>
-  <view wx:elif="{{medications.length === 0}}" class="state-box">还没有保存用药记录</view>
+  <view wx:if="{{loading}}" class="inline-state" role="status" aria-role="status">正在刷新用药记录…</view>
+  <view wx:if="{{dataStale && loadError}}" class="inline-warning" role="status" aria-role="status" aria-live="polite">
+    <view>{{loadError}}</view>
+    <button class="retry-button inline-retry" bindtap="loadMedications">重新刷新</button>
+  </view>
+  <view wx:if="{{!loading && medications.length === 0}}" class="state-box">还没有保存用药记录</view>
   <block wx:for="{{medications}}" wx:key="id">
     <view class="medicine-card">
       <view class="medicine-top">
@@ -57,7 +71,10 @@
         <view class="time-badge">{{item.timeOfDay}}</view>
       </view>
       <view class="medicine-meta">{{item.frequencyLabel}} · {{item.triggerText}}</view>
-      <button class="delete-link" data-id="{{item.id}}" data-name="{{item.medicineName}}" bindtap="deleteMedication">删除这条记录</button>
+      <button class="delete-link" data-id="{{item.id}}" data-name="{{item.medicineName}}" disabled="{{!contextReady || busy}}" bindtap="deleteMedication">删除这条记录</button>
     </view>
   </block>
+  </block>
+
+  <view wx:else class="state-box">请返回家庭照护，重新选择需要记录的家人。</view>
 </view>
