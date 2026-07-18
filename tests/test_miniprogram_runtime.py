@@ -838,6 +838,82 @@ def test_action_confirm_rejects_elder_action_collection_boundaries(
     assert DailyStatus.query.filter_by(pair_id=pair.id).count() == 0
 
 
+def test_action_help_accepts_300_characters_and_rejects_301(client, db_session):
+    from core.db_models import DailyStatus
+    from core.time_utils import today_local
+
+    owner, token = _user_and_token(db_session, "help-note-boundary-owner")
+    pair = _pair(db_session, owner, "73444555")
+    headers = {"Authorization": f"Bearer {token}"}
+
+    at_limit = client.post(
+        f"/mp/api/v1/actions/{pair.id}/help",
+        headers=headers,
+        json={"note": "求" * 300},
+    )
+    assert at_limit.status_code == 200
+    status = DailyStatus.query.filter_by(
+        pair_id=pair.id,
+        status_date=today_local(),
+    ).one()
+    assert status.caregiver_note == "求" * 300
+
+    over_limit = client.post(
+        f"/mp/api/v1/actions/{pair.id}/help",
+        headers=headers,
+        json={"note": "求" * 301},
+    )
+    assert over_limit.status_code == 400
+    assert over_limit.get_json()["error"] == "note_too_long"
+    db_session.refresh(status)
+    assert status.caregiver_note == "求" * 300
+
+
+@pytest.mark.parametrize(
+    ("field_name", "limit"),
+    (("question_1", 200), ("question_2", 200), ("difficulty", 500)),
+)
+def test_action_debrief_preserves_documented_text_boundaries(
+    client,
+    db_session,
+    field_name,
+    limit,
+):
+    from core.db_models import Debrief
+
+    owner, token = _user_and_token(
+        db_session,
+        f"debrief-boundary-{field_name}",
+    )
+    pair = _pair(
+        db_session,
+        owner,
+        {
+            "question_1": "73444601",
+            "question_2": "73444602",
+            "difficulty": "73444603",
+        }[field_name],
+    )
+    headers = {"Authorization": f"Bearer {token}"}
+
+    at_limit = client.post(
+        f"/mp/api/v1/actions/{pair.id}/debrief",
+        headers=headers,
+        json={field_name: "复" * limit, "debrief_optin": True},
+    )
+    assert at_limit.status_code == 200
+    record = db_session.get(Debrief, at_limit.get_json()["data"]["debrief_id"])
+    assert getattr(record, field_name) == "复" * limit
+
+    over_limit = client.post(
+        f"/mp/api/v1/actions/{pair.id}/debrief",
+        headers=headers,
+        json={field_name: "复" * (limit + 1), "debrief_optin": True},
+    )
+    assert over_limit.status_code == 400
+    assert over_limit.get_json()["error"] == f"{field_name}_too_long"
+
+
 def test_shared_confirm_rejects_elder_action_count_drift(db_session):
     """直接调用共享层时，行动数量和自护列表也必须保持一致。"""
     from core.db_models import DailyStatus
@@ -1352,6 +1428,11 @@ def test_account_delete_rejects_cross_user_and_anonymizes_owner_data(
     token = data["session_token"]
     headers = {"Authorization": f"Bearer {token}"}
     with app.app_context():
+        owner = db_session.get(User, user_id)
+        owner.wxpusher_uid = "UID_DELETE"
+        owner.push_enabled = True
+        owner.wxpusher_consent_version = app.config["WX_MINIPROGRAM_PRIVACY_VERSION"]
+        owner.wxpusher_consented_at = utcnow()
         db_session.add(
             HealthDiary(
                 user_id=user_id,
@@ -1396,6 +1477,10 @@ def test_account_delete_rejects_cross_user_and_anonymizes_owner_data(
         assert user.username.startswith("deleted_mp_")
         assert user.email is None
         assert user.deleted_at is not None
+        assert user.wxpusher_uid is None
+        assert user.push_enabled is False
+        assert user.wxpusher_consent_version is None
+        assert user.wxpusher_consented_at is None
         assert HealthDiary.query.filter_by(user_id=user_id).count() == 0
         assert Debrief.query.filter_by(owner_user_id=user_id).count() == 0
         assert MiniProgramIdentity.query.filter_by(user_id=user_id).count() == 0

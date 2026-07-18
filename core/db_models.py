@@ -86,6 +86,9 @@ class User(UserMixin, db.Model):
     # 试点推送设置（子女端）
     wxpusher_uid = db.Column(db.String(80))
     push_enabled = db.Column(db.Boolean, default=False)
+    # 第三方传输同意回执；文案版本变更后发送端自动失效。
+    wxpusher_consent_version = db.Column(db.String(64))
+    wxpusher_consented_at = db.Column(db.DateTime)
 
     def set_password(self, password):
         self.password_hash = generate_password_hash(password)

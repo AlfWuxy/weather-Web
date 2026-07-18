@@ -10,16 +10,20 @@
                 <div class="display-6 mb-3" aria-hidden="true">☀️</div>
                 <h1 class="h3 mb-3">确认收到天气提醒</h1>
                 <p class="text-muted mb-0">
-                    请由本人点击下方按钮。系统会记录一次确认，用于判断这条提醒是否成功送达。
+                    请由收件人本人点击下方按钮。链接携带随机持有者令牌，最长 7 天有效，请勿转发。页面无法核验实际点击者的身份。
                 </p>
             </div>
             <form method="post" action="{{ url_for('public.track_delivery', delivery_token=delivery_token) }}">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <button class="btn btn-primary btn-lg w-100" type="submit">我已看到这条提醒</button>
             </form>
-            <p class="small text-muted text-center mt-3 mb-0">
-                打开本页不会自动记录；只有主动点击确认按钮后才会保存确认时间。
-            </p>
+            <ul class="small text-muted mt-3 mb-0 ps-3">
+                <li>打开或预览本页（GET/HEAD）不会写入送达记录。</li>
+                <li>服务器仍可能生成必要的访问安全日志，这不等同于送达确认。</li>
+                <li>只有首次有效 POST 确认会写入一次，重复提交不会重复记录。</li>
+                <li>确认时间和自动确认标记满 30 天后清空。</li>
+                <li>防重复投递状态和人工复核记录保留至账号注销。</li>
+            </ul>
         </div>
     </div>
 </div>

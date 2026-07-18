@@ -1,6 +1,7 @@
 const { getBootstrap } = require('../../utils/public-data');
 const { duchangDateKey, freshnessView, normalizeBootstrap } = require('../../utils/format');
 const { allowsJsMotion } = require('../../utils/motion');
+const { loadActionChecked, saveActionChecked } = require('../../utils/action-storage');
 const {
   beginPublicPage,
   hidePublicPage,
@@ -29,8 +30,7 @@ function todayKey() {
 
 function readChecked() {
   try {
-    const record = wx.getStorageSync(`yl_actions_${todayKey()}`);
-    return record && typeof record === 'object' ? record : {};
+    return loadActionChecked(wx, todayKey());
   } catch (error) {
     return {};
   }
@@ -56,6 +56,8 @@ Page({
   },
 
   onLoad() {
+    // 页面启动即执行旧键迁移和跨日清理，不等待天气请求。
+    readChecked();
     beginPublicPage(this);
     showPublicShareMenu();
   },
@@ -134,7 +136,7 @@ Page({
     const record = {};
     actions.forEach((item) => { if (item.checked) record[item.id] = true; });
     try {
-      wx.setStorageSync(`yl_actions_${todayKey()}`, record);
+      saveActionChecked(wx, todayKey(), record);
     } catch (error) {
       wx.showToast({ title: '记录保存失败', icon: 'none' });
     }

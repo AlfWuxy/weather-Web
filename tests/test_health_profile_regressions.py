@@ -204,6 +204,7 @@ def test_profile_rejects_wxpusher_enable_when_channel_missing_without_partial_up
         'wxpusher_uid': 'UID_CHANGED',
         'push_enabled': 'on',
         'wxpusher_consent': '1',
+        'wxpusher_consent_version': app.config['WX_MINIPROGRAM_PRIVACY_VERSION'],
     })
 
     response = authenticated_client.post('/profile', data=form, follow_redirects=True)
@@ -257,6 +258,7 @@ def test_profile_enables_wxpusher_with_current_consent(
         'wxpusher_uid': 'UID_ENABLED',
         'push_enabled': 'on',
         'wxpusher_consent': '1',
+        'wxpusher_consent_version': app.config['WX_MINIPROGRAM_PRIVACY_VERSION'],
     })
 
     response = authenticated_client.post('/profile', data=form, follow_redirects=True)
@@ -267,6 +269,39 @@ def test_profile_enables_wxpusher_with_current_consent(
     assert current.email == 'after@example.com'
     assert current.wxpusher_uid == 'UID_ENABLED'
     assert current.push_enabled is True
+    assert current.wxpusher_consent_version == app.config['WX_MINIPROGRAM_PRIVACY_VERSION']
+    assert current.wxpusher_consented_at is not None
+
+
+def test_profile_rejects_stale_wxpusher_consent_version_without_partial_update(
+    app,
+    authenticated_client,
+    db_session,
+):
+    app.config['WXPUSHER_APP_TOKEN'] = 'AT_test-wxpusher-token'
+    current = User.query.filter_by(username='testuser').first()
+    current.email = 'before@example.com'
+    current.wxpusher_uid = 'UID_KEEP'
+    current.push_enabled = False
+    db_session.commit()
+    form = _profile_form('after@example.com')
+    form.update({
+        'wxpusher_uid': 'UID_CHANGED',
+        'push_enabled': 'on',
+        'wxpusher_consent': '1',
+        'wxpusher_consent_version': 'privacy-old',
+    })
+
+    response = authenticated_client.post('/profile', data=form, follow_redirects=True)
+
+    assert response.status_code == 200
+    assert '推送传输说明已更新' in response.get_data(as_text=True)
+    db_session.refresh(current)
+    assert current.email == 'before@example.com'
+    assert current.wxpusher_uid == 'UID_KEEP'
+    assert current.push_enabled is False
+    assert current.wxpusher_consent_version is None
+    assert current.wxpusher_consented_at is None
 
 
 def test_profile_keeps_existing_wxpusher_enabled_without_reusing_consent(
@@ -275,9 +310,13 @@ def test_profile_keeps_existing_wxpusher_enabled_without_reusing_consent(
     db_session,
 ):
     app.config['WXPUSHER_APP_TOKEN'] = 'AT_test-wxpusher-token'
+    from core.time_utils import utcnow
+
     current = User.query.filter_by(username='testuser').first()
     current.wxpusher_uid = 'UID_KEEP'
     current.push_enabled = True
+    current.wxpusher_consent_version = app.config['WX_MINIPROGRAM_PRIVACY_VERSION']
+    current.wxpusher_consented_at = utcnow()
     db_session.commit()
     form = _profile_form('after@example.com')
     form.update({'wxpusher_uid': 'UID_KEEP', 'push_enabled': 'on'})
@@ -363,9 +402,21 @@ def test_profile_wxpusher_controls_follow_runtime_capability(
 
     available_html = available.get_data(as_text=True)
     assert 'name="wxpusher_consent"' in available_html
+    assert (
+        f'name="wxpusher_consent_version" '
+        f'value="{app.config["WX_MINIPROGRAM_PRIVACY_VERSION"]}"'
+    ) in available_html
+    consent_id = available_html.index('id="wxpusher_consent"')
+    consent_input_start = available_html.rfind('<input', 0, consent_id)
+    consent_input_end = available_html.index('>', consent_id)
+    assert 'checked' not in available_html[consent_input_start:consent_input_end]
     assert '都昌县级预警标题与正文及 7 天内有效的点击链接' in available_html
-    assert '打开页面本身不会记录' in available_html
+    assert '打开或预览链接不会记为送达确认' in available_html
+    assert '必要的访问安全日志' in available_html
+    assert '页面无法核验实际点击者身份' in available_html
     assert '确认时间和自动确认标记满 30 天后' in available_html
+    assert '防重复投递状态和人工复核记录保留至账号注销' in available_html
+    assert '说明版本和 UTC 同意时间在关闭推送后继续保留至账号注销' in available_html
     assert '不会发送家人姓名、健康筛查、健康日记、用药记录或家庭地址' in available_html
 
 

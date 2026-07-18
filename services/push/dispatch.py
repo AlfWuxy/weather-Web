@@ -27,6 +27,7 @@ from core.extensions import db
 from core.time_utils import ensure_utc_aware, utcnow
 from core.usage import log_usage_event
 from core.weather import is_qweather_online_weather
+from services.miniprogram_auth import current_privacy_version
 from services.miniprogram_service import canonical_location, get_bootstrap_payload
 from services.push.locks import push_owner_lock
 from services.push.wxpusher import send as wxpusher_send
@@ -362,7 +363,17 @@ def _reload_push_authorization(
         return None
     authorized_pairs = _reload_authorized_pairs(user_id, candidate_pair_ids)
     uid = (getattr(user, "wxpusher_uid", None) or "").strip()
-    if not getattr(user, "push_enabled", False) or not uid or not authorized_pairs:
+    consent_is_current = bool(
+        getattr(user, "wxpusher_consented_at", None) is not None
+        and getattr(user, "wxpusher_consent_version", None)
+        == current_privacy_version()
+    )
+    if (
+        not getattr(user, "push_enabled", False)
+        or not uid
+        or not consent_is_current
+        or not authorized_pairs
+    ):
         return None
     pair = authorized_pairs[0]
     return {

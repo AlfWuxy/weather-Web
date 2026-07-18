@@ -54,7 +54,9 @@ test('隐私候选文案完整披露健康筛查与日记字段', () => {
       assert.match(text, new RegExp(field), `${file} 缺少 ${field}`);
     }
     assert.match(text, /200 字/);
+    assert.match(text, /300 字/);
     assert.match(text, /500 字/);
+    assert.match(text, /评估时间.*天气.*快照.*模型.*规则.*结果/s);
     assert.match(text, /用于.*(风险|家庭|回看|行动)/s);
     assert.match(text, /账号注销时删除/);
     assert.match(text, /用药记录可逐条删除/);
@@ -97,6 +99,8 @@ test('公共行动本机勾选与家人行动账号保存保持清晰分离', ()
   for (const file of [FILES.privacyDoc, FILES.agreementDoc, FILES.privacyPage, FILES.agreementPage]) {
     const text = read(file);
     assert.match(text, /公共[“\"]?今日行动[”\"]?.*(当前微信设备|当前设备|本机)/s, `${file} 缺少本机保存边界`);
+    assert.match(text, /(一份.*当前都昌县日期|当前都昌县日期.*一份)/s, `${file} 缺少单一当前日期记录边界`);
+    assert.match(text, /(新日期|再次打开|再次进入).*清理旧日期键/s, `${file} 缺少旧日期清理边界`);
     assert.match(text, /(指定家人|某位家人|家人).*行动确认.*保存到账号/s, `${file} 缺少账号保存边界`);
   }
 });
@@ -165,11 +169,12 @@ test('隐私与协议统一 30 分钟新鲜度和 WxPusher 单独同意字段', 
   for (const file of [FILES.privacyDoc, FILES.agreementDoc, FILES.privacyPage, FILES.agreementPage]) {
     const text = read(file);
     assert.match(text, /30 分钟.*新鲜度/s, `${file} 缺少 30 分钟新鲜度`);
+    assert.match(text, /30 分钟.*(不表示|不是)个人数据保存期限/s, `${file} 混淆天气新鲜度和个人数据保存期限`);
     assert.match(text, /WxPusher/);
     assert.match(text, /单独勾选/);
     assert.match(text, /WxPusher UID/);
     assert.match(text, /都昌县级预警标题与正文/);
-    assert.match(text, /7\s*天内有效的点击链接/);
+    assert.match(text, /7\s*天内有效的(?:随机持有者)?(?:点击)?链接/);
   }
 });
 
@@ -185,20 +190,28 @@ test('WxPusher 文案与配置锁定七天点击期限和健康筛查排除', ()
   ];
   for (const file of disclosureFiles) {
     const text = read(file);
-    assert.match(text, /7\s*天内有效的点击链接/, `${file} 缺少七天点击期限`);
+    assert.match(text, /7\s*天(?:内有效的)?[^。\n]{0,12}链接/, `${file} 缺少七天链接期限`);
     assert.doesNotMatch(text, /一次性点击链接/, `${file} 仍宣称链接一次性`);
   }
 
   const settings = read(FILES.settingsPage);
   assert.match(settings, /不会发送家人姓名、健康筛查、健康日记、用药记录或家庭地址/);
-  assert.match(settings, /打开页面本身不会记录/);
-  assert.match(settings, /主动点击“我已看到这条提醒”后.*首次记录一次送达确认/);
+  assert.match(settings, /打开或预览链接不会记为送达确认/);
+  assert.match(settings, /必要的访问安全日志/);
+  assert.match(settings, /页面无法核验实际点击者身份/);
+  assert.match(settings, /持有链接的人主动点击“我已看到这条提醒”后.*首次记录一次送达确认/);
   assert.match(settings, /确认时间和自动确认标记满 30 天后由每日清理任务清空/);
+  assert.match(settings, /防重复投递状态和人工复核记录保留至账号注销/);
+  assert.match(settings, /说明版本和 UTC 同意时间在关闭推送后继续保留至账号注销/);
+  assert.match(settings, /当前说明版本/);
 
   for (const file of [FILES.privacyDoc, FILES.privacyPage]) {
     const text = read(file);
-    assert.match(text, /主动送达确认时间和自动确认标记.*满 30 天后由每日清理任务清空/s, `${file} 缺少主动确认记录清理口径`);
-    assert.match(text, /(每日清理任务清空|清空这两项)/, `${file} 缺少主动确认记录清理方式`);
+    assert.match(text, /确认时间和.*自动确认标记.*满 30 天后.*清空/s, `${file} 缺少主动确认记录清理口径`);
+    assert.match(text, /防重复投递状态和人工复核记录.*账号注销/s, `${file} 缺少投递记录生命周期`);
+    assert.match(text, /同意.*版本.*UTC.*时间.*账号注销/s, `${file} 缺少同意回执生命周期`);
+    assert.match(text, /消息.*状态.*7 天.*删除.*详情.*无法删除.*已经推送/s, `${file} 缺少服务商保存与删除边界`);
+    assert.match(text, /隐私政策或数据处理条款.*缺少.*通道.*关闭/s, `${file} 缺少服务商政策 URL 门禁`);
   }
 
   assert.match(read(FILES.usageCore), /ALERT_DELIVERY_CLICK_RETENTION_DAYS\s*=\s*30/);
@@ -227,6 +240,7 @@ test('上架文案使用高温行动并完整披露候选包功能', () => {
     '家人档案',
     '五项健康筛查',
     '200 字症状',
+    '300 字求助',
     '500 字备注',
     '用药记录',
     '家人行动确认',
@@ -237,6 +251,19 @@ test('上架文案使用高温行动并完整披露候选包功能', () => {
     assert.match(listing, new RegExp(feature), `类目材料缺少 ${feature}`);
   }
   assert.match(listing, /禁止通过缩窄描述、隐藏功能/);
+  assert.match(listing, /个人主体后台.*无法核验.*保持通道关闭.*停止全功能包提交/s);
+});
+
+test('发布材料精确锁定平台数据声明与 WxPusher 回执门禁', () => {
+  const handoff = read(FILES.handoff);
+  for (const field of ['wx.login', 'OpenID 哈希', '家人档案与健康字段', 'WxPusher UID', '固定枚举产品事件', '必要安全限流']) {
+    assert.match(handoff, new RegExp(field.replace('.', '\\.')), `交接缺少平台声明 ${field}`);
+  }
+  for (const excluded of ['个人定位', '昵称头像', '手机号', '订阅消息']) {
+    assert.match(handoff, new RegExp(excluded), `交接缺少未调用声明 ${excluded}`);
+  }
+  assert.match(handoff, /缺失、过期或无时间回执.*fail closed/s);
+  assert.match(handoff, /服务商当前有效的隐私政策或数据处理条款 URL/);
 });
 
 test('法律与上架文件具备正式冻结说明且门禁拒绝候选占位', () => {

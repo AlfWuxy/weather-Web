@@ -109,6 +109,15 @@ def _wxpusher_available():
     return bool((current_app.config.get("WXPUSHER_APP_TOKEN") or "").strip())
 
 
+def _wxpusher_consent_is_current(user, required_version=None):
+    """同意版本和时间同时存在才是有效回执。"""
+    version = required_version or current_privacy_version()
+    return bool(
+        getattr(user, "wxpusher_consented_at", None) is not None
+        and getattr(user, "wxpusher_consent_version", None) == version
+    )
+
+
 def _json_payload():
     payload = request.get_json(silent=True)
     if payload is None:
@@ -635,12 +644,18 @@ def me():
     user = getattr(g, "api_user", None)
     if not user:
         return jsonify({"success": False, "error": "user_not_found"}), 404
+    required_wxpusher_version = current_privacy_version()
     data = {
         "id": user.id,
         "display_name": "微信用户" if getattr(g, "auth_kind", None) == "miniprogram_session" else user.username,
         "wxpusher_uid": user.wxpusher_uid,
         "push_enabled": bool(user.push_enabled),
         "wxpusher_available": _wxpusher_available(),
+        "required_wxpusher_consent_version": required_wxpusher_version,
+        "wxpusher_reconsent_required": bool(
+            user.push_enabled
+            and not _wxpusher_consent_is_current(user, required_wxpusher_version)
+        ),
     }
     # 旧 API token 客户端继续使用 username；微信会话不暴露内部哈希前缀账号名。
     if getattr(g, "auth_kind", None) == "api_token":
@@ -663,6 +678,7 @@ def me_patch():
     requested_wx_uid = None
     requested_push_enabled = None
     wxpusher_consent = False
+    wxpusher_consent_version = None
 
     if "wxpusher_uid" in payload:
         requested_wx_uid = sanitize_input(payload.get("wxpusher_uid"), max_length=80)
@@ -686,7 +702,18 @@ def me_patch():
         except ValueError:
             return jsonify({"success": False, "error": "invalid_wxpusher_consent"}), 400
 
+    if "wxpusher_consent_version" in payload:
+        try:
+            wxpusher_consent_version = _strict_text(
+                payload,
+                "wxpusher_consent_version",
+                64,
+            )
+        except ValueError as exc:
+            return _error(str(exc), "第三方推送同意版本无效。", 400)
+
     wxpusher_available = _wxpusher_available()
+    required_wxpusher_version = current_privacy_version()
     owner_user_id = int(g.api_user_id)
     db.session.rollback()
     try:
@@ -714,20 +741,52 @@ def me_patch():
             if push_enabled and not wxpusher_available:
                 db.session.rollback()
                 return _error("wxpusher_unavailable", "第三方推送服务暂不可用。", 503)
-            if push_enabled and not wxpusher_consent:
+            consent_refresh_required = bool(
+                push_enabled
+                and (
+                    not bool(user.push_enabled)
+                    or not _wxpusher_consent_is_current(
+                        user,
+                        required_wxpusher_version,
+                    )
+                )
+            )
+            if consent_refresh_required and not wxpusher_consent:
                 db.session.rollback()
                 return jsonify({"success": False, "error": "wxpusher_consent_required"}), 400
+            if (
+                consent_refresh_required
+                and wxpusher_consent_version != required_wxpusher_version
+            ):
+                db.session.rollback()
+                return _error(
+                    "wxpusher_consent_version_mismatch",
+                    "推送传输说明已更新，请重新阅读并确认。",
+                    400,
+                    data={
+                        "required_wxpusher_consent_version": required_wxpusher_version,
+                    },
+                )
 
             if updated_fields:
                 user.wxpusher_uid = wx_uid
                 user.push_enabled = bool(push_enabled)
-                db.session.commit()
-            else:
-                db.session.commit()
+            if consent_refresh_required:
+                user.wxpusher_consent_version = required_wxpusher_version
+                user.wxpusher_consented_at = utcnow()
+            db.session.commit()
             response_data = {
                 "wxpusher_uid": wx_uid,
                 "push_enabled": bool(push_enabled),
                 "wxpusher_available": wxpusher_available,
+                "required_wxpusher_consent_version": required_wxpusher_version,
+                "wxpusher_reconsent_required": bool(
+                    push_enabled
+                    and not _wxpusher_consent_is_current(
+                        user,
+                        required_wxpusher_version,
+                    )
+                ),
             }
     except (OSError, RuntimeError, ValueError):
         db.session.rollback()
@@ -799,6 +858,8 @@ def _anonymize_miniprogram_owner(user):
     user.chronic_diseases = None
     user.wxpusher_uid = None
     user.push_enabled = False
+    user.wxpusher_consent_version = None
+    user.wxpusher_consented_at = None
     user.role = "user"
     user.set_password(secrets.token_urlsafe(32))
     db.session.add(
@@ -1470,7 +1531,7 @@ def action_help(pair_id):
         payload = _json_payload()
         note_provided = "note" in payload
         note = (
-            _strict_text(payload, "note", 500, default="") or ""
+            _strict_text(payload, "note", 300, default="") or ""
             if note_provided
             else None
         )

@@ -11,7 +11,7 @@ import pytest
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
-HEAD_REVISION = '0023_auth_session_version'
+HEAD_REVISION = '0024_wxpusher_consent_receipt'
 PREVIOUS_REVISION = '0022_private_health_indexes'
 
 
@@ -111,6 +111,182 @@ def test_auth_version_migration_round_trip_preserves_clean_users(monkeypatch, tm
             (user_id,),
         ).fetchone()[0]
     assert restored == 1
+
+
+def test_wxpusher_consent_migration_resets_history_and_downgrades_fail_closed(
+    monkeypatch,
+    tmp_path,
+):
+    """迁移不信任旧开关，重复升级安全，降级前也先关闭推送。"""
+    database_path = tmp_path / 'wxpusher-consent-round-trip.db'
+    app, config = _initialize(monkeypatch, database_path)
+
+    from core.db_models import User
+    from core.extensions import db
+    from core.time_utils import utcnow
+
+    with app.app_context():
+        user = User(
+            username='wxpusher-consent-migration-user',
+            wxpusher_uid='UID_MIGRATION',
+            push_enabled=True,
+            wxpusher_consent_version=app.config['WX_MINIPROGRAM_PRIVACY_VERSION'],
+            wxpusher_consented_at=utcnow(),
+        )
+        user.set_password('MigrationPassword1!')
+        db.session.add(user)
+        db.session.commit()
+        user_id = int(user.id)
+    _dispose(app)
+
+    command.downgrade(config, '0023_auth_session_version')
+    revision, columns = _revision_and_columns(database_path)
+    assert revision == '0023_auth_session_version'
+    assert 'wxpusher_consent_version' not in columns['users']
+    assert 'wxpusher_consented_at' not in columns['users']
+    with sqlite3.connect(database_path) as connection:
+        assert connection.execute(
+            'SELECT push_enabled FROM users WHERE id = ?',
+            (user_id,),
+        ).fetchone()[0] == 0
+        # 模拟迁移重试前已存在正确同名列的部分状态。
+        connection.execute(
+            'ALTER TABLE users ADD COLUMN wxpusher_consent_version VARCHAR(64)'
+        )
+        connection.execute(
+            'ALTER TABLE users ADD COLUMN wxpusher_consented_at DATETIME'
+        )
+        connection.execute(
+            '''UPDATE users
+               SET push_enabled = 1,
+                   wxpusher_consent_version = 'privacy-legacy',
+                   wxpusher_consented_at = '2026-07-18 08:00:00'
+               WHERE id = ?''',
+            (user_id,),
+        )
+        connection.commit()
+
+    command.upgrade(config, 'head')
+    command.upgrade(config, 'head')
+    revision, columns = _revision_and_columns(database_path)
+    assert revision == HEAD_REVISION
+    assert columns['users']['wxpusher_consent_version'][2].upper() == 'VARCHAR(64)'
+    assert columns['users']['wxpusher_consent_version'][3] == 0
+    assert columns['users']['wxpusher_consented_at'][2].upper() == 'DATETIME'
+    assert columns['users']['wxpusher_consented_at'][3] == 0
+    with sqlite3.connect(database_path) as connection:
+        assert connection.execute(
+            '''SELECT push_enabled,
+                      wxpusher_consent_version,
+                      wxpusher_consented_at
+               FROM users WHERE id = ?''',
+            (user_id,),
+        ).fetchone() == (0, None, None)
+        connection.execute(
+            '''UPDATE users
+               SET push_enabled = 1,
+                   wxpusher_consent_version = 'privacy-current',
+                   wxpusher_consented_at = '2026-07-18 09:00:00'
+               WHERE id = ?''',
+            (user_id,),
+        )
+        connection.commit()
+
+    command.downgrade(config, '0023_auth_session_version')
+    revision, columns = _revision_and_columns(database_path)
+    assert revision == '0023_auth_session_version'
+    assert 'wxpusher_consent_version' not in columns['users']
+    assert 'wxpusher_consented_at' not in columns['users']
+    with sqlite3.connect(database_path) as connection:
+        assert connection.execute(
+            'SELECT push_enabled FROM users WHERE id = ?',
+            (user_id,),
+        ).fetchone()[0] == 0
+
+
+def test_wxpusher_relative_one_step_downgrade_stops_at_auth_revision(
+    monkeypatch,
+    tmp_path,
+):
+    """相对降级一阶只移除回执列，不误触发 0023 丢数据保护。"""
+    database_path = tmp_path / 'wxpusher-relative-one-step.db'
+    app, config = _initialize(monkeypatch, database_path)
+
+    from core.db_models import User
+    from core.extensions import db
+    from core.time_utils import utcnow
+
+    with app.app_context():
+        user = User(
+            username='wxpusher-relative-one-step-user',
+            auth_version=2,
+            wxpusher_uid='UID_RELATIVE_ONE',
+            push_enabled=True,
+            wxpusher_consent_version=app.config['WX_MINIPROGRAM_PRIVACY_VERSION'],
+            wxpusher_consented_at=utcnow(),
+        )
+        user.set_password('MigrationPassword1!')
+        db.session.add(user)
+        db.session.commit()
+        user_id = int(user.id)
+    _dispose(app)
+
+    command.downgrade(config, '-1')
+
+    revision, columns = _revision_and_columns(database_path)
+    assert revision == '0023_auth_session_version'
+    assert 'auth_version' in columns['users']
+    assert 'wxpusher_consent_version' not in columns['users']
+    assert 'wxpusher_consented_at' not in columns['users']
+    with sqlite3.connect(database_path) as connection:
+        assert connection.execute(
+            'SELECT auth_version, push_enabled FROM users WHERE id = ?',
+            (user_id,),
+        ).fetchone() == (2, 0)
+
+
+def test_wxpusher_relative_two_step_downgrade_runs_auth_guard(
+    monkeypatch,
+    tmp_path,
+):
+    """相对降级两阶会跨越 0023，并在首个 DDL 前阻断。"""
+    database_path = tmp_path / 'wxpusher-relative-two-step.db'
+    app, config = _initialize(monkeypatch, database_path)
+
+    from core.db_models import User
+    from core.extensions import db
+    from core.time_utils import utcnow
+
+    with app.app_context():
+        user = User(
+            username='wxpusher-relative-two-step-user',
+            auth_version=2,
+            wxpusher_uid='UID_RELATIVE_TWO',
+            push_enabled=True,
+            wxpusher_consent_version=app.config['WX_MINIPROGRAM_PRIVACY_VERSION'],
+            wxpusher_consented_at=utcnow(),
+        )
+        user.set_password('MigrationPassword1!')
+        db.session.add(user)
+        db.session.commit()
+        user_id = int(user.id)
+    _dispose(app)
+
+    with pytest.raises(RuntimeError, match='auth_version_count=1'):
+        command.downgrade(config, '-2')
+
+    revision, columns = _revision_and_columns(database_path)
+    assert revision == HEAD_REVISION
+    assert 'wxpusher_consent_version' in columns['users']
+    assert 'wxpusher_consented_at' in columns['users']
+    with sqlite3.connect(database_path) as connection:
+        assert connection.execute(
+            '''SELECT auth_version,
+                      push_enabled,
+                      wxpusher_consent_version
+               FROM users WHERE id = ?''',
+            (user_id,),
+        ).fetchone() == (2, 1, app.config['WX_MINIPROGRAM_PRIVACY_VERSION'])
 
 
 @pytest.mark.parametrize(

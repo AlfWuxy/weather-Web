@@ -36,6 +36,8 @@ def _forbid_weather_upstream(monkeypatch):
 
 
 def _create_push_recipient(db_session, *, username, short_code):
+    from flask import current_app
+
     from core.db_models import Pair, User
     from core.security import hash_short_code
     from core.time_utils import utcnow
@@ -45,6 +47,8 @@ def _create_push_recipient(db_session, *, username, short_code):
         role="user",
         wxpusher_uid=f"UID_{username}",
         push_enabled=True,
+        wxpusher_consent_version=current_app.config["WX_MINIPROGRAM_PRIVACY_VERSION"],
+        wxpusher_consented_at=utcnow(),
     )
     user.set_password("pw123456")
     db_session.add(user)
@@ -123,7 +127,14 @@ def test_dispatch_alerts_dedupes_success(app, db_session, monkeypatch):
 
     with app.app_context():
         # 创建已开启推送的用户。
-        user = User(username="u1", role="user", wxpusher_uid="UID_TEST", push_enabled=True)
+        user = User(
+            username="u1",
+            role="user",
+            wxpusher_uid="UID_TEST",
+            push_enabled=True,
+            wxpusher_consent_version=app.config["WX_MINIPROGRAM_PRIVACY_VERSION"],
+            wxpusher_consented_at=utcnow(),
+        )
         user.set_password("pw123456")
         db_session.add(user)
         db_session.commit()
@@ -157,6 +168,42 @@ def test_dispatch_alerts_dedupes_success(app, db_session, monkeypatch):
         result2 = dispatch_mod.dispatch_alerts()
         assert AlertDelivery.query.count() == 1
         assert result2["deliveries"] == 0 or result2["sent"] == 0
+
+
+@pytest.mark.parametrize("invalid_receipt", ("stale_version", "missing_time"))
+def test_dispatch_fails_closed_for_invalid_wxpusher_consent_receipt(
+    app,
+    db_session,
+    monkeypatch,
+    invalid_receipt,
+):
+    from core.db_models import AlertDelivery, User
+    from services.push import dispatch as dispatch_mod
+
+    with app.app_context():
+        user_id, _pair_id = _create_push_recipient(
+            db_session,
+            username=f"consent-{invalid_receipt}",
+            short_code="13000001" if invalid_receipt == "stale_version" else "13000002",
+        )
+        user = db_session.get(User, user_id)
+        if invalid_receipt == "stale_version":
+            user.wxpusher_consent_version = "privacy-old"
+        else:
+            user.wxpusher_consented_at = None
+        db_session.commit()
+        _persist_dispatch_snapshot()
+        _forbid_weather_upstream(monkeypatch)
+        monkeypatch.setattr(
+            dispatch_mod,
+            "wxpusher_send",
+            lambda *_args, **_kwargs: pytest.fail("无效同意回执不得进入第三方外呼"),
+        )
+
+        result = dispatch_mod.dispatch_alerts()
+
+        assert result["deliveries"] == 0
+        assert AlertDelivery.query.count() == 0
 
 
 def test_dispatch_commits_alert_and_claim_before_external_call(
@@ -517,6 +564,8 @@ def test_dispatch_fails_closed_without_fresh_available_snapshot(
             role="user",
             wxpusher_uid="UID_FAIL_CLOSED",
             push_enabled=True,
+            wxpusher_consent_version=app.config["WX_MINIPROGRAM_PRIVACY_VERSION"],
+            wxpusher_consented_at=utcnow(),
         )
         user.set_password("pw123456")
         db_session.add(user)
@@ -666,7 +715,16 @@ def test_tracking_route_requires_explicit_csrf_confirmation_and_marks_only_once(
     assert first.status_code == 200
     assert second.status_code == 200
     assert head.status_code == 200
-    assert "我已看到这条提醒" in first.get_data(as_text=True)
+    confirmation_html = first.get_data(as_text=True)
+    assert "我已看到这条提醒" in confirmation_html
+    assert "随机持有者令牌" in confirmation_html
+    assert "最长 7 天有效" in confirmation_html
+    assert "请勿转发" in confirmation_html
+    assert "无法核验实际点击者的身份" in confirmation_html
+    assert "GET/HEAD" in confirmation_html
+    assert "首次有效 POST" in confirmation_html
+    assert "满 30 天后清空" in confirmation_html
+    assert "防重复投递状态和人工复核记录保留至账号注销" in confirmation_html
     assert first.headers["Cache-Control"] == "no-store, private, max-age=0"
     assert first.headers["X-Robots-Tag"] == "noindex, nofollow, noarchive"
 
@@ -926,7 +984,14 @@ def test_dispatch_respects_member_alert_and_privacy_settings(app, db_session, mo
     from services.push import dispatch as dispatch_mod
 
     with app.app_context():
-        user = User(username="push_privacy", role="user", wxpusher_uid="UID_PRIVATE", push_enabled=True)
+        user = User(
+            username="push_privacy",
+            role="user",
+            wxpusher_uid="UID_PRIVATE",
+            push_enabled=True,
+            wxpusher_consent_version=app.config["WX_MINIPROGRAM_PRIVACY_VERSION"],
+            wxpusher_consented_at=utcnow(),
+        )
         user.set_password("pw123456")
         db_session.add(user)
         db_session.flush()
@@ -983,7 +1048,14 @@ def test_dispatch_minimizes_identity_data_sent_to_third_party(app, db_session, m
     from services.push import dispatch as dispatch_mod
 
     with app.app_context():
-        user = User(username="push_minimized", role="user", wxpusher_uid="UID_MIN", push_enabled=True)
+        user = User(
+            username="push_minimized",
+            role="user",
+            wxpusher_uid="UID_MIN",
+            push_enabled=True,
+            wxpusher_consent_version=app.config["WX_MINIPROGRAM_PRIVACY_VERSION"],
+            wxpusher_consented_at=utcnow(),
+        )
         user.set_password("pw123456")
         db_session.add(user)
         db_session.flush()

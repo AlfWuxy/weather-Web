@@ -39,8 +39,17 @@ from utils.validators import (
     validate_password
 )
 from services.user.owner_write_guard import OwnerInactiveError, owner_write_guard
+from services.miniprogram_auth import current_privacy_version
 
 logger = logging.getLogger(__name__)
+
+
+def _wxpusher_consent_is_current(user, required_version):
+    """只有版本和时间都存在时才继续认可第三方推送同意。"""
+    return bool(
+        getattr(user, 'wxpusher_consented_at', None) is not None
+        and getattr(user, 'wxpusher_consent_version', None) == required_version
+    )
 
 
 def _personal_weather_available(weather_data):
@@ -380,6 +389,16 @@ def profile():
         wxpusher_available = bool(
             (current_app.config.get('WXPUSHER_APP_TOKEN') or '').strip()
         )
+        required_wxpusher_version = current_privacy_version()
+        submitted_wxpusher_version = request.form.get('wxpusher_consent_version')
+        submitted_wxpusher_version = (
+            submitted_wxpusher_version.strip()
+            if (
+                isinstance(submitted_wxpusher_version, str)
+                and len(submitted_wxpusher_version) <= 64
+            )
+            else None
+        ) or None
         if push_enabled and not wxpusher_available:
             flash('第三方推送服务暂不可用，本次更改未保存。', 'error')
             return redirect(url_for('user.profile'))
@@ -390,14 +409,26 @@ def profile():
         try:
             owner_user_id = int(current_user.id)
             with owner_write_guard(owner_user_id) as locked_user:
-                if (
+                consent_is_current = _wxpusher_consent_is_current(
+                    locked_user,
+                    required_wxpusher_version,
+                )
+                consent_required = bool(
                     push_enabled
-                    and not bool(locked_user.push_enabled)
-                    and request.form.get('wxpusher_consent') != '1'
-                ):
-                    db.session.rollback()
-                    flash('请先确认本次开启涉及的第三方传输范围。', 'error')
-                    return redirect(url_for('user.profile'))
+                    and (
+                        not bool(locked_user.push_enabled)
+                        or not consent_is_current
+                    )
+                )
+                if consent_required:
+                    if request.form.get('wxpusher_consent') != '1':
+                        db.session.rollback()
+                        flash('请先确认本次开启涉及的第三方传输范围。', 'error')
+                        return redirect(url_for('user.profile'))
+                    if submitted_wxpusher_version != required_wxpusher_version:
+                        db.session.rollback()
+                        flash('推送传输说明已更新，请刷新页面后重新确认。', 'error')
+                        return redirect(url_for('user.profile'))
 
                 locked_user.age = age
                 locked_user.gender = gender
@@ -419,6 +450,9 @@ def profile():
 
                 locked_user.wxpusher_uid = wx_uid
                 locked_user.push_enabled = bool(push_enabled)
+                if consent_required:
+                    locked_user.wxpusher_consent_version = required_wxpusher_version
+                    locked_user.wxpusher_consented_at = utcnow()
                 db.session.commit()
         except OwnerInactiveError:
             flash('账号已失效，请重新登录。', 'error')
@@ -441,6 +475,7 @@ def profile():
     chronic_diseases_list = safe_json_loads(current_user.chronic_diseases, [])
 
     last_api_token_plain = session.pop('last_api_token_plain', None)
+    required_wxpusher_version = current_privacy_version()
     return render_template(
         'profile.html',
         communities=communities,
@@ -448,6 +483,14 @@ def profile():
         last_api_token_plain=last_api_token_plain,
         wxpusher_available=bool(
             (current_app.config.get('WXPUSHER_APP_TOKEN') or '').strip()
+        ),
+        required_wxpusher_consent_version=required_wxpusher_version,
+        wxpusher_reconsent_required=bool(
+            current_user.push_enabled
+            and not _wxpusher_consent_is_current(
+                current_user,
+                required_wxpusher_version,
+            )
         ),
     )
 

@@ -48,12 +48,21 @@ def test_mp_api_me_and_patch(app, client, db_session):
     assert body["success"] is True
     assert body["data"]["username"] == "mp_user"
     assert body["data"]["wxpusher_available"] is True
+    assert body["data"]["required_wxpusher_consent_version"] == app.config[
+        "WX_MINIPROGRAM_PRIVACY_VERSION"
+    ]
+    assert body["data"]["wxpusher_reconsent_required"] is False
     assert "AT_private-test-token" not in resp.get_data(as_text=True)
 
     # update push settings
     resp2 = client.patch(
         "/mp/api/v1/me",
-        json={"wxpusher_uid": "UID_X", "push_enabled": True, "wxpusher_consent": True},
+        json={
+            "wxpusher_uid": "UID_X",
+            "push_enabled": True,
+            "wxpusher_consent": True,
+            "wxpusher_consent_version": app.config["WX_MINIPROGRAM_PRIVACY_VERSION"],
+        },
         headers={"Authorization": f"Bearer {plain}"},
     )
     assert resp2.status_code == 200

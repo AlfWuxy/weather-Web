@@ -14,6 +14,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 def _create_mp_user_and_token(app, db_session, *, uid="UID_KEEP", push_enabled=True):
     from core.db_models import User
+    from core.time_utils import utcnow
     from core.usage import create_api_token
 
     with app.app_context():
@@ -23,6 +24,12 @@ def _create_mp_user_and_token(app, db_session, *, uid="UID_KEEP", push_enabled=T
             role="user",
             wxpusher_uid=uid,
             push_enabled=push_enabled,
+            wxpusher_consent_version=(
+                app.config["WX_MINIPROGRAM_PRIVACY_VERSION"]
+                if push_enabled
+                else None
+            ),
+            wxpusher_consented_at=utcnow() if push_enabled else None,
         )
         user.set_password("pw123456")
         db_session.add(user)
@@ -38,6 +45,23 @@ def test_mp_me_patch_preserves_omitted_fields_and_disables_push_when_uid_removed
     user_id, token = _create_mp_user_and_token(app, db_session)
     headers = {"Authorization": f"Bearer {token}"}
 
+    from core.db_models import User
+
+    with app.app_context():
+        original_consent_time = db_session.get(User, user_id).wxpusher_consented_at
+
+    uid_response = client.patch(
+        "/mp/api/v1/me",
+        json={"wxpusher_uid": "UID_CHANGED_WITH_CURRENT_RECEIPT"},
+        headers=headers,
+    )
+    assert uid_response.status_code == 200
+    assert uid_response.get_json()["data"]["push_enabled"] is True
+    with app.app_context():
+        user = db_session.get(User, user_id)
+        assert user.wxpusher_uid == "UID_CHANGED_WITH_CURRENT_RECEIPT"
+        assert user.wxpusher_consented_at == original_consent_time
+
     disable_response = client.patch(
         "/mp/api/v1/me",
         json={"push_enabled": "false"},
@@ -45,14 +69,20 @@ def test_mp_me_patch_preserves_omitted_fields_and_disables_push_when_uid_removed
     )
     assert disable_response.status_code == 200
     assert disable_response.get_json()["data"] == {
-        "wxpusher_uid": "UID_KEEP",
+        "wxpusher_uid": "UID_CHANGED_WITH_CURRENT_RECEIPT",
         "push_enabled": False,
         "wxpusher_available": True,
+        "required_wxpusher_consent_version": app.config["WX_MINIPROGRAM_PRIVACY_VERSION"],
+        "wxpusher_reconsent_required": False,
     }
 
     enable_response = client.patch(
         "/mp/api/v1/me",
-        json={"push_enabled": True, "wxpusher_consent": True},
+        json={
+            "push_enabled": True,
+            "wxpusher_consent": True,
+            "wxpusher_consent_version": app.config["WX_MINIPROGRAM_PRIVACY_VERSION"],
+        },
         headers=headers,
     )
     assert enable_response.status_code == 200
@@ -68,14 +98,16 @@ def test_mp_me_patch_preserves_omitted_fields_and_disables_push_when_uid_removed
         "wxpusher_uid": None,
         "push_enabled": False,
         "wxpusher_available": True,
+        "required_wxpusher_consent_version": app.config["WX_MINIPROGRAM_PRIVACY_VERSION"],
+        "wxpusher_reconsent_required": False,
     }
-
-    from core.db_models import User
 
     with app.app_context():
         user = db_session.get(User, user_id)
         assert user.wxpusher_uid is None
         assert user.push_enabled is False
+        assert user.wxpusher_consent_version == app.config["WX_MINIPROGRAM_PRIVACY_VERSION"]
+        assert user.wxpusher_consented_at is not None
 
 
 def test_mp_me_patch_rejects_ambiguous_boolean_without_partial_update(
@@ -124,6 +156,110 @@ def test_mp_me_patch_requires_explicit_wxpusher_consent_without_partial_update(
         user = db_session.get(User, user_id)
         assert user.wxpusher_uid == 'UID_KEEP'
         assert user.push_enabled is False
+
+
+@pytest.mark.parametrize("submitted_version", (None, "privacy-old"))
+def test_mp_me_patch_rejects_missing_or_stale_wxpusher_consent_version(
+    app,
+    client,
+    db_session,
+    submitted_version,
+):
+    user_id, token = _create_mp_user_and_token(app, db_session, push_enabled=False)
+    payload = {
+        "wxpusher_uid": "UID_CHANGED",
+        "push_enabled": True,
+        "wxpusher_consent": True,
+    }
+    if submitted_version is not None:
+        payload["wxpusher_consent_version"] = submitted_version
+
+    response = client.patch(
+        "/mp/api/v1/me",
+        json=payload,
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 400
+    body = response.get_json()
+    assert body["error"] == "wxpusher_consent_version_mismatch"
+    assert body["data"]["required_wxpusher_consent_version"] == app.config[
+        "WX_MINIPROGRAM_PRIVACY_VERSION"
+    ]
+    from core.db_models import User
+
+    with app.app_context():
+        user = db_session.get(User, user_id)
+        assert user.wxpusher_uid == "UID_KEEP"
+        assert user.push_enabled is False
+        assert user.wxpusher_consent_version is None
+        assert user.wxpusher_consented_at is None
+
+
+def test_mp_me_returns_wxpusher_version_and_flags_stale_enabled_receipt(
+    app,
+    client,
+    db_session,
+):
+    user_id, token = _create_mp_user_and_token(app, db_session)
+    from core.db_models import User
+
+    with app.app_context():
+        user = db_session.get(User, user_id)
+        user.wxpusher_consent_version = "privacy-old"
+        db_session.commit()
+
+    response = client.get(
+        "/mp/api/v1/me",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+    data = response.get_json()["data"]
+    assert data["required_wxpusher_consent_version"] == app.config[
+        "WX_MINIPROGRAM_PRIVACY_VERSION"
+    ]
+    assert data["wxpusher_reconsent_required"] is True
+
+
+def test_mp_me_patch_requires_reconsent_for_stale_enabled_receipt(
+    app,
+    client,
+    db_session,
+):
+    user_id, token = _create_mp_user_and_token(app, db_session)
+    from core.db_models import User
+
+    with app.app_context():
+        user = db_session.get(User, user_id)
+        user.wxpusher_consent_version = "privacy-old"
+        db_session.commit()
+
+    rejected = client.patch(
+        "/mp/api/v1/me",
+        json={"wxpusher_uid": "UID_STALE_ATTEMPT"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert rejected.status_code == 400
+    assert rejected.get_json()["error"] == "wxpusher_consent_required"
+
+    accepted = client.patch(
+        "/mp/api/v1/me",
+        json={
+            "wxpusher_uid": "UID_RECONSENTED",
+            "wxpusher_consent": True,
+            "wxpusher_consent_version": app.config["WX_MINIPROGRAM_PRIVACY_VERSION"],
+        },
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert accepted.status_code == 200
+    with app.app_context():
+        user = db_session.get(User, user_id)
+        assert user.wxpusher_uid == "UID_RECONSENTED"
+        assert user.wxpusher_consent_version == app.config[
+            "WX_MINIPROGRAM_PRIVACY_VERSION"
+        ]
+        assert user.wxpusher_consented_at is not None
 
 
 def test_mp_me_patch_rejects_enable_when_wxpusher_is_unavailable_without_partial_update(
@@ -178,6 +314,8 @@ def test_mp_me_patch_allows_disable_when_wxpusher_is_unavailable(
         'wxpusher_uid': 'UID_KEEP',
         'push_enabled': False,
         'wxpusher_available': False,
+        'required_wxpusher_consent_version': app.config['WX_MINIPROGRAM_PRIVACY_VERSION'],
+        'wxpusher_reconsent_required': False,
     }
 
     from core.db_models import User

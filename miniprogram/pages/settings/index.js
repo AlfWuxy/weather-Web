@@ -8,8 +8,11 @@ Page({
     settingsVerified: false,
     wxpusherUid: '',
     pushEnabled: false,
+    persistedPushEnabled: false,
     wxpusherAvailable: false,
     wxpusherConsent: false,
+    requiredWxpusherConsentVersion: '',
+    wxpusherReconsentRequired: false,
   },
 
   clearPrivateSettings(overrides) {
@@ -18,8 +21,11 @@ Page({
       settingsVerified: false,
       wxpusherUid: '',
       pushEnabled: false,
+      persistedPushEnabled: false,
       wxpusherAvailable: false,
       wxpusherConsent: false,
+      requiredWxpusherConsentVersion: '',
+      wxpusherReconsentRequired: false,
     }, overrides || {}));
   },
 
@@ -49,12 +55,17 @@ Page({
       const me = await authApi({ method: 'GET', path: '/mp/api/v1/me' });
       if (loadId !== this._settingsLoadId || getToken() !== sessionToken) return;
       if (!me || typeof me !== 'object') throw new Error('invalid_settings_response');
+      const requiredVersion = String(me.required_wxpusher_consent_version || '').trim();
+      if (!requiredVersion) throw new Error('missing_wxpusher_consent_version');
       this._settingsVerifiedToken = sessionToken;
       this.setData({
         wxpusherUid: me.wxpusher_uid || '',
         pushEnabled: !!me.push_enabled,
+        persistedPushEnabled: !!me.push_enabled,
         wxpusherAvailable: me.wxpusher_available === true,
         wxpusherConsent: false,
+        requiredWxpusherConsentVersion: requiredVersion,
+        wxpusherReconsentRequired: me.wxpusher_reconsent_required === true,
         settingsVerified: true,
       });
     } catch (error) {
@@ -103,8 +114,19 @@ Page({
       wx.showToast({ title: '请先填写 WxPusher UID', icon: 'none' });
       return;
     }
-    if (this.data.pushEnabled && !this.data.wxpusherConsent) {
+    const consentRefreshRequired = Boolean(
+      this.data.pushEnabled
+      && (
+        !this.data.persistedPushEnabled
+        || this.data.wxpusherReconsentRequired
+      )
+    );
+    if (consentRefreshRequired && !this.data.wxpusherConsent) {
       wx.showToast({ title: '请先确认第三方传输说明', icon: 'none' });
+      return;
+    }
+    if (this.data.pushEnabled && !this.data.requiredWxpusherConsentVersion) {
+      wx.showToast({ title: '请重新加载传输说明', icon: 'none' });
       return;
     }
     this.setData({ busy: true });
@@ -115,8 +137,14 @@ Page({
         data: {
           wxpusher_uid: this.data.wxpusherUid,
           push_enabled: this.data.pushEnabled,
-          wxpusher_consent: this.data.pushEnabled && this.data.wxpusherConsent,
+          wxpusher_consent: consentRefreshRequired && this.data.wxpusherConsent,
+          wxpusher_consent_version: this.data.requiredWxpusherConsentVersion,
         },
+      });
+      this.setData({
+        persistedPushEnabled: this.data.pushEnabled,
+        wxpusherConsent: false,
+        wxpusherReconsentRequired: false,
       });
       wx.showToast({ title: '设置已保存', icon: 'success' });
     } catch (error) {
@@ -124,10 +152,6 @@ Page({
     } finally {
       this.setData({ busy: false });
     }
-  },
-
-  openSystemSettings() {
-    wx.openSetting({ fail: () => wx.showToast({ title: '暂时无法打开系统设置', icon: 'none' }) });
   },
 
   goAccount() {
@@ -169,7 +193,7 @@ Page({
           // 网络异常时仍优先保护共享设备上的本机登录状态。
         } finally {
           clear();
-          this.setData({ busy: false });
+          this.clearPrivateSettings({ loggedIn: false, loading: false, busy: false });
           wx.reLaunch({ url: '/pages/home/index' });
         }
       },

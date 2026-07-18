@@ -124,10 +124,12 @@
                                 开启自动推送（高温/寒潮预警触发时）
                             </label>
                         </div>
+                        <input type="hidden" name="wxpusher_consent_version" value="{{ required_wxpusher_consent_version }}">
                         <div class="alert alert-light border small" role="note">
-                            开启后会向 WxPusher 发送 UID、都昌县级预警标题与正文及 7 天内有效的点击链接。打开页面本身不会记录；只有本人主动点击“我已看到这条提醒”后，服务器才首次记录一次送达确认。确认时间和自动确认标记满 30 天后由每日清理任务清空。不会发送家人姓名、健康筛查、健康日记、用药记录或家庭地址。
+                            开启后会向 WxPusher 发送 UID、都昌县级预警标题与正文及 7 天内有效的点击链接。打开或预览链接不会记为送达确认；服务器仍可能生成必要的访问安全日志。只有持有链接的人主动点击“我已看到这条提醒”后，服务器才首次记录一次送达确认；页面无法核验实际点击者身份，请勿转发链接。确认时间和自动确认标记满 30 天后由每日清理任务清空；防重复投递状态和人工复核记录保留至账号注销。不会发送家人姓名、健康筛查、健康日记、用药记录或家庭地址。说明版本和 UTC 同意时间在关闭推送后继续保留至账号注销。
+                            <span class="d-block mt-1">当前传输说明版本：{{ required_wxpusher_consent_version }}</span>
                         </div>
-                        {% if wxpusher_available and not current_user.push_enabled %}
+                        {% if wxpusher_available and (not current_user.push_enabled or wxpusher_reconsent_required) %}
                         <div class="mb-3 form-check">
                             <input class="form-check-input" type="checkbox" id="wxpusher_consent" name="wxpusher_consent" value="1">
                             <label class="form-check-label" for="wxpusher_consent">
