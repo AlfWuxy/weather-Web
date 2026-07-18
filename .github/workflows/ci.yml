@@ -79,10 +79,7 @@ jobs:
       - name: 检查已跟踪文件密钥
         run: python scripts/check_tracked_secrets.py
 
-      - name: 运行默认测试
-        run: python -m pytest -q
-
-      - name: 检查弃用警告
+      - name: 运行完整测试并检查弃用警告
         run: >-
           python -m pytest -q
           -W error::DeprecationWarning
