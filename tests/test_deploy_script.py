@@ -21,16 +21,17 @@ def _load_activate_script():
 
 def test_deploy_script_checks_units_with_is_active():
     content = _load_deploy_script()
+    activate = _load_activate_script()
 
-    assert 'check_remote_unit_active "case-weather.service"' in content
-    assert 'check_remote_unit_active "case-weather-cache-bootstrap.timer"' in content
-    assert "常规天气缓存 timer 在首轮等待期间不应提前运行" in content
-    assert "常规天气缓存 timer 状态应为 disabled" in content
-    assert "bootstrap timer 状态应为 enabled" in content
+    assert 'case-weather.service' in activate
+    assert 'case-weather-cache-bootstrap.timer' in activate
+    assert "常规天气缓存 timer 在首轮等待期间不应提前运行" in activate
+    assert "常规天气缓存 timer 状态应为 disabled" in activate
+    assert "bootstrap timer 状态应为 enabled" in activate
     assert 'check_remote_unit_active "case-weather-dispatch.timer"' not in content
-    assert 'check_remote_unit_active "case-weather-risk-precompute.timer"' in content
-    assert "旧 dispatch.timer 仍存在，拒绝完成发布" in content
-    assert 'systemctl is-active --quiet $unit' in content
+    assert 'case-weather-risk-precompute.timer' in activate
+    assert "旧 dispatch.timer 仍存在" in activate
+    assert '"$SYSTEMCTL_BIN" is-active --quiet "$unit"' in activate
 
 
 def test_deploy_script_no_longer_swallows_systemctl_failures():
@@ -78,11 +79,11 @@ def test_deploy_script_delays_first_cache_refresh_then_starts_recurring_timer():
     assert 'ExecStart=/usr/bin/true' in bootstrap_block
     assert 'OnActiveSec=30min' in content[bootstrap_start:]
     assert 'RemainAfterElapse=no' in content[bootstrap_start:]
-    assert 'NextElapseUSecMonotonic' in content
-    assert 'REMAINING_US' in content
-    assert 'bootstrap timer 未保留完整的首轮 30 分钟等待窗口' in content
-    assert "--property=LoadState --value" in content
-    assert "case-weather-cache-bootstrap.service --property=OnSuccess" in content
+    activate = _load_activate_script()
+    assert 'NextElapseUSecMonotonic' in activate
+    assert 'remaining_us' in activate
+    assert 'bootstrap timer 未保留完整的首轮 30 分钟等待窗口' in activate
+    assert 'case-weather-cache-bootstrap.service --property=OnSuccess --value' in activate
 
 
 def test_deploy_script_sets_precompute_python_path():
@@ -146,6 +147,22 @@ def test_activate_transaction_stops_every_writer_and_commits_last():
     assert content.index('start_new_release\n') < content.index('COMMITTED=1')
     assert content.index('FORWARD_ONLY=1') < content.index('COMMITTED=1')
     assert content.index('COMMITTED=1') < content.index('start_release_timers\n')
+    assert content.index('start_release_timers\n') < content.index(
+        'verify_release_state\n'
+    )
+    assert content.index('verify_release_state\n') < content.index(
+        '"$TRANSACTION_DIR/COMMITTED"'
+    )
+
+
+def test_deploy_has_no_untracked_hard_checks_after_activation_returns():
+    content = _load_deploy_script()
+    activation = 'bash $RELEASE_APP/scripts/activate_release.sh"'
+    tail = content.split(activation, 1)[1]
+
+    assert 'check_remote_unit_active' not in tail
+    assert 'remote_exec "' not in tail
+    assert '已在原子激活事务内通过' in tail
 
 
 def test_deploy_script_excludes_local_design_drafts():

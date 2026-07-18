@@ -56,6 +56,18 @@ def marker(kind):
 
 if command == 'cat':
     raise SystemExit(0 if marker('exists').exists() or (unit_dir / unit).exists() else 1)
+if command == 'show':
+    if os.environ.get('FAKE_BAD_ON_SUCCESS_UNIT') == unit:
+        print('')
+        raise SystemExit(0)
+    if unit == 'case-weather-cache.service':
+        print('case-weather-dispatch.service')
+        raise SystemExit(0)
+    if unit == 'case-weather-cache-bootstrap.service':
+        print('case-weather-cache.timer')
+        raise SystemExit(0)
+    print('')
+    raise SystemExit(0)
 if command == 'is-enabled':
     if marker('enabled-runtime').exists():
         print('enabled-runtime')
@@ -104,7 +116,16 @@ if command == 'disable':
     marker('enabled').unlink(missing_ok=True)
     marker('enabled-runtime').unlink(missing_ok=True)
     raise SystemExit(0)
-if command in {'daemon-reload', 'status'}:
+if command == 'daemon-reload':
+    for exists_marker in state.glob('*.exists'):
+        current_unit = exists_marker.name[:-len('.exists')]
+        if not (unit_dir / current_unit).exists():
+            exists_marker.unlink(missing_ok=True)
+    for unit_file in unit_dir.iterdir():
+        if unit_file.is_file():
+            (state / f'{unit_file.name}.exists').touch()
+    raise SystemExit(0)
+if command == 'status':
     raise SystemExit(0)
 raise SystemExit(f'unsupported fake systemctl call: {args}')
 """,
@@ -220,6 +241,15 @@ else:
 print('{"status":"ok"}' if healthy else '{"status":"unavailable"}')
 """,
     )
+    fake_busctl = fake_bin / 'busctl'
+    _write_executable(
+        fake_busctl,
+        """#!/bin/sh
+printf 't 2000000000\n'
+""",
+    )
+    uptime_file = tmp_path / 'uptime'
+    uptime_file.write_text('200.00 100.00\n', encoding='utf-8')
 
     environment = os.environ.copy()
     environment.update({
@@ -235,6 +265,8 @@ print('{"status":"ok"}' if healthy else '{"status":"unavailable"}')
         'SQLITE3_BIN': '/usr/bin/sqlite3',
         'CURL_BIN': str(fake_curl),
         'FLOCK_BIN': '/usr/bin/true',
+        'BUSCTL_BIN': str(fake_busctl),
+        'UPTIME_FILE': str(uptime_file),
         'FAKE_SYSTEMCTL_STATE': str(fake_state),
         'HEALTH_ATTEMPTS': '1',
         'HEALTH_SLEEP_SECONDS': '0',
@@ -298,6 +330,10 @@ def test_success_switches_release_only_after_migration_and_health(tmp_path):
         if line.startswith('QWEATHER_NETWORK_NOT_BEFORE_EPOCH=')
     )
     assert int(gate_line.split('=', 1)[1]) >= started_at + 1800
+    committed_markers = list(
+        (transaction['state_dir'] / 'backups').rglob('COMMITTED')
+    )
+    assert len(committed_markers) == 1
 
 
 def test_migration_failure_restores_database_release_and_unit_state(tmp_path):
@@ -482,6 +518,36 @@ def test_timer_start_failure_keeps_committed_release_and_user_writes(tmp_path):
     assert not (transaction['fake_state'] / 'case-weather-dispatch.timer.active').exists()
 
 
+def test_post_start_verification_failure_persists_blocking_marker(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    transaction['env']['FAKE_BAD_ON_SUCCESS_UNIT'] = (
+        'case-weather-cache-bootstrap.service'
+    )
+
+    result = _run_activation(transaction)
+
+    assert result.returncode != 0
+    assert transaction['current_link'].resolve() == transaction['new_release'].resolve()
+    assert _database_value(transaction['database_file']) == 'new'
+    markers = list(
+        (transaction['state_dir'] / 'backups').rglob('POST_COMMIT_ATTENTION.txt')
+    )
+    assert len(markers) == 1
+    transaction_dir = markers[0].parent
+    assert not (transaction_dir / 'COMMITTED').exists()
+    (transaction['new_release'] / 'staged.env').write_text(
+        'DEBUG=true\nRELEASE_VALUE=new\n',
+        encoding='utf-8',
+    )
+
+    blocked = _run_activation(transaction)
+
+    assert blocked.returncode != 0
+    assert '尚未人工确认' in blocked.stderr
+    assert transaction['current_link'].resolve() == transaction['new_release'].resolve()
+    assert _database_value(transaction['database_file']) == 'new'
+
+
 def test_rollback_failure_is_loud_and_leaves_all_units_stopped(tmp_path):
     transaction = _prepare_transaction(tmp_path, migration_exit=23)
     transaction['env']['FAKE_FAIL_START_ALWAYS'] = 'case-weather-risk-precompute.timer'
@@ -544,3 +610,27 @@ def test_rollback_required_blocks_until_exact_transaction_is_acknowledged(tmp_pa
     assert confirmed.returncode == 0, confirmed.stderr
     assert (failed / 'RECOVERY_CONFIRMED').is_file()
     assert transaction['current_link'].resolve() == transaction['new_release'].resolve()
+
+
+def test_committed_transaction_with_post_commit_attention_still_blocks(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    failed = (
+        transaction['state_dir']
+        / 'backups'
+        / 'deploy-transactions'
+        / 'committed-but-unverified'
+    )
+    failed.mkdir(parents=True)
+    (failed / 'ACTIVATION_STARTED').write_text('old-release\n', encoding='utf-8')
+    (failed / 'COMMITTED').write_text('success\n', encoding='utf-8')
+    (failed / 'POST_COMMIT_ATTENTION.txt').write_text(
+        'manual review required\n',
+        encoding='utf-8',
+    )
+
+    result = _run_activation(transaction)
+
+    assert result.returncode != 0
+    assert '尚未人工确认' in result.stderr
+    assert transaction['current_link'].resolve() == transaction['old_release'].resolve()
+    assert _database_value(transaction['database_file']) == 'old'

@@ -19,6 +19,8 @@ SYSTEMCTL_BIN="${SYSTEMCTL_BIN:-systemctl}"
 SQLITE3_BIN="${SQLITE3_BIN:-sqlite3}"
 CURL_BIN="${CURL_BIN:-curl}"
 FLOCK_BIN="${FLOCK_BIN:-flock}"
+BUSCTL_BIN="${BUSCTL_BIN:-busctl}"
+UPTIME_FILE="${UPTIME_FILE:-/proc/uptime}"
 DATABASE_FILE="${DATABASE_FILE:-}"
 RECOVERY_ACKNOWLEDGED_TRANSACTION="${RECOVERY_ACKNOWLEDGED_TRANSACTION:-}"
 
@@ -139,9 +141,6 @@ detect_unfinished_transactions() {
     local marker transaction
     while IFS= read -r marker; do
         transaction="$(dirname "$marker")"
-        if [ -f "$transaction/COMMITTED" ] || [ -f "$transaction/ROLLED_BACK" ]; then
-            continue
-        fi
         if [ -f "$transaction/ROLLBACK_REQUIRED.txt" ] \
             || [ -f "$transaction/POST_COMMIT_ATTENTION.txt" ]; then
             if [ -f "$transaction/$RECOVERY_CONFIRMED_MARKER_NAME" ]; then
@@ -149,6 +148,9 @@ detect_unfinished_transactions() {
             fi
             fail "发现尚未人工确认的部署恢复事务: $transaction"
             return 1
+        fi
+        if [ -f "$transaction/COMMITTED" ] || [ -f "$transaction/ROLLED_BACK" ]; then
+            continue
         fi
         fail "发现上次进程中断留下的未完成事务: $transaction"
         return 1
@@ -453,6 +455,84 @@ start_release_timers() {
     done
 }
 
+verify_release_state() {
+    local unit unit_file_state on_success next_us uptime_us remaining_us link_target
+
+    for unit in case-weather.service \
+        case-weather-cache-bootstrap.timer \
+        case-weather-risk-precompute.timer \
+        case-weather-usage-cleanup.timer; do
+        if ! "$SYSTEMCTL_BIN" is-active --quiet "$unit"; then
+            fail "发布后单元未处于 active: $unit"
+            return 1
+        fi
+    done
+
+    unit_file_state="$($SYSTEMCTL_BIN is-enabled case-weather-cache-bootstrap.timer 2>/dev/null || true)"
+    if [ "$unit_file_state" != enabled ]; then
+        fail "bootstrap timer 状态应为 enabled，实际为 ${unit_file_state:-unknown}"
+        return 1
+    fi
+    unit_exists case-weather-cache.timer || {
+        fail "常规天气缓存 timer 未正确安装"
+        return 1
+    }
+    unit_file_state="$($SYSTEMCTL_BIN is-enabled case-weather-cache.timer 2>/dev/null || true)"
+    if [ "$unit_file_state" != disabled ]; then
+        fail "常规天气缓存 timer 状态应为 disabled，实际为 ${unit_file_state:-unknown}"
+        return 1
+    fi
+    if "$SYSTEMCTL_BIN" is-active --quiet case-weather-cache.timer; then
+        fail "常规天气缓存 timer 在首轮等待期间不应提前运行"
+        return 1
+    fi
+
+    on_success="$($SYSTEMCTL_BIN show case-weather-cache.service --property=OnSuccess --value)"
+    case " $on_success " in
+        *" case-weather-dispatch.service "*) ;;
+        *) fail "天气缓存服务缺少 dispatch OnSuccess"; return 1 ;;
+    esac
+    on_success="$($SYSTEMCTL_BIN show case-weather-cache-bootstrap.service --property=OnSuccess --value)"
+    case " $on_success " in
+        *" case-weather-cache.timer "*) ;;
+        *) fail "bootstrap 服务缺少 recurring timer OnSuccess"; return 1 ;;
+    esac
+    if "$SYSTEMCTL_BIN" is-active --quiet case-weather-dispatch.timer \
+        || unit_exists case-weather-dispatch.timer; then
+        fail "旧 dispatch.timer 仍存在"
+        return 1
+    fi
+
+    next_us="$($BUSCTL_BIN get-property \
+        org.freedesktop.systemd1 \
+        /org/freedesktop/systemd1/unit/case_2dweather_2dcache_2dbootstrap_2etimer \
+        org.freedesktop.systemd1.Timer \
+        NextElapseUSecMonotonic \
+        | awk '{print $2}')"
+    uptime_us="$(awk '{printf "%.0f", $1 * 1000000}' "$UPTIME_FILE")"
+    if [[ ! "$next_us" =~ ^[0-9]+$ || ! "$uptime_us" =~ ^[0-9]+$ ]]; then
+        fail "bootstrap timer 单调时钟状态无效"
+        return 1
+    fi
+    remaining_us=$((next_us - uptime_us))
+    if [ "$remaining_us" -lt 1700000000 ] || [ "$remaining_us" -gt 1810000000 ]; then
+        fail "bootstrap timer 未保留完整的首轮 30 分钟等待窗口"
+        return 1
+    fi
+
+    link_target="$(readlink "$CURRENT_LINK")"
+    if [ "$link_target" != "$NEW_RELEASE" ]; then
+        fail "current 链接未指向本次发布"
+        return 1
+    fi
+    if [ -e "$STAGED_ENV_FILE" ]; then
+        fail "候选环境文件在提交前未清理"
+        return 1
+    fi
+    wait_for_health "$HEALTH_URL"
+    log "发布后服务、timer、OnSuccess、链接与健康检查全部通过"
+}
+
 captured_unit_active() {
     local wanted="$1"
     awk -F '\t' -v wanted="$wanted" '
@@ -627,7 +707,7 @@ on_exit() {
     if [ "$COMMITTED" -eq 1 ] || [ "$FORWARD_ONLY" -eq 1 ]; then
         {
             if [ "$COMMITTED" -eq 1 ]; then
-                echo '新版本已通过健康检查并提交，后置 timer 启动失败；为避免覆盖提交后的用户写入，本次不会回滚数据库。'
+                echo '新版本已通过首次公网健康检查并进入向前提交阶段；timer 启动或完整状态复核失败，为避免覆盖用户写入，本次不会回滚数据库。'
             else
                 echo '公网服务已尝试启动，期间可能已有用户写入；本次保留向前迁移后的数据库、环境和代码入口。'
             fi
@@ -694,6 +774,8 @@ command -v "$SYSTEMCTL_BIN" >/dev/null 2>&1 || require_executable "$SYSTEMCTL_BI
 command -v "$SQLITE3_BIN" >/dev/null 2>&1 || require_executable "$SQLITE3_BIN"
 command -v "$CURL_BIN" >/dev/null 2>&1 || require_executable "$CURL_BIN"
 command -v "$FLOCK_BIN" >/dev/null 2>&1 || require_executable "$FLOCK_BIN"
+command -v "$BUSCTL_BIN" >/dev/null 2>&1 || require_executable "$BUSCTL_BIN"
+require_file "$UPTIME_FILE"
 
 mkdir -p "$RELEASE_ROOT" "$TRANSACTION_ROOT"
 exec 9> "$RELEASE_ROOT/deploy.lock"
@@ -743,5 +825,6 @@ printf '%s\n' "$NEW_RELEASE" > "$STATE_DIR/deployments/current-release.next.$$"
 mv -f "$STATE_DIR/deployments/current-release.next.$$" "$STATE_DIR/deployments/current-release"
 COMMITTED=1
 start_release_timers
+verify_release_state
 printf '%s\n' 'success' > "$TRANSACTION_DIR/COMMITTED"
 log "发布已提交: $NEW_RELEASE"

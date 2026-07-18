@@ -273,12 +273,6 @@ remote_env_generate_secret() {
     remote_exec "umask 077; python3 -c 'import secrets; print(secrets.token_hex(32), end=\"\")' | flock $RELEASE_ROOT/deploy-env.lock python3 $RELEASE_APP/scripts/update_env_value.py --file $STAGED_ENV_FILE --key $key --mode if-empty"
 }
 
-check_remote_unit_active() {
-    local unit="$1"
-    remote_exec "systemctl is-active --quiet $unit"
-    echo "已确认 systemd 单元运行中: $unit"
-}
-
 # 使用 rsync/scp 上传文件的函数
 upload_files() {
     local remote_target="$1"
@@ -641,23 +635,7 @@ echo "步骤7: 在单个服务器事务中备份、迁移、切换并验活..."
 remote_exec "STATE_DIR=$PROJECT_DIR RELEASE_ROOT=$RELEASE_ROOT NEW_RELEASE=$NEW_RELEASE CURRENT_LINK=$CURRENT_LINK ENV_FILE=$PROJECT_DIR/.env STAGED_ENV_FILE=$STAGED_ENV_FILE HEALTH_URL=http://127.0.0.1:5000/healthz RECOVERY_ACKNOWLEDGED_TRANSACTION=$RECOVERY_ACKNOWLEDGED_TRANSACTION bash $RELEASE_APP/scripts/activate_release.sh"
 
 echo ""
-echo "步骤8: 复核服务、定时器与当前版本..."
-check_remote_unit_active "case-weather.service"
-check_remote_unit_active "case-weather-cache-bootstrap.timer"
-remote_exec "BOOTSTRAP_STATE=\$(systemctl is-enabled case-weather-cache-bootstrap.timer 2>/dev/null || true); test \"\$BOOTSTRAP_STATE\" = enabled || { echo \"bootstrap timer 状态应为 enabled，实际为 \${BOOTSTRAP_STATE:-unknown}。\" >&2; exit 1; }"
-remote_exec "NEXT_US=\$(busctl get-property org.freedesktop.systemd1 /org/freedesktop/systemd1/unit/case_2dweather_2dcache_2dbootstrap_2etimer org.freedesktop.systemd1.Timer NextElapseUSecMonotonic | awk '{print \$2}'); UPTIME_US=\$(awk '{printf \"%.0f\", \$1 * 1000000}' /proc/uptime); REMAINING_US=\$((NEXT_US - UPTIME_US)); if [ \"\$REMAINING_US\" -lt 1700000000 ] || [ \"\$REMAINING_US\" -gt 1810000000 ]; then echo 'bootstrap timer 未保留完整的首轮 30 分钟等待窗口。' >&2; exit 1; fi"
-remote_exec "systemctl cat case-weather-cache.timer >/dev/null; test \"\$(systemctl show case-weather-cache.timer --property=LoadState --value)\" = loaded"
-remote_exec "RECURRING_STATE=\$(systemctl is-enabled case-weather-cache.timer 2>/dev/null || true); test \"\$RECURRING_STATE\" = disabled || { echo \"常规天气缓存 timer 状态应为 disabled，实际为 \${RECURRING_STATE:-unknown}。\" >&2; exit 1; }"
-remote_exec "if systemctl is-active --quiet case-weather-cache.timer; then echo '常规天气缓存 timer 在首轮等待期间不应提前运行。' >&2; exit 1; fi"
-check_remote_unit_active "case-weather-risk-precompute.timer"
-check_remote_unit_active "case-weather-usage-cleanup.timer"
-remote_exec "systemctl cat case-weather-dispatch.service >/dev/null"
-remote_exec "systemctl show case-weather-cache.service --property=OnSuccess --value | grep -qw 'case-weather-dispatch.service'"
-remote_exec "systemctl show case-weather-cache-bootstrap.service --property=OnSuccess --value | grep -qw 'case-weather-cache.timer'"
-remote_exec "if systemctl is-active --quiet case-weather-dispatch.timer || systemctl cat case-weather-dispatch.timer >/dev/null 2>&1; then echo '旧 dispatch.timer 仍存在，拒绝完成发布。' >&2; exit 1; fi"
-remote_exec "test \"\$(readlink $CURRENT_LINK)\" = '$NEW_RELEASE'"
-remote_exec "test ! -e $STAGED_ENV_FILE"
-remote_exec "curl --fail --silent --show-error --max-time 3 http://127.0.0.1:5000/healthz"
+echo "步骤8: 服务、timer、OnSuccess、current 链接与健康检查已在原子激活事务内通过。"
 
 echo ""
 echo "=== 部署完成 ==="

@@ -194,7 +194,8 @@ def test_deploy_installs_independent_daily_cleanup_timer_idempotently():
     assert '"$SYSTEMCTL_BIN" enable "$unit"' in activate_content
     assert '"$SYSTEMCTL_BIN" restart "$unit"' in activate_content
     assert '"$SYSTEMCTL_BIN" is-active --quiet "$unit"' in activate_content
-    assert 'check_remote_unit_active "case-weather-usage-cleanup.timer"' in deploy_content
+    assert 'case-weather-usage-cleanup.timer' in activate_content
+    assert 'verify_release_state() {' in activate_content
 
     activation_tail = activate_content.split('switch_current_link "$NEW_RELEASE"', 1)[1]
     assert activation_tail.index('install_new_units') < activation_tail.index('start_new_release')
