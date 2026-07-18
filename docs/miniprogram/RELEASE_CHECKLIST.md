@@ -2,6 +2,7 @@
 
 ## 个人主体证据与发布门禁
 
+- [ ] 账号持有人已按 [个人主体行动表](./PERSONAL_SUBJECT_ACTION_SHEET.md) 完成平台实际出现且只需本人操作的实名、人脸、短信、扫码确认和必要付款步骤；身份证号、验证码、付款信息和 AppSecret 未进入聊天或仓库。
 - [ ] 已从 `.env.wechat-release.example` 复制出被 Git 忽略的 `.env.wechat-release`，没有把真实值写回模板。
 - [ ] `.env.wechat-release` 是普通文件且权限为 `0600`；`git check-ignore .env.wechat-release` 能命中忽略规则。
 - [ ] 微信公众平台正式后台仍显示主体类型为“个人”，账号状态允许提交审核。

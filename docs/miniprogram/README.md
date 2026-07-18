@@ -70,6 +70,6 @@ git diff --check
 
 ## 发布入口
 
-上架前按 [RELEASE_CHECKLIST.md](./RELEASE_CHECKLIST.md) 完成账号侧配置，并按 [TEST_PLAN.md](./TEST_PLAN.md) 留存验收结果。隐私文案见 [PRIVACY_NOTICE_TEMPLATE.md](./PRIVACY_NOTICE_TEMPLATE.md)，服务规则见 [USER_AGREEMENT_TEMPLATE.md](./USER_AGREEMENT_TEMPLATE.md)。
+个人主体账号持有人先按 [PERSONAL_SUBJECT_ACTION_SHEET.md](./PERSONAL_SUBJECT_ACTION_SHEET.md) 完成平台实际出现的适用实名、人脸、短信、扫码确认和必要付款步骤。项目维护者再按 [RELEASE_CHECKLIST.md](./RELEASE_CHECKLIST.md) 完成账号配置与正式门禁，并按 [TEST_PLAN.md](./TEST_PLAN.md) 留存验收结果。隐私文案见 [PRIVACY_NOTICE_TEMPLATE.md](./PRIVACY_NOTICE_TEMPLATE.md)，服务规则见 [USER_AGREEMENT_TEMPLATE.md](./USER_AGREEMENT_TEMPLATE.md)。
 
 `DEPLOY_REQUIRE_WECHAT_READY=0` 只能在本地微信开发者工具预览。远程发布脚本只接受 `DEPLOY_REQUIRE_WECHAT_READY=1`，并会在任何 SSH、上传或服务器修改前验证正式门禁。
