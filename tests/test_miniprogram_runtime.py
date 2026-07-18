@@ -823,9 +823,19 @@ def test_sync_cycle_calls_each_qweather_endpoint_at_most_once_and_enriches_forec
     monkeypatch,
 ):
     from core.db_models import MiniProgramSnapshot
+    from core.time_utils import today_local
     from services.pipelines import sync_weather_cache as pipeline
 
-    calls = {"current": [], "forecast": [], "warning": []}
+    calls = {"current": [], "forecast": [], "nowcast": [], "warning": []}
+    forecast_start = today_local()
+    complete_forecast = [
+        {
+            **FORECAST[0],
+            "date": (forecast_start + timedelta(days=index)).isoformat(),
+            "forecast_date": (forecast_start + timedelta(days=index)).isoformat(),
+        }
+        for index in range(7)
+    ]
 
     class WeatherStub:
         def get_current_weather(self, location, *, include_enrichment=True):
@@ -841,7 +851,26 @@ def test_sync_cycle_calls_each_qweather_endpoint_at_most_once_and_enriches_forec
 
         def get_qweather_daily_forecast(self, location, days=7):
             calls["forecast"].append((location, days))
-            return {"success": True, "daily": FORECAST, "meta": {"source": "QWeather"}}
+            return {
+                "success": True,
+                "daily": complete_forecast,
+                "meta": {"source": "QWeather"},
+            }
+
+        def get_short_term_nowcast(self, location, hours=24):
+            calls["nowcast"].append((location, hours))
+            return {
+                "available": True,
+                "source": "Open-Meteo",
+                "timeline": [{
+                    "time": "2026-07-18T08:00",
+                    "precipitation_probability": 20.0,
+                    "precipitation_mm": 0.0,
+                    "temperature": 31.0,
+                    "condition": "多云",
+                    "risk_level": "低",
+                }],
+            }
 
     app.config.update(
         QWEATHER_AUTH_MODE="api_key",
@@ -861,8 +890,10 @@ def test_sync_cycle_calls_each_qweather_endpoint_at_most_once_and_enriches_forec
 
     assert calls["current"] == [("都昌县", False)]
     assert calls["forecast"] == [("都昌县", 7)]
+    assert calls["nowcast"] == [("都昌县", 24)]
     assert calls["warning"] == ["116.20,29.27"]
     assert result["locations"] == 1
+    assert result["nowcast_updated"] == 1
     record = MiniProgramSnapshot.query.filter_by(snapshot_id=result["snapshot_id"]).one()
     payload = __import__("services.miniprogram_service", fromlist=["snapshot_payload"]).snapshot_payload(record)
     assert payload["current"]["temperature_max"] == 39.0
@@ -1067,6 +1098,89 @@ def test_postgresql_snapshot_retention_uses_transaction_lock():
     assert len(calls) == 1
     assert "pg_advisory_xact_lock" in calls[0][0]
     assert calls[0][1]["lock_id"] > 0
+
+
+def test_weather_sync_persists_nowcast_for_read_only_web_route(app, db_session):
+    from core.db_models import ForecastCache
+    from services.pipelines import sync_weather_cache as pipeline
+
+    fetched_at = utcnow()
+    nowcast = {
+        "available": True,
+        "source": "Open-Meteo",
+        "timeline": [
+            {
+                "time": "2026-07-18T08:00",
+                "precipitation_probability": 20.0,
+                "precipitation_mm": 0.0,
+                "temperature": 31.0,
+                "condition": "多云",
+                "risk_level": "低",
+            }
+        ],
+    }
+
+    with app.app_context():
+        assert pipeline._upsert_nowcast(nowcast, fetched_at) is True
+        db_session.commit()
+        record = ForecastCache.query.filter_by(
+            location="nowcast:都昌县",
+            days=24,
+        ).one()
+
+    assert record.is_mock is False
+    assert record.fetched_at == fetched_at.replace(tzinfo=None)
+    assert json.loads(record.payload) == nowcast
+
+
+def test_weather_sync_rejects_untrusted_or_malformed_nowcast(app, db_session):
+    from core.db_models import ForecastCache
+    from services.pipelines import sync_weather_cache as pipeline
+
+    valid_entry = {
+        "time": "2026-07-18T08:00",
+        "precipitation_probability": 20.0,
+        "precipitation_mm": 0.0,
+        "temperature": 31.0,
+        "condition": "多云",
+        "risk_level": "低",
+    }
+    invalid_payloads = [
+        {
+            "available": True,
+            "source": "unknown",
+            "timeline": [dict(valid_entry)],
+        },
+        {
+            "available": True,
+            "source": "Open-Meteo",
+            "is_mock": True,
+            "timeline": [dict(valid_entry)],
+        },
+        {
+            "available": True,
+            "source": "Open-Meteo",
+            "timeline": [{**valid_entry, "time": "invalid"}],
+        },
+        {
+            "available": True,
+            "source": "Open-Meteo",
+            "timeline": [{**valid_entry, "precipitation_probability": 120.0}],
+        },
+        {
+            "available": True,
+            "source": "Open-Meteo",
+            "timeline": [{**valid_entry, "risk_level": "高"}],
+        },
+    ]
+
+    with app.app_context():
+        for payload in invalid_payloads:
+            assert pipeline._upsert_nowcast(payload, utcnow()) is False
+        assert ForecastCache.query.filter_by(
+            location="nowcast:都昌县",
+            days=24,
+        ).count() == 0
 
 
 def test_wechat_login_limits_active_sessions_per_identity(

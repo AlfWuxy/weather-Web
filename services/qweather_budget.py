@@ -10,7 +10,7 @@ import os
 import threading
 import time
 
-from flask import current_app, has_app_context
+from flask import current_app, has_app_context, has_request_context
 
 from core.time_utils import now_local
 from utils.parsers import parse_bool, parse_int
@@ -66,6 +66,9 @@ def _log_network_gate_blocked_once(reason):
     _BLOCKED_LOGGED.add(key)
     if reason == "invalid":
         logger.error("和风天气网络闸门配置无效，已按关闭策略阻断请求。")
+        return
+    if reason == "request-context":
+        logger.warning("普通 HTTP 请求禁止直连和风天气，已按只读策略阻断请求。")
         return
     logger.warning("和风天气网络闸门尚未开放，已阻断请求。")
 
@@ -164,6 +167,11 @@ def _reserve_local(month, endpoint, limit):
 
 def reserve_qweather_request(endpoint):
     """在发出一次和风请求前预占月度额度。"""
+    # 普通 HTTP 请求只允许读取已落地缓存，且阻断时不得消耗预算。
+    if has_request_context():
+        _log_network_gate_blocked_once("request-context")
+        return False
+
     # 网络闸门必须先于 Redis 和进程内计数，阻断期不消耗任何预算。
     if not _network_gate_allows_request():
         return False

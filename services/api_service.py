@@ -10,7 +10,7 @@ from flask_login import current_user, login_required
 from core.constants import DEFAULT_CITY_LABEL
 from core.notifications import create_notification
 from core.security import csrf_failure_response, validate_csrf
-from core.time_utils import now_local, today_local
+from core.time_utils import ensure_utc_aware, now_local, today_local, utcnow
 from core.weather import (
     ensure_user_location_valid,
     get_qweather_forecast_with_cache,
@@ -20,7 +20,7 @@ from core.weather import (
     normalize_location_name,
     weather_source_label
 )
-from core.db_models import Community
+from core.db_models import Community, ForecastCache
 from core.extensions import db
 from core.usage import WEB_CLIENT_PILOT_EVENT_TYPES, log_usage_event
 from utils.parsers import parse_date, parse_int, safe_json_loads
@@ -155,28 +155,70 @@ def _api_current_weather():
 
 
 def _api_weather_nowcast():
-    """获取未来小时级降水时间轴（短临预报）"""
-    location = sanitize_input(request.args.get('location'), max_length=100)
-    if location:
-        location = normalize_location_name(location)
-    else:
-        location = ensure_user_location_valid()
-
+    """只读后台 30 分钟周期生成的小时级降水缓存。"""
     try:
         hours = int(request.args.get('hours', 6))
     except Exception:
         hours = 6
     hours = max(1, min(hours, 24))
-
-    weather_service = get_weather_fetcher()
-    if weather_service is None or not hasattr(weather_service, 'get_short_term_nowcast'):
-        return jsonify({'success': False, 'message': '短临服务未启用', 'data': {'available': False, 'timeline': []}})
-
     try:
-        nowcast = weather_service.get_short_term_nowcast(location, hours=hours)
-    except (ValueError, TypeError, RuntimeError, OSError) as exc:
-        logger.warning("Nowcast fetch failed: %s", exc)
-        nowcast = {'available': False, 'timeline': [], 'reason': 'fetch_failed'}
+        record = ForecastCache.query.filter_by(
+            location=f'nowcast:{DEFAULT_CITY_LABEL}',
+            days=24,
+        ).order_by(ForecastCache.fetched_at.desc(), ForecastCache.id.desc()).first()
+        if record is None or record.fetched_at is None or bool(record.is_mock):
+            nowcast = {
+                'available': False,
+                'source': 'scheduled-cache',
+                'reason': 'cache_pending',
+                'timeline': [],
+            }
+        else:
+            cached = safe_json_loads(record.payload, {})
+            timeline = cached.get('timeline') if isinstance(cached, dict) else []
+            age_seconds_exact = max(
+                0.0,
+                (utcnow() - ensure_utc_aware(record.fetched_at)).total_seconds(),
+            )
+            age_seconds = int(age_seconds_exact)
+            if age_seconds_exact > 1800:
+                nowcast = {
+                    'available': False,
+                    'source': cached.get('source', 'scheduled-cache')
+                    if isinstance(cached, dict) else 'scheduled-cache',
+                    'reason': 'cache_stale',
+                    'timeline': [],
+                    'from_cache': True,
+                    'stale': True,
+                    'cache_age_seconds': age_seconds,
+                }
+            elif not isinstance(timeline, list) or not timeline or not cached.get('available'):
+                nowcast = {
+                    'available': False,
+                    'source': cached.get('source', 'scheduled-cache')
+                    if isinstance(cached, dict) else 'scheduled-cache',
+                    'reason': 'cache_invalid',
+                    'timeline': [],
+                    'from_cache': True,
+                    'stale': False,
+                    'cache_age_seconds': age_seconds,
+                }
+            else:
+                nowcast = dict(cached)
+                nowcast['timeline'] = timeline[:hours]
+                nowcast['available'] = True
+                nowcast['from_cache'] = True
+                nowcast['stale'] = False
+                nowcast['cache_age_seconds'] = age_seconds
+    except Exception as exc:
+        logger.warning("Nowcast cache read failed: %s", exc)
+        db.session.rollback()
+        nowcast = {
+            'available': False,
+            'source': 'scheduled-cache',
+            'reason': 'cache_unavailable',
+            'timeline': [],
+        }
 
     return jsonify({'success': True, 'data': nowcast})
 

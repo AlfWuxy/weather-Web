@@ -393,12 +393,15 @@ def _weather_cache_location(location):
     return normalized
 
 
-def get_weather_with_cache(location, ttl_minutes=None, cache_only=False):
-    """获取带缓存的天气数据，可选择只读真实缓存。"""
+def get_weather_with_cache(location, ttl_minutes=None, cache_only=True):
+    """获取带缓存的天气数据，普通调用默认只读真实缓存。"""
     if is_demo_mode():
-        if cache_only:
+        # 演示页面可以继续展示本地样例；后台 cache-only 任务仍拒绝 mock。
+        if cache_only and not has_request_context():
             return {}, False
         return get_demo_weather_data(), False
+    # HTTP 请求一律只读。显式联网刷新只允许后台任务或命令行诊断使用。
+    cache_only = bool(cache_only) or has_request_context()
     location = _weather_cache_location(location)
     if ttl_minutes is None:
         ttl_minutes = current_app.config.get('WEATHER_CACHE_TTL_MINUTES', WEATHER_CACHE_TTL_MINUTES)
@@ -426,9 +429,8 @@ def get_weather_with_cache(location, ttl_minutes=None, cache_only=False):
             if now - ensure_utc_aware(cache.fetched_at) <= timedelta(minutes=ttl_minutes):
                 if not cache_only or cached_weather_is_real:
                     return cached_weather, True
-            # 预热任务允许读取最后一条过期的真实缓存，避免自行访问外网。
-            if cache_only and cached_weather_is_real:
-                return cached_weather, True
+            # 实况超过新鲜度期限后停止参与页面展示和风险计算。
+            # 离线小程序快照由独立持久层保留原始时间并明确标记 stale。
     except Exception as exc:
         logger.warning("天气缓存不可用，已跳过缓存: %s", exc)
         db.session.rollback()
@@ -482,10 +484,15 @@ def get_fallback_weather_data():
     }
 
 
-def get_forecast_with_cache(location, days=7, ttl_minutes=None):
-    """获取带缓存的天气预报"""
+def get_forecast_with_cache(location, days=7, ttl_minutes=None, cache_only=True):
+    """获取带缓存的天气预报，普通调用默认只读。"""
     if is_demo_mode():
+        # 演示页面只生成本地样例，不访问外网或写缓存。
+        if cache_only and not has_request_context():
+            return [], False
         return get_demo_forecast_data(days=days), True
+    # 防止未来路由误传 cache_only=False 后重新引入按请求抓取。
+    cache_only = bool(cache_only) or has_request_context()
     location = _weather_cache_location(location)
     if ttl_minutes is None:
         ttl_minutes = current_app.config.get('FORECAST_CACHE_TTL_MINUTES', 20)
@@ -503,12 +510,18 @@ def get_forecast_with_cache(location, days=7, ttl_minutes=None):
             ForecastCache.id.desc()
         ).first()
         if cache and cache.fetched_at:
+            cached_forecast = safe_json_loads(cache.payload, [])
             # 确保从数据库读取的 datetime 是 UTC aware 的
             if now - ensure_utc_aware(cache.fetched_at) <= timedelta(minutes=ttl_minutes):
-                return safe_json_loads(cache.payload, []), True
+                return cached_forecast, True
+            # 只读链路可复用最后一份缓存，等待后台周期刷新。
+            if cache_only and cached_forecast and not bool(cache.is_mock):
+                return cached_forecast, True
     except Exception as exc:
         logger.warning("预报缓存不可用，已跳过缓存: %s", exc)
         db.session.rollback()
+    if cache_only:
+        return [], False
     weather_service = get_weather_fetcher()
     try:
         if weather_service is None:
@@ -591,13 +604,21 @@ def _parse_qweather_only_cache_payload(payload, days, expected_start_date=None):
     return forecast_data[:days], meta
 
 
-def get_qweather_forecast_with_cache(location, days=7, ttl_minutes=None):
-    """获取和风-only天气预报，失败时返回空数据而不是模拟预报。"""
+def get_qweather_forecast_with_cache(
+    location,
+    days=7,
+    ttl_minutes=None,
+    cache_only=True,
+    fetcher=None,
+):
+    """获取和风-only天气预报，普通调用默认只读真实缓存。"""
     try:
         days = max(1, min(int(days or 7), 7))
     except Exception:
         days = 7
-    if is_demo_mode():
+    # 请求上下文始终只读；已配置和风的后台同步可在 DEMO_MODE 下显式刷新。
+    cache_only = bool(cache_only) or has_request_context()
+    if is_demo_mode() and cache_only:
         return [], False, {'source': 'QWeather', 'error': 'demo_mode'}
 
     location = _weather_cache_location(location)
@@ -624,20 +645,28 @@ def get_qweather_forecast_with_cache(location, days=7, ttl_minutes=None):
             ForecastCache.fetched_at.desc(),
             ForecastCache.id.desc()
         ).first()
-        if cache and cache.fetched_at:
-            if now - ensure_utc_aware(cache.fetched_at) <= timedelta(minutes=ttl_minutes):
-                forecast_data, meta = _parse_qweather_only_cache_payload(
-                    safe_json_loads(cache.payload, {}),
-                    days,
-                    expected_start_date=expected_start_date,
-                )
-                if forecast_data is not None:
+        if cache and cache.fetched_at and not bool(cache.is_mock):
+            forecast_data, meta = _parse_qweather_only_cache_payload(
+                safe_json_loads(cache.payload, {}),
+                days,
+                expected_start_date=expected_start_date,
+            )
+            if forecast_data is not None:
+                if now - ensure_utc_aware(cache.fetched_at) <= timedelta(minutes=ttl_minutes):
                     return forecast_data, True, meta
+                # 日期仍有效时允许 HTTP 复用过期缓存，等待后台同步刷新。
+                if cache_only:
+                    stale_meta = dict(meta or {})
+                    stale_meta['stale'] = True
+                    return forecast_data, True, stale_meta
     except Exception as exc:
         logger.warning("和风-only预报缓存不可用，已跳过缓存: %s", exc)
         db.session.rollback()
 
-    weather_service = get_weather_fetcher()
+    if cache_only:
+        return [], False, {'source': 'QWeather', 'error': 'cache_miss'}
+
+    weather_service = fetcher or get_weather_fetcher()
     meta = {'source': 'QWeather'}
     forecast_data = []
     try:

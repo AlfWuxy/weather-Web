@@ -99,7 +99,7 @@ def test_precompute_community_risk_skips_mock_weather(app, monkeypatch):
     clear_local_community_risk_cache()
 
 
-def test_precompute_reads_expired_real_cache_without_fetcher(app, db_session, monkeypatch):
+def test_precompute_skips_expired_real_cache_without_fetcher(app, db_session, monkeypatch):
     from core.db_models import WeatherCache
     from core.time_utils import utcnow
     from services.community_risk_cache import clear_local_community_risk_cache
@@ -126,8 +126,8 @@ def test_precompute_reads_expired_real_cache_without_fetcher(app, db_session, mo
 
     class FakeCommunityService:
         def generate_community_risk_map(self, weather_data, target_date=None, window_days=None, disease_filter=None):
-            assert weather_data == weather
-            return {'map_data': {'cache_only': True}}
+            del weather_data, target_date, window_days, disease_filter
+            pytest.fail('过期天气不得进入社区风险计算')
 
     monkeypatch.setattr(
         'core.weather.get_weather_fetcher',
@@ -145,10 +145,10 @@ def test_precompute_reads_expired_real_cache_without_fetcher(app, db_session, mo
         disease_filters=[''],
     )
 
-    assert result['weather_cache_hits'] == 1
-    assert result['weather_skipped'] == 0
-    assert result['computed'] == 1
-    assert result['combinations'] == 1
+    assert result['weather_cache_hits'] == 0
+    assert result['weather_skipped'] == 1
+    assert result['computed'] == 0
+    assert result['combinations'] == 0
 
     clear_local_community_risk_cache()
 

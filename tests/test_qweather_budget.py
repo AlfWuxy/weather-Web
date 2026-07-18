@@ -116,6 +116,36 @@ def test_legacy_provider_total_does_not_block_app_counter(app, monkeypatch):
     assert snapshot["endpoints"] == {"weather_7d_forecast": 1}
 
 
+def test_request_context_fails_closed_before_any_budget_counter(app, monkeypatch):
+    from services import qweather_budget as budget
+
+    _reset_local_budget(budget)
+    fake_redis = _FakeBudgetRedis()
+    redis_calls = []
+    gate_calls = []
+    monkeypatch.setattr(
+        budget,
+        "get_qweather_redis_client",
+        lambda: redis_calls.append(True) or fake_redis,
+    )
+    monkeypatch.setattr(
+        budget,
+        "_network_gate_allows_request",
+        lambda: gate_calls.append(True) or True,
+    )
+
+    with app.test_request_context("/api/v1/weather/current"):
+        app.config["QWEATHER_MONTHLY_REQUEST_LIMIT"] = 40000
+        assert budget.reserve_qweather_request("weather_now") is False
+
+    assert gate_calls == []
+    assert redis_calls == []
+    assert fake_redis.values == {}
+    assert fake_redis.hashes == {}
+    assert dict(budget._LOCAL_TOTALS) == {}
+    assert dict(budget._LOCAL_ENDPOINTS) == {}
+
+
 def test_future_network_gate_blocks_before_any_budget_counter(app, monkeypatch):
     from services import qweather_budget as budget
 

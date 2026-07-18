@@ -22,6 +22,7 @@ from core.db_models import (
 )
 from core.extensions import db
 from core.time_utils import ensure_utc_aware, utcnow
+from core.weather import get_qweather_forecast_with_cache
 from services.qweather_auth import is_qweather_configured
 from services.miniprogram_auth import current_privacy_version
 from services.user._common import _action_plan
@@ -393,12 +394,12 @@ def refresh_snapshot_from_cycle(current, weather_service=None, *, fetched_at=Non
     warning_status = {"available": False, "status": "not_refreshed"}
     if weather_service is not None and qweather_runtime_configured():
         try:
-            result = weather_service.get_qweather_daily_forecast(CANONICAL_LOCATION_NAME, days=7)
-            if isinstance(result, dict):
-                forecast = result.get("daily") or []
-                forecast_meta = result.get("meta") or {}
-            elif isinstance(result, list):
-                forecast = result
+            forecast, _, forecast_meta = get_qweather_forecast_with_cache(
+                CANONICAL_LOCATION_NAME,
+                days=7,
+                cache_only=False,
+                fetcher=weather_service,
+            )
         except Exception:
             current_app.logger.exception("小程序预报同步失败，保留实况快照")
             forecast_meta = {"source": "QWeather", "error": "fetch_failed"}
