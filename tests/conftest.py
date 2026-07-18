@@ -13,7 +13,7 @@ from pathlib import Path
 
 
 @pytest.fixture(scope='session', autouse=True)
-def setup_test_environment():
+def setup_test_environment(tmp_path_factory):
     """自动设置测试环境变量（在所有测试之前执行）。"""
     # 创建临时数据库文件
     temp_db = tempfile.NamedTemporaryFile(
@@ -23,6 +23,7 @@ def setup_test_environment():
     )
     temp_db_path = temp_db.name
     temp_db.close()
+    lock_root = tmp_path_factory.mktemp('dispatch_locks')
 
     # 设置测试环境变量（仅在未设置时）
     test_env = {
@@ -41,6 +42,8 @@ def setup_test_environment():
         # 测试必须隔离生产 Redis 限流状态，避免远端 .env 影响登录/API 用例。
         'RATE_LIMIT_STORAGE_URI': 'memory://',
         'REDIS_URL': '',
+        # 文件锁使用独立的绝对临时目录，避免依赖被 Git 忽略的 instance/。
+        'DISPATCH_LOCK_PATH': str(lock_root / 'case-weather-dispatch.lock'),
     }
 
     for key, value in test_env.items():
