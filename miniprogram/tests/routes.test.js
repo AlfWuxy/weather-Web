@@ -26,6 +26,21 @@ test('app 首屏、隐私检查与 tabBar 完整', () => {
   ]);
 });
 
+test('tabBar 默认与选中图标均存在且视觉资源不同', () => {
+  appConfig.tabBar.list.forEach((item) => {
+    assert.notEqual(item.iconPath, item.selectedIconPath, `${item.text} 必须配置独立的选中图标`);
+    const iconFile = path.join(miniRoot, item.iconPath);
+    const selectedIconFile = path.join(miniRoot, item.selectedIconPath);
+    assert.equal(fs.existsSync(iconFile), true, `${item.text} 默认图标必须存在`);
+    assert.equal(fs.existsSync(selectedIconFile), true, `${item.text} 选中图标必须存在`);
+    assert.equal(
+      fs.readFileSync(iconFile).equals(fs.readFileSync(selectedIconFile)),
+      false,
+      `${item.text} 默认与选中图标内容必须不同`,
+    );
+  });
+});
+
 test('自定义组件只在实际使用的页面按需注册', () => {
   assert.equal(appConfig.usingComponents, undefined);
   const componentPages = ['home', 'forecast', 'community', 'actions', 'alerts', 'cooling', 'gis', 'transparency'];

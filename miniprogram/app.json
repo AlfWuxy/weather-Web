@@ -40,13 +40,13 @@
         "pagePath": "pages/home/index",
         "text": "首页",
         "iconPath": "assets/icons/tab-home.png",
-        "selectedIconPath": "assets/icons/tab-home.png"
+        "selectedIconPath": "assets/icons/tab-home-selected.png"
       },
       {
         "pagePath": "pages/forecast/index",
         "text": "预报",
         "iconPath": "assets/icons/tab-forecast.png",
-        "selectedIconPath": "assets/icons/tab-forecast.png"
+        "selectedIconPath": "assets/icons/tab-forecast-selected.png"
       },
       {
         "pagePath": "pages/elders/index",
@@ -64,7 +64,7 @@
         "pagePath": "pages/settings/index",
         "text": "我的",
         "iconPath": "assets/icons/tab-settings.png",
-        "selectedIconPath": "assets/icons/tab-settings.png"
+        "selectedIconPath": "assets/icons/tab-settings-selected.png"
       }
     ]
   },
