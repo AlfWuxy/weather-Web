@@ -12,9 +12,9 @@
 
 1. 安装微信开发者工具。
 2. 导入仓库根目录，开发者工具会按根目录 `project.config.json` 的 `miniprogramRoot` 只编译 `miniprogram/`。
-3. 游客调试可保留 `touristappid`；正式上传前在开发者工具中选择已认证的小程序 AppID。个人本机设置放进根目录 `project.private.config.json`，不要提交。
-4. 参考 `miniprogram/config.example.js`，在本机临时把已经备案的正式 HTTPS API 域名填入 `miniprogram/config.runtime.js`。
-5. 上传完成后立即用 `git diff -- miniprogram/config.runtime.js` 复核，并恢复为空值；禁止把真实域名或密钥提交到公开分支。
+3. 小程序发布分支已在根目录 `project.config.json` 固定正式 AppID。导入后核对项目名称和主体；个人界面偏好放进 `project.private.config.json`，AppSecret、代码上传密钥和会话密钥只进入受限私密文件，均不得提交。
+4. 正式分支已把公开 API 域名 `https://yilaoweather.org` 固定在 `miniprogram/config.runtime.js`，保证目标 commit 可直接编译和复现。
+5. 微信后台 `request` 合法域名、私密发布确认单和目标 commit 中的 API 域名必须一致；AppSecret、上传密钥及第三方密钥仍不得提交。
 
 ## 后端配置
 
@@ -42,9 +42,11 @@
 
 AppSecret 只允许出现在服务器环境变量。小程序包、日志、错误消息和 Git 历史都不能包含 AppSecret、QWeather key 或微信 CI 私钥。
 
+正式小程序不使用第三方生成式人工智能。正式 Web 后端固定 `FEATURE_WEB_AI=0`、`SILICONFLOW_API_KEY` 为空，发布校验会拒绝开启状态或密钥。
+
 新 Web Token 会绑定生成时的隐私版本并在 30 天后过期。历史无期限 Token 在迁移后必须轮换；隐私版本升级也会让旧 Token 返回 428。用药和求助只保存记录，不承诺自动送达。
 
-`config.runtime.js` 始终保留在仓库中且默认值为空，保证源码可以正常编译。域名为空时请求层会明确终止，不会误连占位服务。
+`config.runtime.js` 始终保留在正式小程序分支中并固定公开生产域名。请求层只允许 HTTPS 且只访问同一主机，不接受跨域绝对 URL。
 
 ## 请求模型
 
@@ -69,3 +71,5 @@ git diff --check
 ## 发布入口
 
 上架前按 [RELEASE_CHECKLIST.md](./RELEASE_CHECKLIST.md) 完成账号侧配置，并按 [TEST_PLAN.md](./TEST_PLAN.md) 留存验收结果。隐私文案见 [PRIVACY_NOTICE_TEMPLATE.md](./PRIVACY_NOTICE_TEMPLATE.md)，服务规则见 [USER_AGREEMENT_TEMPLATE.md](./USER_AGREEMENT_TEMPLATE.md)。
+
+`DEPLOY_REQUIRE_WECHAT_READY=0` 只能在本地微信开发者工具预览。远程发布脚本只接受 `DEPLOY_REQUIRE_WECHAT_READY=1`，并会在任何 SSH、上传或服务器修改前验证正式门禁。

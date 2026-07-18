@@ -5,20 +5,23 @@
 - [ ] 已从 `.env.wechat-release.example` 复制出被 Git 忽略的 `.env.wechat-release`，没有把真实值写回模板。
 - [ ] `.env.wechat-release` 是普通文件且权限为 `0600`；`git check-ignore .env.wechat-release` 能命中忽略规则。
 - [ ] 微信公众平台正式后台仍显示主体类型为“个人”，账号状态允许提交审核。
+- [ ] 选填“职业信息”保持为“无”或跳过；没有用无法核验的科学科普、公益、医疗或 IT 身份材料换取展示认证。
 - [ ] 私有发布资料中保存了发布当天的正式截图，能看清个人主体、实际选中类目、资质要求状态和日期；敏感字段已遮盖，截图未进入仓库。
 - [ ] 实际类目与当前功能一致，页面没有要求尚未具备的额外资质；确认后才设置 `WECHAT_CATEGORY_CONFIRMED=1`。
 - [ ] 运营者姓名、专用联系邮箱和 `YYYY-MM-DD` 生效日期已按认证账号核对。
+- [ ] 微信后台批准的小程序名称已逐字同步到私密表单与五份冻结材料；每份材料同时包含唯一名称 marker 和可见名称。
 - [ ] 正式 AppID 已核对，AppSecret 只存在于私密表单和受控服务器环境。
 - [ ] `WX_MINIPROGRAM_PRIVACY_VERSION` 与小程序包、服务器要求版本和本次平台隐私保护指引一致。
 - [ ] 所有材料复核完成后才设置 `WECHAT_FORM_READY=1`；正式部署同时设置 `DEPLOY_REQUIRE_WECHAT_READY=1`。
+- [ ] `DEPLOY_REQUIRE_WECHAT_READY=0` 只用于本地微信开发者工具预览；远程发布脚本会在 SSH、上传和服务器变更前直接拒绝该模式。
 - [ ] 任一主体、类目、运营者、AppID 或隐私版本发生变化时，两个门禁先恢复为 `0` 并重新核对。
 
 ## 账号与工程
 
 - [ ] 正式小程序账号已完成主体认证。
-- [ ] 根目录 `project.config.json` 可被开发者工具导入，并已在工具中选择正式 AppID。
+- [ ] 根目录 `project.config.json` 可被开发者工具导入，正式 AppID 与微信后台“开发者ID”一致；仓库中不存在 AppSecret 或代码上传密钥。
 - [ ] 服务器已配置同一 AppID 和 AppSecret。
-- [ ] 本机临时写入 `config.runtime.js` 的正式 HTTPS API 域名已加入 request 合法域名。
+- [ ] `config.runtime.js` 固定的 `https://yilaoweather.org` 已加入 request 合法域名，并与私密发布确认单一致。
 - [ ] 合法域名使用有效 HTTPS 证书、443 端口，无重定向到 HTTP。
 - [ ] 生产包没有 `project.private.config.json`、密钥、测试账号密码或本地地址。
 - [ ] 不可变 release 上传规则明确排除所有 `.env*`，私密微信表单与本机配置没有出现在服务器 release 目录。
@@ -33,9 +36,12 @@
 - [ ] 已说明年龄、性别、慢病类别、日记、用药记录和行动状态的用途。
 - [ ] 已说明用药和求助只保存记录，不提供定时、订阅、短信或电话通知。
 - [ ] 已说明产品分析只使用固定枚举事件、登录后最小维度和 30 天保存期。
+- [ ] 小程序不调用第三方生成式人工智能；正式环境固定 `FEATURE_WEB_AI=0`、`SILICONFLOW_API_KEY` 为空，AI 入口和 API 均不可达。
 - [ ] `/events` 客户端只允许当前真实使用的事件，拒绝自由事件名、列表元数据和超长元数据。
 - [ ] Web Token 默认 30 天过期，并绑定当前隐私说明版本；历史无期限 Token 已轮换。
 - [ ] WxPusher 默认关闭；迁移后历史开启状态已统一关闭，重新开启时前端展示完整第三方传输范围且后端强制收到明确同意。
+- [ ] 正式发布环境已配置 WxPusher token；密钥缺失时 Web 与小程序均禁止开启，并明确提示通道暂不可用。
+- [ ] `FEATURE_HEAT_EXPOSURE_GIS=1` 已由正式发布表单写入候选环境，热暴露 GIS 接口与页面均返回可用。
 - [ ] 设置页提供退出、解绑或账号删除入口。
 - [ ] 管理员原始病历、姓名、医生、诊断、主诉和病史不会进入普通小程序 API。
 - [ ] 医疗边界文案明确“行动筛查与通用提醒，不提供诊断、处方或治疗建议”。
@@ -61,8 +67,14 @@
 - [ ] 正式服务启动前已由服务器时钟设置 30 分钟 QWeather 网络闸门；阻断期不会增加 Redis 或本地预算计数，过期后自动放行。
 - [ ] 社区风险预计算只读最后一份真实天气缓存，缓存缺失时跳过且不会访问 QWeather。
 - [ ] 产品事件清理 timer 独立运行，每日删除 30 天前事件，失败会进入 systemd failed 状态。
+- [ ] 每日产品事件清理不读取 root 私有部署事务目录；部署事务副本只由 root 管理员核对状态后单独执行保留清理。
 - [ ] canonical location 为 `116.20,29.27`，默认预热列表只有都昌县。
 - [ ] 月度预算上限和 fail-closed 已启用。
+- [ ] 正式天气使用本项目独立 QWeather 凭据，并将 `QWEATHER_DEDICATED_CREDENTIAL_CONFIRMED=1`。
+- [ ] 正式发布当天已从 QWeather 控制台读取一次北京时间当月已用量，`QWEATHER_CONSOLE_USAGE_MONTH` 和 `QWEATHER_CONSOLE_USAGE_BASELINE` 已准确写入私密发布表单。
+- [ ] 基线加上距北京时间下月起点的全部 30 分钟周期预算，每周期按 3 个 QWeather endpoint 计算，并额外预留最多 3 次正式烟测后仍不超过月上限。
+- [ ] 正式环境固定 `QWEATHER_REQUIRE_PERSISTENT_BUDGET=1`；QWeather 使用 api_key/jwt 时已配置 Redis，候选发布在停止生产服务前完成一次短超时 PING。
+- [ ] Redis 已启用 AOF，`appendfsync` 为 `everysec` 或 `always`；加载状态、最近写入状态和权限探测均通过。
 - [ ] 小程序客户端缓存为 30 分钟，并发请求已合并。
 - [ ] 普通 bootstrap 请求不会调用 QWeather。
 - [ ] Web 当前天气、七日预报和小时降水接口只读周期缓存；空缓存时返回更新中，且 fetcher 调用数为 0。
@@ -71,13 +83,21 @@
 - [ ] 旧数据库缓存不会被改写抓取时间；过期数据保持 stale。
 - [ ] 预警接口可区分“确认无预警”和“预警来源不可用”。
 - [ ] 多轮自动化、模拟器和视觉测试使用 fixture，真实 QWeather 调用数为 0。
-- [ ] 正式凭据就绪后的唯一一次受控真实联调已记录调用前后预算差值；部署与普通验活没有代替这次联调。
+- [ ] 正式 release 的 `private-metadata/source-commit.txt`、激活参数和验证票据是同一个 40 位冻结 commit。
+- [ ] 正式天气烟测 receipt 位于外置状态目录，绑定冻结 commit 与天气语义配置指纹；`started` 在开放网络闸门前形成，`completed` 记录通过校验的 snapshot_id。
+- [ ] 轮换 AppID、AppSecret、隐私版本、WxPusher、GIS 开关或公开域名后仍命中同一天气 receipt，没有追加同步请求；QWeather 凭据或天气配置确实变化时才形成新指纹。
+- [ ] 正式天气烟测快照的实况、七日预报和预警状态均通过 QWeather 官方来源校验；Open-Meteo、fallback、mock 和 demo 无法通过。
+- [ ] 正式烟测使用 `--skip-nowcast`，最多触发 QWeather 实况、七日预报和预警三个 endpoint；30 分钟常规周期继续包含短时 nowcast。
+- [ ] 正式天气烟测和候选 Gunicorn 都以 `case-weather` 运行，候选进程通过 `env -i` 只获得发布所需的最小环境白名单。
+- [ ] 相同 receipt 的重试没有再次访问上游；started 未完成或 completed 快照失效时已停止并转人工核对。
+- [ ] 正式凭据就绪后的唯一一次受控真实联调已记录调用前后预算差值；普通验活不会另行触发联调。
 
 ## 匿名分析与推送人工复核
 
 - [ ] 公开浏览只使用微信公众平台聚合统计，小程序包未安装第三方统计 SDK。
 - [ ] 自有事件只保存固定枚举与最小维度，原始事件 30 天后删除；聚合 CSV 不含逐事件时间、账号 ID、家庭标识或自由文本。
 - [ ] D7、D15 和家庭分享只按成熟队列展示聚合人数与比例；小样本不对外发布细分结论。
+- [ ] 对外社区当日汇总至少覆盖 5 户，户数与比例按固定粒度分桶；内部管理视图保留准确数据。
 - [ ] `ANALYTICS_MIN_LOCATION_COUNT=3` 已配置；地区聚合只使用社区编码且至少有 3 个家庭才展示，生产环境无法把门槛降到 3 以下。
 - [ ] WxPusher 默认关闭；开启时已经取得当前用户对 UID 和第三方传输范围的明确同意。
 - [ ] 推送正文不含老人姓名和细粒度地址，推送开关、成员级权限和隐私级别均生效。
@@ -98,11 +118,12 @@
 - [ ] 上传包版本号、提交说明、截图和回滚 commit 已记录。
 - [ ] 后端使用不可变 release 目录完成预检，生产目录未被 rsync 原地覆盖。
 - [ ] 发布后 `case-weather-cache-bootstrap.timer` 为 active，`case-weather-cache.timer` 在首轮等待期间为 inactive 且 disabled。
+- [ ] 六个运行时 systemd 服务均使用无登录权限的 `case-weather` 账号和 systemd 沙箱；只有 `instance/`、`storage/` 和 `run/` 可写。
 - [ ] 激活事务在写入 `COMMITTED` 前已核对服务、timer、两条 `OnSuccess`、bootstrap 剩余窗口、`current` 链接、暂存环境清理与公网健康检查。
 - [ ] 激活事务已验证迁移失败和候选端口健康检查失败会恢复数据库、旧 release 与原 systemd 状态。
 - [ ] 公网服务启动后出现故障会保留向前迁移的数据库与新 release，并写入 `POST_COMMIT_ATTENTION.txt`，不会覆盖可能已经确认的用户写入。
 - [ ] `/healthz` 只执行应用与数据库检查，不会触发天气、地图、推送或其他外部 API。
-- [ ] 上传后已把本机 `config.runtime.js` 恢复为空，`git diff` 未发现正式域名。
+- [ ] 上传包使用目标 commit 中固定的公开生产域名，工作树保持干净且构建可复现。
 
 ## 发布与回滚确认
 
