@@ -1,5 +1,10 @@
 const { authApi, getSnapshot, requireToken } = require('./care-session');
-const { FIXED_LOCATION, normalizeList, normalizeSnapshot } = require('./care-logic');
+const {
+  FIXED_LOCATION,
+  markSnapshotStale,
+  normalizeList,
+  normalizeSnapshot,
+} = require('./care-logic');
 
 function memberName(item) {
   return item && item.member && item.member.name ? item.member.name : '家中老人';
@@ -19,6 +24,15 @@ Page({
     await this.loadCareHome();
   },
 
+  onSessionInvalidated() {
+    this.setData({
+      elders: [],
+      weather: normalizeSnapshot({}),
+      loading: false,
+      loadError: '',
+    });
+  },
+
   async onPullDownRefresh() {
     try {
       await this.loadCareHome();
@@ -36,7 +50,7 @@ Page({
         authApi({ method: 'GET', path: '/mp/api/v1/elders' }),
         getSnapshot().catch(() => null),
       ]);
-      const weather = snapshot ? normalizeSnapshot(snapshot) : this.data.weather;
+      const weather = snapshot ? normalizeSnapshot(snapshot) : markSnapshotStale(this.data.weather);
       const elders = normalizeList(elderData, ['items', 'elders']).map((item) => ({
         ...item,
         displayName: memberName(item),
@@ -50,7 +64,9 @@ Page({
       const loadError = this.data.elders.length
         ? '刷新失败，以下仍显示上次成功加载的照护资料。'
         : '照护资料暂时没有加载出来，请稍后再试。';
-      this.setData({ loadError });
+      const weather = markSnapshotStale(this.data.weather);
+      const elders = this.data.elders.map((item) => ({ ...item, today: weather }));
+      this.setData({ loadError, elders, weather });
     } finally {
       this.setData({ loading: false });
     }

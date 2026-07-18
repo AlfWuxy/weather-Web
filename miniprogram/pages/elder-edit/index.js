@@ -28,6 +28,27 @@ Page({
     if (mode === 'edit') await this.loadElder();
   },
 
+  onShow() {
+    requireToken();
+  },
+
+  onSessionInvalidated() {
+    if (this._returnTimer) clearTimeout(this._returnTimer);
+    this._returnTimer = null;
+    this.setData({
+      mode: 'create',
+      pairId: null,
+      name: '',
+      relation: '',
+      age: '',
+      gender: '未填写',
+      genderIndex: 0,
+      chronicText: '',
+      loading: false,
+      busy: false,
+    });
+  },
+
   onUnload() {
     this._unloaded = true;
     if (this._returnTimer) clearTimeout(this._returnTimer);

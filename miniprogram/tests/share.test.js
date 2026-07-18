@@ -46,6 +46,34 @@ function loadHomePageDefinition() {
   return definition;
 }
 
+function loadActionsPageDefinition() {
+  const pagePath = require.resolve('../pages/actions/index');
+  const previousPage = global.Page;
+  let definition;
+  try {
+    global.Page = (candidate) => { definition = candidate; };
+    delete require.cache[pagePath];
+    require(pagePath);
+  } finally {
+    global.Page = previousPage;
+  }
+  return definition;
+}
+
+function loadPublicPageDefinition(name) {
+  const pagePath = require.resolve(`../pages/${name}/index`);
+  const previousPage = global.Page;
+  let definition;
+  try {
+    global.Page = (candidate) => { definition = candidate; };
+    delete require.cache[pagePath];
+    require(pagePath);
+  } finally {
+    global.Page = previousPage;
+  }
+  return definition;
+}
+
 function pageInstance(definition) {
   const instance = Object.assign({}, definition);
   instance.data = JSON.parse(JSON.stringify(definition.data));
@@ -172,16 +200,139 @@ test('统一分享封面存在且使用轻量 JPEG', () => {
   assert.equal(dimensions.width / dimensions.height, 5 / 4);
 });
 
-test('家庭分享落地页解释来源并提供主动照护入口', () => {
+test('家庭分享落地页跳过营销首屏并提供老人和家属双入口', () => {
   const script = fs.readFileSync(path.join(__dirname, '..', 'pages/home/index.js'), 'utf8');
   const view = fs.readFileSync(path.join(__dirname, '..', 'pages/home/index.wxml'), 'utf8');
 
   assert.match(script, /readFamilyShareEntryRecord\(\)/);
   assert.match(script, /entryRecord\.expiresAt - Date\.now\(\)/);
+  assert.match(script, /openTodayActions\(\)[\s\S]*\/pages\/actions\/index/);
   assert.match(script, /startFamilyCare\(\)[\s\S]*\/pages\/bind-token\/index/);
-  assert.match(view, /wx:if="\{\{familyShareEntry\}\}"/);
+  assert.match(view, /wx:if="\{\{entryContextReady && !familyShareEntry\}\}" class="hero"/);
+  assert.match(view, /wx:if="\{\{entryContextReady && familyShareEntry\}\}"/);
   assert.match(view, /家人把这份天气提醒分享给你/);
-  assert.match(view, /登录并开启家庭照护/);
+  assert.match(view, /先看今天行动/);
+  assert.match(view, /我是家属，开启照护/);
+});
+
+test('较早公共天气隐藏旧风险分数并退回通用行动', () => {
+  const result = {
+    data: {
+      available: true,
+      location: { name: '都昌县' },
+      current: { temperature: 38, temperature_max: 40, temperature_min: 30 },
+      risk: { available: true, score: 88, label: '高风险', summary: '旧风险结论' },
+      actions: [{ id: 'stale-heat-action', title: '旧高温行动', detail: '旧数据生成' }],
+    },
+    meta: { source: 'stale-cache', stale: true },
+  };
+
+  const homePage = pageInstance(loadHomePageDefinition());
+  homePage.renderSnapshot.call(homePage, result);
+  assert.equal(homePage.data.freshness.stale, true);
+  assert.equal(homePage.data.snapshot.risk.label, '风险待刷新');
+  assert.equal(homePage.data.snapshot.risk.scoreText, '待刷新');
+  assert.equal(homePage.data.snapshot.risk.summary, '');
+  assert.deepEqual(homePage.data.snapshot.warnings, []);
+  assert.equal(homePage.data.snapshot.warningsStatusText, '官方预警待刷新');
+  assert.deepEqual(homePage.data.topActions, []);
+
+  const actionsPage = pageInstance(loadActionsPageDefinition());
+  actionsPage.renderActions.call(actionsPage, result);
+  assert.equal(actionsPage.data.generalMode, true);
+  assert.equal(actionsPage.data.freshness.stale, true);
+  assert.equal(actionsPage.data.actions.some((item) => item.id === 'stale-heat-action'), false);
+  assert.equal(actionsPage.data.actions[0].id, 'general-water');
+  assert.match(actionsPage.data.error, /通用安全清单/);
+
+  const homeView = fs.readFileSync(path.join(__dirname, '..', 'pages/home/index.wxml'), 'utf8');
+  const actionsView = fs.readFileSync(path.join(__dirname, '..', 'pages/actions/index.wxml'), 'utf8');
+  assert.match(homeView, /较早观测/);
+  assert.match(homeView, /较早天气不生成风险行动/);
+  assert.match(actionsView, /较早天气已切换为通用清单/);
+});
+
+test('较早预警和预报不继续展示有效风险结论', () => {
+  const result = {
+    data: {
+      available: true,
+      location: { name: '都昌县' },
+      current: { temperature: 38, temperature_max: 40, temperature_min: 30 },
+      warnings: [{ id: 'old-warning', title: '旧高温预警', level: '橙色' }],
+      forecast: [{
+        date: '2026-07-18',
+        temperature_max: 40,
+        temperature_min: 30,
+        risk_score: 90,
+        risk_level: '高风险',
+      }],
+      source_status: { warning: { available: true } },
+    },
+    meta: { source: 'stale-cache', stale: true },
+  };
+
+  const alertsPage = pageInstance(loadPublicPageDefinition('alerts'));
+  alertsPage.renderWarnings.call(alertsPage, result);
+  assert.equal(alertsPage.data.freshness.stale, true);
+  assert.deepEqual(alertsPage.data.warnings, []);
+  assert.equal(alertsPage.data.warningsSourceAvailable, false);
+
+  const forecastPage = pageInstance(loadPublicPageDefinition('forecast'));
+  forecastPage.renderForecast.call(forecastPage, result);
+  assert.equal(forecastPage.data.freshness.stale, true);
+  assert.equal(forecastPage.data.highRiskDays, 0);
+  assert.equal(forecastPage.data.forecast[0].riskLabel, '风险待刷新');
+  assert.equal(forecastPage.data.forecast[0].scoreText, '待刷新');
+  assert.equal(forecastPage.data.forecast[0].tone, 'unknown');
+
+  const alertsView = fs.readFileSync(path.join(__dirname, '..', 'pages/alerts/index.wxml'), 'utf8');
+  const forecastView = fs.readFileSync(path.join(__dirname, '..', 'pages/forecast/index.wxml'), 'utf8');
+  assert.match(alertsView, /官方预警有效性待核对/);
+  assert.match(alertsView, /较早观测/);
+  assert.match(forecastView, /高风险日统计待刷新/);
+  assert.match(forecastView, /较早 7 天预报/);
+});
+
+test('完成公共行动后的回执由用户主动分享且不包含个人细节', () => {
+  const page = pageInstance(loadActionsPageDefinition());
+  page.data.completedCount = 1;
+  page.data.locationName = '都昌县';
+  const receipt = page.onShareAppMessage({
+    from: 'button',
+    target: {
+      dataset: {
+        shareKind: 'completion_receipt',
+        shareSource: 'family_share',
+      },
+    },
+  });
+  assert.deepEqual(receipt, {
+    title: '我已看到，并完成一项防护准备',
+    path: '/pages/actions/index?from=family_share',
+    imageUrl: SHARE_COVER_PATH,
+  });
+
+  const view = fs.readFileSync(path.join(__dirname, '..', 'pages/actions/index.wxml'), 'utf8');
+  assert.match(view, /wx:if="\{\{completedCount > 0\}\}"/);
+  assert.match(view, /data-share-kind="completion_receipt"/);
+  assert.match(view, /回发给家人/);
+  assert.match(view, /不包含姓名、健康资料或具体行动记录/);
+});
+
+test('未完成行动时不能伪造完成回执标题', () => {
+  const page = pageInstance(loadActionsPageDefinition());
+  page.data.completedCount = 0;
+  page.data.locationName = '都昌县';
+  const result = page.onShareAppMessage({
+    from: 'button',
+    target: {
+      dataset: {
+        shareKind: 'completion_receipt',
+        shareSource: 'family_share',
+      },
+    },
+  });
+  assert.equal(result.title, '都昌县今日防护清单');
 });
 
 test('分享来源只在本机保留三十天并能自动过期', () => {

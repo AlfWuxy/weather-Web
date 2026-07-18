@@ -47,6 +47,21 @@
   background: #eaf3ff;
 }
 
+.weather-strip.stale {
+  border: 2rpx solid #efc697;
+  background: #fff4e5;
+}
+
+.weather-strip.unavailable {
+  border: 2rpx solid #d7dfda;
+  background: #eef1ef;
+}
+
+.weather-main {
+  flex: 1;
+  min-width: 0;
+}
+
 .weather-label {
   color: #496157;
   font-size: 14px;
@@ -70,7 +85,24 @@
   font-size: 15px;
 }
 
+.weather-status-copy {
+  margin-top: 10rpx;
+  color: #496157;
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.weather-status-copy.stale {
+  color: #784116;
+}
+
+.weather-status-copy.unavailable {
+  color: #4f5f56;
+}
+
 .risk-badge {
+  flex: 0 0 auto;
+  margin-left: 18rpx;
   padding: 10rpx 16rpx;
   border-radius: 999rpx;
   background: #fff4ed;
@@ -87,6 +119,16 @@
 .risk-badge.safe {
   background: #e8f5ed;
   color: #147a42;
+}
+
+.risk-badge.stale {
+  background: #fce7cf;
+  color: #784116;
+}
+
+.risk-badge.unavailable {
+  background: #dfe5e1;
+  color: #46564d;
 }
 
 .add-button {
@@ -279,6 +321,15 @@
 }
 
 @media screen and (max-width: 340px) {
+  .weather-strip {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .risk-badge {
+    margin: 16rpx 0 0;
+  }
+
   .primary-actions,
   .care-tools { grid-template-columns: 1fr; }
 }

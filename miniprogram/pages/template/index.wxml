@@ -6,9 +6,11 @@
   <view wx:else class="message-card">
     <view class="weather-row">
       <view class="location">都昌县</view>
-      <view class="weather-summary" wx:if="{{weather.available}}">最高 {{weather.temperatureMax === null ? '--' : weather.temperatureMax}}° · 最低 {{weather.temperatureMin === null ? '--' : weather.temperatureMin}}°</view>
+      <view class="weather-summary stale" wx:if="{{weather.available && weather.stale}}">较早：最高 {{weather.temperatureMax === null ? '--' : weather.temperatureMax}}° · 最低 {{weather.temperatureMin === null ? '--' : weather.temperatureMin}}°</view>
+      <view class="weather-summary" wx:elif="{{weather.available}}">最高 {{weather.temperatureMax === null ? '--' : weather.temperatureMax}}° · 最低 {{weather.temperatureMin === null ? '--' : weather.temperatureMin}}°</view>
       <view class="weather-summary" wx:else>天气正在更新</view>
     </view>
+    <view wx:if="{{weatherNotice}}" class="weather-notice {{weather.stale ? 'stale' : ''}}" role="status" aria-role="status">{{weatherNotice}}</view>
     <view class="message-text">{{message}}</view>
     <button class="copy-button" bindtap="copyMessage">复制整段提醒</button>
     <button class="checkin-button" bindtap="goCheckin">去记录今日行动</button>

@@ -1,3 +1,5 @@
+const { formatDateTime } = require('../../utils/format');
+
 const FIXED_LOCATION = '都昌县';
 
 const ASSESSMENT_QUESTIONS = [
@@ -225,7 +227,9 @@ function pickFirst(source, keys) {
 }
 
 function normalizeSnapshot(snapshot) {
-  const first = snapshot && snapshot.data && typeof snapshot.data === 'object' ? snapshot.data : snapshot;
+  const envelope = snapshot && typeof snapshot === 'object' ? snapshot : {};
+  const meta = envelope.meta && typeof envelope.meta === 'object' ? envelope.meta : {};
+  const first = envelope.data && typeof envelope.data === 'object' ? envelope.data : envelope;
   const root = first && first.snapshot && typeof first.snapshot === 'object' ? first.snapshot : (first || {});
   const current = root.current || root.current_weather || root.weather || {};
   const forecastSource = root.forecast || root.forecasts || root.daily || root.forecast_7day || [];
@@ -249,6 +253,15 @@ function normalizeSnapshot(snapshot) {
   let trigger = '';
   if (/高温|heat/i.test(warningText) || (tmax !== null && tmax >= 35)) trigger = 'heat';
   else if (/寒潮|低温|cold/i.test(warningText) || (tmin !== null && tmin <= 5)) trigger = 'cold';
+  const available = temperature !== null || tmax !== null || tmin !== null || warnings.length > 0;
+  const cacheSource = cleanText(meta.source, 30);
+  const stale = available && (meta.stale === true || cacheSource === 'stale-cache' || root.stale === true);
+  const freshnessState = !available ? 'unavailable' : (stale ? 'stale' : 'fresh');
+  const rootUpdatedValue = pickFirst(root, ['updated_at', 'updatedAt', 'fetched_at', 'generated_at']);
+  const updatedValue = rootUpdatedValue !== undefined ? rootUpdatedValue : pickFirst(meta, ['storedAt']);
+  const updatedAt = typeof updatedValue === 'number' && Number.isFinite(updatedValue)
+    ? new Date(updatedValue).toISOString()
+    : cleanText(updatedValue, 40);
   return {
     location: FIXED_LOCATION,
     temperature,
@@ -258,8 +271,23 @@ function normalizeSnapshot(snapshot) {
     condition: cleanText(pickFirst(current, ['condition', 'text', 'weather', 'weather_text']), 40),
     trigger,
     warnings,
-    updatedAt: cleanText(pickFirst(root, ['updated_at', 'updatedAt', 'fetched_at', 'generated_at']), 40),
-    available: temperature !== null || tmax !== null || tmin !== null || warnings.length > 0,
+    updatedAt,
+    updatedText: formatDateTime(updatedValue),
+    available,
+    stale,
+    cacheSource,
+    freshnessState,
+  };
+}
+
+function markSnapshotStale(weather) {
+  const source = weather && typeof weather === 'object' ? weather : normalizeSnapshot({});
+  const available = Boolean(source.available);
+  return {
+    ...source,
+    stale: available,
+    cacheSource: available ? 'stale-cache' : (source.cacheSource || ''),
+    freshnessState: available ? 'stale' : 'unavailable',
   };
 }
 
@@ -306,6 +334,7 @@ module.exports = {
   cleanText,
   formatLocalDate,
   isValidDateText,
+  markSnapshotStale,
   normalizeList,
   normalizeSnapshot,
   splitChronic,

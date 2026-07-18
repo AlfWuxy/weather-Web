@@ -49,6 +49,25 @@
   font-size: 14px;
 }
 
+.weather-summary.stale {
+  color: #784116;
+}
+
+.weather-notice {
+  margin-top: 20rpx;
+  padding: 18rpx 20rpx;
+  border-radius: 16rpx;
+  background: #f1f4f2;
+  color: #4f5f56;
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.weather-notice.stale {
+  background: #fff4e5;
+  color: #784116;
+}
+
 .message-text {
   margin-top: 24rpx;
   color: #21372b;

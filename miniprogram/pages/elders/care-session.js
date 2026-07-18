@@ -14,6 +14,8 @@ function extractRequiredPrivacyVersion(payload, fallback) {
   const privacy = source.privacy && typeof source.privacy === 'object' ? source.privacy : {};
   const auth = source.auth && typeof source.auth === 'object' ? source.auth : {};
   const nested = source.data && typeof source.data === 'object' ? source.data : {};
+  const nestedPrivacy = nested.privacy && typeof nested.privacy === 'object' ? nested.privacy : {};
+  const nestedAuth = nested.auth && typeof nested.auth === 'object' ? nested.auth : {};
   const candidates = [
     source.required_privacy_consent_version,
     source.required_version,
@@ -27,6 +29,12 @@ function extractRequiredPrivacyVersion(payload, fallback) {
     nested.required_privacy_consent_version,
     nested.required_version,
     nested.privacy_consent_version,
+    nestedPrivacy.required_privacy_consent_version,
+    nestedPrivacy.required_version,
+    nestedPrivacy.requiredVersion,
+    nestedPrivacy.version,
+    nestedAuth.required_privacy_consent_version,
+    nestedAuth.required_version,
     fallback,
   ];
   for (let index = 0; index < candidates.length; index += 1) {
@@ -59,8 +67,21 @@ function saveToken(token, metadata) {
   session.setSessionToken(normalized, metadata || {});
 }
 
+function scrubPrivatePages() {
+  const pages = typeof getCurrentPages === 'function' ? getCurrentPages() : [];
+  pages.forEach((page) => {
+    if (!page || typeof page.onSessionInvalidated !== 'function') return;
+    try {
+      page.onSessionInvalidated();
+    } catch (error) {
+      // 单个页面已经卸载时继续清理其他私人页面。
+    }
+  });
+}
+
 function clear() {
   session.clearSession();
+  scrubPrivatePages();
 }
 
 function goLogin() {
@@ -68,8 +89,8 @@ function goLogin() {
   const current = pages.length ? pages[pages.length - 1] : null;
   if ((current && current.route === 'pages/bind-token/index') || loginNavigationPending) return;
   loginNavigationPending = true;
-  // navigateTo 保留原来的 Tab 根页面，游客可以随时回到公共首页。
-  wx.navigateTo({
+  // 会话失效时销毁私人页面栈，防止共享设备返回后继续看到上一账号资料。
+  wx.reLaunch({
     url: '/pages/bind-token/index',
     fail: () => {
       wx.switchTab({ url: '/pages/settings/index' });
@@ -82,27 +103,55 @@ function goLogin() {
 
 function requireToken() {
   const token = getToken();
-  if (!token) goLogin();
+  if (!token) {
+    scrubPrivatePages();
+    goLogin();
+  }
   return token;
 }
 
 function isUnauthorized(error) {
+  const statusCode = Number(error && (error.statusCode || error.status_code || error.status));
   const message = String(error && (error.code || error.message) || error || '').toLowerCase();
-  return message.includes('unauthorized') || message.includes('401') || message.includes('session_expired');
+  return statusCode === 401
+    || message.includes('unauthorized')
+    || message.includes('invalid_token')
+    || message.includes('missing_session')
+    || message.includes('401')
+    || message.includes('session_expired');
+}
+
+function sessionChangedError() {
+  const error = new Error('session_changed');
+  error.code = 'session_changed';
+  return error;
+}
+
+function rejectChangedSession(token) {
+  const activeToken = getToken();
+  if (activeToken === token) return false;
+  // 旧会话的延迟结果不得影响新账号；退出后返回的结果也只负责清理旧页面。
+  scrubPrivatePages();
+  if (!activeToken) goLogin();
+  return true;
 }
 
 async function authApi(options) {
   const token = requireToken();
   if (!token) throw new Error('missing_session');
+  let data;
   try {
-    return await request.api(Object.assign({}, options, { token }));
+    data = await request.api(Object.assign({}, options, { token }));
   } catch (error) {
+    if (rejectChangedSession(token)) throw sessionChangedError();
     if (isUnauthorized(error)) {
       clear();
       goLogin();
     }
     throw error;
   }
+  if (rejectChangedSession(token)) throw sessionChangedError();
+  return data;
 }
 
 function publicApi(options) {
@@ -114,7 +163,8 @@ function tokenApi(token, options) {
 }
 
 function getSnapshot(options) {
-  return getBootstrap(options).then((result) => (result && result.data !== undefined ? result.data : result));
+  // 保留公共缓存的 stale、source 和更新时间元数据，由照护页决定可见状态。
+  return getBootstrap(options);
 }
 
 function extractAuthToken(data) {
@@ -131,8 +181,10 @@ module.exports = {
   getMeta,
   getToken,
   goLogin,
+  isUnauthorized,
   publicApi,
   requireToken,
   saveToken,
+  scrubPrivatePages,
   tokenApi,
 };

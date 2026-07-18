@@ -20,10 +20,19 @@ const ACTION_PLANS = {
 };
 
 const COMPLETION_OPTIONS = ['全部完成', '完成一部分', '暂时没完成'];
+const CONTEXT_LOAD_ERROR = '未能核对这位家人的信息，请检查网络后重试。';
 
 function actionPlan(trigger) {
   return (ACTION_PLANS[trigger] || ACTION_PLANS.normal)
     .map((item) => ({ ...item, checked: false }));
+}
+
+function weatherStatus(weather) {
+  if (!weather || !weather.available) return '天气待更新';
+  if (weather.stale) return '较早天气，待刷新';
+  if (weather.trigger === 'heat') return '高温留意';
+  if (weather.trigger === 'cold') return '低温留意';
+  return '常规天气提示';
 }
 
 Page({
@@ -31,8 +40,11 @@ Page({
     pairId: null,
     elderName: '家人',
     weather: normalizeSnapshot({}),
-    actions: actionPlan('normal'),
+    weatherStatus: '天气待更新',
+    actions: [],
     selectedActions: [],
+    contextReady: false,
+    loadError: '',
     confirmed: false,
     helpRecorded: false,
     helpNote: '',
@@ -52,14 +64,72 @@ Page({
     const pairId = Number(options.pair_id || 0) || null;
     this.setData({ pairId });
     if (!pairId) {
+      this.setData({
+        contextReady: false,
+        actions: [],
+        selectedActions: [],
+        loadError: '缺少家人信息，请返回上一页重新选择。',
+      });
       wx.showToast({ title: '请选择一位家人', icon: 'none' });
       return;
     }
     await this.loadContext();
   },
 
+  onShow() {
+    requireToken();
+  },
+
+  onSessionInvalidated() {
+    this.setData({
+      pairId: null,
+      elderName: '家人',
+      weather: normalizeSnapshot({}),
+      weatherStatus: '天气待更新',
+      actions: [],
+      selectedActions: [],
+      contextReady: false,
+      loadError: '',
+      confirmed: false,
+      helpRecorded: false,
+      helpNote: '',
+      completionIndex: 0,
+      question1: '全部完成',
+      question2: '',
+      question3: '',
+      difficulty: '',
+      debriefOptin: true,
+      busyAction: '',
+      loading: false,
+    });
+  },
+
   async loadContext() {
-    this.setData({ loading: true });
+    const pairId = Number(this.data.pairId || 0);
+    if (!pairId) {
+      this.setData({
+        loading: false,
+        contextReady: false,
+        actions: [],
+        selectedActions: [],
+        loadError: '缺少家人信息，请返回上一页重新选择。',
+      });
+      return;
+    }
+
+    // 身份重新核验完成前先关闭所有个性化写入口，避免沿用旧人的行动上下文。
+    this.setData({
+      loading: true,
+      contextReady: false,
+      loadError: '',
+      elderName: '家人',
+      weather: normalizeSnapshot({}),
+      weatherStatus: '天气待更新',
+      actions: [],
+      selectedActions: [],
+      confirmed: false,
+      helpRecorded: false,
+    });
     try {
       const [elderData, snapshot] = await Promise.all([
         authApi({ method: 'GET', path: '/mp/api/v1/elders' }),
@@ -72,18 +142,43 @@ Page({
       this.setData({
         elderName: elder.member && elder.member.name ? elder.member.name : '家人',
         weather,
-        actions: actionPlan(weather.trigger),
+        weatherStatus: weatherStatus(weather),
+        // 较早天气只作可见参考，行动清单退回通用安全项，避免沿用过期风险判断。
+        actions: actionPlan(weather.stale ? '' : weather.trigger),
         selectedActions: [],
+        contextReady: true,
+        loadError: '',
         confirmed: false,
       });
     } catch (error) {
-      wx.showToast({ title: '行动清单加载失败', icon: 'none' });
+      this.setData({
+        elderName: '家人',
+        weather: normalizeSnapshot({}),
+        weatherStatus: '天气待更新',
+        actions: [],
+        selectedActions: [],
+        contextReady: false,
+        loadError: CONTEXT_LOAD_ERROR,
+        confirmed: false,
+        helpRecorded: false,
+      });
     } finally {
       this.setData({ loading: false });
     }
   },
 
+  hasVerifiedContext() {
+    return this.data.contextReady === true && Number(this.data.pairId || 0) > 0;
+  },
+
+  ensureContextReady() {
+    if (this.hasVerifiedContext()) return true;
+    wx.showToast({ title: '请先重新加载家人信息', icon: 'none' });
+    return false;
+  },
+
   onActionsChange(event) {
+    if (!this.hasVerifiedContext()) return;
     const allowed = new Set(this.data.actions.map((item) => item.id));
     const selectedActions = Array.isArray(event.detail.value)
       ? event.detail.value.filter((value) => allowed.has(value))
@@ -108,6 +203,7 @@ Page({
   },
 
   async confirmActions() {
+    if (!this.ensureContextReady()) return;
     if (this.data.busyAction) return;
     const allowed = new Set(this.data.actions.map((item) => item.id));
     const selectedActions = this.data.selectedActions.filter((value) => allowed.has(value));
@@ -132,6 +228,7 @@ Page({
   },
 
   requestHelp() {
+    if (!this.ensureContextReady()) return;
     if (this.data.busyAction) return;
     wx.showModal({
       title: '记录一条求助需求？',
@@ -140,6 +237,8 @@ Page({
       confirmColor: '#b42318',
       success: async (result) => {
         if (!result.confirm) return;
+        // 弹窗停留期间上下文可能失效，真正写入前必须再次核验。
+        if (!this.ensureContextReady() || this.data.busyAction) return;
         this.setData({ busyAction: 'help' });
         try {
           await authApi({
@@ -171,6 +270,7 @@ Page({
   },
 
   async submitDebrief() {
+    if (!this.ensureContextReady()) return;
     if (this.data.busyAction) return;
     if (!this.data.question2 && !this.data.question3 && !this.data.difficulty) {
       wx.showToast({ title: '请至少填写一项复盘内容', icon: 'none' });

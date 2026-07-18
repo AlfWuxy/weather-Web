@@ -151,13 +151,13 @@ test('428 返回新版本后重置勾选并用于下一次提交', async () => {
   assert.equal(storage.get('yl_session_v1').meta.privacy_consent_version, 'server-v3');
 });
 
-test('登录页使用 navigateTo 保留原 Tab 页面栈', () => {
+test('会话失效时重启到登录页并销毁私人页面栈', () => {
   let navigation;
   let switchTabCalled = false;
   global.getCurrentPages = () => [{ route: 'pages/home/index' }];
-  global.wx.navigateTo = (options) => { navigation = options; };
+  global.wx.navigateTo = () => { throw new Error('不应保留私人页面栈'); };
   global.wx.switchTab = () => { switchTabCalled = true; };
-  global.wx.reLaunch = () => { throw new Error('不应清空页面栈'); };
+  global.wx.reLaunch = (options) => { navigation = options; };
 
   careSession.goLogin();
   assert.equal(navigation.url, '/pages/bind-token/index');

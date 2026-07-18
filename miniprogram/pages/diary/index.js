@@ -41,6 +41,27 @@ Page({
     await this.loadDiary();
   },
 
+  onShow() {
+    requireToken();
+  },
+
+  onSessionInvalidated() {
+    const today = formatLocalDate(new Date());
+    this.setData({
+      pairId: null,
+      elderName: '家人',
+      entryDate: today,
+      todayDate: today,
+      severityIndex: 0,
+      severity: '轻微',
+      symptoms: '',
+      notes: '',
+      entries: [],
+      loading: false,
+      busy: false,
+    });
+  },
+
   async loadDiary() {
     this.setData({ loading: true });
     try {

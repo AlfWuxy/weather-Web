@@ -1,5 +1,24 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+
+let bootstrapResult = null;
+let bootstrapOptions = null;
+const publicDataPath = require.resolve('../utils/public-data');
+require.cache[publicDataPath] = {
+  id: publicDataPath,
+  filename: publicDataPath,
+  loaded: true,
+  exports: {
+    getBootstrap: async (options) => {
+      bootstrapOptions = options;
+      return bootstrapResult;
+    },
+  },
+};
+
+const careSession = require('../pages/elders/care-session');
 
 const {
   ASSESSMENT_QUESTIONS,
@@ -7,6 +26,7 @@ const {
   buildReminderMessage,
   formatLocalDate,
   isValidDateText,
+  markSnapshotStale,
   normalizeSnapshot,
   splitChronic,
   validateAssessment,
@@ -125,4 +145,147 @@ test('共享 bootstrap 快照可归一化且不需要逐老人天气', () => {
   assert.equal(normalized.trigger, 'heat');
   assert.equal(normalized.temperatureMax, 36);
   assert.equal(normalized.location, '都昌县');
+  assert.equal(normalized.freshnessState, 'fresh');
+  assert.equal(normalized.stale, false);
+  assert.equal(normalized.updatedText, '07月17日 12:00');
+});
+
+test('照护快照保留缓存元数据并兼容 data 内的隐私版本', async () => {
+  bootstrapResult = {
+    data: {
+      privacy: { required_version: 'privacy-v5' },
+      auth: { required_privacy_consent_version: 'auth-v6' },
+    },
+    meta: { source: 'stale-cache', stale: true, storedAt: Date.parse('2026-07-17T12:00:00+08:00') },
+  };
+  bootstrapOptions = null;
+
+  const result = await careSession.getSnapshot({ force: true });
+
+  assert.equal(result, bootstrapResult);
+  assert.deepEqual(bootstrapOptions, { force: true });
+  assert.equal(careSession.extractRequiredPrivacyVersion(result, 'bundle-v1'), 'privacy-v5');
+  assert.equal(careSession.extractRequiredPrivacyVersion({
+    data: { auth: { required_version: 'auth-only-v7' } },
+  }, 'bundle-v1'), 'auth-only-v7');
+});
+
+test('照护天气明确区分 fresh、stale 和 unavailable', () => {
+  const payload = {
+    current: { temperature: 34, temperature_max: 36, temperature_min: 27 },
+    fetched_at: '2026-07-17T12:00:00+08:00',
+  };
+  const fresh = normalizeSnapshot({ data: payload, meta: { source: 'network', stale: false } });
+  const stale = normalizeSnapshot({ data: payload, meta: { source: 'stale-cache', stale: true } });
+  const unavailable = normalizeSnapshot({
+    data: {},
+    meta: { source: 'stale-cache', stale: true, storedAt: Date.parse('2026-07-17T12:00:00+08:00') },
+  });
+
+  assert.equal(fresh.freshnessState, 'fresh');
+  assert.equal(fresh.stale, false);
+  assert.equal(fresh.updatedText, '07月17日 12:00');
+  assert.equal(stale.freshnessState, 'stale');
+  assert.equal(stale.stale, true);
+  assert.equal(stale.temperature, 34);
+  assert.equal(unavailable.freshnessState, 'unavailable');
+  assert.equal(unavailable.available, false);
+  assert.equal(unavailable.stale, false);
+  assert.equal(unavailable.updatedText, '07月17日 12:00');
+});
+
+test('刷新失败保留旧天气并降级为 stale，空天气保持 unavailable', () => {
+  const fresh = normalizeSnapshot({
+    current: { temperature: 34, temperature_max: 36, temperature_min: 27 },
+    fetched_at: '2026-07-17T12:00:00+08:00',
+  });
+  const retained = markSnapshotStale(fresh);
+  const empty = markSnapshotStale(normalizeSnapshot({}));
+
+  assert.equal(retained.temperature, 34);
+  assert.equal(retained.updatedText, '07月17日 12:00');
+  assert.equal(retained.freshnessState, 'stale');
+  assert.equal(retained.stale, true);
+  assert.equal(empty.freshnessState, 'unavailable');
+  assert.equal(empty.stale, false);
+});
+
+test('照护页刷新失败后不把旧天气或缺失天气显示为绿色安全态', async () => {
+  const careSessionPath = require.resolve('../pages/elders/care-session');
+  const carePagePath = require.resolve('../pages/elders/index');
+  const originalCareSessionModule = require.cache[careSessionPath];
+  const originalPage = global.Page;
+  let pageDefinition = null;
+  let rejectSnapshot = false;
+  let rejectElders = false;
+  const snapshot = {
+    data: {
+      current: { temperature: 34, temperature_max: 36, temperature_min: 27 },
+      fetched_at: '2026-07-17T12:00:00+08:00',
+    },
+    meta: { source: 'network', stale: false },
+  };
+
+  require.cache[careSessionPath] = {
+    id: careSessionPath,
+    filename: careSessionPath,
+    loaded: true,
+    exports: {
+      authApi: async () => {
+        if (rejectElders) throw new Error('offline');
+        return { items: [{ pair_id: 7, member: { name: '奶奶', relation: '祖母', age: 72 } }] };
+      },
+      getSnapshot: async () => {
+        if (rejectSnapshot) throw new Error('offline');
+        return snapshot;
+      },
+      requireToken: () => 'session-token',
+    },
+  };
+  global.Page = (definition) => { pageDefinition = definition; };
+  delete require.cache[carePagePath];
+
+  function makePage() {
+    const page = Object.assign({}, pageDefinition);
+    page.data = Object.assign({}, pageDefinition.data, {
+      elders: [],
+      weather: normalizeSnapshot({}),
+    });
+    page.setData = (next) => Object.assign(page.data, next);
+    return page;
+  }
+
+  try {
+    require(carePagePath);
+    const page = makePage();
+    await page.loadCareHome.call(page);
+    assert.equal(page.data.weather.freshnessState, 'fresh');
+
+    rejectSnapshot = true;
+    await page.loadCareHome.call(page);
+    assert.equal(page.data.weather.temperature, 34);
+    assert.equal(page.data.weather.freshnessState, 'stale');
+    assert.equal(page.data.elders[0].today.freshnessState, 'stale');
+
+    const emptyPage = makePage();
+    await emptyPage.loadCareHome.call(emptyPage);
+    assert.equal(emptyPage.data.weather.freshnessState, 'unavailable');
+
+    rejectSnapshot = false;
+    await page.loadCareHome.call(page);
+    rejectElders = true;
+    await page.loadCareHome.call(page);
+    assert.equal(page.data.weather.temperature, 34);
+    assert.equal(page.data.weather.freshnessState, 'stale');
+    assert.match(page.data.loadError, /上次成功加载/);
+
+    const view = fs.readFileSync(path.join(__dirname, '..', 'pages/elders/index.wxml'), 'utf8');
+    assert.match(view, /freshnessState === 'unavailable'[^>]*>风险待更新</);
+    assert.match(view, /safe" wx:elif="{{weather\.freshnessState === 'fresh'}}">日常留意</);
+    assert.doesNotMatch(view, /safe" wx:else>日常留意/);
+  } finally {
+    global.Page = originalPage;
+    delete require.cache[carePagePath];
+    require.cache[careSessionPath] = originalCareSessionModule;
+  }
 });

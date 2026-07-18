@@ -5,34 +5,63 @@ Page({
     loading: false,
     busy: false,
     loggedIn: false,
+    settingsVerified: false,
     wxpusherUid: '',
     pushEnabled: false,
     wxpusherConsent: false,
   },
 
-  async onShow() {
-    const loggedIn = !!getToken();
-    this.setData({ loggedIn });
-    if (!loggedIn) {
-      this.setData({ loading: false, wxpusherUid: '', pushEnabled: false, wxpusherConsent: false });
-      return;
-    }
-    await this.loadSettings();
+  clearPrivateSettings(overrides) {
+    this._settingsVerifiedToken = '';
+    this.setData(Object.assign({
+      settingsVerified: false,
+      wxpusherUid: '',
+      pushEnabled: false,
+      wxpusherConsent: false,
+    }, overrides || {}));
   },
 
-  async loadSettings() {
-    this.setData({ loading: true });
+  async onShow() {
+    const sessionToken = getToken();
+    const loggedIn = !!sessionToken;
+    this._settingsLoadId = (this._settingsLoadId || 0) + 1;
+    this.clearPrivateSettings({ loggedIn, loading: false });
+    if (!loggedIn) {
+      return;
+    }
+    await this.loadSettings(sessionToken);
+  },
+
+  onSessionInvalidated() {
+    this._settingsLoadId = (this._settingsLoadId || 0) + 1;
+    this.clearPrivateSettings({ loggedIn: false, loading: false, busy: false });
+  },
+
+  async loadSettings(expectedToken) {
+    const sessionToken = String(expectedToken || getToken() || '').trim();
+    const loadId = (this._settingsLoadId || 0) + 1;
+    this._settingsLoadId = loadId;
+    this.clearPrivateSettings({ loggedIn: !!sessionToken, loading: !!sessionToken });
+    if (!sessionToken) return;
     try {
       const me = await authApi({ method: 'GET', path: '/mp/api/v1/me' });
+      if (loadId !== this._settingsLoadId || getToken() !== sessionToken) return;
+      if (!me || typeof me !== 'object') throw new Error('invalid_settings_response');
+      this._settingsVerifiedToken = sessionToken;
       this.setData({
         wxpusherUid: me.wxpusher_uid || '',
         pushEnabled: !!me.push_enabled,
         wxpusherConsent: false,
+        settingsVerified: true,
       });
     } catch (error) {
-      wx.showToast({ title: '设置加载失败', icon: 'none' });
+      if (loadId === this._settingsLoadId) {
+        const currentToken = getToken();
+        this.clearPrivateSettings({ loggedIn: !!currentToken });
+        wx.showToast({ title: '设置加载失败', icon: 'none' });
+      }
     } finally {
-      this.setData({ loading: false });
+      if (loadId === this._settingsLoadId) this.setData({ loading: false });
     }
   },
 
@@ -48,6 +77,16 @@ Page({
 
   async saveSettings() {
     if (this.data.busy) return;
+    const sessionToken = getToken();
+    if (
+      !sessionToken
+      || !this.data.settingsVerified
+      || this._settingsVerifiedToken !== sessionToken
+    ) {
+      this.clearPrivateSettings({ loggedIn: !!sessionToken, loading: false });
+      wx.showToast({ title: '请先重新加载并验证设置', icon: 'none' });
+      return;
+    }
     if (this.data.pushEnabled && !this.data.wxpusherUid) {
       wx.showToast({ title: '请先填写 WxPusher UID', icon: 'none' });
       return;

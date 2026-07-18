@@ -6,6 +6,7 @@ const path = require('node:path');
 let pageDefinition;
 let authApiImpl = async () => ({});
 let snapshotImpl = async () => ({});
+let getTokenImpl = () => 'session-token';
 let lastToast = null;
 
 global.Page = (definition) => { pageDefinition = definition; };
@@ -23,6 +24,7 @@ require.cache[careSessionPath] = {
     clear: () => {},
     getMeta: () => ({ login_method: 'wechat' }),
     getSnapshot: () => snapshotImpl(),
+    getToken: () => getTokenImpl(),
     requireToken: () => 'session-token',
   },
 };
@@ -78,6 +80,89 @@ test('账号接口失败后清空已验证展示并提供内联错误', async ()
   assert.match(page.data.loadError, /重新|重试/);
 });
 
+test('推送设置重新加载时先清空旧账号值，失败后保持关闭写入口', async () => {
+  const requests = [];
+  let rejectLoad;
+  authApiImpl = (options) => {
+    requests.push(options);
+    return new Promise((resolve, reject) => { rejectLoad = reject; });
+  };
+  const definition = loadPage('../pages/settings/index');
+  const page = makePage(definition, {
+    loggedIn: true,
+    settingsVerified: true,
+    wxpusherUid: 'UID_USER_A',
+    pushEnabled: true,
+    wxpusherConsent: true,
+  });
+
+  const loading = page.loadSettings.call(page);
+  assert.equal(page.data.settingsVerified, false);
+  assert.equal(page.data.wxpusherUid, '');
+  assert.equal(page.data.pushEnabled, false);
+  assert.equal(page.data.wxpusherConsent, false);
+
+  rejectLoad(new Error('offline'));
+  await loading;
+  assert.equal(page.data.settingsVerified, false);
+  assert.equal(page.data.wxpusherUid, '');
+  assert.equal(page.data.pushEnabled, false);
+  assert.equal(page.data.wxpusherConsent, false);
+
+  await page.saveSettings.call(page);
+  assert.equal(requests.filter((item) => item.method === 'PATCH').length, 0);
+});
+
+test('推送设置缺少会话时清空旧值，成功核验后仍可正常保存', async (t) => {
+  const requests = [];
+  t.after(() => { getTokenImpl = () => 'session-token'; });
+  const definition = loadPage('../pages/settings/index');
+  const page = makePage(definition, {
+    loggedIn: true,
+    settingsVerified: true,
+    wxpusherUid: 'UID_USER_A',
+    pushEnabled: true,
+    wxpusherConsent: true,
+  });
+
+  getTokenImpl = () => '';
+  await page.onShow.call(page);
+  assert.equal(page.data.loggedIn, false);
+  assert.equal(page.data.settingsVerified, false);
+  assert.equal(page.data.wxpusherUid, '');
+  assert.equal(page.data.pushEnabled, false);
+  assert.equal(page.data.wxpusherConsent, false);
+
+  getTokenImpl = () => 'session-user-b';
+  authApiImpl = async (options) => {
+    requests.push(options);
+    if (options.method === 'GET') {
+      return { wxpusher_uid: 'UID_USER_B', push_enabled: false };
+    }
+    return { ok: true };
+  };
+  await page.onShow.call(page);
+  assert.equal(page.data.loggedIn, true);
+  assert.equal(page.data.settingsVerified, true);
+  assert.equal(page.data.wxpusherUid, 'UID_USER_B');
+
+  page.onUid.call(page, { detail: { value: 'UID_USER_B_NEW' } });
+  await page.saveSettings.call(page);
+  assert.equal(requests.filter((item) => item.method === 'PATCH').length, 1);
+  assert.equal(requests.find((item) => item.method === 'PATCH').data.wxpusher_uid, 'UID_USER_B_NEW');
+
+  getTokenImpl = () => '';
+  page.onSessionInvalidated.call(page);
+  assert.equal(page.data.loggedIn, false);
+  assert.equal(page.data.settingsVerified, false);
+  assert.equal(page.data.wxpusherUid, '');
+  assert.equal(page.data.pushEnabled, false);
+  assert.equal(page.data.wxpusherConsent, false);
+
+  await page.saveSettings.call(page);
+  assert.equal(requests.filter((item) => item.method === 'PATCH').length, 1);
+});
+
 test('今日行动未勾选时不会提交，勾选后只保存实际选项', async () => {
   const requests = [];
   authApiImpl = async (options) => {
@@ -86,7 +171,11 @@ test('今日行动未勾选时不会提交，勾选后只保存实际选项', as
   };
   lastToast = null;
   const definition = loadPage('../pages/action-checkin/index');
-  const page = makePage(definition, { pairId: 9 });
+  const page = makePage(definition, {
+    pairId: 9,
+    contextReady: true,
+    actions: [{ id: 'check_weather', title: '出门前看天气', detail: '', checked: false }],
+  });
 
   await page.confirmActions.call(page);
   assert.equal(requests.length, 0);
@@ -98,6 +187,146 @@ test('今日行动未勾选时不会提交，勾选后只保存实际选项', as
   assert.deepEqual(requests[0].data.actions_done, ['check_weather']);
   assert.equal(page.data.confirmed, true);
   assert.equal(lastToast.title, '今日行动已记录');
+});
+
+test('今日行动老人接口失败后保持上下文门禁且所有写入口 POST 为零', async () => {
+  const requests = [];
+  authApiImpl = async (options) => {
+    requests.push(options);
+    if (options.method === 'GET') throw new Error('offline');
+    return { ok: true };
+  };
+  snapshotImpl = async () => ({ current: { temperature: 30 } });
+  const definition = loadPage('../pages/action-checkin/index');
+  assert.deepEqual(definition.data.actions, []);
+  assert.equal(definition.data.contextReady, false);
+
+  const page = makePage(definition, {
+    pairId: 9,
+    contextReady: true,
+    actions: [{ id: 'check_weather', title: '旧行动', detail: '', checked: true }],
+    selectedActions: ['check_weather'],
+  });
+  await page.loadContext.call(page);
+
+  assert.equal(page.data.contextReady, false);
+  assert.deepEqual(page.data.actions, []);
+  assert.deepEqual(page.data.selectedActions, []);
+  assert.match(page.data.loadError, /重试/);
+  const persistentError = page.data.loadError;
+
+  page.data.selectedActions = ['check_weather'];
+  page.data.question2 = '旧复盘';
+  const originalShowModal = global.wx.showModal;
+  let modalCount = 0;
+  global.wx.showModal = () => { modalCount += 1; };
+  try {
+    await page.confirmActions.call(page);
+    page.requestHelp.call(page);
+    await page.submitDebrief.call(page);
+  } finally {
+    global.wx.showModal = originalShowModal;
+  }
+
+  assert.equal(requests.filter((item) => item.method === 'GET').length, 1);
+  assert.equal(requests.filter((item) => item.method === 'POST').length, 0);
+  assert.equal(modalCount, 0);
+  assert.equal(page.data.loadError, persistentError);
+});
+
+test('求助弹窗确认前上下文失效时二次门禁阻止写入', async () => {
+  const requests = [];
+  authApiImpl = async (options) => {
+    requests.push(options);
+    return { ok: true };
+  };
+  const definition = loadPage('../pages/action-checkin/index');
+  const page = makePage(definition, { pairId: 9, contextReady: true });
+  const originalShowModal = global.wx.showModal;
+  let confirmModal;
+  global.wx.showModal = ({ success }) => { confirmModal = success; };
+  try {
+    page.requestHelp.call(page);
+    page.data.contextReady = false;
+    await confirmModal({ confirm: true });
+  } finally {
+    global.wx.showModal = originalShowModal;
+  }
+  assert.equal(requests.filter((item) => item.method === 'POST').length, 0);
+});
+
+test('天气快照失败时保留已核验家人并显示待更新通用状态', async () => {
+  authApiImpl = async () => ({
+    items: [{ pair_id: 9, member: { name: '奶奶' } }],
+  });
+  snapshotImpl = async () => { throw new Error('weather offline'); };
+  const definition = loadPage('../pages/action-checkin/index');
+  const page = makePage(definition, { pairId: 9 });
+
+  await page.loadContext.call(page);
+
+  assert.equal(page.data.contextReady, true);
+  assert.equal(page.data.elderName, '奶奶');
+  assert.equal(page.data.weather.available, false);
+  assert.equal(page.data.weatherStatus, '天气待更新');
+  assert.ok(page.data.actions.length > 0);
+  assert.equal(page.data.loadError, '');
+});
+
+test('较早天气明确标注并退回通用安全行动', async () => {
+  authApiImpl = async () => ({
+    items: [{ pair_id: 9, member: { name: '奶奶' } }],
+  });
+  snapshotImpl = async () => ({
+    data: {
+      current: { temperature: 38, temperature_max: 40, temperature_min: 30 },
+    },
+    meta: { source: 'stale-cache', stale: true },
+  });
+  const definition = loadPage('../pages/action-checkin/index');
+  const page = makePage(definition, { pairId: 9 });
+
+  await page.loadContext.call(page);
+
+  assert.equal(page.data.contextReady, true);
+  assert.equal(page.data.weather.stale, true);
+  assert.equal(page.data.weatherStatus, '较早天气，待刷新');
+  assert.deepEqual(page.data.actions.map((item) => item.id), [
+    'check_weather',
+    'carry_water',
+    'contact_family',
+  ]);
+});
+
+test('提醒话术遇到较早或不可用天气时退回通用提醒', async () => {
+  authApiImpl = async () => ({
+    items: [{ pair_id: 9, member: { name: '奶奶', relation: '祖母' } }],
+  });
+  snapshotImpl = async () => ({
+    data: {
+      current: { temperature: 38, temperature_max: 40, temperature_min: 30 },
+    },
+    meta: { source: 'stale-cache', stale: true },
+  });
+  const definition = loadPage('../pages/template/index');
+  const stalePage = makePage(definition, { pairId: 9 });
+
+  await stalePage.loadTemplate.call(stalePage);
+
+  assert.equal(stalePage.data.weather.stale, true);
+  assert.equal(stalePage.data.trigger, '');
+  assert.match(stalePage.data.weatherNotice, /较早/);
+  assert.match(stalePage.data.message, /【都昌县天气提醒】/);
+  assert.doesNotMatch(stalePage.data.message, /高温提醒/);
+
+  snapshotImpl = async () => ({});
+  const unavailablePage = makePage(definition, { pairId: 9 });
+  await unavailablePage.loadTemplate.call(unavailablePage);
+
+  assert.equal(unavailablePage.data.weather.available, false);
+  assert.equal(unavailablePage.data.trigger, '');
+  assert.match(unavailablePage.data.weatherNotice, /待更新/);
+  assert.match(unavailablePage.data.message, /【都昌县天气提醒】/);
 });
 
 test('健康筛查切换家人会清空答案且不被旧人的乱序响应覆盖', async () => {
@@ -214,14 +443,27 @@ test('账号页卸载后平台隐私协议的延迟失败不再跳页', () => {
 test('关键选择控件和公开信息带有可读语义', () => {
   const miniRoot = path.resolve(__dirname, '..');
   const actionView = fs.readFileSync(path.join(miniRoot, 'pages/action-checkin/index.wxml'), 'utf8');
+  const actionStyles = fs.readFileSync(path.join(miniRoot, 'pages/action-checkin/index.wxss'), 'utf8');
   const communityView = fs.readFileSync(path.join(miniRoot, 'pages/community/index.wxml'), 'utf8');
   const alertsView = fs.readFileSync(path.join(miniRoot, 'pages/alerts/index.wxml'), 'utf8');
   const accountView = fs.readFileSync(path.join(miniRoot, 'pages/account/index.wxml'), 'utf8');
+  const settingsView = fs.readFileSync(path.join(miniRoot, 'pages/settings/index.wxml'), 'utf8');
   const freshnessView = fs.readFileSync(path.join(miniRoot, 'components/freshness-bar/index.wxml'), 'utf8');
 
   assert.match(actionView, /aria-checked=/);
   assert.match(actionView, /保存已完成行动/);
   assert.doesNotMatch(actionView, /确认今日平安/);
+  assert.doesNotMatch(actionView, /日常留意/);
+  assert.match(actionView, /wx:elif="\{\{contextReady\}\}"/);
+  assert.match(actionView, /bindtap="loadContext"/);
+  assert.match(actionView, /天气数据待更新，当前显示通用安全行动/);
+  assert.match(actionStyles, /\.danger-title\s*\{[^}]*font-size:\s*16px/s);
+  assert.match(actionStyles, /\.help-disclaimer\s*\{[^}]*font-size:\s*16px/s);
+  assert.match(actionStyles, /\.help-input\s*\{[^}]*font-size:\s*16px/s);
+  assert.match(actionStyles, /\.help-button,\s*\.emergency-button\s*\{[^}]*font-size:\s*16px/s);
+  assert.match(actionStyles, /\.help-button,\s*\.emergency-button\s*\{[^}]*line-height:\s*1\.4/s);
+  assert.match(actionStyles, /@media screen and \(max-width:\s*340px\)[\s\S]*\.help-buttons\s*\{[^}]*flex-direction:\s*column/s);
+  assert.match(actionStyles, /\.medical-note\s*\{[^}]*font-size:\s*16px/s);
   assert.match(communityView, /aria-selected=/);
   assert.match(communityView, /65\+ 人口占比/);
   assert.match(alertsView, /发布单位：/);
@@ -230,5 +472,6 @@ test('关键选择控件和公开信息带有可读语义', () => {
   assert.match(alertsView, /未提供，请以当地主管部门通知为准/);
   assert.match(accountView, /bindtap="loadAccount"/);
   assert.match(accountView, /wx:elif="\{\{accountVerified\}\}"/);
+  assert.match(settingsView, /disabled="\{\{busy \|\| !settingsVerified\}\}" bindtap="saveSettings"/);
   assert.match(freshnessView, /当前离线，正在显示上次保存的数据/);
 });

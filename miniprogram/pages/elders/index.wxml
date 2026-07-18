@@ -1,13 +1,13 @@
 <view class="page-shell">
   <view class="page-header">
-    <view>
+    <view class="weather-main">
       <view class="page-title">家庭照护</view>
       <view class="page-subtitle">{{fixedLocation}} · 一份天气，多位家人共用</view>
     </view>
     <button class="header-button" bindtap="goSettings">设置</button>
   </view>
 
-  <view class="weather-strip {{weather.trigger || 'normal'}}">
+  <view class="weather-strip {{weather.freshnessState}} {{weather.freshnessState === 'fresh' ? (weather.trigger || 'normal') : ''}}" role="status" aria-role="status" aria-live="polite">
     <view>
       <view class="weather-label">都昌县今日天气</view>
       <view class="weather-value" wx:if="{{weather.available}}">
@@ -15,10 +15,16 @@
         <text class="weather-range">最高 {{weather.temperatureMax === null ? '--' : weather.temperatureMax}}° · 最低 {{weather.temperatureMin === null ? '--' : weather.temperatureMin}}°</text>
       </view>
       <view class="weather-value weather-wait" wx:else>天气正在更新</view>
+      <view class="weather-status-copy stale" wx:if="{{weather.freshnessState === 'stale'}}">{{weather.updatedText}} · 正在显示较早天气，请刷新后再判断今日风险</view>
+      <view class="weather-status-copy" wx:elif="{{weather.freshnessState === 'fresh'}}">{{weather.updatedText}}</view>
+      <view class="weather-status-copy unavailable" wx:else>暂时没有可用天气，请刷新后再判断今日风险</view>
     </view>
-    <view class="risk-badge" wx:if="{{weather.trigger === 'heat'}}">高温留意</view>
+    <view class="risk-badge unavailable" wx:if="{{weather.freshnessState === 'unavailable'}}">风险待更新</view>
+    <view class="risk-badge stale" wx:elif="{{weather.freshnessState === 'stale'}}">{{weather.trigger === 'heat' ? '较早高温' : weather.trigger === 'cold' ? '较早低温' : '较早天气'}}</view>
+    <view class="risk-badge" wx:elif="{{weather.trigger === 'heat'}}">高温留意</view>
     <view class="risk-badge cold" wx:elif="{{weather.trigger === 'cold'}}">低温留意</view>
-    <view class="risk-badge safe" wx:else>日常留意</view>
+    <view class="risk-badge safe" wx:elif="{{weather.freshnessState === 'fresh'}}">日常留意</view>
+    <view class="risk-badge unavailable" wx:else>风险待更新</view>
   </view>
 
   <button class="add-button" bindtap="goCreate">

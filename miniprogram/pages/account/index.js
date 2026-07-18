@@ -23,6 +23,17 @@ Page({
     await this.loadAccount();
   },
 
+  onSessionInvalidated() {
+    this.setData({
+      me: null,
+      accountVerified: false,
+      loadError: '',
+      canDeleteAccount: false,
+      loading: false,
+      busy: false,
+    });
+  },
+
   onUnload() {
     this._unloaded = true;
   },

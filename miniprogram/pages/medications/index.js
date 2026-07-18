@@ -69,6 +69,30 @@ Page({
     await this.loadMedications();
   },
 
+  onShow() {
+    requireToken();
+  },
+
+  onSessionInvalidated() {
+    this.setData({
+      pairId: null,
+      elderName: '家人',
+      medicineName: '',
+      dosage: '',
+      frequencyIndex: 0,
+      frequency: 'daily',
+      timeOfDay: '08:00',
+      showWeatherTriggers: false,
+      highTemp: '',
+      lowTemp: '',
+      highHumidity: '',
+      highAqi: '',
+      medications: [],
+      loading: false,
+      busy: false,
+    });
+  },
+
   async loadMedications() {
     this.setData({ loading: true });
     try {

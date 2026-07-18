@@ -8,6 +8,7 @@ Page({
     trigger: '',
     message: '',
     weather: normalizeSnapshot({}),
+    weatherNotice: '',
     loading: false,
   },
 
@@ -16,6 +17,22 @@ Page({
     const pairId = Number(options.pair_id || 0) || null;
     this.setData({ pairId });
     if (pairId) await this.loadTemplate();
+  },
+
+  onShow() {
+    requireToken();
+  },
+
+  onSessionInvalidated() {
+    this.setData({
+      pairId: null,
+      elderName: '家人',
+      trigger: '',
+      message: '',
+      weather: normalizeSnapshot({}),
+      weatherNotice: '',
+      loading: false,
+    });
   },
 
   async loadTemplate() {
@@ -30,8 +47,13 @@ Page({
       if (!item) throw new Error('not_found');
       const member = item.member || {};
       const weather = normalizeSnapshot(snapshot);
+      const usesGenericWeather = weather.stale || !weather.available;
+      const weatherNotice = weather.stale
+        ? '天气数据较早，复制内容已切换为通用提醒。'
+        : (!weather.available ? '天气数据待更新，复制内容使用通用提醒。' : '');
+      const trigger = usesGenericWeather ? '' : weather.trigger;
       const message = buildReminderMessage({
-        trigger: weather.trigger,
+        trigger,
         elderName: member.name,
         relation: member.relation,
         tmax: weather.temperatureMax,
@@ -39,8 +61,9 @@ Page({
       });
       this.setData({
         elderName: member.name || '家人',
-        trigger: weather.trigger,
+        trigger,
         weather,
+        weatherNotice,
         message,
       });
     } catch (error) {

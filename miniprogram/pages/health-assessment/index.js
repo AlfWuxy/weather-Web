@@ -54,6 +54,29 @@ Page({
     await this.loadPage();
   },
 
+  onShow() {
+    requireToken();
+  },
+
+  onSessionInvalidated() {
+    this._latestRequestToken = (this._latestRequestToken || 0) + 1;
+    this._pageRequestToken = (this._pageRequestToken || 0) + 1;
+    this._submitRequestToken = (this._submitRequestToken || 0) + 1;
+    this.requestedPairId = null;
+    this.setData({
+      pairId: null,
+      elders: [],
+      elderNames: [],
+      elderIndex: 0,
+      questions: freshQuestions(),
+      answers: {},
+      completedCount: 0,
+      latest: null,
+      loading: false,
+      busy: false,
+    });
+  },
+
   onUnload() {
     this._unloaded = true;
     this._latestRequestToken += 1;
