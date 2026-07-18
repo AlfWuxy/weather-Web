@@ -57,7 +57,7 @@ def test_validator_requires_all_wechat_values_for_formal_release(tmp_path):
         f"WX_MINIPROGRAM_SESSION_SECRET={'s' * 32}\n"
         "QWEATHER_AUTH_MODE=api_key\n"
         "QWEATHER_KEY=server-secret\n"
-        "QWEATHER_API_BASE=https://weather.example.com/v7\n",
+        "QWEATHER_API_BASE=https://unit-test.qweatherapi.com/v7\n",
     )
     ready_result = validate_release_env(ready, require_wechat=True)
     assert ready_result["ok"] is True
@@ -109,13 +109,78 @@ def test_validator_requires_weather_or_explicit_degraded_mode(tmp_path):
         "PUBLIC_BASE_URL=https://api.example.com\n"
         "QWEATHER_AUTH_MODE=api_key\n"
         "QWEATHER_KEY=server-secret\n"
-        "QWEATHER_API_BASE=https://weather.example.com/v7\n",
+        "QWEATHER_API_BASE=https://unit-test.qweatherapi.com/v7\n",
         encoding="utf-8",
     )
     ready_result = validate_release_env(ready)
 
     assert ready_result["ok"] is True
     assert ready_result["weather_ready"] is True
+
+
+def test_validator_rejects_untrusted_qweather_api_key_host_and_port(tmp_path):
+    def api_key_env(name, api_base):
+        path = tmp_path / name
+        path.write_text(
+            "PUBLIC_BASE_URL=https://api.example.com\n"
+            "QWEATHER_AUTH_MODE=api_key\n"
+            "QWEATHER_KEY=server-secret\n"
+            f"QWEATHER_API_BASE={api_base}\n",
+            encoding="utf-8",
+        )
+        return path
+
+    invalid_host = validate_release_env(
+        api_key_env("invalid-host.env", "https://weather.example.com/v7")
+    )
+    assert invalid_host["ok"] is False
+    assert invalid_host["weather_ready"] is False
+    assert any("API Host" in error for error in invalid_host["errors"])
+
+    invalid_port = validate_release_env(
+        api_key_env("invalid-port.env", "https://unit-test.qweatherapi.com:8443/v7")
+    )
+    assert invalid_port["ok"] is False
+    assert invalid_port["weather_ready"] is False
+    assert any("端口 443" in error for error in invalid_port["errors"])
+
+    explicit_https_port = validate_release_env(
+        api_key_env("explicit-https-port.env", "https://unit-test.qweatherapi.com:443/v7")
+    )
+    assert explicit_https_port["ok"] is True
+    assert explicit_https_port["weather_ready"] is True
+
+
+def test_validator_rejects_noncanonical_qweather_api_bases_without_crashing(tmp_path):
+    invalid_bases = (
+        "https://[unit-test.qweatherapi.com/v7",
+        "https://@unit-test.qweatherapi.com/v7",
+        "https://:@unit-test.qweatherapi.com/v7",
+        "https://.qweatherapi.com/v7",
+        "https://qweatherapi.com/v7",
+        "https://evilqweatherapi.com/v7",
+        "https://unit-test.qweatherapi.com.evil.example/v7",
+        "https://unit-test.qweatherapi.com:/v7",
+        "http://unit-test.qweatherapi.com/v7",
+        "https://unit-test.qweatherapi.com/v8",
+        "https://unit-test.qweatherapi.com/v7;param",
+        "https://unit-test.qweatherapi.com/v7?query=1",
+        "https://unit-test.qweatherapi.com/v7#fragment",
+    )
+
+    for index, api_base in enumerate(invalid_bases):
+        path = tmp_path / f"invalid-{index}.env"
+        path.write_text(
+            "PUBLIC_BASE_URL=https://api.example.com\n"
+            "QWEATHER_AUTH_MODE=api_key\n"
+            "QWEATHER_KEY=server-secret\n"
+            f"QWEATHER_API_BASE={api_base}\n",
+            encoding="utf-8",
+        )
+        result = validate_release_env(path)
+        assert result["ok"] is False, api_base
+        assert result["weather_ready"] is False, api_base
+        assert result["errors"], api_base
 
 
 def test_validator_matches_qweather_jwt_host_path_and_private_key_rules(tmp_path):
@@ -147,7 +212,7 @@ def test_validator_matches_qweather_jwt_host_path_and_private_key_rules(tmp_path
     )
     assert invalid_host["ok"] is False
     assert invalid_host["weather_ready"] is False
-    assert any("JWT Host" in error for error in invalid_host["errors"])
+    assert any("API Host" in error for error in invalid_host["errors"])
 
     missing_key = validate_release_env(
         jwt_env(

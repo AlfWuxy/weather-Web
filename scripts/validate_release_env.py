@@ -34,6 +34,11 @@ WECHAT_FORM_REQUIRED_KEYS = (
 QWEATHER_MAX_PRIVATE_KEY_BYTES = 16 * 1024
 EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 APPID_PATTERN = re.compile(r"^wx[A-Za-z0-9]{6,32}$")
+QWEATHER_API_AUTHORITY_PATTERN = re.compile(
+    r"^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+"
+    r"qweatherapi\.com(?::443)?$",
+    re.IGNORECASE,
+)
 
 
 def _read_env(path: Path):
@@ -127,25 +132,31 @@ def validate_wechat_release_form(path: Path, *, require_ready=False):
     }
 
 
-def _validate_qweather_base(api_base: str, *, auth_mode: str):
+def _validate_qweather_base(api_base: str):
     errors = []
-    parsed = urlparse(api_base)
+    try:
+        parsed = urlparse(api_base)
+        hostname = parsed.hostname
+        port = parsed.port
+    except ValueError:
+        return ["QWEATHER_API_BASE URL 或端口格式异常。"]
     if (
         parsed.scheme != "https"
-        or not parsed.hostname
-        or parsed.username
-        or parsed.password
+        or not hostname
+        or parsed.username is not None
+        or parsed.password is not None
         or parsed.query
         or parsed.fragment
+        or parsed.params
     ):
         errors.append("QWEATHER_API_BASE 必须是无用户信息、查询参数和片段的 HTTPS URL。")
         return errors
-    if auth_mode == "jwt":
-        hostname = parsed.hostname.lower().rstrip(".")
-        if hostname != "qweatherapi.com" and not hostname.endswith(".qweatherapi.com"):
-            errors.append("QWeather JWT Host 必须是 qweatherapi.com 或其子域名。")
-        if parsed.path.rstrip("/") != "/v7":
-            errors.append("QWeather JWT API Base 路径必须为 /v7。")
+    if not QWEATHER_API_AUTHORITY_PATTERN.fullmatch(parsed.netloc):
+        errors.append("QWeather API Host 必须是控制台分配的 qweatherapi.com 子域名。")
+    if port not in (None, 443):
+        errors.append("QWEATHER_API_BASE 只允许标准 HTTPS 端口 443。")
+    if parsed.path not in {"/v7", "/v7/"}:
+        errors.append("QWeather API Base 路径必须为 /v7。")
     return errors
 
 
@@ -223,7 +234,7 @@ def validate_release_env(path: Path, *, require_wechat=False):
         if not values.get("QWEATHER_KEY") or not qweather_base:
             errors.append("QWEATHER_AUTH_MODE=api_key 时必须同时配置 Key 与 API Base。")
         else:
-            mode_errors = _validate_qweather_base(qweather_base, auth_mode=qweather_mode)
+            mode_errors = _validate_qweather_base(qweather_base)
             errors.extend(mode_errors)
             weather_ready = not mode_errors
     elif qweather_mode == "jwt":
@@ -235,7 +246,7 @@ def validate_release_env(path: Path, *, require_wechat=False):
         if not qweather_base or any(not values.get(key) for key in required):
             errors.append("QWEATHER_AUTH_MODE=jwt 时必须完整配置 API Base 与三项 JWT 参数。")
         else:
-            mode_errors = _validate_qweather_base(qweather_base, auth_mode=qweather_mode)
+            mode_errors = _validate_qweather_base(qweather_base)
             mode_errors.extend(
                 _validate_qweather_private_key(values["QWEATHER_JWT_PRIVATE_KEY_PATH"])
             )
