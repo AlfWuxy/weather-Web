@@ -71,6 +71,18 @@ WECHAT_PRIVACY_VERSION_ARTIFACT_KEYS = {
     "WECHAT_PRIVACY_PAGE_SHA256",
 }
 WECHAT_PROJECT_CONFIG_PATH = "project.config.json"
+WECHAT_PROJECT_PRIVATE_CONFIG_PATH = "project.private.config.json"
+WECHAT_PROJECT_CONFIG_PLACEHOLDER_APPID = "touristappid"
+WECHAT_PROJECT_PRIVATE_CONFIG_MAX_BYTES = 64 * 1024
+WECHAT_PROJECT_PRIVATE_FORBIDDEN_KEYS = frozenset(
+    {
+        "appsecret",
+        "miniprogramappsecret",
+        "miniprogramsecret",
+        "wechatappsecret",
+        "wxminiprogramsecret",
+    }
+)
 WECHAT_MINIPROGRAM_CONFIG_PATH = "miniprogram/config.js"
 WECHAT_MINIPROGRAM_RUNTIME_CONFIG_PATH = "miniprogram/config.runtime.js"
 WECHAT_RELEASE_FREEZE_KEYS = (
@@ -616,6 +628,80 @@ def _run_git(repo_root: Path, *args: str):
     return result.stdout
 
 
+def _private_project_config_contains_appsecret(value):
+    """递归识别常见 AppSecret 字段名，不检查或回显字段值。"""
+    if isinstance(value, dict):
+        for key, child in value.items():
+            normalized_key = re.sub(r"[^a-z0-9]", "", str(key).lower())
+            if (
+                normalized_key in WECHAT_PROJECT_PRIVATE_FORBIDDEN_KEYS
+                or normalized_key.endswith("appsecret")
+            ):
+                return True
+            if _private_project_config_contains_appsecret(child):
+                return True
+    elif isinstance(value, list):
+        return any(_private_project_config_contains_appsecret(item) for item in value)
+    return False
+
+
+def _validate_wechat_private_project_config(values, repo_root: Path):
+    """安全核对仅保存在本机且被 Git 忽略的小程序工程配置。"""
+    errors = []
+    ignored = _run_git(
+        repo_root,
+        "check-ignore",
+        "--quiet",
+        "--",
+        WECHAT_PROJECT_PRIVATE_CONFIG_PATH,
+    )
+    if ignored is None:
+        errors.append("本机小程序私有工程配置必须被 Git 忽略。")
+
+    content, read_error = _read_regular_file_stably(
+        repo_root / WECHAT_PROJECT_PRIVATE_CONFIG_PATH,
+        max_bytes=WECHAT_PROJECT_PRIVATE_CONFIG_MAX_BYTES,
+        require_private=True,
+        require_nonempty=True,
+        required_mode=0o600,
+    )
+    read_error_messages = {
+        "missing": "本机小程序私有工程配置不存在或不可读取。",
+        "type": "本机小程序私有工程配置必须是普通文件且不能是符号链接。",
+        "permission": "本机小程序私有工程配置权限必须严格为 0600。",
+        "size": "本机小程序私有工程配置大小异常。",
+        "changed": "本机小程序私有工程配置读取期间发生变化，请重新执行。",
+        "io": "本机小程序私有工程配置无法安全读取。",
+    }
+    if read_error is not None:
+        errors.append(
+            read_error_messages.get(
+                read_error,
+                "本机小程序私有工程配置无法安全读取。",
+            )
+        )
+        return errors
+
+    try:
+        private_values = json.loads(content)
+    except (UnicodeDecodeError, TypeError, ValueError, json.JSONDecodeError):
+        errors.append("本机小程序私有工程配置必须是有效 JSON 对象。")
+        return errors
+    if not isinstance(private_values, dict):
+        errors.append("本机小程序私有工程配置必须是有效 JSON 对象。")
+        return errors
+
+    if _private_project_config_contains_appsecret(private_values):
+        errors.append("本机小程序私有工程配置不得包含 AppSecret 字段。")
+
+    private_appid = private_values.get("appid")
+    if not isinstance(private_appid, str) or not private_appid:
+        errors.append("本机小程序私有工程配置的 AppID 字段无效。")
+    elif private_appid != values.get("WX_MINIPROGRAM_APPID", ""):
+        errors.append("WX_MINIPROGRAM_APPID 与本机小程序私有工程配置不一致。")
+    return errors
+
+
 def _brotli_compress_with_node(content: bytes, *, node_bin: str | None = None):
     """使用 Node 标准库生成 Brotli 冻结体，不依赖额外 Python 包。"""
     executable = node_bin or shutil.which("node")
@@ -695,21 +781,25 @@ def _validate_wechat_release_integrity(values, repo_root: Path):
     head = _run_git(expected_root, "rev-parse", "--verify", "HEAD^{commit}")
     if head is None:
         errors.append("正式发布的 Git HEAD 无法验证。")
-    else:
-        try:
-            current_head = head.decode("ascii").strip()
-        except UnicodeDecodeError:
-            current_head = ""
-        target_commit = values.get("WECHAT_TARGET_COMMIT_SHA", "")
-        if LOWER_COMMIT_SHA_PATTERN.fullmatch(target_commit):
-            if current_head != target_commit:
-                errors.append("WECHAT_TARGET_COMMIT_SHA 与当前 Git HEAD 不一致。")
+        return errors
+    try:
+        current_head = head.decode("ascii").strip()
+    except UnicodeDecodeError:
+        errors.append("正式发布的 Git HEAD 无法验证。")
+        return errors
+    if not LOWER_COMMIT_SHA_PATTERN.fullmatch(current_head):
+        errors.append("正式发布的 Git HEAD 无法验证。")
+        return errors
+    target_commit = values.get("WECHAT_TARGET_COMMIT_SHA", "")
+    if LOWER_COMMIT_SHA_PATTERN.fullmatch(target_commit):
+        if current_head != target_commit:
+            errors.append("WECHAT_TARGET_COMMIT_SHA 与当前 Git HEAD 不一致。")
 
     gis_content = _run_git(
         expected_root,
         "cat-file",
         "blob",
-        f"HEAD:{GIS_FROZEN_ARTIFACT_PATH}",
+        f"{current_head}:{GIS_FROZEN_ARTIFACT_PATH}",
     )
     if gis_content is None:
         errors.append("冻结 GIS 文件无法从当前 Git HEAD 验证。")
@@ -718,7 +808,12 @@ def _validate_wechat_release_integrity(values, repo_root: Path):
 
     for key, relative_path in WECHAT_RELEASE_ARTIFACTS:
         expected_digest = values.get(key, "")
-        content = _run_git(expected_root, "cat-file", "blob", f"HEAD:{relative_path}")
+        content = _run_git(
+            expected_root,
+            "cat-file",
+            "blob",
+            f"{current_head}:{relative_path}",
+        )
         if content is None:
             errors.append(f"{key} 对应的发布材料无法从当前 Git HEAD 验证。")
             continue
@@ -796,7 +891,7 @@ def _validate_wechat_release_integrity(values, repo_root: Path):
         expected_root,
         "cat-file",
         "blob",
-        f"HEAD:{WECHAT_PROJECT_CONFIG_PATH}",
+        f"{current_head}:{WECHAT_PROJECT_CONFIG_PATH}",
     )
     if project_config is None:
         errors.append("WX_MINIPROGRAM_APPID 无法与当前 Git HEAD 的工程配置核对。")
@@ -809,14 +904,16 @@ def _validate_wechat_release_integrity(values, repo_root: Path):
         except (KeyError, TypeError, ValueError, json.JSONDecodeError):
             errors.append("WX_MINIPROGRAM_APPID 无法与当前 Git HEAD 的工程配置核对。")
         else:
-            if project_appid != values.get("WX_MINIPROGRAM_APPID", ""):
-                errors.append("WX_MINIPROGRAM_APPID 与当前 Git HEAD 的工程配置不一致。")
+            if project_appid != WECHAT_PROJECT_CONFIG_PLACEHOLDER_APPID:
+                errors.append("当前 Git HEAD 的工程配置必须固定为游客占位 AppID。")
+
+    errors.extend(_validate_wechat_private_project_config(values, expected_root))
 
     miniprogram_config = _run_git(
         expected_root,
         "cat-file",
         "blob",
-        f"HEAD:{WECHAT_MINIPROGRAM_CONFIG_PATH}",
+        f"{current_head}:{WECHAT_MINIPROGRAM_CONFIG_PATH}",
     )
     if miniprogram_config is None:
         errors.append(
@@ -844,7 +941,7 @@ def _validate_wechat_release_integrity(values, repo_root: Path):
         expected_root,
         "cat-file",
         "blob",
-        f"HEAD:{WECHAT_MINIPROGRAM_RUNTIME_CONFIG_PATH}",
+        f"{current_head}:{WECHAT_MINIPROGRAM_RUNTIME_CONFIG_PATH}",
     )
     if runtime_config is None:
         errors.append("WECHAT_REQUEST_DOMAIN 无法与当前 Git HEAD 的运行时配置核对。")

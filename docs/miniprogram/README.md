@@ -11,10 +11,10 @@
 ## 本地导入
 
 1. 安装微信开发者工具。
-2. 导入仓库根目录，开发者工具会按根目录 `project.config.json` 的 `miniprogramRoot` 只编译 `miniprogram/`。
-3. 小程序发布分支已在根目录 `project.config.json` 固定正式 AppID。导入后核对项目名称和主体；个人界面偏好放进 `project.private.config.json`，AppSecret、代码上传密钥和会话密钥只进入受限私密文件，均不得提交。
+2. 导入仓库根目录，开发者工具会按根目录 `project.config.json` 的 `miniprogramRoot` 只编译 `miniprogram/`；该受版本控制文件固定使用 `touristappid`。
+3. 在被 Git 忽略的根目录 `project.private.config.json` 中配置正式 AppID 并保留开发者工具生成的本机偏好，文件权限保持 `0600`。开发者工具会把本机私有配置与公开工程配置合并；AppSecret 绝不写入该文件。
 4. 正式分支已把公开 API 域名 `https://yilaoweather.org` 固定在 `miniprogram/config.runtime.js`，保证目标 commit 可直接编译和复现。
-5. 微信后台 `request` 合法域名、私密发布确认单和目标 commit 中的 API 域名必须一致；AppSecret、上传密钥及第三方密钥仍不得提交。
+5. 微信后台 `request` 合法域名、私密发布确认单和目标 commit 中的 API 域名必须一致。正式 AppID 与 AppSecret 保存到本机私密发布表单并下发受控服务器环境；AppSecret、上传密钥及第三方密钥均不得提交。
 
 ## 后端配置
 

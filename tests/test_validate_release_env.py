@@ -2,6 +2,7 @@
 """候选发布配置 readiness 测试。"""
 
 import hashlib
+import json
 import os
 import subprocess
 from types import SimpleNamespace
@@ -60,6 +61,16 @@ def _git(repo, *args):
     return result.stdout.strip()
 
 
+def _write_private_project_config(repo, appid="wx12345678"):
+    private_config = repo / release_validator.WECHAT_PROJECT_PRIVATE_CONFIG_PATH
+    private_config.write_text(
+        json.dumps({"appid": appid}) + "\n",
+        encoding="utf-8",
+    )
+    private_config.chmod(0o600)
+    return private_config
+
+
 def _prepare_release_repo(tmp_path):
     if not (tmp_path / ".git").exists():
         for index, (key, relative_path) in enumerate(
@@ -83,7 +94,7 @@ def _prepare_release_repo(tmp_path):
             artifact.write_text("\n".join(lines) + "\n", encoding="utf-8")
         (tmp_path / "release-marker.txt").write_text("frozen\n", encoding="utf-8")
         (tmp_path / "project.config.json").write_text(
-            '{"appid":"wx12345678"}\n',
+            '{"appid":"touristappid"}\n',
             encoding="utf-8",
         )
         (tmp_path / "miniprogram" / "config.js").write_text(
@@ -104,10 +115,14 @@ def _prepare_release_repo(tmp_path):
             '{"type":"FeatureCollection","features":[]}' + (" " * 4096),
             encoding="utf-8",
         )
-        (tmp_path / ".gitignore").write_text(".env.*\n", encoding="utf-8")
+        (tmp_path / ".gitignore").write_text(
+            ".env.*\n/project.private.config.json\n",
+            encoding="utf-8",
+        )
         _git(tmp_path, "init", "--quiet")
         _git(tmp_path, "add", ".")
         _git(tmp_path, "commit", "--quiet", "-m", "release fixture")
+        _write_private_project_config(tmp_path)
 
     digests = {
         key: hashlib.sha256((tmp_path / relative_path).read_bytes()).hexdigest()
@@ -1372,9 +1387,12 @@ def test_wechat_release_form_requires_current_strict_semver(tmp_path):
 
 def test_wechat_release_form_accepts_valid_complete_release_freeze(tmp_path):
     form = _write_wechat_release_form(tmp_path)
+    private_config = tmp_path / release_validator.WECHAT_PROJECT_PRIVATE_CONFIG_PATH
 
     result = validate_wechat_release_form(form, require_ready=True)
 
+    assert private_config.stat().st_mode & 0o777 == 0o600
+    assert _git(tmp_path, "check-ignore", "--", private_config.name) == private_config.name
     assert result == {
         "ok": True,
         "form_ready": True,
@@ -1399,6 +1417,72 @@ def test_wechat_release_form_writes_verified_commit_ticket_once(tmp_path):
     assert result["ok"] is True
     assert verified_commit.read_text(encoding="ascii").strip() == expected_head
     assert verified_commit.stat().st_mode & 0o077 == 0
+
+
+def test_wechat_release_form_pins_blob_reads_when_head_moves_during_validation(
+    tmp_path,
+    monkeypatch,
+):
+    form = _write_wechat_release_form(tmp_path)
+    verified_head = _git(tmp_path, "rev-parse", "HEAD")
+    verified_commit = tmp_path / "verified-commit"
+
+    (tmp_path / "project.config.json").write_text(
+        '{"appid":"wx87654321"}\n',
+        encoding="utf-8",
+    )
+    _git(tmp_path, "add", "project.config.json")
+    _git(tmp_path, "commit", "--quiet", "-m", "later unsafe project config")
+    moved_head = _git(tmp_path, "rev-parse", "HEAD")
+    _git(tmp_path, "checkout", "--quiet", "--detach", verified_head)
+
+    real_run_git = release_validator._run_git
+    head_moved = False
+
+    def move_head_before_first_blob(repo_root, *args):
+        nonlocal head_moved
+        if not head_moved and args[:2] == ("cat-file", "blob"):
+            _git(tmp_path, "update-ref", "HEAD", moved_head)
+            head_moved = True
+        return real_run_git(repo_root, *args)
+
+    monkeypatch.setattr(release_validator, "_run_git", move_head_before_first_blob)
+
+    result = validate_wechat_release_form(
+        form,
+        require_ready=True,
+        verified_commit_output=verified_commit,
+    )
+
+    assert head_moved is True
+    assert _git(tmp_path, "rev-parse", "HEAD") == moved_head
+    assert result["ok"] is True
+    assert verified_commit.read_text(encoding="ascii").strip() == verified_head
+
+
+def test_wechat_release_form_skips_blob_reads_when_head_cannot_be_resolved(
+    tmp_path,
+    monkeypatch,
+):
+    form = _write_wechat_release_form(tmp_path)
+    real_run_git = release_validator._run_git
+    blob_read_attempted = False
+
+    def fail_head_resolution(repo_root, *args):
+        nonlocal blob_read_attempted
+        if args == ("rev-parse", "--verify", "HEAD^{commit}"):
+            return None
+        if args[:2] == ("cat-file", "blob"):
+            blob_read_attempted = True
+        return real_run_git(repo_root, *args)
+
+    monkeypatch.setattr(release_validator, "_run_git", fail_head_resolution)
+
+    result = validate_wechat_release_form(form, require_ready=True)
+
+    assert result["ok"] is False
+    assert any("Git HEAD 无法验证" in error for error in result["errors"])
+    assert blob_read_attempted is False
 
 
 def test_wechat_release_form_rejects_candidate_markers_in_frozen_artifacts(tmp_path):
@@ -1655,7 +1739,7 @@ def test_wechat_release_form_enforces_category_evidence_24_hour_window(tmp_path)
             )
 
 
-def test_wechat_release_form_binds_appid_to_frozen_project_config(tmp_path):
+def test_wechat_release_form_requires_tourist_appid_in_frozen_project_config(tmp_path):
     _prepare_release_repo(tmp_path)
     (tmp_path / "project.config.json").write_text(
         '{"appid":"wx87654321"}\n',
@@ -1668,8 +1752,135 @@ def test_wechat_release_form_binds_appid_to_frozen_project_config(tmp_path):
     result = validate_wechat_release_form(form, require_ready=True)
 
     assert result["ok"] is False
-    assert any("WX_MINIPROGRAM_APPID" in error for error in result["errors"])
+    assert any("游客占位 AppID" in error for error in result["errors"])
     assert "wx87654321" not in "\n".join(result["errors"])
+
+
+def test_wechat_release_form_requires_private_project_config(tmp_path):
+    form = _write_wechat_release_form(tmp_path)
+    private_config = tmp_path / release_validator.WECHAT_PROJECT_PRIVATE_CONFIG_PATH
+    private_config.unlink()
+
+    result = validate_wechat_release_form(form, require_ready=True)
+
+    error_summary = "\n".join(result["errors"])
+    assert result["ok"] is False
+    assert any("私有工程配置不存在" in error for error in result["errors"])
+    assert str(private_config) not in error_summary
+
+
+def test_wechat_release_form_requires_private_project_config_mode_0600(tmp_path):
+    form = _write_wechat_release_form(tmp_path)
+    private_config = tmp_path / release_validator.WECHAT_PROJECT_PRIVATE_CONFIG_PATH
+    private_config.chmod(0o640)
+
+    result = validate_wechat_release_form(form, require_ready=True)
+
+    assert result["ok"] is False
+    assert any("严格为 0600" in error for error in result["errors"])
+    assert str(private_config) not in "\n".join(result["errors"])
+
+
+def test_wechat_release_form_rejects_private_project_config_symlink(tmp_path):
+    form = _write_wechat_release_form(tmp_path)
+    private_config = tmp_path / release_validator.WECHAT_PROJECT_PRIVATE_CONFIG_PATH
+    private_config.unlink()
+    symlink_target = tmp_path.parent / f"{tmp_path.name}-private-project-config.json"
+    symlink_target.write_text('{"appid":"wx12345678"}\n', encoding="utf-8")
+    symlink_target.chmod(0o600)
+    private_config.symlink_to(symlink_target)
+
+    result = validate_wechat_release_form(form, require_ready=True)
+
+    error_summary = "\n".join(result["errors"])
+    assert result["ok"] is False
+    assert any("不能是符号链接" in error for error in result["errors"])
+    assert str(private_config) not in error_summary
+    assert str(symlink_target) not in error_summary
+
+
+def test_wechat_release_form_rejects_oversized_private_project_config(tmp_path):
+    form = _write_wechat_release_form(tmp_path)
+    private_config = tmp_path / release_validator.WECHAT_PROJECT_PRIVATE_CONFIG_PATH
+    private_config.write_bytes(
+        b"{" + b" " * release_validator.WECHAT_PROJECT_PRIVATE_CONFIG_MAX_BYTES
+    )
+    private_config.chmod(0o600)
+
+    result = validate_wechat_release_form(form, require_ready=True)
+
+    assert result["ok"] is False
+    assert any("大小异常" in error for error in result["errors"])
+
+
+def test_wechat_release_form_rejects_invalid_private_project_config_json(tmp_path):
+    form = _write_wechat_release_form(tmp_path)
+    private_config = tmp_path / release_validator.WECHAT_PROJECT_PRIVATE_CONFIG_PATH
+    private_config.write_text("{invalid-json\n", encoding="utf-8")
+    private_config.chmod(0o600)
+
+    result = validate_wechat_release_form(form, require_ready=True)
+
+    assert result["ok"] is False
+    assert any("有效 JSON 对象" in error for error in result["errors"])
+    assert "{invalid-json" not in "\n".join(result["errors"])
+
+
+def test_wechat_release_form_binds_appid_to_private_project_config(tmp_path):
+    form = _write_wechat_release_form(tmp_path)
+    private_config = _write_private_project_config(tmp_path, appid="wx87654321")
+
+    result = validate_wechat_release_form(form, require_ready=True)
+
+    error_summary = "\n".join(result["errors"])
+    assert result["ok"] is False
+    assert any("WX_MINIPROGRAM_APPID" in error for error in result["errors"])
+    assert "wx87654321" not in error_summary
+    assert str(private_config) not in error_summary
+
+
+@pytest.mark.parametrize(
+    "private_values",
+    (
+        {"appid": "wx12345678", "appSecret": "test-secret-value"},
+        {
+            "appid": "wx12345678",
+            "setting": {"WX_MINIPROGRAM_SECRET": "test-secret-value"},
+        },
+    ),
+)
+def test_wechat_release_form_rejects_appsecret_in_private_project_config(
+    tmp_path,
+    private_values,
+):
+    form = _write_wechat_release_form(tmp_path)
+    private_config = tmp_path / release_validator.WECHAT_PROJECT_PRIVATE_CONFIG_PATH
+    private_config.write_text(json.dumps(private_values) + "\n", encoding="utf-8")
+    private_config.chmod(0o600)
+
+    result = validate_wechat_release_form(form, require_ready=True)
+
+    error_summary = "\n".join(result["errors"])
+    assert result["ok"] is False
+    assert any("不得包含 AppSecret" in error for error in result["errors"])
+    assert "test-secret-value" not in error_summary
+    assert str(private_config) not in error_summary
+
+
+def test_wechat_release_form_requires_private_project_config_to_be_ignored(tmp_path):
+    _prepare_release_repo(tmp_path)
+    (tmp_path / ".gitignore").write_text(".env.*\n", encoding="utf-8")
+    _git(tmp_path, "add", ".gitignore")
+    _git(tmp_path, "commit", "--quiet", "-m", "remove private config ignore")
+    form = _write_wechat_release_form(tmp_path)
+
+    result = validate_wechat_release_form(form, require_ready=True)
+
+    error_summary = "\n".join(result["errors"])
+    assert result["ok"] is False
+    assert any("必须被 Git 忽略" in error for error in result["errors"])
+    assert "wx12345678" not in error_summary
+    assert str(tmp_path) not in error_summary
 
 
 def test_wechat_release_form_binds_privacy_version_to_frozen_config(tmp_path):

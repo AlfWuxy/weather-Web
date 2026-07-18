@@ -10,7 +10,7 @@
 - [ ] 实际类目与当前功能一致，页面没有要求尚未具备的额外资质；确认后才设置 `WECHAT_CATEGORY_CONFIRMED=1`。
 - [ ] 运营者姓名、专用联系邮箱和 `YYYY-MM-DD` 生效日期已按认证账号核对。
 - [ ] 微信后台批准的小程序名称已逐字同步到私密表单与五份冻结材料；每份材料同时包含唯一名称 marker 和可见名称。
-- [ ] 正式 AppID 已核对，AppSecret 只存在于私密表单和受控服务器环境。
+- [ ] 正式 AppID 已核对到微信后台、本机 `project.private.config.json`、私密发布表单和受控服务器环境；AppSecret 只存在于私密发布表单和受控服务器环境，绝不进入本机工程私有配置。
 - [ ] `WX_MINIPROGRAM_PRIVACY_VERSION` 与小程序包、服务器要求版本和本次平台隐私保护指引一致。
 - [ ] 所有材料复核完成后才设置 `WECHAT_FORM_READY=1`；正式部署同时设置 `DEPLOY_REQUIRE_WECHAT_READY=1`。
 - [ ] `DEPLOY_REQUIRE_WECHAT_READY=0` 只用于本地微信开发者工具预览；远程发布脚本会在 SSH、上传和服务器变更前直接拒绝该模式。
@@ -19,11 +19,11 @@
 ## 账号与工程
 
 - [ ] 正式小程序账号已完成主体认证。
-- [ ] 根目录 `project.config.json` 可被开发者工具导入，正式 AppID 与微信后台“开发者ID”一致；仓库中不存在 AppSecret 或代码上传密钥。
-- [ ] 服务器已配置同一 AppID 和 AppSecret。
+- [ ] 受版本控制的根目录 `project.config.json` 固定为 `touristappid`；被 Git 忽略且权限为 `0600` 的根目录 `project.private.config.json` 在保留本机偏好的同时配置与微信后台一致的正式 AppID，开发者工具导入后使用合并配置。
+- [ ] 私密发布表单和服务器已配置同一正式 AppID 与 AppSecret；AppSecret 没有进入 `project.private.config.json`、Git、日志或小程序包。
 - [ ] `config.runtime.js` 固定的 `https://yilaoweather.org` 已加入 request 合法域名，并与私密发布确认单一致。
 - [ ] 合法域名使用有效 HTTPS 证书、443 端口，无重定向到 HTTP。
-- [ ] 生产包没有 `project.private.config.json`、密钥、测试账号密码或本地地址。
+- [ ] 开发者工具已经从合并后的本机工程配置读取正式 AppID；生产包没有 `project.private.config.json`、密钥、测试账号密码或本地地址。
 - [ ] 不可变 release 上传规则明确排除所有 `.env*`，私密微信表单与本机配置没有出现在服务器 release 目录。
 - [ ] 小程序名称、图标、简介、服务类目和版本号已在账号后台填写。
 - [ ] 已按 `LISTING_COPY.md` 复核头像、上架文案、审核路径和无隐私截图。

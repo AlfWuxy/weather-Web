@@ -53,11 +53,15 @@ test('自定义组件只在实际使用的页面按需注册', () => {
   });
 });
 
-test('根目录工程配置可按正式项目导入并开启域名校验', () => {
-  const project = JSON.parse(fs.readFileSync(path.resolve(miniRoot, '..', 'project.config.json'), 'utf8'));
+test('根目录工程配置使用安全占位并开启域名校验', () => {
+  const repoRoot = path.resolve(miniRoot, '..');
+  const projectText = fs.readFileSync(path.join(repoRoot, 'project.config.json'), 'utf8');
+  const project = JSON.parse(projectText);
+  const gitignore = fs.readFileSync(path.join(repoRoot, '.gitignore'), 'utf8');
   assert.equal(project.miniprogramRoot, 'miniprogram/');
-  assert.match(project.appid, /^wx[a-f0-9]{16}$/);
-  assert.notEqual(project.appid, 'touristappid');
+  assert.equal(project.appid, 'touristappid');
+  assert.doesNotMatch(projectText, /wx[a-f0-9]{16}/);
+  assert.match(gitignore, /^\/project\.private\.config\.json$/m);
   assert.equal(project.setting.urlCheck, true);
   assert.equal(project.setting.es6, true);
   assert.equal(project.setting.enhance, true);

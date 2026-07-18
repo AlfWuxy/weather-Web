@@ -30,7 +30,7 @@
   },
   "compileType": "miniprogram",
   "libVersion": "3.7.12",
-  "appid": "wxb13f4f07c9ea02b1",
+  "appid": "touristappid",
   "projectname": "yilao-weather-miniprogram",
   "miniprogramRoot": "miniprogram/",
   "simulatorType": "wechat",

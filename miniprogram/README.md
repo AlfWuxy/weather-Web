@@ -6,11 +6,11 @@
 
 ## 本地导入
 
-1. 在微信开发者工具中导入仓库根目录，工具会读取根目录 `project.config.json`。
-2. 当前小程序发布分支已经在 `project.config.json` 固定正式 AppID，导入后核对项目名称和主体即可。AppSecret、代码上传密钥及会话密钥不得写入仓库。
+1. 在微信开发者工具中导入仓库根目录。受版本控制的 `project.config.json` 固定使用 `touristappid`，避免把正式标识写入 Git。
+2. 在被 Git 忽略的根目录 `project.private.config.json` 中配置正式 AppID，并保留开发者工具生成的本机偏好。微信开发者工具会把它与公开工程配置合并；文件权限保持 `0600`，`git check-ignore project.private.config.json` 必须命中。
 3. 正式分支已在 `config.runtime.js` 固定公开后端 `https://yilaoweather.org`，导入后无需临时改写。
 4. 在微信公众平台的“开发管理，开发设置，服务器域名”中，把 `https://yilaoweather.org` 加入 `request` 合法域名。
-5. AppSecret、代码上传密钥、QWeather 密钥和会话密钥只能进入私密表单或服务端环境，不能写入小程序包。
+5. 正式 AppID 和 AppSecret 同时保存到本机私密发布表单并下发受控服务器环境。`project.private.config.json` 的凭据相关内容只允许 AppID，AppSecret、代码上传密钥、QWeather 密钥和会话密钥绝不进入该文件、Git 或小程序包。
 
 小程序端不需要天气供应商 API Key。第三方天气认证材料只应保存在后端环境变量中。
 
@@ -44,5 +44,6 @@
 find miniprogram -type f -name '*.js' -print0 | while IFS= read -r -d '' file; do node --check "$file"; done
 find miniprogram -type f -name '*.json' -print0 | while IFS= read -r -d '' file; do jq -e . "$file" >/dev/null; done
 jq -e . project.config.json >/dev/null
+git check-ignore project.private.config.json
 node --test miniprogram/tests/*.test.js
 ```
