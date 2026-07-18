@@ -1,22 +1,32 @@
 # -*- coding: utf-8 -*-
 """部署脚本回归测试。"""
 
+import os
+import subprocess
 from pathlib import Path
 
 
+ROOT = Path(__file__).resolve().parents[1]
+
+
 def _load_deploy_script():
-    script_path = Path(__file__).resolve().parents[1] / "scripts" / "deploy.sh"
+    script_path = ROOT / "scripts" / "deploy.sh"
     return script_path.read_text(encoding="utf-8")
 
 
 def _load_precompute_script():
-    script_path = Path(__file__).resolve().parents[1] / "scripts" / "community_risk_precompute.sh"
+    script_path = ROOT / "scripts" / "community_risk_precompute.sh"
     return script_path.read_text(encoding="utf-8")
 
 
 def _load_activate_script():
-    script_path = Path(__file__).resolve().parents[1] / "scripts" / "activate_release.sh"
+    script_path = ROOT / "scripts" / "activate_release.sh"
     return script_path.read_text(encoding="utf-8")
+
+
+def _write_executable(path, content):
+    path.write_text(content, encoding='utf-8')
+    path.chmod(0o755)
 
 
 def test_deploy_script_checks_units_with_is_active():
@@ -49,11 +59,48 @@ def test_deploy_script_pins_duchang_cache_to_free_tier_budget():
     assert 'WEATHER_SYNC_LOCATIONS=都昌县' in content
     assert 'QWEATHER_CANONICAL_LOCATION=116.20,29.27' in content
     assert 'QWEATHER_MONTHLY_REQUEST_LIMIT=40000' in content
+    assert 'QWEATHER_REQUIRE_PERSISTENT_BUDGET=1' in content
+    assert (
+        'remote_env_update "QWEATHER_REQUIRE_PERSISTENT_BUDGET" "1" "always"'
+        in content
+    )
+    for key, value in (
+        ('QWEATHER_CANONICAL_LOCATION', '116.20,29.27'),
+        ('QWEATHER_MONTHLY_REQUEST_LIMIT', '40000'),
+        ('QWEATHER_BUDGET_FAIL_CLOSED', '1'),
+        ('WEATHER_CACHE_TTL_MINUTES', '30'),
+        ('FORECAST_CACHE_TTL_MINUTES', '30'),
+        ('QWEATHER_WARNING_CACHE_TTL_MINUTES', '30'),
+        ('WEATHER_SYNC_LOCATIONS', '都昌县'),
+    ):
+        assert f'remote_env_update "{key}" "{value}" "always"' in content
+    assert '--probe-persistent-budget' in content
+    assert '--seed-persistent-budget' in content
+    assert 'QWEATHER_DEDICATED_CREDENTIAL_CONFIRMED' in content
+    assert 'QWEATHER_CONSOLE_USAGE_MONTH' in content
+    assert 'QWEATHER_CONSOLE_USAGE_BASELINE' in content
+    assert content.index('--probe-persistent-budget') < content.index(
+        '$RELEASE_VENV/bin/python -m pytest -q'
+    )
+    assert content.index('--seed-persistent-budget') < content.index(
+        'bash $RELEASE_APP/scripts/activate_release.sh'
+    )
     assert 'OnUnitActiveSec=30min' in content
     assert 'OnActiveSec=30min' in content
     assert 'OnSuccess=case-weather-dispatch.service' in content
     assert "cat > $NEW_RELEASE/systemd/case-weather-dispatch.timer" not in content
     assert 'ExecStart=/bin/bash $CURRENT_LINK/app/scripts/weather_cache_sync.sh' in content
+
+
+def test_formal_deploy_propagates_full_feature_release_flags():
+    content = _load_deploy_script()
+
+    assert 'WXPUSHER_APP_TOKEN|FEATURE_HEAT_EXPOSURE_GIS' in content
+    assert 'LOCAL_FEATURE_HEAT_EXPOSURE_GIS' in content
+    assert 'FEATURE_HEAT_EXPOSURE_GIS=0' in content
+    assert 'remote_env_update "FEATURE_HEAT_EXPOSURE_GIS" "0" "if-empty"' in content
+    assert 'remote_env_update "FEATURE_HEAT_EXPOSURE_GIS" "$LOCAL_FEATURE_HEAT_EXPOSURE_GIS" "always"' in content
+    assert '微信全功能正式发布必须启用 FEATURE_HEAT_EXPOSURE_GIS=1' in content
 
 
 def test_deploy_script_delays_first_cache_refresh_then_starts_recurring_timer():
@@ -73,13 +120,16 @@ def test_deploy_script_delays_first_cache_refresh_then_starts_recurring_timer():
     assert 'OnUnitActiveSec=30min' in recurring_block
     assert '[Install]' in recurring_block
     assert 'WantedBy=timers.target' in recurring_block
-    assert 'Wants=case-weather-cache.service' in bootstrap_block
-    assert 'After=network.target case-weather.service case-weather-cache.service' in bootstrap_block
+    assert 'Wants=case-weather-cache.service' not in bootstrap_block
+    assert 'After=network.target case-weather.service' in bootstrap_block
     assert 'OnSuccess=case-weather-cache.timer' in bootstrap_block
-    assert 'ExecStart=/usr/bin/true' in bootstrap_block
+    assert 'OnSuccess=case-weather-dispatch.service' not in bootstrap_block
+    assert 'ExecStart=/bin/bash $CURRENT_LINK/app/scripts/weather_cache_sync.sh' in bootstrap_block
     assert 'OnActiveSec=30min' in content[bootstrap_start:]
     assert 'RemainAfterElapse=no' in content[bootstrap_start:]
     activate = _load_activate_script()
+    assert 'cache-bootstrap-' not in content
+    assert 'cache-bootstrap.success' not in activate
     assert 'NextElapseUSecMonotonic' in activate
     assert 'remaining_us' in activate
     assert 'bootstrap timer 未保留完整的首轮 30 分钟等待窗口' in activate
@@ -119,6 +169,81 @@ def test_preflight_finishes_before_server_transaction_can_stop_units():
     assert preflight < activation
 
 
+def test_formal_freeze_preflight_runs_before_remote_change_or_rsync():
+    content = _load_deploy_script()
+
+    preflight = content.index('python3 "$SCRIPT_DIR/validate_release_env.py"')
+    first_remote_call = content.index('remote_exec "echo \'连接成功\'"')
+    first_rsync = content.index("rsync -avz")
+    upload = content.index('upload_files "$RELEASE_APP"')
+
+    assert '--repo-root "$LOCAL_DIR"' in content
+    assert '--snapshot-output "$VERIFIED_WECHAT_FORM_FILE"' in content
+    assert '--verified-commit-output "$VERIFIED_COMMIT_FILE"' in content
+    assert preflight < first_remote_call
+    assert preflight < first_rsync
+    assert preflight < upload
+    assert '冻结 GIS gzip 体积必须小于 300 KiB' in (
+        ROOT / 'scripts' / 'validate_release_env.py'
+    ).read_text(encoding='utf-8')
+
+
+def test_deploy_keeps_control_directories_root_private_and_asserts_state():
+    content = _load_deploy_script()
+
+    assert 'chown root:root $PROJECT_DIR/backups $PROJECT_DIR/deployments' in content
+    assert 'chmod 0700 $PROJECT_DIR/backups $PROJECT_DIR/deployments' in content
+    assert "stat -c '%u:%g:%a' $PROJECT_DIR/backups" in content
+    assert "stat -c '%u:%g:%a' $PROJECT_DIR/deployments" in content
+    assert "'0:0:700'" in content
+
+
+def test_formal_deploy_uploads_verified_commit_snapshot_instead_of_live_tree():
+    content = _load_deploy_script()
+
+    assert 'RELEASE_SOURCE_DIR="$LOCAL_DIR"' in content
+    assert 'if [ "$FORMAL_WECHAT_CONFIG_ALLOWED" != "1" ]; then' in content
+    assert 'IFS= read -r VERIFIED_COMMIT < "$VERIFIED_COMMIT_FILE"' in content
+    assert 'git -C "$LOCAL_DIR" archive --format=tar "$VERIFIED_COMMIT"' in content
+    assert 'RELEASE_SOURCE_DIR="$LOCAL_RELEASE_EXPORT_DIR"' in content
+    assert '$NEW_RELEASE/private-metadata/source-commit.txt' in content
+    assert 'EXPECTED_RELEASE_COMMIT=$VERIFIED_COMMIT' in content
+    assert content.count('"$RELEASE_SOURCE_DIR/" "$USER@$SERVER:$remote_target/"') == 2
+    assert '"$LOCAL_DIR/" "$USER@$SERVER:$remote_target/"' not in content
+
+
+def test_deploy_archive_target_comes_from_same_validation_ticket():
+    content = _load_deploy_script()
+    form_loader_start = content.index("load_wechat_release_form() {")
+    form_loader_end = content.index("\n}\n", form_loader_start)
+    form_loader = content[form_loader_start:form_loader_end]
+
+    assert "WECHAT_TARGET_COMMIT_SHA" not in form_loader
+    assert 'local form_file="$1"' in form_loader
+    assert 'done < "$form_file"' in form_loader
+    assert "WECHAT_RELEASE_FORM_FILE" not in form_loader
+    assert 'VERIFIED_COMMIT_FILE="$LOCAL_DEPLOY_TEMP_DIR/verified-commit"' in content
+    assert content.index('--verified-commit-output "$VERIFIED_COMMIT_FILE"') < content.index(
+        'IFS= read -r VERIFIED_COMMIT < "$VERIFIED_COMMIT_FILE"'
+    )
+
+
+def test_deploy_loader_uses_the_same_validated_form_snapshot():
+    content = _load_deploy_script()
+
+    snapshot_assignment = (
+        'VERIFIED_WECHAT_FORM_FILE='
+        '"$LOCAL_DEPLOY_TEMP_DIR/wechat-release.snapshot"'
+    )
+    snapshot_validation = '--snapshot-output "$VERIFIED_WECHAT_FORM_FILE"'
+    snapshot_load = 'load_wechat_release_form "$VERIFIED_WECHAT_FORM_FILE"'
+
+    assert snapshot_assignment in content
+    assert content.index(snapshot_assignment) < content.index(snapshot_validation)
+    assert content.index(snapshot_validation) < content.index(snapshot_load)
+    assert "load_wechat_release_form\n" not in content
+
+
 def test_activate_transaction_stops_every_writer_and_commits_last():
     content = _load_activate_script()
 
@@ -140,17 +265,28 @@ def test_activate_transaction_stops_every_writer_and_commits_last():
     assert content.index('install_new_units\n') < content.index(
         'prepare_release_timer_states\n'
     )
-    assert content.index('prepare_release_timer_states\n') < content.index(
+    assert content.index('start_candidate_release\n') < content.index(
+        'run_formal_cache_smoke\n'
+    )
+    assert content.index('run_formal_cache_smoke\n') < content.index(
         'arm_qweather_network_gate\n'
+    )
+    assert content.index('arm_qweather_network_gate\n') < content.index('LINK_MUTATED=1')
+    assert content.index('LINK_MUTATED=1') < content.index(
+        'prepare_release_timer_states\n'
     )
     assert content.index('wait_for_health "$HEALTH_URL"') < content.index('COMMITTED=1')
     assert content.index('start_new_release\n') < content.index('COMMITTED=1')
     assert content.index('FORWARD_ONLY=1') < content.index('COMMITTED=1')
     assert content.index('COMMITTED=1') < content.index('start_release_timers\n')
-    assert content.index('start_release_timers\n') < content.index(
+    commit_flow = content.split('\nCOMMITTED=1\n', 1)[1]
+    assert commit_flow.index('start_release_timers\n') < commit_flow.index(
         'verify_release_state\n'
     )
-    assert content.index('verify_release_state\n') < content.index(
+    assert commit_flow.index('verify_release_state\n') < commit_flow.index(
+        'observe_post_commit_stability\n'
+    )
+    assert commit_flow.index('observe_post_commit_stability\n') < commit_flow.index(
         '"$TRANSACTION_DIR/COMMITTED"'
     )
 
@@ -185,8 +321,9 @@ def test_deploy_script_requires_https_public_base_url():
     content = _load_deploy_script()
 
     assert 'ALLOW_INSECURE_PUBLIC_BASE_URL' in content
-    assert 'PUBLIC_BASE_URL 必须优先使用 HTTPS' in content
-    assert 'ALLOW_INSECURE_PUBLIC_BASE_URL' in content
+    assert 'PUBLIC_BASE_URL=https://yilaoweather.org' in content
+    assert 'remote_env_update "PUBLIC_BASE_URL" "https://yilaoweather.org" "always"' in content
+    assert 'remote_env_update "ALLOW_INSECURE_PUBLIC_BASE_URL" "" "always"' in content
     assert 'DEFAULT_PUBLIC_BASE_URL="http://$SERVER:5000"' not in content
     assert 'scripts/validate_release_env.py --file $STAGED_ENV_FILE' in content
 
@@ -203,9 +340,7 @@ def test_deploy_secrets_use_stdin_and_staged_environment():
     assert content.index('upload_files "$RELEASE_APP"') < content.index(
         'remote_env_update "DATABASE_URI"'
     )
-    assert content.index('$RELEASE_VENV/bin/python -m pytest -q') < content.index(
-        'ln -s $PROJECT_DIR/.env $RELEASE_APP/.env'
-    )
+    assert 'ln -s $PROJECT_DIR/.env $RELEASE_APP/.env' not in content
 
 
 def test_deploy_only_supports_key_or_sshpass_and_locks_private_files():
@@ -214,7 +349,44 @@ def test_deploy_only_supports_key_or_sshpass_and_locks_private_files():
     assert 'expect -c' not in content
     assert '密码部署需要 sshpass' in content
     assert content.count('UMask=0077') == 6
-    assert 'chmod 0700 $PROJECT_DIR/instance' in content
+    assert 'chmod 0700 $PROJECT_DIR/instance $PROJECT_DIR/storage $PROJECT_DIR/run' in content
+
+
+def test_deploy_runs_all_runtime_units_as_hardened_service_user():
+    content = _load_deploy_script()
+
+    assert 'User=root' not in content
+    assert content.count('User=case-weather') == 6
+    assert content.count('Group=case-weather') == 6
+    for directive in (
+        'NoNewPrivileges=true',
+        'PrivateTmp=true',
+        'PrivateDevices=true',
+        'ProtectSystem=strict',
+        'ProtectHome=true',
+        'RestrictSUIDSGID=true',
+        'RestrictNamespaces=true',
+        'CapabilityBoundingSet=',
+        'ReadWritePaths=$PROJECT_DIR/instance $PROJECT_DIR/storage $PROJECT_DIR/run',
+    ):
+        assert content.count(directive) == 6
+    assert 'DISPATCH_LOCK_PATH=$PROJECT_DIR/run/case-weather-dispatch.lock' in content
+    assert 'useradd --system' in content
+    assert 'RUNTIME_USER=$RUNTIME_USER RUNTIME_GROUP=$RUNTIME_GROUP' in content
+    activate = _load_activate_script()
+    assert '--preserve-environment' not in activate
+    assert 'runtime_exec "$VENV_DIR/bin/gunicorn"' in activate
+    assert 'runtime_exec /bin/bash scripts/weather_cache_sync.sh --skip-nowcast' in activate
+    assert "local runtime_env=(\n        -i" in activate
+    runtime_block = activate.split('runtime_exec() {', 1)[1].split('\n}', 1)[0]
+    for inherited_secret in (
+        'SSHPASS',
+        'WX_MINIPROGRAM_SECRET',
+        'QWEATHER_KEY',
+        'SILICONFLOW_API_KEY',
+        'WXPUSHER_APP_TOKEN',
+    ):
+        assert inherited_secret not in runtime_block
 
 
 def test_deploy_verifies_ssh_host_and_keeps_gunicorn_private():
@@ -248,13 +420,11 @@ def test_preview_does_not_generate_partial_wechat_authentication():
     assert 'WX_MINIPROGRAM_SESSION_SECRET=\n' in content
     assert 'WX_OPENID_PEPPER_GEN=' not in content
     assert 'WX_SESSION_SECRET_GEN=' not in content
-    guard = (
-        'if [ "$REQUIRE_WECHAT_READY" = "1" ] \\\n'
-        '    || [ -n "$LOCAL_WX_MINIPROGRAM_APPID" ] \\\n'
-        '    || [ -n "$LOCAL_WX_MINIPROGRAM_SECRET" ]; then'
-    )
+    guard = 'if [ "$FORMAL_WECHAT_CONFIG_ALLOWED" = "1" ]; then'
     assert guard in content
-    assert content.index('remote_env_update "WX_MINIPROGRAM_SECRET"') < content.index(guard)
+    assert content.index(guard) < content.index(
+        'remote_env_update "WX_MINIPROGRAM_SECRET"'
+    )
     assert content.count('remote_env_generate_secret "WX_MINIPROGRAM_OPENID_PEPPER"') == 1
     assert content.count('remote_env_generate_secret "WX_MINIPROGRAM_SESSION_SECRET"') == 1
     assert 'WX_MINIPROGRAM_APPID 与 WX_MINIPROGRAM_SECRET 必须由同一次发布同时提供。' in content
@@ -298,3 +468,87 @@ def test_precompute_script_respects_deploy_venv_dir():
 
     assert '${DEPLOY_VENV_DIR:+$DEPLOY_VENV_DIR/bin/python}' in content
     assert 'VENV_PY="${VENV_PY:-python3}"' in content
+
+
+def test_remote_preview_is_rejected_before_any_remote_command(tmp_path):
+    fake_bin = tmp_path / 'bin'
+    fake_bin.mkdir()
+    remote_log = tmp_path / 'remote.log'
+    _write_executable(
+        fake_bin / 'ssh',
+        '''#!/bin/bash
+set -euo pipefail
+payload="$(/bin/cat)"
+{
+    printf 'COMMAND'
+    printf ' <%s>' "$@"
+    printf '\nPAYLOAD=%s\n' "$payload"
+} >> "$FAKE_DEPLOY_LOG"
+''',
+    )
+    _write_executable(
+        fake_bin / 'rsync',
+        '''#!/bin/bash
+set -euo pipefail
+printf 'RSYNC' >> "$FAKE_DEPLOY_LOG"
+printf ' <%s>' "$@" >> "$FAKE_DEPLOY_LOG"
+printf '\n' >> "$FAKE_DEPLOY_LOG"
+''',
+    )
+    form_file = tmp_path / 'wechat-release.env'
+    form_file.write_text(
+        '''WECHAT_FORM_READY=0
+WX_MINIPROGRAM_APPID=wx-preview-canary
+WX_MINIPROGRAM_SECRET=preview-secret-canary
+WXPUSHER_APP_TOKEN=preview-wxpusher-canary
+WX_MINIPROGRAM_PRIVACY_VERSION=preview-privacy-canary
+FEATURE_HEAT_EXPOSURE_GIS=1
+''',
+        encoding='utf-8',
+    )
+    deploy_env = tmp_path / 'deploy.env'
+    deploy_env.write_text(
+        f'''DEPLOY_SERVER=fake.example
+DEPLOY_USER=deployer
+DEPLOY_PROJECT_DIR=/srv/case-weather
+DEPLOY_RELEASE_ROOT=/srv/case-weather-deploy
+DEPLOY_RELEASE_ID=preview-test
+DEPLOY_LOCAL_DIR={ROOT}
+DEPLOY_REQUIRE_WECHAT_READY=0
+WECHAT_RELEASE_FORM_FILE={form_file}
+''',
+        encoding='utf-8',
+    )
+    environment = os.environ.copy()
+    environment.update(
+        {
+            'ENV_FILE': str(deploy_env),
+            'WECHAT_RELEASE_FORM_FILE': str(form_file),
+            'FAKE_DEPLOY_LOG': str(remote_log),
+            'PATH': f"{fake_bin}:{environment['PATH']}",
+        }
+    )
+
+    result = subprocess.run(
+        ['bash', str(ROOT / 'scripts' / 'deploy.sh')],
+        cwd=ROOT,
+        env=environment,
+        stdin=subprocess.DEVNULL,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 64
+    assert '本地微信 DevTools 预览' in result.stderr
+    assert not remote_log.exists()
+    remote_text = ''
+    for canary in (
+        'wx-preview-canary',
+        'preview-secret-canary',
+        'preview-wxpusher-canary',
+        'preview-privacy-canary',
+    ):
+        assert canary not in remote_text
+    assert '--key WX_MINIPROGRAM_OPENID_PEPPER' not in remote_text
+    assert '--key WX_MINIPROGRAM_SESSION_SECRET' not in remote_text

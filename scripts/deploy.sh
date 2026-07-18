@@ -26,13 +26,15 @@ LOCAL_QWEATHER_JWT_PRIVATE_KEY_PATH=""
 LOCAL_ALLOW_WEATHER_UNAVAILABLE="${ALLOW_WEATHER_UNAVAILABLE:-}"
 LOCAL_AMAP_KEY=""
 LOCAL_WXPUSHER_APP_TOKEN=""
+LOCAL_FEATURE_HEAT_EXPOSURE_GIS=""
 LOCAL_PUBLIC_BASE_URL=""
 LOCAL_ALLOW_INSECURE_PUBLIC_BASE_URL="${ALLOW_INSECURE_PUBLIC_BASE_URL:-}"
 LOCAL_WX_MINIPROGRAM_APPID=""
 LOCAL_WX_MINIPROGRAM_SECRET=""
-LOCAL_WX_MINIPROGRAM_OPENID_PEPPER=""
-LOCAL_WX_MINIPROGRAM_SESSION_SECRET=""
 LOCAL_WX_MINIPROGRAM_PRIVACY_VERSION=""
+LOCAL_QWEATHER_DEDICATED_CREDENTIAL_CONFIRMED=""
+LOCAL_QWEATHER_CONSOLE_USAGE_MONTH=""
+LOCAL_QWEATHER_CONSOLE_USAGE_BASELINE=""
 LOCAL_WECHAT_FORM_READY="0"
 
 load_deploy_env() {
@@ -56,7 +58,7 @@ load_local_api_keys() {
     while IFS='=' read -r key value; do
         case "$key" in
             ''|\#*) continue ;;
-            QWEATHER_KEY|QWEATHER_API_BASE|QWEATHER_AUTH_MODE|QWEATHER_JWT_KID|QWEATHER_JWT_PROJECT_ID|QWEATHER_JWT_PRIVATE_KEY_PATH|ALLOW_WEATHER_UNAVAILABLE|AMAP_KEY|WXPUSHER_APP_TOKEN|PUBLIC_BASE_URL|ALLOW_INSECURE_PUBLIC_BASE_URL|WX_MINIPROGRAM_APPID|WX_MINIPROGRAM_SECRET|WX_MINIPROGRAM_OPENID_PEPPER|WX_MINIPROGRAM_SESSION_SECRET|WX_MINIPROGRAM_PRIVACY_VERSION)
+            QWEATHER_KEY|QWEATHER_API_BASE|QWEATHER_AUTH_MODE|QWEATHER_JWT_KID|QWEATHER_JWT_PROJECT_ID|QWEATHER_JWT_PRIVATE_KEY_PATH|ALLOW_WEATHER_UNAVAILABLE|AMAP_KEY|FEATURE_HEAT_EXPOSURE_GIS|PUBLIC_BASE_URL|ALLOW_INSECURE_PUBLIC_BASE_URL)
                 normalize_env_value "$value"
                 value="$NORMALIZED_ENV_VALUE"
                 case "$key" in
@@ -68,14 +70,9 @@ load_local_api_keys() {
                     QWEATHER_JWT_PRIVATE_KEY_PATH) LOCAL_QWEATHER_JWT_PRIVATE_KEY_PATH="$value" ;;
                     ALLOW_WEATHER_UNAVAILABLE) LOCAL_ALLOW_WEATHER_UNAVAILABLE="$value" ;;
                     AMAP_KEY) LOCAL_AMAP_KEY="$value" ;;
-                    WXPUSHER_APP_TOKEN) LOCAL_WXPUSHER_APP_TOKEN="$value" ;;
+                    FEATURE_HEAT_EXPOSURE_GIS) LOCAL_FEATURE_HEAT_EXPOSURE_GIS="$value" ;;
                     PUBLIC_BASE_URL) LOCAL_PUBLIC_BASE_URL="$value" ;;
                     ALLOW_INSECURE_PUBLIC_BASE_URL) LOCAL_ALLOW_INSECURE_PUBLIC_BASE_URL="$value" ;;
-                    WX_MINIPROGRAM_APPID) LOCAL_WX_MINIPROGRAM_APPID="$value" ;;
-                    WX_MINIPROGRAM_SECRET) LOCAL_WX_MINIPROGRAM_SECRET="$value" ;;
-                    WX_MINIPROGRAM_OPENID_PEPPER) LOCAL_WX_MINIPROGRAM_OPENID_PEPPER="$value" ;;
-                    WX_MINIPROGRAM_SESSION_SECRET) LOCAL_WX_MINIPROGRAM_SESSION_SECRET="$value" ;;
-                    WX_MINIPROGRAM_PRIVACY_VERSION) LOCAL_WX_MINIPROGRAM_PRIVACY_VERSION="$value" ;;
                 esac
                 ;;
         esac
@@ -85,11 +82,12 @@ load_local_api_keys() {
 load_local_api_keys
 
 load_wechat_release_form() {
-    [ -f "$WECHAT_RELEASE_FORM_FILE" ] || return 0
+    local form_file="$1"
+    [ -f "$form_file" ] || return 0
     while IFS='=' read -r key value; do
         case "$key" in
             ''|\#*) continue ;;
-            WECHAT_FORM_READY|WX_MINIPROGRAM_APPID|WX_MINIPROGRAM_SECRET|WX_MINIPROGRAM_PRIVACY_VERSION)
+            WECHAT_FORM_READY|WX_MINIPROGRAM_APPID|WX_MINIPROGRAM_SECRET|WX_MINIPROGRAM_PRIVACY_VERSION|WXPUSHER_APP_TOKEN|FEATURE_HEAT_EXPOSURE_GIS|QWEATHER_DEDICATED_CREDENTIAL_CONFIRMED|QWEATHER_CONSOLE_USAGE_MONTH|QWEATHER_CONSOLE_USAGE_BASELINE)
                 normalize_env_value "$value"
                 value="$NORMALIZED_ENV_VALUE"
                 case "$key" in
@@ -97,10 +95,15 @@ load_wechat_release_form() {
                     WX_MINIPROGRAM_APPID) LOCAL_WX_MINIPROGRAM_APPID="$value" ;;
                     WX_MINIPROGRAM_SECRET) LOCAL_WX_MINIPROGRAM_SECRET="$value" ;;
                     WX_MINIPROGRAM_PRIVACY_VERSION) LOCAL_WX_MINIPROGRAM_PRIVACY_VERSION="$value" ;;
+                    WXPUSHER_APP_TOKEN) LOCAL_WXPUSHER_APP_TOKEN="$value" ;;
+                    FEATURE_HEAT_EXPOSURE_GIS) LOCAL_FEATURE_HEAT_EXPOSURE_GIS="$value" ;;
+                    QWEATHER_DEDICATED_CREDENTIAL_CONFIRMED) LOCAL_QWEATHER_DEDICATED_CREDENTIAL_CONFIRMED="$value" ;;
+                    QWEATHER_CONSOLE_USAGE_MONTH) LOCAL_QWEATHER_CONSOLE_USAGE_MONTH="$value" ;;
+                    QWEATHER_CONSOLE_USAGE_BASELINE) LOCAL_QWEATHER_CONSOLE_USAGE_BASELINE="$value" ;;
                 esac
                 ;;
         esac
-    done < "$WECHAT_RELEASE_FORM_FILE"
+    done < "$form_file"
 }
 
 SERVER="${DEPLOY_SERVER:-}"
@@ -117,17 +120,53 @@ RELEASE_VENV="$NEW_RELEASE/venv"
 STAGED_ENV_FILE="$NEW_RELEASE/staged.env"
 REQUIRE_WECHAT_READY="${DEPLOY_REQUIRE_WECHAT_READY:-0}"
 RECOVERY_ACKNOWLEDGED_TRANSACTION="${DEPLOY_RECOVERY_ACKNOWLEDGED_TRANSACTION:-}"
+LOCAL_DEPLOY_TEMP_DIR=""
+VERIFIED_COMMIT_FILE=""
+VERIFIED_WECHAT_FORM_FILE=""
+VERIFIED_COMMIT=""
+FORMAL_WECHAT_CONFIG_ALLOWED="0"
+RUNTIME_USER="case-weather"
+RUNTIME_GROUP="case-weather"
 
-if [ "$REQUIRE_WECHAT_READY" = "1" ] || [ -f "$WECHAT_RELEASE_FORM_FILE" ]; then
+# 远端部署脚本只允许正式发布。未认证阶段继续使用本地微信 DevTools 预览，
+# 防止“预览”误复用服务器正式凭据、数据库和 systemd 单元。
+case "$REQUIRE_WECHAT_READY" in
+    1) ;;
+    0)
+        echo "远端部署仅允许 DEPLOY_REQUIRE_WECHAT_READY=1；请继续使用本地微信 DevTools 预览。" >&2
+        exit 64
+        ;;
+    *)
+        echo "DEPLOY_REQUIRE_WECHAT_READY 只能是 0 或 1。" >&2
+        exit 64
+        ;;
+esac
+
+# 临时目录只保存本轮校验票据和正式提交快照，退出时统一清理。
+cleanup_local_deploy_temp() {
+    if [ -n "$LOCAL_DEPLOY_TEMP_DIR" ] && [ -d "$LOCAL_DEPLOY_TEMP_DIR" ]; then
+        rm -rf -- "$LOCAL_DEPLOY_TEMP_DIR"
+    fi
+}
+trap cleanup_local_deploy_temp EXIT
+
+if [ "$REQUIRE_WECHAT_READY" = "1" ]; then
+    LOCAL_DEPLOY_TEMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/case-weather-deploy.XXXXXX")"
+    VERIFIED_COMMIT_FILE="$LOCAL_DEPLOY_TEMP_DIR/verified-commit"
+    VERIFIED_WECHAT_FORM_FILE="$LOCAL_DEPLOY_TEMP_DIR/wechat-release.snapshot"
     python3 "$SCRIPT_DIR/validate_release_env.py" \
         --wechat-form "$WECHAT_RELEASE_FORM_FILE" \
+        --snapshot-output "$VERIFIED_WECHAT_FORM_FILE" \
         --form-only \
-        --require-wechat "$REQUIRE_WECHAT_READY"
-fi
-load_wechat_release_form
-if [ "$REQUIRE_WECHAT_READY" = "1" ] && [ "$LOCAL_WECHAT_FORM_READY" != "1" ]; then
-    echo "微信正式发布私密表单尚未标记完成。" >&2
-    exit 64
+        --require-wechat "$REQUIRE_WECHAT_READY" \
+        --repo-root "$LOCAL_DIR" \
+        --verified-commit-output "$VERIFIED_COMMIT_FILE"
+    load_wechat_release_form "$VERIFIED_WECHAT_FORM_FILE"
+    if [ "$LOCAL_WECHAT_FORM_READY" != "1" ]; then
+        echo "微信正式发布私密表单尚未标记完成。" >&2
+        exit 64
+    fi
+    FORMAL_WECHAT_CONFIG_ALLOWED="1"
 fi
 if { [ -n "$LOCAL_WX_MINIPROGRAM_APPID" ] && [ -z "$LOCAL_WX_MINIPROGRAM_SECRET" ]; } \
     || { [ -z "$LOCAL_WX_MINIPROGRAM_APPID" ] && [ -n "$LOCAL_WX_MINIPROGRAM_SECRET" ]; }; then
@@ -147,15 +186,19 @@ require_env_value() {
 require_env_value "DEPLOY_SERVER" "$SERVER"
 require_env_value "DEPLOY_USER" "$USER"
 
-case "$REQUIRE_WECHAT_READY" in
-    0|1) ;;
-    *) echo "DEPLOY_REQUIRE_WECHAT_READY 只能是 0 或 1。" >&2; exit 64 ;;
-esac
-
 case "${LOCAL_ALLOW_WEATHER_UNAVAILABLE:-}" in
     ''|0|1) ;;
     *) echo "ALLOW_WEATHER_UNAVAILABLE 只能是 0 或 1。" >&2; exit 64 ;;
 esac
+
+case "${LOCAL_FEATURE_HEAT_EXPOSURE_GIS:-}" in
+    ''|0|1) ;;
+    *) echo "FEATURE_HEAT_EXPOSURE_GIS 只能是 0 或 1。" >&2; exit 64 ;;
+esac
+if [ "$REQUIRE_WECHAT_READY" = "1" ] && [ "$LOCAL_FEATURE_HEAT_EXPOSURE_GIS" != "1" ]; then
+    echo "微信全功能正式发布必须启用 FEATURE_HEAT_EXPOSURE_GIS=1。" >&2
+    exit 64
+fi
 
 if [ -n "$LOCAL_QWEATHER_AUTH_MODE" ]; then
     case "$LOCAL_QWEATHER_AUTH_MODE" in
@@ -207,6 +250,32 @@ if [[ ! "$RELEASE_ID" =~ ^[A-Za-z0-9._-]+$ ]]; then
     echo "DEPLOY_RELEASE_ID 只能包含字母、数字、点、下划线和短横线。" >&2
     exit 1
 fi
+
+RELEASE_SOURCE_DIR="$LOCAL_DIR"
+LOCAL_RELEASE_EXPORT_DIR=""
+
+# 正式发布只上传冻结提交的快照，避免 rsync 在校验后继续读取可变化的工作目录。
+prepare_release_source() {
+    if [ "$FORMAL_WECHAT_CONFIG_ALLOWED" != "1" ]; then
+        return
+    fi
+    if [ -z "$VERIFIED_COMMIT_FILE" ] || [ ! -f "$VERIFIED_COMMIT_FILE" ]; then
+        echo "正式发布缺少同一次校验生成的目标提交票据。" >&2
+        exit 64
+    fi
+    IFS= read -r VERIFIED_COMMIT < "$VERIFIED_COMMIT_FILE"
+    if [[ ! "$VERIFIED_COMMIT" =~ ^[0-9a-f]{40}$ ]]; then
+        echo "正式发布的目标提交票据格式异常。" >&2
+        exit 64
+    fi
+    LOCAL_RELEASE_EXPORT_DIR="$LOCAL_DEPLOY_TEMP_DIR/release-source"
+    mkdir -m 0700 "$LOCAL_RELEASE_EXPORT_DIR"
+    git -C "$LOCAL_DIR" archive --format=tar "$VERIFIED_COMMIT" \
+        | tar -xf - -C "$LOCAL_RELEASE_EXPORT_DIR"
+    RELEASE_SOURCE_DIR="$LOCAL_RELEASE_EXPORT_DIR"
+}
+
+prepare_release_source
 
 if [ -z "${SSHPASS:-}" ] && [ -n "$PASSWORD" ]; then
     export SSHPASS="$PASSWORD"
@@ -278,7 +347,7 @@ remote_env_generate_secret() {
     remote_exec "umask 077; python3 -c 'import secrets; print(secrets.token_hex(32), end=\"\")' | flock $RELEASE_ROOT/deploy-env.lock python3 $RELEASE_APP/scripts/update_env_value.py --file $STAGED_ENV_FILE --key $key --mode if-empty"
 }
 
-# 使用 rsync/scp 上传文件的函数
+# 使用 rsync 上传已准备好的发布源；正式发布源是冻结提交的本机快照。
 upload_files() {
     local remote_target="$1"
     if use_sshpass && [ -n "${SSHPASS:-}" ]; then
@@ -306,7 +375,7 @@ upload_files() {
             --exclude 'tmp' \
             --exclude 'output' \
             --exclude 'blueprints/tools 2.py' \
-            -e "ssh $SSH_OPTS" "$LOCAL_DIR/" "$USER@$SERVER:$remote_target/"
+            -e "ssh $SSH_OPTS" "$RELEASE_SOURCE_DIR/" "$USER@$SERVER:$remote_target/"
         return
     fi
 
@@ -315,7 +384,7 @@ upload_files() {
         return 64
     fi
 
-    rsync -avz --exclude '__pycache__' --exclude '*.pyc' --exclude 'instance' --exclude 'storage' --exclude 'health_weather.db' --exclude 'data/research/*.xlsx' --exclude 'data/research/*.xls' --exclude '.git' --exclude '.claude' --exclude 'venv' --exclude '.venv' --exclude '.venv2' --exclude '.env*' --exclude 'project.private.config.json' --exclude '.superpowers' --exclude '.pytest_cache' --exclude '.playwright-cli' --exclude '.vscode' --exclude '.DS_Store' --exclude 'backups' --exclude 'tmp' --exclude 'output' --exclude 'blueprints/tools 2.py' -e "ssh $SSH_OPTS" "$LOCAL_DIR/" "$USER@$SERVER:$remote_target/"
+    rsync -avz --exclude '__pycache__' --exclude '*.pyc' --exclude 'instance' --exclude 'storage' --exclude 'health_weather.db' --exclude 'data/research/*.xlsx' --exclude 'data/research/*.xls' --exclude '.git' --exclude '.claude' --exclude 'venv' --exclude '.venv' --exclude '.venv2' --exclude '.env*' --exclude 'project.private.config.json' --exclude '.superpowers' --exclude '.pytest_cache' --exclude '.playwright-cli' --exclude '.vscode' --exclude '.DS_Store' --exclude 'backups' --exclude 'tmp' --exclude 'output' --exclude 'blueprints/tools 2.py' -e "ssh $SSH_OPTS" "$RELEASE_SOURCE_DIR/" "$USER@$SERVER:$remote_target/"
 }
 
 echo "步骤1: 测试服务器连接..."
@@ -323,7 +392,7 @@ remote_exec "echo '连接成功'"
 
 echo ""
 echo "步骤2: 检查服务器依赖（常规发布不修改全局软件）..."
-remote_exec "for REQUIRED_COMMAND in python3 rsync sqlite3 curl flock systemctl busctl; do command -v \"\$REQUIRED_COMMAND\" >/dev/null || { echo \"缺少服务器依赖: \$REQUIRED_COMMAND，请先执行一次性服务器初始化。\" >&2; exit 1; }; done"
+remote_exec "for REQUIRED_COMMAND in python3 rsync sqlite3 curl flock systemctl busctl runuser getent groupadd useradd; do command -v \"\$REQUIRED_COMMAND\" >/dev/null || { echo \"缺少服务器依赖: \$REQUIRED_COMMAND，请先执行一次性服务器初始化。\" >&2; exit 1; }; done"
 
 echo ""
 echo "步骤2.1: 检查 Redis（用于生产环境限流存储）..."
@@ -334,8 +403,12 @@ echo "步骤2.2: 检查 systemd 的成功链路能力..."
 remote_exec "SYSTEMD_VERSION=\$(systemd --version | awk 'NR == 1 {print \$2}'); if [ \"\$SYSTEMD_VERSION\" -lt 249 ]; then echo 'systemd 版本过低，无法安全使用 OnSuccess 推送链路。' >&2; exit 1; fi"
 
 echo ""
+echo "步骤2.3: 准备无登录权限的运行账户..."
+remote_exec "getent group $RUNTIME_GROUP >/dev/null || groupadd --system $RUNTIME_GROUP; id -u $RUNTIME_USER >/dev/null 2>&1 || useradd --system --gid $RUNTIME_GROUP --home-dir /nonexistent --shell /usr/sbin/nologin $RUNTIME_USER; [ \"\$(id -gn $RUNTIME_USER)\" = \"$RUNTIME_GROUP\" ] || { echo 'case-weather 运行账户主组异常。' >&2; exit 1; }"
+
+echo ""
 echo "步骤3: 创建不可变发布目录并上传代码..."
-remote_exec "mkdir -p $PROJECT_DIR/instance $PROJECT_DIR/storage $PROJECT_DIR/backups $RELEASE_ROOT/releases && chmod 0700 $PROJECT_DIR/instance $PROJECT_DIR/storage $PROJECT_DIR/backups"
+remote_exec "mkdir -p $PROJECT_DIR/instance $PROJECT_DIR/storage $PROJECT_DIR/run $PROJECT_DIR/backups $PROJECT_DIR/deployments $RELEASE_ROOT/releases; chown $RUNTIME_USER:$RUNTIME_GROUP $PROJECT_DIR/instance $PROJECT_DIR/storage $PROJECT_DIR/run; chmod 0700 $PROJECT_DIR/instance $PROJECT_DIR/storage $PROJECT_DIR/run; chown root:root $PROJECT_DIR/backups $PROJECT_DIR/deployments; chmod 0700 $PROJECT_DIR/backups $PROJECT_DIR/deployments; [ \"\$(stat -c '%u:%g:%a' $PROJECT_DIR/backups)\" = '0:0:700' ] && [ \"\$(stat -c '%u:%g:%a' $PROJECT_DIR/deployments)\" = '0:0:700' ] || { echo 'backups/deployments 权限或所有者异常。' >&2; exit 1; }; chown root:$RUNTIME_GROUP $PROJECT_DIR $RELEASE_ROOT $RELEASE_ROOT/releases; chmod 0750 $PROJECT_DIR $RELEASE_ROOT $RELEASE_ROOT/releases"
 remote_exec "if [ -e $NEW_RELEASE ]; then echo '发布 ID 已存在，拒绝覆盖不可变版本: $NEW_RELEASE' >&2; exit 1; fi; mkdir -p $RELEASE_APP $NEW_RELEASE/systemd"
 upload_files "$RELEASE_APP"
 remote_exec "ln -s $PROJECT_DIR/instance $RELEASE_APP/instance && ln -s $PROJECT_DIR/storage $RELEASE_APP/storage && ln -s $PROJECT_DIR/backups $RELEASE_APP/backups"
@@ -360,20 +433,29 @@ QWEATHER_JWT_PRIVATE_KEY_PATH=
 QWEATHER_CANONICAL_LOCATION=116.20,29.27
 QWEATHER_MONTHLY_REQUEST_LIMIT=40000
 QWEATHER_BUDGET_FAIL_CLOSED=1
+QWEATHER_REQUIRE_PERSISTENT_BUDGET=1
+QWEATHER_DEDICATED_CREDENTIAL_CONFIRMED=
+QWEATHER_CONSOLE_USAGE_MONTH=
+QWEATHER_CONSOLE_USAGE_BASELINE=
 ALLOW_WEATHER_UNAVAILABLE=
 WEATHER_CACHE_TTL_MINUTES=30
 FORECAST_CACHE_TTL_MINUTES=30
 QWEATHER_WARNING_CACHE_TTL_MINUTES=30
 WEATHER_SYNC_LOCATIONS=都昌县
 AMAP_KEY=
+FEATURE_WEB_AI=0
+SILICONFLOW_API_KEY=
+SILICONFLOW_API_BASE=https://api.siliconflow.cn/v1
 WXPUSHER_APP_TOKEN=
 WXPUSHER_API_BASE=https://wxpusher.zjiecode.com/api
+DISPATCH_LOCK_PATH=$PROJECT_DIR/run/case-weather-dispatch.lock
+FEATURE_HEAT_EXPOSURE_GIS=0
 WX_MINIPROGRAM_APPID=
 WX_MINIPROGRAM_SECRET=
 WX_MINIPROGRAM_OPENID_PEPPER=
 WX_MINIPROGRAM_SESSION_SECRET=
 WX_MINIPROGRAM_PRIVACY_VERSION=2026-07-18
-PUBLIC_BASE_URL=
+PUBLIC_BASE_URL=https://yilaoweather.org
 ALLOW_INSECURE_PUBLIC_BASE_URL=
 EOF
 echo '已创建首次部署配置'; fi; cp -a $PROJECT_DIR/.env $STAGED_ENV_FILE; chmod 0600 $STAGED_ENV_FILE"
@@ -383,29 +465,27 @@ echo "步骤4.1: 原子补齐候选配置..."
 # 所有候选值均通过 stdin 写入；旧服务在激活事务前继续读取原配置。
 remote_env_update "DATABASE_URI" "sqlite:///health_weather.db" "if-empty"
 remote_env_update "QWEATHER_AUTH_MODE" "disabled" "if-empty"
-remote_env_update "QWEATHER_CANONICAL_LOCATION" "116.20,29.27" "if-empty"
-remote_env_update "QWEATHER_MONTHLY_REQUEST_LIMIT" "40000" "if-empty"
-remote_env_update "QWEATHER_BUDGET_FAIL_CLOSED" "1" "if-empty"
-remote_env_update "WEATHER_CACHE_TTL_MINUTES" "30" "if-empty"
-remote_env_update "FORECAST_CACHE_TTL_MINUTES" "30" "if-empty"
-remote_env_update "QWEATHER_WARNING_CACHE_TTL_MINUTES" "30" "if-empty"
-remote_env_update "WEATHER_SYNC_LOCATIONS" "都昌县" "if-empty"
-remote_env_update "WXPUSHER_API_BASE" "https://wxpusher.zjiecode.com/api" "if-empty"
+remote_env_update "QWEATHER_CANONICAL_LOCATION" "116.20,29.27" "always"
+remote_env_update "QWEATHER_MONTHLY_REQUEST_LIMIT" "40000" "always"
+remote_env_update "QWEATHER_BUDGET_FAIL_CLOSED" "1" "always"
+remote_env_update "QWEATHER_REQUIRE_PERSISTENT_BUDGET" "1" "always"
+remote_env_update "WEATHER_CACHE_TTL_MINUTES" "30" "always"
+remote_env_update "FORECAST_CACHE_TTL_MINUTES" "30" "always"
+remote_env_update "QWEATHER_WARNING_CACHE_TTL_MINUTES" "30" "always"
+remote_env_update "WEATHER_SYNC_LOCATIONS" "都昌县" "always"
+remote_env_update "WXPUSHER_API_BASE" "https://wxpusher.zjiecode.com/api" "always"
+remote_env_update "FEATURE_WEB_AI" "0" "always"
+remote_env_update "SILICONFLOW_API_KEY" "" "always"
+remote_env_update "SILICONFLOW_API_BASE" "https://api.siliconflow.cn/v1" "always"
+remote_env_update "DISPATCH_LOCK_PATH" "$PROJECT_DIR/run/case-weather-dispatch.lock" "always"
+remote_env_update "FEATURE_HEAT_EXPOSURE_GIS" "0" "if-empty"
 remote_env_update "WX_MINIPROGRAM_PRIVACY_VERSION" "2026-07-18" "if-empty"
 
 echo ""
 echo "步骤4.2: 安全写入显式提供的发布配置..."
-# PUBLIC_BASE_URL 必须优先使用 HTTPS。HTTP/IP 只允许显式临时豁免。
-if [ -n "$LOCAL_PUBLIC_BASE_URL" ]; then
-    remote_env_update "PUBLIC_BASE_URL" "$LOCAL_PUBLIC_BASE_URL" "always"
-else
-    remote_env_update "PUBLIC_BASE_URL" "" "if-empty"
-fi
-if [ -n "${LOCAL_ALLOW_INSECURE_PUBLIC_BASE_URL:-}" ]; then
-    remote_env_update "ALLOW_INSECURE_PUBLIC_BASE_URL" "$LOCAL_ALLOW_INSECURE_PUBLIC_BASE_URL" "always"
-else
-    remote_env_update "ALLOW_INSECURE_PUBLIC_BASE_URL" "" "if-empty"
-fi
+# 正式入口与第三方凭证接收端每次部署都收敛到固定 origin。
+remote_env_update "PUBLIC_BASE_URL" "https://yilaoweather.org" "always"
+remote_env_update "ALLOW_INSECURE_PUBLIC_BASE_URL" "" "always"
 
 if [ -n "$LOCAL_QWEATHER_AUTH_MODE" ]; then
     remote_env_update "QWEATHER_AUTH_MODE" "$LOCAL_QWEATHER_AUTH_MODE" "always"
@@ -441,41 +521,35 @@ fi
 if [ -n "$LOCAL_AMAP_KEY" ]; then
     remote_env_update "AMAP_KEY" "$LOCAL_AMAP_KEY" "always"
 fi
-if [ -n "$LOCAL_WXPUSHER_APP_TOKEN" ]; then
+if [ -n "$LOCAL_FEATURE_HEAT_EXPOSURE_GIS" ]; then
+    remote_env_update "FEATURE_HEAT_EXPOSURE_GIS" "$LOCAL_FEATURE_HEAT_EXPOSURE_GIS" "always"
+fi
+# 只有同一次验证快照同时满足 require=1 与 ready=1，才允许写入正式凭据。
+if [ "$FORMAL_WECHAT_CONFIG_ALLOWED" = "1" ]; then
     remote_env_update "WXPUSHER_APP_TOKEN" "$LOCAL_WXPUSHER_APP_TOKEN" "always"
-fi
-if [ -n "$LOCAL_WX_MINIPROGRAM_APPID" ]; then
     remote_env_update "WX_MINIPROGRAM_APPID" "$LOCAL_WX_MINIPROGRAM_APPID" "always"
-fi
-if [ -n "$LOCAL_WX_MINIPROGRAM_SECRET" ]; then
     remote_env_update "WX_MINIPROGRAM_SECRET" "$LOCAL_WX_MINIPROGRAM_SECRET" "always"
-fi
-# 首次游客预览保持四项微信认证配置全空；有微信凭证时才补齐两枚服务器密钥。
-if [ "$REQUIRE_WECHAT_READY" = "1" ] \
-    || [ -n "$LOCAL_WX_MINIPROGRAM_APPID" ] \
-    || [ -n "$LOCAL_WX_MINIPROGRAM_SECRET" ]; then
     remote_env_generate_secret "WX_MINIPROGRAM_OPENID_PEPPER"
     remote_env_generate_secret "WX_MINIPROGRAM_SESSION_SECRET"
-fi
-if [ -n "$LOCAL_WX_MINIPROGRAM_OPENID_PEPPER" ]; then
-    remote_env_update "WX_MINIPROGRAM_OPENID_PEPPER" "$LOCAL_WX_MINIPROGRAM_OPENID_PEPPER" "if-empty"
-fi
-if [ -n "$LOCAL_WX_MINIPROGRAM_SESSION_SECRET" ]; then
-    remote_env_update "WX_MINIPROGRAM_SESSION_SECRET" "$LOCAL_WX_MINIPROGRAM_SESSION_SECRET" "if-empty"
-fi
-if [ -n "$LOCAL_WX_MINIPROGRAM_PRIVACY_VERSION" ]; then
     remote_env_update "WX_MINIPROGRAM_PRIVACY_VERSION" "$LOCAL_WX_MINIPROGRAM_PRIVACY_VERSION" "always"
+    remote_env_update "QWEATHER_DEDICATED_CREDENTIAL_CONFIRMED" "$LOCAL_QWEATHER_DEDICATED_CREDENTIAL_CONFIRMED" "always"
+    remote_env_update "QWEATHER_CONSOLE_USAGE_MONTH" "$LOCAL_QWEATHER_CONSOLE_USAGE_MONTH" "always"
+    remote_env_update "QWEATHER_CONSOLE_USAGE_BASELINE" "$LOCAL_QWEATHER_CONSOLE_USAGE_BASELINE" "always"
 fi
 remote_exec "python3 $RELEASE_APP/scripts/validate_release_env.py --file $STAGED_ENV_FILE --require-wechat $REQUIRE_WECHAT_READY"
 
 echo ""
 echo "步骤6: 为新版本创建独立虚拟环境..."
-remote_exec "python3 -m venv $RELEASE_VENV && $RELEASE_VENV/bin/pip install --upgrade pip && $RELEASE_VENV/bin/pip install -r $RELEASE_APP/requirements.txt && $RELEASE_VENV/bin/pip install gunicorn"
+remote_exec "set -e; EXPECTED_LOCK_SHA=c7e450c30d7d3c56bdf210f69a58620cba9d99e462e0e2c254ab45456271f853; ACTUAL_LOCK_SHA=\$(python3 -c 'import hashlib; print(hashlib.sha256(open(\"$RELEASE_APP/requirements.lock\", \"rb\").read()).hexdigest())'); [ \"\$ACTUAL_LOCK_SHA\" = \"\$EXPECTED_LOCK_SHA\" ] || { echo 'requirements.lock 摘要不匹配。' >&2; exit 1; }; python3 -m venv $RELEASE_VENV; $RELEASE_VENV/bin/python -m pip install --index-url https://pypi.org/simple --require-hashes --only-binary=:all: -r $RELEASE_APP/requirements.lock; [ -x $RELEASE_VENV/bin/gunicorn ] || { echo '锁定依赖安装后缺少 gunicorn。' >&2; exit 1; }; umask 077; mkdir -p $NEW_RELEASE/private-metadata; $RELEASE_VENV/bin/python --version > $NEW_RELEASE/private-metadata/python-version.txt 2>&1; printf '%s\n' \"\$ACTUAL_LOCK_SHA\" > $NEW_RELEASE/private-metadata/requirements-lock.sha256; $RELEASE_VENV/bin/python -m pip inspect --local > $NEW_RELEASE/private-metadata/pip-inspect.json; chmod 0700 $NEW_RELEASE/private-metadata; chmod 0600 $NEW_RELEASE/private-metadata/python-version.txt $NEW_RELEASE/private-metadata/requirements-lock.sha256 $NEW_RELEASE/private-metadata/pip-inspect.json"
+remote_exec "$RELEASE_VENV/bin/python $RELEASE_APP/scripts/validate_release_env.py --file $STAGED_ENV_FILE --require-wechat $REQUIRE_WECHAT_READY --probe-persistent-budget"
+if [ "$FORMAL_WECHAT_CONFIG_ALLOWED" = "1" ]; then
+    # commit 只含十六进制字符，写入 release 私有 metadata 后由激活脚本再次核对。
+    remote_exec "umask 077; printf '%s\n' '$VERIFIED_COMMIT' > $NEW_RELEASE/private-metadata/source-commit.txt; chmod 0600 $NEW_RELEASE/private-metadata/source-commit.txt"
+fi
 
 echo ""
 echo "步骤6.1: 在停止生产服务前完成隔离测试..."
 remote_exec "cd $RELEASE_APP && DATABASE_URI=sqlite:///:memory: DEBUG=true SECRET_KEY=release-preflight-secret-key-123456789 PAIR_TOKEN_PEPPER=release-preflight-pair-pepper-123456789 RATE_LIMIT_STORAGE_URI=memory:// REDIS_URL= QWEATHER_AUTH_MODE=disabled QWEATHER_KEY= QWEATHER_API_BASE= AMAP_KEY= AMAP_WEB_SERVICE_KEY= AMAP_SECURITY_JS_CODE= SILICONFLOW_API_KEY= WXPUSHER_APP_TOKEN= WX_MINIPROGRAM_APPID= WX_MINIPROGRAM_SECRET= WX_MINIPROGRAM_OPENID_PEPPER= WX_MINIPROGRAM_SESSION_SECRET= DEMO_MODE=1 $RELEASE_VENV/bin/python -m pytest -q"
-remote_exec "ln -s $PROJECT_DIR/.env $RELEASE_APP/.env"
 
 echo ""
 echo "步骤6.2: 为新版本生成 systemd 单元模板..."
@@ -485,8 +559,30 @@ Description=Case Weather Flask Application
 After=network.target
 
 [Service]
-User=root
+User=case-weather
+Group=case-weather
 UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+ProcSubset=pid
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+RestrictRealtime=true
+LockPersonality=true
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+ReadOnlyPaths=$CURRENT_LINK $PROJECT_DIR/.env
+ReadWritePaths=$PROJECT_DIR/instance $PROJECT_DIR/storage $PROJECT_DIR/run
 WorkingDirectory=$CURRENT_LINK/app
 EnvironmentFile=$PROJECT_DIR/.env
 Environment=PYTHONUNBUFFERED=1
@@ -506,8 +602,30 @@ OnSuccess=case-weather-dispatch.service
 
 [Service]
 Type=oneshot
-User=root
+User=case-weather
+Group=case-weather
 UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+ProcSubset=pid
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+RestrictRealtime=true
+LockPersonality=true
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+ReadOnlyPaths=$CURRENT_LINK $PROJECT_DIR/.env
+ReadWritePaths=$PROJECT_DIR/instance $PROJECT_DIR/storage $PROJECT_DIR/run
 WorkingDirectory=$CURRENT_LINK/app
 EnvironmentFile=$PROJECT_DIR/.env
 Environment=PYTHONUNBUFFERED=1
@@ -533,16 +651,41 @@ EOF"
 remote_exec "cat > $NEW_RELEASE/systemd/case-weather-cache-bootstrap.service << 'EOF'
 [Unit]
 Description=Case Weather - start the first cache refresh after a full 30-minute delay
-Wants=case-weather-cache.service
-After=network.target case-weather.service case-weather-cache.service
+After=network.target case-weather.service
 OnSuccess=case-weather-cache.timer
 
 [Service]
 Type=oneshot
-User=root
+User=case-weather
+Group=case-weather
 UMask=0077
-# 真实同步由 Wants 拉起；本单元在同步结束后成功退出，再启动常规定时器。
-ExecStart=/usr/bin/true
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+ProcSubset=pid
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+RestrictRealtime=true
+LockPersonality=true
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+ReadOnlyPaths=$CURRENT_LINK $PROJECT_DIR/.env
+ReadWritePaths=$PROJECT_DIR/instance $PROJECT_DIR/storage $PROJECT_DIR/run
+WorkingDirectory=$CURRENT_LINK/app
+EnvironmentFile=$PROJECT_DIR/.env
+Environment=PYTHONUNBUFFERED=1
+Environment=VENV_PY=$CURRENT_LINK/venv/bin/python
+# bootstrap 自身执行同步；只有同步与成功 marker 都完成后才启动常规定时器。
+ExecStart=/bin/bash $CURRENT_LINK/app/scripts/weather_cache_sync.sh
 TimeoutStartSec=16min
 EOF
 
@@ -567,12 +710,33 @@ After=network.target case-weather.service case-weather-cache.service
 
 [Service]
 Type=oneshot
-User=root
+User=case-weather
+Group=case-weather
 UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+ProcSubset=pid
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+RestrictRealtime=true
+LockPersonality=true
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+ReadOnlyPaths=$CURRENT_LINK $PROJECT_DIR/.env
+ReadWritePaths=$PROJECT_DIR/instance $PROJECT_DIR/storage $PROJECT_DIR/run
 WorkingDirectory=$CURRENT_LINK/app
 EnvironmentFile=$PROJECT_DIR/.env
 Environment=PYTHONUNBUFFERED=1
-Environment=DEPLOY_STATE_DIR=$PROJECT_DIR
 ExecStart=/bin/bash $CURRENT_LINK/app/scripts/dispatch_alerts.sh --dedupe-hours 6
 TimeoutStartSec=15min
 EOF"
@@ -584,8 +748,30 @@ After=network.target case-weather.service
 
 [Service]
 Type=oneshot
-User=root
+User=case-weather
+Group=case-weather
 UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+ProcSubset=pid
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+RestrictRealtime=true
+LockPersonality=true
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+ReadOnlyPaths=$CURRENT_LINK $PROJECT_DIR/.env
+ReadWritePaths=$PROJECT_DIR/instance $PROJECT_DIR/storage $PROJECT_DIR/run
 WorkingDirectory=$CURRENT_LINK/app
 EnvironmentFile=$PROJECT_DIR/.env
 Environment=PYTHONUNBUFFERED=1
@@ -615,13 +801,34 @@ StartLimitBurst=20
 
 [Service]
 Type=oneshot
-User=root
+User=case-weather
+Group=case-weather
 UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+ProcSubset=pid
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+RestrictRealtime=true
+LockPersonality=true
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+ReadOnlyPaths=$CURRENT_LINK $PROJECT_DIR/.env
+ReadWritePaths=$PROJECT_DIR/instance $PROJECT_DIR/storage $PROJECT_DIR/run
 WorkingDirectory=$CURRENT_LINK/app
 EnvironmentFile=$PROJECT_DIR/.env
 Environment=PYTHONUNBUFFERED=1
 Environment=VENV_PY=$CURRENT_LINK/venv/bin/python
-Environment=DEPLOY_STATE_DIR=$PROJECT_DIR
 ExecStart=/bin/bash $CURRENT_LINK/app/scripts/cleanup_usage_events.sh
 Restart=on-failure
 RestartSec=1min
@@ -641,8 +848,16 @@ WantedBy=timers.target
 EOF"
 
 echo ""
+echo "步骤6.3: 收敛发布文件与运行数据权限..."
+remote_exec "chown -R root:$RUNTIME_GROUP $NEW_RELEASE; chmod -R g+rX,o-rwx $NEW_RELEASE; chown root:$RUNTIME_GROUP $PROJECT_DIR/.env $STAGED_ENV_FILE; chmod 0640 $PROJECT_DIR/.env $STAGED_ENV_FILE; chown $RUNTIME_USER:$RUNTIME_GROUP $PROJECT_DIR/instance $PROJECT_DIR/storage $PROJECT_DIR/run; chmod 0700 $PROJECT_DIR/instance $PROJECT_DIR/storage $PROJECT_DIR/run"
+if [ "$FORMAL_WECHAT_CONFIG_ALLOWED" = "1" ]; then
+    # 控制台当月已用量只做原子 max 合并，绝不降低 Redis 中已有计数。
+    remote_exec "$RELEASE_VENV/bin/python $RELEASE_APP/scripts/validate_release_env.py --file $STAGED_ENV_FILE --require-wechat 1 --probe-persistent-budget --seed-persistent-budget"
+fi
+
+echo ""
 echo "步骤7: 在单个服务器事务中备份、迁移、切换并验活..."
-remote_exec "STATE_DIR=$PROJECT_DIR RELEASE_ROOT=$RELEASE_ROOT NEW_RELEASE=$NEW_RELEASE CURRENT_LINK=$CURRENT_LINK ENV_FILE=$PROJECT_DIR/.env STAGED_ENV_FILE=$STAGED_ENV_FILE HEALTH_URL=http://127.0.0.1:5000/healthz RECOVERY_ACKNOWLEDGED_TRANSACTION=$RECOVERY_ACKNOWLEDGED_TRANSACTION bash $RELEASE_APP/scripts/activate_release.sh"
+remote_exec "STATE_DIR=$PROJECT_DIR RELEASE_ROOT=$RELEASE_ROOT NEW_RELEASE=$NEW_RELEASE CURRENT_LINK=$CURRENT_LINK ENV_FILE=$PROJECT_DIR/.env STAGED_ENV_FILE=$STAGED_ENV_FILE HEALTH_URL=http://127.0.0.1:5000/healthz REQUIRE_WECHAT_READY=$REQUIRE_WECHAT_READY EXPECTED_RELEASE_COMMIT=$VERIFIED_COMMIT RECOVERY_ACKNOWLEDGED_TRANSACTION=$RECOVERY_ACKNOWLEDGED_TRANSACTION RUNTIME_USER=$RUNTIME_USER RUNTIME_GROUP=$RUNTIME_GROUP bash $RELEASE_APP/scripts/activate_release.sh"
 
 echo ""
 echo "步骤8: 服务、timer、OnSuccess、current 链接与健康检查已在原子激活事务内通过。"

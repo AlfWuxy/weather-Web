@@ -1,7 +1,10 @@
 # -*- coding: utf-8 -*-
 """不可变发布激活事务的行为级回归测试。"""
 
+import hashlib
 import os
+import grp
+import pwd
 import sqlite3
 import subprocess
 import sys
@@ -29,6 +32,7 @@ SERVICE_UNITS = (
 )
 INSTALL_UNITS = MANAGED_TIMER_UNITS + SERVICE_UNITS
 ALL_UNITS = INSTALL_UNITS + LEGACY_UNITS
+FORMAL_COMMIT = 'a' * 40
 
 
 def _write_executable(path, content):
@@ -83,6 +87,18 @@ if command == 'is-active':
         '',
     )
     if active_state:
+        stop_on_check = os.environ.get('FAKE_STOP_BOOTSTRAP_ON_ACTIVE_CHECK', '')
+        if (
+            unit == 'case-weather-cache-bootstrap.timer'
+            and '--quiet' in args
+            and stop_on_check
+        ):
+            counter = state / 'bootstrap-active-check-count'
+            count = int(counter.read_text(encoding='utf-8')) + 1 if counter.exists() else 1
+            counter.write_text(str(count), encoding='utf-8')
+            if count == int(stop_on_check):
+                marker('active').unlink(missing_ok=True)
+                raise SystemExit(3)
         if '--quiet' not in args:
             print(active_state)
         raise SystemExit(0)
@@ -166,6 +182,7 @@ def _prepare_transaction(
         state_dir / 'backups',
         old_release,
         new_release / 'app' / 'scripts',
+        new_release / 'private-metadata',
         new_release / 'venv' / 'bin',
         new_release / 'systemd',
         unit_dir,
@@ -179,6 +196,21 @@ def _prepare_transaction(
         encoding='utf-8',
     )
     current_link.symlink_to(old_release)
+
+    requirements_lock = (ROOT / 'requirements.lock').read_bytes()
+    (new_release / 'app' / 'requirements.lock').write_bytes(requirements_lock)
+    (new_release / 'private-metadata' / 'requirements-lock.sha256').write_text(
+        hashlib.sha256(requirements_lock).hexdigest() + '\n',
+        encoding='utf-8',
+    )
+    (new_release / 'private-metadata' / 'python-version.txt').write_text(
+        sys.version + '\n',
+        encoding='utf-8',
+    )
+    (new_release / 'private-metadata' / 'pip-inspect.json').write_text(
+        '{}\n',
+        encoding='utf-8',
+    )
 
     connection = sqlite3.connect(database_file)
     connection.execute('CREATE TABLE release_state (value TEXT NOT NULL)')
@@ -270,8 +302,15 @@ printf 't 2000000000\n'
         'FAKE_SYSTEMCTL_STATE': str(fake_state),
         'HEALTH_ATTEMPTS': '1',
         'HEALTH_SLEEP_SECONDS': '0',
+        'POST_COMMIT_STABILITY_SECONDS': '0',
+        'POST_COMMIT_STABILITY_INTERVAL_SECONDS': '1',
         'FAKE_CANDIDATE_HEALTH_OK': '1' if candidate_health_ok else '0',
         'FAKE_PUBLIC_HEALTH_OK': '1' if public_health_ok else '0',
+        'RUNTIME_USER': pwd.getpwuid(os.getuid()).pw_name,
+        'RUNTIME_GROUP': grp.getgrgid(os.getgid()).gr_name,
+        'CHOWN_BIN': '/usr/bin/true',
+        'CONTROL_OWNER_UID': str(os.getuid()),
+        'CONTROL_OWNER_GID': str(os.getgid()),
     })
     return {
         'env': environment,
@@ -295,6 +334,143 @@ def _run_activation(transaction):
         capture_output=True,
         check=False,
     )
+
+
+def _configure_formal_smoke(transaction, *, provider='QWeather'):
+    """为激活事务准备完全离线的正式天气烟测桩。"""
+    staged_text = """DEBUG=true
+RELEASE_VALUE=new
+QWEATHER_AUTH_MODE=api_key
+QWEATHER_KEY=test-qweather-key
+QWEATHER_API_BASE=https://example.invalid
+QWEATHER_CANONICAL_LOCATION=116.20,29.27
+QWEATHER_MONTHLY_REQUEST_LIMIT=40000
+QWEATHER_BUDGET_FAIL_CLOSED=1
+QWEATHER_REQUIRE_PERSISTENT_BUDGET=1
+ALLOW_WEATHER_UNAVAILABLE=0
+WEATHER_CACHE_TTL_MINUTES=30
+FORECAST_CACHE_TTL_MINUTES=30
+QWEATHER_WARNING_CACHE_TTL_MINUTES=30
+WEATHER_SYNC_LOCATIONS=都昌县
+WXPUSHER_APP_TOKEN=test-wxpusher-token
+FEATURE_HEAT_EXPOSURE_GIS=1
+WX_MINIPROGRAM_APPID=wx1234567890abcdef
+WX_MINIPROGRAM_SECRET=test-miniprogram-secret
+WX_MINIPROGRAM_PRIVACY_VERSION=2026-07-18
+PUBLIC_BASE_URL=https://yilaoweather.org
+"""
+    (transaction['new_release'] / 'staged.env').write_text(staged_text, encoding='utf-8')
+    (transaction['new_release'] / 'private-metadata' / 'source-commit.txt').write_text(
+        FORMAL_COMMIT + '\n',
+        encoding='utf-8',
+    )
+    transaction['env']['REQUIRE_WECHAT_READY'] = '1'
+    transaction['env']['EXPECTED_RELEASE_COMMIT'] = FORMAL_COMMIT
+    counter_file = transaction['state_dir'] / 'formal-smoke-request-count'
+    weather_sync = transaction['new_release'] / 'app' / 'scripts' / 'weather_cache_sync.sh'
+    _write_executable(
+        weather_sync,
+        f"""#!/bin/bash
+set -euo pipefail
+if [ "$#" -ne 1 ] || [ "$1" != "--skip-nowcast" ]; then
+    echo '正式烟测必须显式跳过 nowcast' >&2
+    exit 91
+fi
+"$VENV_PY" - "$DATABASE_FILE" "{counter_file}" "{provider}" <<'PY'
+import json
+import sqlite3
+import sys
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+database, counter_path, provider = sys.argv[1:]
+counter = Path(counter_path)
+count = int(counter.read_text(encoding='utf-8')) + 1 if counter.exists() else 1
+counter.write_text(str(count), encoding='utf-8')
+now = datetime.now(timezone.utc)
+snapshot_id = f'formal-snapshot-{{count}}'
+current = {{'temperature': 31, 'humidity': 70, 'data_source': provider, 'is_mock': False}}
+forecast = [{{
+    'date': now.date().isoformat(),
+    'temperature_max': 34,
+    'temperature_min': 27,
+    'data_source': provider,
+    'is_mock': False,
+}}]
+source_status = {{
+    'weather': {{'available': True, 'provider': provider, 'is_mock': False}},
+    'forecast': {{
+        'available': True,
+        'providers': [provider],
+        'meta': {{'source': provider}},
+    }},
+    'warnings': {{'available': True, 'count': 0, 'status': 'ok'}},
+}}
+connection = sqlite3.connect(database)
+try:
+    connection.execute(
+        '''
+        INSERT INTO miniprogram_snapshots(
+            snapshot_id, fetched_at, expires_at, available,
+            current_json, forecast_json, source_status_json
+        ) VALUES (?, ?, ?, 1, ?, ?, ?)
+        ''',
+        (
+            snapshot_id,
+            now.isoformat(),
+            (now + timedelta(hours=1)).isoformat(),
+            json.dumps(current),
+            json.dumps(forecast),
+            json.dumps(source_status),
+        ),
+    )
+    connection.commit()
+finally:
+    connection.close()
+PY
+""",
+    )
+    connection = sqlite3.connect(transaction['database_file'])
+    try:
+        connection.execute(
+            '''
+            CREATE TABLE IF NOT EXISTS miniprogram_snapshots (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                snapshot_id TEXT NOT NULL UNIQUE,
+                fetched_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                available INTEGER NOT NULL,
+                current_json TEXT,
+                forecast_json TEXT,
+                source_status_json TEXT
+            )
+            '''
+        )
+        connection.commit()
+    finally:
+        connection.close()
+    return staged_text, counter_file
+
+
+def _configure_formal_jwt_smoke(transaction, private_key, *, provider='QWeather'):
+    staged_text, counter_file = _configure_formal_smoke(
+        transaction,
+        provider=provider,
+    )
+    jwt_text = staged_text.replace(
+        "QWEATHER_AUTH_MODE=api_key\nQWEATHER_KEY=test-qweather-key\n",
+        "QWEATHER_AUTH_MODE=jwt\n"
+        "QWEATHER_KEY=\n"
+        "QWEATHER_JWT_KID=test-kid\n"
+        "QWEATHER_JWT_PROJECT_ID=test-project\n"
+        f"QWEATHER_JWT_PRIVATE_KEY_PATH={private_key}\n",
+    )
+    assert jwt_text != staged_text
+    (transaction['new_release'] / 'staged.env').write_text(
+        jwt_text,
+        encoding='utf-8',
+    )
+    return jwt_text, counter_file
 
 
 def test_success_switches_release_only_after_migration_and_health(tmp_path):
@@ -334,6 +510,25 @@ def test_success_switches_release_only_after_migration_and_health(tmp_path):
         (transaction['state_dir'] / 'backups').rglob('COMMITTED')
     )
     assert len(committed_markers) == 1
+
+
+def test_stability_window_detects_post_activation_timer_cleanup(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    transaction['env']['POST_COMMIT_STABILITY_SECONDS'] = '1'
+    transaction['env']['FAKE_STOP_BOOTSTRAP_ON_ACTIVE_CHECK'] = '3'
+
+    result = _run_activation(transaction)
+
+    assert result.returncode != 0
+    assert '发布后单元未处于 active: case-weather-cache-bootstrap.timer' in result.stderr
+    markers = list(
+        (transaction['state_dir'] / 'backups').rglob('POST_COMMIT_ATTENTION.txt')
+    )
+    assert len(markers) == 1
+    assert not list((transaction['state_dir'] / 'backups').rglob('COMMITTED'))
+    assert not (
+        transaction['fake_state'] / 'case-weather-cache-bootstrap.timer.active'
+    ).exists()
 
 
 def test_migration_failure_restores_database_release_and_unit_state(tmp_path):
@@ -612,6 +807,79 @@ def test_rollback_required_blocks_until_exact_transaction_is_acknowledged(tmp_pa
     assert transaction['current_link'].resolve() == transaction['new_release'].resolve()
 
 
+def test_recovery_ack_rejects_symlink_escape_and_symlinked_marker(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    transaction_root = (
+        transaction['state_dir'] / 'backups' / 'deploy-transactions'
+    )
+    transaction_root.mkdir()
+    outside = tmp_path / 'outside-transaction'
+    outside.mkdir()
+    (outside / 'ROLLBACK_REQUIRED.txt').write_text(
+        'manual review required\n',
+        encoding='utf-8',
+    )
+    escaped = transaction_root / 'linked-transaction'
+    escaped.symlink_to(outside, target_is_directory=True)
+    transaction['env']['RECOVERY_ACKNOWLEDGED_TRANSACTION'] = str(escaped)
+
+    escaped_result = _run_activation(transaction)
+
+    assert escaped_result.returncode != 0
+    assert 'realpath' in escaped_result.stderr
+    assert not (outside / 'RECOVERY_CONFIRMED').exists()
+    assert transaction['current_link'].resolve() == transaction['old_release'].resolve()
+
+    escaped.unlink()
+    direct = transaction_root / 'direct-transaction'
+    direct.mkdir()
+    marker_target = tmp_path / 'outside-marker.txt'
+    marker_target.write_text('manual review required\n', encoding='utf-8')
+    (direct / 'ROLLBACK_REQUIRED.txt').symlink_to(marker_target)
+    transaction['env']['RECOVERY_ACKNOWLEDGED_TRANSACTION'] = str(direct)
+
+    marker_result = _run_activation(transaction)
+
+    assert marker_result.returncode != 0
+    assert '故障标记不得为符号链接' in marker_result.stderr
+    assert not (direct / 'RECOVERY_CONFIRMED').exists()
+
+    canonical = transaction_root / 'canonical-transaction'
+    canonical.mkdir()
+    (canonical / 'ROLLBACK_REQUIRED.txt').write_text(
+        'manual review required\n',
+        encoding='utf-8',
+    )
+    nested = transaction_root / 'nested'
+    nested.mkdir()
+    transaction['env']['RECOVERY_ACKNOWLEDGED_TRANSACTION'] = (
+        f"{nested}/../{canonical.name}"
+    )
+
+    dotdot_result = _run_activation(transaction)
+
+    assert dotdot_result.returncode != 0
+    assert 'realpath' in dotdot_result.stderr
+    assert not (canonical / 'RECOVERY_CONFIRMED').exists()
+
+
+def test_control_directories_are_private_and_owner_asserted(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+
+    result = _run_activation(transaction)
+
+    assert result.returncode == 0, result.stderr
+    for directory in (
+        transaction['state_dir'] / 'backups',
+        transaction['state_dir'] / 'deployments',
+        transaction['state_dir'] / 'backups' / 'deploy-transactions',
+    ):
+        file_stat = directory.stat()
+        assert file_stat.st_mode & 0o777 == 0o700
+        assert file_stat.st_uid == os.getuid()
+        assert file_stat.st_gid == os.getgid()
+
+
 def test_committed_transaction_with_post_commit_attention_still_blocks(tmp_path):
     transaction = _prepare_transaction(tmp_path)
     failed = (
@@ -634,3 +902,200 @@ def test_committed_transaction_with_post_commit_attention_still_blocks(tmp_path)
     assert '尚未人工确认' in result.stderr
     assert transaction['current_link'].resolve() == transaction['old_release'].resolve()
     assert _database_value(transaction['database_file']) == 'old'
+
+
+def test_formal_activation_rejects_release_commit_metadata_mismatch_before_mutation(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    _staged_text, counter_file = _configure_formal_smoke(transaction)
+    (transaction['new_release'] / 'private-metadata' / 'source-commit.txt').write_text(
+        ('b' * 40) + '\n',
+        encoding='utf-8',
+    )
+
+    result = _run_activation(transaction)
+
+    assert result.returncode != 0
+    assert '上传 release 与冻结 commit 票据不一致' in result.stderr
+    assert transaction['current_link'].resolve() == transaction['old_release'].resolve()
+    assert _database_value(transaction['database_file']) == 'old'
+    assert not counter_file.exists()
+
+
+def test_formal_qweather_smoke_writes_completed_receipt_and_reuses_without_request(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    _staged_text, counter_file = _configure_formal_smoke(transaction)
+
+    first = _run_activation(transaction)
+
+    assert first.returncode == 0, first.stderr
+    assert counter_file.read_text(encoding='utf-8') == '1'
+    receipt_dirs = list(
+        (transaction['state_dir'] / 'deployments' / 'formal-cache-smokes').iterdir()
+    )
+    assert len(receipt_dirs) == 1
+    receipt = receipt_dirs[0]
+    assert (receipt / 'started').is_file()
+    assert (receipt / 'completed').is_file()
+    assert 'snapshot_id=formal-snapshot-1' in (receipt / 'completed').read_text(
+        encoding='utf-8'
+    )
+
+    # 动态网络闸门和非天气发布字段轮换都不能获得第二次自动烟测机会。
+    rotated_config = (transaction['state_dir'] / '.env').read_text(encoding='utf-8')
+    for old, new in (
+        ('WXPUSHER_APP_TOKEN=test-wxpusher-token', 'WXPUSHER_APP_TOKEN=rotated-token'),
+        ('FEATURE_HEAT_EXPOSURE_GIS=1', 'FEATURE_HEAT_EXPOSURE_GIS=0'),
+        ('WX_MINIPROGRAM_APPID=wx1234567890abcdef', 'WX_MINIPROGRAM_APPID=wxabcdef1234567890'),
+        ('WX_MINIPROGRAM_SECRET=test-miniprogram-secret', 'WX_MINIPROGRAM_SECRET=rotated-secret'),
+        ('WX_MINIPROGRAM_PRIVACY_VERSION=2026-07-18', 'WX_MINIPROGRAM_PRIVACY_VERSION=2026-07-19'),
+        ('PUBLIC_BASE_URL=https://yilaoweather.org', 'PUBLIC_BASE_URL=https://preview.example.invalid'),
+    ):
+        assert old in rotated_config
+        rotated_config = rotated_config.replace(old, new)
+    (transaction['new_release'] / 'staged.env').write_text(
+        rotated_config,
+        encoding='utf-8',
+    )
+    second = _run_activation(transaction)
+
+    assert second.returncode == 0, second.stderr
+    assert counter_file.read_text(encoding='utf-8') == '1'
+    assert '未再次请求上游' in second.stdout
+    assert list(
+        (transaction['state_dir'] / 'deployments' / 'formal-cache-smokes').iterdir()
+    ) == [receipt]
+
+
+def test_qweather_key_change_creates_new_weather_fingerprint(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    _staged_text, counter_file = _configure_formal_smoke(transaction)
+    first = _run_activation(transaction)
+    assert first.returncode == 0, first.stderr
+    assert counter_file.read_text(encoding='utf-8') == '1'
+
+    weather_config = (transaction['state_dir'] / '.env').read_text(encoding='utf-8')
+    assert 'QWEATHER_KEY=test-qweather-key' in weather_config
+    weather_config = weather_config.replace(
+        'QWEATHER_KEY=test-qweather-key',
+        'QWEATHER_KEY=rotated-qweather-key',
+    )
+    (transaction['new_release'] / 'staged.env').write_text(
+        weather_config,
+        encoding='utf-8',
+    )
+    second = _run_activation(transaction)
+
+    assert second.returncode == 0, second.stderr
+    assert counter_file.read_text(encoding='utf-8') == '2'
+    receipt_dirs = list(
+        (transaction['state_dir'] / 'deployments' / 'formal-cache-smokes').iterdir()
+    )
+    assert len(receipt_dirs) == 2
+    assert all((receipt / 'completed').is_file() for receipt in receipt_dirs)
+
+
+def test_jwt_private_key_content_change_creates_new_weather_fingerprint(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    private_key = tmp_path / 'qweather-private.pem'
+    private_key.write_bytes(b'private-key-version-one')
+    private_key.chmod(0o600)
+    _staged_text, counter_file = _configure_formal_jwt_smoke(
+        transaction,
+        private_key,
+    )
+
+    first = _run_activation(transaction)
+
+    assert first.returncode == 0, first.stderr
+    assert counter_file.read_text(encoding='utf-8') == '1'
+
+    private_key.write_bytes(b'private-key-version-two')
+    private_key.chmod(0o600)
+    (transaction['new_release'] / 'staged.env').write_text(
+        (transaction['state_dir'] / '.env').read_text(encoding='utf-8'),
+        encoding='utf-8',
+    )
+    second = _run_activation(transaction)
+
+    assert second.returncode == 0, second.stderr
+    assert counter_file.read_text(encoding='utf-8') == '2'
+    receipt_dirs = list(
+        (transaction['state_dir'] / 'deployments' / 'formal-cache-smokes').iterdir()
+    )
+    assert len(receipt_dirs) == 2
+
+
+def test_jwt_private_key_symlink_fails_before_weather_request(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    private_key = tmp_path / 'qweather-private.pem'
+    private_key.write_bytes(b'private-key-material')
+    private_key.chmod(0o600)
+    linked_key = tmp_path / 'linked-private.pem'
+    linked_key.symlink_to(private_key)
+    _staged_text, counter_file = _configure_formal_jwt_smoke(
+        transaction,
+        linked_key,
+    )
+
+    result = _run_activation(transaction)
+
+    assert result.returncode != 0
+    assert '正式 JWT 私钥安全校验失败' in result.stderr
+    assert str(private_key) not in result.stderr
+    assert not counter_file.exists()
+
+
+def test_formal_fallback_snapshot_is_rejected_and_started_receipt_blocks_retry(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    staged_text, counter_file = _configure_formal_smoke(
+        transaction,
+        provider='Open-Meteo',
+    )
+
+    first = _run_activation(transaction)
+
+    assert first.returncode != 0
+    assert '实况来源不是 QWeather 官方数据' in first.stderr
+    assert counter_file.read_text(encoding='utf-8') == '1'
+    receipt_dirs = list(
+        (transaction['state_dir'] / 'deployments' / 'formal-cache-smokes').iterdir()
+    )
+    assert len(receipt_dirs) == 1
+    assert (receipt_dirs[0] / 'started').is_file()
+    assert not (receipt_dirs[0] / 'completed').exists()
+
+    # 即使下一事务的桩能生成 QWeather 数据，同一绑定也必须在请求前关闭。
+    _configure_formal_smoke(transaction, provider='QWeather')
+    (transaction['new_release'] / 'staged.env').write_text(staged_text, encoding='utf-8')
+    second = _run_activation(transaction)
+
+    assert second.returncode != 0
+    assert '禁止自动重试' in second.stderr
+    assert counter_file.read_text(encoding='utf-8') == '1'
+
+
+def test_completed_receipt_with_expired_snapshot_fails_closed_without_request(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    _staged_text, counter_file = _configure_formal_smoke(transaction)
+    first = _run_activation(transaction)
+    assert first.returncode == 0, first.stderr
+    assert counter_file.read_text(encoding='utf-8') == '1'
+
+    connection = sqlite3.connect(transaction['database_file'])
+    try:
+        connection.execute(
+            "UPDATE miniprogram_snapshots SET expires_at = '2000-01-01T00:00:00+00:00'"
+        )
+        connection.commit()
+    finally:
+        connection.close()
+    (transaction['new_release'] / 'staged.env').write_text(
+        (transaction['state_dir'] / '.env').read_text(encoding='utf-8'),
+        encoding='utf-8',
+    )
+
+    second = _run_activation(transaction)
+
+    assert second.returncode != 0
+    assert '持久化快照不可用或已经过期' in second.stderr
+    assert counter_file.read_text(encoding='utf-8') == '1'

@@ -19,16 +19,9 @@ cd "$ROOT_DIR"
 export PYTHONPATH="$ROOT_DIR${PYTHONPATH:+:$PYTHONPATH}"
 
 cleanup_status=0
-retention_status=0
 "$VENV_PY" -m services.pipelines.cleanup_usage_events "$@" || cleanup_status=$?
-
-if [ -n "${DEPLOY_STATE_DIR:-}" ]; then
-  "$VENV_PY" "$ROOT_DIR/scripts/prune_deploy_transactions.py" \
-    --state-dir "$DEPLOY_STATE_DIR" \
-    --retention-days 30 || retention_status=$?
-fi
 
 if [ "$cleanup_status" -ne 0 ]; then
   exit "$cleanup_status"
 fi
-exit "$retention_status"
+exit 0
