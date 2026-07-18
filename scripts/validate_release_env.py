@@ -190,6 +190,8 @@ def validate_release_env(path: Path, *, require_wechat=False):
         errors.append("WX_MINIPROGRAM_APPID 与 WX_MINIPROGRAM_SECRET 必须同时填写。")
     if wechat_server_present and len(wechat_server_present) != len(WECHAT_SERVER_KEYS):
         errors.append("微信身份 pepper 与会话密钥必须同时配置。")
+    if wechat_server_present and not wechat_app_present:
+        errors.append("微信服务端密钥不能脱离 AppID 与 AppSecret 单独启用。")
 
     wechat_ready = (
         len(wechat_app_present) == len(WECHAT_APP_KEYS)

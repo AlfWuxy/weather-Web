@@ -129,6 +129,11 @@ if [ "$REQUIRE_WECHAT_READY" = "1" ] && [ "$LOCAL_WECHAT_FORM_READY" != "1" ]; t
     echo "微信正式发布私密表单尚未标记完成。" >&2
     exit 64
 fi
+if { [ -n "$LOCAL_WX_MINIPROGRAM_APPID" ] && [ -z "$LOCAL_WX_MINIPROGRAM_SECRET" ]; } \
+    || { [ -z "$LOCAL_WX_MINIPROGRAM_APPID" ] && [ -n "$LOCAL_WX_MINIPROGRAM_SECRET" ]; }; then
+    echo "WX_MINIPROGRAM_APPID 与 WX_MINIPROGRAM_SECRET 必须由同一次发布同时提供。" >&2
+    exit 64
+fi
 
 require_env_value() {
     local name="$1"
@@ -338,7 +343,7 @@ remote_exec "ln -s $PROJECT_DIR/instance $RELEASE_APP/instance && ln -s $PROJECT
 echo ""
 echo "步骤4: 准备隔离的候选环境配置..."
 # 首次部署尚无生产进程，可以安全创建初始配置。已有配置只复制到候选文件。
-remote_exec "umask 077; if [ ! -f $PROJECT_DIR/.env ]; then SECRET_KEY_GEN=\$(python3 -c 'import secrets; print(secrets.token_hex(32))'); PAIR_TOKEN_PEPPER_GEN=\$(python3 -c 'import secrets; print(secrets.token_hex(32))'); WX_OPENID_PEPPER_GEN=\$(python3 -c 'import secrets; print(secrets.token_hex(32))'); WX_SESSION_SECRET_GEN=\$(python3 -c 'import secrets; print(secrets.token_hex(32))'); cat > $PROJECT_DIR/.env << EOF
+remote_exec "umask 077; if [ ! -f $PROJECT_DIR/.env ]; then SECRET_KEY_GEN=\$(python3 -c 'import secrets; print(secrets.token_hex(32))'); PAIR_TOKEN_PEPPER_GEN=\$(python3 -c 'import secrets; print(secrets.token_hex(32))'); cat > $PROJECT_DIR/.env << EOF
 FLASK_ENV=production
 DEBUG=false
 SECRET_KEY=\$SECRET_KEY_GEN
@@ -365,8 +370,8 @@ WXPUSHER_APP_TOKEN=
 WXPUSHER_API_BASE=https://wxpusher.zjiecode.com/api
 WX_MINIPROGRAM_APPID=
 WX_MINIPROGRAM_SECRET=
-WX_MINIPROGRAM_OPENID_PEPPER=\$WX_OPENID_PEPPER_GEN
-WX_MINIPROGRAM_SESSION_SECRET=\$WX_SESSION_SECRET_GEN
+WX_MINIPROGRAM_OPENID_PEPPER=
+WX_MINIPROGRAM_SESSION_SECRET=
 WX_MINIPROGRAM_PRIVACY_VERSION=2026-07-18
 PUBLIC_BASE_URL=
 ALLOW_INSECURE_PUBLIC_BASE_URL=
@@ -386,8 +391,6 @@ remote_env_update "FORECAST_CACHE_TTL_MINUTES" "30" "if-empty"
 remote_env_update "QWEATHER_WARNING_CACHE_TTL_MINUTES" "30" "if-empty"
 remote_env_update "WEATHER_SYNC_LOCATIONS" "都昌县" "if-empty"
 remote_env_update "WXPUSHER_API_BASE" "https://wxpusher.zjiecode.com/api" "if-empty"
-remote_env_generate_secret "WX_MINIPROGRAM_OPENID_PEPPER"
-remote_env_generate_secret "WX_MINIPROGRAM_SESSION_SECRET"
 remote_env_update "WX_MINIPROGRAM_PRIVACY_VERSION" "2026-07-18" "if-empty"
 
 echo ""
@@ -446,6 +449,13 @@ if [ -n "$LOCAL_WX_MINIPROGRAM_APPID" ]; then
 fi
 if [ -n "$LOCAL_WX_MINIPROGRAM_SECRET" ]; then
     remote_env_update "WX_MINIPROGRAM_SECRET" "$LOCAL_WX_MINIPROGRAM_SECRET" "always"
+fi
+# 首次游客预览保持四项微信认证配置全空；有微信凭证时才补齐两枚服务器密钥。
+if [ "$REQUIRE_WECHAT_READY" = "1" ] \
+    || [ -n "$LOCAL_WX_MINIPROGRAM_APPID" ] \
+    || [ -n "$LOCAL_WX_MINIPROGRAM_SECRET" ]; then
+    remote_env_generate_secret "WX_MINIPROGRAM_OPENID_PEPPER"
+    remote_env_generate_secret "WX_MINIPROGRAM_SESSION_SECRET"
 fi
 if [ -n "$LOCAL_WX_MINIPROGRAM_OPENID_PEPPER" ]; then
     remote_env_update "WX_MINIPROGRAM_OPENID_PEPPER" "$LOCAL_WX_MINIPROGRAM_OPENID_PEPPER" "if-empty"

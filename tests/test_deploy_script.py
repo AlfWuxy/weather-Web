@@ -241,6 +241,25 @@ def test_deploy_can_stage_formal_wechat_and_weather_readiness():
     assert 'ALLOW_WEATHER_UNAVAILABLE' in content
 
 
+def test_preview_does_not_generate_partial_wechat_authentication():
+    content = _load_deploy_script()
+
+    assert 'WX_MINIPROGRAM_OPENID_PEPPER=\n' in content
+    assert 'WX_MINIPROGRAM_SESSION_SECRET=\n' in content
+    assert 'WX_OPENID_PEPPER_GEN=' not in content
+    assert 'WX_SESSION_SECRET_GEN=' not in content
+    guard = (
+        'if [ "$REQUIRE_WECHAT_READY" = "1" ] \\\n'
+        '    || [ -n "$LOCAL_WX_MINIPROGRAM_APPID" ] \\\n'
+        '    || [ -n "$LOCAL_WX_MINIPROGRAM_SECRET" ]; then'
+    )
+    assert guard in content
+    assert content.index('remote_env_update "WX_MINIPROGRAM_SECRET"') < content.index(guard)
+    assert content.count('remote_env_generate_secret "WX_MINIPROGRAM_OPENID_PEPPER"') == 1
+    assert content.count('remote_env_generate_secret "WX_MINIPROGRAM_SESSION_SECRET"') == 1
+    assert 'WX_MINIPROGRAM_APPID 与 WX_MINIPROGRAM_SECRET 必须由同一次发布同时提供。' in content
+
+
 def test_explicit_credentials_rotate_and_auth_modes_clear_stale_values():
     content = _load_deploy_script()
 

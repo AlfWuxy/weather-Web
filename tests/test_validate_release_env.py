@@ -30,6 +30,18 @@ def test_validator_allows_explicit_pending_wechat_for_preview(tmp_path):
     assert result["warnings"]
 
 
+def test_validator_rejects_server_only_wechat_materials_for_preview(tmp_path):
+    server_only = _write_env(
+        tmp_path,
+        f"WX_MINIPROGRAM_OPENID_PEPPER={'p' * 32}\n"
+        f"WX_MINIPROGRAM_SESSION_SECRET={'s' * 32}\n",
+    )
+    result = validate_release_env(server_only, require_wechat=False)
+
+    assert result["ok"] is False
+    assert any("不能脱离" in error for error in result["errors"])
+
+
 def test_validator_requires_all_wechat_values_for_formal_release(tmp_path):
     partial = _write_env(tmp_path, "WX_MINIPROGRAM_APPID=wx123456\n")
     result = validate_release_env(partial, require_wechat=True)
