@@ -63,6 +63,9 @@
           {% endif %}
         </span>
       </div>
+      <div class="alert alert-light border small py-2" role="note">
+        来源启用率从首次登录开始计算，不代表分享卡打开率、分享落地人数或落地到登录转化率。
+      </div>
       <div class="table-responsive">
         <table class="table table-sm align-middle mb-0">
           <thead>
@@ -71,7 +74,7 @@
               <th class="text-end">登录</th>
               <th class="text-end">D7 成熟分母</th>
               <th class="text-end">7 日启用</th>
-              <th class="text-end">D7 启用率</th>
+              <th class="text-end">D7 登录后启用率</th>
               <th class="text-end">D15 成熟分母</th>
               <th class="text-end">第二周留存</th>
               <th class="text-end">D15 留存率</th>
@@ -82,8 +85,8 @@
             <tr>
               <td>
                 {{ row.label }}
-                {% if row.source == 'direct' %}<span class="visually-hidden">直接访问 7 日启用率</span>{% endif %}
-                {% if row.source == 'family_share' %}<span class="visually-hidden">家庭分享 7 日启用率</span>{% endif %}
+                {% if row.source == 'direct' %}<span class="visually-hidden">直接访问来源登录后有效启用率</span>{% endif %}
+                {% if row.source == 'family_share' %}<span class="visually-hidden">家庭分享来源登录后有效启用率</span>{% endif %}
               </td>
               <td class="text-end">{{ row.login_users }}</td>
               <td class="text-end">{{ row.d7_mature_users }}</td>

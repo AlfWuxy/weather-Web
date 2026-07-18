@@ -127,8 +127,9 @@ def test_pilot_dashboard_renders_for_admin(client, db_session):
     body = response.get_data(as_text=True)
     assert '试点数据看板' in body
     assert '微信小程序有效照护漏斗' in body
-    assert '家庭分享 7 日启用率' in body
-    assert '直接访问 7 日启用率' in body
+    assert '家庭分享来源登录后有效启用率' in body
+    assert '直接访问来源登录后有效启用率' in body
+    assert '不代表分享卡打开率、分享落地人数或落地到登录转化率' in body
     assert '第二周行动留存' in body
 
 
