@@ -81,7 +81,27 @@ def register_hooks(app):
 
     @app.after_request
     def log_request(response):
-        """结构化请求日志"""
+        """统一安全响应头，并按配置写入结构化请求日志。"""
+        response.headers.setdefault('X-Content-Type-Options', 'nosniff')
+        response.headers.setdefault('X-Frame-Options', 'DENY')
+        response.headers.setdefault(
+            'Content-Security-Policy',
+            "base-uri 'self'; frame-ancestors 'none'; object-src 'none'",
+        )
+        response.headers.setdefault(
+            'Permissions-Policy',
+            'camera=(), microphone=(), geolocation=(), payment=(), usb=()',
+        )
+        if request.path.startswith(('/e/', '/t/')):
+            # 行动与投递 token 绝不能进入外站 Referer。
+            response.headers['Referrer-Policy'] = 'no-referrer'
+        else:
+            response.headers.setdefault('Referrer-Policy', 'strict-origin-when-cross-origin')
+        if not app.config.get('DEBUG'):
+            response.headers.setdefault(
+                'Strict-Transport-Security',
+                'max-age=31536000; includeSubDomains',
+            )
         if not app.config.get('FEATURE_STRUCTURED_LOGS'):
             return response
         try:

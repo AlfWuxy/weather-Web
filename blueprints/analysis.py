@@ -44,6 +44,18 @@ def _require_admin():
     return True
 
 
+def _pending_delivery_filter(_reference_time):
+    """返回真正需要人工关注的投递条件，不受页面展示上限影响。"""
+    unreviewed = db.and_(
+        AlertDelivery.review_action.is_(None),
+        AlertDelivery.reviewed_at.is_(None),
+    )
+    return db.or_(
+        db.and_(AlertDelivery.status == 'uncertain', unreviewed),
+        db.and_(AlertDelivery.status == 'failed', unreviewed),
+    )
+
+
 def _default_city():
     return current_app.config.get('DEFAULT_CITY', DEFAULT_CITY_LABEL) or DEFAULT_CITY_LABEL
 
@@ -3296,17 +3308,12 @@ def pilot_dashboard():
         AlertDelivery.clicked_at.isnot(None),
     ).count()
     ctr = round(clicked / sent, 4) if sent else 0.0
-    review_deliveries = delivery_query.filter(
-        AlertDelivery.status.in_(('sending', 'failed', 'uncertain', 'retry_ready'))
-    ).order_by(
+    pending_delivery_filter = _pending_delivery_filter(now)
+    review_required_count = delivery_query.filter(pending_delivery_filter).count()
+    review_deliveries = delivery_query.filter(pending_delivery_filter).order_by(
         AlertDelivery.sent_at.desc(),
         AlertDelivery.id.desc(),
     ).limit(50).all()
-    review_required_count = sum(
-        delivery.status in {'sending', 'uncertain'}
-        or (delivery.status == 'failed' and not delivery.review_action)
-        for delivery in review_deliveries
-    )
 
     usage_filter = []
     if excluded_test_user_ids:
@@ -3403,28 +3410,67 @@ def pilot_review_delivery(delivery_id):
     if delivery is None:
         flash('投递记录不存在', 'error')
         return redirect(url_for('analysis.pilot_dashboard', days=30))
-    if action == 'allow_retry' and delivery.status not in {'failed', 'uncertain'}:
-        flash('当前状态不允许重新发送', 'error')
+    if delivery.status == 'sending':
+        flash('投递仍在发送中，暂不能人工复核', 'error')
+        return redirect(url_for('analysis.pilot_dashboard', days=30))
+    if delivery.status == 'retry_ready':
+        flash('投递已进入待重试队列，暂不能重复复核', 'error')
+        return redirect(url_for('analysis.pilot_dashboard', days=30))
+    if delivery.status not in {'failed', 'uncertain'}:
+        flash('当前状态不允许人工复核', 'error')
+        return redirect(url_for('analysis.pilot_dashboard', days=30))
+    if delivery.review_action is not None or delivery.reviewed_at is not None:
+        flash('本次投递已完成复核，不能重复修改结论', 'error')
+        return redirect(url_for('analysis.pilot_dashboard', days=30))
+    if delivery.clicked_at is not None and action != 'confirm_sent':
+        flash('有效点击已构成送达证据，只能确认送达', 'error')
         return redirect(url_for('analysis.pilot_dashboard', days=30))
 
     previous_status = delivery.status
+    previous_clicked_at = delivery.clicked_at
     reviewed_at = utcnow()
     if action == 'confirm_sent':
-        delivery.status = 'sent'
-        delivery.error = None
-        delivery.sent_at = delivery.sent_at or reviewed_at
+        next_status = 'sent'
+        next_error = None
+        next_sent_at = delivery.sent_at or reviewed_at
         message = '已确认送达'
     elif action == 'confirm_failed':
-        delivery.status = 'failed'
-        delivery.error = '管理员已确认本次未送达；未授权自动重试'
+        next_status = 'failed'
+        next_error = '管理员已确认本次未送达；未授权自动重试'
+        next_sent_at = delivery.sent_at
         message = '已确认未送达'
     else:
-        delivery.status = 'retry_ready'
-        delivery.error = '管理员已确认本次未送达；允许下一轮重新发送一次'
+        next_status = 'retry_ready'
+        next_error = '管理员已确认本次未送达；允许下一轮重新发送一次'
+        next_sent_at = delivery.sent_at
         message = '已允许下一轮重新发送'
-    delivery.reviewed_at = reviewed_at
-    delivery.reviewed_by_user_id = current_user.id
-    delivery.review_action = action
+
+    cas_conditions = [
+        AlertDelivery.id == delivery_id,
+        AlertDelivery.status == previous_status,
+        AlertDelivery.review_action.is_(None),
+        AlertDelivery.reviewed_at.is_(None),
+    ]
+    if previous_clicked_at is None:
+        cas_conditions.append(AlertDelivery.clicked_at.is_(None))
+    else:
+        cas_conditions.append(AlertDelivery.clicked_at == previous_clicked_at)
+    changed = db.session.execute(
+        db.update(AlertDelivery)
+        .where(*cas_conditions)
+        .values(
+            status=next_status,
+            error=next_error,
+            sent_at=next_sent_at,
+            reviewed_at=reviewed_at,
+            reviewed_by_user_id=current_user.id,
+            review_action=action,
+        )
+    ).rowcount
+    if changed != 1:
+        db.session.rollback()
+        flash('投递状态刚刚发生变化，请刷新后重试', 'error')
+        return redirect(url_for('analysis.pilot_dashboard', days=30))
     log_audit(
         'pilot_delivery_review',
         resource_type='alert_delivery',
@@ -3432,7 +3478,7 @@ def pilot_review_delivery(delivery_id):
         metadata={
             'action': action,
             'previous_status': previous_status,
-            'next_status': delivery.status,
+            'next_status': next_status,
         },
     )
     db.session.commit()

@@ -11,8 +11,103 @@ import io
 
 def _login_as(client, user_id: int):
     with client.session_transaction() as session:
-        session['_user_id'] = str(user_id)
+        session['_user_id'] = f'{user_id}:1'
         session['_fresh'] = True
+
+
+def test_admin_password_reset_revokes_target_sessions(app, client):
+    """管理员重设密码时同步撤销目标用户的所有旧凭证。"""
+    from core.db_models import (
+        ApiToken,
+        MiniProgramIdentity,
+        MiniProgramSession,
+        User,
+    )
+    from core.extensions import db
+    from core.time_utils import utcnow
+
+    with app.app_context():
+        db.drop_all()
+        db.create_all()
+        admin = User(username='admin-password-reset', role='admin')
+        admin.set_password('AdminPassword1!')
+        target = User(username='admin_reset_target', role='user')
+        target.set_password('TargetPassword1!')
+        db.session.add_all([admin, target])
+        db.session.flush()
+        now = utcnow()
+        api_token = ApiToken(
+            user_id=target.id,
+            name='管理员改密前凭证',
+            token_hash='e' * 64,
+            created_at=now,
+            expires_at=now + timedelta(days=30),
+            scopes='miniapp:read',
+            privacy_consent_version='privacy-v1',
+        )
+        identity = MiniProgramIdentity(
+            user_id=target.id,
+            openid_hash='f' * 64,
+            privacy_consent_version='privacy-v1',
+            privacy_consented_at=now,
+            acquisition_source='direct',
+            created_at=now,
+            last_login_at=now,
+        )
+        db.session.add_all([api_token, identity])
+        db.session.flush()
+        mini_session = MiniProgramSession(
+            identity_id=identity.id,
+            user_id=target.id,
+            token_hash='1' * 64,
+            privacy_consent_version='privacy-v1',
+            expires_at=now + timedelta(days=30),
+            created_at=now,
+            last_used_at=now,
+        )
+        db.session.add(mini_session)
+        db.session.commit()
+        admin_id = int(admin.id)
+        target_id = int(target.id)
+        target_username = target.username
+        target_session_id = target.get_id()
+        api_token_id = int(api_token.id)
+        mini_session_id = int(mini_session.id)
+
+    target_client = client.application.test_client()
+    with target_client.session_transaction() as session:
+        session['_user_id'] = target_session_id
+        session['_fresh'] = True
+
+    csrf_token = 'admin-password-reset-csrf'
+    _login_as(client, admin_id)
+    with client.session_transaction() as session:
+        session['_csrf_token'] = csrf_token
+    response = client.post(
+        f'/admin/user/{target_id}/edit',
+        data={
+            'username': target_username,
+            'email': '',
+            'age': '',
+            'gender': '',
+            'community': '',
+            'role': 'user',
+            'password': 'ResetPassword2!',
+            'csrf_token': csrf_token,
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code in (301, 302, 303)
+    assert response.headers['Location'].endswith('/admin/users')
+    with app.app_context():
+        assert db.session.get(User, target_id).auth_version == 2
+        assert db.session.get(User, target_id).check_password('ResetPassword2!')
+        assert db.session.get(ApiToken, api_token_id).revoked_at is not None
+        assert db.session.get(MiniProgramSession, mini_session_id).revoked_at is not None
+    stale_response = target_client.get('/profile', follow_redirects=False)
+    assert stale_response.status_code in (301, 302)
+    assert '/login' in stale_response.headers['Location']
 
 
 def test_admin_dashboard_renders(client, db_session):
@@ -303,7 +398,7 @@ def test_pilot_dashboard_separates_uncertain_clicks_and_reviews_delivery(
     assert response.status_code == 200
     body = response.get_data(as_text=True)
     assert '推送人工复核队列' in body
-    assert '另有 1 次不明确投递点击待复核' in body
+    assert '另有 1 次不明确投递主动确认待复核' in body
     assert '100.0%' in body
 
     with client.session_transaction() as session:
@@ -311,7 +406,7 @@ def test_pilot_dashboard_separates_uncertain_clicks_and_reviews_delivery(
     reviewed = client.post(
         f'/analysis/pilot/deliveries/{uncertain.id}/review',
         data={
-            'action': 'allow_retry',
+            'action': 'confirm_sent',
             'days': '30',
             'csrf_token': 'delivery-review-csrf',
         },
@@ -321,8 +416,8 @@ def test_pilot_dashboard_separates_uncertain_clicks_and_reviews_delivery(
     assert reviewed.status_code in (301, 302)
     db_session.expire_all()
     refreshed = db_session.get(AlertDelivery, uncertain.id)
-    assert refreshed.status == 'retry_ready'
-    assert refreshed.review_action == 'allow_retry'
+    assert refreshed.status == 'sent'
+    assert refreshed.review_action == 'confirm_sent'
     assert refreshed.reviewed_by_user_id == admin.id
     assert refreshed.reviewed_at is not None
 

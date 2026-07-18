@@ -4,6 +4,7 @@
 import json
 import threading
 import time
+from contextlib import contextmanager
 from datetime import timedelta
 
 import pytest
@@ -157,6 +158,102 @@ def test_all_elders_share_one_snapshot_without_weather_fanout(
     assert len(rows) == 3
     assert {row["snapshot_id"] for row in rows} == {snapshot_id}
     assert {row["location"]["name"] for row in rows} == {"都昌县"}
+
+
+def test_elders_batch_loads_only_current_day_elder_actions(
+    app,
+    client,
+    db_session,
+):
+    """老人列表只批量读取当天自护状态，并安全收敛历史 JSON。"""
+    from sqlalchemy import event
+
+    from core.db_models import DailyStatus, FamilyMember
+    from core.extensions import db
+    from core.time_utils import today_local
+
+    user, token = _user_and_token(db_session, "elder_today_state_user")
+    pairs = []
+    for index in range(3):
+        member = FamilyMember(user_id=user.id, name=f"状态老人{index}", relation="家人")
+        db_session.add(member)
+        db_session.flush()
+        pairs.append(_pair(db_session, user, f"7100000{index}", member=member))
+
+    status_date = today_local()
+    confirmed_at = utcnow()
+    db_session.add_all([
+        DailyStatus(
+            pair_id=pairs[0].id,
+            status_date=status_date,
+            community_code="都昌县",
+            confirmed_at=confirmed_at,
+            actions_done_count=25,
+            help_flag=True,
+            relay_stage="caregiver",
+            elder_actions=json.dumps(
+                ["drink_water", "<script>alert(1)</script>"]
+                + [f"legacy_{index}" for index in range(25)]
+                + [123],
+                ensure_ascii=False,
+            ),
+        ),
+        DailyStatus(
+            pair_id=pairs[1].id,
+            status_date=status_date - timedelta(days=1),
+            community_code="都昌县",
+            confirmed_at=confirmed_at,
+            actions_done_count=1,
+            elder_actions=json.dumps(["carry_water"], ensure_ascii=False),
+        ),
+        DailyStatus(
+            pair_id=pairs[2].id,
+            status_date=status_date,
+            community_code="都昌县",
+            actions_done_count=1,
+            elder_actions='{"not": "a list"}',
+        ),
+    ])
+    db_session.commit()
+    _persist_snapshot(app)
+
+    statements = []
+
+    def record_statement(_conn, _cursor, statement, _parameters, _context, _many):
+        if statement.lstrip().upper().startswith("SELECT") and "daily_status" in statement.lower():
+            statements.append(statement)
+
+    event.listen(db.engine, "before_cursor_execute", record_statement)
+    try:
+        response = client.get(
+            "/mp/api/v1/elders",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+    finally:
+        event.remove(db.engine, "before_cursor_execute", record_statement)
+
+    assert response.status_code == 200
+    rows = {row["pair_id"]: row for row in response.get_json()["data"]}
+    current = rows[pairs[0].id]["today"]
+    assert current["status_date"] == status_date.isoformat()
+    assert current["confirmed_at"] == confirmed_at.replace(tzinfo=None).isoformat()
+    assert current["actions_done_count"] == 20
+    assert current["elder_actions"][0] == "drink_water"
+    assert len(current["elder_actions"]) <= 20
+    assert all(isinstance(item, str) for item in current["elder_actions"])
+    assert "alert(1)" not in current["elder_actions"]
+    assert current["help_flag"] is True
+    assert current["relay_stage"] == "caregiver"
+
+    yesterday_only = rows[pairs[1].id]["today"]
+    assert yesterday_only["status_date"] == status_date.isoformat()
+    assert yesterday_only["confirmed_at"] is None
+    assert yesterday_only["actions_done_count"] == 0
+    assert yesterday_only["elder_actions"] == []
+    assert rows[pairs[2].id]["today"]["elder_actions"] == []
+    assert rows[pairs[2].id]["today"]["help_flag"] is False
+    assert rows[pairs[2].id]["today"]["relay_stage"] == "none"
+    assert len(statements) == 1
 
 
 class _WechatResponse:
@@ -386,14 +483,6 @@ def test_owner_scope_and_input_boundaries_for_diary_medication_and_actions(
         f"/mp/api/v1/health/diary?pair_id={pair.id}", headers=outsider_headers
     ).status_code in {400, 404}
 
-    too_long = client.post(
-        "/mp/api/v1/health/diary",
-        headers=owner_headers,
-        json={"pair_id": pair.id, "severity": "mild", "symptoms": "x" * 501},
-    )
-    assert too_long.status_code == 400
-    assert too_long.get_json()["error"] == "symptoms_too_long"
-
     medication = client.post(
         "/mp/api/v1/medications",
         headers=owner_headers,
@@ -438,6 +527,651 @@ def test_owner_scope_and_input_boundaries_for_diary_medication_and_actions(
         headers=owner_headers,
         json={"actions_done": ["hydrate"]},
     ).status_code == 200
+
+
+def test_health_diary_matches_miniprogram_free_text_boundaries(client, db_session):
+    from core.db_models import FamilyMember
+
+    owner, owner_token = _user_and_token(db_session, "diary_length_owner")
+    member = FamilyMember(user_id=owner.id, name="边界测试家人", relation="家人")
+    db_session.add(member)
+    db_session.commit()
+    pair = _pair(db_session, owner, "72222222", member=member)
+    headers = {"Authorization": f"Bearer {owner_token}"}
+
+    symptoms_at_limit = client.post(
+        "/mp/api/v1/health/diary",
+        headers=headers,
+        json={
+            "pair_id": pair.id,
+            "severity": "mild",
+            "symptoms": "症" * 200,
+            "notes": "",
+        },
+    )
+    assert symptoms_at_limit.status_code == 201
+
+    symptoms_over_limit = client.post(
+        "/mp/api/v1/health/diary",
+        headers=headers,
+        json={
+            "pair_id": pair.id,
+            "severity": "mild",
+            "symptoms": "症" * 201,
+            "notes": "",
+        },
+    )
+    assert symptoms_over_limit.status_code == 400
+    assert symptoms_over_limit.get_json()["error"] == "symptoms_too_long"
+
+    notes_at_limit = client.post(
+        "/mp/api/v1/health/diary",
+        headers=headers,
+        json={
+            "pair_id": pair.id,
+            "severity": "mild",
+            "symptoms": "状态记录",
+            "notes": "注" * 500,
+        },
+    )
+    assert notes_at_limit.status_code == 201
+
+    notes_over_limit = client.post(
+        "/mp/api/v1/health/diary",
+        headers=headers,
+        json={
+            "pair_id": pair.id,
+            "severity": "mild",
+            "symptoms": "状态记录",
+            "notes": "注" * 501,
+        },
+    )
+    assert notes_over_limit.status_code == 400
+    assert notes_over_limit.get_json()["error"] == "notes_too_long"
+
+
+def test_action_confirm_separates_elder_actions_from_caregiver_fields(client, db_session):
+    from core.db_models import DailyStatus, FamilyMember
+    from core.time_utils import today_local
+
+    owner, owner_token = _user_and_token(db_session, "action_note_owner")
+    member = FamilyMember(user_id=owner.id, name="行动记录家人", relation="家人")
+    db_session.add(member)
+    db_session.commit()
+    pair = _pair(db_session, owner, "73333333", member=member)
+    headers = {"Authorization": f"Bearer {owner_token}"}
+
+    help_response = client.post(
+        f"/mp/api/v1/actions/{pair.id}/help",
+        headers=headers,
+        json={"note": "请尽快回电并带水"},
+    )
+    assert help_response.status_code == 200
+    status = DailyStatus.query.filter_by(pair_id=pair.id, status_date=today_local()).one()
+    status.caregiver_actions = json.dumps(["remind"], ensure_ascii=False)
+    db_session.commit()
+
+    confirm_without_note = client.post(
+        f"/mp/api/v1/actions/{pair.id}/confirm",
+        headers=headers,
+        json={"actions_done": ["drink_water"]},
+    )
+    assert confirm_without_note.status_code == 200
+    db_session.expire_all()
+    status = DailyStatus.query.filter_by(pair_id=pair.id, status_date=today_local()).one()
+    assert status.help_flag is True
+    assert status.caregiver_note == "请尽快回电并带水"
+    assert json.loads(status.caregiver_actions) == ["remind"]
+    assert json.loads(status.elder_actions) == ["drink_water"]
+
+    confirm_with_note = client.post(
+        f"/mp/api/v1/actions/{pair.id}/confirm",
+        headers=headers,
+        json={"actions_done": ["cool_rest"], "note": "已电话确认在家休息"},
+    )
+    assert confirm_with_note.status_code == 200
+    db_session.expire_all()
+    status = DailyStatus.query.filter_by(pair_id=pair.id, status_date=today_local()).one()
+    assert status.help_flag is True
+    assert status.caregiver_note == "请尽快回电并带水"
+    assert json.loads(status.caregiver_actions) == ["remind"]
+    assert json.loads(status.elder_actions) == ["cool_rest"]
+
+
+def test_repeated_help_updates_note_without_duplicate_event(client, db_session):
+    """同一天再次保存求助说明只更新内容，不重复计一次新求助。"""
+    from core.db_models import DailyStatus, FamilyMember, UsageEvent
+    from core.time_utils import today_local
+
+    owner, token = _user_and_token(db_session, "help_update_owner")
+    member = FamilyMember(user_id=owner.id, name="求助家人", relation="家人")
+    db_session.add(member)
+    db_session.commit()
+    pair = _pair(db_session, owner, "73333334", member=member)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    first = client.post(
+        f"/mp/api/v1/actions/{pair.id}/help",
+        headers=headers,
+        json={"note": "请回电话"},
+    )
+    second = client.post(
+        f"/mp/api/v1/actions/{pair.id}/help",
+        headers=headers,
+        json={"note": "请带水并回电话"},
+    )
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    status = DailyStatus.query.filter_by(pair_id=pair.id, status_date=today_local()).one()
+    assert status.help_flag is True
+    assert status.caregiver_note == "请带水并回电话"
+    assert UsageEvent.query.filter_by(
+        user_id=owner.id,
+        event_type="help_flagged",
+    ).count() == 1
+
+
+def test_inactive_pair_blocks_profile_health_and_action_writes(client, db_session):
+    """停止管理后，旧页面持有的 pair_id 不能继续产生任何写入。"""
+    from core.db_models import FamilyMember, HealthDiary, MedicationReminder
+
+    owner, token = _user_and_token(db_session, "inactive_pair_owner")
+    member = FamilyMember(user_id=owner.id, name="停用家人", relation="家人")
+    db_session.add(member)
+    db_session.commit()
+    pair = _pair(db_session, owner, "73333335", member=member)
+    member_id = member.id
+    headers = {"Authorization": f"Bearer {token}"}
+
+    deleted = client.delete(f"/mp/api/v1/elders/{pair.id}", headers=headers)
+    assert deleted.status_code == 200
+
+    patch_response = client.patch(
+        f"/mp/api/v1/elders/{pair.id}",
+        headers=headers,
+        json={"name": "不应写入"},
+    )
+    diary_response = client.post(
+        "/mp/api/v1/health/diary",
+        headers=headers,
+        json={
+            "pair_id": pair.id,
+            "severity": "mild",
+            "symptoms": "不应写入",
+        },
+    )
+    medication_response = client.post(
+        "/mp/api/v1/medications",
+        headers=headers,
+        json={"pair_id": pair.id, "medicine_name": "不应写入"},
+    )
+    assessment_response = client.post(
+        "/mp/api/v1/health/assessment",
+        headers=headers,
+        json={"pair_id": pair.id},
+    )
+    action_response = client.post(
+        f"/mp/api/v1/actions/{pair.id}/help",
+        headers=headers,
+        json={"note": "不应写入"},
+    )
+
+    assert patch_response.status_code == 404
+    assert diary_response.status_code == 404
+    assert medication_response.status_code == 404
+    assert assessment_response.status_code == 404
+    assert action_response.status_code == 404
+    db_session.expire_all()
+    assert db_session.get(FamilyMember, member_id).name == "停用家人"
+    assert HealthDiary.query.filter_by(user_id=owner.id).count() == 0
+    assert MedicationReminder.query.filter_by(user_id=owner.id).count() == 0
+
+
+def test_explicit_unlinked_pair_scope_never_falls_back_to_all_health_records(
+    client,
+    db_session,
+):
+    """显式但无成员的 Pair 必须拒绝，不能退化成账号全量查询。"""
+    from core.db_models import FamilyMember, HealthDiary, MedicationReminder
+    from core.time_utils import today_local
+
+    owner, token = _user_and_token(db_session, "unlinked_scope_owner")
+    first_member = FamilyMember(user_id=owner.id, name="甲家人", relation="家人")
+    second_member = FamilyMember(user_id=owner.id, name="乙家人", relation="家人")
+    db_session.add_all([first_member, second_member])
+    db_session.flush()
+    unlinked_pair = _pair(db_session, owner, "73333336")
+    db_session.add_all([
+        HealthDiary(
+            user_id=owner.id,
+            member_id=first_member.id,
+            entry_date=today_local(),
+            symptoms="甲记录",
+            severity="mild",
+        ),
+        HealthDiary(
+            user_id=owner.id,
+            member_id=second_member.id,
+            entry_date=today_local(),
+            symptoms="乙记录",
+            severity="mild",
+        ),
+        MedicationReminder(user_id=owner.id, member_id=first_member.id, medicine_name="甲药"),
+        MedicationReminder(user_id=owner.id, member_id=second_member.id, medicine_name="乙药"),
+    ])
+    db_session.commit()
+    headers = {"Authorization": f"Bearer {token}"}
+
+    diary = client.get(
+        f"/mp/api/v1/health/diary?pair_id={unlinked_pair.id}",
+        headers=headers,
+    )
+    medications = client.get(
+        f"/mp/api/v1/medications?pair_id={unlinked_pair.id}",
+        headers=headers,
+    )
+
+    assert diary.status_code == 400
+    assert diary.get_json()["error"] == "pair_member_not_found"
+    assert medications.status_code == 400
+    assert medications.get_json()["error"] == "pair_member_not_found"
+
+
+def test_stale_snapshot_never_persists_risk_level_on_action_confirm(
+    app,
+    client,
+    db_session,
+):
+    """较早快照只供页面参考，不能进入当天风险聚合。"""
+    from core.db_models import DailyStatus, FamilyMember
+    from core.time_utils import today_local
+
+    owner, token = _user_and_token(db_session, "stale_action_risk_owner")
+    member = FamilyMember(user_id=owner.id, name="陈旧风险家人", relation="家人")
+    db_session.add(member)
+    db_session.commit()
+    pair = _pair(db_session, owner, "73333337", member=member)
+    _persist_snapshot(app, fetched_at=utcnow() - timedelta(minutes=31))
+
+    response = client.post(
+        f"/mp/api/v1/actions/{pair.id}/confirm",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"actions_done": ["check_weather"]},
+    )
+
+    assert response.status_code == 200
+    status = DailyStatus.query.filter_by(pair_id=pair.id, status_date=today_local()).one()
+    assert status.risk_level is None
+
+
+@pytest.mark.parametrize(
+    "actions_done",
+    (
+        ["行动"] * 21,
+        ["行" * 51],
+    ),
+    ids=("too-many-items", "item-too-long"),
+)
+def test_action_confirm_rejects_elder_action_collection_boundaries(
+    client,
+    db_session,
+    actions_done,
+):
+    """小程序适配层应在共享服务前拒绝过量或过长的自护行动。"""
+    from core.db_models import DailyStatus, FamilyMember
+
+    owner, owner_token = _user_and_token(db_session, "action_boundary_owner")
+    member = FamilyMember(user_id=owner.id, name="行动边界家人", relation="家人")
+    db_session.add(member)
+    db_session.commit()
+    pair = _pair(db_session, owner, "73444444", member=member)
+
+    response = client.post(
+        f"/mp/api/v1/actions/{pair.id}/confirm",
+        headers={"Authorization": f"Bearer {owner_token}"},
+        json={"actions_done": actions_done},
+    )
+
+    assert response.status_code == 400
+    assert response.get_json()["error"] == "invalid_actions_done"
+    assert DailyStatus.query.filter_by(pair_id=pair.id).count() == 0
+
+
+def test_shared_confirm_rejects_elder_action_count_drift(db_session):
+    """直接调用共享层时，行动数量和自护列表也必须保持一致。"""
+    from core.db_models import DailyStatus
+    from core.time_utils import today_local
+    from services.care_action_service import stage_confirm_action
+
+    owner, _owner_token = _user_and_token(db_session, "action_count_drift_owner")
+    pair = _pair(db_session, owner, "73445555")
+    status = DailyStatus(
+        pair_id=pair.id,
+        status_date=today_local(),
+        community_code=pair.community_code,
+    )
+    db_session.add(status)
+    db_session.flush()
+
+    with pytest.raises(ValueError, match="elder_action_count_mismatch"):
+        stage_confirm_action(
+            pair,
+            status,
+            actions_done_count=2,
+            elder_actions=["drink_water"],
+            source="miniprogram",
+        )
+
+    assert status.confirmed_at is None
+    assert status.actions_done_count == 0
+    assert status.elder_actions is None
+
+
+def test_miniprogram_actions_share_events_and_community_projection(client, db_session):
+    """三类小程序行动应写入同一事件口径并刷新社区投影。"""
+    from core.db_models import CommunityDaily, DailyStatus, FamilyMember, Pair, UsageEvent
+    from core.time_utils import ensure_utc_aware, today_local
+
+    owner, owner_token = _user_and_token(db_session, "action_projection_owner")
+    member = FamilyMember(user_id=owner.id, name="行动投影家人", relation="家人")
+    db_session.add(member)
+    db_session.commit()
+    pair = _pair(db_session, owner, "73555555", member=member)
+    headers = {"Authorization": f"Bearer {owner_token}"}
+
+    assert client.post(
+        f"/mp/api/v1/actions/{pair.id}/confirm",
+        headers=headers,
+        json={"actions_done": ["drink_water"]},
+    ).status_code == 200
+    assert client.post(
+        f"/mp/api/v1/actions/{pair.id}/help",
+        headers=headers,
+        json={"note": "请联系家人"},
+    ).status_code == 200
+
+    inactive_at = utcnow() - timedelta(days=3)
+    persisted_pair = db_session.get(Pair, pair.id)
+    persisted_pair.last_active_at = inactive_at
+    db_session.commit()
+    assert client.post(
+        f"/mp/api/v1/actions/{pair.id}/debrief",
+        headers=headers,
+        json={"question_2": "已经联系", "debrief_optin": False},
+    ).status_code == 200
+
+    db_session.expire_all()
+    status = DailyStatus.query.filter_by(
+        pair_id=pair.id,
+        status_date=today_local(),
+    ).one()
+    aggregate = CommunityDaily.query.filter_by(
+        community_code=pair.community_code,
+        date=today_local(),
+    ).one()
+    events = UsageEvent.query.filter(
+        UsageEvent.user_id == owner.id,
+        UsageEvent.event_type.in_((
+            "checkin_confirmed",
+            "help_flagged",
+            "feedback_submitted",
+        )),
+    ).order_by(UsageEvent.id.asc()).all()
+
+    assert json.loads(status.elder_actions) == ["drink_water"]
+    assert status.caregiver_note == "请联系家人"
+    assert aggregate.total_people == 1
+    assert aggregate.confirm_rate == 1
+    assert [event.event_type for event in events] == [
+        "checkin_confirmed",
+        "help_flagged",
+        "feedback_submitted",
+    ]
+    assert all(event.source == "miniprogram" for event in events)
+    assert ensure_utc_aware(
+        db_session.get(Pair, pair.id).last_active_at
+    ) > ensure_utc_aware(inactive_at)
+
+
+def test_miniprogram_action_succeeds_when_community_projection_fails(
+    client,
+    db_session,
+    monkeypatch,
+):
+    """派生投影失败时，已提交的小程序主动作仍返回成功。"""
+    from core.db_models import CommunityDaily, DailyStatus, FamilyMember
+    from core.time_utils import today_local
+    from services import community_daily_service
+
+    owner, owner_token = _user_and_token(db_session, "action_projection_failure_owner")
+    member = FamilyMember(user_id=owner.id, name="投影失败家人", relation="家人")
+    db_session.add(member)
+    db_session.commit()
+    pair = _pair(db_session, owner, "73666666", member=member)
+
+    def fail_projection(*_args, **_kwargs):
+        raise RuntimeError("projection unavailable")
+
+    monkeypatch.setattr(
+        community_daily_service,
+        "refresh_community_daily",
+        fail_projection,
+    )
+    response = client.post(
+        f"/mp/api/v1/actions/{pair.id}/confirm",
+        headers={"Authorization": f"Bearer {owner_token}"},
+        json={"actions_done": ["drink_water"]},
+    )
+
+    assert response.status_code == 200
+    db_session.expire_all()
+    status = DailyStatus.query.filter_by(
+        pair_id=pair.id,
+        status_date=today_local(),
+    ).one()
+    assert status.confirmed_at is not None
+    assert CommunityDaily.query.filter_by(
+        community_code=pair.community_code,
+        date=today_local(),
+    ).count() == 0
+
+
+def test_action_debrief_respects_pair_optin_on_create_and_update(client, db_session):
+    from core.db_models import DailyStatus, Debrief, FamilyMember, Pair
+    from core.time_utils import ensure_utc_aware, today_local
+
+    owner, owner_token = _user_and_token(db_session, "debrief_optin_owner")
+    outsider, outsider_token = _user_and_token(db_session, "debrief_optin_outsider")
+    member = FamilyMember(user_id=owner.id, name="复盘记录家人", relation="家人")
+    db_session.add(member)
+    db_session.commit()
+    pair = _pair(db_session, owner, "74444444", member=member)
+    owner_headers = {"Authorization": f"Bearer {owner_token}"}
+    outsider_headers = {"Authorization": f"Bearer {outsider_token}"}
+
+    outsider_response = client.post(
+        f"/mp/api/v1/actions/{pair.id}/debrief",
+        headers=outsider_headers,
+        json={"question_2": "越权内容", "debrief_optin": False},
+    )
+    assert outsider_response.status_code == 404
+    assert Debrief.query.count() == 0
+    assert DailyStatus.query.count() == 0
+
+    linked_response = client.post(
+        f"/mp/api/v1/actions/{pair.id}/debrief",
+        headers=owner_headers,
+        json={"question_2": "第一次复盘", "debrief_optin": True},
+    )
+    assert linked_response.status_code == 200
+    linked_id = linked_response.get_json()["data"]["debrief_id"]
+    linked = db_session.get(Debrief, linked_id)
+    assert linked.owner_user_id == owner.id
+    assert linked.origin_pair_id == pair.id
+    assert linked.pair_id == pair.id
+    status = DailyStatus.query.filter_by(pair_id=pair.id, status_date=today_local()).one()
+    assert status.debrief_optin is True
+
+    inactive_at = utcnow() - timedelta(days=3)
+    persisted_pair = db_session.get(Pair, pair.id)
+    persisted_pair.last_active_at = inactive_at
+    db_session.commit()
+    unlinked_response = client.post(
+        f"/mp/api/v1/actions/{pair.id}/debrief",
+        headers=owner_headers,
+        json={"question_2": "更新后不关联", "debrief_optin": False},
+    )
+    assert unlinked_response.status_code == 200
+    assert unlinked_response.get_json()["data"]["debrief_id"] == linked_id
+    assert unlinked_response.get_json()["data"]["pair_id"] is None
+    db_session.expire_all()
+    unlinked = db_session.get(Debrief, linked_id)
+    assert unlinked.owner_user_id == owner.id
+    assert unlinked.origin_pair_id == pair.id
+    assert unlinked.pair_id is None
+    assert unlinked.question_2 == "更新后不关联"
+    status = DailyStatus.query.filter_by(pair_id=pair.id, status_date=today_local()).one()
+    assert status.debrief_optin is False
+    assert ensure_utc_aware(
+        db_session.get(Pair, pair.id).last_active_at
+    ) > ensure_utc_aware(inactive_at)
+
+    relinked_response = client.post(
+        f"/mp/api/v1/actions/{pair.id}/debrief",
+        headers=owner_headers,
+        json={"question_2": "再次选择关联", "debrief_optin": True},
+    )
+    assert relinked_response.status_code == 200
+    relinked_id = relinked_response.get_json()["data"]["debrief_id"]
+    assert relinked_id == linked_id
+    relinked = db_session.get(Debrief, relinked_id)
+    assert relinked.origin_pair_id == pair.id
+    assert relinked.pair_id == pair.id
+    assert relinked.question_2 == "再次选择关联"
+    assert Debrief.query.filter_by(owner_user_id=owner.id, date=today_local()).count() == 1
+
+    second_member = FamilyMember(user_id=owner.id, name="另一位家人", relation="家人")
+    db_session.add(second_member)
+    db_session.commit()
+    second_pair = _pair(db_session, owner, "75555555", member=second_member)
+    second_response = client.post(
+        f"/mp/api/v1/actions/{second_pair.id}/debrief",
+        headers=owner_headers,
+        json={"question_2": "第二位家人不关联", "debrief_optin": False},
+    )
+    assert second_response.status_code == 200
+    second_id = second_response.get_json()["data"]["debrief_id"]
+    assert second_id != relinked_id
+    second_record = db_session.get(Debrief, second_id)
+    assert second_record.origin_pair_id == second_pair.id
+    assert second_record.pair_id is None
+    assert db_session.get(Debrief, relinked_id).pair_id == pair.id
+
+    repeated_second = client.post(
+        f"/mp/api/v1/actions/{second_pair.id}/debrief",
+        headers=owner_headers,
+        json={"question_2": "第二位家人重复不关联", "debrief_optin": False},
+    )
+    assert repeated_second.status_code == 200
+    assert repeated_second.get_json()["data"]["debrief_id"] == second_id
+
+    relinked_second = client.post(
+        f"/mp/api/v1/actions/{second_pair.id}/debrief",
+        headers=owner_headers,
+        json={"question_2": "第二位家人再次关联", "debrief_optin": True},
+    )
+    assert relinked_second.status_code == 200
+    assert relinked_second.get_json()["data"]["debrief_id"] == second_id
+    db_session.expire_all()
+    first_record = db_session.get(Debrief, relinked_id)
+    second_record = db_session.get(Debrief, second_id)
+    assert first_record.origin_pair_id == pair.id
+    assert first_record.pair_id == pair.id
+    assert first_record.question_2 == "再次选择关联"
+    assert second_record.origin_pair_id == second_pair.id
+    assert second_record.pair_id == second_pair.id
+    assert second_record.question_2 == "第二位家人再次关联"
+    assert Debrief.query.filter_by(owner_user_id=owner.id, date=today_local()).count() == 2
+
+    difficulty_at_limit = client.post(
+        f"/mp/api/v1/actions/{pair.id}/debrief",
+        headers=owner_headers,
+        json={"difficulty": "难" * 500, "debrief_optin": True},
+    )
+    assert difficulty_at_limit.status_code == 200
+    db_session.expire_all()
+    assert db_session.get(Debrief, relinked_id).difficulty == "难" * 500
+
+    difficulty_over_limit = client.post(
+        f"/mp/api/v1/actions/{pair.id}/debrief",
+        headers=owner_headers,
+        json={"difficulty": "难" * 501, "debrief_optin": True},
+    )
+    assert difficulty_over_limit.status_code == 400
+    assert difficulty_over_limit.get_json()["error"] == "difficulty_too_long"
+
+
+def test_pair_hard_delete_keeps_owned_debrief_until_account_delete(
+    app,
+    client,
+    db_session,
+    monkeypatch,
+):
+    """删除来源家人只清空两种 pair 关联，账号注销才删除复盘。"""
+    from sqlalchemy import inspect
+
+    from core.db_models import Debrief, User
+    from core.extensions import db
+    from core.time_utils import today_local
+
+    login = _wechat_login(app, client, monkeypatch, openid="debrief-pair-delete-openid")
+    data = login.get_json()["data"]
+    user_id = data["user"]["id"]
+    headers = {"Authorization": f"Bearer {data['session_token']}"}
+    owner = db_session.get(User, user_id)
+    pair = _pair(db_session, owner, "74555555")
+    pair_id = int(pair.id)
+    record = Debrief(
+        owner_user_id=user_id,
+        origin_pair_id=pair_id,
+        pair_id=pair_id,
+        date=today_local(),
+        community_code="都昌县",
+        question_2="删除家人后仍由账号持有",
+        created_at=utcnow(),
+    )
+    db_session.add(record)
+    db_session.commit()
+    debrief_id = int(record.id)
+
+    foreign_keys = inspect(db.engine).get_foreign_keys("debriefs")
+    for column_name in ("origin_pair_id", "pair_id"):
+        foreign_key = next(
+            item
+            for item in foreign_keys
+            if item.get("constrained_columns") == [column_name]
+        )
+        assert foreign_key.get("options", {}).get("ondelete") == "SET NULL"
+
+    db_session.delete(pair)
+    db_session.commit()
+    db_session.expire_all()
+    retained = db_session.get(Debrief, debrief_id)
+    assert retained is not None
+    assert retained.owner_user_id == user_id
+    assert retained.origin_pair_id is None
+    assert retained.pair_id is None
+    assert retained.question_2 == "删除家人后仍由账号持有"
+
+    deleted = client.delete(
+        "/mp/api/v1/me",
+        headers=headers,
+        json={"confirm": True, "user_id": user_id},
+    )
+    assert deleted.status_code == 200
+    db_session.expire_all()
+    assert db_session.get(Debrief, debrief_id) is None
 
 
 def test_health_assessment_submit_latest_and_owner_scope(
@@ -609,7 +1343,8 @@ def test_account_delete_rejects_cross_user_and_anonymizes_owner_data(
     db_session,
     monkeypatch,
 ):
-    from core.db_models import HealthDiary, MiniProgramIdentity, MiniProgramSession, User
+    from core.db_models import Debrief, HealthDiary, MiniProgramIdentity, MiniProgramSession, User
+    from core.time_utils import today_local
 
     login = _wechat_login(app, client, monkeypatch, openid="delete-openid")
     data = login.get_json()["data"]
@@ -622,6 +1357,16 @@ def test_account_delete_rejects_cross_user_and_anonymizes_owner_data(
                 user_id=user_id,
                 symptoms="待删除",
                 severity="mild",
+                created_at=utcnow(),
+            )
+        )
+        db_session.add(
+            Debrief(
+                owner_user_id=user_id,
+                pair_id=None,
+                date=today_local(),
+                community_code="都昌县",
+                question_1="关闭家人关联后仍属于账号",
                 created_at=utcnow(),
             )
         )
@@ -652,6 +1397,7 @@ def test_account_delete_rejects_cross_user_and_anonymizes_owner_data(
         assert user.email is None
         assert user.deleted_at is not None
         assert HealthDiary.query.filter_by(user_id=user_id).count() == 0
+        assert Debrief.query.filter_by(owner_user_id=user_id).count() == 0
         assert MiniProgramIdentity.query.filter_by(user_id=user_id).count() == 0
         assert MiniProgramSession.query.filter_by(user_id=user_id).count() == 0
 
@@ -715,6 +1461,443 @@ def test_account_delete_serializes_an_inflight_diary_write(
     assert outcomes["delete"].status_code == 200
     with app.app_context():
         assert HealthDiary.query.filter_by(user_id=user_id).count() == 0
+
+
+def test_account_delete_serializes_atomic_miniprogram_action_confirm(
+    app,
+    client,
+    db_session,
+    monkeypatch,
+):
+    """行动状态与匿名事件一次提交，注销等待事务后清除全部 owner 数据。"""
+    from blueprints import mp_api
+    from core.db_models import DailyStatus, UsageEvent, User
+    from services import care_action_service
+
+    login = _wechat_login(app, client, monkeypatch, openid="delete-action-race-openid")
+    data = login.get_json()["data"]
+    user_id = data["user"]["id"]
+    headers = {"Authorization": f"Bearer {data['session_token']}"}
+    owner = db_session.get(User, user_id)
+    pair = _pair(db_session, owner, "76555555")
+    pair_id = int(pair.id)
+    writer_staged = threading.Event()
+    release_writer = threading.Event()
+    outcomes = {}
+    captured_event = {}
+    original_stage_event = care_action_service._stage_usage_event
+
+    monkeypatch.setattr(
+        mp_api,
+        "get_bootstrap_payload",
+        lambda: {"risk": {"level": "低风险"}},
+    )
+    monkeypatch.setattr(
+        mp_api,
+        "log_usage_event",
+        lambda *_args, **_kwargs: pytest.fail("行动确认不得进行第二次事件提交"),
+    )
+
+    def blocked_stage_event(*args, **kwargs):
+        event = original_stage_event(*args, **kwargs)
+        captured_event.update(
+            {
+                "user_id": event.user_id,
+                "pair_id": event.pair_id,
+                "member_id": event.member_id,
+                "meta": json.loads(event.meta_json),
+            }
+        )
+        writer_staged.set()
+        assert release_writer.wait(timeout=5)
+        return event
+
+    monkeypatch.setattr(
+        care_action_service,
+        "_stage_usage_event",
+        blocked_stage_event,
+    )
+
+    def write_action_confirm():
+        with app.test_client() as thread_client:
+            outcomes["write"] = thread_client.post(
+                f"/mp/api/v1/actions/{pair_id}/confirm",
+                headers=headers,
+                json={"actions_done": ["drink_water"]},
+            )
+
+    def delete_account():
+        with app.test_client() as thread_client:
+            outcomes["delete"] = thread_client.delete(
+                "/mp/api/v1/me",
+                headers=headers,
+                json={"confirm": True, "user_id": user_id},
+            )
+
+    writer = threading.Thread(target=write_action_confirm)
+    deleter = threading.Thread(target=delete_account)
+    writer.start()
+    assert writer_staged.wait(timeout=5)
+    deleter.start()
+    time.sleep(0.2)
+    assert deleter.is_alive()
+
+    release_writer.set()
+    writer.join(timeout=5)
+    deleter.join(timeout=5)
+
+    assert not writer.is_alive()
+    assert not deleter.is_alive()
+    assert outcomes["write"].status_code == 200
+    assert outcomes["delete"].status_code == 200
+    assert captured_event == {
+        "user_id": user_id,
+        "pair_id": None,
+        "member_id": None,
+        "meta": {"actions_done_count": 1},
+    }
+    with app.app_context():
+        assert DailyStatus.query.filter_by(pair_id=pair_id).count() == 0
+        assert UsageEvent.query.count() == 0
+
+
+def test_account_delete_serializes_an_inflight_miniprogram_debrief_write(
+    app,
+    client,
+    db_session,
+    monkeypatch,
+):
+    """小程序复盘与注销共用 owner 锁，注销后不留解除关联的记录。"""
+    from blueprints import mp_api
+    from core.db_models import Debrief, User
+
+    login = _wechat_login(app, client, monkeypatch, openid="delete-debrief-race-openid")
+    data = login.get_json()["data"]
+    user_id = data["user"]["id"]
+    headers = {"Authorization": f"Bearer {data['session_token']}"}
+    owner = db_session.get(User, user_id)
+    pair = _pair(db_session, owner, "76666666")
+    pair_id = int(pair.id)
+    writer_locked = threading.Event()
+    release_writer = threading.Event()
+    outcomes = {}
+    original_status_resolver = mp_api._daily_status_for_pair
+
+    def blocked_status_resolver(*args, **kwargs):
+        writer_locked.set()
+        assert release_writer.wait(timeout=5)
+        return original_status_resolver(*args, **kwargs)
+
+    monkeypatch.setattr(mp_api, "_daily_status_for_pair", blocked_status_resolver)
+
+    def write_debrief():
+        with app.test_client() as thread_client:
+            outcomes["write"] = thread_client.post(
+                f"/mp/api/v1/actions/{pair_id}/debrief",
+                headers=headers,
+                json={
+                    "question_2": "并发中的复盘",
+                    "debrief_optin": False,
+                },
+            )
+
+    def delete_account():
+        with app.test_client() as thread_client:
+            outcomes["delete"] = thread_client.delete(
+                "/mp/api/v1/me",
+                headers=headers,
+                json={"confirm": True, "user_id": user_id},
+            )
+
+    writer = threading.Thread(target=write_debrief)
+    deleter = threading.Thread(target=delete_account)
+    writer.start()
+    assert writer_locked.wait(timeout=5)
+    deleter.start()
+    time.sleep(0.2)
+    assert deleter.is_alive()
+
+    release_writer.set()
+    writer.join(timeout=5)
+    deleter.join(timeout=5)
+
+    assert not writer.is_alive()
+    assert not deleter.is_alive()
+    assert outcomes["write"].status_code == 200
+    assert outcomes["write"].get_json()["data"]["pair_id"] is None
+    assert outcomes["delete"].status_code == 200
+    with app.app_context():
+        assert Debrief.query.filter_by(owner_user_id=user_id).count() == 0
+
+
+@pytest.mark.parametrize(
+    ("action_path", "short_code", "payload"),
+    (
+        ("help", "76777777", {"note": "并发求助"}),
+        (
+            "debrief",
+            "76888888",
+            {"question_2": "提交后并发复盘", "debrief_optin": False},
+        ),
+    ),
+)
+def test_miniprogram_action_response_survives_post_commit_account_delete(
+    app,
+    client,
+    db_session,
+    monkeypatch,
+    action_path,
+    short_code,
+    payload,
+):
+    """注销在写入提交后立即清理时，响应只读取提交前冻结的标量。"""
+    from blueprints import mp_api
+    from core.db_models import DailyStatus, Debrief, Pair, User
+
+    login = _wechat_login(
+        app,
+        client,
+        monkeypatch,
+        openid=f"post-commit-{action_path}-delete-openid",
+    )
+    data = login.get_json()["data"]
+    user_id = data["user"]["id"]
+    headers = {"Authorization": f"Bearer {data['session_token']}"}
+    owner = db_session.get(User, user_id)
+    pair = _pair(db_session, owner, short_code)
+    pair_id = int(pair.id)
+
+    writer_locked = threading.Event()
+    release_writer = threading.Event()
+    writer_committed = threading.Event()
+    delete_finished = threading.Event()
+    outcomes = {}
+    original_status_resolver = mp_api._daily_status_for_pair
+    original_commit = mp_api.db.session.commit
+    writer_name = f"miniprogram-{action_path}-writer"
+
+    def blocked_status_resolver(*args, **kwargs):
+        writer_locked.set()
+        assert release_writer.wait(timeout=5)
+        return original_status_resolver(*args, **kwargs)
+
+    def coordinated_commit():
+        original_commit()
+        if threading.current_thread().name == writer_name:
+            writer_committed.set()
+            assert delete_finished.wait(timeout=5)
+
+    monkeypatch.setattr(mp_api, "_daily_status_for_pair", blocked_status_resolver)
+    monkeypatch.setattr(mp_api.db.session, "commit", coordinated_commit)
+
+    def write_action():
+        with app.test_client() as thread_client:
+            outcomes["write"] = thread_client.post(
+                f"/mp/api/v1/actions/{pair_id}/{action_path}",
+                headers=headers,
+                json=payload,
+            )
+
+    def delete_account():
+        try:
+            with app.test_client() as thread_client:
+                outcomes["delete"] = thread_client.delete(
+                    "/mp/api/v1/me",
+                    headers=headers,
+                    json={"confirm": True, "user_id": user_id},
+                )
+        finally:
+            delete_finished.set()
+
+    writer = threading.Thread(target=write_action, name=writer_name)
+    deleter = threading.Thread(target=delete_account)
+    writer.start()
+    assert writer_locked.wait(timeout=5)
+    deleter.start()
+    time.sleep(0.2)
+    assert deleter.is_alive()
+
+    release_writer.set()
+    writer.join(timeout=5)
+    deleter.join(timeout=5)
+
+    assert not writer.is_alive()
+    assert not deleter.is_alive()
+    assert writer_committed.is_set()
+    assert outcomes["write"].status_code == 200
+    assert outcomes["delete"].status_code == 200
+    response_data = outcomes["write"].get_json()["data"]
+    if action_path == "help":
+        assert response_data == {
+            "pair_id": pair_id,
+            "help_flag": True,
+            "relay_stage": "caregiver",
+        }
+    else:
+        assert isinstance(response_data["debrief_id"], int)
+        assert response_data["pair_id"] is None
+    with app.app_context():
+        assert Pair.query.filter_by(caregiver_id=user_id).count() == 0
+        assert DailyStatus.query.filter_by(pair_id=pair_id).count() == 0
+        assert Debrief.query.filter_by(owner_user_id=user_id).count() == 0
+
+
+def test_web_debrief_persists_owner_and_clamps_usage_metadata(
+    app,
+    client,
+    db_session,
+    monkeypatch,
+):
+    """Web 解除家人关联时仍保留 owner，分析长度遵循 300 上限。"""
+    from core.db_models import Debrief, PairActionToken, UsageEvent, User
+    from core.security import hash_pair_token
+    from services import public_service
+
+    login = _wechat_login(app, client, monkeypatch, openid="web-debrief-owner-openid")
+    data = login.get_json()["data"]
+    user_id = data["user"]["id"]
+    owner = db_session.get(User, user_id)
+    pair = _pair(db_session, owner, "78888888")
+    pair_id = int(pair.id)
+    pair_short_code = str(pair.short_code)
+    action_token = "web-debrief-owner-token"
+    db_session.add(
+        PairActionToken(
+            pair_id=pair_id,
+            token_hash=hash_pair_token(action_token),
+            expires_at=utcnow() + timedelta(days=1),
+            created_at=utcnow(),
+        )
+    )
+    db_session.commit()
+    monkeypatch.setattr(
+        public_service,
+        "get_weather_with_cache",
+        lambda _location: ({"is_mock": True, "data_source": "Demo"}, False),
+    )
+    with client.session_transaction() as session_record:
+        session_record["_csrf_token"] = "web-debrief-owner-csrf"
+
+    response = client.post(
+        f"/e/{action_token}/debrief",
+        data={
+            "short_code": pair_short_code,
+            "question_2": "Web owner 边界",
+            "difficulty": "难" * 500,
+            "csrf_token": "web-debrief-owner-csrf",
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 200
+    db_session.expire_all()
+    debrief = Debrief.query.one()
+    event = UsageEvent.query.filter_by(
+        user_id=user_id,
+        event_type="feedback_submitted",
+    ).one()
+    assert debrief.owner_user_id == user_id
+    assert debrief.pair_id is None
+    assert debrief.difficulty == "难" * 500
+    assert json.loads(event.meta_json) == {
+        "difficulty_len": 300,
+        "optin": False,
+    }
+
+
+def test_account_delete_serializes_an_inflight_web_debrief_write(
+    app,
+    client,
+    db_session,
+    monkeypatch,
+):
+    """Web token 复盘也必须在 owner 锁内一次提交所有账号写入。"""
+    from core.db_models import Debrief, PairActionToken, UsageEvent, User
+    from core.security import hash_pair_token
+    from services import public_service
+
+    login = _wechat_login(app, client, monkeypatch, openid="delete-web-debrief-race-openid")
+    data = login.get_json()["data"]
+    user_id = data["user"]["id"]
+    headers = {"Authorization": f"Bearer {data['session_token']}"}
+    owner = db_session.get(User, user_id)
+    pair = _pair(db_session, owner, "77777777")
+    action_token = "web-debrief-race-token"
+    db_session.add(
+        PairActionToken(
+            pair_id=pair.id,
+            token_hash=hash_pair_token(action_token),
+            expires_at=utcnow() + timedelta(days=1),
+            created_at=utcnow(),
+        )
+    )
+    db_session.commit()
+    pair_short_code = str(pair.short_code)
+
+    monkeypatch.setattr(
+        public_service,
+        "get_weather_with_cache",
+        lambda _location: ({"is_mock": True, "data_source": "Demo"}, False),
+    )
+    writer_locked = threading.Event()
+    release_writer = threading.Event()
+    outcomes = {}
+    original_owner_guard = public_service._active_pair_write_guard
+
+    @contextmanager
+    def blocked_owner_guard(*args, **kwargs):
+        with original_owner_guard(*args, **kwargs) as locked_pair:
+            writer_locked.set()
+            assert release_writer.wait(timeout=5)
+            yield locked_pair
+
+    monkeypatch.setattr(
+        public_service,
+        "_active_pair_write_guard",
+        blocked_owner_guard,
+    )
+
+    def write_debrief():
+        with app.test_client() as thread_client:
+            with thread_client.session_transaction() as session_record:
+                session_record["_csrf_token"] = "web-debrief-race-csrf"
+            outcomes["write"] = thread_client.post(
+                f"/e/{action_token}/debrief",
+                data={
+                    "short_code": pair_short_code,
+                    "question_2": "Web 并发复盘",
+                    "csrf_token": "web-debrief-race-csrf",
+                },
+                follow_redirects=False,
+            )
+
+    def delete_account():
+        with app.test_client() as thread_client:
+            outcomes["delete"] = thread_client.delete(
+                "/mp/api/v1/me",
+                headers=headers,
+                json={"confirm": True, "user_id": user_id},
+            )
+
+    writer = threading.Thread(target=write_debrief)
+    deleter = threading.Thread(target=delete_account)
+    writer.start()
+    assert writer_locked.wait(timeout=5)
+    deleter.start()
+    time.sleep(0.2)
+    assert deleter.is_alive()
+
+    release_writer.set()
+    writer.join(timeout=5)
+    deleter.join(timeout=5)
+
+    assert not writer.is_alive()
+    assert not deleter.is_alive()
+    assert outcomes["write"].status_code == 200
+    assert outcomes["delete"].status_code == 200
+    with app.app_context():
+        assert Debrief.query.filter_by(owner_user_id=user_id).count() == 0
+        assert UsageEvent.query.filter_by(user_id=user_id).count() == 0
 
 
 def test_session_owner_is_enforced_by_sqlite_foreign_keys(app, db_session):
@@ -900,6 +2083,15 @@ def test_sync_cycle_calls_each_qweather_endpoint_at_most_once_and_enriches_forec
     assert payload["forecast"][0]["risk_available"] is True
     assert payload["forecast"][0]["risk_score"] is not None
     assert payload["risk"]["summary"]
+
+    calls["nowcast"].clear()
+    smoke_result = pipeline.sync_weather_cache(
+        locations=["都昌县"],
+        update_daily=False,
+        include_nowcast=False,
+    )
+    assert calls["nowcast"] == []
+    assert smoke_result["nowcast_updated"] == 0
 
 
 def test_sync_with_qweather_empty_never_instantiates_fetcher_or_uses_network(
@@ -1216,3 +2408,58 @@ def test_wechat_login_limits_active_sessions_per_identity(
     assert client.get(
         "/mp/api/v1/me", headers={"Authorization": f"Bearer {tokens[-1]}"}
     ).status_code == 200
+
+
+def test_concurrent_wechat_login_keeps_one_identity_and_session_cap(
+    app,
+    db_session,
+    monkeypatch,
+):
+    """同一 OpenID 并发首次登录只能建一份身份，活跃会话不得突破上限。"""
+    from core.db_models import MiniProgramIdentity, MiniProgramSession, User
+
+    _configure_wechat(app)
+    app.config["WX_MINIPROGRAM_MAX_ACTIVE_SESSIONS"] = 2
+    barrier = threading.Barrier(4)
+
+    def exchange_once(*_args, **_kwargs):
+        barrier.wait(timeout=5)
+        return _WechatResponse("concurrent-first-login-openid")
+
+    monkeypatch.setattr(
+        "services.miniprogram_auth.requests.get",
+        exchange_once,
+    )
+    responses = []
+    response_lock = threading.Lock()
+
+    def login(index):
+        with app.test_client() as thread_client:
+            response = thread_client.post(
+                "/mp/api/v1/auth/wechat",
+                json={
+                    "code": f"concurrent-code-{index}",
+                    "privacy_consent_version": "privacy-v1",
+                },
+                environ_overrides={"REMOTE_ADDR": f"198.51.100.{index + 1}"},
+            )
+            with response_lock:
+                responses.append(response)
+
+    threads = [threading.Thread(target=login, args=(index,)) for index in range(4)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=8)
+
+    assert all(not thread.is_alive() for thread in threads)
+    assert len(responses) == 4
+    assert all(response.status_code == 200 for response in responses)
+    with app.app_context():
+        assert MiniProgramIdentity.query.count() == 1
+        identity = MiniProgramIdentity.query.one()
+        assert User.query.filter_by(id=identity.user_id).count() == 1
+        assert MiniProgramSession.query.filter(
+            MiniProgramSession.identity_id == identity.id,
+            MiniProgramSession.revoked_at.is_(None),
+        ).count() == 2

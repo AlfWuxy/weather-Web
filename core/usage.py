@@ -11,9 +11,9 @@ import secrets
 from datetime import timedelta
 
 from flask import current_app, has_app_context
-from sqlalchemy import or_
+from sqlalchemy import case, or_
 
-from core.db_models import ApiToken, UsageEvent, User
+from core.db_models import AlertDelivery, ApiToken, UsageEvent, User
 from core.extensions import db
 from core.security import hash_identifier
 from core.time_utils import ensure_utc_aware, utcnow
@@ -29,6 +29,7 @@ _USAGE_SOURCES = {'web', 'miniprogram', 'cron', 'system'}
 USAGE_EVENT_RETENTION_DAYS = 30
 USAGE_EVENT_RETENTION_BATCH_SIZE = 1000
 USAGE_EVENT_RETENTION_MAX_BATCHES = 10
+ALERT_DELIVERY_CLICK_RETENTION_DAYS = 30
 _VALID_ACTION_EVENT_TYPE = 'checkin_confirmed'
 PILOT_EVENT_TYPES = frozenset({
     'pair_created',
@@ -149,6 +150,7 @@ def create_api_token(
     scopes=None,
     ttl_days=None,
     privacy_consent_version=None,
+    commit=True,
 ):
     """Create an API token for miniprogram binding.
 
@@ -179,7 +181,8 @@ def create_api_token(
         privacy_consent_version=consent_version,
     )
     db.session.add(record)
-    db.session.commit()
+    if commit:
+        db.session.commit()
     return plain
 
 
@@ -190,18 +193,48 @@ def verify_api_token(plain_token):
     token_hash = hash_identifier(plain_token)
     if not token_hash:
         return None
-    record = ApiToken.query.filter(
-        ApiToken.token_hash == token_hash,
-        ApiToken.revoked_at.is_(None),
-    ).first()
-    if record is None or record.expires_at is None:
+    verification_query = (
+        db.select(ApiToken, User)
+        .join(User, User.id == ApiToken.user_id)
+        .where(
+            ApiToken.token_hash == token_hash,
+            ApiToken.revoked_at.is_(None),
+            User.deleted_at.is_(None),
+        )
+        # 写请求会在同一 Session 内再次复验，不能沿用旧的 ORM 字段值。
+        .execution_options(populate_existing=True)
+        .limit(1)
+    )
+    verified = db.session.execute(verification_query).first()
+    if verified is None:
+        return None
+    record, user = verified
+    if record.expires_at is None:
         return None
     if ensure_utc_aware(record.expires_at) <= utcnow():
         return None
-    user = db.session.get(User, record.user_id)
-    if user is None or user.deleted_at is not None:
-        return None
+    record._verified_user = user
     return record
+
+
+def _lock_active_usage_event_owner_for_write(user_id):
+    """与账号注销共用 User 行锁，并在取锁后复核注销墓碑。"""
+    if db.engine.dialect.name == 'sqlite':
+        # SQLite 忽略 SELECT FOR UPDATE，条件 no-op UPDATE 会取得写锁。
+        lock_result = db.session.execute(
+            db.update(User)
+            .where(User.id == user_id, User.deleted_at.is_(None))
+            .values(last_login=User.last_login)
+        )
+        if lock_result.rowcount != 1:
+            return None
+        return db.session.get(User, user_id)
+
+    return db.session.execute(
+        db.select(User)
+        .where(User.id == user_id, User.deleted_at.is_(None))
+        .with_for_update()
+    ).scalar_one_or_none()
 
 
 def log_usage_event(event_type, user_id=None, pair_id=None, member_id=None, source='web', meta=None):
@@ -227,6 +260,13 @@ def log_usage_event(event_type, user_id=None, pair_id=None, member_id=None, sour
         normalized_source = str(source or '').strip().lower()
         if normalized_source not in _USAGE_SOURCES:
             normalized_source = 'web'
+        if (
+            user_id is not None
+            and _lock_active_usage_event_owner_for_write(user_id) is None
+        ):
+            # 释放当前锁事务，并丢弃已注销账号的分析事件。
+            db.session.rollback()
+            return None
         event = UsageEvent(
             user_id=user_id,
             # 保留 pair_id/member_id 参数兼容旧调用，分析事件只做账号级聚合。
@@ -289,6 +329,65 @@ def delete_expired_usage_events(
 
     return {
         'deleted': deleted_total,
+        'cutoff': cutoff,
+        'complete': complete,
+    }
+
+
+def clear_expired_alert_delivery_clicks(
+    *,
+    now=None,
+    batch_size=USAGE_EVENT_RETENTION_BATCH_SIZE,
+    max_batches=USAGE_EVENT_RETENTION_MAX_BATCHES,
+):
+    """分批清空超过 30 天的点击时间，保留投递幂等记录。"""
+    reference_time = ensure_utc_aware(now or utcnow())
+    cutoff = reference_time - timedelta(days=ALERT_DELIVERY_CLICK_RETENTION_DAYS)
+    batch_size = max(1, min(int(batch_size), 10_000))
+    max_batches = max(1, min(int(max_batches), 100))
+    cleared_total = 0
+    complete = False
+
+    for _batch_number in range(max_batches):
+        expired_ids = [
+            row[0]
+            for row in db.session.query(AlertDelivery.id)
+            .filter(AlertDelivery.clicked_at < cutoff)
+            .order_by(AlertDelivery.clicked_at.asc(), AlertDelivery.id.asc())
+            .limit(batch_size)
+            .all()
+        ]
+        if not expired_ids:
+            complete = True
+            break
+
+        click_confirmed = AlertDelivery.review_action == 'click_confirmed'
+        cleared = AlertDelivery.query.filter(
+            AlertDelivery.id.in_(expired_ids),
+            AlertDelivery.clicked_at < cutoff,
+        ).update(
+            {
+                AlertDelivery.clicked_at: None,
+                # 点击自动确认与 clicked_at 属于同一行为记录；人工复核时间保持不动。
+                AlertDelivery.reviewed_at: case(
+                    (click_confirmed, None),
+                    else_=AlertDelivery.reviewed_at,
+                ),
+                AlertDelivery.review_action: case(
+                    (click_confirmed, None),
+                    else_=AlertDelivery.review_action,
+                ),
+            },
+            synchronize_session=False,
+        )
+        db.session.commit()
+        cleared_total += int(cleared or 0)
+        if len(expired_ids) < batch_size:
+            complete = True
+            break
+
+    return {
+        'cleared': cleared_total,
         'cutoff': cutoff,
         'complete': complete,
     }

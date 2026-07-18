@@ -172,16 +172,8 @@ def test_shell_wrapper_uses_repo_root_and_module_entrypoint(
         'arguments': list(expected_arguments),
     }
     if script_name == 'cleanup_usage_events.sh':
-        assert python_calls[1:] == [{
-            'cwd': str(ROOT_DIR),
-            'arguments': [
-                str(ROOT_DIR / 'scripts' / 'prune_deploy_transactions.py'),
-                '--state-dir',
-                str(tmp_path),
-                '--retention-days',
-                '30',
-            ],
-        }]
+        # 非特权日常清理只触碰应用数据库；部署事务保留由 root 运维单独处理。
+        assert len(python_calls) == 1
     else:
         assert len(python_calls) == 1
 
@@ -189,23 +181,35 @@ def test_shell_wrapper_uses_repo_root_and_module_entrypoint(
 def test_weather_cache_cli_only_succeeds_with_fresh_available_snapshot(monkeypatch):
     from services.pipelines import sync_weather_cache as pipeline
 
+    calls = []
     monkeypatch.setattr(
         pipeline,
         'sync_weather_cache',
-        lambda **_options: {'snapshot_id': 'snapshot-1', 'snapshot_ready': False},
+        lambda **options: calls.append(options)
+        or {'snapshot_id': 'snapshot-1', 'snapshot_ready': False},
     )
-    assert pipeline.main([]) == 2
+    assert pipeline.main(['--skip-nowcast']) == 2
+    assert calls[-1]['include_nowcast'] is False
 
     monkeypatch.setattr(
         pipeline,
         'sync_weather_cache',
-        lambda **_options: {'snapshot_id': 'snapshot-2', 'snapshot_ready': True},
+        lambda **options: calls.append(options)
+        or {'snapshot_id': 'snapshot-2', 'snapshot_ready': True},
     )
     assert pipeline.main([]) == 0
+    assert calls[-1]['include_nowcast'] is True
 
 
 def test_dispatch_cli_marks_snapshot_and_delivery_failures(monkeypatch):
     from services.pipelines import dispatch_alerts as pipeline
+
+    class FakeLock:
+        def close(self):
+            return None
+
+    # 该用例只验证业务退出码；调度锁的 fail-closed 边界由独立测试覆盖。
+    monkeypatch.setattr(pipeline, '_acquire_dispatch_lock', lambda: FakeLock())
 
     monkeypatch.setattr(
         pipeline,

@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """Public and auth routes."""
 import logging
+from datetime import datetime, timedelta
 from urllib.parse import parse_qsl
 
 import requests
@@ -21,14 +22,21 @@ from flask_login import current_user, login_required
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 
+from config import (
+    PUSH_TRACKING_LINK_TTL_DAYS_DEFAULT,
+    PUSH_TRACKING_LINK_TTL_DAYS_MAX,
+    PUSH_TRACKING_LINK_TTL_DAYS_MIN,
+)
+
 logger = logging.getLogger(__name__)
 
 from core.extensions import limiter
 from core.extensions import db
+from core.audit import log_audit
 from core.security import rate_limit_key
-from core.time_utils import utcnow
+from core.time_utils import ensure_utc_aware, utcnow
 from core.usage import log_usage_event
-from core.db_models import AlertDelivery
+from core.db_models import AlertDelivery, WeatherAlert
 from core.time_utils import today_local
 from services.public_service import (
     render_role_entry,
@@ -48,6 +56,7 @@ from services.public_service import (
     _resolve_action_routes,
     _render_action_page
 )
+from services.push.dispatch import DELIVERY_LOCAL_FAILURES
 from utils.validators import sanitize_input
 
 bp = Blueprint('public', __name__)
@@ -84,6 +93,39 @@ Disallow: /elder
 Disallow: /e/
 Disallow: /t/
 """
+
+
+def _push_tracking_ttl_days():
+    """读取已经由应用配置层收敛的推送链接有效期。"""
+    value = current_app.config.get(
+        'PUSH_TRACKING_LINK_TTL_DAYS',
+        PUSH_TRACKING_LINK_TTL_DAYS_DEFAULT,
+    )
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        parsed = PUSH_TRACKING_LINK_TTL_DAYS_DEFAULT
+    return max(
+        PUSH_TRACKING_LINK_TTL_DAYS_MIN,
+        min(parsed, PUSH_TRACKING_LINK_TTL_DAYS_MAX),
+    )
+
+
+def _push_tracking_anchor(delivery):
+    """优先使用发送时间，旧记录仅回退到更早的预警创建时间。"""
+    candidate = delivery.sent_at
+    if candidate is None:
+        candidate = (
+            db.session.query(WeatherAlert.alert_date)
+            .filter(WeatherAlert.id == delivery.alert_id)
+            .scalar()
+        )
+    if not isinstance(candidate, datetime):
+        return None
+    try:
+        return ensure_utc_aware(candidate)
+    except (OverflowError, ValueError):
+        return None
 
 HOME_EDGE_CACHE_SECONDS = 60
 HOME_STALE_WHILE_REVALIDATE_SECONDS = 30
@@ -359,12 +401,10 @@ def logout():
     return handle_logout()
 
 
-@bp.route('/t/<delivery_token>', endpoint='track_delivery')
+@bp.route('/t/<delivery_token>', methods=['GET', 'POST'], endpoint='track_delivery')
+@limiter.limit("30 per minute", key_func=rate_limit_key)
 def track_delivery(delivery_token):
-    """Push click tracking endpoint.
-
-    Records click (CTR) then redirects user to the caregiver dashboard (login if needed).
-    """
+    """展示确认页，并仅在用户主动提交后记录首次送达确认。"""
     token = sanitize_input(delivery_token, max_length=80) or ''
     token = token.strip()
     if not token:
@@ -374,18 +414,85 @@ def track_delivery(delivery_token):
     if not delivery:
         return redirect(url_for('public.index'))
 
+    checked_at = ensure_utc_aware(utcnow())
+    tracking_anchor = _push_tracking_anchor(delivery)
+    if tracking_anchor is None:
+        return redirect(url_for('public.index'))
     try:
-        if not delivery.clicked_at:
-            clicked_at = utcnow()
-            delivery.clicked_at = clicked_at
-            # 不明确投递出现有效点击时，可确定消息已经到达，无需继续人工猜测。
-            if delivery.status in {'sending', 'uncertain'}:
-                delivery.status = 'sent'
-                delivery.error = None
-                delivery.sent_at = delivery.sent_at or clicked_at
-                delivery.reviewed_at = clicked_at
-                delivery.review_action = 'click_confirmed'
+        expires_at = tracking_anchor + timedelta(days=_push_tracking_ttl_days())
+    except OverflowError:
+        return redirect(url_for('public.index'))
+    if checked_at < tracking_anchor or checked_at > expires_at:
+        return redirect(url_for('public.index'))
+
+    if request.method in {'GET', 'HEAD'}:
+        # GET/HEAD 可能由微信预览、浏览器预取或安全扫描触发，严禁在此写入送达事实。
+        response = make_response(
+            render_template(
+                'push_delivery_confirm.html',
+                delivery_token=token,
+            )
+        )
+        response.headers['Cache-Control'] = 'no-store, private, max-age=0'
+        response.headers['Pragma'] = 'no-cache'
+        response.headers['X-Robots-Tag'] = 'noindex, nofollow, noarchive'
+        return response
+
+    clicked_at = checked_at
+
+    try:
+        # 条件更新让并发或重复提交只产生一次主动确认事实与一次分析事件。
+        first_click = (
+            AlertDelivery.query.filter(
+                AlertDelivery.id == delivery.id,
+                AlertDelivery.clicked_at.is_(None),
+            ).update(
+                {AlertDelivery.clicked_at: clicked_at},
+                synchronize_session=False,
+            )
+            == 1
+        )
+        if first_click:
+            # 主动确认是强送达证据；CAS 不覆盖并发或既有人工复核结论。
+            promotable_failed = db.and_(
+                AlertDelivery.status == 'failed',
+                db.or_(
+                    AlertDelivery.error.is_(None),
+                    AlertDelivery.error.notin_(tuple(DELIVERY_LOCAL_FAILURES)),
+                ),
+            )
+            db.session.execute(
+                db.update(AlertDelivery)
+                .where(
+                    AlertDelivery.id == delivery.id,
+                    AlertDelivery.clicked_at == clicked_at,
+                    AlertDelivery.review_action.is_(None),
+                    AlertDelivery.reviewed_at.is_(None),
+                    db.or_(
+                        AlertDelivery.status.in_(('sending', 'uncertain', 'retry_ready')),
+                        promotable_failed,
+                    ),
+                )
+                .values(
+                    status='sent',
+                    error=None,
+                    sent_at=db.func.coalesce(AlertDelivery.sent_at, tracking_anchor),
+                    reviewed_at=clicked_at,
+                    review_action='click_confirmed',
+                )
+            )
+            log_audit(
+                'push_delivery_user_confirmed',
+                resource_type='alert_delivery',
+                resource_id=delivery.id,
+                metadata={
+                    'previous_status': str(delivery.status or ''),
+                    'previous_review_action': delivery.review_action,
+                },
+            )
             db.session.commit()
+            db.session.expire(delivery)
+            db.session.refresh(delivery)
             log_usage_event(
                 'push_click',
                 user_id=delivery.user_id,
@@ -393,8 +500,11 @@ def track_delivery(delivery_token):
                 source='web',
                 meta={'alert_id': delivery.alert_id, 'channel': delivery.channel},
             )
+        else:
+            db.session.rollback()
     except Exception:
         db.session.rollback()
+        logger.debug("推送点击记录失败", exc_info=True)
 
     target = url_for('user.pair_management')
     if current_user.is_authenticated:

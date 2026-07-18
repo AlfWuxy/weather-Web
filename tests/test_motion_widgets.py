@@ -34,7 +34,7 @@ def _contrast_ratio(first, second):
 
 def _login_as(client, user_id, csrf_token='test-csrf-token'):
     with client.session_transaction() as session:
-        session['_user_id'] = str(user_id)
+        session['_user_id'] = f'{user_id}:1'
         session['_fresh'] = True
         session['_csrf_token'] = csrf_token
 
@@ -423,7 +423,7 @@ def test_apple_polish_uses_accessible_action_and_muted_colors(client):
     assert 'animation: none;' in css
 
 
-def test_home_loads_polish_layer_and_accessible_chat_markup(client):
+def test_home_loads_polish_layer_without_disabled_web_ai(client):
     response = client.get('/')
 
     assert response.status_code == 200
@@ -431,13 +431,9 @@ def test_home_loads_polish_layer_and_accessible_chat_markup(client):
     assert '/static/css/apple-polish.css' in body
     assert 'class="visually-hidden-focusable skip-link"' in body
     assert 'href="#main-content"' in body
-    assert 'id="ai-chat-window"' in body
-    assert 'role="dialog"' in body
-    assert 'aria-labelledby="ai-chat-title"' in body
-    assert 'aria-hidden="true"' in body
-    assert 'aria-controls="ai-chat-window"' in body
-    assert 'aria-expanded="false"' in body
-    assert 'role="log"' in body
+    assert 'id="ai-chat-window"' not in body
+    assert 'ai-floating-chat.css' not in body
+    assert 'ai-floating-chat.js' not in body
 
 
 def test_ai_chat_script_keeps_aria_and_focus_state_in_sync():

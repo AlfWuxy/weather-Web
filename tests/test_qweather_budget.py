@@ -2,6 +2,7 @@
 """和风天气单地点缓存与月度预算保护测试。"""
 
 import logging
+import importlib
 import time
 
 from flask import Flask
@@ -76,6 +77,22 @@ def test_budget_fails_closed_when_configured_redis_is_unavailable(app, monkeypat
         app.config["QWEATHER_BUDGET_FAIL_CLOSED"] = True
 
         assert budget.reserve_qweather_request("weather_now") is False
+
+
+def test_configured_redis_never_falls_back_even_if_legacy_flag_is_disabled(app, monkeypatch):
+    from services import qweather_budget as budget
+
+    _reset_local_budget(budget)
+    monkeypatch.setattr(budget, "get_qweather_redis_client", lambda: None)
+    with app.app_context():
+        app.config["REDIS_URL"] = "redis://127.0.0.1:6379/0"
+        app.config["WEATHER_CACHE_REDIS_URL"] = ""
+        app.config["QWEATHER_NETWORK_NOT_BEFORE_EPOCH"] = ""
+        app.config["QWEATHER_BUDGET_FAIL_CLOSED"] = False
+
+        assert budget.reserve_qweather_request("weather_now") is False
+
+    assert dict(budget._LOCAL_TOTALS) == {}
 
 
 def test_zero_budget_disables_qweather(app, monkeypatch):
@@ -215,6 +232,53 @@ def test_expired_network_gate_allows_budget_reservation(app, monkeypatch):
 
     assert snapshot["used"] == 1
     assert snapshot["endpoints"] == {"weather_now": 1}
+
+
+def test_formal_runtime_without_redis_fails_closed_across_module_reload(monkeypatch):
+    """模块重载模拟下一个定时进程，正式环境不得因本地计数归零而放行。"""
+    from services import qweather_budget as imported_budget
+
+    app = Flask(__name__)
+    app.config.update(
+        DEBUG=False,
+        TESTING=False,
+        REDIS_URL="",
+        WEATHER_CACHE_REDIS_URL="",
+        QWEATHER_NETWORK_NOT_BEFORE_EPOCH="",
+        QWEATHER_MONTHLY_REQUEST_LIMIT=2,
+        QWEATHER_REQUIRE_PERSISTENT_BUDGET=False,
+    )
+
+    budget = importlib.reload(imported_budget)
+    with app.app_context():
+        assert budget.reserve_qweather_request("weather_now") is False
+        assert budget.get_qweather_budget_snapshot()["backend"] == "unavailable"
+    assert dict(budget._LOCAL_TOTALS) == {}
+
+    budget = importlib.reload(budget)
+    with app.app_context():
+        assert budget.reserve_qweather_request("weather_now") is False
+        assert budget.get_qweather_budget_snapshot()["remaining"] == 0
+    assert dict(budget._LOCAL_TOTALS) == {}
+
+
+def test_debug_runtime_can_explicitly_require_persistent_budget(app, monkeypatch):
+    from services import qweather_budget as budget
+
+    _reset_local_budget(budget)
+    monkeypatch.setattr(budget, "get_qweather_redis_client", lambda: None)
+    with app.app_context():
+        app.config["DEBUG"] = True
+        app.config["TESTING"] = True
+        app.config["REDIS_URL"] = ""
+        app.config["WEATHER_CACHE_REDIS_URL"] = ""
+        app.config["QWEATHER_NETWORK_NOT_BEFORE_EPOCH"] = ""
+        app.config["QWEATHER_REQUIRE_PERSISTENT_BUDGET"] = True
+
+        assert budget.reserve_qweather_request("weather_now") is False
+        assert budget.get_qweather_budget_snapshot()["backend"] == "unavailable"
+
+    assert dict(budget._LOCAL_TOTALS) == {}
 
 
 def test_network_gate_opens_at_exact_not_before_second(app):

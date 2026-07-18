@@ -15,7 +15,7 @@ from __future__ import annotations
 import json
 import math
 import secrets
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from functools import wraps
 
 from flask import Blueprint, current_app, g, jsonify, request
@@ -43,7 +43,7 @@ from core.db_models import (
 )
 from core.extensions import db, limiter
 from core.security import hash_identifier
-from core.time_utils import today_local, utcnow
+from core.time_utils import ensure_utc_aware, today_local, utcnow
 from core.usage import (
     MINIPROGRAM_CLIENT_PILOT_EVENT_TYPES,
     api_token_has_scope,
@@ -58,6 +58,17 @@ from core.weather import (
 from services.location_resolver import resolve_location
 from services.warning_service import get_qweather_warnings
 from services.user._common import _create_pair_record
+from services.care_action_service import (
+    RELAY_STAGES,
+    get_or_create_daily_status,
+    stage_confirm_action,
+    stage_debrief_action,
+    stage_help_action,
+)
+from services.community_daily_service import (
+    refresh_community_daily_best_effort,
+    refresh_latest_community_daily_best_effort,
+)
 from services.miniprogram_auth import (
     MiniProgramAuthError,
     current_privacy_version,
@@ -71,6 +82,7 @@ from services.miniprogram_service import (
     public_cooling_resources_payload,
     public_gis_metadata_payload,
 )
+from services.push.locks import push_owner_lock
 from utils.parsers import safe_json_loads
 from utils.validators import sanitize_input
 
@@ -78,6 +90,7 @@ bp = Blueprint("mp_api", __name__, url_prefix="/mp/api/v1")
 MP_EVENT_META_MAX_CHARS = 2048
 MAX_PAGE_SIZE = 50
 ACQUISITION_SOURCE_FAMILY_SHARE = "family_share"
+CREDENTIAL_LAST_USED_INTERVAL = timedelta(minutes=30)
 
 
 def _success(data=None, status=200):
@@ -89,6 +102,11 @@ def _error(error, message, status=400, data=None):
     if data is not None:
         payload["data"] = data
     return jsonify(payload), status
+
+
+def _wxpusher_available():
+    """只暴露推送通道是否可用，不向客户端返回任何凭证内容。"""
+    return bool((current_app.config.get("WXPUSHER_APP_TOKEN") or "").strip())
 
 
 def _json_payload():
@@ -137,6 +155,24 @@ def _finite_or_none(value):
     except (TypeError, ValueError):
         return None
     return parsed if math.isfinite(parsed) else None
+
+
+def _safe_stored_text_list(value, *, max_items=20, item_max_length=50):
+    """把历史 JSON 字段收敛为有界纯文本列表。"""
+    parsed = safe_json_loads(value, [])
+    if not isinstance(parsed, list):
+        return []
+    items = []
+    for item in parsed[:max_items]:
+        if not isinstance(item, str):
+            continue
+        stripped = item.strip()
+        if not stripped or len(stripped) > item_max_length:
+            continue
+        cleaned = sanitize_input(stripped, max_length=item_max_length)
+        if cleaned == stripped:
+            items.append(cleaned)
+    return items
 
 
 def _list_of_text(payload, name, *, max_items, item_max_length):
@@ -213,13 +249,25 @@ def _mp_rate_limit_key() -> str:
     return f"mp-ip:{hash_identifier(client_ip)}"
 
 
+def _credential_last_used_due(record, used_at) -> bool:
+    """凭证活跃时间最多每 30 分钟持久化一次。"""
+    last_used_at = getattr(record, "last_used_at", None)
+    if last_used_at is None:
+        return True
+    return ensure_utc_aware(last_used_at) <= (
+        ensure_utc_aware(used_at) - CREDENTIAL_LAST_USED_INTERVAL
+    )
+
+
 def require_api_token(fn):
     @wraps(fn)
     def wrapper(*args, **kwargs):
         token = _bearer_token()
+        used_at = utcnow()
+        credential_record = None
         session_record = verify_miniprogram_session(token)
         if session_record is not None:
-            session_record.last_used_at = utcnow()
+            credential_record = session_record
             g.mp_session = session_record
             g.api_token = None
             g.api_user_id = session_record.user_id
@@ -228,21 +276,29 @@ def require_api_token(fn):
             record = verify_api_token(token)
             if not record:
                 return _error("unauthorized", "登录状态无效或已过期。", 401)
-            record.last_used_at = utcnow()
+            credential_record = record
             g.api_token = record
             g.api_user_id = record.user_id
             g.auth_kind = "api_token"
 
-        user_query = db.select(User).where(User.id == g.api_user_id)
-        if request.method in {"POST", "PUT", "PATCH", "DELETE"}:
+        is_write = request.method in {"POST", "PUT", "PATCH", "DELETE"}
+        if is_write:
             # 所有写请求与账号注销共用同一行锁，消除清理后的并发残留。
-            user_query = user_query.with_for_update()
-        active_user = db.session.execute(user_query).scalar_one_or_none()
+            user_query = (
+                db.select(User)
+                .where(User.id == g.api_user_id, User.deleted_at.is_(None))
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+            active_user = db.session.execute(user_query).scalar_one_or_none()
+        else:
+            # GET/HEAD 复用凭证 JOIN 已验证的 User，避免重复 owner 查询。
+            active_user = getattr(credential_record, "_verified_user", None)
         if active_user is None or active_user.deleted_at is not None:
             db.session.rollback()
             return _error("unauthorized", "账号已失效或已注销。", 401)
         if (
-            request.method in {"POST", "PUT", "PATCH", "DELETE"}
+            is_write
             and db.engine.dialect.name == "sqlite"
         ):
             # SQLite 忽略 SELECT FOR UPDATE；条件 no-op UPDATE 会取得写锁并复核墓碑。
@@ -276,7 +332,26 @@ def require_api_token(fn):
                 "该 Token 没有写入权限，请重新生成。",
                 403,
             )
-        return fn(*args, **kwargs)
+        g.api_scope_denied = False
+        if is_write:
+            # 先取得 User 锁，再将 credential 标记为脏，保持固定锁序。
+            if _credential_last_used_due(credential_record, used_at):
+                credential_record.last_used_at = used_at
+            return fn(*args, **kwargs)
+
+        response = fn(*args, **kwargs)
+        if (
+            not getattr(g, "api_scope_denied", False)
+            and _credential_last_used_due(credential_record, used_at)
+        ):
+            # GET/HEAD 完成后才开启短写事务，避免整个请求持有 credential 写锁。
+            try:
+                credential_record.last_used_at = used_at
+                db.session.commit()
+            except Exception:
+                db.session.rollback()
+                current_app.logger.warning("小程序凭证使用时间写入失败", exc_info=True)
+        return response
 
     return wrapper
 
@@ -291,6 +366,7 @@ def require_api_scope(scope):
                 return fn(*args, **kwargs)
             if api_token_has_scope(getattr(g, "api_token", None), scope):
                 return fn(*args, **kwargs)
+            g.api_scope_denied = True
             return _error("insufficient_scope", "该 Token 没有此功能权限，请重新生成。", 403)
 
         return wrapper
@@ -298,8 +374,62 @@ def require_api_scope(scope):
     return decorator
 
 
+def _reauthorize_locked_api_user():
+    """在 owner 文件锁内重新验证凭证、账号墓碑和写权限。"""
+    expected_user_id = int(g.api_user_id)
+    expected_kind = str(g.auth_kind)
+    token = _bearer_token()
+    used_at = utcnow()
+    if expected_kind == "miniprogram_session":
+        credential = verify_miniprogram_session(token)
+        if credential is None or int(credential.user_id) != expected_user_id:
+            db.session.rollback()
+            return _error("unauthorized", "登录状态无效或已过期。", 401)
+        g.mp_session = credential
+        g.api_token = None
+    else:
+        credential = verify_api_token(token)
+        if credential is None or int(credential.user_id) != expected_user_id:
+            db.session.rollback()
+            return _error("unauthorized", "登录状态无效或已过期。", 401)
+        g.api_token = credential
+        if credential.privacy_consent_version != current_privacy_version():
+            db.session.rollback()
+            return _error(
+                "privacy_consent_required",
+                "隐私说明已更新，请在网页端重新生成绑定 Token。",
+                428,
+                data={"required_privacy_consent_version": current_privacy_version()},
+            )
+        if not api_token_has_scope(credential, "miniprogram:write"):
+            db.session.rollback()
+            return _error("insufficient_scope", "该 Token 没有写入权限，请重新生成。", 403)
+
+    user = db.session.execute(
+        db.select(User)
+        .where(User.id == expected_user_id, User.deleted_at.is_(None))
+        .with_for_update()
+    ).scalar_one_or_none()
+    if user is None:
+        db.session.rollback()
+        return _error("unauthorized", "账号已失效或已注销。", 401)
+    if db.engine.dialect.name == "sqlite":
+        changed = db.session.execute(
+            db.update(User)
+            .where(User.id == expected_user_id, User.deleted_at.is_(None))
+            .values(last_login=User.last_login)
+        ).rowcount
+        if changed != 1:
+            db.session.rollback()
+            return _error("unauthorized", "账号已失效或已注销。", 401)
+    if _credential_last_used_due(credential, used_at):
+        credential.last_used_at = used_at
+    g.api_user = user
+    return None
+
+
 def _pair_for_user(pair_id: int):
-    q = Pair.query.filter_by(id=pair_id)
+    q = Pair.query.filter_by(id=pair_id, status="active")
     # admin token is not supported in pilot; restrict to owner
     q = q.filter_by(caregiver_id=g.api_user_id)
     return q.first()
@@ -316,11 +446,14 @@ def _resolve_owned_member(*, payload=None, required=False):
         pair = _pair_for_user(pair_id)
         if pair is None:
             raise LookupError("pair_not_found")
-        if pair.member_id:
-            member = FamilyMember.query.filter_by(
-                id=pair.member_id,
-                user_id=g.api_user_id,
-            ).first()
+        if not pair.member_id:
+            raise LookupError("pair_member_not_found")
+        member = FamilyMember.query.filter_by(
+            id=pair.member_id,
+            user_id=g.api_user_id,
+        ).first()
+        if member is None:
+            raise LookupError("member_not_found")
     if member_raw not in (None, ""):
         member_id = _int_value(member_raw, minimum=1, field="member_id", allow_none=False)
         direct_member = FamilyMember.query.filter_by(id=member_id, user_id=g.api_user_id).first()
@@ -499,7 +632,7 @@ def public_community_bundle():
 @limiter.limit(lambda: current_app.config.get("RATE_LIMIT_MP_READ", "120 per minute"), key_func=_mp_rate_limit_key)
 @require_api_token
 def me():
-    user = db.session.get(User, g.api_user_id)
+    user = getattr(g, "api_user", None)
     if not user:
         return jsonify({"success": False, "error": "user_not_found"}), 404
     data = {
@@ -507,6 +640,7 @@ def me():
         "display_name": "微信用户" if getattr(g, "auth_kind", None) == "miniprogram_session" else user.username,
         "wxpusher_uid": user.wxpusher_uid,
         "push_enabled": bool(user.push_enabled),
+        "wxpusher_available": _wxpusher_available(),
     }
     # 旧 API token 客户端继续使用 username；微信会话不暴露内部哈希前缀账号名。
     if getattr(g, "auth_kind", None) == "api_token":
@@ -519,9 +653,6 @@ def me():
 @require_api_token
 def me_patch():
     """Update pilot push settings (WxPusher UID + enabled flag)."""
-    user = db.session.get(User, g.api_user_id)
-    if not user:
-        return jsonify({"success": False, "error": "user_not_found"}), 404
     payload = request.get_json(silent=True)
     if payload is None:
         payload = {}
@@ -529,18 +660,22 @@ def me_patch():
         return jsonify({"success": False, "error": "invalid_payload"}), 400
 
     updated_fields = []
-    wx_uid = user.wxpusher_uid
-    push_enabled = bool(user.push_enabled)
+    requested_wx_uid = None
+    requested_push_enabled = None
     wxpusher_consent = False
 
     if "wxpusher_uid" in payload:
-        wx_uid = sanitize_input(payload.get("wxpusher_uid"), max_length=80)
-        wx_uid = (wx_uid.strip() if isinstance(wx_uid, str) else None) or None
+        requested_wx_uid = sanitize_input(payload.get("wxpusher_uid"), max_length=80)
+        requested_wx_uid = (
+            requested_wx_uid.strip()
+            if isinstance(requested_wx_uid, str)
+            else None
+        ) or None
         updated_fields.append("wxpusher_uid")
 
     if "push_enabled" in payload:
         try:
-            push_enabled = _parse_strict_bool(payload.get("push_enabled"))
+            requested_push_enabled = _parse_strict_bool(payload.get("push_enabled"))
         except ValueError:
             return jsonify({"success": False, "error": "invalid_push_enabled"}), 400
         updated_fields.append("push_enabled")
@@ -551,27 +686,134 @@ def me_patch():
         except ValueError:
             return jsonify({"success": False, "error": "invalid_wxpusher_consent"}), 400
 
-    # UID 被移除时必须关闭推送，避免保留无法投递的开启状态。
-    if not wx_uid:
-        push_enabled = False
-        if "wxpusher_uid" in updated_fields and "push_enabled" not in updated_fields:
-            updated_fields.append("push_enabled")
+    wxpusher_available = _wxpusher_available()
+    owner_user_id = int(g.api_user_id)
+    db.session.rollback()
+    try:
+        with push_owner_lock(owner_user_id):
+            authorization_error = _reauthorize_locked_api_user()
+            if authorization_error is not None:
+                return authorization_error
+            user = g.api_user
+            wx_uid = (
+                requested_wx_uid
+                if "wxpusher_uid" in payload
+                else user.wxpusher_uid
+            )
+            push_enabled = (
+                requested_push_enabled
+                if "push_enabled" in payload
+                else bool(user.push_enabled)
+            )
 
-    # 每次开启第三方推送都要求本次请求携带明确同意，不能沿用旧客户端状态。
-    if push_enabled and not wxpusher_consent:
-        return jsonify({"success": False, "error": "wxpusher_consent_required"}), 400
+            # UID 被移除时必须关闭推送，避免保留无法投递的开启状态。
+            if not wx_uid:
+                push_enabled = False
+                if "wxpusher_uid" in updated_fields and "push_enabled" not in updated_fields:
+                    updated_fields.append("push_enabled")
+            if push_enabled and not wxpusher_available:
+                db.session.rollback()
+                return _error("wxpusher_unavailable", "第三方推送服务暂不可用。", 503)
+            if push_enabled and not wxpusher_consent:
+                db.session.rollback()
+                return jsonify({"success": False, "error": "wxpusher_consent_required"}), 400
+
+            if updated_fields:
+                user.wxpusher_uid = wx_uid
+                user.push_enabled = bool(push_enabled)
+                db.session.commit()
+            else:
+                db.session.commit()
+            response_data = {
+                "wxpusher_uid": wx_uid,
+                "push_enabled": bool(push_enabled),
+                "wxpusher_available": wxpusher_available,
+            }
+    except (OSError, RuntimeError, ValueError):
+        db.session.rollback()
+        current_app.logger.exception("小程序推送授权锁不可用")
+        return _error("settings_update_unavailable", "设置暂时无法保存，请稍后重试。", 503)
 
     if updated_fields:
-        user.wxpusher_uid = wx_uid
-        user.push_enabled = push_enabled
-        db.session.commit()
         log_usage_event(
             "settings_updated",
-            user_id=user.id,
+            user_id=owner_user_id,
             source="miniprogram",
             meta={"fields": updated_fields},
         )
-    return jsonify({"success": True, "data": {"wxpusher_uid": user.wxpusher_uid, "push_enabled": bool(user.push_enabled)}})
+    return jsonify(
+        {
+            "success": True,
+            "data": response_data,
+        }
+    )
+
+
+def _anonymize_miniprogram_owner(user):
+    """在 owner 文件锁与数据库写事务内清理账号数据。"""
+    user_id = int(user.id)
+    user.deleted_at = utcnow()
+    db.session.flush()
+
+    pair_rows = (
+        db.session.query(Pair.id, Pair.community_code)
+        .filter_by(caregiver_id=user_id)
+        .all()
+    )
+    pair_ids = [row[0] for row in pair_rows]
+    affected_community_codes = {row[1] for row in pair_rows if row[1]}
+    member_ids = [row[0] for row in db.session.query(FamilyMember.id).filter_by(user_id=user_id).all()]
+
+    # pair_id 可为空，复盘的注销边界必须依据独立 owner 字段。
+    Debrief.query.filter_by(owner_user_id=user_id).delete(synchronize_session=False)
+    if pair_ids:
+        PairActionToken.query.filter(PairActionToken.pair_id.in_(pair_ids)).delete(synchronize_session=False)
+        DailyStatus.query.filter(DailyStatus.pair_id.in_(pair_ids)).delete(synchronize_session=False)
+        AlertDelivery.query.filter(AlertDelivery.pair_id.in_(pair_ids)).delete(synchronize_session=False)
+        PairLink.query.filter(PairLink.pair_id.in_(pair_ids)).delete(synchronize_session=False)
+        UsageEvent.query.filter(UsageEvent.pair_id.in_(pair_ids)).delete(synchronize_session=False)
+    PairLink.query.filter_by(caregiver_id=user_id).delete(synchronize_session=False)
+    Pair.query.filter_by(caregiver_id=user_id).delete(synchronize_session=False)
+
+    if member_ids:
+        FamilyMemberProfile.query.filter(FamilyMemberProfile.member_id.in_(member_ids)).delete(
+            synchronize_session=False
+        )
+    HealthDiary.query.filter_by(user_id=user_id).delete(synchronize_session=False)
+    MedicationReminder.query.filter_by(user_id=user_id).delete(synchronize_session=False)
+    HealthRiskAssessment.query.filter_by(user_id=user_id).delete(synchronize_session=False)
+    Notification.query.filter_by(user_id=user_id).delete(synchronize_session=False)
+    AlertDelivery.query.filter_by(user_id=user_id).delete(synchronize_session=False)
+    UsageEvent.query.filter_by(user_id=user_id).delete(synchronize_session=False)
+    FamilyMember.query.filter_by(user_id=user_id).delete(synchronize_session=False)
+    ApiToken.query.filter_by(user_id=user_id).delete(synchronize_session=False)
+    MiniProgramSession.query.filter_by(user_id=user_id).delete(synchronize_session=False)
+    MiniProgramIdentity.query.filter_by(user_id=user_id).delete(synchronize_session=False)
+
+    user.username = f"deleted_mp_{user_id}_{secrets.token_hex(6)}"
+    user.email = None
+    user.age = None
+    user.gender = None
+    user.community = None
+    user.has_chronic_disease = False
+    user.chronic_diseases = None
+    user.wxpusher_uid = None
+    user.push_enabled = False
+    user.role = "user"
+    user.set_password(secrets.token_urlsafe(32))
+    db.session.add(
+        AuditLog(
+            actor_id=None,
+            actor_role="deleted_miniprogram_user",
+            action="miniprogram_account_anonymized",
+            resource_type="user",
+            resource_id=str(user_id),
+            extra_data=json.dumps({"owner_data_removed": True}),
+            created_at=utcnow(),
+        )
+    )
+    db.session.commit()
+    return affected_community_codes
 
 
 @bp.route("/me", methods=["DELETE"], endpoint="me_delete")
@@ -581,11 +823,7 @@ def me_delete():
     """删除小程序身份和 owner 数据，并保留无身份审计占位用户。"""
     if getattr(g, "auth_kind", None) != "miniprogram_session":
         return _error("miniprogram_session_required", "账号注销仅支持微信小程序登录会话。", 403)
-    user = getattr(g, "api_user", None)
-    if user is None:
-        return _error("user_not_found", "账号不存在。", 404)
-    if user.role == "admin":
-        return _error("admin_account_delete_forbidden", "管理员账号不能通过小程序注销。", 403)
+    owner_user_id = int(g.api_user_id)
     try:
         payload = _json_payload()
         requested_user_id = payload.get("user_id")
@@ -596,82 +834,57 @@ def me_delete():
                 field="user_id",
                 allow_none=False,
             )
-            if requested_user_id != user.id:
+            if requested_user_id != owner_user_id:
                 return _error("owner_scope_violation", "不能注销其他用户的账号。", 403)
-        confirmation = payload.get("confirm", False)
-        if confirmation is not True:
+        if payload.get("confirm", False) is not True:
             return _error("delete_confirmation_required", "请明确确认账号注销。", 400)
 
-        user.deleted_at = utcnow()
-        db.session.flush()
-
-        pair_ids = [row[0] for row in db.session.query(Pair.id).filter_by(caregiver_id=user.id).all()]
-        member_ids = [row[0] for row in db.session.query(FamilyMember.id).filter_by(user_id=user.id).all()]
-
-        if pair_ids:
-            PairActionToken.query.filter(PairActionToken.pair_id.in_(pair_ids)).delete(synchronize_session=False)
-            DailyStatus.query.filter(DailyStatus.pair_id.in_(pair_ids)).delete(synchronize_session=False)
-            Debrief.query.filter(Debrief.pair_id.in_(pair_ids)).delete(synchronize_session=False)
-            AlertDelivery.query.filter(AlertDelivery.pair_id.in_(pair_ids)).delete(synchronize_session=False)
-            PairLink.query.filter(PairLink.pair_id.in_(pair_ids)).delete(synchronize_session=False)
-            UsageEvent.query.filter(UsageEvent.pair_id.in_(pair_ids)).delete(synchronize_session=False)
-        PairLink.query.filter_by(caregiver_id=user.id).delete(synchronize_session=False)
-        Pair.query.filter_by(caregiver_id=user.id).delete(synchronize_session=False)
-
-        if member_ids:
-            FamilyMemberProfile.query.filter(FamilyMemberProfile.member_id.in_(member_ids)).delete(
-                synchronize_session=False
-            )
-        HealthDiary.query.filter_by(user_id=user.id).delete(synchronize_session=False)
-        MedicationReminder.query.filter_by(user_id=user.id).delete(synchronize_session=False)
-        HealthRiskAssessment.query.filter_by(user_id=user.id).delete(synchronize_session=False)
-        Notification.query.filter_by(user_id=user.id).delete(synchronize_session=False)
-        AlertDelivery.query.filter_by(user_id=user.id).delete(synchronize_session=False)
-        UsageEvent.query.filter_by(user_id=user.id).delete(synchronize_session=False)
-        FamilyMember.query.filter_by(user_id=user.id).delete(synchronize_session=False)
-        ApiToken.query.filter_by(user_id=user.id).delete(synchronize_session=False)
-
-        MiniProgramSession.query.filter_by(user_id=user.id).delete(synchronize_session=False)
-        MiniProgramIdentity.query.filter_by(user_id=user.id).delete(synchronize_session=False)
-
-        user.username = f"deleted_mp_{user.id}_{secrets.token_hex(6)}"
-        user.email = None
-        user.age = None
-        user.gender = None
-        user.community = None
-        user.has_chronic_disease = False
-        user.chronic_diseases = None
-        user.wxpusher_uid = None
-        user.push_enabled = False
-        user.role = "user"
-        user.set_password(secrets.token_urlsafe(32))
-        db.session.add(
-            AuditLog(
-                actor_id=None,
-                actor_role="deleted_miniprogram_user",
-                action="miniprogram_account_anonymized",
-                resource_type="user",
-                resource_id=str(user.id),
-                extra_data=json.dumps({"owner_data_removed": True}),
-                created_at=utcnow(),
-            )
-        )
-        db.session.commit()
+        # 装饰器的认证写锁必须先释放，后续统一执行 file lock -> DB。
+        db.session.rollback()
+        with push_owner_lock(owner_user_id):
+            authorization_error = _reauthorize_locked_api_user()
+            if authorization_error is not None:
+                return authorization_error
+            user = g.api_user
+            if user.role == "admin":
+                db.session.rollback()
+                return _error("admin_account_delete_forbidden", "管理员账号不能通过小程序注销。", 403)
+            affected_community_codes = _anonymize_miniprogram_owner(user)
     except ValueError as exc:
         db.session.rollback()
         return _error(str(exc), "账号注销请求无效。", 400)
+    except (OSError, RuntimeError):
+        db.session.rollback()
+        current_app.logger.exception("小程序账号注销锁不可用")
+        return _error("account_delete_unavailable", "账号注销暂时不可用，请稍后重试。", 503)
     except Exception:
         db.session.rollback()
         current_app.logger.exception("小程序账号注销失败")
         return _error("account_delete_failed", "账号注销失败，请稍后重试。", 503)
+    refresh_latest_community_daily_best_effort(
+        affected_community_codes,
+        event_logger=current_app.logger,
+    )
     return _success({"deleted": True, "anonymized": True, "session_revoked": True})
 
 
 @bp.route("/elders", endpoint="elders_list")
 @limiter.limit(lambda: current_app.config.get("RATE_LIMIT_MP_READ", "120 per minute"), key_func=_mp_rate_limit_key)
 @require_api_token
+@require_api_scope("miniprogram:sensitive")
 def elders_list():
     pairs = Pair.query.filter_by(caregiver_id=g.api_user_id, status="active").order_by(Pair.created_at.desc()).all()
+    status_date = today_local()
+    pair_ids = [pair.id for pair in pairs]
+    statuses = (
+        DailyStatus.query.filter(
+            DailyStatus.pair_id.in_(pair_ids),
+            DailyStatus.status_date == status_date,
+        ).all()
+        if pair_ids
+        else []
+    )
+    status_map = {status.pair_id: status for status in statuses}
     member_ids = [p.member_id for p in pairs if p.member_id]
     members = (
         FamilyMember.query.filter(FamilyMember.id.in_(member_ids)).all() if member_ids else []
@@ -693,6 +906,12 @@ def elders_list():
     result = []
     for p in pairs:
         member = member_map.get(p.member_id) if p.member_id else None
+        status = status_map.get(p.id)
+        try:
+            actions_done_count = int(status.actions_done_count or 0) if status else 0
+        except (TypeError, ValueError):
+            actions_done_count = 0
+        actions_done_count = min(20, max(0, actions_done_count))
         result.append(
             {
                 "pair_id": p.id,
@@ -713,6 +932,24 @@ def elders_list():
                     else None
                 ),
                 "today": {
+                    "status_date": status_date.isoformat(),
+                    "confirmed_at": (
+                        status.confirmed_at.isoformat()
+                        if status and status.confirmed_at
+                        else None
+                    ),
+                    "actions_done_count": actions_done_count,
+                    "elder_actions": _safe_stored_text_list(
+                        status.elder_actions if status else None,
+                        max_items=20,
+                        item_max_length=50,
+                    ),
+                    "help_flag": bool(status.help_flag) if status else False,
+                    "relay_stage": (
+                        status.relay_stage
+                        if status and status.relay_stage in RELAY_STAGES
+                        else "none"
+                    ),
                     "trigger": trigger,
                     "temperature_max": tmax_value if weather_available else None,
                     "temperature_min": tmin_value if weather_available else None,
@@ -729,6 +966,7 @@ def elders_list():
 @bp.route("/elders", methods=["POST"], endpoint="elders_create")
 @limiter.limit(lambda: current_app.config.get("RATE_LIMIT_MP_WRITE", "30 per minute"), key_func=_mp_rate_limit_key)
 @require_api_token
+@require_api_scope("miniprogram:sensitive")
 def elders_create():
     try:
         payload = _json_payload()
@@ -798,6 +1036,7 @@ def elders_create():
 @bp.route("/elders/<int:pair_id>", methods=["PATCH"], endpoint="elders_patch")
 @limiter.limit(lambda: current_app.config.get("RATE_LIMIT_MP_WRITE", "30 per minute"), key_func=_mp_rate_limit_key)
 @require_api_token
+@require_api_scope("miniprogram:sensitive")
 def elders_patch(pair_id: int):
     pair = _pair_for_user(pair_id)
     if not pair:
@@ -847,16 +1086,41 @@ def elders_patch(pair_id: int):
 @bp.route("/elders/<int:pair_id>", methods=["DELETE"], endpoint="elders_delete")
 @limiter.limit(lambda: current_app.config.get("RATE_LIMIT_MP_WRITE", "30 per minute"), key_func=_mp_rate_limit_key)
 @require_api_token
+@require_api_scope("miniprogram:sensitive")
 def elders_delete(pair_id: int):
-    pair = _pair_for_user(pair_id)
-    if not pair:
-        return _error("not_found", "老人档案不存在。", 404)
-    pair.status = "inactive"
-    pair.location_query = CANONICAL_LOCATION_NAME
-    pair.community_code = CANONICAL_LOCATION_NAME
-    pair.last_active_at = utcnow()
-    db.session.commit()
-    return _success({"pair_id": pair.id, "status": "inactive"})
+    owner_user_id = int(g.api_user_id)
+    db.session.rollback()
+    try:
+        with push_owner_lock(owner_user_id):
+            authorization_error = _reauthorize_locked_api_user()
+            if authorization_error is not None:
+                return authorization_error
+            pair = Pair.query.filter_by(
+                id=pair_id,
+                caregiver_id=owner_user_id,
+                status="active",
+            ).first()
+            if not pair:
+                db.session.rollback()
+                return _error("not_found", "老人档案不存在。", 404)
+            affected_community_codes = {
+                pair.community_code,
+                CANONICAL_LOCATION_NAME,
+            }
+            pair.status = "inactive"
+            pair.location_query = CANONICAL_LOCATION_NAME
+            pair.community_code = CANONICAL_LOCATION_NAME
+            pair.last_active_at = utcnow()
+            db.session.commit()
+    except (OSError, RuntimeError, ValueError):
+        db.session.rollback()
+        current_app.logger.exception("小程序老人档案撤权锁不可用")
+        return _error("elder_delete_unavailable", "老人档案暂时无法删除，请稍后重试。", 503)
+    refresh_latest_community_daily_best_effort(
+        affected_community_codes,
+        event_logger=current_app.logger,
+    )
+    return _success({"pair_id": pair_id, "status": "inactive"})
 
 
 @bp.route("/health/diary", methods=["GET", "POST"], endpoint="health_diary")
@@ -897,8 +1161,9 @@ def health_diary():
         severity = _strict_text(payload, "severity", 20, required=True)
         if severity not in {"none", "mild", "moderate", "severe", "无", "轻微", "中等", "严重"}:
             raise ValueError("invalid_severity")
-        symptoms = _strict_text(payload, "symptoms", 500, default="") or ""
-        notes = _strict_text(payload, "notes", 1000, default="") or ""
+        # 服务端边界与小程序表单保持一致，避免绕过客户端提交更长的健康自由文本。
+        symptoms = _strict_text(payload, "symptoms", 200, default="") or ""
+        notes = _strict_text(payload, "notes", 500, default="") or ""
         if not symptoms and not notes:
             raise ValueError("diary_content_required")
         record = HealthDiary(
@@ -1128,20 +1393,25 @@ def health_assessment():
 
 def _daily_status_for_pair(pair):
     status_date = today_local()
-    record = DailyStatus.query.filter_by(pair_id=pair.id, status_date=status_date).first()
-    if record is None:
+
+    def snapshot_risk_level():
         snapshot = get_bootstrap_payload()
-        record = DailyStatus(
-            pair_id=pair.id,
-            status_date=status_date,
-            community_code=CANONICAL_LOCATION_NAME,
-            risk_level=(snapshot.get("risk") or {}).get("level"),
-            created_at=utcnow(),
-            updated_at=utcnow(),
-        )
-        db.session.add(record)
-        db.session.flush()
-    return record
+        current = snapshot.get("current") if isinstance(snapshot.get("current"), dict) else {}
+        if (
+            not snapshot.get("available")
+            or snapshot.get("stale")
+            or current.get("is_mock")
+            or current.get("is_demo")
+        ):
+            return None
+        level = str((snapshot.get("risk") or {}).get("level") or "").strip()
+        return level if level and level not in {"未知", "unknown"} else None
+
+    return get_or_create_daily_status(
+        pair,
+        status_date,
+        risk_level_factory=snapshot_risk_level,
+    )
 
 
 @bp.route("/actions/<int:pair_id>/confirm", methods=["POST"], endpoint="action_confirm")
@@ -1150,7 +1420,7 @@ def _daily_status_for_pair(pair):
 @require_api_scope("miniprogram:sensitive")
 def action_confirm(pair_id):
     pair = _pair_for_user(pair_id)
-    if pair is None:
+    if pair is None or pair.status != "active":
         return _error("not_found", "照护关系不存在。", 404)
     try:
         payload = _json_payload()
@@ -1160,14 +1430,14 @@ def action_confirm(pair_id):
             max_items=20,
             item_max_length=50,
         )
-        note = _strict_text(payload, "note", 500, default="") or ""
         status = _daily_status_for_pair(pair)
-        status.confirmed_at = utcnow()
-        status.actions_done_count = len(actions_done)
-        status.caregiver_actions = json.dumps(actions_done, ensure_ascii=False)
-        status.caregiver_note = note
-        status.community_code = CANONICAL_LOCATION_NAME
-        status.updated_at = utcnow()
+        mutation = stage_confirm_action(
+            pair,
+            status,
+            actions_done_count=len(actions_done),
+            elder_actions=actions_done,
+            source="miniprogram",
+        )
         db.session.commit()
     except ValueError as exc:
         db.session.rollback()
@@ -1175,15 +1445,17 @@ def action_confirm(pair_id):
     except Exception:
         db.session.rollback()
         return _error("confirm_failed", "行动确认保存失败。", 503)
-    if actions_done:
-        log_usage_event(
-            "checkin_confirmed",
-            user_id=g.api_user_id,
-            pair_id=pair.id,
-            source="miniprogram",
-            meta={"actions_done_count": len(actions_done)},
-        )
-    return _success({"pair_id": pair.id, "confirmed_at": status.confirmed_at.isoformat()})
+    refresh_community_daily_best_effort(
+        mutation.community_code,
+        mutation.status_date,
+        event_logger=current_app.logger,
+    )
+    return _success(
+        {
+            "pair_id": mutation.pair_id,
+            "confirmed_at": mutation.confirmed_at.isoformat(),
+        }
+    )
 
 
 @bp.route("/actions/<int:pair_id>/help", methods=["POST"], endpoint="action_help")
@@ -1192,18 +1464,24 @@ def action_confirm(pair_id):
 @require_api_scope("miniprogram:sensitive")
 def action_help(pair_id):
     pair = _pair_for_user(pair_id)
-    if pair is None:
+    if pair is None or pair.status != "active":
         return _error("not_found", "照护关系不存在。", 404)
     try:
         payload = _json_payload()
-        note = _strict_text(payload, "note", 500, default="") or ""
+        note_provided = "note" in payload
+        note = (
+            _strict_text(payload, "note", 500, default="") or ""
+            if note_provided
+            else None
+        )
         status = _daily_status_for_pair(pair)
-        status.help_flag = True
-        if status.relay_stage in (None, "", "none"):
-            status.relay_stage = "caregiver"
-        status.caregiver_note = note
-        status.community_code = CANONICAL_LOCATION_NAME
-        status.updated_at = utcnow()
+        mutation = stage_help_action(
+            pair,
+            status,
+            source="miniprogram",
+            note=note,
+            note_provided=note_provided,
+        )
         db.session.commit()
     except ValueError as exc:
         db.session.rollback()
@@ -1211,7 +1489,18 @@ def action_help(pair_id):
     except Exception:
         db.session.rollback()
         return _error("help_failed", "求助状态保存失败。", 503)
-    return _success({"pair_id": pair.id, "help_flag": True, "relay_stage": status.relay_stage})
+    refresh_community_daily_best_effort(
+        mutation.community_code,
+        mutation.status_date,
+        event_logger=current_app.logger,
+    )
+    return _success(
+        {
+            "pair_id": mutation.pair_id,
+            "help_flag": True,
+            "relay_stage": mutation.relay_stage,
+        }
+    )
 
 
 @bp.route("/actions/<int:pair_id>/debrief", methods=["POST"], endpoint="action_debrief")
@@ -1220,7 +1509,7 @@ def action_help(pair_id):
 @require_api_scope("miniprogram:sensitive")
 def action_debrief(pair_id):
     pair = _pair_for_user(pair_id)
-    if pair is None:
+    if pair is None or pair.status != "active":
         return _error("not_found", "照护关系不存在。", 404)
     try:
         payload = _json_payload()
@@ -1228,28 +1517,19 @@ def action_debrief(pair_id):
             name: _strict_text(payload, name, 200, default="") or ""
             for name in ("question_1", "question_2", "question_3")
         }
-        difficulty = _strict_text(payload, "difficulty", 1000, default="") or ""
+        difficulty = _strict_text(payload, "difficulty", 500, default="") or ""
         optin = payload.get("debrief_optin", True)
         if not isinstance(optin, bool):
             raise ValueError("invalid_debrief_optin")
         status = _daily_status_for_pair(pair)
-        record = Debrief.query.filter_by(pair_id=pair.id, date=today_local()).order_by(
-            Debrief.id.desc()
-        ).first()
-        if record is None:
-            record = Debrief(
-                pair_id=pair.id,
-                date=today_local(),
-                community_code=CANONICAL_LOCATION_NAME,
-                created_at=utcnow(),
-            )
-            db.session.add(record)
-        record.question_1 = answers["question_1"]
-        record.question_2 = answers["question_2"]
-        record.question_3 = answers["question_3"]
-        record.difficulty = difficulty
-        status.debrief_optin = optin
-        status.updated_at = utcnow()
+        mutation = stage_debrief_action(
+            pair,
+            status,
+            answers=answers,
+            difficulty=difficulty,
+            opt_in=optin,
+            source="miniprogram",
+        )
         db.session.commit()
     except ValueError as exc:
         db.session.rollback()
@@ -1257,7 +1537,17 @@ def action_debrief(pair_id):
     except Exception:
         db.session.rollback()
         return _error("debrief_failed", "行动复盘保存失败。", 503)
-    return _success({"debrief_id": record.id, "pair_id": pair.id})
+    refresh_community_daily_best_effort(
+        mutation.community_code,
+        mutation.status_date,
+        event_logger=current_app.logger,
+    )
+    return _success(
+        {
+            "debrief_id": mutation.debrief_id,
+            "pair_id": mutation.linked_pair_id,
+        }
+    )
 
 
 @bp.route("/alerts", endpoint="alerts_list")

@@ -2,8 +2,9 @@
 
 
 def test_public_communities_uses_latest_date_then_highest_id(app, db_session):
-    from core.db_models import Community
+    from core.db_models import Community, Pair, User
     from core.extensions import db
+    from core.security import hash_short_code
     from services.miniprogram_service import public_communities_payload
 
     # 当前模型有唯一约束；这里模拟升级前遗留的同日重复行，验证查询仍确定性取最大 id。
@@ -27,7 +28,27 @@ def test_public_communities_uses_latest_date_then_highest_id(app, db_session):
         Community(name="乙社区", location="都昌县"),
         Community(name="丙社区", location="都昌县"),
     ])
-    db_session.flush()
+    for community_index, community_code in enumerate(("甲社区", "乙社区"), start=1):
+        for pair_index in range(5):
+            owner = User(
+                username=f"community-latest-owner-{community_index}-{pair_index}",
+                role="caregiver",
+            )
+            owner.set_password("test-password")
+            db_session.add(owner)
+            db_session.flush()
+            short_code = f"81{community_index}{pair_index:05d}"
+            db_session.add(
+                Pair(
+                    caregiver_id=owner.id,
+                    community_code=community_code,
+                    location_query="都昌县",
+                    elder_code=f"latest-{community_index}-{pair_index}",
+                    short_code=short_code,
+                    short_code_hash=hash_short_code(short_code),
+                    status="active",
+                )
+            )
     db_session.execute(
         db.text("""
             INSERT INTO community_daily (
@@ -87,7 +108,7 @@ def test_public_communities_uses_latest_date_then_highest_id(app, db_session):
     latest = by_name["甲社区"]["latest_action_summary"]
     assert latest == {
         "date": "2026-07-18",
-        "total_people": 8,
+        "total_people": 5,
         "confirm_rate": 0.8,
         "escalation_rate": 0.3,
         "sample_suppressed": False,

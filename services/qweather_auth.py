@@ -6,6 +6,8 @@ JWT 只在当前进程内短时缓存。私钥、JWT 和认证请求头不得写
 
 from __future__ import annotations
 
+import errno
+import hashlib
 import os
 import stat
 import threading
@@ -81,7 +83,7 @@ def validate_qweather_api_base(
     api_base: str,
     config: Optional[Mapping] = None,
 ) -> str:
-    """阻止认证头发送到非 HTTPS 或非预期的 JWT Host。"""
+    """阻止任一认证模式把凭据发送到非官方 QWeather 端点。"""
     value = str(api_base or "").strip().rstrip("/")
     parsed = urlsplit(value)
     if (
@@ -91,45 +93,100 @@ def validate_qweather_api_base(
         or parsed.password
         or parsed.query
         or parsed.fragment
+        or parsed.port not in (None, 443)
     ):
         raise QWeatherAuthError("qweather_api_base_invalid")
 
-    if get_qweather_auth_mode(config) == "jwt":
-        hostname = parsed.hostname.lower().rstrip(".")
-        if hostname != "qweatherapi.com" and not hostname.endswith(".qweatherapi.com"):
-            raise QWeatherAuthError("qweather_jwt_host_invalid")
-        if parsed.path.rstrip("/") != "/v7":
-            raise QWeatherAuthError("qweather_jwt_base_path_invalid")
+    hostname = parsed.hostname.lower().rstrip(".")
+    if hostname != "qweatherapi.com" and not hostname.endswith(".qweatherapi.com"):
+        raise QWeatherAuthError("qweather_jwt_host_invalid")
+    if parsed.path.rstrip("/") != "/v7":
+        raise QWeatherAuthError("qweather_jwt_base_path_invalid")
     return value
 
 
-def _private_key_identity(path_value: str, kid: str, project_id: str):
+def _file_fingerprint(file_stat):
+    return (
+        file_stat.st_dev,
+        file_stat.st_ino,
+        file_stat.st_size,
+        file_stat.st_mtime_ns,
+        file_stat.st_ctime_ns,
+    )
+
+
+def _read_private_key_snapshot(path_value: str, kid: str, project_id: str):
+    """安全读取私钥固定快照，并返回可感知内容轮换的缓存身份。"""
     path = Path(path_value).expanduser()
+    no_follow = getattr(os, "O_NOFOLLOW", None)
+    if no_follow is None:
+        raise QWeatherAuthError("qweather_jwt_key_unavailable")
+
+    flags = os.O_RDONLY | no_follow | getattr(os, "O_CLOEXEC", 0)
     try:
-        file_stat = path.stat()
+        file_descriptor = os.open(path, flags)
     except OSError as exc:
+        if exc.errno in {errno.ELOOP, errno.EISDIR}:
+            raise QWeatherAuthError("qweather_jwt_key_not_regular") from exc
         raise QWeatherAuthError("qweather_jwt_key_unavailable") from exc
 
-    if not stat.S_ISREG(file_stat.st_mode):
-        raise QWeatherAuthError("qweather_jwt_key_not_regular")
-    if file_stat.st_mode & 0o077:
-        raise QWeatherAuthError("qweather_jwt_key_permissions")
-    if file_stat.st_size <= 0 or file_stat.st_size > _MAX_PRIVATE_KEY_BYTES:
-        raise QWeatherAuthError("qweather_jwt_key_size_invalid")
+    try:
+        before = os.fstat(file_descriptor)
+        if not stat.S_ISREG(before.st_mode):
+            raise QWeatherAuthError("qweather_jwt_key_not_regular")
+        if stat.S_IMODE(before.st_mode) != 0o600:
+            raise QWeatherAuthError("qweather_jwt_key_permissions")
+        if before.st_size <= 0 or before.st_size > _MAX_PRIVATE_KEY_BYTES:
+            raise QWeatherAuthError("qweather_jwt_key_size_invalid")
 
+        chunks = []
+        total = 0
+        while True:
+            chunk = os.read(
+                file_descriptor,
+                min(8192, _MAX_PRIVATE_KEY_BYTES + 1 - total),
+            )
+            if not chunk:
+                break
+            chunks.append(chunk)
+            total += len(chunk)
+            if total > _MAX_PRIVATE_KEY_BYTES:
+                raise QWeatherAuthError("qweather_jwt_key_size_invalid")
+        after = os.fstat(file_descriptor)
+        try:
+            current_path_stat = os.stat(path, follow_symlinks=False)
+        except OSError as exc:
+            raise QWeatherAuthError("qweather_jwt_key_changed") from exc
+    except QWeatherAuthError:
+        raise
+    except OSError as exc:
+        raise QWeatherAuthError("qweather_jwt_key_unavailable") from exc
+    finally:
+        os.close(file_descriptor)
+
+    if (
+        total != before.st_size
+        or _file_fingerprint(before) != _file_fingerprint(after)
+        or not stat.S_ISREG(current_path_stat.st_mode)
+        or stat.S_IMODE(current_path_stat.st_mode) != 0o600
+        or _file_fingerprint(current_path_stat) != _file_fingerprint(after)
+    ):
+        raise QWeatherAuthError("qweather_jwt_key_changed")
+
+    private_key = b"".join(chunks)
     identity = (
         kid,
         project_id,
-        str(path.resolve()),
-        file_stat.st_mtime_ns,
-        file_stat.st_size,
+        os.path.abspath(os.fspath(path)),
+        before.st_dev,
+        before.st_ino,
+        hashlib.sha256(private_key).digest(),
     )
-    return path, identity
+    return private_key, identity
 
 
-def _generate_jwt(path: Path, kid: str, project_id: str, now: int):
+def _generate_jwt(private_key: bytes, kid: str, project_id: str, now: int):
     try:
-        private_key = path.read_bytes()
         token = jwt.encode(
             {
                 "sub": project_id,
@@ -156,17 +213,9 @@ def _get_cached_jwt(config: Optional[Mapping] = None) -> str:
     if not kid or not project_id or not key_path:
         raise QWeatherAuthError("qweather_jwt_config_missing")
 
-    path, identity = _private_key_identity(key_path, kid, project_id)
-    now = int(time.time())
-    cached_token = _TOKEN_CACHE.get("token")
-    if (
-        _TOKEN_CACHE.get("identity") == identity
-        and cached_token
-        and now < int(_TOKEN_CACHE.get("expires_at") or 0) - _JWT_REFRESH_MARGIN_SECONDS
-    ):
-        return str(cached_token)
-
     with _TOKEN_LOCK:
+        # 读取、比较和更新缓存共用同一把锁，避免轮换期间旧快照覆盖新令牌。
+        private_key, identity = _read_private_key_snapshot(key_path, kid, project_id)
         now = int(time.time())
         cached_token = _TOKEN_CACHE.get("token")
         if (
@@ -175,7 +224,7 @@ def _get_cached_jwt(config: Optional[Mapping] = None) -> str:
             and now < int(_TOKEN_CACHE.get("expires_at") or 0) - _JWT_REFRESH_MARGIN_SECONDS
         ):
             return str(cached_token)
-        token, expires_at = _generate_jwt(path, kid, project_id, now)
+        token, expires_at = _generate_jwt(private_key, kid, project_id, now)
         _TOKEN_CACHE.update(
             identity=identity,
             token=token,

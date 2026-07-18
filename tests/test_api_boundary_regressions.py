@@ -17,6 +17,7 @@ def _create_mp_user_and_token(app, db_session, *, uid="UID_KEEP", push_enabled=T
     from core.usage import create_api_token
 
     with app.app_context():
+        app.config["WXPUSHER_APP_TOKEN"] = "AT_test-wxpusher-token"
         user = User(
             username="mp_boundary_user",
             role="user",
@@ -46,6 +47,7 @@ def test_mp_me_patch_preserves_omitted_fields_and_disables_push_when_uid_removed
     assert disable_response.get_json()["data"] == {
         "wxpusher_uid": "UID_KEEP",
         "push_enabled": False,
+        "wxpusher_available": True,
     }
 
     enable_response = client.patch(
@@ -65,6 +67,7 @@ def test_mp_me_patch_preserves_omitted_fields_and_disables_push_when_uid_removed
     assert remove_uid_response.get_json()["data"] == {
         "wxpusher_uid": None,
         "push_enabled": False,
+        "wxpusher_available": True,
     }
 
     from core.db_models import User
@@ -120,6 +123,67 @@ def test_mp_me_patch_requires_explicit_wxpusher_consent_without_partial_update(
     with app.app_context():
         user = db_session.get(User, user_id)
         assert user.wxpusher_uid == 'UID_KEEP'
+        assert user.push_enabled is False
+
+
+def test_mp_me_patch_rejects_enable_when_wxpusher_is_unavailable_without_partial_update(
+    app,
+    client,
+    db_session,
+):
+    user_id, token = _create_mp_user_and_token(
+        app,
+        db_session,
+        push_enabled=False,
+    )
+    app.config['WXPUSHER_APP_TOKEN'] = ''
+
+    response = client.patch(
+        '/mp/api/v1/me',
+        json={
+            'wxpusher_uid': 'UID_CHANGED',
+            'push_enabled': True,
+            'wxpusher_consent': True,
+        },
+        headers={'Authorization': f'Bearer {token}'},
+    )
+
+    assert response.status_code == 503
+    assert response.get_json()['error'] == 'wxpusher_unavailable'
+
+    from core.db_models import User
+
+    with app.app_context():
+        user = db_session.get(User, user_id)
+        assert user.wxpusher_uid == 'UID_KEEP'
+        assert user.push_enabled is False
+
+
+def test_mp_me_patch_allows_disable_when_wxpusher_is_unavailable(
+    app,
+    client,
+    db_session,
+):
+    user_id, token = _create_mp_user_and_token(app, db_session)
+    app.config['WXPUSHER_APP_TOKEN'] = ''
+
+    response = client.patch(
+        '/mp/api/v1/me',
+        json={'push_enabled': False},
+        headers={'Authorization': f'Bearer {token}'},
+    )
+
+    assert response.status_code == 200
+    assert response.get_json()['data'] == {
+        'wxpusher_uid': 'UID_KEEP',
+        'push_enabled': False,
+        'wxpusher_available': False,
+    }
+
+    from core.db_models import User
+
+    with app.app_context():
+        user = db_session.get(User, user_id)
         assert user.push_enabled is False
 
 

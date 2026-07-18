@@ -185,6 +185,7 @@ class WeatherService:
                     params=weather_params,
                     headers=headers,
                     timeout=10,
+                    allow_redirects=False,
                 )
                 _record_external_api_timing('qweather_now', (time.perf_counter() - start_ts) * 1000, weather_response.status_code)
                 
@@ -325,6 +326,7 @@ class WeatherService:
                 params={'lang': 'zh'},
                 headers=headers,
                 timeout=10,
+                allow_redirects=False,
             )
             _record_external_api_timing(
                 'qweather_air_v1',
@@ -552,6 +554,7 @@ class WeatherService:
                 params=hourly_params,
                 headers=headers,
                 timeout=10,
+                allow_redirects=False,
             )
             _record_external_api_timing(
                 'qweather_hourly_for_now',
@@ -641,6 +644,7 @@ class WeatherService:
                 params=forecast_params,
                 headers=headers,
                 timeout=10,
+                allow_redirects=False,
             )
             _record_external_api_timing(
                 'qweather_daily_for_now',
@@ -747,6 +751,7 @@ class WeatherService:
                 params=forecast_params,
                 headers=headers,
                 timeout=10,
+                allow_redirects=False,
             )
             _record_external_api_timing(
                 'qweather_forecast_only',
@@ -1115,6 +1120,7 @@ class WeatherService:
                     params=forecast_params,
                     headers=headers,
                     timeout=10,
+                    allow_redirects=False,
                 )
                 _record_external_api_timing(
                     'qweather_forecast',

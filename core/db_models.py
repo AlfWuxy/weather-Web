@@ -20,13 +20,37 @@ from core.time_utils import today_local, utcnow, ensure_utc_aware
 
 
 @event.listens_for(Engine, 'connect')
-def _enable_sqlite_foreign_keys(dbapi_connection, _connection_record):
-    """SQLite 每条连接都显式开启外键和级联约束。"""
+def _configure_sqlite_connection(dbapi_connection, _connection_record):
+    """SQLite 连接统一开启约束、忙等待和并发友好模式。"""
     if not isinstance(dbapi_connection, sqlite3.Connection):
         return
     cursor = dbapi_connection.cursor()
     try:
+        # 忙等待先生效，避免并发写入时立即报 database is locked。
+        cursor.execute('PRAGMA busy_timeout=5000')
         cursor.execute('PRAGMA foreign_keys=ON')
+
+        database_rows = cursor.execute('PRAGMA database_list').fetchall()
+        main_filename = next(
+            (str(row[2] or '') for row in database_rows if len(row) >= 3 and row[1] == 'main'),
+            '',
+        )
+        is_memory_database = not main_filename or main_filename == ':memory:'
+        if not is_memory_database:
+            try:
+                current_mode = cursor.execute('PRAGMA journal_mode').fetchone()
+                if not current_mode or str(current_mode[0]).lower() != 'wal':
+                    # WAL 是文件库的持久属性；只读连接无法切换时继续提供读取。
+                    cursor.execute('PRAGMA journal_mode=WAL').fetchone()
+            except sqlite3.DatabaseError:
+                pass
+
+        try:
+            # NORMAL 在 WAL 下减少每次提交的同步开销，不改变事务原子性。
+            cursor.execute('PRAGMA synchronous=NORMAL')
+        except sqlite3.DatabaseError:
+            # 某些只读连接禁止调整安全等级，不应因性能选项阻断读取。
+            pass
     finally:
         cursor.close()
 
@@ -39,6 +63,13 @@ class User(UserMixin, db.Model):
     password_hash = db.Column(db.String(200), nullable=False)
     email = db.Column(db.String(120), unique=True)
     role = db.Column(db.String(20), default='user')  # admin/user/caregiver/community
+    # 每次修改密码递增，用于同时撤销 Web 会话与记住登录 Cookie。
+    auth_version = db.Column(
+        db.Integer,
+        nullable=False,
+        default=1,
+        server_default='1',
+    )
     # 使用 timezone-aware UTC 时间戳（推荐做法）
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
     last_login = db.Column(db.DateTime)
@@ -61,6 +92,12 @@ class User(UserMixin, db.Model):
 
     def check_password(self, password):
         return check_password_hash(self.password_hash, password)
+
+    def get_id(self):
+        """把认证版本绑定到 Flask-Login 的会话标识。"""
+        if self.id is None:
+            raise ValueError('未持久化用户不能建立登录会话')
+        return f'{int(self.id)}:{int(self.auth_version)}'
 
 
 class MedicalRecord(db.Model):
@@ -160,6 +197,16 @@ class HealthRiskAssessment(db.Model):
     recommendations = db.Column(db.Text)  # 健康建议
     explain = db.Column(db.Text)  # JSON格式：可解释输出
 
+    __table_args__ = (
+        db.Index(
+            'ix_assessment_owner_member_date_id',
+            'user_id',
+            'member_id',
+            'assessment_date',
+            'id',
+        ),
+    )
+
 
 class WeatherAlert(db.Model):
     """天气预警记录"""
@@ -172,6 +219,12 @@ class WeatherAlert(db.Model):
     description = db.Column(db.Text)
     affected_communities = db.Column(db.Text)  # JSON格式：受影响社区
     disease_correlation = db.Column(db.Text)  # JSON格式：疾病相关性分析
+    # 新投递使用 64 位摘要做并发幂等；历史记录保持 NULL，不做推测性回填。
+    dedupe_key = db.Column(db.String(64), nullable=True)
+
+    __table_args__ = (
+        db.Index('uq_weather_alerts_dedupe_key', 'dedupe_key', unique=True),
+    )
 
 
 class FamilyMember(db.Model):
@@ -219,6 +272,16 @@ class HealthDiary(db.Model):
     notes = db.Column(db.Text)
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
+    __table_args__ = (
+        db.Index(
+            'ix_health_diary_owner_member_date_id',
+            'user_id',
+            'member_id',
+            'entry_date',
+            'id',
+        ),
+    )
+
 
 class MedicationReminder(db.Model):
     """用药提醒"""
@@ -234,6 +297,15 @@ class MedicationReminder(db.Model):
     is_active = db.Column(db.Boolean, default=True)
     last_notified_at = db.Column(db.DateTime)
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+
+    __table_args__ = (
+        db.Index(
+            'ix_medication_owner_member_id',
+            'user_id',
+            'member_id',
+            'id',
+        ),
+    )
 
 
 class Notification(db.Model):
@@ -391,6 +463,7 @@ class DailyStatus(db.Model):
     debrief_optin = db.Column(db.Boolean, default=False)
     caregiver_actions = db.Column(db.Text)  # JSON
     caregiver_note = db.Column(db.Text)
+    elder_actions = db.Column(db.Text)  # JSON，小程序老人自护行动，与照护端行动分离
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
@@ -450,7 +523,17 @@ class Debrief(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     date = db.Column(db.Date, nullable=False)
     community_code = db.Column(db.String(100), nullable=False)
-    pair_id = db.Column(db.Integer, db.ForeignKey('pairs.id'))
+    owner_user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    # origin_pair_id 固定本次复盘的来源家人；pair_id 只控制当前是否展示到家人记录。
+    origin_pair_id = db.Column(
+        db.Integer,
+        db.ForeignKey('pairs.id', ondelete='SET NULL'),
+        nullable=True,
+    )
+    pair_id = db.Column(
+        db.Integer,
+        db.ForeignKey('pairs.id', ondelete='SET NULL'),
+    )
     question_1 = db.Column(db.String(200))
     question_2 = db.Column(db.String(200))
     question_3 = db.Column(db.String(200))
@@ -458,6 +541,8 @@ class Debrief(db.Model):
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
     __table_args__ = (
+        db.Index('ix_debriefs_owner_user_id', 'owner_user_id'),
+        db.Index('ix_debriefs_origin_pair_id', 'origin_pair_id'),
         db.Index('ix_debriefs_community_date', 'community_code', 'date'),
         db.Index('ix_debriefs_pair_date', 'pair_id', 'date'),
     )

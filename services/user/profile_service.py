@@ -3,14 +3,21 @@
 import json
 import logging
 import math
+from datetime import timedelta
 from urllib.parse import urlparse
 
 from flask import current_app, flash, redirect, render_template, request, session, url_for
-from flask_login import current_user
+from flask_login import current_user, login_user
 from sqlalchemy.exc import IntegrityError
 
 from core.analytics import get_high_risk_streak
-from core.db_models import Community, HealthRiskAssessment, User
+from core.db_models import (
+    ApiToken,
+    Community,
+    HealthRiskAssessment,
+    MiniProgramSession,
+    User,
+)
 from core.extensions import db
 from core.guest import build_guest_profile, get_guest_assessment, is_guest_user
 from core.notifications import create_notification
@@ -31,6 +38,7 @@ from utils.validators import (
     validate_gender,
     validate_password
 )
+from services.user.owner_write_guard import OwnerInactiveError, owner_write_guard
 
 logger = logging.getLogger(__name__)
 
@@ -147,44 +155,49 @@ def health_assessment():
                 }
                 flash('健康风险评估完成（游客模式不保存记录）', 'success')
             else:
-                # 保存评估记录
-                assessment = HealthRiskAssessment(
-                    user_id=current_user.id,
-                    assessment_date=utcnow(),
-                    weather_condition=compact_assessment_weather_condition(weather_data),
-                    risk_score=risk_result['risk_score'],
-                    risk_level=risk_result['risk_level'],
-                    disease_risks=json.dumps(disease_risks, ensure_ascii=False),
-                    recommendations=json.dumps(recommendations, ensure_ascii=False),
-                    explain=json_or_none(explain_payload)
-                )
+                owner_user_id = int(current_user.id)
+                with owner_write_guard(owner_user_id):
+                    # 评估、通知与账号状态在同一受保护事务内落库。
+                    assessment = HealthRiskAssessment(
+                        user_id=owner_user_id,
+                        assessment_date=utcnow(),
+                        weather_condition=compact_assessment_weather_condition(weather_data),
+                        risk_score=risk_result['risk_score'],
+                        risk_level=risk_result['risk_level'],
+                        disease_risks=json.dumps(disease_risks, ensure_ascii=False),
+                        recommendations=json.dumps(recommendations, ensure_ascii=False),
+                        explain=json_or_none(explain_payload)
+                    )
+                    db.session.add(assessment)
 
-                db.session.add(assessment)
-                db.session.commit()
-
-                if current_app.config.get('FEATURE_NOTIFICATIONS'):
-                    if risk_result['risk_level'] == '高风险':
-                        create_notification(
-                            current_user.id,
-                            title='健康风险偏高',
-                            message='今日天气对健康影响较大，建议减少外出并加强防护。',
-                            level='warning',
-                            category='risk',
-                            action_url=url_for('user.health_assessment')
-                        )
-                    streak = get_high_risk_streak(current_user.id)
-                    threshold_days = current_app.config.get('NOTIFICATION_ESCALATION_DAYS', 3)
-                    if threshold_days and streak >= threshold_days:
-                        create_notification(
-                            current_user.id,
-                            title='高风险持续提醒',
-                            message=f'已连续{streak}天高风险，建议联系家属或村医协助。',
-                            level='danger',
-                            category='risk',
-                            action_url=url_for('user.health_assessment')
-                        )
+                    if current_app.config.get('FEATURE_NOTIFICATIONS'):
+                        if risk_result['risk_level'] == '高风险':
+                            create_notification(
+                                owner_user_id,
+                                title='健康风险偏高',
+                                message='今日天气对健康影响较大，建议减少外出并加强防护。',
+                                level='warning',
+                                category='risk',
+                                action_url=url_for('user.health_assessment'),
+                                commit=False,
+                            )
+                        streak = get_high_risk_streak(owner_user_id)
+                        threshold_days = current_app.config.get('NOTIFICATION_ESCALATION_DAYS', 3)
+                        if threshold_days and streak >= threshold_days:
+                            create_notification(
+                                owner_user_id,
+                                title='高风险持续提醒',
+                                message=f'已连续{streak}天高风险，建议联系家属或村医协助。',
+                                level='danger',
+                                category='risk',
+                                action_url=url_for('user.health_assessment'),
+                                commit=False,
+                            )
+                    db.session.commit()
 
                 flash('健康风险评估完成', 'success')
+        except OwnerInactiveError:
+            flash('账号已失效，请重新登录。', 'error')
         except Exception:
             logger.exception("健康风险评估失败")
             flash('评估过程出现异常，请稍后重试。', 'error')
@@ -233,19 +246,26 @@ def profile():
                 flash('请先阅读并同意小程序隐私说明，再生成绑定凭证。', 'error')
                 return redirect(url_for('user.profile'))
             try:
-                plain = create_api_token(
-                    current_user.id,
-                    name=token_name,
-                    privacy_consent_version=current_app.config.get(
-                        'WX_MINIPROGRAM_PRIVACY_VERSION'
-                    ),
-                )
+                owner_user_id = int(current_user.id)
+                with owner_write_guard(owner_user_id):
+                    plain = create_api_token(
+                        owner_user_id,
+                        name=token_name,
+                        privacy_consent_version=current_app.config.get(
+                            'WX_MINIPROGRAM_PRIVACY_VERSION'
+                        ),
+                        commit=False,
+                    )
+                    db.session.commit()
                 session['last_api_token_plain'] = plain
                 ttl_days = current_app.config.get('API_TOKEN_TTL_DAYS', 30)
                 flash(
                     f'API Token 已生成，有效期 {ttl_days} 天（仅展示一次，请立即复制保存）',
                     'success',
                 )
+            except OwnerInactiveError:
+                flash('账号已失效，请重新登录。', 'error')
+                return redirect(url_for('public.login'))
             except Exception:
                 logger.exception("API token create failed")
                 flash('生成失败，请稍后重试。', 'error')
@@ -257,17 +277,63 @@ def profile():
             if not old_password:
                 flash('请输入当前密码', 'error')
                 return redirect(url_for('user.profile'))
-            if not current_user.check_password(old_password):
-                flash('当前密码不正确', 'error')
-                return redirect(url_for('user.profile'))
             if new_password:
                 valid, result = validate_password(new_password)
                 if not valid:
                     flash(result, 'error')
                     return redirect(url_for('user.profile'))
-                current_user.set_password(result)
-                db.session.commit()
-                flash('密码已更新', 'success')
+                try:
+                    owner_user_id = int(current_user.id)
+                    remember_cookie_name = current_app.config.get(
+                        'REMEMBER_COOKIE_NAME',
+                        'remember_token',
+                    )
+                    refresh_remember_cookie = bool(
+                        request.cookies.get(remember_cookie_name)
+                    )
+                    with owner_write_guard(owner_user_id) as locked_user:
+                        if not locked_user.check_password(old_password):
+                            flash('当前密码不正确', 'error')
+                            return redirect(url_for('user.profile'))
+                        locked_user.set_password(result)
+                        locked_user.auth_version = int(locked_user.auth_version) + 1
+                        now = utcnow()
+                        ApiToken.query.filter(
+                            ApiToken.user_id == owner_user_id,
+                            ApiToken.revoked_at.is_(None),
+                        ).update(
+                            {ApiToken.revoked_at: now},
+                            synchronize_session=False,
+                        )
+                        MiniProgramSession.query.filter(
+                            MiniProgramSession.user_id == owner_user_id,
+                            MiniProgramSession.revoked_at.is_(None),
+                        ).update(
+                            {MiniProgramSession.revoked_at: now},
+                            synchronize_session=False,
+                        )
+                        db.session.commit()
+                        # 当前浏览器已再次验证密码，签发新版本会话并按需轮换记住登录。
+                        login_user(
+                            locked_user,
+                            remember=refresh_remember_cookie,
+                            duration=(
+                                timedelta(days=30)
+                                if refresh_remember_cookie
+                                else None
+                            ),
+                        )
+                    flash(
+                        '密码已更新，其他网页登录、小程序会话及绑定凭证均已失效',
+                        'success',
+                    )
+                except OwnerInactiveError:
+                    flash('账号已失效，请重新登录。', 'error')
+                    return redirect(url_for('public.login'))
+                except (OSError, RuntimeError, ValueError):
+                    db.session.rollback()
+                    logger.exception('密码更新授权锁不可用，修改未保存')
+                    flash('密码暂时无法更新，请稍后重试。', 'error')
             else:
                 flash('未填写新密码', 'info')
             return redirect(url_for('user.profile'))
@@ -307,43 +373,67 @@ def profile():
             flash('该邮箱已被其他账号使用，请更换邮箱。', 'error')
             return redirect(url_for('user.profile'))
 
-        current_user.age = age
-        current_user.gender = gender
-        current_user.community = community
-        current_user.email = email
-
-        # 更新密码
-        # 密码更新已拆分到 form_id=password
-
-        # 更新慢性病信息
-        has_chronic = request.form.get('has_chronic_disease') == 'on'
-        current_user.has_chronic_disease = has_chronic
-
-        if has_chronic:
-            chronic_diseases = request.form.getlist('chronic_diseases')
-            # 清理慢性病输入
-            chronic_diseases = [sanitize_input(d, max_length=50) for d in chronic_diseases if d]
-            current_user.chronic_diseases = json.dumps(chronic_diseases)
-        else:
-            current_user.chronic_diseases = None
-
-        # 试点推送设置
+        # 先完整校验第三方推送，再统一修改用户对象，避免配置缺失时部分保存档案。
         wx_uid = sanitize_input(request.form.get('wxpusher_uid'), max_length=80)
-        current_user.wxpusher_uid = (wx_uid.strip() if isinstance(wx_uid, str) else None) or None
+        wx_uid = (wx_uid.strip() if isinstance(wx_uid, str) else None) or None
         push_enabled = request.form.get('push_enabled') == 'on'
-        if push_enabled and not current_user.wxpusher_uid:
+        wxpusher_available = bool(
+            (current_app.config.get('WXPUSHER_APP_TOKEN') or '').strip()
+        )
+        if push_enabled and not wxpusher_available:
+            flash('第三方推送服务暂不可用，本次更改未保存。', 'error')
+            return redirect(url_for('user.profile'))
+        if push_enabled and not wx_uid:
             push_enabled = False
             flash('已关闭自动推送：需要先填写 WxPusher UID', 'warning')
-        current_user.push_enabled = bool(push_enabled)
 
         try:
-            db.session.commit()
+            owner_user_id = int(current_user.id)
+            with owner_write_guard(owner_user_id) as locked_user:
+                if (
+                    push_enabled
+                    and not bool(locked_user.push_enabled)
+                    and request.form.get('wxpusher_consent') != '1'
+                ):
+                    db.session.rollback()
+                    flash('请先确认本次开启涉及的第三方传输范围。', 'error')
+                    return redirect(url_for('user.profile'))
+
+                locked_user.age = age
+                locked_user.gender = gender
+                locked_user.community = community
+                locked_user.email = email
+
+                has_chronic = request.form.get('has_chronic_disease') == 'on'
+                locked_user.has_chronic_disease = has_chronic
+                if has_chronic:
+                    chronic_diseases = request.form.getlist('chronic_diseases')
+                    chronic_diseases = [
+                        sanitize_input(d, max_length=50)
+                        for d in chronic_diseases
+                        if d
+                    ]
+                    locked_user.chronic_diseases = json.dumps(chronic_diseases)
+                else:
+                    locked_user.chronic_diseases = None
+
+                locked_user.wxpusher_uid = wx_uid
+                locked_user.push_enabled = bool(push_enabled)
+                db.session.commit()
+        except OwnerInactiveError:
+            flash('账号已失效，请重新登录。', 'error')
+            return redirect(url_for('public.login'))
         except IntegrityError:
             # 并发更新时仍以数据库唯一约束为最终防线。
             db.session.rollback()
             flash('该邮箱已被其他账号使用，请更换邮箱。', 'error')
             return redirect(url_for('user.profile'))
-        logger.info("用户更新个人信息: %s", current_user.username)
+        except (OSError, RuntimeError, ValueError):
+            db.session.rollback()
+            logger.exception('推送授权锁不可用，个人信息未保存')
+            flash('个人信息暂时无法保存，请稍后重试。', 'error')
+            return redirect(url_for('user.profile'))
+        logger.info("用户更新个人信息: user_id=%s", owner_user_id)
         flash('个人信息更新成功', 'success')
         return redirect(url_for('user.profile'))
 
@@ -355,7 +445,10 @@ def profile():
         'profile.html',
         communities=communities,
         chronic_diseases_list=chronic_diseases_list,
-        last_api_token_plain=last_api_token_plain
+        last_api_token_plain=last_api_token_plain,
+        wxpusher_available=bool(
+            (current_app.config.get('WXPUSHER_APP_TOKEN') or '').strip()
+        ),
     )
 
 
@@ -375,8 +468,19 @@ def update_location():
         profile['community'] = normalized
         session['guest_profile'] = profile
     else:
-        current_user.community = normalized
-        db.session.commit()
+        try:
+            owner_user_id = int(current_user.id)
+            with owner_write_guard(owner_user_id) as locked_user:
+                locked_user.community = normalized
+                db.session.commit()
+        except OwnerInactiveError:
+            flash('账号已失效，请重新登录。', 'error')
+            return redirect(url_for('public.login'))
+        except (OSError, RuntimeError, ValueError):
+            db.session.rollback()
+            logger.exception('位置更新授权锁不可用，修改未保存')
+            flash('位置暂时无法更新，请稍后重试。', 'error')
+            return redirect(_safe_referrer_or_dashboard())
 
     flash(f'定位已更新为 {normalized}', 'success')
     return redirect(_safe_referrer_or_dashboard())

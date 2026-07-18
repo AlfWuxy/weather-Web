@@ -1,8 +1,10 @@
 # -*- coding: utf-8 -*-
 """Application configuration loader."""
 import os
+import re
 import secrets
 from pathlib import Path
+from urllib.parse import urlparse
 
 from config import (
     AI_ALLOWED_MODELS,
@@ -10,6 +12,9 @@ from config import (
     COMMUNITY_COORDS_GCJ,
     DEFAULT_CITY,
     DEFAULT_LOCATION,
+    PUSH_TRACKING_LINK_TTL_DAYS_DEFAULT,
+    PUSH_TRACKING_LINK_TTL_DAYS_MAX,
+    PUSH_TRACKING_LINK_TTL_DAYS_MIN,
     WEAK_SECRET_KEYWORDS,
 )
 from core.constants import DEFAULT_CITY_LABEL, WEATHER_CACHE_TTL_MINUTES
@@ -18,6 +23,8 @@ from utils.parsers import parse_bool, parse_float, parse_int
 QWEATHER_API_BASE_DEFAULT = ''
 SILICONFLOW_API_BASE_DEFAULT = 'https://api.siliconflow.cn/v1'
 WXPUSHER_API_BASE_DEFAULT = 'https://wxpusher.zjiecode.com/api'
+PUBLIC_BASE_URL_FORMAL = 'https://yilaoweather.org'
+WXPUSHER_APP_TOKEN_PATTERN = re.compile(r'^AT_[A-Za-z0-9_-]{16,197}$')
 
 
 def _contains_weak_keyword(value):
@@ -31,6 +38,17 @@ def _is_memory_storage_uri(uri):
     if not isinstance(uri, str):
         return False
     return uri.strip().lower().startswith('memory://')
+
+
+def _is_valid_redis_uri(uri):
+    """只允许带主机的 Redis 连接地址。"""
+    if not isinstance(uri, str) or not uri.strip():
+        return False
+    try:
+        parsed = urlparse(uri.strip())
+        return parsed.scheme in {'redis', 'rediss'} and bool(parsed.hostname)
+    except ValueError:
+        return False
 
 
 def resolve_database_uri():
@@ -138,12 +156,25 @@ def validate_production_config():
     pair_token_pepper = (os.getenv('PAIR_TOKEN_PEPPER') or '').strip()
     rate_limit_storage_env = (os.getenv('RATE_LIMIT_STORAGE_URI') or '').strip()
     redis_url = (os.getenv('REDIS_URL') or '').strip()
+    weather_cache_redis_url = (os.getenv('WEATHER_CACHE_REDIS_URL') or '').strip()
+    qweather_auth_mode = (os.getenv('QWEATHER_AUTH_MODE') or 'disabled').strip().lower()
+    qweather_require_persistent_budget = parse_bool(
+        os.getenv('QWEATHER_REQUIRE_PERSISTENT_BUDGET'),
+        default=not debug_value,
+    )
     wx_miniprogram_values = {
         'WX_MINIPROGRAM_APPID': (os.getenv('WX_MINIPROGRAM_APPID') or '').strip(),
         'WX_MINIPROGRAM_SECRET': (os.getenv('WX_MINIPROGRAM_SECRET') or '').strip(),
         'WX_MINIPROGRAM_OPENID_PEPPER': (os.getenv('WX_MINIPROGRAM_OPENID_PEPPER') or '').strip(),
         'WX_MINIPROGRAM_SESSION_SECRET': (os.getenv('WX_MINIPROGRAM_SESSION_SECRET') or '').strip(),
     }
+    wxpusher_app_token = (os.getenv('WXPUSHER_APP_TOKEN') or '').strip()
+    wxpusher_api_base = (os.getenv('WXPUSHER_API_BASE') or WXPUSHER_API_BASE_DEFAULT).strip()
+    public_base_url = (os.getenv('PUBLIC_BASE_URL') or '').strip()
+    insecure_public_base_allowed = (os.getenv('ALLOW_INSECURE_PUBLIC_BASE_URL') or '').strip()
+    dispatch_lock_path = (os.getenv('DISPATCH_LOCK_PATH') or '').strip()
+    feature_web_ai = parse_bool(os.getenv('FEATURE_WEB_AI'), default=False)
+    siliconflow_api_key = (os.getenv('SILICONFLOW_API_KEY') or '').strip()
 
     if not debug_value:
         if not secret_key_env:
@@ -163,8 +194,27 @@ def validate_production_config():
                 "PAIR_TOKEN_PEPPER 未设置！生产环境必须配置。\n"
                 "  生成方式: python3 -c 'import secrets; print(secrets.token_hex(32))'"
             )
+        if len(pair_token_pepper) < 32:
+            raise RuntimeError("PAIR_TOKEN_PEPPER 长度过短，生产环境必须 >= 32 位。")
+        if _contains_weak_keyword(pair_token_pepper):
+            raise RuntimeError("PAIR_TOKEN_PEPPER 包含弱关键词，必须更换为独立随机值。")
         if pair_token_pepper in ('your-pair-token-pepper-here', 'change-me-min-32-chars'):
             raise RuntimeError("PAIR_TOKEN_PEPPER 使用了示例值，必须替换为真实的随机密钥！")
+        independent_from = {
+            'SECRET_KEY': secret_key_env,
+            'WX_MINIPROGRAM_OPENID_PEPPER': wx_miniprogram_values['WX_MINIPROGRAM_OPENID_PEPPER'],
+            'WX_MINIPROGRAM_SESSION_SECRET': wx_miniprogram_values['WX_MINIPROGRAM_SESSION_SECRET'],
+        }
+        duplicate_name = next(
+            (
+                name
+                for name, value in independent_from.items()
+                if value and secrets.compare_digest(pair_token_pepper, value)
+            ),
+            None,
+        )
+        if duplicate_name:
+            raise RuntimeError(f"PAIR_TOKEN_PEPPER 必须与 {duplicate_name} 使用不同的独立随机值。")
 
         effective_rate_limit_uri = rate_limit_storage_env or redis_url or 'memory://'
         if _is_memory_storage_uri(effective_rate_limit_uri):
@@ -181,6 +231,43 @@ def validate_production_config():
                 value = wx_miniprogram_values[name]
                 if len(value) < 32 or _contains_weak_keyword(value):
                     raise RuntimeError(f"{name} 必须使用至少 32 位的独立随机值。")
+            if public_base_url != PUBLIC_BASE_URL_FORMAL:
+                raise RuntimeError("微信正式模式的 PUBLIC_BASE_URL 必须使用固定正式 origin。")
+            if insecure_public_base_allowed:
+                raise RuntimeError("微信正式模式禁止 ALLOW_INSECURE_PUBLIC_BASE_URL。")
+            if not WXPUSHER_APP_TOKEN_PATTERN.fullmatch(wxpusher_app_token):
+                raise RuntimeError("微信正式模式的 WXPUSHER_APP_TOKEN 格式或长度异常。")
+
+        # WxPusher 也可能在 Web-only 运行时开启，启用后必须锁定正式跳转与官方 API。
+        if wxpusher_app_token:
+            if public_base_url != PUBLIC_BASE_URL_FORMAL:
+                raise RuntimeError("启用 WxPusher 时 PUBLIC_BASE_URL 必须使用固定正式 origin。")
+            if insecure_public_base_allowed:
+                raise RuntimeError("启用 WxPusher 时禁止 ALLOW_INSECURE_PUBLIC_BASE_URL。")
+            if wxpusher_api_base != WXPUSHER_API_BASE_DEFAULT:
+                raise RuntimeError("启用 WxPusher 时 WXPUSHER_API_BASE 必须使用固定官方 origin。")
+            if not WXPUSHER_APP_TOKEN_PATTERN.fullmatch(wxpusher_app_token):
+                raise RuntimeError("WXPUSHER_APP_TOKEN 格式或长度异常。")
+
+        if any(wx_miniprogram_values.values()) or wxpusher_app_token:
+            if not dispatch_lock_path or not Path(dispatch_lock_path).is_absolute():
+                raise RuntimeError("微信或 WxPusher 正式运行时必须配置绝对 DISPATCH_LOCK_PATH。")
+
+        # 正式站暂不处理用户自由文本，也不允许遗留第三方 AI 凭据。
+        if feature_web_ai or siliconflow_api_key:
+            raise RuntimeError("正式环境必须关闭 FEATURE_WEB_AI 并清空 SILICONFLOW_API_KEY。")
+
+        if qweather_auth_mode in {'api_key', 'jwt'}:
+            persistent_budget_uri = weather_cache_redis_url or redis_url
+            if not qweather_require_persistent_budget:
+                raise RuntimeError(
+                    "正式 QWeather 必须启用 QWEATHER_REQUIRE_PERSISTENT_BUDGET。"
+                )
+            if not _is_valid_redis_uri(persistent_budget_uri):
+                raise RuntimeError(
+                    "正式 QWeather 必须配置有效的 REDIS_URL 或 "
+                    "WEATHER_CACHE_REDIS_URL。"
+                )
 
     database_uri = resolve_database_uri()
     db_path = resolve_sqlite_db_path(database_uri, Path(__file__).resolve().parents[1])
@@ -253,8 +340,22 @@ def configure_app(app, logger):
     amap_security_js_code = _normalized_env_value('AMAP_SECURITY_JS_CODE', '')
     siliconflow_key = _normalized_env_value('SILICONFLOW_API_KEY', '')
     siliconflow_base = _normalized_env_value('SILICONFLOW_API_BASE', SILICONFLOW_API_BASE_DEFAULT)
+    feature_web_ai = parse_bool(os.getenv('FEATURE_WEB_AI'), default=False)
     wxpusher_app_token = _normalized_env_value('WXPUSHER_APP_TOKEN', '')
     wxpusher_api_base = _normalized_env_value('WXPUSHER_API_BASE', WXPUSHER_API_BASE_DEFAULT)
+    push_tracking_link_ttl_days = max(
+        PUSH_TRACKING_LINK_TTL_DAYS_MIN,
+        min(
+            parse_int(
+                os.getenv(
+                    'PUSH_TRACKING_LINK_TTL_DAYS',
+                    str(PUSH_TRACKING_LINK_TTL_DAYS_DEFAULT),
+                ),
+                default=PUSH_TRACKING_LINK_TTL_DAYS_DEFAULT,
+            ),
+            PUSH_TRACKING_LINK_TTL_DAYS_MAX,
+        ),
+    )
     wx_miniprogram_appid = _normalized_env_value('WX_MINIPROGRAM_APPID', '')
     wx_miniprogram_secret = _normalized_env_value('WX_MINIPROGRAM_SECRET', '')
     wx_miniprogram_openid_pepper = _normalized_env_value('WX_MINIPROGRAM_OPENID_PEPPER', '')
@@ -275,6 +376,7 @@ def configure_app(app, logger):
         ),
     )
     public_base_url = _normalized_env_value('PUBLIC_BASE_URL', '')
+    dispatch_lock_path = _normalized_env_value('DISPATCH_LOCK_PATH', '')
     pair_token_pepper = _normalized_env_value('PAIR_TOKEN_PEPPER', '')
     demo_mode = os.getenv('DEMO_MODE')
     default_city = _normalized_env_value('DEFAULT_CITY', DEFAULT_CITY)
@@ -285,6 +387,10 @@ def configure_app(app, logger):
     )
     redis_url = _normalized_env_value('REDIS_URL', '')
     weather_cache_redis_url = _normalized_env_value('WEATHER_CACHE_REDIS_URL', redis_url)
+    qweather_require_persistent_budget = parse_bool(
+        os.getenv('QWEATHER_REQUIRE_PERSISTENT_BUDGET'),
+        default=not debug_value,
+    )
 
     validate_production_config()
 
@@ -304,6 +410,7 @@ def configure_app(app, logger):
     app.config['QWEATHER_KEY'] = qweather_key
     app.config['QWEATHER_API_BASE'] = qweather_api_base
     app.config['QWEATHER_AUTH_MODE'] = qweather_auth_mode
+    app.config['QWEATHER_REQUIRE_PERSISTENT_BUDGET'] = qweather_require_persistent_budget
     app.config['QWEATHER_JWT_KID'] = qweather_jwt_kid
     app.config['QWEATHER_JWT_PROJECT_ID'] = qweather_jwt_project_id
     app.config['QWEATHER_JWT_PRIVATE_KEY_PATH'] = qweather_jwt_private_key_path
@@ -312,8 +419,10 @@ def configure_app(app, logger):
     app.config['AMAP_SECURITY_JS_CODE'] = amap_security_js_code
     app.config['SILICONFLOW_API_KEY'] = siliconflow_key
     app.config['SILICONFLOW_API_BASE'] = siliconflow_base
+    app.config['FEATURE_WEB_AI'] = feature_web_ai
     app.config['WXPUSHER_APP_TOKEN'] = wxpusher_app_token
     app.config['WXPUSHER_API_BASE'] = wxpusher_api_base
+    app.config['PUSH_TRACKING_LINK_TTL_DAYS'] = push_tracking_link_ttl_days
     app.config['WX_MINIPROGRAM_APPID'] = wx_miniprogram_appid
     app.config['WX_MINIPROGRAM_SECRET'] = wx_miniprogram_secret
     app.config['WX_MINIPROGRAM_OPENID_PEPPER'] = wx_miniprogram_openid_pepper
@@ -340,6 +449,14 @@ def configure_app(app, logger):
         min(parse_float(os.getenv('WX_MINIPROGRAM_AUTH_TIMEOUT', '8'), default=8.0), 15.0),
     )
     app.config['PUBLIC_BASE_URL'] = public_base_url
+    app.config['DISPATCH_LOCK_PATH'] = dispatch_lock_path
+    app.config['WECHAT_FORMAL_RUNTIME'] = bool(
+        not debug_value
+        and wx_miniprogram_appid
+        and wx_miniprogram_secret
+        and wx_miniprogram_openid_pepper
+        and wx_miniprogram_session_secret
+    )
     app.config['PREFERRED_URL_SCHEME'] = 'https' if not app.config['DEBUG'] else 'http'
     app.config['SESSION_COOKIE_SECURE'] = not app.config['DEBUG']
     app.config['SESSION_COOKIE_HTTPONLY'] = True
@@ -538,7 +655,9 @@ def configure_app(app, logger):
         logger.warning("AMAP_KEY 未配置，地图API将无法使用")
     if not amap_security_js_code:
         logger.warning("AMAP_SECURITY_JS_CODE 未配置，地图安全密钥将无法使用")
-    if not siliconflow_key:
+    if not feature_web_ai:
+        logger.info("FEATURE_WEB_AI=0，Web AI 问答已关闭")
+    elif not siliconflow_key:
         logger.warning("SILICONFLOW_API_KEY 未配置，AI问答将不可用")
 
     app.config.setdefault('SENTRY_DSN', _normalized_env_value('SENTRY_DSN', ''))

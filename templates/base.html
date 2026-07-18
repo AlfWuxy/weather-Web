@@ -68,7 +68,9 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/animations.css') }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/page-transitions.css') }}">
+    {% if config.get('FEATURE_WEB_AI') %}
     <link rel="stylesheet" href="{{ url_for('static', filename='css/ai-floating-chat.css') }}">
+    {% endif %}
     {# 新的视觉主题,放在最后覆盖旧样式 #}
     <link rel="stylesheet" href="{{ url_for('static', filename='css/yilao.css') }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/yilao-motion.css') }}">
@@ -407,7 +409,9 @@
         {% block content %}{% endblock %}
     </main>
 
+    {% if config.get('FEATURE_WEB_AI') %}
     {% include 'partials/ai_floating_chat.html' %}
+    {% endif %}
 
     <footer class="site-footer text-center py-4 mt-5" style="color:var(--yl-muted); border-top:1px solid var(--yl-line-soft);">
         <div class="container">
@@ -575,7 +579,9 @@
 
     <script src="{{ url_for('static', filename='js/clipboard.js') }}"></script>
     <script src="{{ url_for('static', filename='js/metric-explanations.js') }}"></script>
+    {% if config.get('FEATURE_WEB_AI') %}
     <script src="{{ url_for('static', filename='js/ai-floating-chat.js') }}"></script>
+    {% endif %}
     <script src="{{ url_for('static', filename='js/yilao-motion.js') }}"></script>
     <script src="{{ url_for('static', filename='js/yilao-data-fx.js') }}"></script>
     <script src="{{ url_for('static', filename='js/yilao-data-fx-extra.js') }}"></script>

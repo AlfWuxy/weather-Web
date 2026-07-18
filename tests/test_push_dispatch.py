@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 
 import sqlite3
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -65,6 +65,54 @@ def _create_push_recipient(db_session, *, username, short_code):
     pair_id = int(pair.id)
     db_session.commit()
     return user_id, pair_id
+
+
+def _create_tracking_delivery(
+    db_session,
+    *,
+    token,
+    sent_at,
+    alert_at,
+    status="sent",
+):
+    """创建不依赖天气上游的点击跟踪记录。"""
+    from core.db_models import AlertDelivery, User, WeatherAlert
+    from core.time_utils import utcnow
+
+    user = User(username=f"tracking_{token}", role="user")
+    user.set_password("pw123456")
+    db_session.add(user)
+    db_session.flush()
+
+    alert = WeatherAlert(
+        alert_date=alert_at if alert_at is not None else utcnow(),
+        location="116.20,29.27",
+        alert_type="heat_threshold",
+        alert_level="阈值",
+        description="tracking test",
+        affected_communities="[]",
+        disease_correlation="{}",
+    )
+    db_session.add(alert)
+    db_session.flush()
+    if alert_at is None:
+        WeatherAlert.query.filter_by(id=alert.id).update(
+            {WeatherAlert.alert_date: None},
+            synchronize_session=False,
+        )
+
+    delivery = AlertDelivery(
+        alert_id=alert.id,
+        user_id=user.id,
+        channel="wxpusher",
+        status=status,
+        delivery_token=token,
+        sent_at=sent_at,
+        error="provider timeout" if status == "uncertain" else None,
+    )
+    db_session.add(delivery)
+    db_session.commit()
+    return int(delivery.id)
 
 
 def test_dispatch_alerts_dedupes_success(app, db_session, monkeypatch):
@@ -285,7 +333,7 @@ def test_non_success_delivery_is_terminal_until_manual_review(
 def test_manually_approved_retry_reuses_claim_once(app, db_session):
     from core.db_models import AlertDelivery, User, WeatherAlert
     from core.time_utils import utcnow
-    from services.push.dispatch import _claim_delivery
+    from services.push.dispatch import _claim_delivery, _finalize_delivery
 
     with app.app_context():
         user = User(username='manual-retry-user', role='user')
@@ -311,6 +359,8 @@ def test_manually_approved_retry_reuses_claim_once(app, db_session):
             sent_at=utcnow(),
             attempt_count=1,
             review_action='allow_retry',
+            reviewed_at=utcnow(),
+            reviewed_by_user_id=user.id,
         )
         db_session.add(delivery)
         db_session.commit()
@@ -329,6 +379,124 @@ def test_manually_approved_retry_reuses_claim_once(app, db_session):
         refreshed = db_session.get(AlertDelivery, delivery.id)
         assert refreshed.status == 'sending'
         assert refreshed.attempt_count == 2
+        assert refreshed.review_action is None
+        assert refreshed.reviewed_at is None
+        assert refreshed.reviewed_by_user_id is None
+
+        retry_state = _finalize_delivery(
+            delivery.id,
+            {"ok": False, "error": "ReadTimeout after retry"},
+            utcnow(),
+        )
+        db_session.expire_all()
+        retried = db_session.get(AlertDelivery, delivery.id)
+        assert retry_state == "uncertain"
+        assert retried.status == "uncertain"
+        assert retried.review_action is None
+        assert retried.reviewed_at is None
+        assert retried.reviewed_by_user_id is None
+
+
+def test_dispatch_recovers_stale_sending_before_no_pair_early_return(app, db_session):
+    """即使没有活跃关系，旧 sending 也必须进入人工复核。"""
+    from core.db_models import AlertDelivery, User, WeatherAlert
+    from core.time_utils import utcnow
+    from services.push import dispatch as dispatch_mod
+
+    with app.app_context():
+        user = User(username="stale_without_pair", role="user")
+        user.set_password("testpass")
+        db_session.add(user)
+        alert = WeatherAlert(
+            alert_date=utcnow(),
+            location="116.20,29.27",
+            alert_type="heat_threshold",
+            alert_level="阈值",
+            description="test",
+            affected_communities="[]",
+            disease_correlation="{}",
+        )
+        db_session.add(alert)
+        db_session.flush()
+        delivery = AlertDelivery(
+            alert_id=alert.id,
+            user_id=user.id,
+            channel="wxpusher",
+            status="sending",
+            delivery_token="stale-without-pair-token",
+            sent_at=utcnow() - timedelta(minutes=11),
+            review_action="allow_retry",
+            reviewed_at=utcnow() - timedelta(minutes=12),
+            reviewed_by_user_id=user.id,
+        )
+        db_session.add(delivery)
+        db_session.commit()
+
+        result = dispatch_mod.dispatch_alerts(now=utcnow())
+
+        db_session.expire_all()
+        refreshed = db_session.get(AlertDelivery, delivery.id)
+        assert result["status"] == "idle_no_pairs"
+        assert result["recovered_stale_sending"] == 1
+        assert refreshed.status == "uncertain"
+        assert "禁止自动重试" in refreshed.error
+        assert refreshed.review_action is None
+        assert refreshed.reviewed_at is None
+        assert refreshed.reviewed_by_user_id is None
+
+
+@pytest.mark.parametrize(
+    ("payload", "expected_ok", "expected_error", "expected_message_id"),
+    [
+        (
+            {"code": 1000, "data": [{"uid": "UID_TARGET", "status": "fail", "code": 1001, "msg": "UID不存在"}]},
+            False,
+            "UID不存在",
+            None,
+        ),
+        ({"code": 1000, "data": []}, False, "empty delivery result", None),
+        (
+            {"code": "1000", "data": [{"uid": "UID_TARGET", "status": "success", "code": "1000", "messageId": 42}]},
+            True,
+            None,
+            "42",
+        ),
+        (
+            {"code": 1000, "data": [{"uid": "UID_OTHER", "status": "success", "code": 1000}]},
+            False,
+            "uid mismatch",
+            None,
+        ),
+    ],
+)
+def test_wxpusher_requires_successful_matching_nested_delivery(
+    app,
+    monkeypatch,
+    payload,
+    expected_ok,
+    expected_error,
+    expected_message_id,
+):
+    from services.push import wxpusher
+
+    class FakeResponse:
+        status_code = 200
+        content = b"{}"
+
+        def json(self):
+            return payload
+
+    app.config["WXPUSHER_APP_TOKEN"] = "AT_abcdefghijklmnop"
+    app.config["WXPUSHER_API_BASE"] = wxpusher.WXPUSHER_OFFICIAL_API_BASE
+    monkeypatch.setattr(wxpusher.requests, "post", lambda *_args, **_kwargs: FakeResponse())
+
+    with app.app_context():
+        result = wxpusher.send("UID_TARGET", "标题", "正文")
+
+    assert result["ok"] is expected_ok
+    assert result.get("msg_id") == expected_message_id
+    if expected_error:
+        assert expected_error in result.get("error", "")
 
 
 @pytest.mark.parametrize("snapshot_state", ["missing", "unavailable", "stale"])
@@ -409,7 +577,42 @@ def test_threshold_alert_rejects_mock_weather():
     }) is not None
 
 
-def test_tracking_route_marks_clicked(client, app, db_session):
+@pytest.mark.parametrize(
+    "configured,expected",
+    [
+        (None, 7),
+        ("invalid", 7),
+        ("0", 1),
+        ("999", 7),
+    ],
+)
+def test_push_tracking_link_ttl_config_is_bounded(monkeypatch, configured, expected):
+    import logging
+
+    from flask import Flask
+
+    from core.config import configure_app
+
+    if configured is None:
+        monkeypatch.delenv("PUSH_TRACKING_LINK_TTL_DAYS", raising=False)
+    else:
+        monkeypatch.setenv("PUSH_TRACKING_LINK_TTL_DAYS", configured)
+
+    test_app = Flask("push-tracking-config")
+    configure_app(test_app, logging.getLogger("push-tracking-config"))
+    assert test_app.config["PUSH_TRACKING_LINK_TTL_DAYS"] == expected
+
+
+def _tracking_csrf_token(client):
+    with client.session_transaction() as sess:
+        return sess.get("_csrf_token")
+
+
+def test_tracking_route_requires_explicit_csrf_confirmation_and_marks_only_once(
+    client,
+    app,
+    db_session,
+):
     from core.db_models import AlertDelivery, Pair, User, WeatherAlert, UsageEvent
     from core.security import hash_short_code
     from core.time_utils import utcnow
@@ -457,8 +660,40 @@ def test_tracking_route_marks_clicked(client, app, db_session):
         db_session.add(delivery)
         db_session.commit()
 
-    resp = client.get("/t/tok_test_123", follow_redirects=False)
-    assert resp.status_code in (301, 302)
+    first = client.get("/t/tok_test_123", follow_redirects=False)
+    second = client.get("/t/tok_test_123", follow_redirects=False)
+    head = client.head("/t/tok_test_123", follow_redirects=False)
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert head.status_code == 200
+    assert "我已看到这条提醒" in first.get_data(as_text=True)
+    assert first.headers["Cache-Control"] == "no-store, private, max-age=0"
+    assert first.headers["X-Robots-Tag"] == "noindex, nofollow, noarchive"
+
+    with app.app_context():
+        refreshed = AlertDelivery.query.filter_by(delivery_token="tok_test_123").first()
+        assert refreshed is not None
+        assert refreshed.clicked_at is None
+        assert refreshed.status == "uncertain"
+        assert UsageEvent.query.filter_by(event_type="push_click").count() == 0
+
+    rejected = client.post("/t/tok_test_123", follow_redirects=False)
+    assert rejected.status_code == 400
+
+    csrf_token = _tracking_csrf_token(client)
+    assert csrf_token
+    confirmed = client.post(
+        "/t/tok_test_123",
+        data={"csrf_token": csrf_token},
+        follow_redirects=False,
+    )
+    repeated = client.post(
+        "/t/tok_test_123",
+        data={"csrf_token": csrf_token},
+        follow_redirects=False,
+    )
+    assert confirmed.status_code in (301, 302)
+    assert repeated.status_code in (301, 302)
 
     with app.app_context():
         refreshed = AlertDelivery.query.filter_by(delivery_token="tok_test_123").first()
@@ -468,6 +703,219 @@ def test_tracking_route_marks_clicked(client, app, db_session):
         assert refreshed.review_action == "click_confirmed"
         assert refreshed.reviewed_at is not None
         assert refreshed.error is None
+        assert UsageEvent.query.filter_by(event_type="push_click").count() == 1
+
+
+@pytest.mark.parametrize(
+    ("status", "error", "review_action", "expected_status", "expected_review"),
+    [
+        ("failed", "管理员确认未送达", "confirm_failed", "failed", "confirm_failed"),
+        ("retry_ready", "允许下一轮重试", "allow_retry", "retry_ready", "allow_retry"),
+        (
+            "failed",
+            "push authorization revoked",
+            "auth_revoked",
+            "failed",
+            "auth_revoked",
+        ),
+    ],
+)
+def test_tracking_confirmation_never_overrides_existing_review_or_local_failure(
+    client,
+    app,
+    db_session,
+    status,
+    error,
+    review_action,
+    expected_status,
+    expected_review,
+):
+    from core.db_models import AlertDelivery
+    from core.time_utils import utcnow
+
+    token = f"click-{status}-{review_action}"
+    delivery_id = _create_tracking_delivery(
+        db_session,
+        token=token,
+        sent_at=utcnow(),
+        alert_at=utcnow(),
+        status=status,
+    )
+    delivery = db_session.get(AlertDelivery, delivery_id)
+    delivery.error = error
+    delivery.review_action = review_action
+    delivery.reviewed_at = utcnow()
+    db_session.commit()
+
+    page = client.get(f"/t/{token}", follow_redirects=False)
+    assert page.status_code == 200
+    csrf_token = _tracking_csrf_token(client)
+    response = client.post(
+        f"/t/{token}",
+        data={"csrf_token": csrf_token},
+        follow_redirects=False,
+    )
+    assert response.status_code in (301, 302)
+    db_session.expire_all()
+    refreshed = db_session.get(AlertDelivery, delivery_id)
+    assert refreshed.clicked_at is not None
+    assert refreshed.status == expected_status
+    assert refreshed.review_action == expected_review
+
+
+def test_tracking_route_enforces_before_at_and_after_seven_day_boundary(
+    client,
+    app,
+    db_session,
+    monkeypatch,
+):
+    from core.db_models import AlertDelivery, UsageEvent
+
+    fixed_now = datetime(2026, 7, 18, 12, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr("blueprints.public.utcnow", lambda: fixed_now)
+    app.config["PUSH_TRACKING_LINK_TTL_DAYS"] = 7
+
+    with app.app_context():
+        _create_tracking_delivery(
+            db_session,
+            token="tok_before_boundary",
+            sent_at=fixed_now - timedelta(days=7) + timedelta(microseconds=1),
+            alert_at=fixed_now - timedelta(days=8),
+        )
+        _create_tracking_delivery(
+            db_session,
+            token="tok_at_boundary",
+            sent_at=fixed_now - timedelta(days=7),
+            alert_at=fixed_now - timedelta(days=8),
+        )
+        _create_tracking_delivery(
+            db_session,
+            token="tok_after_boundary",
+            sent_at=fixed_now - timedelta(days=7) - timedelta(microseconds=1),
+            alert_at=fixed_now - timedelta(days=8),
+        )
+
+    before = client.get("/t/tok_before_boundary", follow_redirects=False)
+    at = client.get("/t/tok_at_boundary", follow_redirects=False)
+    after = client.get("/t/tok_after_boundary", follow_redirects=False)
+
+    assert before.status_code == 200
+    assert at.status_code == 200
+    assert after.headers["Location"].endswith("/")
+    with app.app_context():
+        records = {
+            item.delivery_token: item
+            for item in AlertDelivery.query.filter(
+                AlertDelivery.delivery_token.in_(
+                    {
+                        "tok_before_boundary",
+                        "tok_at_boundary",
+                        "tok_after_boundary",
+                    }
+                )
+            ).all()
+        }
+        assert records["tok_before_boundary"].clicked_at is None
+        assert records["tok_at_boundary"].clicked_at is None
+        assert records["tok_after_boundary"].clicked_at is None
+        assert UsageEvent.query.filter_by(event_type="push_click").count() == 0
+
+    csrf_token = _tracking_csrf_token(client)
+    before_confirm = client.post(
+        "/t/tok_before_boundary",
+        data={"csrf_token": csrf_token},
+        follow_redirects=False,
+    )
+    at_confirm = client.post(
+        "/t/tok_at_boundary",
+        data={"csrf_token": csrf_token},
+        follow_redirects=False,
+    )
+    expired_confirm = client.post(
+        "/t/tok_after_boundary",
+        data={"csrf_token": csrf_token},
+        follow_redirects=False,
+    )
+    assert "/login" in before_confirm.headers["Location"]
+    assert "/login" in at_confirm.headers["Location"]
+    assert expired_confirm.headers["Location"].endswith("/")
+    with app.app_context():
+        records = {
+            item.delivery_token: item
+            for item in AlertDelivery.query.filter(
+                AlertDelivery.delivery_token.in_(
+                    {"tok_before_boundary", "tok_at_boundary", "tok_after_boundary"}
+                )
+            ).all()
+        }
+        assert records["tok_before_boundary"].clicked_at is not None
+        assert records["tok_at_boundary"].clicked_at is not None
+        assert records["tok_after_boundary"].clicked_at is None
+        assert UsageEvent.query.filter_by(event_type="push_click").count() == 2
+
+
+def test_tracking_route_uses_safe_alert_time_fallback_and_rejects_missing_time(
+    client,
+    app,
+    db_session,
+    monkeypatch,
+):
+    from core.db_models import AlertDelivery, UsageEvent
+    from core.time_utils import ensure_utc_aware
+
+    fixed_now = datetime(2026, 7, 18, 12, 0, tzinfo=timezone.utc)
+    fallback_time = fixed_now - timedelta(days=1)
+    monkeypatch.setattr("blueprints.public.utcnow", lambda: fixed_now)
+    app.config["PUSH_TRACKING_LINK_TTL_DAYS"] = 7
+
+    with app.app_context():
+        _create_tracking_delivery(
+            db_session,
+            token="tok_alert_fallback",
+            sent_at=None,
+            alert_at=fallback_time,
+            status="uncertain",
+        )
+        _create_tracking_delivery(
+            db_session,
+            token="tok_missing_time",
+            sent_at=None,
+            alert_at=None,
+            status="uncertain",
+        )
+
+    fallback = client.get("/t/tok_alert_fallback", follow_redirects=False)
+    missing = client.get("/t/tok_missing_time", follow_redirects=False)
+
+    assert fallback.status_code == 200
+    assert missing.headers["Location"].endswith("/")
+    with app.app_context():
+        fallback_record = AlertDelivery.query.filter_by(
+            delivery_token="tok_alert_fallback"
+        ).first()
+        missing_record = AlertDelivery.query.filter_by(
+            delivery_token="tok_missing_time"
+        ).first()
+        assert fallback_record.clicked_at is None
+        assert fallback_record.status == "uncertain"
+        assert missing_record.clicked_at is None
+        assert missing_record.status == "uncertain"
+        assert UsageEvent.query.filter_by(event_type="push_click").count() == 0
+
+    csrf_token = _tracking_csrf_token(client)
+    confirmed = client.post(
+        "/t/tok_alert_fallback",
+        data={"csrf_token": csrf_token},
+        follow_redirects=False,
+    )
+    assert "/login" in confirmed.headers["Location"]
+    with app.app_context():
+        fallback_record = AlertDelivery.query.filter_by(
+            delivery_token="tok_alert_fallback"
+        ).first()
+        assert fallback_record.clicked_at is not None
+        assert fallback_record.status == "sent"
+        assert ensure_utc_aware(fallback_record.sent_at) == fallback_time
         assert UsageEvent.query.filter_by(event_type="push_click").count() == 1
 
 
@@ -668,3 +1116,260 @@ def test_weather_alert_level_upgrade_creates_new_delivery_record(app, db_session
 
         assert first.id != upgraded.id
         assert WeatherAlert.query.count() == 2
+
+
+def _official_warning(**overrides):
+    warning = {
+        "source_id": "alert-20260718-001",
+        "start_time": "2026-07-18T08:00:00+08:00",
+        "end_time": "2026-07-18T20:00:00+08:00",
+        "type": "高温",
+        "level": "黄色",
+        "title": "高温黄色预警",
+        "text": "请注意防暑降温",
+        "severity": "Severe",
+        "certainty": "Observed",
+        "urgency": "Immediate",
+        "message_type": "alert",
+        "supersedes": [],
+        "raw": {"updateTime": "2026-07-18T08:01:00+08:00"},
+    }
+    warning.update(overrides)
+    return warning
+
+
+def _create_official_alert(db_session, *, now, warning):
+    from services.push.dispatch import (
+        _build_alert_dedupe_key,
+        _get_or_create_weather_alert,
+    )
+
+    alert_type = warning.get("type") or "qweather_warning"
+    alert_level = warning.get("level") or warning.get("severity") or ""
+    dedupe_key = _build_alert_dedupe_key(
+        now=now,
+        location_key="101240210",
+        alert_type=alert_type,
+        alert_level=alert_level,
+        dedupe_hours=6,
+        warning=warning,
+    )
+    record = _get_or_create_weather_alert(
+        now=now,
+        location_key="101240210",
+        alert_type=alert_type,
+        alert_level=alert_level,
+        description=warning.get("title") or warning.get("text") or "官方预警",
+        dedupe_hours=6,
+        dedupe_key=dedupe_key,
+        exact_dedupe=True,
+    )
+    db_session.commit()
+    return record
+
+
+def test_official_weather_alert_same_revision_is_idempotent(app, db_session):
+    from core.db_models import WeatherAlert
+    from core.time_utils import utcnow
+
+    with app.app_context():
+        now = utcnow()
+        first = _create_official_alert(
+            db_session,
+            now=now,
+            warning=_official_warning(),
+        )
+        repeated = _create_official_alert(
+            db_session,
+            now=now + timedelta(minutes=1),
+            warning=_official_warning(
+                source_id="  alert-20260718-001  ",
+                start_time="2026-07-18T00:00:00Z",
+                title="高温黄色预警  ",
+                text="请注意防暑降温\n",
+                severity="severe",
+                certainty="observed",
+                urgency="immediate",
+                message_type="ALERT",
+                raw={"updateTime": "2026-07-18T00:01:00Z"},
+            ),
+        )
+
+        assert first.id == repeated.id
+        assert WeatherAlert.query.count() == 1
+        assert len(first.dedupe_key) == 64
+        assert "alert-20260718-001" not in first.dedupe_key
+
+
+@pytest.mark.parametrize(
+    "changed_identity",
+    [
+        {"source_id": "alert-20260718-002"},
+        {"start_time": "2026-07-18T09:00:00+08:00"},
+    ],
+)
+def test_official_weather_alert_distinct_events_do_not_collapse(
+    app,
+    db_session,
+    changed_identity,
+):
+    from core.db_models import WeatherAlert
+    from core.time_utils import utcnow
+
+    with app.app_context():
+        now = utcnow()
+        first = _create_official_alert(
+            db_session,
+            now=now,
+            warning=_official_warning(),
+        )
+        distinct = _create_official_alert(
+            db_session,
+            now=now + timedelta(minutes=1),
+            warning=_official_warning(**changed_identity),
+        )
+
+        assert first.id != distinct.id
+        assert WeatherAlert.query.count() == 2
+
+
+@pytest.mark.parametrize(
+    "revision_changes",
+    [
+        {
+            "level": "橙色",
+            "title": "高温橙色预警",
+            "message_type": "update",
+        },
+        {
+            "message_type": "update",
+            "supersedes": ["alert-20260718-000"],
+            "text": "预警防御建议已更新",
+            "raw": {"updateTime": "2026-07-18T08:15:00+08:00"},
+        },
+    ],
+)
+def test_official_weather_alert_level_or_revision_upgrade_creates_new_revision(
+    app,
+    db_session,
+    revision_changes,
+):
+    from core.db_models import WeatherAlert
+    from core.time_utils import utcnow
+
+    with app.app_context():
+        now = utcnow()
+        first = _create_official_alert(
+            db_session,
+            now=now,
+            warning=_official_warning(),
+        )
+        upgraded = _create_official_alert(
+            db_session,
+            now=now + timedelta(minutes=1),
+            warning=_official_warning(**revision_changes),
+        )
+
+        assert first.id != upgraded.id
+        assert WeatherAlert.query.count() == 2
+
+
+def test_official_level_upgrade_creates_a_new_delivery(
+    app,
+    db_session,
+    monkeypatch,
+):
+    from core.db_models import AlertDelivery, WeatherAlert
+    from core.time_utils import utcnow
+    from services.push import dispatch as dispatch_mod
+
+    with app.app_context():
+        _create_push_recipient(
+            db_session,
+            username="official_level_upgrade",
+            short_code="92000020",
+        )
+        now = utcnow()
+        _forbid_weather_upstream(monkeypatch)
+        send_calls = []
+        monkeypatch.setattr(
+            dispatch_mod,
+            "wxpusher_send",
+            lambda *_args, **_kwargs: send_calls.append(1) or {"ok": True},
+        )
+
+        _persist_dispatch_snapshot(
+            warnings=[_official_warning()],
+            fetched_at=now,
+        )
+        first = dispatch_mod.dispatch_alerts(now=now)
+        _persist_dispatch_snapshot(
+            warnings=[_official_warning(
+                level="橙色",
+                title="高温橙色预警",
+                message_type="update",
+                raw={"updateTime": "2026-07-18T08:15:00+08:00"},
+            )],
+            fetched_at=now + timedelta(minutes=1),
+        )
+        upgraded = dispatch_mod.dispatch_alerts(now=now + timedelta(minutes=1))
+
+        assert first["deliveries"] == 1
+        assert upgraded["deliveries"] == 1
+        assert send_calls == [1, 1]
+        assert WeatherAlert.query.count() == 2
+        assert AlertDelivery.query.count() == 2
+        assert {item.alert_level for item in WeatherAlert.query.all()} == {"黄色", "橙色"}
+
+
+def test_threshold_alert_keeps_rolling_dedupe_across_hash_window_boundary(
+    app,
+    db_session,
+):
+    from core.db_models import WeatherAlert
+    from services.push.dispatch import (
+        _build_alert_dedupe_key,
+        _get_or_create_weather_alert,
+    )
+
+    with app.app_context():
+        first_time = datetime(2026, 7, 18, 5, 59, tzinfo=timezone.utc)
+        second_time = first_time + timedelta(minutes=2)
+        first_key = _build_alert_dedupe_key(
+            now=first_time,
+            location_key="101240210",
+            alert_type="heat_threshold",
+            alert_level="阈值",
+            dedupe_hours=6,
+        )
+        second_key = _build_alert_dedupe_key(
+            now=second_time,
+            location_key="101240210",
+            alert_type="heat_threshold",
+            alert_level="阈值",
+            dedupe_hours=6,
+        )
+        assert first_key != second_key
+
+        first = _get_or_create_weather_alert(
+            now=first_time,
+            location_key="101240210",
+            alert_type="heat_threshold",
+            alert_level="阈值",
+            description="第一次阈值提醒",
+            dedupe_hours=6,
+            dedupe_key=first_key,
+        )
+        db_session.commit()
+        repeated = _get_or_create_weather_alert(
+            now=second_time,
+            location_key="101240210",
+            alert_type="heat_threshold",
+            alert_level="阈值",
+            description="第二次阈值提醒",
+            dedupe_hours=6,
+            dedupe_key=second_key,
+        )
+
+        assert first.id == repeated.id
+        assert WeatherAlert.query.count() == 1

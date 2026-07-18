@@ -18,6 +18,8 @@ from core.db_models import (
     CoolingResource,
     ForecastCache,
     MiniProgramSnapshot,
+    Pair,
+    User,
     WeatherCache,
 )
 from core.extensions import db
@@ -25,6 +27,11 @@ from core.time_utils import ensure_utc_aware, utcnow
 from core.weather import get_qweather_forecast_with_cache
 from services.qweather_auth import is_qweather_configured
 from services.miniprogram_auth import current_privacy_version
+from services.community_daily_service import (
+    PUBLIC_AGGREGATE_MIN_SAMPLE,
+    bucket_public_count,
+    bucket_public_rate,
+)
 from services.user._common import _action_plan
 from utils.parsers import safe_json_loads
 
@@ -455,6 +462,26 @@ def refresh_snapshot_from_cycle(current, weather_service=None, *, fetched_at=Non
 def public_communities_payload() -> dict:
     """仅公开社区级聚合字段，小样本行动率统一抑制。"""
     communities = Community.query.order_by(Community.name.asc()).all()
+    community_names = [community.name for community in communities]
+    active_pair_counts = {}
+    if community_names:
+        active_pair_counts = {
+            community_code: int(count or 0)
+            for community_code, count in (
+                db.session.query(
+                    Pair.community_code,
+                    db.func.count(db.distinct(Pair.caregiver_id)),
+                )
+                .join(User, User.id == Pair.caregiver_id)
+                .filter(
+                    Pair.status == "active",
+                    Pair.community_code.in_(community_names),
+                    User.deleted_at.is_(None),
+                )
+                .group_by(Pair.community_code)
+                .all()
+            )
+        }
     # 先限定每个社区的最新日期，再用最大 id 兼容同日历史重复记录。
     latest_dates = db.session.query(
         CommunityDaily.community_code.label("community_code"),
@@ -477,7 +504,14 @@ def public_communities_payload() -> dict:
     for community in communities:
         daily = latest_daily.get(community.name)
         count = int(daily.total_people or 0) if daily else 0
-        sample_suppressed = bool(daily and count < 3)
+        active_count = active_pair_counts.get(community.name, 0)
+        sample_suppressed = bool(
+            daily
+            and (
+                count < PUBLIC_AGGREGATE_MIN_SAMPLE
+                or active_count < PUBLIC_AGGREGATE_MIN_SAMPLE
+            )
+        )
         items.append(
             {
                 "id": community.id,
@@ -492,9 +526,9 @@ def public_communities_payload() -> dict:
                 "latest_action_summary": (
                     {
                         "date": daily.date.isoformat(),
-                        "total_people": None if sample_suppressed else count,
-                        "confirm_rate": None if sample_suppressed else daily.confirm_rate,
-                        "escalation_rate": None if sample_suppressed else daily.escalation_rate,
+                        "total_people": None if sample_suppressed else bucket_public_count(count),
+                        "confirm_rate": None if sample_suppressed else bucket_public_rate(daily.confirm_rate),
+                        "escalation_rate": None if sample_suppressed else bucket_public_rate(daily.escalation_rate),
                         "sample_suppressed": sample_suppressed,
                     }
                     if daily

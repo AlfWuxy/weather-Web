@@ -10,6 +10,7 @@
         <div class="col-12">
             <h2><i class="bi bi-clipboard-check"></i> 行动型热健康预警</h2>
             <p class="text-muted mb-0">输入短码即可完成今日确认或求助（不含医疗诊断/治疗建议）。</p>
+            <p class="text-muted small mt-2 mb-0">未登录者可使用照护人提供的有效短码或有时效家庭行动安全链接。只有主动提交时，行动确认、求助需求或复盘才会写入对应照护账号；该入口不等于登录，不能查看账号内其他资料。</p>
         </div>
     </div>
 
@@ -27,7 +28,7 @@
                                 <label class="form-label">短码</label>
                                 <input class="form-control" name="short_code" value="{{ short_code or '' }}" placeholder="例如 123456" maxlength="12" required>
                             </div>
-                            <div class="text-muted small mb-3">短码仅用于行动确认，不包含个人身份信息。</div>
+                            <div class="text-muted small mb-3">有效短码或有时效家庭行动安全链接只开放对应家庭行动页，请勿转发给无关人员。</div>
                             <button class="btn btn-primary w-100" type="submit">
                                 <i class="bi bi-arrow-right-circle"></i> 进入行动页面
                             </button>
@@ -179,7 +180,7 @@
                                 <button class="btn btn-success btn-lg" type="submit">
                                     <i class="bi bi-check-circle"></i> 我很安全
                                 </button>
-                                <span class="text-muted small">确认后记录今日完成情况。</span>
+                                <span class="text-muted small">主动确认后，今日完成情况会写入对应照护账号。</span>
                             </div>
                         </form>
                         <hr>
@@ -190,7 +191,7 @@
                                 <button class="btn btn-danger btn-lg" type="submit">
                                     <i class="bi bi-life-preserver"></i> 我需要帮助
                                 </button>
-                                <span class="text-muted small">仅用于触发协助流程，不包含医疗处置。</span>
+                                <span class="text-muted small">这里只记录求助需求，不会自动通知照护人。请同时通过电话或微信直接联系照护人，紧急时拨打 120。</span>
                             </div>
                         </form>
                     </div>
@@ -254,9 +255,10 @@
                             <div class="form-check mt-3">
                                 <input class="form-check-input" type="checkbox" value="1" id="debriefOptin" name="debrief_optin">
                                 <label class="form-check-label" for="debriefOptin">
-                                    允许将复盘与绑定关系关联（用于改进服务）
+                                    关联到这位家人的今日记录
                                 </label>
                             </div>
+                            <div class="text-muted small mt-2">取消关联后，复盘不会显示在这位家人的今日记录中，仍归对应照护账号保存并在账号注销时删除。无论是否关联，都计入当天社区复盘提交数量；社区只展示数量，不展示复盘原文。</div>
                             <button class="btn btn-outline-primary mt-3" type="submit">
                                 <i class="bi bi-send"></i> 提交复盘
                             </button>

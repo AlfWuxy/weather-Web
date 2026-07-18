@@ -331,12 +331,11 @@ def normalize_location_name(location):
 
 
 def ensure_user_location_valid():
-    """确保用户定位有效，必要时修正到默认城市
+    """返回规范化定位；普通请求不在读取路径中隐式修改账号。
 
     注意：
-    - 对于数据库用户，仅修改 current_user.community 属性
-    - 仅在 GET 请求且 session 没有其它脏对象时提交，避免误提交其它修改
-    - 其他情况下仅 flush，不自动提交
+    - 游客定位继续保存在当前浏览器会话
+    - 正式账号只通过显式的定位更新入口持久化，避免与账号注销并发后恢复数据
     """
     location = get_user_location_value()
     normalized = normalize_location_name(location)
@@ -346,23 +345,6 @@ def ensure_user_location_valid():
             profile = build_guest_profile()
             profile['community'] = normalized
             session['guest_profile'] = profile
-        else:
-            # 仅修改模型属性，仅在安全场景下显式提交，避免误提交其他修改
-            try:
-                current_user.community = normalized
-                should_commit = False
-                if has_request_context() and request.method == 'GET':
-                    other_dirty = any(obj is not current_user for obj in db.session.dirty)
-                    if not other_dirty and not db.session.new and not db.session.deleted:
-                        should_commit = True
-                # 标记为已修改（通常自动追踪，但显式刷新确保安全）
-                db.session.flush()
-                if should_commit:
-                    db.session.commit()
-            except Exception as exc:
-                logger.warning("更新用户定位失败: %s", exc)
-                db.session.rollback()
-                # 不抛出异常，允许继续使用 normalized 值
     return normalized
 
 

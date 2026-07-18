@@ -2,11 +2,15 @@
 """天气兜底与行动同步 fail-closed 回归测试。"""
 
 import json
+import threading
+import time
+from contextlib import contextmanager
 from datetime import date
 
 import pytest
 
 from core.db_models import CommunityDaily, DailyStatus, Pair, User, WeatherData
+from core.extensions import db
 from core.security import hash_short_code
 from core.time_utils import utcnow
 
@@ -173,7 +177,7 @@ def test_qweather_air_quality_v1_uses_origin_and_lat_lon(monkeypatch):
 
     service = weather_module.WeatherService()
     service.qweather_key = 'test-key'
-    service.api_base_url = 'https://api.qweather.invalid/v7'
+    service.api_base_url = 'https://unit-test.qweatherapi.com/v7'
     service.canonical_location = '116.20,29.27'
     calls = []
     reserved_endpoints = []
@@ -222,8 +226,10 @@ def test_qweather_air_quality_v1_uses_origin_and_lat_lon(monkeypatch):
     assert result['aqi'] == 83
     assert result['pm25'] == 27.5
     assert result['air_quality'] == '良'
-    assert calls[0][0] == 'https://api.qweather.invalid/v7/weather/now'
-    assert calls[1][0] == 'https://api.qweather.invalid/airquality/v1/current/29.27/116.20'
+    assert calls[0][0] == 'https://unit-test.qweatherapi.com/v7/weather/now'
+    assert calls[1][0] == 'https://unit-test.qweatherapi.com/airquality/v1/current/29.27/116.20'
+    assert calls[0][1]['allow_redirects'] is False
+    assert calls[1][1]['allow_redirects'] is False
     assert calls[1][1]['params'] == {'lang': 'zh'}
     assert calls[1][1]['headers'] == {'X-QW-Api-Key': 'test-key'}
     assert reserved_endpoints == ['weather_now', 'airquality_v1_current']
@@ -235,7 +241,7 @@ def test_qweather_air_quality_failure_keeps_weather_available(monkeypatch):
 
     service = weather_module.WeatherService()
     service.qweather_key = 'test-key'
-    service.api_base_url = 'https://api.qweather.invalid/v7'
+    service.api_base_url = 'https://unit-test.qweatherapi.com/v7'
     service.canonical_location = '116.20,29.27'
     responses = iter([
         _Response(200, {
@@ -273,7 +279,7 @@ def test_qweather_air_quality_does_not_use_generic_qaqi(monkeypatch):
 
     service = weather_module.WeatherService()
     service.qweather_key = 'test-key'
-    service.api_base_url = 'https://api.qweather.invalid/v7'
+    service.api_base_url = 'https://unit-test.qweatherapi.com/v7'
     response = _Response(200, {
         'indexes': [{'code': 'qaqi', 'aqi': 2.1, 'category': 'Good'}],
         'pollutants': [
@@ -296,7 +302,7 @@ def test_qweather_air_quality_budget_guard_skips_http(monkeypatch):
 
     service = weather_module.WeatherService()
     service.qweather_key = 'test-key'
-    service.api_base_url = 'https://api.qweather.invalid/v7'
+    service.api_base_url = 'https://unit-test.qweatherapi.com/v7'
 
     monkeypatch.setattr(weather_module, 'reserve_qweather_request', lambda _endpoint: False)
     monkeypatch.setattr(
@@ -328,7 +334,7 @@ def test_qweather_air_quality_invalid_payload_stays_unknown(monkeypatch, respons
 
     service = weather_module.WeatherService()
     service.qweather_key = 'test-key'
-    service.api_base_url = 'https://api.qweather.invalid/v7'
+    service.api_base_url = 'https://unit-test.qweatherapi.com/v7'
 
     monkeypatch.setattr(weather_module.requests, 'get', lambda *_args, **_kwargs: response)
     monkeypatch.setattr(weather_module, '_record_external_api_timing', lambda *_args: None)
@@ -505,8 +511,194 @@ def test_sync_action_daily_aggregates_active_pairs_and_backup_escalation(
         community_code='同步测试社区',
         date=target_date,
     ).one()
-    assert record.total_people == 2
-    assert record.confirm_rate == 0.5
-    assert record.escalation_rate == 0.5
-    assert sum(json.loads(record.risk_distribution).values()) == 2
+    assert record.total_people == 1
+    assert record.confirm_rate == 1
+    assert record.escalation_rate == 1
+    assert sum(json.loads(record.risk_distribution).values()) == 1
     assert record.outreach_summary == '已有1个家庭进入升级链，优先安排社区跟进。'
+
+
+def test_sync_action_daily_refreshes_projection_locks_in_sorted_order(
+    app,
+    db_session,
+    monkeypatch,
+):
+    """批量投影固定加锁顺序，每轮天气接口只读取一次。"""
+    owner = User(username='projection-order-owner', role='caregiver')
+    owner.set_password('test-password')
+    db_session.add(owner)
+    db_session.flush()
+    insertion_order = ['社区乙', '社区甲', '社区丙']
+    for index, community_code in enumerate(insertion_order):
+        _create_pair(
+            db_session,
+            owner,
+            f'93{index:06d}',
+            community=community_code,
+        )
+    db_session.commit()
+
+    pipeline = _load_pipeline(app, monkeypatch)
+    weather_calls = []
+
+    class RecordingWeatherService(_PipelineWeatherService):
+        def get_current_weather(self, location):
+            weather_calls.append(location)
+            return super().get_current_weather(location)
+
+    monkeypatch.setattr(
+        pipeline,
+        'WeatherService',
+        lambda: RecordingWeatherService(VALID_QWEATHER),
+    )
+    monkeypatch.setattr(pipeline, 'get_consecutive_hot_days', lambda *_args, **_kwargs: 0)
+    refresh_calls = []
+    monkeypatch.setattr(
+        pipeline,
+        'refresh_community_daily',
+        lambda code, status_date, *, commit: refresh_calls.append(
+            (code, status_date, commit)
+        ),
+    )
+    target_date = date(2026, 7, 14)
+
+    result = pipeline.sync_action_daily(target_date=target_date)
+
+    assert result['processed_communities'] == 3
+    assert weather_calls == ['都昌']
+    assert refresh_calls == [
+        (code, target_date, False)
+        for code in sorted(insertion_order)
+    ]
+
+
+def test_sync_action_daily_stop_first_blocks_private_status_write(
+    app,
+    db_session,
+    monkeypatch,
+):
+    """Pair 停用先提交时，同步只能保留公共天气，不能补写私密状态。"""
+    from services.user.owner_write_guard import owner_write_guard as real_guard
+
+    owner = User(username='sync-stop-first-owner', role='caregiver')
+    owner.set_password('test-password')
+    db_session.add(owner)
+    db_session.flush()
+    pair = _create_pair(db_session, owner, '94000001')
+    db_session.commit()
+    owner_id = int(owner.id)
+    pair_id = int(pair.id)
+
+    pipeline = _load_pipeline(app, monkeypatch)
+    _install_pipeline_weather(monkeypatch, pipeline, VALID_QWEATHER)
+    monkeypatch.setattr(pipeline, 'get_consecutive_hot_days', lambda *_args, **_kwargs: 0)
+    monkeypatch.setattr(pipeline, 'refresh_community_daily', lambda *_args, **_kwargs: None)
+    writer_ready = threading.Event()
+    release_writer = threading.Event()
+    outcome = {}
+
+    @contextmanager
+    def delayed_guard(user_id):
+        db.session.rollback()
+        writer_ready.set()
+        assert release_writer.wait(timeout=5)
+        with real_guard(user_id) as locked_owner:
+            yield locked_owner
+
+    monkeypatch.setattr(pipeline, 'owner_write_guard', delayed_guard)
+
+    def run_sync():
+        outcome['result'] = pipeline.sync_action_daily(target_date=date(2026, 7, 15))
+
+    writer = threading.Thread(target=run_sync)
+    writer.start()
+    assert writer_ready.wait(timeout=5)
+    with app.app_context():
+        with real_guard(owner_id):
+            locked_pair = db.session.get(Pair, pair_id)
+            locked_pair.status = 'inactive'
+            db.session.commit()
+    release_writer.set()
+    writer.join(timeout=5)
+
+    assert not writer.is_alive()
+    assert outcome['result']['updated'] == 0
+    db_session.expire_all()
+    assert DailyStatus.query.filter_by(pair_id=pair_id).count() == 0
+
+
+def test_sync_action_daily_sync_first_serializes_pair_stop(
+    app,
+    db_session,
+    monkeypatch,
+):
+    """同步先取得 owner 锁时，停用等待同步提交，最终状态保持可解释。"""
+    from services.user.owner_write_guard import owner_write_guard as real_guard
+
+    owner = User(username='sync-write-first-owner', role='caregiver')
+    owner.set_password('test-password')
+    db_session.add(owner)
+    db_session.flush()
+    pair = _create_pair(db_session, owner, '95000001')
+    db_session.commit()
+    owner_id = int(owner.id)
+    pair_id = int(pair.id)
+
+    pipeline = _load_pipeline(app, monkeypatch)
+    weather_calls = []
+
+    class RecordingWeatherService(_PipelineWeatherService):
+        def get_current_weather(self, location):
+            weather_calls.append(location)
+            return super().get_current_weather(location)
+
+    monkeypatch.setattr(
+        pipeline,
+        'WeatherService',
+        lambda: RecordingWeatherService(VALID_QWEATHER),
+    )
+    monkeypatch.setattr(pipeline, 'get_consecutive_hot_days', lambda *_args, **_kwargs: 0)
+    monkeypatch.setattr(pipeline, 'refresh_community_daily', lambda *_args, **_kwargs: None)
+    sync_locked = threading.Event()
+    release_sync = threading.Event()
+    outcome = {}
+
+    @contextmanager
+    def held_sync_guard(user_id):
+        with real_guard(user_id) as locked_owner:
+            sync_locked.set()
+            assert release_sync.wait(timeout=5)
+            yield locked_owner
+
+    monkeypatch.setattr(pipeline, 'owner_write_guard', held_sync_guard)
+
+    def run_sync():
+        outcome['sync'] = pipeline.sync_action_daily(target_date=date(2026, 7, 16))
+
+    def stop_pair():
+        with app.app_context():
+            with real_guard(owner_id):
+                locked_pair = db.session.get(Pair, pair_id)
+                locked_pair.status = 'inactive'
+                db.session.commit()
+                outcome['stopped'] = True
+
+    writer = threading.Thread(target=run_sync)
+    stopper = threading.Thread(target=stop_pair)
+    writer.start()
+    assert sync_locked.wait(timeout=5)
+    stopper.start()
+    time.sleep(0.2)
+    assert stopper.is_alive()
+    release_sync.set()
+    writer.join(timeout=5)
+    stopper.join(timeout=5)
+
+    assert not writer.is_alive()
+    assert not stopper.is_alive()
+    assert weather_calls == ['都昌']
+    assert outcome['sync']['updated'] == 1
+    assert outcome['stopped'] is True
+    db_session.expire_all()
+    assert DailyStatus.query.filter_by(pair_id=pair_id).count() == 1
+    assert db_session.get(Pair, pair_id).status == 'inactive'

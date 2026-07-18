@@ -291,7 +291,13 @@ def get_qweather_warnings_result(location_code: str) -> Dict[str, Any]:
 
     start_ts = time.perf_counter()
     try:
-        resp = requests.get(url, params=params, headers=headers, timeout=10)
+        resp = requests.get(
+            url,
+            params=params,
+            headers=headers,
+            timeout=10,
+            allow_redirects=False,
+        )
         _record_external_api_timing(
             "qweather_weatheralert_v1",
             (time.perf_counter() - start_ts) * 1000,

@@ -107,7 +107,7 @@ def test_warning_service_parses_weatheralert_v1_payload(app, monkeypatch):
 
     with app.app_context():
         app.config["QWEATHER_KEY"] = "x"
-        app.config["QWEATHER_API_BASE"] = "https://example.com/v7"
+        app.config["QWEATHER_API_BASE"] = "https://unit-test.qweatherapi.com/v7"
 
         warnings = get_qweather_warnings("116.20,29.27")
         assert len(warnings) == 1

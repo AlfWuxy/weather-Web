@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+
+{% block title %}确认收到提醒 - 宜老天气通{% endblock %}
+
+{% block content %}
+<div class="container py-5" style="max-width: 680px;">
+    <div class="card border-0 shadow-sm">
+        <div class="card-body p-4 p-md-5">
+            <div class="text-center mb-4">
+                <div class="display-6 mb-3" aria-hidden="true">☀️</div>
+                <h1 class="h3 mb-3">确认收到天气提醒</h1>
+                <p class="text-muted mb-0">
+                    请由本人点击下方按钮。系统会记录一次确认，用于判断这条提醒是否成功送达。
+                </p>
+            </div>
+            <form method="post" action="{{ url_for('public.track_delivery', delivery_token=delivery_token) }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <button class="btn btn-primary btn-lg w-100" type="submit">我已看到这条提醒</button>
+            </form>
+            <p class="small text-muted text-center mt-3 mb-0">
+                打开本页不会自动记录；只有主动点击确认按钮后才会保存确认时间。
+            </p>
+        </div>
+    </div>
+</div>
+{% endblock %}

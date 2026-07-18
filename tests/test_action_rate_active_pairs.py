@@ -3,7 +3,7 @@
 
 import json
 
-from core.db_models import CommunityDaily, DailyStatus, Pair, User
+from core.db_models import Community, CommunityDaily, DailyStatus, Pair, User
 from core.security import hash_short_code
 from core.time_utils import today_local, utcnow
 
@@ -131,3 +131,94 @@ def test_public_refresh_uses_the_same_active_pair_population(db_session):
 
     _refresh_community_daily('行动率测试社区', status_date)
     assert record.escalation_rate == 1
+
+
+def test_household_snapshot_and_web_dashboard_count_one_caregiver_once(
+    app,
+    db_session,
+    monkeypatch,
+):
+    """同一照护账号多位老人按最高风险和任一行动状态汇总为一户。"""
+    from flask_login import login_user
+    from services.user import community_service
+    from services.user._helpers import _build_community_snapshot
+
+    caregiver = User(username='household-owner', role='caregiver')
+    caregiver.set_password('safe-test-password')
+    admin = User(username='household-admin', role='admin')
+    admin.set_password('safe-test-password')
+    db_session.add_all([caregiver, admin, Community(name='行动率测试社区')])
+    db_session.flush()
+
+    risk_rows = [
+        ('84000001', '低风险', True, False, 'none'),
+        ('84000002', '极高', False, True, 'backup'),
+        ('84000003', '高风险', False, False, 'none'),
+    ]
+    status_date = today_local()
+    for code, risk_level, confirmed, help_flag, relay_stage in risk_rows:
+        pair = _create_pair(db_session, caregiver.id, code, 'active')
+        db_session.add(DailyStatus(
+            pair_id=pair.id,
+            status_date=status_date,
+            community_code='行动率测试社区',
+            risk_level=risk_level,
+            confirmed_at=utcnow() if confirmed else None,
+            help_flag=help_flag,
+            relay_stage=relay_stage,
+        ))
+    db_session.commit()
+
+    snapshot = _build_community_snapshot('行动率测试社区', status_date)
+    assert snapshot['total_people'] == 1
+    assert snapshot['confirmed_count'] == 1
+    assert snapshot['help_count'] == 1
+    assert snapshot['escalation_count'] == 1
+    assert snapshot['confirm_rate'] == 1
+    assert snapshot['help_rate'] == 1
+    assert snapshot['escalation_rate'] == 1
+    assert snapshot['risk_distribution'] == {
+        '低风险': 0,
+        '中风险': 0,
+        '高风险': 0,
+        '极高': 1,
+    }
+    assert snapshot['confirmed_risk_distribution'] == snapshot['risk_distribution']
+
+    rendered = []
+
+    def capture_template(template_name, **context):
+        rendered.append((template_name, context))
+        return context
+
+    monkeypatch.setattr(community_service, 'render_template', capture_template)
+    monkeypatch.setattr(
+        community_service,
+        '_load_heat_risk',
+        lambda _location: ({}, None, None),
+    )
+
+    with app.test_request_context('/'):
+        login_user(admin)
+        dashboard_context = community_service.community_dashboard()
+        dashboard_item = dashboard_context['snapshots'][0]
+        assert dashboard_item['confirmed_total'] == 1
+        assert dashboard_item['help_count'] == 1
+        assert dashboard_item['escalation_count'] == 1
+        assert dashboard_item['risk_counts'] == snapshot['risk_distribution']
+        assert dashboard_item['confirmed_counts'] == snapshot['confirmed_risk_distribution']
+
+        detail_context = community_service.community_detail('行动率测试社区')
+        assert detail_context['confirmed_total'] == 1
+        assert detail_context['help_count'] == 1
+        assert detail_context['escalation_count'] == 1
+        assert detail_context['risk_counts'] == snapshot['risk_distribution']
+        assert detail_context['confirmed_counts'] == snapshot['confirmed_risk_distribution']
+        # 管理员明细保留逐 Pair 行，聚合展示仍只计算一户。
+        assert len(detail_context['statuses']) == 3
+        assert len(detail_context['pair_map']) == 3
+
+    assert [item[0] for item in rendered] == [
+        'community_dashboard.html',
+        'community_detail.html',
+    ]

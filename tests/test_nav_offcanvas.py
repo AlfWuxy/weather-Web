@@ -14,7 +14,7 @@ def _set_logged_in_user(client, db_session, *, username, role):
     db_session.commit()
     with client.session_transaction() as session:
         session.clear()
-        session['_user_id'] = str(user.id)
+        session['_user_id'] = user.get_id()
         session['_fresh'] = True
         session['_csrf_token'] = 'nav-csrf'
     return user

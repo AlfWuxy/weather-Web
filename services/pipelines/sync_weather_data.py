@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 """Weather data sync pipeline (CSV backfill + daily API update)."""
 import argparse
-import json
 import math
 from datetime import date, datetime
 from pathlib import Path
@@ -16,11 +15,13 @@ if str(ROOT_DIR) not in sys.path:
 
 from core.app import create_app  # noqa: E402
 from core.constants import DEFAULT_CITY_LABEL  # noqa: E402
-from core.db_models import CommunityDaily, DailyStatus, Pair, WeatherData  # noqa: E402
+from core.db_models import DailyStatus, Pair, WeatherData  # noqa: E402
 from core.extensions import db  # noqa: E402
 from core.weather import get_consecutive_hot_days, is_qweather_online_weather  # noqa: E402
 from core.time_utils import today_local  # noqa: E402
+from services.community_daily_service import refresh_community_daily  # noqa: E402
 from services.heat_action_service import HeatActionService  # noqa: E402
+from services.user.owner_write_guard import OwnerInactiveError, owner_write_guard  # noqa: E402
 from services.weather_service import WeatherService  # noqa: E402
 
 app = create_app(register_blueprints=False)
@@ -41,7 +42,6 @@ REQUIRED_ACTION_WEATHER_FIELDS = (
     'temperature_min',
     'humidity',
 )
-ESCALATED_RELAY_STAGES = {'backup', 'community', 'emergency'}
 
 
 def _validate_action_weather(weather_data):
@@ -257,28 +257,21 @@ def _map_heat_level(level):
     }.get(level, '低风险')
 
 
-def _outreach_summary(total_people, confirmed_count, help_count, escalation_count):
-    if total_people <= 0:
-        return '暂无可用行动数据。'
-    pending = total_people - confirmed_count
-    if escalation_count > 0:
-        return f'已有{escalation_count}个家庭进入升级链，优先安排社区跟进。'
-    if help_count > 0:
-        return f'已有{help_count}个家庭发出求助，请尽快联系。'
-    if pending > 0:
-        return f'仍有{pending}个家庭未确认，建议分批提醒。'
-    return '全部家庭已完成确认，继续关注高温变化。'
-
-
 def sync_action_daily(target_date=None, community_code=None, overwrite=False):
-    """Sync daily heat action status for all active pairs."""
+    """同步 active Pair 的每日行动状态，每轮最多读取一次天气接口。"""
     target_date = _parse_date(target_date) or today_local()
     with app.app_context():
-        query = Pair.query.filter_by(status='active')
+        query = db.select(
+            Pair.id,
+            Pair.caregiver_id,
+            Pair.community_code,
+        ).where(Pair.status == 'active')
         if community_code:
-            query = query.filter_by(community_code=community_code)
-        pairs = query.all()
-        if not pairs:
+            query = query.where(Pair.community_code == community_code)
+        candidates = db.session.execute(
+            query.order_by(Pair.caregiver_id, Pair.id)
+        ).all()
+        if not candidates:
             return {
                 'date': target_date,
                 'updated': 0,
@@ -289,27 +282,33 @@ def sync_action_daily(target_date=None, community_code=None, overwrite=False):
                 'skipped_communities': {},
             }
 
-        heat_service = HeatActionService()
-        weather_service = WeatherService()
-
-        communities = {}
-        for pair in pairs:
-            communities.setdefault(pair.community_code, []).append(pair)
-
-        updated = 0
-        processed_communities = []
-        skipped_communities = {}
-        for code, members in communities.items():
-            weather_data = weather_service.get_current_weather(code)
-            validation = _validate_action_weather(weather_data)
-            if not validation['valid']:
-                skipped_communities[code] = {
+        initial_communities = sorted({row.community_code for row in candidates})
+        # 都昌单城试点使用同一份实时天气。接口读取发生在 owner 锁外，避免慢调用占锁。
+        weather_location = _normalize_location(community_code)
+        weather_data = WeatherService().get_current_weather(weather_location)
+        validation = _validate_action_weather(weather_data)
+        if not validation['valid']:
+            skipped_communities = {
+                code: {
                     'reason': validation['reason'],
                     'weather_source': validation['weather_source'],
                     'missing_fields': validation['missing_fields'],
                 }
-                continue
+                for code in initial_communities
+            }
+            return {
+                'date': target_date,
+                'updated': 0,
+                'communities': len(initial_communities),
+                'processed_communities': 0,
+                'skipped': True,
+                'reason': 'weather_unavailable_for_all_communities',
+                'skipped_communities': skipped_communities,
+            }
 
+        heat_service = HeatActionService()
+        risk_by_community = {}
+        for code in initial_communities:
             consecutive_hot_days = get_consecutive_hot_days(
                 code,
                 target_date=target_date,
@@ -320,6 +319,7 @@ def sync_action_daily(target_date=None, community_code=None, overwrite=False):
                 consecutive_hot_days=consecutive_hot_days
             )
             risk_level = _map_heat_level(heat_result['risk_level'])
+            risk_by_community[code] = risk_level
 
             weather_record = WeatherData.query.filter_by(date=target_date, location=code).first()
             if weather_record is None:
@@ -336,84 +336,70 @@ def sync_action_daily(target_date=None, community_code=None, overwrite=False):
             weather_record.aqi = weather_data.get('aqi')
             weather_record.is_extreme = bool(weather_data.get('is_extreme'))
             weather_record.extreme_type = weather_data.get('extreme_type')
-
-            for pair in members:
-                status = DailyStatus.query.filter_by(
-                    pair_id=pair.id,
-                    status_date=target_date
-                ).first()
-                if status and not overwrite:
-                    if status.risk_level:
-                        continue
-                if status is None:
-                    status = DailyStatus(
-                        pair_id=pair.id,
-                        status_date=target_date,
-                        community_code=pair.community_code
-                    )
-                    db.session.add(status)
-                status.risk_level = risk_level
-                updated += 1
-            processed_communities.append(code)
-
+        # 公共天气先独立提交，后续私密状态始终在 owner 守卫内写入。
         db.session.commit()
 
-        for code in processed_communities:
-            active_pair_ids = {pair.id for pair in communities[code]}
-            total_people = len(active_pair_ids)
-            statuses = []
-            if active_pair_ids:
-                statuses = DailyStatus.query.filter(
-                    DailyStatus.community_code == code,
-                    DailyStatus.status_date == target_date,
-                    DailyStatus.pair_id.in_(active_pair_ids),
-                ).all()
-            confirmed_count = sum(1 for s in statuses if s.confirmed_at)
-            help_count = sum(1 for s in statuses if s.help_flag)
-            escalation_count = sum(
-                1 for s in statuses if s.relay_stage in ESCALATED_RELAY_STAGES
-            )
-            risk_dist = {'低风险': 0, '中风险': 0, '高风险': 0, '极高': 0}
-            for status in statuses:
-                if status.risk_level in risk_dist:
-                    risk_dist[status.risk_level] += 1
+        candidate_ids_by_owner = {}
+        for row in candidates:
+            candidate_ids_by_owner.setdefault(int(row.caregiver_id), []).append(int(row.id))
 
-            summary = _outreach_summary(total_people, confirmed_count, help_count, escalation_count)
-            confirm_rate = (confirmed_count / total_people) if total_people else 0
-            escalation_rate = (escalation_count / total_people) if total_people else 0
+        updated = 0
+        processed_communities = set()
+        for owner_user_id in sorted(candidate_ids_by_owner):
+            try:
+                with owner_write_guard(owner_user_id):
+                    pair_ids = candidate_ids_by_owner[owner_user_id]
+                    pairs = db.session.execute(
+                        db.select(Pair)
+                        .where(
+                            Pair.id.in_(pair_ids),
+                            Pair.caregiver_id == owner_user_id,
+                            Pair.status == 'active',
+                        )
+                        .order_by(Pair.id)
+                        .execution_options(populate_existing=True)
+                    ).scalars().all()
+                    for pair in pairs:
+                        risk_level = risk_by_community.get(pair.community_code)
+                        if risk_level is None:
+                            # 位置在预计算后发生变化，留待下一轮，避免在锁内读取天气。
+                            continue
+                        status = DailyStatus.query.filter_by(
+                            pair_id=pair.id,
+                            status_date=target_date,
+                        ).first()
+                        if status and not overwrite and status.risk_level:
+                            processed_communities.add(pair.community_code)
+                            continue
+                        if status is None:
+                            status = DailyStatus(
+                                pair_id=pair.id,
+                                status_date=target_date,
+                                community_code=pair.community_code,
+                            )
+                            db.session.add(status)
+                        status.risk_level = risk_level
+                        updated += 1
+                        processed_communities.add(pair.community_code)
+                    db.session.commit()
+            except OwnerInactiveError:
+                # 注销先完成时，本轮不再为该账号创建任何私密记录。
+                continue
 
-            record = CommunityDaily.query.filter_by(
-                community_code=code,
-                date=target_date
-            ).first()
-            if record is None:
-                record = CommunityDaily(
-                    community_code=code,
-                    date=target_date
-                )
-                db.session.add(record)
-            record.total_people = total_people
-            record.confirm_rate = round(confirm_rate, 4)
-            record.escalation_rate = round(escalation_rate, 4)
-            record.risk_distribution = json.dumps(risk_dist, ensure_ascii=False)
-            record.outreach_summary = summary
+        # commit=False 会把同键投影锁保持到下方最终提交；固定顺序可避免并发批任务交叉持锁。
+        for code in sorted(processed_communities):
+            # 定时同步只复用本地状态投影，不增加天气接口调用。
+            refresh_community_daily(code, target_date, commit=False)
 
         db.session.commit()
-        skipped = bool(skipped_communities)
-        if skipped and not processed_communities:
-            reason = 'weather_unavailable_for_all_communities'
-        elif skipped:
-            reason = 'some_communities_skipped'
-        else:
-            reason = None
         return {
             'date': target_date,
             'updated': updated,
-            'communities': len(communities),
+            'communities': len(initial_communities),
             'processed_communities': len(processed_communities),
-            'skipped': skipped,
-            'reason': reason,
-            'skipped_communities': skipped_communities,
+            'skipped': False,
+            'reason': None,
+            'skipped_communities': {},
         }
 
 

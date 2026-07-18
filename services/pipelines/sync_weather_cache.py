@@ -165,7 +165,8 @@ def _resolve_locations(locations):
     return [DEFAULT_CITY_LABEL]
 
 
-def sync_weather_cache(locations=None, update_daily=True):
+def sync_weather_cache(locations=None, update_daily=True, include_nowcast=True):
+    """同步正式天气快照；受控发布烟测可关闭不参与门禁的短时 nowcast。"""
     with app.app_context():
         # 小程序与 Web 共用唯一都昌县周期。即使旧命令传入多个地点，也不会形成 API fan-out。
         requested_locations = list(_dedupe_locations(_resolve_locations(locations)))
@@ -189,14 +190,15 @@ def sync_weather_cache(locations=None, update_daily=True):
                 logger.exception("Weather sync failed for %s: %s", CANONICAL_LOCATION_NAME, exc)
                 db.session.rollback()
                 weather_data = {}
-            try:
-                nowcast = weather_service.get_short_term_nowcast(
-                    CANONICAL_LOCATION_NAME,
-                    hours=NOWCAST_CACHE_HOURS,
-                )
-            except Exception as exc:
-                logger.warning("Nowcast sync failed for %s: %s", CANONICAL_LOCATION_NAME, exc)
-                nowcast = {}
+            if include_nowcast:
+                try:
+                    nowcast = weather_service.get_short_term_nowcast(
+                        CANONICAL_LOCATION_NAME,
+                        hours=NOWCAST_CACHE_HOURS,
+                    )
+                except Exception as exc:
+                    logger.warning("Nowcast sync failed for %s: %s", CANONICAL_LOCATION_NAME, exc)
+                    nowcast = {}
         else:
             # QWeather 未配置时由快照层只读旧缓存并继承原始 fetched_at。
             # 这里不回写 WeatherCache，避免旧数据被洗成刚抓取。
@@ -259,11 +261,17 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description='Sync minute-level weather cache.')
     parser.add_argument('--location', action='append', dest='locations', help='Location label override')
     parser.add_argument('--no-daily', action='store_true', help='Skip WeatherData daily upsert')
+    parser.add_argument(
+        '--skip-nowcast',
+        action='store_true',
+        help='正式发布受控烟测跳过短时预报',
+    )
     args = parser.parse_args(argv)
 
     result = sync_weather_cache(
         locations=args.locations,
-        update_daily=not args.no_daily
+        update_daily=not args.no_daily,
+        include_nowcast=not args.skip_nowcast,
     )
     print(f"Cache sync: {result}")
     # systemd 只会在新鲜快照形成后通过 OnSuccess 触发推送。

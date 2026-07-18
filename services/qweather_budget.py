@@ -28,7 +28,10 @@ _BLOCKED_LOGGED = set()
 
 def _config_value(key, default=None):
     if has_app_context():
-        return current_app.config.get(key, default)
+        if key in current_app.config:
+            return current_app.config.get(key)
+        # 新增的运维门禁可先通过环境变量显式启用，无需放宽默认值。
+        return os.getenv(key, default)
     return os.getenv(key, default)
 
 
@@ -51,11 +54,25 @@ def _redis_url():
     return str(value).strip()
 
 
-def _fail_closed():
-    return parse_bool(
-        _config_value("QWEATHER_BUDGET_FAIL_CLOSED", "1"),
-        default=True,
+def _debug_or_test_runtime():
+    """只有明确的调试或测试运行时才允许使用进程内预算。"""
+    return parse_bool(_config_value("DEBUG", False), default=False) or parse_bool(
+        _config_value("TESTING", False),
+        default=False,
     )
+
+
+def _persistent_budget_required():
+    """正式环境始终需要持久化后端，调试环境也可显式收紧。"""
+    explicitly_required = parse_bool(
+        _config_value("QWEATHER_REQUIRE_PERSISTENT_BUDGET", False),
+        default=False,
+    )
+    return explicitly_required or not _debug_or_test_runtime()
+
+
+def _local_budget_allowed():
+    return _debug_or_test_runtime() and not _persistent_budget_required()
 
 
 def _log_network_gate_blocked_once(reason):
@@ -206,12 +223,17 @@ def reserve_qweather_request(endpoint):
             return True
         except Exception as exc:
             logger.error("和风天气预算 Redis 计数失败: %s", exc)
-            if redis_configured and _fail_closed():
+            # Redis 已配置时禁止退回进程内计数，避免 oneshot 重启后额度归零。
+            if redis_configured:
                 _log_blocked_once(month, limit, "redis-unavailable")
                 return False
 
-    if redis_configured and _fail_closed():
+    if redis_configured:
         _log_blocked_once(month, limit, "redis-unavailable")
+        return False
+
+    if _persistent_budget_required() or not _local_budget_allowed():
+        _log_blocked_once(month, limit, "persistent-backend-required")
         return False
 
     return _reserve_local(month, endpoint, limit)
@@ -238,6 +260,16 @@ def get_qweather_budget_snapshot():
             }
         except Exception as exc:
             logger.warning("读取和风天气预算快照失败: %s", exc)
+
+    if bool(_redis_url()) or _persistent_budget_required() or not _local_budget_allowed():
+        return {
+            "month": month,
+            "limit": limit,
+            "used": 0,
+            "remaining": 0,
+            "backend": "unavailable",
+            "endpoints": {},
+        }
 
     with _LOCAL_LOCK:
         total = int(_LOCAL_TOTALS.get(month, 0))

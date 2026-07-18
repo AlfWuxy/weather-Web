@@ -4,7 +4,7 @@ import json
 import logging
 import math
 
-from flask import current_app, jsonify, request
+from flask import abort, current_app, jsonify, request
 from flask_login import current_user, login_required
 
 from core.constants import DEFAULT_CITY_LABEL
@@ -969,6 +969,8 @@ def api_chronic_population():
 
 def _api_ai_ask():
     """AI问答接口"""
+    if not current_app.config.get('FEATURE_WEB_AI'):
+        abort(404)
     try:
         from services.ai_question_service import AIQuestionService
         data = request.get_json() or {}

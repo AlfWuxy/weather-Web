@@ -14,27 +14,31 @@ if str(ROOT_DIR) not in sys.path:
 
 from core.app import create_app  # noqa: E402
 from core.usage import (  # noqa: E402
+    ALERT_DELIVERY_CLICK_RETENTION_DAYS,
     USAGE_EVENT_RETENTION_DAYS,
+    clear_expired_alert_delivery_clicks,
     delete_expired_usage_events,
 )
 
 logger = logging.getLogger(__name__)
 
 
-def _audit_result(result):
+def _audit_result(result, click_result):
     """把清理结果整理为适合 systemd journal 留存的 JSON 字段。"""
     cutoff = result.get('cutoff')
     if hasattr(cutoff, 'isoformat'):
         cutoff = cutoff.isoformat()
     elif cutoff is not None:
         cutoff = str(cutoff)
-    complete = bool(result.get('complete'))
+    complete = bool(result.get('complete')) and bool(click_result.get('complete'))
 
     return {
         'status': 'success' if complete else 'partial',
         'retention_days': USAGE_EVENT_RETENTION_DAYS,
+        'click_retention_days': ALERT_DELIVERY_CLICK_RETENTION_DAYS,
         'cutoff': cutoff,
         'deleted': int(result.get('deleted') or 0),
+        'click_timestamps_cleared': int(click_result.get('cleared') or 0),
         'complete': complete,
     }
 
@@ -51,12 +55,16 @@ def cleanup_usage_events(*, batch_size=None, max_batches=None, app_instance=None
     target_app = app_instance or create_app(register_blueprints=False)
     with target_app.app_context():
         result = delete_expired_usage_events(**cleanup_options)
-    return _audit_result(result)
+        click_result = clear_expired_alert_delivery_clicks(**cleanup_options)
+    return _audit_result(result, click_result)
 
 
 def _build_parser():
     parser = argparse.ArgumentParser(
-        description='Delete UsageEvent rows older than the 30-day retention window.',
+        description=(
+            'Delete expired UsageEvent rows and clear AlertDelivery click timestamps '
+            'after the 30-day retention window.'
+        ),
     )
     parser.add_argument(
         '--batch-size',

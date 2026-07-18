@@ -182,10 +182,10 @@
     <div class="col-md-3">
       <div class="card shadow-sm h-100">
         <div class="card-body">
-          <div class="text-muted small">点击率（CTR）</div>
+          <div class="text-muted small">主动确认率</div>
           <div class="fs-3 fw-bold">{{ (push_ctr * 100) | round(1) }}%</div>
-          <div class="text-muted small">确认点击 {{ push_clicked }} / 确认送达 {{ push_sent }}</div>
-          {% if push_uncertain_clicked %}<div class="text-warning small">另有 {{ push_uncertain_clicked }} 次不明确投递点击待复核</div>{% endif %}
+          <div class="text-muted small">主动确认 {{ push_clicked }} / 确认送达 {{ push_sent }}</div>
+          {% if push_uncertain_clicked %}<div class="text-warning small">另有 {{ push_uncertain_clicked }} 次不明确投递主动确认待复核</div>{% endif %}
         </div>
       </div>
     </div>
@@ -220,7 +220,7 @@
               <td><code>{{ delivery.status }}</code></td>
               <td>{{ delivery.attempt_count or 1 }}</td>
               <td>{{ delivery.sent_at or '待记录' }}</td>
-              <td>{% if delivery.clicked_at %}已点击{% else %}无点击{% endif %}</td>
+              <td>{% if delivery.clicked_at %}已主动确认{% else %}未确认{% endif %}</td>
               <td>
                 {% if delivery.review_action %}
                   {{ delivery.review_action }} · {{ delivery.reviewed_at or '' }}
@@ -229,6 +229,9 @@
                 {% endif %}
               </td>
               <td class="text-end">
+                {% if delivery.status == 'sending' %}
+                <span class="text-muted small">发送占位已超时，等待调度任务收敛</span>
+                {% elif delivery.status in ['failed', 'uncertain'] and not delivery.review_action and not delivery.reviewed_at %}
                 <div class="d-flex flex-wrap justify-content-end gap-1">
                   <form method="post" action="{{ url_for('analysis.pilot_review_delivery', delivery_id=delivery.id) }}">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -251,6 +254,9 @@
                   </form>
                   {% endif %}
                 </div>
+                {% else %}
+                <span class="text-muted small">当前无需人工操作</span>
+                {% endif %}
               </td>
             </tr>
             {% endfor %}

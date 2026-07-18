@@ -578,3 +578,621 @@ def test_alert_delivery_idempotency_migration_deduplicates_safely(
                 ''',
                 (second_alert_id, user_id),
             )
+
+
+def test_debrief_owner_migration_backfills_owner_and_origin_without_data_loss(
+    monkeypatch,
+    tmp_path,
+):
+    """0018 只用旧 pair 回填 owner 与稳定来源，并固化外键和索引。"""
+    database_path = tmp_path / 'debrief-owner-backfill.db'
+    app = _create_test_app(monkeypatch, database_path)
+    initialized = app.test_cli_runner().invoke(args=['init-db'])
+    assert initialized.exit_code == 0, initialized.output
+    alembic_config = _alembic_config(app)
+
+    from core.db_models import Pair, User
+    from core.extensions import db
+    from core.security import hash_short_code
+    from core.time_utils import utcnow
+
+    with app.app_context():
+        owner = User(username='debrief-migration-owner')
+        owner.set_password('migration-test-password')
+        db.session.add(owner)
+        db.session.flush()
+        pair = Pair(
+            caregiver_id=owner.id,
+            community_code='都昌县',
+            location_query='都昌县',
+            elder_code='debrief-migration-elder',
+            short_code='81818181',
+            short_code_hash=hash_short_code('81818181'),
+            status='active',
+            created_at=utcnow(),
+            last_active_at=utcnow(),
+        )
+        db.session.add(pair)
+        db.session.commit()
+        owner_id = int(owner.id)
+        pair_id = int(pair.id)
+        db.session.remove()
+        db.engine.dispose()
+
+    command.downgrade(alembic_config, '0017_delivery_review_workflow')
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            '''
+            INSERT INTO debriefs (
+                date,
+                community_code,
+                pair_id,
+                question_1,
+                created_at
+            ) VALUES (?, ?, ?, ?, ?)
+            ''',
+            (
+                '2026-07-18',
+                '都昌县',
+                pair_id,
+                '迁移前已有复盘',
+                '2026-07-18 09:00:00',
+            ),
+        )
+        connection.commit()
+
+    command.upgrade(alembic_config, 'head')
+
+    with sqlite3.connect(database_path) as connection:
+        rows = connection.execute(
+            '''
+            SELECT owner_user_id, origin_pair_id, pair_id, question_1
+            FROM debriefs
+            '''
+        ).fetchall()
+        table_info = {
+            row[1]: row
+            for row in connection.execute('PRAGMA table_info(debriefs)')
+        }
+        indexes = {
+            row[1]
+            for row in connection.execute('PRAGMA index_list(debriefs)')
+        }
+        foreign_keys = connection.execute('PRAGMA foreign_key_list(debriefs)').fetchall()
+
+    assert rows == [(owner_id, pair_id, pair_id, '迁移前已有复盘')]
+    assert table_info['owner_user_id'][3] == 1
+    assert table_info['origin_pair_id'][3] == 0
+    assert 'ix_debriefs_owner_user_id' in indexes
+    assert 'ix_debriefs_origin_pair_id' in indexes
+    assert any(
+        row[2] == 'users' and row[3] == 'owner_user_id' and row[4] == 'id'
+        for row in foreign_keys
+    )
+    origin_fk = next(
+        row
+        for row in foreign_keys
+        if row[2] == 'pairs' and row[3] == 'origin_pair_id' and row[4] == 'id'
+    )
+    display_fk = next(
+        row
+        for row in foreign_keys
+        if row[2] == 'pairs' and row[3] == 'pair_id' and row[4] == 'id'
+    )
+    assert origin_fk[6] == 'SET NULL'
+    assert display_fk[6] == 'SET NULL'
+
+
+def test_debrief_owner_migration_fails_closed_for_unowned_rows(
+    monkeypatch,
+    tmp_path,
+):
+    """无法从 pair 回填的旧复盘必须保留并中止迁移。"""
+    database_path = tmp_path / 'debrief-owner-orphan.db'
+    app = _create_test_app(monkeypatch, database_path)
+    initialized = app.test_cli_runner().invoke(args=['init-db'])
+    assert initialized.exit_code == 0, initialized.output
+    alembic_config = _alembic_config(app)
+
+    from core.extensions import db
+
+    with app.app_context():
+        db.session.remove()
+        db.engine.dispose()
+    command.downgrade(alembic_config, '0017_delivery_review_workflow')
+
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            '''
+            INSERT INTO debriefs (
+                date,
+                community_code,
+                pair_id,
+                question_1,
+                created_at
+            ) VALUES (?, ?, NULL, ?, ?)
+            ''',
+            (
+                '2026-07-18',
+                '都昌县',
+                '归属待人工确认',
+                '2026-07-18 09:30:00',
+            ),
+        )
+        connection.commit()
+
+    with pytest.raises(RuntimeError, match='orphan_count=1; no rows were deleted'):
+        command.upgrade(alembic_config, 'head')
+
+    with sqlite3.connect(database_path) as connection:
+        kept = connection.execute(
+            '''
+            SELECT date, community_code, pair_id, question_1, created_at
+            FROM debriefs
+            '''
+        ).fetchall()
+        columns = {
+            row[1]
+            for row in connection.execute('PRAGMA table_info(debriefs)')
+        }
+        revision = connection.execute(
+            'SELECT version_num FROM alembic_version'
+        ).fetchone()[0]
+
+    assert kept == [(
+        '2026-07-18',
+        '都昌县',
+        None,
+        '归属待人工确认',
+        '2026-07-18 09:30:00',
+    )]
+    assert 'owner_user_id' not in columns
+    assert 'origin_pair_id' not in columns
+    assert revision == '0017_delivery_review_workflow'
+
+
+def test_debrief_owner_migration_refuses_lossy_downgrade_for_opted_out_pair(
+    monkeypatch,
+    tmp_path,
+):
+    """关闭家人关联的复盘不能降级到会丢失 owner 的旧结构。"""
+    database_path = tmp_path / 'debrief-owner-lossy-downgrade.db'
+    app = _create_test_app(monkeypatch, database_path)
+    initialized = app.test_cli_runner().invoke(args=['init-db'])
+    assert initialized.exit_code == 0, initialized.output
+    alembic_config = _alembic_config(app)
+
+    from core.db_models import Pair, User
+    from core.extensions import db
+    from core.security import hash_short_code
+    from core.time_utils import utcnow
+
+    with app.app_context():
+        owner = User(username='debrief-downgrade-owner')
+        owner.set_password('migration-test-password')
+        db.session.add(owner)
+        db.session.flush()
+        pair = Pair(
+            caregiver_id=owner.id,
+            community_code='都昌县',
+            location_query='都昌县',
+            elder_code='debrief-downgrade-elder',
+            short_code='82828282',
+            short_code_hash=hash_short_code('82828282'),
+            status='inactive',
+            created_at=utcnow(),
+            last_active_at=utcnow(),
+        )
+        db.session.add(pair)
+        db.session.flush()
+        db.session.commit()
+        owner_id = int(owner.id)
+        pair_id = int(pair.id)
+        db.session.remove()
+        db.engine.dispose()
+
+    # 先停在 0018，确保本次断言只检验 owner/origin 降级边界。
+    command.downgrade(alembic_config, '0018_debrief_owner_scope')
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            '''
+            INSERT INTO debriefs (
+                date,
+                community_code,
+                owner_user_id,
+                origin_pair_id,
+                pair_id,
+                question_1,
+                created_at
+            ) VALUES (?, ?, ?, ?, NULL, ?, ?)
+            ''',
+            (
+                '2026-07-18',
+                '都昌县',
+                owner_id,
+                pair_id,
+                '已关闭家人关联的复盘',
+                '2026-07-18 10:00:00',
+            ),
+        )
+        connection.commit()
+    with pytest.raises(
+        RuntimeError,
+        match='unrepresentable_count=1; owner and origin columns were preserved',
+    ):
+        command.downgrade(alembic_config, '0017_delivery_review_workflow')
+
+    with sqlite3.connect(database_path) as connection:
+        columns = {
+            row[1]
+            for row in connection.execute('PRAGMA table_info(debriefs)')
+        }
+        kept = connection.execute(
+            '''
+            SELECT owner_user_id, origin_pair_id, pair_id, question_1
+            FROM debriefs
+            '''
+        ).fetchall()
+        revision = connection.execute(
+            'SELECT version_num FROM alembic_version'
+        ).fetchone()[0]
+
+    assert {'owner_user_id', 'origin_pair_id'} <= columns
+    assert kept == [(owner_id, pair_id, None, '已关闭家人关联的复盘')]
+    assert revision == '0018_debrief_owner_scope'
+
+    command.upgrade(alembic_config, 'head')
+    with sqlite3.connect(database_path) as connection:
+        restored = connection.execute(
+            '''
+            SELECT owner_user_id, origin_pair_id, pair_id, question_1
+            FROM debriefs
+            '''
+        ).fetchall()
+    assert restored == kept
+
+
+def test_head_downgrade_preflight_preserves_newer_columns_for_opted_out_pair(
+    monkeypatch,
+    tmp_path,
+):
+    """从 head 直接降级时，0021 必须在 0020/0019 删列前拒绝。"""
+    from datetime import date
+
+    database_path = tmp_path / 'debrief-head-downgrade-guard.db'
+    app = _create_test_app(monkeypatch, database_path)
+    initialized = app.test_cli_runner().invoke(args=['init-db'])
+    assert initialized.exit_code == 0, initialized.output
+    alembic_config = _alembic_config(app)
+
+    from core.db_models import Debrief, Pair, User
+    from core.extensions import db
+    from core.security import hash_short_code
+    from core.time_utils import utcnow
+
+    with app.app_context():
+        owner = User(username='debrief-head-guard-owner')
+        owner.set_password('migration-test-password')
+        db.session.add(owner)
+        db.session.flush()
+        pair = Pair(
+            caregiver_id=owner.id,
+            community_code='都昌县',
+            location_query='都昌县',
+            elder_code='debrief-head-guard-elder',
+            short_code='83838383',
+            short_code_hash=hash_short_code('83838383'),
+            status='inactive',
+            created_at=utcnow(),
+            last_active_at=utcnow(),
+        )
+        db.session.add(pair)
+        db.session.flush()
+        db.session.add(Debrief(
+            date=date(2026, 7, 18),
+            community_code='都昌县',
+            owner_user_id=owner.id,
+            origin_pair_id=pair.id,
+            pair_id=None,
+            question_1='head 降级前已关闭关联',
+            created_at=utcnow(),
+        ))
+        db.session.commit()
+        owner_id = int(owner.id)
+        pair_id = int(pair.id)
+        db.session.remove()
+        db.engine.dispose()
+
+    with pytest.raises(
+        RuntimeError,
+        match='unrepresentable_debrief_count=1; head schema was preserved',
+    ):
+        command.downgrade(alembic_config, '0017_delivery_review_workflow')
+
+    with sqlite3.connect(database_path) as connection:
+        debrief_columns = {
+            row[1]
+            for row in connection.execute('PRAGMA table_info(debriefs)')
+        }
+        daily_status_columns = {
+            row[1]
+            for row in connection.execute('PRAGMA table_info(daily_status)')
+        }
+        weather_alert_columns = {
+            row[1]
+            for row in connection.execute('PRAGMA table_info(weather_alerts)')
+        }
+        kept = connection.execute(
+            '''
+            SELECT owner_user_id, origin_pair_id, pair_id, question_1
+            FROM debriefs
+            '''
+        ).fetchall()
+        revision = connection.execute(
+            'SELECT version_num FROM alembic_version'
+        ).fetchone()[0]
+
+    assert {'owner_user_id', 'origin_pair_id'} <= debrief_columns
+    assert 'elder_actions' in daily_status_columns
+    assert 'dedupe_key' in weather_alert_columns
+    assert kept == [(owner_id, pair_id, None, 'head 降级前已关闭关联')]
+    assert revision == '0023_auth_session_version'
+
+
+def test_head_to_0017_round_trip_succeeds_for_representable_debrief(
+    monkeypatch,
+    tmp_path,
+):
+    """所有复盘都可由 pair 表达时，完整降级链与重新升级仍应无损。"""
+    from datetime import date
+
+    database_path = tmp_path / 'debrief-head-round-trip.db'
+    app = _create_test_app(monkeypatch, database_path)
+    initialized = app.test_cli_runner().invoke(args=['init-db'])
+    assert initialized.exit_code == 0, initialized.output
+    alembic_config = _alembic_config(app)
+
+    from core.db_models import Debrief, Pair, User
+    from core.extensions import db
+    from core.security import hash_short_code
+    from core.time_utils import utcnow
+
+    with app.app_context():
+        owner = User(username='debrief-round-trip-owner')
+        owner.set_password('migration-test-password')
+        db.session.add(owner)
+        db.session.flush()
+        pair = Pair(
+            caregiver_id=owner.id,
+            community_code='都昌县',
+            location_query='都昌县',
+            elder_code='debrief-round-trip-elder',
+            short_code='84848484',
+            short_code_hash=hash_short_code('84848484'),
+            status='active',
+            created_at=utcnow(),
+            last_active_at=utcnow(),
+        )
+        db.session.add(pair)
+        db.session.flush()
+        db.session.add(Debrief(
+            date=date(2026, 7, 18),
+            community_code='都昌县',
+            owner_user_id=owner.id,
+            origin_pair_id=pair.id,
+            pair_id=pair.id,
+            question_1='可以由旧结构表达',
+            created_at=utcnow(),
+        ))
+        db.session.commit()
+        owner_id = int(owner.id)
+        pair_id = int(pair.id)
+        db.session.remove()
+        db.engine.dispose()
+
+    command.downgrade(alembic_config, '0017_delivery_review_workflow')
+    with sqlite3.connect(database_path) as connection:
+        downgraded_debrief_columns = {
+            row[1]
+            for row in connection.execute('PRAGMA table_info(debriefs)')
+        }
+        downgraded_daily_columns = {
+            row[1]
+            for row in connection.execute('PRAGMA table_info(daily_status)')
+        }
+        downgraded_alert_columns = {
+            row[1]
+            for row in connection.execute('PRAGMA table_info(weather_alerts)')
+        }
+        downgraded_row = connection.execute(
+            'SELECT pair_id, question_1 FROM debriefs'
+        ).fetchall()
+        downgraded_revision = connection.execute(
+            'SELECT version_num FROM alembic_version'
+        ).fetchone()[0]
+
+    assert 'owner_user_id' not in downgraded_debrief_columns
+    assert 'origin_pair_id' not in downgraded_debrief_columns
+    assert 'elder_actions' not in downgraded_daily_columns
+    assert 'dedupe_key' not in downgraded_alert_columns
+    assert downgraded_row == [(pair_id, '可以由旧结构表达')]
+    assert downgraded_revision == '0017_delivery_review_workflow'
+
+    command.upgrade(alembic_config, 'head')
+    with sqlite3.connect(database_path) as connection:
+        restored = connection.execute(
+            '''
+            SELECT owner_user_id, origin_pair_id, pair_id, question_1
+            FROM debriefs
+            '''
+        ).fetchall()
+        restored_revision = connection.execute(
+            'SELECT version_num FROM alembic_version'
+        ).fetchone()[0]
+
+    assert restored == [(owner_id, pair_id, pair_id, '可以由旧结构表达')]
+    assert restored_revision == '0023_auth_session_version'
+
+
+def test_elder_actions_migration_keeps_caregiver_actions_separate(
+    monkeypatch,
+    tmp_path,
+):
+    """老人自护有数据时拒绝降级，清空后仍保留照护端行动数据。"""
+    from datetime import date
+
+    database_path = tmp_path / 'elder-actions-separation.db'
+    app = _create_test_app(monkeypatch, database_path)
+    initialized = app.test_cli_runner().invoke(args=['init-db'])
+    assert initialized.exit_code == 0, initialized.output
+    alembic_config = _alembic_config(app)
+
+    from core.db_models import DailyStatus, Pair, User
+    from core.extensions import db
+    from core.security import hash_short_code
+    from core.time_utils import utcnow
+
+    with app.app_context():
+        owner = User(username='elder-actions-migration-owner')
+        owner.set_password('migration-test-password')
+        db.session.add(owner)
+        db.session.flush()
+        pair = Pair(
+            caregiver_id=owner.id,
+            community_code='都昌县',
+            location_query='都昌县',
+            elder_code='elder-actions-migration-elder',
+            short_code='91919191',
+            short_code_hash=hash_short_code('91919191'),
+            status='active',
+            created_at=utcnow(),
+            last_active_at=utcnow(),
+        )
+        db.session.add(pair)
+        db.session.flush()
+        pair_id = int(pair.id)
+        db.session.add(DailyStatus(
+            pair_id=pair_id,
+            status_date=date(2026, 7, 18),
+            community_code='都昌县',
+            caregiver_actions='["remind"]',
+            elder_actions='["drink_water"]',
+        ))
+        db.session.commit()
+        db.session.remove()
+        db.engine.dispose()
+
+    with pytest.raises(
+        RuntimeError,
+        match='elder_action_count=1; head schema was preserved',
+    ):
+        command.downgrade(alembic_config, '0018_debrief_owner_scope')
+
+    with sqlite3.connect(database_path) as connection:
+        guarded_columns = {
+            row[1]
+            for row in connection.execute('PRAGMA table_info(daily_status)')
+        }
+        guarded_values = connection.execute(
+            '''SELECT caregiver_actions, elder_actions
+               FROM daily_status WHERE pair_id = ?''',
+            (pair_id,),
+        ).fetchone()
+        guarded_revision = connection.execute(
+            'SELECT version_num FROM alembic_version'
+        ).fetchone()[0]
+        connection.execute(
+            'UPDATE daily_status SET elder_actions = NULL WHERE pair_id = ?',
+            (pair_id,),
+        )
+        connection.commit()
+
+    assert 'elder_actions' in guarded_columns
+    assert guarded_values == ('["remind"]', '["drink_water"]')
+    assert guarded_revision == '0023_auth_session_version'
+
+    command.downgrade(alembic_config, '0018_debrief_owner_scope')
+    with sqlite3.connect(database_path) as connection:
+        downgraded_columns = {
+            row[1]
+            for row in connection.execute('PRAGMA table_info(daily_status)')
+        }
+        caregiver_actions = connection.execute(
+            'SELECT caregiver_actions FROM daily_status WHERE pair_id = ?',
+            (pair_id,),
+        ).fetchone()[0]
+
+    assert 'elder_actions' not in downgraded_columns
+    assert 'caregiver_actions' in downgraded_columns
+    assert caregiver_actions == '["remind"]'
+
+    command.upgrade(alembic_config, 'head')
+    with sqlite3.connect(database_path) as connection:
+        upgraded_columns = {
+            row[1]
+            for row in connection.execute('PRAGMA table_info(daily_status)')
+        }
+        caregiver_actions, elder_actions = connection.execute(
+            '''
+            SELECT caregiver_actions, elder_actions
+            FROM daily_status
+            WHERE pair_id = ?
+            ''',
+            (pair_id,),
+        ).fetchone()
+
+    assert 'elder_actions' in upgraded_columns
+    assert caregiver_actions == '["remind"]'
+    assert elder_actions is None
+
+
+def test_weather_alert_dedupe_migration_refuses_lossy_direct_downgrade(
+    monkeypatch,
+    tmp_path,
+):
+    """数据库停在 0020 时，非空幂等键也必须阻止删列。"""
+    database_path = tmp_path / 'weather-alert-dedupe-guard.db'
+    app = _create_test_app(monkeypatch, database_path)
+    initialized = app.test_cli_runner().invoke(args=['init-db'])
+    assert initialized.exit_code == 0, initialized.output
+    alembic_config = _alembic_config(app)
+
+    from core.extensions import db
+
+    with app.app_context():
+        db.session.remove()
+        db.engine.dispose()
+    command.downgrade(alembic_config, '0020_weather_alert_dedupe_key')
+
+    dedupe_key = 'a' * 64
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            '''
+            INSERT INTO weather_alerts (location, alert_type, dedupe_key)
+            VALUES (?, ?, ?)
+            ''',
+            ('都昌县', '高温', dedupe_key),
+        )
+        connection.commit()
+
+    with pytest.raises(
+        RuntimeError,
+        match='protected_count=1; dedupe_key was preserved',
+    ):
+        command.downgrade(alembic_config, '0019_daily_status_elder_actions')
+
+    with sqlite3.connect(database_path) as connection:
+        columns = {
+            row[1]
+            for row in connection.execute('PRAGMA table_info(weather_alerts)')
+        }
+        kept_key = connection.execute(
+            'SELECT dedupe_key FROM weather_alerts'
+        ).fetchone()[0]
+        revision = connection.execute(
+            'SELECT version_num FROM alembic_version'
+        ).fetchone()[0]
+
+    assert 'dedupe_key' in columns
+    assert kept_key == dedupe_key
+    assert revision == '0020_weather_alert_dedupe_key'

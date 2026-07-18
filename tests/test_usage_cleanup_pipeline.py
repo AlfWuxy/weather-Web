@@ -22,17 +22,31 @@ def test_cleanup_pipeline_enters_app_context(app, monkeypatch):
     def fake_delete_expired_usage_events(**options):
         observed['has_app_context'] = has_app_context()
         observed['app_name'] = current_app.name
-        observed['options'] = options
+        observed['usage_options'] = options
         return {
             'deleted': 7,
             'cutoff': utcnow() - timedelta(days=30),
             'complete': False,
         }
 
+    def fake_clear_expired_alert_delivery_clicks(**options):
+        observed['click_has_app_context'] = has_app_context()
+        observed['click_options'] = options
+        return {
+            'cleared': 3,
+            'cutoff': utcnow() - timedelta(days=30),
+            'complete': True,
+        }
+
     monkeypatch.setattr(
         pipeline,
         'delete_expired_usage_events',
         fake_delete_expired_usage_events,
+    )
+    monkeypatch.setattr(
+        pipeline,
+        'clear_expired_alert_delivery_clicks',
+        fake_clear_expired_alert_delivery_clicks,
     )
 
     result = pipeline.cleanup_usage_events(
@@ -44,17 +58,21 @@ def test_cleanup_pipeline_enters_app_context(app, monkeypatch):
     assert observed == {
         'has_app_context': True,
         'app_name': app.name,
-        'options': {'batch_size': 50, 'max_batches': 3},
+        'usage_options': {'batch_size': 50, 'max_batches': 3},
+        'click_has_app_context': True,
+        'click_options': {'batch_size': 50, 'max_batches': 3},
     }
     assert result['status'] == 'partial'
     assert result['retention_days'] == 30
+    assert result['click_retention_days'] == 30
     assert result['deleted'] == 7
+    assert result['click_timestamps_cleared'] == 3
     assert result['complete'] is False
     assert result['cutoff'].endswith('+00:00')
 
 
-def test_cleanup_pipeline_deletes_expired_rows(app, db_session):
-    from core.db_models import UsageEvent
+def test_cleanup_pipeline_deletes_expired_rows_and_clears_old_clicks(app, db_session):
+    from core.db_models import AlertDelivery, UsageEvent, User, WeatherAlert
     from services.pipelines import cleanup_usage_events as pipeline
 
     old_event = UsageEvent(
@@ -67,7 +85,28 @@ def test_cleanup_pipeline_deletes_expired_rows(app, db_session):
         source='web',
         created_at=utcnow() - timedelta(days=29),
     )
-    db_session.add_all((old_event, fresh_event))
+    user = User(username='pipeline-click-owner', role='user')
+    user.set_password('safe-test-password')
+    alert = WeatherAlert(
+        alert_date=utcnow(),
+        location='116.20,29.27',
+        alert_type='heat_threshold',
+        alert_level='阈值',
+        description='test',
+        affected_communities='[]',
+        disease_correlation='{}',
+    )
+    db_session.add_all((old_event, fresh_event, user, alert))
+    db_session.flush()
+    delivery = AlertDelivery(
+        alert_id=alert.id,
+        user_id=user.id,
+        channel='wxpusher',
+        status='sent',
+        delivery_token='pipeline-click-retention',
+        clicked_at=utcnow() - timedelta(days=31),
+    )
+    db_session.add(delivery)
     db_session.commit()
     old_event_id = old_event.id
     fresh_event_id = fresh_event.id
@@ -76,10 +115,13 @@ def test_cleanup_pipeline_deletes_expired_rows(app, db_session):
 
     assert result['status'] == 'success'
     assert result['deleted'] == 1
+    assert result['click_timestamps_cleared'] == 1
     assert result['complete'] is True
     remaining_ids = set(db_session.execute(select(UsageEvent.id)).scalars())
     assert remaining_ids == {fresh_event_id}
     assert old_event_id not in remaining_ids
+    db_session.expire_all()
+    assert db_session.get(AlertDelivery, delivery.id).clicked_at is None
 
 
 def test_cleanup_cli_prints_json_audit_result(monkeypatch, capsys):
@@ -92,8 +134,10 @@ def test_cleanup_cli_prints_json_audit_result(monkeypatch, capsys):
         return {
             'status': 'success',
             'retention_days': 30,
+            'click_retention_days': 30,
             'cutoff': '2026-06-18T03:15:00+00:00',
             'deleted': 4,
+            'click_timestamps_cleared': 2,
             'complete': True,
         }
 
@@ -108,8 +152,10 @@ def test_cleanup_cli_prints_json_audit_result(monkeypatch, capsys):
     assert json.loads(captured.out) == {
         'status': 'success',
         'retention_days': 30,
+        'click_retention_days': 30,
         'cutoff': '2026-06-18T03:15:00+00:00',
         'deleted': 4,
+        'click_timestamps_cleared': 2,
         'complete': True,
     }
 
@@ -147,8 +193,10 @@ def test_cleanup_cli_returns_nonzero_and_partial_json_for_backlog(
         lambda **_options: {
             'status': 'partial',
             'retention_days': 30,
+            'click_retention_days': 30,
             'cutoff': '2026-06-18T03:15:00+00:00',
             'deleted': 10_000,
+            'click_timestamps_cleared': 10_000,
             'complete': False,
         },
     )
@@ -161,8 +209,10 @@ def test_cleanup_cli_returns_nonzero_and_partial_json_for_backlog(
     assert json.loads(captured.out) == {
         'status': 'partial',
         'retention_days': 30,
+        'click_retention_days': 30,
         'cutoff': '2026-06-18T03:15:00+00:00',
         'deleted': 10_000,
+        'click_timestamps_cleared': 10_000,
         'complete': False,
     }
 
@@ -188,7 +238,11 @@ def test_deploy_installs_independent_daily_cleanup_timer_idempotently():
     assert 'Restart=on-failure' in deploy_content
     assert 'RestartSec=1min' in deploy_content
     assert 'StartLimitBurst=20' in deploy_content
-    assert 'Environment=DEPLOY_STATE_DIR=$PROJECT_DIR' in deploy_content
+    assert 'Environment=DEPLOY_STATE_DIR=$PROJECT_DIR' not in deploy_content
+    cleanup_script = (ROOT_DIR / 'scripts' / 'cleanup_usage_events.sh').read_text(
+        encoding='utf-8'
+    )
+    assert 'prune_deploy_transactions.py' not in cleanup_script
     assert 'case-weather-usage-cleanup.timer' in activate_content
     assert 'for unit in "${START_TIMER_UNITS[@]}"' in activate_content
     assert '"$SYSTEMCTL_BIN" enable "$unit"' in activate_content

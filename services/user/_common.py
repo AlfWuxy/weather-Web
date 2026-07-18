@@ -2,6 +2,7 @@
 """User-facing shared constants and helpers."""
 import secrets
 from datetime import timedelta
+from urllib.parse import urlsplit
 
 from flask import current_app, flash, has_app_context, url_for
 from flask_login import current_user
@@ -215,12 +216,35 @@ def _create_pair_action_token(pair, flush=False):
 def _build_pair_action_link(pair, external=True):
     """为照护提醒生成带 token 的行动链接。"""
     _, token = _create_pair_action_token(pair, flush=True)
-    return url_for(
+    return _trusted_public_url(
         'public.elder_token_entry',
         token=token,
         short_code=pair.short_code,
-        _external=external
+        external=external,
     )
+
+
+def _trusted_public_url(endpoint, *, external=True, **values):
+    """敏感链接只使用配置过的可信公开 origin，绝不采信请求 Host。"""
+    path = url_for(endpoint, _external=False, **values)
+    if not external:
+        return path
+    base = str(current_app.config.get('PUBLIC_BASE_URL') or '').strip()
+    try:
+        parsed = urlsplit(base)
+    except ValueError:
+        return path
+    if (
+        parsed.scheme != 'https'
+        or not parsed.hostname
+        or parsed.username
+        or parsed.password
+        or parsed.query
+        or parsed.fragment
+        or parsed.path not in ('', '/')
+    ):
+        return path
+    return f"{base.rstrip('/')}{path}"
 
 
 def _create_pair_link_record(caregiver_id, community_code, expires_after=None, flush=False):

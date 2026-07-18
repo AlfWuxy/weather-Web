@@ -18,6 +18,11 @@ AI_ALLOWED_MODELS = [
 # 弱密钥关键词（用于生产环境配置校验）
 WEAK_SECRET_KEYWORDS = ('dev', 'test', 'secret', 'password', 'example', 'demo')
 
+# WxPusher 点击跟踪链接默认保留 7 天；允许缩短，不允许超过已披露期限。
+PUSH_TRACKING_LINK_TTL_DAYS_DEFAULT = 7
+PUSH_TRACKING_LINK_TTL_DAYS_MIN = 1
+PUSH_TRACKING_LINK_TTL_DAYS_MAX = 7
+
 # 城市ID映射（和风天气API）
 # 都昌县属于江西省九江市，使用九江市ID或经纬度
 # 九江市 ID: 101240201
