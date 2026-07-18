@@ -6,6 +6,7 @@ const {
   freshnessView,
   normalizeBootstrap,
   normalizeCommunity,
+  warningStatusText,
 } = require('../utils/format');
 
 test('bootstrap 兼容正式天气字段与 reasons', () => {
@@ -42,6 +43,7 @@ test('预警列表为空时区分暂无预警与来源不可用', () => {
   });
   assert.equal(unavailable.warnings.length, 0);
   assert.equal(unavailable.warningsSourceAvailable, false);
+  assert.equal(unavailable.warningsStatusText, '来源暂不可用');
 
   const noWarnings = normalizeBootstrap({
     warnings: [],
@@ -49,9 +51,12 @@ test('预警列表为空时区分暂无预警与来源不可用', () => {
   });
   assert.equal(noWarnings.warnings.length, 0);
   assert.equal(noWarnings.warningsSourceAvailable, true);
+  assert.equal(noWarnings.warningsStatusText, '当前暂无预警');
 
   const unknownSource = normalizeBootstrap({ warnings: [] });
   assert.equal(unknownSource.warningsSourceAvailable, false);
+  assert.equal(unknownSource.warningsStatusText, '来源暂不可用');
+  assert.equal(warningStatusText([{}], true), '1 条有效信息');
 });
 
 test('预警保留发布单位、发布时间和生效时间', () => {

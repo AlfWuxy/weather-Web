@@ -1,6 +1,6 @@
 const { getBootstrap } = require('../../utils/public-data');
 const { freshnessView, normalizeBootstrap } = require('../../utils/format');
-const { prefersReducedMotion } = require('../../utils/motion');
+const { allowsJsMotion } = require('../../utils/motion');
 const {
   beginPublicPage,
   hidePublicPage,
@@ -39,6 +39,12 @@ function readChecked() {
   }
 }
 
+function isCompletionReceiptShare(options) {
+  const event = options || {};
+  const dataset = event.target && event.target.dataset;
+  return Boolean(event.from === 'button' && dataset && dataset.shareKind === 'completion_receipt');
+}
+
 Page({
   data: {
     loading: true,
@@ -49,18 +55,15 @@ Page({
     generalMode: false,
     freshness: {},
     locationName: '都昌县',
-    reduceMotion: false,
+    reduceMotion: !allowsJsMotion(),
   },
 
   onLoad() {
     beginPublicPage(this);
-    this.setData({ reduceMotion: prefersReducedMotion() });
     showPublicShareMenu();
   },
 
   onShow() {
-    const reduceMotion = prefersReducedMotion();
-    if (reduceMotion !== this.data.reduceMotion) this.setData({ reduceMotion });
     showPublicPage(this, () => this.loadData());
   },
 
@@ -108,19 +111,20 @@ Page({
 
   renderActions(result) {
     const snapshot = normalizeBootstrap(result.data);
-    const generalMode = !snapshot.available || !snapshot.actions.length;
+    const freshness = freshnessView(result.meta, snapshot);
+    const generalMode = freshness.stale || !snapshot.available || !snapshot.actions.length;
     const sourceActions = generalMode ? GENERAL_ACTIONS : snapshot.actions;
     const actions = this.mergeChecked(sourceActions);
     const completedCount = actions.filter((item) => item.checked).length;
     this.setData({
       loading: false,
-      error: '',
+      error: freshness.stale ? '正在显示较早天气，当前已切换为通用安全清单。刷新后再判断今日风险。' : '',
       actions,
       completedCount,
       progressPercent: actions.length ? Math.round(completedCount / actions.length * 100) : 0,
       generalMode,
       locationName: snapshot.location.name,
-      freshness: freshnessView(result.meta, snapshot),
+      freshness,
     });
     schedulePublicRefresh(this, result.meta, () => this.loadData());
   },
@@ -153,8 +157,11 @@ Page({
   },
 
   onShareAppMessage(options) {
+    const completionReceipt = this.data.completedCount > 0 && isCompletionReceiptShare(options);
     return createPageShare({
-      title: `${this.data.locationName}今日防护清单`,
+      title: completionReceipt
+        ? '我已看到，并完成一项防护准备'
+        : `${this.data.locationName}今日防护清单`,
       route: '/pages/actions/index',
       source: sourceFromShareEvent(options),
     });

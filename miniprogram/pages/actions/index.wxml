@@ -9,7 +9,7 @@
 
   <block wx:if="{{!loading}}">
     <freshness-bar wx:if="{{freshness.updatedText}}" updated-text="{{freshness.updatedText}}" stale="{{freshness.stale}}" source="{{freshness.source}}" refresh-deferred="{{freshness.refreshDeferred}}" refresh-started="{{freshness.refreshStarted}}" />
-    <status-card wx:if="{{generalMode}}" state="empty" title="当前显示通用防护" detail="{{error || '天气或风险行动待更新，这些内容不代表当前风险等级。'}}" />
+    <status-card wx:if="{{generalMode}}" state="empty" title="{{freshness.stale ? '较早天气已切换为通用清单' : '当前显示通用防护'}}" detail="{{error || '天气或风险行动待更新，这些内容不代表当前风险等级。'}}" />
 
     <view class="progress-card card">
       <view class="row-between">
@@ -32,8 +32,14 @@
       </view>
     </button>
 
+    <view wx:if="{{completedCount > 0}}" class="completion-share-card card motion-enter" role="region" aria-role="region" aria-label="行动完成回执">
+      <view class="completion-share-title">我已看到，并完成一项防护准备</view>
+      <view class="completion-share-copy">由你主动回发给家人。分享内容不包含姓名、健康资料或具体行动记录。</view>
+      <button class="primary-button completion-share-button" open-type="share" data-share-kind="completion_receipt" data-share-source="family_share" hover-class="button-pressed" aria-label="回发已完成防护准备给家人"><image class="button-icon" src="/assets/icons/share.png" mode="aspectFit" aria-hidden="true" />回发给家人</button>
+    </view>
+
     <button class="secondary-button copy-button" bindtap="copyReminder" hover-class="button-pressed">复制给家人的提醒</button>
-    <button class="secondary-button share-button" open-type="share" data-share-source="family_share" hover-class="button-pressed" aria-label="分享今日清单给家人"><image class="button-icon" src="/assets/icons/share.png" mode="aspectFit" aria-hidden="true" />分享今日清单给家人</button>
+    <button wx:if="{{completedCount === 0}}" class="secondary-button share-button" open-type="share" data-share-source="family_share" hover-class="button-pressed" aria-label="分享今日清单给家人"><image class="button-icon" src="/assets/icons/share.png" mode="aspectFit" aria-hidden="true" />分享今日清单给家人</button>
     <navigator class="primary-button" url="/pages/cooling/index" hover-class="button-pressed">查看避暑资源</navigator>
     <view class="safe-note action-note">行动建议用于日常防护。慢病患者的饮水、用药和活动安排应遵循医生给出的个体要求。</view>
   </block>

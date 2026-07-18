@@ -1,12 +1,15 @@
 .hero-share { display: inline-flex; align-items: center; min-height: 88rpx; margin: 22rpx 0 0; padding: 14rpx 24rpx; border: 1rpx solid rgba(255, 255, 255, 0.55); border-radius: 999rpx; color: #73300f; background: rgba(255, 255, 255, 0.92); font-size: 14px; font-weight: 750; line-height: 1.4; transition: opacity 150ms ease, transform 150ms ease; }
 .hero-share-icon { width: 32rpx; height: 32rpx; margin-right: 10rpx; opacity: 0.72; }
 .family-share-card { margin-top: 20rpx; border-color: #efc7a9; background: #fff4e6; }
+.family-share-brand { margin-bottom: 18rpx; color: #985020; font-size: 14px; line-height: 1.4; font-weight: 750; letter-spacing: 1rpx; }
 .family-share-heading { display: flex; align-items: flex-start; gap: 18rpx; }
+.family-share-copy-wrap { flex: 1; min-width: 0; }
 .family-share-icon { display: flex; flex: 0 0 64rpx; align-items: center; justify-content: center; width: 64rpx; height: 64rpx; border-radius: 18rpx; background: #ffe1c2; }
-.family-share-icon image { width: 36rpx; height: 36rpx; opacity: 0.72; }
+.family-share-icon-image { width: 36rpx; height: 36rpx; opacity: 0.72; }
 .family-share-title { color: #74300f; font-size: 16px; line-height: 1.4; font-weight: 800; }
 .family-share-copy { margin-top: 8rpx; color: #6a5142; font-size: 14px; line-height: 1.62; }
-.family-share-action { width: 100%; margin-top: 20rpx; }
+.family-share-actions { display: grid; grid-template-columns: 1fr; gap: 14rpx; margin-top: 20rpx; }
+.family-share-action { width: 100%; margin: 0; }
 .today-card { margin-top: 20rpx; padding: 30rpx; }
 .temperature { margin-top: 8rpx; color: #a94016; font-size: 88rpx; line-height: 1; font-weight: 850; }
 .condition { margin-top: 12rpx; font-size: 16px; font-weight: 700; }
@@ -14,13 +17,13 @@
 .risk-label { font-size: 14px; font-weight: 750; }
 .risk-score { margin-top: 4rpx; font-size: 48rpx; line-height: 1.1; font-weight: 850; }
 .weather-details { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12rpx; margin-top: 28rpx; padding-top: 24rpx; border-top: 1rpx solid #efe2d8; }
-.weather-details > view { display: flex; align-items: center; gap: 8rpx; flex-direction: column; }
+.weather-detail-item { display: flex; align-items: center; gap: 8rpx; flex-direction: column; }
 .detail-value { font-size: 15.5px; font-weight: 750; }
 .risk-summary { margin-top: 24rpx; padding: 20rpx; border-radius: 18rpx; color: #6a4c3a; background: #fff2e3; font-size: 14px; line-height: 1.6; }
 .quick-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 18rpx; margin-top: 20rpx; }
 .quick-card { min-height: 190rpx; padding: 24rpx; border: 1rpx solid #f0ded0; border-radius: 24rpx; background: #fffdf9; transition: opacity 150ms ease, transform 150ms ease; }
 .quick-icon { display: flex; align-items: center; justify-content: center; width: 64rpx; height: 64rpx; margin-bottom: 16rpx; border-radius: 18rpx; background: #fff0dc; }
-.quick-icon image { width: 38rpx; height: 38rpx; opacity: 0.72; }
+.quick-icon-image { width: 38rpx; height: 38rpx; opacity: 0.72; }
 .action-line { display: flex; align-items: flex-start; gap: 20rpx; }
 .action-number { display: flex; flex: 0 0 56rpx; align-items: center; justify-content: center; width: 56rpx; height: 56rpx; border-radius: 50%; color: #fff; background: #b64815; font-size: 14px; font-weight: 800; }
 .action-copy { flex: 1; min-width: 0; }
@@ -32,5 +35,4 @@
   .risk-bubble { width: 100%; min-height: 112rpx; }
   .weather-details,
   .quick-grid { grid-template-columns: 1fr; }
-  .family-share-heading { flex-direction: column; }
 }

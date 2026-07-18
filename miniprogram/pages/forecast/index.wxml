@@ -1,6 +1,6 @@
 <view class="page-shell">
   <view class="hero forecast-hero">
-    <view class="hero-kicker">{{locationName}} · 未来 7 天</view>
+    <view class="hero-kicker">{{locationName}} · {{freshness.stale ? '较早 7 天预报' : '未来 7 天'}}</view>
     <view class="hero-title">哪几天要特别留心？</view>
     <view class="hero-subtitle">风险综合温度、湿度和空气质量等地区级输入，不使用个人慢病资料。</view>
   </view>
@@ -10,7 +10,8 @@
 
   <block wx:if="{{forecast.length}}">
     <freshness-bar updated-text="{{freshness.updatedText}}" stale="{{freshness.stale}}" source="{{freshness.source}}" refresh-deferred="{{freshness.refreshDeferred}}" refresh-started="{{freshness.refreshStarted}}" />
-    <view class="week-summary card">
+    <status-card wx:if="{{freshness.stale}}" state="empty" title="高风险日统计待刷新" detail="以下日期和温度为较早预报，仅供参考；风险等级需刷新后再判断。" />
+    <view wx:else class="week-summary card">
       <view class="row-between">
         <view>
           <view class="small muted">本周需要重点准备</view>

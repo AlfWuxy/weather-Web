@@ -24,6 +24,7 @@ Page({
     freshness: {},
     topActions: [],
     familyShareEntry: false,
+    entryContextReady: false,
   },
 
   onLoad() {
@@ -51,8 +52,8 @@ Page({
     this.clearEntryContextTimer();
     const entryRecord = readFamilyShareEntryRecord();
     const familyShareEntry = Boolean(entryRecord && entryRecord.source === 'family_share');
-    if (familyShareEntry !== this.data.familyShareEntry) {
-      this.setData({ familyShareEntry });
+    if (familyShareEntry !== this.data.familyShareEntry || !this.data.entryContextReady) {
+      this.setData({ familyShareEntry, entryContextReady: true });
     }
     if (!familyShareEntry || !pageCanRender(this)) return;
     const delay = Math.min(0x7fffffff, Math.max(0, entryRecord.expiresAt - Date.now()));
@@ -70,6 +71,10 @@ Page({
 
   startFamilyCare() {
     wx.navigateTo({ url: '/pages/bind-token/index' });
+  },
+
+  openTodayActions() {
+    wx.navigateTo({ url: '/pages/actions/index' });
   },
 
   async onPullDownRefresh() {
@@ -98,12 +103,30 @@ Page({
 
   renderSnapshot(result) {
     const snapshot = normalizeBootstrap(result.data);
+    const freshness = freshnessView(result.meta, snapshot);
+    // 较早天气可以继续展示观测值，风险分数和定制行动必须等刷新后再启用。
+    const displaySnapshot = freshness.stale
+      ? Object.assign({}, snapshot, {
+        warnings: [],
+        warningsSourceAvailable: false,
+        warningsStatusText: '官方预警待刷新',
+        risk: Object.assign({}, snapshot.risk, {
+          available: false,
+          score: null,
+          scoreText: '待刷新',
+          level: '',
+          label: '风险待刷新',
+          tone: 'unknown',
+          summary: '',
+        }),
+      })
+      : snapshot;
     this.setData({
       loading: false,
       error: '',
-      snapshot,
-      topActions: snapshot.actions.slice(0, 3),
-      freshness: freshnessView(result.meta, snapshot),
+      snapshot: displaySnapshot,
+      topActions: freshness.stale ? [] : snapshot.actions.slice(0, 3),
+      freshness,
     });
     schedulePublicRefresh(this, result.meta, () => this.loadData());
   },

@@ -1,24 +1,19 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
 
-const { motionDuration, prefersReducedMotion } = require('../utils/motion');
+const { allowsJsMotion, safeJsDuration } = require('../utils/motion');
 
-test('系统减少动态效果时关闭 JS 滚动和进度动画', () => {
-  const reduced = { getSystemSetting: () => ({ reduceMotion: true }) };
-  const ordinary = { getSystemSetting: () => ({ reduceMotion: false }) };
-  assert.equal(prefersReducedMotion(reduced), true);
-  assert.equal(motionDuration(240, reduced), 0);
-  assert.equal(motionDuration(240, ordinary), 240);
-  assert.equal(prefersReducedMotion({}), false);
+test('JS 滚动和进度动画采用即时完成策略', () => {
+  assert.equal(allowsJsMotion(), false);
+  assert.equal(safeJsDuration(240), 0);
+  assert.equal(safeJsDuration(0), 0);
 });
 
-test('新系统信息接口可用时不调用已弃用 getSystemInfoSync', () => {
-  let legacyCalls = 0;
-  const api = {
-    getSystemSetting: () => ({}),
-    getDeviceInfo: () => ({ reduceMotion: true }),
-    getSystemInfoSync: () => { legacyCalls += 1; return {}; },
-  };
-  assert.equal(prefersReducedMotion(api), true);
-  assert.equal(legacyCalls, 0);
+test('动效策略不读取未公开的系统字段，CSS 保留系统媒体查询', () => {
+  const utility = fs.readFileSync(path.join(__dirname, '..', 'utils/motion.js'), 'utf8');
+  const styles = fs.readFileSync(path.join(__dirname, '..', 'app.wxss'), 'utf8');
+  assert.doesNotMatch(utility, /getSystemSetting|getDeviceInfo|getSystemInfoSync|reduceMotion/);
+  assert.match(styles, /@media\s*\(prefers-reduced-motion:\s*reduce\)/);
 });

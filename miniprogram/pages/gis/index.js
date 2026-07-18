@@ -1,7 +1,7 @@
 const { getCommunity } = require('../../utils/public-data');
 const { backendJson } = require('../../utils/request');
 const { freshnessView, normalizeCommunity } = require('../../utils/format');
-const { motionDuration, prefersReducedMotion } = require('../../utils/motion');
+const { allowsJsMotion, safeJsDuration } = require('../../utils/motion');
 const {
   beginPublicPage,
   hidePublicPage,
@@ -102,7 +102,7 @@ Page({
     selected: null,
     announcement: '',
     sourceVersions: [],
-    reduceMotion: false,
+    reduceMotion: !allowsJsMotion(),
   },
 
   onLoad() {
@@ -110,13 +110,10 @@ Page({
     this._mapLoadToken = 0;
     this._metadataShowToken = 0;
     beginPublicPage(this);
-    this.setData({ reduceMotion: prefersReducedMotion() });
     showPublicShareMenu();
   },
 
   onShow() {
-    const reduceMotion = prefersReducedMotion();
-    if (reduceMotion !== this.data.reduceMotion) this.setData({ reduceMotion });
     const resumeMapLoad = Boolean(this._resumeMapLoad);
     const resumeMapRender = Boolean(this._resumeMapRender);
     this._resumeMapLoad = false;
@@ -606,7 +603,7 @@ Page({
     if (!pageCanRender(this) || typeof wx.pageScrollTo !== 'function') return;
     wx.pageScrollTo({
       selector: '#selectedDetail',
-      duration: motionDuration(240),
+      duration: safeJsDuration(240),
     });
   },
 

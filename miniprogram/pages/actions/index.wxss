@@ -14,6 +14,10 @@
 .check-detail { margin-top: 8rpx; color: #786d65; font-size: 14px; line-height: 1.6; }
 .check-state { margin-top: 10rpx; color: #8d3511; font-size: 14px; font-weight: 700; }
 .checked .check-state { color: #137947; }
+.completion-share-card { border-color: #b9d8c3; background: #f2f8f4; }
+.completion-share-title { color: #12623d; font-size: 17px; line-height: 1.45; font-weight: 800; }
+.completion-share-copy { margin-top: 10rpx; color: #53665b; font-size: 14px; line-height: 1.6; }
+.completion-share-button { width: 100%; margin: 20rpx 0 0; background: #137947; }
 .copy-button, .share-button { width: 100%; min-width: 100%; margin-right: 0; margin-left: 0; }
 .copy-button { margin-bottom: 18rpx; }
 .share-button { margin-bottom: 18rpx; }

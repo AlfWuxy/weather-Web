@@ -1,5 +1,5 @@
 <view class="page-shell">
-  <view class="hero">
+  <view wx:if="{{entryContextReady && !familyShareEntry}}" class="hero">
     <view class="hero-kicker">都昌县 · 适老天气服务</view>
     <view class="hero-title">把天气预警变成今天能做的事。</view>
     <view class="hero-subtitle">先看风险，再照着行动。老人、家属和社区都能快速打开。</view>
@@ -9,15 +9,19 @@
     </button>
   </view>
 
-  <view wx:if="{{familyShareEntry}}" class="family-share-card card" role="region" aria-role="region" aria-label="家人分享提醒">
+  <view wx:if="{{entryContextReady && familyShareEntry}}" class="family-share-card card motion-enter" role="region" aria-role="region" aria-label="家人分享提醒">
+    <view class="family-share-brand">宜老天气通 · 都昌县</view>
     <view class="family-share-heading">
-      <view class="family-share-icon"><image src="/assets/icons/share.png" mode="aspectFit" aria-hidden="true" /></view>
-      <view>
+      <view class="family-share-icon"><image class="family-share-icon-image" src="/assets/icons/share.png" mode="aspectFit" aria-hidden="true" /></view>
+      <view class="family-share-copy-wrap">
         <view class="family-share-title">家人把这份天气提醒分享给你</view>
         <view class="family-share-copy">可以先直接看今天的天气和行动。需要一起记录照护时，再主动登录并添加家人。</view>
       </view>
     </view>
-    <button class="primary-button family-share-action" bindtap="startFamilyCare" hover-class="button-pressed">登录并开启家庭照护</button>
+    <view class="family-share-actions">
+      <button class="primary-button family-share-action" bindtap="openTodayActions" hover-class="button-pressed">先看今天行动</button>
+      <button class="secondary-button family-share-action" bindtap="startFamilyCare" hover-class="button-pressed">我是家属，开启照护</button>
+    </view>
   </view>
 
   <status-card wx:if="{{loading}}" state="loading" title="正在读取最近一次天气" detail="同一份天气数据 30 分钟内只获取一次。" />
@@ -31,7 +35,7 @@
     <view class="today-card card motion-enter">
       <view class="row-between">
         <view>
-          <view class="small muted">{{snapshot.location.name}} · 当前</view>
+          <view class="small muted">{{snapshot.location.name}} · {{freshness.stale ? '较早观测' : '当前'}}</view>
           <view class="temperature">{{snapshot.current.temperatureText}}</view>
           <view class="condition">{{snapshot.current.condition}}</view>
         </view>
@@ -41,31 +45,31 @@
         </view>
       </view>
       <view class="weather-details">
-        <view><text class="muted small">最高</text><text class="detail-value">{{snapshot.current.highText}}</text></view>
-        <view><text class="muted small">最低</text><text class="detail-value">{{snapshot.current.lowText}}</text></view>
-        <view><text class="muted small">湿度</text><text class="detail-value">{{snapshot.current.humidity === null ? '待更新' : snapshot.current.humidity + '%'}}</text></view>
+        <view class="weather-detail-item"><text class="muted small">最高</text><text class="detail-value">{{snapshot.current.highText}}</text></view>
+        <view class="weather-detail-item"><text class="muted small">最低</text><text class="detail-value">{{snapshot.current.lowText}}</text></view>
+        <view class="weather-detail-item"><text class="muted small">湿度</text><text class="detail-value">{{snapshot.current.humidity === null ? '待更新' : snapshot.current.humidity + '%'}}</text></view>
       </view>
       <view wx:if="{{snapshot.risk.summary}}" class="risk-summary">{{snapshot.risk.summary}}</view>
     </view>
 
     <view class="quick-grid">
       <navigator class="quick-card" url="/pages/forecast/index" open-type="switchTab" hover-class="button-pressed" aria-label="查看七天天气预报">
-        <view class="quick-icon"><image src="/assets/icons/sunny.png" mode="aspectFit" aria-hidden="true" /></view>
+        <view class="quick-icon"><image class="quick-icon-image" src="/assets/icons/sunny.png" mode="aspectFit" aria-hidden="true" /></view>
         <view class="strong">7 天预报</view>
         <view class="small muted">哪几天要留心</view>
       </navigator>
       <navigator class="quick-card" url="/pages/alerts/index" hover-class="button-pressed" aria-label="查看官方天气预警">
-        <view class="quick-icon"><image src="/assets/icons/warning.png" mode="aspectFit" aria-hidden="true" /></view>
+        <view class="quick-icon"><image class="quick-icon-image" src="/assets/icons/warning.png" mode="aspectFit" aria-hidden="true" /></view>
         <view class="strong">官方预警</view>
-        <view class="small muted">{{snapshot.warnings.length ? snapshot.warnings.length + ' 条有效信息' : '当前暂无预警'}}</view>
+        <view class="small muted">{{snapshot.warningsStatusText}}</view>
       </navigator>
       <navigator class="quick-card" url="/pages/actions/index" hover-class="button-pressed" aria-label="查看今日行动清单">
-        <view class="quick-icon"><image src="/assets/icons/checklist.png" mode="aspectFit" aria-hidden="true" /></view>
+        <view class="quick-icon"><image class="quick-icon-image" src="/assets/icons/checklist.png" mode="aspectFit" aria-hidden="true" /></view>
         <view class="strong">今日行动</view>
         <view class="small muted">照着做并打勾</view>
       </navigator>
       <navigator class="quick-card" url="/pages/cooling/index" hover-class="button-pressed" aria-label="查看避暑资源">
-        <view class="quick-icon"><image src="/assets/icons/place.png" mode="aspectFit" aria-hidden="true" /></view>
+        <view class="quick-icon"><image class="quick-icon-image" src="/assets/icons/place.png" mode="aspectFit" aria-hidden="true" /></view>
         <view class="strong">避暑资源</view>
         <view class="small muted">条件不足时求助</view>
       </navigator>
@@ -82,7 +86,7 @@
       </view>
       <navigator class="primary-button" url="/pages/actions/index" hover-class="button-pressed">打开完整行动清单</navigator>
     </block>
-    <status-card wx:else state="empty" title="个性化行动待更新" detail="天气可用后会给出与今日风险匹配的行动。当前可先查看通用防护。" />
+    <status-card wx:else state="empty" title="{{freshness.stale ? '较早天气不生成风险行动' : '个性化行动待更新'}}" detail="{{freshness.stale ? '当前可先打开通用防护清单，刷新后再判断今日风险。' : '天气可用后会给出与今日风险匹配的行动。当前可先查看通用防护。'}}" />
 
     <view class="section-title">更多公开服务</view>
     <view class="grid-two">

@@ -263,7 +263,7 @@ test('网格选择会播报结果并把详情滚动到当前视野', () => {
 
   assert.equal(page.data.selected.id, 'cell-a');
   assert.match(page.data.announcement, /已选择网格 cell-a/);
-  assert.deepEqual(scrollOptions, { selector: '#selectedDetail', duration: 240 });
+  assert.deepEqual(scrollOptions, { selector: '#selectedDetail', duration: 0 });
 });
 
 test('Canvas 上滑不会误选网格，轻点仍可选择', () => {

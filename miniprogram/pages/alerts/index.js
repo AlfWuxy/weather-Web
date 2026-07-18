@@ -61,14 +61,16 @@ Page({
 
   renderWarnings(result) {
     const snapshot = normalizeBootstrap(result.data);
+    const freshness = freshnessView(result.meta, snapshot);
     this.setData({
       loading: false,
       error: '',
-      warnings: snapshot.warnings,
-      warningsSourceAvailable: snapshot.warningsSourceAvailable,
+      // 较早缓存中的预警可能已经失效，刷新前不继续标成有效预警。
+      warnings: freshness.stale ? [] : snapshot.warnings,
+      warningsSourceAvailable: freshness.stale ? false : snapshot.warningsSourceAvailable,
       current: snapshot.current,
       locationName: snapshot.location.name,
-      freshness: freshnessView(result.meta, snapshot),
+      freshness,
     });
     schedulePublicRefresh(this, result.meta, () => this.loadData());
   },

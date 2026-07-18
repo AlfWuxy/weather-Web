@@ -60,14 +60,24 @@ Page({
 
   renderForecast(result) {
     const snapshot = normalizeBootstrap(result.data);
-    const highRiskDays = snapshot.forecast.filter((day) => day.tone === 'high').length;
+    const freshness = freshnessView(result.meta, snapshot);
+    const forecast = freshness.stale
+      ? snapshot.forecast.map((day) => Object.assign({}, day, {
+        available: false,
+        score: null,
+        scoreText: '待刷新',
+        tone: 'unknown',
+        riskLabel: '风险待刷新',
+      }))
+      : snapshot.forecast;
+    const highRiskDays = freshness.stale ? 0 : forecast.filter((day) => day.tone === 'high').length;
     this.setData({
       loading: false,
       error: '',
-      forecast: snapshot.forecast,
+      forecast,
       locationName: snapshot.location.name,
       highRiskDays,
-      freshness: freshnessView(result.meta, snapshot),
+      freshness,
     });
     schedulePublicRefresh(this, result.meta, () => this.loadData());
   },

@@ -25,7 +25,7 @@
     </scroll-view>
 
     <view wx:for="{{communities}}" wx:key="id" class="community-card card">
-      <view class="rank">{{index + 1}}</view>
+      <view class="rank" aria-label="全县排名第 {{item.globalRank}}">{{item.globalRank}}</view>
       <view class="community-copy">
         <view class="row-between">
           <view class="card-title">{{item.name}}</view>

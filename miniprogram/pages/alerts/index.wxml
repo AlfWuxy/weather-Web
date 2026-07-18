@@ -11,12 +11,12 @@
   <block wx:if="{{current}}">
     <freshness-bar updated-text="{{freshness.updatedText}}" stale="{{freshness.stale}}" source="{{freshness.source}}" refresh-deferred="{{freshness.refreshDeferred}}" refresh-started="{{freshness.refreshStarted}}" />
     <view class="card weather-strip">
-      <view><view class="small muted">当前</view><view class="strip-value">{{current.temperatureText}}</view></view>
+      <view><view class="small muted">{{freshness.stale ? '较早观测' : '当前'}}</view><view class="strip-value">{{current.temperatureText}}</view></view>
       <view><view class="small muted">最高</view><view class="strip-value">{{current.highText}}</view></view>
       <view><view class="small muted">最低</view><view class="strip-value">{{current.lowText}}</view></view>
     </view>
 
-    <view class="section-title">有效预警</view>
+    <view class="section-title">{{freshness.stale ? '官方预警待刷新' : '有效预警'}}</view>
     <view wx:for="{{warnings}}" wx:key="id" class="warning-card card warning-{{item.tone}}">
       <view class="row-between">
         <view class="card-title warning-title">{{item.title}}</view>
@@ -31,7 +31,8 @@
         <view wx:if="{{item.expiresAt}}">结束时间：{{item.expiresText}}</view>
       </view>
     </view>
-    <status-card wx:if="{{!warningsSourceAvailable}}" state="error" title="官方预警来源暂不可用" detail="当前无法确认是否存在有效预警，请同时查看当地主管部门的最新通知。" />
+    <status-card wx:if="{{freshness.stale}}" state="error" title="官方预警有效性待核对" detail="缓存中的预警记录可能已经失效，刷新前不继续显示为有效预警。请同时查看当地主管部门的最新通知。" />
+    <status-card wx:elif="{{!warningsSourceAvailable}}" state="error" title="官方预警来源暂不可用" detail="当前无法确认是否存在有效预警，请同时查看当地主管部门的最新通知。" />
     <status-card wx:elif="{{!warnings.length}}" state="empty" title="当前暂无官方预警" detail="没有官方预警仍可能出现高温、低温或空气质量风险，请继续查看今日风险和行动。" />
 
     <navigator class="primary-button" url="/pages/actions/index">查看今日行动</navigator>

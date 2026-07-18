@@ -10,6 +10,22 @@ const {
 } = require('../../utils/public-page-lifecycle');
 const { createPageShare, createTimelineShare, showPublicShareMenu } = require('../../utils/share');
 
+function stableCommunityKey(item) {
+  const source = item && typeof item === 'object' ? item : {};
+  return String(source.id || source.code || source.name || '');
+}
+
+function compareCommunityRank(left, right) {
+  const leftMissing = left.score === null;
+  const rightMissing = right.score === null;
+  if (leftMissing !== rightMissing) return leftMissing ? 1 : -1;
+  if (!leftMissing && left.score !== right.score) return right.score - left.score;
+  const leftKey = stableCommunityKey(left);
+  const rightKey = stableCommunityKey(right);
+  if (leftKey === rightKey) return 0;
+  return leftKey < rightKey ? -1 : 1;
+}
+
 Page({
   data: {
     loading: true,
@@ -62,11 +78,10 @@ Page({
 
   renderCommunities(result) {
     const normalized = normalizeCommunity(result.data);
-    const allCommunities = normalized.communities.slice().sort((left, right) => {
-      if (left.score === null) return 1;
-      if (right.score === null) return -1;
-      return right.score - left.score;
-    });
+    const allCommunities = normalized.communities.slice()
+      .sort(compareCommunityRank)
+      // 排名在完整列表上一次生成，切换筛选时仍显示全县位置。
+      .map((item, index) => Object.assign({}, item, { globalRank: index + 1 }));
     const counts = {
       all: allCommunities.length,
       high: allCommunities.filter((item) => item.tone === 'high').length,

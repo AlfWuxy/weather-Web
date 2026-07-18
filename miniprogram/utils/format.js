@@ -241,6 +241,12 @@ function warningSourceAvailable(sourceStatus) {
   return false;
 }
 
+function warningStatusText(warnings, sourceAvailable) {
+  if (sourceAvailable !== true) return '来源暂不可用';
+  const count = Array.isArray(warnings) ? warnings.length : 0;
+  return count ? `${count} 条有效信息` : '当前暂无预警';
+}
+
 function normalizeBootstrap(payload) {
   const data = payload && typeof payload === 'object' ? payload : {};
   const currentSource = data.current && typeof data.current === 'object' ? data.current : {};
@@ -260,6 +266,8 @@ function normalizeBootstrap(payload) {
   const actionsRaw = Array.isArray(data.actions)
     ? data.actions
     : (Array.isArray(data.actions && data.actions.items) ? data.actions.items : []);
+  const warnings = warningsRaw.map(normalizeWarning);
+  const warningsSourceAvailable = warningSourceAvailable(data.source_status);
   return {
     snapshotId: String(data.snapshot_id || ''),
     location: {
@@ -285,8 +293,9 @@ function normalizeBootstrap(payload) {
       wind: String(firstDefined(currentSource, ['wind', 'wind_direction', 'wind_dir', 'windDir'], '')),
     },
     forecast: forecastRaw.map(normalizeForecastItem),
-    warnings: warningsRaw.map(normalizeWarning),
-    warningsSourceAvailable: warningSourceAvailable(data.source_status),
+    warnings,
+    warningsSourceAvailable,
+    warningsStatusText: warningStatusText(warnings, warningsSourceAvailable),
     risk: {
       available: riskAvailable,
       score: riskScore,
@@ -404,4 +413,5 @@ module.exports = {
   riskLabel,
   riskTone,
   warningSourceAvailable,
+  warningStatusText,
 };
