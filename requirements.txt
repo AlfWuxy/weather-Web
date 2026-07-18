@@ -36,6 +36,7 @@ python-dateutil==2.9.0.post0
 
 # HTTP请求（用于天气API）
 requests==2.32.4
+chardet==5.2.0
 PyJWT[crypto]==2.8.0
 
 # HTML清理（XSS防护）
