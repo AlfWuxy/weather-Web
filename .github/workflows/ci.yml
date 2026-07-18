@@ -76,6 +76,9 @@ jobs:
           done < <(git ls-files -z)
           test "$oversized" -eq 0
 
+      - name: 检查已跟踪文件密钥
+        run: python scripts/check_tracked_secrets.py
+
       - name: 运行默认测试
         run: python -m pytest -q
 
