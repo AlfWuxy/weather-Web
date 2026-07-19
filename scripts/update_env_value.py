@@ -9,6 +9,7 @@ import os
 import re
 import stat
 import tempfile
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -95,7 +96,7 @@ def _atomic_replace_if_unchanged(
     """仅在目标仍与已读快照一致时执行 0600 原子替换。"""
     path.parent.mkdir(parents=True, exist_ok=True)
     descriptor, temporary_name = tempfile.mkstemp(
-        prefix=f".{path.name}.",
+        prefix=f"{path.name}.tmp.",
         dir=path.parent,
         text=True,
     )
@@ -109,6 +110,11 @@ def _atomic_replace_if_unchanged(
         if _read_existing_env(path) != expected:
             raise ValueError("目标环境文件更新期间发生变化")
         os.replace(temporary_path, path)
+        directory = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
     finally:
         if temporary_path.exists():
             temporary_path.unlink()
@@ -130,6 +136,62 @@ def _read_stdin_value() -> str:
         return content.decode("utf-8")
     except UnicodeDecodeError:
         raise ValueError("环境变量值必须是 UTF-8 文本") from None
+
+
+def update_env_values(
+    path: Path,
+    updates: Mapping[str, str],
+    *,
+    require_existing: bool = True,
+    expected_content: str | None = None,
+) -> bool:
+    """一次快照、一次原子替换更新多个 dotenv 字段。"""
+    if not updates:
+        return False
+    for key, value in updates.items():
+        if not KEY_PATTERN.fullmatch(key):
+            raise ValueError(f"环境变量名不合法：{key}")
+        if any(character in value for character in ("\x00", "\n", "\r")):
+            raise ValueError(f"{key} 的值不能包含换行或空字节")
+        if len(value.encode("utf-8")) > MAX_ENV_VALUE_BYTES:
+            raise ValueError(f"{key} 的值过长")
+
+    snapshot = _read_existing_env(path)
+    if expected_content is not None and snapshot.content != expected_content:
+        raise ValueError("目标环境文件更新前发生变化")
+    if require_existing and snapshot.fingerprint is None:
+        raise ValueError("目标环境文件不存在")
+    counts = {key: 0 for key in updates}
+    rendered: list[str] = []
+    for line in snapshot.content.splitlines(keepends=True):
+        body = line.rstrip("\r\n")
+        ending = line[len(body) :]
+        if "=" not in body:
+            rendered.append(line)
+            continue
+        left, _ = body.split("=", 1)
+        key = left.strip()
+        if key not in updates:
+            rendered.append(line)
+            continue
+        counts[key] += 1
+        rendered.append(f"{left}={updates[key]}{ending}")
+    invalid = [key for key, count in counts.items() if count > 1]
+    missing = [key for key, count in counts.items() if count == 0]
+    if invalid:
+        raise ValueError(f"{invalid[0]} 在目标环境文件中必须唯一")
+    if require_existing and missing:
+        raise ValueError(f"{missing[0]} 在目标环境文件中缺失")
+    if not require_existing:
+        for key in missing:
+            if rendered and not rendered[-1].endswith(("\n", "\r")):
+                rendered[-1] += "\n"
+            rendered.append(f"{key}={updates[key]}\n")
+    updated = "".join(rendered)
+    if updated == snapshot.content:
+        return _finish_noop_safely(path, snapshot)
+    _atomic_replace_if_unchanged(path, snapshot, updated)
+    return True
 
 
 def update_env_value(path: Path, key: str, value: str, mode: str) -> bool:

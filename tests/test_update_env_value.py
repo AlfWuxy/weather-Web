@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 import scripts.update_env_value as env_value_updater
-from scripts.update_env_value import MAX_ENV_VALUE_BYTES, update_env_value
+from scripts.update_env_value import MAX_ENV_VALUE_BYTES, update_env_value, update_env_values
 
 
 SCRIPT_PATH = Path(__file__).resolve().parents[1] / 'scripts' / 'update_env_value.py'
@@ -215,3 +215,66 @@ def test_update_env_value_if_empty_preserves_concurrent_nonempty_value(
     assert env_file.read_text(encoding='utf-8') == concurrent_value
     assert stat.S_IMODE(env_file.stat().st_mode) == 0o600
     assert not any(tmp_path.glob('..env.*'))
+
+
+def test_update_env_values_uses_one_atomic_replace_and_preserves_other_bytes(tmp_path, monkeypatch):
+    env_file = tmp_path / '.env.release'
+    original = '# 发布确认单\r\nFIRST =old\r\nPRIVATE=秘密\nSECOND=old\n'
+    env_file.write_text(original, encoding='utf-8', newline='')
+    env_file.chmod(0o600)
+    real_replace = env_value_updater._atomic_replace_if_unchanged
+    calls = 0
+
+    def counted_replace(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return real_replace(*args, **kwargs)
+
+    monkeypatch.setattr(env_value_updater, '_atomic_replace_if_unchanged', counted_replace)
+    changed = update_env_values(env_file, {'FIRST': 'new-1', 'SECOND': 'new-2'})
+
+    assert changed is True
+    assert calls == 1
+    assert env_file.read_bytes() == '# 发布确认单\r\nFIRST =new-1\r\nPRIVATE=秘密\nSECOND=new-2\n'.encode()
+    assert stat.S_IMODE(env_file.stat().st_mode) == 0o600
+
+
+@pytest.mark.parametrize('problem', ('missing', 'duplicate'))
+def test_update_env_values_requires_unique_existing_targets_without_mutation(tmp_path, problem):
+    env_file = tmp_path / '.env.release'
+    content = 'FIRST=old\nPRIVATE=keep\n'
+    if problem == 'duplicate':
+        content += 'FIRST=again\n'
+    env_file.write_text(content, encoding='utf-8')
+    env_file.chmod(0o600)
+
+    updates = {'FIRST': 'new', 'SECOND': 'new'} if problem == 'missing' else {'FIRST': 'new'}
+    with pytest.raises(ValueError):
+        update_env_values(env_file, updates)
+    assert env_file.read_text(encoding='utf-8') == content
+
+
+def test_update_env_values_expected_content_cas_preserves_concurrent_value(tmp_path):
+    env_file = tmp_path / '.env.release'
+    env_file.write_text('FIRST=concurrent\nPRIVATE=keep\n', encoding='utf-8')
+    env_file.chmod(0o600)
+
+    with pytest.raises(ValueError, match='更新前发生变化'):
+        update_env_values(
+            env_file,
+            {'FIRST': 'new'},
+            expected_content='FIRST=old\nPRIVATE=keep\n',
+        )
+    assert env_file.read_text(encoding='utf-8') == 'FIRST=concurrent\nPRIVATE=keep\n'
+
+
+def test_update_env_values_keeps_mode_0600_under_restrictive_umask(tmp_path):
+    env_file = tmp_path / '.env.release'
+    env_file.write_text('FIRST=old\n', encoding='utf-8')
+    env_file.chmod(0o600)
+    previous_umask = os.umask(0o777)
+    try:
+        assert update_env_values(env_file, {'FIRST': 'new'}) is True
+    finally:
+        os.umask(previous_umask)
+    assert stat.S_IMODE(env_file.stat().st_mode) == 0o600
