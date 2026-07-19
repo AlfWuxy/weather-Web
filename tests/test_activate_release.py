@@ -402,9 +402,10 @@ if command in {'start', 'restart'}:
     ):
         final_key = Path(os.environ['FAKE_QWEATHER_FINAL_KEY'])
         payload = final_key.read_bytes()
-        final_key.unlink()
-        final_key.write_bytes(payload)
-        final_key.chmod(0o640)
+        replacement = final_key.with_name(f'{final_key.name}.replacement')
+        replacement.write_bytes(payload)
+        replacement.chmod(0o640)
+        os.replace(replacement, final_key)
     if os.environ.get('FAKE_KILL_PARENT_AFTER_RESTART_UNIT') == unit and command == 'restart':
         os.kill(os.getppid(), signal.SIGKILL)
     cache_result = os.environ.get('FAKE_CACHE_RESULT', '')
