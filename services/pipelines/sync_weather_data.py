@@ -17,7 +17,11 @@ from core.app import create_app  # noqa: E402
 from core.constants import DEFAULT_CITY_LABEL  # noqa: E402
 from core.db_models import DailyStatus, Pair, WeatherData  # noqa: E402
 from core.extensions import db  # noqa: E402
-from core.weather import get_consecutive_hot_days, is_qweather_online_weather  # noqa: E402
+from core.weather import (  # noqa: E402
+    get_consecutive_hot_days,
+    get_weather_with_cache,
+    is_qweather_online_weather,
+)
 from core.time_utils import today_local  # noqa: E402
 from services.community_daily_service import refresh_community_daily  # noqa: E402
 from services.heat_action_service import HeatActionService  # noqa: E402
@@ -194,8 +198,8 @@ def sync_daily_weather(target_date=None, location=None, overwrite=True):
     target_date = _parse_date(target_date) or today_local()
     with app.app_context():
         location = _normalize_location(location)
-        weather_service = WeatherService()
-        weather_data = weather_service.get_current_weather(location)
+        # 旧 daily/action 命令只消费统一周期已落地的实况，永远不直接访问上游。
+        weather_data, _from_cache = get_weather_with_cache(location, cache_only=True)
         validation = _validate_action_weather(weather_data)
         if not validation['valid']:
             return {
@@ -208,7 +212,7 @@ def sync_daily_weather(target_date=None, location=None, overwrite=True):
                 'missing_fields': validation['missing_fields'],
             }
 
-        extreme = weather_service.identify_extreme_weather(weather_data)
+        extreme = WeatherService().identify_extreme_weather(weather_data)
         record = WeatherData.query.filter_by(date=target_date, location=location).first()
         if record and not overwrite:
             return {
@@ -283,9 +287,12 @@ def sync_action_daily(target_date=None, community_code=None, overwrite=False):
             }
 
         initial_communities = sorted({row.community_code for row in candidates})
-        # 都昌单城试点使用同一份实时天气。接口读取发生在 owner 锁外，避免慢调用占锁。
+        # 都昌单城试点使用同一份已落地天气，禁止旧入口形成第二条联网路径。
         weather_location = _normalize_location(community_code)
-        weather_data = WeatherService().get_current_weather(weather_location)
+        weather_data, _from_cache = get_weather_with_cache(
+            weather_location,
+            cache_only=True,
+        )
         validation = _validate_action_weather(weather_data)
         if not validation['valid']:
             skipped_communities = {

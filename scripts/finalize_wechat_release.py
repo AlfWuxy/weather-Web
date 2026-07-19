@@ -30,7 +30,7 @@ DEFAULT_FORM_NAME = ".env.wechat-release"
 LOCK_NAME = "wechat-release-finalize.lock"
 MAX_FORM_BYTES = 64 * 1024
 MAX_CONTENT_BYTES = 2 * 1024 * 1024
-COMMIT_RE = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
+COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 FORM_KEYS = frozenset({
     "WECHAT_MINIPROGRAM_NAME", "WECHAT_EFFECTIVE_DATE", "WX_MINIPROGRAM_PRIVACY_VERSION",
     "WECHAT_RELEASE_VERSION", "WECHAT_FORM_READY", "WECHAT_CATEGORY_CONFIRMED",

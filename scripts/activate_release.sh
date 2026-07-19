@@ -42,6 +42,7 @@ RECOVERY_ACKNOWLEDGED_TRANSACTION="${RECOVERY_ACKNOWLEDGED_TRANSACTION:-}"
 REQUIRE_WECHAT_READY="${REQUIRE_WECHAT_READY:-0}"
 EXPECTED_RELEASE_COMMIT="${EXPECTED_RELEASE_COMMIT:-}"
 QWEATHER_BUDGET_SNAPSHOT_HELPER="${QWEATHER_BUDGET_SNAPSHOT_HELPER:-}"
+FORMAL_SMOKE_LEASE_HELPER="${FORMAL_SMOKE_LEASE_HELPER:-}"
 RUNTIME_USER="${RUNTIME_USER:-case-weather}"
 RUNTIME_GROUP="${RUNTIME_GROUP:-case-weather}"
 CONTROL_OWNER_UID="${CONTROL_OWNER_UID:-0}"
@@ -149,6 +150,12 @@ FORMAL_SMOKE_RECEIPT_DIR=""
 FORMAL_SMOKE_REUSED=0
 FORMAL_SMOKE_IRREVERSIBLE=0
 FORMAL_NETWORK_GATE_OPEN=0
+FORMAL_SMOKE_TOKEN=""
+FORMAL_SMOKE_TOKEN_SHA256=""
+FORMAL_SMOKE_BINDING=""
+FORMAL_SMOKE_TICKET=""
+FORMAL_SMOKE_LEASE_TOKEN=""
+FORMAL_SMOKE_LEASE_TOKEN_SHA256=""
 
 log() {
     printf '[activate_release] %s\n' "$*"
@@ -1543,7 +1550,10 @@ verify_no_retired_processes() {
     local pattern rc
     for pattern in \
         "$STATE_DIR/backup.sh" \
-        "$STATE_DIR/services/pipelines/sync_weather_data.py"; do
+        "$STATE_DIR/services/pipelines/sync_weather_data.py" \
+        "services.pipelines.sync_weather_cache" \
+        "$CURRENT_LINK/app/scripts/weather_cache_sync.sh" \
+        "$CURRENT_LINK/app/services/pipelines/sync_weather_cache.py"; do
         if "$PGREP_BIN" -f -- "$pattern" >/dev/null 2>&1; then
             fail "检测到仍在运行的旧调度进程: $pattern"
             return 1
@@ -1555,6 +1565,34 @@ verify_no_retired_processes() {
             fi
         fi
     done
+}
+
+verify_weather_sync_lock_quiescent() {
+    local lock_path="$STATE_DIR/run/case-weather-sync.lock"
+    if [ -L "$lock_path" ]; then
+        fail "天气同步锁不得为符号链接"
+        return 1
+    fi
+    [ -e "$lock_path" ] || return 0
+    if [ ! -f "$lock_path" ]; then
+        fail "天气同步锁不是常规文件"
+        return 1
+    fi
+    exec 8<> "$lock_path" || {
+        fail "无法打开天气同步锁进行静默检查"
+        return 1
+    }
+    if ! "$FLOCK_BIN" -n 8; then
+        exec 8>&-
+        fail "正式天气请求前仍有同步周期持有同机锁"
+        return 1
+    fi
+    if ! "$FLOCK_BIN" -u 8; then
+        exec 8>&-
+        fail "天气同步静默检查后无法释放锁"
+        return 1
+    fi
+    exec 8>&-
 }
 
 verify_no_unmanaged_processes_after_quiesce() {
@@ -2524,9 +2562,12 @@ if before['backend'] != 'redis' or after['backend'] != 'redis':
 if before['month'] != after['month']:
     raise SystemExit(2)
 total_delta = after['used'] - before['used']
-if total_delta < 1 or total_delta > 3:
-    raise SystemExit(2)
 endpoint_deltas = {}
+allowed_endpoints = {
+    'weather_now',
+    'weather_7d_forecast',
+    'weatheralert_v1_current',
+}
 for endpoint in sorted(set(before['endpoints']) | set(after['endpoints'])):
     delta = after['endpoints'].get(endpoint, 0) - before['endpoints'].get(endpoint, 0)
     if delta < 0 or delta > 1:
@@ -2534,6 +2575,12 @@ for endpoint in sorted(set(before['endpoints']) | set(after['endpoints'])):
     if delta:
         endpoint_deltas[endpoint] = delta
 if sum(endpoint_deltas.values()) != total_delta:
+    raise SystemExit(2)
+if total_delta != len(allowed_endpoints):
+    raise SystemExit(2)
+if set(endpoint_deltas) != allowed_endpoints:
+    raise SystemExit(2)
+if not all(delta == 1 for delta in endpoint_deltas.values()):
     raise SystemExit(2)
 
 compact = lambda value: json.dumps(
@@ -2549,7 +2596,8 @@ PY
 }
 
 verify_completed_budget_receipt() {
-    "$VENV_DIR/bin/python" - "$1" "$2" <<'PY'
+    "$VENV_DIR/bin/python" - "$1" "$2" "$3" <<'PY'
+import hashlib
 import json
 import re
 import sys
@@ -2566,6 +2614,7 @@ def fields(path):
 try:
     started = fields(sys.argv[1])
     completed = fields(sys.argv[2])
+    binding = fields(sys.argv[3])
     month = completed['budget_month']
     if month != started['budget_month'] or not re.fullmatch(r'\d{4}-\d{2}', month):
         raise ValueError
@@ -2577,7 +2626,28 @@ try:
     before_endpoints = json.loads(started['budget_endpoints_before_json'])
     after_endpoints = json.loads(completed['budget_endpoints_after_json'])
     endpoint_deltas = json.loads(completed['budget_endpoint_deltas_json'])
-    if total_delta not in {1, 2, 3} or used_after - used_before != total_delta:
+    allowed_endpoints = {
+        'weather_now',
+        'weather_7d_forecast',
+        'weatheralert_v1_current',
+    }
+    formal_binding = started['formal_smoke_binding']
+    formal_token_sha256 = started['formal_smoke_token_sha256']
+    formal_lease_token_sha256 = started['formal_smoke_lease_token_sha256']
+    if not re.fullmatch(r'[0-9a-f]{64}', formal_binding):
+        raise ValueError
+    expected_binding = hashlib.sha256(
+        f"{binding['release_commit']}:{binding['config_fingerprint']}".encode('ascii')
+    ).hexdigest()
+    if formal_binding != expected_binding:
+        raise ValueError
+    if not re.fullmatch(r'[0-9a-f]{64}', formal_token_sha256):
+        raise ValueError
+    if not re.fullmatch(r'[0-9a-f]{64}', formal_lease_token_sha256):
+        raise ValueError
+    if total_delta != len(allowed_endpoints) or used_after - used_before != total_delta:
+        raise ValueError
+    if set(endpoint_deltas) != allowed_endpoints:
         raise ValueError
     if not all(isinstance(value, int) and value == 1 for value in endpoint_deltas.values()):
         raise ValueError
@@ -2589,6 +2659,107 @@ try:
 except (KeyError, TypeError, ValueError, json.JSONDecodeError):
     raise SystemExit(2) from None
 PY
+}
+
+prepare_formal_smoke_token_material() {
+    local generated
+    generated="$("$VENV_DIR/bin/python" - \
+        "$FORMAL_RELEASE_COMMIT" \
+        "$FORMAL_RELEASE_CONFIG_FINGERPRINT" <<'PY'
+import hashlib
+import secrets
+import sys
+
+commit, fingerprint = sys.argv[1:]
+token = secrets.token_hex(32)
+binding = hashlib.sha256(f'{commit}:{fingerprint}'.encode('ascii')).hexdigest()
+lease_token = secrets.token_hex(32)
+print(token)
+print(binding)
+print(hashlib.sha256(token.encode('ascii')).hexdigest())
+print(lease_token)
+print(hashlib.sha256(lease_token.encode('ascii')).hexdigest())
+PY
+    )" || {
+        fail "正式天气烟测一次性票据材料生成失败"
+        return 1
+    }
+    FORMAL_SMOKE_TOKEN="$(printf '%s\n' "$generated" | sed -n '1p')"
+    FORMAL_SMOKE_BINDING="$(printf '%s\n' "$generated" | sed -n '2p')"
+    FORMAL_SMOKE_TOKEN_SHA256="$(printf '%s\n' "$generated" | sed -n '3p')"
+    FORMAL_SMOKE_LEASE_TOKEN="$(printf '%s\n' "$generated" | sed -n '4p')"
+    FORMAL_SMOKE_LEASE_TOKEN_SHA256="$(printf '%s\n' "$generated" | sed -n '5p')"
+    if [[ ! "$FORMAL_SMOKE_TOKEN" =~ ^[0-9a-f]{64}$ ]] \
+        || [[ ! "$FORMAL_SMOKE_BINDING" =~ ^[0-9a-f]{64}$ ]] \
+        || [[ ! "$FORMAL_SMOKE_TOKEN_SHA256" =~ ^[0-9a-f]{64}$ ]] \
+        || [[ ! "$FORMAL_SMOKE_LEASE_TOKEN" =~ ^[0-9a-f]{64}$ ]] \
+        || [[ ! "$FORMAL_SMOKE_LEASE_TOKEN_SHA256" =~ ^[0-9a-f]{64}$ ]]; then
+        fail "正式天气烟测一次性票据材料格式异常"
+        return 1
+    fi
+    FORMAL_SMOKE_TICKET="$STATE_DIR/run/formal-weather-smoke-$RELEASE_ID-$FORMAL_SMOKE_BINDING.ticket"
+}
+
+verify_formal_smoke_ticket_path_available() {
+    if [ -e "$FORMAL_SMOKE_TICKET" ] || [ -L "$FORMAL_SMOKE_TICKET" ]; then
+        fail "正式天气烟测一次性票据已存在，禁止覆盖"
+        return 1
+    fi
+}
+
+reserve_formal_smoke_cycle_lease() {
+    if [ -n "$FORMAL_SMOKE_LEASE_HELPER" ]; then
+        if [ "$ALLOW_NONROOT_TEST_RUNTIME_GUARD" != 1 ]; then
+            fail "生产激活禁止覆盖正式天气烟测租约实现"
+            return 1
+        fi
+        (
+            cd "$APP_DIR"
+            runtime_exec "$ENV_BIN" \
+                "CASE_WEATHER_FORMAL_SMOKE_LEASE_TOKEN=$FORMAL_SMOKE_LEASE_TOKEN" \
+                "$FORMAL_SMOKE_LEASE_HELPER"
+        ) || {
+            fail "正式天气烟测无法在 started receipt 前取得全局租约"
+            return 1
+        }
+        return 0
+    fi
+    (
+        cd "$APP_DIR"
+        runtime_exec "$ENV_BIN" \
+            "CASE_WEATHER_FORMAL_SMOKE_LEASE_TOKEN=$FORMAL_SMOKE_LEASE_TOKEN" \
+            "$VENV_DIR/bin/python" \
+            -m services.pipelines.sync_weather_cache \
+            --reserve-formal-lease-only
+    ) || {
+        fail "正式天气烟测无法在 started receipt 前取得全局租约"
+        return 1
+    }
+}
+
+issue_formal_smoke_ticket() {
+    verify_formal_smoke_ticket_path_available
+    write_durable_marker \
+        "$FORMAL_SMOKE_TICKET" \
+        "$(printf 'binding=%s\ntoken_sha256=%s\nlease_token_sha256=%s' \
+            "$FORMAL_SMOKE_BINDING" \
+            "$FORMAL_SMOKE_TOKEN_SHA256" \
+            "$FORMAL_SMOKE_LEASE_TOKEN_SHA256")"
+    "$CHOWN_BIN" "root:$RUNTIME_GROUP" "$FORMAL_SMOKE_TICKET"
+    chmod 0640 "$FORMAL_SMOKE_TICKET"
+    fsync_directory "$STATE_DIR/run"
+}
+
+revoke_formal_smoke_ticket() {
+    [ -n "$FORMAL_SMOKE_TICKET" ] || return 0
+    if [ -L "$FORMAL_SMOKE_TICKET" ]; then
+        fail "正式天气烟测一次性票据被替换为符号链接"
+        return 1
+    fi
+    if [ -f "$FORMAL_SMOKE_TICKET" ]; then
+        rm -f -- "$FORMAL_SMOKE_TICKET"
+        fsync_directory "$STATE_DIR/run"
+    fi
 }
 
 prepare_formal_smoke_receipt() {
@@ -2622,7 +2793,10 @@ prepare_formal_smoke_receipt() {
                 return 1
             fi
             snapshot_id="$(receipt_value "$completed_file" snapshot_id || true)"
-            if ! verify_completed_budget_receipt "$started_file" "$completed_file"; then
+            if ! verify_completed_budget_receipt \
+                "$started_file" \
+                "$completed_file" \
+                "$binding_file"; then
                 fail "正式天气烟测 completed receipt 缺少可信预算差值"
                 return 1
             fi
@@ -2637,14 +2811,18 @@ prepare_formal_smoke_receipt() {
         fail "同一冻结 commit 与配置已有 started 天气烟测 receipt；禁止自动重试，请人工核对上游计数与数据库"
         return 1
     fi
-    mkdir "$FORMAL_SMOKE_RECEIPT_DIR"
-    chmod 0700 "$FORMAL_SMOKE_RECEIPT_DIR"
-    fsync_directory "$FORMAL_SMOKE_RECEIPT_ROOT"
     now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     budget_fields="$(budget_snapshot_started_fields "$budget_before_file")" || {
         fail "正式天气烟测预算前值无法写入 receipt"
         return 1
     }
+    prepare_formal_smoke_token_material
+    verify_formal_smoke_ticket_path_available
+    # 全局租约必须在 started 前取得，避免正常周期残留 lease 形成不可重试 receipt。
+    reserve_formal_smoke_cycle_lease
+    mkdir "$FORMAL_SMOKE_RECEIPT_DIR"
+    chmod 0700 "$FORMAL_SMOKE_RECEIPT_DIR"
+    fsync_directory "$FORMAL_SMOKE_RECEIPT_ROOT"
     write_durable_marker \
         "$binding_file" \
         "$(printf 'release_commit=%s\nconfig_fingerprint=%s' \
@@ -2652,11 +2830,18 @@ prepare_formal_smoke_receipt() {
             "$FORMAL_RELEASE_CONFIG_FINGERPRINT")"
     write_durable_marker \
         "$started_file" \
-        "$(printf 'started_at=%s\n%s' "$now" "$budget_fields")"
+        "$(printf 'started_at=%s\nformal_smoke_binding=%s\nformal_smoke_token_sha256=%s\nformal_smoke_lease_token_sha256=%s\n%s' \
+            "$now" \
+            "$FORMAL_SMOKE_BINDING" \
+            "$FORMAL_SMOKE_TOKEN_SHA256" \
+            "$FORMAL_SMOKE_LEASE_TOKEN_SHA256" \
+            "$budget_fields")"
     # started receipt 完整落盘后，才允许打开唯一一次正式天气出网窗口。
     fsync_directory "$FORMAL_SMOKE_RECEIPT_DIR"
     fsync_directory "$FORMAL_SMOKE_RECEIPT_ROOT"
     fsync_directory "$STATE_DIR/deployments"
+    # started receipt 已经不可变落盘，之后才签发唯一一次运行票据。
+    issue_formal_smoke_ticket
     "$SYNC_BIN"
 }
 
@@ -2677,7 +2862,7 @@ complete_formal_smoke_receipt() {
 
 run_formal_cache_smoke() {
     local previous_snapshot current_snapshot budget_delta_fields
-    local gate_open_status=0 smoke_status=0 gate_close_status=0
+    local gate_open_status=0 smoke_status=0 gate_close_status=0 ticket_revoke_status=0
     local budget_before_file="$TRANSACTION_DIR/qweather-budget-before.json"
     local budget_after_file="$TRANSACTION_DIR/qweather-budget-after.json"
     [ "$REQUIRE_WECHAT_READY" = 1 ] || return 0
@@ -2704,9 +2889,16 @@ run_formal_cache_smoke() {
     if [ "$gate_open_status" -eq 0 ]; then
         (
             cd "$APP_DIR"
-            runtime_exec /bin/bash scripts/weather_cache_sync.sh --skip-nowcast
+            runtime_exec "$ENV_BIN" \
+                "CASE_WEATHER_FORMAL_SMOKE_TOKEN=$FORMAL_SMOKE_TOKEN" \
+                "CASE_WEATHER_FORMAL_SMOKE_BINDING=$FORMAL_SMOKE_BINDING" \
+                "CASE_WEATHER_FORMAL_SMOKE_TICKET=$FORMAL_SMOKE_TICKET" \
+                "CASE_WEATHER_FORMAL_SMOKE_LEASE_TOKEN=$FORMAL_SMOKE_LEASE_TOKEN" \
+                /bin/bash scripts/weather_cache_sync.sh --skip-nowcast
         ) || smoke_status=$?
     fi
+    # 无论子进程是否走到消费逻辑，都撤销磁盘票据，禁止激活事务自动重试。
+    revoke_formal_smoke_ticket || ticket_revoke_status=$?
     # 无论上游调用结果如何，都立即恢复从当前时刻起 30 分钟的出网保护。
     arm_qweather_network_gate || gate_close_status=$?
     if [ "$gate_close_status" -eq 0 ]; then
@@ -2720,6 +2912,10 @@ run_formal_cache_smoke() {
         fail "唯一一次天气同步烟测执行失败，禁止自动重试"
         return "$smoke_status"
     fi
+    if [ "$ticket_revoke_status" -ne 0 ]; then
+        fail "唯一一次天气同步烟测票据未能安全撤销"
+        return "$ticket_revoke_status"
+    fi
     if [ "$gate_close_status" -ne 0 ]; then
         fail "天气烟测结束后未能恢复 30 分钟出网保护"
         return "$gate_close_status"
@@ -2728,7 +2924,7 @@ run_formal_cache_smoke() {
     if ! budget_delta_fields="$(
         compare_qweather_budget_snapshots "$budget_before_file" "$budget_after_file"
     )"; then
-        fail "正式天气烟测预算差值异常；要求总增量 1 至 3 且每个 endpoint 增量不超过 1"
+        fail "正式天气烟测预算差值异常；必须由 now、7d 与 weatheralert 三项各增加 1 次"
         return 1
     fi
     current_snapshot="$(latest_snapshot_id)"
@@ -3017,6 +3213,8 @@ verify_pre_request_quiescence() {
         fail "正式天气请求前缺少已安装备份 unit 的验证票据"
         return 1
     }
+    verify_no_retired_processes
+    verify_weather_sync_lock_quiescent
     log "正式天气请求前所有公网服务、writer 与 timer 均保持停止"
 }
 
@@ -3615,6 +3813,14 @@ if [ -n "$QWEATHER_BUDGET_SNAPSHOT_HELPER" ]; then
     fi
     validate_absolute_path QWEATHER_BUDGET_SNAPSHOT_HELPER "$QWEATHER_BUDGET_SNAPSHOT_HELPER"
     require_executable "$QWEATHER_BUDGET_SNAPSHOT_HELPER"
+fi
+if [ -n "$FORMAL_SMOKE_LEASE_HELPER" ]; then
+    if [ "$ALLOW_NONROOT_TEST_RUNTIME_GUARD" != 1 ]; then
+        echo '生产激活禁止覆盖正式天气烟测租约实现' >&2
+        exit 2
+    fi
+    validate_absolute_path FORMAL_SMOKE_LEASE_HELPER "$FORMAL_SMOKE_LEASE_HELPER"
+    require_executable "$FORMAL_SMOKE_LEASE_HELPER"
 fi
 require_file "$ENV_FILE"
 require_file "$STAGED_ENV_FILE"

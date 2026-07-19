@@ -20,6 +20,22 @@ class _FakeBudgetRedis:
     def __init__(self, values=None):
         self.values = dict(values or {})
         self.hashes = {}
+        self.expirations = {}
+
+    def eval(self, script, numkeys, *args):
+        assert "HINCRBY" in script
+        assert numkeys == 2
+        total_key, endpoint_key, endpoint, limit, ttl = args
+        current = int(self.values.get(total_key, 0))
+        if current >= int(limit):
+            return [0, current]
+        current += 1
+        self.values[total_key] = current
+        bucket = self.hashes.setdefault(endpoint_key, {})
+        bucket[endpoint] = int(bucket.get(endpoint, 0)) + 1
+        self.expirations[total_key] = int(ttl)
+        self.expirations[endpoint_key] = int(ttl)
+        return [1, current]
 
     def incr(self, key):
         self.values[key] = int(self.values.get(key, 0)) + 1
@@ -131,6 +147,34 @@ def test_legacy_provider_total_does_not_block_app_counter(app, monkeypatch):
     assert snapshot["used"] == 1
     assert snapshot["remaining"] == 39999
     assert snapshot["endpoints"] == {"weather_7d_forecast": 1}
+    assert set(fake_redis.expirations) == {
+        app_total_key,
+        budget._redis_budget_keys(month)[1],
+    }
+
+
+def test_redis_lua_exception_fails_closed_without_partial_fallback(app, monkeypatch):
+    from services import qweather_budget as budget
+
+    class BrokenRedis(_FakeBudgetRedis):
+        def eval(self, *_args):
+            raise RuntimeError("lua unavailable")
+
+    _reset_local_budget(budget)
+    fake_redis = BrokenRedis()
+    monkeypatch.setattr(budget, "get_qweather_redis_client", lambda: fake_redis)
+    with app.app_context():
+        app.config.update(
+            REDIS_URL="redis://127.0.0.1:6379/0",
+            WEATHER_CACHE_REDIS_URL="",
+            QWEATHER_NETWORK_NOT_BEFORE_EPOCH="",
+            QWEATHER_MONTHLY_REQUEST_LIMIT=40000,
+        )
+        assert budget.reserve_qweather_request("weather_now") is False
+
+    assert fake_redis.values == {}
+    assert fake_redis.hashes == {}
+    assert dict(budget._LOCAL_TOTALS) == {}
 
 
 def test_request_context_fails_closed_before_any_budget_counter(app, monkeypatch):

@@ -50,6 +50,7 @@ from services.public_service import (
     _handle_action_confirm,
     _handle_action_help,
     _handle_action_debrief,
+    _formal_web_actions_are_read_only,
     _resolve_pair_from_session_or_code,
     _validate_pair_token_binding,
     _build_action_context,
@@ -288,6 +289,12 @@ def elder_token_debrief(token):
     token = sanitize_input(token, max_length=200)
     if request.method == 'POST':
         return _handle_action_debrief(token=token, focus_debrief=True)
+    if _formal_web_actions_are_read_only():
+        # 正式微信态直接复用固定停用页，避免读取短码、配对和健康行动数据。
+        return _handle_action_lookup(
+            token=token,
+            entry_action=url_for('public.elder_enter'),
+        )
 
     short_code = sanitize_input(request.args.get('short_code'), max_length=12)
     pair = _resolve_pair_from_session_or_code(short_code)

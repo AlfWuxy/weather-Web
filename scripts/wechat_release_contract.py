@@ -18,6 +18,7 @@ AGREEMENT_DOC_PATH = "docs/miniprogram/USER_AGREEMENT_TEMPLATE.md"
 LISTING_COPY_PATH = "docs/miniprogram/LISTING_COPY.md"
 PRIVACY_PAGE_PATH = "miniprogram/pages/privacy/index.wxml"
 AGREEMENT_PAGE_PATH = "miniprogram/pages/agreement/index.wxml"
+HEALTH_CONSENT_PAGE_PATH = "miniprogram/pages/health-consent/index.wxml"
 CONFIG_PATH = "miniprogram/config.js"
 RELEASE_ARTIFACTS = (
     ("WECHAT_PRIVACY_DOC_SHA256", PRIVACY_DOC_PATH),
@@ -25,14 +26,16 @@ RELEASE_ARTIFACTS = (
     ("WECHAT_LISTING_COPY_SHA256", LISTING_COPY_PATH),
     ("WECHAT_PRIVACY_PAGE_SHA256", PRIVACY_PAGE_PATH),
     ("WECHAT_AGREEMENT_PAGE_SHA256", AGREEMENT_PAGE_PATH),
+    ("WECHAT_HEALTH_CONSENT_PAGE_SHA256", HEALTH_CONSENT_PAGE_PATH),
 )
 CONTENT_PATHS = tuple(path for _, path in RELEASE_ARTIFACTS) + (CONFIG_PATH,)
 CANDIDATE_SHA256 = {
-    PRIVACY_DOC_PATH: "f8125e9cf7edc6004b61274a02d8db62ae51455c35488eac9814800b560d06f0",
-    AGREEMENT_DOC_PATH: "fb1f9fb475f35fdd04b0c2784c53da0b4f4a343a9a745c0ca2dd8c8f9b4b686d",
-    LISTING_COPY_PATH: "f3230023b2b61605aa575f2a50698669f7bc03da4baef61a2687b06a4ed120de",
-    PRIVACY_PAGE_PATH: "fd5da9eac25bdb3edeae40a029ba2a3044f4a2de7f7f031c17d9337932041748",
-    AGREEMENT_PAGE_PATH: "1d06e0ba1fcf3181cc6f7f49ad01224115a41e068221ba9ccae1623c23b86d85",
+    PRIVACY_DOC_PATH: "9b5417fde70291975bffb3126503243c0172bdd4094a8e37d0a9cf783019e4bf",
+    AGREEMENT_DOC_PATH: "fc8a42d578933b3a3dc575170455cb9cf8959ca02b64e02aeaf5d7284ba5c107",
+    LISTING_COPY_PATH: "983de96df086c75c7f368f5abdb64cee4c798f0affde5ba5e77aba7918262aa7",
+    PRIVACY_PAGE_PATH: "03d0cc5f012bade9d138c74eaced00a679c66c6f91c3496a2c9a6f278339cc0a",
+    AGREEMENT_PAGE_PATH: "6f2d81e4a0281e207ed32d5c65cfc1ee96e9b48994fb3589e950be060ac19f80",
+    HEALTH_CONSENT_PAGE_PATH: "e79b956b29b09bccc024a2c0c6ae597f6fdbd3a601f5859dd63d220b09408bc0",
     CONFIG_PATH: "c8995ca740ab477fada9b68817b6d4fb99d92a77ffccd7fe34008b3379a956b3",
 }
 FREEZE_KEYS = ("WECHAT_RELEASE_VERSION", "WECHAT_TARGET_COMMIT_SHA") + tuple(
@@ -131,6 +134,10 @@ def render_artifact(path: str, content: bytes, fields: PublicReleaseFields) -> b
         text = _replace(text, '<view class="page-shell">', f"{_markers(fields, dated=True)}\n<view class=\"page-shell\">")
         text = _replace(text, '<view class="hero-kicker">宜老天气通用户协议 · 发布候选版</view>', f'<view class="hero-kicker">{fields.name}用户协议</view>')
         text = _replace(text, '<view class="effective-date">候选版本：2026-07-18 · 正式提交审核时同步冻结生效日期、协议与隐私版本、目标 commit hash 和页面内容 hash。</view>', f'<view class="effective-date">生效日期：{fields.effective_date} · 重要协议或隐私规则变化会通过版本更新提示。</view>')
+    elif path == HEALTH_CONSENT_PAGE_PATH:
+        text = _replace(text, '<view class="page-shell">', f"{_markers(fields, dated=True, private=True)}\n<view class=\"page-shell\">")
+        text = _replace(text, '<view class="hero-kicker">健康敏感个人信息</view>', f'<view class="hero-kicker">{fields.name} · 健康敏感个人信息</view>')
+        text = _replace(text, '<view class="version-text">当前服务端要求版本：{{requiredVersion}}</view>', f'<view class="version-text">生效日期：{fields.effective_date} · 隐私版本：{fields.privacy_version} · 当前服务端要求版本：{{{{requiredVersion}}}}</view>')
     elif path == CONFIG_PATH:
         matches = list(CONFIG_RE.finditer(text))
         if len(matches) != 1:
@@ -164,6 +171,10 @@ def _restore_candidate(path: str, content: bytes, fields: PublicReleaseFields) -
         text = _replace(text, f"{_markers(fields, dated=True)}\n<view class=\"page-shell\">", '<view class="page-shell">')
         text = _replace(text, f'<view class="hero-kicker">{fields.name}用户协议</view>', '<view class="hero-kicker">宜老天气通用户协议 · 发布候选版</view>')
         text = _replace(text, f'<view class="effective-date">生效日期：{fields.effective_date} · 重要协议或隐私规则变化会通过版本更新提示。</view>', '<view class="effective-date">候选版本：2026-07-18 · 正式提交审核时同步冻结生效日期、协议与隐私版本、目标 commit hash 和页面内容 hash。</view>')
+    elif path == HEALTH_CONSENT_PAGE_PATH:
+        text = _replace(text, f"{_markers(fields, dated=True, private=True)}\n<view class=\"page-shell\">", '<view class="page-shell">')
+        text = _replace(text, f'<view class="hero-kicker">{fields.name} · 健康敏感个人信息</view>', '<view class="hero-kicker">健康敏感个人信息</view>')
+        text = _replace(text, f'<view class="version-text">生效日期：{fields.effective_date} · 隐私版本：{fields.privacy_version} · 当前服务端要求版本：{{{{requiredVersion}}}}</view>', '<view class="version-text">当前服务端要求版本：{{requiredVersion}}</view>')
     elif path == CONFIG_PATH:
         matches = list(CONFIG_RE.finditer(text))
         if len(matches) != 1:
@@ -200,11 +211,17 @@ def _visible(text: str) -> str:
 
 
 def verify_final(contents: Mapping[str, bytes], fields: PublicReleaseFields) -> None:
-    """验证 16 个 marker、可见文本和 config 同步合同。"""
+    """验证 20 个 marker、可见文本和 config 同步合同。"""
     if set(contents) != set(CONTENT_PATHS):
         raise ReleaseContractError("发布材料清单不完整。")
-    dated = {PRIVACY_DOC_PATH, AGREEMENT_DOC_PATH, PRIVACY_PAGE_PATH, AGREEMENT_PAGE_PATH}
-    private = {PRIVACY_DOC_PATH, PRIVACY_PAGE_PATH}
+    dated = {
+        PRIVACY_DOC_PATH,
+        AGREEMENT_DOC_PATH,
+        PRIVACY_PAGE_PATH,
+        AGREEMENT_PAGE_PATH,
+        HEALTH_CONSENT_PAGE_PATH,
+    }
+    private = {PRIVACY_DOC_PATH, PRIVACY_PAGE_PATH, HEALTH_CONSENT_PAGE_PATH}
     marker_total = 0
     for path in CONTENT_PATHS[:-1]:
         text = _text(contents[path])
@@ -224,7 +241,7 @@ def verify_final(contents: Mapping[str, bytes], fields: PublicReleaseFields) -> 
     if listing.count(f"正式首发版本 `{fields.release_version}`") != 1 or listing.count(f"- 版本号：`{fields.release_version}`") != 1:
         raise ReleaseContractError("上架文案首发版本不一致。")
     versions = [match.group(2) for match in CONFIG_RE.finditer(_text(contents[CONFIG_PATH]))]
-    if marker_total != 16 or versions != [fields.privacy_version]:
+    if marker_total != 20 or versions != [fields.privacy_version]:
         raise ReleaseContractError("正式材料 marker 数量或 config 隐私版本不一致。")
     restored = {path: _restore_candidate(path, contents[path], fields) for path in CONTENT_PATHS}
     _verify_candidate(restored)

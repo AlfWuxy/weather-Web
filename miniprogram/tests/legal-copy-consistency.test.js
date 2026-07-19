@@ -17,6 +17,7 @@ const FILES = {
   manifest: 'docs/miniprogram/REVIEW_SCREENSHOT_MANIFEST_TEMPLATE.md',
   privacyPage: 'miniprogram/pages/privacy/index.wxml',
   agreementPage: 'miniprogram/pages/agreement/index.wxml',
+  healthConsentPage: 'miniprogram/pages/health-consent/index.wxml',
   actionCheckinPage: 'miniprogram/pages/action-checkin/index.wxml',
   webActionCheckinPage: 'templates/action_checkin.html',
   careLogic: 'miniprogram/pages/elders/care-logic.js',
@@ -65,6 +66,45 @@ test('隐私模板与小程序页面统一披露微信登录标识处理', () =>
   }
 });
 
+test('法律与上架材料统一披露健康敏感信息单独同意和成人边界', () => {
+  for (const file of [
+    FILES.privacyDoc,
+    FILES.agreementDoc,
+    FILES.listing,
+    FILES.privacyPage,
+    FILES.agreementPage,
+  ]) {
+    const text = read(file);
+    assert.match(text, /(健康敏感个人信息|健康敏感信息).*单独同意/s, `${file} 缺少单独同意`);
+    assert.match(text, /(18 至 120 岁|18 至 120)/, `${file} 缺少成年家人年龄边界`);
+    assert.match(text, /拒绝或撤回.*公开天气.*(仍可|继续)/s, `${file} 缺少拒绝后的公开功能边界`);
+  }
+
+  const consentPage = read(FILES.healthConsentPage);
+  assert.match(consentPage, /默认不勾选|checked="\{\{agreed\}\}"/);
+  assert.match(consentPage, /确认我有权.*年满 18 岁/s);
+  assert.match(consentPage, /撤回单独同意/);
+});
+
+test('隐私与发布材料精确锁定首发安全限流和审计日志边界', () => {
+  for (const file of [FILES.privacyDoc, FILES.privacyPage]) {
+    const text = read(file);
+    assert.match(text, /限流.*IP.*不可逆哈希.*窗口.*(到期|失效)/s, `${file} 缺少临时 IP 哈希边界`);
+    assert.match(text, /1\.0\.0.*关闭数据库安全审计日志/s, `${file} 缺少审计关闭说明`);
+    assert.match(text, /不把 IP 哈希或 User-Agent 写入应用审计表/);
+  }
+
+  for (const file of [FILES.handoff, 'docs/miniprogram/RELEASE_CHECKLIST.md']) {
+    const text = read(file);
+    assert.match(text, /FEATURE_AUDIT_LOGS=0/, `${file} 缺少审计发布门禁`);
+    assert.match(text, /IP.*哈希.*限流/s, `${file} 缺少限流披露`);
+  }
+
+  const validator = read(FILES.releaseValidator);
+  assert.match(validator, /FEATURE_AUDIT_LOGS/);
+  assert.match(validator, /正式.*FEATURE_AUDIT_LOGS=0/);
+});
+
 test('健康日记前端与服务端共享 200 字症状和 500 字备注边界', () => {
   const frontend = read(FILES.careLogic);
   const server = read(FILES.mpApi);
@@ -98,25 +138,27 @@ test('公共行动本机勾选与家人行动账号保存保持清晰分离', ()
   }
 });
 
-test('未登录家庭行动安全入口只开放有限主动写入', () => {
-  for (const file of [
-    FILES.webActionCheckinPage,
-    FILES.privacyDoc,
-    FILES.agreementDoc,
-    FILES.privacyPage,
-    FILES.agreementPage,
-  ]) {
-    const text = read(file);
-    assert.match(text, /未登录.*有时效家庭行动安全链接.*主动提交.*写入对应照护账号/s, `${file} 缺少未登录主动写入边界`);
-    assert.match(text, /入口不等于登录.*不能查看账号内其他/s, `${file} 缺少安全入口权限边界`);
-    assert.match(text, /(请勿转发给无关人员|不能查看账号内其他资料)/s, `${file} 缺少入口安全提示`);
-  }
-});
-
-test('未登录安全入口的产品事件保持账号级匿名聚合', () => {
+test('正式微信首发未登录家庭行动入口在家庭解析前零读写', () => {
   for (const file of [FILES.privacyDoc, FILES.privacyPage]) {
     const text = read(file);
-    assert.match(text, /未登录访问者.*有效家庭行动安全入口.*主动提交.*固定枚举/s, `${file} 缺少未登录入口事件口径`);
+    assert.match(text, /1\.0\.0 首发不开放未登录家庭行动.*读取或写入/s, `${file} 缺少首发零读写边界`);
+    assert.match(text, /不会读取短码.*兑换链接.*解析家庭资料.*行动确认.*求助.*复盘/s, `${file} 缺少家庭解析前停止说明`);
+  }
+  for (const file of [FILES.agreementDoc, FILES.agreementPage]) {
+    const text = read(file);
+    assert.match(text, /1\.0\.0 首发.*未登录家庭行动安全链接.*只显示停用说明.*不读取或写入家庭资料/s, `${file} 缺少首发停用边界`);
+  }
+  const webPage = read(FILES.webActionCheckinPage);
+  assert.match(webPage, /微信正式版不会在网页读取短码或家庭安全链接/);
+  assert.match(webPage, /不会读取短码、兑换安全链接或写入家庭记录/);
+  assert.match(webPage, /web_actions_read_only/);
+});
+
+test('首发产品事件只来自完成单独同意的登录账号', () => {
+  for (const file of [FILES.privacyDoc, FILES.privacyPage]) {
+    const text = read(file);
+    assert.match(text, /登录用户.*健康敏感个人信息单独同意.*固定枚举/s, `${file} 缺少登录事件边界`);
+    assert.match(text, /首发未登录家庭行动页.*不产生.*提交事件/s, `${file} 缺少未登录零事件边界`);
     assert.match(text, /对应照护账号.*内部 ID.*不保存.*家庭成员.*配对标识/s, `${file} 缺少账号级匿名聚合边界`);
   }
 });
@@ -233,22 +275,33 @@ test('发布材料精确锁定平台数据声明与第三方推送排除项', ()
   assert.match(handoff, /平台隐私保护指引和审核材料均不声明对应第三方共享项/);
 });
 
-test('五份发布材料继续保持候选态且未提前冻结日期', () => {
-  for (const file of [
+test('六份发布材料只允许处于完整候选态或完整正式态', () => {
+  const files = [
     FILES.privacyDoc,
     FILES.agreementDoc,
     FILES.listing,
     FILES.privacyPage,
     FILES.agreementPage,
-  ]) {
-    const text = read(file);
-    assert.match(text, /候选/, `${file} 应继续标记为候选材料`);
-    assert.doesNotMatch(text, /<!-- WECHAT_RELEASE_STATUS: final -->/);
-    assert.doesNotMatch(text, /<!-- WECHAT_EFFECTIVE_DATE:/);
+    FILES.healthConsentPage,
+  ];
+  const contents = files.map((file) => [file, read(file)]);
+  const publicContents = contents.slice(0, -1);
+  const healthConsentText = contents.at(-1)[1];
+  const isCandidate = publicContents.every(([, text]) => text.includes('候选') && !text.includes('<!-- WECHAT_RELEASE_STATUS: final -->'))
+    && !healthConsentText.includes('<!-- WECHAT_RELEASE_STATUS: final -->');
+  const isFinal = contents.every(([, text]) => !text.includes('候选') && text.includes('<!-- WECHAT_RELEASE_STATUS: final -->'));
+
+  assert.ok(isCandidate || isFinal, '六份发布材料出现候选态与正式态混用');
+  for (const [file, text] of contents) {
+    if (isCandidate) {
+      assert.doesNotMatch(text, /<!-- WECHAT_EFFECTIVE_DATE:/, `${file} 不应提前冻结日期`);
+    } else {
+      assert.match(text, /<!-- WECHAT_MINIPROGRAM_NAME: 宜老天气通 -->/, `${file} 缺少正式名称 marker`);
+    }
   }
 });
 
-test('法律与上架文件具备正式冻结说明且门禁拒绝候选占位', () => {
+test('法律与上架文件具备正式冻结说明且机器门禁拒绝候选占位', () => {
   for (const file of [
     FILES.privacyDoc,
     FILES.agreementDoc,
@@ -271,10 +324,20 @@ test('法律与上架文件具备正式冻结说明且门禁拒绝候选占位',
   assert.match(validator, /WECHAT_RELEASE_STATUS: final/);
   assert.match(validator, /WECHAT_MINIPROGRAM_NAME_MARKER_FORMAT/);
   assert.match(validator, /WECHAT_MINIPROGRAM_NAME_MARKER_PATTERN/);
-  assert.match(read(FILES.handoff), /WECHAT_MINIPROGRAM_NAME: 后台批准名称/);
   assert.match(validator, /WECHAT_VISIBLE_EFFECTIVE_DATE_PATTERN/);
   assert.match(validator, /WECHAT_VISIBLE_PRIVACY_VERSION_PATTERN/);
   assert.match(validator, /候选占位/);
+
+  const handoff = read(FILES.handoff);
+  const finalizeCommand = `python3 scripts/finalize_wechat_release.py finalize-content \\
+  --wechat-form .env.wechat-release \\
+  --repo-root .`;
+  const recordCommand = `python3 scripts/finalize_wechat_release.py record-freeze \\
+  --wechat-form .env.wechat-release \\
+  --repo-root .`;
+  assert.ok(handoff.includes(finalizeCommand), '交接文档缺少完整 finalize-content 命令');
+  assert.ok(handoff.includes(recordCommand), '交接文档缺少完整 record-freeze 命令');
+  assert.doesNotMatch(handoff, /WECHAT_MINIPROGRAM_NAME: 后台批准名称/);
 });
 
 test('审核截图清单登记设备证据并覆盖五项关键审核状态', () => {

@@ -473,10 +473,24 @@ def test_miniprogram_valid_action_event_requires_one_completed_action(
     client,
     db_session,
 ):
-    from core.db_models import UsageEvent
+    from core.db_models import FamilyMember, UsageEvent
 
     user, token = _create_miniprogram_user(db_session, "valid-action-owner")
+    user.health_sensitive_consent_version = app.config[
+        "WX_MINIPROGRAM_PRIVACY_VERSION"
+    ]
+    user.health_sensitive_consented_at = utcnow()
+    member = FamilyMember(
+        user_id=user.id,
+        name="行动测试家人",
+        relation="家人",
+        age=70,
+    )
+    db_session.add(member)
+    db_session.commit()
     pair = _create_pair(db_session, user, "60606060")
+    pair.member_id = member.id
+    db_session.commit()
     headers = {"Authorization": f"Bearer {token}"}
 
     empty_response = client.post(

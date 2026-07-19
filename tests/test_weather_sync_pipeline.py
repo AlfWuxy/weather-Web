@@ -62,11 +62,20 @@ def _load_pipeline(app, monkeypatch):
 
 
 def _install_pipeline_weather(monkeypatch, pipeline, payload):
+    calls = []
+
+    def cached_weather(location, *, cache_only=True):
+        calls.append((location, cache_only))
+        value = dict(payload) if isinstance(payload, dict) else payload
+        return value, True
+
+    monkeypatch.setattr(pipeline, 'get_weather_with_cache', cached_weather)
     monkeypatch.setattr(
         pipeline,
         'WeatherService',
         lambda: _PipelineWeatherService(payload),
     )
+    return calls
 
 
 def _create_pair(db_session, owner, code, status='active', community='同步测试社区'):
@@ -541,15 +550,13 @@ def test_sync_action_daily_refreshes_projection_locks_in_sorted_order(
     pipeline = _load_pipeline(app, monkeypatch)
     weather_calls = []
 
-    class RecordingWeatherService(_PipelineWeatherService):
-        def get_current_weather(self, location):
-            weather_calls.append(location)
-            return super().get_current_weather(location)
-
     monkeypatch.setattr(
         pipeline,
-        'WeatherService',
-        lambda: RecordingWeatherService(VALID_QWEATHER),
+        'get_weather_with_cache',
+        lambda location, *, cache_only=True: (
+            weather_calls.append(location) or dict(VALID_QWEATHER),
+            True,
+        ),
     )
     monkeypatch.setattr(pipeline, 'get_consecutive_hot_days', lambda *_args, **_kwargs: 0)
     refresh_calls = []
@@ -647,15 +654,13 @@ def test_sync_action_daily_sync_first_serializes_pair_stop(
     pipeline = _load_pipeline(app, monkeypatch)
     weather_calls = []
 
-    class RecordingWeatherService(_PipelineWeatherService):
-        def get_current_weather(self, location):
-            weather_calls.append(location)
-            return super().get_current_weather(location)
-
     monkeypatch.setattr(
         pipeline,
-        'WeatherService',
-        lambda: RecordingWeatherService(VALID_QWEATHER),
+        'get_weather_with_cache',
+        lambda location, *, cache_only=True: (
+            weather_calls.append(location) or dict(VALID_QWEATHER),
+            True,
+        ),
     )
     monkeypatch.setattr(pipeline, 'get_consecutive_hot_days', lambda *_args, **_kwargs: 0)
     monkeypatch.setattr(pipeline, 'refresh_community_daily', lambda *_args, **_kwargs: None)

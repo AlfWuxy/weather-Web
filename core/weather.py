@@ -592,6 +592,7 @@ def get_qweather_forecast_with_cache(
     ttl_minutes=None,
     cache_only=True,
     fetcher=None,
+    force_refresh=False,
 ):
     """获取和风-only天气预报，普通调用默认只读真实缓存。"""
     try:
@@ -599,7 +600,10 @@ def get_qweather_forecast_with_cache(
     except Exception:
         days = 7
     # 请求上下文始终只读；已配置和风的后台同步可在 DEMO_MODE 下显式刷新。
-    cache_only = bool(cache_only) or has_request_context()
+    request_bound = has_request_context()
+    cache_only = bool(cache_only) or request_bound
+    # HTTP 永远不能借 force_refresh 打开上游；该开关只供受管后台周期使用。
+    force_refresh = bool(force_refresh) and not request_bound and not cache_only
     if is_demo_mode() and cache_only:
         return [], False, {'source': 'QWeather', 'error': 'demo_mode'}
 
@@ -611,14 +615,15 @@ def get_qweather_forecast_with_cache(
     expected_start_date = today_local()
     redis_client = _get_redis_client()
     redis_key = _redis_cache_key('weather:qweather_forecast', location, days)
-    redis_payload = _redis_get_json(redis_client, redis_key, {})
-    forecast_data, meta = _parse_qweather_only_cache_payload(
-        redis_payload,
-        days,
-        expected_start_date=expected_start_date,
-    )
-    if forecast_data is not None:
-        return forecast_data, True, meta
+    if not force_refresh:
+        redis_payload = _redis_get_json(redis_client, redis_key, {})
+        forecast_data, meta = _parse_qweather_only_cache_payload(
+            redis_payload,
+            days,
+            expected_start_date=expected_start_date,
+        )
+        if forecast_data is not None:
+            return forecast_data, True, meta
 
     now = utcnow()
     cache = None
@@ -633,7 +638,14 @@ def get_qweather_forecast_with_cache(
                 days,
                 expected_start_date=expected_start_date,
             )
-            if forecast_data is not None:
+            if forecast_data is not None and not force_refresh:
+                cache_fetched_at = ensure_utc_aware(cache.fetched_at)
+                meta = dict(meta or {})
+                meta.setdefault('fetched_at', cache_fetched_at.isoformat())
+                meta.setdefault(
+                    'expires_at',
+                    (cache_fetched_at + timedelta(seconds=ttl_seconds)).isoformat(),
+                )
                 if now - ensure_utc_aware(cache.fetched_at) <= timedelta(minutes=ttl_minutes):
                     return forecast_data, True, meta
                 # 日期仍有效时允许 HTTP 复用过期缓存，等待后台同步刷新。
@@ -674,6 +686,12 @@ def get_qweather_forecast_with_cache(
         meta.setdefault('error', 'qweather_data_incomplete')
         return [], False, meta
 
+    source_fetched_at = utcnow()
+    source_expires_at = source_fetched_at + timedelta(seconds=ttl_seconds)
+    meta = dict(meta or {})
+    meta['fetched_at'] = source_fetched_at.isoformat()
+    meta['expires_at'] = source_expires_at.isoformat()
+
     cache_payload = {
         'daily': forecast_data[:days],
         'meta': meta,
@@ -682,13 +700,13 @@ def get_qweather_forecast_with_cache(
         _redis_set_json(redis_client, redis_key, ttl_seconds, cache_payload)
         if cache:
             cache.payload = json.dumps(cache_payload, ensure_ascii=False)
-            cache.fetched_at = now
+            cache.fetched_at = source_fetched_at
             cache.is_mock = False
         else:
             cache = ForecastCache(
                 location=cache_location,
                 days=days,
-                fetched_at=now,
+                fetched_at=source_fetched_at,
                 payload=json.dumps(cache_payload, ensure_ascii=False),
                 is_mock=False
             )

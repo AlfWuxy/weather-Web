@@ -47,6 +47,7 @@ WECHAT_RELEASE_SHA256_KEYS = (
     "WECHAT_LISTING_COPY_SHA256",
     "WECHAT_PRIVACY_PAGE_SHA256",
     "WECHAT_AGREEMENT_PAGE_SHA256",
+    "WECHAT_HEALTH_CONSENT_PAGE_SHA256",
 )
 WECHAT_RELEASE_ARTIFACTS = (
     ("WECHAT_PRIVACY_DOC_SHA256", "docs/miniprogram/PRIVACY_NOTICE_TEMPLATE.md"),
@@ -54,6 +55,10 @@ WECHAT_RELEASE_ARTIFACTS = (
     ("WECHAT_LISTING_COPY_SHA256", "docs/miniprogram/LISTING_COPY.md"),
     ("WECHAT_PRIVACY_PAGE_SHA256", "miniprogram/pages/privacy/index.wxml"),
     ("WECHAT_AGREEMENT_PAGE_SHA256", "miniprogram/pages/agreement/index.wxml"),
+    (
+        "WECHAT_HEALTH_CONSENT_PAGE_SHA256",
+        "miniprogram/pages/health-consent/index.wxml",
+    ),
 )
 WECHAT_RELEASE_CANDIDATE_MARKER = "候选"
 WECHAT_RELEASE_FINAL_STATUS = "final"
@@ -68,10 +73,12 @@ WECHAT_EFFECTIVE_DATE_ARTIFACT_KEYS = {
     "WECHAT_AGREEMENT_DOC_SHA256",
     "WECHAT_PRIVACY_PAGE_SHA256",
     "WECHAT_AGREEMENT_PAGE_SHA256",
+    "WECHAT_HEALTH_CONSENT_PAGE_SHA256",
 }
 WECHAT_PRIVACY_VERSION_ARTIFACT_KEYS = {
     "WECHAT_PRIVACY_DOC_SHA256",
     "WECHAT_PRIVACY_PAGE_SHA256",
+    "WECHAT_HEALTH_CONSENT_PAGE_SHA256",
 }
 WECHAT_PROJECT_CONFIG_PATH = "project.config.json"
 WECHAT_PROJECT_PRIVATE_CONFIG_PATH = "project.private.config.json"
@@ -98,10 +105,12 @@ WECHAT_FORM_REQUIRED_KEYS = (
     "WECHAT_CONTACT_EMAIL",
     "WECHAT_EFFECTIVE_DATE",
     "WECHAT_REQUEST_DOMAIN",
+    "WECHAT_FORMAL_RUNTIME",
     "WX_MINIPROGRAM_APPID",
     "WX_MINIPROGRAM_SECRET",
     "WX_MINIPROGRAM_PRIVACY_VERSION",
     "FEATURE_WXPUSHER",
+    "FEATURE_AUDIT_LOGS",
     "FEATURE_HEAT_EXPOSURE_GIS",
     "QWEATHER_DEDICATED_CREDENTIAL_CONFIRMED",
     "QWEATHER_CONSOLE_USAGE_MONTH",
@@ -758,7 +767,7 @@ def _validate_gis_compressed_content(content: bytes, *, node_bin: str | None = N
 
 
 def _validate_wechat_release_integrity(values, repo_root: Path):
-    """把正式冻结记录绑定到干净 HEAD 及该提交内的五份发布材料。"""
+    """把正式冻结记录绑定到干净 HEAD 及该提交内的六份发布材料。"""
     errors = []
     try:
         expected_root = repo_root.resolve(strict=True)
@@ -1100,10 +1109,14 @@ def validate_wechat_release_form(
         errors.append("WECHAT_FORM_READY 只能是 0 或 1。")
     if values.get("WECHAT_CATEGORY_CONFIRMED", "0") not in {"0", "1"}:
         errors.append("WECHAT_CATEGORY_CONFIRMED 只能是 0 或 1。")
+    if values.get("WECHAT_FORMAL_RUNTIME", "") not in {"0", "1"}:
+        errors.append("WECHAT_FORMAL_RUNTIME 只能是 0 或 1。")
     if values.get("FEATURE_HEAT_EXPOSURE_GIS", "") not in {"", "0", "1"}:
         errors.append("FEATURE_HEAT_EXPOSURE_GIS 只能是 0 或 1。")
     if values.get("FEATURE_WXPUSHER", "") not in {"", "0", "1"}:
         errors.append("FEATURE_WXPUSHER 只能是 0 或 1。")
+    if values.get("FEATURE_AUDIT_LOGS", "") not in {"", "0", "1"}:
+        errors.append("FEATURE_AUDIT_LOGS 只能是 0 或 1。")
     if appsecret_production_safe not in {"0", "1"}:
         errors.append(
             "WECHAT_APPSECRET_PRODUCTION_SAFE_CONFIRMED 只能是 0 或 1。"
@@ -1122,6 +1135,8 @@ def validate_wechat_release_form(
     must_validate_release_freeze = must_be_complete or release_freeze_present
     if require_ready and not form_ready:
         errors.append("正式发布前必须将 WECHAT_FORM_READY 设为 1。")
+    if must_be_complete and values.get("WECHAT_FORMAL_RUNTIME") != "1":
+        errors.append("正式微信发布表单必须固定 WECHAT_FORMAL_RUNTIME=1。")
     if must_be_complete and appsecret_production_safe != "1":
         errors.append(
             "正式发布前必须确认当前 AppSecret 未暴露或已完成轮换，并设置 "
@@ -1247,6 +1262,8 @@ def validate_wechat_release_form(
             errors.append("WXPUSHER_APP_TOKEN 格式或长度异常。")
         if values.get("FEATURE_WXPUSHER") != "0":
             errors.append("1.0.0 正式首发必须固定 FEATURE_WXPUSHER=0。")
+        if values.get("FEATURE_AUDIT_LOGS") != "0":
+            errors.append("1.0.0 正式首发必须固定 FEATURE_AUDIT_LOGS=0。")
         if wxpusher_token:
             errors.append("FEATURE_WXPUSHER=0 时必须清空 WXPUSHER_APP_TOKEN。")
         contact_email = values.get("WECHAT_CONTACT_EMAIL", "")
@@ -1376,6 +1393,15 @@ def validate_release_env(path: Path, *, require_wechat=False):
         }
     errors = []
     warnings = []
+    wechat_formal_runtime = values.get("WECHAT_FORMAL_RUNTIME", "")
+    debug_raw = values.get("DEBUG", "").strip().lower()
+
+    if wechat_formal_runtime not in {"0", "1"}:
+        errors.append("生产环境必须显式设置 WECHAT_FORMAL_RUNTIME=0 或 1。")
+    if wechat_formal_runtime == "1" and debug_raw not in {"false", "0"}:
+        errors.append("WECHAT_FORMAL_RUNTIME=1 时必须显式设置 DEBUG=false。")
+    if require_wechat and wechat_formal_runtime != "1":
+        errors.append("微信正式发布必须固定 WECHAT_FORMAL_RUNTIME=1。")
 
     public_base_url = values.get("PUBLIC_BASE_URL", "")
     parsed_public = urlparse(public_base_url)
@@ -1396,6 +1422,8 @@ def validate_release_env(path: Path, *, require_wechat=False):
         errors.extend(_validate_qweather_console_baseline(values))
         if values.get("FEATURE_WEB_AI", "0") != "0":
             errors.append("微信正式发布必须关闭 FEATURE_WEB_AI。")
+        if values.get("FEATURE_AUDIT_LOGS", "") != "0":
+            errors.append("微信正式发布必须固定 FEATURE_AUDIT_LOGS=0。")
         if values.get("SILICONFLOW_API_KEY", ""):
             errors.append("微信正式发布必须清空 SILICONFLOW_API_KEY。")
         if values.get("SILICONFLOW_API_BASE", "https://api.siliconflow.cn/v1") != "https://api.siliconflow.cn/v1":
@@ -1418,6 +1446,8 @@ def validate_release_env(path: Path, *, require_wechat=False):
 
     wechat_app_present = [key for key in WECHAT_APP_KEYS if values.get(key)]
     wechat_server_present = [key for key in WECHAT_SERVER_KEYS if values.get(key)]
+    if wechat_formal_runtime == "0" and (wechat_app_present or wechat_server_present):
+        errors.append("WECHAT_FORMAL_RUNTIME=0 是 Web-only 运行态，必须清空四项微信服务端配置。")
     if wechat_app_present and len(wechat_app_present) != len(WECHAT_APP_KEYS):
         errors.append("WX_MINIPROGRAM_APPID 与 WX_MINIPROGRAM_SECRET 必须同时填写。")
     if wechat_server_present and len(wechat_server_present) != len(WECHAT_SERVER_KEYS):
@@ -1429,7 +1459,9 @@ def validate_release_env(path: Path, *, require_wechat=False):
         len(wechat_app_present) == len(WECHAT_APP_KEYS)
         and len(wechat_server_present) == len(WECHAT_SERVER_KEYS)
     )
-    if wechat_app_present and not wechat_ready:
+    if wechat_formal_runtime == "1" and not wechat_ready:
+        errors.append("WECHAT_FORMAL_RUNTIME=1 需要完整的四项微信服务端配置。")
+    elif wechat_app_present and not wechat_ready:
         errors.append("微信登录凭证存在时，四项服务端配置必须完整。")
     elif not wechat_ready:
         message = "微信登录配置待认证后填写，当前仅可运行 Web/公开预览能力。"

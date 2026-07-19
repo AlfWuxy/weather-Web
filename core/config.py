@@ -151,7 +151,8 @@ def validate_production_config():
     生产环境缺少必需配置时会抛出 RuntimeError。
     """
     errors = []
-    debug_value = parse_bool(os.getenv('DEBUG'), default=False)
+    debug_raw = (os.getenv('DEBUG') or '').strip().lower()
+    debug_value = parse_bool(debug_raw, default=False)
     secret_key_env = (os.getenv('SECRET_KEY') or '').strip()
     pair_token_pepper = (os.getenv('PAIR_TOKEN_PEPPER') or '').strip()
     rate_limit_storage_env = (os.getenv('RATE_LIMIT_STORAGE_URI') or '').strip()
@@ -168,6 +169,7 @@ def validate_production_config():
         'WX_MINIPROGRAM_OPENID_PEPPER': (os.getenv('WX_MINIPROGRAM_OPENID_PEPPER') or '').strip(),
         'WX_MINIPROGRAM_SESSION_SECRET': (os.getenv('WX_MINIPROGRAM_SESSION_SECRET') or '').strip(),
     }
+    wechat_formal_runtime_raw = (os.getenv('WECHAT_FORMAL_RUNTIME') or '').strip()
     wxpusher_app_token = (os.getenv('WXPUSHER_APP_TOKEN') or '').strip()
     feature_wxpusher_env = os.getenv('FEATURE_WXPUSHER')
     feature_wxpusher_raw = (
@@ -187,7 +189,25 @@ def validate_production_config():
     feature_web_ai = parse_bool(os.getenv('FEATURE_WEB_AI'), default=False)
     siliconflow_api_key = (os.getenv('SILICONFLOW_API_KEY') or '').strip()
 
+    if wechat_formal_runtime_raw not in {'', '0', '1'}:
+        raise RuntimeError("WECHAT_FORMAL_RUNTIME 必须显式设置为 0 或 1。")
+    if wechat_formal_runtime_raw == '1' and debug_raw not in {'false', '0'}:
+        raise RuntimeError("WECHAT_FORMAL_RUNTIME=1 时必须设置 DEBUG=false。")
+    if wechat_formal_runtime_raw == '0' and any(wx_miniprogram_values.values()):
+        raise RuntimeError(
+            "WECHAT_FORMAL_RUNTIME=0 是 Web-only 运行态，必须清空四项微信服务端配置。"
+        )
+
     if not debug_value:
+        if wechat_formal_runtime_raw not in {'0', '1'}:
+            raise RuntimeError("生产环境必须显式设置 WECHAT_FORMAL_RUNTIME=0 或 1。")
+        if wechat_formal_runtime_raw == '1':
+            missing = [name for name, value in wx_miniprogram_values.items() if not value]
+            if missing:
+                raise RuntimeError(
+                    "WECHAT_FORMAL_RUNTIME=1 需要完整的四项微信服务端配置，缺少: "
+                    + ", ".join(missing)
+                )
         if feature_wxpusher_raw and feature_wxpusher_raw not in {'0', '1'}:
             raise RuntimeError("FEATURE_WXPUSHER 必须显式设置为 0 或 1。")
         if not secret_key_env:
@@ -245,7 +265,7 @@ def validate_production_config():
                 "生产环境禁止使用 memory:// 作为限流存储，请配置 REDIS_URL 或 RATE_LIMIT_STORAGE_URI。"
             )
 
-        # Web 可独立运行；一旦启用微信登录，四项服务端材料必须同时存在。
+        # 正式微信态的四项服务端材料必须同时存在并符合发布约束。
         if any(wx_miniprogram_values.values()):
             missing = [name for name, value in wx_miniprogram_values.items() if not value]
             if missing:
@@ -389,6 +409,7 @@ def configure_app(app, logger):
     wx_miniprogram_secret = _normalized_env_value('WX_MINIPROGRAM_SECRET', '')
     wx_miniprogram_openid_pepper = _normalized_env_value('WX_MINIPROGRAM_OPENID_PEPPER', '')
     wx_miniprogram_session_secret = _normalized_env_value('WX_MINIPROGRAM_SESSION_SECRET', '')
+    wechat_formal_runtime_raw = _normalized_env_value('WECHAT_FORMAL_RUNTIME', '')
     wx_miniprogram_privacy_version = _normalized_env_value(
         'WX_MINIPROGRAM_PRIVACY_VERSION',
         '2026-07-18',
@@ -480,13 +501,7 @@ def configure_app(app, logger):
     )
     app.config['PUBLIC_BASE_URL'] = public_base_url
     app.config['DISPATCH_LOCK_PATH'] = dispatch_lock_path
-    app.config['WECHAT_FORMAL_RUNTIME'] = bool(
-        not debug_value
-        and wx_miniprogram_appid
-        and wx_miniprogram_secret
-        and wx_miniprogram_openid_pepper
-        and wx_miniprogram_session_secret
-    )
+    app.config['WECHAT_FORMAL_RUNTIME'] = wechat_formal_runtime_raw == '1'
     app.config['PREFERRED_URL_SCHEME'] = 'https' if not app.config['DEBUG'] else 'http'
     app.config['SESSION_COOKIE_SECURE'] = not app.config['DEBUG']
     app.config['SESSION_COOKIE_HTTPONLY'] = True

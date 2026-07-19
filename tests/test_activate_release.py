@@ -7,6 +7,7 @@ import json
 import os
 import grp
 import pwd
+import re
 import shlex
 import signal
 import sqlite3
@@ -933,14 +934,29 @@ mode_file = Path({str(budget_mode_file)!r})
 count = int(counter.read_text(encoding='utf-8')) if counter.exists() else 0
 mode = mode_file.read_text(encoding='utf-8').strip() if mode_file.exists() else 'valid'
 if mode == 'duplicate':
-    used = 10 + (count * 2)
-    endpoints = {{'weather_now': count * 2}}
+    used = 10 + (count * 4)
+    endpoints = {{
+        'weather_now': count * 2,
+        'weather_7d_forecast': count,
+        'weatheralert_v1_current': count,
+    }} if count else {{}}
 elif mode == 'zero':
     used = 10
     endpoints = {{}}
+elif mode == 'unexpected':
+    used = 10 + (count * 3)
+    endpoints = {{
+        'weather_now': count,
+        'weather_7d_forecast': count,
+        'airquality_v1_current': count,
+    }} if count else {{}}
 else:
-    used = 10 + count
-    endpoints = {{'weather_now': count}} if count else {{}}
+    used = 10 + (count * 3)
+    endpoints = {{
+        'weather_now': count,
+        'weather_7d_forecast': count,
+        'weatheralert_v1_current': count,
+    }} if count else {{}}
 print(json.dumps({{
     'backend': 'redis',
     'month': '2026-07',
@@ -950,6 +966,25 @@ print(json.dumps({{
 """,
     )
     transaction['env']['QWEATHER_BUDGET_SNAPSHOT_HELPER'] = str(budget_helper)
+    lease_token_file = transaction['state_dir'] / 'formal-smoke-lease-token'
+    lease_mode_file = transaction['state_dir'] / 'formal-smoke-lease-mode'
+    lease_helper = transaction['state_dir'] / 'formal-smoke-lease-reserve'
+    _write_executable(
+        lease_helper,
+        f"""#!/usr/bin/env python3
+import os
+from pathlib import Path
+
+token = os.environ.get('CASE_WEATHER_FORMAL_SMOKE_LEASE_TOKEN', '')
+if len(token) != 64 or any(char not in '0123456789abcdef' for char in token):
+    raise SystemExit(92)
+mode_file = Path({str(lease_mode_file)!r})
+if mode_file.exists() and mode_file.read_text(encoding='utf-8').strip() == 'busy':
+    raise SystemExit(75)
+Path({str(lease_token_file)!r}).write_text(token, encoding='ascii')
+""",
+    )
+    transaction['env']['FORMAL_SMOKE_LEASE_HELPER'] = str(lease_helper)
     weather_sync = transaction['new_release'] / 'app' / 'scripts' / 'weather_cache_sync.sh'
     _write_executable(
         weather_sync,
@@ -958,6 +993,11 @@ set -euo pipefail
 if [ "$#" -ne 1 ] || [ "$1" != "--skip-nowcast" ]; then
     echo '正式烟测必须显式跳过 nowcast' >&2
     exit 91
+fi
+if [ -z "${{CASE_WEATHER_FORMAL_SMOKE_LEASE_TOKEN:-}}" ] \
+    || [ "$(cat {str(lease_token_file)!r})" != "$CASE_WEATHER_FORMAL_SMOKE_LEASE_TOKEN" ]; then
+    echo '正式烟测缺少预占的全局租约' >&2
+    exit 92
 fi
 "$VENV_PY" - "$DATABASE_FILE" "{counter_file}" "{provider}" <<'PY'
 import json
@@ -2556,13 +2596,28 @@ def test_formal_qweather_smoke_writes_completed_receipt_and_reuses_without_reque
     assert 'budget_month=2026-07' in started_text
     assert 'budget_used_before=10' in started_text
     assert 'budget_endpoints_before_json={}' in started_text
+    assert re.search(r'^formal_smoke_binding=[0-9a-f]{64}$', started_text, re.MULTILINE)
+    assert re.search(
+        r'^formal_smoke_token_sha256=[0-9a-f]{64}$',
+        started_text,
+        re.MULTILINE,
+    )
+    assert re.search(
+        r'^formal_smoke_lease_token_sha256=[0-9a-f]{64}$',
+        started_text,
+        re.MULTILINE,
+    )
+    assert list((transaction['state_dir'] / 'run').glob('formal-weather-smoke-*.ticket')) == []
     completed_text = (receipt / 'completed').read_text(encoding='utf-8')
     assert 'snapshot_id=formal-snapshot-1' in (receipt / 'completed').read_text(
         encoding='utf-8'
     )
-    assert 'budget_used_after=11' in completed_text
-    assert 'budget_total_delta=1' in completed_text
-    assert 'budget_endpoint_deltas_json={"weather_now":1}' in completed_text
+    assert 'budget_used_after=13' in completed_text
+    assert 'budget_total_delta=3' in completed_text
+    assert (
+        'budget_endpoint_deltas_json='
+        '{"weather_7d_forecast":1,"weather_now":1,"weatheralert_v1_current":1}'
+    ) in completed_text
 
     # 动态网络闸门和非天气发布字段轮换都不能获得第二次自动烟测机会。
     rotated_config = (transaction['state_dir'] / '.env').read_text(encoding='utf-8')
@@ -2730,7 +2785,7 @@ def test_formal_smoke_rejects_duplicate_endpoint_budget_delta(tmp_path):
     result = _run_activation(transaction)
 
     assert result.returncode != 0
-    assert '每个 endpoint 增量不超过 1' in result.stderr
+    assert '必须由 now、7d 与 weatheralert 三项各增加 1 次' in result.stderr
     assert counter_file.read_text(encoding='utf-8') == '1'
     receipt_dirs = list(
         (transaction['state_dir'] / 'deployments' / 'formal-cache-smokes').iterdir()
@@ -2738,6 +2793,81 @@ def test_formal_smoke_rejects_duplicate_endpoint_budget_delta(tmp_path):
     assert len(receipt_dirs) == 1
     assert (receipt_dirs[0] / 'started').is_file()
     assert not (receipt_dirs[0] / 'completed').exists()
+
+
+def test_formal_smoke_rejects_unexpected_endpoint_budget_delta(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    _staged_text, counter_file = _configure_formal_smoke(transaction)
+    (transaction['state_dir'] / 'formal-smoke-budget-mode').write_text(
+        'unexpected\n',
+        encoding='utf-8',
+    )
+
+    result = _run_activation(transaction)
+
+    assert result.returncode != 0
+    assert '必须由 now、7d 与 weatheralert 三项各增加 1 次' in result.stderr
+    assert counter_file.read_text(encoding='utf-8') == '1'
+    receipt_dirs = list(
+        (transaction['state_dir'] / 'deployments' / 'formal-cache-smokes').iterdir()
+    )
+    assert len(receipt_dirs) == 1
+    assert (receipt_dirs[0] / 'started').is_file()
+    assert not (receipt_dirs[0] / 'completed').exists()
+    assert list((transaction['state_dir'] / 'run').glob('formal-weather-smoke-*.ticket')) == []
+
+
+def test_formal_smoke_requires_weather_sync_lock_quiescence(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    _staged_text, counter_file = _configure_formal_smoke(transaction)
+    sync_lock = transaction['state_dir'] / 'run' / 'case-weather-sync.lock'
+    sync_lock.parent.mkdir(parents=True, exist_ok=True)
+    sync_lock.write_text('', encoding='ascii')
+    fake_flock = transaction['state_dir'] / 'fake-weather-flock'
+    _write_executable(
+        fake_flock,
+        """#!/bin/sh
+if [ "$1" = "-n" ] && [ "$2" = "8" ]; then
+    exit 1
+fi
+exit 0
+""",
+    )
+    transaction['env']['FLOCK_BIN'] = str(fake_flock)
+
+    result = _run_activation(transaction)
+
+    assert result.returncode != 0
+    assert '仍有同步周期持有同机锁' in result.stderr
+    assert not counter_file.exists()
+    assert not (
+        transaction['state_dir'] / 'deployments' / 'formal-cache-smokes'
+    ).exists()
+
+
+def test_formal_smoke_busy_global_lease_fails_before_started_receipt(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    _staged_text, counter_file = _configure_formal_smoke(transaction)
+    (transaction['state_dir'] / 'formal-smoke-lease-mode').write_text(
+        'busy\n',
+        encoding='utf-8',
+    )
+
+    result = _run_activation(transaction)
+
+    assert result.returncode != 0
+    assert '无法在 started receipt 前取得全局租约' in result.stderr
+    assert not counter_file.exists()
+    receipt_root = (
+        transaction['state_dir'] / 'deployments' / 'formal-cache-smokes'
+    )
+    assert receipt_root.is_dir()
+    assert list(receipt_root.iterdir()) == []
+    assert list(
+        (transaction['state_dir'] / 'run').glob('formal-weather-smoke-*.ticket')
+    ) == []
+    assert transaction['current_link'].resolve() == transaction['old_release'].resolve()
+    assert _database_value(transaction['database_file']) == 'old'
 
 
 def test_formal_fallback_snapshot_is_rejected_and_started_receipt_blocks_retry(tmp_path):

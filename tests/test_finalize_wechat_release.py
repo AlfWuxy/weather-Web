@@ -22,6 +22,11 @@ PRIVACY_VERSION = "privacy-2026.08.01"
 PRIVATE_SENTINEL = "PRIVATE_VALUE_MUST_NOT_LEAK"
 
 
+def test_commit_rule_matches_current_sha1_repository():
+    assert finalizer.COMMIT_RE.fullmatch("a" * 40)
+    assert finalizer.COMMIT_RE.fullmatch("a" * 64) is None
+
+
 def _git(repo: Path, *arguments: str) -> bytes:
     result = subprocess.run(
         ("git", "-C", str(repo), *arguments),
@@ -68,6 +73,7 @@ def _form_lines(**overrides: str) -> list[str]:
         "WECHAT_LISTING_COPY_SHA256": "",
         "WECHAT_PRIVACY_PAGE_SHA256": "",
         "WECHAT_AGREEMENT_PAGE_SHA256": "",
+        "WECHAT_HEALTH_CONSENT_PAGE_SHA256": "",
         "WECHAT_OPERATOR_NAME": PRIVATE_SENTINEL,
         "WECHAT_CONTACT_EMAIL": f"{PRIVATE_SENTINEL}@example.invalid",
         "WX_MINIPROGRAM_SECRET": PRIVATE_SENTINEL,
@@ -130,12 +136,12 @@ def test_finalize_candidate_matches_contract_and_is_idempotent(tmp_path):
     assert _snapshot(repo) == expected
     combined = "".join(expected[path].decode("utf-8") for path in contract.CONTENT_PATHS[:-1])
     assert combined.count("候选") == 0
-    assert combined.count("<!-- WECHAT_") == 16
+    assert combined.count("<!-- WECHAT_") == 20
     assert finalizer.finalize_content(repo_root=repo, wechat_form=form) is False
     assert _snapshot(repo) == expected
 
 
-@pytest.mark.parametrize("completed", range(7))
+@pytest.mark.parametrize("completed", range(8))
 def test_finalize_known_partial_states_converge(tmp_path, completed):
     repo = _init_repo(tmp_path)
     form = _write_form(repo)
@@ -143,7 +149,7 @@ def test_finalize_known_partial_states_converge(tmp_path, completed):
     for path in contract.CONTENT_PATHS[:completed]:
         (repo / path).write_bytes(expected[path])
 
-    assert finalizer.finalize_content(repo_root=repo, wechat_form=form) is (completed < 6)
+    assert finalizer.finalize_content(repo_root=repo, wechat_form=form) is (completed < 7)
     assert _snapshot(repo) == expected
 
 
@@ -384,7 +390,7 @@ def test_record_freeze_requires_clean_final_head(tmp_path, state):
 
 
 @pytest.mark.parametrize("problem", ("missing", "duplicate"))
-def test_record_freeze_requires_seven_unique_existing_fields(tmp_path, problem):
+def test_record_freeze_requires_eight_unique_existing_fields(tmp_path, problem):
     repo = _init_repo(tmp_path)
     form = _write_form(repo)
     _finalize_commit(repo, form)

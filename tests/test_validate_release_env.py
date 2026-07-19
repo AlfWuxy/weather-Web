@@ -31,16 +31,19 @@ _RELEASE_ARTIFACTS = {
     "WECHAT_LISTING_COPY_SHA256": "docs/miniprogram/LISTING_COPY.md",
     "WECHAT_PRIVACY_PAGE_SHA256": "miniprogram/pages/privacy/index.wxml",
     "WECHAT_AGREEMENT_PAGE_SHA256": "miniprogram/pages/agreement/index.wxml",
+    "WECHAT_HEALTH_CONSENT_PAGE_SHA256": "miniprogram/pages/health-consent/index.wxml",
 }
 _EFFECTIVE_DATE_ARTIFACTS = {
     "WECHAT_PRIVACY_DOC_SHA256",
     "WECHAT_AGREEMENT_DOC_SHA256",
     "WECHAT_PRIVACY_PAGE_SHA256",
     "WECHAT_AGREEMENT_PAGE_SHA256",
+    "WECHAT_HEALTH_CONSENT_PAGE_SHA256",
 }
 _PRIVACY_VERSION_ARTIFACTS = {
     "WECHAT_PRIVACY_DOC_SHA256",
     "WECHAT_PRIVACY_PAGE_SHA256",
+    "WECHAT_HEALTH_CONSENT_PAGE_SHA256",
 }
 
 
@@ -137,10 +140,13 @@ def _write_env(tmp_path, extra=""):
     path = tmp_path / ".env"
     path.write_text(
         "PUBLIC_BASE_URL=https://yilaoweather.org\n"
+        "DEBUG=false\n"
+        "WECHAT_FORMAL_RUNTIME=0\n"
         "ALLOW_INSECURE_PUBLIC_BASE_URL=\n"
         "WXPUSHER_API_BASE=https://wxpusher.zjiecode.com/api\n"
         "FEATURE_WXPUSHER=0\n"
         "WXPUSHER_APP_TOKEN=\n"
+        "FEATURE_AUDIT_LOGS=0\n"
         f"DISPATCH_LOCK_PATH={tmp_path / 'case-weather-dispatch.lock'}\n"
         "ALLOW_WEATHER_UNAVAILABLE=1\n"
         "QWEATHER_AUTH_MODE=disabled\n"
@@ -193,6 +199,7 @@ def _write_wechat_release_form(tmp_path, **overrides):
         "WECHAT_CONTACT_EMAIL": "operator@example.com",
         "WECHAT_EFFECTIVE_DATE": "2026-07-18",
         "WECHAT_REQUEST_DOMAIN": "https://yilaoweather.org",
+        "WECHAT_FORMAL_RUNTIME": "1",
         "WECHAT_CATEGORY_CONFIRMED": "1",
         "WECHAT_CATEGORY_PATHS_JSON": '["生活服务/天气查询"]',
         "WECHAT_CATEGORY_QUALIFICATION_STATUS": "no_extra_institutional_qualification",
@@ -211,6 +218,7 @@ def _write_wechat_release_form(tmp_path, **overrides):
         "WX_MINIPROGRAM_PRIVACY_VERSION": "2026-07-18",
         "FEATURE_WXPUSHER": "0",
         "WXPUSHER_APP_TOKEN": "",
+        "FEATURE_AUDIT_LOGS": "0",
         "FEATURE_HEAT_EXPOSURE_GIS": "1",
         "QWEATHER_DEDICATED_CREDENTIAL_CONFIRMED": "1",
         "QWEATHER_EXPECTED_PROJECT_ID": "test-project",
@@ -235,6 +243,72 @@ def test_validator_allows_explicit_pending_wechat_for_preview(tmp_path):
     assert result["ok"] is True
     assert result["wechat_ready"] is False
     assert result["warnings"]
+
+
+def test_validator_requires_explicit_runtime_and_keeps_web_only_credentials_empty(
+    tmp_path,
+):
+    missing = _write_env(tmp_path)
+    missing.write_text(
+        missing.read_text(encoding="utf-8").replace(
+            "WECHAT_FORMAL_RUNTIME=0\n",
+            "",
+            1,
+        ),
+        encoding="utf-8",
+    )
+    missing_result = validate_release_env(missing, require_wechat=False)
+    assert missing_result["ok"] is False
+    assert any("WECHAT_FORMAL_RUNTIME" in error for error in missing_result["errors"])
+
+    formal_without_credentials = _write_env(
+        tmp_path,
+        "WECHAT_FORMAL_RUNTIME=1\n",
+    )
+    formal_without_credentials_result = validate_release_env(
+        formal_without_credentials,
+        require_wechat=False,
+    )
+    assert formal_without_credentials_result["ok"] is False
+    assert any(
+        "四项微信服务端配置" in error
+        for error in formal_without_credentials_result["errors"]
+    )
+
+    formal_without_debug = _write_env(
+        tmp_path,
+        "WECHAT_FORMAL_RUNTIME=1\n",
+    )
+    formal_without_debug.write_text(
+        formal_without_debug.read_text(encoding="utf-8").replace(
+            "DEBUG=false\n",
+            "",
+            1,
+        ),
+        encoding="utf-8",
+    )
+    formal_without_debug_result = validate_release_env(
+        formal_without_debug,
+        require_wechat=False,
+    )
+    assert any(
+        "DEBUG=false" in error
+        for error in formal_without_debug_result["errors"]
+    )
+
+    web_only_with_credentials = _write_env(
+        tmp_path,
+        "WX_MINIPROGRAM_APPID=wx123456\n"
+        "WX_MINIPROGRAM_SECRET=1234567890abcdef\n"
+        f"WX_MINIPROGRAM_OPENID_PEPPER={'p' * 32}\n"
+        f"WX_MINIPROGRAM_SESSION_SECRET={'s' * 32}\n",
+    )
+    web_only_result = validate_release_env(
+        web_only_with_credentials,
+        require_wechat=False,
+    )
+    assert web_only_result["ok"] is False
+    assert any("Web-only" in error for error in web_only_result["errors"])
 
 
 def test_validator_supports_wxpusher_only_when_feature_and_token_match(tmp_path):
@@ -299,6 +373,7 @@ def test_release_env_validator_fails_closed_for_unsafe_file_inputs(tmp_path):
 def test_validator_rejects_server_only_wechat_materials_for_preview(tmp_path):
     server_only = _write_env(
         tmp_path,
+        "WECHAT_FORMAL_RUNTIME=1\n"
         f"WX_MINIPROGRAM_OPENID_PEPPER={'p' * 32}\n"
         f"WX_MINIPROGRAM_SESSION_SECRET={'s' * 32}\n",
     )
@@ -309,7 +384,11 @@ def test_validator_rejects_server_only_wechat_materials_for_preview(tmp_path):
 
 
 def test_validator_requires_all_wechat_values_for_formal_release(tmp_path):
-    partial = _write_env(tmp_path, "WX_MINIPROGRAM_APPID=wx123456\n")
+    partial = _write_env(
+        tmp_path,
+        "WECHAT_FORMAL_RUNTIME=1\n"
+        "WX_MINIPROGRAM_APPID=wx123456\n",
+    )
     result = validate_release_env(partial, require_wechat=True)
 
     assert result["ok"] is False
@@ -317,6 +396,7 @@ def test_validator_requires_all_wechat_values_for_formal_release(tmp_path):
 
     ready = _write_env(
         tmp_path,
+        "WECHAT_FORMAL_RUNTIME=1\n"
         "WX_MINIPROGRAM_APPID=wx123456\n"
         "WX_MINIPROGRAM_SECRET=1234567890abcdef\n"
         f"WX_MINIPROGRAM_OPENID_PEPPER={'p' * 32}\n"
@@ -331,6 +411,7 @@ def test_validator_requires_all_wechat_values_for_formal_release(tmp_path):
 
 def test_formal_validator_requires_jwt_and_matching_public_identifiers(tmp_path):
     wechat = (
+        "WECHAT_FORMAL_RUNTIME=1\n"
         "WX_MINIPROGRAM_APPID=wx123456\n"
         "WX_MINIPROGRAM_SECRET=1234567890abcdef\n"
         f"WX_MINIPROGRAM_OPENID_PEPPER={'p' * 32}\n"
@@ -379,6 +460,7 @@ def test_formal_validator_requires_exact_duchang_budget_values(
     wrong_value,
 ):
     formal_values = (
+        "WECHAT_FORMAL_RUNTIME=1\n"
         "WX_MINIPROGRAM_APPID=wx123456\n"
         "WX_MINIPROGRAM_SECRET=1234567890abcdef\n"
         f"WX_MINIPROGRAM_OPENID_PEPPER={'p' * 32}\n"
@@ -455,6 +537,7 @@ def test_formal_validator_requires_web_ai_to_stay_closed(
     expected_error,
 ):
     base = (
+        "WECHAT_FORMAL_RUNTIME=1\n"
         "WX_MINIPROGRAM_APPID=wx123456\n"
         "WX_MINIPROGRAM_SECRET=1234567890abcdef\n"
         f"WX_MINIPROGRAM_OPENID_PEPPER={'p' * 32}\n"
@@ -473,8 +556,9 @@ def test_formal_validator_requires_web_ai_to_stay_closed(
     assert any(expected_error in error for error in result['errors'])
 
 
-def test_formal_server_validator_requires_gis_and_wxpusher_disabled(tmp_path):
+def test_formal_server_validator_requires_gis_push_and_audit_policy(tmp_path):
     base = (
+        "WECHAT_FORMAL_RUNTIME=1\n"
         "WX_MINIPROGRAM_APPID=wx123456\n"
         "WX_MINIPROGRAM_SECRET=1234567890abcdef\n"
         f"WX_MINIPROGRAM_OPENID_PEPPER={'p' * 32}\n"
@@ -515,11 +599,24 @@ def test_formal_server_validator_requires_gis_and_wxpusher_disabled(tmp_path):
     assert enabled_push["ok"] is False
     assert any("FEATURE_WXPUSHER=0" in error for error in enabled_push["errors"])
 
+    enabled_audit = validate_release_env(
+        _write_env(
+            tmp_path,
+            base
+            + "FEATURE_AUDIT_LOGS=1\n"
+            + "FEATURE_HEAT_EXPOSURE_GIS=1\n",
+        ),
+        require_wechat=True,
+    )
+    assert enabled_audit["ok"] is False
+    assert any("FEATURE_AUDIT_LOGS=0" in error for error in enabled_audit["errors"])
+
 
 def test_validator_rejects_incomplete_qweather_or_insecure_public_url(tmp_path):
     path = tmp_path / ".env"
     path.write_text(
         "PUBLIC_BASE_URL=http://api.example.com\n"
+        "WECHAT_FORMAL_RUNTIME=0\n"
         "ALLOW_INSECURE_PUBLIC_BASE_URL=\n"
         "QWEATHER_AUTH_MODE=api_key\n"
         "QWEATHER_KEY=secret\n"
@@ -537,6 +634,7 @@ def test_validator_requires_weather_or_explicit_degraded_mode(tmp_path):
     disabled = tmp_path / "disabled.env"
     disabled.write_text(
         "PUBLIC_BASE_URL=https://api.example.com\n"
+        "WECHAT_FORMAL_RUNTIME=0\n"
         "QWEATHER_AUTH_MODE=disabled\n",
         encoding="utf-8",
     )
@@ -547,6 +645,7 @@ def test_validator_requires_weather_or_explicit_degraded_mode(tmp_path):
 
     degraded_formal = _write_env(
         tmp_path,
+        "WECHAT_FORMAL_RUNTIME=1\n"
         "WX_MINIPROGRAM_APPID=wx123456\n"
         "WX_MINIPROGRAM_SECRET=1234567890abcdef\n"
         f"WX_MINIPROGRAM_OPENID_PEPPER={'p' * 32}\n"
@@ -559,6 +658,7 @@ def test_validator_requires_weather_or_explicit_degraded_mode(tmp_path):
     ready = tmp_path / "ready.env"
     ready.write_text(
         "PUBLIC_BASE_URL=https://api.example.com\n"
+        "WECHAT_FORMAL_RUNTIME=0\n"
         "QWEATHER_AUTH_MODE=api_key\n"
         "QWEATHER_KEY=server-secret\n"
         "QWEATHER_API_BASE=https://unit-test.qweatherapi.com/v7\n"
@@ -575,6 +675,7 @@ def test_validator_requires_persistent_budget_config_for_enabled_qweather(tmp_pa
     missing_redis = tmp_path / "missing-redis.env"
     missing_redis.write_text(
         "PUBLIC_BASE_URL=https://api.example.com\n"
+        "WECHAT_FORMAL_RUNTIME=0\n"
         "QWEATHER_AUTH_MODE=api_key\n"
         "QWEATHER_KEY=server-secret\n"
         "QWEATHER_API_BASE=https://unit-test.qweatherapi.com/v7\n",
@@ -588,6 +689,7 @@ def test_validator_requires_persistent_budget_config_for_enabled_qweather(tmp_pa
 
     formal_without_flag = _write_env(
         tmp_path,
+        "WECHAT_FORMAL_RUNTIME=1\n"
         "WX_MINIPROGRAM_APPID=wx123456\n"
         "WX_MINIPROGRAM_SECRET=1234567890abcdef\n"
         f"WX_MINIPROGRAM_OPENID_PEPPER={'p' * 32}\n"
@@ -873,6 +975,7 @@ def test_validator_rejects_untrusted_qweather_api_key_host_and_port(tmp_path):
         path = tmp_path / name
         path.write_text(
             "PUBLIC_BASE_URL=https://api.example.com\n"
+            "WECHAT_FORMAL_RUNTIME=0\n"
             "QWEATHER_AUTH_MODE=api_key\n"
             "QWEATHER_KEY=server-secret\n"
             f"QWEATHER_API_BASE={api_base}\n"
@@ -923,6 +1026,7 @@ def test_validator_rejects_noncanonical_qweather_api_bases_without_crashing(tmp_
         path = tmp_path / f"invalid-{index}.env"
         path.write_text(
             "PUBLIC_BASE_URL=https://api.example.com\n"
+            "WECHAT_FORMAL_RUNTIME=0\n"
             "QWEATHER_AUTH_MODE=api_key\n"
             "QWEATHER_KEY=server-secret\n"
             f"QWEATHER_API_BASE={api_base}\n",
@@ -943,6 +1047,7 @@ def test_validator_matches_qweather_jwt_host_path_and_private_key_rules(tmp_path
         path = tmp_path / name
         path.write_text(
             "PUBLIC_BASE_URL=https://api.example.com\n"
+            "WECHAT_FORMAL_RUNTIME=0\n"
             "QWEATHER_AUTH_MODE=jwt\n"
             f"QWEATHER_API_BASE={api_base}\n"
             "QWEATHER_JWT_KID=test-kid\n"
@@ -1005,6 +1110,7 @@ def test_qweather_jwt_private_key_rejects_symlink_and_read_time_change(
         path = tmp_path / "jwt.env"
         path.write_text(
             "PUBLIC_BASE_URL=https://api.example.com\n"
+            "WECHAT_FORMAL_RUNTIME=0\n"
             "QWEATHER_AUTH_MODE=jwt\n"
             "QWEATHER_API_BASE=https://unit-test.qweatherapi.com/v7\n"
             "QWEATHER_JWT_KID=test-kid\n"
@@ -1075,6 +1181,20 @@ def test_wechat_release_form_requires_private_complete_personal_form(tmp_path):
         "errors": [],
     }
 
+    web_only_form = _write_wechat_release_form(
+        tmp_path,
+        WECHAT_FORMAL_RUNTIME="0",
+    )
+    web_only_result = validate_wechat_release_form(
+        web_only_form,
+        require_ready=True,
+    )
+    assert web_only_result["ok"] is False
+    assert any(
+        "WECHAT_FORMAL_RUNTIME=1" in error
+        for error in web_only_result["errors"]
+    )
+
 
 def test_wechat_release_template_defaults_appsecret_safety_gate_closed():
     template = (
@@ -1082,6 +1202,7 @@ def test_wechat_release_template_defaults_appsecret_safety_gate_closed():
     ).read_text(encoding="utf-8")
 
     assert "WECHAT_APPSECRET_PRODUCTION_SAFE_CONFIRMED=0" in template
+    assert "WECHAT_FORMAL_RUNTIME=1" in template
     for required_instruction in ("聊天", "日志", "截图", "轮换"):
         assert required_instruction in template
 
@@ -1424,6 +1545,7 @@ def test_wechat_release_form_allows_empty_category_evidence_for_preview(tmp_path
         WECHAT_LISTING_COPY_SHA256="",
         WECHAT_PRIVACY_PAGE_SHA256="",
         WECHAT_AGREEMENT_PAGE_SHA256="",
+        WECHAT_HEALTH_CONSENT_PAGE_SHA256="",
         WECHAT_FORM_READY="0",
     )
 
@@ -1597,6 +1719,7 @@ def test_wechat_release_form_requires_release_freeze_fields_for_formal_release(
         WECHAT_LISTING_COPY_SHA256="",
         WECHAT_PRIVACY_PAGE_SHA256="",
         WECHAT_AGREEMENT_PAGE_SHA256="",
+        WECHAT_HEALTH_CONSENT_PAGE_SHA256="",
     )
 
     result = validate_wechat_release_form(form, require_ready=True)
@@ -1610,6 +1733,7 @@ def test_wechat_release_form_requires_release_freeze_fields_for_formal_release(
         "WECHAT_LISTING_COPY_SHA256",
         "WECHAT_PRIVACY_PAGE_SHA256",
         "WECHAT_AGREEMENT_PAGE_SHA256",
+        "WECHAT_HEALTH_CONSENT_PAGE_SHA256",
     ):
         assert any(key in error for error in result["errors"])
 
@@ -1833,6 +1957,8 @@ def test_wechat_release_form_requires_full_feature_release_flags(tmp_path):
     cases = (
         ("missing-wxpusher-flag", {"FEATURE_WXPUSHER": ""}, "FEATURE_WXPUSHER"),
         ("enabled-wxpusher", {"FEATURE_WXPUSHER": "1"}, "FEATURE_WXPUSHER=0"),
+        ("missing-audit-flag", {"FEATURE_AUDIT_LOGS": ""}, "FEATURE_AUDIT_LOGS"),
+        ("enabled-audit", {"FEATURE_AUDIT_LOGS": "1"}, "FEATURE_AUDIT_LOGS=0"),
         (
             "disabled-with-token",
             {"WXPUSHER_APP_TOKEN": "AT_release-test-token"},
@@ -2315,6 +2441,7 @@ def test_wechat_preview_skips_git_and_content_freeze_until_form_ready(tmp_path):
         WECHAT_LISTING_COPY_SHA256="d" * 64,
         WECHAT_PRIVACY_PAGE_SHA256="e" * 64,
         WECHAT_AGREEMENT_PAGE_SHA256="f" * 64,
+        WECHAT_HEALTH_CONSENT_PAGE_SHA256="0" * 64,
     )
     (tmp_path / "preview-only.txt").write_text("preview\n", encoding="utf-8")
 

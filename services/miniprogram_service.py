@@ -6,7 +6,7 @@ from __future__ import annotations
 import json
 import math
 import uuid
-from datetime import timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from flask import current_app, url_for
@@ -190,6 +190,7 @@ def _source_status(
     warnings,
     forecast_meta=None,
     warning_status=None,
+    source_timing=None,
 ) -> dict:
     source = str((current or {}).get("data_source") or (current or {}).get("source") or "").strip()
     forecast_sources = sorted(
@@ -200,6 +201,7 @@ def _source_status(
         }
     )
     warning_state = warning_status if isinstance(warning_status, dict) else {}
+    timing = source_timing if isinstance(source_timing, dict) else {}
     warning_available = bool(
         warning_state.get("available")
         if "available" in warning_state
@@ -213,23 +215,88 @@ def _source_status(
             "available": _weather_available(current),
             "provider": source or "unavailable",
             "is_mock": bool((current or {}).get("is_mock")),
+            **(timing.get("current") or {}),
         },
         "forecast": {
             "available": bool(forecast),
             "providers": forecast_sources,
             "meta": forecast_meta if isinstance(forecast_meta, dict) else {},
+            **(timing.get("forecast") or {}),
         },
         "warnings": {
             "available": warning_available,
             "count": len(warnings or []),
             "status": str(warning_state.get("status") or ("success" if warning_available else "unavailable")),
+            **(timing.get("warnings") or {}),
         },
-        "budget_guard": (
-            "enabled"
-            if current_app.config.get("QWEATHER_BUDGET_FAIL_CLOSED", True)
-            else "disabled"
-        ),
+        # 正式运行语义固定为 fail-closed；旧环境变量不再改变该事实。
+        "budget_guard": "enabled",
     }
+
+
+def _source_datetime(value):
+    """把来源时间规范为 UTC aware datetime；无效值不会被伪造成当前时间。"""
+    if value is None:
+        return None
+    if hasattr(value, "tzinfo"):
+        try:
+            return ensure_utc_aware(value)
+        except (TypeError, ValueError):
+            return None
+    try:
+        return ensure_utc_aware(datetime.fromisoformat(str(value)))
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def _normalize_source_timing(
+    *,
+    current,
+    forecast,
+    warning_status,
+    fetched_at,
+    forecast_meta,
+    source_timing,
+):
+    """生成各必要来源的真实时间，并返回快照最保守的有效窗口。"""
+    supplied = source_timing if isinstance(source_timing, dict) else {}
+    warning_state = warning_status if isinstance(warning_status, dict) else {}
+    forecast_state = forecast_meta if isinstance(forecast_meta, dict) else {}
+    defaults = {
+        "current": supplied.get("current") or {},
+        "forecast": supplied.get("forecast") or forecast_state,
+        "warnings": supplied.get("warnings") or warning_state,
+    }
+    required = []
+    if _weather_available(current):
+        required.append("current")
+    if forecast:
+        required.append("forecast")
+    if warning_state.get("available"):
+        # 成功确认“无预警”也是本快照的必要来源。
+        required.append("warnings")
+
+    normalized = {}
+    fetched_values = []
+    expiry_values = []
+    for name in required:
+        raw = defaults.get(name) or {}
+        component_fetched = _source_datetime(raw.get("fetched_at")) or fetched_at
+        component_expires = _source_datetime(raw.get("expires_at")) or (
+            component_fetched + timedelta(seconds=SNAPSHOT_TTL_SECONDS)
+        )
+        normalized[name] = {
+            "fetched_at": component_fetched.isoformat(),
+            "expires_at": component_expires.isoformat(),
+        }
+        fetched_values.append(component_fetched)
+        expiry_values.append(component_expires)
+
+    snapshot_fetched_at = min(fetched_values) if fetched_values else fetched_at
+    snapshot_expires_at = min(expiry_values) if expiry_values else (
+        snapshot_fetched_at + timedelta(seconds=SNAPSHOT_TTL_SECONDS)
+    )
+    return normalized, snapshot_fetched_at, snapshot_expires_at
 
 
 def persist_snapshot(
@@ -240,6 +307,7 @@ def persist_snapshot(
     fetched_at=None,
     forecast_meta=None,
     warning_status=None,
+    source_timing=None,
     commit=True,
 ):
     """在一个事务中保存完整快照，所有消费者共享同一 snapshot_id。"""
@@ -247,6 +315,14 @@ def persist_snapshot(
     current = current if isinstance(current, dict) else {}
     forecast = _enrich_forecast_risk(forecast if isinstance(forecast, list) else [])
     warnings = warnings if isinstance(warnings, list) else []
+    source_timing, fetched_at, expires_at = _normalize_source_timing(
+        current=current,
+        forecast=forecast,
+        warning_status=warning_status,
+        fetched_at=fetched_at,
+        forecast_meta=forecast_meta,
+        source_timing=source_timing,
+    )
     risk, actions = _risk_and_actions(current, warnings)
     location = canonical_location()
     _acquire_snapshot_retention_lock()
@@ -255,7 +331,7 @@ def persist_snapshot(
         location_name=location["name"],
         location_code=location["code"],
         fetched_at=fetched_at,
-        expires_at=fetched_at + timedelta(seconds=SNAPSHOT_TTL_SECONDS),
+        expires_at=expires_at,
         available=_weather_available(current),
         current_json=json.dumps(current, ensure_ascii=False),
         forecast_json=json.dumps(forecast, ensure_ascii=False),
@@ -269,6 +345,7 @@ def persist_snapshot(
                 warnings,
                 forecast_meta,
                 warning_status,
+                source_timing,
             ),
             ensure_ascii=False,
         ),
@@ -390,15 +467,47 @@ def load_cached_weather_inputs():
         if record is not None and record.fetched_at is not None
     ]
     cached_fetched_at = min(fetched_candidates) if fetched_candidates else None
-    return current, forecast, forecast_meta, cached_fetched_at
+    source_timing = {}
+    if current_record is not None and current_record.fetched_at is not None:
+        current_fetched_at = ensure_utc_aware(current_record.fetched_at)
+        current_ttl = max(
+            int(current_app.config.get("WEATHER_CACHE_TTL_MINUTES", 30) or 30),
+            1,
+        )
+        source_timing["current"] = {
+            "fetched_at": current_fetched_at,
+            "expires_at": current_fetched_at + timedelta(minutes=current_ttl),
+        }
+    if forecast_record is not None and forecast_record.fetched_at is not None:
+        forecast_fetched_at = ensure_utc_aware(forecast_record.fetched_at)
+        forecast_ttl = max(
+            int(current_app.config.get("FORECAST_CACHE_TTL_MINUTES", 30) or 30),
+            1,
+        )
+        forecast_meta = dict(forecast_meta or {})
+        forecast_meta.setdefault("fetched_at", forecast_fetched_at.isoformat())
+        forecast_meta.setdefault(
+            "expires_at",
+            (forecast_fetched_at + timedelta(minutes=forecast_ttl)).isoformat(),
+        )
+        source_timing["forecast"] = forecast_meta
+    return current, forecast, forecast_meta, cached_fetched_at, source_timing
 
 
-def refresh_snapshot_from_cycle(current, weather_service=None, *, fetched_at=None):
+def refresh_snapshot_from_cycle(
+    current,
+    weather_service=None,
+    *,
+    fetched_at=None,
+    current_fetched_at=None,
+    force_refresh_sources=False,
+):
     """完成一次 canonical 同步周期的预报/预警收集并落库。"""
     forecast = []
     forecast_meta = {}
     warnings = []
     warning_status = {"available": False, "status": "not_refreshed"}
+    cycle_source_timing = {}
     if weather_service is not None and qweather_runtime_configured():
         try:
             forecast, _, forecast_meta = get_qweather_forecast_with_cache(
@@ -406,6 +515,7 @@ def refresh_snapshot_from_cycle(current, weather_service=None, *, fetched_at=Non
                 days=7,
                 cache_only=False,
                 fetcher=weather_service,
+                force_refresh=force_refresh_sources,
             )
         except Exception:
             current_app.logger.exception("小程序预报同步失败，保留实况快照")
@@ -413,12 +523,17 @@ def refresh_snapshot_from_cycle(current, weather_service=None, *, fetched_at=Non
         try:
             from services.warning_service import get_qweather_warnings_result
 
-            warning_result = get_qweather_warnings_result(canonical_location()["code"])
+            warning_result = get_qweather_warnings_result(
+                canonical_location()["code"],
+                force_refresh=force_refresh_sources,
+            )
             if isinstance(warning_result, dict):
                 warnings = warning_result.get("warnings") or []
                 warning_status = {
                     "available": bool(warning_result.get("available")),
                     "status": str(warning_result.get("status") or "unavailable"),
+                    "fetched_at": warning_result.get("fetched_at"),
+                    "expires_at": warning_result.get("expires_at"),
                 }
             else:
                 # 测试桩或旧扩展返回 list 时继续兼容。
@@ -429,7 +544,13 @@ def refresh_snapshot_from_cycle(current, weather_service=None, *, fetched_at=Non
             warnings = []
             warning_status = {"available": False, "status": "fetch_failed"}
     else:
-        cached_current, forecast, forecast_meta, cached_fetched_at = load_cached_weather_inputs()
+        (
+            cached_current,
+            forecast,
+            forecast_meta,
+            cached_fetched_at,
+            cycle_source_timing,
+        ) = load_cached_weather_inputs()
         if not current:
             current = cached_current
         # 离线周期必须继承原始缓存时间，禁止把旧天气重新包装成新鲜快照。
@@ -456,6 +577,19 @@ def refresh_snapshot_from_cycle(current, weather_service=None, *, fetched_at=Non
         fetched_at=fetched_at,
         forecast_meta=forecast_meta,
         warning_status=warning_status,
+        source_timing=cycle_source_timing or {
+            "current": {
+                "fetched_at": (current_fetched_at or fetched_at),
+                "expires_at": (
+                    ensure_utc_aware(current_fetched_at or fetched_at)
+                    + timedelta(seconds=SNAPSHOT_TTL_SECONDS)
+                    if (current_fetched_at or fetched_at) is not None
+                    else None
+                ),
+            },
+            "forecast": forecast_meta,
+            "warnings": warning_status,
+        },
     )
 
 

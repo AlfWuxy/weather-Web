@@ -67,6 +67,9 @@ HEAT_RISK_LABELS = {
 }
 
 PAIR_TOKEN_SESSION_KEY = 'pair_token'
+FORMAL_WEB_ACTION_READ_ONLY_MESSAGE = (
+    '微信正式版的网页家庭行动页仅供查看。请在微信小程序中登录后完成确认、求助或复盘。'
+)
 
 _HEAT_RISK_WEATHER_FIELDS = (
     'temperature',
@@ -95,6 +98,19 @@ def _get_pair_token():
 
 def _clear_pair_token():
     session.pop(PAIR_TOKEN_SESSION_KEY, None)
+
+
+def _formal_web_actions_are_read_only():
+    """正式微信运行态关闭网页家庭行动写入口。"""
+    return bool(current_app.config.get('WECHAT_FORMAL_RUNTIME', False))
+
+
+def _reject_formal_web_action_write():
+    """在读取表单、解析 Pair 或触发数据库写入前统一拒绝网页动作。"""
+    if not _formal_web_actions_are_read_only():
+        return None
+    flash(FORMAL_WEB_ACTION_READ_ONLY_MESSAGE, 'warning')
+    return redirect(url_for('public.action_check'), code=303)
 
 
 def _safe_next_url(next_url):
@@ -517,7 +533,8 @@ def _render_action_page(
         confirm_action=confirm_action,
         help_action=help_action,
         debrief_action=debrief_action,
-        focus_debrief=focus_debrief
+        focus_debrief=focus_debrief,
+        web_actions_read_only=_formal_web_actions_are_read_only(),
     )
 
 
@@ -537,6 +554,16 @@ def _resolve_action_routes(token=None, confirm_action=None, help_action=None, de
 
 
 def _handle_action_lookup(token=None, entry_action=None, confirm_action=None, help_action=None, debrief_action=None):
+    if _formal_web_actions_are_read_only():
+        # 正式微信首发不读取短码、不兑换链接，也不创建家庭状态记录。
+        return render_template(
+            'action_checkin.html',
+            stage='lookup',
+            short_code='',
+            entry_action=entry_action,
+            web_actions_read_only=True,
+        )
+
     if token:
         _store_pair_token(token)
 
@@ -705,6 +732,10 @@ def _validate_pair_token_binding(pair, short_code, token):
 
 
 def _handle_action_confirm(token=None, confirm_action=None, debrief_action=None):
+    formal_rejection = _reject_formal_web_action_write()
+    if formal_rejection is not None:
+        return formal_rejection
+
     short_code = sanitize_input(request.form.get('short_code'), max_length=12) or ''
     short_code = short_code.replace(' ', '').strip()
     token = sanitize_input(request.form.get('token') or token, max_length=200)
@@ -813,6 +844,10 @@ def _handle_action_confirm(token=None, confirm_action=None, debrief_action=None)
 
 
 def _handle_action_help(token=None, confirm_action=None, debrief_action=None):
+    formal_rejection = _reject_formal_web_action_write()
+    if formal_rejection is not None:
+        return formal_rejection
+
     short_code = sanitize_input(request.form.get('short_code'), max_length=12) or ''
     short_code = short_code.replace(' ', '').strip()
     token = sanitize_input(request.form.get('token') or token, max_length=200)
@@ -887,6 +922,10 @@ def _handle_action_help(token=None, confirm_action=None, debrief_action=None):
 
 
 def _handle_action_debrief(token=None, confirm_action=None, debrief_action=None, focus_debrief=False):
+    formal_rejection = _reject_formal_web_action_write()
+    if formal_rejection is not None:
+        return formal_rejection
+
     short_code = sanitize_input(request.form.get('short_code'), max_length=12) or ''
     short_code = short_code.replace(' ', '').strip()
     token = sanitize_input(request.form.get('token') or token, max_length=200)

@@ -113,6 +113,37 @@ def test_formal_deploy_propagates_full_feature_release_flags():
     assert '微信全功能正式发布必须启用 FEATURE_HEAT_EXPOSURE_GIS=1' in content
     assert '1.0.0 微信正式发布必须固定 FEATURE_WXPUSHER=0' in content
     assert 'FEATURE_WXPUSHER=0 时必须清空 WXPUSHER_APP_TOKEN' in content
+    assert 'LOCAL_WECHAT_FORMAL_RUNTIME=""' in content
+    assert 'WECHAT_FORMAL_RUNTIME=0' in content
+    assert (
+        'remote_env_update "WECHAT_FORMAL_RUNTIME" '
+        '"$LOCAL_WECHAT_FORMAL_RUNTIME" "always"'
+    ) in content
+    assert '微信正式发布必须固定 WECHAT_FORMAL_RUNTIME=1。' in content
+    assert 'DEBUG=true WECHAT_FORMAL_RUNTIME=0' in content
+
+
+def test_formal_deploy_loads_and_forces_audit_logs_off():
+    content = _load_deploy_script()
+    env_loader_start = content.index("load_local_api_keys() {")
+    env_loader_end = content.index("\n}\n", env_loader_start)
+    env_loader = content[env_loader_start:env_loader_end]
+    form_loader_start = content.index("load_wechat_release_form() {")
+    form_loader_end = content.index("\n}\n", form_loader_start)
+    form_loader = content[form_loader_start:form_loader_end]
+
+    assert 'LOCAL_FEATURE_AUDIT_LOGS=""' in content
+    assert 'FEATURE_AUDIT_LOGS' in env_loader
+    assert 'FEATURE_AUDIT_LOGS) LOCAL_FEATURE_AUDIT_LOGS="$value" ;;' in env_loader
+    assert 'FEATURE_AUDIT_LOGS' in form_loader
+    assert 'FEATURE_AUDIT_LOGS) LOCAL_FEATURE_AUDIT_LOGS="$value" ;;' in form_loader
+    assert 'FEATURE_AUDIT_LOGS=0' in content
+    assert '微信正式发布必须固定 FEATURE_AUDIT_LOGS=0。' in content
+    assert (
+        'remote_env_update "FEATURE_AUDIT_LOGS" '
+        '"$LOCAL_FEATURE_AUDIT_LOGS" "always"'
+    ) in content
+    assert 'remote_env_update "FEATURE_AUDIT_LOGS" "0" "if-empty"' not in content
 
 
 def test_deploy_script_uses_two_stage_failure_safe_cache_timers():
@@ -429,7 +460,8 @@ def test_deploy_runs_all_runtime_units_as_hardened_service_user():
     activate = _load_activate_script()
     assert '--preserve-environment' not in activate
     assert 'runtime_exec "$VENV_DIR/bin/gunicorn"' in activate
-    assert 'runtime_exec /bin/bash scripts/weather_cache_sync.sh --skip-nowcast' in activate
+    assert 'CASE_WEATHER_FORMAL_SMOKE_LEASE_TOKEN=$FORMAL_SMOKE_LEASE_TOKEN' in activate
+    assert '/bin/bash scripts/weather_cache_sync.sh --skip-nowcast' in activate
     assert "local runtime_env=(\n        -i" in activate
     runtime_block = activate.split('runtime_exec() {', 1)[1].split('\n}', 1)[0]
     for inherited_secret in (

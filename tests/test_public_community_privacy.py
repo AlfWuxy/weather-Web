@@ -194,6 +194,11 @@ def test_elder_deactivation_hides_stale_three_person_projection(
     ]
     _seed_community_daily(db_session, community_code, total_people=3)
     db_session.commit()
+    owners[0].health_sensitive_consent_version = app.config[
+        "WX_MINIPROGRAM_PRIVACY_VERSION"
+    ]
+    owners[0].health_sensitive_consented_at = utcnow()
+    db_session.commit()
     token = create_api_token(owners[0].id, name="privacy-deactivate")
     refresh_targets = []
 

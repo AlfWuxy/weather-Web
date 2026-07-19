@@ -10,7 +10,7 @@ from datetime import timedelta
 
 import pytest
 
-from core.db_models import CommunityDaily, DailyStatus, Pair, PairActionToken, PairLink, UsageEvent, User
+from core.db_models import CommunityDaily, DailyStatus, Debrief, Pair, PairActionToken, PairLink, UsageEvent, User
 from core.security import hash_pair_token, hash_short_code
 from core.time_utils import today_local, utcnow
 from core.extensions import db
@@ -116,6 +116,195 @@ def _wechat_login(app, client, monkeypatch, openid):
         "/mp/api/v1/auth/wechat",
         json={"code": "wx-login-code", "privacy_consent_version": "privacy-v1"},
     )
+
+
+@pytest.mark.parametrize(
+    ("action_path", "short_code", "action_token", "extra_form"),
+    (
+        (
+            "checkin",
+            "61000001",
+            "formal-readonly-confirm-token",
+            {"actions_done": ["drink_water"]},
+        ),
+        ("help", "61000002", "formal-readonly-help-token", {}),
+        (
+            "debrief",
+            "61000003",
+            "formal-readonly-debrief-token",
+            {"question_2": "不应保存", "debrief_optin": "1"},
+        ),
+    ),
+)
+def test_formal_wechat_runtime_rejects_web_token_writes_before_pair_resolution(
+    app,
+    client,
+    monkeypatch,
+    action_path,
+    short_code,
+    action_token,
+    extra_form,
+):
+    """正式微信态应在解析 Pair 和构建天气前拒绝三类 Web 写入。"""
+    from services import public_service
+
+    app.config["WECHAT_FORMAL_RUNTIME"] = True
+
+    def fail_before_pair_resolution(*_args, **_kwargs):
+        pytest.fail("正式微信态不应解析 Web 家庭行动 Pair")
+
+    def fail_before_weather_context(*_args, **_kwargs):
+        pytest.fail("正式微信态不应为 Web 写动作构建天气上下文")
+
+    monkeypatch.setattr(
+        public_service,
+        "_resolve_pair_from_session_or_code",
+        fail_before_pair_resolution,
+    )
+    monkeypatch.setattr(
+        public_service,
+        "_build_action_context",
+        fail_before_weather_context,
+    )
+
+    with app.app_context():
+        db.create_all()
+        user = _create_user(
+            f"formal_readonly_{action_path}_owner",
+            "formal-readonly-password",
+        )
+        user_id = user.id
+        pair_id, token_id = _create_action_token_pair(user, short_code, action_token)
+
+    csrf_token = f"formal-readonly-{action_path}-csrf"
+    with client.session_transaction() as sess:
+        sess["_csrf_token"] = csrf_token
+
+    response = client.post(
+        f"/e/{action_token}/{action_path}",
+        data={
+            "short_code": short_code,
+            "csrf_token": csrf_token,
+            **extra_form,
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert "/action" in (response.headers.get("Location") or "")
+    with client.session_transaction() as sess:
+        flashes = sess.get("_flashes", [])
+    assert any(
+        "微信小程序中登录后" in message
+        for _category, message in flashes
+    )
+
+    with app.app_context():
+        assert DailyStatus.query.filter_by(pair_id=pair_id).count() == 0
+        assert Debrief.query.filter_by(owner_user_id=user_id).count() == 0
+        assert UsageEvent.query.filter_by(user_id=user_id).count() == 0
+        assert db.session.get(PairActionToken, token_id).used_at is None
+
+
+def test_formal_wechat_runtime_stops_web_entry_before_reading_family_data(
+    app,
+    client,
+    monkeypatch,
+):
+    """正式微信态只显示停用说明，不解析短码、家庭或天气。"""
+    from services import public_service
+
+    app.config["WECHAT_FORMAL_RUNTIME"] = True
+
+    def fail_before_family_resolution(*_args, **_kwargs):
+        pytest.fail("正式微信态不应解析家庭短码")
+
+    def fail_before_weather_context(*_args, **_kwargs):
+        pytest.fail("正式微信态不应构建家庭天气上下文")
+
+    monkeypatch.setattr(public_service, "_resolve_pair", fail_before_family_resolution)
+    monkeypatch.setattr(public_service, "_build_action_context", fail_before_weather_context)
+
+    with app.app_context():
+        db.create_all()
+        user = _create_user("formal_readonly_page_owner", "formal-page-password")
+        pair_id, token_id = _create_action_token_pair(
+            user,
+            "61000004",
+            "formal-readonly-page-token",
+        )
+
+    csrf_token = "formal-readonly-page-csrf"
+    with client.session_transaction() as sess:
+        sess["_csrf_token"] = csrf_token
+
+    entry = client.get("/e/formal-readonly-page-token", follow_redirects=False)
+    assert entry.status_code == 200
+    entry_body = entry.get_data(as_text=True)
+    assert "当前网页仅供查看停用说明" in entry_body
+    assert 'name="short_code"' not in entry_body
+    response = client.post(
+        "/elder/enter",
+        data={"short_code": "61000004", "csrf_token": csrf_token},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 200
+    body = response.get_data(as_text=True)
+    assert "当前网页仅供查看停用说明" in body
+    assert "不会读取短码、兑换安全链接或写入家庭记录" in body
+    assert 'name="short_code"' not in body
+    assert 'action="/e/formal-readonly-page-token/checkin"' not in body
+    assert 'action="/e/formal-readonly-page-token/help"' not in body
+    assert 'action="/e/formal-readonly-page-token/debrief"' not in body
+    assert ">我很安全<" not in body
+    assert ">我需要帮助<" not in body
+    assert ">提交复盘<" not in body
+    with app.app_context():
+        assert DailyStatus.query.filter_by(pair_id=pair_id).count() == 0
+        assert db.session.get(PairActionToken, token_id).used_at is None
+
+
+def test_formal_wechat_runtime_stops_debrief_get_before_family_lookup(
+    app,
+    client,
+    monkeypatch,
+):
+    """复盘 GET 也必须在短码、Pair、天气和状态查询前显示停用说明。"""
+    from services import public_service
+
+    app.config["WECHAT_FORMAL_RUNTIME"] = True
+
+    def fail_before_family_access(*_args, **_kwargs):
+        pytest.fail("正式微信态的复盘 GET 不得访问家庭资料")
+
+    monkeypatch.setattr(
+        "blueprints.public._resolve_pair_from_session_or_code",
+        fail_before_family_access,
+    )
+    monkeypatch.setattr(
+        "blueprints.public._validate_pair_token_binding",
+        fail_before_family_access,
+    )
+    monkeypatch.setattr(
+        "blueprints.public._build_action_context",
+        fail_before_family_access,
+    )
+    monkeypatch.setattr(
+        public_service,
+        "_resolve_pair",
+        fail_before_family_access,
+    )
+
+    response = client.get(
+        "/e/formal-debrief-get-token/debrief?short_code=61000005",
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 200
+    body = response.get_data(as_text=True)
+    assert "当前网页仅供查看停用说明" in body
+    assert 'name="short_code"' not in body
 
 
 def test_action_context_does_not_persist_mock_weather_risk(app, monkeypatch):

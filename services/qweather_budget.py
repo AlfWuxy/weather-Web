@@ -25,6 +25,20 @@ _LOCAL_TOTALS = defaultdict(int)
 _LOCAL_ENDPOINTS = defaultdict(lambda: defaultdict(int))
 _BLOCKED_LOGGED = set()
 
+_RESERVE_BUDGET_LUA = """
+local current = tonumber(redis.call('GET', KEYS[1]) or '0')
+local limit = tonumber(ARGV[2])
+if current >= limit then
+    return {0, current}
+end
+
+local total = redis.call('INCR', KEYS[1])
+redis.call('HINCRBY', KEYS[2], ARGV[1], 1)
+redis.call('EXPIRE', KEYS[1], ARGV[3])
+redis.call('EXPIRE', KEYS[2], ARGV[3])
+return {1, total}
+"""
+
 
 def _config_value(key, default=None):
     if has_app_context():
@@ -205,28 +219,26 @@ def reserve_qweather_request(endpoint):
     redis_configured = bool(_redis_url())
     if client is not None:
         total_key, endpoint_key = _redis_budget_keys(month)
+        ttl = _seconds_until_expiry(now)
         try:
-            count = int(client.incr(total_key))
-            if count == 1:
-                ttl = _seconds_until_expiry(now)
-                client.expire(total_key, ttl)
-            if count > limit:
-                try:
-                    client.decr(total_key)
-                except Exception:
-                    pass
+            accepted, _count = client.eval(
+                _RESERVE_BUDGET_LUA,
+                2,
+                total_key,
+                endpoint_key,
+                endpoint,
+                limit,
+                ttl,
+            )
+            if int(accepted) != 1:
                 _log_blocked_once(month, limit, "redis")
                 return False
-            client.hincrby(endpoint_key, endpoint, 1)
-            if count == 1:
-                client.expire(endpoint_key, ttl)
             return True
         except Exception as exc:
             logger.error("和风天气预算 Redis 计数失败: %s", exc)
-            # Redis 已配置时禁止退回进程内计数，避免 oneshot 重启后额度归零。
-            if redis_configured:
-                _log_blocked_once(month, limit, "redis-unavailable")
-                return False
+            # 原子脚本状态未知时一律关闭，禁止退回本地计数或自动重试。
+            _log_blocked_once(month, limit, "redis-unavailable")
+            return False
 
     if redis_configured:
         _log_blocked_once(month, limit, "redis-unavailable")
