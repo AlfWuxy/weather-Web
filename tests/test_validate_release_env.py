@@ -4,9 +4,11 @@
 import hashlib
 import json
 import os
+import stat
 import subprocess
-from types import SimpleNamespace
 from datetime import datetime, timezone
+from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -205,6 +207,7 @@ def _write_wechat_release_form(tmp_path, **overrides):
         **digests,
         "WX_MINIPROGRAM_APPID": "wx12345678",
         "WX_MINIPROGRAM_SECRET": "1234567890abcdef",
+        "WECHAT_APPSECRET_PRODUCTION_SAFE_CONFIRMED": "1",
         "WX_MINIPROGRAM_PRIVACY_VERSION": "2026-07-18",
         "FEATURE_WXPUSHER": "0",
         "WXPUSHER_APP_TOKEN": "",
@@ -1073,6 +1076,94 @@ def test_wechat_release_form_requires_private_complete_personal_form(tmp_path):
     }
 
 
+def test_wechat_release_template_defaults_appsecret_safety_gate_closed():
+    template = (
+        Path(__file__).resolve().parents[1] / ".env.wechat-release.example"
+    ).read_text(encoding="utf-8")
+
+    assert "WECHAT_APPSECRET_PRODUCTION_SAFE_CONFIRMED=0" in template
+    for required_instruction in ("聊天", "日志", "截图", "轮换"):
+        assert required_instruction in template
+
+
+@pytest.mark.parametrize(
+    "confirmation",
+    (
+        None,
+        "",
+        "0",
+        "01",
+        "unsafe-state-marker-must-not-leak",
+    ),
+)
+def test_formal_release_requires_exact_appsecret_safety_confirmation_without_echo(
+    tmp_path,
+    confirmation,
+):
+    form = _write_wechat_release_form(
+        tmp_path,
+        WECHAT_APPSECRET_PRODUCTION_SAFE_CONFIRMED=(confirmation or ""),
+    )
+    if confirmation is None:
+        form.write_text(
+            "".join(
+                line
+                for line in form.read_text(encoding="utf-8").splitlines(keepends=True)
+                if not line.startswith(
+                    "WECHAT_APPSECRET_PRODUCTION_SAFE_CONFIRMED="
+                )
+            ),
+            encoding="utf-8",
+        )
+        form.chmod(0o600)
+
+    result = validate_wechat_release_form(form, require_ready=True)
+    rendered_errors = "\n".join(result["errors"])
+
+    assert result["ok"] is False
+    assert "WECHAT_APPSECRET_PRODUCTION_SAFE_CONFIRMED" in rendered_errors
+    assert "1234567890abcdef" not in rendered_errors
+    if confirmation:
+        assert confirmation not in rendered_errors
+
+
+def test_preview_allows_closed_appsecret_safety_gate_with_fixed_warning(tmp_path):
+    form = _write_wechat_release_form(
+        tmp_path,
+        WECHAT_FORM_READY="0",
+        WECHAT_APPSECRET_PRODUCTION_SAFE_CONFIRMED="0",
+    )
+
+    result = validate_wechat_release_form(form, require_ready=False)
+    rendered = json.dumps(result, ensure_ascii=False, sort_keys=True)
+
+    assert result["ok"] is True
+    assert result["form_ready"] is False
+    assert any("生产 AppSecret 安全确认" in warning for warning in result["warnings"])
+    assert "1234567890abcdef" not in rendered
+
+
+@pytest.mark.parametrize(
+    "mode,expected_ok",
+    (
+        (0o400, False),
+        (0o640, False),
+        (0o600, True),
+    ),
+)
+def test_wechat_release_form_requires_exact_mode_0600(tmp_path, mode, expected_ok):
+    form = _write_wechat_release_form(tmp_path)
+    form.chmod(mode)
+
+    result = validate_wechat_release_form(form, require_ready=True)
+
+    assert result["ok"] is expected_ok
+    if expected_ok:
+        assert result["errors"] == []
+    else:
+        assert any("0600" in error for error in result["errors"])
+
+
 @pytest.mark.parametrize(
     "overrides,expected_error",
     (
@@ -1235,6 +1326,85 @@ def test_snapshot_preserves_all_bytes_across_short_writes(tmp_path, monkeypatch)
     assert len(write_sizes) > 1
     assert snapshot.read_bytes() == expected
     assert snapshot.stat().st_mode & 0o777 == 0o600
+
+
+def test_snapshot_requires_exact_source_mode_and_forces_destination_0600(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    form = _write_wechat_release_form(repo)
+    rejected_snapshot = tmp_path / "rejected.snapshot"
+    form.chmod(0o400)
+
+    rejected_errors = snapshot_wechat_release_form(form, rejected_snapshot)
+
+    assert any("0600" in error for error in rejected_errors)
+    assert not rejected_snapshot.exists()
+
+    form.chmod(0o600)
+    safe_snapshot = tmp_path / "safe.snapshot"
+    previous_umask = os.umask(0o777)
+    try:
+        snapshot_errors = snapshot_wechat_release_form(form, safe_snapshot)
+    finally:
+        os.umask(previous_umask)
+
+    assert snapshot_errors == []
+    assert stat.S_IMODE(safe_snapshot.stat().st_mode) == 0o600
+    assert validate_wechat_release_form(
+        safe_snapshot,
+        require_ready=True,
+        repo_root=repo,
+    )["ok"] is True
+
+
+def test_form_only_cli_enforces_exact_source_and_snapshot_modes(tmp_path, capsys):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    form = _write_wechat_release_form(repo)
+    form.chmod(0o400)
+    rejected_snapshot = tmp_path / ".env.rejected.snapshot"
+
+    rejected_exit = release_validator.main(
+        [
+            "--form-only",
+            "--wechat-form",
+            str(form),
+            "--snapshot-output",
+            str(rejected_snapshot),
+            "--repo-root",
+            str(repo),
+            "--require-wechat",
+            "1",
+        ]
+    )
+    rejected_output = capsys.readouterr().out
+
+    assert rejected_exit == 2
+    assert any("0600" in error for error in json.loads(rejected_output)["errors"])
+    assert "1234567890abcdef" not in rejected_output
+    assert not rejected_snapshot.exists()
+
+    form.chmod(0o600)
+    safe_snapshot = tmp_path / ".env.safe.snapshot"
+    safe_exit = release_validator.main(
+        [
+            "--form-only",
+            "--wechat-form",
+            str(form),
+            "--snapshot-output",
+            str(safe_snapshot),
+            "--repo-root",
+            str(repo),
+            "--require-wechat",
+            "1",
+        ]
+    )
+    safe_output = capsys.readouterr().out
+
+    assert safe_exit == 0
+    assert json.loads(safe_output)["ok"] is True
+    assert "1234567890abcdef" not in safe_output
+    assert stat.S_IMODE(safe_snapshot.stat().st_mode) == 0o600
 
 
 def test_wechat_release_form_allows_empty_category_evidence_for_preview(tmp_path):

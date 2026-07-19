@@ -30,6 +30,9 @@ WECHAT_SERVER_KEYS = (
     "WX_MINIPROGRAM_SESSION_SECRET",
 )
 WECHAT_KEYS = WECHAT_APP_KEYS + WECHAT_SERVER_KEYS
+WECHAT_APPSECRET_PRODUCTION_SAFE_KEY = (
+    "WECHAT_APPSECRET_PRODUCTION_SAFE_CONFIRMED"
+)
 WECHAT_CATEGORY_EVIDENCE_KEYS = (
     "WECHAT_CATEGORY_PATHS_JSON",
     "WECHAT_CATEGORY_QUALIFICATION_STATUS",
@@ -982,6 +985,7 @@ def snapshot_wechat_release_form(source: Path, destination: Path):
         source,
         max_bytes=WECHAT_RELEASE_FORM_MAX_BYTES,
         require_private=True,
+        required_mode=0o600,
     )
     if read_error == "permission":
         return ["微信发布私密表单权限必须为 0600，请先执行 chmod 600。"]
@@ -1009,6 +1013,7 @@ def snapshot_wechat_release_form(source: Path, destination: Path):
             0o600,
         )
         destination_created = True
+        os.fchmod(destination_fd, 0o600)
         view = memoryview(content)
         while view:
             written = os.write(destination_fd, view)
@@ -1045,6 +1050,7 @@ def validate_wechat_release_form(
         path,
         max_bytes=WECHAT_RELEASE_FORM_MAX_BYTES,
         require_private=True,
+        required_mode=0o600,
     )
     if read_error == "missing":
         message = "微信发布私密表单不存在，请复制 .env.wechat-release.example 后填写。"
@@ -1084,6 +1090,10 @@ def validate_wechat_release_form(
         }
     form_ready = values.get("WECHAT_FORM_READY") == "1"
     category_confirmed = values.get("WECHAT_CATEGORY_CONFIRMED") == "1"
+    appsecret_production_safe = values.get(
+        WECHAT_APPSECRET_PRODUCTION_SAFE_KEY,
+        "0",
+    )
     if values.get("WECHAT_SUBJECT_TYPE") != "personal":
         errors.append("WECHAT_SUBJECT_TYPE 必须保持 personal。")
     if values.get("WECHAT_FORM_READY", "0") not in {"0", "1"}:
@@ -1094,6 +1104,10 @@ def validate_wechat_release_form(
         errors.append("FEATURE_HEAT_EXPOSURE_GIS 只能是 0 或 1。")
     if values.get("FEATURE_WXPUSHER", "") not in {"", "0", "1"}:
         errors.append("FEATURE_WXPUSHER 只能是 0 或 1。")
+    if appsecret_production_safe not in {"0", "1"}:
+        errors.append(
+            "WECHAT_APPSECRET_PRODUCTION_SAFE_CONFIRMED 只能是 0 或 1。"
+        )
 
     must_be_complete = require_ready or form_ready
     category_evidence_present = any(
@@ -1108,6 +1122,11 @@ def validate_wechat_release_form(
     must_validate_release_freeze = must_be_complete or release_freeze_present
     if require_ready and not form_ready:
         errors.append("正式发布前必须将 WECHAT_FORM_READY 设为 1。")
+    if must_be_complete and appsecret_production_safe != "1":
+        errors.append(
+            "正式发布前必须确认当前 AppSecret 未暴露或已完成轮换，并设置 "
+            "WECHAT_APPSECRET_PRODUCTION_SAFE_CONFIRMED=1。"
+        )
     if must_be_complete and not category_confirmed:
         errors.append("正式发布前必须在后台确认个人主体可用类目，并设置 WECHAT_CATEGORY_CONFIRMED=1。")
     if must_be_complete:
@@ -1258,6 +1277,10 @@ def validate_wechat_release_form(
         except (KeyError, OSError):
             errors.append("已验证的目标提交无法安全写入本机临时票据。")
 
+    if not must_be_complete and appsecret_production_safe != "1":
+        warnings.append(
+            "生产 AppSecret 安全确认尚未完成；当前只能进行预览，正式发布门禁保持关闭。"
+        )
     if not form_ready and not require_ready:
         warnings.append("微信发布私密表单尚未完成，当前只能进行游客模式预览。")
     return {
