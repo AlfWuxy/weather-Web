@@ -41,7 +41,7 @@ Redis / 数据库持久化当前天气、七日预报、预警、小时降水与
 10. 社区风险预计算只能读取现有真实天气缓存，缓存缺失或仅有 mock 数据时跳过，禁止自行访问上游。
 11. 不可变 release 上传必须排除所有 `.env*` 和 `project.private.config.json`。
 12. 小程序快照与 Web 七日预报共享同一个 QWeather 周期；Web 小时降水时间轴由该周期额外写入 24 小时 Open-Meteo 缓存，页面访问不得临时抓取。
-13. 激活事务只有在服务、timer、`OnSuccess`、30 分钟剩余窗口、`current` 链接、暂存环境清理和公网健康检查全部通过后才能写入 `COMMITTED`。
+13. 激活事务只有在服务、timer、`OnSuccess`、`OnFailure`、30 分钟剩余窗口、`current` 链接、暂存环境清理和公网健康检查全部通过后才能写入 `COMMITTED`。
 14. Web 实况与小时降水超过 30 分钟后必须返回“更新中”，禁止继续生成健康风险或展示已过期小时线；小程序可保留旧快照，但必须明确标记 stale 和原始更新时间。
 15. 七日预报缓存必须从都昌县本地今天开始连续 7 天、关键数值完整、逐项来源为 QWeather，且数据库记录未标记为 mock；任何条件不满足时整组拒绝写入和复用。
 16. 小时降水缓存只接受 Open-Meteo 的非 mock 结果；1 至 24 条时间必须有效、递增且不重复，概率、降水量、温度和风险等级必须在可信范围内。
@@ -69,7 +69,7 @@ Redis / 数据库持久化当前天气、七日预报、预警、小时降水与
 - 测试进程拦截 QWeather host，出现访问即失败。
 - 当前天气、七日预报和小时降水 HTTP 路由在空缓存或过期缓存下均不会调用 fetcher；过期实况和小时线不会继续参与展示或风险计算。
 - 月预算为 0 时，系统可启动、页面可展示缓存状态、QWeather 请求数为 0。
-- 部署完成后 bootstrap timer 为 active，recurring timer 为 inactive 且 disabled；30 分钟窗口内预算计数保持不变。
+- 部署完成后 bootstrap timer 为 active，recurring timer 为 inactive 且 disabled；bootstrap 直接触发 `case-weather-cache.service`，首次同步无论成功或失败都通过 `OnSuccess`/`OnFailure` 接续 recurring timer，30 分钟窗口内预算计数保持不变。
 - 网络闸门值无效时 fail-closed，过期后无需清变量或重启即可自动放行。
 - 原子激活完整状态复核失败时保留新数据库和 release，写入 `POST_COMMIT_ATTENTION.txt`，且下一次激活被阻断。
 
@@ -77,7 +77,7 @@ Redis / 数据库持久化当前天气、七日预报、预警、小时降水与
 
 真实联调前先读取预算快照，确认没有正在运行的手工诊断。一次性开关只在该命令进程内生效，完成后立即关闭。保存脱敏响应、snapshot_id、时间戳和预算计数差值，禁止保存认证头或 key。
 
-正式发布由外置状态目录保存耐久 receipt，目录名绑定冻结 commit 与天气语义配置 SHA-256。天气指纹只纳入会改变 QWeather HTTP 请求、预算或正式快照判定的字段，包括认证模式与凭据、API Base、canonical location、预算门禁、缓存 TTL、同步位置和天气不可用策略。AppID、AppSecret、隐私版本、WxPusher、GIS 开关和公开域名不参与天气指纹；轮换这些字段仍复用同一个 receipt。QWeather key 或其他天气配置变化会形成新的天气指纹。激活事务会在开放 QWeather 网络闸门前创建 `started`，通过 QWeather 官方实况、七日预报、预警状态和快照新鲜度校验后原子写入 `completed`。相同绑定的 completed 只复用仍然新鲜的 snapshot_id；started 未完成、receipt 损坏、快照丢失或过期都会 fail-closed，并要求人工核对上游计数。自动流程不会删除 receipt 或再次发起天气同步。
+正式发布由外置状态目录保存耐久 receipt，目录名绑定冻结 commit 与天气语义配置 SHA-256。天气指纹只纳入会改变 QWeather HTTP 请求、预算或正式快照判定的字段，包括认证模式与凭据、API Base、canonical location、预算门禁、缓存 TTL、同步位置和天气不可用策略。AppID、AppSecret、隐私版本、WxPusher、GIS 开关和公开域名不参与天气指纹；轮换这些字段仍复用同一个 receipt。QWeather key 或其他天气配置变化会形成新的天气指纹。正式模式先由 `case-weather` 运行用户完成 JWT 离线签名预检，再读取 Redis 持久预算前值；两项都通过后才写入 `started` 并开放唯一一次 QWeather 网络闸门。通过 QWeather 官方实况、七日预报、预警状态和快照新鲜度校验后，系统再次读取预算并要求总增量为 1 至 3、每个 endpoint 增量不超过 1，随后原子写入包含预算差值的 `completed`。相同绑定的 completed 只复用仍然新鲜的 snapshot_id；started 未完成、receipt 损坏、快照丢失或过期都会 fail-closed，并要求人工核对上游计数。自动流程不会删除 receipt 或再次发起天气同步。
 
 正式烟测固定向 `weather_cache_sync.sh` 传入 `--skip-nowcast`，因此不会请求或写入短时 nowcast。该烟测预计最多调用 QWeather 实况、七日预报和预警三个 endpoint；预报或预警命中新鲜缓存时调用数会更少。每 30 分钟的常规定时同步不传该参数，继续维护短时 nowcast 缓存。
 

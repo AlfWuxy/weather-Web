@@ -144,7 +144,7 @@ python3 scripts/validate_release_env.py \
 
 ### 30 分钟刷新
 
-1. 确认 bootstrap timer 在部署或开机后完整等待 30 分钟，首次同步尝试结束后才启动 recurring cache timer；客户端公共快照缓存也为 30 分钟。
+1. 确认 bootstrap timer 在部署或开机后完整等待 30 分钟并直接触发缓存服务；首次同步无论成功或失败都通过缓存服务的 `OnSuccess`/`OnFailure` 启动 recurring cache timer，客户端公共快照缓存也为 30 分钟。
 2. 确认正式服务启动前已设置 30 分钟 QWeather 网络闸门；窗口内任何意外入口都会在预算计数前被阻断，过期后自动恢复。
 3. 确认正式环境固定 `QWEATHER_REQUIRE_PERSISTENT_BUDGET=1`，QWeather 已使用 Redis 持久化预算；候选发布在停止生产服务前已对该 Redis 完成短超时 PING。
 4. 确认 Redis 已启用 AOF，`appendfsync` 为 `everysec` 或 `always`，持久化探测没有权限错误、加载状态或最近写入错误。
@@ -174,8 +174,8 @@ python3 scripts/validate_release_env.py \
 3. 将 `DEPLOY_REQUIRE_WECHAT_READY=1`，通过不可变 release 流程部署小程序后端；发布脚本会先在任何 SSH、rsync 或远端变更前把原表单安全复制为单次 `0600` 临时快照，校验器和 loader 全程只读该快照，再依据同一次校验生成的 commit 票据导出代码快照并上传。冻结 commit 同时写入 release 的 `private-metadata/source-commit.txt` 并由激活事务再次核对。原表单中途改变 ready、凭据、隐私版本或目标 commit 都不会影响本轮部署。退出时临时快照会被静默清理。工作目录中的忽略文件不会进入正式发布包。远端流程继续排除所有 `.env*` 与 `project.private.config.json`，执行 `alembic upgrade head` 并强制核对数据库版本等于唯一 head。
 4. 验证 `https://yilaoweather.org/mp/api/v1/bootstrap`，再配置 request 合法域名。
 5. 在微信开发者工具选择正式账号、导入工程，确认工具已把公开 `touristappid` 配置与本机 `project.private.config.json` 的正式 AppID 合并后再编译。
-6. 核对激活事务内的唯一一次受控真实天气同步和预算计数。外置 receipt 绑定冻结 commit 与天气语义配置指纹，并在开放天气网络闸门前写入 `started`；成功后写入 `completed` 和 snapshot_id。天气指纹只包含 QWeather 认证模式、凭据、API Base、canonical location、预算门禁、缓存 TTL、同步位置和天气不可用策略。AppID、AppSecret、隐私版本、GIS 开关、公开域名和动态网络闸门时间均不参与指纹，轮换这些字段不能获得第二次自动烟测机会。正式烟测传入 `--skip-nowcast`，最多调用 QWeather 实况、七日预报和预警三个 endpoint；预报或预警缓存命中时调用数更少。30 分钟常规周期继续维护短时 nowcast。只有实况、七日预报和预警状态都来自 QWeather 官方源且快照新鲜可用时才通过。Open-Meteo、fallback、mock 或 demo 快照均会失败。相同绑定再次执行时只允许复用仍然新鲜的 completed 快照；started 未完成、completed 快照丢失或过期时立即关闭，必须人工核对，禁止自动再次请求。
-   该烟测和候选 Gunicorn 统一以无登录权限的 `case-weather` 用户运行，候选进程仅获得 `env -i` 白名单中的发布环境。六个运行时 systemd 服务都开启权限沙箱，并只允许写入 `instance/`、`storage/` 与 `run/`。bootstrap 成功只以 systemd `OnSuccess`、timer 的 active/enabled 状态与激活事务 `COMMITTED` 作为证据，不生成额外 marker。
+6. 核对激活事务内的唯一一次受控真实天气同步和预算计数。外置 receipt 绑定冻结 commit 与天气语义配置指纹；`case-weather` 运行用户先完成 JWT 离线签名并读取 Redis 预算前值，通过后才在开放天气网络闸门前写入 `started`。成功后写入 `completed`、snapshot_id 与预算差值，并要求总增量为 1 至 3、每个 endpoint 增量不超过 1。天气指纹只包含 QWeather 认证模式、凭据、API Base、canonical location、预算门禁、缓存 TTL、同步位置和天气不可用策略。AppID、AppSecret、隐私版本、GIS 开关、公开域名和动态网络闸门时间均不参与指纹，轮换这些字段不能获得第二次自动烟测机会。正式烟测传入 `--skip-nowcast`，最多调用 QWeather 实况、七日预报和预警三个 endpoint；预报或预警缓存命中时调用数更少。30 分钟常规周期继续维护短时 nowcast。只有实况、七日预报和预警状态都来自 QWeather 官方源且快照新鲜可用时才通过。Open-Meteo、fallback、mock 或 demo 快照均会失败。相同绑定再次执行时只允许复用仍然新鲜的 completed 快照；started 未完成、completed 快照丢失或过期时立即关闭，必须人工核对，禁止自动再次请求。
+   该烟测和候选 Gunicorn 统一以无登录权限的 `case-weather` 用户运行，候选进程仅获得 `env -i` 白名单中的发布环境。五个业务运行服务只允许写入 `instance/`、`storage/` 与 `run/`；root-only SQLite 备份服务关闭网络、限制 capability，只允许写入 `backups/daily`、`instance/` 与 `storage/`。所有运行服务均开启权限沙箱。首轮等待只以 bootstrap timer 的 active/enabled 状态、完整剩余窗口、缓存服务的 `OnSuccess`/`OnFailure` 与激活事务 `COMMITTED` 作为证据，不生成额外 marker。
 7. 完成 Android、iOS 真机检查、隐私接口检查和无敏感信息截图；使用 `docs/miniprogram/REVIEW_SCREENSHOT_MANIFEST_TEMPLATE.md` 登记文件名、系统与机型、字号、时间、commit、审核用途和完成状态。
 8. 根据后台实时选项填写发布资料，在确认完整功能披露后上传 `1.0.0`，记录上传版本、构建标识、提交说明和审核截图。
 9. 在正式点击发布前，记录当前线上小程序版本、可用回退版本、代码 commit、后端 `current` release、数据库备份和部署事务状态，由用户确认发布与回滚目标后再继续。

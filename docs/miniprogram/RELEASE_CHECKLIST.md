@@ -68,7 +68,7 @@
 
 ## 额度与网络
 
-- [ ] bootstrap timer 在部署或开机后完整等待 30 分钟，首次同步尝试结束后才启动 recurring cache timer；后续固定间隔为 30 分钟。
+- [ ] bootstrap timer 在部署或开机后完整等待 30 分钟并直接触发 `case-weather-cache.service`；首次同步无论成功或失败都通过 `OnSuccess`/`OnFailure` 启动 recurring cache timer，后续固定间隔为 30 分钟。
 - [ ] 正式服务启动前已由服务器时钟设置 30 分钟 QWeather 网络闸门；阻断期不会增加 Redis 或本地预算计数，过期后自动放行。
 - [ ] 社区风险预计算只读最后一份真实天气缓存，缓存缺失时跳过且不会访问 QWeather。
 - [ ] 产品事件清理 timer 独立运行，每日删除 30 天前事件，失败会进入 systemd failed 状态。
@@ -89,7 +89,7 @@
 - [ ] 预警接口可区分“确认无预警”和“预警来源不可用”。
 - [ ] 多轮自动化、模拟器和视觉测试使用 fixture，真实 QWeather 调用数为 0。
 - [ ] 正式 release 的 `private-metadata/source-commit.txt`、激活参数和验证票据是同一个 40 位冻结 commit。
-- [ ] 正式天气烟测 receipt 位于外置状态目录，绑定冻结 commit 与天气语义配置指纹；`started` 在开放网络闸门前形成，`completed` 记录通过校验的 snapshot_id。
+- [ ] 正式天气烟测 receipt 位于外置状态目录，绑定冻结 commit 与天气语义配置指纹；运行用户 JWT 离线签名和 Redis 预算前值读取均通过后，`started` 才在开放网络闸门前形成，`completed` 记录通过校验的 snapshot_id 与预算差值。
 - [ ] 轮换 AppID、AppSecret、隐私版本、GIS 开关或公开域名后仍命中同一天气 receipt，没有追加同步请求；QWeather 凭据或天气配置确实变化时才形成新指纹。
 - [ ] 正式天气烟测快照的实况、七日预报和预警状态均通过 QWeather 官方来源校验；Open-Meteo、fallback、mock 和 demo 无法通过。
 - [ ] 正式烟测使用 `--skip-nowcast`，最多触发 QWeather 实况、七日预报和预警三个 endpoint；30 分钟常规周期继续包含短时 nowcast。
@@ -121,8 +121,8 @@
 - [ ] 上传包版本号、提交说明、截图和回滚 commit 已记录。
 - [ ] 后端使用不可变 release 目录完成预检，生产目录未被 rsync 原地覆盖。
 - [ ] 发布后 `case-weather-cache-bootstrap.timer` 为 active，`case-weather-cache.timer` 在首轮等待期间为 inactive 且 disabled。
-- [ ] 六个运行时 systemd 服务均使用无登录权限的 `case-weather` 账号和 systemd 沙箱；只有 `instance/`、`storage/` 和 `run/` 可写。
-- [ ] 激活事务在写入 `COMMITTED` 前已核对服务、timer、两条 `OnSuccess`、bootstrap 剩余窗口、`current` 链接、暂存环境清理与公网健康检查。
+- [ ] 五个业务运行服务使用无登录权限的 `case-weather` 账号，只允许写入 `instance/`、`storage/` 和 `run/`；root-only SQLite 备份服务关闭网络、限制 capability，只允许写入 `backups/daily`、`instance/` 和 `storage/`，且所有服务均启用 systemd 沙箱。
+- [ ] 激活事务在写入 `COMMITTED` 前已核对服务、两阶段 timer、缓存服务的 `OnSuccess`/`OnFailure`、bootstrap 剩余窗口、`current` 链接、暂存环境清理与公网健康检查。
 - [ ] 激活事务已验证迁移失败和候选端口健康检查失败会恢复数据库、旧 release 与原 systemd 状态。
 - [ ] 公网服务启动后出现故障会保留向前迁移的数据库与新 release，并写入 `POST_COMMIT_ATTENTION.txt`，不会覆盖可能已经确认的用户写入。
 - [ ] `/healthz` 只执行应用与数据库检查，不会触发天气、地图、第三方消息服务或其他外部 API。
