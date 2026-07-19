@@ -12,6 +12,49 @@ let clearImpl = () => {};
 let lastToast = null;
 const settingsStorage = new Map();
 
+function trackHealthMutation(page, promise, kind, meta) {
+  const pending = Promise.resolve(promise);
+  page._healthMutationPromise = pending;
+  page._healthMutationKind = String(kind || '');
+  page._healthMutationMeta = meta && typeof meta === 'object' ? meta : null;
+  return pending;
+}
+
+function finishHealthMutation(page, promise) {
+  if (page._healthMutationPromise === promise) {
+    page._healthMutationPromise = null;
+    page._healthMutationKind = '';
+    page._healthMutationMeta = null;
+  }
+}
+
+function suspendHealthMutation(page) {
+  if (!page._healthMutationPromise) return false;
+  page._healthMutationResumePromise = page._healthMutationPromise;
+  page._healthMutationResumeKind = page._healthMutationKind;
+  page._healthMutationResumeMeta = page._healthMutationMeta;
+  page._healthConsentReloadPending = true;
+  return true;
+}
+
+async function resumeHealthMutation(page) {
+  const pending = page._healthMutationResumePromise;
+  if (!pending) return { resumed: false, ok: false, kind: '', meta: null };
+  const kind = String(page._healthMutationResumeKind || '');
+  const meta = page._healthMutationResumeMeta || null;
+  page._healthMutationResumePromise = null;
+  page._healthMutationResumeKind = '';
+  page._healthMutationResumeMeta = null;
+  try {
+    const value = await pending;
+    return { resumed: true, ok: true, value, kind, meta };
+  } catch (error) {
+    return { resumed: true, ok: false, error, kind, meta };
+  } finally {
+    finishHealthMutation(page, pending);
+  }
+}
+
 const {
   ACQUISITION_STORAGE_KEY,
   FAMILY_ENTRY_STORAGE_KEY,
@@ -34,11 +77,16 @@ require.cache[careSessionPath] = {
   exports: {
     authApi: (options) => authApiImpl(options),
     clear: () => clearImpl(),
+    finishHealthMutation,
     getMeta: () => ({ login_method: 'wechat' }),
     getSnapshot: () => snapshotImpl(),
     getToken: () => getTokenImpl(),
+    guardHealthSensitivePage: async (page, loader) => loader(),
     requireToken: () => 'session-token',
+    resumeHealthMutation,
+    suspendHealthMutation,
     tokenApi: (token, options) => tokenApiImpl(token, options),
+    trackHealthMutation,
   },
 };
 
@@ -55,6 +103,16 @@ function makePage(definition, overrides) {
   page.data = Object.assign({}, definition.data, overrides || {});
   page.setData = (next) => Object.assign(page.data, next);
   return page;
+}
+
+function deferred() {
+  let resolve;
+  let reject;
+  const promise = new Promise((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, reject, resolve };
 }
 
 test('家庭照护刷新失败时保留上次成功加载的卡片', async () => {
@@ -77,6 +135,50 @@ test('家庭照护刷新失败时保留上次成功加载的卡片', async () =>
   assert.match(page.data.loadError, /上次成功加载/);
 });
 
+test('停止管理连续点击期间只展示一次确认并只发送一次删除请求', async (t) => {
+  const deleteGate = deferred();
+  const requests = [];
+  const originalShowModal = global.wx.showModal;
+  let modalCount = 0;
+  let confirmDelete;
+  t.after(() => { global.wx.showModal = originalShowModal; });
+  global.wx.showModal = (options) => {
+    modalCount += 1;
+    confirmDelete = options.success;
+  };
+  authApiImpl = (options) => {
+    requests.push(options);
+    if (options.method === 'DELETE') return deleteGate.promise;
+    return Promise.resolve({ items: [] });
+  };
+  snapshotImpl = async () => ({});
+  const definition = loadPage('../pages/elders/index');
+  const page = makePage(definition, {
+    elders: [{ pair_id: 7, displayName: '奶奶' }],
+    busyPairId: 0,
+  });
+  const event = { currentTarget: { dataset: { pairId: 7, name: '奶奶' } } };
+
+  page.deleteElder.call(page, event);
+  page.deleteElder.call(page, event);
+  assert.equal(modalCount, 1);
+  assert.equal(page.data.busyPairId, 7);
+
+  const pendingDelete = confirmDelete({ confirm: true });
+  await Promise.resolve();
+  page.deleteElder.call(page, event);
+  assert.equal(modalCount, 1);
+  assert.equal(requests.filter((item) => item.method === 'DELETE').length, 1);
+  deleteGate.resolve({ ok: true });
+  await pendingDelete;
+
+  assert.equal(requests.filter((item) => item.method === 'DELETE').length, 1);
+  assert.equal(page.data.busyPairId, 0);
+  const view = fs.readFileSync(path.join(__dirname, '../pages/elders/index.wxml'), 'utf8');
+  assert.match(view, /loading="\{\{busyPairId === item\.pair_id\}\}"/);
+  assert.match(view, /disabled="\{\{busyPairId !== 0\}\}"/);
+});
+
 test('账号接口失败后清空已验证展示并提供内联错误', async () => {
   authApiImpl = async () => ({ display_name: '测试用户' });
   const definition = loadPage('../pages/account/index');
@@ -93,231 +195,60 @@ test('账号接口失败后清空已验证展示并提供内联错误', async ()
   assert.match(page.data.loadError, /重新|重试/);
 });
 
-test('推送设置重新加载时先清空旧账号值，失败后保持关闭写入口', async () => {
-  const requests = [];
-  let rejectLoad;
-  authApiImpl = (options) => {
-    requests.push(options);
-    return new Promise((resolve, reject) => { rejectLoad = reject; });
-  };
-  const definition = loadPage('../pages/settings/index');
-  const page = makePage(definition, {
-    loggedIn: true,
-    settingsVerified: true,
-    wxpusherUid: 'UID_USER_A',
-    pushEnabled: true,
-    wxpusherAvailable: true,
-    wxpusherConsent: true,
-    requiredWxpusherConsentVersion: 'privacy-old',
-    wxpusherReconsentRequired: true,
-  });
-
-  const loading = page.loadSettings.call(page);
-  assert.equal(page.data.settingsVerified, false);
-  assert.equal(page.data.wxpusherUid, '');
-  assert.equal(page.data.pushEnabled, false);
-  assert.equal(page.data.persistedPushEnabled, false);
-  assert.equal(page.data.wxpusherAvailable, false);
-  assert.equal(page.data.wxpusherConsent, false);
-  assert.equal(page.data.requiredWxpusherConsentVersion, '');
-  assert.equal(page.data.wxpusherReconsentRequired, false);
-
-  rejectLoad(new Error('offline'));
-  await loading;
-  assert.equal(page.data.settingsVerified, false);
-  assert.equal(page.data.wxpusherUid, '');
-  assert.equal(page.data.pushEnabled, false);
-  assert.equal(page.data.persistedPushEnabled, false);
-  assert.equal(page.data.wxpusherAvailable, false);
-  assert.equal(page.data.wxpusherConsent, false);
-  assert.equal(page.data.requiredWxpusherConsentVersion, '');
-  assert.equal(page.data.wxpusherReconsentRequired, false);
-
-  await page.saveSettings.call(page);
-  assert.equal(requests.filter((item) => item.method === 'PATCH').length, 0);
-});
-
-test('推送设置缺少会话时清空旧值，成功核验后仍可正常保存', async (t) => {
-  const requests = [];
-  t.after(() => { getTokenImpl = () => 'session-token'; });
-  const definition = loadPage('../pages/settings/index');
-  const page = makePage(definition, {
-    loggedIn: true,
-    settingsVerified: true,
-    wxpusherUid: 'UID_USER_A',
-    pushEnabled: true,
-    wxpusherAvailable: true,
-    wxpusherConsent: true,
-    requiredWxpusherConsentVersion: 'privacy-old',
-    wxpusherReconsentRequired: true,
-  });
-
-  getTokenImpl = () => '';
-  await page.onShow.call(page);
-  assert.equal(page.data.loggedIn, false);
-  assert.equal(page.data.settingsVerified, false);
-  assert.equal(page.data.wxpusherUid, '');
-  assert.equal(page.data.pushEnabled, false);
-  assert.equal(page.data.wxpusherAvailable, false);
-  assert.equal(page.data.wxpusherConsent, false);
-  assert.equal(page.data.requiredWxpusherConsentVersion, '');
-  assert.equal(page.data.wxpusherReconsentRequired, false);
-
-  getTokenImpl = () => 'session-user-b';
-  authApiImpl = async (options) => {
-    requests.push(options);
-    if (options.method === 'GET') {
-      return {
-        wxpusher_feature_enabled: true,
-        wxpusher_uid: 'UID_USER_B',
-        push_enabled: false,
-        wxpusher_available: true,
-        required_wxpusher_consent_version: 'privacy-v3',
-        wxpusher_reconsent_required: false,
-      };
-    }
-    return { ok: true };
-  };
-  await page.onShow.call(page);
-  assert.equal(page.data.loggedIn, true);
-  assert.equal(page.data.settingsVerified, true);
-  assert.equal(page.data.wxpusherUid, 'UID_USER_B');
-  assert.equal(page.data.wxpusherAvailable, true);
-  assert.equal(page.data.requiredWxpusherConsentVersion, 'privacy-v3');
-  assert.equal(page.data.persistedPushEnabled, false);
-  assert.equal(page.data.wxpusherConsent, false);
-
-  page.onUid.call(page, { detail: { value: 'UID_USER_B_NEW' } });
-  await page.saveSettings.call(page);
-  assert.equal(requests.filter((item) => item.method === 'PATCH').length, 1);
-  assert.equal(requests.find((item) => item.method === 'PATCH').data.wxpusher_uid, 'UID_USER_B_NEW');
-  assert.equal(requests.find((item) => item.method === 'PATCH').data.wxpusher_consent_version, 'privacy-v3');
-
-  page.onToggle.call(page, { detail: { value: true } });
-  page.onWxPusherConsent.call(page, { detail: { value: ['agreed'] } });
-  await page.saveSettings.call(page);
-  const enableRequest = requests.filter((item) => item.method === 'PATCH')[1];
-  assert.equal(enableRequest.data.push_enabled, true);
-  assert.equal(enableRequest.data.wxpusher_consent, true);
-  assert.equal(enableRequest.data.wxpusher_consent_version, 'privacy-v3');
-  assert.equal(page.data.wxpusherConsent, false);
-  assert.equal(page.data.persistedPushEnabled, true);
-
-  page.onUid.call(page, { detail: { value: 'UID_USER_B_CURRENT' } });
-  await page.saveSettings.call(page);
-  const currentReceiptRequest = requests.filter((item) => item.method === 'PATCH')[2];
-  assert.equal(currentReceiptRequest.data.wxpusher_uid, 'UID_USER_B_CURRENT');
-  assert.equal(currentReceiptRequest.data.push_enabled, true);
-  assert.equal(currentReceiptRequest.data.wxpusher_consent, false);
-  assert.equal(page.data.persistedPushEnabled, true);
-
-  getTokenImpl = () => '';
-  page.onSessionInvalidated.call(page);
-  assert.equal(page.data.loggedIn, false);
-  assert.equal(page.data.settingsVerified, false);
-  assert.equal(page.data.wxpusherUid, '');
-  assert.equal(page.data.pushEnabled, false);
-  assert.equal(page.data.persistedPushEnabled, false);
-  assert.equal(page.data.wxpusherAvailable, false);
-  assert.equal(page.data.wxpusherConsent, false);
-  assert.equal(page.data.requiredWxpusherConsentVersion, '');
-  assert.equal(page.data.wxpusherReconsentRequired, false);
-
-  await page.saveSettings.call(page);
-  assert.equal(requests.filter((item) => item.method === 'PATCH').length, 3);
-});
-
-test('推送通道缺失时阻止开启和写入，同时允许关闭历史开启状态', async () => {
-  const requests = [];
-  authApiImpl = async (options) => {
-    requests.push(options);
-    if (options.method === 'GET') {
-      return {
-        wxpusher_feature_enabled: true,
-        wxpusher_uid: 'UID_EXISTING',
-        push_enabled: false,
-        wxpusher_available: false,
-        required_wxpusher_consent_version: 'privacy-v3',
-        wxpusher_reconsent_required: false,
-      };
-    }
-    return { ok: true };
-  };
-  const definition = loadPage('../pages/settings/index');
-  const unavailablePage = makePage(definition);
-
-  await unavailablePage.loadSettings.call(unavailablePage, 'session-token');
-  unavailablePage.onToggle.call(unavailablePage, { detail: { value: true } });
-  assert.equal(unavailablePage.data.pushEnabled, false);
-  assert.equal(lastToast.title, '推送服务暂不可用');
-
-  unavailablePage.onUid.call(unavailablePage, { detail: { value: '' } });
-  await unavailablePage.saveSettings.call(unavailablePage);
-  const clearRequest = requests.find((item) => item.method === 'PATCH');
-  assert.equal(clearRequest.data.wxpusher_uid, '');
-  assert.equal(clearRequest.data.push_enabled, false);
-
-  unavailablePage.setData({ pushEnabled: true, wxpusherConsent: true });
-  await unavailablePage.saveSettings.call(unavailablePage);
-  assert.equal(requests.filter((item) => item.method === 'PATCH').length, 1);
-
-  authApiImpl = async (options) => {
-    requests.push(options);
-    if (options.method === 'GET') {
-      return {
-        wxpusher_feature_enabled: true,
-        wxpusher_uid: 'UID_EXISTING',
-        push_enabled: true,
-        wxpusher_available: false,
-        required_wxpusher_consent_version: 'privacy-v3',
-        wxpusher_reconsent_required: true,
-      };
-    }
-    return { ok: true };
-  };
-  const enabledPage = makePage(definition);
-  await enabledPage.loadSettings.call(enabledPage, 'session-token');
-  enabledPage.onToggle.call(enabledPage, { detail: { value: false } });
-  await enabledPage.saveSettings.call(enabledPage);
-
-  const patchRequests = requests.filter((item) => item.method === 'PATCH');
-  assert.equal(patchRequests.length, 2);
-  assert.equal(patchRequests[1].data.push_enabled, false);
-});
-
-test('首发关闭第三方推送时清空服务端历史值且不发起保存请求', async () => {
-  const requests = [];
-  authApiImpl = async (options) => {
-    requests.push(options);
-    return {
-      wxpusher_feature_enabled: false,
-      wxpusher_uid: 'UID_HISTORICAL',
-      push_enabled: true,
-      wxpusher_available: true,
-      required_wxpusher_consent_version: 'privacy-v3',
-      wxpusher_reconsent_required: true,
+['resolve', 'reject'].forEach((staleSettlement) => {
+  test(`账号页隐藏返回后的旧请求${staleSettlement === 'resolve' ? '成功' : '失败'}不会覆盖最新结果`, async (t) => {
+    const firstGet = deferred();
+    const secondGet = deferred();
+    let requestCount = 0;
+    t.after(() => { authApiImpl = async () => ({}); });
+    authApiImpl = () => {
+      requestCount += 1;
+      return requestCount === 1 ? firstGet.promise : secondGet.promise;
     };
-  };
+    const definition = loadPage('../pages/account/index');
+    const page = makePage(definition);
+
+    const firstShow = page.onShow.call(page);
+    await Promise.resolve();
+    page.onHide.call(page);
+    const secondShow = page.onShow.call(page);
+    await Promise.resolve();
+    assert.equal(requestCount, 2);
+
+    secondGet.resolve({ display_name: '最新账号' });
+    await secondShow;
+    if (staleSettlement === 'resolve') {
+      firstGet.resolve({ display_name: '旧账号' });
+    } else {
+      firstGet.reject(new Error('旧请求离线'));
+    }
+    await firstShow;
+
+    assert.equal(page.data.accountVerified, true);
+    assert.equal(page.data.me.display_name, '最新账号');
+    assert.equal(page.data.loadError, '');
+    assert.equal(page.data.loading, false);
+  });
+});
+
+test('设置页只根据本机会话展示登录状态', (t) => {
+  t.after(() => { getTokenImpl = () => 'session-token'; });
   const definition = loadPage('../pages/settings/index');
   const page = makePage(definition);
 
-  await page.loadSettings.call(page, 'session-token');
-  assert.equal(page.data.settingsVerified, true);
-  assert.equal(page.data.wxpusherFeatureEnabled, false);
-  assert.equal(page.data.wxpusherUid, '');
-  assert.equal(page.data.pushEnabled, false);
-  assert.equal(page.data.wxpusherAvailable, false);
+  getTokenImpl = () => '';
+  page.onShow.call(page);
+  assert.deepEqual(page.data, { busy: false, loggedIn: false });
 
-  page.onUid.call(page, { detail: { value: 'UID_NEW' } });
-  page.onToggle.call(page, { detail: { value: true } });
-  await page.saveSettings.call(page);
-  assert.equal(page.data.wxpusherUid, '');
-  assert.equal(page.data.pushEnabled, false);
-  assert.equal(lastToast.title, '首发版本暂未开放第三方推送');
-  assert.equal(requests.filter((item) => item.method === 'PATCH').length, 0);
+  getTokenImpl = () => 'session-user-b';
+  page.onShow.call(page);
+  assert.deepEqual(page.data, { busy: false, loggedIn: true });
+
+  page.onSessionInvalidated.call(page);
+  assert.deepEqual(page.data, { busy: false, loggedIn: false });
 });
 
-test('设置页退出登录后清空同意版本和未提交勾选', async (t) => {
+test('设置页退出登录后立即切换为未登录状态', async (t) => {
   let modalSuccess;
   let relaunched = false;
   let clearCount = 0;
@@ -334,29 +265,14 @@ test('设置页退出登录后清空同意版本和未提交勾选', async (t) =
   clearImpl = () => { clearCount += 1; };
   tokenApiImpl = async () => ({ ok: true });
   const definition = loadPage('../pages/settings/index');
-  const page = makePage(definition, {
-    loggedIn: true,
-    settingsVerified: true,
-    wxpusherUid: 'UID_PRIVATE',
-    pushEnabled: true,
-    wxpusherAvailable: true,
-    wxpusherConsent: true,
-    requiredWxpusherConsentVersion: 'privacy-v3',
-    wxpusherReconsentRequired: true,
-  });
+  const page = makePage(definition, { loggedIn: true });
 
   page.logout.call(page);
   await modalSuccess({ confirm: true });
 
   assert.equal(clearCount, 1);
   assert.equal(relaunched, true);
-  assert.equal(page.data.loggedIn, false);
-  assert.equal(page.data.wxpusherUid, '');
-  assert.equal(page.data.pushEnabled, false);
-  assert.equal(page.data.persistedPushEnabled, false);
-  assert.equal(page.data.wxpusherConsent, false);
-  assert.equal(page.data.requiredWxpusherConsentVersion, '');
-  assert.equal(page.data.wxpusherReconsentRequired, false);
+  assert.deepEqual(page.data, { busy: false, loggedIn: false });
 });
 
 test('设置页确认退出后不等待远端请求就清空私人数据', async (t) => {
@@ -381,15 +297,7 @@ test('设置页确认退出后不等待远端请求就清空私人数据', async
     return new Promise((resolve) => { resolveLogout = resolve; });
   };
   const definition = loadPage('../pages/settings/index');
-  const page = makePage(definition, {
-    loggedIn: true,
-    settingsVerified: true,
-    wxpusherUid: 'UID_PRIVATE',
-    pushEnabled: true,
-    persistedPushEnabled: true,
-    wxpusherConsent: true,
-    requiredWxpusherConsentVersion: 'privacy-v3',
-  });
+  const page = makePage(definition, { loggedIn: true });
 
   page.logout.call(page);
   const pendingLogout = modalSuccess({ confirm: true });
@@ -397,15 +305,64 @@ test('设置页确认退出后不等待远端请求就清空私人数据', async
   assert.equal(requestToken, 'session-token');
   assert.equal(clearCount, 1);
   assert.equal(relaunched, true);
-  assert.equal(page.data.loggedIn, false);
-  assert.equal(page.data.wxpusherUid, '');
-  assert.equal(page.data.pushEnabled, false);
-  assert.equal(page.data.persistedPushEnabled, false);
-  assert.equal(page.data.wxpusherConsent, false);
-  assert.equal(page.data.requiredWxpusherConsentVersion, '');
+  assert.deepEqual(page.data, { busy: false, loggedIn: false });
 
   resolveLogout({ ok: true });
   await pendingLogout;
+});
+
+test('账号页确认退出后立即清理并跳转，远端失败不回滚', async (t) => {
+  let modalSuccess;
+  let rejectLogout;
+  let relaunched = false;
+  let clearCount = 0;
+  let requestToken = '';
+  let requestOptions = null;
+  const originalShowModal = global.wx.showModal;
+  const originalReLaunch = global.wx.reLaunch;
+  t.after(() => {
+    global.wx.showModal = originalShowModal;
+    global.wx.reLaunch = originalReLaunch;
+    clearImpl = () => {};
+    tokenApiImpl = async () => ({});
+    settingsStorage.clear();
+  });
+  global.wx.showModal = ({ success }) => { modalSuccess = success; };
+  global.wx.reLaunch = ({ url }) => { relaunched = url === '/pages/home/index'; };
+  clearImpl = () => { clearCount += 1; };
+  tokenApiImpl = (token, options) => {
+    requestToken = token;
+    requestOptions = options;
+    return new Promise((resolve, reject) => { rejectLogout = reject; });
+  };
+  settingsStorage.set(ACQUISITION_STORAGE_KEY, {
+    source: 'family_share',
+    expires_at: Date.now() + 30 * 24 * 60 * 60 * 1000,
+  });
+  settingsStorage.set(FAMILY_ENTRY_STORAGE_KEY, {
+    source: 'family_share',
+    expires_at: Date.now() + 30 * 60 * 1000,
+  });
+  const definition = loadPage('../pages/account/index');
+  const page = makePage(definition, { busy: false });
+
+  page.logout.call(page);
+  const pendingLogout = modalSuccess({ confirm: true });
+
+  assert.equal(requestToken, 'session-token');
+  assert.deepEqual(requestOptions, {
+    method: 'POST',
+    path: '/mp/api/v1/auth/logout',
+  });
+  assert.equal(clearCount, 1);
+  assert.equal(relaunched, true);
+  assert.equal(settingsStorage.has(ACQUISITION_STORAGE_KEY), false);
+  assert.equal(settingsStorage.has(FAMILY_ENTRY_STORAGE_KEY), false);
+
+  rejectLogout(new Error('offline'));
+  await pendingLogout;
+  assert.equal(clearCount, 1);
+  assert.equal(relaunched, true);
 });
 
 test('设置页退出会清除账号 A 的家庭分享来源，账号 B 不继承归因', async (t) => {
@@ -467,6 +424,42 @@ test('今日行动未勾选时不会提交，勾选后只保存实际选项', as
   assert.deepEqual(requests[0].data.actions_done, ['check_weather']);
   assert.equal(page.data.confirmed, true);
   assert.equal(lastToast.title, '今日行动已记录');
+});
+
+test('今日行动提交期间锁定勾选并以提交快照显示保存结果', async () => {
+  const gate = deferred();
+  const requests = [];
+  authApiImpl = (options) => {
+    requests.push(options);
+    return gate.promise;
+  };
+  const definition = loadPage('../pages/action-checkin/index');
+  const page = makePage(definition, {
+    pairId: 9,
+    contextReady: true,
+    actions: [
+      { id: 'check_weather', title: '看天气', detail: '', checked: true },
+      { id: 'carry_water', title: '带水', detail: '', checked: false },
+    ],
+    selectedActions: ['check_weather'],
+  });
+
+  const pending = page.confirmActions.call(page);
+  await Promise.resolve();
+  assert.equal(page.data.busyAction, 'confirm');
+  page.onActionsChange.call(page, { detail: { value: ['carry_water'] } });
+  assert.deepEqual(page.data.selectedActions, ['check_weather']);
+  gate.resolve({ ok: true });
+  await pending;
+
+  assert.equal(requests.length, 1);
+  assert.deepEqual(requests[0].data.actions_done, ['check_weather']);
+  assert.equal(page.data.confirmed, true);
+  assert.deepEqual(page.data.selectedActions, ['check_weather']);
+  assert.deepEqual(page.data.actions.filter((item) => item.checked).map((item) => item.id), ['check_weather']);
+
+  const view = fs.readFileSync(path.join(__dirname, '../pages/action-checkin/index.wxml'), 'utf8');
+  assert.match(view, /disabled="\{\{!contextReady \|\| busyAction !== ''\}\}"/);
 });
 
 test('今日行动恢复当天已保存选项并忽略旧版本行动 ID', async () => {
@@ -837,6 +830,67 @@ test('公共天气页面失败会安全降级、统一退避并提供真实重�
   }
 });
 
+test('健康筛查首次加载失败时保留错误入口并禁止提交空白上下文', async () => {
+  const requests = [];
+  authApiImpl = async (options) => {
+    requests.push(options);
+    throw new Error('offline');
+  };
+  const definition = loadPage('../pages/health-assessment/index');
+  const page = makePage(definition, {
+    answers: {
+      outdoor_exposure: 'low',
+      symptom_level: 'none',
+      hydration: 'good',
+      medication_adherence: 'good',
+      sleep_quality: 'good',
+    },
+  });
+
+  await page.loadPage.call(page);
+  assert.equal(page.data.contextReady, false);
+  assert.equal(page.data.loading, false);
+  assert.match(page.data.loadError, /重试/);
+  await page.submitAssessment.call(page);
+  assert.equal(requests.filter((item) => item.method === 'POST').length, 0);
+
+  const view = fs.readFileSync(path.join(__dirname, '../pages/health-assessment/index.wxml'), 'utf8');
+  assert.match(view, /wx:elif="\{\{loadError\}\}"[^>]*role="alert"/);
+  assert.match(view, /bindtap="loadPage"/);
+  assert.match(view, /wx:elif="\{\{contextReady\}\}"/);
+  assert.match(view, /class="result-card"[^>]*role="status"[^>]*aria-live="polite"/);
+});
+
+test('编辑家人读取失败时不展示空白表单且保存请求为零', async () => {
+  const requests = [];
+  authApiImpl = async (options) => {
+    requests.push(options);
+    throw new Error('offline');
+  };
+  const definition = loadPage('../pages/elder-edit/index');
+  const page = makePage(definition, {
+    mode: 'edit',
+    pairId: 7,
+    name: '旧称呼',
+    relation: '祖母',
+    age: '72',
+    contextReady: true,
+  });
+
+  await page.loadElder.call(page);
+  assert.equal(page.data.contextReady, false);
+  assert.equal(page.data.loading, false);
+  assert.equal(page.data.name, '');
+  assert.match(page.data.loadError, /重试/);
+  page.setData({ name: '奶奶', relation: '祖母', age: '72' });
+  await page.onSave.call(page);
+  assert.equal(requests.filter((item) => item.method === 'PATCH').length, 0);
+
+  const view = fs.readFileSync(path.join(__dirname, '../pages/elder-edit/index.wxml'), 'utf8');
+  assert.match(view, /wx:elif="\{\{loadError\}\}"[^>]*role="alert"/);
+  assert.match(view, /wx:elif="\{\{contextReady\}\}" class="form-card"/);
+});
+
 test('健康筛查切换家人会清空答案且不被旧人的乱序响应覆盖', async () => {
   const pending = new Map();
   authApiImpl = (options) => new Promise((resolve) => {
@@ -850,6 +904,8 @@ test('健康筛查切换家人会清空答案且不被旧人的乱序响应覆�
     elderIndex: 0,
     answers: { outdoor_exposure: 'high' },
     completedCount: 1,
+    contextReady: true,
+    loading: false,
   });
   page._unloaded = false;
   page._latestRequestToken = 0;
@@ -859,6 +915,7 @@ test('健康筛查切换家人会清空答案且不被旧人的乱序响应覆�
   assert.equal(page.data.pairId, 2);
   assert.deepEqual(page.data.answers, {});
   assert.equal(page.data.completedCount, 0);
+  assert.equal(page.requestedPairId, 2);
 
   pending.get(2)({ latest: { id: 'elder-2', risk_level: '留意' } });
   await secondLoad;
@@ -880,6 +937,7 @@ test('健康筛查提交固定开始时的家人且不覆盖已切换页面', as
   const definition = loadPage('../pages/health-assessment/index');
   const page = makePage(definition, {
     pairId: 2,
+    contextReady: true,
     answers: {
       outdoor_exposure: 'low',
       symptom_level: 'none',
@@ -913,7 +971,14 @@ test('老人资料保存后手动离页不会被延迟定时器再返回一层',
   authApiImpl = async () => ({});
   try {
     const definition = loadPage('../pages/elder-edit/index');
-    const page = makePage(definition, { mode: 'create', name: '妈妈', relation: '母亲' });
+    const page = makePage(definition, {
+      mode: 'create',
+      name: '妈妈',
+      relation: '母亲',
+      age: '68',
+      contextReady: true,
+      loading: false,
+    });
     page._unloaded = false;
     await page.onSave.call(page);
     page.onUnload.call(page);
@@ -980,6 +1045,6 @@ test('关键选择控件和公开信息带有可读语义', () => {
   assert.match(alertsView, /未提供，请以当地主管部门通知为准/);
   assert.match(accountView, /bindtap="loadAccount"/);
   assert.match(accountView, /wx:elif="\{\{accountVerified\}\}"/);
-  assert.match(settingsView, /disabled="\{\{busy \|\| !settingsVerified\}\}" bindtap="saveSettings"/);
+  assert.match(settingsView, /wx:if="\{\{loggedIn\}\}" class="logout-button"[\s\S]*bindtap="logout"/);
   assert.match(freshnessView, /当前离线，正在显示上次保存的数据/);
 });

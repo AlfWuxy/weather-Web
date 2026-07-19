@@ -5,6 +5,7 @@
     "pages/elders/index",
     "pages/community/index",
     "pages/settings/index",
+    "pages/health-consent/index",
     "pages/health-assessment/index",
     "pages/diary/index",
     "pages/medications/index",

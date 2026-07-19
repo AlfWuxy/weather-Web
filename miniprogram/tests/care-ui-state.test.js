@@ -28,8 +28,12 @@ require.cache[careSessionPath] = {
   loaded: true,
   exports: {
     authApi: (options) => authApiImpl(options),
+    finishHealthMutation: () => {},
     getSnapshot: () => snapshotImpl(),
     requireToken: () => 'session-token',
+    resumeHealthMutation: async () => ({ resumed: false, ok: false }),
+    suspendHealthMutation: () => false,
+    trackHealthMutation: (page, promise) => Promise.resolve(promise),
   },
 };
 

@@ -107,15 +107,8 @@ test('核心适老正文、新鲜度和风险说明使用 16px 大字令牌', ()
     ['pages/settings/index.wxss', '.login-button'],
     ['pages/settings/index.wxss', '.fallback-note'],
     ['pages/settings/index.wxss', '.policy-copy'],
-    ['pages/settings/index.wxss', '.section-copy'],
     ['pages/settings/index.wxss', '.menu-copy'],
-    ['pages/settings/index.wxss', '.switch-copy'],
-    ['pages/settings/index.wxss', '.field-label'],
-    ['pages/settings/index.wxss', '.text-input'],
-    ['pages/settings/index.wxss', '.consent-copy'],
-    ['pages/settings/index.wxss', '.switch-title'],
     ['pages/settings/index.wxss', '.menu-title'],
-    ['pages/settings/index.wxss', '.save-button'],
     ['pages/settings/index.wxss', '.logout-button'],
     ['pages/actions/index.wxss', '.check-detail'],
     ['pages/actions/index.wxss', '.check-state'],
@@ -262,9 +255,6 @@ test('紧凑按钮、页签、复选与开关包装区仍保持 88rpx', () => {
     ['pages/medications/index.wxss', '.text-input'],
     ['pages/medications/index.wxss', '.picker-field'],
     ['pages/medications/index.wxss', '.small-input'],
-    ['pages/settings/index.wxss', '.text-input'],
-    ['pages/settings/index.wxss', '.switch-row'],
-    ['pages/settings/index.wxss', '.third-party-consent'],
   ];
   const violations = contracts.filter(([file, selector]) => (
     !minHeightsForSelector(file, selector).some((height) => height >= 88)
@@ -284,12 +274,11 @@ test('登录协议复选标签自身具有完整触控面积', () => {
   assert.match(view, /<view class="consent-tail">[\s\S]*>和<[\s\S]*aria-label="阅读用户协议"[\s\S]*<\/view>/);
 });
 
-test('开关的文案与控件共用整行 label 触控区', () => {
+test('行动开关的文案与控件共用整行 label 触控区', () => {
   const checkinView = fs.readFileSync(path.join(miniRoot, 'pages/action-checkin/index.wxml'), 'utf8');
   const settingsView = fs.readFileSync(path.join(miniRoot, 'pages/settings/index.wxml'), 'utf8');
   assert.match(checkinView, /<label class="optin-row" for="debriefOptinSwitch"[\s\S]*<switch id="debriefOptinSwitch"[\s\S]*<\/label>/);
-  assert.match(settingsView, /<label class="switch-row" for="wxpusherSwitch"[\s\S]*<switch id="wxpusherSwitch"[\s\S]*<\/label>/);
-  assert.match(settingsView, /wx:if="\{\{wxpusherFeatureEnabled\}\}" class="settings-card"/);
+  assert.doesNotMatch(settingsView, /<(?:input|switch|checkbox)\b/);
 });
 
 test('所有 WXML role 同时声明小程序 aria-role', () => {

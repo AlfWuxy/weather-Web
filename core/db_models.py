@@ -89,6 +89,9 @@ class User(UserMixin, db.Model):
     # 第三方传输同意回执；文案版本变更后发送端自动失效。
     wxpusher_consent_version = db.Column(db.String(64))
     wxpusher_consented_at = db.Column(db.DateTime)
+    # 健康敏感信息单独留存同意回执，不能由一般隐私同意或第三方推送同意替代。
+    health_sensitive_consent_version = db.Column(db.String(64))
+    health_sensitive_consented_at = db.Column(db.DateTime)
 
     def set_password(self, password):
         self.password_hash = generate_password_hash(password)

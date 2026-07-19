@@ -501,6 +501,121 @@ def test_locked_write_reauthorization_rejects_concurrent_token_revocation(
     assert outcome["response"].get_json()["error"] == "unauthorized"
 
 
+def test_elder_delete_rechecks_health_consent_and_scope_after_owner_lock(
+    app,
+    client,
+    db_session,
+    monkeypatch,
+):
+    """撤回发生在 owner 锁等待期间时，删除必须在二次授权处停止。"""
+    from blueprints import mp_api
+    from core.db_models import ApiToken, FamilyMember, Pair, User
+    from core.security import hash_short_code
+    from core.time_utils import utcnow
+    from core.usage import create_api_token
+
+    user = User(
+        username="elder-delete-health-withdraw-race",
+        role="user",
+        health_sensitive_consent_version=app.config[
+            "WX_MINIPROGRAM_PRIVACY_VERSION"
+        ],
+        health_sensitive_consented_at=utcnow(),
+    )
+    user.set_password("pw123456")
+    db_session.add(user)
+    db_session.flush()
+    member = FamilyMember(
+        user_id=user.id,
+        name="撤回竞态家人",
+        relation="家人",
+        age=70,
+    )
+    db_session.add(member)
+    db_session.flush()
+    pair = Pair(
+        caregiver_id=user.id,
+        member_id=member.id,
+        community_code="都昌县",
+        location_query="都昌县",
+        elder_code="elder-withdraw-race",
+        short_code="78787878",
+        short_code_hash=hash_short_code("78787878"),
+        status="active",
+        created_at=utcnow(),
+        last_active_at=utcnow(),
+    )
+    db_session.add(pair)
+    db_session.commit()
+    pair_id = int(pair.id)
+    plain = create_api_token(
+        user.id,
+        name="health-withdraw-race",
+        scopes=["miniprogram:read", "miniprogram:write", "miniprogram:sensitive"],
+    )
+    token_id = int(ApiToken.query.filter_by(user_id=user.id).one().id)
+    headers = {"Authorization": f"Bearer {plain}"}
+    entered_owner_lock = threading.Event()
+    continue_delete = threading.Event()
+    outcome = {}
+
+    @contextmanager
+    def paused_owner_lock(_user_id):
+        entered_owner_lock.set()
+        assert continue_delete.wait(timeout=5)
+        yield
+
+    monkeypatch.setattr(mp_api, "push_owner_lock", paused_owner_lock)
+
+    def delete_elder():
+        with app.test_client() as thread_client:
+            outcome["response"] = thread_client.delete(
+                f"/mp/api/v1/elders/{pair_id}",
+                headers=headers,
+            )
+
+    worker = threading.Thread(target=delete_elder)
+    worker.start()
+    assert entered_owner_lock.wait(timeout=5)
+    withdrawn = client.delete("/mp/api/v1/health-consent", headers=headers)
+    assert withdrawn.status_code == 200
+    continue_delete.set()
+    worker.join(timeout=5)
+
+    assert not worker.is_alive()
+    assert outcome["response"].status_code == 428
+    assert outcome["response"].get_json()["error"] == (
+        "health_sensitive_consent_required"
+    )
+    db_session.expire_all()
+    assert db_session.get(Pair, pair_id).status == "active"
+
+    # 二次鉴权也要复核 sensitive scope，防止锁等待期间凭证权限被收窄。
+    refreshed_user = db_session.get(User, user.id)
+    refreshed_user.health_sensitive_consent_version = app.config[
+        "WX_MINIPROGRAM_PRIVACY_VERSION"
+    ]
+    refreshed_user.health_sensitive_consented_at = utcnow()
+    db_session.commit()
+
+    @contextmanager
+    def narrow_scope_before_locked_reauth(_user_id):
+        token_record = db_session.get(ApiToken, token_id)
+        token_record.scopes = "miniprogram:read miniprogram:write"
+        db_session.commit()
+        yield
+
+    monkeypatch.setattr(mp_api, "push_owner_lock", narrow_scope_before_locked_reauth)
+    scope_denied = client.delete(
+        f"/mp/api/v1/elders/{pair_id}",
+        headers=headers,
+    )
+    assert scope_denied.status_code == 403
+    assert scope_denied.get_json()["error"] == "insufficient_scope"
+    db_session.expire_all()
+    assert db_session.get(Pair, pair_id).status == "active"
+
+
 def test_api_token_requires_expiry_and_sensitive_scope(app, client, db_session):
     from datetime import timedelta
 
@@ -542,6 +657,247 @@ def test_api_token_requires_expiry_and_sensitive_scope(app, client, db_session):
     assert privacy_refresh.get_json()["data"]["required_privacy_consent_version"]
 
 
+def test_health_sensitive_consent_is_independent_versioned_and_persisted_in_utc(
+    app,
+    client,
+    db_session,
+    monkeypatch,
+):
+    """一般隐私同意不能代替健康回执，版本升级后也必须重新确认。"""
+    from datetime import datetime, timezone
+
+    from core.db_models import ApiToken, User
+    from core.extensions import db
+    from core.usage import create_api_token
+
+    app.config["WX_MINIPROGRAM_PRIVACY_VERSION"] = "privacy-health-v1"
+    user = User(username="health-consent-independent", role="user")
+    user.set_password("pw123456")
+    db_session.add(user)
+    db_session.commit()
+    user_id = int(user.id)
+    plain = create_api_token(
+        user_id,
+        name="health-consent-token",
+        scopes=["miniprogram:read", "miniprogram:write", "miniprogram:sensitive"],
+    )
+    token_record = ApiToken.query.filter_by(user_id=user_id).one()
+    assert token_record.privacy_consent_version == "privacy-health-v1"
+    headers = {"Authorization": f"Bearer {plain}"}
+
+    me_before = client.get("/mp/api/v1/me", headers=headers)
+    assert me_before.status_code == 200
+    before_data = me_before.get_json()["data"]
+    assert before_data["required_health_consent_version"] == "privacy-health-v1"
+    assert before_data["health_consent_current"] is False
+    assert before_data["health_consented_at"] is None
+    blocked = client.get("/mp/api/v1/elders", headers=headers)
+    assert blocked.status_code == 428
+    assert blocked.get_json()["error"] == "health_sensitive_consent_required"
+
+    for payload, expected_error in (
+        ({}, "health_sensitive_consent_required"),
+        ({"consent": False, "health_consent_version": "privacy-health-v1"},
+         "health_sensitive_consent_required"),
+        ({"consent": "true", "health_consent_version": "privacy-health-v1"},
+         "health_sensitive_consent_required"),
+        ({"consent": True}, "missing_health_consent_version"),
+        ({"consent": True, "health_consent_version": "privacy-health-old"},
+         "health_consent_version_mismatch"),
+    ):
+        rejected = client.post(
+            "/mp/api/v1/health-consent",
+            headers=headers,
+            json=payload,
+        )
+        assert rejected.status_code == 400
+        assert rejected.get_json()["error"] == expected_error
+
+    fixed_utc = datetime(2026, 7, 19, 4, 5, 6, tzinfo=timezone.utc)
+    monkeypatch.setattr("blueprints.mp_api.utcnow", lambda: fixed_utc)
+    accepted = client.post(
+        "/mp/api/v1/health-consent",
+        headers=headers,
+        json={
+            "consent": True,
+            "health_consent_version": "privacy-health-v1",
+        },
+    )
+    assert accepted.status_code == 200
+    accepted_data = accepted.get_json()["data"]
+    assert accepted_data["health_consent_current"] is True
+    assert accepted_data["health_consented_at"] == "2026-07-19T04:05:06+00:00"
+    db.session.remove()
+    stored = db.session.get(User, user_id)
+    assert stored.health_sensitive_consent_version == "privacy-health-v1"
+    assert stored.health_sensitive_consented_at == fixed_utc.replace(tzinfo=None)
+
+    app.config["WX_MINIPROGRAM_PRIVACY_VERSION"] = "privacy-health-v2"
+    token_record = ApiToken.query.filter_by(user_id=user_id).one()
+    token_record.privacy_consent_version = "privacy-health-v2"
+    db.session.commit()
+    upgraded = client.get("/mp/api/v1/health-consent", headers=headers)
+    assert upgraded.status_code == 200
+    assert upgraded.get_json()["data"]["health_consent_current"] is False
+    blocked_again = client.get("/mp/api/v1/elders", headers=headers)
+    assert blocked_again.status_code == 428
+    assert blocked_again.get_json()["data"]["required_health_consent_version"] == (
+        "privacy-health-v2"
+    )
+    refreshed = client.post(
+        "/mp/api/v1/health-consent",
+        headers=headers,
+        json={"consent": True, "health_consent_version": "privacy-health-v2"},
+    )
+    assert refreshed.status_code == 200
+    assert refreshed.get_json()["data"]["health_consent_current"] is True
+
+
+def test_health_consent_post_requires_sensitive_write_scope(
+    app,
+    client,
+    db_session,
+):
+    """只读 Token 和缺少 sensitive scope 的 Token 都不能代用户授权。"""
+    from core.db_models import User
+    from core.usage import create_api_token
+
+    required_version = app.config["WX_MINIPROGRAM_PRIVACY_VERSION"]
+    user = User(username="health-consent-scope", role="user")
+    user.set_password("pw123456")
+    db_session.add(user)
+    db_session.commit()
+    user_id = int(user.id)
+    read_only = create_api_token(
+        user_id,
+        name="health-read-only",
+        scopes=["miniprogram:read", "miniprogram:sensitive"],
+    )
+    no_sensitive = create_api_token(
+        user_id,
+        name="health-no-sensitive",
+        scopes=["miniprogram:read", "miniprogram:write"],
+    )
+    payload = {"consent": True, "health_consent_version": required_version}
+
+    read_status = client.get(
+        "/mp/api/v1/health-consent",
+        headers={"Authorization": f"Bearer {read_only}"},
+    )
+    assert read_status.status_code == 200
+    assert read_status.get_json()["data"]["health_consent_current"] is False
+    for token in (read_only, no_sensitive):
+        denied = client.post(
+            "/mp/api/v1/health-consent",
+            headers={"Authorization": f"Bearer {token}"},
+            json=payload,
+        )
+        assert denied.status_code == 403
+        assert denied.get_json()["error"] == "insufficient_scope"
+        denied_withdrawal = client.delete(
+            "/mp/api/v1/health-consent",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert denied_withdrawal.status_code == 403
+        assert denied_withdrawal.get_json()["error"] == "insufficient_scope"
+    db_session.expire_all()
+    stored = db_session.get(User, user_id)
+    assert stored.health_sensitive_consent_version is None
+    assert stored.health_sensitive_consented_at is None
+
+
+def test_all_sensitive_route_groups_require_health_consent_after_scope(
+    app,
+    client,
+    db_session,
+):
+    """11 个敏感处理器统一先返回 428，授权后才能进入各自业务校验。"""
+    from core.db_models import FamilyMember, Pair, User
+    from core.usage import create_api_token
+
+    user = User(username="health-consent-route-matrix", role="user")
+    user.set_password("pw123456")
+    db_session.add(user)
+    db_session.commit()
+    plain = create_api_token(
+        user.id,
+        name="health-route-matrix",
+        scopes=["miniprogram:read", "miniprogram:write", "miniprogram:sensitive"],
+    )
+    headers = {"Authorization": f"Bearer {plain}"}
+    route_groups = (
+        ("get", "/mp/api/v1/elders"),
+        ("post", "/mp/api/v1/elders"),
+        ("patch", "/mp/api/v1/elders/999999"),
+        ("delete", "/mp/api/v1/elders/999999"),
+        ("get", "/mp/api/v1/health/diary"),
+        ("get", "/mp/api/v1/medications"),
+        ("delete", "/mp/api/v1/medications/999999"),
+        ("get", "/mp/api/v1/health/assessment"),
+        ("post", "/mp/api/v1/actions/999999/confirm"),
+        ("post", "/mp/api/v1/actions/999999/help"),
+        ("post", "/mp/api/v1/actions/999999/debrief"),
+    )
+
+    for method, path in route_groups:
+        blocked = getattr(client, method)(path, headers=headers, json={})
+        assert blocked.status_code == 428, (method, path, blocked.get_json())
+        body = blocked.get_json()
+        assert body["error"] == "health_sensitive_consent_required"
+        assert body["data"] == {
+            "required_health_consent_version": app.config[
+                "WX_MINIPROGRAM_PRIVACY_VERSION"
+            ]
+        }
+        assert "not_found" not in blocked.get_data(as_text=True)
+
+    accepted = client.post(
+        "/mp/api/v1/health-consent",
+        headers=headers,
+        json={
+            "consent": True,
+            "health_consent_version": app.config["WX_MINIPROGRAM_PRIVACY_VERSION"],
+        },
+    )
+    assert accepted.status_code == 200
+    for method, path in route_groups:
+        resumed = getattr(client, method)(path, headers=headers, json={})
+        assert resumed.status_code != 428, (method, path, resumed.get_json())
+
+    created = client.post(
+        "/mp/api/v1/elders",
+        headers=headers,
+        json={"name": "撤回后保留的家人", "relation": "家人", "age": 70},
+    )
+    assert created.status_code == 200
+    member_id = created.get_json()["data"]["member_id"]
+    pair_id = created.get_json()["data"]["pair_id"]
+
+    withdrawn = client.delete("/mp/api/v1/health-consent", headers=headers)
+    assert withdrawn.status_code == 200
+    assert withdrawn.get_json()["data"] == {
+        "required_health_consent_version": app.config[
+            "WX_MINIPROGRAM_PRIVACY_VERSION"
+        ],
+        "health_consent_current": False,
+        "health_consented_at": None,
+    }
+    db_session.expire_all()
+    assert db_session.get(FamilyMember, member_id) is not None
+    assert db_session.get(Pair, pair_id) is not None
+
+    for method, path in route_groups:
+        blocked_again = getattr(client, method)(path, headers=headers, json={})
+        assert blocked_again.status_code == 428, (
+            method,
+            path,
+            blocked_again.get_json(),
+        )
+        assert blocked_again.get_json()["error"] == (
+            "health_sensitive_consent_required"
+        )
+
+
 def test_read_only_api_token_cannot_reach_any_authenticated_write_route(
     app,
     client,
@@ -562,6 +918,7 @@ def test_read_only_api_token_cannot_reach_any_authenticated_write_route(
     headers = {"Authorization": f"Bearer {plain}"}
     write_routes = (
         ("post", "/mp/api/v1/auth/logout"),
+        ("delete", "/mp/api/v1/health-consent"),
         ("patch", "/mp/api/v1/me"),
         ("delete", "/mp/api/v1/me"),
         ("post", "/mp/api/v1/elders"),
@@ -777,7 +1134,14 @@ def test_mp_elders_does_not_create_trigger_from_mock_weather(app, client, db_ses
     from core.usage import create_api_token
 
     with app.app_context():
-        user = User(username="mp_mock_weather_user", role="user")
+        user = User(
+            username="mp_mock_weather_user",
+            role="user",
+            health_sensitive_consent_version=app.config[
+                "WX_MINIPROGRAM_PRIVACY_VERSION"
+            ],
+            health_sensitive_consented_at=utcnow(),
+        )
         user.set_password("pw123456")
         db_session.add(user)
         db_session.commit()

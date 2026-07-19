@@ -1,0 +1,56 @@
+<view class="page-shell">
+  <view class="hero consent-hero">
+    <view class="hero-kicker">健康敏感个人信息</view>
+    <view class="hero-title">请单独确认后，再使用家庭照护。</view>
+    <view class="hero-subtitle">公开天气、预报、预警、社区和 GIS 无需这项同意，拒绝后仍可正常使用。</view>
+  </view>
+
+  <view wx:if="{{loading}}" class="card status-card" role="status" aria-role="status" aria-live="polite">正在读取当前授权说明…</view>
+  <view wx:elif="{{loadError}}" class="card status-card error-card" role="alert" aria-role="alert">
+    <view>{{loadError}}</view>
+    <button class="secondary-button retry-button" bindtap="retry" disabled="{{busy}}">重新加载</button>
+  </view>
+
+  <block wx:else>
+    <view class="section-title">为什么需要</view>
+    <view class="card explanation-card">这些资料用于建立成年家人档案、完成健康状态筛查、记录健康日记与用药、保存家庭行动、求助和复盘，并结合都昌县天气生成照护行动提示。筛查和提醒不作医疗诊断。</view>
+
+    <view class="section-title">会处理哪些资料</view>
+    <view class="card list-card">
+      <view>• 姓名或家庭称呼、与你的关系、18 至 120 岁年龄、性别和慢性病类别。</view>
+      <view>• 五项健康状态筛查、健康日记、用药记录与天气触发条件。</view>
+      <view>• 家庭行动确认、求助说明、复盘内容，以及相关都昌县天气摘要和模型结果信息。</view>
+      <view>请勿填写身份证号、病历号、完整病历或与照护无关的信息。</view>
+    </view>
+
+    <view class="section-title">保存、影响与删除</view>
+    <view class="card list-card">
+      <view>• 资料保存在本账号所属服务端，仅用于账号内家庭照护记录和行动提示，并在你主动删除相关记录或注销账号前保存。</view>
+      <view>• 同意版本更新后会再次请你单独确认。拒绝或取消后不会开放私密健康功能，公开天气功能仍可使用。</view>
+      <view>• 用药记录可逐条删除；家人档案可停止管理；在“我的 → 账号、隐私与注销”注销账号，可删除账号关联的家人、筛查、日记、用药和行动资料。</view>
+    </view>
+
+    <view wx:if="{{manageMode && consentCurrent}}" class="card current-card" role="status" aria-role="status">
+      <view class="current-title">当前已经单独同意</view>
+      <view class="current-copy">当前回执版本：{{requiredVersion}}。</view>
+      <view wx:if="{{consentTimeUtc}}" class="current-copy">UTC 同意时间：{{consentTimeUtc}}。</view>
+      <view class="current-copy">你可以继续使用私密家庭照护功能，也可以在下方撤回。</view>
+      <button class="danger-button withdraw-button" loading="{{busy}}" disabled="{{busy}}" bindtap="withdrawConsent">撤回单独同意</button>
+    </view>
+
+    <view wx:else class="card agreement-card">
+      <checkbox-group bindchange="onAgreementChange" role="group" aria-role="group" aria-label="健康敏感个人信息单独同意">
+        <label class="agreement-row" for="healthConsentCheckbox">
+          <checkbox id="healthConsentCheckbox" value="health-consent" checked="{{agreed}}" color="#b64815" aria-label="单独同意处理健康敏感个人信息" />
+          <view class="agreement-copy">我已阅读并单独同意处理上述健康敏感个人信息，并确认我有权为这位年满 18 岁的家人管理这些资料。</view>
+        </label>
+      </checkbox-group>
+      <button class="text-link" bindtap="openPrivacy" aria-label="查看完整隐私说明">查看完整隐私说明</button>
+      <view class="version-text">当前服务端要求版本：{{requiredVersion}}</view>
+    </view>
+
+    <button wx:if="{{!consentCurrent}}" class="primary-button consent-button" loading="{{busy}}" disabled="{{busy || !agreed}}" bindtap="submitConsent">单独同意并继续</button>
+    <button class="secondary-button cancel-button" disabled="{{busy}}" bindtap="goPublicHome">{{manageMode ? '完成，返回公开天气' : '取消，返回公开天气'}}</button>
+    <view wx:if="{{statusHint}}" class="status-hint" role="status" aria-role="status" aria-live="polite">{{statusHint}}</view>
+  </block>
+</view>

@@ -38,8 +38,15 @@ FORECAST = [
 def _user_and_token(db_session, username):
     from core.db_models import User
     from core.usage import create_api_token
+    from services.miniprogram_auth import current_privacy_version
 
-    user = User(username=username, role="user")
+    # 既有私密运行时测试显式构造已完成独立健康同意的用户。
+    user = User(
+        username=username,
+        role="user",
+        health_sensitive_consent_version=current_privacy_version(),
+        health_sensitive_consented_at=utcnow(),
+    )
     user.set_password("safe-test-password")
     db_session.add(user)
     db_session.commit()
@@ -65,6 +72,34 @@ def _pair(db_session, user, code, *, member=None):
     db_session.add(record)
     db_session.commit()
     return record
+
+
+def _adult_pair(db_session, user, code):
+    """为需要成功执行健康行动的测试显式准备成年人家人档案。"""
+    from core.db_models import FamilyMember
+
+    member = FamilyMember(
+        user_id=user.id,
+        name=f"成年人家人{code[-2:]}",
+        relation="家人",
+        age=70,
+    )
+    db_session.add(member)
+    db_session.flush()
+    return _pair(db_session, user, code, member=member)
+
+
+def _grant_health_consent(db_session, user_id, app):
+    """会话测试按当前版本显式准备独立健康同意回执。"""
+    from core.db_models import User
+
+    user = db_session.get(User, user_id)
+    user.health_sensitive_consent_version = app.config[
+        "WX_MINIPROGRAM_PRIVACY_VERSION"
+    ]
+    user.health_sensitive_consented_at = utcnow()
+    db_session.commit()
+    return user
 
 
 def _persist_snapshot(app, *, fetched_at=None):
@@ -480,6 +515,46 @@ def test_privacy_consent_is_required_before_code_exchange(app, client, db_sessio
     assert response.get_json()["data"]["required_privacy_consent_version"] == "privacy-v1"
 
 
+def test_wechat_general_privacy_consent_does_not_grant_health_access(
+    app,
+    client,
+    db_session,
+    monkeypatch,
+):
+    """微信登录的一般隐私回执与健康敏感信息回执保持完全独立。"""
+    login = _wechat_login(
+        app,
+        client,
+        monkeypatch,
+        openid="wechat-health-consent-independent",
+    )
+    assert login.status_code == 200
+    headers = {
+        "Authorization": f"Bearer {login.get_json()['data']['session_token']}"
+    }
+
+    me_before = client.get("/mp/api/v1/me", headers=headers)
+    assert me_before.status_code == 200
+    assert me_before.get_json()["data"]["health_consent_current"] is False
+    blocked = client.get("/mp/api/v1/elders", headers=headers)
+    assert blocked.status_code == 428
+    assert blocked.get_json()["error"] == "health_sensitive_consent_required"
+
+    accepted = client.post(
+        "/mp/api/v1/health-consent",
+        headers=headers,
+        json={"consent": True, "health_consent_version": "privacy-v1"},
+    )
+    assert accepted.status_code == 200
+    assert client.get("/mp/api/v1/elders", headers=headers).status_code == 200
+
+    withdrawn = client.delete("/mp/api/v1/health-consent", headers=headers)
+    assert withdrawn.status_code == 200
+    assert withdrawn.get_json()["data"]["health_consent_current"] is False
+    blocked_again = client.get("/mp/api/v1/elders", headers=headers)
+    assert blocked_again.status_code == 428
+
+
 def test_logout_revokes_session_and_next_request_is_unauthorized(
     app,
     client,
@@ -524,7 +599,7 @@ def test_owner_scope_and_input_boundaries_for_diary_medication_and_actions(
 
     owner, owner_token = _user_and_token(db_session, "runtime_owner")
     outsider, outsider_token = _user_and_token(db_session, "runtime_outsider")
-    member = FamilyMember(user_id=owner.id, name="自己的老人", relation="父亲")
+    member = FamilyMember(user_id=owner.id, name="自己的老人", relation="父亲", age=70)
     db_session.add(member)
     db_session.commit()
     pair = _pair(db_session, owner, "71111111", member=member)
@@ -598,11 +673,159 @@ def test_owner_scope_and_input_boundaries_for_diary_medication_and_actions(
     ).status_code == 200
 
 
+def test_adult_family_age_boundaries_and_legacy_profile_repair(
+    app,
+    client,
+    db_session,
+):
+    """新档案只收成年人，旧档案可见可修复，修复前不能写健康数据。"""
+    from core.db_models import FamilyMember
+
+    owner, token = _user_and_token(db_session, "adult-profile-boundaries")
+    headers = {"Authorization": f"Bearer {token}"}
+
+    for payload in (
+        {"name": "缺年龄档案"},
+        {"name": "未成年档案", "age": 17},
+        {"name": "超龄档案", "age": 121},
+        {"name": "小数年龄档案", "age": 120.9},
+        {"name": "布尔年龄档案", "age": True},
+    ):
+        rejected = client.post("/mp/api/v1/elders", headers=headers, json=payload)
+        assert rejected.status_code == 400
+        assert rejected.get_json()["error"] == "invalid_age"
+
+    created_pairs = []
+    for age in (18, 120):
+        accepted = client.post(
+            "/mp/api/v1/elders",
+            headers=headers,
+            json={"name": f"边界{age}岁", "relation": "家人", "age": age},
+        )
+        assert accepted.status_code == 200
+        created_pairs.append(accepted.get_json()["data"]["pair_id"])
+
+    for age in (17, 121, 18.0, False):
+        rejected_patch = client.patch(
+            f"/mp/api/v1/elders/{created_pairs[0]}",
+            headers=headers,
+            json={"age": age},
+        )
+        assert rejected_patch.status_code == 400
+        assert rejected_patch.get_json()["error"] == "invalid_age"
+    assert client.patch(
+        f"/mp/api/v1/elders/{created_pairs[0]}",
+        headers=headers,
+        json={"age": 18},
+    ).status_code == 200
+    assert client.patch(
+        f"/mp/api/v1/elders/{created_pairs[1]}",
+        headers=headers,
+        json={"age": 120},
+    ).status_code == 200
+
+    null_age = FamilyMember(
+        user_id=owner.id,
+        name="历史缺年龄家人",
+        relation="家人",
+        age=None,
+    )
+    underage = FamilyMember(
+        user_id=owner.id,
+        name="历史未成年家人",
+        relation="家人",
+        age=17,
+    )
+    db_session.add_all([null_age, underage])
+    db_session.flush()
+    null_pair = _pair(db_session, owner, "74444441", member=null_age)
+    underage_pair = _pair(db_session, owner, "74444442", member=underage)
+    _persist_snapshot(app)
+
+    listed = client.get("/mp/api/v1/elders", headers=headers)
+    assert listed.status_code == 200
+    rows = {item["pair_id"]: item for item in listed.get_json()["data"]}
+    assert rows[null_pair.id]["adult_profile_incomplete"] is True
+    assert rows[underage_pair.id]["adult_profile_incomplete"] is True
+    assert rows[created_pairs[0]]["adult_profile_incomplete"] is False
+    assert rows[created_pairs[1]]["adult_profile_incomplete"] is False
+
+    # 旧档案不能通过修改其他字段绕开年龄修复。
+    incomplete_patch = client.patch(
+        f"/mp/api/v1/elders/{null_pair.id}",
+        headers=headers,
+        json={"name": "仍缺年龄"},
+    )
+    assert incomplete_patch.status_code == 400
+    assert incomplete_patch.get_json()["error"] == "invalid_age"
+
+    blocked_writes = (
+        (
+            "post",
+            "/mp/api/v1/health/diary",
+            {"pair_id": underage_pair.id, "severity": "mild", "symptoms": "乏力"},
+        ),
+        (
+            "post",
+            "/mp/api/v1/medications",
+            {"pair_id": underage_pair.id, "medicine_name": "日常药物"},
+        ),
+        (
+            "post",
+            "/mp/api/v1/health/assessment",
+            {"pair_id": underage_pair.id},
+        ),
+        (
+            "post",
+            f"/mp/api/v1/actions/{underage_pair.id}/confirm",
+            {"actions_done": ["hydrate"]},
+        ),
+        (
+            "post",
+            f"/mp/api/v1/actions/{underage_pair.id}/help",
+            {"note": "请联系"},
+        ),
+        (
+            "post",
+            f"/mp/api/v1/actions/{underage_pair.id}/debrief",
+            {"question_1": "今天较热"},
+        ),
+    )
+    for method, path, payload in blocked_writes:
+        blocked = getattr(client, method)(path, headers=headers, json=payload)
+        assert blocked.status_code == 409, (path, blocked.get_json())
+        assert blocked.get_json()["error"] == "adult_family_profile_required"
+
+    repaired = client.patch(
+        f"/mp/api/v1/elders/{null_pair.id}",
+        headers=headers,
+        json={"age": 18, "name": "已补全成年人档案"},
+    )
+    assert repaired.status_code == 200
+    diary_after_repair = client.post(
+        "/mp/api/v1/health/diary",
+        headers=headers,
+        json={
+            "pair_id": null_pair.id,
+            "severity": "none",
+            "notes": "年龄资料已补全",
+        },
+    )
+    assert diary_after_repair.status_code == 201
+
+    # 未修复旧档案仍可删除，避免用户被错误资料锁住。
+    deleted = client.delete(
+        f"/mp/api/v1/elders/{underage_pair.id}",
+        headers=headers,
+    )
+    assert deleted.status_code == 200
+
+
 def test_health_diary_matches_miniprogram_free_text_boundaries(client, db_session):
     from core.db_models import FamilyMember
 
     owner, owner_token = _user_and_token(db_session, "diary_length_owner")
-    member = FamilyMember(user_id=owner.id, name="边界测试家人", relation="家人")
+    member = FamilyMember(user_id=owner.id, name="边界测试家人", relation="家人", age=70)
     db_session.add(member)
     db_session.commit()
     pair = _pair(db_session, owner, "72222222", member=member)
@@ -664,7 +887,7 @@ def test_action_confirm_separates_elder_actions_from_caregiver_fields(client, db
     from core.time_utils import today_local
 
     owner, owner_token = _user_and_token(db_session, "action_note_owner")
-    member = FamilyMember(user_id=owner.id, name="行动记录家人", relation="家人")
+    member = FamilyMember(user_id=owner.id, name="行动记录家人", relation="家人", age=70)
     db_session.add(member)
     db_session.commit()
     pair = _pair(db_session, owner, "73333333", member=member)
@@ -713,7 +936,7 @@ def test_repeated_help_updates_note_without_duplicate_event(client, db_session):
     from core.time_utils import today_local
 
     owner, token = _user_and_token(db_session, "help_update_owner")
-    member = FamilyMember(user_id=owner.id, name="求助家人", relation="家人")
+    member = FamilyMember(user_id=owner.id, name="求助家人", relation="家人", age=70)
     db_session.add(member)
     db_session.commit()
     pair = _pair(db_session, owner, "73333334", member=member)
@@ -857,7 +1080,7 @@ def test_stale_snapshot_never_persists_risk_level_on_action_confirm(
     from core.time_utils import today_local
 
     owner, token = _user_and_token(db_session, "stale_action_risk_owner")
-    member = FamilyMember(user_id=owner.id, name="陈旧风险家人", relation="家人")
+    member = FamilyMember(user_id=owner.id, name="陈旧风险家人", relation="家人", age=70)
     db_session.add(member)
     db_session.commit()
     pair = _pair(db_session, owner, "73333337", member=member)
@@ -891,7 +1114,7 @@ def test_action_confirm_rejects_elder_action_collection_boundaries(
     from core.db_models import DailyStatus, FamilyMember
 
     owner, owner_token = _user_and_token(db_session, "action_boundary_owner")
-    member = FamilyMember(user_id=owner.id, name="行动边界家人", relation="家人")
+    member = FamilyMember(user_id=owner.id, name="行动边界家人", relation="家人", age=70)
     db_session.add(member)
     db_session.commit()
     pair = _pair(db_session, owner, "73444444", member=member)
@@ -912,7 +1135,7 @@ def test_action_help_accepts_300_characters_and_rejects_301(client, db_session):
     from core.time_utils import today_local
 
     owner, token = _user_and_token(db_session, "help-note-boundary-owner")
-    pair = _pair(db_session, owner, "73444555")
+    pair = _adult_pair(db_session, owner, "73444555")
     headers = {"Authorization": f"Bearer {token}"}
 
     at_limit = client.post(
@@ -954,7 +1177,7 @@ def test_action_debrief_preserves_documented_text_boundaries(
         db_session,
         f"debrief-boundary-{field_name}",
     )
-    pair = _pair(
+    pair = _adult_pair(
         db_session,
         owner,
         {
@@ -1019,7 +1242,7 @@ def test_miniprogram_actions_share_events_and_community_projection(client, db_se
     from core.time_utils import ensure_utc_aware, today_local
 
     owner, owner_token = _user_and_token(db_session, "action_projection_owner")
-    member = FamilyMember(user_id=owner.id, name="行动投影家人", relation="家人")
+    member = FamilyMember(user_id=owner.id, name="行动投影家人", relation="家人", age=70)
     db_session.add(member)
     db_session.commit()
     pair = _pair(db_session, owner, "73555555", member=member)
@@ -1090,7 +1313,7 @@ def test_miniprogram_action_succeeds_when_community_projection_fails(
     from services import community_daily_service
 
     owner, owner_token = _user_and_token(db_session, "action_projection_failure_owner")
-    member = FamilyMember(user_id=owner.id, name="投影失败家人", relation="家人")
+    member = FamilyMember(user_id=owner.id, name="投影失败家人", relation="家人", age=70)
     db_session.add(member)
     db_session.commit()
     pair = _pair(db_session, owner, "73666666", member=member)
@@ -1128,7 +1351,7 @@ def test_action_debrief_respects_pair_optin_on_create_and_update(client, db_sess
 
     owner, owner_token = _user_and_token(db_session, "debrief_optin_owner")
     outsider, outsider_token = _user_and_token(db_session, "debrief_optin_outsider")
-    member = FamilyMember(user_id=owner.id, name="复盘记录家人", relation="家人")
+    member = FamilyMember(user_id=owner.id, name="复盘记录家人", relation="家人", age=70)
     db_session.add(member)
     db_session.commit()
     pair = _pair(db_session, owner, "74444444", member=member)
@@ -1196,7 +1419,7 @@ def test_action_debrief_respects_pair_optin_on_create_and_update(client, db_sess
     assert relinked.question_2 == "再次选择关联"
     assert Debrief.query.filter_by(owner_user_id=owner.id, date=today_local()).count() == 1
 
-    second_member = FamilyMember(user_id=owner.id, name="另一位家人", relation="家人")
+    second_member = FamilyMember(user_id=owner.id, name="另一位家人", relation="家人", age=70)
     db_session.add(second_member)
     db_session.commit()
     second_pair = _pair(db_session, owner, "75555555", member=second_member)
@@ -1488,7 +1711,17 @@ def test_account_delete_rejects_cross_user_and_anonymizes_owner_data(
     db_session,
     monkeypatch,
 ):
-    from core.db_models import Debrief, HealthDiary, MiniProgramIdentity, MiniProgramSession, User
+    from core.db_models import (
+        AlertDelivery,
+        AuditLog,
+        Debrief,
+        HealthDiary,
+        MiniProgramIdentity,
+        MiniProgramSession,
+        PairLink,
+        User,
+        WeatherAlert,
+    )
     from core.time_utils import today_local
 
     login = _wechat_login(app, client, monkeypatch, openid="delete-openid")
@@ -1502,6 +1735,10 @@ def test_account_delete_rejects_cross_user_and_anonymizes_owner_data(
         owner.push_enabled = True
         owner.wxpusher_consent_version = app.config["WX_MINIPROGRAM_PRIVACY_VERSION"]
         owner.wxpusher_consented_at = utcnow()
+        owner.health_sensitive_consent_version = app.config[
+            "WX_MINIPROGRAM_PRIVACY_VERSION"
+        ]
+        owner.health_sensitive_consented_at = utcnow()
         db_session.add(
             HealthDiary(
                 user_id=user_id,
@@ -1519,6 +1756,97 @@ def test_account_delete_rejects_cross_user_and_anonymizes_owner_data(
                 question_1="关闭家人关联后仍属于账号",
                 created_at=utcnow(),
             )
+        )
+        pair_link = PairLink(
+            caregiver_id=user_id,
+            short_code="88000001",
+            short_code_hash="pair-link-owner-hash",
+            token_hash="pair-link-owner-token-hash",
+            community_code="都昌县",
+            status="active",
+            created_at=utcnow(),
+        )
+        weather_alert = WeatherAlert(
+            alert_date=utcnow(),
+            location="都昌县",
+            alert_type="高温",
+            alert_level="橙色",
+        )
+        db_session.add_all([pair_link, weather_alert])
+        db_session.flush()
+        delivery = AlertDelivery(
+            alert_id=weather_alert.id,
+            user_id=user_id,
+            channel="wxpusher",
+            status="sent",
+            delivery_token="delete-owner-delivery-token",
+        )
+        db_session.add(delivery)
+        db_session.flush()
+        pair_link_id = int(pair_link.id)
+        delivery_id = int(delivery.id)
+        db_session.add_all(
+            [
+                AuditLog(
+                    actor_id=user_id,
+                    actor_role="user",
+                    action="historical_owner_action",
+                    resource_type="pair",
+                    resource_id="77",
+                    extra_data=json.dumps({"sensitive": "legacy"}),
+                    ip_address="198.51.100.8",
+                    user_agent="legacy-agent",
+                    request_id="legacy-request",
+                    created_at=utcnow(),
+                ),
+                AuditLog(
+                    actor_id=999,
+                    actor_role="admin",
+                    action="historical_user_resource_action",
+                    resource_type="user",
+                    resource_id=str(user_id),
+                    ip_address="198.51.100.9",
+                    user_agent="admin-agent",
+                    request_id="admin-request",
+                    created_at=utcnow(),
+                ),
+                AuditLog(
+                    actor_id=None,
+                    actor_role=None,
+                    action="historical_pair_link_resource_action",
+                    resource_type="pair_link",
+                    resource_id=str(pair_link_id),
+                    extra_data=json.dumps({"pair_id": 77, "short_code_hash": "legacy"}),
+                    ip_address="pair-link-ip-hash",
+                    user_agent="pair-link-agent",
+                    request_id="pair-link-request",
+                    created_at=utcnow(),
+                ),
+                AuditLog(
+                    actor_id=999,
+                    actor_role="admin",
+                    action="historical_alert_delivery_resource_action",
+                    resource_type="alert_delivery",
+                    resource_id=str(delivery_id),
+                    extra_data=json.dumps({"previous_status": "uncertain"}),
+                    ip_address="delivery-ip-hash",
+                    user_agent="delivery-agent",
+                    request_id="delivery-request",
+                    created_at=utcnow(),
+                ),
+                AuditLog(
+                    actor_id=998,
+                    actor_role="admin",
+                    action="unrelated_same_numeric_resource",
+                    resource_type="unrelated_resource",
+                    resource_id=str(pair_link_id),
+                    extra_data=json.dumps({"keep": True}),
+                    ip_address="unrelated-ip-hash",
+                    user_agent="unrelated-agent",
+                    request_id="unrelated-request",
+                    created_at=utcnow(),
+                ),
+            ]
         )
         db_session.commit()
 
@@ -1550,10 +1878,64 @@ def test_account_delete_rejects_cross_user_and_anonymizes_owner_data(
         assert user.push_enabled is False
         assert user.wxpusher_consent_version is None
         assert user.wxpusher_consented_at is None
+        assert user.health_sensitive_consent_version is None
+        assert user.health_sensitive_consented_at is None
         assert HealthDiary.query.filter_by(user_id=user_id).count() == 0
         assert Debrief.query.filter_by(owner_user_id=user_id).count() == 0
         assert MiniProgramIdentity.query.filter_by(user_id=user_id).count() == 0
         assert MiniProgramSession.query.filter_by(user_id=user_id).count() == 0
+        assert PairLink.query.filter_by(id=pair_link_id).count() == 0
+        assert AlertDelivery.query.filter_by(id=delivery_id).count() == 0
+        anonymized_logs = AuditLog.query.filter(
+            AuditLog.action.in_(
+                (
+                    "historical_owner_action",
+                    "historical_user_resource_action",
+                    "historical_pair_link_resource_action",
+                    "historical_alert_delivery_resource_action",
+                    "miniprogram_account_anonymized",
+                )
+            )
+        ).all()
+        assert len(anonymized_logs) == 5
+        for audit in anonymized_logs:
+            assert audit.actor_id is None
+            assert audit.actor_role == "deleted_miniprogram_user"
+            assert audit.resource_type is None
+            assert audit.resource_id is None
+            assert audit.ip_address is None
+            assert audit.user_agent is None
+            assert audit.request_id is None
+        historical = {
+            audit.action: json.loads(audit.extra_data)
+            for audit in anonymized_logs
+        }
+        assert historical["historical_owner_action"] == {
+            "account_reference_removed": True
+        }
+        assert historical["historical_user_resource_action"] == {
+            "account_reference_removed": True
+        }
+        assert historical["historical_pair_link_resource_action"] == {
+            "account_reference_removed": True
+        }
+        assert historical["historical_alert_delivery_resource_action"] == {
+            "account_reference_removed": True
+        }
+        assert historical["miniprogram_account_anonymized"] == {
+            "owner_data_removed": True
+        }
+        unrelated = AuditLog.query.filter_by(
+            action="unrelated_same_numeric_resource"
+        ).one()
+        assert unrelated.actor_id == 998
+        assert unrelated.actor_role == "admin"
+        assert unrelated.resource_type == "unrelated_resource"
+        assert unrelated.resource_id == str(pair_link_id)
+        assert json.loads(unrelated.extra_data) == {"keep": True}
+        assert unrelated.ip_address == "unrelated-ip-hash"
+        assert unrelated.user_agent == "unrelated-agent"
+        assert unrelated.request_id == "unrelated-request"
 
 
 def test_account_delete_serializes_an_inflight_diary_write(
@@ -1569,6 +1951,7 @@ def test_account_delete_serializes_an_inflight_diary_write(
     data = login.get_json()["data"]
     user_id = data["user"]["id"]
     headers = {"Authorization": f"Bearer {data['session_token']}"}
+    _grant_health_consent(db_session, user_id, app)
     writer_locked = threading.Event()
     release_writer = threading.Event()
     outcomes = {}
@@ -1632,8 +2015,8 @@ def test_account_delete_serializes_atomic_miniprogram_action_confirm(
     data = login.get_json()["data"]
     user_id = data["user"]["id"]
     headers = {"Authorization": f"Bearer {data['session_token']}"}
-    owner = db_session.get(User, user_id)
-    pair = _pair(db_session, owner, "76555555")
+    owner = _grant_health_consent(db_session, user_id, app)
+    pair = _adult_pair(db_session, owner, "76555555")
     pair_id = int(pair.id)
     writer_staged = threading.Event()
     release_writer = threading.Event()
@@ -1729,8 +2112,8 @@ def test_account_delete_serializes_an_inflight_miniprogram_debrief_write(
     data = login.get_json()["data"]
     user_id = data["user"]["id"]
     headers = {"Authorization": f"Bearer {data['session_token']}"}
-    owner = db_session.get(User, user_id)
-    pair = _pair(db_session, owner, "76666666")
+    owner = _grant_health_consent(db_session, user_id, app)
+    pair = _adult_pair(db_session, owner, "76666666")
     pair_id = int(pair.id)
     writer_locked = threading.Event()
     release_writer = threading.Event()
@@ -1817,8 +2200,8 @@ def test_miniprogram_action_response_survives_post_commit_account_delete(
     data = login.get_json()["data"]
     user_id = data["user"]["id"]
     headers = {"Authorization": f"Bearer {data['session_token']}"}
-    owner = db_session.get(User, user_id)
-    pair = _pair(db_session, owner, short_code)
+    owner = _grant_health_consent(db_session, user_id, app)
+    pair = _adult_pair(db_session, owner, short_code)
     pair_id = int(pair.id)
 
     writer_locked = threading.Event()
@@ -2175,8 +2558,16 @@ def test_sync_cycle_calls_each_qweather_endpoint_at_most_once_and_enriches_forec
     ]
 
     class WeatherStub:
-        def get_current_weather(self, location, *, include_enrichment=True):
-            calls["current"].append((location, include_enrichment))
+        def get_current_weather(
+            self,
+            location,
+            *,
+            include_enrichment=True,
+            allow_fallback=True,
+        ):
+            calls["current"].append(
+                (location, include_enrichment, allow_fallback)
+            )
             return {
                 "temperature": 36,
                 "temperature_max": None,
@@ -2219,18 +2610,22 @@ def test_sync_cycle_calls_each_qweather_endpoint_at_most_once_and_enriches_forec
     monkeypatch.setattr(pipeline, "WeatherService", WeatherStub)
     monkeypatch.setattr(
         "services.warning_service.get_qweather_warnings_result",
-        lambda location: calls["warning"].append(location)
+        lambda location, **kwargs: calls["warning"].append((location, kwargs))
         or {"available": True, "status": "ok", "warnings": []},
     )
 
     result = pipeline.sync_weather_cache(locations=["都昌县", "九江"], update_daily=False)
 
-    assert calls["current"] == [("都昌县", False)]
+    assert calls["current"] == [("都昌县", False, True)]
     assert calls["forecast"] == [("都昌县", 7)]
     assert calls["nowcast"] == [("都昌县", 24)]
-    assert calls["warning"] == ["116.20,29.27"]
+    assert calls["warning"] == [
+        ("116.20,29.27", {"force_refresh": True}),
+    ]
     assert result["locations"] == 1
     assert result["nowcast_updated"] == 1
+    assert result["snapshot_ready"] is True
+    assert result["snapshot_degraded"] is False
     record = MiniProgramSnapshot.query.filter_by(snapshot_id=result["snapshot_id"]).one()
     payload = __import__("services.miniprogram_service", fromlist=["snapshot_payload"]).snapshot_payload(record)
     assert payload["current"]["temperature_max"] == 39.0

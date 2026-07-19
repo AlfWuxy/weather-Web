@@ -126,6 +126,33 @@ def _wxpusher_consent_is_current(user, required_version=None):
     )
 
 
+def _health_consent_is_current(user, required_version=None):
+    """健康敏感信息必须有独立、当前版本且带时间的回执。"""
+    version = required_version or current_privacy_version()
+    return bool(
+        getattr(user, "health_sensitive_consented_at", None) is not None
+        and getattr(user, "health_sensitive_consent_version", None) == version
+    )
+
+
+def _health_consent_payload(user):
+    """统一健康同意状态字段，时间始终按 UTC 输出。"""
+    required_version = current_privacy_version()
+    consented_at = getattr(user, "health_sensitive_consented_at", None)
+    return {
+        "required_health_consent_version": required_version,
+        "health_consent_current": _health_consent_is_current(
+            user,
+            required_version,
+        ),
+        "health_consented_at": (
+            ensure_utc_aware(consented_at).isoformat()
+            if consented_at is not None
+            else None
+        ),
+    }
+
+
 def _json_payload():
     payload = request.get_json(silent=True)
     if payload is None:
@@ -391,7 +418,30 @@ def require_api_scope(scope):
     return decorator
 
 
-def _reauthorize_locked_api_user():
+def require_health_sensitive_consent(fn):
+    """在认证和 sensitive scope 之后阻断未授权的私密健康访问。"""
+
+    @wraps(fn)
+    def wrapper(*args, **kwargs):
+        required_version = current_privacy_version()
+        if not _health_consent_is_current(
+            getattr(g, "api_user", None),
+            required_version,
+        ):
+            return _error(
+                "health_sensitive_consent_required",
+                "请先阅读并同意健康敏感信息处理说明。",
+                428,
+                data={
+                    "required_health_consent_version": required_version,
+                },
+            )
+        return fn(*args, **kwargs)
+
+    return wrapper
+
+
+def _reauthorize_locked_api_user(*, require_health_consent=False):
     """在 owner 文件锁内重新验证凭证、账号墓碑和写权限。"""
     expected_user_id = int(g.api_user_id)
     expected_kind = str(g.auth_kind)
@@ -421,6 +471,12 @@ def _reauthorize_locked_api_user():
         if not api_token_has_scope(credential, "miniprogram:write"):
             db.session.rollback()
             return _error("insufficient_scope", "该 Token 没有写入权限，请重新生成。", 403)
+        if (
+            require_health_consent
+            and not api_token_has_scope(credential, "miniprogram:sensitive")
+        ):
+            db.session.rollback()
+            return _error("insufficient_scope", "该 Token 没有此功能权限，请重新生成。", 403)
 
     user = db.session.execute(
         db.select(User)
@@ -439,6 +495,16 @@ def _reauthorize_locked_api_user():
         if changed != 1:
             db.session.rollback()
             return _error("unauthorized", "账号已失效或已注销。", 401)
+    if require_health_consent and not _health_consent_is_current(user):
+        db.session.rollback()
+        return _error(
+            "health_sensitive_consent_required",
+            "请先阅读并同意健康敏感信息处理说明。",
+            428,
+            data={
+                "required_health_consent_version": current_privacy_version(),
+            },
+        )
     if _credential_last_used_due(credential, used_at):
         credential.last_used_at = used_at
     g.api_user = user
@@ -482,6 +548,62 @@ def _resolve_owned_member(*, payload=None, required=False):
     if required and member is None:
         raise ValueError("member_required")
     return pair, member
+
+
+def _adult_profile_incomplete(member) -> bool:
+    """历史档案继续可见，但健康功能只接受 18 至 120 岁成年人。"""
+    if member is None or isinstance(getattr(member, "age", None), bool):
+        return True
+    try:
+        age = int(member.age)
+    except (TypeError, ValueError):
+        return True
+    return age < 18 or age > 120
+
+
+def _adult_age_value(value):
+    """年龄只接受整数或纯整数字符串，禁止浮点截断和布尔值混入。"""
+    if isinstance(value, bool) or not isinstance(value, (str, int)):
+        raise ValueError("invalid_age")
+    return _int_value(
+        value,
+        minimum=18,
+        maximum=120,
+        field="age",
+        allow_none=False,
+    )
+
+
+def _adult_profile_required_error(member, *, pair_id=None):
+    if not _adult_profile_incomplete(member):
+        return None
+    data = {
+        "required_min_age": 18,
+        "required_max_age": 120,
+    }
+    if pair_id is not None:
+        data["pair_id"] = pair_id
+    if member is not None:
+        data["member_id"] = member.id
+    return _error(
+        "adult_family_profile_required",
+        "请先把家人档案年龄补充为 18 至 120 岁。",
+        409,
+        data=data,
+    )
+
+
+def _adult_profile_required_for_pair(pair):
+    member = None
+    if pair is not None and pair.member_id:
+        member = FamilyMember.query.filter_by(
+            id=pair.member_id,
+            user_id=g.api_user_id,
+        ).first()
+    return _adult_profile_required_error(
+        member,
+        pair_id=pair.id if pair is not None else None,
+    )
 
 
 def _date_value(value, *, default_today=False):
@@ -667,11 +789,95 @@ def me():
             and user.push_enabled
             and not _wxpusher_consent_is_current(user, required_wxpusher_version)
         ),
+        **_health_consent_payload(user),
     }
     # 旧 API token 客户端继续使用 username；微信会话不暴露内部哈希前缀账号名。
     if getattr(g, "auth_kind", None) == "api_token":
         data["username"] = user.username
     return _success(data)
+
+
+@bp.route("/health-consent", methods=["GET"], endpoint="health_consent_get")
+@limiter.limit(lambda: current_app.config.get("RATE_LIMIT_MP_READ", "120 per minute"), key_func=_mp_rate_limit_key)
+@require_api_token
+def health_consent_get():
+    """读取独立健康敏感信息同意状态，不返回任何健康内容。"""
+    return _success(_health_consent_payload(g.api_user))
+
+
+@bp.route("/health-consent", methods=["POST"], endpoint="health_consent_post")
+@limiter.limit(lambda: current_app.config.get("RATE_LIMIT_MP_WRITE", "30 per minute"), key_func=_mp_rate_limit_key)
+@require_api_token
+@require_api_scope("miniprogram:sensitive")
+def health_consent_post():
+    """只接受明确的 true 和当前说明版本，并保存 UTC 回执。"""
+    required_version = current_privacy_version()
+    try:
+        payload = _json_payload()
+        if payload.get("consent") is not True:
+            return _error(
+                "health_sensitive_consent_required",
+                "必须明确同意后才能使用健康功能。",
+                400,
+                data={
+                    "required_health_consent_version": required_version,
+                },
+            )
+        submitted_version = _strict_text(
+            payload,
+            "health_consent_version",
+            64,
+            required=True,
+        )
+    except ValueError as exc:
+        return _error(str(exc), "健康敏感信息同意请求无效。", 400)
+
+    if submitted_version != required_version:
+        return _error(
+            "health_consent_version_mismatch",
+            "健康敏感信息处理说明已更新，请重新阅读并确认。",
+            400,
+            data={
+                "required_health_consent_version": required_version,
+            },
+        )
+
+    try:
+        user = g.api_user
+        user.health_sensitive_consent_version = required_version
+        user.health_sensitive_consented_at = utcnow()
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        current_app.logger.exception("健康敏感信息同意回执保存失败")
+        return _error(
+            "health_consent_write_failed",
+            "健康敏感信息同意暂时无法保存，请稍后重试。",
+            503,
+        )
+    return _success(_health_consent_payload(user))
+
+
+@bp.route("/health-consent", methods=["DELETE"], endpoint="health_consent_delete")
+@limiter.limit(lambda: current_app.config.get("RATE_LIMIT_MP_WRITE", "30 per minute"), key_func=_mp_rate_limit_key)
+@require_api_token
+@require_api_scope("miniprogram:sensitive")
+def health_consent_delete():
+    """撤回只清空回执并停止后续访问，已有私密资料继续保留。"""
+    try:
+        user = g.api_user
+        user.health_sensitive_consent_version = None
+        user.health_sensitive_consented_at = None
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        current_app.logger.exception("健康敏感信息同意撤回失败")
+        return _error(
+            "health_consent_withdraw_failed",
+            "健康敏感信息同意暂时无法撤回，请稍后重试。",
+            503,
+        )
+    return _success(_health_consent_payload(user))
 
 
 @bp.route("/me", methods=["PATCH"], endpoint="me_patch")
@@ -840,6 +1046,25 @@ def _anonymize_miniprogram_owner(user):
     affected_community_codes = {row[1] for row in pair_rows if row[1]}
     member_ids = [row[0] for row in db.session.query(FamilyMember.id).filter_by(user_id=user_id).all()]
 
+    # 先冻结即将删除的资源主键，删除后仍能按资源类型和主键精确匿名化历史审计。
+    pair_link_predicates = [PairLink.caregiver_id == user_id]
+    alert_delivery_predicates = [AlertDelivery.user_id == user_id]
+    if pair_ids:
+        pair_link_predicates.append(PairLink.pair_id.in_(pair_ids))
+        alert_delivery_predicates.append(AlertDelivery.pair_id.in_(pair_ids))
+    pair_link_ids = [
+        row[0]
+        for row in db.session.query(PairLink.id)
+        .filter(db.or_(*pair_link_predicates))
+        .all()
+    ]
+    alert_delivery_ids = [
+        row[0]
+        for row in db.session.query(AlertDelivery.id)
+        .filter(db.or_(*alert_delivery_predicates))
+        .all()
+    ]
+
     # pair_id 可为空，复盘的注销边界必须依据独立 owner 字段。
     Debrief.query.filter_by(owner_user_id=user_id).delete(synchronize_session=False)
     if pair_ids:
@@ -866,6 +1091,44 @@ def _anonymize_miniprogram_owner(user):
     MiniProgramSession.query.filter_by(user_id=user_id).delete(synchronize_session=False)
     MiniProgramIdentity.query.filter_by(user_id=user_id).delete(synchronize_session=False)
 
+    # 历史审计可能来自旧版本或曾经启用的环境。注销时同时去除账号、网络与资源关联，
+    # 只保留动作类别和发生时间用于无身份故障核对。
+    audit_owner_predicates = [
+        AuditLog.actor_id == user_id,
+        db.and_(
+            AuditLog.resource_type == "user",
+            AuditLog.resource_id == str(user_id),
+        ),
+    ]
+    if pair_link_ids:
+        audit_owner_predicates.append(
+            db.and_(
+                AuditLog.resource_type == "pair_link",
+                AuditLog.resource_id.in_([str(value) for value in pair_link_ids]),
+            )
+        )
+    if alert_delivery_ids:
+        audit_owner_predicates.append(
+            db.and_(
+                AuditLog.resource_type == "alert_delivery",
+                AuditLog.resource_id.in_([str(value) for value in alert_delivery_ids]),
+            )
+        )
+    audit_rows = AuditLog.query.filter(db.or_(*audit_owner_predicates))
+    audit_rows.update(
+        {
+            AuditLog.actor_id: None,
+            AuditLog.actor_role: "deleted_miniprogram_user",
+            AuditLog.resource_type: None,
+            AuditLog.resource_id: None,
+            AuditLog.extra_data: json.dumps({"account_reference_removed": True}),
+            AuditLog.ip_address: None,
+            AuditLog.user_agent: None,
+            AuditLog.request_id: None,
+        },
+        synchronize_session=False,
+    )
+
     user.username = f"deleted_mp_{user_id}_{secrets.token_hex(6)}"
     user.email = None
     user.age = None
@@ -877,6 +1140,8 @@ def _anonymize_miniprogram_owner(user):
     user.push_enabled = False
     user.wxpusher_consent_version = None
     user.wxpusher_consented_at = None
+    user.health_sensitive_consent_version = None
+    user.health_sensitive_consented_at = None
     user.role = "user"
     user.set_password(secrets.token_urlsafe(32))
     db.session.add(
@@ -884,8 +1149,8 @@ def _anonymize_miniprogram_owner(user):
             actor_id=None,
             actor_role="deleted_miniprogram_user",
             action="miniprogram_account_anonymized",
-            resource_type="user",
-            resource_id=str(user_id),
+            resource_type=None,
+            resource_id=None,
             extra_data=json.dumps({"owner_data_removed": True}),
             created_at=utcnow(),
         )
@@ -950,6 +1215,7 @@ def me_delete():
 @limiter.limit(lambda: current_app.config.get("RATE_LIMIT_MP_READ", "120 per minute"), key_func=_mp_rate_limit_key)
 @require_api_token
 @require_api_scope("miniprogram:sensitive")
+@require_health_sensitive_consent
 def elders_list():
     pairs = Pair.query.filter_by(caregiver_id=g.api_user_id, status="active").order_by(Pair.created_at.desc()).all()
     status_date = today_local()
@@ -1014,6 +1280,7 @@ def elders_list():
                     if member
                     else None
                 ),
+                "adult_profile_incomplete": _adult_profile_incomplete(member),
                 "today": {
                     "status_date": status_date.isoformat(),
                     "confirmed_at": (
@@ -1050,12 +1317,13 @@ def elders_list():
 @limiter.limit(lambda: current_app.config.get("RATE_LIMIT_MP_WRITE", "30 per minute"), key_func=_mp_rate_limit_key)
 @require_api_token
 @require_api_scope("miniprogram:sensitive")
+@require_health_sensitive_consent
 def elders_create():
     try:
         payload = _json_payload()
         name = _strict_text(payload, "name", 50, required=True)
         relation = _strict_text(payload, "relation", 20, default="") or ""
-        age = _int_value(payload.get("age"), minimum=0, maximum=120, field="age")
+        age = _adult_age_value(payload.get("age"))
         gender = _strict_text(payload, "gender", 10)
         chronic = _list_of_text(
             payload,
@@ -1120,6 +1388,7 @@ def elders_create():
 @limiter.limit(lambda: current_app.config.get("RATE_LIMIT_MP_WRITE", "30 per minute"), key_func=_mp_rate_limit_key)
 @require_api_token
 @require_api_scope("miniprogram:sensitive")
+@require_health_sensitive_consent
 def elders_patch(pair_id: int):
     pair = _pair_for_user(pair_id)
     if not pair:
@@ -1129,12 +1398,14 @@ def elders_patch(pair_id: int):
         payload = _json_payload()
         member = FamilyMember.query.filter_by(id=pair.member_id, user_id=g.api_user_id).first()
         if member:
+            candidate_age = payload.get("age") if "age" in payload else member.age
+            validated_age = _adult_age_value(candidate_age)
             if "name" in payload:
                 member.name = _strict_text(payload, "name", 50, required=True)
             if "relation" in payload:
                 member.relation = _strict_text(payload, "relation", 20) or ""
             if "age" in payload:
-                member.age = _int_value(payload.get("age"), minimum=0, maximum=120, field="age")
+                member.age = validated_age
             if "gender" in payload:
                 member.gender = _strict_text(payload, "gender", 10)
             if "chronic_diseases" in payload:
@@ -1170,12 +1441,15 @@ def elders_patch(pair_id: int):
 @limiter.limit(lambda: current_app.config.get("RATE_LIMIT_MP_WRITE", "30 per minute"), key_func=_mp_rate_limit_key)
 @require_api_token
 @require_api_scope("miniprogram:sensitive")
+@require_health_sensitive_consent
 def elders_delete(pair_id: int):
     owner_user_id = int(g.api_user_id)
     db.session.rollback()
     try:
         with push_owner_lock(owner_user_id):
-            authorization_error = _reauthorize_locked_api_user()
+            authorization_error = _reauthorize_locked_api_user(
+                require_health_consent=True,
+            )
             if authorization_error is not None:
                 return authorization_error
             pair = Pair.query.filter_by(
@@ -1216,6 +1490,7 @@ def elders_delete(pair_id: int):
 )
 @require_api_token
 @require_api_scope("miniprogram:sensitive")
+@require_health_sensitive_consent
 def health_diary():
     if request.method == "GET":
         try:
@@ -1237,7 +1512,14 @@ def health_diary():
 
     try:
         payload = _json_payload()
-        _pair, member = _resolve_owned_member(payload=payload)
+        pair, member = _resolve_owned_member(payload=payload)
+        if member is not None:
+            adult_error = _adult_profile_required_error(
+                member,
+                pair_id=pair.id if pair is not None else None,
+            )
+            if adult_error is not None:
+                return adult_error
         entry_date = _date_value(payload.get("entry_date"), default_today=True)
         if entry_date > today_local():
             raise ValueError("future_entry_date")
@@ -1282,6 +1564,7 @@ def health_diary():
 )
 @require_api_token
 @require_api_scope("miniprogram:sensitive")
+@require_health_sensitive_consent
 def medications():
     if request.method == "GET":
         try:
@@ -1321,7 +1604,14 @@ def medications():
 
     try:
         payload = _json_payload()
-        _pair, member = _resolve_owned_member(payload=payload)
+        pair, member = _resolve_owned_member(payload=payload)
+        if member is not None:
+            adult_error = _adult_profile_required_error(
+                member,
+                pair_id=pair.id if pair is not None else None,
+            )
+            if adult_error is not None:
+                return adult_error
         medicine_name = _strict_text(payload, "medicine_name", 100, required=True)
         dosage = _strict_text(payload, "dosage", 100, default="") or ""
         frequency = _strict_text(payload, "frequency", 20, default="daily") or "daily"
@@ -1363,6 +1653,7 @@ def medications():
 @limiter.limit(lambda: current_app.config.get("RATE_LIMIT_MP_WRITE", "30 per minute"), key_func=_mp_rate_limit_key)
 @require_api_token
 @require_api_scope("miniprogram:sensitive")
+@require_health_sensitive_consent
 def medication_delete(record_id):
     record = MedicationReminder.query.filter_by(id=record_id, user_id=g.api_user_id).first()
     if record is None:
@@ -1382,10 +1673,18 @@ def medication_delete(record_id):
 )
 @require_api_token
 @require_api_scope("miniprogram:sensitive")
+@require_health_sensitive_consent
 def health_assessment():
     try:
         payload = _json_payload() if request.method == "POST" else {}
-        _pair, member = _resolve_owned_member(payload=payload)
+        pair, member = _resolve_owned_member(payload=payload)
+        if request.method == "POST" and member is not None:
+            adult_error = _adult_profile_required_error(
+                member,
+                pair_id=pair.id if pair is not None else None,
+            )
+            if adult_error is not None:
+                return adult_error
     except LookupError as exc:
         return _error(str(exc), "关联老人不存在或不属于当前用户。", 404)
     except ValueError as exc:
@@ -1501,10 +1800,14 @@ def _daily_status_for_pair(pair):
 @limiter.limit(lambda: current_app.config.get("RATE_LIMIT_CONFIRM", "30 per hour"), key_func=_mp_rate_limit_key)
 @require_api_token
 @require_api_scope("miniprogram:sensitive")
+@require_health_sensitive_consent
 def action_confirm(pair_id):
     pair = _pair_for_user(pair_id)
     if pair is None or pair.status != "active":
         return _error("not_found", "照护关系不存在。", 404)
+    adult_error = _adult_profile_required_for_pair(pair)
+    if adult_error is not None:
+        return adult_error
     try:
         payload = _json_payload()
         actions_done = _list_of_text(
@@ -1545,10 +1848,14 @@ def action_confirm(pair_id):
 @limiter.limit(lambda: current_app.config.get("RATE_LIMIT_HELP", "10 per hour"), key_func=_mp_rate_limit_key)
 @require_api_token
 @require_api_scope("miniprogram:sensitive")
+@require_health_sensitive_consent
 def action_help(pair_id):
     pair = _pair_for_user(pair_id)
     if pair is None or pair.status != "active":
         return _error("not_found", "照护关系不存在。", 404)
+    adult_error = _adult_profile_required_for_pair(pair)
+    if adult_error is not None:
+        return adult_error
     try:
         payload = _json_payload()
         note_provided = "note" in payload
@@ -1590,10 +1897,14 @@ def action_help(pair_id):
 @limiter.limit(lambda: current_app.config.get("RATE_LIMIT_MP_WRITE", "30 per minute"), key_func=_mp_rate_limit_key)
 @require_api_token
 @require_api_scope("miniprogram:sensitive")
+@require_health_sensitive_consent
 def action_debrief(pair_id):
     pair = _pair_for_user(pair_id)
     if pair is None or pair.status != "active":
         return _error("not_found", "照护关系不存在。", 404)
+    adult_error = _adult_profile_required_for_pair(pair)
+    if adult_error is not None:
+        return adult_error
     try:
         payload = _json_payload()
         answers = {

@@ -1,4 +1,11 @@
-const { authApi, clear, getMeta, requireToken } = require('../elders/care-session');
+const {
+  authApi,
+  clear,
+  getMeta,
+  getToken,
+  requireToken,
+  tokenApi,
+} = require('../elders/care-session');
 const { clearAcquisitionContext } = require('../../utils/share');
 
 function publicHome() {
@@ -24,6 +31,7 @@ Page({
   },
 
   onSessionInvalidated() {
+    this._accountLoadId = Number(this._accountLoadId || 0) + 1;
     this.setData({
       me: null,
       accountVerified: false,
@@ -34,26 +42,33 @@ Page({
     });
   },
 
+  onHide() {
+    this._accountLoadId = Number(this._accountLoadId || 0) + 1;
+  },
+
   onUnload() {
     this._unloaded = true;
+    this._accountLoadId = Number(this._accountLoadId || 0) + 1;
   },
 
   async loadAccount() {
+    const loadId = Number(this._accountLoadId || 0) + 1;
+    this._accountLoadId = loadId;
     this.setData({ loading: true, loadError: '', accountVerified: false, me: null });
     try {
       const me = await authApi({ method: 'GET', path: '/mp/api/v1/me' });
-      if (this._unloaded) return;
+      if (this._unloaded || this._accountLoadId !== loadId) return;
       if (!me || typeof me !== 'object') throw new Error('invalid_account_response');
       this.setData({ me, accountVerified: true });
     } catch (error) {
-      if (this._unloaded) return;
+      if (this._unloaded || this._accountLoadId !== loadId) return;
       this.setData({
         me: null,
         accountVerified: false,
         loadError: '账号信息没有验证成功，请检查网络后重试。',
       });
     } finally {
-      if (!this._unloaded) this.setData({ loading: false });
+      if (!this._unloaded && this._accountLoadId === loadId) this.setData({ loading: false });
     }
   },
 
@@ -85,16 +100,26 @@ Page({
       confirmText: '退出登录',
       success: async (result) => {
         if (!result.confirm) return;
-        this.setData({ busy: true });
+        const sessionToken = getToken();
+        let logoutRequest = null;
         try {
-          await authApi({ method: 'POST', path: '/mp/api/v1/auth/logout' });
+          if (sessionToken) {
+            logoutRequest = tokenApi(sessionToken, {
+              method: 'POST',
+              path: '/mp/api/v1/auth/logout',
+            });
+          }
         } catch (error) {
-          // 网络异常时仍清理本机状态，避免共享设备继续显示账号资料。
-        } finally {
-          clear();
-          clearAcquisitionContext();
-          this.setData({ busy: false });
-          publicHome();
+          logoutRequest = null;
+        }
+        clear();
+        clearAcquisitionContext();
+        this.setData({ busy: false });
+        publicHome();
+        try {
+          if (logoutRequest) await logoutRequest;
+        } catch (error) {
+          // 远端注销失败时，本机私人数据仍已立即清除。
         }
       },
     });

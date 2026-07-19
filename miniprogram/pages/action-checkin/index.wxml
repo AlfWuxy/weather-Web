@@ -18,9 +18,9 @@
 
     <view class="action-card">
       <view class="section-title">今天做到哪些？</view>
-      <checkbox-group bindchange="onActionsChange">
+      <checkbox-group bindchange="onActionsChange" role="group" aria-role="group" aria-label="今天已经做到的行动">
         <label wx:for="{{actions}}" wx:key="id" class="action-row">
-          <checkbox value="{{item.id}}" checked="{{item.checked}}" disabled="{{!contextReady}}" color="#167a43" aria-checked="{{item.checked}}" aria-label="{{item.title}}，{{item.detail}}" />
+          <checkbox value="{{item.id}}" checked="{{item.checked}}" disabled="{{!contextReady || busyAction !== ''}}" color="#167a43" aria-checked="{{item.checked}}" aria-label="{{item.title}}，{{item.detail}}" />
           <view class="action-copy">
             <view class="action-title">{{item.title}}</view>
             <view class="action-detail">{{item.detail}}</view>

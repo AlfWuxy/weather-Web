@@ -72,17 +72,18 @@ function validateElderInput(input, options) {
   const name = cleanText(input && input.name, 50);
   const relation = cleanText(input && input.relation, 20);
   const gender = cleanText(input && input.gender, 10);
-  const rawAge = cleanText(input && input.age, 3);
+  const rawAge = cleanText(input && input.age, 20);
   let age = null;
 
   if (!name) {
     return { valid: false, error: '请填写老人姓名或称呼' };
   }
-  if (rawAge) {
-    age = Number(rawAge);
-    if (!Number.isInteger(age) || age < 1 || age > 120) {
-      return { valid: false, error: '年龄请填写 1 到 120 的整数' };
-    }
+  if (!rawAge) {
+    return { valid: false, error: '请填写这位成年家人的年龄' };
+  }
+  age = Number(rawAge);
+  if (!/^\d{1,3}$/.test(rawAge) || !Number.isInteger(age) || age < 18 || age > 120) {
+    return { valid: false, error: '年龄请填写 18 到 120 的整数' };
   }
   if (gender && !['女性', '男性', '未填写'].includes(gender)) {
     return { valid: false, error: '请选择正确的性别' };

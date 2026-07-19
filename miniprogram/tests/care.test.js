@@ -40,9 +40,23 @@ test('慢病输入会按常见中文分隔符拆分并去重', () => {
 });
 
 test('老人资料固定为都昌县并验证年龄', () => {
+  const missing = validateElderInput({ name: '妈妈', age: '' }, { mode: 'create' });
+  assert.equal(missing.valid, false);
+  assert.match(missing.error, /填写.*年龄/);
+
+  const underage = validateElderInput({ name: '妹妹', age: '17' }, { mode: 'create' });
+  assert.equal(underage.valid, false);
+  assert.match(underage.error, /18 到 120/);
+
   const invalid = validateElderInput({ name: '妈妈', age: '121' }, { mode: 'create' });
   assert.equal(invalid.valid, false);
-  assert.match(invalid.error, /1 到 120/);
+  assert.match(invalid.error, /18 到 120/);
+
+  assert.equal(validateElderInput({ name: '异常家人', age: '1200' }, { mode: 'create' }).valid, false);
+  assert.equal(validateElderInput({ name: '异常家人', age: '120.0' }, { mode: 'create' }).valid, false);
+
+  assert.equal(validateElderInput({ name: '成年家人', age: '18' }, { mode: 'create' }).valid, true);
+  assert.equal(validateElderInput({ name: '长寿家人', age: '120' }, { mode: 'create' }).valid, true);
 
   const valid = validateElderInput({
     name: ' 妈妈 ',

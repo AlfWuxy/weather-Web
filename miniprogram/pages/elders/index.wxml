@@ -72,7 +72,14 @@
         <button class="tool-button" data-pair-id="{{item.pair_id}}" bindtap="goMedications">用药记录</button>
       </view>
 
-      <button class="delete-link" data-pair-id="{{item.pair_id}}" data-name="{{item.displayName}}" bindtap="deleteElder">停止管理这位老人</button>
+      <button
+        class="delete-link"
+        data-pair-id="{{item.pair_id}}"
+        data-name="{{item.displayName}}"
+        loading="{{busyPairId === item.pair_id}}"
+        disabled="{{busyPairId !== 0}}"
+        bindtap="deleteElder"
+      >停止管理这位老人</button>
     </view>
   </block>
 

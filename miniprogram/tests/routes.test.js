@@ -125,25 +125,25 @@ test('登录页提供返回公共首页的明确入口', () => {
   assert.equal(appConfig.pages.includes('pages/agreement/index'), true);
 });
 
-test('WxPusher 开启前展示完整第三方传输范围', () => {
+test('首发小程序包不含第三方推送交互，协议保留禁用语义', () => {
+  const runtimeFiles = [];
+  ['.js', '.json', '.wxml', '.wxss'].forEach((suffix) => collectFiles(miniRoot, suffix, runtimeFiles));
+  const runtimeText = runtimeFiles
+    .filter((file) => !path.relative(miniRoot, file).startsWith(`tests${path.sep}`))
+    .map((file) => fs.readFileSync(file, 'utf8'))
+    .join('\n');
   const settingsView = fs.readFileSync(path.join(miniRoot, 'pages/settings/index.wxml'), 'utf8');
-  const settingsScript = fs.readFileSync(path.join(miniRoot, 'pages/settings/index.js'), 'utf8');
-  assert.match(settingsView, /wx:if="\{\{wxpusherFeatureEnabled\}\}" class="settings-card"/);
-  assert.match(settingsView, /发送 UID、都昌县级预警标题与正文及 7\s*天内有效的点击链接/);
-  assert.match(settingsView, /不会发送家人姓名、健康筛查、健康日记、用药记录或家庭地址/);
-  assert.match(settingsView, /打开或预览链接不会记为送达确认/);
-  assert.match(settingsView, /必要的访问安全日志/);
-  assert.match(settingsView, /页面无法核验实际点击者身份/);
-  assert.match(settingsView, /持有链接的人主动点击“我已看到这条提醒”/);
-  assert.match(settingsView, /当前说明版本/);
-  assert.doesNotMatch(settingsView, /一次性点击链接/);
-  assert.match(settingsView, /bindchange="onWxPusherConsent"/);
-  assert.match(settingsScript, /wxpusher_consent/);
-  assert.match(settingsScript, /required_wxpusher_consent_version/);
-  assert.match(settingsScript, /wxpusher_consent_version:\s*this\.data\.requiredWxpusherConsentVersion/);
-  assert.match(settingsScript, /me\.wxpusher_feature_enabled === true/);
-  assert.doesNotMatch(settingsView, /微信通知权限/);
-  assert.doesNotMatch(settingsScript, /wx\.openSetting|openSystemSettings/);
+  const disabledCopy = [
+    'pages/privacy/index.wxml',
+    'pages/agreement/index.wxml',
+  ].map((file) => fs.readFileSync(path.join(miniRoot, file), 'utf8')).join('\n');
+
+  assert.doesNotMatch(runtimeText, /wxpusher/i);
+  assert.doesNotMatch(runtimeText, /\bUID(?:_|\b)/i);
+  assert.doesNotMatch(runtimeText, /saveSettings|onWxPusherConsent|wxpusherSwitch|pushEnabled/);
+  assert.doesNotMatch(settingsView, /<(?:input|switch|checkbox)\b/);
+  assert.match(disabledCopy, /当前版本不提供第三方消息推送/);
+  assert.match(disabledCopy, /不收集第三方推送接收标识/);
 });
 
 test('用药与求助文案明确为仅记录能力', () => {

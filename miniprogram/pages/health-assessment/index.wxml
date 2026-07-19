@@ -2,12 +2,17 @@
   <view class="page-title">健康状态筛查</view>
   <view class="page-copy">5 项快速筛查，帮助家人决定今天要多留意什么。筛查不作医疗诊断。</view>
 
-  <view wx:if="{{loading}}" class="state-box">正在加载…</view>
-  <block wx:else>
+  <view wx:if="{{loading}}" class="state-box" role="status" aria-role="status" aria-live="polite">正在加载…</view>
+  <view wx:elif="{{loadError}}" class="history-error" role="alert" aria-role="alert" aria-live="assertive">
+    <view>{{loadError}}</view>
+    <button class="history-retry" bindtap="loadPage">重新加载筛查页面</button>
+    <button class="history-retry" bindtap="backToCare">返回家庭照护</button>
+  </view>
+  <block wx:elif="{{contextReady}}">
     <view class="person-card">
       <view>
         <view class="person-label">正在为谁筛查</view>
-        <picker range="{{elderNames}}" value="{{elderIndex}}" bindchange="onElderChange" disabled="{{busy || loading}}" aria-label="选择要进行健康筛查的家人">
+        <picker range="{{elderNames}}" value="{{elderIndex}}" bindchange="onElderChange" disabled="{{!contextReady || busy || loading}}" aria-label="选择要进行健康筛查的家人">
           <view class="person-picker"><text>{{elderNames[elderIndex]}}</text><image class="person-picker-icon" src="/assets/icons/chevron-right.png" mode="aspectFit" aria-hidden="true" /></view>
         </picker>
       </view>
@@ -24,7 +29,7 @@
               data-id="{{question.id}}"
               data-value="{{option.value}}"
               bindtap="onSelect"
-              disabled="{{busy}}"
+              disabled="{{!contextReady || busy}}"
               role="radio"
               aria-role="radio"
               aria-checked="{{option.active}}"
@@ -39,7 +44,7 @@
       </view>
     </block>
 
-    <button class="submit-button" loading="{{busy}}" disabled="{{busy}}" bindtap="submitAssessment">提交本次筛查</button>
+    <button class="submit-button" loading="{{busy}}" disabled="{{!contextReady || busy}}" bindtap="submitAssessment">提交本次筛查</button>
 
     <view wx:if="{{latestLoading && !latest}}" class="history-state" role="status" aria-role="status">正在读取最近一次筛查结果…</view>
     <view wx:if="{{latestError}}" class="history-error" role="status" aria-role="status" aria-live="polite">
@@ -47,7 +52,7 @@
       <button class="history-retry" disabled="{{latestLoading}}" bindtap="loadLatest">{{latestLoading ? '正在重试…' : '重新读取最近结果'}}</button>
     </view>
 
-    <view wx:if="{{latest}}" class="result-card">
+    <view wx:if="{{latest}}" class="result-card" role="status" aria-role="status" aria-live="polite">
       <view class="result-label">最近一次筛查结果</view>
       <view class="result-level">{{latest.riskLevel}}</view>
       <view wx:if="{{latest.riskScore !== ''}}" class="result-score">参考分值 {{latest.riskScore}}</view>
@@ -56,4 +61,5 @@
       <view class="result-note">结果只作行动参考。身体明显不适时，请及时联系家人并就医或求助。</view>
     </view>
   </block>
+  <view wx:else class="state-box" role="status" aria-role="status">请返回家庭照护，重新选择需要筛查的家人。</view>
 </view>

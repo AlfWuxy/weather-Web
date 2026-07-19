@@ -1,4 +1,12 @@
-const { authApi, requireToken } = require('../elders/care-session');
+const {
+  authApi,
+  finishHealthMutation,
+  guardHealthSensitivePage,
+  requireToken,
+  resumeHealthMutation,
+  suspendHealthMutation,
+  trackHealthMutation,
+} = require('../elders/care-session');
 const { normalizeList, validateDiaryInput } = require('../elders/care-logic');
 const { duchangDateKey } = require('../../utils/format');
 
@@ -28,7 +36,9 @@ function beginLoad(page) {
 }
 
 function loadIsActive(page, request) {
-  return lifecycleIsActive(page, request.lifecycle) && page._loadRequestId === request.requestId;
+  return page._hidden !== true
+    && lifecycleIsActive(page, request.lifecycle)
+    && page._loadRequestId === request.requestId;
 }
 
 Page({
@@ -46,28 +56,63 @@ Page({
     contextReady: false,
     loadError: '',
     dataStale: false,
-    loading: false,
+    loading: true,
     busy: false,
   },
 
   async onLoad(options) {
     this._unloaded = false;
+    this._hidden = false;
     this._lifecycleGeneration = Number(this._lifecycleGeneration || 0) + 1;
     this._entryDateTouched = false;
     this.syncTodayDate(undefined, true);
     if (!requireToken()) return;
     const pairId = Number(options.pair_id || 0) || null;
+    this._routePairId = pairId;
     this.setData({ pairId, contextReady: false, loadError: '', dataStale: false });
     if (!pairId) {
-      this.setData({ loadError: '缺少家人信息，请返回家庭照护重新选择。' });
+      this.setData({ loadError: '缺少家人信息，请返回家庭照护重新选择。', loading: false });
       return;
     }
-    await this.loadDiary();
+    await guardHealthSensitivePage(this, () => this.loadDiary());
   },
 
-  onShow() {
+  async onShow() {
+    this._hidden = false;
+    if (!requireToken()) return;
+    const resumed = await resumeHealthMutation(this);
+    if (this._unloaded || this._hidden) return;
+    const resumedSave = resumed.resumed && resumed.kind === 'diary-save';
+    if (resumed.resumed) {
+      const nextData = { busy: false, loading: true };
+      if (resumedSave && resumed.ok) {
+        this._entryDateTouched = false;
+        Object.assign(nextData, {
+          entryDate: this.data.todayDate || duchangDateKey(),
+          severityIndex: 0,
+          severity: '轻微',
+          symptoms: '',
+          notes: '',
+        });
+      }
+      this.setData(nextData);
+    }
     this.syncTodayDate();
-    requireToken();
+    if (resumed.resumed && !requireToken()) return;
+    if (!this.data.pairId && this._routePairId) this.setData({ pairId: this._routePairId, loading: true });
+    await guardHealthSensitivePage(this, () => this.loadDiary());
+    if (this._unloaded || this._hidden || !resumedSave) return;
+    wx.showToast({
+      title: resumed.ok ? '日记已保存并重新核对' : '保存未完成，请重试',
+      icon: resumed.ok ? 'success' : 'none',
+    });
+  },
+
+  onHide() {
+    suspendHealthMutation(this);
+    this._hidden = true;
+    this._lifecycleGeneration = Number(this._lifecycleGeneration || 0) + 1;
+    this._loadRequestId = Number(this._loadRequestId || 0) + 1;
   },
 
   syncTodayDate(value, resetEntryDate) {
@@ -91,11 +136,14 @@ Page({
   },
 
   onSessionInvalidated() {
+    this._healthConsentLoadedOnce = false;
+    this._healthConsentLoadedToken = '';
     this._lifecycleGeneration = Number(this._lifecycleGeneration || 0) + 1;
     this._loadRequestId = Number(this._loadRequestId || 0) + 1;
     if (this._unloaded) return;
     const today = duchangDateKey();
     this._entryDateTouched = false;
+    this._routePairId = null;
     this.setData({
       pairId: null,
       elderName: '家人',
@@ -114,8 +162,33 @@ Page({
     });
   },
 
-  async loadDiary() {
+  onHealthConsentRequired() {
+    this._healthConsentReloadPending = true;
+    this._lifecycleGeneration = Number(this._lifecycleGeneration || 0) + 1;
+    this._loadRequestId = Number(this._loadRequestId || 0) + 1;
     if (this._unloaded) return;
+    const today = duchangDateKey();
+    this._entryDateTouched = false;
+    this.setData({
+      pairId: null,
+      elderName: '家人',
+      entryDate: today,
+      todayDate: today,
+      severityIndex: 0,
+      severity: '轻微',
+      symptoms: '',
+      notes: '',
+      entries: [],
+      contextReady: false,
+      loadError: '',
+      dataStale: false,
+      loading: true,
+      busy: false,
+    });
+  },
+
+  async loadDiary() {
+    if (this._unloaded || this._hidden) return;
     const request = beginLoad(this);
     const pairId = Number(this.data.pairId || 0);
     if (!pairId) {
@@ -197,12 +270,18 @@ Page({
     const lifecycle = Number(this._lifecycleGeneration || 0);
     const pairId = Number(this.data.pairId || 0);
     this.setData({ busy: true });
+    let mutation = null;
     try {
-      const result = await authApi({
-        method: 'POST',
-        path: '/mp/api/v1/health/diary',
-        data: Object.assign({ pair_id: pairId }, validation.payload),
-      });
+      mutation = trackHealthMutation(
+        this,
+        authApi({
+          method: 'POST',
+          path: '/mp/api/v1/health/diary',
+          data: Object.assign({ pair_id: pairId }, validation.payload),
+        }),
+        'diary-save'
+      );
+      const result = await mutation;
       if (!lifecycleIsActive(this, lifecycle)) return;
       const directId = result && result.id;
       const savedRecord = result && (
@@ -235,6 +314,7 @@ Page({
     } catch (error) {
       if (lifecycleIsActive(this, lifecycle)) wx.showToast({ title: '保存失败，请稍后再试', icon: 'none' });
     } finally {
+      finishHealthMutation(this, mutation);
       if (lifecycleIsActive(this, lifecycle)) this.setData({ busy: false });
     }
   },

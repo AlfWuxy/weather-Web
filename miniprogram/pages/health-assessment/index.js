@@ -1,4 +1,12 @@
-const { authApi, requireToken } = require('../elders/care-session');
+const {
+  authApi,
+  finishHealthMutation,
+  guardHealthSensitivePage,
+  requireToken,
+  resumeHealthMutation,
+  suspendHealthMutation,
+  trackHealthMutation,
+} = require('../elders/care-session');
 const { ASSESSMENT_QUESTIONS, normalizeList, validateAssessment } = require('../elders/care-logic');
 
 function cleanRecommendation(item) {
@@ -42,25 +50,61 @@ Page({
     latest: null,
     latestLoading: false,
     latestError: '',
-    loading: false,
+    contextReady: false,
+    loadError: '',
+    loading: true,
     busy: false,
   },
 
   async onLoad(options) {
-    if (!requireToken()) return;
     this._unloaded = false;
+    this._hidden = false;
     this._latestRequestToken = 0;
     this._pageRequestToken = 0;
     this._submitRequestToken = 0;
     this.requestedPairId = Number(options.pair_id || 0) || null;
-    await this.loadPage();
+    if (!requireToken()) return;
+    await guardHealthSensitivePage(this, () => this.loadPage());
   },
 
-  onShow() {
-    requireToken();
+  async onShow() {
+    this._hidden = false;
+    if (!requireToken()) return;
+    const resumed = await resumeHealthMutation(this);
+    if (this._unloaded || this._hidden) return;
+    const resumedSubmit = resumed.resumed && resumed.kind === 'assessment-submit';
+    if (resumed.resumed) {
+      const nextData = { busy: false, loading: true };
+      if (resumedSubmit && resumed.ok) {
+        Object.assign(nextData, {
+          latest: normalizeAssessment(resumed.value) || this.data.latest,
+          questions: freshQuestions(),
+          answers: {},
+          completedCount: 0,
+        });
+      }
+      this.setData(nextData);
+    }
+    if (resumed.resumed && !requireToken()) return;
+    await guardHealthSensitivePage(this, () => this.loadPage());
+    if (this._unloaded || this._hidden || !resumedSubmit) return;
+    wx.showToast({
+      title: resumed.ok ? '筛查已保存并重新核对' : '提交未完成，请重试',
+      icon: resumed.ok ? 'success' : 'none',
+    });
+  },
+
+  onHide() {
+    suspendHealthMutation(this);
+    this._hidden = true;
+    this._latestRequestToken = (this._latestRequestToken || 0) + 1;
+    this._pageRequestToken = (this._pageRequestToken || 0) + 1;
+    this._submitRequestToken = (this._submitRequestToken || 0) + 1;
   },
 
   onSessionInvalidated() {
+    this._healthConsentLoadedOnce = false;
+    this._healthConsentLoadedToken = '';
     this._latestRequestToken = (this._latestRequestToken || 0) + 1;
     this._pageRequestToken = (this._pageRequestToken || 0) + 1;
     this._submitRequestToken = (this._submitRequestToken || 0) + 1;
@@ -76,7 +120,33 @@ Page({
       latest: null,
       latestLoading: false,
       latestError: '',
+      contextReady: false,
+      loadError: '',
       loading: false,
+      busy: false,
+    });
+  },
+
+  onHealthConsentRequired() {
+    this._healthConsentReloadPending = true;
+    this._latestRequestToken = (this._latestRequestToken || 0) + 1;
+    this._pageRequestToken = (this._pageRequestToken || 0) + 1;
+    this._submitRequestToken = (this._submitRequestToken || 0) + 1;
+    if (this._unloaded) return;
+    this.setData({
+      pairId: null,
+      elders: [],
+      elderNames: [],
+      elderIndex: 0,
+      questions: freshQuestions(),
+      answers: {},
+      completedCount: 0,
+      latest: null,
+      latestLoading: false,
+      latestError: '',
+      contextReady: false,
+      loadError: '',
+      loading: true,
       busy: false,
     });
   },
@@ -89,6 +159,7 @@ Page({
   },
 
   async loadPage() {
+    if (this._unloaded || this._hidden) return;
     const pageToken = (this._pageRequestToken || 0) + 1;
     this._pageRequestToken = pageToken;
     const requestedPairId = Number(this.requestedPairId || 0);
@@ -97,7 +168,7 @@ Page({
       : 0;
     if (latestToken) this._latestRequestToken = latestToken;
     this.setData(Object.assign(
-      { loading: true },
+      { loading: true, contextReady: false, loadError: '' },
       latestToken ? { latestLoading: true, latestError: '' } : {}
     ));
     try {
@@ -115,18 +186,26 @@ Page({
         authApi({ method: 'GET', path: '/mp/api/v1/elders' }),
         latestRequest,
       ]);
-      if (this._unloaded || pageToken !== this._pageRequestToken) return;
+      if (this._unloaded || this._hidden || pageToken !== this._pageRequestToken) return;
       const elders = normalizeList(elderData, ['items', 'elders']);
       if (!elders.length) {
         if (latestToken === this._latestRequestToken) {
           this._latestRequestToken += 1;
           this.setData({ latestLoading: false, latestError: '' });
         }
+        this.setData({
+          contextReady: false,
+          loadError: '请先添加一位家人后再进行健康筛查。',
+        });
         wx.showModal({
           title: '请先添加家人',
           content: '健康筛查需要关联一位家中老人。',
           showCancel: false,
-          success: () => wx.redirectTo({ url: '/pages/elder-edit/index?mode=create' }),
+          success: () => {
+            if (!this._unloaded && !this._hidden && pageToken === this._pageRequestToken) {
+              wx.redirectTo({ url: '/pages/elder-edit/index?mode=create' });
+            }
+          },
         });
         return;
       }
@@ -143,6 +222,8 @@ Page({
         elderNames: elders.map((item) => (item.member && item.member.name) || '家中老人'),
         elderIndex,
         pairId,
+        contextReady: true,
+        loadError: '',
       };
       if (prefetchedPairMatches) {
         Object.assign(nextData, {
@@ -164,15 +245,18 @@ Page({
         await this.loadLatest();
       }
     } catch (error) {
-      if (!this._unloaded && pageToken === this._pageRequestToken) {
+      if (!this._unloaded && !this._hidden && pageToken === this._pageRequestToken) {
         if (latestToken === this._latestRequestToken) {
           this._latestRequestToken += 1;
           this.setData({ latestLoading: false });
         }
-        wx.showToast({ title: '筛查页面加载失败', icon: 'none' });
+        this.setData({
+          contextReady: false,
+          loadError: '筛查页面暂时没有加载出来，请检查网络后重试。',
+        });
       }
     } finally {
-      if (!this._unloaded && pageToken === this._pageRequestToken) this.setData({ loading: false });
+      if (!this._unloaded && !this._hidden && pageToken === this._pageRequestToken) this.setData({ loading: false });
     }
   },
 
@@ -195,6 +279,7 @@ Page({
       });
       if (
         this._unloaded
+        || this._hidden
         || requestToken !== this._latestRequestToken
         || Number(this.data.pairId) !== requestedPairId
       ) return;
@@ -205,6 +290,7 @@ Page({
     } catch (error) {
       if (
         !this._unloaded
+        && !this._hidden
         && requestToken === this._latestRequestToken
         && Number(this.data.pairId) === requestedPairId
       ) {
@@ -216,6 +302,7 @@ Page({
     } finally {
       if (
         !this._unloaded
+        && !this._hidden
         && requestToken === this._latestRequestToken
         && Number(this.data.pairId) === requestedPairId
       ) this.setData({ latestLoading: false });
@@ -229,6 +316,7 @@ Page({
     if (!elder) return;
     const pairId = Number(elder.pair_id);
     if (!pairId || pairId === Number(this.data.pairId)) return;
+    this.requestedPairId = pairId;
     this._latestRequestToken = (this._latestRequestToken || 0) + 1;
     this.setData({
       elderIndex,
@@ -244,7 +332,7 @@ Page({
   },
 
   onSelect(event) {
-    if (this.data.busy || this.data.loading) return;
+    if (!this.data.contextReady || this.data.busy || this.data.loading) return;
     const id = event.currentTarget.dataset.id;
     const value = event.currentTarget.dataset.value;
     const answers = Object.assign({}, this.data.answers, { [id]: value });
@@ -268,6 +356,10 @@ Page({
 
   async submitAssessment() {
     if (this.data.busy) return;
+    if (!this.data.contextReady) {
+      wx.showToast({ title: '请先重新加载筛查页面', icon: 'none' });
+      return;
+    }
     const submittedPairId = Number(this.data.pairId);
     if (!submittedPairId) {
       wx.showToast({ title: '请先选择家人', icon: 'none' });
@@ -281,14 +373,21 @@ Page({
     const submitToken = (this._submitRequestToken || 0) + 1;
     this._submitRequestToken = submitToken;
     this.setData({ busy: true });
+    let mutation = null;
     try {
-      const data = await authApi({
-        method: 'POST',
-        path: '/mp/api/v1/health/assessment',
-        data: Object.assign({ pair_id: submittedPairId }, validation.payload),
-      });
+      mutation = trackHealthMutation(
+        this,
+        authApi({
+          method: 'POST',
+          path: '/mp/api/v1/health/assessment',
+          data: Object.assign({ pair_id: submittedPairId }, validation.payload),
+        }),
+        'assessment-submit'
+      );
+      const data = await mutation;
       if (
         this._unloaded
+        || this._hidden
         || submitToken !== this._submitRequestToken
         || Number(this.data.pairId) !== submittedPairId
       ) return;
@@ -302,11 +401,16 @@ Page({
       });
       wx.showToast({ title: '筛查已保存', icon: 'success' });
     } catch (error) {
-      if (!this._unloaded && submitToken === this._submitRequestToken) {
+      if (!this._unloaded && !this._hidden && submitToken === this._submitRequestToken) {
         wx.showToast({ title: '提交失败，请稍后再试', icon: 'none' });
       }
     } finally {
-      if (!this._unloaded && submitToken === this._submitRequestToken) this.setData({ busy: false });
+      finishHealthMutation(this, mutation);
+      if (!this._unloaded && !this._hidden && submitToken === this._submitRequestToken) this.setData({ busy: false });
     }
+  },
+
+  backToCare() {
+    wx.switchTab({ url: '/pages/elders/index' });
   },
 });

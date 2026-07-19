@@ -204,6 +204,146 @@ test('GIS 页面恢复时等元数据重验结束后再续载网格', async () =
   assert.match(page.data.mapNotice, /正在重新加载/);
 });
 
+test('GIS 页面隐藏会释放画布并保留已校验数据，返回后重新绘制', async () => {
+  const definition = loadPageDefinition();
+  const page = pageInstance(definition);
+  const collection = sampleCollection();
+  let canvasInitializations = 0;
+  page._metadataShowToken = 0;
+  page._mapLoadToken = 2;
+  page._renderToken = 4;
+  page._unloaded = false;
+  page._publicPageVisible = true;
+  page._collection = collection;
+  page._canvasModel = { cells: [{ id: 'cell-a' }] };
+  page._canvas = { requestAnimationFrame() {} };
+  page._context = { clearRect() {} };
+  page.data.mapState = 'ready';
+  page.data.canvasAvailable = true;
+  page.loadMetadata = () => Promise.resolve({});
+  page.initializeCanvas = () => { canvasInitializations += 1; };
+
+  page.onHide();
+
+  assert.equal(page._publicPageVisible, false);
+  assert.equal(page._collection, collection);
+  assert.equal(page._canvasModel, null);
+  assert.equal(page._canvas, null);
+  assert.equal(page._context, null);
+  assert.equal(page._mapLoadToken, 3);
+  assert.equal(page._renderToken, 5);
+  assert.equal(page._resumeMapRender, true);
+
+  page.onShow();
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(canvasInitializations, 1);
+  assert.equal(page.data.mapState, 'drawing');
+  assert.match(page.data.mapNotice, /重建地图画布/);
+});
+
+test('任意内存告警都会释放 GIS 全量数据且不会自动重新下载', async () => {
+  const definition = loadPageDefinition();
+  const page = pageInstance(definition);
+  const previousWx = global.wx;
+  let warningHandler;
+  let removedHandler;
+  let aborted = false;
+  let mapLoads = 0;
+  global.wx = {
+    onMemoryWarning(handler) { warningHandler = handler; },
+    offMemoryWarning(handler) { removedHandler = handler; },
+    showShareMenu() {},
+  };
+
+  try {
+    page.onLoad();
+    page._mapRequest = { abort() { aborted = true; } };
+    page._collection = sampleCollection();
+    page._canvasModel = { cells: [{ id: 'cell-a' }] };
+    page._canvas = {};
+    page._context = {};
+    page.data.mapState = 'ready';
+    page.data.cellCount = 4;
+    page.data.representativeRows = [{ id: 'cell-a' }];
+    page.data.gridPageRows = [{ id: 'cell-a' }];
+    page.data.gridPageTotal = 4;
+    page.data.selected = { id: 'cell-a' };
+    page.data.sourceVersions = [{ dataset: 'test' }];
+    page.loadMetadata = () => Promise.resolve({});
+    page.loadMap = () => { mapLoads += 1; };
+
+    warningHandler({ level: 10 });
+
+    assert.equal(aborted, true);
+    assert.equal(page._collection, null);
+    assert.equal(page._canvasModel, null);
+    assert.equal(page._canvas, null);
+    assert.equal(page._context, null);
+    assert.equal(page.data.mapState, 'idle');
+    assert.equal(page.data.cellCount, 0);
+    assert.deepEqual(page.data.representativeRows, []);
+    assert.deepEqual(page.data.gridPageRows, []);
+    assert.equal(page.data.gridPageTotal, 0);
+    assert.equal(page.data.selected, null);
+    assert.deepEqual(page.data.sourceVersions, []);
+    assert.match(page.data.mapNotice, /点击.*重新下载/);
+
+    page.onHide();
+    page.onShow();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(mapLoads, 0);
+
+    page.onUnload();
+    assert.equal(removedHandler, warningHandler);
+  } finally {
+    global.wx = previousWx;
+  }
+});
+
+test('隐藏期间的内存告警延后更新界面，缺少解绑 API 也能安全卸载', async () => {
+  const definition = loadPageDefinition();
+  const page = pageInstance(definition);
+  const previousWx = global.wx;
+  let warningHandler;
+  let setDataCalls = 0;
+  global.wx = {
+    onMemoryWarning(handler) { warningHandler = handler; },
+    showShareMenu() {},
+  };
+
+  try {
+    page.onLoad();
+    page._collection = sampleCollection();
+    page.data.mapState = 'ready';
+    page.loadMetadata = () => Promise.resolve({});
+    const originalSetData = page.setData;
+    page.setData = function guardedSetData(next, callback) {
+      assert.equal(this._publicPageVisible, true);
+      assert.equal(this._unloaded, false);
+      setDataCalls += 1;
+      originalSetData.call(this, next, callback);
+    };
+
+    page.onHide();
+    warningHandler({});
+    assert.equal(setDataCalls, 0);
+    assert.equal(page._memoryResetPending, true);
+    assert.equal(page._collection, null);
+
+    page.onShow();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(setDataCalls, 1);
+    assert.equal(page.data.mapState, 'idle');
+
+    assert.doesNotThrow(() => page.onUnload());
+    assert.doesNotThrow(() => warningHandler({ level: 15 }));
+    assert.equal(setDataCalls, 1);
+  } finally {
+    global.wx = previousWx;
+  }
+});
+
 test('GIS 恢复会等过期缓存的 revalidated 新元数据后才下载', async () => {
   const publicData = require('../utils/public-data');
   const originalGetCommunity = publicData.getCommunity;

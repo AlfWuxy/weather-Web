@@ -1,4 +1,13 @@
-const { authApi, getSnapshot, requireToken } = require('../elders/care-session');
+const {
+  authApi,
+  finishHealthMutation,
+  getSnapshot,
+  guardHealthSensitivePage,
+  requireToken,
+  resumeHealthMutation,
+  suspendHealthMutation,
+  trackHealthMutation,
+} = require('../elders/care-session');
 const { normalizeList, normalizeSnapshot } = require('../elders/care-logic');
 const { duchangDateKey } = require('../../utils/format');
 
@@ -67,6 +76,7 @@ function beginRequest(page, key) {
 
 function requestIsActive(page, key, request) {
   return page._unloaded !== true
+    && page._hidden !== true
     && Number(page._lifecycleGeneration || 0) === request.lifecycle
     && Number(page[key] || 0) === request.requestId;
 }
@@ -96,14 +106,16 @@ Page({
     difficulty: '',
     debriefOptin: true,
     busyAction: '',
-    loading: false,
+    loading: true,
   },
 
   async onLoad(options) {
     this._unloaded = false;
+    this._hidden = false;
     this._lifecycleGeneration = Number(this._lifecycleGeneration || 0) + 1;
     if (!requireToken()) return;
     const pairId = Number(options.pair_id || 0) || null;
+    this._routePairId = pairId;
     this.setData({ pairId });
     if (!pairId) {
       this.setData({
@@ -111,15 +123,42 @@ Page({
         actions: [],
         selectedActions: [],
         loadError: '缺少家人信息，请返回上一页重新选择。',
+        loading: false,
       });
       wx.showToast({ title: '请选择一位家人', icon: 'none' });
       return;
     }
-    await this.loadContext();
+    await guardHealthSensitivePage(this, () => this.loadContext());
   },
 
-  onShow() {
-    requireToken();
+  async onShow() {
+    this._hidden = false;
+    if (!requireToken()) return;
+    const resumed = await resumeHealthMutation(this);
+    if (this._unloaded || this._hidden) return;
+    const resumedDebrief = resumed.resumed && resumed.kind === 'action-debrief';
+    if (resumed.resumed) {
+      const nextData = { busyAction: '', loading: true };
+      if (resumedDebrief && resumed.ok) {
+        Object.assign(nextData, { question2: '', question3: '', difficulty: '' });
+      }
+      this.setData(nextData);
+    }
+    if (resumed.resumed && !requireToken()) return;
+    if (!this.data.pairId && this._routePairId) this.setData({ pairId: this._routePairId, loading: true });
+    await guardHealthSensitivePage(this, () => this.loadContext());
+    if (this._unloaded || this._hidden || !resumedDebrief) return;
+    wx.showToast({
+      title: resumed.ok ? '复盘已保存并重新核对' : '复盘未保存，请重试',
+      icon: resumed.ok ? 'success' : 'none',
+    });
+  },
+
+  onHide() {
+    suspendHealthMutation(this);
+    this._hidden = true;
+    this._lifecycleGeneration = Number(this._lifecycleGeneration || 0) + 1;
+    this._contextRequestId = Number(this._contextRequestId || 0) + 1;
   },
 
   onUnload() {
@@ -129,8 +168,11 @@ Page({
   },
 
   onSessionInvalidated() {
+    this._healthConsentLoadedOnce = false;
+    this._healthConsentLoadedToken = '';
     this._lifecycleGeneration = Number(this._lifecycleGeneration || 0) + 1;
     this._contextRequestId = Number(this._contextRequestId || 0) + 1;
+    this._routePairId = null;
     if (this._unloaded) return;
     this.setData({
       pairId: null,
@@ -155,8 +197,36 @@ Page({
     });
   },
 
-  async loadContext() {
+  onHealthConsentRequired() {
+    this._healthConsentReloadPending = true;
+    this._lifecycleGeneration = Number(this._lifecycleGeneration || 0) + 1;
+    this._contextRequestId = Number(this._contextRequestId || 0) + 1;
     if (this._unloaded) return;
+    this.setData({
+      pairId: null,
+      elderName: '家人',
+      weather: normalizeSnapshot({}),
+      weatherStatus: '天气待更新',
+      actions: [],
+      selectedActions: [],
+      contextReady: false,
+      loadError: '',
+      confirmed: false,
+      helpRecorded: false,
+      helpNote: '',
+      completionIndex: 0,
+      question1: '全部完成',
+      question2: '',
+      question3: '',
+      difficulty: '',
+      debriefOptin: true,
+      busyAction: '',
+      loading: true,
+    });
+  },
+
+  async loadContext() {
+    if (this._unloaded || this._hidden) return;
     const request = beginRequest(this, '_contextRequestId');
     const pairId = Number(this.data.pairId || 0);
     if (!pairId) {
@@ -236,7 +306,7 @@ Page({
   },
 
   onActionsChange(event) {
-    if (!this.hasVerifiedContext()) return;
+    if (!this.hasVerifiedContext() || this.data.busyAction) return;
     const allowed = new Set(this.data.actions.map((item) => item.id));
     const selectedActions = Array.isArray(event.detail.value)
       ? event.detail.value.filter((value) => allowed.has(value))
@@ -272,18 +342,31 @@ Page({
     const lifecycle = Number(this._lifecycleGeneration || 0);
     const pairId = Number(this.data.pairId);
     this.setData({ busyAction: 'confirm' });
+    let mutation = null;
     try {
-      await authApi({
-        method: 'POST',
-        path: `/mp/api/v1/actions/${pairId}/confirm`,
-        data: { actions_done: selectedActions },
-      });
+      mutation = trackHealthMutation(
+        this,
+        authApi({
+          method: 'POST',
+          path: `/mp/api/v1/actions/${pairId}/confirm`,
+          data: { actions_done: selectedActions },
+        }),
+        'action-confirm',
+        { selectedActions: selectedActions.slice() }
+      );
+      await mutation;
       if (!lifecycleIsActive(this, lifecycle)) return;
-      this.setData({ confirmed: true });
+      const selected = new Set(selectedActions);
+      this.setData({
+        selectedActions: selectedActions.slice(),
+        actions: this.data.actions.map((item) => ({ ...item, checked: selected.has(item.id) })),
+        confirmed: true,
+      });
       wx.showToast({ title: '今日行动已记录', icon: 'success' });
     } catch (error) {
       if (lifecycleIsActive(this, lifecycle)) wx.showToast({ title: '确认失败，请稍后再试', icon: 'none' });
     } finally {
+      finishHealthMutation(this, mutation);
       if (lifecycleIsActive(this, lifecycle)) this.setData({ busyAction: '' });
     }
   },
@@ -305,18 +388,25 @@ Page({
         if (!this.ensureContextReady() || this.data.busyAction) return;
         this.setData({ busyAction: 'help' });
         const pairId = Number(this.data.pairId);
+        let mutation = null;
         try {
-          await authApi({
-            method: 'POST',
-            path: `/mp/api/v1/actions/${pairId}/help`,
-            data: { note: String(this.data.helpNote || '').trim().slice(0, 300) },
-          });
+          mutation = trackHealthMutation(
+            this,
+            authApi({
+              method: 'POST',
+              path: `/mp/api/v1/actions/${pairId}/help`,
+              data: { note: String(this.data.helpNote || '').trim().slice(0, 300) },
+            }),
+            'action-help'
+          );
+          await mutation;
           if (!lifecycleIsActive(this, lifecycle)) return;
           this.setData({ helpRecorded: true });
           wx.showToast({ title: updating ? '求助说明已更新' : '求助需求已记录', icon: 'success' });
         } catch (error) {
           if (lifecycleIsActive(this, lifecycle)) wx.showToast({ title: '记录失败，请直接联系家人', icon: 'none' });
         } finally {
+          finishHealthMutation(this, mutation);
           if (lifecycleIsActive(this, lifecycle)) this.setData({ busyAction: '' });
         }
       },
@@ -346,24 +436,31 @@ Page({
     const lifecycle = Number(this._lifecycleGeneration || 0);
     const pairId = Number(this.data.pairId);
     this.setData({ busyAction: 'debrief' });
+    let mutation = null;
     try {
-      await authApi({
-        method: 'POST',
-        path: `/mp/api/v1/actions/${pairId}/debrief`,
-        data: {
-          question_1: this.data.question1,
-          question_2: String(this.data.question2 || '').trim().slice(0, 200),
-          question_3: String(this.data.question3 || '').trim().slice(0, 200),
-          difficulty: String(this.data.difficulty || '').trim().slice(0, 500),
-          debrief_optin: this.data.debriefOptin,
-        },
-      });
+      mutation = trackHealthMutation(
+        this,
+        authApi({
+          method: 'POST',
+          path: `/mp/api/v1/actions/${pairId}/debrief`,
+          data: {
+            question_1: this.data.question1,
+            question_2: String(this.data.question2 || '').trim().slice(0, 200),
+            question_3: String(this.data.question3 || '').trim().slice(0, 200),
+            difficulty: String(this.data.difficulty || '').trim().slice(0, 500),
+            debrief_optin: this.data.debriefOptin,
+          },
+        }),
+        'action-debrief'
+      );
+      await mutation;
       if (!lifecycleIsActive(this, lifecycle)) return;
       this.setData({ question2: '', question3: '', difficulty: '' });
       wx.showToast({ title: '复盘已保存', icon: 'success' });
     } catch (error) {
       if (lifecycleIsActive(this, lifecycle)) wx.showToast({ title: '复盘提交失败', icon: 'none' });
     } finally {
+      finishHealthMutation(this, mutation);
       if (lifecycleIsActive(this, lifecycle)) this.setData({ busyAction: '' });
     }
   },

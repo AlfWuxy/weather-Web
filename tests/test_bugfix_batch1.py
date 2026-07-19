@@ -316,15 +316,21 @@ class TestMpApiAtomicCreate:
         from core.extensions import db
         from core.db_models import FamilyMember, Pair
         from core.usage import create_api_token
+        from core.time_utils import utcnow
+        from services.miniprogram_auth import current_privacy_version
         with app.app_context():
             db.create_all()
             user = _make_user(db.session, 'mpuser', 'MpPass123!')
+            user.health_sensitive_consent_version = current_privacy_version()
+            user.health_sensitive_consented_at = utcnow()
+            db.session.commit()
             token = create_api_token(user.id, name='test')
 
             resp = client.post('/mp/api/v1/elders',
                                data=json.dumps({
                                    'name': '测试老人',
                                    'relation': '父亲',
+                                   'age': 70,
                                    'location_query': '北京市',
                                }),
                                content_type='application/json',
@@ -345,9 +351,14 @@ class TestMpApiAtomicCreate:
         from core.extensions import db
         from core.db_models import FamilyMember
         from core.usage import create_api_token
+        from core.time_utils import utcnow
+        from services.miniprogram_auth import current_privacy_version
         with app.app_context():
             db.create_all()
             user = _make_user(db.session, 'mpuser2', 'MpPass123!')
+            user.health_sensitive_consent_version = current_privacy_version()
+            user.health_sensitive_consented_at = utcnow()
+            db.session.commit()
             token = create_api_token(user.id, name='test')
 
             resp = client.post('/mp/api/v1/elders',

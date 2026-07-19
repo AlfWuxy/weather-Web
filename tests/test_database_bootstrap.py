@@ -936,7 +936,7 @@ def test_head_downgrade_preflight_preserves_newer_columns_for_opted_out_pair(
     assert 'elder_actions' in daily_status_columns
     assert 'dedupe_key' in weather_alert_columns
     assert kept == [(owner_id, pair_id, None, 'head 降级前已关闭关联')]
-    assert revision == '0024_wxpusher_consent_receipt'
+    assert revision == '0025_health_sensitive_consent'
 
 
 def test_head_to_0017_round_trip_succeeds_for_representable_debrief(
@@ -1031,7 +1031,7 @@ def test_head_to_0017_round_trip_succeeds_for_representable_debrief(
         ).fetchone()[0]
 
     assert restored == [(owner_id, pair_id, pair_id, '可以由旧结构表达')]
-    assert restored_revision == '0024_wxpusher_consent_receipt'
+    assert restored_revision == '0025_health_sensitive_consent'
 
 
 def test_elder_actions_migration_keeps_caregiver_actions_separate(
@@ -1109,7 +1109,7 @@ def test_elder_actions_migration_keeps_caregiver_actions_separate(
 
     assert 'elder_actions' in guarded_columns
     assert guarded_values == ('["remind"]', '["drink_water"]')
-    assert guarded_revision == '0024_wxpusher_consent_receipt'
+    assert guarded_revision == '0025_health_sensitive_consent'
 
     command.downgrade(alembic_config, '0018_debrief_owner_scope')
     with sqlite3.connect(database_path) as connection:

@@ -15,9 +15,7 @@
   line-height: 1.65;
 }
 
-.state-box,
 .policy-card,
-.settings-card,
 .menu-card,
 .guest-card {
   margin-top: 24rpx;
@@ -65,11 +63,6 @@
   text-align: center;
 }
 
-.state-box {
-  color: #68766e;
-  text-align: center;
-}
-
 .policy-card {
   display: flex;
   align-items: center;
@@ -95,19 +88,12 @@
   margin-left: 20rpx;
 }
 
-.consent-copy,
-.menu-row > view,
-.switch-row > view {
+.menu-row > view {
   min-width: 0;
-}
-
-.menu-row > view,
-.switch-row > view {
   flex: 1;
 }
 
-.policy-title,
-.section-title {
+.policy-title {
   margin: 0;
   color: #25402f;
   font-size: 16px;
@@ -115,88 +101,17 @@
 }
 
 .policy-copy,
-.section-copy,
-.menu-copy,
-.switch-copy {
+.menu-copy {
   margin-top: 8rpx;
   color: #627168;
   font-size: 16px;
   line-height: 1.6;
 }
 
-.field-label {
-  margin: 24rpx 0 12rpx;
-  color: #33483c;
-  font-size: 16px;
-  font-weight: 600;
-}
-
-.text-input {
-  box-sizing: border-box;
-  width: 100%;
-  min-height: 88rpx;
-  padding: 20rpx 22rpx;
-  border: 2rpx solid #ced9d2;
-  border-radius: 16rpx;
-  background: #ffffff;
-  font-size: 16px;
-}
-
-.switch-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  min-height: 88rpx;
-  margin-top: 24rpx;
-  padding-top: 22rpx;
-  border-top: 1rpx solid #e2e9e5;
-}
-
-.third-party-consent {
-  display: flex;
-  align-items: flex-start;
-  min-height: 88rpx;
-  margin-top: 20rpx;
-  padding: 22rpx;
-  border: 2rpx solid #b8d7c5;
-  border-radius: 16rpx;
-  background: #f3faf6;
-}
-
-.third-party-consent checkbox-group {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 64rpx;
-  min-height: 64rpx;
-}
-
-.consent-copy {
-  flex: 1;
-  margin-left: 10rpx;
-  color: #41574b;
-  font-size: 16px;
-  line-height: 1.65;
-}
-
-.switch-title,
 .menu-title {
   color: #30473a;
   font-size: 16px;
   font-weight: 600;
-}
-
-.save-button {
-  width: 100%;
-  min-width: 100%;
-  min-height: 88rpx;
-  margin-top: 26rpx;
-  border-radius: 18rpx;
-  background: #b64815;
-  color: #ffffff;
-  font-size: 16px;
-  font-weight: 700;
-  line-height: 88rpx;
 }
 
 .menu-card {

@@ -17,39 +17,18 @@
     <view class="fallback-note">微信登录暂不可用时，登录页也提供备用登录码。</view>
   </view>
 
-  <view wx:if="{{loading}}" class="state-box">正在加载设置…</view>
-  <block wx:elif="{{loggedIn}}">
-
-    <view wx:if="{{wxpusherFeatureEnabled}}" class="settings-card">
-      <view class="section-title">网页端兼容推送</view>
-      <view class="section-copy">这是独立于微信系统通知的可选第三方通道，默认关闭。开启前请确认下方传输范围。</view>
-      <view wx:if="{{!wxpusherAvailable}}" class="state-box">推送服务暂不可用，管理员尚未配置通道。你仍可关闭推送并清空已保存的 UID。</view>
-      <view wx:if="{{wxpusherReconsentRequired}}" class="state-box">推送传输说明已更新，本次必须重新勾选同意后才能保存开启状态。</view>
-      <view class="field-label">WxPusher UID</view>
-      <input class="text-input" maxlength="80" value="{{wxpusherUid}}" disabled="{{busy || !settingsVerified}}" bindinput="onUid" placeholder="例如：UID_xxxxx" aria-label="WxPusher UID" />
-      <label class="switch-row" for="wxpusherSwitch" aria-label="开启网页端兼容推送">
-        <view>
-          <view class="switch-title">开启兼容推送</view>
-          <view class="switch-copy">UID 为空时不会开启</view>
-        </view>
-        <switch id="wxpusherSwitch" checked="{{pushEnabled}}" disabled="{{busy || !settingsVerified || (!wxpusherAvailable && !pushEnabled)}}" color="#137947" bindchange="onToggle" aria-label="开启网页端兼容推送" />
-      </label>
-      <label wx:if="{{pushEnabled && wxpusherAvailable}}" class="third-party-consent">
-        <checkbox-group bindchange="onWxPusherConsent">
-          <checkbox value="agreed" checked="{{wxpusherConsent}}" disabled="{{busy || !settingsVerified || !wxpusherAvailable}}" color="#137947" aria-label="同意 WxPusher 第三方传输说明" />
-        </checkbox-group>
-        <view class="consent-copy">我同意向 WxPusher 发送 UID、都昌县级预警标题与正文及 7 天内有效的点击链接。打开或预览链接不会记为送达确认；服务器仍可能生成必要的访问安全日志。只有持有链接的人主动点击“我已看到这条提醒”后，服务器才首次记录一次送达确认；页面无法核验实际点击者身份，请勿转发链接。确认时间和自动确认标记满 30 天后由每日清理任务清空；防重复投递状态和人工复核记录保留至账号注销。不会发送家人姓名、健康筛查、健康日记、用药记录或家庭地址。当前说明版本：{{requiredWxpusherConsentVersion}}；说明版本和 UTC 同意时间在关闭推送后继续保留至账号注销。</view>
-      </label>
-      <button class="save-button" loading="{{busy}}" disabled="{{busy || !settingsVerified}}" bindtap="saveSettings" hover-class="button-pressed">保存推送设置</button>
-    </view>
-
-  </block>
-
   <view class="menu-card">
     <button class="menu-row" bindtap="goPrivacy" hover-class="button-pressed">
       <view>
         <view class="menu-title">隐私说明</view>
         <view class="menu-copy">无需登录即可查看数据收集与使用边界</view>
+      </view>
+      <image class="chevron" src="/assets/icons/chevron-right.png" mode="aspectFit" aria-hidden="true" />
+    </button>
+    <button wx:if="{{loggedIn}}" class="menu-row border-top" bindtap="goHealthConsent" hover-class="button-pressed">
+      <view>
+        <view class="menu-title">健康资料授权管理</view>
+        <view class="menu-copy">查看或撤回健康敏感个人信息的单独同意</view>
       </view>
       <image class="chevron" src="/assets/icons/chevron-right.png" mode="aspectFit" aria-hidden="true" />
     </button>

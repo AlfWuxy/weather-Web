@@ -29,6 +29,46 @@ const {
 const REPRESENTATIVE_LIMIT = 8;
 const GRID_PAGE_SIZE = 20;
 
+function releaseCanvasResources(page) {
+  page._canvasTouchStart = null;
+  page._canvasModel = null;
+  page._canvas = null;
+  page._context = null;
+}
+
+function stopMapWork(page) {
+  page._mapLoadToken = (Number(page._mapLoadToken) || 0) + 1;
+  page._renderToken = (Number(page._renderToken) || 0) + 1;
+  const request = page._mapRequest;
+  page._mapRequest = null;
+  if (request && typeof request.abort === 'function') request.abort();
+}
+
+function memoryReleasedViewData() {
+  return {
+    mapState: 'idle',
+    mapError: '',
+    mapNotice: '系统已释放 GIS 数据以节省内存，请点击“加载地图与可读列表”重新下载。',
+    drawProgress: 0,
+    cellCount: 0,
+    viewMode: 'map',
+    canvasAvailable: true,
+    legend: [],
+    representativeRows: [],
+    gridSearchInput: '',
+    gridSearch: '',
+    gridPageRows: [],
+    gridPage: 0,
+    gridPageCount: 0,
+    gridPageTotal: 0,
+    gridHasPrevious: false,
+    gridHasNext: false,
+    selected: null,
+    announcement: '系统已释放 GIS 数据，请点击加载按钮重新下载。',
+    sourceVersions: [],
+  };
+}
+
 function defaultLayerOptions() {
   return LAYER_ORDER.map((key) => ({ key, label: FALLBACK_LAYERS[key].short_label || FALLBACK_LAYERS[key].label }));
 }
@@ -111,15 +151,29 @@ Page({
     this._metadataShowToken = 0;
     beginPublicPage(this);
     showPublicShareMenu();
+    if (typeof wx !== 'undefined' && typeof wx.onMemoryWarning === 'function') {
+      const handler = () => this.handleMemoryWarning();
+      try {
+        wx.onMemoryWarning(handler);
+        this._memoryWarningHandler = handler;
+      } catch (error) {
+        this._memoryWarningHandler = null;
+      }
+    }
   },
 
   onShow() {
-    const resumeMapLoad = Boolean(this._resumeMapLoad);
-    const resumeMapRender = Boolean(this._resumeMapRender);
+    const memoryResetPending = Boolean(this._memoryResetPending);
+    const resumeMapLoad = !memoryResetPending && Boolean(this._resumeMapLoad);
+    const resumeMapRender = !memoryResetPending && Boolean(this._resumeMapRender);
     this._resumeMapLoad = false;
     this._resumeMapRender = false;
     const showToken = ++this._metadataShowToken;
     showPublicPage(this);
+    if (memoryResetPending) {
+      this._memoryResetPending = false;
+      this.setData(memoryReleasedViewData());
+    }
     // 先重验元数据，避免页面恢复时继续下载旧版 GIS 文件。
     this.loadMetadata({ waitForRevalidation: resumeMapLoad || resumeMapRender }).finally(() => {
       if (!pageCanRender(this) || showToken !== this._metadataShowToken) return;
@@ -127,7 +181,8 @@ Page({
         this.setData({ mapState: 'idle', mapError: '', mapNotice: '已返回页面，正在重新加载网格数据。' });
         this.loadMap();
       } else if (resumeMapRender && this._collection) {
-        this.renderLayer();
+        this.setData({ mapState: 'drawing', drawProgress: 0, mapNotice: '已返回页面，正在重建地图画布。' });
+        this.initializeCanvas();
       }
     });
   },
@@ -135,33 +190,56 @@ Page({
   onHide() {
     hidePublicPage(this);
     this._metadataShowToken += 1;
-    this._canvasTouchStart = null;
-    if (this.data.mapState === 'loading') {
-      this._mapLoadToken += 1;
-      if (this._mapRequest && typeof this._mapRequest.abort === 'function') this._mapRequest.abort();
-      this._mapRequest = null;
-      this._resumeMapLoad = true;
-    }
-    if (this.data.mapState === 'drawing') {
-      this._renderToken += 1;
-      this._resumeMapRender = true;
-    }
+    const mapState = this.data.mapState;
+    this._resumeMapLoad = mapState === 'loading';
+    this._resumeMapRender = Boolean(
+      this._collection
+      && this.data.canvasAvailable
+      && (mapState === 'drawing' || mapState === 'ready')
+    );
+    stopMapWork(this);
+    // 页面隐藏时释放路径模型和原生画布，已校验的 GeoJSON 留给返回页面快速重建。
+    releaseCanvasResources(this);
   },
 
   onUnload() {
     unloadPublicPage(this);
     this._metadataShowToken += 1;
-    this._renderToken += 1;
-    this._mapLoadToken += 1;
-    if (this._mapRequest && typeof this._mapRequest.abort === 'function') {
-      this._mapRequest.abort();
+    const memoryWarningHandler = this._memoryWarningHandler;
+    this._memoryWarningHandler = null;
+    if (
+      memoryWarningHandler
+      && typeof wx !== 'undefined'
+      && typeof wx.offMemoryWarning === 'function'
+    ) {
+      try {
+        wx.offMemoryWarning(memoryWarningHandler);
+      } catch (error) {
+        // 旧版基础库可能不支持解绑；回调会通过 _unloaded 安全退出。
+      }
     }
-    this._mapRequest = null;
-    this._canvasTouchStart = null;
+    stopMapWork(this);
+    this._resumeMapLoad = false;
+    this._resumeMapRender = false;
+    this._memoryResetPending = false;
     this._collection = null;
-    this._canvasModel = null;
-    this._canvas = null;
-    this._context = null;
+    releaseCanvasResources(this);
+  },
+
+  handleMemoryWarning() {
+    if (this._unloaded) return;
+    // 不同平台的告警等级可能缺失；收到任意内存告警都执行完整释放。
+    stopMapWork(this);
+    this._resumeMapLoad = false;
+    this._resumeMapRender = false;
+    this._collection = null;
+    releaseCanvasResources(this);
+    if (!pageCanRender(this)) {
+      this._memoryResetPending = true;
+      return;
+    }
+    this._memoryResetPending = false;
+    this.setData(memoryReleasedViewData());
   },
 
   async onPullDownRefresh() {
@@ -409,12 +487,13 @@ Page({
 
   initializeCanvas() {
     if (this._unloaded || this._publicPageVisible === false) return;
+    const renderToken = this._renderToken;
     wx.createSelectorQuery()
       .in(this)
       .select('#gisCanvas')
       .fields({ node: true, size: true, rect: true })
       .exec((result) => {
-        if (!pageCanRender(this)) return;
+        if (!pageCanRender(this) || renderToken !== this._renderToken || !this._collection) return;
         const target = result && result[0];
         if (!target || !target.node || !target.width || !target.height) {
           this.setData({

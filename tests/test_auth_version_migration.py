@@ -11,7 +11,7 @@ import pytest
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
-HEAD_REVISION = '0024_wxpusher_consent_receipt'
+HEAD_REVISION = '0025_health_sensitive_consent'
 PREVIOUS_REVISION = '0022_private_health_indexes'
 
 
@@ -204,6 +204,119 @@ def test_wxpusher_consent_migration_resets_history_and_downgrades_fail_closed(
         ).fetchone()[0] == 0
 
 
+def test_health_sensitive_consent_migration_starts_null_and_blocks_lossy_downgrade(
+    monkeypatch,
+    tmp_path,
+):
+    """旧数据不继承一般隐私同意，真实健康回执存在时降级必须失败关闭。"""
+    database_path = tmp_path / 'health-sensitive-consent-migration.db'
+    app, config = _initialize(monkeypatch, database_path)
+
+    from core.db_models import User
+    from core.extensions import db
+    from core.time_utils import utcnow
+
+    with app.app_context():
+        user = User(username='health-sensitive-consent-migration-user')
+        user.set_password('MigrationPassword1!')
+        db.session.add(user)
+        db.session.commit()
+        user_id = int(user.id)
+    _dispose(app)
+
+    revision, columns = _revision_and_columns(database_path)
+    assert revision == HEAD_REVISION
+    assert columns['users']['health_sensitive_consent_version'][2].upper() == (
+        'VARCHAR(64)'
+    )
+    assert columns['users']['health_sensitive_consent_version'][3] == 0
+    assert columns['users']['health_sensitive_consented_at'][2].upper() == 'DATETIME'
+    assert columns['users']['health_sensitive_consented_at'][3] == 0
+    with sqlite3.connect(database_path) as connection:
+        assert connection.execute(
+            '''SELECT health_sensitive_consent_version,
+                      health_sensitive_consented_at
+               FROM users WHERE id = ?''',
+            (user_id,),
+        ).fetchone() == (None, None)
+
+    # 模拟仅新增版本列后中断：重试要补齐时间列，并清空不可信旧值。
+    command.downgrade(config, '0024_wxpusher_consent_receipt')
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            'ALTER TABLE users ADD COLUMN health_sensitive_consent_version VARCHAR(64)'
+        )
+        connection.execute(
+            '''UPDATE users
+               SET health_sensitive_consent_version = 'privacy-legacy'
+               WHERE id = ?''',
+            (user_id,),
+        )
+        connection.commit()
+    command.upgrade(config, 'head')
+    with sqlite3.connect(database_path) as connection:
+        assert connection.execute(
+            '''SELECT health_sensitive_consent_version,
+                      health_sensitive_consented_at
+               FROM users WHERE id = ?''',
+            (user_id,),
+        ).fetchone() == (None, None)
+
+    app = _create_app(monkeypatch, database_path)
+    with app.app_context():
+        restored = db.session.get(User, user_id)
+        restored.health_sensitive_consent_version = app.config[
+            'WX_MINIPROGRAM_PRIVACY_VERSION'
+        ]
+        restored.health_sensitive_consented_at = utcnow()
+        db.session.commit()
+    _dispose(app)
+
+    with pytest.raises(RuntimeError, match='nonempty_receipt_count=1'):
+        command.downgrade(config, '0024_wxpusher_consent_receipt')
+    revision, columns = _revision_and_columns(database_path)
+    assert revision == HEAD_REVISION
+    assert 'health_sensitive_consent_version' in columns['users']
+    assert 'health_sensitive_consented_at' in columns['users']
+
+
+@pytest.mark.parametrize(
+    ('column_sql', 'invalid_column'),
+    (
+        ('health_sensitive_consent_version INTEGER', 'health_sensitive_consent_version'),
+        ('health_sensitive_consented_at TEXT', 'health_sensitive_consented_at'),
+    ),
+)
+def test_health_sensitive_consent_migration_rejects_invalid_existing_columns(
+    monkeypatch,
+    tmp_path,
+    column_sql,
+    invalid_column,
+):
+    """错误类型的同名列必须在任何新增列之前失败关闭。"""
+    database_path = tmp_path / f'health-consent-invalid-{invalid_column}.db'
+    app, config = _initialize(monkeypatch, database_path)
+    _dispose(app)
+    command.downgrade(config, '0024_wxpusher_consent_receipt')
+
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(f'ALTER TABLE users ADD COLUMN {column_sql}')
+        connection.commit()
+
+    with pytest.raises(RuntimeError, match=invalid_column):
+        command.upgrade(config, 'head')
+
+    revision, columns = _revision_and_columns(database_path)
+    assert revision == '0024_wxpusher_consent_receipt'
+    assert invalid_column in columns['users']
+    other_column = (
+        'health_sensitive_consented_at'
+        if invalid_column == 'health_sensitive_consent_version'
+        else 'health_sensitive_consent_version'
+    )
+    assert other_column not in columns['users']
+
+
 def test_wxpusher_relative_one_step_downgrade_stops_at_auth_revision(
     monkeypatch,
     tmp_path,
@@ -231,6 +344,8 @@ def test_wxpusher_relative_one_step_downgrade_stops_at_auth_revision(
         user_id = int(user.id)
     _dispose(app)
 
+    # 先越过新增的 0025，再单独验证 0024 的相对一阶语义。
+    command.downgrade(config, '0024_wxpusher_consent_receipt')
     command.downgrade(config, '-1')
 
     revision, columns = _revision_and_columns(database_path)
@@ -245,11 +360,11 @@ def test_wxpusher_relative_one_step_downgrade_stops_at_auth_revision(
         ).fetchone() == (2, 0)
 
 
-def test_wxpusher_relative_two_step_downgrade_runs_auth_guard(
+def test_wxpusher_relative_three_step_downgrade_runs_auth_guard(
     monkeypatch,
     tmp_path,
 ):
-    """相对降级两阶会跨越 0023，并在首个 DDL 前阻断。"""
+    """相对降级三阶会跨越 0023，并在首个 DDL 前阻断。"""
     database_path = tmp_path / 'wxpusher-relative-two-step.db'
     app, config = _initialize(monkeypatch, database_path)
 
@@ -273,7 +388,7 @@ def test_wxpusher_relative_two_step_downgrade_runs_auth_guard(
     _dispose(app)
 
     with pytest.raises(RuntimeError, match='auth_version_count=1'):
-        command.downgrade(config, '-2')
+        command.downgrade(config, '-3')
 
     revision, columns = _revision_and_columns(database_path)
     assert revision == HEAD_REVISION
