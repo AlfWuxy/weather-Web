@@ -160,6 +160,75 @@ def test_all_elders_share_one_snapshot_without_weather_fanout(
     assert {row["location"]["name"] for row in rows} == {"都昌县"}
 
 
+def test_create_pair_record_rejects_foreign_and_missing_member_without_disclosure(
+    db_session,
+):
+    from core.db_models import FamilyMember, Pair
+    from services.user._common import _create_pair_record
+
+    owner, _token = _user_and_token(db_session, "pair_guard_owner")
+    outsider, _outsider_token = _user_and_token(db_session, "pair_guard_outsider")
+    foreign_member = FamilyMember(
+        user_id=outsider.id,
+        name="不可泄露成员",
+        relation="家人",
+    )
+    db_session.add(foreign_member)
+    db_session.commit()
+
+    errors = []
+    for member_id in (foreign_member.id, 2_147_483_647):
+        with pytest.raises(ValueError) as exc_info:
+            _create_pair_record(
+                caregiver_id=owner.id,
+                location_query="都昌县",
+                member_id=member_id,
+                flush=True,
+            )
+        errors.append(str(exc_info.value))
+
+    assert errors == ["member_ownership_mismatch", "member_ownership_mismatch"]
+    assert "不可泄露成员" not in " ".join(errors)
+    assert Pair.query.filter_by(caregiver_id=owner.id).count() == 0
+
+
+def test_elders_list_masks_cross_owner_member_from_dirty_pair(
+    app,
+    client,
+    db_session,
+):
+    from core.db_models import FamilyMember
+
+    owner, token = _user_and_token(db_session, "dirty_pair_owner")
+    outsider, _outsider_token = _user_and_token(db_session, "dirty_pair_outsider")
+    foreign_member = FamilyMember(
+        user_id=outsider.id,
+        name="跨账号隐私姓名",
+        relation="父亲",
+        age=73,
+        chronic_diseases=json.dumps(["高血压"], ensure_ascii=False),
+    )
+    db_session.add(foreign_member)
+    db_session.flush()
+    # 直接构造历史脏数据，模拟旧迁移或人工写库绕过统一 helper 的情况。
+    dirty_pair = _pair(db_session, owner, "70999999", member=foreign_member)
+    _persist_snapshot(app)
+
+    response = client.get(
+        "/mp/api/v1/elders",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+    rows = response.get_json()["data"]
+    assert len(rows) == 1
+    assert rows[0]["pair_id"] == dirty_pair.id
+    assert rows[0]["member"] is None
+    response_text = response.get_data(as_text=True)
+    assert "跨账号隐私姓名" not in response_text
+    assert "高血压" not in response_text
+
+
 def test_elders_batch_loads_only_current_day_elder_actions(
     app,
     client,

@@ -8,7 +8,7 @@ from flask import current_app, flash, has_app_context, url_for
 from flask_login import current_user
 
 from core.extensions import db
-from core.db_models import Pair, PairActionToken, PairLink
+from core.db_models import FamilyMember, Pair, PairActionToken, PairLink
 from core.security import hash_identifier, hash_pair_token, hash_short_code
 from core.time_utils import utcnow
 from utils.validators import sanitize_input
@@ -140,6 +140,16 @@ def _create_pair_record(caregiver_id, location_query, member_id=None, flush=Fals
     location_query = location_query.strip()
     if not location_query:
         raise ValueError('location_query is required')
+
+    # 共用写入口必须自行验证归属，避免调用方遗漏校验后形成跨账号脏关联。
+    if member_id not in (None, ''):
+        owned_member = FamilyMember.query.filter_by(
+            id=member_id,
+            user_id=caregiver_id,
+        ).first()
+        if owned_member is None:
+            # 缺失成员与他人成员使用同一错误，避免泄露成员是否存在。
+            raise ValueError('member_ownership_mismatch')
 
     short_code = _generate_short_code()
     pair = Pair(

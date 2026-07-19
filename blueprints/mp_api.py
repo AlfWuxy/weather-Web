@@ -965,7 +965,12 @@ def elders_list():
     status_map = {status.pair_id: status for status in statuses}
     member_ids = [p.member_id for p in pairs if p.member_id]
     members = (
-        FamilyMember.query.filter(FamilyMember.id.in_(member_ids)).all() if member_ids else []
+        FamilyMember.query.filter(
+            FamilyMember.id.in_(member_ids),
+            FamilyMember.user_id == g.api_user_id,
+        ).all()
+        if member_ids
+        else []
     )
     member_map = {m.id: m for m in members}
 

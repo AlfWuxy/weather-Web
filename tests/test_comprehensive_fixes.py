@@ -287,15 +287,25 @@ def test_validate_production_config_rejects_weak_pair_token_pepper(tmp_path, pep
         _reload_config()
 
 
-@pytest.mark.parametrize('duplicate_key', ['SECRET_KEY', 'WX_MINIPROGRAM_OPENID_PEPPER', 'WX_MINIPROGRAM_SESSION_SECRET'])
-def test_validate_production_config_requires_independent_pair_token_pepper(
+@pytest.mark.parametrize(
+    ('first_key', 'second_key'),
+    [
+        ('PAIR_TOKEN_PEPPER', 'SECRET_KEY'),
+        ('PAIR_TOKEN_PEPPER', 'WX_MINIPROGRAM_OPENID_PEPPER'),
+        ('PAIR_TOKEN_PEPPER', 'WX_MINIPROGRAM_SESSION_SECRET'),
+        ('SECRET_KEY', 'WX_MINIPROGRAM_OPENID_PEPPER'),
+        ('SECRET_KEY', 'WX_MINIPROGRAM_SESSION_SECRET'),
+        ('WX_MINIPROGRAM_OPENID_PEPPER', 'WX_MINIPROGRAM_SESSION_SECRET'),
+    ],
+)
+def test_validate_production_config_requires_pairwise_independent_secrets(
     tmp_path,
-    duplicate_key,
+    first_key,
+    second_key,
 ):
-    shared_value = 'independentvalue1234567890abcdefghij'
     env = {
         'SECRET_KEY': 'strongkey1234567890strongkey123456',
-        'PAIR_TOKEN_PEPPER': shared_value,
+        'PAIR_TOKEN_PEPPER': 'pairpepper1234567890abcdefghijklmn',
         'DEBUG': 'false',
         'DATABASE_URI': f"sqlite:///{tmp_path/'prod_duplicate_pepper.db'}",
         'RATE_LIMIT_STORAGE_URI': 'redis://localhost:6379/0',
@@ -310,12 +320,16 @@ def test_validate_production_config_requires_independent_pair_token_pepper(
         'ALLOW_INSECURE_PUBLIC_BASE_URL': None,
         'QWEATHER_AUTH_MODE': 'disabled',
     }
-    env[duplicate_key] = shared_value
+    env[second_key] = env[first_key]
     original = _set_env(env)
     try:
         config = _reload_config()
-        with pytest.raises(RuntimeError, match=f'PAIR_TOKEN_PEPPER.*{duplicate_key}'):
+        with pytest.raises(RuntimeError) as exc_info:
             config.validate_production_config()
+        error = str(exc_info.value)
+        assert first_key in error
+        assert second_key in error
+        assert env[first_key] not in error
     finally:
         _restore_env(original)
         _reload_config()

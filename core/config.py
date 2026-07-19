@@ -213,21 +213,31 @@ def validate_production_config():
             raise RuntimeError("PAIR_TOKEN_PEPPER 包含弱关键词，必须更换为独立随机值。")
         if pair_token_pepper in ('your-pair-token-pepper-here', 'change-me-min-32-chars'):
             raise RuntimeError("PAIR_TOKEN_PEPPER 使用了示例值，必须替换为真实的随机密钥！")
-        independent_from = {
+        independent_secrets = {
+            'PAIR_TOKEN_PEPPER': pair_token_pepper,
             'SECRET_KEY': secret_key_env,
             'WX_MINIPROGRAM_OPENID_PEPPER': wx_miniprogram_values['WX_MINIPROGRAM_OPENID_PEPPER'],
             'WX_MINIPROGRAM_SESSION_SECRET': wx_miniprogram_values['WX_MINIPROGRAM_SESSION_SECRET'],
         }
-        duplicate_name = next(
-            (
-                name
-                for name, value in independent_from.items()
-                if value and secrets.compare_digest(pair_token_pepper, value)
-            ),
-            None,
-        )
-        if duplicate_name:
-            raise RuntimeError(f"PAIR_TOKEN_PEPPER 必须与 {duplicate_name} 使用不同的独立随机值。")
+        configured_secrets = [
+            (name, value)
+            for name, value in independent_secrets.items()
+            if value
+        ]
+        for index, (name, value) in enumerate(configured_secrets):
+            duplicate_name = next(
+                (
+                    other_name
+                    for other_name, other_value in configured_secrets[index + 1:]
+                    if secrets.compare_digest(value, other_value)
+                ),
+                None,
+            )
+            if duplicate_name:
+                # 只报告冲突变量名，不回显任何密钥内容。
+                raise RuntimeError(
+                    f"{name} 必须与 {duplicate_name} 使用不同的独立随机值。"
+                )
 
         effective_rate_limit_uri = rate_limit_storage_env or redis_url or 'memory://'
         if _is_memory_storage_uri(effective_rate_limit_uri):
