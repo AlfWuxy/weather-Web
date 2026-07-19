@@ -31,7 +31,7 @@ test('首页与关于页明确区分小程序名称和内部服务名称', () =>
   const home = read(FILES.homePage);
   const about = read(FILES.aboutPage);
 
-  assert.match(home, /宜老平安小程序 · 宜老天气通服务/);
+  assert.equal((home.match(/宜老平安小程序 · 宜老天气通服务/g) || []).length, 2);
   assert.match(about, /宜老平安小程序 · 宜老天气通服务/);
   assert.match(about, /“宜老平安”是微信小程序名称，“宜老天气通”是小程序内的适老天气风险与行动提醒服务名称/);
 });

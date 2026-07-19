@@ -10,7 +10,7 @@
   </view>
 
   <view wx:if="{{entryContextReady && familyShareEntry}}" class="family-share-card card motion-enter" role="region" aria-role="region" aria-label="家人分享提醒">
-    <view class="family-share-brand">宜老天气通 · 都昌县</view>
+    <view class="family-share-brand">宜老平安小程序 · 宜老天气通服务</view>
     <view class="family-share-heading">
       <view class="family-share-icon"><image class="family-share-icon-image" src="/assets/icons/share.png" mode="aspectFit" aria-hidden="true" /></view>
       <view class="family-share-copy-wrap">
