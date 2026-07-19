@@ -215,6 +215,29 @@ test('家庭分享落地页跳过营销首屏并提供老人和家属双入口',
   assert.match(view, /我是家属，开启照护/);
 });
 
+test('首页在天气指标和快捷入口前提供数据最小化的今日行动入口', () => {
+  const view = fs.readFileSync(path.join(__dirname, '..', 'pages/home/index.wxml'), 'utf8');
+  const style = fs.readFileSync(path.join(__dirname, '..', 'pages/home/index.wxss'), 'utf8');
+  const calloutStart = view.indexOf('class="today-action-callout"');
+  const weatherDetailsStart = view.indexOf('class="weather-details"');
+  const quickGridStart = view.indexOf('class="quick-grid"');
+  const fullActionsStart = view.indexOf('<view class="section-title">今天先做什么</view>');
+  const calloutEnd = view.indexOf('</view>\n      <view class="weather-details"', calloutStart);
+  const callout = view.slice(calloutStart, calloutEnd);
+
+  assert.ok(calloutStart >= 0, '首页应包含紧凑的今天先做入口');
+  assert.ok(calloutStart < weatherDetailsStart, '今天先做入口应在天气指标之前');
+  assert.ok(weatherDetailsStart < quickGridStart, '天气指标应继续位于快捷入口之前');
+  assert.ok(quickGridStart < fullActionsStart, '后面的三条完整行动区应继续保留');
+  assert.match(callout, /role="region"[^>]*aria-role="region"[^>]*aria-label="今天先做"/);
+  assert.match(callout, /wx:if="\{\{topActions\.length\}\}"[^>]*>\{\{topActions\[0\]\.title\}\}/);
+  assert.match(callout, /先查看通用防护清单/);
+  assert.match(callout, /aria-label="\{\{topActions\.length \? '打开完整今日行动清单' : '打开通用防护清单'\}\}"/);
+  assert.doesNotMatch(callout, /item\.detail|pair_id|member_id|elder_id|姓名|健康资料/);
+  assert.match(style, /\.today-action-button\s*\{[^}]*min-height:\s*88rpx[^}]*font-size:\s*16px/);
+  assert.match(view, /wx:for="\{\{topActions\}\}"/);
+});
+
 test('较早公共天气隐藏旧风险分数并退回通用行动', () => {
   const result = {
     data: {

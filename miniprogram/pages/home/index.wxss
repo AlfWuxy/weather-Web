@@ -16,6 +16,12 @@
 .risk-bubble { display: flex; flex: 0 0 176rpx; align-items: center; justify-content: center; min-height: 150rpx; padding: 20rpx; border-radius: 28rpx; text-align: center; flex-direction: column; }
 .risk-label { font-size: 16px; font-weight: 750; }
 .risk-score { margin-top: 4rpx; font-size: 48rpx; line-height: 1.1; font-weight: 850; }
+.today-action-callout { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 18rpx; margin-top: 24rpx; padding: 20rpx; border-radius: 20rpx; background: #fff2df; }
+.today-action-copy { min-width: 0; }
+.today-action-kicker { color: #8d3511; font-size: 14px; line-height: 1.4; font-weight: 750; }
+.today-action-title { margin-top: 6rpx; color: #3b2b22; font-size: 16px; line-height: 1.45; font-weight: 800; }
+.today-action-hint { margin-top: 6rpx; color: #6a5142; font-size: 14px; line-height: 1.5; }
+.today-action-button { display: flex; align-items: center; justify-content: center; min-width: 210rpx; min-height: 88rpx; margin: 0; padding: 14rpx 20rpx; border-radius: 18rpx; color: #fff; background: #b64815; font-size: 16px; line-height: 1.4; font-weight: 750; text-align: center; }
 .weather-details { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12rpx; margin-top: 28rpx; padding-top: 24rpx; border-top: 1rpx solid #efe2d8; }
 .weather-detail-item { display: flex; align-items: center; gap: 8rpx; flex-direction: column; }
 .detail-value { font-size: 15.5px; font-weight: 750; }
@@ -33,6 +39,8 @@
 @media screen and (max-width: 340px) {
   .today-card > .row-between { align-items: stretch; flex-direction: column; }
   .risk-bubble { width: 100%; min-height: 112rpx; }
+  .today-action-callout { grid-template-columns: 1fr; }
+  .today-action-button { width: 100%; }
   .weather-details,
   .quick-grid { grid-template-columns: 1fr; }
 }

@@ -45,6 +45,20 @@
           <view class="risk-score">{{snapshot.risk.scoreText}}</view>
         </view>
       </view>
+      <view class="today-action-callout" role="region" aria-role="region" aria-label="今天先做">
+        <view class="today-action-copy">
+          <view class="today-action-kicker">今天先做</view>
+          <view wx:if="{{topActions.length}}" class="today-action-title">{{topActions[0].title}}</view>
+          <view wx:else class="today-action-title">先查看通用防护清单</view>
+          <view class="today-action-hint">{{topActions.length ? '打开清单，按顺序完成今天的防护。' : '天气风险行动待更新，先做好补水、休息等通用防护。'}}</view>
+        </view>
+        <navigator
+          class="today-action-button"
+          url="/pages/actions/index"
+          hover-class="button-pressed"
+          aria-label="{{topActions.length ? '打开完整今日行动清单' : '打开通用防护清单'}}"
+        >{{topActions.length ? '打开完整清单' : '查看通用防护'}}</navigator>
+      </view>
       <view class="weather-details">
         <view class="weather-detail-item"><text class="muted small">最高</text><text class="detail-value">{{snapshot.current.highText}}</text></view>
         <view class="weather-detail-item"><text class="muted small">最低</text><text class="detail-value">{{snapshot.current.lowText}}</text></view>
