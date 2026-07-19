@@ -18,12 +18,23 @@ const FILES = {
   privacyPage: 'miniprogram/pages/privacy/index.wxml',
   agreementPage: 'miniprogram/pages/agreement/index.wxml',
   healthConsentPage: 'miniprogram/pages/health-consent/index.wxml',
+  homePage: 'miniprogram/pages/home/index.wxml',
+  aboutPage: 'miniprogram/pages/about/index.wxml',
   actionCheckinPage: 'miniprogram/pages/action-checkin/index.wxml',
   webActionCheckinPage: 'templates/action_checkin.html',
   careLogic: 'miniprogram/pages/elders/care-logic.js',
   mpApi: 'blueprints/mp_api.py',
   releaseValidator: 'scripts/validate_release_env.py',
 };
+
+test('首页与关于页明确区分小程序名称和内部服务名称', () => {
+  const home = read(FILES.homePage);
+  const about = read(FILES.aboutPage);
+
+  assert.match(home, /宜老平安小程序 · 宜老天气通服务/);
+  assert.match(about, /宜老平安小程序 · 宜老天气通服务/);
+  assert.match(about, /“宜老平安”是微信小程序名称，“宜老天气通”是小程序内的适老天气风险与行动提醒服务名称/);
+});
 
 function frontendDiaryLimit(source, field) {
   const match = source.match(new RegExp(`const ${field} = cleanText\\(input && input\\.${field}, (\\d+)\\)`));

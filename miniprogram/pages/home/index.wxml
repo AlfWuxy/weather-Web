@@ -1,6 +1,6 @@
 <view class="page-shell">
   <view wx:if="{{entryContextReady && !familyShareEntry}}" class="hero">
-    <view class="hero-kicker">都昌县 · 适老天气服务</view>
+    <view class="hero-kicker">宜老平安小程序 · 宜老天气通服务</view>
     <view class="hero-title">把天气预警变成今天能做的事。</view>
     <view class="hero-subtitle">先看风险，再照着行动。老人、家属和社区都能快速打开。</view>
     <button class="hero-share" open-type="share" data-share-source="family_share" hover-class="button-pressed" aria-label="分享宜老天气通给家人">
