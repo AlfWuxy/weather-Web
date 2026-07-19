@@ -29,6 +29,82 @@ function normalizeAssessment(value) {
   };
 }
 
+function submitErrorView(error) {
+  const source = error && typeof error === 'object' ? error : {};
+  const nested = source.data && typeof source.data === 'object' ? source.data : {};
+  const statusCode = Number(source.statusCode || source.status_code || source.status) || 0;
+  const fingerprint = [
+    source.code,
+    source.error,
+    source.message,
+    source.errMsg,
+    nested.code,
+    nested.error,
+  ].filter(Boolean).join(' ').toLowerCase();
+
+  if (fingerprint.includes('weather_snapshot_unavailable')) {
+    return {
+      kind: 'weather-unavailable',
+      title: '天气数据待更新',
+      detail: '天气快照尚未准备好。请稍后重新提交；身体明显不适时，请及时联系家人并就医或求助。',
+      retry: true,
+    };
+  }
+  if (fingerprint.includes('weather_snapshot_stale')) {
+    return {
+      kind: 'weather-stale',
+      title: '天气数据已经过期',
+      detail: '天气快照正在刷新。请稍后重新提交，页面会保留你已经选择的内容。',
+      retry: true,
+    };
+  }
+  if (
+    statusCode === 401
+    || fingerprint.includes('unauthorized')
+    || fingerprint.includes('invalid_token')
+    || fingerprint.includes('missing_session')
+    || fingerprint.includes('session_expired')
+    || fingerprint.includes('session_changed')
+  ) {
+    return {
+      kind: 'session',
+      title: '登录状态已失效',
+      detail: '为保护家人资料，请重新登录后再进行筛查。',
+      retry: false,
+    };
+  }
+  if (statusCode === 428 && fingerprint.includes('health_sensitive_consent_required')) {
+    return {
+      kind: 'consent',
+      title: '健康资料授权需要重新确认',
+      detail: '请完成新的单独同意后，再重新进行本次筛查。',
+      retry: false,
+    };
+  }
+  if (
+    fingerprint.includes('request:fail')
+    || fingerprint.includes('timeout')
+    || fingerprint.includes('network')
+    || fingerprint.includes('offline')
+    || fingerprint.includes('socket')
+    || fingerprint.includes('dns')
+    || fingerprint.includes('connection')
+  ) {
+    return {
+      kind: 'network',
+      title: '网络连接失败',
+      detail: '没有连接到服务。请检查网络后重新提交，页面会保留你已经选择的内容。',
+      retry: true,
+    };
+  }
+  return {
+    kind: 'service',
+    title: '提交暂时没有完成',
+    detail: '服务暂时没有完成处理。请稍后重新提交，页面会保留你已经选择的内容。',
+    retry: true,
+  };
+}
+
 function freshQuestions() {
   return ASSESSMENT_QUESTIONS.map((question, index) => ({
     ...question,
@@ -50,6 +126,7 @@ Page({
     latest: null,
     latestLoading: false,
     latestError: '',
+    submitError: null,
     contextReady: false,
     loadError: '',
     loading: true,
@@ -78,10 +155,13 @@ Page({
       if (resumedSubmit && resumed.ok) {
         Object.assign(nextData, {
           latest: normalizeAssessment(resumed.value) || this.data.latest,
+          submitError: null,
           questions: freshQuestions(),
           answers: {},
           completedCount: 0,
         });
+      } else if (resumedSubmit) {
+        Object.assign(nextData, { submitError: submitErrorView(resumed.error) });
       }
       this.setData(nextData);
     }
@@ -89,7 +169,7 @@ Page({
     await guardHealthSensitivePage(this, () => this.loadPage());
     if (this._unloaded || this._hidden || !resumedSubmit) return;
     wx.showToast({
-      title: resumed.ok ? '筛查已保存并重新核对' : '提交未完成，请重试',
+      title: resumed.ok ? '筛查已保存并重新核对' : '本次未保存，请查看提示',
       icon: resumed.ok ? 'success' : 'none',
     });
   },
@@ -103,6 +183,9 @@ Page({
   },
 
   onSessionInvalidated() {
+    const submitWasPending = this.data.busy === true
+      || this._healthMutationKind === 'assessment-submit'
+      || this._healthMutationResumeKind === 'assessment-submit';
     this._healthConsentLoadedOnce = false;
     this._healthConsentLoadedToken = '';
     this._latestRequestToken = (this._latestRequestToken || 0) + 1;
@@ -120,6 +203,9 @@ Page({
       latest: null,
       latestLoading: false,
       latestError: '',
+      submitError: submitWasPending
+        ? submitErrorView({ statusCode: 401, code: 'session_expired' })
+        : null,
       contextReady: false,
       loadError: '',
       loading: false,
@@ -128,6 +214,9 @@ Page({
   },
 
   onHealthConsentRequired() {
+    const submitWasPending = this.data.busy === true
+      || this._healthMutationKind === 'assessment-submit'
+      || this._healthMutationResumeKind === 'assessment-submit';
     this._healthConsentReloadPending = true;
     this._latestRequestToken = (this._latestRequestToken || 0) + 1;
     this._pageRequestToken = (this._pageRequestToken || 0) + 1;
@@ -144,6 +233,9 @@ Page({
       latest: null,
       latestLoading: false,
       latestError: '',
+      submitError: submitWasPending
+        ? submitErrorView({ statusCode: 428, code: 'health_sensitive_consent_required' })
+        : null,
       contextReady: false,
       loadError: '',
       loading: true,
@@ -324,6 +416,7 @@ Page({
       latest: null,
       latestLoading: false,
       latestError: '',
+      submitError: null,
       questions: freshQuestions(),
       answers: {},
       completedCount: 0,
@@ -395,6 +488,7 @@ Page({
         latest: normalizeAssessment(data),
         latestLoading: false,
         latestError: '',
+        submitError: null,
         questions: freshQuestions(),
         answers: {},
         completedCount: 0,
@@ -402,7 +496,8 @@ Page({
       wx.showToast({ title: '筛查已保存', icon: 'success' });
     } catch (error) {
       if (!this._unloaded && !this._hidden && submitToken === this._submitRequestToken) {
-        wx.showToast({ title: '提交失败，请稍后再试', icon: 'none' });
+        this.setData({ submitError: submitErrorView(error) });
+        wx.showToast({ title: '本次未保存，请查看提示', icon: 'none' });
       }
     } finally {
       finishHealthMutation(this, mutation);

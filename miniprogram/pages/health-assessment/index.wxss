@@ -20,12 +20,49 @@
 .question-card,
 .history-state,
 .history-error,
+.submit-error,
 .result-card {
   margin-top: 24rpx;
   padding: 28rpx;
   border-radius: 24rpx;
   background: #ffffff;
   box-shadow: 0 12rpx 32rpx rgba(25, 58, 39, 0.07);
+}
+
+.submit-error {
+  border: 2rpx solid #d59a64;
+  background: #fff4e5;
+  color: #65340f;
+}
+
+.submit-error-title {
+  font-size: 16px;
+  font-weight: 800;
+  line-height: 1.45;
+}
+
+.submit-error-state {
+  margin-top: 10rpx;
+  font-size: 16px;
+  font-weight: 750;
+  line-height: 1.55;
+}
+
+.submit-error-detail {
+  margin-top: 8rpx;
+  font-size: 16px;
+  line-height: 1.65;
+}
+
+.submit-error-retry {
+  min-height: 88rpx;
+  margin: 20rpx 0 0;
+  border-radius: 16rpx;
+  background: #8d3511;
+  color: #ffffff;
+  font-size: 16px;
+  font-weight: 750;
+  line-height: 1.4;
 }
 
 .state-box {

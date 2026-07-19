@@ -2,6 +2,20 @@
   <view class="page-title">健康状态筛查</view>
   <view class="page-copy">5 项快速筛查，帮助家人决定今天要多留意什么。筛查不作医疗诊断。</view>
 
+  <view wx:if="{{submitError}}" class="submit-error" role="alert" aria-role="alert" aria-live="assertive" aria-label="{{submitError.title}}，本次筛查未保存。{{submitError.detail}}">
+    <view class="submit-error-title">{{submitError.title}}</view>
+    <view class="submit-error-state">本次筛查未保存。</view>
+    <view class="submit-error-detail">{{submitError.detail}}</view>
+    <button
+      wx:if="{{submitError.retry && contextReady}}"
+      class="submit-error-retry"
+      loading="{{busy}}"
+      disabled="{{busy}}"
+      bindtap="submitAssessment"
+      aria-label="重新提交本次健康筛查"
+    >{{busy ? '正在重新提交…' : '重新提交本次筛查'}}</button>
+  </view>
+
   <view wx:if="{{loading}}" class="state-box" role="status" aria-role="status" aria-live="polite">正在加载…</view>
   <view wx:elif="{{loadError}}" class="history-error" role="alert" aria-role="alert" aria-live="assertive">
     <view>{{loadError}}</view>
