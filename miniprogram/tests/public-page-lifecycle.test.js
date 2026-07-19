@@ -10,6 +10,7 @@ const {
   pageCanRender,
   schedulePublicRefresh,
   showPublicPage,
+  staleRetryMeta,
   unloadPublicPage,
 } = require('../utils/public-page-lifecycle');
 
@@ -37,6 +38,24 @@ test('freshness 下一次检查优先遵守失败退避时间', () => {
     assert.equal(nextRefreshAt({ effectiveExpiresAt: 900, retryAfter: 3000 }), 3000);
     assert.equal(nextRefreshAt({ effectiveExpiresAt: 900, refreshStarted: true }), null);
     assert.equal(nextRefreshAt({}), null);
+  } finally {
+    Date.now = originalNow;
+  }
+});
+
+test('公共失败元数据统一降级为较早状态并按指定间隔重试', () => {
+  const originalNow = Date.now;
+  Date.now = () => 1000;
+  try {
+    const meta = staleRetryMeta({ updatedText: '刚刚更新', effectiveExpiresAt: 900 }, 60 * 1000);
+    assert.equal(meta.updatedText, '刚刚更新');
+    assert.equal(meta.stale, true);
+    assert.equal(meta.source, 'stale-cache');
+    assert.equal(meta.refreshDeferred, false);
+    assert.equal(meta.refreshStarted, false);
+    assert.equal(meta.effectiveExpiresAt, null);
+    assert.equal(meta.retryAfter, 61 * 1000);
+    assert.equal(staleRetryMeta({}, 0).retryAfter, 61 * 1000);
   } finally {
     Date.now = originalNow;
   }

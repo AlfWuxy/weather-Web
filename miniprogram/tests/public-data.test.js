@@ -21,6 +21,7 @@ require.cache[configPath] = {
 const storage = new Map();
 let requestCalls = 0;
 let requestFailure = false;
+let storageWriteFailure = false;
 
 function flushAsync() {
   return new Promise((resolve) => setImmediate(resolve));
@@ -32,7 +33,10 @@ function iso(timestamp) {
 
 global.wx = {
   getStorageSync: (key) => storage.get(key),
-  setStorageSync: (key, value) => storage.set(key, value),
+  setStorageSync: (key, value) => {
+    if (storageWriteFailure) throw new Error('storage unavailable');
+    storage.set(key, value);
+  },
   request: (options) => {
     requestCalls += 1;
     const call = requestCalls;
@@ -58,9 +62,21 @@ global.wx = {
   },
 };
 
-const { getBootstrap, getCommunity } = require('../utils/public-data');
+const {
+  __resetPublicDataForTests,
+  getBootstrap,
+  getCommunity,
+} = require('../utils/public-data');
 
-test.after(() => { Date.now = originalNow; });
+test.beforeEach(() => {
+  __resetPublicDataForTests();
+  storageWriteFailure = false;
+});
+
+test.after(() => {
+  __resetPublicDataForTests();
+  Date.now = originalNow;
+});
 
 test('真实 getBootstrap 覆盖 absolute expiry、并发去重和 stale backoff', async () => {
   Date.now = () => now;
@@ -165,4 +181,43 @@ test('隐私版本纠正只额外请求一次并覆盖新鲜缓存', async () =>
   assert.equal(requestCalls, 2);
   assert.equal(corrected.meta.source, 'network');
   assert.equal(corrected.data.snapshot_id, 'snapshot-2');
+});
+
+test('本机缓存写入失败后仍用进程内快照完成过期断网降级', async (t) => {
+  const originalWarn = console.warn;
+  const cacheWarnings = [];
+  console.warn = (...args) => { cacheWarnings.push(args); };
+  t.after(() => { console.warn = originalWarn; });
+  Date.now = () => now;
+  storage.clear();
+  requestCalls = 0;
+  requestFailure = false;
+  storageWriteFailure = true;
+
+  const first = await getBootstrap();
+  assert.equal(first.meta.source, 'network');
+  assert.equal(first.data.snapshot_id, 'snapshot-1');
+  assert.equal(storage.size, 0);
+
+  now += 60 * 1000 + 1;
+  requestFailure = true;
+  const stale = await getBootstrap();
+  assert.equal(stale.meta.source, 'stale-cache');
+  assert.equal(stale.meta.stale, true);
+  assert.equal(stale.meta.refreshStarted, true);
+  assert.equal(stale.data.snapshot_id, 'snapshot-1');
+  assert.equal(requestCalls, 2);
+
+  const failedRefresh = await stale.revalidated;
+  assert.equal(failedRefresh.meta.source, 'stale-cache');
+  assert.equal(failedRefresh.meta.stale, true);
+  assert.match(failedRefresh.meta.networkError, /offline/);
+  assert.ok(failedRefresh.meta.retryAfter > now);
+  assert.equal(failedRefresh.data.snapshot_id, 'snapshot-1');
+
+  const guarded = await getBootstrap({ force: true });
+  assert.equal(guarded.meta.source, 'stale-cache');
+  assert.equal(guarded.data.snapshot_id, 'snapshot-1');
+  assert.equal(requestCalls, 2);
+  assert.equal(cacheWarnings.length, 2);
 });

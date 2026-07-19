@@ -1,4 +1,4 @@
-<view class="state-card state-{{state}}" role="status" aria-role="status" aria-live="polite">
+<view class="state-card state-{{state}}" role="{{state === 'error' ? 'alert' : 'status'}}" aria-role="{{state === 'error' ? 'alert' : 'status'}}" aria-live="{{state === 'error' ? 'assertive' : 'polite'}}">
   <view class="state-icon">
     <image wx:if="{{state === 'loading'}}" class="state-icon-image loading-icon" src="/assets/icons/sync.png" mode="aspectFit" aria-hidden="true" />
     <image wx:elif="{{state === 'error'}}" class="state-icon-image" src="/assets/icons/error.png" mode="aspectFit" aria-hidden="true" />

@@ -9,7 +9,7 @@
 
   <block wx:if="{{!loading}}">
     <freshness-bar wx:if="{{freshness.updatedText}}" updated-text="{{freshness.updatedText}}" stale="{{freshness.stale}}" source="{{freshness.source}}" refresh-deferred="{{freshness.refreshDeferred}}" refresh-started="{{freshness.refreshStarted}}" />
-    <status-card wx:if="{{generalMode}}" state="empty" title="{{freshness.stale ? '较早天气已切换为通用清单' : '当前显示通用防护'}}" detail="{{error || '天气或风险行动待更新，这些内容不代表当前风险等级。'}}" />
+    <status-card wx:if="{{generalMode}}" state="{{error ? 'error' : 'empty'}}" title="{{error ? '天气更新失败，已使用通用清单' : (freshness.stale ? '较早天气已切换为通用清单' : '当前显示通用防护')}}" detail="{{error || '天气或风险行动待更新，这些内容不代表当前风险等级。'}}" action-label="{{error ? '重新获取天气' : ''}}" bind:action="retry" />
 
     <view class="progress-card card">
       <view class="row-between">

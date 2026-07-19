@@ -12,7 +12,7 @@
 
   <view wx:if="{{!loggedIn}}" class="guest-card">
     <view class="guest-title">登录开启家庭照护</view>
-    <view class="guest-copy">登录后可添加家人、保存每日照护记录、完成行动确认和设置提醒。查看公共天气、隐私说明和方法透明度无需登录。</view>
+    <view class="guest-copy">登录后可添加家人、保存每日照护记录、完成行动确认和生成可手动发送的提醒话术。查看公共天气、隐私说明和方法透明度无需登录。</view>
     <button class="login-button" bindtap="goLogin" hover-class="button-pressed">微信登录</button>
     <view class="fallback-note">微信登录暂不可用时，登录页也提供备用登录码。</view>
   </view>

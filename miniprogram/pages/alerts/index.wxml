@@ -31,7 +31,7 @@
         <view wx:if="{{item.expiresAt}}">结束时间：{{item.expiresText}}</view>
       </view>
     </view>
-    <status-card wx:if="{{freshness.stale}}" state="error" title="官方预警有效性待核对" detail="缓存中的预警记录可能已经失效，刷新前不继续显示为有效预警。请同时查看当地主管部门的最新通知。" />
+    <status-card wx:if="{{freshness.stale}}" state="error" title="{{error ? '预警更新失败，有效性待核对' : '官方预警有效性待核对'}}" detail="{{error || '缓存中的预警记录可能已经失效，刷新前不继续显示为有效预警。请同时查看当地主管部门的最新通知。'}}" action-label="{{error ? '重试' : ''}}" bind:action="retry" />
     <status-card wx:elif="{{!warningsSourceAvailable}}" state="error" title="官方预警来源暂不可用" detail="当前无法确认是否存在有效预警，请同时查看当地主管部门的最新通知。" />
     <status-card wx:elif="{{!warnings.length}}" state="empty" title="当前暂无官方预警" detail="没有官方预警仍可能出现高温、低温或空气质量风险，请继续查看今日风险和行动。" />
 

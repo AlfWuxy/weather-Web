@@ -11,7 +11,7 @@
 .page-copy {
   margin-top: 10rpx;
   color: #66736c;
-  font-size: 14px;
+  font-size: 16px;
   line-height: 1.65;
 }
 
@@ -40,7 +40,7 @@
 .guest-copy {
   margin-top: 10rpx;
   color: #786d65;
-  font-size: 14px;
+  font-size: 16px;
   line-height: 1.65;
 }
 
@@ -52,7 +52,7 @@
   border-radius: 18rpx;
   background: #b64815;
   color: #ffffff;
-  font-size: 14.5px;
+  font-size: 16px;
   font-weight: 700;
   line-height: 90rpx;
 }
@@ -60,7 +60,7 @@
 .fallback-note {
   margin-top: 14rpx;
   color: #786d65;
-  font-size: 14px;
+  font-size: 16px;
   line-height: 1.55;
   text-align: center;
 }
@@ -120,14 +120,14 @@
 .switch-copy {
   margin-top: 8rpx;
   color: #627168;
-  font-size: 14px;
+  font-size: 16px;
   line-height: 1.6;
 }
 
 .field-label {
   margin: 24rpx 0 12rpx;
   color: #33483c;
-  font-size: 14px;
+  font-size: 16px;
   font-weight: 600;
 }
 
@@ -139,7 +139,7 @@
   border: 2rpx solid #ced9d2;
   border-radius: 16rpx;
   background: #ffffff;
-  font-size: 15px;
+  font-size: 16px;
 }
 
 .switch-row {
@@ -175,14 +175,14 @@
   flex: 1;
   margin-left: 10rpx;
   color: #41574b;
-  font-size: 14px;
+  font-size: 16px;
   line-height: 1.65;
 }
 
 .switch-title,
 .menu-title {
   color: #30473a;
-  font-size: 14px;
+  font-size: 16px;
   font-weight: 600;
 }
 
@@ -194,7 +194,7 @@
   border-radius: 18rpx;
   background: #b64815;
   color: #ffffff;
-  font-size: 14.5px;
+  font-size: 16px;
   font-weight: 700;
   line-height: 88rpx;
 }
@@ -241,6 +241,6 @@
   border-radius: 18rpx;
   background: #ffffff;
   color: #9b2c24;
-  font-size: 14px;
+  font-size: 16px;
   line-height: 88rpx;
 }

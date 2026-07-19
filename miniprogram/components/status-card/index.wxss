@@ -38,8 +38,8 @@
 .state-error .state-icon { color: #a0281a; background: #ffe6df; }
 .state-copy { flex: 1; min-width: 0; }
 .state-title { font-size: 16px; line-height: 1.4; font-weight: 750; }
-.state-detail { margin-top: 8rpx; color: #786d65; font-size: 14px; line-height: 1.6; }
-.state-action { display: inline-flex; min-height: 88rpx; margin: 18rpx 0 0; padding: 14rpx 24rpx; color: #8d3511; background: #fff0df; border-radius: 16rpx; font-size: 14px; }
+.state-detail { margin-top: 8rpx; color: #786d65; font-size: 16px; line-height: 1.6; }
+.state-action { display: inline-flex; min-height: 88rpx; margin: 18rpx 0 0; padding: 14rpx 24rpx; color: #8d3511; background: #fff0df; border-radius: 16rpx; font-size: 16px; }
 
 @media (prefers-reduced-motion: reduce) {
   .state-card,

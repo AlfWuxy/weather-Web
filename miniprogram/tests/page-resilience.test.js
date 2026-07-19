@@ -5,13 +5,24 @@ const path = require('node:path');
 
 let pageDefinition;
 let authApiImpl = async () => ({});
+let tokenApiImpl = async () => ({});
 let snapshotImpl = async () => ({});
 let getTokenImpl = () => 'session-token';
 let clearImpl = () => {};
 let lastToast = null;
+const settingsStorage = new Map();
+
+const {
+  ACQUISITION_STORAGE_KEY,
+  FAMILY_ENTRY_STORAGE_KEY,
+  readAcquisitionSource,
+} = require('../utils/share');
 
 global.Page = (definition) => { pageDefinition = definition; };
 global.wx = {
+  getStorageSync: (key) => settingsStorage.get(key),
+  removeStorageSync: (key) => settingsStorage.delete(key),
+  setStorageSync: (key, value) => settingsStorage.set(key, value),
   showToast: (options) => { lastToast = options; },
 };
 
@@ -27,6 +38,7 @@ require.cache[careSessionPath] = {
     getSnapshot: () => snapshotImpl(),
     getToken: () => getTokenImpl(),
     requireToken: () => 'session-token',
+    tokenApi: (token, options) => tokenApiImpl(token, options),
   },
 };
 
@@ -315,11 +327,12 @@ test('设置页退出登录后清空同意版本和未提交勾选', async (t) =
     global.wx.showModal = originalShowModal;
     global.wx.reLaunch = originalReLaunch;
     clearImpl = () => {};
+    tokenApiImpl = async () => ({});
   });
   global.wx.showModal = ({ success }) => { modalSuccess = success; };
   global.wx.reLaunch = () => { relaunched = true; };
   clearImpl = () => { clearCount += 1; };
-  authApiImpl = async () => ({ ok: true });
+  tokenApiImpl = async () => ({ ok: true });
   const definition = loadPage('../pages/settings/index');
   const page = makePage(definition, {
     loggedIn: true,
@@ -344,6 +357,90 @@ test('设置页退出登录后清空同意版本和未提交勾选', async (t) =
   assert.equal(page.data.wxpusherConsent, false);
   assert.equal(page.data.requiredWxpusherConsentVersion, '');
   assert.equal(page.data.wxpusherReconsentRequired, false);
+});
+
+test('设置页确认退出后不等待远端请求就清空私人数据', async (t) => {
+  let modalSuccess;
+  let resolveLogout;
+  let relaunched = false;
+  let clearCount = 0;
+  let requestToken = '';
+  const originalShowModal = global.wx.showModal;
+  const originalReLaunch = global.wx.reLaunch;
+  t.after(() => {
+    global.wx.showModal = originalShowModal;
+    global.wx.reLaunch = originalReLaunch;
+    clearImpl = () => {};
+    tokenApiImpl = async () => ({});
+  });
+  global.wx.showModal = ({ success }) => { modalSuccess = success; };
+  global.wx.reLaunch = () => { relaunched = true; };
+  clearImpl = () => { clearCount += 1; };
+  tokenApiImpl = (token) => {
+    requestToken = token;
+    return new Promise((resolve) => { resolveLogout = resolve; });
+  };
+  const definition = loadPage('../pages/settings/index');
+  const page = makePage(definition, {
+    loggedIn: true,
+    settingsVerified: true,
+    wxpusherUid: 'UID_PRIVATE',
+    pushEnabled: true,
+    persistedPushEnabled: true,
+    wxpusherConsent: true,
+    requiredWxpusherConsentVersion: 'privacy-v3',
+  });
+
+  page.logout.call(page);
+  const pendingLogout = modalSuccess({ confirm: true });
+
+  assert.equal(requestToken, 'session-token');
+  assert.equal(clearCount, 1);
+  assert.equal(relaunched, true);
+  assert.equal(page.data.loggedIn, false);
+  assert.equal(page.data.wxpusherUid, '');
+  assert.equal(page.data.pushEnabled, false);
+  assert.equal(page.data.persistedPushEnabled, false);
+  assert.equal(page.data.wxpusherConsent, false);
+  assert.equal(page.data.requiredWxpusherConsentVersion, '');
+
+  resolveLogout({ ok: true });
+  await pendingLogout;
+});
+
+test('设置页退出会清除账号 A 的家庭分享来源，账号 B 不继承归因', async (t) => {
+  let modalSuccess;
+  const originalShowModal = global.wx.showModal;
+  const originalReLaunch = global.wx.reLaunch;
+  t.after(() => {
+    global.wx.showModal = originalShowModal;
+    global.wx.reLaunch = originalReLaunch;
+    clearImpl = () => {};
+    tokenApiImpl = async () => ({});
+    settingsStorage.clear();
+  });
+  global.wx.showModal = ({ success }) => { modalSuccess = success; };
+  global.wx.reLaunch = () => {};
+  clearImpl = () => {};
+  tokenApiImpl = async () => ({ ok: true });
+  settingsStorage.set(ACQUISITION_STORAGE_KEY, {
+    source: 'family_share',
+    expires_at: Date.now() + 30 * 24 * 60 * 60 * 1000,
+  });
+  settingsStorage.set(FAMILY_ENTRY_STORAGE_KEY, {
+    source: 'family_share',
+    expires_at: Date.now() + 30 * 60 * 1000,
+  });
+  assert.equal(readAcquisitionSource(), 'family_share');
+
+  const definition = loadPage('../pages/settings/index');
+  const page = makePage(definition, { loggedIn: true });
+  page.logout.call(page);
+  await modalSuccess({ confirm: true });
+
+  assert.equal(settingsStorage.has(ACQUISITION_STORAGE_KEY), false);
+  assert.equal(settingsStorage.has(FAMILY_ENTRY_STORAGE_KEY), false);
+  assert.equal(readAcquisitionSource(), '');
 });
 
 test('今日行动未勾选时不会提交，勾选后只保存实际选项', async () => {
@@ -584,6 +681,160 @@ test('提醒话术遇到较早或不可用天气时退回通用提醒', async ()
   assert.equal(unavailablePage.data.trigger, '');
   assert.match(unavailablePage.data.weatherNotice, /待更新/);
   assert.match(unavailablePage.data.message, /【都昌县天气提醒】/);
+});
+
+test('公共天气页面失败会安全降级、统一退避并提供真实重试入口', async () => {
+  const publicDataPath = require.resolve('../utils/public-data');
+  const lifecyclePath = require.resolve('../utils/public-page-lifecycle');
+  const originalPublicDataModule = require.cache[publicDataPath];
+  const originalLifecycleModule = require.cache[lifecyclePath];
+  const pageModules = [
+    require.resolve('../pages/home/index'),
+    require.resolve('../pages/forecast/index'),
+    require.resolve('../pages/alerts/index'),
+    require.resolve('../pages/actions/index'),
+    require.resolve('../pages/transparency/index'),
+  ];
+  const schedules = [];
+  const bootstrapOptions = [];
+  const hadActionStorage = settingsStorage.has('yl_actions');
+  const actionStorageBefore = settingsStorage.get('yl_actions');
+  require.cache[publicDataPath] = {
+    id: publicDataPath,
+    filename: publicDataPath,
+    loaded: true,
+    exports: {
+      getBootstrap: async (options) => {
+        bootstrapOptions.push(options || {});
+        throw new Error('offline');
+      },
+      PUBLIC_RETRY_DELAY_MS: 60 * 1000,
+    },
+  };
+  require.cache[lifecyclePath] = {
+    id: lifecyclePath,
+    filename: lifecyclePath,
+    loaded: true,
+    exports: {
+      beginPublicPage: () => {},
+      hidePublicPage: () => {},
+      pageCanRender: () => true,
+      schedulePublicRefresh: (page, meta, reload) => {
+        schedules.push({ page, meta, reload });
+        return 60 * 1000;
+      },
+      showPublicPage: () => {},
+      staleRetryMeta: (meta, retryDelayMs) => Object.assign({}, meta || {}, {
+        stale: true,
+        source: 'stale-cache',
+        refreshDeferred: false,
+        refreshStarted: false,
+        effectiveExpiresAt: null,
+        retryAfter: Date.now() + retryDelayMs,
+      }),
+      unloadPublicPage: () => {},
+    },
+  };
+
+  try {
+    const homeDefinition = loadPage('../pages/home/index');
+    const home = makePage(homeDefinition, {
+      snapshot: {
+        available: true,
+        current: { available: true, temperatureText: '35°C' },
+        warnings: [{ id: 'warning-1', title: '旧预警' }],
+        warningsSourceAvailable: true,
+        warningsStatusText: '1 条有效预警',
+        risk: { available: true, score: 88, scoreText: '88', label: '高风险', tone: 'high', summary: '旧风险' },
+      },
+      topActions: [{ id: 'old-action', title: '旧定制行动' }],
+      freshness: { source: 'network', stale: false, updatedText: '刚刚更新' },
+    });
+    await home.loadData.call(home);
+    assert.equal(home.data.freshness.stale, true);
+    assert.equal(home.data.freshness.source, 'stale-cache');
+    assert.deepEqual(home.data.snapshot.warnings, []);
+    assert.equal(home.data.snapshot.warningsSourceAvailable, false);
+    assert.equal(home.data.snapshot.risk.available, false);
+    assert.equal(home.data.snapshot.risk.score, null);
+    assert.deepEqual(home.data.topActions, []);
+    assert.match(home.data.error, /风险、预警和定制行动已暂停/);
+
+    const forecastDefinition = loadPage('../pages/forecast/index');
+    const forecast = makePage(forecastDefinition, {
+      forecast: [{ id: 'day-1', score: 91, scoreText: '91', tone: 'high', riskLabel: '高风险' }],
+      highRiskDays: 1,
+      freshness: { source: 'network', stale: false, updatedText: '刚刚更新' },
+    });
+    await forecast.loadData.call(forecast);
+    assert.equal(forecast.data.freshness.stale, true);
+    assert.equal(forecast.data.forecast[0].score, null);
+    assert.equal(forecast.data.forecast[0].tone, 'unknown');
+    assert.equal(forecast.data.highRiskDays, 0);
+    assert.match(forecast.data.error, /风险等级已暂停/);
+
+    const alertsDefinition = loadPage('../pages/alerts/index');
+    const alerts = makePage(alertsDefinition, {
+      current: { available: true, temperatureText: '35°C' },
+      warnings: [{ id: 'warning-1', title: '旧预警' }],
+      warningsSourceAvailable: true,
+      freshness: { source: 'network', stale: false, updatedText: '刚刚更新' },
+    });
+    await alerts.loadData.call(alerts);
+    assert.equal(alerts.data.freshness.stale, true);
+    assert.deepEqual(alerts.data.warnings, []);
+    assert.equal(alerts.data.warningsSourceAvailable, false);
+    assert.match(alerts.data.error, /无法确认是否存在有效预警/);
+
+    const actionsDefinition = loadPage('../pages/actions/index');
+    const actions = makePage(actionsDefinition);
+    await actions.loadData.call(actions);
+    assert.equal(actions.data.generalMode, true);
+    assert.equal(actions.data.actions.length, 4);
+    assert.equal(actions.data.freshness.stale, true);
+    assert.match(actions.data.error, /自动重试/);
+
+    const transparencyDefinition = loadPage('../pages/transparency/index');
+    const transparency = makePage(transparencyDefinition);
+    await transparency.loadSources.call(transparency);
+    assert.equal(transparency.data.sourceLoading, false);
+    assert.equal(transparency.data.sources.length, 0);
+    assert.equal(transparency.data.freshness.stale, true);
+    assert.match(transparency.data.sourceError, /自动重试/);
+
+    assert.equal(schedules.length, 5);
+    schedules.forEach((scheduled) => {
+      assert.ok(scheduled.meta.retryAfter > Date.now());
+      assert.equal(scheduled.meta.refreshStarted, false);
+      assert.equal(typeof scheduled.reload, 'function');
+    });
+
+    await actions.retry.call(actions);
+    await transparency.retrySources.call(transparency);
+    assert.equal(schedules.length, 7);
+    assert.equal(bootstrapOptions.at(-2).force, true);
+    assert.equal(bootstrapOptions.at(-1).force, true);
+
+    const miniRoot = path.resolve(__dirname, '..');
+    const homeView = fs.readFileSync(path.join(miniRoot, 'pages/home/index.wxml'), 'utf8');
+    const forecastView = fs.readFileSync(path.join(miniRoot, 'pages/forecast/index.wxml'), 'utf8');
+    const alertsView = fs.readFileSync(path.join(miniRoot, 'pages/alerts/index.wxml'), 'utf8');
+    const actionsView = fs.readFileSync(path.join(miniRoot, 'pages/actions/index.wxml'), 'utf8');
+    const transparencyView = fs.readFileSync(path.join(miniRoot, 'pages/transparency/index.wxml'), 'utf8');
+    assert.match(homeView, /wx:if="\{\{error\}\}"[^>]*title="天气更新失败，风险信息已暂停"/);
+    assert.match(forecastView, /wx:if="\{\{error\}\}"[^>]*title="预报更新失败，风险等级已暂停"/);
+    assert.match(alertsView, /error \? '预警更新失败，有效性待核对'/);
+    assert.match(actionsView, /action-label="\{\{error \? '重新获取天气' : ''\}\}"[^>]*bind:action="retry"/);
+    assert.match(transparencyView, /state="error"[^>]*action-label="重新读取"[^>]*bind:action="retrySources"/);
+  } finally {
+    pageModules.forEach((modulePath) => { delete require.cache[modulePath]; });
+    if (originalPublicDataModule) require.cache[publicDataPath] = originalPublicDataModule;
+    else delete require.cache[publicDataPath];
+    if (originalLifecycleModule) require.cache[lifecyclePath] = originalLifecycleModule;
+    else delete require.cache[lifecyclePath];
+    if (hadActionStorage) settingsStorage.set('yl_actions', actionStorageBefore);
+    else settingsStorage.delete('yl_actions');
+  }
 });
 
 test('健康筛查切换家人会清空答案且不被旧人的乱序响应覆盖', async () => {

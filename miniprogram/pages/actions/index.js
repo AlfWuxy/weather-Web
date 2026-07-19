@@ -1,4 +1,4 @@
-const { getBootstrap } = require('../../utils/public-data');
+const { getBootstrap, PUBLIC_RETRY_DELAY_MS } = require('../../utils/public-data');
 const { duchangDateKey, freshnessView, normalizeBootstrap } = require('../../utils/format');
 const { allowsJsMotion } = require('../../utils/motion');
 const { loadActionChecked, saveActionChecked } = require('../../utils/action-storage');
@@ -8,6 +8,7 @@ const {
   pageCanRender,
   schedulePublicRefresh,
   showPublicPage,
+  staleRetryMeta,
   unloadPublicPage,
 } = require('../../utils/public-page-lifecycle');
 const {
@@ -97,14 +98,17 @@ Page({
     } catch (error) {
       if (!pageCanRender(this)) return;
       const actions = this.mergeChecked(GENERAL_ACTIONS);
+      const freshness = staleRetryMeta(this.data.freshness, PUBLIC_RETRY_DELAY_MS);
       this.setData({
         loading: false,
-        error: '天气暂时无法更新，当前显示通用安全清单。',
+        error: '天气暂时无法更新，当前显示通用安全清单。稍后会自动重试。',
         actions,
         completedCount: actions.filter((item) => item.checked).length,
         progressPercent: actions.length ? Math.round(actions.filter((item) => item.checked).length / actions.length * 100) : 0,
         generalMode: true,
+        freshness,
       });
+      schedulePublicRefresh(this, freshness, () => this.loadData());
     }
   },
 
@@ -126,6 +130,10 @@ Page({
       freshness,
     });
     schedulePublicRefresh(this, result.meta, () => this.loadData());
+  },
+
+  retry() {
+    return this.loadData({ force: true });
   },
 
   toggleAction(event) {

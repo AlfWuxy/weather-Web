@@ -1,5 +1,6 @@
 const MIN_TIMER_DELAY_MS = 80;
 const MAX_TIMER_DELAY_MS = 0x7fffffff;
+const DEFAULT_FAILURE_RETRY_DELAY_MS = 60 * 1000;
 
 function finiteTimestamp(value) {
   if (value === null || value === undefined || value === '') return null;
@@ -43,6 +44,20 @@ function pageCanRender(page) {
   return Boolean(page && !page._unloaded && page._publicPageVisible !== false);
 }
 
+function staleRetryMeta(meta, retryDelayMs) {
+  const delay = Number(retryDelayMs);
+  // 调用方漏传间隔时保持保守的一分钟退避，避免失败路径形成快速重试。
+  const safeDelay = Number.isFinite(delay) && delay > 0 ? delay : DEFAULT_FAILURE_RETRY_DELAY_MS;
+  return Object.assign({}, meta || {}, {
+    stale: true,
+    source: 'stale-cache',
+    refreshDeferred: false,
+    refreshStarted: false,
+    effectiveExpiresAt: null,
+    retryAfter: Date.now() + safeDelay,
+  });
+}
+
 function nextRefreshAt(meta) {
   const source = meta || {};
   if (source.refreshStarted) return null;
@@ -79,5 +94,6 @@ module.exports = {
   pageCanRender,
   schedulePublicRefresh,
   showPublicPage,
+  staleRetryMeta,
   unloadPublicPage,
 };

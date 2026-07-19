@@ -7,20 +7,23 @@ const CACHE_KEYS = {
   community: 'yl_public_community_v1',
 };
 
+const PUBLIC_RETRY_DELAY_MS = 60 * 1000;
+
 const RESOURCE_CONFIG = {
   bootstrap: {
     key: CACHE_KEYS.bootstrap,
     path: '/mp/api/v1/bootstrap',
-    staleRetryMs: 60 * 1000,
+    staleRetryMs: PUBLIC_RETRY_DELAY_MS,
   },
   community: {
     key: CACHE_KEYS.community,
     path: '/mp/api/v1/public/community',
-    staleRetryMs: 60 * 1000,
+    staleRetryMs: PUBLIC_RETRY_DELAY_MS,
   },
 };
 
 const loaders = {};
+const memoryEnvelopes = {};
 
 function timestampFromIso(value) {
   if (!value) return null;
@@ -28,15 +31,36 @@ function timestampFromIso(value) {
   return Number.isFinite(timestamp) ? timestamp : null;
 }
 
+function envelopeTimestamp(envelope) {
+  if (!envelope || envelope.schema !== 1 || envelope.data === undefined) return null;
+  const timestamp = Number(envelope.storedAt);
+  return Number.isFinite(timestamp) && timestamp >= 0 ? timestamp : null;
+}
+
+function newestEnvelope(stored, memory) {
+  const storedAt = envelopeTimestamp(stored);
+  const memoryAt = envelopeTimestamp(memory);
+  if (storedAt === null) return memoryAt === null ? null : memory;
+  if (memoryAt === null) return stored;
+  return memoryAt >= storedAt ? memory : stored;
+}
+
 function readEnvelope(key) {
+  let stored = null;
   try {
-    return wx.getStorageSync(key) || null;
+    stored = wx.getStorageSync(key) || null;
   } catch (error) {
-    return null;
+    stored = null;
   }
+  // 本机存储失败时保留当前进程最后一份完整公共快照，避免弱网下退回无状态页面。
+  const envelope = newestEnvelope(stored, memoryEnvelopes[key]);
+  if (envelope) memoryEnvelopes[key] = envelope;
+  return envelope;
 }
 
 function writeEnvelope(key, envelope) {
+  // 先写进程内存，再尝试持久化。持久化失败不会丢掉本轮已验证的公共快照。
+  memoryEnvelopes[key] = envelope;
   try {
     wx.setStorageSync(key, envelope);
   } catch (error) {
@@ -118,8 +142,16 @@ function getCommunity(options) {
   return getCachedPublic('community', options);
 }
 
+function resetPublicDataForTests() {
+  // 只清理模块进程内状态，不触碰用户本机存储。
+  Object.keys(loaders).forEach((key) => { delete loaders[key]; });
+  Object.keys(memoryEnvelopes).forEach((key) => { delete memoryEnvelopes[key]; });
+}
+
 module.exports = {
   CACHE_KEYS,
+  PUBLIC_RETRY_DELAY_MS,
+  __resetPublicDataForTests: resetPublicDataForTests,
   getBootstrap,
   getCommunity,
   getCachedPublic,

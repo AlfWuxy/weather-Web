@@ -4,7 +4,7 @@
   gap: 12rpx;
   margin: 18rpx 2rpx;
   color: #786d65;
-  font-size: 14px;
+  font-size: 16px;
   line-height: 1.55;
 }
 .dot {

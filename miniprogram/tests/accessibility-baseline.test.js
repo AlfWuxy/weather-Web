@@ -28,6 +28,16 @@ function minHeightsForSelector(relativePath, selector) {
     .flatMap((rule) => Array.from(rule.body.matchAll(/min-height\s*:\s*(\d+(?:\.\d+)?)rpx/g), (match) => Number(match[1])));
 }
 
+function pixelFontSizesForSelector(relativePath, selector) {
+  const style = fs.readFileSync(path.join(miniRoot, relativePath), 'utf8');
+  return parseRules(style)
+    .filter((rule) => rule.selectors.includes(selector))
+    .flatMap((rule) => Array.from(
+      rule.body.matchAll(/font-size\s*:\s*(\d+(?:\.\d+)?)px/g),
+      (match) => Number(match[1])
+    ));
+}
+
 test('所有小程序样式在 320px 设备上的阅读字号不小于 14px', () => {
   const styleFiles = collectFiles(miniRoot, '.wxss').sort();
   const violations = [];
@@ -47,6 +57,74 @@ test('所有小程序样式在 320px 设备上的阅读字号不小于 14px', ()
   });
 
   assert.deepEqual(violations, []);
+});
+
+test('核心适老正文、新鲜度和风险说明使用 16px 大字令牌', () => {
+  const privacyStyle = fs.readFileSync(path.join(miniRoot, 'pages/privacy/index.wxss'), 'utf8');
+  const agreementStyle = fs.readFileSync(path.join(miniRoot, 'pages/agreement/index.wxss'), 'utf8');
+  const freshnessStyle = fs.readFileSync(path.join(miniRoot, 'components/freshness-bar/index.wxss'), 'utf8');
+  const homeStyle = fs.readFileSync(path.join(miniRoot, 'pages/home/index.wxss'), 'utf8');
+  const settingsView = fs.readFileSync(path.join(miniRoot, 'pages/settings/index.wxml'), 'utf8');
+
+  for (const selector of ['.privacy-text', '.list-card view', '.privacy-version']) {
+    assert.match(privacyStyle, new RegExp(`${selector.replace('.', '\\.')}\\s*\\{[^}]*font-size:\\s*16px`));
+  }
+  assert.match(agreementStyle, /\.agreement-text\s*\{[^}]*font-size:\s*16px/s);
+  assert.match(agreementStyle, /\.effective-date\s*\{[^}]*font-size:\s*16px/s);
+  assert.match(freshnessStyle, /\.freshness\s*\{[^}]*font-size:\s*16px/s);
+  assert.match(homeStyle, /\.family-share-copy\s*\{[^}]*font-size:\s*16px/);
+  assert.match(homeStyle, /\.risk-label\s*\{[^}]*font-size:\s*16px/);
+  assert.match(homeStyle, /\.risk-summary\s*\{[^}]*font-size:\s*16px/);
+  assert.match(privacyStyle, /@media screen and \(max-width: 340px\)[\s\S]*\.privacy-card\s*\{\s*grid-template-columns:\s*1fr/);
+  assert.match(homeStyle, /@media screen and \(max-width: 340px\)[\s\S]*\.risk-bubble\s*\{\s*width:\s*100%/);
+  assert.match(settingsView, /生成可手动发送的提醒话术/);
+  assert.doesNotMatch(settingsView, /设置提醒/);
+
+  const largeTextContracts = [
+    ['app.wxss', '.hero-subtitle'],
+    ['app.wxss', '.section-subtitle'],
+    ['app.wxss', '.safe-note'],
+    ['components/status-card/index.wxss', '.state-detail'],
+    ['components/status-card/index.wxss', '.state-action'],
+    ['pages/elders/index.wxss', '.page-subtitle'],
+    ['pages/elders/index.wxss', '.header-button'],
+    ['pages/elders/index.wxss', '.edit-button'],
+    ['pages/elders/index.wxss', '.weather-label'],
+    ['pages/elders/index.wxss', '.weather-range'],
+    ['pages/elders/index.wxss', '.weather-status-copy'],
+    ['pages/elders/index.wxss', '.risk-badge'],
+    ['pages/elders/index.wxss', '.add-button'],
+    ['pages/elders/index.wxss', '.inline-refresh'],
+    ['pages/elders/index.wxss', '.inline-warning'],
+    ['pages/elders/index.wxss', '.retry-button'],
+    ['pages/elders/index.wxss', '.empty-copy'],
+    ['pages/elders/index.wxss', '.primary-action'],
+    ['pages/elders/index.wxss', '.tool-button'],
+    ['pages/elders/index.wxss', '.delete-link'],
+    ['pages/elders/index.wxss', '.medical-note'],
+    ['pages/settings/index.wxss', '.page-copy'],
+    ['pages/settings/index.wxss', '.guest-copy'],
+    ['pages/settings/index.wxss', '.login-button'],
+    ['pages/settings/index.wxss', '.fallback-note'],
+    ['pages/settings/index.wxss', '.policy-copy'],
+    ['pages/settings/index.wxss', '.section-copy'],
+    ['pages/settings/index.wxss', '.menu-copy'],
+    ['pages/settings/index.wxss', '.switch-copy'],
+    ['pages/settings/index.wxss', '.field-label'],
+    ['pages/settings/index.wxss', '.text-input'],
+    ['pages/settings/index.wxss', '.consent-copy'],
+    ['pages/settings/index.wxss', '.switch-title'],
+    ['pages/settings/index.wxss', '.menu-title'],
+    ['pages/settings/index.wxss', '.save-button'],
+    ['pages/settings/index.wxss', '.logout-button'],
+    ['pages/actions/index.wxss', '.check-detail'],
+    ['pages/actions/index.wxss', '.check-state'],
+    ['pages/actions/index.wxss', '.completion-share-copy'],
+  ];
+  const undersized = largeTextContracts.filter(([file, selector]) => (
+    !pixelFontSizesForSelector(file, selector).some((size) => size >= 16)
+  )).map(([file, selector]) => `${file} ${selector}`);
+  assert.deepEqual(undersized, []);
 });
 
 test('374px 及以下设备为原生交互控件提供 44px 触控基线并降低公共双列布局', () => {
@@ -253,6 +331,9 @@ test('组件 WXSS 状态图标只使用 class 选择器', () => {
   assert.doesNotMatch(style, /\.state-icon\s+image\b/);
   assert.match(style, /\.state-icon-image\s*\{/);
   assert.match(view, /class="state-icon-image loading-icon"/);
+  assert.match(view, /role="\{\{state === 'error' \? 'alert' : 'status'\}\}"/);
+  assert.match(view, /aria-role="\{\{state === 'error' \? 'alert' : 'status'\}\}"/);
+  assert.match(view, /aria-live="\{\{state === 'error' \? 'assertive' : 'polite'\}\}"/);
 });
 
 test('可见操作图标使用真实图片资源而非文本符号', () => {

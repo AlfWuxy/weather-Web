@@ -19,7 +19,7 @@
 .page-subtitle {
   margin-top: 8rpx;
   color: #66736c;
-  font-size: 14px;
+  font-size: 16px;
 }
 
 .header-button,
@@ -29,7 +29,7 @@
   border-radius: 16rpx;
   background: #ffffff;
   color: #315340;
-  font-size: 14px;
+  font-size: 16px;
 }
 
 .weather-strip {
@@ -64,7 +64,7 @@
 
 .weather-label {
   color: #496157;
-  font-size: 14px;
+  font-size: 16px;
 }
 
 .weather-value {
@@ -77,18 +77,18 @@
 .weather-range {
   margin-left: 12rpx;
   color: #496157;
-  font-size: 14px;
+  font-size: 16px;
   font-weight: 400;
 }
 
 .weather-wait {
-  font-size: 15px;
+  font-size: 16px;
 }
 
 .weather-status-copy {
   margin-top: 10rpx;
   color: #496157;
-  font-size: 14px;
+  font-size: 16px;
   line-height: 1.55;
 }
 
@@ -107,7 +107,7 @@
   border-radius: 999rpx;
   background: #fff4ed;
   color: #b54708;
-  font-size: 14px;
+  font-size: 16px;
   font-weight: 600;
 }
 
@@ -141,7 +141,7 @@
   border-radius: 20rpx;
   background: #167a43;
   color: #ffffff;
-  font-size: 15px;
+  font-size: 16px;
   font-weight: 700;
   line-height: 1.4;
 }
@@ -171,7 +171,7 @@
   margin-bottom: 22rpx;
   padding: 20rpx 24rpx;
   border-radius: 18rpx;
-  font-size: 14px;
+  font-size: 16px;
   line-height: 1.6;
 }
 
@@ -202,7 +202,7 @@
   border: 1rpx solid #d8b3ae;
   background: #ffffff;
   color: #9c2f24;
-  font-size: 14px;
+  font-size: 16px;
 }
 
 .empty-title {
@@ -215,7 +215,7 @@
 .empty-copy {
   margin-top: 14rpx;
   color: #67756d;
-  font-size: 14px;
+  font-size: 16px;
   line-height: 1.7;
   text-align: center;
 }
@@ -273,7 +273,7 @@
 .tool-button {
   margin: 0;
   border-radius: 16rpx;
-  font-size: 14px;
+  font-size: 16px;
 }
 
 .primary-action {
@@ -301,7 +301,7 @@
   margin-top: 20rpx;
   background: transparent;
   color: #9a554f;
-  font-size: 14px;
+  font-size: 16px;
 }
 
 .delete-link::after,
@@ -316,7 +316,7 @@
   border-radius: 18rpx;
   background: #f2f5f3;
   color: #65736b;
-  font-size: 14px;
+  font-size: 16px;
   line-height: 1.7;
 }
 

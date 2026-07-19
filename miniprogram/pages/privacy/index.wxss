@@ -2,10 +2,10 @@
 .privacy-card { display: grid; grid-template-columns: 74rpx 1fr; align-items: flex-start; gap: 20rpx; }
 .privacy-icon { display: flex; align-items: center; justify-content: center; width: 64rpx; height: 64rpx; border-radius: 18rpx; background: #fff0df; }
 .privacy-icon image { width: 38rpx; height: 38rpx; opacity: 0.7; }
-.privacy-text { margin-top: 10rpx; color: #66594f; font-size: 14px; line-height: 1.7; }
-.list-card view { color: #66594f; font-size: 14px; line-height: 1.72; }
+.privacy-text { margin-top: 10rpx; color: #66594f; font-size: 16px; line-height: 1.7; }
+.list-card view { color: #66594f; font-size: 16px; line-height: 1.72; }
 .list-card view + view { margin-top: 14rpx; }
-.privacy-version { margin: 24rpx 4rpx 0; color: #786d65; font-size: 14px; line-height: 1.65; }
+.privacy-version { margin: 24rpx 4rpx 0; color: #786d65; font-size: 16px; line-height: 1.65; }
 .operator-card { margin-top: 24rpx; }
 .privacy-link { margin-top: 22rpx; }
 

@@ -93,7 +93,7 @@ button::after {
   border-radius: 16rpx;
   color: #fff;
   background: #6f290d;
-  font-size: 15px;
+  font-size: 16px;
   line-height: 1.58;
 }
 
@@ -107,7 +107,7 @@ button::after {
 .section-subtitle {
   margin: -8rpx 4rpx 18rpx;
   color: #786d65;
-  font-size: 14px;
+  font-size: 16px;
   line-height: 1.6;
 }
 
@@ -298,7 +298,7 @@ button::after {
   border-radius: 18rpx;
   color: #654d3e;
   background: #fff0df;
-  font-size: 14px;
+  font-size: 16px;
   line-height: 1.65;
 }
 

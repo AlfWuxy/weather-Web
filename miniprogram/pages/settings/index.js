@@ -1,4 +1,10 @@
-const { authApi, clear, getToken } = require('../elders/care-session');
+const {
+  authApi,
+  clear,
+  getToken,
+  tokenApi,
+} = require('../elders/care-session');
+const { clearAcquisitionContext } = require('../../utils/share');
 
 Page({
   data: {
@@ -198,15 +204,26 @@ Page({
       confirmText: '退出登录',
       success: async (result) => {
         if (!result.confirm) return;
-        this.setData({ busy: true });
+        const sessionToken = getToken();
+        let logoutRequest = null;
         try {
-          await authApi({ method: 'POST', path: '/mp/api/v1/auth/logout' });
+          if (sessionToken) {
+            logoutRequest = tokenApi(sessionToken, {
+              method: 'POST',
+              path: '/mp/api/v1/auth/logout',
+            });
+          }
         } catch (error) {
-          // 网络异常时仍优先保护共享设备上的本机登录状态。
-        } finally {
-          clear();
-          this.clearPrivateSettings({ loggedIn: false, loading: false, busy: false });
-          wx.reLaunch({ url: '/pages/home/index' });
+          logoutRequest = null;
+        }
+        clear();
+        clearAcquisitionContext();
+        this.clearPrivateSettings({ loggedIn: false, loading: false, busy: false });
+        wx.reLaunch({ url: '/pages/home/index' });
+        try {
+          if (logoutRequest) await logoutRequest;
+        } catch (error) {
+          // 远端注销失败时，本机私人数据仍已立即清除。
         }
       },
     });

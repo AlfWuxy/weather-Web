@@ -29,6 +29,7 @@
 
   <block wx:if="{{snapshot}}">
     <freshness-bar updated-text="{{freshness.updatedText}}" stale="{{freshness.stale}}" source="{{freshness.source}}" refresh-deferred="{{freshness.refreshDeferred}}" refresh-started="{{freshness.refreshStarted}}" />
+    <status-card wx:if="{{error}}" state="error" title="天气更新失败，风险信息已暂停" detail="{{error}}" action-label="重试" bind:action="retry" />
 
     <status-card wx:if="{{!snapshot.available || !snapshot.current.available}}" state="empty" title="实时天气正在更新" detail="页面不会用演示天气代替真实观测。你仍可查看通用防护和避暑资源。" />
 

@@ -1,4 +1,4 @@
-const { getBootstrap } = require('../../utils/public-data');
+const { getBootstrap, PUBLIC_RETRY_DELAY_MS } = require('../../utils/public-data');
 const { freshnessView, normalizeBootstrap } = require('../../utils/format');
 const {
   beginPublicPage,
@@ -6,6 +6,7 @@ const {
   pageCanRender,
   schedulePublicRefresh,
   showPublicPage,
+  staleRetryMeta,
   unloadPublicPage,
 } = require('../../utils/public-page-lifecycle');
 const { createPageShare, createTimelineShare, showPublicShareMenu } = require('../../utils/share');
@@ -13,6 +14,7 @@ const { createPageShare, createTimelineShare, showPublicShareMenu } = require('.
 Page({
   data: {
     sourceLoading: true,
+    sourceError: '',
     sources: [],
     freshness: {},
   },
@@ -40,6 +42,7 @@ Page({
   },
 
   async loadSources(options) {
+    if (!this.data.sources.length) this.setData({ sourceLoading: true, sourceError: '' });
     try {
       const requestOptions = Object.assign({}, options, {
         onRevalidated: (freshResult) => {
@@ -50,7 +53,13 @@ Page({
       if (pageCanRender(this)) this.renderSources(result);
     } catch (error) {
       if (!pageCanRender(this)) return;
-      this.setData({ sourceLoading: false, sources: [] });
+      const freshness = staleRetryMeta(this.data.freshness, PUBLIC_RETRY_DELAY_MS);
+      this.setData({
+        sourceLoading: false,
+        sourceError: '数据源状态暂时无法读取。稍后会自动重试。',
+        freshness,
+      });
+      schedulePublicRefresh(this, freshness, () => this.loadSources());
     }
   },
 
@@ -58,10 +67,15 @@ Page({
     const snapshot = normalizeBootstrap(result.data);
     this.setData({
       sourceLoading: false,
+      sourceError: '',
       sources: snapshot.sources,
       freshness: freshnessView(result.meta, snapshot),
     });
     schedulePublicRefresh(this, result.meta, () => this.loadSources());
+  },
+
+  retrySources() {
+    return this.loadSources({ force: true });
   },
 
   onShareAppMessage() {

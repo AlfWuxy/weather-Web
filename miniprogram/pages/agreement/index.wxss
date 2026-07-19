@@ -34,14 +34,14 @@
 .agreement-text {
   margin-top: 12rpx;
   color: #56665d;
-  font-size: 14px;
+  font-size: 16px;
   line-height: 1.78;
 }
 
 .effective-date {
   margin: 26rpx 0 18rpx;
   color: #6d786f;
-  font-size: 14px;
+  font-size: 16px;
   line-height: 1.6;
   text-align: center;
 }

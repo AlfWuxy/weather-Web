@@ -1,4 +1,4 @@
-const { getBootstrap } = require('../../utils/public-data');
+const { getBootstrap, PUBLIC_RETRY_DELAY_MS } = require('../../utils/public-data');
 const { freshnessView, normalizeBootstrap } = require('../../utils/format');
 const {
   beginPublicPage,
@@ -6,6 +6,7 @@ const {
   pageCanRender,
   schedulePublicRefresh,
   showPublicPage,
+  staleRetryMeta,
   unloadPublicPage,
 } = require('../../utils/public-page-lifecycle');
 const {
@@ -28,6 +29,24 @@ function homeSnapshotView(snapshot) {
     warningsStatusText: source.warningsStatusText,
     risk: source.risk,
   };
+}
+
+function staleHomeSnapshot(snapshot) {
+  if (!snapshot) return null;
+  return Object.assign({}, snapshot, {
+    warnings: [],
+    warningsSourceAvailable: false,
+    warningsStatusText: '官方预警待刷新',
+    risk: Object.assign({}, snapshot.risk || {}, {
+      available: false,
+      score: null,
+      scoreText: '待刷新',
+      level: '',
+      label: '风险待刷新',
+      tone: 'unknown',
+      summary: '',
+    }),
+  });
 }
 
 Page({
@@ -108,10 +127,18 @@ Page({
       if (pageCanRender(this)) this.renderSnapshot(result);
     } catch (error) {
       if (!pageCanRender(this)) return;
+      const hasSnapshot = Boolean(this.data.snapshot);
+      const freshness = staleRetryMeta(this.data.freshness, PUBLIC_RETRY_DELAY_MS);
       this.setData({
         loading: false,
-        error: '天气数据暂时无法获取。请检查网络，稍后再试。',
+        error: hasSnapshot
+          ? '天气更新失败，正在显示较早观测；风险、预警和定制行动已暂停。稍后会自动重试。'
+          : '天气数据暂时无法获取。请检查网络，稍后再试。',
+        snapshot: hasSnapshot ? staleHomeSnapshot(this.data.snapshot) : null,
+        topActions: [],
+        freshness,
       });
+      schedulePublicRefresh(this, freshness, () => this.loadData());
     }
   },
 
@@ -119,25 +146,12 @@ Page({
     const snapshot = normalizeBootstrap(result.data);
     const freshness = freshnessView(result.meta, snapshot);
     // 较早天气可以继续展示观测值，风险分数和定制行动必须等刷新后再启用。
-    const displaySnapshot = freshness.stale
-      ? Object.assign({}, snapshot, {
-        warnings: [],
-        warningsSourceAvailable: false,
-        warningsStatusText: '官方预警待刷新',
-        risk: Object.assign({}, snapshot.risk, {
-          available: false,
-          score: null,
-          scoreText: '待刷新',
-          level: '',
-          label: '风险待刷新',
-          tone: 'unknown',
-          summary: '',
-        }),
-      })
-      : snapshot;
+    const displaySnapshot = freshness.stale ? staleHomeSnapshot(snapshot) : snapshot;
     this.setData({
       loading: false,
-      error: '',
+      error: result.meta && result.meta.networkError
+        ? '天气更新失败，正在显示较早观测；风险、预警和定制行动已暂停。稍后会自动重试。'
+        : '',
       snapshot: homeSnapshotView(displaySnapshot),
       topActions: freshness.stale ? [] : snapshot.actions.slice(0, 3),
       freshness,
