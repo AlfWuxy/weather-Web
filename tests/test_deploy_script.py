@@ -1076,11 +1076,15 @@ def test_qweather_preactivation_rejects_tamper_and_payload_mismatch(tmp_path):
     assert _run_qweather_manager(
         replacement_state, 'provision', payload
     ).returncode == 0
-    original_inode = replacement_state['pending_path'].stat().st_ino
-    replacement_state['pending_path'].unlink()
-    replacement_state['pending_path'].write_bytes(payload)
-    replacement_state['pending_path'].chmod(0o600)
-    assert replacement_state['pending_path'].stat().st_ino != original_inode
+    pending_path = replacement_state['pending_path']
+    original_inode = pending_path.stat().st_ino
+    replacement = pending_path.with_name(f'{pending_path.name}.replacement')
+    replacement.write_bytes(payload)
+    replacement.chmod(0o600)
+    replacement_inode = replacement.stat().st_ino
+    assert replacement_inode != original_inode
+    os.replace(replacement, pending_path)
+    assert pending_path.stat().st_ino == replacement_inode
     replacement_archive = _run_qweather_manager(replacement_state, 'archive')
     assert replacement_archive.returncode == 64
     assert replacement_state['pending_path'].exists()
