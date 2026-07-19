@@ -410,15 +410,18 @@ DEPLOY_PROJECT_DIR=/opt/your-app
 DEPLOY_LOCAL_DIR=/path/to/your-local-repo
 WECHAT_RELEASE_FORM_FILE=/absolute/path/to/.env.wechat-release
 PUBLIC_BASE_URL=https://your-production-domain.example
-QWEATHER_AUTH_MODE=api_key
+QWEATHER_AUTH_MODE=jwt
 QWEATHER_API_BASE=https://your-qweather-host.example
-QWEATHER_KEY=<server-only>
+QWEATHER_JWT_KID=<credential-kid>
+QWEATHER_JWT_PROJECT_ID=<project-id>
+QWEATHER_JWT_PRIVATE_KEY_PATH=/opt/your-app/private/qweather-ed25519.pem
+QWEATHER_JWT_PRIVATE_KEY_SOURCE=/absolute/local/ignored/qweather-ed25519.pem
 WX_MINIPROGRAM_APPID=<认证后填写>
 WX_MINIPROGRAM_SECRET=<server-only>
 DEPLOY_REQUIRE_WECHAT_READY=1
 ```
 
-普通 `.env` 保存部署与服务器运行参数；运营者姓名、类目门禁和正式微信凭据以 `.env.wechat-release` 为唯一交接表单。`scripts/deploy.sh` 会读取私密表单，并在服务器内生成微信 OpenID pepper 与会话密钥。正式发布要求 HTTPS、有效天气配置和完整微信登录凭据；显式的降级预览不会被误标成正式可上架版本。公开仓库只记录 SSH Key 方式，其他运维细节放到私有 ops 文档。
+普通 `.env` 保存部署与服务器运行参数；运营者姓名、类目门禁和正式微信凭据以 `.env.wechat-release` 为唯一交接表单。`QWEATHER_JWT_PRIVATE_KEY_SOURCE` 只供本机部署进程读取，不会写入服务器环境；它必须指向仓库外、权限为 `0600` 的 Ed25519 私钥。本机部署只用一次带 `O_NOFOLLOW` 与 `O_CLOEXEC` 的只读文件描述符打开源文件，在同一描述符上确认普通文件、权限与大小，再以 `O_CREAT|O_EXCL` 创建本轮 `0600` 快照并复制；OpenSSL 只校验快照。`scripts/deploy.sh` 通过文件 stdin 把快照安装为 release 专属 `.qweather-jwt.pending-<release-id>`，pending 在候选校验和测试期间保持 `root:root 0600`。激活事务先耐久记录转换计划和 boot guard，再停止并确认全部受管单元及运行账号进程静默。create 路径用 no-clobber 硬链接创建 root-only final，删除并 fsync pending 名称后才把 final 提升为 `root:case-weather 0640`；reuse 路径仅接受内容、inode、属主和权限精确一致的既有 final。回滚会在旧单元恢复前把本轮新 final 与 pending 收回到 root-only 事务归档；身份、回收或 fsync 无法证明时保持单元停止并保留 guard。版本化新文件名用于轮换，旧 key 在提供方吊销且回滚保留期结束后再由 root 单独退役。脚本还会在服务器内生成微信 OpenID pepper 与会话密钥。正式发布要求 HTTPS、有效天气配置和完整微信登录凭据；显式的降级预览不会被误标成正式可上架版本。公开仓库只记录 SSH Key 方式，其他运维细节放到私有 ops 文档。
 
 ### 7.6 发布事务与人工恢复确认
 

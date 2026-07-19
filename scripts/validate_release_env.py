@@ -5,7 +5,10 @@
 from __future__ import annotations
 
 import argparse
+import base64
+import binascii
 import errno
+import grp
 import gzip
 import hashlib
 import json
@@ -135,6 +138,10 @@ QWEATHER_FORMAL_PINNED_VALUES = {
 QWEATHER_CONSOLE_USAGE_MONTH_PATTERN = re.compile(r"^\d{4}-\d{2}$")
 QWEATHER_CONSOLE_USAGE_BASELINE_PATTERN = re.compile(r"^(?:0|[1-9]\d{0,8})$")
 QWEATHER_PUBLIC_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
+QWEATHER_PENDING_PRIVATE_KEY_BASENAME_PATTERN = re.compile(
+    r"^\.qweather-jwt\.pending-[A-Za-z0-9._-]+$"
+)
+QWEATHER_RUNTIME_GROUP_NAME = "case-weather"
 QWEATHER_REDIS_BUDGET_PREFIX = "qweather:budget:app:v2"
 QWEATHER_FORMAL_SMOKE_MAX_REQUESTS = 3
 WECHAT_CATEGORY_PATHS_JSON_MAX_LENGTH = 1800
@@ -227,6 +234,9 @@ def _file_fingerprint(file_stat):
     return (
         file_stat.st_dev,
         file_stat.st_ino,
+        file_stat.st_mode,
+        file_stat.st_uid,
+        file_stat.st_gid,
         file_stat.st_size,
         file_stat.st_mtime_ns,
         file_stat.st_ctime_ns,
@@ -240,6 +250,8 @@ def _read_open_file_stably(
     require_private: bool,
     require_nonempty: bool = False,
     required_mode: int | None = None,
+    required_uid: int | None = None,
+    required_gid: int | None = None,
 ):
     """从已安全打开的普通文件读取固定快照，并检测读中变化和增长。"""
     try:
@@ -250,6 +262,10 @@ def _read_open_file_stably(
             return None, "permission"
         if required_mode is None and require_private and before.st_mode & 0o077:
             return None, "permission"
+        if required_uid is not None and before.st_uid != required_uid:
+            return None, "owner"
+        if required_gid is not None and before.st_gid != required_gid:
+            return None, "group"
         if before.st_size > max_bytes or (require_nonempty and before.st_size <= 0):
             return None, "size"
 
@@ -283,6 +299,8 @@ def _read_regular_file_stably(
     require_private: bool,
     require_nonempty: bool = False,
     required_mode: int | None = None,
+    required_uid: int | None = None,
+    required_gid: int | None = None,
 ):
     no_follow = getattr(os, "O_NOFOLLOW", None)
     if no_follow is None:
@@ -305,6 +323,8 @@ def _read_regular_file_stably(
             require_private=require_private,
             require_nonempty=require_nonempty,
             required_mode=required_mode,
+            required_uid=required_uid,
+            required_gid=required_gid,
         )
     finally:
         os.close(file_descriptor)
@@ -1337,33 +1357,221 @@ def _validate_qweather_base(api_base: str):
     return errors
 
 
-def _validate_qweather_private_key(path_value: str):
+def _read_der_tlv(data: bytes, offset: int):
+    """读取一个最小 DER TLV，拒绝不定长和非最短长度编码。"""
+    if offset >= len(data):
+        raise ValueError("truncated")
+    tag = data[offset]
+    offset += 1
+    if offset >= len(data):
+        raise ValueError("truncated")
+    first_length = data[offset]
+    offset += 1
+    if first_length < 0x80:
+        length = first_length
+    else:
+        length_bytes = first_length & 0x7F
+        if (
+            length_bytes == 0
+            or length_bytes > 4
+            or offset + length_bytes > len(data)
+            or data[offset] == 0
+        ):
+            raise ValueError("invalid-length")
+        length = int.from_bytes(data[offset : offset + length_bytes], "big")
+        if length < 0x80:
+            raise ValueError("non-minimal-length")
+        offset += length_bytes
+    end = offset + length
+    if end > len(data):
+        raise ValueError("truncated")
+    return tag, data[offset:end], end
+
+
+def _is_pkcs8_ed25519_private_key(content: bytes) -> bool:
+    """离线解析 PKCS#8，并确认算法 OID 和 32 字节 Ed25519 seed。"""
+    try:
+        from cryptography.hazmat.primitives import serialization
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import (
+            Ed25519PrivateKey,
+        )
+
+        private_key = serialization.load_pem_private_key(content, password=None)
+        return isinstance(private_key, Ed25519PrivateKey)
+    except ImportError:
+        pass
+    except Exception:
+        return False
+
+    try:
+        text = content.decode("ascii")
+        private_key_label = "PRIVATE " + "KEY"
+        match = re.fullmatch(
+            rf"-----BEGIN {private_key_label}-----\r?\n"
+            r"([A-Za-z0-9+/=\r\n]+)"
+            rf"-----END {private_key_label}-----\r?\n?",
+            text,
+        )
+        if not match:
+            return False
+        compact = re.sub(r"[\r\n]", "", match.group(1))
+        der = base64.b64decode(compact, validate=True)
+
+        outer_tag, outer, outer_end = _read_der_tlv(der, 0)
+        if outer_tag != 0x30 or outer_end != len(der):
+            return False
+        version_tag, version, offset = _read_der_tlv(outer, 0)
+        if version_tag != 0x02 or version != b"\x00":
+            return False
+        algorithm_tag, algorithm, offset = _read_der_tlv(outer, offset)
+        oid_tag, oid, algorithm_end = _read_der_tlv(algorithm, 0)
+        if (
+            algorithm_tag != 0x30
+            or oid_tag != 0x06
+            or oid != b"\x2b\x65\x70"
+            or algorithm_end != len(algorithm)
+        ):
+            return False
+        private_tag, private_value, offset = _read_der_tlv(outer, offset)
+        if private_tag != 0x04 or offset != len(outer):
+            return False
+        seed_tag, seed, seed_end = _read_der_tlv(private_value, 0)
+        return seed_tag == 0x04 and len(seed) == 32 and seed_end == len(private_value)
+    except (UnicodeDecodeError, ValueError, binascii.Error):
+        return False
+
+
+def _resolve_qweather_private_key_identity(
+    *,
+    expected_owner_uid=None,
+    expected_owner_gid=None,
+    expected_runtime_group_gid=None,
+):
+    """生产默认固定 root/root 与 root/case-weather；测试必须显式全量注入。"""
+    injected = (
+        expected_owner_uid,
+        expected_owner_gid,
+        expected_runtime_group_gid,
+    )
+    if any(value is not None for value in injected):
+        if not all(
+            isinstance(value, int) and not isinstance(value, bool) and value >= 0
+            for value in injected
+        ):
+            return None, "QWeather JWT 私钥预期身份参数不完整或无效。"
+        return injected, None
+    try:
+        runtime_group_gid = grp.getgrnam(QWEATHER_RUNTIME_GROUP_NAME).gr_gid
+    except (KeyError, OSError):
+        return None, "QWeather JWT 私钥运行组无法安全确认。"
+    return (0, 0, runtime_group_gid), None
+
+
+def _validate_qweather_private_key(
+    path_value: str,
+    *,
+    expected_owner_uid: int,
+    expected_runtime_group_gid: int,
+    allow_missing=False,
+):
     path = Path(path_value).expanduser()
     if not path.is_absolute():
         return ["QWEATHER_JWT_PRIVATE_KEY_PATH 必须是服务器上的绝对路径。"]
-    _content, read_error = _read_regular_file_stably(
+    content, read_error = _read_regular_file_stably(
         path,
         max_bytes=QWEATHER_MAX_PRIVATE_KEY_BYTES,
         require_private=True,
         require_nonempty=True,
-        required_mode=0o600,
+        required_mode=0o640,
+        required_uid=expected_owner_uid,
+        required_gid=expected_runtime_group_gid,
     )
     if read_error == "missing":
+        if allow_missing:
+            return []
         return ["QWeather JWT 私钥文件不存在或不可读取。"]
     if read_error == "type":
         return ["QWeather JWT 私钥必须是普通文件且不能是符号链接。"]
     if read_error == "permission":
-        return ["QWeather JWT 私钥权限必须严格为 0600。"]
+        return ["QWeather JWT 私钥权限必须严格为 0640。"]
+    if read_error == "owner":
+        return ["QWeather JWT 私钥所有者必须严格为 root。"]
+    if read_error == "group":
+        return ["QWeather JWT 私钥组必须严格匹配运行组。"]
     if read_error == "size":
         return ["QWeather JWT 私钥文件大小异常。"]
     if read_error == "changed":
         return ["QWeather JWT 私钥读取期间发生变化，请重新执行。"]
     if read_error is not None:
         return ["QWeather JWT 私钥文件不存在或不可读取。"]
+    if not _is_pkcs8_ed25519_private_key(content):
+        return ["QWeather JWT 私钥必须是有效的 Ed25519 私钥。"]
     return []
 
 
-def validate_release_env(path: Path, *, require_wechat=False):
+def _validate_qweather_pending_private_key(
+    path_value,
+    final_path_value: str,
+    *,
+    expected_owner_uid: int,
+    expected_owner_gid: int,
+):
+    """校验激活前仅 root 可读且尚未发布的 JWT 私钥。"""
+    path = Path(path_value)
+    final_path = Path(final_path_value).expanduser()
+    if not path.is_absolute():
+        return ["QWeather JWT pending 私钥必须使用规范绝对路径。"]
+    try:
+        if path.parent.resolve(strict=True) != path.parent:
+            return ["QWeather JWT pending 私钥必须使用规范直达路径。"]
+    except (OSError, RuntimeError):
+        return ["QWeather JWT pending 私钥父目录无法安全验证。"]
+    if path == final_path:
+        return ["QWeather JWT pending 私钥路径不能与运行态私钥路径相同。"]
+    if path.parent != final_path.parent:
+        return ["QWeather JWT pending 私钥必须与运行态私钥位于同一目录。"]
+    if not QWEATHER_PENDING_PRIVATE_KEY_BASENAME_PATTERN.fullmatch(path.name):
+        return ["QWeather JWT pending 私钥命名不符合发布约定。"]
+
+    content, read_error = _read_regular_file_stably(
+        path,
+        max_bytes=QWEATHER_MAX_PRIVATE_KEY_BYTES,
+        require_private=True,
+        require_nonempty=True,
+        required_mode=0o600,
+        required_uid=expected_owner_uid,
+        required_gid=expected_owner_gid,
+    )
+    if read_error == "missing":
+        return ["QWeather JWT pending 私钥文件不存在或不可读取。"]
+    if read_error == "type":
+        return ["QWeather JWT pending 私钥必须是普通文件且不能是符号链接。"]
+    if read_error == "permission":
+        return ["QWeather JWT pending 私钥权限必须严格为 0600。"]
+    if read_error == "owner":
+        return ["QWeather JWT pending 私钥所有者必须严格为 root。"]
+    if read_error == "group":
+        return ["QWeather JWT pending 私钥组必须严格为 root。"]
+    if read_error == "size":
+        return ["QWeather JWT pending 私钥文件大小异常。"]
+    if read_error == "changed":
+        return ["QWeather JWT pending 私钥读取期间发生变化，请重新执行。"]
+    if read_error is not None:
+        return ["QWeather JWT pending 私钥文件不存在或不可读取。"]
+    if not _is_pkcs8_ed25519_private_key(content):
+        return ["QWeather JWT pending 私钥必须是有效的 Ed25519 私钥。"]
+    return []
+
+
+def validate_release_env(
+    path: Path,
+    *,
+    require_wechat=False,
+    qweather_private_key_pending_path=None,
+    qweather_private_key_expected_owner_uid=None,
+    qweather_private_key_expected_owner_gid=None,
+    qweather_private_key_expected_runtime_group_gid=None,
+):
     content, read_error = _read_regular_file_stably(
         path,
         max_bytes=WECHAT_RELEASE_FORM_MAX_BYTES,
@@ -1515,9 +1723,47 @@ def validate_release_env(path: Path, *, require_wechat=False):
         else:
             mode_errors = _validate_qweather_base(qweather_base)
             mode_errors.extend(_validate_persistent_budget_url(persistent_budget_url))
-            mode_errors.extend(
-                _validate_qweather_private_key(values["QWEATHER_JWT_PRIVATE_KEY_PATH"])
+            expected_identity, identity_error = (
+                _resolve_qweather_private_key_identity(
+                    expected_owner_uid=(
+                        qweather_private_key_expected_owner_uid
+                    ),
+                    expected_owner_gid=(
+                        qweather_private_key_expected_owner_gid
+                    ),
+                    expected_runtime_group_gid=(
+                        qweather_private_key_expected_runtime_group_gid
+                    ),
+                )
             )
+            if identity_error:
+                mode_errors.append(identity_error)
+            else:
+                (
+                    expected_owner_uid,
+                    expected_owner_gid,
+                    expected_runtime_group_gid,
+                ) = expected_identity
+                pending_key_errors = []
+                if qweather_private_key_pending_path is not None:
+                    pending_key_errors = _validate_qweather_pending_private_key(
+                        qweather_private_key_pending_path,
+                        values["QWEATHER_JWT_PRIVATE_KEY_PATH"],
+                        expected_owner_uid=expected_owner_uid,
+                        expected_owner_gid=expected_owner_gid,
+                    )
+                    mode_errors.extend(pending_key_errors)
+                mode_errors.extend(
+                    _validate_qweather_private_key(
+                        values["QWEATHER_JWT_PRIVATE_KEY_PATH"],
+                        expected_owner_uid=expected_owner_uid,
+                        expected_runtime_group_gid=expected_runtime_group_gid,
+                        allow_missing=(
+                            qweather_private_key_pending_path is not None
+                            and not pending_key_errors
+                        ),
+                    )
+                )
             errors.extend(mode_errors)
             weather_ready = not mode_errors
     else:
@@ -1754,6 +2000,7 @@ return total
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Validate staged release environment.")
     parser.add_argument("--file", type=Path)
+    parser.add_argument("--qweather-private-key-pending-path", type=Path)
     parser.add_argument("--wechat-form", type=Path)
     parser.add_argument("--repo-root", type=Path)
     parser.add_argument("--verified-commit-output", type=Path)
@@ -1799,7 +2046,13 @@ def main(argv=None):
     else:
         if not args.file:
             parser.error("必须提供 --file")
-        result = validate_release_env(args.file, require_wechat=require_wechat)
+        result = validate_release_env(
+            args.file,
+            require_wechat=require_wechat,
+            qweather_private_key_pending_path=(
+                args.qweather_private_key_pending_path
+            ),
+        )
         if args.probe_persistent_budget and result["ok"]:
             probe_errors = probe_persistent_budget_backend(args.file)
             if probe_errors:

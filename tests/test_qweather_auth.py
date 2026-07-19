@@ -133,6 +133,16 @@ def test_jwt_rejects_private_key_without_exact_permissions(jwt_material, mode):
         qweather_auth.get_qweather_request_headers(config)
 
 
+def test_jwt_accepts_root_group_read_only_mode(jwt_material):
+    config, key_path, _public_pem = jwt_material
+    key_path.chmod(0o640)
+
+    headers = qweather_auth.get_qweather_request_headers(config)
+
+    assert set(headers) == {"Authorization"}
+    assert headers["Authorization"].startswith("Bearer ")
+
+
 def test_jwt_rejects_symlink_private_key(jwt_material, tmp_path):
     config, key_path, _public_pem = jwt_material
     linked_key = tmp_path / "linked-qweather-private.pem"

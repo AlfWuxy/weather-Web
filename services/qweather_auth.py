@@ -134,7 +134,7 @@ def _read_private_key_snapshot(path_value: str, kid: str, project_id: str):
         before = os.fstat(file_descriptor)
         if not stat.S_ISREG(before.st_mode):
             raise QWeatherAuthError("qweather_jwt_key_not_regular")
-        if stat.S_IMODE(before.st_mode) != 0o600:
+        if stat.S_IMODE(before.st_mode) not in {0o600, 0o640}:
             raise QWeatherAuthError("qweather_jwt_key_permissions")
         if before.st_size <= 0 or before.st_size > _MAX_PRIVATE_KEY_BYTES:
             raise QWeatherAuthError("qweather_jwt_key_size_invalid")
@@ -168,7 +168,7 @@ def _read_private_key_snapshot(path_value: str, kid: str, project_id: str):
         total != before.st_size
         or _file_fingerprint(before) != _file_fingerprint(after)
         or not stat.S_ISREG(current_path_stat.st_mode)
-        or stat.S_IMODE(current_path_stat.st_mode) != 0o600
+        or stat.S_IMODE(current_path_stat.st_mode) not in {0o600, 0o640}
         or _file_fingerprint(current_path_stat) != _file_fingerprint(after)
     ):
         raise QWeatherAuthError("qweather_jwt_key_changed")

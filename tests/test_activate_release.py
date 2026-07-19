@@ -9,6 +9,7 @@ import grp
 import pwd
 import re
 import shlex
+import shutil
 import signal
 import sqlite3
 import subprocess
@@ -82,7 +83,7 @@ def _write_executable(path, content):
     path.chmod(0o755)
 
 
-def _write_test_ed25519_private_key(path):
+def _write_test_ed25519_private_key(path, *, mode=0o600):
     key = Ed25519PrivateKey.generate()
     path.write_bytes(
         key.private_bytes(
@@ -91,7 +92,7 @@ def _write_test_ed25519_private_key(path):
             encryption_algorithm=serialization.NoEncryption(),
         )
     )
-    path.chmod(0o600)
+    path.chmod(mode)
     return path
 
 
@@ -145,6 +146,8 @@ event = {
 }
 with audit_file.open('a', encoding='utf-8') as stream:
     stream.write(json.dumps(event, sort_keys=True) + '\\n')
+if count == int(os.environ.get('FAKE_SYNC_FAIL_ON', '0')):
+    raise SystemExit(23)
 if count == int(os.environ.get('FAKE_SYNC_KILL_ON', '0')):
     os.kill(os.getppid(), signal.SIGKILL)
 """,
@@ -156,7 +159,9 @@ def _make_fake_systemctl(path):
         path,
         """#!/usr/bin/env python3
 import gzip
+import json
 import os
+import signal
 import sqlite3
 import sys
 from pathlib import Path
@@ -170,6 +175,26 @@ action_log = os.environ.get('FAKE_SYSTEMCTL_LOG')
 if action_log:
     with open(action_log, 'a', encoding='utf-8') as stream:
         stream.write(' '.join(args) + '\\n')
+
+key_audit = os.environ.get('FAKE_QWEATHER_KEY_STOP_AUDIT', '')
+if command == 'stop' and key_audit and not Path(key_audit).exists():
+    pending = Path(os.environ['FAKE_QWEATHER_PENDING_KEY'])
+    final = Path(os.environ['FAKE_QWEATHER_FINAL_KEY'])
+    pending_stat = pending.lstat()
+    Path(key_audit).write_text(json.dumps({
+        'unit': unit,
+        'pending_mode': oct(pending_stat.st_mode & 0o777),
+        'pending_regular': pending.is_file() and not pending.is_symlink(),
+        'final_exists': final.exists() or final.is_symlink(),
+    }, sort_keys=True), encoding='utf-8')
+    if os.environ.get('FAKE_REPLACE_QWEATHER_PRIVATE_DIR_ON_STOP') == '1':
+        private_dir = pending.parent
+        original_dir = private_dir.with_name(private_dir.name + '.original')
+        private_dir.rename(original_dir)
+        private_dir.mkdir(mode=0o700)
+        replacement = private_dir / pending.name
+        replacement.write_bytes((original_dir / pending.name).read_bytes())
+        replacement.chmod(0o600)
 
 def marker(kind):
     return state / f'{unit}.{kind}'
@@ -370,6 +395,18 @@ if command in {'start', 'restart'}:
         marker('active').unlink(missing_ok=True)
         raise SystemExit(0)
     marker('active').touch()
+    if (
+        command == 'restart'
+        and unit == 'case-weather.service'
+        and os.environ.get('FAKE_REPLACE_QWEATHER_FINAL_AFTER_RESTART') == '1'
+    ):
+        final_key = Path(os.environ['FAKE_QWEATHER_FINAL_KEY'])
+        payload = final_key.read_bytes()
+        final_key.unlink()
+        final_key.write_bytes(payload)
+        final_key.chmod(0o640)
+    if os.environ.get('FAKE_KILL_PARENT_AFTER_RESTART_UNIT') == unit and command == 'restart':
+        os.kill(os.getppid(), signal.SIGKILL)
     cache_result = os.environ.get('FAKE_CACHE_RESULT', '')
     if unit == 'case-weather-cache.service' and cache_result in {'success', 'failure'}:
         hook_name = 'OnSuccess' if cache_result == 'success' else 'OnFailure'
@@ -470,6 +507,12 @@ if [ -f \"$FAKE_SYSTEMCTL_STATE/legacy-process-running\" ]; then
     exit 0
 fi
 case "$*" in
+    *"-u $RUNTIME_USER"*)
+        if [ -f "$FAKE_SYSTEMCTL_STATE/runtime-user-process-running" ]; then
+            printf '%s\\n' 4999
+            exit 0
+        fi
+        ;;
     *'/current/app/scripts/backup.sh'*)
         for state in active activating reloading deactivating; do
             if [ -f "$FAKE_SYSTEMCTL_STATE/case-weather-backup.service.$state" ]; then
@@ -561,10 +604,12 @@ def _prepare_transaction(
     systemctl_log = tmp_path / 'systemctl-actions.log'
     database_file = state_dir / 'instance' / 'health_weather.db'
     runtime_guard_dir = tmp_path / 'runtime-boot-guard'
+    qweather_private_dir = state_dir / 'private'
 
     for directory in (
         state_dir / 'instance',
         state_dir / 'backups',
+        qweather_private_dir,
         old_release,
         new_release / 'app' / 'scripts',
         new_release / 'private-metadata',
@@ -575,6 +620,7 @@ def _prepare_transaction(
         fake_bin,
     ):
         directory.mkdir(parents=True, exist_ok=True)
+    qweather_private_dir.chmod(0o700)
     database_uri = f'sqlite:///{database_file.as_posix()}'
     (state_dir / '.env').write_text(
         f'DEBUG=true\nRELEASE_VALUE=old\nDATABASE_URI={database_uri}\n',
@@ -822,10 +868,26 @@ printf 't 2000000000\n'
         'root_crontab': root_crontab,
         'systemctl_log': systemctl_log,
         'database_file': database_file,
+        'qweather_private_dir': qweather_private_dir,
     }
 
 
 def _run_activation(transaction):
+    pending_raw = transaction['env'].get('QWEATHER_PENDING_KEY_PATH', '')
+    if pending_raw and transaction.get('auto_stage_qweather_pending', True):
+        pending = Path(pending_raw)
+        if not pending.exists() and not pending.is_symlink():
+            staged_values = {}
+            staged_env = transaction['new_release'] / 'staged.env'
+            if staged_env.exists():
+                for line in staged_env.read_text(encoding='utf-8').splitlines():
+                    key, separator, value = line.partition('=')
+                    if separator:
+                        staged_values[key] = value
+            final = Path(staged_values.get('QWEATHER_JWT_PRIVATE_KEY_PATH', ''))
+            if final.is_file() and not final.is_symlink():
+                pending.write_bytes(final.read_bytes())
+                pending.chmod(0o600)
     return subprocess.run(
         ['bash', str(ACTIVATE_SCRIPT)],
         cwd=ROOT,
@@ -882,9 +944,25 @@ def _seed_interrupted_activation_guard(
 
 def _configure_formal_smoke(transaction, *, provider='QWeather'):
     """为激活事务准备完全离线的正式天气烟测桩。"""
-    private_key = transaction['state_dir'] / 'qweather-formal-private.pem'
-    if not private_key.exists():
-        private_key = _write_test_ed25519_private_key(private_key)
+    private_key = transaction['qweather_private_dir'] / 'qweather-formal-current.pem'
+    pending_key = (
+        transaction['qweather_private_dir']
+        / f'.qweather-jwt.pending-{transaction["new_release"].name}'
+    )
+    if not pending_key.exists() and not pending_key.is_symlink():
+        if private_key.is_file() and not private_key.is_symlink():
+            pending_key.write_bytes(private_key.read_bytes())
+            pending_key.chmod(0o600)
+        else:
+            _write_test_ed25519_private_key(pending_key, mode=0o600)
+    transaction['env']['QWEATHER_PENDING_KEY_PATH'] = str(pending_key)
+    transaction['env']['FAKE_QWEATHER_PENDING_KEY'] = str(pending_key)
+    transaction['env']['FAKE_QWEATHER_FINAL_KEY'] = str(private_key)
+    transaction['env']['FAKE_QWEATHER_KEY_STOP_AUDIT'] = str(
+        transaction['state_dir'] / 'qweather-key-stop-audit.json'
+    )
+    transaction['qweather_pending_key'] = pending_key
+    transaction['qweather_final_key'] = private_key
     staged_text = f"""DEBUG=true
 RELEASE_VALUE=new
 QWEATHER_AUTH_MODE=jwt
@@ -1075,23 +1153,37 @@ PY
     return staged_text, counter_file
 
 
+def _retarget_formal_retry(transaction, suffix='retry'):
+    """用新的 release ID 重试同一冻结 commit，避免复用旧 pending 路径。"""
+    source_release = transaction['new_release']
+    retry_release = source_release.parent / f'{source_release.name}-{suffix}'
+    shutil.copytree(source_release, retry_release, symlinks=True)
+    pending = (
+        transaction['qweather_private_dir']
+        / f'.qweather-jwt.pending-{retry_release.name}'
+    )
+    transaction['new_release'] = retry_release
+    transaction['qweather_pending_key'] = pending
+    transaction['env']['NEW_RELEASE'] = str(retry_release)
+    transaction['env']['STAGED_ENV_FILE'] = str(retry_release / 'staged.env')
+    transaction['env']['QWEATHER_PENDING_KEY_PATH'] = str(pending)
+    transaction['env']['FAKE_QWEATHER_PENDING_KEY'] = str(pending)
+    return retry_release
+
+
 def _configure_formal_jwt_smoke(transaction, private_key, *, provider='QWeather'):
     staged_text, counter_file = _configure_formal_smoke(
         transaction,
         provider=provider,
     )
-    jwt_text = ''.join(
-        f"QWEATHER_JWT_PRIVATE_KEY_PATH={private_key}\n"
-        if line.startswith('QWEATHER_JWT_PRIVATE_KEY_PATH=')
-        else line
-        for line in staged_text.splitlines(keepends=True)
-    )
-    assert jwt_text != staged_text
-    (transaction['new_release'] / 'staged.env').write_text(
-        jwt_text,
-        encoding='utf-8',
-    )
-    return jwt_text, counter_file
+    pending = transaction['qweather_pending_key']
+    pending.unlink(missing_ok=True)
+    if private_key.is_symlink():
+        pending.symlink_to(private_key)
+    else:
+        pending.write_bytes(private_key.read_bytes())
+        pending.chmod(0o600)
+    return staged_text, counter_file
 
 
 def test_success_switches_release_only_after_migration_and_health(tmp_path):
@@ -2538,6 +2630,7 @@ def test_completed_receipt_is_reused_after_pre_public_failure(tmp_path):
     for unit in ALL_UNITS:
         assert not (transaction['fake_state'] / f'{unit}.active').exists()
 
+    _retarget_formal_retry(transaction)
     (transaction['new_release'] / 'staged.env').write_text(
         (transaction['state_dir'] / '.env').read_text(encoding='utf-8'),
         encoding='utf-8',
@@ -2717,10 +2810,15 @@ def test_jwt_private_key_content_change_creates_new_weather_fingerprint(tmp_path
     assert counter_file.read_text(encoding='utf-8') == '1'
 
     _write_test_ed25519_private_key(private_key)
-    (transaction['new_release'] / 'staged.env').write_text(
-        (transaction['state_dir'] / '.env').read_text(encoding='utf-8'),
-        encoding='utf-8',
+    rotated_final = transaction['qweather_private_dir'] / 'qweather-formal-rotated.pem'
+    rotated_config = (transaction['state_dir'] / '.env').read_text(encoding='utf-8')
+    rotated_config = rotated_config.replace(
+        f'QWEATHER_JWT_PRIVATE_KEY_PATH={transaction["qweather_final_key"]}',
+        f'QWEATHER_JWT_PRIVATE_KEY_PATH={rotated_final}',
     )
+    (transaction['new_release'] / 'staged.env').write_text(rotated_config, encoding='utf-8')
+    transaction['qweather_pending_key'].write_bytes(private_key.read_bytes())
+    transaction['qweather_pending_key'].chmod(0o600)
     second = _run_activation(transaction)
 
     assert second.returncode == 0, second.stderr
@@ -2735,7 +2833,7 @@ def test_jwt_private_key_symlink_fails_before_weather_request(tmp_path):
     transaction = _prepare_transaction(tmp_path)
     private_key = tmp_path / 'qweather-private.pem'
     private_key.write_bytes(b'private-key-material')
-    private_key.chmod(0o600)
+    private_key.chmod(0o640)
     linked_key = tmp_path / 'linked-private.pem'
     linked_key.symlink_to(private_key)
     _staged_text, counter_file = _configure_formal_jwt_smoke(
@@ -2746,7 +2844,7 @@ def test_jwt_private_key_symlink_fails_before_weather_request(tmp_path):
     result = _run_activation(transaction)
 
     assert result.returncode != 0
-    assert '正式 JWT 运行用户离线签名预检失败' in result.stderr
+    assert 'QWeather pending/final 私钥或转换计划校验失败' in result.stderr
     assert str(private_key) not in result.stderr
     assert not counter_file.exists()
     assert not (
@@ -2758,7 +2856,7 @@ def test_malformed_jwt_key_fails_offline_before_started_receipt(tmp_path):
     transaction = _prepare_transaction(tmp_path)
     private_key = tmp_path / 'qweather-private.pem'
     private_key.write_bytes(b'malformed-private-key')
-    private_key.chmod(0o600)
+    private_key.chmod(0o640)
     _staged_text, counter_file = _configure_formal_jwt_smoke(
         transaction,
         private_key,
@@ -2772,6 +2870,480 @@ def test_malformed_jwt_key_fails_offline_before_started_receipt(tmp_path):
     assert not (
         transaction['state_dir'] / 'deployments' / 'formal-cache-smokes'
     ).exists()
+
+
+def test_jwt_private_key_0600_fails_before_weather_request(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    private_key = tmp_path / 'qweather-private.pem'
+    _write_test_ed25519_private_key(private_key)
+    private_key.chmod(0o600)
+    _staged_text, counter_file = _configure_formal_jwt_smoke(
+        transaction,
+        private_key,
+    )
+    transaction['qweather_final_key'].write_bytes(private_key.read_bytes())
+    transaction['qweather_final_key'].chmod(0o600)
+
+    result = _run_activation(transaction)
+
+    assert result.returncode != 0
+    assert 'QWeather pending/final 私钥或转换计划校验失败' in result.stderr
+    assert not counter_file.exists()
+    assert not (
+        transaction['state_dir'] / 'deployments' / 'formal-cache-smokes'
+    ).exists()
+
+
+def test_formal_jwt_key_checks_root_group_read_only_state():
+    content = ACTIVATE_SCRIPT.read_text(encoding='utf-8')
+
+    assert 'stat.S_IMODE(before.st_mode) != 0o640' in content
+    assert 'before.st_uid != expected_key_owner_uid' in content
+    assert 'before.st_gid != expected_key_group_gid' in content
+    assert 'stat.S_IMODE(key_stat.st_mode) != 0o640' in content
+    assert 'key_stat.st_uid != expected_key_owner_uid' in content
+    assert 'key_stat.st_gid != expected_key_group_gid' in content
+    assert content.index(
+        'reconcile_qweather_key_plan "$TRANSACTION_DIR" committed'
+    ) < content.index('COMMITTED=1')
+
+
+def test_qweather_key_create_then_reuse_only_after_quiescence(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    _staged_text, _counter_file = _configure_formal_smoke(transaction)
+
+    first = _run_activation(transaction)
+
+    assert first.returncode == 0, first.stderr
+    stop_audit = json.loads(
+        Path(transaction['env']['FAKE_QWEATHER_KEY_STOP_AUDIT']).read_text(
+            encoding='utf-8'
+        )
+    )
+    assert stop_audit == {
+        'unit': 'case-weather-backup.timer',
+        'pending_mode': '0o600',
+        'pending_regular': True,
+        'final_exists': False,
+    }
+    assert transaction['qweather_final_key'].is_file()
+    assert transaction['qweather_final_key'].stat().st_mode & 0o777 == 0o640
+    assert not transaction['qweather_pending_key'].exists()
+    plans = sorted(
+        (transaction['state_dir'] / 'backups' / 'deploy-transactions').glob(
+            '*/qweather-key-transition.json'
+        )
+    )
+    assert [json.loads(path.read_text(encoding='utf-8'))['action'] for path in plans] == [
+        'create'
+    ]
+
+    (transaction['new_release'] / 'staged.env').write_text(
+        (transaction['state_dir'] / '.env').read_text(encoding='utf-8'),
+        encoding='utf-8',
+    )
+    second = _run_activation(transaction)
+
+    assert second.returncode == 0, second.stderr
+    plans = sorted(
+        (transaction['state_dir'] / 'backups' / 'deploy-transactions').glob(
+            '*/qweather-key-transition.json'
+        )
+    )
+    assert [json.loads(path.read_text(encoding='utf-8'))['action'] for path in plans] == [
+        'create',
+        'reuse',
+    ]
+    assert not transaction['qweather_pending_key'].exists()
+
+
+@pytest.mark.parametrize(
+    'fault_point',
+    ('before-promotion', 'after-link', 'after-permissions', 'after-pending-unlink'),
+)
+def test_qweather_key_transition_fault_recovers_before_old_units_restart(
+    tmp_path,
+    fault_point,
+):
+    transaction = _prepare_transaction(tmp_path)
+    _staged_text, counter_file = _configure_formal_smoke(transaction)
+    transaction['env']['QWEATHER_KEY_TRANSITION_FAIL_AT'] = fault_point
+
+    result = _run_activation(transaction)
+
+    assert result.returncode != 0
+    assert not counter_file.exists()
+    assert not transaction['qweather_final_key'].exists()
+    assert not transaction['qweather_pending_key'].exists()
+    transaction_dirs = list(
+        (transaction['state_dir'] / 'backups' / 'deploy-transactions').iterdir()
+    )
+    assert len(transaction_dirs) == 1
+    archive = transaction_dirs[0] / 'qweather-key-recovery'
+    assert archive.is_dir()
+    assert all(path.stat().st_mode & 0o777 == 0o600 for path in archive.iterdir())
+    assert all(path.stat().st_nlink == 1 for path in archive.iterdir())
+    assert transaction['qweather_private_dir'].stat().st_mode & 0o777 == 0o700
+    assert (transaction_dirs[0] / 'ROLLED_BACK').is_file()
+    assert not (
+        transaction['state_dir'] / 'deployments' / 'activation-in-progress'
+    ).exists()
+    assert (transaction['fake_state'] / 'case-weather.service.active').is_file()
+
+
+@pytest.mark.parametrize(
+    ('fault_point', 'pending_exists', 'final_mode', 'final_nlink', 'private_mode'),
+    (
+        ('after-link-cleanup', True, 0o600, 2, 0o700),
+        ('after-pending-unlink-cleanup', False, 0o600, 1, 0o700),
+        ('after-permissions-cleanup', False, 0o640, 1, 0o750),
+    ),
+)
+def test_qweather_key_cleanup_failure_keeps_units_stopped_and_guarded(
+    tmp_path,
+    fault_point,
+    pending_exists,
+    final_mode,
+    final_nlink,
+    private_mode,
+):
+    transaction = _prepare_transaction(tmp_path)
+    _staged_text, counter_file = _configure_formal_smoke(transaction)
+    transaction['env']['QWEATHER_KEY_TRANSITION_FAIL_AT'] = fault_point
+
+    result = _run_activation(transaction)
+
+    assert result.returncode != 0
+    assert not counter_file.exists()
+    assert (
+        transaction['state_dir'] / 'deployments' / 'activation-in-progress'
+    ).is_file()
+    assert list(
+        (transaction['state_dir'] / 'backups').rglob('ROLLBACK_REQUIRED.txt')
+    )
+    assert transaction['qweather_pending_key'].exists() is pending_exists
+    assert transaction['qweather_final_key'].stat().st_mode & 0o777 == final_mode
+    assert transaction['qweather_final_key'].stat().st_nlink == final_nlink
+    assert transaction['qweather_private_dir'].stat().st_mode & 0o777 == private_mode
+    assert not (
+        Path(transaction['env']['RUNTIME_BOOT_GUARD_DIR']) / 'activation-permit'
+    ).exists()
+    for unit in ALL_UNITS:
+        assert not (transaction['fake_state'] / f'{unit}.active').exists()
+        assert not (transaction['fake_state'] / f'{unit}.activating').exists()
+
+
+def test_qweather_different_existing_final_fails_before_mutation(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    _staged_text, counter_file = _configure_formal_smoke(transaction)
+    _write_test_ed25519_private_key(
+        transaction['qweather_final_key'],
+        mode=0o640,
+    )
+
+    result = _run_activation(transaction)
+
+    assert result.returncode != 0
+    assert 'QWeather pending/final 私钥或转换计划校验失败' in result.stderr
+    assert not counter_file.exists()
+    assert transaction['qweather_pending_key'].stat().st_mode & 0o777 == 0o600
+    assert not Path(transaction['env']['FAKE_QWEATHER_KEY_STOP_AUDIT']).exists()
+    assert not (
+        transaction['state_dir'] / 'deployments' / 'activation-in-progress'
+    ).exists()
+
+
+def test_qweather_pending_extra_hardlink_fails_before_plan_or_mutation(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    _staged_text, counter_file = _configure_formal_smoke(transaction)
+    alias = tmp_path / 'pending-alias.pem'
+    os.link(transaction['qweather_pending_key'], alias)
+
+    result = _run_activation(transaction)
+
+    assert result.returncode != 0
+    assert 'QWeather pending/final 私钥或转换计划校验失败' in result.stderr
+    assert transaction['qweather_pending_key'].stat().st_nlink == 2
+    assert alias.stat().st_nlink == 2
+    assert not counter_file.exists()
+    assert not Path(transaction['env']['FAKE_QWEATHER_KEY_STOP_AUDIT']).exists()
+    assert (transaction['fake_state'] / 'case-weather.service.active').is_file()
+
+
+def test_qweather_plan_failure_before_started_recovers_pending_and_can_retry(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    _staged_text, counter_file = _configure_formal_smoke(transaction)
+    transaction['env']['QWEATHER_KEY_TRANSITION_FAIL_AT'] = 'after-plan'
+
+    first = _run_activation(transaction)
+
+    assert first.returncode != 0
+    transaction_dirs = list(
+        (transaction['state_dir'] / 'backups' / 'deploy-transactions').iterdir()
+    )
+    assert len(transaction_dirs) == 1
+    old_transaction = transaction_dirs[0]
+    assert not (old_transaction / 'ACTIVATION_STARTED').exists()
+    assert (old_transaction / 'ROLLED_BACK').is_file()
+    recovered_pending = old_transaction / 'qweather-key-recovery' / 'pending.pem'
+    assert recovered_pending.is_file()
+    assert recovered_pending.stat().st_mode & 0o777 == 0o600
+    assert recovered_pending.stat().st_nlink == 1
+    assert not transaction['qweather_pending_key'].exists()
+    assert not (
+        transaction['state_dir'] / 'deployments' / 'activation-in-progress'
+    ).exists()
+
+    transaction['qweather_pending_key'].write_bytes(recovered_pending.read_bytes())
+    transaction['qweather_pending_key'].chmod(0o600)
+    transaction['env'].pop('QWEATHER_KEY_TRANSITION_FAIL_AT')
+    second = _run_activation(transaction)
+
+    assert second.returncode == 0, second.stderr
+    assert counter_file.read_text(encoding='utf-8') == '1'
+
+
+def test_qweather_plan_cleanup_failure_is_registered_and_blocks_retry(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    _staged_text, counter_file = _configure_formal_smoke(transaction)
+    transaction['env']['QWEATHER_KEY_TRANSITION_FAIL_AT'] = 'after-plan-cleanup'
+
+    first = _run_activation(transaction)
+
+    assert first.returncode == 70
+    failures = list(
+        (transaction['state_dir'] / 'backups').rglob('ROLLBACK_REQUIRED.txt')
+    )
+    assert len(failures) == 1
+    assert not (failures[0].parent / 'ACTIVATION_STARTED').exists()
+    assert transaction['qweather_pending_key'].is_file()
+    assert transaction['qweather_pending_key'].stat().st_mode & 0o777 == 0o600
+    assert not counter_file.exists()
+
+    transaction['env'].pop('QWEATHER_KEY_TRANSITION_FAIL_AT')
+    second = _run_activation(transaction)
+
+    assert second.returncode != 0
+    assert '尚未人工确认' in second.stderr
+    assert transaction['qweather_pending_key'].is_file()
+
+
+def test_runtime_uid_process_with_arbitrary_argv_blocks_key_promotion(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    _staged_text, counter_file = _configure_formal_smoke(transaction)
+    (transaction['fake_state'] / 'runtime-user-process-running').touch()
+
+    result = _run_activation(transaction)
+
+    assert result.returncode == 70
+    assert '运行账户仍有未归属进程' in result.stderr
+    assert not transaction['qweather_final_key'].exists()
+    assert not counter_file.exists()
+    assert (
+        transaction['state_dir'] / 'deployments' / 'activation-in-progress'
+    ).is_file()
+    assert not (
+        Path(transaction['env']['RUNTIME_BOOT_GUARD_DIR']) / 'activation-permit'
+    ).exists()
+    for unit in ALL_UNITS:
+        assert not (transaction['fake_state'] / f'{unit}.active').exists()
+
+
+def test_private_directory_inode_replacement_is_preserved_and_quarantined(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    _staged_text, counter_file = _configure_formal_smoke(transaction)
+    transaction['env']['FAKE_REPLACE_QWEATHER_PRIVATE_DIR_ON_STOP'] = '1'
+
+    result = _run_activation(transaction)
+
+    assert result.returncode == 70
+    replacement_dir = transaction['qweather_private_dir']
+    original_dir = replacement_dir.with_name(replacement_dir.name + '.original')
+    assert replacement_dir.is_dir()
+    assert original_dir.is_dir()
+    replacement_pending = replacement_dir / transaction['qweather_pending_key'].name
+    original_pending = original_dir / transaction['qweather_pending_key'].name
+    assert replacement_pending.is_file()
+    assert original_pending.is_file()
+    assert replacement_pending.stat().st_ino != original_pending.stat().st_ino
+    assert not counter_file.exists()
+    assert (
+        transaction['state_dir'] / 'deployments' / 'activation-in-progress'
+    ).is_file()
+    assert not (
+        Path(transaction['env']['RUNTIME_BOOT_GUARD_DIR']) / 'activation-permit'
+    ).exists()
+
+
+def test_private_directory_restore_interruption_can_resume_safely(tmp_path):
+    transaction = _prepare_transaction(tmp_path, candidate_health_ok=False)
+    _staged_text, counter_file = _configure_formal_smoke(transaction)
+    transaction['env']['QWEATHER_KEY_TRANSITION_FAIL_AT'] = (
+        'during-directory-restore'
+    )
+
+    first = _run_activation(transaction)
+
+    assert first.returncode == 70
+    failures = list(
+        (transaction['state_dir'] / 'backups').rglob('ROLLBACK_REQUIRED.txt')
+    )
+    assert len(failures) == 1
+    old_transaction = failures[0].parent
+    assert transaction['qweather_private_dir'].stat().st_mode & 0o777 == 0o700
+    archived_keys = list((old_transaction / 'qweather-key-recovery').iterdir())
+    assert len(archived_keys) == 1
+    assert not (
+        Path(transaction['env']['RUNTIME_BOOT_GUARD_DIR']) / 'activation-permit'
+    ).exists()
+
+    _retarget_formal_retry(transaction, suffix='directory-restore-retry')
+    transaction['qweather_pending_key'].write_bytes(archived_keys[0].read_bytes())
+    transaction['qweather_pending_key'].chmod(0o600)
+    (transaction['new_release'] / 'staged.env').write_text(
+        (transaction['state_dir'] / '.env').read_text(encoding='utf-8'),
+        encoding='utf-8',
+    )
+    transaction['env']['FAKE_CANDIDATE_HEALTH_OK'] = '1'
+    transaction['env'].pop('QWEATHER_KEY_TRANSITION_FAIL_AT')
+    transaction['env']['RECOVERY_ACKNOWLEDGED_TRANSACTION'] = str(old_transaction)
+    second = _run_activation(transaction)
+
+    assert second.returncode == 0, second.stderr
+    assert (old_transaction / 'RECOVERY_CONFIRMED').is_file()
+    assert counter_file.read_text(encoding='utf-8') == '1'
+
+
+def test_sync_failure_after_started_receipt_uses_durable_forward_marker(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    _staged_text, counter_file = _configure_formal_smoke(transaction)
+    fake_sync = tmp_path / 'fake-bin' / 'sync'
+    _make_fake_sync(fake_sync)
+    transaction['env'].update({
+        'SYNC_BIN': str(fake_sync),
+        'FAKE_SYNC_COUNT_FILE': str(tmp_path / 'sync-count'),
+        'FAKE_SYNC_AUDIT_FILE': str(tmp_path / 'sync-audit.jsonl'),
+        'FAKE_SYNC_FAIL_ON': '3',
+        'FAKE_DURABILITY_DATABASE': str(transaction['database_file']),
+        'FAKE_WEATHER_COUNT_FILE': str(counter_file),
+    })
+
+    result = _run_activation(transaction)
+
+    assert result.returncode != 0
+    forward_markers = list(
+        (transaction['state_dir'] / 'backups').rglob('FORWARD_ONLY_REQUIRED')
+    )
+    assert len(forward_markers) == 1
+    assert forward_markers[0].read_text(encoding='utf-8').strip() == (
+        'phase=formal-smoke-started'
+    )
+    assert (forward_markers[0].parent / 'POST_COMMIT_ATTENTION.txt').is_file()
+    assert not (forward_markers[0].parent / 'ROLLED_BACK').exists()
+    assert transaction['qweather_final_key'].is_file()
+    assert transaction['qweather_final_key'].stat().st_mode & 0o777 == 0o640
+    assert not counter_file.exists()
+    assert (
+        transaction['state_dir'] / 'deployments' / 'activation-in-progress'
+    ).is_file()
+
+
+def test_public_restart_sigkill_ack_preserves_key_and_reuses_receipt(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    _staged_text, counter_file = _configure_formal_smoke(transaction)
+    transaction['env']['FAKE_KILL_PARENT_AFTER_RESTART_UNIT'] = 'case-weather.service'
+
+    first = _run_activation(transaction)
+
+    assert first.returncode == -signal.SIGKILL
+    public_markers = list(
+        (transaction['state_dir'] / 'backups').rglob('PUBLIC_START_ATTEMPTED')
+    )
+    assert len(public_markers) == 1
+    old_transaction = public_markers[0].parent
+    assert (old_transaction / 'FORWARD_ONLY_REQUIRED').is_file()
+    assert not (old_transaction / 'COMMITTED').exists()
+    final_identity = (
+        transaction['qweather_final_key'].stat().st_dev,
+        transaction['qweather_final_key'].stat().st_ino,
+    )
+
+    _retarget_formal_retry(transaction, suffix='sigkill-retry')
+    (transaction['new_release'] / 'staged.env').write_text(
+        (transaction['state_dir'] / '.env').read_text(encoding='utf-8'),
+        encoding='utf-8',
+    )
+    transaction['env'].pop('FAKE_KILL_PARENT_AFTER_RESTART_UNIT')
+    transaction['env']['RECOVERY_ACKNOWLEDGED_TRANSACTION'] = str(old_transaction)
+    second = _run_activation(transaction)
+
+    assert second.returncode == 0, second.stderr
+    assert counter_file.read_text(encoding='utf-8') == '1'
+    assert (
+        transaction['qweather_final_key'].stat().st_dev,
+        transaction['qweather_final_key'].stat().st_ino,
+    ) == final_identity
+    assert (old_transaction / 'RECOVERY_CONFIRMED').is_file()
+
+
+def test_same_content_final_inode_replacement_blocks_commit_and_ack(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    _staged_text, counter_file = _configure_formal_smoke(transaction)
+    transaction['env']['FAKE_REPLACE_QWEATHER_FINAL_AFTER_RESTART'] = '1'
+
+    first = _run_activation(transaction)
+
+    assert first.returncode != 0
+    attention = list(
+        (transaction['state_dir'] / 'backups').rglob('POST_COMMIT_ATTENTION.txt')
+    )
+    assert len(attention) == 1
+    old_transaction = attention[0].parent
+    assert not (old_transaction / 'COMMITTED').exists()
+    replacement_identity = (
+        transaction['qweather_final_key'].stat().st_dev,
+        transaction['qweather_final_key'].stat().st_ino,
+    )
+    assert (
+        transaction['state_dir'] / 'deployments' / 'activation-in-progress'
+    ).is_file()
+    assert not (
+        Path(transaction['env']['RUNTIME_BOOT_GUARD_DIR']) / 'activation-permit'
+    ).exists()
+
+    (transaction['fake_state'] / 'case-weather.service.active').touch()
+    runtime_guard = Path(transaction['env']['RUNTIME_BOOT_GUARD_DIR'])
+    runtime_guard.mkdir(parents=True, exist_ok=True)
+    permit = runtime_guard / 'activation-permit'
+    unrelated_transaction = old_transaction.parent / 'unrelated-permit-transaction'
+    unrelated_transaction.mkdir(mode=0o700)
+    permit.write_text(
+        'release_id=new\n'
+        f'transaction={unrelated_transaction}\n',
+        encoding='utf-8',
+    )
+    permit.chmod(0o600)
+    (transaction['new_release'] / 'staged.env').write_text(
+        (transaction['state_dir'] / '.env').read_text(encoding='utf-8'),
+        encoding='utf-8',
+    )
+    transaction['auto_stage_qweather_pending'] = False
+    transaction['env']['RECOVERY_ACKNOWLEDGED_TRANSACTION'] = str(old_transaction)
+    second = _run_activation(transaction)
+
+    assert second.returncode != 0
+    assert (
+        transaction['qweather_final_key'].stat().st_dev,
+        transaction['qweather_final_key'].stat().st_ino,
+    ) == replacement_identity
+    assert not (old_transaction / 'RECOVERY_CONFIRMED').exists()
+    assert (
+        transaction['state_dir'] / 'deployments' / 'activation-in-progress'
+    ).is_file()
+    assert not permit.exists(), second.stderr
+    assert list(runtime_guard.glob('activation-permit.quarantined.*'))
+    for unit in ALL_UNITS:
+        assert not (transaction['fake_state'] / f'{unit}.active').exists()
 
 
 def test_formal_smoke_rejects_duplicate_endpoint_budget_delta(tmp_path):
@@ -2895,6 +3467,17 @@ def test_formal_fallback_snapshot_is_rejected_and_started_receipt_blocks_retry(t
 
     # 即使下一事务的桩能生成 QWeather 数据，同一绑定也必须在请求前关闭。
     _configure_formal_smoke(transaction, provider='QWeather')
+    reprovisioned_identity = (
+        transaction['qweather_pending_key'].stat().st_dev,
+        transaction['qweather_pending_key'].stat().st_ino,
+    )
+    committed_final_identity = (
+        transaction['qweather_final_key'].stat().st_dev,
+        transaction['qweather_final_key'].stat().st_ino,
+    )
+    assert reprovisioned_identity != committed_final_identity
+    assert transaction['qweather_pending_key'].stat().st_nlink == 1
+    assert transaction['qweather_pending_key'].stat().st_mode & 0o777 == 0o600
     (transaction['new_release'] / 'staged.env').write_text(staged_text, encoding='utf-8')
     transaction['env']['RECOVERY_ACKNOWLEDGED_TRANSACTION'] = str(
         attention[0].parent
@@ -2904,6 +3487,46 @@ def test_formal_fallback_snapshot_is_rejected_and_started_receipt_blocks_retry(t
     assert second.returncode != 0
     assert '禁止自动重试' in second.stderr
     assert counter_file.read_text(encoding='utf-8') == '1'
+    assert (attention[0].parent / 'RECOVERY_CONFIRMED').is_file()
+
+
+@pytest.mark.parametrize('pending_tamper', ('hardlink-final', 'wrong-digest', 'wrong-mode'))
+def test_started_receipt_ack_rejects_untrusted_reprovisioned_pending(
+    tmp_path,
+    pending_tamper,
+):
+    transaction = _prepare_transaction(tmp_path)
+    staged_text, counter_file = _configure_formal_smoke(
+        transaction,
+        provider='Open-Meteo',
+    )
+    first = _run_activation(transaction)
+    assert first.returncode != 0
+    attention = list(
+        (transaction['state_dir'] / 'backups').rglob('POST_COMMIT_ATTENTION.txt')
+    )
+    assert len(attention) == 1
+
+    _configure_formal_smoke(transaction, provider='QWeather')
+    pending = transaction['qweather_pending_key']
+    if pending_tamper == 'hardlink-final':
+        pending.unlink()
+        os.link(transaction['qweather_final_key'], pending)
+    elif pending_tamper == 'wrong-digest':
+        _write_test_ed25519_private_key(pending, mode=0o600)
+    else:
+        pending.chmod(0o640)
+    (transaction['new_release'] / 'staged.env').write_text(staged_text, encoding='utf-8')
+    transaction['env']['RECOVERY_ACKNOWLEDGED_TRANSACTION'] = str(
+        attention[0].parent
+    )
+
+    second = _run_activation(transaction)
+
+    assert second.returncode != 0
+    assert 'QWeather 私钥转换计划的 committed 状态校验或回收失败' in second.stderr
+    assert counter_file.read_text(encoding='utf-8') == '1'
+    assert not (attention[0].parent / 'RECOVERY_CONFIRMED').exists()
 
 
 def test_completed_receipt_with_expired_snapshot_fails_closed_without_request(tmp_path):

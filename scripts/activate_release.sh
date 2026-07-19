@@ -42,6 +42,8 @@ RECOVERY_ACKNOWLEDGED_TRANSACTION="${RECOVERY_ACKNOWLEDGED_TRANSACTION:-}"
 REQUIRE_WECHAT_READY="${REQUIRE_WECHAT_READY:-0}"
 EXPECTED_RELEASE_COMMIT="${EXPECTED_RELEASE_COMMIT:-}"
 QWEATHER_BUDGET_SNAPSHOT_HELPER="${QWEATHER_BUDGET_SNAPSHOT_HELPER:-}"
+QWEATHER_PENDING_KEY_PATH="${QWEATHER_PENDING_KEY_PATH:-}"
+QWEATHER_KEY_TRANSITION_FAIL_AT="${QWEATHER_KEY_TRANSITION_FAIL_AT:-}"
 FORMAL_SMOKE_LEASE_HELPER="${FORMAL_SMOKE_LEASE_HELPER:-}"
 RUNTIME_USER="${RUNTIME_USER:-case-weather}"
 RUNTIME_GROUP="${RUNTIME_GROUP:-case-weather}"
@@ -55,6 +57,14 @@ RELEASE_ID="${NEW_RELEASE##*/}"
 TRANSACTION_ROOT="$STATE_DIR/backups/deploy-transactions"
 FORMAL_SMOKE_RECEIPT_ROOT="$STATE_DIR/deployments/formal-cache-smokes"
 TRANSACTION_DIR="$TRANSACTION_ROOT/${RELEASE_ID}-$(date -u +%Y%m%dT%H%M%SZ)-$$"
+QWEATHER_PRIVATE_DIR="$STATE_DIR/private"
+QWEATHER_KEY_PLAN="$TRANSACTION_DIR/qweather-key-transition.json"
+QWEATHER_KEY_ARCHIVE_DIR="$TRANSACTION_DIR/qweather-key-recovery"
+QWEATHER_KEY_FINAL_CREATED_MARKER="$TRANSACTION_DIR/QWEATHER_KEY_FINAL_CREATED"
+QWEATHER_KEY_PENDING_CLEANED_MARKER="$TRANSACTION_DIR/QWEATHER_KEY_PENDING_CLEANED"
+QWEATHER_KEY_RECOVERED_MARKER="$TRANSACTION_DIR/QWEATHER_KEY_RECOVERED"
+FORWARD_ONLY_MARKER="$TRANSACTION_DIR/FORWARD_ONLY_REQUIRED"
+PUBLIC_START_MARKER="$TRANSACTION_DIR/PUBLIC_START_ATTEMPTED"
 STATE_FILE="$TRANSACTION_DIR/unit-state.tsv"
 OLD_LINK_FILE="$TRANSACTION_DIR/old-current-link"
 DB_BACKUP="$TRANSACTION_DIR/database-before.db"
@@ -143,6 +153,13 @@ BACKUP_RUNTIME_ENV_BACKUP_READY=0
 LINK_MUTATED=0
 UNITS_MUTATED=0
 RUNTIME_QUIESCE_STARTED=0
+RUNTIME_KEY_QUIESCENCE_PROVEN=0
+QWEATHER_KEY_TRANSITION_REQUIRED=0
+QWEATHER_KEY_TRANSITION_ACTION=""
+QWEATHER_FINAL_KEY_PATH=""
+QWEATHER_KEY_SHA256=""
+QWEATHER_KEY_FINAL_CREATED=0
+QWEATHER_KEY_PENDING_CLEANED=0
 CANDIDATE_PID=""
 FORMAL_RELEASE_COMMIT=""
 FORMAL_RELEASE_CONFIG_FINGERPRINT=""
@@ -554,6 +571,93 @@ finally:
 PY
 }
 
+transaction_requires_forward_only() {
+    local transaction="$1" state
+    if ! state="$($VENV_DIR/bin/python - \
+        "$transaction" \
+        "$CONTROL_OWNER_UID" \
+        "$CONTROL_OWNER_GID" <<'PY'
+from pathlib import Path
+import stat
+import sys
+
+transaction = Path(sys.argv[1]).resolve(strict=True)
+owner_uid = int(sys.argv[2])
+owner_gid = int(sys.argv[3])
+forward = transaction / 'FORWARD_ONLY_REQUIRED'
+public = transaction / 'PUBLIC_START_ATTEMPTED'
+
+
+def read_marker(path, allowed):
+    try:
+        file_stat = path.lstat()
+    except FileNotFoundError:
+        return None
+    if (
+        not stat.S_ISREG(file_stat.st_mode)
+        or stat.S_ISLNK(file_stat.st_mode)
+        or stat.S_IMODE(file_stat.st_mode) != 0o600
+        or file_stat.st_uid != owner_uid
+        or file_stat.st_gid != owner_gid
+        or path.parent.resolve(strict=True) != transaction
+    ):
+        raise SystemExit(1)
+    value = path.read_text(encoding='utf-8').strip()
+    if value not in allowed:
+        raise SystemExit(1)
+    return value
+
+
+forward_value = read_marker(
+    forward,
+    {'phase=formal-smoke-started', 'phase=public-service-start'},
+)
+public_value = read_marker(public, {'phase=public-service-start'})
+if public_value is not None and forward_value is None:
+    raise SystemExit(1)
+print('forward' if forward_value is not None else 'rollback-safe')
+PY
+    )"; then
+        fail "事务 forward-only/public-start 阶段标记无效"
+        return 2
+    fi
+    case "$state" in
+        forward) return 0 ;;
+        rollback-safe) return 1 ;;
+        *) fail "事务 forward-only 阶段判定异常"; return 2 ;;
+    esac
+}
+
+record_forward_only_phase() {
+    local phase="$1" status=0
+    case "$phase" in
+        formal-smoke-started|public-service-start) ;;
+        *) fail "forward-only 阶段名称无效: $phase"; return 1 ;;
+    esac
+    if [ ! -e "$FORWARD_ONLY_MARKER" ] && [ ! -L "$FORWARD_ONLY_MARKER" ]; then
+        write_durable_marker "$FORWARD_ONLY_MARKER" "phase=$phase"
+    else
+        transaction_requires_forward_only "$TRANSACTION_DIR" || status=$?
+        [ "$status" -eq 0 ] || {
+            fail "已有 forward-only 阶段标记无法安全复用"
+            return 1
+        }
+    fi
+    if [ "$phase" = public-service-start ]; then
+        if [ ! -e "$PUBLIC_START_MARKER" ] && [ ! -L "$PUBLIC_START_MARKER" ]; then
+            write_durable_marker "$PUBLIC_START_MARKER" 'phase=public-service-start'
+        else
+            transaction_requires_forward_only "$TRANSACTION_DIR" || status=$?
+            [ "$status" -eq 0 ] || {
+                fail "已有 public-start 阶段标记无法安全复用"
+                return 1
+            }
+        fi
+    fi
+    # 阶段标记已先于不可逆动作耐久落盘，进程内退出路径随后切换到向前恢复。
+    FORWARD_ONLY=1
+}
+
 durably_checkpoint_recovery_materials() {
     local phase="$1"
     local checkpoint_marker
@@ -830,6 +934,9 @@ marker_names = (
     'POST_COMMIT_ATTENTION.txt',
     'COMMITTED',
     'ROLLED_BACK',
+    'FORWARD_ONLY_REQUIRED',
+    'PUBLIC_START_ATTEMPTED',
+    'qweather-key-transition.json',
 )
 for transaction in sorted(root.iterdir()):
     transaction_stat = transaction.lstat()
@@ -849,9 +956,22 @@ for transaction in sorted(root.iterdir()):
             or stat.S_ISLNK(marker_stat.st_mode)
             or marker_stat.st_uid != owner_uid
             or marker_stat.st_gid != owner_gid
+            or (
+                name in {
+                    'FORWARD_ONLY_REQUIRED',
+                    'PUBLIC_START_ATTEMPTED',
+                    'qweather-key-transition.json',
+                }
+                and stat.S_IMODE(marker_stat.st_mode) != 0o600
+            )
         ):
             raise SystemExit(1)
-    if started.exists():
+    if (
+        started.exists()
+        or (transaction / 'qweather-key-transition.json').exists()
+        or (transaction / 'ROLLBACK_REQUIRED.txt').exists()
+        or (transaction / 'POST_COMMIT_ATTENTION.txt').exists()
+    ):
         print(transaction)
 PY
     )"; then
@@ -894,8 +1014,10 @@ acknowledge_recovery_transaction() {
         has_fault_marker=1
     fi
     if [ "$has_fault_marker" -eq 0 ]; then
-        if [ ! -f "$RECOVERY_ACKNOWLEDGED_TRANSACTION/ACTIVATION_STARTED" ] \
-            || [ -L "$RECOVERY_ACKNOWLEDGED_TRANSACTION/ACTIVATION_STARTED" ] \
+        if { [ ! -f "$RECOVERY_ACKNOWLEDGED_TRANSACTION/ACTIVATION_STARTED" ] \
+                || [ -L "$RECOVERY_ACKNOWLEDGED_TRANSACTION/ACTIVATION_STARTED" ]; } \
+            && { [ ! -f "$RECOVERY_ACKNOWLEDGED_TRANSACTION/qweather-key-transition.json" ] \
+                || [ -L "$RECOVERY_ACKNOWLEDGED_TRANSACTION/qweather-key-transition.json" ]; } \
             || [ -e "$RECOVERY_ACKNOWLEDGED_TRANSACTION/COMMITTED" ] \
             || [ -e "$RECOVERY_ACKNOWLEDGED_TRANSACTION/ROLLED_BACK" ]; then
             fail "指定事务既无故障标记，也不是可确认的中断激活事务"
@@ -910,6 +1032,8 @@ acknowledge_recovery_transaction() {
             fi
         fi
     fi
+    # 人工确认只能在本事务的私钥计划已回收或已验证为向前保留状态后落盘。
+    reconcile_acknowledged_qweather_key_plan "$RECOVERY_ACKNOWLEDGED_TRANSACTION"
     confirmation="$RECOVERY_ACKNOWLEDGED_TRANSACTION/$RECOVERY_CONFIRMED_MARKER_NAME"
     if [ -e "$confirmation" ] || [ -L "$confirmation" ]; then
         if ! "$VENV_DIR/bin/python" - \
@@ -1015,7 +1139,9 @@ recover_activation_boot_guard_if_acknowledged() {
         fail "事务终态标记不得为符号链接"
         return 1
     fi
+    reconcile_acknowledged_qweather_key_plan "$guard_transaction"
     if ! validate_runtime_guard_permit "$guard_transaction"; then
+        quarantine_runtime_activation_permit "$guard_transaction" || true
         fail "运行期开机许可与持久开机门不匹配"
         return 1
     fi
@@ -1124,8 +1250,1234 @@ PY
     fi
 }
 
+prepare_qweather_key_transition_plan() {
+    local expected_owner_uid=0 expected_owner_gid=0 runtime_group_gid plan_summary
+    if [ "$REQUIRE_WECHAT_READY" != 1 ]; then
+        if [ -n "$QWEATHER_PENDING_KEY_PATH" ]; then
+            fail "非正式激活不得携带 QWeather pending 私钥"
+            return 1
+        fi
+        return 0
+    fi
+    if [ -z "$QWEATHER_PENDING_KEY_PATH" ]; then
+        fail "正式 JWT 激活缺少 QWEATHER_PENDING_KEY_PATH"
+        return 1
+    fi
+    if [ "$ALLOW_NONROOT_TEST_RUNTIME_GUARD" = 1 ]; then
+        expected_owner_uid="$CONTROL_OWNER_UID"
+        expected_owner_gid="$CONTROL_OWNER_GID"
+    fi
+    runtime_group_gid="$(id -g "$RUNTIME_USER")"
+    if ! plan_summary="$($VENV_DIR/bin/python - \
+        "$STAGED_ENV_FILE" \
+        "$QWEATHER_PENDING_KEY_PATH" \
+        "$QWEATHER_PRIVATE_DIR" \
+        "$RELEASE_ID" \
+        "$expected_owner_uid" \
+        "$expected_owner_gid" \
+        "$runtime_group_gid" \
+        "$QWEATHER_KEY_PLAN" <<'PY'
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import stat
+import sys
+
+(
+    staged_env_raw,
+    pending_raw,
+    private_dir_raw,
+    release_id,
+    expected_owner_uid_raw,
+    expected_owner_gid_raw,
+    runtime_group_gid_raw,
+    plan_raw,
+) = sys.argv[1:]
+expected_owner_uid = int(expected_owner_uid_raw)
+expected_owner_gid = int(expected_owner_gid_raw)
+runtime_group_gid = int(runtime_group_gid_raw)
+
+if not re.fullmatch(r'[A-Za-z0-9._-]+', release_id):
+    raise SystemExit(1)
+if any(value != os.path.normpath(value) for value in (pending_raw, private_dir_raw, plan_raw)):
+    raise SystemExit(1)
+if any('\n' in value or '\r' in value or '\t' in value for value in sys.argv[1:]):
+    raise SystemExit(1)
+
+staged_env = Path(staged_env_raw)
+staged_stat = staged_env.lstat()
+if not stat.S_ISREG(staged_stat.st_mode) or stat.S_ISLNK(staged_stat.st_mode):
+    raise SystemExit(1)
+values = {}
+for raw_line in staged_env.read_text(encoding='utf-8').splitlines():
+    line = raw_line.strip()
+    if not line or line.startswith('#'):
+        continue
+    key, separator, value = line.partition('=')
+    if not separator or not key or key in values:
+        raise SystemExit(1)
+    values[key] = value
+if values.get('QWEATHER_AUTH_MODE', '').strip().lower() != 'jwt':
+    raise SystemExit(1)
+final_raw = values.get('QWEATHER_JWT_PRIVATE_KEY_PATH', '')
+if not final_raw or not os.path.isabs(final_raw) or final_raw != os.path.normpath(final_raw):
+    raise SystemExit(1)
+if '\n' in final_raw or '\r' in final_raw or '\t' in final_raw:
+    raise SystemExit(1)
+
+private_dir = Path(private_dir_raw)
+private_stat = private_dir.lstat()
+private_real = private_dir.resolve(strict=True)
+if (
+    not stat.S_ISDIR(private_stat.st_mode)
+    or stat.S_ISLNK(private_stat.st_mode)
+    or str(private_real) != private_dir_raw
+    or private_stat.st_uid != expected_owner_uid
+    or stat.S_IMODE(private_stat.st_mode) not in {0o700, 0o750}
+):
+    raise SystemExit(1)
+if stat.S_IMODE(private_stat.st_mode) == 0o700:
+    if private_stat.st_gid != expected_owner_gid:
+        raise SystemExit(1)
+elif private_stat.st_gid != runtime_group_gid:
+    raise SystemExit(1)
+
+pending = Path(pending_raw)
+final = Path(final_raw)
+expected_pending_name = f'.qweather-jwt.pending-{release_id}'
+if pending.name != expected_pending_name or pending.parent != private_dir:
+    raise SystemExit(1)
+if final.parent != private_dir or final == pending or final.name.startswith('.qweather-jwt.pending-'):
+    raise SystemExit(1)
+if pending.parent.resolve(strict=True) != private_real or final.parent.resolve(strict=True) != private_real:
+    raise SystemExit(1)
+
+
+def stable_read(path, *, mode, uid, gid):
+    flags = os.O_RDONLY | getattr(os, 'O_CLOEXEC', 0) | getattr(os, 'O_NOFOLLOW', 0)
+    descriptor = os.open(path, flags)
+    try:
+        before = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or stat.S_ISLNK(before.st_mode)
+            or stat.S_IMODE(before.st_mode) != mode
+            or before.st_uid != uid
+            or before.st_gid != gid
+            or before.st_nlink != 1
+            or before.st_size <= 0
+            or before.st_size > 16 * 1024
+        ):
+            raise SystemExit(1)
+        chunks = []
+        total = 0
+        while True:
+            chunk = os.read(descriptor, 4096)
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > 16 * 1024:
+                raise SystemExit(1)
+            chunks.append(chunk)
+        after = os.fstat(descriptor)
+        if (
+            before.st_dev,
+            before.st_ino,
+            before.st_mode,
+            before.st_uid,
+            before.st_gid,
+            before.st_nlink,
+            before.st_size,
+        ) != (
+            after.st_dev,
+            after.st_ino,
+            after.st_mode,
+            after.st_uid,
+            after.st_gid,
+            after.st_nlink,
+            after.st_size,
+        ):
+            raise SystemExit(1)
+        return b''.join(chunks), before
+    finally:
+        os.close(descriptor)
+
+
+pending_payload, pending_stat = stable_read(
+    pending,
+    mode=0o600,
+    uid=expected_owner_uid,
+    gid=expected_owner_gid,
+)
+digest = hashlib.sha256(pending_payload).hexdigest()
+try:
+    final.lstat()
+except FileNotFoundError:
+    action = 'create'
+    final_device_before = None
+    final_inode_before = None
+else:
+    final_payload, final_stat = stable_read(
+        final,
+        mode=0o640,
+        uid=expected_owner_uid,
+        gid=runtime_group_gid,
+    )
+    if hashlib.sha256(final_payload).hexdigest() != digest:
+        raise SystemExit(1)
+    action = 'reuse'
+    final_device_before = final_stat.st_dev
+    final_inode_before = final_stat.st_ino
+    if stat.S_IMODE(private_stat.st_mode) != 0o750 or private_stat.st_gid != runtime_group_gid:
+        raise SystemExit(1)
+
+plan = Path(plan_raw)
+if plan.parent.resolve(strict=True) != plan.parent or plan.exists() or plan.is_symlink():
+    raise SystemExit(1)
+payload = {
+    'version': 2,
+    'release_id': release_id,
+    'action': action,
+    'pending_path': pending_raw,
+    'final_path': final_raw,
+    'sha256': digest,
+    'pending_device': pending_stat.st_dev,
+    'pending_inode': pending_stat.st_ino,
+    'pending_nlink': pending_stat.st_nlink,
+    'pending_size': pending_stat.st_size,
+    'final_device_before': final_device_before,
+    'final_inode_before': final_inode_before,
+    'final_nlink_before': None if action == 'create' else final_stat.st_nlink,
+    'private_device_before': private_stat.st_dev,
+    'private_inode_before': private_stat.st_ino,
+    'private_uid_before': private_stat.st_uid,
+    'private_gid_before': private_stat.st_gid,
+    'private_mode_before': stat.S_IMODE(private_stat.st_mode),
+}
+encoded = (json.dumps(payload, sort_keys=True, separators=(',', ':')) + '\n').encode('utf-8')
+flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, 'O_CLOEXEC', 0)
+flags |= getattr(os, 'O_NOFOLLOW', 0)
+descriptor = os.open(plan, flags, 0o600)
+try:
+    view = memoryview(encoded)
+    while view:
+        written = os.write(descriptor, view)
+        if written <= 0:
+            raise OSError('short write')
+        view = view[written:]
+    os.fsync(descriptor)
+finally:
+    os.close(descriptor)
+directory = os.open(plan.parent, os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0))
+try:
+    os.fsync(directory)
+finally:
+    os.close(directory)
+print(f'{action}\t{final_raw}\t{digest}')
+PY
+    )"; then
+        fail "QWeather pending/final 私钥或转换计划校验失败"
+        return 1
+    fi
+    IFS=$'\t' read -r \
+        QWEATHER_KEY_TRANSITION_ACTION \
+        QWEATHER_FINAL_KEY_PATH \
+        QWEATHER_KEY_SHA256 <<< "$plan_summary"
+    if [ -z "$QWEATHER_KEY_TRANSITION_ACTION" ] \
+        || [ -z "$QWEATHER_FINAL_KEY_PATH" ] \
+        || [[ ! "$QWEATHER_KEY_SHA256" =~ ^[0-9a-f]{64}$ ]]; then
+        fail "QWeather 私钥转换计划摘要无效"
+        return 1
+    fi
+    QWEATHER_KEY_TRANSITION_REQUIRED=1
+    log "已耐久记录 QWeather 私钥转换计划: $QWEATHER_KEY_TRANSITION_ACTION"
+}
+
+qweather_key_fault() {
+    local point="$1"
+    if [ "$QWEATHER_KEY_TRANSITION_FAIL_AT" = "$point" ] \
+        || [ "$QWEATHER_KEY_TRANSITION_FAIL_AT" = "$point-cleanup" ]; then
+        fail "测试注入 QWeather 私钥转换故障: $point"
+        return 1
+    fi
+}
+
+verify_qweather_key_quiescence() {
+    local unit
+    RUNTIME_KEY_QUIESCENCE_PROVEN=0
+    for unit in "${SCHEDULER_UNITS[@]}" "${STOPPABLE_SERVICE_UNITS[@]}"; do
+        query_unit_load_state "$unit"
+        if [ "$UNIT_LOAD_STATE" = loaded ]; then
+            query_unit_active_state "$unit"
+            case "$UNIT_ACTIVE_STATE" in
+                active|activating|reloading|deactivating)
+                    fail "私钥提升前 systemd 单元仍在运行: $unit=$UNIT_ACTIVE_STATE"
+                    return 1
+                    ;;
+            esac
+        fi
+    done
+    verify_no_unmanaged_processes_after_quiesce
+    RUNTIME_KEY_QUIESCENCE_PROVEN=1
+}
+
+promote_qweather_key_after_quiesce() {
+    local expected_owner_uid=0 expected_owner_gid=0 runtime_group_gid
+    [ "$QWEATHER_KEY_TRANSITION_REQUIRED" -eq 1 ] || return 0
+    [ "$RUNTIME_QUIESCE_STARTED" -eq 1 ] || {
+        fail "QWeather 私钥只能在运行时完全静默后提升"
+        return 1
+    }
+    if [ "$ALLOW_NONROOT_TEST_RUNTIME_GUARD" = 1 ]; then
+        expected_owner_uid="$CONTROL_OWNER_UID"
+        expected_owner_gid="$CONTROL_OWNER_GID"
+    fi
+    runtime_group_gid="$(id -g "$RUNTIME_USER")"
+    verify_qweather_key_quiescence
+    qweather_key_fault before-promotion
+    if ! "$VENV_DIR/bin/python" - \
+        "$QWEATHER_KEY_PLAN" \
+        "$QWEATHER_KEY_TRANSITION_ACTION" \
+        "$QWEATHER_PENDING_KEY_PATH" \
+        "$QWEATHER_FINAL_KEY_PATH" \
+        "$QWEATHER_KEY_SHA256" \
+        "$expected_owner_uid" \
+        "$expected_owner_gid" \
+        "$runtime_group_gid" <<'PY'
+import hashlib
+import json
+import os
+from pathlib import Path
+import stat
+import sys
+
+(
+    plan_raw,
+    expected_action,
+    pending_raw,
+    final_raw,
+    expected_digest,
+    owner_uid_raw,
+    owner_gid_raw,
+    runtime_gid_raw,
+) = sys.argv[1:]
+owner_uid = int(owner_uid_raw)
+owner_gid = int(owner_gid_raw)
+runtime_gid = int(runtime_gid_raw)
+plan_path = Path(plan_raw)
+plan_stat = plan_path.lstat()
+if (
+    not stat.S_ISREG(plan_stat.st_mode)
+    or stat.S_ISLNK(plan_stat.st_mode)
+    or plan_stat.st_nlink != 1
+):
+    raise SystemExit(1)
+plan = json.loads(plan_path.read_text(encoding='utf-8'))
+if (
+    plan.get('version') != 2
+    or plan.get('action') != expected_action
+    or plan.get('pending_path') != pending_raw
+    or plan.get('final_path') != final_raw
+    or plan.get('sha256') != expected_digest
+):
+    raise SystemExit(1)
+
+
+def digest(path, *, expected_mode, expected_uid, expected_gid, expected_nlink):
+    descriptor = os.open(
+        path,
+        os.O_RDONLY | getattr(os, 'O_CLOEXEC', 0) | getattr(os, 'O_NOFOLLOW', 0),
+    )
+    try:
+        before = os.fstat(descriptor)
+        payload = b''
+        while True:
+            chunk = os.read(descriptor, 4096)
+            if not chunk:
+                break
+            payload += chunk
+            if len(payload) > 16 * 1024:
+                raise SystemExit(1)
+        after = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or stat.S_IMODE(before.st_mode) != expected_mode
+            or before.st_uid != expected_uid
+            or before.st_gid != expected_gid
+            or before.st_nlink != expected_nlink
+            or before.st_size <= 0
+            or before.st_ino != after.st_ino
+            or before.st_mode != after.st_mode
+            or before.st_nlink != after.st_nlink
+            or before.st_size != after.st_size
+        ):
+            raise SystemExit(1)
+        return hashlib.sha256(payload).hexdigest(), before
+    finally:
+        os.close(descriptor)
+
+
+pending = Path(pending_raw)
+final = Path(final_raw)
+private_stat = final.parent.lstat()
+if (
+    not stat.S_ISDIR(private_stat.st_mode)
+    or stat.S_ISLNK(private_stat.st_mode)
+    or (private_stat.st_dev, private_stat.st_ino)
+    != (plan.get('private_device_before'), plan.get('private_inode_before'))
+    or (private_stat.st_uid, private_stat.st_gid, stat.S_IMODE(private_stat.st_mode))
+    != (
+        plan.get('private_uid_before'),
+        plan.get('private_gid_before'),
+        plan.get('private_mode_before'),
+    )
+):
+    raise SystemExit(1)
+pending_digest, pending_stat = digest(
+    pending,
+    expected_mode=0o600,
+    expected_uid=owner_uid,
+    expected_gid=owner_gid,
+    expected_nlink=1,
+)
+if (
+    pending_digest != expected_digest
+    or plan.get('pending_nlink') != 1
+    or (pending_stat.st_dev, pending_stat.st_ino) != (
+    plan.get('pending_device'),
+    plan.get('pending_inode'),
+    )
+):
+    raise SystemExit(1)
+if expected_action == 'create':
+    if final.exists() or final.is_symlink():
+        raise SystemExit(1)
+    os.link(pending, final, follow_symlinks=False)
+    final_digest, final_stat = digest(
+        final,
+        expected_mode=0o600,
+        expected_uid=owner_uid,
+        expected_gid=owner_gid,
+        expected_nlink=2,
+    )
+    if final_digest != expected_digest or (final_stat.st_dev, final_stat.st_ino) != (
+        plan.get('pending_device'),
+        plan.get('pending_inode'),
+    ):
+        raise SystemExit(1)
+elif expected_action == 'reuse':
+    final_digest, final_stat = digest(
+        final,
+        expected_mode=0o640,
+        expected_uid=owner_uid,
+        expected_gid=runtime_gid,
+        expected_nlink=1,
+    )
+    if final_digest != expected_digest or (final_stat.st_dev, final_stat.st_ino) != (
+        plan.get('final_device_before'),
+        plan.get('final_inode_before'),
+    ):
+        raise SystemExit(1)
+else:
+    raise SystemExit(1)
+directory = os.open(final.parent, os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0))
+try:
+    os.fsync(directory)
+finally:
+    os.close(directory)
+PY
+    then
+        fail "QWeather 私钥提升前重校验或 no-clobber link 失败"
+        return 1
+    fi
+    if [ "$QWEATHER_KEY_TRANSITION_ACTION" = create ]; then
+        QWEATHER_KEY_FINAL_CREATED=1
+        write_durable_marker "$QWEATHER_KEY_FINAL_CREATED_MARKER" "$QWEATHER_FINAL_KEY_PATH"
+        qweather_key_fault after-link
+    fi
+    if ! "$VENV_DIR/bin/python" - \
+        "$QWEATHER_KEY_PLAN" \
+        "$QWEATHER_PENDING_KEY_PATH" \
+        "$QWEATHER_FINAL_KEY_PATH" \
+        "$QWEATHER_KEY_SHA256" \
+        "$QWEATHER_KEY_TRANSITION_ACTION" \
+        "$expected_owner_uid" \
+        "$expected_owner_gid" \
+        "$runtime_group_gid" <<'PY'
+import hashlib
+import json
+import os
+from pathlib import Path
+import stat
+import sys
+
+plan = json.loads(Path(sys.argv[1]).read_text(encoding='utf-8'))
+pending = Path(sys.argv[2])
+final = Path(sys.argv[3])
+expected_digest = sys.argv[4]
+action = sys.argv[5]
+owner_uid = int(sys.argv[6])
+owner_gid = int(sys.argv[7])
+runtime_gid = int(sys.argv[8])
+private_stat = final.parent.lstat()
+if (
+    plan.get('version') != 2
+    or not stat.S_ISDIR(private_stat.st_mode)
+    or stat.S_ISLNK(private_stat.st_mode)
+    or (private_stat.st_dev, private_stat.st_ino)
+    != (plan.get('private_device_before'), plan.get('private_inode_before'))
+    or (private_stat.st_uid, private_stat.st_gid, stat.S_IMODE(private_stat.st_mode))
+    != (
+        plan.get('private_uid_before'),
+        plan.get('private_gid_before'),
+        plan.get('private_mode_before'),
+    )
+):
+    raise SystemExit(1)
+
+
+def read_digest(path, *, expected_mode, expected_gid, expected_nlink):
+    descriptor = os.open(
+        path,
+        os.O_RDONLY | getattr(os, 'O_CLOEXEC', 0) | getattr(os, 'O_NOFOLLOW', 0),
+    )
+    try:
+        file_stat = os.fstat(descriptor)
+        payload = b''
+        while True:
+            chunk = os.read(descriptor, 4096)
+            if not chunk:
+                break
+            payload += chunk
+            if len(payload) > 16 * 1024:
+                raise SystemExit(1)
+        after = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(file_stat.st_mode)
+            or stat.S_IMODE(file_stat.st_mode) != expected_mode
+            or file_stat.st_uid != owner_uid
+            or file_stat.st_gid != expected_gid
+            or file_stat.st_nlink != expected_nlink
+            or file_stat.st_size <= 0
+            or (
+                file_stat.st_dev,
+                file_stat.st_ino,
+                file_stat.st_mode,
+                file_stat.st_nlink,
+                file_stat.st_size,
+            )
+            != (
+                after.st_dev,
+                after.st_ino,
+                after.st_mode,
+                after.st_nlink,
+                after.st_size,
+            )
+        ):
+            raise SystemExit(1)
+        return hashlib.sha256(payload).hexdigest(), file_stat
+    finally:
+        os.close(descriptor)
+
+
+pending_digest, pending_stat = read_digest(
+    pending,
+    expected_mode=0o600,
+    expected_gid=owner_gid,
+    expected_nlink=2 if action == 'create' else 1,
+)
+final_mode = 0o600 if action == 'create' else 0o640
+final_gid = owner_gid if action == 'create' else runtime_gid
+final_digest, final_stat = read_digest(
+    final,
+    expected_mode=final_mode,
+    expected_gid=final_gid,
+    expected_nlink=2 if action == 'create' else 1,
+)
+if pending_digest != expected_digest or final_digest != expected_digest:
+    raise SystemExit(1)
+if (pending_stat.st_dev, pending_stat.st_ino) != (
+    plan.get('pending_device'),
+    plan.get('pending_inode'),
+):
+    raise SystemExit(1)
+expected_final_identity = (
+    (plan.get('pending_device'), plan.get('pending_inode'))
+    if action == 'create'
+    else (plan.get('final_device_before'), plan.get('final_inode_before'))
+)
+if (final_stat.st_dev, final_stat.st_ino) != expected_final_identity:
+    raise SystemExit(1)
+pending.unlink()
+directory = os.open(final.parent, os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0))
+try:
+    os.fsync(directory)
+finally:
+    os.close(directory)
+PY
+    then
+        fail "QWeather pending 私钥 root-only 清理失败"
+        return 1
+    fi
+    QWEATHER_KEY_PENDING_CLEANED=1
+    write_durable_marker "$QWEATHER_KEY_PENDING_CLEANED_MARKER" "$QWEATHER_PENDING_KEY_PATH"
+    qweather_key_fault after-pending-unlink
+    if [ "$QWEATHER_KEY_TRANSITION_ACTION" = create ]; then
+        "$CHOWN_BIN" "root:$RUNTIME_GROUP" "$QWEATHER_FINAL_KEY_PATH"
+        chmod 0640 "$QWEATHER_FINAL_KEY_PATH"
+        "$CHOWN_BIN" "root:$RUNTIME_GROUP" "$QWEATHER_PRIVATE_DIR"
+        chmod 0750 "$QWEATHER_PRIVATE_DIR"
+        fsync_directory "$QWEATHER_PRIVATE_DIR"
+        qweather_key_fault after-permissions
+    fi
+    if ! "$VENV_DIR/bin/python" - \
+        "$QWEATHER_KEY_PLAN" \
+        "$QWEATHER_PENDING_KEY_PATH" \
+        "$QWEATHER_FINAL_KEY_PATH" \
+        "$QWEATHER_KEY_SHA256" \
+        "$QWEATHER_KEY_TRANSITION_ACTION" \
+        "$expected_owner_uid" \
+        "$runtime_group_gid" <<'PY'
+import hashlib
+import json
+import os
+from pathlib import Path
+import stat
+import sys
+
+plan = json.loads(Path(sys.argv[1]).read_text(encoding='utf-8'))
+pending = Path(sys.argv[2])
+final = Path(sys.argv[3])
+expected_digest = sys.argv[4]
+action = sys.argv[5]
+owner_uid = int(sys.argv[6])
+runtime_gid = int(sys.argv[7])
+if pending.exists() or pending.is_symlink():
+    raise SystemExit(1)
+descriptor = os.open(
+    final,
+    os.O_RDONLY | getattr(os, 'O_CLOEXEC', 0) | getattr(os, 'O_NOFOLLOW', 0),
+)
+try:
+    before = os.fstat(descriptor)
+    payload = b''
+    while True:
+        chunk = os.read(descriptor, 4096)
+        if not chunk:
+            break
+        payload += chunk
+        if len(payload) > 16 * 1024:
+            raise SystemExit(1)
+    after = os.fstat(descriptor)
+finally:
+    os.close(descriptor)
+expected_identity = (
+    (plan.get('pending_device'), plan.get('pending_inode'))
+    if action == 'create'
+    else (plan.get('final_device_before'), plan.get('final_inode_before'))
+)
+if (
+    not stat.S_ISREG(before.st_mode)
+    or stat.S_IMODE(before.st_mode) != 0o640
+    or before.st_uid != owner_uid
+    or before.st_gid != runtime_gid
+    or before.st_nlink != 1
+    or before.st_size <= 0
+    or hashlib.sha256(payload).hexdigest() != expected_digest
+    or (before.st_dev, before.st_ino) != expected_identity
+    or (before.st_dev, before.st_ino, before.st_mode, before.st_nlink, before.st_size)
+    != (after.st_dev, after.st_ino, after.st_mode, after.st_nlink, after.st_size)
+):
+    raise SystemExit(1)
+PY
+    then
+        fail "QWeather final 私钥终态校验失败"
+        return 1
+    fi
+    log "QWeather 私钥已在运行时静默后完成 $QWEATHER_KEY_TRANSITION_ACTION"
+}
+
+reconcile_qweather_key_plan() {
+    local transaction="$1" mode="$2" expected_owner_uid=0 expected_owner_gid=0 runtime_group_gid
+    local plan="$transaction/qweather-key-transition.json"
+    [ -e "$plan" ] || [ -L "$plan" ] || return 0
+    if [ "$ALLOW_NONROOT_TEST_RUNTIME_GUARD" = 1 ]; then
+        expected_owner_uid="$CONTROL_OWNER_UID"
+        expected_owner_gid="$CONTROL_OWNER_GID"
+    fi
+    runtime_group_gid="$(id -g "$RUNTIME_USER")"
+    if { [ "$mode" = rollback ] || [ "$mode" = pre-mutation ]; } \
+        && { [ "$QWEATHER_KEY_TRANSITION_FAIL_AT" = cleanup ] \
+            || [[ "$QWEATHER_KEY_TRANSITION_FAIL_AT" == *-cleanup ]]; }; then
+        fail "测试注入 QWeather 私钥回收故障"
+        return 1
+    fi
+    if ! "$VENV_DIR/bin/python" - \
+        "$plan" \
+        "$transaction" \
+        "$QWEATHER_PRIVATE_DIR" \
+        "$mode" \
+        "$expected_owner_uid" \
+        "$expected_owner_gid" \
+        "$runtime_group_gid" \
+        "$RUNTIME_KEY_QUIESCENCE_PROVEN" \
+        "$QWEATHER_KEY_TRANSITION_FAIL_AT" <<'PY'
+import hashlib
+import json
+import os
+from pathlib import Path
+import stat
+import sys
+
+plan_path = Path(sys.argv[1])
+transaction = Path(sys.argv[2]).resolve(strict=True)
+private_path = Path(sys.argv[3])
+private_stat = private_path.lstat()
+if not stat.S_ISDIR(private_stat.st_mode) or stat.S_ISLNK(private_stat.st_mode):
+    raise SystemExit(1)
+private_dir = private_path.resolve(strict=True)
+mode = sys.argv[4]
+owner_uid = int(sys.argv[5])
+owner_gid = int(sys.argv[6])
+runtime_gid = int(sys.argv[7])
+quiescence_proven = sys.argv[8] == '1'
+fault_point = sys.argv[9]
+if mode not in {'rollback', 'committed', 'pre-mutation'}:
+    raise SystemExit(1)
+if plan_path.parent.resolve(strict=True) != transaction:
+    raise SystemExit(1)
+plan_stat = plan_path.lstat()
+if (
+    not stat.S_ISREG(plan_stat.st_mode)
+    or stat.S_ISLNK(plan_stat.st_mode)
+    or stat.S_IMODE(plan_stat.st_mode) != 0o600
+    or plan_stat.st_uid != owner_uid
+    or plan_stat.st_gid != owner_gid
+    or plan_stat.st_nlink != 1
+):
+    raise SystemExit(1)
+plan = json.loads(plan_path.read_text(encoding='utf-8'))
+required = {
+    'version', 'release_id', 'action', 'pending_path', 'final_path', 'sha256',
+    'pending_device', 'pending_inode', 'pending_nlink', 'pending_size',
+    'final_device_before', 'final_inode_before', 'final_nlink_before',
+    'private_device_before', 'private_inode_before', 'private_uid_before',
+    'private_gid_before', 'private_mode_before',
+}
+if set(plan) != required or plan['version'] != 2 or plan['action'] not in {'create', 'reuse'}:
+    raise SystemExit(1)
+expected_digest = plan['sha256']
+
+
+def plain_int(value):
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+if (
+    not isinstance(expected_digest, str)
+    or len(expected_digest) != 64
+    or not all(character in '0123456789abcdef' for character in expected_digest)
+    or not plain_int(plan['pending_device'])
+    or not plain_int(plan['pending_inode'])
+    or plan['pending_nlink'] != 1
+    or not plain_int(plan['pending_size'])
+    or plan['pending_size'] <= 0
+    or not plain_int(plan['private_device_before'])
+    or not plain_int(plan['private_inode_before'])
+    or not plain_int(plan['private_uid_before'])
+    or not plain_int(plan['private_gid_before'])
+    or plan['private_mode_before'] not in {0o700, 0o750}
+):
+    raise SystemExit(1)
+if plan['action'] == 'create':
+    if (
+        plan['final_device_before'] is not None
+        or plan['final_inode_before'] is not None
+        or plan['final_nlink_before'] is not None
+    ):
+        raise SystemExit(1)
+else:
+    if (
+        not plain_int(plan['final_device_before'])
+        or not plain_int(plan['final_inode_before'])
+        or plan['final_nlink_before'] != 1
+    ):
+        raise SystemExit(1)
+if (private_stat.st_dev, private_stat.st_ino) != (
+    plan['private_device_before'],
+    plan['private_inode_before'],
+):
+    raise SystemExit(1)
+private_before = (
+    plan['private_uid_before'],
+    plan['private_gid_before'],
+    plan['private_mode_before'],
+)
+private_now = (
+    private_stat.st_uid,
+    private_stat.st_gid,
+    stat.S_IMODE(private_stat.st_mode),
+)
+private_promoted = (owner_uid, runtime_gid, 0o750)
+if mode == 'committed':
+    expected_private_states = {private_promoted} if plan['action'] == 'create' else {private_before}
+elif mode == 'pre-mutation' or plan['action'] == 'reuse':
+    expected_private_states = {private_before}
+else:
+    # create 可能在 chown 与 chmod 两条命令之间被 SIGKILL。
+    expected_private_states = {
+        private_before,
+        (owner_uid, runtime_gid, plan['private_mode_before']),
+        private_promoted,
+    }
+if private_now not in expected_private_states:
+    raise SystemExit(1)
+pending = Path(plan['pending_path'])
+final = Path(plan['final_path'])
+if (
+    pending.parent.resolve(strict=True) != private_dir
+    or final.parent.resolve(strict=True) != private_dir
+    or pending == final
+):
+    raise SystemExit(1)
+
+
+def read_file(path):
+    descriptor = os.open(
+        path,
+        os.O_RDONLY | getattr(os, 'O_CLOEXEC', 0) | getattr(os, 'O_NOFOLLOW', 0),
+    )
+    try:
+        file_stat = os.fstat(descriptor)
+        if not stat.S_ISREG(file_stat.st_mode) or file_stat.st_size <= 0:
+            raise SystemExit(1)
+        payload = b''
+        while True:
+            chunk = os.read(descriptor, 4096)
+            if not chunk:
+                break
+            payload += chunk
+            if len(payload) > 16 * 1024:
+                raise SystemExit(1)
+        after = os.fstat(descriptor)
+        if (
+            file_stat.st_dev,
+            file_stat.st_ino,
+            file_stat.st_mode,
+            file_stat.st_uid,
+            file_stat.st_gid,
+            file_stat.st_nlink,
+            file_stat.st_size,
+        ) != (
+            after.st_dev,
+            after.st_ino,
+            after.st_mode,
+            after.st_uid,
+            after.st_gid,
+            after.st_nlink,
+            after.st_size,
+        ):
+            raise SystemExit(1)
+        return hashlib.sha256(payload).hexdigest(), file_stat
+    finally:
+        os.close(descriptor)
+
+
+pending_identity = (plan['pending_device'], plan['pending_inode'])
+final_identity = (
+    pending_identity
+    if plan['action'] == 'create'
+    else (plan['final_device_before'], plan['final_inode_before'])
+)
+
+
+def require_final():
+    digest, file_stat = read_file(final)
+    if (
+        digest != expected_digest
+        or stat.S_IMODE(file_stat.st_mode) != 0o640
+        or file_stat.st_uid != owner_uid
+        or file_stat.st_gid != runtime_gid
+        or file_stat.st_nlink != 1
+        or (file_stat.st_dev, file_stat.st_ino) != final_identity
+    ):
+        raise SystemExit(1)
+
+
+def exists(path):
+    try:
+        path.lstat()
+    except FileNotFoundError:
+        return False
+    return True
+
+
+archive = transaction / 'qweather-key-recovery'
+if mode == 'committed':
+    require_final()
+    if exists(pending):
+        # 允许人工确认前由部署器重新 provision 同一把私钥，但它必须是独立、root-only 的新对象。
+        pending_digest, pending_stat = read_file(pending)
+        if (
+            pending_digest != expected_digest
+            or pending_stat.st_size != plan['pending_size']
+            or stat.S_IMODE(pending_stat.st_mode) != 0o600
+            or pending_stat.st_uid != owner_uid
+            or pending_stat.st_gid != owner_gid
+            or pending_stat.st_nlink != 1
+            or (pending_stat.st_dev, pending_stat.st_ino) == final_identity
+        ):
+            raise SystemExit(1)
+else:
+    if archive.exists() and (archive.is_symlink() or not archive.is_dir()):
+        raise SystemExit(1)
+    archive.mkdir(mode=0o700, exist_ok=True)
+    os.chown(archive, owner_uid, owner_gid)
+    os.chmod(archive, 0o700)
+
+    def inspect_controlled(path, expected_identity, allowed_nlinks):
+        digest, file_stat = read_file(path)
+        if (
+            digest != expected_digest
+            or (file_stat.st_dev, file_stat.st_ino) != expected_identity
+            or file_stat.st_nlink not in allowed_nlinks
+        ):
+            raise SystemExit(1)
+        if path == final and stat.S_IMODE(file_stat.st_mode) & 0o040 and not quiescence_proven:
+            raise SystemExit(1)
+        return file_stat
+
+    def secure_archive(path, name, expected_identity):
+        if not exists(path):
+            return
+        inspect_controlled(path, expected_identity, {1})
+        destination = archive / name
+        if destination.exists() or destination.is_symlink():
+            raise SystemExit(1)
+        os.chown(path, owner_uid, owner_gid)
+        os.chmod(path, 0o600)
+        os.replace(path, destination)
+
+    if mode == 'pre-mutation':
+        if plan['action'] == 'create' and exists(final):
+            # mutation 前从未创建 final；出现任何对象都属于并发或身份歧义，禁止删除。
+            raise SystemExit(1)
+        if plan['action'] == 'reuse':
+            require_final()
+        secure_archive(pending, 'pending.pem', pending_identity)
+        if exists(pending):
+            raise SystemExit(1)
+    elif plan['action'] == 'create':
+        final_exists = exists(final)
+        pending_exists = exists(pending)
+        if final_exists and pending_exists:
+            final_stat = inspect_controlled(final, final_identity, {2})
+            pending_stat = inspect_controlled(pending, pending_identity, {2})
+            if (final_stat.st_dev, final_stat.st_ino) != (
+                pending_stat.st_dev,
+                pending_stat.st_ino,
+            ):
+                raise SystemExit(1)
+            # 两个名称确认属于本计划的同一 inode 后，先解除 final 别名，再归档唯一剩余名称。
+            final.unlink()
+            directory = os.open(private_dir, os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0))
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
+            secure_archive(pending, 'pending.pem', pending_identity)
+        elif final_exists:
+            secure_archive(final, 'final-created.pem', final_identity)
+        elif pending_exists:
+            secure_archive(pending, 'pending.pem', pending_identity)
+        if exists(final) or exists(pending):
+            raise SystemExit(1)
+    else:
+        require_final()
+        secure_archive(pending, 'pending.pem', pending_identity)
+        if exists(pending):
+            raise SystemExit(1)
+        require_final()
+
+    expected_children = {
+        'pending.pem': pending_identity,
+        **({'final-created.pem': final_identity} if plan['action'] == 'create' else {}),
+    }
+    for child in archive.iterdir():
+        child_stat = child.lstat()
+        child_digest, stable_child_stat = read_file(child)
+        if (
+            child.name not in expected_children
+            or not stat.S_ISREG(child_stat.st_mode)
+            or stat.S_ISLNK(child_stat.st_mode)
+            or stat.S_IMODE(child_stat.st_mode) != 0o600
+            or child_stat.st_uid != owner_uid
+            or child_stat.st_gid != owner_gid
+            or child_stat.st_nlink != 1
+            or child_digest != expected_digest
+            or (stable_child_stat.st_dev, stable_child_stat.st_ino)
+            != expected_children[child.name]
+        ):
+            raise SystemExit(1)
+        descriptor = os.open(
+            child,
+            os.O_RDONLY | getattr(os, 'O_CLOEXEC', 0) | getattr(os, 'O_NOFOLLOW', 0),
+        )
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+
+    if mode == 'rollback' and plan['action'] == 'create':
+        # 先撤销 group traverse，再恢复属组；SIGKILL 中间态仍属于允许的安全集合。
+        os.chmod(private_dir, plan['private_mode_before'])
+        descriptor = os.open(private_dir, os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0))
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+        if fault_point == 'during-directory-restore':
+            raise SystemExit(1)
+        os.chown(private_dir, plan['private_uid_before'], plan['private_gid_before'])
+        restored = private_dir.lstat()
+        if (
+            (restored.st_dev, restored.st_ino)
+            != (plan['private_device_before'], plan['private_inode_before'])
+            or (
+                restored.st_uid,
+                restored.st_gid,
+                stat.S_IMODE(restored.st_mode),
+            )
+            != private_before
+        ):
+            raise SystemExit(1)
+
+for directory_path in {private_dir, transaction, archive if archive.exists() else transaction}:
+    descriptor = os.open(directory_path, os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0))
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+PY
+    then
+        fail "QWeather 私钥转换计划的 $mode 状态校验或回收失败"
+        return 1
+    fi
+}
+
+recover_qweather_key_for_rollback() {
+    [ "$QWEATHER_KEY_TRANSITION_REQUIRED" -eq 1 ] || return 0
+    if ! reconcile_qweather_key_plan "$TRANSACTION_DIR" rollback; then
+        return 1
+    fi
+    if [ ! -e "$QWEATHER_KEY_RECOVERED_MARKER" ]; then
+        write_durable_marker "$QWEATHER_KEY_RECOVERED_MARKER" rollback
+    fi
+    log "已在恢复旧单元前收回本轮 QWeather 私钥"
+}
+
+recover_qweather_key_before_mutation() {
+    [ "$QWEATHER_KEY_TRANSITION_REQUIRED" -eq 1 ] || return 0
+    if ! reconcile_qweather_key_plan "$TRANSACTION_DIR" pre-mutation; then
+        return 1
+    fi
+    if [ ! -e "$QWEATHER_KEY_RECOVERED_MARKER" ] \
+        && [ ! -L "$QWEATHER_KEY_RECOVERED_MARKER" ]; then
+        write_durable_marker "$QWEATHER_KEY_RECOVERED_MARKER" pre-mutation
+    fi
+    log "已收回尚未进入生产变更阶段的 QWeather pending 私钥"
+}
+
+qweather_ack_recovery_needs_quiescence() {
+    local transaction="$1" plan="$transaction/qweather-key-transition.json" state runtime_group_gid
+    runtime_group_gid="$(id -g "$RUNTIME_USER")"
+    if ! state="$($VENV_DIR/bin/python - \
+        "$plan" \
+        "$transaction" \
+        "$QWEATHER_PRIVATE_DIR" \
+        "$CONTROL_OWNER_UID" \
+        "$CONTROL_OWNER_GID" \
+        "$runtime_group_gid" <<'PY'
+import hashlib
+import json
+import os
+from pathlib import Path
+import stat
+import sys
+
+plan_path = Path(sys.argv[1])
+transaction = Path(sys.argv[2]).resolve(strict=True)
+private_path = Path(sys.argv[3])
+private_stat = private_path.lstat()
+if not stat.S_ISDIR(private_stat.st_mode) or stat.S_ISLNK(private_stat.st_mode):
+    raise SystemExit(1)
+private_dir = private_path.resolve(strict=True)
+owner_uid = int(sys.argv[4])
+owner_gid = int(sys.argv[5])
+runtime_gid = int(sys.argv[6])
+if plan_path.parent.resolve(strict=True) != transaction:
+    raise SystemExit(1)
+plan_stat = plan_path.lstat()
+if (
+    not stat.S_ISREG(plan_stat.st_mode)
+    or stat.S_ISLNK(plan_stat.st_mode)
+    or stat.S_IMODE(plan_stat.st_mode) != 0o600
+    or plan_stat.st_uid != owner_uid
+    or plan_stat.st_gid != owner_gid
+    or plan_stat.st_nlink != 1
+):
+    raise SystemExit(1)
+plan = json.loads(plan_path.read_text(encoding='utf-8'))
+required = {
+    'version', 'release_id', 'action', 'pending_path', 'final_path', 'sha256',
+    'pending_device', 'pending_inode', 'pending_nlink', 'pending_size',
+    'final_device_before', 'final_inode_before', 'final_nlink_before',
+    'private_device_before', 'private_inode_before', 'private_uid_before',
+    'private_gid_before', 'private_mode_before',
+}
+if set(plan) != required or plan['version'] != 2 or plan['action'] not in {'create', 'reuse'}:
+    raise SystemExit(1)
+if (
+    not isinstance(plan['pending_device'], int)
+    or isinstance(plan['pending_device'], bool)
+    or not isinstance(plan['pending_inode'], int)
+    or isinstance(plan['pending_inode'], bool)
+    or plan['pending_nlink'] != 1
+    or not isinstance(plan['sha256'], str)
+    or len(plan['sha256']) != 64
+    or not all(character in '0123456789abcdef' for character in plan['sha256'])
+):
+    raise SystemExit(1)
+if (private_stat.st_dev, private_stat.st_ino) != (
+    plan['private_device_before'],
+    plan['private_inode_before'],
+):
+    raise SystemExit(1)
+final = Path(plan['final_path'])
+if final.parent.resolve(strict=True) != private_dir:
+    raise SystemExit(1)
+try:
+    descriptor = os.open(
+        final,
+        os.O_RDONLY | getattr(os, 'O_CLOEXEC', 0) | getattr(os, 'O_NOFOLLOW', 0),
+    )
+except FileNotFoundError:
+    print('safe' if plan['action'] == 'create' else 'quiesce')
+    raise SystemExit(0)
+except OSError:
+    print('quiesce')
+    raise SystemExit(0)
+try:
+    before = os.fstat(descriptor)
+    payload = b''
+    while True:
+        chunk = os.read(descriptor, 4096)
+        if not chunk:
+            break
+        payload += chunk
+        if len(payload) > 16 * 1024:
+            print('quiesce')
+            raise SystemExit(0)
+    after = os.fstat(descriptor)
+finally:
+    os.close(descriptor)
+expected_identity = (
+    (plan['pending_device'], plan['pending_inode'])
+    if plan['action'] == 'create'
+    else (plan['final_device_before'], plan['final_inode_before'])
+)
+stable = (
+    stat.S_ISREG(before.st_mode)
+    and before.st_nlink in {1, 2}
+    and (before.st_dev, before.st_ino, before.st_mode, before.st_nlink, before.st_size)
+    == (after.st_dev, after.st_ino, after.st_mode, after.st_nlink, after.st_size)
+    and (before.st_dev, before.st_ino) == expected_identity
+    and hashlib.sha256(payload).hexdigest() == plan['sha256']
+)
+if not stable:
+    print('quiesce')
+elif plan['action'] == 'create':
+    print(
+        'safe'
+        if stat.S_IMODE(before.st_mode) == 0o600
+        and before.st_uid == owner_uid
+        and before.st_gid == owner_gid
+        and before.st_nlink in {1, 2}
+        else 'quiesce'
+    )
+else:
+    print(
+        'safe'
+        if stat.S_IMODE(before.st_mode) == 0o640
+        and before.st_uid == owner_uid
+        and before.st_gid == runtime_gid
+        and before.st_nlink == 1
+        else 'quiesce'
+    )
+PY
+    )"; then
+        fail "无法判定已确认事务的 QWeather 私钥静默要求"
+        return 2
+    fi
+    case "$state" in
+        quiesce) return 0 ;;
+        safe) return 1 ;;
+        *) fail "QWeather 私钥静默要求判定异常"; return 2 ;;
+    esac
+}
+
+reconcile_acknowledged_qweather_key_plan() {
+    local transaction="$1" mode=rollback marker_state=0 quiesce_state=0
+    [ -e "$transaction/qweather-key-transition.json" ] \
+        || [ -L "$transaction/qweather-key-transition.json" ] \
+        || return 0
+    transaction_requires_forward_only "$transaction" || marker_state=$?
+    if [ "$marker_state" -eq 2 ]; then
+        # 阶段方向不可信时保持最保守状态，先停入口并拒绝触碰任何私钥对象。
+        stop_units_best_effort >/dev/null 2>&1 || true
+        revoke_or_quarantine_runtime_activation_permit "$transaction" || true
+        return 1
+    fi
+    if [ "$marker_state" -eq 0 ] \
+        || [ -f "$transaction/COMMITTED" ] \
+        || [ -f "$transaction/POST_COMMIT_ATTENTION.txt" ]; then
+        mode=committed
+    elif [ ! -f "$transaction/ACTIVATION_STARTED" ] \
+        || [ -L "$transaction/ACTIVATION_STARTED" ]; then
+        mode=pre-mutation
+    fi
+    if [ "$mode" = rollback ]; then
+        qweather_ack_recovery_needs_quiescence "$transaction" || quiesce_state=$?
+        case "$quiesce_state" in
+            0)
+                if ! stop_units_best_effort; then
+                    revoke_or_quarantine_runtime_activation_permit "$transaction" || true
+                    fail "已确认事务无法证明业务单元和运行 UID 完全静默"
+                    return 1
+                fi
+                ;;
+            1) ;;
+            *)
+                stop_units_best_effort >/dev/null 2>&1 || true
+                revoke_or_quarantine_runtime_activation_permit "$transaction" || true
+                return 1
+                ;;
+        esac
+    fi
+    if ! reconcile_qweather_key_plan "$transaction" "$mode"; then
+        if [ "$mode" != pre-mutation ]; then
+            stop_units_best_effort >/dev/null 2>&1 || true
+            revoke_or_quarantine_runtime_activation_permit "$transaction" || true
+        fi
+        return 1
+    fi
+}
+
 stop_units_strictly() {
     local unit
+    RUNTIME_KEY_QUIESCENCE_PROVEN=0
     # 先关闭备份入口并等待已经开始的备份自然结束，期间保持公网服务与其他调度不变。
     query_unit_load_state case-weather-backup.timer
     if [ "$UNIT_LOAD_STATE" = loaded ]; then
@@ -1161,11 +2513,13 @@ stop_units_strictly() {
         fi
     done
     verify_no_unmanaged_processes_after_quiesce
+    RUNTIME_KEY_QUIESCENCE_PROVEN=1
 }
 
 stop_units_best_effort() {
     local failed=0
     local unit
+    RUNTIME_KEY_QUIESCENCE_PROVEN=0
     if query_unit_load_state case-weather-backup.timer; then
         if [ "$UNIT_LOAD_STATE" = loaded ]; then
             "$SYSTEMCTL_BIN" stop case-weather-backup.timer >/dev/null 2>&1 || failed=1
@@ -1212,6 +2566,10 @@ stop_units_best_effort() {
             esac
         fi
     done
+    verify_no_unmanaged_processes_after_quiesce || failed=1
+    if [ "$failed" -eq 0 ]; then
+        RUNTIME_KEY_QUIESCENCE_PROVEN=1
+    fi
     return "$failed"
 }
 
@@ -1546,6 +2904,63 @@ revoke_runtime_activation_permit() {
     fi
 }
 
+quarantine_runtime_activation_permit() {
+    local expected_transaction="$1" evidence marker
+    [ -e "$RUNTIME_BOOT_GUARD_FILE" ] \
+        || [ -L "$RUNTIME_BOOT_GUARD_FILE" ] \
+        || return 0
+    evidence="$RUNTIME_BOOT_GUARD_DIR/activation-permit.quarantined.$$"
+    if ! "$VENV_DIR/bin/python" - \
+        "$RUNTIME_BOOT_GUARD_FILE" \
+        "$evidence" \
+        "$RUNTIME_BOOT_GUARD_DIR" <<'PY'
+import os
+from pathlib import Path
+import stat
+import sys
+
+source = Path(sys.argv[1])
+destination = Path(sys.argv[2])
+runtime_dir = Path(sys.argv[3])
+directory_stat = runtime_dir.lstat()
+if (
+    not stat.S_ISDIR(directory_stat.st_mode)
+    or stat.S_ISLNK(directory_stat.st_mode)
+    or source.parent != runtime_dir
+    or destination.parent != runtime_dir
+    or destination.exists()
+    or destination.is_symlink()
+):
+    raise SystemExit(1)
+source.lstat()
+os.rename(source, destination)
+descriptor = os.open(runtime_dir, os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0))
+try:
+    os.fsync(descriptor)
+finally:
+    os.close(descriptor)
+PY
+    then
+        fail "运行期开机许可无法从生效路径安全隔离"
+        return 1
+    fi
+    marker="$expected_transaction/RUNTIME_PERMIT_QUARANTINED.$$"
+    write_durable_marker \
+        "$marker" \
+        "$(printf 'active_path=%s\nevidence_path=%s' \
+            "$RUNTIME_BOOT_GUARD_FILE" \
+            "$evidence")"
+    log "已将无效或错配的运行期开机许可移出生效路径: $evidence" >&2
+}
+
+revoke_or_quarantine_runtime_activation_permit() {
+    local expected_transaction="$1"
+    if revoke_runtime_activation_permit "$expected_transaction"; then
+        return 0
+    fi
+    quarantine_runtime_activation_permit "$expected_transaction"
+}
+
 verify_no_retired_processes() {
     local pattern rc
     for pattern in \
@@ -1605,6 +3020,17 @@ verify_no_unmanaged_processes_after_quiesce() {
         rc=$?
         if [ "$rc" -ne 1 ]; then
             fail "无法确认受管备份进程已静默: $pattern"
+            return 1
+        fi
+    fi
+    # argv 模式只能发现已知旧进程。安全边界必须枚举运行 UID，阻止改名或逃逸进程读取新私钥。
+    if "$PGREP_BIN" -u "$RUNTIME_USER" >/dev/null 2>&1; then
+        fail "运行账户仍有未归属进程，拒绝授予或回收运行组可读私钥"
+        return 1
+    else
+        rc=$?
+        if [ "$rc" -ne 1 ]; then
+            fail "无法完整枚举运行账户进程，拒绝继续私钥转换"
             return 1
         fi
     fi
@@ -2156,7 +3582,16 @@ validate_formal_release_identity() {
 }
 
 compute_formal_release_config_fingerprint() {
-    "$VENV_DIR/bin/python" - "$ENV_FILE" <<'PY'
+    local qweather_key_owner_uid=0
+    local qweather_key_group_gid=""
+    if [ "$ALLOW_NONROOT_TEST_RUNTIME_GUARD" = 1 ]; then
+        qweather_key_owner_uid="$CONTROL_OWNER_UID"
+    fi
+    qweather_key_group_gid="$(id -g "$RUNTIME_USER")"
+    "$VENV_DIR/bin/python" - \
+        "$ENV_FILE" \
+        "$qweather_key_owner_uid" \
+        "$qweather_key_group_gid" <<'PY'
 import hashlib
 import json
 import os
@@ -2164,6 +3599,8 @@ import stat
 import sys
 
 path = sys.argv[1]
+expected_key_owner_uid = int(sys.argv[2])
+expected_key_group_gid = int(sys.argv[3])
 # 指纹只绑定会改变 QWeather 请求、预算或正式快照判定的天气配置。
 # 微信、推送、GIS 与公开域名轮换不能获得第二次自动烟测机会。
 keys = (
@@ -2222,7 +3659,9 @@ def private_key_digest(key_path):
         before = os.fstat(descriptor)
         if (
             not stat.S_ISREG(before.st_mode)
-            or stat.S_IMODE(before.st_mode) != 0o600
+            or stat.S_IMODE(before.st_mode) != 0o640
+            or before.st_uid != expected_key_owner_uid
+            or before.st_gid != expected_key_group_gid
             or before.st_size <= 0
             or before.st_size > 16 * 1024
         ):
@@ -2397,16 +3836,25 @@ PY
 }
 
 preflight_formal_qweather_jwt_runtime() {
-    local state
+    local state qweather_key_owner_uid=0 qweather_key_group_gid=""
     [ "$REQUIRE_WECHAT_READY" = 1 ] || return 0
+    if [ "$ALLOW_NONROOT_TEST_RUNTIME_GUARD" = 1 ]; then
+        qweather_key_owner_uid="$CONTROL_OWNER_UID"
+    fi
+    qweather_key_group_gid="$(id -g "$RUNTIME_USER")"
     if ! state="$(
         cd "$APP_DIR"
-        runtime_exec "$VENV_DIR/bin/python" - <<'PY'
+        runtime_exec "$VENV_DIR/bin/python" - \
+            "$qweather_key_owner_uid" \
+            "$qweather_key_group_gid" <<'PY'
 import os
 import stat
+import sys
 from pathlib import Path
 
 try:
+    expected_key_owner_uid = int(sys.argv[1])
+    expected_key_group_gid = int(sys.argv[2])
     from core.app import create_app
     from services.qweather_auth import get_qweather_request_headers
 
@@ -2424,8 +3872,11 @@ try:
         key_stat = os.stat(key_path, follow_symlinks=False)
         if (
             not stat.S_ISREG(key_stat.st_mode)
-            or stat.S_IMODE(key_stat.st_mode) != 0o600
-            or key_stat.st_uid != os.geteuid()
+            or stat.S_IMODE(key_stat.st_mode) != 0o640
+            or key_stat.st_uid != expected_key_owner_uid
+            or key_stat.st_gid != expected_key_group_gid
+            or expected_key_group_gid
+            not in {os.getegid(), *os.getgroups()}
         ):
             raise RuntimeError('owner-or-mode')
         headers = get_qweather_request_headers(
@@ -2828,6 +4279,8 @@ prepare_formal_smoke_receipt() {
         "$(printf 'release_commit=%s\nconfig_fingerprint=%s' \
             "$FORMAL_RELEASE_COMMIT" \
             "$FORMAL_RELEASE_CONFIG_FINGERPRINT")"
+    # forward-only 标记必须早于 started receipt，覆盖写入失败、sync 失败和 SIGKILL 窗口。
+    record_forward_only_phase formal-smoke-started
     write_durable_marker \
         "$started_file" \
         "$(printf 'started_at=%s\nformal_smoke_binding=%s\nformal_smoke_token_sha256=%s\nformal_smoke_lease_token_sha256=%s\n%s' \
@@ -2947,8 +4400,8 @@ run_formal_cache_smoke() {
 
 start_new_release() {
     "$SYSTEMCTL_BIN" enable case-weather.service
-    # 从公网服务启动这一刻起，可能已有用户写入，后续失败只允许向前修复。
-    FORWARD_ONLY=1
+    # 公网启动阶段标记先耐久落盘，覆盖 restart 后到 COMMITTED 之间的进程崩溃。
+    record_forward_only_phase public-service-start
     "$SYSTEMCTL_BIN" restart case-weather.service
     "$SYSTEMCTL_BIN" is-active --quiet case-weather.service
     wait_for_health "$HEALTH_URL"
@@ -3558,12 +5011,15 @@ restore_backup_timer_state_only() {
 }
 
 rollback_release() {
-    local failed=0
+    local failed=0 runtime_permit_revoke_status=0
     log "激活失败，开始恢复部署前状态"
     set +e
     if [ "$RUNTIME_QUIESCE_STARTED" -eq 0 ]; then
         # 只触碰过 backup timer 时，不停止公网服务或其他调度。
-        restore_backup_timer_state_only || failed=1
+        recover_qweather_key_before_mutation || failed=1
+        if [ "$failed" -eq 0 ]; then
+            restore_backup_timer_state_only || failed=1
+        fi
         if [ "$failed" -eq 0 ]; then
             durably_sync_release_state rollback || failed=1
         fi
@@ -3575,10 +5031,15 @@ rollback_release() {
         fi
         set -e
         if [ "$failed" -ne 0 ]; then
+            revoke_or_quarantine_runtime_activation_permit "$TRANSACTION_DIR" \
+                || runtime_permit_revoke_status=$?
             {
                 echo '发布在运行时静默前失败，backup timer 未能完整恢复。'
                 echo "事务目录: $TRANSACTION_DIR"
                 echo '公网应用与其他调度未被停止，请人工核对备份调度。'
+                if [ "$runtime_permit_revoke_status" -ne 0 ]; then
+                    echo '运行期开机许可未能可靠撤销，请保持全部业务单元停止。'
+                fi
             } > "$FAILURE_MARKER"
             return 1
         fi
@@ -3588,6 +5049,8 @@ rollback_release() {
     if ! stop_units_best_effort; then
         failed=1
     fi
+    # 私钥必须先回到 root-only 事务归档，之后才允许恢复任何旧单元。
+    recover_qweather_key_for_rollback || failed=1
     if [ "$failed" -eq 0 ]; then
         restore_database || failed=1
         restore_backup_runtime_environment || failed=1
@@ -3610,11 +5073,16 @@ rollback_release() {
     set -e
 
     if [ "$failed" -ne 0 ]; then
+        revoke_or_quarantine_runtime_activation_permit "$TRANSACTION_DIR" \
+            || runtime_permit_revoke_status=$?
         stop_units_best_effort >/dev/null 2>&1 || true
         {
             echo '自动回滚未完整成功。全部业务单元已尽力停止。'
             echo "事务目录: $TRANSACTION_DIR"
             echo '请人工核对数据库、current 链接和 systemd unit 后再启动服务。'
+            if [ "$runtime_permit_revoke_status" -ne 0 ]; then
+                echo '运行期开机许可未能可靠撤销，禁止尝试启动业务单元。'
+            fi
         } > "$FAILURE_MARKER"
         log "回滚失败，已写入人工恢复标记: $FAILURE_MARKER" >&2
         return 1
@@ -3628,13 +5096,25 @@ on_exit() {
     local forward_quiesce_status=0
     local forward_gate_status=0
     local forward_sync_status=0
-    local marker_status=0
+    local marker_status=0 forward_marker_status=0 pre_mutation_recovery_status=0
     local marker_payload
     trap - EXIT INT TERM HUP
     stop_candidate_release
     archive_backup_validation_artifacts || true
     if [ "$rc" -eq 0 ]; then
         exit 0
+    fi
+    if [ -d "$TRANSACTION_DIR" ] && [ ! -L "$TRANSACTION_DIR" ]; then
+        transaction_requires_forward_only "$TRANSACTION_DIR" \
+            || forward_marker_status=$?
+        case "$forward_marker_status" in
+            0) FORWARD_ONLY=1 ;;
+            1) ;;
+            *)
+                # 损坏或歧义的阶段证据不得触发回滚，保留开机门并进入停机确认流程。
+                FORWARD_ONLY=1
+                ;;
+        esac
     fi
     if [ "$COMMITTED" -eq 1 ]; then
         repair_release_timers_best_effort || timer_repair_status=$?
@@ -3668,7 +5148,8 @@ on_exit() {
                 FORMAL_NETWORK_GATE_OPEN=0
             fi
         fi
-        revoke_runtime_activation_permit "$TRANSACTION_DIR" || forward_quiesce_status=1
+        revoke_or_quarantine_runtime_activation_permit "$TRANSACTION_DIR" \
+            || forward_quiesce_status=1
         durably_sync_release_state forward || forward_sync_status=$?
         marker_payload="$(
             echo '唯一一次正式天气请求已经开始，或公网服务已经尝试启动；本次保留新数据库、环境、代码入口与 systemd unit。'
@@ -3696,6 +5177,23 @@ on_exit() {
         exit "$rc"
     fi
     if [ "$MUTATION_STARTED" -eq 0 ]; then
+        if [ "$QWEATHER_KEY_TRANSITION_REQUIRED" -eq 1 ]; then
+            recover_qweather_key_before_mutation || pre_mutation_recovery_status=$?
+            if [ "$pre_mutation_recovery_status" -eq 0 ]; then
+                write_durable_marker "$ROLLED_BACK_MARKER" pre-mutation \
+                    || pre_mutation_recovery_status=$?
+            fi
+            if [ "$pre_mutation_recovery_status" -ne 0 ]; then
+                marker_payload="$(
+                    echo 'QWeather 私钥转换计划已落盘，但生产变更尚未开始，pending 私钥未能安全回收到 root-only 事务归档。'
+                    echo "事务目录: $TRANSACTION_DIR"
+                    echo '请保持 pending/final 文件原状，核对设备号、inode、所有者和权限后显式确认本事务。'
+                )"
+                write_durable_marker "$FAILURE_MARKER" "$marker_payload" \
+                    || exit 70
+                exit 70
+            fi
+        fi
         exit "$rc"
     fi
     if rollback_release; then
@@ -3715,6 +5213,9 @@ validate_absolute_path ENV_FILE "$ENV_FILE"
 validate_absolute_path STAGED_ENV_FILE "$STAGED_ENV_FILE"
 validate_absolute_path UNIT_DIR "$UNIT_DIR"
 validate_absolute_path RUNTIME_BOOT_GUARD_DIR "$RUNTIME_BOOT_GUARD_DIR"
+if [ -n "$QWEATHER_PENDING_KEY_PATH" ]; then
+    validate_absolute_path QWEATHER_PENDING_KEY_PATH "$QWEATHER_PENDING_KEY_PATH"
+fi
 validate_runtime_boot_guard_location
 if [ -n "$RECOVERY_ACKNOWLEDGED_TRANSACTION" ]; then
     validate_absolute_path RECOVERY_ACKNOWLEDGED_TRANSACTION "$RECOVERY_ACKNOWLEDGED_TRANSACTION"
@@ -3788,6 +5289,15 @@ case "$REQUIRE_WECHAT_READY" in
     0|1) ;;
     *) echo 'REQUIRE_WECHAT_READY 必须是 0 或 1' >&2; exit 2 ;;
 esac
+case "$QWEATHER_KEY_TRANSITION_FAIL_AT" in
+    ''|after-plan|before-promotion|after-link|after-pending-unlink|after-permissions|during-directory-restore|cleanup|after-plan-cleanup|after-link-cleanup|after-pending-unlink-cleanup|after-permissions-cleanup) ;;
+    *) echo 'QWEATHER_KEY_TRANSITION_FAIL_AT 测试故障点无效' >&2; exit 2 ;;
+esac
+if [ -n "$QWEATHER_KEY_TRANSITION_FAIL_AT" ] \
+    && [ "$ALLOW_NONROOT_TEST_RUNTIME_GUARD" != 1 ]; then
+    echo '生产激活禁止注入 QWeather 私钥转换故障' >&2
+    exit 2
+fi
 if [[ ! "$RUNTIME_USER" =~ ^[a-z_][a-z0-9_-]*$ ]] \
     || [[ ! "$RUNTIME_GROUP" =~ ^[a-z_][a-z0-9_-]*$ ]]; then
     echo '运行账户或组名格式异常' >&2
@@ -3869,6 +5379,8 @@ mkdir -p "$TRANSACTION_DIR"
 fsync_directory "$TRANSACTION_ROOT"
 capture_previous_state
 durably_checkpoint_recovery_materials captured-state
+prepare_qweather_key_transition_plan
+qweather_key_fault after-plan
 verify_activation_guard_dropins
 validate_backup_database_config
 DATABASE_FILE="$(resolve_database_file "$STAGED_ENV_FILE")"
@@ -3882,6 +5394,7 @@ write_durable_marker "$STARTED_MARKER" "$NEW_RELEASE"
 MUTATION_STARTED=1
 prepare_activation_boot_guard
 stop_units_strictly
+promote_qweather_key_after_quiesce
 backup_environment
 backup_backup_runtime_environment
 backup_database
@@ -3924,6 +5437,8 @@ chmod 0600 "$STATE_DIR/deployments/current-release.next.$$"
 atomic_replace \
     "$STATE_DIR/deployments/current-release.next.$$" \
     "$STATE_DIR/deployments/current-release"
+# 私钥与目录身份先验证为可提交态；失败由 durable forward-only 路径停机并保留开机门。
+reconcile_qweather_key_plan "$TRANSACTION_DIR" committed
 COMMITTED=1
 start_release_timers
 verify_release_state

@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """候选发布配置 readiness 测试。"""
 
+import builtins
 import hashlib
 import json
 import os
@@ -11,6 +12,9 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from cryptography.hazmat.primitives.asymmetric.rsa import generate_private_key
 
 import scripts.validate_release_env as release_validator
 from scripts.validate_release_env import (
@@ -45,6 +49,46 @@ _PRIVACY_VERSION_ARTIFACTS = {
     "WECHAT_PRIVACY_PAGE_SHA256",
     "WECHAT_HEALTH_CONSENT_PAGE_SHA256",
 }
+
+
+def _write_ed25519_private_key(path, mode):
+    path.write_bytes(
+        Ed25519PrivateKey.generate().private_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PrivateFormat.PKCS8,
+            encryption_algorithm=serialization.NoEncryption(),
+        )
+    )
+    path.chmod(mode)
+    return path
+
+
+def _write_rsa_private_key(path, mode):
+    path.write_bytes(
+        generate_private_key(public_exponent=65537, key_size=2048).private_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PrivateFormat.PKCS8,
+            encryption_algorithm=serialization.NoEncryption(),
+        )
+    )
+    path.chmod(mode)
+    return path
+
+
+def _qweather_test_identity(**overrides):
+    values = {
+        "qweather_private_key_expected_owner_uid": os.getuid(),
+        "qweather_private_key_expected_owner_gid": os.getgid(),
+        "qweather_private_key_expected_runtime_group_gid": os.getgid(),
+    }
+    values.update(overrides)
+    return values
+
+
+def _validate_qweather_env(path, **kwargs):
+    identity = _qweather_test_identity()
+    identity.update(kwargs)
+    return validate_release_env(path, **identity)
 
 
 def _git(repo, *args):
@@ -172,8 +216,7 @@ def _write_env(tmp_path, extra=""):
 
 def _formal_qweather_env(tmp_path):
     private_key = tmp_path / "qweather-formal-private.pem"
-    private_key.write_text("private-key-material", encoding="utf-8")
-    private_key.chmod(0o600)
+    _write_ed25519_private_key(private_key, 0o640)
     return (
         "QWEATHER_AUTH_MODE=jwt\n"
         "QWEATHER_KEY=\n"
@@ -404,7 +447,7 @@ def test_validator_requires_all_wechat_values_for_formal_release(tmp_path):
         "FEATURE_HEAT_EXPOSURE_GIS=1\n"
         + _formal_qweather_env(tmp_path),
     )
-    ready_result = validate_release_env(ready, require_wechat=True)
+    ready_result = _validate_qweather_env(ready, require_wechat=True)
     assert ready_result["ok"] is True
     assert ready_result["wechat_ready"] is True
 
@@ -433,7 +476,7 @@ def test_formal_validator_requires_jwt_and_matching_public_identifiers(tmp_path)
     assert any("清空旧 QWEATHER_KEY" in error for error in api_key_result["errors"])
 
     mismatch = _formal_qweather_env(tmp_path) + "QWEATHER_EXPECTED_KID=other-kid\n"
-    mismatch_result = validate_release_env(
+    mismatch_result = _validate_qweather_env(
         _write_env(tmp_path, wechat + mismatch),
         require_wechat=True,
     )
@@ -565,14 +608,14 @@ def test_formal_server_validator_requires_gis_push_and_audit_policy(tmp_path):
         f"WX_MINIPROGRAM_SESSION_SECRET={'s' * 32}\n"
         + _formal_qweather_env(tmp_path)
     )
-    first_release = validate_release_env(
+    first_release = _validate_qweather_env(
         _write_env(tmp_path, base + "FEATURE_HEAT_EXPOSURE_GIS=1\n"),
         require_wechat=True,
     )
     assert first_release["ok"] is True
     assert first_release["wxpusher_ready"] is False
 
-    disabled_gis = validate_release_env(
+    disabled_gis = _validate_qweather_env(
         _write_env(
             tmp_path,
             base
@@ -586,7 +629,7 @@ def test_formal_server_validator_requires_gis_push_and_audit_policy(tmp_path):
         for error in disabled_gis["errors"]
     )
 
-    enabled_push = validate_release_env(
+    enabled_push = _validate_qweather_env(
         _write_env(
             tmp_path,
             base
@@ -599,7 +642,7 @@ def test_formal_server_validator_requires_gis_push_and_audit_policy(tmp_path):
     assert enabled_push["ok"] is False
     assert any("FEATURE_WXPUSHER=0" in error for error in enabled_push["errors"])
 
-    enabled_audit = validate_release_env(
+    enabled_audit = _validate_qweather_env(
         _write_env(
             tmp_path,
             base
@@ -1040,8 +1083,7 @@ def test_validator_rejects_noncanonical_qweather_api_bases_without_crashing(tmp_
 
 def test_validator_matches_qweather_jwt_host_path_and_private_key_rules(tmp_path):
     private_key = tmp_path / "qweather-private.pem"
-    private_key.write_text("private-key-material", encoding="utf-8")
-    private_key.chmod(0o600)
+    _write_ed25519_private_key(private_key, 0o640)
 
     def jwt_env(name, api_base, key_path=private_key):
         path = tmp_path / name
@@ -1058,20 +1100,20 @@ def test_validator_matches_qweather_jwt_host_path_and_private_key_rules(tmp_path
         )
         return path
 
-    ready = validate_release_env(
+    ready = _validate_qweather_env(
         jwt_env("ready.env", "https://unit-test.qweatherapi.com/v7")
     )
     assert ready["ok"] is True
     assert ready["weather_ready"] is True
 
-    invalid_host = validate_release_env(
+    invalid_host = _validate_qweather_env(
         jwt_env("invalid-host.env", "https://example.com/v7")
     )
     assert invalid_host["ok"] is False
     assert invalid_host["weather_ready"] is False
     assert any("API Host" in error for error in invalid_host["errors"])
 
-    missing_key = validate_release_env(
+    missing_key = _validate_qweather_env(
         jwt_env(
             "missing-key.env",
             "https://unit-test.qweatherapi.com/v7",
@@ -1082,18 +1124,18 @@ def test_validator_matches_qweather_jwt_host_path_and_private_key_rules(tmp_path
     assert any("不存在" in error for error in missing_key["errors"])
 
     private_key.chmod(0o644)
-    open_permissions = validate_release_env(
+    open_permissions = _validate_qweather_env(
         jwt_env("open-key.env", "https://unit-test.qweatherapi.com/v7")
     )
     assert open_permissions["ok"] is False
-    assert any("0600" in error for error in open_permissions["errors"])
+    assert any("0640" in error for error in open_permissions["errors"])
 
-    private_key.chmod(0o400)
-    read_only_permissions = validate_release_env(
+    private_key.chmod(0o600)
+    read_only_permissions = _validate_qweather_env(
         jwt_env("read-only-key.env", "https://unit-test.qweatherapi.com/v7")
     )
     assert read_only_permissions["ok"] is False
-    assert any("0600" in error for error in read_only_permissions["errors"])
+    assert any("0640" in error for error in read_only_permissions["errors"])
 
 
 def test_qweather_jwt_private_key_rejects_symlink_and_read_time_change(
@@ -1101,8 +1143,7 @@ def test_qweather_jwt_private_key_rejects_symlink_and_read_time_change(
     monkeypatch,
 ):
     private_key = tmp_path / "qweather-private.pem"
-    private_key.write_bytes(b"private-key-material")
-    private_key.chmod(0o600)
+    _write_ed25519_private_key(private_key, 0o640)
     linked_key = tmp_path / "linked-private.pem"
     linked_key.symlink_to(private_key)
 
@@ -1119,7 +1160,7 @@ def test_qweather_jwt_private_key_rejects_symlink_and_read_time_change(
             "REDIS_URL=redis://127.0.0.1:6379/0\n",
             encoding="utf-8",
         )
-        return validate_release_env(path)
+        return _validate_qweather_env(path)
 
     linked_result = validate(linked_key)
     assert linked_result["ok"] is False
@@ -1146,6 +1187,327 @@ def test_qweather_jwt_private_key_rejects_symlink_and_read_time_change(
     changed_result = validate(private_key)
     assert changed_result["ok"] is False
     assert any("读取期间发生变化" in error for error in changed_result["errors"])
+
+
+def _write_pending_qweather_env(tmp_path, final_path, name="pending-jwt.env"):
+    path = tmp_path / name
+    path.write_text(
+        "PUBLIC_BASE_URL=https://api.example.com\n"
+        "WECHAT_FORMAL_RUNTIME=0\n"
+        "QWEATHER_AUTH_MODE=jwt\n"
+        "QWEATHER_API_BASE=https://unit-test.qweatherapi.com/v7\n"
+        "QWEATHER_JWT_KID=test-kid\n"
+        "QWEATHER_JWT_PROJECT_ID=test-project\n"
+        f"QWEATHER_JWT_PRIVATE_KEY_PATH={final_path}\n"
+        "REDIS_URL=redis://127.0.0.1:6379/0\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+def test_qweather_private_key_production_identity_defaults_are_fixed(monkeypatch):
+    monkeypatch.setattr(
+        release_validator.grp,
+        "getgrnam",
+        lambda name: SimpleNamespace(gr_gid=4321),
+    )
+
+    identity, error = release_validator._resolve_qweather_private_key_identity()
+
+    assert error is None
+    assert identity == (0, 0, 4321)
+
+
+def test_qweather_ed25519_parser_has_offline_stdlib_fallback(tmp_path, monkeypatch):
+    ed25519_key = _write_ed25519_private_key(
+        tmp_path / "ed25519-private.pem",
+        0o600,
+    ).read_bytes()
+    rsa_key = _write_rsa_private_key(
+        tmp_path / "rsa-private.pem",
+        0o600,
+    ).read_bytes()
+    real_import = builtins.__import__
+
+    def import_without_cryptography(name, *args, **kwargs):
+        if name == "cryptography" or name.startswith("cryptography."):
+            raise ImportError("test-only cryptography absence")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", import_without_cryptography)
+
+    assert release_validator._is_pkcs8_ed25519_private_key(ed25519_key) is True
+    assert release_validator._is_pkcs8_ed25519_private_key(rsa_key) is False
+
+
+@pytest.mark.parametrize(
+    "scope,identity_override,expected_error",
+    (
+        (
+            "pending",
+            {"qweather_private_key_expected_owner_uid": os.getuid() + 1},
+            "所有者",
+        ),
+        (
+            "pending",
+            {"qweather_private_key_expected_owner_gid": os.getgid() + 1},
+            "组必须严格为 root",
+        ),
+        (
+            "final",
+            {"qweather_private_key_expected_owner_uid": os.getuid() + 1},
+            "所有者",
+        ),
+        (
+            "final",
+            {
+                "qweather_private_key_expected_runtime_group_gid": (
+                    os.getgid() + 1
+                )
+            },
+            "匹配运行组",
+        ),
+    ),
+)
+def test_qweather_private_keys_reject_wrong_owner_or_group(
+    tmp_path,
+    scope,
+    identity_override,
+    expected_error,
+):
+    root = tmp_path.resolve()
+    final_key = _write_ed25519_private_key(root / "qweather-runtime.pem", 0o640)
+    pending_key = _write_ed25519_private_key(
+        root / ".qweather-jwt.pending-owner-group",
+        0o600,
+    )
+    env_path = _write_pending_qweather_env(root, final_key)
+    kwargs = dict(identity_override)
+    if scope == "pending":
+        kwargs["qweather_private_key_pending_path"] = pending_key
+
+    result = _validate_qweather_env(env_path, **kwargs)
+    errors = "\n".join(result["errors"])
+
+    assert result["ok"] is False
+    assert expected_error in errors
+    assert str(root) not in errors
+
+
+@pytest.mark.parametrize("scope", ("pending", "final"))
+def test_qweather_private_keys_reject_non_ed25519_pkcs8(tmp_path, scope):
+    root = tmp_path.resolve()
+    final_key = root / "qweather-runtime.pem"
+    pending_key = root / ".qweather-jwt.pending-rsa"
+    _write_rsa_private_key(final_key, 0o640)
+    _write_rsa_private_key(pending_key, 0o600)
+    env_path = _write_pending_qweather_env(root, final_key)
+    kwargs = {}
+    if scope == "pending":
+        _write_ed25519_private_key(final_key, 0o640)
+        kwargs["qweather_private_key_pending_path"] = pending_key
+
+    result = _validate_qweather_env(env_path, **kwargs)
+    errors = "\n".join(result["errors"])
+
+    assert result["ok"] is False
+    assert "Ed25519" in errors
+    assert str(root) not in errors
+
+
+def test_qweather_private_key_errors_never_echo_path_or_content(tmp_path):
+    root = tmp_path.resolve()
+    secret_marker = "private-key-content-must-stay-secret"
+    final_key = root / "private-path-must-stay-secret.pem"
+    final_key.write_text(secret_marker, encoding="ascii")
+    final_key.chmod(0o640)
+
+    result = _validate_qweather_env(
+        _write_pending_qweather_env(root, final_key),
+    )
+    errors = "\n".join(result["errors"])
+
+    assert result["ok"] is False
+    assert "Ed25519" in errors
+    assert secret_marker not in errors
+    assert str(final_key) not in errors
+
+
+def test_qweather_pending_key_allows_absent_or_valid_existing_final(tmp_path):
+    root = tmp_path.resolve()
+    final_key = root / "qweather-runtime.pem"
+    pending_key = root / ".qweather-jwt.pending-release-20260719"
+    _write_ed25519_private_key(pending_key, 0o600)
+    env_path = _write_pending_qweather_env(root, final_key)
+
+    pending_only = _validate_qweather_env(
+        env_path,
+        qweather_private_key_pending_path=pending_key,
+    )
+    assert pending_only["ok"] is True
+    assert pending_only["weather_ready"] is True
+
+    without_pending = _validate_qweather_env(env_path)
+    assert without_pending["ok"] is False
+    assert any("不存在" in error for error in without_pending["errors"])
+
+    _write_ed25519_private_key(final_key, 0o640)
+    existing_final = _validate_qweather_env(
+        env_path,
+        qweather_private_key_pending_path=pending_key,
+    )
+    assert existing_final["ok"] is True
+    assert existing_final["weather_ready"] is True
+
+
+@pytest.mark.parametrize("mode", (0o640, 0o644))
+def test_qweather_pending_key_requires_exact_0600_mode(tmp_path, mode):
+    root = tmp_path.resolve()
+    final_key = root / "qweather-runtime.pem"
+    pending_key = root / ".qweather-jwt.pending-permission-test"
+    _write_ed25519_private_key(pending_key, mode)
+
+    result = _validate_qweather_env(
+        _write_pending_qweather_env(root, final_key),
+        qweather_private_key_pending_path=pending_key,
+    )
+
+    assert result["ok"] is False
+    assert result["weather_ready"] is False
+    assert any("0600" in error for error in result["errors"])
+
+
+def test_qweather_pending_key_rejects_unsafe_paths_and_empty_file(tmp_path):
+    root = tmp_path.resolve()
+    final_key = root / "qweather-runtime.pem"
+    env_path = _write_pending_qweather_env(root, final_key)
+    target = root / "pending-target.pem"
+    _write_ed25519_private_key(target, 0o600)
+
+    linked_key = root / ".qweather-jwt.pending-linked"
+    linked_key.symlink_to(target)
+    linked_result = _validate_qweather_env(
+        env_path,
+        qweather_private_key_pending_path=linked_key,
+    )
+    assert linked_result["ok"] is False
+    assert any("符号链接" in error for error in linked_result["errors"])
+
+    other_parent = root / "other"
+    other_parent.mkdir()
+    wrong_parent = other_parent / ".qweather-jwt.pending-wrong-parent"
+    _write_ed25519_private_key(wrong_parent, 0o600)
+    wrong_parent_result = _validate_qweather_env(
+        env_path,
+        qweather_private_key_pending_path=wrong_parent,
+    )
+    assert wrong_parent_result["ok"] is False
+    assert any("同一目录" in error for error in wrong_parent_result["errors"])
+
+    wrong_name = root / "pending-wrong-name.pem"
+    _write_ed25519_private_key(wrong_name, 0o600)
+    wrong_name_result = _validate_qweather_env(
+        env_path,
+        qweather_private_key_pending_path=wrong_name,
+    )
+    assert wrong_name_result["ok"] is False
+    assert any("命名" in error for error in wrong_name_result["errors"])
+
+    equal_key = root / ".qweather-jwt.pending-equal-path"
+    _write_ed25519_private_key(equal_key, 0o600)
+    equal_result = _validate_qweather_env(
+        _write_pending_qweather_env(root, equal_key, "equal-jwt.env"),
+        qweather_private_key_pending_path=equal_key,
+    )
+    assert equal_result["ok"] is False
+    assert any("不能与运行态" in error for error in equal_result["errors"])
+
+    empty_key = root / ".qweather-jwt.pending-empty"
+    empty_key.touch()
+    empty_key.chmod(0o600)
+    empty_result = _validate_qweather_env(
+        env_path,
+        qweather_private_key_pending_path=empty_key,
+    )
+    assert empty_result["ok"] is False
+    assert any("大小异常" in error for error in empty_result["errors"])
+
+
+def test_qweather_pending_key_rejects_noncanonical_parent(tmp_path):
+    root = tmp_path.resolve()
+    final_key = root / "qweather-runtime.pem"
+    pending_key = root / ".qweather-jwt.pending-canonical"
+    _write_ed25519_private_key(pending_key, 0o600)
+    alias_parent = root.parent / f"{root.name}-alias"
+    alias_parent.symlink_to(root, target_is_directory=True)
+    aliased_pending = alias_parent / pending_key.name
+
+    result = _validate_qweather_env(
+        _write_pending_qweather_env(root, final_key),
+        qweather_private_key_pending_path=aliased_pending,
+    )
+
+    assert result["ok"] is False
+    assert any("规范直达路径" in error for error in result["errors"])
+
+
+def test_qweather_pending_key_rejects_read_time_change(tmp_path, monkeypatch):
+    root = tmp_path.resolve()
+    final_key = root / "qweather-runtime.pem"
+    pending_key = root / ".qweather-jwt.pending-changing"
+    _write_ed25519_private_key(pending_key, 0o600)
+    pending_inode = pending_key.stat().st_ino
+    real_read = os.read
+    changed = False
+
+    def change_pending_after_read(file_descriptor, size):
+        nonlocal changed
+        chunk = real_read(file_descriptor, size)
+        if (
+            chunk
+            and not changed
+            and os.fstat(file_descriptor).st_ino == pending_inode
+        ):
+            changed = True
+            with pending_key.open("ab") as output:
+                output.write(b"-changed")
+        return chunk
+
+    monkeypatch.setattr(release_validator.os, "read", change_pending_after_read)
+    result = _validate_qweather_env(
+        _write_pending_qweather_env(root, final_key),
+        qweather_private_key_pending_path=pending_key,
+    )
+
+    assert result["ok"] is False
+    assert any("读取期间发生变化" in error for error in result["errors"])
+
+
+def test_qweather_pending_key_cli_passes_argument_without_sensitive_output(
+    tmp_path,
+    capsys,
+):
+    root = tmp_path.resolve()
+    final_key = root / "qweather-runtime.pem"
+    pending_key = root / ".qweather-jwt.pending-cli"
+    secret_marker = b"private-key-content-must-stay-secret"
+    pending_key.write_bytes(secret_marker)
+    pending_key.chmod(0o600)
+
+    exit_code = release_validator.main(
+        [
+            "--file",
+            str(_write_pending_qweather_env(root, final_key)),
+            "--qweather-private-key-pending-path",
+            str(pending_key),
+        ]
+    )
+    output = capsys.readouterr().out
+
+    assert exit_code == 2
+    assert "Ed25519" in output or "所有者" in output or "运行组" in output
+    assert secret_marker.decode("ascii") not in output
+    assert str(root) not in output
 
 
 def test_frozen_gis_compression_requires_gzip_and_brotli_under_300kib(monkeypatch):

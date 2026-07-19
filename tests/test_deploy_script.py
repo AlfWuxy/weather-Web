@@ -1,8 +1,11 @@
 # -*- coding: utf-8 -*-
 """部署脚本回归测试。"""
 
+import hashlib
+import json
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 
@@ -27,6 +30,177 @@ def _load_activate_script():
 def _write_executable(path, content):
     path.write_text(content, encoding='utf-8')
     path.chmod(0o755)
+
+
+def _extract_shell_function(content, name):
+    start = content.index(f'{name}() {{')
+    end = content.index('\n}\n', start) + len('\n}\n')
+    return content[start:end]
+
+
+def _load_qweather_preactivation_manager_source():
+    content = _load_deploy_script()
+    function_start = content.index('qweather_preactivation_manager_source() {')
+    source_start = content.index("    command cat <<'PY'\n", function_start)
+    source_start += len("    command cat <<'PY'\n")
+    source_end = content.index('\nPY\n}', source_start)
+    return content[source_start:source_end]
+
+
+def _create_qweather_manager_state(tmp_path, release_id='release-20260719'):
+    base = (tmp_path / release_id).resolve()
+    project = base / 'project'
+    release_root = base / 'project-deploy'
+    project.mkdir(parents=True, mode=0o700)
+    release_root.mkdir(mode=0o700)
+    backups = project / 'backups'
+    backups.mkdir(mode=0o700)
+    activation_root = backups / 'deploy-transactions'
+    activation_root.mkdir(mode=0o700)
+    private_dir = project / 'private'
+    pending_path = private_dir / f'.qweather-jwt.pending-{release_id}'
+    final_path = private_dir / 'qweather-ed25519.pem'
+    preactivation_root = backups / 'qweather-preactivation'
+    manager_path = base / 'qweather_preactivation_manager.py'
+    manager_path.write_text(
+        _load_qweather_preactivation_manager_source(),
+        encoding='utf-8',
+    )
+    manager_path.chmod(0o700)
+    return {
+        'base': base,
+        'project': project,
+        'release_root': release_root,
+        'release_id': release_id,
+        'private_dir': private_dir,
+        'pending_path': pending_path,
+        'final_path': final_path,
+        'preactivation_root': preactivation_root,
+        'activation_root': activation_root,
+        'manager_path': manager_path,
+    }
+
+
+def _run_qweather_manager(
+    state,
+    action,
+    payload=b'',
+    *,
+    expected_payload=None,
+):
+    identity = str(os.getuid())
+    if expected_payload is None:
+        expected_payload = payload if action == 'provision' else b'x'
+    arguments = [
+        sys.executable,
+        str(state['manager_path']),
+        action,
+        str(state['project']),
+        str(state['release_root']),
+        state['release_id'],
+        str(state['private_dir']),
+        str(state['pending_path']),
+        str(state['final_path']),
+        str(state['preactivation_root']),
+        str(state['activation_root']),
+        identity,
+        str(os.getgid()),
+        str(os.getgid()),
+        hashlib.sha256(expected_payload).hexdigest(),
+        str(len(expected_payload)),
+    ]
+    return subprocess.run(
+        ['bash', '-c', 'exec 3<&0; exec "$@"', 'bash', *arguments],
+        input=payload,
+        capture_output=True,
+        check=False,
+    )
+
+
+def _load_qweather_manifest(state):
+    path = (
+        state['preactivation_root']
+        / state['release_id']
+        / 'manifest.json'
+    )
+    return json.loads(path.read_text(encoding='utf-8'))
+
+
+def _write_activation_plan(state, manifest, transaction_name):
+    transaction = state['activation_root'] / transaction_name
+    transaction.mkdir(mode=0o700)
+    plan = {
+        'version': 2,
+        'release_id': manifest['release_id'],
+        'pending_path': manifest['pending_path'],
+        'final_path': manifest['final_path'],
+        'sha256': manifest['sha256'],
+        'pending_device': manifest['pending_device'],
+        'pending_inode': manifest['pending_inode'],
+        'pending_nlink': manifest['pending_nlink'],
+        'pending_size': manifest['pending_size'],
+    }
+    plan_path = transaction / 'qweather-key-transition.json'
+    plan_path.write_text(
+        json.dumps(plan, sort_keys=True, separators=(',', ':')) + '\n',
+        encoding='utf-8',
+    )
+    plan_path.chmod(0o600)
+    return plan_path
+
+
+def _run_qweather_private_key_source_snapshotter(source, deploy_temp_dir):
+    content = _load_deploy_script()
+    validator_source = _extract_shell_function(
+        content, 'validate_qweather_jwt_private_key_snapshot'
+    )
+    snapshotter_source = _extract_shell_function(
+        content, 'snapshot_qweather_jwt_private_key_source'
+    )
+    environment = os.environ.copy()
+    environment['QWEATHER_TEST_PRIVATE_KEY_SOURCE'] = str(source)
+    environment['QWEATHER_TEST_DEPLOY_TEMP_DIR'] = str(deploy_temp_dir)
+    return subprocess.run(
+        [
+            'bash',
+            '-c',
+            'set -euo pipefail\n'
+            + validator_source
+            + snapshotter_source
+            + '\nLOCAL_DEPLOY_TEMP_DIR="$QWEATHER_TEST_DEPLOY_TEMP_DIR"\n'
+            + 'LOCAL_QWEATHER_JWT_PRIVATE_KEY_SNAPSHOT=""\n'
+            + 'snapshot_qweather_jwt_private_key_source '
+            + '"$QWEATHER_TEST_PRIVATE_KEY_SOURCE"\n',
+        ],
+        cwd=ROOT,
+        env=environment,
+        stdin=subprocess.DEVNULL,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+
+def _run_remote_path_validator(path_value):
+    content = _load_deploy_script()
+    validator_source = _extract_shell_function(content, 'validate_remote_path')
+    environment = os.environ.copy()
+    environment['REMOTE_PATH_UNDER_TEST'] = str(path_value)
+    return subprocess.run(
+        [
+            'bash',
+            '-c',
+            'set -euo pipefail\n'
+            + validator_source
+            + '\nvalidate_remote_path TEST_PATH "$REMOTE_PATH_UNDER_TEST"\n',
+        ],
+        cwd=ROOT,
+        env=environment,
+        stdin=subprocess.DEVNULL,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
 
 
 def test_deploy_script_checks_units_with_is_active():
@@ -423,6 +597,667 @@ def test_deploy_secrets_use_stdin_and_staged_environment():
         'remote_env_update "DATABASE_URI"'
     )
     assert 'ln -s $PROJECT_DIR/.env $RELEASE_APP/.env' not in content
+
+
+def test_qweather_jwt_private_key_source_is_local_only_and_uses_file_stdin():
+    content = _load_deploy_script()
+    initial_env = content.split('cat > $PROJECT_DIR/.env << EOF', 1)[1].split(
+        '\nEOF', 1
+    )[0]
+
+    assert 'QWEATHER_JWT_PRIVATE_KEY_SOURCE' in content
+    assert 'remote_env_update "QWEATHER_JWT_PRIVATE_KEY_SOURCE"' not in content
+    assert 'QWEATHER_JWT_PRIVATE_KEY_SOURCE' not in initial_env
+    runner = _extract_shell_function(
+        content, 'run_qweather_preactivation_manager'
+    )
+    assert 'remote_exec_with_file_stdin' in runner
+    assert '"$LOCAL_QWEATHER_JWT_PRIVATE_KEY_SNAPSHOT"' in runner
+    assert 'remote_exec_with_file_stdin "$LOCAL_QWEATHER_JWT_PRIVATE_KEY_SOURCE"' not in content
+    assert 'ssh $SSH_OPTS "$USER@$SERVER" "$remote_command" < "$local_file"' in content
+    assert 'QWEATHER_JWT_PRIVATE_KEY_PATH 必须位于 DEPLOY_PROJECT_DIR/private/' in content
+    assert 'QWEATHER_JWT_PRIVATE_KEY_PATH 必须是 DEPLOY_PROJECT_DIR/private/ 下的直接文件' in content
+
+
+def test_qweather_jwt_private_key_snapshot_is_private_and_revalidated(tmp_path):
+    content = _load_deploy_script()
+    validator = _extract_shell_function(
+        content, 'validate_qweather_jwt_private_key_snapshot'
+    )
+    snapshotter = _extract_shell_function(
+        content, 'snapshot_qweather_jwt_private_key_source'
+    )
+    private_key = tmp_path / 'qweather-ed25519.pem'
+    subprocess.run(
+        ['openssl', 'genpkey', '-algorithm', 'ED25519', '-out', str(private_key)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    private_key.chmod(0o600)
+    deploy_temp_dir = tmp_path / 'case-weather-deploy.test'
+    deploy_temp_dir.mkdir(mode=0o700)
+
+    result = _run_qweather_private_key_source_snapshotter(
+        private_key, deploy_temp_dir
+    )
+
+    assert result.returncode == 0
+    snapshot = deploy_temp_dir / 'qweather-jwt-private'
+    assert snapshot.is_file()
+    assert not snapshot.is_symlink()
+    assert snapshot.stat().st_mode & 0o777 == 0o600
+    assert snapshot.read_bytes() == private_key.read_bytes()
+    assert result.stderr == ''
+    assert content.count(
+        'LOCAL_DEPLOY_TEMP_DIR="$(mktemp -d '
+        '"${TMPDIR:-/tmp}/case-weather-deploy.XXXXXX")"'
+    ) == 1
+    assert 'chmod 0700 "$LOCAL_DEPLOY_TEMP_DIR"' in content
+    assert '本轮部署临时目录权限必须精确为 0700' in content
+    assert 'local snapshot="$LOCAL_DEPLOY_TEMP_DIR/qweather-jwt-private"' in snapshotter
+    assert snapshotter.count('source_descriptor = os.open(') == 1
+    assert 'os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC' in snapshotter
+    assert 'os.fstat(source_descriptor)' in snapshotter
+    assert 'stat.S_IMODE(before.st_mode) != 0o600' in snapshotter
+    assert 'before.st_size <= 0 or before.st_size > MAX_PRIVATE_KEY_BYTES' in snapshotter
+    create_snapshot = snapshotter.index(
+        'os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC'
+    )
+    revalidate = snapshotter.index(
+        'validate_qweather_jwt_private_key_snapshot "$snapshot"'
+    )
+    publish_snapshot = snapshotter.index(
+        'LOCAL_QWEATHER_JWT_PRIVATE_KEY_SNAPSHOT="$snapshot"'
+    )
+    assert create_snapshot < revalidate < publish_snapshot
+    assert validator.count('openssl pkey -in "$snapshot"') == 2
+    assert 'openssl pkey -in "$source"' not in content
+    assert result.stdout == ''
+
+
+def test_qweather_jwt_private_key_is_provisioned_after_candidate_is_ready():
+    content = _load_deploy_script()
+
+    immutable_release = content.index(
+        'remote_exec "if [ -e $NEW_RELEASE ]; then '
+        "echo '发布 ID 已存在，拒绝覆盖不可变版本: $NEW_RELEASE'"
+    )
+    upload = content.index('upload_files "$RELEASE_APP"')
+    staged_env = content.index(
+        'cp -a $PROJECT_DIR/.env $STAGED_ENV_FILE; chmod 0600 $STAGED_ENV_FILE'
+    )
+    final_candidate_update = content.index(
+        'remote_env_update "QWEATHER_EXPECTED_KID" '
+        '"$LOCAL_QWEATHER_EXPECTED_KID" "always"'
+    )
+    provision = content.index('\nprovision_qweather_jwt_private_key\n')
+    remote_validate = content.index(
+        'remote_exec "python3 $RELEASE_APP/scripts/validate_release_env.py '
+        '--file $STAGED_ENV_FILE --require-wechat $REQUIRE_WECHAT_READY '
+        '--qweather-private-key-pending-path $REMOTE_QWEATHER_PENDING_KEY_PATH"'
+    )
+
+    assert immutable_release < upload < staged_env
+    assert staged_env < final_candidate_update < provision < remote_validate
+
+
+def test_qweather_jwt_private_key_remote_pending_install_is_fail_closed():
+    content = _load_deploy_script()
+    manager = _load_qweather_preactivation_manager_source()
+    runner = _extract_shell_function(
+        content, 'run_qweather_preactivation_manager'
+    )
+    cleanup = _extract_shell_function(content, 'cleanup_local_deploy_temp')
+
+    assert (
+        'REMOTE_QWEATHER_PENDING_KEY_PATH='
+        '"$REMOTE_QWEATHER_PRIVATE_DIR/.qweather-jwt.pending-$RELEASE_ID"'
+    ) in content
+    assert "exec 9>'$RELEASE_ROOT/deploy.lock'" in runner
+    assert 'if ! flock -n 9; then' in runner
+    assert 'remote_exec_with_file_stdin' in runner
+    assert "'pending_device', 'pending_inode', 'pending_nlink', 'pending_size'" in manager
+    assert "mode=0o600,\n        nlink=1" in manager
+    assert 'os.replace(current, pending_path)' in manager
+    assert 'os.replace(source, destination)' in manager
+    assert "if activation_adopted(manifest):\n        return 'activation-adopted'" in manager
+    assert 'validate_existing_final(payload)' in manager
+    assert 'QWeather 私钥目标内容不同，停止发布且不覆盖。' in manager
+    assert 'archive_qweather_preactivation_key' in cleanup
+    assert 'exit "$original_status"' in cleanup
+    assert content.index('\nreconcile_qweather_preactivation_transactions\n') < content.index(
+        '发布 ID 已存在，拒绝覆盖不可变版本'
+    )
+
+
+def test_qweather_existing_final_key_must_match_without_preflight_publication():
+    manager = _load_qweather_preactivation_manager_source()
+
+    compare_existing = manager.index('validate_existing_final(payload)')
+    create_transaction = manager.index(
+        'transaction = ensure_transaction(release_id, create=True)'
+    )
+    publish_pending = manager.index('os.replace(current, pending_path)')
+
+    assert compare_existing < create_transaction < publish_pending
+    assert 'uid=owner_uid,\n        gid=runtime_gid,\n        mode=0o640' in manager
+    assert 'final_payload != payload' in manager
+    assert "echo 'QWeather JWT 私钥已安全复用。'" not in manager
+
+
+def test_qweather_preactivation_archive_is_durable_idempotent_and_recoverable(
+    tmp_path,
+):
+    state = _create_qweather_manager_state(tmp_path)
+    payload = b'synthetic-ed25519-private-key\n'
+
+    provision = _run_qweather_manager(state, 'provision', payload)
+    assert provision.returncode == 0, provision.stderr.decode()
+    pending = state['pending_path']
+    manifest = _load_qweather_manifest(state)
+    pending_stat = pending.stat()
+    assert pending.read_bytes() == payload
+    assert pending_stat.st_mode & 0o777 == 0o600
+    assert pending_stat.st_nlink == 1
+    assert manifest['sha256'] == hashlib.sha256(payload).hexdigest()
+    assert manifest['pending_device'] == pending_stat.st_dev
+    assert manifest['pending_inode'] == pending_stat.st_ino
+
+    archive = _run_qweather_manager(state, 'archive')
+    assert archive.returncode == 0, archive.stderr.decode()
+    recovery = (
+        state['preactivation_root']
+        / state['release_id']
+        / 'qweather-key-recovery'
+        / 'pending.pem'
+    )
+    assert not pending.exists()
+    assert recovery.read_bytes() == payload
+    assert recovery.stat().st_ino == pending_stat.st_ino
+
+    repeated_archive = _run_qweather_manager(state, 'archive')
+    assert repeated_archive.returncode == 0, repeated_archive.stderr.decode()
+    assert recovery.stat().st_ino == pending_stat.st_ino
+
+    retry = _run_qweather_manager(state, 'provision', payload)
+    assert retry.returncode == 0, retry.stderr.decode()
+    assert pending.stat().st_ino == pending_stat.st_ino
+    reconcile = _run_qweather_manager(state, 'reconcile-all')
+    assert reconcile.returncode == 0, reconcile.stderr.decode()
+    assert not pending.exists()
+    assert recovery.stat().st_ino == pending_stat.st_ino
+
+
+def test_qweather_preactivation_recovers_manifestless_sigkill_state(tmp_path):
+    state = _create_qweather_manager_state(tmp_path)
+    payload = b'synthetic-source-before-manifest\n'
+    state['private_dir'].mkdir(mode=0o700)
+    state['preactivation_root'].mkdir(mode=0o700)
+    transaction = state['preactivation_root'] / state['release_id']
+    transaction.mkdir(mode=0o700)
+    source = transaction / 'source.pem'
+    source.write_bytes(payload)
+    source.chmod(0o600)
+    source_inode = source.stat().st_ino
+
+    reconcile = _run_qweather_manager(state, 'reconcile-all')
+    assert reconcile.returncode == 0, reconcile.stderr.decode()
+    unproven = transaction / 'qweather-key-recovery' / 'unproven.pem'
+    marker = transaction / 'UNPROVEN_ARCHIVED.json'
+    assert not source.exists()
+    assert unproven.stat().st_ino == source_inode
+    assert marker.stat().st_mode & 0o777 == 0o600
+
+    marker.unlink()
+    repair_marker = _run_qweather_manager(state, 'reconcile-all')
+    assert repair_marker.returncode == 0, repair_marker.stderr.decode()
+    assert marker.stat().st_mode & 0o777 == 0o600
+
+    os.replace(unproven, source)
+    retry = _run_qweather_manager(state, 'provision', payload)
+    assert retry.returncode == 0, retry.stderr.decode()
+    assert state['pending_path'].stat().st_ino == source_inode
+    assert _load_qweather_manifest(state)['pending_inode'] == source_inode
+
+
+def test_qweather_preactivation_recovers_half_written_canonical_manifest(
+    tmp_path,
+):
+    state = _create_qweather_manager_state(tmp_path, 'half-manifest-release')
+    payload = b'synthetic-complete-private-key\n'
+    state['private_dir'].mkdir(mode=0o700)
+    state['preactivation_root'].mkdir(mode=0o700)
+    transaction = state['preactivation_root'] / state['release_id']
+    transaction.mkdir(mode=0o700)
+    source = transaction / 'source.pem'
+    source.write_bytes(payload)
+    source.chmod(0o600)
+    source_stat = source.stat()
+    expected_manifest = {
+        'version': 1,
+        'release_id': state['release_id'],
+        'pending_path': str(state['pending_path']),
+        'final_path': str(state['final_path']),
+        'sha256': hashlib.sha256(payload).hexdigest(),
+        'pending_device': source_stat.st_dev,
+        'pending_inode': source_stat.st_ino,
+        'pending_nlink': 1,
+        'pending_size': source_stat.st_size,
+    }
+    encoded = (
+        json.dumps(expected_manifest, sort_keys=True, separators=(',', ':'))
+        + '\n'
+    ).encode('utf-8')
+    manifest = transaction / 'manifest.json'
+    manifest.write_bytes(encoded[: len(encoded) // 2])
+    manifest.chmod(0o600)
+    manifest_inode = manifest.stat().st_ino
+
+    retry = _run_qweather_manager(state, 'provision', payload)
+
+    assert retry.returncode == 0, retry.stderr.decode()
+    assert state['pending_path'].read_bytes() == payload
+    assert _load_qweather_manifest(state)['sha256'] == hashlib.sha256(
+        payload
+    ).hexdigest()
+    evidence = list(
+        (transaction / 'qweather-key-recovery').glob(
+            'evidence-partial-manifest-*.bin'
+        )
+    )
+    assert len(evidence) == 1
+    assert evidence[0].stat().st_ino == manifest_inode
+    assert evidence[0].read_bytes() == encoded[: len(encoded) // 2]
+
+
+def test_qweather_preactivation_recovers_half_written_source_after_archive(
+    tmp_path,
+):
+    state = _create_qweather_manager_state(tmp_path, 'half-source-release')
+    payload = b'synthetic-complete-private-key\n'
+    partial = payload[:11]
+    state['private_dir'].mkdir(mode=0o700)
+    state['preactivation_root'].mkdir(mode=0o700)
+    transaction = state['preactivation_root'] / state['release_id']
+    transaction.mkdir(mode=0o700)
+    source = transaction / 'source.pem'
+    source.write_bytes(partial)
+    source.chmod(0o600)
+    partial_inode = source.stat().st_ino
+
+    archived = _run_qweather_manager(state, 'archive')
+    assert archived.returncode == 0, archived.stderr.decode()
+    retry = _run_qweather_manager(state, 'provision', payload)
+
+    assert retry.returncode == 0, retry.stderr.decode()
+    assert state['pending_path'].read_bytes() == payload
+    assert state['pending_path'].stat().st_ino != partial_inode
+    recovery = transaction / 'qweather-key-recovery'
+    evidence = list(recovery.glob('evidence-partial-source-*.bin'))
+    assert len(evidence) == 1
+    assert evidence[0].stat().st_ino == partial_inode
+    assert evidence[0].read_bytes() == partial
+    assert len(list(recovery.glob('evidence-partial-record-*.bin'))) == 1
+
+
+def test_qweather_preactivation_recovers_atomic_temp_sigkill_windows(tmp_path):
+    payload = b'synthetic-complete-private-key\n'
+
+    source_state = _create_qweather_manager_state(
+        tmp_path, 'source-temp-sigkill-release'
+    )
+    source_state['private_dir'].mkdir(mode=0o700)
+    source_state['preactivation_root'].mkdir(mode=0o700)
+    source_transaction = (
+        source_state['preactivation_root'] / source_state['release_id']
+    )
+    source_transaction.mkdir(mode=0o700)
+    source_temp = source_transaction / ('.atomic-source.pem-' + 'a' * 32)
+    source_temp.write_bytes(payload[:7])
+    source_temp.chmod(0o600)
+    source_temp_inode = source_temp.stat().st_ino
+
+    source_retry = _run_qweather_manager(source_state, 'provision', payload)
+    assert source_retry.returncode == 0, source_retry.stderr.decode()
+    assert source_state['pending_path'].read_bytes() == payload
+    source_evidence = list(
+        (source_transaction / 'qweather-key-recovery').glob(
+            'evidence-temp-source-*.bin'
+        )
+    )
+    assert len(source_evidence) == 1
+    assert source_evidence[0].stat().st_ino == source_temp_inode
+
+    manifest_state = _create_qweather_manager_state(
+        tmp_path, 'manifest-temp-sigkill-release'
+    )
+    manifest_state['private_dir'].mkdir(mode=0o700)
+    manifest_state['preactivation_root'].mkdir(mode=0o700)
+    manifest_transaction = (
+        manifest_state['preactivation_root'] / manifest_state['release_id']
+    )
+    manifest_transaction.mkdir(mode=0o700)
+    manifest_source = manifest_transaction / 'source.pem'
+    manifest_source.write_bytes(payload)
+    manifest_source.chmod(0o600)
+    manifest_temp = manifest_transaction / (
+        '.atomic-manifest.json-' + 'b' * 32
+    )
+    manifest_temp.write_bytes(b'{"final_path":')
+    manifest_temp.chmod(0o600)
+    manifest_temp_inode = manifest_temp.stat().st_ino
+
+    manifest_retry = _run_qweather_manager(
+        manifest_state, 'provision', payload
+    )
+    assert manifest_retry.returncode == 0, manifest_retry.stderr.decode()
+    assert manifest_state['pending_path'].read_bytes() == payload
+    manifest_evidence = list(
+        (manifest_transaction / 'qweather-key-recovery').glob(
+            'evidence-temp-manifest-*.bin'
+        )
+    )
+    assert len(manifest_evidence) == 1
+    assert manifest_evidence[0].stat().st_ino == manifest_temp_inode
+
+
+def test_qweather_preactivation_rejects_early_eof_before_remote_mutation(
+    tmp_path,
+):
+    state = _create_qweather_manager_state(tmp_path, 'early-eof-release')
+    complete = b'synthetic-complete-private-key\n'
+    result = _run_qweather_manager(
+        state,
+        'provision',
+        complete[:9],
+        expected_payload=complete,
+    )
+
+    assert result.returncode == 64
+    assert '私钥传输不完整' in result.stderr.decode()
+    assert not state['private_dir'].exists()
+    assert not state['preactivation_root'].exists()
+
+
+def test_qweather_preactivation_half_write_recovery_stays_fail_closed_on_tamper(
+    tmp_path,
+):
+    payload = b'synthetic-complete-private-key\n'
+    hardlink_state = _create_qweather_manager_state(
+        tmp_path, 'half-source-hardlink-release'
+    )
+    hardlink_state['private_dir'].mkdir(mode=0o700)
+    hardlink_state['preactivation_root'].mkdir(mode=0o700)
+    transaction = (
+        hardlink_state['preactivation_root'] / hardlink_state['release_id']
+    )
+    transaction.mkdir(mode=0o700)
+    source = transaction / 'source.pem'
+    source.write_bytes(payload[:8])
+    source.chmod(0o600)
+    escaped = hardlink_state['base'] / 'escaped-source.pem'
+    os.link(source, escaped)
+
+    hardlink_retry = _run_qweather_manager(
+        hardlink_state, 'provision', payload
+    )
+    assert hardlink_retry.returncode == 64
+    assert source.exists()
+    assert source.stat().st_nlink == 2
+    assert not list(transaction.rglob('evidence-*.bin'))
+
+    manifest_state = _create_qweather_manager_state(
+        tmp_path, 'half-manifest-tamper-release'
+    )
+    manifest_state['private_dir'].mkdir(mode=0o700)
+    manifest_state['preactivation_root'].mkdir(mode=0o700)
+    manifest_transaction = (
+        manifest_state['preactivation_root'] / manifest_state['release_id']
+    )
+    manifest_transaction.mkdir(mode=0o700)
+    manifest_source = manifest_transaction / 'source.pem'
+    manifest_source.write_bytes(payload)
+    manifest_source.chmod(0o600)
+    manifest = manifest_transaction / 'manifest.json'
+    manifest.write_bytes(b'root-authored-but-not-a-manifest')
+    manifest.chmod(0o600)
+    manifest_inode = manifest.stat().st_ino
+
+    tampered_retry = _run_qweather_manager(
+        manifest_state, 'provision', payload
+    )
+    assert tampered_retry.returncode == 64
+    assert manifest.stat().st_ino == manifest_inode
+    assert not list(manifest_transaction.rglob('evidence-*.bin'))
+
+    symlink_state = _create_qweather_manager_state(
+        tmp_path, 'temp-symlink-release'
+    )
+    symlink_state['private_dir'].mkdir(mode=0o700)
+    symlink_state['preactivation_root'].mkdir(mode=0o700)
+    symlink_transaction = (
+        symlink_state['preactivation_root'] / symlink_state['release_id']
+    )
+    symlink_transaction.mkdir(mode=0o700)
+    outside = symlink_state['base'] / 'outside-secret'
+    outside.write_bytes(payload[:5])
+    outside.chmod(0o600)
+    temp_symlink = symlink_transaction / (
+        '.atomic-source.pem-' + 'c' * 32
+    )
+    temp_symlink.symlink_to(outside)
+
+    symlink_retry = _run_qweather_manager(
+        symlink_state, 'provision', payload
+    )
+    assert symlink_retry.returncode == 64
+    assert temp_symlink.is_symlink()
+    assert outside.read_bytes() == payload[:5]
+    assert not list(symlink_transaction.rglob('evidence-*.bin'))
+
+
+def test_qweather_preactivation_rejects_tamper_and_payload_mismatch(tmp_path):
+    payload = b'synthetic-tamper-check\n'
+
+    hardlink_state = _create_qweather_manager_state(tmp_path, 'hardlink-release')
+    assert _run_qweather_manager(
+        hardlink_state, 'provision', payload
+    ).returncode == 0
+    hardlink = hardlink_state['base'] / 'escaped-hardlink.pem'
+    os.link(hardlink_state['pending_path'], hardlink)
+    hardlink_archive = _run_qweather_manager(hardlink_state, 'archive')
+    assert hardlink_archive.returncode == 64
+    assert hardlink_state['pending_path'].exists()
+
+    replacement_state = _create_qweather_manager_state(
+        tmp_path, 'replacement-release'
+    )
+    assert _run_qweather_manager(
+        replacement_state, 'provision', payload
+    ).returncode == 0
+    original_inode = replacement_state['pending_path'].stat().st_ino
+    replacement_state['pending_path'].unlink()
+    replacement_state['pending_path'].write_bytes(payload)
+    replacement_state['pending_path'].chmod(0o600)
+    assert replacement_state['pending_path'].stat().st_ino != original_inode
+    replacement_archive = _run_qweather_manager(replacement_state, 'archive')
+    assert replacement_archive.returncode == 64
+    assert replacement_state['pending_path'].exists()
+
+    mismatch_state = _create_qweather_manager_state(tmp_path, 'mismatch-release')
+    assert _run_qweather_manager(
+        mismatch_state, 'provision', payload
+    ).returncode == 0
+    assert _run_qweather_manager(mismatch_state, 'archive').returncode == 0
+    recovery = (
+        mismatch_state['preactivation_root']
+        / mismatch_state['release_id']
+        / 'qweather-key-recovery'
+        / 'pending.pem'
+    )
+    recovery_inode = recovery.stat().st_ino
+    mismatch = _run_qweather_manager(
+        mismatch_state,
+        'provision',
+        b'different-private-key\n',
+    )
+    assert mismatch.returncode == 64
+    assert recovery.stat().st_ino == recovery_inode
+    assert not mismatch_state['pending_path'].exists()
+
+
+def test_qweather_preactivation_never_mutates_activation_adopted_key(tmp_path):
+    state = _create_qweather_manager_state(tmp_path)
+    payload = b'synthetic-activation-adoption\n'
+    assert _run_qweather_manager(state, 'provision', payload).returncode == 0
+    manifest = _load_qweather_manifest(state)
+    pending_stat = state['pending_path'].stat()
+    _write_activation_plan(state, manifest, 'activation-one')
+
+    adopted = _run_qweather_manager(state, 'archive')
+    assert adopted.returncode == 0, adopted.stderr.decode()
+    assert adopted.stdout.strip() == b'activation-adopted'
+    assert state['pending_path'].stat().st_ino == pending_stat.st_ino
+
+    second_plan = _write_activation_plan(state, manifest, 'activation-two')
+    concurrent = _run_qweather_manager(state, 'archive')
+    assert concurrent.returncode == 64
+    assert state['pending_path'].stat().st_ino == pending_stat.st_ino
+
+    plan = json.loads(second_plan.read_text(encoding='utf-8'))
+    plan['sha256'] = '0' * 64
+    second_plan.write_text(
+        json.dumps(plan, sort_keys=True, separators=(',', ':')) + '\n',
+        encoding='utf-8',
+    )
+    second_plan.chmod(0o600)
+    mismatch = _run_qweather_manager(state, 'archive')
+    assert mismatch.returncode == 64
+    assert state['pending_path'].stat().st_ino == pending_stat.st_ino
+
+
+def test_qweather_preactivation_cleanup_covers_all_pre_activation_failures():
+    content = _load_deploy_script()
+    provision = content.index('\nprovision_qweather_jwt_private_key\n')
+    activation = content.index(
+        'QWEATHER_PENDING_KEY_PATH=$REMOTE_QWEATHER_PENDING_KEY_PATH '
+        'bash $RELEASE_APP/scripts/activate_release.sh'
+    )
+    checkpoints = (
+        'scripts/validate_release_env.py --file $STAGED_ENV_FILE '
+        '--require-wechat $REQUIRE_WECHAT_READY '
+        '--qweather-private-key-pending-path $REMOTE_QWEATHER_PENDING_KEY_PATH"',
+        '$RELEASE_VENV/bin/python -m pip install',
+        '$RELEASE_VENV/bin/python -m pytest -q',
+        'systemd-analyze verify $NEW_RELEASE/systemd/*.service',
+        '--seed-persistent-budget',
+    )
+
+    for checkpoint in checkpoints:
+        assert provision < content.index(checkpoint, provision) < activation
+    assert 'REMOTE_QWEATHER_PREACTIVATION_ACTIVE="1"' in content
+    assert 'archive_qweather_preactivation_key || remote_cleanup_status=$?' in content
+    assert 'REMOTE_QWEATHER_PREACTIVATION_ACTIVE="0"' in content[activation:]
+
+
+def test_qweather_pending_key_is_validated_three_times_and_passed_to_activation():
+    content = _load_deploy_script()
+    validator_flag = (
+        '--qweather-private-key-pending-path '
+        '$REMOTE_QWEATHER_PENDING_KEY_PATH'
+    )
+
+    assert content.count(validator_flag) == 3
+    assert (
+        'QWEATHER_PENDING_KEY_PATH=$REMOTE_QWEATHER_PENDING_KEY_PATH '
+        'bash $RELEASE_APP/scripts/activate_release.sh'
+    ) in content
+    assert content.index('\nprovision_qweather_jwt_private_key\n') < content.index(
+        validator_flag
+    )
+
+
+def test_qweather_jwt_private_key_snapshot_rejects_unsafe_sources(tmp_path):
+    private_key = tmp_path / 'qweather-ed25519.pem'
+    subprocess.run(
+        ['openssl', 'genpkey', '-algorithm', 'ED25519', '-out', str(private_key)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    private_key.chmod(0o600)
+    symlink = tmp_path / 'qweather-link.pem'
+    symlink.symlink_to(private_key)
+
+    symlink_dir = tmp_path / 'symlink-snapshot'
+    symlink_dir.mkdir(mode=0o700)
+    symlink_result = _run_qweather_private_key_source_snapshotter(
+        symlink, symlink_dir
+    )
+    assert symlink_result.returncode == 64
+    assert '普通非符号链接文件' in symlink_result.stderr
+
+    private_key.chmod(0o640)
+    mode_dir = tmp_path / 'mode-snapshot'
+    mode_dir.mkdir(mode=0o700)
+    mode_result = _run_qweather_private_key_source_snapshotter(
+        private_key, mode_dir
+    )
+    assert mode_result.returncode == 64
+    assert '权限必须精确为 0600' in mode_result.stderr
+
+    relative_dir = tmp_path / 'relative-snapshot'
+    relative_dir.mkdir(mode=0o700)
+    relative_result = _run_qweather_private_key_source_snapshotter(
+        'relative.pem', relative_dir
+    )
+    assert relative_result.returncode == 64
+    assert '必须使用绝对路径' in relative_result.stderr
+    assert result_paths_not_exposed(
+        (symlink_result, mode_result, relative_result),
+        (private_key, symlink, relative_dir),
+    )
+
+
+def test_qweather_jwt_private_key_snapshot_rejects_other_algorithms(tmp_path):
+    private_key = tmp_path / 'qweather-rsa.pem'
+    subprocess.run(
+        ['openssl', 'genpkey', '-algorithm', 'RSA', '-out', str(private_key)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    private_key.chmod(0o600)
+
+    deploy_temp_dir = tmp_path / 'rsa-snapshot'
+    deploy_temp_dir.mkdir(mode=0o700)
+    result = _run_qweather_private_key_source_snapshotter(
+        private_key, deploy_temp_dir
+    )
+
+    assert result.returncode == 64
+    assert '私钥快照必须是有效的 Ed25519 私钥' in result.stderr
+    assert result.stdout == ''
+
+
+def result_paths_not_exposed(results, paths):
+    combined = ''.join(result.stdout + result.stderr for result in results)
+    return all(str(path) not in combined for path in paths)
+
+
+def test_validate_remote_path_rejects_noncanonical_segments():
+    assert _run_remote_path_validator('/opt/case-weather').returncode == 0
+    for value in (
+        '//opt/case-weather',
+        '/opt//case-weather',
+        '/opt/./case-weather',
+        '/opt/../case-weather',
+        '/opt/case-weather/',
+    ):
+        result = _run_remote_path_validator(value)
+        assert result.returncode != 0
+        assert value not in result.stderr
 
 
 def test_deploy_only_supports_key_or_sshpass_and_locks_private_files():
