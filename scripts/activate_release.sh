@@ -41,6 +41,7 @@ unset DATABASE_URI
 RECOVERY_ACKNOWLEDGED_TRANSACTION="${RECOVERY_ACKNOWLEDGED_TRANSACTION:-}"
 REQUIRE_WECHAT_READY="${REQUIRE_WECHAT_READY:-0}"
 EXPECTED_RELEASE_COMMIT="${EXPECTED_RELEASE_COMMIT:-}"
+QWEATHER_BUDGET_SNAPSHOT_HELPER="${QWEATHER_BUDGET_SNAPSHOT_HELPER:-}"
 RUNTIME_USER="${RUNTIME_USER:-case-weather}"
 RUNTIME_GROUP="${RUNTIME_GROUP:-case-weather}"
 CONTROL_OWNER_UID="${CONTROL_OWNER_UID:-0}"
@@ -101,9 +102,11 @@ LEGACY_TIMER_UNITS=(
 LEGACY_SERVICE_UNITS=(
     case-weather-sync.service
 )
+RETIRED_BOOTSTRAP_UNITS=(
+    case-weather-cache-bootstrap.service
+)
 SERVICE_UNITS=(
     case-weather-backup.service
-    case-weather-cache-bootstrap.service
     case-weather-cache.service
     case-weather-dispatch.service
     case-weather-risk-precompute.service
@@ -111,7 +114,7 @@ SERVICE_UNITS=(
     case-weather.service
 )
 INSTALL_UNITS=("${MANAGED_TIMER_UNITS[@]}" "${SERVICE_UNITS[@]}")
-LEGACY_UNITS=("${LEGACY_TIMER_UNITS[@]}" "${LEGACY_SERVICE_UNITS[@]}")
+LEGACY_UNITS=("${LEGACY_TIMER_UNITS[@]}" "${LEGACY_SERVICE_UNITS[@]}" "${RETIRED_BOOTSTRAP_UNITS[@]}")
 SCHEDULER_UNITS=("${MANAGED_TIMER_UNITS[@]}" "${LEGACY_TIMER_UNITS[@]}")
 STOPPABLE_SERVICE_UNITS=(
     case-weather-cache-bootstrap.service
@@ -2355,8 +2358,242 @@ PY
     [ "$state" = ready ] || fail "正式天气烟测快照校验没有返回 ready"
 }
 
+preflight_formal_qweather_jwt_runtime() {
+    local state
+    [ "$REQUIRE_WECHAT_READY" = 1 ] || return 0
+    if ! state="$(
+        cd "$APP_DIR"
+        runtime_exec "$VENV_DIR/bin/python" - <<'PY'
+import os
+import stat
+from pathlib import Path
+
+try:
+    from core.app import create_app
+    from services.qweather_auth import get_qweather_request_headers
+
+    app = create_app(register_blueprints=False)
+    with app.app_context():
+        config = app.config
+        if str(config.get('QWEATHER_AUTH_MODE') or '').strip().lower() != 'jwt':
+            raise RuntimeError('mode')
+        key_path = Path(str(config.get('QWEATHER_JWT_PRIVATE_KEY_PATH') or ''))
+        if not key_path.is_absolute():
+            raise RuntimeError('path')
+        protected_roots = (Path('/home'), Path('/root'), Path('/run/user'))
+        if any(key_path == root or root in key_path.parents for root in protected_roots):
+            raise RuntimeError('protected-home')
+        key_stat = os.stat(key_path, follow_symlinks=False)
+        if (
+            not stat.S_ISREG(key_stat.st_mode)
+            or stat.S_IMODE(key_stat.st_mode) != 0o600
+            or key_stat.st_uid != os.geteuid()
+        ):
+            raise RuntimeError('owner-or-mode')
+        headers = get_qweather_request_headers(
+            config,
+            api_base=str(config.get('QWEATHER_API_BASE') or ''),
+        )
+        authorization = headers.get('Authorization', '')
+        if set(headers) != {'Authorization'} or not authorization.startswith('Bearer '):
+            raise RuntimeError('headers')
+except Exception:
+    raise SystemExit(2) from None
+
+print('ready')
+PY
+    )"; then
+        fail "正式 JWT 运行用户离线签名预检失败；未写入 started receipt，也未消耗天气预算"
+        return 1
+    fi
+    [ "$state" = ready ] || {
+        fail "正式 JWT 运行用户离线签名预检没有返回 ready"
+        return 1
+    }
+    log "正式 JWT 已由运行用户完成离线签名预检，未发起网络请求"
+}
+
+capture_qweather_budget_snapshot() {
+    local destination="$1"
+    local snapshot normalized
+    if [ -n "$QWEATHER_BUDGET_SNAPSHOT_HELPER" ]; then
+        if [ "$ALLOW_NONROOT_TEST_RUNTIME_GUARD" != 1 ]; then
+            fail "生产激活禁止覆盖 QWeather 预算快照实现"
+            return 1
+        fi
+        snapshot="$(runtime_exec "$QWEATHER_BUDGET_SNAPSHOT_HELPER")" || {
+            fail "离线测试预算快照 helper 执行失败"
+            return 1
+        }
+    else
+        if ! snapshot="$(
+            cd "$APP_DIR"
+            runtime_exec "$VENV_DIR/bin/python" - <<'PY'
+import json
+
+try:
+    from core.app import create_app
+    from services.qweather_budget import get_qweather_budget_snapshot
+
+    app = create_app(register_blueprints=False)
+    with app.app_context():
+        source = get_qweather_budget_snapshot()
+    snapshot = {
+        'backend': source.get('backend'),
+        'month': source.get('month'),
+        'used': source.get('used'),
+        'endpoints': source.get('endpoints'),
+    }
+except Exception:
+    raise SystemExit(2) from None
+
+print(json.dumps(snapshot, ensure_ascii=True, sort_keys=True, separators=(',', ':')))
+PY
+        )"; then
+            fail "无法读取正式 QWeather 持久预算快照"
+            return 1
+        fi
+    fi
+    if ! normalized="$("$VENV_DIR/bin/python" - "$snapshot" <<'PY'
+import json
+import re
+import sys
+
+try:
+    value = json.loads(sys.argv[1])
+    month = value['month']
+    used = value['used']
+    endpoints = value['endpoints']
+    if value.get('backend') != 'redis' or not re.fullmatch(r'\d{4}-\d{2}', month):
+        raise ValueError
+    if isinstance(used, bool) or not isinstance(used, int) or used < 0:
+        raise ValueError
+    if not isinstance(endpoints, dict):
+        raise ValueError
+    normalized_endpoints = {}
+    for key, count in endpoints.items():
+        if not isinstance(key, str) or not re.fullmatch(r'[A-Za-z0-9_.:-]{1,80}', key):
+            raise ValueError
+        if isinstance(count, bool) or not isinstance(count, int) or count < 0:
+            raise ValueError
+        normalized_endpoints[key] = count
+except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+    raise SystemExit(2) from None
+
+print(json.dumps(
+    {'backend': 'redis', 'month': month, 'used': used, 'endpoints': normalized_endpoints},
+    ensure_ascii=True,
+    sort_keys=True,
+    separators=(',', ':'),
+))
+PY
+    )"; then
+        fail "QWeather 持久预算快照结构异常"
+        return 1
+    fi
+    write_durable_marker "$destination" "$normalized"
+}
+
+budget_snapshot_started_fields() {
+    "$VENV_DIR/bin/python" - "$1" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding='ascii') as stream:
+    value = json.load(stream)
+print(f"budget_month={value['month']}")
+print(f"budget_used_before={value['used']}")
+print('budget_endpoints_before_json=' + json.dumps(
+    value['endpoints'], ensure_ascii=True, sort_keys=True, separators=(',', ':')
+))
+PY
+}
+
+compare_qweather_budget_snapshots() {
+    "$VENV_DIR/bin/python" - "$1" "$2" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding='ascii') as stream:
+    before = json.load(stream)
+with open(sys.argv[2], encoding='ascii') as stream:
+    after = json.load(stream)
+
+if before['backend'] != 'redis' or after['backend'] != 'redis':
+    raise SystemExit(2)
+if before['month'] != after['month']:
+    raise SystemExit(2)
+total_delta = after['used'] - before['used']
+if total_delta < 1 or total_delta > 3:
+    raise SystemExit(2)
+endpoint_deltas = {}
+for endpoint in sorted(set(before['endpoints']) | set(after['endpoints'])):
+    delta = after['endpoints'].get(endpoint, 0) - before['endpoints'].get(endpoint, 0)
+    if delta < 0 or delta > 1:
+        raise SystemExit(2)
+    if delta:
+        endpoint_deltas[endpoint] = delta
+if sum(endpoint_deltas.values()) != total_delta:
+    raise SystemExit(2)
+
+compact = lambda value: json.dumps(
+    value, ensure_ascii=True, sort_keys=True, separators=(',', ':')
+)
+print(f"budget_month={before['month']}")
+print(f"budget_used_before={before['used']}")
+print(f"budget_used_after={after['used']}")
+print(f"budget_total_delta={total_delta}")
+print('budget_endpoints_after_json=' + compact(after['endpoints']))
+print('budget_endpoint_deltas_json=' + compact(endpoint_deltas))
+PY
+}
+
+verify_completed_budget_receipt() {
+    "$VENV_DIR/bin/python" - "$1" "$2" <<'PY'
+import json
+import re
+import sys
+
+def fields(path):
+    values = {}
+    with open(path, encoding='utf-8') as stream:
+        for raw_line in stream:
+            key, separator, value = raw_line.rstrip('\n').partition('=')
+            if separator:
+                values[key] = value
+    return values
+
+try:
+    started = fields(sys.argv[1])
+    completed = fields(sys.argv[2])
+    month = completed['budget_month']
+    if month != started['budget_month'] or not re.fullmatch(r'\d{4}-\d{2}', month):
+        raise ValueError
+    used_before = int(started['budget_used_before'])
+    if used_before != int(completed['budget_used_before']):
+        raise ValueError
+    used_after = int(completed['budget_used_after'])
+    total_delta = int(completed['budget_total_delta'])
+    before_endpoints = json.loads(started['budget_endpoints_before_json'])
+    after_endpoints = json.loads(completed['budget_endpoints_after_json'])
+    endpoint_deltas = json.loads(completed['budget_endpoint_deltas_json'])
+    if total_delta not in {1, 2, 3} or used_after - used_before != total_delta:
+        raise ValueError
+    if not all(isinstance(value, int) and value == 1 for value in endpoint_deltas.values()):
+        raise ValueError
+    if sum(endpoint_deltas.values()) != total_delta:
+        raise ValueError
+    for endpoint in set(before_endpoints) | set(after_endpoints):
+        if after_endpoints.get(endpoint, 0) - before_endpoints.get(endpoint, 0) != endpoint_deltas.get(endpoint, 0):
+            raise ValueError
+except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+    raise SystemExit(2) from None
+PY
+}
+
 prepare_formal_smoke_receipt() {
-    local binding_file started_file completed_file snapshot_id now
+    local budget_before_file="$1"
+    local binding_file started_file completed_file snapshot_id now budget_fields
     FORMAL_RELEASE_CONFIG_FINGERPRINT="$(compute_formal_release_config_fingerprint)"
     if [[ ! "$FORMAL_RELEASE_CONFIG_FINGERPRINT" =~ ^[0-9a-f]{64}$ ]]; then
         fail "正式发布配置指纹生成失败"
@@ -2385,6 +2622,10 @@ prepare_formal_smoke_receipt() {
                 return 1
             fi
             snapshot_id="$(receipt_value "$completed_file" snapshot_id || true)"
+            if ! verify_completed_budget_receipt "$started_file" "$completed_file"; then
+                fail "正式天气烟测 completed receipt 缺少可信预算差值"
+                return 1
+            fi
             verify_fresh_qweather_snapshot "$snapshot_id"
             FORMAL_SMOKE_REUSED=1
             write_durable_marker \
@@ -2400,12 +2641,18 @@ prepare_formal_smoke_receipt() {
     chmod 0700 "$FORMAL_SMOKE_RECEIPT_DIR"
     fsync_directory "$FORMAL_SMOKE_RECEIPT_ROOT"
     now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    budget_fields="$(budget_snapshot_started_fields "$budget_before_file")" || {
+        fail "正式天气烟测预算前值无法写入 receipt"
+        return 1
+    }
     write_durable_marker \
         "$binding_file" \
         "$(printf 'release_commit=%s\nconfig_fingerprint=%s' \
             "$FORMAL_RELEASE_COMMIT" \
             "$FORMAL_RELEASE_CONFIG_FINGERPRINT")"
-    write_durable_marker "$started_file" "started_at=$now"
+    write_durable_marker \
+        "$started_file" \
+        "$(printf 'started_at=%s\n%s' "$now" "$budget_fields")"
     # started receipt 完整落盘后，才允许打开唯一一次正式天气出网窗口。
     fsync_directory "$FORMAL_SMOKE_RECEIPT_DIR"
     fsync_directory "$FORMAL_SMOKE_RECEIPT_ROOT"
@@ -2415,21 +2662,28 @@ prepare_formal_smoke_receipt() {
 
 complete_formal_smoke_receipt() {
     local snapshot_id="$1"
+    local budget_delta_fields="$2"
     local completed_file="$FORMAL_SMOKE_RECEIPT_DIR/completed"
     write_durable_marker \
         "$completed_file" \
-        "$(printf 'snapshot_id=%s\ncompleted_at=%s' \
+        "$(printf 'snapshot_id=%s\ncompleted_at=%s\n%s' \
             "$snapshot_id" \
-            "$(date -u +%Y-%m-%dT%H:%M:%SZ)")"
+            "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            "$budget_delta_fields")"
     fsync_directory "$FORMAL_SMOKE_RECEIPT_DIR"
     fsync_directory "$FORMAL_SMOKE_RECEIPT_ROOT"
     "$SYNC_BIN"
 }
 
 run_formal_cache_smoke() {
-    local previous_snapshot current_snapshot gate_open_status=0 smoke_status=0 gate_close_status=0
+    local previous_snapshot current_snapshot budget_delta_fields
+    local gate_open_status=0 smoke_status=0 gate_close_status=0
+    local budget_before_file="$TRANSACTION_DIR/qweather-budget-before.json"
+    local budget_after_file="$TRANSACTION_DIR/qweather-budget-after.json"
     [ "$REQUIRE_WECHAT_READY" = 1 ] || return 0
-    prepare_formal_smoke_receipt
+    preflight_formal_qweather_jwt_runtime
+    capture_qweather_budget_snapshot "$budget_before_file"
+    prepare_formal_smoke_receipt "$budget_before_file"
     if [ "$FORMAL_SMOKE_REUSED" = 1 ]; then
         return 0
     fi
@@ -2470,6 +2724,13 @@ run_formal_cache_smoke() {
         fail "天气烟测结束后未能恢复 30 分钟出网保护"
         return "$gate_close_status"
     fi
+    capture_qweather_budget_snapshot "$budget_after_file"
+    if ! budget_delta_fields="$(
+        compare_qweather_budget_snapshots "$budget_before_file" "$budget_after_file"
+    )"; then
+        fail "正式天气烟测预算差值异常；要求总增量 1 至 3 且每个 endpoint 增量不超过 1"
+        return 1
+    fi
     current_snapshot="$(latest_snapshot_id)"
     if [ -z "$current_snapshot" ] || [ "$current_snapshot" = "$previous_snapshot" ]; then
         fail "唯一一次天气同步烟测未生成新的持久化快照"
@@ -2481,7 +2742,7 @@ run_formal_cache_smoke() {
     write_durable_marker \
         "$TRANSACTION_DIR/FORMAL_SMOKE_DB_DURABLE" \
         "snapshot_id=$current_snapshot"
-    complete_formal_smoke_receipt "$current_snapshot"
+    complete_formal_smoke_receipt "$current_snapshot" "$budget_delta_fields"
     write_durable_marker \
         "$TRANSACTION_DIR/CACHE_SMOKE_VERIFIED" \
         "$(printf 'snapshot_id=%s\nmode=new_request' "$current_snapshot")"
@@ -2850,10 +3111,14 @@ verify_release_state() {
         *" case-weather-dispatch.service "*) ;;
         *) fail "天气缓存服务缺少 dispatch OnSuccess"; return 1 ;;
     esac
-    on_success="$($SYSTEMCTL_BIN show case-weather-cache-bootstrap.service --property=OnSuccess --value)"
     case " $on_success " in
         *" case-weather-cache.timer "*) ;;
-        *) fail "bootstrap 服务缺少 recurring timer OnSuccess"; return 1 ;;
+        *) fail "天气缓存服务缺少 recurring timer OnSuccess"; return 1 ;;
+    esac
+    on_success="$($SYSTEMCTL_BIN show case-weather-cache.service --property=OnFailure --value)"
+    case " $on_success " in
+        *" case-weather-cache.timer "*) ;;
+        *) fail "天气缓存服务缺少 recurring timer OnFailure"; return 1 ;;
     esac
     for unit in "${LEGACY_UNITS[@]}"; do
         query_unit_load_state "$unit"
@@ -2894,7 +3159,7 @@ verify_release_state() {
         return 1
     fi
     wait_for_health "$HEALTH_URL"
-    log "发布后服务、timer、OnSuccess、链接与健康检查全部通过"
+    log "发布后服务、两阶段 30 分钟天气 timer、OnSuccess、OnFailure、链接与健康检查全部通过"
 }
 
 observe_post_commit_stability() {
@@ -2920,7 +3185,7 @@ observe_post_commit_stability() {
 captured_unit_active() {
     local wanted="$1"
     awk -F '\t' -v wanted="$wanted" '
-        $1 == wanted && $2 == "1" && $4 == "active" { found = 1 }
+        $1 == wanted && $2 == "1" && ($4 == "active" || $4 == "activating" || $4 == "reloading" || $4 == "deactivating") { found = 1 }
         END { exit(found ? 0 : 1) }
     ' "$STATE_FILE"
 }
@@ -2928,7 +3193,7 @@ captured_unit_active() {
 captured_unit_running() {
     local wanted="$1"
     awk -F '\t' -v wanted="$wanted" '
-        $1 == wanted && $2 == "1" && ($4 == "active" || $4 == "activating" || $4 == "reloading") { found = 1 }
+        $1 == wanted && $2 == "1" && ($4 == "active" || $4 == "activating" || $4 == "reloading" || $4 == "deactivating") { found = 1 }
         END { exit(found ? 0 : 1) }
     ' "$STATE_FILE"
 }
@@ -3342,6 +3607,14 @@ id -u "$RUNTIME_USER" >/dev/null 2>&1 || {
 if [ "$(id -gn "$RUNTIME_USER")" != "$RUNTIME_GROUP" ]; then
     echo 'case-weather 运行账户主组异常' >&2
     exit 2
+fi
+if [ -n "$QWEATHER_BUDGET_SNAPSHOT_HELPER" ]; then
+    if [ "$ALLOW_NONROOT_TEST_RUNTIME_GUARD" != 1 ]; then
+        echo '生产激活禁止覆盖 QWeather 预算快照实现' >&2
+        exit 2
+    fi
+    validate_absolute_path QWEATHER_BUDGET_SNAPSHOT_HELPER "$QWEATHER_BUDGET_SNAPSHOT_HELPER"
+    require_executable "$QWEATHER_BUDGET_SNAPSHOT_HELPER"
 fi
 require_file "$ENV_FILE"
 require_file "$STAGED_ENV_FILE"

@@ -1,5 +1,7 @@
 [Unit]
 Description=Run Case Weather cache sync every 30 minutes
+ConditionPathExists=|!/opt/your-app/deployments/activation-in-progress
+ConditionPathExists=|/run/case-weather/activation-permit
 
 [Timer]
 OnActiveSec=30min

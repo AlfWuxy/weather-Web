@@ -36,9 +36,9 @@ def test_deploy_script_checks_units_with_is_active():
     assert 'case-weather.service' in activate
     assert 'case-weather-backup.timer' in activate
     assert 'case-weather-cache-bootstrap.timer' in activate
-    assert "常规天气缓存 timer 在首轮等待期间不应提前运行" in activate
-    assert "常规天气缓存 timer 状态应为 disabled" in activate
+    assert 'case-weather-cache.timer' in activate
     assert "bootstrap timer 状态应为 enabled" in activate
+    assert "bootstrap timer 未保留完整的首轮 30 分钟等待窗口" in activate
     assert 'check_remote_unit_active "case-weather-dispatch.timer"' not in content
     assert 'case-weather-risk-precompute.timer' in activate
     assert "旧 systemd 单元仍存在" in activate
@@ -80,6 +80,10 @@ def test_deploy_script_pins_duchang_cache_to_free_tier_budget():
     assert 'QWEATHER_DEDICATED_CREDENTIAL_CONFIRMED' in content
     assert 'QWEATHER_CONSOLE_USAGE_MONTH' in content
     assert 'QWEATHER_CONSOLE_USAGE_BASELINE' in content
+    assert 'QWEATHER_EXPECTED_PROJECT_ID' in content
+    assert 'QWEATHER_EXPECTED_KID' in content
+    assert '微信正式发布必须固定使用 QWEATHER_AUTH_MODE=jwt' in content
+    assert '私密发布表记录的 QWeather Project ID/KID 与实际部署配置不一致' in content
     assert content.index('--probe-persistent-budget') < content.index(
         '$RELEASE_VENV/bin/python -m pytest -q'
     )
@@ -88,7 +92,8 @@ def test_deploy_script_pins_duchang_cache_to_free_tier_budget():
     )
     assert 'OnUnitActiveSec=30min' in content
     assert 'OnActiveSec=30min' in content
-    assert 'OnSuccess=case-weather-dispatch.service' in content
+    assert 'OnSuccess=case-weather-dispatch.service case-weather-cache.timer' in content
+    assert 'OnFailure=case-weather-cache.timer' in content
     assert "cat > $NEW_RELEASE/systemd/case-weather-dispatch.timer" not in content
     assert 'ExecStart=/bin/bash $CURRENT_LINK/app/scripts/weather_cache_sync.sh' in content
 
@@ -110,37 +115,48 @@ def test_formal_deploy_propagates_full_feature_release_flags():
     assert 'FEATURE_WXPUSHER=0 时必须清空 WXPUSHER_APP_TOKEN' in content
 
 
-def test_deploy_script_delays_first_cache_refresh_then_starts_recurring_timer():
+def test_deploy_script_uses_two_stage_failure_safe_cache_timers():
     content = _load_deploy_script()
+    service_start = content.index(
+        "cat > $NEW_RELEASE/systemd/case-weather-cache.service << 'EOF'"
+    )
+    service_end = content.index(
+        "cat > $NEW_RELEASE/systemd/case-weather-cache.timer << 'EOF'",
+        service_start,
+    )
+    service_block = content[service_start:service_end]
     recurring_start = content.index(
         "cat > $NEW_RELEASE/systemd/case-weather-cache.timer << 'EOF'"
     )
     recurring_end = content.index('EOF"', recurring_start)
     recurring_block = content[recurring_start:recurring_end]
     bootstrap_start = content.index(
-        "cat > $NEW_RELEASE/systemd/case-weather-cache-bootstrap.service << 'EOF'"
+        "cat > $NEW_RELEASE/systemd/case-weather-cache-bootstrap.timer << 'EOF'"
     )
     bootstrap_end = content.index('EOF"', bootstrap_start)
     bootstrap_block = content[bootstrap_start:bootstrap_end]
 
+    assert 'OnSuccess=case-weather-dispatch.service case-weather-cache.timer' in service_block
+    assert 'OnFailure=case-weather-cache.timer' in service_block
     assert 'OnActiveSec=30min' in recurring_block
     assert 'OnUnitActiveSec=30min' in recurring_block
     assert '[Install]' in recurring_block
     assert 'WantedBy=timers.target' in recurring_block
-    assert 'Wants=case-weather-cache.service' not in bootstrap_block
-    assert 'After=network.target case-weather.service' in bootstrap_block
-    assert 'OnSuccess=case-weather-cache.timer' in bootstrap_block
-    assert 'OnSuccess=case-weather-dispatch.service' not in bootstrap_block
-    assert 'ExecStart=/bin/bash $CURRENT_LINK/app/scripts/weather_cache_sync.sh' in bootstrap_block
-    assert 'OnActiveSec=30min' in content[bootstrap_start:]
-    assert 'RemainAfterElapse=no' in content[bootstrap_start:]
+    assert "cat > $NEW_RELEASE/systemd/case-weather-cache-bootstrap.service" not in content
+    assert 'OnActiveSec=30min' in bootstrap_block
+    assert 'RemainAfterElapse=no' in bootstrap_block
+    assert 'Unit=case-weather-cache.service' in bootstrap_block
+    assert 'OnUnitActiveSec=' not in bootstrap_block
+    assert '[Install]' in bootstrap_block
     activate = _load_activate_script()
     assert 'cache-bootstrap-' not in content
     assert 'cache-bootstrap.success' not in activate
     assert 'NextElapseUSecMonotonic' in activate
     assert 'remaining_us' in activate
     assert 'bootstrap timer 未保留完整的首轮 30 分钟等待窗口' in activate
-    assert 'case-weather-cache-bootstrap.service --property=OnSuccess --value' in activate
+    assert 'case_2dweather_2dcache_2dbootstrap_2etimer' in activate
+    assert 'case-weather-cache-bootstrap.service --property=OnSuccess --value' not in activate
+    assert 'case-weather-cache.service --property=OnFailure --value' in activate
 
 
 def test_deploy_script_sets_precompute_python_path():
@@ -383,7 +399,7 @@ def test_deploy_only_supports_key_or_sshpass_and_locks_private_files():
 
     assert 'expect -c' not in content
     assert '密码部署需要 sshpass' in content
-    assert content.count('UMask=0077') == 7
+    assert content.count('UMask=0077') == 6
     assert 'chmod 0700 $PROJECT_DIR/instance $PROJECT_DIR/storage $PROJECT_DIR/run' in content
 
 
@@ -392,8 +408,8 @@ def test_deploy_runs_all_runtime_units_as_hardened_service_user():
 
     assert content.count('User=root') == 1
     assert content.count('Group=root') == 1
-    assert content.count('User=case-weather') == 6
-    assert content.count('Group=case-weather') == 6
+    assert content.count('User=case-weather') == 5
+    assert content.count('Group=case-weather') == 5
     for directive in (
         'NoNewPrivileges=true',
         'PrivateTmp=true',
@@ -405,7 +421,7 @@ def test_deploy_runs_all_runtime_units_as_hardened_service_user():
         'CapabilityBoundingSet=',
         'ReadWritePaths=$PROJECT_DIR/instance $PROJECT_DIR/storage $PROJECT_DIR/run',
     ):
-        expected_count = 6 if directive.startswith('ReadWritePaths=') else 7
+        expected_count = 5 if directive.startswith('ReadWritePaths=') else 6
         assert content.count(directive) == expected_count
     assert 'DISPATCH_LOCK_PATH=$PROJECT_DIR/run/case-weather-dispatch.lock' in content
     assert 'useradd --system' in content

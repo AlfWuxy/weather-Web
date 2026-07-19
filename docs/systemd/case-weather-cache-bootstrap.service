@@ -1,13 +1,12 @@
 [Unit]
-Description=Case Weather - start the first cache refresh after a full 30-minute delay
-Wants=case-weather-cache.service
-After=network.target case-weather.service case-weather-cache.service
-OnSuccess=case-weather-cache.timer
+Description=DEPRECATED - Case Weather cache bootstrap must not be enabled
+RefuseManualStart=yes
+ConditionPathExists=/run/case-weather/deprecated-bootstrap-never-enable
 
 [Service]
 Type=oneshot
-User=root
+User=case-weather
+Group=case-weather
 UMask=0077
-# 真实同步由 Wants 拉起；本单元在同步结束后成功退出，再启动常规定时器。
+# 兼容旧主机清理时保留一个无网络、无写入的安全占位单元。
 ExecStart=/usr/bin/true
-TimeoutStartSec=16min

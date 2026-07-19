@@ -1,11 +1,13 @@
 [Unit]
-Description=Case Weather - delay the first cache refresh for 30 minutes
+Description=Run the first Case Weather cache sync after a full 30 minute wait
+ConditionPathExists=|!/opt/your-app/deployments/activation-in-progress
+ConditionPathExists=|/run/case-weather/activation-permit
 
 [Timer]
 OnActiveSec=30min
 AccuracySec=1s
 RemainAfterElapse=no
-Unit=case-weather-cache-bootstrap.service
+Unit=case-weather-cache.service
 
 [Install]
 WantedBy=timers.target

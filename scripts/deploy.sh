@@ -36,6 +36,8 @@ LOCAL_WX_MINIPROGRAM_PRIVACY_VERSION=""
 LOCAL_QWEATHER_DEDICATED_CREDENTIAL_CONFIRMED=""
 LOCAL_QWEATHER_CONSOLE_USAGE_MONTH=""
 LOCAL_QWEATHER_CONSOLE_USAGE_BASELINE=""
+LOCAL_QWEATHER_EXPECTED_PROJECT_ID=""
+LOCAL_QWEATHER_EXPECTED_KID=""
 LOCAL_WECHAT_FORM_READY="0"
 
 load_deploy_env() {
@@ -90,7 +92,7 @@ load_wechat_release_form() {
     while IFS='=' read -r key value; do
         case "$key" in
             ''|\#*) continue ;;
-            WECHAT_FORM_READY|WX_MINIPROGRAM_APPID|WX_MINIPROGRAM_SECRET|WX_MINIPROGRAM_PRIVACY_VERSION|FEATURE_WXPUSHER|WXPUSHER_APP_TOKEN|FEATURE_HEAT_EXPOSURE_GIS|QWEATHER_DEDICATED_CREDENTIAL_CONFIRMED|QWEATHER_CONSOLE_USAGE_MONTH|QWEATHER_CONSOLE_USAGE_BASELINE)
+            WECHAT_FORM_READY|WX_MINIPROGRAM_APPID|WX_MINIPROGRAM_SECRET|WX_MINIPROGRAM_PRIVACY_VERSION|FEATURE_WXPUSHER|WXPUSHER_APP_TOKEN|FEATURE_HEAT_EXPOSURE_GIS|QWEATHER_DEDICATED_CREDENTIAL_CONFIRMED|QWEATHER_CONSOLE_USAGE_MONTH|QWEATHER_CONSOLE_USAGE_BASELINE|QWEATHER_EXPECTED_PROJECT_ID|QWEATHER_EXPECTED_KID)
                 normalize_env_value "$value"
                 value="$NORMALIZED_ENV_VALUE"
                 case "$key" in
@@ -104,6 +106,8 @@ load_wechat_release_form() {
                     QWEATHER_DEDICATED_CREDENTIAL_CONFIRMED) LOCAL_QWEATHER_DEDICATED_CREDENTIAL_CONFIRMED="$value" ;;
                     QWEATHER_CONSOLE_USAGE_MONTH) LOCAL_QWEATHER_CONSOLE_USAGE_MONTH="$value" ;;
                     QWEATHER_CONSOLE_USAGE_BASELINE) LOCAL_QWEATHER_CONSOLE_USAGE_BASELINE="$value" ;;
+                    QWEATHER_EXPECTED_PROJECT_ID) LOCAL_QWEATHER_EXPECTED_PROJECT_ID="$value" ;;
+                    QWEATHER_EXPECTED_KID) LOCAL_QWEATHER_EXPECTED_KID="$value" ;;
                 esac
                 ;;
         esac
@@ -242,6 +246,21 @@ if [ -n "$LOCAL_QWEATHER_AUTH_MODE" ]; then
 elif [ -n "$LOCAL_QWEATHER_KEY" ] || [ -n "$LOCAL_QWEATHER_API_BASE" ] || [ -n "$LOCAL_QWEATHER_JWT_KID" ] || [ -n "$LOCAL_QWEATHER_JWT_PROJECT_ID" ] || [ -n "$LOCAL_QWEATHER_JWT_PRIVATE_KEY_PATH" ]; then
     echo "检测到和风天气配置，请同时显式设置 QWEATHER_AUTH_MODE，避免静默启用或停用天气同步。" >&2
     exit 64
+fi
+if [ "$REQUIRE_WECHAT_READY" = "1" ]; then
+    if [ "$LOCAL_QWEATHER_AUTH_MODE" != "jwt" ]; then
+        echo "微信正式发布必须固定使用 QWEATHER_AUTH_MODE=jwt。" >&2
+        exit 64
+    fi
+    if [ -n "$LOCAL_QWEATHER_KEY" ]; then
+        echo "微信正式发布使用 JWT 时必须清空旧 QWEATHER_KEY。" >&2
+        exit 64
+    fi
+    if [ "$LOCAL_QWEATHER_EXPECTED_PROJECT_ID" != "$LOCAL_QWEATHER_JWT_PROJECT_ID" ] \
+        || [ "$LOCAL_QWEATHER_EXPECTED_KID" != "$LOCAL_QWEATHER_JWT_KID" ]; then
+        echo "私密发布表记录的 QWeather Project ID/KID 与实际部署配置不一致。" >&2
+        exit 64
+    fi
 fi
 
 validate_remote_path() {
@@ -459,6 +478,8 @@ QWEATHER_REQUIRE_PERSISTENT_BUDGET=1
 QWEATHER_DEDICATED_CREDENTIAL_CONFIRMED=
 QWEATHER_CONSOLE_USAGE_MONTH=
 QWEATHER_CONSOLE_USAGE_BASELINE=
+QWEATHER_EXPECTED_PROJECT_ID=
+QWEATHER_EXPECTED_KID=
 ALLOW_WEATHER_UNAVAILABLE=
 WEATHER_CACHE_TTL_MINUTES=30
 FORECAST_CACHE_TTL_MINUTES=30
@@ -560,6 +581,8 @@ if [ "$FORMAL_WECHAT_CONFIG_ALLOWED" = "1" ]; then
     remote_env_update "QWEATHER_DEDICATED_CREDENTIAL_CONFIRMED" "$LOCAL_QWEATHER_DEDICATED_CREDENTIAL_CONFIRMED" "always"
     remote_env_update "QWEATHER_CONSOLE_USAGE_MONTH" "$LOCAL_QWEATHER_CONSOLE_USAGE_MONTH" "always"
     remote_env_update "QWEATHER_CONSOLE_USAGE_BASELINE" "$LOCAL_QWEATHER_CONSOLE_USAGE_BASELINE" "always"
+    remote_env_update "QWEATHER_EXPECTED_PROJECT_ID" "$LOCAL_QWEATHER_EXPECTED_PROJECT_ID" "always"
+    remote_env_update "QWEATHER_EXPECTED_KID" "$LOCAL_QWEATHER_EXPECTED_KID" "always"
 fi
 remote_exec "python3 $RELEASE_APP/scripts/validate_release_env.py --file $STAGED_ENV_FILE --require-wechat $REQUIRE_WECHAT_READY"
 
@@ -696,7 +719,8 @@ Description=Case Weather - refresh Duchang weather cache
 ConditionPathExists=|!$PROJECT_DIR/deployments/activation-in-progress
 ConditionPathExists=|/run/case-weather/activation-permit
 After=network.target case-weather.service
-OnSuccess=case-weather-dispatch.service
+OnSuccess=case-weather-dispatch.service case-weather-cache.timer
+OnFailure=case-weather-cache.timer
 
 [Service]
 Type=oneshot
@@ -748,50 +772,7 @@ Unit=case-weather-cache.service
 WantedBy=timers.target
 EOF"
 
-remote_exec "cat > $NEW_RELEASE/systemd/case-weather-cache-bootstrap.service << 'EOF'
-[Unit]
-Description=Case Weather - start the first cache refresh after a full 30-minute delay
-ConditionPathExists=|!$PROJECT_DIR/deployments/activation-in-progress
-ConditionPathExists=|/run/case-weather/activation-permit
-After=network.target case-weather.service
-OnSuccess=case-weather-cache.timer
-
-[Service]
-Type=oneshot
-User=case-weather
-Group=case-weather
-UMask=0077
-NoNewPrivileges=true
-PrivateTmp=true
-PrivateDevices=true
-ProtectSystem=strict
-ProtectHome=true
-ProtectKernelTunables=true
-ProtectKernelModules=true
-ProtectControlGroups=true
-ProtectClock=true
-ProtectHostname=true
-ProtectProc=invisible
-ProcSubset=pid
-RestrictSUIDSGID=true
-RestrictNamespaces=true
-RestrictRealtime=true
-LockPersonality=true
-SystemCallArchitectures=native
-RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
-CapabilityBoundingSet=
-ReadOnlyPaths=$CURRENT_LINK $PROJECT_DIR/.env
-ReadWritePaths=$PROJECT_DIR/instance $PROJECT_DIR/storage $PROJECT_DIR/run
-WorkingDirectory=$CURRENT_LINK/app
-EnvironmentFile=$PROJECT_DIR/.env
-Environment=PYTHONUNBUFFERED=1
-Environment=VENV_PY=$CURRENT_LINK/venv/bin/python
-# bootstrap 自身执行同步；只有同步与成功 marker 都完成后才启动常规定时器。
-ExecStart=/bin/bash $CURRENT_LINK/app/scripts/weather_cache_sync.sh
-TimeoutStartSec=16min
-EOF
-
-cat > $NEW_RELEASE/systemd/case-weather-cache-bootstrap.timer << 'EOF'
+remote_exec "cat > $NEW_RELEASE/systemd/case-weather-cache-bootstrap.timer << 'EOF'
 [Unit]
 Description=Case Weather - delay the first cache refresh for 30 minutes
 ConditionPathExists=|!$PROJECT_DIR/deployments/activation-in-progress
@@ -801,7 +782,7 @@ ConditionPathExists=|/run/case-weather/activation-permit
 OnActiveSec=30min
 AccuracySec=1s
 RemainAfterElapse=no
-Unit=case-weather-cache-bootstrap.service
+Unit=case-weather-cache.service
 
 [Install]
 WantedBy=timers.target

@@ -7,6 +7,7 @@ import json
 import os
 import grp
 import pwd
+import shlex
 import signal
 import sqlite3
 import subprocess
@@ -15,6 +16,8 @@ import time
 from pathlib import Path
 
 import pytest
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -35,15 +38,17 @@ LEGACY_SERVICE_UNITS = ('case-weather-sync.service',)
 LEGACY_UNITS = LEGACY_TIMER_UNITS + LEGACY_SERVICE_UNITS
 SERVICE_UNITS = (
     'case-weather-backup.service',
-    'case-weather-cache-bootstrap.service',
     'case-weather-cache.service',
     'case-weather-dispatch.service',
     'case-weather-risk-precompute.service',
     'case-weather-usage-cleanup.service',
     'case-weather.service',
 )
+RETIRED_BOOTSTRAP_UNITS = (
+    'case-weather-cache-bootstrap.service',
+)
 INSTALL_UNITS = MANAGED_TIMER_UNITS + SERVICE_UNITS
-ALL_UNITS = INSTALL_UNITS + LEGACY_UNITS
+ALL_UNITS = INSTALL_UNITS + LEGACY_UNITS + RETIRED_BOOTSTRAP_UNITS
 FORMAL_COMMIT = 'a' * 40
 # 保持运行时格式真实，同时避免测试夹具被静态扫描识别为正式 AppID。
 TEST_MINIPROGRAM_APPID = ''.join(('w', 'x', '1234567890abcdef'))
@@ -74,6 +79,19 @@ def _write_executable(path, content):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding='utf-8')
     path.chmod(0o755)
+
+
+def _write_test_ed25519_private_key(path):
+    key = Ed25519PrivateKey.generate()
+    path.write_bytes(
+        key.private_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PrivateFormat.PKCS8,
+            encryption_algorithm=serialization.NoEncryption(),
+        )
+    )
+    path.chmod(0o600)
+    return path
 
 
 def _make_fake_sync(path):
@@ -240,15 +258,20 @@ if command == 'show':
     if '--property=ExecMainStatus' in args:
         print('0')
         raise SystemExit(0)
-    if os.environ.get('FAKE_BAD_ON_SUCCESS_UNIT') == unit:
-        print('')
-        raise SystemExit(0)
-    if unit == 'case-weather-cache.service':
-        print('case-weather-dispatch.service')
-        raise SystemExit(0)
-    if unit == 'case-weather-cache-bootstrap.service':
-        print('case-weather-cache.timer')
-        raise SystemExit(0)
+    if '--property=OnSuccess' in args:
+        if os.environ.get('FAKE_BAD_ON_SUCCESS_UNIT') == unit:
+            print('')
+            raise SystemExit(0)
+        if unit == 'case-weather-cache.service':
+            print('case-weather-dispatch.service case-weather-cache.timer')
+            raise SystemExit(0)
+    if '--property=OnFailure' in args:
+        if os.environ.get('FAKE_BAD_ON_FAILURE_UNIT') == unit:
+            print('')
+            raise SystemExit(0)
+        if unit == 'case-weather-cache.service':
+            print('case-weather-cache.timer')
+            raise SystemExit(0)
     print('')
     raise SystemExit(0)
 if command == 'is-enabled':
@@ -262,7 +285,11 @@ if command == 'is-enabled':
     raise SystemExit(1)
 if command == 'is-active':
     active_state = next(
-        (value for value in ('active', 'activating', 'reloading') if marker(value).exists()),
+        (
+            value
+            for value in ('active', 'activating', 'reloading', 'deactivating')
+            if marker(value).exists()
+        ),
         '',
     )
     if active_state:
@@ -275,13 +302,13 @@ if command == 'is-active':
                 if count >= int(finish_on):
                     marker('active').unlink(missing_ok=True)
                     raise SystemExit(3)
-        stop_on_check = os.environ.get('FAKE_STOP_BOOTSTRAP_ON_ACTIVE_CHECK', '')
+        stop_on_check = os.environ.get('FAKE_STOP_CACHE_ON_ACTIVE_CHECK', '')
         if (
-            unit == 'case-weather-cache-bootstrap.timer'
+            unit in {'case-weather-cache.timer', 'case-weather-cache-bootstrap.timer'}
             and '--quiet' in args
             and stop_on_check
         ):
-            counter = state / 'bootstrap-active-check-count'
+            counter = state / f'{unit}.active-check-count'
             count = int(counter.read_text(encoding='utf-8')) + 1 if counter.exists() else 1
             counter.write_text(str(count), encoding='utf-8')
             if count == int(stop_on_check):
@@ -342,6 +369,18 @@ if command in {'start', 'restart'}:
         marker('active').unlink(missing_ok=True)
         raise SystemExit(0)
     marker('active').touch()
+    cache_result = os.environ.get('FAKE_CACHE_RESULT', '')
+    if unit == 'case-weather-cache.service' and cache_result in {'success', 'failure'}:
+        hook_name = 'OnSuccess' if cache_result == 'success' else 'OnFailure'
+        hook_units = []
+        for line in (unit_dir / unit).read_text(encoding='utf-8').splitlines():
+            key, separator, value = line.partition('=')
+            if separator and key.strip() == hook_name:
+                hook_units.extend(value.split())
+        marker('active').unlink(missing_ok=True)
+        for hook_unit in hook_units:
+            (state / f'{hook_unit}.active').touch()
+        raise SystemExit(0 if cache_result == 'success' else 1)
     if (
         command == 'restart'
         and unit == 'case-weather-backup.timer'
@@ -563,14 +602,19 @@ def _prepare_transaction(
     core_dir.mkdir()
     (core_dir / '__init__.py').write_text('', encoding='utf-8')
     (core_dir / 'app.py').write_text(
-        """from pathlib import Path
+        """from contextlib import nullcontext
+from pathlib import Path
 import os
 
 
 class _ConfigApp:
-    def __init__(self, database_uri):
-        self.config = {'SQLALCHEMY_DATABASE_URI': database_uri}
+    def __init__(self, values):
+        self.config = dict(values)
+        self.config['SQLALCHEMY_DATABASE_URI'] = values['DATABASE_URI']
         self.instance_path = str(Path.cwd() / 'instance')
+
+    def app_context(self):
+        return nullcontext()
 
 
 def create_app(register_blueprints=False):
@@ -580,7 +624,7 @@ def create_app(register_blueprints=False):
         key, separator, value = line.partition('=')
         if separator:
             values[key] = value
-    return _ConfigApp(values['DATABASE_URI'])
+    return _ConfigApp(values)
 """,
         encoding='utf-8',
     )
@@ -597,6 +641,13 @@ def resolve_sqlite_db_path(uri, *, repo_root, instance_dir):
         path = Path(instance_dir) / path
     return path.resolve(strict=False)
 """,
+        encoding='utf-8',
+    )
+    services_dir = new_release / 'app' / 'services'
+    services_dir.mkdir()
+    (services_dir / '__init__.py').write_text('', encoding='utf-8')
+    (services_dir / 'qweather_auth.py').write_text(
+        (ROOT / 'services' / 'qweather_auth.py').read_text(encoding='utf-8'),
         encoding='utf-8',
     )
     (new_release / 'private-metadata' / 'requirements-lock.sha256').write_text(
@@ -628,7 +679,10 @@ exit {migration_exit}
         (ROOT / 'scripts' / 'update_env_value.py').read_text(encoding='utf-8'),
         encoding='utf-8',
     )
-    (new_release / 'venv' / 'bin' / 'python').symlink_to(Path(sys.executable))
+    _write_executable(
+        new_release / 'venv' / 'bin' / 'python',
+        f'#!/bin/sh\nexec {shlex.quote(sys.executable)} "$@"\n',
+    )
     _write_executable(
         new_release / 'venv' / 'bin' / 'gunicorn',
         '#!/bin/sh\ntrap "exit 0" TERM INT\nwhile :; do sleep 1; done\n',
@@ -827,12 +881,21 @@ def _seed_interrupted_activation_guard(
 
 def _configure_formal_smoke(transaction, *, provider='QWeather'):
     """为激活事务准备完全离线的正式天气烟测桩。"""
+    private_key = transaction['state_dir'] / 'qweather-formal-private.pem'
+    if not private_key.exists():
+        private_key = _write_test_ed25519_private_key(private_key)
     staged_text = f"""DEBUG=true
 RELEASE_VALUE=new
-QWEATHER_AUTH_MODE=api_key
+QWEATHER_AUTH_MODE=jwt
 DATABASE_URI=sqlite:///{transaction['database_file'].as_posix()}
-QWEATHER_KEY=test-qweather-key
-QWEATHER_API_BASE=https://example.invalid
+REDIS_URL=redis://127.0.0.1:6379/0
+QWEATHER_KEY=
+QWEATHER_API_BASE=https://unit-test.qweatherapi.com/v7
+QWEATHER_JWT_KID=test-kid
+QWEATHER_JWT_PROJECT_ID=test-project
+QWEATHER_JWT_PRIVATE_KEY_PATH={private_key}
+QWEATHER_EXPECTED_KID=test-kid
+QWEATHER_EXPECTED_PROJECT_ID=test-project
 QWEATHER_CANONICAL_LOCATION=116.20,29.27
 QWEATHER_MONTHLY_REQUEST_LIMIT=40000
 QWEATHER_BUDGET_FAIL_CLOSED=1
@@ -857,6 +920,36 @@ PUBLIC_BASE_URL=https://yilaoweather.org
     transaction['env']['REQUIRE_WECHAT_READY'] = '1'
     transaction['env']['EXPECTED_RELEASE_COMMIT'] = FORMAL_COMMIT
     counter_file = transaction['state_dir'] / 'formal-smoke-request-count'
+    budget_mode_file = transaction['state_dir'] / 'formal-smoke-budget-mode'
+    budget_helper = transaction['state_dir'] / 'formal-smoke-budget-snapshot'
+    _write_executable(
+        budget_helper,
+        f"""#!/usr/bin/env python3
+import json
+from pathlib import Path
+
+counter = Path({str(counter_file)!r})
+mode_file = Path({str(budget_mode_file)!r})
+count = int(counter.read_text(encoding='utf-8')) if counter.exists() else 0
+mode = mode_file.read_text(encoding='utf-8').strip() if mode_file.exists() else 'valid'
+if mode == 'duplicate':
+    used = 10 + (count * 2)
+    endpoints = {{'weather_now': count * 2}}
+elif mode == 'zero':
+    used = 10
+    endpoints = {{}}
+else:
+    used = 10 + count
+    endpoints = {{'weather_now': count}} if count else {{}}
+print(json.dumps({{
+    'backend': 'redis',
+    'month': '2026-07',
+    'used': used,
+    'endpoints': endpoints,
+}}, sort_keys=True, separators=(',', ':')))
+""",
+    )
+    transaction['env']['QWEATHER_BUDGET_SNAPSHOT_HELPER'] = str(budget_helper)
     weather_sync = transaction['new_release'] / 'app' / 'scripts' / 'weather_cache_sync.sh'
     _write_executable(
         weather_sync,
@@ -947,15 +1040,11 @@ def _configure_formal_jwt_smoke(transaction, private_key, *, provider='QWeather'
         transaction,
         provider=provider,
     )
-    jwt_text = staged_text.replace(
-        "QWEATHER_AUTH_MODE=api_key\n",
-        "QWEATHER_AUTH_MODE=jwt\n"
-        "QWEATHER_JWT_KID=test-kid\n"
-        "QWEATHER_JWT_PROJECT_ID=test-project\n"
-        f"QWEATHER_JWT_PRIVATE_KEY_PATH={private_key}\n",
-    ).replace(
-        "QWEATHER_KEY=test-qweather-key\n",
-        "QWEATHER_KEY=\n",
+    jwt_text = ''.join(
+        f"QWEATHER_JWT_PRIVATE_KEY_PATH={private_key}\n"
+        if line.startswith('QWEATHER_JWT_PRIVATE_KEY_PATH=')
+        else line
+        for line in staged_text.splitlines(keepends=True)
     )
     assert jwt_text != staged_text
     (transaction['new_release'] / 'staged.env').write_text(
@@ -990,7 +1079,7 @@ def test_success_switches_release_only_after_migration_and_health(tmp_path):
             assert 'TimeoutStartSec=15min' in installed
         else:
             assert installed == f'new unit {unit}\n'
-    for unit in LEGACY_UNITS:
+    for unit in LEGACY_UNITS + RETIRED_BOOTSTRAP_UNITS:
         assert not (transaction['unit_dir'] / unit).exists()
         assert not (transaction['fake_state'] / f'{unit}.enabled').exists()
         assert not (transaction['fake_state'] / f'{unit}.active').exists()
@@ -1516,7 +1605,7 @@ def test_stalled_backup_race_restores_only_backup_schedule(tmp_path):
 def test_stability_window_detects_post_activation_timer_cleanup(tmp_path):
     transaction = _prepare_transaction(tmp_path)
     transaction['env']['POST_COMMIT_STABILITY_SECONDS'] = '1'
-    transaction['env']['FAKE_STOP_BOOTSTRAP_ON_ACTIVE_CHECK'] = '3'
+    transaction['env']['FAKE_STOP_CACHE_ON_ACTIVE_CHECK'] = '3'
 
     result = _run_activation(transaction)
 
@@ -1620,6 +1709,70 @@ def test_migration_failure_restores_reloading_public_service(tmp_path):
     assert not (transaction['fake_state'] / f'{unit}.reloading').exists()
 
 
+@pytest.mark.parametrize(
+    ('weather_timer_phase', 'unit', 'captured_state', 'expected_timer'),
+    (
+        ('recurring', 'case-weather-cache.timer', 'activating', 'case-weather-cache.timer'),
+        ('recurring', 'case-weather-cache.timer', 'reloading', 'case-weather-cache.timer'),
+        ('recurring', 'case-weather-cache.timer', 'deactivating', 'case-weather-cache.timer'),
+        (
+            'bootstrap',
+            'case-weather-cache-bootstrap.timer',
+            'activating',
+            'case-weather-cache-bootstrap.timer',
+        ),
+        (
+            'bootstrap',
+            'case-weather-cache-bootstrap.timer',
+            'reloading',
+            'case-weather-cache-bootstrap.timer',
+        ),
+        (
+            'bootstrap',
+            'case-weather-cache-bootstrap.timer',
+            'deactivating',
+            'case-weather-cache-bootstrap.timer',
+        ),
+        (
+            'writer',
+            'case-weather-cache.service',
+            'deactivating',
+            'case-weather-cache-bootstrap.timer',
+        ),
+    ),
+)
+def test_migration_failure_restores_transitional_weather_phase(
+    tmp_path,
+    weather_timer_phase,
+    unit,
+    captured_state,
+    expected_timer,
+):
+    transaction = _prepare_transaction(
+        tmp_path,
+        migration_exit=23,
+        weather_timer_phase=weather_timer_phase,
+    )
+    for state in ('active', 'activating', 'reloading', 'deactivating'):
+        (transaction['fake_state'] / f'{unit}.{state}').unlink(missing_ok=True)
+    (transaction['fake_state'] / f'{unit}.{captured_state}').touch()
+
+    result = _run_activation(transaction)
+
+    assert result.returncode == 23
+    assert (
+        transaction['fake_state'] / f'{expected_timer}.active'
+    ).exists()
+    other_timer = (
+        'case-weather-cache-bootstrap.timer'
+        if expected_timer == 'case-weather-cache.timer'
+        else 'case-weather-cache.timer'
+    )
+    assert not (transaction['fake_state'] / f'{other_timer}.active').exists()
+    for state in ('activating', 'reloading', 'deactivating'):
+        assert not (transaction['fake_state'] / f'{unit}.{state}').exists()
+
+
 def test_migration_failure_restores_bootstrap_wait_state_without_recurring_timer(tmp_path):
     transaction = _prepare_transaction(
         tmp_path,
@@ -1665,15 +1818,17 @@ def test_migration_failure_rearms_bootstrap_after_interrupting_active_writer(tmp
     ).exists()
 
 
-def test_first_release_prepare_failure_removes_new_bootstrap_enable_link(tmp_path):
+def test_first_release_prepare_failure_removes_new_weather_unit_enable_links(tmp_path):
     transaction = _prepare_transaction(tmp_path)
     for unit in (
         'case-weather-cache-bootstrap.timer',
-        'case-weather-cache-bootstrap.service',
+        'case-weather-cache.timer',
+        'case-weather-cache.service',
     ):
         (transaction['unit_dir'] / unit).unlink()
         (transaction['fake_state'] / f'{unit}.exists').unlink()
         (transaction['fake_state'] / f'{unit}.enabled').unlink(missing_ok=True)
+        (transaction['fake_state'] / f'{unit}.active').unlink(missing_ok=True)
     (transaction['new_release'] / 'app' / 'scripts' / 'update_env_value.py').write_text(
         'raise SystemExit(31)\n',
         encoding='utf-8',
@@ -1683,15 +1838,13 @@ def test_first_release_prepare_failure_removes_new_bootstrap_enable_link(tmp_pat
 
     assert result.returncode == 31
     assert transaction['current_link'].resolve() == transaction['old_release'].resolve()
-    assert not (
-        transaction['unit_dir'] / 'case-weather-cache-bootstrap.timer'
-    ).exists()
-    assert not (
-        transaction['unit_dir'] / 'case-weather-cache-bootstrap.service'
-    ).exists()
-    assert not (
-        transaction['fake_state'] / 'case-weather-cache-bootstrap.timer.enabled'
-    ).exists()
+    for unit in (
+        'case-weather-cache-bootstrap.timer',
+        'case-weather-cache.timer',
+        'case-weather-cache.service',
+    ):
+        assert not (transaction['unit_dir'] / unit).exists()
+        assert not (transaction['fake_state'] / f'{unit}.enabled').exists()
 
 
 def test_candidate_health_failure_rolls_back_new_code_database_and_units(tmp_path):
@@ -1838,11 +1991,16 @@ def test_timer_start_failure_keeps_committed_release_and_user_writes(tmp_path):
     assert '已逐个补齐并复核' in marker_text
 
 
-def test_post_start_verification_failure_persists_blocking_marker(tmp_path):
+@pytest.mark.parametrize(
+    'broken_hook',
+    ('FAKE_BAD_ON_SUCCESS_UNIT', 'FAKE_BAD_ON_FAILURE_UNIT'),
+)
+def test_post_start_verification_failure_persists_blocking_marker(
+    tmp_path,
+    broken_hook,
+):
     transaction = _prepare_transaction(tmp_path)
-    transaction['env']['FAKE_BAD_ON_SUCCESS_UNIT'] = (
-        'case-weather-cache-bootstrap.service'
-    )
+    transaction['env'][broken_hook] = 'case-weather-cache.service'
 
     result = _run_activation(transaction)
 
@@ -1866,6 +2024,56 @@ def test_post_start_verification_failure_persists_blocking_marker(tmp_path):
     assert '必须显式确认其精确事务' in blocked.stderr
     assert transaction['current_link'].resolve() == transaction['new_release'].resolve()
     assert _database_value(transaction['database_file']) == 'new'
+
+
+@pytest.mark.parametrize(
+    ('cache_result', 'expected_returncode', 'dispatch_expected'),
+    (
+        ('success', 0, True),
+        ('failure', 1, False),
+    ),
+)
+def test_cache_attempt_transitions_to_recurring_timer(
+    tmp_path,
+    cache_result,
+    expected_returncode,
+    dispatch_expected,
+):
+    transaction = _prepare_transaction(tmp_path)
+    cache_unit = transaction['new_release'] / 'systemd' / 'case-weather-cache.service'
+    cache_unit.write_text(
+        '[Unit]\n'
+        'OnSuccess=case-weather-dispatch.service case-weather-cache.timer\n'
+        'OnFailure=case-weather-cache.timer\n'
+        '[Service]\n'
+        'Type=oneshot\n',
+        encoding='utf-8',
+    )
+    activated = _run_activation(transaction)
+    assert activated.returncode == 0, activated.stderr
+    (transaction['fake_state'] / 'case-weather-cache-bootstrap.timer.active').unlink()
+    transaction['env']['FAKE_CACHE_RESULT'] = cache_result
+
+    attempted = subprocess.run(
+        [
+            transaction['env']['SYSTEMCTL_BIN'],
+            'start',
+            'case-weather-cache.service',
+        ],
+        cwd=ROOT,
+        env=transaction['env'],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert attempted.returncode == expected_returncode
+    assert (
+        transaction['fake_state'] / 'case-weather-cache.timer.active'
+    ).exists()
+    assert (
+        transaction['fake_state'] / 'case-weather-dispatch.service.active'
+    ).exists() is dispatch_expected
 
 
 def test_rollback_failure_is_loud_and_leaves_all_units_stopped(tmp_path):
@@ -2344,9 +2552,17 @@ def test_formal_qweather_smoke_writes_completed_receipt_and_reuses_without_reque
     receipt = receipt_dirs[0]
     assert (receipt / 'started').is_file()
     assert (receipt / 'completed').is_file()
+    started_text = (receipt / 'started').read_text(encoding='utf-8')
+    assert 'budget_month=2026-07' in started_text
+    assert 'budget_used_before=10' in started_text
+    assert 'budget_endpoints_before_json={}' in started_text
+    completed_text = (receipt / 'completed').read_text(encoding='utf-8')
     assert 'snapshot_id=formal-snapshot-1' in (receipt / 'completed').read_text(
         encoding='utf-8'
     )
+    assert 'budget_used_after=11' in completed_text
+    assert 'budget_total_delta=1' in completed_text
+    assert 'budget_endpoint_deltas_json={"weather_now":1}' in completed_text
 
     # 动态网络闸门和非天气发布字段轮换都不能获得第二次自动烟测机会。
     rotated_config = (transaction['state_dir'] / '.env').read_text(encoding='utf-8')
@@ -2377,7 +2593,7 @@ def test_formal_qweather_smoke_writes_completed_receipt_and_reuses_without_reque
     ) == [receipt]
 
 
-def test_qweather_key_change_creates_new_weather_fingerprint(tmp_path):
+def test_qweather_kid_change_creates_new_weather_fingerprint(tmp_path):
     transaction = _prepare_transaction(tmp_path)
     _staged_text, counter_file = _configure_formal_smoke(transaction)
     first = _run_activation(transaction)
@@ -2385,10 +2601,13 @@ def test_qweather_key_change_creates_new_weather_fingerprint(tmp_path):
     assert counter_file.read_text(encoding='utf-8') == '1'
 
     weather_config = (transaction['state_dir'] / '.env').read_text(encoding='utf-8')
-    assert 'QWEATHER_KEY=test-qweather-key' in weather_config
+    assert 'QWEATHER_JWT_KID=test-kid' in weather_config
     weather_config = weather_config.replace(
-        'QWEATHER_KEY=test-qweather-key',
-        'QWEATHER_KEY=rotated-qweather-key',
+        'QWEATHER_JWT_KID=test-kid',
+        'QWEATHER_JWT_KID=rotated-test-kid',
+    ).replace(
+        'QWEATHER_EXPECTED_KID=test-kid',
+        'QWEATHER_EXPECTED_KID=rotated-test-kid',
     )
     (transaction['new_release'] / 'staged.env').write_text(
         weather_config,
@@ -2431,8 +2650,7 @@ def test_lost_completed_receipt_never_retries_the_weather_request(tmp_path):
 def test_jwt_private_key_content_change_creates_new_weather_fingerprint(tmp_path):
     transaction = _prepare_transaction(tmp_path)
     private_key = tmp_path / 'qweather-private.pem'
-    private_key.write_bytes(b'private-key-version-one')
-    private_key.chmod(0o600)
+    _write_test_ed25519_private_key(private_key)
     _staged_text, counter_file = _configure_formal_jwt_smoke(
         transaction,
         private_key,
@@ -2443,8 +2661,7 @@ def test_jwt_private_key_content_change_creates_new_weather_fingerprint(tmp_path
     assert first.returncode == 0, first.stderr
     assert counter_file.read_text(encoding='utf-8') == '1'
 
-    private_key.write_bytes(b'private-key-version-two')
-    private_key.chmod(0o600)
+    _write_test_ed25519_private_key(private_key)
     (transaction['new_release'] / 'staged.env').write_text(
         (transaction['state_dir'] / '.env').read_text(encoding='utf-8'),
         encoding='utf-8',
@@ -2474,9 +2691,53 @@ def test_jwt_private_key_symlink_fails_before_weather_request(tmp_path):
     result = _run_activation(transaction)
 
     assert result.returncode != 0
-    assert '正式 JWT 私钥安全校验失败' in result.stderr
+    assert '正式 JWT 运行用户离线签名预检失败' in result.stderr
     assert str(private_key) not in result.stderr
     assert not counter_file.exists()
+    assert not (
+        transaction['state_dir'] / 'deployments' / 'formal-cache-smokes'
+    ).exists()
+
+
+def test_malformed_jwt_key_fails_offline_before_started_receipt(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    private_key = tmp_path / 'qweather-private.pem'
+    private_key.write_bytes(b'malformed-private-key')
+    private_key.chmod(0o600)
+    _staged_text, counter_file = _configure_formal_jwt_smoke(
+        transaction,
+        private_key,
+    )
+
+    result = _run_activation(transaction)
+
+    assert result.returncode != 0
+    assert '正式 JWT 运行用户离线签名预检失败' in result.stderr
+    assert not counter_file.exists()
+    assert not (
+        transaction['state_dir'] / 'deployments' / 'formal-cache-smokes'
+    ).exists()
+
+
+def test_formal_smoke_rejects_duplicate_endpoint_budget_delta(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    _staged_text, counter_file = _configure_formal_smoke(transaction)
+    (transaction['state_dir'] / 'formal-smoke-budget-mode').write_text(
+        'duplicate\n',
+        encoding='utf-8',
+    )
+
+    result = _run_activation(transaction)
+
+    assert result.returncode != 0
+    assert '每个 endpoint 增量不超过 1' in result.stderr
+    assert counter_file.read_text(encoding='utf-8') == '1'
+    receipt_dirs = list(
+        (transaction['state_dir'] / 'deployments' / 'formal-cache-smokes').iterdir()
+    )
+    assert len(receipt_dirs) == 1
+    assert (receipt_dirs[0] / 'started').is_file()
+    assert not (receipt_dirs[0] / 'completed').exists()
 
 
 def test_formal_fallback_snapshot_is_rejected_and_started_receipt_blocks_retry(tmp_path):

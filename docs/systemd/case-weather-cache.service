@@ -1,12 +1,37 @@
 [Unit]
 Description=Case Weather - refresh Duchang weather cache
+ConditionPathExists=|!/opt/your-app/deployments/activation-in-progress
+ConditionPathExists=|/run/case-weather/activation-permit
 After=network.target case-weather.service
-OnSuccess=case-weather-dispatch.service
+OnSuccess=case-weather-dispatch.service case-weather-cache.timer
+OnFailure=case-weather-cache.timer
 
 [Service]
 Type=oneshot
-User=root
+User=case-weather
+Group=case-weather
 UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+ProcSubset=pid
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+RestrictRealtime=true
+LockPersonality=true
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+ReadOnlyPaths=/opt/your-app-deploy/current /opt/your-app/.env
+ReadWritePaths=/opt/your-app/instance /opt/your-app/storage /opt/your-app/run
 WorkingDirectory=/opt/your-app-deploy/current/app
 EnvironmentFile=/opt/your-app/.env
 Environment=PYTHONUNBUFFERED=1

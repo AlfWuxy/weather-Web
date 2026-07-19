@@ -148,6 +148,8 @@ def _write_env(tmp_path, extra=""):
         "QWEATHER_BUDGET_FAIL_CLOSED=1\n"
         "QWEATHER_REQUIRE_PERSISTENT_BUDGET=1\n"
         "QWEATHER_DEDICATED_CREDENTIAL_CONFIRMED=1\n"
+        "QWEATHER_EXPECTED_PROJECT_ID=test-project\n"
+        "QWEATHER_EXPECTED_KID=test-kid\n"
         f"QWEATHER_CONSOLE_USAGE_MONTH={release_validator._expected_qweather_usage_month()}\n"
         "QWEATHER_CONSOLE_USAGE_BASELINE=123\n"
         "WEATHER_CACHE_TTL_MINUTES=30\n"
@@ -158,6 +160,20 @@ def _write_env(tmp_path, extra=""):
         encoding="utf-8",
     )
     return path
+
+
+def _formal_qweather_env(tmp_path):
+    private_key = tmp_path / "qweather-formal-private.pem"
+    private_key.write_text("private-key-material", encoding="utf-8")
+    private_key.chmod(0o600)
+    return (
+        "QWEATHER_AUTH_MODE=jwt\n"
+        "QWEATHER_KEY=\n"
+        "QWEATHER_API_BASE=https://unit-test.qweatherapi.com/v7\n"
+        "QWEATHER_JWT_KID=test-kid\n"
+        "QWEATHER_JWT_PROJECT_ID=test-project\n"
+        f"QWEATHER_JWT_PRIVATE_KEY_PATH={private_key}\n"
+    )
 
 
 def _write_wechat_release_form(tmp_path, **overrides):
@@ -194,6 +210,8 @@ def _write_wechat_release_form(tmp_path, **overrides):
         "WXPUSHER_APP_TOKEN": "",
         "FEATURE_HEAT_EXPOSURE_GIS": "1",
         "QWEATHER_DEDICATED_CREDENTIAL_CONFIRMED": "1",
+        "QWEATHER_EXPECTED_PROJECT_ID": "test-project",
+        "QWEATHER_EXPECTED_KID": "test-kid",
         "QWEATHER_CONSOLE_USAGE_MONTH": release_validator._expected_qweather_usage_month(),
         "QWEATHER_CONSOLE_USAGE_BASELINE": "123",
         "WECHAT_FORM_READY": "1",
@@ -301,13 +319,42 @@ def test_validator_requires_all_wechat_values_for_formal_release(tmp_path):
         f"WX_MINIPROGRAM_OPENID_PEPPER={'p' * 32}\n"
         f"WX_MINIPROGRAM_SESSION_SECRET={'s' * 32}\n"
         "FEATURE_HEAT_EXPOSURE_GIS=1\n"
-        "QWEATHER_AUTH_MODE=api_key\n"
-        "QWEATHER_KEY=server-secret\n"
-        "QWEATHER_API_BASE=https://unit-test.qweatherapi.com/v7\n",
+        + _formal_qweather_env(tmp_path),
     )
     ready_result = validate_release_env(ready, require_wechat=True)
     assert ready_result["ok"] is True
     assert ready_result["wechat_ready"] is True
+
+
+def test_formal_validator_requires_jwt_and_matching_public_identifiers(tmp_path):
+    wechat = (
+        "WX_MINIPROGRAM_APPID=wx123456\n"
+        "WX_MINIPROGRAM_SECRET=1234567890abcdef\n"
+        f"WX_MINIPROGRAM_OPENID_PEPPER={'p' * 32}\n"
+        f"WX_MINIPROGRAM_SESSION_SECRET={'s' * 32}\n"
+        "FEATURE_HEAT_EXPOSURE_GIS=1\n"
+    )
+    api_key_result = validate_release_env(
+        _write_env(
+            tmp_path,
+            wechat
+            + "QWEATHER_AUTH_MODE=api_key\n"
+            + "QWEATHER_KEY=legacy-key\n"
+            + "QWEATHER_API_BASE=https://unit-test.qweatherapi.com/v7\n",
+        ),
+        require_wechat=True,
+    )
+    assert api_key_result["ok"] is False
+    assert any("QWEATHER_AUTH_MODE=jwt" in error for error in api_key_result["errors"])
+    assert any("清空旧 QWEATHER_KEY" in error for error in api_key_result["errors"])
+
+    mismatch = _formal_qweather_env(tmp_path) + "QWEATHER_EXPECTED_KID=other-kid\n"
+    mismatch_result = validate_release_env(
+        _write_env(tmp_path, wechat + mismatch),
+        require_wechat=True,
+    )
+    assert mismatch_result["ok"] is False
+    assert any("实际 JWT KID 不一致" in error for error in mismatch_result["errors"])
 
 
 @pytest.mark.parametrize(
@@ -358,6 +405,8 @@ def test_qweather_month_reserve_covers_30_minute_cycles_and_month_end():
 
     month_start_values = {
         "QWEATHER_DEDICATED_CREDENTIAL_CONFIRMED": "1",
+        "QWEATHER_EXPECTED_PROJECT_ID": "test-project",
+        "QWEATHER_EXPECTED_KID": "test-kid",
         "QWEATHER_CONSOLE_USAGE_MONTH": "2026-07",
         "QWEATHER_CONSOLE_USAGE_BASELINE": str(40000 - ((31 * 48 * 3) + 3)),
     }
@@ -378,6 +427,8 @@ def test_qweather_month_reserve_covers_30_minute_cycles_and_month_end():
 
     month_end_values = {
         "QWEATHER_DEDICATED_CREDENTIAL_CONFIRMED": "1",
+        "QWEATHER_EXPECTED_PROJECT_ID": "test-project",
+        "QWEATHER_EXPECTED_KID": "test-kid",
         "QWEATHER_CONSOLE_USAGE_MONTH": "2026-07",
         "QWEATHER_CONSOLE_USAGE_BASELINE": "39994",
     }
@@ -425,9 +476,7 @@ def test_formal_server_validator_requires_gis_and_wxpusher_disabled(tmp_path):
         "WX_MINIPROGRAM_SECRET=1234567890abcdef\n"
         f"WX_MINIPROGRAM_OPENID_PEPPER={'p' * 32}\n"
         f"WX_MINIPROGRAM_SESSION_SECRET={'s' * 32}\n"
-        "QWEATHER_AUTH_MODE=api_key\n"
-        "QWEATHER_KEY=server-secret\n"
-        "QWEATHER_API_BASE=https://unit-test.qweatherapi.com/v7\n"
+        + _formal_qweather_env(tmp_path)
     )
     first_release = validate_release_env(
         _write_env(tmp_path, base + "FEATURE_HEAT_EXPOSURE_GIS=1\n"),
@@ -1042,6 +1091,10 @@ def test_wechat_release_form_requires_private_complete_personal_form(tmp_path):
         (
             {"QWEATHER_CONSOLE_USAGE_BASELINE": "01"},
             "必须是 0 至",
+        ),
+        (
+            {"QWEATHER_EXPECTED_KID": "contains space"},
+            "QWEATHER_EXPECTED_KID",
         ),
     ),
 )

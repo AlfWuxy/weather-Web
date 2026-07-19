@@ -103,6 +103,8 @@ WECHAT_FORM_REQUIRED_KEYS = (
     "QWEATHER_DEDICATED_CREDENTIAL_CONFIRMED",
     "QWEATHER_CONSOLE_USAGE_MONTH",
     "QWEATHER_CONSOLE_USAGE_BASELINE",
+    "QWEATHER_EXPECTED_PROJECT_ID",
+    "QWEATHER_EXPECTED_KID",
 ) + WECHAT_CATEGORY_EVIDENCE_KEYS + WECHAT_RELEASE_FREEZE_KEYS
 QWEATHER_MAX_PRIVATE_KEY_BYTES = 16 * 1024
 GIS_SOURCE_MAX_BYTES = 8 * 1024 * 1024
@@ -120,6 +122,7 @@ QWEATHER_FORMAL_PINNED_VALUES = {
 }
 QWEATHER_CONSOLE_USAGE_MONTH_PATTERN = re.compile(r"^\d{4}-\d{2}$")
 QWEATHER_CONSOLE_USAGE_BASELINE_PATTERN = re.compile(r"^(?:0|[1-9]\d{0,8})$")
+QWEATHER_PUBLIC_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 QWEATHER_REDIS_BUDGET_PREFIX = "qweather:budget:app:v2"
 QWEATHER_FORMAL_SMOKE_MAX_REQUESTS = 3
 WECHAT_CATEGORY_PATHS_JSON_MAX_LENGTH = 1800
@@ -341,6 +344,9 @@ def _validate_qweather_console_baseline(values, *, validation_time=None):
             "QWeather 控制台当月剩余额度不足以覆盖最多 3 个正式烟测端点，"
             "以及每 30 分钟最多 3 个端点直至北京时间下月起点。"
         )
+    for key in ("QWEATHER_EXPECTED_PROJECT_ID", "QWEATHER_EXPECTED_KID"):
+        if not QWEATHER_PUBLIC_ID_PATTERN.fullmatch(values.get(key, "")):
+            errors.append(f"{key} 必须是 1 至 128 位字母、数字、下划线或短横线。")
     return errors
 
 
@@ -1114,6 +1120,8 @@ def validate_wechat_release_form(
             "QWEATHER_DEDICATED_CREDENTIAL_CONFIRMED",
             "QWEATHER_CONSOLE_USAGE_MONTH",
             "QWEATHER_CONSOLE_USAGE_BASELINE",
+            "QWEATHER_EXPECTED_PROJECT_ID",
+            "QWEATHER_EXPECTED_KID",
         )
     )
     if must_be_complete or baseline_fields_present:
@@ -1421,6 +1429,10 @@ def validate_release_env(path: Path, *, require_wechat=False):
     )
     allow_weather_unavailable = values.get("ALLOW_WEATHER_UNAVAILABLE") == "1"
     weather_ready = False
+    if require_wechat and qweather_mode != "jwt":
+        errors.append("微信正式发布必须固定使用 QWEATHER_AUTH_MODE=jwt。")
+    if require_wechat and values.get("QWEATHER_KEY"):
+        errors.append("微信正式发布使用 JWT 时必须清空旧 QWEATHER_KEY。")
     if persistent_budget_raw not in {"", "0", "1"}:
         errors.append("QWEATHER_REQUIRE_PERSISTENT_BUDGET 只能是 0 或 1。")
     if require_wechat and persistent_budget_raw != "1":
@@ -1455,6 +1467,19 @@ def validate_release_env(path: Path, *, require_wechat=False):
             weather_ready = not mode_errors
     else:
         errors.append("QWEATHER_AUTH_MODE 只能是 disabled、api_key 或 jwt。")
+    if require_wechat:
+        expected_project_id = values.get("QWEATHER_EXPECTED_PROJECT_ID", "")
+        expected_kid = values.get("QWEATHER_EXPECTED_KID", "")
+        for key, value in (
+            ("QWEATHER_EXPECTED_PROJECT_ID", expected_project_id),
+            ("QWEATHER_EXPECTED_KID", expected_kid),
+        ):
+            if not QWEATHER_PUBLIC_ID_PATTERN.fullmatch(value):
+                errors.append(f"{key} 必须是 1 至 128 位字母、数字、下划线或短横线。")
+        if expected_project_id != values.get("QWEATHER_JWT_PROJECT_ID", ""):
+            errors.append("QWEATHER_EXPECTED_PROJECT_ID 与实际 JWT Project ID 不一致。")
+        if expected_kid != values.get("QWEATHER_JWT_KID", ""):
+            errors.append("QWEATHER_EXPECTED_KID 与实际 JWT KID 不一致。")
     feature_heat_exposure_gis = values.get("FEATURE_HEAT_EXPOSURE_GIS", "")
     if feature_heat_exposure_gis not in {"", "0", "1"}:
         errors.append("FEATURE_HEAT_EXPOSURE_GIS 只能是 0 或 1。")
