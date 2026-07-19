@@ -117,7 +117,7 @@ def render_artifact(path: str, content: bytes, fields: PublicReleaseFields) -> b
     """把一份候选 blob 前向渲染为最终 blob。"""
     text = _text(content)
     if path == PRIVACY_DOC_PATH:
-        text = _replace(text, "# 宜老天气通隐私说明发布候选版\n\n> 候选隐私版本：`2026-07-18`。本文尚未作为正式生效文本。正式提交审核时需要根据微信公众平台后台实际勾选的数据类型、接口权限、主体名称和联系方式逐项校对，并同时冻结生效日期、`WX_MINIPROGRAM_PRIVACY_VERSION`、目标 commit hash 和对应页面内容 hash；四者写入私有发布确认单后才可标记为正式版。", f"# {fields.name}隐私说明\n\n{_markers(fields, dated=True, private=True)}\n\n生效日期：{fields.effective_date}  \n隐私版本：{fields.privacy_version}")
+        text = _replace(text, "# 宜老天气通隐私说明发布候选版\n\n> 候选隐私版本：`2026-07-18`。本文尚未作为正式生效文本。正式提交审核时需要根据微信公众平台后台实际勾选的数据类型、接口权限、主体名称和联系方式逐项校对，并同时冻结生效日期、`WX_MINIPROGRAM_PRIVACY_VERSION`、目标 commit hash 和对应页面内容 hash；四者写入私有发布确认单后才可标记为正式版。", f"# {fields.name}隐私说明\n\n{_markers(fields, dated=True, private=True)}\n\n生效日期：{fields.effective_date}\n隐私版本：{fields.privacy_version}")
         text = _replace(text, "正式提交前，将认证主体姓名、专用联系邮箱和生效日期同步填写到微信公众平台隐私保护指引与本机私密发布表单；仓库不保存个人证件或认证隐私材料。", "认证运营者姓名、专用联系邮箱和本说明生效日期以微信公众平台隐私保护指引展示的信息为准；仓库不保存个人证件或认证隐私材料。")
     elif path == AGREEMENT_DOC_PATH:
         text = _replace(text, "# 宜老天气通用户协议发布候选版\n\n候选版本：`2026-07-18`。正式提交审核时同步冻结生效日期、协议版本、隐私版本、目标 commit hash 和对应页面内容 hash；冻结前本文不作为正式生效版本。", f"# {fields.name}用户协议\n\n{_markers(fields, dated=True)}\n\n生效日期：{fields.effective_date}")
@@ -129,6 +129,7 @@ def render_artifact(path: str, content: bytes, fields: PublicReleaseFields) -> b
     elif path == PRIVACY_PAGE_PATH:
         text = _replace(text, '<view class="page-shell">', f"{_markers(fields, dated=True, private=True)}\n<view class=\"page-shell\">")
         text = _replace(text, '<view class="hero-kicker">隐私与数据边界 · 发布候选版</view>', f'<view class="hero-kicker">{fields.name} · 隐私与数据边界</view>')
+        text = _replace(text, "运营者姓名、专用联系邮箱与生效日期会在正式提交前同步到微信平台隐私保护指引，以平台展示的认证信息为准。", "运营者姓名、专用联系邮箱与生效日期以微信公众平台隐私保护指引展示的认证信息为准。")
         text = _replace(text, '<view class="privacy-version">候选版本：2026-07-18 · 正式提交审核时同步冻结生效日期、隐私版本、目标 commit hash 和页面内容 hash；重要变化会再次请你阅读并主动同意。</view>', f'<view class="privacy-version">生效日期：{fields.effective_date} · 隐私版本：{fields.privacy_version} · 重要变化会再次请你阅读并主动同意。</view>')
     elif path == AGREEMENT_PAGE_PATH:
         text = _replace(text, '<view class="page-shell">', f"{_markers(fields, dated=True)}\n<view class=\"page-shell\">")
@@ -154,7 +155,7 @@ def _restore_candidate(path: str, content: bytes, fields: PublicReleaseFields) -
     """从正式文本严格恢复已人工复核的候选基线。"""
     text = _text(content)
     if path == PRIVACY_DOC_PATH:
-        text = _replace(text, f"# {fields.name}隐私说明\n\n{_markers(fields, dated=True, private=True)}\n\n生效日期：{fields.effective_date}  \n隐私版本：{fields.privacy_version}", "# 宜老天气通隐私说明发布候选版\n\n> 候选隐私版本：`2026-07-18`。本文尚未作为正式生效文本。正式提交审核时需要根据微信公众平台后台实际勾选的数据类型、接口权限、主体名称和联系方式逐项校对，并同时冻结生效日期、`WX_MINIPROGRAM_PRIVACY_VERSION`、目标 commit hash 和对应页面内容 hash；四者写入私有发布确认单后才可标记为正式版。")
+        text = _replace(text, f"# {fields.name}隐私说明\n\n{_markers(fields, dated=True, private=True)}\n\n生效日期：{fields.effective_date}\n隐私版本：{fields.privacy_version}", "# 宜老天气通隐私说明发布候选版\n\n> 候选隐私版本：`2026-07-18`。本文尚未作为正式生效文本。正式提交审核时需要根据微信公众平台后台实际勾选的数据类型、接口权限、主体名称和联系方式逐项校对，并同时冻结生效日期、`WX_MINIPROGRAM_PRIVACY_VERSION`、目标 commit hash 和对应页面内容 hash；四者写入私有发布确认单后才可标记为正式版。")
         text = _replace(text, "认证运营者姓名、专用联系邮箱和本说明生效日期以微信公众平台隐私保护指引展示的信息为准；仓库不保存个人证件或认证隐私材料。", "正式提交前，将认证主体姓名、专用联系邮箱和生效日期同步填写到微信公众平台隐私保护指引与本机私密发布表单；仓库不保存个人证件或认证隐私材料。")
     elif path == AGREEMENT_DOC_PATH:
         text = _replace(text, f"# {fields.name}用户协议\n\n{_markers(fields, dated=True)}\n\n生效日期：{fields.effective_date}", "# 宜老天气通用户协议发布候选版\n\n候选版本：`2026-07-18`。正式提交审核时同步冻结生效日期、协议版本、隐私版本、目标 commit hash 和对应页面内容 hash；冻结前本文不作为正式生效版本。")
@@ -166,6 +167,7 @@ def _restore_candidate(path: str, content: bytes, fields: PublicReleaseFields) -
     elif path == PRIVACY_PAGE_PATH:
         text = _replace(text, f"{_markers(fields, dated=True, private=True)}\n<view class=\"page-shell\">", '<view class="page-shell">')
         text = _replace(text, f'<view class="hero-kicker">{fields.name} · 隐私与数据边界</view>', '<view class="hero-kicker">隐私与数据边界 · 发布候选版</view>')
+        text = _replace(text, "运营者姓名、专用联系邮箱与生效日期以微信公众平台隐私保护指引展示的认证信息为准。", "运营者姓名、专用联系邮箱与生效日期会在正式提交前同步到微信平台隐私保护指引，以平台展示的认证信息为准。")
         text = _replace(text, f'<view class="privacy-version">生效日期：{fields.effective_date} · 隐私版本：{fields.privacy_version} · 重要变化会再次请你阅读并主动同意。</view>', '<view class="privacy-version">候选版本：2026-07-18 · 正式提交审核时同步冻结生效日期、隐私版本、目标 commit hash 和页面内容 hash；重要变化会再次请你阅读并主动同意。</view>')
     elif path == AGREEMENT_PAGE_PATH:
         text = _replace(text, f"{_markers(fields, dated=True)}\n<view class=\"page-shell\">", '<view class="page-shell">')
@@ -189,6 +191,17 @@ def _restore_candidate(path: str, content: bytes, fields: PublicReleaseFields) -
 def _verify_candidate(contents: Mapping[str, bytes]) -> None:
     if any(hashlib.sha256(contents[path]).hexdigest() != CANDIDATE_SHA256[path] for path in CONTENT_PATHS):
         raise ReleaseContractError("候选材料 SHA-256 不符合已审基线。")
+
+
+def restore_candidate(contents: Mapping[str, bytes], fields: PublicReleaseFields) -> dict[str, bytes]:
+    """把完整正式材料严格回溯为已人工复核的候选基线。"""
+    if set(contents) != set(CONTENT_PATHS):
+        raise ReleaseContractError("发布材料清单不完整。")
+    restored = {path: _restore_candidate(path, contents[path], fields) for path in CONTENT_PATHS}
+    _verify_candidate(restored)
+    if any(render_artifact(path, restored[path], fields) != contents[path] for path in CONTENT_PATHS):
+        raise ReleaseContractError("正式材料无法确定性回溯到候选基线。")
+    return restored
 
 
 def render_final(candidate: Mapping[str, bytes], fields: PublicReleaseFields) -> dict[str, bytes]:
@@ -243,7 +256,4 @@ def verify_final(contents: Mapping[str, bytes], fields: PublicReleaseFields) -> 
     versions = [match.group(2) for match in CONFIG_RE.finditer(_text(contents[CONFIG_PATH]))]
     if marker_total != 20 or versions != [fields.privacy_version]:
         raise ReleaseContractError("正式材料 marker 数量或 config 隐私版本不一致。")
-    restored = {path: _restore_candidate(path, contents[path], fields) for path in CONTENT_PATHS}
-    _verify_candidate(restored)
-    if any(render_artifact(path, restored[path], fields) != contents[path] for path in CONTENT_PATHS):
-        raise ReleaseContractError("正式材料无法确定性回溯到候选基线。")
+    restore_candidate(contents, fields)

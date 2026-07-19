@@ -7,6 +7,7 @@ import hashlib
 import os
 import stat
 import subprocess
+from functools import lru_cache
 from pathlib import Path
 
 import pytest
@@ -38,8 +39,40 @@ def _git(repo: Path, *arguments: str) -> bytes:
     return result.stdout
 
 
+def _only_marker(pattern, contents: dict[str, bytes], label: str) -> str:
+    values = {
+        match
+        for path, content in contents.items()
+        if path != contract.CONFIG_PATH
+        for match in pattern.findall(content.decode("utf-8"))
+    }
+    assert len(values) == 1, f"正式 HEAD 的{label} marker 不一致"
+    return values.pop()
+
+
+def _restore_head_candidate(contents: dict[str, bytes]) -> dict[str, bytes]:
+    final_states = [contract.has_final_marker(contents[path]) for path in contract.CONTENT_PATHS[:-1]]
+    if not any(final_states):
+        return contents
+    assert all(final_states), "HEAD 发布材料不能混合候选与正式状态"
+    fields = contract.PublicReleaseFields(
+        _only_marker(contract.NAME_RE, contents, "名称"),
+        _only_marker(contract.DATE_RE, contents, "生效日期"),
+        _only_marker(contract.PRIVACY_RE, contents, "隐私版本"),
+        contract.EXPECTED_RELEASE_VERSION,
+    )
+    contract.verify_final(contents, fields)
+    return contract.restore_candidate(contents, fields)
+
+
+@lru_cache(maxsize=1)
+def _candidate_fixture() -> dict[str, bytes]:
+    head = {path: _git(ROOT, "show", f"HEAD:{path}") for path in contract.CONTENT_PATHS}
+    return _restore_head_candidate(head)
+
+
 def _candidate(path: str) -> bytes:
-    return _git(ROOT, "show", f"HEAD:{path}")
+    return _candidate_fixture()[path]
 
 
 def _init_repo(tmp_path: Path) -> Path:
@@ -125,6 +158,21 @@ def _finalize_commit(repo: Path, form: Path) -> str:
     _git(repo, "add", *contract.CONTENT_PATHS)
     _git(repo, "commit", "-q", "-m", "正式冻结")
     return _git(repo, "rev-parse", "HEAD").decode("ascii").strip()
+
+
+def test_candidate_fixture_recovers_reviewed_baseline_from_final_head():
+    candidate = dict(_candidate_fixture())
+    final = contract.render_final(candidate, _fields())
+    assert _restore_head_candidate(final) == candidate
+
+
+def test_privacy_page_final_contact_copy_is_current_and_reversible():
+    candidate = dict(_candidate_fixture())
+    final = contract.render_final(candidate, _fields())
+    privacy = final[contract.PRIVACY_PAGE_PATH].decode("utf-8")
+    assert "以微信公众平台隐私保护指引展示的认证信息为准" in privacy
+    assert "会在正式提交前同步" not in privacy
+    assert contract.restore_candidate(final, _fields()) == candidate
 
 
 def test_finalize_candidate_matches_contract_and_is_idempotent(tmp_path):

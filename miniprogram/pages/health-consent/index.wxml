@@ -1,6 +1,10 @@
+<!-- WECHAT_RELEASE_STATUS: final -->
+<!-- WECHAT_MINIPROGRAM_NAME: 宜老天气通 -->
+<!-- WECHAT_EFFECTIVE_DATE: 2026-07-19 -->
+<!-- WECHAT_PRIVACY_VERSION: 2026-07-18 -->
 <view class="page-shell">
   <view class="hero consent-hero">
-    <view class="hero-kicker">健康敏感个人信息</view>
+    <view class="hero-kicker">宜老天气通 · 健康敏感个人信息</view>
     <view class="hero-title">请单独确认后，再使用家庭照护。</view>
     <view class="hero-subtitle">公开天气、预报、预警、社区和 GIS 无需这项同意，拒绝后仍可正常使用。</view>
   </view>
@@ -46,7 +50,7 @@
         </label>
       </checkbox-group>
       <button class="text-link" bindtap="openPrivacy" aria-label="查看完整隐私说明">查看完整隐私说明</button>
-      <view class="version-text">当前服务端要求版本：{{requiredVersion}}</view>
+      <view class="version-text">生效日期：2026-07-19 · 隐私版本：2026-07-18 · 当前服务端要求版本：{{requiredVersion}}</view>
     </view>
 
     <button wx:if="{{!consentCurrent}}" class="primary-button consent-button" loading="{{busy}}" disabled="{{busy || !agreed}}" bindtap="submitConsent">单独同意并继续</button>
