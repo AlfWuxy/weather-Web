@@ -14,6 +14,7 @@ const FILES = {
   agreementDoc: 'docs/miniprogram/USER_AGREEMENT_TEMPLATE.md',
   listing: 'docs/miniprogram/LISTING_COPY.md',
   handoff: 'docs/miniprogram/WECHAT_RELEASE_HANDOFF.md',
+  releaseChecklist: 'docs/miniprogram/RELEASE_CHECKLIST.md',
   manifest: 'docs/miniprogram/REVIEW_SCREENSHOT_MANIFEST_TEMPLATE.md',
   privacyPage: 'miniprogram/pages/privacy/index.wxml',
   agreementPage: 'miniprogram/pages/agreement/index.wxml',
@@ -261,6 +262,29 @@ test('剪贴板说明和隐私页输入提示与实际能力一致', () => {
 
   const privacyPage = read(FILES.privacyPage);
   assert.doesNotMatch(privacyPage, /safe-note[^>]*>[^<]*昵称/, '隐私页仍提示不存在的昵称输入');
+
+  for (const file of [FILES.handoff, FILES.releaseChecklist]) {
+    const text = read(file);
+    assert.match(text, /wx\.setClipboardData.*只写不读.*(?:不上传|复制内容不上传)/s, `${file} 缺少平台剪贴板声明`);
+  }
+});
+
+test('家庭关系码和结构化请求日志披露与当前运行态一致', () => {
+  for (const file of [FILES.privacyDoc, FILES.privacyPage]) {
+    const text = read(file);
+    assert.match(text, /老人码.*短码明文.*不可逆哈希.*90 天.*账号.*注销/s, `${file} 缺少关系码明文和保存边界`);
+    assert.match(text, /结构化请求日志.*请求编号.*请求方法.*访问路径.*状态码.*耗时/s, `${file} 缺少请求日志字段`);
+    assert.match(text, /不记录.*请求.*正文.*查询参数.*IP.*User-Agent.*会话 token/s, `${file} 缺少请求日志排除项`);
+    assert.match(text, /systemd journal.*没有固定保存天数|systemd journal；当前未配置固定保存天数/s, `${file} 缺少实际轮转边界`);
+    assert.match(text, /磁盘容量边界.*日志量.*自动轮转覆盖/s, `${file} 缺少容量轮转说明`);
+  }
+
+  for (const file of [FILES.handoff, FILES.releaseChecklist]) {
+    const text = read(file);
+    assert.match(text, /老人码.*短码明文.*不可逆哈希/s, `${file} 缺少平台关系码声明`);
+    assert.match(text, /结构化请求日志.*不记录.*正文.*IP.*User-Agent/s, `${file} 缺少平台请求日志声明`);
+    assert.match(text, /systemd journal.*没有固定保存天数.*自动轮转覆盖/s, `${file} 缺少平台日志轮转声明`);
+  }
 });
 
 test('复盘关闭家人关联后仍由账号持有且社区只展示数量', () => {
@@ -365,7 +389,7 @@ test('上架文案使用高温行动并完整披露候选包功能', () => {
 
 test('发布材料精确锁定平台数据声明与第三方推送排除项', () => {
   const handoff = read(FILES.handoff);
-  for (const field of ['wx.login', 'OpenID 哈希', '家人档案与健康字段', '固定枚举产品事件', '必要安全限流']) {
+  for (const field of ['wx.setClipboardData', 'wx.login', 'OpenID 哈希', '家人档案与健康字段', '短码明文', '固定枚举产品事件', '结构化请求日志', '必要安全限流']) {
     assert.match(handoff, new RegExp(field.replace('.', '\\.')), `交接缺少平台声明 ${field}`);
   }
   for (const excluded of ['第三方推送接收标识', '个人定位', '昵称头像', '手机号', '订阅消息']) {
