@@ -676,6 +676,43 @@ test('提醒话术遇到较早或不可用天气时退回通用提醒', async ()
   assert.match(unavailablePage.data.message, /【都昌县天气提醒】/);
 });
 
+test('复制提醒事件不上传家庭配对标识', () => {
+  const requests = [];
+  authApiImpl = (options) => {
+    requests.push(options);
+    return Promise.resolve({});
+  };
+  const originalSetClipboardData = global.wx.setClipboardData;
+  global.wx.setClipboardData = ({ success }) => success();
+
+  try {
+    const definition = loadPage('../pages/template/index');
+    const page = makePage(definition, {
+      pairId: 9,
+      trigger: 'heat',
+      message: '请及时喝水并减少午后外出。',
+      contextReady: true,
+    });
+    page._unloaded = false;
+    page._lifecycleGeneration = 1;
+
+    page.copyMessage.call(page);
+  } finally {
+    global.wx.setClipboardData = originalSetClipboardData;
+  }
+
+  const request = requests.find((item) => item.path === '/mp/api/v1/events');
+  assert.deepEqual(request, {
+    method: 'POST',
+    path: '/mp/api/v1/events',
+    data: {
+      event_type: 'template_copy',
+      meta: { trigger: 'heat', location: '都昌县' },
+    },
+  });
+  assert.equal(Object.hasOwn(request.data, 'pair_id'), false);
+});
+
 test('公共天气页面失败会安全降级、统一退避并提供真实重试入口', async () => {
   const publicDataPath = require.resolve('../utils/public-data');
   const lifecyclePath = require.resolve('../utils/public-page-lifecycle');

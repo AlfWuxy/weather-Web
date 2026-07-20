@@ -151,7 +151,6 @@ Page({
           path: '/mp/api/v1/events',
           data: {
             event_type: 'template_copy',
-            pair_id: this.data.pairId,
             meta: { trigger: this.data.trigger, location: '都昌县' },
           },
         }).catch(() => {});
