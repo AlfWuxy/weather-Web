@@ -3,11 +3,11 @@
 <!-- WECHAT_RELEASE_STATUS: final -->
 <!-- WECHAT_MINIPROGRAM_NAME: 宜老平安 -->
 <!-- WECHAT_SERVICE_NAME: 宜老天气通 -->
-<!-- WECHAT_EFFECTIVE_DATE: 2026-07-19 -->
+<!-- WECHAT_EFFECTIVE_DATE: 2026-07-20 -->
 
 宜老平安小程序 · 宜老天气通服务
 
-生效日期：2026-07-19
+生效日期：2026-07-20
 
 ## 1. 服务内容
 

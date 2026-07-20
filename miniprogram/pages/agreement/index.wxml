@@ -1,7 +1,7 @@
 <!-- WECHAT_RELEASE_STATUS: final -->
 <!-- WECHAT_MINIPROGRAM_NAME: 宜老平安 -->
 <!-- WECHAT_SERVICE_NAME: 宜老天气通 -->
-<!-- WECHAT_EFFECTIVE_DATE: 2026-07-19 -->
+<!-- WECHAT_EFFECTIVE_DATE: 2026-07-20 -->
 <view class="page-shell">
   <view class="hero agreement-hero">
     <view class="hero-kicker">宜老平安小程序 · 宜老天气通服务 · 用户协议</view>
@@ -44,6 +44,6 @@
     <view class="agreement-text">重要协议或隐私规则变化会通过版本更新提示。你可在“我的 → 健康资料授权管理”查看或撤回健康敏感个人信息单独同意，可退出登录或在“账号与隐私”申请注销，也可通过微信小程序右上角菜单中的“反馈与投诉”提交问题。运营者与联系渠道以微信平台隐私保护指引展示的认证信息为准。</view>
   </view>
 
-  <view class="effective-date">生效日期：2026-07-19 · 重要协议或隐私规则变化会通过版本更新提示。</view>
+  <view class="effective-date">生效日期：2026-07-20 · 重要协议或隐私规则变化会通过版本更新提示。</view>
   <navigator class="secondary-button" url="/pages/privacy/index" hover-class="button-pressed">查看隐私说明</navigator>
 </view>
