@@ -69,6 +69,7 @@ WECHAT_RELEASE_FINAL_STATUS_MARKER = "<!-- WECHAT_RELEASE_STATUS: final -->"
 WECHAT_MINIPROGRAM_NAME_MARKER_FORMAT = (
     "<!-- WECHAT_MINIPROGRAM_NAME: {value} -->"
 )
+WECHAT_SERVICE_NAME_MARKER_FORMAT = "<!-- WECHAT_SERVICE_NAME: {value} -->"
 WECHAT_EFFECTIVE_DATE_MARKER_FORMAT = "<!-- WECHAT_EFFECTIVE_DATE: {value} -->"
 WECHAT_PRIVACY_VERSION_MARKER_FORMAT = "<!-- WECHAT_PRIVACY_VERSION: {value} -->"
 WECHAT_EFFECTIVE_DATE_ARTIFACT_KEYS = {
@@ -104,6 +105,7 @@ WECHAT_RELEASE_FREEZE_KEYS = (
 ) + WECHAT_RELEASE_SHA256_KEYS
 WECHAT_FORM_REQUIRED_KEYS = (
     "WECHAT_MINIPROGRAM_NAME",
+    "WECHAT_SERVICE_NAME",
     "WECHAT_OPERATOR_NAME",
     "WECHAT_CONTACT_EMAIL",
     "WECHAT_EFFECTIVE_DATE",
@@ -156,6 +158,9 @@ WECHAT_CATEGORY_EVIDENCE_MAX_BYTES = 20 * 1024 * 1024
 WECHAT_CATEGORY_NO_EXTRA_QUALIFICATION = "no_extra_institutional_qualification"
 WECHAT_EXPECTED_RELEASE_VERSION = "1.0.0"
 WECHAT_EXPECTED_REQUEST_DOMAIN = "https://yilaoweather.org"
+WECHAT_EXPECTED_RELEASE_MARKER_COUNT = 26
+EXPECTED_PLATFORM_NAME = "宜老平安"
+EXPECTED_SERVICE_NAME = "宜老天气通"
 WXPUSHER_EXPECTED_API_BASE = "https://wxpusher.zjiecode.com/api"
 EXPECTED_REQUIREMENTS_LOCK_SHA256 = (
     "c7e450c30d7d3c56bdf210f69a58620cba9d99e462e0e2c254ab45456271f853"
@@ -184,6 +189,10 @@ WECHAT_RELEASE_STATUS_MARKER_PATTERN = re.compile(
 )
 WECHAT_MINIPROGRAM_NAME_MARKER_PATTERN = re.compile(
     r"^<!-- WECHAT_MINIPROGRAM_NAME: ([^<>\r\n]+) -->$",
+    re.MULTILINE,
+)
+WECHAT_SERVICE_NAME_MARKER_PATTERN = re.compile(
+    r"^<!-- WECHAT_SERVICE_NAME: ([^<>\r\n]+) -->$",
     re.MULTILINE,
 )
 WECHAT_EFFECTIVE_DATE_MARKER_PATTERN = re.compile(
@@ -844,6 +853,7 @@ def _validate_wechat_release_integrity(values, repo_root: Path):
     else:
         errors.extend(_validate_gis_compressed_content(gis_content))
 
+    release_marker_count = 0
     for key, relative_path in WECHAT_RELEASE_ARTIFACTS:
         expected_digest = values.get(key, "")
         content = _run_git(
@@ -865,6 +875,7 @@ def _validate_wechat_release_integrity(values, repo_root: Path):
         except UnicodeDecodeError:
             errors.append(f"{key} 对应的发布材料必须是 UTF-8 文本。")
             continue
+        release_marker_count += artifact_text.count("<!-- WECHAT_")
         if WECHAT_RELEASE_CANDIDATE_MARKER in artifact_text:
             errors.append(f"{key} 对应的发布材料仍含候选占位标记。")
         status_markers = WECHAT_RELEASE_STATUS_MARKER_PATTERN.findall(artifact_text)
@@ -872,14 +883,21 @@ def _validate_wechat_release_integrity(values, repo_root: Path):
             errors.append(f"{key} 缺少唯一且明确的正式发布状态 marker。")
         visible_text = _visible_release_body(artifact_text)
         miniprogram_name = values.get("WECHAT_MINIPROGRAM_NAME", "")
+        service_name = values.get("WECHAT_SERVICE_NAME", "")
         name_markers = WECHAT_MINIPROGRAM_NAME_MARKER_PATTERN.findall(artifact_text)
         if name_markers != [miniprogram_name]:
             errors.append(f"WECHAT_MINIPROGRAM_NAME 与 {key} 的名称 marker 不一致。")
-        else:
-            if miniprogram_name not in visible_text:
-                errors.append(
-                    f"WECHAT_MINIPROGRAM_NAME 未在 {key} 的可见正文中出现。"
-                )
+        service_name_markers = WECHAT_SERVICE_NAME_MARKER_PATTERN.findall(
+            artifact_text
+        )
+        if service_name_markers != [service_name]:
+            errors.append(f"WECHAT_SERVICE_NAME 与 {key} 的名称 marker 不一致。")
+        visible_brand_relation = f"{miniprogram_name}小程序 · {service_name}服务"
+        if visible_text.count(visible_brand_relation) != 1:
+            errors.append(
+                "WECHAT_MINIPROGRAM_NAME 与 WECHAT_SERVICE_NAME 未在 "
+                f"{key} 的可见正文中形成唯一完整名称关系。"
+            )
         if key in WECHAT_EFFECTIVE_DATE_ARTIFACT_KEYS:
             effective_date_markers = WECHAT_EFFECTIVE_DATE_MARKER_PATTERN.findall(
                 artifact_text
@@ -924,6 +942,9 @@ def _validate_wechat_release_integrity(values, repo_root: Path):
                     "WX_MINIPROGRAM_PRIVACY_VERSION 与 "
                     f"{key} 的唯一可见隐私版本不一致。"
                 )
+
+    if release_marker_count != WECHAT_EXPECTED_RELEASE_MARKER_COUNT:
+        errors.append("六份微信正式发布材料的 marker 总数必须精确为 26。")
 
     project_config = _run_git(
         expected_root,
@@ -1302,6 +1323,15 @@ def validate_wechat_release_form(
             errors.append("WECHAT_OPERATOR_NAME 长度异常。")
         if len(values.get("WECHAT_MINIPROGRAM_NAME", "")) > 80:
             errors.append("WECHAT_MINIPROGRAM_NAME 长度异常。")
+        if len(values.get("WECHAT_SERVICE_NAME", "")) > 80:
+            errors.append("WECHAT_SERVICE_NAME 长度异常。")
+        if (
+            values.get("WECHAT_MINIPROGRAM_NAME", "")
+            != EXPECTED_PLATFORM_NAME
+        ):
+            errors.append("WECHAT_MINIPROGRAM_NAME 必须与后台批准的平台名称一致。")
+        if values.get("WECHAT_SERVICE_NAME", "") != EXPECTED_SERVICE_NAME:
+            errors.append("WECHAT_SERVICE_NAME 必须与小程序内服务名称一致。")
         if values.get("FEATURE_HEAT_EXPOSURE_GIS") != "1":
             errors.append("微信正式发布必须启用 FEATURE_HEAT_EXPOSURE_GIS=1。")
 

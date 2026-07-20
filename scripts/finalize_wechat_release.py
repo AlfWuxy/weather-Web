@@ -32,8 +32,9 @@ MAX_FORM_BYTES = 64 * 1024
 MAX_CONTENT_BYTES = 2 * 1024 * 1024
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 FORM_KEYS = frozenset({
-    "WECHAT_MINIPROGRAM_NAME", "WECHAT_EFFECTIVE_DATE", "WX_MINIPROGRAM_PRIVACY_VERSION",
-    "WECHAT_RELEASE_VERSION", "WECHAT_FORM_READY", "WECHAT_CATEGORY_CONFIRMED",
+    "WECHAT_MINIPROGRAM_NAME", "WECHAT_SERVICE_NAME", "WECHAT_EFFECTIVE_DATE",
+    "WX_MINIPROGRAM_PRIVACY_VERSION", "WECHAT_RELEASE_VERSION", "WECHAT_FORM_READY",
+    "WECHAT_CATEGORY_CONFIRMED",
 })
 
 # 兼容仓库内既有调用方导入这些常量。
@@ -243,9 +244,13 @@ def _read_form(root: Path, requested: Path | str | None) -> FormSnapshot:
     path = _form_path(root, requested)
     content, fingerprint = _read_regular(path, maximum=MAX_FORM_BYTES, mode=0o600)
     values = _parse_values(content, FORM_KEYS)
-    fields = contract.PublicReleaseFields(values["WECHAT_MINIPROGRAM_NAME"],
-        values["WECHAT_EFFECTIVE_DATE"], values["WX_MINIPROGRAM_PRIVACY_VERSION"],
-        values["WECHAT_RELEASE_VERSION"])
+    fields = contract.PublicReleaseFields(
+        name=values["WECHAT_MINIPROGRAM_NAME"],
+        service_name=values["WECHAT_SERVICE_NAME"],
+        effective_date=values["WECHAT_EFFECTIVE_DATE"],
+        privacy_version=values["WX_MINIPROGRAM_PRIVACY_VERSION"],
+        release_version=values["WECHAT_RELEASE_VERSION"],
+    )
     try:
         contract.validate_public_fields(
             fields,
@@ -426,7 +431,7 @@ def record_freeze(*, repo_root=None, wechat_form=None) -> bool:
         return changed
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="确定性冻结宜老天气通微信小程序发布内容。")
+    parser = argparse.ArgumentParser(description="确定性冻结宜老平安小程序与宜老天气通服务发布内容。")
     subparsers = parser.add_subparsers(dest="command", required=True)
     for command in ("finalize-content", "record-freeze"):
         child = subparsers.add_parser(command)

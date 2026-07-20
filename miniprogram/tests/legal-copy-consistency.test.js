@@ -27,12 +27,34 @@ const FILES = {
   releaseValidator: 'scripts/validate_release_env.py',
 };
 
-test('首页与关于页明确区分小程序名称和内部服务名称', () => {
+const PLATFORM_NAME = '宜老平安';
+const SERVICE_NAME = '宜老天气通';
+const BRAND_RELATIONSHIP = '宜老平安小程序 · 宜老天气通服务';
+const FINAL_STATUS_MARKER = '<!-- WECHAT_RELEASE_STATUS: final -->';
+const PLATFORM_NAME_MARKER = '<!-- WECHAT_MINIPROGRAM_NAME: 宜老平安 -->';
+const SERVICE_NAME_MARKER = '<!-- WECHAT_SERVICE_NAME: 宜老天气通 -->';
+
+function countLiteral(source, literal) {
+  return source.split(literal).length - 1;
+}
+
+function stripHtmlComments(source) {
+  return source.replace(/<!--[\s\S]*?-->/g, '');
+}
+
+test('普通首页、家人分享首页与关于页保持平台名和服务名映射', () => {
   const home = read(FILES.homePage);
   const about = read(FILES.aboutPage);
+  const normalStart = home.indexOf('wx:if="{{entryContextReady && !familyShareEntry}}"');
+  const familyStart = home.indexOf('wx:if="{{entryContextReady && familyShareEntry}}"');
 
-  assert.equal((home.match(/宜老平安小程序 · 宜老天气通服务/g) || []).length, 2);
-  assert.match(about, /宜老平安小程序 · 宜老天气通服务/);
+  assert.ok(normalStart >= 0 && familyStart > normalStart, '首页缺少普通态或家人分享态分支');
+  const normalHome = home.slice(normalStart, familyStart);
+  const familyHome = home.slice(familyStart);
+
+  assert.equal(countLiteral(normalHome, BRAND_RELATIONSHIP), 1, '普通首页品牌映射应唯一');
+  assert.equal(countLiteral(familyHome, BRAND_RELATIONSHIP), 1, '家人分享首页品牌映射应唯一');
+  assert.equal(countLiteral(about, BRAND_RELATIONSHIP), 1, '关于页品牌映射应唯一');
   assert.match(about, /“宜老平安”是微信小程序名称，“宜老天气通”是小程序内的适老天气风险与行动提醒服务名称/);
 });
 
@@ -305,10 +327,30 @@ test('六份发布材料只允许处于完整候选态或完整正式态', () =>
   assert.ok(isCandidate || isFinal, '六份发布材料出现候选态与正式态混用');
   for (const [file, text] of contents) {
     if (isCandidate) {
+      assert.doesNotMatch(text, /<!-- WECHAT_RELEASE_STATUS:/, `${file} 不应提前冻结状态`);
+      assert.doesNotMatch(text, /<!-- WECHAT_MINIPROGRAM_NAME:/, `${file} 不应提前冻结平台名称`);
+      assert.doesNotMatch(text, /<!-- WECHAT_SERVICE_NAME:/, `${file} 不应提前冻结服务名称`);
       assert.doesNotMatch(text, /<!-- WECHAT_EFFECTIVE_DATE:/, `${file} 不应提前冻结日期`);
     } else {
-      assert.match(text, /<!-- WECHAT_MINIPROGRAM_NAME: 宜老天气通 -->/, `${file} 缺少正式名称 marker`);
+      assert.equal(countLiteral(text, FINAL_STATUS_MARKER), 1, `${file} 正式状态 marker 应唯一`);
+      assert.equal(countLiteral(text, PLATFORM_NAME_MARKER), 1, `${file} 平台名称 marker 应唯一`);
+      assert.equal(countLiteral(text, SERVICE_NAME_MARKER), 1, `${file} 服务名称 marker 应唯一`);
+      const visible = stripHtmlComments(text);
+      assert.equal(countLiteral(visible, BRAND_RELATIONSHIP), 1, `${file} 可见双名称关系应唯一`);
+      assert.match(visible, new RegExp(PLATFORM_NAME), `${file} 可见正文缺少平台名称`);
+      assert.match(visible, new RegExp(SERVICE_NAME), `${file} 可见正文缺少服务名称`);
     }
+  }
+
+  if (isFinal) {
+    const markerCount = contents.reduce((total, [, text]) => total + (
+      (text.match(/<!-- WECHAT_RELEASE_STATUS: [^>]+ -->/g) || []).length
+      + (text.match(/<!-- WECHAT_MINIPROGRAM_NAME: [^>]+ -->/g) || []).length
+      + (text.match(/<!-- WECHAT_SERVICE_NAME: [^>]+ -->/g) || []).length
+      + (text.match(/<!-- WECHAT_EFFECTIVE_DATE: [^>]+ -->/g) || []).length
+      + (text.match(/<!-- WECHAT_PRIVACY_VERSION: [^>]+ -->/g) || []).length
+    ), 0);
+    assert.equal(markerCount, 26, '六份正式发布材料应合计包含 26 个发布 marker');
   }
 });
 
@@ -323,7 +365,9 @@ test('候选文件保留冻结说明，正式文件具备完整发布 marker', (
     const text = read(file);
     assert.doesNotMatch(text, /初稿/, `${file} 仍包含初稿标记`);
     if (text.includes('<!-- WECHAT_RELEASE_STATUS: final -->')) {
-      assert.match(text, /<!-- WECHAT_MINIPROGRAM_NAME: 宜老天气通 -->/, `${file} 缺少正式名称 marker`);
+      assert.equal(countLiteral(text, PLATFORM_NAME_MARKER), 1, `${file} 缺少唯一平台名称 marker`);
+      assert.equal(countLiteral(text, SERVICE_NAME_MARKER), 1, `${file} 缺少唯一服务名称 marker`);
+      assert.equal(countLiteral(stripHtmlComments(text), BRAND_RELATIONSHIP), 1, `${file} 缺少唯一可见双名称关系`);
       assert.doesNotMatch(text, /候选/, `${file} 正式态仍包含候选占位`);
       if (file !== FILES.listing) {
         assert.match(text, /<!-- WECHAT_EFFECTIVE_DATE: \d{4}-\d{2}-\d{2} -->/, `${file} 缺少正式日期 marker`);
@@ -342,6 +386,8 @@ test('候选文件保留冻结说明，正式文件具备完整发布 marker', (
   assert.match(validator, /WECHAT_RELEASE_STATUS: final/);
   assert.match(validator, /WECHAT_MINIPROGRAM_NAME_MARKER_FORMAT/);
   assert.match(validator, /WECHAT_MINIPROGRAM_NAME_MARKER_PATTERN/);
+  assert.match(validator, /WECHAT_SERVICE_NAME_MARKER_FORMAT/);
+  assert.match(validator, /WECHAT_SERVICE_NAME_MARKER_PATTERN/);
   assert.match(validator, /WECHAT_VISIBLE_EFFECTIVE_DATE_PATTERN/);
   assert.match(validator, /WECHAT_VISIBLE_PRIVACY_VERSION_PATTERN/);
   assert.match(validator, /候选占位/);
@@ -359,6 +405,10 @@ test('候选文件保留冻结说明，正式文件具备完整发布 marker', (
   --repo-root .`;
   assert.ok(handoff.includes(finalizeCommand), '交接文档缺少完整 finalize-content 命令');
   assert.ok(handoff.includes(recordCommand), '交接文档缺少完整 record-freeze 命令');
+  assert.match(handoff, /WECHAT_MINIPROGRAM_NAME=宜老平安/);
+  assert.match(handoff, /WECHAT_SERVICE_NAME=宜老天气通/);
+  assert.match(handoff, /26 个 marker/);
+  assert.match(handoff, /重新上传 `1\.0\.0`/);
   assert.doesNotMatch(handoff, /WECHAT_MINIPROGRAM_NAME: 后台批准名称/);
 });
 

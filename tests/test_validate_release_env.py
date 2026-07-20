@@ -130,8 +130,9 @@ def _prepare_release_repo(tmp_path):
             artifact.parent.mkdir(parents=True, exist_ok=True)
             lines = [
                 "<!-- WECHAT_RELEASE_STATUS: final -->",
-                "<!-- WECHAT_MINIPROGRAM_NAME: 宜老天气通 -->",
-                "小程序名称：宜老天气通",
+                "<!-- WECHAT_MINIPROGRAM_NAME: 宜老平安 -->",
+                "<!-- WECHAT_SERVICE_NAME: 宜老天气通 -->",
+                "宜老平安小程序 · 宜老天气通服务",
                 f"release artifact {index}",
             ]
             if key in _EFFECTIVE_DATE_ARTIFACTS:
@@ -237,7 +238,8 @@ def _write_wechat_release_form(tmp_path, **overrides):
     evidence_file.chmod(0o600)
     values = {
         "WECHAT_SUBJECT_TYPE": "personal",
-        "WECHAT_MINIPROGRAM_NAME": "宜老天气通",
+        "WECHAT_MINIPROGRAM_NAME": "宜老平安",
+        "WECHAT_SERVICE_NAME": "宜老天气通",
         "WECHAT_OPERATOR_NAME": "测试运营者",
         "WECHAT_CONTACT_EMAIL": "operator@example.com",
         "WECHAT_EFFECTIVE_DATE": "2026-07-18",
@@ -1569,6 +1571,76 @@ def test_wechat_release_template_defaults_appsecret_safety_gate_closed():
         assert required_instruction in template
 
 
+def test_wechat_release_template_pins_platform_and_service_names():
+    template = (
+        Path(__file__).resolve().parents[1] / ".env.wechat-release.example"
+    ).read_text(encoding="utf-8")
+
+    assert "WECHAT_MINIPROGRAM_NAME=宜老平安" in template
+    assert "WECHAT_SERVICE_NAME=宜老天气通" in template
+    assert "宜老平安小程序 · 宜老天气通服务" in template
+
+
+@pytest.mark.parametrize(
+    "overrides,expected_field",
+    (
+        ({"WECHAT_MINIPROGRAM_NAME": ""}, "WECHAT_MINIPROGRAM_NAME"),
+        ({"WECHAT_SERVICE_NAME": ""}, "WECHAT_SERVICE_NAME"),
+        (
+            {"WECHAT_MINIPROGRAM_NAME": "wrong-platform-name-must-not-leak"},
+            "WECHAT_MINIPROGRAM_NAME",
+        ),
+        (
+            {"WECHAT_SERVICE_NAME": "wrong-service-name-must-not-leak"},
+            "WECHAT_SERVICE_NAME",
+        ),
+        (
+            {
+                "WECHAT_MINIPROGRAM_NAME": "宜老天气通",
+                "WECHAT_SERVICE_NAME": "宜老平安",
+            },
+            "WECHAT_MINIPROGRAM_NAME",
+        ),
+    ),
+)
+def test_formal_release_requires_canonical_platform_and_service_names_without_echo(
+    tmp_path,
+    overrides,
+    expected_field,
+):
+    form = _write_wechat_release_form(tmp_path, **overrides)
+
+    result = validate_wechat_release_form(form, require_ready=True)
+    rendered_errors = "\n".join(result["errors"])
+
+    assert result["ok"] is False
+    assert expected_field in rendered_errors
+    for value in overrides.values():
+        if value and value not in {"宜老平安", "宜老天气通"}:
+            assert value not in rendered_errors
+
+
+def test_wechat_release_form_accepts_quoted_canonical_names(tmp_path):
+    form = _write_wechat_release_form(tmp_path)
+    content = form.read_text(encoding="utf-8")
+    form.write_text(
+        content.replace(
+            "WECHAT_MINIPROGRAM_NAME=宜老平安\n",
+            'WECHAT_MINIPROGRAM_NAME="宜老平安"\n',
+        ).replace(
+            "WECHAT_SERVICE_NAME=宜老天气通\n",
+            "WECHAT_SERVICE_NAME='宜老天气通'\n",
+        ),
+        encoding="utf-8",
+    )
+    form.chmod(0o600)
+
+    result = validate_wechat_release_form(form, require_ready=True)
+
+    assert result["ok"] is True
+    assert result["form_ready"] is True
+
+
 @pytest.mark.parametrize(
     "confirmation",
     (
@@ -2281,19 +2353,37 @@ def test_wechat_release_form_requires_unique_explicit_final_marker(tmp_path):
 def test_wechat_release_form_binds_exact_name_to_every_frozen_artifact(tmp_path):
     cases = (
         (
-            "wrong-marker",
-            "<!-- WECHAT_MINIPROGRAM_NAME: 宜老天气通 -->",
-            "<!-- WECHAT_MINIPROGRAM_NAME: 其他名称 -->",
+            "wrong-platform-marker",
+            "<!-- WECHAT_MINIPROGRAM_NAME: 宜老平安 -->",
+            "<!-- WECHAT_MINIPROGRAM_NAME: 其他平台 -->",
+            "WECHAT_MINIPROGRAM_NAME",
             "名称 marker",
         ),
         (
-            "missing-visible-name",
-            "小程序名称：宜老天气通",
-            "小程序名称已冻结",
+            "wrong-service-marker",
+            "<!-- WECHAT_SERVICE_NAME: 宜老天气通 -->",
+            "<!-- WECHAT_SERVICE_NAME: 其他服务 -->",
+            "WECHAT_SERVICE_NAME",
+            "名称 marker",
+        ),
+        (
+            "swapped-markers",
+            "<!-- WECHAT_MINIPROGRAM_NAME: 宜老平安 -->\n"
+            "<!-- WECHAT_SERVICE_NAME: 宜老天气通 -->",
+            "<!-- WECHAT_MINIPROGRAM_NAME: 宜老天气通 -->\n"
+            "<!-- WECHAT_SERVICE_NAME: 宜老平安 -->",
+            "WECHAT_MINIPROGRAM_NAME",
+            "名称 marker",
+        ),
+        (
+            "missing-visible-relation",
+            "宜老平安小程序 · 宜老天气通服务",
+            "宜老平安小程序提供宜老天气通服务",
+            "WECHAT_SERVICE_NAME",
             "可见正文",
         ),
     )
-    for name, old_value, new_value, expected_error in cases:
+    for name, old_value, new_value, expected_field, expected_error in cases:
         case_dir = tmp_path / name
         case_dir.mkdir()
         _prepare_release_repo(case_dir)
@@ -2310,9 +2400,162 @@ def test_wechat_release_form_binds_exact_name_to_every_frozen_artifact(tmp_path)
 
         assert result["ok"] is False
         assert any(
-            "WECHAT_MINIPROGRAM_NAME" in error and expected_error in error
+            expected_field in error and expected_error in error
             for error in result["errors"]
         )
+
+
+def test_wechat_release_form_requires_each_artifact_brand_markers(tmp_path):
+    marker_cases = (
+        (
+            "platform",
+            "<!-- WECHAT_MINIPROGRAM_NAME: 宜老平安 -->\n",
+            "WECHAT_MINIPROGRAM_NAME",
+        ),
+        (
+            "service",
+            "<!-- WECHAT_SERVICE_NAME: 宜老天气通 -->\n",
+            "WECHAT_SERVICE_NAME",
+        ),
+    )
+    for key, relative_path in _RELEASE_ARTIFACTS.items():
+        for marker_name, marker, expected_field in marker_cases:
+            case_dir = tmp_path / f"{key.lower()}-{marker_name}"
+            case_dir.mkdir()
+            _prepare_release_repo(case_dir)
+            artifact = case_dir / relative_path
+            artifact.write_text(
+                artifact.read_text(encoding="utf-8").replace(marker, "", 1),
+                encoding="utf-8",
+            )
+            _git(case_dir, "add", relative_path)
+            _git(case_dir, "commit", "--quiet", "-m", "remove brand marker")
+            form = _write_wechat_release_form(case_dir)
+
+            result = validate_wechat_release_form(form, require_ready=True)
+
+            assert result["ok"] is False
+            assert any(
+                key in error
+                and expected_field in error
+                and "名称 marker" in error
+                for error in result["errors"]
+            )
+
+
+@pytest.mark.parametrize(
+    "name,replacement",
+    (
+        (
+            "comment-only",
+            "<!-- 宜老平安小程序 · 宜老天气通服务 -->",
+        ),
+        (
+            "script-only",
+            "<script>宜老平安小程序 · 宜老天气通服务</script>",
+        ),
+        (
+            "style-only",
+            "<style>宜老平安小程序 · 宜老天气通服务</style>",
+        ),
+    ),
+)
+def test_wechat_release_form_rejects_brand_relation_hidden_from_visible_body(
+    tmp_path,
+    name,
+    replacement,
+):
+    _prepare_release_repo(tmp_path)
+    listing = tmp_path / _RELEASE_ARTIFACTS["WECHAT_LISTING_COPY_SHA256"]
+    listing.write_text(
+        listing.read_text(encoding="utf-8").replace(
+            "宜老平安小程序 · 宜老天气通服务",
+            replacement,
+            1,
+        ),
+        encoding="utf-8",
+    )
+    _git(tmp_path, "add", str(listing.relative_to(tmp_path)))
+    _git(tmp_path, "commit", "--quiet", "-m", name)
+    form = _write_wechat_release_form(tmp_path)
+
+    result = validate_wechat_release_form(form, require_ready=True)
+
+    assert result["ok"] is False
+    assert any(
+        "WECHAT_MINIPROGRAM_NAME" in error
+        and "WECHAT_SERVICE_NAME" in error
+        and "可见正文" in error
+        for error in result["errors"]
+    )
+
+
+@pytest.mark.parametrize(
+    "marker",
+    (
+        "<!-- WECHAT_MINIPROGRAM_NAME: 宜老平安 -->",
+        "<!-- WECHAT_SERVICE_NAME: 宜老天气通 -->",
+    ),
+)
+def test_wechat_release_form_rejects_duplicate_brand_markers(tmp_path, marker):
+    _prepare_release_repo(tmp_path)
+    listing = tmp_path / _RELEASE_ARTIFACTS["WECHAT_LISTING_COPY_SHA256"]
+    listing.write_text(
+        listing.read_text(encoding="utf-8").replace(
+            marker,
+            f"{marker}\n{marker}",
+            1,
+        ),
+        encoding="utf-8",
+    )
+    _git(tmp_path, "add", str(listing.relative_to(tmp_path)))
+    _git(tmp_path, "commit", "--quiet", "-m", "duplicate brand marker")
+    form = _write_wechat_release_form(tmp_path)
+
+    result = validate_wechat_release_form(form, require_ready=True)
+
+    assert result["ok"] is False
+    assert any("名称 marker" in error for error in result["errors"])
+
+
+def test_wechat_release_form_rejects_duplicate_visible_brand_relation(tmp_path):
+    _prepare_release_repo(tmp_path)
+    listing = tmp_path / _RELEASE_ARTIFACTS["WECHAT_LISTING_COPY_SHA256"]
+    relation = "宜老平安小程序 · 宜老天气通服务"
+    listing.write_text(
+        listing.read_text(encoding="utf-8").replace(
+            relation,
+            f"{relation}\n{relation}",
+            1,
+        ),
+        encoding="utf-8",
+    )
+    _git(tmp_path, "add", str(listing.relative_to(tmp_path)))
+    _git(tmp_path, "commit", "--quiet", "-m", "duplicate visible brand relation")
+    form = _write_wechat_release_form(tmp_path)
+
+    result = validate_wechat_release_form(form, require_ready=True)
+
+    assert result["ok"] is False
+    assert any("唯一完整名称关系" in error for error in result["errors"])
+
+
+def test_wechat_release_form_rejects_extra_release_marker(tmp_path):
+    _prepare_release_repo(tmp_path)
+    listing = tmp_path / _RELEASE_ARTIFACTS["WECHAT_LISTING_COPY_SHA256"]
+    listing.write_text(
+        listing.read_text(encoding="utf-8")
+        + "\n<!-- WECHAT_UNEXPECTED_MARKER: final -->\n",
+        encoding="utf-8",
+    )
+    _git(tmp_path, "add", str(listing.relative_to(tmp_path)))
+    _git(tmp_path, "commit", "--quiet", "-m", "add unexpected release marker")
+    form = _write_wechat_release_form(tmp_path)
+
+    result = validate_wechat_release_form(form, require_ready=True)
+
+    assert result["ok"] is False
+    assert any("marker 总数必须精确为 26" in error for error in result["errors"])
 
 
 def test_wechat_release_form_requires_full_feature_release_flags(tmp_path):

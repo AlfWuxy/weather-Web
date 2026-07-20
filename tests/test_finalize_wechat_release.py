@@ -56,10 +56,11 @@ def _restore_head_candidate(contents: dict[str, bytes]) -> dict[str, bytes]:
         return contents
     assert all(final_states), "HEAD 发布材料不能混合候选与正式状态"
     fields = contract.PublicReleaseFields(
-        _only_marker(contract.NAME_RE, contents, "名称"),
-        _only_marker(contract.DATE_RE, contents, "生效日期"),
-        _only_marker(contract.PRIVACY_RE, contents, "隐私版本"),
-        contract.EXPECTED_RELEASE_VERSION,
+        name=_only_marker(contract.NAME_RE, contents, "平台名称"),
+        service_name=_only_marker(contract.SERVICE_NAME_RE, contents, "服务名称"),
+        effective_date=_only_marker(contract.DATE_RE, contents, "生效日期"),
+        privacy_version=_only_marker(contract.PRIVACY_RE, contents, "隐私版本"),
+        release_version=contract.EXPECTED_RELEASE_VERSION,
     )
     contract.verify_final(contents, fields)
     return contract.restore_candidate(contents, fields)
@@ -94,7 +95,8 @@ def _init_repo(tmp_path: Path) -> Path:
 
 def _form_lines(**overrides: str) -> list[str]:
     values = {
-        "WECHAT_MINIPROGRAM_NAME": contract.EXPECTED_NAME,
+        "WECHAT_MINIPROGRAM_NAME": contract.EXPECTED_PLATFORM_NAME,
+        "WECHAT_SERVICE_NAME": contract.EXPECTED_SERVICE_NAME,
         "WECHAT_EFFECTIVE_DATE": EFFECTIVE_DATE,
         "WX_MINIPROGRAM_PRIVACY_VERSION": PRIVACY_VERSION,
         "WECHAT_RELEASE_VERSION": contract.EXPECTED_RELEASE_VERSION,
@@ -125,10 +127,11 @@ def _write_form(repo: Path, **overrides: str) -> Path:
 
 def _fields() -> contract.PublicReleaseFields:
     return contract.PublicReleaseFields(
-        contract.EXPECTED_NAME,
-        EFFECTIVE_DATE,
-        PRIVACY_VERSION,
-        contract.EXPECTED_RELEASE_VERSION,
+        name=contract.EXPECTED_PLATFORM_NAME,
+        service_name=contract.EXPECTED_SERVICE_NAME,
+        effective_date=EFFECTIVE_DATE,
+        privacy_version=PRIVACY_VERSION,
+        release_version=contract.EXPECTED_RELEASE_VERSION,
     )
 
 
@@ -175,6 +178,88 @@ def test_privacy_page_final_contact_copy_is_current_and_reversible():
     assert contract.restore_candidate(final, _fields()) == candidate
 
 
+def test_dual_name_contract_has_exact_markers_visible_relation_and_roundtrip():
+    candidate = dict(_candidate_fixture())
+    assert {
+        path: hashlib.sha256(content).hexdigest()
+        for path, content in candidate.items()
+    } == contract.CANDIDATE_SHA256
+
+    fields = _fields()
+    final = contract.render_final(candidate, fields)
+    marker_total = 0
+    for path in contract.CONTENT_PATHS[:-1]:
+        text = final[path].decode("utf-8")
+        visible = contract._visible(text)
+        assert contract.NAME_RE.findall(text) == [contract.EXPECTED_PLATFORM_NAME]
+        assert contract.SERVICE_NAME_RE.findall(text) == [contract.EXPECTED_SERVICE_NAME]
+        assert visible.count(fields.visible_brand_relation) == 1
+        marker_total += text.count("<!-- WECHAT_")
+    assert marker_total == 26
+
+    restored = contract.restore_candidate(final, fields)
+    assert restored == candidate
+    assert contract.render_final(restored, fields) == final
+
+
+def test_swapped_platform_and_service_names_fail_closed():
+    fields = contract.PublicReleaseFields(
+        name=contract.EXPECTED_SERVICE_NAME,
+        service_name=contract.EXPECTED_PLATFORM_NAME,
+        effective_date=EFFECTIVE_DATE,
+        privacy_version=PRIVACY_VERSION,
+        release_version=contract.EXPECTED_RELEASE_VERSION,
+    )
+    with pytest.raises(contract.ReleaseContractError, match="小程序名称"):
+        contract.validate_public_fields(
+            fields,
+            form_ready="0",
+            category_confirmed="0",
+        )
+
+
+@pytest.mark.parametrize("drift", ("missing_service", "duplicate_service", "swapped_names"))
+def test_verify_final_rejects_dual_name_marker_drift(drift):
+    fields = _fields()
+    final = contract.render_final(dict(_candidate_fixture()), fields)
+    target = contract.LISTING_COPY_PATH
+    text = final[target].decode("utf-8")
+    platform_marker = f"<!-- WECHAT_MINIPROGRAM_NAME: {fields.name} -->"
+    service_marker = f"<!-- WECHAT_SERVICE_NAME: {fields.service_name} -->"
+    if drift == "missing_service":
+        text = text.replace(f"{service_marker}\n", "", 1)
+    elif drift == "duplicate_service":
+        text = text.replace(service_marker, f"{service_marker}\n{service_marker}", 1)
+    else:
+        text = text.replace(
+            f"{platform_marker}\n{service_marker}",
+            (
+                f"<!-- WECHAT_MINIPROGRAM_NAME: {fields.service_name} -->\n"
+                f"<!-- WECHAT_SERVICE_NAME: {fields.name} -->"
+            ),
+            1,
+        )
+    final[target] = text.encode("utf-8")
+
+    with pytest.raises(contract.ReleaseContractError, match="名称 marker"):
+        contract.verify_final(final, fields)
+
+
+def test_verify_final_rejects_hidden_marker_only_brand_relation():
+    fields = _fields()
+    final = contract.render_final(dict(_candidate_fixture()), fields)
+    target = contract.PRIVACY_PAGE_PATH
+    text = final[target].decode("utf-8").replace(
+        fields.visible_brand_relation,
+        f"{fields.name} · {fields.service_name}",
+        1,
+    )
+    final[target] = text.encode("utf-8")
+
+    with pytest.raises(contract.ReleaseContractError, match="可见双名称关系"):
+        contract.verify_final(final, fields)
+
+
 def test_finalize_candidate_matches_contract_and_is_idempotent(tmp_path):
     repo = _init_repo(tmp_path)
     form = _write_form(repo)
@@ -184,7 +269,7 @@ def test_finalize_candidate_matches_contract_and_is_idempotent(tmp_path):
     assert _snapshot(repo) == expected
     combined = "".join(expected[path].decode("utf-8") for path in contract.CONTENT_PATHS[:-1])
     assert combined.count("候选") == 0
-    assert combined.count("<!-- WECHAT_") == 20
+    assert combined.count("<!-- WECHAT_") == 26
     assert finalizer.finalize_content(repo_root=repo, wechat_form=form) is False
     assert _snapshot(repo) == expected
 
@@ -199,6 +284,21 @@ def test_finalize_known_partial_states_converge(tmp_path, completed):
 
     assert finalizer.finalize_content(repo_root=repo, wechat_form=form) is (completed < 7)
     assert _snapshot(repo) == expected
+
+
+def test_finalize_resumes_interrupted_dual_name_write(tmp_path):
+    repo = _init_repo(tmp_path)
+    form = _write_form(repo)
+    expected = _expected(repo)
+    for path in contract.CONTENT_PATHS[:3]:
+        (repo / path).write_bytes(expected[path])
+
+    assert finalizer.finalize_content(repo_root=repo, wechat_form=form) is True
+    final = _snapshot(repo)
+    assert final == expected
+    for path in contract.CONTENT_PATHS[:-1]:
+        text = final[path].decode("utf-8")
+        assert contract.SERVICE_NAME_RE.findall(text) == [contract.EXPECTED_SERVICE_NAME]
 
 
 @pytest.mark.parametrize("target", contract.CONTENT_PATHS)
@@ -276,6 +376,11 @@ def test_finalize_unrelated_worktree_change_blocks(tmp_path, kind):
     "overrides",
     (
         {"WECHAT_MINIPROGRAM_NAME": "其他名称"},
+        {"WECHAT_SERVICE_NAME": "其他服务"},
+        {
+            "WECHAT_MINIPROGRAM_NAME": contract.EXPECTED_SERVICE_NAME,
+            "WECHAT_SERVICE_NAME": contract.EXPECTED_PLATFORM_NAME,
+        },
         {"WECHAT_EFFECTIVE_DATE": "2026-02-30"},
         {"WX_MINIPROGRAM_PRIVACY_VERSION": "bad version"},
         {"WECHAT_RELEASE_VERSION": "1.0.1"},
@@ -297,7 +402,8 @@ def test_finalize_accepts_one_dotenv_quote_layer(tmp_path):
     repo = _init_repo(tmp_path)
     form = _write_form(
         repo,
-        WECHAT_MINIPROGRAM_NAME=f'"{contract.EXPECTED_NAME}"',
+        WECHAT_MINIPROGRAM_NAME=f'"{contract.EXPECTED_PLATFORM_NAME}"',
+        WECHAT_SERVICE_NAME=f"'{contract.EXPECTED_SERVICE_NAME}'",
         WECHAT_EFFECTIVE_DATE=f"'{EFFECTIVE_DATE}'",
         WX_MINIPROGRAM_PRIVACY_VERSION=f'"{PRIVACY_VERSION}"',
         WECHAT_RELEASE_VERSION="'1.0.0'",
@@ -329,6 +435,23 @@ def test_finalize_private_form_safety_gates(tmp_path, problem):
 
     with pytest.raises(finalizer.ReleaseFinalizeError):
         finalizer.finalize_content(repo_root=repo, wechat_form=form)
+
+
+def test_finalize_requires_service_name_form_field_without_writes(tmp_path):
+    repo = _init_repo(tmp_path)
+    form = _write_form(repo)
+    lines = [
+        line
+        for line in form.read_text(encoding="utf-8").splitlines()
+        if not line.startswith("WECHAT_SERVICE_NAME=")
+    ]
+    form.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    form.chmod(0o600)
+    before = _snapshot(repo)
+
+    with pytest.raises(finalizer.ReleaseFinalizeError, match="缺少必填字段"):
+        finalizer.finalize_content(repo_root=repo, wechat_form=form)
+    assert _snapshot(repo) == before
 
 
 @pytest.mark.parametrize("kind", ("content", "form"))
