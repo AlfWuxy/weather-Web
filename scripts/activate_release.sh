@@ -339,7 +339,7 @@ PY
             enabled_rc=0
             enabled="$($SYSTEMCTL_BIN is-enabled "$unit" 2>/dev/null)" || enabled_rc=$?
             if [ "$enabled_rc" -gt 1 ] \
-                || [[ ! "$enabled" =~ ^(enabled|enabled-runtime|disabled)$ ]]; then
+                || [[ ! "$enabled" =~ ^(enabled|enabled-runtime|disabled|static)$ ]]; then
                 fail "无法可靠读取旧 systemd unit 的 enable 状态: $unit"
                 return 1
             fi
@@ -4957,6 +4957,7 @@ restore_unit_states() {
             enabled) "$SYSTEMCTL_BIN" enable "$unit" >/dev/null || return 1 ;;
             enabled-runtime) "$SYSTEMCTL_BIN" enable --runtime "$unit" >/dev/null || return 1 ;;
             disabled) "$SYSTEMCTL_BIN" disable "$unit" >/dev/null || return 1 ;;
+            static) : ;;
         esac
     done < "$STATE_FILE"
 
@@ -5000,6 +5001,7 @@ restore_backup_timer_state_only() {
             enabled) "$SYSTEMCTL_BIN" enable "$unit" >/dev/null || return 1 ;;
             enabled-runtime) "$SYSTEMCTL_BIN" enable --runtime "$unit" >/dev/null || return 1 ;;
             disabled) "$SYSTEMCTL_BIN" disable "$unit" >/dev/null || return 1 ;;
+            static) : ;;
         esac
         if captured_unit_active "$unit"; then
             restore_start_unit "$unit" || return 1

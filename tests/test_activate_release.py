@@ -49,6 +49,16 @@ SERVICE_UNITS = (
 RETIRED_BOOTSTRAP_UNITS = (
     'case-weather-cache-bootstrap.service',
 )
+# 这些 oneshot 服务由 timer 或其他 unit 触发，本身没有 [Install] 段。
+STATIC_SERVICE_UNITS = (
+    'case-weather-backup.service',
+    'case-weather-cache.service',
+    'case-weather-dispatch.service',
+    'case-weather-risk-precompute.service',
+    'case-weather-usage-cleanup.service',
+    'case-weather-sync.service',
+    'case-weather-cache-bootstrap.service',
+)
 INSTALL_UNITS = MANAGED_TIMER_UNITS + SERVICE_UNITS
 ALL_UNITS = INSTALL_UNITS + LEGACY_UNITS + RETIRED_BOOTSTRAP_UNITS
 FORMAL_COMMIT = 'a' * 40
@@ -301,6 +311,9 @@ if command == 'show':
     print('')
     raise SystemExit(0)
 if command == 'is-enabled':
+    if marker('static').exists():
+        print('static')
+        raise SystemExit(0)
     if marker('enabled-runtime').exists():
         print('enabled-runtime')
         raise SystemExit(0)
@@ -582,6 +595,16 @@ def _database_value(path):
         connection.close()
 
 
+def _captured_enable_states(transaction_dir):
+    states = {}
+    for line in (transaction_dir / 'unit-state.tsv').read_text(
+        encoding='utf-8'
+    ).splitlines():
+        unit, _exists, enabled, _active = line.split('\t')
+        states[unit] = enabled
+    return states
+
+
 def _prepare_transaction(
     tmp_path,
     *,
@@ -768,7 +791,8 @@ TimeoutStartSec=15min
         )
         (dropin_dir / '10-case-weather-activation-guard.conf').chmod(0o644)
         (fake_state / f'{unit}.exists').touch()
-        (fake_state / f'{unit}.enabled').touch()
+        unit_file_state = 'static' if unit in STATIC_SERVICE_UNITS else 'enabled'
+        (fake_state / f'{unit}.{unit_file_state}').touch()
     for unit in (
         'case-weather.service',
         'case-weather-backup.timer',
@@ -1235,6 +1259,11 @@ def test_success_switches_release_only_after_migration_and_health(tmp_path):
     )
     assert len(committed_markers) == 1
     transaction_dir = committed_markers[0].parent
+    captured_enable_states = _captured_enable_states(transaction_dir)
+    assert {
+        unit: captured_enable_states[unit]
+        for unit in STATIC_SERVICE_UNITS
+    } == dict.fromkeys(STATIC_SERVICE_UNITS, 'static')
     assert (transaction_dir / 'root-crontab.before').read_bytes() == original_crontab
     assert (transaction_dir / 'root-crontab.before.sha256').read_text(
         encoding='ascii'
@@ -1786,7 +1815,27 @@ def test_migration_failure_restores_database_release_and_unit_state(tmp_path):
         transaction['fake_state'] / 'case-weather-cache-bootstrap.timer.enabled'
     ).exists()
     assert not list((transaction['state_dir'] / 'backups').rglob('ROLLBACK_REQUIRED.txt'))
-    assert len(list((transaction['state_dir'] / 'backups').rglob('ROLLED_BACK'))) == 1
+    rolled_back_markers = list(
+        (transaction['state_dir'] / 'backups').rglob('ROLLED_BACK')
+    )
+    assert len(rolled_back_markers) == 1
+    captured_enable_states = _captured_enable_states(rolled_back_markers[0].parent)
+    assert {
+        unit: captured_enable_states[unit]
+        for unit in STATIC_SERVICE_UNITS
+    } == dict.fromkeys(STATIC_SERVICE_UNITS, 'static')
+    actions = transaction['systemctl_log'].read_text(encoding='utf-8').splitlines()
+    for unit in STATIC_SERVICE_UNITS:
+        toggles = [
+            action for action in actions
+            if action in {
+                f'enable {unit}',
+                f'enable --runtime {unit}',
+                f'disable {unit}',
+            }
+        ]
+        assert toggles == []
+        assert (transaction['fake_state'] / f'{unit}.static').exists()
     assert not (
         transaction['state_dir'] / 'backups' / 'backup-runtime.env'
     ).exists()
