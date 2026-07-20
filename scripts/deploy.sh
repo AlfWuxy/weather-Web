@@ -2036,7 +2036,25 @@ fi
 
 echo ""
 echo "步骤6.1: 在停止生产服务前完成隔离测试..."
-remote_exec "cd $RELEASE_APP && DATABASE_URI=sqlite:///:memory: DEBUG=true WECHAT_FORMAL_RUNTIME=0 SECRET_KEY=release-preflight-secret-key-123456789 PAIR_TOKEN_PEPPER=release-preflight-pair-pepper-123456789 RATE_LIMIT_STORAGE_URI=memory:// REDIS_URL= QWEATHER_AUTH_MODE=disabled QWEATHER_KEY= QWEATHER_API_BASE= AMAP_KEY= AMAP_WEB_SERVICE_KEY= AMAP_SECURITY_JS_CODE= SILICONFLOW_API_KEY= WXPUSHER_APP_TOKEN= WX_MINIPROGRAM_APPID= WX_MINIPROGRAM_SECRET= WX_MINIPROGRAM_OPENID_PEPPER= WX_MINIPROGRAM_SESSION_SECRET= DEMO_MODE=1 $RELEASE_VENV/bin/python -m pytest -q"
+# 完整非激活测试与四个激活分片由 GitHub CI 负责；服务器资源受限，只运行八个发布关键冒烟文件。
+# 禁止恢复不带文件清单的裸全量 pytest，避免发布主机再次触发 OOM。
+remote_exec "set -eu
+umask 077
+PREFLIGHT_ROOT=$NEW_RELEASE/preflight-runtime
+PREFLIGHT_HOME=\$PREFLIGHT_ROOT/home
+PREFLIGHT_TMP=\$PREFLIGHT_ROOT/tmp
+cleanup_preflight() {
+    rm -rf -- \"\$PREFLIGHT_ROOT\"
+}
+trap cleanup_preflight EXIT
+# 候选代码与虚拟环境只向运行组开放读取和执行，测试产生物全部限制在运行用户私有目录。
+chown root:$RUNTIME_GROUP $NEW_RELEASE
+chmod 0750 $NEW_RELEASE
+chown -R root:$RUNTIME_GROUP $RELEASE_APP $RELEASE_VENV
+chmod -R g+rX,o-rwx $RELEASE_APP $RELEASE_VENV
+install -d -o $RUNTIME_USER -g $RUNTIME_GROUP -m 0700 \"\$PREFLIGHT_ROOT\" \"\$PREFLIGHT_HOME\" \"\$PREFLIGHT_TMP\"
+cd $RELEASE_APP
+runuser --user $RUNTIME_USER -- /usr/bin/env -i HOME=\"\$PREFLIGHT_HOME\" TMPDIR=\"\$PREFLIGHT_TMP\" PATH=$RELEASE_VENV/bin:/usr/local/bin:/usr/bin:/bin LANG=C.UTF-8 LC_ALL=C.UTF-8 USER=$RUNTIME_USER LOGNAME=$RUNTIME_USER PYTHONDONTWRITEBYTECODE=1 DATABASE_URI=sqlite:///:memory: DEBUG=true WECHAT_FORMAL_RUNTIME=0 SECRET_KEY=release-preflight-secret-key-123456789 PAIR_TOKEN_PEPPER=release-preflight-pair-pepper-123456789 RATE_LIMIT_STORAGE_URI=memory:// REDIS_URL= QWEATHER_AUTH_MODE=disabled QWEATHER_KEY= QWEATHER_API_BASE= AMAP_KEY= AMAP_WEB_SERVICE_KEY= AMAP_SECURITY_JS_CODE= SILICONFLOW_API_KEY= WXPUSHER_APP_TOKEN= WX_MINIPROGRAM_APPID= WX_MINIPROGRAM_SECRET= WX_MINIPROGRAM_OPENID_PEPPER= WX_MINIPROGRAM_SESSION_SECRET= DEMO_MODE=1 $RELEASE_VENV/bin/python -m pytest -q -p no:cacheprovider tests/test_smoke.py tests/test_database_bootstrap.py tests/test_server_migrate.py tests/test_miniprogram_runtime.py tests/test_formal_web_gate.py tests/test_web_weather_fail_closed.py tests/test_security_headers.py tests/test_mp_api_auth.py"
 
 echo ""
 echo "步骤6.2: 为新版本生成 systemd 单元模板..."

@@ -397,6 +397,67 @@ def test_preflight_finishes_before_server_transaction_can_stop_units():
     assert preflight < activation
 
 
+def test_remote_preflight_drops_to_runtime_user_with_private_writable_dirs():
+    content = _load_deploy_script()
+    start = content.index('echo "步骤6.1: 在停止生产服务前完成隔离测试..."')
+    end = content.index('echo "步骤6.2: 为新版本生成 systemd 单元模板..."')
+    preflight = content[start:end]
+
+    assert '完整非激活测试与四个激活分片由 GitHub CI 负责' in preflight
+    assert '禁止恢复不带文件清单的裸全量 pytest' in preflight
+    assert 'remote_exec "set -eu\numask 077\n' in preflight
+    assert 'PREFLIGHT_ROOT=$NEW_RELEASE/preflight-runtime' in preflight
+    assert 'PREFLIGHT_HOME=\\$PREFLIGHT_ROOT/home' in preflight
+    assert 'PREFLIGHT_TMP=\\$PREFLIGHT_ROOT/tmp' in preflight
+    assert (
+        'install -d -o $RUNTIME_USER -g $RUNTIME_GROUP -m 0700 '
+        '\\"\\$PREFLIGHT_ROOT\\" \\"\\$PREFLIGHT_HOME\\" '
+        '\\"\\$PREFLIGHT_TMP\\"'
+    ) in preflight
+    assert 'chown root:$RUNTIME_GROUP $NEW_RELEASE' in preflight
+    assert 'chmod 0750 $NEW_RELEASE' in preflight
+    assert 'chown -R root:$RUNTIME_GROUP $RELEASE_APP $RELEASE_VENV' in preflight
+    assert 'chmod -R g+rX,o-rwx $RELEASE_APP $RELEASE_VENV' in preflight
+    assert 'runuser --user $RUNTIME_USER -- /usr/bin/env -i' in preflight
+    assert 'HOME=\\"\\$PREFLIGHT_HOME\\"' in preflight
+    assert 'TMPDIR=\\"\\$PREFLIGHT_TMP\\"' in preflight
+    assert 'LANG=C.UTF-8 LC_ALL=C.UTF-8' in preflight
+    assert 'USER=$RUNTIME_USER LOGNAME=$RUNTIME_USER' in preflight
+    assert 'PYTHONDONTWRITEBYTECODE=1' in preflight
+    critical_tests = (
+        'tests/test_smoke.py',
+        'tests/test_database_bootstrap.py',
+        'tests/test_server_migrate.py',
+        'tests/test_miniprogram_runtime.py',
+        'tests/test_formal_web_gate.py',
+        'tests/test_web_weather_fail_closed.py',
+        'tests/test_security_headers.py',
+        'tests/test_mp_api_auth.py',
+    )
+    expected_pytest = (
+        '$RELEASE_VENV/bin/python -m pytest -q -p no:cacheprovider '
+        + ' '.join(critical_tests)
+    )
+    assert expected_pytest in preflight
+    pytest_tail = preflight.split(
+        '$RELEASE_VENV/bin/python -m pytest -q -p no:cacheprovider ', 1
+    )[1].split('"', 1)[0]
+    assert tuple(pytest_tail.split()) == critical_tests
+    assert '$RELEASE_VENV/bin/python -m pytest -q"' not in preflight
+    assert 'trap cleanup_preflight EXIT' in preflight
+    assert 'rm -rf -- \\"\\$PREFLIGHT_ROOT\\"' in preflight
+
+    permission_open = preflight.index(
+        'chown -R root:$RUNTIME_GROUP $RELEASE_APP $RELEASE_VENV'
+    )
+    temp_install = preflight.index('install -d -o $RUNTIME_USER')
+    runtime_test = preflight.index('runuser --user $RUNTIME_USER --')
+    assert permission_open < runtime_test
+    assert temp_install < runtime_test
+    assert 'su -c' not in preflight
+    assert 'runuser --user $RUNTIME_USER -- sh -c' not in preflight
+
+
 def test_formal_freeze_preflight_runs_before_remote_change_or_rsync():
     content = _load_deploy_script()
 
