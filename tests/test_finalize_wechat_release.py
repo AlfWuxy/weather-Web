@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import stat
 import subprocess
 from functools import lru_cache
@@ -175,6 +176,57 @@ def test_privacy_page_final_contact_copy_is_current_and_reversible():
     privacy = final[contract.PRIVACY_PAGE_PATH].decode("utf-8")
     assert "以微信公众平台隐私保护指引展示的认证信息为准" in privacy
     assert "会在正式提交前同步" not in privacy
+    assert contract.restore_candidate(final, _fields()) == candidate
+
+
+def test_finalized_privacy_materials_preserve_exact_data_lifecycle_disclosures():
+    candidate = dict(_candidate_fixture())
+    final = contract.render_final(candidate, _fields())
+
+    for path in (contract.PRIVACY_DOC_PATH, contract.PRIVACY_PAGE_PATH):
+        text = final[path].decode("utf-8")
+        assert re.search(
+            r"wechat_login_success.*direct.*family_share.*内部账号 ID.*事件时间.*30 天",
+            text,
+            re.S,
+        )
+        assert re.search(
+            r"内部账号 ID.*随机内部账号名.*随机密码.*哈希.*一般隐私同意版本.*最近登录时间.*保存至账号注销",
+            text,
+            re.S,
+        )
+        assert re.search(
+            r"会话 token.*不可逆哈希.*创建时间.*到期时间.*最近使用时间.*撤销时间.*7 天.*30 天",
+            text,
+            re.S,
+        )
+        assert re.search(
+            r"老人码.*短码.*不可逆哈希.*短码到期时间.*关系状态.*(?:保存至账号注销|随账号保存至注销)",
+            text,
+            re.S,
+        )
+        assert re.search(r"行动确认.*日期.*完成状态.*实际所选完成项", text, re.S)
+        assert re.search(
+            r"停止管理家人.*软停用.*不会删除家人档案.*历史记录",
+            text,
+            re.S,
+        )
+        assert re.search(
+            r"瞬时读取客户端 IP.*明文 IP 不写入产品分析事件或应用审计表",
+            text,
+            re.S,
+        )
+        assert re.search(
+            r"个性化提醒.*系统剪贴板.*可能包含家人称呼.*不读取系统剪贴板",
+            text,
+            re.S,
+        )
+
+    privacy_page = final[contract.PRIVACY_PAGE_PATH].decode("utf-8")
+    assert not re.search(r"safe-note[^>]*>[^<]*昵称", privacy_page)
+    health_consent = final[contract.HEALTH_CONSENT_PAGE_PATH].decode("utf-8")
+    assert "当前只有用药记录支持逐条删除" in health_consent
+    assert "主动删除相关记录" not in health_consent
     assert contract.restore_candidate(final, _fields()) == candidate
 
 
