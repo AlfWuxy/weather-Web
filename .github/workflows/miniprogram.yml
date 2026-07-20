@@ -1,0 +1,76 @@
+name: Mini Program CI
+
+on:
+  pull_request:
+    paths:
+      - "miniprogram/**"
+      - "project.config.json"
+      - ".github/workflows/miniprogram.yml"
+  push:
+    branches:
+      - codex/miniprogram
+    paths:
+      - "miniprogram/**"
+      - "project.config.json"
+      - ".github/workflows/miniprogram.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  miniprogram:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v7
+
+      - name: 配置 Node.js 20
+        uses: actions/setup-node@v7
+        with:
+          node-version: "20"
+
+      - name: 运行小程序逻辑测试
+        run: node --test miniprogram/tests/*.test.js
+
+      - name: 检查 JavaScript 与 JSON
+        shell: bash
+        run: |
+          while IFS= read -r -d '' file; do
+            node --check "$file"
+          done < <(find miniprogram -type f -name '*.js' -print0)
+
+          while IFS= read -r -d '' file; do
+            jq empty "$file"
+          done < <(find miniprogram -type f -name '*.json' -print0)
+
+          jq empty project.config.json
+
+      - name: 检查公开发布配置
+        shell: bash
+        run: |
+          node -e "const runtime = require('./miniprogram/config.runtime.js'); if (runtime.API_BASE_URL !== 'https://yilaoweather.org') throw new Error('正式分支必须固定审核通过的生产 API 域名')"
+          test "$(jq -r '.appid' project.config.json)" = "touristappid"
+          test "$(jq -r '.setting.urlCheck' project.config.json)" = "true"
+          test "$(jq -r '.miniprogramRoot' project.config.json)" = "miniprogram/"
+
+          forbidden=$(git ls-files | grep -E '(^|/)(config\.private\.js|project\.private\.config\.json)$' || true)
+          if [ -n "$forbidden" ]; then
+            printf '发现禁止提交的私有配置：\n%s\n' "$forbidden" >&2
+            exit 1
+          fi
+
+      - name: 检查主包体积
+        shell: bash
+        run: |
+          bytes=$(
+            find miniprogram -type f \
+              ! -path '*/tests/*' \
+              ! -name 'README.md' \
+              ! -name 'config.example.js' \
+              -exec stat -c '%s' {} + \
+              | awk '{ total += $1 } END { print total + 0 }'
+          )
+          printf '预计上传主包：%s bytes\n' "$bytes"
+          test "$bytes" -le 2097152

@@ -228,8 +228,12 @@ def test_validators_comprehensive():
     assert valid is False
 
     # 密码验证
-    valid, result = validate_password('password123')
+    valid, result = validate_password('password1234')
     assert valid is True
+
+    valid, msg = validate_password('password123')  # 11 位仍不足
+    assert valid is False
+    assert '至少12位' in msg
 
     valid, msg = validate_password('123')  # 太短
     assert valid is False

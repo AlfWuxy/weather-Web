@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% from "partials/metric_info.html" import metric_info with context %}
 {% set needs_chartjs = true %}
+{% set web_actions_read_only = web_actions_read_only|default(config.get('WECHAT_FORMAL_RUNTIME', false)) %}
 
 {% block title %}行动打卡 - 天气健康风险预测系统{% endblock %}
 
@@ -9,7 +10,13 @@
     <div class="row mb-3">
         <div class="col-12">
             <h2><i class="bi bi-clipboard-check"></i> 行动型热健康预警</h2>
-            <p class="text-muted mb-0">输入短码即可完成今日确认或求助（不含医疗诊断/治疗建议）。</p>
+            {% if web_actions_read_only %}
+                <p class="text-muted mb-0">当前网页仅显示家庭行动入口的停用说明（不含医疗诊断/治疗建议）。</p>
+                <p class="text-muted small mt-2 mb-0">微信正式版不会在网页读取短码或家庭安全链接。确认、求助和复盘请在微信小程序中登录并完成健康资料单独同意后操作。</p>
+            {% else %}
+                <p class="text-muted mb-0">输入短码即可完成今日确认或求助（不含医疗诊断/治疗建议）。</p>
+                <p class="text-muted small mt-2 mb-0">未登录者可使用照护人提供的有效短码或有时效家庭行动安全链接。只有主动提交时，行动确认、求助需求或复盘才会写入对应照护账号；该入口不等于登录，不能查看账号内其他资料。</p>
+            {% endif %}
         </div>
     </div>
 
@@ -21,17 +28,24 @@
                         <h5 class="mb-0"><i class="bi bi-key"></i> 短码确认</h5>
                     </div>
                     <div class="card-body">
+                        {% if web_actions_read_only %}
+                        <div class="alert alert-info mb-0" role="status" data-testid="web-actions-read-only">
+                            <strong>当前网页仅供查看停用说明。</strong>
+                            为保护家庭资料，首发不会读取短码、兑换安全链接或写入家庭记录。请打开微信小程序并登录后操作。
+                        </div>
+                        {% else %}
                         <form method="POST" action="{{ entry_action or url_for('public.action_check') }}">
                             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                             <div class="mb-3">
                                 <label class="form-label">短码</label>
                                 <input class="form-control" name="short_code" value="{{ short_code or '' }}" placeholder="例如 123456" maxlength="12" required>
                             </div>
-                            <div class="text-muted small mb-3">短码仅用于行动确认，不包含个人身份信息。</div>
+                            <div class="text-muted small mb-3">有效短码或有时效家庭行动安全链接只开放对应家庭行动页，请勿转发给无关人员。</div>
                             <button class="btn btn-primary w-100" type="submit">
                                 <i class="bi bi-arrow-right-circle"></i> 进入行动页面
                             </button>
                         </form>
+                        {% endif %}
                     </div>
                 </div>
             </div>
@@ -142,7 +156,12 @@
                         {% else %}
                         <div class="alert alert-warning mb-3" role="status">
                             <strong>天气正在更新。</strong>
-                            风险等级暂不显示。你仍可完成安全确认、发出求助或查看避暑资源。
+                            风险等级暂不显示。
+                            {% if web_actions_read_only %}
+                                你仍可查看避暑资源；确认、求助和复盘请前往微信小程序。
+                            {% else %}
+                                你仍可完成安全确认、发出求助或查看避暑资源。
+                            {% endif %}
                         </div>
                         <div class="d-flex flex-wrap gap-2">
                             <a class="btn btn-outline-primary" href="{{ url_for('public.cooling_resources') }}">
@@ -153,6 +172,13 @@
                             </a>
                         </div>
                         {% endif %}
+                        {% if web_actions_read_only %}
+                        <hr>
+                        <div class="alert alert-info mb-0" role="status" data-testid="web-actions-read-only">
+                            <strong>当前网页仅供查看。</strong>
+                            今日确认、求助和复盘不会从网页提交。请打开微信小程序并登录后操作；遇到紧急情况请直接拨打 120。
+                        </div>
+                        {% else %}
                         <hr>
                         <form method="POST" action="{{ confirm_action or url_for('public.action_confirm') }}">
                             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -179,7 +205,7 @@
                                 <button class="btn btn-success btn-lg" type="submit">
                                     <i class="bi bi-check-circle"></i> 我很安全
                                 </button>
-                                <span class="text-muted small">确认后记录今日完成情况。</span>
+                                <span class="text-muted small">主动确认后，今日完成情况会写入对应照护账号。</span>
                             </div>
                         </form>
                         <hr>
@@ -190,9 +216,10 @@
                                 <button class="btn btn-danger btn-lg" type="submit">
                                     <i class="bi bi-life-preserver"></i> 我需要帮助
                                 </button>
-                                <span class="text-muted small">仅用于触发协助流程，不包含医疗处置。</span>
+                                <span class="text-muted small">这里只记录求助需求，不会自动通知照护人。请同时通过电话或微信直接联系照护人，紧急时拨打 120。</span>
                             </div>
                         </form>
+                        {% endif %}
                     </div>
                 </div>
 
@@ -211,9 +238,14 @@
 
                 <div class="card shadow-sm" id="debrief-section">
                     <div class="card-header bg-light">
-                        <h5 class="mb-0"><i class="bi bi-chat-square-text"></i> 今日复盘（可选）</h5>
+                        <h5 class="mb-0"><i class="bi bi-chat-square-text"></i> 今日复盘{% if web_actions_read_only %}（网页只读）{% else %}（可选）{% endif %}</h5>
                     </div>
                     <div class="card-body">
+                        {% if web_actions_read_only %}
+                        <div class="text-muted" data-testid="web-debrief-read-only">
+                            网页保留复盘说明供你查看。需要提交或修改今日复盘时，请在微信小程序中登录后操作。
+                        </div>
+                        {% else %}
                         <form method="POST" action="{{ debrief_action or url_for('public.action_debrief') }}">
                             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                             <input type="hidden" name="short_code" value="{{ pair.short_code }}">
@@ -254,13 +286,15 @@
                             <div class="form-check mt-3">
                                 <input class="form-check-input" type="checkbox" value="1" id="debriefOptin" name="debrief_optin">
                                 <label class="form-check-label" for="debriefOptin">
-                                    允许将复盘与绑定关系关联（用于改进服务）
+                                    关联到这位家人的今日记录
                                 </label>
                             </div>
+                            <div class="text-muted small mt-2">取消关联后，复盘不会显示在这位家人的今日记录中，仍归对应照护账号保存并在账号注销时删除。无论是否关联，都计入当天社区复盘提交数量；社区只展示数量，不展示复盘原文。</div>
                             <button class="btn btn-outline-primary mt-3" type="submit">
                                 <i class="bi bi-send"></i> 提交复盘
                             </button>
                         </form>
+                        {% endif %}
                     </div>
                 </div>
             </div>

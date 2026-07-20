@@ -1,0 +1,51 @@
+<view class="page-shell">
+  <view class="hero community-hero">
+    <view class="hero-kicker">都昌县 · 社区公开视图</view>
+    <view class="hero-title">先提醒哪里，先支持哪里。</view>
+    <view class="hero-subtitle">用于安排宣传、走访和避暑资源。社区分数不代表个人健康诊断。</view>
+  </view>
+
+  <status-card wx:if="{{loading}}" state="loading" title="正在读取社区数据" detail="公共社区结果同样遵守 30 分钟缓存。" />
+  <status-card wx:elif="{{error && !counts.all}}" state="error" title="社区数据暂不可用" detail="{{error}}" action-label="重试" bind:action="retry" />
+
+  <block wx:if="{{counts.all}}">
+    <freshness-bar updated-text="{{freshness.updatedText}}" stale="{{freshness.stale}}" source="{{freshness.source}}" refresh-deferred="{{freshness.refreshDeferred}}" refresh-started="{{freshness.refreshStarted}}" />
+    <view class="grid-two community-summary">
+      <view class="metric"><view class="metric-label">纳入社区</view><view class="metric-value">{{counts.all}}</view></view>
+      <view class="metric"><view class="metric-label">高脆弱性社区</view><view class="metric-value">{{counts.high}}</view></view>
+    </view>
+
+    <scroll-view class="filters" scroll-x="true" show-scrollbar="false">
+      <view class="filter-row" role="tablist" aria-role="tablist" aria-label="按社区脆弱性筛选">
+        <button class="filter-pill {{filter === 'all' ? 'active' : ''}}" role="tab" aria-role="tab" aria-selected="{{filter === 'all'}}" aria-pressed="{{filter === 'all'}}" aria-label="全部 {{counts.all}}，{{filter === 'all' ? '已选择' : '未选择'}}" data-filter="all" bindtap="chooseFilter"><image wx:if="{{filter === 'all'}}" src="/assets/icons/check-white.png" mode="aspectFit" aria-hidden="true" />全部 {{counts.all}}</button>
+        <button class="filter-pill {{filter === 'high' ? 'active' : ''}}" role="tab" aria-role="tab" aria-selected="{{filter === 'high'}}" aria-pressed="{{filter === 'high'}}" aria-label="高脆弱性 {{counts.high}}，{{filter === 'high' ? '已选择' : '未选择'}}" data-filter="high" bindtap="chooseFilter"><image wx:if="{{filter === 'high'}}" src="/assets/icons/check-white.png" mode="aspectFit" aria-hidden="true" />高脆弱性 {{counts.high}}</button>
+        <button class="filter-pill {{filter === 'mid' ? 'active' : ''}}" role="tab" aria-role="tab" aria-selected="{{filter === 'mid'}}" aria-pressed="{{filter === 'mid'}}" aria-label="中等脆弱性 {{counts.mid}}，{{filter === 'mid' ? '已选择' : '未选择'}}" data-filter="mid" bindtap="chooseFilter"><image wx:if="{{filter === 'mid'}}" src="/assets/icons/check-white.png" mode="aspectFit" aria-hidden="true" />中等脆弱性 {{counts.mid}}</button>
+        <button class="filter-pill {{filter === 'low' ? 'active' : ''}}" role="tab" aria-role="tab" aria-selected="{{filter === 'low'}}" aria-pressed="{{filter === 'low'}}" aria-label="较低脆弱性 {{counts.low}}，{{filter === 'low' ? '已选择' : '未选择'}}" data-filter="low" bindtap="chooseFilter"><image wx:if="{{filter === 'low'}}" src="/assets/icons/check-white.png" mode="aspectFit" aria-hidden="true" />较低脆弱性 {{counts.low}}</button>
+      </view>
+    </scroll-view>
+
+    <view wx:for="{{communities}}" wx:key="id" class="community-card card">
+      <view class="rank" aria-label="全县排名第 {{item.globalRank}}">{{item.globalRank}}</view>
+      <view class="community-copy">
+        <view class="row-between">
+          <view class="card-title">{{item.name}}</view>
+          <view class="pill {{item.tone}}">{{item.label}}</view>
+        </view>
+        <view class="community-metrics">
+          <view><text class="small muted">{{item.metricLabel}}</text><text class="community-value">{{item.scoreText}}</text></view>
+          <view><text class="small muted">65+ 人口占比</text><text class="community-value">{{item.elderlyText}}</text></view>
+          <view wx:if="{{item.uncertainty !== null}}"><text class="small muted">不确定性</text><text class="community-value">{{item.uncertainty}}</text></view>
+        </view>
+        <view wx:if="{{item.hotspot}}" class="small muted hotspot">空间复核：{{item.hotspot}}</view>
+      </view>
+    </view>
+    <status-card wx:if="{{!communities.length}}" state="empty" title="该筛选下暂无社区" detail="可切换到“全部”继续查看。" />
+
+    <view class="community-links grid-two">
+      <navigator class="secondary-button" url="/pages/cooling/index">避暑资源</navigator>
+      <navigator class="secondary-button" url="/pages/gis/index">热暴露 GIS</navigator>
+    </view>
+    <view class="safe-note">脆弱性指数是相对稳定的社区背景指标，不代表当前天气风险。排序只用于公共行动优先级；数据缺失或样本不足时会停止显示或标记不确定性。</view>
+  </block>
+  <status-card wx:elif="{{!loading && !error}}" state="empty" title="暂无社区公开数据" detail="系统不会加载内置演示社区。请等待社区档案完成维护。" />
+</view>

@@ -121,6 +121,11 @@ def upgrade():
             sa.Column('created_at', sa.DateTime(), nullable=True),
             sa.Column('last_login_at', sa.DateTime(), nullable=True),
             sa.UniqueConstraint('openid_hash', name='uq_miniprogram_identities_openid_hash'),
+            sa.UniqueConstraint(
+                'id',
+                'user_id',
+                name='uq_miniprogram_identities_id_user_id',
+            ),
         )
         op.create_index(
             'ix_miniprogram_identities_user_id',
@@ -137,24 +142,20 @@ def upgrade():
         op.create_table(
             'miniprogram_sessions',
             sa.Column('id', sa.Integer(), primary_key=True),
-            sa.Column(
-                'identity_id',
-                sa.Integer(),
-                sa.ForeignKey('miniprogram_identities.id', ondelete='CASCADE'),
-                nullable=False,
-            ),
-            sa.Column(
-                'user_id',
-                sa.Integer(),
-                sa.ForeignKey('users.id', ondelete='CASCADE'),
-                nullable=False,
-            ),
+            sa.Column('identity_id', sa.Integer(), nullable=False),
+            sa.Column('user_id', sa.Integer(), nullable=False),
             sa.Column('token_hash', sa.String(length=64), nullable=False),
             sa.Column('privacy_consent_version', sa.String(length=64), nullable=False),
             sa.Column('expires_at', sa.DateTime(), nullable=False),
             sa.Column('created_at', sa.DateTime(), nullable=True),
             sa.Column('last_used_at', sa.DateTime(), nullable=True),
             sa.Column('revoked_at', sa.DateTime(), nullable=True),
+            sa.ForeignKeyConstraint(
+                ['identity_id', 'user_id'],
+                ['miniprogram_identities.id', 'miniprogram_identities.user_id'],
+                name='fk_miniprogram_sessions_identity_owner',
+                ondelete='CASCADE',
+            ),
             sa.UniqueConstraint('token_hash', name='uq_miniprogram_sessions_token_hash'),
         )
         op.create_index(

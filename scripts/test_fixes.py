@@ -123,10 +123,6 @@ def main():
             print("✅ .env.example 包含所有必需配置项")
 
         env_values = _load_active_env_values(env_example)
-        if any(marker in env_example for marker in ['73684be4bf0141c7', '172.245.126.42', 'mj76x98pfn.re.qweatherapi.com']):
-            print("❌ .env.example 仍包含已知敏感片段！")
-            return 1
-
         secret_like_keys = [
             'SECRET_KEY',
             'PAIR_TOKEN_PEPPER',

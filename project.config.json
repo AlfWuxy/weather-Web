@@ -1,0 +1,39 @@
+{
+  "description": "宜老天气通微信小程序",
+  "packOptions": {
+    "ignore": [
+      { "type": "folder", "value": "tests" },
+      { "type": "folder", "value": "miniprogram/tests" },
+      { "type": "file", "value": "README.md" },
+      { "type": "file", "value": "miniprogram/README.md" },
+      { "type": "file", "value": "config.example.js" },
+      { "type": "file", "value": "miniprogram/config.example.js" }
+    ]
+  },
+  "setting": {
+    "urlCheck": true,
+    "es6": true,
+    "enhance": true,
+    "compileHotReLoad": false,
+    "postcss": true,
+    "minified": true,
+    "minifyWXSS": true,
+    "minifyWXML": true,
+    "showShadowRootInWxmlPanel": true,
+    "useApiHook": true,
+    "useApiHostProcess": true,
+    "babelSetting": {
+      "ignore": [],
+      "disablePlugins": [],
+      "outputPath": ""
+    }
+  },
+  "compileType": "miniprogram",
+  "libVersion": "3.7.12",
+  "appid": "touristappid",
+  "projectname": "yilao-weather-miniprogram",
+  "miniprogramRoot": "miniprogram/",
+  "simulatorType": "wechat",
+  "simulatorPluginLibVersion": {},
+  "condition": {}
+}

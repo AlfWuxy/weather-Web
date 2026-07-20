@@ -1,0 +1,49 @@
+# 宜老天气通微信小程序
+
+原生微信小程序版本，无第三方 npm 依赖。公共首页无需登录，照护功能在用户主动登录后使用。
+
+用药和求助模块只保存用户主动填写的记录，不发送定时提醒、订阅消息、短信或电话通知。送达能力需要后续在微信公众平台单独申请模板并完成授权设计。
+
+## 本地导入
+
+1. 在微信开发者工具中导入仓库根目录。受版本控制的 `project.config.json` 固定使用 `touristappid`，避免把正式标识写入 Git。
+2. 在被 Git 忽略的根目录 `project.private.config.json` 中配置正式 AppID，并保留开发者工具生成的本机偏好。微信开发者工具会把它与公开工程配置合并；文件权限保持 `0600`，`git check-ignore project.private.config.json` 必须命中。
+3. 正式分支已在 `config.runtime.js` 固定公开后端 `https://yilaoweather.org`，导入后无需临时改写。
+4. 在微信公众平台的“开发管理，开发设置，服务器域名”中，把 `https://yilaoweather.org` 加入 `request` 合法域名。
+5. 正式 AppID 和 AppSecret 同时保存到本机私密发布表单并下发受控服务器环境。`project.private.config.json` 的凭据相关内容只允许 AppID，AppSecret、代码上传密钥、QWeather 密钥和会话密钥绝不进入该文件、Git 或小程序包。
+
+小程序端不需要天气供应商 API Key。第三方天气认证材料只应保存在后端环境变量中。
+
+兼容 Web Token 默认 30 天有效，并绑定服务端当前隐私版本。隐私说明升级后需在 Web 个人设置页重新勾选同意并生成 Token；微信登录会话会直接要求重新同意新版本。
+
+## 30 分钟更新策略
+
+- 后端计划任务每 30 分钟同步一次都昌县天气，并把完整快照写入数据库。
+- `GET /mp/api/v1/bootstrap` 只读取最近持久化快照，用户打开页面不会触发天气供应商请求。
+- 首页、预报、预警和行动页共享一个本机缓存与一个进行中的 Promise。
+- 客户端有效期取“本机写入后 30 分钟”和服务端 `expires_at` 的较早值。
+- 下拉刷新不能穿透仍有效的硬缓存。快照过期后才会读取后端。
+- 网络失败时可显示最近缓存，同时明确标记离线或过期。
+
+社区、避暑资源和 GIS 元数据统一读取 `GET /mp/api/v1/public/community`。约 1.9 MB 的公开 GeoJSON 只在 GIS 页由用户点击后通过同源后端地址下载，不进入小程序包，也不写入本机持久缓存。
+
+## 上架前检查
+
+1. 在微信公众平台完善小程序名称、类目、服务内容、用户隐私保护指引和服务条款。
+2. 确认 `app.json` 的 `__usePrivacyCheck__` 已启用，并在照护登录入口提供隐私协议查看和同意流程。
+3. 按实际调用能力申报网络请求、拨打电话等功能。公开天气浏览不申请定位权限。
+4. 确认后端证书有效、TLS 配置正常、生产域名已加入 `request` 白名单。
+5. 确认后台 30 分钟同步任务、预算上限保护、失败保留旧快照和监控告警均已启用。
+6. 用老人常见机型测试大字号、低网速、断网、缓存过期、空数据、服务端错误和重新登录。
+7. 分别测试游客路径、照护登录、退出登录、账号注销、行动清单、社区筛选、避暑资源和 GIS 图层切换。
+8. 上传体验版，完成隐私合规与功能自测后再提交审核。
+
+## 本地静态验证
+
+```sh
+find miniprogram -type f -name '*.js' -print0 | while IFS= read -r -d '' file; do node --check "$file"; done
+find miniprogram -type f -name '*.json' -print0 | while IFS= read -r -d '' file; do jq -e . "$file" >/dev/null; done
+jq -e . project.config.json >/dev/null
+git check-ignore project.private.config.json
+node --test miniprogram/tests/*.test.js
+```

@@ -1,0 +1,53 @@
+<view class="page-shell">
+  <view class="hero cooling-hero">
+    <view class="hero-kicker">都昌县 · 避暑支持</view>
+    <view class="hero-title">家里降温条件不足，就近找帮助。</view>
+    <view class="hero-subtitle">出发前请先确认开放时间、接待条件和无障碍情况。</view>
+  </view>
+
+  <status-card wx:if="{{loading}}" state="loading" title="正在读取避暑资源" detail="资源由社区维护，页面会保留最近一次有效结果。" />
+  <status-card wx:elif="{{error && !counts.all}}" state="error" title="避暑资源暂不可用" detail="{{error}}" action-label="重试" bind:action="retry" />
+
+  <block wx:if="{{counts.all}}">
+    <freshness-bar updated-text="{{freshness.updatedText}}" stale="{{freshness.stale}}" source="{{freshness.source}}" refresh-deferred="{{freshness.refreshDeferred}}" refresh-started="{{freshness.refreshStarted}}" />
+    <scroll-view class="filters" scroll-x="true" show-scrollbar="false" aria-label="避暑资源筛选">
+      <view class="filter-row" role="tablist" aria-role="tablist" aria-label="避暑资源筛选条件">
+        <button class="filter-pill {{filter === 'all' ? 'active' : ''}}" data-filter="all" bindtap="chooseFilter" role="tab" aria-role="tab" aria-pressed="{{filter === 'all'}}" aria-selected="{{filter === 'all'}}" aria-label="全部 {{counts.all}} 个，{{filter === 'all' ? '已选择' : '未选择'}}"><image wx:if="{{filter === 'all'}}" class="filter-icon" src="/assets/icons/check-white.png" mode="aspectFit" aria-hidden="true" /><text wx:else class="filter-state" aria-hidden="true">未选</text><text>全部 {{counts.all}}</text></button>
+        <button class="filter-pill {{filter === 'ac' ? 'active' : ''}}" data-filter="ac" bindtap="chooseFilter" role="tab" aria-role="tab" aria-pressed="{{filter === 'ac'}}" aria-selected="{{filter === 'ac'}}" aria-label="有空调 {{counts.ac}} 个，{{filter === 'ac' ? '已选择' : '未选择'}}"><image wx:if="{{filter === 'ac'}}" class="filter-icon" src="/assets/icons/check-white.png" mode="aspectFit" aria-hidden="true" /><text wx:else class="filter-state" aria-hidden="true">未选</text><text>有空调 {{counts.ac}}</text></button>
+        <button class="filter-pill {{filter === 'accessible' ? 'active' : ''}}" data-filter="accessible" bindtap="chooseFilter" role="tab" aria-role="tab" aria-pressed="{{filter === 'accessible'}}" aria-selected="{{filter === 'accessible'}}" aria-label="无障碍 {{counts.accessible}} 个，{{filter === 'accessible' ? '已选择' : '未选择'}}"><image wx:if="{{filter === 'accessible'}}" class="filter-icon" src="/assets/icons/check-white.png" mode="aspectFit" aria-hidden="true" /><text wx:else class="filter-state" aria-hidden="true">未选</text><text>无障碍 {{counts.accessible}}</text></button>
+      </view>
+    </scroll-view>
+
+    <view wx:for="{{resources}}" wx:key="id" class="resource-card card">
+      <view class="row-between">
+        <view class="card-title resource-name">{{item.name}}</view>
+        <view class="pill">{{item.type}}</view>
+      </view>
+      <view class="small muted community-label">{{item.community}}</view>
+      <view class="resource-line"><text class="line-label">地址</text><text>{{item.address}}</text></view>
+      <view class="resource-line"><text class="line-label">开放</text><text>{{item.hours}}</text></view>
+      <view wx:if="{{item.contactHint}}" class="resource-line"><text class="line-label">联系</text><text>{{item.contactHint}}</text></view>
+      <view class="tags">
+        <text wx:if="{{item.hasAc}}" class="tag">有空调</text>
+        <text wx:if="{{item.accessible}}" class="tag">无障碍</text>
+      </view>
+      <view wx:if="{{item.note}}" class="small muted resource-note">{{item.note}}</view>
+      <view class="resource-actions">
+        <button class="secondary-button small-button" data-id="{{item.id}}" bindtap="copyAddress">复制地址</button>
+        <button wx:if="{{item.phone}}" class="primary-button small-button" data-phone="{{item.phone}}" bindtap="callResource">拨打电话</button>
+      </view>
+    </view>
+    <status-card wx:if="{{!resources.length}}" state="empty" title="该筛选下暂无资源" detail="可切换到“全部”继续查看。" />
+    <view class="safe-note">开放时间和设施可能临时变化。行动不便、独居或出现不适时，请优先联系家人、社区或急救服务。</view>
+  </block>
+  <block wx:elif="{{!loading && !error}}">
+    <status-card state="empty" title="暂无录入的避暑资源" detail="系统不会显示虚构地点。请联系当地社区确认可用场所。" />
+    <view class="empty-guidance card">
+      <view class="card-title">现在可以先做两件事</view>
+      <view class="guidance-row"><view class="guidance-number">1</view><view>联系家人或所在社区，确认今天开放且适合停留的公共场所。</view></view>
+      <view class="guidance-row"><view class="guidance-number">2</view><view>先查看今日行动清单，完成补水、遮阳和室内降温检查。</view></view>
+      <navigator class="primary-button guidance-button" url="/pages/actions/index" hover-class="button-pressed">查看今日行动清单</navigator>
+    </view>
+    <view class="safe-note">如出现意识不清、持续高热、胸闷或明显乏力，请立即寻求专业帮助。</view>
+  </block>
+</view>

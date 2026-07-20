@@ -1,0 +1,49 @@
+<!-- WECHAT_RELEASE_STATUS: final -->
+<!-- WECHAT_MINIPROGRAM_NAME: 宜老平安 -->
+<!-- WECHAT_SERVICE_NAME: 宜老天气通 -->
+<!-- WECHAT_EFFECTIVE_DATE: 2026-07-20 -->
+<view class="page-shell">
+  <view class="hero agreement-hero">
+    <view class="hero-kicker">宜老平安小程序 · 宜老天气通服务 · 用户协议</view>
+    <view class="hero-title">把服务范围和责任边界说清楚。</view>
+    <view class="hero-subtitle">使用前请阅读。一般隐私确认用于登录；健康资料另有默认不勾选的单独同意，二者互不替代。</view>
+  </view>
+
+  <view class="agreement-card">
+    <view class="section-title">一、服务内容</view>
+    <view class="agreement-text">本小程序提供都昌县级天气、七天预报、气象预警、通用防护行动、社区脆弱性信息、避暑资源和热暴露地图。完成登录与一般隐私同意后，首次进入私密健康功能还需另行勾选健康敏感个人信息单独同意，之后才可自愿保存成年家人档案、五项健康状态筛查、健康日记、用药记录、家人行动确认、求助需求和复盘。1.0.0 首发的未登录家庭行动安全链接只显示停用说明和登录提示，不读取或写入家庭资料。</view>
+  </view>
+
+  <view class="agreement-card">
+    <view class="section-title">二、账号与授权</view>
+    <view class="agreement-text">请使用本人有权管理的微信账号和家庭资料。家人档案只支持 18 至 120 岁成年人；请确认已取得对方同意或具备管理这些资料的其他合法权限。该年龄不代表账号使用者年龄，小程序不收集或推断账号使用者年龄。请妥善保管登录状态和备用登录码。家庭行动安全入口不等于登录，首发只读页面不能查看账号内其他资料；有效短码和有时效链接请勿转发给无关人员。</view>
+  </view>
+
+  <view class="agreement-card">
+    <view class="section-title">三、信息与数据来源</view>
+    <view class="agreement-text">天气、预警和地图结果以页面标注的数据来源、发布时间、更新时间和适用范围为准。公共数据以 30 分钟作为新鲜度期限，这只表示何时应重新读取公共快照，不表示个人数据保存期限；网络异常时可能展示明确标记的上一份快照。公共“今日行动”只在当前设备保留一份当前都昌县日期和完成项，新日期会替换过期记录并清理旧日期键；登录后为指定家人保存的行动确认会保存到账号。请在重要决定前核对当地官方最新信息。</view>
+  </view>
+
+  <view class="agreement-card warning-card">
+    <view class="section-title">四、健康与紧急情况</view>
+    <view class="agreement-text">健康筛查会保存五项选择、评估时间、都昌县天气摘要与快照标识、模型与规则版本和结果元数据。健康日记保存记录日期、不适程度、最多 200 字症状和最多 500 字备注；求助说明最多 300 字；复盘保存完成情况、两项最多 200 字回答和最多 500 字困难说明。健康敏感信息单独同意默认不勾选，版本更新后需要重新确认；拒绝或撤回不会影响公开天气，私密功能会关闭。撤回清空同意回执，不会自动删除已保存资料；可在撤回前逐条删除支持删除的记录，撤回后仍可注销账号，重新单独同意后也可继续管理。筛查、日记、用药和行动清单只作家庭记录与日常行动参考，不提供诊断、处方、在线问诊或治疗建议；筛查、日记和家人行动确认随账号注销删除，用药记录还可逐条删除。求助功能只记录求助需求，不会自动通知照护人；提交后仍需通过电话或微信直接联系照护人。取消复盘与家人的关联后，复盘仍归对应照护账号保存并在账号注销时删除；无论是否关联，都计入当天社区复盘提交数量，社区只展示数量，不展示复盘原文。产品分析只接收固定枚举和 difficulty_len 等受限数值摘要。出现胸痛、意识异常、呼吸困难、严重中暑等紧急情况时，请立即联系当地急救或线下医疗机构。</view>
+  </view>
+
+  <view class="agreement-card">
+    <view class="section-title">五、第三方服务边界</view>
+    <view class="agreement-text">天气数据由本项目服务器统一读取并缓存，微信登录由服务器与微信接口完成。当前版本不提供第三方消息推送，也不收集第三方推送接收标识，不会向第三方消息服务发送预警、家人、健康、用药、行动记录或家庭地址。</view>
+  </view>
+
+  <view class="agreement-card">
+    <view class="section-title">六、使用规则</view>
+    <view class="agreement-text">请勿提交违法内容、冒用他人身份、尝试绕过权限、攻击服务或滥用接口。因维护、安全风险或不可抗力需要暂停部分服务时，公开天气页面会尽量提供可理解的状态说明。</view>
+  </view>
+
+  <view class="agreement-card">
+    <view class="section-title">七、变更、退出与联系</view>
+    <view class="agreement-text">重要协议或隐私规则变化会通过版本更新提示。你可在“我的 → 健康资料授权管理”查看或撤回健康敏感个人信息单独同意，可退出登录或在“账号与隐私”申请注销，也可通过微信小程序右上角菜单中的“反馈与投诉”提交问题。运营者与联系渠道以微信平台隐私保护指引展示的认证信息为准。</view>
+  </view>
+
+  <view class="effective-date">生效日期：2026-07-20 · 重要协议或隐私规则变化会通过版本更新提示。</view>
+  <navigator class="secondary-button" url="/pages/privacy/index" hover-class="button-pressed">查看隐私说明</navigator>
+</view>

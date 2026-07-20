@@ -21,7 +21,19 @@ from core.health_profiles import (
 from core.time_utils import today_local
 from core.usage import log_usage_event
 from core.weather import ensure_user_location_valid, get_weather_with_cache, is_qweather_online_weather
-from core.db_models import FamilyMember, FamilyMemberProfile, HealthDiary, MedicationReminder, WeatherData
+from core.db_models import (
+    FamilyMember,
+    FamilyMemberProfile,
+    HealthDiary,
+    HealthRiskAssessment,
+    MedicationReminder,
+    Notification,
+    Pair,
+    UsageEvent,
+    WeatherData,
+)
+from services.community_daily_service import refresh_latest_community_daily_best_effort
+from services.user.owner_write_guard import OwnerInactiveError, owner_write_guard
 from utils.parsers import parse_int, parse_date, parse_float, safe_json_loads
 from utils.validators import sanitize_input, validate_gender
 
@@ -94,25 +106,35 @@ def family_members():
     chronic_options = CHRONIC_OPTIONS
 
     if request.method == 'POST':
-        member = FamilyMember(user_id=current_user.id)
+        owner_user_id = int(current_user.id)
+        member = FamilyMember(user_id=owner_user_id)
         profile_payload, error_message = _apply_family_member_form(member)
         if error_message:
             flash(error_message, 'error')
             return redirect(url_for('health.family_members'))
 
-        db.session.add(member)
-        db.session.flush()
-
-        profile = FamilyMemberProfile(
-            member_id=member.id,
-            **profile_payload
-        )
-        db.session.add(profile)
-        db.session.commit()
+        try:
+            with owner_write_guard(owner_user_id):
+                db.session.add(member)
+                db.session.flush()
+                member_id = int(member.id)
+                db.session.add(FamilyMemberProfile(
+                    member_id=member_id,
+                    **profile_payload
+                ))
+                db.session.commit()
+        except OwnerInactiveError:
+            flash('账号已失效，请重新登录。', 'error')
+            return redirect(url_for('public.login'))
+        except (OSError, RuntimeError, ValueError):
+            db.session.rollback()
+            logger.exception('成员授权锁不可用，家庭成员未添加')
+            flash('家庭成员暂时无法添加，请稍后重试。', 'error')
+            return redirect(url_for('health.family_members'))
         log_usage_event(
             'elder_profile_created',
-            user_id=current_user.id,
-            member_id=member.id,
+            user_id=owner_user_id,
+            member_id=member_id,
             source='web',
             meta={'via': 'family_members'},
         )
@@ -242,22 +264,32 @@ def family_member_new():
         return redirect(url_for('user.user_dashboard'))
 
     if request.method == 'POST':
-        member = FamilyMember(user_id=current_user.id)
+        owner_user_id = int(current_user.id)
+        member = FamilyMember(user_id=owner_user_id)
         profile_payload, error_message = _apply_family_member_form(member)
         if error_message:
             flash(error_message, 'error')
             return _render_family_member_form(member, None, is_create_mode=True)
 
-        db.session.add(member)
-        db.session.flush()
-
-        profile = FamilyMemberProfile(member_id=member.id, **profile_payload)
-        db.session.add(profile)
-        db.session.commit()
+        try:
+            with owner_write_guard(owner_user_id):
+                db.session.add(member)
+                db.session.flush()
+                member_id = int(member.id)
+                db.session.add(FamilyMemberProfile(member_id=member_id, **profile_payload))
+                db.session.commit()
+        except OwnerInactiveError:
+            flash('账号已失效，请重新登录。', 'error')
+            return redirect(url_for('public.login'))
+        except (OSError, RuntimeError, ValueError):
+            db.session.rollback()
+            logger.exception('成员授权锁不可用，家庭成员未添加')
+            flash('家庭成员暂时无法添加，请稍后重试。', 'error')
+            return _render_family_member_form(member, None, is_create_mode=True)
         log_usage_event(
             'elder_profile_created',
-            user_id=current_user.id,
-            member_id=member.id,
+            user_id=owner_user_id,
+            member_id=member_id,
             source='web',
             meta={'via': 'family_member_new'},
         )
@@ -278,26 +310,40 @@ def family_member_edit(member_id):
     if member_id == 0:
         return redirect(url_for('health.family_member_new'))
 
-    member = FamilyMember.query.filter_by(id=member_id, user_id=current_user.id).first_or_404()
-    profile = FamilyMemberProfile.query.filter_by(member_id=member.id).first()
-
     if request.method == 'POST':
-        profile_payload, error_message = _apply_family_member_form(member)
+        draft = _empty_family_member()
+        profile_payload, error_message = _apply_family_member_form(draft)
         if error_message:
             flash(error_message, 'error')
             return redirect(url_for('health.family_member_edit', member_id=member_id))
-
-        if profile:
-            for key, value in profile_payload.items():
-                setattr(profile, key, value)
-        else:
-            profile = FamilyMemberProfile(member_id=member.id, **profile_payload)
-            db.session.add(profile)
-
-        db.session.commit()
+        owner_user_id = int(current_user.id)
+        try:
+            with owner_write_guard(owner_user_id):
+                member = FamilyMember.query.filter_by(
+                    id=member_id,
+                    user_id=owner_user_id,
+                ).first_or_404()
+                for field in ('name', 'relation', 'age', 'gender', 'chronic_diseases'):
+                    setattr(member, field, getattr(draft, field))
+                profile = FamilyMemberProfile.query.filter_by(member_id=member.id).first()
+                if profile:
+                    for key, value in profile_payload.items():
+                        setattr(profile, key, value)
+                else:
+                    profile = FamilyMemberProfile(member_id=member.id, **profile_payload)
+                    db.session.add(profile)
+                db.session.commit()
+        except OwnerInactiveError:
+            flash('账号已失效，请重新登录。', 'error')
+            return redirect(url_for('public.login'))
+        except (OSError, RuntimeError, ValueError):
+            db.session.rollback()
+            logger.exception('成员授权锁不可用，家庭成员信息未保存')
+            flash('家庭成员信息暂时无法保存，请稍后重试。', 'error')
+            return redirect(url_for('health.family_members'))
         log_usage_event(
             'elder_profile_updated',
-            user_id=current_user.id,
+            user_id=owner_user_id,
             member_id=member.id,
             source='web',
             meta={'via': 'family_member_edit'},
@@ -305,6 +351,8 @@ def family_member_edit(member_id):
         flash('家庭成员信息已更新', 'success')
         return redirect(url_for('health.family_members'))
 
+    member = FamilyMember.query.filter_by(id=member_id, user_id=current_user.id).first_or_404()
+    profile = FamilyMemberProfile.query.filter_by(member_id=member.id).first()
     return _render_family_member_form(member, profile, is_create_mode=False)
 
 
@@ -316,19 +364,67 @@ def family_member_delete(member_id):
         flash('游客模式无法管理家庭成员，请注册/登录正式账号', 'error')
         return redirect(url_for('user.user_dashboard'))
 
-    member = FamilyMember.query.filter_by(id=member_id, user_id=current_user.id).first_or_404()
+    owner_user_id = int(current_user.id)
+    affected_community_codes = set()
     try:
-        # 先清理关联的健康日记和用药提醒
-        HealthDiary.query.filter_by(member_id=member.id, user_id=current_user.id).delete()
-        MedicationReminder.query.filter_by(member_id=member.id, user_id=current_user.id).delete()
-        profile = FamilyMemberProfile.query.filter_by(member_id=member.id).first()
-        if profile:
-            db.session.delete(profile)
-        db.session.delete(member)
-        db.session.commit()
+        with owner_write_guard(owner_user_id):
+            member = FamilyMember.query.filter_by(
+                id=member_id,
+                user_id=owner_user_id,
+            ).first_or_404()
+            # 先撤销成员对应关系，避免删除成员后关系退化为默认允许推送。
+            member_pairs = Pair.query.filter_by(
+                caregiver_id=owner_user_id,
+                member_id=member.id,
+            )
+            affected_community_codes = {
+                row[0]
+                for row in member_pairs.with_entities(Pair.community_code).all()
+                if row[0]
+            }
+            member_pairs.update(
+                {Pair.status: 'inactive', Pair.member_id: None},
+                synchronize_session=False,
+            )
+            HealthRiskAssessment.query.filter_by(
+                member_id=member.id,
+                user_id=owner_user_id,
+            ).delete(synchronize_session=False)
+            Notification.query.filter_by(
+                member_id=member.id,
+                user_id=owner_user_id,
+            ).delete(synchronize_session=False)
+            HealthDiary.query.filter_by(
+                member_id=member.id,
+                user_id=owner_user_id,
+            ).delete(synchronize_session=False)
+            MedicationReminder.query.filter_by(
+                member_id=member.id,
+                user_id=owner_user_id,
+            ).delete(synchronize_session=False)
+            # 成员删除后不保留可回溯到该成员的使用事件。
+            UsageEvent.query.filter_by(member_id=member.id).delete(
+                synchronize_session=False,
+            )
+            FamilyMemberProfile.query.filter_by(member_id=member.id).delete(
+                synchronize_session=False,
+            )
+            FamilyMember.query.filter_by(
+                id=member.id,
+                user_id=owner_user_id,
+            ).delete(synchronize_session=False)
+            db.session.commit()
+        refresh_latest_community_daily_best_effort(
+            affected_community_codes,
+            event_logger=logger,
+        )
         flash('家庭成员已删除', 'success')
+    except OwnerInactiveError:
+        flash('账号已失效，请重新登录。', 'error')
+        return redirect(url_for('public.login'))
     except Exception:
         db.session.rollback()
+        logger.exception('删除家庭成员失败，事务已回滚')
         flash('删除失败，请稍后重试', 'error')
     return redirect(url_for('health.family_members'))
 
@@ -341,14 +437,25 @@ def family_member_toggle_alert(member_id):
         flash('游客模式无法管理家庭成员，请注册/登录正式账号', 'error')
         return redirect(url_for('user.user_dashboard'))
 
-    profile = FamilyMemberProfile.query.join(FamilyMember).filter(
-        FamilyMemberProfile.member_id == member_id,
-        FamilyMember.user_id == current_user.id
-    ).first_or_404()
-
-    profile.alert_enabled = not bool(profile.alert_enabled)
-    db.session.commit()
-    status = '已开启' if profile.alert_enabled else '已关闭'
+    owner_user_id = int(current_user.id)
+    try:
+        with owner_write_guard(owner_user_id):
+            profile = FamilyMemberProfile.query.join(FamilyMember).filter(
+                FamilyMemberProfile.member_id == member_id,
+                FamilyMember.user_id == owner_user_id,
+            ).first_or_404()
+            profile.alert_enabled = not bool(profile.alert_enabled)
+            enabled = bool(profile.alert_enabled)
+            db.session.commit()
+    except OwnerInactiveError:
+        flash('账号已失效，请重新登录。', 'error')
+        return redirect(url_for('public.login'))
+    except (OSError, RuntimeError, ValueError):
+        db.session.rollback()
+        logger.exception('成员授权锁不可用，提醒状态未修改')
+        flash('提醒状态暂时无法修改，请稍后重试。', 'error')
+        return redirect(url_for('health.family_members'))
+    status = '已开启' if enabled else '已关闭'
     flash(f'提醒{status}', 'success')
     return redirect(url_for('health.family_members'))
 
@@ -406,29 +513,41 @@ def health_diary():
         return redirect(url_for('user.user_dashboard'))
 
     if request.method == 'POST':
+        owner_user_id = int(current_user.id)
         entry_date = parse_date(request.form.get('entry_date')) or today_local()
         member_id = parse_int(request.form.get('member_id'))
         symptoms = sanitize_input(request.form.get('symptoms'), max_length=200)
         severity = sanitize_input(request.form.get('severity'), max_length=20)
         notes = sanitize_input(request.form.get('notes'), max_length=500)
 
-        # 校验 member_id 归属当前用户
-        if member_id:
-            member = FamilyMember.query.filter_by(id=member_id, user_id=current_user.id).first()
-            if not member:
-                flash('无效的家庭成员', 'error')
-                return redirect(url_for('health.health_diary'))
-
-        diary = HealthDiary(
-            user_id=current_user.id,
-            member_id=member_id,
-            entry_date=entry_date,
-            symptoms=symptoms,
-            severity=severity,
-            notes=notes
-        )
-        db.session.add(diary)
-        db.session.commit()
+        try:
+            with owner_write_guard(owner_user_id):
+                # 必须在 owner 锁内重新校验成员归属，避免注销或删除成员后的陈旧写入。
+                if member_id and FamilyMember.query.filter_by(
+                    id=member_id,
+                    user_id=owner_user_id,
+                ).first() is None:
+                    raise LookupError('member_not_found')
+                db.session.add(HealthDiary(
+                    user_id=owner_user_id,
+                    member_id=member_id,
+                    entry_date=entry_date,
+                    symptoms=symptoms,
+                    severity=severity,
+                    notes=notes
+                ))
+                db.session.commit()
+        except LookupError:
+            flash('无效的家庭成员', 'error')
+            return redirect(url_for('health.health_diary'))
+        except OwnerInactiveError:
+            flash('账号已失效，请重新登录。', 'error')
+            return redirect(url_for('public.login'))
+        except (OSError, RuntimeError, ValueError):
+            db.session.rollback()
+            logger.exception('健康日记授权锁不可用，记录未保存')
+            flash('健康日记暂时无法保存，请稍后重试。', 'error')
+            return redirect(url_for('health.health_diary'))
         flash('健康日记已保存', 'success')
         return redirect(url_for('health.health_diary'))
 
@@ -463,6 +582,7 @@ def medication_reminders():
         return redirect(url_for('user.user_dashboard'))
 
     if request.method == 'POST':
+        owner_user_id = int(current_user.id)
         medicine_name = sanitize_input(request.form.get('medicine_name'), max_length=100)
         if not medicine_name:
             flash('请输入药品名称', 'error')
@@ -473,13 +593,6 @@ def medication_reminders():
         frequency = sanitize_input(request.form.get('frequency'), max_length=20) or 'daily'
         time_of_day = sanitize_input(request.form.get('time_of_day'), max_length=10)
 
-        # 校验 member_id 归属当前用户
-        if member_id:
-            member = FamilyMember.query.filter_by(id=member_id, user_id=current_user.id).first()
-            if not member:
-                flash('无效的家庭成员', 'error')
-                return redirect(url_for('health.medication_reminders'))
-
         triggers = {}
         triggers['high_temp'] = parse_float(request.form.get('high_temp'))
         triggers['low_temp'] = parse_float(request.form.get('low_temp'))
@@ -487,17 +600,35 @@ def medication_reminders():
         triggers['high_aqi'] = parse_float(request.form.get('high_aqi'))
         triggers = {k: v for k, v in triggers.items() if v is not None}
 
-        reminder = MedicationReminder(
-            user_id=current_user.id,
-            member_id=member_id,
-            medicine_name=medicine_name,
-            dosage=dosage,
-            frequency=frequency,
-            time_of_day=time_of_day,
-            weather_triggers=json.dumps(triggers, ensure_ascii=False) if triggers else None
-        )
-        db.session.add(reminder)
-        db.session.commit()
+        try:
+            with owner_write_guard(owner_user_id):
+                # 与健康日记保持相同 owner/member 授权边界。
+                if member_id and FamilyMember.query.filter_by(
+                    id=member_id,
+                    user_id=owner_user_id,
+                ).first() is None:
+                    raise LookupError('member_not_found')
+                db.session.add(MedicationReminder(
+                    user_id=owner_user_id,
+                    member_id=member_id,
+                    medicine_name=medicine_name,
+                    dosage=dosage,
+                    frequency=frequency,
+                    time_of_day=time_of_day,
+                    weather_triggers=json.dumps(triggers, ensure_ascii=False) if triggers else None
+                ))
+                db.session.commit()
+        except LookupError:
+            flash('无效的家庭成员', 'error')
+            return redirect(url_for('health.medication_reminders'))
+        except OwnerInactiveError:
+            flash('账号已失效，请重新登录。', 'error')
+            return redirect(url_for('public.login'))
+        except (OSError, RuntimeError, ValueError):
+            db.session.rollback()
+            logger.exception('用药提醒授权锁不可用，记录未保存')
+            flash('用药提醒暂时无法保存，请稍后重试。', 'error')
+            return redirect(url_for('health.medication_reminders'))
         flash('用药提醒已添加', 'success')
         return redirect(url_for('health.medication_reminders'))
 
@@ -514,8 +645,22 @@ def medication_reminders():
 @login_required
 def medication_reminder_delete(reminder_id):
     """删除用药提醒"""
-    reminder = MedicationReminder.query.filter_by(id=reminder_id, user_id=current_user.id).first_or_404()
-    db.session.delete(reminder)
-    db.session.commit()
+    owner_user_id = int(current_user.id)
+    try:
+        with owner_write_guard(owner_user_id):
+            reminder = MedicationReminder.query.filter_by(
+                id=reminder_id,
+                user_id=owner_user_id,
+            ).first_or_404()
+            db.session.delete(reminder)
+            db.session.commit()
+    except OwnerInactiveError:
+        flash('账号已失效，请重新登录。', 'error')
+        return redirect(url_for('public.login'))
+    except (OSError, RuntimeError, ValueError):
+        db.session.rollback()
+        logger.exception('用药提醒授权锁不可用，记录未删除')
+        flash('用药提醒暂时无法删除，请稍后重试。', 'error')
+        return redirect(url_for('health.medication_reminders'))
     flash('用药提醒已删除', 'success')
     return redirect(url_for('health.medication_reminders'))

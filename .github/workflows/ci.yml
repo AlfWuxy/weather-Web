@@ -16,12 +16,12 @@ jobs:
 
     steps:
       - name: 检出代码
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
       - name: 配置 Python 3.12
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
           cache: pip
@@ -31,6 +31,14 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
           python -m pip check
+
+      - name: 验证和风天气私钥跨 UID 权限
+        shell: bash
+        run: |
+          python_path="$(python -c 'import os, sys; print(os.path.realpath(sys.executable))')"
+          test -x "$python_path"
+          sudo -E "$python_path" -m pytest -q -p no:cacheprovider \
+            tests/test_qweather_key_permissions_linux.py
 
       - name: 检查 Python 与 Shell 语法
         run: |
@@ -51,7 +59,7 @@ jobs:
           forbidden=$(
             git ls-files \
               | grep -E '(^\.env($|\.)|^\.claude/|^\.superpowers/|^\.playwright-cli/|^output/|^backups/| 2\.|\.DS_Store$)' \
-              | grep -v '^\.env\.example$' \
+              | grep -vE '^\.env\.(wechat-release\.)?example$' \
               || true
           )
           if [ -n "$forbidden" ]; then
@@ -76,14 +84,74 @@ jobs:
           done < <(git ls-files -z)
           test "$oversized" -eq 0
 
-      - name: 运行默认测试
-        run: python -m pytest -q
+      - name: 检查已跟踪文件密钥
+        run: python scripts/check_tracked_secrets.py
 
-      - name: 检查弃用警告
+      - name: 运行完整测试并检查弃用警告
         run: >-
           python -m pytest -q
+          --ignore=tests/test_activate_release.py
           -W error::DeprecationWarning
           -W ignore::DeprecationWarning:flask_login.login_manager
 
       - name: 运行离线手工契约测试
         run: python -m pytest -q -m "manual and not network"
+
+  activation:
+    name: 发布激活事务测试（分片 ${{ matrix.shard }}/4）
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v7
+
+      - name: 配置 Python 3.12
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip check
+
+      - name: 运行发布激活事务分片
+        shell: bash
+        env:
+          SHARD_INDEX: ${{ matrix.shard }}
+          SHARD_TOTAL: "4"
+        run: |
+          python - <<'PY'
+          import os
+
+          import pytest
+
+          total = int(os.environ['SHARD_TOTAL'])
+          shard = int(os.environ['SHARD_INDEX'])
+          if total <= 0 or not 0 <= shard < total:
+              raise SystemExit('分片参数无效')
+
+          class ShardPlugin:
+              def pytest_collection_modifyitems(self, config, items):
+                  selected = []
+                  deselected = []
+                  for index, item in enumerate(items):
+                      target = selected if index % total == shard else deselected
+                      target.append(item)
+                  items[:] = selected
+                  config.hook.pytest_deselected(items=deselected)
+
+          raise SystemExit(pytest.main([
+              '-q',
+              '-W', 'error::DeprecationWarning',
+              '-W', 'ignore::DeprecationWarning:flask_login.login_manager',
+              'tests/test_activate_release.py',
+          ], plugins=[ShardPlugin()]))
+          PY

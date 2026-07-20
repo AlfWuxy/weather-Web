@@ -155,14 +155,28 @@ class WeatherService:
         logger.error("所有天气API均失败，使用模拟数据")
         return self._get_mock_weather()
     
-    def get_current_weather(self, city="都昌", *, include_enrichment=True):
+    def get_current_weather(
+        self,
+        city="都昌",
+        *,
+        include_enrichment=True,
+        allow_fallback=True,
+    ):
         """
         获取当前天气数据，依次尝试和风天气、Open-Meteo 与模拟数据。
 
         后台统一快照周期会把 include_enrichment 设为 False，避免在实况请求内
-        重复拉取七日预报和空气质量。普通 Web 调用保持原有增强行为。
+        重复拉取七日预报和空气质量。正式烟测同时关闭 allow_fallback，确保
+        所有真实出网都进入可核对的正式 receipt。
         """
         logger = logging.getLogger(__name__)
+
+        def fallback_result():
+            if not allow_fallback:
+                logger.warning("当前受管天气周期已关闭备用源，返回不可用状态")
+                return {}
+            return self._get_fallback_weather(city, logger)
+
         # 尝试调用和风天气API
         if self._qweather_is_configured():
             try:
@@ -178,13 +192,14 @@ class WeatherService:
                 headers = self._qweather_headers()
                 if not reserve_qweather_request('weather_now'):
                     logger.warning("和风天气月度额度保护：跳过实况请求并使用备用源")
-                    return self._get_fallback_weather(city, logger)
+                    return fallback_result()
                 start_ts = time.perf_counter()
                 weather_response = requests.get(
                     weather_url,
                     params=weather_params,
                     headers=headers,
                     timeout=10,
+                    allow_redirects=False,
                 )
                 _record_external_api_timing('qweather_now', (time.perf_counter() - start_ts) * 1000, weather_response.status_code)
                 
@@ -193,14 +208,14 @@ class WeatherService:
                     if weather_response.status_code == 401:
                         invalidate_qweather_token()
                     logger.warning("API HTTP状态码: %s，尝试备用API", weather_response.status_code)
-                    return self._get_fallback_weather(city, logger)
+                    return fallback_result()
                 
                 try:
                     weather_data = weather_response.json()
                 except Exception as json_error:
                     logger.warning("JSON解析失败: %s，尝试备用API", json_error)
                     logger.debug("响应内容: %s", weather_response.text[:200])
-                    return self._get_fallback_weather(city, logger)
+                    return fallback_result()
                 
                 # 检查返回状态
                 code = weather_data.get('code')
@@ -213,13 +228,13 @@ class WeatherService:
                     else:
                         error_msg = self._get_error_message(code)
                         logger.warning("和风天气API返回错误[%s]: %s，尝试备用API", code, error_msg)
-                    return self._get_fallback_weather(city, logger)
+                    return fallback_result()
                 
                 # 解析天气数据
                 now = weather_data.get('now')
                 if not isinstance(now, dict):
                     logger.warning("和风天气API缺少实况字段，尝试备用API")
-                    return self._get_fallback_weather(city, logger)
+                    return fallback_result()
                 temp_val = self._safe_float(now.get('temp'))
                 humidity_val = self._safe_float(now.get('humidity'))
                 if (
@@ -229,7 +244,7 @@ class WeatherService:
                     or not math.isfinite(humidity_val)
                 ):
                     logger.warning("和风天气API关键实况字段不完整，尝试备用API")
-                    return self._get_fallback_weather(city, logger)
+                    return fallback_result()
                 result = {
                     'temperature': temp_val,
                     # 优先使用真实日极值，必要时回退到小时序列推导
@@ -282,7 +297,7 @@ class WeatherService:
         else:
             logger.warning("未配置和风天气API，尝试备用API")
         
-        return self._get_fallback_weather(city, logger)
+        return fallback_result()
     
     def _get_error_message(self, code):
         """获取错误码对应的说明"""
@@ -325,6 +340,7 @@ class WeatherService:
                 params={'lang': 'zh'},
                 headers=headers,
                 timeout=10,
+                allow_redirects=False,
             )
             _record_external_api_timing(
                 'qweather_air_v1',
@@ -552,6 +568,7 @@ class WeatherService:
                 params=hourly_params,
                 headers=headers,
                 timeout=10,
+                allow_redirects=False,
             )
             _record_external_api_timing(
                 'qweather_hourly_for_now',
@@ -641,6 +658,7 @@ class WeatherService:
                 params=forecast_params,
                 headers=headers,
                 timeout=10,
+                allow_redirects=False,
             )
             _record_external_api_timing(
                 'qweather_daily_for_now',
@@ -747,6 +765,7 @@ class WeatherService:
                 params=forecast_params,
                 headers=headers,
                 timeout=10,
+                allow_redirects=False,
             )
             _record_external_api_timing(
                 'qweather_forecast_only',
@@ -1115,6 +1134,7 @@ class WeatherService:
                     params=forecast_params,
                     headers=headers,
                     timeout=10,
+                    allow_redirects=False,
                 )
                 _record_external_api_timing(
                     'qweather_forecast',

@@ -14,8 +14,16 @@ from services.qweather_auth import (
     get_qweather_request_headers,
     is_qweather_configured,
 )
+from services.qweather_budget import reserve_qweather_request
 
 pytestmark = [pytest.mark.manual, pytest.mark.network]
+
+
+def _budgeted_get(endpoint, url, **kwargs):
+    """手工测试同样先经过统一网络闸门与预算保护。"""
+    if not reserve_qweather_request(endpoint):
+        pytest.skip("QWeather 网络闸门或预算保护已阻断请求")
+    return requests.get(url, **kwargs)
 
 def test_qweather_api():
     """测试和风天气API"""
@@ -55,7 +63,13 @@ def test_qweather_api():
         params = {'location': location}
         
         print(f"请求URL: {url}")
-        response = requests.get(url, params=params, headers=headers, timeout=10)
+        response = _budgeted_get(
+            'weather_now',
+            url,
+            params=params,
+            headers=headers,
+            timeout=10,
+        )
         
         print(f"HTTP状态码: {response.status_code}")
         
@@ -79,7 +93,13 @@ def test_qweather_api():
         url = f"{base_url}/weather/7d"
         params = {'location': location}
         
-        response = requests.get(url, params=params, headers=headers, timeout=10)
+        response = _budgeted_get(
+            'weather_7d_forecast',
+            url,
+            params=params,
+            headers=headers,
+            timeout=10,
+        )
         print(f"HTTP状态码: {response.status_code}")
         
         assert response.status_code == 200, f"7天预报 HTTP {response.status_code}"
@@ -102,7 +122,13 @@ def test_qweather_api():
         url = f"{api_origin}/airquality/v1/current/{lat}/{lon}"
         params = {'lang': 'zh'}
         
-        response = requests.get(url, params=params, headers=headers, timeout=10)
+        response = _budgeted_get(
+            'airquality_v1_current',
+            url,
+            params=params,
+            headers=headers,
+            timeout=10,
+        )
         print(f"HTTP状态码: {response.status_code}")
         
         assert response.status_code == 200, f"空气质量 HTTP {response.status_code}"

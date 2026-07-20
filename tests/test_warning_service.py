@@ -59,14 +59,56 @@ def test_warning_result_marks_successful_empty_response_available(app, monkeypat
             QWEATHER_CANONICAL_LOCATION="116.20,29.27",
         )
 
-        assert warning_service.get_qweather_warnings_result("都昌县") == {
-            "available": True,
-            "status": "ok",
-            "warnings": [],
-        }
+        result = warning_service.get_qweather_warnings_result("都昌县")
+        assert result["available"] is True
+        assert result["status"] == "ok"
+        assert result["warnings"] == []
+        assert result["fetched_at"]
+        assert result["expires_at"]
         assert warning_service.get_qweather_warnings("都昌县") == []
 
     assert len(calls) == 1
+
+
+def test_warning_force_refresh_skips_fresh_nested_cache(app, monkeypatch):
+    from services import warning_service
+
+    calls = []
+
+    class FakeResp:
+        status_code = 200
+
+        def json(self):
+            return {"alerts": []}
+
+    monkeypatch.setattr(
+        warning_service.requests,
+        "get",
+        lambda *_args, **_kwargs: calls.append(True) or FakeResp(),
+    )
+    with app.app_context():
+        app.config.update(
+            QWEATHER_KEY="x",
+            QWEATHER_API_BASE="https://unit-test.qweatherapi.com/v7",
+            QWEATHER_CANONICAL_LOCATION="116.20,29.27",
+        )
+        warning_service._LOCAL_WARNING_CACHE[
+            warning_service._warning_cache_key("116.20,29.27")
+        ] = (
+            float("inf"),
+            {
+                "warnings": [{"title": "旧预警"}],
+                "fetched_at": "2026-07-19T00:00:00+00:00",
+                "expires_at": "2026-07-19T00:30:00+00:00",
+            },
+        )
+        result = warning_service.get_qweather_warnings_result(
+            "都昌县",
+            force_refresh=True,
+        )
+
+    assert calls == [True]
+    assert result["warnings"] == []
 
 
 def test_warning_service_parses_weatheralert_v1_payload(app, monkeypatch):
@@ -107,7 +149,7 @@ def test_warning_service_parses_weatheralert_v1_payload(app, monkeypatch):
 
     with app.app_context():
         app.config["QWEATHER_KEY"] = "x"
-        app.config["QWEATHER_API_BASE"] = "https://example.com/v7"
+        app.config["QWEATHER_API_BASE"] = "https://unit-test.qweatherapi.com/v7"
 
         warnings = get_qweather_warnings("116.20,29.27")
         assert len(warnings) == 1

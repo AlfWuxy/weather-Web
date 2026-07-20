@@ -13,11 +13,12 @@ import logging
 import math
 import threading
 import time
+from datetime import timedelta
 from typing import Any, Dict, List
 from urllib.parse import urlsplit
 
 import requests
-from flask import current_app, has_app_context
+from flask import current_app, has_app_context, has_request_context
 
 from services.external_api import record_external_api_timing as _record_external_api_timing
 from services.qweather_auth import (
@@ -27,6 +28,7 @@ from services.qweather_auth import (
     is_qweather_configured,
 )
 from services.qweather_budget import get_qweather_redis_client, reserve_qweather_request
+from core.time_utils import utcnow
 from utils.parsers import parse_int
 
 logger = logging.getLogger(__name__)
@@ -87,6 +89,9 @@ def _get_cached_warnings(location_code):
             if payload is not None:
                 parsed = json.loads(payload)
                 if isinstance(parsed, list):
+                    # 兼容升级前的列表缓存；时间未知时不伪造抓取时间。
+                    return {"warnings": parsed}
+                if isinstance(parsed, dict) and isinstance(parsed.get("warnings"), list):
                     return parsed
         except Exception as exc:
             logger.warning("和风预警 Redis 缓存读取失败: %s", exc)
@@ -101,19 +106,24 @@ def _get_cached_warnings(location_code):
     return _CACHE_MISS
 
 
-def _set_cached_warnings(location_code, warnings):
+def _set_cached_warnings(location_code, warnings, *, fetched_at, expires_at):
     cache_key = _warning_cache_key(location_code)
     ttl_seconds = _warning_cache_ttl_seconds()
+    payload = {
+        "warnings": warnings,
+        "fetched_at": fetched_at.isoformat(),
+        "expires_at": expires_at.isoformat(),
+    }
     client = get_qweather_redis_client()
     if client is not None:
         try:
-            client.setex(cache_key, ttl_seconds, json.dumps(warnings, ensure_ascii=False))
+            client.setex(cache_key, ttl_seconds, json.dumps(payload, ensure_ascii=False))
         except Exception as exc:
             logger.warning("和风预警 Redis 缓存写入失败: %s", exc)
 
     expires_at = time.monotonic() + ttl_seconds
     with _LOCAL_WARNING_CACHE_LOCK:
-        _LOCAL_WARNING_CACHE[cache_key] = (expires_at, warnings)
+        _LOCAL_WARNING_CACHE[cache_key] = (expires_at, payload)
         if len(_LOCAL_WARNING_CACHE) > _LOCAL_WARNING_CACHE_MAX_ITEMS:
             oldest_key = min(
                 _LOCAL_WARNING_CACHE,
@@ -247,22 +257,40 @@ def _extract_warning_list(payload):
     return (warnings, True) if isinstance(warnings, list) else ([], False)
 
 
-def _warning_result(*, available: bool, status: str, warnings=None) -> Dict[str, Any]:
+def _warning_result(
+    *,
+    available: bool,
+    status: str,
+    warnings=None,
+    fetched_at=None,
+    expires_at=None,
+) -> Dict[str, Any]:
     """构造稳定的预警可用性结果。"""
-    return {
+    result = {
         "available": available,
         "status": status,
         "warnings": warnings if isinstance(warnings, list) else [],
     }
+    if fetched_at:
+        result["fetched_at"] = str(fetched_at)
+    if expires_at:
+        result["expires_at"] = str(expires_at)
+    return result
 
 
-def get_qweather_warnings_result(location_code: str) -> Dict[str, Any]:
+def get_qweather_warnings_result(
+    location_code: str,
+    *,
+    force_refresh: bool = False,
+) -> Dict[str, Any]:
     """获取官方预警，并区分“无预警”和“上游不可用”。"""
     location_code = (str(location_code).strip() if location_code is not None else "")
     if not location_code:
         return _warning_result(available=False, status="invalid_location")
 
     location_code = _canonical_location(location_code)
+    # 请求上下文始终只读缓存，不能用参数绕过出网边界。
+    force_refresh = bool(force_refresh) and not has_request_context()
 
     api_base = (_cfg("QWEATHER_API_BASE") or "").strip()
     if not api_base or not is_qweather_configured():
@@ -273,9 +301,16 @@ def get_qweather_warnings_result(location_code: str) -> Dict[str, Any]:
         logger.warning("QWeather 预警 canonical 坐标无效: %s", location_code)
         return _warning_result(available=False, status="invalid_location")
 
-    cached = _get_cached_warnings(location_code)
-    if cached is not _CACHE_MISS:
-        return _warning_result(available=True, status="ok", warnings=cached)
+    if not force_refresh:
+        cached = _get_cached_warnings(location_code)
+        if cached is not _CACHE_MISS:
+            return _warning_result(
+                available=True,
+                status="ok",
+                warnings=cached.get("warnings"),
+                fetched_at=cached.get("fetched_at"),
+                expires_at=cached.get("expires_at"),
+            )
 
     params = {"localTime": "true", "lang": "zh"}
 
@@ -291,7 +326,13 @@ def get_qweather_warnings_result(location_code: str) -> Dict[str, Any]:
 
     start_ts = time.perf_counter()
     try:
-        resp = requests.get(url, params=params, headers=headers, timeout=10)
+        resp = requests.get(
+            url,
+            params=params,
+            headers=headers,
+            timeout=10,
+            allow_redirects=False,
+        )
         _record_external_api_timing(
             "qweather_weatheralert_v1",
             (time.perf_counter() - start_ts) * 1000,
@@ -410,8 +451,21 @@ def get_qweather_warnings_result(location_code: str) -> Dict[str, Any]:
             warnings=normalized,
         )
 
-    _set_cached_warnings(location_code, normalized)
-    return _warning_result(available=True, status="ok", warnings=normalized)
+    source_fetched_at = utcnow()
+    source_expires_at = source_fetched_at + timedelta(seconds=_warning_cache_ttl_seconds())
+    _set_cached_warnings(
+        location_code,
+        normalized,
+        fetched_at=source_fetched_at,
+        expires_at=source_expires_at,
+    )
+    return _warning_result(
+        available=True,
+        status="ok",
+        warnings=normalized,
+        fetched_at=source_fetched_at.isoformat(),
+        expires_at=source_expires_at.isoformat(),
+    )
 
 
 def get_qweather_warnings(location_code: str) -> List[Dict[str, Any]]:

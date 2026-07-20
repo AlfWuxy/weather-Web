@@ -343,9 +343,16 @@ def test_logged_in_navigation_places_heat_exposure_gis_inside_more(authenticated
 
 
 def test_heat_exposure_gis_static_runtime_is_local(client):
-    assert client.get('/static/vendor/leaflet/dist/leaflet.css').status_code == 200
-    assert client.get('/static/vendor/leaflet/dist/leaflet.js').status_code == 200
-    assert client.get('/static/vendor/leaflet/dist/images/layers.png').status_code == 200
+    for path in (
+        '/static/vendor/leaflet/dist/leaflet.css',
+        '/static/vendor/leaflet/dist/leaflet.js',
+        '/static/vendor/leaflet/dist/images/layers.png',
+    ):
+        response = client.get(path)
+        try:
+            assert response.status_code == 200
+        finally:
+            response.close()
 
 
 def test_heat_exposure_gis_script_keeps_controls_accessible_and_fails_closed():

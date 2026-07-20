@@ -200,6 +200,50 @@ def is_qweather_online_weather(weather_data):
     return True
 
 
+def compact_assessment_weather_condition(weather_data):
+    """生成可查询的紧凑天气摘要，严格适配历史 VARCHAR(100)。"""
+    source = weather_data if isinstance(weather_data, dict) else {}
+
+    def bounded(name, minimum, maximum, digits=1):
+        try:
+            value = float(source.get(name))
+        except (TypeError, ValueError):
+            return None
+        if not math.isfinite(value) or not minimum <= value <= maximum:
+            return None
+        return round(value, digits)
+
+    summary = {
+        't': bounded('temperature', -100, 100),
+        'hi': bounded('temperature_max', -100, 100),
+        'lo': bounded('temperature_min', -100, 100),
+        'rh': bounded('humidity', 0, 100),
+        'aqi': bounded('aqi', 0, 1000, 0),
+        'wx': str(
+            source.get('weather_condition')
+            or source.get('condition')
+            or ''
+        )[:12],
+    }
+    compact = json.dumps(
+        {key: value for key, value in summary.items() if value not in (None, '')},
+        ensure_ascii=False,
+        separators=(',', ':'),
+    )
+    if len(compact) <= 100:
+        return compact
+
+    # 极端输入下只保留核心数值，确保仍是完整 JSON。
+    return json.dumps(
+        {
+            key: summary[key]
+            for key in ('t', 'hi', 'lo', 'rh')
+            if summary[key] is not None
+        },
+        separators=(',', ':'),
+    )
+
+
 def get_demo_forecast_data(days=7):
     """演示用天气预报数据。"""
     base = get_demo_weather_data()
@@ -287,12 +331,11 @@ def normalize_location_name(location):
 
 
 def ensure_user_location_valid():
-    """确保用户定位有效，必要时修正到默认城市
+    """返回规范化定位；普通请求不在读取路径中隐式修改账号。
 
     注意：
-    - 对于数据库用户，仅修改 current_user.community 属性
-    - 仅在 GET 请求且 session 没有其它脏对象时提交，避免误提交其它修改
-    - 其他情况下仅 flush，不自动提交
+    - 游客定位继续保存在当前浏览器会话
+    - 正式账号只通过显式的定位更新入口持久化，避免与账号注销并发后恢复数据
     """
     location = get_user_location_value()
     normalized = normalize_location_name(location)
@@ -302,23 +345,6 @@ def ensure_user_location_valid():
             profile = build_guest_profile()
             profile['community'] = normalized
             session['guest_profile'] = profile
-        else:
-            # 仅修改模型属性，仅在安全场景下显式提交，避免误提交其他修改
-            try:
-                current_user.community = normalized
-                should_commit = False
-                if has_request_context() and request.method == 'GET':
-                    other_dirty = any(obj is not current_user for obj in db.session.dirty)
-                    if not other_dirty and not db.session.new and not db.session.deleted:
-                        should_commit = True
-                # 标记为已修改（通常自动追踪，但显式刷新确保安全）
-                db.session.flush()
-                if should_commit:
-                    db.session.commit()
-            except Exception as exc:
-                logger.warning("更新用户定位失败: %s", exc)
-                db.session.rollback()
-                # 不抛出异常，允许继续使用 normalized 值
     return normalized
 
 
@@ -349,10 +375,15 @@ def _weather_cache_location(location):
     return normalized
 
 
-def get_weather_with_cache(location, ttl_minutes=None):
-    """获取带缓存的天气数据"""
+def get_weather_with_cache(location, ttl_minutes=None, cache_only=True):
+    """获取带缓存的天气数据，普通调用默认只读真实缓存。"""
     if is_demo_mode():
+        # 演示页面可以继续展示本地样例；后台 cache-only 任务仍拒绝 mock。
+        if cache_only and not has_request_context():
+            return {}, False
         return get_demo_weather_data(), False
+    # HTTP 请求一律只读。显式联网刷新只允许后台任务或命令行诊断使用。
+    cache_only = bool(cache_only) or has_request_context()
     location = _weather_cache_location(location)
     if ttl_minutes is None:
         ttl_minutes = current_app.config.get('WEATHER_CACHE_TTL_MINUTES', WEATHER_CACHE_TTL_MINUTES)
@@ -361,7 +392,8 @@ def get_weather_with_cache(location, ttl_minutes=None):
     redis_key = _redis_cache_key('weather:current', location)
     redis_payload = _redis_get_json(redis_client, redis_key, {})
     if redis_payload is not None:
-        return redis_payload, True
+        if not cache_only or is_qweather_online_weather(redis_payload):
+            return redis_payload, True
     now = utcnow()
     cache = None
     try:
@@ -370,12 +402,23 @@ def get_weather_with_cache(location, ttl_minutes=None):
             WeatherCache.id.desc()
         ).first()
         if cache and cache.fetched_at:
+            cached_weather = safe_json_loads(cache.payload, {})
+            cached_weather_is_real = (
+                not bool(cache.is_mock)
+                and is_qweather_online_weather(cached_weather)
+            )
             # 确保从数据库读取的 datetime 是 UTC aware 的
             if now - ensure_utc_aware(cache.fetched_at) <= timedelta(minutes=ttl_minutes):
-                return safe_json_loads(cache.payload, {}), True
+                if not cache_only or cached_weather_is_real:
+                    return cached_weather, True
+            # 实况超过新鲜度期限后停止参与页面展示和风险计算。
+            # 离线小程序快照由独立持久层保留原始时间并明确标记 stale。
     except Exception as exc:
         logger.warning("天气缓存不可用，已跳过缓存: %s", exc)
         db.session.rollback()
+    if cache_only:
+        # cache-only 缺少真实缓存时直接返回，不调用 fetcher，也不写入 fallback。
+        return {}, False
     weather_service = get_weather_fetcher()
     try:
         if weather_service is None:
@@ -423,10 +466,15 @@ def get_fallback_weather_data():
     }
 
 
-def get_forecast_with_cache(location, days=7, ttl_minutes=None):
-    """获取带缓存的天气预报"""
+def get_forecast_with_cache(location, days=7, ttl_minutes=None, cache_only=True):
+    """获取带缓存的天气预报，普通调用默认只读。"""
     if is_demo_mode():
+        # 演示页面只生成本地样例，不访问外网或写缓存。
+        if cache_only and not has_request_context():
+            return [], False
         return get_demo_forecast_data(days=days), True
+    # 防止未来路由误传 cache_only=False 后重新引入按请求抓取。
+    cache_only = bool(cache_only) or has_request_context()
     location = _weather_cache_location(location)
     if ttl_minutes is None:
         ttl_minutes = current_app.config.get('FORECAST_CACHE_TTL_MINUTES', 20)
@@ -444,12 +492,18 @@ def get_forecast_with_cache(location, days=7, ttl_minutes=None):
             ForecastCache.id.desc()
         ).first()
         if cache and cache.fetched_at:
+            cached_forecast = safe_json_loads(cache.payload, [])
             # 确保从数据库读取的 datetime 是 UTC aware 的
             if now - ensure_utc_aware(cache.fetched_at) <= timedelta(minutes=ttl_minutes):
-                return safe_json_loads(cache.payload, []), True
+                return cached_forecast, True
+            # 只读链路可复用最后一份缓存，等待后台周期刷新。
+            if cache_only and cached_forecast and not bool(cache.is_mock):
+                return cached_forecast, True
     except Exception as exc:
         logger.warning("预报缓存不可用，已跳过缓存: %s", exc)
         db.session.rollback()
+    if cache_only:
+        return [], False
     weather_service = get_weather_fetcher()
     try:
         if weather_service is None:
@@ -532,13 +586,25 @@ def _parse_qweather_only_cache_payload(payload, days, expected_start_date=None):
     return forecast_data[:days], meta
 
 
-def get_qweather_forecast_with_cache(location, days=7, ttl_minutes=None):
-    """获取和风-only天气预报，失败时返回空数据而不是模拟预报。"""
+def get_qweather_forecast_with_cache(
+    location,
+    days=7,
+    ttl_minutes=None,
+    cache_only=True,
+    fetcher=None,
+    force_refresh=False,
+):
+    """获取和风-only天气预报，普通调用默认只读真实缓存。"""
     try:
         days = max(1, min(int(days or 7), 7))
     except Exception:
         days = 7
-    if is_demo_mode():
+    # 请求上下文始终只读；已配置和风的后台同步可在 DEMO_MODE 下显式刷新。
+    request_bound = has_request_context()
+    cache_only = bool(cache_only) or request_bound
+    # HTTP 永远不能借 force_refresh 打开上游；该开关只供受管后台周期使用。
+    force_refresh = bool(force_refresh) and not request_bound and not cache_only
+    if is_demo_mode() and cache_only:
         return [], False, {'source': 'QWeather', 'error': 'demo_mode'}
 
     location = _weather_cache_location(location)
@@ -549,14 +615,15 @@ def get_qweather_forecast_with_cache(location, days=7, ttl_minutes=None):
     expected_start_date = today_local()
     redis_client = _get_redis_client()
     redis_key = _redis_cache_key('weather:qweather_forecast', location, days)
-    redis_payload = _redis_get_json(redis_client, redis_key, {})
-    forecast_data, meta = _parse_qweather_only_cache_payload(
-        redis_payload,
-        days,
-        expected_start_date=expected_start_date,
-    )
-    if forecast_data is not None:
-        return forecast_data, True, meta
+    if not force_refresh:
+        redis_payload = _redis_get_json(redis_client, redis_key, {})
+        forecast_data, meta = _parse_qweather_only_cache_payload(
+            redis_payload,
+            days,
+            expected_start_date=expected_start_date,
+        )
+        if forecast_data is not None:
+            return forecast_data, True, meta
 
     now = utcnow()
     cache = None
@@ -565,20 +632,35 @@ def get_qweather_forecast_with_cache(location, days=7, ttl_minutes=None):
             ForecastCache.fetched_at.desc(),
             ForecastCache.id.desc()
         ).first()
-        if cache and cache.fetched_at:
-            if now - ensure_utc_aware(cache.fetched_at) <= timedelta(minutes=ttl_minutes):
-                forecast_data, meta = _parse_qweather_only_cache_payload(
-                    safe_json_loads(cache.payload, {}),
-                    days,
-                    expected_start_date=expected_start_date,
+        if cache and cache.fetched_at and not bool(cache.is_mock):
+            forecast_data, meta = _parse_qweather_only_cache_payload(
+                safe_json_loads(cache.payload, {}),
+                days,
+                expected_start_date=expected_start_date,
+            )
+            if forecast_data is not None and not force_refresh:
+                cache_fetched_at = ensure_utc_aware(cache.fetched_at)
+                meta = dict(meta or {})
+                meta.setdefault('fetched_at', cache_fetched_at.isoformat())
+                meta.setdefault(
+                    'expires_at',
+                    (cache_fetched_at + timedelta(seconds=ttl_seconds)).isoformat(),
                 )
-                if forecast_data is not None:
+                if now - ensure_utc_aware(cache.fetched_at) <= timedelta(minutes=ttl_minutes):
                     return forecast_data, True, meta
+                # 日期仍有效时允许 HTTP 复用过期缓存，等待后台同步刷新。
+                if cache_only:
+                    stale_meta = dict(meta or {})
+                    stale_meta['stale'] = True
+                    return forecast_data, True, stale_meta
     except Exception as exc:
         logger.warning("和风-only预报缓存不可用，已跳过缓存: %s", exc)
         db.session.rollback()
 
-    weather_service = get_weather_fetcher()
+    if cache_only:
+        return [], False, {'source': 'QWeather', 'error': 'cache_miss'}
+
+    weather_service = fetcher or get_weather_fetcher()
     meta = {'source': 'QWeather'}
     forecast_data = []
     try:
@@ -604,6 +686,12 @@ def get_qweather_forecast_with_cache(location, days=7, ttl_minutes=None):
         meta.setdefault('error', 'qweather_data_incomplete')
         return [], False, meta
 
+    source_fetched_at = utcnow()
+    source_expires_at = source_fetched_at + timedelta(seconds=ttl_seconds)
+    meta = dict(meta or {})
+    meta['fetched_at'] = source_fetched_at.isoformat()
+    meta['expires_at'] = source_expires_at.isoformat()
+
     cache_payload = {
         'daily': forecast_data[:days],
         'meta': meta,
@@ -612,13 +700,13 @@ def get_qweather_forecast_with_cache(location, days=7, ttl_minutes=None):
         _redis_set_json(redis_client, redis_key, ttl_seconds, cache_payload)
         if cache:
             cache.payload = json.dumps(cache_payload, ensure_ascii=False)
-            cache.fetched_at = now
+            cache.fetched_at = source_fetched_at
             cache.is_mock = False
         else:
             cache = ForecastCache(
                 location=cache_location,
                 days=days,
-                fetched_at=now,
+                fetched_at=source_fetched_at,
                 payload=json.dumps(cache_payload, ensure_ascii=False),
                 is_mock=False
             )

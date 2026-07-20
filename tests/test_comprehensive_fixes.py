@@ -18,6 +18,8 @@ def _reload_config():
 
 
 def _set_env(env_updates):
+    if env_updates.get('DEBUG') == 'false':
+        assert 'WECHAT_FORMAL_RUNTIME' in env_updates
     original = {key: os.environ.get(key) for key in env_updates}
     for key, value in env_updates.items():
         if value is None:
@@ -203,6 +205,7 @@ def test_validate_production_config_missing_secret_key(tmp_path):
         'SECRET_KEY': None,
         'PAIR_TOKEN_PEPPER': 'pepper-1234567890pepper-1234567890',
         'DEBUG': 'false',
+        'WECHAT_FORMAL_RUNTIME': '0',
         'DATABASE_URI': f"sqlite:///{tmp_path/'prod.db'}",
     })
     try:
@@ -219,6 +222,7 @@ def test_validate_production_config_short_secret_key(tmp_path):
         'SECRET_KEY': 'short-key',
         'PAIR_TOKEN_PEPPER': 'pepper-1234567890pepper-1234567890',
         'DEBUG': 'false',
+        'WECHAT_FORMAL_RUNTIME': '0',
         'DATABASE_URI': f"sqlite:///{tmp_path/'prod.db'}",
     })
     try:
@@ -235,6 +239,7 @@ def test_validate_production_config_weak_secret_key(tmp_path):
         'SECRET_KEY': 'dev-secret-key-should-fail-1234567890',
         'PAIR_TOKEN_PEPPER': 'pepper-1234567890pepper-1234567890',
         'DEBUG': 'false',
+        'WECHAT_FORMAL_RUNTIME': '0',
         'DATABASE_URI': f"sqlite:///{tmp_path/'prod.db'}",
     })
     try:
@@ -251,11 +256,236 @@ def test_validate_production_config_missing_pepper(tmp_path):
         'SECRET_KEY': 'strongkey1234567890strongkey123456',
         'PAIR_TOKEN_PEPPER': None,
         'DEBUG': 'false',
+        'WECHAT_FORMAL_RUNTIME': '0',
         'DATABASE_URI': f"sqlite:///{tmp_path/'prod.db'}",
     })
     try:
         config = _reload_config()
         with pytest.raises(RuntimeError):
+            config.validate_production_config()
+    finally:
+        _restore_env(original)
+        _reload_config()
+
+
+@pytest.mark.parametrize(
+    'pepper',
+    [
+        'x',
+        'dev-pepper-value-123456789012345678901234567890',
+        'your-pair-token-pepper-here',
+    ],
+)
+def test_validate_production_config_rejects_weak_pair_token_pepper(tmp_path, pepper):
+    original = _set_env({
+        'SECRET_KEY': 'strongkey1234567890strongkey123456',
+        'PAIR_TOKEN_PEPPER': pepper,
+        'DEBUG': 'false',
+        'WECHAT_FORMAL_RUNTIME': '0',
+        'DATABASE_URI': f"sqlite:///{tmp_path/'prod_weak_pepper.db'}",
+        'RATE_LIMIT_STORAGE_URI': 'redis://localhost:6379/0',
+    })
+    try:
+        config = _reload_config()
+        with pytest.raises(RuntimeError, match='PAIR_TOKEN_PEPPER'):
+            config.validate_production_config()
+    finally:
+        _restore_env(original)
+        _reload_config()
+
+
+@pytest.mark.parametrize(
+    ('first_key', 'second_key'),
+    [
+        ('PAIR_TOKEN_PEPPER', 'SECRET_KEY'),
+        ('PAIR_TOKEN_PEPPER', 'WX_MINIPROGRAM_OPENID_PEPPER'),
+        ('PAIR_TOKEN_PEPPER', 'WX_MINIPROGRAM_SESSION_SECRET'),
+        ('SECRET_KEY', 'WX_MINIPROGRAM_OPENID_PEPPER'),
+        ('SECRET_KEY', 'WX_MINIPROGRAM_SESSION_SECRET'),
+        ('WX_MINIPROGRAM_OPENID_PEPPER', 'WX_MINIPROGRAM_SESSION_SECRET'),
+    ],
+)
+def test_validate_production_config_requires_pairwise_independent_secrets(
+    tmp_path,
+    first_key,
+    second_key,
+):
+    env = {
+        'SECRET_KEY': 'strongkey1234567890strongkey123456',
+        'PAIR_TOKEN_PEPPER': 'pairpepper1234567890abcdefghijklmn',
+        'DEBUG': 'false',
+        'WECHAT_FORMAL_RUNTIME': '1',
+        'DATABASE_URI': f"sqlite:///{tmp_path/'prod_duplicate_pepper.db'}",
+        'RATE_LIMIT_STORAGE_URI': 'redis://localhost:6379/0',
+        'WX_MINIPROGRAM_APPID': 'wx-production-appid',
+        'WX_MINIPROGRAM_SECRET': 'wx-production-secret-value',
+        'WX_MINIPROGRAM_OPENID_PEPPER': 'openidpepper1234567890abcdefghijklm',
+        'WX_MINIPROGRAM_SESSION_SECRET': 'sessionvalue1234567890abcdefghijkl',
+        'PUBLIC_BASE_URL': 'https://yilaoweather.org',
+        'WXPUSHER_APP_TOKEN': 'AT_abcdefghijklmnop',
+        'WXPUSHER_API_BASE': 'https://wxpusher.zjiecode.com/api',
+        'DISPATCH_LOCK_PATH': str(tmp_path / 'dispatch.lock'),
+        'ALLOW_INSECURE_PUBLIC_BASE_URL': None,
+        'QWEATHER_AUTH_MODE': 'disabled',
+    }
+    env[second_key] = env[first_key]
+    original = _set_env(env)
+    try:
+        config = _reload_config()
+        with pytest.raises(RuntimeError) as exc_info:
+            config.validate_production_config()
+        error = str(exc_info.value)
+        assert first_key in error
+        assert second_key in error
+        assert env[first_key] not in error
+    finally:
+        _restore_env(original)
+        _reload_config()
+
+
+def test_validate_production_config_locks_web_only_wxpusher_origin(tmp_path):
+    original = _set_env({
+        'SECRET_KEY': 'strongkey1234567890strongkey123456',
+        'PAIR_TOKEN_PEPPER': 'peppervalue1234567890abcdefghijkl',
+        'DEBUG': 'false',
+        'WECHAT_FORMAL_RUNTIME': '0',
+        'DATABASE_URI': f"sqlite:///{tmp_path/'prod_web_push.db'}",
+        'RATE_LIMIT_STORAGE_URI': 'redis://localhost:6379/0',
+        'QWEATHER_AUTH_MODE': 'disabled',
+        'WX_MINIPROGRAM_APPID': None,
+        'WX_MINIPROGRAM_SECRET': None,
+        'WX_MINIPROGRAM_OPENID_PEPPER': None,
+        'WX_MINIPROGRAM_SESSION_SECRET': None,
+        'PUBLIC_BASE_URL': 'http://attacker.example',
+        'WXPUSHER_APP_TOKEN': 'AT_abcdefghijklmnop',
+        'WXPUSHER_API_BASE': 'https://wxpusher.zjiecode.com/api',
+        'DISPATCH_LOCK_PATH': str(tmp_path / 'dispatch.lock'),
+        'ALLOW_INSECURE_PUBLIC_BASE_URL': None,
+        'QWEATHER_AUTH_MODE': 'disabled',
+    })
+    try:
+        config = _reload_config()
+        with pytest.raises(RuntimeError, match='PUBLIC_BASE_URL'):
+            config.validate_production_config()
+    finally:
+        _restore_env(original)
+        _reload_config()
+
+
+def test_validate_production_config_accepts_locked_web_only_wxpusher(tmp_path):
+    original = _set_env({
+        'SECRET_KEY': 'strongkey1234567890strongkey123456',
+        'PAIR_TOKEN_PEPPER': 'peppervalue1234567890abcdefghijkl',
+        'DEBUG': 'false',
+        'WECHAT_FORMAL_RUNTIME': '0',
+        'DATABASE_URI': f"sqlite:///{tmp_path/'prod_web_push_ok.db'}",
+        'RATE_LIMIT_STORAGE_URI': 'redis://localhost:6379/0',
+        'QWEATHER_AUTH_MODE': 'disabled',
+        'WX_MINIPROGRAM_APPID': None,
+        'WX_MINIPROGRAM_SECRET': None,
+        'WX_MINIPROGRAM_OPENID_PEPPER': None,
+        'WX_MINIPROGRAM_SESSION_SECRET': None,
+        'PUBLIC_BASE_URL': 'https://yilaoweather.org',
+        'WXPUSHER_APP_TOKEN': 'AT_abcdefghijklmnop',
+        'WXPUSHER_API_BASE': 'https://wxpusher.zjiecode.com/api',
+        'DISPATCH_LOCK_PATH': str(tmp_path / 'dispatch.lock'),
+        'ALLOW_INSECURE_PUBLIC_BASE_URL': None,
+    })
+    try:
+        config = _reload_config()
+        config.validate_production_config()
+    finally:
+        _restore_env(original)
+        _reload_config()
+
+
+@pytest.mark.parametrize('formal_value', [None, '', 'true', 'yes', '2'])
+def test_production_requires_explicit_binary_wechat_runtime(tmp_path, formal_value):
+    """生产环境必须明确选择正式小程序态或 Web-only 态。"""
+    original = _set_env({
+        'SECRET_KEY': 'strongkey1234567890strongkey123456',
+        'PAIR_TOKEN_PEPPER': 'peppervalue1234567890abcdefghijkl',
+        'DEBUG': 'false',
+        'WECHAT_FORMAL_RUNTIME': formal_value,
+        'DATABASE_URI': f"sqlite:///{tmp_path/'prod_formal_flag.db'}",
+        'RATE_LIMIT_STORAGE_URI': 'redis://localhost:6379/0',
+        'QWEATHER_AUTH_MODE': 'disabled',
+        'WX_MINIPROGRAM_APPID': None,
+        'WX_MINIPROGRAM_SECRET': None,
+        'WX_MINIPROGRAM_OPENID_PEPPER': None,
+        'WX_MINIPROGRAM_SESSION_SECRET': None,
+        'WXPUSHER_APP_TOKEN': None,
+    })
+    try:
+        config = _reload_config()
+        with pytest.raises(RuntimeError, match='WECHAT_FORMAL_RUNTIME'):
+            config.validate_production_config()
+    finally:
+        _restore_env(original)
+        _reload_config()
+
+
+def test_formal_wechat_runtime_rejects_debug_and_incomplete_credentials(tmp_path):
+    """正式小程序态必须关闭 DEBUG 并同时具备四项微信服务端配置。"""
+    debug_env = {
+        'WECHAT_FORMAL_RUNTIME': '1',
+        'WX_MINIPROGRAM_APPID': 'wx-production-appid',
+        'WX_MINIPROGRAM_SECRET': 'wx-production-secret-value',
+        'WX_MINIPROGRAM_OPENID_PEPPER': 'openidpepper1234567890abcdefghijklm',
+        'WX_MINIPROGRAM_SESSION_SECRET': 'sessionvalue1234567890abcdefghijkl',
+    }
+    for debug_setting in ('true', None):
+        original = _set_env({**debug_env, 'DEBUG': debug_setting})
+        try:
+            config = _reload_config()
+            with pytest.raises(RuntimeError, match='DEBUG=false'):
+                config.validate_production_config()
+        finally:
+            _restore_env(original)
+            _reload_config()
+
+    original = _set_env({
+        'SECRET_KEY': 'strongkey1234567890strongkey123456',
+        'PAIR_TOKEN_PEPPER': 'peppervalue1234567890abcdefghijkl',
+        'DEBUG': 'false',
+        'WECHAT_FORMAL_RUNTIME': '1',
+        'DATABASE_URI': f"sqlite:///{tmp_path/'prod_formal_missing.db'}",
+        'RATE_LIMIT_STORAGE_URI': 'redis://localhost:6379/0',
+        'QWEATHER_AUTH_MODE': 'disabled',
+        'WX_MINIPROGRAM_APPID': None,
+        'WX_MINIPROGRAM_SECRET': None,
+        'WX_MINIPROGRAM_OPENID_PEPPER': None,
+        'WX_MINIPROGRAM_SESSION_SECRET': None,
+        'WXPUSHER_APP_TOKEN': None,
+    })
+    try:
+        config = _reload_config()
+        with pytest.raises(RuntimeError, match='四项微信服务端配置'):
+            config.validate_production_config()
+    finally:
+        _restore_env(original)
+        _reload_config()
+
+
+def test_web_only_runtime_rejects_wechat_credentials(tmp_path):
+    """Web-only 运行态不得悄悄加载微信正式凭据。"""
+    original = _set_env({
+        'SECRET_KEY': 'strongkey1234567890strongkey123456',
+        'PAIR_TOKEN_PEPPER': 'peppervalue1234567890abcdefghijkl',
+        'DEBUG': 'false',
+        'WECHAT_FORMAL_RUNTIME': '0',
+        'DATABASE_URI': f"sqlite:///{tmp_path/'prod_web_with_wechat.db'}",
+        'RATE_LIMIT_STORAGE_URI': 'redis://localhost:6379/0',
+        'QWEATHER_AUTH_MODE': 'disabled',
+        'WX_MINIPROGRAM_APPID': 'wx-production-appid',
+        'WX_MINIPROGRAM_SECRET': 'wx-production-secret-value',
+        'WX_MINIPROGRAM_OPENID_PEPPER': 'openidpepper1234567890abcdefghijklm',
+        'WX_MINIPROGRAM_SESSION_SECRET': 'sessionvalue1234567890abcdefghijkl',
+        'WXPUSHER_APP_TOKEN': None,
+    })
+    try:
+        config = _reload_config()
+        with pytest.raises(RuntimeError, match='Web-only'):
             config.validate_production_config()
     finally:
         _restore_env(original)
@@ -280,6 +510,7 @@ def test_validate_production_config_rejects_memory_rate_limit(tmp_path):
         'SECRET_KEY': 'strongkey1234567890strongkey123456',
         'PAIR_TOKEN_PEPPER': 'pepper-1234567890pepper-1234567890',
         'DEBUG': 'false',
+        'WECHAT_FORMAL_RUNTIME': '0',
         'DATABASE_URI': f"sqlite:///{tmp_path/'prod_rate_limit.db'}",
         'RATE_LIMIT_STORAGE_URI': 'memory://',
         'REDIS_URL': '',
@@ -298,8 +529,83 @@ def test_validate_production_config_accepts_redis_rate_limit(tmp_path):
         'SECRET_KEY': 'strongkey1234567890strongkey123456',
         'PAIR_TOKEN_PEPPER': 'pepper-1234567890pepper-1234567890',
         'DEBUG': 'false',
+        'WECHAT_FORMAL_RUNTIME': '0',
         'DATABASE_URI': f"sqlite:///{tmp_path/'prod_rate_limit_ok.db'}",
         'RATE_LIMIT_STORAGE_URI': 'redis://localhost:6379/0',
+        'QWEATHER_AUTH_MODE': 'disabled',
+    })
+    try:
+        config = _reload_config()
+        config.validate_production_config()
+    finally:
+        _restore_env(original)
+        _reload_config()
+
+
+def test_validate_production_config_requires_qweather_persistent_redis(tmp_path):
+    original = _set_env({
+        'SECRET_KEY': 'strongkey1234567890strongkey123456',
+        'PAIR_TOKEN_PEPPER': 'pepper-1234567890pepper-1234567890',
+        'DEBUG': 'false',
+        'WECHAT_FORMAL_RUNTIME': '0',
+        'DATABASE_URI': f"sqlite:///{tmp_path/'prod_qweather_budget.db'}",
+        'RATE_LIMIT_STORAGE_URI': 'redis://localhost:6379/0',
+        'QWEATHER_AUTH_MODE': 'api_key',
+        'QWEATHER_KEY': 'server-weather-key',
+        'QWEATHER_API_BASE': 'https://unit-test.qweatherapi.com/v7',
+        'QWEATHER_REQUIRE_PERSISTENT_BUDGET': '1',
+        'REDIS_URL': None,
+        'WEATHER_CACHE_REDIS_URL': None,
+    })
+    try:
+        config = _reload_config()
+        with pytest.raises(RuntimeError, match='REDIS_URL'):
+            config.validate_production_config()
+    finally:
+        _restore_env(original)
+        _reload_config()
+
+
+def test_validate_production_config_rejects_disabled_qweather_persistent_budget(
+    tmp_path,
+):
+    original = _set_env({
+        'SECRET_KEY': 'strongkey1234567890strongkey123456',
+        'PAIR_TOKEN_PEPPER': 'pepper-1234567890pepper-1234567890',
+        'DEBUG': 'false',
+        'WECHAT_FORMAL_RUNTIME': '0',
+        'DATABASE_URI': f"sqlite:///{tmp_path/'prod_qweather_flag.db'}",
+        'RATE_LIMIT_STORAGE_URI': 'redis://localhost:6379/0',
+        'QWEATHER_AUTH_MODE': 'api_key',
+        'QWEATHER_KEY': 'server-weather-key',
+        'QWEATHER_API_BASE': 'https://unit-test.qweatherapi.com/v7',
+        'QWEATHER_REQUIRE_PERSISTENT_BUDGET': '0',
+        'REDIS_URL': 'redis://localhost:6379/0',
+        'WEATHER_CACHE_REDIS_URL': None,
+    })
+    try:
+        config = _reload_config()
+        with pytest.raises(RuntimeError, match='QWEATHER_REQUIRE_PERSISTENT_BUDGET'):
+            config.validate_production_config()
+    finally:
+        _restore_env(original)
+        _reload_config()
+
+
+def test_validate_production_config_accepts_qweather_persistent_budget(tmp_path):
+    original = _set_env({
+        'SECRET_KEY': 'strongkey1234567890strongkey123456',
+        'PAIR_TOKEN_PEPPER': 'pepper-1234567890pepper-1234567890',
+        'DEBUG': 'false',
+        'WECHAT_FORMAL_RUNTIME': '0',
+        'DATABASE_URI': f"sqlite:///{tmp_path/'prod_qweather_ok.db'}",
+        'RATE_LIMIT_STORAGE_URI': 'redis://localhost:6379/0',
+        'QWEATHER_AUTH_MODE': 'api_key',
+        'QWEATHER_KEY': 'server-weather-key',
+        'QWEATHER_API_BASE': 'https://unit-test.qweatherapi.com/v7',
+        'QWEATHER_REQUIRE_PERSISTENT_BUDGET': '1',
+        'REDIS_URL': None,
+        'WEATHER_CACHE_REDIS_URL': 'rediss://cache.example:6380/1',
     })
     try:
         config = _reload_config()
@@ -314,9 +620,11 @@ def test_configure_app_sets_secure_cookie_defaults_for_production(tmp_path):
         'SECRET_KEY': 'strongkey1234567890strongkey123456',
         'PAIR_TOKEN_PEPPER': 'pepper-1234567890pepper-1234567890',
         'DEBUG': 'false',
+        'WECHAT_FORMAL_RUNTIME': '0',
         'DATABASE_URI': f"sqlite:///{tmp_path/'prod_cookie.db'}",
         'RATE_LIMIT_STORAGE_URI': 'redis://localhost:6379/0',
         'PUBLIC_BASE_URL': 'https://yilaoweather.org',
+        'QWEATHER_AUTH_MODE': 'disabled',
     })
     try:
         from flask import Flask
@@ -333,6 +641,7 @@ def test_configure_app_sets_secure_cookie_defaults_for_production(tmp_path):
         assert app.config['SESSION_COOKIE_SAMESITE'] == 'Lax'
         assert app.config['REMEMBER_COOKIE_SAMESITE'] == 'Lax'
         assert app.config['PREFERRED_URL_SCHEME'] == 'https'
+        assert app.config['WECHAT_FORMAL_RUNTIME'] is False
     finally:
         _restore_env(original)
         _reload_config()

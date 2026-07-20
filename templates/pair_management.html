@@ -12,6 +12,7 @@
                 为家中老人设置所在地，高温或寒潮来临时及时收到提醒。慢病类别可选填，用于提供更贴合的日常建议。
                 所在地和关联档案仅用于天气查询与提醒，请勿填写精确门牌信息。
             </p>
+            {% if wxpusher_feature_enabled %}
             {% if not current_user.push_enabled or not current_user.wxpusher_uid %}
                 <div class="alert alert-warning mt-3 mb-0">
                     <div class="fw-semibold">尚未开启自动推送</div>
@@ -27,6 +28,7 @@
                         你仍可复制提醒话术并手动发送，行动记录不会受到影响。
                     </div>
                 </div>
+            {% endif %}
             {% endif %}
             {% if current_user.role in ['caregiver', 'admin'] %}
                 <a class="btn btn-sm btn-outline-primary mt-2" href="{{ url_for('user.community_announce') }}">

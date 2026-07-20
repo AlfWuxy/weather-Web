@@ -12,6 +12,7 @@ import pytest
 ROOT_DIR = Path(__file__).resolve().parents[1]
 DIRECT_PIPELINES = (
     'services/pipelines/analyze_surnames.py',
+    'services/pipelines/cleanup_usage_events.py',
     'services/pipelines/dispatch_alerts.py',
     'services/pipelines/import_data.py',
     'services/pipelines/precompute_community_risk.py',
@@ -19,6 +20,7 @@ DIRECT_PIPELINES = (
     'services/pipelines/sync_weather_data.py',
 )
 PRODUCTION_MODULES = (
+    'services.pipelines.cleanup_usage_events',
     'services.pipelines.dispatch_alerts',
     'services.pipelines.sync_weather_cache',
     'services.pipelines.sync_weather_data',
@@ -38,6 +40,7 @@ def _subprocess_env(tmp_path):
         'SILICONFLOW_API_KEY': '',
         'RATE_LIMIT_STORAGE_URI': 'memory://',
         'REDIS_URL': '',
+        'DEPLOY_STATE_DIR': str(tmp_path),
     })
     return env
 
@@ -90,6 +93,16 @@ def test_production_pipeline_modules_expose_help(tmp_path, module_name):
     ('script_name', 'arguments', 'expected_arguments'),
     (
         (
+            'cleanup_usage_events.sh',
+            ('--batch-size', '25'),
+            (
+                '-m',
+                'services.pipelines.cleanup_usage_events',
+                '--batch-size',
+                '25',
+            ),
+        ),
+        (
             'dispatch_alerts.sh',
             ('--dedupe-hours', '9'),
             ('-m', 'services.pipelines.dispatch_alerts', '--dedupe-hours', '9'),
@@ -123,7 +136,7 @@ def test_shell_wrapper_uses_repo_root_and_module_entrypoint(
     fake_python = tmp_path / 'fake-python'
     fake_python.write_text(
         '#!/bin/sh\n'
-        'printf "cwd=%s\\n" "$PWD"\n'
+        'printf "__PYTHON_CALL__ cwd=%s\\n" "$PWD"\n'
         'for arg in "$@"; do printf "arg=%s\\n" "$arg"; done\n',
         encoding='utf-8',
     )
@@ -142,10 +155,103 @@ def test_shell_wrapper_uses_repo_root_and_module_entrypoint(
     )
 
     assert result.returncode == 0, result.stderr
-    assert f'cwd={ROOT_DIR}' in result.stdout
-    actual_arguments = tuple(
-        line.removeprefix('arg=')
-        for line in result.stdout.splitlines()
-        if line.startswith('arg=')
+    python_calls = []
+    for line in result.stdout.splitlines():
+        if line.startswith('__PYTHON_CALL__ cwd='):
+            python_calls.append({
+                'cwd': line.removeprefix('__PYTHON_CALL__ cwd='),
+                'arguments': [],
+            })
+        elif line.startswith('arg='):
+            assert python_calls, result.stdout
+            python_calls[-1]['arguments'].append(line.removeprefix('arg='))
+
+    assert python_calls, result.stdout
+    assert python_calls[0] == {
+        'cwd': str(ROOT_DIR),
+        'arguments': list(expected_arguments),
+    }
+    if script_name == 'cleanup_usage_events.sh':
+        # 非特权日常清理只触碰应用数据库；部署事务保留由 root 运维单独处理。
+        assert len(python_calls) == 1
+    else:
+        assert len(python_calls) == 1
+
+
+def test_weather_cache_cli_only_succeeds_with_fresh_available_snapshot(monkeypatch):
+    from services.pipelines import sync_weather_cache as pipeline
+
+    calls = []
+    monkeypatch.setattr(
+        pipeline,
+        'sync_weather_cache',
+        lambda **options: calls.append(options)
+        or {'snapshot_id': 'snapshot-1', 'snapshot_ready': False},
     )
-    assert actual_arguments == expected_arguments
+    assert pipeline.main(['--skip-nowcast']) == 2
+    assert calls[-1]['include_nowcast'] is False
+
+    monkeypatch.setattr(
+        pipeline,
+        'sync_weather_cache',
+        lambda **options: calls.append(options)
+        or {'snapshot_id': 'snapshot-2', 'snapshot_ready': True},
+    )
+    assert pipeline.main([]) == 0
+    assert calls[-1]['include_nowcast'] is True
+
+
+def test_dispatch_cli_marks_snapshot_and_delivery_failures(monkeypatch):
+    from services.pipelines import dispatch_alerts as pipeline
+
+    class FakeLock:
+        def close(self):
+            return None
+
+    # 该用例只验证业务退出码；调度锁的 fail-closed 边界由独立测试覆盖。
+    monkeypatch.setattr(pipeline, '_acquire_dispatch_lock', lambda: FakeLock())
+
+    monkeypatch.setattr(
+        pipeline,
+        'dispatch_alerts',
+        lambda **_options: {'status': 'snapshot_unavailable', 'failed': 0},
+    )
+    assert pipeline.main([]) == 3
+
+    monkeypatch.setattr(
+        pipeline,
+        'dispatch_alerts',
+        lambda **_options: {'status': 'delivery_failed', 'failed': 1},
+    )
+    assert pipeline.main([]) == 2
+
+    monkeypatch.setattr(
+        pipeline,
+        'dispatch_alerts',
+        lambda **_options: {'status': 'idle_no_alert', 'failed': 0},
+    )
+    assert pipeline.main([]) == 0
+
+    monkeypatch.setattr(pipeline, '_acquire_dispatch_lock', lambda: None)
+    assert pipeline.main([]) == 75
+
+
+def test_cleanup_wrapper_propagates_partial_exit_code(tmp_path):
+    """CLI 报告积压时，wrapper 必须把非零状态交给 systemd。"""
+    fake_python = tmp_path / 'fake-python'
+    fake_python.write_text('#!/bin/sh\nexit 2\n', encoding='utf-8')
+    fake_python.chmod(0o755)
+
+    env = _subprocess_env(tmp_path)
+    env['VENV_PY'] = str(fake_python)
+    result = subprocess.run(
+        ['bash', str(ROOT_DIR / 'scripts' / 'cleanup_usage_events.sh')],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+    assert result.returncode == 2

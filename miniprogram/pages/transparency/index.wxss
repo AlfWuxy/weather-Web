@@ -1,0 +1,11 @@
+.method-hero { background: linear-gradient(145deg, #9f3a12 0%, #7f4d31 100%); }
+.method-note { margin-top: 22rpx; }
+.method-title { color: #7f3516; font-size: 34rpx; font-weight: 800; }
+.method-text { margin-top: 16rpx; color: #66594f; font-size: 14px; line-height: 1.75; }
+.formula { overflow-wrap: anywhere; margin-top: 18rpx; padding: 20rpx; border-radius: 16rpx; color: #7f3516; background: #fff0df; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 14px; line-height: 1.6; }
+.method-tag-row { display: flex; flex-wrap: wrap; gap: 12rpx; margin-top: 18rpx; }
+.method-tag-row text { padding: 8rpx 16rpx; border-radius: 999rpx; color: #6e5443; background: #f8eadf; font-size: 14px; }
+.method-link { margin-top: 20rpx; }
+.source-row .muted { margin-top: 8rpx; }
+.limits-card view { color: #66594f; font-size: 14px; line-height: 1.72; }
+.limits-card view + view { margin-top: 14rpx; }

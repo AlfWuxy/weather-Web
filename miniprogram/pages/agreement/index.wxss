@@ -1,0 +1,60 @@
+.page-shell {
+  padding: 30rpx 28rpx calc(70rpx + env(safe-area-inset-bottom));
+}
+
+.agreement-hero {
+  color: #2f493a;
+  background: linear-gradient(145deg, #f2f8f4, #fff8ef);
+}
+
+.agreement-hero .hero-subtitle {
+  color: #34483c;
+  background: #e3eee7;
+}
+
+.agreement-card {
+  margin-top: 22rpx;
+  padding: 28rpx;
+  border: 1rpx solid #e2e9e5;
+  border-radius: 22rpx;
+  background: #ffffff;
+}
+
+.warning-card {
+  border-color: #efd3b6;
+  background: #fffaf4;
+}
+
+.section-title {
+  color: #2f493a;
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.agreement-text {
+  margin-top: 12rpx;
+  color: #56665d;
+  font-size: 16px;
+  line-height: 1.78;
+}
+
+.effective-date {
+  margin: 26rpx 0 18rpx;
+  color: #6d786f;
+  font-size: 16px;
+  line-height: 1.6;
+  text-align: center;
+}
+
+.secondary-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 88rpx;
+  border: 2rpx solid #a9c8b5;
+  border-radius: 18rpx;
+  background: #ffffff;
+  color: #245f3f;
+  font-size: 14.5px;
+  font-weight: 700;
+}

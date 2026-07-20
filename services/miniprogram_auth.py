@@ -46,7 +46,7 @@ def _required_config(name: str) -> str:
 def current_privacy_version() -> str:
     return str(
         current_app.config.get("WX_MINIPROGRAM_PRIVACY_VERSION")
-        or "2026-07-17"
+        or "2026-07-18"
     ).strip()
 
 
@@ -162,7 +162,28 @@ def _create_wechat_user(openid_hash: str) -> User:
     return user
 
 
-def login_with_wechat_code(code: str, privacy_consent_version: str) -> dict:
+def _acquire_identity_login_lock(openid_hash: str) -> None:
+    """按身份串行化登录事务，覆盖首次建档与活跃会话上限。"""
+    dialect = db.engine.dialect.name
+    if dialect == "sqlite":
+        # SQLite 没有行锁；BEGIN IMMEDIATE 在首次身份查询前取得全库写锁。
+        db.session.connection().exec_driver_sql("BEGIN IMMEDIATE")
+        return
+    if dialect == "postgresql":
+        lock_id = int(openid_hash[:16], 16)
+        if lock_id >= 2 ** 63:
+            lock_id -= 2 ** 64
+        db.session.execute(
+            db.text("SELECT pg_advisory_xact_lock(:lock_id)"),
+            {"lock_id": lock_id},
+        )
+
+
+def login_with_wechat_code(
+    code: str,
+    privacy_consent_version: str,
+    acquisition_source: str = "direct",
+) -> dict:
     """校验隐私同意、完成 code2session，并签发可撤销会话。"""
     required_version = current_privacy_version()
     consent_version = str(privacy_consent_version or "").strip()
@@ -176,9 +197,17 @@ def login_with_wechat_code(code: str, privacy_consent_version: str) -> dict:
     openid = exchange_wechat_code(code)
     openid_digest = hash_openid(openid)
     now = utcnow()
-    identity = MiniProgramIdentity.query.filter_by(openid_hash=openid_digest).first()
-
+    normalized_acquisition = (
+        "family_share" if acquisition_source == "family_share" else "direct"
+    )
     try:
+        _acquire_identity_login_lock(openid_digest)
+        identity_query = db.select(MiniProgramIdentity).where(
+            MiniProgramIdentity.openid_hash == openid_digest
+        )
+        if db.engine.dialect.name not in {"sqlite", "postgresql"}:
+            identity_query = identity_query.with_for_update()
+        identity = db.session.execute(identity_query).scalar_one_or_none()
         if identity is None:
             user = _create_wechat_user(openid_digest)
             identity = MiniProgramIdentity(
@@ -186,6 +215,7 @@ def login_with_wechat_code(code: str, privacy_consent_version: str) -> dict:
                 openid_hash=openid_digest,
                 privacy_consent_version=required_version,
                 privacy_consented_at=now,
+                acquisition_source=normalized_acquisition,
                 created_at=now,
                 last_login_at=now,
             )
@@ -193,7 +223,7 @@ def login_with_wechat_code(code: str, privacy_consent_version: str) -> dict:
             db.session.flush()
         else:
             user = db.session.get(User, identity.user_id)
-            if user is None:
+            if user is None or user.deleted_at is not None:
                 raise MiniProgramAuthError(
                     "wechat_identity_invalid",
                     "微信身份关联异常，请联系管理员。",
@@ -202,6 +232,12 @@ def login_with_wechat_code(code: str, privacy_consent_version: str) -> dict:
             identity.privacy_consent_version = required_version
             identity.privacy_consented_at = now
             identity.last_login_at = now
+            if identity.acquisition_source not in {
+                "direct",
+                "family_share",
+                "unknown",
+            }:
+                identity.acquisition_source = "unknown"
 
         # 每次登录清理本身份已失效会话，避免长期运行后表无限增长。
         MiniProgramSession.query.filter(
@@ -281,18 +317,26 @@ def verify_miniprogram_session(token: str):
     except (TypeError, ValueError):
         return None
 
-    record = db.session.get(MiniProgramSession, session_id)
-    if record is None or record.revoked_at is not None:
+    verification_query = (
+        db.select(MiniProgramSession, MiniProgramIdentity, User)
+        .join(
+            MiniProgramIdentity,
+            (MiniProgramIdentity.id == MiniProgramSession.identity_id)
+            & (MiniProgramIdentity.user_id == MiniProgramSession.user_id),
+        )
+        .join(User, User.id == MiniProgramSession.user_id)
+        .where(
+            MiniProgramSession.id == session_id,
+            MiniProgramSession.revoked_at.is_(None),
+            User.deleted_at.is_(None),
+        )
+        # 锁内复验可能发生在同一 Session，必须覆盖 identity map 中的旧状态。
+        .execution_options(populate_existing=True)
+    )
+    verified = db.session.execute(verification_query).one_or_none()
+    if verified is None:
         return None
-    identity = db.session.get(MiniProgramIdentity, record.identity_id)
-    user = db.session.get(User, record.user_id)
-    if (
-        identity is None
-        or user is None
-        or user.deleted_at is not None
-        or identity.user_id != record.user_id
-    ):
-        return None
+    record, identity, user = verified
     now = utcnow()
     if ensure_utc_aware(record.expires_at) <= now:
         return None
@@ -306,4 +350,7 @@ def verify_miniprogram_session(token: str):
     expected_hash = _hash_session_token(token)
     if not record.token_hash or not hmac.compare_digest(record.token_hash, expected_hash):
         return None
+    # 保持返回记录接口兼容，同时允许本次请求复用已完成验证的上下文。
+    record._verified_identity = identity
+    record._verified_user = user
     return record

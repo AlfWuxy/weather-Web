@@ -1,47 +1,55 @@
-<view style="padding: 16px;">
-  <view class="card">
-    <view style="font-size: 18px; font-weight: 700;">
-      {{mode === 'create' ? '新增老人' : '编辑老人'}}
-    </view>
-    <view class="muted" style="margin-top: 6px; font-size: 12px;">
-      慢病信息仅填写“类别”（可选），用于生成更贴近实际的提醒话术。
-    </view>
+<view class="page-shell">
+  <view class="page-title">{{mode === 'create' ? '添加家中老人' : '编辑老人资料'}}</view>
+  <view class="page-copy">资料用于生成更合适的天气行动提醒。慢病只需填写类别。</view>
 
-    <block wx:if="{{mode === 'create'}}">
-      <view style="margin-top: 14px;">
-        <view class="muted" style="font-size: 12px;">姓名/称呼</view>
-        <input value="{{name}}" bindinput="onName" placeholder="例如：妈妈/爸爸" style="border: 1px solid #e5e7eb; border-radius: 10px; padding: 10px 12px; background:#fff;" />
-      </view>
-      <view style="margin-top: 10px;">
-        <view class="muted" style="font-size: 12px;">关系（可选）</view>
-        <input value="{{relation}}" bindinput="onRelation" placeholder="例如：母亲/父亲" style="border: 1px solid #e5e7eb; border-radius: 10px; padding: 10px 12px; background:#fff;" />
-      </view>
-      <view style="margin-top: 10px; display:flex; gap:10px;">
-        <view style="flex:1;">
-          <view class="muted" style="font-size: 12px;">年龄（可选）</view>
-          <input type="number" value="{{age}}" bindinput="onAge" placeholder="例如：68" style="border: 1px solid #e5e7eb; border-radius: 10px; padding: 10px 12px; background:#fff;" />
-        </view>
-        <view style="flex:1;">
-          <view class="muted" style="font-size: 12px;">性别（可选）</view>
-          <input value="{{gender}}" bindinput="onGender" placeholder="男性/女性" style="border: 1px solid #e5e7eb; border-radius: 10px; padding: 10px 12px; background:#fff;" />
-        </view>
-      </view>
-    </block>
-
-    <view style="margin-top: 14px;">
-      <view class="muted" style="font-size: 12px;">所在地</view>
-      <input value="{{locationQuery}}" bindinput="onLocation" placeholder="例如：九江市都昌县/九江某乡镇" style="border: 1px solid #e5e7eb; border-radius: 10px; padding: 10px 12px; background:#fff;" />
-    </view>
-
-    <view style="margin-top: 10px;">
-      <view class="muted" style="font-size: 12px;">慢病类别（逗号分隔，可选）</view>
-      <input value="{{chronicText}}" bindinput="onChronic" placeholder="例如：高血压, 糖尿病" style="border: 1px solid #e5e7eb; border-radius: 10px; padding: 10px 12px; background:#fff;" />
-    </view>
-
-    <view style="display:flex; gap: 10px; margin-top: 14px;">
-      <button class="btn-primary" style="flex:1;" bindtap="onSave">{{mode === 'create' ? '创建' : '保存'}}</button>
-      <button class="btn-outline" style="flex:1;" bindtap="onCancel">取消</button>
+  <view wx:if="{{loading}}" class="loading-box" role="status" aria-role="status" aria-live="polite">正在加载资料…</view>
+  <view wx:elif="{{loadError}}" class="loading-box" role="alert" aria-role="alert" aria-live="assertive">
+    <view>{{loadError}}</view>
+    <view class="button-row">
+      <button class="primary-button row-button" bindtap="loadAuthorizedPage">重新加载</button>
+      <button class="secondary-button row-button" bindtap="onCancel">返回</button>
     </view>
   </view>
-</view>
+  <view wx:elif="{{contextReady}}" class="form-card">
+    <view class="field-group">
+      <view class="field-label">姓名或家中称呼 <text class="required">*</text></view>
+      <input class="text-input" maxlength="50" value="{{name}}" disabled="{{busy}}" bindinput="onName" placeholder="例如：妈妈、张奶奶" aria-label="姓名或家中称呼，必填" />
+    </view>
 
+    <view class="field-group">
+      <view class="field-label">与你的关系</view>
+      <input class="text-input" maxlength="20" value="{{relation}}" disabled="{{busy}}" bindinput="onRelation" placeholder="例如：母亲、爷爷" aria-label="这位家人与你的关系" />
+    </view>
+
+    <view class="two-column">
+      <view class="field-group column-field">
+        <view class="field-label">年龄 <text class="required">*</text></view>
+        <input class="text-input" type="number" maxlength="3" value="{{age}}" disabled="{{busy}}" bindinput="onAge" placeholder="18 至 120 岁" aria-label="这位成年家人的年龄，必填，18 至 120 岁" />
+        <view class="field-hint">仅支持管理年满 18 岁的家人资料。</view>
+      </view>
+      <view class="field-group column-field">
+        <view class="field-label">性别</view>
+        <picker range="{{genderOptions}}" value="{{genderIndex}}" disabled="{{busy}}" bindchange="onGender" aria-label="这位家人的性别">
+          <view class="picker-field">{{gender}}</view>
+        </picker>
+      </view>
+    </view>
+
+    <view class="field-group">
+      <view class="field-label">所在地区</view>
+      <view class="fixed-field">都昌县 <text>已固定</text></view>
+      <view class="field-hint">小程序当前天气与预警范围固定为都昌县。</view>
+    </view>
+
+    <view class="field-group">
+      <view class="field-label">慢病类别</view>
+      <textarea class="text-area" maxlength="300" value="{{chronicText}}" disabled="{{busy}}" bindinput="onChronic" placeholder="例如：高血压、糖尿病。请勿填写病历号或身份证号。" aria-label="这位家人的慢病类别" />
+    </view>
+
+    <view class="button-row">
+      <button class="primary-button row-button" loading="{{busy}}" disabled="{{busy}}" bindtap="onSave">{{mode === 'create' ? '确认添加' : '保存修改'}}</button>
+      <button class="secondary-button row-button" disabled="{{busy}}" bindtap="onCancel">取消</button>
+    </view>
+  </view>
+  <view wx:else class="loading-box" role="status" aria-role="status">请返回后重新进入家人资料页。</view>
+</view>

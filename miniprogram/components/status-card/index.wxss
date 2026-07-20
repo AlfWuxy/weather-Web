@@ -1,0 +1,47 @@
+.state-card {
+  animation: state-enter 180ms ease-out both;
+}
+
+@keyframes state-enter {
+  from { opacity: 0; transform: translateY(8rpx); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes state-spin {
+  to { transform: rotate(360deg); }
+}
+
+.state-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 20rpx;
+  margin: 20rpx 0;
+  padding: 28rpx;
+  border: 1rpx solid #ecdcd0;
+  border-radius: 24rpx;
+  color: #64574f;
+  background: #fffdf9;
+}
+.state-icon {
+  display: flex;
+  flex: 0 0 58rpx;
+  align-items: center;
+  justify-content: center;
+  width: 58rpx;
+  height: 58rpx;
+  border-radius: 50%;
+  background: #fff0df;
+}
+.state-icon-image { width: 34rpx; height: 34rpx; opacity: 0.68; }
+.state-icon .loading-icon { animation: state-spin 900ms linear infinite; }
+.state-loading .state-icon { color: #6f6259; background: #f1ede9; }
+.state-error .state-icon { color: #a0281a; background: #ffe6df; }
+.state-copy { flex: 1; min-width: 0; }
+.state-title { font-size: 16px; line-height: 1.4; font-weight: 750; }
+.state-detail { margin-top: 8rpx; color: #786d65; font-size: 16px; line-height: 1.6; }
+.state-action { display: inline-flex; min-height: 88rpx; margin: 18rpx 0 0; padding: 14rpx 24rpx; color: #8d3511; background: #fff0df; border-radius: 16rpx; font-size: 16px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .state-card,
+  .state-icon .loading-icon { animation: none; }
+}

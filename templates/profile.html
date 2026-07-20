@@ -105,20 +105,39 @@
                             </div>
                         </div>
 
+                        {% if wxpusher_feature_enabled %}
                         <hr class="my-4">
-
                         <h6 class="mb-3">消息提醒（子女端）</h6>
+                        {% if not wxpusher_available %}
+                        <div class="alert alert-warning" role="status">
+                            推送服务暂不可用，管理员尚未配置通道。您仍可关闭推送并清空已保存的 UID。
+                        </div>
+                        {% endif %}
                         <div class="mb-3">
                             <label for="wxpusher_uid" class="form-label">WxPusher 接收码</label>
                             <input type="text" class="form-control" id="wxpusher_uid" name="wxpusher_uid" value="{{ current_user.wxpusher_uid or '' }}" placeholder="例如：UID_xxxxx">
                             <small class="text-muted">关注 WxPusher 后，将收到的 UID 粘贴到这里。</small>
                         </div>
                         <div class="mb-3 form-check">
-                            <input class="form-check-input" type="checkbox" id="push_enabled" name="push_enabled" {% if current_user.push_enabled %}checked{% endif %}>
+                            <input class="form-check-input" type="checkbox" id="push_enabled" name="push_enabled" {% if current_user.push_enabled %}checked{% endif %} {% if not wxpusher_available and not current_user.push_enabled %}disabled aria-disabled="true"{% endif %}>
                             <label class="form-check-label" for="push_enabled">
                                 开启自动推送（高温/寒潮预警触发时）
                             </label>
                         </div>
+                        <input type="hidden" name="wxpusher_consent_version" value="{{ required_wxpusher_consent_version }}">
+                        <div class="alert alert-light border small" role="note">
+                            开启后会向 WxPusher 发送 UID、都昌县级预警标题与正文及 7 天内有效的点击链接。打开或预览链接不会记为送达确认；服务器仍可能生成必要的访问安全日志。只有持有链接的人主动点击“我已看到这条提醒”后，服务器才首次记录一次送达确认；页面无法核验实际点击者身份，请勿转发链接。确认时间和自动确认标记满 30 天后由每日清理任务清空；防重复投递状态和人工复核记录保留至账号注销。不会发送家人姓名、健康筛查、健康日记、用药记录或家庭地址。说明版本和 UTC 同意时间在关闭推送后继续保留至账号注销。
+                            <span class="d-block mt-1">当前传输说明版本：{{ required_wxpusher_consent_version }}</span>
+                        </div>
+                        {% if wxpusher_available and (not current_user.push_enabled or wxpusher_reconsent_required) %}
+                        <div class="mb-3 form-check">
+                            <input class="form-check-input" type="checkbox" id="wxpusher_consent" name="wxpusher_consent" value="1">
+                            <label class="form-check-label" for="wxpusher_consent">
+                                我已阅读以上范围，并同意本次开启第三方推送
+                            </label>
+                        </div>
+                        {% endif %}
+                        {% endif %}
 
                         <div class="d-grid gap-2 mt-4">
                             <button type="submit" class="btn btn-primary">保存更改</button>
@@ -257,5 +276,3 @@ if (passwordForm) {
 }
 </script>
 {% endblock %}
-
-

@@ -4,13 +4,13 @@ import json
 import logging
 import math
 
-from flask import current_app, jsonify, request
+from flask import abort, current_app, jsonify, request
 from flask_login import current_user, login_required
 
 from core.constants import DEFAULT_CITY_LABEL
 from core.notifications import create_notification
 from core.security import csrf_failure_response, validate_csrf
-from core.time_utils import now_local, today_local
+from core.time_utils import ensure_utc_aware, now_local, today_local, utcnow
 from core.weather import (
     ensure_user_location_valid,
     get_qweather_forecast_with_cache,
@@ -20,9 +20,9 @@ from core.weather import (
     normalize_location_name,
     weather_source_label
 )
-from core.db_models import Community, FamilyMember, Pair
+from core.db_models import Community, ForecastCache
 from core.extensions import db
-from core.usage import log_usage_event
+from core.usage import WEB_CLIENT_PILOT_EVENT_TYPES, log_usage_event
 from utils.parsers import parse_date, parse_int, safe_json_loads
 from utils.error_handlers import handle_api_exception
 from utils.validators import sanitize_input
@@ -61,23 +61,6 @@ def _validate_qweather_for_risk(weather_data, context):
         weather_data.get('is_mock') if isinstance(weather_data, dict) else None,
     )
     return _weather_unavailable_response(weather_data)
-
-PILOT_EVENT_TYPES = {
-    'pair_created',
-    'elder_profile_created',
-    'elder_profile_updated',
-    'template_view',
-    'template_copy',
-    'push_sent',
-    'push_failed',
-    'push_click',
-    'feedback_submitted',
-    'help_flagged',
-    'checkin_confirmed',
-    'wxoa_land',
-}
-_PILOT_EVENT_TYPES = PILOT_EVENT_TYPES
-
 
 def _handle_api_error(exc, context_msg, include_details=None):
     """统一处理API异常（兼容旧调用）"""
@@ -172,28 +155,70 @@ def _api_current_weather():
 
 
 def _api_weather_nowcast():
-    """获取未来小时级降水时间轴（短临预报）"""
-    location = sanitize_input(request.args.get('location'), max_length=100)
-    if location:
-        location = normalize_location_name(location)
-    else:
-        location = ensure_user_location_valid()
-
+    """只读后台 30 分钟周期生成的小时级降水缓存。"""
     try:
         hours = int(request.args.get('hours', 6))
     except Exception:
         hours = 6
     hours = max(1, min(hours, 24))
-
-    weather_service = get_weather_fetcher()
-    if weather_service is None or not hasattr(weather_service, 'get_short_term_nowcast'):
-        return jsonify({'success': False, 'message': '短临服务未启用', 'data': {'available': False, 'timeline': []}})
-
     try:
-        nowcast = weather_service.get_short_term_nowcast(location, hours=hours)
-    except (ValueError, TypeError, RuntimeError, OSError) as exc:
-        logger.warning("Nowcast fetch failed: %s", exc)
-        nowcast = {'available': False, 'timeline': [], 'reason': 'fetch_failed'}
+        record = ForecastCache.query.filter_by(
+            location=f'nowcast:{DEFAULT_CITY_LABEL}',
+            days=24,
+        ).order_by(ForecastCache.fetched_at.desc(), ForecastCache.id.desc()).first()
+        if record is None or record.fetched_at is None or bool(record.is_mock):
+            nowcast = {
+                'available': False,
+                'source': 'scheduled-cache',
+                'reason': 'cache_pending',
+                'timeline': [],
+            }
+        else:
+            cached = safe_json_loads(record.payload, {})
+            timeline = cached.get('timeline') if isinstance(cached, dict) else []
+            age_seconds_exact = max(
+                0.0,
+                (utcnow() - ensure_utc_aware(record.fetched_at)).total_seconds(),
+            )
+            age_seconds = int(age_seconds_exact)
+            if age_seconds_exact > 1800:
+                nowcast = {
+                    'available': False,
+                    'source': cached.get('source', 'scheduled-cache')
+                    if isinstance(cached, dict) else 'scheduled-cache',
+                    'reason': 'cache_stale',
+                    'timeline': [],
+                    'from_cache': True,
+                    'stale': True,
+                    'cache_age_seconds': age_seconds,
+                }
+            elif not isinstance(timeline, list) or not timeline or not cached.get('available'):
+                nowcast = {
+                    'available': False,
+                    'source': cached.get('source', 'scheduled-cache')
+                    if isinstance(cached, dict) else 'scheduled-cache',
+                    'reason': 'cache_invalid',
+                    'timeline': [],
+                    'from_cache': True,
+                    'stale': False,
+                    'cache_age_seconds': age_seconds,
+                }
+            else:
+                nowcast = dict(cached)
+                nowcast['timeline'] = timeline[:hours]
+                nowcast['available'] = True
+                nowcast['from_cache'] = True
+                nowcast['stale'] = False
+                nowcast['cache_age_seconds'] = age_seconds
+    except Exception as exc:
+        logger.warning("Nowcast cache read failed: %s", exc)
+        db.session.rollback()
+        nowcast = {
+            'available': False,
+            'source': 'scheduled-cache',
+            'reason': 'cache_unavailable',
+            'timeline': [],
+        }
 
     return jsonify({'success': True, 'data': nowcast})
 
@@ -944,6 +969,8 @@ def api_chronic_population():
 
 def _api_ai_ask():
     """AI问答接口"""
+    if not current_app.config.get('FEATURE_WEB_AI'):
+        abort(404)
     try:
         from services.ai_question_service import AIQuestionService
         data = request.get_json() or {}
@@ -1136,47 +1163,25 @@ def api_comprehensive_alert():
 def _api_usage_event():
     """Write pilot usage event (server-side validation, CSRF-protected)."""
     try:
-        payload = request.get_json(silent=True) or {}
+        payload = request.get_json(silent=True)
+        if payload is None:
+            payload = {}
+        if not isinstance(payload, dict):
+            return jsonify({'success': False, 'error': 'invalid_payload'}), 400
         event_type = sanitize_input(payload.get('event_type'), max_length=50) or ''
-        if event_type not in _PILOT_EVENT_TYPES:
+        if event_type not in WEB_CLIENT_PILOT_EVENT_TYPES:
             return jsonify({'success': False, 'error': 'invalid event_type'}), 400
 
-        pair_id = payload.get('pair_id')
-        member_id = payload.get('member_id')
-        source = sanitize_input(payload.get('source'), max_length=20) or 'web'
-        meta = payload.get('meta') if isinstance(payload.get('meta'), (dict, list)) else None
-
-        resolved_pair_id = None
-        if pair_id is not None:
-            try:
-                pair_id_int = int(pair_id)
-            except Exception:
-                pair_id_int = None
-            if pair_id_int:
-                q = Pair.query.filter_by(id=pair_id_int)
-                if getattr(current_user, 'role', None) != 'admin':
-                    q = q.filter_by(caregiver_id=current_user.id)
-                pair = q.first()
-                if pair:
-                    resolved_pair_id = pair.id
-
-        resolved_member_id = None
-        if member_id is not None:
-            try:
-                member_id_int = int(member_id)
-            except Exception:
-                member_id_int = None
-            if member_id_int:
-                member = FamilyMember.query.filter_by(id=member_id_int, user_id=current_user.id).first()
-                if member:
-                    resolved_member_id = member.id
+        raw_meta = payload.get('meta')
+        if raw_meta is not None and not isinstance(raw_meta, dict):
+            return jsonify({'success': False, 'error': 'invalid_meta'}), 400
+        meta = raw_meta
 
         event = log_usage_event(
             event_type,
             user_id=current_user.id,
-            pair_id=resolved_pair_id,
-            member_id=resolved_member_id,
-            source=source,
+            # Web 客户端只能记录自己的交互来源，不能伪装定时或系统事件。
+            source='web',
             meta=meta,
         )
         if event is None:

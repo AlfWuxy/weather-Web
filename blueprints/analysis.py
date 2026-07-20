@@ -28,6 +28,7 @@ from core.db_models import (
     WeatherData
 )
 from core.time_utils import today_local, date_to_utc_start, date_to_utc_end, utc_to_local_date, utcnow
+from services.miniprogram_metrics import load_miniprogram_metrics
 from utils.parsers import parse_date
 from utils.validators import sanitize_input
 
@@ -41,6 +42,18 @@ def _require_admin():
         flash('权限不足', 'error')
         return False
     return True
+
+
+def _pending_delivery_filter(_reference_time):
+    """返回真正需要人工关注的投递条件，不受页面展示上限影响。"""
+    unreviewed = db.and_(
+        AlertDelivery.review_action.is_(None),
+        AlertDelivery.reviewed_at.is_(None),
+    )
+    return db.or_(
+        db.and_(AlertDelivery.status == 'uncertain', unreviewed),
+        db.and_(AlertDelivery.status == 'failed', unreviewed),
+    )
 
 
 def _default_city():
@@ -3229,60 +3242,129 @@ def pilot_dashboard():
         return redirect(url_for('user.user_dashboard'))
 
     days = request.args.get('days', default=30, type=int)
-    days = max(1, min(days, 365))
+    # 账号级产品事件只保留 30 天，报表不得把短期数据包装成 90 天口径。
+    days = max(1, min(days, 30))
 
     now = utcnow()
     start_ts = now - timedelta(days=days)
     start_7d = now - timedelta(days=7)
     start_30d = now - timedelta(days=30)
+    excluded_test_user_ids = {
+        int(value)
+        for value in str(current_app.config.get('ANALYTICS_TEST_USER_IDS', '')).replace(',', ' ').split()
+        if value.isdigit()
+    }
+    miniprogram_metrics = load_miniprogram_metrics(
+        start_ts,
+        as_of=now,
+        excluded_user_ids=excluded_test_user_ids,
+    )
 
-    pairs_total = Pair.query.filter_by(status='active').count()
-    elders_total = Pair.query.filter(Pair.status == 'active', Pair.member_id.isnot(None)).count()
+    pair_query = Pair.query.filter(Pair.status == 'active')
+    if excluded_test_user_ids:
+        pair_query = pair_query.filter(db.or_(
+            Pair.caregiver_id.is_(None),
+            Pair.caregiver_id.notin_(excluded_test_user_ids),
+        ))
+    pairs_total = pair_query.count()
+    elders_total = pair_query.filter(Pair.member_id.isnot(None)).count()
 
     # 活跃 caregiver：近N天有 usage_events
-    active_7d = db.session.query(db.func.count(db.func.distinct(UsageEvent.user_id))).filter(
+    active_7d_query = db.session.query(db.func.count(db.func.distinct(UsageEvent.user_id))).filter(
         UsageEvent.user_id.isnot(None),
         UsageEvent.created_at >= start_7d
-    ).scalar() or 0
-    active_30d = db.session.query(db.func.count(db.func.distinct(UsageEvent.user_id))).filter(
+    )
+    active_30d_query = db.session.query(db.func.count(db.func.distinct(UsageEvent.user_id))).filter(
         UsageEvent.user_id.isnot(None),
         UsageEvent.created_at >= start_30d
-    ).scalar() or 0
+    )
+    if excluded_test_user_ids:
+        active_7d_query = active_7d_query.filter(
+            UsageEvent.user_id.notin_(excluded_test_user_ids)
+        )
+        active_30d_query = active_30d_query.filter(
+            UsageEvent.user_id.notin_(excluded_test_user_ids)
+        )
+    active_7d = active_7d_query.scalar() or 0
+    active_30d = active_30d_query.scalar() or 0
 
-    # 推送投递与CTR
-    sent = AlertDelivery.query.filter(AlertDelivery.sent_at >= start_ts, AlertDelivery.status == 'sent').count()
-    failed = AlertDelivery.query.filter(AlertDelivery.sent_at >= start_ts, AlertDelivery.status == 'failed').count()
-    clicked = AlertDelivery.query.filter(AlertDelivery.sent_at >= start_ts, AlertDelivery.clicked_at.isnot(None)).count()
+    # CTR 只比较确认 sent 的投递与点击，uncertain 点击单独展示并等待复核。
+    delivery_query = AlertDelivery.query.filter(AlertDelivery.sent_at >= start_ts)
+    if excluded_test_user_ids:
+        delivery_query = delivery_query.filter(
+            AlertDelivery.user_id.notin_(excluded_test_user_ids)
+        )
+    sent = delivery_query.filter(AlertDelivery.status == 'sent').count()
+    failed = delivery_query.filter(AlertDelivery.status == 'failed').count()
+    uncertain = delivery_query.filter(AlertDelivery.status == 'uncertain').count()
+    sending = delivery_query.filter(AlertDelivery.status == 'sending').count()
+    retry_ready = delivery_query.filter(AlertDelivery.status == 'retry_ready').count()
+    clicked = delivery_query.filter(
+        AlertDelivery.status == 'sent',
+        AlertDelivery.clicked_at.isnot(None),
+    ).count()
+    uncertain_clicked = delivery_query.filter(
+        AlertDelivery.status == 'uncertain',
+        AlertDelivery.clicked_at.isnot(None),
+    ).count()
     ctr = round(clicked / sent, 4) if sent else 0.0
+    pending_delivery_filter = _pending_delivery_filter(now)
+    review_required_count = delivery_query.filter(pending_delivery_filter).count()
+    review_deliveries = delivery_query.filter(pending_delivery_filter).order_by(
+        AlertDelivery.sent_at.desc(),
+        AlertDelivery.id.desc(),
+    ).limit(50).all()
 
+    usage_filter = []
+    if excluded_test_user_ids:
+        usage_filter.append(db.or_(
+            UsageEvent.user_id.is_(None),
+            UsageEvent.user_id.notin_(excluded_test_user_ids),
+        ))
     template_copy = UsageEvent.query.filter(
         UsageEvent.created_at >= start_ts,
-        UsageEvent.event_type == 'template_copy'
+        UsageEvent.event_type == 'template_copy',
+        *usage_filter,
     ).count()
-    template_pairs = db.session.query(db.func.count(db.func.distinct(UsageEvent.pair_id))).filter(
+    template_users = db.session.query(db.func.count(db.func.distinct(UsageEvent.user_id))).filter(
         UsageEvent.created_at >= start_ts,
         UsageEvent.event_type == 'template_copy',
-        UsageEvent.pair_id.isnot(None)
+        UsageEvent.user_id.isnot(None),
+        *usage_filter,
     ).scalar() or 0
 
     feedback_count = UsageEvent.query.filter(
         UsageEvent.created_at >= start_ts,
-        UsageEvent.event_type == 'feedback_submitted'
+        UsageEvent.event_type == 'feedback_submitted',
+        *usage_filter,
     ).count()
 
     wxoa_land = UsageEvent.query.filter(
         UsageEvent.created_at >= start_ts,
-        UsageEvent.event_type == 'wxoa_land'
+        UsageEvent.event_type == 'wxoa_land',
+        *usage_filter,
     ).count()
 
-    location_expr = db.func.coalesce(Pair.location_query, Pair.community_code).label('location')
+    # 地区卡片只展示社区编码的聚合结果，避免把自由输入地址带进运营看板。
+    location_min_count = max(
+        3,
+        int(current_app.config.get('ANALYTICS_MIN_LOCATION_COUNT', 3) or 3),
+    )
+    location_expr = Pair.community_code.label('location')
     cnt_expr = db.func.count(Pair.id).label('cnt')
-    location_rows = db.session.query(
+    location_query = db.session.query(
         location_expr,
         cnt_expr
     ).filter(
         Pair.status == 'active'
-    ).group_by(location_expr).order_by(cnt_expr.desc()).limit(20).all()
+    )
+    if excluded_test_user_ids:
+        location_query = location_query.filter(
+            Pair.caregiver_id.notin_(excluded_test_user_ids)
+        )
+    location_rows = location_query.group_by(location_expr).having(
+        cnt_expr >= location_min_count
+    ).order_by(cnt_expr.desc(), location_expr.asc()).limit(20).all()
     location_coverage = [{'location': r[0] or '', 'count': int(r[1] or 0)} for r in location_rows]
 
     return render_template(
@@ -3294,44 +3376,166 @@ def pilot_dashboard():
         active_30d=active_30d,
         push_sent=sent,
         push_failed=failed,
+        push_uncertain=uncertain,
+        push_sending=sending,
+        push_retry_ready=retry_ready,
         push_clicked=clicked,
+        push_uncertain_clicked=uncertain_clicked,
         push_ctr=ctr,
+        review_deliveries=review_deliveries,
+        review_required_count=review_required_count,
         template_copy=template_copy,
-        template_pairs=template_pairs,
+        template_users=template_users,
         feedback_count=feedback_count,
         wxoa_land=wxoa_land,
         location_coverage=location_coverage,
+        location_min_count=location_min_count,
+        miniprogram_metrics=miniprogram_metrics,
     )
+
+
+@bp.route('/analysis/pilot/deliveries/<int:delivery_id>/review', methods=['POST'], endpoint='pilot_review_delivery')
+@login_required
+def pilot_review_delivery(delivery_id):
+    """由管理员确认不明确投递，所有动作保留在投递记录和审计日志中。"""
+    if not _require_admin():
+        return redirect(url_for('user.user_dashboard'))
+
+    action = str(request.form.get('action') or '').strip()
+    if action not in {'confirm_sent', 'confirm_failed', 'allow_retry'}:
+        flash('不支持的投递复核动作', 'error')
+        return redirect(url_for('analysis.pilot_dashboard', days=30))
+
+    delivery = db.session.get(AlertDelivery, delivery_id)
+    if delivery is None:
+        flash('投递记录不存在', 'error')
+        return redirect(url_for('analysis.pilot_dashboard', days=30))
+    if delivery.status == 'sending':
+        flash('投递仍在发送中，暂不能人工复核', 'error')
+        return redirect(url_for('analysis.pilot_dashboard', days=30))
+    if delivery.status == 'retry_ready':
+        flash('投递已进入待重试队列，暂不能重复复核', 'error')
+        return redirect(url_for('analysis.pilot_dashboard', days=30))
+    if delivery.status not in {'failed', 'uncertain'}:
+        flash('当前状态不允许人工复核', 'error')
+        return redirect(url_for('analysis.pilot_dashboard', days=30))
+    if delivery.review_action is not None or delivery.reviewed_at is not None:
+        flash('本次投递已完成复核，不能重复修改结论', 'error')
+        return redirect(url_for('analysis.pilot_dashboard', days=30))
+    if delivery.clicked_at is not None and action != 'confirm_sent':
+        flash('有效点击已构成送达证据，只能确认送达', 'error')
+        return redirect(url_for('analysis.pilot_dashboard', days=30))
+
+    previous_status = delivery.status
+    previous_clicked_at = delivery.clicked_at
+    reviewed_at = utcnow()
+    if action == 'confirm_sent':
+        next_status = 'sent'
+        next_error = None
+        next_sent_at = delivery.sent_at or reviewed_at
+        message = '已确认送达'
+    elif action == 'confirm_failed':
+        next_status = 'failed'
+        next_error = '管理员已确认本次未送达；未授权自动重试'
+        next_sent_at = delivery.sent_at
+        message = '已确认未送达'
+    else:
+        next_status = 'retry_ready'
+        next_error = '管理员已确认本次未送达；允许下一轮重新发送一次'
+        next_sent_at = delivery.sent_at
+        message = '已允许下一轮重新发送'
+
+    cas_conditions = [
+        AlertDelivery.id == delivery_id,
+        AlertDelivery.status == previous_status,
+        AlertDelivery.review_action.is_(None),
+        AlertDelivery.reviewed_at.is_(None),
+    ]
+    if previous_clicked_at is None:
+        cas_conditions.append(AlertDelivery.clicked_at.is_(None))
+    else:
+        cas_conditions.append(AlertDelivery.clicked_at == previous_clicked_at)
+    changed = db.session.execute(
+        db.update(AlertDelivery)
+        .where(*cas_conditions)
+        .values(
+            status=next_status,
+            error=next_error,
+            sent_at=next_sent_at,
+            reviewed_at=reviewed_at,
+            reviewed_by_user_id=current_user.id,
+            review_action=action,
+        )
+    ).rowcount
+    if changed != 1:
+        db.session.rollback()
+        flash('投递状态刚刚发生变化，请刷新后重试', 'error')
+        return redirect(url_for('analysis.pilot_dashboard', days=30))
+    log_audit(
+        'pilot_delivery_review',
+        resource_type='alert_delivery',
+        resource_id=delivery.id,
+        metadata={
+            'action': action,
+            'previous_status': previous_status,
+            'next_status': next_status,
+        },
+    )
+    db.session.commit()
+    flash(message, 'success')
+    days = max(1, min(request.form.get('days', default=30, type=int), 30))
+    return redirect(url_for('analysis.pilot_dashboard', days=days))
 
 
 @bp.route('/analysis/pilot/export.csv', endpoint='pilot_export_csv')
 @login_required
 def pilot_export_csv():
-    """导出试点埋点（CSV）"""
+    """按本地日期、事件类型和来源导出匿名聚合 CSV。"""
     if not _require_admin():
         return redirect(url_for('user.user_dashboard'))
 
     days = request.args.get('days', default=30, type=int)
-    days = max(1, min(days, 365))
+    days = max(1, min(days, 30))
     start_ts = utcnow() - timedelta(days=days)
+    excluded_test_user_ids = {
+        int(value)
+        for value in str(
+            current_app.config.get('ANALYTICS_TEST_USER_IDS', '')
+        ).replace(',', ' ').split()
+        if value.isdigit()
+    }
 
-    events = UsageEvent.query.filter(
+    event_query = UsageEvent.query.filter(
         UsageEvent.created_at >= start_ts
-    ).order_by(UsageEvent.created_at.desc()).all()
+    )
+    if excluded_test_user_ids:
+        event_query = event_query.filter(
+            db.or_(
+                UsageEvent.user_id.is_(None),
+                UsageEvent.user_id.notin_(excluded_test_user_ids),
+            )
+        )
+
+    buckets = defaultdict(int)
+    events = event_query.order_by(
+        UsageEvent.created_at.asc(),
+        UsageEvent.id.asc(),
+    ).all()
+    for event in events:
+        local_date = utc_to_local_date(event.created_at)
+        if local_date is None:
+            continue
+        buckets[(
+            local_date.isoformat(),
+            event.event_type or '',
+            event.source or 'unknown',
+        )] += 1
 
     out = io.StringIO()
     writer = csv.writer(out)
-    writer.writerow(['created_at', 'event_type', 'user_id', 'pair_id', 'member_id', 'source', 'meta_json'])
-    for e in events:
-        writer.writerow([
-            e.created_at.isoformat() if e.created_at else '',
-            e.event_type or '',
-            e.user_id or '',
-            e.pair_id or '',
-            e.member_id or '',
-            e.source or '',
-            e.meta_json or '',
-        ])
+    writer.writerow(['local_date', 'event_type', 'source', 'event_count'])
+    for (local_date, event_type, source), count in sorted(buckets.items()):
+        writer.writerow([local_date, event_type, source, count])
 
     data = out.getvalue().encode('utf-8-sig')  # Excel-friendly
     return send_file(

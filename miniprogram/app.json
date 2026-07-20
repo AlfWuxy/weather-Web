@@ -1,18 +1,76 @@
 {
   "pages": [
-    "pages/bind-token/index",
+    "pages/home/index",
+    "pages/forecast/index",
     "pages/elders/index",
-    "pages/elder-edit/index",
+    "pages/community/index",
+    "pages/settings/index",
+    "pages/health-consent/index",
+    "pages/health-assessment/index",
+    "pages/diary/index",
+    "pages/medications/index",
+    "pages/action-checkin/index",
+    "pages/account/index",
     "pages/alerts/index",
-    "pages/template/index",
-    "pages/settings/index"
+    "pages/actions/index",
+    "pages/cooling/index",
+    "pages/gis/index",
+    "pages/transparency/index",
+    "pages/privacy/index",
+    "pages/agreement/index",
+    "pages/about/index",
+    "pages/bind-token/index",
+    "pages/elder-edit/index",
+    "pages/template/index"
   ],
   "window": {
     "navigationBarTitleText": "宜老天气通",
-    "navigationBarBackgroundColor": "#ffffff",
+    "navigationBarBackgroundColor": "#fff8f0",
     "navigationBarTextStyle": "black",
-    "backgroundColor": "#f5f7fb"
+    "backgroundColor": "#fff8f0",
+    "backgroundTextStyle": "dark",
+    "enablePullDownRefresh": false
   },
+  "tabBar": {
+    "color": "#6f6259",
+    "selectedColor": "#b64815",
+    "backgroundColor": "#fffdf9",
+    "borderStyle": "black",
+    "list": [
+      {
+        "pagePath": "pages/home/index",
+        "text": "首页",
+        "iconPath": "assets/icons/tab-home.png",
+        "selectedIconPath": "assets/icons/tab-home-selected.png"
+      },
+      {
+        "pagePath": "pages/forecast/index",
+        "text": "预报",
+        "iconPath": "assets/icons/tab-forecast.png",
+        "selectedIconPath": "assets/icons/tab-forecast-selected.png"
+      },
+      {
+        "pagePath": "pages/elders/index",
+        "text": "照护",
+        "iconPath": "assets/icons/tab-care.png",
+        "selectedIconPath": "assets/icons/tab-care-selected.png"
+      },
+      {
+        "pagePath": "pages/community/index",
+        "text": "社区",
+        "iconPath": "assets/icons/tab-community.png",
+        "selectedIconPath": "assets/icons/tab-community-selected.png"
+      },
+      {
+        "pagePath": "pages/settings/index",
+        "text": "我的",
+        "iconPath": "assets/icons/tab-settings.png",
+        "selectedIconPath": "assets/icons/tab-settings-selected.png"
+      }
+    ]
+  },
+  "sitemapLocation": "sitemap.json",
+  "__usePrivacyCheck__": true,
+  "lazyCodeLoading": "requiredComponents",
   "style": "v2"
 }
-

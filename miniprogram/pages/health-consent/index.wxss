@@ -1,0 +1,122 @@
+.consent-hero {
+  background: linear-gradient(145deg, #8c3513 0%, #6f4b3b 100%);
+}
+
+.status-card,
+.explanation-card,
+.list-card {
+  color: #5f544d;
+  font-size: 16px;
+  line-height: 1.72;
+}
+
+.status-card {
+  margin-top: 26rpx;
+  text-align: center;
+}
+
+.error-card {
+  color: #8b2d20;
+  background: #fff5f1;
+}
+
+.retry-button {
+  margin-top: 22rpx;
+}
+
+.list-card view + view {
+  margin-top: 14rpx;
+}
+
+.agreement-card {
+  margin-top: 30rpx;
+  border: 2rpx solid #e2c8b6;
+  background: #fffaf4;
+}
+
+.current-card {
+  margin-top: 30rpx;
+  border-color: #b7d8c4;
+  background: #f2faf5;
+}
+
+.current-title {
+  color: #176d40;
+  font-size: 18px;
+  font-weight: 800;
+}
+
+.current-copy {
+  margin-top: 12rpx;
+  color: #52655a;
+  font-size: 16px;
+  line-height: 1.65;
+  word-break: break-all;
+}
+
+.danger-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #9b261b;
+  border: 2rpx solid #d9a8a1;
+  background: #fff8f6;
+  font-weight: 750;
+}
+
+.withdraw-button {
+  width: 100%;
+  margin-top: 24rpx;
+}
+
+.agreement-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 18rpx;
+  min-height: 0;
+}
+
+.agreement-row checkbox {
+  flex: 0 0 auto;
+  margin-top: 5rpx;
+}
+
+.agreement-copy {
+  flex: 1;
+  color: #3e342f;
+  font-size: 16px;
+  line-height: 1.68;
+}
+
+.text-link {
+  display: inline-flex;
+  min-height: 88rpx;
+  margin-top: 14rpx;
+  padding: 12rpx 0;
+  color: #9f3a12;
+  background: transparent;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.version-text {
+  margin-top: 8rpx;
+  color: #786d65;
+  font-size: 14px;
+  line-height: 1.5;
+  word-break: break-all;
+}
+
+.consent-button,
+.cancel-button {
+  width: 100%;
+  margin-top: 20rpx;
+}
+
+.status-hint {
+  margin-top: 18rpx;
+  color: #8b2d20;
+  font-size: 15px;
+  line-height: 1.6;
+  text-align: center;
+}

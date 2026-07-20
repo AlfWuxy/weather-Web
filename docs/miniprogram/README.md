@@ -4,17 +4,17 @@
 
 ## 产品范围
 
-普通用户打开后可直接查看都昌县天气、七日预报、官方预警、行动建议、社区脆弱性、避暑点和 1 km 热暴露 GIS。照护、健康评估、健康日记和用药记录在用户主动登录并同意隐私说明后启用。
+普通用户打开后可直接查看都昌县天气、七日预报、官方预警、行动建议、社区脆弱性、避暑点和 1 km 热暴露 GIS。家人档案、天气行动评估、生活记录和日常用品服用备忘需要用户主动登录并完成一般隐私确认，首次进入时还要勾选默认未选中的健康敏感个人信息单独同意。
 
 后台用户管理、原始病历、研究导出和高权限运营操作继续留在 Web 管理面。小程序只接收聚合或去标识数据。
 
 ## 本地导入
 
 1. 安装微信开发者工具。
-2. 导入仓库根目录，开发者工具会按根目录 `project.config.json` 的 `miniprogramRoot` 只编译 `miniprogram/`。
-3. 游客调试可保留 `touristappid`；正式上传前在开发者工具中选择已认证的小程序 AppID。个人本机设置放进根目录 `project.private.config.json`，不要提交。
-4. 参考 `miniprogram/config.example.js`，在本机临时把已经备案的正式 HTTPS API 域名填入 `miniprogram/config.runtime.js`。
-5. 上传完成后立即用 `git diff -- miniprogram/config.runtime.js` 复核，并恢复为空值；禁止把真实域名或密钥提交到公开分支。
+2. 导入仓库根目录，开发者工具会按根目录 `project.config.json` 的 `miniprogramRoot` 只编译 `miniprogram/`；该受版本控制文件固定使用 `touristappid`。
+3. 在被 Git 忽略的根目录 `project.private.config.json` 中配置正式 AppID 并保留开发者工具生成的本机偏好，文件权限保持 `0600`。开发者工具会把本机私有配置与公开工程配置合并；AppSecret 绝不写入该文件。
+4. 正式分支已把公开 API 域名 `https://yilaoweather.org` 固定在 `miniprogram/config.runtime.js`，保证目标 commit 可直接编译和复现。
+5. 微信后台 `request` 合法域名、私密发布确认单和目标 commit 中的 API 域名必须一致。正式 AppID 与 AppSecret 保存到本机私密发布表单并下发受控服务器环境；AppSecret、上传密钥及第三方密钥均不得提交。
 
 ## 后端配置
 
@@ -38,11 +38,15 @@
 - `QWEATHER_BUDGET_FAIL_CLOSED=1`
 - `RATE_LIMIT_MP_PUBLIC=600 per minute`
 
-AppSecret 只允许出现在服务器环境变量。小程序包、日志、错误消息和 Git 历史都不能包含 AppSecret、QWeather key 或微信 CI 私钥。
+产品分析只使用服务端固定事件和登录后的最小匿名维度，保存 30 天；公开浏览不接入第三方统计 SDK。指标定义、事件边界和验证 SQL 见 [ANALYTICS_SPEC.md](./ANALYTICS_SPEC.md)。
+
+AppSecret 只允许出现在权限为 `0600` 且被 Git 忽略的本机私密发布表单，以及受控服务器环境变量。小程序包、开发者工具私有配置、日志、错误消息和 Git 历史都不能包含 AppSecret、QWeather key 或微信 CI 私钥。
+
+正式小程序不使用第三方生成式人工智能。正式 Web 后端固定 `FEATURE_WEB_AI=0`、`SILICONFLOW_API_KEY` 为空，发布校验会拒绝开启状态或密钥。
 
 新 Web Token 会绑定生成时的隐私版本并在 30 天后过期。历史无期限 Token 在迁移后必须轮换；隐私版本升级也会让旧 Token 返回 428。用药和求助只保存记录，不承诺自动送达。
 
-`config.runtime.js` 始终保留在仓库中且默认值为空，保证源码可以正常编译。域名为空时请求层会明确终止，不会误连占位服务。
+`config.runtime.js` 始终保留在正式小程序分支中并固定公开生产域名。请求层只允许 HTTPS 且只访问同一主机，不接受跨域绝对 URL。
 
 ## 请求模型
 
@@ -66,4 +70,6 @@ git diff --check
 
 ## 发布入口
 
-上架前按 [RELEASE_CHECKLIST.md](./RELEASE_CHECKLIST.md) 完成账号侧配置，并按 [TEST_PLAN.md](./TEST_PLAN.md) 留存验收结果。隐私文案初稿见 [PRIVACY_NOTICE_TEMPLATE.md](./PRIVACY_NOTICE_TEMPLATE.md)。
+个人主体账号持有人先按 [PERSONAL_SUBJECT_ACTION_SHEET.md](./PERSONAL_SUBJECT_ACTION_SHEET.md) 完成平台实际出现的适用实名、人脸、短信、扫码确认和必要付款步骤。项目维护者再按 [RELEASE_CHECKLIST.md](./RELEASE_CHECKLIST.md) 完成账号配置与正式门禁，并按 [TEST_PLAN.md](./TEST_PLAN.md) 留存验收结果。隐私文案见 [PRIVACY_NOTICE_TEMPLATE.md](./PRIVACY_NOTICE_TEMPLATE.md)，服务规则见 [USER_AGREEMENT_TEMPLATE.md](./USER_AGREEMENT_TEMPLATE.md)。
+
+`DEPLOY_REQUIRE_WECHAT_READY=0` 只能在本地微信开发者工具预览。远程发布脚本只接受 `DEPLOY_REQUIRE_WECHAT_READY=1`，并会在任何 SSH、上传或服务器修改前验证正式门禁。

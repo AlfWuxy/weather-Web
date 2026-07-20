@@ -65,6 +65,8 @@ backups/
 .env
 .env.*
 !.env.example
+!.env.wechat-release.example
+.secrets/
 *.pem
 *.key
 miniprogram/config.private.js

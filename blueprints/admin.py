@@ -10,6 +10,7 @@ from flask_login import current_user, login_required
 from core.extensions import db
 from core.audit import log_audit
 from core.db_models import (
+    ApiToken,
     Community,
     CoolingResource,
     HealthRiskAssessment,
@@ -500,7 +501,12 @@ def admin_edit_user(user_id):
         flash('权限不足', 'error')
         return redirect(url_for('user.user_dashboard'))
 
-    user = User.query.get_or_404(user_id)
+    user_query = User.query.filter_by(id=user_id)
+    user = (
+        user_query.with_for_update().first_or_404()
+        if request.method == 'POST'
+        else user_query.first_or_404()
+    )
 
     if request.method == 'POST':
         # 验证用户名
@@ -546,6 +552,22 @@ def admin_edit_user(user_id):
                 flash(result, 'error')
                 return redirect(url_for('admin.admin_edit_user', user_id=user_id))
             user.set_password(result)
+            user.auth_version = int(user.auth_version) + 1
+            revoked_at = utcnow()
+            ApiToken.query.filter(
+                ApiToken.user_id == user.id,
+                ApiToken.revoked_at.is_(None),
+            ).update(
+                {ApiToken.revoked_at: revoked_at},
+                synchronize_session=False,
+            )
+            MiniProgramSession.query.filter(
+                MiniProgramSession.user_id == user.id,
+                MiniProgramSession.revoked_at.is_(None),
+            ).update(
+                {MiniProgramSession.revoked_at: revoked_at},
+                synchronize_session=False,
+            )
 
         role = request.form.get('role', user.role or 'user')
         if role not in ['admin', 'user', 'caregiver', 'community']:
