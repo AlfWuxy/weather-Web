@@ -1,6 +1,11 @@
+<!-- WECHAT_RELEASE_STATUS: final -->
+<!-- WECHAT_MINIPROGRAM_NAME: 宜老平安 -->
+<!-- WECHAT_SERVICE_NAME: 宜老天气通 -->
+<!-- WECHAT_EFFECTIVE_DATE: 2026-07-19 -->
+<!-- WECHAT_PRIVACY_VERSION: 2026-07-18 -->
 <view class="page-shell">
   <view class="hero privacy-hero">
-    <view class="hero-kicker">隐私与数据边界 · 发布候选版</view>
+    <view class="hero-kicker">宜老平安小程序 · 宜老天气通服务 · 隐私与数据边界</view>
     <view class="hero-title">先解释清楚，再请你决定。</view>
     <view class="hero-subtitle">公开天气无需登录。照护功能涉及个人资料时，会单独说明用途并征得同意。</view>
   </view>
@@ -64,9 +69,9 @@
   <navigator class="secondary-button privacy-link" url="/pages/health-consent/index?manage=1" hover-class="button-pressed">管理健康资料单独同意</navigator>
   <view class="card operator-card">
     <view class="card-title">运营与联系</view>
-    <view class="privacy-text">可在“我的 → 账号、隐私与注销”管理账号，并通过微信小程序右上角菜单中的“反馈与投诉”提交问题。运营者姓名、专用联系邮箱与生效日期会在正式提交前同步到微信平台隐私保护指引，以平台展示的认证信息为准。</view>
+    <view class="privacy-text">可在“我的 → 账号、隐私与注销”管理账号，并通过微信小程序右上角菜单中的“反馈与投诉”提交问题。运营者姓名、专用联系邮箱与生效日期以微信公众平台隐私保护指引展示的认证信息为准。</view>
   </view>
-  <view class="privacy-version">候选版本：2026-07-18 · 正式提交审核时同步冻结生效日期、隐私版本、目标 commit hash 和页面内容 hash；重要变化会再次请你阅读并主动同意。</view>
+  <view class="privacy-version">生效日期：2026-07-19 · 隐私版本：2026-07-18 · 重要变化会再次请你阅读并主动同意。</view>
   <navigator class="secondary-button privacy-link" url="/pages/agreement/index" hover-class="button-pressed">查看用户协议</navigator>
   <navigator class="secondary-button privacy-link" url="/pages/transparency/index" hover-class="button-pressed">查看计算方法</navigator>
 </view>
