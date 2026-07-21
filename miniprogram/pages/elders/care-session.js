@@ -397,6 +397,13 @@ async function guardHealthSensitivePage(page, loader) {
       allowed = await ensureHealthConsent();
     } catch (error) {
       if (page._unloaded !== true && page._hidden !== true && !isUnauthorized(error)) {
+        if (typeof page.onHealthConsentGuardError === 'function') {
+          try {
+            page.onHealthConsentGuardError(error);
+          } catch (callbackError) {
+            // 页面错误态写回失败时仍保持门禁关闭，不继续读取私密资料。
+          }
+        }
         wx.showToast({ title: '健康资料授权状态核验失败', icon: 'none' });
       }
       return false;

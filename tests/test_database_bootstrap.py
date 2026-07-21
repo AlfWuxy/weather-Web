@@ -69,6 +69,7 @@ def test_init_db_bootstraps_fresh_database_and_is_idempotent(monkeypatch, tmp_pa
     first_result = runner.invoke(args=['init-db'])
     assert first_result.exit_code == 0, first_result.output
     assert 'Database initialized.' in first_result.output
+    assert app.logger.disabled is False
     _assert_schema_is_at_head(app)
     assert app.test_client().get('/register').status_code == 200
 
@@ -84,6 +85,7 @@ def test_init_db_bootstraps_fresh_database_and_is_idempotent(monkeypatch, tmp_pa
 
     second_result = runner.invoke(args=['init-db'])
     assert second_result.exit_code == 0, second_result.output
+    assert app.logger.disabled is False
     _assert_schema_is_at_head(app)
     with app.app_context():
         assert User.query.filter_by(username='bootstrap-existing-user').count() == 1
@@ -104,6 +106,93 @@ def test_init_db_recovers_empty_alembic_version_shell(monkeypatch, tmp_path):
     result = app.test_cli_runner().invoke(args=['init-db'])
     assert result.exit_code == 0, result.output
     _assert_schema_is_at_head(app)
+
+
+def test_cooling_coordinate_verification_migration_is_idempotent_and_resets_history(
+    monkeypatch,
+    tmp_path,
+):
+    """历史坐标保持未核验，迁移中断重试也应补齐全部来源字段。"""
+    database_path = tmp_path / 'cooling-coordinate-verification.db'
+    app = _create_test_app(monkeypatch, database_path)
+    initialized = app.test_cli_runner().invoke(args=['init-db'])
+    assert initialized.exit_code == 0, initialized.output
+    alembic_config = _alembic_config(app)
+
+    from core.extensions import db
+
+    with app.app_context():
+        db.session.remove()
+        db.engine.dispose()
+    command.downgrade(alembic_config, '0025_health_sensitive_consent')
+
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            '''INSERT INTO cooling_resources (
+                   community_code, name, latitude, longitude, is_active
+               ) VALUES (?, ?, ?, ?, ?)''',
+            ('测试社区', '历史坐标点位', 29.27, 116.20, 1),
+        )
+        # 模拟迁移只新增第一列后中断，下一次升级必须安全补齐。
+        connection.execute(
+            'ALTER TABLE cooling_resources ADD COLUMN coordinate_system VARCHAR(16)'
+        )
+        connection.execute(
+            '''UPDATE cooling_resources
+               SET coordinate_system = 'GCJ-02'
+               WHERE name = '历史坐标点位' '''
+        )
+        connection.commit()
+
+    command.upgrade(alembic_config, 'head')
+    command.upgrade(alembic_config, 'head')
+
+    with sqlite3.connect(database_path) as connection:
+        columns = {
+            row[1]: row
+            for row in connection.execute('PRAGMA table_info(cooling_resources)')
+        }
+        verification = connection.execute(
+            '''SELECT coordinate_system, coordinate_source, coordinate_verified_at
+               FROM cooling_resources WHERE name = '历史坐标点位' '''
+        ).fetchone()
+        revision = connection.execute(
+            'SELECT version_num FROM alembic_version'
+        ).fetchone()[0]
+
+    assert {
+        'coordinate_system',
+        'coordinate_source',
+        'coordinate_verified_at',
+    } <= set(columns)
+    assert verification == (None, None, None)
+    assert revision == '0026_cooling_coordinate_verify'
+
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            '''UPDATE cooling_resources
+               SET coordinate_system = 'GCJ-02',
+                   coordinate_source = '管理员现场核验',
+                   coordinate_verified_at = '2026-07-21 10:00:00'
+               WHERE name = '历史坐标点位' '''
+        )
+        connection.commit()
+
+    with pytest.raises(RuntimeError, match='nonempty_verification_count=1'):
+        command.downgrade(alembic_config, '0025_health_sensitive_consent')
+    with sqlite3.connect(database_path) as connection:
+        protected_revision = connection.execute(
+            'SELECT version_num FROM alembic_version'
+        ).fetchone()[0]
+        protected_columns = {
+            row[1] for row in connection.execute('PRAGMA table_info(cooling_resources)')
+        }
+    assert protected_revision == '0026_cooling_coordinate_verify'
+    assert set(COLUMN for COLUMN in (
+        'coordinate_system',
+        'coordinate_source',
+        'coordinate_verified_at',
+    )) <= protected_columns
 
 
 def test_miniprogram_migration_round_trip_removes_member_id(monkeypatch, tmp_path):
@@ -936,7 +1025,7 @@ def test_head_downgrade_preflight_preserves_newer_columns_for_opted_out_pair(
     assert 'elder_actions' in daily_status_columns
     assert 'dedupe_key' in weather_alert_columns
     assert kept == [(owner_id, pair_id, None, 'head 降级前已关闭关联')]
-    assert revision == '0025_health_sensitive_consent'
+    assert revision == '0026_cooling_coordinate_verify'
 
 
 def test_head_to_0017_round_trip_succeeds_for_representable_debrief(
@@ -1031,7 +1120,7 @@ def test_head_to_0017_round_trip_succeeds_for_representable_debrief(
         ).fetchone()[0]
 
     assert restored == [(owner_id, pair_id, pair_id, '可以由旧结构表达')]
-    assert restored_revision == '0025_health_sensitive_consent'
+    assert restored_revision == '0026_cooling_coordinate_verify'
 
 
 def test_elder_actions_migration_keeps_caregiver_actions_separate(
@@ -1109,7 +1198,7 @@ def test_elder_actions_migration_keeps_caregiver_actions_separate(
 
     assert 'elder_actions' in guarded_columns
     assert guarded_values == ('["remind"]', '["drink_water"]')
-    assert guarded_revision == '0025_health_sensitive_consent'
+    assert guarded_revision == '0026_cooling_coordinate_verify'
 
     command.downgrade(alembic_config, '0018_debrief_owner_scope')
     with sqlite3.connect(database_path) as connection:

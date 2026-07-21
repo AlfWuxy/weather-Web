@@ -510,12 +510,15 @@ class CoolingResource(db.Model):
     address_hint = db.Column(db.String(200))
     latitude = db.Column(db.Float)
     longitude = db.Column(db.Float)
+    coordinate_system = db.Column(db.String(16))
+    coordinate_source = db.Column(db.String(500))
+    coordinate_verified_at = db.Column(db.DateTime)
     open_hours = db.Column(db.String(100))
     has_ac = db.Column(db.Boolean, default=False)
     is_accessible = db.Column(db.Boolean, default=False)
     contact_hint = db.Column(db.String(100))
     notes = db.Column(db.Text)
-    is_active = db.Column(db.Boolean, default=True)
+    is_active = db.Column(db.Boolean, default=False)
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
     __table_args__ = (

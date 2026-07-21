@@ -17,6 +17,11 @@ function collectFiles(directory, suffix, result) {
 test('app 首屏、隐私检查与 tabBar 完整', () => {
   assert.equal(appConfig.pages[0], 'pages/home/index');
   assert.equal(appConfig.__usePrivacyCheck__, true);
+  assert.deepEqual(appConfig.requiredPrivateInfos, ['getLocation']);
+  assert.match(
+    appConfig.permission['scope.userLocation'].desc,
+    /每次主动确认.*本次.*直线距离/
+  );
   assert.deepEqual(appConfig.tabBar.list.map((item) => item.pagePath), [
     'pages/home/index',
     'pages/forecast/index',
@@ -24,6 +29,24 @@ test('app 首屏、隐私检查与 tabBar 完整', () => {
     'pages/community/index',
     'pages/settings/index',
   ]);
+});
+
+test('避暑页只使用单次定位且未引入持续或后台定位', () => {
+  const coolingScript = fs.readFileSync(path.join(miniRoot, 'pages/cooling/index.js'), 'utf8');
+  const runtimeScripts = [];
+  collectFiles(miniRoot, '.js', runtimeScripts);
+  const runtimeText = runtimeScripts
+    .filter((file) => !path.relative(miniRoot, file).startsWith(`tests${path.sep}`))
+    .map((file) => fs.readFileSync(file, 'utf8'))
+    .join('\n');
+
+  assert.match(coolingScript, /wx\.showModal\(/);
+  assert.match(coolingScript, /wx\.getLocation\(\{[\s\S]*?type:\s*'gcj02'/);
+  assert.doesNotMatch(coolingScript, /setStorage|request\(|reportAnalytics|sendSocketMessage/);
+  assert.doesNotMatch(
+    runtimeText,
+    /startLocationUpdateBackground|startLocationUpdate|onLocationChange|stopLocationUpdate/
+  );
 });
 
 test('tabBar 默认与选中图标均存在且视觉资源不同', () => {

@@ -969,6 +969,14 @@ def _seed_interrupted_activation_guard(
 
 def _configure_formal_smoke(transaction, *, provider='QWeather'):
     """为激活事务准备完全离线的正式天气烟测桩。"""
+    runtime_log_helper = transaction['state_dir'] / 'runtime-log-boundary-test-helper'
+    _write_executable(
+        runtime_log_helper,
+        "#!/bin/sh\nexit 0\n",
+    )
+    transaction['env']['RUNTIME_LOG_BOUNDARY_TEST_HELPER'] = str(
+        runtime_log_helper
+    )
     private_key = transaction['qweather_private_dir'] / 'qweather-formal-current.pem'
     pending_key = (
         transaction['qweather_private_dir']
@@ -2570,6 +2578,143 @@ def test_formal_activation_rejects_release_commit_metadata_mismatch_before_mutat
     assert transaction['current_link'].resolve() == transaction['old_release'].resolve()
     assert _database_value(transaction['database_file']) == 'old'
     assert not counter_file.exists()
+
+
+def test_formal_runtime_log_guard_runs_after_lock_before_capture_and_mutation(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    _configure_formal_smoke(transaction)
+    lock_marker = tmp_path / 'deploy-lock-acquired'
+    audit_file = tmp_path / 'runtime-log-guard-audit.json'
+    fake_flock = tmp_path / 'fake-bin' / 'flock'
+    _write_executable(
+        fake_flock,
+        """#!/bin/sh
+set -eu
+[ "$1" = "-n" ]
+[ "$2" = "9" ]
+: > "$FAKE_DEPLOY_LOCK_ACQUIRED"
+""",
+    )
+    helper = tmp_path / 'runtime-log-boundary-order-helper'
+    _write_executable(
+        helper,
+        f"""#!/usr/bin/env python3
+import json
+import os
+import sqlite3
+import sys
+from pathlib import Path
+
+lock_path, transaction_path, mutation_started = sys.argv[1:]
+current_link = Path(os.environ['CURRENT_LINK'])
+database = Path({str(transaction['database_file'])!r})
+connection = sqlite3.connect(database)
+try:
+    database_value = connection.execute(
+        'SELECT value FROM release_state'
+    ).fetchone()[0]
+finally:
+    connection.close()
+event = {{
+    'lock_argument': lock_path,
+    'lock_file_exists': Path(lock_path).is_file(),
+    'flock_marker_exists': Path(
+        os.environ['FAKE_DEPLOY_LOCK_ACQUIRED']
+    ).is_file(),
+    'transaction_exists': Path(transaction_path).exists(),
+    'mutation_started': mutation_started,
+    'current_is_old': current_link.resolve() == Path(
+        {str(transaction['old_release'])!r}
+    ).resolve(),
+    'database_value': database_value,
+    'live_env_is_old': 'RELEASE_VALUE=old' in Path(
+        os.environ['ENV_FILE']
+    ).read_text(encoding='utf-8'),
+}}
+Path({str(audit_file)!r}).write_text(
+    json.dumps(event, sort_keys=True),
+    encoding='utf-8',
+)
+if not all((
+    event['lock_file_exists'],
+    event['flock_marker_exists'],
+    not event['transaction_exists'],
+    event['mutation_started'] == '0',
+    event['current_is_old'],
+    event['database_value'] == 'old',
+    event['live_env_is_old'],
+)):
+    raise SystemExit(91)
+""",
+    )
+    transaction['env'].update({
+        'FLOCK_BIN': str(fake_flock),
+        'FAKE_DEPLOY_LOCK_ACQUIRED': str(lock_marker),
+        'RUNTIME_LOG_BOUNDARY_TEST_HELPER': str(helper),
+        # helper 成功后让 capture_previous_state 失败，避免进入发布 mutation。
+        'FAKE_FAIL_LOAD_STATE_QUERY': 'case-weather-backup.timer',
+    })
+
+    result = _run_activation(transaction)
+
+    assert result.returncode != 0
+    assert '无法可靠读取 systemd 单元 LoadState' in result.stderr
+    assert json.loads(audit_file.read_text(encoding='utf-8')) == {
+        'lock_argument': str(transaction['release_root'] / 'deploy.lock'),
+        'lock_file_exists': True,
+        'flock_marker_exists': True,
+        'transaction_exists': False,
+        'mutation_started': '0',
+        'current_is_old': True,
+        'database_value': 'old',
+        'live_env_is_old': True,
+    }
+    assert transaction['current_link'].resolve() == transaction['old_release'].resolve()
+    assert _database_value(transaction['database_file']) == 'old'
+
+
+def test_formal_runtime_log_guard_failure_leaves_production_state_unchanged(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    _configure_formal_smoke(transaction)
+    helper = tmp_path / 'runtime-log-boundary-failing-helper'
+    _write_executable(helper, "#!/bin/sh\nexit 47\n")
+    transaction['env']['RUNTIME_LOG_BOUNDARY_TEST_HELPER'] = str(helper)
+    live_env_before = (transaction['state_dir'] / '.env').read_bytes()
+    staged_env_before = (transaction['new_release'] / 'staged.env').read_bytes()
+    systemctl_before = (
+        transaction['systemctl_log'].read_bytes()
+        if transaction['systemctl_log'].exists()
+        else b''
+    )
+
+    result = _run_activation(transaction)
+
+    assert result.returncode == 47
+    assert transaction['current_link'].resolve() == transaction['old_release'].resolve()
+    assert _database_value(transaction['database_file']) == 'old'
+    assert (transaction['state_dir'] / '.env').read_bytes() == live_env_before
+    assert (transaction['new_release'] / 'staged.env').read_bytes() == staged_env_before
+    assert not list(
+        (transaction['state_dir'] / 'backups' / 'deploy-transactions').iterdir()
+    )
+    systemctl_after = (
+        transaction['systemctl_log'].read_bytes()
+        if transaction['systemctl_log'].exists()
+        else b''
+    )
+    assert systemctl_after == systemctl_before
+
+
+def test_formal_runtime_log_guard_forces_local_probe_to_bypass_proxy():
+    """本机日志零增长探针不得被 HTTPS_PROXY 绕到代理或公网。"""
+    script = ACTIVATE_SCRIPT.read_text(encoding='utf-8')
+    guard = script.split('verify_formal_runtime_log_boundary() {', 1)[1].split(
+        '\n}',
+        1,
+    )[0]
+
+    assert "--noproxy '*'" in guard
+    assert '--resolve yilaoweather.org:443:127.0.0.1' in guard
 
 
 def test_durable_checkpoints_precede_mutation_and_the_only_weather_request(tmp_path):

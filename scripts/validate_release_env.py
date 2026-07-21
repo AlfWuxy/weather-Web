@@ -116,6 +116,7 @@ WECHAT_FORM_REQUIRED_KEYS = (
     "WX_MINIPROGRAM_PRIVACY_VERSION",
     "FEATURE_WXPUSHER",
     "FEATURE_AUDIT_LOGS",
+    "FEATURE_STRUCTURED_LOGS",
     "FEATURE_HEAT_EXPOSURE_GIS",
     "QWEATHER_DEDICATED_CREDENTIAL_CONFIRMED",
     "QWEATHER_CONSOLE_USAGE_MONTH",
@@ -156,7 +157,7 @@ WECHAT_CATEGORY_EVIDENCE_MAX_AGE = timedelta(hours=24)
 WECHAT_RELEASE_FORM_MAX_BYTES = 64 * 1024
 WECHAT_CATEGORY_EVIDENCE_MAX_BYTES = 20 * 1024 * 1024
 WECHAT_CATEGORY_NO_EXTRA_QUALIFICATION = "no_extra_institutional_qualification"
-WECHAT_EXPECTED_RELEASE_VERSION = "1.0.0"
+WECHAT_EXPECTED_RELEASE_VERSION = "1.1.0"
 WECHAT_EXPECTED_REQUEST_DOMAIN = "https://yilaoweather.org"
 WECHAT_EXPECTED_RELEASE_MARKER_COUNT = 26
 EXPECTED_PLATFORM_NAME = "宜老平安"
@@ -647,7 +648,7 @@ def _validate_wechat_release_freeze(values):
         if not SEMVER_PATTERN.fullmatch(release_version):
             errors.append("WECHAT_RELEASE_VERSION 必须是合法的 SemVer 版本号。")
         elif release_version != WECHAT_EXPECTED_RELEASE_VERSION:
-            errors.append("WECHAT_RELEASE_VERSION 当前正式首发版本必须为 1.0.0。")
+            errors.append("WECHAT_RELEASE_VERSION 当前候选版本必须为 1.1.0。")
 
     target_commit = values.get("WECHAT_TARGET_COMMIT_SHA", "")
     if target_commit and not LOWER_COMMIT_SHA_PATTERN.fullmatch(target_commit):
@@ -1158,6 +1159,8 @@ def validate_wechat_release_form(
         errors.append("FEATURE_WXPUSHER 只能是 0 或 1。")
     if values.get("FEATURE_AUDIT_LOGS", "") not in {"", "0", "1"}:
         errors.append("FEATURE_AUDIT_LOGS 只能是 0 或 1。")
+    if values.get("FEATURE_STRUCTURED_LOGS", "") not in {"", "0", "1"}:
+        errors.append("FEATURE_STRUCTURED_LOGS 只能是 0 或 1。")
     if appsecret_production_safe not in {"0", "1"}:
         errors.append(
             "WECHAT_APPSECRET_PRODUCTION_SAFE_CONFIRMED 只能是 0 或 1。"
@@ -1302,9 +1305,17 @@ def validate_wechat_release_form(
         ):
             errors.append("WXPUSHER_APP_TOKEN 格式或长度异常。")
         if values.get("FEATURE_WXPUSHER") != "0":
-            errors.append("1.0.0 正式首发必须固定 FEATURE_WXPUSHER=0。")
+            errors.append("1.1.0 正式发布必须固定 FEATURE_WXPUSHER=0。")
         if values.get("FEATURE_AUDIT_LOGS") != "0":
-            errors.append("1.0.0 正式首发必须固定 FEATURE_AUDIT_LOGS=0。")
+            errors.append("1.1.0 正式发布必须固定 FEATURE_AUDIT_LOGS=0。")
+        if values.get("FEATURE_STRUCTURED_LOGS") != "1":
+            errors.append("1.1.0 正式发布必须固定 FEATURE_STRUCTURED_LOGS=1。")
+        if values.get("SENTRY_DSN", ""):
+            errors.append("1.1.0 正式发布必须清空 SENTRY_DSN。")
+        if values.get("SENTRY_TRACES_SAMPLE_RATE", "") != "0":
+            errors.append("1.1.0 正式发布必须固定 SENTRY_TRACES_SAMPLE_RATE=0。")
+        if values.get("SENTRY_SEND_PII", "") != "0":
+            errors.append("1.1.0 正式发布必须固定 SENTRY_SEND_PII=0。")
         if wxpusher_token:
             errors.append("FEATURE_WXPUSHER=0 时必须清空 WXPUSHER_APP_TOKEN。")
         contact_email = values.get("WECHAT_CONTACT_EMAIL", "")
@@ -1638,6 +1649,13 @@ def validate_release_env(
         errors.append("生产环境必须显式设置 WECHAT_FORMAL_RUNTIME=0 或 1。")
     if wechat_formal_runtime == "1" and debug_raw not in {"false", "0"}:
         errors.append("WECHAT_FORMAL_RUNTIME=1 时必须显式设置 DEBUG=false。")
+    if wechat_formal_runtime == "1":
+        if values.get("SENTRY_DSN", ""):
+            errors.append("微信正式运行态必须清空 SENTRY_DSN。")
+        if values.get("SENTRY_TRACES_SAMPLE_RATE", "") != "0":
+            errors.append("微信正式运行态必须固定 SENTRY_TRACES_SAMPLE_RATE=0。")
+        if values.get("SENTRY_SEND_PII", "") != "0":
+            errors.append("微信正式运行态必须固定 SENTRY_SEND_PII=0。")
     if require_wechat and wechat_formal_runtime != "1":
         errors.append("微信正式发布必须固定 WECHAT_FORMAL_RUNTIME=1。")
 
@@ -1662,6 +1680,8 @@ def validate_release_env(
             errors.append("微信正式发布必须关闭 FEATURE_WEB_AI。")
         if values.get("FEATURE_AUDIT_LOGS", "") != "0":
             errors.append("微信正式发布必须固定 FEATURE_AUDIT_LOGS=0。")
+        if values.get("FEATURE_STRUCTURED_LOGS", "") != "1":
+            errors.append("微信正式发布必须固定 FEATURE_STRUCTURED_LOGS=1。")
         if values.get("SILICONFLOW_API_KEY", ""):
             errors.append("微信正式发布必须清空 SILICONFLOW_API_KEY。")
         if values.get("SILICONFLOW_API_BASE", "https://api.siliconflow.cn/v1") != "https://api.siliconflow.cn/v1":
@@ -1832,7 +1852,7 @@ def validate_release_env(
     elif wxpusher_token and not wxpusher_ready:
         errors.append("WXPUSHER_APP_TOKEN 格式或长度异常。")
     if require_wechat and feature_wxpusher != "0":
-        errors.append("1.0.0 微信正式发布必须固定 FEATURE_WXPUSHER=0。")
+        errors.append("1.1.0 微信正式发布必须固定 FEATURE_WXPUSHER=0。")
     return {
         "ok": not errors,
         "wechat_ready": wechat_ready,

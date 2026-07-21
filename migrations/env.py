@@ -15,7 +15,7 @@ from core.extensions import db  # noqa: E402
 app = create_app()
 
 config = context.config
-fileConfig(config.config_file_name)
+fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 config.set_main_option('sqlalchemy.url', app.config.get('SQLALCHEMY_DATABASE_URI'))
 target_metadata = db.metadata

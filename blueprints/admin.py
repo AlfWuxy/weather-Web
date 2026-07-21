@@ -2,6 +2,7 @@
 """Admin routes."""
 import json
 import logging
+import math
 from datetime import datetime, timedelta
 
 from flask import Blueprint, current_app, flash, redirect, render_template, request, url_for
@@ -29,6 +30,93 @@ from utils.validators import (
 logger = logging.getLogger(__name__)
 
 bp = Blueprint('admin', __name__)
+
+COOLING_GCJ02_CENTER_LATITUDE = 29.27
+COOLING_GCJ02_CENTER_LONGITUDE = 116.20
+COOLING_GCJ02_MAX_DISTANCE_KM = 80.0
+
+
+def _coordinate_distance_km(latitude, longitude):
+    """计算资源点到都昌服务中心的球面距离。"""
+    earth_radius_km = 6371.0088
+    center_latitude = math.radians(COOLING_GCJ02_CENTER_LATITUDE)
+    point_latitude = math.radians(latitude)
+    latitude_delta = point_latitude - center_latitude
+    longitude_delta = math.radians(longitude - COOLING_GCJ02_CENTER_LONGITUDE)
+    value = (
+        math.sin(latitude_delta / 2) ** 2
+        + math.cos(center_latitude)
+        * math.cos(point_latitude)
+        * math.sin(longitude_delta / 2) ** 2
+    )
+    return earth_radius_km * 2 * math.atan2(math.sqrt(value), math.sqrt(max(0.0, 1 - value)))
+
+
+def _parse_cooling_coordinates(latitude_raw, longitude_raw):
+    """校验避暑资源 GCJ-02 坐标，空值必须成对出现。"""
+    latitude_text = str(latitude_raw or '').strip()
+    longitude_text = str(longitude_raw or '').strip()
+    if bool(latitude_text) != bool(longitude_text):
+        raise ValueError('coordinates_must_be_paired')
+    if not latitude_text:
+        return None, None
+
+    latitude = parse_float(latitude_text)
+    longitude = parse_float(longitude_text)
+    if (
+        latitude is None
+        or longitude is None
+        or not math.isfinite(latitude)
+        or not math.isfinite(longitude)
+        or not -90 <= latitude <= 90
+        or not -180 <= longitude <= 180
+    ):
+        raise ValueError('invalid_coordinates')
+    if _coordinate_distance_km(latitude, longitude) > COOLING_GCJ02_MAX_DISTANCE_KM:
+        raise ValueError('outside_duchang_service_area')
+    return latitude, longitude
+
+
+def _parse_cooling_coordinate_submission(form, existing=None):
+    """解析坐标核验表单，并让任何来源或坐标变更重新取得回执。"""
+    latitude, longitude = _parse_cooling_coordinates(
+        form.get('latitude'),
+        form.get('longitude'),
+    )
+    if latitude is None:
+        return None, None, None, None, None
+
+    coordinate_system = sanitize_input(
+        form.get('coordinate_system'),
+        max_length=16,
+    )
+    coordinate_source = sanitize_input(
+        form.get('coordinate_source'),
+        max_length=500,
+    )
+    if coordinate_system != 'GCJ-02':
+        raise ValueError('coordinate_system_must_be_gcj02')
+    if not coordinate_source:
+        raise ValueError('coordinate_source_required')
+
+    verified_at = None
+    if parse_bool(form.get('coordinate_verified'), default=False):
+        unchanged = bool(
+            existing is not None
+            and existing.latitude == latitude
+            and existing.longitude == longitude
+            and existing.coordinate_system == coordinate_system
+            and existing.coordinate_source == coordinate_source
+            and existing.coordinate_verified_at is not None
+        )
+        verified_at = existing.coordinate_verified_at if unchanged else utcnow()
+    return (
+        latitude,
+        longitude,
+        coordinate_system,
+        coordinate_source,
+        verified_at,
+    )
 
 
 @bp.route('/admin', endpoint='admin_dashboard')
@@ -723,7 +811,7 @@ def admin_edit_community(community_id):
         flash('权限不足', 'error')
         return redirect(url_for('user.user_dashboard'))
 
-    community = Community.query.get_or_404(community_id)
+    community = db.get_or_404(Community, community_id)
 
     if request.method == 'POST':
         name = sanitize_input(request.form.get('name'), max_length=100)
@@ -801,19 +889,37 @@ def admin_add_cooling_resource():
             flash('请填写社区和名称', 'error')
             return redirect(url_for('admin.admin_add_cooling_resource'))
 
+        try:
+            (
+                latitude,
+                longitude,
+                coordinate_system,
+                coordinate_source,
+                coordinate_verified_at,
+            ) = _parse_cooling_coordinate_submission(request.form)
+        except ValueError:
+            flash(
+                '坐标必须成对填写并位于都昌周边 80 公里内；填写坐标时请选择 GCJ-02 并注明来源',
+                'error',
+            )
+            return redirect(url_for('admin.admin_add_cooling_resource'))
+
         resource = CoolingResource(
             community_code=community_code,
             name=name,
             resource_type=sanitize_input(request.form.get('resource_type'), max_length=50),
             address_hint=sanitize_input(request.form.get('address_hint'), max_length=200),
-            latitude=parse_float(request.form.get('latitude')),
-            longitude=parse_float(request.form.get('longitude')),
+            latitude=latitude,
+            longitude=longitude,
+            coordinate_system=coordinate_system,
+            coordinate_source=coordinate_source,
+            coordinate_verified_at=coordinate_verified_at,
             open_hours=sanitize_input(request.form.get('open_hours'), max_length=100),
             has_ac=parse_bool(request.form.get('has_ac'), default=False),
             is_accessible=parse_bool(request.form.get('is_accessible'), default=False),
             contact_hint=sanitize_input(request.form.get('contact_hint'), max_length=100),
             notes=sanitize_input(request.form.get('notes'), max_length=500),
-            is_active=parse_bool(request.form.get('is_active'), default=True)
+            is_active=parse_bool(request.form.get('is_active'), default=False)
         )
         db.session.add(resource)
         db.session.commit()
@@ -832,7 +938,7 @@ def admin_edit_cooling_resource(resource_id):
         flash('权限不足', 'error')
         return redirect(url_for('user.user_dashboard'))
 
-    resource = CoolingResource.query.get_or_404(resource_id)
+    resource = db.get_or_404(CoolingResource, resource_id)
     if request.method == 'POST':
         community_code = sanitize_input(request.form.get('community_code'), max_length=100)
         name = sanitize_input(request.form.get('name'), max_length=120)
@@ -840,18 +946,36 @@ def admin_edit_cooling_resource(resource_id):
             flash('请填写社区和名称', 'error')
             return redirect(url_for('admin.admin_edit_cooling_resource', resource_id=resource_id))
 
+        try:
+            (
+                latitude,
+                longitude,
+                coordinate_system,
+                coordinate_source,
+                coordinate_verified_at,
+            ) = _parse_cooling_coordinate_submission(request.form, existing=resource)
+        except ValueError:
+            flash(
+                '坐标必须成对填写并位于都昌周边 80 公里内；填写坐标时请选择 GCJ-02 并注明来源',
+                'error',
+            )
+            return redirect(url_for('admin.admin_edit_cooling_resource', resource_id=resource_id))
+
         resource.community_code = community_code
         resource.name = name
         resource.resource_type = sanitize_input(request.form.get('resource_type'), max_length=50)
         resource.address_hint = sanitize_input(request.form.get('address_hint'), max_length=200)
-        resource.latitude = parse_float(request.form.get('latitude'))
-        resource.longitude = parse_float(request.form.get('longitude'))
+        resource.latitude = latitude
+        resource.longitude = longitude
+        resource.coordinate_system = coordinate_system
+        resource.coordinate_source = coordinate_source
+        resource.coordinate_verified_at = coordinate_verified_at
         resource.open_hours = sanitize_input(request.form.get('open_hours'), max_length=100)
         resource.has_ac = parse_bool(request.form.get('has_ac'), default=False)
         resource.is_accessible = parse_bool(request.form.get('is_accessible'), default=False)
         resource.contact_hint = sanitize_input(request.form.get('contact_hint'), max_length=100)
         resource.notes = sanitize_input(request.form.get('notes'), max_length=500)
-        resource.is_active = parse_bool(request.form.get('is_active'), default=True)
+        resource.is_active = parse_bool(request.form.get('is_active'), default=False)
 
         db.session.commit()
         flash('避暑资源已更新', 'success')

@@ -458,7 +458,7 @@ def test_finalize_accepts_one_dotenv_quote_layer(tmp_path):
         WECHAT_SERVICE_NAME=f"'{contract.EXPECTED_SERVICE_NAME}'",
         WECHAT_EFFECTIVE_DATE=f"'{EFFECTIVE_DATE}'",
         WX_MINIPROGRAM_PRIVACY_VERSION=f'"{PRIVACY_VERSION}"',
-        WECHAT_RELEASE_VERSION="'1.0.0'",
+        WECHAT_RELEASE_VERSION=f"'{contract.EXPECTED_RELEASE_VERSION}'",
         WECHAT_FORM_READY="'0'",
         WECHAT_CATEGORY_CONFIRMED='"0"',
     )

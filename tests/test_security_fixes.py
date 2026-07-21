@@ -9,6 +9,8 @@
 4. 时区处理
 """
 import os
+import json
+import re
 import pytest
 from datetime import datetime, timezone
 
@@ -365,6 +367,49 @@ def test_structured_logs_redact_action_and_tracking_tokens(app, client, monkeypa
 
     assert any('"path": "/e/<token>"' in message for message in messages)
     assert all('action-secret' not in message for message in messages)
+
+
+def test_structured_logs_use_server_request_id_and_exclude_request_content(
+    app,
+    client,
+    monkeypatch,
+):
+    """请求日志只使用服务端编号，且不记录正文、网络地址或请求头。"""
+    sentinels = {
+        'external_request_id': 'EXTERNAL_REQUEST_ID_SENTINEL_7F5A',
+        'body': 'REQUEST_BODY_SENTINEL_9C2D',
+        'query': 'QUERY_SENTINEL_51B8',
+        'ip': '198.51.100.77',
+        'user_agent': 'USER_AGENT_SENTINEL_84E1',
+        'header': 'EXTERNAL_HEADER_SENTINEL_B6D3',
+    }
+    app.config['FEATURE_STRUCTURED_LOGS'] = True
+    messages = []
+    monkeypatch.setattr(
+        'core.hooks.logger.info',
+        lambda message, *args: messages.append(message),
+    )
+
+    response = client.post(
+        f"/mp/api/v1/nonexistent?probe={sentinels['query']}",
+        json={'notes': sentinels['body']},
+        headers={
+            'X-Request-Id': sentinels['external_request_id'],
+            'User-Agent': sentinels['user_agent'],
+            'X-Debug-Probe': sentinels['header'],
+        },
+        environ_overrides={'REMOTE_ADDR': sentinels['ip']},
+    )
+
+    assert response.status_code == 404
+    assert len(messages) == 1
+    payload = json.loads(messages[0])
+    assert re.fullmatch(r'[0-9a-f]{16}', payload['request_id'])
+    assert response.headers['X-Request-Id'] == payload['request_id']
+    assert payload['request_id'] != sentinels['external_request_id']
+    serialized = messages[0]
+    for sentinel in sentinels.values():
+        assert sentinel not in serialized
 
 
 if __name__ == '__main__':

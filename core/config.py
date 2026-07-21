@@ -188,11 +188,24 @@ def validate_production_config():
     dispatch_lock_path = (os.getenv('DISPATCH_LOCK_PATH') or '').strip()
     feature_web_ai = parse_bool(os.getenv('FEATURE_WEB_AI'), default=False)
     siliconflow_api_key = (os.getenv('SILICONFLOW_API_KEY') or '').strip()
+    sentry_dsn = (os.getenv('SENTRY_DSN') or '').strip()
+    sentry_traces_sample_rate = parse_float(
+        os.getenv('SENTRY_TRACES_SAMPLE_RATE', '0'),
+        default=0.0,
+    )
+    sentry_send_pii = parse_bool(os.getenv('SENTRY_SEND_PII'), default=False)
 
     if wechat_formal_runtime_raw not in {'', '0', '1'}:
         raise RuntimeError("WECHAT_FORMAL_RUNTIME 必须显式设置为 0 或 1。")
     if wechat_formal_runtime_raw == '1' and debug_raw not in {'false', '0'}:
         raise RuntimeError("WECHAT_FORMAL_RUNTIME=1 时必须设置 DEBUG=false。")
+    if wechat_formal_runtime_raw == '1' and (
+        sentry_dsn or sentry_traces_sample_rate != 0 or sentry_send_pii
+    ):
+        raise RuntimeError(
+            "WECHAT_FORMAL_RUNTIME=1 必须关闭 Sentry，清空 SENTRY_DSN，"
+            "并固定 SENTRY_TRACES_SAMPLE_RATE=0、SENTRY_SEND_PII=0。"
+        )
     if wechat_formal_runtime_raw == '0' and any(wx_miniprogram_values.values()):
         raise RuntimeError(
             "WECHAT_FORMAL_RUNTIME=0 是 Web-only 运行态，必须清空四项微信服务端配置。"
@@ -334,6 +347,14 @@ def validate_production_config():
 
 def _configure_sentry(app, logger):
     dsn = app.config.get('SENTRY_DSN')
+    if app.config.get('WECHAT_FORMAL_RUNTIME'):
+        if (
+            dsn
+            or app.config.get('SENTRY_TRACES_SAMPLE_RATE', 0.0) != 0
+            or app.config.get('SENTRY_SEND_PII', False)
+        ):
+            raise RuntimeError("微信正式运行态禁止启用 Sentry。")
+        return
     if not dsn:
         return
     try:
@@ -412,7 +433,7 @@ def configure_app(app, logger):
     wechat_formal_runtime_raw = _normalized_env_value('WECHAT_FORMAL_RUNTIME', '')
     wx_miniprogram_privacy_version = _normalized_env_value(
         'WX_MINIPROGRAM_PRIVACY_VERSION',
-        '2026-07-18',
+        '2026-07-21',
     )
     analytics_test_user_ids = _normalized_env_value('ANALYTICS_TEST_USER_IDS', '')
     analytics_min_location_count = max(

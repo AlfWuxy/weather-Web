@@ -128,6 +128,22 @@ def _assert_owner_mode(
     return metadata
 
 
+def test_ci_root_permission_check_does_not_write_repo_bytecode() -> None:
+    """root 权限测试不得在检出目录留下普通 runner 无法覆盖的缓存。"""
+    workflow = (
+        Path(__file__).resolve().parents[1] / ".github" / "workflows" / "ci.yml"
+    ).read_text(encoding="utf-8")
+    permission_step = workflow.split(
+        "      - name: 验证和风天气私钥跨 UID 权限",
+        maxsplit=1,
+    )[1].split("      - name:", maxsplit=1)[0]
+
+    assert (
+        'sudo -E env PYTHONDONTWRITEBYTECODE=1 "$python_path"'
+        in permission_step
+    )
+
+
 def test_qweather_key_stays_root_only_until_old_uid_is_quiesced(tmp_path: Path) -> None:
     if sys.platform != "linux":
         pytest.skip("真实跨 UID 权限回归仅在 Linux 执行")

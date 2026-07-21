@@ -5,7 +5,6 @@ const {
   getToken,
   publicApi,
   saveToken,
-  tokenApi,
 } = require('../elders/care-session');
 const { PRIVACY_CONSENT_VERSION } = require('../../config');
 const { clearAcquisitionContext, readAcquisitionSource } = require('../../utils/share');
@@ -25,9 +24,8 @@ function wxLogin() {
 Page({
   data: {
     privacyAgreed: false,
-    showTokenFallback: false,
-    tokenInput: '',
     busy: false,
+    loginFailed: false,
     loginHint: '',
     requiredPrivacyVersion: PRIVACY_CONSENT_VERSION,
   },
@@ -98,7 +96,7 @@ Page({
 
   async onWechatLogin() {
     if (this.data.busy || !this.requireConsent()) return;
-    this.setData({ busy: true, loginHint: '' });
+    this.setData({ busy: true, loginFailed: false, loginHint: '' });
     try {
       const consentVersion = extractRequiredPrivacyVersion(
         { required_privacy_consent_version: this.data.requiredPrivacyVersion },
@@ -147,6 +145,7 @@ Page({
         if (this._unloaded) return;
         this.setData({
           privacyAgreed: false,
+          loginFailed: false,
           requiredPrivacyVersion,
           loginHint: '隐私说明版本已更新，请重新阅读并主动勾选同意。',
         });
@@ -163,56 +162,16 @@ Page({
       }
       if (this._unloaded) return;
       this.setData({
-        showTokenFallback: true,
-        loginHint: '微信登录暂未可用，可以先使用网页端生成的备用登录码。',
+        loginFailed: true,
+        loginHint: '微信登录暂时没有成功，请检查网络后重试；你也可以先查看公共天气和预警。',
       });
-      wx.showToast({ title: '微信登录暂不可用', icon: 'none' });
+      wx.showToast({ title: '登录失败，请重试', icon: 'none' });
     } finally {
       if (!this._unloaded) this.setData({ busy: false });
     }
-  },
-
-  toggleTokenFallback() {
-    this.setData({ showTokenFallback: !this.data.showTokenFallback, loginHint: '' });
-  },
-
-  onTokenInput(event) {
-    this.setData({ tokenInput: event.detail.value || '' });
-  },
-
-  onClear() {
-    this.setData({ tokenInput: '' });
   },
 
   goPublicHome() {
     wx.switchTab({ url: '/pages/home/index' });
-  },
-
-  async onBind() {
-    if (this.data.busy || !this.requireConsent()) return;
-    const token = String(this.data.tokenInput || '').trim();
-    if (!token) {
-      wx.showToast({ title: '请粘贴完整登录码', icon: 'none' });
-      return;
-    }
-    this.setData({ busy: true });
-    try {
-      await tokenApi(token, { method: 'GET', path: '/mp/api/v1/me' });
-      if (this._unloaded) return;
-      const consentVersion = extractRequiredPrivacyVersion(
-        { required_privacy_consent_version: this.data.requiredPrivacyVersion },
-        PRIVACY_CONSENT_VERSION
-      );
-      saveToken(token, { login_method: 'legacy_token', privacy_consent_version: consentVersion });
-      clearAcquisitionContext();
-      this.setData({ tokenInput: '' });
-      wx.showToast({ title: '绑定成功', icon: 'success' });
-      wx.switchTab({ url: '/pages/elders/index' });
-    } catch (error) {
-      if (this._unloaded) return;
-      wx.showToast({ title: '验证失败，请检查登录码', icon: 'none' });
-    } finally {
-      if (!this._unloaded) this.setData({ busy: false });
-    }
   },
 });
