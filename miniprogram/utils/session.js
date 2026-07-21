@@ -41,6 +41,11 @@ function getSessionToken() {
   const stored = normalizeToken(session && session.token);
   if (stored) {
     const meta = session && session.meta && typeof session.meta === 'object' ? session.meta : {};
+    if (meta.login_method !== 'wechat') {
+      // 1.1 只接受微信登录会话，清理旧体验版遗留的手动 Web Token。
+      clearSession();
+      return '';
+    }
     const expiryValue = meta.expiresAt || meta.expires_at;
     if (expiryValue) {
       let expiresAt = Number(expiryValue);
@@ -54,15 +59,15 @@ function getSessionToken() {
     return stored;
   }
 
-  // 兼容旧体验版，首次读取后迁移到统一会话结构。
+  // 旧体验版可能遗留明文 Web Token；1.1 不再把它迁移为小程序身份。
   let legacy = '';
   try {
     legacy = normalizeToken(wx.getStorageSync(LEGACY_TOKEN_KEY));
   } catch (error) {
     legacy = '';
   }
-  if (legacy) setSessionToken(legacy, { migratedFrom: LEGACY_TOKEN_KEY });
-  return legacy;
+  if (legacy) clearSession();
+  return '';
 }
 
 function getSessionMeta() {
