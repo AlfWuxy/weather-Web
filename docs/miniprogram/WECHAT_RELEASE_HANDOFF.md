@@ -85,7 +85,8 @@ git check-ignore .env.wechat-release
 - `WECHAT_APPSECRET_PRODUCTION_SAFE_CONFIRMED=1`；AppSecret 若曾进入聊天、日志、截图或其他外部系统，已先在微信后台重置并通过本机无回显输入重新录入
 - `WECHAT_FORMAL_RUNTIME=1` 且 `DEBUG=false`；正式服务器的 `WX_MINIPROGRAM_APPID`、`WX_MINIPROGRAM_SECRET`、`WX_MINIPROGRAM_OPENID_PEPPER` 与 `WX_MINIPROGRAM_SESSION_SECRET` 四项完整。`WECHAT_FORMAL_RUNTIME=0` 只用于 Web-only 运行态，并要求清空上述四项微信服务端配置
 - `WX_MINIPROGRAM_PRIVACY_VERSION` 与本次提交的隐私说明版本一致，生效日期、目标 commit hash 和页面内容 hash 已同时冻结
-- `FEATURE_AUDIT_LOGS=0`，首发不持久化应用数据库安全审计日志
+- `FEATURE_AUDIT_LOGS=0`，首发不持久化应用数据库安全审计日志；`FEATURE_STRUCTURED_LOGS=1`，保留经过正式运行态全局白名单处理的排障日志
+- `SENTRY_DSN` 为空、`SENTRY_TRACES_SAMPLE_RATE=0`、`SENTRY_SEND_PII=0`；正式微信运行态不接入第三方错误监控或性能追踪服务
 - 六项结构化类目证据均已填写且通过文件完整性校验；资质状态明确为无需额外机构资质
 - `WECHAT_CATEGORY_CONFIRMED=1`，且非敏感证据引用可回溯到私有截图
 
@@ -95,11 +96,11 @@ git check-ignore .env.wechat-release
 
 ## 最终冻结的机器校验
 
-正式首发版本继续固定为 `1.0.0`。开启 `WECHAT_FORM_READY=1` 前，按以下顺序完成人工复核和机器冻结：
+本分支候选版本固定为 `1.1.0`。开启 `WECHAT_FORM_READY=1` 前，按以下顺序完成人工复核和机器冻结：
 
 正式提交审核时，必须先冻结生效日期、首发版本、目标 commit 与六份材料摘要，再进入部署和上传步骤。
 
-1. 在私密表单分别填写 `WECHAT_MINIPROGRAM_NAME=宜老平安`、`WECHAT_SERVICE_NAME=宜老天气通`、正式生效日期、重新核对后的隐私版本和首发版本 `1.0.0`，继续保持 `WECHAT_FORM_READY=0` 与 `WECHAT_CATEGORY_CONFIRMED=0`。首发冻结工具会分别校验平台名和服务名；任一名称不一致时安全停止，先核对双名称关系、重新编译和真机验收。执行下一步前确认 `git status --short --untracked-files=all` 没有输出；已被 `.gitignore` 忽略的本机私密表单和私有配置可以保留，任何 tracked 修改、暂存修改或未忽略的 untracked 文件都会阻断冻结工具。
+1. 在私密表单分别填写 `WECHAT_MINIPROGRAM_NAME=宜老平安`、`WECHAT_SERVICE_NAME=宜老天气通`、正式生效日期、重新核对后的隐私版本和候选版本 `1.1.0`，继续保持 `WECHAT_FORM_READY=0` 与 `WECHAT_CATEGORY_CONFIRMED=0`。冻结工具会分别校验平台名和服务名；任一名称不一致时安全停止，先核对双名称关系、重新编译和真机验收。执行下一步前确认 `git status --short --untracked-files=all` 没有输出；已被 `.gitignore` 忽略的本机私密表单和私有配置可以保留，任何 tracked 修改、暂存修改或未忽略的 untracked 文件都会阻断冻结工具。
 2. 执行 `finalize-content`。工具只使用平台名、服务名、生效日期、隐私版本和首发版本生成公开内容，并额外读取两个门禁确认它们都保持为 `0`；绝不把运营者姓名、邮箱、AppID、AppSecret、类目证据或 QWeather 字段写入受版本控制文件。它会先用内置 SHA-256 清单确认七份 `HEAD` 候选 blob 与人工复核基线完全一致，再确定性更新六份材料与 `miniprogram/config.js`，清除全部候选文字。六份正式材料各生成唯一状态 marker、平台名 marker 和服务名 marker，可见正文同时说明“宜老平安”与“宜老天气通”的关系；加上 5 个生效日期 marker 和 3 个隐私版本 marker，正式 marker 总数固定为 26 个。工具使用单维护者协作锁，临时文件与目标文件位于同一目录并以原子替换落盘；中断后只接受每份文件处于可信候选态或本次精确正式输出态的已知部分状态，重跑时继续向完整正式态收敛。未知字节、暂存修改、候选 SHA 漂移或无关仓库变化都会安全停止，工具不会创建包含发布表单或密钥的事务 journal。
 
 ```bash
@@ -147,10 +148,11 @@ python3 scripts/validate_release_env.py \
 - 名称使用规则：平台账号、审核资料中的“小程序名称”填写“宜老平安”；功能页、分享标题和服务说明可使用“宜老天气通”，同时在隐私、协议、健康同意与上架资料中展示两者关系。该映射不要求全局替换服务品牌。
 - 服务范围：江西省九江市都昌县
 - request 合法域名：`https://yilaoweather.org`
-- 首发版本：`1.0.0`
+- 候选版本：`1.1.0`
 - 产品介绍、版本说明、隐私模板、测试计划和上架截图清单
 - 30 分钟服务端同步、客户端缓存、预算上限和失败保留旧快照策略
-- 微信登录、Token 备用登录、健康敏感信息单独同意与撤回、账户删除和隐私版本机制
+- 微信快捷登录、不同 OpenID 私有资料隔离、健康敏感信息单独同意与撤回、账户删除和隐私版本机制
+- 逐次确认的单次位置、端内距离排序、社区手选回退与资源点原生地图查看
 
 ## 正式资料一致性
 
@@ -158,11 +160,12 @@ python3 scripts/validate_release_env.py \
 - `WECHAT_REQUEST_DOMAIN` 固定记录微信后台 request 合法域名 `https://yilaoweather.org`，必须与冻结 HEAD 的公开 `API_BASE_URL` 完全一致。
 - `WX_MINIPROGRAM_PRIVACY_VERSION` 需要与小程序包内显示的隐私版本、服务器要求版本和平台隐私保护指引本次生效内容一致。隐私内容更新时先递增版本，再重新取得主动同意。
 - 登录的一般隐私同意与健康敏感个人信息单独同意分开记录。首次进入家人档案、筛查、日记、用药或家庭行动前必须显示默认不勾选的独立说明；服务器保存独立版本和 UTC 时间，拒绝、撤回或版本过期时私密路由返回 428，公开天气继续可用。
-- 正式微信运行态的 Web 家庭行动安全链接在 1.0.0 首发只显示停用说明；短码读取、链接兑换、家庭解析、天气构建以及确认行动、求助和复盘写入都会在触碰家庭资料前停止。查看和保存家庭行动只允许在小程序登录并完成健康敏感个人信息单独同意后执行。
+- 正式微信运行态的 Web 家庭行动安全链接在 1.1.0 只显示停用说明；短码读取、链接兑换、家庭解析、天气构建以及确认行动、求助和复盘写入都会在触碰家庭资料前停止。查看和保存家庭行动只允许在小程序登录并完成健康敏感个人信息单独同意后执行。
 - 家人档案只接受 18 至 120 岁成年人，用户在单独同意页确认已取得对方同意或具备其他合法管理权限。账号使用者年龄不采集、不推断。撤回入口位于“我的 → 健康资料授权管理”；撤回只清回执并关闭私密功能，已有资料继续按逐条删除或账号注销路径处理。
 - `WECHAT_OPERATOR_NAME` 填认证账号对应的实际运营者姓名，`WECHAT_CONTACT_EMAIL` 使用可持续接收审核通知的专用邮箱，`WECHAT_EFFECTIVE_DATE` 使用 `YYYY-MM-DD`。
 - 平台隐私保护指引使用认证运营者姓名、专用联系邮箱和生效日期。运营者姓名、证件及其他认证资料只保存在微信平台、权限为 `0600` 的忽略表单和仓库外私有 ops；经运营者批准的专用支持邮箱可在 Web 透明度页和微信平台公开联系入口展示。受版本控制的隐私说明、用户协议、上架文案和小程序页面同时使用批准的平台名“宜老平安”和服务名“宜老天气通”，并通过微信“反馈与投诉”提供联系入口，禁止写入运营者姓名或其他认证隐私材料。
-- 平台数据类型按代码实际处理逐项声明：用户点击后由 `wx.setClipboardData` 写入提醒或公共纳凉点信息（只写不读，复制内容不上传）；`wx.login` 产生的 OpenID 哈希、账号与会话信息；18 至 120 岁成年家人档案与健康字段；老人码、短码明文及不可逆哈希等家庭照护关系技术标识；独立健康同意版本和 UTC 时间；固定枚举产品事件；基础结构化请求日志；必要安全限流中的临时 IP 哈希键。基础结构化请求日志记录随机请求编号、方法、路径、接口、状态和耗时，不记录请求或响应正文、查询参数、IP、User-Agent、请求头或会话 token；日志进入 systemd journal，当前没有固定保存天数，按磁盘容量边界和日志量自动轮转覆盖。首发固定 `FEATURE_AUDIT_LOGS=0`，不把 IP 哈希或 User-Agent 写入数据库应用审计表。当前版本不收集第三方推送接收标识，也未调用个人定位、昵称头像、手机号或订阅消息，不得为了“看起来完整”而误勾这些数据类型。
+- 平台数据类型按代码实际处理逐项声明：用户点击后由 `wx.setClipboardData` 写入提醒或公共纳凉点信息（只写不读，复制内容不上传）；`wx.login` 产生的 OpenID 哈希、账号与会话信息；18 至 120 岁成年家人档案与健康字段；老人码、短码明文及不可逆哈希等家庭照护关系技术标识；独立健康同意版本和 UTC 时间；固定枚举产品事件；受限结构化运行日志；必要安全限流中的临时 IP 哈希键；以及用户每次主动确认后由 `wx.getLocation` 读取的一次位置。用户坐标只在避暑资源页面实例内按 GCJ-02 资源点计算直线距离，不发送到项目服务器，不进入持久存储、产品事件、日志、分享参数或公共缓存，页面隐藏或离开后清除，拒绝或失败后仍可手选社区。结构化请求日志只记录服务端随机请求编号、方法、经过凭据替换的路径、接口、状态和耗时，其他正式应用日志只保留事件类型、模块、级别、函数和代码行；全局过滤器会丢弃原始消息参数、异常正文和 traceback。运行日志不记录请求或响应正文、查询参数、IP、User-Agent、请求头、SQL 参数、会话 token 或用户坐标。正式站点的 Nginx server 块必须同时声明 `access_log off` 和 `error_log /dev/null crit`，部署器会在候选激活前安全停止任何不一致配置。应用日志进入 systemd journal；2026-07-21 核验时 systemd 252 没有 journald 显式容量或时间覆盖，`MaxRetentionSec=0`，所以 systemd journal 当前没有固定保存天数，按磁盘容量边界和日志量自动轮转覆盖。`MaxFileSec` 默认 1 个月只控制单个文件轮转；`SystemMaxUse` 默认文件系统 10% 且上限 4 GiB，`SystemKeepFree` 默认 15% 且上限 4 GiB，核验时实际占用约 2.9 GiB。只有归档文件会在容量压力下删除。1.1.0 固定 `FEATURE_AUDIT_LOGS=0`，不把 IP 哈希或 User-Agent 写入数据库应用审计表。当前版本不收集第三方推送接收标识、昵称头像、手机号或订阅消息，不得误勾这些数据类型。完整证据边界见 [运行日志边界](./RUNTIME_LOG_BOUNDARY.md)。
+- 正式微信运行态不接入第三方错误监控或性能追踪服务。正式表单和候选服务器必须保持 `SENTRY_DSN` 为空，并显式固定 `SENTRY_TRACES_SAMPLE_RATE=0`、`SENTRY_SEND_PII=0`；任一项不一致时发布校验和应用启动都会停止，应用日志、异常上下文、请求信息或用户资料不会发送到第三方监控服务。
 - 当前版本不提供第三方消息推送，不配置第三方消息服务凭据，不向第三方消息服务发送预警或用户数据，平台隐私保护指引和审核材料均不声明对应第三方共享项。未来若新增该能力，需要先形成新的隐私候选版本、重新完成类目和平台数据声明核对，再取得用户主动同意。
 - 运行 `finalize-content` 前，仓库文本应处于“发布候选版”整理阶段；运行后，六份材料必须全部带平台名与服务名双 marker、可见双名称关系和其余正式 marker，合计 26 个 marker，且不再含候选文字。随后冻结 `WECHAT_EFFECTIVE_DATE`、小程序版本、`WX_MINIPROGRAM_PRIVACY_VERSION`、目标 commit hash，以及隐私说明、用户协议、上架文案、隐私页、协议页与健康资料单独同意页的内容 hash；任何一项变更都要把 `WECHAT_FORM_READY` 与 `WECHAT_CATEGORY_CONFIRMED` 恢复为 `0`，重新运行 `record-freeze`、重新编译上传并重新取证。
 
@@ -214,7 +217,7 @@ python3 scripts/validate_release_env.py \
 6. 核对激活事务内的唯一一次受控真实天气同步和预算计数。外置 receipt 绑定冻结 commit 与天气语义配置指纹；`case-weather` 运行用户先完成 JWT 离线签名并读取 Redis 预算前值。两项通过后，root 生成随机 lease token，并在写入 `started` 前取得全局 Redis `SET NX EX 1800` 周期租约；租约忙或 Redis 异常时安全退出，不形成不可重试 receipt。`started` 耐久落盘后，root 才签发权限为 `0640`、绑定 commit、天气配置指纹与 lease token 摘要的一次性 ticket。同步进程以常量时间比较确认自己持有预占租约，再校验 binding、token SHA-256 和 lease token SHA-256，通过独立 Redis `SET NX` 消费标记后删除磁盘 ticket，之后才允许访问上游；任一步失败都在访问上游前退出，消费后无论成功或失败均禁止自动重试。成功后写入 `completed`、snapshot_id 与预算差值，并要求 `weather_now`、`weather_7d_forecast`、`weatheralert_v1_current` 三项各增加 1 次，总增量固定为 3。天气指纹只包含 QWeather 认证模式、凭据、API Base、canonical location、预算门禁、缓存 TTL、同步位置和天气不可用策略。AppID、AppSecret、隐私版本、GIS 开关、公开域名和动态网络闸门时间均不参与指纹，轮换这些字段不能获得第二次自动烟测机会。正式烟测传入 `--skip-nowcast`，关闭 Open-Meteo 与 mock 兜底，绕过实况、七日预报和预警三项内部新鲜缓存，并分别预占一次预算。30 分钟常规周期继续维护短时 nowcast。只有实况、七日预报和预警状态都来自 QWeather 官方源且快照新鲜可用时才通过；任一来源失败的周期可保存 degraded 状态供页面透明显示，但不会触发下游预警派发。相同绑定再次执行时只允许复用仍然新鲜的 completed 快照；started 未完成、completed 快照丢失或过期时立即关闭，必须人工核对，禁止自动再次请求。
    该烟测和候选 Gunicorn 统一以无登录权限的 `case-weather` 用户运行，候选进程仅获得 `env -i` 白名单中的发布环境。五个业务运行服务只允许写入 `instance/`、`storage/` 与 `run/`；root-only SQLite 备份服务关闭网络、限制 capability，只允许写入 `backups/daily`、`instance/` 与 `storage/`。所有运行服务均开启权限沙箱。首轮等待只以 bootstrap timer 的 active/enabled 状态、完整剩余窗口、缓存服务的 `OnSuccess`/`OnFailure` 与激活事务 `COMMITTED` 作为证据，不生成额外 marker。
 7. 完成 Android、iOS 真机检查、隐私接口检查和无敏感信息截图；使用 `docs/miniprogram/REVIEW_SCREENSHOT_MANIFEST_TEMPLATE.md` 登记文件名、系统与机型、字号、时间、commit、审核用途和完成状态。
-8. 根据后台实时选项填写发布资料，在确认完整功能与双名称关系披露后重新上传 `1.0.0`，记录上传版本、构建标识、冻结 commit、提交说明、上传回执和审核截图。只接受本轮双名称冻结 commit 生成的新上传证据。
+8. 根据后台实时选项填写发布资料，在确认完整功能、双名称关系和单次定位处理方式已准确披露后上传 `1.1.0`，记录上传版本、构建标识、冻结 commit、提交说明、上传回执和审核截图。只接受本轮冻结 commit 生成的新上传证据，旧 1.0.0 回执只作历史记录。
 9. 在正式点击发布前，记录当前线上小程序版本、可用回退版本、代码 commit、后端 `current` release、数据库备份和部署事务状态，由用户确认发布与回滚目标后再继续。
 
 ## 发布、观察与回滚确认

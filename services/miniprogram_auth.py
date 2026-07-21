@@ -46,7 +46,7 @@ def _required_config(name: str) -> str:
 def current_privacy_version() -> str:
     return str(
         current_app.config.get("WX_MINIPROGRAM_PRIVACY_VERSION")
-        or "2026-07-18"
+        or "2026-07-21"
     ).strip()
 
 
