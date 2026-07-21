@@ -37,7 +37,7 @@ jobs:
         run: |
           python_path="$(python -c 'import os, sys; print(os.path.realpath(sys.executable))')"
           test -x "$python_path"
-          sudo -E "$python_path" -m pytest -q -p no:cacheprovider \
+          sudo -E env PYTHONDONTWRITEBYTECODE=1 "$python_path" -m pytest -q -p no:cacheprovider \
             tests/test_qweather_key_permissions_linux.py
 
       - name: 检查 Python 与 Shell 语法
