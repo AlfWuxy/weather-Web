@@ -12,6 +12,16 @@ import pytest
 from pathlib import Path
 
 
+@pytest.fixture(scope='function', autouse=True)
+def isolate_formal_logging_privacy():
+    """隔离正式态进程级日志工厂，防止测试模式跨用例串扰。"""
+    from core.logging_privacy import _restore_logging_privacy_for_testing
+
+    _restore_logging_privacy_for_testing()
+    yield
+    _restore_logging_privacy_for_testing()
+
+
 @pytest.fixture(scope='session', autouse=True)
 def setup_test_environment(tmp_path_factory):
     """自动设置测试环境变量（在所有测试之前执行）。"""
