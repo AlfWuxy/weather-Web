@@ -21,6 +21,7 @@ from core.metric_explanations import (
     get_metric_explanation_groups,
     get_metric_explanations,
 )
+from core.logging_privacy import formal_request_log_event, sanitize_request_path
 from core.security import csrf_failure_response, generate_csrf_token, validate_csrf
 from core.weather import (
     get_location_options,
@@ -106,17 +107,7 @@ def _formal_web_gate_kind(endpoint):
 
 def _redact_sensitive_path(path):
     """结构化日志不得记录行动链接或点击追踪 token。"""
-    path = str(path or '')
-    for prefix in ('/e/', '/t/'):
-        if not path.startswith(prefix):
-            continue
-        remainder = path[len(prefix):]
-        suffix = ''
-        if '/' in remainder:
-            _, tail = remainder.split('/', 1)
-            suffix = f'/{tail}'
-        return f'{prefix}<token>{suffix}'
-    return path
+    return sanitize_request_path(path)
 
 
 def _exceeds_json_depth(value, max_depth, current_depth=1):
@@ -142,7 +133,8 @@ def register_hooks(app):
     @app.before_request
     def init_request_context():
         """初始化请求上下文（结构化日志使用）"""
-        g.request_id = request.headers.get('X-Request-Id') or secrets.token_hex(8)
+        # 请求编号属于服务端审计边界，不能采纳客户端可伪造的请求头。
+        g.request_id = secrets.token_hex(8)
         g.request_start = time.perf_counter()
         g.external_api_timings = []
 
@@ -225,7 +217,10 @@ def register_hooks(app):
                 'duration_ms': duration_ms,
                 'external_api': getattr(g, 'external_api_timings', [])
             }
-            logger.info(json.dumps(log_payload, ensure_ascii=False))
+            if app.config.get('WECHAT_FORMAL_RUNTIME'):
+                logger.info(formal_request_log_event(log_payload))
+            else:
+                logger.info(json.dumps(log_payload, ensure_ascii=False))
             if getattr(g, 'request_id', None):
                 response.headers['X-Request-Id'] = g.request_id
         except Exception as exc:

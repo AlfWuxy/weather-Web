@@ -192,6 +192,10 @@ def _write_env(tmp_path, extra=""):
         "FEATURE_WXPUSHER=0\n"
         "WXPUSHER_APP_TOKEN=\n"
         "FEATURE_AUDIT_LOGS=0\n"
+        "FEATURE_STRUCTURED_LOGS=1\n"
+        "SENTRY_DSN=\n"
+        "SENTRY_TRACES_SAMPLE_RATE=0\n"
+        "SENTRY_SEND_PII=0\n"
         f"DISPATCH_LOCK_PATH={tmp_path / 'case-weather-dispatch.lock'}\n"
         "ALLOW_WEATHER_UNAVAILABLE=1\n"
         "QWEATHER_AUTH_MODE=disabled\n"
@@ -254,7 +258,7 @@ def _write_wechat_release_form(tmp_path, **overrides):
             evidence_file.read_bytes()
         ).hexdigest(),
         "WECHAT_CATEGORY_CONFIRMED_AT": datetime.now(timezone.utc).isoformat(),
-        "WECHAT_RELEASE_VERSION": "1.0.0",
+        "WECHAT_RELEASE_VERSION": "1.1.0",
         "WECHAT_TARGET_COMMIT_SHA": head,
         **digests,
         "WX_MINIPROGRAM_APPID": "wx12345678",
@@ -264,6 +268,10 @@ def _write_wechat_release_form(tmp_path, **overrides):
         "FEATURE_WXPUSHER": "0",
         "WXPUSHER_APP_TOKEN": "",
         "FEATURE_AUDIT_LOGS": "0",
+        "FEATURE_STRUCTURED_LOGS": "1",
+        "SENTRY_DSN": "",
+        "SENTRY_TRACES_SAMPLE_RATE": "0",
+        "SENTRY_SEND_PII": "0",
         "FEATURE_HEAT_EXPOSURE_GIS": "1",
         "QWEATHER_DEDICATED_CREDENTIAL_CONFIRMED": "1",
         "QWEATHER_EXPECTED_PROJECT_ID": "test-project",
@@ -1560,6 +1568,47 @@ def test_wechat_release_form_requires_private_complete_personal_form(tmp_path):
     )
 
 
+@pytest.mark.parametrize("structured_logs", ("", "0"))
+def test_wechat_release_form_requires_structured_logs_for_formal_release(
+    tmp_path,
+    structured_logs,
+):
+    """正式发布不能关闭已做隐私净化的结构化排障日志。"""
+    form = _write_wechat_release_form(
+        tmp_path,
+        FEATURE_STRUCTURED_LOGS=structured_logs,
+    )
+
+    result = validate_wechat_release_form(form, require_ready=True)
+
+    assert result["ok"] is False
+    assert any(
+        "FEATURE_STRUCTURED_LOGS=1" in error
+        for error in result["errors"]
+    )
+
+
+@pytest.mark.parametrize(
+    ("overrides", "expected"),
+    (
+        ({"SENTRY_DSN": "https://public@example.invalid/1"}, "SENTRY_DSN"),
+        ({"SENTRY_TRACES_SAMPLE_RATE": "0.1"}, "SENTRY_TRACES_SAMPLE_RATE=0"),
+        ({"SENTRY_SEND_PII": "1"}, "SENTRY_SEND_PII=0"),
+    ),
+)
+def test_wechat_release_form_rejects_sentry_in_formal_runtime(
+    tmp_path,
+    overrides,
+    expected,
+):
+    form = _write_wechat_release_form(tmp_path, **overrides)
+
+    result = validate_wechat_release_form(form, require_ready=True)
+
+    assert result["ok"] is False
+    assert any(expected in error for error in result["errors"])
+
+
 def test_wechat_release_template_defaults_appsecret_safety_gate_closed():
     template = (
         Path(__file__).resolve().parents[1] / ".env.wechat-release.example"
@@ -2192,7 +2241,7 @@ def test_wechat_release_form_rejects_uppercase_and_short_release_hashes(tmp_path
 
 
 def test_wechat_release_form_requires_current_strict_semver(tmp_path):
-    for index, release_version in enumerate(("v1.0.0", "01.0.0", "1.0.1")):
+    for index, release_version in enumerate(("1.0.0", "v1.1.0", "01.1.0", "1.1.1")):
         case_dir = tmp_path / str(index)
         case_dir.mkdir()
         form = _write_wechat_release_form(

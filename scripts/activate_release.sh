@@ -45,6 +45,8 @@ QWEATHER_BUDGET_SNAPSHOT_HELPER="${QWEATHER_BUDGET_SNAPSHOT_HELPER:-}"
 QWEATHER_PENDING_KEY_PATH="${QWEATHER_PENDING_KEY_PATH:-}"
 QWEATHER_KEY_TRANSITION_FAIL_AT="${QWEATHER_KEY_TRANSITION_FAIL_AT:-}"
 FORMAL_SMOKE_LEASE_HELPER="${FORMAL_SMOKE_LEASE_HELPER:-}"
+# 仅供非 root 测试夹具替代真实 Nginx；正式发布禁止覆盖。
+RUNTIME_LOG_BOUNDARY_TEST_HELPER="${RUNTIME_LOG_BOUNDARY_TEST_HELPER:-}"
 RUNTIME_USER="${RUNTIME_USER:-case-weather}"
 RUNTIME_GROUP="${RUNTIME_GROUP:-case-weather}"
 CONTROL_OWNER_UID="${CONTROL_OWNER_UID:-0}"
@@ -3581,6 +3583,76 @@ validate_formal_release_identity() {
     FORMAL_RELEASE_COMMIT="$metadata_commit"
 }
 
+verify_formal_runtime_log_boundary() {
+    local access_log=/var/log/nginx/access.log
+    local error_log=/var/log/nginx/error.log
+    local access_before access_after error_before error_after
+
+    [ "$REQUIRE_WECHAT_READY" = 1 ] || return 0
+
+    if [ "$ALLOW_NONROOT_TEST_RUNTIME_GUARD" = 1 ]; then
+        # 测试 helper 只能观察锁与零变更边界，不能进入正式 root 路径。
+        "$RUNTIME_LOG_BOUNDARY_TEST_HELPER" \
+            "$RELEASE_ROOT/deploy.lock" \
+            "$TRANSACTION_DIR" \
+            "$MUTATION_STARTED"
+        return 0
+    fi
+
+    [ -x /usr/sbin/nginx ] || {
+        fail "正式发布缺少固定的 /usr/sbin/nginx"
+        return 1
+    }
+    [ -x /usr/bin/systemctl ] || {
+        fail "正式发布缺少固定的 /usr/bin/systemctl"
+        return 1
+    }
+    [ -x /usr/bin/stat ] || {
+        fail "正式发布缺少固定的 /usr/bin/stat"
+        return 1
+    }
+    require_file "$APP_DIR/scripts/verify_runtime_log_boundary.py"
+
+    log "重新加载并验证正式 Nginx 日志边界"
+    /usr/sbin/nginx -t >/dev/null
+    /usr/bin/systemctl reload nginx
+    /usr/bin/systemctl is-active --quiet nginx || {
+        fail "Nginx reload 后未保持 active"
+        return 1
+    }
+    "$VENV_DIR/bin/python" \
+        "$APP_DIR/scripts/verify_runtime_log_boundary.py" \
+        --active-nginx >/dev/null
+
+    if [ ! -f "$access_log" ] || [ -L "$access_log" ] \
+        || [ ! -f "$error_log" ] || [ -L "$error_log" ]; then
+        fail "Nginx 运行态日志必须是固定路径下的普通文件"
+        return 1
+    fi
+    access_before="$(/usr/bin/stat -c %s "$access_log")"
+    error_before="$(/usr/bin/stat -c %s "$error_log")"
+
+    "$CURL_BIN" \
+        --fail \
+        --silent \
+        --show-error \
+        --noproxy '*' \
+        --connect-timeout 5 \
+        --max-time 10 \
+        --resolve yilaoweather.org:443:127.0.0.1 \
+        --output /dev/null \
+        https://yilaoweather.org/healthz
+
+    access_after="$(/usr/bin/stat -c %s "$access_log")"
+    error_after="$(/usr/bin/stat -c %s "$error_log")"
+    if [ "$access_after" != "$access_before" ] \
+        || [ "$error_after" != "$error_before" ]; then
+        fail "本机 healthz 请求导致 Nginx 访问者日志增长"
+        return 1
+    fi
+    log "正式 Nginx 日志边界与本机 healthz 验证通过"
+}
+
 compute_formal_release_config_fingerprint() {
     local qweather_key_owner_uid=0
     local qweather_key_group_gid=""
@@ -5334,6 +5406,20 @@ if [ -n "$FORMAL_SMOKE_LEASE_HELPER" ]; then
     validate_absolute_path FORMAL_SMOKE_LEASE_HELPER "$FORMAL_SMOKE_LEASE_HELPER"
     require_executable "$FORMAL_SMOKE_LEASE_HELPER"
 fi
+if [ -n "$RUNTIME_LOG_BOUNDARY_TEST_HELPER" ]; then
+    if [ "$ALLOW_NONROOT_TEST_RUNTIME_GUARD" != 1 ]; then
+        echo '生产激活禁止覆盖 Nginx 运行态日志守卫' >&2
+        exit 2
+    fi
+    validate_absolute_path \
+        RUNTIME_LOG_BOUNDARY_TEST_HELPER \
+        "$RUNTIME_LOG_BOUNDARY_TEST_HELPER"
+    require_executable "$RUNTIME_LOG_BOUNDARY_TEST_HELPER"
+elif [ "$REQUIRE_WECHAT_READY" = 1 ] \
+    && [ "$ALLOW_NONROOT_TEST_RUNTIME_GUARD" = 1 ]; then
+    echo '非 root 正式发布测试必须显式提供 Nginx 日志守卫 helper' >&2
+    exit 2
+fi
 require_file "$ENV_FILE"
 require_file "$STAGED_ENV_FILE"
 require_file "$APP_DIR/scripts/server_migrate.sh"
@@ -5373,6 +5459,9 @@ if ! "$FLOCK_BIN" -n 9; then
     echo '已有另一个部署事务正在运行，本次发布未修改生产状态。' >&2
     exit 73
 fi
+
+# 该守卫必须处于部署锁内，并先于事务目录、状态快照与全部发布 mutation。
+verify_formal_runtime_log_boundary
 
 acknowledge_recovery_transaction
 recover_activation_boot_guard_if_acknowledged

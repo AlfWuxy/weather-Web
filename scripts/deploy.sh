@@ -30,6 +30,7 @@ LOCAL_QWEATHER_JWT_PRIVATE_KEY_SIZE=""
 LOCAL_ALLOW_WEATHER_UNAVAILABLE="${ALLOW_WEATHER_UNAVAILABLE:-}"
 LOCAL_AMAP_KEY=""
 LOCAL_FEATURE_AUDIT_LOGS=""
+LOCAL_FEATURE_STRUCTURED_LOGS=""
 LOCAL_FEATURE_WXPUSHER=""
 LOCAL_WXPUSHER_APP_TOKEN=""
 LOCAL_FEATURE_HEAT_EXPOSURE_GIS=""
@@ -67,7 +68,7 @@ load_local_api_keys() {
     while IFS='=' read -r key value; do
         case "$key" in
             ''|\#*) continue ;;
-            QWEATHER_KEY|QWEATHER_API_BASE|QWEATHER_AUTH_MODE|QWEATHER_JWT_KID|QWEATHER_JWT_PROJECT_ID|QWEATHER_JWT_PRIVATE_KEY_PATH|QWEATHER_JWT_PRIVATE_KEY_SOURCE|ALLOW_WEATHER_UNAVAILABLE|AMAP_KEY|FEATURE_AUDIT_LOGS|FEATURE_WXPUSHER|WXPUSHER_APP_TOKEN|FEATURE_HEAT_EXPOSURE_GIS|PUBLIC_BASE_URL|ALLOW_INSECURE_PUBLIC_BASE_URL)
+            QWEATHER_KEY|QWEATHER_API_BASE|QWEATHER_AUTH_MODE|QWEATHER_JWT_KID|QWEATHER_JWT_PROJECT_ID|QWEATHER_JWT_PRIVATE_KEY_PATH|QWEATHER_JWT_PRIVATE_KEY_SOURCE|ALLOW_WEATHER_UNAVAILABLE|AMAP_KEY|FEATURE_AUDIT_LOGS|FEATURE_STRUCTURED_LOGS|FEATURE_WXPUSHER|WXPUSHER_APP_TOKEN|FEATURE_HEAT_EXPOSURE_GIS|PUBLIC_BASE_URL|ALLOW_INSECURE_PUBLIC_BASE_URL)
                 normalize_env_value "$value"
                 value="$NORMALIZED_ENV_VALUE"
                 case "$key" in
@@ -81,6 +82,7 @@ load_local_api_keys() {
                     ALLOW_WEATHER_UNAVAILABLE) LOCAL_ALLOW_WEATHER_UNAVAILABLE="$value" ;;
                     AMAP_KEY) LOCAL_AMAP_KEY="$value" ;;
                     FEATURE_AUDIT_LOGS) LOCAL_FEATURE_AUDIT_LOGS="$value" ;;
+                    FEATURE_STRUCTURED_LOGS) LOCAL_FEATURE_STRUCTURED_LOGS="$value" ;;
                     FEATURE_WXPUSHER) LOCAL_FEATURE_WXPUSHER="$value" ;;
                     WXPUSHER_APP_TOKEN) LOCAL_WXPUSHER_APP_TOKEN="$value" ;;
                     FEATURE_HEAT_EXPOSURE_GIS) LOCAL_FEATURE_HEAT_EXPOSURE_GIS="$value" ;;
@@ -100,7 +102,7 @@ load_wechat_release_form() {
     while IFS='=' read -r key value; do
         case "$key" in
             ''|\#*) continue ;;
-            WECHAT_FORM_READY|WECHAT_FORMAL_RUNTIME|WX_MINIPROGRAM_APPID|WX_MINIPROGRAM_SECRET|WX_MINIPROGRAM_PRIVACY_VERSION|FEATURE_AUDIT_LOGS|FEATURE_WXPUSHER|WXPUSHER_APP_TOKEN|FEATURE_HEAT_EXPOSURE_GIS|QWEATHER_DEDICATED_CREDENTIAL_CONFIRMED|QWEATHER_CONSOLE_USAGE_MONTH|QWEATHER_CONSOLE_USAGE_BASELINE|QWEATHER_EXPECTED_PROJECT_ID|QWEATHER_EXPECTED_KID)
+            WECHAT_FORM_READY|WECHAT_FORMAL_RUNTIME|WX_MINIPROGRAM_APPID|WX_MINIPROGRAM_SECRET|WX_MINIPROGRAM_PRIVACY_VERSION|FEATURE_AUDIT_LOGS|FEATURE_STRUCTURED_LOGS|FEATURE_WXPUSHER|WXPUSHER_APP_TOKEN|FEATURE_HEAT_EXPOSURE_GIS|QWEATHER_DEDICATED_CREDENTIAL_CONFIRMED|QWEATHER_CONSOLE_USAGE_MONTH|QWEATHER_CONSOLE_USAGE_BASELINE|QWEATHER_EXPECTED_PROJECT_ID|QWEATHER_EXPECTED_KID)
                 normalize_env_value "$value"
                 value="$NORMALIZED_ENV_VALUE"
                 case "$key" in
@@ -110,6 +112,7 @@ load_wechat_release_form() {
                     WX_MINIPROGRAM_SECRET) LOCAL_WX_MINIPROGRAM_SECRET="$value" ;;
                     WX_MINIPROGRAM_PRIVACY_VERSION) LOCAL_WX_MINIPROGRAM_PRIVACY_VERSION="$value" ;;
                     FEATURE_AUDIT_LOGS) LOCAL_FEATURE_AUDIT_LOGS="$value" ;;
+                    FEATURE_STRUCTURED_LOGS) LOCAL_FEATURE_STRUCTURED_LOGS="$value" ;;
                     FEATURE_WXPUSHER) LOCAL_FEATURE_WXPUSHER="$value" ;;
                     WXPUSHER_APP_TOKEN) LOCAL_WXPUSHER_APP_TOKEN="$value" ;;
                     FEATURE_HEAT_EXPOSURE_GIS) LOCAL_FEATURE_HEAT_EXPOSURE_GIS="$value" ;;
@@ -215,6 +218,10 @@ if [ "$REQUIRE_WECHAT_READY" = "1" ]; then
     fi
     if [ "$LOCAL_WECHAT_FORMAL_RUNTIME" != "1" ]; then
         echo "微信正式发布必须固定 WECHAT_FORMAL_RUNTIME=1。" >&2
+        exit 64
+    fi
+    if [ "$LOCAL_FEATURE_STRUCTURED_LOGS" != "1" ]; then
+        echo "微信正式发布必须固定 FEATURE_STRUCTURED_LOGS=1。" >&2
         exit 64
     fi
     FORMAL_WECHAT_CONFIG_ALLOWED="1"
@@ -448,7 +455,7 @@ case "${LOCAL_FEATURE_WXPUSHER:-}" in
 esac
 if [ "$REQUIRE_WECHAT_READY" = "1" ]; then
     if [ "$LOCAL_FEATURE_WXPUSHER" != "0" ]; then
-        echo "1.0.0 微信正式发布必须固定 FEATURE_WXPUSHER=0。" >&2
+        echo "1.1.0 微信正式发布必须固定 FEATURE_WXPUSHER=0。" >&2
         exit 64
     fi
     if [ -n "$LOCAL_WXPUSHER_APP_TOKEN" ]; then
@@ -1885,6 +1892,10 @@ reconcile_qweather_preactivation_transactions
 remote_exec "if [ -e $NEW_RELEASE ]; then echo '发布 ID 已存在，拒绝覆盖不可变版本: $NEW_RELEASE' >&2; exit 1; fi; mkdir -p $RELEASE_APP $NEW_RELEASE/systemd"
 upload_files "$RELEASE_APP"
 remote_exec "ln -s $PROJECT_DIR/instance $RELEASE_APP/instance && ln -s $PROJECT_DIR/storage $RELEASE_APP/storage && ln -s $PROJECT_DIR/backups $RELEASE_APP/backups"
+if [ "$FORMAL_WECHAT_CONFIG_ALLOWED" = "1" ]; then
+    # 在写入正式候选凭据前检查完整 Nginx 配置，失败时不产生敏感候选状态。
+    remote_exec "python3 $RELEASE_APP/scripts/verify_runtime_log_boundary.py --active-nginx"
+fi
 
 echo ""
 echo "步骤4: 准备隔离的候选环境配置..."
@@ -1921,6 +1932,10 @@ WEATHER_SYNC_LOCATIONS=都昌县
 AMAP_KEY=
 FEATURE_WEB_AI=0
 FEATURE_AUDIT_LOGS=0
+FEATURE_STRUCTURED_LOGS=1
+SENTRY_DSN=
+SENTRY_TRACES_SAMPLE_RATE=0
+SENTRY_SEND_PII=0
 SILICONFLOW_API_KEY=
 SILICONFLOW_API_BASE=https://api.siliconflow.cn/v1
 FEATURE_WXPUSHER=0
@@ -1932,7 +1947,7 @@ WX_MINIPROGRAM_APPID=
 WX_MINIPROGRAM_SECRET=
 WX_MINIPROGRAM_OPENID_PEPPER=
 WX_MINIPROGRAM_SESSION_SECRET=
-WX_MINIPROGRAM_PRIVACY_VERSION=2026-07-18
+WX_MINIPROGRAM_PRIVACY_VERSION=2026-07-21
 PUBLIC_BASE_URL=https://yilaoweather.org
 ALLOW_INSECURE_PUBLIC_BASE_URL=
 EOF
@@ -1954,12 +1969,13 @@ remote_env_update "WEATHER_SYNC_LOCATIONS" "都昌县" "always"
 remote_env_update "WXPUSHER_API_BASE" "https://wxpusher.zjiecode.com/api" "always"
 remote_env_update "FEATURE_WXPUSHER" "0" "if-empty"
 remote_env_update "FEATURE_WEB_AI" "0" "always"
+remote_env_update "FEATURE_STRUCTURED_LOGS" "1" "always"
 remote_env_update "SILICONFLOW_API_KEY" "" "always"
 remote_env_update "SILICONFLOW_API_BASE" "https://api.siliconflow.cn/v1" "always"
 remote_env_update "DISPATCH_LOCK_PATH" "$PROJECT_DIR/run/case-weather-dispatch.lock" "always"
 remote_env_update "FEATURE_HEAT_EXPOSURE_GIS" "0" "if-empty"
 remote_env_update "WECHAT_FORMAL_RUNTIME" "0" "if-empty"
-remote_env_update "WX_MINIPROGRAM_PRIVACY_VERSION" "2026-07-18" "if-empty"
+remote_env_update "WX_MINIPROGRAM_PRIVACY_VERSION" "2026-07-21" "if-empty"
 
 echo ""
 echo "步骤4.2: 安全写入显式提供的发布配置..."
@@ -2006,9 +2022,13 @@ if [ -n "$LOCAL_FEATURE_HEAT_EXPOSURE_GIS" ]; then
 fi
 # 只有同一次验证快照同时满足 require=1 与 ready=1，才允许写入正式凭据。
 if [ "$FORMAL_WECHAT_CONFIG_ALLOWED" = "1" ]; then
-    # 个人主体 1.0.0 不持久化审计日志，旧远端即使为 1 也强制收敛为 0。
+    # 个人主体 1.1.0 不持久化审计日志，也禁止第三方异常平台接收请求上下文。
     remote_env_update "WECHAT_FORMAL_RUNTIME" "$LOCAL_WECHAT_FORMAL_RUNTIME" "always"
     remote_env_update "FEATURE_AUDIT_LOGS" "$LOCAL_FEATURE_AUDIT_LOGS" "always"
+    remote_env_update "FEATURE_STRUCTURED_LOGS" "$LOCAL_FEATURE_STRUCTURED_LOGS" "always"
+    remote_env_update "SENTRY_DSN" "" "always"
+    remote_env_update "SENTRY_TRACES_SAMPLE_RATE" "0" "always"
+    remote_env_update "SENTRY_SEND_PII" "0" "always"
     remote_env_update "FEATURE_WXPUSHER" "$LOCAL_FEATURE_WXPUSHER" "always"
     remote_env_update "WXPUSHER_APP_TOKEN" "$LOCAL_WXPUSHER_APP_TOKEN" "always"
     remote_env_update "WX_MINIPROGRAM_APPID" "$LOCAL_WX_MINIPROGRAM_APPID" "always"
@@ -2415,6 +2435,10 @@ fi
 
 echo ""
 echo "步骤7: 在单个服务器事务中备份、迁移、切换并验活..."
+if [ "$FORMAL_WECHAT_CONFIG_ALLOWED" = "1" ]; then
+    # 激活前复查活动配置，缩小上传预检与生产切换之间的竞态窗口。
+    remote_exec "python3 $RELEASE_APP/scripts/verify_runtime_log_boundary.py --active-nginx"
+fi
 if remote_exec "STATE_DIR=$PROJECT_DIR RELEASE_ROOT=$RELEASE_ROOT NEW_RELEASE=$NEW_RELEASE CURRENT_LINK=$CURRENT_LINK ENV_FILE=$PROJECT_DIR/.env STAGED_ENV_FILE=$STAGED_ENV_FILE HEALTH_URL=http://127.0.0.1:5000/healthz REQUIRE_WECHAT_READY=$REQUIRE_WECHAT_READY EXPECTED_RELEASE_COMMIT=$VERIFIED_COMMIT RECOVERY_ACKNOWLEDGED_TRANSACTION=$RECOVERY_ACKNOWLEDGED_TRANSACTION RUNTIME_USER=$RUNTIME_USER RUNTIME_GROUP=$RUNTIME_GROUP QWEATHER_PENDING_KEY_PATH=$REMOTE_QWEATHER_PENDING_KEY_PATH bash $RELEASE_APP/scripts/activate_release.sh"; then
     # 激活事务已消费或精确复用 pending，并负责后续回滚/向前恢复；本地 EXIT 不再介入。
     REMOTE_QWEATHER_PREACTIVATION_ACTIVE="0"

@@ -23,9 +23,12 @@ from scipy import stats
 from scipy.interpolate import UnivariateSpline
 from collections import defaultdict
 import json
+import logging
 import os
 from pathlib import Path
 
+
+logger = logging.getLogger(__name__)
 
 # ============================================================
 # 文献参数 - 基于中国南方亚热带地区多中心研究
@@ -192,7 +195,7 @@ class DLNMRiskService:
         """加载外部校准模型曲线（优先于在线训练结果）"""
         try:
             if not self.profile_path.exists():
-                print(f"ℹ️ 未发现外部模型配置: {self.profile_path}")
+                logger.info("dlnm_profile_not_found")
                 return False
 
             with self.profile_path.open('r', encoding='utf-8') as f:
@@ -200,20 +203,20 @@ class DLNMRiskService:
 
             curve = profile.get('curve')
             if not isinstance(curve, list) or not curve:
-                print(f"⚠️ 外部模型配置缺少有效 curve: {self.profile_path}")
+                logger.warning("dlnm_profile_curve_missing")
                 return False
 
             curve_df = pd.DataFrame(curve)
             required_cols = {'temp', 'rr'}
             if not required_cols.issubset(set(curve_df.columns)):
-                print(f"⚠️ 外部模型配置缺少必要列 {required_cols}: {self.profile_path}")
+                logger.warning("dlnm_profile_columns_missing")
                 return False
 
             curve_df['temp'] = pd.to_numeric(curve_df['temp'], errors='coerce')
             curve_df['rr'] = pd.to_numeric(curve_df['rr'], errors='coerce')
             curve_df = curve_df.dropna(subset=['temp', 'rr']).sort_values('temp').drop_duplicates('temp')
             if curve_df.empty:
-                print(f"⚠️ 外部模型曲线为空: {self.profile_path}")
+                logger.warning("dlnm_profile_curve_empty")
                 return False
 
             self.temperature_rr = {
@@ -262,12 +265,10 @@ class DLNMRiskService:
             self.model_source = 'calibrated_profile'
             self.model_trained = True
 
-            print(f"✅ 已加载外部校准模型: {self.profile_name}")
-            print(f"   配置文件: {self.profile_path}")
-            print(f"   MMT: {self.mmt:.2f}°C, RR曲线点数: {len(self.temperature_rr)}")
+            logger.info("dlnm_profile_loaded")
             return True
-        except Exception as e:
-            print(f"⚠️ 加载外部校准模型失败: {e}")
+        except Exception:
+            logger.warning("dlnm_profile_load_failed")
             return False
 
     def _load_weather_data(self):
@@ -319,11 +320,10 @@ class DLNMRiskService:
                         self.weather_df['tmean'] = pd.to_numeric(self.weather_df[col], errors='coerce')
                         break
             
-            print(f"✅ 天气数据加载成功: {len(self.weather_df)} 天记录")
-            print(f"   日期范围: {self.weather_df['date'].min()} 至 {self.weather_df['date'].max()}")
-            
-        except Exception as e:
-            print(f"⚠️ 天气数据加载失败: {e}")
+            logger.info("dlnm_weather_data_loaded")
+
+        except Exception:
+            logger.warning("dlnm_weather_data_load_failed")
             self.weather_df = pd.DataFrame()
     
     def _load_medical_data(self):
@@ -350,12 +350,10 @@ class DLNMRiskService:
             self.elderly_daily_visits = elderly_df.groupby('date').size().reset_index(name='visits')
             self.elderly_daily_visits['date'] = pd.to_datetime(self.elderly_daily_visits['date'])
             
-            print(f"✅ 病历数据加载成功: {len(self.medical_df)} 条记录")
-            
-        except Exception as e:
-            print(f"⚠️ 病历数据加载失败: {e}")
-            import traceback
-            traceback.print_exc()
+            logger.info("dlnm_medical_data_loaded")
+
+        except Exception:
+            logger.warning("dlnm_medical_data_load_failed")
             self.medical_df = pd.DataFrame()
             self.daily_visits = pd.DataFrame()
             self.elderly_daily_visits = pd.DataFrame()
@@ -378,7 +376,7 @@ class DLNMRiskService:
     def _train_model(self):
         """训练DLNM风险函数模型"""
         if self.weather_df.empty or self.daily_visits.empty:
-            print("⚠️ 数据不足，无法训练模型")
+            logger.info("dlnm_training_data_unavailable")
             return
         
         try:
@@ -386,7 +384,7 @@ class DLNMRiskService:
             merged_df = self._merge_data()
             
             if merged_df.empty or len(merged_df) < 30:
-                print("⚠️ 合并后数据不足")
+                logger.info("dlnm_merged_data_insufficient")
                 return
             
             # 1. 计算温度分位数和MMT
@@ -402,14 +400,10 @@ class DLNMRiskService:
             self._calculate_seasonal_baseline(merged_df)
             
             self.model_trained = True
-            print("✅ DLNM风险模型训练完成")
-            print(f"   MMT (最低风险温度): {self.mmt:.1f}°C")
-            print(f"   温度范围: {self.percentiles.get('p5', 0):.1f}°C - {self.percentiles.get('p95', 35):.1f}°C")
-            
-        except Exception as e:
-            print(f"⚠️ 模型训练失败: {e}")
-            import traceback
-            traceback.print_exc()
+            logger.info("dlnm_model_trained")
+
+        except Exception:
+            logger.warning("dlnm_model_training_failed")
     
     def _merge_data(self):
         """合并天气和门诊数据，并创建滞后变量"""
@@ -435,14 +429,14 @@ class DLNMRiskService:
             merged = merged.sort_values('date').reset_index(drop=True)
             
             if merged.empty:
-                print("⚠️ 合并后数据为空")
+                logger.info("dlnm_merge_empty")
                 return pd.DataFrame()
             
             # 确保 tmean 列为数值类型
             if 'tmean' in merged.columns:
                 merged['tmean'] = pd.to_numeric(merged['tmean'], errors='coerce')
             else:
-                print("⚠️ 缺少 tmean 列")
+                logger.warning("dlnm_tmean_column_missing")
                 return pd.DataFrame()
             
             # 创建滞后变量（lag 0-7）
@@ -484,10 +478,8 @@ class DLNMRiskService:
             
             return merged
             
-        except Exception as e:
-            print(f"数据合并失败: {e}")
-            import traceback
-            traceback.print_exc()
+        except Exception:
+            logger.warning("dlnm_data_merge_failed")
             return pd.DataFrame()
     
     def _calculate_temperature_percentiles(self, merged_df):
@@ -532,7 +524,7 @@ class DLNMRiskService:
                 self.mmt = (1 - self.literature_weight) * local_mmt + self.literature_weight * lit_mmt
             else:
                 # 本地估计超出范围，更偏向文献值
-                print(f"   ⚠️ 本地MMT({local_mmt:.1f}°C)超出文献范围{mmt_range}，向文献值校正")
+                logger.info("dlnm_local_mmt_clamped")
                 self.mmt = 0.3 * local_mmt + 0.7 * lit_mmt
                 # 限制在合理范围
                 self.mmt = max(mmt_range[0], min(self.mmt, mmt_range[1]))
@@ -748,10 +740,10 @@ class DLNMRiskService:
                 'age_modifier': self._create_age_modifier('heat')
             }
 
-            print(f"   病种RR计算完成: 呼吸系统({len(resp_df)}例), 心脑血管({len(cardio_df)}例), 消化系统({len(digest_df)}例)")
+            logger.info("dlnm_disease_rr_calculated")
 
-        except Exception as e:
-            print(f"病种RR计算失败: {e}，使用文献参数")
+        except Exception:
+            logger.warning("dlnm_disease_rr_fallback")
             self._set_literature_disease_rr()
 
     def _set_literature_disease_rr(self):

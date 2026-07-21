@@ -1768,7 +1768,15 @@ def health_assessment():
         return _error(str(exc), "健康筛查输入不完整或无效。", 400)
     except Exception:
         db.session.rollback()
-        current_app.logger.exception("小程序健康评估失败")
+        # 只记录固定错误码和服务端元数据，避免异常字符串、SQL 参数或健康字段进入日志。
+        current_app.logger.error(
+            "小程序健康评估写入失败",
+            extra={
+                "error_code": "mp_health_assessment_write_failed",
+                "operation": "health_assessment_write",
+                "request_id": getattr(g, "request_id", None),
+            },
+        )
         return _error("assessment_failed", "健康评估暂时无法完成，请稍后重试。", 503)
     return _success({"assessment": _assessment_json(record)}, 201)
 

@@ -18,6 +18,7 @@ from core.config import configure_app
 from core.constants import CHRONIC_OPTIONS, DEFAULT_CITY_LABEL, GUEST_ID_PREFIX, RISK_TAG_OPTIONS
 from core.extensions import db, init_extensions, login_manager
 from core.hooks import register_hooks
+from core.logging_privacy import install_formal_logging_privacy
 from core.db_models import (
     AlertDelivery,
     AuditLog,
@@ -85,6 +86,7 @@ def _load_environment():
 
 # 正式激活时由发布器显式传入外置配置；本地开发仍兼容仓库 .env。
 _load_environment()
+install_formal_logging_privacy()
 
 # 创建Flask应用
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -99,6 +101,7 @@ def create_app(register_blueprints=True):
         static_folder=str(PROJECT_ROOT / 'static')
     )
     configure_app(app, logger)
+    install_formal_logging_privacy(app.config.get('WECHAT_FORMAL_RUNTIME'))
     init_extensions(app)
     register_user_loader(login_manager)
     register_hooks(app)

@@ -285,7 +285,7 @@ def test_formal_deploy_propagates_full_feature_release_flags():
     assert 'remote_env_update "FEATURE_HEAT_EXPOSURE_GIS" "0" "if-empty"' in content
     assert 'remote_env_update "FEATURE_HEAT_EXPOSURE_GIS" "$LOCAL_FEATURE_HEAT_EXPOSURE_GIS" "always"' in content
     assert '微信全功能正式发布必须启用 FEATURE_HEAT_EXPOSURE_GIS=1' in content
-    assert '1.0.0 微信正式发布必须固定 FEATURE_WXPUSHER=0' in content
+    assert '1.1.0 微信正式发布必须固定 FEATURE_WXPUSHER=0' in content
     assert 'FEATURE_WXPUSHER=0 时必须清空 WXPUSHER_APP_TOKEN' in content
     assert 'LOCAL_WECHAT_FORMAL_RUNTIME=""' in content
     assert 'WECHAT_FORMAL_RUNTIME=0' in content
@@ -318,6 +318,33 @@ def test_formal_deploy_loads_and_forces_audit_logs_off():
         '"$LOCAL_FEATURE_AUDIT_LOGS" "always"'
     ) in content
     assert 'remote_env_update "FEATURE_AUDIT_LOGS" "0" "if-empty"' not in content
+
+
+def test_formal_deploy_requires_and_forces_structured_privacy_logs_on():
+    content = _load_deploy_script()
+    assert 'LOCAL_FEATURE_STRUCTURED_LOGS=""' in content
+    assert '微信正式发布必须固定 FEATURE_STRUCTURED_LOGS=1。' in content
+    assert 'FEATURE_STRUCTURED_LOGS=1' in content
+    assert 'remote_env_update "FEATURE_STRUCTURED_LOGS" "1" "always"' in content
+    assert 'remote_env_update "SENTRY_DSN" "" "always"' in content
+    assert 'remote_env_update "SENTRY_TRACES_SAMPLE_RATE" "0" "always"' in content
+    assert 'remote_env_update "SENTRY_SEND_PII" "0" "always"' in content
+    assert (
+        'remote_env_update "FEATURE_STRUCTURED_LOGS" '
+        '"$LOCAL_FEATURE_STRUCTURED_LOGS" "always"'
+    ) in content
+
+
+def test_formal_deploy_requires_nginx_access_log_off_before_activation():
+    content = _load_deploy_script()
+    verification = 'python3 $RELEASE_APP/scripts/verify_runtime_log_boundary.py --active-nginx'
+    assert content.count(verification) == 2
+    first = content.index(verification)
+    second = content.index(verification, first + 1)
+    assert first < content.index('步骤4: 准备隔离的候选环境配置')
+    assert first < content.index('remote_env_update "WX_MINIPROGRAM_SECRET"')
+    assert second > content.index('步骤7: 在单个服务器事务中备份、迁移、切换并验活')
+    assert second < content.index('bash $RELEASE_APP/scripts/activate_release.sh')
 
 
 def test_deploy_script_uses_two_stage_failure_safe_cache_timers():
