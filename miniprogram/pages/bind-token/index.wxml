@@ -7,7 +7,7 @@
 
   <view class="card login-card motion-enter">
     <view class="section-title">登录后管理家人</view>
-    <view class="section-copy">优先使用微信快捷登录。系统只读取登录所需的临时凭证，不读取你的聊天、通讯录或位置。</view>
+    <view class="section-copy">使用微信快捷登录。登录过程只读取所需的临时凭证，不读取你的聊天、通讯录或位置；避暑资源页的可选定位会另行逐次说明并征得同意。</view>
 
     <view class="consent-row" role="group" aria-role="group" aria-label="登录协议确认区">
       <label class="consent-check" for="privacyAgreementCheckbox" aria-label="勾选表示已阅读并同意隐私说明和用户协议">
@@ -25,30 +25,8 @@
       </view>
     </view>
 
-    <button class="wechat-button" loading="{{busy}}" disabled="{{busy}}" bindtap="onWechatLogin" hover-class="button-pressed" aria-label="微信快捷登录">微信快捷登录</button>
+    <button class="wechat-button" loading="{{busy}}" disabled="{{busy}}" bindtap="onWechatLogin" hover-class="button-pressed" aria-label="{{loginFailed ? '重新微信登录' : '微信快捷登录'}}">{{loginFailed ? '重新微信登录' : '微信快捷登录'}}</button>
     <view wx:if="{{loginHint}}" class="status-hint" role="status" aria-role="status" aria-live="polite">{{loginHint}}</view>
-
-    <button class="fallback-link" bindtap="toggleTokenFallback" hover-class="button-pressed">
-      {{showTokenFallback ? '收起备用登录码' : '使用备用登录码'}}
-    </button>
-
-    <view wx:if="{{showTokenFallback}}" class="fallback-panel">
-      <view class="field-label">备用登录码</view>
-      <input
-        class="text-input"
-        password="true"
-        maxlength="512"
-        placeholder="粘贴网页端生成的登录码"
-        value="{{tokenInput}}"
-        bindinput="onTokenInput"
-        aria-label="备用登录码"
-      />
-      <view class="button-row">
-        <button class="primary-button row-button" loading="{{busy}}" disabled="{{busy}}" bindtap="onBind" hover-class="button-pressed">验证并进入</button>
-        <button class="secondary-button row-button" disabled="{{busy}}" bindtap="onClear" hover-class="button-pressed">清空输入</button>
-      </view>
-      <view class="security-note">登录码只用于验证本服务账号，不会显示在页面中。请勿转发给他人。</view>
-    </view>
   </view>
 
   <view class="public-note">无需登录也可以从小程序首页查看都昌县公共天气和预警。</view>

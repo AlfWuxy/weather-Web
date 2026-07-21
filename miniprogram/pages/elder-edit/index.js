@@ -29,6 +29,17 @@ function loadIsActive(page, request) {
     && page._loadRequestId === request.requestId;
 }
 
+function markPreviousCarePageForReload() {
+  const pages = typeof getCurrentPages === 'function' ? getCurrentPages() : [];
+  const previous = pages.length > 1 ? pages[pages.length - 2] : null;
+  if (
+    previous
+    && (previous.route === 'pages/elders/index' || typeof previous.loadCareHome === 'function')
+  ) {
+    previous._healthConsentReloadPending = true;
+  }
+}
+
 Page({
   data: {
     mode: 'create',
@@ -57,8 +68,9 @@ Page({
     const mode = options.mode === 'create' || !pairId ? 'create' : 'edit';
     this._routePairId = pairId;
     this._routeMode = mode;
+    this._preserveDraftAfterSaveFailure = false;
     this.setData({ mode, pairId, contextReady: false, loadError: '', loading: true });
-    await guardHealthSensitivePage(this, () => this.loadAuthorizedPage());
+    await this.loadAuthorizedPage();
   },
 
   async onShow() {
@@ -66,18 +78,34 @@ Page({
     if (!requireToken()) return;
     const resumed = await resumeHealthMutation(this);
     if (this._unloaded || this._hidden) return;
-    if (resumed.resumed) this.setData({ busy: false, loading: true });
+    if (resumed.resumed) this.setData({ busy: false });
     if (resumed.resumed && !requireToken()) return;
     const resumedSave = resumed.resumed
       && (resumed.kind === 'elder-create' || resumed.kind === 'elder-edit');
+    if (resumedSave && resumed.ok) markPreviousCarePageForReload();
     if (resumedSave && resumed.ok && resumed.kind === 'elder-create') {
-      const pages = typeof getCurrentPages === 'function' ? getCurrentPages() : [];
-      const previous = pages.length > 1 ? pages[pages.length - 2] : null;
-      if (previous) previous._healthConsentReloadPending = true;
       wx.navigateBack();
       return;
     }
-    if (this.data.pairId === null && this._routeMode) {
+    if (resumedSave && !resumed.ok && this.data.contextReady === true) {
+      // 后台保存失败时保留用户已经输入的草稿，返回后允许直接再次保存。
+      this._preserveDraftAfterSaveFailure = true;
+      this.setData({ busy: false, loading: false, loadError: '' });
+      wx.showToast({ title: '保存失败，请检查网络后重试', icon: 'none' });
+      await guardHealthSensitivePage(this, async () => {});
+      return;
+    }
+    if (resumedSave && resumed.ok) {
+      this._preserveDraftAfterSaveFailure = false;
+      this.setData({ loading: true });
+    }
+    if (this._preserveDraftAfterSaveFailure && this.data.contextReady === true) {
+      this.setData({ busy: false, loading: false, loadError: '' });
+      // 只重新核验健康资料门禁，不读取服务器资料覆盖尚未保存的草稿。
+      await guardHealthSensitivePage(this, async () => {});
+      return;
+    }
+    if (this.data.contextReady !== true && this.data.pairId === null && this._routeMode) {
       this.setData({
         mode: this._routeMode,
         pairId: this._routePairId,
@@ -86,7 +114,7 @@ Page({
         loading: true,
       });
     }
-    await guardHealthSensitivePage(this, () => this.loadAuthorizedPage());
+    await this.loadAuthorizedPage();
   },
 
   onHide() {
@@ -105,6 +133,7 @@ Page({
     this._returnTimer = null;
     this._routePairId = null;
     this._routeMode = 'create';
+    this._preserveDraftAfterSaveFailure = false;
     if (this._unloaded) return;
     this.setData({
       mode: 'create',
@@ -128,6 +157,7 @@ Page({
     this._loadRequestId = Number(this._loadRequestId || 0) + 1;
     if (this._returnTimer) clearTimeout(this._returnTimer);
     this._returnTimer = null;
+    this._preserveDraftAfterSaveFailure = false;
     if (this._unloaded) return;
     this.setData({
       mode: 'create',
@@ -145,15 +175,38 @@ Page({
     });
   },
 
+  onHealthConsentGuardError() {
+    this._loadRequestId = Number(this._loadRequestId || 0) + 1;
+    if (this._unloaded || this._hidden) return;
+    this.setData({
+      contextReady: false,
+      loadError: '健康资料授权状态暂时没有核验成功，请检查网络后重新加载。',
+      loading: false,
+      busy: false,
+    });
+  },
+
   onUnload() {
     this._unloaded = true;
     this._lifecycleGeneration = Number(this._lifecycleGeneration || 0) + 1;
     this._loadRequestId = Number(this._loadRequestId || 0) + 1;
     if (this._returnTimer) clearTimeout(this._returnTimer);
     this._returnTimer = null;
+    this._preserveDraftAfterSaveFailure = false;
   },
 
-  async loadAuthorizedPage() {
+  async loadAuthorizedPage(event) {
+    if (this._unloaded || this._hidden) return false;
+    const manualRetry = Boolean(event && event.currentTarget);
+    if (manualRetry) {
+      // 可见重试必须重新经过健康同意门禁，不能直接调用私密资料 loader。
+      this._healthConsentReloadPending = true;
+      this.setData({ contextReady: false, loadError: '', loading: true });
+    }
+    return guardHealthSensitivePage(this, () => this.loadAuthorizedContent());
+  },
+
+  async loadAuthorizedContent() {
     if (this._unloaded || this._hidden) return;
     const mode = this._routeMode || this.data.mode;
     const pairId = this._routePairId || this.data.pairId;
@@ -197,6 +250,7 @@ Page({
         contextReady: true,
         loadError: '',
       });
+      this._preserveDraftAfterSaveFailure = false;
     } catch (error) {
       if (loadIsActive(this, request)) {
         this.setData({
@@ -246,6 +300,8 @@ Page({
       );
       await mutation;
       if (!lifecycleIsActive(this, lifecycle)) return;
+      this._preserveDraftAfterSaveFailure = false;
+      markPreviousCarePageForReload();
       wx.showToast({ title: mode === 'create' ? '已添加' : '已保存', icon: 'success' });
       if (this._returnTimer) clearTimeout(this._returnTimer);
       this._returnTimer = setTimeout(() => {
@@ -253,7 +309,11 @@ Page({
         if (lifecycleIsActive(this, lifecycle)) wx.navigateBack();
       }, 300);
     } catch (error) {
-      if (lifecycleIsActive(this, lifecycle)) wx.showToast({ title: '保存失败，请稍后再试', icon: 'none' });
+      if (lifecycleIsActive(this, lifecycle)) {
+        this._preserveDraftAfterSaveFailure = true;
+        this.setData({ loading: false, loadError: '' });
+        wx.showToast({ title: '保存失败，请检查网络后重试', icon: 'none' });
+      }
     } finally {
       finishHealthMutation(this, mutation);
       if (lifecycleIsActive(this, lifecycle)) this.setData({ busy: false });

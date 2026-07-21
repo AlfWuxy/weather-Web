@@ -11,6 +11,7 @@ let modalOptions = null;
 let clipboardOptions = null;
 let toasts = [];
 let navigations = [];
+let currentPages = [];
 
 function trackHealthMutation(page, promise, kind, meta) {
   const pending = Promise.resolve(promise);
@@ -56,9 +57,11 @@ async function resumeHealthMutation(page) {
 }
 
 global.Page = (definition) => { pageDefinition = definition; };
+global.getCurrentPages = () => currentPages;
 global.wx = {
   makePhoneCall: () => {},
   navigateBack: () => { navigations.push('back'); },
+  navigateTo: (options) => { navigations.push(options.url); },
   redirectTo: (options) => { navigations.push(options.url); },
   setClipboardData: (options) => { clipboardOptions = options; },
   showModal: (options) => { modalOptions = options; },
@@ -185,6 +188,193 @@ test('六个健康敏感页面在守卫拒绝时不会发出私密 API 请求', 
     assert.equal(privateRequestCount, 0, `${scenario.name} 的守卫拒绝后不得读取私密 API`);
     assert.equal(snapshotCount, 0, `${scenario.name} 的守卫拒绝后不得读取照护天气快照`);
   }
+});
+
+test('老人创建页门禁失败退出加载态，页面重试仍先经过守卫', async (t) => {
+  let guardCount = 0;
+  let privateRequestCount = 0;
+  let gateAvailable = false;
+  t.after(() => {
+    authApiImpl = async () => ({});
+    guardHealthSensitivePageImpl = async (page, loader) => loader();
+  });
+  guardHealthSensitivePageImpl = async (page, loader) => {
+    guardCount += 1;
+    if (!gateAvailable) {
+      page.onHealthConsentGuardError(Object.assign(new Error('request:fail timeout'), {
+        statusCode: 503,
+      }));
+      return false;
+    }
+    return loader();
+  };
+  authApiImpl = async () => {
+    privateRequestCount += 1;
+    return {};
+  };
+  const definition = loadPage('../pages/elder-edit/index');
+  const page = makePage(definition);
+
+  await page.onLoad.call(page, { mode: 'create' });
+  assert.equal(page.data.loading, false);
+  assert.equal(page.data.contextReady, false);
+  assert.match(page.data.loadError, /授权状态/);
+  assert.equal(guardCount, 1);
+  assert.equal(privateRequestCount, 0);
+
+  gateAvailable = true;
+  await page.loadAuthorizedPage.call(page, { currentTarget: { id: 'retry' } });
+  assert.equal(guardCount, 2);
+  assert.equal(privateRequestCount, 0);
+  assert.equal(page.data.loading, false);
+  assert.equal(page.data.contextReady, true);
+  assert.equal(page.data.loadError, '');
+});
+
+test('家庭照护门禁失败退出加载态，重试成功后显示老人资料', async (t) => {
+  let guardCount = 0;
+  let privateRequestCount = 0;
+  let gateAvailable = false;
+  t.after(() => {
+    authApiImpl = async () => ({});
+    snapshotImpl = async () => ({});
+    guardHealthSensitivePageImpl = async (page, loader) => loader();
+  });
+  guardHealthSensitivePageImpl = async (page, loader) => {
+    guardCount += 1;
+    if (!gateAvailable) {
+      page.onHealthConsentGuardError(new Error('request:fail timeout'));
+      return false;
+    }
+    return loader();
+  };
+  authApiImpl = async () => {
+    privateRequestCount += 1;
+    return {
+      items: [{ pair_id: 7, member: { name: '奶奶', relation: '祖母', age: 72 } }],
+    };
+  };
+  snapshotImpl = async () => ({});
+  const definition = loadPage('../pages/elders/index');
+  const page = makePage(definition);
+
+  await page.onShow.call(page);
+  assert.equal(page.data.loading, false);
+  assert.match(page.data.loadError, /授权状态/);
+  assert.equal(guardCount, 1);
+  assert.equal(privateRequestCount, 0);
+
+  gateAvailable = true;
+  await page.retryLoad.call(page);
+  assert.equal(guardCount, 2);
+  assert.equal(privateRequestCount, 1);
+  assert.equal(page.data.loading, false);
+  assert.equal(page.data.loadError, '');
+  assert.equal(page.data.elders[0].displayName, '奶奶');
+
+  const view = fs.readFileSync(path.join(__dirname, '../pages/elders/index.wxml'), 'utf8');
+  assert.equal((view.match(/bindtap="retryLoad"/g) || []).length, 2);
+  assert.doesNotMatch(view, /bindtap="loadCareHome"/);
+});
+
+test('家庭照护添加入口在加载和失败时给出反馈，资料就绪后才进入创建页', () => {
+  const definition = loadPage('../pages/elders/index');
+  const page = makePage(definition);
+  toasts = [];
+  navigations = [];
+
+  page.goCreate.call(page);
+  assert.match(toasts.at(-1).title, /仍在加载/);
+  assert.deepEqual(navigations, []);
+
+  page.setData({ loading: false, loadError: '加载失败' });
+  page.goCreate.call(page);
+  assert.match(toasts.at(-1).title, /先重试/);
+  assert.deepEqual(navigations, []);
+
+  page._healthConsentLoadedOnce = true;
+  page.setData({ loading: false, loadError: '' });
+  page.goCreate.call(page);
+  assert.deepEqual(navigations, ['/pages/elder-edit/index?mode=create']);
+});
+
+test('老人资料前台保存成功后返回家庭页会重新读取当前账号资料', async (t) => {
+  const originalSetTimeout = global.setTimeout;
+  const originalClearTimeout = global.clearTimeout;
+  let returnCallback = null;
+  let getCalls = 0;
+  let postCalls = 0;
+  t.after(() => {
+    global.setTimeout = originalSetTimeout;
+    global.clearTimeout = originalClearTimeout;
+    currentPages = [];
+    authApiImpl = async () => ({});
+    snapshotImpl = async () => ({});
+    guardHealthSensitivePageImpl = async (page, loader) => loader();
+  });
+  global.setTimeout = (callback) => {
+    returnCallback = callback;
+    return 71;
+  };
+  global.clearTimeout = () => {};
+  authApiImpl = async (options) => {
+    if (options.method === 'POST') {
+      postCalls += 1;
+      return { pair_id: 9 };
+    }
+    if (options.method === 'GET' && options.path === '/mp/api/v1/elders') {
+      getCalls += 1;
+      return {
+        items: [{ pair_id: 9, member: { name: '外婆', relation: '祖母', age: 76 } }],
+      };
+    }
+    return {};
+  };
+  snapshotImpl = async () => ({});
+  guardHealthSensitivePageImpl = async (page, loader) => {
+    if (page._healthConsentReloadPending !== true) return false;
+    page._healthConsentReloadPending = false;
+    page._healthConsentLoadedOnce = true;
+    return loader();
+  };
+
+  const eldersDefinition = loadPage('../pages/elders/index');
+  const eldersPage = makePage(eldersDefinition, { loading: false });
+  eldersPage.route = 'pages/elders/index';
+  eldersPage._healthConsentLoadedOnce = true;
+  eldersPage.onHide.call(eldersPage);
+
+  const editDefinition = loadPage('../pages/elder-edit/index');
+  const editPage = makePage(editDefinition, {
+    mode: 'create',
+    pairId: null,
+    name: '外婆',
+    relation: '祖母',
+    age: '76',
+    gender: '女性',
+    chronicText: '',
+    contextReady: true,
+    loading: false,
+  });
+  editPage.route = 'pages/elder-edit/index';
+  editPage._unloaded = false;
+  editPage._hidden = false;
+  editPage._lifecycleGeneration = 1;
+  currentPages = [eldersPage, editPage];
+  navigations = [];
+
+  await editPage.onSave.call(editPage);
+  assert.equal(postCalls, 1);
+  assert.equal(eldersPage._healthConsentReloadPending, true);
+  assert.equal(typeof returnCallback, 'function');
+  returnCallback();
+  assert.deepEqual(navigations, ['back']);
+
+  currentPages = [eldersPage];
+  await eldersPage.onShow.call(eldersPage);
+  assert.equal(getCalls, 1);
+  assert.equal(eldersPage.data.loading, false);
+  assert.equal(eldersPage.data.elders[0].displayName, '外婆');
 });
 
 const mutationResumeScenarios = [
@@ -380,6 +570,73 @@ mutationResumeScenarios
       }
     });
   });
+
+test('老人资料后台保存失败后保留草稿、退出忙碌且不发 GET 覆盖', async (t) => {
+  const gate = deferred();
+  const requests = [];
+  let retryShouldSucceed = false;
+  toasts = [];
+  t.after(() => {
+    authApiImpl = async () => ({});
+    guardHealthSensitivePageImpl = async (page, loader) => loader();
+  });
+  authApiImpl = (options) => {
+    requests.push(options);
+    if (options.method === 'GET') {
+      return Promise.resolve({
+        items: [{ pair_id: 7, member: { name: '服务器旧称呼', age: 70 } }],
+      });
+    }
+    return retryShouldSucceed ? Promise.resolve({ ok: true }) : gate.promise;
+  };
+  const definition = loadPage('../pages/elder-edit/index');
+  const page = makePage(definition, {
+    mode: 'edit',
+    pairId: 7,
+    name: '奶奶的新称呼',
+    relation: '祖母',
+    age: '72',
+    gender: '女性',
+    genderIndex: 1,
+    chronicText: '高血压、糖尿病',
+    contextReady: true,
+    loading: false,
+  });
+  Object.assign(page, {
+    _routeMode: 'edit',
+    _routePairId: 7,
+    _hidden: false,
+    _unloaded: false,
+    _lifecycleGeneration: 1,
+  });
+
+  const pendingMutation = page.onSave.call(page);
+  await Promise.resolve();
+  assert.equal(page.data.busy, true);
+  page.onHide.call(page);
+  gate.reject(new Error('offline'));
+  await pendingMutation;
+  await page.onShow.call(page);
+
+  assert.equal(page.data.busy, false);
+  assert.equal(page.data.loading, false);
+  assert.equal(page.data.contextReady, true);
+  assert.equal(page.data.name, '奶奶的新称呼');
+  assert.equal(page.data.chronicText, '高血压、糖尿病');
+  assert.deepEqual(requests.map((item) => item.method), ['PATCH']);
+  assert.match(toasts.at(-1).title, /保存失败.*重试/);
+
+  await page.onShow.call(page);
+  assert.deepEqual(requests.map((item) => item.method), ['PATCH']);
+  assert.equal(page.data.name, '奶奶的新称呼');
+
+  retryShouldSucceed = true;
+  await page.onSave.call(page);
+  assert.deepEqual(requests.map((item) => item.method), ['PATCH', 'PATCH']);
+  assert.equal(page.data.busy, false);
+  assert.equal(toasts.at(-1).title, '已保存');
+  page.onUnload.call(page);
+});
 
 test('当天求助状态恢复后再次提交使用更新语义', async () => {
   const requests = [];

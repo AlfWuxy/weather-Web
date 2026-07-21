@@ -156,3 +156,63 @@ test('全部私人页面都提供返回校验和内存清理入口', () => {
     assert.match(source, /onSessionInvalidated\(\)/, `${name} 应提供私人数据清理入口`);
   });
 });
+
+test('1.1 登录页只保留微信登录并提供重试和公共天气回退', () => {
+  const loginScript = fs.readFileSync(
+    path.join(__dirname, '..', 'pages', 'bind-token', 'index.js'),
+    'utf8'
+  );
+  const loginView = fs.readFileSync(
+    path.join(__dirname, '..', 'pages', 'bind-token', 'index.wxml'),
+    'utf8'
+  );
+  const settingsView = fs.readFileSync(
+    path.join(__dirname, '..', 'pages', 'settings', 'index.wxml'),
+    'utf8'
+  );
+
+  assert.match(loginScript, /wx\.login\(/);
+  assert.match(loginScript, /loginFailed:\s*true/);
+  assert.match(loginScript, /检查网络后重试/);
+  assert.match(loginView, /重新微信登录/);
+  assert.match(loginView, /bindtap="goPublicHome"[\s\S]*先查看公共天气/);
+
+  assert.doesNotMatch(loginScript, /\btokenApi\b|\bonBind\s*\(|legacy_token|tokenInput|showTokenFallback/);
+  assert.doesNotMatch(loginView, /备用登录码|password="true"|bindtap="(?:onBind|toggleTokenFallback|onClear)"/);
+  assert.doesNotMatch(settingsView, /备用登录码/);
+});
+
+test('微信登录失败后显示重试状态并保留公共天气回退提示', async () => {
+  const loginPagePath = require.resolve('../pages/bind-token/index');
+  const previousPage = global.Page;
+  const previousLogin = global.wx.login;
+  const previousShowToast = global.wx.showToast;
+  let loginPageDefinition;
+  let toast;
+
+  try {
+    global.Page = (definition) => { loginPageDefinition = definition; };
+    global.wx.login = ({ fail }) => fail(new Error('wechat unavailable'));
+    global.wx.showToast = (options) => { toast = options; };
+    delete require.cache[loginPagePath];
+    require(loginPagePath);
+
+    const page = Object.assign({}, loginPageDefinition);
+    page.data = Object.assign({}, loginPageDefinition.data, { privacyAgreed: true });
+    page.setData = (next) => Object.assign(page.data, next);
+    page._unloaded = false;
+
+    await page.onWechatLogin.call(page);
+
+    assert.equal(page.data.busy, false);
+    assert.equal(page.data.loginFailed, true);
+    assert.match(page.data.loginHint, /检查网络后重试/);
+    assert.match(page.data.loginHint, /公共天气和预警/);
+    assert.equal(toast.title, '登录失败，请重试');
+  } finally {
+    delete require.cache[loginPagePath];
+    global.Page = previousPage;
+    global.wx.login = previousLogin;
+    global.wx.showToast = previousShowToast;
+  }
+});

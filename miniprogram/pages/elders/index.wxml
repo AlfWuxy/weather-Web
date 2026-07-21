@@ -35,13 +35,13 @@
   <view wx:if="{{loading && elders.length}}" class="inline-refresh" role="status" aria-role="status" aria-live="polite">正在刷新照护资料…</view>
   <view wx:if="{{loadError && elders.length}}" class="inline-warning" role="status" aria-role="status" aria-live="polite">
     <view>{{loadError}}</view>
-    <button class="retry-button inline-retry" bindtap="loadCareHome">重新刷新</button>
+    <button class="retry-button inline-retry" bindtap="retryLoad">重新刷新</button>
   </view>
 
   <view wx:if="{{loading && !elders.length}}" class="state-box">正在加载照护资料…</view>
   <view wx:elif="{{loadError && !elders.length}}" class="state-box error-state">
     <view>{{loadError}}</view>
-    <button class="retry-button" bindtap="loadCareHome">重新加载</button>
+    <button class="retry-button" bindtap="retryLoad">重新加载</button>
   </view>
   <view wx:elif="{{elders.length === 0}}" class="empty-card">
     <view class="empty-title">还没有添加家人</view>

@@ -109,6 +109,23 @@ Page({
     });
   },
 
+  onHealthConsentGuardError() {
+    this._healthConsentReloadPending = true;
+    if (this._unloaded || this._hidden) return;
+    this.setData({
+      loading: false,
+      loadError: '健康资料授权状态暂时没有核验成功，请检查网络后重试。',
+      busyPairId: 0,
+    });
+  },
+
+  async retryLoad() {
+    if (!requireToken()) return;
+    this._healthConsentReloadPending = true;
+    this.setData({ loading: true, loadError: '' });
+    await guardHealthSensitivePage(this, () => this.loadCareHome());
+  },
+
   async onPullDownRefresh() {
     try {
       if (!requireToken()) return;
@@ -158,7 +175,14 @@ Page({
   },
 
   goCreate() {
-    if (this._healthConsentLoadedOnce !== true) return;
+    if (this.data.loading) {
+      wx.showToast({ title: '资料仍在加载，请稍候', icon: 'none' });
+      return;
+    }
+    if (this.data.loadError || this._healthConsentLoadedOnce !== true) {
+      wx.showToast({ title: '请先重试加载资料', icon: 'none' });
+      return;
+    }
     wx.navigateTo({ url: '/pages/elder-edit/index?mode=create' });
   },
 

@@ -2,6 +2,7 @@
 """微信小程序运行时：快照、认证、owner scope 与输入边界。"""
 
 import json
+import re
 import threading
 import time
 from contextlib import contextmanager
@@ -429,6 +430,119 @@ def test_wechat_login_hashes_openid_and_issues_expiring_signed_session(
         assert "openid-sensitive-value" not in identity.openid_hash
         assert session.token_hash != data["session_token"]
         assert verify_miniprogram_session(data["session_token"]).id == session.id
+
+
+def test_same_wechat_openid_reuses_internal_user_and_private_owner_data(
+    app,
+    client,
+    db_session,
+    monkeypatch,
+):
+    """同一微信身份可换新会话，同时继续访问同一账号的私人资料。"""
+    from core.db_models import MiniProgramIdentity, MiniProgramSession
+
+    first = _wechat_login(app, client, monkeypatch, openid="stable-owner-openid")
+    second = _wechat_login(app, client, monkeypatch, openid="stable-owner-openid")
+    assert first.status_code == 200
+    assert second.status_code == 200
+
+    first_data = first.get_json()["data"]
+    second_data = second.get_json()["data"]
+    assert first_data["user"]["id"] == second_data["user"]["id"]
+    assert first_data["session_token"] != second_data["session_token"]
+    assert MiniProgramIdentity.query.count() == 1
+    assert MiniProgramSession.query.count() == 2
+    assert MiniProgramIdentity.query.one().user_id == first_data["user"]["id"]
+
+    first_headers = {
+        "Authorization": f"Bearer {first_data['session_token']}"
+    }
+    second_headers = {
+        "Authorization": f"Bearer {second_data['session_token']}"
+    }
+    consent = client.post(
+        "/mp/api/v1/health-consent",
+        headers=first_headers,
+        json={"consent": True, "health_consent_version": "privacy-v1"},
+    )
+    assert consent.status_code == 200
+    created = client.post(
+        "/mp/api/v1/elders",
+        headers=first_headers,
+        json={"name": "同账号老人", "relation": "母亲", "age": 70},
+    )
+    assert created.status_code == 200
+
+    visible_from_second_session = client.get(
+        "/mp/api/v1/elders",
+        headers=second_headers,
+    )
+    assert visible_from_second_session.status_code == 200
+    items = visible_from_second_session.get_json()["data"]
+    assert len(items) == 1
+    assert items[0]["pair_id"] == created.get_json()["data"]["pair_id"]
+    assert items[0]["member"]["name"] == "同账号老人"
+
+
+def test_distinct_wechat_openids_isolate_private_data_and_share_public_snapshot(
+    app,
+    client,
+    db_session,
+    monkeypatch,
+):
+    """不同微信身份互不可读私人资料，同时读取同一份县级公共快照。"""
+    from core.db_models import MiniProgramIdentity
+
+    snapshot_id = _persist_snapshot(app)
+    login_a = _wechat_login(app, client, monkeypatch, openid="owner-a-openid")
+    login_b = _wechat_login(app, client, monkeypatch, openid="owner-b-openid")
+    assert login_a.status_code == 200
+    assert login_b.status_code == 200
+
+    data_a = login_a.get_json()["data"]
+    data_b = login_b.get_json()["data"]
+    assert data_a["user"]["id"] != data_b["user"]["id"]
+    assert MiniProgramIdentity.query.count() == 2
+    headers_a = {"Authorization": f"Bearer {data_a['session_token']}"}
+    headers_b = {"Authorization": f"Bearer {data_b['session_token']}"}
+
+    for headers in (headers_a, headers_b):
+        consent = client.post(
+            "/mp/api/v1/health-consent",
+            headers=headers,
+            json={"consent": True, "health_consent_version": "privacy-v1"},
+        )
+        assert consent.status_code == 200
+
+    created = client.post(
+        "/mp/api/v1/elders",
+        headers=headers_a,
+        json={"name": "账号 A 老人", "relation": "父亲", "age": 72},
+    )
+    assert created.status_code == 200
+    pair_id = created.get_json()["data"]["pair_id"]
+
+    owner_list = client.get("/mp/api/v1/elders", headers=headers_a)
+    outsider_list = client.get("/mp/api/v1/elders", headers=headers_b)
+    assert owner_list.status_code == 200
+    assert owner_list.get_json()["data"][0]["pair_id"] == pair_id
+    assert outsider_list.status_code == 200
+    assert outsider_list.get_json()["data"] == []
+    assert client.get(
+        f"/mp/api/v1/health/diary?pair_id={pair_id}",
+        headers=headers_b,
+    ).status_code in {400, 404}
+
+    public_a = client.get("/mp/api/v1/bootstrap", headers=headers_a)
+    public_b = client.get("/mp/api/v1/bootstrap", headers=headers_b)
+    public_guest = client.get("/mp/api/v1/bootstrap")
+    assert public_a.status_code == public_b.status_code == public_guest.status_code == 200
+    for response in (public_a, public_b, public_guest):
+        public_data = response.get_json()["data"]
+        assert public_data["snapshot_id"] == snapshot_id
+        assert public_data["location"]["name"] == "都昌县"
+        assert public_data["current"] == public_a.get_json()["data"]["current"]
+        assert public_data["warnings"] == public_a.get_json()["data"]["warnings"]
 
 
 def test_wechat_identity_keeps_first_acquisition_source(
@@ -1607,6 +1721,109 @@ def test_health_assessment_submit_latest_and_owner_scope(
         headers={"Authorization": f"Bearer {outsider_token}"},
         json=payload,
     ).status_code == 404
+
+
+def test_health_assessment_database_failure_does_not_log_sensitive_values(
+    app,
+    client,
+    db_session,
+    monkeypatch,
+    caplog,
+):
+    """数据库异常日志只包含固定错误码，不含健康正文、请求信息或 SQL 参数。"""
+    import logging
+
+    from core.db_models import FamilyMember
+    from core.extensions import db
+
+    sentinels = {
+        "body": "HEALTH_BODY_SENTINEL_73A1",
+        "ip": "203.0.113.91",
+        "user_agent": "HEALTH_UA_SENTINEL_16C4",
+        "request_id": "EXTERNAL_HEALTH_REQUEST_ID_58D2",
+        "sql_parameter": "SQL_PARAMETER_SENTINEL_C90F",
+    }
+    owner, token = _user_and_token(db_session, "assessment_log_privacy_owner")
+    member = FamilyMember(
+        user_id=owner.id,
+        name="日志边界老人",
+        relation="家人",
+        age=72,
+    )
+    db_session.add(member)
+    db_session.commit()
+    pair = _pair(db_session, owner, "72345678", member=member)
+    _persist_snapshot(app)
+
+    assessment_started = False
+
+    def fake_assessment(_self, _profile, _weather, screening=None):
+        nonlocal assessment_started
+        assessment_started = True
+        return {
+            "risk_score": 50,
+            "risk_level": "中风险",
+            "disease_risks": {},
+            "recommendations": [],
+            "explain": {},
+            "risk_interval": {},
+            "model_version": "test-model",
+            "rule_version": "test-rule",
+        }
+
+    original_commit = db.session.commit
+
+    def fail_assessment_commit():
+        if assessment_started:
+            raise RuntimeError(
+                "UPDATE health_risk_assessments params="
+                f"({sentinels['sql_parameter']}, {sentinels['body']})"
+            )
+        return original_commit()
+
+    monkeypatch.setattr(
+        "services.health_risk_service.HealthRiskService.assess_personal_weather_health_risk",
+        fake_assessment,
+    )
+    monkeypatch.setattr(db.session, "commit", fail_assessment_commit)
+    payload = {
+        "pair_id": pair.id,
+        "outdoor_exposure": "medium",
+        "symptom_level": "none",
+        "hydration": "normal",
+        "medication_adherence": "good",
+        "sleep_quality": "fair",
+        "notes": sentinels["body"],
+    }
+
+    with caplog.at_level(logging.ERROR, logger=app.logger.name):
+        response = client.post(
+            "/mp/api/v1/health/assessment",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "X-Request-Id": sentinels["request_id"],
+                "User-Agent": sentinels["user_agent"],
+            },
+            json=payload,
+            environ_overrides={"REMOTE_ADDR": sentinels["ip"]},
+        )
+
+    assert response.status_code == 503
+    assert response.get_json()["error"] == "assessment_failed"
+    failure_records = [
+        record
+        for record in caplog.records
+        if getattr(record, "error_code", None)
+        == "mp_health_assessment_write_failed"
+    ]
+    assert len(failure_records) == 1
+    failure_record = failure_records[0]
+    assert failure_record.operation == "health_assessment_write"
+    assert re.fullmatch(r"[0-9a-f]{16}", failure_record.request_id)
+    assert failure_record.request_id != sentinels["request_id"]
+    assert failure_record.exc_info is None
+    for sentinel in sentinels.values():
+        assert sentinel not in caplog.text
 
 
 def test_public_resources_are_aggregated_and_small_samples_suppressed(
