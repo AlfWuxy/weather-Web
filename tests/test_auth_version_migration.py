@@ -11,7 +11,7 @@ import pytest
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
-HEAD_REVISION = '0025_health_sensitive_consent'
+HEAD_REVISION = '0026_cooling_coordinate_verify'
 PREVIOUS_REVISION = '0022_private_health_indexes'
 
 
@@ -280,6 +280,62 @@ def test_health_sensitive_consent_migration_starts_null_and_blocks_lossy_downgra
     assert 'health_sensitive_consented_at' in columns['users']
 
 
+def test_cooling_migration_single_step_downgrade_preserves_health_consent(
+    monkeypatch,
+    tmp_path,
+):
+    """只回退 0026 时应保留 0025 健康回执及其数据。"""
+    database_path = tmp_path / 'cooling-single-step-downgrade.db'
+    app, config = _initialize(monkeypatch, database_path)
+
+    from core.db_models import User
+    from core.extensions import db
+    from core.time_utils import utcnow
+
+    with app.app_context():
+        user = User(username='cooling-single-step-downgrade-user')
+        user.set_password('MigrationPassword1!')
+        user.health_sensitive_consent_version = app.config[
+            'WX_MINIPROGRAM_PRIVACY_VERSION'
+        ]
+        user.health_sensitive_consented_at = utcnow()
+        db.session.add(user)
+        db.session.commit()
+        user_id = int(user.id)
+    _dispose(app)
+
+    command.downgrade(config, '0025_health_sensitive_consent')
+
+    revision, columns = _revision_and_columns(database_path)
+    with sqlite3.connect(database_path) as connection:
+        cooling_columns = {
+            row[1]
+            for row in connection.execute('PRAGMA table_info(cooling_resources)')
+        }
+    assert revision == '0025_health_sensitive_consent'
+    assert 'coordinate_system' not in cooling_columns
+    assert 'coordinate_source' not in cooling_columns
+    assert 'coordinate_verified_at' not in cooling_columns
+    assert 'health_sensitive_consent_version' in columns['users']
+    assert 'health_sensitive_consented_at' in columns['users']
+    with sqlite3.connect(database_path) as connection:
+        version, consented_at = connection.execute(
+            '''SELECT health_sensitive_consent_version,
+                      health_sensitive_consented_at
+               FROM users WHERE id = ?''',
+            (user_id,),
+        ).fetchone()
+    assert version == '2026-07-21'
+    assert consented_at
+
+    command.upgrade(config, 'head')
+    command.downgrade(config, '-1')
+    relative_revision, relative_columns = _revision_and_columns(database_path)
+    assert relative_revision == '0025_health_sensitive_consent'
+    assert 'health_sensitive_consent_version' in relative_columns['users']
+    assert 'health_sensitive_consented_at' in relative_columns['users']
+
+
 @pytest.mark.parametrize(
     ('column_sql', 'invalid_column'),
     (
@@ -344,7 +400,7 @@ def test_wxpusher_relative_one_step_downgrade_stops_at_auth_revision(
         user_id = int(user.id)
     _dispose(app)
 
-    # 先越过新增的 0025，再单独验证 0024 的相对一阶语义。
+    # 先越过新增的 0026 与 0025，再单独验证 0024 的相对一阶语义。
     command.downgrade(config, '0024_wxpusher_consent_receipt')
     command.downgrade(config, '-1')
 
@@ -360,11 +416,11 @@ def test_wxpusher_relative_one_step_downgrade_stops_at_auth_revision(
         ).fetchone() == (2, 0)
 
 
-def test_wxpusher_relative_three_step_downgrade_runs_auth_guard(
+def test_wxpusher_relative_four_step_downgrade_runs_auth_guard(
     monkeypatch,
     tmp_path,
 ):
-    """相对降级三阶会跨越 0023，并在首个 DDL 前阻断。"""
+    """相对降级四阶会跨越 0023，并在首个 DDL 前阻断。"""
     database_path = tmp_path / 'wxpusher-relative-two-step.db'
     app, config = _initialize(monkeypatch, database_path)
 
@@ -388,7 +444,7 @@ def test_wxpusher_relative_three_step_downgrade_runs_auth_guard(
     _dispose(app)
 
     with pytest.raises(RuntimeError, match='auth_version_count=1'):
-        command.downgrade(config, '-3')
+        command.downgrade(config, '-4')
 
     revision, columns = _revision_and_columns(database_path)
     assert revision == HEAD_REVISION

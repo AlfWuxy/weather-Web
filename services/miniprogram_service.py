@@ -676,28 +676,76 @@ def public_communities_payload() -> dict:
     }
 
 
+def _public_cooling_coordinates(record):
+    """只公开具备 GCJ-02 人工核验回执的有效坐标。"""
+    if (
+        record.coordinate_verified_at is None
+        or record.coordinate_system != 'GCJ-02'
+        or not str(record.coordinate_source or '').strip()
+        or record.latitude is None
+        or record.longitude is None
+    ):
+        return None, None, None
+    try:
+        latitude = float(record.latitude)
+        longitude = float(record.longitude)
+    except (TypeError, ValueError):
+        return None, None, None
+    if (
+        not math.isfinite(latitude)
+        or not math.isfinite(longitude)
+        or not -90 <= latitude <= 90
+        or not -180 <= longitude <= 180
+    ):
+        return None, None, None
+
+    # 后台录入已经校验一次，公开接口再次限制都昌服务区，防止异常导入绕过。
+    center_latitude = math.radians(29.27)
+    point_latitude = math.radians(latitude)
+    latitude_delta = point_latitude - center_latitude
+    longitude_delta = math.radians(longitude - 116.20)
+    haversine = (
+        math.sin(latitude_delta / 2) ** 2
+        + math.cos(center_latitude)
+        * math.cos(point_latitude)
+        * math.sin(longitude_delta / 2) ** 2
+    )
+    distance_km = 6371.0088 * 2 * math.atan2(
+        math.sqrt(haversine),
+        math.sqrt(max(0.0, 1 - haversine)),
+    )
+    if distance_km > 80.0:
+        return None, None, None
+    return latitude, longitude, 'GCJ-02'
+
+
 def public_cooling_resources_payload() -> dict:
     records = CoolingResource.query.filter_by(is_active=True).order_by(
         CoolingResource.community_code.asc(), CoolingResource.name.asc()
     ).all()
-    return {
-        "items": [
+    items = []
+    for record in records:
+        latitude, longitude, coordinate_system = _public_cooling_coordinates(record)
+        items.append(
             {
                 "id": record.id,
                 "community_code": record.community_code,
                 "name": record.name,
                 "resource_type": record.resource_type,
                 "address_hint": record.address_hint,
-                "latitude": record.latitude,
-                "longitude": record.longitude,
+                "latitude": latitude,
+                "longitude": longitude,
+                "coordinate_system": coordinate_system,
                 "open_hours": record.open_hours,
                 "has_ac": bool(record.has_ac),
                 "is_accessible": bool(record.is_accessible),
                 "contact_hint": record.contact_hint,
                 "notes": record.notes,
             }
-            for record in records
-        ]
+        )
+    return {
+        "items": items,
+        "coordinate_system": "GCJ-02",
     }
 
 

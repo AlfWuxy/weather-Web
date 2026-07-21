@@ -69,6 +69,14 @@
       }
     ]
   },
+  "permission": {
+    "scope.userLocation": {
+      "desc": "仅在你每次主动确认后，用于本次按直线距离排列附近避暑资源"
+    }
+  },
+  "requiredPrivateInfos": [
+    "getLocation"
+  ],
   "sitemapLocation": "sitemap.json",
   "__usePrivacyCheck__": true,
   "lazyCodeLoading": "requiredComponents",

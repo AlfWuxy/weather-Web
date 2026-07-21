@@ -187,7 +187,7 @@ def test_private_health_index_migration_is_idempotent_and_used_by_queries(
         revision = connection.execute(
             'SELECT version_num FROM alembic_version'
         ).fetchone()[0]
-    assert revision == '0025_health_sensitive_consent'
+    assert revision == '0026_cooling_coordinate_verify'
 
 
 def test_private_health_index_migration_rejects_missing_table_before_mutation(

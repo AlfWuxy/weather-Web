@@ -46,13 +46,34 @@
                         </div>
                         <div class="row">
                             <div class="col-md-6 mb-3">
-                                <label class="form-label">纬度</label>
-                                <input class="form-control" name="latitude" type="number" step="0.000001" value="{{ resource.latitude if resource.latitude is not none else '' }}">
+                                <label class="form-label">纬度（GCJ-02）</label>
+                                <input class="form-control" id="coordinateLatitude" name="latitude" type="number" min="28.5" max="30" step="0.000001" value="{{ resource.latitude if resource.latitude is not none else '' }}">
                             </div>
                             <div class="col-md-6 mb-3">
-                                <label class="form-label">经度</label>
-                                <input class="form-control" name="longitude" type="number" step="0.000001" value="{{ resource.longitude if resource.longitude is not none else '' }}">
+                                <label class="form-label">经度（GCJ-02）</label>
+                                <input class="form-control" id="coordinateLongitude" name="longitude" type="number" min="115.3" max="117.1" step="0.000001" value="{{ resource.longitude if resource.longitude is not none else '' }}">
                             </div>
+                        </div>
+                        <div class="row">
+                            <div class="col-md-4 mb-3">
+                                <label class="form-label" for="coordinateSystem">坐标系</label>
+                                <select class="form-select" id="coordinateSystem" name="coordinate_system">
+                                    <option value="">请选择</option>
+                                    <option value="GCJ-02" {% if resource.coordinate_system == 'GCJ-02' %}selected{% endif %}>GCJ-02</option>
+                                </select>
+                            </div>
+                            <div class="col-md-8 mb-3">
+                                <label class="form-label" for="coordinateSource">坐标来源</label>
+                                <input class="form-control" id="coordinateSource" name="coordinate_source" maxlength="500" value="{{ resource.coordinate_source or '' }}" placeholder="例如：管理员于现场用微信地图核对，2026-07-21">
+                            </div>
+                        </div>
+                        <div class="form-check mb-2">
+                            <input class="form-check-input" type="checkbox" name="coordinate_verified" value="1" id="coordinateVerified" {% if resource.coordinate_verified_at %}checked{% endif %}>
+                            <label class="form-check-label" for="coordinateVerified">我已人工核对地址、开放情况、来源与 GCJ-02 坐标</label>
+                        </div>
+                        <div class="form-text mb-3">
+                            坐标必须成对填写并位于都昌周边 80 公里内。修改坐标、坐标系或来源后，本页会取消原核验，请重新勾选。
+                            {% if resource.coordinate_verified_at %}当前核验时间：{{ resource.coordinate_verified_at }}。{% else %}当前坐标尚未核验，小程序不会获得距离排序或地图入口。{% endif %}
                         </div>
                         <div class="mb-3">
                             <label class="form-label">开放时间</label>
@@ -98,4 +119,16 @@
         </div>
     </div>
 </div>
+<script>
+    document.addEventListener('DOMContentLoaded', function() {
+        const verification = document.getElementById('coordinateVerified');
+        ['coordinateLatitude', 'coordinateLongitude', 'coordinateSystem', 'coordinateSource'].forEach(function(id) {
+            const field = document.getElementById(id);
+            if (field && verification) {
+                field.addEventListener('input', function() { verification.checked = false; });
+                field.addEventListener('change', function() { verification.checked = false; });
+            }
+        });
+    });
+</script>
 {% endblock %}

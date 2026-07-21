@@ -65,6 +65,39 @@ def _preflight_lower_downgrade():
     previous_migration._preflight_lower_downgrade(op.get_bind(), inspect(op.get_bind()))
 
 
+def _preflight_downgrade(bind=None, inspector=None):
+    """在上游迁移发生任何变更前，检查本迁移及更早版本的数据丢失风险。"""
+    bind = bind or op.get_bind()
+    inspector = inspector or inspect(bind)
+    _preflight_lower_downgrade()
+    if 'users' not in inspector.get_table_names():
+        return
+
+    columns = _user_columns(inspector)
+    _validate_existing_columns(columns)
+    present_columns = {
+        CONSENT_VERSION_COLUMN,
+        CONSENT_TIME_COLUMN,
+    } & set(columns)
+    if not present_columns:
+        return
+
+    predicates = []
+    if CONSENT_VERSION_COLUMN in columns:
+        predicates.append(f'{CONSENT_VERSION_COLUMN} IS NOT NULL')
+    if CONSENT_TIME_COLUMN in columns:
+        predicates.append(f'{CONSENT_TIME_COLUMN} IS NOT NULL')
+    receipt_count = bind.execute(sa.text(
+        f'''SELECT COUNT(*) FROM users
+            WHERE {' OR '.join(predicates)}'''
+    )).scalar_one()
+    if receipt_count:
+        raise RuntimeError(
+            'health sensitive consent downgrade aborted: '
+            f'nonempty_receipt_count={receipt_count}'
+        )
+
+
 def upgrade():
     bind = op.get_bind()
     inspector = inspect(bind)
@@ -101,27 +134,7 @@ def downgrade():
         return
     columns = _user_columns(inspector)
     _validate_existing_columns(columns)
-    _preflight_lower_downgrade()
-
-    present_columns = {
-        CONSENT_VERSION_COLUMN,
-        CONSENT_TIME_COLUMN,
-    } & set(columns)
-    if present_columns:
-        predicates = []
-        if CONSENT_VERSION_COLUMN in columns:
-            predicates.append(f'{CONSENT_VERSION_COLUMN} IS NOT NULL')
-        if CONSENT_TIME_COLUMN in columns:
-            predicates.append(f'{CONSENT_TIME_COLUMN} IS NOT NULL')
-        receipt_count = bind.execute(sa.text(
-            f'''SELECT COUNT(*) FROM users
-                WHERE {' OR '.join(predicates)}'''
-        )).scalar_one()
-        if receipt_count:
-            raise RuntimeError(
-                'health sensitive consent downgrade aborted: '
-                f'nonempty_receipt_count={receipt_count}'
-            )
+    _preflight_downgrade(bind, inspector)
 
     if CONSENT_TIME_COLUMN in columns:
         op.drop_column('users', CONSENT_TIME_COLUMN)

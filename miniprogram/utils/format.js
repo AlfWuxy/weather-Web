@@ -369,6 +369,7 @@ function normalizeCoolingItem(item, index) {
     hasAc: source.has_ac === true,
     accessible: source.is_accessible === true || source.accessible === true,
     note: String(firstDefined(source, ['notes', 'note', 'description'], '')),
+    coordinateSystem: String(firstDefined(source, ['coordinate_system', 'coordinateSystem'], '')).trim(),
     latitude: finiteNumber(firstDefined(source, ['latitude', 'lat'], null)),
     longitude: finiteNumber(firstDefined(source, ['longitude', 'lng', 'lon'], null)),
   };
@@ -388,6 +389,7 @@ function normalizeCommunity(payload) {
     summary: data.summary && typeof data.summary === 'object' ? data.summary : {},
     gis: data.gis && typeof data.gis === 'object' ? data.gis : {},
     source: data.source && typeof data.source === 'object' ? data.source : {},
+    coordinateSystem: String(firstDefined(data, ['coordinate_system', 'coordinateSystem'], '')).trim(),
     generatedAt: data.generated_at || data.fetched_at || '',
     available: data.available !== false,
   };
