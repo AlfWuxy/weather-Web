@@ -69,6 +69,7 @@ def test_init_db_bootstraps_fresh_database_and_is_idempotent(monkeypatch, tmp_pa
     first_result = runner.invoke(args=['init-db'])
     assert first_result.exit_code == 0, first_result.output
     assert 'Database initialized.' in first_result.output
+    assert app.logger.disabled is False
     _assert_schema_is_at_head(app)
     assert app.test_client().get('/register').status_code == 200
 
@@ -84,6 +85,7 @@ def test_init_db_bootstraps_fresh_database_and_is_idempotent(monkeypatch, tmp_pa
 
     second_result = runner.invoke(args=['init-db'])
     assert second_result.exit_code == 0, second_result.output
+    assert app.logger.disabled is False
     _assert_schema_is_at_head(app)
     with app.app_context():
         assert User.query.filter_by(username='bootstrap-existing-user').count() == 1
