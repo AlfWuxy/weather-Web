@@ -4,6 +4,8 @@
 import hashlib
 import json
 import os
+import re
+import stat
 import subprocess
 import sys
 from pathlib import Path
@@ -32,6 +34,31 @@ def _write_executable(path, content):
     path.chmod(0o755)
 
 
+def _create_clean_git_source(tmp_path):
+    source = tmp_path / 'source'
+    source.mkdir()
+    (source / 'README.md').write_text('release fixture\n', encoding='utf-8')
+    subprocess.run(['git', 'init', '-q', str(source)], check=True)
+    subprocess.run(['git', '-C', str(source), 'add', 'README.md'], check=True)
+    subprocess.run(
+        [
+            'git',
+            '-C',
+            str(source),
+            '-c',
+            'user.name=Deploy Test',
+            '-c',
+            'user.email=deploy-test@example.invalid',
+            'commit',
+            '-q',
+            '-m',
+            'test release',
+        ],
+        check=True,
+    )
+    return source
+
+
 def _extract_shell_function(content, name):
     start = content.index(f'{name}() {{')
     end = content.index('\n}\n', start) + len('\n}\n')
@@ -41,6 +68,15 @@ def _extract_shell_function(content, name):
 def _load_qweather_preactivation_manager_source():
     content = _load_deploy_script()
     function_start = content.index('qweather_preactivation_manager_source() {')
+    source_start = content.index("    command cat <<'PY'\n", function_start)
+    source_start += len("    command cat <<'PY'\n")
+    source_end = content.index('\nPY\n}', source_start)
+    return content[source_start:source_end]
+
+
+def _load_embedded_python_source(function_name):
+    content = _load_deploy_script()
+    function_start = content.index(f'{function_name}() {{')
     source_start = content.index("    command cat <<'PY'\n", function_start)
     source_start += len("    command cat <<'PY'\n")
     source_end = content.index('\nPY\n}', source_start)
@@ -285,7 +321,7 @@ def test_formal_deploy_propagates_full_feature_release_flags():
     assert 'remote_env_update "FEATURE_HEAT_EXPOSURE_GIS" "0" "if-empty"' in content
     assert 'remote_env_update "FEATURE_HEAT_EXPOSURE_GIS" "$LOCAL_FEATURE_HEAT_EXPOSURE_GIS" "always"' in content
     assert '微信全功能正式发布必须启用 FEATURE_HEAT_EXPOSURE_GIS=1' in content
-    assert '1.1.0 微信正式发布必须固定 FEATURE_WXPUSHER=0' in content
+    assert '1.1.1 微信正式发布必须固定 FEATURE_WXPUSHER=0' in content
     assert 'FEATURE_WXPUSHER=0 时必须清空 WXPUSHER_APP_TOKEN' in content
     assert 'LOCAL_WECHAT_FORMAL_RUNTIME=""' in content
     assert 'WECHAT_FORMAL_RUNTIME=0' in content
@@ -458,9 +494,10 @@ def test_remote_preflight_drops_to_runtime_user_with_private_writable_dirs():
         'tests/test_miniprogram_runtime.py',
         'tests/test_formal_web_gate.py',
         'tests/test_web_weather_fail_closed.py',
-        'tests/test_security_headers.py',
-        'tests/test_mp_api_auth.py',
-    )
+            'tests/test_security_headers.py',
+            'tests/test_mp_api_auth.py',
+            'tests/test_cross_platform_identity.py',
+        )
     expected_pytest = (
         '$RELEASE_VENV/bin/python -m pytest -q -p no:cacheprovider '
         + ' '.join(critical_tests)
@@ -522,12 +559,23 @@ def test_formal_deploy_uploads_verified_commit_snapshot_instead_of_live_tree():
     content = _load_deploy_script()
 
     assert 'RELEASE_SOURCE_DIR="$LOCAL_DIR"' in content
-    assert 'if [ "$FORMAL_WECHAT_CONFIG_ALLOWED" != "1" ]; then' in content
+    assert 'freeze_web_backend_commit() {' in content
+    assert (
+        'status --porcelain=v1 --untracked-files=all --ignore-submodules=none'
+        in content
+    )
     assert 'IFS= read -r VERIFIED_COMMIT < "$VERIFIED_COMMIT_FILE"' in content
     assert 'git -C "$LOCAL_DIR" archive --format=tar "$VERIFIED_COMMIT"' in content
     assert 'RELEASE_SOURCE_DIR="$LOCAL_RELEASE_EXPORT_DIR"' in content
     assert '$NEW_RELEASE/private-metadata/source-commit.txt' in content
-    assert 'EXPECTED_RELEASE_COMMIT=$VERIFIED_COMMIT' in content
+    assert (
+        'ACTIVATION_EXPECTED_RELEASE_COMMIT="$VERIFIED_COMMIT"'
+        in content
+    )
+    assert (
+        'EXPECTED_RELEASE_COMMIT=$ACTIVATION_EXPECTED_RELEASE_COMMIT'
+        in content
+    )
     assert content.count('"$RELEASE_SOURCE_DIR/" "$USER@$SERVER:$remote_target/"') == 2
     assert '"$LOCAL_DIR/" "$USER@$SERVER:$remote_target/"' not in content
 
@@ -680,11 +728,208 @@ def test_deploy_secrets_use_stdin_and_staged_environment():
     assert 'sed -i' not in content
     assert 'QWEATHER_KEY=$LOCAL_QWEATHER_KEY' not in content
     assert 'AMAP_KEY=$LOCAL_AMAP_KEY' not in content
+    assert 'AMAP_JS_API_KEY=$LOCAL_AMAP_JS_API_KEY' not in content
+    assert 'AMAP_WEB_SERVICE_KEY=$LOCAL_AMAP_WEB_SERVICE_KEY' not in content
+    assert 'AMAP_SECURITY_JS_CODE=$LOCAL_AMAP_SECURITY_JS_CODE' not in content
     assert 'WXPUSHER_APP_TOKEN=$LOCAL_WXPUSHER_APP_TOKEN' not in content
     assert content.index('upload_files "$RELEASE_APP"') < content.index(
         'remote_env_update "DATABASE_URI"'
     )
     assert 'ln -s $PROJECT_DIR/.env $RELEASE_APP/.env' not in content
+
+
+def test_deploy_script_syncs_split_amap_configuration_via_stdin():
+    content = _load_deploy_script()
+
+    assert 'LOCAL_AMAP_KEY' not in content
+    assert 'AMAP_JS_API_KEY=' in content
+    assert 'AMAP_WEB_SERVICE_KEY=' in content
+    assert 'AMAP_SECURITY_JS_CODE=' in content
+    assert 'COOLING_COORDINATE_VERIFICATION_TTL_DAYS=365' in content
+    assert 'remote_env_update "AMAP_KEY" "" "always"' not in content
+    assert 'migrate_amap_credentials_atomically' in content
+    migration = _load_embedded_python_source('amap_atomic_migration_source')
+    assert 'module.update_env_values(' in migration
+    assert "'AMAP_KEY': ''" in migration
+    assert "'AMAP_JS_API_KEY': js_key" in migration
+    assert "'AMAP_WEB_SERVICE_KEY': web_service_key" in migration
+    assert "'AMAP_SECURITY_JS_CODE': security_code" in migration
+    assert (
+        'remote_env_update "COOLING_COORDINATE_VERIFICATION_TTL_DAYS" '
+        '"$LOCAL_COOLING_COORDINATE_VERIFICATION_TTL_DAYS" "always"'
+    ) in content
+
+
+def test_amap_migration_switches_legacy_and_split_keys_atomically(tmp_path):
+    source = _load_embedded_python_source('amap_atomic_migration_source')
+    helper = tmp_path / 'amap-migration.py'
+    helper.write_text(source, encoding='utf-8')
+    env_file = tmp_path / 'staged.env'
+    legacy = 'l' * 32
+    env_file.write_text(
+        f'AMAP_KEY={legacy}\n'
+        'AMAP_JS_API_KEY=\n'
+        'AMAP_WEB_SERVICE_KEY=\n'
+        'AMAP_SECURITY_JS_CODE=\n',
+        encoding='utf-8',
+    )
+    env_file.chmod(0o600)
+    payload = '\n'.join(('j' * 32, 'w' * 32, 's' * 32))
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(helper),
+            str(env_file),
+            str(ROOT / 'scripts' / 'update_env_value.py'),
+        ],
+        input=payload,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    values = dict(
+        line.split('=', 1)
+        for line in env_file.read_text(encoding='utf-8').splitlines()
+    )
+    assert values == {
+        'AMAP_KEY': '',
+        'AMAP_JS_API_KEY': 'j' * 32,
+        'AMAP_WEB_SERVICE_KEY': 'w' * 32,
+        'AMAP_SECURITY_JS_CODE': 's' * 32,
+    }
+
+
+def test_candidate_base_state_capture_freezes_env_and_current_link(tmp_path):
+    source = _load_embedded_python_source(
+        'candidate_base_state_capture_source'
+    )
+    helper = tmp_path / 'capture-base-state.py'
+    helper.write_text(source, encoding='utf-8')
+    active_env = tmp_path / 'active.env'
+    active_env.write_text('SECRET_KEY=canary\n', encoding='utf-8')
+    active_env.chmod(0o600)
+    releases = tmp_path / 'releases'
+    releases.mkdir()
+    current_release = releases / 'old'
+    current_release.mkdir()
+    current_link = tmp_path / 'current'
+    current_link.symlink_to(current_release)
+    new_release = releases / 'new'
+    new_release.mkdir()
+    staged_env = new_release / 'staged.env'
+    metadata = new_release / 'private-metadata' / 'candidate-base-state.json'
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(helper),
+            str(active_env),
+            str(staged_env),
+            str(current_link),
+            str(metadata),
+            'web_backend_only',
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert staged_env.read_bytes() == active_env.read_bytes()
+    assert stat.S_IMODE(staged_env.stat().st_mode) == 0o600
+    values = json.loads(metadata.read_text(encoding='utf-8'))
+    assert values['active_env_sha256'] == hashlib.sha256(
+        active_env.read_bytes()
+    ).hexdigest()
+    assert values['current_link_state_sha256'] == hashlib.sha256(
+        b'link\0' + os.fsencode(os.readlink(current_link))
+    ).hexdigest()
+    assert values['deployment_intent'] == 'web_backend_only'
+    assert re.fullmatch(r'[0-9a-f]{64}', values['qweather_config_sha256'])
+    assert values['version'] == 2
+
+
+def test_web_mode_backfills_only_account_link_pepper_for_formal_runtime(
+    tmp_path,
+):
+    source = _load_embedded_python_source(
+        'account_link_pepper_backfill_source'
+    )
+    helper = tmp_path / 'backfill-account-link.py'
+    helper.write_text(source, encoding='utf-8')
+    staged_env = tmp_path / 'staged.env'
+    staged_env.write_text(
+        'WECHAT_FORMAL_RUNTIME=1\n'
+        'WX_MINIPROGRAM_APPID=wx-canary\n'
+        'WX_MINIPROGRAM_SECRET=secret-canary\n'
+        'WX_MINIPROGRAM_OPENID_PEPPER=openid-canary\n'
+        'WX_MINIPROGRAM_SESSION_SECRET=session-canary\n'
+        'ACCOUNT_LINK_CODE_PEPPER=\n',
+        encoding='utf-8',
+    )
+    staged_env.chmod(0o600)
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(helper),
+            str(staged_env),
+            str(ROOT / 'scripts' / 'update_env_value.py'),
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == ''
+    values = dict(
+        line.split('=', 1)
+        for line in staged_env.read_text(encoding='utf-8').splitlines()
+    )
+    assert re.fullmatch(r'[0-9a-f]{64}', values['ACCOUNT_LINK_CODE_PEPPER'])
+    assert values['WX_MINIPROGRAM_SECRET'] == 'secret-canary'
+    first_pepper = values['ACCOUNT_LINK_CODE_PEPPER']
+    repeated = subprocess.run(
+        [
+            sys.executable,
+            str(helper),
+            str(staged_env),
+            str(ROOT / 'scripts' / 'update_env_value.py'),
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert repeated.returncode == 0
+    assert f'ACCOUNT_LINK_CODE_PEPPER={first_pepper}' in staged_env.read_text(
+        encoding='utf-8'
+    )
+
+    web_env = tmp_path / 'web.env'
+    web_env.write_text(
+        'WECHAT_FORMAL_RUNTIME=0\nACCOUNT_LINK_CODE_PEPPER=\n',
+        encoding='utf-8',
+    )
+    web_env.chmod(0o600)
+    untouched = subprocess.run(
+        [
+            sys.executable,
+            str(helper),
+            str(web_env),
+            str(ROOT / 'scripts' / 'update_env_value.py'),
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert untouched.returncode == 0
+    assert web_env.read_text(encoding='utf-8').endswith(
+        'ACCOUNT_LINK_CODE_PEPPER=\n'
+    )
 
 
 def test_qweather_jwt_private_key_source_is_local_only_and_uses_file_stdin():
@@ -772,9 +1017,7 @@ def test_qweather_jwt_private_key_is_provisioned_after_candidate_is_ready():
         "echo '发布 ID 已存在，拒绝覆盖不可变版本: $NEW_RELEASE'"
     )
     upload = content.index('upload_files "$RELEASE_APP"')
-    staged_env = content.index(
-        'cp -a $PROJECT_DIR/.env $STAGED_ENV_FILE; chmod 0600 $STAGED_ENV_FILE'
-    )
+    staged_env = content.index('\ncapture_remote_candidate_base_state\n')
     final_candidate_update = content.index(
         'remote_env_update "QWEATHER_EXPECTED_KID" '
         '"$LOCAL_QWEATHER_EXPECTED_KID" "always"'
@@ -782,8 +1025,9 @@ def test_qweather_jwt_private_key_is_provisioned_after_candidate_is_ready():
     provision = content.index('\nprovision_qweather_jwt_private_key\n')
     remote_validate = content.index(
         'remote_exec "python3 $RELEASE_APP/scripts/validate_release_env.py '
-        '--file $STAGED_ENV_FILE --require-wechat $REQUIRE_WECHAT_READY '
-        '--qweather-private-key-pending-path $REMOTE_QWEATHER_PENDING_KEY_PATH"'
+        '--file $STAGED_ENV_FILE '
+        '--require-wechat $EFFECTIVE_REQUIRE_WECHAT_READY '
+        '--require-weather-ready $REMOTE_QWEATHER_VALIDATION_PENDING_ARG"'
     )
 
     assert immutable_release < upload < staged_env
@@ -1233,13 +1477,14 @@ def test_qweather_preactivation_cleanup_covers_all_pre_activation_failures():
     content = _load_deploy_script()
     provision = content.index('\nprovision_qweather_jwt_private_key\n')
     activation = content.index(
-        'QWEATHER_PENDING_KEY_PATH=$REMOTE_QWEATHER_PENDING_KEY_PATH '
+        'QWEATHER_PENDING_KEY_PATH=$ACTIVATION_QWEATHER_PENDING_KEY_PATH '
         'bash $RELEASE_APP/scripts/activate_release.sh'
     )
     checkpoints = (
         'scripts/validate_release_env.py --file $STAGED_ENV_FILE '
-        '--require-wechat $REQUIRE_WECHAT_READY '
-        '--qweather-private-key-pending-path $REMOTE_QWEATHER_PENDING_KEY_PATH"',
+        '--require-wechat $EFFECTIVE_REQUIRE_WECHAT_READY '
+        '--require-weather-ready '
+        '$REMOTE_QWEATHER_VALIDATION_PENDING_ARG"',
         '$RELEASE_VENV/bin/python -m pip install',
         '$RELEASE_VENV/bin/python -m pytest -q',
         'systemd-analyze verify $NEW_RELEASE/systemd/*.service',
@@ -1260,13 +1505,21 @@ def test_qweather_pending_key_is_validated_three_times_and_passed_to_activation(
         '$REMOTE_QWEATHER_PENDING_KEY_PATH'
     )
 
-    assert content.count(validator_flag) == 3
+    assert content.count(validator_flag) == 1
+    assert content.count('$REMOTE_QWEATHER_VALIDATION_PENDING_ARG') == 3
     assert (
-        'QWEATHER_PENDING_KEY_PATH=$REMOTE_QWEATHER_PENDING_KEY_PATH '
+        'QWEATHER_PENDING_KEY_PATH=$ACTIVATION_QWEATHER_PENDING_KEY_PATH '
         'bash $RELEASE_APP/scripts/activate_release.sh'
     ) in content
-    assert content.index('\nprovision_qweather_jwt_private_key\n') < content.index(
-        validator_flag
+    assert (
+        'REMOTE_QWEATHER_VALIDATION_PENDING_ARG='
+        '"--qweather-private-key-pending-path '
+        '$REMOTE_QWEATHER_PENDING_KEY_PATH"'
+    ) in content
+    provision = content.index('\nprovision_qweather_jwt_private_key\n')
+    assert provision < content.index(
+        '$REMOTE_QWEATHER_VALIDATION_PENDING_ARG"',
+        provision,
     )
 
 
@@ -1403,6 +1656,7 @@ def test_deploy_runs_all_runtime_units_as_hardened_service_user():
 
 def test_deploy_generates_root_only_sandboxed_daily_backup_units():
     content = _load_deploy_script()
+    activation = _load_activate_script()
     service_start = content.index(
         "cat > $NEW_RELEASE/systemd/case-weather-backup.service << 'EOF'"
     )
@@ -1447,6 +1701,9 @@ def test_deploy_generates_root_only_sandboxed_daily_backup_units():
     assert 'InaccessiblePaths=$PROJECT_DIR/storage' not in service_block
     assert 'backup-validation.env' not in service_block
     assert '$CURRENT_LINK/app/scripts/backup.sh --if-present' not in service_block
+    assert 'install_activation_guard_dropins' in activation
+    assert 'for unit in "${ALL_UNITS[@]}"' in activation
+    assert '步骤6.2.1: 给现有与新调度安装共享断电保护门' not in content
     for unit in (
         'case-weather.service',
         'case-weather-backup.service',
@@ -1464,7 +1721,7 @@ def test_deploy_generates_root_only_sandboxed_daily_backup_units():
         'case-weather-sync.service',
         'case-weather-sync.timer',
     ):
-        assert unit in content.split('步骤6.2.1: 给现有与新调度安装共享断电保护门', 1)[1]
+        assert unit in activation
 
 
 def test_deploy_verifies_ssh_host_and_keeps_gunicorn_private():
@@ -1480,6 +1737,9 @@ def test_deploy_verifies_ssh_host_and_keeps_gunicorn_private():
 def test_deploy_can_stage_formal_wechat_and_weather_readiness():
     content = _load_deploy_script()
 
+    assert 'DEPLOY_MODE="${DEPLOY_MODE:-wechat_formal}"' in content
+    assert 'web_backend_only)' in content
+    assert 'wechat_formal)' in content
     assert 'DEPLOY_REQUIRE_WECHAT_READY' in content
     assert 'WECHAT_RELEASE_FORM_FILE' in content
     assert '--form-only' in content
@@ -1488,6 +1748,7 @@ def test_deploy_can_stage_formal_wechat_and_weather_readiness():
     assert 'remote_env_update "WX_MINIPROGRAM_SECRET"' in content
     assert 'remote_env_generate_secret "WX_MINIPROGRAM_OPENID_PEPPER"' in content
     assert 'remote_env_generate_secret "WX_MINIPROGRAM_SESSION_SECRET"' in content
+    assert 'remote_env_generate_secret "ACCOUNT_LINK_CODE_PEPPER"' in content
     assert 'ALLOW_WEATHER_UNAVAILABLE' in content
 
 
@@ -1496,6 +1757,7 @@ def test_preview_does_not_generate_partial_wechat_authentication():
 
     assert 'WX_MINIPROGRAM_OPENID_PEPPER=\n' in content
     assert 'WX_MINIPROGRAM_SESSION_SECRET=\n' in content
+    assert 'ACCOUNT_LINK_CODE_PEPPER=\n' in content
     assert 'WX_OPENID_PEPPER_GEN=' not in content
     assert 'WX_SESSION_SECRET_GEN=' not in content
     guard = 'if [ "$FORMAL_WECHAT_CONFIG_ALLOWED" = "1" ]; then'
@@ -1505,6 +1767,7 @@ def test_preview_does_not_generate_partial_wechat_authentication():
     )
     assert content.count('remote_env_generate_secret "WX_MINIPROGRAM_OPENID_PEPPER"') == 1
     assert content.count('remote_env_generate_secret "WX_MINIPROGRAM_SESSION_SECRET"') == 1
+    assert content.count('remote_env_generate_secret "ACCOUNT_LINK_CODE_PEPPER"') == 1
     assert 'WX_MINIPROGRAM_APPID 与 WX_MINIPROGRAM_SECRET 必须由同一次发布同时提供。' in content
 
 
@@ -1549,7 +1812,9 @@ def test_precompute_script_respects_deploy_venv_dir():
     assert 'VENV_PY="${VENV_PY:-python3}"' in content
 
 
-def test_remote_preview_is_rejected_before_any_remote_command(tmp_path):
+def test_implicit_wechat_formal_mode_rejects_preview_before_remote_command(
+    tmp_path,
+):
     fake_bin = tmp_path / 'bin'
     fake_bin.mkdir()
     remote_log = tmp_path / 'remote.log'
@@ -1599,6 +1864,7 @@ WECHAT_RELEASE_FORM_FILE={form_file}
         encoding='utf-8',
     )
     environment = os.environ.copy()
+    environment.pop('DEPLOY_MODE', None)
     environment.update(
         {
             'ENV_FILE': str(deploy_env),
@@ -1619,7 +1885,10 @@ WECHAT_RELEASE_FORM_FILE={form_file}
     )
 
     assert result.returncode == 64
-    assert '本地微信 DevTools 预览' in result.stderr
+    assert (
+        'DEPLOY_MODE=wechat_formal 必须同时设置 '
+        'DEPLOY_REQUIRE_WECHAT_READY=1'
+    ) in result.stderr
     assert not remote_log.exists()
     remote_text = ''
     for canary in (
@@ -1631,3 +1900,205 @@ WECHAT_RELEASE_FORM_FILE={form_file}
         assert canary not in remote_text
     assert '--key WX_MINIPROGRAM_OPENID_PEPPER' not in remote_text
     assert '--key WX_MINIPROGRAM_SESSION_SECRET' not in remote_text
+
+
+def test_explicit_web_backend_mode_reaches_remote_without_wechat_form(
+    tmp_path,
+):
+    source = _create_clean_git_source(tmp_path)
+    fake_bin = tmp_path / 'bin'
+    fake_bin.mkdir()
+    remote_log = tmp_path / 'remote.log'
+    _write_executable(
+        fake_bin / 'ssh',
+        '''#!/bin/bash
+set -euo pipefail
+{
+    printf 'COMMAND'
+    printf ' <%s>' "$@"
+    printf '\\n'
+} >> "$FAKE_DEPLOY_LOG"
+exit 73
+''',
+    )
+    missing_form = tmp_path / 'missing-wechat-release.env'
+    deploy_env = tmp_path / 'web-backend.env'
+    deploy_env.write_text(
+        f'''DEPLOY_SERVER=fake.example
+DEPLOY_USER=deployer
+DEPLOY_PROJECT_DIR=/srv/case-weather
+DEPLOY_RELEASE_ROOT=/srv/case-weather-deploy
+DEPLOY_RELEASE_ID=web-backend-test
+DEPLOY_LOCAL_DIR={source}
+DEPLOY_MODE=web_backend_only
+DEPLOY_REQUIRE_WECHAT_READY=0
+WECHAT_RELEASE_FORM_FILE={missing_form}
+''',
+        encoding='utf-8',
+    )
+    environment = os.environ.copy()
+    environment.update(
+        {
+            'ENV_FILE': str(deploy_env),
+            'FAKE_DEPLOY_LOG': str(remote_log),
+            'PATH': f"{fake_bin}:{environment['PATH']}",
+        }
+    )
+
+    result = subprocess.run(
+        ['bash', str(ROOT / 'scripts' / 'deploy.sh')],
+        cwd=ROOT,
+        env=environment,
+        stdin=subprocess.DEVNULL,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 73
+    assert '步骤1: 测试服务器连接' in result.stdout
+    assert remote_log.exists()
+    assert 'missing-wechat-release.env' not in result.stdout
+    assert 'missing-wechat-release.env' not in result.stderr
+
+
+def test_web_backend_mode_cannot_claim_wechat_ready(tmp_path):
+    fake_bin = tmp_path / 'bin'
+    fake_bin.mkdir()
+    remote_log = tmp_path / 'remote.log'
+    _write_executable(
+        fake_bin / 'ssh',
+        '''#!/bin/bash
+printf 'unexpected remote call\\n' >> "$FAKE_DEPLOY_LOG"
+''',
+    )
+    deploy_env = tmp_path / 'invalid-web-backend.env'
+    deploy_env.write_text(
+        '''DEPLOY_SERVER=fake.example
+DEPLOY_USER=deployer
+DEPLOY_MODE=web_backend_only
+DEPLOY_REQUIRE_WECHAT_READY=1
+''',
+        encoding='utf-8',
+    )
+    environment = os.environ.copy()
+    environment.update(
+        {
+            'ENV_FILE': str(deploy_env),
+            'FAKE_DEPLOY_LOG': str(remote_log),
+            'PATH': f"{fake_bin}:{environment['PATH']}",
+        }
+    )
+
+    result = subprocess.run(
+        ['bash', str(ROOT / 'scripts' / 'deploy.sh')],
+        cwd=ROOT,
+        env=environment,
+        stdin=subprocess.DEVNULL,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 64
+    assert (
+        'DEPLOY_MODE=web_backend_only 必须保持 '
+        'DEPLOY_REQUIRE_WECHAT_READY=0'
+    ) in result.stderr
+    assert not remote_log.exists()
+
+
+def test_command_line_web_mode_cannot_be_overridden_by_env_file(tmp_path):
+    fake_bin = tmp_path / 'bin'
+    fake_bin.mkdir()
+    remote_log = tmp_path / 'remote.log'
+    _write_executable(
+        fake_bin / 'ssh',
+        '''#!/bin/bash
+printf 'unexpected remote call\\n' >> "$FAKE_DEPLOY_LOG"
+''',
+    )
+    deploy_env = tmp_path / 'stale-formal.env'
+    deploy_env.write_text(
+        '''DEPLOY_SERVER=fake.example
+DEPLOY_USER=deployer
+DEPLOY_MODE=wechat_formal
+DEPLOY_REQUIRE_WECHAT_READY=1
+WECHAT_RELEASE_FORM_FILE=/private/form-canary
+''',
+        encoding='utf-8',
+    )
+    environment = os.environ.copy()
+    environment.update(
+        {
+            'ENV_FILE': str(deploy_env),
+            'DEPLOY_MODE': 'web_backend_only',
+            'DEPLOY_REQUIRE_WECHAT_READY': '0',
+            'FAKE_DEPLOY_LOG': str(remote_log),
+            'PATH': f"{fake_bin}:{environment['PATH']}",
+        }
+    )
+
+    result = subprocess.run(
+        ['bash', str(ROOT / 'scripts' / 'deploy.sh')],
+        cwd=ROOT,
+        env=environment,
+        stdin=subprocess.DEVNULL,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 64
+    assert '命令行 DEPLOY_MODE 与 ENV_FILE 冲突' in result.stderr
+    assert '/private/form-canary' not in result.stdout
+    assert '/private/form-canary' not in result.stderr
+    assert not remote_log.exists()
+
+
+def test_web_backend_mode_rejects_dirty_source_before_remote_command(
+    tmp_path,
+):
+    source = _create_clean_git_source(tmp_path)
+    (source / 'untracked.txt').write_text('dirty\n', encoding='utf-8')
+    fake_bin = tmp_path / 'bin'
+    fake_bin.mkdir()
+    remote_log = tmp_path / 'remote.log'
+    _write_executable(
+        fake_bin / 'ssh',
+        '''#!/bin/bash
+printf 'unexpected remote call\\n' >> "$FAKE_DEPLOY_LOG"
+''',
+    )
+    deploy_env = tmp_path / 'dirty-web-backend.env'
+    deploy_env.write_text(
+        f'''DEPLOY_SERVER=fake.example
+DEPLOY_USER=deployer
+DEPLOY_LOCAL_DIR={source}
+DEPLOY_MODE=web_backend_only
+DEPLOY_REQUIRE_WECHAT_READY=0
+''',
+        encoding='utf-8',
+    )
+    environment = os.environ.copy()
+    environment.update(
+        {
+            'ENV_FILE': str(deploy_env),
+            'FAKE_DEPLOY_LOG': str(remote_log),
+            'PATH': f"{fake_bin}:{environment['PATH']}",
+        }
+    )
+
+    result = subprocess.run(
+        ['bash', str(ROOT / 'scripts' / 'deploy.sh')],
+        cwd=ROOT,
+        env=environment,
+        stdin=subprocess.DEVNULL,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 64
+    assert 'Git 工作树保持干净' in result.stderr
+    assert not remote_log.exists()

@@ -40,6 +40,7 @@ DATABASE_FILE=""
 unset DATABASE_URI
 RECOVERY_ACKNOWLEDGED_TRANSACTION="${RECOVERY_ACKNOWLEDGED_TRANSACTION:-}"
 REQUIRE_WECHAT_READY="${REQUIRE_WECHAT_READY:-0}"
+DEPLOY_INTENT="${DEPLOY_INTENT:-web_backend_only}"
 EXPECTED_RELEASE_COMMIT="${EXPECTED_RELEASE_COMMIT:-}"
 QWEATHER_BUDGET_SNAPSHOT_HELPER="${QWEATHER_BUDGET_SNAPSHOT_HELPER:-}"
 QWEATHER_PENDING_KEY_PATH="${QWEATHER_PENDING_KEY_PATH:-}"
@@ -55,6 +56,7 @@ EXPECTED_REQUIREMENTS_LOCK_SHA256="c7e450c30d7d3c56bdf210f69a58620cba9d99e462e0e
 
 APP_DIR="$NEW_RELEASE/app"
 VENV_DIR="$NEW_RELEASE/venv"
+CANDIDATE_BASE_STATE_FILE="$NEW_RELEASE/private-metadata/candidate-base-state.json"
 RELEASE_ID="${NEW_RELEASE##*/}"
 TRANSACTION_ROOT="$STATE_DIR/backups/deploy-transactions"
 FORMAL_SMOKE_RECEIPT_ROOT="$STATE_DIR/deployments/formal-cache-smokes"
@@ -71,6 +73,7 @@ STATE_FILE="$TRANSACTION_DIR/unit-state.tsv"
 OLD_LINK_FILE="$TRANSACTION_DIR/old-current-link"
 DB_BACKUP="$TRANSACTION_DIR/database-before.db"
 ENV_BACKUP="$TRANSACTION_DIR/environment-before.env"
+ENV_METADATA="$TRANSACTION_DIR/environment-before.metadata"
 BACKUP_RUNTIME_ENV_FILE="$STATE_DIR/backups/backup-runtime.env"
 BACKUP_RUNTIME_ENV_BACKUP="$TRANSACTION_DIR/backup-runtime-before.env"
 FAILURE_MARKER="$TRANSACTION_DIR/ROLLBACK_REQUIRED.txt"
@@ -94,6 +97,8 @@ ALLOW_NONROOT_TEST_RUNTIME_GUARD="${ALLOW_NONROOT_TEST_RUNTIME_GUARD:-0}"
 RUNTIME_BOOT_GUARD_FILE="$RUNTIME_BOOT_GUARD_DIR/activation-permit"
 ACTIVATION_BOOT_GUARD_FILE="$STATE_DIR/deployments/activation-in-progress"
 ACTIVATION_GUARD_DROPIN_NAME="10-case-weather-activation-guard.conf"
+ACTIVATION_GUARD_DROPIN_STATE="$TRANSACTION_DIR/activation-guard-dropins.tsv"
+ACTIVATION_GUARD_DROPIN_BACKUP_DIR="$TRANSACTION_DIR/activation-guard-dropins"
 LEGACY_BACKUP_CRON_LINE="0 3 * * * $STATE_DIR/backup.sh >> $STATE_DIR/backups/backup.log 2>&1"
 LEGACY_BACKUP_RELEASE_CRON_LINE="0 3 * * * PROJECT_DIR=$STATE_DIR ENV_FILE=$STATE_DIR/.env BACKUP_DIR=$STATE_DIR/backups $CURRENT_LINK/app/scripts/backup.sh >> $STATE_DIR/backups/backup.log 2>&1"
 LEGACY_SYNC_CRON_LINE="0 6 * * * TZ=Asia/Shanghai $STATE_DIR/venv/bin/python3 $STATE_DIR/services/pipelines/sync_weather_data.py --daily >> $STATE_DIR/logs/weather_sync.log 2>&1"
@@ -154,6 +159,7 @@ BACKUP_RUNTIME_ENV_EXISTED=0
 BACKUP_RUNTIME_ENV_BACKUP_READY=0
 LINK_MUTATED=0
 UNITS_MUTATED=0
+ACTIVATION_GUARD_DROPINS_MUTATED=0
 RUNTIME_QUIESCE_STARTED=0
 RUNTIME_KEY_QUIESCENCE_PROVEN=0
 QWEATHER_KEY_TRANSITION_REQUIRED=0
@@ -307,6 +313,7 @@ capture_previous_state() {
                 "$UNIT_DIR" \
                 "$CONTROL_OWNER_UID" \
                 "$CONTROL_OWNER_GID" <<'PY'
+import os
 from pathlib import Path
 import stat
 import sys
@@ -352,6 +359,122 @@ PY
             return 1
         fi
         printf '%s\t%s\t%s\t%s\n' "$unit" "$exists" "$enabled" "$active" >> "$STATE_FILE"
+    done
+    capture_activation_guard_dropin_state
+}
+
+capture_activation_guard_dropin_state() {
+    local unit directory dropin directory_existed file_existed
+    local directory_metadata directory_uid directory_gid directory_mode
+    local temporary_name
+    mkdir -p "$ACTIVATION_GUARD_DROPIN_BACKUP_DIR"
+    : > "$ACTIVATION_GUARD_DROPIN_STATE"
+    chmod 0600 "$ACTIVATION_GUARD_DROPIN_STATE"
+
+    for unit in "${ALL_UNITS[@]}"; do
+        directory="$UNIT_DIR/$unit.d"
+        dropin="$directory/$ACTIVATION_GUARD_DROPIN_NAME"
+        directory_existed=0
+        file_existed=0
+        directory_uid=-
+        directory_gid=-
+        directory_mode=-
+        temporary_name=".$ACTIVATION_GUARD_DROPIN_NAME.next"
+        if [ -e "$directory" ] || [ -L "$directory" ]; then
+            if ! directory_metadata="$("$VENV_DIR/bin/python" - \
+                "$directory" \
+                "$UNIT_DIR" \
+                "$unit" \
+                "$CONTROL_OWNER_UID" \
+                "$CONTROL_OWNER_GID" \
+                "$ALLOW_NONROOT_TEST_RUNTIME_GUARD" <<'PY'
+import os
+from pathlib import Path
+import stat
+import sys
+
+path = Path(sys.argv[1])
+root = Path(sys.argv[2]).resolve(strict=True)
+unit = sys.argv[3]
+file_stat = path.lstat()
+directory_mode = stat.S_IMODE(file_stat.st_mode)
+listxattr = getattr(os, 'listxattr', None)
+if listxattr is None:
+    if sys.argv[6] != '1' or os.geteuid() == 0:
+        raise SystemExit(1)
+    extended_attributes = []
+else:
+    try:
+        extended_attributes = listxattr(path, follow_symlinks=False)
+    except OSError:
+        raise SystemExit(1) from None
+if (
+    not stat.S_ISDIR(file_stat.st_mode)
+    or stat.S_ISLNK(file_stat.st_mode)
+    or path.name != f'{unit}.d'
+    or path.parent.resolve(strict=True) != root
+    or file_stat.st_uid != int(sys.argv[4])
+    or file_stat.st_gid != int(sys.argv[5])
+    or directory_mode & 0o022
+    or any(
+        name.startswith('system.posix_acl_')
+        for name in extended_attributes
+    )
+):
+    raise SystemExit(1)
+print(
+    f'{file_stat.st_uid}\t'
+    f'{file_stat.st_gid}\t'
+    f'{directory_mode:04o}'
+)
+PY
+            )"; then
+                fail "systemd drop-in 目录身份异常: $directory"
+                return 1
+            fi
+            IFS=$'\t' read -r \
+                directory_uid \
+                directory_gid \
+                directory_mode <<< "$directory_metadata"
+            directory_existed=1
+        fi
+        if [ -e "$dropin" ] || [ -L "$dropin" ]; then
+            if ! "$VENV_DIR/bin/python" - \
+                "$dropin" \
+                "$directory" \
+                "$CONTROL_OWNER_UID" \
+                "$CONTROL_OWNER_GID" <<'PY'
+from pathlib import Path
+import stat
+import sys
+
+path = Path(sys.argv[1])
+directory = Path(sys.argv[2]).resolve(strict=True)
+file_stat = path.lstat()
+if (
+    not stat.S_ISREG(file_stat.st_mode)
+    or stat.S_ISLNK(file_stat.st_mode)
+    or path.parent.resolve(strict=True) != directory
+    or file_stat.st_uid != int(sys.argv[3])
+    or file_stat.st_gid != int(sys.argv[4])
+):
+    raise SystemExit(1)
+PY
+            then
+                fail "systemd 断电保护 drop-in 身份异常: $dropin"
+                return 1
+            fi
+            cp -a "$dropin" "$ACTIVATION_GUARD_DROPIN_BACKUP_DIR/$unit"
+            file_existed=1
+        fi
+        printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+            "$unit" \
+            "$directory_existed" \
+            "$file_existed" \
+            "$directory_uid" \
+            "$directory_gid" \
+            "$directory_mode" \
+            "$temporary_name" >> "$ACTIVATION_GUARD_DROPIN_STATE"
     done
 }
 
@@ -675,8 +798,11 @@ durably_checkpoint_recovery_materials() {
         "$STATE_FILE" \
         "$OLD_LINK_FILE" \
         "$UNIT_DIR" \
+        "$ACTIVATION_GUARD_DROPIN_STATE" \
+        "$ACTIVATION_GUARD_DROPIN_BACKUP_DIR" \
         "$CAPTURED_STATE_CHECKPOINT" \
         "$ENV_BACKUP" \
+        "$ENV_METADATA" \
         "$ENV_EXISTED" \
         "$ENV_BACKUP_READY" \
         "$BACKUP_RUNTIME_ENV_BACKUP" \
@@ -698,8 +824,11 @@ separator = sys.argv.index('--')
     state_raw,
     old_link_raw,
     unit_dir_raw,
+    dropin_state_raw,
+    dropin_backup_dir_raw,
     captured_checkpoint_raw,
     env_backup_raw,
+    env_metadata_raw,
     env_existed_raw,
     env_ready_raw,
     backup_env_raw,
@@ -717,6 +846,8 @@ old_link_file = Path(old_link_raw)
 unit_dir = Path(unit_dir_raw).resolve(strict=True)
 captured_checkpoint = Path(captured_checkpoint_raw)
 units_backup_dir = transaction / 'units'
+dropin_state = Path(dropin_state_raw)
+dropin_backup_dir = Path(dropin_backup_dir_raw)
 
 
 def ensure_transaction_path(path):
@@ -724,7 +855,7 @@ def ensure_transaction_path(path):
         parent = path.parent.resolve(strict=True)
     except OSError:
         raise SystemExit(1) from None
-    if parent not in {transaction, units_backup_dir}:
+    if parent not in {transaction, units_backup_dir, dropin_backup_dir}:
         raise SystemExit(1)
 
 
@@ -763,11 +894,14 @@ def fsync_regular(path):
 
 transaction_stat = transaction.lstat()
 units_stat = units_backup_dir.lstat()
+dropin_backup_stat = dropin_backup_dir.lstat()
 if (
     not stat.S_ISDIR(transaction_stat.st_mode)
     or stat.S_ISLNK(transaction_stat.st_mode)
     or not stat.S_ISDIR(units_stat.st_mode)
     or stat.S_ISLNK(units_stat.st_mode)
+    or not stat.S_ISDIR(dropin_backup_stat.st_mode)
+    or stat.S_ISLNK(dropin_backup_stat.st_mode)
 ):
     raise SystemExit(1)
 
@@ -789,6 +923,45 @@ old_link_lines = require_regular(old_link_file).read_text(encoding='utf-8').spli
 if len(old_link_lines) != 1 or not old_link_lines[0]:
     raise SystemExit(1)
 
+dropin_lines = require_regular(dropin_state).read_text(
+    encoding='utf-8'
+).splitlines()
+if len(dropin_lines) != len(expected_units):
+    raise SystemExit(1)
+dropin_backups = []
+for line, expected_unit in zip(dropin_lines, expected_units, strict=True):
+    fields = line.split('\t')
+    expected_temporary_name = f'.{os.path.basename("10-case-weather-activation-guard.conf")}.next'
+    if (
+        len(fields) != 7
+        or fields[0] != expected_unit
+        or fields[1] not in {'0', '1'}
+        or fields[2] not in {'0', '1'}
+        or (fields[2] == '1' and fields[1] != '1')
+        or fields[6] != expected_temporary_name
+    ):
+        raise SystemExit(1)
+    if fields[1] == '1':
+        if (
+            not fields[3].isdigit()
+            or not fields[4].isdigit()
+            or len(fields[5]) != 4
+            or fields[5][0] != '0'
+            or any(character not in '01234567' for character in fields[5])
+            or int(fields[5], 8) & 0o022
+        ):
+            raise SystemExit(1)
+    elif fields[3:6] != ['-', '-', '-']:
+        raise SystemExit(1)
+    backup = dropin_backup_dir / expected_unit
+    if fields[2] == '1':
+        dropin_backups.append(require_regular(backup))
+    elif path_exists(backup):
+        raise SystemExit(1)
+for child in dropin_backup_dir.iterdir():
+    if child.name not in expected_units:
+        raise SystemExit(1)
+
 backup_units = []
 for child in units_backup_dir.iterdir():
     if child.name not in expected_units:
@@ -807,7 +980,13 @@ for unit in expected_units:
     if stat.S_ISREG(source_stat.st_mode):
         require_regular(units_backup_dir / unit)
 
-files_to_sync = [state_file, old_link_file, *backup_units]
+files_to_sync = [
+    state_file,
+    old_link_file,
+    dropin_state,
+    *dropin_backups,
+    *backup_units,
+]
 if phase == 'recovery-backups':
     require_regular(captured_checkpoint)
     files_to_sync.append(captured_checkpoint)
@@ -825,12 +1004,31 @@ if phase == 'recovery-backups':
             files_to_sync.append(require_regular(backup_path))
         elif path_exists(backup_path):
             raise SystemExit(1)
+    env_metadata = Path(env_metadata_raw)
+    if env_existed_raw == '1':
+        metadata_fields = require_regular(env_metadata).read_text(
+            encoding='utf-8'
+        ).split()
+        if (
+            len(metadata_fields) != 3
+            or not all(value.isdigit() for value in metadata_fields)
+            or metadata_fields[2] not in {'600', '640'}
+        ):
+            raise SystemExit(1)
+        files_to_sync.append(env_metadata)
+    elif path_exists(env_metadata):
+        raise SystemExit(1)
 elif phase != 'captured-state':
     raise SystemExit(1)
 
 for file_path in files_to_sync:
     fsync_regular(file_path)
-for directory_path in (units_backup_dir, transaction, transaction.parent):
+for directory_path in (
+    units_backup_dir,
+    dropin_backup_dir,
+    transaction,
+    transaction.parent,
+):
     descriptor = os.open(
         directory_path,
         os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0),
@@ -1259,6 +1457,14 @@ prepare_qweather_key_transition_plan() {
             fail "非正式激活不得携带 QWeather pending 私钥"
             return 1
         fi
+        return 0
+    fi
+    if [ "$DEPLOY_INTENT" = web_backend_only ]; then
+        if [ -n "$QWEATHER_PENDING_KEY_PATH" ]; then
+            fail "网页/后端发布不得携带 QWeather pending 私钥"
+            return 1
+        fi
+        log "正式运行态复用服务器现有 QWeather 私钥，不执行私钥转换"
         return 0
     fi
     if [ -z "$QWEATHER_PENDING_KEY_PATH" ]; then
@@ -2668,6 +2874,175 @@ validate_backup_database_config() {
     fi
 }
 
+install_activation_guard_dropins() {
+    local unit directory dropin temporary expected
+    expected="$TRANSACTION_DIR/activation-guard.expected"
+    {
+        printf '%s\n' '[Unit]'
+        printf 'ConditionPathExists=|!%s\n' "$ACTIVATION_BOOT_GUARD_FILE"
+        printf 'ConditionPathExists=|%s\n' "$RUNTIME_BOOT_GUARD_FILE"
+    } > "$expected"
+    chmod 0600 "$expected"
+
+    # 所有精确临时路径必须在任何目录权限修改前确认不存在；事务快照已
+    # 耐久记录同一固定文件名，崩溃恢复时只会处理本轮可证明的临时文件。
+    for unit in "${ALL_UNITS[@]}"; do
+        directory="$UNIT_DIR/$unit.d"
+        temporary="$directory/.$ACTIVATION_GUARD_DROPIN_NAME.next"
+        if [ -L "$directory" ]; then
+            fail "systemd drop-in 目录不得为符号链接: $directory"
+            return 1
+        fi
+        if [ -e "$temporary" ] || [ -L "$temporary" ]; then
+            fail "systemd drop-in 临时路径已被占用: $temporary"
+            return 1
+        fi
+    done
+
+    ACTIVATION_GUARD_DROPINS_MUTATED=1
+    for unit in "${ALL_UNITS[@]}"; do
+        directory="$UNIT_DIR/$unit.d"
+        dropin="$directory/$ACTIVATION_GUARD_DROPIN_NAME"
+        mkdir -p "$directory"
+        "$CHOWN_BIN" "$CONTROL_OWNER_UID:$CONTROL_OWNER_GID" "$directory"
+        chmod 0755 "$directory"
+        temporary="$directory/.$ACTIVATION_GUARD_DROPIN_NAME.next"
+        "$VENV_DIR/bin/python" - \
+            "$expected" \
+            "$directory" \
+            "$(basename "$temporary")" \
+            "$UNIT_DIR" \
+            "$unit" \
+            "$CONTROL_OWNER_UID" \
+            "$CONTROL_OWNER_GID" \
+            "$ALLOW_NONROOT_TEST_RUNTIME_GUARD" <<'PY'
+import os
+from pathlib import Path
+import stat
+import sys
+
+expected = Path(sys.argv[1])
+directory = Path(sys.argv[2])
+temporary_name = sys.argv[3]
+unit_root = Path(sys.argv[4]).resolve(strict=True)
+unit = sys.argv[5]
+expected_uid = int(sys.argv[6])
+expected_gid = int(sys.argv[7])
+test_mode = sys.argv[8]
+
+directory_stat = directory.lstat()
+listxattr = getattr(os, 'listxattr', None)
+if listxattr is None:
+    if test_mode != '1' or os.geteuid() == 0:
+        raise SystemExit(1)
+    extended_attributes = []
+else:
+    try:
+        extended_attributes = listxattr(directory, follow_symlinks=False)
+    except OSError:
+        raise SystemExit(1) from None
+if (
+    not stat.S_ISDIR(directory_stat.st_mode)
+    or stat.S_ISLNK(directory_stat.st_mode)
+    or directory.parent.resolve(strict=True) != unit_root
+    or directory.name != f'{unit}.d'
+    or directory_stat.st_uid != expected_uid
+    or directory_stat.st_gid != expected_gid
+    or stat.S_IMODE(directory_stat.st_mode) != 0o755
+    or any(
+        name.startswith('system.posix_acl_')
+        for name in extended_attributes
+    )
+    or temporary_name != '.10-case-weather-activation-guard.conf.next'
+):
+    raise SystemExit(1)
+
+open_flags = (
+    os.O_RDONLY
+    | getattr(os, 'O_CLOEXEC', 0)
+    | getattr(os, 'O_NOFOLLOW', 0)
+)
+expected_fd = os.open(expected, open_flags)
+try:
+    expected_stat = os.fstat(expected_fd)
+    if not stat.S_ISREG(expected_stat.st_mode):
+        raise SystemExit(1)
+    chunks = []
+    while True:
+        chunk = os.read(expected_fd, 65536)
+        if not chunk:
+            break
+        chunks.append(chunk)
+    expected_bytes = b''.join(chunks)
+finally:
+    os.close(expected_fd)
+
+directory_fd = os.open(
+    directory,
+    os.O_RDONLY
+    | getattr(os, 'O_DIRECTORY', 0)
+    | getattr(os, 'O_CLOEXEC', 0)
+    | getattr(os, 'O_NOFOLLOW', 0),
+)
+temporary_fd = None
+created = False
+try:
+    try:
+        os.stat(temporary_name, dir_fd=directory_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        pass
+    else:
+        raise SystemExit(1)
+    temporary_fd = os.open(
+        temporary_name,
+        os.O_WRONLY
+        | os.O_CREAT
+        | os.O_EXCL
+        | getattr(os, 'O_CLOEXEC', 0)
+        | getattr(os, 'O_NOFOLLOW', 0),
+        0o600,
+        dir_fd=directory_fd,
+    )
+    created = True
+    view = memoryview(expected_bytes)
+    while view:
+        written = os.write(temporary_fd, view)
+        if written <= 0:
+            raise OSError('short write')
+        view = view[written:]
+    temporary_stat = os.fstat(temporary_fd)
+    if (
+        temporary_stat.st_uid != expected_uid
+        or temporary_stat.st_gid != expected_gid
+    ):
+        os.fchown(temporary_fd, expected_uid, expected_gid)
+    os.fchmod(temporary_fd, 0o644)
+    os.fsync(temporary_fd)
+except BaseException:
+    if temporary_fd is not None:
+        os.close(temporary_fd)
+        temporary_fd = None
+    if created:
+        try:
+            os.unlink(temporary_name, dir_fd=directory_fd)
+            os.fsync(directory_fd)
+        except OSError:
+            pass
+    raise
+finally:
+    if temporary_fd is not None:
+        os.close(temporary_fd)
+    os.close(directory_fd)
+PY
+        mv -f "$temporary" "$dropin"
+        fsync_directory "$directory"
+    done
+    "$SYSTEMCTL_BIN" daemon-reload
+    fsync_directory "$UNIT_DIR"
+    verify_activation_guard_dropins
+    log "systemd 断电保护 drop-in 已在激活事务内安装"
+}
+
 verify_activation_guard_dropins() {
     local unit dropin expected load_state need_reload loaded_config
     expected="$TRANSACTION_DIR/activation-guard.expected"
@@ -3394,10 +3769,32 @@ PY
 }
 
 backup_environment() {
+    local metadata
     if [ ! -f "$ENV_FILE" ]; then
         ENV_EXISTED=0
         return
     fi
+    if [ -L "$ENV_FILE" ]; then
+        fail "活动环境文件不得为符号链接"
+        return 1
+    fi
+    metadata="$("$VENV_DIR/bin/python" - "$ENV_FILE" <<'PY'
+from pathlib import Path
+import stat
+import sys
+
+file_stat = Path(sys.argv[1]).lstat()
+if not stat.S_ISREG(file_stat.st_mode) or stat.S_ISLNK(file_stat.st_mode):
+    raise SystemExit(1)
+print(file_stat.st_uid, file_stat.st_gid, f'{stat.S_IMODE(file_stat.st_mode):o}')
+PY
+)"
+    if [[ ! "$metadata" =~ ^[0-9]+\ [0-9]+\ (600|640)$ ]]; then
+        fail "活动环境文件权限不安全，拒绝在事务外修正"
+        return 1
+    fi
+    printf '%s\n' "$metadata" > "$ENV_METADATA"
+    chmod 0600 "$ENV_METADATA"
     ENV_EXISTED=1
     cp -a "$ENV_FILE" "$ENV_BACKUP"
     chmod 0600 "$ENV_BACKUP"
@@ -3555,12 +3952,292 @@ PY
     fi
 }
 
+verify_candidate_base_state() {
+    if ! "$VENV_DIR/bin/python" - \
+        "$CANDIDATE_BASE_STATE_FILE" \
+        "$ENV_FILE" \
+        "$STAGED_ENV_FILE" \
+        "$CURRENT_LINK" \
+        "$DEPLOY_INTENT" <<'PY'
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import stat
+import sys
+
+
+MAX_ENV_BYTES = 1024 * 1024
+HASH_PATTERN = re.compile(r'^[0-9a-f]{64}$')
+QWEATHER_PROTECTED_KEYS = (
+    'ALLOW_WEATHER_UNAVAILABLE',
+    'FORECAST_CACHE_TTL_MINUTES',
+    'QWEATHER_API_BASE',
+    'QWEATHER_AUTH_MODE',
+    'QWEATHER_BUDGET_FAIL_CLOSED',
+    'QWEATHER_CANONICAL_LOCATION',
+    'QWEATHER_CONSOLE_USAGE_BASELINE',
+    'QWEATHER_CONSOLE_USAGE_MONTH',
+    'QWEATHER_DEDICATED_CREDENTIAL_CONFIRMED',
+    'QWEATHER_EXPECTED_KID',
+    'QWEATHER_EXPECTED_PROJECT_ID',
+    'QWEATHER_JWT_KID',
+    'QWEATHER_JWT_PRIVATE_KEY_PATH',
+    'QWEATHER_JWT_PROJECT_ID',
+    'QWEATHER_KEY',
+    'QWEATHER_MONTHLY_REQUEST_LIMIT',
+    'QWEATHER_NETWORK_NOT_BEFORE_EPOCH',
+    'QWEATHER_REQUIRE_PERSISTENT_BUDGET',
+    'QWEATHER_WARNING_CACHE_TTL_MINUTES',
+    'REDIS_URL',
+    'WEATHER_CACHE_REDIS_URL',
+    'WEATHER_CACHE_TTL_MINUTES',
+    'WEATHER_SYNC_LOCATIONS',
+)
+
+
+def fail():
+    raise SystemExit(1)
+
+
+def fingerprint(value):
+    return (
+        value.st_dev,
+        value.st_ino,
+        value.st_mode,
+        value.st_uid,
+        value.st_gid,
+        value.st_size,
+        value.st_mtime_ns,
+        value.st_ctime_ns,
+    )
+
+
+def read_regular_stably(path, max_bytes):
+    flags = os.O_RDONLY | getattr(os, 'O_CLOEXEC', 0)
+    flags |= getattr(os, 'O_NOFOLLOW', 0)
+    descriptor = None
+    try:
+        path_before = path.lstat()
+        descriptor = os.open(path, flags)
+        before = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(path_before.st_mode)
+            or not stat.S_ISREG(before.st_mode)
+            or fingerprint(path_before) != fingerprint(before)
+            or before.st_size > max_bytes
+        ):
+            fail()
+        chunks = []
+        total = 0
+        while True:
+            chunk = os.read(descriptor, min(65536, max_bytes + 1 - total))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            total += len(chunk)
+            if total > max_bytes:
+                fail()
+        after = os.fstat(descriptor)
+        path_after = path.lstat()
+        if fingerprint(before) != fingerprint(after) or fingerprint(after) != fingerprint(path_after):
+            fail()
+        return b''.join(chunks)
+    except OSError:
+        fail()
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
+def current_link_state(path):
+    try:
+        before = path.lstat()
+    except FileNotFoundError:
+        return hashlib.sha256(b'absent').hexdigest()
+    except OSError:
+        fail()
+    if not stat.S_ISLNK(before.st_mode):
+        fail()
+    try:
+        target = os.readlink(path)
+        after = path.lstat()
+    except OSError:
+        fail()
+    if fingerprint(before) != fingerprint(after):
+        fail()
+    encoded = os.fsencode(target)
+    if not encoded or any(character in encoded for character in (0, 10, 13)):
+        fail()
+    return hashlib.sha256(b'link\0' + encoded).hexdigest()
+
+
+def qweather_configuration_hash(payload):
+    try:
+        text = payload.decode('utf-8')
+    except UnicodeDecodeError:
+        fail()
+    values = {}
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith('#') or '=' not in raw_line:
+            continue
+        key, value = raw_line.split('=', 1)
+        key = key.strip()
+        if key not in QWEATHER_PROTECTED_KEYS:
+            continue
+        if key in values:
+            fail()
+        values[key] = value
+    canonical = b''.join(
+        key.encode('ascii') + b'=' + values.get(key, '').encode('utf-8') + b'\0'
+        for key in QWEATHER_PROTECTED_KEYS
+    )
+    return hashlib.sha256(canonical).hexdigest()
+
+
+metadata_path = Path(sys.argv[1])
+active_env = Path(sys.argv[2])
+staged_env = Path(sys.argv[3])
+current_link = Path(sys.argv[4])
+deployment_intent = sys.argv[5]
+try:
+    metadata = json.loads(
+        read_regular_stably(metadata_path, 4096).decode('utf-8')
+    )
+except (UnicodeDecodeError, ValueError, json.JSONDecodeError):
+    fail()
+if (
+    not isinstance(metadata, dict)
+    or set(metadata) != {
+        'active_env_sha256',
+        'current_link_state_sha256',
+        'deployment_intent',
+        'qweather_config_sha256',
+        'version',
+    }
+    or metadata.get('version') != 2
+    or not isinstance(metadata.get('active_env_sha256'), str)
+    or not HASH_PATTERN.fullmatch(metadata['active_env_sha256'])
+    or not isinstance(metadata.get('current_link_state_sha256'), str)
+    or not HASH_PATTERN.fullmatch(metadata['current_link_state_sha256'])
+    or metadata.get('deployment_intent') != deployment_intent
+    or deployment_intent not in {'web_backend_only', 'wechat_formal'}
+    or not isinstance(metadata.get('qweather_config_sha256'), str)
+    or not HASH_PATTERN.fullmatch(metadata['qweather_config_sha256'])
+):
+    fail()
+active_content = read_regular_stably(active_env, MAX_ENV_BYTES)
+if (
+    hashlib.sha256(active_content).hexdigest()
+    != metadata['active_env_sha256']
+    or current_link_state(current_link)
+    != metadata['current_link_state_sha256']
+):
+    fail()
+if deployment_intent == 'web_backend_only' and (
+    qweather_configuration_hash(active_content)
+    != metadata['qweather_config_sha256']
+    or qweather_configuration_hash(
+        read_regular_stably(staged_env, MAX_ENV_BYTES)
+    )
+    != metadata['qweather_config_sha256']
+):
+    fail()
+PY
+    then
+        fail "候选配置基线已变化，请从最新活动环境重新创建发布"
+        return 1
+    fi
+}
+
+verify_effective_runtime_gate() {
+    local staged_runtime=""
+    if ! staged_runtime="$("$VENV_DIR/bin/python" - "$STAGED_ENV_FILE" <<'PY'
+import os
+from pathlib import Path
+import stat
+import sys
+
+
+path = Path(sys.argv[1])
+chunks = []
+total = 0
+descriptor = os.open(
+    path,
+    os.O_RDONLY | getattr(os, 'O_CLOEXEC', 0) | getattr(os, 'O_NOFOLLOW', 0),
+)
+try:
+    before = os.fstat(descriptor)
+    if not stat.S_ISREG(before.st_mode) or before.st_size > 1024 * 1024:
+        raise SystemExit(1)
+    while True:
+        chunk = os.read(descriptor, min(65536, 1024 * 1024 + 1 - total))
+        if not chunk:
+            break
+        chunks.append(chunk)
+        total += len(chunk)
+        if total > 1024 * 1024:
+            raise SystemExit(1)
+    after = os.fstat(descriptor)
+finally:
+    os.close(descriptor)
+if (
+    total != before.st_size
+    or (
+        before.st_dev,
+        before.st_ino,
+        before.st_size,
+        before.st_mtime_ns,
+        before.st_ctime_ns,
+    )
+    != (
+        after.st_dev,
+        after.st_ino,
+        after.st_size,
+        after.st_mtime_ns,
+        after.st_ctime_ns,
+    )
+):
+    raise SystemExit(1)
+try:
+    text = b''.join(chunks).decode('utf-8')
+except UnicodeDecodeError:
+    raise SystemExit(1) from None
+matches = []
+for raw_line in text.splitlines():
+    line = raw_line.strip()
+    if not line or line.startswith('#') or '=' not in raw_line:
+        continue
+    key, value = raw_line.split('=', 1)
+    if key.strip() == 'WECHAT_FORMAL_RUNTIME':
+        matches.append(value.strip().strip('"').strip("'"))
+if len(matches) != 1 or matches[0] not in {'0', '1'}:
+    raise SystemExit(1)
+print(matches[0])
+PY
+)"; then
+        fail "无法从候选环境确定唯一的 WECHAT_FORMAL_RUNTIME"
+        return 1
+    fi
+    if [ "$staged_runtime" != "$REQUIRE_WECHAT_READY" ]; then
+        fail "部署门禁与候选 WECHAT_FORMAL_RUNTIME 不一致"
+        return 1
+    fi
+    if [ "$DEPLOY_INTENT" = wechat_formal ] \
+        && [ "$staged_runtime" != 1 ]; then
+        fail "微信正式部署候选必须保持正式运行态"
+        return 1
+    fi
+}
+
 validate_formal_release_identity() {
     local metadata_file="$NEW_RELEASE/private-metadata/source-commit.txt"
     local metadata_commit=""
     if [ "$REQUIRE_WECHAT_READY" != 1 ]; then
         if [ -n "$EXPECTED_RELEASE_COMMIT" ]; then
-            fail "游客部署不得携带正式发布 commit 票据"
+            fail "非正式运行态部署不得携带正式发布 commit 票据"
             return 1
         fi
         return 0
@@ -4954,6 +5631,7 @@ restore_database() {
 
 restore_environment() {
     local failed_env="$TRANSACTION_DIR/environment-from-failed-release.env"
+    local owner_uid owner_gid original_mode extra
     [ "$ENV_MUTATION_STARTED" -eq 1 ] || return 0
     if [ -e "$ENV_FILE" ]; then
         mv "$ENV_FILE" "$failed_env" || return 1
@@ -4964,7 +5642,17 @@ restore_environment() {
         cp -a "$ENV_BACKUP" "$ENV_FILE.restore.$$" || return 1
         chmod 0600 "$ENV_FILE.restore.$$" || return 1
         atomic_replace "$ENV_FILE.restore.$$" "$ENV_FILE" || return 1
-        tighten_environment_permissions || return 1
+        read -r owner_uid owner_gid original_mode extra < "$ENV_METADATA" \
+            || return 1
+        [ -z "${extra:-}" ] || return 1
+        [[ "$owner_uid" =~ ^[0-9]+$ ]] || return 1
+        [[ "$owner_gid" =~ ^[0-9]+$ ]] || return 1
+        case "$original_mode" in
+            600|640) ;;
+            *) return 1 ;;
+        esac
+        "$CHOWN_BIN" "$owner_uid:$owner_gid" "$ENV_FILE" || return 1
+        chmod "$original_mode" "$ENV_FILE" || return 1
     fi
 }
 
@@ -5019,6 +5707,94 @@ restore_unit_files() {
         fi
     done < "$STATE_FILE"
     "$SYSTEMCTL_BIN" daemon-reload || return 1
+}
+
+restore_activation_guard_dropins() {
+    local unit directory_existed file_existed directory_uid directory_gid
+    local directory_mode temporary_name directory dropin backup temporary
+    local removed_dir="$TRANSACTION_DIR/activation-guard-dropins-from-failed-release"
+    [ "$ACTIVATION_GUARD_DROPINS_MUTATED" -eq 1 ] || return 0
+    mkdir -p "$removed_dir"
+    while IFS=$'\t' read -r \
+        unit \
+        directory_existed \
+        file_existed \
+        directory_uid \
+        directory_gid \
+        directory_mode \
+        temporary_name; do
+        case "$unit" in
+            *[!A-Za-z0-9_.@-]*|'') return 1 ;;
+        esac
+        case "$directory_existed:$file_existed" in
+            0:0|1:0|1:1) ;;
+            *) return 1 ;;
+        esac
+        if [ "$temporary_name" != ".$ACTIVATION_GUARD_DROPIN_NAME.next" ]; then
+            return 1
+        fi
+        if [ "$directory_existed" = 1 ]; then
+            case "$directory_uid:$directory_gid:$directory_mode" in
+                *[!0-9:]*|*::*|:*) return 1 ;;
+            esac
+            case "$directory_mode" in
+                0[0-7][0-7][0-7]) ;;
+                *) return 1 ;;
+            esac
+        elif [ "$directory_uid:$directory_gid:$directory_mode" != "-:-:-" ]; then
+            return 1
+        fi
+        directory="$UNIT_DIR/$unit.d"
+        dropin="$directory/$ACTIVATION_GUARD_DROPIN_NAME"
+        backup="$ACTIVATION_GUARD_DROPIN_BACKUP_DIR/$unit"
+        temporary="$directory/$temporary_name"
+        if [ -e "$temporary" ] || [ -L "$temporary" ]; then
+            if ! "$VENV_DIR/bin/python" - \
+                "$temporary" \
+                "$directory" <<'PY'
+from pathlib import Path
+import stat
+import sys
+
+path = Path(sys.argv[1])
+directory = Path(sys.argv[2]).resolve(strict=True)
+file_stat = path.lstat()
+if (
+    not stat.S_ISREG(file_stat.st_mode)
+    or stat.S_ISLNK(file_stat.st_mode)
+    or path.parent.resolve(strict=True) != directory
+):
+    raise SystemExit(1)
+PY
+            then
+                return 1
+            fi
+            mv "$temporary" "$removed_dir/$unit.temporary" || return 1
+        fi
+        if [ "$file_existed" = 1 ]; then
+            [ -f "$backup" ] && [ ! -L "$backup" ] || return 1
+            cp -a "$backup" "$directory/.$ACTIVATION_GUARD_DROPIN_NAME.restore.$$" \
+                || return 1
+            mv -f \
+                "$directory/.$ACTIVATION_GUARD_DROPIN_NAME.restore.$$" \
+                "$dropin" \
+                || return 1
+        elif [ -e "$dropin" ] || [ -L "$dropin" ]; then
+            mv "$dropin" "$removed_dir/$unit" || return 1
+        fi
+        if [ "$directory_existed" = 0 ]; then
+            rmdir "$directory" || return 1
+        elif [ -d "$directory" ] && [ ! -L "$directory" ]; then
+            "$CHOWN_BIN" "$directory_uid:$directory_gid" "$directory" || return 1
+            chmod "$directory_mode" "$directory" || return 1
+            fsync_directory "$directory" || return 1
+        else
+            return 1
+        fi
+    done < "$ACTIVATION_GUARD_DROPIN_STATE"
+    "$SYSTEMCTL_BIN" daemon-reload || return 1
+    fsync_directory "$UNIT_DIR" || return 1
+    log "已恢复部署前 systemd 断电保护 drop-in"
 }
 
 restore_unit_states() {
@@ -5092,6 +5868,9 @@ rollback_release() {
         # 只触碰过 backup timer 时，不停止公网服务或其他调度。
         recover_qweather_key_before_mutation || failed=1
         if [ "$failed" -eq 0 ]; then
+            restore_activation_guard_dropins || failed=1
+        fi
+        if [ "$failed" -eq 0 ]; then
             restore_backup_timer_state_only || failed=1
         fi
         if [ "$failed" -eq 0 ]; then
@@ -5133,6 +5912,7 @@ rollback_release() {
         if [ "$UNITS_MUTATED" -eq 1 ]; then
             restore_unit_files || failed=1
         fi
+        restore_activation_guard_dropins || failed=1
         restore_unit_states || failed=1
     fi
     if [ "$failed" -eq 0 ]; then
@@ -5363,6 +6143,10 @@ case "$REQUIRE_WECHAT_READY" in
     0|1) ;;
     *) echo 'REQUIRE_WECHAT_READY 必须是 0 或 1' >&2; exit 2 ;;
 esac
+case "$DEPLOY_INTENT" in
+    web_backend_only|wechat_formal) ;;
+    *) echo 'DEPLOY_INTENT 必须是 web_backend_only 或 wechat_formal' >&2; exit 2 ;;
+esac
 case "$QWEATHER_KEY_TRANSITION_FAIL_AT" in
     ''|after-plan|before-promotion|after-link|after-pending-unlink|after-permissions|during-directory-restore|cleanup|after-plan-cleanup|after-link-cleanup|after-pending-unlink-cleanup|after-permissions-cleanup) ;;
     *) echo 'QWEATHER_KEY_TRANSITION_FAIL_AT 测试故障点无效' >&2; exit 2 ;;
@@ -5444,6 +6228,7 @@ fi
 command -v "$CHOWN_BIN" >/dev/null 2>&1 || require_executable "$CHOWN_BIN"
 command -v "$ENV_BIN" >/dev/null 2>&1 || require_executable "$ENV_BIN"
 require_file "$UPTIME_FILE"
+verify_effective_runtime_gate
 validate_release_dependencies
 validate_formal_release_identity
 if [ -n "$INHERITED_DATABASE_FILE" ] || [ -n "$INHERITED_DATABASE_URI" ]; then
@@ -5460,7 +6245,8 @@ if ! "$FLOCK_BIN" -n 9; then
     exit 73
 fi
 
-# 该守卫必须处于部署锁内，并先于事务目录、状态快照与全部发布 mutation。
+# CAS 与日志守卫必须处于部署锁内，并先于事务目录、状态快照与全部发布 mutation。
+verify_candidate_base_state
 verify_formal_runtime_log_boundary
 
 acknowledge_recovery_transaction
@@ -5472,7 +6258,6 @@ capture_previous_state
 durably_checkpoint_recovery_materials captured-state
 prepare_qweather_key_transition_plan
 qweather_key_fault after-plan
-verify_activation_guard_dropins
 validate_backup_database_config
 DATABASE_FILE="$(resolve_database_file "$STAGED_ENV_FILE")"
 validate_absolute_path DATABASE_FILE "$DATABASE_FILE"
@@ -5483,6 +6268,7 @@ verify_root_crontab_retired_before_activation
 write_durable_marker "$STARTED_MARKER" "$NEW_RELEASE"
 
 MUTATION_STARTED=1
+install_activation_guard_dropins
 prepare_activation_boot_guard
 stop_units_strictly
 promote_qweather_key_after_quiesce

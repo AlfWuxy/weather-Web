@@ -31,6 +31,7 @@ WECHAT_APP_KEYS = (
 WECHAT_SERVER_KEYS = (
     "WX_MINIPROGRAM_OPENID_PEPPER",
     "WX_MINIPROGRAM_SESSION_SECRET",
+    "ACCOUNT_LINK_CODE_PEPPER",
 )
 WECHAT_KEYS = WECHAT_APP_KEYS + WECHAT_SERVER_KEYS
 WECHAT_APPSECRET_PRODUCTION_SAFE_KEY = (
@@ -127,8 +128,9 @@ WECHAT_FORM_REQUIRED_KEYS = (
 QWEATHER_MAX_PRIVATE_KEY_BYTES = 16 * 1024
 GIS_SOURCE_MAX_BYTES = 8 * 1024 * 1024
 GIS_COMPRESSED_MAX_BYTES = 300 * 1024
-GIS_FROZEN_ARTIFACT_PATH = "static/data/gis/duchang_heat_exposure_cells.geojson"
+GIS_FROZEN_ARTIFACT_PATH = "data/gis/duchang_heat_exposure_cells.geojson"
 QWEATHER_FORMAL_PINNED_VALUES = {
+    "ALLOW_WEATHER_UNAVAILABLE": "0",
     "QWEATHER_CANONICAL_LOCATION": "116.20,29.27",
     "QWEATHER_MONTHLY_REQUEST_LIMIT": "40000",
     "QWEATHER_BUDGET_FAIL_CLOSED": "1",
@@ -157,7 +159,7 @@ WECHAT_CATEGORY_EVIDENCE_MAX_AGE = timedelta(hours=24)
 WECHAT_RELEASE_FORM_MAX_BYTES = 64 * 1024
 WECHAT_CATEGORY_EVIDENCE_MAX_BYTES = 20 * 1024 * 1024
 WECHAT_CATEGORY_NO_EXTRA_QUALIFICATION = "no_extra_institutional_qualification"
-WECHAT_EXPECTED_RELEASE_VERSION = "1.1.0"
+WECHAT_EXPECTED_RELEASE_VERSION = "1.1.1"
 WECHAT_EXPECTED_REQUEST_DOMAIN = "https://yilaoweather.org"
 WECHAT_EXPECTED_RELEASE_MARKER_COUNT = 26
 EXPECTED_PLATFORM_NAME = "宜老平安"
@@ -169,6 +171,7 @@ EXPECTED_REQUIREMENTS_LOCK_SHA256 = (
 EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 APPID_PATTERN = re.compile(r"^wx[A-Za-z0-9]{6,32}$")
 WXPUSHER_APP_TOKEN_PATTERN = re.compile(r"^AT_[A-Za-z0-9_-]{16,197}$")
+AMAP_CREDENTIAL_PATTERN = re.compile(r"^[A-Za-z0-9_-]{20,100}$")
 SEMVER_PATTERN = re.compile(
     r"^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)"
     r"(?:-(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)"
@@ -648,7 +651,7 @@ def _validate_wechat_release_freeze(values):
         if not SEMVER_PATTERN.fullmatch(release_version):
             errors.append("WECHAT_RELEASE_VERSION 必须是合法的 SemVer 版本号。")
         elif release_version != WECHAT_EXPECTED_RELEASE_VERSION:
-            errors.append("WECHAT_RELEASE_VERSION 当前候选版本必须为 1.1.0。")
+            errors.append("WECHAT_RELEASE_VERSION 当前候选版本必须为 1.1.1。")
 
     target_commit = values.get("WECHAT_TARGET_COMMIT_SHA", "")
     if target_commit and not LOWER_COMMIT_SHA_PATTERN.fullmatch(target_commit):
@@ -1305,17 +1308,17 @@ def validate_wechat_release_form(
         ):
             errors.append("WXPUSHER_APP_TOKEN 格式或长度异常。")
         if values.get("FEATURE_WXPUSHER") != "0":
-            errors.append("1.1.0 正式发布必须固定 FEATURE_WXPUSHER=0。")
+            errors.append("1.1.1 正式发布必须固定 FEATURE_WXPUSHER=0。")
         if values.get("FEATURE_AUDIT_LOGS") != "0":
-            errors.append("1.1.0 正式发布必须固定 FEATURE_AUDIT_LOGS=0。")
+            errors.append("1.1.1 正式发布必须固定 FEATURE_AUDIT_LOGS=0。")
         if values.get("FEATURE_STRUCTURED_LOGS") != "1":
-            errors.append("1.1.0 正式发布必须固定 FEATURE_STRUCTURED_LOGS=1。")
+            errors.append("1.1.1 正式发布必须固定 FEATURE_STRUCTURED_LOGS=1。")
         if values.get("SENTRY_DSN", ""):
-            errors.append("1.1.0 正式发布必须清空 SENTRY_DSN。")
+            errors.append("1.1.1 正式发布必须清空 SENTRY_DSN。")
         if values.get("SENTRY_TRACES_SAMPLE_RATE", "") != "0":
-            errors.append("1.1.0 正式发布必须固定 SENTRY_TRACES_SAMPLE_RATE=0。")
+            errors.append("1.1.1 正式发布必须固定 SENTRY_TRACES_SAMPLE_RATE=0。")
         if values.get("SENTRY_SEND_PII", "") != "0":
-            errors.append("1.1.0 正式发布必须固定 SENTRY_SEND_PII=0。")
+            errors.append("1.1.1 正式发布必须固定 SENTRY_SEND_PII=0。")
         if wxpusher_token:
             errors.append("FEATURE_WXPUSHER=0 时必须清空 WXPUSHER_APP_TOKEN。")
         contact_email = values.get("WECHAT_CONTACT_EMAIL", "")
@@ -1604,10 +1607,76 @@ def _validate_qweather_pending_private_key(
     return []
 
 
+def _validate_amap_configuration(values):
+    """验证高德浏览器与服务端凭据边界，不输出任何凭据内容。"""
+    errors = []
+    warnings = []
+    legacy_key = values.get("AMAP_KEY", "")
+    js_key = values.get("AMAP_JS_API_KEY", "")
+    web_service_key = values.get("AMAP_WEB_SERVICE_KEY", "")
+    security_code = values.get("AMAP_SECURITY_JS_CODE", "")
+
+    for key, value in (
+        ("AMAP_KEY", legacy_key),
+        ("AMAP_JS_API_KEY", js_key),
+        ("AMAP_WEB_SERVICE_KEY", web_service_key),
+        ("AMAP_SECURITY_JS_CODE", security_code),
+    ):
+        if value:
+            if value.lower().startswith(("your-", "change-me")):
+                errors.append(f"{key} 仍是示例占位值。")
+            elif not AMAP_CREDENTIAL_PATTERN.fullmatch(value):
+                errors.append(f"{key} 格式或长度异常。")
+
+    explicit_credentials = {
+        "AMAP_JS_API_KEY": js_key,
+        "AMAP_WEB_SERVICE_KEY": web_service_key,
+        "AMAP_SECURITY_JS_CODE": security_code,
+    }
+    if any(explicit_credentials.values()):
+        missing = [
+            key for key, value in explicit_credentials.items() if not value
+        ]
+        if missing:
+            errors.append(
+                "高德地图正式配置必须同时提供 AMAP_JS_API_KEY、"
+                "AMAP_WEB_SERVICE_KEY 与 AMAP_SECURITY_JS_CODE；缺少: "
+                + ", ".join(missing)
+            )
+    if bool(js_key) != bool(security_code):
+        errors.append(
+            "AMAP_JS_API_KEY 必须与 AMAP_SECURITY_JS_CODE 同时配置。"
+        )
+    if js_key and web_service_key and js_key == web_service_key:
+        errors.append(
+            "AMAP_JS_API_KEY 与 AMAP_WEB_SERVICE_KEY 必须使用不同用途的 Key。"
+        )
+    if legacy_key and (not js_key or not web_service_key):
+        errors.append(
+            "AMAP_KEY 已废弃且不会参与调用；请显式配置独立的 "
+            "AMAP_JS_API_KEY、AMAP_WEB_SERVICE_KEY 与 AMAP_SECURITY_JS_CODE。"
+        )
+    elif legacy_key:
+        warnings.append("AMAP_KEY 已废弃且不会参与调用，请从发布配置中删除。")
+
+    ttl_raw = values.get("COOLING_COORDINATE_VERIFICATION_TTL_DAYS", "")
+    if ttl_raw:
+        try:
+            ttl_days = int(ttl_raw)
+        except (TypeError, ValueError):
+            ttl_days = 0
+        if not 30 <= ttl_days <= 730:
+            errors.append(
+                "COOLING_COORDINATE_VERIFICATION_TTL_DAYS 必须是 30 至 730 天。"
+            )
+    return errors, warnings
+
+
 def validate_release_env(
     path: Path,
     *,
     require_wechat=False,
+    require_weather_ready=False,
     qweather_private_key_pending_path=None,
     qweather_private_key_expected_owner_uid=None,
     qweather_private_key_expected_owner_gid=None,
@@ -1670,6 +1739,9 @@ def validate_release_env(
         warnings.append("当前显式允许 HTTP PUBLIC_BASE_URL，仅适合临时验收。")
     else:
         errors.append("PUBLIC_BASE_URL 必须使用 HTTPS，或显式临时允许 HTTP。")
+    amap_errors, amap_warnings = _validate_amap_configuration(values)
+    errors.extend(amap_errors)
+    warnings.extend(amap_warnings)
     if require_wechat:
         errors.extend(_validate_deploy_dependency_lock())
         for key, expected_value in QWEATHER_FORMAL_PINNED_VALUES.items():
@@ -1705,11 +1777,11 @@ def validate_release_env(
     wechat_app_present = [key for key in WECHAT_APP_KEYS if values.get(key)]
     wechat_server_present = [key for key in WECHAT_SERVER_KEYS if values.get(key)]
     if wechat_formal_runtime == "0" and (wechat_app_present or wechat_server_present):
-        errors.append("WECHAT_FORMAL_RUNTIME=0 是 Web-only 运行态，必须清空四项微信服务端配置。")
+        errors.append("WECHAT_FORMAL_RUNTIME=0 是 Web-only 运行态，必须清空五项微信服务端配置。")
     if wechat_app_present and len(wechat_app_present) != len(WECHAT_APP_KEYS):
         errors.append("WX_MINIPROGRAM_APPID 与 WX_MINIPROGRAM_SECRET 必须同时填写。")
     if wechat_server_present and len(wechat_server_present) != len(WECHAT_SERVER_KEYS):
-        errors.append("微信身份 pepper 与会话密钥必须同时配置。")
+        errors.append("微信身份 pepper、会话密钥与账号绑定 pepper 必须同时配置。")
     if wechat_server_present and not wechat_app_present:
         errors.append("微信服务端密钥不能脱离 AppID 与 AppSecret 单独启用。")
 
@@ -1718,9 +1790,9 @@ def validate_release_env(
         and len(wechat_server_present) == len(WECHAT_SERVER_KEYS)
     )
     if wechat_formal_runtime == "1" and not wechat_ready:
-        errors.append("WECHAT_FORMAL_RUNTIME=1 需要完整的四项微信服务端配置。")
+        errors.append("WECHAT_FORMAL_RUNTIME=1 需要完整的五项微信服务端配置。")
     elif wechat_app_present and not wechat_ready:
-        errors.append("微信登录凭证存在时，四项服务端配置必须完整。")
+        errors.append("微信登录凭证存在时，五项服务端配置必须完整。")
     elif not wechat_ready:
         message = "微信登录配置待认证后填写，当前仅可运行 Web/公开预览能力。"
         (errors if require_wechat else warnings).append(message)
@@ -1742,6 +1814,10 @@ def validate_release_env(
     )
     allow_weather_unavailable = values.get("ALLOW_WEATHER_UNAVAILABLE") == "1"
     weather_ready = False
+    if require_weather_ready and allow_weather_unavailable:
+        errors.append(
+            "服务器天气运行态复用发布必须固定 ALLOW_WEATHER_UNAVAILABLE=0。"
+        )
     if require_wechat and qweather_mode != "jwt":
         errors.append("微信正式发布必须固定使用 QWEATHER_AUTH_MODE=jwt。")
     if require_wechat and values.get("QWEATHER_KEY"):
@@ -1752,7 +1828,11 @@ def validate_release_env(
         errors.append("微信正式发布必须固定启用 QWeather 持久化预算。")
     if qweather_mode == "disabled":
         message = "和风天气同步当前停用，新服务器没有可用天气快照。"
-        can_run_degraded_preview = allow_weather_unavailable and not require_wechat
+        can_run_degraded_preview = (
+            allow_weather_unavailable
+            and not require_wechat
+            and not require_weather_ready
+        )
         (warnings if can_run_degraded_preview else errors).append(message)
     elif qweather_mode == "api_key":
         if not values.get("QWEATHER_KEY") or not qweather_base:
@@ -1852,7 +1932,7 @@ def validate_release_env(
     elif wxpusher_token and not wxpusher_ready:
         errors.append("WXPUSHER_APP_TOKEN 格式或长度异常。")
     if require_wechat and feature_wxpusher != "0":
-        errors.append("1.1.0 微信正式发布必须固定 FEATURE_WXPUSHER=0。")
+        errors.append("1.1.1 微信正式发布必须固定 FEATURE_WXPUSHER=0。")
     return {
         "ok": not errors,
         "wechat_ready": wechat_ready,
@@ -2059,6 +2139,7 @@ def main(argv=None):
     parser.add_argument("--probe-persistent-budget", action="store_true")
     parser.add_argument("--seed-persistent-budget", action="store_true")
     parser.add_argument("--require-wechat", choices=("0", "1"), default="0")
+    parser.add_argument("--require-weather-ready", action="store_true")
     args = parser.parse_args(argv)
     require_wechat = args.require_wechat == "1"
     if args.form_only:
@@ -2099,6 +2180,7 @@ def main(argv=None):
         result = validate_release_env(
             args.file,
             require_wechat=require_wechat,
+            require_weather_ready=args.require_weather_ready,
             qweather_private_key_pending_path=(
                 args.qweather_private_key_pending_path
             ),

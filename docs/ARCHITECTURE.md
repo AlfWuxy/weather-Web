@@ -335,15 +335,16 @@ chmod 600 .env.wechat-release
 git check-ignore .env.wechat-release
 
 # 首次执行前，先人工核对服务器指纹并写入 ~/.ssh/known_hosts。
-# 正式发布只使用这个入口；sync.sh 会进入同一流程。
+# 网页与后端先行发布使用 web_backend_only；微信正式发布改为 wechat_formal 与 ready=1。
 ENV_FILE=/path/to/private-release.env \
-WECHAT_RELEASE_FORM_FILE=/absolute/path/to/.env.wechat-release \
+DEPLOY_MODE=web_backend_only \
+DEPLOY_REQUIRE_WECHAT_READY=0 \
 ./scripts/deploy.sh
 ```
 
-正式发布时，私密部署配置中的 `DEPLOY_REQUIRE_WECHAT_READY=1` 会要求发布表单通过权限、个人主体、类目、运营资料、AppID、AppSecret 与隐私版本校验。`WECHAT_CATEGORY_CONFIRMED` 只能在发布当天保存正式个人主体类目截图并人工复核后设为 `1`；`WECHAT_FORM_READY` 必须最后开启。
+`DEPLOY_MODE=web_backend_only` 必须与 `DEPLOY_REQUIRE_WECHAT_READY=0` 配对。它不读取微信表单，不替换或生成 AppID、AppSecret、OpenID pepper 和会话密钥，并保留服务器已有的完整微信运行配置；这项部署不构成微信包 ready 或审核证据。旧正式环境只缺新绑定字段时，服务器会 if-empty 生成独立 `ACCOUNT_LINK_CODE_PEPPER`，该应用 pepper 不属于微信平台凭据。该模式复用服务器已有 QWeather 运行态私钥，因此部署环境必须清空 `QWEATHER_JWT_PRIVATE_KEY_SOURCE`，私钥轮换继续走完整正式事务。`DEPLOY_MODE=wechat_formal` 必须与 `DEPLOY_REQUIRE_WECHAT_READY=1` 配对，并要求发布表单通过权限、个人主体、类目、运营资料、AppID、AppSecret 与隐私版本校验。`WECHAT_CATEGORY_CONFIRMED` 只能在发布当天保存正式个人主体类目截图并人工复核后设为 `1`；`WECHAT_FORM_READY` 必须最后开启。命令行显式模式与 `ENV_FILE` 冲突时在 SSH 前停止。
 
-`deploy.sh` 会创建不可变 release、独立虚拟环境和候选配置，上传时排除所有 `.env*` 与 `project.private.config.json`，先跑全量测试，再在本机隔离端口验活。激活事务负责备份数据库与环境、执行 Alembic、原子切换 `current`、替换 systemd 单元、设置 30 分钟 QWeather 网络闸门并启动 bootstrap timer；服务、两阶段 timer、缓存服务的 `OnSuccess`/`OnFailure`、单调时钟剩余窗口、`current` 链接、暂存环境清理和公网健康检查全部通过后才写入 `COMMITTED`。进入向前提交阶段后的复核失败会写入 `POST_COMMIT_ATTENTION.txt`，阻断下一次激活并保留新数据库。禁止把代码 rsync 到持久化状态目录后手工重启，这会绕过预检、迁移校验和回滚边界。
+两种模式都要求干净 Git HEAD，在本机 `0700` 临时目录内生成 `0600` commit 票据，并用 `git archive` 导出固定代码快照。`deploy.sh` 会创建不可变 release、独立虚拟环境和候选配置，上传时排除所有 `.env*` 与 `project.private.config.json`，先跑发布关键测试，再在候选环境验活。候选配置生成时记录活动 `.env` 和 `current` 链接摘要；激活取得 `deploy.lock` 后先执行 CAS，任何并发部署或人工配置变化都会让陈旧候选停止。激活事务随后负责备份数据库与环境、执行 Alembic、原子切换 `current`、替换 systemd 单元并启动 timer；服务、两阶段 timer、缓存服务的 `OnSuccess`/`OnFailure`、单调时钟剩余窗口、`current` 链接、暂存环境清理和公网健康检查全部通过后才写入 `COMMITTED`。进入向前提交阶段后的复核失败会写入 `POST_COMMIT_ATTENTION.txt`，阻断下一次激活并保留新数据库。禁止把代码 rsync 到持久化状态目录后手工重启，这会绕过预检、迁移校验和回滚边界。
 
 ### 7.4 数据库备份策略
 
@@ -409,6 +410,7 @@ DEPLOY_USER=deploy-user
 DEPLOY_PROJECT_DIR=/opt/your-app
 DEPLOY_LOCAL_DIR=/path/to/your-local-repo
 WECHAT_RELEASE_FORM_FILE=/absolute/path/to/.env.wechat-release
+DEPLOY_MODE=wechat_formal
 PUBLIC_BASE_URL=https://your-production-domain.example
 QWEATHER_AUTH_MODE=jwt
 QWEATHER_API_BASE=https://your-qweather-host.example

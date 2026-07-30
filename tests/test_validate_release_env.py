@@ -182,11 +182,17 @@ def _prepare_release_repo(tmp_path):
 
 
 def _write_env(tmp_path, extra=""):
+    if (
+        "WX_MINIPROGRAM_SESSION_SECRET=" in extra
+        and "ACCOUNT_LINK_CODE_PEPPER=" not in extra
+    ):
+        extra += f"ACCOUNT_LINK_CODE_PEPPER={'l' * 32}\n"
     path = tmp_path / ".env"
     path.write_text(
         "PUBLIC_BASE_URL=https://yilaoweather.org\n"
         "DEBUG=false\n"
         "WECHAT_FORMAL_RUNTIME=0\n"
+        "ACCOUNT_LINK_CODE_PEPPER=\n"
         "ALLOW_INSECURE_PUBLIC_BASE_URL=\n"
         "WXPUSHER_API_BASE=https://wxpusher.zjiecode.com/api\n"
         "FEATURE_WXPUSHER=0\n"
@@ -223,6 +229,7 @@ def _formal_qweather_env(tmp_path):
     private_key = tmp_path / "qweather-formal-private.pem"
     _write_ed25519_private_key(private_key, 0o640)
     return (
+        "ALLOW_WEATHER_UNAVAILABLE=0\n"
         "QWEATHER_AUTH_MODE=jwt\n"
         "QWEATHER_KEY=\n"
         "QWEATHER_API_BASE=https://unit-test.qweatherapi.com/v7\n"
@@ -258,7 +265,7 @@ def _write_wechat_release_form(tmp_path, **overrides):
             evidence_file.read_bytes()
         ).hexdigest(),
         "WECHAT_CATEGORY_CONFIRMED_AT": datetime.now(timezone.utc).isoformat(),
-        "WECHAT_RELEASE_VERSION": "1.1.0",
+        "WECHAT_RELEASE_VERSION": "1.1.1",
         "WECHAT_TARGET_COMMIT_SHA": head,
         **digests,
         "WX_MINIPROGRAM_APPID": "wx12345678",
@@ -298,6 +305,119 @@ def test_validator_allows_explicit_pending_wechat_for_preview(tmp_path):
     assert result["warnings"]
 
 
+def test_validator_accepts_split_amap_credentials(tmp_path):
+    result = validate_release_env(
+        _write_env(
+            tmp_path,
+            f"AMAP_JS_API_KEY={'j' * 32}\n"
+            f"AMAP_SECURITY_JS_CODE={'s' * 32}\n"
+            f"AMAP_WEB_SERVICE_KEY={'w' * 32}\n"
+            "COOLING_COORDINATE_VERIFICATION_TTL_DAYS=365\n",
+        ),
+        require_wechat=False,
+    )
+
+    assert result["ok"] is True
+    assert not any("AMAP_" in error for error in result["errors"])
+
+
+def test_validator_rejects_partial_or_reused_amap_credentials(tmp_path):
+    partial = validate_release_env(
+        _write_env(
+            tmp_path,
+            f"AMAP_JS_API_KEY={'j' * 32}\n",
+        ),
+        require_wechat=False,
+    )
+    assert partial["ok"] is False
+    assert any("同时配置" in error for error in partial["errors"])
+
+    reused = validate_release_env(
+        _write_env(
+            tmp_path,
+            f"AMAP_JS_API_KEY={'k' * 32}\n"
+            f"AMAP_SECURITY_JS_CODE={'s' * 32}\n"
+            f"AMAP_WEB_SERVICE_KEY={'k' * 32}\n",
+        ),
+        require_wechat=False,
+    )
+    assert reused["ok"] is False
+    assert any("不同用途" in error for error in reused["errors"])
+
+
+@pytest.mark.parametrize(
+    'placeholder',
+    (
+        'your-amap-js-api-key',
+        'change-me-amap-key-123456',
+    ),
+)
+def test_validator_rejects_amap_placeholder_credentials(
+    tmp_path,
+    placeholder,
+):
+    result = validate_release_env(
+        _write_env(
+            tmp_path,
+            f'AMAP_JS_API_KEY={placeholder}\n'
+            f"AMAP_SECURITY_JS_CODE={'s' * 32}\n"
+            f"AMAP_WEB_SERVICE_KEY={'w' * 32}\n",
+        ),
+        require_wechat=False,
+    )
+
+    assert result["ok"] is False
+    assert any("占位值" in error for error in result["errors"])
+
+
+def test_validator_rejects_legacy_only_amap_configuration(tmp_path):
+    result = validate_release_env(
+        _write_env(
+            tmp_path,
+            f"AMAP_KEY={'k' * 32}\n"
+            f"AMAP_SECURITY_JS_CODE={'s' * 32}\n",
+        ),
+        require_wechat=False,
+    )
+
+    assert result["ok"] is False
+    assert any("AMAP_KEY 已废弃" in error for error in result["errors"])
+
+
+def test_validator_warns_when_legacy_key_remains_beside_split_credentials(
+    tmp_path,
+):
+    result = validate_release_env(
+        _write_env(
+            tmp_path,
+            f"AMAP_KEY={'l' * 32}\n"
+            f"AMAP_JS_API_KEY={'j' * 32}\n"
+            f"AMAP_SECURITY_JS_CODE={'s' * 32}\n"
+            f"AMAP_WEB_SERVICE_KEY={'w' * 32}\n",
+        ),
+        require_wechat=False,
+    )
+
+    assert result["ok"] is True
+    assert any("AMAP_KEY 已废弃" in warning for warning in result["warnings"])
+
+
+def test_validator_rejects_invalid_coordinate_verification_ttl(tmp_path):
+    result = validate_release_env(
+        _write_env(
+            tmp_path,
+            "COOLING_COORDINATE_VERIFICATION_TTL_DAYS=7\n",
+        ),
+        require_wechat=False,
+    )
+
+    assert result["ok"] is False
+    assert any(
+        "COOLING_COORDINATE_VERIFICATION_TTL_DAYS" in error
+        for error in result["errors"]
+    )
+
+
 def test_validator_requires_explicit_runtime_and_keeps_web_only_credentials_empty(
     tmp_path,
 ):
@@ -324,7 +444,7 @@ def test_validator_requires_explicit_runtime_and_keeps_web_only_credentials_empt
     )
     assert formal_without_credentials_result["ok"] is False
     assert any(
-        "四项微信服务端配置" in error
+        "五项微信服务端配置" in error
         for error in formal_without_credentials_result["errors"]
     )
 
@@ -695,6 +815,18 @@ def test_validator_requires_weather_or_explicit_degraded_mode(tmp_path):
 
     assert disabled_result["ok"] is False
     assert disabled_result["weather_ready"] is False
+
+    degraded_preview = _write_env(tmp_path)
+    assert validate_release_env(degraded_preview)["ok"] is True
+    strict_reuse = validate_release_env(
+        degraded_preview,
+        require_weather_ready=True,
+    )
+    assert strict_reuse["ok"] is False
+    assert any(
+        "ALLOW_WEATHER_UNAVAILABLE=0" in error
+        for error in strict_reuse["errors"]
+    )
 
     degraded_formal = _write_env(
         tmp_path,
@@ -2241,7 +2373,9 @@ def test_wechat_release_form_rejects_uppercase_and_short_release_hashes(tmp_path
 
 
 def test_wechat_release_form_requires_current_strict_semver(tmp_path):
-    for index, release_version in enumerate(("1.0.0", "v1.1.0", "01.1.0", "1.1.1")):
+    for index, release_version in enumerate(
+        ("1.0.0", "1.1.0", "v1.1.1", "01.1.1", "1.1.2")
+    ):
         case_dir = tmp_path / str(index)
         case_dir.mkdir()
         form = _write_wechat_release_form(

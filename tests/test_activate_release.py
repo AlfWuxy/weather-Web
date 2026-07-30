@@ -12,6 +12,7 @@ import shlex
 import shutil
 import signal
 import sqlite3
+import stat
 import subprocess
 import sys
 import time
@@ -65,6 +66,31 @@ FORMAL_COMMIT = 'a' * 40
 # 保持运行时格式真实，同时避免测试夹具被静态扫描识别为正式 AppID。
 TEST_MINIPROGRAM_APPID = ''.join(('w', 'x', '1234567890abcdef'))
 ROTATED_TEST_MINIPROGRAM_APPID = ''.join(('w', 'x', 'abcdef1234567890'))
+QWEATHER_PROTECTED_KEYS = (
+    'ALLOW_WEATHER_UNAVAILABLE',
+    'FORECAST_CACHE_TTL_MINUTES',
+    'QWEATHER_API_BASE',
+    'QWEATHER_AUTH_MODE',
+    'QWEATHER_BUDGET_FAIL_CLOSED',
+    'QWEATHER_CANONICAL_LOCATION',
+    'QWEATHER_CONSOLE_USAGE_BASELINE',
+    'QWEATHER_CONSOLE_USAGE_MONTH',
+    'QWEATHER_DEDICATED_CREDENTIAL_CONFIRMED',
+    'QWEATHER_EXPECTED_KID',
+    'QWEATHER_EXPECTED_PROJECT_ID',
+    'QWEATHER_JWT_KID',
+    'QWEATHER_JWT_PRIVATE_KEY_PATH',
+    'QWEATHER_JWT_PROJECT_ID',
+    'QWEATHER_KEY',
+    'QWEATHER_MONTHLY_REQUEST_LIMIT',
+    'QWEATHER_NETWORK_NOT_BEFORE_EPOCH',
+    'QWEATHER_REQUIRE_PERSISTENT_BUDGET',
+    'QWEATHER_WARNING_CACHE_TTL_MINUTES',
+    'REDIS_URL',
+    'WEATHER_CACHE_REDIS_URL',
+    'WEATHER_CACHE_TTL_MINUTES',
+    'WEATHER_SYNC_LOCATIONS',
+)
 
 
 def _legacy_cron_lines(state_dir):
@@ -647,11 +673,14 @@ def _prepare_transaction(
     qweather_private_dir.chmod(0o700)
     database_uri = f'sqlite:///{database_file.as_posix()}'
     (state_dir / '.env').write_text(
-        f'DEBUG=true\nRELEASE_VALUE=old\nDATABASE_URI={database_uri}\n',
+        f'DEBUG=true\nWECHAT_FORMAL_RUNTIME=0\n'
+        f'RELEASE_VALUE=old\nDATABASE_URI={database_uri}\n',
         encoding='utf-8',
     )
+    (state_dir / '.env').chmod(0o600)
     (new_release / 'staged.env').write_text(
-        f'DEBUG=true\nRELEASE_VALUE=new\nDATABASE_URI={database_uri}\n',
+        f'DEBUG=true\nWECHAT_FORMAL_RUNTIME=0\n'
+        f'RELEASE_VALUE=new\nDATABASE_URI={database_uri}\n',
         encoding='utf-8',
     )
     current_link.symlink_to(old_release)
@@ -872,6 +901,7 @@ printf 't 2000000000\n'
         'POST_COMMIT_STABILITY_INTERVAL_SECONDS': '1',
         'FAKE_CANDIDATE_HEALTH_OK': '1' if candidate_health_ok else '0',
         'FAKE_PUBLIC_HEALTH_OK': '1' if public_health_ok else '0',
+        'DEPLOY_INTENT': 'web_backend_only',
         'RUNTIME_USER': pwd.getpwuid(os.getuid()).pw_name,
         'RUNTIME_GROUP': grp.getgrgid(os.getgid()).gr_name,
         'RUNTIME_BOOT_GUARD_DIR': str(runtime_guard_dir),
@@ -897,7 +927,7 @@ printf 't 2000000000\n'
     }
 
 
-def _run_activation(transaction):
+def _run_activation(transaction, *, refresh_base_state=True):
     pending_raw = transaction['env'].get('QWEATHER_PENDING_KEY_PATH', '')
     if pending_raw and transaction.get('auto_stage_qweather_pending', True):
         pending = Path(pending_raw)
@@ -913,6 +943,8 @@ def _run_activation(transaction):
             if final.is_file() and not final.is_symlink():
                 pending.write_bytes(final.read_bytes())
                 pending.chmod(0o600)
+    if refresh_base_state:
+        _write_candidate_base_state(transaction)
     return subprocess.run(
         ['bash', str(ACTIVATE_SCRIPT)],
         cwd=ROOT,
@@ -921,6 +953,55 @@ def _run_activation(transaction):
         capture_output=True,
         check=False,
     )
+
+
+def _write_candidate_base_state(transaction):
+    active_env = Path(transaction['env']['ENV_FILE'])
+    current_link = Path(transaction['env']['CURRENT_LINK'])
+    if current_link.is_symlink():
+        current_payload = b'link\0' + os.fsencode(os.readlink(current_link))
+    elif not current_link.exists():
+        current_payload = b'absent'
+    else:
+        raise AssertionError('current link fixture must be a symlink or absent')
+    def qweather_hash(payload):
+        values = {}
+        for raw_line in payload.decode('utf-8').splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith('#') or '=' not in raw_line:
+                continue
+            key, value = raw_line.split('=', 1)
+            key = key.strip()
+            if key in QWEATHER_PROTECTED_KEYS:
+                values[key] = value
+        canonical = b''.join(
+            key.encode('ascii')
+            + b'='
+            + values.get(key, '').encode('utf-8')
+            + b'\0'
+            for key in QWEATHER_PROTECTED_KEYS
+        )
+        return hashlib.sha256(canonical).hexdigest()
+
+    active_content = active_env.read_bytes()
+    payload = {
+        'active_env_sha256': hashlib.sha256(active_content).hexdigest(),
+        'current_link_state_sha256': hashlib.sha256(current_payload).hexdigest(),
+        'deployment_intent': transaction['env']['DEPLOY_INTENT'],
+        'qweather_config_sha256': qweather_hash(active_content),
+        'version': 2,
+    }
+    metadata = (
+        transaction['new_release']
+        / 'private-metadata'
+        / 'candidate-base-state.json'
+    )
+    metadata.write_text(
+        json.dumps(payload, sort_keys=True, separators=(',', ':')) + '\n',
+        encoding='utf-8',
+    )
+    metadata.chmod(0o600)
+    return metadata
 
 
 def _seed_interrupted_activation_guard(
@@ -996,7 +1077,8 @@ def _configure_formal_smoke(transaction, *, provider='QWeather'):
     )
     transaction['qweather_pending_key'] = pending_key
     transaction['qweather_final_key'] = private_key
-    staged_text = f"""DEBUG=true
+    staged_text = f"""DEBUG=false
+WECHAT_FORMAL_RUNTIME=1
 RELEASE_VALUE=new
 QWEATHER_AUTH_MODE=jwt
 DATABASE_URI=sqlite:///{transaction['database_file'].as_posix()}
@@ -1030,6 +1112,7 @@ PUBLIC_BASE_URL=https://yilaoweather.org
         encoding='utf-8',
     )
     transaction['env']['REQUIRE_WECHAT_READY'] = '1'
+    transaction['env']['DEPLOY_INTENT'] = 'wechat_formal'
     transaction['env']['EXPECTED_RELEASE_COMMIT'] = FORMAL_COMMIT
     counter_file = transaction['state_dir'] / 'formal-smoke-request-count'
     budget_mode_file = transaction['state_dir'] / 'formal-smoke-budget-mode'
@@ -1217,6 +1300,85 @@ def _configure_formal_jwt_smoke(transaction, private_key, *, provider='QWeather'
         pending.write_bytes(private_key.read_bytes())
         pending.chmod(0o600)
     return staged_text, counter_file
+
+
+@pytest.mark.parametrize('changed_state', ('active-env', 'current-link'))
+def test_stale_candidate_base_state_is_rejected_inside_activation_lock(
+    tmp_path,
+    changed_state,
+):
+    transaction = _prepare_transaction(tmp_path)
+    _write_candidate_base_state(transaction)
+    if changed_state == 'active-env':
+        active_env = Path(transaction['env']['ENV_FILE'])
+        active_env.write_text(
+            active_env.read_text(encoding='utf-8') + 'CONCURRENT_VALUE=1\n',
+            encoding='utf-8',
+        )
+    else:
+        concurrent_release = transaction['release_root'] / 'releases' / 'concurrent'
+        concurrent_release.mkdir()
+        transaction['current_link'].unlink()
+        transaction['current_link'].symlink_to(concurrent_release)
+
+    result = _run_activation(transaction, refresh_base_state=False)
+
+    assert result.returncode != 0
+    assert '候选配置基线已变化' in result.stderr
+    assert _database_value(transaction['database_file']) == 'old'
+    assert not (
+        transaction['state_dir']
+        / 'deployments'
+        / 'activation-in-progress'
+    ).exists()
+    transaction_root = (
+        transaction['state_dir']
+        / 'backups'
+        / 'deploy-transactions'
+    )
+    assert not list(transaction_root.iterdir())
+
+
+def test_web_backend_candidate_cannot_change_qweather_baseline(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    _write_candidate_base_state(transaction)
+    staged_env = transaction['new_release'] / 'staged.env'
+    staged_env.write_text(
+        staged_env.read_text(encoding='utf-8')
+        + 'QWEATHER_AUTH_MODE=disabled\n',
+        encoding='utf-8',
+    )
+
+    result = _run_activation(transaction, refresh_base_state=False)
+
+    assert result.returncode != 0
+    assert '候选配置基线已变化' in result.stderr
+    assert _database_value(transaction['database_file']) == 'old'
+    assert not list(
+        (
+            transaction['state_dir']
+            / 'backups'
+            / 'deploy-transactions'
+        ).iterdir()
+    )
+
+
+def test_formal_runtime_cannot_be_downgraded_by_deploy_gate(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    staged_env = transaction['new_release'] / 'staged.env'
+    staged_env.write_text(
+        staged_env.read_text(encoding='utf-8').replace(
+            'WECHAT_FORMAL_RUNTIME=0',
+            'WECHAT_FORMAL_RUNTIME=1',
+        ),
+        encoding='utf-8',
+    )
+
+    result = _run_activation(transaction)
+
+    assert result.returncode != 0
+    assert '部署门禁与候选 WECHAT_FORMAL_RUNTIME 不一致' in result.stderr
+    assert _database_value(transaction['database_file']) == 'old'
 
 
 def test_success_switches_release_only_after_migration_and_health(tmp_path):
@@ -1574,7 +1736,9 @@ def test_load_state_query_failure_during_quiesce_never_reaches_migration(tmp_pat
     assert not list((transaction['state_dir'] / 'backups').rglob('ROLLBACK_REQUIRED.txt'))
 
 
-def test_missing_guard_dropin_blocks_before_runtime_mutation(tmp_path):
+def test_missing_guard_dropin_is_installed_inside_activation_transaction(
+    tmp_path,
+):
     transaction = _prepare_transaction(tmp_path)
     target = (
         transaction['unit_dir']
@@ -1582,19 +1746,89 @@ def test_missing_guard_dropin_blocks_before_runtime_mutation(tmp_path):
         / '10-case-weather-activation-guard.conf'
     )
     target.unlink()
-    original_crontab = transaction['root_crontab'].read_bytes()
+    result = _run_activation(transaction)
+
+    assert result.returncode == 0, result.stderr
+    assert target.read_text(encoding='utf-8') == (
+        '[Unit]\n'
+        f'ConditionPathExists=|!{transaction["state_dir"]}/deployments/'
+        'activation-in-progress\n'
+        f'ConditionPathExists=|{transaction["env"]["RUNTIME_BOOT_GUARD_DIR"]}/'
+        'activation-permit\n'
+    )
+
+
+def test_guard_temp_rename_failure_rolls_back_without_residue(tmp_path):
+    transaction = _prepare_transaction(tmp_path, migration_exit=23)
+    fake_bin = Path(transaction['env']['SYSTEMCTL_BIN']).parent
+    failing_mv = fake_bin / 'mv'
+    failure_marker = tmp_path / 'guard-temp-mv-failed-once'
+    _write_executable(
+        failing_mv,
+        """#!/bin/sh
+source_path="$1"
+if [ "$source_path" = "-f" ]; then
+    source_path="$2"
+fi
+case "$source_path" in
+    */.10-case-weather-activation-guard.conf.next)
+        if [ ! -e "$FAKE_GUARD_MV_FAIL_MARKER" ]; then
+            : > "$FAKE_GUARD_MV_FAIL_MARKER"
+            exit 42
+        fi
+        ;;
+esac
+exec /bin/mv "$@"
+""",
+    )
+    transaction['env']['PATH'] = (
+        f'{fake_bin}:{transaction["env"].get("PATH", "")}'
+    )
+    transaction['env']['FAKE_GUARD_MV_FAIL_MARKER'] = str(failure_marker)
 
     result = _run_activation(transaction)
 
     assert result.returncode != 0
-    assert 'drop-in 文件无效' in result.stderr
-    assert transaction['root_crontab'].read_bytes() == original_crontab
-    assert _database_value(transaction['database_file']) == 'old'
-    actions = transaction['systemctl_log'].read_text(encoding='utf-8').splitlines()
-    assert not any(
-        action.startswith(('stop ', 'start ', 'restart ', 'enable ', 'disable '))
-        for action in actions
+    assert failure_marker.is_file(), result.stderr
+    transaction_root = transaction['state_dir'] / 'backups' / 'deploy-transactions'
+    assert len(list(transaction_root.rglob('ROLLED_BACK'))) == 1
+    assert not list(transaction_root.rglob('ROLLBACK_REQUIRED.txt'))
+    assert not list(
+        transaction['unit_dir'].rglob(
+            '.10-case-weather-activation-guard.conf.next'
+        )
     )
+
+
+def test_guard_rejects_group_or_world_writable_existing_directory(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    directory = transaction['unit_dir'] / 'case-weather.service.d'
+    directory.chmod(0o777)
+    original_database = _database_value(transaction['database_file'])
+
+    result = _run_activation(transaction)
+
+    assert result.returncode != 0
+    assert 'systemd drop-in 目录身份异常' in result.stderr
+    assert _database_value(transaction['database_file']) == original_database
+    assert stat.S_IMODE(directory.stat().st_mode) == 0o777
+
+
+def test_guard_directory_metadata_is_restored_on_rollback(tmp_path):
+    transaction = _prepare_transaction(tmp_path, migration_exit=23)
+    directory = (
+        transaction['unit_dir']
+        / 'case-weather.service.d'
+    )
+    directory.chmod(0o700)
+
+    result = _run_activation(transaction)
+
+    assert result.returncode != 0
+    assert stat.S_IMODE(directory.stat().st_mode) == 0o700
+    transaction_root = transaction['state_dir'] / 'backups' / 'deploy-transactions'
+    assert len(list(transaction_root.rglob('ROLLED_BACK'))) == 1
+    assert not list(transaction_root.rglob('ROLLBACK_REQUIRED.txt'))
 
 
 @pytest.mark.parametrize(
@@ -1617,6 +1851,12 @@ def test_later_dropin_cannot_reset_or_bypass_activation_guard(
     )
     bypass.write_text(override, encoding='utf-8')
     bypass.chmod(0o644)
+    managed = (
+        transaction['unit_dir']
+        / 'case-weather.service.d'
+        / '10-case-weather-activation-guard.conf'
+    )
+    original_managed = managed.read_bytes()
 
     result = _run_activation(transaction)
 
@@ -1626,17 +1866,26 @@ def test_later_dropin_cannot_reset_or_bypass_activation_guard(
     assert not (
         transaction['state_dir'] / 'deployments' / 'activation-in-progress'
     ).exists()
+    assert managed.read_bytes() == original_managed
 
 
 def test_guard_preflight_rejects_stale_systemd_manager_state(tmp_path):
     transaction = _prepare_transaction(tmp_path)
     transaction['env']['FAKE_NEED_DAEMON_RELOAD_UNIT'] = 'case-weather.service'
+    managed = (
+        transaction['unit_dir']
+        / 'case-weather.service.d'
+        / '10-case-weather-activation-guard.conf'
+    )
+    managed.write_text('[Unit]\n# old managed content\n', encoding='utf-8')
+    original_managed = managed.read_bytes()
 
     result = _run_activation(transaction)
 
     assert result.returncode != 0
     assert '尚未加载磁盘上的最新断电保护配置' in result.stderr
     assert _database_value(transaction['database_file']) == 'old'
+    assert managed.read_bytes() == original_managed
 
 
 @pytest.mark.parametrize('database_config', ('missing', 'duplicate'))
@@ -1647,10 +1896,16 @@ def test_invalid_backup_database_config_blocks_before_mutation(
     transaction = _prepare_transaction(tmp_path)
     database_uri = f'sqlite:///{transaction["database_file"].as_posix()}'
     if database_config == 'missing':
-        staged = 'DEBUG=true\nRELEASE_VALUE=new\n'
+        staged = (
+            'DEBUG=true\n'
+            'WECHAT_FORMAL_RUNTIME=0\n'
+            'RELEASE_VALUE=new\n'
+        )
     else:
         staged = (
-            'DEBUG=true\nRELEASE_VALUE=new\n'
+            'DEBUG=true\n'
+            'WECHAT_FORMAL_RUNTIME=0\n'
+            'RELEASE_VALUE=new\n'
             f'DATABASE_URI={database_uri}\n'
             f'DATABASE_URI={database_uri}\n'
         )
@@ -1674,7 +1929,9 @@ def test_external_database_path_is_rejected_before_runtime_mutation(tmp_path):
     transaction = _prepare_transaction(tmp_path)
     external_database = tmp_path / 'external' / 'live.db'
     (transaction['new_release'] / 'staged.env').write_text(
-        f'DEBUG=true\nRELEASE_VALUE=new\n'
+        f'DEBUG=true\n'
+        f'WECHAT_FORMAL_RUNTIME=0\n'
+        f'RELEASE_VALUE=new\n'
         f'DATABASE_URI=sqlite:///{external_database.as_posix()}\n',
         encoding='utf-8',
     )
@@ -1801,7 +2058,9 @@ def test_migration_failure_restores_database_release_and_unit_state(tmp_path):
     assert result.returncode == 23
     assert transaction['current_link'].resolve() == transaction['old_release'].resolve()
     assert _database_value(transaction['database_file']) == 'old'
-    assert 'RELEASE_VALUE=old' in (transaction['state_dir'] / '.env').read_text(encoding='utf-8')
+    active_env = transaction['state_dir'] / '.env'
+    assert 'RELEASE_VALUE=old' in active_env.read_text(encoding='utf-8')
+    assert stat.S_IMODE(active_env.stat().st_mode) == 0o600
     for unit in ALL_UNITS:
         assert (transaction['unit_dir'] / unit).read_text(encoding='utf-8') == f'old unit {unit}\n'
     for unit in (
@@ -2203,9 +2462,9 @@ def test_post_start_verification_failure_persists_blocking_marker(
     assert len(markers) == 1
     transaction_dir = markers[0].parent
     assert not (transaction_dir / 'COMMITTED').exists()
-    (transaction['new_release'] / 'staged.env').write_text(
-        'DEBUG=true\nRELEASE_VALUE=new\n',
-        encoding='utf-8',
+    shutil.copyfile(
+        transaction['state_dir'] / '.env',
+        transaction['new_release'] / 'staged.env',
     )
 
     blocked = _run_activation(transaction)
