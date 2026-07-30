@@ -5,31 +5,37 @@ on:
   push:
     branches:
       - main
+      - "codex/**"
 
 permissions:
   contents: read
 
 jobs:
   test:
+    name: Python 完整测试（${{ matrix.python-version }}）
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
 
     steps:
       - name: 检出代码
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 0
 
-      - name: 配置 Python 3.12
-        uses: actions/setup-python@v6
+      - name: 配置 Python ${{ matrix.python-version }}
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python-version }}
           cache: pip
+          cache-dependency-path: requirements.lock
 
       - name: 安装依赖
         run: |
-          python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt
+          python -m pip install --index-url https://pypi.org/simple --require-hashes --only-binary=:all: -r requirements.lock
           python -m pip check
 
       - name: 验证和风天气私钥跨 UID 权限
@@ -108,18 +114,18 @@ jobs:
 
     steps:
       - name: 检出代码
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
-      - name: 配置 Python 3.12
-        uses: actions/setup-python@v6
+      - name: 配置 Python 3.11
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
-          python-version: "3.12"
+          python-version: "3.11"
           cache: pip
+          cache-dependency-path: requirements.lock
 
       - name: 安装依赖
         run: |
-          python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt
+          python -m pip install --index-url https://pypi.org/simple --require-hashes --only-binary=:all: -r requirements.lock
           python -m pip check
 
       - name: 运行发布激活事务分片
@@ -155,3 +161,16 @@ jobs:
               'tests/test_activate_release.py',
           ], plugins=[ShardPlugin()]))
           PY
+
+  release-proof:
+    name: 可发布提交证明
+    needs:
+      - test
+      - activation
+    if: ${{ github.event_name == 'push' && needs.test.result == 'success' && needs.activation.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+
+    steps:
+      - name: 记录已验证提交
+        run: printf '已验证提交：%s\n' "$GITHUB_SHA"

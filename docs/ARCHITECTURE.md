@@ -281,7 +281,7 @@ AuditLog (审计日志)
 | 分享与换号 | 只有“分享给家人”按钮生成固定 `from=family_share`。普通分享不带归因，个人页回退到公开首页；登录成功后一次性消费来源，退出和账号注销清理本机会话与来源上下文。 |
 | 匿名分析 | 公开浏览使用微信公众平台聚合统计。自有事件只接受固定枚举和最小账号级维度，原始事件保留 30 天，管理看板与 CSV 只输出聚合结果并排除配置的测试账号。地区聚合只使用社区编码，`ANALYTICS_MIN_LOCATION_COUNT` 在生产环境最小强制为 3。 |
 | 推送 | WxPusher 默认关闭且需要用户明确同意。投递先以数据库唯一占位保证单次发送；超时、失败和结果不明确的记录进入管理员人工复核队列，复核前禁止自动重发。 |
-| 发布门禁 | `.env.wechat-release` 只存在于本机且权限为 `0600`。正式发布要求个人主体类目证据、运营者资料、AppID、隐私版本、`WECHAT_CATEGORY_CONFIRMED=1` 和 `WECHAT_FORM_READY=1` 全部成立。 |
+| 发布门禁 | `.env.wechat-release` 只存在于本机且权限为 `0600`。正式发布要求个人主体类目证据、运营者资料、AppID、隐私版本、`WECHAT_CATEGORY_CONFIRMED=1` 和 `WECHAT_FORM_READY=1` 全部成立。远程部署还要求 GitHub 对精确 commit 的最新 push workflow 与稳定证明任务成功；缺失、等待、失败或分支 tip 已变化时均在首次 SSH 前停止。 |
 
 个人主体类目截图和运营者认证资料属于私有发布证据，只放本机私有目录或私有 ops。公开仓库只记录字段、门禁逻辑和复核流程。详细步骤见 `docs/miniprogram/WECHAT_RELEASE_HANDOFF.md` 与 `docs/miniprogram/RELEASE_CHECKLIST.md`。
 
@@ -344,7 +344,9 @@ DEPLOY_REQUIRE_WECHAT_READY=0 \
 
 `DEPLOY_MODE=web_backend_only` 必须与 `DEPLOY_REQUIRE_WECHAT_READY=0` 配对。它不读取微信表单，不替换或生成 AppID、AppSecret、OpenID pepper 和会话密钥，并保留服务器已有的完整微信运行配置；这项部署不构成微信包 ready 或审核证据。旧正式环境只缺新绑定字段时，服务器会 if-empty 生成独立 `ACCOUNT_LINK_CODE_PEPPER`，该应用 pepper 不属于微信平台凭据。该模式复用服务器已有 QWeather 运行态私钥，因此部署环境必须清空 `QWEATHER_JWT_PRIVATE_KEY_SOURCE`，私钥轮换继续走完整正式事务。`DEPLOY_MODE=wechat_formal` 必须与 `DEPLOY_REQUIRE_WECHAT_READY=1` 配对，并要求发布表单通过权限、个人主体、类目、运营资料、AppID、AppSecret 与隐私版本校验。`WECHAT_CATEGORY_CONFIRMED` 只能在发布当天保存正式个人主体类目截图并人工复核后设为 `1`；`WECHAT_FORM_READY` 必须最后开启。命令行显式模式与 `ENV_FILE` 冲突时在 SSH 前停止。
 
-两种模式都要求干净 Git HEAD，在本机 `0700` 临时目录内生成 `0600` commit 票据，并用 `git archive` 导出固定代码快照。`deploy.sh` 会创建不可变 release、独立虚拟环境和候选配置，上传时排除所有 `.env*` 与 `project.private.config.json`，先跑发布关键测试，再在候选环境验活。候选配置生成时记录活动 `.env` 和 `current` 链接摘要；激活取得 `deploy.lock` 后先执行 CAS，任何并发部署或人工配置变化都会让陈旧候选停止。激活事务随后负责备份数据库与环境、执行 Alembic、原子切换 `current`、替换 systemd 单元并启动 timer；服务、两阶段 timer、缓存服务的 `OnSuccess`/`OnFailure`、单调时钟剩余窗口、`current` 链接、暂存环境清理和公网健康检查全部通过后才写入 `COMMITTED`。进入向前提交阶段后的复核失败会写入 `POST_COMMIT_ATTENTION.txt`，阻断下一次激活并保留新数据库。禁止把代码 rsync 到持久化状态目录后手工重启，这会绕过预检、迁移校验和回滚边界。
+两种模式都要求干净 Git HEAD，在本机 `0700` 临时目录内生成 `0600` commit 票据，并用 `git archive` 导出固定代码快照。首次 SSH 前，部署器核对 GitHub 远程分支 tip、精确 commit、push event、workflow 路径以及最新 run 中的稳定证明任务。网页与后端模式要求 `可发布提交证明`；微信正式模式额外要求 `小程序可发布提交证明`。证明收据随 release 保存为 root 私有 `0600` metadata，并在激活产生任何状态变更前再次离线核对。
+
+`deploy.sh` 会创建不可变 release、独立虚拟环境和候选配置，上传时排除所有 `.env*` 与 `project.private.config.json`。服务器停服前不再运行会导入完整 Flask 应用的 pytest；完整 Python 3.11/3.12、四个激活事务分片和小程序 Node 测试由 GitHub runner 承担。发布主机只在 `MemoryMax=96M`、`MemorySwapMax=0`、`PrivateNetwork=yes` 的 transient unit 中执行 `compileall`、Shell 语法、锁定依赖、Python 3.11、四个轻量包导入和 Alembic 单 head 检查。激活停止旧服务并完成真实迁移后，以单 worker 候选进程验证 `/healthz`、ML 的 scikit-learn 1.7.2、可用且未陈旧的 QWeather 小程序快照，以及不含“天气更新中”或“风险待刷新”的公开风险页。候选配置生成时记录活动 `.env` 和 `current` 链接摘要；激活取得 `deploy.lock` 后先执行 CAS，任何并发部署或人工配置变化都会让陈旧候选停止。激活事务随后负责备份数据库与环境、执行 Alembic、原子切换 `current`、替换 systemd 单元并启动 timer；服务、两阶段 timer、缓存服务的 `OnSuccess`/`OnFailure`、单调时钟剩余窗口、`current` 链接、暂存环境清理和公网健康检查全部通过后才写入 `COMMITTED`。进入向前提交阶段后的复核失败会写入 `POST_COMMIT_ATTENTION.txt`，阻断下一次激活并保留新数据库。禁止把代码 rsync 到持久化状态目录后手工重启，这会绕过预检、迁移校验和回滚边界。
 
 ### 7.4 数据库备份策略
 

@@ -63,6 +63,7 @@ STATIC_SERVICE_UNITS = (
 INSTALL_UNITS = MANAGED_TIMER_UNITS + SERVICE_UNITS
 ALL_UNITS = INSTALL_UNITS + LEGACY_UNITS + RETIRED_BOOTSTRAP_UNITS
 FORMAL_COMMIT = 'a' * 40
+TEST_RELEASE_BRANCH = 'codex/miniprogram-v1.1.1-unified'
 # 保持运行时格式真实，同时避免测试夹具被静态扫描识别为正式 AppID。
 TEST_MINIPROGRAM_APPID = ''.join(('w', 'x', '1234567890abcdef'))
 ROTATED_TEST_MINIPROGRAM_APPID = ''.join(('w', 'x', 'abcdef1234567890'))
@@ -117,6 +118,110 @@ def _write_executable(path, content):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding='utf-8')
     path.chmod(0o755)
+
+
+def _write_private_json(path, payload):
+    path.write_text(
+        json.dumps(payload, ensure_ascii=False, sort_keys=True) + '\n',
+        encoding='utf-8',
+    )
+    path.chmod(0o600)
+
+
+def _write_ci_proof(path, *, workflow, proof_job, commit=FORMAL_COMMIT):
+    run_id = 101 if workflow.endswith('/ci.yml') else 102
+    _write_private_json(
+        path,
+        {
+            'schema_version': 1,
+            'kind': 'github-actions-ci-proof',
+            'repository': 'AlfWuxy/weather-Web',
+            'workflow': workflow,
+            'branch': TEST_RELEASE_BRANCH,
+            'commit_sha': commit,
+            'event': 'push',
+            'proof_job': proof_job,
+            'verified_at': '2026-07-31T01:02:30Z',
+            'run': {
+                'id': run_id,
+                'attempt': 1,
+                'path': f'{workflow}@refs/heads/{TEST_RELEASE_BRANCH}',
+                'head_branch': TEST_RELEASE_BRANCH,
+                'head_sha': commit,
+                'event': 'push',
+                'status': 'completed',
+                'conclusion': 'success',
+                'repository': 'AlfWuxy/weather-Web',
+                'head_repository': 'AlfWuxy/weather-Web',
+                'created_at': '2026-07-31T01:00:00Z',
+                'updated_at': '2026-07-31T01:02:00Z',
+                'html_url': f'https://github.com/example/actions/runs/{run_id}',
+            },
+            'job': {
+                'id': run_id + 100,
+                'name': proof_job,
+                'run_id': run_id,
+                'head_sha': commit,
+                'status': 'completed',
+                'conclusion': 'success',
+                'started_at': '2026-07-31T01:02:01Z',
+                'completed_at': '2026-07-31T01:02:20Z',
+                'html_url': (
+                    f'https://github.com/example/actions/jobs/{run_id + 100}'
+                ),
+            },
+        },
+    )
+
+
+def _write_runtime_smoke_receipt(path, *, app_dir, python_path, commit=FORMAL_COMMIT):
+    lock_text = (app_dir / 'requirements.lock').read_text(encoding='utf-8')
+    packages = {}
+    for package in ('alembic', 'flask', 'gunicorn', 'sqlalchemy'):
+        match = re.search(
+            rf'^{package}==([^\s\\]+)',
+            lock_text,
+            flags=re.MULTILINE,
+        )
+        assert match is not None
+        packages[package] = match.group(1)
+    python_realpath = python_path.resolve()
+    prefix_realpath = python_path.parent.parent.resolve()
+    _write_private_json(
+        path,
+        {
+            'schema_version': 1,
+            'receipt_type': 'case-weather-release-runtime-smoke',
+            'status': 'passed',
+            'commit_sha': commit,
+            'created_at_utc': '2026-07-31T01:03:00Z',
+            'python': {
+                'executable': str(python_path.absolute()),
+                'executable_realpath': str(python_realpath),
+                'minor': '3.11',
+                'prefix_realpath': str(prefix_realpath),
+                'version': '3.11.9',
+            },
+            'requirements': {
+                'lock_sha256': hashlib.sha256(
+                    (app_dir / 'requirements.lock').read_bytes()
+                ).hexdigest(),
+                'pip_check': 'passed',
+            },
+            'packages': packages,
+            'alembic': {'heads': ['0027_cross_platform_identity']},
+            'resource': {'ru_maxrss_kib': 65536},
+            'checks': {
+                'alembic_single_head': True,
+                'interpreter_path': True,
+                'package_imports': True,
+                'package_versions': True,
+                'pip_check': True,
+                'python_minor': True,
+                'requirements_lock': True,
+            },
+        },
+    )
 
 
 def _write_test_ed25519_private_key(path, *, mode=0o600):
@@ -636,11 +741,16 @@ def _prepare_transaction(
     *,
     migration_exit=0,
     candidate_health_ok=True,
+    candidate_contract_failure=None,
     public_health_ok=True,
     weather_timer_phase='recurring',
 ):
     if weather_timer_phase not in {'recurring', 'bootstrap', 'writer'}:
         raise ValueError(f'unsupported weather timer phase: {weather_timer_phase}')
+    if candidate_contract_failure not in {None, 'ml', 'bootstrap', 'risk'}:
+        raise ValueError(
+            f'unsupported candidate contract failure: {candidate_contract_failure}'
+        )
 
     state_dir = tmp_path / 'state'
     release_root = tmp_path / 'deploy'
@@ -698,6 +808,15 @@ def _prepare_transaction(
         encoding='utf-8',
     )
     (new_release / 'app' / 'scripts' / 'backup.sh').chmod(0o755)
+    for script_name in (
+        'verify_github_ci.py',
+        'release_runtime_smoke.py',
+    ):
+        target = new_release / 'app' / 'scripts' / script_name
+        target.write_text(
+            (ROOT / 'scripts' / script_name).read_text(encoding='utf-8'),
+            encoding='utf-8',
+        )
     core_dir = new_release / 'app' / 'core'
     core_dir.mkdir()
     (core_dir / '__init__.py').write_text('', encoding='utf-8')
@@ -787,6 +906,24 @@ exit {migration_exit}
         new_release / 'venv' / 'bin' / 'gunicorn',
         '#!/bin/sh\ntrap "exit 0" TERM INT\nwhile :; do sleep 1; done\n',
     )
+    source_commit = new_release / 'private-metadata' / 'source-commit.txt'
+    source_commit.write_text(FORMAL_COMMIT + '\n', encoding='utf-8')
+    source_commit.chmod(0o600)
+    _write_ci_proof(
+        new_release / 'private-metadata' / 'ci-proof.json',
+        workflow='.github/workflows/ci.yml',
+        proof_job='可发布提交证明',
+    )
+    _write_ci_proof(
+        new_release / 'private-metadata' / 'miniprogram-ci-proof.json',
+        workflow='.github/workflows/miniprogram.yml',
+        proof_job='小程序可发布提交证明',
+    )
+    _write_runtime_smoke_receipt(
+        new_release / 'private-metadata' / 'runtime-smoke.json',
+        app_dir=new_release / 'app',
+        python_path=new_release / 'venv' / 'bin' / 'python',
+    )
 
     for unit in INSTALL_UNITS:
         if unit == 'case-weather-backup.service':
@@ -853,13 +990,44 @@ TimeoutStartSec=15min
         """#!/usr/bin/env python3
 import os
 import sys
+from pathlib import Path
 
 url = sys.argv[-1]
 if ':5001/' in url:
     healthy = os.environ.get('FAKE_CANDIDATE_HEALTH_OK') == '1'
+    failure = os.environ.get('FAKE_CANDIDATE_CONTRACT_FAILURE', '')
+    if not healthy:
+        print('{"status":"unavailable"}')
+    elif url.endswith('/healthz'):
+        print('{"status":"ok"}')
+    elif url.endswith('/api/ml/status'):
+        if failure == 'ml':
+            print('{"success":true,"status":{"model_loaded":false}}')
+        else:
+            print('{"success":true,"status":{"model_loaded":true,'
+                  '"runtime_sklearn_version":"1.7.2",'
+                  '"expected_sklearn_version":"1.7.2",'
+                  '"sklearn_compatible":true}}')
+    elif url.endswith('/mp/api/v1/bootstrap'):
+        smoke_counter = os.environ.get('FAKE_FORMAL_SMOKE_COUNTER', '')
+        smoke_completed = not smoke_counter or Path(smoke_counter).is_file()
+        if failure == 'bootstrap' or not smoke_completed:
+            print('{"success":true,"data":{"available":false,"stale":true}}')
+        else:
+            print('{"success":true,"data":{"available":true,"stale":false,'
+                  '"snapshot_id":"snapshot-test","current":{"data_source":"QWeather"},'
+                  '"risk":{"score":56,"summary":"天气较热"},'
+                  '"source_status":{"weather":{"provider":"QWeather"}}}}')
+    elif url.endswith('/risk'):
+        if failure == 'risk':
+            print('<h5>天气更新中</h5>')
+        else:
+            print('<h5>当前风险：中风险</h5>')
+    else:
+        print('{"status":"unavailable"}')
 else:
     healthy = os.environ.get('FAKE_PUBLIC_HEALTH_OK') == '1'
-print('{"status":"ok"}' if healthy else '{"status":"unavailable"}')
+    print('{"status":"ok"}' if healthy else '{"status":"unavailable"}')
 """,
     )
     fake_busctl = fake_bin / 'busctl'
@@ -900,8 +1068,11 @@ printf 't 2000000000\n'
         'POST_COMMIT_STABILITY_SECONDS': '0',
         'POST_COMMIT_STABILITY_INTERVAL_SECONDS': '1',
         'FAKE_CANDIDATE_HEALTH_OK': '1' if candidate_health_ok else '0',
+        'FAKE_CANDIDATE_CONTRACT_FAILURE': candidate_contract_failure or '',
         'FAKE_PUBLIC_HEALTH_OK': '1' if public_health_ok else '0',
         'DEPLOY_INTENT': 'web_backend_only',
+        'EXPECTED_RELEASE_COMMIT': FORMAL_COMMIT,
+        'EXPECTED_RELEASE_BRANCH': TEST_RELEASE_BRANCH,
         'RUNTIME_USER': pwd.getpwuid(os.getuid()).pw_name,
         'RUNTIME_GROUP': grp.getgrgid(os.getgid()).gr_name,
         'RUNTIME_BOOT_GUARD_DIR': str(runtime_guard_dir),
@@ -1115,6 +1286,7 @@ PUBLIC_BASE_URL=https://yilaoweather.org
     transaction['env']['DEPLOY_INTENT'] = 'wechat_formal'
     transaction['env']['EXPECTED_RELEASE_COMMIT'] = FORMAL_COMMIT
     counter_file = transaction['state_dir'] / 'formal-smoke-request-count'
+    transaction['env']['FAKE_FORMAL_SMOKE_COUNTER'] = str(counter_file)
     budget_mode_file = transaction['state_dir'] / 'formal-smoke-budget-mode'
     budget_helper = transaction['state_dir'] / 'formal-smoke-budget-snapshot'
     _write_executable(
@@ -1284,6 +1456,11 @@ def _retarget_formal_retry(transaction, suffix='retry'):
     transaction['env']['STAGED_ENV_FILE'] = str(retry_release / 'staged.env')
     transaction['env']['QWEATHER_PENDING_KEY_PATH'] = str(pending)
     transaction['env']['FAKE_QWEATHER_PENDING_KEY'] = str(pending)
+    _write_runtime_smoke_receipt(
+        retry_release / 'private-metadata' / 'runtime-smoke.json',
+        app_dir=retry_release / 'app',
+        python_path=retry_release / 'venv' / 'bin' / 'python',
+    )
     return retry_release
 
 
@@ -2309,6 +2486,62 @@ def test_candidate_health_failure_rolls_back_new_code_database_and_units(tmp_pat
         assert (transaction['unit_dir'] / unit).read_text(encoding='utf-8') == f'old unit {unit}\n'
 
 
+def test_candidate_ml_contract_failure_rolls_back_before_link_switch(tmp_path):
+    transaction = _prepare_transaction(
+        tmp_path,
+        candidate_contract_failure='ml',
+    )
+
+    result = _run_activation(transaction)
+
+    assert result.returncode != 0
+    assert 'ML 运行态版本或模型状态异常' in result.stderr
+    assert transaction['current_link'].resolve() == transaction['old_release'].resolve()
+    assert _database_value(transaction['database_file']) == 'old'
+    assert 'RELEASE_VALUE=old' in (
+        transaction['state_dir'] / '.env'
+    ).read_text(encoding='utf-8')
+
+
+@pytest.mark.parametrize(
+    ('failure', 'message'),
+    (
+        ('bootstrap', '天气快照仍处于缺失、陈旧或待刷新状态'),
+        ('risk', '公开风险页仍显示待刷新状态'),
+    ),
+)
+def test_candidate_weather_contract_failure_is_forward_only_after_formal_smoke(
+    tmp_path,
+    failure,
+    message,
+):
+    transaction = _prepare_transaction(
+        tmp_path,
+        candidate_contract_failure=failure,
+    )
+    _staged_text, counter_file = _configure_formal_smoke(transaction)
+
+    result = _run_activation(transaction)
+
+    assert result.returncode != 0
+    assert message in result.stderr
+    assert counter_file.read_text(encoding='utf-8') == '1'
+    assert transaction['current_link'].resolve() == transaction['new_release'].resolve()
+    assert _database_value(transaction['database_file']) == 'new'
+    forward_markers = list(
+        (transaction['state_dir'] / 'backups').rglob('FORWARD_ONLY_REQUIRED')
+    )
+    assert len(forward_markers) == 1
+    assert (
+        forward_markers[0].read_text(encoding='utf-8').strip()
+        == 'phase=formal-smoke-started'
+    )
+    assert (forward_markers[0].parent / 'POST_COMMIT_ATTENTION.txt').is_file()
+    assert not (forward_markers[0].parent / 'ROLLED_BACK').exists()
+    for unit in ALL_UNITS:
+        assert not (transaction['fake_state'] / f'{unit}.active').exists()
+
+
 def test_managed_backup_validation_failure_rolls_back_before_public_switch(tmp_path):
     transaction = _prepare_transaction(tmp_path)
     transaction['env']['FAKE_FAIL_SYSTEMD_RUN'] = '1'
@@ -2834,6 +3067,55 @@ def test_formal_activation_rejects_release_commit_metadata_mismatch_before_mutat
 
     assert result.returncode != 0
     assert '上传 release 与冻结 commit 票据不一致' in result.stderr
+    assert transaction['current_link'].resolve() == transaction['old_release'].resolve()
+    assert _database_value(transaction['database_file']) == 'old'
+    assert not counter_file.exists()
+
+
+@pytest.mark.parametrize(
+    ('receipt_name', 'tamper_key', 'message'),
+    (
+        ('ci-proof.json', 'commit_sha', 'GitHub Python CI 收据'),
+        ('runtime-smoke.json', 'commit_sha', '服务器低内存运行态收据'),
+    ),
+)
+def test_release_proof_mismatch_stops_before_any_activation_mutation(
+    tmp_path,
+    receipt_name,
+    tamper_key,
+    message,
+):
+    transaction = _prepare_transaction(tmp_path)
+    receipt = transaction['new_release'] / 'private-metadata' / receipt_name
+    payload = json.loads(receipt.read_text(encoding='utf-8'))
+    payload[tamper_key] = 'b' * 40
+    _write_private_json(receipt, payload)
+
+    result = _run_activation(transaction)
+
+    assert result.returncode != 0
+    assert message in result.stderr
+    assert transaction['current_link'].resolve() == transaction['old_release'].resolve()
+    assert _database_value(transaction['database_file']) == 'old'
+    transaction_root = (
+        transaction['state_dir'] / 'backups' / 'deploy-transactions'
+    )
+    assert not transaction_root.exists()
+
+
+def test_formal_activation_requires_miniprogram_ci_proof_before_mutation(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    _staged_text, counter_file = _configure_formal_smoke(transaction)
+    (
+        transaction['new_release']
+        / 'private-metadata'
+        / 'miniprogram-ci-proof.json'
+    ).unlink()
+
+    result = _run_activation(transaction)
+
+    assert result.returncode != 0
+    assert 'miniprogram-ci-proof.json' in result.stderr
     assert transaction['current_link'].resolve() == transaction['old_release'].resolve()
     assert _database_value(transaction['database_file']) == 'old'
     assert not counter_file.exists()

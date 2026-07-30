@@ -94,6 +94,8 @@ git check-ignore .env.wechat-release
 
 需要在微信后台登录和上传前先发布网页与后端时，使用 `DEPLOY_MODE=web_backend_only` 与 `DEPLOY_REQUIRE_WECHAT_READY=0`。该模式不读取本表单，不替换或生成 AppID、AppSecret、OpenID pepper 和会话密钥，也不会把网页发布冒充成微信 ready。升级旧正式环境且只缺新字段时，服务器会 if-empty 生成独立的 `ACCOUNT_LINK_CODE_PEPPER`，该应用 pepper 不属于微信平台凭据。它只从干净 Git HEAD 导出代码快照，并继续执行同一套候选配置校验、不可变 release、备份、迁移、健康检查和回滚事务。先行部署复用服务器已有 QWeather 运行态私钥，部署环境必须清空 `QWEATHER_JWT_PRIVATE_KEY_SOURCE`；QWeather 私钥轮换继续走微信正式事务。两种模式与 ready 值交叉混用、命令行与 `ENV_FILE` 模式冲突都会在 SSH 前停止。候选复制时固定活动 `.env` 与 `current` 链接摘要，激活取得部署锁后执行 CAS；并发部署或人工配置变化会停止陈旧候选。
 
+远程发布前必须先把目标 commit 推送到 GitHub，并等待该 commit 的最新 push workflow 完成。网页与后端模式要求稳定任务 `可发布提交证明` 成功；微信正式模式还要求 `小程序可发布提交证明` 成功。部署器在首次 SSH 前核对仓库、workflow、分支 tip、commit、event、run attempt 和稳定任务，并生成权限为 `0600` 的收据。服务器激活前会再次离线核对收据与 `source-commit.txt`、Python 3.11 运行态收据属于同一 release。任何 API 错误、限流、旧成功 run、等待中状态或收据混装都会停止发布。
+
 `WECHAT_FORM_READY=0` 时的表单校验只用于本地预览，不会读取 AppID 或 AppSecret，也不会生成微信 OpenID pepper 或会话密钥。只有同一次 `0600` 验证快照同时满足 `DEPLOY_REQUIRE_WECHAT_READY=1` 与 `WECHAT_FORM_READY=1`，发布脚本才允许下发这些正式配置。
 
 ## 最终冻结的机器校验

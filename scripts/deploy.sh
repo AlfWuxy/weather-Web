@@ -168,6 +168,9 @@ LOCAL_DEPLOY_TEMP_DIR=""
 VERIFIED_COMMIT_FILE=""
 VERIFIED_WECHAT_FORM_FILE=""
 VERIFIED_COMMIT=""
+VERIFIED_RELEASE_BRANCH=""
+LOCAL_CI_PROOF_FILE=""
+LOCAL_MINIPROGRAM_CI_PROOF_FILE=""
 FORMAL_WECHAT_CONFIG_ALLOWED="0"
 EFFECTIVE_REQUIRE_WECHAT_READY=""
 RUNTIME_USER="case-weather"
@@ -258,6 +261,8 @@ if [ "$local_temp_mode" != "700" ]; then
     exit 64
 fi
 VERIFIED_COMMIT_FILE="$LOCAL_DEPLOY_TEMP_DIR/verified-commit"
+LOCAL_CI_PROOF_FILE="$LOCAL_DEPLOY_TEMP_DIR/ci-proof.json"
+LOCAL_MINIPROGRAM_CI_PROOF_FILE="$LOCAL_DEPLOY_TEMP_DIR/miniprogram-ci-proof.json"
 
 # 网页/后端独立发布同样只接受干净 Git HEAD，并生成本轮私有 commit 票据。
 freeze_web_backend_commit() {
@@ -723,6 +728,10 @@ if [[ ! "$RELEASE_ID" =~ ^[A-Za-z0-9._-]+$ ]]; then
     echo "DEPLOY_RELEASE_ID 只能包含字母、数字、点、下划线和短横线。" >&2
     exit 1
 fi
+if [ "${#RELEASE_ID}" -gt 64 ]; then
+    echo "DEPLOY_RELEASE_ID 最长为 64 个字符。" >&2
+    exit 1
+fi
 REMOTE_QWEATHER_PENDING_KEY_PATH="$REMOTE_QWEATHER_PRIVATE_DIR/.qweather-jwt.pending-$RELEASE_ID"
 validate_remote_path "QWEATHER 私钥待激活路径" "$REMOTE_QWEATHER_PENDING_KEY_PATH"
 if [ "$LOCAL_QWEATHER_AUTH_MODE" = "jwt" ] \
@@ -749,6 +758,19 @@ prepare_release_source() {
         echo "远端发布的目标提交票据格式异常。" >&2
         exit 64
     fi
+    if ! VERIFIED_RELEASE_BRANCH="$(
+        git -C "$LOCAL_DIR" symbolic-ref --quiet --short HEAD 2>/dev/null
+    )"; then
+        echo "远端发布要求使用 main 或 codex/* 命名分支，不能从 detached HEAD 发布。" >&2
+        exit 64
+    fi
+    case "$VERIFIED_RELEASE_BRANCH" in
+        main|codex/*) ;;
+        *)
+            echo "远端发布分支只能是 main 或 codex/*。" >&2
+            exit 64
+            ;;
+    esac
     LOCAL_RELEASE_EXPORT_DIR="$LOCAL_DEPLOY_TEMP_DIR/release-source"
     mkdir -m 0700 "$LOCAL_RELEASE_EXPORT_DIR"
     git -C "$LOCAL_DIR" archive --format=tar "$VERIFIED_COMMIT" \
@@ -756,7 +778,32 @@ prepare_release_source() {
     RELEASE_SOURCE_DIR="$LOCAL_RELEASE_EXPORT_DIR"
 }
 
+verify_github_release_proofs() {
+    local verifier="$RELEASE_SOURCE_DIR/scripts/verify_github_ci.py"
+    if [ ! -f "$verifier" ]; then
+        echo "冻结发布快照缺少 GitHub CI 校验器。" >&2
+        exit 64
+    fi
+    python3 "$verifier" verify-online \
+        --repo AlfWuxy/weather-Web \
+        --workflow .github/workflows/ci.yml \
+        --commit "$VERIFIED_COMMIT" \
+        --branch "$VERIFIED_RELEASE_BRANCH" \
+        --proof-job "可发布提交证明" \
+        --output "$LOCAL_CI_PROOF_FILE"
+    if [ "$DEPLOY_MODE" = "wechat_formal" ]; then
+        python3 "$verifier" verify-online \
+            --repo AlfWuxy/weather-Web \
+            --workflow .github/workflows/miniprogram.yml \
+            --commit "$VERIFIED_COMMIT" \
+            --branch "$VERIFIED_RELEASE_BRANCH" \
+            --proof-job "小程序可发布提交证明" \
+            --output "$LOCAL_MINIPROGRAM_CI_PROOF_FILE"
+    fi
+}
+
 prepare_release_source
+verify_github_release_proofs
 
 if [ -z "${SSHPASS:-}" ] && [ -n "$PASSWORD" ]; then
     export SSHPASS="$PASSWORD"
@@ -816,6 +863,33 @@ remote_exec_with_file_stdin() {
     fi
 
     ssh $SSH_OPTS "$USER@$SERVER" "$remote_command" < "$local_file"
+}
+
+# CI 收据只通过 stdin 进入新 release 的 root 私有 metadata。
+upload_private_metadata_receipt() {
+    local local_file="$1"
+    local remote_name="$2"
+    case "$remote_name" in
+        ci-proof.json|miniprogram-ci-proof.json) ;;
+        *)
+            echo "私有发布收据文件名不在允许清单中。" >&2
+            exit 64
+            ;;
+    esac
+    if [ ! -f "$local_file" ]; then
+        echo "本机缺少待上传的 CI 收据: $remote_name" >&2
+        exit 64
+    fi
+    remote_exec_with_file_stdin "$local_file" "set -eu
+umask 077
+TARGET=$NEW_RELEASE/private-metadata/$remote_name
+[ ! -e \"\$TARGET\" ] && [ ! -L \"\$TARGET\" ] || {
+    echo '候选 CI 收据目标已存在，拒绝覆盖。' >&2
+    exit 1
+}
+cat > \"\$TARGET\"
+chown root:root \"\$TARGET\"
+chmod 0600 \"\$TARGET\""
 }
 
 # 预激活私钥管理器只在服务端 root 私有目录中工作。它先落盘清单，再暴露 pending 名称；
@@ -2730,28 +2804,132 @@ remote_exec "$RELEASE_VENV/bin/python $RELEASE_APP/scripts/validate_release_env.
 # commit 只含十六进制字符。微信正式模式会由激活脚本再次核对；
 # 网页/后端模式保留同样的来源审计记录，但不会把它冒充微信 ready 票据。
 remote_exec "umask 077; printf '%s\n' '$VERIFIED_COMMIT' > $NEW_RELEASE/private-metadata/source-commit.txt; chmod 0600 $NEW_RELEASE/private-metadata/source-commit.txt"
+upload_private_metadata_receipt "$LOCAL_CI_PROOF_FILE" "ci-proof.json"
+if [ "$DEPLOY_MODE" = "wechat_formal" ]; then
+    upload_private_metadata_receipt \
+        "$LOCAL_MINIPROGRAM_CI_PROOF_FILE" \
+        "miniprogram-ci-proof.json"
+fi
 
 echo ""
-echo "步骤6.1: 在停止生产服务前完成隔离测试..."
-# 完整非激活测试与四个激活分片由 GitHub CI 负责；服务器资源受限，只运行八个发布关键冒烟文件。
-# 禁止恢复不带文件清单的裸全量 pytest，避免发布主机再次触发 OOM。
+echo "步骤6.1: 在停止生产服务前完成低内存隔离预检..."
+# 完整 Python、激活事务和小程序测试由精确提交的 GitHub CI 收据负责。
+# 服务器只做语法、锁定依赖、Python 3.11 与 Alembic 单 head 运行态核对。
 remote_exec "set -eu
 umask 077
 PREFLIGHT_ROOT=$NEW_RELEASE/preflight-runtime
 PREFLIGHT_HOME=\$PREFLIGHT_ROOT/home
 PREFLIGHT_TMP=\$PREFLIGHT_ROOT/tmp
+PREFLIGHT_PYCACHE=\$PREFLIGHT_ROOT/pycache
+PREFLIGHT_RECEIPT=\$PREFLIGHT_ROOT/runtime-smoke.json
+PREFLIGHT_UNIT_PREFIX=case-weather-preflight-$RELEASE_ID
 cleanup_preflight() {
     rm -rf -- \"\$PREFLIGHT_ROOT\"
 }
 trap cleanup_preflight EXIT
-# 候选代码与虚拟环境只向运行组开放读取和执行，测试产生物全部限制在运行用户私有目录。
+# 候选代码与虚拟环境只向运行组开放读取和执行，所有产生物限制在运行用户私有目录。
 chown root:$RUNTIME_GROUP $NEW_RELEASE
 chmod 0750 $NEW_RELEASE
 chown -R root:$RUNTIME_GROUP $RELEASE_APP $RELEASE_VENV
 chmod -R g+rX,o-rwx $RELEASE_APP $RELEASE_VENV
-install -d -o $RUNTIME_USER -g $RUNTIME_GROUP -m 0700 \"\$PREFLIGHT_ROOT\" \"\$PREFLIGHT_HOME\" \"\$PREFLIGHT_TMP\"
-cd $RELEASE_APP
-runuser --user $RUNTIME_USER -- /usr/bin/env -i HOME=\"\$PREFLIGHT_HOME\" TMPDIR=\"\$PREFLIGHT_TMP\" PATH=$RELEASE_VENV/bin:/usr/local/bin:/usr/bin:/bin LANG=C.UTF-8 LC_ALL=C.UTF-8 USER=$RUNTIME_USER LOGNAME=$RUNTIME_USER PYTHONDONTWRITEBYTECODE=1 DATABASE_URI=sqlite:///:memory: DEBUG=true WECHAT_FORMAL_RUNTIME=0 SECRET_KEY=release-preflight-secret-key-123456789 PAIR_TOKEN_PEPPER=release-preflight-pair-pepper-123456789 RATE_LIMIT_STORAGE_URI=memory:// REDIS_URL= QWEATHER_AUTH_MODE=disabled QWEATHER_KEY= QWEATHER_API_BASE= AMAP_KEY= AMAP_JS_API_KEY= AMAP_WEB_SERVICE_KEY= AMAP_SECURITY_JS_CODE= SILICONFLOW_API_KEY= WXPUSHER_APP_TOKEN= WX_MINIPROGRAM_APPID= WX_MINIPROGRAM_SECRET= WX_MINIPROGRAM_OPENID_PEPPER= WX_MINIPROGRAM_SESSION_SECRET= ACCOUNT_LINK_CODE_PEPPER= DEMO_MODE=1 $RELEASE_VENV/bin/python -m pytest -q -p no:cacheprovider tests/test_smoke.py tests/test_database_bootstrap.py tests/test_server_migrate.py tests/test_miniprogram_runtime.py tests/test_formal_web_gate.py tests/test_web_weather_fail_closed.py tests/test_security_headers.py tests/test_mp_api_auth.py tests/test_cross_platform_identity.py"
+install -d -o $RUNTIME_USER -g $RUNTIME_GROUP -m 0700 \"\$PREFLIGHT_ROOT\" \"\$PREFLIGHT_HOME\" \"\$PREFLIGHT_TMP\" \"\$PREFLIGHT_PYCACHE\"
+
+systemd-run --quiet --wait --collect --service-type=exec \
+    --unit=\"\$PREFLIGHT_UNIT_PREFIX-compile\" \
+    --property=User=$RUNTIME_USER \
+    --property=Group=$RUNTIME_GROUP \
+    --property=UMask=0077 \
+    --property=MemoryMax=96M \
+    --property=MemorySwapMax=0 \
+    --property=TasksMax=64 \
+    --property=OOMPolicy=stop \
+    --property=PrivateNetwork=yes \
+    --property=PrivateTmp=yes \
+    --property=PrivateDevices=yes \
+    --property=NoNewPrivileges=yes \
+    --working-directory=$RELEASE_APP \
+    /usr/bin/env -i \
+    HOME=\"\$PREFLIGHT_HOME\" \
+    TMPDIR=\"\$PREFLIGHT_TMP\" \
+    PYTHONPYCACHEPREFIX=\"\$PREFLIGHT_PYCACHE\" \
+    PYTHONNOUSERSITE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_NO_INDEX=1 \
+    PIP_CONFIG_FILE=/dev/null \
+    PATH=$RELEASE_VENV/bin:/usr/local/bin:/usr/bin:/bin \
+    LANG=C.UTF-8 LC_ALL=C.UTF-8 \
+    USER=$RUNTIME_USER LOGNAME=$RUNTIME_USER \
+    $RELEASE_VENV/bin/python -m compileall -q -j 1 \
+        app.py blueprints core services utils migrations
+
+systemd-run --quiet --wait --collect --service-type=exec \
+    --unit=\"\$PREFLIGHT_UNIT_PREFIX-shell\" \
+    --property=User=$RUNTIME_USER \
+    --property=Group=$RUNTIME_GROUP \
+    --property=UMask=0077 \
+    --property=MemoryMax=96M \
+    --property=MemorySwapMax=0 \
+    --property=TasksMax=64 \
+    --property=OOMPolicy=stop \
+    --property=PrivateNetwork=yes \
+    --property=PrivateTmp=yes \
+    --property=PrivateDevices=yes \
+    --property=NoNewPrivileges=yes \
+    --working-directory=$RELEASE_APP \
+    /usr/bin/env -i \
+    HOME=\"\$PREFLIGHT_HOME\" TMPDIR=\"\$PREFLIGHT_TMP\" \
+    PATH=$RELEASE_VENV/bin:/usr/local/bin:/usr/bin:/bin \
+    LANG=C.UTF-8 LC_ALL=C.UTF-8 \
+    USER=$RUNTIME_USER LOGNAME=$RUNTIME_USER \
+    /bin/bash -c 'set -eu
+for file in scripts/deploy.sh scripts/activate_release.sh scripts/server_migrate.sh scripts/weather_cache_sync.sh scripts/backup.sh; do
+    /bin/bash -n \"\$file\"
+done'
+
+systemd-run --quiet --wait --collect --service-type=exec \
+    --unit=\"\$PREFLIGHT_UNIT_PREFIX-runtime\" \
+    --property=User=$RUNTIME_USER \
+    --property=Group=$RUNTIME_GROUP \
+    --property=UMask=0077 \
+    --property=MemoryMax=96M \
+    --property=MemorySwapMax=0 \
+    --property=TasksMax=64 \
+    --property=OOMPolicy=stop \
+    --property=PrivateNetwork=yes \
+    --property=PrivateTmp=yes \
+    --property=PrivateDevices=yes \
+    --property=NoNewPrivileges=yes \
+    --working-directory=$RELEASE_APP \
+    /usr/bin/env -i \
+    HOME=\"\$PREFLIGHT_HOME\" \
+    TMPDIR=\"\$PREFLIGHT_TMP\" \
+    PYTHONPYCACHEPREFIX=\"\$PREFLIGHT_PYCACHE\" \
+    PYTHONNOUSERSITE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_NO_INDEX=1 \
+    PIP_CONFIG_FILE=/dev/null \
+    PATH=$RELEASE_VENV/bin:/usr/local/bin:/usr/bin:/bin \
+    LANG=C.UTF-8 LC_ALL=C.UTF-8 \
+    USER=$RUNTIME_USER LOGNAME=$RUNTIME_USER \
+    $RELEASE_VENV/bin/python scripts/release_runtime_smoke.py run \
+        --repo-root $RELEASE_APP \
+        --expected-commit $VERIFIED_COMMIT \
+        --expected-python $RELEASE_VENV/bin/python \
+        --expected-python-minor 3.11 \
+        --expected-lock-sha c7e450c30d7d3c56bdf210f69a58620cba9d99e462e0e2c254ab45456271f853 \
+        --output \"\$PREFLIGHT_RECEIPT\"
+
+install -o root -g root -m 0600 \
+    \"\$PREFLIGHT_RECEIPT\" \
+    $NEW_RELEASE/private-metadata/runtime-smoke.json
+$RELEASE_VENV/bin/python $RELEASE_APP/scripts/release_runtime_smoke.py \
+    verify-receipt \
+    --receipt $NEW_RELEASE/private-metadata/runtime-smoke.json \
+    --repo-root $RELEASE_APP \
+    --expected-commit $VERIFIED_COMMIT \
+    --expected-python $RELEASE_VENV/bin/python \
+    --expected-python-minor 3.11 \
+    --expected-lock-sha c7e450c30d7d3c56bdf210f69a58620cba9d99e462e0e2c254ab45456271f853"
 
 echo ""
 echo "步骤6.2: 为新版本生成 systemd 单元模板..."
@@ -3100,7 +3278,31 @@ remote_exec "systemd-analyze verify $NEW_RELEASE/systemd/*.service $NEW_RELEASE/
 
 echo ""
 echo "步骤6.3: 收敛发布文件与运行数据权限..."
-remote_exec "chown -R root:$RUNTIME_GROUP $NEW_RELEASE; chmod -R g+rX,o-rwx $NEW_RELEASE; chown root:$RUNTIME_GROUP $STAGED_ENV_FILE; chmod 0640 $STAGED_ENV_FILE; chown $RUNTIME_USER:$RUNTIME_GROUP $PROJECT_DIR/instance $PROJECT_DIR/storage $PROJECT_DIR/run; chmod 0700 $PROJECT_DIR/instance $PROJECT_DIR/storage $PROJECT_DIR/run"
+remote_exec "set -eu
+chown -R root:$RUNTIME_GROUP $NEW_RELEASE
+chmod -R g+rX,o-rwx $NEW_RELEASE
+# 发布证明和运行态清单只供 root 激活事务读取，递归开放运行组后立即重新收紧。
+chown -R root:root $NEW_RELEASE/private-metadata
+chmod -R u=rwX,go= $NEW_RELEASE/private-metadata
+for PRIVATE_RECEIPT in \
+    $NEW_RELEASE/private-metadata/ci-proof.json \
+    $NEW_RELEASE/private-metadata/runtime-smoke.json \
+    $NEW_RELEASE/private-metadata/source-commit.txt; do
+    [ \"\$(stat -c '%u:%g:%a' \"\$PRIVATE_RECEIPT\")\" = '0:0:600' ] || {
+        echo '发布私有收据权限异常。' >&2
+        exit 1
+    }
+done
+if [ '$DEPLOY_MODE' = wechat_formal ]; then
+    [ \"\$(stat -c '%u:%g:%a' $NEW_RELEASE/private-metadata/miniprogram-ci-proof.json)\" = '0:0:600' ] || {
+        echo '小程序发布私有收据权限异常。' >&2
+        exit 1
+    }
+fi
+chown root:$RUNTIME_GROUP $STAGED_ENV_FILE
+chmod 0640 $STAGED_ENV_FILE
+chown $RUNTIME_USER:$RUNTIME_GROUP $PROJECT_DIR/instance $PROJECT_DIR/storage $PROJECT_DIR/run
+chmod 0700 $PROJECT_DIR/instance $PROJECT_DIR/storage $PROJECT_DIR/run"
 if [ "$EFFECTIVE_REQUIRE_WECHAT_READY" = "1" ]; then
     # 控制台当月已用量只做原子 max 合并，绝不降低 Redis 中已有计数。
     remote_exec "$RELEASE_VENV/bin/python $RELEASE_APP/scripts/validate_release_env.py --file $STAGED_ENV_FILE --require-wechat 1 --require-weather-ready $REMOTE_QWEATHER_VALIDATION_PENDING_ARG --probe-persistent-budget --seed-persistent-budget"
@@ -3112,11 +3314,8 @@ if [ "$EFFECTIVE_REQUIRE_WECHAT_READY" = "1" ]; then
     # 激活前复查活动配置，缩小上传预检与生产切换之间的竞态窗口。
     remote_exec "python3 $RELEASE_APP/scripts/verify_runtime_log_boundary.py --active-nginx"
 fi
-ACTIVATION_EXPECTED_RELEASE_COMMIT=""
-if [ "$EFFECTIVE_REQUIRE_WECHAT_READY" = "1" ]; then
-    ACTIVATION_EXPECTED_RELEASE_COMMIT="$VERIFIED_COMMIT"
-fi
-if remote_exec "STATE_DIR=$PROJECT_DIR RELEASE_ROOT=$RELEASE_ROOT NEW_RELEASE=$NEW_RELEASE CURRENT_LINK=$CURRENT_LINK ENV_FILE=$PROJECT_DIR/.env STAGED_ENV_FILE=$STAGED_ENV_FILE HEALTH_URL=http://127.0.0.1:5000/healthz DEPLOY_INTENT=$DEPLOY_MODE REQUIRE_WECHAT_READY=$EFFECTIVE_REQUIRE_WECHAT_READY EXPECTED_RELEASE_COMMIT=$ACTIVATION_EXPECTED_RELEASE_COMMIT RECOVERY_ACKNOWLEDGED_TRANSACTION=$RECOVERY_ACKNOWLEDGED_TRANSACTION RUNTIME_USER=$RUNTIME_USER RUNTIME_GROUP=$RUNTIME_GROUP QWEATHER_PENDING_KEY_PATH=$ACTIVATION_QWEATHER_PENDING_KEY_PATH bash $RELEASE_APP/scripts/activate_release.sh"; then
+ACTIVATION_EXPECTED_RELEASE_COMMIT="$VERIFIED_COMMIT"
+if remote_exec "STATE_DIR=$PROJECT_DIR RELEASE_ROOT=$RELEASE_ROOT NEW_RELEASE=$NEW_RELEASE CURRENT_LINK=$CURRENT_LINK ENV_FILE=$PROJECT_DIR/.env STAGED_ENV_FILE=$STAGED_ENV_FILE HEALTH_URL=http://127.0.0.1:5000/healthz DEPLOY_INTENT=$DEPLOY_MODE REQUIRE_WECHAT_READY=$EFFECTIVE_REQUIRE_WECHAT_READY EXPECTED_RELEASE_COMMIT=$ACTIVATION_EXPECTED_RELEASE_COMMIT EXPECTED_RELEASE_BRANCH=$VERIFIED_RELEASE_BRANCH RECOVERY_ACKNOWLEDGED_TRANSACTION=$RECOVERY_ACKNOWLEDGED_TRANSACTION RUNTIME_USER=$RUNTIME_USER RUNTIME_GROUP=$RUNTIME_GROUP QWEATHER_PENDING_KEY_PATH=$ACTIVATION_QWEATHER_PENDING_KEY_PATH bash $RELEASE_APP/scripts/activate_release.sh"; then
     # 激活事务已消费或精确复用 pending，并负责后续回滚/向前恢复；本地 EXIT 不再介入。
     REMOTE_QWEATHER_PREACTIVATION_ACTIVE="0"
 else

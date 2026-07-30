@@ -23,6 +23,8 @@
 - [ ] 所有材料复核完成后才设置 `WECHAT_FORM_READY=1`；微信正式部署同时设置 `DEPLOY_MODE=wechat_formal` 与 `DEPLOY_REQUIRE_WECHAT_READY=1`。
 - [ ] 如先部署网页和后端，显式使用 `DEPLOY_MODE=web_backend_only` 与 `DEPLOY_REQUIRE_WECHAT_READY=0`；该模式不读取微信表单，不替换或生成 AppID、AppSecret、OpenID pepper 和会话密钥，也不作为微信包就绪证据。旧正式环境只缺新字段时，服务器可 if-empty 生成独立的 `ACCOUNT_LINK_CODE_PEPPER`。
 - [ ] 两种远程模式都从干净 Git HEAD 导出不可变代码快照，并继续执行候选环境校验、备份、迁移、健康检查和回滚事务；模式与 ready 值不匹配、命令行与 `ENV_FILE` 模式冲突时均在 SSH 前停止。
+- [ ] 目标 commit 已推送到 `main` 或明确的 `codex/*` 发布分支；该分支当前 tip 仍等于目标 commit。最新 push 的 GitHub `CI` workflow 已生成 `可发布提交证明`，微信正式模式的 `Mini Program CI` 也已生成 `小程序可发布提交证明`。等待中、失败、取消、跳过、缺失或旧 run 均不能作为发布证明。
+- [ ] 两份 workflow 使用 `requirements.lock` 与固定 SHA 的官方 Actions。服务器发布前只运行 96 MiB、无 swap、无网络的低内存预检，不在旧生产服务仍运行时执行 Flask pytest。激活停服后已由单 worker 候选验证 ML 版本、QWeather 快照和公开风险页。
 - [ ] 候选环境已记录活动 `.env` 与 `current` 链接摘要；激活在取得部署锁后执行 CAS，并发部署或人工配置变化会停止陈旧候选，不会把新微信配置覆盖回旧值。
 - [ ] 任一主体、类目、运营者、AppID 或隐私版本发生变化时，两个门禁先恢复为 `0` 并重新核对。
 

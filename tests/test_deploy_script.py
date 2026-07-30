@@ -38,8 +38,25 @@ def _create_clean_git_source(tmp_path):
     source = tmp_path / 'source'
     source.mkdir()
     (source / 'README.md').write_text('release fixture\n', encoding='utf-8')
-    subprocess.run(['git', 'init', '-q', str(source)], check=True)
-    subprocess.run(['git', '-C', str(source), 'add', 'README.md'], check=True)
+    verifier = source / 'scripts' / 'verify_github_ci.py'
+    verifier.parent.mkdir()
+    verifier.write_text(
+        """#!/usr/bin/env python3
+import os
+from pathlib import Path
+import sys
+
+output = Path(sys.argv[sys.argv.index('--output') + 1])
+output.write_text('{}\\n', encoding='utf-8')
+os.chmod(output, 0o600)
+""",
+        encoding='utf-8',
+    )
+    subprocess.run(['git', 'init', '-q', '-b', 'main', str(source)], check=True)
+    subprocess.run(
+        ['git', '-C', str(source), 'add', 'README.md', 'scripts/verify_github_ci.py'],
+        check=True,
+    )
     subprocess.run(
         [
             'git',
@@ -295,7 +312,7 @@ def test_deploy_script_pins_duchang_cache_to_free_tier_budget():
     assert '微信正式发布必须固定使用 QWEATHER_AUTH_MODE=jwt' in content
     assert '私密发布表记录的 QWeather Project ID/KID 与实际部署配置不一致' in content
     assert content.index('--probe-persistent-budget') < content.index(
-        '$RELEASE_VENV/bin/python -m pytest -q'
+        'scripts/release_runtime_smoke.py run'
     )
     assert content.index('--seed-persistent-budget') < content.index(
         'bash $RELEASE_APP/scripts/activate_release.sh'
@@ -330,7 +347,7 @@ def test_formal_deploy_propagates_full_feature_release_flags():
         '"$LOCAL_WECHAT_FORMAL_RUNTIME" "always"'
     ) in content
     assert '微信正式发布必须固定 WECHAT_FORMAL_RUNTIME=1。' in content
-    assert 'DEBUG=true WECHAT_FORMAL_RUNTIME=0' in content
+    assert 'DEBUG=true WECHAT_FORMAL_RUNTIME=0' not in content
 
 
 def test_formal_deploy_loads_and_forces_audit_logs_off():
@@ -477,59 +494,58 @@ def test_deploy_script_uses_isolated_release_and_server_transaction():
 def test_preflight_finishes_before_server_transaction_can_stop_units():
     content = _load_deploy_script()
 
-    preflight = content.index('$RELEASE_VENV/bin/python -m pytest -q')
+    preflight = content.index('scripts/release_runtime_smoke.py run')
     activation = content.index('bash $RELEASE_APP/scripts/activate_release.sh')
     assert preflight < activation
 
 
-def test_remote_preflight_drops_to_runtime_user_with_private_writable_dirs():
+def test_remote_preflight_is_low_memory_private_and_has_no_pytest():
     content = _load_deploy_script()
-    start = content.index('echo "步骤6.1: 在停止生产服务前完成隔离测试..."')
+    start = content.index(
+        'echo "步骤6.1: 在停止生产服务前完成低内存隔离预检..."'
+    )
     end = content.index('echo "步骤6.2: 为新版本生成 systemd 单元模板..."')
     preflight = content[start:end]
 
-    assert '完整非激活测试与四个激活分片由 GitHub CI 负责' in preflight
-    assert '禁止恢复不带文件清单的裸全量 pytest' in preflight
+    assert '精确提交的 GitHub CI 收据负责' in preflight
     assert 'remote_exec "set -eu\numask 077\n' in preflight
     assert 'PREFLIGHT_ROOT=$NEW_RELEASE/preflight-runtime' in preflight
     assert 'PREFLIGHT_HOME=\\$PREFLIGHT_ROOT/home' in preflight
     assert 'PREFLIGHT_TMP=\\$PREFLIGHT_ROOT/tmp' in preflight
+    assert 'PREFLIGHT_PYCACHE=\\$PREFLIGHT_ROOT/pycache' in preflight
+    assert 'PREFLIGHT_RECEIPT=\\$PREFLIGHT_ROOT/runtime-smoke.json' in preflight
     assert (
         'install -d -o $RUNTIME_USER -g $RUNTIME_GROUP -m 0700 '
         '\\"\\$PREFLIGHT_ROOT\\" \\"\\$PREFLIGHT_HOME\\" '
-        '\\"\\$PREFLIGHT_TMP\\"'
+        '\\"\\$PREFLIGHT_TMP\\" \\"\\$PREFLIGHT_PYCACHE\\"'
     ) in preflight
     assert 'chown root:$RUNTIME_GROUP $NEW_RELEASE' in preflight
     assert 'chmod 0750 $NEW_RELEASE' in preflight
     assert 'chown -R root:$RUNTIME_GROUP $RELEASE_APP $RELEASE_VENV' in preflight
     assert 'chmod -R g+rX,o-rwx $RELEASE_APP $RELEASE_VENV' in preflight
-    assert 'runuser --user $RUNTIME_USER -- /usr/bin/env -i' in preflight
+    assert preflight.count('systemd-run --quiet --wait --collect') == 3
+    assert preflight.count('--property=User=$RUNTIME_USER') == 3
+    assert preflight.count('--property=Group=$RUNTIME_GROUP') == 3
+    assert preflight.count('--property=MemoryMax=96M') == 3
+    assert preflight.count('--property=MemorySwapMax=0') == 3
+    assert preflight.count('--property=TasksMax=64') == 3
+    assert preflight.count('--property=OOMPolicy=stop') == 3
+    assert preflight.count('--property=PrivateNetwork=yes') == 3
+    assert preflight.count('--property=NoNewPrivileges=yes') == 3
+    assert preflight.count('/usr/bin/env -i') == 3
     assert 'HOME=\\"\\$PREFLIGHT_HOME\\"' in preflight
     assert 'TMPDIR=\\"\\$PREFLIGHT_TMP\\"' in preflight
     assert 'LANG=C.UTF-8 LC_ALL=C.UTF-8' in preflight
     assert 'USER=$RUNTIME_USER LOGNAME=$RUNTIME_USER' in preflight
-    assert 'PYTHONDONTWRITEBYTECODE=1' in preflight
-    critical_tests = (
-        'tests/test_smoke.py',
-        'tests/test_database_bootstrap.py',
-        'tests/test_server_migrate.py',
-        'tests/test_miniprogram_runtime.py',
-        'tests/test_formal_web_gate.py',
-        'tests/test_web_weather_fail_closed.py',
-            'tests/test_security_headers.py',
-            'tests/test_mp_api_auth.py',
-            'tests/test_cross_platform_identity.py',
-        )
-    expected_pytest = (
-        '$RELEASE_VENV/bin/python -m pytest -q -p no:cacheprovider '
-        + ' '.join(critical_tests)
-    )
-    assert expected_pytest in preflight
-    pytest_tail = preflight.split(
-        '$RELEASE_VENV/bin/python -m pytest -q -p no:cacheprovider ', 1
-    )[1].split('"', 1)[0]
-    assert tuple(pytest_tail.split()) == critical_tests
-    assert '$RELEASE_VENV/bin/python -m pytest -q"' not in preflight
+    assert 'PYTHONPYCACHEPREFIX=\\"\\$PREFLIGHT_PYCACHE\\"' in preflight
+    assert 'PIP_NO_INDEX=1' in preflight
+    assert '-m compileall -q -j 1' in preflight
+    assert '/bin/bash -n \\"\\$file\\"' in preflight
+    assert 'scripts/release_runtime_smoke.py run' in preflight
+    assert 'scripts/release_runtime_smoke.py \\\n    verify-receipt' in preflight
+    assert '--expected-python-minor 3.11' in preflight
+    assert 'runtime-smoke.json' in preflight
+    assert 'pytest' not in preflight
     assert 'trap cleanup_preflight EXIT' in preflight
     assert 'rm -rf -- \\"\\$PREFLIGHT_ROOT\\"' in preflight
 
@@ -537,11 +553,11 @@ def test_remote_preflight_drops_to_runtime_user_with_private_writable_dirs():
         'chown -R root:$RUNTIME_GROUP $RELEASE_APP $RELEASE_VENV'
     )
     temp_install = preflight.index('install -d -o $RUNTIME_USER')
-    runtime_test = preflight.index('runuser --user $RUNTIME_USER --')
-    assert permission_open < runtime_test
-    assert temp_install < runtime_test
+    runtime_smoke = preflight.index('scripts/release_runtime_smoke.py run')
+    assert permission_open < runtime_smoke
+    assert temp_install < runtime_smoke
     assert 'su -c' not in preflight
-    assert 'runuser --user $RUNTIME_USER -- sh -c' not in preflight
+    assert 'runuser' not in preflight
 
 
 def test_formal_freeze_preflight_runs_before_remote_change_or_rsync():
@@ -561,6 +577,53 @@ def test_formal_freeze_preflight_runs_before_remote_change_or_rsync():
     assert '冻结 GIS gzip 体积必须小于 300 KiB' in (
         ROOT / 'scripts' / 'validate_release_env.py'
     ).read_text(encoding='utf-8')
+
+
+def test_exact_commit_ci_proof_is_verified_before_first_ssh():
+    content = _load_deploy_script()
+
+    proof_call = content.index('\nverify_github_release_proofs\n')
+    first_remote_call = content.index('remote_exec "echo \'连接成功\'"')
+    first_rsync = content.index('rsync -avz')
+    verifier = content[
+        content.index('verify_github_release_proofs() {'):
+        content.index('\nprepare_release_source\n')
+    ]
+
+    assert proof_call < first_remote_call
+    assert proof_call < first_rsync
+    assert '--repo AlfWuxy/weather-Web' in verifier
+    assert '--workflow .github/workflows/ci.yml' in verifier
+    assert '--commit "$VERIFIED_COMMIT"' in verifier
+    assert '--branch "$VERIFIED_RELEASE_BRANCH"' in verifier
+    assert '--proof-job "可发布提交证明"' in verifier
+    assert '--workflow .github/workflows/miniprogram.yml' in verifier
+    assert '--proof-job "小程序可发布提交证明"' in verifier
+    assert 'if [ "$DEPLOY_MODE" = "wechat_formal" ]; then' in verifier
+    assert 'main|codex/*' in content
+    assert 'symbolic-ref --quiet --short HEAD' in content
+
+
+def test_ci_and_runtime_receipts_are_bound_to_activation_metadata():
+    content = _load_deploy_script()
+
+    ci_upload = content.index(
+        'upload_private_metadata_receipt "$LOCAL_CI_PROOF_FILE" "ci-proof.json"'
+    )
+    runtime_receipt = content.index(
+        '$NEW_RELEASE/private-metadata/runtime-smoke.json'
+    )
+    activation = content.index('bash $RELEASE_APP/scripts/activate_release.sh')
+
+    assert ci_upload < runtime_receipt < activation
+    assert 'chmod 0600 \\"\\$TARGET\\"' in content
+    assert 'chown -R root:root $NEW_RELEASE/private-metadata' in content
+    assert 'chmod -R u=rwX,go= $NEW_RELEASE/private-metadata' in content
+    assert "stat -c '%u:%g:%a' \\\"\\$PRIVATE_RECEIPT\\\"" in content
+    assert "'0:0:600'" in content
+    assert 'ACTIVATION_EXPECTED_RELEASE_COMMIT="$VERIFIED_COMMIT"' in content
+    assert 'EXPECTED_RELEASE_BRANCH=$VERIFIED_RELEASE_BRANCH' in content
+    assert 'EXPECTED_RELEASE_COMMIT=$ACTIVATION_EXPECTED_RELEASE_COMMIT' in content
 
 
 def test_deploy_keeps_control_directories_root_private_and_asserts_state():
@@ -655,12 +718,11 @@ def test_activate_transaction_stops_every_writer_and_commits_last():
         'case-weather-usage-cleanup.timer',
     ):
         assert unit in content
-    assert content.index('start_candidate_release\n') < content.index('LINK_MUTATED=1')
+    assert content.index('start_candidate_release base\n') < content.index(
+        'LINK_MUTATED=1'
+    )
     assert content.index('install_new_units\n') < content.index(
         'prepare_release_timer_states\n'
-    )
-    assert content.index('start_candidate_release\n') < content.index(
-        'LINK_MUTATED=1'
     )
     assert content.index('LINK_MUTATED=1') < content.index(
         'prepare_release_timer_states\n'
@@ -678,6 +740,9 @@ def test_activate_transaction_stops_every_writer_and_commits_last():
         'run_formal_cache_smoke\n'
     )
     assert content.index('run_formal_cache_smoke\n') < content.index(
+        'start_candidate_release weather\n'
+    )
+    assert content.index('start_candidate_release weather\n') < content.index(
         'arm_qweather_network_gate\n'
     )
     assert content.index('arm_qweather_network_gate\n') < content.index(
@@ -1508,7 +1573,7 @@ def test_qweather_preactivation_cleanup_covers_all_pre_activation_failures():
         '--require-weather-ready '
         '$REMOTE_QWEATHER_VALIDATION_PENDING_ARG"',
         '$RELEASE_VENV/bin/python -m pip install',
-        '$RELEASE_VENV/bin/python -m pytest -q',
+        'scripts/release_runtime_smoke.py run',
         'systemd-analyze verify $NEW_RELEASE/systemd/*.service',
         '--seed-persistent-budget',
     )
@@ -1632,7 +1697,7 @@ def test_deploy_only_supports_key_or_sshpass_and_locks_private_files():
 
     assert 'expect -c' not in content
     assert '密码部署需要 sshpass' in content
-    assert content.count('UMask=0077') == 6
+    assert content.count('UMask=0077') == 9
     assert 'chmod 0700 $PROJECT_DIR/instance $PROJECT_DIR/storage $PROJECT_DIR/run' in content
 
 
@@ -1824,7 +1889,12 @@ def test_activation_arms_qweather_gate_immediately_before_public_restart():
     assert '--key QWEATHER_NETWORK_NOT_BEFORE_EPOCH' in content
     assert 'not_before_epoch=$((now_epoch + 1800))' in content
     assert content.index('arm_qweather_network_gate\n') < content.index('start_new_release\n')
-    assert content.index('start_candidate_release\n') < content.index('arm_qweather_network_gate\n')
+    assert content.index('start_candidate_release base\n') < content.index(
+        'arm_qweather_network_gate\n'
+    )
+    assert content.index('start_candidate_release weather\n') < content.index(
+        'arm_qweather_network_gate\n'
+    )
 
 
 def test_precompute_script_respects_deploy_venv_dir():

@@ -42,6 +42,7 @@ RECOVERY_ACKNOWLEDGED_TRANSACTION="${RECOVERY_ACKNOWLEDGED_TRANSACTION:-}"
 REQUIRE_WECHAT_READY="${REQUIRE_WECHAT_READY:-0}"
 DEPLOY_INTENT="${DEPLOY_INTENT:-web_backend_only}"
 EXPECTED_RELEASE_COMMIT="${EXPECTED_RELEASE_COMMIT:-}"
+EXPECTED_RELEASE_BRANCH="${EXPECTED_RELEASE_BRANCH:-}"
 QWEATHER_BUDGET_SNAPSHOT_HELPER="${QWEATHER_BUDGET_SNAPSHOT_HELPER:-}"
 QWEATHER_PENDING_KEY_PATH="${QWEATHER_PENDING_KEY_PATH:-}"
 QWEATHER_KEY_TRANSITION_FAIL_AT="${QWEATHER_KEY_TRANSITION_FAIL_AT:-}"
@@ -57,6 +58,9 @@ EXPECTED_REQUIREMENTS_LOCK_SHA256="c7e450c30d7d3c56bdf210f69a58620cba9d99e462e0e
 APP_DIR="$NEW_RELEASE/app"
 VENV_DIR="$NEW_RELEASE/venv"
 CANDIDATE_BASE_STATE_FILE="$NEW_RELEASE/private-metadata/candidate-base-state.json"
+CI_PROOF_FILE="$NEW_RELEASE/private-metadata/ci-proof.json"
+MINIPROGRAM_CI_PROOF_FILE="$NEW_RELEASE/private-metadata/miniprogram-ci-proof.json"
+RUNTIME_SMOKE_RECEIPT_FILE="$NEW_RELEASE/private-metadata/runtime-smoke.json"
 RELEASE_ID="${NEW_RELEASE##*/}"
 TRANSACTION_ROOT="$STATE_DIR/backups/deploy-transactions"
 FORMAL_SMOKE_RECEIPT_ROOT="$STATE_DIR/deployments/formal-cache-smokes"
@@ -169,6 +173,7 @@ QWEATHER_KEY_SHA256=""
 QWEATHER_KEY_FINAL_CREATED=0
 QWEATHER_KEY_PENDING_CLEANED=0
 CANDIDATE_PID=""
+RELEASE_COMMIT=""
 FORMAL_RELEASE_COMMIT=""
 FORMAL_RELEASE_CONFIG_FINGERPRINT=""
 FORMAL_SMOKE_RECEIPT_DIR=""
@@ -3906,6 +3911,106 @@ wait_for_health() {
     fail "应用健康检查失败: $url"
 }
 
+validate_candidate_ml_contract() {
+    local base_url="http://$CANDIDATE_BIND"
+    local ml_body
+
+    ml_body="$(
+        "$CURL_BIN" --fail --silent --show-error --max-time 5 \
+            "$base_url/api/ml/status" 2>/dev/null
+    )" || {
+        fail "候选应用 ML 状态接口不可用"
+        return 1
+    }
+    if ! printf '%s' "$ml_body" | "$VENV_DIR/bin/python" -c '
+import json
+import sys
+
+payload = json.load(sys.stdin)
+status = payload.get("status") if isinstance(payload, dict) else None
+valid = (
+    payload.get("success") is True
+    and isinstance(status, dict)
+    and status.get("model_loaded") is True
+    and status.get("runtime_sklearn_version") == "1.7.2"
+    and status.get("expected_sklearn_version") == "1.7.2"
+    and status.get("sklearn_compatible") is True
+)
+raise SystemExit(0 if valid else 1)
+'; then
+        fail "候选应用 ML 运行态版本或模型状态异常"
+        return 1
+    fi
+}
+
+validate_candidate_weather_contracts() {
+    local base_url="http://$CANDIDATE_BIND"
+    local bootstrap_body risk_body
+
+    bootstrap_body="$(
+        "$CURL_BIN" --fail --silent --show-error --max-time 5 \
+            "$base_url/mp/api/v1/bootstrap" 2>/dev/null
+    )" || {
+        fail "候选应用小程序天气快照接口不可用"
+        return 1
+    }
+    if ! printf '%s' "$bootstrap_body" | "$VENV_DIR/bin/python" -c '
+import json
+import sys
+
+payload = json.load(sys.stdin)
+data = payload.get("data") if isinstance(payload, dict) else None
+current = data.get("current") if isinstance(data, dict) else None
+risk = data.get("risk") if isinstance(data, dict) else None
+source_status = data.get("source_status") if isinstance(data, dict) else None
+weather_status = (
+    source_status.get("weather") if isinstance(source_status, dict) else None
+)
+provider = ""
+if isinstance(weather_status, dict):
+    provider = str(weather_status.get("provider") or "").strip()
+if not provider and isinstance(current, dict):
+    provider = str(
+        current.get("data_source") or current.get("source") or ""
+    ).strip()
+score = risk.get("score") if isinstance(risk, dict) else None
+summary = str(risk.get("summary") or "") if isinstance(risk, dict) else ""
+pending_markers = ("待刷新", "尚未生成", "正在更新")
+valid = (
+    payload.get("success") is True
+    and isinstance(data, dict)
+    and data.get("available") is True
+    and data.get("stale") is False
+    and bool(str(data.get("snapshot_id") or "").strip())
+    and provider == "QWeather"
+    and isinstance(score, (int, float))
+    and not isinstance(score, bool)
+    and bool(summary.strip())
+    and not any(marker in summary for marker in pending_markers)
+)
+raise SystemExit(0 if valid else 1)
+'; then
+        fail "候选应用天气快照仍处于缺失、陈旧或待刷新状态"
+        return 1
+    fi
+
+    risk_body="$(
+        "$CURL_BIN" --fail --silent --show-error --max-time 5 \
+            "$base_url/risk" 2>/dev/null
+    )" || {
+        fail "候选应用公开风险页不可用"
+        return 1
+    }
+    if printf '%s' "$risk_body" | grep -Eq '天气更新中|风险待刷新'; then
+        fail "候选应用公开风险页仍显示待刷新状态"
+        return 1
+    fi
+    if ! printf '%s' "$risk_body" | grep -Fq '当前风险：'; then
+        fail "候选应用公开风险页缺少已生成的风险结果"
+        return 1
+    fi
+}
+
 stop_candidate_release() {
     if [ -n "$CANDIDATE_PID" ]; then
         kill "$CANDIDATE_PID" >/dev/null 2>&1 || true
@@ -3915,7 +4020,19 @@ stop_candidate_release() {
 }
 
 start_candidate_release() {
-    log "在仅本机可访问的端口验证候选版本"
+    local contract_phase="${1:-base}"
+    case "$contract_phase" in
+        base)
+            log "在仅本机可访问的端口验证候选版本基础运行态"
+            ;;
+        weather)
+            log "在正式天气烟测后验证候选版本天气与风险展示"
+            ;;
+        *)
+            fail "候选版本验证阶段无效: $contract_phase"
+            return 2
+            ;;
+    esac
     (
         cd "$APP_DIR"
         runtime_exec "$VENV_DIR/bin/gunicorn" \
@@ -3926,6 +4043,10 @@ start_candidate_release() {
     ) > "$TRANSACTION_DIR/candidate-gunicorn.log" 2>&1 &
     CANDIDATE_PID=$!
     wait_for_health "$CANDIDATE_HEALTH_URL" "$CANDIDATE_PID"
+    case "$contract_phase" in
+        base) validate_candidate_ml_contract ;;
+        weather) validate_candidate_weather_contracts ;;
+    esac
     stop_candidate_release
 }
 
@@ -4232,22 +4353,15 @@ PY
     fi
 }
 
-validate_formal_release_identity() {
+validate_release_identity() {
     local metadata_file="$NEW_RELEASE/private-metadata/source-commit.txt"
     local metadata_commit=""
-    if [ "$REQUIRE_WECHAT_READY" != 1 ]; then
-        if [ -n "$EXPECTED_RELEASE_COMMIT" ]; then
-            fail "非正式运行态部署不得携带正式发布 commit 票据"
-            return 1
-        fi
-        return 0
-    fi
     if [[ ! "$EXPECTED_RELEASE_COMMIT" =~ ^[0-9a-f]{40}$ ]]; then
-        fail "正式发布缺少有效的冻结 commit 票据"
+        fail "发布缺少有效的冻结 commit 票据"
         return 1
     fi
     if [ -L "$metadata_file" ]; then
-        fail "正式发布 commit metadata 不得为符号链接"
+        fail "发布 commit metadata 不得为符号链接"
         return 1
     fi
     require_file "$metadata_file"
@@ -4257,7 +4371,56 @@ validate_formal_release_identity() {
         fail "上传 release 与冻结 commit 票据不一致"
         return 1
     fi
-    FORMAL_RELEASE_COMMIT="$metadata_commit"
+    RELEASE_COMMIT="$metadata_commit"
+    if [ "$REQUIRE_WECHAT_READY" = 1 ]; then
+        FORMAL_RELEASE_COMMIT="$metadata_commit"
+    fi
+}
+
+validate_release_proofs() {
+    require_file "$APP_DIR/scripts/verify_github_ci.py"
+    require_file "$APP_DIR/scripts/release_runtime_smoke.py"
+    require_file "$CI_PROOF_FILE"
+    require_file "$RUNTIME_SMOKE_RECEIPT_FILE"
+
+    if ! "$VENV_DIR/bin/python" \
+        "$APP_DIR/scripts/verify_github_ci.py" verify-receipt \
+        --receipt "$CI_PROOF_FILE" \
+        --repo AlfWuxy/weather-Web \
+        --workflow .github/workflows/ci.yml \
+        --commit "$EXPECTED_RELEASE_COMMIT" \
+        --branch "$EXPECTED_RELEASE_BRANCH" \
+        --proof-job "可发布提交证明"; then
+        fail "GitHub Python CI 收据与待激活 release 不一致"
+        return 1
+    fi
+
+    if [ "$REQUIRE_WECHAT_READY" = 1 ]; then
+        require_file "$MINIPROGRAM_CI_PROOF_FILE"
+        if ! "$VENV_DIR/bin/python" \
+            "$APP_DIR/scripts/verify_github_ci.py" verify-receipt \
+            --receipt "$MINIPROGRAM_CI_PROOF_FILE" \
+            --repo AlfWuxy/weather-Web \
+            --workflow .github/workflows/miniprogram.yml \
+            --commit "$EXPECTED_RELEASE_COMMIT" \
+            --branch "$EXPECTED_RELEASE_BRANCH" \
+            --proof-job "小程序可发布提交证明"; then
+            fail "GitHub 小程序 CI 收据与待激活 release 不一致"
+            return 1
+        fi
+    fi
+
+    if ! "$VENV_DIR/bin/python" \
+        "$APP_DIR/scripts/release_runtime_smoke.py" verify-receipt \
+        --receipt "$RUNTIME_SMOKE_RECEIPT_FILE" \
+        --repo-root "$APP_DIR" \
+        --expected-commit "$EXPECTED_RELEASE_COMMIT" \
+        --expected-python "$VENV_DIR/bin/python" \
+        --expected-python-minor 3.11 \
+        --expected-lock-sha "$EXPECTED_REQUIREMENTS_LOCK_SHA256"; then
+        fail "服务器低内存运行态收据与待激活 release 不一致"
+        return 1
+    fi
 }
 
 verify_formal_runtime_log_boundary() {
@@ -6147,6 +6310,11 @@ case "$DEPLOY_INTENT" in
     web_backend_only|wechat_formal) ;;
     *) echo 'DEPLOY_INTENT 必须是 web_backend_only 或 wechat_formal' >&2; exit 2 ;;
 esac
+if [[ ! "$EXPECTED_RELEASE_BRANCH" =~ ^(main|codex/[A-Za-z0-9._/-]+)$ ]] \
+    || [[ "$EXPECTED_RELEASE_BRANCH" == *".."* ]]; then
+    echo 'EXPECTED_RELEASE_BRANCH 只能是 main 或安全的 codex/* 分支' >&2
+    exit 2
+fi
 case "$QWEATHER_KEY_TRANSITION_FAIL_AT" in
     ''|after-plan|before-promotion|after-link|after-pending-unlink|after-permissions|during-directory-restore|cleanup|after-plan-cleanup|after-link-cleanup|after-pending-unlink-cleanup|after-permissions-cleanup) ;;
     *) echo 'QWEATHER_KEY_TRANSITION_FAIL_AT 测试故障点无效' >&2; exit 2 ;;
@@ -6230,7 +6398,8 @@ command -v "$ENV_BIN" >/dev/null 2>&1 || require_executable "$ENV_BIN"
 require_file "$UPTIME_FILE"
 verify_effective_runtime_gate
 validate_release_dependencies
-validate_formal_release_identity
+validate_release_identity
+validate_release_proofs
 if [ -n "$INHERITED_DATABASE_FILE" ] || [ -n "$INHERITED_DATABASE_URI" ]; then
     echo '禁止继承 DATABASE_FILE 或 DATABASE_URI；数据库只能由冻结的候选配置决定' >&2
     exit 2
@@ -6295,7 +6464,7 @@ tighten_database_permissions
 sqlite_quick_check "$DATABASE_FILE"
 sqlite_foreign_key_check "$DATABASE_FILE"
 
-start_candidate_release
+start_candidate_release base
 
 LINK_MUTATED=1
 switch_current_link "$NEW_RELEASE"
@@ -6305,6 +6474,10 @@ validate_managed_backup_service
 validate_installed_backup_service
 verify_pre_request_quiescence
 run_formal_cache_smoke
+if [ "$REQUIRE_WECHAT_READY" = 1 ]; then
+    # 正式快照生成并持久化后，再验证依赖该快照的天气与风险页面。
+    start_candidate_release weather
+fi
 arm_qweather_network_gate
 start_new_release
 
