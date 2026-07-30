@@ -15,6 +15,11 @@ REPO = "AlfWuxy/weather-Web"
 WORKFLOW = ".github/workflows/ci.yml"
 BRANCH = "codex/miniprogram-v1.1.1-unified"
 PROOF_JOB = "可发布提交证明"
+ALLOWED_WORKFLOWS = {
+    ".github/workflows/ci.yml",
+    ".github/workflows/cloudflare-edge.yml",
+    ".github/workflows/miniprogram.yml",
+}
 
 
 def _load_module():
@@ -122,6 +127,28 @@ def _verify_online(module):
         token="secret-token",
         timeout=10,
     )
+
+
+def test_workflow_allowlist_adds_only_three_release_proofs():
+    module = _load_module()
+
+    assert module.ALLOWED_WORKFLOWS == ALLOWED_WORKFLOWS
+    for workflow in ALLOWED_WORKFLOWS:
+        module._validate_inputs(
+            repo=REPO,
+            workflow=workflow,
+            commit=COMMIT,
+            branch=BRANCH,
+            proof_job=PROOF_JOB,
+        )
+    with pytest.raises(module.VerificationError, match="允许清单"):
+        module._validate_inputs(
+            repo=REPO,
+            workflow=".github/workflows/untrusted.yml",
+            commit=COMMIT,
+            branch=BRANCH,
+            proof_job=PROOF_JOB,
+        )
 
 
 def test_exact_commit_success_writes_private_token_free_receipt(

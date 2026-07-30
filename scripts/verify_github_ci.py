@@ -29,6 +29,7 @@ REPOSITORY_PATTERN = re.compile(
 BRANCH_PATTERN = re.compile(r"^(?:main|codex/[A-Za-z0-9._/-]+)$")
 ALLOWED_WORKFLOWS = {
     ".github/workflows/ci.yml",
+    ".github/workflows/cloudflare-edge.yml",
     ".github/workflows/miniprogram.yml",
 }
 
