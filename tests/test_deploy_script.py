@@ -371,6 +371,28 @@ def test_formal_deploy_requires_and_forces_structured_privacy_logs_on():
     ) in content
 
 
+def test_inherited_formal_runtime_forces_sentry_privacy_before_validation():
+    content = _load_deploy_script()
+    resolve = content.index("\nresolve_effective_formal_runtime\n")
+    inherited_guard = content.index(
+        'if [ "$EFFECTIVE_REQUIRE_WECHAT_READY" = "1" ]; then',
+        resolve,
+    )
+    validation = content.index(
+        'remote_exec "python3 $RELEASE_APP/scripts/validate_release_env.py '
+        '--file $STAGED_ENV_FILE',
+        inherited_guard,
+    )
+
+    for update in (
+        'remote_env_update "SENTRY_DSN" "" "always"',
+        'remote_env_update "SENTRY_TRACES_SAMPLE_RATE" "0" "always"',
+        'remote_env_update "SENTRY_SEND_PII" "0" "always"',
+    ):
+        assert content.count(update) == 1
+        assert inherited_guard < content.index(update) < validation
+
+
 def test_formal_deploy_requires_nginx_access_log_off_before_activation():
     content = _load_deploy_script()
     verification = 'python3 $RELEASE_APP/scripts/verify_runtime_log_boundary.py --active-nginx'

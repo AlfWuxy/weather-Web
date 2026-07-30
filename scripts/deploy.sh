@@ -2699,9 +2699,6 @@ if [ "$FORMAL_WECHAT_CONFIG_ALLOWED" = "1" ]; then
     remote_env_update "WECHAT_FORMAL_RUNTIME" "$LOCAL_WECHAT_FORMAL_RUNTIME" "always"
     remote_env_update "FEATURE_AUDIT_LOGS" "$LOCAL_FEATURE_AUDIT_LOGS" "always"
     remote_env_update "FEATURE_STRUCTURED_LOGS" "$LOCAL_FEATURE_STRUCTURED_LOGS" "always"
-    remote_env_update "SENTRY_DSN" "" "always"
-    remote_env_update "SENTRY_TRACES_SAMPLE_RATE" "0" "always"
-    remote_env_update "SENTRY_SEND_PII" "0" "always"
     remote_env_update "FEATURE_WXPUSHER" "$LOCAL_FEATURE_WXPUSHER" "always"
     remote_env_update "WXPUSHER_APP_TOKEN" "$LOCAL_WXPUSHER_APP_TOKEN" "always"
     remote_env_update "WX_MINIPROGRAM_APPID" "$LOCAL_WX_MINIPROGRAM_APPID" "always"
@@ -2717,6 +2714,12 @@ if [ "$FORMAL_WECHAT_CONFIG_ALLOWED" = "1" ]; then
     remote_env_update "QWEATHER_EXPECTED_KID" "$LOCAL_QWEATHER_EXPECTED_KID" "always"
 fi
 resolve_effective_formal_runtime
+# 网页独立发布会继承服务器正式运行态，因此同样收敛第三方异常平台隐私边界。
+if [ "$EFFECTIVE_REQUIRE_WECHAT_READY" = "1" ]; then
+    remote_env_update "SENTRY_DSN" "" "always"
+    remote_env_update "SENTRY_TRACES_SAMPLE_RATE" "0" "always"
+    remote_env_update "SENTRY_SEND_PII" "0" "always"
+fi
 provision_qweather_jwt_private_key
 remote_exec "python3 $RELEASE_APP/scripts/validate_release_env.py --file $STAGED_ENV_FILE --require-wechat $EFFECTIVE_REQUIRE_WECHAT_READY --require-weather-ready $REMOTE_QWEATHER_VALIDATION_PENDING_ARG"
 
