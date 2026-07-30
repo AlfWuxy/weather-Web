@@ -43,6 +43,13 @@ def test_robots_points_to_sitemap_and_keeps_private_routes_blocked(client):
     assert response.status_code == 200
     assert "Sitemap: https://yilaoweather.org/sitemap.xml" in body
     assert "Allow: /llms.txt" in body
+    assert (
+        "Content-Signal: ai-train=no, search=yes, ai-input=yes"
+        in body
+    )
+    assert response.headers["Content-Signal"] == (
+        "ai-train=no, search=yes, ai-input=yes"
+    )
     for path in (
         "/admin",
         "/api/",
@@ -79,6 +86,9 @@ def test_sitemap_contains_only_fixed_anonymous_pages_and_ignores_host(client):
 
     assert response.status_code == 200
     assert response.mimetype == "application/xml"
+    assert response.headers["Content-Signal"] == (
+        "ai-train=no, search=yes, ai-input=yes"
+    )
     assert locations == INDEXABLE_PATHS
     assert all("?" not in location for location in locations)
     assert all("attacker.example" not in location for location in locations)
@@ -89,6 +99,15 @@ def test_home_has_search_metadata_canonical_and_valid_json_ld(client):
     body = response.get_data(as_text=True)
 
     assert response.status_code == 200
+    assert response.headers["Content-Signal"] == (
+        "ai-train=no, search=yes, ai-input=yes"
+    )
+    assert (
+        '<https://yilaoweather.org/llms.txt>; rel="describedby"'
+        in response.headers["Link"]
+    )
+    assert 'rel="sitemap"' not in response.headers["Link"]
+    assert 'rel="alternate"' not in response.headers["Link"]
     assert _canonical(body) == "https://yilaoweather.org/"
     assert _meta_content(body, "robots") == "index, follow"
     description = _meta_content(body, "description")
@@ -133,6 +152,9 @@ def test_llms_txt_lists_only_public_discovery_pages_and_privacy_boundary(client)
     assert response.status_code == 200
     assert response.mimetype == "text/plain"
     assert response.headers["X-Robots-Tag"] == "index, follow"
+    assert response.headers["Content-Signal"] == (
+        "ai-train=no, search=yes, ai-input=yes"
+    )
     assert response.headers["Cache-Control"] == "public, max-age=3600"
     assert "实验性 AI 发现摘要" in body
     assert "不代表正式或通用的网络标准" in body
@@ -210,6 +232,10 @@ def test_public_content_pages_have_unique_descriptions_and_canonical_urls(
         response = client.get(path)
         body = response.get_data(as_text=True)
         assert response.status_code == 200
+        assert response.headers["Content-Signal"] == (
+            "ai-train=no, search=yes, ai-input=yes"
+        )
+        assert "Link" not in response.headers
         assert _meta_content(body, "robots") == "index, follow"
         assert "?" not in _canonical(body)
         descriptions.add(_meta_content(body, "description"))
@@ -220,6 +246,8 @@ def test_login_and_private_pages_are_noindex(client, db_session):
     login = client.get("/login")
 
     assert login.status_code == 200
+    assert "Content-Signal" not in login.headers
+    assert "Link" not in login.headers
     assert _meta_content(login.get_data(as_text=True), "robots").startswith(
         "noindex"
     )

@@ -1,0 +1,44 @@
+name: Cloudflare Edge CI
+
+on:
+  pull_request:
+    paths:
+      - "cloudflare/ai-discovery-worker/**"
+      - "blueprints/public.py"
+      - "core/hooks.py"
+      - "tests/test_seo.py"
+      - ".github/workflows/cloudflare-edge.yml"
+  push:
+    branches:
+      - main
+      - "codex/**"
+
+permissions:
+  contents: read
+
+jobs:
+  edge:
+    name: Cloudflare 边缘可发布提交证明
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: 配置 Node.js 20
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: "20"
+
+      - name: 检查 Worker 与测试语法
+        run: |
+          node --check cloudflare/ai-discovery-worker/src/index.mjs
+          node --check cloudflare/ai-discovery-worker/tests/index.test.mjs
+          node -e "JSON.parse(require('node:fs').readFileSync('cloudflare/ai-discovery-worker/wrangler.jsonc', 'utf8'))"
+
+      - name: 运行边缘路由契约测试
+        run: node --test cloudflare/ai-discovery-worker/tests/*.test.mjs
+
+      - name: 检查提交差异
+        run: git show --check --oneline --no-renames HEAD

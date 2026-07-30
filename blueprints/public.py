@@ -74,6 +74,7 @@ from utils.validators import sanitize_input
 
 bp = Blueprint('public', __name__)
 SEO_FALLBACK_BASE_URL = 'https://yilaoweather.org'
+PUBLIC_CONTENT_SIGNAL = 'ai-train=no, search=yes, ai-input=yes'
 PUBLIC_SITEMAP_PATHS = (
     '/',
     '/risk',
@@ -89,6 +90,7 @@ PUBLIC_COOLING_CANDIDATE_PATH = (
     / 'cooling_resource_candidates.json'
 )
 ROBOTS_TXT = """User-agent: *
+Content-Signal: ai-train=no, search=yes, ai-input=yes
 Allow: /
 Allow: /llms.txt
 Disallow: /admin
@@ -307,6 +309,7 @@ def robots_txt():
     )
     response = Response(body, content_type='text/plain; charset=utf-8')
     response.headers['Cache-Control'] = 'public, max-age=300'
+    response.headers['Content-Signal'] = PUBLIC_CONTENT_SIGNAL
     return response
 
 
@@ -328,6 +331,7 @@ def sitemap_xml():
         content_type='application/xml; charset=utf-8',
     )
     response.headers['Cache-Control'] = 'public, max-age=3600'
+    response.headers['Content-Signal'] = PUBLIC_CONTENT_SIGNAL
     return response
 
 
@@ -370,6 +374,7 @@ def llms_txt():
     )
     response = Response(body, content_type='text/plain; charset=utf-8')
     response.headers['Cache-Control'] = 'public, max-age=3600'
+    response.headers['Content-Signal'] = PUBLIC_CONTENT_SIGNAL
     response.headers['X-Robots-Tag'] = 'index, follow'
     return response
 

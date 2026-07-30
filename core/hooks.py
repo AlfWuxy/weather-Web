@@ -35,6 +35,11 @@ logger = logging.getLogger(__name__)
 MAX_JSON_BYTES = 10 * 1024
 MAX_JSON_DEPTH = 5
 SEO_FALLBACK_BASE_URL = 'https://yilaoweather.org'
+SEO_PUBLIC_CONTENT_SIGNAL = 'ai-train=no, search=yes, ai-input=yes'
+SEO_HOME_DISCOVERY_LINK = (
+    '<https://yilaoweather.org/llms.txt>; rel="describedby"; '
+    'type="text/plain"; title="AI discovery summary"'
+)
 SEO_INDEXABLE_ENDPOINTS = {
     'public.index': '/',
     'public.public_risk': '/risk',
@@ -234,6 +239,15 @@ def register_hooks(app):
                 'Strict-Transport-Security',
                 'max-age=31536000; includeSubDomains',
             )
+        if request.endpoint in SEO_INDEXABLE_ENDPOINTS:
+            # 公开白名单页面声明可用于搜索与即时 AI 引用，训练用途不授权。
+            response.headers.setdefault(
+                'Content-Signal',
+                SEO_PUBLIC_CONTENT_SIGNAL,
+            )
+            if request.endpoint == 'public.index':
+                # llms.txt 是站点说明，只从首页用已注册的 describedby 关系发现。
+                response.headers.setdefault('Link', SEO_HOME_DISCOVERY_LINK)
         if request.endpoint in {
             'public.account_link',
             'public.account_link_phone',
