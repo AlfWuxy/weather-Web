@@ -10,6 +10,8 @@
 
 Worker 不接管网页、登录、API、天气、风险或用户数据。源站发布完成并验证三个端点后，应删除 Worker Route，避免长期维护两份内容。
 
+当前 sitemap 与 `llms.txt` 只列出实测返回 HTTP 200 的五个公开页面。`/duchang-heat-vulnerability-map` 在旧源站仍为 404，暂不进入发现清单；源站 v1.1.1 上线并实测该页面返回 200 后，再恢复该 URL。
+
 ## 内容用途边界
 
 公开内容声明：
@@ -52,7 +54,7 @@ https://www.yilaoweather.org/llms.txt*
 - `Content-Signal: ai-train=no, search=yes, ai-input=yes`。
 - Content-Type 与正文正确。
 - `robots.txt` 含 Sitemap 和私密路径边界。
-- Sitemap 只含六个固定匿名 URL。
+- Sitemap 只含五个当前在线匿名 URL，不含 404 页面。
 - `llms.txt` 不含私密页面 URL。
 
 还要确认 `/`、`/risk`、`/healthz`、`/admin` 和 `/mp/api/` 的状态、安全头与缓存行为没有变化。
@@ -62,3 +64,5 @@ https://www.yilaoweather.org/llms.txt*
 按 `www`、apex 的逆序删除六条 Route。Worker 脚本可以保留为未绑定版本。随后精确清理这六个 URL 的 Cloudflare 缓存，并确认请求重新回到源站。
 
 源站正式更新后，先核对源站三个端点的正文与响应头，再解绑 Worker Route并定点清缓存。
+
+恢复脆弱性地图 URL 前，还必须确认 `/duchang-heat-vulnerability-map` 返回 HTTP 200、公开页面不要求登录，并且不暴露家庭、手机号、微信身份、绑定码或精确位置。

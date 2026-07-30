@@ -13,7 +13,6 @@ export const PUBLIC_URLS = Object.freeze([
   "https://yilaoweather.org/",
   "https://yilaoweather.org/risk",
   "https://yilaoweather.org/cooling",
-  "https://yilaoweather.org/duchang-heat-vulnerability-map",
   "https://yilaoweather.org/transparency",
   "https://yilaoweather.org/about/trust-network",
 ]);
@@ -70,7 +69,6 @@ const LLMS_BODY = `# 宜老天气通
 - [主页](https://yilaoweather.org/)
 - [公开天气风险与行动建议](https://yilaoweather.org/risk)
 - [已核验避暑资源](https://yilaoweather.org/cooling)
-- [都昌县热暴露与老年人口脆弱性聚合地图](https://yilaoweather.org/duchang-heat-vulnerability-map)
 - [指标透明度](https://yilaoweather.org/transparency)
 - [信任网络说明](https://yilaoweather.org/about/trust-network)
 
@@ -85,7 +83,7 @@ const LLMS_BODY = `# 宜老天气通
 - 不抓取登录后页面、管理后台、API、家庭与照护关系、社区私密工作区、手机号、微信身份、绑定码或用户精确位置。
 - 地表温度不是气温、体感温度或个人医疗风险评分；候选地点必须完成人工核验后才会进入正式资源页。
 
-English note: The map contains de-identified, modeled ~1 km research grids within Duchang County, not county-level totals or household records. Private user and community data must not be crawled.
+English note: Public research content is de-identified and aggregated within Duchang County. Private user and community data must not be crawled.
 `;
 
 export const DISCOVERY_RESOURCES = Object.freeze({
