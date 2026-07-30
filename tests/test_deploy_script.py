@@ -12,6 +12,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+DEPENDENCY_INSTALLER = ROOT / "scripts" / "install_release_dependencies.sh"
 
 
 def _load_deploy_script():
@@ -475,9 +476,10 @@ def test_deploy_script_sets_precompute_python_path():
 def test_deploy_script_uses_isolated_release_and_server_transaction():
     content = _load_deploy_script()
     activate = _load_activate_script()
+    installer = DEPENDENCY_INSTALLER.read_text(encoding="utf-8")
 
     assert 'upload_files "$RELEASE_APP"' in content
-    assert 'python3 -m venv $RELEASE_VENV' in content
+    assert 'python3 -m venv "$RELEASE_VENV"' in installer
     assert 'bash $RELEASE_APP/scripts/activate_release.sh' in content
     assert 'upload_files "$PROJECT_DIR"' not in content
     assert 'apt-get' not in content
@@ -489,6 +491,105 @@ def test_deploy_script_uses_isolated_release_and_server_transaction():
     assert 'STAGED_ENV_FILE="$NEW_RELEASE/staged.env"' in content
     assert 'trap on_exit EXIT' in activate
     assert 'flock' in activate.lower()
+
+
+def test_dependency_install_is_memory_bounded_before_runtime_preflight():
+    content = _load_deploy_script()
+    start = content.index('echo "步骤6: 为新版本创建独立虚拟环境..."')
+    end = content.index(
+        'echo "步骤6.1: 在停止生产服务前完成低内存隔离预检..."'
+    )
+    install_block = content[start:end]
+    activation = content.index('bash $RELEASE_APP/scripts/activate_release.sh')
+
+    assert install_block.count(
+        'systemd-run --quiet --wait --pipe --collect'
+    ) == 1
+    assert '--property=MemoryHigh=192M' in install_block
+    assert '--property=MemoryMax=256M' in install_block
+    assert '--property=MemorySwapMax=0' in install_block
+    assert '--property=TasksMax=64' in install_block
+    assert '--property=OOMPolicy=stop' in install_block
+    assert '--property=TimeoutStartSec=15min' in install_block
+    assert '--property=RuntimeMaxSec=15min' in install_block
+    assert '--property=PrivateTmp=yes' in install_block
+    assert '--property=PrivateDevices=yes' in install_block
+    assert '--property=NoNewPrivileges=yes' in install_block
+    assert '--property=PrivateNetwork=yes' not in install_block
+    assert 'INSTALL_MEM_TOTAL_KIB=' in install_block
+    assert 'INSTALL_MEM_AVAILABLE_KIB=' in install_block
+    assert 'INSTALL_AVAILABLE_MIB=' in install_block
+    assert 'INSTALL_INODE_USE_PERCENT=' in install_block
+    assert '460800' in install_block
+    assert '327680' in install_block
+    assert '2048' in install_block
+    assert 'PIP_NO_CACHE_DIR=1' in install_block
+    assert 'PIP_DISABLE_PIP_VERSION_CHECK=1' in install_block
+    assert 'PYTHONDONTWRITEBYTECODE=1' in install_block
+    assert 'INSTALL_UNIT=case-weather-install-$RELEASE_ID.service' in install_block
+    assert 'trap cleanup_install EXIT' in install_block
+    assert 'rm -rf -- \\"\\$INSTALL_ROOT\\"' in install_block
+    assert 'systemctl stop \\"\\$INSTALL_UNIT\\"' in install_block
+    assert 'exit \\"\\$INSTALL_CLEANUP_STATUS\\"' in install_block
+    assert (
+        install_block.index('systemctl stop \\"\\$INSTALL_UNIT\\"')
+        < install_block.index('rm -rf -- \\"\\$INSTALL_ROOT\\"')
+    )
+    assert 'scripts/install_release_dependencies.sh' in install_block
+    assert content.index('scripts/install_release_dependencies.sh') < activation
+    assert 'retry' not in install_block.lower()
+
+
+def test_dependency_installer_rejects_wrong_lock_before_creating_venv(tmp_path):
+    release_venv = tmp_path / "venv"
+    metadata_dir = tmp_path / "metadata"
+
+    result = subprocess.run(
+        [
+            "bash",
+            str(DEPENDENCY_INSTALLER),
+            str(ROOT),
+            str(release_venv),
+            str(metadata_dir),
+            "0" * 64,
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 65
+    assert "requirements.lock 摘要不匹配" in result.stderr
+    assert not release_venv.exists()
+    assert not metadata_dir.exists()
+
+
+def test_dependency_installer_keeps_hashes_binary_only_and_no_cache():
+    content = DEPENDENCY_INSTALLER.read_text(encoding="utf-8")
+
+    assert "set -euo pipefail" in content
+    assert '--no-cache-dir' in content
+    assert '--no-compile' in content
+    assert '--require-hashes' in content
+    assert '--only-binary=:all:' in content
+    assert 'pip inspect --local' in content
+    assert 'requirements-lock.sha256' in content
+    assert 'gunicorn' in content
+
+
+def test_production_gunicorn_uses_single_worker_on_low_memory_host():
+    content = _load_deploy_script()
+    start = content.index(
+        'cat > $NEW_RELEASE/systemd/case-weather.service'
+    )
+    end = content.index(
+        'cat > $NEW_RELEASE/systemd/case-weather-backup.service'
+    )
+    service_block = content[start:end]
+
+    assert '--workers 1 --bind 127.0.0.1:5000' in service_block
+    assert '--workers 3' not in service_block
+    assert '--preload' not in service_block
 
 
 def test_preflight_finishes_before_server_transaction_can_stop_units():
@@ -524,6 +625,7 @@ def test_remote_preflight_is_low_memory_private_and_has_no_pytest():
     assert 'chown -R root:$RUNTIME_GROUP $RELEASE_APP $RELEASE_VENV' in preflight
     assert 'chmod -R g+rX,o-rwx $RELEASE_APP $RELEASE_VENV' in preflight
     assert preflight.count('systemd-run --quiet --wait --collect') == 3
+    assert preflight.count('.service\\"') == 3
     assert preflight.count('--property=User=$RUNTIME_USER') == 3
     assert preflight.count('--property=Group=$RUNTIME_GROUP') == 3
     assert preflight.count('--property=MemoryMax=96M') == 3
@@ -540,7 +642,16 @@ def test_remote_preflight_is_low_memory_private_and_has_no_pytest():
     assert 'PYTHONPYCACHEPREFIX=\\"\\$PREFLIGHT_PYCACHE\\"' in preflight
     assert 'PIP_NO_INDEX=1' in preflight
     assert '-m compileall -q -j 1' in preflight
-    assert '/bin/bash -n \\"\\$file\\"' in preflight
+    for shell_path in (
+        'scripts/deploy.sh',
+        'scripts/install_release_dependencies.sh',
+        'scripts/activate_release.sh',
+        'scripts/server_migrate.sh',
+        'scripts/weather_cache_sync.sh',
+        'scripts/backup.sh',
+    ):
+        assert f'/bin/bash -n {shell_path}' in preflight
+    assert '$file' not in preflight
     assert 'scripts/release_runtime_smoke.py run' in preflight
     assert 'scripts/release_runtime_smoke.py \\\n    verify-receipt' in preflight
     assert '--expected-python-minor 3.11' in preflight
@@ -1572,7 +1683,7 @@ def test_qweather_preactivation_cleanup_covers_all_pre_activation_failures():
         '--require-wechat $EFFECTIVE_REQUIRE_WECHAT_READY '
         '--require-weather-ready '
         '$REMOTE_QWEATHER_VALIDATION_PENDING_ARG"',
-        '$RELEASE_VENV/bin/python -m pip install',
+        'scripts/install_release_dependencies.sh',
         'scripts/release_runtime_smoke.py run',
         'systemd-analyze verify $NEW_RELEASE/systemd/*.service',
         '--seed-persistent-budget',

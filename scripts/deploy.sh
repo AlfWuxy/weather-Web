@@ -2799,7 +2799,84 @@ remote_exec "python3 $RELEASE_APP/scripts/validate_release_env.py --file $STAGED
 
 echo ""
 echo "步骤6: 为新版本创建独立虚拟环境..."
-remote_exec "set -e; EXPECTED_LOCK_SHA=c7e450c30d7d3c56bdf210f69a58620cba9d99e462e0e2c254ab45456271f853; ACTUAL_LOCK_SHA=\$(python3 -c 'import hashlib; print(hashlib.sha256(open(\"$RELEASE_APP/requirements.lock\", \"rb\").read()).hexdigest())'); [ \"\$ACTUAL_LOCK_SHA\" = \"\$EXPECTED_LOCK_SHA\" ] || { echo 'requirements.lock 摘要不匹配。' >&2; exit 1; }; python3 -m venv $RELEASE_VENV; $RELEASE_VENV/bin/python -m pip install --index-url https://pypi.org/simple --require-hashes --only-binary=:all: -r $RELEASE_APP/requirements.lock; [ -x $RELEASE_VENV/bin/gunicorn ] || { echo '锁定依赖安装后缺少 gunicorn。' >&2; exit 1; }; umask 077; mkdir -p $NEW_RELEASE/private-metadata; $RELEASE_VENV/bin/python --version > $NEW_RELEASE/private-metadata/python-version.txt 2>&1; printf '%s\n' \"\$ACTUAL_LOCK_SHA\" > $NEW_RELEASE/private-metadata/requirements-lock.sha256; $RELEASE_VENV/bin/python -m pip inspect --local > $NEW_RELEASE/private-metadata/pip-inspect.json; chmod 0700 $NEW_RELEASE/private-metadata; chmod 0600 $NEW_RELEASE/private-metadata/python-version.txt $NEW_RELEASE/private-metadata/requirements-lock.sha256 $NEW_RELEASE/private-metadata/pip-inspect.json"
+remote_exec "set -eu
+# 512 MiB 生产机只允许在资源足够时开始安装，门禁失败不会触碰旧服务。
+INSTALL_MEM_TOTAL_KIB=\$(awk '/^MemTotal:/ {print \$2}' /proc/meminfo)
+INSTALL_MEM_AVAILABLE_KIB=\$(awk '/^MemAvailable:/ {print \$2}' /proc/meminfo)
+INSTALL_AVAILABLE_MIB=\$(df -Pm $RELEASE_ROOT | awk 'NR == 2 {print \$4}')
+INSTALL_INODE_USE_PERCENT=\$(df -Pi $RELEASE_ROOT | awk 'NR == 2 {gsub(\"%\", \"\", \$5); print \$5}')
+[ \"\${INSTALL_MEM_TOTAL_KIB:-0}\" -ge 460800 ] || {
+    echo '服务器总内存不足 450 MiB，停止依赖安装。' >&2
+    exit 1
+}
+[ \"\${INSTALL_MEM_AVAILABLE_KIB:-0}\" -ge 327680 ] || {
+    echo '服务器可用内存不足 320 MiB，停止依赖安装。' >&2
+    exit 1
+}
+[ \"\${INSTALL_AVAILABLE_MIB:-0}\" -ge 2048 ] || {
+    echo '发布磁盘可用空间不足 2048 MiB，停止依赖安装。' >&2
+    exit 1
+}
+[ \"\${INSTALL_INODE_USE_PERCENT:-100}\" -le 90 ] || {
+    echo '发布磁盘可用 inode 不足 10%，停止依赖安装。' >&2
+    exit 1
+}
+
+umask 077
+INSTALL_ROOT=$NEW_RELEASE/dependency-install
+INSTALL_HOME=\$INSTALL_ROOT/home
+INSTALL_TMP=\$INSTALL_ROOT/tmp
+INSTALL_UNIT=case-weather-install-$RELEASE_ID.service
+cleanup_install() {
+    INSTALL_CLEANUP_STATUS=\$?
+    if systemctl is-active --quiet \"\$INSTALL_UNIT\"; then
+        systemctl stop \"\$INSTALL_UNIT\" >/dev/null 2>&1 \
+            || INSTALL_CLEANUP_STATUS=1
+        for INSTALL_STOP_ATTEMPT in 1 2 3 4 5; do
+            systemctl is-active --quiet \"\$INSTALL_UNIT\" || break
+            sleep 1
+        done
+    fi
+    if systemctl is-active --quiet \"\$INSTALL_UNIT\"; then
+        echo \"依赖安装 unit 未停止，保留临时目录并停止发布: \$INSTALL_UNIT\" >&2
+        INSTALL_CLEANUP_STATUS=1
+    else
+        rm -rf -- \"\$INSTALL_ROOT\"
+    fi
+    exit \"\$INSTALL_CLEANUP_STATUS\"
+}
+trap cleanup_install EXIT
+install -d -o root -g root -m 0700 \"\$INSTALL_ROOT\" \"\$INSTALL_HOME\" \"\$INSTALL_TMP\"
+
+# PyPI 网络仅对本轮受限安装开放；超内存或超时会让发布在激活前安全停止。
+systemd-run --quiet --wait --pipe --collect --service-type=exec \
+    --unit=\"\$INSTALL_UNIT\" \
+    --property=MemoryHigh=192M \
+    --property=MemoryMax=256M \
+    --property=MemorySwapMax=0 \
+    --property=TasksMax=64 \
+    --property=OOMPolicy=stop \
+    --property=TimeoutStartSec=15min \
+    --property=RuntimeMaxSec=15min \
+    --property=PrivateTmp=yes \
+    --property=PrivateDevices=yes \
+    --property=NoNewPrivileges=yes \
+    --working-directory=$RELEASE_APP \
+    /usr/bin/env -i \
+    HOME=\"\$INSTALL_HOME\" \
+    TMPDIR=\"\$INSTALL_TMP\" \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_CONFIG_FILE=/dev/null \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONNOUSERSITE=1 \
+    PATH=/usr/local/bin:/usr/bin:/bin \
+    LANG=C.UTF-8 LC_ALL=C.UTF-8 \
+    /bin/bash $RELEASE_APP/scripts/install_release_dependencies.sh \
+        $RELEASE_APP \
+        $RELEASE_VENV \
+        $NEW_RELEASE/private-metadata \
+        c7e450c30d7d3c56bdf210f69a58620cba9d99e462e0e2c254ab45456271f853"
 remote_exec "$RELEASE_VENV/bin/python $RELEASE_APP/scripts/validate_release_env.py --file $STAGED_ENV_FILE --require-wechat $EFFECTIVE_REQUIRE_WECHAT_READY --require-weather-ready $REMOTE_QWEATHER_VALIDATION_PENDING_ARG --probe-persistent-budget"
 # commit 只含十六进制字符。微信正式模式会由激活脚本再次核对；
 # 网页/后端模式保留同样的来源审计记录，但不会把它冒充微信 ready 票据。
@@ -2835,7 +2912,7 @@ chmod -R g+rX,o-rwx $RELEASE_APP $RELEASE_VENV
 install -d -o $RUNTIME_USER -g $RUNTIME_GROUP -m 0700 \"\$PREFLIGHT_ROOT\" \"\$PREFLIGHT_HOME\" \"\$PREFLIGHT_TMP\" \"\$PREFLIGHT_PYCACHE\"
 
 systemd-run --quiet --wait --collect --service-type=exec \
-    --unit=\"\$PREFLIGHT_UNIT_PREFIX-compile\" \
+    --unit=\"\$PREFLIGHT_UNIT_PREFIX-compile.service\" \
     --property=User=$RUNTIME_USER \
     --property=Group=$RUNTIME_GROUP \
     --property=UMask=0077 \
@@ -2863,7 +2940,7 @@ systemd-run --quiet --wait --collect --service-type=exec \
         app.py blueprints core services utils migrations
 
 systemd-run --quiet --wait --collect --service-type=exec \
-    --unit=\"\$PREFLIGHT_UNIT_PREFIX-shell\" \
+    --unit=\"\$PREFLIGHT_UNIT_PREFIX-shell.service\" \
     --property=User=$RUNTIME_USER \
     --property=Group=$RUNTIME_GROUP \
     --property=UMask=0077 \
@@ -2881,13 +2958,17 @@ systemd-run --quiet --wait --collect --service-type=exec \
     PATH=$RELEASE_VENV/bin:/usr/local/bin:/usr/bin:/bin \
     LANG=C.UTF-8 LC_ALL=C.UTF-8 \
     USER=$RUNTIME_USER LOGNAME=$RUNTIME_USER \
-    /bin/bash -c 'set -eu
-for file in scripts/deploy.sh scripts/activate_release.sh scripts/server_migrate.sh scripts/weather_cache_sync.sh scripts/backup.sh; do
-    /bin/bash -n \"\$file\"
-done'
+    /bin/bash -ceu '
+/bin/bash -n scripts/deploy.sh
+/bin/bash -n scripts/install_release_dependencies.sh
+/bin/bash -n scripts/activate_release.sh
+/bin/bash -n scripts/server_migrate.sh
+/bin/bash -n scripts/weather_cache_sync.sh
+/bin/bash -n scripts/backup.sh
+'
 
 systemd-run --quiet --wait --collect --service-type=exec \
-    --unit=\"\$PREFLIGHT_UNIT_PREFIX-runtime\" \
+    --unit=\"\$PREFLIGHT_UNIT_PREFIX-runtime.service\" \
     --property=User=$RUNTIME_USER \
     --property=Group=$RUNTIME_GROUP \
     --property=UMask=0077 \
@@ -2968,7 +3049,7 @@ ReadWritePaths=$PROJECT_DIR/instance $PROJECT_DIR/storage $PROJECT_DIR/run
 WorkingDirectory=$CURRENT_LINK/app
 EnvironmentFile=$PROJECT_DIR/.env
 Environment=PYTHONUNBUFFERED=1
-ExecStart=$CURRENT_LINK/venv/bin/gunicorn --workers 3 --bind 127.0.0.1:5000 --timeout 120 app:app
+ExecStart=$CURRENT_LINK/venv/bin/gunicorn --workers 1 --bind 127.0.0.1:5000 --timeout 120 app:app
 Restart=always
 RestartSec=10
 

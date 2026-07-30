@@ -258,7 +258,7 @@ AuditLog (审计日志)
 ┌────────────────────┴────────────────────┐
 │           Gunicorn (WSGI服务器)          │
 │              :5000 (内部)               │
-│           workers = 4                   │
+│           workers = 1                   │
 └────────────────────┬────────────────────┘
                      │
 ┌────────────────────┴────────────────────┐
@@ -346,7 +346,7 @@ DEPLOY_REQUIRE_WECHAT_READY=0 \
 
 两种模式都要求干净 Git HEAD，在本机 `0700` 临时目录内生成 `0600` commit 票据，并用 `git archive` 导出固定代码快照。首次 SSH 前，部署器核对 GitHub 远程分支 tip、精确 commit、push event、workflow 路径以及最新 run 中的稳定证明任务。网页与后端模式要求 `可发布提交证明`；微信正式模式额外要求 `小程序可发布提交证明`。证明收据随 release 保存为 root 私有 `0600` metadata，并在激活产生任何状态变更前再次离线核对。
 
-`deploy.sh` 会创建不可变 release、独立虚拟环境和候选配置，上传时排除所有 `.env*` 与 `project.private.config.json`。服务器停服前不再运行会导入完整 Flask 应用的 pytest；完整 Python 3.11/3.12、四个激活事务分片和小程序 Node 测试由 GitHub runner 承担。发布主机只在 `MemoryMax=96M`、`MemorySwapMax=0`、`PrivateNetwork=yes` 的 transient unit 中执行 `compileall`、Shell 语法、锁定依赖、Python 3.11、四个轻量包导入和 Alembic 单 head 检查。激活停止旧服务并完成真实迁移后，以单 worker 候选进程验证 `/healthz`、ML 的 scikit-learn 1.7.2、可用且未陈旧的 QWeather 小程序快照，以及不含“天气更新中”或“风险待刷新”的公开风险页。候选配置生成时记录活动 `.env` 和 `current` 链接摘要；激活取得 `deploy.lock` 后先执行 CAS，任何并发部署或人工配置变化都会让陈旧候选停止。激活事务随后负责备份数据库与环境、执行 Alembic、原子切换 `current`、替换 systemd 单元并启动 timer；服务、两阶段 timer、缓存服务的 `OnSuccess`/`OnFailure`、单调时钟剩余窗口、`current` 链接、暂存环境清理和公网健康检查全部通过后才写入 `COMMITTED`。进入向前提交阶段后的复核失败会写入 `POST_COMMIT_ATTENTION.txt`，阻断下一次激活并保留新数据库。禁止把代码 rsync 到持久化状态目录后手工重启，这会绕过预检、迁移校验和回滚边界。
+`deploy.sh` 会创建不可变 release、独立虚拟环境和候选配置，上传时排除所有 `.env*` 与 `project.private.config.json`。服务器停服前不再运行会导入完整 Flask 应用的 pytest；完整 Python 3.11/3.12、四个激活事务分片和小程序 Node 测试由 GitHub runner 承担。512 MiB 发布主机在安装前要求总内存至少 450 MiB、可用内存至少 320 MiB、项目盘可用空间至少 2048 MiB 且 inode 可用比例至少 10%。依赖创建、哈希锁安装、Gunicorn 存在性检查和 `pip inspect` 全部进入 `MemoryHigh=192M`、`MemoryMax=256M`、无 swap、最长 15 分钟的 transient unit；PyPI 网络只在该安装阶段开放，OOM、超时或资源门禁失败都会在激活前停止，不自动重试。随后只在 `MemoryMax=96M`、`MemorySwapMax=0`、`PrivateNetwork=yes` 的 transient unit 中执行 `compileall`、Shell 语法、锁定依赖、Python 3.11、四个轻量包导入和 Alembic 单 head 检查。激活停止旧服务并完成真实迁移后，以单 worker 候选进程验证 `/healthz`、ML 的 scikit-learn 1.7.2、可用且未陈旧的 QWeather 小程序快照，以及不含“天气更新中”或“风险待刷新”的公开风险页；正式 Gunicorn 同样固定为单 worker，避免在小内存主机上重复加载科学计算依赖。候选配置生成时记录活动 `.env` 和 `current` 链接摘要；激活取得 `deploy.lock` 后先执行 CAS，任何并发部署或人工配置变化都会让陈旧候选停止。激活事务随后负责备份数据库与环境、执行 Alembic、原子切换 `current`、替换 systemd 单元并启动 timer；服务、两阶段 timer、缓存服务的 `OnSuccess`/`OnFailure`、单调时钟剩余窗口、`current` 链接、暂存环境清理和公网健康检查全部通过后才写入 `COMMITTED`。进入向前提交阶段后的复核失败会写入 `POST_COMMIT_ATTENTION.txt`，阻断下一次激活并保留新数据库。禁止把代码 rsync 到持久化状态目录后手工重启，这会绕过预检、迁移校验和回滚边界。
 
 ### 7.4 数据库备份策略
 
