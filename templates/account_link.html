@@ -1,0 +1,107 @@
+{% extends "base.html" %}
+
+{% block title %}跨端账号 · 宜老天气通{% endblock %}
+{% block body_class %}account-link-page{% endblock %}
+
+{% block content %}
+<div class="container py-4 py-lg-5" style="max-width: 880px;">
+    <header class="mb-4">
+        <span class="section-kicker">网页版与微信小程序</span>
+        <h1 class="mt-2 mb-2">把两端串成同一个账号</h1>
+        <p class="text-muted mb-0">
+            手机号当前只保存为待验证标识，不发送短信验证码，也不能用于登录。
+        </p>
+    </header>
+
+    <div class="alert alert-light border" role="note">
+        <strong>推荐顺序：</strong>
+        先保存手机号，再到微信小程序完成微信登录，最后输入这里生成的 8 位码。绑定完成后，两端会读取同一份家庭照护数据。
+    </div>
+
+    <div class="row g-4">
+        <div class="col-lg-6">
+            <section class="card shadow-sm h-100">
+                <div class="card-body p-4">
+                    <div class="d-flex align-items-center gap-2 mb-3">
+                        <span class="badge text-bg-primary">1</span>
+                        <h2 class="h5 mb-0">保存待验证手机号</h2>
+                    </div>
+                    <form method="POST" action="{{ url_for('public.account_link_phone') }}">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <div class="mb-3">
+                            <label class="form-label" for="accountPhone">手机号</label>
+                            <input
+                                class="form-control"
+                                id="accountPhone"
+                                name="phone"
+                                type="tel"
+                                inputmode="tel"
+                                autocomplete="tel"
+                                value="{{ current_user.phone_normalized or '' }}"
+                                placeholder="例如 13800138000"
+                                required
+                            >
+                            <div class="form-text">保存后仍需使用用户名登录。状态：待验证。</div>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label" for="phoneCurrentPassword">当前密码</label>
+                            <input class="form-control" id="phoneCurrentPassword" name="current_password" type="password" autocomplete="current-password" required>
+                        </div>
+                        <button class="btn btn-outline-primary w-100" type="submit">保存手机号</button>
+                    </form>
+                </div>
+            </section>
+        </div>
+
+        <div class="col-lg-6">
+            <section class="card shadow-sm h-100">
+                <div class="card-body p-4">
+                    <div class="d-flex align-items-center gap-2 mb-3">
+                        <span class="badge text-bg-primary">2</span>
+                        <h2 class="h5 mb-0">生成一次性绑定码</h2>
+                    </div>
+
+                    {% if last_link_code %}
+                    <div class="alert alert-warning">
+                        <div class="fw-semibold">请现在打开微信小程序输入</div>
+                        <input
+                            class="form-control mt-2 text-center fs-3 fw-bold"
+                            value="{{ last_link_code }}"
+                            inputmode="numeric"
+                            aria-label="一次性微信小程序绑定码"
+                            readonly
+                        >
+                        <div class="small mt-2">
+                            10 分钟内有效，只能使用一次。{% if last_link_expires_at %}到期：{{ last_link_expires_at }}{% endif %}
+                        </div>
+                    </div>
+                    {% endif %}
+
+                    <form method="POST" action="{{ url_for('public.account_link_code') }}">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <div class="mb-3">
+                            <label class="form-label" for="linkCurrentPassword">当前密码</label>
+                            <input class="form-control" id="linkCurrentPassword" name="current_password" type="password" autocomplete="current-password" required>
+                            <div class="form-text">绑定相当于新增登录身份，所以需要再次确认密码。</div>
+                        </div>
+                        <div class="form-check mb-3">
+                            <input class="form-check-input" type="checkbox" value="1" name="miniprogram_privacy_consent" id="accountLinkConsent" required>
+                            <label class="form-check-label small" for="accountLinkConsent">
+                                我已阅读<a href="{{ url_for('public.transparency') }}#privacy" target="_blank" rel="noopener">隐私与使用边界</a>，并确认绑定本人微信。
+                            </label>
+                        </div>
+                        <button class="btn btn-primary w-100" type="submit">生成 8 位绑定码</button>
+                    </form>
+                </div>
+            </section>
+        </div>
+    </div>
+
+    <div class="mt-4 d-flex flex-wrap gap-2">
+        <a class="btn btn-outline-secondary" href="{{ url_for('public.index') }}">返回首页</a>
+        {% if not config.get('WECHAT_FORMAL_RUNTIME') %}
+        <a class="btn btn-outline-secondary" href="{{ url_for('user.profile') }}">返回个人设置</a>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

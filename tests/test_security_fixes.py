@@ -229,6 +229,10 @@ def test_validators_comprehensive():
     valid, msg = validate_username('ab')  # 太短
     assert valid is False
 
+    for phone_username in ('13800138000', '8613800138000', '008613800138000'):
+        valid, msg = validate_username(phone_username)
+        assert valid is False
+
     # 密码验证
     valid, result = validate_password('password1234')
     assert valid is True

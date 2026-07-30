@@ -24,6 +24,55 @@
       </view>
     </scroll-view>
 
+    <view class="community-map-card card">
+      <view class="row-between map-heading">
+        <view>
+          <view class="card-title">社区位置地图</view>
+          <view class="small muted">当前筛选中 {{mappableCount}} 个社区有已维护坐标</view>
+        </view>
+        <image class="map-heading-icon" src="/assets/icons/map.png" mode="aspectFit" aria-hidden="true" />
+      </view>
+      <map
+        wx:if="{{mapReady}}"
+        class="community-map"
+        latitude="{{mapLatitude}}"
+        longitude="{{mapLongitude}}"
+        scale="{{mapScale}}"
+        markers="{{mapMarkers}}"
+        enable-zoom="{{true}}"
+        enable-scroll="{{true}}"
+        bindmarkertap="onMarkerTap"
+        role="region"
+        aria-role="region"
+        aria-label="社区位置地图，共 {{mappableCount}} 个社区标记。标记只显示社区名称，风险与脆弱性请在地图下方或社区列表查看。"
+      ></map>
+      <view wx:else class="map-empty" role="status" aria-role="status" aria-live="polite">
+        <view class="card-title">当前筛选暂无已维护坐标</view>
+        <view class="small muted">社区数据仍可在下方列表查看，系统不会猜测缺失位置。</view>
+      </view>
+      <view class="small muted map-note">地图默认不请求你的定位。点击标记或下方“在地图查看”后，才会在地图外显示该社区的公开聚合指标。</view>
+
+      <view
+        wx:if="{{selectedCommunity}}"
+        class="map-selection"
+        role="status"
+        aria-role="status"
+        aria-live="polite"
+        aria-label="已选择 {{selectedCommunity.name}}，{{selectedCommunity.metricLabel}} {{selectedCommunity.scoreText}}，{{selectedCommunity.label}}"
+      >
+        <view class="row-between">
+          <view class="card-title">{{selectedCommunity.name}}</view>
+          <view class="pill {{selectedCommunity.tone}}">{{selectedCommunity.label}}</view>
+        </view>
+        <view class="community-metrics">
+          <view><text class="small muted">{{selectedCommunity.metricLabel}}</text><text class="community-value">{{selectedCommunity.scoreText}}</text></view>
+          <view><text class="small muted">65+ 人口占比</text><text class="community-value">{{selectedCommunity.elderlyText}}</text></view>
+          <view wx:if="{{selectedCommunity.uncertainty !== null}}"><text class="small muted">不确定性</text><text class="community-value">{{selectedCommunity.uncertainty}}</text></view>
+        </view>
+        <button class="map-reset-button" bindtap="resetMapView" aria-label="返回当前筛选的全部社区位置">查看全部社区位置</button>
+      </view>
+    </view>
+
     <view wx:for="{{communities}}" wx:key="id" class="community-card card">
       <view class="rank" aria-label="全县排名第 {{item.globalRank}}">{{item.globalRank}}</view>
       <view class="community-copy">
@@ -37,6 +86,14 @@
           <view wx:if="{{item.uncertainty !== null}}"><text class="small muted">不确定性</text><text class="community-value">{{item.uncertainty}}</text></view>
         </view>
         <view wx:if="{{item.hotspot}}" class="small muted hotspot">空间复核：{{item.hotspot}}</view>
+        <button
+          wx:if="{{item.hasCoordinates}}"
+          class="map-focus-button"
+          data-community-id="{{item.id}}"
+          bindtap="focusCommunity"
+          aria-label="在地图查看 {{item.name}}，{{item.metricLabel}} {{item.scoreText}}，{{item.label}}"
+        >在地图查看</button>
+        <view wx:else class="small muted map-coordinate-missing">位置坐标待维护，列表指标仍可查看。</view>
       </view>
     </view>
     <status-card wx:if="{{!communities.length}}" state="empty" title="该筛选下暂无社区" detail="可切换到“全部”继续查看。" />

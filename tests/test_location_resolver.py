@@ -32,22 +32,25 @@ def test_location_resolver_amap_mock_and_cache(app, db_session, monkeypatch):
                 ]
             }
 
-    calls = {"n": 0}
+    calls = {"n": 0, "keys": []}
 
     def fake_get(url, params=None, timeout=None):
         calls["n"] += 1
+        calls["keys"].append((params or {}).get("key"))
         return FakeResp()
 
     monkeypatch.setattr("services.location_resolver.requests.get", fake_get)
 
     with app.app_context():
-        app.config["AMAP_KEY"] = "fake-key"
+        app.config["AMAP_WEB_SERVICE_KEY"] = "fake-web-service-key"
+        app.config["AMAP_KEY"] = "legacy-key-must-not-be-used"
         app.config["CITY_LOCATION_MAP"] = {}
 
         result1 = resolve_location("杭州市测试地")
         assert result1["location_code"] == "120.10,30.20"
         assert result1["provider"] == "amap"
         assert calls["n"] == 1
+        assert calls["keys"] == ["fake-web-service-key"]
 
         # second call should hit DB cache (no more requests)
         monkeypatch.setattr(

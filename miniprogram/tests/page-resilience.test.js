@@ -115,6 +115,53 @@ function deferred() {
   return { promise, reject, resolve };
 }
 
+test('首页手动重试与下拉刷新会立即重新校验天气快照', async (t) => {
+  const calls = [];
+  const originalStopPullDownRefresh = global.wx.stopPullDownRefresh;
+  t.after(() => { global.wx.stopPullDownRefresh = originalStopPullDownRefresh; });
+  global.wx.stopPullDownRefresh = () => calls.push('stop');
+  const definition = loadPage('../pages/home/index');
+  const page = makePage(definition);
+  page.loadData = async (options) => calls.push(options);
+
+  page.retry.call(page);
+  await page.onPullDownRefresh.call(page);
+
+  assert.deepEqual(calls, [
+    { force: true, revalidate: true },
+    { force: true, revalidate: true },
+    'stop',
+  ]);
+});
+
+test('所有公开页的手动重试与下拉刷新都会绕过旧缓存', () => {
+  const miniRoot = path.resolve(__dirname, '..');
+  const pageNames = [
+    'actions',
+    'alerts',
+    'community',
+    'cooling',
+    'forecast',
+    'gis',
+    'transparency',
+  ];
+  pageNames.forEach((pageName) => {
+    const source = fs.readFileSync(
+      path.join(miniRoot, 'pages', pageName, 'index.js'),
+      'utf8',
+    );
+    const explicitRefreshes = (
+      source.match(/\{\s*force:\s*true,\s*revalidate:\s*true\s*\}/g) || []
+    );
+    assert.equal(
+      explicitRefreshes.length,
+      2,
+      `${pageName} 应同时覆盖下拉刷新和显式重试`,
+    );
+    assert.doesNotMatch(source, /\{\s*force:\s*true\s*\}/);
+  });
+});
+
 test('家庭照护刷新失败时保留上次成功加载的卡片', async () => {
   authApiImpl = async () => ({
     items: [{ pair_id: 7, member: { name: '奶奶', relation: '祖母', age: 72 } }],
@@ -193,6 +240,50 @@ test('账号接口失败后清空已验证展示并提供内联错误', async ()
   assert.equal(page.data.accountVerified, false);
   assert.equal(page.data.me, null);
   assert.match(page.data.loadError, /重新|重试/);
+});
+
+test('账号注销提交 fresh wx.login code 进行服务端身份复验', async (t) => {
+  const originalShowModal = global.wx.showModal;
+  const originalLogin = global.wx.login;
+  const originalReLaunch = global.wx.reLaunch;
+  const modalCallbacks = [];
+  const requests = [];
+  t.after(() => {
+    global.wx.showModal = originalShowModal;
+    global.wx.login = originalLogin;
+    global.wx.reLaunch = originalReLaunch;
+    authApiImpl = async () => ({});
+    clearImpl = () => {};
+  });
+  global.wx.showModal = ({ success }) => {
+    if (success) modalCallbacks.push(success);
+  };
+  global.wx.login = ({ success }) => success({ code: 'fresh-delete-code' });
+  global.wx.reLaunch = () => {};
+  authApiImpl = async (options) => {
+    requests.push(options);
+    return { deleted: true };
+  };
+
+  const definition = loadPage('../pages/account/index');
+  const page = makePage(definition, {
+    accountVerified: true,
+    canDeleteAccount: true,
+    busy: false,
+  });
+
+  page.requestAccountDeletion.call(page);
+  modalCallbacks.shift()({ confirm: true });
+  await modalCallbacks.shift()({ confirm: true });
+
+  assert.deepEqual(requests, [{
+    method: 'DELETE',
+    path: '/mp/api/v1/me',
+    data: {
+      confirm: true,
+      wechat_code: 'fresh-delete-code',
+    },
+  }]);
 });
 
 ['resolve', 'reject'].forEach((staleSettlement) => {
@@ -844,6 +935,8 @@ test('公共天气页面失败会安全降级、统一退避并提供真实重�
     assert.equal(schedules.length, 7);
     assert.equal(bootstrapOptions.at(-2).force, true);
     assert.equal(bootstrapOptions.at(-1).force, true);
+    assert.equal(bootstrapOptions.at(-2).revalidate, true);
+    assert.equal(bootstrapOptions.at(-1).revalidate, true);
 
     const miniRoot = path.resolve(__dirname, '..');
     const homeView = fs.readFileSync(path.join(miniRoot, 'pages/home/index.wxml'), 'utf8');

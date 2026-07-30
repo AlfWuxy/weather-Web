@@ -6,7 +6,6 @@
 {% block body_class %}heat-exposure-gis-page{% endblock %}
 
 {% block extra_css %}
-<link rel="stylesheet" href="{{ url_for('static', filename='vendor/leaflet/dist/leaflet.css') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='css/heat-exposure-gis.css') }}">
 {% endblock %}
 
@@ -14,6 +13,7 @@
 <div class="gis-page" id="heatExposureGisApp"
      data-geojson-url="{{ gis_data_url }}"
      data-default-cell="{{ default_cell_id }}"
+     data-has-map-key="{{ '1' if amap_key and amap_security_js_code else '0' }}"
      data-transparency-url="{{ url_for('public.transparency') }}">
     <header class="gis-hero" aria-labelledby="gisTitle">
         <div>
@@ -23,7 +23,7 @@
         </div>
         <div class="gis-status-group" aria-label="数据状态">
             <span class="gis-status gis-status--pass"><i class="bi bi-check-circle-fill" aria-hidden="true"></i>独立复核程序通过</span>
-            <span class="gis-status"><i class="bi bi-globe2" aria-hidden="true"></i>WGS84</span>
+            <span class="gis-status"><i class="bi bi-globe2" aria-hidden="true"></i>高德底图 · 数据 WGS84</span>
             <span class="gis-status"><i class="bi bi-shield-lock" aria-hidden="true"></i>聚合数据</span>
         </div>
     </header>
@@ -41,6 +41,7 @@
         <div>
             <strong>解释边界</strong>
             <span>本页展示模型化人口与 Aqua 白天晴空地表温度。结果不代表个人健康风险、2 米气温、室内温度或因果效应。</span>
+            <span>新增相对分位、人口支持状态和中位数偏差均由本页现有网格即时计算，不增加逐年、逐月或个人层面的新数据。</span>
         </div>
     </aside>
 
@@ -88,6 +89,13 @@
                  class="gis-map"
                  tabindex="0"
                  aria-label="都昌县 1 km 网格交互地图。使用地图可缩放和平移，使用数据表可通过键盘访问全部网格。"></div>
+            <canvas id="gisGridCanvas"
+                    class="gis-grid-canvas"
+                    aria-hidden="true"></canvas>
+            <div id="gisMapTooltip"
+                 class="gis-cell-tooltip"
+                 role="tooltip"
+                 hidden></div>
             <div class="gis-map-loading" id="gisMapLoading" role="status" aria-live="polite">
                 <span class="spinner-border spinner-border-sm" aria-hidden="true"></span>
                 正在载入 2,593 个网格…
@@ -97,7 +105,7 @@
                 <p>下面的数据表和方法信息仍可正常使用。</p>
             </div>
             <div class="gis-north-arrow" aria-hidden="true"><span>N</span><i></i></div>
-            <div class="gis-coordinate-readout" id="gisCoordinateReadout" aria-live="polite">WGS84</div>
+            <div class="gis-coordinate-readout" id="gisCoordinateReadout" aria-live="polite">高德底图 GCJ-02 · 数据 WGS84</div>
             <div class="gis-legend" id="gisLegend" aria-label="地图图例"></div>
         </div>
 
@@ -155,7 +163,7 @@
             <article>
                 <span class="gis-method-index">01</span>
                 <h3>空间单位与显示几何 {{ metric_info('gis_display_geometry') }}</h3>
-                <p>分析单位仍是 MYD11A1 h28v06 原生正弦投影网格。地图默认以中心保持的正交方格显示，可切回原生几何；下载 GeoJSON 始终保留原生四角。</p>
+                <p>分析单位仍是 MYD11A1 h28v06 原生正弦投影网格。网页仅把显示副本转换为 GCJ-02 以对齐高德底图；地图默认以中心保持的正交方格显示，可切回原生几何；下载 GeoJSON 始终保留原生四角（WGS84）。</p>
             </article>
             <article>
                 <span class="gis-method-index">02</span>
@@ -288,6 +296,13 @@
 {% endblock %}
 
 {% block extra_js %}
-<script src="{{ url_for('static', filename='vendor/leaflet/dist/leaflet.js') }}"></script>
+{% if amap_key and amap_security_js_code %}
+<script>
+    window._AMapSecurityConfig = {
+        securityJsCode: {{ amap_security_js_code|tojson }}
+    };
+</script>
+<script src="https://webapi.amap.com/maps?v=2.0&key={{ amap_key|urlencode }}&plugin=AMap.Scale,AMap.ToolBar"></script>
+{% endif %}
 <script src="{{ url_for('static', filename='js/heat-exposure-gis.js') }}"></script>
 {% endblock %}

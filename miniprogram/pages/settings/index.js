@@ -27,6 +27,10 @@ Page({
     wx.navigateTo({ url: '/pages/bind-token/index' });
   },
 
+  goAccountLink() {
+    wx.navigateTo({ url: '/pages/bind-token/index?mode=link' });
+  },
+
   goPrivacy() {
     wx.navigateTo({ url: '/pages/privacy/index' });
   },

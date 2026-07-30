@@ -100,7 +100,8 @@ def resolve_location(query, ttl_days=30):
         }
 
     # 4) AMap geocode
-    amap_key = current_app.config.get('AMAP_KEY') or ''
+    # 只接受服务端专用 Key，废弃的 AMAP_KEY 不参与地理编码调用。
+    amap_key = current_app.config.get('AMAP_WEB_SERVICE_KEY') or ''
     if not amap_key:
         default_location = current_app.config.get('DEFAULT_LOCATION', '116.20,29.27')
         default_city = current_app.config.get('DEFAULT_CITY', '都昌')

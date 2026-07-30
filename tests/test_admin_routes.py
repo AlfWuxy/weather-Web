@@ -53,6 +53,7 @@ def test_admin_password_reset_revokes_target_sessions(app, client):
             acquisition_source='direct',
             created_at=now,
             last_login_at=now,
+            binding_auth_version=1,
         )
         db.session.add_all([api_token, identity])
         db.session.flush()
@@ -72,6 +73,7 @@ def test_admin_password_reset_revokes_target_sessions(app, client):
         target_username = target.username
         target_session_id = target.get_id()
         api_token_id = int(api_token.id)
+        identity_id = int(identity.id)
         mini_session_id = int(mini_session.id)
 
     target_client = client.application.test_client()
@@ -105,9 +107,142 @@ def test_admin_password_reset_revokes_target_sessions(app, client):
         assert db.session.get(User, target_id).check_password('ResetPassword2!')
         assert db.session.get(ApiToken, api_token_id).revoked_at is not None
         assert db.session.get(MiniProgramSession, mini_session_id).revoked_at is not None
+        assert db.session.get(
+            MiniProgramIdentity,
+            identity_id,
+        ).binding_auth_version == 1
     stale_response = target_client.get('/profile', follow_redirects=False)
     assert stale_response.status_code in (301, 302)
     assert '/login' in stale_response.headers['Location']
+
+
+def test_admin_rejects_reserved_internal_usernames(app, client):
+    from core.db_models import User
+    from core.extensions import db
+
+    with app.app_context():
+        db.drop_all()
+        db.create_all()
+        admin = User(username='admin-reserved-name', role='admin')
+        admin.set_password('AdminPassword1!')
+        ordinary_user = User(username='ordinary-admin-user', role='user')
+        ordinary_user.set_password('OrdinaryPassword1!')
+        db.session.add_all([admin, ordinary_user])
+        db.session.commit()
+        admin_id = int(admin.id)
+        ordinary_user_id = int(ordinary_user.id)
+
+    _login_as(client, admin_id)
+    csrf_token = 'admin-reserved-username-csrf'
+    with client.session_transaction() as session:
+        session['_csrf_token'] = csrf_token
+
+    create_response = client.post(
+        '/admin/user/add',
+        data={
+            'username': 'wx_admin_created',
+            'password': 'CreatedPassword1!',
+            'email': '',
+            'age': '',
+            'gender': '',
+            'community': '',
+            'role': 'user',
+            'csrf_token': csrf_token,
+        },
+        follow_redirects=False,
+    )
+    assert create_response.status_code in (301, 302, 303)
+    assert create_response.headers['Location'].endswith('/admin/user/add')
+
+    edit_response = client.post(
+        f'/admin/user/{ordinary_user_id}/edit',
+        data={
+            'username': 'deleted_mp_admin_edit',
+            'email': '',
+            'age': '',
+            'gender': '',
+            'community': '',
+            'role': 'user',
+            'password': '',
+            'csrf_token': csrf_token,
+        },
+        follow_redirects=False,
+    )
+    assert edit_response.status_code in (301, 302, 303)
+    assert edit_response.headers['Location'].endswith(
+        f'/admin/user/{ordinary_user_id}/edit'
+    )
+
+    with app.app_context():
+        assert User.query.filter_by(username='wx_admin_created').first() is None
+        preserved = db.session.get(User, ordinary_user_id)
+        assert preserved.username == 'ordinary-admin-user'
+
+
+def test_admin_rejects_phone_shaped_and_case_colliding_usernames(app, client):
+    from core.db_models import User
+    from core.extensions import db
+
+    with app.app_context():
+        db.drop_all()
+        db.create_all()
+        admin = User(username='admin-username-boundaries', role='admin')
+        admin.set_password('AdminPassword1!')
+        existing = User(username='ExistingName', role='user')
+        existing.set_password('ExistingPassword1!')
+        editable = User(username='editable-user', role='user')
+        editable.set_password('EditablePassword1!')
+        db.session.add_all([admin, existing, editable])
+        db.session.commit()
+        admin_id = int(admin.id)
+        editable_id = int(editable.id)
+
+    _login_as(client, admin_id)
+    csrf_token = 'admin-username-boundaries-csrf'
+    with client.session_transaction() as session:
+        session['_csrf_token'] = csrf_token
+
+    for phone_username in ('13800138000', '8613800138000', '008613800138000'):
+        phone_response = client.post(
+            '/admin/user/add',
+            data={
+                'username': phone_username,
+                'password': 'CreatedPassword1!',
+                'email': '',
+                'age': '',
+                'gender': '',
+                'community': '',
+                'role': 'user',
+                'csrf_token': csrf_token,
+            },
+            follow_redirects=False,
+        )
+        assert phone_response.status_code in (301, 302, 303)
+        assert phone_response.headers['Location'].endswith('/admin/user/add')
+
+    collision_response = client.post(
+        f'/admin/user/{editable_id}/edit',
+        data={
+            'username': 'existingname',
+            'email': '',
+            'age': '',
+            'gender': '',
+            'community': '',
+            'role': 'user',
+            'password': '',
+            'csrf_token': csrf_token,
+        },
+        follow_redirects=False,
+    )
+
+    assert collision_response.status_code in (301, 302, 303)
+    assert collision_response.headers['Location'].endswith(
+        f'/admin/user/{editable_id}/edit'
+    )
+    with app.app_context():
+        for phone_username in ('13800138000', '8613800138000', '008613800138000'):
+            assert User.query.filter_by(username=phone_username).first() is None
+        assert db.session.get(User, editable_id).username == 'editable-user'
 
 
 def test_admin_dashboard_renders(client, db_session):

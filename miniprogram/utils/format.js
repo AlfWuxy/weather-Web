@@ -217,6 +217,17 @@ function normalizeAction(item, index) {
   };
 }
 
+function normalizeFamilyReminder(value) {
+  const source = value && typeof value === 'object' ? value : {};
+  return {
+    id: String(firstDefined(source, ['id'], '')),
+    date: String(firstDefined(source, ['date'], '')),
+    message: String(firstDefined(source, ['message'], '')),
+    followUpQuestion: String(firstDefined(source, ['follow_up_question', 'followUpQuestion'], '')),
+    text: String(firstDefined(source, ['text'], '')),
+  };
+}
+
 function normalizeSources(sourceStatus) {
   if (Array.isArray(sourceStatus)) {
     return sourceStatus.map((item, index) => ({
@@ -317,6 +328,7 @@ function normalizeBootstrap(payload) {
       summary: String(firstDefined(riskSource, ['summary', 'message', 'reason'], Array.isArray(riskSource.reasons) ? riskSource.reasons.join('；') : '')),
     },
     actions: actionsRaw.map(normalizeAction),
+    familyReminder: normalizeFamilyReminder(data.family_reminder),
     sources: normalizeSources(data.source_status),
   };
 }
@@ -331,6 +343,16 @@ function normalizeCommunityItem(item, index) {
   const available = source.available !== false && score !== null;
   const level = firstDefined(source, ['heatrisk_label', 'risk_label', 'risk_level', 'level'], '');
   const elderlyRatio = finiteNumber(firstDefined(source, ['elderly_ratio', 'age65_share', 'age65_share_pct'], null));
+  const latitude = finiteNumber(firstDefined(source, ['latitude', 'lat'], null));
+  const longitude = finiteNumber(firstDefined(source, ['longitude', 'lng', 'lon'], null));
+  const coordinateSystem = String(firstDefined(source, ['coordinate_system', 'coordinateSystem'], '')).trim();
+  const hasCoordinates = coordinateSystem === 'GCJ-02'
+    && latitude !== null
+    && longitude !== null
+    && latitude >= -90
+    && latitude <= 90
+    && longitude >= -180
+    && longitude <= 180;
   const tone = riskTone(level, score);
   const vulnerabilityLabel = !available
     ? '待更新'
@@ -352,6 +374,10 @@ function normalizeCommunityItem(item, index) {
     elderlyText: elderlyRatio === null ? '待更新' : `${elderlyRatio <= 1 ? (elderlyRatio * 100).toFixed(1) : elderlyRatio.toFixed(1)}%`,
     uncertainty: finiteNumber(firstDefined(source, ['uncertainty_index'], null)),
     hotspot: String(firstDefined(source, ['hotspot_category'], '')),
+    latitude: hasCoordinates ? latitude : null,
+    longitude: hasCoordinates ? longitude : null,
+    coordinateSystem: hasCoordinates ? coordinateSystem : '',
+    hasCoordinates,
   };
 }
 

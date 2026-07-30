@@ -57,6 +57,18 @@
         })();
     </script>
     <title>{% block title %}宜老天气通{% endblock %}</title>
+    <meta name="description" content="{% block meta_description %}宜老天气通把都昌县天气风险转成老人、家属和社区今天能执行的防护行动。{% endblock %}">
+    <meta name="robots" content="{{ seo_robots or 'noindex, nofollow, noarchive' }}">
+    {% if seo_canonical_url %}
+    <link rel="canonical" href="{{ seo_canonical_url }}">
+    <meta property="og:url" content="{{ seo_canonical_url }}">
+    {% endif %}
+    <meta property="og:type" content="website">
+    <meta property="og:site_name" content="宜老天气通">
+    <meta property="og:title" content="{{ self.title()|striptags|trim }}">
+    <meta property="og:description" content="{{ self.meta_description()|striptags|trim }}">
+    <meta property="og:locale" content="zh_CN">
+    {% block structured_data %}{% endblock %}
     <link rel="icon" type="image/png" href="{{ url_for('static', filename='brand/yilao-avatar.png') }}">
     <link rel="apple-touch-icon" href="{{ url_for('static', filename='brand/yilao-avatar.png') }}">
 
@@ -418,6 +430,7 @@
             <nav class="d-flex flex-wrap justify-content-center gap-3 mb-2 small" aria-label="页脚导航">
                 <a href="{{ url_for('public.public_risk') }}">风险说明</a>
                 <a href="{{ url_for('public.cooling_resources') }}">避暑资源</a>
+                <a href="{{ url_for('public.heat_vulnerability_preview') }}">热脆弱性地图</a>
                 <a href="{{ url_for('public.transparency') }}">计算与透明度</a>
                 <a href="{{ url_for('public.transparency') }}#privacy">隐私边界</a>
             </nav>

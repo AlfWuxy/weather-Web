@@ -1,7 +1,30 @@
 {% extends "base.html" %}
 
-{% block title %}首页 · 宜老天气通{% endblock %}
+{% block title %}宜老天气通｜都昌老人高温、寒潮预警与家庭照护提醒{% endblock %}
+{% block meta_description %}查看都昌县高温、寒潮等天气风险，把预警转成老人防护、家人提醒、今日行动和避暑资源。{% endblock %}
 {% block body_class %}home-page{% endblock %}
+{% block structured_data %}
+{% set website_schema = {
+    '@context': 'https://schema.org',
+    '@type': 'WebSite',
+    'name': '宜老天气通',
+    'url': seo_base_url ~ '/',
+    'inLanguage': 'zh-CN',
+    'description': '面向都昌县老人、家属和社区的天气风险行动提醒。'
+} %}
+{% set application_schema = {
+    '@context': 'https://schema.org',
+    '@type': 'WebApplication',
+    'name': '宜老天气通',
+    'url': seo_base_url ~ '/',
+    'applicationCategory': 'HealthApplication',
+    'operatingSystem': 'Web',
+    'inLanguage': 'zh-CN',
+    'description': '把都昌县高温、寒潮等天气风险转成家庭照护行动和避暑资源。'
+} %}
+<script type="application/ld+json">{{ website_schema|tojson }}</script>
+<script type="application/ld+json">{{ application_schema|tojson }}</script>
+{% endblock %}
 
 {% block content %}
 {% if not current_user.is_authenticated or current_user.role == 'guest' %}
@@ -94,6 +117,15 @@
             </figure>
         </article>
         {% endfor %}
+    </section>
+
+    <section class="yl-home-section-head yl-fade-up">
+        <h2>看看都昌哪些区域更需要关注。</h2>
+        <p>公开地图把 2020 至 2024 年夏季晴空地表温度、65 岁及以上人口比例和县域研究网格放到一起，帮助家庭和社区形成进一步核查的线索。</p>
+        <div class="hero-actions">
+            <a href="{{ url_for('public.heat_vulnerability_preview') }}" class="btn btn-primary">查看热暴露与老年人口地图</a>
+            <a href="{{ url_for('public.transparency') }}" class="btn btn-outline-secondary">了解数据口径</a>
+        </div>
     </section>
 
     {# ============== 角色入口 ============== #}

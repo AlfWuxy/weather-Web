@@ -177,7 +177,9 @@ test('1.1 登录页只保留微信登录并提供重试和公共天气回退', (
   assert.match(loginView, /重新微信登录/);
   assert.match(loginView, /bindtap="goPublicHome"[\s\S]*先查看公共天气/);
 
-  assert.doesNotMatch(loginScript, /\btokenApi\b|\bonBind\s*\(|legacy_token|tokenInput|showTokenFallback/);
+  assert.match(loginScript, /\btokenApi\b[\s\S]*\/mp\/api\/v1\/auth\/link-account/);
+  assert.match(loginView, /网页绑定码/);
+  assert.doesNotMatch(loginScript, /\bonBind\s*\(|legacy_token|tokenInput|showTokenFallback/);
   assert.doesNotMatch(loginView, /备用登录码|password="true"|bindtap="(?:onBind|toggleTokenFallback|onClear)"/);
   assert.doesNotMatch(settingsView, /备用登录码/);
 });

@@ -5,6 +5,7 @@ const {
   getToken,
   publicApi,
   saveToken,
+  tokenApi,
 } = require('../elders/care-session');
 const { PRIVACY_CONSENT_VERSION } = require('../../config');
 const { clearAcquisitionContext, readAcquisitionSource } = require('../../utils/share');
@@ -13,6 +14,16 @@ function requiresPrivacyRefresh(error) {
   const statusCode = Number(error && (error.statusCode || error.status_code || error.status));
   const message = String(error && (error.code || error.message || error.error) || '').toLowerCase();
   return statusCode === 428 || message.includes('privacy_consent') || message.includes('consent_version');
+}
+
+function linkFailureMessage(error) {
+  const code = String(error && (error.code || error.error) || '');
+  const messageMap = {
+    account_link_temporarily_locked: '绑定尝试次数过多，请 10 分钟后再试。',
+    target_already_linked: '这个网页账号已经绑定其他微信。',
+    source_account_has_data: '当前微信账号已有照护数据，需要人工确认后再合并。',
+  };
+  return messageMap[code] || '绑定码无效、过期或网络异常，请回网页重新生成后重试。';
 }
 
 function wxLogin() {
@@ -27,15 +38,23 @@ Page({
     busy: false,
     loginFailed: false,
     loginHint: '',
+    linkMode: false,
+    alreadyLoggedIn: false,
+    linkCode: '',
+    linkHint: '',
     requiredPrivacyVersion: PRIVACY_CONSENT_VERSION,
   },
 
-  async onLoad() {
+  async onLoad(options) {
     this._unloaded = false;
-    if (getToken()) {
+    const linkMode = String(options && options.mode || '') === 'link';
+    const alreadyLoggedIn = !!getToken();
+    this.setData({ linkMode, alreadyLoggedIn });
+    if (alreadyLoggedIn && !linkMode) {
       wx.switchTab({ url: '/pages/elders/index' });
       return;
     }
+    if (alreadyLoggedIn) return;
     await this.loadRequiredPrivacyVersion();
   },
 
@@ -94,6 +113,70 @@ Page({
     return false;
   },
 
+  onLinkCodeInput(event) {
+    const value = String(event && event.detail && event.detail.value || '')
+      .replace(/\D/g, '')
+      .slice(0, 8);
+    this.setData({
+      linkCode: value,
+      linkHint: '',
+    });
+  },
+
+  async linkAccountWithSession(sessionToken) {
+    const code = String(this.data.linkCode || '').trim();
+    if (!/^\d{8}$/.test(code)) {
+      this.setData({ linkHint: '请输入网页“个人设置”里显示的 8 位绑定码。' });
+      wx.showToast({ title: '请输入 8 位绑定码', icon: 'none' });
+      return false;
+    }
+    const data = await tokenApi(sessionToken, {
+      method: 'POST',
+      path: '/mp/api/v1/auth/link-account',
+      data: { code },
+    });
+    const linkedToken = extractAuthToken(data);
+    if (!linkedToken) throw new Error('missing_linked_session_token');
+    saveToken(linkedToken, {
+      login_method: 'wechat',
+      privacy_consent_version: data.privacy_consent_version || this.data.requiredPrivacyVersion,
+      expires_at: data.expires_at || '',
+      expires_in: data.expires_in || null,
+      account_linked: true,
+    });
+    this.setData({
+      alreadyLoggedIn: true,
+      linkCode: '',
+      linkHint: '绑定成功，网页和小程序现在使用同一份照护数据。',
+    });
+    return true;
+  },
+
+  async onLinkAccount() {
+    if (this.data.busy) return;
+    const sessionToken = getToken();
+    if (!sessionToken) {
+      this.setData({ linkHint: '请先完成微信登录，再输入网页绑定码。' });
+      wx.showToast({ title: '请先微信登录', icon: 'none' });
+      return;
+    }
+    this.setData({ busy: true, linkHint: '' });
+    try {
+      const linked = await this.linkAccountWithSession(sessionToken);
+      if (!linked || this._unloaded) return;
+      wx.showToast({ title: '账号已串联', icon: 'success' });
+      wx.reLaunch({ url: '/pages/elders/index' });
+    } catch (error) {
+      if (this._unloaded) return;
+      this.setData({
+        linkHint: linkFailureMessage(error),
+      });
+      wx.showToast({ title: '绑定失败，请重试', icon: 'none' });
+    } finally {
+      if (!this._unloaded) this.setData({ busy: false });
+    }
+  },
+
   async onWechatLogin() {
     if (this.data.busy || !this.requireConsent()) return;
     this.setData({ busy: true, loginFailed: false, loginHint: '' });
@@ -128,6 +211,20 @@ Page({
       });
       // 登录成功后消费来源标记，避免共享设备上的下一位用户继承归因。
       clearAcquisitionContext();
+      if (/^\d{8}$/.test(String(this.data.linkCode || ''))) {
+        try {
+          const linked = await this.linkAccountWithSession(token);
+          if (this._unloaded || !linked) return;
+        } catch (error) {
+          if (this._unloaded) return;
+          this.setData({
+            alreadyLoggedIn: true,
+            linkHint: linkFailureMessage(error),
+          });
+          wx.showToast({ title: '微信已登录，请重试绑定', icon: 'none' });
+          return;
+        }
+      }
       wx.showToast({ title: '登录成功', icon: 'success' });
       wx.switchTab({ url: '/pages/elders/index' });
     } catch (error) {

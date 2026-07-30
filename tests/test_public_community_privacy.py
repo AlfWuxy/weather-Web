@@ -256,7 +256,11 @@ def test_account_deletion_refreshes_projection_and_hides_three_to_two(
     deleted = client.delete(
         "/mp/api/v1/me",
         headers={"Authorization": f"Bearer {login_data['session_token']}"},
-        json={"confirm": True, "user_id": deleting_owner.id},
+        json={
+            "confirm": True,
+            "user_id": deleting_owner.id,
+            "wechat_code": "fresh-delete-code",
+        },
     )
 
     assert deleted.status_code == 200

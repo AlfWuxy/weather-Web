@@ -37,7 +37,7 @@ Page({
   },
 
   async onPullDownRefresh() {
-    await this.loadSources({ force: true });
+    await this.loadSources({ force: true, revalidate: true });
     wx.stopPullDownRefresh();
   },
 
@@ -75,7 +75,7 @@ Page({
   },
 
   retrySources() {
-    return this.loadSources({ force: true });
+    return this.loadSources({ force: true, revalidate: true });
   },
 
   onShareAppMessage() {

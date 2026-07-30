@@ -116,7 +116,10 @@ test('每次点击先自定义确认，确认后仅用单次 GCJ-02 定位做端
   assert.equal(modalCalls.length, 1);
   assert.equal(locationCalls.length, 0);
   assert.equal(page.data.locationBusy, true);
-  assert.match(modalCalls[0].content, /不会上传.*不会写入本机存储.*不会后台持续定位/);
+  assert.match(
+    modalCalls[0].content,
+    /不会上传至本项目服务器.*不会写入本项目持久存储.*不会后台持续定位/,
+  );
 
   modalCalls[0].success({ confirm: true, cancel: false });
   assert.equal(locationCalls.length, 1);

@@ -7,7 +7,6 @@ import json
 import math
 import uuid
 from datetime import datetime, timedelta
-from pathlib import Path
 
 from flask import current_app, url_for
 
@@ -27,6 +26,10 @@ from core.time_utils import ensure_utc_aware, utcnow
 from core.weather import get_qweather_forecast_with_cache
 from services.qweather_auth import is_qweather_configured
 from services.miniprogram_auth import current_privacy_version
+from services.action_reminder_service import (
+    infer_weather_tags,
+    select_action_reminder,
+)
 from services.community_daily_service import (
     PUBLIC_AGGREGATE_MIN_SAMPLE,
     bucket_public_count,
@@ -39,7 +42,6 @@ from utils.parsers import safe_json_loads
 SNAPSHOT_TTL_SECONDS = 1800
 CANONICAL_LOCATION_NAME = DEFAULT_CITY_LABEL
 CANONICAL_LOCATION_CODE = "116.20,29.27"
-_GIS_METADATA_CACHE = {"mtime_ns": None, "payload": None}
 _SNAPSHOT_RETENTION_LOCK_ID = 1836086096
 
 
@@ -388,6 +390,7 @@ def latest_snapshot_record():
 def snapshot_payload(record=None, *, now=None) -> dict:
     """序列化快照；陈旧判断只依赖持久化时间，不触发任何上游调用。"""
     location = canonical_location()
+    current_time = ensure_utc_aware(now or utcnow())
     if record is None:
         return {
             "snapshot_id": None,
@@ -408,6 +411,12 @@ def snapshot_payload(record=None, *, now=None) -> dict:
                 "disclaimer": "仅作天气健康行动提醒，不提供医疗诊断。",
             },
             "actions": [],
+            "family_reminder": select_action_reminder(
+                date_value=current_time,
+                risk_level="low",
+                weather_tags=["general"],
+                audience="family_group",
+            ),
             "source_status": {
                 "mode": "scheduled_snapshot_only",
                 "status": "missing",
@@ -416,8 +425,10 @@ def snapshot_payload(record=None, *, now=None) -> dict:
             },
             "required_privacy_consent_version": current_privacy_version(),
         }
-    current_time = ensure_utc_aware(now or utcnow())
     expires_at = ensure_utc_aware(record.expires_at)
+    current = safe_json_loads(record.current_json, {})
+    warnings = safe_json_loads(record.warnings_json, [])
+    risk = safe_json_loads(record.risk_json, {})
     return {
         "snapshot_id": record.snapshot_id,
         "location": {
@@ -430,11 +441,17 @@ def snapshot_payload(record=None, *, now=None) -> dict:
         "ttl_seconds": SNAPSHOT_TTL_SECONDS,
         "available": bool(record.available),
         "stale": current_time > expires_at,
-        "current": safe_json_loads(record.current_json, {}),
+        "current": current,
         "forecast": safe_json_loads(record.forecast_json, []),
-        "warnings": safe_json_loads(record.warnings_json, []),
-        "risk": safe_json_loads(record.risk_json, {}),
+        "warnings": warnings,
+        "risk": risk,
         "actions": safe_json_loads(record.actions_json, []),
+        "family_reminder": select_action_reminder(
+            date_value=current_time,
+            risk_level=risk.get("level"),
+            weather_tags=infer_weather_tags(current, warnings),
+            audience="family_group",
+        ),
         "source_status": safe_json_loads(record.source_status_json, {}),
         "required_privacy_consent_version": current_privacy_version(),
     }
@@ -501,6 +518,7 @@ def refresh_snapshot_from_cycle(
     fetched_at=None,
     current_fetched_at=None,
     force_refresh_sources=False,
+    commit=True,
 ):
     """完成一次 canonical 同步周期的预报/预警收集并落库。"""
     forecast = []
@@ -590,12 +608,14 @@ def refresh_snapshot_from_cycle(
             "forecast": forecast_meta,
             "warnings": warning_status,
         },
+        commit=commit,
     )
 
 
 def public_communities_payload() -> dict:
     """仅公开社区级聚合字段，小样本行动率统一抑制。"""
     communities = Community.query.order_by(Community.name.asc()).all()
+    community_coordinates = current_app.config.get("COMMUNITY_COORDS_GCJ") or {}
     community_names = [community.name for community in communities]
     active_pair_counts = {}
     if community_names:
@@ -637,6 +657,22 @@ def public_communities_payload() -> dict:
     items = []
     for community in communities:
         daily = latest_daily.get(community.name)
+        coordinates = community_coordinates.get(community.name)
+        latitude = None
+        longitude = None
+        coordinate_system = None
+        if isinstance(coordinates, (list, tuple)) and len(coordinates) == 2:
+            configured_longitude = _finite_number(coordinates[0])
+            configured_latitude = _finite_number(coordinates[1])
+            if (
+                configured_longitude is not None
+                and configured_latitude is not None
+                and -180 <= configured_longitude <= 180
+                and -90 <= configured_latitude <= 90
+            ):
+                longitude = configured_longitude
+                latitude = configured_latitude
+                coordinate_system = "GCJ-02"
         count = int(daily.total_people or 0) if daily else 0
         active_count = active_pair_counts.get(community.name, 0)
         sample_suppressed = bool(
@@ -651,8 +687,10 @@ def public_communities_payload() -> dict:
                 "id": community.id,
                 "name": community.name,
                 "location": community.location,
-                "latitude": community.latitude,
-                "longitude": community.longitude,
+                # 小程序原生地图只接收项目内已核对的高德坐标；数据库位置不会兜底。
+                "latitude": latitude,
+                "longitude": longitude,
+                "coordinate_system": coordinate_system,
                 "population": community.population,
                 "elderly_ratio": community.elderly_ratio,
                 "vulnerability_index": community.vulnerability_index,
@@ -750,27 +788,30 @@ def public_cooling_resources_payload() -> dict:
 
 
 def public_gis_metadata_payload() -> dict:
-    from services.heat_exposure_gis_service import PUBLIC_GEOJSON_FILENAME
+    from services.heat_exposure_gis_service import (
+        PUBLIC_GEOJSON_PATH,
+        PUBLIC_GEOJSON_SHA256,
+        load_validated_public_geojson,
+    )
 
-    path = Path(current_app.static_folder) / PUBLIC_GEOJSON_FILENAME
+    path = PUBLIC_GEOJSON_PATH
     if not current_app.config.get("FEATURE_HEAT_EXPOSURE_GIS") or not path.exists():
         return {"available": False, "scope": CANONICAL_LOCATION_NAME}
-    stat = path.stat()
-    if _GIS_METADATA_CACHE.get("mtime_ns") != stat.st_mtime_ns:
-        collection = json.loads(path.read_text(encoding="utf-8"))
-        metadata = collection.get("metadata") if isinstance(collection, dict) else {}
-        _GIS_METADATA_CACHE.update(mtime_ns=stat.st_mtime_ns, payload=metadata or {})
-    metadata = _GIS_METADATA_CACHE.get("payload") or {}
-    url_values = {
-        "filename": PUBLIC_GEOJSON_FILENAME,
-        # 文件版本进入 URL，避免微信/CDN 在数据更新后继续返回旧 GeoJSON。
-        "v": stat.st_mtime_ns,
-    }
+    try:
+        collection = load_validated_public_geojson(path)
+        stat = path.stat()
+    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+        return {"available": False, "scope": CANONICAL_LOCATION_NAME}
+    metadata = collection.get("metadata") or {}
     return {
         "available": True,
         "scope": CANONICAL_LOCATION_NAME,
         # 返回同源相对路径，避免反向代理 Host/协议误配置污染小程序请求目标。
-        "geojson_url": url_for("static", _external=False, **url_values),
+        "geojson_url": url_for(
+            "public.public_heat_geojson",
+            _external=False,
+            v=PUBLIC_GEOJSON_SHA256[:16],
+        ),
         "title": metadata.get("title"),
         "schema_version": metadata.get("schema_version"),
         "size_bytes": stat.st_size,

@@ -1,12 +1,16 @@
 {% extends "base.html" %}
-{% block title %}避暑资源 · 宜老天气通{% endblock %}
+{% block title %}都昌避暑资源与纳凉点｜宜老天气通{% endblock %}
+{% block meta_description %}查看都昌县避暑点、纳凉场所和无障碍信息，按所在地、空调和资源类型筛选老人高温天可用去处。{% endblock %}
+{% block extra_css %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/cooling-map.css') }}">
+{% endblock %}
 
 {% block content %}
 <div class="container" style="max-width:1160px;">
     <section class="section-heading yl-fade-up">
         <span class="section-kicker"><i class="bi bi-snow2"></i> 避暑资源</span>
-        <h2>离你最近的纳凉点</h2>
-        <p>高温天,可以带老人去这些地方避暑。多数免费开放,部分需登记身份证。</p>
+        <h1>都昌县避暑资源与纳凉点</h1>
+        <p>高温天，可以带老人查看这些避暑资源。开放时间、无障碍条件和现场安排请在出发前再次确认。</p>
     </section>
 
     {% if outdoor_temp is not none %}
@@ -66,12 +70,55 @@
         </div>
     </form>
 
+    <section class="yl-section mb-4 yl-fade-up yl-fade-up-d2 cooling-map-panel"
+             id="coolingMapPanel"
+             data-has-map-key="{{ '1' if amap_key else '0' }}">
+        <div class="cooling-map-toolbar">
+            <div>
+                <h2 class="cooling-map-title">地图查看避暑资源</h2>
+                <p class="cooling-map-copy mb-0">地图只接收已核验的公开资源点。只有你点击按钮后，浏览器才会申请一次位置权限；精确位置仅在本页内存计算距离，不上传至本项目服务器或保存，也不会用于地图打点。</p>
+            </div>
+            <button type="button"
+                    class="btn btn-outline-primary cooling-locate-button"
+                    id="coolingLocateButton"
+                    {% if not map_points or not amap_key %}disabled{% endif %}>
+                <i class="bi bi-crosshair me-1" aria-hidden="true"></i>
+                按当前位置找附近
+            </button>
+        </div>
+        <div class="cooling-map-canvas" id="coolingMap" role="region" aria-label="都昌县避暑资源地图">
+            <div class="cooling-map-fallback">
+                <i class="bi bi-map" aria-hidden="true"></i>
+                {% if not map_points %}
+                <span>当前筛选下没有仍在核验有效期内的地图点位，下面的文字清单仍可使用。</span>
+                {% elif not amap_key %}
+                <span>地图服务暂未配置，下面的地址与开放信息仍可使用。</span>
+                {% else %}
+                <span>地图正在加载，下面的资源清单可继续使用。</span>
+                {% endif %}
+            </div>
+        </div>
+        <p class="cooling-map-status mb-0"
+           id="coolingMapStatus"
+           role="status"
+           aria-live="polite">
+            {% if map_points %}
+            已载入 {{ map_points|length }} 个仍在人工核验有效期内的 GCJ-02 点位。未点击定位时不会读取你的位置；定位后也不会上传至本项目服务器或保存。
+            {% else %}
+            当前没有可进入地图的已核验点位，资源文字信息仍会保留。
+            {% endif %}
+        </p>
+        <noscript>
+            <p class="cooling-map-noscript mb-0">浏览器未启用 JavaScript，请使用下面的地址清单并在出发前再次确认。</p>
+        </noscript>
+    </section>
+
     <div class="row g-3 yl-fade-up yl-fade-up-d2">
         {% if total and total > 0 %}
         {% for community, items in resources_by_community.items() %}
         {% for r in items %}
         <div class="col-md-6 col-lg-4">
-            <div class="card h-100">
+            <div class="card h-100" data-cooling-resource-id="{{ r.id }}">
                 <div class="card-body">
                     <div class="d-flex justify-content-between align-items-start mb-2">
                         <h5 class="mb-0" style="font-size:1.05rem;">{{ r.name }}</h5>
@@ -94,7 +141,15 @@
                     </div>
 
                     <div class="d-flex gap-2 mt-3">
+                        {% if r.id in map_point_ids %}
+                        <button type="button"
+                                class="btn btn-sm btn-outline-primary flex-grow-1"
+                                data-cooling-map-focus="{{ r.id }}">
+                            <i class="bi bi-geo-alt me-1" aria-hidden="true"></i>在地图中查看
+                        </button>
+                        {% else %}
                         <span class="btn btn-sm btn-outline-primary flex-grow-1 disabled"><i class="bi bi-geo-alt me-1"></i>以实际地址为准</span>
+                        {% endif %}
                     </div>
                 </div>
             </div>
@@ -117,4 +172,19 @@
         高温天(35°C 以上)建议带老人上午 10 点前或傍晚 6 点后出门,并随身带水和遮阳伞。
     </section>
 </div>
+{% endblock %}
+
+{% block extra_js %}
+<script id="coolingMapData" type="application/json">{{ map_points|tojson }}</script>
+{% if amap_security_js_code %}
+<script>
+    window._AMapSecurityConfig = {
+        securityJsCode: {{ amap_security_js_code|tojson }}
+    };
+</script>
+{% endif %}
+{% if amap_key %}
+<script src="https://webapi.amap.com/maps?v=2.0&key={{ amap_key|urlencode }}&plugin=AMap.Scale,AMap.ToolBar"></script>
+{% endif %}
+<script src="{{ url_for('static', filename='js/cooling-map.js') }}"></script>
 {% endblock %}

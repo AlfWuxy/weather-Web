@@ -41,6 +41,10 @@
   padding: 32rpx;
 }
 
+.link-card {
+  margin-bottom: 24rpx;
+}
+
 .section-title {
   color: #2f2925;
   font-size: 36rpx;
@@ -163,6 +167,18 @@
   border-radius: 16rpx;
   background: #ffffff;
   font-size: 14px;
+}
+
+.link-code-input {
+  margin-top: 12rpx;
+  text-align: center;
+  letter-spacing: 12rpx;
+  font-size: 22px;
+  font-weight: 700;
+}
+
+.link-button {
+  margin-top: 24rpx;
 }
 
 .button-row {

@@ -12,7 +12,7 @@
     <freshness-bar updated-text="{{freshness.updatedText}}" stale="{{freshness.stale}}" source="{{freshness.source}}" refresh-deferred="{{freshness.refreshDeferred}}" refresh-started="{{freshness.refreshStarted}}" />
     <view class="location-card card" role="region" aria-role="region" aria-label="附近避暑资源定位控制">
       <view class="card-title">按本次位置找附近资源</view>
-      <view class="small muted location-privacy">每次使用前都会先请你确认。位置只在当前页面计算直线距离，不上传、不写入本机存储，也不会后台持续定位。</view>
+      <view class="small muted location-privacy">每次使用前都会先请你确认。位置只在当前页面计算直线距离，不上传至本项目服务器、不写入本项目持久存储，也不会后台持续定位。</view>
       <view class="location-actions">
         <button class="primary-button location-button" loading="{{locationBusy}}" disabled="{{locationBusy}}" bindtap="startNearbyLocation" aria-label="逐次确认后使用本次位置排列避暑资源">{{locationMode === 'located' ? '重新确认本次定位' : '按当前位置找附近'}}</button>
         <button class="secondary-button location-button" disabled="{{locationBusy}}" bindtap="showManualSelection" aria-label="不使用设备定位，手动选择社区">手动选择社区</button>

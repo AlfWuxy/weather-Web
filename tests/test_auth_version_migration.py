@@ -11,7 +11,7 @@ import pytest
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
-HEAD_REVISION = '0026_cooling_coordinate_verify'
+HEAD_REVISION = '0027_cross_platform_identity'
 PREVIOUS_REVISION = '0022_private_health_indexes'
 
 
@@ -304,6 +304,7 @@ def test_cooling_migration_single_step_downgrade_preserves_health_consent(
         user_id = int(user.id)
     _dispose(app)
 
+    command.downgrade(config, '0026_cooling_coordinate_verify')
     command.downgrade(config, '0025_health_sensitive_consent')
 
     revision, columns = _revision_and_columns(database_path)
@@ -329,6 +330,8 @@ def test_cooling_migration_single_step_downgrade_preserves_health_consent(
     assert consented_at
 
     command.upgrade(config, 'head')
+    # 先单独回退 0027，再验证 0026 的相对一阶降级不会误删健康回执。
+    command.downgrade(config, '0026_cooling_coordinate_verify')
     command.downgrade(config, '-1')
     relative_revision, relative_columns = _revision_and_columns(database_path)
     assert relative_revision == '0025_health_sensitive_consent'
@@ -416,11 +419,11 @@ def test_wxpusher_relative_one_step_downgrade_stops_at_auth_revision(
         ).fetchone() == (2, 0)
 
 
-def test_wxpusher_relative_four_step_downgrade_runs_auth_guard(
+def test_wxpusher_relative_five_step_downgrade_runs_auth_guard(
     monkeypatch,
     tmp_path,
 ):
-    """相对降级四阶会跨越 0023，并在首个 DDL 前阻断。"""
+    """相对降级五阶会跨越 0023，并在首个 DDL 前阻断。"""
     database_path = tmp_path / 'wxpusher-relative-two-step.db'
     app, config = _initialize(monkeypatch, database_path)
 
@@ -444,7 +447,7 @@ def test_wxpusher_relative_four_step_downgrade_runs_auth_guard(
     _dispose(app)
 
     with pytest.raises(RuntimeError, match='auth_version_count=1'):
-        command.downgrade(config, '-4')
+        command.downgrade(config, '-5')
 
     revision, columns = _revision_and_columns(database_path)
     assert revision == HEAD_REVISION

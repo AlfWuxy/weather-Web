@@ -168,6 +168,53 @@ def test_stale_current_and_nowcast_are_unavailable(app, client, db_session):
     assert fetcher.nowcast_calls == 0
 
 
+def test_incomplete_redis_current_falls_back_to_complete_database(
+    app,
+    db_session,
+    monkeypatch,
+):
+    from core.db_models import WeatherCache
+    from core.weather import get_weather_with_cache
+
+    class FakeRedis:
+        def get(self, _key):
+            return json.dumps({
+                'temperature': 36.0,
+                'temperature_max': None,
+                'temperature_min': None,
+                'humidity': 62.0,
+                'data_source': 'QWeather',
+                'is_mock': False,
+            }, ensure_ascii=False)
+
+    complete_weather = {
+        'temperature': 36.0,
+        'temperature_max': 39.0,
+        'temperature_min': 29.0,
+        'humidity': 62.0,
+        'data_source': 'QWeather',
+        'is_mock': False,
+    }
+    with app.app_context():
+        app.config.update(DEMO_MODE=False, WEATHER_CACHE_TTL_MINUTES=30)
+        db_session.add(WeatherCache(
+            location='都昌县',
+            fetched_at=utcnow(),
+            payload=json.dumps(complete_weather, ensure_ascii=False),
+            is_mock=False,
+        ))
+        db_session.commit()
+        monkeypatch.setattr(
+            'core.weather._get_redis_client',
+            lambda: FakeRedis(),
+        )
+
+        weather, used_cache = get_weather_with_cache('都昌县')
+
+    assert used_cache is True
+    assert weather == complete_weather
+
+
 @pytest.mark.parametrize(
     ('extra_microseconds', 'expected_stale'),
     ((0, False), (1, True)),

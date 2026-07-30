@@ -122,3 +122,43 @@ def test_public_communities_uses_latest_date_then_highest_id(app, db_session):
     }
     assert by_name["丙社区"]["latest_action_summary"] is None
     assert payload["summary"] == {"community_count": 3, "scope": "都昌县"}
+
+
+def test_public_communities_only_exposes_configured_gcj02_coordinates(app, db_session):
+    from core.db_models import Community
+    from services.miniprogram_service import public_communities_payload
+
+    configured_name = "牛家垄周村"
+    configured_longitude, configured_latitude = app.config["COMMUNITY_COORDS_GCJ"][
+        configured_name
+    ]
+    db_session.add_all(
+        [
+            Community(
+                name=configured_name,
+                location="都昌县",
+                latitude=1.0,
+                longitude=2.0,
+            ),
+            Community(
+                name="坐标未维护社区",
+                location="都昌县",
+                latitude=29.27,
+                longitude=116.20,
+            ),
+        ]
+    )
+    db_session.commit()
+
+    payload = public_communities_payload()
+    by_name = {item["name"]: item for item in payload["items"]}
+
+    configured = by_name[configured_name]
+    assert configured["longitude"] == configured_longitude
+    assert configured["latitude"] == configured_latitude
+    assert configured["coordinate_system"] == "GCJ-02"
+
+    unconfigured = by_name["坐标未维护社区"]
+    assert unconfigured["longitude"] is None
+    assert unconfigured["latitude"] is None
+    assert unconfigured["coordinate_system"] is None

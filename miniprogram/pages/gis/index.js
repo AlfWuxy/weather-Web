@@ -14,6 +14,7 @@ const { createPageShare, createTimelineShare, showPublicShareMenu } = require('.
 const {
   FALLBACK_LAYERS,
   LAYER_ORDER,
+  enrichDerivedLayers,
   hitTest,
   legendEntries,
   makeCanvasModel,
@@ -243,7 +244,7 @@ Page({
   },
 
   async onPullDownRefresh() {
-    await this.loadMetadata({ force: true });
+    await this.loadMetadata({ force: true, revalidate: true });
     wx.stopPullDownRefresh();
   },
 
@@ -336,7 +337,7 @@ Page({
   },
 
   retryMetadata() {
-    this.loadMetadata({ force: true });
+    this.loadMetadata({ force: true, revalidate: true });
   },
 
   async loadMap() {
@@ -377,12 +378,14 @@ Page({
       this._mapRequest = mapRequest;
       const response = await mapRequest;
       if (this._unloaded || loadToken !== this._mapLoadToken) return;
-      const collection = response && response.type === 'FeatureCollection'
+      const rawCollection = response && response.type === 'FeatureCollection'
         ? response
         : (response && response.data && response.data.type === 'FeatureCollection' ? response.data : null);
-      if (!collection || !Array.isArray(collection.features)) {
+      if (!rawCollection || !Array.isArray(rawCollection.features)) {
         throw new Error('invalid_geojson_collection');
       }
+      // 派生分位与相对中位数只存在于本次内存副本，不改写下载的科研 GeoJSON。
+      const collection = enrichDerivedLayers(rawCollection);
       const presentation = layerViewData(collection, this.data.activeLayer);
       if (!presentation.cellCount) throw new Error('geojson_cells_missing');
       const metadataLayers = collection.metadata && collection.metadata.layers || {};

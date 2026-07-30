@@ -169,7 +169,11 @@ class TestLoginLockoutFallback:
 
         with app.app_context():
             db.create_all()
-            _make_user(db.session, 'lockdbuser', 'RightPass123!')
+            user_id = _make_user(
+                db.session,
+                'lockdbuser',
+                'RightPass123!',
+            ).id
             app.config['RATE_LIMIT_LOGIN'] = '100 per minute'
             app.config['LOGIN_MAX_FAILURES'] = 2
             app.config['LOGIN_LOCKOUT_SECONDS'] = 300
@@ -197,7 +201,8 @@ class TestLoginLockoutFallback:
             assert not sess.get('_user_id'), "锁定期间不应写入登录态"
 
         with app.app_context():
-            key_hash = hash_identifier('login:lockdbuser')
+            # 已识别账号按内部 user_id 共用锁定桶，数据库不保留明文登录标识。
+            key_hash = hash_identifier(f'login:user:{user_id}')
             row = ShortCodeAttempt.query.filter_by(key_hash=key_hash).first()
             assert row is not None
             assert (row.failed_count or 0) >= 2

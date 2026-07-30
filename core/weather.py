@@ -200,6 +200,25 @@ def is_qweather_online_weather(weather_data):
     return True
 
 
+def is_complete_qweather_weather(weather_data):
+    """统一判断网页风险计算所需的和风实况字段是否完整。"""
+    if not is_qweather_online_weather(weather_data):
+        return False
+    for field in (
+        'temperature',
+        'temperature_max',
+        'temperature_min',
+        'humidity',
+    ):
+        try:
+            value = float(weather_data.get(field))
+        except (TypeError, ValueError):
+            return False
+        if not math.isfinite(value):
+            return False
+    return True
+
+
 def compact_assessment_weather_condition(weather_data):
     """生成可查询的紧凑天气摘要，严格适配历史 VARCHAR(100)。"""
     source = weather_data if isinstance(weather_data, dict) else {}
@@ -392,7 +411,7 @@ def get_weather_with_cache(location, ttl_minutes=None, cache_only=True):
     redis_key = _redis_cache_key('weather:current', location)
     redis_payload = _redis_get_json(redis_client, redis_key, {})
     if redis_payload is not None:
-        if not cache_only or is_qweather_online_weather(redis_payload):
+        if is_complete_qweather_weather(redis_payload):
             return redis_payload, True
     now = utcnow()
     cache = None
@@ -405,7 +424,7 @@ def get_weather_with_cache(location, ttl_minutes=None, cache_only=True):
             cached_weather = safe_json_loads(cache.payload, {})
             cached_weather_is_real = (
                 not bool(cache.is_mock)
-                and is_qweather_online_weather(cached_weather)
+                and is_complete_qweather_weather(cached_weather)
             )
             # 确保从数据库读取的 datetime 是 UTC aware 的
             if now - ensure_utc_aware(cache.fetched_at) <= timedelta(minutes=ttl_minutes):

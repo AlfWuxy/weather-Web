@@ -1,0 +1,120 @@
+.cooling-map-panel {
+    overflow: hidden;
+}
+
+.cooling-map-toolbar {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 18px;
+    margin-bottom: 16px;
+}
+
+.cooling-map-title {
+    margin: 0 0 6px;
+    color: var(--yl-ink, #1f2937);
+    font-size: 1.15rem;
+    font-weight: 700;
+}
+
+.cooling-map-copy,
+.cooling-map-status,
+.cooling-map-noscript {
+    color: var(--yl-ink-soft, #64748b);
+    font-size: .9rem;
+    line-height: 1.65;
+}
+
+.cooling-locate-button {
+    flex: 0 0 auto;
+    min-height: 42px;
+}
+
+.cooling-map-canvas {
+    position: relative;
+    width: 100%;
+    height: 430px;
+    overflow: hidden;
+    border: 1px solid #d7e1ea;
+    border-radius: 14px;
+    background: #f8fafc;
+}
+
+.cooling-map-fallback {
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    padding: 24px;
+    color: #64748b;
+    text-align: center;
+}
+
+.cooling-map-fallback .bi {
+    color: var(--yl-orange-500, #f97316);
+    font-size: 1.65rem;
+}
+
+.cooling-map-canvas.is-ready .cooling-map-fallback {
+    display: none;
+}
+
+.cooling-map-status {
+    min-height: 24px;
+    margin-top: 12px;
+}
+
+.cooling-map-status.is-error {
+    color: #b42318;
+}
+
+.cooling-map-status.is-success {
+    color: #137333;
+}
+
+.cooling-map-info {
+    width: min(260px, 70vw);
+    padding: 2px;
+    color: #1f2937;
+    font-size: 13px;
+    line-height: 1.5;
+}
+
+.cooling-map-info strong {
+    display: block;
+    margin-bottom: 4px;
+    font-size: 14px;
+}
+
+.cooling-map-info span {
+    display: block;
+    color: #64748b;
+}
+
+@media (max-width: 767.98px) {
+    .cooling-map-toolbar {
+        align-items: stretch;
+        flex-direction: column;
+    }
+
+    .cooling-locate-button {
+        width: 100%;
+    }
+
+    .cooling-map-canvas {
+        height: 360px;
+        border-radius: 12px;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .cooling-map-panel *,
+    .cooling-map-panel *::before,
+    .cooling-map-panel *::after {
+        scroll-behavior: auto !important;
+        transition: none !important;
+    }
+}

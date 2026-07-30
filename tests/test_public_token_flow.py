@@ -1639,7 +1639,11 @@ def test_account_delete_serializes_inflight_web_actions(
             outcomes["delete"] = thread_client.delete(
                 "/mp/api/v1/me",
                 headers=headers,
-                json={"confirm": True, "user_id": user_id},
+                json={
+                    "confirm": True,
+                    "user_id": user_id,
+                    "wechat_code": "fresh-delete-code",
+                },
             )
 
     writer = threading.Thread(target=write_action)

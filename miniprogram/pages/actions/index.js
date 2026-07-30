@@ -51,6 +51,7 @@ Page({
     completedCount: 0,
     progressPercent: 0,
     generalMode: false,
+    familyReminder: null,
     freshness: {},
     locationName: '都昌县',
     reduceMotion: !allowsJsMotion(),
@@ -76,7 +77,7 @@ Page({
   },
 
   async onPullDownRefresh() {
-    await this.loadData({ force: true });
+    await this.loadData({ force: true, revalidate: true });
     wx.stopPullDownRefresh();
   },
 
@@ -106,6 +107,7 @@ Page({
         completedCount: actions.filter((item) => item.checked).length,
         progressPercent: actions.length ? Math.round(actions.filter((item) => item.checked).length / actions.length * 100) : 0,
         generalMode: true,
+        familyReminder: null,
         freshness,
       });
       schedulePublicRefresh(this, freshness, () => this.loadData());
@@ -126,6 +128,7 @@ Page({
       completedCount,
       progressPercent: actions.length ? Math.round(completedCount / actions.length * 100) : 0,
       generalMode,
+      familyReminder: freshness.stale ? null : snapshot.familyReminder,
       locationName: snapshot.location.name,
       freshness,
     });
@@ -133,7 +136,7 @@ Page({
   },
 
   retry() {
-    return this.loadData({ force: true });
+    return this.loadData({ force: true, revalidate: true });
   },
 
   toggleAction(event) {
@@ -157,9 +160,16 @@ Page({
   },
 
   copyReminder() {
+    const reminder = this.data.familyReminder;
     const remaining = this.data.actions.filter((item) => !item.checked).map((item) => `• ${item.title}`);
     const lines = remaining.length ? remaining : ['• 今日行动已全部确认'];
-    const text = `宜老天气通提醒：\n${lines.join('\n')}\n如明显不适，请及时就医。`;
+    const dailyMessage = reminder && reminder.message
+      ? `${reminder.message}\n${reminder.followUpQuestion || ''}`.trim()
+      : lines.join('\n');
+    const remainingBlock = reminder && reminder.message && remaining.length
+      ? `\n\n还没确认：\n${lines.join('\n')}`
+      : '';
+    const text = `宜老天气通提醒：\n${dailyMessage}${remainingBlock}\n如明显不适，请及时就医。`;
     wx.setClipboardData({ data: text });
   },
 

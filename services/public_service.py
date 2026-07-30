@@ -11,6 +11,8 @@ from urllib.parse import urlparse
 from flask import current_app, flash, redirect, render_template, request, session, url_for
 from flask_login import current_user, login_user, logout_user
 from sqlalchemy import or_
+from sqlalchemy.exc import IntegrityError
+from werkzeug.security import check_password_hash, generate_password_hash
 
 from core.constants import GUEST_ID_PREFIX
 from core.extensions import db
@@ -44,6 +46,12 @@ from services.community_daily_service import (
     refresh_community_daily_best_effort as _refresh_community_daily_best_effort,
 )
 from services.heat_action_service import HeatActionService
+from services.cross_platform_identity import (
+    AccountLinkError,
+    create_account_link_challenge,
+    is_reserved_internal_username,
+    normalize_phone,
+)
 from services.user.owner_write_guard import OwnerInactiveError, owner_write_guard
 from utils.parsers import parse_bool, parse_float
 from utils.audit_log import log_security_event
@@ -58,6 +66,9 @@ from utils.validators import (
 )
 
 logger = logging.getLogger(__name__)
+_DUMMY_LOGIN_PASSWORD_HASH = generate_password_hash(
+    "yilao-login-dummy-password-check"
+)
 
 HEAT_RISK_LABELS = {
     'low': '低风险',
@@ -77,6 +88,9 @@ _HEAT_RISK_WEATHER_FIELDS = (
     'temperature_min',
     'humidity',
 )
+COOLING_MAP_CENTER_LATITUDE = 29.27
+COOLING_MAP_CENTER_LONGITUDE = 116.20
+COOLING_MAP_MAX_DISTANCE_KM = 80.0
 
 
 def _heat_risk_weather_is_ready(weather_data):
@@ -140,23 +154,50 @@ def _normalize_login_identifier(username):
     return normalized
 
 
-def _login_lockout_key(username):
-    normalized = _normalize_login_identifier(username)
+def _find_user_by_username(identifier):
+    """优先精确匹配，兼容唯一的大小写不敏感历史用户名。"""
+    username = (str(identifier or '')).strip()
+    exact_user = User.query.filter(
+        User.deleted_at.is_(None),
+        User.username == username,
+    ).first()
+    if exact_user is not None:
+        return exact_user
+
+    candidates = User.query.filter(
+        User.deleted_at.is_(None),
+        db.func.lower(User.username) == _normalize_login_identifier(username),
+    ).limit(2).all()
+    if len(candidates) == 1:
+        return candidates[0]
+    return None
+
+
+def _login_attempt_subject(user, identifier):
+    """已知账号统一按 user_id 锁定，未知输入只使用不可逆摘要。"""
+    if user is not None and getattr(user, 'id', None) is not None:
+        return f'user:{int(user.id)}'
+    normalized = _normalize_login_identifier(identifier)
     if not normalized:
         return None
-    return f'login_failures:{normalized}'
+    return f'identifier:{hash_identifier(normalized)}'
 
 
-def _login_attempt_key_hash(username):
-    """按用户名生成登录失败计数键（哈希后落库）。"""
-    normalized = _normalize_login_identifier(username)
-    if not normalized:
+def _login_lockout_key(subject):
+    if not subject:
         return None
-    return hash_identifier(f"login:{normalized}")
+    return f'login_failures:{hash_identifier(subject)}'
 
 
-def _get_login_attempt_record(username):
-    key_hash = _login_attempt_key_hash(username)
+def _login_attempt_key_hash(subject):
+    """按账号主体生成数据库失败计数键，任何外部标识都不明文落库。"""
+    if not subject:
+        return None
+    return hash_identifier(f"login:{subject}")
+
+
+def _get_login_attempt_record(subject):
+    key_hash = _login_attempt_key_hash(subject)
     if not key_hash:
         return None
     attempt = ShortCodeAttempt.query.filter_by(key_hash=key_hash).order_by(ShortCodeAttempt.id.desc()).first()
@@ -166,9 +207,9 @@ def _get_login_attempt_record(username):
     return attempt
 
 
-def _get_login_lock_state_from_db(username, max_failures, lockout_seconds):
+def _get_login_lock_state_from_db(subject, max_failures, lockout_seconds):
     """Redis 不可用时，使用数据库兜底登录锁定。"""
-    attempt = _get_login_attempt_record(username)
+    attempt = _get_login_attempt_record(subject)
     if attempt is None:
         return False, 0
 
@@ -197,8 +238,8 @@ def _get_login_lock_state_from_db(username, max_failures, lockout_seconds):
     return False, 0
 
 
-def _record_login_failure_db(username, max_failures, lockout_seconds):
-    attempt = _get_login_attempt_record(username)
+def _record_login_failure_db(subject, max_failures, lockout_seconds):
+    attempt = _get_login_attempt_record(subject)
     if attempt is None:
         return
 
@@ -218,8 +259,8 @@ def _record_login_failure_db(username, max_failures, lockout_seconds):
     db.session.commit()
 
 
-def _clear_login_failures_db(username):
-    attempt = _get_login_attempt_record(username)
+def _clear_login_failures_db(subject):
+    attempt = _get_login_attempt_record(subject)
     if attempt is None:
         return
     attempt.failed_count = 0
@@ -1075,17 +1116,104 @@ def render_role_entry():
     )
 
 
+def render_account_link_page():
+    """只呈现跨端账号所需的最小信息，不读取健康档案。"""
+    last_link_code = session.pop('last_mini_link_code', None)
+    last_link_expires_at = session.pop('last_mini_link_expires_at', None)
+    return render_template(
+        'account_link.html',
+        last_link_code=last_link_code,
+        last_link_expires_at=last_link_expires_at,
+    )
+
+
+def handle_account_link_phone():
+    """复验当前密码后更新待验证手机号标识。"""
+    try:
+        phone_normalized = normalize_phone(request.form.get('phone'), required=True)
+    except ValueError as exc:
+        flash(str(exc), 'error')
+        return redirect(url_for('public.account_link'))
+
+    current_password = request.form.get('current_password', '')
+    if not current_password:
+        flash('请输入当前密码后再保存手机号。', 'error')
+        return redirect(url_for('public.account_link'))
+
+    try:
+        owner_user_id = int(current_user.id)
+        with owner_write_guard(owner_user_id) as locked_user:
+            if not locked_user.check_password(current_password):
+                flash('当前密码不正确，本次更改未保存。', 'error')
+                return redirect(url_for('public.account_link'))
+            if locked_user.phone_normalized != phone_normalized:
+                locked_user.phone_normalized = phone_normalized
+                locked_user.phone_verified_at = None
+            db.session.commit()
+    except OwnerInactiveError:
+        flash('账号已失效，请重新登录。', 'error')
+        return redirect(url_for('public.login'))
+    except IntegrityError:
+        db.session.rollback()
+        flash('手机号暂时无法保存，请稍后重试。', 'error')
+        return redirect(url_for('public.account_link'))
+    except (OSError, RuntimeError, ValueError):
+        db.session.rollback()
+        logger.exception('跨端账号手机号保存失败')
+        flash('手机号暂时无法保存，请稍后重试。', 'error')
+        return redirect(url_for('public.account_link'))
+
+    flash('手机号已保存为待验证标识，当前不能用于登录。', 'success')
+    return redirect(url_for('public.account_link'))
+
+
+def handle_account_link_code():
+    """复验当前密码后生成一次性八位绑定码。"""
+    if request.form.get('miniprogram_privacy_consent') != '1':
+        flash('请先阅读并同意跨端绑定说明。', 'error')
+        return redirect(url_for('public.account_link'))
+    current_password = request.form.get('current_password', '')
+    if not current_password:
+        flash('请输入当前密码后再生成绑定码。', 'error')
+        return redirect(url_for('public.account_link'))
+
+    try:
+        owner_user_id = int(current_user.id)
+        with owner_write_guard(owner_user_id) as locked_user:
+            if not locked_user.check_password(current_password):
+                flash('当前密码不正确，未生成绑定码。', 'error')
+                return redirect(url_for('public.account_link'))
+            challenge = create_account_link_challenge(owner_user_id)
+        session['last_mini_link_code'] = challenge['code']
+        session['last_mini_link_expires_at'] = challenge['expires_at']
+        flash('一次性绑定码已生成，请在 10 分钟内到微信小程序输入。', 'success')
+    except OwnerInactiveError:
+        flash('账号已失效，请重新登录。', 'error')
+        return redirect(url_for('public.login'))
+    except AccountLinkError as exc:
+        flash(exc.message, 'error')
+    except (OSError, RuntimeError, ValueError):
+        db.session.rollback()
+        logger.exception('小程序一次性绑定码生成失败')
+        flash('绑定码暂时无法生成，请稍后重试。', 'error')
+    return redirect(url_for('public.account_link'))
+
+
 def handle_login(next_url):
     if request.method == 'POST':
         # 输入验证
         username = request.form.get('username', '').strip()
         normalized_username = _normalize_login_identifier(username)
+        try:
+            normalized_phone = normalize_phone(username)
+        except ValueError:
+            normalized_phone = None
         password = request.form.get('password', '')
         remember_flag = request.form.get('remember') in ('1', 'on', 'true', 'yes')
 
         # 基本验证
         if not username or not password:
-            flash('请输入用户名和密码', 'error')
+            flash('请输入用户名或已验证手机号和密码', 'error')
             return render_template('login.html', next=next_url)
 
         # 限制长度防止攻击
@@ -1093,10 +1221,26 @@ def handle_login(next_url):
             flash('输入内容过长', 'error')
             return render_template('login.html', next=next_url)
 
-        user = User.query.filter_by(username=username).first()
+        if normalized_phone:
+            user = User.query.filter(
+                User.deleted_at.is_(None),
+                User.phone_normalized == normalized_phone,
+                User.phone_verified_at.is_not(None),
+            ).first()
+            if user is None:
+                user = _find_user_by_username(username)
+            canonical_identifier = (
+                normalized_phone
+                if user is None
+                else _normalize_login_identifier(user.username)
+            )
+        else:
+            user = _find_user_by_username(username)
+            canonical_identifier = normalized_username
+        login_subject = _login_attempt_subject(user, canonical_identifier)
 
         # 账户锁定检查（防暴力破解）
-        lockout_key = _login_lockout_key(normalized_username)
+        lockout_key = _login_lockout_key(login_subject)
         max_failures = current_app.config.get('LOGIN_MAX_FAILURES', 5)
         lockout_seconds = current_app.config.get('LOGIN_LOCKOUT_SECONDS', 300)
         redis_client = None
@@ -1126,7 +1270,11 @@ def handle_login(next_url):
 
         if not redis_client:
             try:
-                db_locked, db_remaining = _get_login_lock_state_from_db(normalized_username, max_failures, lockout_seconds)
+                db_locked, db_remaining = _get_login_lock_state_from_db(
+                    login_subject,
+                    max_failures,
+                    lockout_seconds,
+                )
                 if db_locked:
                     logger.warning(
                         "账户被锁定(db): user_id=%s identifier_len=%s remaining=%ds",
@@ -1139,7 +1287,13 @@ def handle_login(next_url):
             except Exception:
                 logger.warning("数据库锁定检查失败", exc_info=True)
 
-        if user and user.check_password(password):
+        # 不存在的账号也执行同成本密码校验，缩小账号枚举的时间差。
+        password_matches = (
+            user.check_password(password)
+            if user is not None
+            else check_password_hash(_DUMMY_LOGIN_PASSWORD_HASH, password)
+        )
+        if user and password_matches:
             # 登录成功，清除失败计数
             if redis_client:
                 try:
@@ -1149,7 +1303,7 @@ def handle_login(next_url):
                     redis_client = None
             if not redis_client:
                 try:
-                    _clear_login_failures_db(normalized_username)
+                    _clear_login_failures_db(login_subject)
                 except Exception:
                     logger.warning("数据库清除失败计数失败", exc_info=True)
             login_user(
@@ -1164,6 +1318,12 @@ def handle_login(next_url):
             safe_next = _safe_next_url(next_url)
             if safe_next:
                 return redirect(safe_next)
+
+            if (
+                current_app.config.get('WECHAT_FORMAL_RUNTIME')
+                and user.role in {'user', 'caregiver'}
+            ):
+                return redirect(url_for('public.account_link'))
 
             # 没有显式 next 时，让每种角色直达自己的主工作台。
             landing_endpoint = {
@@ -1185,12 +1345,16 @@ def handle_login(next_url):
                 redis_client = None
         if not redis_client:
             try:
-                _record_login_failure_db(normalized_username, max_failures, lockout_seconds)
+                _record_login_failure_db(
+                    login_subject,
+                    max_failures,
+                    lockout_seconds,
+                )
             except Exception:
                 logger.warning("数据库递增失败计数失败", exc_info=True)
 
         logger.warning("登录失败: identifier_len=%s", len(username))
-        flash('用户名或密码错误', 'error')
+        flash('用户名、已验证手机号或密码错误', 'error')
 
     return render_template('login.html', next=next_url)
 
@@ -1203,6 +1367,16 @@ def handle_register():
             flash(result, 'error')
             return redirect(url_for('public.register'))
         username = result
+        if is_reserved_internal_username(username):
+            flash('该用户名属于系统保留命名空间，请换一个用户名。', 'error')
+            return redirect(url_for('public.register'))
+        try:
+            username_as_phone = normalize_phone(username)
+        except ValueError:
+            username_as_phone = None
+        if username_as_phone:
+            flash('用户名不能使用手机号格式，请换一个用户名。', 'error')
+            return redirect(url_for('public.register'))
 
         # 验证密码
         valid, result = validate_password(request.form.get('password'))
@@ -1217,6 +1391,13 @@ def handle_register():
             flash(result, 'error')
             return redirect(url_for('public.register'))
         email = result
+
+        # 手机号只保存为待验证标识；接入短信校验前不能用于登录。
+        try:
+            phone_normalized = normalize_phone(request.form.get('phone'))
+        except ValueError as exc:
+            flash(str(exc), 'error')
+            return redirect(url_for('public.register'))
 
         # 验证年龄
         valid, result = validate_age(request.form.get('age'))
@@ -1235,34 +1416,130 @@ def handle_register():
         # 社区信息
         community = sanitize_input(request.form.get('community'), max_length=100)
 
-        # 检查用户名是否已存在
-        if User.query.filter_by(username=username).first():
-            flash('用户名已存在', 'error')
-            return redirect(url_for('public.register'))
-
-        # 检查邮箱是否已存在
-        if email and User.query.filter_by(email=email).first():
-            flash('邮箱已被注册', 'error')
-            return redirect(url_for('public.register'))
-
         user = User(
             username=username,
             email=email,
+            phone_normalized=phone_normalized,
             age=age,
             gender=gender,
             community=community
         )
         user.set_password(password)
 
-        db.session.add(user)
-        db.session.commit()
+        # 所有占用结果使用相同提示与跳转，减少匿名访客据此枚举手机号或邮箱。
+        processed_message = (
+            '注册申请已处理，请尝试登录。若无法登录，请更换用户名或联系管理员。'
+        )
+        username_taken = User.query.filter(
+            db.func.lower(User.username) == _normalize_login_identifier(username)
+        ).first() is not None
+        email_taken = bool(
+            email and User.query.filter_by(email=email).first() is not None
+        )
+        if any(
+            (
+                username_taken,
+                email_taken,
+            )
+        ):
+            flash(processed_message, 'success')
+            return redirect(
+                url_for('public.login', next=url_for('public.account_link'))
+            )
+
+        try:
+            db.session.add(user)
+            db.session.commit()
+        except IntegrityError:
+            # 用户名与邮箱唯一索引负责处理并发注册竞争。
+            db.session.rollback()
+            flash(processed_message, 'success')
+            return redirect(
+                url_for('public.login', next=url_for('public.account_link'))
+            )
 
         logger.info("新用户注册: user_id=%s", user.id)
-        flash('注册成功，请登录', 'success')
-        return redirect(url_for('public.login'))
+        flash(processed_message, 'success')
+        return redirect(
+            url_for('public.login', next=url_for('public.account_link'))
+        )
 
     communities = Community.query.all()
     return render_template('register.html', communities=communities)
+
+
+def _verified_cooling_map_point(resource):
+    """把仍在人工核验有效期内的 GCJ-02 点位转换为公开地图数据。"""
+    if (
+        resource.coordinate_verified_at is None
+        or resource.coordinate_system != 'GCJ-02'
+        or not str(resource.coordinate_source or '').strip()
+        or resource.latitude is None
+        or resource.longitude is None
+    ):
+        return None
+
+    try:
+        latitude = float(resource.latitude)
+        longitude = float(resource.longitude)
+        verified_at = ensure_utc_aware(resource.coordinate_verified_at)
+    except (TypeError, ValueError):
+        return None
+    if (
+        not math.isfinite(latitude)
+        or not math.isfinite(longitude)
+        or not -90 <= latitude <= 90
+        or not -180 <= longitude <= 180
+    ):
+        return None
+
+    now = utcnow()
+    verification_ttl_days = current_app.config.get(
+        'COOLING_COORDINATE_VERIFICATION_TTL_DAYS',
+        365,
+    )
+    try:
+        verification_ttl_days = max(30, min(int(verification_ttl_days), 730))
+    except (TypeError, ValueError):
+        verification_ttl_days = 365
+    if (
+        verified_at > now + timedelta(minutes=5)
+        or now - verified_at > timedelta(days=verification_ttl_days)
+    ):
+        return None
+
+    center_latitude = math.radians(COOLING_MAP_CENTER_LATITUDE)
+    point_latitude = math.radians(latitude)
+    latitude_delta = point_latitude - center_latitude
+    longitude_delta = math.radians(
+        longitude - COOLING_MAP_CENTER_LONGITUDE
+    )
+    haversine = (
+        math.sin(latitude_delta / 2) ** 2
+        + math.cos(center_latitude)
+        * math.cos(point_latitude)
+        * math.sin(longitude_delta / 2) ** 2
+    )
+    distance_km = 6371.0088 * 2 * math.atan2(
+        math.sqrt(haversine),
+        math.sqrt(max(0.0, 1 - haversine)),
+    )
+    if distance_km > COOLING_MAP_MAX_DISTANCE_KM:
+        return None
+
+    return {
+        'id': resource.id,
+        'name': resource.name,
+        'community': resource.community_code,
+        'type': resource.resource_type,
+        'address': resource.address_hint,
+        'open_hours': resource.open_hours,
+        'has_ac': bool(resource.has_ac),
+        'is_accessible': bool(resource.is_accessible),
+        'lat': latitude,
+        'lng': longitude,
+        'coordinate_system': 'GCJ-02',
+    }
 
 
 def render_cooling_resources_page(community, resource_type, has_ac_raw, is_accessible_raw, open_only):
@@ -1313,20 +1590,11 @@ def render_cooling_resources_page(community, resource_type, has_ac_raw, is_acces
     map_points = []
     for item in resources:
         grouped.setdefault(item.community_code or '未标注社区', []).append(item)
-        if item.latitude is not None and item.longitude is not None:
-            map_points.append({
-                'name': item.name,
-                'community': item.community_code,
-                'type': item.resource_type,
-                'address': item.address_hint,
-                'open_hours': item.open_hours,
-                'has_ac': bool(item.has_ac),
-                'is_accessible': bool(item.is_accessible),
-                'lat': item.latitude,
-                'lng': item.longitude
-            })
+        map_point = _verified_cooling_map_point(item)
+        if map_point is not None:
+            map_points.append(map_point)
 
-    amap_key = current_app.config.get('AMAP_KEY')
+    amap_key = current_app.config.get('AMAP_JS_API_KEY')
     amap_security_js_code = current_app.config.get('AMAP_SECURITY_JS_CODE')
     return render_template(
         'cooling.html',
@@ -1340,6 +1608,7 @@ def render_cooling_resources_page(community, resource_type, has_ac_raw, is_acces
         selected_is_accessible=is_accessible_raw if is_accessible_raw is not None else '',
         open_only=open_only_flag,
         map_points=map_points,
+        map_point_ids={point['id'] for point in map_points},
         amap_key=amap_key,
         amap_security_js_code=amap_security_js_code,
         cooling_weather=cooling_weather,

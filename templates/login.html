@@ -76,8 +76,9 @@
                             {% if next %}<input type="hidden" name="next" value="{{ next }}">{% endif %}
 
                             <div class="mb-3">
-                                <label for="username" class="form-label">用户名</label>
-                                <input type="text" class="form-control" id="username" name="username" placeholder="请输入用户名" required autofocus>
+                                <label for="username" class="form-label">用户名或已验证手机号</label>
+                                <input type="text" class="form-control" id="username" name="username" placeholder="请输入用户名" autocomplete="username" required autofocus>
+                                <small class="text-muted">手机号尚未接入短信验证，保存后仍需使用用户名登录。</small>
                             </div>
                             <div class="mb-3">
                                 <label for="password" class="form-label">密码</label>

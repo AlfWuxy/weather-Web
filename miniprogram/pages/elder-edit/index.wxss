@@ -34,6 +34,10 @@
   margin-top: 26rpx;
 }
 
+.column-field + .column-field {
+  margin-top: 0;
+}
+
 .field-label {
   margin-bottom: 12rpx;
   color: #2a3e33;
@@ -72,7 +76,7 @@
   font-weight: 600;
 }
 
-.fixed-field text {
+.fixed-field-status {
   float: right;
   color: #586d63;
   font-size: 14px;
@@ -93,6 +97,7 @@
 
 .two-column {
   display: flex;
+  align-items: flex-start;
   gap: 18rpx;
   margin-top: 26rpx;
 }

@@ -155,14 +155,19 @@ def _create_wechat_user(openid_hash: str) -> User:
     while User.query.filter_by(username=username).first() is not None:
         suffix += 1
         username = f"{base[:70]}_{suffix}"
-    user = User(username=username, role="user", created_at=utcnow())
+    user = User(
+        username=username,
+        role="user",
+        account_origin="miniprogram_placeholder",
+        created_at=utcnow(),
+    )
     user.set_password(secrets.token_urlsafe(32))
     db.session.add(user)
     db.session.flush()
     return user
 
 
-def _acquire_identity_login_lock(openid_hash: str) -> None:
+def acquire_miniprogram_identity_lock(openid_hash: str) -> None:
     """按身份串行化登录事务，覆盖首次建档与活跃会话上限。"""
     dialect = db.engine.dialect.name
     if dialect == "sqlite":
@@ -177,6 +182,102 @@ def _acquire_identity_login_lock(openid_hash: str) -> None:
             db.text("SELECT pg_advisory_xact_lock(:lock_id)"),
             {"lock_id": lock_id},
         )
+
+
+def issue_miniprogram_session(
+    identity: MiniProgramIdentity,
+    user: User,
+    *,
+    now=None,
+) -> dict:
+    """为已完成身份校验的映射签发会话；调用方负责提交当前事务。"""
+    issued_at = now or utcnow()
+    if identity is None or user is None or identity.user_id != user.id:
+        raise MiniProgramAuthError(
+            "wechat_identity_invalid",
+            "微信身份关联异常，请联系管理员。",
+            409,
+        )
+    if int(identity.binding_auth_version or 0) != int(user.auth_version or 0):
+        raise MiniProgramAuthError(
+            "wechat_identity_relink_required",
+            "网页账号密码已经变更，请重新生成绑定码并串联账号。",
+            401,
+        )
+
+    required_version = current_privacy_version()
+    MiniProgramSession.query.filter(
+        MiniProgramSession.identity_id == identity.id,
+        or_(
+            MiniProgramSession.expires_at <= issued_at,
+            MiniProgramSession.revoked_at.is_not(None),
+        ),
+    ).delete(synchronize_session=False)
+
+    ttl_seconds = _session_ttl_seconds()
+    session_record = MiniProgramSession(
+        identity_id=identity.id,
+        user_id=user.id,
+        token_hash=hashlib.sha256(secrets.token_bytes(32)).hexdigest(),
+        privacy_consent_version=required_version,
+        expires_at=issued_at + timedelta(seconds=ttl_seconds),
+        created_at=issued_at,
+        last_used_at=issued_at,
+    )
+    db.session.add(session_record)
+    db.session.flush()
+    token = _serializer().dumps(
+        {
+            "sid": session_record.id,
+            "uid": user.id,
+            "pv": required_version,
+            "nonce": secrets.token_urlsafe(12),
+        }
+    )
+    session_record.token_hash = _hash_session_token(token)
+    overflow = (
+        MiniProgramSession.query.filter_by(identity_id=identity.id)
+        .filter(MiniProgramSession.revoked_at.is_(None))
+        .order_by(MiniProgramSession.created_at.desc(), MiniProgramSession.id.desc())
+        .offset(_max_active_sessions())
+        .all()
+    )
+    for old_session in overflow:
+        old_session.revoked_at = issued_at
+
+    display_name = (
+        "微信用户"
+        if user.account_origin == "miniprogram_placeholder"
+        else user.username
+    )
+    return {
+        "session_token": token,
+        "token": token,
+        "token_type": "Bearer",
+        "expires_at": ensure_utc_aware(session_record.expires_at).isoformat(),
+        "expires_in": ttl_seconds,
+        "privacy_consent_version": required_version,
+        "user": {"id": user.id, "display_name": display_name},
+    }
+
+
+def _detach_outdated_identity(
+    identity: MiniProgramIdentity,
+    openid_digest: str,
+) -> User:
+    """改密后把微信身份降回空白占位账号，避免继续访问原网页账号。"""
+    MiniProgramSession.query.filter_by(identity_id=identity.id).delete(
+        synchronize_session=False,
+    )
+    db.session.flush()
+    placeholder = _create_wechat_user(openid_digest)
+    identity.user_id = placeholder.id
+    identity.binding_auth_version = int(placeholder.auth_version)
+    identity.link_failed_count = 0
+    identity.link_first_failed_at = None
+    identity.link_locked_until = None
+    db.session.flush()
+    return placeholder
 
 
 def login_with_wechat_code(
@@ -201,7 +302,7 @@ def login_with_wechat_code(
         "family_share" if acquisition_source == "family_share" else "direct"
     )
     try:
-        _acquire_identity_login_lock(openid_digest)
+        acquire_miniprogram_identity_lock(openid_digest)
         identity_query = db.select(MiniProgramIdentity).where(
             MiniProgramIdentity.openid_hash == openid_digest
         )
@@ -218,6 +319,7 @@ def login_with_wechat_code(
                 acquisition_source=normalized_acquisition,
                 created_at=now,
                 last_login_at=now,
+                binding_auth_version=int(user.auth_version),
             )
             db.session.add(identity)
             db.session.flush()
@@ -229,6 +331,10 @@ def login_with_wechat_code(
                     "微信身份关联异常，请联系管理员。",
                     409,
                 )
+            if int(identity.binding_auth_version or 0) != int(
+                user.auth_version or 0
+            ):
+                user = _detach_outdated_identity(identity, openid_digest)
             identity.privacy_consent_version = required_version
             identity.privacy_consented_at = now
             identity.last_login_at = now
@@ -239,45 +345,7 @@ def login_with_wechat_code(
             }:
                 identity.acquisition_source = "unknown"
 
-        # 每次登录清理本身份已失效会话，避免长期运行后表无限增长。
-        MiniProgramSession.query.filter(
-            MiniProgramSession.identity_id == identity.id,
-            or_(
-                MiniProgramSession.expires_at <= now,
-                MiniProgramSession.revoked_at.is_not(None),
-            ),
-        ).delete(synchronize_session=False)
-
-        ttl_seconds = _session_ttl_seconds()
-        session_record = MiniProgramSession(
-            identity_id=identity.id,
-            user_id=user.id,
-            token_hash=hashlib.sha256(secrets.token_bytes(32)).hexdigest(),
-            privacy_consent_version=required_version,
-            expires_at=now + timedelta(seconds=ttl_seconds),
-            created_at=now,
-            last_used_at=now,
-        )
-        db.session.add(session_record)
-        db.session.flush()
-        token = _serializer().dumps(
-            {
-                "sid": session_record.id,
-                "uid": user.id,
-                "pv": required_version,
-                "nonce": secrets.token_urlsafe(12),
-            }
-        )
-        session_record.token_hash = _hash_session_token(token)
-        overflow = (
-            MiniProgramSession.query.filter_by(identity_id=identity.id)
-            .filter(MiniProgramSession.revoked_at.is_(None))
-            .order_by(MiniProgramSession.created_at.desc(), MiniProgramSession.id.desc())
-            .offset(_max_active_sessions())
-            .all()
-        )
-        for old_session in overflow:
-            old_session.revoked_at = now
+        session_payload = issue_miniprogram_session(identity, user, now=now)
         db.session.commit()
     except MiniProgramAuthError:
         db.session.rollback()
@@ -290,15 +358,7 @@ def login_with_wechat_code(
             503,
         ) from exc
 
-    return {
-        "session_token": token,
-        "token": token,
-        "token_type": "Bearer",
-        "expires_at": ensure_utc_aware(session_record.expires_at).isoformat(),
-        "expires_in": ttl_seconds,
-        "privacy_consent_version": required_version,
-        "user": {"id": user.id, "display_name": "微信用户"},
-    }
+    return session_payload
 
 
 def verify_miniprogram_session(token: str):
@@ -341,6 +401,8 @@ def verify_miniprogram_session(token: str):
     if ensure_utc_aware(record.expires_at) <= now:
         return None
     if record.user_id != user_id:
+        return None
+    if int(identity.binding_auth_version or 0) != int(user.auth_version or 0):
         return None
     required_version = current_privacy_version()
     if payload.get("pv") != record.privacy_consent_version:

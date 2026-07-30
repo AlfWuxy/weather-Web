@@ -4,6 +4,7 @@ import json
 import logging
 import math
 from datetime import datetime, timedelta
+from pathlib import Path
 
 from flask import Blueprint, current_app, flash, redirect, render_template, request, url_for
 from flask_login import current_user, login_required
@@ -22,6 +23,7 @@ from core.db_models import (
     WeatherAlert,
 )
 from core.time_utils import utcnow
+from services.cross_platform_identity import is_reserved_internal_username
 from utils.parsers import parse_bool, parse_float, parse_int
 from utils.validators import (
     sanitize_input, validate_age, validate_email, validate_gender, validate_password, validate_username
@@ -34,6 +36,41 @@ bp = Blueprint('admin', __name__)
 COOLING_GCJ02_CENTER_LATITUDE = 29.27
 COOLING_GCJ02_CENTER_LONGITUDE = 116.20
 COOLING_GCJ02_MAX_DISTANCE_KM = 80.0
+COOLING_CANDIDATE_PATH = (
+    Path(__file__).resolve().parent.parent
+    / 'data'
+    / 'cooling_resource_candidates.json'
+)
+
+
+def _load_cooling_candidates():
+    """读取只读候选库；异常数据不会进入正式资源表。"""
+    try:
+        payload = json.loads(COOLING_CANDIDATE_PATH.read_text(encoding='utf-8'))
+        if (
+            not isinstance(payload, dict)
+            or payload.get('publication_status') != 'candidate_only'
+            or payload.get('coordinate_system') != 'GCJ-02'
+            or not isinstance(payload.get('items'), list)
+        ):
+            raise ValueError('candidate_contract_invalid')
+        items = [
+            item for item in payload['items']
+            if (
+                isinstance(item, dict)
+                and item.get('verification_status') == 'pending_human_verification'
+                and item.get('is_active') is False
+            )
+        ]
+        return {**payload, 'items': items}
+    except (OSError, ValueError, json.JSONDecodeError):
+        logger.exception('避暑资源候选库读取失败')
+        return {
+            'publication_status': 'candidate_only',
+            'coordinate_system': 'GCJ-02',
+            'notice': '候选库暂时无法读取。',
+            'items': [],
+        }
 
 
 def _coordinate_distance_km(latitude, longitude):
@@ -603,7 +640,17 @@ def admin_edit_user(user_id):
             flash(result, 'error')
             return redirect(url_for('admin.admin_edit_user', user_id=user_id))
         username = result
-        if username != user.username and User.query.filter_by(username=username).first():
+        if (
+            username != user.username
+            and is_reserved_internal_username(username)
+        ):
+            flash('该用户名属于系统保留命名空间', 'error')
+            return redirect(url_for('admin.admin_edit_user', user_id=user_id))
+        username_conflict = User.query.filter(
+            User.id != user.id,
+            db.func.lower(User.username) == username.lower(),
+        ).first()
+        if username_conflict is not None:
             flash('用户名已存在', 'error')
             return redirect(url_for('admin.admin_edit_user', user_id=user_id))
 
@@ -691,6 +738,9 @@ def admin_add_user():
             flash(result, 'error')
             return redirect(url_for('admin.admin_add_user'))
         username = result
+        if is_reserved_internal_username(username):
+            flash('该用户名属于系统保留命名空间', 'error')
+            return redirect(url_for('admin.admin_add_user'))
 
         # 验证密码
         valid, result = validate_password(request.form.get('password'))
@@ -725,7 +775,9 @@ def admin_add_user():
         if role not in ['admin', 'user', 'caregiver', 'community']:
             role = 'user'
 
-        if User.query.filter_by(username=username).first():
+        if User.query.filter(
+            db.func.lower(User.username) == username.lower()
+        ).first():
             flash('用户名已存在', 'error')
             return redirect(url_for('admin.admin_add_user'))
 
@@ -874,6 +926,22 @@ def admin_cooling_resources():
     )
 
 
+@bp.route('/admin/cooling/candidates', endpoint='admin_cooling_candidates')
+@login_required
+def admin_cooling_candidates():
+    """展示高德候选点，必须人工核验后再转录到正式资源表。"""
+    if current_user.role != 'admin':
+        flash('权限不足', 'error')
+        return redirect(url_for('user.user_dashboard'))
+
+    payload = _load_cooling_candidates()
+    return render_template(
+        'admin_cooling_candidates.html',
+        candidate_payload=payload,
+        candidates=payload['items'],
+    )
+
+
 @bp.route('/admin/cooling/add', methods=['GET', 'POST'], endpoint='admin_add_cooling_resource')
 @login_required
 def admin_add_cooling_resource():
@@ -927,7 +995,45 @@ def admin_add_cooling_resource():
         return redirect(url_for('admin.admin_cooling_resources'))
 
     communities = Community.query.order_by(Community.name).all()
-    return render_template('admin_add_cooling_resource.html', communities=communities)
+    candidate_id = sanitize_input(request.args.get('candidate'), max_length=64)
+    candidate = None
+    if candidate_id:
+        candidate = next(
+            (
+                item for item in _load_cooling_candidates()['items']
+                if item.get('source_id') == candidate_id
+            ),
+            None,
+        )
+    role_labels = {
+        'cooling_candidate': '待核验公共避暑资源',
+        'service_candidate': '待核验志愿服务',
+        'medical_support': '医疗支持',
+    }
+    prefill = {}
+    if candidate:
+        prefill = {
+            'name': candidate.get('name') or '',
+            'resource_type': role_labels.get(
+                candidate.get('public_role'),
+                '待核验资源',
+            ),
+            'address_hint': candidate.get('address') or '',
+            'latitude': candidate.get('latitude'),
+            'longitude': candidate.get('longitude'),
+            'coordinate_system': 'GCJ-02',
+            'coordinate_source': (
+                f"高德 Place Text API v5 候选 {candidate['source_id']}，"
+                "仍需管理员现场或电话人工核验"
+            ),
+            'open_hours': candidate.get('opening_hours_hint') or '',
+        }
+    return render_template(
+        'admin_add_cooling_resource.html',
+        communities=communities,
+        prefill=prefill,
+        candidate=candidate,
+    )
 
 
 @bp.route('/admin/cooling/<int:resource_id>/edit', methods=['GET', 'POST'], endpoint='admin_edit_cooling_resource')

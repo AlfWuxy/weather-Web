@@ -15,7 +15,7 @@ EXPECTED_PLATFORM_NAME = "宜老平安"
 EXPECTED_SERVICE_NAME = "宜老天气通"
 # 兼容仍把 EXPECTED_NAME 作为微信平台正式名称读取的仓库内调用方。
 EXPECTED_NAME = EXPECTED_PLATFORM_NAME
-EXPECTED_RELEASE_VERSION = "1.1.0"
+EXPECTED_RELEASE_VERSION = "1.1.1"
 PRIVACY_DOC_PATH = "docs/miniprogram/PRIVACY_NOTICE_TEMPLATE.md"
 AGREEMENT_DOC_PATH = "docs/miniprogram/USER_AGREEMENT_TEMPLATE.md"
 LISTING_COPY_PATH = "docs/miniprogram/LISTING_COPY.md"
@@ -33,12 +33,12 @@ RELEASE_ARTIFACTS = (
 )
 CONTENT_PATHS = tuple(path for _, path in RELEASE_ARTIFACTS) + (CONFIG_PATH,)
 CANDIDATE_SHA256 = {
-    PRIVACY_DOC_PATH: "aa8899c2003359635f19b26aad3954284853add017eb0f9307293092d879e687",
-    AGREEMENT_DOC_PATH: "0c16483896c8286d47ac66627129c399a9e1c34576af08a4e1147d4d6f8f7a7a",
-    LISTING_COPY_PATH: "0c236a37c43394b2795153d9e2189231e58bbcb0f2cc8706e6dbe1bf9eb16aee",
-    PRIVACY_PAGE_PATH: "78a5d6d46dde6add23c42617f5335b46674909efa331b76d771c767975c49b21",
-    AGREEMENT_PAGE_PATH: "dcd72bd6564924c28d3fbf0c8a71fba6da99bef94d3cc9311788cd30c755e5aa",
-    HEALTH_CONSENT_PAGE_PATH: "a032979495511f552c8dbe6e068f4cf2bf98d64b0e3b27a7cac44d34c2246cc1",
+    PRIVACY_DOC_PATH: "6e331bfcba2e0992ad1a274fc09156417116fc1ea2707dcf218e71d092262bfd",
+    AGREEMENT_DOC_PATH: "8cf0b89832d0ae3f716310e56a4f6d05b52e46975a97f67c615d6ddecfd6c3f2",
+    LISTING_COPY_PATH: "cb2570e8bf78997a9cfb474732769712ef7b6b4b18426530074cd3eee14e7468",
+    PRIVACY_PAGE_PATH: "54e8db4911ada1a94c3e6fc53aacc06aef322fbd0d2e7d300d8b7c631703157e",
+    AGREEMENT_PAGE_PATH: "058ff6aa5f62b1010813386b855c0bd23cde6d9b159d7332299de0918d2b3fbd",
+    HEALTH_CONSENT_PAGE_PATH: "817cfa2f741bfe9c8147c5825c603f6278856eddbabcceea65d3dd61a4142a08",
     CONFIG_PATH: "788385e37f29f5cbcc5b701358f65495c701764767141733ecbb183f10178913",
 }
 FREEZE_KEYS = ("WECHAT_RELEASE_VERSION", "WECHAT_TARGET_COMMIT_SHA") + tuple(
@@ -88,7 +88,7 @@ def validate_public_fields(
     if fields.service_name != EXPECTED_SERVICE_NAME:
         raise ReleaseContractError("小程序内服务名称不符合发布合同。")
     if fields.release_version != EXPECTED_RELEASE_VERSION:
-        raise ReleaseContractError("首发版本不符合发布合同。")
+        raise ReleaseContractError("发布版本必须为 1.1.1。")
     try:
         if date.fromisoformat(fields.effective_date).isoformat() != fields.effective_date:
             raise ValueError
@@ -138,7 +138,7 @@ def render_artifact(path: str, content: bytes, fields: PublicReleaseFields) -> b
     elif path == LISTING_COPY_PATH:
         text = _replace(text, "# 微信小程序上架文案与审核路径（发布候选版）\n\n> 本文案随候选版本迭代。正式提交审核时，同时冻结生效日期、版本号、目标 commit hash、隐私版本及各提交页面内容 hash，并写入私有发布确认单。", f"# 微信小程序上架文案与审核路径\n\n{_markers(fields)}\n\n{fields.visible_brand_relation}\n\n> 本文案对应正式版本 `{fields.release_version}`，审核路径与当前提交功能保持一致。")
         text = _replace(text, "- 小程序名称：宜老天气通", f"- 小程序名称：{fields.name}\n- 小程序内服务名称：{fields.service_name}")
-        for old, new in (("- 建议版本号：`1.1.0`", f"- 版本号：`{fields.release_version}`"), ("类目必须覆盖候选包的完整真实功能", "类目必须覆盖本次提交包的完整真实功能"), ("1.1.0 发布候选版。", "1.1.0 正式版。")):
+        for old, new in (("- 建议版本号：`1.1.1`", f"- 版本号：`{fields.release_version}`"), ("类目必须覆盖候选包的完整真实功能", "类目必须覆盖本次提交包的完整真实功能"), ("1.1.1 发布候选版。", "1.1.1 正式版。")):
             text = _replace(text, old, new)
     elif path == PRIVACY_PAGE_PATH:
         text = _replace(text, '<view class="page-shell">', f"{_markers(fields, dated=True, private=True)}\n<view class=\"page-shell\">")
@@ -177,7 +177,7 @@ def _restore_candidate(path: str, content: bytes, fields: PublicReleaseFields) -
     elif path == LISTING_COPY_PATH:
         text = _replace(text, f"# 微信小程序上架文案与审核路径\n\n{_markers(fields)}\n\n{fields.visible_brand_relation}\n\n> 本文案对应正式版本 `{fields.release_version}`，审核路径与当前提交功能保持一致。", "# 微信小程序上架文案与审核路径（发布候选版）\n\n> 本文案随候选版本迭代。正式提交审核时，同时冻结生效日期、版本号、目标 commit hash、隐私版本及各提交页面内容 hash，并写入私有发布确认单。")
         text = _replace(text, f"- 小程序名称：{fields.name}\n- 小程序内服务名称：{fields.service_name}", "- 小程序名称：宜老天气通")
-        for final, candidate in ((f"- 版本号：`{fields.release_version}`", "- 建议版本号：`1.1.0`"), ("类目必须覆盖本次提交包的完整真实功能", "类目必须覆盖候选包的完整真实功能"), ("1.1.0 正式版。", "1.1.0 发布候选版。")):
+        for final, candidate in ((f"- 版本号：`{fields.release_version}`", "- 建议版本号：`1.1.1`"), ("类目必须覆盖本次提交包的完整真实功能", "类目必须覆盖候选包的完整真实功能"), ("1.1.1 正式版。", "1.1.1 发布候选版。")):
             text = _replace(text, final, candidate)
     elif path == PRIVACY_PAGE_PATH:
         text = _replace(text, f"{_markers(fields, dated=True, private=True)}\n<view class=\"page-shell\">", '<view class="page-shell">')

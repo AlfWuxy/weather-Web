@@ -111,7 +111,8 @@ Page({
   },
 
   async onPullDownRefresh() {
-    await this.loadData({ force: true });
+    // 用户主动下拉时立即请求后端快照，跳过失败后的短暂重试等待。
+    await this.loadData({ force: true, revalidate: true });
     wx.stopPullDownRefresh();
   },
 
@@ -160,7 +161,7 @@ Page({
   },
 
   retry() {
-    this.loadData({ force: true });
+    this.loadData({ force: true, revalidate: true });
   },
 
   onShareAppMessage(options) {

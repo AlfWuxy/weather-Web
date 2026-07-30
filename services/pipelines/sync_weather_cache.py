@@ -27,8 +27,14 @@ from core.app import create_app  # noqa: E402
 from core.constants import DEFAULT_CITY_LABEL  # noqa: E402
 from core.db_models import ForecastCache, WeatherCache, WeatherData  # noqa: E402
 from core.extensions import db  # noqa: E402
-from core.weather import normalize_location_name  # noqa: E402
-from core.time_utils import today_local, utcnow  # noqa: E402
+from core.weather import (  # noqa: E402
+    _get_redis_client,
+    _redis_cache_key,
+    _redis_set_json,
+    is_complete_qweather_weather,
+    normalize_location_name,
+)
+from core.time_utils import ensure_utc_aware, today_local, utcnow  # noqa: E402
 from services.miniprogram_service import (  # noqa: E402
     CANONICAL_LOCATION_NAME,
     latest_snapshot_record,
@@ -399,6 +405,57 @@ def _trusted_complete_snapshot(payload):
     )
 
 
+def _trusted_cycle_current(payload, *, fetched_at, previous_snapshot_id):
+    """只返回本周期补齐且可供网页风险使用的同源实况。"""
+    if (
+        not isinstance(payload, dict)
+        or not payload.get('snapshot_id')
+        or payload.get('snapshot_id') == previous_snapshot_id
+        or not payload.get('available')
+        or payload.get('stale', True)
+    ):
+        return None
+    current = payload.get('current')
+    weather_status = (payload.get('source_status') or {}).get('weather') or {}
+    if (
+        not is_complete_qweather_weather(current)
+        or not weather_status.get('available')
+        or weather_status.get('is_mock')
+        or str(weather_status.get('provider') or '').strip().casefold()
+        != 'qweather'
+        or fetched_at is None
+    ):
+        return None
+    try:
+        source_fetched_at = ensure_utc_aware(
+            datetime.fromisoformat(str(weather_status.get('fetched_at') or ''))
+        )
+        expected_fetched_at = ensure_utc_aware(fetched_at)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if source_fetched_at != expected_fetched_at:
+        return None
+    return dict(current)
+
+
+def _replace_current_redis_cache(location, weather_data):
+    """数据库提交后用同一份完整天气原子替换 Redis 当前天气。"""
+    if not is_complete_qweather_weather(weather_data):
+        return
+    try:
+        ttl_minutes = int(
+            current_app.config.get('WEATHER_CACHE_TTL_MINUTES', 30) or 30
+        )
+    except (TypeError, ValueError):
+        ttl_minutes = 30
+    _redis_set_json(
+        _get_redis_client(),
+        _redis_cache_key('weather:current', location),
+        max(ttl_minutes * 60, 60),
+        weather_data,
+    )
+
+
 def _sync_weather_cache_locked(locations=None, update_daily=True, include_nowcast=True):
     """同步正式天气快照；受控发布烟测可关闭不参与门禁的短时 nowcast。"""
     with app.app_context():
@@ -446,23 +503,6 @@ def _sync_weather_cache_locked(locations=None, update_daily=True, include_nowcas
             isinstance(weather_data, dict)
             and (weather_data.get('is_mock') or weather_data.get('is_demo'))
         )
-        try:
-            if weather_data and not weather_is_mock:
-                fetched_at = fetched_at or utcnow()
-                _upsert_cache(CANONICAL_LOCATION_NAME, weather_data, fetched_at)
-                if update_daily:
-                    _upsert_daily(CANONICAL_LOCATION_NAME, weather_data, target_date)
-                updated = 1
-            if _upsert_nowcast(nowcast, fetched_at or utcnow()):
-                nowcast_updated = 1
-            if updated or nowcast_updated:
-                db.session.commit()
-        except Exception as exc:
-            logger.exception("Weather cache upsert failed for %s: %s", CANONICAL_LOCATION_NAME, exc)
-            db.session.rollback()
-            updated = 0
-            nowcast_updated = 0
-
         if not weather_data or weather_is_mock:
             logger.warning(
                 "No trustworthy persisted weather data available for %s",
@@ -475,9 +515,50 @@ def _sync_weather_cache_locked(locations=None, update_daily=True, include_nowcas
             fetched_at=fetched_at,
             current_fetched_at=fetched_at if weather_data and not weather_is_mock else None,
             force_refresh_sources=weather_service is not None,
+            commit=False,
         )
         persisted = snapshot_payload(snapshot)
         trusted_complete_cycle = _trusted_complete_snapshot(persisted)
+        cycle_current = _trusted_cycle_current(
+            persisted,
+            fetched_at=fetched_at,
+            previous_snapshot_id=previous_snapshot_id,
+        )
+        try:
+            if cycle_current is not None:
+                _upsert_cache(
+                    CANONICAL_LOCATION_NAME,
+                    cycle_current,
+                    fetched_at,
+                )
+                if update_daily:
+                    _upsert_daily(
+                        CANONICAL_LOCATION_NAME,
+                        cycle_current,
+                        target_date,
+                    )
+                updated = 1
+            if _upsert_nowcast(nowcast, fetched_at or utcnow()):
+                nowcast_updated = 1
+            db.session.commit()
+        except Exception as exc:
+            logger.exception(
+                "Weather cycle persistence failed for %s: %s",
+                CANONICAL_LOCATION_NAME,
+                exc,
+            )
+            db.session.rollback()
+            updated = 0
+            nowcast_updated = 0
+            snapshot = latest_snapshot_record()
+            persisted = snapshot_payload(snapshot)
+            trusted_complete_cycle = False
+            cycle_current = None
+        if updated == 1:
+            _replace_current_redis_cache(
+                CANONICAL_LOCATION_NAME,
+                cycle_current,
+            )
         snapshot_ready = bool(
             updated == 1
             and persisted.get('snapshot_id')

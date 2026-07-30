@@ -15,6 +15,7 @@ from core.db_models import (
     ApiToken,
     Community,
     HealthRiskAssessment,
+    MiniProgramLinkChallenge,
     MiniProgramSession,
     User,
 )
@@ -319,6 +320,14 @@ def profile():
                             MiniProgramSession.revoked_at.is_(None),
                         ).update(
                             {MiniProgramSession.revoked_at: now},
+                            synchronize_session=False,
+                        )
+                        MiniProgramLinkChallenge.query.filter(
+                            MiniProgramLinkChallenge.user_id == owner_user_id,
+                            MiniProgramLinkChallenge.consumed_at.is_(None),
+                            MiniProgramLinkChallenge.revoked_at.is_(None),
+                        ).update(
+                            {MiniProgramLinkChallenge.revoked_at: now},
                             synchronize_session=False,
                         )
                         db.session.commit()

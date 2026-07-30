@@ -62,6 +62,16 @@ class User(UserMixin, db.Model):
     username = db.Column(db.String(80), unique=True, nullable=False)
     password_hash = db.Column(db.String(200), nullable=False)
     email = db.Column(db.String(120), unique=True)
+    # 账号来源由服务端写入，不能依赖用户可控的用户名判断系统占位账号。
+    account_origin = db.Column(
+        db.String(32),
+        nullable=False,
+        default='web',
+        server_default='web',
+    )
+    # 手机号先保存为待验证标识；未完成验证前不得用于登录或视为已核验联系方式。
+    phone_normalized = db.Column(db.String(32))
+    phone_verified_at = db.Column(db.DateTime)
     role = db.Column(db.String(20), default='user')  # admin/user/caregiver/community
     # 每次修改密码递增，用于同时撤销 Web 会话与记住登录 Cookie。
     auth_version = db.Column(
@@ -92,6 +102,22 @@ class User(UserMixin, db.Model):
     # 健康敏感信息单独留存同意回执，不能由一般隐私同意或第三方推送同意替代。
     health_sensitive_consent_version = db.Column(db.String(64))
     health_sensitive_consented_at = db.Column(db.DateTime)
+
+    __table_args__ = (
+        # 普通索引支持按号码查询待验证记录，不让未验证号码形成唯一占用。
+        db.Index(
+            'ix_users_phone_normalized',
+            'phone_normalized',
+        ),
+        # 只有已验证手机号形成唯一身份；待验证记录继续允许重复保存。
+        db.Index(
+            'uq_users_verified_phone_normalized',
+            'phone_normalized',
+            unique=True,
+            sqlite_where=db.text('phone_verified_at IS NOT NULL'),
+            postgresql_where=db.text('phone_verified_at IS NOT NULL'),
+        ),
+    )
 
     def set_password(self, password):
         self.password_hash = generate_password_hash(password)
@@ -708,6 +734,22 @@ class MiniProgramIdentity(db.Model):
     acquisition_source = db.Column(db.String(20), nullable=False, default='direct')
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
     last_login_at = db.Column(db.DateTime)
+    # 绑定码错误次数按微信身份持久化，配合 IP 限流抵御分布式枚举。
+    link_failed_count = db.Column(
+        db.Integer,
+        nullable=False,
+        default=0,
+        server_default='0',
+    )
+    link_first_failed_at = db.Column(db.DateTime)
+    link_locked_until = db.Column(db.DateTime)
+    # 微信绑定只对创建或重新绑定时的账号认证版本有效，改密后必须重新串联。
+    binding_auth_version = db.Column(
+        db.Integer,
+        nullable=False,
+        default=1,
+        server_default='1',
+    )
 
     __table_args__ = (
         db.UniqueConstraint(
@@ -715,9 +757,63 @@ class MiniProgramIdentity(db.Model):
             'user_id',
             name='uq_miniprogram_identities_id_user_id',
         ),
+        db.Index(
+            'uq_miniprogram_identities_user_id',
+            'user_id',
+            unique=True,
+        ),
         db.Index('ix_miniprogram_identities_user_id', 'user_id'),
         db.Index('ix_miniprogram_identities_openid_hash', 'openid_hash'),
         db.Index('ix_miniprogram_identities_created_at', 'created_at'),
+    )
+
+
+class MiniProgramLinkChallenge(db.Model):
+    """网页账号与微信身份之间的一次性短码挑战，仅保存带 pepper 的摘要。"""
+    __tablename__ = 'miniprogram_link_challenges'
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(
+        db.Integer,
+        db.ForeignKey('users.id', ondelete='CASCADE'),
+        nullable=False,
+    )
+    code_hash = db.Column(db.String(64), nullable=False, unique=True)
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    expires_at = db.Column(db.DateTime, nullable=False)
+    auth_version_at_create = db.Column(
+        db.Integer,
+        nullable=False,
+        default=1,
+        server_default='1',
+    )
+    consumed_at = db.Column(db.DateTime)
+    consumed_identity_id = db.Column(
+        db.Integer,
+        db.ForeignKey('miniprogram_identities.id', ondelete='SET NULL'),
+    )
+    revoked_at = db.Column(db.DateTime)
+    attempt_count = db.Column(
+        db.Integer,
+        nullable=False,
+        default=0,
+        server_default='0',
+    )
+
+    __table_args__ = (
+        db.Index('ix_mp_link_challenges_user_id', 'user_id'),
+        db.Index('ix_mp_link_challenges_code_hash', 'code_hash'),
+        db.Index('ix_mp_link_challenges_expires_at', 'expires_at'),
+        db.Index(
+            'uq_mp_link_active_user',
+            'user_id',
+            unique=True,
+            sqlite_where=db.text(
+                'consumed_at IS NULL AND revoked_at IS NULL'
+            ),
+            postgresql_where=db.text(
+                'consumed_at IS NULL AND revoked_at IS NULL'
+            ),
+        ),
     )
 
 

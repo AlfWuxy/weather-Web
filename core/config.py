@@ -155,6 +155,7 @@ def validate_production_config():
     debug_value = parse_bool(debug_raw, default=False)
     secret_key_env = (os.getenv('SECRET_KEY') or '').strip()
     pair_token_pepper = (os.getenv('PAIR_TOKEN_PEPPER') or '').strip()
+    account_link_code_pepper = (os.getenv('ACCOUNT_LINK_CODE_PEPPER') or '').strip()
     rate_limit_storage_env = (os.getenv('RATE_LIMIT_STORAGE_URI') or '').strip()
     redis_url = (os.getenv('REDIS_URL') or '').strip()
     weather_cache_redis_url = (os.getenv('WEATHER_CACHE_REDIS_URL') or '').strip()
@@ -206,9 +207,11 @@ def validate_production_config():
             "WECHAT_FORMAL_RUNTIME=1 必须关闭 Sentry，清空 SENTRY_DSN，"
             "并固定 SENTRY_TRACES_SAMPLE_RATE=0、SENTRY_SEND_PII=0。"
         )
-    if wechat_formal_runtime_raw == '0' and any(wx_miniprogram_values.values()):
+    if wechat_formal_runtime_raw == '0' and (
+        any(wx_miniprogram_values.values()) or account_link_code_pepper
+    ):
         raise RuntimeError(
-            "WECHAT_FORMAL_RUNTIME=0 是 Web-only 运行态，必须清空四项微信服务端配置。"
+            "WECHAT_FORMAL_RUNTIME=0 是 Web-only 运行态，必须清空五项微信服务端配置。"
         )
 
     if not debug_value:
@@ -216,9 +219,11 @@ def validate_production_config():
             raise RuntimeError("生产环境必须显式设置 WECHAT_FORMAL_RUNTIME=0 或 1。")
         if wechat_formal_runtime_raw == '1':
             missing = [name for name, value in wx_miniprogram_values.items() if not value]
+            if not account_link_code_pepper:
+                missing.append('ACCOUNT_LINK_CODE_PEPPER')
             if missing:
                 raise RuntimeError(
-                    "WECHAT_FORMAL_RUNTIME=1 需要完整的四项微信服务端配置，缺少: "
+                    "WECHAT_FORMAL_RUNTIME=1 需要完整的五项微信服务端配置，缺少: "
                     + ", ".join(missing)
                 )
         if feature_wxpusher_raw and feature_wxpusher_raw not in {'0', '1'}:
@@ -249,6 +254,7 @@ def validate_production_config():
         independent_secrets = {
             'PAIR_TOKEN_PEPPER': pair_token_pepper,
             'SECRET_KEY': secret_key_env,
+            'ACCOUNT_LINK_CODE_PEPPER': account_link_code_pepper,
             'WX_MINIPROGRAM_OPENID_PEPPER': wx_miniprogram_values['WX_MINIPROGRAM_OPENID_PEPPER'],
             'WX_MINIPROGRAM_SESSION_SECRET': wx_miniprogram_values['WX_MINIPROGRAM_SESSION_SECRET'],
         }
@@ -278,7 +284,7 @@ def validate_production_config():
                 "生产环境禁止使用 memory:// 作为限流存储，请配置 REDIS_URL 或 RATE_LIMIT_STORAGE_URI。"
             )
 
-        # 正式微信态的四项服务端材料必须同时存在并符合发布约束。
+        # 正式微信态的五项服务端材料必须同时存在并符合发布约束。
         if any(wx_miniprogram_values.values()):
             missing = [name for name, value in wx_miniprogram_values.items() if not value]
             if missing:
@@ -287,6 +293,12 @@ def validate_production_config():
                 value = wx_miniprogram_values[name]
                 if len(value) < 32 or _contains_weak_keyword(value):
                     raise RuntimeError(f"{name} 必须使用至少 32 位的独立随机值。")
+            if len(account_link_code_pepper) < 32 or _contains_weak_keyword(
+                account_link_code_pepper
+            ):
+                raise RuntimeError(
+                    "ACCOUNT_LINK_CODE_PEPPER 必须使用至少 32 位的独立随机值。"
+                )
             if public_base_url != PUBLIC_BASE_URL_FORMAL:
                 raise RuntimeError("微信正式模式的 PUBLIC_BASE_URL 必须使用固定正式 origin。")
             if insecure_public_base_allowed:
@@ -402,7 +414,9 @@ def configure_app(app, logger):
     qweather_jwt_kid = _normalized_env_value('QWEATHER_JWT_KID', '')
     qweather_jwt_project_id = _normalized_env_value('QWEATHER_JWT_PROJECT_ID', '')
     qweather_jwt_private_key_path = _normalized_env_value('QWEATHER_JWT_PRIVATE_KEY_PATH', '')
-    amap_key = _normalized_env_value('AMAP_KEY', '')
+    legacy_amap_key = _normalized_env_value('AMAP_KEY', '')
+    amap_js_api_key = _normalized_env_value('AMAP_JS_API_KEY', '')
+    amap_web_service_key = _normalized_env_value('AMAP_WEB_SERVICE_KEY', '')
     amap_security_js_code = _normalized_env_value('AMAP_SECURITY_JS_CODE', '')
     siliconflow_key = _normalized_env_value('SILICONFLOW_API_KEY', '')
     siliconflow_base = _normalized_env_value('SILICONFLOW_API_BASE', SILICONFLOW_API_BASE_DEFAULT)
@@ -430,6 +444,7 @@ def configure_app(app, logger):
     wx_miniprogram_secret = _normalized_env_value('WX_MINIPROGRAM_SECRET', '')
     wx_miniprogram_openid_pepper = _normalized_env_value('WX_MINIPROGRAM_OPENID_PEPPER', '')
     wx_miniprogram_session_secret = _normalized_env_value('WX_MINIPROGRAM_SESSION_SECRET', '')
+    account_link_code_pepper = _normalized_env_value('ACCOUNT_LINK_CODE_PEPPER', '')
     wechat_formal_runtime_raw = _normalized_env_value('WECHAT_FORMAL_RUNTIME', '')
     wx_miniprogram_privacy_version = _normalized_env_value(
         'WX_MINIPROGRAM_PRIVACY_VERSION',
@@ -486,8 +501,25 @@ def configure_app(app, logger):
     app.config['QWEATHER_JWT_PROJECT_ID'] = qweather_jwt_project_id
     app.config['QWEATHER_JWT_PRIVATE_KEY_PATH'] = qweather_jwt_private_key_path
     app.config['QWEATHER_CANONICAL_LOCATION'] = qweather_canonical_location
-    app.config['AMAP_KEY'] = amap_key
+    # 旧 Key 只转换为布尔迁移标记，避免原值进入应用配置后被误用。
+    app.config['AMAP_KEY'] = ''
+    app.config['AMAP_LEGACY_KEY_CONFIGURED'] = bool(legacy_amap_key)
+    app.config['AMAP_JS_API_KEY'] = amap_js_api_key
+    app.config['AMAP_WEB_SERVICE_KEY'] = amap_web_service_key
     app.config['AMAP_SECURITY_JS_CODE'] = amap_security_js_code
+    app.config['COOLING_COORDINATE_VERIFICATION_TTL_DAYS'] = max(
+        30,
+        min(
+            parse_int(
+                os.getenv(
+                    'COOLING_COORDINATE_VERIFICATION_TTL_DAYS',
+                    '365',
+                ),
+                default=365,
+            ),
+            730,
+        ),
+    )
     app.config['SILICONFLOW_API_KEY'] = siliconflow_key
     app.config['SILICONFLOW_API_BASE'] = siliconflow_base
     app.config['FEATURE_WEB_AI'] = feature_web_ai
@@ -499,6 +531,7 @@ def configure_app(app, logger):
     app.config['WX_MINIPROGRAM_SECRET'] = wx_miniprogram_secret
     app.config['WX_MINIPROGRAM_OPENID_PEPPER'] = wx_miniprogram_openid_pepper
     app.config['WX_MINIPROGRAM_SESSION_SECRET'] = wx_miniprogram_session_secret
+    app.config['ACCOUNT_LINK_CODE_PEPPER'] = account_link_code_pepper or secret_key
     app.config['WX_MINIPROGRAM_PRIVACY_VERSION'] = wx_miniprogram_privacy_version
     app.config['ANALYTICS_TEST_USER_IDS'] = analytics_test_user_ids
     app.config['ANALYTICS_MIN_LOCATION_COUNT'] = analytics_min_location_count
@@ -624,19 +657,61 @@ def configure_app(app, logger):
     app.config.setdefault('RATE_LIMIT_ML', os.getenv('RATE_LIMIT_ML', app.config['RATE_LIMITS']))
     app.config.setdefault('RATE_LIMIT_AI', os.getenv('RATE_LIMIT_AI', '20 per minute'))
     app.config.setdefault('RATE_LIMIT_LOGIN', os.getenv('RATE_LIMIT_LOGIN', '5 per 5 minutes'))
+    app.config.setdefault('RATE_LIMIT_REGISTER', os.getenv('RATE_LIMIT_REGISTER', '5 per hour'))
     app.config.setdefault('LOGIN_MAX_FAILURES', parse_int(os.getenv('LOGIN_MAX_FAILURES', '5'), default=5))
     app.config.setdefault('LOGIN_LOCKOUT_SECONDS', parse_int(os.getenv('LOGIN_LOCKOUT_SECONDS', '300'), default=300))
     app.config.setdefault('RATE_LIMIT_SHORT_CODE', os.getenv('RATE_LIMIT_SHORT_CODE', '3 per hour'))
     app.config.setdefault('RATE_LIMIT_CONFIRM', os.getenv('RATE_LIMIT_CONFIRM', '30 per hour'))
     app.config.setdefault('RATE_LIMIT_HELP', os.getenv('RATE_LIMIT_HELP', '10 per hour'))
     app.config.setdefault('RATE_LIMIT_ESCALATE', os.getenv('RATE_LIMIT_ESCALATE', '10 per hour'))
-    app.config.setdefault('RATE_LIMIT_AMAP_PROXY', os.getenv('RATE_LIMIT_AMAP_PROXY', '30 per minute'))
     app.config.setdefault('RATE_LIMIT_MP_READ', os.getenv('RATE_LIMIT_MP_READ', '120 per minute'))
     app.config.setdefault('RATE_LIMIT_MP_WRITE', os.getenv('RATE_LIMIT_MP_WRITE', '30 per minute'))
     app.config.setdefault('RATE_LIMIT_MP_ALERTS', os.getenv('RATE_LIMIT_MP_ALERTS', '30 per minute'))
     app.config.setdefault('RATE_LIMIT_MP_EVENTS', os.getenv('RATE_LIMIT_MP_EVENTS', '60 per minute'))
     app.config.setdefault('RATE_LIMIT_MP_AUTH', os.getenv('RATE_LIMIT_MP_AUTH', '10 per 5 minutes'))
+    app.config.setdefault('RATE_LIMIT_MP_LINK', os.getenv('RATE_LIMIT_MP_LINK', '5 per 10 minutes'))
+    app.config.setdefault('RATE_LIMIT_MP_DELETE', os.getenv('RATE_LIMIT_MP_DELETE', '5 per hour'))
     app.config.setdefault('RATE_LIMIT_MP_PUBLIC', os.getenv('RATE_LIMIT_MP_PUBLIC', '600 per minute'))
+    app.config.setdefault(
+        'RATE_LIMIT_ACCOUNT_LINK',
+        os.getenv('RATE_LIMIT_ACCOUNT_LINK', '5 per hour'),
+    )
+    app.config.setdefault(
+        'ACCOUNT_LINK_CODE_TTL_SECONDS',
+        max(
+            300,
+            min(
+                parse_int(
+                    os.getenv('ACCOUNT_LINK_CODE_TTL_SECONDS', '600'),
+                    default=600,
+                ),
+                1800,
+            ),
+        ),
+    )
+    app.config.setdefault(
+        'ACCOUNT_LINK_FAILURE_MAX',
+        max(
+            3,
+            min(
+                parse_int(os.getenv('ACCOUNT_LINK_FAILURE_MAX', '5'), default=5),
+                10,
+            ),
+        ),
+    )
+    app.config.setdefault(
+        'ACCOUNT_LINK_FAILURE_WINDOW_SECONDS',
+        max(
+            300,
+            min(
+                parse_int(
+                    os.getenv('ACCOUNT_LINK_FAILURE_WINDOW_SECONDS', '600'),
+                    default=600,
+                ),
+                1800,
+            ),
+        ),
+    )
     app.config.setdefault(
         'MINIPROGRAM_SNAPSHOT_RETENTION',
         max(
@@ -717,10 +792,17 @@ def configure_app(app, logger):
 
     if qweather_auth_mode == 'disabled':
         logger.warning("QWeather 已禁用，天气API将使用 Open-Meteo 或规则兜底。")
-    if not amap_key:
-        logger.warning("AMAP_KEY 未配置，地图API将无法使用")
+    if not amap_js_api_key:
+        logger.warning("AMAP_JS_API_KEY 未配置，浏览器地图将降级为文字清单")
     if not amap_security_js_code:
-        logger.warning("AMAP_SECURITY_JS_CODE 未配置，地图安全密钥将无法使用")
+        logger.warning("AMAP_SECURITY_JS_CODE 未配置，高德 JS API 将无法正式加载")
+    if not amap_web_service_key:
+        logger.warning("AMAP_WEB_SERVICE_KEY 未配置，服务端地理编码与地点查询将不可用")
+    if legacy_amap_key:
+        logger.warning(
+            "AMAP_KEY 已废弃且不会参与任何调用，请改用独立的 "
+            "AMAP_JS_API_KEY 与 AMAP_WEB_SERVICE_KEY"
+        )
     if not feature_web_ai:
         logger.info("FEATURE_WEB_AI=0，Web AI 问答已关闭")
     elif not siliconflow_key:

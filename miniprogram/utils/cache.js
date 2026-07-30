@@ -99,7 +99,7 @@ function createCachedResourceLoader(options) {
     const now = settings.now();
     const cached = inspectEnvelope(settings.read(), now, settings.ttlMs);
     if (loadOptions && loadOptions.revalidate) {
-      // 只供服务端明确要求纠正版本时使用；普通刷新继续遵守 30 分钟硬缓存。
+      // 服务端纠正版本或用户主动刷新可跳过硬缓存；后台刷新继续遵守节流。
       return refresh(cached);
     }
     if (cached.valid && (cached.fresh || cached.retryGuarded)) {

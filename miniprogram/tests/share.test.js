@@ -275,6 +275,36 @@ test('较早公共天气隐藏旧风险分数并退回通用行动', () => {
   assert.match(actionsView, /较早天气已切换为通用清单/);
 });
 
+test('复制给家人的提醒使用当日模板并保留未确认行动', () => {
+  const definition = loadActionsPageDefinition();
+  const page = pageInstance(definition);
+  let clipboard = '';
+  const previousWx = global.wx;
+  global.wx = {
+    setClipboardData(options) {
+      clipboard = options.data;
+    },
+  };
+  try {
+    page.data.familyReminder = {
+      message: '今天高温，请马上联系老人。',
+      followUpQuestion: '现在谁能联系到他？',
+    };
+    page.data.actions = [
+      { id: 'water', title: '少量多次补水', checked: false },
+      { id: 'room', title: '检查室内温度', checked: true },
+    ];
+    page.copyReminder.call(page);
+  } finally {
+    global.wx = previousWx;
+  }
+
+  assert.match(clipboard, /今天高温，请马上联系老人/);
+  assert.match(clipboard, /现在谁能联系到他/);
+  assert.match(clipboard, /还没确认：\n• 少量多次补水/);
+  assert.doesNotMatch(clipboard, /检查室内温度/);
+});
+
 test('首页只向视图层传递当前天气和前三项行动', () => {
   const result = {
     data: {

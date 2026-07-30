@@ -206,11 +206,21 @@ test('继承父卡片背景的小字颜色也达到 4.5:1', () => {
   const coolingStyle = fs.readFileSync(path.join(miniRoot, 'pages/cooling/index.wxss'), 'utf8');
   const elderStyle = fs.readFileSync(path.join(miniRoot, 'pages/elder-edit/index.wxss'), 'utf8');
   assert.match(coolingStyle, /\.line-label\s*\{\s*color:\s*#66594f/);
-  assert.match(elderStyle, /\.fixed-field text\s*\{[^}]*color:\s*#586d63/);
+  assert.match(elderStyle, /\.fixed-field-status\s*\{[^}]*color:\s*#586d63/);
   assert.match(elderStyle, /\.field-hint\s*\{[^}]*color:\s*#5f6f67/);
   assert.ok(contrastRatio('#66594f', '#fffdf9') >= 4.5);
   assert.ok(contrastRatio('#586d63', '#f2f8f4') >= 4.5);
   assert.ok(contrastRatio('#5f6f67', '#ffffff') >= 4.5);
+});
+
+test('老人资料年龄与性别双栏共享同一顶部基线', () => {
+  const style = fs.readFileSync(path.join(miniRoot, 'pages/elder-edit/index.wxss'), 'utf8');
+  const view = fs.readFileSync(path.join(miniRoot, 'pages/elder-edit/index.wxml'), 'utf8');
+  assert.match(style, /\.column-field\s*\+\s*\.column-field\s*\{[^}]*margin-top:\s*0;/);
+  assert.match(style, /\.two-column\s*\{[^}]*align-items:\s*flex-start;/);
+  assert.doesNotMatch(style, /\.fixed-field\s+text\b/);
+  assert.match(style, /\.fixed-field-status\s*\{/);
+  assert.match(view, /<text class="fixed-field-status">已固定<\/text>/);
 });
 
 test('原生按钮、导航、选择和输入控件共享 88rpx 触控基线', () => {

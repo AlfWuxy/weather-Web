@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+
+{% block title %}避暑资源候选预览 - 管理后台{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <div class="row mb-4">
+        <div class="col-12">
+            <h2><i class="bi bi-map"></i> 高德资源候选预览</h2>
+            <p class="text-muted">查询日期 {{ candidate_payload.generated_at or '未知' }} · 坐标系 {{ candidate_payload.coordinate_system }}</p>
+            <div class="alert alert-warning" role="alert">
+                <strong>这些点位尚未公开。</strong>
+                {{ candidate_payload.notice }}
+                点击“带入录入表单”只会预填字段，仍需逐项确认开放时间、空调、无障碍、接待条件与坐标，再手动勾选核验和启用。
+            </div>
+            <a class="btn btn-outline-secondary" href="{{ url_for('admin.admin_cooling_resources') }}">返回正式资源管理</a>
+        </div>
+    </div>
+
+    <div class="card shadow-sm">
+        <div class="card-body p-0">
+            <div class="table-responsive">
+                <table class="table table-hover mb-0 align-middle">
+                    <thead class="table-light">
+                        <tr>
+                            <th>名称</th>
+                            <th>候选用途</th>
+                            <th>地址</th>
+                            <th>高德开放提示</th>
+                            <th>状态</th>
+                            <th>操作</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for item in candidates %}
+                        <tr>
+                            <td>
+                                <strong>{{ item.name }}</strong>
+                                <div class="small text-muted">{{ item.source_id }}</div>
+                            </td>
+                            <td>
+                                {% if item.public_role == 'medical_support' %}
+                                    <span class="badge bg-danger">医疗支持</span>
+                                {% elif item.public_role == 'service_candidate' %}
+                                    <span class="badge bg-primary">志愿服务候选</span>
+                                {% else %}
+                                    <span class="badge bg-warning text-dark">避暑资源候选</span>
+                                {% endif %}
+                            </td>
+                            <td>{{ item.address or '待核验' }}</td>
+                            <td>{{ item.opening_hours_hint or '未提供，必须人工确认' }}</td>
+                            <td><span class="badge bg-secondary">待人工核验</span></td>
+                            <td>
+                                <a class="btn btn-sm btn-outline-primary"
+                                   href="{{ url_for('admin.admin_add_cooling_resource', candidate=item.source_id) }}">
+                                    带入录入表单
+                                </a>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        {% if not candidates %}
+            <div class="card-footer bg-white text-muted">候选库当前为空或不可用。</div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

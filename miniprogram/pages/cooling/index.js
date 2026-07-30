@@ -70,7 +70,7 @@ Page({
   },
 
   async onPullDownRefresh() {
-    await this.loadData({ force: true });
+    await this.loadData({ force: true, revalidate: true });
     wx.stopPullDownRefresh();
   },
 
@@ -191,7 +191,7 @@ Page({
     });
     wx.showModal({
       title: '本次使用当前位置？',
-      content: '仅在本页按直线距离排列避暑资源。位置不会上传，不会写入本机存储，也不会后台持续定位，离开页面后清除。',
+      content: '仅在本页按直线距离排列避暑资源。位置不会上传至本项目服务器，不会写入本项目持久存储，也不会后台持续定位，离开页面后清除。',
       confirmText: '仅本次',
       cancelText: '手动选择',
       success: (result) => {
@@ -353,7 +353,7 @@ Page({
   },
 
   retry() {
-    this.loadData({ force: true });
+    this.loadData({ force: true, revalidate: true });
   },
 
   onShareAppMessage() {

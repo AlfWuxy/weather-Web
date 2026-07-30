@@ -26,6 +26,20 @@ function compareCommunityRank(left, right) {
   return leftKey < rightKey ? -1 : 1;
 }
 
+function mapScaleFor(communities) {
+  if (!communities.length) return 12;
+  const latitudes = communities.map((item) => item.latitude);
+  const longitudes = communities.map((item) => item.longitude);
+  const span = Math.max(
+    Math.max(...latitudes) - Math.min(...latitudes),
+    Math.max(...longitudes) - Math.min(...longitudes)
+  );
+  if (span <= 0.01) return 14;
+  if (span <= 0.03) return 13;
+  if (span <= 0.08) return 12;
+  return 10;
+}
+
 Page({
   data: {
     loading: true,
@@ -35,10 +49,18 @@ Page({
     freshness: {},
     filter: 'all',
     counts: { all: 0, high: 0, mid: 0, low: 0 },
+    mapReady: false,
+    mapMarkers: [],
+    mapLatitude: null,
+    mapLongitude: null,
+    mapScale: 12,
+    mappableCount: 0,
+    selectedCommunity: null,
   },
 
   onLoad() {
     this._allCommunities = [];
+    this._markerCommunityById = {};
     beginPublicPage(this);
     showPublicShareMenu();
   },
@@ -54,10 +76,11 @@ Page({
   onUnload() {
     unloadPublicPage(this);
     this._allCommunities = [];
+    this._markerCommunityById = {};
   },
 
   async onPullDownRefresh() {
-    await this.loadData({ force: true });
+    await this.loadData({ force: true, revalidate: true });
     wx.stopPullDownRefresh();
   },
 
@@ -93,6 +116,7 @@ Page({
     };
     this._allCommunities = allCommunities;
     const communities = this.filteredCommunities(this.data.filter);
+    const mapState = this.buildMapState(communities);
     this.setData({
       loading: false,
       error: '',
@@ -100,6 +124,8 @@ Page({
       summary: normalized.summary,
       freshness: freshnessView(result.meta, normalized),
       counts,
+      ...mapState,
+      selectedCommunity: null,
     });
     schedulePublicRefresh(this, result.meta, () => this.loadData());
   },
@@ -110,7 +136,12 @@ Page({
 
   applyFilter(filter) {
     const communities = this.filteredCommunities(filter);
-    this.setData({ filter, communities });
+    this.setData({
+      filter,
+      communities,
+      ...this.buildMapState(communities),
+      selectedCommunity: null,
+    });
   },
 
   filteredCommunities(filter) {
@@ -120,8 +151,96 @@ Page({
       : allCommunities.filter((item) => item.tone === filter);
   },
 
+  buildMapState(communities) {
+    const mappable = (Array.isArray(communities) ? communities : [])
+      .filter((item) => item.hasCoordinates);
+    const markerCommunityById = {};
+    const markers = mappable.map((item, index) => {
+      const markerId = index + 1;
+      markerCommunityById[String(markerId)] = stableCommunityKey(item);
+      return {
+        id: markerId,
+        latitude: item.latitude,
+        longitude: item.longitude,
+        iconPath: '/assets/icons/place.png',
+        width: 30,
+        height: 30,
+        title: item.name,
+        // 地图标记只显示社区名称，聚合指标统一在地图外的详情卡展示。
+        callout: {
+          content: item.name,
+          color: '#44362d',
+          fontSize: 12,
+          borderRadius: 6,
+          bgColor: '#fffdf9',
+          padding: 6,
+          display: 'BYCLICK',
+          textAlign: 'center',
+        },
+      };
+    });
+    this._markerCommunityById = markerCommunityById;
+    if (!mappable.length) {
+      return {
+        mapReady: false,
+        mapMarkers: [],
+        mapLatitude: null,
+        mapLongitude: null,
+        mapScale: 12,
+        mappableCount: 0,
+      };
+    }
+    const latitudes = mappable.map((item) => item.latitude);
+    const longitudes = mappable.map((item) => item.longitude);
+    return {
+      mapReady: true,
+      mapMarkers: markers,
+      mapLatitude: (Math.min(...latitudes) + Math.max(...latitudes)) / 2,
+      mapLongitude: (Math.min(...longitudes) + Math.max(...longitudes)) / 2,
+      mapScale: mapScaleFor(mappable),
+      mappableCount: mappable.length,
+    };
+  },
+
+  selectCommunity(item) {
+    if (!item || !item.hasCoordinates) return;
+    this.setData({
+      selectedCommunity: item,
+      mapLatitude: item.latitude,
+      mapLongitude: item.longitude,
+      mapScale: 15,
+    });
+  },
+
+  onMarkerTap(event) {
+    const markerId = String(event && event.detail && event.detail.markerId || '');
+    const communityKey = this._markerCommunityById[markerId];
+    const item = this._allCommunities.find(
+      (community) => stableCommunityKey(community) === communityKey
+    );
+    this.selectCommunity(item);
+  },
+
+  focusCommunity(event) {
+    const communityId = String(
+      event && event.currentTarget && event.currentTarget.dataset
+        && event.currentTarget.dataset.communityId || ''
+    );
+    const item = this._allCommunities.find(
+      (community) => stableCommunityKey(community) === communityId
+    );
+    this.selectCommunity(item);
+  },
+
+  resetMapView() {
+    this.setData({
+      ...this.buildMapState(this.data.communities),
+      selectedCommunity: null,
+    });
+  },
+
   retry() {
-    this.loadData({ force: true });
+    this.loadData({ force: true, revalidate: true });
   },
 
   onShareAppMessage() {

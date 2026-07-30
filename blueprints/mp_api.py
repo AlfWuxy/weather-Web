@@ -12,6 +12,7 @@ Endpoints:
 
 from __future__ import annotations
 
+import hmac
 import json
 import math
 import secrets
@@ -33,6 +34,7 @@ from core.db_models import (
     HealthRiskAssessment,
     MedicationReminder,
     MiniProgramIdentity,
+    MiniProgramLinkChallenge,
     MiniProgramSession,
     Notification,
     Pair,
@@ -72,8 +74,14 @@ from services.community_daily_service import (
 from services.miniprogram_auth import (
     MiniProgramAuthError,
     current_privacy_version,
+    exchange_wechat_code,
+    hash_openid,
     login_with_wechat_code,
     verify_miniprogram_session,
+)
+from services.cross_platform_identity import (
+    AccountLinkError,
+    consume_account_link_challenge,
 )
 from services.miniprogram_service import (
     CANONICAL_LOCATION_NAME,
@@ -711,6 +719,39 @@ def wechat_login():
     return _success(result)
 
 
+@bp.route("/auth/link-account", methods=["POST"], endpoint="link_account")
+@limiter.limit(lambda: current_app.config.get("RATE_LIMIT_MP_LINK", "5 per 10 minutes"), key_func=_mp_rate_limit_key)
+@require_api_token
+def link_account():
+    """微信登录完成后，消费网页生成的一次性短码并轮换会话。"""
+    if getattr(g, "auth_kind", None) != "miniprogram_session":
+        db.session.rollback()
+        return _error(
+            "miniprogram_session_required",
+            "请先使用微信登录，再绑定网页账号。",
+            403,
+        )
+    try:
+        payload = _json_payload()
+        code = _strict_text(payload, "code", 16, required=True)
+        result = consume_account_link_challenge(
+            code=code,
+            identity_id=g.mp_session.identity_id,
+            authenticated_user_id=g.api_user_id,
+            identity_openid_hash=getattr(
+                getattr(g.mp_session, "_verified_identity", None),
+                "openid_hash",
+                None,
+            ),
+        )
+    except ValueError as exc:
+        db.session.rollback()
+        return _error(str(exc), "绑定请求格式不正确。", 400)
+    except AccountLinkError as exc:
+        return _error(exc.code, exc.message, exc.status_code)
+    return _success(result)
+
+
 @bp.route("/auth/logout", methods=["POST"], endpoint="wechat_logout")
 @limiter.limit(lambda: current_app.config.get("RATE_LIMIT_MP_WRITE", "30 per minute"), key_func=_mp_rate_limit_key)
 @require_api_token
@@ -776,9 +817,14 @@ def me():
         return jsonify({"success": False, "error": "user_not_found"}), 404
     wxpusher_feature_enabled = _wxpusher_feature_enabled()
     required_wxpusher_version = current_privacy_version()
+    display_name = (
+        "微信用户"
+        if user.account_origin == "miniprogram_placeholder"
+        else user.username
+    )
     data = {
         "id": user.id,
-        "display_name": "微信用户" if getattr(g, "auth_kind", None) == "miniprogram_session" else user.username,
+        "display_name": display_name,
         "wxpusher_uid": user.wxpusher_uid if wxpusher_feature_enabled else None,
         "push_enabled": bool(user.push_enabled) if wxpusher_feature_enabled else False,
         "wxpusher_feature_enabled": wxpusher_feature_enabled,
@@ -1088,6 +1134,9 @@ def _anonymize_miniprogram_owner(user):
     UsageEvent.query.filter_by(user_id=user_id).delete(synchronize_session=False)
     FamilyMember.query.filter_by(user_id=user_id).delete(synchronize_session=False)
     ApiToken.query.filter_by(user_id=user_id).delete(synchronize_session=False)
+    MiniProgramLinkChallenge.query.filter_by(user_id=user_id).delete(
+        synchronize_session=False
+    )
     MiniProgramSession.query.filter_by(user_id=user_id).delete(synchronize_session=False)
     MiniProgramIdentity.query.filter_by(user_id=user_id).delete(synchronize_session=False)
 
@@ -1131,6 +1180,8 @@ def _anonymize_miniprogram_owner(user):
 
     user.username = f"deleted_mp_{user_id}_{secrets.token_hex(6)}"
     user.email = None
+    user.phone_normalized = None
+    user.phone_verified_at = None
     user.age = None
     user.gender = None
     user.community = None
@@ -1160,10 +1211,10 @@ def _anonymize_miniprogram_owner(user):
 
 
 @bp.route("/me", methods=["DELETE"], endpoint="me_delete")
-@limiter.limit(lambda: current_app.config.get("RATE_LIMIT_MP_WRITE", "30 per minute"), key_func=_mp_rate_limit_key)
+@limiter.limit(lambda: current_app.config.get("RATE_LIMIT_MP_DELETE", "5 per hour"), key_func=_mp_rate_limit_key)
 @require_api_token
 def me_delete():
-    """删除小程序身份和 owner 数据，并保留无身份审计占位用户。"""
+    """经 fresh wx.login 复验后删除小程序身份和 owner 数据。"""
     if getattr(g, "auth_kind", None) != "miniprogram_session":
         return _error("miniprogram_session_required", "账号注销仅支持微信小程序登录会话。", 403)
     owner_user_id = int(g.api_user_id)
@@ -1181,13 +1232,49 @@ def me_delete():
                 return _error("owner_scope_violation", "不能注销其他用户的账号。", 403)
         if payload.get("confirm", False) is not True:
             return _error("delete_confirmation_required", "请明确确认账号注销。", 400)
+        raw_wechat_code = payload.get("wechat_code")
+        if not isinstance(raw_wechat_code, str) or not raw_wechat_code.strip():
+            db.session.rollback()
+            return _error(
+                "fresh_wechat_login_required",
+                "注销前请重新完成一次微信身份验证。",
+                428,
+            )
+        wechat_code = _strict_text(
+            payload,
+            "wechat_code",
+            128,
+            required=True,
+        )
 
-        # 装饰器的认证写锁必须先释放，后续统一执行 file lock -> DB。
+        # 上游换码前释放装饰器取得的数据库锁，避免网络等待占用 owner 写锁。
         db.session.rollback()
+        fresh_openid_hash = hash_openid(exchange_wechat_code(wechat_code))
         with push_owner_lock(owner_user_id):
             authorization_error = _reauthorize_locked_api_user()
             if authorization_error is not None:
                 return authorization_error
+            locked_identity = getattr(
+                getattr(g, "mp_session", None),
+                "_verified_identity",
+                None,
+            )
+            locked_openid_hash = str(
+                getattr(locked_identity, "openid_hash", "") or ""
+            )
+            if (
+                not locked_openid_hash
+                or not hmac.compare_digest(
+                    fresh_openid_hash,
+                    locked_openid_hash,
+                )
+            ):
+                db.session.rollback()
+                return _error(
+                    "wechat_identity_mismatch",
+                    "本次微信身份与当前账号不一致，注销已取消。",
+                    403,
+                )
             user = g.api_user
             if user.role == "admin":
                 db.session.rollback()
@@ -1196,6 +1283,9 @@ def me_delete():
     except ValueError as exc:
         db.session.rollback()
         return _error(str(exc), "账号注销请求无效。", 400)
+    except MiniProgramAuthError as exc:
+        db.session.rollback()
+        return _error(exc.code, exc.message, exc.status_code)
     except (OSError, RuntimeError):
         db.session.rollback()
         current_app.logger.exception("小程序账号注销锁不可用")

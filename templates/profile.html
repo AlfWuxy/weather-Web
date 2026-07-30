@@ -177,35 +177,35 @@
         <div class="col-md-4">
             <div class="card shadow-sm mb-4">
                 <div class="card-header bg-light">
-                    <h5 class="mb-0">小程序绑定凭证</h5>
+                    <h5 class="mb-0">网页与微信小程序串联</h5>
                 </div>
                 <div class="card-body">
                     <p class="text-muted small mb-2">
-                        为小程序生成短期绑定凭证。凭证只显示一次，隐私说明更新后需重新生成。
+                        使用独立的跨端账号页保存手机号，并在复验当前密码后生成 8 位一次性绑定码。
                     </p>
-                    {% if last_api_token_plain %}
-                        <div class="alert alert-warning small">
-                            <div class="fw-semibold">请立即复制保存（仅显示一次）</div>
-                            <input class="form-control mt-2" value="{{ last_api_token_plain }}" readonly>
-                        </div>
-                    {% endif %}
-                    <form method="POST" action="{{ url_for('user.profile') }}">
-                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                        <input type="hidden" name="form_id" value="api_token">
-                        <div class="mb-2">
-                            <label class="form-label small">备注（可选）</label>
-                            <input class="form-control" name="token_name" placeholder="例如：我的手机">
-                        </div>
-                        <div class="form-check mb-3">
-                            <input class="form-check-input" type="checkbox" value="1" name="miniprogram_privacy_consent" id="miniprogramPrivacyConsent" required>
-                            <label class="form-check-label small" for="miniprogramPrivacyConsent">
-                                我已阅读并同意<a href="{{ url_for('public.transparency') }}#privacy" target="_blank" rel="noopener">隐私与使用边界</a>，并确认此凭证仅供本人设备绑定。
-                            </label>
-                        </div>
-                        <button type="submit" class="btn btn-outline-primary w-100">
-                            <i class="bi bi-key"></i> 生成绑定凭证
-                        </button>
-                    </form>
+                    <a class="btn btn-primary w-100" href="{{ url_for('public.account_link') }}">
+                        <i class="bi bi-link-45deg"></i> 打开跨端账号页
+                    </a>
+
+                    <details class="mt-3">
+                        <summary class="small text-muted">旧版 API Token 兼容入口</summary>
+                        {% if last_api_token_plain %}
+                            <div class="alert alert-warning small mt-2">
+                                <div class="fw-semibold">请立即复制保存（仅显示一次）</div>
+                                <input class="form-control mt-2" value="{{ last_api_token_plain }}" readonly>
+                            </div>
+                        {% endif %}
+                        <form method="POST" action="{{ url_for('user.profile') }}" class="mt-2">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                            <input type="hidden" name="form_id" value="api_token">
+                            <input class="form-control mb-2" name="token_name" placeholder="备注，例如：旧版设备">
+                            <div class="form-check mb-2">
+                                <input class="form-check-input" type="checkbox" value="1" name="miniprogram_privacy_consent" id="legacyTokenConsent" required>
+                                <label class="form-check-label small" for="legacyTokenConsent">我确认仅在自己的旧版设备上使用。</label>
+                            </div>
+                            <button type="submit" class="btn btn-outline-secondary btn-sm w-100">生成旧版 Token</button>
+                        </form>
+                    </details>
                 </div>
             </div>
 

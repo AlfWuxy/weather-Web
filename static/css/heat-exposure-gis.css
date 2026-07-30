@@ -394,6 +394,15 @@
     background: transparent;
 }
 
+.gis-grid-canvas {
+    position: absolute;
+    z-index: 180;
+    inset: 0;
+    width: 100%;
+    height: 640px;
+    pointer-events: none;
+}
+
 .gis-map-loading,
 .gis-map-fallback {
     position: absolute;
@@ -965,11 +974,18 @@
 }
 
 .gis-cell-tooltip {
-    border: 1px solid var(--gis-line-dark) !important;
-    border-radius: 0 !important;
-    color: var(--gis-navy) !important;
-    box-shadow: 0 4px 14px rgba(15, 38, 59, .14) !important;
-    font-size: .75rem !important;
+    position: absolute;
+    z-index: 650;
+    max-width: 220px;
+    padding: 7px 9px;
+    border: 1px solid var(--gis-line-dark);
+    border-radius: 0;
+    background: rgba(255, 255, 255, .96);
+    color: var(--gis-navy);
+    box-shadow: 0 4px 14px rgba(15, 38, 59, .14);
+    font-size: .75rem;
+    pointer-events: none;
+    transform: translate(10px, calc(-100% - 10px));
 }
 
 .gis-cell-tooltip strong,
@@ -982,19 +998,19 @@
     color: var(--gis-muted);
 }
 
-.leaflet-container {
+.amap-container {
     font-family: inherit;
 }
 
-.leaflet-control-zoom a {
-    color: var(--gis-navy);
+.gis-map .amap-logo,
+.gis-map .amap-copyright {
+    z-index: 210 !important;
 }
 
-.leaflet-control-scale-line {
-    border-color: var(--gis-navy);
-    background: rgba(255, 255, 255, .85);
-    color: var(--gis-navy);
-    font-size: 9px;
+.gis-map .amap-controls,
+.gis-map .amap-scalecontrol,
+.gis-map .amap-toolbar {
+    z-index: 220 !important;
 }
 
 @media (max-width: 1180px) {

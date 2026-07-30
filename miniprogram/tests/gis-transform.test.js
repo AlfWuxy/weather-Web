@@ -5,7 +5,10 @@ const path = require('node:path');
 
 const {
   colorForValue,
+  enrichDerivedLayers,
+  formatLayerValue,
   hitTest,
+  legendEntries,
   makeCanvasModel,
   project,
   resolveLayer,
@@ -54,6 +57,55 @@ test('图层断点映射稳定', () => {
   assert.equal(colorForValue(null, spec), '#ddd8d3');
 });
 
+test('现有网格可在内存中派生 65+ 与地表温度比较图层且不改写原数据', () => {
+  const collection = {
+    type: 'FeatureCollection',
+    metadata: { layers: {} },
+    features: [
+      {
+        type: 'Feature',
+        properties: { feature_type: 'study_boundary' },
+        geometry: { type: 'Polygon', coordinates: [] },
+      },
+      ...[
+        { id: 'a', age: 10, support: true, lst: 20 },
+        { id: 'b', age: null, support: false, lst: 30 },
+        { id: 'c', age: 30, support: true, lst: 40 },
+      ].map((item) => ({
+        type: 'Feature',
+        id: item.id,
+        properties: {
+          feature_type: 'modis_cell',
+          cell_id: item.id,
+          age65_share_pct: item.age,
+          positive_population_support: item.support,
+          q3_lst_c_mean: item.lst,
+        },
+        geometry: { type: 'Polygon', coordinates: [] },
+      })),
+    ],
+  };
+
+  const enriched = enrichDerivedLayers(collection);
+  const cells = enriched.features.filter((feature) => feature.properties.feature_type === 'modis_cell');
+
+  assert.equal(Object.hasOwn(collection.features[1].properties, 'age65_percentile'), false);
+  assert.deepEqual(cells.map((feature) => feature.properties.age65_percentile), [50, null, 100]);
+  assert.deepEqual(cells.map((feature) => feature.properties.age65_population_support), [1, 0, 1]);
+  assert.deepEqual(cells.map((feature) => feature.properties.q3_lst_delta_median_c), [-10, 0, 10]);
+  assert.deepEqual(cells.map((feature) => feature.properties.q3_lst_percentile), [33, 67, 100]);
+  assert.equal(enriched.metadata.layers.age65_percentile.valid_cells, 2);
+  assert.equal(enriched.metadata.layers.age65_percentile.missing_cells, 1);
+  assert.equal(
+    formatLayerValue(0, enriched.metadata.layers.age65_population_support),
+    '无正人口支持'
+  );
+  assert.deepEqual(
+    legendEntries(enriched.metadata.layers.age65_population_support).map((item) => item.label),
+    ['无正人口支持', '有正人口支持']
+  );
+});
+
 test('bbox 内但多边形外的点不会误命中', () => {
   const triangle = {
     id: 'triangle',
@@ -83,7 +135,7 @@ test('共享边界按绘制顺序确定归属', () => {
 });
 
 test('真实都昌 GIS 的全部网格质心命中自身多边形', () => {
-  const fixturePath = path.resolve(__dirname, '../../static/data/gis/duchang_heat_exposure_cells.geojson');
+  const fixturePath = path.resolve(__dirname, '../../data/gis/duchang_heat_exposure_cells.geojson');
   const collection = JSON.parse(fs.readFileSync(fixturePath, 'utf8'));
   const padding = 16;
   const model = makeCanvasModel(collection, 'q3_lst_c_mean', 750, 900, padding);

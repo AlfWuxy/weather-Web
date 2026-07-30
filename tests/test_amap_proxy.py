@@ -1,89 +1,40 @@
 # -*- coding: utf-8 -*-
-import json
+"""已删除的匿名高德代理必须持续保持不可访问。"""
 
 import pytest
 import requests
 
 
-def test_amap_proxy_appends_server_side_jscode(client, app, monkeypatch):
-    class FakeResp:
-        status_code = 200
-        headers = {'Content-Type': 'application/json; charset=utf-8'}
-        content = json.dumps({'status': '1'}).encode('utf-8')
-
-    captured = {}
-
-    def fake_get(url, params=None, timeout=None):
-        captured['url'] = url
-        captured['params'] = params
-        captured['timeout'] = timeout
-        return FakeResp()
-
-    monkeypatch.setattr('blueprints.public.requests.get', fake_get)
-
-    with app.app_context():
-        app.config['AMAP_SECURITY_JS_CODE'] = 'server-side-security-code-123456'
-
-    response = client.get('/_AMapService/v3/place/text?key=frontend-visible-key&keywords=test&jscode=bad-value')
-    assert response.status_code == 200
-    assert response.get_json()['status'] == '1'
-    assert captured['url'] == 'https://restapi.amap.com/v3/place/text'
-    assert ('key', 'frontend-visible-key') in captured['params']
-    assert ('keywords', 'test') in captured['params']
-    assert ('jscode', 'server-side-security-code-123456') in captured['params']
-    assert ('jscode', 'bad-value') not in captured['params']
-
-
-def test_amap_proxy_rejects_invalid_path(client, app):
-    with app.app_context():
-        app.config['AMAP_SECURITY_JS_CODE'] = 'server-side-security-code-123456'
-
-    response = client.get('/_AMapService/../../etc/passwd')
-    assert response.status_code == 404
-
-
-def test_amap_proxy_rejects_unlisted_path(client, app):
-    with app.app_context():
-        app.config['AMAP_SECURITY_JS_CODE'] = 'server-side-security-code-123456'
-
-    response = client.get('/_AMapService/v3/weather/weatherInfo?city=110000')
-    assert response.status_code == 404
-
-
-def test_amap_proxy_rejects_oversized_response(client, app, monkeypatch):
-    class FakeResp:
-        status_code = 200
-        headers = {'Content-Type': 'application/json; charset=utf-8'}
-        content = b'{' + (b'"x":' + b'"a"' * (256 * 1024)) + b'}'
-
-    monkeypatch.setattr('blueprints.public.requests.get', lambda *args, **kwargs: FakeResp())
-
-    with app.app_context():
-        app.config['AMAP_SECURITY_JS_CODE'] = 'server-side-security-code-123456'
-
-    response = client.get('/_AMapService/v3/place/text?key=frontend-visible-key&keywords=test')
-    assert response.status_code == 502
-
-
 @pytest.mark.parametrize(
-    'error_type',
-    [requests.Timeout, requests.ConnectionError, requests.RequestException],
+    ("method", "path"),
+    (
+        ("GET", "/_AMapService/v3/place/text?keywords=test&key=client-key"),
+        ("GET", "/_AMapService/v3/weather/weatherInfo?city=360428"),
+        ("GET", "/_AMapService"),
+    ),
 )
-def test_amap_proxy_returns_safe_502_for_upstream_request_errors(
+def test_removed_amap_proxy_is_always_404_without_upstream_request(
     client,
-    app,
     monkeypatch,
-    error_type,
+    method,
+    path,
 ):
-    def fake_get(*args, **kwargs):
-        raise error_type('upstream-sensitive-detail')
+    upstream_calls = []
 
-    monkeypatch.setattr('blueprints.public.requests.get', fake_get)
+    def forbidden_request(*args, **kwargs):
+        upstream_calls.append((args, kwargs))
+        raise AssertionError("已删除端点不应向高德发送请求")
 
-    with app.app_context():
-        app.config['AMAP_SECURITY_JS_CODE'] = 'server-side-security-code-123456'
+    monkeypatch.setattr(requests.sessions.Session, "request", forbidden_request)
 
-    response = client.get('/_AMapService/v3/place/text?key=frontend-visible-key&keywords=test')
+    response = client.open(path, method=method)
 
-    assert response.status_code == 502
-    assert 'upstream-sensitive-detail' not in response.get_data(as_text=True)
+    assert response.status_code == 404
+    assert upstream_calls == []
+
+
+def test_amap_proxy_route_is_absent(app):
+    assert all(
+        not rule.rule.startswith("/_AMapService")
+        for rule in app.url_map.iter_rules()
+    )

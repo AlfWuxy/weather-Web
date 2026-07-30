@@ -37,7 +37,7 @@
 
     <view class="field-group">
       <view class="field-label">所在地区</view>
-      <view class="fixed-field">都昌县 <text>已固定</text></view>
+      <view class="fixed-field">都昌县 <text class="fixed-field-status">已固定</text></view>
       <view class="field-hint">小程序当前天气与预警范围固定为都昌县。</view>
     </view>
 

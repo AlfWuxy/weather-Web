@@ -16,6 +16,7 @@ const FILES = {
   handoff: 'docs/miniprogram/WECHAT_RELEASE_HANDOFF.md',
   releaseChecklist: 'docs/miniprogram/RELEASE_CHECKLIST.md',
   manifest: 'docs/miniprogram/REVIEW_SCREENSHOT_MANIFEST_TEMPLATE.md',
+  parityMatrix: 'docs/miniprogram/PARITY_MATRIX.md',
   privacyPage: 'miniprogram/pages/privacy/index.wxml',
   agreementPage: 'miniprogram/pages/agreement/index.wxml',
   healthConsentPage: 'miniprogram/pages/health-consent/index.wxml',
@@ -100,6 +101,42 @@ test('隐私模板与小程序页面统一披露微信登录标识处理', () =>
   }
 });
 
+test('1.1.1 法律与发布材料统一披露跨端账号边界', () => {
+  for (const file of [
+    FILES.privacyDoc,
+    FILES.agreementDoc,
+    FILES.listing,
+    FILES.privacyPage,
+    FILES.agreementPage,
+  ]) {
+    const text = read(file);
+    assert.match(text, /1\.1\.1/, `${file} 缺少 1.1.1 版本`);
+    assert.match(text, /小程序.*不(?:请求|调用).*微信手机号/s, `${file} 缺少微信手机号排除边界`);
+    assert.match(text, /网页.*主动填写.*手机号.*(?:未.*短信验证|不发送短信验证码)/s, `${file} 缺少网页未验证手机号边界`);
+    assert.match(text, /手机号.*不能用于网页登录/s, `${file} 缺少未验证手机号禁止登录边界`);
+    assert.match(text, /8 位.*绑定码.*10 分钟.*(?:哈希|不可逆)/s, `${file} 缺少一次性绑定码边界`);
+    assert.match(text, /失败.*锁定/s, `${file} 缺少绑定失败锁定边界`);
+  }
+
+  for (const file of [
+    FILES.privacyDoc,
+    FILES.agreementDoc,
+    FILES.listing,
+    FILES.handoff,
+    FILES.releaseChecklist,
+  ]) {
+    const text = read(file);
+    assert.match(text, /(?:临时占位账号|占位账号).*去关联/s, `${file} 缺少临时账号去关联边界`);
+    assert.match(text, /(?:fresh wx\.login|重新.*wx\.login).*(?:身份.*一致|一致性)/s, `${file} 缺少注销身份复验边界`);
+  }
+
+  const parity = read(FILES.parityMatrix);
+  assert.match(parity, /小程序不请求微信手机号/);
+  assert.match(parity, /网页手机号由用户主动填写、未短信验证/);
+  assert.match(parity, /不能用于网页登录/);
+  assert.match(parity, /8 位.*10 分钟.*仅哈希.*失败锁定/);
+});
+
 test('一般隐私登录事件与健康照护事件按同意层级记录', () => {
   for (const file of [FILES.privacyDoc, FILES.privacyPage]) {
     const text = read(file);
@@ -167,7 +204,7 @@ test('隐私与发布材料精确锁定 1.1 安全限流和审计日志边界', 
     const text = read(file);
     assert.match(text, /(接口滥用|限流).*IP.*不可逆.*哈希.*窗口.*(到期|失效)/s, `${file} 缺少临时 IP 哈希边界`);
     assert.match(text, /瞬时读取客户端 IP.*明文 IP 不写入产品分析事件或应用审计表/s, `${file} 缺少明文 IP 排除说明`);
-    assert.match(text, /1\.1\.0.*关闭数据库安全审计日志/s, `${file} 缺少审计关闭说明`);
+    assert.match(text, /1\.1\.1.*关闭数据库安全审计日志/s, `${file} 缺少审计关闭说明`);
     assert.match(text, /不把 IP 哈希或 User-Agent 写入应用审计表/);
   }
 
@@ -218,12 +255,12 @@ test('公共行动本机勾选与家人行动账号保存保持清晰分离', ()
 test('微信 1.1 未登录家庭行动入口在家庭解析前零读写', () => {
   for (const file of [FILES.privacyDoc, FILES.privacyPage]) {
     const text = read(file);
-    assert.match(text, /1\.1\.0 不开放未登录家庭行动.*读取或写入/s, `${file} 缺少 1.1 零读写边界`);
+    assert.match(text, /1\.1\.1 不开放未登录家庭行动.*读取或写入/s, `${file} 缺少 1.1 零读写边界`);
     assert.match(text, /不会读取短码.*兑换链接.*解析家庭资料.*行动确认.*求助.*复盘/s, `${file} 缺少家庭解析前停止说明`);
   }
   for (const file of [FILES.agreementDoc, FILES.agreementPage]) {
     const text = read(file);
-    assert.match(text, /1\.1\.0.*未登录家庭行动安全链接.*只显示停用说明.*不读取或写入家庭资料/s, `${file} 缺少 1.1 停用边界`);
+    assert.match(text, /1\.1\.1.*未登录家庭行动安全链接.*只显示停用说明.*不读取或写入家庭资料/s, `${file} 缺少 1.1 停用边界`);
   }
   const webPage = read(FILES.webActionCheckinPage);
   assert.match(webPage, /微信正式版不会在网页读取短码或家庭安全链接/);
@@ -396,7 +433,7 @@ test('发布材料精确锁定平台数据声明与第三方推送排除项', ()
   for (const field of ['wx.setClipboardData', 'wx.login', 'OpenID 哈希', '家人档案与健康字段', '短码明文', '固定枚举产品事件', '结构化请求日志', '必要安全限流']) {
     assert.match(handoff, new RegExp(field.replace('.', '\\.')), `交接缺少平台声明 ${field}`);
   }
-  for (const excluded of ['第三方推送接收标识', '昵称头像', '手机号', '订阅消息']) {
+  for (const excluded of ['第三方推送接收标识', '昵称头像', '微信手机号', '订阅消息']) {
     assert.match(handoff, new RegExp(excluded), `交接缺少未调用声明 ${excluded}`);
   }
   assert.match(handoff, /wx\.getLocation/);
@@ -406,6 +443,28 @@ test('发布材料精确锁定平台数据声明与第三方推送排除项', ()
   assert.match(handoff, /页面隐藏或离开后清除.*拒绝或失败后仍可手选社区/s);
   assert.match(handoff, /不向第三方消息服务发送预警或用户数据/);
   assert.match(handoff, /平台隐私保护指引和审核材料均不声明对应第三方共享项/);
+});
+
+test('发布材料统一披露地图语义与 120 条提醒边界', () => {
+  for (const file of [
+    FILES.privacyDoc,
+    FILES.agreementDoc,
+    FILES.listing,
+    FILES.privacyPage,
+    FILES.agreementPage,
+  ]) {
+    const text = read(file);
+    assert.match(text, /120 条.*(?:预先编写|预写).*提醒/s, `${file} 缺少 120 条提醒说明`);
+    assert.match(text, /65\+.*模型化.*65 岁及以上人口/s, `${file} 缺少 65+ 语义`);
+    assert.match(text, /LST.*Aqua MODIS.*白天晴空地表温度/s, `${file} 缺少 LST 语义`);
+    assert.match(text, /不(?:等于|代表).*个人暴露.*当前气温/s, `${file} 缺少 GIS 排除边界`);
+  }
+
+  for (const file of [FILES.privacyDoc, FILES.agreementDoc, FILES.privacyPage, FILES.agreementPage]) {
+    const text = read(file);
+    assert.match(text, /小程序.*不直接加载高德地图 SDK/s, `${file} 缺少小程序高德边界`);
+    assert.match(text, /高德.*(?:待核验资源记录|待核验地理编码记录).*人工核对.*公开/s, `${file} 缺少待核验资源核验边界`);
+  }
 });
 
 test('隐私、协议与上架材料统一披露按次定位边界', () => {
@@ -419,8 +478,12 @@ test('隐私、协议与上架材料统一披露按次定位边界', () => {
     const text = read(file);
     assert.match(text, /(每次|逐次).*主动.*(确认|点击)/s, `${file} 缺少逐次主动确认`);
     assert.match(text, /(?:只)?(?:读取|调用)一次(?:微信定位能力| GCJ-02 位置|位置)|单次读取位置/, `${file} 缺少单次读取边界`);
-    assert.match(text, /(不上传|不会上传).*服务器/s, `${file} 缺少不上送服务器说明`);
-    assert.match(text, /(不持久保存|不会持久保存|不写入本机持久存储)/, `${file} 缺少不持久保存说明`);
+    assert.match(text, /(不上传|不会上传).*本项目服务器/s, `${file} 缺少不上送项目服务器说明`);
+    assert.match(
+      text,
+      /(?:(?:不|不会)持久保存|(?:不进入|不写入|不会进入|不会写入)(?:本项目(?:的)?|本机)持久存储)/,
+      `${file} 缺少项目内不持久保存说明`,
+    );
     assert.match(text, /(不后台持续获取|不会.*后台持续获取|不在后台定位)/s, `${file} 缺少后台排除说明`);
     assert.match(text, /(页面隐藏或离开后.*清除|离开页面(?:后|即)清除|离开或隐藏页面后.*清除)/s, `${file} 缺少页面生命周期清理说明`);
     assert.match(text, /拒绝.*(?:手动.*社区|手选社区|按社区)/s, `${file} 缺少拒绝后的社区回退`);
@@ -532,7 +595,7 @@ test('候选文件保留冻结说明，正式文件具备完整发布 marker', (
   assert.match(handoff, /WECHAT_MINIPROGRAM_NAME=宜老平安/);
   assert.match(handoff, /WECHAT_SERVICE_NAME=宜老天气通/);
   assert.match(handoff, /26 个 marker/);
-  assert.match(handoff, /上传 `1\.1\.0`/);
+  assert.match(handoff, /上传 `1\.1\.1`/);
   assert.doesNotMatch(handoff, /WECHAT_MINIPROGRAM_NAME: 后台批准名称/);
 });
 

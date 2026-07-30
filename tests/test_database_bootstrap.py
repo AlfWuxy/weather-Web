@@ -166,7 +166,7 @@ def test_cooling_coordinate_verification_migration_is_idempotent_and_resets_hist
         'coordinate_verified_at',
     } <= set(columns)
     assert verification == (None, None, None)
-    assert revision == '0026_cooling_coordinate_verify'
+    assert revision == '0027_cross_platform_identity'
 
     with sqlite3.connect(database_path) as connection:
         connection.execute(
@@ -187,7 +187,7 @@ def test_cooling_coordinate_verification_migration_is_idempotent_and_resets_hist
         protected_columns = {
             row[1] for row in connection.execute('PRAGMA table_info(cooling_resources)')
         }
-    assert protected_revision == '0026_cooling_coordinate_verify'
+    assert protected_revision == '0027_cross_platform_identity'
     assert set(COLUMN for COLUMN in (
         'coordinate_system',
         'coordinate_source',
@@ -1025,7 +1025,7 @@ def test_head_downgrade_preflight_preserves_newer_columns_for_opted_out_pair(
     assert 'elder_actions' in daily_status_columns
     assert 'dedupe_key' in weather_alert_columns
     assert kept == [(owner_id, pair_id, None, 'head 降级前已关闭关联')]
-    assert revision == '0026_cooling_coordinate_verify'
+    assert revision == '0027_cross_platform_identity'
 
 
 def test_head_to_0017_round_trip_succeeds_for_representable_debrief(
@@ -1120,7 +1120,7 @@ def test_head_to_0017_round_trip_succeeds_for_representable_debrief(
         ).fetchone()[0]
 
     assert restored == [(owner_id, pair_id, pair_id, '可以由旧结构表达')]
-    assert restored_revision == '0026_cooling_coordinate_verify'
+    assert restored_revision == '0027_cross_platform_identity'
 
 
 def test_elder_actions_migration_keeps_caregiver_actions_separate(
@@ -1198,7 +1198,7 @@ def test_elder_actions_migration_keeps_caregiver_actions_separate(
 
     assert 'elder_actions' in guarded_columns
     assert guarded_values == ('["remind"]', '["drink_water"]')
-    assert guarded_revision == '0026_cooling_coordinate_verify'
+    assert guarded_revision == '0027_cross_platform_identity'
 
     command.downgrade(alembic_config, '0018_debrief_owner_scope')
     with sqlite3.connect(database_path) as connection:

@@ -1,6 +1,10 @@
 const LAYER_ORDER = [
   'age65_share_pct',
+  'age65_percentile',
+  'age65_population_support',
   'q3_lst_c_mean',
+  'q3_lst_delta_median_c',
+  'q3_lst_percentile',
   'q3_coverage_pct',
   'tree_cover_pct',
   'built_up_pct',
@@ -10,7 +14,11 @@ const LAYER_ORDER = [
 
 const FALLBACK_LAYERS = {
   age65_share_pct: { label: '65 岁及以上人口比例', short_label: '65+ 人口', unit: '%', digits: 1, palette: ['#fff1df', '#f7c997', '#ee9551', '#d85d19', '#9f3211'], breaks: [0, 8, 14, 22, 32, 100], source: 'ASPECT 2020' },
+  age65_percentile: { label: '65+ 人口比例全县相对分位', short_label: '65+ 相对分位', unit: '%', digits: 0, palette: ['#f1eef6', '#d7b5d8', '#df65b0', '#ce1256', '#7a0177'], breaks: [0, 20, 40, 60, 80, 100], source: '由 ASPECT 2020 有效网格计算' },
+  age65_population_support: { label: '65+ 比例人口支持状态', short_label: '人口支持状态', unit: '', digits: 0, palette: ['#d9dfe2', '#237a57'], breaks: [0, 0, 1], value_labels: { 0: '无正人口支持', 1: '有正人口支持' }, source: 'ASPECT 2020 支持状态' },
   q3_lst_c_mean: { label: '晴空地表温度均值', short_label: '地表温度', unit: '°C', digits: 1, palette: ['#fff4d9', '#f8cf7a', '#ec9748', '#d85d19', '#8f2717'], breaks: [20, 28, 32, 36, 40, 60], source: 'NASA MYD11A1.061' },
+  q3_lst_delta_median_c: { label: '地表温度相对全县中位数偏差', short_label: '地表温度偏差', unit: '°C', digits: 1, palette: ['#2c7bb6', '#abd9e9', '#fdae61', '#d7191c'], breaks: [-10, -5, 0, 5, 10], source: '由 MYD11A1.061 有效网格计算' },
+  q3_lst_percentile: { label: '地表温度全县相对分位', short_label: '地表温度分位', unit: '%', digits: 0, palette: ['#ffffcc', '#fed976', '#fd8d3c', '#e31a1c', '#800026'], breaks: [0, 20, 40, 60, 80, 100], source: '由 MYD11A1.061 有效网格计算' },
   q3_coverage_pct: { label: 'Q3 观测覆盖率', short_label: '观测覆盖', unit: '%', digits: 1, palette: ['#eef4f8', '#c9dfea', '#83bed4', '#438ead', '#205b7a'], breaks: [0, 20, 40, 60, 80, 100], source: '独立复核程序 v3' },
   tree_cover_pct: { label: '树木覆盖比例', short_label: '树木覆盖', unit: '%', digits: 1, palette: ['#f0f4df', '#d5e6b5', '#a5cb78', '#6fa347', '#3e6f2d'], breaks: [0, 10, 25, 45, 70, 100], source: 'ESA WorldCover 2020' },
   built_up_pct: { label: '建成区覆盖比例', short_label: '建成区', unit: '%', digits: 1, palette: ['#f4efeb', '#dfcec5', '#c5a394', '#9f7161', '#70463e'], breaks: [0, 5, 15, 30, 55, 100], source: 'ESA WorldCover 2020' },
@@ -20,6 +28,150 @@ const FALLBACK_LAYERS = {
 
 function isFiniteNumber(value) {
   return typeof value === 'number' && Number.isFinite(value);
+}
+
+function upperBound(sortedValues, target) {
+  let low = 0;
+  let high = sortedValues.length;
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    if (sortedValues[middle] <= target) low = middle + 1;
+    else high = middle;
+  }
+  return low;
+}
+
+function percentileRank(sortedValues, value) {
+  if (!isFiniteNumber(value) || !sortedValues.length) return null;
+  return Math.max(
+    1,
+    Math.min(100, Math.round(upperBound(sortedValues, value) / sortedValues.length * 100))
+  );
+}
+
+function median(sortedValues) {
+  if (!sortedValues.length) return null;
+  const middle = Math.floor(sortedValues.length / 2);
+  if (sortedValues.length % 2) return sortedValues[middle];
+  return (sortedValues[middle - 1] + sortedValues[middle]) / 2;
+}
+
+function summary(values) {
+  const sorted = values.filter(isFiniteNumber).sort((left, right) => left - right);
+  return {
+    sorted,
+    min: sorted.length ? sorted[0] : null,
+    median: median(sorted),
+    max: sorted.length ? sorted[sorted.length - 1] : null,
+  };
+}
+
+function enrichDerivedLayers(collection) {
+  const parts = collectionParts(collection);
+  const ageSummary = summary(parts.cells.map((feature) => feature.properties.age65_share_pct));
+  const lstSummary = summary(parts.cells.map((feature) => feature.properties.q3_lst_c_mean));
+  const derivedCells = parts.cells.map((feature) => {
+    const properties = feature.properties || {};
+    const ageValue = properties.age65_share_pct;
+    const lstValue = properties.q3_lst_c_mean;
+    let supportValue = null;
+    if (properties.positive_population_support === true) supportValue = 1;
+    if (properties.positive_population_support === false) supportValue = 0;
+    return {
+      ...feature,
+      properties: {
+        ...properties,
+        age65_percentile: percentileRank(ageSummary.sorted, ageValue),
+        age65_population_support: supportValue,
+        q3_lst_delta_median_c: isFiniteNumber(lstValue) && isFiniteNumber(lstSummary.median)
+          ? Number((lstValue - lstSummary.median).toFixed(4))
+          : null,
+        q3_lst_percentile: percentileRank(lstSummary.sorted, lstValue),
+      },
+    };
+  });
+  const derivedById = new Map(
+    derivedCells.map((feature) => [String(feature.properties.cell_id || feature.id || ''), feature])
+  );
+  const features = collection.features.map((feature) => {
+    if (!feature || !feature.properties || feature.properties.feature_type !== 'modis_cell') return feature;
+    return derivedById.get(String(feature.properties.cell_id || feature.id || '')) || feature;
+  });
+  const deltaSummary = summary(
+    derivedCells.map((feature) => feature.properties.q3_lst_delta_median_c)
+  );
+  const maxDelta = Math.max(
+    Math.abs(deltaSummary.min || 0),
+    Math.abs(deltaSummary.max || 0),
+    1
+  );
+  const deltaBreaks = [
+    -maxDelta,
+    -maxDelta / 2,
+    0,
+    maxDelta / 2,
+    maxDelta,
+  ].map((value) => Number(value.toFixed(4)));
+  const metadata = collection.metadata || {};
+  const layers = metadata.layers || {};
+  const definitions = {
+    age65_percentile: {
+      ...FALLBACK_LAYERS.age65_percentile,
+      min: ageSummary.sorted.length ? 1 : null,
+      median: 50,
+      max: ageSummary.sorted.length ? 100 : null,
+      valid_cells: ageSummary.sorted.length,
+      missing_cells: derivedCells.length - ageSummary.sorted.length,
+      definition: '把有正人口支持网格的模型化 65+ 人口比例放入全县有效网格分布，使用并列值上界计算相对百分位。',
+      metric_key: 'gis_age65_share',
+      details_anchor: 'gis-age65-share',
+    },
+    age65_population_support: {
+      ...FALLBACK_LAYERS.age65_population_support,
+      min: 0,
+      median: 1,
+      max: 1,
+      valid_cells: derivedCells.filter((feature) => isFiniteNumber(feature.properties.age65_population_support)).length,
+      missing_cells: derivedCells.filter((feature) => !isFiniteNumber(feature.properties.age65_population_support)).length,
+      definition: '仅区分该网格是否具有正的模型化人口支持。无正人口支持不等于 65+ 人口比例为 0。',
+      metric_key: 'gis_age65_share',
+      details_anchor: 'gis-age65-share',
+    },
+    q3_lst_delta_median_c: {
+      ...FALLBACK_LAYERS.q3_lst_delta_median_c,
+      breaks: deltaBreaks,
+      min: deltaSummary.min,
+      median: deltaSummary.median,
+      max: deltaSummary.max,
+      valid_cells: deltaSummary.sorted.length,
+      missing_cells: derivedCells.length - deltaSummary.sorted.length,
+      definition: '每个网格的 2020 至 2024 年夏季晴空地表温度均值减去全县有效网格中位数。',
+      metric_key: 'gis_lst_mean',
+      details_anchor: 'gis-lst-mean',
+    },
+    q3_lst_percentile: {
+      ...FALLBACK_LAYERS.q3_lst_percentile,
+      min: lstSummary.sorted.length ? 1 : null,
+      median: 50,
+      max: lstSummary.sorted.length ? 100 : null,
+      valid_cells: lstSummary.sorted.length,
+      missing_cells: derivedCells.length - lstSummary.sorted.length,
+      definition: '把卫星晴空地表温度均值放入全县有效网格分布，使用并列值上界计算相对百分位。',
+      metric_key: 'gis_lst_mean',
+      details_anchor: 'gis-lst-mean',
+    },
+  };
+  return {
+    ...collection,
+    metadata: {
+      ...metadata,
+      layers: {
+        ...layers,
+        ...definitions,
+      },
+    },
+    features,
+  };
 }
 
 function walkCoordinates(coordinates, callback) {
@@ -146,6 +298,17 @@ function legendEntries(spec) {
   const breaks = spec && spec.breaks || [];
   const palette = spec && spec.palette || [];
   const unit = spec && spec.unit || '';
+  const valueLabels = spec && spec.value_labels || {};
+  const labeledValues = Object.keys(valueLabels)
+    .map(Number)
+    .filter(Number.isFinite)
+    .sort((left, right) => left - right);
+  if (labeledValues.length === palette.length) {
+    return labeledValues.map((value, index) => ({
+      color: palette[index],
+      label: valueLabels[String(value)],
+    }));
+  }
   return palette.map((color, index) => {
     const start = breaks[index];
     const end = breaks[index + 1];
@@ -203,6 +366,10 @@ function hitTest(cells, x, y) {
 
 function formatLayerValue(value, spec) {
   if (!isFiniteNumber(value)) return '无数据';
+  const valueLabels = spec && spec.value_labels || {};
+  if (Object.prototype.hasOwnProperty.call(valueLabels, String(value))) {
+    return valueLabels[String(value)];
+  }
   const digits = Number.isInteger(spec && spec.digits) ? spec.digits : 1;
   const unit = spec && spec.unit || '';
   return `${value.toFixed(digits)}${unit}`;
@@ -214,6 +381,7 @@ module.exports = {
   boundsForFeatures,
   collectionParts,
   colorForValue,
+  enrichDerivedLayers,
   formatLayerValue,
   hitTest,
   legendEntries,

@@ -155,10 +155,19 @@ Page({
             if (!second.confirm) return;
             this.setData({ busy: true });
             try {
+              const freshLogin = await new Promise((resolve, reject) => {
+                wx.login({ success: resolve, fail: reject });
+              });
+              if (!freshLogin || !freshLogin.code) {
+                throw new Error('fresh_wechat_login_required');
+              }
               await authApi({
                 method: 'DELETE',
                 path: '/mp/api/v1/me',
-                data: { confirm: true },
+                data: {
+                  confirm: true,
+                  wechat_code: freshLogin.code,
+                },
               });
               const message = '注销处理已完成，账号身份已匿名化，当前会话已退出。关联照护数据已按服务端规则处理。';
               clear();

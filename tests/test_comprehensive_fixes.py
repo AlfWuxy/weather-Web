@@ -303,6 +303,10 @@ def test_validate_production_config_rejects_weak_pair_token_pepper(tmp_path, pep
         ('SECRET_KEY', 'WX_MINIPROGRAM_OPENID_PEPPER'),
         ('SECRET_KEY', 'WX_MINIPROGRAM_SESSION_SECRET'),
         ('WX_MINIPROGRAM_OPENID_PEPPER', 'WX_MINIPROGRAM_SESSION_SECRET'),
+        ('ACCOUNT_LINK_CODE_PEPPER', 'PAIR_TOKEN_PEPPER'),
+        ('ACCOUNT_LINK_CODE_PEPPER', 'SECRET_KEY'),
+        ('ACCOUNT_LINK_CODE_PEPPER', 'WX_MINIPROGRAM_OPENID_PEPPER'),
+        ('ACCOUNT_LINK_CODE_PEPPER', 'WX_MINIPROGRAM_SESSION_SECRET'),
     ],
 )
 def test_validate_production_config_requires_pairwise_independent_secrets(
@@ -321,6 +325,7 @@ def test_validate_production_config_requires_pairwise_independent_secrets(
         'WX_MINIPROGRAM_SECRET': 'wx-production-secret-value',
         'WX_MINIPROGRAM_OPENID_PEPPER': 'openidpepper1234567890abcdefghijklm',
         'WX_MINIPROGRAM_SESSION_SECRET': 'sessionvalue1234567890abcdefghijkl',
+        'ACCOUNT_LINK_CODE_PEPPER': 'accountlink1234567890abcdefghijkl',
         'PUBLIC_BASE_URL': 'https://yilaoweather.org',
         'WXPUSHER_APP_TOKEN': 'AT_abcdefghijklmnop',
         'WXPUSHER_API_BASE': 'https://wxpusher.zjiecode.com/api',
@@ -426,13 +431,14 @@ def test_production_requires_explicit_binary_wechat_runtime(tmp_path, formal_val
 
 
 def test_formal_wechat_runtime_rejects_debug_and_incomplete_credentials(tmp_path):
-    """正式小程序态必须关闭 DEBUG 并同时具备四项微信服务端配置。"""
+    """正式小程序态必须关闭 DEBUG 并同时具备五项微信服务端配置。"""
     debug_env = {
         'WECHAT_FORMAL_RUNTIME': '1',
         'WX_MINIPROGRAM_APPID': 'wx-production-appid',
         'WX_MINIPROGRAM_SECRET': 'wx-production-secret-value',
         'WX_MINIPROGRAM_OPENID_PEPPER': 'openidpepper1234567890abcdefghijklm',
         'WX_MINIPROGRAM_SESSION_SECRET': 'sessionvalue1234567890abcdefghijkl',
+        'ACCOUNT_LINK_CODE_PEPPER': 'accountlink1234567890abcdefghijkl',
     }
     for debug_setting in ('true', None):
         original = _set_env({**debug_env, 'DEBUG': debug_setting})
@@ -456,11 +462,52 @@ def test_formal_wechat_runtime_rejects_debug_and_incomplete_credentials(tmp_path
         'WX_MINIPROGRAM_SECRET': None,
         'WX_MINIPROGRAM_OPENID_PEPPER': None,
         'WX_MINIPROGRAM_SESSION_SECRET': None,
+        'ACCOUNT_LINK_CODE_PEPPER': None,
         'WXPUSHER_APP_TOKEN': None,
     })
     try:
         config = _reload_config()
-        with pytest.raises(RuntimeError, match='四项微信服务端配置'):
+        with pytest.raises(RuntimeError, match='五项微信服务端配置'):
+            config.validate_production_config()
+    finally:
+        _restore_env(original)
+        _reload_config()
+
+
+@pytest.mark.parametrize(
+    'missing_name',
+    [
+        'WX_MINIPROGRAM_APPID',
+        'WX_MINIPROGRAM_SECRET',
+        'WX_MINIPROGRAM_OPENID_PEPPER',
+        'WX_MINIPROGRAM_SESSION_SECRET',
+    ],
+)
+def test_formal_wechat_runtime_rejects_each_missing_wechat_credential(
+    tmp_path,
+    missing_name,
+):
+    """绑定码 pepper 已配置时，任一微信凭据缺失也必须阻止启动。"""
+    env = {
+        'SECRET_KEY': 'strongkey1234567890strongkey123456',
+        'PAIR_TOKEN_PEPPER': 'peppervalue1234567890abcdefghijkl',
+        'DEBUG': 'false',
+        'WECHAT_FORMAL_RUNTIME': '1',
+        'DATABASE_URI': f"sqlite:///{tmp_path/'prod_formal_partial.db'}",
+        'RATE_LIMIT_STORAGE_URI': 'redis://localhost:6379/0',
+        'QWEATHER_AUTH_MODE': 'disabled',
+        'WX_MINIPROGRAM_APPID': 'wx-production-appid',
+        'WX_MINIPROGRAM_SECRET': 'wx-production-secret-value',
+        'WX_MINIPROGRAM_OPENID_PEPPER': 'openidpepper1234567890abcdefghijklm',
+        'WX_MINIPROGRAM_SESSION_SECRET': 'sessionvalue1234567890abcdefghijkl',
+        'ACCOUNT_LINK_CODE_PEPPER': 'accountlink1234567890abcdefghijkl',
+        'WXPUSHER_APP_TOKEN': None,
+    }
+    env[missing_name] = None
+    original = _set_env(env)
+    try:
+        config = _reload_config()
+        with pytest.raises(RuntimeError, match=missing_name):
             config.validate_production_config()
     finally:
         _restore_env(original)
@@ -481,6 +528,7 @@ def test_web_only_runtime_rejects_wechat_credentials(tmp_path):
         'WX_MINIPROGRAM_SECRET': 'wx-production-secret-value',
         'WX_MINIPROGRAM_OPENID_PEPPER': 'openidpepper1234567890abcdefghijklm',
         'WX_MINIPROGRAM_SESSION_SECRET': 'sessionvalue1234567890abcdefghijkl',
+        'ACCOUNT_LINK_CODE_PEPPER': 'accountlink1234567890abcdefghijkl',
         'WXPUSHER_APP_TOKEN': None,
     })
     try:

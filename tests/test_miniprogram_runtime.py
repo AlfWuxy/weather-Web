@@ -132,6 +132,9 @@ def test_snapshot_fresh_at_2959_and_stale_at_3001(app, db_session):
     assert fresh["stale"] is False
     assert stale["stale"] is True
     assert fresh["snapshot_id"] == stale["snapshot_id"]
+    assert fresh["family_reminder"]["date"]
+    assert fresh["family_reminder"]["message"]
+    assert fresh["family_reminder"]["follow_up_question"]
 
 
 def test_bootstrap_is_database_only_and_keeps_same_snapshot_id(
@@ -1649,7 +1652,11 @@ def test_pair_hard_delete_keeps_owned_debrief_until_account_delete(
     deleted = client.delete(
         "/mp/api/v1/me",
         headers=headers,
-        json={"confirm": True, "user_id": user_id},
+        json={
+            "confirm": True,
+            "user_id": user_id,
+            "wechat_code": "fresh-delete-code",
+        },
     )
     assert deleted.status_code == 200
     db_session.expire_all()
@@ -1879,7 +1886,9 @@ def test_public_gis_metadata_uses_same_origin_relative_url(app, client, db_sessi
     assert response.status_code == 200
     gis = response.get_json()["data"]
     assert gis["available"] is True
-    assert gis["geojson_url"].startswith("/static/")
+    assert gis["geojson_url"].startswith(
+        "/data/duchang-heat-exposure.geojson"
+    )
     assert "://" not in gis["geojson_url"]
     assert "?v=" in gis["geojson_url"]
     assert gis["size_bytes"] > 0
@@ -1887,14 +1896,17 @@ def test_public_gis_metadata_uses_same_origin_relative_url(app, client, db_sessi
     assert app.config["RATE_LIMIT_MP_PUBLIC"] == "600 per minute"
 
 
-def test_public_gis_metadata_url_changes_with_file_version(app, tmp_path):
+def test_public_gis_metadata_url_uses_frozen_digest(
+    app,
+    tmp_path,
+    monkeypatch,
+):
     import json
     import os
 
     from services.miniprogram_service import public_gis_metadata_payload
 
-    static_root = tmp_path / "static"
-    geojson = static_root / "data" / "gis" / "duchang_heat_exposure_cells.geojson"
+    geojson = tmp_path / "data" / "gis" / "duchang_heat_exposure_cells.geojson"
     geojson.parent.mkdir(parents=True)
     geojson.write_text(
         json.dumps({"type": "FeatureCollection", "metadata": {"title": "版本一"}}),
@@ -1902,24 +1914,33 @@ def test_public_gis_metadata_url_changes_with_file_version(app, tmp_path):
     )
     first_ns = 1_800_000_000_000_000_000
     second_ns = first_ns + 1_000_000_000
-    original_static_folder = app.static_folder
-    app.static_folder = str(static_root)
     app.config["FEATURE_HEAT_EXPOSURE_GIS"] = True
-    try:
-        os.utime(geojson, ns=(first_ns, first_ns))
-        with app.test_request_context():
-            first_url = public_gis_metadata_payload()["geojson_url"]
-        os.utime(geojson, ns=(second_ns, second_ns))
-        with app.test_request_context():
-            second_url = public_gis_metadata_payload()["geojson_url"]
-    finally:
-        app.static_folder = original_static_folder
+    from services import heat_exposure_gis_service
 
-    assert first_url.startswith("/static/")
+    monkeypatch.setattr(
+        heat_exposure_gis_service,
+        "PUBLIC_GEOJSON_PATH",
+        geojson,
+    )
+    monkeypatch.setattr(
+        heat_exposure_gis_service,
+        "load_validated_public_geojson",
+        lambda _path: {
+            "type": "FeatureCollection",
+            "metadata": {"title": "冻结公开版本"},
+        },
+    )
+    os.utime(geojson, ns=(first_ns, first_ns))
+    with app.test_request_context():
+        first_url = public_gis_metadata_payload()["geojson_url"]
+    os.utime(geojson, ns=(second_ns, second_ns))
+    with app.test_request_context():
+        second_url = public_gis_metadata_payload()["geojson_url"]
+
+    assert first_url.startswith("/data/duchang-heat-exposure.geojson")
     assert "://" not in first_url
-    assert first_url != second_url
-    assert f"v={first_ns}" in first_url
-    assert f"v={second_ns}" in second_url
+    assert first_url == second_url
+    assert "v=c72b6d1a9ac9ba2c" in first_url
 
 
 def test_account_delete_rejects_cross_user_and_anonymizes_owner_data(
@@ -1934,6 +1955,7 @@ def test_account_delete_rejects_cross_user_and_anonymizes_owner_data(
         Debrief,
         HealthDiary,
         MiniProgramIdentity,
+        MiniProgramLinkChallenge,
         MiniProgramSession,
         PairLink,
         User,
@@ -1948,6 +1970,8 @@ def test_account_delete_rejects_cross_user_and_anonymizes_owner_data(
     headers = {"Authorization": f"Bearer {token}"}
     with app.app_context():
         owner = db_session.get(User, user_id)
+        owner.phone_normalized = "+8613800138000"
+        owner.phone_verified_at = utcnow()
         owner.wxpusher_uid = "UID_DELETE"
         owner.push_enabled = True
         owner.wxpusher_consent_version = app.config["WX_MINIPROGRAM_PRIVACY_VERSION"]
@@ -1972,6 +1996,14 @@ def test_account_delete_rejects_cross_user_and_anonymizes_owner_data(
                 community_code="都昌县",
                 question_1="关闭家人关联后仍属于账号",
                 created_at=utcnow(),
+            )
+        )
+        db_session.add(
+            MiniProgramLinkChallenge(
+                user_id=user_id,
+                code_hash="delete-owner-link-challenge-hash",
+                expires_at=utcnow() + timedelta(minutes=10),
+                auth_version_at_create=int(owner.auth_version),
             )
         )
         pair_link = PairLink(
@@ -2079,10 +2111,22 @@ def test_account_delete_rejects_cross_user_and_anonymizes_owner_data(
         "/mp/api/v1/me", headers=headers, json={"confirm": False}
     ).status_code == 400
 
-    deleted = client.delete(
+    fresh_login_required = client.delete(
         "/mp/api/v1/me",
         headers=headers,
         json={"confirm": True, "user_id": user_id},
+    )
+    assert fresh_login_required.status_code == 428
+    assert fresh_login_required.get_json()["error"] == "fresh_wechat_login_required"
+
+    deleted = client.delete(
+        "/mp/api/v1/me",
+        headers=headers,
+        json={
+            "confirm": True,
+            "user_id": user_id,
+            "wechat_code": "fresh-delete-code",
+        },
     )
     assert deleted.status_code == 200
     assert client.get("/mp/api/v1/me", headers=headers).status_code == 401
@@ -2090,6 +2134,8 @@ def test_account_delete_rejects_cross_user_and_anonymizes_owner_data(
         user = db_session.get(User, user_id)
         assert user.username.startswith("deleted_mp_")
         assert user.email is None
+        assert user.phone_normalized is None
+        assert user.phone_verified_at is None
         assert user.deleted_at is not None
         assert user.wxpusher_uid is None
         assert user.push_enabled is False
@@ -2100,6 +2146,7 @@ def test_account_delete_rejects_cross_user_and_anonymizes_owner_data(
         assert HealthDiary.query.filter_by(user_id=user_id).count() == 0
         assert Debrief.query.filter_by(owner_user_id=user_id).count() == 0
         assert MiniProgramIdentity.query.filter_by(user_id=user_id).count() == 0
+        assert MiniProgramLinkChallenge.query.filter_by(user_id=user_id).count() == 0
         assert MiniProgramSession.query.filter_by(user_id=user_id).count() == 0
         assert PairLink.query.filter_by(id=pair_link_id).count() == 0
         assert AlertDelivery.query.filter_by(id=delivery_id).count() == 0
@@ -2154,6 +2201,67 @@ def test_account_delete_rejects_cross_user_and_anonymizes_owner_data(
         assert unrelated.user_agent == "unrelated-agent"
         assert unrelated.request_id == "unrelated-request"
 
+        replacement = User(
+            username="replacement_phone_owner",
+            role="user",
+            phone_normalized="+8613800138000",
+        )
+        replacement.set_password("replacement-password-long")
+        db_session.add(replacement)
+        db_session.commit()
+        assert replacement.id is not None
+
+
+def test_account_delete_rejects_fresh_code_from_another_wechat_identity(
+    app,
+    client,
+    db_session,
+    monkeypatch,
+):
+    from core.db_models import HealthDiary, MiniProgramIdentity, User
+
+    login = _wechat_login(
+        app,
+        client,
+        monkeypatch,
+        openid="delete-owner-openid",
+    )
+    login_data = login.get_json()["data"]
+    user_id = int(login_data["user"]["id"])
+    headers = {"Authorization": f"Bearer {login_data['session_token']}"}
+    _grant_health_consent(db_session, user_id, app)
+    db_session.add(
+        HealthDiary(
+            user_id=user_id,
+            symptoms="身份不一致时必须保留",
+            severity="mild",
+            created_at=utcnow(),
+        )
+    )
+    db_session.commit()
+    monkeypatch.setattr(
+        "services.miniprogram_auth.requests.get",
+        lambda *_args, **_kwargs: _WechatResponse("different-owner-openid"),
+    )
+
+    response = client.delete(
+        "/mp/api/v1/me",
+        headers=headers,
+        json={
+            "confirm": True,
+            "user_id": user_id,
+            "wechat_code": "fresh-other-wechat-code",
+        },
+    )
+
+    assert response.status_code == 403
+    assert response.get_json()["error"] == "wechat_identity_mismatch"
+    db_session.expire_all()
+    assert db_session.get(User, user_id).deleted_at is None
+    assert HealthDiary.query.filter_by(user_id=user_id).count() == 1
+    assert MiniProgramIdentity.query.filter_by(user_id=user_id).count() == 1
+    assert client.get("/mp/api/v1/me", headers=headers).status_code == 200
+
 
 def test_account_delete_serializes_an_inflight_diary_write(
     app,
@@ -2194,7 +2302,11 @@ def test_account_delete_serializes_an_inflight_diary_write(
             outcomes["delete"] = thread_client.delete(
                 "/mp/api/v1/me",
                 headers=headers,
-                json={"confirm": True, "user_id": user_id},
+                json={
+                    "confirm": True,
+                    "user_id": user_id,
+                    "wechat_code": "fresh-delete-code",
+                },
             )
 
     writer = threading.Thread(target=write_diary)
@@ -2285,7 +2397,11 @@ def test_account_delete_serializes_atomic_miniprogram_action_confirm(
             outcomes["delete"] = thread_client.delete(
                 "/mp/api/v1/me",
                 headers=headers,
-                json={"confirm": True, "user_id": user_id},
+                json={
+                    "confirm": True,
+                    "user_id": user_id,
+                    "wechat_code": "fresh-delete-code",
+                },
             )
 
     writer = threading.Thread(target=write_action_confirm)
@@ -2360,7 +2476,11 @@ def test_account_delete_serializes_an_inflight_miniprogram_debrief_write(
             outcomes["delete"] = thread_client.delete(
                 "/mp/api/v1/me",
                 headers=headers,
-                json={"confirm": True, "user_id": user_id},
+                json={
+                    "confirm": True,
+                    "user_id": user_id,
+                    "wechat_code": "fresh-delete-code",
+                },
             )
 
     writer = threading.Thread(target=write_debrief)
@@ -2458,7 +2578,11 @@ def test_miniprogram_action_response_survives_post_commit_account_delete(
                 outcomes["delete"] = thread_client.delete(
                     "/mp/api/v1/me",
                     headers=headers,
-                    json={"confirm": True, "user_id": user_id},
+                    json={
+                        "confirm": True,
+                        "user_id": user_id,
+                        "wechat_code": "fresh-delete-code",
+                    },
                 )
         finally:
             delete_finished.set()
@@ -2630,7 +2754,11 @@ def test_account_delete_serializes_an_inflight_web_debrief_write(
             outcomes["delete"] = thread_client.delete(
                 "/mp/api/v1/me",
                 headers=headers,
-                json={"confirm": True, "user_id": user_id},
+                json={
+                    "confirm": True,
+                    "user_id": user_id,
+                    "wechat_code": "fresh-delete-code",
+                },
             )
 
     writer = threading.Thread(target=write_debrief)
@@ -2756,11 +2884,15 @@ def test_admin_delete_removes_miniprogram_identity_and_invalidates_bearer(
 
 def test_sync_cycle_calls_each_qweather_endpoint_at_most_once_and_enriches_forecast(
     app,
+    client,
     db_session,
     monkeypatch,
 ):
-    from core.db_models import MiniProgramSnapshot
+    from core.db_models import MiniProgramSnapshot, WeatherCache, WeatherData
     from core.time_utils import today_local
+    from core.weather import get_weather_with_cache
+    from services.public_service import _heat_risk_weather_is_ready
+    from services.user.dashboard_service import _dashboard_weather_available
     from services.pipelines import sync_weather_cache as pipeline
 
     calls = {"current": [], "forecast": [], "nowcast": [], "warning": []}
@@ -2818,6 +2950,7 @@ def test_sync_cycle_calls_each_qweather_endpoint_at_most_once_and_enriches_forec
             }
 
     app.config.update(
+        DEMO_MODE=False,
         QWEATHER_AUTH_MODE="api_key",
         QWEATHER_KEY="test-only-key",
         QWEATHER_API_BASE="https://qweather.invalid/v7",
@@ -2831,7 +2964,7 @@ def test_sync_cycle_calls_each_qweather_endpoint_at_most_once_and_enriches_forec
         or {"available": True, "status": "ok", "warnings": []},
     )
 
-    result = pipeline.sync_weather_cache(locations=["都昌县", "九江"], update_daily=False)
+    result = pipeline.sync_weather_cache(locations=["都昌县", "九江"])
 
     assert calls["current"] == [("都昌县", False, True)]
     assert calls["forecast"] == [("都昌县", 7)]
@@ -2849,6 +2982,25 @@ def test_sync_cycle_calls_each_qweather_endpoint_at_most_once_and_enriches_forec
     assert payload["forecast"][0]["risk_available"] is True
     assert payload["forecast"][0]["risk_score"] is not None
     assert payload["risk"]["summary"]
+    cached_record = WeatherCache.query.filter_by(location="都昌县").one()
+    cached_payload = json.loads(cached_record.payload)
+    assert cached_payload["temperature_max"] == 39.0
+    assert cached_payload["temperature_min"] == 29.0
+    daily_record = WeatherData.query.filter_by(
+        location="都昌县",
+        date=forecast_start,
+    ).one()
+    assert daily_record.temperature_max == 39.0
+    assert daily_record.temperature_min == 29.0
+    web_weather, used_cache = get_weather_with_cache("都昌县")
+    assert used_cache is True
+    assert _heat_risk_weather_is_ready(web_weather) is True
+    assert _dashboard_weather_available(web_weather) is True
+    public_risk = client.get("/risk")
+    public_risk_body = public_risk.get_data(as_text=True)
+    assert public_risk.status_code == 200
+    assert "当前风险：" in public_risk_body
+    assert "天气更新中" not in public_risk_body
 
     calls["nowcast"].clear()
     smoke_result = pipeline.sync_weather_cache(

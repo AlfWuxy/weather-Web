@@ -6,6 +6,7 @@ import logging
 import secrets
 import time
 from datetime import datetime
+from urllib.parse import urlsplit
 
 from flask import (
     g,
@@ -33,6 +34,22 @@ logger = logging.getLogger(__name__)
 
 MAX_JSON_BYTES = 10 * 1024
 MAX_JSON_DEPTH = 5
+SEO_FALLBACK_BASE_URL = 'https://yilaoweather.org'
+SEO_INDEXABLE_ENDPOINTS = {
+    'public.index': '/',
+    'public.public_risk': '/risk',
+    'public.cooling_resources': '/cooling',
+    'public.heat_vulnerability_preview': '/duchang-heat-vulnerability-map',
+    'public.transparency': '/transparency',
+    'public.about_trust_network': '/about/trust-network',
+}
+SEO_TECHNICAL_ENDPOINTS = {
+    'public.robots_txt',
+    'public.sitemap_xml',
+    'public.llms_txt',
+    'public.healthz',
+    'static',
+}
 
 # 正式微信运行态仅保留公开、聚合或研究管理端点。下列白名单需要人工审查后扩展，
 # 其余同蓝图新端点会默认关闭，避免新增私密 Web 功能时漏配门禁。
@@ -92,8 +109,6 @@ def _formal_web_gate_kind(endpoint):
     """返回正式微信态端点的门禁类型，None 表示可继续处理。"""
     endpoint = str(endpoint or '')
     blueprint = endpoint.partition('.')[0]
-    if endpoint == 'public.register':
-        return 'html'
     if blueprint in {'health', 'tools'}:
         return 'html'
     if blueprint == 'user':
@@ -126,6 +141,24 @@ def _exceeds_json_depth(value, max_depth, current_depth=1):
 
 def _valid_key_length(value):
     return isinstance(value, str) and 20 <= len(value) <= 100
+
+
+def _trusted_seo_base_url(config):
+    """canonical 只使用 HTTPS 受信 origin，避免 Host 头污染搜索结果。"""
+    configured = str(config.get('PUBLIC_BASE_URL') or '').strip().rstrip('/')
+    parsed = urlsplit(configured)
+    if (
+        parsed.scheme == 'https'
+        and parsed.netloc
+        and parsed.hostname
+        and not parsed.username
+        and not parsed.password
+        and parsed.path in ('', '/')
+        and not parsed.query
+        and not parsed.fragment
+    ):
+        return configured
+    return SEO_FALLBACK_BASE_URL
 
 
 def register_hooks(app):
@@ -178,10 +211,19 @@ def register_hooks(app):
             'Content-Security-Policy',
             "base-uri 'self'; frame-ancestors 'none'; object-src 'none'",
         )
-        response.headers.setdefault(
-            'Permissions-Policy',
-            'camera=(), microphone=(), geolocation=(), payment=(), usb=()',
-        )
+        if (
+            request.endpoint == 'public.cooling_resources'
+            or request.path == '/cooling'
+        ):
+            # 避暑资源页仅在用户点击后调用一次浏览器定位，其他能力继续关闭。
+            permissions_policy = (
+                'camera=(), microphone=(), geolocation=(self), payment=(), usb=()'
+            )
+        else:
+            permissions_policy = (
+                'camera=(), microphone=(), geolocation=(), payment=(), usb=()'
+            )
+        response.headers.setdefault('Permissions-Policy', permissions_policy)
         if request.path.startswith(('/e/', '/t/')):
             # 行动与投递 token 绝不能进入外站 Referer。
             response.headers['Referrer-Policy'] = 'no-referrer'
@@ -191,6 +233,24 @@ def register_hooks(app):
             response.headers.setdefault(
                 'Strict-Transport-Security',
                 'max-age=31536000; includeSubDomains',
+            )
+        if request.endpoint in {
+            'public.account_link',
+            'public.account_link_phone',
+            'public.account_link_code',
+        }:
+            # 绑定码和手机号页面禁止被浏览器、代理或搜索引擎保存。
+            response.headers['Cache-Control'] = 'no-store, private, max-age=0'
+            response.headers['Pragma'] = 'no-cache'
+            response.headers['X-Robots-Tag'] = 'noindex, nofollow, noarchive'
+        elif (
+            request.endpoint not in SEO_INDEXABLE_ENDPOINTS
+            and request.endpoint not in SEO_TECHNICAL_ENDPOINTS
+        ):
+            # 默认关闭新增页面索引，只有人工审查后的匿名内容页进入白名单。
+            response.headers.setdefault(
+                'X-Robots-Tag',
+                'noindex, nofollow, noarchive',
             )
         if not app.config.get('FEATURE_STRUCTURED_LOGS'):
             return response
@@ -272,6 +332,8 @@ def register_hooks(app):
     def inject_now():
         """注入当前时间到模板"""
         current_location = normalize_location_name(get_user_location_value())
+        seo_base_url = _trusted_seo_base_url(app.config)
+        canonical_path = SEO_INDEXABLE_ENDPOINTS.get(request.endpoint)
         payload = {
             'now': lambda: datetime.now(tz=__import__('zoneinfo').ZoneInfo('Asia/Shanghai')),
             'csrf_token': generate_csrf_token,
@@ -280,6 +342,17 @@ def register_hooks(app):
             'ai_models': app.config.get('AI_ALLOWED_MODELS', []),
             'metric_explanations': get_metric_explanations(),
             'metric_explanation_groups': get_metric_explanation_groups(),
+            'seo_base_url': seo_base_url,
+            'seo_canonical_url': (
+                f'{seo_base_url}{canonical_path}'
+                if canonical_path
+                else None
+            ),
+            'seo_robots': (
+                'index, follow'
+                if canonical_path
+                else 'noindex, nofollow, noarchive'
+            ),
             'feature_flags': {
                 'explain_output': app.config.get('FEATURE_EXPLAIN_OUTPUT'),
                 'emergency_triage': app.config.get('FEATURE_EMERGENCY_TRIAGE'),
@@ -288,16 +361,22 @@ def register_hooks(app):
                 'heat_exposure_gis': app.config.get('FEATURE_HEAT_EXPOSURE_GIS')
             }
         }
-        map_endpoints = {'user.community_risk', 'public.cooling_resources'}
-        map_paths = {'/community-risk', '/cooling'}
+        map_endpoints = {
+            'user.community_risk',
+            'user.heat_exposure_gis',
+            'public.cooling_resources',
+        }
+        map_paths = {'/community-risk', '/heat-exposure-gis', '/cooling'}
         needs_map_keys = request.endpoint in map_endpoints or request.path in map_paths
         if needs_map_keys:
-            amap_key = app.config.get('AMAP_KEY', '')
+            amap_key = app.config.get('AMAP_JS_API_KEY', '')
             amap_code = app.config.get('AMAP_SECURITY_JS_CODE', '')
             if _valid_key_length(amap_key):
                 payload['amap_key'] = amap_key
             elif amap_key:
-                logger.warning("Invalid AMAP_KEY length; skipping template injection")
+                logger.warning(
+                    "Invalid AMAP_JS_API_KEY length; skipping template injection"
+                )
             if _valid_key_length(amap_code):
                 payload['amap_security_js_code'] = amap_code
             elif amap_code:

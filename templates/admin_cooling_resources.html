@@ -23,9 +23,14 @@
                 <button class="btn btn-outline-secondary" type="submit">筛选</button>
                 <a class="btn btn-outline-secondary" href="{{ url_for('admin.admin_cooling_resources') }}">重置</a>
             </form>
-            <a href="{{ url_for('admin.admin_add_cooling_resource') }}" class="btn btn-primary">
-                <i class="bi bi-plus-circle"></i> 添加资源
-            </a>
+            <div class="d-flex gap-2 flex-wrap">
+                <a href="{{ url_for('admin.admin_cooling_candidates') }}" class="btn btn-outline-primary">
+                    <i class="bi bi-map"></i> 查看高德待核验候选
+                </a>
+                <a href="{{ url_for('admin.admin_add_cooling_resource') }}" class="btn btn-primary">
+                    <i class="bi bi-plus-circle"></i> 添加资源
+                </a>
+            </div>
         </div>
         <div class="card-body p-0">
             <div class="table-responsive">

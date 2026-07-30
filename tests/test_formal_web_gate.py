@@ -39,7 +39,6 @@ def test_formal_web_gate_inventory_defaults_sensitive_blueprints_to_closed(app):
             assert gate_kind == expected, endpoint
 
     expected_private = {
-        "public.register",
         "health.family_members",
         "health.health_diary",
         "health.medication_reminders",
@@ -136,25 +135,45 @@ def test_formal_web_json_gate_returns_fixed_error_before_csrf_or_service(
     assert response.headers["Cache-Control"] == "no-store, private, max-age=0"
 
 
-def test_formal_web_registration_is_blocked_before_csrf(app, client):
-    """正式态注册 POST 即使没有 CSRF，也应先进入固定停用说明。"""
+def test_formal_web_registration_keeps_minimal_account_creation(
+    app,
+    client,
+    db_session,
+):
+    """正式态保留待验证手机号保存，并继续执行 CSRF 与输入校验。"""
+    from core.db_models import User
+
     app.config["WECHAT_FORMAL_RUNTIME"] = True
+    csrf = "formal-register-csrf"
+    with client.session_transaction() as flask_session:
+        flask_session["_csrf_token"] = csrf
 
     response = client.post(
         "/register",
-        data={"username": "should-not-register"},
+        data={
+            "username": "formal_link_user",
+            "password": "formal-test-password",
+            "phone": "13800138000",
+            "csrf_token": csrf,
+        },
         follow_redirects=False,
     )
 
-    assert response.status_code == 303
-    assert response.headers["Location"].endswith("/action")
-    assert response.headers["Cache-Control"] == "no-store, private, max-age=0"
+    assert response.status_code in (301, 302, 303)
+    assert "/login" in response.headers["Location"]
+    user = User.query.filter_by(username="formal_link_user").one()
+    assert user.phone_normalized == "+8613800138000"
+    assert user.phone_verified_at is None
 
 
 def test_formal_web_gate_preserves_public_aggregate_and_admin_inventory(app):
     """公开天气、社区、GIS 与管理员研究入口继续可达。"""
     allowed = {
         "public.index",
+        "public.register",
+        "public.account_link",
+        "public.account_link_phone",
+        "public.account_link_code",
         "public.action_check",
         "user.community_dashboard",
         "user.community_risk",

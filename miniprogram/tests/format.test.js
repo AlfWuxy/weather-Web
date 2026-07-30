@@ -19,11 +19,19 @@ test('bootstrap 兼容正式天气字段与 reasons', () => {
     current: { temperature: 35, weather_condition: '晴', wind_dir: '南风' },
     risk: { score: 72, reasons: ['高温', '热夜'] },
     forecast: [{ date: '2026-07-18', temperature_max: 36, temperature_min: 28, weather_condition: '多云', risk_score: 70, risk_level: '高风险' }],
+    family_reminder: {
+      id: 'dc-heat-high-04',
+      date: '2026-07-17',
+      message: '今天高温，我们一人负责一次联系。',
+      follow_up_question: '上午谁先联系？',
+    },
   });
   assert.equal(result.current.condition, '晴');
   assert.equal(result.current.wind, '南风');
   assert.equal(result.risk.summary, '高温；热夜');
   assert.equal(result.forecast[0].condition, '多云');
+  assert.equal(result.familyReminder.id, 'dc-heat-high-04');
+  assert.equal(result.familyReminder.followUpQuestion, '上午谁先联系？');
 });
 
 test('归一化结果不保留未使用的原始大对象镜像', () => {
@@ -151,4 +159,42 @@ test('0 到 1 脆弱性指数转换为 0 到 100 显示', () => {
   assert.equal(result.cooling[0].address, '中心附近');
   assert.equal(result.cooling[0].contactHint, '请联系网格员');
   assert.equal(result.cooling[0].phone, '');
+});
+
+test('社区地图只接收完整有效的 GCJ-02 坐标', () => {
+  const result = normalizeCommunity({
+    communities: [
+      {
+        id: 1,
+        name: '已维护社区',
+        vulnerability_index: 0.43,
+        latitude: 29.331309,
+        longitude: 116.204529,
+        coordinate_system: 'GCJ-02',
+      },
+      {
+        id: 2,
+        name: '错误坐标系社区',
+        latitude: 29.27,
+        longitude: 116.2,
+        coordinate_system: 'WGS84',
+      },
+      {
+        id: 3,
+        name: '坐标越界社区',
+        latitude: 129.27,
+        longitude: 116.2,
+        coordinate_system: 'GCJ-02',
+      },
+    ],
+  });
+
+  assert.equal(result.communities[0].hasCoordinates, true);
+  assert.equal(result.communities[0].coordinateSystem, 'GCJ-02');
+  assert.equal(result.communities[0].latitude, 29.331309);
+  assert.equal(result.communities[0].longitude, 116.204529);
+  assert.equal(result.communities[1].hasCoordinates, false);
+  assert.equal(result.communities[1].latitude, null);
+  assert.equal(result.communities[2].hasCoordinates, false);
+  assert.equal(result.communities[2].longitude, null);
 });

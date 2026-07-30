@@ -31,6 +31,13 @@
       </view>
       <image class="chevron" src="/assets/icons/chevron-right.png" mode="aspectFit" aria-hidden="true" />
     </button>
+    <button wx:if="{{loggedIn}}" class="menu-row border-top" bindtap="goAccountLink" hover-class="button-pressed">
+      <view>
+        <view class="menu-title">串联网页版账号</view>
+        <view class="menu-copy">输入网页一次性绑定码，共用家庭照护数据</view>
+      </view>
+      <image class="chevron" src="/assets/icons/chevron-right.png" mode="aspectFit" aria-hidden="true" />
+    </button>
     <button class="menu-row border-top" bindtap="goTransparency" hover-class="button-pressed">
       <view>
         <view class="menu-title">计算透明度</view>

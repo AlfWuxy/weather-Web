@@ -49,7 +49,7 @@ Page({
   },
 
   async onPullDownRefresh() {
-    await this.loadData({ force: true });
+    await this.loadData({ force: true, revalidate: true });
     wx.stopPullDownRefresh();
   },
 
@@ -101,7 +101,7 @@ Page({
   },
 
   retry() {
-    this.loadData({ force: true });
+    this.loadData({ force: true, revalidate: true });
   },
 
   onShareAppMessage() {
