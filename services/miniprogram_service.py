@@ -727,6 +727,7 @@ def _public_cooling_coordinates(record):
     try:
         latitude = float(record.latitude)
         longitude = float(record.longitude)
+        verified_at = ensure_utc_aware(record.coordinate_verified_at)
     except (TypeError, ValueError):
         return None, None, None
     if (
@@ -734,6 +735,24 @@ def _public_cooling_coordinates(record):
         or not math.isfinite(longitude)
         or not -90 <= latitude <= 90
         or not -180 <= longitude <= 180
+    ):
+        return None, None, None
+
+    verification_ttl_days = current_app.config.get(
+        'COOLING_COORDINATE_VERIFICATION_TTL_DAYS',
+        365,
+    )
+    try:
+        verification_ttl_days = max(
+            30,
+            min(int(verification_ttl_days), 730),
+        )
+    except (TypeError, ValueError):
+        verification_ttl_days = 365
+    now = utcnow()
+    if (
+        verified_at > now + timedelta(minutes=5)
+        or now - verified_at > timedelta(days=verification_ttl_days)
     ):
         return None, None, None
 

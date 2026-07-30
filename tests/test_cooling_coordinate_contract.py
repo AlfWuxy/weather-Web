@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """避暑资源坐标来源、核验回执与公开输出测试。"""
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import math
 
 import pytest
@@ -48,6 +48,7 @@ def test_parse_cooling_coordinates_rejects_incomplete_or_invalid_pair(latitude, 
 
 def test_public_cooling_resource_declares_gcj02_contract(client, db_session):
     from core.db_models import CoolingResource
+    from core.time_utils import utcnow
 
     db_session.add(
         CoolingResource(
@@ -57,7 +58,7 @@ def test_public_cooling_resource_declares_gcj02_contract(client, db_session):
             longitude=116.20,
             coordinate_system="GCJ-02",
             coordinate_source="管理员现场使用微信地图人工核对",
-            coordinate_verified_at=datetime(2026, 7, 21, tzinfo=timezone.utc),
+            coordinate_verified_at=utcnow() - timedelta(days=1),
             is_active=True,
         )
     )
@@ -71,6 +72,143 @@ def test_public_cooling_resource_declares_gcj02_contract(client, db_session):
     assert math.isfinite(payload["items"][0]["latitude"])
     assert math.isfinite(payload["items"][0]["longitude"])
     assert "coordinate_source" not in payload["items"][0]
+
+
+def test_miniprogram_hides_expired_or_future_verified_coordinates(
+    app,
+    client,
+    db_session,
+):
+    from core.db_models import CoolingResource
+    from core.time_utils import utcnow
+
+    app.config["COOLING_COORDINATE_VERIFICATION_TTL_DAYS"] = 365
+    now = utcnow()
+    db_session.add_all(
+        [
+            CoolingResource(
+                community_code="测试社区",
+                name="有效坐标",
+                latitude=29.27,
+                longitude=116.20,
+                coordinate_system="GCJ-02",
+                coordinate_source="管理员现场核验",
+                coordinate_verified_at=now - timedelta(days=1),
+                is_active=True,
+            ),
+            CoolingResource(
+                community_code="测试社区",
+                name="过期坐标",
+                latitude=29.28,
+                longitude=116.21,
+                coordinate_system="GCJ-02",
+                coordinate_source="历史人工核验",
+                coordinate_verified_at=now - timedelta(days=366),
+                is_active=True,
+            ),
+            CoolingResource(
+                community_code="测试社区",
+                name="异常未来坐标",
+                latitude=29.29,
+                longitude=116.22,
+                coordinate_system="GCJ-02",
+                coordinate_source="异常时间回执",
+                coordinate_verified_at=now + timedelta(minutes=6),
+                is_active=True,
+            ),
+        ]
+    )
+    db_session.commit()
+
+    response = client.get("/mp/api/v1/public/cooling-resources")
+    assert response.status_code == 200
+    items = {
+        item["name"]: item
+        for item in response.get_json()["data"]["items"]
+    }
+    assert items["有效坐标"]["coordinate_system"] == "GCJ-02"
+    assert math.isfinite(items["有效坐标"]["latitude"])
+    assert math.isfinite(items["有效坐标"]["longitude"])
+    for name in ("过期坐标", "异常未来坐标"):
+        assert items[name]["latitude"] is None
+        assert items[name]["longitude"] is None
+        assert items[name]["coordinate_system"] is None
+
+
+REFERENCE_NOW = datetime(2026, 7, 31, 12, 0, tzinfo=timezone.utc)
+
+
+@pytest.mark.parametrize(
+    ("coordinate_verified_at", "coordinate_visible"),
+    [
+        pytest.param(
+            REFERENCE_NOW - timedelta(days=365),
+            True,
+            id="ttl-boundary",
+        ),
+        pytest.param(
+            REFERENCE_NOW - timedelta(days=365, seconds=1),
+            False,
+            id="ttl-plus-one-second",
+        ),
+        pytest.param(
+            REFERENCE_NOW + timedelta(minutes=5),
+            True,
+            id="future-tolerance-boundary",
+        ),
+        pytest.param(
+            REFERENCE_NOW + timedelta(minutes=5, seconds=1),
+            False,
+            id="future-tolerance-plus-one-second",
+        ),
+        pytest.param(
+            (REFERENCE_NOW - timedelta(days=1)).replace(tzinfo=None),
+            True,
+            id="sqlite-naive-utc",
+        ),
+    ],
+)
+def test_miniprogram_coordinate_verification_time_boundaries(
+    app,
+    client,
+    db_session,
+    monkeypatch,
+    coordinate_verified_at,
+    coordinate_visible,
+):
+    """小程序坐标公开规则在 TTL、时钟容差和 SQLite 时间格式下保持稳定。"""
+    from core.db_models import CoolingResource
+
+    app.config["COOLING_COORDINATE_VERIFICATION_TTL_DAYS"] = 365
+    monkeypatch.setattr(
+        "services.miniprogram_service.utcnow",
+        lambda: REFERENCE_NOW,
+    )
+    db_session.add(
+        CoolingResource(
+            community_code="测试社区",
+            name="坐标时间边界点位",
+            latitude=29.27,
+            longitude=116.20,
+            coordinate_system="GCJ-02",
+            coordinate_source="管理员现场核验",
+            coordinate_verified_at=coordinate_verified_at,
+            is_active=True,
+        )
+    )
+    db_session.commit()
+
+    item = client.get(
+        "/mp/api/v1/public/cooling-resources"
+    ).get_json()["data"]["items"][0]
+    if coordinate_visible:
+        assert item["coordinate_system"] == "GCJ-02"
+        assert math.isfinite(item["latitude"])
+        assert math.isfinite(item["longitude"])
+    else:
+        assert item["latitude"] is None
+        assert item["longitude"] is None
+        assert item["coordinate_system"] is None
 
 
 @pytest.mark.parametrize(

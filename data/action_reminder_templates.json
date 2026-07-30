@@ -47,7 +47,7 @@
   {"id":"dc-cold-extreme-03","risk_level":"extreme","weather_tags":["cold"],"audience":"family_caregiver","message":"今天极端寒冷，请马上联系老人，安排有人查看取暖。","follow_up_question":"谁能马上联系？"},
   {"id":"dc-cold-extreme-04","risk_level":"extreme","weather_tags":["cold"],"audience":"family_group","message":"今天风险很高，我们马上确认老人位置和取暖情况。","follow_up_question":"谁能最快到他身边？"},
   {"id":"dc-cold-extreme-05","risk_level":"extreme","weather_tags":["cold"],"audience":"neighbor_helper","message":"今天极端寒冷，麻烦尽快看看老人，异常情况联系家人。","follow_up_question":"现在能去看一下吗？"},
-  {"id":"dc-cold-extreme-06","risk_level":"extreme","weather_tags":["cold"],"audience":"older_adult","message":"今天先别出门，留意官方提醒；明显不舒服就马上叫家人。","follow_up_question":"先回我一句好吗？"},
+  {"id":"dc-cold-extreme-06","risk_level":"extreme","weather_tags":["cold"],"audience":"older_adult","message":"今天先别出门，注意保暖并留意官方提醒；明显不舒服就马上叫家人。","follow_up_question":"先回我一句好吗？"},
 
   {"id":"dc-storm-low-01","risk_level":"low","weather_tags":["storm"],"audience":"older_adult","message":"今天可能有阵风，阳台零碎东西先收进来。","follow_up_question":"东西收好了吗？"},
   {"id":"dc-storm-low-02","risk_level":"low","weather_tags":["storm"],"audience":"older_adult","message":"听到雷声就先回屋，别在树下久留。","follow_up_question":"现在在屋里吗？"},

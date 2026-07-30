@@ -11,6 +11,7 @@ def test_reminder_library_has_120_unique_easy_follow_up_entries():
 
     assert len(templates) == 120
     assert len({item["id"] for item in templates}) == 120
+    assert len({item["message"] for item in templates}) == 120
     assert all(item["message"] for item in templates)
     assert all(item["follow_up_question"].endswith(("？", "吗？")) for item in templates)
 

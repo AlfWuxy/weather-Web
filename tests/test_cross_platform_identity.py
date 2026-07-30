@@ -239,6 +239,100 @@ def test_one_time_code_links_wechat_identity_and_rotates_session(
     assert reused.get_json()["error"] == "invalid_link_code"
 
 
+def test_linked_web_and_miniprogram_share_the_same_health_diary_owner(
+    app,
+    client,
+    db_session,
+    monkeypatch,
+):
+    """网页与小程序绑定后，双方通过真实路由读写同一账号日记。"""
+    from core.db_models import HealthDiary, User
+
+    _configure_wechat(app)
+    web_user = User(username="cross_platform_diary", role="user")
+    web_user.set_password("long-web-password")
+    db_session.add(web_user)
+    db_session.commit()
+    web_user_id = int(web_user.id)
+
+    csrf = _login_web(client, web_user.username, "long-web-password")
+    web_created = client.post(
+        "/health-diary",
+        data={
+            "csrf_token": csrf,
+            "entry_date": "2026-07-30",
+            "severity": "轻微",
+            "symptoms": "网页记录的乏力",
+            "notes": "网页端先补水",
+        },
+        follow_redirects=False,
+    )
+    assert web_created.status_code in (301, 302, 303)
+    assert HealthDiary.query.filter_by(
+        user_id=web_user_id,
+        notes="网页端先补水",
+    ).count() == 1
+
+    link_code = _generate_link_code(client, csrf)
+    mini_client = app.test_client()
+    temporary_token = _wechat_login(
+        app,
+        mini_client,
+        monkeypatch,
+        "openid-cross-platform-diary",
+    )
+    linked = mini_client.post(
+        "/mp/api/v1/auth/link-account",
+        json={"code": link_code},
+        headers={"Authorization": f"Bearer {temporary_token}"},
+    )
+    assert linked.status_code == 200
+    linked_token = linked.get_json()["data"]["session_token"]
+    linked_headers = {"Authorization": f"Bearer {linked_token}"}
+
+    consent = mini_client.post(
+        "/mp/api/v1/health-consent",
+        headers=linked_headers,
+        json={
+            "consent": True,
+            "health_consent_version": "privacy-v1",
+        },
+    )
+    assert consent.status_code == 200
+
+    mini_list = mini_client.get(
+        "/mp/api/v1/health/diary",
+        headers=linked_headers,
+    )
+    assert mini_list.status_code == 200
+    assert any(
+        item["notes"] == "网页端先补水"
+        for item in mini_list.get_json()["data"]["items"]
+    )
+
+    mini_created = mini_client.post(
+        "/mp/api/v1/health/diary",
+        headers=linked_headers,
+        json={
+            "entry_date": "2026-07-30",
+            "severity": "mild",
+            "symptoms": "小程序记录的口渴",
+            "notes": "小程序端再补水",
+        },
+    )
+    assert mini_created.status_code == 201
+    assert HealthDiary.query.filter_by(
+        user_id=web_user_id,
+        notes="小程序端再补水",
+    ).count() == 1
+
+    web_list = client.get("/health-diary")
+    assert web_list.status_code == 200
+    html = web_list.get_data(as_text=True)
+    assert "网页记录的乏力" in html
+    assert "小程序记录的口渴" in html
+
+
 def test_account_delete_wins_link_race_without_identity_residue(
     app,
     client,
