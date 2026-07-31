@@ -12,6 +12,13 @@ import pytest
 from pathlib import Path
 
 
+# conftest 会先于测试模块加载，立即切断宿主机 Redis，避免收集阶段导入应用时污染运行缓存。
+os.environ.pop('CASE_WEATHER_ENV_FILE', None)
+os.environ['RATE_LIMIT_STORAGE_URI'] = 'memory://'
+os.environ['REDIS_URL'] = ''
+os.environ['WEATHER_CACHE_REDIS_URL'] = ''
+
+
 @pytest.fixture(scope='function', autouse=True)
 def isolate_formal_logging_privacy():
     """隔离正式态进程级日志工厂，防止测试模式跨用例串扰。"""
@@ -52,6 +59,7 @@ def setup_test_environment(tmp_path_factory):
         # 测试必须隔离生产 Redis 限流状态，避免远端 .env 影响登录/API 用例。
         'RATE_LIMIT_STORAGE_URI': 'memory://',
         'REDIS_URL': '',
+        'WEATHER_CACHE_REDIS_URL': '',
         # 文件锁使用独立的绝对临时目录，避免依赖被 Git 忽略的 instance/。
         'DISPATCH_LOCK_PATH': str(lock_root / 'case-weather-dispatch.lock'),
     }
@@ -86,6 +94,8 @@ def app():
     # 确保使用内存存储（避免速率限制干扰测试）
     app.config['RATE_LIMIT_STORAGE_URI'] = 'memory://'
     app.config['RATELIMIT_STORAGE_URI'] = 'memory://'
+    assert app.config['REDIS_URL'] == ''
+    assert app.config['WEATHER_CACHE_REDIS_URL'] == ''
 
     yield app
 
