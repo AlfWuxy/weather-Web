@@ -8,7 +8,16 @@ from contextlib import contextmanager
 from datetime import timedelta
 from urllib.parse import urlparse
 
-from flask import current_app, flash, redirect, render_template, request, session, url_for
+from flask import (
+    current_app,
+    flash,
+    make_response,
+    redirect,
+    render_template,
+    request,
+    session,
+    url_for,
+)
 from flask_login import current_user, login_user, logout_user
 from sqlalchemy import or_
 from sqlalchemy.exc import IntegrityError
@@ -1546,7 +1555,14 @@ def _verified_cooling_map_point(resource):
     }
 
 
-def render_cooling_resources_page(community, resource_type, has_ac_raw, is_accessible_raw, open_only):
+def render_cooling_resources_page(
+    community,
+    resource_type,
+    has_ac_raw,
+    is_accessible_raw,
+    open_only,
+    cooling_candidates=None,
+):
     open_only_flag = parse_bool(open_only, default=False)
     location_query = sanitize_input(request.args.get('location'), max_length=100)
     weather_location = normalize_location_name(community or location_query or None)
@@ -1588,6 +1604,11 @@ def render_cooling_resources_page(community, resource_type, has_ac_raw, is_acces
         CoolingResource.name
     ).all()
     all_resources = CoolingResource.query.filter_by(is_active=True).all()
+    candidate_preview = (
+        list(cooling_candidates or [])
+        if not all_resources
+        else []
+    )
     communities = sorted({item.community_code for item in all_resources if item.community_code})
     resource_types = sorted({item.resource_type for item in all_resources if item.resource_type})
     grouped = {}
@@ -1600,7 +1621,7 @@ def render_cooling_resources_page(community, resource_type, has_ac_raw, is_acces
 
     amap_key = current_app.config.get('AMAP_JS_API_KEY')
     amap_security_js_code = current_app.config.get('AMAP_SECURITY_JS_CODE')
-    return render_template(
+    response = make_response(render_template(
         'cooling.html',
         resources_by_community=grouped,
         total=len(resources),
@@ -1617,8 +1638,15 @@ def render_cooling_resources_page(community, resource_type, has_ac_raw, is_acces
         amap_security_js_code=amap_security_js_code,
         cooling_weather=cooling_weather,
         cooling_weather_location=weather_location,
-        outdoor_temp=outdoor_temp
-    )
+        outdoor_temp=outdoor_temp,
+        cooling_candidates=candidate_preview,
+    ))
+    if not map_points:
+        # 没有可计算距离的正式点位时，浏览器不应提供定位能力。
+        response.headers['Permissions-Policy'] = (
+            'camera=(), microphone=(), geolocation=(), payment=(), usb=()'
+        )
+    return response
 
 
 def render_public_risk_page(location):

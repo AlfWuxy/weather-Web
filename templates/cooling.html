@@ -160,12 +160,52 @@
         <div class="col-12">
             <section class="yl-section text-center mb-0">
                 <div style="font-size:2rem; color:var(--yl-orange-500);"><i class="bi bi-geo-alt"></i></div>
-                <h4 class="mt-2" style="font-size:1.05rem;">暂无录入的避暑资源</h4>
-                <p class="text-muted mb-0" style="font-size:.9rem;">当前筛选条件下没有可展示的真实资源。请调整地区或类型,或等待管理员补充数据。</p>
+                <h4 class="mt-2" style="font-size:1.05rem;">暂无已发布且完成核验的避暑资源</h4>
+                <p class="text-muted mb-0" style="font-size:.9rem;">当前筛选条件下没有可展示的正式资源。请调整地区或类型，或等待管理员完成现场核验。</p>
             </section>
         </div>
         {% endif %}
     </div>
+
+    {% if cooling_candidates %}
+    <section class="yl-section mt-4 yl-fade-up"
+             aria-labelledby="coolingCandidateTitle"
+             data-publication-status="candidate-only"
+             data-verification-status="pending-human-verification">
+        <div class="d-flex flex-column flex-lg-row justify-content-between gap-3 mb-3">
+            <div>
+                <span class="section-kicker">预览资料</span>
+                <h2 class="h4 mb-1" id="coolingCandidateTitle">待核验场所预览</h2>
+                <p class="text-muted mb-0">这些信息来自高德公开 POI，仅帮助后续人工核验和联系确认。</p>
+            </div>
+            <span class="badge bg-warning-subtle text-warning-emphasis align-self-start">全部待人工核验</span>
+        </div>
+        <div class="alert alert-warning" role="note">
+            候选场所不代表当天开放、具备空调、允许公众纳凉或已获本项目推荐。志愿服务候选也不等于可进入纳凉，请勿直接按候选信息带老人前往。
+        </div>
+        <div class="row g-3">
+            {% for candidate in cooling_candidates %}
+            <div class="col-md-6 col-lg-4">
+                <article class="card h-100" data-cooling-candidate="pending">
+                    <div class="card-body">
+                        <div class="d-flex justify-content-between align-items-start gap-2 mb-2">
+                            <h3 class="h6 mb-0">{{ candidate.name }}</h3>
+                            <span class="badge bg-warning-subtle text-warning-emphasis">待人工核验</span>
+                        </div>
+                        <p class="small text-muted mb-3">{{ candidate.role_label }} · {{ candidate.category_label }}</p>
+                        <p class="small mb-2">
+                            <strong>POI 地址提示：</strong>{{ candidate.address or '未提供' }}
+                        </p>
+                        <p class="small mb-0">
+                            <strong>POI 时段提示：</strong>{{ candidate.opening_hours_hint or '未提供，需电话或现场确认' }}
+                        </p>
+                    </div>
+                </article>
+            </div>
+            {% endfor %}
+        </div>
+    </section>
+    {% endif %}
 
     <section class="alert alert-primary mt-4 yl-fade-up">
         <i class="bi bi-info-circle me-1"></i>

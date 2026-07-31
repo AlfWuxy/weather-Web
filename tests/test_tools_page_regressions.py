@@ -611,20 +611,55 @@ def test_chronic_risk_service_uses_submitted_vitals():
     assert high['vital_adjustment']['score_adjustment'] > base['vital_adjustment']['score_adjustment']
 
 
-def test_cooling_page_empty_database_does_not_render_default_resources(client, db_session, monkeypatch):
+def test_cooling_page_empty_database_renders_safe_candidate_preview(
+    app,
+    client,
+    db_session,
+    monkeypatch,
+):
+    import json
+    import re
+
+    from core.db_models import CoolingResource
+
     monkeypatch.setattr(
         'services.public_service.get_weather_with_cache',
         lambda location: ({'temperature': 27.5, 'is_mock': False, 'data_source': 'QWeather'}, False),
     )
+    app.config['AMAP_JS_API_KEY'] = 'j' * 32
+    assert CoolingResource.query.count() == 0
 
     response = client.get('/cooling?location=都昌')
 
     assert response.status_code == 200
     body = response.get_data(as_text=True)
-    assert '暂无录入的避暑资源' in body
-    assert '都昌县图书馆' not in body
+    assert CoolingResource.query.count() == 0
+    assert '暂无已发布且完成核验的避暑资源' in body
+    assert '待核验场所预览' in body
+    assert '都昌县图书馆' in body
+    assert '都昌志愿服务联合会' in body
+    assert '待人工核验' in body
+    assert '不代表当天开放、具备空调、允许公众纳凉或已获本项目推荐' in body
+    assert '都昌县人民医院' not in body
+    assert '左里中心卫生院' not in body
     assert '万达广场' not in body
     assert '人民公园纳凉亭' not in body
+    assert 'B03180SL06' not in body
+    assert '116.187665' not in body
+    assert '29.249263' not in body
+    assert 'data-publication-status="candidate-only"' in body
+    assert 'data-verification-status="pending-human-verification"' in body
+    assert 'data-cooling-map-focus' not in body
+    assert 'id="coolingLocateButton"' in body
+    assert 'id="coolingLocateButton"\n                    disabled' in body
+    assert 'geolocation=()' in response.headers['Permissions-Policy']
+    match = re.search(
+        r'<script id="coolingMapData" type="application/json">(.*?)</script>',
+        body,
+        re.DOTALL,
+    )
+    assert match is not None
+    assert json.loads(match.group(1)) == []
 
 
 def test_cooling_page_renders_real_resources_only(client, db_session, monkeypatch):
@@ -660,6 +695,34 @@ def test_cooling_page_renders_real_resources_only(client, db_session, monkeypatc
     assert '距你' not in body
     assert '都昌县图书馆' not in body
     assert '万达广场' not in body
+    assert '待核验场所预览' not in body
+
+
+def test_public_cooling_candidates_reject_unapproved_category(
+    monkeypatch,
+):
+    from blueprints import public as public_blueprint
+
+    payload = {
+        'publication_status': 'candidate_only',
+        'coordinate_system': 'GCJ-02',
+        'items': [{
+            'name': '异常医院候选',
+            'category': 'hospital',
+            'public_role': 'cooling_candidate',
+            'address': '测试地址',
+            'opening_hours_hint': '全天',
+            'verification_status': 'pending_human_verification',
+            'is_active': False,
+        }],
+    }
+    monkeypatch.setattr(
+        public_blueprint,
+        '_read_versioned_public_json',
+        lambda _path: payload,
+    )
+
+    assert public_blueprint._public_cooling_candidates() == []
 
 
 def test_cooling_map_only_serializes_current_verified_gcj02_points(

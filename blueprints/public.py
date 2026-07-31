@@ -225,8 +225,10 @@ def _public_cooling_candidates():
             if not isinstance(item, dict):
                 continue
             role = item.get('public_role')
+            category = item.get('category')
             if (
                 role not in role_labels
+                or category not in category_labels
                 or item.get('verification_status')
                 != 'pending_human_verification'
                 or item.get('is_active') is not False
@@ -239,10 +241,7 @@ def _public_cooling_candidates():
                     item.get('opening_hours_hint') or ''
                 ).strip()[:160],
                 'role_label': role_labels[role],
-                'category_label': category_labels.get(
-                    item.get('category'),
-                    '公共服务场所',
-                ),
+                'category_label': category_labels[category],
             })
         return [item for item in candidates if item['name']][:12]
     except (OSError, TypeError, ValueError, json.JSONDecodeError):
@@ -632,7 +631,8 @@ def cooling_resources():
         resource_type=resource_type,
         has_ac_raw=has_ac_raw,
         is_accessible_raw=is_accessible_raw,
-        open_only=open_only
+        open_only=open_only,
+        cooling_candidates=_public_cooling_candidates(),
     )
 
 
