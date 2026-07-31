@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import stat
 
 import pytest
 import sklearn
@@ -71,6 +72,10 @@ def test_write_feature_config_builds_complete_exact_runtime_artifacts(
     }
     assert set(written["runtime_artifacts"]["files"]) == set(
         feature_config_writer.ARTIFACT_NAMES
+    )
+    assert all(
+        stat.S_IMODE((tmp_path / filename).stat().st_mode) == 0o600
+        for filename in feature_config_writer.ARTIFACT_NAMES
     )
 
 
@@ -207,6 +212,29 @@ def test_write_feature_config_marks_symbolic_link_stale(
     )["runtime_artifacts"]
     assert runtime["status"] == "stale"
     assert runtime["files"] == {}
+
+
+def test_write_feature_config_marks_hard_link_stale_without_chmod(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "feature_config.json"
+    _write_artifacts(tmp_path)
+    artifact = tmp_path / "scaler.pkl"
+    artifact.chmod(0o644)
+    os.link(artifact, tmp_path / "scaler-copy.pkl")
+
+    feature_config_writer.write_feature_config(
+        config_path,
+        {"feature_cols": ["年龄数值"]},
+    )
+
+    runtime = json.loads(
+        config_path.read_text(encoding="utf-8")
+    )["runtime_artifacts"]
+    assert runtime["status"] == "stale"
+    assert runtime["reason"] == "artifact_metadata_invalid"
+    assert runtime["files"] == {}
+    assert stat.S_IMODE(artifact.stat().st_mode) == 0o644
 
 
 def test_write_feature_config_marks_unexpected_digest_error_stale(

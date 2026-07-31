@@ -50,6 +50,19 @@ def _fingerprint(metadata: os.stat_result) -> tuple[int, ...]:
     )
 
 
+def _identity(metadata: os.stat_result) -> tuple[int, ...]:
+    """返回权限收紧前后必须保持不变的文件身份。"""
+    return (
+        metadata.st_dev,
+        metadata.st_ino,
+        metadata.st_nlink,
+        metadata.st_uid,
+        metadata.st_gid,
+        metadata.st_size,
+        metadata.st_mtime_ns,
+    )
+
+
 def _validate_regular_file(
     metadata: os.stat_result,
 ) -> None:
@@ -72,6 +85,22 @@ def _read_artifact_spec(path: Path) -> dict[str, str | int]:
         opened = os.fstat(descriptor)
         _validate_regular_file(opened)
         if _fingerprint(lexical) != _fingerprint(opened):
+            raise _ArtifactReadError("artifact_changed")
+        if opened.st_uid != os.geteuid():
+            raise _ArtifactReadError("artifact_owner_invalid")
+
+        # joblib.dump 遵循进程 umask，常见默认值会生成 0644。
+        # 只对已用 O_NOFOLLOW 打开的单链接本人文件收紧权限，再生成摘要。
+        before_identity = _identity(opened)
+        os.fchmod(descriptor, 0o600)
+        opened = os.fstat(descriptor)
+        _validate_regular_file(opened)
+        after_chmod = path.lstat()
+        if (
+            _identity(opened) != before_identity
+            or _fingerprint(opened) != _fingerprint(after_chmod)
+            or stat.S_IMODE(opened.st_mode) != 0o600
+        ):
             raise _ArtifactReadError("artifact_changed")
 
         digest = hashlib.sha256()
