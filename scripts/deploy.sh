@@ -2951,25 +2951,20 @@ remote_exec "python3 $RELEASE_APP/scripts/validate_release_env.py --file $STAGED
 echo ""
 echo "步骤6: 为新版本创建独立虚拟环境..."
 remote_exec "set -eu
-# 512 MiB 生产机只允许在资源足够时开始安装，门禁失败不会触碰旧服务。
-INSTALL_MEM_TOTAL_KIB=\$(awk '/^MemTotal:/ {print \$2}' /proc/meminfo)
-INSTALL_MEM_AVAILABLE_KIB=\$(awk '/^MemAvailable:/ {print \$2}' /proc/meminfo)
+# 先尝试从已激活 release 严格核验并低内存克隆；证据不足才进入原网络安装门禁。
 INSTALL_AVAILABLE_MIB=\$(df -Pm $RELEASE_ROOT | awk 'NR == 2 {print \$4}')
 INSTALL_INODE_USE_PERCENT=\$(df -Pi $RELEASE_ROOT | awk 'NR == 2 {gsub(\"%\", \"\", \$5); print \$5}')
-[ \"\${INSTALL_MEM_TOTAL_KIB:-0}\" -ge 460800 ] || {
-    echo '服务器总内存不足 450 MiB，停止依赖安装。' >&2
-    exit 1
-}
-[ \"\${INSTALL_MEM_AVAILABLE_KIB:-0}\" -ge 327680 ] || {
-    echo '服务器可用内存不足 320 MiB，停止依赖安装。' >&2
+INSTALL_REUSE_MEM_AVAILABLE_KIB=\$(awk '/^MemAvailable:/ {print \$2}' /proc/meminfo)
+[ \"\${INSTALL_REUSE_MEM_AVAILABLE_KIB:-0}\" -ge 262144 ] || {
+    echo '发布依赖复用前可用内存不足 256 MiB，安全停止发布。' >&2
     exit 1
 }
 [ \"\${INSTALL_AVAILABLE_MIB:-0}\" -ge 2048 ] || {
-    echo '发布磁盘可用空间不足 2048 MiB，停止依赖安装。' >&2
+    echo '发布磁盘可用空间不足 2048 MiB，停止依赖准备。' >&2
     exit 1
 }
 [ \"\${INSTALL_INODE_USE_PERCENT:-100}\" -le 90 ] || {
-    echo '发布磁盘可用 inode 不足 10%，停止依赖安装。' >&2
+    echo '发布磁盘可用 inode 不足 10%，停止依赖准备。' >&2
     exit 1
 }
 
@@ -2977,21 +2972,27 @@ umask 077
 INSTALL_ROOT=$NEW_RELEASE/dependency-install
 INSTALL_HOME=\$INSTALL_ROOT/home
 INSTALL_TMP=\$INSTALL_ROOT/tmp
-INSTALL_UNIT=case-weather-install-$RELEASE_ID.service
+INSTALL_REUSE_UNIT=case-weather-reuse-$RELEASE_ID.service
+INSTALL_NETWORK_UNIT=case-weather-install-$RELEASE_ID.service
 cleanup_install() {
     INSTALL_CLEANUP_STATUS=\$?
-    if systemctl is-active --quiet \"\$INSTALL_UNIT\"; then
-        systemctl stop \"\$INSTALL_UNIT\" >/dev/null 2>&1 \
-            || INSTALL_CLEANUP_STATUS=1
-        for INSTALL_STOP_ATTEMPT in 1 2 3 4 5; do
-            systemctl is-active --quiet \"\$INSTALL_UNIT\" || break
-            sleep 1
-        done
-    fi
-    if systemctl is-active --quiet \"\$INSTALL_UNIT\"; then
-        echo \"依赖安装 unit 未停止，保留临时目录并停止发布: \$INSTALL_UNIT\" >&2
-        INSTALL_CLEANUP_STATUS=1
-    else
+    INSTALL_UNIT_STILL_ACTIVE=0
+    for INSTALL_UNIT in \"\$INSTALL_REUSE_UNIT\" \"\$INSTALL_NETWORK_UNIT\"; do
+        if systemctl is-active --quiet \"\$INSTALL_UNIT\"; then
+            systemctl stop \"\$INSTALL_UNIT\" >/dev/null 2>&1 \
+                || INSTALL_CLEANUP_STATUS=1
+            for INSTALL_STOP_ATTEMPT in 1 2 3 4 5; do
+                systemctl is-active --quiet \"\$INSTALL_UNIT\" || break
+                sleep 1
+            done
+        fi
+        if systemctl is-active --quiet \"\$INSTALL_UNIT\"; then
+            echo \"依赖准备 unit 未停止，保留临时目录并停止发布: \$INSTALL_UNIT\" >&2
+            INSTALL_UNIT_STILL_ACTIVE=1
+            INSTALL_CLEANUP_STATUS=1
+        fi
+    done
+    if [ \"\$INSTALL_UNIT_STILL_ACTIVE\" = 0 ]; then
         rm -rf -- \"\$INSTALL_ROOT\"
     fi
     exit \"\$INSTALL_CLEANUP_STATUS\"
@@ -2999,24 +3000,27 @@ cleanup_install() {
 trap cleanup_install EXIT
 install -d -o root -g root -m 0700 \"\$INSTALL_ROOT\" \"\$INSTALL_HOME\" \"\$INSTALL_TMP\"
 
-# PyPI 网络仅对本轮受限安装开放；超内存或超时会让发布在激活前安全停止。
+# 当前 release 的锁、私有收据、Python 与 live 包集合全相等时才允许无网络克隆。
+# 17,845 条目实测父进程与 pip 子进程组合峰值约 146 MiB，保留 192 MiB 硬上限。
+INSTALL_REUSE_STATUS=0
 systemd-run --quiet --wait --pipe --collect --service-type=exec \
-    --unit=\"\$INSTALL_UNIT\" \
-    --property=MemoryHigh=192M \
-    --property=MemoryMax=256M \
+    --unit=\"\$INSTALL_REUSE_UNIT\" \
+    --property=MemoryHigh=160M \
+    --property=MemoryMax=192M \
     --property=MemorySwapMax=0 \
-    --property=TasksMax=64 \
+    --property=TasksMax=32 \
     --property=OOMPolicy=stop \
-    --property=TimeoutStartSec=15min \
-    --property=RuntimeMaxSec=15min \
+    --property=TimeoutStartSec=10min \
+    --property=RuntimeMaxSec=10min \
     --property=PrivateTmp=yes \
     --property=PrivateDevices=yes \
+    --property=PrivateNetwork=yes \
     --property=NoNewPrivileges=yes \
     --working-directory=$RELEASE_APP \
     /usr/bin/env -i \
     HOME=\"\$INSTALL_HOME\" \
     TMPDIR=\"\$INSTALL_TMP\" \
-    PIP_NO_CACHE_DIR=1 \
+    PIP_NO_INDEX=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PIP_CONFIG_FILE=/dev/null \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -3027,7 +3031,72 @@ systemd-run --quiet --wait --pipe --collect --service-type=exec \
         $RELEASE_APP \
         $RELEASE_VENV \
         $NEW_RELEASE/private-metadata \
-        c7e450c30d7d3c56bdf210f69a58620cba9d99e462e0e2c254ab45456271f853"
+        c7e450c30d7d3c56bdf210f69a58620cba9d99e462e0e2c254ab45456271f853 \
+        reuse-current \
+        $CURRENT_LINK \
+        3.11 || INSTALL_REUSE_STATUS=\$?
+
+if [ \"\$INSTALL_REUSE_STATUS\" = 0 ]; then
+    echo '已从 current release 严格核验并低内存克隆依赖。'
+elif [ \"\$INSTALL_REUSE_STATUS\" = 75 ]; then
+    # 只有明确的“不可复用”状态才允许回退；320 MiB 门禁仍在任何 PyPI 请求之前。
+    # 复用核对最长可运行 10 分钟，网络安装必须重新读取当下资源，禁止使用旧快照。
+    INSTALL_MEM_TOTAL_KIB=\$(awk '/^MemTotal:/ {print \$2}' /proc/meminfo)
+    INSTALL_MEM_AVAILABLE_KIB=\$(awk '/^MemAvailable:/ {print \$2}' /proc/meminfo)
+    INSTALL_AVAILABLE_MIB=\$(df -Pm $RELEASE_ROOT | awk 'NR == 2 {print \$4}')
+    INSTALL_INODE_USE_PERCENT=\$(df -Pi $RELEASE_ROOT | awk 'NR == 2 {gsub(\"%\", \"\", \$5); print \$5}')
+    [ \"\${INSTALL_MEM_TOTAL_KIB:-0}\" -ge 460800 ] || {
+        echo '当前 release 不可安全复用，且服务器总内存不足 450 MiB，停止依赖安装。' >&2
+        exit 1
+    }
+    [ \"\${INSTALL_MEM_AVAILABLE_KIB:-0}\" -ge 327680 ] || {
+        echo '当前 release 不可安全复用，且服务器可用内存不足 320 MiB，停止依赖安装。' >&2
+        exit 1
+    }
+    [ \"\${INSTALL_AVAILABLE_MIB:-0}\" -ge 2048 ] || {
+        echo '网络安装前发布磁盘可用空间不足 2048 MiB，停止依赖安装。' >&2
+        exit 1
+    }
+    [ \"\${INSTALL_INODE_USE_PERCENT:-100}\" -le 90 ] || {
+        echo '网络安装前发布磁盘可用 inode 不足 10%，停止依赖安装。' >&2
+        exit 1
+    }
+    # PyPI 网络仅对本轮受限安装开放；超内存或超时会在激活前安全停止。
+    systemd-run --quiet --wait --pipe --collect --service-type=exec \
+        --unit=\"\$INSTALL_NETWORK_UNIT\" \
+        --property=MemoryHigh=192M \
+        --property=MemoryMax=256M \
+        --property=MemorySwapMax=0 \
+        --property=TasksMax=64 \
+        --property=OOMPolicy=stop \
+        --property=TimeoutStartSec=15min \
+        --property=RuntimeMaxSec=15min \
+        --property=PrivateTmp=yes \
+        --property=PrivateDevices=yes \
+        --property=NoNewPrivileges=yes \
+        --working-directory=$RELEASE_APP \
+        /usr/bin/env -i \
+        HOME=\"\$INSTALL_HOME\" \
+        TMPDIR=\"\$INSTALL_TMP\" \
+        PIP_NO_CACHE_DIR=1 \
+        PIP_DISABLE_PIP_VERSION_CHECK=1 \
+        PIP_CONFIG_FILE=/dev/null \
+        PYTHONDONTWRITEBYTECODE=1 \
+        PYTHONNOUSERSITE=1 \
+        PATH=/usr/local/bin:/usr/bin:/bin \
+        LANG=C.UTF-8 LC_ALL=C.UTF-8 \
+        /bin/bash $RELEASE_APP/scripts/install_release_dependencies.sh \
+            $RELEASE_APP \
+            $RELEASE_VENV \
+            $NEW_RELEASE/private-metadata \
+            c7e450c30d7d3c56bdf210f69a58620cba9d99e462e0e2c254ab45456271f853 \
+            install \
+            /dev/null \
+            3.11
+else
+    echo \"current release 依赖复用发生非回退型失败（状态 \$INSTALL_REUSE_STATUS），停止发布。\" >&2
+    exit 1
+fi"
 remote_exec "$RELEASE_VENV/bin/python $RELEASE_APP/scripts/validate_release_env.py --file $STAGED_ENV_FILE --require-wechat $EFFECTIVE_REQUIRE_WECHAT_READY --require-weather-ready $REMOTE_QWEATHER_VALIDATION_PENDING_ARG --probe-persistent-budget"
 # commit 只含十六进制字符。有效正式运行态会由激活脚本再次核对两份 CI 收据。
 remote_exec "umask 077; printf '%s\n' '$VERIFIED_COMMIT' > $NEW_RELEASE/private-metadata/source-commit.txt; chmod 0600 $NEW_RELEASE/private-metadata/source-commit.txt"
@@ -3211,7 +3280,7 @@ ReadWritePaths=$PROJECT_DIR/instance $PROJECT_DIR/storage $PROJECT_DIR/run
 WorkingDirectory=$CURRENT_LINK/app
 EnvironmentFile=$PROJECT_DIR/.env
 Environment=PYTHONUNBUFFERED=1
-ExecStart=$CURRENT_LINK/venv/bin/gunicorn --workers 1 --bind 127.0.0.1:5000 --timeout 120 app:app
+ExecStart=$CURRENT_LINK/venv/bin/python -m gunicorn --workers 1 --bind 127.0.0.1:5000 --timeout 120 app:app
 Restart=always
 RestartSec=10
 
@@ -3528,6 +3597,7 @@ chmod -R g+rX,o-rwx $NEW_RELEASE
 chown -R root:root $NEW_RELEASE/private-metadata
 chmod -R u=rwX,go= $NEW_RELEASE/private-metadata
 for PRIVATE_RECEIPT in \
+    $NEW_RELEASE/private-metadata/dependency-receipt.json \
     $NEW_RELEASE/private-metadata/ci-proof.json \
     $NEW_RELEASE/private-metadata/model-artifacts.json \
     $NEW_RELEASE/private-metadata/runtime-smoke.json \

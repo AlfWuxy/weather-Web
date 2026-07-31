@@ -1,10 +1,12 @@
 # -*- coding: utf-8 -*-
 """部署脚本回归测试。"""
 
+import ast
 import hashlib
 import json
 import os
 import re
+import shutil
 import stat
 import subprocess
 import sys
@@ -33,9 +35,196 @@ def _load_activate_script():
     return script_path.read_text(encoding="utf-8")
 
 
+def _load_dependency_helper_namespace():
+    """只加载依赖安装器内嵌 Python 的声明，便于直接验证树边界函数。"""
+    content = DEPENDENCY_INSTALLER.read_text(encoding='utf-8')
+    source = content.split("    python3 - \"$@\" <<'PY'\n", 1)[1]
+    source = source.split('\nPY\n}', 1)[0]
+    parsed = ast.parse(source)
+    declarations = tuple(
+        node
+        for node in parsed.body
+        if isinstance(
+            node,
+            (ast.Import, ast.ImportFrom, ast.ClassDef, ast.FunctionDef),
+        )
+    )
+    namespace = {}
+    exec(
+        compile(
+            ast.Module(body=list(declarations), type_ignores=[]),
+            str(DEPENDENCY_INSTALLER),
+            'exec',
+        ),
+        namespace,
+    )
+    return namespace
+
+
 def _write_executable(path, content):
     path.write_text(content, encoding='utf-8')
     path.chmod(0o755)
+
+
+def _create_reusable_release_base(base):
+    release_root = base / 'deploy'
+    old_release = release_root / 'releases' / 'old'
+    new_release = release_root / 'releases' / 'new'
+    old_app = old_release / 'app'
+    old_metadata = old_release / 'private-metadata'
+    new_app = new_release / 'app'
+    for directory in (old_app, old_metadata, new_app):
+        directory.mkdir(parents=True, mode=0o700)
+
+    old_venv = old_release / 'venv'
+    subprocess.run(
+        [sys.executable, '-m', 'venv', str(old_venv)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    python_minor = f'{sys.version_info.major}.{sys.version_info.minor}'
+    trusted_python_entry = Path(sys.executable).resolve().parent / 'python3'
+    assert trusted_python_entry.exists()
+    source_bin = old_venv / 'bin'
+    for python_entry in source_bin.glob('python*'):
+        python_entry.unlink()
+    (source_bin / 'python').symlink_to('python3')
+    (source_bin / 'python3').symlink_to(trusted_python_entry)
+    (source_bin / f'python{python_minor}').symlink_to('python3')
+    old_python = old_venv / 'bin' / 'python'
+    site_packages = Path(
+        subprocess.run(
+            [
+                str(old_python),
+                '-c',
+                'import sysconfig; print(sysconfig.get_paths()["purelib"])',
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+    )
+    gunicorn_module = site_packages / 'gunicorn'
+    gunicorn_module.mkdir()
+    (gunicorn_module / '__init__.py').write_text(
+        '__version__ = "0.0.1"\n',
+        encoding='utf-8',
+    )
+    (gunicorn_module / '__main__.py').write_text(
+        'raise SystemExit(0)\n',
+        encoding='utf-8',
+    )
+    gunicorn_metadata = site_packages / 'gunicorn-0.0.1.dist-info'
+    gunicorn_metadata.mkdir()
+    (gunicorn_metadata / 'METADATA').write_text(
+        'Metadata-Version: 2.1\nName: gunicorn\nVersion: 0.0.1\n',
+        encoding='utf-8',
+    )
+
+    inspect_text = subprocess.run(
+        [str(old_python), '-m', 'pip', 'inspect', '--local'],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    installed = json.loads(inspect_text)['installed']
+    lock_text = ''.join(
+        f'{item["metadata"]["name"]}=={item["metadata"]["version"]}\n'
+        for item in sorted(
+            installed,
+            key=lambda value: value['metadata']['name'].lower(),
+        )
+    )
+    lock_sha = hashlib.sha256(lock_text.encode()).hexdigest()
+    (old_app / 'requirements.lock').write_text(lock_text, encoding='utf-8')
+    (new_app / 'requirements.lock').write_text(lock_text, encoding='utf-8')
+    (old_metadata / 'requirements-lock.sha256').write_text(
+        f'{lock_sha}\n',
+        encoding='utf-8',
+    )
+    version_result = subprocess.run(
+        [str(old_python), '--version'],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    python_version = (version_result.stdout or version_result.stderr).strip()
+    (old_metadata / 'python-version.txt').write_text(
+        f'{python_version}\n',
+        encoding='utf-8',
+    )
+    (old_metadata / 'pip-inspect.json').write_text(
+        inspect_text,
+        encoding='utf-8',
+    )
+    for receipt in old_metadata.iterdir():
+        # 线上 2026-07-20 legacy release 的依赖收据为 root:case-weather 0640。
+        receipt.chmod(0o640)
+
+    current = release_root / 'current'
+    current.symlink_to(old_release)
+    return {
+        'release_root': release_root,
+        'old_release': old_release,
+        'new_release': new_release,
+        'current': current,
+        'lock_sha': lock_sha,
+        'python_minor': python_minor,
+    }
+
+
+@pytest.fixture(scope='module')
+def reusable_release_base(tmp_path_factory):
+    return _create_reusable_release_base(
+        tmp_path_factory.mktemp('reusable-release-base')
+    )
+
+
+def _copy_reusable_release(reusable_release_base, tmp_path):
+    copied_root = tmp_path / 'fixture'
+    shutil.copytree(
+        reusable_release_base['release_root'],
+        copied_root,
+        symlinks=True,
+    )
+    current = copied_root / 'current'
+    current.unlink()
+    old_release = copied_root / 'releases' / 'old'
+    current.symlink_to(old_release)
+    return {
+        'release_root': copied_root,
+        'old_release': old_release,
+        'new_release': copied_root / 'releases' / 'new',
+        'current': current,
+        'lock_sha': reusable_release_base['lock_sha'],
+        'python_minor': reusable_release_base['python_minor'],
+    }
+
+
+def _run_reuse_installer(fixture):
+    new_release = fixture['new_release']
+    environment = os.environ.copy()
+    # helper 必须由测试运行时的受信 Python 启动，不能先执行 source venv。
+    trusted_python_bin = Path(sys.executable).resolve().parent
+    environment['PATH'] = f'{trusted_python_bin}:{environment["PATH"]}'
+    return subprocess.run(
+        [
+            'bash',
+            str(DEPENDENCY_INSTALLER),
+            str(new_release / 'app'),
+            str(new_release / 'venv'),
+            str(new_release / 'private-metadata'),
+            fixture['lock_sha'],
+            'reuse-current',
+            str(fixture['current']),
+            fixture['python_minor'],
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=environment,
+    )
 
 
 def _create_clean_git_source(tmp_path):
@@ -671,29 +860,59 @@ def test_dependency_install_is_memory_bounded_before_runtime_preflight():
 
     assert install_block.count(
         'systemd-run --quiet --wait --pipe --collect'
-    ) == 1
-    assert '--property=MemoryHigh=192M' in install_block
-    assert '--property=MemoryMax=256M' in install_block
+    ) == 2
+    reuse_end = install_block.index(
+        'elif [ \\"\\$INSTALL_REUSE_STATUS\\" = 75 ]; then'
+    )
+    reuse_block = install_block[:reuse_end]
+    network_block = install_block[reuse_end:]
+    assert '组合峰值约 146 MiB' in reuse_block
+    assert '--property=MemoryHigh=160M' in reuse_block
+    assert '--property=MemoryMax=192M' in reuse_block
+    assert '--property=TasksMax=32' in reuse_block
+    assert '--property=TimeoutStartSec=10min' in reuse_block
+    assert '--property=RuntimeMaxSec=10min' in reuse_block
+    assert '--property=PrivateNetwork=yes' in reuse_block
+    assert 'PIP_NO_INDEX=1' in reuse_block
+    assert 'reuse-current' in reuse_block
+    assert '$CURRENT_LINK' in reuse_block
+    assert 'INSTALL_REUSE_MEM_AVAILABLE_KIB=' in reuse_block
+    assert '262144' in reuse_block
+    assert '可用内存不足 256 MiB' in reuse_block
+    assert reuse_block.index('262144') < reuse_block.index(
+        'systemd-run --quiet --wait --pipe --collect'
+    )
+    assert '--property=MemoryHigh=192M' in network_block
+    assert '--property=MemoryMax=256M' in network_block
     assert '--property=MemorySwapMax=0' in install_block
-    assert '--property=TasksMax=64' in install_block
+    assert '--property=TasksMax=64' in network_block
     assert '--property=OOMPolicy=stop' in install_block
-    assert '--property=TimeoutStartSec=15min' in install_block
-    assert '--property=RuntimeMaxSec=15min' in install_block
+    assert '--property=TimeoutStartSec=15min' in network_block
+    assert '--property=RuntimeMaxSec=15min' in network_block
     assert '--property=PrivateTmp=yes' in install_block
     assert '--property=PrivateDevices=yes' in install_block
     assert '--property=NoNewPrivileges=yes' in install_block
-    assert '--property=PrivateNetwork=yes' not in install_block
+    assert '--property=PrivateNetwork=yes' not in network_block
     assert 'INSTALL_MEM_TOTAL_KIB=' in install_block
     assert 'INSTALL_MEM_AVAILABLE_KIB=' in install_block
     assert 'INSTALL_AVAILABLE_MIB=' in install_block
     assert 'INSTALL_INODE_USE_PERCENT=' in install_block
     assert '460800' in install_block
     assert '327680' in install_block
+    assert install_block.index('reuse-current') < install_block.index('460800')
+    assert install_block.index('reuse-current') < install_block.index('327680')
     assert '2048' in install_block
-    assert 'PIP_NO_CACHE_DIR=1' in install_block
+    assert 'PIP_NO_CACHE_DIR=1' in network_block
     assert 'PIP_DISABLE_PIP_VERSION_CHECK=1' in install_block
     assert 'PYTHONDONTWRITEBYTECODE=1' in install_block
-    assert 'INSTALL_UNIT=case-weather-install-$RELEASE_ID.service' in install_block
+    assert (
+        'INSTALL_REUSE_UNIT=case-weather-reuse-$RELEASE_ID.service'
+        in install_block
+    )
+    assert (
+        'INSTALL_NETWORK_UNIT=case-weather-install-$RELEASE_ID.service'
+        in install_block
+    )
     assert 'trap cleanup_install EXIT' in install_block
     assert 'rm -rf -- \\"\\$INSTALL_ROOT\\"' in install_block
     assert 'systemctl stop \\"\\$INSTALL_UNIT\\"' in install_block
@@ -704,6 +923,7 @@ def test_dependency_install_is_memory_bounded_before_runtime_preflight():
     )
     assert 'scripts/install_release_dependencies.sh' in install_block
     assert content.index('scripts/install_release_dependencies.sh') < activation
+    assert '非回退型失败' in install_block
     assert 'retry' not in install_block.lower()
 
 
@@ -731,7 +951,334 @@ def test_dependency_installer_rejects_wrong_lock_before_creating_venv(tmp_path):
     assert not metadata_dir.exists()
 
 
-def test_dependency_installer_keeps_hashes_binary_only_and_no_cache():
+def test_dependency_installer_clones_only_verified_current_release(
+    reusable_release_base,
+    tmp_path,
+):
+    fixture = _copy_reusable_release(reusable_release_base, tmp_path)
+
+    result = _run_reuse_installer(fixture)
+
+    assert result.returncode == 0, result.stderr
+    new_release = fixture['new_release']
+    receipt = json.loads(
+        (new_release / 'private-metadata' / 'dependency-receipt.json').read_text(
+            encoding='utf-8'
+        )
+    )
+    assert receipt['method'] == 'verified-current-clone'
+    assert receipt['source_release_id'] == 'old'
+    assert receipt['requirements_lock_sha256'] == fixture['lock_sha']
+    assert re.fullmatch(
+        r'[0-9a-f]{64}',
+        receipt['source_pip_inspect_sha256'],
+    )
+    assert (new_release / 'venv' / 'bin' / 'python').exists()
+    assert subprocess.run(
+        [
+            str(new_release / 'venv' / 'bin' / 'python'),
+            '-c',
+            'import gunicorn',
+        ],
+        check=False,
+    ).returncode == 0
+
+
+@pytest.mark.parametrize(
+    ('receipt_name', 'replacement'),
+    [
+        ('requirements-lock.sha256', '0' * 64 + '\n'),
+        ('python-version.txt', 'Python 0.0.0\n'),
+        ('pip-inspect.json', '{"installed":[]}\n'),
+    ],
+)
+def test_dependency_reuse_rejects_tampered_private_receipt(
+    reusable_release_base,
+    tmp_path,
+    receipt_name,
+    replacement,
+):
+    fixture = _copy_reusable_release(reusable_release_base, tmp_path)
+    receipt = (
+        fixture['old_release'] / 'private-metadata' / receipt_name
+    )
+    receipt.write_text(replacement, encoding='utf-8')
+    receipt.chmod(0o640)
+
+    result = _run_reuse_installer(fixture)
+
+    assert result.returncode == 75
+    assert '不可安全复用' in result.stderr
+    assert not (fixture['new_release'] / 'venv').exists()
+
+
+def test_dependency_reuse_rejects_lock_or_live_package_drift(
+    reusable_release_base,
+    tmp_path,
+):
+    fixture = _copy_reusable_release(reusable_release_base, tmp_path)
+    source_lock = fixture['old_release'] / 'app' / 'requirements.lock'
+    source_lock.write_text(
+        source_lock.read_text(encoding='utf-8') + 'unexpected==1.0\n',
+        encoding='utf-8',
+    )
+    lock_result = _run_reuse_installer(fixture)
+    assert lock_result.returncode == 75
+    assert not (fixture['new_release'] / 'venv').exists()
+
+    fixture = _copy_reusable_release(
+        reusable_release_base,
+        tmp_path / 'package-drift',
+    )
+    old_python = fixture['old_release'] / 'venv' / 'bin' / 'python'
+    site_packages = Path(
+        subprocess.run(
+            [
+                str(old_python),
+                '-c',
+                'import sysconfig; print(sysconfig.get_paths()["purelib"])',
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+    )
+    (site_packages / 'gunicorn-0.0.1.dist-info' / 'METADATA').write_text(
+        'Metadata-Version: 2.1\nName: gunicorn\nVersion: 9.9.9\n',
+        encoding='utf-8',
+    )
+    package_result = _run_reuse_installer(fixture)
+    assert package_result.returncode == 75
+    assert not (fixture['new_release'] / 'venv').exists()
+
+
+def test_dependency_reuse_rejects_python_major_minor_drift(
+    reusable_release_base,
+    tmp_path,
+):
+    fixture = _copy_reusable_release(reusable_release_base, tmp_path)
+    fixture['python_minor'] = '0.0'
+
+    result = _run_reuse_installer(fixture)
+
+    assert result.returncode == 75
+    assert not (fixture['new_release'] / 'venv').exists()
+
+
+def test_dependency_reuse_rejects_unsafe_tree_and_copy_race(
+    reusable_release_base,
+    tmp_path,
+):
+    fixture = _copy_reusable_release(reusable_release_base, tmp_path)
+    outside = tmp_path / 'outside.txt'
+    outside.write_text('do-not-copy\n', encoding='utf-8')
+    (
+        fixture['old_release'] / 'venv' / 'escaped-link'
+    ).symlink_to(outside)
+
+    source_result = _run_reuse_installer(fixture)
+
+    assert source_result.returncode == 75
+    assert outside.read_text(encoding='utf-8') == 'do-not-copy\n'
+    assert not (fixture['new_release'] / 'venv').exists()
+
+    fixture = _copy_reusable_release(
+        reusable_release_base,
+        tmp_path / 'target-symlink',
+    )
+    target = fixture['new_release'] / 'venv'
+    target.symlink_to(tmp_path)
+    target_result = _run_reuse_installer(fixture)
+    assert target_result.returncode == 64
+    assert target.is_symlink()
+    assert '拒绝覆盖' in target_result.stderr
+
+    fixture = _copy_reusable_release(
+        reusable_release_base,
+        tmp_path / 'group-writable-module',
+    )
+    site_packages = next(
+        (
+            fixture['old_release'] / 'venv' / 'lib'
+        ).glob('python*/site-packages')
+    )
+    execution_marker = tmp_path / 'group-writable-executed'
+    gunicorn_init = site_packages / 'gunicorn' / '__init__.py'
+    gunicorn_init.write_text(
+        'from pathlib import Path\n'
+        f'Path({str(execution_marker)!r}).write_text("executed")\n'
+        '__version__ = "0.0.1"\n',
+        encoding='utf-8',
+    )
+    gunicorn_init.chmod(0o664)
+
+    writable_result = _run_reuse_installer(fixture)
+
+    assert writable_result.returncode == 75
+    assert not execution_marker.exists()
+    assert not (fixture['new_release'] / 'venv').exists()
+
+    fixture = _copy_reusable_release(
+        reusable_release_base,
+        tmp_path / 'fifo-entry',
+    )
+    os.mkfifo(fixture['old_release'] / 'venv' / 'unsafe-fifo', 0o600)
+
+    fifo_result = _run_reuse_installer(fixture)
+
+    assert fifo_result.returncode == 75
+    assert not (fixture['new_release'] / 'venv').exists()
+
+    fixture = _copy_reusable_release(
+        reusable_release_base,
+        tmp_path / 'hardlink-entry',
+    )
+    hardlink_source = fixture['old_release'] / 'venv' / 'hardlink-source'
+    hardlink_target = fixture['old_release'] / 'venv' / 'hardlink-target'
+    hardlink_source.write_text('same inode\n', encoding='utf-8')
+    os.link(hardlink_source, hardlink_target)
+
+    hardlink_result = _run_reuse_installer(fixture)
+
+    assert hardlink_result.returncode == 75
+    assert not (fixture['new_release'] / 'venv').exists()
+
+    fixture = _copy_reusable_release(
+        reusable_release_base,
+        tmp_path / 'writable-python-parent',
+    )
+    execution_marker = tmp_path / 'writable-parent-executed'
+    writable_parent = tmp_path / 'replaceable-python'
+    writable_parent.mkdir(mode=0o777)
+    writable_parent.chmod(0o777)
+    malicious_python = writable_parent / 'python'
+    _write_executable(
+        malicious_python,
+        '#!/bin/sh\n'
+        f'printf executed > {str(execution_marker)!r}\n'
+        f'exec {str(Path(sys.executable).resolve())!r} "$@"\n',
+    )
+    linkback = writable_parent / 'linkback'
+    linkback.symlink_to(Path(sys.executable).resolve())
+    source_bin = fixture['old_release'] / 'venv' / 'bin'
+    for python_entry in source_bin.glob('python*'):
+        python_entry.unlink()
+        python_entry.symlink_to(linkback)
+    racer = subprocess.Popen(
+        [
+            sys.executable,
+            '-c',
+            (
+                'import os,sys,time\n'
+                'linkback,malicious,trusted=sys.argv[1:]\n'
+                'deadline=time.monotonic()+0.5\n'
+                'counter=0\n'
+                'while time.monotonic()<deadline:\n'
+                '    target=malicious if counter%2==0 else trusted\n'
+                '    temporary=f"{linkback}.swap-{os.getpid()}"\n'
+                '    try:\n'
+                '        os.symlink(target,temporary)\n'
+                '        os.replace(temporary,linkback)\n'
+                '    finally:\n'
+                '        try: os.unlink(temporary)\n'
+                '        except FileNotFoundError: pass\n'
+                '    counter+=1\n'
+            ),
+            str(linkback),
+            str(malicious_python),
+            str(Path(sys.executable).resolve()),
+        ],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    writable_parent_result = _run_reuse_installer(fixture)
+    racer.wait(timeout=5)
+
+    assert writable_parent_result.returncode == 75
+    assert 'Python 标准链接目标异常' in writable_parent_result.stderr
+    assert not execution_marker.exists()
+    assert not (fixture['new_release'] / 'venv').exists()
+
+    fixture = _copy_reusable_release(
+        reusable_release_base,
+        tmp_path / 'dotdot-python-chain',
+    )
+    dotdot_marker = tmp_path / 'dotdot-chain-executed'
+    attacker_root = tmp_path / 'dotdot-attacker'
+    attacker_root.mkdir()
+    attacker_python = attacker_root / 'python'
+    _write_executable(
+        attacker_python,
+        '#!/bin/sh\n'
+        f'printf executed > {str(dotdot_marker)!r}\n'
+        f'exec {str(Path(sys.executable).resolve())!r} "$@"\n',
+    )
+    pivot = tmp_path / 'dotdot-pivot'
+    pivot.symlink_to(attacker_root)
+    source_python3 = fixture['old_release'] / 'venv' / 'bin' / 'python3'
+    source_python3.unlink()
+    source_python3.symlink_to(
+        f'{pivot}/../../{str(Path(sys.executable).resolve()).lstrip("/")}'
+    )
+
+    dotdot_result = _run_reuse_installer(fixture)
+
+    assert dotdot_result.returncode == 75
+    assert 'Python 标准链接目标异常' in dotdot_result.stderr
+    assert not dotdot_marker.exists()
+    assert not (fixture['new_release'] / 'venv').exists()
+
+    fixture = _copy_reusable_release(
+        reusable_release_base,
+        tmp_path / 'copy-race',
+    )
+    source_venv = fixture['old_release'] / 'venv'
+    slow_directory = source_venv / 'race-slow'
+    slow_directory.mkdir()
+    for index in range(500):
+        (slow_directory / f'{index:04d}.txt').write_text(
+            'slow-copy\n',
+            encoding='utf-8',
+        )
+    changing_source = source_venv / 'zz-race-source.txt'
+    changing_source.write_text('before\n', encoding='utf-8')
+    target_venv = fixture['new_release'] / 'venv'
+    racer = subprocess.Popen(
+        [
+            sys.executable,
+            '-c',
+            (
+                'import os,sys,time\n'
+                'target,source=sys.argv[1:]\n'
+                'deadline=time.monotonic()+10\n'
+                'while time.monotonic()<deadline:\n'
+                '    if os.path.lexists(target):\n'
+                '        with open(source,"a",encoding="utf-8") as handle:\n'
+                '            handle.write("changed-during-copy\\n")\n'
+                '        raise SystemExit(0)\n'
+                'raise SystemExit(3)\n'
+            ),
+            str(target_venv),
+            str(changing_source),
+        ],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        race_result = _run_reuse_installer(fixture)
+        racer.wait(timeout=12)
+    finally:
+        if racer.poll() is None:
+            racer.terminate()
+            racer.wait(timeout=5)
+
+    assert racer.returncode == 0
+    assert race_result.returncode == 65
+    assert '复制前后发生变化' in race_result.stderr
+    assert not target_venv.exists()
+
+
+def test_dependency_installer_keeps_hashes_binary_only_and_no_cache(tmp_path):
     content = DEPENDENCY_INSTALLER.read_text(encoding="utf-8")
 
     assert "set -euo pipefail" in content
@@ -739,9 +1286,64 @@ def test_dependency_installer_keeps_hashes_binary_only_and_no_cache():
     assert '--no-compile' in content
     assert '--require-hashes' in content
     assert '--only-binary=:all:' in content
-    assert 'pip inspect --local' in content
+    assert '"pip",' in content
+    assert '"inspect",' in content
+    assert '"--local",' in content
     assert 'requirements-lock.sha256' in content
+    assert 'dependency-receipt.json' in content
+    assert 'shutil.copytree' in content
+    assert 'symlinks=True' in content
     assert 'gunicorn' in content
+    reuse_flow = content.split('if mode == "reuse":', 1)[1].split(
+        'elif mode == "finalize":', 1
+    )[0]
+    assert reuse_flow.index('source_snapshot = validate_venv_tree(') < (
+        reuse_flow.index('live_contract(')
+    )
+    assert 'post_copy_snapshot = validate_venv_tree(' in reuse_flow
+    assert 'target_snapshot = validate_venv_tree(' in reuse_flow
+    assert 'require_same_source_snapshot(' in reuse_flow
+    assert 'require_matching_copy(' in reuse_flow
+    assert 'helper_python_entry = Path(sys.executable)' in (
+        reuse_flow
+    )
+    assert 'validate_system_python_chain(helper_python_entry' in reuse_flow
+    assert 'before_exec=source_interpreter_guard' in reuse_flow
+    source_compare = reuse_flow.index(
+        'source_snapshot, pre_copy_snapshot, "代码核验"'
+    )
+    source_release = reuse_flow.index('del source_snapshot')
+    copy_start = reuse_flow.index('copy_started = True')
+    post_compare = reuse_flow.index(
+        'pre_copy_snapshot, post_copy_snapshot, "复制"'
+    )
+    post_release = reuse_flow.index('del post_copy_snapshot')
+    target_capture = reuse_flow.index(
+        'target_snapshot = validate_venv_tree('
+    )
+    copy_compare = reuse_flow.index(
+        'require_matching_copy(pre_copy_snapshot, target_snapshot)'
+    )
+    pre_copy_release = reuse_flow.index('del pre_copy_snapshot')
+    target_live = reuse_flow.index(
+        'new_inspect, new_python_version = live_contract('
+    )
+    assert source_compare < source_release < copy_start
+    assert post_compare < post_release < target_capture
+    assert copy_compare < pre_copy_release < target_live
+
+    # 生产运行身份是 root；此处以 UID 0 直接验证非 root 所有者会被拒绝。
+    owner_tree = tmp_path / 'non-root-owner'
+    owner_tree.mkdir()
+    helper = _load_dependency_helper_namespace()
+    expected_uid = 0 if os.getuid() != 0 else 1
+    with pytest.raises(helper['ContractError'], match='非受信所有者'):
+        helper['validate_venv_tree'](
+            owner_tree,
+            expected_uid,
+            Path(sys.executable).resolve().parent / 'python3',
+            f'{sys.version_info.major}.{sys.version_info.minor}',
+        )
 
 
 def test_production_gunicorn_uses_single_worker_on_low_memory_host():
@@ -754,6 +1356,11 @@ def test_production_gunicorn_uses_single_worker_on_low_memory_host():
     )
     service_block = content[start:end]
 
+    assert (
+        'ExecStart=$CURRENT_LINK/venv/bin/python -m gunicorn'
+        in service_block
+    )
+    assert '$CURRENT_LINK/venv/bin/gunicorn' not in service_block
     assert '--workers 1 --bind 127.0.0.1:5000' in service_block
     assert '--workers 3' not in service_block
     assert '--preload' not in service_block
@@ -902,11 +1509,16 @@ def test_ci_and_runtime_receipts_are_bound_to_activation_metadata():
     assert 'chmod 0600 \\"\\$TARGET\\"' in content
     assert 'chown -R root:root $NEW_RELEASE/private-metadata' in content
     assert 'chmod -R u=rwX,go= $NEW_RELEASE/private-metadata' in content
+    assert '$NEW_RELEASE/private-metadata/dependency-receipt.json' in content
     assert "stat -c '%u:%g:%a' \\\"\\$PRIVATE_RECEIPT\\\"" in content
     assert "'0:0:600'" in content
     assert 'ACTIVATION_EXPECTED_RELEASE_COMMIT="$VERIFIED_COMMIT"' in content
     assert 'EXPECTED_RELEASE_BRANCH=$VERIFIED_RELEASE_BRANCH' in content
     assert 'EXPECTED_RELEASE_COMMIT=$ACTIVATION_EXPECTED_RELEASE_COMMIT' in content
+    activate = _load_activate_script()
+    assert 'DEPENDENCY_RECEIPT_FILE=' in activate
+    assert 'source_pip_inspect_sha256' in activate
+    assert '候选虚拟环境依赖完整性检查失败' in activate
 
 
 def test_deploy_keeps_control_directories_root_private_and_asserts_state():
@@ -2142,7 +2754,8 @@ def test_deploy_runs_all_runtime_units_as_hardened_service_user():
     assert 'RUNTIME_USER=$RUNTIME_USER RUNTIME_GROUP=$RUNTIME_GROUP' in content
     activate = _load_activate_script()
     assert '--preserve-environment' not in activate
-    assert 'runtime_exec "$VENV_DIR/bin/gunicorn"' in activate
+    assert 'runtime_exec "$VENV_DIR/bin/python" -m gunicorn' in activate
+    assert 'require_executable "$VENV_DIR/bin/gunicorn"' not in activate
     assert 'CASE_WEATHER_FORMAL_SMOKE_LEASE_TOKEN=$FORMAL_SMOKE_LEASE_TOKEN' in activate
     assert '/bin/bash scripts/weather_cache_sync.sh --skip-nowcast' in activate
     assert "local runtime_env=(\n        -i" in activate

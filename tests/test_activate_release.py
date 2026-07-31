@@ -128,6 +128,31 @@ def _write_private_json(path, payload):
     path.chmod(0o600)
 
 
+def _locked_pip_inspect_payload(lock_bytes):
+    """把正式锁文件转换成最小、真实结构的 pip inspect 测试收据。"""
+    requirement_pattern = re.compile(
+        r'^([A-Za-z0-9][A-Za-z0-9._-]*)(?:\[[^\]]+\])?==([^\s\\;]+)'
+    )
+    installed = []
+    for line in lock_bytes.decode('utf-8').splitlines():
+        if not line or line.startswith('#') or line[0].isspace():
+            continue
+        match = requirement_pattern.match(line)
+        assert match is not None
+        installed.append({
+            'metadata': {
+                'name': match.group(1),
+                'version': match.group(2),
+            },
+        })
+    assert installed
+    return {
+        'version': '1',
+        'pip_version': 'activation-test',
+        'installed': installed,
+    }
+
+
 def _write_ci_proof(path, *, workflow, proof_job, commit=FORMAL_COMMIT):
     run_id = 101 if workflow.endswith('/ci.yml') else 102
     _write_private_json(
@@ -765,6 +790,8 @@ def _prepare_transaction(
     database_file = state_dir / 'instance' / 'health_weather.db'
     runtime_guard_dir = tmp_path / 'runtime-boot-guard'
     qweather_private_dir = state_dir / 'private'
+    fake_python_modules = tmp_path / 'fake-python-modules'
+    fake_pip_inspect_file = tmp_path / 'fake-pip-inspect.json'
 
     for directory in (
         state_dir / 'instance',
@@ -778,6 +805,8 @@ def _prepare_transaction(
         unit_dir,
         fake_state,
         fake_bin,
+        fake_python_modules / 'pip',
+        fake_python_modules / 'gunicorn',
     ):
         directory.mkdir(parents=True, exist_ok=True)
     qweather_private_dir.chmod(0o700)
@@ -907,13 +936,91 @@ def resolve_sqlite_db_path(uri, *, repo_root, instance_dir):
         hashlib.sha256(requirements_lock).hexdigest() + '\n',
         encoding='utf-8',
     )
+    version_result = subprocess.run(
+        [sys.executable, '--version'],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    python_version = (version_result.stdout or version_result.stderr).strip()
     (new_release / 'private-metadata' / 'python-version.txt').write_text(
-        sys.version + '\n',
+        python_version + '\n',
         encoding='utf-8',
     )
-    (new_release / 'private-metadata' / 'pip-inspect.json').write_text(
-        '{}\n',
+    pip_inspect_bytes = (
+        json.dumps(
+            _locked_pip_inspect_payload(requirements_lock),
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+        + '\n'
+    ).encode('utf-8')
+    (new_release / 'private-metadata' / 'pip-inspect.json').write_bytes(
+        pip_inspect_bytes,
+    )
+    fake_pip_inspect_file.write_bytes(pip_inspect_bytes)
+    (fake_python_modules / 'pip' / '__init__.py').write_text(
+        '',
         encoding='utf-8',
+    )
+    (fake_python_modules / 'pip' / '__main__.py').write_text(
+        """import os
+from pathlib import Path
+import sys
+
+arguments = sys.argv[1:]
+if arguments == ['inspect', '--local']:
+    print(
+        Path(os.environ['FAKE_PIP_INSPECT_FILE']).read_text(encoding='utf-8'),
+        end='',
+    )
+elif arguments == ['check']:
+    raise SystemExit(0)
+else:
+    raise SystemExit(2)
+""",
+        encoding='utf-8',
+    )
+    (fake_python_modules / 'gunicorn' / '__init__.py').write_text(
+        '',
+        encoding='utf-8',
+    )
+    (fake_python_modules / 'gunicorn' / '__main__.py').write_text(
+        """import sys
+
+if sys.argv[1:] == ['--version']:
+    print('gunicorn (version activation-test)')
+else:
+    raise SystemExit(2)
+""",
+        encoding='utf-8',
+    )
+    for dependency_metadata_name in (
+        'requirements-lock.sha256',
+        'python-version.txt',
+        'pip-inspect.json',
+    ):
+        (
+            new_release / 'private-metadata' / dependency_metadata_name
+        ).chmod(0o600)
+    _write_private_json(
+        new_release / 'private-metadata' / 'dependency-receipt.json',
+        {
+            'schema_version': 1,
+            'method': 'fresh-install',
+            'requirements_lock_sha256': hashlib.sha256(
+                requirements_lock
+            ).hexdigest(),
+            'pip_inspect_sha256': hashlib.sha256(
+                pip_inspect_bytes
+            ).hexdigest(),
+            'python_major_minor': (
+                f'{sys.version_info.major}.{sys.version_info.minor}'
+            ),
+            'python_version': python_version,
+            'source_release_id': None,
+            'source_pip_inspect_sha256': None,
+        },
     )
 
     connection = sqlite3.connect(database_file)
@@ -934,7 +1041,15 @@ exit {migration_exit}
     )
     _write_executable(
         new_release / 'venv' / 'bin' / 'python',
-        f'#!/bin/sh\nexec {shlex.quote(sys.executable)} "$@"\n',
+        (
+            '#!/bin/sh\n'
+            'if [ "$#" -ge 2 ] && [ "$1" = "-m" ] '
+            '&& [ "$2" = "gunicorn" ]; then\n'
+            '  trap "exit 0" TERM INT\n'
+            '  while :; do sleep 1; done\n'
+            'fi\n'
+            f'exec {shlex.quote(sys.executable)} "$@"\n'
+        ),
     )
     _write_executable(
         new_release / 'venv' / 'bin' / 'gunicorn',
@@ -1128,6 +1243,8 @@ printf 't 2000000000\n'
         'CHOWN_BIN': '/usr/bin/true',
         'CONTROL_OWNER_UID': str(os.getuid()),
         'CONTROL_OWNER_GID': str(os.getgid()),
+        'PYTHONPATH': str(fake_python_modules),
+        'FAKE_PIP_INSPECT_FILE': str(fake_pip_inspect_file),
     })
     return {
         'env': environment,

@@ -64,6 +64,7 @@ CI_PROOF_FILE="$NEW_RELEASE/private-metadata/ci-proof.json"
 MINIPROGRAM_CI_PROOF_FILE="$NEW_RELEASE/private-metadata/miniprogram-ci-proof.json"
 MODEL_ARTIFACT_RECEIPT_FILE="$NEW_RELEASE/private-metadata/model-artifacts.json"
 RUNTIME_SMOKE_RECEIPT_FILE="$NEW_RELEASE/private-metadata/runtime-smoke.json"
+DEPENDENCY_RECEIPT_FILE="$NEW_RELEASE/private-metadata/dependency-receipt.json"
 RELEASE_ID="${NEW_RELEASE##*/}"
 TRANSACTION_ROOT="$STATE_DIR/backups/deploy-transactions"
 FORMAL_SMOKE_RECEIPT_ROOT="$STATE_DIR/deployments/formal-cache-smokes"
@@ -4038,7 +4039,7 @@ start_candidate_release() {
     esac
     (
         cd "$APP_DIR"
-        runtime_exec "$VENV_DIR/bin/gunicorn" \
+        runtime_exec "$VENV_DIR/bin/python" -m gunicorn \
             --workers 1 \
             --bind "$CANDIDATE_BIND" \
             --timeout 60 \
@@ -4056,10 +4057,10 @@ start_candidate_release() {
 validate_release_dependencies() {
     local actual_lock_sha recorded_lock_sha
     require_file "$APP_DIR/requirements.lock"
-    require_executable "$VENV_DIR/bin/gunicorn"
     require_file "$NEW_RELEASE/private-metadata/requirements-lock.sha256"
     require_file "$NEW_RELEASE/private-metadata/python-version.txt"
     require_file "$NEW_RELEASE/private-metadata/pip-inspect.json"
+    require_file "$DEPENDENCY_RECEIPT_FILE"
     actual_lock_sha="$("$VENV_DIR/bin/python" - "$APP_DIR/requirements.lock" <<'PY'
 import hashlib
 import sys
@@ -4072,6 +4073,173 @@ PY
     if [ "$actual_lock_sha" != "$EXPECTED_REQUIREMENTS_LOCK_SHA256" ] \
         || [ "$recorded_lock_sha" != "$EXPECTED_REQUIREMENTS_LOCK_SHA256" ]; then
         fail "部署依赖锁摘要与正式基线不一致"
+        return 1
+    fi
+    if ! "$VENV_DIR/bin/python" - \
+        "$APP_DIR/requirements.lock" \
+        "$NEW_RELEASE/private-metadata/requirements-lock.sha256" \
+        "$NEW_RELEASE/private-metadata/python-version.txt" \
+        "$NEW_RELEASE/private-metadata/pip-inspect.json" \
+        "$DEPENDENCY_RECEIPT_FILE" \
+        "$EXPECTED_REQUIREMENTS_LOCK_SHA256" \
+        "$CONTROL_OWNER_UID" \
+        "$CONTROL_OWNER_GID" <<'PY'
+import hashlib
+import json
+from pathlib import Path
+import platform
+import re
+import stat
+import subprocess
+import sys
+
+
+def reject(message):
+    print(message, file=sys.stderr)
+    raise SystemExit(1)
+
+
+lock_file, lock_receipt, python_receipt, inspect_receipt, dependency_receipt = map(
+    Path, sys.argv[1:6]
+)
+expected_sha, expected_uid, expected_gid = (
+    sys.argv[6],
+    int(sys.argv[7]),
+    int(sys.argv[8]),
+)
+for private_file in (
+    lock_receipt,
+    python_receipt,
+    inspect_receipt,
+    dependency_receipt,
+):
+    info = private_file.lstat()
+    if (
+        not stat.S_ISREG(info.st_mode)
+        or stat.S_ISLNK(info.st_mode)
+        or info.st_nlink != 1
+        or (info.st_uid, info.st_gid) != (expected_uid, expected_gid)
+        or stat.S_IMODE(info.st_mode) != 0o600
+    ):
+        reject("依赖私有收据类型、硬链接、所有者或权限异常")
+
+def canonical_name(value):
+    return re.sub(r"[-_.]+", "-", value).lower()
+
+
+def locked_packages():
+    packages = {}
+    pattern = re.compile(
+        r"^([A-Za-z0-9][A-Za-z0-9._-]*)(?:\[[^\]]+\])?==([^\s\\;]+)"
+    )
+    for line in lock_file.read_text(encoding="utf-8").splitlines():
+        if not line or line.startswith("#") or line[0].isspace():
+            continue
+        match = pattern.match(line)
+        if match is None:
+            reject("requirements.lock 含无法核对的顶层条目")
+        name = canonical_name(match.group(1))
+        if name in packages:
+            reject("requirements.lock 含重复包")
+        packages[name] = match.group(2)
+    return packages
+
+
+def inspected_packages(payload):
+    installed = payload.get("installed") if isinstance(payload, dict) else None
+    if not isinstance(installed, list):
+        reject("pip inspect 收据结构异常")
+    packages = {}
+    for item in installed:
+        metadata = item.get("metadata") if isinstance(item, dict) else None
+        name = metadata.get("name") if isinstance(metadata, dict) else None
+        version = metadata.get("version") if isinstance(metadata, dict) else None
+        if not isinstance(name, str) or not isinstance(version, str):
+            reject("pip inspect 包名或版本异常")
+        name = canonical_name(name)
+        if name in packages:
+            reject("pip inspect 含重复包")
+        packages[name] = version
+    return packages
+
+
+inspect_bytes = inspect_receipt.read_bytes()
+try:
+    recorded_inspect = json.loads(inspect_bytes)
+    receipt = json.loads(dependency_receipt.read_text(encoding="utf-8"))
+except (UnicodeError, json.JSONDecodeError):
+    reject("依赖私有收据无法解析")
+python_version = f"Python {platform.python_version()}"
+if (
+    lock_receipt.read_text(encoding="utf-8").splitlines() != [expected_sha]
+    or python_receipt.read_text(encoding="utf-8").splitlines()
+    != [python_version]
+    or not isinstance(receipt, dict)
+    or receipt.get("schema_version") != 1
+    or receipt.get("method")
+    not in {"fresh-install", "verified-current-clone"}
+    or receipt.get("requirements_lock_sha256") != expected_sha
+    or receipt.get("pip_inspect_sha256")
+    != hashlib.sha256(inspect_bytes).hexdigest()
+    or receipt.get("python_major_minor")
+    != f"{sys.version_info.major}.{sys.version_info.minor}"
+    or receipt.get("python_version") != python_version
+):
+    reject("依赖来源收据与候选解释器不一致")
+if receipt["method"] == "fresh-install":
+    if (
+        receipt.get("source_release_id") is not None
+        or receipt.get("source_pip_inspect_sha256") is not None
+    ):
+        reject("全新安装收据不得声明复用来源")
+else:
+    if (
+        not isinstance(receipt.get("source_release_id"), str)
+        or receipt["source_release_id"] in {".", ".."}
+        or re.fullmatch(r"[A-Za-z0-9._-]+", receipt["source_release_id"])
+        is None
+        or not isinstance(receipt.get("source_pip_inspect_sha256"), str)
+        or re.fullmatch(
+            r"[0-9a-f]{64}", receipt["source_pip_inspect_sha256"]
+        )
+        is None
+    ):
+        reject("依赖复用来源收据不完整")
+live_inspect_result = subprocess.run(
+    [sys.executable, "-m", "pip", "inspect", "--local"],
+    check=False,
+    capture_output=True,
+    text=True,
+)
+if live_inspect_result.returncode != 0:
+    reject("候选虚拟环境 pip inspect 失败")
+try:
+    live_inspect = json.loads(live_inspect_result.stdout)
+except json.JSONDecodeError:
+    reject("候选虚拟环境 pip inspect 输出异常")
+expected_packages = locked_packages()
+if (
+    inspected_packages(recorded_inspect) != expected_packages
+    or inspected_packages(live_inspect) != expected_packages
+):
+    reject("锁、记录收据与候选 live 包集合或版本不一致")
+if subprocess.run(
+    [sys.executable, "-m", "pip", "check"],
+    check=False,
+    stdout=subprocess.DEVNULL,
+    stderr=subprocess.DEVNULL,
+).returncode != 0:
+    reject("候选虚拟环境依赖完整性检查失败")
+if subprocess.run(
+    [sys.executable, "-m", "gunicorn", "--version"],
+    check=False,
+    stdout=subprocess.DEVNULL,
+    stderr=subprocess.DEVNULL,
+).returncode != 0:
+    reject("候选虚拟环境 Gunicorn 模块或入口不可用")
+PY
+    then
+        fail "部署依赖 Python、来源收据或 pip check 验证失败"
         return 1
     fi
 }
@@ -6561,7 +6729,6 @@ if [ "$REQUIRE_WECHAT_READY" = 1 ]; then
     require_file "$APP_DIR/scripts/weather_cache_sync.sh"
 fi
 require_executable "$VENV_DIR/bin/python"
-require_executable "$VENV_DIR/bin/gunicorn"
 command -v "$SYSTEMCTL_BIN" >/dev/null 2>&1 || require_executable "$SYSTEMCTL_BIN"
 command -v "$SYSTEMD_RUN_BIN" >/dev/null 2>&1 || require_executable "$SYSTEMD_RUN_BIN"
 command -v "$SQLITE3_BIN" >/dev/null 2>&1 || require_executable "$SQLITE3_BIN"
