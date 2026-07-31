@@ -3671,7 +3671,7 @@ def test_formal_runtime_log_guard_failure_leaves_production_state_unchanged(tmp_
 
 
 def test_formal_runtime_log_guard_forces_local_probe_to_bypass_proxy():
-    """本机日志零增长探针不得被 HTTPS_PROXY 绕到代理或公网。"""
+    """本机日志零增长探针必须命中真实 Nginx 回环入口。"""
     script = ACTIVATE_SCRIPT.read_text(encoding='utf-8')
     guard = script.split('verify_formal_runtime_log_boundary() {', 1)[1].split(
         '\n}',
@@ -3679,7 +3679,10 @@ def test_formal_runtime_log_guard_forces_local_probe_to_bypass_proxy():
     )[0]
 
     assert "--noproxy '*'" in guard
-    assert '--resolve yilaoweather.org:443:127.0.0.1' in guard
+    assert "--header 'Host: yilaoweather.org'" in guard
+    assert 'http://127.0.0.1:8080/healthz' in guard
+    assert '--resolve yilaoweather.org:443:127.0.0.1' not in guard
+    assert 'https://yilaoweather.org/healthz' not in guard
 
 
 def test_durable_checkpoints_precede_mutation_and_the_only_weather_request(tmp_path):

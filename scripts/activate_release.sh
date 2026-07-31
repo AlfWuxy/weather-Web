@@ -4807,6 +4807,8 @@ verify_formal_runtime_log_boundary() {
     access_before="$(/usr/bin/stat -c %s "$access_log")"
     error_before="$(/usr/bin/stat -c %s "$error_log")"
 
+    # 正式 Nginx 只监听回环 HTTP，公网 HTTPS 由边缘层终止。
+    # 固定命中边缘隧道使用的 8080 入口，避免误连同机其他 443 服务或绕回公网。
     "$CURL_BIN" \
         --fail \
         --silent \
@@ -4814,9 +4816,9 @@ verify_formal_runtime_log_boundary() {
         --noproxy '*' \
         --connect-timeout 5 \
         --max-time 10 \
-        --resolve yilaoweather.org:443:127.0.0.1 \
+        --header 'Host: yilaoweather.org' \
         --output /dev/null \
-        https://yilaoweather.org/healthz
+        http://127.0.0.1:8080/healthz
 
     access_after="$(/usr/bin/stat -c %s "$access_log")"
     error_after="$(/usr/bin/stat -c %s "$error_log")"
