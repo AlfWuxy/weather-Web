@@ -89,6 +89,19 @@ def _rematerialize_fixture_file(candidate):
     assert not normalized.st_mode & (stat.S_IWGRP | stat.S_IWOTH)
 
 
+def _normalize_fixture_tree(root):
+    """只归一化测试 venv 中不满足生产只读契约的普通文件。"""
+    for candidate in root.rglob('*'):
+        file_info = candidate.lstat()
+        if not stat.S_ISREG(file_info.st_mode):
+            continue
+        if (
+            file_info.st_nlink != 1
+            or file_info.st_mode & (stat.S_IWGRP | stat.S_IWOTH)
+        ):
+            _rematerialize_fixture_file(candidate)
+
+
 def _create_reusable_release_base(base, trusted_python_entry):
     release_root = base / 'deploy'
     old_release = release_root / 'releases' / 'old'
@@ -106,6 +119,8 @@ def _create_reusable_release_base(base, trusted_python_entry):
         capture_output=True,
         text=True,
     )
+    # GitHub runner 可能让多个激活脚本复用 inode 或继承可写权限。
+    _normalize_fixture_tree(old_venv)
     python_minor = f'{sys.version_info.major}.{sys.version_info.minor}'
     assert trusted_python_entry.exists()
     source_bin = old_venv / 'bin'
@@ -253,8 +268,6 @@ def _copy_reusable_release(reusable_release_base, tmp_path):
     current = copied_root / 'current'
     current.unlink()
     old_release = copied_root / 'releases' / 'old'
-    # GitHub runner 的 PowerShell 激活脚本偶有 inode 或权限差异，仅归一化测试副本。
-    _rematerialize_fixture_file(old_release / 'venv' / 'bin' / 'Activate.ps1')
     current.symlink_to(old_release)
     return {
         'release_root': copied_root,
@@ -269,20 +282,26 @@ def _copy_reusable_release(reusable_release_base, tmp_path):
     }
 
 
-def test_rematerialize_fixture_file_preserves_content_and_hardens_mode(tmp_path):
+def test_normalize_fixture_tree_preserves_content_and_hardens_mode(tmp_path):
     source = tmp_path / 'source.txt'
     candidate = tmp_path / 'candidate.txt'
+    writable = tmp_path / 'writable.txt'
     source.write_text('fixture\n', encoding='utf-8')
     source.chmod(0o660)
     os.link(source, candidate)
+    writable.write_text('writable\n', encoding='utf-8')
+    writable.chmod(0o666)
 
-    _rematerialize_fixture_file(candidate)
+    _normalize_fixture_tree(tmp_path)
 
     assert candidate.read_text(encoding='utf-8') == 'fixture\n'
     assert source.read_text(encoding='utf-8') == 'fixture\n'
+    assert writable.read_text(encoding='utf-8') == 'writable\n'
     assert candidate.stat().st_nlink == 1
     assert source.stat().st_nlink == 1
     assert stat.S_IMODE(candidate.stat().st_mode) == 0o640
+    assert stat.S_IMODE(source.stat().st_mode) == 0o640
+    assert stat.S_IMODE(writable.stat().st_mode) == 0o644
 
 
 def _run_reuse_installer(fixture):
