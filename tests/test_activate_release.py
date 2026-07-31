@@ -1402,6 +1402,154 @@ def _seed_interrupted_activation_guard(
     return transaction_dir
 
 
+def _run_formal_runtime_healthz_probe(
+    tmp_path,
+    *,
+    status='200',
+    curl_exit=0,
+    terminal=None,
+    terminal_mode=0o600,
+    terminal_payload='success\n',
+    both_terminals=False,
+    acknowledgement=None,
+    invalid_guard_mode=False,
+    symlink_guard=False,
+    symlink_terminal=False,
+    grow_log=False,
+):
+    """直接执行正式 healthz 探针策略，覆盖停机恢复的 fail-closed 分支。"""
+    script = ACTIVATE_SCRIPT.read_text(encoding='utf-8')
+    guard_functions = script[
+        script.index('read_activation_guard_transaction() {'):
+        script.index('validate_runtime_guard_permit() {')
+    ]
+    probe_function = script[
+        script.index('verify_formal_runtime_healthz_probe() {'):
+        script.index('verify_formal_runtime_log_boundary() {')
+    ]
+
+    probe_root = tmp_path / 'formal-probe'
+    transaction_root = probe_root / 'deploy-transactions'
+    deployments = probe_root / 'deployments'
+    transaction_root.mkdir(parents=True, mode=0o700)
+    deployments.mkdir(mode=0o700)
+    transaction = transaction_root / 'guarded-transaction'
+    transaction.mkdir(mode=0o700)
+    (transaction / 'ACTIVATION_STARTED').write_text(
+        'interrupted-release\n',
+        encoding='utf-8',
+    )
+    terminal_names = []
+    if terminal:
+        terminal_names.append(terminal)
+    if both_terminals:
+        terminal_names = ['COMMITTED', 'ROLLED_BACK']
+    for terminal_name in terminal_names:
+        terminal_marker = transaction / terminal_name
+        if symlink_terminal:
+            terminal_target = probe_root / f'{terminal_name}-target'
+            terminal_target.write_text('success\n', encoding='utf-8')
+            terminal_marker.symlink_to(terminal_target)
+        else:
+            terminal_marker.write_text(terminal_payload, encoding='utf-8')
+            terminal_marker.chmod(terminal_mode)
+
+    guard = deployments / 'activation-in-progress'
+    guard_payload = (
+        'release_id=interrupted-release\n'
+        f'transaction={transaction}\n'
+        'started_at=2026-07-31T00:00:00Z\n'
+    )
+    if symlink_guard:
+        guard_target = probe_root / 'guard-target'
+        guard_target.write_text(guard_payload, encoding='utf-8')
+        guard_target.chmod(0o600)
+        guard.symlink_to(guard_target)
+    elif (
+        terminal is not None
+        or both_terminals
+        or acknowledgement is not None
+        or invalid_guard_mode
+    ):
+        guard.write_text(guard_payload, encoding='utf-8')
+        guard.chmod(0o644 if invalid_guard_mode else 0o600)
+
+    acknowledged_transaction = ''
+    if acknowledgement == 'exact':
+        acknowledged_transaction = str(transaction)
+    elif acknowledgement == 'mismatch':
+        mismatched = transaction_root / 'other-transaction'
+        mismatched.mkdir(mode=0o700)
+        (mismatched / 'ACTIVATION_STARTED').write_text(
+            'other-release\n',
+            encoding='utf-8',
+        )
+        acknowledged_transaction = str(mismatched)
+
+    venv_python = probe_root / 'venv' / 'bin' / 'python'
+    venv_python.parent.mkdir(parents=True)
+    venv_python.symlink_to(Path(sys.executable))
+    access_log = probe_root / 'access.log'
+    error_log = probe_root / 'error.log'
+    access_log.write_text('', encoding='utf-8')
+    error_log.write_text('', encoding='utf-8')
+
+    fake_curl = probe_root / 'curl'
+    _write_executable(
+        fake_curl,
+        """#!/bin/sh
+if [ "${FAKE_CURL_EXIT:-0}" -ne 0 ]; then
+    exit "$FAKE_CURL_EXIT"
+fi
+if [ -n "${FAKE_GROW_LOG:-}" ]; then
+    printf x >> "$FAKE_GROW_LOG"
+fi
+printf '%s' "${FAKE_CURL_STATUS:-200}"
+""",
+    )
+    fake_stat = probe_root / 'stat'
+    _write_executable(
+        fake_stat,
+        """#!/bin/sh
+[ "$1" = "-c" ] && [ "$2" = "%s" ] || exit 64
+wc -c < "$3" | tr -d ' '
+""",
+    )
+    harness = probe_root / 'probe-harness.sh'
+    _write_executable(
+        harness,
+        f"""#!/bin/bash
+set -u
+fail() {{ printf '%s\\n' "$*" >&2; }}
+log() {{ printf '%s\\n' "$*" >&2; }}
+{guard_functions}
+{probe_function}
+verify_formal_runtime_healthz_probe "$1" "$2" "$3"
+""",
+    )
+    env = os.environ.copy()
+    env.update({
+        'ACTIVATION_BOOT_GUARD_FILE': str(guard),
+        'CONTROL_OWNER_GID': str(os.getgid()),
+        'CONTROL_OWNER_UID': str(os.getuid()),
+        'CURL_BIN': str(fake_curl),
+        'FAKE_CURL_EXIT': str(curl_exit),
+        'FAKE_CURL_STATUS': status,
+        'FAKE_GROW_LOG': str(access_log) if grow_log else '',
+        'RECOVERY_ACKNOWLEDGED_TRANSACTION': acknowledged_transaction,
+        'TRANSACTION_ROOT': str(transaction_root),
+        'VENV_DIR': str(venv_python.parent.parent),
+    })
+    return subprocess.run(
+        [harness, access_log, error_log, fake_stat],
+        cwd=ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+
 def _configure_formal_smoke(transaction, *, provider='QWeather'):
     """为激活事务准备完全离线的正式天气烟测桩。"""
     runtime_log_helper = transaction['state_dir'] / 'runtime-log-boundary-test-helper'
@@ -3673,25 +3821,163 @@ def test_formal_runtime_log_guard_failure_leaves_production_state_unchanged(tmp_
 def test_formal_runtime_log_guard_forces_local_probe_to_bypass_proxy():
     """本机日志零增长探针必须命中真实 Nginx 回环入口。"""
     script = ACTIVATE_SCRIPT.read_text(encoding='utf-8')
-    guard = script.split('verify_formal_runtime_log_boundary() {', 1)[1].split(
+    probe = script.split('verify_formal_runtime_healthz_probe() {', 1)[1].split(
         '\n}',
         1,
     )[0]
+    guard = script.split(
+        'formal_runtime_stopped_probe_is_allowed() {',
+        1,
+    )[1].split('\n}', 1)[0]
 
-    assert "--noproxy '*'" in guard
-    assert "--header 'Host: yilaoweather.org'" in guard
-    assert 'http://127.0.0.1:8080/healthz' in guard
-    assert "--write-out '%{http_code}'" in guard
-    assert 'allow_stopped_recovery=1' in guard
+    assert "--noproxy '*'" in probe
+    assert "--header 'Host: yilaoweather.org'" in probe
+    assert 'http://127.0.0.1:8080/healthz' in probe
+    assert "--write-out '%{http_code}'" in probe
+    assert 'allow_stopped_recovery=1' in probe
     assert (
-        'recovery_guard_transaction" != "$RECOVERY_ACKNOWLEDGED_TRANSACTION'
+        'guard_transaction" != "$RECOVERY_ACKNOWLEDGED_TRANSACTION'
         in guard
     )
-    assert '502)' in guard
-    assert '200)' in guard
-    assert '--fail' not in guard
-    assert '--resolve yilaoweather.org:443:127.0.0.1' not in guard
-    assert 'https://yilaoweather.org/healthz' not in guard
+    assert '502)' in probe
+    assert '200)' in probe
+    assert '--fail' not in probe
+    assert '--resolve yilaoweather.org:443:127.0.0.1' not in probe
+    assert 'https://yilaoweather.org/healthz' not in probe
+
+
+def test_formal_runtime_healthz_probe_accepts_ordinary_200(tmp_path):
+    result = _run_formal_runtime_healthz_probe(tmp_path, status='200')
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_formal_runtime_healthz_probe_rejects_ordinary_502(tmp_path):
+    result = _run_formal_runtime_healthz_probe(tmp_path, status='502')
+
+    assert result.returncode != 0
+    assert '非预期状态: 502' in result.stderr
+
+
+def test_formal_runtime_healthz_probe_accepts_exact_ack_guard_502(tmp_path):
+    result = _run_formal_runtime_healthz_probe(
+        tmp_path,
+        status='502',
+        acknowledgement='exact',
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert '接受持久开机门下的预期 502' in result.stderr
+
+
+@pytest.mark.parametrize(
+    'kwargs, expected_error',
+    (
+        ({'acknowledgement': 'mismatch'}, '事务不匹配'),
+        (
+            {'acknowledgement': 'exact', 'invalid_guard_mode': True},
+            '无效的持久开机门',
+        ),
+        (
+            {'acknowledgement': 'exact', 'symlink_guard': True},
+            '无效的持久开机门',
+        ),
+        (
+            {
+                'terminal': 'COMMITTED',
+                'symlink_terminal': True,
+            },
+            '无效或冲突的事务终态标记',
+        ),
+        (
+            {
+                'terminal': 'COMMITTED',
+                'terminal_mode': 0o644,
+            },
+            '无效或冲突的事务终态标记',
+        ),
+        (
+            {
+                'both_terminals': True,
+            },
+            '无效或冲突的事务终态标记',
+        ),
+        (
+            {
+                'terminal': 'COMMITTED',
+                'terminal_payload': 'unexpected\n',
+            },
+            '无效或冲突的事务终态标记',
+        ),
+    ),
+)
+def test_formal_runtime_healthz_probe_rejects_untrusted_guard(
+    tmp_path,
+    kwargs,
+    expected_error,
+):
+    result = _run_formal_runtime_healthz_probe(
+        tmp_path,
+        status='502',
+        **kwargs,
+    )
+
+    assert result.returncode != 0
+    assert expected_error in result.stderr
+
+
+@pytest.mark.parametrize(
+    'kwargs, expected_error',
+    (
+        ({'status': '503'}, '非预期状态: 503'),
+        ({'curl_exit': 7}, 'healthz 请求失败'),
+    ),
+)
+def test_formal_runtime_healthz_probe_rejects_other_failures(
+    tmp_path,
+    kwargs,
+    expected_error,
+):
+    result = _run_formal_runtime_healthz_probe(tmp_path, **kwargs)
+
+    assert result.returncode != 0
+    assert expected_error in result.stderr
+
+
+def test_formal_runtime_healthz_probe_rejects_502_log_growth(tmp_path):
+    result = _run_formal_runtime_healthz_probe(
+        tmp_path,
+        status='502',
+        acknowledgement='exact',
+        grow_log=True,
+    )
+
+    assert result.returncode != 0
+    assert '访问者日志增长' in result.stderr
+
+
+@pytest.mark.parametrize(
+    'terminal, terminal_payload',
+    (
+        ('COMMITTED', 'success\n'),
+        ('ROLLED_BACK', 'success\n'),
+        ('ROLLED_BACK', 'pre-mutation\n'),
+    ),
+)
+def test_formal_runtime_healthz_probe_accepts_terminal_guard_502(
+    tmp_path,
+    terminal,
+    terminal_payload,
+):
+    result = _run_formal_runtime_healthz_probe(
+        tmp_path,
+        status='502',
+        terminal=terminal,
+        terminal_payload=terminal_payload,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert '接受持久开机门下的预期 502' in result.stderr
 
 
 def test_durable_checkpoints_precede_mutation_and_the_only_weather_request(tmp_path):

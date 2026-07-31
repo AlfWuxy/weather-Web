@@ -1087,6 +1087,72 @@ print(transaction)
 PY
 }
 
+read_validated_activation_guard_terminal_count() {
+    local guard_transaction="$1"
+    "$VENV_DIR/bin/python" - \
+        "$guard_transaction" \
+        "$CONTROL_OWNER_UID" \
+        "$CONTROL_OWNER_GID" <<'PY'
+from pathlib import Path
+import stat
+import sys
+
+transaction = Path(sys.argv[1]).resolve(strict=True)
+owner_uid = int(sys.argv[2])
+owner_gid = int(sys.argv[3])
+terminal_count = 0
+allowed_payloads = {
+    'COMMITTED': {b'success\n'},
+    'ROLLED_BACK': {b'success\n', b'pre-mutation\n'},
+}
+for name in ('COMMITTED', 'ROLLED_BACK'):
+    marker = transaction / name
+    try:
+        marker_stat = marker.lstat()
+    except FileNotFoundError:
+        continue
+    if (
+        not stat.S_ISREG(marker_stat.st_mode)
+        or stat.S_ISLNK(marker_stat.st_mode)
+        or stat.S_IMODE(marker_stat.st_mode) != 0o600
+        or marker_stat.st_uid != owner_uid
+        or marker_stat.st_gid != owner_gid
+        or marker.read_bytes() not in allowed_payloads[name]
+    ):
+        raise SystemExit(1)
+    terminal_count += 1
+if terminal_count > 1:
+    raise SystemExit(1)
+print(terminal_count)
+PY
+}
+
+formal_runtime_stopped_probe_is_allowed() {
+    local guard_transaction="" terminal_count=""
+    [ -e "$ACTIVATION_BOOT_GUARD_FILE" ] \
+        || [ -L "$ACTIVATION_BOOT_GUARD_FILE" ] \
+        || return 1
+    if ! guard_transaction="$(read_activation_guard_transaction)"; then
+        fail "Nginx 停机恢复探针发现无效的持久开机门"
+        return 2
+    fi
+    if ! terminal_count="$(
+        read_validated_activation_guard_terminal_count "$guard_transaction"
+    )"; then
+        fail "Nginx 停机恢复探针发现无效或冲突的事务终态标记"
+        return 2
+    fi
+    if [ -n "$RECOVERY_ACKNOWLEDGED_TRANSACTION" ]; then
+        if [ "$guard_transaction" != "$RECOVERY_ACKNOWLEDGED_TRANSACTION" ]; then
+            fail "Nginx 停机恢复探针与持久开机门事务不匹配"
+            return 2
+        fi
+        return 0
+    fi
+    # 只有唯一、可信的终态标记可以在无人工作确认时进入既有自动归档流程。
+    [ "$terminal_count" = 1 ] || return 1
+}
+
 validate_runtime_guard_permit() {
     local expected_transaction="$1"
     [ -e "$RUNTIME_BOOT_GUARD_FILE" ] || [ -L "$RUNTIME_BOOT_GUARD_FILE" ] || return 0
@@ -1317,7 +1383,7 @@ PY
 }
 
 recover_activation_boot_guard_if_acknowledged() {
-    local guard_transaction recovered_guard terminal_count=0
+    local guard_transaction recovered_guard terminal_count=""
     [ -e "$ACTIVATION_BOOT_GUARD_FILE" ] \
         || [ -L "$ACTIVATION_BOOT_GUARD_FILE" ] \
         || return 0
@@ -1325,10 +1391,10 @@ recover_activation_boot_guard_if_acknowledged() {
         fail "持久开机门内容、权限或事务路径无效"
         return 1
     fi
-    [ -f "$guard_transaction/COMMITTED" ] && terminal_count=$((terminal_count + 1))
-    [ -f "$guard_transaction/ROLLED_BACK" ] && terminal_count=$((terminal_count + 1))
-    if [ "$terminal_count" -gt 1 ]; then
-        fail "持久开机门对应事务同时存在两个终态标记"
+    if ! terminal_count="$(
+        read_validated_activation_guard_terminal_count "$guard_transaction"
+    )"; then
+        fail "持久开机门对应事务的终态标记无效或冲突"
         return 1
     fi
     if [ "$terminal_count" -eq 0 ]; then
@@ -1342,11 +1408,6 @@ recover_activation_boot_guard_if_acknowledged() {
             fail "持久开机门与已确认恢复事务不匹配"
             return 1
         fi
-    fi
-    if [ -L "$guard_transaction/COMMITTED" ] \
-        || [ -L "$guard_transaction/ROLLED_BACK" ]; then
-        fail "事务终态标记不得为符号链接"
-        return 1
     fi
     reconcile_acknowledged_qweather_key_plan "$guard_transaction"
     if ! validate_runtime_guard_permit "$guard_transaction"; then
@@ -4758,12 +4819,75 @@ validate_release_proofs() {
     fi
 }
 
+verify_formal_runtime_healthz_probe() {
+    local access_log="$1"
+    local error_log="$2"
+    local stat_bin="$3"
+    local access_before access_after error_before error_after
+    local probe_status="" stopped_probe_result=1
+    local allow_stopped_recovery=0
+
+    if [ ! -f "$access_log" ] || [ -L "$access_log" ] \
+        || [ ! -f "$error_log" ] || [ -L "$error_log" ]; then
+        fail "Nginx 运行态日志必须是固定路径下的普通文件"
+        return 1
+    fi
+    access_before="$("$stat_bin" -c %s "$access_log")"
+    error_before="$("$stat_bin" -c %s "$error_log")"
+
+    if formal_runtime_stopped_probe_is_allowed; then
+        allow_stopped_recovery=1
+    else
+        stopped_probe_result=$?
+        if [ "$stopped_probe_result" -ne 1 ]; then
+            return 1
+        fi
+    fi
+
+    # 正式 Nginx 只监听回环 HTTP，公网 HTTPS 由边缘层终止。
+    # 固定命中边缘隧道使用的 8080 入口，避免误连同机其他 443 服务或绕回公网。
+    if ! probe_status="$("$CURL_BIN" \
+        --silent \
+        --show-error \
+        --noproxy '*' \
+        --connect-timeout 5 \
+        --max-time 10 \
+        --header 'Host: yilaoweather.org' \
+        --output /dev/null \
+        --write-out '%{http_code}' \
+        http://127.0.0.1:8080/healthz
+    )"; then
+        fail "Nginx 本机 healthz 请求失败"
+        return 1
+    fi
+    case "$probe_status" in
+        200) ;;
+        502)
+            if [ "$allow_stopped_recovery" != 1 ]; then
+                fail "Nginx 本机 healthz 返回非预期状态: $probe_status"
+                return 1
+            fi
+            log "已验证恢复事务，接受持久开机门下的预期 502 停机态"
+            ;;
+        *)
+            fail "Nginx 本机 healthz 返回非预期状态: $probe_status"
+            return 1
+            ;;
+    esac
+
+    access_after="$("$stat_bin" -c %s "$access_log")"
+    error_after="$("$stat_bin" -c %s "$error_log")"
+    if [ "$access_after" != "$access_before" ] \
+        || [ "$error_after" != "$error_before" ]; then
+        fail "本机 healthz 请求导致 Nginx 访问者日志增长"
+        return 1
+    fi
+    log "正式 Nginx 日志边界与本机 healthz 验证通过"
+}
+
 verify_formal_runtime_log_boundary() {
     local access_log=/var/log/nginx/access.log
     local error_log=/var/log/nginx/error.log
-    local access_before access_after error_before error_after
-    local probe_status="" recovery_guard_transaction=""
-    local allow_stopped_recovery=0
 
     [ "$REQUIRE_WECHAT_READY" = 1 ] || return 0
 
@@ -4801,64 +4925,7 @@ verify_formal_runtime_log_boundary() {
         "$APP_DIR/scripts/verify_runtime_log_boundary.py" \
         --active-nginx >/dev/null
 
-    if [ ! -f "$access_log" ] || [ -L "$access_log" ] \
-        || [ ! -f "$error_log" ] || [ -L "$error_log" ]; then
-        fail "Nginx 运行态日志必须是固定路径下的普通文件"
-        return 1
-    fi
-    access_before="$(/usr/bin/stat -c %s "$access_log")"
-    error_before="$(/usr/bin/stat -c %s "$error_log")"
-
-    if [ -n "$RECOVERY_ACKNOWLEDGED_TRANSACTION" ] \
-        && { [ -e "$ACTIVATION_BOOT_GUARD_FILE" ] \
-            || [ -L "$ACTIVATION_BOOT_GUARD_FILE" ]; }; then
-        if ! recovery_guard_transaction="$(read_activation_guard_transaction)" \
-            || [ "$recovery_guard_transaction" != "$RECOVERY_ACKNOWLEDGED_TRANSACTION" ]; then
-            fail "Nginx 停机恢复探针与持久开机门事务不匹配"
-            return 1
-        fi
-        allow_stopped_recovery=1
-    fi
-
-    # 正式 Nginx 只监听回环 HTTP，公网 HTTPS 由边缘层终止。
-    # 固定命中边缘隧道使用的 8080 入口，避免误连同机其他 443 服务或绕回公网。
-    if ! probe_status="$("$CURL_BIN" \
-        --silent \
-        --show-error \
-        --noproxy '*' \
-        --connect-timeout 5 \
-        --max-time 10 \
-        --header 'Host: yilaoweather.org' \
-        --output /dev/null \
-        --write-out '%{http_code}' \
-        http://127.0.0.1:8080/healthz
-    )"; then
-        fail "Nginx 本机 healthz 请求失败"
-        return 1
-    fi
-    case "$probe_status" in
-        200) ;;
-        502)
-            if [ "$allow_stopped_recovery" != 1 ]; then
-                fail "Nginx 本机 healthz 返回非预期状态: $probe_status"
-                return 1
-            fi
-            log "已确认精确恢复事务，接受持久开机门下的预期 502 停机态"
-            ;;
-        *)
-            fail "Nginx 本机 healthz 返回非预期状态: $probe_status"
-            return 1
-            ;;
-    esac
-
-    access_after="$(/usr/bin/stat -c %s "$access_log")"
-    error_after="$(/usr/bin/stat -c %s "$error_log")"
-    if [ "$access_after" != "$access_before" ] \
-        || [ "$error_after" != "$error_before" ]; then
-        fail "本机 healthz 请求导致 Nginx 访问者日志增长"
-        return 1
-    fi
-    log "正式 Nginx 日志边界与本机 healthz 验证通过"
+    verify_formal_runtime_healthz_probe "$access_log" "$error_log" /usr/bin/stat
 }
 
 compute_formal_release_config_fingerprint() {
