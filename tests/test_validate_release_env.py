@@ -2967,6 +2967,9 @@ def test_wechat_release_form_enforces_category_evidence_24_hour_window(tmp_path)
         form = _write_wechat_release_form(
             case_dir,
             WECHAT_CATEGORY_CONFIRMED_AT=confirmed_at,
+            QWEATHER_CONSOLE_USAGE_MONTH=(
+                release_validator._expected_qweather_usage_month(validation_time)
+            ),
         )
 
         result = validate_wechat_release_form(
