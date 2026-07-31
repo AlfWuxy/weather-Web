@@ -1321,6 +1321,7 @@ def handle_login(next_url):
 
             if (
                 current_app.config.get('WECHAT_FORMAL_RUNTIME')
+                and not current_app.config.get('WEB_PRIVATE_FEATURES_ENABLED')
                 and user.role in {'user', 'caregiver'}
             ):
                 return redirect(url_for('public.account_link'))

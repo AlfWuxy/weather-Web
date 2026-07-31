@@ -240,6 +240,68 @@ def test_login_uses_role_aware_default_landing(client, db_session, role, expecte
     assert response.headers['Location'].endswith(expected_path)
 
 
+def test_formal_dual_runtime_login_lands_on_web_dashboard(app, client, db_session):
+    """微信正式双端态登录后继续进入网页工作台。"""
+    from core.db_models import User
+
+    app.config['WECHAT_FORMAL_RUNTIME'] = True
+    app.config['WEB_PRIVATE_FEATURES_ENABLED'] = True
+    user = User(username='formal-dual-user', role='user')
+    user.set_password('testpass')
+    db_session.add(user)
+    db_session.commit()
+
+    csrf = 'csrf-formal-dual-user'
+    with client.session_transaction() as session:
+        session['_csrf_token'] = csrf
+
+    response = client.post(
+        '/login',
+        data={
+            'username': user.username,
+            'password': 'testpass',
+            'csrf_token': csrf,
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code in (302, 303)
+    assert response.headers['Location'].endswith('/dashboard')
+
+
+def test_formal_miniprogram_only_login_keeps_account_link_landing(
+    app,
+    client,
+    db_session,
+):
+    """双端开关关闭时保留原有最小账号绑定落点。"""
+    from core.db_models import User
+
+    app.config['WECHAT_FORMAL_RUNTIME'] = True
+    app.config['WEB_PRIVATE_FEATURES_ENABLED'] = False
+    user = User(username='formal-mini-only-user', role='user')
+    user.set_password('testpass')
+    db_session.add(user)
+    db_session.commit()
+
+    csrf = 'csrf-formal-mini-only-user'
+    with client.session_transaction() as session:
+        session['_csrf_token'] = csrf
+
+    response = client.post(
+        '/login',
+        data={
+            'username': user.username,
+            'password': 'testpass',
+            'csrf_token': csrf,
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code in (302, 303)
+    assert response.headers['Location'].endswith('/account-link')
+
+
 def test_safe_next_keeps_multiple_query_parameters_and_takes_precedence(client, db_session):
     from core.db_models import User
 

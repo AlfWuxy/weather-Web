@@ -56,8 +56,8 @@ SEO_TECHNICAL_ENDPOINTS = {
     'static',
 }
 
-# 正式微信运行态仅保留公开、聚合或研究管理端点。下列白名单需要人工审查后扩展，
-# 其余同蓝图新端点会默认关闭，避免新增私密 Web 功能时漏配门禁。
+# 正式微信运行态在网页私密功能关闭时，仅保留公开、聚合或研究管理端点。
+# 下列白名单需要人工审查后扩展，其余同蓝图新端点会默认关闭。
 FORMAL_WEB_ALLOWED_USER_ENDPOINTS = frozenset({
     'user.community_dashboard',
     'user.community_detail',
@@ -178,12 +178,41 @@ def register_hooks(app):
 
     @app.before_request
     def formal_wechat_web_gate():
-        """正式微信态在登录加载、CSRF 与业务查询前关闭 Web 私密入口。"""
+        """按显式双端开关决定是否在业务处理前关闭网页私密入口。"""
         if not app.config.get('WECHAT_FORMAL_RUNTIME'):
             return None
         gate_kind = _formal_web_gate_kind(request.endpoint)
         if gate_kind is None:
             return None
+        if app.config.get('WEB_PRIVATE_FEATURES_ENABLED'):
+            # 中央层保留最小登录边界，路由继续负责更细的角色与 CSRF 校验。
+            if current_user.is_authenticated:
+                return None
+            g.formal_web_gate_blocked = True
+            if gate_kind == 'json':
+                response = jsonify({
+                    'success': False,
+                    'error': 'authentication_required',
+                    'message': '请先登录后使用此功能。',
+                })
+                response.status_code = 401
+            else:
+                next_target = (
+                    request.full_path.rstrip('?')
+                    if request.query_string
+                    else request.path
+                )
+                response = redirect(
+                    flask_url_for(
+                        'public.login',
+                        next=next_target,
+                    ),
+                    code=302,
+                )
+            response.headers['Cache-Control'] = (
+                'no-store, private, max-age=0'
+            )
+            return response
         g.formal_web_gate_blocked = True
         if gate_kind == 'json':
             response = jsonify({

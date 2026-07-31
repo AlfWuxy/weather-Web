@@ -171,6 +171,9 @@ def validate_production_config():
         'WX_MINIPROGRAM_SESSION_SECRET': (os.getenv('WX_MINIPROGRAM_SESSION_SECRET') or '').strip(),
     }
     wechat_formal_runtime_raw = (os.getenv('WECHAT_FORMAL_RUNTIME') or '').strip()
+    web_private_features_raw = (
+        os.getenv('WEB_PRIVATE_FEATURES_ENABLED') or ''
+    ).strip()
     wxpusher_app_token = (os.getenv('WXPUSHER_APP_TOKEN') or '').strip()
     feature_wxpusher_env = os.getenv('FEATURE_WXPUSHER')
     feature_wxpusher_raw = (
@@ -198,6 +201,8 @@ def validate_production_config():
 
     if wechat_formal_runtime_raw not in {'', '0', '1'}:
         raise RuntimeError("WECHAT_FORMAL_RUNTIME 必须显式设置为 0 或 1。")
+    if web_private_features_raw not in {'', '0', '1'}:
+        raise RuntimeError("WEB_PRIVATE_FEATURES_ENABLED 必须显式设置为 0 或 1。")
     if wechat_formal_runtime_raw == '1' and debug_raw not in {'false', '0'}:
         raise RuntimeError("WECHAT_FORMAL_RUNTIME=1 时必须设置 DEBUG=false。")
     if wechat_formal_runtime_raw == '1' and (
@@ -218,6 +223,11 @@ def validate_production_config():
         if wechat_formal_runtime_raw not in {'0', '1'}:
             raise RuntimeError("生产环境必须显式设置 WECHAT_FORMAL_RUNTIME=0 或 1。")
         if wechat_formal_runtime_raw == '1':
+            if web_private_features_raw not in {'0', '1'}:
+                raise RuntimeError(
+                    "微信正式生产环境必须显式设置 "
+                    "WEB_PRIVATE_FEATURES_ENABLED=0 或 1。"
+                )
             missing = [name for name, value in wx_miniprogram_values.items() if not value]
             if not account_link_code_pepper:
                 missing.append('ACCOUNT_LINK_CODE_PEPPER')
@@ -446,6 +456,10 @@ def configure_app(app, logger):
     wx_miniprogram_session_secret = _normalized_env_value('WX_MINIPROGRAM_SESSION_SECRET', '')
     account_link_code_pepper = _normalized_env_value('ACCOUNT_LINK_CODE_PEPPER', '')
     wechat_formal_runtime_raw = _normalized_env_value('WECHAT_FORMAL_RUNTIME', '')
+    web_private_features_enabled = parse_bool(
+        os.getenv('WEB_PRIVATE_FEATURES_ENABLED'),
+        default=False,
+    )
     wx_miniprogram_privacy_version = _normalized_env_value(
         'WX_MINIPROGRAM_PRIVACY_VERSION',
         '2026-07-21',
@@ -556,6 +570,7 @@ def configure_app(app, logger):
     app.config['PUBLIC_BASE_URL'] = public_base_url
     app.config['DISPATCH_LOCK_PATH'] = dispatch_lock_path
     app.config['WECHAT_FORMAL_RUNTIME'] = wechat_formal_runtime_raw == '1'
+    app.config['WEB_PRIVATE_FEATURES_ENABLED'] = web_private_features_enabled
     app.config['PREFERRED_URL_SCHEME'] = 'https' if not app.config['DEBUG'] else 'http'
     app.config['SESSION_COOKIE_SECURE'] = not app.config['DEBUG']
     app.config['SESSION_COOKIE_HTTPONLY'] = True

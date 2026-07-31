@@ -91,6 +91,7 @@ def test_formal_web_html_gate_runs_before_login_loader_and_database(
         session_record["_fresh"] = True
 
     app.config["WECHAT_FORMAL_RUNTIME"] = True
+    app.config["WEB_PRIVATE_FEATURES_ENABLED"] = False
     app.config["FEATURE_STRUCTURED_LOGS"] = True
     statements = []
 
@@ -118,6 +119,7 @@ def test_formal_web_json_gate_returns_fixed_error_before_csrf_or_service(
     from services import api_service
 
     app.config["WECHAT_FORMAL_RUNTIME"] = True
+    app.config["WEB_PRIVATE_FEATURES_ENABLED"] = False
     monkeypatch.setattr(
         api_service,
         "_api_ml_predict",
@@ -144,6 +146,7 @@ def test_formal_web_registration_keeps_minimal_account_creation(
     from core.db_models import User
 
     app.config["WECHAT_FORMAL_RUNTIME"] = True
+    app.config["WEB_PRIVATE_FEATURES_ENABLED"] = False
     csrf = "formal-register-csrf"
     with client.session_transaction() as flask_session:
         flask_session["_csrf_token"] = csrf
@@ -194,3 +197,122 @@ def test_web_only_runtime_preserves_legacy_registration(app, client, db_session)
     response = client.get("/register", follow_redirects=False)
 
     assert response.status_code == 200
+
+
+def test_dual_runtime_forecast_uses_route_auth_and_renders_normally(
+    app,
+    authenticated_client,
+):
+    """双端开关开启后，预报页不得再被中央门禁送到行动页。"""
+    app.config["WECHAT_FORMAL_RUNTIME"] = True
+    app.config["WEB_PRIVATE_FEATURES_ENABLED"] = True
+
+    response = authenticated_client.get("/forecast-7day", follow_redirects=False)
+
+    assert response.status_code == 200
+    assert response.request.path == "/forecast-7day"
+    assert 'id="forecastChart"' in response.get_data(as_text=True)
+
+
+def test_dual_runtime_private_route_still_requires_login(app, client):
+    """双端开关移除禁用层后，中央最小登录门禁仍继续生效。"""
+    app.config["WECHAT_FORMAL_RUNTIME"] = True
+    app.config["WEB_PRIVATE_FEATURES_ENABLED"] = True
+
+    response = client.get("/forecast-7day", follow_redirects=False)
+
+    assert response.status_code in (302, 303)
+    assert "/login" in response.headers["Location"]
+    assert "next=" in response.headers["Location"]
+    assert not response.headers["Location"].endswith("/action")
+
+
+def test_dual_runtime_central_gate_blocks_future_unprotected_private_view(
+    app,
+    client,
+):
+    """未来敏感端点即使漏写路由登录装饰器，也不能匿名访问。"""
+    app.config["WECHAT_FORMAL_RUNTIME"] = True
+    app.config["WEB_PRIVATE_FEATURES_ENABLED"] = True
+    endpoint = "tools.forecast_7day"
+    original_view = app.view_functions[endpoint]
+    app.view_functions[endpoint] = lambda: ("unsafe future view", 200)
+    try:
+        response = client.get("/forecast-7day", follow_redirects=False)
+    finally:
+        app.view_functions[endpoint] = original_view
+
+    assert response.status_code in (302, 303)
+    assert "/login" in response.headers["Location"]
+    assert response.headers["Cache-Control"] == (
+        "no-store, private, max-age=0"
+    )
+    assert b"unsafe future view" not in response.data
+
+
+def test_dual_runtime_private_api_keeps_anonymous_login_guard(
+    app,
+    client,
+    monkeypatch,
+):
+    """双端态匿名 API 仍由原登录门禁拒绝。"""
+    from services import api_service
+
+    app.config["WECHAT_FORMAL_RUNTIME"] = True
+    app.config["WEB_PRIVATE_FEATURES_ENABLED"] = True
+    called = []
+
+    def fake_predict():
+        called.append(True)
+        return {"success": True}, 200
+
+    monkeypatch.setattr(api_service, "_api_ml_predict", fake_predict)
+
+    anonymous_csrf = "dual-api-anonymous-csrf"
+    with client.session_transaction() as session_record:
+        session_record["_csrf_token"] = anonymous_csrf
+    anonymous = client.post(
+        "/api/v1/ml/predict",
+        json={"age": 70},
+        headers={"X-CSRF-Token": anonymous_csrf},
+        follow_redirects=False,
+    )
+    assert anonymous.status_code == 401
+    assert anonymous.get_json() == {
+        "success": False,
+        "error": "authentication_required",
+        "message": "请先登录后使用此功能。",
+    }
+    assert anonymous.headers["Cache-Control"] == (
+        "no-store, private, max-age=0"
+    )
+    assert called == []
+
+
+def test_dual_runtime_authenticated_private_api_reaches_service(
+    app,
+    authenticated_client,
+    monkeypatch,
+):
+    """双端态已登录 API 通过 CSRF 后可以进入原服务层。"""
+    from services import api_service
+
+    app.config["WECHAT_FORMAL_RUNTIME"] = True
+    app.config["WEB_PRIVATE_FEATURES_ENABLED"] = True
+    called = []
+
+    def fake_predict():
+        called.append(True)
+        return {"success": True}, 200
+
+    monkeypatch.setattr(api_service, "_api_ml_predict", fake_predict)
+
+    authenticated = authenticated_client.post(
+        "/api/v1/ml/predict",
+        json={"age": 70},
+        headers={"X-CSRF-Token": "test-csrf-token"},
+        follow_redirects=False,
+    )
+    assert authenticated.status_code == 200
+    assert authenticated.get_json() == {"success": True}
+    assert called == [True]

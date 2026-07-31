@@ -319,6 +319,7 @@ def test_validate_production_config_requires_pairwise_independent_secrets(
         'PAIR_TOKEN_PEPPER': 'pairpepper1234567890abcdefghijklmn',
         'DEBUG': 'false',
         'WECHAT_FORMAL_RUNTIME': '1',
+        'WEB_PRIVATE_FEATURES_ENABLED': '1',
         'DATABASE_URI': f"sqlite:///{tmp_path/'prod_duplicate_pepper.db'}",
         'RATE_LIMIT_STORAGE_URI': 'redis://localhost:6379/0',
         'WX_MINIPROGRAM_APPID': 'wx-production-appid',
@@ -430,10 +431,53 @@ def test_production_requires_explicit_binary_wechat_runtime(tmp_path, formal_val
         _reload_config()
 
 
+@pytest.mark.parametrize('web_private_value', ['true', 'yes', '2'])
+def test_runtime_rejects_non_binary_web_private_flag(
+    tmp_path,
+    web_private_value,
+):
+    """网页私密功能开关只能使用可审计的 0 或 1。"""
+    original = _set_env({
+        'DEBUG': 'true',
+        'WECHAT_FORMAL_RUNTIME': '0',
+        'WEB_PRIVATE_FEATURES_ENABLED': web_private_value,
+        'DATABASE_URI': f"sqlite:///{tmp_path/'invalid_web_private_flag.db'}",
+    })
+    try:
+        config = _reload_config()
+        with pytest.raises(RuntimeError, match='WEB_PRIVATE_FEATURES_ENABLED'):
+            config.validate_production_config()
+    finally:
+        _restore_env(original)
+        _reload_config()
+
+
+def test_formal_production_requires_explicit_web_private_flag(tmp_path):
+    """正式微信生产态缺少双端开关时必须拒绝启动。"""
+    original = _set_env({
+        'SECRET_KEY': 'strongkey1234567890strongkey123456',
+        'PAIR_TOKEN_PEPPER': 'peppervalue1234567890abcdefghijkl',
+        'DEBUG': 'false',
+        'WECHAT_FORMAL_RUNTIME': '1',
+        'WEB_PRIVATE_FEATURES_ENABLED': None,
+        'DATABASE_URI': f"sqlite:///{tmp_path/'missing_web_private_flag.db'}",
+        'RATE_LIMIT_STORAGE_URI': 'redis://localhost:6379/0',
+        'QWEATHER_AUTH_MODE': 'disabled',
+    })
+    try:
+        config = _reload_config()
+        with pytest.raises(RuntimeError, match='WEB_PRIVATE_FEATURES_ENABLED'):
+            config.validate_production_config()
+    finally:
+        _restore_env(original)
+        _reload_config()
+
+
 def test_formal_wechat_runtime_rejects_debug_and_incomplete_credentials(tmp_path):
     """正式小程序态必须关闭 DEBUG 并同时具备五项微信服务端配置。"""
     debug_env = {
         'WECHAT_FORMAL_RUNTIME': '1',
+        'WEB_PRIVATE_FEATURES_ENABLED': '1',
         'WX_MINIPROGRAM_APPID': 'wx-production-appid',
         'WX_MINIPROGRAM_SECRET': 'wx-production-secret-value',
         'WX_MINIPROGRAM_OPENID_PEPPER': 'openidpepper1234567890abcdefghijklm',
@@ -455,6 +499,7 @@ def test_formal_wechat_runtime_rejects_debug_and_incomplete_credentials(tmp_path
         'PAIR_TOKEN_PEPPER': 'peppervalue1234567890abcdefghijkl',
         'DEBUG': 'false',
         'WECHAT_FORMAL_RUNTIME': '1',
+        'WEB_PRIVATE_FEATURES_ENABLED': '1',
         'DATABASE_URI': f"sqlite:///{tmp_path/'prod_formal_missing.db'}",
         'RATE_LIMIT_STORAGE_URI': 'redis://localhost:6379/0',
         'QWEATHER_AUTH_MODE': 'disabled',
@@ -493,6 +538,7 @@ def test_formal_wechat_runtime_rejects_each_missing_wechat_credential(
         'PAIR_TOKEN_PEPPER': 'peppervalue1234567890abcdefghijkl',
         'DEBUG': 'false',
         'WECHAT_FORMAL_RUNTIME': '1',
+        'WEB_PRIVATE_FEATURES_ENABLED': '1',
         'DATABASE_URI': f"sqlite:///{tmp_path/'prod_formal_partial.db'}",
         'RATE_LIMIT_STORAGE_URI': 'redis://localhost:6379/0',
         'QWEATHER_AUTH_MODE': 'disabled',
@@ -690,6 +736,7 @@ def test_configure_app_sets_secure_cookie_defaults_for_production(tmp_path):
         assert app.config['REMEMBER_COOKIE_SAMESITE'] == 'Lax'
         assert app.config['PREFERRED_URL_SCHEME'] == 'https'
         assert app.config['WECHAT_FORMAL_RUNTIME'] is False
+        assert app.config['WEB_PRIVATE_FEATURES_ENABLED'] is False
     finally:
         _restore_env(original)
         _reload_config()

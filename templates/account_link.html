@@ -99,7 +99,7 @@
 
     <div class="mt-4 d-flex flex-wrap gap-2">
         <a class="btn btn-outline-secondary" href="{{ url_for('public.index') }}">返回首页</a>
-        {% if not config.get('WECHAT_FORMAL_RUNTIME') %}
+        {% if not config.get('WECHAT_FORMAL_RUNTIME') or config.get('WEB_PRIVATE_FEATURES_ENABLED') %}
         <a class="btn btn-outline-secondary" href="{{ url_for('user.profile') }}">返回个人设置</a>
         {% endif %}
     </div>

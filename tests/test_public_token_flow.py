@@ -149,6 +149,7 @@ def test_formal_wechat_runtime_rejects_web_token_writes_before_pair_resolution(
     from services import public_service
 
     app.config["WECHAT_FORMAL_RUNTIME"] = True
+    app.config["WEB_PRIVATE_FEATURES_ENABLED"] = True
 
     def fail_before_pair_resolution(*_args, **_kwargs):
         pytest.fail("正式微信态不应解析 Web 家庭行动 Pair")
@@ -215,6 +216,7 @@ def test_formal_wechat_runtime_stops_web_entry_before_reading_family_data(
     from services import public_service
 
     app.config["WECHAT_FORMAL_RUNTIME"] = True
+    app.config["WEB_PRIVATE_FEATURES_ENABLED"] = True
 
     def fail_before_family_resolution(*_args, **_kwargs):
         pytest.fail("正式微信态不应解析家庭短码")
@@ -274,6 +276,7 @@ def test_formal_wechat_runtime_stops_debrief_get_before_family_lookup(
     from services import public_service
 
     app.config["WECHAT_FORMAL_RUNTIME"] = True
+    app.config["WEB_PRIVATE_FEATURES_ENABLED"] = True
 
     def fail_before_family_access(*_args, **_kwargs):
         pytest.fail("正式微信态的复盘 GET 不得访问家庭资料")
