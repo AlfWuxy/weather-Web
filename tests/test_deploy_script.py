@@ -648,7 +648,7 @@ def test_deploy_script_pins_duchang_cache_to_free_tier_budget():
     assert content.index('--seed-persistent-budget') < content.index(
         'bash $RELEASE_APP/scripts/activate_release.sh'
     )
-    assert 'OnUnitActiveSec=30min' in content
+    assert 'OnUnitInactiveSec=30min' in content
     assert 'OnActiveSec=30min' in content
     assert 'OnSuccess=case-weather-dispatch.service case-weather-cache.timer' in content
     assert 'OnFailure=case-weather-cache.timer' in content
@@ -862,7 +862,8 @@ def test_deploy_script_uses_two_stage_failure_safe_cache_timers():
     assert 'OnSuccess=case-weather-dispatch.service case-weather-cache.timer' in service_block
     assert 'OnFailure=case-weather-cache.timer' in service_block
     assert 'OnActiveSec=30min' in recurring_block
-    assert 'OnUnitActiveSec=30min' in recurring_block
+    assert 'OnUnitInactiveSec=30min' in recurring_block
+    assert 'OnUnitActiveSec=' not in recurring_block
     assert '[Install]' in recurring_block
     assert 'WantedBy=timers.target' in recurring_block
     assert "cat > $NEW_RELEASE/systemd/case-weather-cache-bootstrap.service" not in content

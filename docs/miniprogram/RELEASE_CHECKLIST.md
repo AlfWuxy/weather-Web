@@ -106,7 +106,7 @@
 
 ## 额度与网络
 
-- [ ] bootstrap timer 在部署或开机后完整等待 30 分钟并直接触发 `case-weather-cache.service`；首次同步无论成功或失败都通过 `OnSuccess`/`OnFailure` 启动 recurring cache timer，后续固定间隔为 30 分钟。
+- [ ] bootstrap timer 在部署或开机后完整等待 30 分钟并直接触发 `case-weather-cache.service`；首次同步无论成功或失败都通过 `OnSuccess`/`OnFailure` 启动 recurring cache timer。recurring timer 使用 `OnUnitInactiveSec=30min`，每次从同步任务结束起等待完整 30 分钟，且 recurring unit 中没有 `OnUnitActiveSec`。
 - [ ] timer、手工普通同步与发布烟测共用 `$STATE_DIR/run/case-weather-sync.lock` 非阻塞 flock；普通周期同时使用 Redis `SET NX EX 1800` 租约，任一互斥或 Redis 检查失败均在上游访问前退出。
 - [ ] 正式服务启动前已由服务器时钟设置 30 分钟 QWeather 网络闸门；阻断期不会增加 Redis 或本地预算计数，过期后自动放行。
 - [ ] 社区风险预计算只读最后一份真实天气缓存，缓存缺失时跳过且不会访问 QWeather。

@@ -3408,7 +3408,7 @@ ConditionPathExists=|/run/case-weather/activation-permit
 
 [Timer]
 OnActiveSec=30min
-OnUnitActiveSec=30min
+OnUnitInactiveSec=30min
 AccuracySec=1s
 Unit=case-weather-cache.service
 

@@ -12,9 +12,11 @@
 ```text
 部署或开机后 bootstrap timer 完整等待 30 分钟
         ↓
-首次都昌同步完成后启动 recurring timer
+首次都昌同步尝试结束后启动 recurring timer
         ↓
-服务器单次都昌同步周期
+recurring timer 从上次同步任务结束起等待 30 分钟
+        ↓
+服务器下一次都昌同步周期
         ↓
 同机非阻塞 flock：run/case-weather-sync.lock
         ↓
@@ -33,7 +35,7 @@ Redis / 数据库持久化当前天气、七日预报、预警、小时降水与
 
 ## 服务端规则
 
-1. `case-weather-cache-bootstrap.timer` 在部署或开机后完整等待 30 分钟，再拉起首次同步；首次尝试结束后才启动 `case-weather-cache.timer`，此后每 30 分钟触发一次。
+1. `case-weather-cache-bootstrap.timer` 在部署或开机后完整等待 30 分钟，再拉起首次同步；首次尝试结束后才启动 `case-weather-cache.timer`。recurring timer 使用 `OnUnitInactiveSec=30min`，从上一次同步任务结束起等待完整 30 分钟再触发下一次，避免任务启动时间与 Redis 1,800 秒租约之间的秒级偏差造成隔轮空跑。
 2. 默认预热列表只能包含都昌县。
 3. 普通 HTTP 请求不能触发上游 QWeather 刷新；即使调用方误传联网参数，请求上下文也必须强制只读，预算预占必须零计数拒绝。
 4. 每次上游请求前必须先通过 `QWEATHER_NETWORK_NOT_BEFORE_EPOCH` 网络闸门，再通过月度预算预占；闸门阻断不得增加 Redis 或本地预算计数。
@@ -76,7 +78,7 @@ Redis / 数据库持久化当前天气、七日预报、预警、小时降水与
 - 测试进程拦截 QWeather host，出现访问即失败。
 - 当前天气、七日预报和小时降水 HTTP 路由在空缓存或过期缓存下均不会调用 fetcher；过期实况和小时线不会继续参与展示或风险计算。
 - 月预算为 0 时，系统可启动、页面可展示缓存状态、QWeather 请求数为 0。
-- 部署完成后 bootstrap timer 为 active，recurring timer 为 inactive 且 disabled；bootstrap 直接触发 `case-weather-cache.service`，首次同步无论成功或失败都通过 `OnSuccess`/`OnFailure` 接续 recurring timer，30 分钟窗口内预算计数保持不变。
+- 部署完成后 bootstrap timer 为 active，recurring timer 为 inactive 且 disabled；bootstrap 直接触发 `case-weather-cache.service`，首次同步无论成功或失败都通过 `OnSuccess`/`OnFailure` 接续 recurring timer。recurring timer 从同步任务结束后计算完整 30 分钟等待窗口，窗口内预算计数保持不变。
 - 网络闸门值无效时 fail-closed，过期后无需清变量或重启即可自动放行。
 - 原子激活完整状态复核失败时保留新数据库和 release，写入 `POST_COMMIT_ATTENTION.txt`，且下一次激活被阻断。
 
@@ -86,7 +88,7 @@ Redis / 数据库持久化当前天气、七日预报、预警、小时降水与
 
 正式发布由外置状态目录保存耐久 receipt，目录名绑定冻结 commit 与天气语义配置 SHA-256。天气指纹只纳入会改变 QWeather HTTP 请求、预算或正式快照判定的字段，包括认证模式与凭据、API Base、canonical location、预算门禁、缓存 TTL、同步位置和天气不可用策略。AppID、AppSecret、隐私版本、WxPusher、GIS 开关和公开域名不参与天气指纹；轮换这些字段仍复用同一个 receipt。QWeather key 或其他天气配置变化会形成新的天气指纹。正式模式先由 `case-weather` 运行用户完成 JWT 离线签名预检，再读取 Redis 持久预算前值。两项通过后，root 生成随机 lease token，并在写入 `started` 前取得全局 Redis `SET NX EX 1800` 周期租约；租约忙或 Redis 异常时安全退出，不形成不可重试 receipt。`started` 耐久落盘后，root 才签发 root-owned `0640` 一次性 ticket 并开放唯一一次 QWeather 网络闸门。同步进程以常量时间比较确认预占租约，再校验 binding、token SHA-256 与 lease token SHA-256，通过独立 Redis `SET NX` 留下消费标记并删除磁盘 ticket，之后才允许访问上游；任一步失败都在访问上游前退出，票据一经消费，无论请求成功或失败都不能自动重试。通过 QWeather 官方实况、七日预报、预警状态和快照新鲜度校验后，系统再次读取预算，只接受 `weather_now`、`weather_7d_forecast` 与 `weatheralert_v1_current` 三项各增加 1 次，总增量固定为 3，随后原子写入包含预算差值的 `completed`。相同绑定的 completed 只复用仍然新鲜的 snapshot_id；started 未完成、receipt 损坏、快照丢失或过期都会 fail-closed，并要求人工核对上游计数。自动流程不会删除 receipt 或再次发起天气同步。
 
-正式烟测固定向 `weather_cache_sync.sh` 传入 `--skip-nowcast`，并关闭 Open-Meteo 与 mock 兜底，因此不会请求或写入短时 nowcast，也不会产生 receipt 之外的备用天气请求。烟测强制刷新 QWeather 实况、七日预报和预警，绕过这三项内部新鲜缓存；完整成功链路会分别预占一次预算。每 30 分钟的常规定时同步不传该参数，继续维护短时 nowcast 缓存。常规周期任一官方来源失败时可保存 degraded 快照供页面透明显示，但不会触发下游预警派发。
+正式烟测固定向 `weather_cache_sync.sh` 传入 `--skip-nowcast`，并关闭 Open-Meteo 与 mock 兜底，因此不会请求或写入短时 nowcast，也不会产生 receipt 之外的备用天气请求。烟测强制刷新 QWeather 实况、七日预报和预警，绕过这三项内部新鲜缓存；完整成功链路会分别预占一次预算。常规定时同步在上次同步任务结束 30 分钟后触发且不传该参数，继续维护短时 nowcast 缓存。常规周期任一官方来源失败时可保存 degraded 快照供页面透明显示，但不会触发下游预警派发。
 
 Open-Meteo、fallback、mock 和 demo 数据不能完成正式烟测。动态的 `QWEATHER_NETWORK_NOT_BEFORE_EPOCH` 不参与天气语义配置指纹，避免同一发布仅因 30 分钟闸门时间变化而绕过单次约束。
 
