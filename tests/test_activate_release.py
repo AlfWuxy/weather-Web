@@ -3681,6 +3681,15 @@ def test_formal_runtime_log_guard_forces_local_probe_to_bypass_proxy():
     assert "--noproxy '*'" in guard
     assert "--header 'Host: yilaoweather.org'" in guard
     assert 'http://127.0.0.1:8080/healthz' in guard
+    assert "--write-out '%{http_code}'" in guard
+    assert 'allow_stopped_recovery=1' in guard
+    assert (
+        'recovery_guard_transaction" != "$RECOVERY_ACKNOWLEDGED_TRANSACTION'
+        in guard
+    )
+    assert '502)' in guard
+    assert '200)' in guard
+    assert '--fail' not in guard
     assert '--resolve yilaoweather.org:443:127.0.0.1' not in guard
     assert 'https://yilaoweather.org/healthz' not in guard
 

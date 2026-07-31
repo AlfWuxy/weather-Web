@@ -4762,6 +4762,8 @@ verify_formal_runtime_log_boundary() {
     local access_log=/var/log/nginx/access.log
     local error_log=/var/log/nginx/error.log
     local access_before access_after error_before error_after
+    local probe_status="" recovery_guard_transaction=""
+    local allow_stopped_recovery=0
 
     [ "$REQUIRE_WECHAT_READY" = 1 ] || return 0
 
@@ -4807,10 +4809,20 @@ verify_formal_runtime_log_boundary() {
     access_before="$(/usr/bin/stat -c %s "$access_log")"
     error_before="$(/usr/bin/stat -c %s "$error_log")"
 
+    if [ -n "$RECOVERY_ACKNOWLEDGED_TRANSACTION" ] \
+        && { [ -e "$ACTIVATION_BOOT_GUARD_FILE" ] \
+            || [ -L "$ACTIVATION_BOOT_GUARD_FILE" ]; }; then
+        if ! recovery_guard_transaction="$(read_activation_guard_transaction)" \
+            || [ "$recovery_guard_transaction" != "$RECOVERY_ACKNOWLEDGED_TRANSACTION" ]; then
+            fail "Nginx 停机恢复探针与持久开机门事务不匹配"
+            return 1
+        fi
+        allow_stopped_recovery=1
+    fi
+
     # 正式 Nginx 只监听回环 HTTP，公网 HTTPS 由边缘层终止。
     # 固定命中边缘隧道使用的 8080 入口，避免误连同机其他 443 服务或绕回公网。
-    "$CURL_BIN" \
-        --fail \
+    if ! probe_status="$("$CURL_BIN" \
         --silent \
         --show-error \
         --noproxy '*' \
@@ -4818,7 +4830,26 @@ verify_formal_runtime_log_boundary() {
         --max-time 10 \
         --header 'Host: yilaoweather.org' \
         --output /dev/null \
+        --write-out '%{http_code}' \
         http://127.0.0.1:8080/healthz
+    )"; then
+        fail "Nginx 本机 healthz 请求失败"
+        return 1
+    fi
+    case "$probe_status" in
+        200) ;;
+        502)
+            if [ "$allow_stopped_recovery" != 1 ]; then
+                fail "Nginx 本机 healthz 返回非预期状态: $probe_status"
+                return 1
+            fi
+            log "已确认精确恢复事务，接受持久开机门下的预期 502 停机态"
+            ;;
+        *)
+            fail "Nginx 本机 healthz 返回非预期状态: $probe_status"
+            return 1
+            ;;
+    esac
 
     access_after="$(/usr/bin/stat -c %s "$access_log")"
     error_after="$(/usr/bin/stat -c %s "$error_log")"
