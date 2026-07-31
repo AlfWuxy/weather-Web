@@ -79,7 +79,7 @@ def _create_reusable_release_base(base, trusted_python_entry):
 
     old_venv = old_release / 'venv'
     subprocess.run(
-        [str(trusted_python_entry), '-m', 'venv', str(old_venv)],
+        [sys.executable, '-m', 'venv', str(old_venv)],
         check=True,
         capture_output=True,
         text=True,
