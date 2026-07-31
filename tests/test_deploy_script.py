@@ -10,9 +10,12 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[1]
 DEPENDENCY_INSTALLER = ROOT / "scripts" / "install_release_dependencies.sh"
+MODEL_ARTIFACT_HELPER = ROOT / "scripts" / "model_artifact.py"
 
 
 def _load_deploy_script():
@@ -39,6 +42,22 @@ def _create_clean_git_source(tmp_path):
     source = tmp_path / 'source'
     source.mkdir()
     (source / 'README.md').write_text('release fixture\n', encoding='utf-8')
+    model_source = tmp_path / 'model-artifacts'
+    model_source.mkdir(mode=0o700)
+    model_payloads = {
+        'disease_predictor.pkl': b'test-predictor\n',
+        'scaler.pkl': b'test-scaler\n',
+        'label_encoder.pkl': b'test-labels\n',
+    }
+    model_specs = {}
+    for filename, payload in model_payloads.items():
+        artifact = model_source / filename
+        artifact.write_bytes(payload)
+        artifact.chmod(0o600)
+        model_specs[filename] = {
+            'sha256': hashlib.sha256(payload).hexdigest(),
+            'size_bytes': len(payload),
+        }
     verifier = source / 'scripts' / 'verify_github_ci.py'
     verifier.parent.mkdir()
     verifier.write_text(
@@ -50,12 +69,32 @@ import sys
 output = Path(sys.argv[sys.argv.index('--output') + 1])
 output.write_text('{}\\n', encoding='utf-8')
 os.chmod(output, 0o600)
-""",
+        """,
+        encoding='utf-8',
+    )
+    model_helper = source / 'scripts' / 'model_artifact.py'
+    model_helper.write_text(
+        MODEL_ARTIFACT_HELPER.read_text(encoding='utf-8'),
+        encoding='utf-8',
+    )
+    model_helper.chmod(0o755)
+    model_manifest = source / 'models' / 'feature_config.json'
+    model_manifest.parent.mkdir()
+    model_manifest.write_text(
+        json.dumps(
+            {
+                'runtime_artifacts': {
+                    'expected_sklearn_version': '1.7.2',
+                    'files': model_specs,
+                },
+            },
+            ensure_ascii=False,
+        ),
         encoding='utf-8',
     )
     subprocess.run(['git', 'init', '-q', '-b', 'main', str(source)], check=True)
     subprocess.run(
-        ['git', '-C', str(source), 'add', 'README.md', 'scripts/verify_github_ci.py'],
+        ['git', '-C', str(source), 'add', '.'],
         check=True,
     )
     subprocess.run(
@@ -342,13 +381,53 @@ def test_formal_deploy_propagates_full_feature_release_flags():
     assert '1.1.1 微信正式发布必须固定 FEATURE_WXPUSHER=0' in content
     assert 'FEATURE_WXPUSHER=0 时必须清空 WXPUSHER_APP_TOKEN' in content
     assert 'LOCAL_WECHAT_FORMAL_RUNTIME=""' in content
+    assert 'LOCAL_WEB_PRIVATE_FEATURES_ENABLED=""' in content
     assert 'WECHAT_FORMAL_RUNTIME=0' in content
+    assert 'WEB_PRIVATE_FEATURES_ENABLED=0' in content
     assert (
         'remote_env_update "WECHAT_FORMAL_RUNTIME" '
         '"$LOCAL_WECHAT_FORMAL_RUNTIME" "always"'
     ) in content
+    assert (
+        'remote_env_update "WEB_PRIVATE_FEATURES_ENABLED" '
+        '"$LOCAL_WEB_PRIVATE_FEATURES_ENABLED" "always"'
+    ) in content
     assert '微信正式发布必须固定 WECHAT_FORMAL_RUNTIME=1。' in content
+    assert '双端正式发布必须固定 WEB_PRIVATE_FEATURES_ENABLED=1。' in content
     assert 'DEBUG=true WECHAT_FORMAL_RUNTIME=0' not in content
+
+
+def test_web_backend_deploy_inherits_runtime_gate_and_binds_activation_expectation():
+    content = _load_deploy_script()
+    web_mode_start = content.index(
+        'if [ "$DEPLOY_MODE" = "web_backend_only" ]; then'
+    )
+    web_mode_end = content.index('\nfi', web_mode_start)
+    web_mode = content[web_mode_start:web_mode_end]
+    candidate_update = content.index(
+        'remote_env_update "WEB_PRIVATE_FEATURES_ENABLED" "0" "if-empty"'
+    )
+    explicit_update = content.index(
+        'remote_env_update "WEB_PRIVATE_FEATURES_ENABLED" '
+        '"$LOCAL_WEB_PRIVATE_FEATURES_ENABLED" "always"'
+    )
+    activation = content.index('bash $RELEASE_APP/scripts/activate_release.sh')
+    activation_command = content[activation - 2000:activation]
+
+    assert 'LOCAL_WEB_PRIVATE_FEATURES_ENABLED=""' in web_mode
+    assert candidate_update < explicit_update
+    assert (
+        'if [ "$DEPLOY_MODE" = "wechat_formal" ] \\\n'
+        '    && [ -n "$LOCAL_WEB_PRIVATE_FEATURES_ENABLED" ]; then'
+    ) in content
+    assert (
+        'EXPECTED_WECHAT_FORMAL_RUNTIME='
+        '$EXPECTED_WECHAT_FORMAL_RUNTIME'
+    ) in activation_command
+    assert (
+        'EXPECTED_WEB_PRIVATE_FEATURES_ENABLED='
+        '$EXPECTED_WEB_PRIVATE_FEATURES_ENABLED'
+    ) in activation_command
 
 
 def test_formal_deploy_loads_and_forces_audit_logs_off():
@@ -491,6 +570,49 @@ def test_deploy_script_uses_isolated_release_and_server_transaction():
     assert 'STAGED_ENV_FILE="$NEW_RELEASE/staged.env"' in content
     assert 'trap on_exit EXIT' in activate
     assert 'flock' in activate.lower()
+
+
+def test_deploy_requires_verified_private_model_artifacts_before_ssh():
+    content = _load_deploy_script()
+    prepare = content.index("\nprepare_model_artifacts\n")
+    connect = content.index('echo "步骤1: 测试服务器连接..."')
+    upload = content.index("\nupload_model_artifacts\n")
+    dependency_install = content.index('echo "步骤6: 为新版本创建独立虚拟环境..."')
+
+    assert "ML_MODEL_ARTIFACT_DIR" in content
+    assert (
+        'require_env_value "ML_MODEL_ARTIFACT_DIR" '
+        '"$LOCAL_ML_MODEL_ARTIFACT_DIR"'
+    ) in content
+    assert 'python3 "$helper" snapshot' in content
+    assert '--manifest "$manifest"' in content
+    assert '--commit "$VERIFIED_COMMIT"' in content
+    assert prepare < connect
+    assert upload < dependency_install
+    assert (
+        "for model_name in disease_predictor.pkl scaler.pkl "
+        "label_encoder.pkl"
+    ) in content
+    assert content.count("--exclude 'models/*.pkl'") == 2
+    assert content.count("scripts/model_artifact.py verify") == 2
+    assert "model-artifacts.json" in content
+    assert (
+        "ci-proof.json|miniprogram-ci-proof.json|model-artifacts.json"
+    ) in content
+    runtime_permissions = content.index("chmod -R g+rX,o-rwx")
+    receipt_verification = content.index(
+        "--receipt $NEW_RELEASE/private-metadata/model-artifacts.json"
+    )
+    assert runtime_permissions < receipt_verification
+    assert "--commit $VERIFIED_COMMIT" in content[receipt_verification:]
+    assert "--expected-owner root" in content[receipt_verification:]
+    assert "--expected-group $RUNTIME_GROUP" in content[receipt_verification:]
+    assert "--expected-file-mode 0640" in content[receipt_verification:]
+    assert "--expected-dir-mode 0750" in content[receipt_verification:]
+    assert (
+        "$NEW_RELEASE/private-metadata/model-artifacts.json"
+        in content[content.index("for PRIVATE_RECEIPT in") :]
+    )
 
 
 def test_dependency_install_is_memory_bounded_before_runtime_preflight():
@@ -1007,7 +1129,12 @@ def test_candidate_base_state_capture_freezes_env_and_current_link(tmp_path):
     helper = tmp_path / 'capture-base-state.py'
     helper.write_text(source, encoding='utf-8')
     active_env = tmp_path / 'active.env'
-    active_env.write_text('SECRET_KEY=canary\n', encoding='utf-8')
+    active_env.write_text(
+        'SECRET_KEY=canary\n'
+        'WECHAT_FORMAL_RUNTIME=1\n'
+        'WEB_PRIVATE_FEATURES_ENABLED=0\n',
+        encoding='utf-8',
+    )
     active_env.chmod(0o600)
     releases = tmp_path / 'releases'
     releases.mkdir()
@@ -1047,7 +1174,135 @@ def test_candidate_base_state_capture_freezes_env_and_current_link(tmp_path):
     ).hexdigest()
     assert values['deployment_intent'] == 'web_backend_only'
     assert re.fullmatch(r'[0-9a-f]{64}', values['qweather_config_sha256'])
-    assert values['version'] == 2
+    assert values['wechat_formal_runtime'] == '1'
+    assert values['web_private_features_enabled'] == '0'
+    assert values['version'] == 3
+
+
+def test_candidate_base_state_legacy_formal_env_defaults_new_web_gate_closed(
+    tmp_path,
+):
+    source = _load_embedded_python_source(
+        'candidate_base_state_capture_source'
+    )
+    helper = tmp_path / 'capture-base-state.py'
+    helper.write_text(source, encoding='utf-8')
+    active_env = tmp_path / 'active.env'
+    active_env.write_text(
+        'WECHAT_FORMAL_RUNTIME=1\n',
+        encoding='utf-8',
+    )
+    active_env.chmod(0o600)
+    releases = tmp_path / 'releases'
+    releases.mkdir()
+    current_release = releases / 'old'
+    current_release.mkdir()
+    current_link = tmp_path / 'current'
+    current_link.symlink_to(current_release)
+    new_release = releases / 'new'
+    new_release.mkdir()
+    staged_env = new_release / 'staged.env'
+    metadata = new_release / 'private-metadata' / 'candidate-base-state.json'
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(helper),
+            str(active_env),
+            str(staged_env),
+            str(current_link),
+            str(metadata),
+            'web_backend_only',
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    values = json.loads(metadata.read_text(encoding='utf-8'))
+    assert values['wechat_formal_runtime'] == '1'
+    assert values['web_private_features_enabled'] == '0'
+    assert 'WEB_PRIVATE_FEATURES_ENABLED=' not in staged_env.read_text(
+        encoding='utf-8'
+    )
+
+    backfill = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / 'scripts' / 'update_env_value.py'),
+            '--file',
+            str(staged_env),
+            '--key',
+            'WEB_PRIVATE_FEATURES_ENABLED',
+            '--mode',
+            'if-empty',
+        ],
+        input='0',
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert backfill.returncode == 0, backfill.stderr
+    assert staged_env.read_text(encoding='utf-8').endswith(
+        'WEB_PRIVATE_FEATURES_ENABLED=0\n'
+    )
+
+
+@pytest.mark.parametrize(
+    'active_text',
+    (
+        'WEB_PRIVATE_FEATURES_ENABLED=0\n',
+        'WECHAT_FORMAL_RUNTIME=2\nWEB_PRIVATE_FEATURES_ENABLED=0\n',
+        (
+            'WECHAT_FORMAL_RUNTIME=1\n'
+            'WEB_PRIVATE_FEATURES_ENABLED=0\n'
+            'WEB_PRIVATE_FEATURES_ENABLED=1\n'
+        ),
+        'WECHAT_FORMAL_RUNTIME=1\nWEB_PRIVATE_FEATURES_ENABLED=yes\n',
+    ),
+)
+def test_candidate_base_state_rejects_invalid_or_duplicate_runtime_gates(
+    tmp_path,
+    active_text,
+):
+    source = _load_embedded_python_source(
+        'candidate_base_state_capture_source'
+    )
+    helper = tmp_path / 'capture-base-state.py'
+    helper.write_text(source, encoding='utf-8')
+    active_env = tmp_path / 'active.env'
+    active_env.write_text(active_text, encoding='utf-8')
+    active_env.chmod(0o600)
+    releases = tmp_path / 'releases'
+    releases.mkdir()
+    current_release = releases / 'old'
+    current_release.mkdir()
+    current_link = tmp_path / 'current'
+    current_link.symlink_to(current_release)
+    new_release = releases / 'new'
+    new_release.mkdir()
+    staged_env = new_release / 'staged.env'
+    metadata = new_release / 'private-metadata' / 'candidate-base-state.json'
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(helper),
+            str(active_env),
+            str(staged_env),
+            str(current_link),
+            str(metadata),
+            'web_backend_only',
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert not staged_env.exists()
+    assert not metadata.exists()
 
 
 def test_web_mode_backfills_only_account_link_pepper_for_formal_runtime(
@@ -2133,6 +2388,7 @@ DEPLOY_PROJECT_DIR=/srv/case-weather
 DEPLOY_RELEASE_ROOT=/srv/case-weather-deploy
 DEPLOY_RELEASE_ID=web-backend-test
 DEPLOY_LOCAL_DIR={source}
+ML_MODEL_ARTIFACT_DIR={tmp_path / 'model-artifacts'}
 DEPLOY_MODE=web_backend_only
 DEPLOY_REQUIRE_WECHAT_READY=0
 WECHAT_RELEASE_FORM_FILE={missing_form}
@@ -2278,6 +2534,7 @@ printf 'unexpected remote call\\n' >> "$FAKE_DEPLOY_LOG"
         f'''DEPLOY_SERVER=fake.example
 DEPLOY_USER=deployer
 DEPLOY_LOCAL_DIR={source}
+ML_MODEL_ARTIFACT_DIR={tmp_path / 'model-artifacts'}
 DEPLOY_MODE=web_backend_only
 DEPLOY_REQUIRE_WECHAT_READY=0
 ''',

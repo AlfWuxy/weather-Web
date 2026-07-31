@@ -83,7 +83,7 @@ git check-ignore .env.wechat-release
 - 运营者姓名、专用联系邮箱、生效日期已经核对
 - 正式 AppID、AppSecret 已从当前账号后台取得
 - `WECHAT_APPSECRET_PRODUCTION_SAFE_CONFIRMED=1`；AppSecret 若曾进入聊天、日志、截图或其他外部系统，已先在微信后台重置并通过本机无回显输入重新录入
-- `WECHAT_FORMAL_RUNTIME=1` 且 `DEBUG=false`；正式服务器的 `WX_MINIPROGRAM_APPID`、`WX_MINIPROGRAM_SECRET`、`WX_MINIPROGRAM_OPENID_PEPPER` 与 `WX_MINIPROGRAM_SESSION_SECRET` 四项完整。`WECHAT_FORMAL_RUNTIME=0` 只用于 Web-only 运行态，并要求清空上述四项微信服务端配置
+- `WECHAT_FORMAL_RUNTIME=1`、`WEB_PRIVATE_FEATURES_ENABLED=1` 且 `DEBUG=false`；正式服务器的 `WX_MINIPROGRAM_APPID`、`WX_MINIPROGRAM_SECRET`、`WX_MINIPROGRAM_OPENID_PEPPER`、`WX_MINIPROGRAM_SESSION_SECRET` 与 `ACCOUNT_LINK_CODE_PEPPER` 五项完整。前两个开关共同保留微信正式鉴权和网页版自身的登录、角色、CSRF 门禁。`WECHAT_FORMAL_RUNTIME=0` 只用于 Web-only 运行态，并要求清空上述五项微信服务端配置
 - `WX_MINIPROGRAM_PRIVACY_VERSION` 与本次提交的隐私说明版本一致，生效日期、目标 commit hash 和页面内容 hash 已同时冻结
 - `FEATURE_AUDIT_LOGS=0`，首发不持久化应用数据库安全审计日志；`FEATURE_STRUCTURED_LOGS=1`，保留经过正式运行态全局白名单处理的排障日志
 - `SENTRY_DSN` 为空、`SENTRY_TRACES_SAMPLE_RATE=0`、`SENTRY_SEND_PII=0`；正式微信运行态不接入第三方错误监控或性能追踪服务
@@ -164,7 +164,7 @@ python3 scripts/validate_release_env.py \
 - `WECHAT_REQUEST_DOMAIN` 固定记录微信后台 request 合法域名 `https://yilaoweather.org`，必须与冻结 HEAD 的公开 `API_BASE_URL` 完全一致。
 - `WX_MINIPROGRAM_PRIVACY_VERSION` 需要与小程序包内显示的隐私版本、服务器要求版本和平台隐私保护指引本次生效内容一致。隐私内容更新时先递增版本，再重新取得主动同意。
 - 登录的一般隐私同意与健康敏感个人信息单独同意分开记录。首次进入家人档案、筛查、日记、用药或家庭行动前必须显示默认不勾选的独立说明；服务器保存独立版本和 UTC 时间，拒绝、撤回或版本过期时私密路由返回 428，公开天气继续可用。
-- 正式微信运行态的 Web 家庭行动安全链接在 1.1.1 只显示停用说明；短码读取、链接兑换、家庭解析、天气构建以及确认行动、求助和复盘写入都会在触碰家庭资料前停止。查看和保存家庭行动只允许在小程序登录并完成健康敏感个人信息单独同意后执行。
+- 双端正式运行态允许登录后的网页版预报、工作台、健康工具与对应 API 继续经过原有登录、角色和 CSRF 门禁。Web 家庭行动安全链接在 1.1.1 仍只显示停用说明；短码读取、链接兑换、家庭解析、天气构建以及确认行动、求助和复盘写入都会在触碰家庭资料前停止。查看和保存家庭行动只允许在小程序登录并完成健康敏感个人信息单独同意后执行。
 - 家人档案只接受 18 至 120 岁成年人，用户在单独同意页确认已取得对方同意或具备其他合法管理权限。账号使用者年龄不采集、不推断。撤回入口位于“我的 → 健康资料授权管理”；撤回只清回执并关闭私密功能，已有资料继续按逐条删除或账号注销路径处理。
 - 小程序不请求微信手机号，也不调用微信手机号获取接口。手机号只可由网页用户主动填写，当前未发送短信验证码且状态为未验证，只作待验证跨端账号标识，1.1.1 不能用于网页登录或证明号码归属，不得填写为小程序采集的微信手机号。不同账号填写相同未验证号码不会互相获得资料，也不会阻断一次性绑定码；跨端绑定仍由用户名登录、当前密码复验和 8 位一次性码完成。
 - 跨端绑定由网页登录态发起。用户复验当前密码并确认跨端隐私说明后生成 8 位一次性绑定码，10 分钟内有效，明文只展示一次，服务器只保存不可逆哈希和必要状态。同一微信身份连续 5 次失败后锁定 10 分钟。绑定只接受没有照护数据的微信临时占位账号；成功后旧会话失效并签发新会话，占位账号随机化、标记失效，账号身份和事件引用去关联。

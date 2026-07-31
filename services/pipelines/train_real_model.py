@@ -16,6 +16,12 @@ import joblib
 import warnings
 import time
 from pathlib import Path
+
+if __package__:
+    from .feature_config_writer import write_feature_config
+else:
+    from feature_config_writer import write_feature_config
+
 warnings.filterwarnings('ignore')
 
 print("=" * 70)
@@ -295,15 +301,16 @@ joblib.dump(label_encoder, MODELS_DIR / 'label_encoder.pkl')
 joblib.dump(scaler, MODELS_DIR / 'scaler.pkl')
 
 # 保存特征列名
-import json
-with open(MODELS_DIR / 'feature_config.json', 'w', encoding='utf-8') as f:
-    json.dump({
+write_feature_config(
+    MODELS_DIR / 'feature_config.json',
+    {
         'feature_cols': feature_cols,
         'classes': list(label_encoder.classes_),
         'model_name': best_model_name,
         'accuracy': float(final_accuracy),
         'f1_score': float(final_f1)
-    }, f, ensure_ascii=False, indent=2)
+    },
+)
 
 print(f"  模型已保存到 {MODELS_DIR}/ 目录")
 

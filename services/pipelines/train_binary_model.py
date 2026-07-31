@@ -13,10 +13,15 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.svm import SVC
 from sklearn.metrics import classification_report, accuracy_score, f1_score, roc_auc_score
 import joblib
-import json
 import time
 import warnings
 from pathlib import Path
+
+if __package__:
+    from .feature_config_writer import write_feature_config
+else:
+    from feature_config_writer import write_feature_config
+
 warnings.filterwarnings('ignore')
 
 print("=" * 70)
@@ -227,8 +232,9 @@ joblib.dump(best_model, MODELS_DIR / 'disease_predictor.pkl')
 joblib.dump(label_encoder, MODELS_DIR / 'label_encoder.pkl')
 joblib.dump(scaler, MODELS_DIR / 'scaler.pkl')
 
-with open(MODELS_DIR / 'feature_config.json', 'w', encoding='utf-8') as f:
-    json.dump({
+write_feature_config(
+    MODELS_DIR / 'feature_config.json',
+    {
         'feature_cols': feature_cols,
         'classes': ['非呼吸系统疾病', '呼吸系统疾病'],
         'model_name': best_name,
@@ -236,7 +242,8 @@ with open(MODELS_DIR / 'feature_config.json', 'w', encoding='utf-8') as f:
         'f1_score': float(f1_score(y_test, y_pred)),
         'model_type': 'binary',
         'description': '高准确率二分类模型'
-    }, f, ensure_ascii=False, indent=2)
+    },
+)
 
 print("  模型已保存!")
 

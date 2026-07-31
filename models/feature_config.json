@@ -36,6 +36,23 @@
   "f1_score": 0.6417731832945053,
   "model_type": "multiclass",
   "description": "多分类疾病预测模型，包含天气因素",
+  "runtime_artifacts": {
+    "expected_sklearn_version": "1.7.2",
+    "files": {
+      "disease_predictor.pkl": {
+        "sha256": "2046af4d6296f1bdd7d758d7fd9c977ac17e1da0614cef545b4ec272ffedeef1",
+        "size_bytes": 19855905
+      },
+      "scaler.pkl": {
+        "sha256": "28fde53382871dfbfc1216473fcc4b47d03da6ad6de25bdc91c564a4c0c44af7",
+        "size_bytes": 959
+      },
+      "label_encoder.pkl": {
+        "sha256": "ec779b493604eebd5eaf1433043ab6ccdf9ef150469cda66907df835e6e157a7",
+        "size_bytes": 691
+      }
+    }
+  },
   "weather_features": [
     "tmean",
     "tmin",

@@ -19,11 +19,12 @@
 - [ ] `WX_MINIPROGRAM_PRIVACY_VERSION` 与小程序包、服务器要求版本和本次平台隐私保护指引一致。
 - [ ] 首发私密表单和候选服务器环境均显式固定 `FEATURE_AUDIT_LOGS=0` 与 `FEATURE_STRUCTURED_LOGS=1`；必要接口限流只临时处理不可逆 IP 哈希键，平台与文案没有把数据库审计日志描述为已开启。
 - [ ] 正式发布表单和候选服务器保持 `SENTRY_DSN` 为空，并显式固定 `SENTRY_TRACES_SAMPLE_RATE=0`、`SENTRY_SEND_PII=0`；正式微信运行态不向第三方错误监控或性能追踪服务发送应用日志、异常上下文、请求信息或用户资料。
-- [ ] 正式发布表单与候选服务器均显式设置 `WECHAT_FORMAL_RUNTIME=1`、`DEBUG=false`，四项微信服务端配置完整；没有把 Web-only 的 `WECHAT_FORMAL_RUNTIME=0` 与任何微信服务端配置混用。
+- [ ] 正式发布表单与候选服务器均显式设置 `WECHAT_FORMAL_RUNTIME=1`、`WEB_PRIVATE_FEATURES_ENABLED=1`、`DEBUG=false`，五项微信服务端配置完整；微信鉴权与网页版自身的登录、角色、CSRF 门禁同时生效，没有把 Web-only 的 `WECHAT_FORMAL_RUNTIME=0` 与任何微信服务端配置混用。
 - [ ] 所有材料复核完成后才设置 `WECHAT_FORM_READY=1`；微信正式部署同时设置 `DEPLOY_MODE=wechat_formal` 与 `DEPLOY_REQUIRE_WECHAT_READY=1`。
 - [ ] 如先部署网页和后端，显式使用 `DEPLOY_MODE=web_backend_only` 与 `DEPLOY_REQUIRE_WECHAT_READY=0`；该模式不读取微信表单，不替换或生成 AppID、AppSecret、OpenID pepper 和会话密钥，也不作为微信包就绪证据。旧正式环境只缺新字段时，服务器可 if-empty 生成独立的 `ACCOUNT_LINK_CODE_PEPPER`。
 - [ ] 两种远程模式都从干净 Git HEAD 导出不可变代码快照，并继续执行候选环境校验、备份、迁移、健康检查和回滚事务；模式与 ready 值不匹配、命令行与 `ENV_FILE` 模式冲突时均在 SSH 前停止。
 - [ ] 目标 commit 已推送到 `main` 或明确的 `codex/*` 发布分支；该分支当前 tip 仍等于目标 commit。最新 push 的 GitHub `CI` workflow 已生成 `可发布提交证明`，微信正式模式的 `Mini Program CI` 也已生成 `小程序可发布提交证明`。等待中、失败、取消、跳过、缺失或旧 run 均不能作为发布证明。
+- [ ] 私密部署环境已用 `ML_MODEL_ARTIFACT_DIR` 指向仓库外、非符号链接的模型目录；三个固定 `.pkl` 文件均为当前部署用户持有、单硬链接、权限 `0600` 的普通文件，并与冻结提交中记录的 SHA-256、大小和 scikit-learn 1.7.2 清单完全一致。模型明文没有进入 Git、CI artifact 或聊天；服务器运行态保持 `root:case-weather` 只读，独立激活与恢复路径也会在变更生产状态前复核收据和 commit。
 - [ ] 两份 workflow 使用 `requirements.lock` 与固定 SHA 的官方 Actions。512 MiB 服务器安装前满足总内存至少 450 MiB、可用内存至少 320 MiB、项目盘可用空间至少 2048 MiB和 inode 可用比例至少 10%；依赖安装只在 `MemoryHigh=192M`、`MemoryMax=256M`、无 swap、最长 15 分钟的 transient unit 内运行，失败时不激活、不停止旧服务且不自动重试。
 - [ ] 服务器发布前只运行 96 MiB、无 swap、无网络的低内存预检，不在旧生产服务仍运行时执行 Flask pytest。激活停服后已由单 worker 候选验证 ML 版本、QWeather 快照和公开风险页，正式 Gunicorn 同样固定为单 worker。
 - [ ] 候选环境已记录活动 `.env` 与 `current` 链接摘要；激活在取得部署锁后执行 CAS，并发部署或人工配置变化会停止陈旧候选，不会把新微信配置覆盖回旧值。
@@ -83,7 +84,7 @@
 ## 功能
 
 - [ ] 未登录也能看到都昌天气状态、预报、预警、行动建议、社区与避暑信息。
-- [ ] 正式微信运行态的 Web 家庭行动安全链接只显示停用说明；短码读取、链接兑换、家庭解析、天气构建与确认/求助/复盘 POST 均在触碰家庭资料前停止，页面提示前往小程序登录并完成健康资料单独同意。
+- [ ] 双端正式运行态允许登录后的网页版预报、工作台、健康工具和对应 API 继续使用原有登录、角色与 CSRF 门禁；公开 Web 家庭行动安全链接仍只显示停用说明，短码读取、链接兑换、家庭解析、天气构建与确认/求助/复盘 POST 均在触碰家庭资料前停止。
 - [ ] 微信登录成功；同一 OpenID 再次登录复用原内部账号，不同 OpenID 创建不同内部账号，账号 B 无法读取账号 A 的家人、日记、用药、评估或行动资料。
 - [ ] 公开天气、预警、社区、避暑资源和 GIS 对所有账号共享同一都昌县快照；公共内容相同不代表私有账号混用。
 - [ ] 成年家人新增、编辑、列表、停止管理和 owner 权限正确；17、121、空年龄、`1200` 与 `120.0` 被拒绝，18 与 120 被接受。

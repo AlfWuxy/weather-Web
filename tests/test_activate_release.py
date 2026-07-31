@@ -784,12 +784,14 @@ def _prepare_transaction(
     database_uri = f'sqlite:///{database_file.as_posix()}'
     (state_dir / '.env').write_text(
         f'DEBUG=true\nWECHAT_FORMAL_RUNTIME=0\n'
+        f'WEB_PRIVATE_FEATURES_ENABLED=0\n'
         f'RELEASE_VALUE=old\nDATABASE_URI={database_uri}\n',
         encoding='utf-8',
     )
     (state_dir / '.env').chmod(0o600)
     (new_release / 'staged.env').write_text(
         f'DEBUG=true\nWECHAT_FORMAL_RUNTIME=0\n'
+        f'WEB_PRIVATE_FEATURES_ENABLED=0\n'
         f'RELEASE_VALUE=new\nDATABASE_URI={database_uri}\n',
         encoding='utf-8',
     )
@@ -809,6 +811,7 @@ def _prepare_transaction(
     )
     (new_release / 'app' / 'scripts' / 'backup.sh').chmod(0o755)
     for script_name in (
+        'model_artifact.py',
         'verify_github_ci.py',
         'release_runtime_smoke.py',
     ):
@@ -845,6 +848,37 @@ def create_app(register_blueprints=False):
             values[key] = value
     return _ConfigApp(values)
 """,
+        encoding='utf-8',
+    )
+    model_payloads = {
+        'disease_predictor.pkl': b'activation-test-predictor\n',
+        'scaler.pkl': b'activation-test-scaler\n',
+        'label_encoder.pkl': b'activation-test-labels\n',
+    }
+    model_files = {
+        filename: {
+            'sha256': hashlib.sha256(payload).hexdigest(),
+            'size_bytes': len(payload),
+        }
+        for filename, payload in model_payloads.items()
+    }
+    model_dir = new_release / 'app' / 'models'
+    model_dir.mkdir(mode=0o750)
+    model_dir.chmod(0o750)
+    for filename, payload in model_payloads.items():
+        artifact = model_dir / filename
+        artifact.write_bytes(payload)
+        artifact.chmod(0o640)
+    (model_dir / 'feature_config.json').write_text(
+        json.dumps(
+            {
+                'runtime_artifacts': {
+                    'expected_sklearn_version': '1.7.2',
+                    'files': model_files,
+                },
+            },
+            ensure_ascii=False,
+        ),
         encoding='utf-8',
     )
     (core_dir / 'config.py').write_text(
@@ -909,6 +943,17 @@ exit {migration_exit}
     source_commit = new_release / 'private-metadata' / 'source-commit.txt'
     source_commit.write_text(FORMAL_COMMIT + '\n', encoding='utf-8')
     source_commit.chmod(0o600)
+    _write_private_json(
+        new_release / 'private-metadata' / 'model-artifacts.json',
+        {
+            'schema_version': 1,
+            'receipt_type': 'yilao-model-artifact-snapshot',
+            'status': 'passed',
+            'commit': FORMAL_COMMIT,
+            'expected_sklearn_version': '1.7.2',
+            'files': model_files,
+        },
+    )
     _write_ci_proof(
         new_release / 'private-metadata' / 'ci-proof.json',
         workflow='.github/workflows/ci.yml',
@@ -1071,6 +1116,8 @@ printf 't 2000000000\n'
         'FAKE_CANDIDATE_CONTRACT_FAILURE': candidate_contract_failure or '',
         'FAKE_PUBLIC_HEALTH_OK': '1' if public_health_ok else '0',
         'DEPLOY_INTENT': 'web_backend_only',
+        'EXPECTED_WECHAT_FORMAL_RUNTIME': '0',
+        'EXPECTED_WEB_PRIVATE_FEATURES_ENABLED': '0',
         'EXPECTED_RELEASE_COMMIT': FORMAL_COMMIT,
         'EXPECTED_RELEASE_BRANCH': TEST_RELEASE_BRANCH,
         'RUNTIME_USER': pwd.getpwuid(os.getuid()).pw_name,
@@ -1155,12 +1202,31 @@ def _write_candidate_base_state(transaction):
         return hashlib.sha256(canonical).hexdigest()
 
     active_content = active_env.read_bytes()
+    runtime_values = {}
+    for key in ('WECHAT_FORMAL_RUNTIME', 'WEB_PRIVATE_FEATURES_ENABLED'):
+        matches = []
+        for raw_line in active_content.decode('utf-8').splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith('#') or '=' not in raw_line:
+                continue
+            candidate_key, value = raw_line.split('=', 1)
+            if candidate_key.strip() == key:
+                matches.append(value.strip().strip('"').strip("'"))
+        if key == 'WEB_PRIVATE_FEATURES_ENABLED' and not matches:
+            matches = ['0']
+        if len(matches) != 1 or matches[0] not in {'0', '1'}:
+            raise AssertionError(f'{key} fixture must be explicit and unique')
+        runtime_values[key] = matches[0]
     payload = {
         'active_env_sha256': hashlib.sha256(active_content).hexdigest(),
         'current_link_state_sha256': hashlib.sha256(current_payload).hexdigest(),
         'deployment_intent': transaction['env']['DEPLOY_INTENT'],
         'qweather_config_sha256': qweather_hash(active_content),
-        'version': 2,
+        'wechat_formal_runtime': runtime_values['WECHAT_FORMAL_RUNTIME'],
+        'web_private_features_enabled': runtime_values[
+            'WEB_PRIVATE_FEATURES_ENABLED'
+        ],
+        'version': 3,
     }
     metadata = (
         transaction['new_release']
@@ -1250,6 +1316,7 @@ def _configure_formal_smoke(transaction, *, provider='QWeather'):
     transaction['qweather_final_key'] = private_key
     staged_text = f"""DEBUG=false
 WECHAT_FORMAL_RUNTIME=1
+WEB_PRIVATE_FEATURES_ENABLED=1
 RELEASE_VALUE=new
 QWEATHER_AUTH_MODE=jwt
 DATABASE_URI=sqlite:///{transaction['database_file'].as_posix()}
@@ -1284,6 +1351,8 @@ PUBLIC_BASE_URL=https://yilaoweather.org
     )
     transaction['env']['REQUIRE_WECHAT_READY'] = '1'
     transaction['env']['DEPLOY_INTENT'] = 'wechat_formal'
+    transaction['env']['EXPECTED_WECHAT_FORMAL_RUNTIME'] = '1'
+    transaction['env']['EXPECTED_WEB_PRIVATE_FEATURES_ENABLED'] = '1'
     transaction['env']['EXPECTED_RELEASE_COMMIT'] = FORMAL_COMMIT
     counter_file = transaction['state_dir'] / 'formal-smoke-request-count'
     transaction['env']['FAKE_FORMAL_SMOKE_COUNTER'] = str(counter_file)
@@ -1441,6 +1510,37 @@ PY
     return staged_text, counter_file
 
 
+def _configure_web_formal_mini_only(transaction):
+    """模拟已在线的 formal=1、双端网页关闭态做网页/后端升级。"""
+    staged_text, counter_file = _configure_formal_smoke(transaction)
+    staged_text = staged_text.replace(
+        'WEB_PRIVATE_FEATURES_ENABLED=1',
+        'WEB_PRIVATE_FEATURES_ENABLED=0',
+    )
+    staged_env = transaction['new_release'] / 'staged.env'
+    staged_env.write_text(staged_text, encoding='utf-8')
+
+    pending_key = transaction['qweather_pending_key']
+    final_key = transaction['qweather_final_key']
+    final_key.write_bytes(pending_key.read_bytes())
+    final_key.chmod(0o640)
+    pending_key.unlink()
+
+    active_text = staged_text.replace('RELEASE_VALUE=new', 'RELEASE_VALUE=old')
+    active_env = Path(transaction['env']['ENV_FILE'])
+    active_env.write_text(active_text, encoding='utf-8')
+    active_env.chmod(0o600)
+
+    transaction['env']['DEPLOY_INTENT'] = 'web_backend_only'
+    transaction['env']['REQUIRE_WECHAT_READY'] = '1'
+    transaction['env']['EXPECTED_WECHAT_FORMAL_RUNTIME'] = '1'
+    transaction['env']['EXPECTED_WEB_PRIVATE_FEATURES_ENABLED'] = '0'
+    transaction['env']['QWEATHER_PENDING_KEY_PATH'] = ''
+    transaction['env'].pop('FAKE_QWEATHER_KEY_STOP_AUDIT', None)
+    transaction['auto_stage_qweather_pending'] = False
+    return counter_file
+
+
 def _retarget_formal_retry(transaction, suffix='retry'):
     """用新的 release ID 重试同一冻结 commit，避免复用旧 pending 路径。"""
     source_release = transaction['new_release']
@@ -1513,7 +1613,7 @@ def test_stale_candidate_base_state_is_rejected_inside_activation_lock(
         / 'backups'
         / 'deploy-transactions'
     )
-    assert not list(transaction_root.iterdir())
+    assert not transaction_root.exists() or not list(transaction_root.iterdir())
 
 
 def test_web_backend_candidate_cannot_change_qweather_baseline(tmp_path):
@@ -1547,6 +1647,9 @@ def test_formal_runtime_cannot_be_downgraded_by_deploy_gate(tmp_path):
         staged_env.read_text(encoding='utf-8').replace(
             'WECHAT_FORMAL_RUNTIME=0',
             'WECHAT_FORMAL_RUNTIME=1',
+        ).replace(
+            'WEB_PRIVATE_FEATURES_ENABLED=0',
+            'WEB_PRIVATE_FEATURES_ENABLED=1',
         ),
         encoding='utf-8',
     )
@@ -1556,6 +1659,161 @@ def test_formal_runtime_cannot_be_downgraded_by_deploy_gate(tmp_path):
     assert result.returncode != 0
     assert '部署门禁与候选 WECHAT_FORMAL_RUNTIME 不一致' in result.stderr
     assert _database_value(transaction['database_file']) == 'old'
+
+
+def test_formal_activation_rejects_disabled_dual_web_before_mutation(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    _configure_formal_smoke(transaction)
+    staged_env = transaction['new_release'] / 'staged.env'
+    staged_env.write_text(
+        staged_env.read_text(encoding='utf-8').replace(
+            'WEB_PRIVATE_FEATURES_ENABLED=1',
+            'WEB_PRIVATE_FEATURES_ENABLED=0',
+        ),
+        encoding='utf-8',
+    )
+
+    result = _run_activation(transaction)
+
+    assert result.returncode != 0
+    assert '正式态与双端网页开关均为 1' in result.stderr
+    assert _database_value(transaction['database_file']) == 'old'
+    transaction_root = (
+        transaction['state_dir']
+        / 'backups'
+        / 'deploy-transactions'
+    )
+    assert not transaction_root.exists() or not list(transaction_root.iterdir())
+
+
+def test_web_backend_candidate_cannot_enable_dual_web_over_closed_base(
+    tmp_path,
+):
+    transaction = _prepare_transaction(tmp_path)
+    staged_env = transaction['new_release'] / 'staged.env'
+    staged_env.write_text(
+        staged_env.read_text(encoding='utf-8').replace(
+            'WEB_PRIVATE_FEATURES_ENABLED=0',
+            'WEB_PRIVATE_FEATURES_ENABLED=1',
+        ),
+        encoding='utf-8',
+    )
+    transaction['env']['EXPECTED_WEB_PRIVATE_FEATURES_ENABLED'] = '1'
+
+    result = _run_activation(transaction)
+
+    assert result.returncode != 0
+    assert '必须继承活动环境的正式态与双端网页开关' in result.stderr
+    assert _database_value(transaction['database_file']) == 'old'
+    transaction_root = (
+        transaction['state_dir']
+        / 'backups'
+        / 'deploy-transactions'
+    )
+    assert not transaction_root.exists() or not list(transaction_root.iterdir())
+
+
+@pytest.mark.parametrize(
+    'mutation',
+    ('missing', 'duplicate', 'invalid'),
+)
+def test_runtime_gate_rejects_non_unique_candidate_before_mutation(
+    tmp_path,
+    mutation,
+):
+    transaction = _prepare_transaction(tmp_path)
+    staged_env = transaction['new_release'] / 'staged.env'
+    staged_text = staged_env.read_text(encoding='utf-8')
+    if mutation == 'missing':
+        staged_text = staged_text.replace(
+            'WEB_PRIVATE_FEATURES_ENABLED=0\n',
+            '',
+        )
+    elif mutation == 'duplicate':
+        staged_text += 'WEB_PRIVATE_FEATURES_ENABLED=0\n'
+    else:
+        staged_text = staged_text.replace(
+            'WEB_PRIVATE_FEATURES_ENABLED=0',
+            'WEB_PRIVATE_FEATURES_ENABLED=yes',
+        )
+    staged_env.write_text(staged_text, encoding='utf-8')
+
+    result = _run_activation(transaction)
+
+    assert result.returncode != 0
+    assert '候选正式态、双端网页开关或活动基线不完整' in result.stderr
+    assert _database_value(transaction['database_file']) == 'old'
+    transaction_root = (
+        transaction['state_dir']
+        / 'backups'
+        / 'deploy-transactions'
+    )
+    assert not transaction_root.exists() or not list(transaction_root.iterdir())
+
+
+def test_activation_requires_explicit_runtime_gate_expectations(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    transaction['env'].pop('EXPECTED_WEB_PRIVATE_FEATURES_ENABLED')
+
+    result = _run_activation(transaction)
+
+    assert result.returncode != 0
+    assert (
+        'EXPECTED_WEB_PRIVATE_FEATURES_ENABLED 必须显式设置为 0 或 1'
+        in result.stderr
+    )
+    assert _database_value(transaction['database_file']) == 'old'
+    transaction_root = (
+        transaction['state_dir']
+        / 'backups'
+        / 'deploy-transactions'
+    )
+    assert not transaction_root.exists()
+
+
+@pytest.mark.parametrize(
+    ('migration_exit', 'expected_returncode'),
+    ((0, 0), (1, 1)),
+)
+def test_web_backend_formal_mini_only_can_activate_or_rollback(
+    tmp_path,
+    migration_exit,
+    expected_returncode,
+):
+    transaction = _prepare_transaction(
+        tmp_path,
+        migration_exit=migration_exit,
+    )
+    _configure_web_formal_mini_only(transaction)
+    if migration_exit == 0:
+        active_env = Path(transaction['env']['ENV_FILE'])
+        active_env.write_text(
+            active_env.read_text(encoding='utf-8').replace(
+                'WEB_PRIVATE_FEATURES_ENABLED=0\n',
+                '',
+            ),
+            encoding='utf-8',
+        )
+
+    result = _run_activation(transaction)
+
+    assert result.returncode == expected_returncode, result.stderr
+    if migration_exit == 0:
+        assert transaction['current_link'].resolve() == transaction[
+            'new_release'
+        ].resolve()
+        assert _database_value(transaction['database_file']) == 'new'
+        assert 'WEB_PRIVATE_FEATURES_ENABLED=0' in Path(
+            transaction['env']['ENV_FILE']
+        ).read_text(encoding='utf-8')
+    else:
+        assert transaction['current_link'].resolve() == transaction[
+            'old_release'
+        ].resolve()
+        assert _database_value(transaction['database_file']) == 'old'
+        assert 'WEB_PRIVATE_FEATURES_ENABLED=0' in Path(
+            transaction['env']['ENV_FILE']
+        ).read_text(encoding='utf-8')
 
 
 def test_success_switches_release_only_after_migration_and_health(tmp_path):
@@ -2076,12 +2334,14 @@ def test_invalid_backup_database_config_blocks_before_mutation(
         staged = (
             'DEBUG=true\n'
             'WECHAT_FORMAL_RUNTIME=0\n'
+            'WEB_PRIVATE_FEATURES_ENABLED=0\n'
             'RELEASE_VALUE=new\n'
         )
     else:
         staged = (
             'DEBUG=true\n'
             'WECHAT_FORMAL_RUNTIME=0\n'
+            'WEB_PRIVATE_FEATURES_ENABLED=0\n'
             'RELEASE_VALUE=new\n'
             f'DATABASE_URI={database_uri}\n'
             f'DATABASE_URI={database_uri}\n'
@@ -2108,6 +2368,7 @@ def test_external_database_path_is_rejected_before_runtime_mutation(tmp_path):
     (transaction['new_release'] / 'staged.env').write_text(
         f'DEBUG=true\n'
         f'WECHAT_FORMAL_RUNTIME=0\n'
+        f'WEB_PRIVATE_FEATURES_ENABLED=0\n'
         f'RELEASE_VALUE=new\n'
         f'DATABASE_URI=sqlite:///{external_database.as_posix()}\n',
         encoding='utf-8',
@@ -3076,6 +3337,7 @@ def test_formal_activation_rejects_release_commit_metadata_mismatch_before_mutat
     ('receipt_name', 'tamper_key', 'message'),
     (
         ('ci-proof.json', 'commit_sha', 'GitHub Python CI 收据'),
+        ('model-artifacts.json', 'commit', '模型制品收据'),
         ('runtime-smoke.json', 'commit_sha', '服务器低内存运行态收据'),
     ),
 )
@@ -3095,6 +3357,29 @@ def test_release_proof_mismatch_stops_before_any_activation_mutation(
 
     assert result.returncode != 0
     assert message in result.stderr
+    assert transaction['current_link'].resolve() == transaction['old_release'].resolve()
+    assert _database_value(transaction['database_file']) == 'old'
+    transaction_root = (
+        transaction['state_dir'] / 'backups' / 'deploy-transactions'
+    )
+    assert not transaction_root.exists()
+
+
+def test_model_artifact_tamper_stops_before_any_activation_mutation(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    artifact = (
+        transaction['new_release']
+        / 'app'
+        / 'models'
+        / 'scaler.pkl'
+    )
+    artifact.write_bytes(b'tampered-model\n')
+    artifact.chmod(0o640)
+
+    result = _run_activation(transaction)
+
+    assert result.returncode != 0
+    assert '模型制品收据或运行制品' in result.stderr
     assert transaction['current_link'].resolve() == transaction['old_release'].resolve()
     assert _database_value(transaction['database_file']) == 'old'
     transaction_root = (

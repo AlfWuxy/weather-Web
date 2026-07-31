@@ -187,11 +187,17 @@ def _write_env(tmp_path, extra=""):
         and "ACCOUNT_LINK_CODE_PEPPER=" not in extra
     ):
         extra += f"ACCOUNT_LINK_CODE_PEPPER={'l' * 32}\n"
+    if (
+        "WECHAT_FORMAL_RUNTIME=1" in extra
+        and "WEB_PRIVATE_FEATURES_ENABLED=" not in extra
+    ):
+        extra += "WEB_PRIVATE_FEATURES_ENABLED=1\n"
     path = tmp_path / ".env"
     path.write_text(
         "PUBLIC_BASE_URL=https://yilaoweather.org\n"
         "DEBUG=false\n"
         "WECHAT_FORMAL_RUNTIME=0\n"
+        "WEB_PRIVATE_FEATURES_ENABLED=0\n"
         "ACCOUNT_LINK_CODE_PEPPER=\n"
         "ALLOW_INSECURE_PUBLIC_BASE_URL=\n"
         "WXPUSHER_API_BASE=https://wxpusher.zjiecode.com/api\n"
@@ -256,6 +262,7 @@ def _write_wechat_release_form(tmp_path, **overrides):
         "WECHAT_EFFECTIVE_DATE": "2026-07-18",
         "WECHAT_REQUEST_DOMAIN": "https://yilaoweather.org",
         "WECHAT_FORMAL_RUNTIME": "1",
+        "WEB_PRIVATE_FEATURES_ENABLED": "1",
         "WECHAT_CATEGORY_CONFIRMED": "1",
         "WECHAT_CATEGORY_PATHS_JSON": '["生活服务/天气查询"]',
         "WECHAT_CATEGORY_QUALIFICATION_STATUS": "no_extra_institutional_qualification",
@@ -434,6 +441,36 @@ def test_validator_requires_explicit_runtime_and_keeps_web_only_credentials_empt
     assert missing_result["ok"] is False
     assert any("WECHAT_FORMAL_RUNTIME" in error for error in missing_result["errors"])
 
+    missing_web_private = _write_env(
+        tmp_path,
+        "WECHAT_FORMAL_RUNTIME=1\n"
+        "WX_MINIPROGRAM_APPID=wx123456\n"
+        "WX_MINIPROGRAM_SECRET=1234567890abcdef\n"
+        f"WX_MINIPROGRAM_OPENID_PEPPER={'p' * 32}\n"
+        f"WX_MINIPROGRAM_SESSION_SECRET={'s' * 32}\n",
+    )
+    missing_web_private.write_text(
+        missing_web_private.read_text(encoding="utf-8").replace(
+            "WEB_PRIVATE_FEATURES_ENABLED=1\n",
+            "",
+            1,
+        ).replace(
+            "WEB_PRIVATE_FEATURES_ENABLED=0\n",
+            "",
+            1,
+        ),
+        encoding="utf-8",
+    )
+    missing_web_private_result = validate_release_env(
+        missing_web_private,
+        require_wechat=False,
+    )
+    assert missing_web_private_result["ok"] is False
+    assert any(
+        "WEB_PRIVATE_FEATURES_ENABLED" in error
+        for error in missing_web_private_result["errors"]
+    )
+
     formal_without_credentials = _write_env(
         tmp_path,
         "WECHAT_FORMAL_RUNTIME=1\n",
@@ -580,6 +617,31 @@ def test_validator_requires_all_wechat_values_for_formal_release(tmp_path):
     ready_result = _validate_qweather_env(ready, require_wechat=True)
     assert ready_result["ok"] is True
     assert ready_result["wechat_ready"] is True
+
+
+def test_runtime_validator_allows_existing_formal_mini_only_closed_web_gate(
+    tmp_path,
+):
+    ready = _write_env(
+        tmp_path,
+        "WECHAT_FORMAL_RUNTIME=1\n"
+        "WEB_PRIVATE_FEATURES_ENABLED=0\n"
+        "WX_MINIPROGRAM_APPID=wx123456\n"
+        "WX_MINIPROGRAM_SECRET=1234567890abcdef\n"
+        f"WX_MINIPROGRAM_OPENID_PEPPER={'p' * 32}\n"
+        f"WX_MINIPROGRAM_SESSION_SECRET={'s' * 32}\n"
+        "FEATURE_HEAT_EXPOSURE_GIS=1\n"
+        + _formal_qweather_env(tmp_path),
+    )
+
+    result = _validate_qweather_env(ready, require_wechat=True)
+
+    assert result["ok"] is True
+    assert result["wechat_ready"] is True
+    assert not any(
+        "WEB_PRIVATE_FEATURES_ENABLED=1" in error
+        for error in result["errors"]
+    )
 
 
 def test_formal_validator_requires_jwt_and_matching_public_identifiers(tmp_path):
@@ -1748,6 +1810,7 @@ def test_wechat_release_template_defaults_appsecret_safety_gate_closed():
 
     assert "WECHAT_APPSECRET_PRODUCTION_SAFE_CONFIRMED=0" in template
     assert "WECHAT_FORMAL_RUNTIME=1" in template
+    assert "WEB_PRIVATE_FEATURES_ENABLED=1" in template
     for required_instruction in ("聊天", "日志", "截图", "轮换"):
         assert required_instruction in template
 

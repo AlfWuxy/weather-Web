@@ -112,6 +112,7 @@ WECHAT_FORM_REQUIRED_KEYS = (
     "WECHAT_EFFECTIVE_DATE",
     "WECHAT_REQUEST_DOMAIN",
     "WECHAT_FORMAL_RUNTIME",
+    "WEB_PRIVATE_FEATURES_ENABLED",
     "WX_MINIPROGRAM_APPID",
     "WX_MINIPROGRAM_SECRET",
     "WX_MINIPROGRAM_PRIVACY_VERSION",
@@ -1156,6 +1157,8 @@ def validate_wechat_release_form(
         errors.append("WECHAT_CATEGORY_CONFIRMED 只能是 0 或 1。")
     if values.get("WECHAT_FORMAL_RUNTIME", "") not in {"0", "1"}:
         errors.append("WECHAT_FORMAL_RUNTIME 只能是 0 或 1。")
+    if values.get("WEB_PRIVATE_FEATURES_ENABLED", "") not in {"0", "1"}:
+        errors.append("WEB_PRIVATE_FEATURES_ENABLED 只能是 0 或 1。")
     if values.get("FEATURE_HEAT_EXPOSURE_GIS", "") not in {"", "0", "1"}:
         errors.append("FEATURE_HEAT_EXPOSURE_GIS 只能是 0 或 1。")
     if values.get("FEATURE_WXPUSHER", "") not in {"", "0", "1"}:
@@ -1184,6 +1187,8 @@ def validate_wechat_release_form(
         errors.append("正式发布前必须将 WECHAT_FORM_READY 设为 1。")
     if must_be_complete and values.get("WECHAT_FORMAL_RUNTIME") != "1":
         errors.append("正式微信发布表单必须固定 WECHAT_FORMAL_RUNTIME=1。")
+    if must_be_complete and values.get("WEB_PRIVATE_FEATURES_ENABLED") != "1":
+        errors.append("双端正式发布必须固定 WEB_PRIVATE_FEATURES_ENABLED=1。")
     if must_be_complete and appsecret_production_safe != "1":
         errors.append(
             "正式发布前必须确认当前 AppSecret 未暴露或已完成轮换，并设置 "
@@ -1712,10 +1717,21 @@ def validate_release_env(
     errors = []
     warnings = []
     wechat_formal_runtime = values.get("WECHAT_FORMAL_RUNTIME", "")
+    web_private_features_enabled = values.get(
+        "WEB_PRIVATE_FEATURES_ENABLED",
+        "",
+    )
     debug_raw = values.get("DEBUG", "").strip().lower()
 
     if wechat_formal_runtime not in {"0", "1"}:
         errors.append("生产环境必须显式设置 WECHAT_FORMAL_RUNTIME=0 或 1。")
+    if web_private_features_enabled not in {"", "0", "1"}:
+        errors.append("WEB_PRIVATE_FEATURES_ENABLED 只能是 0 或 1。")
+    if wechat_formal_runtime == "1" and web_private_features_enabled == "":
+        errors.append(
+            "微信正式生产环境必须显式设置 "
+            "WEB_PRIVATE_FEATURES_ENABLED=0 或 1。"
+        )
     if wechat_formal_runtime == "1" and debug_raw not in {"false", "0"}:
         errors.append("WECHAT_FORMAL_RUNTIME=1 时必须显式设置 DEBUG=false。")
     if wechat_formal_runtime == "1":
@@ -1727,6 +1743,7 @@ def validate_release_env(
             errors.append("微信正式运行态必须固定 SENTRY_SEND_PII=0。")
     if require_wechat and wechat_formal_runtime != "1":
         errors.append("微信正式发布必须固定 WECHAT_FORMAL_RUNTIME=1。")
+    # 双端网页开关由发布意图门禁校验；已有 mini-only 正式态允许保持 0。
 
     public_base_url = values.get("PUBLIC_BASE_URL", "")
     parsed_public = urlparse(public_base_url)

@@ -41,6 +41,8 @@ unset DATABASE_URI
 RECOVERY_ACKNOWLEDGED_TRANSACTION="${RECOVERY_ACKNOWLEDGED_TRANSACTION:-}"
 REQUIRE_WECHAT_READY="${REQUIRE_WECHAT_READY:-0}"
 DEPLOY_INTENT="${DEPLOY_INTENT:-web_backend_only}"
+EXPECTED_WECHAT_FORMAL_RUNTIME="${EXPECTED_WECHAT_FORMAL_RUNTIME:-}"
+EXPECTED_WEB_PRIVATE_FEATURES_ENABLED="${EXPECTED_WEB_PRIVATE_FEATURES_ENABLED:-}"
 EXPECTED_RELEASE_COMMIT="${EXPECTED_RELEASE_COMMIT:-}"
 EXPECTED_RELEASE_BRANCH="${EXPECTED_RELEASE_BRANCH:-}"
 QWEATHER_BUDGET_SNAPSHOT_HELPER="${QWEATHER_BUDGET_SNAPSHOT_HELPER:-}"
@@ -60,6 +62,7 @@ VENV_DIR="$NEW_RELEASE/venv"
 CANDIDATE_BASE_STATE_FILE="$NEW_RELEASE/private-metadata/candidate-base-state.json"
 CI_PROOF_FILE="$NEW_RELEASE/private-metadata/ci-proof.json"
 MINIPROGRAM_CI_PROOF_FILE="$NEW_RELEASE/private-metadata/miniprogram-ci-proof.json"
+MODEL_ARTIFACT_RECEIPT_FILE="$NEW_RELEASE/private-metadata/model-artifacts.json"
 RUNTIME_SMOKE_RECEIPT_FILE="$NEW_RELEASE/private-metadata/runtime-smoke.json"
 RELEASE_ID="${NEW_RELEASE##*/}"
 TRANSACTION_ROOT="$STATE_DIR/backups/deploy-transactions"
@@ -4116,6 +4119,10 @@ QWEATHER_PROTECTED_KEYS = (
     'WEATHER_CACHE_TTL_MINUTES',
     'WEATHER_SYNC_LOCATIONS',
 )
+RUNTIME_GATE_KEYS = (
+    'WECHAT_FORMAL_RUNTIME',
+    'WEB_PRIVATE_FEATURES_ENABLED',
+)
 
 
 def fail():
@@ -4218,6 +4225,36 @@ def qweather_configuration_hash(payload):
     return hashlib.sha256(canonical).hexdigest()
 
 
+def runtime_gate_values(payload, *, allow_missing_web_private=False):
+    try:
+        text = payload.decode('utf-8')
+    except UnicodeDecodeError:
+        fail()
+    matches = {key: [] for key in RUNTIME_GATE_KEYS}
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith('#') or '=' not in raw_line:
+            continue
+        key, value = raw_line.split('=', 1)
+        key = key.strip()
+        if key in matches:
+            matches[key].append(value.strip().strip('"').strip("'"))
+    values = {}
+    for key in RUNTIME_GATE_KEYS:
+        candidates = matches[key]
+        if (
+            key == 'WEB_PRIVATE_FEATURES_ENABLED'
+            and not candidates
+            and allow_missing_web_private
+        ):
+            # 只兼容旧活动环境缺字段；候选环境仍必须显式且唯一。
+            candidates = ['0']
+        if len(candidates) != 1 or candidates[0] not in {'0', '1'}:
+            fail()
+        values[key] = candidates[0]
+    return values
+
+
 metadata_path = Path(sys.argv[1])
 active_env = Path(sys.argv[2])
 staged_env = Path(sys.argv[3])
@@ -4236,9 +4273,11 @@ if (
         'current_link_state_sha256',
         'deployment_intent',
         'qweather_config_sha256',
+        'wechat_formal_runtime',
+        'web_private_features_enabled',
         'version',
     }
-    or metadata.get('version') != 2
+    or metadata.get('version') != 3
     or not isinstance(metadata.get('active_env_sha256'), str)
     or not HASH_PATTERN.fullmatch(metadata['active_env_sha256'])
     or not isinstance(metadata.get('current_link_state_sha256'), str)
@@ -4247,25 +4286,37 @@ if (
     or deployment_intent not in {'web_backend_only', 'wechat_formal'}
     or not isinstance(metadata.get('qweather_config_sha256'), str)
     or not HASH_PATTERN.fullmatch(metadata['qweather_config_sha256'])
+    or metadata.get('wechat_formal_runtime') not in {'0', '1'}
+    or metadata.get('web_private_features_enabled') not in {'0', '1'}
 ):
     fail()
 active_content = read_regular_stably(active_env, MAX_ENV_BYTES)
+active_runtime_flags = runtime_gate_values(
+    active_content,
+    allow_missing_web_private=True,
+)
 if (
     hashlib.sha256(active_content).hexdigest()
     != metadata['active_env_sha256']
     or current_link_state(current_link)
     != metadata['current_link_state_sha256']
+    or active_runtime_flags['WECHAT_FORMAL_RUNTIME']
+    != metadata['wechat_formal_runtime']
+    or active_runtime_flags['WEB_PRIVATE_FEATURES_ENABLED']
+    != metadata['web_private_features_enabled']
 ):
     fail()
-if deployment_intent == 'web_backend_only' and (
-    qweather_configuration_hash(active_content)
-    != metadata['qweather_config_sha256']
-    or qweather_configuration_hash(
-        read_regular_stably(staged_env, MAX_ENV_BYTES)
-    )
-    != metadata['qweather_config_sha256']
-):
-    fail()
+if deployment_intent == 'web_backend_only':
+    staged_content = read_regular_stably(staged_env, MAX_ENV_BYTES)
+    staged_runtime_flags = runtime_gate_values(staged_content)
+    if (
+        qweather_configuration_hash(active_content)
+        != metadata['qweather_config_sha256']
+        or qweather_configuration_hash(staged_content)
+        != metadata['qweather_config_sha256']
+        or staged_runtime_flags != active_runtime_flags
+    ):
+        fail()
 PY
     then
         fail "候选配置基线已变化，请从最新活动环境重新创建发布"
@@ -4274,81 +4325,177 @@ PY
 }
 
 verify_effective_runtime_gate() {
+    local gate_state=""
+    local base_runtime=""
+    local base_web_private=""
     local staged_runtime=""
-    if ! staged_runtime="$("$VENV_DIR/bin/python" - "$STAGED_ENV_FILE" <<'PY'
+    local staged_web_private=""
+    if ! gate_state="$("$VENV_DIR/bin/python" - \
+        "$STAGED_ENV_FILE" \
+        "$CANDIDATE_BASE_STATE_FILE" \
+        "$DEPLOY_INTENT" <<'PY'
+import json
 import os
 from pathlib import Path
 import stat
 import sys
 
 
-path = Path(sys.argv[1])
-chunks = []
-total = 0
-descriptor = os.open(
-    path,
-    os.O_RDONLY | getattr(os, 'O_CLOEXEC', 0) | getattr(os, 'O_NOFOLLOW', 0),
-)
-try:
-    before = os.fstat(descriptor)
-    if not stat.S_ISREG(before.st_mode) or before.st_size > 1024 * 1024:
-        raise SystemExit(1)
-    while True:
-        chunk = os.read(descriptor, min(65536, 1024 * 1024 + 1 - total))
-        if not chunk:
-            break
-        chunks.append(chunk)
-        total += len(chunk)
-        if total > 1024 * 1024:
+def read_regular_stably(path, max_bytes):
+    descriptor = None
+    try:
+        path_before = path.lstat()
+        descriptor = os.open(
+            path,
+            os.O_RDONLY
+            | getattr(os, 'O_CLOEXEC', 0)
+            | getattr(os, 'O_NOFOLLOW', 0),
+        )
+        before = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(path_before.st_mode)
+            or not stat.S_ISREG(before.st_mode)
+            or stat.S_ISLNK(path_before.st_mode)
+            or before.st_size > max_bytes
+        ):
             raise SystemExit(1)
-    after = os.fstat(descriptor)
-finally:
-    os.close(descriptor)
+        chunks = []
+        total = 0
+        while True:
+            chunk = os.read(descriptor, min(65536, max_bytes + 1 - total))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            total += len(chunk)
+            if total > max_bytes:
+                raise SystemExit(1)
+        after = os.fstat(descriptor)
+        path_after = path.lstat()
+        fingerprint = lambda value: (
+            value.st_dev,
+            value.st_ino,
+            value.st_mode,
+            value.st_uid,
+            value.st_gid,
+            value.st_size,
+            value.st_mtime_ns,
+            value.st_ctime_ns,
+        )
+        if (
+            total != before.st_size
+            or fingerprint(path_before) != fingerprint(before)
+            or fingerprint(before) != fingerprint(after)
+            or fingerprint(after) != fingerprint(path_after)
+        ):
+            raise SystemExit(1)
+        return b''.join(chunks)
+    except OSError:
+        raise SystemExit(1) from None
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
+def runtime_gate_values(payload):
+    try:
+        text = payload.decode('utf-8')
+    except UnicodeDecodeError:
+        raise SystemExit(1) from None
+    matches = {
+        'WECHAT_FORMAL_RUNTIME': [],
+        'WEB_PRIVATE_FEATURES_ENABLED': [],
+    }
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith('#') or '=' not in raw_line:
+            continue
+        key, value = raw_line.split('=', 1)
+        normalized_key = key.strip()
+        if normalized_key in matches:
+            matches[normalized_key].append(
+                value.strip().strip('"').strip("'")
+            )
+    values = []
+    for key in ('WECHAT_FORMAL_RUNTIME', 'WEB_PRIVATE_FEATURES_ENABLED'):
+        candidates = matches[key]
+        if len(candidates) != 1 or candidates[0] not in {'0', '1'}:
+            raise SystemExit(1)
+        values.append(candidates[0])
+    return values
+
+
+staged_env = Path(sys.argv[1])
+metadata_path = Path(sys.argv[2])
+deployment_intent = sys.argv[3]
+try:
+    metadata = json.loads(
+        read_regular_stably(metadata_path, 4096).decode('utf-8')
+    )
+except (UnicodeDecodeError, ValueError, json.JSONDecodeError):
+    raise SystemExit(1) from None
+expected_keys = {
+    'active_env_sha256',
+    'current_link_state_sha256',
+    'deployment_intent',
+    'qweather_config_sha256',
+    'wechat_formal_runtime',
+    'web_private_features_enabled',
+    'version',
+}
 if (
-    total != before.st_size
-    or (
-        before.st_dev,
-        before.st_ino,
-        before.st_size,
-        before.st_mtime_ns,
-        before.st_ctime_ns,
-    )
-    != (
-        after.st_dev,
-        after.st_ino,
-        after.st_size,
-        after.st_mtime_ns,
-        after.st_ctime_ns,
-    )
+    not isinstance(metadata, dict)
+    or set(metadata) != expected_keys
+    or metadata.get('version') != 3
+    or metadata.get('deployment_intent') != deployment_intent
+    or metadata.get('wechat_formal_runtime') not in {'0', '1'}
+    or metadata.get('web_private_features_enabled') not in {'0', '1'}
 ):
     raise SystemExit(1)
-try:
-    text = b''.join(chunks).decode('utf-8')
-except UnicodeDecodeError:
-    raise SystemExit(1) from None
-matches = []
-for raw_line in text.splitlines():
-    line = raw_line.strip()
-    if not line or line.startswith('#') or '=' not in raw_line:
-        continue
-    key, value = raw_line.split('=', 1)
-    if key.strip() == 'WECHAT_FORMAL_RUNTIME':
-        matches.append(value.strip().strip('"').strip("'"))
-if len(matches) != 1 or matches[0] not in {'0', '1'}:
-    raise SystemExit(1)
-print(matches[0])
+staged_runtime, staged_web_private = runtime_gate_values(
+    read_regular_stably(staged_env, 1024 * 1024)
+)
+print(
+    ':'.join(
+        (
+            staged_runtime,
+            staged_web_private,
+            metadata['wechat_formal_runtime'],
+            metadata['web_private_features_enabled'],
+        )
+    )
+)
 PY
 )"; then
-        fail "无法从候选环境确定唯一的 WECHAT_FORMAL_RUNTIME"
+        fail "候选正式态、双端网页开关或活动基线不完整"
         return 1
     fi
+    IFS=: read -r \
+        staged_runtime \
+        staged_web_private \
+        base_runtime \
+        base_web_private <<< "$gate_state"
     if [ "$staged_runtime" != "$REQUIRE_WECHAT_READY" ]; then
         fail "部署门禁与候选 WECHAT_FORMAL_RUNTIME 不一致"
         return 1
     fi
-    if [ "$DEPLOY_INTENT" = wechat_formal ] \
-        && [ "$staged_runtime" != 1 ]; then
-        fail "微信正式部署候选必须保持正式运行态"
+    case "$DEPLOY_INTENT" in
+        wechat_formal)
+            if [ "$staged_runtime:$staged_web_private" != "1:1" ]; then
+                fail "微信正式部署候选必须保持正式态与双端网页开关均为 1"
+                return 1
+            fi
+            ;;
+        web_backend_only)
+            if [ "$staged_runtime:$staged_web_private" \
+                != "$base_runtime:$base_web_private" ]; then
+                fail "网页/后端发布必须继承活动环境的正式态与双端网页开关"
+                return 1
+            fi
+            ;;
+    esac
+    if [ "$staged_runtime" != "$EXPECTED_WECHAT_FORMAL_RUNTIME" ] \
+        || [ "$staged_web_private" != "$EXPECTED_WEB_PRIVATE_FEATURES_ENABLED" ]; then
+        fail "候选正式态与部署预期不一致"
         return 1
     fi
 }
@@ -4374,6 +4521,26 @@ validate_release_identity() {
     RELEASE_COMMIT="$metadata_commit"
     if [ "$REQUIRE_WECHAT_READY" = 1 ]; then
         FORMAL_RELEASE_COMMIT="$metadata_commit"
+    fi
+}
+
+validate_model_artifacts() {
+    local helper="$APP_DIR/scripts/model_artifact.py"
+    local manifest="$APP_DIR/models/feature_config.json"
+    require_file "$helper"
+    require_file "$manifest"
+    require_file "$MODEL_ARTIFACT_RECEIPT_FILE"
+    if ! "$VENV_DIR/bin/python" "$helper" verify \
+        --artifact-dir "$APP_DIR/models" \
+        --manifest "$manifest" \
+        --receipt "$MODEL_ARTIFACT_RECEIPT_FILE" \
+        --commit "$EXPECTED_RELEASE_COMMIT" \
+        --expected-owner "$CONTROL_OWNER_UID" \
+        --expected-group "$RUNTIME_GROUP" \
+        --expected-file-mode 0640 \
+        --expected-dir-mode 0750; then
+        fail "模型制品收据或运行制品与待激活 release 不一致"
+        return 1
     fi
 }
 
@@ -6310,6 +6477,20 @@ case "$DEPLOY_INTENT" in
     web_backend_only|wechat_formal) ;;
     *) echo 'DEPLOY_INTENT 必须是 web_backend_only 或 wechat_formal' >&2; exit 2 ;;
 esac
+case "$EXPECTED_WECHAT_FORMAL_RUNTIME" in
+    0|1) ;;
+    *)
+        echo 'EXPECTED_WECHAT_FORMAL_RUNTIME 必须显式设置为 0 或 1' >&2
+        exit 2
+        ;;
+esac
+case "$EXPECTED_WEB_PRIVATE_FEATURES_ENABLED" in
+    0|1) ;;
+    *)
+        echo 'EXPECTED_WEB_PRIVATE_FEATURES_ENABLED 必须显式设置为 0 或 1' >&2
+        exit 2
+        ;;
+esac
 if [[ ! "$EXPECTED_RELEASE_BRANCH" =~ ^(main|codex/[A-Za-z0-9._/-]+)$ ]] \
     || [[ "$EXPECTED_RELEASE_BRANCH" == *".."* ]]; then
     echo 'EXPECTED_RELEASE_BRANCH 只能是 main 或安全的 codex/* 分支' >&2
@@ -6399,6 +6580,7 @@ require_file "$UPTIME_FILE"
 verify_effective_runtime_gate
 validate_release_dependencies
 validate_release_identity
+validate_model_artifacts
 validate_release_proofs
 if [ -n "$INHERITED_DATABASE_FILE" ] || [ -n "$INHERITED_DATABASE_URI" ]; then
     echo '禁止继承 DATABASE_FILE 或 DATABASE_URI；数据库只能由冻结的候选配置决定' >&2

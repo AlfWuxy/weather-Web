@@ -31,6 +31,9 @@ LOCAL_QWEATHER_JWT_PRIVATE_KEY_SOURCE=""
 LOCAL_QWEATHER_JWT_PRIVATE_KEY_SNAPSHOT=""
 LOCAL_QWEATHER_JWT_PRIVATE_KEY_SHA256=""
 LOCAL_QWEATHER_JWT_PRIVATE_KEY_SIZE=""
+LOCAL_ML_MODEL_ARTIFACT_DIR=""
+LOCAL_ML_MODEL_ARTIFACT_SNAPSHOT_DIR=""
+LOCAL_ML_MODEL_ARTIFACT_RECEIPT=""
 LOCAL_ALLOW_WEATHER_UNAVAILABLE="${ALLOW_WEATHER_UNAVAILABLE:-}"
 LOCAL_AMAP_JS_API_KEY=""
 LOCAL_AMAP_WEB_SERVICE_KEY=""
@@ -47,6 +50,7 @@ LOCAL_WX_MINIPROGRAM_APPID=""
 LOCAL_WX_MINIPROGRAM_SECRET=""
 LOCAL_WX_MINIPROGRAM_PRIVACY_VERSION=""
 LOCAL_WECHAT_FORMAL_RUNTIME=""
+LOCAL_WEB_PRIVATE_FEATURES_ENABLED=""
 LOCAL_QWEATHER_DEDICATED_CREDENTIAL_CONFIRMED=""
 LOCAL_QWEATHER_CONSOLE_USAGE_MONTH=""
 LOCAL_QWEATHER_CONSOLE_USAGE_BASELINE=""
@@ -59,7 +63,7 @@ load_deploy_env() {
     while IFS='=' read -r key value; do
         case "$key" in
             ''|\#*) continue ;;
-            DEPLOY_SERVER|DEPLOY_USER|DEPLOY_PASSWORD|DEPLOY_PROJECT_DIR|DEPLOY_LOCAL_DIR|DEPLOY_RELEASE_ROOT|DEPLOY_RELEASE_ID|DEPLOY_MODE|DEPLOY_REQUIRE_WECHAT_READY|DEPLOY_RECOVERY_ACKNOWLEDGED_TRANSACTION|WECHAT_RELEASE_FORM_FILE|SSHPASS)
+            DEPLOY_SERVER|DEPLOY_USER|DEPLOY_PASSWORD|DEPLOY_PROJECT_DIR|DEPLOY_LOCAL_DIR|DEPLOY_RELEASE_ROOT|DEPLOY_RELEASE_ID|DEPLOY_MODE|DEPLOY_REQUIRE_WECHAT_READY|DEPLOY_RECOVERY_ACKNOWLEDGED_TRANSACTION|WECHAT_RELEASE_FORM_FILE|ML_MODEL_ARTIFACT_DIR|SSHPASS)
                 normalize_env_value "$value"
                 value="$NORMALIZED_ENV_VALUE"
                 if [ "$key" = "DEPLOY_MODE" ] \
@@ -81,13 +85,14 @@ load_deploy_env() {
 }
 
 load_deploy_env
+LOCAL_ML_MODEL_ARTIFACT_DIR="${ML_MODEL_ARTIFACT_DIR:-}"
 
 load_local_api_keys() {
     [ -f "$ENV_FILE" ] || return 0
     while IFS='=' read -r key value; do
         case "$key" in
             ''|\#*) continue ;;
-            QWEATHER_KEY|QWEATHER_API_BASE|QWEATHER_AUTH_MODE|QWEATHER_JWT_KID|QWEATHER_JWT_PROJECT_ID|QWEATHER_JWT_PRIVATE_KEY_PATH|QWEATHER_JWT_PRIVATE_KEY_SOURCE|ALLOW_WEATHER_UNAVAILABLE|AMAP_JS_API_KEY|AMAP_WEB_SERVICE_KEY|AMAP_SECURITY_JS_CODE|COOLING_COORDINATE_VERIFICATION_TTL_DAYS|FEATURE_AUDIT_LOGS|FEATURE_STRUCTURED_LOGS|FEATURE_WXPUSHER|WXPUSHER_APP_TOKEN|FEATURE_HEAT_EXPOSURE_GIS|PUBLIC_BASE_URL|ALLOW_INSECURE_PUBLIC_BASE_URL)
+            QWEATHER_KEY|QWEATHER_API_BASE|QWEATHER_AUTH_MODE|QWEATHER_JWT_KID|QWEATHER_JWT_PROJECT_ID|QWEATHER_JWT_PRIVATE_KEY_PATH|QWEATHER_JWT_PRIVATE_KEY_SOURCE|ALLOW_WEATHER_UNAVAILABLE|AMAP_JS_API_KEY|AMAP_WEB_SERVICE_KEY|AMAP_SECURITY_JS_CODE|COOLING_COORDINATE_VERIFICATION_TTL_DAYS|FEATURE_AUDIT_LOGS|FEATURE_STRUCTURED_LOGS|FEATURE_WXPUSHER|WXPUSHER_APP_TOKEN|FEATURE_HEAT_EXPOSURE_GIS|WEB_PRIVATE_FEATURES_ENABLED|PUBLIC_BASE_URL|ALLOW_INSECURE_PUBLIC_BASE_URL)
                 normalize_env_value "$value"
                 value="$NORMALIZED_ENV_VALUE"
                 case "$key" in
@@ -108,6 +113,7 @@ load_local_api_keys() {
                     FEATURE_WXPUSHER) LOCAL_FEATURE_WXPUSHER="$value" ;;
                     WXPUSHER_APP_TOKEN) LOCAL_WXPUSHER_APP_TOKEN="$value" ;;
                     FEATURE_HEAT_EXPOSURE_GIS) LOCAL_FEATURE_HEAT_EXPOSURE_GIS="$value" ;;
+                    WEB_PRIVATE_FEATURES_ENABLED) LOCAL_WEB_PRIVATE_FEATURES_ENABLED="$value" ;;
                     PUBLIC_BASE_URL) LOCAL_PUBLIC_BASE_URL="$value" ;;
                     ALLOW_INSECURE_PUBLIC_BASE_URL) LOCAL_ALLOW_INSECURE_PUBLIC_BASE_URL="$value" ;;
                 esac
@@ -124,12 +130,13 @@ load_wechat_release_form() {
     while IFS='=' read -r key value; do
         case "$key" in
             ''|\#*) continue ;;
-            WECHAT_FORM_READY|WECHAT_FORMAL_RUNTIME|WX_MINIPROGRAM_APPID|WX_MINIPROGRAM_SECRET|WX_MINIPROGRAM_PRIVACY_VERSION|FEATURE_AUDIT_LOGS|FEATURE_STRUCTURED_LOGS|FEATURE_WXPUSHER|WXPUSHER_APP_TOKEN|FEATURE_HEAT_EXPOSURE_GIS|QWEATHER_DEDICATED_CREDENTIAL_CONFIRMED|QWEATHER_CONSOLE_USAGE_MONTH|QWEATHER_CONSOLE_USAGE_BASELINE|QWEATHER_EXPECTED_PROJECT_ID|QWEATHER_EXPECTED_KID)
+            WECHAT_FORM_READY|WECHAT_FORMAL_RUNTIME|WEB_PRIVATE_FEATURES_ENABLED|WX_MINIPROGRAM_APPID|WX_MINIPROGRAM_SECRET|WX_MINIPROGRAM_PRIVACY_VERSION|FEATURE_AUDIT_LOGS|FEATURE_STRUCTURED_LOGS|FEATURE_WXPUSHER|WXPUSHER_APP_TOKEN|FEATURE_HEAT_EXPOSURE_GIS|QWEATHER_DEDICATED_CREDENTIAL_CONFIRMED|QWEATHER_CONSOLE_USAGE_MONTH|QWEATHER_CONSOLE_USAGE_BASELINE|QWEATHER_EXPECTED_PROJECT_ID|QWEATHER_EXPECTED_KID)
                 normalize_env_value "$value"
                 value="$NORMALIZED_ENV_VALUE"
                 case "$key" in
                     WECHAT_FORM_READY) LOCAL_WECHAT_FORM_READY="$value" ;;
                     WECHAT_FORMAL_RUNTIME) LOCAL_WECHAT_FORMAL_RUNTIME="$value" ;;
+                    WEB_PRIVATE_FEATURES_ENABLED) LOCAL_WEB_PRIVATE_FEATURES_ENABLED="$value" ;;
                     WX_MINIPROGRAM_APPID) LOCAL_WX_MINIPROGRAM_APPID="$value" ;;
                     WX_MINIPROGRAM_SECRET) LOCAL_WX_MINIPROGRAM_SECRET="$value" ;;
                     WX_MINIPROGRAM_PRIVACY_VERSION) LOCAL_WX_MINIPROGRAM_PRIVACY_VERSION="$value" ;;
@@ -173,6 +180,8 @@ LOCAL_CI_PROOF_FILE=""
 LOCAL_MINIPROGRAM_CI_PROOF_FILE=""
 FORMAL_WECHAT_CONFIG_ALLOWED="0"
 EFFECTIVE_REQUIRE_WECHAT_READY=""
+EXPECTED_WECHAT_FORMAL_RUNTIME=""
+EXPECTED_WEB_PRIVATE_FEATURES_ENABLED=""
 RUNTIME_USER="case-weather"
 RUNTIME_GROUP="case-weather"
 REMOTE_QWEATHER_PRIVATE_DIR="$PROJECT_DIR/private"
@@ -224,6 +233,8 @@ if [ "$DEPLOY_MODE" = "web_backend_only" ]; then
     LOCAL_QWEATHER_JWT_PRIVATE_KEY_SHA256=""
     LOCAL_QWEATHER_JWT_PRIVATE_KEY_SIZE=""
     LOCAL_ALLOW_WEATHER_UNAVAILABLE=""
+    # 网页/后端发布只能继承服务器当前双端路由策略，本机值不得改写候选。
+    LOCAL_WEB_PRIVATE_FEATURES_ENABLED=""
 fi
 
 # 退出时清理本地临时快照；若私钥仍处于预激活阶段，同时触发服务端身份绑定归档。
@@ -263,6 +274,7 @@ fi
 VERIFIED_COMMIT_FILE="$LOCAL_DEPLOY_TEMP_DIR/verified-commit"
 LOCAL_CI_PROOF_FILE="$LOCAL_DEPLOY_TEMP_DIR/ci-proof.json"
 LOCAL_MINIPROGRAM_CI_PROOF_FILE="$LOCAL_DEPLOY_TEMP_DIR/miniprogram-ci-proof.json"
+LOCAL_ML_MODEL_ARTIFACT_RECEIPT="$LOCAL_DEPLOY_TEMP_DIR/model-artifacts.json"
 
 # 网页/后端独立发布同样只接受干净 Git HEAD，并生成本轮私有 commit 票据。
 freeze_web_backend_commit() {
@@ -323,6 +335,10 @@ if [ "$DEPLOY_MODE" = "wechat_formal" ]; then
         echo "微信正式发布必须固定 WECHAT_FORMAL_RUNTIME=1。" >&2
         exit 64
     fi
+    if [ "$LOCAL_WEB_PRIVATE_FEATURES_ENABLED" != "1" ]; then
+        echo "双端正式发布必须固定 WEB_PRIVATE_FEATURES_ENABLED=1。" >&2
+        exit 64
+    fi
     if [ "$LOCAL_FEATURE_STRUCTURED_LOGS" != "1" ]; then
         echo "微信正式发布必须固定 FEATURE_STRUCTURED_LOGS=1。" >&2
         exit 64
@@ -330,6 +346,12 @@ if [ "$DEPLOY_MODE" = "wechat_formal" ]; then
     FORMAL_WECHAT_CONFIG_ALLOWED="1"
 else
     freeze_web_backend_commit
+fi
+if [ -n "$LOCAL_WEB_PRIVATE_FEATURES_ENABLED" ] \
+    && [ "$LOCAL_WEB_PRIVATE_FEATURES_ENABLED" != "0" ] \
+    && [ "$LOCAL_WEB_PRIVATE_FEATURES_ENABLED" != "1" ]; then
+    echo "WEB_PRIVATE_FEATURES_ENABLED 只能是 0 或 1。" >&2
+    exit 64
 fi
 if { [ -n "$LOCAL_WX_MINIPROGRAM_APPID" ] && [ -z "$LOCAL_WX_MINIPROGRAM_SECRET" ]; } \
     || { [ -z "$LOCAL_WX_MINIPROGRAM_APPID" ] && [ -n "$LOCAL_WX_MINIPROGRAM_SECRET" ]; }; then
@@ -394,6 +416,7 @@ require_env_value() {
 
 require_env_value "DEPLOY_SERVER" "$SERVER"
 require_env_value "DEPLOY_USER" "$USER"
+require_env_value "ML_MODEL_ARTIFACT_DIR" "$LOCAL_ML_MODEL_ARTIFACT_DIR"
 
 # 私钥算法校验只读取已固定到本轮私有临时目录的快照。
 validate_qweather_jwt_private_key_snapshot() {
@@ -778,6 +801,23 @@ prepare_release_source() {
     RELEASE_SOURCE_DIR="$LOCAL_RELEASE_EXPORT_DIR"
 }
 
+prepare_model_artifacts() {
+    local helper="$RELEASE_SOURCE_DIR/scripts/model_artifact.py"
+    local manifest="$RELEASE_SOURCE_DIR/models/feature_config.json"
+    LOCAL_ML_MODEL_ARTIFACT_SNAPSHOT_DIR="$LOCAL_DEPLOY_TEMP_DIR/model-artifacts"
+
+    if [ ! -f "$helper" ] || [ ! -f "$manifest" ]; then
+        echo "冻结发布快照缺少模型制品校验器或清单。" >&2
+        exit 64
+    fi
+    python3 "$helper" snapshot \
+        --source-dir "$LOCAL_ML_MODEL_ARTIFACT_DIR" \
+        --manifest "$manifest" \
+        --output-dir "$LOCAL_ML_MODEL_ARTIFACT_SNAPSHOT_DIR" \
+        --receipt "$LOCAL_ML_MODEL_ARTIFACT_RECEIPT" \
+        --commit "$VERIFIED_COMMIT"
+}
+
 verify_github_release_proofs() {
     local verifier="$RELEASE_SOURCE_DIR/scripts/verify_github_ci.py"
     if [ ! -f "$verifier" ]; then
@@ -803,6 +843,7 @@ verify_github_release_proofs() {
 }
 
 prepare_release_source
+prepare_model_artifacts
 verify_github_release_proofs
 
 if [ -z "${SSHPASS:-}" ] && [ -n "$PASSWORD" ]; then
@@ -865,26 +906,26 @@ remote_exec_with_file_stdin() {
     ssh $SSH_OPTS "$USER@$SERVER" "$remote_command" < "$local_file"
 }
 
-# CI 收据只通过 stdin 进入新 release 的 root 私有 metadata。
+# 发布收据只通过 stdin 进入新 release 的 root 私有 metadata。
 upload_private_metadata_receipt() {
     local local_file="$1"
     local remote_name="$2"
     case "$remote_name" in
-        ci-proof.json|miniprogram-ci-proof.json) ;;
+        ci-proof.json|miniprogram-ci-proof.json|model-artifacts.json) ;;
         *)
             echo "私有发布收据文件名不在允许清单中。" >&2
             exit 64
             ;;
     esac
     if [ ! -f "$local_file" ]; then
-        echo "本机缺少待上传的 CI 收据: $remote_name" >&2
+        echo "本机缺少待上传的发布收据: $remote_name" >&2
         exit 64
     fi
     remote_exec_with_file_stdin "$local_file" "set -eu
 umask 077
 TARGET=$NEW_RELEASE/private-metadata/$remote_name
 [ ! -e \"\$TARGET\" ] && [ ! -L \"\$TARGET\" ] || {
-    echo '候选 CI 收据目标已存在，拒绝覆盖。' >&2
+    echo '候选发布收据目标已存在，拒绝覆盖。' >&2
     exit 1
 }
 cat > \"\$TARGET\"
@@ -2085,6 +2126,10 @@ QWEATHER_PROTECTED_KEYS = (
     'WEATHER_CACHE_TTL_MINUTES',
     'WEATHER_SYNC_LOCATIONS',
 )
+RUNTIME_GATE_KEYS = (
+    'WECHAT_FORMAL_RUNTIME',
+    'WEB_PRIVATE_FEATURES_ENABLED',
+)
 
 
 def fail():
@@ -2187,6 +2232,36 @@ def qweather_configuration_hash(payload):
     return hashlib.sha256(canonical).hexdigest()
 
 
+def runtime_gate_values(payload, *, allow_missing_web_private=False):
+    try:
+        text = payload.decode('utf-8')
+    except UnicodeDecodeError:
+        fail()
+    matches = {key: [] for key in RUNTIME_GATE_KEYS}
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith('#') or '=' not in raw_line:
+            continue
+        key, value = raw_line.split('=', 1)
+        key = key.strip()
+        if key in matches:
+            matches[key].append(value.strip().strip('"').strip("'"))
+    values = {}
+    for key in RUNTIME_GATE_KEYS:
+        candidates = matches[key]
+        if (
+            key == 'WEB_PRIVATE_FEATURES_ENABLED'
+            and not candidates
+            and allow_missing_web_private
+        ):
+            # 旧活动环境缺少新开关时按关闭态冻结，首次升级不得扩大访问面。
+            candidates = ['0']
+        if len(candidates) != 1 or candidates[0] not in {'0', '1'}:
+            fail()
+        values[key] = candidates[0]
+    return values
+
+
 def create_private_file(path, payload):
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, 'O_CLOEXEC', 0)
     descriptor = None
@@ -2225,6 +2300,10 @@ if not stat.S_ISDIR(metadata_stat.st_mode) or stat.S_ISLNK(metadata_stat.st_mode
 active_content = read_regular_stably(active_env)
 active_hash = hashlib.sha256(active_content).hexdigest()
 qweather_hash = qweather_configuration_hash(active_content)
+runtime_flags = runtime_gate_values(
+    active_content,
+    allow_missing_web_private=True,
+)
 current_hash = current_link_state(current_link)
 created = []
 try:
@@ -2240,7 +2319,11 @@ try:
         'current_link_state_sha256': current_hash,
         'deployment_intent': deployment_intent,
         'qweather_config_sha256': qweather_hash,
-        'version': 2,
+        'wechat_formal_runtime': runtime_flags['WECHAT_FORMAL_RUNTIME'],
+        'web_private_features_enabled': runtime_flags[
+            'WEB_PRIVATE_FEATURES_ENABLED'
+        ],
+        'version': 3,
     }
     metadata_payload = (
         json.dumps(metadata, sort_keys=True, separators=(',', ':')) + '\n'
@@ -2507,39 +2590,52 @@ try:
     text = content.decode('utf-8')
 except UnicodeDecodeError:
     raise SystemExit(64) from None
-matches = []
+matches = {
+    'WECHAT_FORMAL_RUNTIME': [],
+    'WEB_PRIVATE_FEATURES_ENABLED': [],
+}
 for raw_line in text.splitlines():
     line = raw_line.strip()
     if not line or line.startswith('#') or '=' not in raw_line:
         continue
     key, value = raw_line.split('=', 1)
-    if key.strip() == 'WECHAT_FORMAL_RUNTIME':
-        matches.append(value.strip().strip('"').strip("'"))
-if len(matches) != 1 or matches[0] not in {'0', '1'}:
-    raise SystemExit(64)
-print(matches[0])
+    normalized_key = key.strip()
+    if normalized_key in matches:
+        matches[normalized_key].append(value.strip().strip('"').strip("'"))
+values = []
+for key in ('WECHAT_FORMAL_RUNTIME', 'WEB_PRIVATE_FEATURES_ENABLED'):
+    candidates = matches[key]
+    if len(candidates) != 1 or candidates[0] not in {'0', '1'}:
+        raise SystemExit(64)
+    values.append(candidates[0])
+print(':'.join(values))
 PY
 }
 
 resolve_effective_formal_runtime() {
-    local source runtime
+    local source runtime_flags
     source="$(candidate_runtime_reader_source)"
-    if ! runtime="$(remote_exec "python3 /dev/fd/4 '$STAGED_ENV_FILE' 4<<'CANDIDATE_RUNTIME_READER_PY'
+    if ! runtime_flags="$(remote_exec "python3 /dev/fd/4 '$STAGED_ENV_FILE' 4<<'CANDIDATE_RUNTIME_READER_PY'
 $source
 CANDIDATE_RUNTIME_READER_PY")"; then
-        echo "无法从候选环境确定 WECHAT_FORMAL_RUNTIME。" >&2
+        echo "无法从候选环境确定唯一的正式态与双端网页开关。" >&2
         exit 64
     fi
-    case "$runtime" in
-        0|1) EFFECTIVE_REQUIRE_WECHAT_READY="$runtime" ;;
+    case "$runtime_flags" in
+        0:0|0:1|1:0|1:1)
+            EXPECTED_WECHAT_FORMAL_RUNTIME="${runtime_flags%%:*}"
+            EXPECTED_WEB_PRIVATE_FEATURES_ENABLED="${runtime_flags#*:}"
+            EFFECTIVE_REQUIRE_WECHAT_READY="$EXPECTED_WECHAT_FORMAL_RUNTIME"
+            ;;
         *)
-            echo "候选环境的 WECHAT_FORMAL_RUNTIME 输出异常。" >&2
+            echo "候选环境的正式态与双端网页开关输出异常。" >&2
             exit 64
             ;;
     esac
     if [ "$DEPLOY_MODE" = "wechat_formal" ] \
-        && [ "$EFFECTIVE_REQUIRE_WECHAT_READY" != "1" ]; then
-        echo "微信正式部署候选必须保持 WECHAT_FORMAL_RUNTIME=1。" >&2
+        && { [ "$EXPECTED_WECHAT_FORMAL_RUNTIME" != "1" ] \
+            || [ "$EXPECTED_WEB_PRIVATE_FEATURES_ENABLED" != "1" ]; }; then
+        echo "微信正式部署候选必须保持正式态与双端网页开关均为 1。" >&2
         exit 64
     fi
 }
@@ -2556,6 +2652,7 @@ upload_files() {
             --exclude 'health_weather.db' \
             --exclude 'data/research/*.xlsx' \
             --exclude 'data/research/*.xls' \
+            --exclude 'models/*.pkl' \
             --exclude '.git' \
             --exclude '.claude' \
             --exclude 'venv' \
@@ -2584,7 +2681,42 @@ upload_files() {
         return 64
     fi
 
-    rsync -avz --exclude '__pycache__' --exclude '*.pyc' --exclude 'instance' --exclude 'storage' --exclude 'health_weather.db' --exclude 'data/research/*.xlsx' --exclude 'data/research/*.xls' --exclude '.git' --exclude '.claude' --exclude 'venv' --exclude '.venv' --exclude '.venv2' --exclude '.env*' --exclude '.secrets/' --exclude '*.pem' --exclude '*.key' --exclude 'project.private.config.json' --exclude '.superpowers' --exclude '.pytest_cache' --exclude '.playwright-cli' --exclude '.vscode' --exclude '.DS_Store' --exclude 'backups' --exclude 'tmp' --exclude 'output' --exclude 'blueprints/tools 2.py' -e "ssh $SSH_OPTS" "$RELEASE_SOURCE_DIR/" "$USER@$SERVER:$remote_target/"
+    rsync -avz --exclude '__pycache__' --exclude '*.pyc' --exclude 'instance' --exclude 'storage' --exclude 'health_weather.db' --exclude 'data/research/*.xlsx' --exclude 'data/research/*.xls' --exclude 'models/*.pkl' --exclude '.git' --exclude '.claude' --exclude 'venv' --exclude '.venv' --exclude '.venv2' --exclude '.env*' --exclude '.secrets/' --exclude '*.pem' --exclude '*.key' --exclude 'project.private.config.json' --exclude '.superpowers' --exclude '.pytest_cache' --exclude '.playwright-cli' --exclude '.vscode' --exclude '.DS_Store' --exclude 'backups' --exclude 'tmp' --exclude 'output' --exclude 'blueprints/tools 2.py' -e "ssh $SSH_OPTS" "$RELEASE_SOURCE_DIR/" "$USER@$SERVER:$remote_target/"
+}
+
+upload_model_artifacts() {
+    local model_name=""
+    local model_file=""
+
+    remote_exec "set -eu
+[ -d $RELEASE_APP/models ] && [ ! -L $RELEASE_APP/models ] || {
+    echo '候选 release 的 models 目录状态异常。' >&2
+    exit 1
+}
+chown root:root $RELEASE_APP/models
+chmod 0700 $RELEASE_APP/models"
+
+    for model_name in disease_predictor.pkl scaler.pkl label_encoder.pkl; do
+        model_file="$LOCAL_ML_MODEL_ARTIFACT_SNAPSHOT_DIR/$model_name"
+        if [ ! -f "$model_file" ] || [ -L "$model_file" ]; then
+            echo "本轮模型制品快照缺失或类型异常: $model_name" >&2
+            exit 64
+        fi
+        remote_exec_with_file_stdin "$model_file" "set -eu
+umask 077
+TARGET=$RELEASE_APP/models/$model_name
+[ ! -e \"\$TARGET\" ] && [ ! -L \"\$TARGET\" ] || {
+    echo '候选模型制品目标已存在，拒绝覆盖。' >&2
+    exit 1
+}
+cat > \"\$TARGET\"
+chown root:root \"\$TARGET\"
+chmod 0600 \"\$TARGET\""
+    done
+
+    remote_exec "python3 $RELEASE_APP/scripts/model_artifact.py verify \
+        --artifact-dir $RELEASE_APP/models \
+        --manifest $RELEASE_APP/models/feature_config.json"
 }
 
 echo "步骤1: 测试服务器连接..."
@@ -2615,6 +2747,7 @@ reconcile_qweather_preactivation_transactions
 remote_exec "if [ -e $NEW_RELEASE ]; then echo '发布 ID 已存在，拒绝覆盖不可变版本: $NEW_RELEASE' >&2; exit 1; fi; mkdir -p $RELEASE_APP $NEW_RELEASE/systemd"
 upload_files "$RELEASE_APP"
 remote_exec "ln -s $PROJECT_DIR/instance $RELEASE_APP/instance && ln -s $PROJECT_DIR/storage $RELEASE_APP/storage && ln -s $PROJECT_DIR/backups $RELEASE_APP/backups"
+upload_model_artifacts
 if [ "$FORMAL_WECHAT_CONFIG_ALLOWED" = "1" ]; then
     # 在写入正式候选凭据前检查完整 Nginx 配置，失败时不产生敏感候选状态。
     remote_exec "python3 $RELEASE_APP/scripts/verify_runtime_log_boundary.py --active-nginx"
@@ -2635,6 +2768,7 @@ if [ ! -f $PROJECT_DIR/.env ]; then SECRET_KEY_GEN=\$(python3 -c 'import secrets
 FLASK_ENV=production
 DEBUG=false
 WECHAT_FORMAL_RUNTIME=0
+WEB_PRIVATE_FEATURES_ENABLED=0
 SECRET_KEY=\$SECRET_KEY_GEN
 PAIR_TOKEN_PEPPER=\$PAIR_TOKEN_PEPPER_GEN
 DATABASE_URI=sqlite:///health_weather.db
@@ -2716,6 +2850,7 @@ remote_env_update "SILICONFLOW_API_BASE" "https://api.siliconflow.cn/v1" "always
 remote_env_update "DISPATCH_LOCK_PATH" "$PROJECT_DIR/run/case-weather-dispatch.lock" "always"
 remote_env_update "FEATURE_HEAT_EXPOSURE_GIS" "0" "if-empty"
 remote_env_update "WECHAT_FORMAL_RUNTIME" "0" "if-empty"
+remote_env_update "WEB_PRIVATE_FEATURES_ENABLED" "0" "if-empty"
 remote_env_update "WX_MINIPROGRAM_PRIVACY_VERSION" "2026-07-21" "if-empty"
 
 echo ""
@@ -2765,6 +2900,10 @@ if [ -n "$LOCAL_COOLING_COORDINATE_VERIFICATION_TTL_DAYS" ]; then
 fi
 if [ -n "$LOCAL_FEATURE_HEAT_EXPOSURE_GIS" ]; then
     remote_env_update "FEATURE_HEAT_EXPOSURE_GIS" "$LOCAL_FEATURE_HEAT_EXPOSURE_GIS" "always"
+fi
+if [ "$DEPLOY_MODE" = "wechat_formal" ] \
+    && [ -n "$LOCAL_WEB_PRIVATE_FEATURES_ENABLED" ]; then
+    remote_env_update "WEB_PRIVATE_FEATURES_ENABLED" "$LOCAL_WEB_PRIVATE_FEATURES_ENABLED" "always"
 fi
 backfill_account_link_pepper_for_existing_formal_runtime
 # 只有同一次验证快照同时满足 require=1 与 ready=1，才允许写入正式凭据。
@@ -2881,6 +3020,9 @@ remote_exec "$RELEASE_VENV/bin/python $RELEASE_APP/scripts/validate_release_env.
 # commit 只含十六进制字符。微信正式模式会由激活脚本再次核对；
 # 网页/后端模式保留同样的来源审计记录，但不会把它冒充微信 ready 票据。
 remote_exec "umask 077; printf '%s\n' '$VERIFIED_COMMIT' > $NEW_RELEASE/private-metadata/source-commit.txt; chmod 0600 $NEW_RELEASE/private-metadata/source-commit.txt"
+upload_private_metadata_receipt \
+    "$LOCAL_ML_MODEL_ARTIFACT_RECEIPT" \
+    "model-artifacts.json"
 upload_private_metadata_receipt "$LOCAL_CI_PROOF_FILE" "ci-proof.json"
 if [ "$DEPLOY_MODE" = "wechat_formal" ]; then
     upload_private_metadata_receipt \
@@ -2909,6 +3051,15 @@ chown root:$RUNTIME_GROUP $NEW_RELEASE
 chmod 0750 $NEW_RELEASE
 chown -R root:$RUNTIME_GROUP $RELEASE_APP $RELEASE_VENV
 chmod -R g+rX,o-rwx $RELEASE_APP $RELEASE_VENV
+$RELEASE_VENV/bin/python $RELEASE_APP/scripts/model_artifact.py verify \
+    --artifact-dir $RELEASE_APP/models \
+    --manifest $RELEASE_APP/models/feature_config.json \
+    --receipt $NEW_RELEASE/private-metadata/model-artifacts.json \
+    --commit $VERIFIED_COMMIT \
+    --expected-owner root \
+    --expected-group $RUNTIME_GROUP \
+    --expected-file-mode 0640 \
+    --expected-dir-mode 0750
 install -d -o $RUNTIME_USER -g $RUNTIME_GROUP -m 0700 \"\$PREFLIGHT_ROOT\" \"\$PREFLIGHT_HOME\" \"\$PREFLIGHT_TMP\" \"\$PREFLIGHT_PYCACHE\"
 
 systemd-run --quiet --wait --collect --service-type=exec \
@@ -3367,6 +3518,7 @@ chown -R root:root $NEW_RELEASE/private-metadata
 chmod -R u=rwX,go= $NEW_RELEASE/private-metadata
 for PRIVATE_RECEIPT in \
     $NEW_RELEASE/private-metadata/ci-proof.json \
+    $NEW_RELEASE/private-metadata/model-artifacts.json \
     $NEW_RELEASE/private-metadata/runtime-smoke.json \
     $NEW_RELEASE/private-metadata/source-commit.txt; do
     [ \"\$(stat -c '%u:%g:%a' \"\$PRIVATE_RECEIPT\")\" = '0:0:600' ] || {
@@ -3396,7 +3548,7 @@ if [ "$EFFECTIVE_REQUIRE_WECHAT_READY" = "1" ]; then
     remote_exec "python3 $RELEASE_APP/scripts/verify_runtime_log_boundary.py --active-nginx"
 fi
 ACTIVATION_EXPECTED_RELEASE_COMMIT="$VERIFIED_COMMIT"
-if remote_exec "STATE_DIR=$PROJECT_DIR RELEASE_ROOT=$RELEASE_ROOT NEW_RELEASE=$NEW_RELEASE CURRENT_LINK=$CURRENT_LINK ENV_FILE=$PROJECT_DIR/.env STAGED_ENV_FILE=$STAGED_ENV_FILE HEALTH_URL=http://127.0.0.1:5000/healthz DEPLOY_INTENT=$DEPLOY_MODE REQUIRE_WECHAT_READY=$EFFECTIVE_REQUIRE_WECHAT_READY EXPECTED_RELEASE_COMMIT=$ACTIVATION_EXPECTED_RELEASE_COMMIT EXPECTED_RELEASE_BRANCH=$VERIFIED_RELEASE_BRANCH RECOVERY_ACKNOWLEDGED_TRANSACTION=$RECOVERY_ACKNOWLEDGED_TRANSACTION RUNTIME_USER=$RUNTIME_USER RUNTIME_GROUP=$RUNTIME_GROUP QWEATHER_PENDING_KEY_PATH=$ACTIVATION_QWEATHER_PENDING_KEY_PATH bash $RELEASE_APP/scripts/activate_release.sh"; then
+if remote_exec "STATE_DIR=$PROJECT_DIR RELEASE_ROOT=$RELEASE_ROOT NEW_RELEASE=$NEW_RELEASE CURRENT_LINK=$CURRENT_LINK ENV_FILE=$PROJECT_DIR/.env STAGED_ENV_FILE=$STAGED_ENV_FILE HEALTH_URL=http://127.0.0.1:5000/healthz DEPLOY_INTENT=$DEPLOY_MODE REQUIRE_WECHAT_READY=$EFFECTIVE_REQUIRE_WECHAT_READY EXPECTED_WECHAT_FORMAL_RUNTIME=$EXPECTED_WECHAT_FORMAL_RUNTIME EXPECTED_WEB_PRIVATE_FEATURES_ENABLED=$EXPECTED_WEB_PRIVATE_FEATURES_ENABLED EXPECTED_RELEASE_COMMIT=$ACTIVATION_EXPECTED_RELEASE_COMMIT EXPECTED_RELEASE_BRANCH=$VERIFIED_RELEASE_BRANCH RECOVERY_ACKNOWLEDGED_TRANSACTION=$RECOVERY_ACKNOWLEDGED_TRANSACTION RUNTIME_USER=$RUNTIME_USER RUNTIME_GROUP=$RUNTIME_GROUP QWEATHER_PENDING_KEY_PATH=$ACTIVATION_QWEATHER_PENDING_KEY_PATH bash $RELEASE_APP/scripts/activate_release.sh"; then
     # 激活事务已消费或精确复用 pending，并负责后续回滚/向前恢复；本地 EXIT 不再介入。
     REMOTE_QWEATHER_PREACTIVATION_ACTIVE="0"
 else
