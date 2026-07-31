@@ -43,13 +43,84 @@ _RISK_ALIASES = {
     "严重": "extreme",
     "extreme": "extreme",
 }
-_FALLBACK_TEMPLATE = {
-    "id": "dc-general-fallback",
-    "risk_level": "low",
-    "weather_tags": ["general"],
-    "audience": "family_group",
-    "message": "今天方便时问问家里老人，水、常用药和电话是否都在手边。",
-    "follow_up_question": "谁方便联系一下？",
+_FALLBACK_TEMPLATES = (
+    {
+        "id": "dc-general-fallback-01",
+        "risk_level": "low",
+        "weather_tags": ["general"],
+        "audience": "family_group",
+        "message": "今天方便时问问家里老人，水、常用药和电话是否都在手边。",
+        "follow_up_question": "谁方便联系一下？",
+    },
+    {
+        "id": "dc-general-fallback-02",
+        "risk_level": "low",
+        "weather_tags": ["general"],
+        "audience": "family_group",
+        "message": "今天问问家里老人有没有按时吃饭、喝水，下午也记得休息。",
+        "follow_up_question": "谁晚点再确认一次？",
+    },
+    {
+        "id": "dc-general-fallback-03",
+        "risk_level": "low",
+        "weather_tags": ["general"],
+        "audience": "family_group",
+        "message": "今天帮家里老人看看室内是否舒服，需要时调整风扇、空调或窗户。",
+        "follow_up_question": "现在方便看一下吗？",
+    },
+    {
+        "id": "dc-general-fallback-04",
+        "risk_level": "low",
+        "weather_tags": ["general"],
+        "audience": "family_group",
+        "message": "今天问清家里老人是否要出门，需要的话提前安排陪同和接送。",
+        "follow_up_question": "谁可以帮忙安排？",
+    },
+    {
+        "id": "dc-general-fallback-05",
+        "risk_level": "low",
+        "weather_tags": ["general"],
+        "audience": "family_group",
+        "message": "今天提醒家里老人，有头晕、胸闷或明显不舒服时要马上告诉家人。",
+        "follow_up_question": "电话现在能打通吗？",
+    },
+)
+_FAMILY_FOLLOW_UP_VARIANTS = (
+    "谁方便先联系一下？",
+    "你现在方便回一句吗？",
+    "今天谁负责晚点再问？",
+    "水和手机都在手边吗？",
+    "需要我帮你准备什么吗？",
+    "现在身边有人吗？",
+    "晚饭前能再回一句吗？",
+    "谁可以顺路去看一下？",
+    "电话现在能打通吗？",
+    "今天准备几点休息？",
+    "有不舒服请马上告诉我好吗？",
+    "今天还需要出门吗？",
+    "家里现在舒服吗？",
+    "常用物品都放好了吗？",
+    "谁来确认今天的安排？",
+    "你先完成哪一件？",
+    "下午我们再联系一次好吗？",
+    "现在最需要帮忙的是什么？",
+    "门窗和电器都检查了吗？",
+    "今天有人陪着吗？",
+    "需要我帮你叫人过去吗？",
+    "手机电量够用吗？",
+    "明天还要我继续提醒吗？",
+    "完成后告诉我一声好吗？",
+)
+_FAMILY_ROTATION_SIZE = 5
+_FAMILY_ROTATION_DAYS = (
+    _FAMILY_ROTATION_SIZE * len(_FAMILY_FOLLOW_UP_VARIANTS)
+)
+_FAMILY_ROTATION_ANCHOR = date(2026, 1, 1).toordinal()
+_PRIMARY_WEATHER_TAGS = ("storm", "heat", "cold", "rain", "general")
+_SHAREABLE_AUDIENCES = {
+    "older_adult",
+    "family_caregiver",
+    "family_group",
 }
 
 
@@ -167,14 +238,32 @@ def load_action_reminder_templates() -> tuple[dict, ...]:
             for index, item in enumerate(raw_templates)
         )
         ids = [item["id"] for item in templates]
+        messages = [item["message"] for item in templates]
         if len(templates) < 100:
             raise ValueError("提醒模板少于 100 条")
         if len(ids) != len(set(ids)):
             raise ValueError("提醒模板 ID 重复")
+        if len(messages) != len(set(messages)):
+            raise ValueError("提醒模板正文重复")
+        if any(len(item["weather_tags"]) != 1 for item in templates):
+            raise ValueError("提醒模板必须只属于一个天气场景")
+        for risk_level in sorted(_VALID_RISK_LEVELS):
+            for weather_tag in sorted(_VALID_WEATHER_TAGS):
+                shareable = [
+                    item
+                    for item in templates
+                    if item["risk_level"] == risk_level
+                    and item["weather_tags"] == [weather_tag]
+                    and item["audience"] in _SHAREABLE_AUDIENCES
+                ]
+                if len(shareable) != _FAMILY_ROTATION_SIZE:
+                    raise ValueError(
+                        "每个风险天气场景必须恰有 5 条家庭可分享提醒"
+                    )
         return templates
     except (OSError, ValueError, json.JSONDecodeError):
         logger.exception("今日行动提醒模板加载失败，使用内置安全提醒")
-        return (dict(_FALLBACK_TEMPLATE),)
+        return tuple(dict(item) for item in _FALLBACK_TEMPLATES)
 
 
 def _duchang_date_key(value=None) -> str:
@@ -220,18 +309,26 @@ def select_action_reminder(
         if str(tag).strip() in _VALID_WEATHER_TAGS
     ] or ["general"]
 
+    primary_weather_tag = next(
+        (
+            tag
+            for tag in _PRIMARY_WEATHER_TAGS
+            if tag in normalized_tags
+        ),
+        "general",
+    )
     exact = [
         item
         for item in templates
         if item["risk_level"] == normalized_risk
         and item["audience"] == normalized_audience
-        and set(item["weather_tags"]).intersection(normalized_tags)
+        and primary_weather_tag in item["weather_tags"]
     ]
     same_context = [
         item
         for item in templates
         if item["risk_level"] == normalized_risk
-        and set(item["weather_tags"]).intersection(normalized_tags)
+        and primary_weather_tag in item["weather_tags"]
     ]
     shareable_context = [
         item
@@ -247,30 +344,47 @@ def select_action_reminder(
     ]
     # 家庭群复制入口允许轮换“对老人说”和“请家属做”两类短句，
     # 这样同一风险场景也能每天变化，同时避开仅适合邻里志愿者的措辞。
+    day_key = _duchang_date_key(date_value)
+    day_ordinal = date.fromisoformat(day_key).toordinal()
     if normalized_audience == "family_group":
-        candidates = (
-            shareable_context
-            or exact
-            or same_context
-            or same_risk_general
-            or list(templates)
+        candidates = sorted(
+            (
+                shareable_context
+                or same_risk_general
+                or list(templates)
+            ),
+            key=lambda item: item["id"],
         )
+        if len(candidates) < _FAMILY_ROTATION_SIZE:
+            candidates = [dict(item) for item in _FALLBACK_TEMPLATES]
+        # 日期槽位独立于天气上下文，任意场景变化下仍保持 120 天不撞词。
+        day_slot = (
+            day_ordinal - _FAMILY_ROTATION_ANCHOR
+        ) % _FAMILY_ROTATION_DAYS
+        message_index = day_slot % _FAMILY_ROTATION_SIZE
+        question_index = day_slot // _FAMILY_ROTATION_SIZE
+        selected = candidates[message_index]
+        follow_up_question = _FAMILY_FOLLOW_UP_VARIANTS[question_index]
+        reminder_id = f"{selected['id']}-q{question_index + 1:02d}"
     else:
         candidates = exact or same_context or same_risk_general or list(templates)
-    day_key = _duchang_date_key(date_value)
-    context_seed = "|".join(
-        (
-            normalized_risk,
-            ",".join(sorted(normalized_tags)),
-            normalized_audience,
+        context_seed = "|".join(
+            (
+                normalized_risk,
+                ",".join(sorted(normalized_tags)),
+                normalized_audience,
+            )
         )
-    )
-    digest = hashlib.sha256(context_seed.encode("utf-8")).digest()
-    context_offset = int.from_bytes(digest[:8], "big")
-    day_ordinal = date.fromisoformat(day_key).toordinal()
-    selected = candidates[(day_ordinal + context_offset) % len(candidates)]
+        digest = hashlib.sha256(context_seed.encode("utf-8")).digest()
+        context_offset = int.from_bytes(digest[:8], "big")
+        selected = candidates[(day_ordinal + context_offset) % len(candidates)]
+        follow_up_question = selected["follow_up_question"]
+        reminder_id = selected["id"]
     return {
         **selected,
+        "id": reminder_id,
+        "template_id": selected["id"],
+        "follow_up_question": follow_up_question,
         "date": day_key,
-        "text": f"{selected['message']}\n{selected['follow_up_question']}",
+        "text": f"{selected['message']}\n{follow_up_question}",
     }
