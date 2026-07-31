@@ -67,6 +67,28 @@ def _write_executable(path, content):
     path.chmod(0o755)
 
 
+def _rematerialize_fixture_file(candidate):
+    """把平台生成的测试文件收敛为独立 inode 与安全权限。"""
+    file_info = candidate.lstat()
+    assert stat.S_ISREG(file_info.st_mode)
+    descriptor, detached_name = tempfile.mkstemp(
+        prefix=f'.{candidate.name}.detached-',
+        dir=candidate.parent,
+    )
+    os.close(descriptor)
+    detached = Path(detached_name)
+    try:
+        shutil.copyfile(candidate, detached, follow_symlinks=False)
+        detached.chmod(stat.S_IMODE(file_info.st_mode) & ~0o022)
+        os.replace(detached, candidate)
+    finally:
+        detached.unlink(missing_ok=True)
+    normalized = candidate.lstat()
+    assert stat.S_ISREG(normalized.st_mode)
+    assert normalized.st_nlink == 1
+    assert not normalized.st_mode & (stat.S_IWGRP | stat.S_IWOTH)
+
+
 def _create_reusable_release_base(base, trusted_python_entry):
     release_root = base / 'deploy'
     old_release = release_root / 'releases' / 'old'
@@ -231,6 +253,8 @@ def _copy_reusable_release(reusable_release_base, tmp_path):
     current = copied_root / 'current'
     current.unlink()
     old_release = copied_root / 'releases' / 'old'
+    # GitHub runner 的 PowerShell 激活脚本偶有 inode 或权限差异，仅归一化测试副本。
+    _rematerialize_fixture_file(old_release / 'venv' / 'bin' / 'Activate.ps1')
     current.symlink_to(old_release)
     return {
         'release_root': copied_root,
@@ -243,6 +267,22 @@ def _copy_reusable_release(reusable_release_base, tmp_path):
             'trusted_python_entry'
         ],
     }
+
+
+def test_rematerialize_fixture_file_preserves_content_and_hardens_mode(tmp_path):
+    source = tmp_path / 'source.txt'
+    candidate = tmp_path / 'candidate.txt'
+    source.write_text('fixture\n', encoding='utf-8')
+    source.chmod(0o660)
+    os.link(source, candidate)
+
+    _rematerialize_fixture_file(candidate)
+
+    assert candidate.read_text(encoding='utf-8') == 'fixture\n'
+    assert source.read_text(encoding='utf-8') == 'fixture\n'
+    assert candidate.stat().st_nlink == 1
+    assert source.stat().st_nlink == 1
+    assert stat.S_IMODE(candidate.stat().st_mode) == 0o640
 
 
 def _run_reuse_installer(fixture):
