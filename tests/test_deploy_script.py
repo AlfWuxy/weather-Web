@@ -490,6 +490,51 @@ def test_inherited_formal_runtime_forces_sentry_privacy_before_validation():
         assert inherited_guard < content.index(update) < validation
 
 
+def test_effective_formal_runtime_prepares_and_uploads_miniprogram_proof():
+    content = _load_deploy_script()
+    helper_start = content.index("verify_miniprogram_release_proof() {")
+    helper_end = content.index("\n}\n", helper_start)
+    helper = content[helper_start:helper_end]
+    proof_bundle_start = content.index("verify_github_release_proofs() {")
+    proof_bundle_end = content.index("\n}\n", proof_bundle_start)
+    proof_bundle = content[proof_bundle_start:proof_bundle_end]
+    first_remote = content.index('remote_exec "echo \'连接成功\'"')
+    resolve = content.index("\nresolve_effective_formal_runtime\n")
+    inherited_guard = content.index(
+        'if [ "$EFFECTIVE_REQUIRE_WECHAT_READY" = "1" ]; then',
+        resolve,
+    )
+    validation = content.index(
+        'remote_exec "python3 $RELEASE_APP/scripts/validate_release_env.py '
+        '--file $STAGED_ENV_FILE',
+        inherited_guard,
+    )
+    upload_guard = content.index(
+        'if [ "$EFFECTIVE_REQUIRE_WECHAT_READY" = "1" ]; then',
+        validation,
+    )
+    upload = content.index(
+        '"miniprogram-ci-proof.json"',
+        upload_guard,
+    )
+
+    assert '--workflow .github/workflows/miniprogram.yml' in helper
+    assert '--proof-job "小程序可发布提交证明"' in helper
+    assert content.count("verify_miniprogram_release_proof") == 2
+    assert "verify_miniprogram_release_proof" in proof_bundle
+    assert content.index("\nverify_github_release_proofs\n") < first_remote
+    assert "verify_miniprogram_release_proof" not in content[
+        inherited_guard:validation
+    ]
+    assert upload_guard < upload
+    assert "if [ '$EFFECTIVE_REQUIRE_WECHAT_READY' = 1 ]; then" in content
+    assert "if [ '$DEPLOY_MODE' = wechat_formal ]; then" not in content
+    assert (
+        'if [ "$DEPLOY_MODE" = "wechat_formal" ]; then\n'
+        '    upload_private_metadata_receipt'
+    ) not in content
+
+
 def test_formal_deploy_requires_nginx_access_log_off_before_activation():
     content = _load_deploy_script()
     verification = 'python3 $RELEASE_APP/scripts/verify_runtime_log_boundary.py --active-nginx'
@@ -822,6 +867,10 @@ def test_exact_commit_ci_proof_is_verified_before_first_ssh():
         content.index('verify_github_release_proofs() {'):
         content.index('\nprepare_release_source\n')
     ]
+    proof_helpers = content[
+        content.index('verify_miniprogram_release_proof() {'):
+        content.index('\nprepare_release_source\n')
+    ]
 
     assert proof_call < first_remote_call
     assert proof_call < first_rsync
@@ -830,9 +879,10 @@ def test_exact_commit_ci_proof_is_verified_before_first_ssh():
     assert '--commit "$VERIFIED_COMMIT"' in verifier
     assert '--branch "$VERIFIED_RELEASE_BRANCH"' in verifier
     assert '--proof-job "可发布提交证明"' in verifier
-    assert '--workflow .github/workflows/miniprogram.yml' in verifier
-    assert '--proof-job "小程序可发布提交证明"' in verifier
-    assert 'if [ "$DEPLOY_MODE" = "wechat_formal" ]; then' in verifier
+    assert '--workflow .github/workflows/miniprogram.yml' in proof_helpers
+    assert '--proof-job "小程序可发布提交证明"' in proof_helpers
+    assert 'verify_miniprogram_release_proof' in verifier
+    assert 'if [ "$DEPLOY_MODE" = "wechat_formal" ]; then' not in verifier
     assert 'main|codex/*' in content
     assert 'symbolic-ref --quiet --short HEAD' in content
 

@@ -818,6 +818,24 @@ prepare_model_artifacts() {
         --commit "$VERIFIED_COMMIT"
 }
 
+verify_miniprogram_release_proof() {
+    local verifier="$RELEASE_SOURCE_DIR/scripts/verify_github_ci.py"
+    if [ ! -f "$verifier" ]; then
+        echo "冻结发布快照缺少 GitHub CI 校验器。" >&2
+        exit 64
+    fi
+    if [ -s "$LOCAL_MINIPROGRAM_CI_PROOF_FILE" ]; then
+        return 0
+    fi
+    python3 "$verifier" verify-online \
+        --repo AlfWuxy/weather-Web \
+        --workflow .github/workflows/miniprogram.yml \
+        --commit "$VERIFIED_COMMIT" \
+        --branch "$VERIFIED_RELEASE_BRANCH" \
+        --proof-job "小程序可发布提交证明" \
+        --output "$LOCAL_MINIPROGRAM_CI_PROOF_FILE"
+}
+
 verify_github_release_proofs() {
     local verifier="$RELEASE_SOURCE_DIR/scripts/verify_github_ci.py"
     if [ ! -f "$verifier" ]; then
@@ -831,15 +849,9 @@ verify_github_release_proofs() {
         --branch "$VERIFIED_RELEASE_BRANCH" \
         --proof-job "可发布提交证明" \
         --output "$LOCAL_CI_PROOF_FILE"
-    if [ "$DEPLOY_MODE" = "wechat_formal" ]; then
-        python3 "$verifier" verify-online \
-            --repo AlfWuxy/weather-Web \
-            --workflow .github/workflows/miniprogram.yml \
-            --commit "$VERIFIED_COMMIT" \
-            --branch "$VERIFIED_RELEASE_BRANCH" \
-            --proof-job "小程序可发布提交证明" \
-            --output "$LOCAL_MINIPROGRAM_CI_PROOF_FILE"
-    fi
+    # 两种发布模式都在首次 SSH 前冻结同一提交的小程序证明；
+    # 候选有效正式态再决定是否上传并强制激活复核。
+    verify_miniprogram_release_proof
 }
 
 prepare_release_source
@@ -3017,14 +3029,13 @@ systemd-run --quiet --wait --pipe --collect --service-type=exec \
         $NEW_RELEASE/private-metadata \
         c7e450c30d7d3c56bdf210f69a58620cba9d99e462e0e2c254ab45456271f853"
 remote_exec "$RELEASE_VENV/bin/python $RELEASE_APP/scripts/validate_release_env.py --file $STAGED_ENV_FILE --require-wechat $EFFECTIVE_REQUIRE_WECHAT_READY --require-weather-ready $REMOTE_QWEATHER_VALIDATION_PENDING_ARG --probe-persistent-budget"
-# commit 只含十六进制字符。微信正式模式会由激活脚本再次核对；
-# 网页/后端模式保留同样的来源审计记录，但不会把它冒充微信 ready 票据。
+# commit 只含十六进制字符。有效正式运行态会由激活脚本再次核对两份 CI 收据。
 remote_exec "umask 077; printf '%s\n' '$VERIFIED_COMMIT' > $NEW_RELEASE/private-metadata/source-commit.txt; chmod 0600 $NEW_RELEASE/private-metadata/source-commit.txt"
 upload_private_metadata_receipt \
     "$LOCAL_ML_MODEL_ARTIFACT_RECEIPT" \
     "model-artifacts.json"
 upload_private_metadata_receipt "$LOCAL_CI_PROOF_FILE" "ci-proof.json"
-if [ "$DEPLOY_MODE" = "wechat_formal" ]; then
+if [ "$EFFECTIVE_REQUIRE_WECHAT_READY" = "1" ]; then
     upload_private_metadata_receipt \
         "$LOCAL_MINIPROGRAM_CI_PROOF_FILE" \
         "miniprogram-ci-proof.json"
@@ -3526,7 +3537,7 @@ for PRIVATE_RECEIPT in \
         exit 1
     }
 done
-if [ '$DEPLOY_MODE' = wechat_formal ]; then
+if [ '$EFFECTIVE_REQUIRE_WECHAT_READY' = 1 ]; then
     [ \"\$(stat -c '%u:%g:%a' $NEW_RELEASE/private-metadata/miniprogram-ci-proof.json)\" = '0:0:600' ] || {
         echo '小程序发布私有收据权限异常。' >&2
         exit 1

@@ -3406,6 +3406,28 @@ def test_formal_activation_requires_miniprogram_ci_proof_before_mutation(tmp_pat
     assert not counter_file.exists()
 
 
+def test_web_backend_formal_runtime_requires_miniprogram_proof_before_mutation(
+    tmp_path,
+):
+    transaction = _prepare_transaction(tmp_path)
+    counter_file = _configure_web_formal_mini_only(transaction)
+    (
+        transaction['new_release']
+        / 'private-metadata'
+        / 'miniprogram-ci-proof.json'
+    ).unlink()
+
+    result = _run_activation(transaction)
+
+    assert result.returncode != 0
+    assert 'miniprogram-ci-proof.json' in result.stderr
+    assert transaction['current_link'].resolve() == transaction[
+        'old_release'
+    ].resolve()
+    assert _database_value(transaction['database_file']) == 'old'
+    assert not counter_file.exists()
+
+
 def test_formal_runtime_log_guard_runs_after_lock_before_capture_and_mutation(tmp_path):
     transaction = _prepare_transaction(tmp_path)
     _configure_formal_smoke(transaction)
