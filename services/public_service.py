@@ -46,6 +46,7 @@ from services.community_daily_service import (
     refresh_community_daily_best_effort as _refresh_community_daily_best_effort,
 )
 from services.heat_action_service import HeatActionService
+from services.miniprogram_service import get_bootstrap_payload
 from services.cross_platform_identity import (
     AccountLinkError,
     create_account_link_challenge,
@@ -516,29 +517,32 @@ def _build_recent_series(pair_id, days=7):
 
 
 def _build_action_context(pair, status_date):
-    location = normalize_location_name(pair.location_query or pair.community_code)
-    weather_data, _ = get_weather_with_cache(location)
+    snapshot = get_bootstrap_payload()
     resources = CoolingResource.query.filter_by(
         community_code=pair.community_code,
         is_active=True
     ).all()
-    if not _heat_risk_weather_is_ready(weather_data):
+    risk = snapshot.get('risk') if isinstance(snapshot.get('risk'), dict) else {}
+    calculation = risk.get('calculation') if isinstance(risk.get('calculation'), dict) else {}
+    stored_heat_result = calculation.get('heat_result')
+    stored_risk_reasons = calculation.get('risk_reasons')
+    risk_available = (
+        risk.get('available') is True
+        and risk.get('score') is not None
+        and snapshot.get('stale') is not True
+        and isinstance(stored_heat_result, dict)
+        and isinstance(stored_risk_reasons, list)
+    )
+    if not risk_available:
         status = _get_or_create_daily_status(pair, status_date, None)
         return status, [], resources, None, None, None, []
 
-    heat_service = HeatActionService()
-    consecutive_hot_days = get_consecutive_hot_days(
-        location,
-        today_max=weather_data.get('temperature_max')
-    )
-    heat_result = heat_service.calculate_heat_risk(
-        weather_data,
-        consecutive_hot_days=consecutive_hot_days
-    )
-    risk_label = HEAT_RISK_LABELS.get(heat_result['risk_level'], '低风险')
-    risk_reasons = heat_service.build_risk_reasons(heat_result)
+    weather_data = snapshot.get('current')
+    heat_result = dict(stored_heat_result)
+    risk_label = str(risk.get('level'))
+    risk_reasons = list(stored_risk_reasons)
     status = _get_or_create_daily_status(pair, status_date, risk_label)
-    actions = _action_plan(risk_label)
+    actions = snapshot.get('actions') if isinstance(snapshot.get('actions'), list) else []
     return status, actions, resources, weather_data, heat_result, risk_label, risk_reasons
 
 
@@ -1004,7 +1008,15 @@ def _handle_action_debrief(token=None, confirm_action=None, debrief_action=None,
                 flash('短码或令牌无效，请联系照护人确认。', 'error')
                 return redirect(url_for('public.action_check'))
             status_date = today_local()
-            status = _get_or_create_daily_status(pair, status_date, None)
+            (
+                status,
+                actions,
+                resources,
+                weather_data,
+                heat_result,
+                risk_label,
+                risk_reasons,
+            ) = _build_action_context(pair, status_date)
             mutation = stage_debrief_action(
                 pair,
                 status,
@@ -1017,15 +1029,6 @@ def _handle_action_debrief(token=None, confirm_action=None, debrief_action=None,
                 opt_in=optin,
                 source='web',
             )
-            (
-                status,
-                actions,
-                resources,
-                weather_data,
-                heat_result,
-                risk_label,
-                risk_reasons,
-            ) = _build_action_context(pair, status_date)
             # 提交后注销可立即删除数据库行，响应渲染使用本次已写入快照。
             db.session.flush()
             db.session.expunge(pair)
@@ -1619,39 +1622,39 @@ def render_cooling_resources_page(community, resource_type, has_ac_raw, is_acces
 
 
 def render_public_risk_page(location):
-    location = normalize_location_name(location) if location else normalize_location_name(None)
-    weather_data, _ = get_weather_with_cache(location)
-    if not _heat_risk_weather_is_ready(weather_data):
-        return render_template(
-            'risk.html',
-            location=location,
-            weather=None,
-            heat_result=None,
-            risk_label=None,
-            actions=[],
-            risk_reasons=[]
-        )
-
-    heat_service = HeatActionService()
-    consecutive_hot_days = get_consecutive_hot_days(
-        location,
-        today_max=weather_data.get('temperature_max')
+    """公开风险页与小程序 bootstrap 读取同一持久化快照。"""
+    snapshot = get_bootstrap_payload()
+    snapshot_location = snapshot.get('location') or {}
+    fallback_location = (
+        normalize_location_name(location)
+        if location
+        else normalize_location_name(None)
     )
-    heat_result = heat_service.calculate_heat_risk(
-        weather_data,
-        consecutive_hot_days=consecutive_hot_days
+    location_name = str(snapshot_location.get('name') or fallback_location)
+    risk = snapshot.get('risk') or {}
+    calculation = risk.get('calculation') if isinstance(risk.get('calculation'), dict) else {}
+    stored_heat_result = calculation.get('heat_result')
+    stored_risk_reasons = calculation.get('risk_reasons')
+    risk_ready = (
+        risk.get('available') is True
+        and risk.get('score') is not None
+        and isinstance(stored_heat_result, dict)
+        and isinstance(stored_risk_reasons, list)
     )
-    risk_label = HEAT_RISK_LABELS.get(heat_result['risk_level'], '低风险')
-    actions = _action_plan(risk_label)
-    risk_reasons = heat_service.build_risk_reasons(heat_result)
+    weather_data = snapshot.get('current') if risk_ready else None
+    heat_result = dict(stored_heat_result) if risk_ready else None
+    risk_reasons = list(stored_risk_reasons) if risk_ready else []
+    risk_label = risk.get('level') if risk_ready else None
     return render_template(
         'risk.html',
-        location=location,
+        location=location_name,
         weather=weather_data,
         heat_result=heat_result,
         risk_label=risk_label,
-        actions=actions,
-        risk_reasons=risk_reasons
+        risk=risk,
+        actions=snapshot.get('actions') or [],
+        risk_reasons=risk_reasons,
+        family_reminder=snapshot.get('family_reminder'),
     )
 
 

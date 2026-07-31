@@ -34,6 +34,25 @@ test('bootstrap 兼容正式天气字段与 reasons', () => {
   assert.equal(result.familyReminder.followUpQuestion, '上午谁先联系？');
 });
 
+test('不完整天气的未知风险必须保持不可用', () => {
+  const result = normalizeBootstrap({
+    available: true,
+    current: { temperature: 36, humidity: 72 },
+    risk: {
+      available: false,
+      level: '未知',
+      score: null,
+      summary: '天气快照尚未具备完整风险计算条件',
+    },
+    actions: [],
+  });
+
+  assert.equal(result.current.available, true);
+  assert.equal(result.risk.available, false);
+  assert.equal(result.risk.label, '风险待更新');
+  assert.equal(result.risk.scoreText, '待计算');
+});
+
 test('归一化结果不保留未使用的原始大对象镜像', () => {
   const bootstrap = normalizeBootstrap({
     forecast: [{ date: '2026-07-18', temperature_max: 36, provider_payload: { verbose: true } }],

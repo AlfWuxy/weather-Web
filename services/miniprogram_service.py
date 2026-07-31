@@ -9,6 +9,8 @@ import uuid
 from datetime import datetime, timedelta
 
 from flask import current_app, url_for
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.orm import Session
 
 from core.constants import DEFAULT_CITY_LABEL
 from core.db_models import (
@@ -22,20 +24,23 @@ from core.db_models import (
     WeatherCache,
 )
 from core.extensions import db
-from core.time_utils import ensure_utc_aware, utcnow
-from core.weather import get_qweather_forecast_with_cache
+from core.time_utils import ensure_utc_aware, today_local, utc_to_local_date, utcnow
+from core.weather import get_consecutive_hot_days, get_qweather_forecast_with_cache
 from services.qweather_auth import is_qweather_configured
 from services.miniprogram_auth import current_privacy_version
-from services.action_reminder_service import (
-    infer_weather_tags,
-    select_action_reminder,
-)
 from services.community_daily_service import (
     PUBLIC_AGGREGATE_MIN_SAMPLE,
     bucket_public_count,
     bucket_public_rate,
 )
-from services.user._common import _action_plan
+from services.public_risk_service import (
+    HEAT_RISK_LABELS,
+    PUBLIC_RISK_SCHEMA_VERSION,
+    build_public_family_reminder,
+    build_public_risk_context,
+    calculate_public_risk,
+    public_risk_weather_is_ready,
+)
 from utils.parsers import safe_json_loads
 
 
@@ -88,68 +93,9 @@ def _weather_available(current) -> bool:
 
 
 def _risk_and_actions(current, warnings):
-    """用已同步数据生成面向行动的稳定分级，不读取个人病历。"""
-    if not _weather_available(current):
-        reasons = ["天气快照尚未可用"]
-        return (
-            {
-                "level": "未知",
-                "score": None,
-                "summary": reasons[0],
-                "reasons": reasons,
-                "disclaimer": "仅作天气健康行动提醒，不提供医疗诊断。",
-            },
-            [],
-        )
-
-    temperature = _finite_number(current.get("temperature"))
-    temperature_max = _finite_number(current.get("temperature_max"))
-    humidity = _finite_number(current.get("humidity"))
-    aqi = _finite_number(current.get("aqi"))
-    observed = temperature_max if temperature_max is not None else temperature
-    score = 12.0
-    reasons = []
-    if observed is not None and observed >= 40:
-        score += 78
-        reasons.append("最高温达到或超过 40°C")
-    elif observed is not None and observed >= 37:
-        score += 62
-        reasons.append("最高温达到或超过 37°C")
-    elif observed is not None and observed >= 35:
-        score += 46
-        reasons.append("最高温达到或超过 35°C")
-    elif observed is not None and observed >= 32:
-        score += 24
-        reasons.append("天气较热")
-    if humidity is not None and humidity >= 80:
-        score += 8
-        reasons.append("湿度偏高")
-    if aqi is not None and aqi >= 150:
-        score += 12
-        reasons.append("空气质量风险偏高")
-    if isinstance(warnings, list) and warnings:
-        score += 12
-        reasons.append("当前存在官方气象预警")
-    score = round(min(max(score, 0.0), 100.0), 1)
-    if score >= 80:
-        level = "极高"
-    elif score >= 60:
-        level = "高风险"
-    elif score >= 35:
-        level = "中风险"
-    else:
-        level = "低风险"
-    final_reasons = reasons or ["当前未触发主要天气风险阈值"]
-    return (
-        {
-            "level": level,
-            "score": score,
-            "summary": "；".join(final_reasons[:2]),
-            "reasons": final_reasons,
-            "disclaimer": "仅作天气健康行动提醒，不提供医疗诊断。",
-        },
-        _action_plan(level),
-    )
+    """兼容旧调用点，实际计算统一委托给公共风险服务。"""
+    context = build_public_risk_context(current, warnings)
+    return context["risk"], context["actions"]
 
 
 def _enrich_forecast_risk(items):
@@ -174,7 +120,8 @@ def _enrich_forecast_risk(items):
             "data_source": item.get("data_source") or item.get("source") or "QWeather",
             "is_mock": bool(item.get("is_mock")),
         }
-        risk, _actions = _risk_and_actions(proxy, [])
+        public_risk = calculate_public_risk(proxy)
+        risk = public_risk["risk"]
         available = risk.get("score") is not None
         item.update(
             risk_available=available,
@@ -325,7 +272,13 @@ def persist_snapshot(
         forecast_meta=forecast_meta,
         source_timing=source_timing,
     )
-    risk, actions = _risk_and_actions(current, warnings)
+    public_context = build_public_risk_context(
+        current,
+        warnings,
+        date_value=fetched_at,
+    )
+    risk = public_context["risk"]
+    actions = public_context["actions"]
     location = canonical_location()
     _acquire_snapshot_retention_lock()
     record = MiniProgramSnapshot(
@@ -387,11 +340,89 @@ def latest_snapshot_record():
     ).first()
 
 
+def _persisted_public_context(record, current, warnings, *, available, date_value):
+    """新鲜快照优先读取落库风险，保证同一 snapshot_id 的语义稳定。"""
+    if not available or not public_risk_weather_is_ready(current):
+        return build_public_risk_context(
+            current,
+            warnings,
+            date_value=date_value,
+            available=False,
+        )
+
+    risk = safe_json_loads(record.risk_json, {})
+    actions = safe_json_loads(record.actions_json, [])
+    calculation = risk.get("calculation") if isinstance(risk, dict) else None
+    heat_result = (
+        calculation.get("heat_result")
+        if isinstance(calculation, dict)
+        else None
+    )
+    risk_reasons = (
+        calculation.get("risk_reasons")
+        if isinstance(calculation, dict)
+        else None
+    )
+    stored_score = _finite_number(risk.get("score")) if isinstance(risk, dict) else None
+    calculated_score = (
+        _finite_number(heat_result.get("risk_score"))
+        if isinstance(heat_result, dict)
+        else None
+    )
+    calculated_label = (
+        HEAT_RISK_LABELS.get(heat_result.get("risk_level"))
+        if isinstance(heat_result, dict)
+        else None
+    )
+    if (
+        not isinstance(risk, dict)
+        or risk.get("available") is False
+        or risk.get("schema_version") != PUBLIC_RISK_SCHEMA_VERSION
+        or stored_score is None
+        or calculated_score is None
+        or abs(stored_score - calculated_score) > 1e-9
+        or not str(risk.get("level") or "").strip()
+        or risk.get("level") != calculated_label
+        or not isinstance(actions, list)
+        or not isinstance(risk_reasons, list)
+    ):
+        return build_public_risk_context(
+            current,
+            warnings,
+            date_value=date_value,
+            available=False,
+        )
+
+    risk = dict(risk)
+    risk.setdefault("available", True)
+    risk.setdefault("schema_version", PUBLIC_RISK_SCHEMA_VERSION)
+    return {
+        "available": True,
+        "risk": risk,
+        "actions": actions,
+        "heat_result": heat_result,
+        "risk_reasons": risk_reasons,
+        "family_reminder": build_public_family_reminder(
+            current,
+            warnings,
+            risk=risk,
+            available=True,
+            date_value=date_value,
+        ),
+    }
+
+
 def snapshot_payload(record=None, *, now=None) -> dict:
     """序列化快照；陈旧判断只依赖持久化时间，不触发任何上游调用。"""
     location = canonical_location()
     current_time = ensure_utc_aware(now or utcnow())
     if record is None:
+        public_context = build_public_risk_context(
+            {},
+            [],
+            date_value=current_time,
+            available=False,
+        )
         return {
             "snapshot_id": None,
             "location": location,
@@ -403,20 +434,9 @@ def snapshot_payload(record=None, *, now=None) -> dict:
             "current": {"is_mock": True},
             "forecast": [],
             "warnings": [],
-            "risk": {
-                "level": "未知",
-                "score": None,
-                "summary": "后台天气快照尚未生成",
-                "reasons": ["后台天气快照尚未生成"],
-                "disclaimer": "仅作天气健康行动提醒，不提供医疗诊断。",
-            },
-            "actions": [],
-            "family_reminder": select_action_reminder(
-                date_value=current_time,
-                risk_level="low",
-                weather_tags=["general"],
-                audience="family_group",
-            ),
+            "risk": public_context["risk"],
+            "actions": public_context["actions"],
+            "family_reminder": public_context["family_reminder"],
             "source_status": {
                 "mode": "scheduled_snapshot_only",
                 "status": "missing",
@@ -428,7 +448,14 @@ def snapshot_payload(record=None, *, now=None) -> dict:
     expires_at = ensure_utc_aware(record.expires_at)
     current = safe_json_loads(record.current_json, {})
     warnings = safe_json_loads(record.warnings_json, [])
-    risk = safe_json_loads(record.risk_json, {})
+    stale = current_time > expires_at
+    public_context = _persisted_public_context(
+        record,
+        current,
+        warnings,
+        available=bool(record.available) and not stale,
+        date_value=current_time,
+    )
     return {
         "snapshot_id": record.snapshot_id,
         "location": {
@@ -440,26 +467,31 @@ def snapshot_payload(record=None, *, now=None) -> dict:
         "expires_at": expires_at.isoformat(),
         "ttl_seconds": SNAPSHOT_TTL_SECONDS,
         "available": bool(record.available),
-        "stale": current_time > expires_at,
+        "stale": stale,
         "current": current,
         "forecast": safe_json_loads(record.forecast_json, []),
         "warnings": warnings,
-        "risk": risk,
-        "actions": safe_json_loads(record.actions_json, []),
-        "family_reminder": select_action_reminder(
-            date_value=current_time,
-            risk_level=risk.get("level"),
-            weather_tags=infer_weather_tags(current, warnings),
-            audience="family_group",
-        ),
+        "risk": public_context["risk"],
+        "actions": public_context["actions"],
+        "family_reminder": public_context["family_reminder"],
         "source_status": safe_json_loads(record.source_status_json, {}),
         "required_privacy_consent_version": current_privacy_version(),
     }
 
 
 def get_bootstrap_payload(*, now=None) -> dict:
-    """公共 bootstrap 的唯一读取入口，严禁在这里增加 fetcher。"""
-    return snapshot_payload(latest_snapshot_record(), now=now)
+    """通过独立只读会话取得 bootstrap，绝不影响调用方事务。"""
+    try:
+        with Session(bind=db.engine) as read_session:
+            record = read_session.query(MiniProgramSnapshot).order_by(
+                MiniProgramSnapshot.fetched_at.desc(),
+                MiniProgramSnapshot.id.desc(),
+            ).first()
+            return snapshot_payload(record, now=now)
+    except SQLAlchemyError:
+        # 独立读取失败只降级本次结果，不能回滚调用方正在进行的写事务。
+        current_app.logger.exception("读取公共天气快照失败，返回安全降级结果")
+        return snapshot_payload(None, now=now)
 
 
 def load_cached_weather_inputs():
@@ -583,6 +615,20 @@ def refresh_snapshot_from_cycle(
             current["temperature_max"] = first_day.get("temperature_max")
         if current.get("temperature_min") is None:
             current["temperature_min"] = first_day.get("temperature_min")
+
+    if isinstance(current, dict) and current.get("consecutive_hot_days") is None:
+        # 连续高温只读取本地历史表，绝不增加天气供应商请求。
+        snapshot_date = (
+            utc_to_local_date(fetched_at)
+            if fetched_at is not None
+            else today_local()
+        )
+        current = dict(current)
+        current["consecutive_hot_days"] = get_consecutive_hot_days(
+            CANONICAL_LOCATION_NAME,
+            target_date=snapshot_date,
+            today_max=current.get("temperature_max"),
+        )
 
     if not _weather_available(current):
         existing = latest_snapshot_record()

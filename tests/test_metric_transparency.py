@@ -61,7 +61,14 @@ def test_transparency_page_renders_formula_index(client):
     assert 'metric-explanations.js' in body
 
 
-def test_public_risk_exposes_current_inputs_in_info_button(client, monkeypatch):
+def test_public_risk_exposes_current_inputs_in_info_button(
+    app,
+    client,
+    db_session,
+):
+    from core.time_utils import utcnow
+    from services.miniprogram_service import persist_snapshot
+
     weather = {
         'temperature': 36.0,
         'temperature_max': 38.0,
@@ -69,15 +76,10 @@ def test_public_risk_exposes_current_inputs_in_info_button(client, monkeypatch):
         'humidity': 72.0,
         'data_source': 'QWeather',
         'is_mock': False,
+        'consecutive_hot_days': 3,
     }
-    monkeypatch.setattr(
-        'services.public_service.get_weather_with_cache',
-        lambda _location: (weather, False),
-    )
-    monkeypatch.setattr(
-        'services.public_service.get_consecutive_hot_days',
-        lambda _location, today_max=None: 3,
-    )
+    with app.app_context():
+        persist_snapshot(weather, [], [], fetched_at=utcnow())
 
     response = client.get('/risk?location=都昌')
 
@@ -93,7 +95,14 @@ def test_public_risk_exposes_current_inputs_in_info_button(client, monkeypatch):
     assert '你主动填写的账户和家庭资料会保存在服务器' in body
 
 
-def test_public_risk_fails_closed_for_mock_weather(client, monkeypatch):
+def test_public_risk_fails_closed_for_mock_weather(
+    app,
+    client,
+    db_session,
+):
+    from core.time_utils import utcnow
+    from services.miniprogram_service import persist_snapshot
+
     weather = {
         'temperature': 20.0,
         'temperature_max': 25.0,
@@ -102,10 +111,8 @@ def test_public_risk_fails_closed_for_mock_weather(client, monkeypatch):
         'data_source': 'Demo',
         'is_mock': True,
     }
-    monkeypatch.setattr(
-        'services.public_service.get_weather_with_cache',
-        lambda _location: (weather, False),
-    )
+    with app.app_context():
+        persist_snapshot(weather, [], [], fetched_at=utcnow())
 
     response = client.get('/risk?location=都昌')
 
@@ -118,7 +125,14 @@ def test_public_risk_fails_closed_for_mock_weather(client, monkeypatch):
     assert '附近避暑资源' in body
 
 
-def test_public_risk_fails_closed_when_required_weather_field_is_missing(client, monkeypatch):
+def test_public_risk_fails_closed_when_required_weather_field_is_missing(
+    app,
+    client,
+    db_session,
+):
+    from core.time_utils import utcnow
+    from services.miniprogram_service import persist_snapshot
+
     weather = {
         'temperature': 36.0,
         'temperature_max': 38.0,
@@ -127,10 +141,8 @@ def test_public_risk_fails_closed_when_required_weather_field_is_missing(client,
         'data_source': 'QWeather',
         'is_mock': False,
     }
-    monkeypatch.setattr(
-        'services.public_service.get_weather_with_cache',
-        lambda _location: (weather, False),
-    )
+    with app.app_context():
+        persist_snapshot(weather, [], [], fetched_at=utcnow())
 
     response = client.get('/risk?location=都昌')
 

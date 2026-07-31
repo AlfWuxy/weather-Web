@@ -356,6 +356,80 @@ def test_action_context_does_not_persist_mock_weather_risk(app, monkeypatch):
         assert reasons == []
 
 
+def test_snapshot_read_failure_never_rolls_back_staged_debrief(
+    app,
+    db_session,
+    monkeypatch,
+):
+    """独立快照读取失败时，调用方已经暂存的行动写入仍可正常提交。"""
+    from sqlalchemy.exc import SQLAlchemyError
+
+    from services.care_action_service import stage_debrief_action
+    from services.public_service import (
+        _build_action_context,
+        _get_or_create_daily_status,
+    )
+
+    class FailingReadSession:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def __enter__(self):
+            raise SQLAlchemyError("snapshot read failed")
+
+        def __exit__(self, *_args):
+            return False
+
+    with app.app_context():
+        db.create_all()
+        user = _create_user("snapshot_failure_user", "snapshot_failure_pass")
+        pair = Pair(
+            caregiver_id=user.id,
+            community_code="都昌县",
+            location_query="都昌县",
+            elder_code="snapshot-failure-elder",
+            short_code="56565656",
+            short_code_hash=hash_short_code("56565656"),
+            status="active",
+            created_at=utcnow(),
+            last_active_at=utcnow(),
+        )
+        db.session.add(pair)
+        db.session.flush()
+        status_date = today_local()
+        status = _get_or_create_daily_status(pair, status_date, None)
+        stage_debrief_action(
+            pair,
+            status,
+            answers={
+                "question_1": "完成了",
+                "question_2": "按计划执行",
+                "question_3": "明天继续",
+            },
+            difficulty="无",
+            opt_in=True,
+            source="web",
+        )
+        monkeypatch.setattr(
+            "services.miniprogram_service.Session",
+            FailingReadSession,
+        )
+
+        context = _build_action_context(pair, status_date)
+        db.session.commit()
+
+        assert context[0].id == status.id
+        assert context[1] == []
+        assert context[3] is None
+        from core.db_models import Debrief, UsageEvent
+
+        assert Debrief.query.filter_by(pair_id=pair.id).count() == 1
+        assert UsageEvent.query.filter_by(
+            user_id=user.id,
+            event_type="feedback_submitted",
+        ).count() == 1
+
+
 def test_pair_management_can_create_pair(app, client):
     """Web 端创建绑定不应因 _generate_elder_code 缺失而失败。"""
     with app.app_context():
