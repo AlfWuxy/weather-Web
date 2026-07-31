@@ -10,6 +10,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -66,7 +67,7 @@ def _write_executable(path, content):
     path.chmod(0o755)
 
 
-def _create_reusable_release_base(base):
+def _create_reusable_release_base(base, trusted_python_entry):
     release_root = base / 'deploy'
     old_release = release_root / 'releases' / 'old'
     new_release = release_root / 'releases' / 'new'
@@ -78,13 +79,12 @@ def _create_reusable_release_base(base):
 
     old_venv = old_release / 'venv'
     subprocess.run(
-        [sys.executable, '-m', 'venv', str(old_venv)],
+        [str(trusted_python_entry), '-m', 'venv', str(old_venv)],
         check=True,
         capture_output=True,
         text=True,
     )
     python_minor = f'{sys.version_info.major}.{sys.version_info.minor}'
-    trusted_python_entry = Path(sys.executable).resolve().parent / 'python3'
     assert trusted_python_entry.exists()
     source_bin = old_venv / 'bin'
     for python_entry in source_bin.glob('python*'):
@@ -171,14 +171,54 @@ def _create_reusable_release_base(base):
         'current': current,
         'lock_sha': lock_sha,
         'python_minor': python_minor,
+        'trusted_python_entry': trusted_python_entry,
     }
 
 
 @pytest.fixture(scope='module')
 def reusable_release_base(tmp_path_factory):
-    return _create_reusable_release_base(
-        tmp_path_factory.mktemp('reusable-release-base')
-    )
+    helper = _load_dependency_helper_namespace()
+    trusted_python_entry = Path(sys.executable).resolve().parent / 'python3'
+    trusted_root = None
+    try:
+        try:
+            helper['validate_system_python_chain'](
+                trusted_python_entry,
+                os.geteuid(),
+            )
+        except (OSError, helper['ContractError']):
+            # GitHub runner 的工具缓存位于可写 /opt；Linux CI 使用受控副本。
+            trusted_root = Path(
+                tempfile.mkdtemp(
+                    prefix='case-weather-test-python-',
+                    dir=Path.home(),
+                )
+            )
+            trusted_runtime = trusted_root / 'runtime'
+            subprocess.run(
+                [
+                    sys.executable,
+                    '-m',
+                    'venv',
+                    '--copies',
+                    str(trusted_runtime),
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            trusted_python_entry = trusted_runtime / 'bin' / 'python3'
+            helper['validate_system_python_chain'](
+                trusted_python_entry,
+                os.geteuid(),
+            )
+        yield _create_reusable_release_base(
+            tmp_path_factory.mktemp('reusable-release-base'),
+            trusted_python_entry,
+        )
+    finally:
+        if trusted_root is not None:
+            shutil.rmtree(trusted_root)
 
 
 def _copy_reusable_release(reusable_release_base, tmp_path):
@@ -199,6 +239,9 @@ def _copy_reusable_release(reusable_release_base, tmp_path):
         'current': current,
         'lock_sha': reusable_release_base['lock_sha'],
         'python_minor': reusable_release_base['python_minor'],
+        'trusted_python_entry': reusable_release_base[
+            'trusted_python_entry'
+        ],
     }
 
 
@@ -206,7 +249,7 @@ def _run_reuse_installer(fixture):
     new_release = fixture['new_release']
     environment = os.environ.copy()
     # helper 必须由测试运行时的受信 Python 启动，不能先执行 source venv。
-    trusted_python_bin = Path(sys.executable).resolve().parent
+    trusted_python_bin = fixture['trusted_python_entry'].parent
     environment['PATH'] = f'{trusted_python_bin}:{environment["PATH"]}'
     return subprocess.run(
         [
