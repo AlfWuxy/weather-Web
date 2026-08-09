@@ -24,6 +24,12 @@ from core.db_models import (
 )
 from core.time_utils import utcnow
 from services.cross_platform_identity import is_reserved_internal_username
+from services.user.admin_role_guard import (
+    AdminRoleGuardUnavailable,
+    AdminRoleTargetMissing,
+    LastAdminError,
+    serialized_admin_role_change,
+)
 from utils.parsers import parse_bool, parse_float, parse_int
 from utils.validators import (
     sanitize_input, validate_age, validate_email, validate_gender, validate_password, validate_username
@@ -639,12 +645,7 @@ def admin_edit_user(user_id):
         flash('权限不足', 'error')
         return redirect(url_for('user.user_dashboard'))
 
-    user_query = User.query.filter_by(id=user_id)
-    user = (
-        user_query.with_for_update().first_or_404()
-        if request.method == 'POST'
-        else user_query.first_or_404()
-    )
+    user = User.query.filter_by(id=user_id).first_or_404()
 
     if request.method == 'POST':
         # 验证用户名
@@ -705,38 +706,53 @@ def admin_edit_user(user_id):
             return redirect(url_for('admin.admin_edit_user', user_id=user_id))
 
         new_password = request.form.get('password')
+        validated_password = None
         if new_password:
             valid, result = validate_password(new_password)
             if not valid:
                 flash(result, 'error')
                 return redirect(url_for('admin.admin_edit_user', user_id=user_id))
-            user.set_password(result)
-            user.auth_version = int(user.auth_version) + 1
-            revoked_at = utcnow()
-            ApiToken.query.filter(
-                ApiToken.user_id == user.id,
-                ApiToken.revoked_at.is_(None),
-            ).update(
-                {ApiToken.revoked_at: revoked_at},
-                synchronize_session=False,
-            )
-            MiniProgramSession.query.filter(
-                MiniProgramSession.user_id == user.id,
-                MiniProgramSession.revoked_at.is_(None),
-            ).update(
-                {MiniProgramSession.revoked_at: revoked_at},
-                synchronize_session=False,
-            )
+            validated_password = result
 
-        user.username = username
-        user.email = email
-        user.age = age
-        user.gender = gender
-        user.community = community
-        user.authorized_community = authorized_community
-        user.role = role
+        try:
+            with serialized_admin_role_change(user_id, role) as locked_user:
+                if validated_password:
+                    locked_user.set_password(validated_password)
+                    locked_user.auth_version = int(locked_user.auth_version) + 1
+                    revoked_at = utcnow()
+                    ApiToken.query.filter(
+                        ApiToken.user_id == locked_user.id,
+                        ApiToken.revoked_at.is_(None),
+                    ).update(
+                        {ApiToken.revoked_at: revoked_at},
+                        synchronize_session=False,
+                    )
+                    MiniProgramSession.query.filter(
+                        MiniProgramSession.user_id == locked_user.id,
+                        MiniProgramSession.revoked_at.is_(None),
+                    ).update(
+                        {MiniProgramSession.revoked_at: revoked_at},
+                        synchronize_session=False,
+                    )
 
-        db.session.commit()
+                locked_user.username = username
+                locked_user.email = email
+                locked_user.age = age
+                locked_user.gender = gender
+                locked_user.community = community
+                locked_user.authorized_community = authorized_community
+                locked_user.role = role
+                db.session.commit()
+        except LastAdminError:
+            flash('必须保留至少一个管理员账户', 'error')
+            return redirect(url_for('admin.admin_edit_user', user_id=user_id))
+        except AdminRoleTargetMissing:
+            return redirect(url_for('admin.admin_users'))
+        except AdminRoleGuardUnavailable:
+            logger.exception('管理员角色串行化保护不可用')
+            flash('管理员角色更新暂时不可用，请稍后重试', 'error')
+            return redirect(url_for('admin.admin_edit_user', user_id=user_id))
+
         flash('用户信息更新成功', 'success')
         return redirect(url_for('admin.admin_users'))
 
