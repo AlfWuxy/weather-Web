@@ -8,17 +8,23 @@ from pathlib import Path
 
 from flask import Blueprint, current_app, flash, redirect, render_template, request, url_for
 from flask_login import current_user, login_required
+from sqlalchemy.exc import SQLAlchemyError
 
 from core.extensions import db
 from core.audit import log_audit
 from core.db_models import (
     ApiToken,
     Community,
+    CommunityDaily,
     CoolingResource,
+    DailyStatus,
+    Debrief,
     HealthRiskAssessment,
     MedicalRecord,
     MiniProgramIdentity,
     MiniProgramSession,
+    Pair,
+    PairLink,
     User,
     WeatherAlert,
 )
@@ -60,6 +66,31 @@ def _validated_authorized_community(role, raw_value):
         return False, None
     exists = Community.query.filter_by(name=value).first() is not None
     return (exists, value if exists else None)
+
+
+def _community_name_reference_counts(community_name):
+    """统计以 Community.name 为业务键的持久引用；新增引用必须在此显式登记。"""
+    references = []
+    authorized_community = getattr(User, 'authorized_community', None)
+    if authorized_community is not None:
+        references.append(('用户运营授权', authorized_community))
+    references.extend([
+        ('用户定位或展示社区', User.community),
+        ('病例社区', MedicalRecord.community),
+        ('绑定链接社区', PairLink.community_code),
+        ('照护关系社区', Pair.community_code),
+        ('日度行动社区', DailyStatus.community_code),
+        ('社区日汇总', CommunityDaily.community_code),
+        ('避暑资源社区', CoolingResource.community_code),
+        ('行动复盘社区', Debrief.community_code),
+    ])
+
+    counts = {}
+    for label, column in references:
+        count = db.session.query(column).filter(column == community_name).count()
+        if count:
+            counts[label] = int(count)
+    return counts
 
 
 def _load_cooling_candidates():
@@ -918,6 +949,35 @@ def admin_edit_community(community_id):
         if name != community.name and Community.query.filter_by(name=name).first():
             flash('社区名称已存在', 'error')
             return redirect(url_for('admin.admin_edit_community', community_id=community_id))
+
+        if name != community.name:
+            try:
+                reference_counts = _community_name_reference_counts(community.name)
+            except SQLAlchemyError:
+                db.session.rollback()
+                logger.exception(
+                    '社区改名引用检查失败，已拒绝写入',
+                    extra={'community_id': community_id},
+                )
+                flash('社区引用检查暂时不可用，未执行改名', 'error')
+                return redirect(url_for(
+                    'admin.admin_edit_community',
+                    community_id=community_id,
+                ))
+            if reference_counts:
+                reference_summary = '、'.join(
+                    f'{label} {count} 条'
+                    for label, count in reference_counts.items()
+                )
+                flash(
+                    f'社区名称仍被业务数据使用，未执行改名：{reference_summary}。'
+                    '请先迁移关联数据。',
+                    'error',
+                )
+                return redirect(url_for(
+                    'admin.admin_edit_community',
+                    community_id=community_id,
+                ))
 
         community.name = name
         community.location = sanitize_input(request.form.get('location'), max_length=200)
