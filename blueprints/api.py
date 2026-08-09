@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
 """API routes."""
-from flask import Blueprint, current_app
-from flask_login import login_required
+from flask import Blueprint, current_app, jsonify
+from flask_login import current_user, login_required
 
 from core.extensions import limiter
+from core.guest import is_guest_user
 from core.security import rate_limit_key
 from services import api_service
 
@@ -128,6 +129,11 @@ def api_dlnm_risk():
 @login_required
 def api_v1_dlnm_summary():
     """获取DLNM模型摘要（v1）"""
+    if is_guest_user(current_user):
+        return jsonify({
+            'success': False,
+            'error': 'real_account_required',
+        }), 403
     return api_service._api_dlnm_summary()
 
 

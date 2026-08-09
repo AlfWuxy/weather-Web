@@ -45,6 +45,32 @@ def test_dlnm_summary_rejects_anonymous_before_loading_model(
     "path",
     ("/api/v1/dlnm/summary", "/api/dlnm/summary"),
 )
+def test_dlnm_summary_rejects_guest_before_loading_model(
+    client,
+    db_session,
+    monkeypatch,
+    path,
+):
+    """游客会话不能绕过正式账号认证读取模型摘要。"""
+    assert client.get("/guest", follow_redirects=False).status_code in (301, 302, 303)
+    monkeypatch.setattr(
+        "services.dlnm_risk_service.get_dlnm_service",
+        lambda: pytest.fail("游客请求不得加载模型摘要"),
+    )
+
+    response = client.get(path, follow_redirects=False)
+
+    assert response.status_code == 403
+    assert response.get_json() == {
+        "success": False,
+        "error": "real_account_required",
+    }
+
+
+@pytest.mark.parametrize(
+    "path",
+    ("/api/v1/dlnm/summary", "/api/dlnm/summary"),
+)
 def test_authenticated_dlnm_summary_uses_explicit_allowlist(
     authenticated_client,
     monkeypatch,
@@ -75,4 +101,3 @@ def test_authenticated_dlnm_summary_uses_explicit_allowlist(
     assert "sample_counts" not in body
     assert "secret_field" not in body
     assert "/srv/private" not in body
-

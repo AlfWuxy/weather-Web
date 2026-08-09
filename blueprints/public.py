@@ -37,6 +37,7 @@ logger = logging.getLogger(__name__)
 from core.extensions import limiter
 from core.extensions import db
 from core.audit import log_audit
+from core.guest import is_guest_user
 from core.security import rate_limit_key
 from core.time_utils import ensure_utc_aware, utcnow
 from core.usage import log_usage_event
@@ -480,6 +481,8 @@ def register():
 @login_required
 def account_link():
     """网页与微信小程序账号串联的最小页面。"""
+    if is_guest_user(current_user):
+        return redirect(url_for('public.register'), code=303)
     return render_account_link_page()
 
 
@@ -488,6 +491,8 @@ def account_link():
 @limiter.limit('10 per hour', key_func=rate_limit_key)
 def account_link_phone():
     """保存待验证手机号标识。"""
+    if is_guest_user(current_user):
+        return redirect(url_for('public.register'), code=303)
     return handle_account_link_phone()
 
 
@@ -499,6 +504,8 @@ def account_link_phone():
 )
 def account_link_code():
     """复验当前密码后生成一次性小程序绑定码。"""
+    if is_guest_user(current_user):
+        return redirect(url_for('public.register'), code=303)
     return handle_account_link_code()
 
 

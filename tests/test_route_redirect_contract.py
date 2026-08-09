@@ -197,6 +197,48 @@ def test_guest_web_route_matrix_never_uses_forecast_as_fallback(
 
 
 @pytest.mark.parametrize(
+    ("method", "path"),
+    (
+        ("GET", "/account-link"),
+        ("POST", "/account-link/phone"),
+        ("POST", "/account-link/code"),
+    ),
+)
+def test_guest_account_link_routes_require_real_account_and_never_use_forecast(
+    app,
+    client,
+    db_session,
+    method,
+    path,
+):
+    """游客不能进入或写入跨端账号绑定流程。"""
+    from core.db_models import MiniProgramLinkChallenge
+
+    _set_runtime_mode(app, "dual")
+    assert client.get("/guest", follow_redirects=False).status_code in (301, 302, 303)
+    with client.session_transaction() as flask_session:
+        flask_session["_csrf_token"] = "guest-account-link-csrf"
+
+    response = client.open(
+        path,
+        method=method,
+        data={
+            "csrf_token": "guest-account-link-csrf",
+            "phone": "13900000000",
+            "current_password": "unused-guest-password",
+            "miniprogram_privacy_consent": "1",
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    location = response.headers.get("Location", "")
+    assert location.endswith("/register")
+    assert "/forecast-7day" not in location
+    assert MiniProgramLinkChallenge.query.count() == 0
+
+
+@pytest.mark.parametrize(
     ("target", "suffix"),
     (
         ("/logout", "logout"),
