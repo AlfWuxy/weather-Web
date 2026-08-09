@@ -36,6 +36,17 @@ INPUT_EXCEPTIONS = (ValueError, KeyError, TypeError, json.JSONDecodeError)
 SERVICE_EXCEPTIONS = (RuntimeError, FileNotFoundError, OSError, TimeoutError)
 API_EXCEPTIONS = INPUT_EXCEPTIONS + SERVICE_EXCEPTIONS
 
+# 仅公开前端展示所需的稳定字段，避免模型内部路径和样本元数据外泄。
+DLNM_SUMMARY_PUBLIC_FIELDS = (
+    'status',
+    'model_source',
+    'profile_loaded',
+    'profile_name',
+    'mmt',
+    'max_lag',
+    'risk_thresholds',
+)
+
 
 def _weather_unavailable_response(weather_data=None, message=None):
     """风险计算只允许使用真实和风实况；不可用时停止生成结论。"""
@@ -522,9 +533,17 @@ def _api_dlnm_summary():
     try:
         from services.dlnm_risk_service import get_dlnm_service
         dlnm = get_dlnm_service()
+        raw_summary = dlnm.get_model_summary()
+        if not isinstance(raw_summary, dict):
+            raise TypeError('DLNM模型摘要格式无效')
+        public_summary = {
+            field: raw_summary[field]
+            for field in DLNM_SUMMARY_PUBLIC_FIELDS
+            if field in raw_summary
+        }
         return jsonify({
             'success': True,
-            'summary': dlnm.get_model_summary()
+            'summary': public_summary
         })
     except API_EXCEPTIONS as exc:
         return handle_api_exception(exc, "DLNM模型摘要获取失败", log=logger)

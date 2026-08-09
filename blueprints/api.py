@@ -125,6 +125,7 @@ def api_dlnm_risk():
 
 
 @bp.route('/api/v1/dlnm/summary', endpoint='api_v1_dlnm_summary')
+@login_required
 def api_v1_dlnm_summary():
     """获取DLNM模型摘要（v1）"""
     return api_service._api_dlnm_summary()
