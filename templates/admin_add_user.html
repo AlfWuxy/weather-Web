@@ -72,6 +72,16 @@
                                     {% endfor %}
                                 </select>
                             </div>
+                            <div class="col-md-4 mb-3">
+                                <label for="authorized_community" class="form-label">运营授权社区</label>
+                                <select class="form-select" id="authorized_community" name="authorized_community">
+                                    <option value="">普通用户或管理员无需选择</option>
+                                    {% for comm in communities %}
+                                        <option value="{{ comm.name }}">{{ comm.name }}</option>
+                                    {% endfor %}
+                                </select>
+                                <small class="text-muted">社区人员和照护人必须由管理员明确分配。</small>
+                            </div>
                         </div>
 
                         <hr>
@@ -89,7 +99,6 @@
     </div>
 </div>
 {% endblock %}
-
 
 
 

@@ -36,11 +36,24 @@ bp = Blueprint('admin', __name__)
 COOLING_GCJ02_CENTER_LATITUDE = 29.27
 COOLING_GCJ02_CENTER_LONGITUDE = 116.20
 COOLING_GCJ02_MAX_DISTANCE_KM = 80.0
+COMMUNITY_OPERATING_ROLES = frozenset({'community', 'caregiver'})
 COOLING_CANDIDATE_PATH = (
     Path(__file__).resolve().parent.parent
     / 'data'
     / 'cooling_resource_candidates.json'
 )
+
+
+def _validated_authorized_community(role, raw_value):
+    """只接受管理员从现有社区表选择的运营授权。"""
+    if role not in COMMUNITY_OPERATING_ROLES:
+        return True, None
+    value = sanitize_input(raw_value, max_length=100)
+    value = value.strip() if isinstance(value, str) else ''
+    if not value:
+        return False, None
+    exists = Community.query.filter_by(name=value).first() is not None
+    return (exists, value if exists else None)
 
 
 def _load_cooling_candidates():
@@ -680,6 +693,17 @@ def admin_edit_user(user_id):
 
         community = sanitize_input(request.form.get('community'), max_length=100)
 
+        role = request.form.get('role', user.role or 'user')
+        if role not in ['admin', 'user', 'caregiver', 'community']:
+            role = user.role or 'user'
+        valid_authorized, authorized_community = _validated_authorized_community(
+            role,
+            request.form.get('authorized_community'),
+        )
+        if not valid_authorized:
+            flash('社区人员或照护人必须选择有效的运营授权社区', 'error')
+            return redirect(url_for('admin.admin_edit_user', user_id=user_id))
+
         new_password = request.form.get('password')
         if new_password:
             valid, result = validate_password(new_password)
@@ -704,15 +728,12 @@ def admin_edit_user(user_id):
                 synchronize_session=False,
             )
 
-        role = request.form.get('role', user.role or 'user')
-        if role not in ['admin', 'user', 'caregiver', 'community']:
-            role = user.role or 'user'
-
         user.username = username
         user.email = email
         user.age = age
         user.gender = gender
         user.community = community
+        user.authorized_community = authorized_community
         user.role = role
 
         db.session.commit()
@@ -774,6 +795,13 @@ def admin_add_user():
         role = request.form.get('role', 'user')
         if role not in ['admin', 'user', 'caregiver', 'community']:
             role = 'user'
+        valid_authorized, authorized_community = _validated_authorized_community(
+            role,
+            request.form.get('authorized_community'),
+        )
+        if not valid_authorized:
+            flash('社区人员或照护人必须选择有效的运营授权社区', 'error')
+            return redirect(url_for('admin.admin_add_user'))
 
         if User.query.filter(
             db.func.lower(User.username) == username.lower()
@@ -791,6 +819,7 @@ def admin_add_user():
             age=age,
             gender=gender,
             community=community,
+            authorized_community=authorized_community,
             role=role
         )
         user.set_password(password)

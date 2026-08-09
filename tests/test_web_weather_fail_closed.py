@@ -235,6 +235,7 @@ def test_community_pages_do_not_generate_mock_risk_messages(
 ):
     """社区工作台、微信模板和传播包遇到 mock 时均停止风险文案。"""
     user = _create_user(db_session, 'community_mock_guard', 'community')
+    user.authorized_community = '都昌'
     db_session.add(Community(name='都昌', population=800, elderly_ratio=0.35))
     db_session.commit()
     _login_as(client, user.id)

@@ -32,6 +32,7 @@ from ._helpers import (
     _build_community_snapshot,
     _build_outreach_suggestions,
     _community_access_allowed,
+    _user_acl_community,
 )
 
 logger = logging.getLogger(__name__)
@@ -89,9 +90,9 @@ def community_dashboard():
     if getattr(current_user, 'role', None) == 'admin':
         communities = Community.query.order_by(Community.name).all()
     else:
-        community_code = _normalize_code(getattr(current_user, 'community', None))
+        community_code = _user_acl_community()
         if not community_code:
-            flash('请先设置所属社区', 'error')
+            flash('尚未分配运营社区，请联系管理员', 'error')
             return redirect(url_for('user.user_dashboard'))
         communities = Community.query.filter_by(name=community_code).all()
 
@@ -320,9 +321,20 @@ def community_announce():
     if not _require_roles('community', 'caregiver', 'admin'):
         return redirect(url_for('user.user_dashboard'))
 
-    community_code = sanitize_input(request.args.get('community'), max_length=100)
-    if not community_code:
-        community_code = getattr(current_user, 'community', None)
+    requested_community = sanitize_input(
+        request.args.get('community'),
+        max_length=100,
+    )
+    if getattr(current_user, 'role', None) == 'admin':
+        community_code = _normalize_code(requested_community)
+    else:
+        authorized_community = _user_acl_community()
+        community_code = _normalize_code(
+            requested_community or authorized_community,
+        )
+        if not community_code or not _community_access_allowed(community_code):
+            flash('无权生成该社区传播包', 'error')
+            return redirect(url_for('user.user_dashboard'))
     location = normalize_location_name(community_code)
     display_location = community_code or location
     _weather_data, _heat_result, risk_label = _load_heat_risk(location)

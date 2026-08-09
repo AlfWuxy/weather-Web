@@ -89,7 +89,9 @@ class User(UserMixin, db.Model):
     # 个人健康信息
     age = db.Column(db.Integer)
     gender = db.Column(db.String(10))
-    community = db.Column(db.String(100))  # 所属社区
+    community = db.Column(db.String(100))  # 定位、展示与天气关联，可由用户修改
+    # 运营 ACL 只能由管理员写入；空值必须拒绝访问，禁止回退到 community。
+    authorized_community = db.Column(db.String(100))
     has_chronic_disease = db.Column(db.Boolean, default=False)
     chronic_diseases = db.Column(db.Text)  # JSON格式存储多个慢性病
 

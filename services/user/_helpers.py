@@ -284,11 +284,18 @@ def _ensure_demo_statuses(community_code, status_date, caregiver_id=None, pair_c
     _refresh_community_daily(community_code, status_date)
 
 
+def _user_acl_community(user=None):
+    """返回可信运营社区；空授权保持为空，禁止回退定位字段。"""
+    actor = user or current_user
+    return _normalize_code(getattr(actor, 'authorized_community', None)) or None
+
+
 def _community_access_allowed(community_code):
     if getattr(current_user, 'role', None) == 'admin':
         return True
-    user_code = _normalize_code(getattr(current_user, 'community', None))
-    return bool(user_code) and user_code == community_code
+    target_code = _normalize_code(community_code)
+    user_code = _user_acl_community()
+    return bool(target_code and user_code) and user_code == target_code
 
 
 def _build_community_snapshot(community_code, status_date, record=_MISSING, statuses=_MISSING):
