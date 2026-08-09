@@ -21,6 +21,8 @@ from flask import (
 from flask_login import current_user, login_user, logout_user
 from sqlalchemy import or_
 from sqlalchemy.exc import IntegrityError
+from werkzeug.exceptions import MethodNotAllowed, NotFound
+from werkzeug.routing import RequestRedirect
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from core.constants import GUEST_ID_PREFIX
@@ -88,6 +90,20 @@ HEAT_RISK_LABELS = {
 }
 
 PAIR_TOKEN_SESSION_KEY = 'pair_token'
+IDENTITY_SCOPED_SESSION_KEYS = frozenset({
+    'pair_session_id',
+    'pair_session_code',
+    PAIR_TOKEN_SESSION_KEY,
+    'last_api_token_plain',
+    'last_mini_link_code',
+    'last_mini_link_expires_at',
+    'pair_link_token',
+    'pair_link_id',
+    'created_pair_id',
+    'guest_profile',
+    'guest_assessment',
+    'guest_id',
+})
 FORMAL_WEB_ACTION_READ_ONLY_MESSAGE = (
     '微信正式版的网页家庭行动页仅供查看。请在微信小程序中登录后完成确认、求助或复盘。'
 )
@@ -124,6 +140,17 @@ def _clear_pair_token():
     session.pop(PAIR_TOKEN_SESSION_KEY, None)
 
 
+def _clear_identity_scoped_session():
+    """只清理绑定到旧身份的数据，保留 CSRF、flash 与其他匿名偏好。"""
+    for key in IDENTITY_SCOPED_SESSION_KEYS:
+        session.pop(key, None)
+    # 未勾选“记住我”的新身份不能继承旧账号的长期登录 cookie。
+    remember_cookie = current_app.config.get('REMEMBER_COOKIE_NAME', 'remember_token')
+    if request.cookies.get(remember_cookie):
+        session['_remember'] = 'clear'
+    session.pop('_remember_seconds', None)
+
+
 def _formal_web_actions_are_read_only():
     """正式微信运行态关闭网页家庭行动写入口。"""
     return bool(current_app.config.get('WECHAT_FORMAL_RUNTIME', False))
@@ -142,14 +169,26 @@ def _safe_next_url(next_url):
         return None
     if '\r' in next_url or '\n' in next_url:
         return None
-    parsed = urlparse(next_url)
-    if parsed.scheme or parsed.netloc:
+    try:
+        parsed = urlparse(next_url)
+    except ValueError:
+        return None
+    if parsed.scheme or parsed.netloc or parsed.params or parsed.fragment:
         return None
     if not next_url.startswith('/'):
         return None
     if next_url.startswith(("//", "\\\\", "/\\")):
         return None
-    return next_url
+    adapter = current_app.url_map.bind_to_environ(request.environ)
+    for method in ('GET', 'HEAD'):
+        try:
+            adapter.match(parsed.path, method=method)
+            return next_url
+        except MethodNotAllowed:
+            continue
+        except (NotFound, RequestRedirect):
+            return None
+    return None
 
 
 def _short_code_guard_config():
@@ -1212,6 +1251,7 @@ def handle_account_link_code():
 
 
 def handle_login(next_url):
+    safe_next = _safe_next_url(next_url)
     if request.method == 'POST':
         # 输入验证
         username = request.form.get('username', '').strip()
@@ -1226,12 +1266,12 @@ def handle_login(next_url):
         # 基本验证
         if not username or not password:
             flash('请输入用户名或已验证手机号和密码', 'error')
-            return render_template('login.html', next=next_url)
+            return render_template('login.html', next=safe_next)
 
         # 限制长度防止攻击
         if len(username) > 50 or len(password) > 100:
             flash('输入内容过长', 'error')
-            return render_template('login.html', next=next_url)
+            return render_template('login.html', next=safe_next)
 
         if normalized_phone:
             user = User.query.filter(
@@ -1275,7 +1315,7 @@ def handle_login(next_url):
                         remaining,
                     )
                     flash(f'登录失败次数过多，请 {remaining // 60 + 1} 分钟后再试', 'error')
-                    return render_template('login.html', next=next_url)
+                    return render_template('login.html', next=safe_next)
             except Exception:
                 logger.warning("Redis 锁定检查失败，回退数据库兜底", exc_info=True)
                 redis_client = None
@@ -1295,7 +1335,7 @@ def handle_login(next_url):
                         db_remaining,
                     )
                     flash(f'登录失败次数过多，请 {db_remaining // 60 + 1} 分钟后再试', 'error')
-                    return render_template('login.html', next=next_url)
+                    return render_template('login.html', next=safe_next)
             except Exception:
                 logger.warning("数据库锁定检查失败", exc_info=True)
 
@@ -1318,6 +1358,7 @@ def handle_login(next_url):
                     _clear_login_failures_db(login_subject)
                 except Exception:
                     logger.warning("数据库清除失败计数失败", exc_info=True)
+            _clear_identity_scoped_session()
             login_user(
                 user,
                 remember=remember_flag,
@@ -1327,7 +1368,6 @@ def handle_login(next_url):
             db.session.commit()
             logger.info("用户登录成功: user_id=%s", user.id)
 
-            safe_next = _safe_next_url(next_url)
             if safe_next:
                 return redirect(safe_next)
 
@@ -1369,7 +1409,7 @@ def handle_login(next_url):
         logger.warning("登录失败: identifier_len=%s", len(username))
         flash('用户名、已验证手机号或密码错误', 'error')
 
-    return render_template('login.html', next=next_url)
+    return render_template('login.html', next=safe_next)
 
 
 def handle_register():
@@ -1690,6 +1730,7 @@ def handle_guest_login(next_url=None):
     if current_user.is_authenticated and not is_guest_user(current_user):
         return redirect(url_for('user.user_dashboard'))
 
+    _clear_identity_scoped_session()
     session['guest_profile'] = {
         'username': '游客',
         'age': None,
@@ -1709,9 +1750,6 @@ def handle_guest_login(next_url=None):
 
 
 def handle_logout():
-    if is_guest_user(current_user):
-        session.pop('guest_profile', None)
-        session.pop('guest_assessment', None)
-        session.pop('guest_id', None)
+    _clear_identity_scoped_session()
     logout_user()
     return redirect(url_for('public.index'))

@@ -96,7 +96,7 @@
                                 <button type="submit" class="btn btn-primary btn-lg">登录</button>
                             </div>
                             <div class="d-grid mb-3">
-                                <a href="{{ url_for('public.guest_login') }}" class="btn btn-outline-primary">游客体验</a>
+                                <a href="{{ url_for('public.guest_login', next=next) if next else url_for('public.guest_login') }}" class="btn btn-outline-primary">游客体验</a>
                             </div>
 
                             <div class="text-center">
