@@ -43,9 +43,12 @@
 {% if current_user.is_authenticated and current_user.role in ['community', 'admin'] %}
     {% set community_url = url_for('user.community_dashboard') %}
     {% set community_cta = '进入社区工作台' %}
-{% elif current_user.is_authenticated %}
+{% elif current_user.is_authenticated and current_user.role != 'guest' %}
     {% set community_url = url_for('user.community_risk') %}
     {% set community_cta = '查看社区风险' %}
+{% elif current_user.is_authenticated %}
+    {% set community_url = url_for('public.public_risk') %}
+    {% set community_cta = '查看公开风险' %}
 {% else %}
     {% set community_url = url_for('public.login', next=url_for('user.community_dashboard')) %}
     {% set community_cta = '社区人员登录' %}

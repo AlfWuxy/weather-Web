@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
 """User-facing routes."""
-from flask import Blueprint, abort, current_app
-from flask_login import login_required
+from flask import Blueprint, abort, current_app, redirect, url_for
+from flask_login import current_user, login_required
 
 from core.extensions import limiter
+from core.guest import is_guest_user
 from core.security import rate_limit_key
 from services import user_service
 
@@ -137,6 +138,9 @@ def health_assessment():
 @login_required
 def community_risk():
     """社区风险地图"""
+    # 游客身份不进入真实用户的社区与病历查询链路。
+    if is_guest_user(current_user):
+        return redirect(url_for('public.public_risk'))
     return user_service.community_risk()
 
 
