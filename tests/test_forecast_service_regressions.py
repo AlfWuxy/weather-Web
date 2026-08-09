@@ -38,6 +38,8 @@ def test_composite_exposure_returns_score_stages_and_input_trace():
     assert result['pre_clip_score'] == 63.4
     assert result['final_score'] == 63.4
     assert result['score'] == result['final_score']
+    assert result['threshold_semantics'] == 'action_communication_interface'
+    assert result['warning_calibrated'] is False
     assert result['pm25_source'] == 'aqi_proxy'
     assert result['inputs']['pm25'] == {
         'used_value': 65.0,
@@ -135,7 +137,7 @@ def test_qweather_normalizer_does_not_insert_temperature_or_humidity_defaults():
     assert normalized['humidity'] is None
 
 
-def test_predict_daily_visits_exposes_raw_probability_inputs(monkeypatch):
+def test_predict_daily_visits_disables_uncalibrated_probability(monkeypatch):
     from services.forecast_service import ForecastService
 
     class FakeDlnmService:
@@ -164,9 +166,82 @@ def test_predict_daily_visits_exposes_raw_probability_inputs(monkeypatch):
     assert result['dow_factor'] == 0.7
     assert result['visit_threshold_p90'] == 30.0
     assert result['std_estimate'] == pytest.approx(expected_std, abs=1e-4)
-    assert result['probability_method'] == 'normal_approximation'
+    assert result['probability_exceed_p90'] is None
+    assert result['probability_exceed_p75'] is None
+    assert result['probability_method'] == 'disabled_uncalibrated'
+    assert result['probability_calibrated'] is False
+    assert result['prediction_status'] == 'exploratory_point_estimate'
     assert result['guardrail_cap'] == 40.0
     assert result['guardrail_applied'] is True
+
+
+def test_7day_model_warnings_are_disabled_but_weather_events_remain(monkeypatch):
+    import pandas as pd
+
+    from services.forecast_service import ForecastService
+
+    class FakeDlnmService:
+        seasonal_baseline = {}
+
+        def calculate_rr(self, _temperature, _lag_temps=None):
+            return 1.1, {}
+
+        def identify_extreme_weather_events(self, _temperature):
+            return [{
+                'type': '高温预警',
+                'severity': 'medium',
+                'description': '天气事件提示',
+            }]
+
+    monkeypatch.setattr(
+        'services.dlnm_risk_service.get_dlnm_service',
+        lambda: FakeDlnmService(),
+    )
+
+    service = ForecastService.__new__(ForecastService)
+    service.qm_params = {}
+    service.weather_history = pd.DataFrame()
+    service.visit_mean = 20.0
+    service.visit_threshold_p90 = 30.0
+    service.max_observed_daily_visits = 40.0
+    service.quantile_mapping = lambda temp, lead_day, model_spread=None: (
+        float(temp),
+        {'lower': float(temp) - 1, 'upper': float(temp) + 1, 'model_spread': model_spread or 0},
+    )
+    service.get_lag_temperature_profile = lambda *_args, **_kwargs: ([20.0] * 8, ['observed'] * 8)
+
+    inputs = [
+        {
+            'temperature_mean': 33 + idx,
+            'temperature_min': 25 + idx,
+            'temperature_max': 36 + idx,
+            'humidity': 70,
+            'data_source': 'QWeather',
+        }
+        for idx in range(7)
+    ]
+    forecasts, summary = service.generate_7day_forecast(
+        inputs,
+        start_date=date(2026, 7, 10),
+    )
+
+    assert len(forecasts) == 7
+    for day in forecasts:
+        assert day['probability_high_visits'] is None
+        assert day['risk_level'] is None
+        assert day['model_warning_status'] == 'disabled_uncalibrated'
+        assert day['cap_semantics']['status'] == 'disabled_uncalibrated'
+        assert day['visits']['probability_exceed_p90'] is None
+        assert day['extreme_events'][0]['description'] == '天气事件提示'
+
+    assert summary['high_risk_days'] is None
+    assert summary['overall_risk'] == 'unavailable'
+    assert summary['probability_products']['available'] is False
+    assert summary['probability_products']['days_prob_exceed_p90_ge50'] is None
+    assert summary['impact_likelihood_matrix']['available'] is False
+    assert summary['composite_exposure']['high_attention_days'] >= 0
+    assert 'high_risk_days' not in summary['composite_exposure']
+    assert any('非官方预警' in item['advice'] for item in summary['recommendations'])
 
 
 def test_predictability_reports_external_and_derived_branches():
@@ -219,7 +294,8 @@ def test_forecast_cards_do_not_substitute_visit_probability_for_composite_score(
 
     card = build_forecast_cards(qweather_days, health_forecasts, date(2026, 7, 10))[0]
 
-    assert card['probability_high_visits'] == 82.0
+    assert card['probability_high_visits'] is None
+    assert card['model_warning_status'] == 'disabled_uncalibrated'
     assert card['risk_available'] is False
     assert card['risk_score'] is None
     assert card['risk_level'] == 'unknown'
@@ -349,7 +425,8 @@ def test_forecast_page_embeds_recalculation_context(authenticated_client, monkey
                 )
                 forecasts.append({
                     'date': (start + timedelta(days=idx)).strftime('%Y-%m-%d'),
-                    'probability_high_visits': 61.5,
+                    'probability_high_visits': None,
+                    'model_warning_status': 'disabled_uncalibrated',
                     'composite_exposure': {
                         'score': 72.0,
                         'pre_clip_score': 72.0,
@@ -371,7 +448,8 @@ def test_forecast_page_embeds_recalculation_context(authenticated_client, monkey
                         'dow_factor': 1.0,
                         'visit_threshold_p90': 38.0,
                         'std_estimate': 16.2,
-                        'probability_method': 'normal_approximation',
+                        'probability_method': 'disabled_uncalibrated',
+                        'probability_calibrated': False,
                         'guardrail_applied': False,
                     },
                     'predictability': {
@@ -425,13 +503,12 @@ def test_forecast_page_embeds_recalculation_context(authenticated_client, monkey
 
     assert response.status_code == 200
     exposure_context = contexts_by_metric['forecast_exposure_score'][0]
-    visit_context = contexts_by_metric['forecast_visit_probability'][0]
     predictability_context = contexts_by_metric['forecast_predictability'][0]
     assert exposure_context['限幅前评分'] == 72.0
     assert exposure_context['协同加分'] == 12.0
     assert exposure_context['PM2.5来源'] == '当前实况复用（非未来预报）'
     assert contexts_by_metric['forecast_exposure_score'][1]['PM2.5来源'] == '未来日AQI×0.65代理'
-    assert visit_context['概率所用原始门诊量'] == 39.5
-    assert visit_context['历史P90阈值'] == 38.0
+    assert 'forecast_visit_probability' not in contexts_by_metric
+    assert '门诊高负荷概率与模型预警尚未完成校准，当前不启用' in body
     assert predictability_context['计算分支'] == '上游外部分数'
     assert predictability_context['外部分数输入'] == 88.0

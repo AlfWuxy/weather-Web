@@ -6,7 +6,7 @@
 B1. 天气预报输入（CMA/和风天气API）
 B2. 预报后处理（Quantile Mapping / EMOS）
 B3. Lag拼接（过去7天观测 + 未来预报）
-B4. 健康预测（点预测 + 区间 + 概率预警）
+B4. 健康预测（探索性点预测；概率与模型预警待校准）
 B5. 回测评估
 """
 import pandas as pd
@@ -335,6 +335,8 @@ class ForecastService:
             'final_score': round(final_score, 1),
             'synergy_bonus': round(synergy_bonus, 1),
             'level': level,
+            'threshold_semantics': 'action_communication_interface',
+            'warning_calibrated': False,
             'components': {
                 'heat': round(heat_score, 1),
                 'pm25': round(pollution_score, 1),
@@ -373,49 +375,24 @@ class ForecastService:
         }
 
     def _cap_semantics_for_forecast(self, prob_high_percent, composite_level):
-        """将日级概率映射为 CAP 风格语义。"""
-        prob = self._safe_float(prob_high_percent, 0.0) or 0.0
-        if prob >= 65 or composite_level == '高':
-            severity = 'severe'
-        elif prob >= 35:
-            severity = 'moderate'
-        else:
-            severity = 'minor'
-
-        if prob >= 60:
-            certainty = 'likely'
-        elif prob >= 30:
-            certainty = 'possible'
-        else:
-            certainty = 'unlikely'
-
-        if severity == 'severe' and certainty == 'likely':
-            urgency = 'immediate'
-        elif severity in ('severe', 'moderate'):
-            urgency = 'expected'
-        else:
-            urgency = 'future'
-
+        """未校准前不把模型分数映射成 CAP 预警语义。"""
+        del prob_high_percent, composite_level
         return {
-            'severity': severity,
-            'certainty': certainty,
-            'urgency': urgency
+            'severity': 'unknown',
+            'certainty': 'unknown',
+            'urgency': 'unknown',
+            'status': 'disabled_uncalibrated',
         }
 
     def _build_role_action_cards(self, forecasts, summary):
         """按角色输出行动卡：居民 / 村医 / 社区干部。"""
-        high_days = [row for row in forecasts if (self._safe_float(row.get('probability_high_visits'), 0.0) or 0.0) >= 50]
         composite_high_days = [row for row in forecasts if (row.get('composite_exposure') or {}).get('level') == '高']
-        scenario = summary.get('scenario_totals') or {}
-        baseline_total = self._safe_float(scenario.get('baseline_total'), 0.0) or 0.0
-        worst_total = self._safe_float(scenario.get('worst_case_total'), baseline_total) or baseline_total
-        extra = max(0.0, worst_total - baseline_total)
 
         resident_cards = [
             {
-                'priority': 'high' if high_days else 'medium',
+                'priority': 'medium',
                 'title': '居民日常行动',
-                'action': '根据预警概率调整外出时段，优先早晚活动，午后减少户外暴露。'
+                'action': '结合官方天气预警和逐日天气安排外出；复合暴露关注分只作防护沟通参考。'
             }
         ]
         if composite_high_days:
@@ -427,23 +404,17 @@ class ForecastService:
 
         doctor_cards = [
             {
-                'priority': 'high' if high_days else 'medium',
+                'priority': 'medium',
                 'title': '村医排班准备',
-                'action': f'未来7天最坏情景较基线多约 {round(extra, 1)} 人次，建议提前安排门急诊与随访。'
+                'action': '门诊负担模型尚未完成时间切分校准，不据此自动排班；请结合官方预警与现场需求人工准备。'
             }
         ]
-        if any((row.get('cap_semantics') or {}).get('urgency') == 'immediate' for row in forecasts):
-            doctor_cards.append({
-                'priority': 'high',
-                'title': '高危人群追踪',
-                'action': '对老年慢病与近期不适人群进行电话回访，必要时上门复核。'
-            })
 
         community_cards = [
             {
-                'priority': 'high' if len(high_days) >= 2 else 'medium',
+                'priority': 'medium',
                 'title': '社区资源调度',
-                'action': '根据高风险日分布，动态调整避暑点开放时段和宣传频次。'
+                'action': '根据官方天气预警、现场容量和居民反馈调整避暑点开放与宣传频次。'
             },
             {
                 'priority': 'medium',
@@ -500,42 +471,14 @@ class ForecastService:
         }
 
     def _build_impact_likelihood_matrix(self, forecasts):
-        """
-        影响×可能性矩阵（类似英气象部门 impact-likelihood 风格）。
-        返回 3x3 计数，供前端可视化。
-        """
-        matrix = {
-            'high': {'high': 0, 'medium': 0, 'low': 0},
-            'medium': {'high': 0, 'medium': 0, 'low': 0},
-            'low': {'high': 0, 'medium': 0, 'low': 0}
-        }
-        for item in forecasts or []:
-            visits = (item.get('visits') or {})
-            point_estimate = self._safe_float(visits.get('point_estimate'), 0.0) or 0.0
-            baseline = self._safe_float(visits.get('baseline'), self.visit_mean or 1.0) or 1.0
-            ratio = point_estimate / baseline if baseline > 0 else 1.0
-
-            if ratio >= 1.4:
-                impact = 'high'
-            elif ratio >= 1.1:
-                impact = 'medium'
-            else:
-                impact = 'low'
-
-            prob = self._safe_float(item.get('probability_high_visits'), 0.0) or 0.0
-            if prob >= 50:
-                likelihood = 'high'
-            elif prob >= 20:
-                likelihood = 'medium'
-            else:
-                likelihood = 'low'
-
-            matrix[impact][likelihood] += 1
-
+        """Likelihood 没有校准概率时，矩阵必须显式不可用。"""
+        del forecasts
         return {
-            'impact_levels': ['low', 'medium', 'high'],
-            'likelihood_levels': ['low', 'medium', 'high'],
-            'cells': matrix
+            'available': False,
+            'status': 'disabled_uncalibrated_probability',
+            'impact_levels': [],
+            'likelihood_levels': [],
+            'cells': None,
         }
 
     def quantile_mapping(self, forecast_temp, lead_day=1, model_spread=None):
@@ -686,9 +629,9 @@ class ForecastService:
         - dow: 星期几（0-6）
         
         返回:
-        - point_estimate: 点预测
-        - interval: 预测区间
-        - probability_high: 超阈值概率
+        - point_estimate: 探索性点预测
+        - interval: 固定离散参数下的探索性范围
+        - probability_high: 未校准，固定返回 None
         """
         from services.dlnm_risk_service import get_dlnm_service
         
@@ -712,7 +655,7 @@ class ForecastService:
             elif dow == 0:  # 周一略高
                 dow_factor = 1.1
         
-        # 点预测。保留限幅前数值，概率计算始终使用这一原始均值。
+        # 点预测保留为研究参考，不用于触发模型预警。
         point_estimate = baseline * rr * dow_factor
         raw_point_estimate = float(point_estimate)
         
@@ -724,16 +667,9 @@ class ForecastService:
         lower_bound = max(0, point_estimate - 1.96 * std_estimate)
         upper_bound = point_estimate + 1.96 * std_estimate
         
-        # 超阈值概率 P(Y >= P90)
+        # 历史阈值保留用于审计；概率没有时间切分校准，线上不计算。
         visit_threshold_p90 = self._safe_float(self.visit_threshold_p90, None)
-        if visit_threshold_p90 is not None and visit_threshold_p90 > 0:
-            # 使用正态近似
-            z = (visit_threshold_p90 - raw_point_estimate) / std_estimate if std_estimate > 0 else 0
-            prob_high = 1 - stats.norm.cdf(z)
-            probability_method = 'normal_approximation'
-        else:
-            prob_high = 0.1
-            probability_method = 'fallback_0.1'
+        probability_method = 'disabled_uncalibrated'
         
         # --- Safety guardrail: clamp implausible outliers (pilot reliability) ---
         max_cap = None
@@ -775,8 +711,8 @@ class ForecastService:
             'p10': round(p10, 1) if p10 is not None else None,
             'p50': round(p50, 1) if p50 is not None else None,
             'p90': round(p90, 1) if p90 is not None else None,
-            'probability_exceed_p90': round(prob_high, 3),
-            'probability_exceed_p75': round(min(1, prob_high * 1.5), 3),
+            'probability_exceed_p90': None,
+            'probability_exceed_p75': None,
             'rr': round(rr, 3),
             'baseline': round(baseline, 1),
             'dow_factor': round(dow_factor, 3),
@@ -784,6 +720,9 @@ class ForecastService:
             'visit_threshold_p90': round(visit_threshold_p90, 4) if visit_threshold_p90 is not None else None,
             'std_estimate': round(float(std_estimate), 4),
             'probability_method': probability_method,
+            'probability_calibrated': False,
+            'prediction_status': 'exploratory_point_estimate',
+            'interval_status': 'exploratory_fixed_theta_not_calibrated',
             'guardrail_cap': round(max_cap, 1) if max_cap is not None else None,
             'guardrail_applied': guardrail_applied,
             'temperature': temperature
@@ -828,7 +767,6 @@ class ForecastService:
         
         forecasts = []
         total_expected_visits = 0
-        high_risk_days = 0
         predictability_scores = []
         model_sources = set()
         total_worst_case_visits = 0.0
@@ -902,23 +840,9 @@ class ForecastService:
                 dow=dow
             )
             
-            # 确定风险等级
-            prob_high = prediction['probability_exceed_p90']
-            if prob_high > 0.5:
-                risk_level = '红色预警'
-                risk_color = 'danger'
-            elif prob_high > 0.3:
-                risk_level = '橙色预警'
-                risk_color = 'warning'
-            elif prob_high > 0.15:
-                risk_level = '黄色提醒'
-                risk_color = 'info'
-            else:
-                risk_level = '正常'
-                risk_color = 'success'
-            
-            if prob_high > 0.3:
-                high_risk_days += 1
+            # 固定 theta + 正态近似未经时间切分校准，停用红橙黄模型预警。
+            risk_level = None
+            risk_color = 'secondary'
             
             # 识别极端天气
             from services.dlnm_risk_service import get_dlnm_service
@@ -950,7 +874,7 @@ class ForecastService:
                 composite_high_days += 1
 
             cap_semantics = self._cap_semantics_for_forecast(
-                prob_high_percent=prob_high * 100.0,
+                prob_high_percent=None,
                 composite_level=composite_exposure.get('level')
             )
 
@@ -983,7 +907,8 @@ class ForecastService:
                 # 风险信息
                 'risk_level': risk_level,
                 'risk_color': risk_color,
-                'probability_high_visits': round(prob_high * 100, 1),
+                'probability_high_visits': None,
+                'model_warning_status': 'disabled_uncalibrated',
                 
                 # 极端天气
                 'extreme_events': extreme_events,
@@ -1007,7 +932,7 @@ class ForecastService:
             total_worst_case_visits += self._safe_float(prediction.get('p90'), 0.0) or 0.0
         
         # 生成建议
-        recommendations = self._generate_forecast_recommendations(forecasts, high_risk_days)
+        recommendations = self._generate_forecast_recommendations(forecasts, None)
         avg_predictability = round(sum(predictability_scores) / len(predictability_scores), 1) if predictability_scores else None
         low_predictability_days = sum(1 for s in predictability_scores if s < 50)
         
@@ -1017,20 +942,25 @@ class ForecastService:
                 'end': (start_date + timedelta(days=6)).strftime('%Y-%m-%d')
             },
             'total_expected_visits': round(total_expected_visits, 0),
-            'high_risk_days': high_risk_days,
+            'high_risk_days': None,
             'average_daily_visits': round(total_expected_visits / 7, 1),
-            'overall_risk': 'high' if high_risk_days >= 3 else 'medium' if high_risk_days >= 1 else 'low',
+            'visit_projection_status': 'exploratory_uncalibrated',
+            'overall_risk': 'unavailable',
+            'model_warning_status': 'disabled_uncalibrated',
             'recommendations': recommendations,
             'scenario_totals': {
+                'status': 'exploratory_fixed_theta_not_calibrated',
                 'optimistic_total': round(total_optimistic_visits, 1),
                 'baseline_total': round(total_expected_visits, 1),
                 'worst_case_total': round(total_worst_case_visits, 1),
                 'worst_case_extra': round(max(0.0, total_worst_case_visits - total_expected_visits), 1)
             },
             'probability_products': {
-                'days_prob_exceed_p90_ge50': int(sum(1 for f in forecasts if (self._safe_float(f.get('probability_high_visits'), 0.0) or 0.0) >= 50.0)),
-                'days_prob_exceed_p90_ge30': int(sum(1 for f in forecasts if (self._safe_float(f.get('probability_high_visits'), 0.0) or 0.0) >= 30.0)),
-                'days_prob_exceed_p75_ge50': int(sum(1 for f in forecasts if (self._safe_float((f.get('visits') or {}).get('probability_exceed_p75'), 0.0) or 0.0) * 100.0 >= 50.0))
+                'available': False,
+                'status': 'disabled_uncalibrated',
+                'days_prob_exceed_p90_ge50': None,
+                'days_prob_exceed_p90_ge30': None,
+                'days_prob_exceed_p75_ge50': None,
             },
             'predictability': {
                 'average_score': avg_predictability,
@@ -1038,7 +968,8 @@ class ForecastService:
             },
             'composite_exposure': {
                 'average_score': round(float(np.mean(composite_scores)) if composite_scores else 0.0, 1),
-                'high_risk_days': composite_high_days
+                'high_attention_days': composite_high_days,
+                'threshold_semantics': 'action_communication_interface',
             },
             'impact_likelihood_matrix': self._build_impact_likelihood_matrix(forecasts),
             'model_sources': sorted(model_sources),
@@ -1052,8 +983,8 @@ class ForecastService:
         """生成预测建议"""
         recommendations = []
         
-        # 分析高风险天数
-        if high_risk_days >= 3:
+        # 只有经过校准的模型高风险天数才能触发资源配置建议。
+        if high_risk_days is not None and high_risk_days >= 3:
             recommendations.append({
                 'priority': 'high',
                 'category': '资源调配',
@@ -1067,8 +998,8 @@ class ForecastService:
                 for event in day['extreme_events']:
                     recommendations.append({
                         'priority': 'high' if event['severity'] == 'extreme' else 'medium',
-                        'category': '极端天气',
-                        'advice': f"{day['date']}: {event['description']}"
+                        'category': '天气事件',
+                        'advice': f"{day['date']}: {event['description']}（模型阈值行动提示，非官方预警）"
                     })
         
         # 温度趋势分析
@@ -1076,24 +1007,15 @@ class ForecastService:
         if max(temps) - min(temps) > 10:
             recommendations.append({
                 'priority': 'medium',
-                'category': '温差预警',
+                'category': '温差提醒',
                 'advice': f'未来一周温差较大({min(temps):.0f}°C ~ {max(temps):.0f}°C)，注意防范温度骤变影响'
-            })
-        
-        # 周末高峰预警
-        weekend_high = [f for f in forecasts if f['day_of_week'] in ['周六', '周日'] and f['risk_level'] in ['红色预警', '橙色预警']]
-        if weekend_high:
-            recommendations.append({
-                'priority': 'medium',
-                'category': '周末安排',
-                'advice': '周末预计有就诊高峰，建议安排值班人员'
             })
         
         if not recommendations:
             recommendations.append({
                 'priority': 'low',
                 'category': '常规管理',
-                'advice': '未来一周天气和就诊量预计正常，保持常规医疗资源配置'
+                'advice': '本页模型预警未启用，请继续关注官方天气预警与逐日天气变化'
             })
         
         return recommendations

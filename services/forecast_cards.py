@@ -7,12 +7,12 @@ from utils.parsers import parse_float
 
 
 def score_level(score):
-    """按分值映射页面展示等级。"""
+    """按分值映射行动沟通档位。"""
     if score >= 70:
-        return '高风险'
+        return '高关注'
     if score >= 45:
-        return '中等风险'
-    return '低风险'
+        return '中关注'
+    return '低关注'
 
 
 def level_bucket(score):
@@ -84,6 +84,10 @@ def build_forecast_cards(qweather_days, health_forecasts, start_date):
         humidity_input = composite_inputs.get('humidity') or {}
         pm25_input = composite_inputs.get('pm25') or {}
         visits = health.get('visits') or {}
+        probability_calibrated = visits.get('probability_calibrated') is True
+        model_warning_status = health.get('model_warning_status') or (
+            'enabled_calibrated' if probability_calibrated else 'disabled_uncalibrated'
+        )
         predictability = health.get('predictability') or {}
         predictability_inputs = predictability.get('inputs') or {}
         score = parse_float(composite.get('final_score'))
@@ -126,7 +130,13 @@ def build_forecast_cards(qweather_days, health_forecasts, start_date):
             'pm25_detail_source': pm25_input.get('detail_source'),
             'pm25_aqi_used': parse_float(pm25_input.get('aqi_used')),
             'pm25_proxy': parse_float(composite.get('pm25_proxy')),
-            'probability_high_visits': parse_float(health.get('probability_high_visits')),
+            # 旧缓存即使带有数值，也必须有明确校准标记才允许展示。
+            'probability_high_visits': (
+                parse_float(health.get('probability_high_visits'))
+                if probability_calibrated else None
+            ),
+            'model_warning_status': model_warning_status,
+            'model_warning_available': probability_calibrated,
             'visit_point_estimate': parse_float(visits.get('point_estimate')),
             'visit_raw_point_estimate': parse_float(visits.get('raw_point_estimate')),
             'visit_rr': parse_float(visits.get('rr')),

@@ -342,15 +342,19 @@
             <div class="section-heading compact d-flex justify-content-between align-items-center flex-wrap gap-3 yl-section-head">
                 <div>
                     <span class="section-kicker">7 日健康预测</span>
-                    <h3 style="font-size:1.2rem; margin:4px 0 0;">接下来一周的风险趋势 {{ metric_info('forecast_exposure_score') }}</h3>
+                    <h3 style="font-size:1.2rem; margin:4px 0 0;">接下来一周的暴露关注趋势 {{ metric_info('forecast_exposure_score') }}</h3>
                 </div>
                 <a class="btn btn-sm btn-outline-primary" href="{{ url_for('tools.forecast_7day') }}">查看详情 <i class="bi bi-arrow-right"></i></a>
             </div>
 
+            {% if forecast_days %}
+            <div class="alert alert-light border small mt-3 mb-0" role="note">门诊高负荷概率与模型预警尚未完成校准，当前不启用；逐日天气和官方天气预警继续正常展示。</div>
+            {% endif %}
+
             <div class="yl-forecast-row mt-3">
                 {% if forecast_days %}
                     {% for d in forecast_days %}
-                    <div class="day" data-risk="{{ d.risk_level or 'low' }}">
+                    <div class="day" data-risk="attention">
                         {% set forecast_context = {
                             '限幅前评分': d.composite_pre_clip_score if d.composite_pre_clip_score is not none else '--',
                             '最终评分': d.composite_final_score if d.composite_final_score is not none else '--',
@@ -368,7 +372,7 @@
                         <div class="dow">{{ d.dow }}</div>
                         <div class="t">{{ d.temp_high }}° / {{ d.temp_low }}°</div>
                         <div class="mt-1" style="font-size:.78rem; color:var(--yl-muted);">{{ d.condition }}</div>
-                        <span class="rk {{ d.risk_level or 'unknown' }}">{{ d.risk_label or '待计算' }}</span>
+                        <span class="rk unknown">{{ d.risk_label or '待计算' }}</span>
                         {{ metric_info('forecast_exposure_score', forecast_context) }}
                         {% if d.probability_high_visits is not none or d.predictability_score is not none %}
                         <div class="mt-1" style="font-size:.7rem; line-height:1.35; color:var(--yl-muted);">
@@ -403,7 +407,7 @@
                             {% endif %}
                         </div>
                         {% endif %}
-                        <div class="why-tip">风险 {{ d.risk_label or '待计算' }} · {{ d.condition }} · {{ d.temp_high }}°/{{ d.temp_low }}°</div>
+                        <div class="why-tip">暴露关注 {{ d.risk_label or '待计算' }} · {{ d.condition }} · {{ d.temp_high }}°/{{ d.temp_low }}°</div>
                     </div>
                     {% endfor %}
                 {% else %}

@@ -7,8 +7,8 @@
 <div class="container" style="max-width:1160px;">
     <section class="section-heading yl-fade-up">
         <span class="section-kicker"><i class="bi bi-calendar-week"></i> 7 天健康预测</span>
-        <h2>接下来一周,哪几天要特别留心?</h2>
-        <p>风险评分综合温度、PM2.5、湿度与热夜。当前是地区级暴露评分，不使用个人慢病资料。</p>
+        <h2>接下来一周，哪几天要特别留心？</h2>
+        <p>暴露关注分综合温度、PM2.5、湿度与热夜。它是地区级行动沟通分，不使用个人慢病资料，也不作为模型天气预警。</p>
     </section>
 
     <form method="GET" class="yl-section mb-4 yl-fade-up yl-fade-up-d1">
@@ -40,12 +40,13 @@
 
     {# 7 天横向卡 #}
     {% if forecast_days %}
+    <div class="alert alert-light border yl-fade-up yl-fade-up-d2" role="note">
+        门诊高负荷概率与模型预警尚未完成校准，当前不启用。这里的逐日天气卡继续显示；官方天气预警仍由独立预警链展示。
+    </div>
     <div class="row g-3 mb-4 yl-fade-up yl-fade-up-d2">
         {% for d in forecast_days %}
         <div class="col">
-            <div class="card h-100 text-center day"
-                 data-risk="{{ d.risk_level or 'unknown' }}"
-                 {% if d.risk_level == 'high' %}style="border:1px solid #F0C4B9; background:var(--yl-danger-50);"{% elif d.risk_level == 'mid' %}style="border:1px solid #F1DFB1; background:var(--yl-warn-50);"{% endif %}>
+            <div class="card h-100 text-center day" data-risk="attention">
                 <div class="card-body p-3">
                     <div class="text-muted" style="font-size:.82rem;">{{ d.date }}</div>
                     <div class="fw-semibold mt-1">{{ d.dow }}</div>
@@ -67,9 +68,9 @@
                             '湿度实际使用': ((d.humidity_used|string) ~ '%' ~ ('（插补）' if d.humidity_imputed else '（直接）')) if d.humidity_used is not none else '--',
                             '夜间最低温实际使用': ((d.temp_min_used|string) ~ '°C' ~ ('（插补）' if d.temp_min_imputed else '（直接）')) if d.temp_min_used is not none else '--'
                         } %}
-                        <span class="badge risk-badge {% if d.risk_level=='high' %}bg-danger-subtle{% elif d.risk_level=='mid' %}bg-warning-subtle{% elif d.risk_level=='low' %}bg-success-subtle{% else %}bg-secondary-subtle{% endif %}"
+                        <span class="badge risk-badge text-bg-light"
                               data-detail="温度 {{ d.temp_high }}°/{{ d.temp_low }}° · {{ d.condition }}">
-                            {% if d.risk_available %}风险 {{ d.risk_score }}{% else %}风险待计算{% endif %}
+                            {% if d.risk_available %}关注分 {{ d.risk_score }}{% else %}关注分待计算{% endif %}
                         </span>
                         {{ metric_info('forecast_exposure_score', forecast_context) }}
                     </div>
@@ -107,7 +108,7 @@
                         {% endif %}
                     </div>
                     {% endif %}
-                    <div class="why-tip">风险 {{ d.risk_score if d.risk_available else '待计算' }} · {{ d.condition }} · {{ d.temp_high }}°/{{ d.temp_low }}°</div>
+                    <div class="why-tip">暴露关注 {{ d.risk_score if d.risk_available else '待计算' }} · {{ d.condition }} · {{ d.temp_high }}°/{{ d.temp_low }}°</div>
                 </div>
             </div>
         </div>
@@ -124,14 +125,14 @@
     <div class="row g-4 mb-4">
         <div class="col-lg-8">
             <section class="yl-section yl-fade-up yl-fade-up-d3">
-                <h4 style="font-size:1.1rem;">风险走势 {{ metric_info('forecast_exposure_score') }}</h4>
+                <h4 style="font-size:1.1rem;">暴露关注走势 {{ metric_info('forecast_exposure_score') }}</h4>
                 <canvas id="forecastChart" height="260" class="mt-3"></canvas>
             </section>
         </div>
         <div class="col-lg-4">
             <section class="yl-section h-100 yl-fade-up yl-fade-up-d3">
-                <h4 style="font-size:1.1rem;">本周高风险日</h4>
-                <p class="text-muted" style="font-size:.9rem;">以下日期风险评分 ≥ 70,建议重点准备。</p>
+                <h4 style="font-size:1.1rem;">本周高暴露关注日</h4>
+                <p class="text-muted" style="font-size:.9rem;">以下日期行动关注分 ≥ 70，建议提前核对官方预警并准备防护。</p>
                 <ul class="list-unstyled mt-3 mb-0">
                     {% set high_risk_count = namespace(value=0) %}
                     {% set unknown_risk_count = namespace(value=0) %}
@@ -147,9 +148,9 @@
                         {% endif %}
                     {% endfor %}
                     {% if unknown_risk_count.value == forecast_days|length %}
-                    <li class="text-muted py-2">风险趋势正在更新。</li>
+                    <li class="text-muted py-2">暴露关注趋势正在更新。</li>
                     {% elif high_risk_count.value == 0 %}
-                    <li class="text-muted py-2">本周暂无高风险日。</li>
+                    <li class="text-muted py-2">本周暂无高暴露关注日。</li>
                     {% endif %}
                 </ul>
             </section>
@@ -188,14 +189,14 @@ document.addEventListener('DOMContentLoaded', function() {
     new Chart(ctx, {
         type: 'line',
         data: { labels, datasets: [
-            { label: '风险评分', data: scores, borderColor:'#EE7E2D', backgroundColor:'rgba(238,126,45,0.12)', fill:true, tension:0.4, yAxisID:'y' },
+            { label: '暴露关注分', data: scores, borderColor:'#EE7E2D', backgroundColor:'rgba(238,126,45,0.12)', fill:true, tension:0.4, yAxisID:'y' },
             { label: '最高气温', data: highs, borderColor:'#C7472E', borderDash:[4,4], tension:0.4, yAxisID:'y1' }
         ]},
         options: {
             responsive: true,
             interaction: { mode:'index', intersect:false },
             scales: {
-                y: { beginAtZero:true, max:100, title:{display:true,text:'风险评分'}, grid:{color:'#F4EDDF'} },
+                y: { beginAtZero:true, max:100, title:{display:true,text:'暴露关注分'}, grid:{color:'#F4EDDF'} },
                 y1:{ position:'right', suggestedMin:0, suggestedMax:45, grid:{display:false}, title:{display:true,text:'气温 °C'} }
             }
         }
