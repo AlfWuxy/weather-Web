@@ -194,7 +194,7 @@
                                                         <span class="badge bg-warning text-dark">升级链 {{ item.relay_stage_label }}</span>
                                                     {% endif %}
                                                     {% if item.is_overdue %}
-                                                        <span class="badge bg-secondary">超时未响应</span>
+                                                        <span class="badge bg-secondary">超时未响应，等待人工跟进</span>
                                                     {% endif %}
                                                 </div>
                                             {% endif %}
@@ -236,7 +236,7 @@
                                                         <input type="hidden" name="pair_id" value="{{ item.pair.id }}">
                                                     {% endif %}
                                                     <button class="btn btn-outline-warning btn-sm" type="submit">
-                                                        <i class="bi bi-arrow-up-right"></i> 升级链按钮
+                                                        <i class="bi bi-arrow-up-right"></i> 人工推进升级链
                                                     </button>
                                                 </form>
                                                 {% if pair_detail_endpoint %}

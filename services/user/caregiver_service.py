@@ -41,7 +41,6 @@ from ._common import (
     _trusted_public_url,
 )
 from ._helpers import (
-    _auto_escalate_overdue_statuses,
     _build_caregiver_message,
     _build_community_snapshot,
     _build_recent_series,
@@ -263,7 +262,6 @@ def _build_pair_management_context(caregiver_mode=False):
             DailyStatus.pair_id.in_(pair_ids),
             DailyStatus.status_date == status_date
         ).all()
-        _auto_escalate_overdue_statuses(statuses, status_date)
         status_map = {status.pair_id: status for status in statuses}
     action_links = _build_active_pair_action_links(
         int(current_user.id),
