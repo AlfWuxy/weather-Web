@@ -12,6 +12,7 @@ IDENTITY_SCOPED_KEYS = (
     "pair_link_token",
     "pair_link_id",
     "created_pair_id",
+    "demo_mode",
 )
 GUEST_KEYS = ("guest_profile", "guest_assessment", "guest_id")
 PRESERVED_FLASH = ("info", "切换身份后仍需显示")

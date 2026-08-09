@@ -100,6 +100,7 @@ IDENTITY_SCOPED_SESSION_KEYS = frozenset({
     'pair_link_token',
     'pair_link_id',
     'created_pair_id',
+    'demo_mode',
     'guest_profile',
     'guest_assessment',
     'guest_id',
