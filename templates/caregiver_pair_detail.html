@@ -47,7 +47,7 @@
                 <div class="card-body">
                     {% if status_today %}
                         <div class="mb-2"><span class="text-muted">今日已观察最高风险：</span>{{ status_today.risk_level or '-' }}</div>
-                        <div class="mb-2"><span class="text-muted">确认时间：</span>{{ status_today.confirmed_at.strftime('%H:%M') if status_today.confirmed_at else '未确认' }}</div>
+                        <div class="mb-2"><span class="text-muted">确认时间：</span>{{ status_today.confirmed_at.strftime('%H:%M') if is_effective_confirmation(status_today) else '未确认' }}</div>
                         <div class="mb-2"><span class="text-muted">求助：</span>{{ '是' if status_today.help_flag else '否' }}</div>
                         <div class="mb-2"><span class="text-muted">完成项数：</span>{{ status_today.actions_done_count or 0 }}</div>
                         <div class="mb-2"><span class="text-muted">升级链：</span>{{ status_today.relay_stage or 'none' }}</div>
@@ -175,7 +175,7 @@
                                         <tr>
                                             <td>{{ item.status_date.strftime('%Y-%m-%d') }}</td>
                                             <td>{{ item.risk_level or '-' }}</td>
-                                            <td>{{ '是' if item.confirmed_at else '否' }}</td>
+                                            <td>{{ '是' if is_effective_confirmation(item) else '否' }}</td>
                                             <td>{{ '是' if item.help_flag else '否' }}</td>
                                             <td>{{ item.relay_stage or 'none' }}</td>
                                         </tr>

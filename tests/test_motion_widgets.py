@@ -478,3 +478,17 @@ def test_action_checkin_distinguishes_current_risk_from_daily_peak():
     assert '当前快照风险等级' in template
     assert '今日已观察最高风险' in template
     assert 'status.risk_level' in template
+
+
+def test_action_views_share_effective_confirmation_contract():
+    """四个行动视图都要求确认时间和至少一项完成行动。"""
+    pair_management = (PROJECT_ROOT / 'templates/pair_management.html').read_text(encoding='utf-8')
+    caregiver_detail = (PROJECT_ROOT / 'templates/caregiver_pair_detail.html').read_text(encoding='utf-8')
+    community_detail = (PROJECT_ROOT / 'templates/community_detail.html').read_text(encoding='utf-8')
+    action_checkin = (PROJECT_ROOT / 'templates/action_checkin.html').read_text(encoding='utf-8')
+
+    assert 'if item.confirmed' in pair_management
+    assert 'is_effective_confirmation(status_today)' in caregiver_detail
+    assert 'is_effective_confirmation(item)' in caregiver_detail
+    assert 'item.confirmed_at and (item.actions_done_count or 0) >= 1' in community_detail
+    assert 'status.confirmed_at and (status.actions_done_count or 0) >= 1' in action_checkin

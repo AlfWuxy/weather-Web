@@ -41,6 +41,20 @@ class ActionMutation:
     linked_pair_id: int | None = None
 
 
+def is_effective_confirmation(status) -> bool:
+    """只有确认时间和至少一项实际行动同时存在时才算有效确认。"""
+    if status is None or not getattr(status, "confirmed_at", None):
+        return False
+    raw_count = getattr(status, "actions_done_count", 0)
+    if isinstance(raw_count, bool):
+        return False
+    try:
+        actions_done_count = int(raw_count or 0)
+    except (TypeError, ValueError, OverflowError):
+        return False
+    return actions_done_count >= 1
+
+
 def _require_active_pair(pair: Pair) -> None:
     if pair is None or pair.status != "active":
         raise ValueError("inactive_pair")

@@ -18,7 +18,10 @@ from core.weather import (
     normalize_location_name,
 )
 from core.usage import log_usage_event
-from services.care_action_service import get_or_create_daily_status
+from services.care_action_service import (
+    get_or_create_daily_status,
+    is_effective_confirmation,
+)
 from services.heat_action_service import HeatActionService
 from services.location_resolver import resolve_location
 from services.user.owner_write_guard import OwnerInactiveError, owner_write_guard
@@ -394,7 +397,7 @@ def _build_pair_management_context(caregiver_mode=False):
             else:
                 alert_label = '暂无预警'
 
-        confirmed = bool(status and status.confirmed_at)
+        confirmed = is_effective_confirmation(status)
         is_overdue = bool(now >= deadline and not confirmed)
         relay_stage = status.relay_stage if status else None
         relay_stage_label = None
@@ -416,6 +419,7 @@ def _build_pair_management_context(caregiver_mode=False):
         pair_cards.append({
             'pair': pair,
             'status': status,
+            'confirmed': confirmed,
             'risk_label': risk_label,
             'heat_result': heat_result,
             'weather_available': weather_available,
@@ -595,8 +599,10 @@ def caregiver_pair_detail(pair_id):
     actions_today = safe_json_loads(status_today.caregiver_actions, []) if status_today else []
     if not isinstance(actions_today, list):
         actions_today = []
-    elder_actions_today = _build_elder_action_labels(
-        status_today.elder_actions if status_today else None
+    elder_actions_today = (
+        _build_elder_action_labels(status_today.elder_actions)
+        if is_effective_confirmation(status_today)
+        else []
     )
     caregiver_note = status_today.caregiver_note if status_today else None
 
@@ -614,7 +620,8 @@ def caregiver_pair_detail(pair_id):
         action_options=CARE_ACTION_OPTIONS,
         actions_today=actions_today,
         elder_actions_today=elder_actions_today,
-        caregiver_note=caregiver_note
+        caregiver_note=caregiver_note,
+        is_effective_confirmation=is_effective_confirmation,
     )
 
 

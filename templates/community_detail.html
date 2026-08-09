@@ -106,7 +106,7 @@
                                             <tr>
                                                 <td>{{ pair.short_code if pair else '-' }}</td>
                                                 <td>{{ item.risk_level or '-' }}</td>
-                                                <td>{{ '是' if item.confirmed_at else '否' }}</td>
+                                                <td>{{ '是' if item.confirmed_at and (item.actions_done_count or 0) >= 1 else '否' }}</td>
                                                 <td>{{ '是' if item.help_flag else '否' }}</td>
                                                 <td>{{ item.actions_done_count or 0 }}</td>
                                                 <td>{{ item.relay_stage or 'none' }}</td>

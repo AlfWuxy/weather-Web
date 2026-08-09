@@ -59,6 +59,35 @@ def test_shared_action_confirmation_rejects_empty_checklist(db_session):
     assert status.elder_actions is None
 
 
+def test_effective_confirmation_requires_timestamp_and_completed_action(db_session):
+    """确认时间和至少一项完成行动必须同时成立。"""
+    from core.time_utils import utcnow
+    from services.care_action_service import is_effective_confirmation
+
+    _pair, status = _pair_and_status(
+        db_session,
+        username="effective-confirmation-owner",
+        short_code="76110002",
+    )
+
+    assert is_effective_confirmation(None) is False
+    assert is_effective_confirmation(status) is False
+
+    status.confirmed_at = utcnow()
+    status.actions_done_count = 0
+    assert is_effective_confirmation(status) is False
+
+    status.actions_done_count = 1
+    assert is_effective_confirmation(status) is True
+
+    status.confirmed_at = None
+    assert is_effective_confirmation(status) is False
+
+    status.confirmed_at = utcnow()
+    status.actions_done_count = "invalid"
+    assert is_effective_confirmation(status) is False
+
+
 def test_legacy_empty_confirmation_does_not_enter_community_rate(db_session):
     from core.time_utils import today_local, utcnow
     from services.community_daily_service import build_community_household_metrics

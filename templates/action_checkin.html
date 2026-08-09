@@ -61,6 +61,7 @@
             </div>
         </div>
     {% else %}
+        {% set effective_confirmed = status and status.confirmed_at and (status.actions_done_count or 0) >= 1 %}
         <div class="row g-4">
             <div class="col-lg-8">
                 {% set heat_color = 'dark' if risk_label == '极高' else 'danger' if risk_label == '高风险' else 'warning' if risk_label == '中风险' else 'success' if risk_label == '低风险' else 'secondary' %}
@@ -189,6 +190,15 @@
                         </div>
                         {% else %}
                         <hr>
+                        {% if effective_confirmed %}
+                        <div class="alert alert-success py-2" role="status">
+                            今日已有效确认 {{ status.actions_done_count }} 项行动。
+                        </div>
+                        {% elif status and status.confirmed_at %}
+                        <div class="alert alert-secondary py-2" role="status">
+                            旧确认记录缺少有效行动项，当前不计入今日确认；请至少完成并勾选一项。
+                        </div>
+                        {% endif %}
                         <form method="POST" action="{{ confirm_action or url_for('public.action_confirm') }}">
                             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                             <input type="hidden" name="short_code" value="{{ pair.short_code }}">

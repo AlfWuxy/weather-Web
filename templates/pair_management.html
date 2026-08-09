@@ -174,7 +174,7 @@
                                                     {% endif %}
                                                 </div>
                                                 <div class="text-end">
-                                                    {% if status and status.confirmed_at %}
+                                                    {% if item.confirmed %}
                                                         <span class="badge bg-success">已确认</span>
                                                         <div class="text-muted small">{{ status.confirmed_at.strftime('%H:%M') }}</div>
                                                     {% else %}
