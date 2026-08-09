@@ -469,3 +469,12 @@ def test_action_checkin_reduced_motion_uses_instant_scroll():
 
     assert "window.matchMedia('(prefers-reduced-motion: reduce)').matches" in template
     assert "behavior: reduceMotion ? 'auto' : 'smooth'" in template
+
+
+def test_action_checkin_distinguishes_current_risk_from_daily_peak():
+    """行动页不能把当前快照风险与当日已观察峰值混成同一字段。"""
+    template = (PROJECT_ROOT / 'templates/action_checkin.html').read_text(encoding='utf-8')
+
+    assert '当前快照风险等级' in template
+    assert '今日已观察最高风险' in template
+    assert 'status.risk_level' in template

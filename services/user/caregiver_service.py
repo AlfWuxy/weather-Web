@@ -18,6 +18,7 @@ from core.weather import (
     normalize_location_name,
 )
 from core.usage import log_usage_event
+from services.care_action_service import get_or_create_daily_status
 from services.heat_action_service import HeatActionService
 from services.location_resolver import resolve_location
 from services.user.owner_write_guard import OwnerInactiveError, owner_write_guard
@@ -48,6 +49,14 @@ from ._helpers import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def get_bootstrap_payload():
+    """延迟导入县级快照服务，避免 services.user 包初始化形成循环依赖。"""
+    from services.miniprogram_service import get_bootstrap_payload as load_payload
+
+    return load_payload()
+
 
 _REQUIRED_HEAT_WEATHER_FIELDS = (
     'temperature',
@@ -131,6 +140,38 @@ def _load_heat_risk(location):
         return weather_data, None, None
     risk_label = HEAT_RISK_LABELS.get(heat_result['risk_level'], '低风险')
     return weather_data, heat_result, risk_label
+
+
+def _load_daily_risk_snapshot():
+    """只接受一份带 ID 的新鲜真实都昌县快照用于日度峰值。"""
+    try:
+        snapshot = get_bootstrap_payload()
+    except Exception:
+        logger.warning("读取县级天气快照失败，日度风险保持不变", exc_info=True)
+        return None
+    if not isinstance(snapshot, dict):
+        return None
+
+    snapshot_id = str(snapshot.get('snapshot_id') or '').strip()
+    current = snapshot.get('current')
+    risk = snapshot.get('risk')
+    if (
+        not snapshot_id
+        or snapshot.get('available') is not True
+        or snapshot.get('stale') is not False
+        or not _heat_weather_available(current)
+        or not isinstance(risk, dict)
+        or risk.get('available') is not True
+    ):
+        return None
+
+    risk_level = str(risk.get('level') or '').strip()
+    if risk_level not in set(HEAT_RISK_LABELS.values()):
+        return None
+    return {
+        'snapshot_id': snapshot_id,
+        'risk_level': risk_level,
+    }
 
 
 def _create_pair_link(community_code):
@@ -590,14 +631,7 @@ def caregiver_action_log(pair_id):
     initial_pair = _active_pair_for_actor(pair_id, actor_user_id, actor_role)
     owner_user_id = int(initial_pair.caregiver_id)
     status_date = today_local()
-    prepared_location = normalize_location_name(
-        initial_pair.location_query or initial_pair.community_code
-    )
-    prepared_risk_label = None
-    if DailyStatus.query.filter_by(pair_id=pair_id, status_date=status_date).first() is None:
-        location = prepared_location
-        _weather_data, _heat_result, risk_label = _load_heat_risk(location)
-        prepared_risk_label = risk_label
+    prepared_risk_snapshot = _load_daily_risk_snapshot()
 
     allowed_actions = {item['id'] for item in CARE_ACTION_OPTIONS}
     actions = [item for item in request.form.getlist('caregiver_actions') if item in allowed_actions]
@@ -606,27 +640,17 @@ def caregiver_action_log(pair_id):
     try:
         with owner_write_guard(owner_user_id):
             pair = _active_pair_for_actor(pair_id, actor_user_id, actor_role)
-            status = DailyStatus.query.filter_by(
-                pair_id=pair.id,
-                status_date=status_date,
-            ).first()
-            if not status:
-                current_location = normalize_location_name(
-                    pair.location_query or pair.community_code
-                )
-                risk_label = (
-                    prepared_risk_label
-                    if current_location == prepared_location
-                    else None
-                )
-                weather_waiting = risk_label is None
-                status = DailyStatus(
-                    pair_id=pair.id,
-                    status_date=status_date,
-                    community_code=pair.community_code,
-                    risk_level=risk_label
-                )
-                db.session.add(status)
+            risk_label = (
+                prepared_risk_snapshot.get('risk_level')
+                if prepared_risk_snapshot
+                else None
+            )
+            weather_waiting = risk_label is None
+            status = get_or_create_daily_status(
+                pair,
+                status_date,
+                risk_level=risk_label,
+            )
             status.caregiver_actions = json_or_none(actions)
             status.caregiver_note = note or None
             logged_pair_id = int(pair.id)
@@ -643,13 +667,19 @@ def caregiver_action_log(pair_id):
         logger.exception('照护行动授权锁不可用，记录未保存')
         flash('行动记录暂时无法保存，请稍后重试。', 'error')
         return redirect(url_for('user.caregiver_pair_detail', pair_id=pair_id))
+    usage_meta = {
+        'caregiver_actions_count': len(actions),
+        'has_note': bool(note),
+    }
+    if prepared_risk_snapshot:
+        usage_meta['snapshot_id'] = prepared_risk_snapshot['snapshot_id']
     log_usage_event(
         'feedback_submitted',
         user_id=actor_user_id,
         pair_id=logged_pair_id,
         member_id=logged_member_id,
         source='web',
-        meta={'caregiver_actions_count': len(actions), 'has_note': bool(note)},
+        meta=usage_meta,
     )
     if weather_waiting:
         flash('行动记录已保存。天气更新后会补充今日风险。', 'warning')
@@ -753,38 +783,21 @@ def _handle_pair_escalate(pair_id, redirect_url, target_stage=None):
     initial_pair = _active_pair_for_actor(pair_id, actor_user_id, actor_role)
     owner_user_id = int(initial_pair.caregiver_id)
     status_date = today_local()
-    prepared_location = normalize_location_name(
-        initial_pair.location_query or initial_pair.community_code
-    )
-    prepared_risk_label = None
-    if DailyStatus.query.filter_by(pair_id=pair_id, status_date=status_date).first() is None:
-        location = prepared_location
-        _weather_data, _heat_result, risk_label = _load_heat_risk(location)
-        prepared_risk_label = risk_label
+    prepared_risk_snapshot = _load_daily_risk_snapshot()
 
     try:
         with owner_write_guard(owner_user_id):
             pair = _active_pair_for_actor(pair_id, actor_user_id, actor_role)
-            status = DailyStatus.query.filter_by(
-                pair_id=pair.id,
-                status_date=status_date,
-            ).first()
-            if not status:
-                current_location = normalize_location_name(
-                    pair.location_query or pair.community_code
-                )
-                risk_label = (
-                    prepared_risk_label
-                    if current_location == prepared_location
-                    else None
-                )
-                status = DailyStatus(
-                    pair_id=pair.id,
-                    status_date=status_date,
-                    community_code=pair.community_code,
-                    risk_level=risk_label
-                )
-                db.session.add(status)
+            risk_label = (
+                prepared_risk_snapshot.get('risk_level')
+                if prepared_risk_snapshot
+                else None
+            )
+            status = get_or_create_daily_status(
+                pair,
+                status_date,
+                risk_level=risk_label,
+            )
 
             stages = RELAY_STAGE_ORDER
             current_stage = status.relay_stage or 'none'

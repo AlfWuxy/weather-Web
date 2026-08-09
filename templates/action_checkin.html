@@ -98,8 +98,14 @@
                         {% if heat_result and risk_label %}
                         <div class="row g-3 align-items-center">
                             <div class="col-md-7">
-                                <div class="text-muted small">风险等级</div>
+                                <div class="text-muted small">当前快照风险等级</div>
                                 <div class="display-4 fw-bold text-{{ heat_color }}">{{ risk_label }}</div>
+                                {% if status and status.risk_level %}
+                                <div class="mt-2 small">
+                                    <span class="badge bg-secondary">今日已观察最高风险：{{ status.risk_level }}</span>
+                                    <span class="text-muted">峰值用于今日行动复盘，只升不降。</span>
+                                </div>
+                                {% endif %}
                                 <div class="text-muted small">
                                     {% if weather %}
                                         气温 {{ weather.temperature|round(1) }}°C · 最高 {{ weather.temperature_max|round(1) }}°C · 湿度 {{ weather.humidity|round(0) }}%
@@ -157,6 +163,9 @@
                         <div class="alert alert-warning mb-3" role="status">
                             <strong>天气正在更新。</strong>
                             风险等级暂不显示。
+                            {% if status and status.risk_level %}
+                                今日已观察最高风险：{{ status.risk_level }}；当前快照暂不可用。
+                            {% endif %}
                             {% if web_actions_read_only %}
                                 你仍可查看避暑资源；确认、求助和复盘请前往微信小程序。
                             {% else %}

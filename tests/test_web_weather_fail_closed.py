@@ -130,12 +130,14 @@ def test_caregiver_action_log_keeps_risk_null_when_weather_is_mock(
     pair = _create_pair(db_session, user.id, short_code='27182818')
     _login_as(client, user.id)
     monkeypatch.setattr(
-        'services.user.caregiver_service.get_weather_with_cache',
-        lambda _location: (dict(MOCK_WEATHER), False),
-    )
-    monkeypatch.setattr(
-        'services.user.caregiver_service.get_consecutive_hot_days',
-        lambda *_args, **_kwargs: pytest.fail('mock 天气不应读取连续高温天数'),
+        'services.user.caregiver_service.get_bootstrap_payload',
+        lambda: {
+            'snapshot_id': 'mock-snapshot',
+            'available': True,
+            'stale': False,
+            'current': dict(MOCK_WEATHER),
+            'risk': {'available': True, 'level': '极高'},
+        },
     )
 
     response = client.post(
@@ -156,6 +158,113 @@ def test_caregiver_action_log_keeps_risk_null_when_weather_is_mock(
     assert status.risk_level is None
     assert json.loads(status.caregiver_actions) == ['remind']
     assert status.caregiver_note == '已电话确认'
+
+
+def test_daily_risk_snapshot_requires_fresh_real_snapshot(monkeypatch):
+    """日度风险必须来自带 ID 的新鲜真实县级快照。"""
+    from services.user import caregiver_service
+
+    valid = {
+        'snapshot_id': 'fresh-real-snapshot',
+        'available': True,
+        'stale': False,
+        'current': dict(REAL_WEATHER),
+        'risk': {'available': True, 'level': '高风险'},
+    }
+    invalid_payloads = [
+        {**valid, 'snapshot_id': None},
+        {**valid, 'available': False},
+        {**valid, 'stale': True},
+        {**valid, 'current': dict(MOCK_WEATHER)},
+        {**valid, 'current': {**REAL_WEATHER, 'is_demo': True}},
+        {**valid, 'risk': {'available': False, 'level': '高风险'}},
+        {**valid, 'risk': {'available': True, 'level': '未知'}},
+    ]
+
+    for payload in invalid_payloads:
+        monkeypatch.setattr(
+            caregiver_service,
+            'get_bootstrap_payload',
+            lambda payload=payload: payload,
+        )
+        assert caregiver_service._load_daily_risk_snapshot() is None
+
+    monkeypatch.setattr(
+        caregiver_service,
+        'get_bootstrap_payload',
+        lambda: valid,
+    )
+    assert caregiver_service._load_daily_risk_snapshot() == {
+        'snapshot_id': 'fresh-real-snapshot',
+        'risk_level': '高风险',
+    }
+
+
+def test_caregiver_action_log_updates_daily_peak_without_downgrade(
+    client,
+    db_session,
+    monkeypatch,
+):
+    """照护端每次写入都观察共享快照，日度峰值只允许升高。"""
+    from services.user import caregiver_service
+
+    user = _create_user(db_session, 'caregiver_peak_guard', 'caregiver')
+    pair = _create_pair(db_session, user.id, short_code='16180339')
+    db_session.add(DailyStatus(
+        pair_id=pair.id,
+        status_date=today_local(),
+        community_code=pair.community_code,
+        risk_level='低风险',
+    ))
+    db_session.commit()
+    _login_as(client, user.id)
+
+    snapshot = {
+        'snapshot_id': 'peak-snapshot-high',
+        'available': True,
+        'stale': False,
+        'current': dict(REAL_WEATHER),
+        'risk': {'available': True, 'level': '高风险'},
+    }
+    monkeypatch.setattr(
+        caregiver_service,
+        'get_bootstrap_payload',
+        lambda: snapshot,
+    )
+
+    first = client.post(
+        f'/caregiver/pair/{pair.id}/action-log',
+        data={
+            'csrf_token': 'test-csrf-token',
+            'caregiver_actions': 'remind',
+        },
+        follow_redirects=False,
+    )
+    assert first.status_code == 302
+    db_session.expire_all()
+    status = DailyStatus.query.filter_by(
+        pair_id=pair.id,
+        status_date=today_local(),
+    ).one()
+    assert status.risk_level == '高风险'
+
+    snapshot['snapshot_id'] = 'peak-snapshot-low'
+    snapshot['risk'] = {'available': True, 'level': '低风险'}
+    second = client.post(
+        f'/caregiver/pair/{pair.id}/action-log',
+        data={
+            'csrf_token': 'test-csrf-token',
+            'caregiver_actions': 'remind',
+        },
+        follow_redirects=False,
+    )
+    assert second.status_code == 302
+    db_session.expire_all()
+    status = DailyStatus.query.filter_by(
+        pair_id=pair.id,
+        status_date=today_local(),
+    ).one()
+    assert status.risk_level == '高风险'
 
 
 def test_elder_action_labels_cover_current_plans_and_hide_unknown_values():

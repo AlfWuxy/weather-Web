@@ -454,8 +454,14 @@ def test_caregiver_writes_accept_active_pair_and_reject_inactive_pair(
     _login_session(client, owner.id)
     monkeypatch.setattr(
         caregiver_service,
-        "_load_heat_risk",
-        lambda *_args, **_kwargs: pytest.fail("已有状态时不应读取天气"),
+        "get_bootstrap_payload",
+        lambda: {
+            "snapshot_id": None,
+            "available": False,
+            "stale": True,
+            "current": {"is_mock": True},
+            "risk": {"available": False, "level": "未知"},
+        },
     )
     monkeypatch.setattr(caregiver_service, "_refresh_community_daily", lambda *_args: None)
 
