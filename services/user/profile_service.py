@@ -434,6 +434,9 @@ def profile():
         wx_uid_field_present = 'wxpusher_uid' in request.form
         wx_uid = sanitize_input(request.form.get('wxpusher_uid'), max_length=80)
         wx_uid = (wx_uid.strip() if isinstance(wx_uid, str) else None) or None
+        if request.form.get('remove_wxpusher_uid') == '1':
+            wx_uid_field_present = True
+            wx_uid = None
         push_enabled = request.form.get('push_enabled') == 'on'
         wxpusher_available = bool(
             wxpusher_feature_enabled
@@ -455,13 +458,43 @@ def profile():
         if push_enabled and not wxpusher_available:
             flash('第三方推送服务暂不可用，本次更改未保存。', 'error')
             return redirect(url_for('user.profile'))
-        if push_enabled and not wx_uid:
+        if push_enabled and wx_uid_field_present and not wx_uid:
             push_enabled = False
             flash('已关闭自动推送：需要先填写 WxPusher UID', 'warning')
 
         try:
             owner_user_id = int(current_user.id)
             with owner_write_guard(owner_user_id) as locked_user:
+                locked_wx_uid = (
+                    (locked_user.wxpusher_uid or '').strip() or None
+                )
+                uid_is_verified = bool(
+                    locked_wx_uid
+                    and getattr(
+                        locked_user,
+                        'wxpusher_uid_verified_at',
+                        None,
+                    ) is not None
+                )
+                if (
+                    wxpusher_feature_enabled
+                    and wx_uid_field_present
+                    and wx_uid
+                    and wx_uid != locked_wx_uid
+                ):
+                    db.session.rollback()
+                    flash('新的 WxPusher UID 必须先完成所有权验证。', 'error')
+                    return redirect(url_for('user.profile'))
+                effective_wx_uid = (
+                    wx_uid if wx_uid_field_present else locked_wx_uid
+                )
+                if push_enabled and (
+                    not effective_wx_uid
+                    or not uid_is_verified
+                ):
+                    db.session.rollback()
+                    flash('必须先验证 WxPusher UID 所有权才能开启推送。', 'error')
+                    return redirect(url_for('user.profile'))
                 consent_is_current = _wxpusher_consent_is_current(
                     locked_user,
                     required_wxpusher_version,
@@ -502,12 +535,16 @@ def profile():
                     locked_user.chronic_diseases = None
 
                 if wxpusher_feature_enabled:
-                    locked_user.wxpusher_uid = wx_uid
+                    if wx_uid_field_present:
+                        locked_user.wxpusher_uid = wx_uid
+                        if not wx_uid:
+                            locked_user.wxpusher_uid_verified_at = None
                     locked_user.push_enabled = bool(push_enabled)
                 else:
                     # 隐藏入口时保留历史接收码；显式清空仍可完成数据最小化。
                     if wx_uid_field_present:
                         locked_user.wxpusher_uid = None
+                        locked_user.wxpusher_uid_verified_at = None
                     locked_user.push_enabled = False
                 if consent_required:
                     locked_user.wxpusher_consent_version = required_wxpusher_version

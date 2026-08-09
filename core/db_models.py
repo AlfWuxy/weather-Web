@@ -97,6 +97,8 @@ class User(UserMixin, db.Model):
 
     # 试点推送设置（子女端）
     wxpusher_uid = db.Column(db.String(80))
+    # 只有验证码挑战成功后才写入，发送端必须同时检查此时间。
+    wxpusher_uid_verified_at = db.Column(db.DateTime)
     push_enabled = db.Column(db.Boolean, default=False)
     # 第三方传输同意回执；文案版本变更后发送端自动失效。
     wxpusher_consent_version = db.Column(db.String(64))
@@ -106,6 +108,11 @@ class User(UserMixin, db.Model):
     health_sensitive_consented_at = db.Column(db.DateTime)
 
     __table_args__ = (
+        db.Index(
+            'uq_users_wxpusher_uid',
+            'wxpusher_uid',
+            unique=True,
+        ),
         # 普通索引支持按号码查询待验证记录，不让未验证号码形成唯一占用。
         db.Index(
             'ix_users_phone_normalized',
@@ -132,6 +139,42 @@ class User(UserMixin, db.Model):
         if self.id is None:
             raise ValueError('未持久化用户不能建立登录会话')
         return f'{int(self.id)}:{int(self.auth_version)}'
+
+
+class WxpusherBindingChallenge(db.Model):
+    """WxPusher UID 所有权一次性验证码挑战。"""
+    __tablename__ = 'wxpusher_binding_challenges'
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(
+        db.Integer,
+        db.ForeignKey('users.id', ondelete='CASCADE'),
+        nullable=False,
+    )
+    candidate_uid = db.Column(db.String(80), nullable=False)
+    code_hash = db.Column(db.String(64), nullable=False)
+    created_at = db.Column(db.DateTime, nullable=False)
+    expires_at = db.Column(db.DateTime, nullable=False)
+    attempt_count = db.Column(
+        db.Integer,
+        nullable=False,
+        default=0,
+        server_default='0',
+    )
+    consumed_at = db.Column(db.DateTime)
+    revoked_at = db.Column(db.DateTime)
+
+    __table_args__ = (
+        db.Index(
+            'ix_wxpusher_binding_challenges_user_active',
+            'user_id',
+            'consumed_at',
+            'revoked_at',
+        ),
+        db.Index(
+            'ix_wxpusher_binding_challenges_candidate_uid',
+            'candidate_uid',
+        ),
+    )
 
 
 class MedicalRecord(db.Model):

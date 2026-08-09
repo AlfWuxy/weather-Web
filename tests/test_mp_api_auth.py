@@ -34,7 +34,13 @@ def test_mp_api_me_and_patch(app, client, db_session):
     app.config["WXPUSHER_APP_TOKEN"] = "AT_private-test-token"
 
     with app.app_context():
-        user = User(username="mp_user", role="user")
+        user = User(
+            username="mp_user",
+            role="user",
+            wxpusher_uid="UID_X",
+            wxpusher_uid_verified_at=utcnow(),
+            push_enabled=False,
+        )
         user.set_password("pw123456")
         db_session.add(user)
         db_session.commit()

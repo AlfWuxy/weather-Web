@@ -187,7 +187,7 @@ def test_private_health_index_migration_is_idempotent_and_used_by_queries(
         revision = connection.execute(
             'SELECT version_num FROM alembic_version'
         ).fetchone()[0]
-    assert revision == '0027_cross_platform_identity'
+    assert revision == '0029_wxpusher_uid_ownership'
 
 
 def test_private_health_index_migration_rejects_missing_table_before_mutation(

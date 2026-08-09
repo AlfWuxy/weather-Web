@@ -42,6 +42,7 @@ from core.db_models import (
     PairLink,
     UsageEvent,
     User,
+    WxpusherBindingChallenge,
 )
 from core.extensions import db, limiter
 from core.security import hash_identifier
@@ -851,6 +852,15 @@ def me():
         return jsonify({"success": False, "error": "user_not_found"}), 404
     wxpusher_feature_enabled = _wxpusher_feature_enabled()
     required_wxpusher_version = current_privacy_version()
+    wxpusher_uid_verified = bool(
+        wxpusher_feature_enabled
+        and user.wxpusher_uid
+        and getattr(user, 'wxpusher_uid_verified_at', None) is not None
+    )
+    effective_push_enabled = bool(
+        wxpusher_uid_verified
+        and user.push_enabled
+    )
     display_name = (
         "微信用户"
         if user.account_origin == "miniprogram_placeholder"
@@ -860,13 +870,14 @@ def me():
         "id": user.id,
         "display_name": display_name,
         "wxpusher_uid": user.wxpusher_uid if wxpusher_feature_enabled else None,
-        "push_enabled": bool(user.push_enabled) if wxpusher_feature_enabled else False,
+        "push_enabled": effective_push_enabled,
+        "wxpusher_uid_verified": wxpusher_uid_verified,
         "wxpusher_feature_enabled": wxpusher_feature_enabled,
         "wxpusher_available": _wxpusher_available(),
         "required_wxpusher_consent_version": required_wxpusher_version,
         "wxpusher_reconsent_required": bool(
             wxpusher_feature_enabled
-            and user.push_enabled
+            and effective_push_enabled
             and not _wxpusher_consent_is_current(user, required_wxpusher_version)
         ),
         **_health_consent_payload(user),
@@ -1025,10 +1036,29 @@ def me_patch():
             if authorization_error is not None:
                 return authorization_error
             user = g.api_user
+            current_wx_uid = (user.wxpusher_uid or '').strip() or None
+            uid_is_verified = bool(
+                current_wx_uid
+                and getattr(user, 'wxpusher_uid_verified_at', None) is not None
+            )
+            if (
+                'wxpusher_uid' in payload
+                and requested_wx_uid
+                and (
+                    requested_wx_uid != current_wx_uid
+                    or not uid_is_verified
+                )
+            ):
+                db.session.rollback()
+                return _error(
+                    'wxpusher_verification_required',
+                    '新的 WxPusher UID 必须先完成所有权验证。',
+                    409,
+                )
             wx_uid = (
                 requested_wx_uid
                 if "wxpusher_uid" in payload
-                else user.wxpusher_uid
+                else current_wx_uid
             )
             push_enabled = (
                 requested_push_enabled
@@ -1044,6 +1074,13 @@ def me_patch():
             if push_enabled and not wxpusher_available:
                 db.session.rollback()
                 return _error("wxpusher_unavailable", "第三方推送服务暂不可用。", 503)
+            if push_enabled and not uid_is_verified:
+                db.session.rollback()
+                return _error(
+                    'wxpusher_verification_required',
+                    '必须先验证 WxPusher UID 所有权才能开启推送。',
+                    409,
+                )
             consent_refresh_required = bool(
                 push_enabled
                 and (
@@ -1073,6 +1110,8 @@ def me_patch():
 
             if updated_fields:
                 user.wxpusher_uid = wx_uid
+                if not wx_uid:
+                    user.wxpusher_uid_verified_at = None
                 user.push_enabled = bool(push_enabled)
             if consent_refresh_required:
                 user.wxpusher_consent_version = required_wxpusher_version
@@ -1171,6 +1210,9 @@ def _anonymize_miniprogram_owner(user):
     MiniProgramLinkChallenge.query.filter_by(user_id=user_id).delete(
         synchronize_session=False
     )
+    WxpusherBindingChallenge.query.filter_by(user_id=user_id).delete(
+        synchronize_session=False
+    )
     MiniProgramSession.query.filter_by(user_id=user_id).delete(synchronize_session=False)
     MiniProgramIdentity.query.filter_by(user_id=user_id).delete(synchronize_session=False)
 
@@ -1222,6 +1264,7 @@ def _anonymize_miniprogram_owner(user):
     user.has_chronic_disease = False
     user.chronic_diseases = None
     user.wxpusher_uid = None
+    user.wxpusher_uid_verified_at = None
     user.push_enabled = False
     user.wxpusher_consent_version = None
     user.wxpusher_consented_at = None

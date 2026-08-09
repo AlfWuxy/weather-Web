@@ -32,6 +32,7 @@ from core.db_models import (
     PairLink,
     UsageEvent,
     User,
+    WxpusherBindingChallenge,
 )
 from core.extensions import db
 from core.time_utils import ensure_utc_aware, utcnow
@@ -272,6 +273,9 @@ def _anonymize_temporary_source_user(source_user: User, now) -> None:
     MiniProgramLinkChallenge.query.filter_by(user_id=source_user_id).delete(
         synchronize_session=False,
     )
+    WxpusherBindingChallenge.query.filter_by(user_id=source_user_id).delete(
+        synchronize_session=False,
+    )
     AlertDelivery.query.filter_by(reviewed_by_user_id=source_user_id).update(
         {
             AlertDelivery.reviewed_by_user_id: None,
@@ -313,6 +317,7 @@ def _anonymize_temporary_source_user(source_user: User, now) -> None:
     source_user.has_chronic_disease = False
     source_user.chronic_diseases = None
     source_user.wxpusher_uid = None
+    source_user.wxpusher_uid_verified_at = None
     source_user.push_enabled = False
     source_user.wxpusher_consent_version = None
     source_user.wxpusher_consented_at = None

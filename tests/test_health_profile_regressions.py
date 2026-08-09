@@ -225,15 +225,18 @@ def test_profile_requires_independent_consent_for_enable_without_partial_update(
     authenticated_client,
     db_session,
 ):
+    from core.time_utils import utcnow
+
     app.config['WXPUSHER_APP_TOKEN'] = 'AT_test-wxpusher-token'
     current = User.query.filter_by(username='testuser').first()
     current.age = 50
     current.email = 'before@example.com'
     current.wxpusher_uid = 'UID_KEEP'
+    current.wxpusher_uid_verified_at = utcnow()
     current.push_enabled = False
     db_session.commit()
     form = _profile_form('after@example.com')
-    form.update({'wxpusher_uid': 'UID_CHANGED', 'push_enabled': 'on'})
+    form.update({'wxpusher_uid': 'UID_KEEP', 'push_enabled': 'on'})
 
     response = authenticated_client.post('/profile', data=form, follow_redirects=True)
 
@@ -251,8 +254,13 @@ def test_profile_enables_wxpusher_with_current_consent(
     authenticated_client,
     db_session,
 ):
+    from core.time_utils import utcnow
+
     app.config['WXPUSHER_APP_TOKEN'] = 'AT_test-wxpusher-token'
     current = User.query.filter_by(username='testuser').first()
+    current.wxpusher_uid = 'UID_ENABLED'
+    current.wxpusher_uid_verified_at = utcnow()
+    db_session.commit()
     form = _profile_form('after@example.com')
     form.update({
         'wxpusher_uid': 'UID_ENABLED',
@@ -278,15 +286,18 @@ def test_profile_rejects_stale_wxpusher_consent_version_without_partial_update(
     authenticated_client,
     db_session,
 ):
+    from core.time_utils import utcnow
+
     app.config['WXPUSHER_APP_TOKEN'] = 'AT_test-wxpusher-token'
     current = User.query.filter_by(username='testuser').first()
     current.email = 'before@example.com'
     current.wxpusher_uid = 'UID_KEEP'
+    current.wxpusher_uid_verified_at = utcnow()
     current.push_enabled = False
     db_session.commit()
     form = _profile_form('after@example.com')
     form.update({
-        'wxpusher_uid': 'UID_CHANGED',
+        'wxpusher_uid': 'UID_KEEP',
         'push_enabled': 'on',
         'wxpusher_consent': '1',
         'wxpusher_consent_version': 'privacy-old',
@@ -314,6 +325,7 @@ def test_profile_keeps_existing_wxpusher_enabled_without_reusing_consent(
 
     current = User.query.filter_by(username='testuser').first()
     current.wxpusher_uid = 'UID_KEEP'
+    current.wxpusher_uid_verified_at = utcnow()
     current.push_enabled = True
     current.wxpusher_consent_version = app.config['WX_MINIPROGRAM_PRIVACY_VERSION']
     current.wxpusher_consented_at = utcnow()
@@ -335,9 +347,12 @@ def test_profile_allows_disable_when_wxpusher_channel_missing(
     authenticated_client,
     db_session,
 ):
+    from core.time_utils import utcnow
+
     app.config['WXPUSHER_APP_TOKEN'] = ''
     current = User.query.filter_by(username='testuser').first()
     current.wxpusher_uid = 'UID_KEEP'
+    current.wxpusher_uid_verified_at = utcnow()
     current.push_enabled = True
     db_session.commit()
     form = _profile_form('after@example.com')
@@ -378,6 +393,7 @@ def test_profile_allows_clearing_uid_when_wxpusher_channel_missing(
 def test_profile_wxpusher_controls_follow_runtime_capability(
     app,
     authenticated_client,
+    db_session,
 ):
     app.config['FEATURE_WXPUSHER'] = False
     app.config['WXPUSHER_APP_TOKEN'] = ''
@@ -398,7 +414,7 @@ def test_profile_wxpusher_controls_follow_runtime_capability(
     uid_input_start = unavailable_html.index('<input', uid_id - 100)
     uid_input_end = unavailable_html.index('>', uid_input_start)
     uid_input = unavailable_html[uid_input_start:uid_input_end]
-    assert 'readonly' not in uid_input
+    assert 'readonly' in uid_input
     assert 'disabled' not in uid_input
     push_enabled_id = unavailable_html.index('id="push_enabled"')
     push_input_start = unavailable_html.index('<input', push_enabled_id - 100)
@@ -406,6 +422,12 @@ def test_profile_wxpusher_controls_follow_runtime_capability(
     assert 'disabled' in unavailable_html[push_input_start:push_input_end]
     assert 'name="wxpusher_consent"' not in unavailable_html
 
+    from core.time_utils import utcnow
+
+    current = User.query.filter_by(username='testuser').first()
+    current.wxpusher_uid = 'UID_VERIFIED_UI'
+    current.wxpusher_uid_verified_at = utcnow()
+    db_session.commit()
     app.config['WXPUSHER_APP_TOKEN'] = 'AT_test-wxpusher-token'
     available = authenticated_client.get('/profile')
 

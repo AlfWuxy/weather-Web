@@ -54,6 +54,33 @@ def _cfg(key: str, default=None):
     return default
 
 
+def max_delivery_attempts() -> int:
+    """返回包含首次发送在内的硬上限，任何配置都不能超过两次。"""
+    try:
+        configured = int(_cfg('WXPUSHER_MAX_DELIVERY_ATTEMPTS', 2))
+    except (TypeError, ValueError):
+        configured = 2
+    return max(1, min(configured, 2))
+
+
+def normalize_delivery_attempt_count(value: Any) -> int:
+    """历史空值或非正数也按已发送过一次处理。"""
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        parsed = 1
+    return max(1, parsed)
+
+
+def delivery_attempt_count_expression():
+    """生成与 Python 归一规则一致的 SQL 表达式。"""
+    return db.case(
+        (AlertDelivery.attempt_count.is_(None), 1),
+        (AlertDelivery.attempt_count < 1, 1),
+        else_=AlertDelivery.attempt_count,
+    )
+
+
 def _generate_delivery_token() -> str:
     # 生成 32 到 43 个字符的 URL 安全令牌。
     for _ in range(5):
@@ -117,18 +144,54 @@ def _existing_delivery_decision(delivery: AlertDelivery, now) -> Dict[str, Any]:
         return {"action": "skip", "state": "sent", "review_required": False}
 
     if state == "retry_ready":
+        retry_limit = max_delivery_attempts()
+        normalized_attempt_count = normalize_delivery_attempt_count(
+            delivery.attempt_count
+        )
+        attempt_count_expression = delivery_attempt_count_expression()
+        if normalized_attempt_count >= retry_limit:
+            changed = db.session.execute(
+                db.update(AlertDelivery)
+                .where(
+                    AlertDelivery.id == delivery_id,
+                    AlertDelivery.status == "retry_ready",
+                    attempt_count_expression >= retry_limit,
+                )
+                .values(
+                    status="failed",
+                    error="已达到人工重试上限，禁止再次发送",
+                    reviewed_at=now,
+                    reviewed_by_user_id=None,
+                    review_action="retry_limit_reached",
+                )
+            ).rowcount
+            if changed == 1:
+                db.session.commit()
+                return {
+                    "action": "skip",
+                    "state": "failed",
+                    "review_required": False,
+                }
+            db.session.rollback()
+            refreshed = _load_delivery_fresh(delivery_id)
+            if refreshed is None:
+                db.session.rollback()
+                return {"action": "skip", "state": "missing", "review_required": False}
+            return _existing_delivery_decision(refreshed, now)
+
         # 管理员允许重试与调度 claim 可能并发，必须只让一次 CAS 成功。
         claimed = db.session.execute(
             db.update(AlertDelivery)
             .where(
                 AlertDelivery.id == delivery_id,
                 AlertDelivery.status == "retry_ready",
+                attempt_count_expression < retry_limit,
             )
             .values(
                 status="sending",
                 error=None,
                 sent_at=now,
-                attempt_count=db.func.coalesce(AlertDelivery.attempt_count, 1) + 1,
+                attempt_count=attempt_count_expression + 1,
                 reviewed_at=None,
                 reviewed_by_user_id=None,
                 review_action=None,
@@ -363,6 +426,7 @@ def _reload_push_authorization(
         return None
     authorized_pairs = _reload_authorized_pairs(user_id, candidate_pair_ids)
     uid = (getattr(user, "wxpusher_uid", None) or "").strip()
+    uid_is_verified = getattr(user, 'wxpusher_uid_verified_at', None) is not None
     consent_is_current = bool(
         getattr(user, "wxpusher_consented_at", None) is not None
         and getattr(user, "wxpusher_consent_version", None)
@@ -371,6 +435,7 @@ def _reload_push_authorization(
     if (
         not getattr(user, "push_enabled", False)
         or not uid
+        or not uid_is_verified
         or not consent_is_current
         or not authorized_pairs
     ):

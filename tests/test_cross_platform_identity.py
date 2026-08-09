@@ -176,6 +176,11 @@ def test_one_time_code_links_wechat_identity_and_rotates_session(
     source_user_id = int(source_identity.user_id)
     source_user = db.session.get(User, source_user_id)
     source_username = source_user.username
+    from core.time_utils import utcnow
+
+    # 模拟历史异常残留的孤立证明时间，退休流程必须显式清除且不能转移。
+    source_user.wxpusher_uid_verified_at = utcnow()
+    db.session.commit()
     assert source_username.startswith("wx_")
     assert source_user.account_origin == "miniprogram_placeholder"
     assert source_user_id != target_user_id
@@ -205,6 +210,8 @@ def test_one_time_code_links_wechat_identity_and_rotates_session(
     assert retired_source.email is None
     assert retired_source.phone_normalized is None
     assert retired_source.wxpusher_uid is None
+    assert retired_source.wxpusher_uid_verified_at is None
+    assert db.session.get(User, target_user_id).wxpusher_uid_verified_at is None
     assert retired_source.health_sensitive_consent_version is None
     assert UsageEvent.query.filter_by(user_id=source_user_id).count() == 0
     assert UsageEvent.query.filter_by(

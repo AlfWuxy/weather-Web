@@ -23,6 +23,7 @@ def _create_mp_user_and_token(app, db_session, *, uid="UID_KEEP", push_enabled=T
             username="mp_boundary_user",
             role="user",
             wxpusher_uid=uid,
+            wxpusher_uid_verified_at=utcnow() if uid else None,
             push_enabled=push_enabled,
             wxpusher_consent_version=(
                 app.config["WX_MINIPROGRAM_PRIVACY_VERSION"]
@@ -55,11 +56,11 @@ def test_mp_me_patch_preserves_omitted_fields_and_disables_push_when_uid_removed
         json={"wxpusher_uid": "UID_CHANGED_WITH_CURRENT_RECEIPT"},
         headers=headers,
     )
-    assert uid_response.status_code == 200
-    assert uid_response.get_json()["data"]["push_enabled"] is True
+    assert uid_response.status_code == 409
+    assert uid_response.get_json()["error"] == "wxpusher_verification_required"
     with app.app_context():
         user = db_session.get(User, user_id)
-        assert user.wxpusher_uid == "UID_CHANGED_WITH_CURRENT_RECEIPT"
+        assert user.wxpusher_uid == "UID_KEEP"
         assert user.wxpusher_consented_at == original_consent_time
 
     disable_response = client.patch(
@@ -69,7 +70,7 @@ def test_mp_me_patch_preserves_omitted_fields_and_disables_push_when_uid_removed
     )
     assert disable_response.status_code == 200
     assert disable_response.get_json()["data"] == {
-        "wxpusher_uid": "UID_CHANGED_WITH_CURRENT_RECEIPT",
+        "wxpusher_uid": "UID_KEEP",
         "push_enabled": False,
         "wxpusher_available": True,
         "required_wxpusher_consent_version": app.config["WX_MINIPROGRAM_PRIVACY_VERSION"],
@@ -105,6 +106,7 @@ def test_mp_me_patch_preserves_omitted_fields_and_disables_push_when_uid_removed
     with app.app_context():
         user = db_session.get(User, user_id)
         assert user.wxpusher_uid is None
+        assert user.wxpusher_uid_verified_at is None
         assert user.push_enabled is False
         assert user.wxpusher_consent_version == app.config["WX_MINIPROGRAM_PRIVACY_VERSION"]
         assert user.wxpusher_consented_at is not None
@@ -143,7 +145,7 @@ def test_mp_me_patch_requires_explicit_wxpusher_consent_without_partial_update(
 
     response = client.patch(
         '/mp/api/v1/me',
-        json={'wxpusher_uid': 'UID_CHANGED', 'push_enabled': True},
+        json={'wxpusher_uid': 'UID_KEEP', 'push_enabled': True},
         headers={'Authorization': f'Bearer {token}'},
     )
 
@@ -167,7 +169,7 @@ def test_mp_me_patch_rejects_missing_or_stale_wxpusher_consent_version(
 ):
     user_id, token = _create_mp_user_and_token(app, db_session, push_enabled=False)
     payload = {
-        "wxpusher_uid": "UID_CHANGED",
+        "wxpusher_uid": "UID_KEEP",
         "push_enabled": True,
         "wxpusher_consent": True,
     }
@@ -240,13 +242,13 @@ def test_mp_me_patch_requires_reconsent_for_stale_enabled_receipt(
         json={"wxpusher_uid": "UID_STALE_ATTEMPT"},
         headers={"Authorization": f"Bearer {token}"},
     )
-    assert rejected.status_code == 400
-    assert rejected.get_json()["error"] == "wxpusher_consent_required"
+    assert rejected.status_code == 409
+    assert rejected.get_json()["error"] == "wxpusher_verification_required"
 
     accepted = client.patch(
         "/mp/api/v1/me",
         json={
-            "wxpusher_uid": "UID_RECONSENTED",
+            "wxpusher_uid": "UID_KEEP",
             "wxpusher_consent": True,
             "wxpusher_consent_version": app.config["WX_MINIPROGRAM_PRIVACY_VERSION"],
         },
@@ -255,7 +257,7 @@ def test_mp_me_patch_requires_reconsent_for_stale_enabled_receipt(
     assert accepted.status_code == 200
     with app.app_context():
         user = db_session.get(User, user_id)
-        assert user.wxpusher_uid == "UID_RECONSENTED"
+        assert user.wxpusher_uid == "UID_KEEP"
         assert user.wxpusher_consent_version == app.config[
             "WX_MINIPROGRAM_PRIVACY_VERSION"
         ]
@@ -277,7 +279,7 @@ def test_mp_me_patch_rejects_enable_when_wxpusher_is_unavailable_without_partial
     response = client.patch(
         '/mp/api/v1/me',
         json={
-            'wxpusher_uid': 'UID_CHANGED',
+            'wxpusher_uid': 'UID_KEEP',
             'push_enabled': True,
             'wxpusher_consent': True,
         },

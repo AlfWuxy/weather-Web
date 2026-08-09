@@ -307,6 +307,11 @@ def test_validate_production_config_rejects_weak_pair_token_pepper(tmp_path, pep
         ('ACCOUNT_LINK_CODE_PEPPER', 'SECRET_KEY'),
         ('ACCOUNT_LINK_CODE_PEPPER', 'WX_MINIPROGRAM_OPENID_PEPPER'),
         ('ACCOUNT_LINK_CODE_PEPPER', 'WX_MINIPROGRAM_SESSION_SECRET'),
+        ('WXPUSHER_BINDING_PEPPER', 'PAIR_TOKEN_PEPPER'),
+        ('WXPUSHER_BINDING_PEPPER', 'SECRET_KEY'),
+        ('WXPUSHER_BINDING_PEPPER', 'ACCOUNT_LINK_CODE_PEPPER'),
+        ('WXPUSHER_BINDING_PEPPER', 'WX_MINIPROGRAM_OPENID_PEPPER'),
+        ('WXPUSHER_BINDING_PEPPER', 'WX_MINIPROGRAM_SESSION_SECRET'),
     ],
 )
 def test_validate_production_config_requires_pairwise_independent_secrets(
@@ -330,6 +335,8 @@ def test_validate_production_config_requires_pairwise_independent_secrets(
         'PUBLIC_BASE_URL': 'https://yilaoweather.org',
         'WXPUSHER_APP_TOKEN': 'AT_abcdefghijklmnop',
         'WXPUSHER_API_BASE': 'https://wxpusher.zjiecode.com/api',
+        'FEATURE_WXPUSHER_BINDING': '1',
+        'WXPUSHER_BINDING_PEPPER': 'bindvalue93847502938475029384750293847',
         'DISPATCH_LOCK_PATH': str(tmp_path / 'dispatch.lock'),
         'ALLOW_INSECURE_PUBLIC_BASE_URL': None,
         'QWEATHER_AUTH_MODE': 'disabled',
@@ -394,12 +401,133 @@ def test_validate_production_config_accepts_locked_web_only_wxpusher(tmp_path):
         'PUBLIC_BASE_URL': 'https://yilaoweather.org',
         'WXPUSHER_APP_TOKEN': 'AT_abcdefghijklmnop',
         'WXPUSHER_API_BASE': 'https://wxpusher.zjiecode.com/api',
+        'FEATURE_WXPUSHER_BINDING': '0',
+        # 绑定入口关闭时，预配置值不得破坏纯推送部署。
+        'WXPUSHER_BINDING_PEPPER': 'strongkey1234567890strongkey123456',
         'DISPATCH_LOCK_PATH': str(tmp_path / 'dispatch.lock'),
         'ALLOW_INSECURE_PUBLIC_BASE_URL': None,
     })
     try:
         config = _reload_config()
         config.validate_production_config()
+    finally:
+        _restore_env(original)
+        _reload_config()
+
+
+def test_validate_production_config_requires_pepper_only_for_wxpusher_binding(
+    tmp_path,
+):
+    base_env = {
+        'SECRET_KEY': 'strongkey1234567890strongkey123456',
+        'PAIR_TOKEN_PEPPER': 'peppervalue1234567890abcdefghijkl',
+        'DEBUG': 'false',
+        'WECHAT_FORMAL_RUNTIME': '0',
+        'DATABASE_URI': f"sqlite:///{tmp_path/'prod_web_binding.db'}",
+        'RATE_LIMIT_STORAGE_URI': 'redis://localhost:6379/0',
+        'QWEATHER_AUTH_MODE': 'disabled',
+        'WX_MINIPROGRAM_APPID': None,
+        'WX_MINIPROGRAM_SECRET': None,
+        'WX_MINIPROGRAM_OPENID_PEPPER': None,
+        'WX_MINIPROGRAM_SESSION_SECRET': None,
+        'PUBLIC_BASE_URL': 'https://yilaoweather.org',
+        'FEATURE_WXPUSHER': '1',
+        'WXPUSHER_APP_TOKEN': 'AT_abcdefghijklmnop',
+        'WXPUSHER_API_BASE': 'https://wxpusher.zjiecode.com/api',
+        'FEATURE_WXPUSHER_BINDING': '1',
+        'WXPUSHER_BINDING_PEPPER': None,
+        'DISPATCH_LOCK_PATH': str(tmp_path / 'dispatch.lock'),
+        'ALLOW_INSECURE_PUBLIC_BASE_URL': None,
+    }
+    original = _set_env(base_env)
+    try:
+        config = _reload_config()
+        with pytest.raises(RuntimeError, match='WXPUSHER_BINDING_PEPPER'):
+            config.validate_production_config()
+    finally:
+        _restore_env(original)
+        _reload_config()
+
+
+def test_validate_production_config_accepts_enabled_wxpusher_binding(tmp_path):
+    original = _set_env({
+        'SECRET_KEY': 'strongkey1234567890strongkey123456',
+        'PAIR_TOKEN_PEPPER': 'peppervalue1234567890abcdefghijkl',
+        'DEBUG': 'false',
+        'WECHAT_FORMAL_RUNTIME': '0',
+        'DATABASE_URI': f"sqlite:///{tmp_path/'prod_web_binding_ok.db'}",
+        'RATE_LIMIT_STORAGE_URI': 'redis://localhost:6379/0',
+        'QWEATHER_AUTH_MODE': 'disabled',
+        'WX_MINIPROGRAM_APPID': None,
+        'WX_MINIPROGRAM_SECRET': None,
+        'WX_MINIPROGRAM_OPENID_PEPPER': None,
+        'WX_MINIPROGRAM_SESSION_SECRET': None,
+        'PUBLIC_BASE_URL': 'https://yilaoweather.org',
+        'FEATURE_WXPUSHER': '1',
+        'WXPUSHER_APP_TOKEN': 'AT_abcdefghijklmnop',
+        'WXPUSHER_API_BASE': 'https://wxpusher.zjiecode.com/api',
+        'FEATURE_WXPUSHER_BINDING': '1',
+        'WXPUSHER_BINDING_PEPPER': 'bindvalue93847502938475029384750293847',
+        'DISPATCH_LOCK_PATH': str(tmp_path / 'dispatch.lock'),
+        'ALLOW_INSECURE_PUBLIC_BASE_URL': None,
+    })
+    try:
+        config = _reload_config()
+        config.validate_production_config()
+    finally:
+        _restore_env(original)
+        _reload_config()
+
+
+def test_validate_production_config_rejects_binding_without_wxpusher(tmp_path):
+    original = _set_env({
+        'SECRET_KEY': 'strongkey1234567890strongkey123456',
+        'PAIR_TOKEN_PEPPER': 'peppervalue1234567890abcdefghijkl',
+        'DEBUG': 'false',
+        'WECHAT_FORMAL_RUNTIME': '0',
+        'DATABASE_URI': f"sqlite:///{tmp_path/'prod_binding_without_push.db'}",
+        'RATE_LIMIT_STORAGE_URI': 'redis://localhost:6379/0',
+        'QWEATHER_AUTH_MODE': 'disabled',
+        'WX_MINIPROGRAM_APPID': None,
+        'WX_MINIPROGRAM_SECRET': None,
+        'WX_MINIPROGRAM_OPENID_PEPPER': None,
+        'WX_MINIPROGRAM_SESSION_SECRET': None,
+        'FEATURE_WXPUSHER': '0',
+        'WXPUSHER_APP_TOKEN': None,
+        'FEATURE_WXPUSHER_BINDING': '1',
+        'WXPUSHER_BINDING_PEPPER': 'bindvalue93847502938475029384750293847',
+    })
+    try:
+        config = _reload_config()
+        with pytest.raises(RuntimeError, match='FEATURE_WXPUSHER_BINDING'):
+            config.validate_production_config()
+    finally:
+        _restore_env(original)
+        _reload_config()
+
+
+def test_validate_production_config_rejects_nonbinary_binding_flag(tmp_path):
+    original = _set_env({
+        'SECRET_KEY': 'strongkey1234567890strongkey123456',
+        'PAIR_TOKEN_PEPPER': 'peppervalue1234567890abcdefghijkl',
+        'DEBUG': 'false',
+        'WECHAT_FORMAL_RUNTIME': '0',
+        'DATABASE_URI': f"sqlite:///{tmp_path/'prod_invalid_binding_flag.db'}",
+        'RATE_LIMIT_STORAGE_URI': 'redis://localhost:6379/0',
+        'QWEATHER_AUTH_MODE': 'disabled',
+        'WX_MINIPROGRAM_APPID': None,
+        'WX_MINIPROGRAM_SECRET': None,
+        'WX_MINIPROGRAM_OPENID_PEPPER': None,
+        'WX_MINIPROGRAM_SESSION_SECRET': None,
+        'FEATURE_WXPUSHER': '0',
+        'WXPUSHER_APP_TOKEN': None,
+        'FEATURE_WXPUSHER_BINDING': 'yes',
+        'WXPUSHER_BINDING_PEPPER': None,
+    })
+    try:
+        config = _reload_config()
+        with pytest.raises(RuntimeError, match='FEATURE_WXPUSHER_BINDING'):
+            config.validate_production_config()
     finally:
         _restore_env(original)
         _reload_config()

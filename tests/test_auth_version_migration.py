@@ -11,7 +11,7 @@ import pytest
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
-HEAD_REVISION = '0027_cross_platform_identity'
+HEAD_REVISION = '0029_wxpusher_uid_ownership'
 PREVIOUS_REVISION = '0022_private_health_indexes'
 
 
@@ -419,11 +419,11 @@ def test_wxpusher_relative_one_step_downgrade_stops_at_auth_revision(
         ).fetchone() == (2, 0)
 
 
-def test_wxpusher_relative_five_step_downgrade_runs_auth_guard(
+def test_wxpusher_relative_seven_step_downgrade_runs_auth_guard(
     monkeypatch,
     tmp_path,
 ):
-    """相对降级五阶会跨越 0023，并在首个 DDL 前阻断。"""
+    """相对降级七阶会跨越 0023，并在首个 DDL 前阻断。"""
     database_path = tmp_path / 'wxpusher-relative-two-step.db'
     app, config = _initialize(monkeypatch, database_path)
 
@@ -447,7 +447,7 @@ def test_wxpusher_relative_five_step_downgrade_runs_auth_guard(
     _dispose(app)
 
     with pytest.raises(RuntimeError, match='auth_version_count=1'):
-        command.downgrade(config, '-5')
+        command.downgrade(config, '-7')
 
     revision, columns = _revision_and_columns(database_path)
     assert revision == HEAD_REVISION

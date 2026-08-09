@@ -29,6 +29,11 @@ from core.db_models import (
 )
 from core.time_utils import today_local, date_to_utc_start, date_to_utc_end, utc_to_local_date, utcnow
 from services.miniprogram_metrics import load_miniprogram_metrics
+from services.push.dispatch import (
+    delivery_attempt_count_expression,
+    max_delivery_attempts,
+    normalize_delivery_attempt_count,
+)
 from utils.parsers import parse_date
 from utils.validators import sanitize_input
 
@@ -3425,6 +3430,13 @@ def pilot_review_delivery(delivery_id):
     if delivery.clicked_at is not None and action != 'confirm_sent':
         flash('有效点击已构成送达证据，只能确认送达', 'error')
         return redirect(url_for('analysis.pilot_dashboard', days=30))
+    if (
+        action == 'allow_retry'
+        and normalize_delivery_attempt_count(delivery.attempt_count)
+        >= max_delivery_attempts()
+    ):
+        flash('本次投递已使用一次人工重试，不能再次发送', 'error')
+        return redirect(url_for('analysis.pilot_dashboard', days=30))
 
     previous_status = delivery.status
     previous_clicked_at = delivery.clicked_at
@@ -3455,6 +3467,11 @@ def pilot_review_delivery(delivery_id):
         cas_conditions.append(AlertDelivery.clicked_at.is_(None))
     else:
         cas_conditions.append(AlertDelivery.clicked_at == previous_clicked_at)
+    if action == 'allow_retry':
+        cas_conditions.append(
+            delivery_attempt_count_expression()
+            < max_delivery_attempts()
+        )
     changed = db.session.execute(
         db.update(AlertDelivery)
         .where(*cas_conditions)

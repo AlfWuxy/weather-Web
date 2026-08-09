@@ -14,7 +14,7 @@ from sqlalchemy.schema import CreateIndex
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
-HEAD_REVISION = "0027_cross_platform_identity"
+HEAD_REVISION = "0029_wxpusher_uid_ownership"
 PREVIOUS_REVISION = "0026_cooling_coordinate_verify"
 
 

@@ -175,6 +175,7 @@ def validate_production_config():
         os.getenv('WEB_PRIVATE_FEATURES_ENABLED') or ''
     ).strip()
     wxpusher_app_token = (os.getenv('WXPUSHER_APP_TOKEN') or '').strip()
+    wxpusher_binding_pepper = (os.getenv('WXPUSHER_BINDING_PEPPER') or '').strip()
     feature_wxpusher_env = os.getenv('FEATURE_WXPUSHER')
     feature_wxpusher_raw = (
         feature_wxpusher_env.strip()
@@ -185,6 +186,16 @@ def validate_production_config():
     feature_wxpusher = parse_bool(
         feature_wxpusher_raw,
         default=bool(wxpusher_app_token),
+    )
+    feature_wxpusher_binding_env = os.getenv('FEATURE_WXPUSHER_BINDING')
+    feature_wxpusher_binding_raw = (
+        feature_wxpusher_binding_env.strip()
+        if isinstance(feature_wxpusher_binding_env, str)
+        else ''
+    )
+    feature_wxpusher_binding = parse_bool(
+        feature_wxpusher_binding_raw,
+        default=False,
     )
     wxpusher_api_base = (os.getenv('WXPUSHER_API_BASE') or WXPUSHER_API_BASE_DEFAULT).strip()
     public_base_url = (os.getenv('PUBLIC_BASE_URL') or '').strip()
@@ -238,6 +249,13 @@ def validate_production_config():
                 )
         if feature_wxpusher_raw and feature_wxpusher_raw not in {'0', '1'}:
             raise RuntimeError("FEATURE_WXPUSHER 必须显式设置为 0 或 1。")
+        if (
+            feature_wxpusher_binding_raw
+            and feature_wxpusher_binding_raw not in {'0', '1'}
+        ):
+            raise RuntimeError(
+                "FEATURE_WXPUSHER_BINDING 必须显式设置为 0 或 1。"
+            )
         if not secret_key_env:
             raise RuntimeError(
                 "SECRET_KEY 未设置！生产环境必须配置。\n"
@@ -265,6 +283,9 @@ def validate_production_config():
             'PAIR_TOKEN_PEPPER': pair_token_pepper,
             'SECRET_KEY': secret_key_env,
             'ACCOUNT_LINK_CODE_PEPPER': account_link_code_pepper,
+            'WXPUSHER_BINDING_PEPPER': (
+                wxpusher_binding_pepper if feature_wxpusher_binding else ''
+            ),
             'WX_MINIPROGRAM_OPENID_PEPPER': wx_miniprogram_values['WX_MINIPROGRAM_OPENID_PEPPER'],
             'WX_MINIPROGRAM_SESSION_SECRET': wx_miniprogram_values['WX_MINIPROGRAM_SESSION_SECRET'],
         }
@@ -315,6 +336,11 @@ def validate_production_config():
                 raise RuntimeError("微信正式模式禁止 ALLOW_INSECURE_PUBLIC_BASE_URL。")
         if not feature_wxpusher and wxpusher_app_token:
             raise RuntimeError("FEATURE_WXPUSHER=0 时必须清空 WXPUSHER_APP_TOKEN。")
+        if feature_wxpusher_binding and not feature_wxpusher:
+            raise RuntimeError(
+                "FEATURE_WXPUSHER_BINDING=1 时必须同时设置 "
+                "FEATURE_WXPUSHER=1。"
+            )
 
         # WxPusher 也可能在 Web-only 运行时开启，启用后必须锁定正式跳转与官方 API。
         if feature_wxpusher:
@@ -328,6 +354,15 @@ def validate_production_config():
                 raise RuntimeError("启用 WxPusher 时 WXPUSHER_API_BASE 必须使用固定官方 origin。")
             if not WXPUSHER_APP_TOKEN_PATTERN.fullmatch(wxpusher_app_token):
                 raise RuntimeError("WXPUSHER_APP_TOKEN 格式或长度异常。")
+
+        if feature_wxpusher_binding and (
+            len(wxpusher_binding_pepper) < 32
+            or _contains_weak_keyword(wxpusher_binding_pepper)
+        ):
+            raise RuntimeError(
+                "启用 WxPusher 绑定时 WXPUSHER_BINDING_PEPPER "
+                "必须使用至少 32 位的独立随机值。"
+            )
 
         if any(wx_miniprogram_values.values()) or feature_wxpusher:
             if not dispatch_lock_path or not Path(dispatch_lock_path).is_absolute():
@@ -436,7 +471,34 @@ def configure_app(app, logger):
         os.getenv('FEATURE_WXPUSHER'),
         default=bool(wxpusher_app_token),
     )
+    feature_wxpusher_binding = parse_bool(
+        os.getenv('FEATURE_WXPUSHER_BINDING'),
+        default=False,
+    )
     wxpusher_api_base = _normalized_env_value('WXPUSHER_API_BASE', WXPUSHER_API_BASE_DEFAULT)
+    wxpusher_binding_pepper = _normalized_env_value('WXPUSHER_BINDING_PEPPER', '')
+    wxpusher_binding_ttl_seconds = max(
+        300,
+        min(
+            parse_int(os.getenv('WXPUSHER_BINDING_TTL_SECONDS', '600'), default=600),
+            900,
+        ),
+    )
+    wxpusher_binding_max_attempts = max(
+        3,
+        min(
+            parse_int(os.getenv('WXPUSHER_BINDING_MAX_ATTEMPTS', '5'), default=5),
+            10,
+        ),
+    )
+    # 初次发送加一次人工重试，总尝试次数最多为 2。
+    wxpusher_max_delivery_attempts = max(
+        1,
+        min(
+            parse_int(os.getenv('WXPUSHER_MAX_DELIVERY_ATTEMPTS', '2'), default=2),
+            2,
+        ),
+    )
     push_tracking_link_ttl_days = max(
         PUSH_TRACKING_LINK_TTL_DAYS_MIN,
         min(
@@ -538,8 +600,13 @@ def configure_app(app, logger):
     app.config['SILICONFLOW_API_BASE'] = siliconflow_base
     app.config['FEATURE_WEB_AI'] = feature_web_ai
     app.config['FEATURE_WXPUSHER'] = feature_wxpusher
+    app.config['FEATURE_WXPUSHER_BINDING'] = feature_wxpusher_binding
     app.config['WXPUSHER_APP_TOKEN'] = wxpusher_app_token
     app.config['WXPUSHER_API_BASE'] = wxpusher_api_base
+    app.config['WXPUSHER_BINDING_PEPPER'] = wxpusher_binding_pepper or secret_key
+    app.config['WXPUSHER_BINDING_TTL_SECONDS'] = wxpusher_binding_ttl_seconds
+    app.config['WXPUSHER_BINDING_MAX_ATTEMPTS'] = wxpusher_binding_max_attempts
+    app.config['WXPUSHER_MAX_DELIVERY_ATTEMPTS'] = wxpusher_max_delivery_attempts
     app.config['PUSH_TRACKING_LINK_TTL_DAYS'] = push_tracking_link_ttl_days
     app.config['WX_MINIPROGRAM_APPID'] = wx_miniprogram_appid
     app.config['WX_MINIPROGRAM_SECRET'] = wx_miniprogram_secret
