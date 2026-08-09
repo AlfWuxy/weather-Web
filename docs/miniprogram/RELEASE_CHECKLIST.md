@@ -130,8 +130,8 @@
 - [ ] 预警接口可区分“确认无预警”和“预警来源不可用”。
 - [ ] 多轮自动化、模拟器和视觉测试使用 fixture，真实 QWeather 调用数为 0。
 - [ ] 正式 release 的 `private-metadata/source-commit.txt`、激活参数和验证票据是同一个 40 位冻结 commit。
-- [ ] 正式天气烟测 receipt 位于外置状态目录，绑定冻结 commit 与天气语义配置指纹；运行用户 JWT 离线签名和 Redis 预算前值读取均通过后，`started` 才在开放网络闸门前形成，`completed` 记录通过校验的 snapshot_id 与预算差值。
-- [ ] root 在 `started` receipt 前用随机 lease token 取得全局 Redis `SET NX EX 1800` 周期租约；租约忙时未形成 receipt。`started` 耐久落盘后才签发 root-owned `0640` 一次性 ticket；同步进程确认预占租约，并校验 binding、token SHA-256 与 lease token SHA-256，通过独立 Redis `SET NX` 消费并删除 ticket 后才访问上游，消费后失败也不会自动重试。
+- [ ] 正式天气烟测 receipt 位于外置状态目录，绑定冻结 commit 与天气语义配置指纹；指纹包含 `REDIS_URL` 与 `WEATHER_CACHE_REDIS_URL`，原始 URL 不在 journal、receipt 或日志中暴露。活动与候选环境的有效 Redis URL 已归一化为连接身份哈希且完全一致；不同主机、端口、数据库、认证或连接选项已拆成独立 Redis 迁移，激活事务没有跨后端切换。运行用户 JWT 离线签名和 Redis 预算前值读取均通过后，`started` 才在开放网络闸门前形成，`completed` 记录通过校验的 snapshot_id 与预算差值。绑定一致、`completed` 完整且 snapshot_id 在生产变更前仍通过官方来源与新鲜度校验时直接复用 receipt，没有重复预占租约或访问上游。
+- [ ] 需要新烟测时，root 先将事务 ID、随机 lease token 与 Redis 后端身份哈希写入 root-only `0600` 耐久 journal，再在 Nginx reload、停服、环境替换、数据库迁移、`current` 切换等任何生产变更前取得全局 Redis `SET NX EX 1800` 周期租约；租约忙时未形成 receipt，事务写入 `ROLLED_BACK=pre-mutation` 后退出，且没有清理、覆盖、续租或抢占现有租约。`SET NX` 结果未知或不可逆边界前 SIGKILL 的回归已验证：当前退出或下次启动只在后端身份相同、阶段证据仍可回滚时，用 journal owner token 执行 Lua compare-and-delete 并耐久删除 journal；陌生 token、不匹配后端、forward-only 或损坏证据保持原状。写入 forward-only 与 `started` 前，Lua 只在租约值仍等于本事务 token 时原子续回完整 1,800 秒；失败时普通回滚。生产切换后的 `started` receipt、root-owned `0640` 一次性 ticket 与同步进程使用同一个预留 lease token；同步进程确认该租约，并校验 binding、token SHA-256 与 lease token SHA-256，通过独立 Redis `SET NX` 消费并删除 ticket 后才访问上游，消费后失败也不会自动重试。
 - [ ] 烟测预算增量固定为 `weather_now`、`weather_7d_forecast`、`weatheralert_v1_current` 三项各 1 次，总增量为 3。
 - [ ] 正式烟测关闭 Open-Meteo 与 mock 兜底；常规周期任一官方来源失败时可保存 degraded 快照供页面说明，但不会触发预警派发。
 - [ ] 轮换 AppID、AppSecret、隐私版本、GIS 开关或公开域名后仍命中同一天气 receipt，没有追加同步请求；QWeather 凭据或天气配置确实变化时才形成新指纹。
@@ -166,9 +166,9 @@
 - [ ] 后端使用不可变 release 目录完成预检，生产目录未被 rsync 原地覆盖。
 - [ ] 发布后 `case-weather-cache-bootstrap.timer` 为 active，`case-weather-cache.timer` 在首轮等待期间为 inactive 且 disabled。
 - [ ] 五个业务运行服务使用无登录权限的 `case-weather` 账号，只允许写入 `instance/`、`storage/` 和 `run/`；root-only SQLite 备份服务关闭网络、限制 capability，只允许写入 `backups/daily`、`instance/` 和 `storage/`，且所有服务均启用 systemd 沙箱。
-- [ ] 激活事务在写入 `COMMITTED` 前已核对服务、两阶段 timer、缓存服务的 `OnSuccess`/`OnFailure`、bootstrap 剩余窗口、`current` 链接、暂存环境清理与公网健康检查。
+- [ ] 激活事务在写入 `COMMITTED` 前已核对服务、两阶段 timer、缓存服务的 `OnSuccess`/`OnFailure`、bootstrap 剩余窗口、暂存环境清理与公网健康检查；`current` 符号链接解析出的不可变 release 与 `deployments/current-release` 普通文件记录完全一致。
 - [ ] 激活事务已验证迁移失败和候选端口健康检查失败会恢复数据库、旧 release 与原 systemd 状态。
-- [ ] 公网服务启动后出现故障会保留向前迁移的数据库与新 release，并写入 `POST_COMMIT_ATTENTION.txt`，不会覆盖可能已经确认的用户写入。
+- [ ] 公网服务启动后出现故障会保留向前迁移的数据库与新 release，并同时写入 `FORWARD_ONLY_REQUIRED` 和 `POST_COMMIT_ATTENTION.txt`；`current` 与 `deployments/current-release` 均记录新 release，不会覆盖可能已经确认的用户写入。
 - [ ] `/healthz` 只执行应用与数据库检查，不会触发天气、地图、第三方消息服务或其他外部 API。
 - [ ] 上传包使用目标 commit 中固定的公开生产域名，工作树保持干净且构建可复现。
 
@@ -181,7 +181,7 @@
 - [ ] 已验证公网切换前失败可恢复数据库、旧 release 与原 systemd 状态。
 - [ ] 已确认公网启动后的故障进入向前修复区间，禁止用旧数据库覆盖可能已经确认的用户写入。
 - [ ] 没有未处理的 `ROLLBACK_REQUIRED.txt` 或 `POST_COMMIT_ATTENTION.txt`；若存在，已停止新部署并完成逐项人工核对。
-- [ ] `DEPLOY_RECOVERY_ACKNOWLEDGED_TRANSACTION` 只在人工核对后指向精确事务目录，不使用宽泛路径代替确认。
+- [ ] `DEPLOY_RECOVERY_ACKNOWLEDGED_TRANSACTION` 只在人工核对后指向精确事务目录，不使用宽泛路径代替确认。历史 `current` 与 `deployments/current-release` 不一致只能通过该精确事务确认恢复；确认事务的 `ACTIVATION_STARTED` 必须与当前符号链接解析出的 release 完全一致，无法匹配时继续 fail-closed。
 
 ## 发布后
 

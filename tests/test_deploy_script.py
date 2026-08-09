@@ -1720,6 +1720,7 @@ def test_deploy_loader_uses_the_same_validated_form_snapshot():
 
 def test_activate_transaction_stops_every_writer_and_commits_last():
     content = _load_activate_script()
+    main_flow = content[content.rindex('\nacknowledge_recovery_transaction\n'):]
 
     for unit in (
         'case-weather.service',
@@ -1741,6 +1742,18 @@ def test_activate_transaction_stops_every_writer_and_commits_last():
         assert unit in content
     assert content.index('start_candidate_release base\n') < content.index(
         'LINK_MUTATED=1'
+    )
+    assert main_flow.index('verify_root_crontab_retired_before_activation\n') < (
+        main_flow.index('preflight_formal_smoke_cycle_lease\n')
+    )
+    assert main_flow.index('preflight_formal_smoke_cycle_lease\n') < (
+        main_flow.index('verify_formal_runtime_log_boundary\n')
+    )
+    assert main_flow.index('verify_formal_runtime_log_boundary\n') < (
+        main_flow.index('write_durable_marker "$STARTED_MARKER" "$NEW_RELEASE"')
+    )
+    assert main_flow.index('preflight_formal_smoke_cycle_lease\n') < (
+        main_flow.index('MUTATION_STARTED=1')
     )
     assert content.index('install_new_units\n') < content.index(
         'prepare_release_timer_states\n'
@@ -1776,6 +1789,9 @@ def test_activate_transaction_stops_every_writer_and_commits_last():
     assert content.index('start_new_release\n') < content.index('COMMITTED=1')
     assert content.index('FORWARD_ONLY=1') < content.index('COMMITTED=1')
     assert content.index('COMMITTED=1') < content.index('start_release_timers\n')
+    assert main_flow.index('write_current_release_ledger "$NEW_RELEASE"') < (
+        main_flow.index('COMMITTED=1')
+    )
     commit_flow = content.split('\nCOMMITTED=1\n', 1)[1]
     assert commit_flow.index('start_release_timers\n') < commit_flow.index(
         'verify_release_state\n'
@@ -1786,6 +1802,99 @@ def test_activate_transaction_stops_every_writer_and_commits_last():
     assert commit_flow.index('observe_post_commit_stability\n') < commit_flow.index(
         '"$TRANSACTION_DIR/COMMITTED"'
     )
+
+
+def test_activation_forward_only_and_recovery_keep_current_release_ledger_exact():
+    content = _load_activate_script()
+    forward_start = content.index('if [ "$FORWARD_ONLY" -eq 1 ]; then')
+    forward_end = content.index(
+        'if [ "$MUTATION_STARTED" -eq 0 ]; then',
+        forward_start,
+    )
+    forward_flow = content[forward_start:forward_end]
+    acknowledge_flow = content.split(
+        'acknowledge_recovery_transaction() {',
+        1,
+    )[1].split('\n}', 1)[0]
+    receipt_flow = content.split(
+        'prepare_formal_smoke_receipt() {',
+        1,
+    )[1].split('\n}', 1)[0]
+    started_write = 'write_durable_marker \\' + '\n        "$started_file"'
+
+    assert forward_flow.index('write_current_release_ledger "$NEW_RELEASE"') < (
+        forward_flow.index('durably_sync_release_state forward')
+    )
+    assert 'COMMITTED=1' not in forward_flow
+    assert receipt_flow.index('renew_formal_smoke_cycle_lease') < (
+        receipt_flow.index('record_forward_only_phase formal-smoke-started')
+    )
+    assert receipt_flow.index(
+        'record_forward_only_phase formal-smoke-started'
+    ) < receipt_flow.index(
+        'remove_formal_smoke_lease_journal "$FORMAL_SMOKE_LEASE_JOURNAL"'
+    )
+    assert receipt_flow.index(
+        'remove_formal_smoke_lease_journal "$FORMAL_SMOKE_LEASE_JOURNAL"'
+    ) < receipt_flow.index(started_write)
+    assert acknowledge_flow.index(
+        'reconcile_acknowledged_qweather_key_plan'
+    ) < acknowledge_flow.index(
+        'reconcile_acknowledged_current_release_ledger'
+    )
+    assert acknowledge_flow.index(
+        'reconcile_acknowledged_current_release_ledger'
+    ) < acknowledge_flow.index('confirmation=')
+    fingerprint_keys = content.split('keys = (', 1)[1].split('\n)', 1)[0]
+    assert "'REDIS_URL'" in fingerprint_keys
+    assert "'WEATHER_CACHE_REDIS_URL'" in fingerprint_keys
+
+
+def test_activation_redis_identity_and_lease_journal_precede_all_mutation():
+    content = _load_activate_script()
+    main_flow = content[content.rindex('\nverify_candidate_base_state\n'):]
+    preflight_flow = content.split(
+        'preflight_formal_smoke_cycle_lease() {',
+        1,
+    )[1].split('\n}', 1)[0]
+    recovery_flow = content.split(
+        'recover_abandoned_formal_smoke_lease_journals() {',
+        1,
+    )[1].split('\n}', 1)[0]
+
+    assert main_flow.index('verify_candidate_base_state') < main_flow.index(
+        'verify_effective_redis_backend_identity'
+    )
+    assert main_flow.index(
+        'verify_effective_redis_backend_identity'
+    ) < main_flow.index('recover_abandoned_formal_smoke_lease_journals')
+    assert main_flow.index(
+        'recover_abandoned_formal_smoke_lease_journals'
+    ) < main_flow.index('acknowledge_recovery_transaction')
+    assert main_flow.index('recover_abandoned_formal_smoke_lease_journals') < (
+        main_flow.index('mkdir -p "$TRANSACTION_DIR"')
+    )
+    assert main_flow.index('verify_effective_redis_backend_identity') < (
+        main_flow.index('MUTATION_STARTED=1')
+    )
+    assert preflight_flow.index('write_formal_smoke_lease_journal') < (
+        preflight_flow.index('reserve_formal_smoke_cycle_lease')
+    )
+    assert 'transaction_requires_forward_only "$transaction_path"' in recovery_flow
+    assert 'run_formal_smoke_cycle_lease_control release "$ENV_FILE"' in (
+        recovery_flow
+    )
+    assert recovery_flow.index(
+        'run_formal_smoke_cycle_lease_control release "$ENV_FILE"'
+    ) < recovery_flow.index('remove_formal_smoke_lease_journal "$journal_path"')
+    journal_writer = content.split(
+        'write_formal_smoke_lease_journal() {',
+        1,
+    )[1].split('\n}', 1)[0]
+    assert 'transaction_id=%s' in journal_writer
+    assert 'redis_backend_sha256=%s' in journal_writer
+    assert 'lease_token=%s' in journal_writer
+    assert 'REDIS_URL=%s' not in journal_writer
 
 
 def test_deploy_has_no_untracked_hard_checks_after_activation_returns():
@@ -2883,6 +2992,9 @@ def test_deploy_runs_all_runtime_units_as_hardened_service_user():
     assert 'runtime_exec "$VENV_DIR/bin/python" -m gunicorn' in activate
     assert 'require_executable "$VENV_DIR/bin/gunicorn"' not in activate
     assert 'CASE_WEATHER_FORMAL_SMOKE_LEASE_TOKEN=$FORMAL_SMOKE_LEASE_TOKEN' in activate
+    assert 'CASE_WEATHER_FORMAL_SMOKE_LEASE_ACTION=$action' in activate
+    assert '--renew-formal-lease-only' in activate
+    assert '--release-formal-lease-only' in activate
     assert '/bin/bash scripts/weather_cache_sync.sh --skip-nowcast' in activate
     assert "local runtime_env=(\n        -i" in activate
     runtime_block = activate.split('runtime_exec() {', 1)[1].split('\n}', 1)[0]

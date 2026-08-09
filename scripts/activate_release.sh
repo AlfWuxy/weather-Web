@@ -83,6 +83,7 @@ QWEATHER_KEY_PENDING_CLEANED_MARKER="$TRANSACTION_DIR/QWEATHER_KEY_PENDING_CLEAN
 QWEATHER_KEY_RECOVERED_MARKER="$TRANSACTION_DIR/QWEATHER_KEY_RECOVERED"
 FORWARD_ONLY_MARKER="$TRANSACTION_DIR/FORWARD_ONLY_REQUIRED"
 PUBLIC_START_MARKER="$TRANSACTION_DIR/PUBLIC_START_ATTEMPTED"
+FORMAL_SMOKE_LEASE_JOURNAL="$TRANSACTION_DIR/formal-smoke-lease.journal"
 STATE_FILE="$TRANSACTION_DIR/unit-state.tsv"
 OLD_LINK_FILE="$TRANSACTION_DIR/old-current-link"
 DB_BACKUP="$TRANSACTION_DIR/database-before.db"
@@ -197,6 +198,9 @@ FORMAL_SMOKE_TICKET=""
 FORMAL_SMOKE_LEASE_TOKEN=""
 FORMAL_SMOKE_LEASE_TOKEN_SHA256=""
 ACTIVE_HARD_TIMEOUT_PID=""
+FORMAL_SMOKE_REDIS_BACKEND_SHA256=""
+FORMAL_SMOKE_LEASE_RESERVED=0
+FORMAL_SMOKE_RECEIPT_REUSE_CANDIDATE=0
 
 log() {
     printf '[activate_release] %s\n' "$*"
@@ -210,7 +214,12 @@ fail() {
 validate_absolute_path() {
     local name="$1"
     local value="$2"
-    if [[ "$value" != /* || "$value" = "/" || "$value" == *"'"* || "$value" == *$'\n'* ]]; then
+    if [[ "$value" != /* \
+        || "$value" = "/" \
+        || "$value" == *"'"* \
+        || "$value" == *$'\t'* \
+        || "$value" == *$'\r'* \
+        || "$value" == *$'\n'* ]]; then
         echo "$name 必须是安全的绝对路径: $value" >&2
         exit 2
     fi
@@ -1217,8 +1226,9 @@ marker_names = (
     'COMMITTED',
     'ROLLED_BACK',
     'FORWARD_ONLY_REQUIRED',
-    'PUBLIC_START_ATTEMPTED',
-    'qweather-key-transition.json',
+        'PUBLIC_START_ATTEMPTED',
+        'qweather-key-transition.json',
+        'formal-smoke-lease.journal',
 )
 for transaction in sorted(root.iterdir()):
     transaction_stat = transaction.lstat()
@@ -1243,6 +1253,7 @@ for transaction in sorted(root.iterdir()):
                     'FORWARD_ONLY_REQUIRED',
                     'PUBLIC_START_ATTEMPTED',
                     'qweather-key-transition.json',
+                    'formal-smoke-lease.journal',
                 }
                 and stat.S_IMODE(marker_stat.st_mode) != 0o600
             )
@@ -1251,6 +1262,7 @@ for transaction in sorted(root.iterdir()):
     if (
         started.exists()
         or (transaction / 'qweather-key-transition.json').exists()
+        or (transaction / 'formal-smoke-lease.journal').exists()
         or (transaction / 'ROLLBACK_REQUIRED.txt').exists()
         or (transaction / 'POST_COMMIT_ATTENTION.txt').exists()
     ):
@@ -1316,6 +1328,9 @@ acknowledge_recovery_transaction() {
     fi
     # 人工确认只能在本事务的私钥计划已回收或已验证为向前保留状态后落盘。
     reconcile_acknowledged_qweather_key_plan "$RECOVERY_ACKNOWLEDGED_TRANSACTION"
+    # forward-only 事务已经保留新入口；精确人工确认时同步修复历史账本。
+    reconcile_acknowledged_current_release_ledger \
+        "$RECOVERY_ACKNOWLEDGED_TRANSACTION"
     confirmation="$RECOVERY_ACKNOWLEDGED_TRANSACTION/$RECOVERY_CONFIRMED_MARKER_NAME"
     if [ -e "$confirmation" ] || [ -L "$confirmation" ]; then
         if ! "$VENV_DIR/bin/python" - \
@@ -2760,6 +2775,97 @@ reconcile_acknowledged_qweather_key_plan() {
     fi
 }
 
+reconcile_acknowledged_current_release_ledger() {
+    local transaction="$1" marker_state=0 target marker
+    transaction_requires_forward_only "$transaction" || marker_state=$?
+    case "$marker_state" in
+        0) ;;
+        1) return 0 ;;
+        *) fail "已确认事务的 forward-only 阶段证据无效"; return 1 ;;
+    esac
+
+    if ! target="$($VENV_DIR/bin/python - \
+        "$transaction" \
+        "$CURRENT_LINK" \
+        "$RELEASE_ROOT" \
+        "$CONTROL_OWNER_UID" \
+        "$CONTROL_OWNER_GID" <<'PY'
+from pathlib import Path
+import stat
+import sys
+
+transaction = Path(sys.argv[1]).resolve(strict=True)
+current_link = Path(sys.argv[2])
+release_root = Path(sys.argv[3]).resolve(strict=True)
+owner_uid = int(sys.argv[4])
+owner_gid = int(sys.argv[5])
+activation = transaction / 'ACTIVATION_STARTED'
+activation_stat = activation.lstat()
+if (
+    not stat.S_ISREG(activation_stat.st_mode)
+    or stat.S_ISLNK(activation_stat.st_mode)
+    or activation_stat.st_uid != owner_uid
+    or activation_stat.st_gid != owner_gid
+    or stat.S_IMODE(activation_stat.st_mode) != 0o600
+):
+    raise SystemExit(1)
+lines = activation.read_text(encoding='utf-8').splitlines()
+if len(lines) != 1 or not lines[0] or '\x00' in lines[0]:
+    raise SystemExit(1)
+target = Path(lines[0])
+release_directory = (release_root / 'releases').resolve(strict=True)
+if (
+    not target.is_absolute()
+    or str(target) != str(target.resolve(strict=True))
+    or target.parent.resolve(strict=True) != release_directory
+    or not target.is_dir()
+    or target.is_symlink()
+    or not current_link.is_symlink()
+    or current_link.resolve(strict=True) != target.resolve(strict=True)
+):
+    raise SystemExit(1)
+print(target)
+PY
+    )"; then
+        fail "已确认 forward-only 事务与当前代码入口不匹配"
+        return 1
+    fi
+
+    write_current_release_ledger "$target"
+    marker="$transaction/CURRENT_RELEASE_RECONCILED"
+    if [ -e "$marker" ] || [ -L "$marker" ]; then
+        if ! "$VENV_DIR/bin/python" - \
+            "$marker" \
+            "$target" \
+            "$CONTROL_OWNER_UID" \
+            "$CONTROL_OWNER_GID" <<'PY'
+from pathlib import Path
+import stat
+import sys
+
+path = Path(sys.argv[1])
+expected = f'release={sys.argv[2]}\n'
+file_stat = path.lstat()
+if (
+    not stat.S_ISREG(file_stat.st_mode)
+    or stat.S_ISLNK(file_stat.st_mode)
+    or file_stat.st_uid != int(sys.argv[3])
+    or file_stat.st_gid != int(sys.argv[4])
+    or stat.S_IMODE(file_stat.st_mode) != 0o600
+    or path.read_text(encoding='utf-8') != expected
+):
+    raise SystemExit(1)
+PY
+        then
+            fail "历史 current-release 对账标记无效"
+            return 1
+        fi
+    else
+        write_durable_marker "$marker" "release=$target"
+    fi
+    log "已将明确确认的 forward-only 版本与 current-release 账本对齐"
+}
+
 stop_units_strictly() {
     local unit
     RUNTIME_KEY_QUIESCENCE_PROVEN=0
@@ -3862,14 +3968,14 @@ for unit in unit_names:
     fsync_regular(unit_dir / unit)
 
 if mode in {'commit', 'forward'}:
-    required_paths = [env_file, backup_env, database]
-    if mode == 'commit':
-        required_paths.append(current_release)
+    required_paths = [env_file, backup_env, database, current_release]
     for path in required_paths:
         file_stat = path.lstat()
         if not stat.S_ISREG(file_stat.st_mode) or stat.S_ISLNK(file_stat.st_mode):
             raise SystemExit(1)
     if not current_link.is_symlink() or current_link.resolve(strict=True) != new_release.resolve(strict=True):
+        raise SystemExit(1)
+    if current_release.read_text(encoding='utf-8').strip() != str(new_release):
         raise SystemExit(1)
     if staged_env.exists() or staged_env.is_symlink():
         raise SystemExit(1)
@@ -4045,6 +4151,34 @@ switch_current_link() {
     local next_link="$CURRENT_LINK.next.$$"
     ln -s "$target" "$next_link"
     atomic_replace "$next_link" "$CURRENT_LINK"
+}
+
+write_current_release_ledger() {
+    local target="$1"
+    local ledger="$STATE_DIR/deployments/current-release"
+    local temporary="$ledger.next.$$"
+    local current_target=""
+    case "$target" in
+        "$RELEASE_ROOT"/releases/*) ;;
+        *) fail "current-release 目标不在受控发布目录: $target"; return 1 ;;
+    esac
+    if [ ! -d "$target" ] || [ -L "$target" ]; then
+        fail "current-release 目标不是普通发布目录: $target"
+        return 1
+    fi
+    if [ ! -L "$CURRENT_LINK" ] \
+        || ! current_target="$(readlink "$CURRENT_LINK")" \
+        || [ "$current_target" != "$target" ]; then
+        fail "current-release 写入前 current 链接与目标版本不一致"
+        return 1
+    fi
+    if [ -L "$ledger" ] || [ -e "$temporary" ] || [ -L "$temporary" ]; then
+        fail "current-release 账本或临时路径状态异常"
+        return 1
+    fi
+    printf '%s\n' "$target" > "$temporary"
+    chmod 0600 "$temporary"
+    atomic_replace "$temporary" "$ledger"
 }
 
 install_new_units() {
@@ -4418,6 +4552,154 @@ PY
         fail "部署依赖 Python、来源收据或 pip check 验证失败"
         return 1
     fi
+}
+
+compute_effective_redis_backend_sha256() {
+    local environment_path="$1"
+    "$VENV_DIR/bin/python" - "$environment_path" <<'PY'
+import hashlib
+import io
+import ipaddress
+import json
+import os
+from pathlib import Path
+import stat
+import sys
+from urllib.parse import parse_qsl, unquote, urlsplit
+
+from dotenv import dotenv_values
+
+
+MAX_ENV_BYTES = 1024 * 1024
+path = Path(sys.argv[1])
+descriptor = None
+try:
+    path_before = path.lstat()
+    descriptor = os.open(
+        path,
+        os.O_RDONLY
+        | getattr(os, 'O_CLOEXEC', 0)
+        | getattr(os, 'O_NOFOLLOW', 0),
+    )
+    before = os.fstat(descriptor)
+    if (
+        not stat.S_ISREG(path_before.st_mode)
+        or not stat.S_ISREG(before.st_mode)
+        or stat.S_ISLNK(path_before.st_mode)
+        or before.st_size > MAX_ENV_BYTES
+        or (path_before.st_dev, path_before.st_ino)
+        != (before.st_dev, before.st_ino)
+    ):
+        raise ValueError
+    chunks = []
+    total = 0
+    while True:
+        chunk = os.read(descriptor, min(65536, MAX_ENV_BYTES + 1 - total))
+        if not chunk:
+            break
+        chunks.append(chunk)
+        total += len(chunk)
+        if total > MAX_ENV_BYTES:
+            raise ValueError
+    payload = b''.join(chunks)
+    after = os.fstat(descriptor)
+    path_after = path.lstat()
+    stable_fields = ('st_dev', 'st_ino', 'st_size', 'st_mtime_ns', 'st_ctime_ns')
+    if any(
+        getattr(before, field) != getattr(after, field)
+        or getattr(after, field) != getattr(path_after, field)
+        for field in stable_fields
+    ):
+        raise ValueError
+    text = payload.decode('utf-8-sig')
+except (OSError, UnicodeError, ValueError):
+    raise SystemExit(2) from None
+finally:
+    if descriptor is not None:
+        os.close(descriptor)
+
+values = dotenv_values(stream=io.StringIO(text), interpolate=True)
+raw = str(
+    values.get('WEATHER_CACHE_REDIS_URL')
+    or values.get('REDIS_URL')
+    or ''
+).strip()
+if not raw:
+    print(hashlib.sha256(b'absent').hexdigest())
+    raise SystemExit(0)
+
+try:
+    parsed = urlsplit(raw)
+    scheme = parsed.scheme.lower()
+    if scheme not in {'redis', 'rediss'} or not parsed.hostname or parsed.fragment:
+        raise ValueError
+    host = parsed.hostname.lower().rstrip('.')
+    try:
+        host = ipaddress.ip_address(host).compressed
+    except ValueError:
+        pass
+    port = parsed.port or 6379
+    if port < 1 or port > 65535:
+        raise ValueError
+    username = unquote(parsed.username or '')
+    password = unquote(parsed.password or '')
+    path_value = unquote(parsed.path or '').strip('/')
+    if path_value and (not path_value.isdigit() or int(path_value) < 0):
+        raise ValueError
+    query_items = parse_qsl(parsed.query, keep_blank_values=True)
+    # redis-py 对重复参数采用首值；直接拒绝重复键，避免排序后身份哈希碰撞。
+    query_keys = [key for key, _value in query_items]
+    if len(query_keys) != len(set(query_keys)):
+        raise ValueError
+    db_values = [value for key, value in query_items if key == 'db']
+    if len(db_values) > 1 or any(
+        not value.isdigit() or int(value) < 0 for value in db_values
+    ):
+        raise ValueError
+    database = int(db_values[0]) if db_values else int(path_value or '0')
+    connection_options = sorted(
+        (key, value) for key, value in query_items if key != 'db'
+    )
+except (TypeError, ValueError):
+    raise SystemExit(2) from None
+
+# 只输出不可逆哈希；认证信息和原始 Redis URL 不进入 journal 或日志。
+identity = {
+    'scheme': scheme,
+    'host': host,
+    'port': port,
+    'username': username,
+    'password': password,
+    'database': database,
+    'connection_options': connection_options,
+}
+canonical = json.dumps(
+    identity,
+    ensure_ascii=False,
+    sort_keys=True,
+    separators=(',', ':'),
+).encode('utf-8')
+print(hashlib.sha256(canonical).hexdigest())
+PY
+}
+
+verify_effective_redis_backend_identity() {
+    local active_hash staged_hash
+    active_hash="$(compute_effective_redis_backend_sha256 "$ENV_FILE")" || {
+        fail "活动环境 Redis 后端身份无法安全解析"
+        return 1
+    }
+    staged_hash="$(compute_effective_redis_backend_sha256 "$STAGED_ENV_FILE")" || {
+        fail "候选环境 Redis 后端身份无法安全解析"
+        return 1
+    }
+    if [[ ! "$active_hash" =~ ^[0-9a-f]{64}$ ]] \
+        || [[ ! "$staged_hash" =~ ^[0-9a-f]{64}$ ]] \
+        || [ "$active_hash" != "$staged_hash" ]; then
+        fail "活动与候选环境的有效 Redis 后端不同；请先独立迁移并验证 Redis，再重新创建发布"
+        return 1
+    fi
+    FORMAL_SMOKE_REDIS_BACKEND_SHA256="$active_hash"
 }
 
 verify_candidate_base_state() {
@@ -5044,6 +5326,8 @@ verify_formal_runtime_log_boundary() {
 }
 
 compute_formal_release_config_fingerprint() {
+    local environment_path="${1:-$ENV_FILE}"
+    local private_key_digest_override="${2:-}"
     local qweather_key_owner_uid=0
     local qweather_key_group_gid=""
     if [ "$ALLOW_NONROOT_TEST_RUNTIME_GUARD" = 1 ]; then
@@ -5051,9 +5335,10 @@ compute_formal_release_config_fingerprint() {
     fi
     qweather_key_group_gid="$(id -g "$RUNTIME_USER")"
     "$VENV_DIR/bin/python" - \
-        "$ENV_FILE" \
+        "$environment_path" \
         "$qweather_key_owner_uid" \
-        "$qweather_key_group_gid" <<'PY'
+        "$qweather_key_group_gid" \
+        "$private_key_digest_override" <<'PY'
 import hashlib
 import json
 import os
@@ -5063,6 +5348,7 @@ import sys
 path = sys.argv[1]
 expected_key_owner_uid = int(sys.argv[2])
 expected_key_group_gid = int(sys.argv[3])
+private_key_digest_override = sys.argv[4]
 # 指纹只绑定会改变 QWeather 请求、预算或正式快照判定的天气配置。
 # 微信、推送、GIS 与公开域名轮换不能获得第二次自动烟测机会。
 keys = (
@@ -5076,6 +5362,8 @@ keys = (
     'QWEATHER_MONTHLY_REQUEST_LIMIT',
     'QWEATHER_BUDGET_FAIL_CLOSED',
     'QWEATHER_REQUIRE_PERSISTENT_BUDGET',
+    'WEATHER_CACHE_REDIS_URL',
+    'REDIS_URL',
     'ALLOW_WEATHER_UNAVAILABLE',
     'WEATHER_CACHE_TTL_MINUTES',
     'FORECAST_CACHE_TTL_MINUTES',
@@ -5150,10 +5438,21 @@ def private_key_digest(key_path):
 
 payload['QWEATHER_JWT_PRIVATE_KEY_SHA256'] = ''
 if values.get('QWEATHER_AUTH_MODE', '').lower() == 'jwt':
-    key_path = values.get('QWEATHER_JWT_PRIVATE_KEY_PATH', '')
-    if not key_path or not os.path.isabs(key_path):
-        raise SystemExit('正式 JWT 私钥安全校验失败')
-    payload['QWEATHER_JWT_PRIVATE_KEY_SHA256'] = private_key_digest(key_path)
+    if private_key_digest_override:
+        if (
+            len(private_key_digest_override) != 64
+            or any(
+                character not in '0123456789abcdef'
+                for character in private_key_digest_override
+            )
+        ):
+            raise SystemExit('正式 JWT 私钥摘要覆盖值无效')
+        payload['QWEATHER_JWT_PRIVATE_KEY_SHA256'] = private_key_digest_override
+    else:
+        key_path = values.get('QWEATHER_JWT_PRIVATE_KEY_PATH', '')
+        if not key_path or not os.path.isabs(key_path):
+            raise SystemExit('正式 JWT 私钥安全校验失败')
+        payload['QWEATHER_JWT_PRIVATE_KEY_SHA256'] = private_key_digest(key_path)
 encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
 print(hashlib.sha256(encoded.encode('utf-8')).hexdigest())
 PY
@@ -5649,19 +5948,28 @@ verify_formal_smoke_ticket_path_available() {
     fi
 }
 
-try_reserve_formal_smoke_cycle_lease() {
-    local attempt_timeout_seconds="$1"
-    local status
+run_formal_smoke_cycle_lease_control() {
+    local action="$1" environment_path="$2"
+    local timeout_seconds="${3:-$FORMAL_SMOKE_LEASE_ATTEMPT_TIMEOUT_SECONDS}"
+    local option="" status
+    case "$action" in
+        reserve) option=--reserve-formal-lease-only ;;
+        renew) option=--renew-formal-lease-only ;;
+        release) option=--release-formal-lease-only ;;
+        *) fail "正式天气烟测租约控制动作无效"; return 1 ;;
+    esac
     if [ -n "$FORMAL_SMOKE_LEASE_HELPER" ]; then
         if [ "$ALLOW_NONROOT_TEST_RUNTIME_GUARD" != 1 ]; then
             fail "生产激活禁止覆盖正式天气烟测租约实现"
             return 70
         fi
         if run_runtime_with_hard_timeout \
-            "$attempt_timeout_seconds" \
+            "$timeout_seconds" \
             "$APP_DIR" \
             '' \
             "$ENV_BIN" \
+            "CASE_WEATHER_ENV_FILE=$environment_path" \
+            "CASE_WEATHER_FORMAL_SMOKE_LEASE_ACTION=$action" \
             "CASE_WEATHER_FORMAL_SMOKE_LEASE_TOKEN=$FORMAL_SMOKE_LEASE_TOKEN" \
             "$FORMAL_SMOKE_LEASE_HELPER"; then
             status=0
@@ -5670,14 +5978,15 @@ try_reserve_formal_smoke_cycle_lease() {
         fi
     else
         if run_runtime_with_hard_timeout \
-            "$attempt_timeout_seconds" \
+            "$timeout_seconds" \
             "$APP_DIR" \
             '' \
             "$ENV_BIN" \
+            "CASE_WEATHER_ENV_FILE=$environment_path" \
             "CASE_WEATHER_FORMAL_SMOKE_LEASE_TOKEN=$FORMAL_SMOKE_LEASE_TOKEN" \
             "$VENV_DIR/bin/python" \
             -m services.pipelines.sync_weather_cache \
-            --reserve-formal-lease-only; then
+            "$option"; then
             status=0
         else
             status=$?
@@ -5685,7 +5994,7 @@ try_reserve_formal_smoke_cycle_lease() {
     fi
     case "$status" in
         124|137)
-            log "失败: 正式天气烟测租约预占发生硬超时" >&2
+            log "失败: 正式天气烟测租约控制发生硬超时: $action" >&2
             return 70
             ;;
         *) return "$status" ;;
@@ -5694,12 +6003,6 @@ try_reserve_formal_smoke_cycle_lease() {
 
 wait_and_reserve_formal_smoke_cycle_lease() {
     local deadline status remaining wait_seconds attempt_timeout_seconds
-    if [ "$RUNTIME_QUIESCE_STARTED" -ne 1 ] \
-        || [ "$RUNTIME_KEY_QUIESCENCE_PROVEN" -ne 1 ]; then
-        log "失败: 正式天气烟测等待租约前必须先完成调度器静默" >&2
-        return 70
-    fi
-
     deadline=$((SECONDS + FORMAL_SMOKE_LEASE_WAIT_MAX_SECONDS))
     while true; do
         remaining=$((deadline - SECONDS))
@@ -5711,7 +6014,10 @@ wait_and_reserve_formal_smoke_cycle_lease() {
         if [ "$attempt_timeout_seconds" -gt "$remaining" ]; then
             attempt_timeout_seconds="$remaining"
         fi
-        if try_reserve_formal_smoke_cycle_lease "$attempt_timeout_seconds"; then
+        if run_formal_smoke_cycle_lease_control \
+            reserve \
+            "$STAGED_ENV_FILE" \
+            "$attempt_timeout_seconds"; then
             return 0
         else
             status=$?
@@ -5743,6 +6049,287 @@ wait_and_reserve_formal_smoke_cycle_lease() {
     done
 }
 
+write_formal_smoke_lease_journal() {
+    local transaction_id="${TRANSACTION_DIR##*/}"
+    if [[ ! "$FORMAL_SMOKE_LEASE_TOKEN" =~ ^[0-9a-f]{64}$ ]] \
+        || [[ ! "$FORMAL_SMOKE_REDIS_BACKEND_SHA256" =~ ^[0-9a-f]{64}$ ]] \
+        || [ -z "$transaction_id" ] \
+        || [[ "$transaction_id" == *$'\n'* ]]; then
+        fail "正式天气烟测 lease journal 材料无效"
+        return 1
+    fi
+    if [ -e "$FORMAL_SMOKE_LEASE_JOURNAL" ] \
+        || [ -L "$FORMAL_SMOKE_LEASE_JOURNAL" ]; then
+        fail "正式天气烟测 lease journal 已存在，禁止覆盖"
+        return 1
+    fi
+    write_durable_marker \
+        "$FORMAL_SMOKE_LEASE_JOURNAL" \
+        "$(printf 'transaction_id=%s\nredis_backend_sha256=%s\nlease_token=%s' \
+            "$transaction_id" \
+            "$FORMAL_SMOKE_REDIS_BACKEND_SHA256" \
+            "$FORMAL_SMOKE_LEASE_TOKEN")"
+    log "正式天气烟测 lease journal 已在预占前耐久落盘"
+}
+
+remove_formal_smoke_lease_journal() {
+    local journal_path="$1"
+    "$VENV_DIR/bin/python" - \
+        "$journal_path" \
+        "$TRANSACTION_ROOT" \
+        "$CONTROL_OWNER_UID" \
+        "$CONTROL_OWNER_GID" <<'PY'
+import os
+from pathlib import Path
+import stat
+import sys
+
+journal = Path(sys.argv[1])
+root = Path(sys.argv[2]).resolve(strict=True)
+owner_uid = int(sys.argv[3])
+owner_gid = int(sys.argv[4])
+parent = journal.parent.resolve(strict=True)
+file_stat = journal.lstat()
+if (
+    parent.parent != root
+    or journal.name != 'formal-smoke-lease.journal'
+    or not stat.S_ISREG(file_stat.st_mode)
+    or stat.S_ISLNK(file_stat.st_mode)
+    or file_stat.st_uid != owner_uid
+    or file_stat.st_gid != owner_gid
+    or stat.S_IMODE(file_stat.st_mode) != 0o600
+):
+    raise SystemExit(1)
+os.unlink(journal)
+directory = os.open(parent, os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0))
+try:
+    os.fsync(directory)
+finally:
+    os.close(directory)
+PY
+}
+
+recover_abandoned_formal_smoke_lease_journals() {
+    local journal_rows="" journal_path lease_token backend_hash transaction_path
+    local marker_status=0 saved_token="$FORMAL_SMOKE_LEASE_TOKEN"
+    [ "$REQUIRE_WECHAT_READY" = 1 ] || return 0
+    if [[ ! "$FORMAL_SMOKE_REDIS_BACKEND_SHA256" =~ ^[0-9a-f]{64}$ ]]; then
+        fail "无法在恢复历史租约前确认活动 Redis 后端身份"
+        return 1
+    fi
+    if ! journal_rows="$("$VENV_DIR/bin/python" - \
+        "$TRANSACTION_ROOT" \
+        "$CONTROL_OWNER_UID" \
+        "$CONTROL_OWNER_GID" <<'PY'
+from pathlib import Path
+import re
+import stat
+import sys
+
+root = Path(sys.argv[1]).resolve(strict=True)
+owner_uid = int(sys.argv[2])
+owner_gid = int(sys.argv[3])
+hash_pattern = re.compile(r'^[0-9a-f]{64}$')
+for transaction in sorted(root.iterdir()):
+    transaction_stat = transaction.lstat()
+    if not stat.S_ISDIR(transaction_stat.st_mode) or stat.S_ISLNK(transaction_stat.st_mode):
+        raise SystemExit(1)
+    journal = transaction / 'formal-smoke-lease.journal'
+    try:
+        journal_stat = journal.lstat()
+    except FileNotFoundError:
+        continue
+    if (
+        not stat.S_ISREG(journal_stat.st_mode)
+        or stat.S_ISLNK(journal_stat.st_mode)
+        or journal_stat.st_uid != owner_uid
+        or journal_stat.st_gid != owner_gid
+        or stat.S_IMODE(journal_stat.st_mode) != 0o600
+        or journal.parent.resolve(strict=True) != transaction.resolve(strict=True)
+    ):
+        raise SystemExit(1)
+    values = {}
+    try:
+        for line in journal.read_text(encoding='utf-8').splitlines():
+            key, separator, value = line.partition('=')
+            if not separator or not key or not value or key in values:
+                raise ValueError
+            values[key] = value
+    except (OSError, UnicodeError, ValueError):
+        raise SystemExit(1) from None
+    if (
+        set(values)
+        != {'transaction_id', 'redis_backend_sha256', 'lease_token'}
+        or values['transaction_id'] != transaction.name
+        or not hash_pattern.fullmatch(values['redis_backend_sha256'])
+        or not hash_pattern.fullmatch(values['lease_token'])
+        or any(
+            character in str(journal)
+            for character in ('\t', '\r', '\n')
+        )
+    ):
+        raise SystemExit(1)
+    print(
+        f"{journal}\t{values['lease_token']}\t"
+        f"{values['redis_backend_sha256']}"
+    )
+PY
+    )"; then
+        fail "历史正式天气烟测 lease journal 内容、权限或路径无效"
+        return 1
+    fi
+    [ -n "$journal_rows" ] || return 0
+
+    # 先完整验证全部 journal，再执行任何 compare-delete，避免半清理。
+    while IFS=$'\t' read -r journal_path lease_token backend_hash; do
+        [ -n "$journal_path" ] || continue
+        transaction_path="${journal_path%/formal-smoke-lease.journal}"
+        if [ "$backend_hash" != "$FORMAL_SMOKE_REDIS_BACKEND_SHA256" ]; then
+            fail "历史天气租约的 Redis 后端身份与当前活动环境不一致，保留 journal 等待人工核对"
+            return 1
+        fi
+        marker_status=0
+        transaction_requires_forward_only "$transaction_path" || marker_status=$?
+        case "$marker_status" in
+            1) ;;
+            0)
+                fail "历史天气租约已进入不可逆请求阶段，禁止自动释放"
+                return 1
+                ;;
+            *)
+                fail "历史天气租约的阶段证据损坏，禁止自动释放"
+                return 1
+                ;;
+        esac
+    done <<< "$journal_rows"
+
+    while IFS=$'\t' read -r journal_path lease_token backend_hash; do
+        [ -n "$journal_path" ] || continue
+        FORMAL_SMOKE_LEASE_TOKEN="$lease_token"
+        if ! run_formal_smoke_cycle_lease_control release "$ENV_FILE"; then
+            FORMAL_SMOKE_LEASE_TOKEN="$saved_token"
+            fail "历史天气租约无法用 owner token 安全回收，保留 journal 等待 TTL"
+            return 1
+        fi
+        if ! remove_formal_smoke_lease_journal "$journal_path"; then
+            FORMAL_SMOKE_LEASE_TOKEN="$saved_token"
+            fail "历史天气租约已核验释放，但 lease journal 无法安全收口"
+            return 1
+        fi
+        log "已用 owner token 安全回收可识别的中断天气租约: ${journal_path%/*}"
+    done <<< "$journal_rows"
+    FORMAL_SMOKE_LEASE_TOKEN="$saved_token"
+}
+
+reserve_formal_smoke_cycle_lease() {
+    local status
+    if wait_and_reserve_formal_smoke_cycle_lease; then
+        return 0
+    else
+        status=$?
+    fi
+    log "失败: 正式天气烟测无法在生产变更前取得全局租约" >&2
+    return "$status"
+}
+
+renew_formal_smoke_cycle_lease() {
+    if ! run_formal_smoke_cycle_lease_control renew "$ENV_FILE"; then
+        fail "正式天气烟测租约在不可逆 receipt 前已过期或不再属于本事务"
+        return 1
+    fi
+    log "正式天气烟测全局租约已由同一 token 原子续回 30 分钟"
+}
+
+release_reversible_formal_smoke_cycle_lease() {
+    local environment_path="$ENV_FILE"
+    [ "$FORMAL_SMOKE_IRREVERSIBLE" = 0 ] || return 0
+    [ "$FORWARD_ONLY" = 0 ] || return 0
+    if [ ! -e "$FORMAL_SMOKE_LEASE_JOURNAL" ] \
+        && [ ! -L "$FORMAL_SMOKE_LEASE_JOURNAL" ]; then
+        if [ "$FORMAL_SMOKE_LEASE_RESERVED" = 1 ]; then
+            fail "可回滚天气租约缺少耐久 lease journal"
+            return 1
+        fi
+        return 0
+    fi
+    if [ -L "$FORMAL_SMOKE_LEASE_JOURNAL" ] \
+        || [ ! -f "$FORMAL_SMOKE_LEASE_JOURNAL" ]; then
+        fail "可回滚天气租约的 lease journal 状态异常"
+        return 1
+    fi
+    if [ -f "$STAGED_ENV_FILE" ] && [ ! -L "$STAGED_ENV_FILE" ]; then
+        environment_path="$STAGED_ENV_FILE"
+    fi
+    if ! run_formal_smoke_cycle_lease_control release "$environment_path"; then
+        log "可回滚事务未能核验并释放自身天气租约；保留 Redis 状态等待 TTL 到期" >&2
+        return 1
+    fi
+    if ! remove_formal_smoke_lease_journal "$FORMAL_SMOKE_LEASE_JOURNAL"; then
+        log "可回滚事务已核验租约，但 lease journal 无法安全删除" >&2
+        return 1
+    fi
+    FORMAL_SMOKE_LEASE_RESERVED=0
+    log "可回滚事务已原子释放自身天气租约；陌生租约保持原状"
+}
+
+preflight_formal_smoke_cycle_lease() {
+    local binding_file started_file completed_file snapshot_id
+    [ "$REQUIRE_WECHAT_READY" = 1 ] || return 0
+
+    FORMAL_RELEASE_CONFIG_FINGERPRINT="$(
+        compute_formal_release_config_fingerprint \
+            "$STAGED_ENV_FILE" \
+            "$QWEATHER_KEY_SHA256"
+    )"
+    if [[ ! "$FORMAL_RELEASE_CONFIG_FINGERPRINT" =~ ^[0-9a-f]{64}$ ]]; then
+        fail "生产变更前无法生成正式发布配置指纹"
+        return 1
+    fi
+    FORMAL_SMOKE_RECEIPT_DIR="$FORMAL_SMOKE_RECEIPT_ROOT/${FORMAL_RELEASE_COMMIT}-${FORMAL_RELEASE_CONFIG_FINGERPRINT}"
+    binding_file="$FORMAL_SMOKE_RECEIPT_DIR/binding"
+    started_file="$FORMAL_SMOKE_RECEIPT_DIR/started"
+    completed_file="$FORMAL_SMOKE_RECEIPT_DIR/completed"
+
+    if [ -L "$FORMAL_SMOKE_RECEIPT_ROOT" ] \
+        || { [ -e "$FORMAL_SMOKE_RECEIPT_ROOT" ] \
+            && [ ! -d "$FORMAL_SMOKE_RECEIPT_ROOT" ]; }; then
+        fail "正式天气烟测 receipt 根目录状态异常"
+        return 1
+    fi
+    if [ -e "$FORMAL_SMOKE_RECEIPT_DIR" ] \
+        || [ -L "$FORMAL_SMOKE_RECEIPT_DIR" ]; then
+        verify_receipt_binding
+        if [ -L "$started_file" ] || [ ! -f "$started_file" ]; then
+            fail "正式天气烟测 receipt 状态不完整，必须人工核对"
+            return 1
+        fi
+        if [ -L "$completed_file" ] || [ ! -f "$completed_file" ]; then
+            fail "同一冻结 commit 与配置已有 started 天气烟测 receipt；禁止自动重试，请人工核对上游计数与数据库"
+            return 1
+        fi
+        if ! verify_completed_budget_receipt \
+            "$started_file" \
+            "$completed_file" \
+            "$binding_file"; then
+            fail "正式天气烟测 completed receipt 缺少可信预算差值"
+            return 1
+        fi
+        snapshot_id="$(receipt_value "$completed_file" snapshot_id || true)"
+        verify_fresh_qweather_snapshot "$snapshot_id"
+        FORMAL_SMOKE_RECEIPT_REUSE_CANDIDATE=1
+        log "生产变更前已识别可复核的 completed 天气烟测 receipt，无需预占新租约"
+        return 0
+    fi
+
+    prepare_formal_smoke_token_material
+    verify_formal_smoke_ticket_path_available
+    write_formal_smoke_lease_journal
+    # 保持旧服务在线，有界等待其他合法周期自然释放租约。
+    reserve_formal_smoke_cycle_lease
+    FORMAL_SMOKE_LEASE_RESERVED=1
+    log "正式天气烟测全局租约已在生产变更前预占"
+}
+
 issue_formal_smoke_ticket() {
     verify_formal_smoke_ticket_path_available
     write_durable_marker \
@@ -5771,9 +6358,11 @@ revoke_formal_smoke_ticket() {
 prepare_formal_smoke_receipt() {
     local budget_before_file="$1"
     local binding_file started_file completed_file snapshot_id now budget_fields
-    FORMAL_RELEASE_CONFIG_FINGERPRINT="$(compute_formal_release_config_fingerprint)"
-    if [[ ! "$FORMAL_RELEASE_CONFIG_FINGERPRINT" =~ ^[0-9a-f]{64}$ ]]; then
-        fail "正式发布配置指纹生成失败"
+    local active_fingerprint
+    active_fingerprint="$(compute_formal_release_config_fingerprint "$ENV_FILE")"
+    if [[ ! "$active_fingerprint" =~ ^[0-9a-f]{64}$ ]] \
+        || [ "$active_fingerprint" != "$FORMAL_RELEASE_CONFIG_FINGERPRINT" ]; then
+        fail "正式发布配置指纹在租约预占后发生变化"
         return 1
     fi
     if [ -L "$FORMAL_SMOKE_RECEIPT_ROOT" ]; then
@@ -5788,6 +6377,10 @@ prepare_formal_smoke_receipt() {
     started_file="$FORMAL_SMOKE_RECEIPT_DIR/started"
     completed_file="$FORMAL_SMOKE_RECEIPT_DIR/completed"
     if [ -e "$FORMAL_SMOKE_RECEIPT_DIR" ] || [ -L "$FORMAL_SMOKE_RECEIPT_DIR" ]; then
+        if [ "$FORMAL_SMOKE_RECEIPT_REUSE_CANDIDATE" != 1 ]; then
+            fail "正式天气烟测 receipt 在生产变更后意外出现"
+            return 1
+        fi
         verify_receipt_binding
         if [ -L "$started_file" ] || [ ! -f "$started_file" ]; then
             fail "正式天气烟测 receipt 状态不完整，必须人工核对"
@@ -5817,16 +6410,29 @@ prepare_formal_smoke_receipt() {
         fail "同一冻结 commit 与配置已有 started 天气烟测 receipt；禁止自动重试，请人工核对上游计数与数据库"
         return 1
     fi
-    prepare_formal_smoke_token_material
-    verify_formal_smoke_ticket_path_available
-    # 调度器静默后有界等待旧租约自然到期，全程禁止删除或续期旧租约。
-    wait_and_reserve_formal_smoke_cycle_lease
-    # 成功预占后立即冻结预算基线，避免等待旧租约期间的计数变化污染差值。
-    capture_qweather_budget_snapshot "$budget_before_file"
+    if [ "$FORMAL_SMOKE_RECEIPT_REUSE_CANDIDATE" = 1 ]; then
+        fail "生产变更前识别的 completed 天气烟测 receipt 已消失"
+        return 1
+    fi
+    if [ "$FORMAL_SMOKE_LEASE_RESERVED" != 1 ]; then
+        fail "正式天气烟测缺少生产变更前预占的全局租约"
+        return 1
+    fi
     budget_fields="$(budget_snapshot_started_fields "$budget_before_file")" || {
         fail "正式天气烟测预算前值无法写入 receipt"
         return 1
     }
+    verify_formal_smoke_ticket_path_available
+    # started 前只允许本事务 token 原子续租，避免慢迁移耗尽预占窗口。
+    renew_formal_smoke_cycle_lease
+    # started_at 反映续租和预算基线都已经完成后的真实时刻。
+    now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    # 续租成功后先耐久标记不可逆边界，覆盖 receipt 任一步写入失败。
+    record_forward_only_phase formal-smoke-started
+    FORMAL_SMOKE_IRREVERSIBLE=1
+    # 不可逆边界已经耐久，journal 不再具备自动回收资格，立即收口避免误释放。
+    remove_formal_smoke_lease_journal "$FORMAL_SMOKE_LEASE_JOURNAL"
+    # 租约已续回完整窗口；这里将同一 token 绑定到不可重试 receipt。
     mkdir "$FORMAL_SMOKE_RECEIPT_DIR"
     chmod 0700 "$FORMAL_SMOKE_RECEIPT_DIR"
     fsync_directory "$FORMAL_SMOKE_RECEIPT_ROOT"
@@ -5835,10 +6441,6 @@ prepare_formal_smoke_receipt() {
         "$(printf 'release_commit=%s\nconfig_fingerprint=%s' \
             "$FORMAL_RELEASE_COMMIT" \
             "$FORMAL_RELEASE_CONFIG_FINGERPRINT")"
-    # started_at 必须反映本次租约和预算基线均已取得后的真实时刻。
-    now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-    # forward-only 标记必须早于 started receipt，覆盖写入失败、sync 失败和 SIGKILL 窗口。
-    record_forward_only_phase formal-smoke-started
     write_durable_marker \
         "$started_file" \
         "$(printf 'started_at=%s\nformal_smoke_binding=%s\nformal_smoke_token_sha256=%s\nformal_smoke_lease_token_sha256=%s\n%s' \
@@ -5878,14 +6480,14 @@ run_formal_cache_smoke() {
     local budget_after_file="$TRANSACTION_DIR/qweather-budget-after.json"
     [ "$REQUIRE_WECHAT_READY" = 1 ] || return 0
     preflight_formal_qweather_jwt_runtime
+    # 预占租约保持独占后，再用已经应用的正式环境冻结预算基线。
+    capture_qweather_budget_snapshot "$budget_before_file"
     prepare_formal_smoke_receipt "$budget_before_file"
     if [ "$FORMAL_SMOKE_REUSED" = 1 ]; then
         return 0
     fi
     previous_snapshot="$(latest_snapshot_id)"
     # started receipt 已落盘。从这里开始即使请求结果未知，也只允许向前恢复。
-    FORMAL_SMOKE_IRREVERSIBLE=1
-    FORWARD_ONLY=1
     FORMAL_NETWORK_GATE_OPEN=1
     printf '0' \
         | "$VENV_DIR/bin/python" "$APP_DIR/scripts/update_env_value.py" \
@@ -6757,6 +7359,7 @@ on_exit() {
     local timer_repair_status=0
     local forward_quiesce_status=0
     local forward_gate_status=0
+    local forward_ledger_status=0
     local forward_sync_status=0
     local marker_status=0 forward_marker_status=0 pre_mutation_recovery_status=0
     local marker_payload
@@ -6778,6 +7381,7 @@ on_exit() {
                 ;;
         esac
     fi
+    release_reversible_formal_smoke_cycle_lease || true
     if [ "$COMMITTED" -eq 1 ]; then
         repair_release_timers_best_effort || timer_repair_status=$?
         durably_sync_release_state commit || forward_sync_status=$?
@@ -6812,7 +7416,10 @@ on_exit() {
         fi
         revoke_or_quarantine_runtime_activation_permit "$TRANSACTION_DIR" \
             || forward_quiesce_status=1
-        durably_sync_release_state forward || forward_sync_status=$?
+        write_current_release_ledger "$NEW_RELEASE" || forward_ledger_status=$?
+        if [ "$forward_ledger_status" -eq 0 ]; then
+            durably_sync_release_state forward || forward_sync_status=$?
+        fi
         marker_payload="$(
             echo '唯一一次正式天气请求已经开始，或公网服务已经尝试启动；本次保留新数据库、环境、代码入口与 systemd unit。'
             echo "事务目录: $TRANSACTION_DIR"
@@ -6823,6 +7430,9 @@ on_exit() {
             if [ "$forward_gate_status" -ne 0 ]; then
                 echo '30 分钟出网保护未能确认恢复，请勿手工启动天气同步。'
             fi
+            if [ "$forward_ledger_status" -ne 0 ]; then
+                echo 'current-release 账本未能与保留的新 current 链接对齐。'
+            fi
             if [ "$forward_sync_status" -ne 0 ]; then
                 echo '向前状态未能完成 durability barrier，请人工核对磁盘状态。'
             fi
@@ -6832,6 +7442,7 @@ on_exit() {
         log "不可逆发布阶段失败，已保持停机与开机门: $POST_COMMIT_MARKER" >&2
         if [ "$forward_quiesce_status" -ne 0 ] \
             || [ "$forward_gate_status" -ne 0 ] \
+            || [ "$forward_ledger_status" -ne 0 ] \
             || [ "$forward_sync_status" -ne 0 ] \
             || [ "$marker_status" -ne 0 ]; then
             exit 70
@@ -6841,20 +7452,24 @@ on_exit() {
     if [ "$MUTATION_STARTED" -eq 0 ]; then
         if [ "$QWEATHER_KEY_TRANSITION_REQUIRED" -eq 1 ]; then
             recover_qweather_key_before_mutation || pre_mutation_recovery_status=$?
-            if [ "$pre_mutation_recovery_status" -eq 0 ]; then
-                write_durable_marker "$ROLLED_BACK_MARKER" pre-mutation \
-                    || pre_mutation_recovery_status=$?
-            fi
-            if [ "$pre_mutation_recovery_status" -ne 0 ]; then
-                marker_payload="$(
-                    echo 'QWeather 私钥转换计划已落盘，但生产变更尚未开始，pending 私钥未能安全回收到 root-only 事务归档。'
-                    echo "事务目录: $TRANSACTION_DIR"
-                    echo '请保持 pending/final 文件原状，核对设备号、inode、所有者和权限后显式确认本事务。'
-                )"
-                write_durable_marker "$FAILURE_MARKER" "$marker_payload" \
-                    || exit 70
-                exit 70
-            fi
+        fi
+        if [ "$pre_mutation_recovery_status" -eq 0 ] \
+            && [ -d "$TRANSACTION_DIR" ] \
+            && [ ! -L "$TRANSACTION_DIR" ] \
+            && [ ! -e "$ROLLED_BACK_MARKER" ] \
+            && [ ! -L "$ROLLED_BACK_MARKER" ]; then
+            write_durable_marker "$ROLLED_BACK_MARKER" pre-mutation \
+                || pre_mutation_recovery_status=$?
+        fi
+        if [ "$pre_mutation_recovery_status" -ne 0 ]; then
+            marker_payload="$(
+                echo '生产变更尚未开始，但预检事务未能安全收口。'
+                echo "事务目录: $TRANSACTION_DIR"
+                echo '如存在 QWeather pending 私钥，请保持 pending/final 文件原状并核对身份、所有者与权限。'
+            )"
+            write_durable_marker "$FAILURE_MARKER" "$marker_payload" \
+                || exit 70
+            exit 70
         fi
         exit "$rc"
     fi
@@ -7123,9 +7738,12 @@ if ! "$FLOCK_BIN" -n 9; then
     exit 73
 fi
 
-# CAS 与日志守卫必须处于部署锁内，并先于事务目录、状态快照与全部发布 mutation。
+# CAS 必须处于部署锁内，并先于事务目录、状态快照与全部发布 mutation。
 verify_candidate_base_state
-verify_formal_runtime_log_boundary
+# Redis 后端必须在活动与候选环境间保持同一有效身份，避免两套 timer 各自持锁。
+verify_effective_redis_backend_identity
+# 部署锁内先安全回收可识别的可逆中断租约，再处理历史事务确认。
+recover_abandoned_formal_smoke_lease_journals
 
 acknowledge_recovery_transaction
 recover_activation_boot_guard_if_acknowledged
@@ -7143,6 +7761,9 @@ validate_managed_backup_database_path
 preflight_root_crontab
 verify_backup_not_running
 verify_root_crontab_retired_before_activation
+preflight_formal_smoke_cycle_lease
+# Nginx reload 也属于生产 mutation，必须晚于全局天气租约预检。
+verify_formal_runtime_log_boundary
 write_durable_marker "$STARTED_MARKER" "$NEW_RELEASE"
 
 MUTATION_STARTED=1
@@ -7190,12 +7811,7 @@ fi
 arm_qweather_network_gate
 start_new_release
 
-mkdir -p "$STATE_DIR/deployments"
-printf '%s\n' "$NEW_RELEASE" > "$STATE_DIR/deployments/current-release.next.$$"
-chmod 0600 "$STATE_DIR/deployments/current-release.next.$$"
-atomic_replace \
-    "$STATE_DIR/deployments/current-release.next.$$" \
-    "$STATE_DIR/deployments/current-release"
+write_current_release_ledger "$NEW_RELEASE"
 # 私钥与目录身份先验证为可提交态；失败由 durable forward-only 路径停机并保留开机门。
 reconcile_qweather_key_plan "$TRANSACTION_DIR" committed
 COMMITTED=1
