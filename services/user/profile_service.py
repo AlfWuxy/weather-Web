@@ -142,6 +142,7 @@ def health_assessment():
                     'risk_interval': risk_result.get('risk_interval', {}),
                     'risk_probabilities': risk_result.get('risk_probabilities', {}),
                     'high_risk_probability': risk_result.get('high_risk_probability'),
+                    'probability_status': risk_result.get('probability_status'),
                     'cap_semantics': risk_result.get('cap_semantics', {}),
                     'impact_likelihood': risk_result.get('impact_likelihood', {}),
                     'model_paths': risk_result.get('model_paths', []),

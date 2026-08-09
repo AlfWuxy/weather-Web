@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """网页公开风险页与小程序 bootstrap 的同源回归测试。"""
 
+import copy
 from datetime import datetime, timezone
 from html import unescape
 import json
@@ -26,6 +27,25 @@ WARNINGS = [
     }
 ]
 FIXED_NOW = datetime(2026, 7, 31, 4, 0, tzinfo=timezone.utc)
+
+
+def _action_snapshot():
+    return {
+        "snapshot_id": "snapshot-contract-001",
+        "available": True,
+        "stale": False,
+        "current": dict(CURRENT),
+        "risk": {
+            "available": True,
+            "level": "高风险",
+            "score": 80,
+            "calculation": {
+                "heat_result": {"risk_score": 80},
+                "risk_reasons": ["高温测试原因"],
+            },
+        },
+        "actions": [{"id": "drink_water", "title": "喝水"}],
+    }
 
 
 def _forbid_weather_requests(monkeypatch):
@@ -257,3 +277,116 @@ def test_action_page_context_consumes_same_snapshot_without_weather_request(
     assert actions == snapshot["actions"]
     assert weather == snapshot["current"]
     assert reasons
+
+
+@pytest.mark.parametrize(
+    "broken_contract",
+    (
+        "snapshot_id",
+        "available",
+        "stale",
+        "current_source",
+        "risk_available",
+        "risk_level",
+    ),
+)
+def test_web_and_miniprogram_never_persist_risk_from_invalid_snapshot_contract(
+    app,
+    db_session,
+    monkeypatch,
+    broken_contract,
+):
+    """行动写路径只接受完整、新鲜、真实且声明可用的同一县级快照。"""
+    from blueprints import mp_api
+    from core.db_models import Pair, User
+    from core.security import hash_short_code
+    from core.time_utils import today_local
+    from services import public_service
+
+    snapshot = copy.deepcopy(_action_snapshot())
+    if broken_contract == "snapshot_id":
+        snapshot["snapshot_id"] = None
+    elif broken_contract == "available":
+        snapshot["available"] = False
+    elif broken_contract == "stale":
+        snapshot["stale"] = True
+    elif broken_contract == "current_source":
+        snapshot["current"]["data_source"] = "Demo"
+    elif broken_contract == "risk_available":
+        snapshot["risk"]["available"] = False
+    elif broken_contract == "risk_level":
+        snapshot["risk"]["level"] = "未知"
+
+    monkeypatch.setattr(public_service, "get_bootstrap_payload", lambda: snapshot)
+    monkeypatch.setattr(mp_api, "get_bootstrap_payload", lambda: snapshot)
+    owner = User(username=f"invalid-snapshot-{broken_contract}", role="caregiver")
+    owner.set_password("invalid-snapshot-password")
+    db_session.add(owner)
+    db_session.flush()
+    pair = Pair(
+        caregiver_id=owner.id,
+        community_code="都昌县",
+        location_query="都昌县",
+        elder_code=f"invalid-snapshot-{broken_contract}",
+        short_code="74217421",
+        short_code_hash=hash_short_code("74217421"),
+        status="active",
+        created_at=FIXED_NOW,
+        last_active_at=FIXED_NOW,
+    )
+    db_session.add(pair)
+    db_session.flush()
+
+    web_context = public_service._build_action_context(pair, today_local())
+    mini_status = mp_api._daily_status_for_pair(pair)
+
+    assert web_context[0].risk_level is None
+    assert web_context[1] == []
+    assert web_context[3] is None
+    assert mini_status.risk_level is None
+
+
+def test_web_and_miniprogram_persist_the_same_valid_snapshot_risk(
+    app,
+    db_session,
+    monkeypatch,
+):
+    """完整县级快照在两个行动入口只落一次相同风险等级。"""
+    from blueprints import mp_api
+    from core.db_models import DailyStatus, Pair, User
+    from core.security import hash_short_code
+    from core.time_utils import today_local
+    from services import public_service
+
+    snapshot = _action_snapshot()
+    monkeypatch.setattr(public_service, "get_bootstrap_payload", lambda: snapshot)
+    monkeypatch.setattr(mp_api, "get_bootstrap_payload", lambda: snapshot)
+    owner = User(username="valid-shared-snapshot", role="caregiver")
+    owner.set_password("valid-snapshot-password")
+    db_session.add(owner)
+    db_session.flush()
+    pair = Pair(
+        caregiver_id=owner.id,
+        community_code="都昌县",
+        location_query="都昌县",
+        elder_code="valid-shared-snapshot",
+        short_code="75317531",
+        short_code_hash=hash_short_code("75317531"),
+        status="active",
+        created_at=FIXED_NOW,
+        last_active_at=FIXED_NOW,
+    )
+    db_session.add(pair)
+    db_session.flush()
+
+    mini_status = mp_api._daily_status_for_pair(pair)
+    web_context = public_service._build_action_context(pair, today_local())
+    db_session.flush()
+
+    assert mini_status.id == web_context[0].id
+    assert mini_status.risk_level == "高风险"
+    assert web_context[5] == "高风险"
+    assert DailyStatus.query.filter_by(
+        pair_id=pair.id,
+        status_date=today_local(),
+    ).count() == 1

@@ -10,6 +10,7 @@ from core.security import hash_short_code
 from core.time_utils import now_local, today_local, utcnow, ensure_utc_aware
 from core.weather import is_demo_mode
 from core.db_models import DailyStatus, Pair
+from services.care_action_service import is_effective_confirmation
 from services.community_daily_service import (
     build_community_household_metrics,
     outreach_summary,
@@ -42,7 +43,7 @@ def _auto_escalate_overdue_statuses(statuses, status_date, target_stage=AUTO_ESC
     updated_communities = set()
     updated_count = 0
     for status in statuses:
-        if status.confirmed_at:
+        if is_effective_confirmation(status):
             continue
         if not status.created_at:
             continue
@@ -78,7 +79,7 @@ def _build_recent_series(pair_id, days=7):
             'date': day.strftime('%m-%d'),
             'risk_label': risk_label,
             'risk_value': _risk_level_value(risk_label),
-            'confirmed': 1 if status and status.confirmed_at else 0
+            'confirmed': 1 if is_effective_confirmation(status) else 0
         })
     return series
 
@@ -276,6 +277,12 @@ def _ensure_demo_statuses(community_code, status_date, caregiver_id=None, pair_c
             community_code=pair.community_code,
             risk_level=label,
             confirmed_at=now - timedelta(hours=idx + 1) if idx % 2 == 0 else None,
+            actions_done_count=1 if idx % 2 == 0 else 0,
+            elder_actions=(
+                json.dumps(['drink_water'], ensure_ascii=False)
+                if idx % 2 == 0
+                else None
+            ),
             help_flag=idx == 2,
             relay_stage='caregiver' if idx == 2 else 'none'
         )

@@ -63,6 +63,7 @@ from services.user._common import _create_pair_record
 from services.care_action_service import (
     RELAY_STAGES,
     get_or_create_daily_status,
+    is_effective_confirmation,
     stage_confirm_action,
     stage_debrief_action,
     stage_help_action,
@@ -1375,7 +1376,7 @@ def elders_list():
                     "status_date": status_date.isoformat(),
                     "confirmed_at": (
                         status.confirmed_at.isoformat()
-                        if status and status.confirmed_at
+                        if is_effective_confirmation(status)
                         else None
                     ),
                     "actions_done_count": actions_done_count,
@@ -1876,16 +1877,18 @@ def _daily_status_for_pair(pair):
 
     def snapshot_risk_level():
         snapshot = get_bootstrap_payload()
-        current = snapshot.get("current") if isinstance(snapshot.get("current"), dict) else {}
+        current = snapshot.get("current") if isinstance(snapshot.get("current"), dict) else None
+        risk = snapshot.get("risk") if isinstance(snapshot.get("risk"), dict) else {}
         if (
-            not snapshot.get("available")
-            or snapshot.get("stale")
-            or current.get("is_mock")
-            or current.get("is_demo")
+            not snapshot.get("snapshot_id")
+            or snapshot.get("available") is not True
+            or snapshot.get("stale") is not False
+            or not is_qweather_online_weather(current)
+            or risk.get("available") is not True
         ):
             return None
-        level = str((snapshot.get("risk") or {}).get("level") or "").strip()
-        return level if level and level not in {"未知", "unknown"} else None
+        level = str(risk.get("level") or "").strip()
+        return level if level in {"低风险", "中风险", "高风险", "极高"} else None
 
     return get_or_create_daily_status(
         pair,

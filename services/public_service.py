@@ -48,6 +48,7 @@ from core.db_models import (
 )
 from services.care_action_service import (
     get_or_create_daily_status,
+    is_effective_confirmation,
     stage_confirm_action,
     stage_debrief_action,
     stage_help_action,
@@ -560,7 +561,7 @@ def _build_recent_series(pair_id, days=7):
             'date': day.strftime('%m-%d'),
             'risk_label': risk_label,
             'risk_value': _risk_level_value(risk_label),
-            'confirmed': 1 if status and status.confirmed_at else 0
+            'confirmed': 1 if is_effective_confirmation(status) else 0
         })
     return series
 
@@ -575,10 +576,15 @@ def _build_action_context(pair, status_date):
     calculation = risk.get('calculation') if isinstance(risk.get('calculation'), dict) else {}
     stored_heat_result = calculation.get('heat_result')
     stored_risk_reasons = calculation.get('risk_reasons')
+    current = snapshot.get('current') if isinstance(snapshot.get('current'), dict) else None
     risk_available = (
-        risk.get('available') is True
+        bool(snapshot.get('snapshot_id'))
+        and snapshot.get('available') is True
+        and snapshot.get('stale') is False
+        and is_qweather_online_weather(current)
+        and risk.get('available') is True
         and risk.get('score') is not None
-        and snapshot.get('stale') is not True
+        and risk.get('level') in set(HEAT_RISK_LABELS.values())
         and isinstance(stored_heat_result, dict)
         and isinstance(stored_risk_reasons, list)
     )
@@ -586,7 +592,7 @@ def _build_action_context(pair, status_date):
         status = _get_or_create_daily_status(pair, status_date, None)
         return status, [], resources, None, None, None, []
 
-    weather_data = snapshot.get('current')
+    weather_data = current
     heat_result = dict(stored_heat_result)
     risk_label = str(risk.get('level'))
     risk_reasons = list(stored_risk_reasons)

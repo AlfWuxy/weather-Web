@@ -510,8 +510,9 @@ def test_token_route_rejects_mismatched_token(app, client):
         assert status is None or status.confirmed_at is None
 
 
-def test_token_route_accepts_valid_token(app, client):
+def test_token_route_accepts_valid_token(app, client, monkeypatch):
     """带 token 路由在 token 正确时应允许正常提交。"""
+    _block_public_action_external_calls(monkeypatch)
     with app.app_context():
         db.create_all()
         user = _create_user("token_user_b", "token_pass_b")
@@ -551,7 +552,11 @@ def test_token_route_accepts_valid_token(app, client):
 
     resp = client.post(
         "/e/valid-token-b/checkin",
-        data={"short_code": "88776655", "csrf_token": "token-csrf-b"},
+        data={
+            "short_code": "88776655",
+            "csrf_token": "token-csrf-b",
+            "actions_done": "drink_water",
+        },
         follow_redirects=False,
     )
     assert resp.status_code == 200
@@ -560,10 +565,12 @@ def test_token_route_accepts_valid_token(app, client):
         status = DailyStatus.query.filter_by(pair_id=pair_id, status_date=today_local()).first()
         assert status is not None
         assert status.confirmed_at is not None
+        assert status.actions_done_count == 1
 
 
-def test_pair_action_token_route_accepts_valid_token(app, client):
+def test_pair_action_token_route_accepts_valid_token(app, client, monkeypatch):
     """新的行动 token 表应支持带 token 的确认路径。"""
+    _block_public_action_external_calls(monkeypatch)
     with app.app_context():
         db.create_all()
         user = _create_user("action_token_user", "action_token_pass")
@@ -598,7 +605,11 @@ def test_pair_action_token_route_accepts_valid_token(app, client):
 
     resp = client.post(
         "/e/valid-action-token/checkin",
-        data={"short_code": "77889900", "csrf_token": "action-token-csrf"},
+        data={
+            "short_code": "77889900",
+            "csrf_token": "action-token-csrf",
+            "actions_done": "drink_water",
+        },
         follow_redirects=False,
     )
 
@@ -607,6 +618,7 @@ def test_pair_action_token_route_accepts_valid_token(app, client):
         status = DailyStatus.query.filter_by(pair_id=pair_id, status_date=today_local()).first()
         assert status is not None
         assert status.confirmed_at is not None
+        assert status.actions_done_count == 1
 
 
 def test_web_action_token_confirm_persists_status_and_safe_event(
@@ -1103,10 +1115,15 @@ def test_pair_action_token_route_rejects_expired_token(app, client):
         assert status is None or status.confirmed_at is None
 
 
-def test_generated_action_token_survives_short_code_expiry_and_is_reused(app, client):
+def test_generated_action_token_survives_short_code_expiry_and_is_reused(
+    app,
+    client,
+    monkeypatch,
+):
     """新行动 token 使用自己的有效期，重复渲染链接不应持续新增记录。"""
     from services.user._common import _build_pair_action_link
 
+    _block_public_action_external_calls(monkeypatch)
     with app.app_context():
         db.create_all()
         user = _create_user("generated_token_user", "generated_token_pass")
@@ -1145,7 +1162,11 @@ def test_generated_action_token_survives_short_code_expiry_and_is_reused(app, cl
 
     response = client.post(
         f"/e/{token}/checkin",
-        data={"short_code": "55667788", "csrf_token": "generated-token-csrf"},
+        data={
+            "short_code": "55667788",
+            "csrf_token": "generated-token-csrf",
+            "actions_done": "drink_water",
+        },
         follow_redirects=False,
     )
 
@@ -1153,6 +1174,7 @@ def test_generated_action_token_survives_short_code_expiry_and_is_reused(app, cl
     with app.app_context():
         status = DailyStatus.query.filter_by(pair_id=pair_id, status_date=today_local()).one()
         assert status.confirmed_at is not None
+        assert status.actions_done_count == 1
         assert PairActionToken.query.filter_by(pair_id=pair_id).count() == 1
 
 

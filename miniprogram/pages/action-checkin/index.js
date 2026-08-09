@@ -63,7 +63,9 @@ function restoreTodayActions(actions, today) {
   return {
     actions: actions.map((item) => ({ ...item, checked: selected.has(item.id) })),
     selectedActions,
-    confirmed: typeof status.confirmed_at === 'string' && Boolean(status.confirmed_at.trim()),
+    confirmed: typeof status.confirmed_at === 'string'
+      && Boolean(status.confirmed_at.trim())
+      && Number(status.actions_done_count) >= 1,
     helpRecorded: Boolean(status.help_flag),
   };
 }

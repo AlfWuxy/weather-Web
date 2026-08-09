@@ -600,6 +600,33 @@ test('今日行动恢复当天已保存选项并忽略旧版本行动 ID', async
   assert.deepEqual(page.data.selectedActions, ['drink_water']);
 });
 
+test('今日行动不把旧版空确认记录显示为已完成', async () => {
+  const { formatLocalDate } = require('../pages/elders/care-logic');
+  authApiImpl = async () => ({
+    items: [{
+      pair_id: 9,
+      member: { name: '奶奶' },
+      today: {
+        status_date: formatLocalDate(),
+        confirmed_at: '2026-07-18T08:00:00',
+        actions_done_count: 0,
+        elder_actions: [],
+      },
+    }],
+  });
+  snapshotImpl = async () => ({
+    current: { temperature: 31, temperature_max: 34, temperature_min: 25 },
+  });
+  const definition = loadPage('../pages/action-checkin/index');
+  const page = makePage(definition, { pairId: 9 });
+
+  await page.loadContext.call(page);
+
+  assert.equal(page.data.contextReady, true);
+  assert.equal(page.data.confirmed, false);
+  assert.deepEqual(page.data.selectedActions, []);
+});
+
 test('今日行动不会从其他日期恢复确认和勾选状态', async () => {
   const { formatLocalDate } = require('../pages/elders/care-logic');
   const yesterday = new Date();
