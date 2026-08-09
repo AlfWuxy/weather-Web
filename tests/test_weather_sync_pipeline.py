@@ -484,6 +484,7 @@ def test_sync_action_daily_aggregates_active_pairs_and_backup_escalation(
             status_date=target_date,
             community_code='同步测试社区',
             confirmed_at=utcnow(),
+            actions_done_count=1,
             help_flag=False,
             relay_stage='backup',
         ),
@@ -525,6 +526,116 @@ def test_sync_action_daily_aggregates_active_pairs_and_backup_escalation(
     assert record.escalation_rate == 1
     assert sum(json.loads(record.risk_distribution).values()) == 1
     assert record.outreach_summary == '已有1个家庭进入升级链，优先安排社区跟进。'
+
+
+@pytest.mark.parametrize('overwrite', [False, True], ids=['keep', 'overwrite'])
+def test_sync_action_daily_keeps_existing_peak_when_incoming_lower(
+    app,
+    db_session,
+    monkeypatch,
+    overwrite,
+):
+    """定时同步无论 overwrite 与否都不得降低已观测到的当日峰值。"""
+    owner = User(username=f'peak-keep-owner-{overwrite}', role='caregiver')
+    owner.set_password('test-password')
+    db_session.add(owner)
+    db_session.flush()
+    pair = _create_pair(db_session, owner, f'9210000{int(overwrite)}')
+    target_date = date(2026, 7, 17)
+    db_session.add(
+        DailyStatus(
+            pair_id=pair.id,
+            status_date=target_date,
+            community_code='同步测试社区',
+            risk_level='高风险',
+        )
+    )
+    db_session.commit()
+
+    pipeline = _load_pipeline(app, monkeypatch)
+    _install_pipeline_weather(monkeypatch, pipeline, VALID_QWEATHER)
+    monkeypatch.setattr(pipeline, 'get_consecutive_hot_days', lambda *_args, **_kwargs: 0)
+    monkeypatch.setattr(
+        pipeline.HeatActionService,
+        'calculate_heat_risk',
+        lambda _self, _weather, consecutive_hot_days=None: {'risk_level': 'low'},
+    )
+
+    result = pipeline.sync_action_daily(
+        target_date=target_date,
+        overwrite=overwrite,
+    )
+
+    db_session.expire_all()
+    status = DailyStatus.query.filter_by(
+        pair_id=pair.id,
+        status_date=target_date,
+    ).one()
+    projection = CommunityDaily.query.filter_by(
+        community_code='同步测试社区',
+        date=target_date,
+    ).one()
+    distribution = json.loads(projection.risk_distribution)
+    assert result['updated'] == 0
+    assert result['processed_communities'] == 1
+    assert status.risk_level == '高风险'
+    assert distribution['高风险'] == 1
+    assert distribution['低风险'] == 0
+
+
+@pytest.mark.parametrize('overwrite', [False, True], ids=['keep', 'overwrite'])
+def test_sync_action_daily_promotes_peak_when_incoming_higher(
+    app,
+    db_session,
+    monkeypatch,
+    overwrite,
+):
+    """更高的新鲜风险必须提升当日峰值，社区投影同步看到新峰值。"""
+    owner = User(username=f'peak-promote-owner-{overwrite}', role='caregiver')
+    owner.set_password('test-password')
+    db_session.add(owner)
+    db_session.flush()
+    pair = _create_pair(db_session, owner, f'9220000{int(overwrite)}')
+    target_date = date(2026, 7, 18)
+    db_session.add(
+        DailyStatus(
+            pair_id=pair.id,
+            status_date=target_date,
+            community_code='同步测试社区',
+            risk_level='低风险',
+        )
+    )
+    db_session.commit()
+
+    pipeline = _load_pipeline(app, monkeypatch)
+    _install_pipeline_weather(monkeypatch, pipeline, VALID_QWEATHER)
+    monkeypatch.setattr(pipeline, 'get_consecutive_hot_days', lambda *_args, **_kwargs: 0)
+    monkeypatch.setattr(
+        pipeline.HeatActionService,
+        'calculate_heat_risk',
+        lambda _self, _weather, consecutive_hot_days=None: {'risk_level': 'high'},
+    )
+
+    result = pipeline.sync_action_daily(
+        target_date=target_date,
+        overwrite=overwrite,
+    )
+
+    db_session.expire_all()
+    status = DailyStatus.query.filter_by(
+        pair_id=pair.id,
+        status_date=target_date,
+    ).one()
+    projection = CommunityDaily.query.filter_by(
+        community_code='同步测试社区',
+        date=target_date,
+    ).one()
+    distribution = json.loads(projection.risk_distribution)
+    assert result['updated'] == 1
+    assert result['processed_communities'] == 1
+    assert status.risk_level == '高风险'
+    assert distribution['高风险'] == 1
+    assert distribution['低风险'] == 0
 
 
 def test_sync_action_daily_refreshes_projection_locks_in_sorted_order(

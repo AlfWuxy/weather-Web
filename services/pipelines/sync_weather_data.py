@@ -23,6 +23,7 @@ from core.weather import (  # noqa: E402
     is_qweather_online_weather,
 )
 from core.time_utils import today_local  # noqa: E402
+from services.care_action_service import get_or_create_daily_status  # noqa: E402
 from services.community_daily_service import refresh_community_daily  # noqa: E402
 from services.heat_action_service import HeatActionService  # noqa: E402
 from services.user.owner_write_guard import OwnerInactiveError, owner_write_guard  # noqa: E402
@@ -371,22 +372,32 @@ def sync_action_daily(target_date=None, community_code=None, overwrite=False):
                         if risk_level is None:
                             # 位置在预计算后发生变化，留待下一轮，避免在锁内读取天气。
                             continue
-                        status = DailyStatus.query.filter_by(
+                        previous_status = DailyStatus.query.filter_by(
                             pair_id=pair.id,
                             status_date=target_date,
                         ).first()
-                        if status and not overwrite and status.risk_level:
-                            processed_communities.add(pair.community_code)
-                            continue
-                        if status is None:
-                            status = DailyStatus(
-                                pair_id=pair.id,
-                                status_date=target_date,
-                                community_code=pair.community_code,
-                            )
-                            db.session.add(status)
-                        status.risk_level = risk_level
-                        updated += 1
+                        previous_risk = (
+                            previous_status.risk_level
+                            if previous_status is not None
+                            else None
+                        )
+                        previous_community = (
+                            previous_status.community_code
+                            if previous_status is not None
+                            else None
+                        )
+                        # overwrite 仅保留命令参数兼容；风险字段始终保存当日峰值。
+                        status = get_or_create_daily_status(
+                            pair,
+                            target_date,
+                            risk_level=risk_level,
+                        )
+                        if (
+                            previous_status is None
+                            or status.risk_level != previous_risk
+                            or status.community_code != previous_community
+                        ):
+                            updated += 1
                         processed_communities.add(pair.community_code)
                     db.session.commit()
             except OwnerInactiveError:
