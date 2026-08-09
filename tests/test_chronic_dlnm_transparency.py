@@ -76,15 +76,18 @@ def test_dlnm_breakdown_marks_cap_without_changing_result():
     assert breakdown['rr_cap_applied'] is True
 
 
-def test_chronic_service_exposes_both_modifier_layers(monkeypatch):
+def test_chronic_service_uses_chronic_age_layer_only(monkeypatch):
     from services.chronic_risk_service import ChronicRiskService
 
     class FakeDLNMService:
+        ages = []
+
         def calculate_rr(self, temperature, lag_temperatures=None, disease_type=None, age=None):
-            del temperature, lag_temperatures, disease_type, age
+            del temperature, lag_temperatures, disease_type
+            self.ages.append(age)
             raw_rr = 1.2
             disease_modifier = 1.1
-            age_modifier = 1.3
+            age_modifier = 1.0
             adjusted_rr = raw_rr * disease_modifier * age_modifier
             return adjusted_rr, {
                 'raw_dlnm_rr': raw_rr,
@@ -97,9 +100,10 @@ def test_chronic_service_exposes_both_modifier_layers(monkeypatch):
                 'calculation_branch': 'trained_model',
             }
 
+    fake_dlnm = FakeDLNMService()
     monkeypatch.setattr(
         'services.dlnm_risk_service.get_dlnm_service',
-        lambda: FakeDLNMService(),
+        lambda: fake_dlnm,
     )
 
     service = ChronicRiskService()
@@ -112,8 +116,10 @@ def test_chronic_service_exposes_both_modifier_layers(monkeypatch):
 
     assert risk['raw_dlnm_rr'] == pytest.approx(1.2)
     assert risk['dlnm_disease_modifier'] == pytest.approx(1.1)
-    assert risk['dlnm_age_modifier'] == pytest.approx(1.3)
-    assert risk['dlnm_adjusted_rr'] == pytest.approx(1.716)
+    assert fake_dlnm.ages == [None]
+    assert risk['dlnm_age_modifier'] == pytest.approx(1.0)
+    assert risk['dlnm_adjusted_rr'] == pytest.approx(1.32)
     assert risk['chronic_age_amplifier'] == pytest.approx(1.1)
     assert risk['comorbidity_amplifier'] == pytest.approx(1.4)
-    assert risk['personal_rr'] == pytest.approx(1.716 * 1.1 * 1.4, abs=0.001)
+    assert risk['personal_rr'] == pytest.approx(1.32 * 1.1 * 1.4, abs=0.001)
+    assert risk['age_modifier_policy'] == 'chronic_layer_only'

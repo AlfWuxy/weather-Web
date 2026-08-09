@@ -8,7 +8,7 @@ D2. 个体/分层放大系数
 D3. 建议生成（规则库 + 可审计触发条件）
 
 公式：
-DLNMRR = min(RawDLNMRR × DLNM Disease Modifier × DLNM Age Modifier, DLNM Cap)
+DLNMRR = min(RawDLNMRR × DLNM Disease Modifier, DLNM Cap)
 PersonalRisk = DLNMRR × Chronic-layer Age Amplifier × Comorbidity Amplifier
 
 触发条件（可审计）→ 建议模板（可版本化）
@@ -120,7 +120,7 @@ class ChronicRiskService:
             # 空气质量相关
             'aqi_high': {
                 'name': '空气质量较差',
-                'trigger': lambda ctx: ctx.get('aqi', 0) >= 150,
+                'trigger': lambda ctx: ctx.get('aqi') is not None and ctx['aqi'] >= 150,
                 'priority': 'high',
                 'category': '空气质量',
                 'thresholds': {'aqi': '>=150'},
@@ -131,7 +131,7 @@ class ChronicRiskService:
             },
             'aqi_moderate': {
                 'name': '空气质量一般',
-                'trigger': lambda ctx: 100 <= ctx.get('aqi', 0) < 150,
+                'trigger': lambda ctx: ctx.get('aqi') is not None and 100 <= ctx['aqi'] < 150,
                 'priority': 'medium',
                 'category': '空气质量',
                 'thresholds': {'aqi': '100-149'},
@@ -335,10 +335,11 @@ class ChronicRiskService:
             dlnm_adjusted_rr, dlnm_breakdown = dlnm.calculate_rr(
                 temperature, 
                 disease_type=disease_type,
-                age=age
+                # 个体年龄只在慢病层计入一次，避免与 DLNM 年龄先验重复相乘。
+                age=None
             )
 
-            # DLNM 内部已经包含病种与年龄修正，这里拆开保存，避免和慢病层修正混在一起。
+            # DLNM 仅保留温度与病种修正，个体年龄统一由慢病层处理。
             raw_dlnm_rr = float(
                 dlnm_breakdown.get('raw_dlnm_rr', dlnm_breakdown.get('base_rr', dlnm_adjusted_rr))
             )
@@ -379,6 +380,7 @@ class ChronicRiskService:
                 'dlnm_calculation_branch': dlnm_breakdown.get('calculation_branch', 'legacy'),
                 'age_amplifier': round(age_amp, 2),
                 'chronic_age_amplifier': round(age_amp, 2),
+                'age_modifier_policy': 'chronic_layer_only',
                 'comorbidity_amplifier': round(comorbidity_amp, 2),
                 'personal_rr': round(personal_rr, 3),
                 'risk_level': self._get_risk_level(personal_rr),
@@ -401,6 +403,7 @@ class ChronicRiskService:
                 max_risk = {'rr': personal_rr, 'disease_type': disease_type}
         
         # 生成个性化建议
+        aqi = self._optional_number(weather_data.get('aqi'))
         context = {
             'age': age,
             'temperature': temperature,
@@ -409,7 +412,7 @@ class ChronicRiskService:
             'chronic_diseases': chronic_diseases,
             'has_chronic_disease': len(chronic_diseases) > 0,
             'disease_count': len(chronic_diseases),
-            'aqi': weather_data.get('aqi', 50),
+            'aqi': aqi,
             'hot_night': weather_data.get('tmin', 15) >= 22 if 'tmin' in weather_data else False,
             'hot_night_temp': weather_data.get('tmin', 22),
             'heat_wave_days': weather_data.get('heat_wave_days', 0),
@@ -454,7 +457,7 @@ class ChronicRiskService:
             },
             'weather': {
                 'temperature': temperature,
-                'aqi': weather_data.get('aqi'),
+                'aqi': aqi,
                 'humidity': weather_data.get('humidity')
             },
             'disease_risks': risks,
@@ -516,7 +519,7 @@ class ChronicRiskService:
             'chronic_diseases': context.get('chronic_diseases', []),
             'has_chronic_disease': context.get('has_chronic_disease', False),
             'disease_count': context.get('disease_count', 0),
-            'aqi': context.get('aqi', 50),
+            'aqi': self._optional_number(context.get('aqi')),
             'hot_night': context.get('hot_night', False),
             'hot_night_temp': context.get('hot_night_temp', 22),
             'heat_wave_days': context.get('heat_wave_days', 0),
@@ -632,7 +635,7 @@ class ChronicRiskService:
             escalation.append('如出现胸痛、呼吸困难、意识模糊等，请立即就医或拨打120。')
         if safe_context.get('age', 0) >= 75 or safe_context.get('disease_count', 0) >= 2:
             escalation.append('建议及时联系家属或村医协助观察。')
-        if safe_context.get('aqi', 0) >= 200:
+        if safe_context.get('aqi') is not None and safe_context['aqi'] >= 200:
             escalation.append('若持续咳喘或胸闷，请联系医生评估。')
 
         return {
@@ -641,6 +644,15 @@ class ChronicRiskService:
             'escalation': escalation[:3],
             'disclaimer': '风险提示不是诊断，如有不适请及时就医。'
         }, triggered_output
+
+    @staticmethod
+    def _optional_number(value):
+        """把缺失或非法观测保留为 None，避免伪造中性 AQI。"""
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return None
+        return number if np.isfinite(number) else None
     
     def predict_population_risk(self, population_info, weather_data):
         """

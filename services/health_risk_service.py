@@ -85,14 +85,16 @@ class HealthRiskService:
             weather['temperature'],
             lag_temperatures=lag_temps,
             disease_type='general',
-            age=profile['age']
+            # 年龄已进入个体易感性路径，DLNM 层不再重复应用年龄先验。
+            age=None
         )
         temp_score = self._clamp((float(base_rr) - 1.0) / 1.2 * 100.0, 0.0, 100.0)
         personal_susceptibility = self._calc_personal_susceptibility_score(profile)
-        model_a_score = self._clamp(
-            0.50 * temp_score + 0.28 * personal_susceptibility + 0.22 * self._aqi_score(weather['aqi']),
-            0.0,
-            100.0
+        aqi_score = self._aqi_score(weather['aqi'])
+        model_a_score = self._weighted_available_score(
+            (temp_score, 0.50),
+            (personal_susceptibility, 0.28),
+            (aqi_score, 0.22),
         )
 
         # 路径 B：规则暴露（空气/湿度/极端天气）+ 即时筛查
@@ -100,12 +102,12 @@ class HealthRiskService:
         extreme = weather_service.identify_extreme_weather(weather_data)
         extreme_score = self._clamp(len(extreme.get('conditions', [])) * 25.0, 0.0, 100.0)
         humidity_score = self._humidity_score(weather['humidity'])
-        aqi_score = self._aqi_score(weather['aqi'])
         screening_score = self._screening_score(screening_data)
-        model_b_score = self._clamp(
-            0.30 * extreme_score + 0.30 * aqi_score + 0.15 * humidity_score + 0.25 * screening_score,
-            0.0,
-            100.0
+        model_b_score = self._weighted_available_score(
+            (extreme_score, 0.30),
+            (aqi_score, 0.30),
+            (humidity_score, 0.15),
+            (screening_score, 0.25),
         )
 
         # 路径 C：社区脆弱性 + 社区近期负担 + 个体基础敏感性
@@ -202,7 +204,7 @@ class HealthRiskService:
 
         component_scores = {
             '温度风险': round(temp_score, 1),
-            '空气质量风险': round(aqi_score, 1),
+            '空气质量风险': round(aqi_score, 1) if aqi_score is not None else None,
             '湿度风险': round(humidity_score, 1),
             '极端天气暴露': round(extreme_score, 1),
             '个体易感性': round(personal_susceptibility, 1),
@@ -323,10 +325,11 @@ class HealthRiskService:
         }
 
     def _normalize_weather_data(self, weather_data):
+        aqi = self._to_optional_float(weather_data.get('aqi'))
         return {
             'temperature': self._to_float(weather_data.get('temperature'), 20.0),
             'humidity': self._clamp(self._to_float(weather_data.get('humidity'), 60.0), 0.0, 100.0),
-            'aqi': self._clamp(self._to_float(weather_data.get('aqi'), 50.0), 0.0, 500.0),
+            'aqi': self._clamp(aqi, 0.0, 500.0) if aqi is not None else None,
             'pressure': self._to_float(weather_data.get('pressure'), 1013.0),
             'wind_speed': self._to_float(weather_data.get('wind_speed'), 3.0),
             'weather_condition': str(weather_data.get('weather_condition') or '')
@@ -574,7 +577,9 @@ class HealthRiskService:
         }
 
     def _aqi_score(self, aqi):
-        aqi = self._clamp(self._to_float(aqi, 50.0), 0.0, 500.0)
+        if aqi is None:
+            return None
+        aqi = self._clamp(self._to_float(aqi), 0.0, 500.0)
         if aqi <= 50:
             return 8.0
         if aqi <= 100:
@@ -719,7 +724,7 @@ class HealthRiskService:
         elif weather['temperature'] <= 5:
             add_item('低温防护', '外出注意分层保暖，尤其关注头颈和四肢。', 'high')
 
-        if weather['aqi'] >= 150:
+        if weather['aqi'] is not None and weather['aqi'] >= 150:
             add_item('空气质量', '空气质量偏差，尽量减少户外运动，必要时佩戴防护口罩。', 'high')
 
         if screening.get('symptom_level') in ('moderate', 'severe'):
@@ -751,7 +756,8 @@ class HealthRiskService:
             '社区脆弱性': '所在社区脆弱性较高',
             '社区病例负担': '近期社区病例负担偏高'
         }
-        sorted_items = sorted(component_scores.items(), key=lambda x: float(x[1]), reverse=True)
+        available_items = [item for item in component_scores.items() if item[1] is not None]
+        sorted_items = sorted(available_items, key=lambda x: float(x[1]), reverse=True)
         reasons = []
         for name, score in sorted_items[:4]:
             if float(score) < 40:
@@ -790,6 +796,25 @@ class HealthRiskService:
             return float(value)
         except (TypeError, ValueError):
             return float(default)
+
+    @staticmethod
+    def _to_optional_float(value):
+        """保留缺失值，避免把未知 AQI 当成 50。"""
+        try:
+            result = float(value)
+        except (TypeError, ValueError):
+            return None
+        return result if math.isfinite(result) else None
+
+    @classmethod
+    def _weighted_available_score(cls, *items):
+        """仅对可用指标重新归一权重，缺失值不贡献零风险。"""
+        available = [(value, weight) for value, weight in items if value is not None and weight > 0]
+        total_weight = sum(weight for _value, weight in available)
+        if total_weight <= 0:
+            return 0.0
+        score = sum(float(value) * weight for value, weight in available) / total_weight
+        return cls._clamp(score, 0.0, 100.0)
 
     @staticmethod
     def _to_int(value, default=0, min_value=None, max_value=None):
