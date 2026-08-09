@@ -276,26 +276,27 @@ def test_parse_bool_false_values():
     assert parse_bool('unknown', default=False) is False
 
 
-def test_safe_next_url_blocks_scheme_relative():
+def test_safe_next_url_blocks_scheme_relative(app):
     """测试 _safe_next_url 拒绝危险前缀与控制字符"""
     from services.public_service import _safe_next_url
 
-    assert _safe_next_url('/dashboard') == '/dashboard'
-    assert _safe_next_url('/forecast-7day?location=duchang&view=compact') == (
-        '/forecast-7day?location=duchang&view=compact'
-    )
+    with app.test_request_context('/login'):
+        assert _safe_next_url('/dashboard') == '/dashboard'
+        assert _safe_next_url('/forecast-7day?location=duchang&view=compact') == (
+            '/forecast-7day?location=duchang&view=compact'
+        )
 
-    unsafe_urls = [
-        '//evil.com',
-        '///evil.com',
-        '\\\\evil.com',
-        '/\\evil.com',
-        '/path\nnext',
-        '/path\rnext',
-    ]
+        unsafe_urls = [
+            '//evil.com',
+            '///evil.com',
+            '\\\\evil.com',
+            '/\\evil.com',
+            '/path\nnext',
+            '/path\rnext',
+        ]
 
-    for url in unsafe_urls:
-        assert _safe_next_url(url) is None
+        for url in unsafe_urls:
+            assert _safe_next_url(url) is None
 
 
 def test_robots_use_current_private_route_paths(client):

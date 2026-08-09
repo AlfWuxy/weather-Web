@@ -165,7 +165,7 @@ def test_four_pairs_from_two_households_remain_suppressed(
     client,
     db_session,
 ):
-    """两户即使共有四位老人，也不能越过三户隐私门槛。"""
+    """两户即使共有四位老人，也不能越过五户隐私门槛。"""
     community_code = "两户多老人社区"
     owners = [_new_owner(db_session, f"two-households-{index}") for index in range(2)]
     for index in range(4):
@@ -176,23 +176,23 @@ def test_four_pairs_from_two_households_remain_suppressed(
     _assert_action_statistics_suppressed(_public_summary(client, community_code))
 
 
-def test_elder_deactivation_hides_stale_three_person_projection(
+def test_elder_deactivation_hides_stale_five_household_projection(
     app,
     client,
     db_session,
     monkeypatch,
 ):
-    """真实停用造成 3→2 后，即使投影刷新失败也不能泄露统计。"""
+    """真实停用造成 5→4 后，即使投影刷新失败也不能泄露统计。"""
     from core.db_models import CommunityDaily, Pair
     from core.usage import create_api_token
 
     community_code = "停用隐私社区"
-    owners = [_new_owner(db_session, f"deactivate-owner-{index}") for index in range(3)]
+    owners = [_new_owner(db_session, f"deactivate-owner-{index}") for index in range(5)]
     pairs = [
         _new_pair(db_session, owner, community_code, index + 10)
         for index, owner in enumerate(owners)
     ]
-    _seed_community_daily(db_session, community_code, total_people=3)
+    _seed_community_daily(db_session, community_code, total_people=5)
     db_session.commit()
     owners[0].health_sensitive_consent_version = app.config[
         "WX_MINIPROGRAM_PRIVACY_VERSION"
@@ -201,6 +201,10 @@ def test_elder_deactivation_hides_stale_three_person_projection(
     db_session.commit()
     token = create_api_token(owners[0].id, name="privacy-deactivate")
     refresh_targets = []
+
+    visible_before_delete = _public_summary(client, community_code)
+    assert visible_before_delete["sample_suppressed"] is False
+    assert visible_before_delete["total_people"] == 5
 
     def fail_projection_refresh(community_codes, **_kwargs):
         refresh_targets.append(set(community_codes))
@@ -218,9 +222,12 @@ def test_elder_deactivation_hides_stale_three_person_projection(
 
     assert deleted.status_code == 200
     db_session.expire_all()
-    assert db_session.get(Pair, pairs[0].id).status == "inactive"
-    assert CommunityDaily.query.filter_by(community_code=community_code).one().total_people == 3
-    assert refresh_targets == [{community_code, "都昌县"}]
+    persisted_pair = db_session.get(Pair, pairs[0].id)
+    assert persisted_pair.status == "inactive"
+    assert persisted_pair.location_query == "都昌县"
+    assert persisted_pair.community_code == community_code
+    assert CommunityDaily.query.filter_by(community_code=community_code).one().total_people == 5
+    assert refresh_targets == [{community_code}]
     _assert_action_statistics_suppressed(_public_summary(client, community_code))
 
 
