@@ -85,6 +85,35 @@ test('请求返回 401 时清除令牌和页面内存数据', async () => {
   assert.equal(relaunchedTo, '/pages/bind-token/index');
 });
 
+test('登录页重启失败只回退设置 tab 且并发失效只导航一次', () => {
+  const previousReLaunch = global.wx.reLaunch;
+  const previousSwitchTab = global.wx.switchTab;
+  let launchCount = 0;
+  let completed;
+  let fallback = '';
+  currentPages = [];
+
+  try {
+    global.wx.reLaunch = (options) => {
+      launchCount += 1;
+      completed = options.complete;
+      options.fail();
+    };
+    global.wx.switchTab = ({ url }) => { fallback = url; };
+
+    careSession.goLogin();
+    careSession.goLogin();
+
+    assert.equal(launchCount, 1);
+    assert.equal(fallback, '/pages/settings/index');
+    assert.notEqual(fallback, '/pages/forecast/index');
+    completed();
+  } finally {
+    global.wx.reLaunch = previousReLaunch;
+    global.wx.switchTab = previousSwitchTab;
+  }
+});
+
 test('旧会话延迟响应不能写回新账号', async () => {
   storage.clear();
   relaunchedTo = '';

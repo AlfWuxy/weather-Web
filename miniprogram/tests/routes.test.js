@@ -108,6 +108,51 @@ test('指向 tabBar 的 navigator 使用 switchTab', () => {
   assert.deepEqual(violations, []);
 });
 
+test('全部 JavaScript 导航目标已注册且使用匹配的页面栈方法', () => {
+  const registeredPages = new Set(appConfig.pages);
+  const tabPages = new Set(appConfig.tabBar.list.map((item) => item.pagePath));
+  const scripts = [];
+  const violations = [];
+  collectFiles(path.join(miniRoot, 'pages'), '.js', scripts);
+
+  scripts.forEach((file) => {
+    const source = fs.readFileSync(file, 'utf8');
+    const pattern = /wx\.(navigateTo|redirectTo|reLaunch|switchTab)\s*\(\s*\{\s*url:\s*([`'"])(\/pages\/[^`'"]+)\2/g;
+    for (const match of source.matchAll(pattern)) {
+      const method = match[1];
+      const rawUrl = match[3];
+      const normalizedUrl = rawUrl.replace(/\$\{[^}]+\}/g, '');
+      const pagePath = normalizedUrl.split(/[?#]/, 1)[0].replace(/^\//, '');
+      if (!registeredPages.has(pagePath)) {
+        violations.push(`${path.relative(miniRoot, file)}: 未注册 ${rawUrl}`);
+        continue;
+      }
+      if (tabPages.has(pagePath) && ['navigateTo', 'redirectTo'].includes(method)) {
+        violations.push(`${path.relative(miniRoot, file)}: ${method} 不能打开 tabBar ${rawUrl}`);
+      }
+      if (!tabPages.has(pagePath) && method === 'switchTab') {
+        violations.push(`${path.relative(miniRoot, file)}: switchTab 不能打开普通页 ${rawUrl}`);
+      }
+    }
+  });
+
+  assert.deepEqual(violations, []);
+});
+
+test('账号、退出、未授权和错误边界均不使用预报页作为兜底', () => {
+  const boundaryFiles = [
+    'pages/account/index.js',
+    'pages/settings/index.js',
+    'pages/bind-token/index.js',
+    'pages/elders/care-session.js',
+    'utils/request.js',
+  ];
+  boundaryFiles.forEach((file) => {
+    const source = fs.readFileSync(path.join(miniRoot, file), 'utf8');
+    assert.doesNotMatch(source, /pages\/forecast\/index/, `${file} 不得把身份或错误边界送到预报页`);
+  });
+});
+
 test('正式分支固定公开生产域名且保留无密钥示例', () => {
   const files = ['config.js', 'config.runtime.js', 'config.example.js'];
   const text = files.map((file) => fs.readFileSync(path.join(miniRoot, file), 'utf8')).join('\n');

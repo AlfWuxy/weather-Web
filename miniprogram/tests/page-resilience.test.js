@@ -341,7 +341,7 @@ test('设置页只根据本机会话展示登录状态', (t) => {
 
 test('设置页退出登录后立即切换为未登录状态', async (t) => {
   let modalSuccess;
-  let relaunched = false;
+  let relaunchedTo = '';
   let clearCount = 0;
   const originalShowModal = global.wx.showModal;
   const originalReLaunch = global.wx.reLaunch;
@@ -352,7 +352,7 @@ test('设置页退出登录后立即切换为未登录状态', async (t) => {
     tokenApiImpl = async () => ({});
   });
   global.wx.showModal = ({ success }) => { modalSuccess = success; };
-  global.wx.reLaunch = () => { relaunched = true; };
+  global.wx.reLaunch = ({ url }) => { relaunchedTo = url; };
   clearImpl = () => { clearCount += 1; };
   tokenApiImpl = async () => ({ ok: true });
   const definition = loadPage('../pages/settings/index');
@@ -362,14 +362,15 @@ test('设置页退出登录后立即切换为未登录状态', async (t) => {
   await modalSuccess({ confirm: true });
 
   assert.equal(clearCount, 1);
-  assert.equal(relaunched, true);
+  assert.equal(relaunchedTo, '/pages/home/index');
+  assert.notEqual(relaunchedTo, '/pages/forecast/index');
   assert.deepEqual(page.data, { busy: false, loggedIn: false });
 });
 
 test('设置页确认退出后不等待远端请求就清空私人数据', async (t) => {
   let modalSuccess;
   let resolveLogout;
-  let relaunched = false;
+  let relaunchedTo = '';
   let clearCount = 0;
   let requestToken = '';
   const originalShowModal = global.wx.showModal;
@@ -381,7 +382,7 @@ test('设置页确认退出后不等待远端请求就清空私人数据', async
     tokenApiImpl = async () => ({});
   });
   global.wx.showModal = ({ success }) => { modalSuccess = success; };
-  global.wx.reLaunch = () => { relaunched = true; };
+  global.wx.reLaunch = ({ url }) => { relaunchedTo = url; };
   clearImpl = () => { clearCount += 1; };
   tokenApiImpl = (token) => {
     requestToken = token;
@@ -395,7 +396,8 @@ test('设置页确认退出后不等待远端请求就清空私人数据', async
 
   assert.equal(requestToken, 'session-token');
   assert.equal(clearCount, 1);
-  assert.equal(relaunched, true);
+  assert.equal(relaunchedTo, '/pages/home/index');
+  assert.notEqual(relaunchedTo, '/pages/forecast/index');
   assert.deepEqual(page.data, { busy: false, loggedIn: false });
 
   resolveLogout({ ok: true });

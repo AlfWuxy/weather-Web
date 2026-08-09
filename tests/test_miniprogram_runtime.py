@@ -7,10 +7,41 @@ import threading
 import time
 from contextlib import contextmanager
 from datetime import timedelta
+from pathlib import Path
 
 import pytest
 
 from core.time_utils import utcnow
+
+
+def test_all_miniprogram_literal_api_calls_match_registered_backend_routes(app):
+    """前端声明的每个静态 API 方法和路径都必须由当前 Flask 路由提供。"""
+    mini_root = Path(__file__).resolve().parents[1] / "miniprogram"
+    pattern = re.compile(
+        r"method:\s*['\"](?P<method>GET|POST|PATCH|DELETE)['\"]"
+        r"[\s\S]{0,220}?path:\s*(?P<quote>[`'\"])"
+        r"(?P<path>/mp/api/v1/[^`'\"]+)(?P=quote)"
+    )
+    calls = []
+    for script in sorted(mini_root.rglob("*.js")):
+        if "tests" in script.parts:
+            continue
+        source = script.read_text(encoding="utf-8")
+        for match in pattern.finditer(source):
+            raw_path = re.sub(r"\$\{[^}]+\}", "1", match.group("path"))
+            calls.append((script.relative_to(mini_root), match.group("method"), raw_path))
+
+    assert len(calls) >= 25
+    adapter = app.url_map.bind("localhost")
+    failures = []
+    for script, method, raw_path in calls:
+        path = raw_path.partition("?")[0]
+        try:
+            adapter.match(path, method=method)
+        except Exception as exc:  # pragma: no cover - 失败信息保留具体路由异常
+            failures.append(f"{script}: {method} {raw_path}: {type(exc).__name__}")
+
+    assert failures == []
 
 
 CURRENT = {
