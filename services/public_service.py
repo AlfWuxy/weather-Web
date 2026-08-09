@@ -20,7 +20,7 @@ from flask import (
 )
 from flask_login import current_user, login_user, logout_user
 from sqlalchemy import or_
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from werkzeug.exceptions import MethodNotAllowed, NotFound
 from werkzeug.routing import RequestRedirect
 from werkzeug.security import check_password_hash, generate_password_hash
@@ -703,17 +703,37 @@ def _handle_action_lookup(token=None, entry_action=None, confirm_action=None, he
                 entry_action=entry_action
             )
 
-        session['pair_session_id'] = pair.id
-        session['pair_session_code'] = pair.short_code
-        pair.last_active_at = utcnow()
-        _clear_short_code_failures()
-        _clear_pair_token()
+        try:
+            with _active_pair_write_guard(pair) as locked_pair:
+                if locked_pair is None:
+                    flash('绑定已停用，请联系照护人重新生成。', 'error')
+                    return redirect(url_for('public.action_check'))
+                pair = locked_pair
+                session['pair_session_id'] = pair.id
+                session['pair_session_code'] = pair.short_code
+                pair.last_active_at = utcnow()
+                _clear_short_code_failures()
+                _clear_pair_token()
 
-        status_date = today_local()
-        status, actions, resources, weather_data, heat_result, risk_label, risk_reasons = _build_action_context(
-            pair, status_date
-        )
-        db.session.commit()
+                status_date = today_local()
+                (
+                    status,
+                    actions,
+                    resources,
+                    weather_data,
+                    heat_result,
+                    risk_label,
+                    risk_reasons,
+                ) = _build_action_context(pair, status_date)
+                db.session.commit()
+        except OwnerInactiveError:
+            flash('照护账号已失效，请联系照护人重新生成。', 'error')
+            return redirect(url_for('public.action_check'))
+        except (SQLAlchemyError, OSError, RuntimeError, ValueError):
+            db.session.rollback()
+            logger.exception('短码查询写锁不可用，今日行动页暂未打开')
+            flash('今日行动页暂时无法打开，请稍后重试。', 'error')
+            return redirect(url_for('public.action_check'))
         action_routes = _resolve_action_routes(
             token=token,
             confirm_action=confirm_action,
