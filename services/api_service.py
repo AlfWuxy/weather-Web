@@ -1137,25 +1137,18 @@ def _api_comprehensive_alert():
         # 社区风险
         community_result = community_service.generate_community_risk_map(current_weather)
 
-        # 综合预警级别（蓝/黄/橙/红）
-        if rr >= 1.4 or summary['high_risk_days'] >= 3:
-            alert_level = 'red'
-            alert_text = '红色预警'
-        elif rr >= 1.25 or summary['high_risk_days'] >= 2:
-            alert_level = 'orange'
-            alert_text = '橙色预警'
-        elif rr >= 1.1 or summary['high_risk_days'] >= 1:
-            alert_level = 'yellow'
-            alert_text = '黄色预警'
-        else:
-            alert_level = 'blue'
-            alert_text = '蓝色预警'
+        # RR 与门诊高负荷天数尚未完成预警校准，不生成模型红橙黄等级。
+        alert_level = 'unavailable'
+        alert_text = 'disabled_unvalidated'
 
         return jsonify({
             'success': True,
             'alert': {
+                'available': False,
                 'level': alert_level,
                 'text': alert_text,
+                'status': 'disabled_unvalidated',
+                'message': '模型综合预警未启用，请查看独立的官方天气预警。',
                 'rr': round(rr, 3),
                 'extreme_events': extreme_events
             },

@@ -297,7 +297,11 @@ def test_comprehensive_alert_uses_qweather_forecast_with_today_start(client, db_
                     'composite_exposure': {'score': 20 + idx, 'level': '低'},
                 }
                 for idx in range(7)
-            ], {'high_risk_days': 0, 'recommendations': []}
+            ], {
+                'high_risk_days': None,
+                'model_warning_status': 'disabled_uncalibrated',
+                'recommendations': [],
+            }
 
     class FakeCommunityService:
         def generate_community_risk_map(self, current_weather):
@@ -329,7 +333,11 @@ def test_comprehensive_alert_uses_qweather_forecast_with_today_start(client, db_
     assert response.status_code == 200
     payload = response.get_json()
     assert payload['success'] is True
-    assert payload['alert']['text'] == '蓝色预警'
+    assert payload['alert']['available'] is False
+    assert payload['alert']['level'] == 'unavailable'
+    assert payload['alert']['text'] == 'disabled_unvalidated'
+    assert payload['alert']['status'] == 'disabled_unvalidated'
+    assert '官方天气预警' in payload['alert']['message']
     assert captured['forecast_temps'] == qweather_days
     assert captured['start_date'] == start
     assert captured['context'] == {'aqi': 38, 'pm25': 14}
