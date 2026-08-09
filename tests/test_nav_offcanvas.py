@@ -8,7 +8,12 @@ def _set_logged_in_user(client, db_session, *, username, role):
     """建立指定角色的测试会话。"""
     from core.db_models import User
 
-    user = User(username=username, role=role, community='朝阳社区')
+    user = User(
+        username=username,
+        role=role,
+        community='朝阳社区',
+        authorized_community='朝阳社区',
+    )
     user.set_password('testpass')
     db_session.add(user)
     db_session.commit()
@@ -120,7 +125,10 @@ def test_mobile_navigation_keeps_community_risk_available(client, db_session, ro
 
     body = client.get('/').get_data(as_text=True)
     drawer = body.split('id="appNavDrawer"', 1)[1]
-    assert 'href="/community-risk" data-nav-key="community-risk"' in drawer
+    expected_path = '/risk' if role == 'guest' else '/community-risk'
+    assert f'href="{expected_path}" data-nav-key="community-risk"' in drawer
+    if role == 'guest':
+        assert 'href="/community-risk" data-nav-key="community-risk"' not in drawer
 
 
 @pytest.mark.parametrize(
