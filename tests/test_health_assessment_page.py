@@ -325,3 +325,65 @@ def test_legacy_assessment_without_matrix_does_not_render_false_low_bucket(
     assert '发生可能性：<strong>--</strong>' in html
     assert '综合位置 -- / 16' in html
     assert '影响程度：<strong>low</strong>' not in html
+
+
+@pytest.mark.parametrize(
+    'academic_profile',
+    [
+        None,
+        'invalid-profile',
+        ['invalid-profile'],
+        {'weather': None},
+        {'fusion_breakdown': 'invalid'},
+        {'risk_interval': []},
+        {'impact_likelihood': None},
+        {'community_context': 'invalid'},
+        {'model_paths': 'invalid'},
+        {'model_paths': [{'name': '安全路径', 'weight': 0.5}, 'invalid']},
+    ],
+    ids=(
+        'profile-null',
+        'profile-string',
+        'profile-list',
+        'weather-null',
+        'fusion-string',
+        'interval-list',
+        'matrix-null',
+        'community-string',
+        'paths-string',
+        'paths-mixed',
+    ),
+)
+def test_legacy_academic_profile_shapes_never_break_assessment_page(
+    authenticated_client,
+    db_session,
+    academic_profile,
+):
+    """历史脏 JSON 只能降级展示，不能让健康评估页返回 500。"""
+    _seed_health_assessment_user(db_session)
+    user = User.query.filter_by(username='testuser').first()
+    db_session.add(HealthRiskAssessment(
+        user_id=user.id,
+        assessment_date=utcnow(),
+        weather_condition='{}',
+        risk_score=52,
+        risk_level='中风险',
+        disease_risks='{}',
+        recommendations='[]',
+        explain=json.dumps(
+            {'academic_profile': academic_profile},
+            ensure_ascii=False,
+        ),
+    ))
+    db_session.commit()
+
+    response = authenticated_client.get('/health-assessment')
+
+    assert response.status_code == 200
+    body = response.get_data(as_text=True)
+    assert '最新评估结果' in body
+    if isinstance(academic_profile, dict) and isinstance(
+        academic_profile.get('model_paths'),
+        list,
+    ):
+        assert '安全路径' in body

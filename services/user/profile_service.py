@@ -44,6 +44,36 @@ from services.miniprogram_auth import current_privacy_version
 
 logger = logging.getLogger(__name__)
 
+_ACADEMIC_MAPPING_FIELDS = (
+    'risk_interval',
+    'risk_probabilities',
+    'cap_semantics',
+    'impact_likelihood',
+    'fusion_breakdown',
+    'component_scores',
+    'community_context',
+    'screening',
+    'weather',
+    'rr_breakdown',
+)
+
+
+def _normalize_academic_profile(raw_profile):
+    """把历史评估中的不可信 JSON 形状收敛到模板可安全读取的结构。"""
+    if not isinstance(raw_profile, dict):
+        return {}
+    normalized = dict(raw_profile)
+    for field in _ACADEMIC_MAPPING_FIELDS:
+        if not isinstance(normalized.get(field), dict):
+            normalized[field] = {}
+    model_paths = normalized.get('model_paths')
+    normalized['model_paths'] = (
+        [item for item in model_paths if isinstance(item, dict)]
+        if isinstance(model_paths, list)
+        else []
+    )
+    return normalized
+
 
 def _wxpusher_consent_is_current(user, required_version):
     """只有版本和时间都存在时才继续认可第三方推送同意。"""
@@ -229,8 +259,13 @@ def health_assessment():
         explain_data = safe_json_loads(latest_assessment.explain, {})
     if latest_assessment and getattr(latest_assessment, 'disease_risks', None):
         disease_risks_data = safe_json_loads(latest_assessment.disease_risks, {})
-    if isinstance(explain_data, dict):
-        academic_profile = explain_data.get('academic_profile', {})
+    if not isinstance(explain_data, dict):
+        explain_data = {}
+    academic_profile = _normalize_academic_profile(
+        explain_data.get('academic_profile')
+    )
+    explain_data = dict(explain_data)
+    explain_data['academic_profile'] = academic_profile
     if not isinstance(disease_risks_data, dict):
         disease_risks_data = {}
 

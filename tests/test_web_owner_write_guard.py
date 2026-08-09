@@ -40,6 +40,45 @@ def _new_owner(db_session, username, *, role="user"):
     return owner
 
 
+def test_guest_cannot_delete_medication_reminder(
+    client,
+    db_session,
+    monkeypatch,
+):
+    """游客 ID 不进入整数转换或私密提醒删除事务。"""
+    from blueprints import health as health_module
+
+    owner = _new_owner(db_session, "guest-delete-medication-owner")
+    reminder = MedicationReminder(
+        user_id=owner.id,
+        medicine_name="不可被游客删除",
+        frequency="daily",
+    )
+    db_session.add(reminder)
+    db_session.commit()
+    reminder_id = int(reminder.id)
+    monkeypatch.setattr(
+        health_module,
+        "owner_write_guard",
+        lambda *_args, **_kwargs: pytest.fail("游客不得进入提醒删除写锁"),
+    )
+    assert client.get("/guest", follow_redirects=False).status_code in (301, 302, 303)
+    with client.session_transaction() as session:
+        session["_csrf_token"] = "guest-delete-medication-csrf"
+
+    response = client.post(
+        f"/medication-reminders/{reminder_id}/delete",
+        data={"csrf_token": "guest-delete-medication-csrf"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code in (301, 302, 303)
+    location = response.headers.get("Location", "")
+    assert location.endswith("/dashboard")
+    assert "/forecast-7day" not in location
+    assert db_session.get(MedicationReminder, reminder_id) is not None
+
+
 @pytest.mark.parametrize(
     ("guard_module", "path", "payload"),
     (

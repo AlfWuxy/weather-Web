@@ -645,6 +645,9 @@ def medication_reminders():
 @login_required
 def medication_reminder_delete(reminder_id):
     """删除用药提醒"""
+    if is_guest_user(current_user):
+        flash('游客模式无法管理用药提醒，请注册/登录正式账号', 'error')
+        return redirect(url_for('user.user_dashboard'))
     owner_user_id = int(current_user.id)
     try:
         with owner_write_guard(owner_user_id):
