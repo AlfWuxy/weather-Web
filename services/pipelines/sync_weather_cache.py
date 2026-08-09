@@ -52,6 +52,18 @@ NOWCAST_CACHE_HOURS = 24
 SYNC_LEASE_SECONDS = 1800
 SYNC_LEASE_KEY = "weather:sync:cycle:v1"
 FORMAL_SMOKE_USED_PREFIX = "weather:sync:formal-smoke:v1"
+FORMAL_LEASE_RENEW_LUA = """
+if redis.call('GET', KEYS[1]) == ARGV[1] then
+    return redis.call('EXPIRE', KEYS[1], tonumber(ARGV[2]))
+end
+return 0
+"""
+FORMAL_LEASE_RELEASE_LUA = """
+if redis.call('GET', KEYS[1]) == ARGV[1] then
+    return redis.call('DEL', KEYS[1])
+end
+return 0
+"""
 _HOST_LOCK = threading.Lock()
 
 
@@ -191,13 +203,18 @@ def _consume_formal_smoke_ticket(
         raise WeatherSyncBusy("formal_smoke_ticket_consume_failed") from exc
 
 
-def reserve_formal_cycle_lease(lease_token):
-    """在 started receipt 形成前预占正式烟测的跨主机周期租约。"""
+def _validated_formal_lease_token(lease_token):
     lease_token = str(lease_token or "").strip()
     if len(lease_token) != 64 or any(
         character not in "0123456789abcdef" for character in lease_token
     ):
         raise WeatherSyncBusy("formal_smoke_lease_token_invalid")
+    return lease_token
+
+
+def reserve_formal_cycle_lease(lease_token):
+    """在生产变更前预占正式烟测的跨主机周期租约。"""
+    lease_token = _validated_formal_lease_token(lease_token)
     with app.app_context():
         client = get_qweather_redis_client()
         if client is None:
@@ -214,6 +231,47 @@ def reserve_formal_cycle_lease(lease_token):
         if not acquired:
             raise WeatherSyncBusy("redis_lease_busy")
     return True
+
+
+def renew_formal_cycle_lease(lease_token):
+    """仅当租约仍属于本事务时，原子续回完整 30 分钟。"""
+    lease_token = _validated_formal_lease_token(lease_token)
+    with app.app_context():
+        client = get_qweather_redis_client()
+        if client is None:
+            raise WeatherSyncBusy("redis_lease_unavailable")
+        try:
+            renewed = client.eval(
+                FORMAL_LEASE_RENEW_LUA,
+                1,
+                SYNC_LEASE_KEY,
+                lease_token,
+                SYNC_LEASE_SECONDS,
+            )
+        except Exception as exc:
+            raise WeatherSyncBusy("redis_lease_unavailable") from exc
+        if int(renewed or 0) != 1:
+            raise WeatherSyncBusy("formal_smoke_lease_invalid")
+    return True
+
+
+def release_formal_cycle_lease(lease_token):
+    """原子删除本事务仍持有的租约；陌生或已过期租约保持原状。"""
+    lease_token = _validated_formal_lease_token(lease_token)
+    with app.app_context():
+        client = get_qweather_redis_client()
+        if client is None:
+            raise WeatherSyncBusy("redis_lease_unavailable")
+        try:
+            released = client.eval(
+                FORMAL_LEASE_RELEASE_LUA,
+                1,
+                SYNC_LEASE_KEY,
+                lease_token,
+            )
+        except Exception as exc:
+            raise WeatherSyncBusy("redis_lease_unavailable") from exc
+    return int(released or 0) == 1
 
 
 def _acquire_distributed_cycle_lease():
@@ -621,24 +679,53 @@ def main(argv=None):
         action='store_true',
         help='正式发布受控烟测跳过短时预报',
     )
-    parser.add_argument(
+    lease_group = parser.add_mutually_exclusive_group()
+    lease_group.add_argument(
         '--reserve-formal-lease-only',
         action='store_true',
         help='只预占正式烟测的 30 分钟跨主机租约，不访问天气上游',
     )
+    lease_group.add_argument(
+        '--renew-formal-lease-only',
+        action='store_true',
+        help='仅在仍持有正式烟测租约时原子续回 30 分钟',
+    )
+    lease_group.add_argument(
+        '--release-formal-lease-only',
+        action='store_true',
+        help='仅在仍持有正式烟测租约时原子释放',
+    )
     args = parser.parse_args(argv)
 
-    if args.reserve_formal_lease_only:
+    if (
+        args.reserve_formal_lease_only
+        or args.renew_formal_lease_only
+        or args.release_formal_lease_only
+    ):
         if args.locations or args.no_daily or args.skip_nowcast:
-            parser.error('--reserve-formal-lease-only 不能与同步参数混用')
+            parser.error('正式租约控制参数不能与同步参数混用')
         try:
-            reserve_formal_cycle_lease(
-                os.getenv('CASE_WEATHER_FORMAL_SMOKE_LEASE_TOKEN', ''),
+            lease_token = os.getenv(
+                'CASE_WEATHER_FORMAL_SMOKE_LEASE_TOKEN',
+                '',
             )
+            if args.reserve_formal_lease_only:
+                reserve_formal_cycle_lease(lease_token)
+                message = 'Formal weather smoke lease reserved.'
+            elif args.renew_formal_lease_only:
+                renew_formal_cycle_lease(lease_token)
+                message = 'Formal weather smoke lease renewed.'
+            else:
+                released = release_formal_cycle_lease(lease_token)
+                message = (
+                    'Formal weather smoke lease released.'
+                    if released
+                    else 'Formal weather smoke lease already absent or foreign.'
+                )
         except WeatherSyncBusy as exc:
             logger.warning("Formal weather smoke lease unavailable: %s", exc)
             return 75
-        print('Formal weather smoke lease reserved.')
+        print(message)
         return 0
 
     result = sync_weather_cache(

@@ -796,6 +796,7 @@ def _prepare_transaction(
     for directory in (
         state_dir / 'instance',
         state_dir / 'backups',
+        state_dir / 'deployments',
         qweather_private_dir,
         old_release,
         new_release / 'app' / 'scripts',
@@ -825,6 +826,12 @@ def _prepare_transaction(
         encoding='utf-8',
     )
     current_link.symlink_to(old_release)
+    current_release_ledger = state_dir / 'deployments' / 'current-release'
+    current_release_ledger.write_text(
+        f'{old_release}\n',
+        encoding='utf-8',
+    )
+    current_release_ledger.chmod(0o600)
     root_crontab.write_bytes(
         (
             'MAILTO=ops@example.invalid\n'
@@ -1579,6 +1586,17 @@ def _configure_formal_smoke(transaction, *, provider='QWeather'):
     )
     transaction['qweather_pending_key'] = pending_key
     transaction['qweather_final_key'] = private_key
+    active_env = Path(transaction['env']['ENV_FILE'])
+    active_text = active_env.read_text(encoding='utf-8')
+    if (
+        'REDIS_URL=' not in active_text
+        and 'WEATHER_CACHE_REDIS_URL=' not in active_text
+    ):
+        active_env.write_text(
+            active_text + 'REDIS_URL=redis://127.0.0.1:6379/0\n',
+            encoding='utf-8',
+        )
+        active_env.chmod(0o600)
     staged_text = f"""DEBUG=false
 WECHAT_FORMAL_RUNTIME=1
 WEB_PRIVATE_FEATURES_ENABLED=1
@@ -1668,20 +1686,120 @@ print(json.dumps({{
     transaction['env']['QWEATHER_BUDGET_SNAPSHOT_HELPER'] = str(budget_helper)
     lease_token_file = transaction['state_dir'] / 'formal-smoke-lease-token'
     lease_mode_file = transaction['state_dir'] / 'formal-smoke-lease-mode'
+    lease_reservation_count = (
+        transaction['state_dir'] / 'formal-smoke-lease-reservation-count'
+    )
+    lease_renewal_count = (
+        transaction['state_dir'] / 'formal-smoke-lease-renewal-count'
+    )
+    lease_release_count = (
+        transaction['state_dir'] / 'formal-smoke-lease-release-count'
+    )
+    lease_observation_file = (
+        transaction['state_dir'] / 'formal-smoke-lease-observation.json'
+    )
+    lease_action_log = transaction['state_dir'] / 'formal-smoke-lease-actions.log'
     lease_helper = transaction['state_dir'] / 'formal-smoke-lease-reserve'
     _write_executable(
         lease_helper,
         f"""#!/usr/bin/env python3
+import json
 import os
+import sqlite3
+import time
 from pathlib import Path
 
 token = os.environ.get('CASE_WEATHER_FORMAL_SMOKE_LEASE_TOKEN', '')
 if len(token) != 64 or any(char not in '0123456789abcdef' for char in token):
     raise SystemExit(92)
+action = os.environ.get('CASE_WEATHER_FORMAL_SMOKE_LEASE_ACTION', '')
 mode_file = Path({str(lease_mode_file)!r})
-if mode_file.exists() and mode_file.read_text(encoding='utf-8').strip() == 'busy':
-    raise SystemExit(75)
-Path({str(lease_token_file)!r}).write_text(token, encoding='ascii')
+mode = mode_file.read_text(encoding='utf-8').strip() if mode_file.exists() else ''
+token_file = Path({str(lease_token_file)!r})
+action_log = Path({str(lease_action_log)!r})
+with action_log.open('a', encoding='utf-8') as handle:
+    handle.write(action + '\\n')
+
+def increment(path_value):
+    path = Path(path_value)
+    count = int(path.read_text(encoding='utf-8')) + 1 if path.exists() else 1
+    path.write_text(str(count), encoding='utf-8')
+
+if action == 'reserve':
+    increment({str(lease_reservation_count)!r})
+    transaction_root = Path({str(transaction['state_dir'] / 'backups' / 'deploy-transactions')!r})
+    journals = list(transaction_root.glob('*/formal-smoke-lease.journal'))
+    if len(journals) != 1:
+        raise SystemExit(94)
+    journal_values = {{}}
+    for line in journals[0].read_text(encoding='utf-8').splitlines():
+        key, separator, value = line.partition('=')
+        if not separator or key in journal_values:
+            raise SystemExit(95)
+        journal_values[key] = value
+    if (
+        set(journal_values)
+        != {{'transaction_id', 'redis_backend_sha256', 'lease_token'}}
+        or journal_values['transaction_id'] != journals[0].parent.name
+        or journal_values['lease_token'] != token
+        or len(journal_values['redis_backend_sha256']) != 64
+        or any(
+            char not in '0123456789abcdef'
+            for char in journal_values['redis_backend_sha256']
+        )
+    ):
+        raise SystemExit(96)
+    active_env = Path({str(transaction['state_dir'] / '.env')!r})
+    active_values = {{}}
+    for line in active_env.read_text(encoding='utf-8').splitlines():
+        key, separator, value = line.partition('=')
+        if separator:
+            active_values[key] = value
+    with sqlite3.connect({str(transaction['database_file'])!r}) as connection:
+        database_value = connection.execute(
+            'SELECT value FROM release_state'
+        ).fetchone()[0]
+    systemctl_log = Path({str(transaction['systemctl_log'])!r})
+    Path({str(lease_observation_file)!r}).write_text(
+        json.dumps({{
+            'active_env_release': active_values.get('RELEASE_VALUE'),
+            'current_release': str(Path({str(transaction['current_link'])!r}).resolve()),
+            'database_value': database_value,
+            'lease_env_file': os.environ.get('CASE_WEATHER_ENV_FILE'),
+            'lease_journal_fields': sorted(journal_values),
+            'lease_journal_precedes_reserve': True,
+            'systemctl_actions': (
+                systemctl_log.read_text(encoding='utf-8').splitlines()
+                if systemctl_log.exists()
+                else []
+            ),
+        }}, sort_keys=True),
+        encoding='utf-8',
+    )
+    if mode == 'busy':
+        raise SystemExit(75)
+    token_file.write_text(token, encoding='ascii')
+    if mode == 'error-after-reserve':
+        raise SystemExit(75)
+    if mode == 'pause-after-reserve':
+        while True:
+            time.sleep(0.05)
+elif action == 'renew':
+    increment({str(lease_renewal_count)!r})
+    if mode == 'expire-before-renew':
+        token_file.unlink(missing_ok=True)
+        raise SystemExit(75)
+    if mode == 'foreign-before-renew':
+        token_file.write_text('f' * 64, encoding='ascii')
+        raise SystemExit(75)
+    if not token_file.exists() or token_file.read_text(encoding='ascii') != token:
+        raise SystemExit(75)
+elif action == 'release':
+    increment({str(lease_release_count)!r})
+    if token_file.exists() and token_file.read_text(encoding='ascii') == token:
+        token_file.unlink()
+else:
+    raise SystemExit(93)
 """,
     )
     transaction['env']['FORMAL_SMOKE_LEASE_HELPER'] = str(lease_helper)
@@ -3007,6 +3125,9 @@ def test_candidate_health_failure_rolls_back_new_code_database_and_units(tmp_pat
     assert result.returncode != 0
     assert transaction['current_link'].resolve() == transaction['old_release'].resolve()
     assert _database_value(transaction['database_file']) == 'old'
+    assert (
+        transaction['state_dir'] / 'deployments' / 'current-release'
+    ).read_text(encoding='utf-8').strip() == str(transaction['old_release'])
     assert 'RELEASE_VALUE=old' in (transaction['state_dir'] / '.env').read_text(encoding='utf-8')
     for unit in ALL_UNITS:
         assert (transaction['unit_dir'] / unit).read_text(encoding='utf-8') == f'old unit {unit}\n'
@@ -3054,6 +3175,9 @@ def test_candidate_weather_contract_failure_is_forward_only_after_formal_smoke(
     assert counter_file.read_text(encoding='utf-8') == '1'
     assert transaction['current_link'].resolve() == transaction['new_release'].resolve()
     assert _database_value(transaction['database_file']) == 'new'
+    assert (
+        transaction['state_dir'] / 'deployments' / 'current-release'
+    ).read_text(encoding='utf-8').strip() == str(transaction['new_release'])
     forward_markers = list(
         (transaction['state_dir'] / 'backups').rglob('FORWARD_ONLY_REQUIRED')
     )
@@ -3693,7 +3817,7 @@ def test_web_backend_formal_runtime_requires_miniprogram_proof_before_mutation(
     assert not counter_file.exists()
 
 
-def test_formal_runtime_log_guard_runs_after_lock_before_capture_and_mutation(tmp_path):
+def test_formal_runtime_log_guard_runs_after_lease_before_mutation(tmp_path):
     transaction = _prepare_transaction(tmp_path)
     _configure_formal_smoke(transaction)
     lock_marker = tmp_path / 'deploy-lock-acquired'
@@ -3735,6 +3859,9 @@ event = {{
         os.environ['FAKE_DEPLOY_LOCK_ACQUIRED']
     ).is_file(),
     'transaction_exists': Path(transaction_path).exists(),
+    'lease_reserved': Path(
+        {str(transaction['state_dir'] / 'formal-smoke-lease-token')!r}
+    ).is_file(),
     'mutation_started': mutation_started,
     'current_is_old': current_link.resolve() == Path(
         {str(transaction['old_release'])!r}
@@ -3751,32 +3878,32 @@ Path({str(audit_file)!r}).write_text(
 if not all((
     event['lock_file_exists'],
     event['flock_marker_exists'],
-    not event['transaction_exists'],
+    event['transaction_exists'],
+    event['lease_reserved'],
     event['mutation_started'] == '0',
     event['current_is_old'],
     event['database_value'] == 'old',
     event['live_env_is_old'],
 )):
     raise SystemExit(91)
+raise SystemExit(47)
 """,
     )
     transaction['env'].update({
         'FLOCK_BIN': str(fake_flock),
         'FAKE_DEPLOY_LOCK_ACQUIRED': str(lock_marker),
         'RUNTIME_LOG_BOUNDARY_TEST_HELPER': str(helper),
-        # helper 成功后让 capture_previous_state 失败，避免进入发布 mutation。
-        'FAKE_FAIL_LOAD_STATE_QUERY': 'case-weather-backup.timer',
     })
 
     result = _run_activation(transaction)
 
-    assert result.returncode != 0
-    assert '无法可靠读取 systemd 单元 LoadState' in result.stderr
+    assert result.returncode == 47
     assert json.loads(audit_file.read_text(encoding='utf-8')) == {
         'lock_argument': str(transaction['release_root'] / 'deploy.lock'),
         'lock_file_exists': True,
         'flock_marker_exists': True,
-        'transaction_exists': False,
+        'transaction_exists': True,
+        'lease_reserved': True,
         'mutation_started': '0',
         'current_is_old': True,
         'database_value': 'old',
@@ -3784,6 +3911,17 @@ if not all((
     }
     assert transaction['current_link'].resolve() == transaction['old_release'].resolve()
     assert _database_value(transaction['database_file']) == 'old'
+    assert not (
+        transaction['state_dir'] / 'formal-smoke-lease-token'
+    ).exists()
+    assert (
+        transaction['state_dir'] / 'formal-smoke-lease-release-count'
+    ).read_text(encoding='utf-8') == '1'
+    rollback_markers = list(
+        (transaction['state_dir'] / 'backups').rglob('ROLLED_BACK')
+    )
+    assert len(rollback_markers) == 1
+    assert rollback_markers[0].read_text(encoding='utf-8').strip() == 'pre-mutation'
 
 
 def test_formal_runtime_log_guard_failure_leaves_production_state_unchanged(tmp_path):
@@ -3794,11 +3932,6 @@ def test_formal_runtime_log_guard_failure_leaves_production_state_unchanged(tmp_
     transaction['env']['RUNTIME_LOG_BOUNDARY_TEST_HELPER'] = str(helper)
     live_env_before = (transaction['state_dir'] / '.env').read_bytes()
     staged_env_before = (transaction['new_release'] / 'staged.env').read_bytes()
-    systemctl_before = (
-        transaction['systemctl_log'].read_bytes()
-        if transaction['systemctl_log'].exists()
-        else b''
-    )
 
     result = _run_activation(transaction)
 
@@ -3807,15 +3940,25 @@ def test_formal_runtime_log_guard_failure_leaves_production_state_unchanged(tmp_
     assert _database_value(transaction['database_file']) == 'old'
     assert (transaction['state_dir'] / '.env').read_bytes() == live_env_before
     assert (transaction['new_release'] / 'staged.env').read_bytes() == staged_env_before
-    assert not list(
-        (transaction['state_dir'] / 'backups' / 'deploy-transactions').iterdir()
+    rollback_markers = list(
+        (transaction['state_dir'] / 'backups').rglob('ROLLED_BACK')
     )
-    systemctl_after = (
-        transaction['systemctl_log'].read_bytes()
-        if transaction['systemctl_log'].exists()
-        else b''
+    assert len(rollback_markers) == 1
+    assert rollback_markers[0].read_text(encoding='utf-8').strip() == 'pre-mutation'
+    assert not (
+        transaction['state_dir'] / 'formal-smoke-lease-token'
+    ).exists()
+    assert (
+        transaction['state_dir'] / 'formal-smoke-lease-release-count'
+    ).read_text(encoding='utf-8') == '1'
+    assert not any(
+        action.split()[0] in {
+            'daemon-reload', 'disable', 'enable', 'reload', 'restart', 'start', 'stop',
+        }
+        for action in transaction['systemctl_log'].read_text(
+            encoding='utf-8'
+        ).splitlines()
     )
-    assert systemctl_after == systemctl_before
 
 
 def test_formal_runtime_log_guard_forces_local_probe_to_bypass_proxy():
@@ -4061,6 +4204,14 @@ def test_completed_receipt_is_reused_after_pre_public_failure(tmp_path):
 
     assert first.returncode != 0
     assert counter_file.read_text(encoding='utf-8') == '1'
+    lease_reservation_count = (
+        transaction['state_dir'] / 'formal-smoke-lease-reservation-count'
+    )
+    lease_renewal_count = (
+        transaction['state_dir'] / 'formal-smoke-lease-renewal-count'
+    )
+    assert lease_reservation_count.read_text(encoding='utf-8') == '1'
+    assert lease_renewal_count.read_text(encoding='utf-8') == '1'
     receipt_dirs = list(
         (transaction['state_dir'] / 'deployments' / 'formal-cache-smokes').iterdir()
     )
@@ -4088,6 +4239,7 @@ def test_completed_receipt_is_reused_after_pre_public_failure(tmp_path):
     for unit in ALL_UNITS:
         assert not (transaction['fake_state'] / f'{unit}.active').exists()
 
+    forward_release = transaction['new_release']
     _retarget_formal_retry(transaction)
     (transaction['new_release'] / 'staged.env').write_text(
         (transaction['state_dir'] / '.env').read_text(encoding='utf-8'),
@@ -4095,12 +4247,26 @@ def test_completed_receipt_is_reused_after_pre_public_failure(tmp_path):
     )
     transaction['env']['FAKE_PUBLIC_HEALTH_OK'] = '1'
     transaction['env']['RECOVERY_ACKNOWLEDGED_TRANSACTION'] = str(markers[0].parent)
+    current_release_ledger = (
+        transaction['state_dir'] / 'deployments' / 'current-release'
+    )
+    current_release_ledger.write_text(
+        f'{transaction["old_release"]}\n',
+        encoding='utf-8',
+    )
 
     second = _run_activation(transaction)
 
     assert second.returncode == 0, second.stderr
     assert counter_file.read_text(encoding='utf-8') == '1'
+    assert lease_reservation_count.read_text(encoding='utf-8') == '1'
+    assert lease_renewal_count.read_text(encoding='utf-8') == '1'
     assert '未再次请求上游' in second.stdout
+    assert (
+        markers[0].parent / 'CURRENT_RELEASE_RECONCILED'
+    ).read_text(encoding='utf-8') == (
+        f'release={forward_release}\n'
+    )
 
 
 def test_quarantine_stops_other_units_when_backup_state_query_fails(tmp_path):
@@ -4158,6 +4324,21 @@ def test_formal_qweather_smoke_writes_completed_receipt_and_reuses_without_reque
         started_text,
         re.MULTILINE,
     )
+    lease_token = (
+        transaction['state_dir'] / 'formal-smoke-lease-token'
+    ).read_text(encoding='ascii')
+    assert (
+        f'formal_smoke_lease_token_sha256='
+        f'{hashlib.sha256(lease_token.encode("ascii")).hexdigest()}'
+    ) in started_text
+    lease_reservation_count = (
+        transaction['state_dir'] / 'formal-smoke-lease-reservation-count'
+    )
+    lease_renewal_count = (
+        transaction['state_dir'] / 'formal-smoke-lease-renewal-count'
+    )
+    assert lease_reservation_count.read_text(encoding='utf-8') == '1'
+    assert lease_renewal_count.read_text(encoding='utf-8') == '1'
     assert list((transaction['state_dir'] / 'run').glob('formal-weather-smoke-*.ticket')) == []
     completed_text = (receipt / 'completed').read_text(encoding='utf-8')
     assert 'snapshot_id=formal-snapshot-1' in (receipt / 'completed').read_text(
@@ -4193,6 +4374,8 @@ def test_formal_qweather_smoke_writes_completed_receipt_and_reuses_without_reque
 
     assert second.returncode == 0, second.stderr
     assert counter_file.read_text(encoding='utf-8') == '1'
+    assert lease_reservation_count.read_text(encoding='utf-8') == '1'
+    assert lease_renewal_count.read_text(encoding='utf-8') == '1'
     assert '未再次请求上游' in second.stdout
     assert list(
         (transaction['state_dir'] / 'deployments' / 'formal-cache-smokes').iterdir()
@@ -4228,6 +4411,127 @@ def test_qweather_kid_change_creates_new_weather_fingerprint(tmp_path):
     )
     assert len(receipt_dirs) == 2
     assert all((receipt / 'completed').is_file() for receipt in receipt_dirs)
+
+
+def test_weather_cache_redis_backend_change_is_rejected_before_mutation(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    _staged_text, counter_file = _configure_formal_smoke(transaction)
+    first = _run_activation(transaction)
+    assert first.returncode == 0, first.stderr
+    assert counter_file.read_text(encoding='utf-8') == '1'
+
+    redis_config = (transaction['state_dir'] / '.env').read_text(
+        encoding='utf-8'
+    )
+    assert 'WEATHER_CACHE_REDIS_URL=' not in redis_config
+    redis_config += 'WEATHER_CACHE_REDIS_URL=redis://127.0.0.1:6379/9\n'
+    (transaction['new_release'] / 'staged.env').write_text(
+        redis_config,
+        encoding='utf-8',
+    )
+
+    transaction_count_before = len(list(
+        (
+            transaction['state_dir']
+            / 'backups'
+            / 'deploy-transactions'
+        ).iterdir()
+    ))
+    current_before = transaction['current_link'].resolve()
+    database_before = _database_value(transaction['database_file'])
+    environment_before = (transaction['state_dir'] / '.env').read_bytes()
+    transaction['systemctl_log'].write_text('', encoding='utf-8')
+
+    second = _run_activation(transaction)
+
+    assert second.returncode != 0
+    assert '有效 Redis 后端不同' in second.stderr
+    assert counter_file.read_text(encoding='utf-8') == '1'
+    receipt_dirs = list(
+        (transaction['state_dir'] / 'deployments' / 'formal-cache-smokes').iterdir()
+    )
+    assert len(receipt_dirs) == 1
+    assert all((receipt / 'completed').is_file() for receipt in receipt_dirs)
+    assert transaction['current_link'].resolve() == current_before
+    assert _database_value(transaction['database_file']) == database_before
+    assert (transaction['state_dir'] / '.env').read_bytes() == environment_before
+    assert len(list(
+        (
+            transaction['state_dir']
+            / 'backups'
+            / 'deploy-transactions'
+        ).iterdir()
+    )) == transaction_count_before
+    assert transaction['systemctl_log'].read_text(encoding='utf-8') == ''
+
+
+def test_equivalent_effective_redis_urls_share_one_backend_identity(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    staged_text, counter_file = _configure_formal_smoke(transaction)
+    active_env = Path(transaction['env']['ENV_FILE'])
+    active_env.write_text(
+        active_env.read_text(encoding='utf-8').replace(
+            'REDIS_URL=redis://127.0.0.1:6379/0',
+            'REDIS_URL=redis://LOCALHOST/0',
+        ),
+        encoding='utf-8',
+    )
+    (transaction['new_release'] / 'staged.env').write_text(
+        staged_text.replace(
+            'REDIS_URL=redis://127.0.0.1:6379/0',
+            'REDIS_URL=redis://localhost:6379/0',
+        ),
+        encoding='utf-8',
+    )
+
+    result = _run_activation(transaction)
+
+    assert result.returncode == 0, result.stderr
+    assert counter_file.read_text(encoding='utf-8') == '1'
+
+
+def test_duplicate_redis_query_keys_are_rejected_before_formal_mutation(
+    tmp_path,
+):
+    transaction = _prepare_transaction(tmp_path)
+    staged_text, counter_file = _configure_formal_smoke(transaction)
+    active_env = Path(transaction['env']['ENV_FILE'])
+    active_env.write_text(
+        active_env.read_text(encoding='utf-8').replace(
+            'redis://127.0.0.1:6379/0',
+            'redis://127.0.0.1/0?port=6380&port=6379',
+        ),
+        encoding='utf-8',
+    )
+    (transaction['new_release'] / 'staged.env').write_text(
+        staged_text.replace(
+            'redis://127.0.0.1:6379/0',
+            'redis://127.0.0.1/0?port=6379&port=6380',
+        ),
+        encoding='utf-8',
+    )
+
+    result = _run_activation(transaction)
+
+    assert result.returncode != 0
+    assert 'Redis 后端身份无法安全解析' in result.stderr
+    assert not counter_file.exists()
+    assert transaction['current_link'].resolve() == transaction['old_release'].resolve()
+    assert _database_value(transaction['database_file']) == 'old'
+    transaction_root = (
+        transaction['state_dir'] / 'backups' / 'deploy-transactions'
+    )
+    assert transaction_root.is_dir()
+    assert list(transaction_root.iterdir()) == []
+    systemctl_actions = (
+        transaction['systemctl_log'].read_text(encoding='utf-8').splitlines()
+        if transaction['systemctl_log'].exists()
+        else []
+    )
+    assert not any(
+        action.split()[0] in {'disable', 'enable', 'restart', 'start', 'stop'}
+        for action in systemctl_actions
+    )
 
 
 def test_lost_completed_receipt_never_retries_the_weather_request(tmp_path):
@@ -4873,6 +5177,15 @@ exit 0
     assert not (
         transaction['state_dir'] / 'deployments' / 'formal-cache-smokes'
     ).exists()
+    assert not (
+        transaction['state_dir'] / 'formal-smoke-lease-token'
+    ).exists()
+    assert (
+        transaction['state_dir'] / 'formal-smoke-lease-reservation-count'
+    ).read_text(encoding='utf-8') == '1'
+    assert (
+        transaction['state_dir'] / 'formal-smoke-lease-release-count'
+    ).read_text(encoding='utf-8') == '1'
 
 
 def test_formal_smoke_busy_global_lease_fails_before_started_receipt(tmp_path):
@@ -4886,18 +5199,274 @@ def test_formal_smoke_busy_global_lease_fails_before_started_receipt(tmp_path):
     result = _run_activation(transaction)
 
     assert result.returncode != 0
-    assert '无法在 started receipt 前取得全局租约' in result.stderr
+    assert '无法在生产变更前取得全局租约' in result.stderr
     assert not counter_file.exists()
     receipt_root = (
         transaction['state_dir'] / 'deployments' / 'formal-cache-smokes'
     )
-    assert receipt_root.is_dir()
-    assert list(receipt_root.iterdir()) == []
+    assert not receipt_root.exists()
     assert list(
         (transaction['state_dir'] / 'run').glob('formal-weather-smoke-*.ticket')
     ) == []
     assert transaction['current_link'].resolve() == transaction['old_release'].resolve()
     assert _database_value(transaction['database_file']) == 'old'
+    assert 'RELEASE_VALUE=old' in (
+        transaction['state_dir'] / '.env'
+    ).read_text(encoding='utf-8')
+    assert (
+        transaction['state_dir'] / 'deployments' / 'current-release'
+    ).read_text(encoding='utf-8').strip() == str(transaction['old_release'])
+    observation = json.loads(
+        (
+            transaction['state_dir'] / 'formal-smoke-lease-observation.json'
+        ).read_text(encoding='utf-8')
+    )
+    assert observation['active_env_release'] == 'old'
+    assert observation['current_release'] == str(transaction['old_release'])
+    assert observation['database_value'] == 'old'
+    assert observation['lease_env_file'] == str(
+        transaction['new_release'] / 'staged.env'
+    )
+    assert observation['lease_journal_precedes_reserve'] is True
+    assert observation['lease_journal_fields'] == [
+        'lease_token',
+        'redis_backend_sha256',
+        'transaction_id',
+    ]
+    assert not any(
+        action.split()[0] in {'disable', 'enable', 'restart', 'start', 'stop'}
+        for action in observation['systemctl_actions']
+    )
+    rollback_markers = list(
+        (transaction['state_dir'] / 'backups').rglob('ROLLED_BACK')
+    )
+    assert len(rollback_markers) == 1
+    assert rollback_markers[0].read_text(encoding='utf-8').strip() == 'pre-mutation'
+    assert not (rollback_markers[0].parent / 'formal-smoke-lease.journal').exists()
+
+
+def test_formal_smoke_unknown_reserve_result_releases_from_durable_journal(
+    tmp_path,
+):
+    transaction = _prepare_transaction(tmp_path)
+    _staged_text, counter_file = _configure_formal_smoke(transaction)
+    (transaction['state_dir'] / 'formal-smoke-lease-mode').write_text(
+        'error-after-reserve\n',
+        encoding='utf-8',
+    )
+
+    result = _run_activation(transaction)
+
+    assert result.returncode != 0
+    assert '无法在生产变更前取得全局租约' in result.stderr
+    assert not counter_file.exists()
+    assert not (
+        transaction['state_dir'] / 'formal-smoke-lease-token'
+    ).exists()
+    assert (
+        transaction['state_dir'] / 'formal-smoke-lease-reservation-count'
+    ).read_text(encoding='utf-8') == '1'
+    assert (
+        transaction['state_dir'] / 'formal-smoke-lease-release-count'
+    ).read_text(encoding='utf-8') == '1'
+    assert (
+        transaction['state_dir'] / 'formal-smoke-lease-actions.log'
+    ).read_text(encoding='utf-8').splitlines() == ['reserve', 'release']
+    rollback_markers = list(
+        (transaction['state_dir'] / 'backups').rglob('ROLLED_BACK')
+    )
+    assert len(rollback_markers) == 1
+    assert rollback_markers[0].read_text(encoding='utf-8').strip() == 'pre-mutation'
+    assert not (rollback_markers[0].parent / 'formal-smoke-lease.journal').exists()
+    assert transaction['current_link'].resolve() == transaction['old_release'].resolve()
+    assert _database_value(transaction['database_file']) == 'old'
+
+
+def test_sigkill_before_started_receipt_is_recovered_from_lease_journal(
+    tmp_path,
+):
+    transaction = _prepare_transaction(tmp_path)
+    _configure_formal_smoke(transaction)
+    mode_file = transaction['state_dir'] / 'formal-smoke-lease-mode'
+    mode_file.write_text('pause-after-reserve\n', encoding='utf-8')
+    _write_candidate_base_state(transaction)
+    process = subprocess.Popen(
+        ['bash', str(ACTIVATE_SCRIPT)],
+        cwd=ROOT,
+        env=transaction['env'],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        start_new_session=True,
+    )
+    transaction_root = (
+        transaction['state_dir'] / 'backups' / 'deploy-transactions'
+    )
+    token_file = transaction['state_dir'] / 'formal-smoke-lease-token'
+    journal = None
+    try:
+        for _attempt in range(200):
+            journals = list(transaction_root.glob('*/formal-smoke-lease.journal'))
+            if token_file.is_file() and len(journals) == 1:
+                journal = journals[0]
+                break
+            if process.poll() is not None:
+                break
+            time.sleep(0.05)
+        assert process.poll() is None
+        assert journal is not None
+        journal_payload = journal.read_text(encoding='utf-8')
+        journal_values = dict(
+            line.split('=', 1) for line in journal_payload.splitlines()
+        )
+        assert set(journal_values) == {
+            'transaction_id',
+            'redis_backend_sha256',
+            'lease_token',
+        }
+        assert journal_values['transaction_id'] == journal.parent.name
+        assert journal_values['lease_token'] == token_file.read_text(encoding='ascii')
+        assert re.fullmatch(
+            r'[0-9a-f]{64}',
+            journal_values['redis_backend_sha256'],
+        )
+        assert 'redis://' not in journal_payload
+        os.killpg(process.pid, signal.SIGKILL)
+        process.communicate(timeout=10)
+    finally:
+        if process.poll() is None:
+            os.killpg(process.pid, signal.SIGKILL)
+            process.communicate(timeout=10)
+
+    assert process.returncode == -signal.SIGKILL
+    assert journal.is_file()
+    assert token_file.is_file()
+    mode_file.unlink()
+
+    retry = _run_activation(transaction)
+
+    assert retry.returncode != 0
+    assert '未完成事务' in retry.stderr
+    assert '已用 owner token 安全回收' in retry.stdout
+    assert not journal.exists()
+    assert not token_file.exists()
+    assert (
+        transaction['state_dir'] / 'formal-smoke-lease-actions.log'
+    ).read_text(encoding='utf-8').splitlines() == ['reserve', 'release']
+    assert transaction['current_link'].resolve() == transaction['old_release'].resolve()
+    assert _database_value(transaction['database_file']) == 'old'
+    assert not any(
+        action.split()[0] in {'disable', 'enable', 'restart', 'start', 'stop'}
+        for action in transaction['systemctl_log'].read_text(
+            encoding='utf-8'
+        ).splitlines()
+    )
+
+
+def test_corrupt_forward_marker_with_old_current_never_rewrites_release_ledger(
+    tmp_path,
+):
+    transaction = _prepare_transaction(tmp_path)
+    _configure_formal_smoke(transaction)
+    corrupting_helper = transaction['state_dir'] / 'corrupt-forward-marker-helper'
+    transaction_root = (
+        transaction['state_dir'] / 'backups' / 'deploy-transactions'
+    )
+    _write_executable(
+        corrupting_helper,
+        f"""#!/usr/bin/env python3
+import os
+from pathlib import Path
+
+if os.environ.get('CASE_WEATHER_FORMAL_SMOKE_LEASE_ACTION') != 'reserve':
+    raise SystemExit(93)
+transactions = list(Path({str(transaction_root)!r}).iterdir())
+if len(transactions) != 1:
+    raise SystemExit(94)
+marker = transactions[0] / 'FORWARD_ONLY_REQUIRED'
+marker.write_text('phase=corrupt\\n', encoding='utf-8')
+marker.chmod(0o600)
+raise SystemExit(75)
+""",
+    )
+    transaction['env']['FORMAL_SMOKE_LEASE_HELPER'] = str(corrupting_helper)
+
+    result = _run_activation(transaction)
+
+    assert result.returncode == 70
+    assert 'current 链接与目标版本不一致' in result.stderr
+    assert transaction['current_link'].resolve() == transaction['old_release'].resolve()
+    assert _database_value(transaction['database_file']) == 'old'
+    assert (
+        transaction['state_dir'] / 'deployments' / 'current-release'
+    ).read_text(encoding='utf-8').strip() == str(transaction['old_release'])
+    assert not list(
+        (transaction['state_dir'] / 'deployments').glob('current-release.next.*')
+    )
+    attention = list(
+        (transaction['state_dir'] / 'backups').rglob('POST_COMMIT_ATTENTION.txt')
+    )
+    assert len(attention) == 1
+    assert (
+        attention[0].parent / 'FORWARD_ONLY_REQUIRED'
+    ).read_text(encoding='utf-8') == 'phase=corrupt\n'
+    assert not (attention[0].parent / 'COMMITTED').exists()
+
+
+@pytest.mark.parametrize(
+    ('lease_mode', 'remaining_token'),
+    (
+        ('expire-before-renew', None),
+        ('foreign-before-renew', 'f' * 64),
+    ),
+)
+def test_formal_smoke_lease_renewal_failure_rolls_back_before_started_receipt(
+    tmp_path,
+    lease_mode,
+    remaining_token,
+):
+    transaction = _prepare_transaction(tmp_path)
+    _staged_text, counter_file = _configure_formal_smoke(transaction)
+    (transaction['state_dir'] / 'formal-smoke-lease-mode').write_text(
+        f'{lease_mode}\n',
+        encoding='utf-8',
+    )
+
+    result = _run_activation(transaction)
+
+    assert result.returncode != 0
+    assert '租约在不可逆 receipt 前已过期或不再属于本事务' in result.stderr
+    assert not counter_file.exists()
+    assert transaction['current_link'].resolve() == transaction['old_release'].resolve()
+    assert _database_value(transaction['database_file']) == 'old'
+    assert 'RELEASE_VALUE=old' in (
+        transaction['state_dir'] / '.env'
+    ).read_text(encoding='utf-8')
+    assert (
+        transaction['state_dir'] / 'deployments' / 'current-release'
+    ).read_text(encoding='utf-8').strip() == str(transaction['old_release'])
+    assert not list(
+        (transaction['state_dir'] / 'backups').rglob('FORWARD_ONLY_REQUIRED')
+    )
+    receipt_root = (
+        transaction['state_dir'] / 'deployments' / 'formal-cache-smokes'
+    )
+    assert receipt_root.is_dir()
+    assert list(receipt_root.iterdir()) == []
+    assert (
+        transaction['state_dir'] / 'formal-smoke-lease-reservation-count'
+    ).read_text(encoding='utf-8') == '1'
+    assert (
+        transaction['state_dir'] / 'formal-smoke-lease-renewal-count'
+    ).read_text(encoding='utf-8') == '1'
+    assert (
+        transaction['state_dir'] / 'formal-smoke-lease-release-count'
+    ).read_text(encoding='utf-8') == '1'
+    token_file = transaction['state_dir'] / 'formal-smoke-lease-token'
+    if remaining_token is None:
+        assert not token_file.exists()
+    else:
+        assert token_file.read_text(encoding='ascii') == remaining_token
 
 
 def test_formal_fallback_snapshot_is_rejected_and_started_receipt_blocks_retry(tmp_path):
@@ -5006,9 +5575,32 @@ def test_completed_receipt_with_expired_snapshot_fails_closed_without_request(tm
         (transaction['state_dir'] / '.env').read_text(encoding='utf-8'),
         encoding='utf-8',
     )
+    current_before = transaction['current_link'].resolve()
+    environment_before = (transaction['state_dir'] / '.env').read_bytes()
+    transaction['systemctl_log'].write_text('', encoding='utf-8')
 
     second = _run_activation(transaction)
 
     assert second.returncode != 0
     assert '持久化快照不可用或已经过期' in second.stderr
     assert counter_file.read_text(encoding='utf-8') == '1'
+    assert transaction['current_link'].resolve() == current_before
+    assert _database_value(transaction['database_file']) == 'new'
+    assert (transaction['state_dir'] / '.env').read_bytes() == environment_before
+    assert (
+        transaction['state_dir'] / 'deployments' / 'current-release'
+    ).read_text(encoding='utf-8').strip() == str(current_before)
+    assert (
+        transaction['state_dir'] / 'formal-smoke-lease-reservation-count'
+    ).read_text(encoding='utf-8') == '1'
+    assert not any(
+        action.split()[0] in {'disable', 'enable', 'reload', 'restart', 'start', 'stop'}
+        for action in transaction['systemctl_log'].read_text(
+            encoding='utf-8'
+        ).splitlines()
+    )
+    rollback_markers = list(
+        (transaction['state_dir'] / 'backups').rglob('ROLLED_BACK')
+    )
+    assert len(rollback_markers) == 1
+    assert rollback_markers[0].read_text(encoding='utf-8').strip() == 'pre-mutation'

@@ -9,19 +9,37 @@ import pytest
 
 
 class _LeaseRedis:
-    def __init__(self, accepted=True, values=None):
+    def __init__(self, accepted=True, values=None, ttl_seconds=1800):
         self.accepted = accepted
         self.calls = []
+        self.eval_calls = []
         self.values = dict(values or {})
+        self.ttl_seconds = ttl_seconds
 
     def set(self, key, value, **kwargs):
         self.calls.append((key, value, kwargs))
         if self.accepted:
             self.values[key] = value
+            self.ttl_seconds = kwargs.get("ex", self.ttl_seconds)
         return self.accepted
 
     def get(self, key):
         return self.values.get(key)
+
+    def eval(self, script, numkeys, key, *arguments):
+        self.eval_calls.append((script, numkeys, key, arguments))
+        token = arguments[0]
+        if "EXPIRE" in script:
+            if self.values.get(key) != token:
+                return 0
+            self.ttl_seconds = int(arguments[1])
+            return 1
+        if "DEL" in script:
+            if self.values.get(key) != token:
+                return 0
+            del self.values[key]
+            return 1
+        raise AssertionError("unexpected Lua script")
 
 
 def test_production_cycle_rejects_busy_redis_lease_before_fetcher(app, monkeypatch):
@@ -161,6 +179,64 @@ def test_formal_smoke_lease_reservation_fails_before_receipt_when_busy(
     assert len(fake_redis.calls) == 1
     assert fake_redis.calls[0][0] == pipeline.SYNC_LEASE_KEY
     assert fake_redis.calls[0][2] == {"nx": True, "ex": 1800}
+
+
+def test_formal_smoke_lease_renew_is_atomic_and_owner_bound(app, monkeypatch):
+    from services.pipelines import sync_weather_cache as pipeline
+
+    lease_token = "a" * 64
+    fake_redis = _LeaseRedis(
+        values={pipeline.SYNC_LEASE_KEY: lease_token},
+        ttl_seconds=1,
+    )
+    monkeypatch.setattr(pipeline, "app", app)
+    monkeypatch.setattr(pipeline, "get_qweather_redis_client", lambda: fake_redis)
+
+    assert pipeline.renew_formal_cycle_lease(lease_token) is True
+
+    assert fake_redis.values[pipeline.SYNC_LEASE_KEY] == lease_token
+    assert fake_redis.ttl_seconds == pipeline.SYNC_LEASE_SECONDS
+    assert len(fake_redis.eval_calls) == 1
+    assert fake_redis.calls == []
+
+
+def test_formal_smoke_lease_renew_rejects_missing_or_foreign_owner(
+    app,
+    monkeypatch,
+):
+    from services.pipelines import sync_weather_cache as pipeline
+
+    lease_token = "b" * 64
+    fake_redis = _LeaseRedis(
+        values={pipeline.SYNC_LEASE_KEY: "c" * 64},
+    )
+    monkeypatch.setattr(pipeline, "app", app)
+    monkeypatch.setattr(pipeline, "get_qweather_redis_client", lambda: fake_redis)
+
+    with pytest.raises(pipeline.WeatherSyncBusy, match="formal_smoke_lease_invalid"):
+        pipeline.renew_formal_cycle_lease(lease_token)
+
+    assert fake_redis.values[pipeline.SYNC_LEASE_KEY] == "c" * 64
+    assert fake_redis.calls == []
+
+
+def test_formal_smoke_lease_release_deletes_only_its_own_token(app, monkeypatch):
+    from services.pipelines import sync_weather_cache as pipeline
+
+    lease_token = "d" * 64
+    fake_redis = _LeaseRedis(
+        values={pipeline.SYNC_LEASE_KEY: lease_token},
+    )
+    monkeypatch.setattr(pipeline, "app", app)
+    monkeypatch.setattr(pipeline, "get_qweather_redis_client", lambda: fake_redis)
+
+    assert pipeline.release_formal_cycle_lease(lease_token) is True
+    assert pipeline.SYNC_LEASE_KEY not in fake_redis.values
+
+    fake_redis.values[pipeline.SYNC_LEASE_KEY] = "e" * 64
+    assert pipeline.release_formal_cycle_lease(lease_token) is False
+    assert fake_redis.values[pipeline.SYNC_LEASE_KEY] == "e" * 64
+    assert fake_redis.calls == []
 
 
 def test_current_weather_can_disable_untracked_fallback(monkeypatch):
