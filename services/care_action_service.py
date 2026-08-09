@@ -22,6 +22,10 @@ RELAY_STAGES = frozenset({"none", "caregiver", "backup", "community", "emergency
 MAX_ELDER_ACTIONS = 20
 MAX_ELDER_ACTION_LENGTH = 50
 ABSENT = object()
+RISK_LEVEL_ORDER = ("低风险", "中风险", "高风险", "极高")
+_RISK_LEVEL_RANK = {
+    level: rank for rank, level in enumerate(RISK_LEVEL_ORDER)
+}
 
 
 @dataclass(frozen=True)
@@ -77,16 +81,19 @@ def get_or_create_daily_status(
     risk_level_factory=None,
     now=None,
 ) -> DailyStatus:
-    """按照护关系和本地日期取得状态，必要时使用延迟风险工厂创建。"""
+    """按照护关系和本地日期取得状态，并保存当日已观察风险峰值。"""
     _require_active_pair(pair)
     record = DailyStatus.query.filter_by(
         pair_id=pair.id,
         status_date=status_date,
     ).first()
+    resolved_risk = risk_level
+    if resolved_risk is None and callable(risk_level_factory):
+        resolved_risk = risk_level_factory()
+    if resolved_risk not in _RISK_LEVEL_RANK:
+        resolved_risk = None
+
     if record is None:
-        resolved_risk = risk_level
-        if resolved_risk is None and callable(risk_level_factory):
-            resolved_risk = risk_level_factory()
         timestamp = now or utcnow()
         record = DailyStatus(
             pair_id=pair.id,
@@ -101,8 +108,11 @@ def get_or_create_daily_status(
     else:
         # 聚合键始终跟随 Pair，避免不同客户端写出两套社区口径。
         record.community_code = pair.community_code
-        if risk_level and not record.risk_level:
-            record.risk_level = risk_level
+        current_rank = _RISK_LEVEL_RANK.get(record.risk_level, -1)
+        next_rank = _RISK_LEVEL_RANK.get(resolved_risk, -1)
+        # risk_level 的持久化语义是“当日峰值”；只接受调用方核验过的新鲜真实快照。
+        if next_rank > current_rank:
+            record.risk_level = resolved_risk
     return record
 
 
