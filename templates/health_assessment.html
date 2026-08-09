@@ -121,6 +121,7 @@
                         <div class="fw-semibold mb-2">{{ weather_ref.get('condition', '以最近一次可用天气为准') }}</div>
                         <div class="text-muted small">
                             温度 {{ weather_ref.get('temperature', '--') }}°C / 湿度 {{ weather_ref.get('humidity', '--') }}%
+                            / AQI {% if weather_ref.get('aqi_available') %}{{ weather_ref.get('aqi') }}{% else %}缺失（已对其余可用指标重新归一）{% endif %}
                         </div>
                     </div>
                 </div>
@@ -238,22 +239,29 @@
             <div class="col-md-6">
                 <div class="card h-100 border-0 shadow-sm">
                     <div class="card-body">
-                        <div class="fw-semibold mb-3">风险分布 {{ metric_info('personal_impact_likelihood', {
+                        <div class="fw-semibold mb-3">行动筛查影响分 {{ metric_info('personal_impact_likelihood', {
                             'Impact连续分': matrix.get('impact_score', '--'),
                             'Likelihood原始分': matrix.get('likelihood_raw_score', '--'),
                             '确定性修正': matrix.get('certainty_adjustment', '--'),
                             'Likelihood修正后': matrix.get('likelihood_score', '--'),
                             '矩阵得分': matrix.get('matrix_score', '--')
                         }) }}</div>
-                        {% if matrix and matrix.get('matrix_score') is not none %}
+                        {% if matrix and matrix.get('available') %}
                             <div class="small mb-2">影响程度：<strong>{{ matrix.get('impact_bucket', '--') }}</strong>（{{ matrix.get('impact_score', '--') }}）</div>
                             <div class="small mb-2">发生可能性：<strong>{{ matrix.get('likelihood_bucket', '--') }}</strong>（{{ matrix.get('likelihood_score', '--') }}）</div>
                             <div class="small text-muted">综合位置 {{ matrix.get('matrix_score') }} / 16</div>
                         {% else %}
+                            {% if matrix and matrix.get('status') == 'disabled_uncalibrated_probability' %}
+                            <div class="small mb-2">影响程度：<strong>{{ matrix.get('impact_bucket', '--') }}</strong>（{{ matrix.get('impact_score', '--') }}）</div>
+                            <div class="small mb-2">发生可能性：<strong>未输出</strong></div>
+                            <div class="small text-muted">Impact × Likelihood 矩阵未启用</div>
+                            <div class="alert alert-light border small mt-3 mb-0" role="note">个人结局概率尚未完成校准，因此不显示低/中/高概率、Likelihood 或 1–16 矩阵。</div>
+                            {% else %}
                             <div class="small mb-2">影响程度：<strong>--</strong>（--）</div>
                             <div class="small mb-2">发生可能性：<strong>--</strong>（--）</div>
                             <div class="small text-muted">综合位置 -- / 16</div>
                             <div class="alert alert-light border small mt-3 mb-0" role="note">这条历史记录没有完整的评估依据，详细分布暂不显示。</div>
+                            {% endif %}
                         {% endif %}
                     </div>
                 </div>

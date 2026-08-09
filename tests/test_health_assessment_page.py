@@ -96,7 +96,9 @@ def test_health_assessment_post_persists_academic_payload(
     html = response.get_data(as_text=True)
     assert '最新评估结果' in html
     assert '评估依据' in html
-    assert '风险分布' in html
+    assert '行动筛查影响分' in html
+    assert '个人结局概率尚未完成校准' in html
+    assert 'AQI 62.0' in html
 
     assessment = HealthRiskAssessment.query.order_by(HealthRiskAssessment.id.desc()).first()
     assert assessment is not None
@@ -113,6 +115,8 @@ def test_health_assessment_post_persists_academic_payload(
     academic = explain_payload['academic_profile']
     assert 'risk_interval' in academic
     assert 'risk_probabilities' in academic
+    assert academic['risk_probabilities'] == {'low': None, 'medium': None, 'high': None}
+    assert academic['high_risk_probability'] is None
     assert 'cap_semantics' in academic
     assert 'impact_likelihood' in academic
     assert 'model_paths' in academic
@@ -124,7 +128,10 @@ def test_health_assessment_post_persists_academic_payload(
     ) <= 0.2
     assert 'impact_score' in academic['impact_likelihood']
     assert 'likelihood_score' in academic['impact_likelihood']
+    assert academic['impact_likelihood']['available'] is False
+    assert academic['impact_likelihood']['matrix_score'] is None
     assert 'component_scores' in academic
+    assert academic['weather']['aqi_available'] is True
     assert 'community_context' in academic
     community_context = academic['community_context']
     assert community_context['community'] == '测试社区'

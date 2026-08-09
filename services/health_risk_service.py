@@ -6,9 +6,9 @@
 1) 社区脆弱性指数计算（供管理后台使用）
 2) 个人健康风险评估（学术实践增强版）：
    - 多路径融合（DLNM + 规则暴露 + 社区脆弱性）
-   - 概率化输出（低/中/高风险概率 + 不确定性区间）
+   - 行动筛查分与探索性分数范围
    - 事件语义（severity / certainty / urgency）
-   - Impact × Likelihood 矩阵化表达
+   - 未完成校准前停用个人概率与 Likelihood 矩阵
 """
 import math
 from datetime import timedelta
@@ -23,7 +23,7 @@ class HealthRiskService:
     """健康风险评估服务类"""
 
     def __init__(self):
-        self.model_version = 'health-risk-fusion-2.0'
+        self.model_version = 'health-risk-fusion-2.1-safety-contract'
 
     # ---------------------------
     # 社区脆弱性（兼容旧接口）
@@ -186,8 +186,9 @@ class HealthRiskService:
             spread, low=6.0, high=11.0, labels=('低', '中', '高')
         )
 
-        probability = self._risk_probabilities(fused_score, sigma=max(6.0, spread + 5.0))
-        high_risk_probability = probability['high']
+        # 当前分数没有个体结局校准样本，不能转换成可解释为概率的数字。
+        probability = {'low': None, 'medium': None, 'high': None}
+        high_risk_probability = None
 
         cap_semantics = self._cap_semantics(
             score=fused_score,
@@ -195,10 +196,9 @@ class HealthRiskService:
             uncertainty_label=uncertainty_label
         )
         impact_input_score = 0.7 * fused_score + 0.3 * screening_score
-        likelihood_input_score = high_risk_probability * 100.0
         impact_likelihood = self._impact_likelihood_bucket(
             impact_score=impact_input_score,
-            likelihood_score=likelihood_input_score,
+            likelihood_score=None,
             certainty=cap_semantics['certainty']
         )
 
@@ -246,14 +246,12 @@ class HealthRiskService:
                 'low': round(score_low, 1),
                 'high': round(score_high, 1),
                 'spread': round(spread, 2),
-                'label': uncertainty_label
+                'label': uncertainty_label,
+                'status': 'exploratory_score_range',
             },
-            'risk_probabilities': {
-                'low': round(probability['low'], 4),
-                'medium': round(probability['medium'], 4),
-                'high': round(probability['high'], 4)
-            },
-            'high_risk_probability': round(high_risk_probability, 4),
+            'risk_probabilities': probability,
+            'high_risk_probability': high_risk_probability,
+            'probability_status': 'disabled_uncalibrated',
             'cap_semantics': cap_semantics,
             'impact_likelihood': impact_likelihood,
             'model_paths': model_paths,
@@ -277,8 +275,8 @@ class HealthRiskService:
                 '路径B: 规则暴露(空气质量/湿度/极端天气) + 即时筛查',
                 '路径C: 社区脆弱性指数 + 30天病例负担',
                 '融合分数 = 0.45*A + 0.30*B + 0.25*C，并与慢病专项结果做轻量校准',
-                '概率化输出基于分数分布计算低/中/高风险概率，并给出区间与不确定性等级',
-                '行动优先级采用 Impact × Likelihood 四级矩阵（1-16分）'
+                '低/中/高风险概率尚未完成个体结局校准，线上不输出概率值',
+                'Impact 保留为行动筛查分；Likelihood 与 1-16 矩阵在校准前停用'
             ],
             'model_version': self.model_version,
             'rr_breakdown': rr_breakdown
@@ -330,6 +328,7 @@ class HealthRiskService:
             'temperature': self._to_float(weather_data.get('temperature'), 20.0),
             'humidity': self._clamp(self._to_float(weather_data.get('humidity'), 60.0), 0.0, 100.0),
             'aqi': self._clamp(aqi, 0.0, 500.0) if aqi is not None else None,
+            'aqi_available': aqi is not None,
             'pressure': self._to_float(weather_data.get('pressure'), 1013.0),
             'wind_speed': self._to_float(weather_data.get('wind_speed'), 3.0),
             'weather_condition': str(weather_data.get('weather_condition') or '')
@@ -630,7 +629,9 @@ class HealthRiskService:
         else:
             severity = 'minor'
 
-        if high_probability >= 0.7:
+        if high_probability is None:
+            certainty = 'unknown'
+        elif high_probability >= 0.7:
             certainty = 'likely'
         elif high_probability >= 0.45:
             certainty = 'possible'
@@ -654,6 +655,21 @@ class HealthRiskService:
         }
 
     def _impact_likelihood_bucket(self, impact_score, likelihood_score, certainty):
+        impact_bucket = self._to_four_bucket(impact_score)
+        impact_value = round(self._clamp(self._to_float(impact_score), 0.0, 100.0), 1)
+        if likelihood_score is None:
+            return {
+                'available': False,
+                'status': 'disabled_uncalibrated_probability',
+                'impact_bucket': impact_bucket,
+                'likelihood_bucket': None,
+                'matrix_score': None,
+                'impact_score': impact_value,
+                'likelihood_raw_score': None,
+                'certainty_adjustment': None,
+                'likelihood_score': None,
+            }
+
         raw_likelihood = self._clamp(self._to_float(likelihood_score, 0.0), 0.0, 100.0)
         likelihood = raw_likelihood
         certainty_adjustment = 0.0
@@ -663,14 +679,14 @@ class HealthRiskService:
             certainty_adjustment = -8.0
         likelihood = self._clamp(likelihood + certainty_adjustment, 0.0, 100.0)
 
-        impact_bucket = self._to_four_bucket(impact_score)
         likelihood_bucket = self._to_four_bucket(likelihood)
         rank = {'low': 1, 'medium': 2, 'high': 3, 'very_high': 4}
         return {
+            'available': True,
             'impact_bucket': impact_bucket,
             'likelihood_bucket': likelihood_bucket,
             'matrix_score': rank[impact_bucket] * rank[likelihood_bucket],
-            'impact_score': round(self._clamp(self._to_float(impact_score), 0.0, 100.0), 1),
+            'impact_score': impact_value,
             'likelihood_raw_score': round(raw_likelihood, 1),
             'certainty_adjustment': round(certainty_adjustment, 1),
             'likelihood_score': round(likelihood, 1),
@@ -735,7 +751,7 @@ class HealthRiskService:
 
         if cap_semantics['urgency'] == 'immediate':
             add_item('紧急分流', '若出现胸痛、呼吸困难、意识模糊等症状，请立即就医。', 'urgent')
-        elif impact_likelihood['matrix_score'] >= 12:
+        elif impact_likelihood.get('matrix_score') is not None and impact_likelihood['matrix_score'] >= 12:
             add_item('行动升级', '当前风险已进入高优先级，请联系家属或村医协助观察。', 'high')
 
         if not result:

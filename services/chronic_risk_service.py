@@ -404,6 +404,7 @@ class ChronicRiskService:
         
         # 生成个性化建议
         aqi = self._optional_number(weather_data.get('aqi'))
+        tmin = self._optional_number(weather_data.get('tmin'))
         context = {
             'age': age,
             'temperature': temperature,
@@ -413,8 +414,8 @@ class ChronicRiskService:
             'has_chronic_disease': len(chronic_diseases) > 0,
             'disease_count': len(chronic_diseases),
             'aqi': aqi,
-            'hot_night': weather_data.get('tmin', 15) >= 22 if 'tmin' in weather_data else False,
-            'hot_night_temp': weather_data.get('tmin', 22),
+            'hot_night': tmin is not None and tmin >= 22,
+            'hot_night_temp': tmin,
             'heat_wave_days': weather_data.get('heat_wave_days', 0),
             'cold_wave_days': weather_data.get('cold_wave_days', 0)
         }
@@ -458,6 +459,7 @@ class ChronicRiskService:
             'weather': {
                 'temperature': temperature,
                 'aqi': aqi,
+                'aqi_available': aqi is not None,
                 'humidity': weather_data.get('humidity')
             },
             'disease_risks': risks,
