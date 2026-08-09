@@ -138,14 +138,14 @@ METRIC_EXPLANATIONS = {
     'action_confirmation_rate': {
         'anchor': 'action-confirmation-rate',
         'title': '行动确认覆盖率',
-        'summary': '当天已完成安全确认的有效监测对象，占该社区全部有效监测对象的比例。',
+        'summary': '当天至少完成并保存一项行动的有效监测对象，占该社区全部有效监测对象的比例。',
         'formula': 'ConfirmRate = ConfirmedToday / ActivePairsInCommunity',
-        'variables': ['ConfirmedToday = 当天 confirmed_at 已填写且绑定仍为 active 的对象数', 'ActivePairsInCommunity = 状态为 active 的绑定数'],
+        'variables': ['ConfirmedToday = 当天 confirmed_at 已填写、actions_done_count 至少为 1 且绑定仍为 active 的对象数', 'ActivePairsInCommunity = 状态为 active 的绑定数'],
         'thresholds': ['只描述行动覆盖，不代表健康改善'],
         'method': '行动状态计数',
         'window': '本地日期当天',
         'missing': '有效监测对象为 0 时不可计算，页面显示 --。',
-        'limitations': ['未确认可能代表尚未操作，不等于不安全'],
+        'limitations': ['该指标衡量行动记录覆盖，不等于老人安全状态或健康改善', '未确认可能代表尚未操作'],
         'source_file': 'services/user/_helpers.py',
     },
     'action_escalation_rate': {

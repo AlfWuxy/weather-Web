@@ -162,7 +162,10 @@ def build_community_household_metrics(
         if owner_id is None:
             continue
         state = owner_states[owner_id]
-        state["confirmed"] = state["confirmed"] or bool(status.confirmed_at)
+        # 确认覆盖率只统计至少完成一项行动的有效确认；历史空确认不进入口径。
+        state["confirmed"] = state["confirmed"] or bool(
+            status.confirmed_at and int(status.actions_done_count or 0) >= 1
+        )
         state["help"] = state["help"] or bool(status.help_flag)
         state["escalated"] = state["escalated"] or (
             status.relay_stage in ESCALATED_RELAY_STAGES

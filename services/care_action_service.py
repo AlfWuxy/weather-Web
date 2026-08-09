@@ -124,6 +124,9 @@ def stage_confirm_action(
         or actions_done_count < 0
     ):
         raise ValueError("invalid_actions_done_count")
+    if actions_done_count == 0:
+        # confirmed_at 是行动确认口径，不能由空清单激活。
+        raise ValueError("actions_required")
 
     normalized_elder_actions = ABSENT
     if elder_actions is not ABSENT:

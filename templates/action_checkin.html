@@ -197,16 +197,18 @@
                                         </div>
                                     {% endfor %}
                                 {% else %}
-                                    <h6 class="mb-2">安全确认</h6>
-                                    <div class="text-muted small">天气风险清单已暂停；你仍可完成安全确认或直接发出求助。</div>
+                                    <h6 class="mb-2">行动确认暂不可用</h6>
+                                    <div class="text-muted small">天气风险清单已暂停，当前不能提交空行动记录；如需帮助请直接发出求助。</div>
                                 {% endif %}
                             </div>
+                            {% if actions %}
                             <div class="d-flex flex-wrap gap-2 align-items-center">
                                 <button class="btn btn-success btn-lg" type="submit">
-                                    <i class="bi bi-check-circle"></i> 我很安全
+                                    <i class="bi bi-check-circle"></i> 保存已完成行动
                                 </button>
-                                <span class="text-muted small">主动确认后，今日完成情况会写入对应照护账号。</span>
+                                <span class="text-muted small">请至少勾选一项实际完成的行动；保存后会计入今日行动确认覆盖。</span>
                             </div>
+                            {% endif %}
                         </form>
                         <hr>
                         <form method="POST" action="{{ help_action or url_for('public.action_help') }}">
