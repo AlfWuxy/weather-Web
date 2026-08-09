@@ -26,6 +26,40 @@ def _user_columns(inspector):
     }
 
 
+def _preflight_downgrade(bind, inspector):
+    """旧结构无法表达独立授权，任何有效授权都必须先由人工撤销。"""
+    columns = _user_columns(inspector)
+    missing = sorted({'role', COLUMN_NAME} - set(columns))
+    if missing:
+        raise RuntimeError(
+            'authorized community downgrade aborted: '
+            f'missing_columns={missing}; schema and rows were preserved'
+        )
+
+    operating_role_count = int(bind.execute(sa.text(
+        "SELECT COUNT(*) FROM users "
+        "WHERE role IN ('community', 'caregiver')"
+    )).scalar_one())
+    if operating_role_count:
+        raise RuntimeError(
+            'authorized community downgrade aborted: '
+            f'operating_role_count={operating_role_count}; '
+            'schema and rows were preserved'
+        )
+
+    authorized_community_count = int(bind.execute(sa.text(
+        '''SELECT COUNT(*) FROM users
+           WHERE authorized_community IS NOT NULL
+             AND TRIM(authorized_community) != '' '''
+    )).scalar_one())
+    if authorized_community_count:
+        raise RuntimeError(
+            'authorized community downgrade aborted: '
+            f'authorized_community_count={authorized_community_count}; '
+            'schema and rows were preserved'
+        )
+
+
 def upgrade():
     bind = op.get_bind()
     inspector = inspect(bind)
@@ -66,9 +100,6 @@ def downgrade():
     if COLUMN_NAME not in _user_columns(inspector):
         return
 
-    # 旧代码会把定位字段当 ACL。回滚前先撤销受影响运营角色，保持安全失败。
-    bind.execute(sa.text(
-        "UPDATE users SET role = 'user' "
-        "WHERE role IN ('community', 'caregiver')"
-    ))
+    # SQLite DDL 不可回滚，丢数据检查必须位于首个写操作之前。
+    _preflight_downgrade(bind, inspector)
     op.drop_column('users', COLUMN_NAME)
