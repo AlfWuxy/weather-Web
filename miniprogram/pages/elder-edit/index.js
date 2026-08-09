@@ -238,6 +238,9 @@ Page({
       if (!loadIsActive(this, request)) return;
       const item = normalizeList(data, ['items', 'elders']).find((elder) => Number(elder.pair_id) === pairId);
       if (!item) throw new Error('not_found');
+      if (item.miniprogram_supported === false) {
+        throw new Error('miniprogram_pair_unsupported');
+      }
       const member = item.member || {};
       const genderIndex = Math.max(0, GENDER_OPTIONS.indexOf(member.gender || '未填写'));
       this.setData({
@@ -255,7 +258,9 @@ Page({
       if (loadIsActive(this, request)) {
         this.setData({
           contextReady: false,
-          loadError: '没有找到这位家人的资料，请检查网络后重试。',
+          loadError: error && error.message === 'miniprogram_pair_unsupported'
+            ? '该家人的地点不在小程序当前都昌县服务范围，请在网页版管理。'
+            : '没有找到这位家人的资料，请检查网络后重试。',
         });
       }
     } finally {

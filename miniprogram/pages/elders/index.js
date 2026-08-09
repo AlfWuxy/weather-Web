@@ -19,6 +19,11 @@ function memberName(item) {
   return item && item.member && item.member.name ? item.member.name : '家中老人';
 }
 
+function pairLocation(item) {
+  const value = item && (item.location_query || item.community_code);
+  return typeof value === 'string' && value.trim() ? value.trim() : '地点未填写';
+}
+
 function beginLoad(page) {
   page._loadRequestId = Number(page._loadRequestId || 0) + 1;
   return {
@@ -159,6 +164,8 @@ Page({
           displayAge: item.adult_profile_incomplete || !(item.member && item.member.age)
             ? '请补充 18 岁以上年龄'
             : `${item.member.age} 岁`,
+          displayLocation: pairLocation(item),
+          miniprogramSupported: item.miniprogram_supported !== false,
         };
       });
       this.setData({ elders, weather });

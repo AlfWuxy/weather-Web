@@ -22,6 +22,37 @@ RELAY_STAGES = frozenset({"none", "caregiver", "backup", "community", "emergency
 MAX_ELDER_ACTIONS = 20
 MAX_ELDER_ACTION_LENGTH = 50
 ABSENT = object()
+WEB_ELDER_ACTION_LABELS = {
+    "stay_cool": "留在有降温条件的室内",
+    "contact_now": "立即联系照护人或邻里",
+    "cooling_center": "条件不足时优先去避暑点",
+    "stay_indoor": "尽量待在阴凉通风处",
+    "hydrate": "少量多次补水",
+    "check_in": "安排每日确认",
+    "avoid_sun": "减少连续暴晒",
+    "cooling": "准备降温物品",
+    "watch_signs": "关注体感变化",
+    "water": "规律补水",
+    "ventilate": "室内通风",
+    "shade": "适度遮阳",
+}
+MINIPROGRAM_ELDER_ACTION_LABELS = {
+    "drink_water": "少量多次喝水",
+    "avoid_noon": "避开中午外出",
+    "cool_rest": "到凉快处休息",
+    "keep_warm": "及时添衣保暖",
+    "avoid_fall": "减少湿滑路面外出",
+    "safe_heating": "安全使用取暖设备",
+    "check_weather": "出门前看天气",
+    "carry_water": "随身带水",
+    "contact_family": "和家人报个平安",
+}
+ELDER_ACTION_LABELS = {
+    **WEB_ELDER_ACTION_LABELS,
+    **MINIPROGRAM_ELDER_ACTION_LABELS,
+}
+KNOWN_ELDER_ACTION_IDS = frozenset(ELDER_ACTION_LABELS)
+MINIPROGRAM_ELDER_ACTION_IDS = frozenset(MINIPROGRAM_ELDER_ACTION_LABELS)
 RISK_LEVEL_ORDER = ("低风险", "中风险", "高风险", "极高")
 _RISK_LEVEL_RANK = {
     level: rank for rank, level in enumerate(RISK_LEVEL_ORDER)
@@ -159,12 +190,18 @@ def stage_confirm_action(
         if len(elder_actions) > MAX_ELDER_ACTIONS:
             raise ValueError("invalid_elder_actions")
         normalized_elder_actions = []
+        seen_elder_actions = set()
         for item in elder_actions:
             if not isinstance(item, str):
                 raise ValueError("invalid_elder_actions")
             normalized_item = item.strip()
             if not normalized_item or len(normalized_item) > MAX_ELDER_ACTION_LENGTH:
                 raise ValueError("invalid_elder_actions")
+            if normalized_item not in KNOWN_ELDER_ACTION_IDS:
+                raise ValueError("unknown_elder_action")
+            if normalized_item in seen_elder_actions:
+                raise ValueError("duplicate_elder_action")
+            seen_elder_actions.add(normalized_item)
             normalized_elder_actions.append(normalized_item)
         if actions_done_count != len(normalized_elder_actions):
             raise ValueError("elder_action_count_mismatch")

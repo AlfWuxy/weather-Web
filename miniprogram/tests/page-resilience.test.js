@@ -182,6 +182,34 @@ test('家庭照护刷新失败时保留上次成功加载的卡片', async () =>
   assert.match(page.data.loadError, /上次成功加载/);
 });
 
+test('家庭照护保留非都昌真实地点并关闭县级私密入口', async () => {
+  authApiImpl = async () => ({
+    items: [{
+      pair_id: 17,
+      location_query: '北京市',
+      community_code: '北京市',
+      miniprogram_supported: false,
+      member: { name: '北京家人', relation: '家人', age: 70 },
+    }],
+  });
+  snapshotImpl = async () => ({
+    current: { temperature: 34, temperature_max: 36, temperature_min: 27 },
+  });
+  const definition = loadPage('../pages/elders/index');
+  const page = makePage(definition);
+
+  await page.loadCareHome.call(page);
+
+  assert.equal(page.data.elders.length, 1);
+  assert.equal(page.data.elders[0].displayLocation, '北京市');
+  assert.equal(page.data.elders[0].miniprogramSupported, false);
+  const view = fs.readFileSync(path.join(__dirname, '../pages/elders/index.wxml'), 'utf8');
+  assert.match(view, /wx:if="\{\{!item\.miniprogramSupported\}\}"/);
+  assert.match(view, /wx:if="\{\{item\.miniprogramSupported\}\}" class="primary-actions"/);
+  assert.match(view, /wx:if="\{\{item\.miniprogramSupported\}\}" class="care-tools"/);
+  assert.match(view, /小程序不会套用都昌县天气/);
+});
+
 test('停止管理连续点击期间只展示一次确认并只发送一次删除请求', async (t) => {
   const deleteGate = deferred();
   const requests = [];
@@ -587,6 +615,7 @@ test('今日行动恢复当天已保存选项并忽略旧版本行动 ID', async
   assert.equal(page.data.contextReady, true);
   assert.equal(page.data.confirmed, true);
   assert.deepEqual(page.data.selectedActions, ['drink_water']);
+  assert.equal(page.data.confirmedElsewhereCount, 2);
   assert.deepEqual(
     page.data.actions.filter((item) => item.checked).map((item) => item.id),
     ['drink_water'],
@@ -598,6 +627,68 @@ test('今日行动恢复当天已保存选项并忽略旧版本行动 ID', async
   assert.deepEqual(post.data.actions_done, ['drink_water']);
   assert.equal(page.data.confirmed, true);
   assert.deepEqual(page.data.selectedActions, ['drink_water']);
+});
+
+test('Web 行动确认在小程序保持当天事实且不伪造本页勾选', async () => {
+  const { formatLocalDate } = require('../pages/elders/care-logic');
+  authApiImpl = async () => ({
+    items: [{
+      pair_id: 9,
+      miniprogram_supported: true,
+      member: { name: '奶奶' },
+      today: {
+        status_date: formatLocalDate(),
+        confirmed_at: '2026-08-09T04:00:00',
+        actions_done_count: 3,
+        elder_actions: ['stay_indoor', 'hydrate', 'check_in'],
+      },
+    }],
+  });
+  snapshotImpl = async () => ({
+    current: { temperature: 38, temperature_max: 40, temperature_min: 30 },
+  });
+  const definition = loadPage('../pages/action-checkin/index');
+  const page = makePage(definition, { pairId: 9 });
+
+  await page.loadContext.call(page);
+
+  assert.equal(page.data.contextReady, true);
+  assert.equal(page.data.confirmed, true);
+  assert.equal(page.data.confirmedElsewhereCount, 3);
+  assert.deepEqual(page.data.selectedActions, []);
+  assert.equal(page.data.actions.some((item) => item.checked), false);
+  const view = fs.readFileSync(path.join(__dirname, '../pages/action-checkin/index.wxml'), 'utf8');
+  assert.match(view, /今天已有 \{\{confirmedElsewhereCount\}\} 项来自另一份行动清单/);
+  assert.match(view, /confirmed && selectedActions\.length \? '今日行动已记录'/);
+});
+
+test('今日行动深链遇到非都昌 Pair 时保持写入口关闭', async () => {
+  const requests = [];
+  authApiImpl = async (options) => {
+    requests.push(options);
+    return {
+      items: [{
+        pair_id: 9,
+        location_query: '北京市',
+        miniprogram_supported: false,
+        member: { name: '北京家人' },
+      }],
+    };
+  };
+  snapshotImpl = async () => ({
+    current: { temperature: 38, temperature_max: 40, temperature_min: 30 },
+  });
+  const definition = loadPage('../pages/action-checkin/index');
+  const page = makePage(definition, { pairId: 9 });
+
+  await page.loadContext.call(page);
+
+  assert.equal(page.data.contextReady, false);
+  assert.deepEqual(page.data.actions, []);
+  assert.deepEqual(page.data.selectedActions, []);
+  assert.match(page.data.loadError, /网页版管理/);
+  await page.confirmActions.call(page);
+  assert.equal(requests.filter((item) => item.method === 'POST').length, 0);
 });
 
 test('今日行动不把旧版空确认记录显示为已完成', async () => {

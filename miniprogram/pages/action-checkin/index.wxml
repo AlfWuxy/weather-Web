@@ -27,9 +27,10 @@
           </view>
         </label>
       </checkbox-group>
-      <view wx:if="{{confirmed}}" class="selection-hint" role="status" aria-role="status">已恢复今天保存的行动，可调整后再次保存。</view>
+      <view wx:if="{{confirmedElsewhereCount > 0}}" class="selection-hint" role="status" aria-role="status">今天已有 {{confirmedElsewhereCount}} 项来自另一份行动清单。本页没有替你勾选，可按当前清单重新记录。</view>
+      <view wx:elif="{{confirmed && selectedActions.length}}" class="selection-hint" role="status" aria-role="status">已恢复今天保存的行动，可调整后再次保存。</view>
       <view wx:elif="{{!selectedActions.length}}" class="selection-hint" role="status" aria-role="status">请至少勾选一项实际完成的行动。</view>
-      <button class="confirm-button" loading="{{busyAction === 'confirm'}}" disabled="{{!contextReady || busyAction !== '' || !selectedActions.length}}" bindtap="confirmActions">{{confirmed ? '今日行动已记录' : '保存已完成行动'}}</button>
+      <button class="confirm-button" loading="{{busyAction === 'confirm'}}" disabled="{{!contextReady || busyAction !== '' || !selectedActions.length}}" bindtap="confirmActions">{{confirmed && selectedActions.length ? '今日行动已记录' : '保存已完成行动'}}</button>
     </view>
 
     <view class="help-card">

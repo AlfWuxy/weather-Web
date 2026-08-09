@@ -19,6 +19,7 @@ from core.weather import (
 )
 from core.usage import log_usage_event
 from services.care_action_service import (
+    ELDER_ACTION_LABELS,
     get_or_create_daily_status,
     is_effective_confirmation,
 )
@@ -68,17 +69,6 @@ _REQUIRED_HEAT_WEATHER_FIELDS = (
     'humidity',
 )
 _WEATHER_WAITING_LABEL = '天气更新中'
-ELDER_ACTION_LABELS = {
-    'drink_water': '少量多次喝水',
-    'avoid_noon': '避开中午外出',
-    'cool_rest': '到凉快处休息',
-    'keep_warm': '及时添衣保暖',
-    'avoid_fall': '减少湿滑路面外出',
-    'safe_heating': '安全使用取暖设备',
-    'check_weather': '出门前看天气',
-    'carry_water': '随身带水',
-    'contact_family': '和家人报个平安',
-}
 _UNKNOWN_ELDER_ACTION_LABEL = '其他自护行动（旧版本记录）'
 
 

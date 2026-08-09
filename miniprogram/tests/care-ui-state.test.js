@@ -256,6 +256,33 @@ test('提醒话术仅在上下文核验且内容非空时开放复制与行动',
   assert.match(view, /返回家庭照护/);
 });
 
+test('非都昌 Pair 的编辑与提醒话术深链都停在网页版管理提示', async () => {
+  authApiImpl = async () => ({
+    items: [{
+      pair_id: 7,
+      location_query: '北京市',
+      miniprogram_supported: false,
+      member: { name: '北京家人', relation: '家人', age: 70 },
+    }],
+  });
+  snapshotImpl = async () => ({
+    current: { temperature_max: 36, temperature_min: 27 },
+  });
+
+  const editDefinition = loadPage('../pages/elder-edit/index');
+  const editPage = makePage(editDefinition, { pairId: 7, mode: 'edit' });
+  await editPage.loadElder.call(editPage);
+  assert.equal(editPage.data.contextReady, false);
+  assert.match(editPage.data.loadError, /网页版管理/);
+
+  const templateDefinition = loadPage('../pages/template/index');
+  const templatePage = makePage(templateDefinition, { pairId: 7 });
+  await templatePage.loadTemplate.call(templatePage);
+  assert.equal(templatePage.data.contextReady, false);
+  assert.equal(templatePage.data.message, '');
+  assert.match(templatePage.data.loadError, /网页版管理/);
+});
+
 ['resolve', 'reject'].forEach((settlement) => {
   test(`老人编辑页卸载后延迟${settlement === 'resolve' ? '成功' : '失败'}不再更新界面`, async () => {
     const gate = deferred();

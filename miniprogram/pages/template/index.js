@@ -98,6 +98,9 @@ Page({
         .find((elder) => Number(elder.pair_id) === pairId);
       if (!loadIsActive(this, request)) return;
       if (!item) throw new Error('not_found');
+      if (item.miniprogram_supported === false) {
+        throw new Error('miniprogram_pair_unsupported');
+      }
       const member = item.member || {};
       const weather = normalizeSnapshot(snapshot);
       const usesGenericWeather = weather.stale || !weather.available;
@@ -127,7 +130,9 @@ Page({
         this.setData({
           message: '',
           contextReady: false,
-          loadError: '提醒话术暂时无法生成，请检查网络后重试。',
+          loadError: error && error.message === 'miniprogram_pair_unsupported'
+            ? '该家人的地点不在小程序当前都昌县服务范围，请在网页版管理。'
+            : '提醒话术暂时无法生成，请检查网络后重试。',
         });
       }
     } finally {

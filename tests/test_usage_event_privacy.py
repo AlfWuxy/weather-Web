@@ -498,12 +498,12 @@ def test_miniprogram_valid_action_event_requires_one_completed_action(
         json={"actions_done": []},
         headers=headers,
     )
-    assert empty_response.status_code == 200
+    assert empty_response.status_code == 400
     assert UsageEvent.query.filter_by(event_type="checkin_confirmed").count() == 0
 
     valid_response = client.post(
         f"/mp/api/v1/actions/{pair.id}/confirm",
-        json={"actions_done": ["hydrate"]},
+        json={"actions_done": ["drink_water"]},
         headers=headers,
     )
     assert valid_response.status_code == 200

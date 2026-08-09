@@ -61,6 +61,7 @@ from services.location_resolver import resolve_location
 from services.warning_service import get_qweather_warnings
 from services.user._common import _create_pair_record
 from services.care_action_service import (
+    MINIPROGRAM_ELDER_ACTION_IDS,
     RELAY_STAGES,
     get_or_create_daily_status,
     is_effective_confirmation,
@@ -100,6 +101,36 @@ MP_EVENT_META_MAX_CHARS = 2048
 MAX_PAGE_SIZE = 50
 ACQUISITION_SOURCE_FAMILY_SHARE = "family_share"
 CREDENTIAL_LAST_USED_INTERVAL = timedelta(minutes=30)
+MINIPROGRAM_LOCATION_ALIASES = frozenset({
+    "都昌",
+    "都昌县",
+    "九江市都昌县",
+    "江西省九江市都昌县",
+})
+
+
+class MiniProgramPairUnsupported(ValueError):
+    """Pair 超出小程序当前县级天气服务范围。"""
+
+
+def _miniprogram_pair_supported(pair) -> bool:
+    """地点与社区都必须明确属于都昌县，未知值一律不猜测。"""
+    if pair is None:
+        return False
+    location_query = str(getattr(pair, "location_query", "") or "").strip()
+    community_code = str(getattr(pair, "community_code", "") or "").strip()
+    return bool(
+        location_query in MINIPROGRAM_LOCATION_ALIASES
+        and community_code in MINIPROGRAM_LOCATION_ALIASES
+    )
+
+
+def _unsupported_pair_error():
+    return _error(
+        "miniprogram_pair_unsupported",
+        "该家人的地点不在小程序当前都昌县服务范围，请在网页版管理。",
+        409,
+    )
 
 
 def _success(data=None, status=200):
@@ -538,6 +569,8 @@ def _resolve_owned_member(*, payload=None, required=False):
         pair = _pair_for_user(pair_id)
         if pair is None:
             raise LookupError("pair_not_found")
+        if not _miniprogram_pair_supported(pair):
+            raise MiniProgramPairUnsupported("miniprogram_pair_unsupported")
         if not pair.member_id:
             raise LookupError("pair_member_not_found")
         member = FamilyMember.query.filter_by(
@@ -1331,8 +1364,9 @@ def elders_list():
     )
     member_map = {m.id: m for m in members}
 
-    # 一个请求只读取一次县级快照，所有老人共享相同 snapshot_id。
-    snapshot = get_bootstrap_payload()
+    support_map = {pair.id: _miniprogram_pair_supported(pair) for pair in pairs}
+    # 只有受支持的 Pair 才读取县级快照；所有受支持老人共享同一 snapshot_id。
+    snapshot = get_bootstrap_payload() if any(support_map.values()) else {}
     current = snapshot.get("current") if isinstance(snapshot.get("current"), dict) else {}
     weather_available = bool(snapshot.get("available"))
     tmax_value = _finite_or_none(current.get("temperature_max")) if weather_available else None
@@ -1345,6 +1379,7 @@ def elders_list():
 
     result = []
     for p in pairs:
+        miniprogram_supported = support_map[p.id]
         member = member_map.get(p.member_id) if p.member_id else None
         status = status_map.get(p.id)
         try:
@@ -1355,10 +1390,11 @@ def elders_list():
         result.append(
             {
                 "pair_id": p.id,
-                "snapshot_id": snapshot.get("snapshot_id"),
-                "location": snapshot.get("location"),
-                "location_query": CANONICAL_LOCATION_NAME,
-                "community_code": CANONICAL_LOCATION_NAME,
+                "snapshot_id": snapshot.get("snapshot_id") if miniprogram_supported else None,
+                "location": snapshot.get("location") if miniprogram_supported else None,
+                "location_query": p.location_query,
+                "community_code": p.community_code,
+                "miniprogram_supported": miniprogram_supported,
                 "member": (
                     {
                         "id": member.id,
@@ -1391,12 +1427,18 @@ def elders_list():
                         if status and status.relay_stage in RELAY_STAGES
                         else "none"
                     ),
-                    "trigger": trigger,
-                    "temperature_max": tmax_value if weather_available else None,
-                    "temperature_min": tmin_value if weather_available else None,
-                    "weather_available": weather_available,
-                    "stale": bool(snapshot.get("stale")),
-                    "is_mock": bool(current.get("is_mock")),
+                    "trigger": trigger if miniprogram_supported else None,
+                    "temperature_max": (
+                        tmax_value if miniprogram_supported and weather_available else None
+                    ),
+                    "temperature_min": (
+                        tmin_value if miniprogram_supported and weather_available else None
+                    ),
+                    "weather_available": bool(
+                        miniprogram_supported and weather_available
+                    ),
+                    "stale": bool(snapshot.get("stale")) if miniprogram_supported else False,
+                    "is_mock": bool(current.get("is_mock")) if miniprogram_supported else False,
                 },
             }
         )
@@ -1484,6 +1526,8 @@ def elders_patch(pair_id: int):
     pair = _pair_for_user(pair_id)
     if not pair:
         return jsonify({"success": False, "error": "not_found"}), 404
+    if not _miniprogram_pair_supported(pair):
+        return _unsupported_pair_error()
 
     try:
         payload = _json_payload()
@@ -1507,9 +1551,6 @@ def elders_patch(pair_id: int):
                     item_max_length=50,
                 )
                 member.chronic_diseases = json.dumps(chronic, ensure_ascii=False) if chronic else None
-        # 历史记录也强制收敛为都昌县县级天气语义。
-        pair.location_query = CANONICAL_LOCATION_NAME
-        pair.community_code = CANONICAL_LOCATION_NAME
         db.session.commit()
     except ValueError as exc:
         db.session.rollback()
@@ -1551,13 +1592,10 @@ def elders_delete(pair_id: int):
             if not pair:
                 db.session.rollback()
                 return _error("not_found", "老人档案不存在。", 404)
-            affected_community_codes = {
-                pair.community_code,
-                CANONICAL_LOCATION_NAME,
-            }
+            affected_community_codes = (
+                {pair.community_code} if pair.community_code else set()
+            )
             pair.status = "inactive"
-            pair.location_query = CANONICAL_LOCATION_NAME
-            pair.community_code = CANONICAL_LOCATION_NAME
             pair.last_active_at = utcnow()
             db.session.commit()
     except (OSError, RuntimeError, ValueError):
@@ -1593,6 +1631,8 @@ def health_diary():
                 field="limit",
                 allow_none=False,
             )
+        except MiniProgramPairUnsupported:
+            return _unsupported_pair_error()
         except (ValueError, LookupError) as exc:
             return _error(str(exc), "查询条件无效或资源不属于当前用户。", 400)
         query = HealthDiary.query.filter_by(user_id=g.api_user_id)
@@ -1633,6 +1673,9 @@ def health_diary():
         )
         db.session.add(record)
         db.session.commit()
+    except MiniProgramPairUnsupported:
+        db.session.rollback()
+        return _unsupported_pair_error()
     except LookupError as exc:
         db.session.rollback()
         return _error(str(exc), "关联老人不存在或不属于当前用户。", 404)
@@ -1667,6 +1710,8 @@ def medications():
                 field="limit",
                 allow_none=False,
             )
+        except MiniProgramPairUnsupported:
+            return _unsupported_pair_error()
         except (ValueError, LookupError) as exc:
             return _error(str(exc), "查询条件无效或资源不属于当前用户。", 400)
         query = MedicationReminder.query.filter_by(user_id=g.api_user_id)
@@ -1728,6 +1773,9 @@ def medications():
         )
         db.session.add(record)
         db.session.commit()
+    except MiniProgramPairUnsupported:
+        db.session.rollback()
+        return _unsupported_pair_error()
     except LookupError as exc:
         db.session.rollback()
         return _error(str(exc), "关联老人不存在或不属于当前用户。", 404)
@@ -1776,6 +1824,8 @@ def health_assessment():
             )
             if adult_error is not None:
                 return adult_error
+    except MiniProgramPairUnsupported:
+        return _unsupported_pair_error()
     except LookupError as exc:
         return _error(str(exc), "关联老人不存在或不属于当前用户。", 404)
     except ValueError as exc:
@@ -1873,6 +1923,8 @@ def health_assessment():
 
 
 def _daily_status_for_pair(pair):
+    if not _miniprogram_pair_supported(pair):
+        raise MiniProgramPairUnsupported("miniprogram_pair_unsupported")
     status_date = today_local()
 
     def snapshot_risk_level():
@@ -1906,6 +1958,8 @@ def action_confirm(pair_id):
     pair = _pair_for_user(pair_id)
     if pair is None or pair.status != "active":
         return _error("not_found", "照护关系不存在。", 404)
+    if not _miniprogram_pair_supported(pair):
+        return _unsupported_pair_error()
     adult_error = _adult_profile_required_for_pair(pair)
     if adult_error is not None:
         return adult_error
@@ -1917,6 +1971,8 @@ def action_confirm(pair_id):
             max_items=20,
             item_max_length=50,
         )
+        if any(action_id not in MINIPROGRAM_ELDER_ACTION_IDS for action_id in actions_done):
+            raise ValueError("unknown_elder_action")
         status = _daily_status_for_pair(pair)
         mutation = stage_confirm_action(
             pair,
@@ -1954,6 +2010,8 @@ def action_help(pair_id):
     pair = _pair_for_user(pair_id)
     if pair is None or pair.status != "active":
         return _error("not_found", "照护关系不存在。", 404)
+    if not _miniprogram_pair_supported(pair):
+        return _unsupported_pair_error()
     adult_error = _adult_profile_required_for_pair(pair)
     if adult_error is not None:
         return adult_error
@@ -2003,6 +2061,8 @@ def action_debrief(pair_id):
     pair = _pair_for_user(pair_id)
     if pair is None or pair.status != "active":
         return _error("not_found", "照护关系不存在。", 404)
+    if not _miniprogram_pair_supported(pair):
+        return _unsupported_pair_error()
     adult_error = _adult_profile_required_for_pair(pair)
     if adult_error is not None:
         return adult_error
@@ -2055,6 +2115,8 @@ def alerts_list():
     pair = _pair_for_user(pair_id)
     if not pair:
         return jsonify({"success": False, "error": "not_found"}), 404
+    if not _miniprogram_pair_supported(pair):
+        return _unsupported_pair_error()
 
     snapshot = get_bootstrap_payload()
     weather_data = snapshot.get("current") if isinstance(snapshot.get("current"), dict) else {}

@@ -44,7 +44,7 @@ def _create_user(db_session, username, role, community='都昌'):
     return user
 
 
-def _create_pair(db_session, user_id, short_code='31415926'):
+def _create_pair(db_session, user_id, short_code='90909091'):
     pair = Pair(
         caregiver_id=user_id,
         community_code='都昌',
@@ -95,7 +95,7 @@ def test_caregiver_dashboard_does_not_calculate_mock_weather(
 ):
     """照护工作台遇到 mock 时只显示等待状态和中性行动链接说明。"""
     user = _create_user(db_session, 'caregiver_mock_guard', 'caregiver')
-    _create_pair(db_session, user.id)
+    pair = _create_pair(db_session, user.id)
     _login_as(client, user.id)
     _patch_caregiver_location(monkeypatch)
     monkeypatch.setattr(
@@ -117,7 +117,7 @@ def test_caregiver_dashboard_does_not_calculate_mock_weather(
     assert '复制行动链接说明' in body
     assert '热风险：极高' not in body
     assert '高温（39°C）' not in body
-    assert DailyStatus.query.count() == 0
+    assert DailyStatus.query.filter_by(pair_id=pair.id).count() == 0
 
 
 def test_caregiver_action_log_keeps_risk_null_when_weather_is_mock(

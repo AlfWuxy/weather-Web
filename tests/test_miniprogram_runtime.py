@@ -228,6 +228,121 @@ def test_all_elders_share_one_snapshot_without_weather_fanout(
     assert len(rows) == 3
     assert {row["snapshot_id"] for row in rows} == {snapshot_id}
     assert {row["location"]["name"] for row in rows} == {"都昌县"}
+    assert {row["miniprogram_supported"] for row in rows} == {True}
+    assert {row["location_query"] for row in rows} == {"都昌县"}
+
+
+def test_foreign_web_pair_is_visible_but_never_rewritten_or_given_county_weather(
+    client,
+    db_session,
+    monkeypatch,
+):
+    """非都昌 Web Pair 只能可见和撤权，私密县级功能全部关闭。"""
+    from core.db_models import (
+        DailyStatus,
+        FamilyMember,
+        HealthDiary,
+        HealthRiskAssessment,
+        MedicationReminder,
+        Pair,
+    )
+
+    owner, token = _user_and_token(db_session, "foreign-web-pair-owner")
+    member = FamilyMember(user_id=owner.id, name="北京家人", relation="家人", age=70)
+    db_session.add(member)
+    db_session.commit()
+    pair = _pair(db_session, owner, "70000009", member=member)
+    pair.location_query = "北京市"
+    pair.community_code = "北京市"
+    db_session.commit()
+    headers = {"Authorization": f"Bearer {token}"}
+
+    monkeypatch.setattr(
+        "blueprints.mp_api.get_bootstrap_payload",
+        lambda: pytest.fail("仅含非都昌 Pair 时不得读取都昌县快照"),
+    )
+
+    listed = client.get("/mp/api/v1/elders", headers=headers)
+    assert listed.status_code == 200
+    row = listed.get_json()["data"][0]
+    assert row["pair_id"] == pair.id
+    assert row["location_query"] == "北京市"
+    assert row["community_code"] == "北京市"
+    assert row["miniprogram_supported"] is False
+    assert row["snapshot_id"] is None
+    assert row["location"] is None
+    assert row["today"]["weather_available"] is False
+    assert row["today"]["trigger"] is None
+
+    requests = (
+        client.patch(
+            f"/mp/api/v1/elders/{pair.id}",
+            headers=headers,
+            json={"name": "不应改名"},
+        ),
+        client.get(f"/mp/api/v1/alerts?pair_id={pair.id}", headers=headers),
+        client.post(
+            f"/mp/api/v1/actions/{pair.id}/confirm",
+            headers=headers,
+            json={"actions_done": ["drink_water"]},
+        ),
+        client.post(
+            f"/mp/api/v1/actions/{pair.id}/help",
+            headers=headers,
+            json={"note": "不应写入"},
+        ),
+        client.post(
+            f"/mp/api/v1/actions/{pair.id}/debrief",
+            headers=headers,
+            json={"question_2": "不应写入", "debrief_optin": True},
+        ),
+        client.get(f"/mp/api/v1/health/diary?pair_id={pair.id}", headers=headers),
+        client.post(
+            "/mp/api/v1/health/diary",
+            headers=headers,
+            json={
+                "pair_id": pair.id,
+                "severity": "mild",
+                "symptoms": "不应写入",
+            },
+        ),
+        client.get(f"/mp/api/v1/medications?pair_id={pair.id}", headers=headers),
+        client.post(
+            "/mp/api/v1/medications",
+            headers=headers,
+            json={"pair_id": pair.id, "medicine_name": "不应写入"},
+        ),
+        client.get(f"/mp/api/v1/health/assessment?pair_id={pair.id}", headers=headers),
+        client.post(
+            "/mp/api/v1/health/assessment",
+            headers=headers,
+            json={"pair_id": pair.id},
+        ),
+    )
+    assert {response.status_code for response in requests} == {409}
+    assert {
+        response.get_json()["error"] for response in requests
+    } == {"miniprogram_pair_unsupported"}
+
+    db_session.expire_all()
+    persisted_pair = db_session.get(Pair, pair.id)
+    persisted_member = db_session.get(FamilyMember, member.id)
+    assert persisted_pair.status == "active"
+    assert persisted_pair.location_query == "北京市"
+    assert persisted_pair.community_code == "北京市"
+    assert persisted_member.name == "北京家人"
+    assert DailyStatus.query.filter_by(pair_id=pair.id).count() == 0
+    assert HealthDiary.query.filter_by(member_id=member.id).count() == 0
+    assert MedicationReminder.query.filter_by(member_id=member.id).count() == 0
+    assert HealthRiskAssessment.query.filter_by(member_id=member.id).count() == 0
+
+    deleted = client.delete(f"/mp/api/v1/elders/{pair.id}", headers=headers)
+    assert deleted.status_code == 200
+    db_session.expire_all()
+    persisted_pair = db_session.get(Pair, pair.id)
+    assert persisted_pair.status == "inactive"
+    assert persisted_pair.location_query == "北京市"
+    assert persisted_pair.community_code == "北京市"
 
 
 def test_create_pair_record_rejects_foreign_and_missing_member_without_disclosure(
@@ -812,12 +927,12 @@ def test_owner_scope_and_input_boundaries_for_diary_medication_and_actions(
     assert client.post(
         f"/mp/api/v1/actions/{pair.id}/confirm",
         headers=outsider_headers,
-        json={"actions_done": ["hydrate"]},
+        json={"actions_done": ["drink_water"]},
     ).status_code == 404
     assert client.post(
         f"/mp/api/v1/actions/{pair.id}/confirm",
         headers=owner_headers,
-        json={"actions_done": ["hydrate"]},
+        json={"actions_done": ["drink_water"]},
     ).status_code == 200
 
 
@@ -1275,6 +1390,48 @@ def test_action_confirm_rejects_elder_action_collection_boundaries(
 
     assert response.status_code == 400
     assert response.get_json()["error"] == "invalid_actions_done"
+    assert DailyStatus.query.filter_by(pair_id=pair.id).count() == 0
+
+
+@pytest.mark.parametrize(
+    ("actions_done", "expected_error"),
+    (
+        (["hydrate"], "unknown_elder_action"),
+        (["forged-client-action"], "unknown_elder_action"),
+        (["drink_water", "drink_water"], "duplicate_elder_action"),
+    ),
+)
+def test_miniprogram_action_confirm_rejects_cross_catalog_forgery_and_duplicates(
+    client,
+    db_session,
+    actions_done,
+    expected_error,
+):
+    """小程序只能提交当前小程序目录，失败时不得形成确认状态。"""
+    from core.db_models import DailyStatus
+
+    owner, token = _user_and_token(
+        db_session,
+        f"invalid-mini-action-{expected_error}-{len(actions_done)}",
+    )
+    pair = _adult_pair(
+        db_session,
+        owner,
+        {
+            ("hydrate",): "73444451",
+            ("forged-client-action",): "73444452",
+            ("drink_water", "drink_water"): "73444453",
+        }[tuple(actions_done)],
+    )
+
+    response = client.post(
+        f"/mp/api/v1/actions/{pair.id}/confirm",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"actions_done": actions_done},
+    )
+
+    assert response.status_code == 400
+    assert response.get_json()["error"] == expected_error
     assert DailyStatus.query.filter_by(pair_id=pair.id).count() == 0
 
 

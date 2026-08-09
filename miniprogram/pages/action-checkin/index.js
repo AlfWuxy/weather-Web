@@ -31,6 +31,7 @@ const ACTION_PLANS = {
 
 const COMPLETION_OPTIONS = ['全部完成', '完成一部分', '暂时没完成'];
 const CONTEXT_LOAD_ERROR = '未能核对这位家人的信息，请检查网络后重试。';
+const UNSUPPORTED_PAIR_ERROR = '该家人的地点不在小程序当前都昌县服务范围，请在网页版管理。';
 
 function actionPlan(trigger) {
   return (ACTION_PLANS[trigger] || ACTION_PLANS.normal)
@@ -48,7 +49,13 @@ function weatherStatus(weather) {
 function restoreTodayActions(actions, today) {
   const status = today && typeof today === 'object' ? today : {};
   if (String(status.status_date || '') !== duchangDateKey()) {
-    return { actions, selectedActions: [], confirmed: false, helpRecorded: false };
+    return {
+      actions,
+      selectedActions: [],
+      confirmed: false,
+      confirmedElsewhereCount: 0,
+      helpRecorded: false,
+    };
   }
   const stored = new Set(
     (Array.isArray(status.elder_actions) ? status.elder_actions : [])
@@ -60,12 +67,21 @@ function restoreTodayActions(actions, today) {
     .map((item) => item.id)
     .filter((itemId) => stored.has(itemId));
   const selected = new Set(selectedActions);
+  const actionsDoneCount = Math.max(
+    0,
+    Math.min(20, Math.floor(Number(status.actions_done_count) || 0)),
+  );
+  const confirmed = typeof status.confirmed_at === 'string'
+    && Boolean(status.confirmed_at.trim())
+    && actionsDoneCount >= 1;
   return {
     actions: actions.map((item) => ({ ...item, checked: selected.has(item.id) })),
     selectedActions,
-    confirmed: typeof status.confirmed_at === 'string'
-      && Boolean(status.confirmed_at.trim())
-      && Number(status.actions_done_count) >= 1,
+    confirmed,
+    // Web 或另一版清单的行动不伪装成本页已勾选项，同时保留当天已确认事实。
+    confirmedElsewhereCount: confirmed
+      ? Math.max(0, actionsDoneCount - selectedActions.length)
+      : 0,
     helpRecorded: Boolean(status.help_flag),
   };
 }
@@ -98,6 +114,7 @@ Page({
     contextReady: false,
     loadError: '',
     confirmed: false,
+    confirmedElsewhereCount: 0,
     helpRecorded: false,
     helpNote: '',
     completionOptions: COMPLETION_OPTIONS,
@@ -186,6 +203,7 @@ Page({
       contextReady: false,
       loadError: '',
       confirmed: false,
+      confirmedElsewhereCount: 0,
       helpRecorded: false,
       helpNote: '',
       completionIndex: 0,
@@ -214,6 +232,7 @@ Page({
       contextReady: false,
       loadError: '',
       confirmed: false,
+      confirmedElsewhereCount: 0,
       helpRecorded: false,
       helpNote: '',
       completionIndex: 0,
@@ -253,6 +272,7 @@ Page({
       actions: [],
       selectedActions: [],
       confirmed: false,
+      confirmedElsewhereCount: 0,
       helpRecorded: false,
     });
     try {
@@ -264,6 +284,9 @@ Page({
         .find((item) => Number(item.pair_id) === pairId);
       if (!requestIsActive(this, '_contextRequestId', request)) return;
       if (!elder) throw new Error('not_found');
+      if (elder.miniprogram_supported === false) {
+        throw new Error('miniprogram_pair_unsupported');
+      }
       const weather = normalizeSnapshot(snapshot);
       const plan = actionPlan(weather.stale ? '' : weather.trigger);
       const restored = restoreTodayActions(plan, elder.today);
@@ -277,6 +300,7 @@ Page({
         contextReady: true,
         loadError: '',
         confirmed: restored.confirmed,
+        confirmedElsewhereCount: restored.confirmedElsewhereCount,
         helpRecorded: restored.helpRecorded,
       });
     } catch (error) {
@@ -288,8 +312,11 @@ Page({
         actions: [],
         selectedActions: [],
         contextReady: false,
-        loadError: CONTEXT_LOAD_ERROR,
+        loadError: error && error.message === 'miniprogram_pair_unsupported'
+          ? UNSUPPORTED_PAIR_ERROR
+          : CONTEXT_LOAD_ERROR,
         confirmed: false,
+        confirmedElsewhereCount: 0,
         helpRecorded: false,
       });
     } finally {
@@ -317,6 +344,7 @@ Page({
     this.setData({
       selectedActions,
       confirmed: false,
+      confirmedElsewhereCount: 0,
       actions: this.data.actions.map((item) => ({ ...item, checked: selected.has(item.id) })),
     });
   },
@@ -363,6 +391,7 @@ Page({
         selectedActions: selectedActions.slice(),
         actions: this.data.actions.map((item) => ({ ...item, checked: selected.has(item.id) })),
         confirmed: true,
+        confirmedElsewhereCount: 0,
       });
       wx.showToast({ title: '今日行动已记录', icon: 'success' });
     } catch (error) {
