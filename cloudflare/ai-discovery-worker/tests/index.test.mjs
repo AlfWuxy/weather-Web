@@ -54,7 +54,7 @@ test("robots 允许公开抓取并保留私密路径与内容用途边界", asyn
   );
 });
 
-test("sitemap 只列出五个当前在线匿名页面", async () => {
+test("sitemap 只列出六个当前在线匿名页面", async () => {
   const response = await worker.fetch(request("/sitemap.xml"));
   const body = await response.text();
   const locations = Array.from(
@@ -68,10 +68,10 @@ test("sitemap 只列出五个当前在线匿名页面", async () => {
     "application/xml; charset=utf-8",
   );
   assert.deepEqual(locations, PUBLIC_URLS);
-  assert.equal(new Set(locations).size, 5);
+  assert.equal(new Set(locations).size, 6);
   assert.ok(locations.every((url) => !url.includes("?")));
   assert.ok(
-    !locations.includes(
+    locations.includes(
       "https://yilaoweather.org/duchang-heat-vulnerability-map",
     ),
   );
@@ -100,7 +100,7 @@ test("llms 摘要只列公开页面并明确隐私边界", async () => {
   assert.ok(!body.includes("https://yilaoweather.org/admin"));
   assert.ok(!body.includes("https://yilaoweather.org/community-risk"));
   assert.ok(
-    !body.includes(
+    body.includes(
       "https://yilaoweather.org/duchang-heat-vulnerability-map",
     ),
   );

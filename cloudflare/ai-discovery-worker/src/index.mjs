@@ -13,6 +13,7 @@ export const PUBLIC_URLS = Object.freeze([
   "https://yilaoweather.org/",
   "https://yilaoweather.org/risk",
   "https://yilaoweather.org/cooling",
+  "https://yilaoweather.org/duchang-heat-vulnerability-map",
   "https://yilaoweather.org/transparency",
   "https://yilaoweather.org/about/trust-network",
 ]);
@@ -69,6 +70,7 @@ const LLMS_BODY = `# 宜老天气通
 - [主页](https://yilaoweather.org/)
 - [公开天气风险与行动建议](https://yilaoweather.org/risk)
 - [已核验避暑资源](https://yilaoweather.org/cooling)
+- [都昌县热暴露与老年人口脆弱性地图](https://yilaoweather.org/duchang-heat-vulnerability-map)
 - [指标透明度](https://yilaoweather.org/transparency)
 - [信任网络说明](https://yilaoweather.org/about/trust-network)
 
