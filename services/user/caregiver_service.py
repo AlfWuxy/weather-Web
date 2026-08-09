@@ -10,7 +10,12 @@ from flask_login import current_user
 from core.db_models import Community, DailyStatus, Debrief, FamilyMember, Pair, PairLink
 from core.extensions import db
 from core.guest import is_guest_user
-from core.time_utils import today_local, utcnow, local_datetime_to_utc
+from core.time_utils import (
+    local_datetime_to_utc,
+    today_local,
+    utc_to_local_datetime,
+    utcnow,
+)
 from core.weather import (
     get_consecutive_hot_days,
     get_weather_with_cache,
@@ -388,6 +393,11 @@ def _build_pair_management_context(caregiver_mode=False):
                 alert_label = '暂无预警'
 
         confirmed = is_effective_confirmation(status)
+        confirmed_at_local = (
+            utc_to_local_datetime(status.confirmed_at)
+            if confirmed
+            else None
+        )
         is_overdue = bool(now >= deadline and not confirmed)
         relay_stage = status.relay_stage if status else None
         relay_stage_label = None
@@ -410,6 +420,11 @@ def _build_pair_management_context(caregiver_mode=False):
             'pair': pair,
             'status': status,
             'confirmed': confirmed,
+            'confirmed_at_local_display': (
+                confirmed_at_local.strftime('%H:%M')
+                if confirmed_at_local
+                else None
+            ),
             'risk_label': risk_label,
             'heat_result': heat_result,
             'weather_available': weather_available,
@@ -595,6 +610,11 @@ def caregiver_pair_detail(pair_id):
         else []
     )
     caregiver_note = status_today.caregiver_note if status_today else None
+    confirmed_at_local = (
+        utc_to_local_datetime(status_today.confirmed_at)
+        if is_effective_confirmation(status_today)
+        else None
+    )
 
     return render_template(
         'caregiver_pair_detail.html',
@@ -611,6 +631,11 @@ def caregiver_pair_detail(pair_id):
         actions_today=actions_today,
         elder_actions_today=elder_actions_today,
         caregiver_note=caregiver_note,
+        confirmed_at_local_display=(
+            confirmed_at_local.strftime('%H:%M')
+            if confirmed_at_local
+            else None
+        ),
         is_effective_confirmation=is_effective_confirmation,
     )
 

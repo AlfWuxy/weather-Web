@@ -162,6 +162,19 @@ def ensure_utc_aware(dt):
     return dt.replace(tzinfo=timezone.utc)
 
 
+def utc_to_local_datetime(dt):
+    """将 UTC 时间戳转换为应用时区的 naive datetime，用于界面显示。
+
+    - 支持数据库返回的 naive/aware datetime
+    - naive 输入按 UTC 语义处理
+    - 返回值与 now_local() 一致，不携带 tzinfo
+    """
+    if dt is None:
+        return None
+    aware = ensure_utc_aware(dt)
+    return aware.astimezone(_resolve_timezone()).replace(tzinfo=None)
+
+
 def utc_to_local_date(dt):
     """将 UTC 时间戳转换为本地日期（date）
 
