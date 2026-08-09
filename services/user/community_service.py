@@ -26,7 +26,6 @@ from ._common import (
     _require_roles
 )
 from ._helpers import (
-    _auto_escalate_overdue_statuses,
     _build_announce_message,
     _build_community_message,
     _build_community_snapshot,
@@ -109,7 +108,6 @@ def community_dashboard():
             DailyStatus.status_date == status_date,
             Pair.status == 'active',
         ).all()
-        _auto_escalate_overdue_statuses(statuses, status_date)
         for status in statuses:
             statuses_by_comm.setdefault(status.community_code, []).append(status)
 

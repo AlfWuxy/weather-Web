@@ -105,6 +105,7 @@ def test_same_key_refresh_serializes_stale_writer_and_keeps_both_actions(
             with app.app_context():
                 status = db.session.get(DailyStatus, first_status_id)
                 status.confirmed_at = utcnow()
+                status.actions_done_count = 1
                 db.session.commit()
                 service.refresh_community_daily(COMMUNITY_CODE, STATUS_DATE)
         except Exception as exc:  # pragma: no cover - 断言在主线程统一展示
@@ -120,6 +121,7 @@ def test_same_key_refresh_serializes_stale_writer_and_keeps_both_actions(
             with app.app_context():
                 status = db.session.get(DailyStatus, second_status_id)
                 status.confirmed_at = utcnow()
+                status.actions_done_count = 1
                 db.session.commit()
                 second_attempting_refresh.set()
                 service.refresh_community_daily(COMMUNITY_CODE, STATUS_DATE)

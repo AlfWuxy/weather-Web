@@ -10,3 +10,11 @@ def test_pair_management_get_has_no_hidden_auto_escalation_write():
     source = inspect.getsource(caregiver_service._build_pair_management_context)
 
     assert "_auto_escalate_overdue_statuses(" not in source
+
+
+def test_community_dashboard_get_has_no_hidden_auto_escalation_write():
+    from services.user import community_service
+
+    source = inspect.getsource(community_service.community_dashboard)
+
+    assert "_auto_escalate_overdue_statuses(" not in source
