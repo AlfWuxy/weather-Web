@@ -854,6 +854,8 @@ class DLNMRiskService:
                 'final_rr': rr,
                 'temperature': temperature,
                 'deviation_from_mmt': deviation,
+                'lag_history_applied': False,
+                'lag_history_status': 'untrained_fallback',
             }
         
         # 获取MMT，如果未计算则使用默认值
@@ -862,7 +864,9 @@ class DLNMRiskService:
         # 基础RR计算
         rr = self._get_base_rr(temperature)
         
-        # 考虑滞后效应
+        # 固化画像曲线已经代表累积 RR，再叠加在线 lag 权重会重复计权。
+        lag_history_applied = False
+        lag_history_status = 'not_requested'
         if lag_temperatures is not None and len(lag_temperatures) > 0:
             # 确保滞后温度都是数值
             clean_lag_temps = []
@@ -872,7 +876,12 @@ class DLNMRiskService:
                 except (TypeError, ValueError):
                     clean_lag_temps.append(temperature)
             if clean_lag_temps:
-                rr = self._apply_lag_effects(temperature, clean_lag_temps, rr)
+                if getattr(self, 'profile_loaded', False):
+                    lag_history_status = 'profile_cumulative_rr_no_online_reweight'
+                else:
+                    rr = self._apply_lag_effects(temperature, clean_lag_temps, rr)
+                    lag_history_applied = True
+                    lag_history_status = 'legacy_online_lag_weighting'
         
         # 病种专项调整
         disease_modifier = 1.0
@@ -930,7 +939,9 @@ class DLNMRiskService:
             'deviation_from_mmt': abs(temperature - mmt),
             'literature_weight': self.literature_weight,
             'calculation_branch': 'trained_model',
-            'rr_cap_applied': uncapped_final_rr > self.rr_cap_cumulative
+            'rr_cap_applied': uncapped_final_rr > self.rr_cap_cumulative,
+            'lag_history_applied': lag_history_applied,
+            'lag_history_status': lag_history_status,
         }
     
     def _get_base_rr(self, temperature):
@@ -1096,8 +1107,10 @@ class DLNMRiskService:
                 'type': '热夜',
                 'severity': 'medium',
                 'description': f'夜间最低温度过高({temperature:.1f}°C)',
-                'rr_multiplier': 1.2,
-                'cardiovascular_risk': 'elevated'
+                # 热夜仍可触发防护行动，研究 RR 未经本地验证，不进入线上计算。
+                'model_effect_applied': False,
+                'effect_status': 'action_signal_only',
+                'cardiovascular_attention': 'action_only'
             })
         
         return events
@@ -1109,6 +1122,10 @@ class DLNMRiskService:
 
         return {
             'status': '模型已训练',
+            'evidence_status': 'exploratory',
+            'mmt_boundary_flag': int(self.model_profile_metrics.get('mmt_boundary_flag', 1)),
+            'probability_calibrated': False,
+            'threshold_semantics': 'action_communication_interface',
             'model_source': self.model_source,
             'profile_loaded': self.profile_loaded,
             'profile_name': self.profile_name,
@@ -1131,6 +1148,19 @@ class DLNMRiskService:
             'seasonal_factors': {
                 month: data['seasonal_factor']
                 for month, data in self.seasonal_baseline.items()
+            },
+            # 两个文献数值只作研究溯源，不参与线上 RR 或概率计算。
+            'research_priors': {
+                'cold_p5_rr': {
+                    'value': LITERATURE_PRIORS['cold_rr']['p5']['typical'],
+                    'applied': False,
+                    'status': 'inactive_research_metadata',
+                },
+                'hot_night_rr': {
+                    'value': LITERATURE_PRIORS['disease_rr']['cardiovascular']['hot_night_rr'],
+                    'applied': False,
+                    'status': 'inactive_research_metadata',
+                },
             },
             'calibration_sources': [
                 'Zeng2016_IJERPH (MMT by region)',
