@@ -9,19 +9,51 @@ import pytest
 
 
 class _LeaseRedis:
-    def __init__(self, accepted=True, values=None):
+    def __init__(
+        self,
+        accepted=True,
+        values=None,
+        *,
+        set_results=None,
+        pttl_results=None,
+        set_error=None,
+        pttl_error=None,
+    ):
         self.accepted = accepted
         self.calls = []
         self.values = dict(values or {})
+        self.set_results = list(set_results) if set_results is not None else None
+        self.pttl_results = list(pttl_results or [])
+        self.pttl_calls = []
+        self.set_error = set_error
+        self.pttl_error = pttl_error
 
     def set(self, key, value, **kwargs):
         self.calls.append((key, value, kwargs))
-        if self.accepted:
+        if self.set_error is not None:
+            raise self.set_error
+        accepted = (
+            self.set_results.pop(0)
+            if self.set_results is not None
+            else self.accepted
+        )
+        if accepted:
             self.values[key] = value
-        return self.accepted
+        return accepted
 
     def get(self, key):
         return self.values.get(key)
+
+    def pttl(self, key):
+        self.pttl_calls.append(key)
+        if self.pttl_error is not None:
+            raise self.pttl_error
+        if not self.pttl_results:
+            raise AssertionError("测试未提供 PTTL 结果")
+        result = self.pttl_results.pop(0)
+        if isinstance(result, BaseException):
+            raise result
+        return result
 
 
 def test_production_cycle_rejects_busy_redis_lease_before_fetcher(app, monkeypatch):
@@ -151,7 +183,7 @@ def test_formal_smoke_lease_reservation_fails_before_receipt_when_busy(
 ):
     from services.pipelines import sync_weather_cache as pipeline
 
-    fake_redis = _LeaseRedis(accepted=False)
+    fake_redis = _LeaseRedis(accepted=False, pttl_results=[1_800_000])
     monkeypatch.setattr(pipeline, "app", app)
     monkeypatch.setattr(pipeline, "get_qweather_redis_client", lambda: fake_redis)
 
@@ -161,6 +193,148 @@ def test_formal_smoke_lease_reservation_fails_before_receipt_when_busy(
     assert len(fake_redis.calls) == 1
     assert fake_redis.calls[0][0] == pipeline.SYNC_LEASE_KEY
     assert fake_redis.calls[0][2] == {"nx": True, "ex": 1800}
+    assert fake_redis.pttl_calls == [pipeline.SYNC_LEASE_KEY]
+
+
+def test_formal_smoke_expiring_lease_is_retryable_exit_75(
+    app,
+    monkeypatch,
+):
+    from services.pipelines import sync_weather_cache as pipeline
+
+    fake_redis = _LeaseRedis(accepted=False, pttl_results=[139_000])
+    monkeypatch.setattr(pipeline, "app", app)
+    monkeypatch.setattr(pipeline, "get_qweather_redis_client", lambda: fake_redis)
+    monkeypatch.setenv("CASE_WEATHER_FORMAL_SMOKE_LEASE_TOKEN", "a" * 64)
+
+    assert pipeline.main(["--reserve-formal-lease-only"]) == 75
+    assert len(fake_redis.calls) == 1
+    assert fake_redis.calls[0][2] == {"nx": True, "ex": 1800}
+    assert fake_redis.pttl_calls == [pipeline.SYNC_LEASE_KEY]
+
+
+@pytest.mark.parametrize("pttl_value", (-1, -3, 1_800_001))
+def test_formal_smoke_invalid_lease_pttl_is_fatal_exit_74(
+    app,
+    monkeypatch,
+    pttl_value,
+):
+    from services.pipelines import sync_weather_cache as pipeline
+
+    fake_redis = _LeaseRedis(accepted=False, pttl_results=[pttl_value])
+    monkeypatch.setattr(pipeline, "app", app)
+    monkeypatch.setattr(pipeline, "get_qweather_redis_client", lambda: fake_redis)
+    monkeypatch.setenv("CASE_WEATHER_FORMAL_SMOKE_LEASE_TOKEN", "b" * 64)
+
+    assert pipeline.main(["--reserve-formal-lease-only"]) == 74
+    assert len(fake_redis.calls) == 1
+    assert fake_redis.pttl_calls == [pipeline.SYNC_LEASE_KEY]
+
+
+def test_formal_smoke_lease_pttl_error_is_fatal_exit_74(
+    app,
+    monkeypatch,
+):
+    from services.pipelines import sync_weather_cache as pipeline
+
+    fake_redis = _LeaseRedis(
+        accepted=False,
+        pttl_error=ConnectionError("redis unavailable"),
+    )
+    monkeypatch.setattr(pipeline, "app", app)
+    monkeypatch.setattr(pipeline, "get_qweather_redis_client", lambda: fake_redis)
+    monkeypatch.setenv("CASE_WEATHER_FORMAL_SMOKE_LEASE_TOKEN", "c" * 64)
+
+    assert pipeline.main(["--reserve-formal-lease-only"]) == 74
+    assert len(fake_redis.calls) == 1
+    assert fake_redis.pttl_calls == [pipeline.SYNC_LEASE_KEY]
+
+
+def test_formal_smoke_expired_lease_race_retries_set_once_and_succeeds(
+    app,
+    monkeypatch,
+):
+    from services.pipelines import sync_weather_cache as pipeline
+
+    fake_redis = _LeaseRedis(
+        set_results=[False, True],
+        pttl_results=[-2],
+    )
+    monkeypatch.setattr(pipeline, "app", app)
+    monkeypatch.setattr(pipeline, "get_qweather_redis_client", lambda: fake_redis)
+    monkeypatch.setenv("CASE_WEATHER_FORMAL_SMOKE_LEASE_TOKEN", "d" * 64)
+
+    assert pipeline.main(["--reserve-formal-lease-only"]) == 0
+    assert len(fake_redis.calls) == 2
+    assert all(
+        call[2] == {"nx": True, "ex": 1800}
+        for call in fake_redis.calls
+    )
+    assert fake_redis.pttl_calls == [pipeline.SYNC_LEASE_KEY]
+    assert fake_redis.values[pipeline.SYNC_LEASE_KEY] == "d" * 64
+
+
+def test_formal_smoke_zero_pttl_race_retries_set_once_and_succeeds(
+    app,
+    monkeypatch,
+):
+    from services.pipelines import sync_weather_cache as pipeline
+
+    fake_redis = _LeaseRedis(
+        set_results=[False, True],
+        pttl_results=[0],
+    )
+    monkeypatch.setattr(pipeline, "app", app)
+    monkeypatch.setattr(pipeline, "get_qweather_redis_client", lambda: fake_redis)
+    monkeypatch.setenv("CASE_WEATHER_FORMAL_SMOKE_LEASE_TOKEN", "e" * 64)
+
+    assert pipeline.main(["--reserve-formal-lease-only"]) == 0
+    assert len(fake_redis.calls) == 2
+    assert all(
+        call[2] == {"nx": True, "ex": 1800}
+        for call in fake_redis.calls
+    )
+    assert fake_redis.pttl_calls == [pipeline.SYNC_LEASE_KEY]
+    assert fake_redis.values[pipeline.SYNC_LEASE_KEY] == "e" * 64
+
+
+def test_formal_smoke_repeated_zero_pttl_stops_after_one_retry(
+    app,
+    monkeypatch,
+):
+    from services.pipelines import sync_weather_cache as pipeline
+
+    fake_redis = _LeaseRedis(
+        set_results=[False, False],
+        pttl_results=[0, 0],
+    )
+    monkeypatch.setattr(pipeline, "app", app)
+    monkeypatch.setattr(pipeline, "get_qweather_redis_client", lambda: fake_redis)
+    monkeypatch.setenv("CASE_WEATHER_FORMAL_SMOKE_LEASE_TOKEN", "f" * 64)
+
+    assert pipeline.main(["--reserve-formal-lease-only"]) == 74
+    assert len(fake_redis.calls) == 2
+    assert fake_redis.pttl_calls == [
+        pipeline.SYNC_LEASE_KEY,
+        pipeline.SYNC_LEASE_KEY,
+    ]
+
+
+def test_formal_smoke_invalid_lease_token_is_usage_exit_64(
+    app,
+    monkeypatch,
+):
+    from services.pipelines import sync_weather_cache as pipeline
+
+    monkeypatch.setattr(pipeline, "app", app)
+    monkeypatch.setattr(
+        pipeline,
+        "get_qweather_redis_client",
+        lambda: pytest.fail("无效 token 不得访问 Redis"),
+    )
+    monkeypatch.setenv("CASE_WEATHER_FORMAL_SMOKE_LEASE_TOKEN", "invalid")
+
+    assert pipeline.main(["--reserve-formal-lease-only"]) == 64
 
 
 def test_current_weather_can_disable_untracked_fallback(monkeypatch):

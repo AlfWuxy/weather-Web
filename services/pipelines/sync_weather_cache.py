@@ -51,12 +51,21 @@ NOWCAST_CACHE_LOCATION = f"nowcast:{CANONICAL_LOCATION_NAME}"
 NOWCAST_CACHE_HOURS = 24
 SYNC_LEASE_SECONDS = 1800
 SYNC_LEASE_KEY = "weather:sync:cycle:v1"
+SYNC_LEASE_MAX_PTTL_MS = SYNC_LEASE_SECONDS * 1000
 FORMAL_SMOKE_USED_PREFIX = "weather:sync:formal-smoke:v1"
 _HOST_LOCK = threading.Lock()
 
 
 class WeatherSyncBusy(RuntimeError):
     """同步周期已被同机进程或分布式租约占用。"""
+
+
+class FormalLeaseReservationError(WeatherSyncBusy):
+    """正式烟测租约预占失败，并携带发布层可判定的退出码。"""
+
+    def __init__(self, reason, exit_code):
+        super().__init__(reason)
+        self.exit_code = exit_code
 
 
 def _sync_lock_path():
@@ -197,23 +206,54 @@ def reserve_formal_cycle_lease(lease_token):
     if len(lease_token) != 64 or any(
         character not in "0123456789abcdef" for character in lease_token
     ):
-        raise WeatherSyncBusy("formal_smoke_lease_token_invalid")
+        raise FormalLeaseReservationError(
+            "formal_smoke_lease_token_invalid",
+            64,
+        )
     with app.app_context():
         client = get_qweather_redis_client()
         if client is None:
-            raise WeatherSyncBusy("redis_lease_unavailable")
-        try:
-            acquired = client.set(
-                SYNC_LEASE_KEY,
-                lease_token,
-                nx=True,
-                ex=SYNC_LEASE_SECONDS,
+            raise FormalLeaseReservationError("redis_lease_unavailable", 74)
+
+        # 最多处理一次“SET 失败后键刚好到期”的竞态，禁止形成无界重试。
+        for attempt in range(2):
+            try:
+                acquired = client.set(
+                    SYNC_LEASE_KEY,
+                    lease_token,
+                    nx=True,
+                    ex=SYNC_LEASE_SECONDS,
+                )
+            except Exception as exc:
+                raise FormalLeaseReservationError(
+                    "redis_lease_unavailable",
+                    74,
+                ) from exc
+            if acquired:
+                return True
+
+            try:
+                ttl_ms = client.pttl(SYNC_LEASE_KEY)
+            except Exception as exc:
+                raise FormalLeaseReservationError(
+                    "redis_lease_pttl_unavailable",
+                    74,
+                ) from exc
+            if type(ttl_ms) is not int:
+                raise FormalLeaseReservationError(
+                    "redis_lease_pttl_invalid",
+                    74,
+                )
+            if 1 <= ttl_ms <= SYNC_LEASE_MAX_PTTL_MS:
+                raise FormalLeaseReservationError("redis_lease_busy", 75)
+            if ttl_ms in (-2, 0) and attempt == 0:
+                continue
+            raise FormalLeaseReservationError(
+                "redis_lease_pttl_invalid",
+                74,
             )
-        except Exception as exc:
-            raise WeatherSyncBusy("redis_lease_unavailable") from exc
-        if not acquired:
-            raise WeatherSyncBusy("redis_lease_busy")
-    return True
+
+    raise FormalLeaseReservationError("redis_lease_reservation_failed", 70)
 
 
 def _acquire_distributed_cycle_lease():
@@ -635,9 +675,15 @@ def main(argv=None):
             reserve_formal_cycle_lease(
                 os.getenv('CASE_WEATHER_FORMAL_SMOKE_LEASE_TOKEN', ''),
             )
-        except WeatherSyncBusy as exc:
+        except FormalLeaseReservationError as exc:
             logger.warning("Formal weather smoke lease unavailable: %s", exc)
-            return 75
+            return exc.exit_code
+        except WeatherSyncBusy as exc:
+            logger.error("Unexpected formal weather smoke lease state: %s", exc)
+            return 70
+        except Exception:
+            logger.exception("Unexpected formal weather smoke lease failure")
+            return 70
         print('Formal weather smoke lease reserved.')
         return 0
 

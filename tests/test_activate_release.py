@@ -16,6 +16,7 @@ import stat
 import subprocess
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -39,6 +40,7 @@ LEGACY_TIMER_UNITS = (
 )
 LEGACY_SERVICE_UNITS = ('case-weather-sync.service',)
 LEGACY_UNITS = LEGACY_TIMER_UNITS + LEGACY_SERVICE_UNITS
+SCHEDULER_UNITS = MANAGED_TIMER_UNITS + LEGACY_TIMER_UNITS
 SERVICE_UNITS = (
     'case-weather-backup.service',
     'case-weather-cache.service',
@@ -516,6 +518,13 @@ if command == 'is-active':
         print('inactive')
     raise SystemExit(3)
 if command == 'stop':
+    stop_failure_marker = state / f'{unit}.stop-failure-consumed'
+    if (
+        os.environ.get('FAKE_FAIL_STOP_UNIT_ONCE') == unit
+        and not stop_failure_marker.exists()
+    ):
+        stop_failure_marker.touch()
+        raise SystemExit(9)
     if os.environ.get('FAKE_FAIL_STOP_UNIT') == unit:
         raise SystemExit(9)
     for value in ('active', 'activating', 'reloading', 'deactivating'):
@@ -1560,6 +1569,73 @@ def _configure_formal_smoke(transaction, *, provider='QWeather'):
     transaction['env']['RUNTIME_LOG_BOUNDARY_TEST_HELPER'] = str(
         runtime_log_helper
     )
+    timeout_helper = transaction['state_dir'] / 'formal-smoke-timeout'
+    _write_executable(
+        timeout_helper,
+        """#!/usr/bin/env python3
+import signal
+import os
+import subprocess
+import sys
+
+
+process = None
+
+
+def forward_signal_and_wait(signum, _frame):
+    # 把父进程信号转发给直接子进程，并等待它完成回收。
+    if process is not None and process.poll() is None:
+        process.send_signal(signum)
+        process.wait()
+    raise SystemExit(128 + signum)
+
+
+def parse_seconds(value):
+    multipliers = {'s': 1, 'm': 60, 'h': 3600}
+    suffix = value[-1:] if value[-1:] in multipliers else ''
+    number = value[:-1] if suffix else value
+    return float(number) * multipliers.get(suffix, 1)
+
+
+arguments = sys.argv[1:]
+index = 0
+while index < len(arguments) and arguments[index].startswith('-'):
+    option = arguments[index]
+    if option == '--':
+        index += 1
+        break
+    if option in ('-s', '--signal', '-k', '--kill-after'):
+        index += 2
+        continue
+    index += 1
+if index >= len(arguments):
+    raise SystemExit(64)
+duration = parse_seconds(arguments[index])
+command = arguments[index + 1:]
+if command[:1] == ['--']:
+    command = command[1:]
+if not command:
+    raise SystemExit(64)
+
+for forwarded_signal in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+    signal.signal(forwarded_signal, forward_signal_and_wait)
+# GNU timeout 默认作为独立进程组组长运行，便于父 shell 清理整组后代。
+os.setpgid(0, 0)
+process = subprocess.Popen(command)
+try:
+    return_code = process.wait(timeout=duration)
+except subprocess.TimeoutExpired:
+    process.send_signal(signal.SIGTERM)
+    try:
+        process.wait(timeout=0.25)
+    except subprocess.TimeoutExpired:
+        process.send_signal(signal.SIGKILL)
+        process.wait()
+    raise SystemExit(124)
+raise SystemExit(return_code if return_code >= 0 else 128 - return_code)
+""",
+    )
+    transaction['env']['TIMEOUT_BIN'] = str(timeout_helper)
     private_key = transaction['qweather_private_dir'] / 'qweather-formal-current.pem'
     pending_key = (
         transaction['qweather_private_dir']
@@ -1622,16 +1698,40 @@ PUBLIC_BASE_URL=https://yilaoweather.org
     counter_file = transaction['state_dir'] / 'formal-smoke-request-count'
     transaction['env']['FAKE_FORMAL_SMOKE_COUNTER'] = str(counter_file)
     budget_mode_file = transaction['state_dir'] / 'formal-smoke-budget-mode'
+    budget_owner_count_file = (
+        transaction['state_dir'] / 'formal-smoke-owner-budget-count'
+    )
+    budget_month_file = transaction['state_dir'] / 'formal-smoke-budget-month'
+    budget_audit_file = transaction['state_dir'] / 'formal-smoke-budget-audit.jsonl'
+    lease_acquired_epoch_file = (
+        transaction['state_dir'] / 'formal-smoke-lease-acquired-epoch'
+    )
     budget_helper = transaction['state_dir'] / 'formal-smoke-budget-snapshot'
     _write_executable(
         budget_helper,
         f"""#!/usr/bin/env python3
 import json
+import time
 from pathlib import Path
 
 counter = Path({str(counter_file)!r})
 mode_file = Path({str(budget_mode_file)!r})
-count = int(counter.read_text(encoding='utf-8')) if counter.exists() else 0
+owner_counter = Path({str(budget_owner_count_file)!r})
+month_file = Path({str(budget_month_file)!r})
+audit_file = Path({str(budget_audit_file)!r})
+lease_acquired_file = Path({str(lease_acquired_epoch_file)!r})
+formal_count = int(counter.read_text(encoding='utf-8')) if counter.exists() else 0
+owner_count = (
+    int(owner_counter.read_text(encoding='utf-8'))
+    if owner_counter.exists()
+    else 0
+)
+count = formal_count + owner_count
+month = (
+    month_file.read_text(encoding='ascii').strip()
+    if month_file.exists()
+    else '2026-07'
+)
 mode = mode_file.read_text(encoding='utf-8').strip() if mode_file.exists() else 'valid'
 if mode == 'duplicate':
     used = 10 + (count * 4)
@@ -1659,32 +1759,156 @@ else:
     }} if count else {{}}
 print(json.dumps({{
     'backend': 'redis',
-    'month': '2026-07',
+    'month': month,
     'used': used,
     'endpoints': endpoints,
 }}, sort_keys=True, separators=(',', ':')))
+with audit_file.open('a', encoding='utf-8') as stream:
+    stream.write(json.dumps({{
+        'captured_at_ns': time.time_ns(),
+        'formal_count': formal_count,
+        'lease_acquired': lease_acquired_file.exists(),
+        'month': month,
+        'owner_count': owner_count,
+        'used': used,
+    }}, sort_keys=True) + '\\n')
 """,
     )
     transaction['env']['QWEATHER_BUDGET_SNAPSHOT_HELPER'] = str(budget_helper)
     lease_token_file = transaction['state_dir'] / 'formal-smoke-lease-token'
     lease_mode_file = transaction['state_dir'] / 'formal-smoke-lease-mode'
+    lease_scenario_file = transaction['state_dir'] / 'formal-smoke-lease-scenario.json'
+    lease_attempt_file = transaction['state_dir'] / 'formal-smoke-lease-attempt-count'
+    lease_audit_file = transaction['state_dir'] / 'formal-smoke-lease-audit.jsonl'
+    lease_entered_file = transaction['state_dir'] / 'formal-smoke-lease-entered'
+    lease_helper_pid_file = transaction['state_dir'] / 'formal-smoke-lease-helper.pid'
     lease_helper = transaction['state_dir'] / 'formal-smoke-lease-reserve'
     _write_executable(
         lease_helper,
         f"""#!/usr/bin/env python3
+import json
 import os
+import signal
+import time
 from pathlib import Path
 
 token = os.environ.get('CASE_WEATHER_FORMAL_SMOKE_LEASE_TOKEN', '')
 if len(token) != 64 or any(char not in '0123456789abcdef' for char in token):
     raise SystemExit(92)
 mode_file = Path({str(lease_mode_file)!r})
-if mode_file.exists() and mode_file.read_text(encoding='utf-8').strip() == 'busy':
-    raise SystemExit(75)
-Path({str(lease_token_file)!r}).write_text(token, encoding='ascii')
+scenario_file = Path({str(lease_scenario_file)!r})
+attempt_file = Path({str(lease_attempt_file)!r})
+audit_file = Path({str(lease_audit_file)!r})
+entered_file = Path({str(lease_entered_file)!r})
+helper_pid_file = Path({str(lease_helper_pid_file)!r})
+acquired_epoch_file = Path({str(lease_acquired_epoch_file)!r})
+owner_counter = Path({str(budget_owner_count_file)!r})
+month_file = Path({str(budget_month_file)!r})
+attempt = (
+    int(attempt_file.read_text(encoding='ascii')) + 1
+    if attempt_file.exists()
+    else 1
+)
+attempt_file.write_text(str(attempt), encoding='ascii')
+if scenario_file.exists():
+    scenario = json.loads(scenario_file.read_text(encoding='utf-8'))
+    if not isinstance(scenario, list) or not scenario:
+        raise SystemExit(93)
+    response = scenario[min(attempt - 1, len(scenario) - 1)]
+elif mode_file.exists() and mode_file.read_text(encoding='utf-8').strip() == 'busy':
+    response = {{'outcome': 'busy', 'exit_code': 75}}
+else:
+    response = {{'outcome': 'acquired', 'exit_code': 0}}
+
+# 模拟旧 lease owner 在等待期完成合法调用，或等待跨过预算月份边界。
+owner_increment = int(response.get('owner_budget_increment', 0))
+if owner_increment:
+    owner_count = (
+        int(owner_counter.read_text(encoding='utf-8'))
+        if owner_counter.exists()
+        else 0
+    )
+    owner_counter.write_text(str(owner_count + owner_increment), encoding='utf-8')
+if response.get('budget_month') is not None:
+    month_file.write_text(str(response['budget_month']), encoding='ascii')
+
+state = Path({str(transaction['fake_state'])!r})
+actions_path = Path({str(transaction['systemctl_log'])!r})
+actions = actions_path.read_text(encoding='utf-8').splitlines() if actions_path.exists() else []
+active_units = []
+for unit in {ALL_UNITS!r}:
+    if any((state / f'{{unit}}.{{kind}}').exists() for kind in (
+        'active', 'activating', 'reloading', 'deactivating'
+    )):
+        active_units.append(unit)
+receipt_root = Path(
+    {str(transaction['state_dir'] / 'deployments' / 'formal-cache-smokes')!r}
+)
+started = list(receipt_root.glob('*/started')) if receipt_root.exists() else []
+completed = list(receipt_root.glob('*/completed')) if receipt_root.exists() else []
+tickets = list(
+    Path({str(transaction['state_dir'] / 'run')!r}).glob(
+        'formal-weather-smoke-*.ticket'
+    )
+)
+live_env = Path({transaction['env']['ENV_FILE']!r}).read_text(encoding='utf-8')
+gate_values = [
+    line.split('=', 1)[1]
+    for line in live_env.splitlines()
+    if line.startswith('QWEATHER_NETWORK_NOT_BEFORE_EPOCH=')
+]
+transactions = sorted(
+    Path({str(transaction['state_dir'] / 'backups' / 'deploy-transactions')!r}).iterdir()
+)
+current_transaction = transactions[-1]
+weather_counter = Path({str(counter_file)!r})
+event = {{
+    'attempt': attempt,
+    'outcome': str(response.get('outcome', '')),
+    'pttl_ms': response.get('pttl_ms'),
+    'exit_code': int(response.get('exit_code', 70)),
+    'active_units': active_units,
+    'all_scheduler_stops_seen': all(
+        f'stop {{unit}}' in actions for unit in {SCHEDULER_UNITS!r}
+    ),
+    'started_count': len(started),
+    'completed_count': len(completed),
+    'ticket_count': len(tickets),
+    'gate_values': gate_values,
+    'network_gate_open': '0' in gate_values,
+    'upstream_called': weather_counter.exists(),
+    'forward_only': (current_transaction / 'FORWARD_ONLY_REQUIRED').exists(),
+}}
+with audit_file.open('a', encoding='utf-8') as stream:
+    stream.write(json.dumps(event, sort_keys=True) + '\\n')
+helper_pid_file.write_text(str(os.getpid()), encoding='ascii')
+if response.get('ignore_term'):
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+entered_file.touch()
+sleep_seconds = float(response.get('sleep_seconds', 0))
+if sleep_seconds > 0:
+    time.sleep(sleep_seconds)
+exit_code = int(response.get('exit_code', 70))
+if exit_code == 0:
+    Path({str(lease_token_file)!r}).write_text(token, encoding='ascii')
+    acquired_epoch_file.write_text(str(int(time.time())), encoding='ascii')
+raise SystemExit(exit_code)
 """,
     )
     transaction['env']['FORMAL_SMOKE_LEASE_HELPER'] = str(lease_helper)
+    transaction.update({
+        'formal_lease_token_file': lease_token_file,
+        'formal_lease_mode_file': lease_mode_file,
+        'formal_lease_scenario_file': lease_scenario_file,
+        'formal_lease_attempt_file': lease_attempt_file,
+        'formal_lease_audit_file': lease_audit_file,
+        'formal_lease_entered_file': lease_entered_file,
+        'formal_lease_helper_pid_file': lease_helper_pid_file,
+        'formal_lease_acquired_epoch_file': lease_acquired_epoch_file,
+        'formal_budget_audit_file': budget_audit_file,
+        'formal_budget_month_file': budget_month_file,
+        'formal_budget_owner_count_file': budget_owner_count_file,
+    })
     weather_sync = transaction['new_release'] / 'app' / 'scripts' / 'weather_cache_sync.sh'
     _write_executable(
         weather_sync,
@@ -1773,6 +1997,115 @@ PY
     finally:
         connection.close()
     return staged_text, counter_file
+
+
+def _write_formal_lease_scenario(transaction, responses):
+    transaction['formal_lease_scenario_file'].write_text(
+        json.dumps(responses, ensure_ascii=True),
+        encoding='utf-8',
+    )
+
+
+def _formal_lease_audit_events(transaction):
+    audit_file = transaction['formal_lease_audit_file']
+    if not audit_file.exists():
+        return []
+    return [
+        json.loads(line)
+        for line in audit_file.read_text(encoding='utf-8').splitlines()
+    ]
+
+
+def _formal_budget_audit_events(transaction):
+    audit_file = transaction['formal_budget_audit_file']
+    if not audit_file.exists():
+        return []
+    return [
+        json.loads(line)
+        for line in audit_file.read_text(encoding='utf-8').splitlines()
+    ]
+
+
+def _receipt_fields(path):
+    fields = {}
+    for raw_line in path.read_text(encoding='utf-8').splitlines():
+        key, separator, value = raw_line.partition('=')
+        if separator:
+            fields[key] = value
+    return fields
+
+
+def _set_formal_wait_network_gate(transaction):
+    staged_env = transaction['new_release'] / 'staged.env'
+    staged_env.write_text(
+        staged_env.read_text(encoding='utf-8')
+        + 'QWEATHER_NETWORK_NOT_BEFORE_EPOCH=4102444800\n',
+        encoding='utf-8',
+    )
+
+
+def _set_recurring_timer_active_disabled(transaction):
+    fake_state = transaction['fake_state']
+    (fake_state / 'case-weather-cache.timer.active').touch()
+    (fake_state / 'case-weather-cache.timer.enabled').unlink(missing_ok=True)
+    (fake_state / 'case-weather-cache-bootstrap.timer.active').unlink(missing_ok=True)
+    (fake_state / 'case-weather-cache-bootstrap.timer.enabled').touch()
+
+
+def _assert_formal_lease_wait_is_pre_irreversible(events):
+    assert events
+    for event in events:
+        assert event['active_units'] == []
+        assert event['all_scheduler_stops_seen'] is True
+        assert event['started_count'] == 0
+        assert event['completed_count'] == 0
+        assert event['ticket_count'] == 0
+        assert event['gate_values'] == ['4102444800']
+        assert event['network_gate_open'] is False
+        assert event['upstream_called'] is False
+        assert event['forward_only'] is False
+
+
+def _assert_formal_lease_failure_rolled_back(transaction, counter_file):
+    assert transaction['current_link'].resolve() == transaction['old_release'].resolve()
+    assert _database_value(transaction['database_file']) == 'old'
+    assert 'RELEASE_VALUE=old' in Path(transaction['env']['ENV_FILE']).read_text(
+        encoding='utf-8'
+    )
+    rolled_back = list(
+        (transaction['state_dir'] / 'backups').rglob('ROLLED_BACK')
+    )
+    assert len(rolled_back) == 1, 'lease 失败必须形成唯一成功回滚标记'
+    assert rolled_back[0].read_text(encoding='utf-8') == 'success\n'
+    transaction_dir = rolled_back[0].parent
+    assert not (transaction_dir / 'FORWARD_ONLY_REQUIRED').exists()
+    assert not (transaction_dir / 'POST_COMMIT_ATTENTION.txt').exists()
+    assert not (transaction_dir / 'ROLLBACK_REQUIRED.txt').exists()
+    assert not counter_file.exists()
+    receipt_root = transaction['state_dir'] / 'deployments' / 'formal-cache-smokes'
+    assert not receipt_root.is_symlink()
+    if receipt_root.exists():
+        assert receipt_root.is_dir()
+        assert list(receipt_root.iterdir()) == []
+    assert list(
+        (transaction['state_dir'] / 'run').glob('formal-weather-smoke-*.ticket')
+    ) == []
+    assert (transaction['fake_state'] / 'case-weather.service.active').is_file()
+    assert (
+        transaction['fake_state'] / 'case-weather-cache.timer.active'
+    ).is_file()
+    assert not (
+        transaction['fake_state'] / 'case-weather-cache.timer.enabled'
+    ).exists()
+    assert not (
+        transaction['fake_state'] / 'case-weather-cache-bootstrap.timer.active'
+    ).exists()
+    assert (
+        transaction['fake_state'] / 'case-weather-cache-bootstrap.timer.enabled'
+    ).is_file()
+    assert not (
+        transaction['state_dir'] / 'deployments' / 'activation-in-progress'
+    ).exists()
 
 
 def _configure_web_formal_mini_only(transaction):
@@ -4878,6 +5211,8 @@ exit 0
 def test_formal_smoke_busy_global_lease_fails_before_started_receipt(tmp_path):
     transaction = _prepare_transaction(tmp_path)
     _staged_text, counter_file = _configure_formal_smoke(transaction)
+    transaction['env']['FORMAL_SMOKE_LEASE_WAIT_MAX_SECONDS'] = '1'
+    transaction['env']['FORMAL_SMOKE_LEASE_RETRY_INTERVAL_SECONDS'] = '1'
     (transaction['state_dir'] / 'formal-smoke-lease-mode').write_text(
         'busy\n',
         encoding='utf-8',
@@ -4898,6 +5233,421 @@ def test_formal_smoke_busy_global_lease_fails_before_started_receipt(tmp_path):
     ) == []
     assert transaction['current_link'].resolve() == transaction['old_release'].resolve()
     assert _database_value(transaction['database_file']) == 'old'
+
+
+def test_formal_smoke_waits_for_expiring_lease_after_runtime_quiescence(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    _staged_text, counter_file = _configure_formal_smoke(transaction)
+    _set_formal_wait_network_gate(transaction)
+    _set_recurring_timer_active_disabled(transaction)
+    _write_formal_lease_scenario(
+        transaction,
+        [
+            {'outcome': 'busy', 'pttl_ms': 322_000, 'exit_code': 75},
+            {'outcome': 'busy', 'pttl_ms': 95_000, 'exit_code': 75},
+            {'outcome': 'acquired', 'exit_code': 0},
+        ],
+    )
+    transaction['env']['FORMAL_SMOKE_LEASE_WAIT_MAX_SECONDS'] = '5'
+    transaction['env']['FORMAL_SMOKE_LEASE_RETRY_INTERVAL_SECONDS'] = '1'
+
+    result = _run_activation(transaction)
+
+    assert result.returncode == 0, result.stderr
+    events = _formal_lease_audit_events(transaction)
+    assert [event['outcome'] for event in events] == [
+        'busy',
+        'busy',
+        'acquired',
+    ]
+    assert [event['pttl_ms'] for event in events[:2]] == [322_000, 95_000]
+    _assert_formal_lease_wait_is_pre_irreversible(events)
+    assert transaction['formal_lease_attempt_file'].read_text(
+        encoding='ascii'
+    ) == '3'
+    assert transaction['formal_lease_token_file'].is_file()
+    assert counter_file.read_text(encoding='utf-8') == '1'
+    receipt_dirs = list(
+        (transaction['state_dir'] / 'deployments' / 'formal-cache-smokes').iterdir()
+    )
+    assert len(receipt_dirs) == 1
+    assert (receipt_dirs[0] / 'started').is_file()
+    assert (receipt_dirs[0] / 'completed').is_file()
+
+
+def test_formal_smoke_blocking_lease_helper_hits_hard_limit_and_rolls_back(
+    tmp_path,
+):
+    transaction = _prepare_transaction(tmp_path)
+    _staged_text, counter_file = _configure_formal_smoke(transaction)
+    _set_formal_wait_network_gate(transaction)
+    _set_recurring_timer_active_disabled(transaction)
+    _write_formal_lease_scenario(
+        transaction,
+        [{
+            'outcome': 'blocking',
+            'pttl_ms': 120_000,
+            'exit_code': 75,
+            'sleep_seconds': 10,
+        }],
+    )
+    transaction['env']['FORMAL_SMOKE_LEASE_WAIT_MAX_SECONDS'] = '1'
+    transaction['env']['FORMAL_SMOKE_LEASE_RETRY_INTERVAL_SECONDS'] = '1'
+    transaction['env']['FORMAL_SMOKE_LEASE_ATTEMPT_TIMEOUT_SECONDS'] = '5'
+    _write_candidate_base_state(transaction)
+
+    process = subprocess.Popen(
+        ['bash', str(ACTIVATE_SCRIPT)],
+        cwd=ROOT,
+        env=transaction['env'],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        start_new_session=True,
+    )
+    try:
+        entered_deadline = time.monotonic() + 30
+        while not transaction['formal_lease_entered_file'].exists():
+            if process.poll() is not None:
+                break
+            if time.monotonic() >= entered_deadline:
+                pytest.fail('激活事务未在时限内进入阻塞 lease helper')
+            time.sleep(0.02)
+        assert process.poll() is None
+        wait_started = time.monotonic()
+        try:
+            stdout, stderr = process.communicate(timeout=6)
+        except subprocess.TimeoutExpired:
+            os.killpg(process.pid, signal.SIGKILL)
+            process.communicate(timeout=5)
+            pytest.fail('阻塞 lease helper 未受总等待硬上限约束')
+        wait_elapsed = time.monotonic() - wait_started
+    finally:
+        if process.poll() is None:
+            os.killpg(process.pid, signal.SIGKILL)
+            process.communicate(timeout=5)
+
+    assert process.returncode == 70, (stdout, stderr)
+    assert wait_elapsed < 4.5
+    events = _formal_lease_audit_events(transaction)
+    assert len(events) == 1
+    _assert_formal_lease_wait_is_pre_irreversible(events)
+    _assert_formal_lease_failure_rolled_back(transaction, counter_file)
+
+
+def test_formal_smoke_parent_sigterm_cannot_leave_blocking_helper_to_acquire(
+    tmp_path,
+):
+    transaction = _prepare_transaction(tmp_path)
+    _staged_text, counter_file = _configure_formal_smoke(transaction)
+    _set_formal_wait_network_gate(transaction)
+    _set_recurring_timer_active_disabled(transaction)
+    _write_formal_lease_scenario(
+        transaction,
+        [{
+            'outcome': 'would-acquire-after-parent-exits',
+            'exit_code': 0,
+            'ignore_term': True,
+            'sleep_seconds': 1.5,
+        }],
+    )
+    transaction['env']['FORMAL_SMOKE_LEASE_WAIT_MAX_SECONDS'] = '10'
+    transaction['env']['FORMAL_SMOKE_LEASE_RETRY_INTERVAL_SECONDS'] = '1'
+    transaction['env']['FORMAL_SMOKE_LEASE_ATTEMPT_TIMEOUT_SECONDS'] = '1'
+    _write_candidate_base_state(transaction)
+
+    process = subprocess.Popen(
+        ['bash', str(ACTIVATE_SCRIPT)],
+        cwd=ROOT,
+        env=transaction['env'],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        start_new_session=True,
+    )
+    try:
+        entered_deadline = time.monotonic() + 30
+        while not transaction['formal_lease_entered_file'].exists():
+            if process.poll() is not None:
+                break
+            if time.monotonic() >= entered_deadline:
+                pytest.fail('激活事务未在时限内进入阻塞 lease helper')
+            time.sleep(0.02)
+        assert process.poll() is None
+        # 只通知激活父 shell，验证 child timeout 仍会收回 helper。
+        process.send_signal(signal.SIGTERM)
+        stdout, stderr = process.communicate(timeout=5)
+    finally:
+        if process.poll() is None:
+            os.killpg(process.pid, signal.SIGKILL)
+            process.communicate(timeout=5)
+
+    assert process.returncode == 130, (stdout, stderr)
+    helper_pid = int(
+        transaction['formal_lease_helper_pid_file'].read_text(encoding='ascii')
+    )
+    helper_exit_deadline = time.monotonic() + 2
+    while time.monotonic() < helper_exit_deadline:
+        try:
+            os.kill(helper_pid, 0)
+        except ProcessLookupError:
+            break
+        time.sleep(0.02)
+    else:
+        pytest.fail('父 shell 退出后仍残留 lease helper 进程')
+
+    # 超过 helper 原定成功时间后，仍不得迟到写入 token、receipt 或上游状态。
+    time.sleep(0.75)
+    assert not transaction['formal_lease_token_file'].exists()
+    assert not transaction['formal_lease_acquired_epoch_file'].exists()
+    events = _formal_lease_audit_events(transaction)
+    assert len(events) == 1
+    _assert_formal_lease_wait_is_pre_irreversible(events)
+    _assert_formal_lease_failure_rolled_back(transaction, counter_file)
+
+
+def test_formal_smoke_budget_baseline_and_started_time_follow_lease_acquisition(
+    tmp_path,
+):
+    transaction = _prepare_transaction(tmp_path)
+    _staged_text, counter_file = _configure_formal_smoke(transaction)
+    _set_formal_wait_network_gate(transaction)
+    _set_recurring_timer_active_disabled(transaction)
+    _write_formal_lease_scenario(
+        transaction,
+        [
+            {
+                'outcome': 'busy-owner-finishes-at-month-boundary',
+                'pttl_ms': 1_000,
+                'exit_code': 75,
+                'owner_budget_increment': 1,
+                'budget_month': '2026-08',
+            },
+            {'outcome': 'acquired', 'exit_code': 0},
+        ],
+    )
+    transaction['env']['FORMAL_SMOKE_LEASE_WAIT_MAX_SECONDS'] = '5'
+    transaction['env']['FORMAL_SMOKE_LEASE_RETRY_INTERVAL_SECONDS'] = '1'
+
+    result = _run_activation(transaction)
+
+    assert result.returncode == 0, result.stderr
+    lease_events = _formal_lease_audit_events(transaction)
+    assert [event['exit_code'] for event in lease_events] == [75, 0]
+    _assert_formal_lease_wait_is_pre_irreversible(lease_events)
+
+    budget_events = _formal_budget_audit_events(transaction)
+    assert budget_events == [
+        {
+            'captured_at_ns': budget_events[0]['captured_at_ns'],
+            'formal_count': 0,
+            'lease_acquired': True,
+            'month': '2026-08',
+            'owner_count': 1,
+            'used': 13,
+        },
+        {
+            'captured_at_ns': budget_events[1]['captured_at_ns'],
+            'formal_count': 1,
+            'lease_acquired': True,
+            'month': '2026-08',
+            'owner_count': 1,
+            'used': 16,
+        },
+    ]
+    assert budget_events[0]['captured_at_ns'] <= budget_events[1]['captured_at_ns']
+
+    receipt_dirs = list(
+        (transaction['state_dir'] / 'deployments' / 'formal-cache-smokes').iterdir()
+    )
+    assert len(receipt_dirs) == 1
+    started_fields = _receipt_fields(receipt_dirs[0] / 'started')
+    completed_fields = _receipt_fields(receipt_dirs[0] / 'completed')
+    acquired_epoch = int(
+        transaction['formal_lease_acquired_epoch_file'].read_text(encoding='ascii')
+    )
+    started_epoch = int(
+        datetime.strptime(
+            started_fields['started_at'],
+            '%Y-%m-%dT%H:%M:%SZ',
+        ).replace(tzinfo=timezone.utc).timestamp()
+    )
+    completed_epoch = int(
+        datetime.strptime(
+            completed_fields['completed_at'],
+            '%Y-%m-%dT%H:%M:%SZ',
+        ).replace(tzinfo=timezone.utc).timestamp()
+    )
+    assert started_epoch >= acquired_epoch
+    assert completed_epoch >= started_epoch
+    assert started_fields['budget_month'] == '2026-08'
+    assert started_fields['budget_used_before'] == '13'
+    assert json.loads(started_fields['budget_endpoints_before_json']) == {
+        'weather_7d_forecast': 1,
+        'weather_now': 1,
+        'weatheralert_v1_current': 1,
+    }
+    assert completed_fields['budget_used_before'] == '13'
+    assert completed_fields['budget_used_after'] == '16'
+    assert completed_fields['budget_total_delta'] == '3'
+    assert counter_file.read_text(encoding='utf-8') == '1'
+
+
+def test_formal_smoke_persistent_busy_lease_times_out_and_rolls_back(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    _staged_text, counter_file = _configure_formal_smoke(transaction)
+    _set_formal_wait_network_gate(transaction)
+    _set_recurring_timer_active_disabled(transaction)
+    _write_formal_lease_scenario(
+        transaction,
+        [{'outcome': 'busy', 'pttl_ms': 322_000, 'exit_code': 75}],
+    )
+    transaction['env']['FORMAL_SMOKE_LEASE_WAIT_MAX_SECONDS'] = '2'
+    transaction['env']['FORMAL_SMOKE_LEASE_RETRY_INTERVAL_SECONDS'] = '1'
+
+    result = _run_activation(transaction)
+
+    assert result.returncode == 75
+    events = _formal_lease_audit_events(transaction)
+    assert len(events) >= 1
+    assert {event['outcome'] for event in events} == {'busy'}
+    assert {event['pttl_ms'] for event in events} == {322_000}
+    _assert_formal_lease_wait_is_pre_irreversible(events)
+    _assert_formal_lease_failure_rolled_back(transaction, counter_file)
+
+
+def test_formal_smoke_nonretryable_lease_error_rolls_back_immediately(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    _staged_text, counter_file = _configure_formal_smoke(transaction)
+    _set_formal_wait_network_gate(transaction)
+    _set_recurring_timer_active_disabled(transaction)
+    _write_formal_lease_scenario(
+        transaction,
+        [{'outcome': 'pttl-without-expiry', 'pttl_ms': -1, 'exit_code': 74}],
+    )
+    transaction['env']['FORMAL_SMOKE_LEASE_WAIT_MAX_SECONDS'] = '180'
+    transaction['env']['FORMAL_SMOKE_LEASE_RETRY_INTERVAL_SECONDS'] = '10'
+
+    result = _run_activation(transaction)
+
+    assert result.returncode == 74
+    events = _formal_lease_audit_events(transaction)
+    assert len(events) == 1
+    assert events[0]['pttl_ms'] == -1
+    _assert_formal_lease_wait_is_pre_irreversible(events)
+    _assert_formal_lease_failure_rolled_back(transaction, counter_file)
+
+
+def test_formal_smoke_unexpected_lease_helper_exit_is_normalized_to_70(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    _staged_text, counter_file = _configure_formal_smoke(transaction)
+    _set_formal_wait_network_gate(transaction)
+    _set_recurring_timer_active_disabled(transaction)
+    _write_formal_lease_scenario(
+        transaction,
+        [{'outcome': 'unexpected', 'exit_code': 99}],
+    )
+    transaction['env']['FORMAL_SMOKE_LEASE_WAIT_MAX_SECONDS'] = '180'
+    transaction['env']['FORMAL_SMOKE_LEASE_RETRY_INTERVAL_SECONDS'] = '10'
+
+    result = _run_activation(transaction)
+
+    assert result.returncode == 70
+    events = _formal_lease_audit_events(transaction)
+    assert len(events) == 1
+    _assert_formal_lease_wait_is_pre_irreversible(events)
+    _assert_formal_lease_failure_rolled_back(transaction, counter_file)
+
+
+def test_formal_smoke_lease_wait_is_not_entered_before_scheduler_quiescence(
+    tmp_path,
+):
+    transaction = _prepare_transaction(tmp_path)
+    _staged_text, counter_file = _configure_formal_smoke(transaction)
+    _set_recurring_timer_active_disabled(transaction)
+    transaction['env']['FAKE_FAIL_STOP_UNIT_ONCE'] = 'case-weather-cache.timer'
+
+    result = _run_activation(transaction)
+
+    assert result.returncode != 0
+    assert not transaction['formal_lease_attempt_file'].exists()
+    assert not transaction['formal_lease_audit_file'].exists()
+    assert not counter_file.exists()
+    rolled_back = list(
+        (transaction['state_dir'] / 'backups').rglob('ROLLED_BACK')
+    )
+    assert len(rolled_back) == 1, result.stderr
+    assert rolled_back[0].read_text(encoding='utf-8') == 'success\n'
+
+
+def test_formal_smoke_lease_wait_sigterm_rolls_back_before_started_receipt(
+    tmp_path,
+):
+    transaction = _prepare_transaction(tmp_path)
+    _staged_text, counter_file = _configure_formal_smoke(transaction)
+    _set_formal_wait_network_gate(transaction)
+    _set_recurring_timer_active_disabled(transaction)
+    _write_formal_lease_scenario(
+        transaction,
+        [{'outcome': 'busy', 'pttl_ms': 322_000, 'exit_code': 75}],
+    )
+    transaction['env']['FORMAL_SMOKE_LEASE_WAIT_MAX_SECONDS'] = '180'
+    transaction['env']['FORMAL_SMOKE_LEASE_RETRY_INTERVAL_SECONDS'] = '10'
+    _write_candidate_base_state(transaction)
+    process = subprocess.Popen(
+        ['bash', str(ACTIVATE_SCRIPT)],
+        cwd=ROOT,
+        env=transaction['env'],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        start_new_session=True,
+    )
+    try:
+        deadline = time.monotonic() + 60
+        while not transaction['formal_lease_entered_file'].exists():
+            if process.poll() is not None:
+                break
+            if time.monotonic() >= deadline:
+                pytest.fail('激活事务未在时限内进入 lease 等待')
+            time.sleep(0.02)
+        assert process.poll() is None
+        os.killpg(process.pid, signal.SIGTERM)
+        stdout, stderr = process.communicate(timeout=15)
+    finally:
+        if process.poll() is None:
+            os.killpg(process.pid, signal.SIGKILL)
+            process.communicate(timeout=5)
+
+    assert process.returncode == 130, (stdout, stderr)
+    events = _formal_lease_audit_events(transaction)
+    assert events
+    _assert_formal_lease_wait_is_pre_irreversible(events)
+    _assert_formal_lease_failure_rolled_back(transaction, counter_file)
+
+
+@pytest.mark.parametrize(
+    ('name', 'value'),
+    (
+        ('FORMAL_SMOKE_LEASE_WAIT_MAX_SECONDS', '181'),
+        ('FORMAL_SMOKE_LEASE_RETRY_INTERVAL_SECONDS', '0'),
+    ),
+)
+def test_formal_smoke_lease_wait_configuration_rejects_invalid_bounds(
+    tmp_path,
+    name,
+    value,
+):
+    transaction = _prepare_transaction(tmp_path)
+    transaction['env'][name] = value
+
+    result = _run_activation(transaction)
+
+    assert result.returncode == 2
+    assert not transaction['systemctl_log'].exists()
+    assert not (
+        transaction['state_dir'] / 'backups' / 'deploy-transactions'
+    ).exists()
 
 
 def test_formal_fallback_snapshot_is_rejected_and_started_receipt_blocks_retry(tmp_path):

@@ -33,6 +33,7 @@ CHOWN_BIN="${CHOWN_BIN:-chown}"
 ENV_BIN="${ENV_BIN:-/usr/bin/env}"
 CRONTAB_BIN="${CRONTAB_BIN:-crontab}"
 PGREP_BIN="${PGREP_BIN:-pgrep}"
+TIMEOUT_BIN="${TIMEOUT_BIN:-/usr/bin/timeout}"
 UPTIME_FILE="${UPTIME_FILE:-/proc/uptime}"
 INHERITED_DATABASE_FILE="${DATABASE_FILE:-}"
 INHERITED_DATABASE_URI="${DATABASE_URI:-}"
@@ -49,6 +50,10 @@ QWEATHER_BUDGET_SNAPSHOT_HELPER="${QWEATHER_BUDGET_SNAPSHOT_HELPER:-}"
 QWEATHER_PENDING_KEY_PATH="${QWEATHER_PENDING_KEY_PATH:-}"
 QWEATHER_KEY_TRANSITION_FAIL_AT="${QWEATHER_KEY_TRANSITION_FAIL_AT:-}"
 FORMAL_SMOKE_LEASE_HELPER="${FORMAL_SMOKE_LEASE_HELPER:-}"
+FORMAL_SMOKE_LEASE_WAIT_MAX_SECONDS="${FORMAL_SMOKE_LEASE_WAIT_MAX_SECONDS:-180}"
+FORMAL_SMOKE_LEASE_RETRY_INTERVAL_SECONDS="${FORMAL_SMOKE_LEASE_RETRY_INTERVAL_SECONDS:-2}"
+FORMAL_SMOKE_LEASE_ATTEMPT_TIMEOUT_SECONDS="${FORMAL_SMOKE_LEASE_ATTEMPT_TIMEOUT_SECONDS:-5}"
+QWEATHER_BUDGET_SNAPSHOT_TIMEOUT_SECONDS="${QWEATHER_BUDGET_SNAPSHOT_TIMEOUT_SECONDS:-5}"
 # 仅供非 root 测试夹具替代真实 Nginx；正式发布禁止覆盖。
 RUNTIME_LOG_BOUNDARY_TEST_HELPER="${RUNTIME_LOG_BOUNDARY_TEST_HELPER:-}"
 RUNTIME_USER="${RUNTIME_USER:-case-weather}"
@@ -190,6 +195,7 @@ FORMAL_SMOKE_BINDING=""
 FORMAL_SMOKE_TICKET=""
 FORMAL_SMOKE_LEASE_TOKEN=""
 FORMAL_SMOKE_LEASE_TOKEN_SHA256=""
+ACTIVE_HARD_TIMEOUT_PID=""
 
 log() {
     printf '[activate_release] %s\n' "$*"
@@ -3621,6 +3627,114 @@ runtime_exec() {
         "$ENV_BIN" "${runtime_env[@]}" "$@"
 }
 
+run_runtime_with_hard_timeout() {
+    local timeout_seconds="$1"
+    local working_directory="$2"
+    local stdout_file="$3"
+    shift 3
+    local runtime_path='/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
+    local status pid
+    local runtime_env=(
+        -i
+        "CASE_WEATHER_ENV_FILE=$ENV_FILE"
+        "DATABASE_FILE=${DATABASE_FILE:-}"
+        "HOME=$STATE_DIR/run"
+        'LANG=C.UTF-8'
+        'LC_ALL=C.UTF-8'
+        "PATH=$runtime_path"
+        'PYTHONUNBUFFERED=1'
+        'TMPDIR=/tmp'
+        'TZ=Asia/Shanghai'
+        "VENV_PY=$VENV_DIR/bin/python"
+    )
+    local runtime_command=(
+        /bin/bash
+        -c
+        'runtime_directory=$1; shift; cd -- "$runtime_directory" || exit 70; exec "$@"'
+        case-weather-runtime
+        "$working_directory"
+        "$@"
+    )
+    local timed_command=(
+        "$TIMEOUT_BIN"
+        --signal=KILL
+        "$timeout_seconds"
+    )
+
+    # timeout 位于 runuser/env 外层，确保运行用户切换和全部后代都受同一硬上限约束。
+    if [ "$(id -u)" = "$(id -u "$RUNTIME_USER")" ]; then
+        timed_command+=(
+            "$ENV_BIN"
+            "${runtime_env[@]}"
+            "${runtime_command[@]}"
+        )
+    else
+        timed_command+=(
+            "$RUNUSER_BIN"
+            -u
+            "$RUNTIME_USER"
+            --
+            "$ENV_BIN"
+            "${runtime_env[@]}"
+            "${runtime_command[@]}"
+        )
+    fi
+
+    if [ -n "$stdout_file" ]; then
+        "${timed_command[@]}" > "$stdout_file" <&0 &
+    else
+        "${timed_command[@]}" <&0 &
+    fi
+    pid=$!
+    ACTIVE_HARD_TIMEOUT_PID="$pid"
+    if wait "$pid"; then
+        status=0
+    else
+        status=$?
+    fi
+    ACTIVE_HARD_TIMEOUT_PID=""
+    return "$status"
+}
+
+terminate_active_hard_timeout() {
+    local pid="$ACTIVE_HARD_TIMEOUT_PID"
+    local attempt group_signaled=0
+    ACTIVE_HARD_TIMEOUT_PID=""
+    case "$pid" in
+        ''|*[!0-9]*) return 0 ;;
+    esac
+
+    # GNU timeout 默认创建独立后台进程组；先通知整组，避免 helper 成为孤儿。
+    if kill -TERM -- "-$pid" 2>/dev/null; then
+        group_signaled=1
+    else
+        kill -TERM "$pid" 2>/dev/null || true
+    fi
+    # TERM 可被 helper 忽略，最多给一秒收尾，之后强制终止同一受管范围。
+    for ((attempt = 0; attempt < 10; attempt++)); do
+        if [ "$group_signaled" -eq 1 ]; then
+            kill -0 -- "-$pid" 2>/dev/null || break
+        else
+            kill -0 "$pid" 2>/dev/null || break
+        fi
+        sleep 0.1
+    done
+    if [ "$group_signaled" -eq 1 ]; then
+        kill -KILL -- "-$pid" 2>/dev/null || true
+    else
+        kill -KILL "$pid" 2>/dev/null || true
+    fi
+    # 直接子进程已被回收后才允许 on_exit 进入数据库和服务回滚。
+    wait "$pid" 2>/dev/null || true
+}
+
+on_activation_signal() {
+    # 清理期间忽略重复信号，避免 helper 尚未退出便提前进入回滚。
+    trap '' INT TERM HUP
+    terminate_active_hard_timeout
+    exit 130
+}
+
 backup_database() {
     if [ ! -f "$DATABASE_FILE" ]; then
         DB_EXISTED=0
@@ -5251,20 +5365,38 @@ PY
 
 capture_qweather_budget_snapshot() {
     local destination="$1"
-    local snapshot normalized
+    local snapshot normalized status
+    local command_output="$destination.command-output"
     if [ -n "$QWEATHER_BUDGET_SNAPSHOT_HELPER" ]; then
         if [ "$ALLOW_NONROOT_TEST_RUNTIME_GUARD" != 1 ]; then
             fail "生产激活禁止覆盖 QWeather 预算快照实现"
             return 1
         fi
-        snapshot="$(runtime_exec "$QWEATHER_BUDGET_SNAPSHOT_HELPER")" || {
-            fail "离线测试预算快照 helper 执行失败"
-            return 1
-        }
+        if run_runtime_with_hard_timeout \
+            "$QWEATHER_BUDGET_SNAPSHOT_TIMEOUT_SECONDS" \
+            "$APP_DIR" \
+            "$command_output" \
+            "$QWEATHER_BUDGET_SNAPSHOT_HELPER"; then
+            snapshot="$(<"$command_output")"
+        else
+            status=$?
+            case "$status" in
+                124|137)
+                    log "失败: QWeather 持久预算快照读取发生硬超时" >&2
+                    return 70
+                    ;;
+                *)
+                    fail "离线测试预算快照 helper 执行失败"
+                    return 1
+                    ;;
+            esac
+        fi
     else
-        if ! snapshot="$(
-            cd "$APP_DIR"
-            runtime_exec "$VENV_DIR/bin/python" - <<'PY'
+        if run_runtime_with_hard_timeout \
+            "$QWEATHER_BUDGET_SNAPSHOT_TIMEOUT_SECONDS" \
+            "$APP_DIR" \
+            "$command_output" \
+            "$VENV_DIR/bin/python" - <<'PY'
 import json
 
 try:
@@ -5285,9 +5417,20 @@ except Exception:
 
 print(json.dumps(snapshot, ensure_ascii=True, sort_keys=True, separators=(',', ':')))
 PY
-        )"; then
-            fail "无法读取正式 QWeather 持久预算快照"
-            return 1
+        then
+            snapshot="$(<"$command_output")"
+        else
+            status=$?
+            case "$status" in
+                124|137)
+                    log "失败: QWeather 持久预算快照读取发生硬超时" >&2
+                    return 70
+                    ;;
+                *)
+                    fail "无法读取正式 QWeather 持久预算快照"
+                    return 1
+                    ;;
+            esac
         fi
     fi
     if ! normalized="$("$VENV_DIR/bin/python" - "$snapshot" <<'PY'
@@ -5505,34 +5648,98 @@ verify_formal_smoke_ticket_path_available() {
     fi
 }
 
-reserve_formal_smoke_cycle_lease() {
+try_reserve_formal_smoke_cycle_lease() {
+    local attempt_timeout_seconds="$1"
+    local status
     if [ -n "$FORMAL_SMOKE_LEASE_HELPER" ]; then
         if [ "$ALLOW_NONROOT_TEST_RUNTIME_GUARD" != 1 ]; then
             fail "生产激活禁止覆盖正式天气烟测租约实现"
-            return 1
+            return 70
         fi
-        (
-            cd "$APP_DIR"
-            runtime_exec "$ENV_BIN" \
-                "CASE_WEATHER_FORMAL_SMOKE_LEASE_TOKEN=$FORMAL_SMOKE_LEASE_TOKEN" \
-                "$FORMAL_SMOKE_LEASE_HELPER"
-        ) || {
-            fail "正式天气烟测无法在 started receipt 前取得全局租约"
-            return 1
-        }
-        return 0
-    fi
-    (
-        cd "$APP_DIR"
-        runtime_exec "$ENV_BIN" \
+        if run_runtime_with_hard_timeout \
+            "$attempt_timeout_seconds" \
+            "$APP_DIR" \
+            '' \
+            "$ENV_BIN" \
+            "CASE_WEATHER_FORMAL_SMOKE_LEASE_TOKEN=$FORMAL_SMOKE_LEASE_TOKEN" \
+            "$FORMAL_SMOKE_LEASE_HELPER"; then
+            status=0
+        else
+            status=$?
+        fi
+    else
+        if run_runtime_with_hard_timeout \
+            "$attempt_timeout_seconds" \
+            "$APP_DIR" \
+            '' \
+            "$ENV_BIN" \
             "CASE_WEATHER_FORMAL_SMOKE_LEASE_TOKEN=$FORMAL_SMOKE_LEASE_TOKEN" \
             "$VENV_DIR/bin/python" \
             -m services.pipelines.sync_weather_cache \
-            --reserve-formal-lease-only
-    ) || {
-        fail "正式天气烟测无法在 started receipt 前取得全局租约"
-        return 1
-    }
+            --reserve-formal-lease-only; then
+            status=0
+        else
+            status=$?
+        fi
+    fi
+    case "$status" in
+        124|137)
+            log "失败: 正式天气烟测租约预占发生硬超时" >&2
+            return 70
+            ;;
+        *) return "$status" ;;
+    esac
+}
+
+wait_and_reserve_formal_smoke_cycle_lease() {
+    local deadline status remaining wait_seconds attempt_timeout_seconds
+    if [ "$RUNTIME_QUIESCE_STARTED" -ne 1 ] \
+        || [ "$RUNTIME_KEY_QUIESCENCE_PROVEN" -ne 1 ]; then
+        log "失败: 正式天气烟测等待租约前必须先完成调度器静默" >&2
+        return 70
+    fi
+
+    deadline=$((SECONDS + FORMAL_SMOKE_LEASE_WAIT_MAX_SECONDS))
+    while true; do
+        remaining=$((deadline - SECONDS))
+        if [ "$remaining" -le 0 ]; then
+            log "失败: 正式天气烟测无法在 started receipt 前取得全局租约：等待旧租约自然到期超时" >&2
+            return 75
+        fi
+        attempt_timeout_seconds="$FORMAL_SMOKE_LEASE_ATTEMPT_TIMEOUT_SECONDS"
+        if [ "$attempt_timeout_seconds" -gt "$remaining" ]; then
+            attempt_timeout_seconds="$remaining"
+        fi
+        if try_reserve_formal_smoke_cycle_lease "$attempt_timeout_seconds"; then
+            return 0
+        else
+            status=$?
+        fi
+
+        case "$status" in
+            75)
+                remaining=$((deadline - SECONDS))
+                if [ "$remaining" -le 0 ]; then
+                    log "失败: 正式天气烟测无法在 started receipt 前取得全局租约：等待旧租约自然到期超时" >&2
+                    return 75
+                fi
+                wait_seconds="$FORMAL_SMOKE_LEASE_RETRY_INTERVAL_SECONDS"
+                if [ "$wait_seconds" -gt "$remaining" ]; then
+                    wait_seconds="$remaining"
+                fi
+                log "正式天气烟测全局租约仍在有效期，${wait_seconds} 秒后重试"
+                sleep "$wait_seconds"
+                ;;
+            64|74)
+                log "失败: 正式天气烟测租约预占返回不可重试状态 $status" >&2
+                return "$status"
+                ;;
+            *)
+                log "失败: 正式天气烟测租约预占返回异常状态 $status" >&2
+                return 70
+                ;;
+        esac
+    done
 }
 
 issue_formal_smoke_ticket() {
@@ -5609,15 +5816,16 @@ prepare_formal_smoke_receipt() {
         fail "同一冻结 commit 与配置已有 started 天气烟测 receipt；禁止自动重试，请人工核对上游计数与数据库"
         return 1
     fi
-    now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    prepare_formal_smoke_token_material
+    verify_formal_smoke_ticket_path_available
+    # 调度器静默后有界等待旧租约自然到期，全程禁止删除或续期旧租约。
+    wait_and_reserve_formal_smoke_cycle_lease
+    # 成功预占后立即冻结预算基线，避免等待旧租约期间的计数变化污染差值。
+    capture_qweather_budget_snapshot "$budget_before_file"
     budget_fields="$(budget_snapshot_started_fields "$budget_before_file")" || {
         fail "正式天气烟测预算前值无法写入 receipt"
         return 1
     }
-    prepare_formal_smoke_token_material
-    verify_formal_smoke_ticket_path_available
-    # 全局租约必须在 started 前取得，避免正常周期残留 lease 形成不可重试 receipt。
-    reserve_formal_smoke_cycle_lease
     mkdir "$FORMAL_SMOKE_RECEIPT_DIR"
     chmod 0700 "$FORMAL_SMOKE_RECEIPT_DIR"
     fsync_directory "$FORMAL_SMOKE_RECEIPT_ROOT"
@@ -5626,6 +5834,8 @@ prepare_formal_smoke_receipt() {
         "$(printf 'release_commit=%s\nconfig_fingerprint=%s' \
             "$FORMAL_RELEASE_COMMIT" \
             "$FORMAL_RELEASE_CONFIG_FINGERPRINT")"
+    # started_at 必须反映本次租约和预算基线均已取得后的真实时刻。
+    now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     # forward-only 标记必须早于 started receipt，覆盖写入失败、sync 失败和 SIGKILL 窗口。
     record_forward_only_phase formal-smoke-started
     write_durable_marker \
@@ -5667,7 +5877,6 @@ run_formal_cache_smoke() {
     local budget_after_file="$TRANSACTION_DIR/qweather-budget-after.json"
     [ "$REQUIRE_WECHAT_READY" = 1 ] || return 0
     preflight_formal_qweather_jwt_runtime
-    capture_qweather_budget_snapshot "$budget_before_file"
     prepare_formal_smoke_receipt "$budget_before_file"
     if [ "$FORMAL_SMOKE_REUSED" = 1 ]; then
         return 0
@@ -6655,7 +6864,7 @@ on_exit() {
 }
 
 trap on_exit EXIT
-trap 'exit 130' INT TERM HUP
+trap on_activation_signal INT TERM HUP
 
 validate_absolute_path STATE_DIR "$STATE_DIR"
 validate_absolute_path RELEASE_ROOT "$RELEASE_ROOT"
@@ -6715,6 +6924,47 @@ case "$POST_COMMIT_STABILITY_INTERVAL_SECONDS" in
 esac
 if [ "$POST_COMMIT_STABILITY_INTERVAL_SECONDS" -gt 30 ]; then
     echo 'POST_COMMIT_STABILITY_INTERVAL_SECONDS 必须是 1 至 30 的整数' >&2
+    exit 2
+fi
+case "$FORMAL_SMOKE_LEASE_WAIT_MAX_SECONDS" in
+    ''|0|*[!0-9]*)
+        echo 'FORMAL_SMOKE_LEASE_WAIT_MAX_SECONDS 必须是 1 至 180 的整数' >&2
+        exit 2
+        ;;
+esac
+if [ "$FORMAL_SMOKE_LEASE_WAIT_MAX_SECONDS" -gt 180 ]; then
+    echo 'FORMAL_SMOKE_LEASE_WAIT_MAX_SECONDS 必须是 1 至 180 的整数' >&2
+    exit 2
+fi
+case "$FORMAL_SMOKE_LEASE_RETRY_INTERVAL_SECONDS" in
+    ''|0|*[!0-9]*)
+        echo 'FORMAL_SMOKE_LEASE_RETRY_INTERVAL_SECONDS 必须是 1 至 10 的整数' >&2
+        exit 2
+        ;;
+esac
+if [ "$FORMAL_SMOKE_LEASE_RETRY_INTERVAL_SECONDS" -gt 10 ] \
+    || [ "$FORMAL_SMOKE_LEASE_RETRY_INTERVAL_SECONDS" -gt "$FORMAL_SMOKE_LEASE_WAIT_MAX_SECONDS" ]; then
+    echo 'FORMAL_SMOKE_LEASE_RETRY_INTERVAL_SECONDS 必须是 1 至 10 且不大于总等待时间的整数' >&2
+    exit 2
+fi
+case "$FORMAL_SMOKE_LEASE_ATTEMPT_TIMEOUT_SECONDS" in
+    ''|0|*[!0-9]*)
+        echo 'FORMAL_SMOKE_LEASE_ATTEMPT_TIMEOUT_SECONDS 必须是 1 至 30 的整数' >&2
+        exit 2
+        ;;
+esac
+if [ "$FORMAL_SMOKE_LEASE_ATTEMPT_TIMEOUT_SECONDS" -gt 30 ]; then
+    echo 'FORMAL_SMOKE_LEASE_ATTEMPT_TIMEOUT_SECONDS 必须是 1 至 30 的整数' >&2
+    exit 2
+fi
+case "$QWEATHER_BUDGET_SNAPSHOT_TIMEOUT_SECONDS" in
+    ''|0|*[!0-9]*)
+        echo 'QWEATHER_BUDGET_SNAPSHOT_TIMEOUT_SECONDS 必须是 1 至 30 的整数' >&2
+        exit 2
+        ;;
+esac
+if [ "$QWEATHER_BUDGET_SNAPSHOT_TIMEOUT_SECONDS" -gt 30 ]; then
+    echo 'QWEATHER_BUDGET_SNAPSHOT_TIMEOUT_SECONDS 必须是 1 至 30 的整数' >&2
     exit 2
 fi
 case "$BACKUP_WAIT_ATTEMPTS" in
@@ -6806,6 +7056,15 @@ if [ -n "$FORMAL_SMOKE_LEASE_HELPER" ]; then
     fi
     validate_absolute_path FORMAL_SMOKE_LEASE_HELPER "$FORMAL_SMOKE_LEASE_HELPER"
     require_executable "$FORMAL_SMOKE_LEASE_HELPER"
+fi
+if [ "$REQUIRE_WECHAT_READY" = 1 ]; then
+    if [ "$ALLOW_NONROOT_TEST_RUNTIME_GUARD" != 1 ] \
+        && [ "$TIMEOUT_BIN" != /usr/bin/timeout ]; then
+        echo '生产激活的硬超时实现必须固定为 /usr/bin/timeout' >&2
+        exit 2
+    fi
+    validate_absolute_path TIMEOUT_BIN "$TIMEOUT_BIN"
+    require_executable "$TIMEOUT_BIN"
 fi
 if [ -n "$RUNTIME_LOG_BOUNDARY_TEST_HELPER" ]; then
     if [ "$ALLOW_NONROOT_TEST_RUNTIME_GUARD" != 1 ]; then
