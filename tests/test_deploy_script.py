@@ -889,6 +889,29 @@ def test_deploy_script_sets_precompute_python_path():
     assert 'Environment=VENV_PY=$CURRENT_LINK/venv/bin/python' in content
 
 
+def test_deploy_script_sets_dispatch_python_path_inside_dispatch_unit():
+    content = _load_deploy_script()
+    service_start = content.index(
+        "cat > $NEW_RELEASE/systemd/case-weather-dispatch.service << 'EOF'"
+    )
+    service_end = content.index('EOF"', service_start)
+    service_block = content[service_start:service_end]
+    venv_environment = (
+        'Environment=VENV_PY=$CURRENT_LINK/venv/bin/python'
+    )
+    dispatch_entrypoint = (
+        'ExecStart=/bin/bash '
+        '$CURRENT_LINK/app/scripts/dispatch_alerts.sh --dedupe-hours 6'
+    )
+
+    # 必须约束 dispatch 自己的 heredoc，避免被其他 unit 的同名配置误判为通过。
+    assert service_block.count(venv_environment) == 1
+    assert service_block.count(dispatch_entrypoint) == 1
+    assert service_block.index(venv_environment) < service_block.index(
+        dispatch_entrypoint
+    )
+
+
 def test_deploy_script_uses_isolated_release_and_server_transaction():
     content = _load_deploy_script()
     activate = _load_activate_script()

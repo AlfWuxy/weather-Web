@@ -3468,6 +3468,7 @@ ReadWritePaths=$PROJECT_DIR/instance $PROJECT_DIR/storage $PROJECT_DIR/run
 WorkingDirectory=$CURRENT_LINK/app
 EnvironmentFile=$PROJECT_DIR/.env
 Environment=PYTHONUNBUFFERED=1
+Environment=VENV_PY=$CURRENT_LINK/venv/bin/python
 ExecStart=/bin/bash $CURRENT_LINK/app/scripts/dispatch_alerts.sh --dedupe-hours 6
 TimeoutStartSec=15min
 EOF"
