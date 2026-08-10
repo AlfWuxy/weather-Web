@@ -1186,10 +1186,11 @@ if ':5001/' in url:
                   '"risk":{"score":56,"summary":"天气较热"},'
                   '"source_status":{"weather":{"provider":"QWeather"}}}}')
     elif url.endswith('/risk'):
+        padding = 'x' * int(os.environ.get('FAKE_CANDIDATE_RISK_PADDING_SIZE', '0'))
         if failure == 'risk':
-            print('<h5>天气更新中</h5>')
+            print('<h5>天气更新中</h5>' + padding)
         else:
-            print('<h5>当前风险：中风险</h5>')
+            print('<h5>当前风险：中风险</h5>' + padding)
     else:
         print('{"status":"unavailable"}')
 else:
@@ -3197,6 +3198,62 @@ def test_candidate_weather_contract_failure_is_forward_only_after_formal_smoke(
     assert not (forward_markers[0].parent / 'ROLLED_BACK').exists()
     for unit in ALL_UNITS:
         assert not (transaction['fake_state'] / f'{unit}.active').exists()
+
+
+def test_large_candidate_risk_page_does_not_trigger_pipefail_false_negative(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    _staged_text, counter_file = _configure_formal_smoke(transaction)
+    transaction['env']['FAKE_CANDIDATE_RISK_PADDING_SIZE'] = str(4 * 1024 * 1024)
+
+    result = _run_activation(transaction)
+
+    assert result.returncode == 0, result.stderr
+    assert counter_file.read_text(encoding='utf-8') == '1'
+    assert transaction['current_link'].resolve() == transaction['new_release'].resolve()
+    committed_markers = list(
+        (transaction['state_dir'] / 'backups').rglob('COMMITTED')
+    )
+    assert len(committed_markers) == 1
+
+
+def test_large_pending_candidate_risk_page_keeps_precise_failure(tmp_path):
+    transaction = _prepare_transaction(
+        tmp_path,
+        candidate_contract_failure='risk',
+    )
+    _staged_text, counter_file = _configure_formal_smoke(transaction)
+    transaction['env']['FAKE_CANDIDATE_RISK_PADDING_SIZE'] = str(4 * 1024 * 1024)
+
+    result = _run_activation(transaction)
+
+    assert result.returncode != 0
+    assert '公开风险页仍显示待刷新状态' in result.stderr
+    assert counter_file.read_text(encoding='utf-8') == '1'
+    assert transaction['current_link'].resolve() == transaction['new_release'].resolve()
+    assert _database_value(transaction['database_file']) == 'new'
+    forward_markers = list(
+        (transaction['state_dir'] / 'backups').rglob('FORWARD_ONLY_REQUIRED')
+    )
+    assert len(forward_markers) == 1
+    assert (
+        forward_markers[0].read_text(encoding='utf-8').strip()
+        == 'phase=formal-smoke-started'
+    )
+    assert (forward_markers[0].parent / 'POST_COMMIT_ATTENTION.txt').is_file()
+    assert not (forward_markers[0].parent / 'ROLLED_BACK').exists()
+    for unit in ALL_UNITS:
+        assert not (transaction['fake_state'] / f'{unit}.active').exists()
+
+
+def test_candidate_risk_contract_avoids_pipefail_prone_quiet_grep():
+    script = ACTIVATE_SCRIPT.read_text(encoding='utf-8')
+    function_body = script.split(
+        'validate_candidate_weather_contracts() {',
+        1,
+    )[1].split('\n}\n\nstop_candidate_release()', 1)[0]
+
+    assert 'risk_body" | grep' not in function_body
+    assert 'case "$risk_body" in' in function_body
 
 
 def test_managed_backup_validation_failure_rolls_back_before_public_switch(tmp_path):
