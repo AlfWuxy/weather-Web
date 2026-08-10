@@ -805,7 +805,9 @@ function renderHistoryNowcast(data) {
     container.innerHTML = '';
     const timeline = Array.isArray(data.timeline) ? data.timeline : [];
     if (!timeline.length) {
-        container.textContent = '暂无短临时间轴数据';
+        container.textContent = data.reason === 'cache_stale'
+            ? '小时降水数据正在更新，请稍后查看'
+            : '暂无短临时间轴数据';
         return;
     }
     timeline.forEach((item) => {

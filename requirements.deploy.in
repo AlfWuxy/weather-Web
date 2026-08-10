@@ -1,0 +1,7 @@
+# 生产运行时依赖基线
+-r requirements.txt
+
+# WSGI 服务与部署引导工具
+gunicorn==26.0.0
+pip==26.1.2
+setuptools==66.1.1

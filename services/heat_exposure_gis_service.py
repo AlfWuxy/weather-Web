@@ -8,7 +8,9 @@ import csv
 import hashlib
 import json
 import math
+import re
 from datetime import datetime, timezone
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -18,7 +20,267 @@ MODIS_Y_ORIGIN_M = 3_335_851.5593
 MODIS_PIXEL_WIDTH_M = 926.6254331391661
 MODIS_PIXEL_HEIGHT_M = -926.6254331391666
 DEFAULT_CELL_ID = "h28v06-r0081-c0156"
-PUBLIC_GEOJSON_FILENAME = "data/gis/duchang_heat_exposure_cells.geojson"
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+PUBLIC_GEOJSON_PATH = (
+    PROJECT_ROOT / "data" / "gis" / "duchang_heat_exposure_cells.geojson"
+)
+PUBLIC_GEOJSON_SHA256 = (
+    "c72b6d1a9ac9ba2c53bdf3ffdc1aadb14775c15ced2e156674e64be3a8a40237"
+)
+PUBLIC_METADATA_KEYS = frozenset({
+    "age65_share_pct", "audited_cells", "available_modes", "breaks",
+    "built_up_pct", "calendar_dates", "classification",
+    "county_center_cells", "dataset", "default_mode", "definition",
+    "details_anchor", "digits", "display_crs", "display_geometry",
+    "distance_method", "doi", "end", "generated_at_utc", "geometry_rule",
+    "hard_failures", "independent_validation", "input_fingerprints",
+    "interpretation_ceiling", "label", "layers", "limitation",
+    "local_frozen_scenes", "logical_name", "max",
+    "max_corner_shift_cell_id", "max_corner_shift_corner",
+    "max_corner_shift_m", "mean_elevation_m", "median", "metric_key",
+    "min", "missing_cells", "native_geometry_field",
+    "native_geometry_preserved", "native_grid_crs",
+    "native_nominal_resolution_m", "native_sphere_radius_m",
+    "official_catalog_scenes", "palette", "permanent_water_pct",
+    "positive_population_support_cells", "product", "q3_coverage_pct",
+    "q3_definition", "q3_lst_c_mean", "q3_valid_cell_days",
+    "quality_summary", "rectified_corner_shift_audit", "rectified_formula",
+    "rectified_geometry_analysis_use", "rectified_method",
+    "schema_version", "season", "selection_rule", "sha256", "short_label",
+    "source", "source_versions", "spatial_definition", "start",
+    "study_period", "title", "tree_cover_pct", "unit", "valid_cells",
+    "version", "zero_population_support_cells",
+})
+PUBLIC_BOUNDARY_PROPERTY_KEYS = frozenset({
+    "boundary_level",
+    "boundary_notice",
+    "feature_type",
+    "name_en",
+    "name_zh",
+    "shape_id",
+})
+PUBLIC_CELL_PROPERTY_KEYS = frozenset({
+    "age65_share_pct",
+    "built_up_pct",
+    "cell_id",
+    "center_lat_wgs84",
+    "center_lon_wgs84",
+    "feature_type",
+    "local_available_dates",
+    "mean_elevation_m",
+    "modis_col_0based",
+    "modis_row_0based",
+    "modis_tile",
+    "permanent_water_pct",
+    "positive_population_support",
+    "q3_coverage_pct",
+    "q3_dates",
+    "q3_lst_c_mean",
+    "tree_cover_pct",
+})
+_PUBLIC_ABSOLUTE_PATH_RE = re.compile(
+    r"(?:^|\s)/(?:Users|home|root|private|etc|var)/",
+    re.IGNORECASE,
+)
+
+
+def _validate_public_metadata_value(value: Any, depth: int = 0) -> None:
+    """公开元数据只接受审核过的键、短标量和有界列表。"""
+    if depth > 8:
+        raise ValueError("public_gis_metadata_too_deep")
+    if isinstance(value, dict):
+        if len(value) > 80 or not set(value).issubset(PUBLIC_METADATA_KEYS):
+            raise ValueError("public_gis_metadata_key_not_allowed")
+        for nested in value.values():
+            _validate_public_metadata_value(nested, depth + 1)
+        return
+    if isinstance(value, list):
+        if len(value) > 80:
+            raise ValueError("public_gis_metadata_list_too_long")
+        for nested in value:
+            _validate_public_metadata_value(nested, depth + 1)
+        return
+    if isinstance(value, str):
+        if (
+            len(value) > 1200
+            or "\x00" in value
+            or _PUBLIC_ABSOLUTE_PATH_RE.search(value)
+            or "BEGIN PRIVATE KEY" in value
+        ):
+            raise ValueError("public_gis_metadata_value_not_allowed")
+        return
+    if value is None or isinstance(value, bool):
+        return
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        if not math.isfinite(float(value)):
+            raise ValueError("public_gis_metadata_number_invalid")
+        return
+    raise ValueError("public_gis_metadata_type_not_allowed")
+
+
+def _validate_public_polygon(geometry: Any) -> None:
+    """公开几何仅接受都昌县附近、闭合且有界的 WGS84 Polygon。"""
+    if not isinstance(geometry, dict) or set(geometry) != {"type", "coordinates"}:
+        raise ValueError("public_gis_geometry_shape_invalid")
+    if geometry.get("type") != "Polygon":
+        raise ValueError("public_gis_geometry_type_invalid")
+    rings = geometry.get("coordinates")
+    if not isinstance(rings, list) or len(rings) != 1:
+        raise ValueError("public_gis_geometry_rings_invalid")
+    ring = rings[0]
+    if not isinstance(ring, list) or not 4 <= len(ring) <= 10_000:
+        raise ValueError("public_gis_geometry_points_invalid")
+    normalized = []
+    for point in ring:
+        if not isinstance(point, list) or len(point) != 2:
+            raise ValueError("public_gis_geometry_point_invalid")
+        longitude, latitude = point
+        if (
+            isinstance(longitude, bool)
+            or isinstance(latitude, bool)
+            or not isinstance(longitude, (int, float))
+            or not isinstance(latitude, (int, float))
+            or not math.isfinite(float(longitude))
+            or not math.isfinite(float(latitude))
+            or not 115.0 <= float(longitude) <= 118.0
+            or not 28.0 <= float(latitude) <= 31.0
+        ):
+            raise ValueError("public_gis_geometry_coordinate_invalid")
+        normalized.append((float(longitude), float(latitude)))
+    if normalized[0] != normalized[-1]:
+        raise ValueError("public_gis_geometry_not_closed")
+
+
+def _validate_public_feature(feature: Any, seen_ids: set[str]) -> str:
+    """验证单个公开边界或网格要素的字段白名单。"""
+    if (
+        not isinstance(feature, dict)
+        or set(feature) != {"type", "id", "properties", "geometry"}
+        or feature.get("type") != "Feature"
+        or not isinstance(feature.get("id"), str)
+        or not 1 <= len(feature["id"]) <= 80
+        or feature["id"] in seen_ids
+        or not isinstance(feature.get("properties"), dict)
+    ):
+        raise ValueError("public_gis_feature_invalid")
+    seen_ids.add(feature["id"])
+    properties = feature["properties"]
+    feature_type = properties.get("feature_type")
+    if feature_type == "study_boundary":
+        if set(properties) != PUBLIC_BOUNDARY_PROPERTY_KEYS:
+            raise ValueError("public_gis_boundary_properties_invalid")
+        if feature["id"] != "duchang-research-boundary":
+            raise ValueError("public_gis_boundary_id_invalid")
+        shape_id = properties.get("shape_id")
+        if not isinstance(shape_id, str) or not 1 <= len(shape_id) <= 120:
+            raise ValueError("public_gis_boundary_shape_id_invalid")
+    elif feature_type == "modis_cell":
+        if set(properties) != PUBLIC_CELL_PROPERTY_KEYS:
+            raise ValueError("public_gis_cell_properties_invalid")
+        if feature["id"] != properties.get("cell_id"):
+            raise ValueError("public_gis_cell_id_invalid")
+        if not re.fullmatch(r"h\d{2}v\d{2}-r\d{4}-c\d{4}", feature["id"]):
+            raise ValueError("public_gis_cell_id_format_invalid")
+        longitude = properties.get("center_lon_wgs84")
+        latitude = properties.get("center_lat_wgs84")
+        if (
+            isinstance(longitude, bool)
+            or isinstance(latitude, bool)
+            or not isinstance(longitude, (int, float))
+            or not isinstance(latitude, (int, float))
+            or not 115.0 <= float(longitude) <= 118.0
+            or not 28.0 <= float(latitude) <= 31.0
+        ):
+            raise ValueError("public_gis_cell_center_invalid")
+        for key in {
+            "age65_share_pct",
+            "built_up_pct",
+            "permanent_water_pct",
+            "q3_coverage_pct",
+            "tree_cover_pct",
+        }:
+            value = properties.get(key)
+            if value is not None and (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(float(value))
+                or not 0 <= float(value) <= 100
+            ):
+                raise ValueError("public_gis_cell_percent_invalid")
+    else:
+        raise ValueError("public_gis_feature_type_invalid")
+    _validate_public_polygon(feature["geometry"])
+    return feature_type
+
+
+@lru_cache(maxsize=4)
+def _load_validated_public_geojson_cached(
+    path_value: str,
+    mtime_ns: int,
+    size_bytes: int,
+) -> dict[str, Any]:
+    """按文件版本缓存发布校验；摘要参数用于阻止陈旧缓存复用。"""
+    del mtime_ns, size_bytes
+    raw = Path(path_value).read_bytes()
+    if hashlib.sha256(raw).hexdigest() != PUBLIC_GEOJSON_SHA256:
+        raise ValueError("public_gis_digest_mismatch")
+    collection = json.loads(raw)
+    if (
+        not isinstance(collection, dict)
+        or set(collection) != {"type", "name", "metadata", "features"}
+        or collection.get("type") != "FeatureCollection"
+        or collection.get("name") != "duchang_heat_exposure_cells"
+        or not isinstance(collection.get("metadata"), dict)
+        or not isinstance(collection.get("features"), list)
+    ):
+        raise ValueError("public_gis_collection_invalid")
+    metadata = collection["metadata"]
+    if set(metadata) != {
+        "generated_at_utc",
+        "input_fingerprints",
+        "interpretation_ceiling",
+        "layers",
+        "quality_summary",
+        "schema_version",
+        "source_versions",
+        "spatial_definition",
+        "study_period",
+        "title",
+    }:
+        raise ValueError("public_gis_metadata_contract_invalid")
+    _validate_public_metadata_value(metadata)
+    quality = metadata.get("quality_summary") or {}
+    spatial = metadata.get("spatial_definition") or {}
+    expected_cells = spatial.get("county_center_cells")
+    if (
+        quality.get("independent_validation") != "pass"
+        or quality.get("hard_failures") != 0
+        or not isinstance(expected_cells, int)
+        or expected_cells <= 0
+        or len(collection["features"]) != expected_cells + 1
+    ):
+        raise ValueError("public_gis_release_status_invalid")
+    seen_ids: set[str] = set()
+    feature_types = [
+        _validate_public_feature(feature, seen_ids)
+        for feature in collection["features"]
+    ]
+    if (
+        feature_types.count("study_boundary") != 1
+        or feature_types.count("modis_cell") != expected_cells
+    ):
+        raise ValueError("public_gis_feature_count_invalid")
+    return collection
+
+
+def load_validated_public_geojson(path: Path) -> dict[str, Any]:
+    """验证冻结摘要、发布状态及完整字段/值边界后返回公开产物。"""
+    stat_result = path.stat()
+    return _load_validated_public_geojson_cached(
+        str(path),
+        stat_result.st_mtime_ns,
+        stat_result.st_size,
+    )
 
 
 LAYER_DEFINITIONS = {
@@ -432,17 +694,13 @@ def render_heat_exposure_gis():
     # 构建器无需 Flask 环境，页面依赖在渲染时再加载。
     from flask import current_app, render_template, url_for
 
-    static_path = Path(current_app.static_folder) / PUBLIC_GEOJSON_FILENAME
-    try:
-        static_version = int(static_path.stat().st_mtime)
-    except OSError:
-        static_version = None
-    url_values = {"filename": PUBLIC_GEOJSON_FILENAME}
-    if static_version is not None:
-        url_values["v"] = static_version
+    load_validated_public_geojson(PUBLIC_GEOJSON_PATH)
     return render_template(
         "heat_exposure_gis.html",
-        gis_data_url=url_for("static", **url_values),
+        gis_data_url=url_for(
+            "public.public_heat_geojson",
+            v=PUBLIC_GEOJSON_SHA256[:16],
+        ),
         default_cell_id=DEFAULT_CELL_ID,
     )
 

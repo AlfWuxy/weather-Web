@@ -8,8 +8,9 @@ from datetime import datetime
 import logging
 import os
 import threading
+import time
 
-from flask import current_app, has_app_context
+from flask import current_app, has_app_context, has_request_context
 
 from core.time_utils import now_local
 from utils.parsers import parse_bool, parse_int
@@ -24,10 +25,27 @@ _LOCAL_TOTALS = defaultdict(int)
 _LOCAL_ENDPOINTS = defaultdict(lambda: defaultdict(int))
 _BLOCKED_LOGGED = set()
 
+_RESERVE_BUDGET_LUA = """
+local current = tonumber(redis.call('GET', KEYS[1]) or '0')
+local limit = tonumber(ARGV[2])
+if current >= limit then
+    return {0, current}
+end
+
+local total = redis.call('INCR', KEYS[1])
+redis.call('HINCRBY', KEYS[2], ARGV[1], 1)
+redis.call('EXPIRE', KEYS[1], ARGV[3])
+redis.call('EXPIRE', KEYS[2], ARGV[3])
+return {1, total}
+"""
+
 
 def _config_value(key, default=None):
     if has_app_context():
-        return current_app.config.get(key, default)
+        if key in current_app.config:
+            return current_app.config.get(key)
+        # 新增的运维门禁可先通过环境变量显式启用，无需放宽默认值。
+        return os.getenv(key, default)
     return os.getenv(key, default)
 
 
@@ -50,11 +68,67 @@ def _redis_url():
     return str(value).strip()
 
 
-def _fail_closed():
-    return parse_bool(
-        _config_value("QWEATHER_BUDGET_FAIL_CLOSED", "1"),
-        default=True,
+def _debug_or_test_runtime():
+    """只有明确的调试或测试运行时才允许使用进程内预算。"""
+    return parse_bool(_config_value("DEBUG", False), default=False) or parse_bool(
+        _config_value("TESTING", False),
+        default=False,
     )
+
+
+def _persistent_budget_required():
+    """正式环境始终需要持久化后端，调试环境也可显式收紧。"""
+    explicitly_required = parse_bool(
+        _config_value("QWEATHER_REQUIRE_PERSISTENT_BUDGET", False),
+        default=False,
+    )
+    return explicitly_required or not _debug_or_test_runtime()
+
+
+def _local_budget_allowed():
+    return _debug_or_test_runtime() and not _persistent_budget_required()
+
+
+def _log_network_gate_blocked_once(reason):
+    """记录网络闸门状态，不输出原始配置值。"""
+    key = ("network-gate", reason)
+    if key in _BLOCKED_LOGGED:
+        return
+    _BLOCKED_LOGGED.add(key)
+    if reason == "invalid":
+        logger.error("和风天气网络闸门配置无效，已按关闭策略阻断请求。")
+        return
+    if reason == "request-context":
+        logger.warning("普通 HTTP 请求禁止直连和风天气，已按只读策略阻断请求。")
+        return
+    logger.warning("和风天气网络闸门尚未开放，已阻断请求。")
+
+
+def _network_gate_allows_request(now_epoch=None):
+    """按 Unix 秒闸门决定是否允许访问和风天气网络。"""
+    raw_value = _config_value("QWEATHER_NETWORK_NOT_BEFORE_EPOCH", "")
+    if raw_value is None:
+        return True
+    value = str(raw_value).strip()
+    if not value:
+        return True
+
+    try:
+        # bool 是 int 的子类，但不应被当作合法的 Unix 秒配置。
+        if isinstance(raw_value, bool):
+            raise ValueError("boolean epoch is invalid")
+        not_before_epoch = int(value, 10)
+        if not_before_epoch < 0:
+            raise ValueError("negative epoch is invalid")
+    except (TypeError, ValueError, OverflowError):
+        _log_network_gate_blocked_once("invalid")
+        return False
+
+    current_epoch = time.time() if now_epoch is None else float(now_epoch)
+    if current_epoch < not_before_epoch:
+        _log_network_gate_blocked_once("future")
+        return False
+    return True
 
 
 def _month_key(now=None):
@@ -124,6 +198,15 @@ def _reserve_local(month, endpoint, limit):
 
 def reserve_qweather_request(endpoint):
     """在发出一次和风请求前预占月度额度。"""
+    # 普通 HTTP 请求只允许读取已落地缓存，且阻断时不得消耗预算。
+    if has_request_context():
+        _log_network_gate_blocked_once("request-context")
+        return False
+
+    # 网络闸门必须先于 Redis 和进程内计数，阻断期不消耗任何预算。
+    if not _network_gate_allows_request():
+        return False
+
     endpoint = str(endpoint or "unknown").strip() or "unknown"
     limit = _monthly_limit()
     if limit <= 0:
@@ -136,30 +219,33 @@ def reserve_qweather_request(endpoint):
     redis_configured = bool(_redis_url())
     if client is not None:
         total_key, endpoint_key = _redis_budget_keys(month)
+        ttl = _seconds_until_expiry(now)
         try:
-            count = int(client.incr(total_key))
-            if count == 1:
-                ttl = _seconds_until_expiry(now)
-                client.expire(total_key, ttl)
-            if count > limit:
-                try:
-                    client.decr(total_key)
-                except Exception:
-                    pass
+            accepted, _count = client.eval(
+                _RESERVE_BUDGET_LUA,
+                2,
+                total_key,
+                endpoint_key,
+                endpoint,
+                limit,
+                ttl,
+            )
+            if int(accepted) != 1:
                 _log_blocked_once(month, limit, "redis")
                 return False
-            client.hincrby(endpoint_key, endpoint, 1)
-            if count == 1:
-                client.expire(endpoint_key, ttl)
             return True
         except Exception as exc:
             logger.error("和风天气预算 Redis 计数失败: %s", exc)
-            if redis_configured and _fail_closed():
-                _log_blocked_once(month, limit, "redis-unavailable")
-                return False
+            # 原子脚本状态未知时一律关闭，禁止退回本地计数或自动重试。
+            _log_blocked_once(month, limit, "redis-unavailable")
+            return False
 
-    if redis_configured and _fail_closed():
+    if redis_configured:
         _log_blocked_once(month, limit, "redis-unavailable")
+        return False
+
+    if _persistent_budget_required() or not _local_budget_allowed():
+        _log_blocked_once(month, limit, "persistent-backend-required")
         return False
 
     return _reserve_local(month, endpoint, limit)
@@ -186,6 +272,16 @@ def get_qweather_budget_snapshot():
             }
         except Exception as exc:
             logger.warning("读取和风天气预算快照失败: %s", exc)
+
+    if bool(_redis_url()) or _persistent_budget_required() or not _local_budget_allowed():
+        return {
+            "month": month,
+            "limit": limit,
+            "used": 0,
+            "remaining": 0,
+            "backend": "unavailable",
+            "endpoints": {},
+        }
 
     with _LOCAL_LOCK:
         total = int(_LOCAL_TOTALS.get(month, 0))

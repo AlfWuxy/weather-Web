@@ -258,7 +258,7 @@ AuditLog (审计日志)
 ┌────────────────────┴────────────────────┐
 │           Gunicorn (WSGI服务器)          │
 │              :5000 (内部)               │
-│           workers = 4                   │
+│           workers = 1                   │
 └────────────────────┬────────────────────┘
                      │
 ┌────────────────────┴────────────────────┐
@@ -272,6 +272,19 @@ AuditLog (审计日志)
 └─────────────────────────────────────────┘
 ```
 
+### 6.1 小程序运行与发布控制面
+
+| 链路 | 当前边界 |
+|------|----------|
+| 公共天气 | 小程序只读取服务端持久化的都昌县快照；Web 当前天气、七日预报和小时降水也只读取周期缓存。bootstrap timer 在部署或开机后完整等待 30 分钟并直接触发缓存服务，首次同步无论成功或失败都通过 `OnSuccess`/`OnFailure` 启动 recurring timer；客户端公共快照缓存 30 分钟。网络闸门在正式服务启动前设置，请求上下文中的 QWeather 预算预占会直接拒绝，普通页面、风险预计算和 `/healthz` 不触发额外上游请求。 |
+| 微信登录 | 正式 AppID、AppSecret 和隐私版本由本机私密发布表单进入受控服务器环境。AppSecret、OpenID pepper 和会话密钥不进入小程序包；pepper 与会话密钥在服务器内生成。 |
+| 分享与换号 | 只有“分享给家人”按钮生成固定 `from=family_share`。普通分享不带归因，个人页回退到公开首页；登录成功后一次性消费来源，退出和账号注销清理本机会话与来源上下文。 |
+| 匿名分析 | 公开浏览使用微信公众平台聚合统计。自有事件只接受固定枚举和最小账号级维度，原始事件保留 30 天，管理看板与 CSV 只输出聚合结果并排除配置的测试账号。地区聚合只使用社区编码，`ANALYTICS_MIN_LOCATION_COUNT` 在生产环境最小强制为 3。 |
+| 推送 | WxPusher 默认关闭且需要用户明确同意。投递先以数据库唯一占位保证单次发送；超时、失败和结果不明确的记录进入管理员人工复核队列，复核前禁止自动重发。 |
+| 发布门禁 | `.env.wechat-release` 只存在于本机且权限为 `0600`。正式发布要求个人主体类目证据、运营者资料、AppID、隐私版本、`WECHAT_CATEGORY_CONFIRMED=1` 和 `WECHAT_FORM_READY=1` 全部成立。远程部署还要求 GitHub 对精确 commit 的最新 push workflow 与稳定证明任务成功；缺失、等待、失败或分支 tip 已变化时均在首次 SSH 前停止。 |
+
+个人主体类目截图和运营者认证资料属于私有发布证据，只放本机私有目录或私有 ops。公开仓库只记录字段、门禁逻辑和复核流程。详细步骤见 `docs/miniprogram/WECHAT_RELEASE_HANDOFF.md` 与 `docs/miniprogram/RELEASE_CHECKLIST.md`。
+
 ---
 
 ## 7. 服务器运维指南
@@ -282,12 +295,14 @@ AuditLog (审计日志)
 |------|------|
 | 服务器IP | `<managed-in-private-ops>` |
 | 操作系统 | Debian 12 |
-| 项目路径 | /opt/your-app |
+| 持久化状态目录 | `/opt/your-app` |
+| 不可变发布根目录 | `/opt/your-app-deploy` |
+| 当前版本入口 | `/opt/your-app-deploy/current` |
 | Python版本 | 3.11.2 |
-| 虚拟环境 | /opt/your-app/venv |
+| 虚拟环境 | 每个 release 独立的 `venv/` |
 | 数据库 | /opt/your-app/instance/health_weather.db |
 | 服务名称 | case-weather.service |
-| 端口 | 5000 |
+| 内部端口 | `127.0.0.1:5000`，只允许 Nginx 反向代理访问 |
 
 ### 7.2 服务管理命令
 
@@ -314,24 +329,26 @@ journalctl -u case-weather --no-pager -n 50
 ### 7.3 代码部署
 
 ```bash
-# 从本地同步代码到服务器（排除数据库和敏感文件）
-rsync -avz \
-  --exclude "venv" \
-  --exclude ".venv" \
-  --exclude "__pycache__" \
-  --exclude ".git" \
-  --exclude ".DS_Store" \
-  --exclude ".env" \
-  --exclude "instance/health_weather.db" \
-  --exclude "storage" \
-  /path/to/your-local-repo/ \
-  deploy-user@your-server-host:/opt/your-app/
+# 首次正式发布先从模板建立被忽略的私密表单。
+cp .env.wechat-release.example .env.wechat-release
+chmod 600 .env.wechat-release
+git check-ignore .env.wechat-release
 
-# 重启服务使更新生效
-ssh deploy-user@your-server-host "systemctl restart case-weather"
+# 首次执行前，先人工核对服务器指纹并写入 ~/.ssh/known_hosts。
+# 网页与后端先行发布使用 web_backend_only；微信正式发布改为 wechat_formal 与 ready=1。
+ENV_FILE=/path/to/private-release.env \
+DEPLOY_MODE=web_backend_only \
+DEPLOY_REQUIRE_WECHAT_READY=0 \
+./scripts/deploy.sh
 ```
 
-**重要**：`.env` 被排除，不会被覆盖。数据库默认位于 `/opt/your-app/instance/health_weather.db`；若本地存在 `instance/` 或 `storage/` 目录也会被排除。
+`DEPLOY_MODE=web_backend_only` 必须与 `DEPLOY_REQUIRE_WECHAT_READY=0` 配对。它不读取微信表单，不替换或生成 AppID、AppSecret、OpenID pepper 和会话密钥，并保留服务器已有的完整微信运行配置；这项部署不构成微信包 ready 或审核证据。旧正式环境只缺新绑定字段时，服务器会 if-empty 生成独立 `ACCOUNT_LINK_CODE_PEPPER`，该应用 pepper 不属于微信平台凭据。该模式复用服务器已有 QWeather 运行态私钥，因此部署环境必须清空 `QWEATHER_JWT_PRIVATE_KEY_SOURCE`，私钥轮换继续走完整正式事务。`DEPLOY_MODE=wechat_formal` 必须与 `DEPLOY_REQUIRE_WECHAT_READY=1` 配对，并要求发布表单通过权限、个人主体、类目、运营资料、AppID、AppSecret 与隐私版本校验。`WECHAT_CATEGORY_CONFIRMED` 只能在发布当天保存正式个人主体类目截图并人工复核后设为 `1`；`WECHAT_FORM_READY` 必须最后开启。命令行显式模式与 `ENV_FILE` 冲突时在 SSH 前停止。
+
+两种模式都要求干净 Git HEAD，在本机 `0700` 临时目录内生成 `0600` commit 票据，并用 `git archive` 导出固定代码快照。首次 SSH 前，部署器核对 GitHub 远程分支 tip、精确 commit、push event、workflow 路径以及最新 run 中的稳定证明任务。网页与后端模式要求 `可发布提交证明`；微信正式模式额外要求 `小程序可发布提交证明`。证明收据随 release 保存为 root 私有 `0600` metadata，并在激活产生任何状态变更前再次离线核对。
+
+三个 scikit-learn 运行制品不进入 Git。私密部署环境必须用 `ML_MODEL_ARTIFACT_DIR` 指向仓库外的本机目录；目录不能是符号链接，`disease_predictor.pkl`、`scaler.pkl` 与 `label_encoder.pkl` 必须是当前部署用户持有、单硬链接、权限精确为 `0600` 的普通文件。发布器在首次 SSH 前通过同一目录描述符建立本轮 `0600` 快照，并按冻结提交 `models/feature_config.json` 中的 SHA-256、大小和 scikit-learn 版本清单逐项核对。服务端只接受这三个固定文件：上传后按 root 私有权限复核，低内存预检前按 `root:case-weather` 只读运行权限再次复核；制品收据保存在 release 的 root 私有 metadata，并与冻结 commit 绑定。独立激活或恢复路径在任何生产状态变更前执行同一组收据、commit、摘要、所有者和权限门禁。缺失、额外 `.pkl`、符号链接、权限不符、读取中变化或摘要不符都会在激活前停止。
+
+`deploy.sh` 会创建不可变 release、独立虚拟环境和候选配置，上传时排除所有 `.env*` 与 `project.private.config.json`。服务器停服前不再运行会导入完整 Flask 应用的 pytest；完整 Python 3.11/3.12、四个激活事务分片和小程序 Node 测试由 GitHub runner 承担。依赖准备先实时确认可用内存至少 256 MiB，再进入无网络、`MemoryHigh=160M`、`MemoryMax=192M`、无 swap 的 transient unit：只有 `current` 直达受控 release，且新旧 `requirements.lock` 实际 SHA、root 持有且不可写的摘要/版本/`pip inspect` 收据（兼容旧 release 的 `0640`，新收据固定 `0600`）、Python major.minor、锁中包名版本与 current venv 的 live 包集合全部严格一致，并通过 `pip check`，才用不跟随符号链接的复制生成新 venv 和新收据。任何证据不足都返回明确的不可复用状态，再进入原网络安装路径；其他复制或验证失败直接停止发布。网络安装仍要求总内存至少 450 MiB、可用内存至少 320 MiB、项目盘可用空间至少 2048 MiB 且 inode 可用比例至少 10%，并限制在 `MemoryHigh=192M`、`MemoryMax=256M`、无 swap、最长 15 分钟的 transient unit；PyPI 网络只在该路径开放。随后只在 `MemoryMax=96M`、`MemorySwapMax=0`、`PrivateNetwork=yes` 的 transient unit 中执行 `compileall`、Shell 语法、锁定依赖、Python 3.11、四个轻量包导入和 Alembic 单 head 检查。激活会再次核对依赖收据、真实包集合和 `pip check`，候选及正式服务统一通过 `venv/bin/python -m gunicorn` 启动，避免克隆后的入口脚本 shebang 指回旧 release。激活停止旧服务并完成真实迁移后，以单 worker 候选进程验证 `/healthz`、ML 的 scikit-learn 1.7.2、可用且未陈旧的 QWeather 小程序快照，以及不含“天气更新中”或“风险待刷新”的公开风险页；正式 Gunicorn 同样固定为单 worker，避免在小内存主机上重复加载科学计算依赖。候选配置生成时记录活动 `.env` 和 `current` 链接摘要；激活取得 `deploy.lock` 后先执行 CAS，任何并发部署或人工配置变化都会让陈旧候选停止。激活事务随后负责备份数据库与环境、执行 Alembic、原子切换 `current`、替换 systemd 单元并启动 timer；服务、两阶段 timer、缓存服务的 `OnSuccess`/`OnFailure`、bootstrap 激活到触发的 30 分钟单调时钟调度间隔、稳定观察期间未重启或改期、`current` 链接、暂存环境清理和公网健康检查全部通过后才写入 `COMMITTED`。进入向前提交阶段后的复核失败会写入 `POST_COMMIT_ATTENTION.txt`，阻断下一次激活并保留新数据库。禁止把代码 rsync 到持久化状态目录后手工重启，这会绕过预检、迁移校验和回滚边界。
 
 ### 7.4 数据库备份策略
 
@@ -344,19 +361,13 @@ ssh deploy-user@your-server-host "systemctl restart case-weather"
 | 保留天数 | 30天（自动删除旧备份） |
 | 备份格式 | `.db.gz` (SQLite + gzip压缩) |
 
-#### 备份脚本 (`/opt/your-app/scripts/backup.sh`)
+#### 备份脚本
 
 ```bash
-#!/bin/bash
-BACKUP_DIR=/opt/your-app/backups
-DB_FILE=/opt/your-app/instance/health_weather.db
-DATE=$(date +%Y%m%d_%H%M%S)
-BACKUP_FILE=$BACKUP_DIR/health_weather_$DATE.db
-
-mkdir -p $BACKUP_DIR
-sqlite3 $DB_FILE ".backup $BACKUP_FILE"
-gzip $BACKUP_FILE
-find $BACKUP_DIR -name "*.gz" -mtime +30 -delete
+PROJECT_DIR=/opt/your-app \
+ENV_FILE=/opt/your-app/.env \
+BACKUP_DIR=/opt/your-app/backups \
+/opt/your-app-deploy/current/app/scripts/backup.sh
 ```
 
 #### Cron定时任务
@@ -366,14 +377,15 @@ find $BACKUP_DIR -name "*.gz" -mtime +30 -delete
 crontab -l
 
 # 当前配置（每天凌晨3点执行）
-0 3 * * * /opt/your-app/scripts/backup.sh >> /opt/your-app/backups/backup.log 2>&1
+0 3 * * * PROJECT_DIR=/opt/your-app ENV_FILE=/opt/your-app/.env BACKUP_DIR=/opt/your-app/backups /opt/your-app-deploy/current/app/scripts/backup.sh >> /opt/your-app/backups/backup.log 2>&1
 ```
 
 #### 手动备份
 
 ```bash
-# 在服务器上执行
-/opt/your-app/scripts/backup.sh
+# 在服务器上执行当前 release 中的受控脚本
+PROJECT_DIR=/opt/your-app ENV_FILE=/opt/your-app/.env \
+  /opt/your-app-deploy/current/app/scripts/backup.sh
 
 # 查看备份列表
 ls -lh /opt/your-app/backups/
@@ -389,57 +401,44 @@ scp deploy-user@your-server-host:/opt/your-app/backups/*.gz ./backups/
 
 #### 恢复数据库
 
-```bash
-# 1. 停止服务
-systemctl stop case-weather
-
-# 2. 解压备份
-cd /opt/your-app/backups
-gunzip health_weather_YYYYMMDD_HHMMSS.db.gz
-
-# 3. 备份当前数据库（以防万一）
-cp /opt/your-app/instance/health_weather.db /opt/your-app/instance/health_weather.db.old
-
-# 4. 恢复数据库
-cp health_weather_YYYYMMDD_HHMMSS.db /opt/your-app/instance/health_weather.db
-
-# 5. 重启服务
-systemctl restart case-weather
-```
+激活事务失败时由 `activate_release.sh` 自动恢复同一事务内的数据库、环境、release 链接和 systemd 状态。公网服务一旦尝试启动，流程进入只向前修复区间，避免覆盖已经确认的用户写入。跨日期备份恢复属于破坏性运维，只能在维护窗口依据私有 ops 手册执行，先核对目标备份、当前事务目录、`PRAGMA quick_check` 与 `PRAGMA foreign_key_check`。
 
 ### 7.5 环境变量配置
 
 环境变量存储在 `/opt/your-app/.env` 文件中（权限 600）：
 
 ```bash
-# Flask配置
-FLASK_ENV=production
-SECRET_KEY=your_secret_key
-
-# 和风天气API（主来源）
-QWEATHER_KEY=YOUR_QWEATHER_KEY
-QWEATHER_API_BASE=<在本地或私有 ops 中显式配置的 QWeather Host>
-
-# Open-Meteo（兜底，无需 Key）
-# 无需配置，系统会在 QWeather 失败时自动启用
-
-# 高德地图API
-AMAP_KEY=your_amap_key
-
-# SiliconFlow AI
-SILICONFLOW_API_KEY=your_siliconflow_key
-
-# 本地部署/同步（不上传服务器）
+# 本地私密发布表单，完整字段见 .env.example。
 DEPLOY_SERVER=your-server-host
 DEPLOY_USER=deploy-user
 DEPLOY_PROJECT_DIR=/opt/your-app
 DEPLOY_LOCAL_DIR=/path/to/your-local-repo
-# 推荐使用 SSH Key；不要把密码式运维流程写进公开仓库
+WECHAT_RELEASE_FORM_FILE=/absolute/path/to/.env.wechat-release
+DEPLOY_MODE=wechat_formal
+WEB_PRIVATE_FEATURES_ENABLED=1
+PUBLIC_BASE_URL=https://your-production-domain.example
+QWEATHER_AUTH_MODE=jwt
+QWEATHER_API_BASE=https://your-qweather-host.example
+QWEATHER_JWT_KID=<credential-kid>
+QWEATHER_JWT_PROJECT_ID=<project-id>
+QWEATHER_JWT_PRIVATE_KEY_PATH=/opt/your-app/private/qweather-ed25519.pem
+QWEATHER_JWT_PRIVATE_KEY_SOURCE=/absolute/local/ignored/qweather-ed25519.pem
+WX_MINIPROGRAM_APPID=<认证后填写>
+WX_MINIPROGRAM_SECRET=<server-only>
+DEPLOY_REQUIRE_WECHAT_READY=1
 ```
 
-`scripts/deploy.sh` / `scripts/sync.sh` 会读取本地 `.env` 中的部署变量。公开仓库只记录 SSH Key 方式；其他运维细节放到私有 ops 文档。
+普通 `.env` 保存部署与服务器运行参数；运营者姓名、类目门禁和正式微信凭据以 `.env.wechat-release` 为唯一交接表单。双端正式版本同时固定 `WECHAT_FORMAL_RUNTIME=1` 与 `WEB_PRIVATE_FEATURES_ENABLED=1`：前者保留微信身份、日志隐私和公开行动链接边界，后者只移除中央网页禁用层，让登录后的网页版继续经过各路由原有的登录、角色和 CSRF 校验。缺少第二个开关时默认关闭网页私密入口，避免旧环境升级后意外扩大访问面。`QWEATHER_JWT_PRIVATE_KEY_SOURCE` 只供本机部署进程读取，不会写入服务器环境；它必须指向仓库外、权限为 `0600` 的 Ed25519 私钥。本机部署只用一次带 `O_NOFOLLOW` 与 `O_CLOEXEC` 的只读文件描述符打开源文件，在同一描述符上确认普通文件、权限与大小，再以 `O_CREAT|O_EXCL` 创建本轮 `0600` 快照并复制；OpenSSL 只校验快照。`scripts/deploy.sh` 通过文件 stdin 把快照安装为 release 专属 `.qweather-jwt.pending-<release-id>`，pending 在候选校验和测试期间保持 `root:root 0600`。激活事务先耐久记录转换计划和 boot guard，再停止并确认全部受管单元及运行账号进程静默。create 路径用 no-clobber 硬链接创建 root-only final，删除并 fsync pending 名称后才把 final 提升为 `root:case-weather 0640`；reuse 路径仅接受内容、inode、属主和权限精确一致的既有 final。回滚会在旧单元恢复前把本轮新 final 与 pending 收回到 root-only 事务归档；身份、回收或 fsync 无法证明时保持单元停止并保留 guard。版本化新文件名用于轮换，旧 key 在提供方吊销且回滚保留期结束后再由 root 单独退役。脚本还会在服务器内生成微信 OpenID pepper 与会话密钥。正式发布要求 HTTPS、有效天气配置和完整微信登录凭据；显式的降级预览不会被误标成正式可上架版本。公开仓库只记录 SSH Key 方式，其他运维细节放到私有 ops 文档。
 
-### 7.6 常见问题排查
+### 7.6 发布事务与人工恢复确认
+
+发布前记录当前线上小程序版本、平台当时可用的回退版本、目标 commit、后端 `current` release、数据库备份与事务状态。用户确认发布和回滚目标后再点击正式发布。
+
+激活事务在公网切换前失败时自动恢复数据库、旧 release 与 systemd 状态。公网服务已经尝试启动后只进行向前修复，并写入 `POST_COMMIT_ATTENTION.txt`，以保护可能已经确认的用户写入。发现 `ROLLBACK_REQUIRED.txt` 或 `POST_COMMIT_ATTENTION.txt` 时，新部署保持阻塞；管理员核对数据库、`current` 链接、systemd 单元和精确事务目录后，才通过 `DEPLOY_RECOVERY_ACKNOWLEDGED_TRANSACTION` 登记恢复确认。
+
+小程序客户端出现严重问题时，优先使用平台当时可用的版本管理能力回退客户端，Web 公共服务继续运行。后台没有可用回退版本时先停止发布，准备修复包与用户告知方案。
+
+### 7.7 常见问题排查
 
 #### 1. 服务启动失败
 
@@ -448,33 +447,33 @@ DEPLOY_LOCAL_DIR=/path/to/your-local-repo
 journalctl -u case-weather --no-pager -n 100 | grep -E "(ERROR|Exception)"
 
 # 手动测试应用
-cd /opt/your-app
-/opt/your-app/venv/bin/python -c "from app import app; print('OK')"
+cd /opt/your-app-deploy/current/app
+/opt/your-app-deploy/current/venv/bin/python -c "from app import app; print('OK')"
 ```
 
 #### 2. 数据库列缺失错误
 
 ```bash
-# 检查表结构
+# 只读检查表结构与迁移版本
 sqlite3 /opt/your-app/instance/health_weather.db "PRAGMA table_info(表名);"
-
-# 添加缺失列
-sqlite3 /opt/your-app/instance/health_weather.db "ALTER TABLE 表名 ADD COLUMN 列名 TEXT;"
-
-# 或使用 db.create_all() 同步所有表
-cd /opt/your-app
-/opt/your-app/venv/bin/python -c "from app import app, db;
-with app.app_context(): db.create_all(); print('Done')"
+cd /opt/your-app-deploy/current/app
+/opt/your-app-deploy/current/venv/bin/python -m alembic current
 ```
+
+不要手工执行 `ALTER TABLE` 或在生产库运行 `db.create_all()` 修表。重新走不可变发布事务，由 Alembic、单一 head 校验、小程序关键列校验和外键检查决定能否切换。
 
 #### 3. 天气API返回模拟数据
 
-检查 `.env` 文件中的 `QWEATHER_KEY` 和 `QWEATHER_API_BASE` 是否正确配置；若未配置 QWeather，系统会自动回退 Open-Meteo。
+先检查候选配置 readiness 与 timer 日志。普通页面访问、健康检查和回归测试均不得直接触发 QWeather。
 
 ```bash
-# 先在当前 shell 中提供真实 Host，再测试 API
-export QWEATHER_API_BASE="https://your-real-qweather-host/v7"
-curl -s --compressed "${QWEATHER_API_BASE}/weather/now?key=YOUR_KEY&location=116.20,29.27"
+python3 /opt/your-app-deploy/current/app/scripts/validate_release_env.py \
+  --file /opt/your-app/.env --require-wechat 1
+systemctl status case-weather-cache-bootstrap.timer --no-pager
+systemctl status case-weather-cache.timer --no-pager
+journalctl -u case-weather-cache.service --no-pager -n 50
 ```
+
+部署或开机后由 bootstrap timer 完整等待 30 分钟，再直接执行首次 `case-weather-cache.service` 同步；单次周期会持久化实况、七日预报、预警、小程序快照和供 Web 时间轴读取的 24 小时 Open-Meteo 降水缓存，同步无论成功或失败都通过缓存服务的 `OnSuccess`/`OnFailure` 启动 recurring timer。正式凭据就绪后的唯一一次受控真实联调先完成运行用户 JWT 离线签名和 Redis 预算前值读取，成功后记录调用前后预算差值；普通部署与健康检查不得消耗该次数。
 
 ---

@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 
+import os
 import threading
 import time as stdlib_time
 from concurrent.futures import ThreadPoolExecutor
@@ -51,7 +52,7 @@ def test_api_key_mode_sends_only_api_key_header():
 
     headers = qweather_auth.get_qweather_request_headers(
         config,
-        api_base="https://example.com/v7",
+        api_base="https://unit-test.qweatherapi.com/v7",
     )
 
     assert headers == {"X-QW-Api-Key": "unit-test-key"}
@@ -123,12 +124,123 @@ def test_concurrent_requests_sign_only_once(jwt_material, monkeypatch):
     assert len(calls) == 1
 
 
-def test_jwt_rejects_private_key_with_open_permissions(jwt_material):
+@pytest.mark.parametrize("mode", [0o400, 0o644])
+def test_jwt_rejects_private_key_without_exact_permissions(jwt_material, mode):
     config, key_path, _public_pem = jwt_material
-    key_path.chmod(0o644)
+    key_path.chmod(mode)
 
     with pytest.raises(qweather_auth.QWeatherAuthError, match="qweather_jwt_key_permissions"):
         qweather_auth.get_qweather_request_headers(config)
+
+
+def test_jwt_accepts_root_group_read_only_mode(jwt_material):
+    config, key_path, _public_pem = jwt_material
+    key_path.chmod(0o640)
+
+    headers = qweather_auth.get_qweather_request_headers(config)
+
+    assert set(headers) == {"Authorization"}
+    assert headers["Authorization"].startswith("Bearer ")
+
+
+def test_jwt_rejects_symlink_private_key(jwt_material, tmp_path):
+    config, key_path, _public_pem = jwt_material
+    linked_key = tmp_path / "linked-qweather-private.pem"
+    linked_key.symlink_to(key_path)
+    linked_config = {
+        **config,
+        "QWEATHER_JWT_PRIVATE_KEY_PATH": str(linked_key),
+    }
+
+    with pytest.raises(qweather_auth.QWeatherAuthError, match="qweather_jwt_key_not_regular"):
+        qweather_auth.get_qweather_request_headers(linked_config)
+
+
+def test_jwt_rejects_private_key_changed_during_read(jwt_material, monkeypatch):
+    config, key_path, _public_pem = jwt_material
+    real_read = os.read
+    changed = False
+
+    def change_key_after_read(file_descriptor, size):
+        nonlocal changed
+        chunk = real_read(file_descriptor, size)
+        if chunk and not changed:
+            changed = True
+            with key_path.open("ab") as output:
+                output.write(b"\nchanged-during-read")
+        return chunk
+
+    monkeypatch.setattr(qweather_auth.os, "read", change_key_after_read)
+
+    with pytest.raises(qweather_auth.QWeatherAuthError, match="qweather_jwt_key_changed"):
+        qweather_auth.get_qweather_request_headers(config)
+
+
+def test_jwt_rejects_private_key_path_replaced_during_read(
+    jwt_material,
+    tmp_path,
+    monkeypatch,
+):
+    config, key_path, _public_pem = jwt_material
+    replacement = tmp_path / "replacement-private.pem"
+    replacement.write_bytes(key_path.read_bytes())
+    replacement.chmod(0o600)
+    real_read = os.read
+    changed = False
+
+    def replace_key_after_read(file_descriptor, size):
+        nonlocal changed
+        chunk = real_read(file_descriptor, size)
+        if chunk and not changed:
+            changed = True
+            os.replace(replacement, key_path)
+        return chunk
+
+    monkeypatch.setattr(qweather_auth.os, "read", replace_key_after_read)
+
+    with pytest.raises(qweather_auth.QWeatherAuthError, match="qweather_jwt_key_changed"):
+        qweather_auth.get_qweather_request_headers(config)
+
+
+def test_jwt_same_path_key_rotation_refreshes_cached_signature(
+    jwt_material,
+    monkeypatch,
+):
+    config, key_path, first_public_pem = jwt_material
+    now = int(stdlib_time.time())
+    monkeypatch.setattr(qweather_auth.time, "time", lambda: now)
+    original_stat = key_path.stat()
+
+    first_header = qweather_auth.get_qweather_request_headers(config)
+    first_token = first_header["Authorization"].removeprefix("Bearer ")
+
+    second_private_key = Ed25519PrivateKey.generate()
+    second_private_pem = second_private_key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption(),
+    )
+    second_public_pem = second_private_key.public_key().public_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PublicFormat.SubjectPublicKeyInfo,
+    )
+    assert len(second_private_pem) == original_stat.st_size
+    key_path.write_bytes(second_private_pem)
+    os.utime(
+        key_path,
+        ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns),
+    )
+    rotated_stat = key_path.stat()
+    assert rotated_stat.st_ino == original_stat.st_ino
+    assert rotated_stat.st_size == original_stat.st_size
+    assert rotated_stat.st_mtime_ns == original_stat.st_mtime_ns
+
+    second_header = qweather_auth.get_qweather_request_headers(config)
+    second_token = second_header["Authorization"].removeprefix("Bearer ")
+
+    assert second_token != first_token
+    assert jwt.decode(first_token, first_public_pem, algorithms=["EdDSA"])["sub"] == "PROJECT1234"
+    assert jwt.decode(second_token, second_public_pem, algorithms=["EdDSA"])["sub"] == "PROJECT1234"
 
 
 @pytest.mark.parametrize(
@@ -142,6 +254,21 @@ def test_jwt_rejects_private_key_with_open_permissions(jwt_material):
 )
 def test_jwt_rejects_untrusted_api_base(jwt_material, api_base, error_code):
     config, _key_path, _public_pem = jwt_material
+
+    with pytest.raises(qweather_auth.QWeatherAuthError, match=error_code):
+        qweather_auth.get_qweather_request_headers(config, api_base=api_base)
+
+
+@pytest.mark.parametrize(
+    'api_base,error_code',
+    (
+        ('https://example.com/v7', 'qweather_jwt_host_invalid'),
+        ('https://unit-test.qweatherapi.com/weather', 'qweather_jwt_base_path_invalid'),
+        ('https://unit-test.qweatherapi.com:8443/v7', 'qweather_api_base_invalid'),
+    ),
+)
+def test_api_key_rejects_untrusted_api_base(api_base, error_code):
+    config = {'QWEATHER_AUTH_MODE': 'api_key', 'QWEATHER_KEY': 'unit-test-key'}
 
     with pytest.raises(qweather_auth.QWeatherAuthError, match=error_code):
         qweather_auth.get_qweather_request_headers(config, api_base=api_base)

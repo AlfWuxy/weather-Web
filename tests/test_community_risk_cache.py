@@ -130,7 +130,10 @@ def test_precompute_cache_is_reused_by_risk_map_api(authenticated_client, monkey
                 'management_suggestions': [],
             }
 
-    monkeypatch.setattr('services.pipelines.precompute_community_risk.get_weather_with_cache', lambda city: (weather, True))
+    monkeypatch.setattr(
+        'services.pipelines.precompute_community_risk.get_weather_with_cache',
+        lambda city, cache_only=False: (weather, True),
+    )
     monkeypatch.setattr('services.api_service.get_weather_with_cache', lambda city: (weather, True))
     monkeypatch.setattr('services.pipelines.precompute_community_risk.get_community_service', lambda: FakeCommunityService())
     monkeypatch.setattr('services.community_risk_service.get_community_service', lambda: FakeCommunityService())

@@ -6,6 +6,8 @@
 import logging
 import os
 from pathlib import Path
+import stat
+
 from dotenv import load_dotenv
 import click
 from flask import Flask, current_app
@@ -16,6 +18,7 @@ from core.config import configure_app
 from core.constants import CHRONIC_OPTIONS, DEFAULT_CITY_LABEL, GUEST_ID_PREFIX, RISK_TAG_OPTIONS
 from core.extensions import db, init_extensions, login_manager
 from core.hooks import register_hooks
+from core.logging_privacy import install_formal_logging_privacy
 from core.db_models import (
     AlertDelivery,
     AuditLog,
@@ -52,8 +55,38 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# 加载环境变量（.env）
-load_dotenv()
+def _load_environment():
+    """加载默认开发配置，或由发布器指定的唯一正式环境文件。"""
+    explicit_path = str(os.getenv("CASE_WEATHER_ENV_FILE") or "").strip()
+    if not explicit_path:
+        load_dotenv()
+        return
+
+    env_path = Path(explicit_path)
+    if not env_path.is_absolute() or env_path == Path("/"):
+        raise RuntimeError("CASE_WEATHER_ENV_FILE 必须是安全绝对文件路径")
+
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
+    flags |= getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(str(env_path), flags)
+    except (OSError, ValueError) as exc:
+        raise RuntimeError("CASE_WEATHER_ENV_FILE 无法安全读取") from exc
+    try:
+        file_stat = os.fstat(descriptor)
+        if not stat.S_ISREG(file_stat.st_mode):
+            raise RuntimeError("CASE_WEATHER_ENV_FILE 必须是普通文件")
+        with os.fdopen(descriptor, "r", encoding="utf-8") as handle:
+            descriptor = -1
+            load_dotenv(stream=handle, override=True)
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+
+
+# 正式激活时由发布器显式传入外置配置；本地开发仍兼容仓库 .env。
+_load_environment()
+install_formal_logging_privacy()
 
 # 创建Flask应用
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -68,6 +101,7 @@ def create_app(register_blueprints=True):
         static_folder=str(PROJECT_ROOT / 'static')
     )
     configure_app(app, logger)
+    install_formal_logging_privacy(app.config.get('WECHAT_FORMAL_RUNTIME'))
     init_extensions(app)
     register_user_loader(login_manager)
     register_hooks(app)
@@ -187,13 +221,13 @@ def ensure_db_ready(app=None):
     init_db(app)
 
 
-def main():
+def main(app_instance=None):
     """Run the Flask development server."""
-    app = create_app()
-    ensure_db_ready(app)
+    target_app = app_instance if app_instance is not None else create_app()
+    ensure_db_ready(target_app)
     host = os.getenv('FLASK_HOST', '0.0.0.0')
     port = parse_int(os.getenv('FLASK_PORT'), default=5000)
-    app.run(debug=app.config.get('DEBUG', False), host=host, port=port)
+    target_app.run(debug=target_app.config.get('DEBUG', False), host=host, port=port)
 
 
 if __name__ == '__main__':

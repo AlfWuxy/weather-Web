@@ -18,4 +18,5 @@ VENV_PY="${VENV_PY:-python}"
 cd "$ROOT_DIR"
 export PYTHONPATH="$ROOT_DIR${PYTHONPATH:+:$PYTHONPATH}"
 
+# 锁路径只由应用正式配置读取，wrapper 不再生成临时替代路径。
 exec "$VENV_PY" -m services.pipelines.dispatch_alerts "$@"

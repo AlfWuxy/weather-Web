@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 
-{% block title %}信任网络设计逻辑 - 宜老天气通{% endblock %}
+{% block title %}家庭信任网络与天气提醒｜宜老天气通{% endblock %}
+{% block meta_description %}了解宜老天气通如何通过子女和家属这一可信节点，把都昌天气预警转成老人更容易执行和跟进的行动提醒。{% endblock %}
 
 {% block content %}
 <div class="container my-4">
@@ -8,39 +9,39 @@
     <div class="col-lg-9">
       <div class="card shadow-sm">
         <div class="card-body p-4">
-          <h2 class="mb-3"><i class="bi bi-diagram-3"></i> 为什么“子女端”是核心？</h2>
+          <h1 class="h2 mb-3"><i class="bi bi-diagram-3"></i> 为什么天气防护需要家人参与？</h1>
           <p class="text-muted">
-            你的论文核心洞察是：信息是否被采纳，不取决于信息本身，而取决于<strong>信任网络</strong>。
-            因此本工具不是把预警直接推给老人，而是通过子女这个“可信节点”把行动建议转述给家人。
+            天气风险信息从“看见”到“做到”，往往需要熟悉的人解释、提醒和跟进。
+            宜老天气通把公开风险、简短行动话术和家庭记录入口放在同一条流程中，帮助家属通过<strong>信任网络</strong>转述当天能执行的防护建议。
           </p>
 
           <div class="row g-3 mt-1">
             <div class="col-md-6">
               <div class="border rounded p-3 h-100">
-                <div class="fw-semibold mb-2">L1：直接推给老人（容易失败）</div>
+                <div class="fw-semibold mb-2">L1：只展示风险信息</div>
                 <ul class="mb-0 text-muted">
-                  <li>入口门槛高（不会用/不愿用）</li>
-                  <li>不确定信息可信度</li>
-                  <li>行动成本高，缺少督促</li>
+                  <li>用户仍需自行理解风险含义</li>
+                  <li>行动建议可能缺少生活情境</li>
+                  <li>服务无法知道提醒是否被看到</li>
                 </ul>
               </div>
             </div>
             <div class="col-md-6">
               <div class="border rounded p-3 h-100">
-                <div class="fw-semibold mb-2">L2：通过子女转述（更可能成功）</div>
+                <div class="fw-semibold mb-2">L2：由家人转述与跟进</div>
                 <ul class="mb-0 text-muted">
-                  <li>子女是老人信任的节点</li>
-                  <li>子女能把信息翻译成具体行动</li>
-                  <li>子女能跟进与收集反馈</li>
+                  <li>家人可复制简短话术后自行转述</li>
+                  <li>建议可以结合当天生活安排</li>
+                  <li>自愿确认能形成简单跟进记录</li>
                 </ul>
               </div>
             </div>
           </div>
 
           <div class="alert alert-success mt-3 mb-0">
-            <div class="fw-semibold mb-1">本工具如何验证这条逻辑？</div>
+            <div class="fw-semibold mb-1">如何评估这项服务？</div>
             <div class="text-muted">
-              通过试点数据闭环记录：推送触发次数、点击率、话术复制次数、反馈提交等指标，观察“子女作为可信节点”的信息传递是否带来更高的行动完成度。
+              试点阶段会记录受限的账号级产品事件，再由后台以聚合结果评估页面访问、话术复制和自愿确认等使用情况。事件不包含姓名、电话、原始 IP、自由文本或精确位置，保留边界以隐私说明为准。这些指标用于改进流程，不代表个人健康结果，也不用于医疗判断。
             </div>
           </div>
         </div>
@@ -48,7 +49,7 @@
 
       <div class="d-flex flex-wrap gap-2 mt-3">
         <a class="btn btn-primary" href="{{ url_for('user.pair_management') }}">
-          <i class="bi bi-people"></i> 去添加老人并开启推送
+          <i class="bi bi-people"></i> 登录后管理家庭照护
         </a>
         <a class="btn btn-outline-secondary" href="{{ url_for('public.index') }}">返回首页</a>
       </div>
@@ -56,4 +57,3 @@
   </div>
 </div>
 {% endblock %}
-

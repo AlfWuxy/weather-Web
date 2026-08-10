@@ -12,10 +12,15 @@ from sklearn.metrics import classification_report, accuracy_score, f1_score
 from imblearn.over_sampling import SMOTE
 from imblearn.combine import SMOTETomek
 import joblib
-import json
 import time
 import warnings
 from pathlib import Path
+
+if __package__:
+    from .feature_config_writer import write_feature_config
+else:
+    from feature_config_writer import write_feature_config
+
 warnings.filterwarnings('ignore')
 
 print("=" * 70)
@@ -278,8 +283,9 @@ joblib.dump(best_model, MODELS_DIR / 'disease_predictor.pkl')
 joblib.dump(label_encoder, MODELS_DIR / 'label_encoder.pkl')
 joblib.dump(scaler, MODELS_DIR / 'scaler.pkl')
 
-with open(MODELS_DIR / 'feature_config.json', 'w', encoding='utf-8') as f:
-    json.dump({
+write_feature_config(
+    MODELS_DIR / 'feature_config.json',
+    {
         'feature_cols': feature_cols,
         'classes': list(label_encoder.classes_),
         'model_name': best_name,
@@ -287,7 +293,8 @@ with open(MODELS_DIR / 'feature_config.json', 'w', encoding='utf-8') as f:
         'f1_score': float(results[best_name]['f1_score']),
         'num_classes': len(label_encoder.classes_),
         'optimized': True
-    }, f, ensure_ascii=False, indent=2)
+    },
+)
 
 print("  模型已保存!")
 

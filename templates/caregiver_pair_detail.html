@@ -67,7 +67,25 @@
 
             <div class="card shadow-sm mb-3">
                 <div class="card-header bg-light">
-                    <h5 class="mb-0">行动记录</h5>
+                    <h5 class="mb-0">老人自报的今日行动</h5>
+                </div>
+                <div class="card-body">
+                    {% if elder_actions_today %}
+                        <div class="d-flex flex-wrap gap-2" aria-label="老人今天自报完成的行动">
+                            {% for label in elder_actions_today %}
+                                <span class="badge bg-success-subtle text-success-emphasis">{{ label }}</span>
+                            {% endfor %}
+                        </div>
+                        <div class="text-muted small mt-2">这些内容由老人在小程序今日行动页主动确认。</div>
+                    {% else %}
+                        <div class="text-muted">今日暂无老人自报行动。</div>
+                    {% endif %}
+                </div>
+            </div>
+
+            <div class="card shadow-sm mb-3">
+                <div class="card-header bg-light">
+                    <h5 class="mb-0">照护人行动记录</h5>
                 </div>
                 <div class="card-body">
                     {% if actions_today or caregiver_note %}

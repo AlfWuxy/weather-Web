@@ -12,7 +12,7 @@ from services.heat_exposure_gis_service import _validated_hard_failure_count
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-GEOJSON_PATH = PROJECT_ROOT / "static/data/gis/duchang_heat_exposure_cells.geojson"
+GEOJSON_PATH = PROJECT_ROOT / "data/gis/duchang_heat_exposure_cells.geojson"
 
 
 def _load_geojson():
@@ -25,7 +25,10 @@ def test_heat_exposure_gis_requires_login(client):
     assert "/login" in response.headers["Location"]
 
 
-def test_heat_exposure_gis_page_has_academic_contract(authenticated_client):
+def test_heat_exposure_gis_page_has_academic_contract(app, authenticated_client):
+    app.config["AMAP_JS_API_KEY"] = "j" * 32
+    app.config["AMAP_SECURITY_JS_CODE"] = "s" * 32
+    app.config["AMAP_WEB_SERVICE_KEY"] = "server-key-must-stay-private"
     response = authenticated_client.get("/heat-exposure-gis")
     assert response.status_code == 200
 
@@ -34,6 +37,8 @@ def test_heat_exposure_gis_page_has_academic_contract(authenticated_client):
     assert "独立复核程序通过" in html
     assert "模型化人口与 Aqua 白天晴空地表温度" in html
     assert "结果不代表个人健康风险、2 米气温、室内温度或因果效应" in html
+    assert "相对分位、人口支持状态和中位数偏差" in html
+    assert "不增加逐年、逐月或个人层面的新数据" in html
     assert "2,593" in html
     assert "250,270" in html
     assert "SHA-256" in html
@@ -42,13 +47,15 @@ def test_heat_exposure_gis_page_has_academic_contract(authenticated_client):
     assert "WorldCover" in html
     assert "Copernicus DEM" in html
     assert "geoBoundaries" in html
-    assert "/static/data/gis/duchang_heat_exposure_cells.geojson" in html
-    assert "/static/data/gis/duchang_heat_exposure_cells.geojson?v=" in html
+    assert "/data/duchang-heat-exposure.geojson?v=" in html
+    assert "/static/data/gis/duchang_heat_exposure_cells.geojson" not in html
     assert 'download="duchang_heat_exposure_cells.geojson"' in html
     assert "/static/js/heat-exposure-gis.js" in html
-    assert "/static/vendor/leaflet/dist/leaflet.css" in html
-    assert "/static/vendor/leaflet/dist/leaflet.js" in html
-    assert "unpkg.com" not in html
+    assert "https://webapi.amap.com/maps?v=2.0" in html
+    assert "securityJsCode" in html
+    assert 'data-has-map-key="1"' in html
+    assert "/static/vendor/leaflet/" not in html
+    assert "server-key-must-stay-private" not in html
     assert "网页读取冻结上游产物，不会在线重新估计这些图层" in html
     assert "程序复核不代表外部机构认证" in html
     assert "生成方法与关键限制" in html
@@ -59,8 +66,24 @@ def test_heat_exposure_gis_page_has_academic_contract(authenticated_client):
     assert 'data-geometry-mode="native" aria-pressed="false"' in html
     assert 'id="gisCellGeometryMode"' in html
     assert "下载 GeoJSON 始终保留原生四角" in html
+    assert "仅把显示副本转换为 GCJ-02 以对齐高德底图" in html
+    assert 'id="gisGridCanvas"' in html
+    assert "高德底图 GCJ-02 · 数据 WGS84" in html
     assert "综合风险分" not in html
     assert "自动决策" not in html
+
+    script = (
+        PROJECT_ROOT / "static/js/heat-exposure-gis.js"
+    ).read_text(encoding="utf-8")
+    for layer_key in {
+        "age65_percentile",
+        "age65_population_support",
+        "q3_lst_delta_median_c",
+        "q3_lst_percentile",
+    }:
+        assert layer_key in script
+    assert "无正人口支持不等于 65+ 人口比例为 0" in script
+    assert "不写回冻结科研 GeoJSON" in script
 
 
 def test_heat_exposure_gis_uses_shared_metric_info_contract(authenticated_client):
@@ -342,10 +365,36 @@ def test_logged_in_navigation_places_heat_exposure_gis_inside_more(authenticated
     assert 'aria-current="page"' in html
 
 
-def test_heat_exposure_gis_static_runtime_is_local(client):
-    assert client.get('/static/vendor/leaflet/dist/leaflet.css').status_code == 200
-    assert client.get('/static/vendor/leaflet/dist/leaflet.js').status_code == 200
-    assert client.get('/static/vendor/leaflet/dist/images/layers.png').status_code == 200
+def test_heat_exposure_gis_without_browser_key_keeps_data_fallback(
+    app,
+    authenticated_client,
+):
+    app.config["AMAP_JS_API_KEY"] = ""
+    app.config["AMAP_SECURITY_JS_CODE"] = ""
+    app.config["AMAP_WEB_SERVICE_KEY"] = "server-key-must-stay-private"
+
+    html = authenticated_client.get("/heat-exposure-gis").get_data(as_text=True)
+
+    assert 'data-has-map-key="0"' in html
+    assert "https://webapi.amap.com/maps" not in html
+    assert "securityJsCode" not in html
+    assert "server-key-must-stay-private" not in html
+    assert 'id="gisDataPanel"' in html
+    assert "下载 GeoJSON" in html
+
+
+def test_controlled_heat_geojson_download_is_validated_and_cacheable(client):
+    response = client.get("/data/duchang-heat-exposure.geojson")
+
+    assert response.status_code == 200
+    assert response.mimetype == "application/geo+json"
+    assert response.headers["Cache-Control"] == (
+        "public, max-age=86400, immutable"
+    )
+    assert response.headers["X-Robots-Tag"] == "noindex, nofollow"
+    collection = response.get_json()
+    assert collection["type"] == "FeatureCollection"
+    assert len(collection["features"]) == 2594
 
 
 def test_heat_exposure_gis_script_keeps_controls_accessible_and_fails_closed():
@@ -361,11 +410,25 @@ def test_heat_exposure_gis_script_keeps_controls_accessible_and_fails_closed():
     assert "window.initMetricInfo" in script
     assert "duplicatePointAlreadyShown" in script
     assert "geometryModes = new Set(['rectified', 'native'])" in script
-    assert "featureForDisplay(selected)" in script
-    assert "features: cellsForDisplay()" in script
+    assert "wgs84ToGcj02" in script
+    assert "state.displayCells.native = state.cells.map(displayShape)" in script
+    assert "state.displayCells.rectified = state.rectifiedCells.map(displayShape)" in script
+    assert "new window.AMap.Map(ui.map" in script
+    assert "new window.AMap.Polygon" not in script
+    assert "AMap.convertFrom" not in script
+    assert "lngLatToContainer" in script
+    assert "requestAnimationFrame(renderMapCanvas)" in script
+    assert "Math.min(2, Math.max(1, window.devicePixelRatio || 1))" in script
+    assert "pointInPolygons" in script
+    assert "state.map.setBounds(amapBounds(bounds), true)" in script
+    assert "if (state.map.getZoom() > maxZoom) state.map.setZoom(maxZoom)" in script
+    assert "function showMapFallback" in script
+    assert "高德地图初始化失败" in script
+    assert "网格数据表、下载和方法信息仍可正常使用" in script
     assert "app.dataset.activeGeometry = state.geometryMode" in script
     assert "url.searchParams.set('geometry', state.geometryMode)" in script
-    assert "state.map.invalidateSize({pan: false})" in script
+    assert "state.map.resize()" not in script
+    assert "window.L" not in script
     assert "button.disabled = true" in script
     assert "ui.tableToggle.disabled = true" in script
     assert "GeoJSON 网格数与元数据不一致" in script

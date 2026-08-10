@@ -59,7 +59,7 @@ def main():
     print("\n=== 登录后测试（admin） ===")
     with app.test_client() as client:
         with client.session_transaction() as sess:
-            sess['_user_id'] = '1'  # admin user id
+            sess['_user_id'] = '1:1'  # admin user id + 认证版本
             sess['_csrf_token'] = 'test-token'
 
         test_pages = ['/admin', '/user/dashboard']

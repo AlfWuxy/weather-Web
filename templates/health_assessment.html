@@ -61,7 +61,7 @@
                         <div class="d-flex flex-wrap gap-2">
                             {% for val, label in q.options %}
                             <label class="btn btn-outline-secondary assess-choice">
-                                <input type="radio" name="{{ q.id }}" value="{{ val }}" class="d-none assess-opt">
+                                <input type="radio" name="{{ q.id }}" value="{{ val }}" class="visually-hidden assess-opt" required>
                                 {{ label }}
                             </label>
                             {% endfor %}

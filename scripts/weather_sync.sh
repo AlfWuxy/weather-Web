@@ -17,6 +17,8 @@ VENV_PY="${VENV_PY:-python}"
 
 TARGET_DATE="${1:-}"
 
+printf '%s\n' '提示：weather_sync.sh 已退役为 cache-only 行动投影，不会访问天气上游。' >&2
+
 ARGS=("--daily" "--action-daily")
 if [ -n "$TARGET_DATE" ]; then
   ARGS+=("--date" "$TARGET_DATE")

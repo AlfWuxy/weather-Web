@@ -24,8 +24,19 @@ def _notification_daily_count(user_id):
     ).count()
 
 
-def create_notification(user_id, title, message, level='info', category='general', member_id=None, action_url=None, meta=None):
-    """创建站内通知（受Feature Flag控制）"""
+def create_notification(
+    user_id,
+    title,
+    message,
+    level='info',
+    category='general',
+    member_id=None,
+    action_url=None,
+    meta=None,
+    *,
+    commit=True,
+):
+    """创建站内通知；commit=False 时由调用方统一提交事务。"""
     if not current_app.config.get('FEATURE_NOTIFICATIONS'):
         return None
     if not user_id or isinstance(user_id, str):
@@ -35,6 +46,8 @@ def create_notification(user_id, title, message, level='info', category='general
         daily_count = _notification_daily_count(user_id)
     except Exception as exc:
         # Fail-closed：限额检查异常时不发送通知，避免异常期间无限制刷通知
+        if not commit:
+            raise
         logger.warning("通知配额检查失败，已阻止发送: %s", exc)
         db.session.rollback()
         return None
@@ -52,9 +65,12 @@ def create_notification(user_id, title, message, level='info', category='general
             meta=json_or_none(meta or {})
         )
         db.session.add(notification)
-        db.session.commit()
+        if commit:
+            db.session.commit()
         return notification
     except Exception as exc:
+        if not commit:
+            raise
         logger.warning("通知写入失败: %s", exc)
         db.session.rollback()
         return None

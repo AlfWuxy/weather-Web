@@ -3,14 +3,18 @@
 import json
 from datetime import timedelta
 
-from flask import url_for
 from flask_login import current_user
 
 from core.extensions import db
 from core.security import hash_short_code
 from core.time_utils import now_local, today_local, utcnow, ensure_utc_aware
 from core.weather import is_demo_mode
-from core.db_models import CommunityDaily, DailyStatus, Pair
+from core.db_models import DailyStatus, Pair
+from services.community_daily_service import (
+    build_community_household_metrics,
+    outreach_summary,
+    refresh_community_daily as _refresh_community_daily,
+)
 from utils.parsers import safe_json_loads
 
 from ._common import (
@@ -23,7 +27,8 @@ from ._common import (
     _generate_short_code,
     _normalize_code,
     _relay_stage_rank,
-    _risk_level_value
+    _risk_level_value,
+    _trusted_public_url,
 )
 
 _MISSING = object()
@@ -76,19 +81,6 @@ def _build_recent_series(pair_id, days=7):
             'confirmed': 1 if status and status.confirmed_at else 0
         })
     return series
-
-
-def _build_risk_counts(statuses):
-    counts = {'低风险': 0, '中风险': 0, '高风险': 0, '极高': 0}
-    confirmed = {'低风险': 0, '中风险': 0, '高风险': 0, '极高': 0}
-    for status in statuses:
-        label = status.risk_level or '低风险'
-        if label not in counts:
-            continue
-        counts[label] += 1
-        if status.confirmed_at:
-            confirmed[label] += 1
-    return counts, confirmed
 
 
 def _build_outreach_suggestions(total_people, confirmed_count, help_count, escalation_count, risk_distribution):
@@ -156,7 +148,10 @@ def _build_caregiver_message(pair, alert_kind=None, weather_data=None, member=No
         tmin_s = None
 
     if not action_link:
-        action_link = url_for('public.elder_entry', short_code=pair.short_code, _external=True)
+        action_link = _trusted_public_url(
+            'public.elder_entry',
+            short_code=pair.short_code,
+        )
 
     lines = []
     if alert_kind == 'cold':
@@ -191,7 +186,7 @@ def _build_caregiver_message(pair, alert_kind=None, weather_data=None, member=No
 
 
 def _build_community_message(community_code, risk_label, resources):
-    action_link = url_for('public.action_check', _external=True)
+    action_link = _trusted_public_url('public.action_check')
     lines = [
         '【社区高温行动提醒】',
         f'社区：{community_code}',
@@ -297,74 +292,17 @@ def _community_access_allowed(community_code):
 
 
 def _build_community_snapshot(community_code, status_date, record=_MISSING, statuses=_MISSING):
-    active_pair_ids = {
-        row[0]
-        for row in Pair.query.with_entities(Pair.id).filter_by(
-            status='active',
-            community_code=community_code,
-        ).all()
-    }
-    if record is _MISSING:
-        record = CommunityDaily.query.filter_by(
-            community_code=community_code,
-            date=status_date
-        ).first()
-    if statuses is _MISSING:
-        statuses = []
-        if active_pair_ids:
-            statuses = DailyStatus.query.filter(
-                DailyStatus.community_code == community_code,
-                DailyStatus.status_date == status_date,
-                DailyStatus.pair_id.in_(active_pair_ids),
-            ).all()
-    else:
-        # 调用方可能传入同社区全部状态，这里仍以 active Pair 作为统一统计集合。
-        statuses = [status for status in statuses if status.pair_id in active_pair_ids]
-    total_people = len(active_pair_ids)
-    confirmed_count = sum(1 for s in statuses if s.confirmed_at)
-    help_count = sum(1 for s in statuses if s.help_flag)
-    flag_count = sum(
-        1 for s in statuses if _relay_stage_rank(s.relay_stage) >= _relay_stage_rank(AUTO_ESCALATE_STAGE)
+    # record 仅为旧批量调用保留；所有派生值统一从当前 active 家庭重算。
+    _ = record
+    metrics = build_community_household_metrics(
+        community_code,
+        status_date,
+        statuses=None if statuses is _MISSING else statuses,
     )
-    if record:
-        risk_dist = safe_json_loads(
-            record.risk_distribution,
-            {'低风险': 0, '中风险': 0, '高风险': 0, '极高': 0}
-        )
-        for key in ('低风险', '中风险', '高风险', '极高'):
-            risk_dist.setdefault(key, 0)
-        confirm_rate = (confirmed_count / total_people) if total_people else 0
-        escalation_rate = (flag_count / total_people) if total_people else 0
-        help_rate = (help_count / total_people) if total_people else 0
-        return {
-            'total_people': total_people,
-            'confirm_rate': round(confirm_rate, 4),
-            'escalation_rate': round(escalation_rate, 4),
-            'risk_distribution': risk_dist,
-            'outreach_summary': record.outreach_summary or '',
-            'help_rate': round(help_rate, 4),
-            'flag_count': flag_count
-        }
-
-    escalation_count = flag_count
-    risk_dist = {'低风险': 0, '中风险': 0, '高风险': 0, '极高': 0}
-    for status in statuses:
-        if status.risk_level in risk_dist:
-            risk_dist[status.risk_level] += 1
-
-    if total_people <= 0:
-        summary = '暂无可用行动数据。'
-    else:
-        pending = total_people - confirmed_count
-        if escalation_count > 0:
-            summary = f'已有{escalation_count}个家庭进入升级链，优先安排社区跟进。'
-        elif help_count > 0:
-            summary = f'已有{help_count}个家庭发出求助，请尽快联系。'
-        elif pending > 0:
-            summary = f'仍有{pending}个家庭未确认，建议分批提醒。'
-        else:
-            summary = '全部家庭已完成确认，继续关注高温变化。'
-
+    total_people = metrics['total_people']
+    confirmed_count = metrics['confirmed_count']
+    help_count = metrics['help_count']
+    escalation_count = metrics['escalation_count']
     confirm_rate = (confirmed_count / total_people) if total_people else 0
     escalation_rate = (escalation_count / total_people) if total_people else 0
     help_rate = (help_count / total_people) if total_people else 0
@@ -372,64 +310,17 @@ def _build_community_snapshot(community_code, status_date, record=_MISSING, stat
         'total_people': total_people,
         'confirm_rate': round(confirm_rate, 4),
         'escalation_rate': round(escalation_rate, 4),
-        'risk_distribution': risk_dist,
-        'outreach_summary': summary,
+        'risk_distribution': metrics['risk_distribution'],
+        'confirmed_risk_distribution': metrics['confirmed_risk_distribution'],
+        'confirmed_count': confirmed_count,
+        'help_count': help_count,
+        'escalation_count': escalation_count,
+        'outreach_summary': outreach_summary(
+            total_people,
+            confirmed_count,
+            help_count,
+            escalation_count,
+        ),
         'help_rate': round(help_rate, 4),
-        'flag_count': flag_count
+        'flag_count': escalation_count
     }
-
-
-def _refresh_community_daily(community_code, status_date):
-    active_pair_ids = {
-        row[0]
-        for row in Pair.query.with_entities(Pair.id).filter_by(
-            status='active',
-            community_code=community_code,
-        ).all()
-    }
-    total_people = len(active_pair_ids)
-    statuses = []
-    if active_pair_ids:
-        statuses = DailyStatus.query.filter(
-            DailyStatus.community_code == community_code,
-            DailyStatus.status_date == status_date,
-            DailyStatus.pair_id.in_(active_pair_ids),
-        ).all()
-    confirmed_count = sum(1 for s in statuses if s.confirmed_at)
-    help_count = sum(1 for s in statuses if s.help_flag)
-    escalation_count = sum(
-        1 for s in statuses if _relay_stage_rank(s.relay_stage) >= _relay_stage_rank(AUTO_ESCALATE_STAGE)
-    )
-    risk_dist = {'低风险': 0, '中风险': 0, '高风险': 0, '极高': 0}
-    for status in statuses:
-        if status.risk_level in risk_dist:
-            risk_dist[status.risk_level] += 1
-    if total_people <= 0:
-        summary = '暂无可用行动数据。'
-    else:
-        pending = total_people - confirmed_count
-        if escalation_count > 0:
-            summary = f'已有{escalation_count}个家庭进入升级链，优先安排社区跟进。'
-        elif help_count > 0:
-            summary = f'已有{help_count}个家庭发出求助，请尽快联系。'
-        elif pending > 0:
-            summary = f'仍有{pending}个家庭未确认，建议分批提醒。'
-        else:
-            summary = '全部家庭已完成确认，继续关注高温变化。'
-
-    confirm_rate = (confirmed_count / total_people) if total_people else 0
-    escalation_rate = (escalation_count / total_people) if total_people else 0
-
-    record = CommunityDaily.query.filter_by(
-        community_code=community_code,
-        date=status_date
-    ).first()
-    if not record:
-        record = CommunityDaily(community_code=community_code, date=status_date)
-        db.session.add(record)
-    record.total_people = total_people
-    record.confirm_rate = round(confirm_rate, 4)
-    record.escalation_rate = round(escalation_rate, 4)
-    record.risk_distribution = json.dumps(risk_dist, ensure_ascii=False)
-    record.outreach_summary = summary
-    db.session.commit()

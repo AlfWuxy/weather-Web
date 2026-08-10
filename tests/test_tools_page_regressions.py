@@ -4,7 +4,7 @@
 
 def _login_as(client, user_id: int, csrf_token='test-csrf-token'):
     with client.session_transaction() as session:
-        session['_user_id'] = str(user_id)
+        session['_user_id'] = f'{user_id}:1'
         session['_fresh'] = True
         session['_csrf_token'] = csrf_token
 
@@ -611,20 +611,55 @@ def test_chronic_risk_service_uses_submitted_vitals():
     assert high['vital_adjustment']['score_adjustment'] > base['vital_adjustment']['score_adjustment']
 
 
-def test_cooling_page_empty_database_does_not_render_default_resources(client, db_session, monkeypatch):
+def test_cooling_page_empty_database_renders_safe_candidate_preview(
+    app,
+    client,
+    db_session,
+    monkeypatch,
+):
+    import json
+    import re
+
+    from core.db_models import CoolingResource
+
     monkeypatch.setattr(
         'services.public_service.get_weather_with_cache',
         lambda location: ({'temperature': 27.5, 'is_mock': False, 'data_source': 'QWeather'}, False),
     )
+    app.config['AMAP_JS_API_KEY'] = 'j' * 32
+    assert CoolingResource.query.count() == 0
 
     response = client.get('/cooling?location=都昌')
 
     assert response.status_code == 200
     body = response.get_data(as_text=True)
-    assert '暂无录入的避暑资源' in body
-    assert '都昌县图书馆' not in body
+    assert CoolingResource.query.count() == 0
+    assert '暂无已发布且完成核验的避暑资源' in body
+    assert '待核验场所预览' in body
+    assert '都昌县图书馆' in body
+    assert '都昌志愿服务联合会' in body
+    assert '待人工核验' in body
+    assert '不代表当天开放、具备空调、允许公众纳凉或已获本项目推荐' in body
+    assert '都昌县人民医院' not in body
+    assert '左里中心卫生院' not in body
     assert '万达广场' not in body
     assert '人民公园纳凉亭' not in body
+    assert 'B03180SL06' not in body
+    assert '116.187665' not in body
+    assert '29.249263' not in body
+    assert 'data-publication-status="candidate-only"' in body
+    assert 'data-verification-status="pending-human-verification"' in body
+    assert 'data-cooling-map-focus' not in body
+    assert 'id="coolingLocateButton"' in body
+    assert 'id="coolingLocateButton"\n                    disabled' in body
+    assert 'geolocation=()' in response.headers['Permissions-Policy']
+    match = re.search(
+        r'<script id="coolingMapData" type="application/json">(.*?)</script>',
+        body,
+        re.DOTALL,
+    )
+    assert match is not None
+    assert json.loads(match.group(1)) == []
 
 
 def test_cooling_page_renders_real_resources_only(client, db_session, monkeypatch):
@@ -660,6 +695,201 @@ def test_cooling_page_renders_real_resources_only(client, db_session, monkeypatc
     assert '距你' not in body
     assert '都昌县图书馆' not in body
     assert '万达广场' not in body
+    assert '待核验场所预览' not in body
+
+
+def test_public_cooling_candidates_reject_unapproved_category(
+    monkeypatch,
+):
+    from blueprints import public as public_blueprint
+
+    payload = {
+        'publication_status': 'candidate_only',
+        'coordinate_system': 'GCJ-02',
+        'items': [{
+            'name': '异常医院候选',
+            'category': 'hospital',
+            'public_role': 'cooling_candidate',
+            'address': '测试地址',
+            'opening_hours_hint': '全天',
+            'verification_status': 'pending_human_verification',
+            'is_active': False,
+        }],
+    }
+    monkeypatch.setattr(
+        public_blueprint,
+        '_read_versioned_public_json',
+        lambda _path: payload,
+    )
+
+    assert public_blueprint._public_cooling_candidates() == []
+
+
+def test_cooling_map_only_serializes_current_verified_gcj02_points(
+    client,
+    app,
+    db_session,
+    monkeypatch,
+):
+    import json
+    import re
+    from datetime import timedelta
+
+    from core.db_models import CoolingResource
+    from core.time_utils import utcnow
+
+    monkeypatch.setattr(
+        'services.public_service.get_weather_with_cache',
+        lambda location: (
+            {
+                'temperature': 27.5,
+                'is_mock': False,
+                'data_source': 'QWeather',
+            },
+            False,
+        ),
+    )
+    app.config['AMAP_JS_API_KEY'] = 'j' * 32
+    app.config['AMAP_SECURITY_JS_CODE'] = 's' * 32
+    app.config['AMAP_WEB_SERVICE_KEY'] = 'server-web-key-that-must-stay-private'
+    app.config['COOLING_COORDINATE_VERIFICATION_TTL_DAYS'] = 365
+    db_session.add_all([
+        CoolingResource(
+            community_code='都昌',
+            name='有效核验点',
+            resource_type='社区服务中心',
+            address_hint='核验路 1 号',
+            latitude=29.27,
+            longitude=116.20,
+            coordinate_system='GCJ-02',
+            coordinate_source='管理员现场使用微信地图人工核对',
+            coordinate_verified_at=utcnow() - timedelta(days=1),
+            is_active=True,
+        ),
+        CoolingResource(
+            community_code='都昌',
+            name='过期核验点',
+            resource_type='社区服务中心',
+            address_hint='过期路 2 号',
+            latitude=29.28,
+            longitude=116.21,
+            coordinate_system='GCJ-02',
+            coordinate_source='一年前的人工核验记录',
+            coordinate_verified_at=utcnow() - timedelta(days=366),
+            is_active=True,
+        ),
+        CoolingResource(
+            community_code='都昌',
+            name='来源缺失点',
+            resource_type='社区服务中心',
+            latitude=29.29,
+            longitude=116.22,
+            coordinate_system='GCJ-02',
+            coordinate_verified_at=utcnow(),
+            is_active=True,
+        ),
+    ])
+    db_session.commit()
+
+    response = client.get('/cooling?location=都昌')
+    body = response.get_data(as_text=True)
+    match = re.search(
+        r'<script id="coolingMapData" type="application/json">(.*?)</script>',
+        body,
+        re.DOTALL,
+    )
+
+    assert response.status_code == 200
+    assert match is not None
+    points = json.loads(match.group(1))
+    assert [point['name'] for point in points] == ['有效核验点']
+    assert points[0]['coordinate_system'] == 'GCJ-02'
+    assert '过期核验点' in body
+    assert '来源缺失点' in body
+    assert 'server-web-key-that-must-stay-private' not in body
+    assert 'geolocation=(self)' in response.headers['Permissions-Policy']
+    assert 'data-cooling-map-focus' in body
+
+
+def test_cooling_location_is_click_only_and_cleared_on_page_exit():
+    import re
+    from pathlib import Path
+
+    script = (
+        Path(__file__).resolve().parents[1]
+        / 'static'
+        / 'js'
+        / 'cooling-map.js'
+    ).read_text(encoding='utf-8')
+
+    assert "locateButton.addEventListener('click', requestOneTimeLocation)" in script
+    assert 'navigator.geolocation.getCurrentPosition(' in script
+    assert 'wgs84ToGcj02' in script
+    assert 'AMap.convertFrom' not in script
+    assert "window.addEventListener('pagehide', clearEphemeralLocation)" in script
+    assert "window.addEventListener('beforeunload', clearEphemeralLocation)" in script
+    assert 'window.fetch' not in script
+    assert 'localStorage' not in script
+    assert 'sessionStorage' not in script
+    assert 'userMarker' not in script
+    assert 'new window.AMap.Marker({' in script
+    assert 'position: [point.lng, point.lat]' in script
+    assert script.count('map.setFitView(') == 1
+    assert 'map.setFitView(Array.from(markerById.values())' in script
+    assert 'map.setCenter(' not in script
+    assert 'map.setZoomAndCenter(15, marker.getPosition())' in script
+    assert '不上传至本项目服务器或保存' in script
+
+    location_handler = re.search(
+        r'function applyConvertedLocation\(location\) \{(.*?)\n    \}\n\n'
+        r'    function convertBrowserLocation',
+        script,
+        re.DOTALL,
+    )
+    assert location_handler is not None
+    handler_source = location_handler.group(1)
+    assert 'const userPoint' in handler_source
+    assert 'nearestPoint(userPoint)' in handler_source
+    assert 'openPoint(nearest.point)' in handler_source
+    assert 'window.AMap' not in handler_source
+    assert 'map.' not in handler_source
+
+
+def test_cooling_page_explains_local_only_location_boundary(
+    client,
+    app,
+    db_session,
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        'services.public_service.get_weather_with_cache',
+        lambda location: (
+            {
+                'temperature': 27.5,
+                'is_mock': False,
+                'data_source': 'QWeather',
+            },
+            False,
+        ),
+    )
+    app.config['AMAP_JS_API_KEY'] = 'j' * 32
+
+    response = client.get('/cooling')
+    body = response.get_data(as_text=True)
+
+    assert response.status_code == 200
+    assert '地图只接收已核验的公开资源点' in body
+    assert '精确位置仅在本页内存计算距离' in body
+    assert '不上传至本项目服务器或保存' in body
+    assert '也不会用于地图打点' in body
+
+
+def test_non_cooling_pages_keep_geolocation_disabled(client):
+    response = client.get('/')
+
+    assert response.status_code == 200
+    assert 'geolocation=()' in response.headers['Permissions-Policy']
+    assert 'geolocation=(self)' not in response.headers['Permissions-Policy']
 
 
 def test_cooling_resource_type_filter_accepts_legacy_type_alias(client, db_session, monkeypatch):

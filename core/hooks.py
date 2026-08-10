@@ -6,14 +6,23 @@ import logging
 import secrets
 import time
 from datetime import datetime
+from urllib.parse import urlsplit
 
-from flask import g, request, session, url_for as flask_url_for
+from flask import (
+    g,
+    jsonify,
+    redirect,
+    request,
+    session,
+    url_for as flask_url_for,
+)
 from flask_login import current_user
 
 from core.metric_explanations import (
     get_metric_explanation_groups,
     get_metric_explanations,
 )
+from core.logging_privacy import formal_request_log_event, sanitize_request_path
 from core.security import csrf_failure_response, generate_csrf_token, validate_csrf
 from core.weather import (
     get_location_options,
@@ -25,21 +34,100 @@ logger = logging.getLogger(__name__)
 
 MAX_JSON_BYTES = 10 * 1024
 MAX_JSON_DEPTH = 5
+SEO_FALLBACK_BASE_URL = 'https://yilaoweather.org'
+SEO_PUBLIC_CONTENT_SIGNAL = 'ai-train=no, search=yes, ai-input=yes'
+SEO_HOME_DISCOVERY_LINK = (
+    '<https://yilaoweather.org/llms.txt>; rel="describedby"; '
+    'type="text/plain"; title="AI discovery summary"'
+)
+SEO_INDEXABLE_ENDPOINTS = {
+    'public.index': '/',
+    'public.public_risk': '/risk',
+    'public.cooling_resources': '/cooling',
+    'public.heat_vulnerability_preview': '/duchang-heat-vulnerability-map',
+    'public.transparency': '/transparency',
+    'public.about_trust_network': '/about/trust-network',
+}
+SEO_TECHNICAL_ENDPOINTS = {
+    'public.robots_txt',
+    'public.sitemap_xml',
+    'public.llms_txt',
+    'public.healthz',
+    'static',
+}
+
+# 正式微信运行态在网页私密功能关闭时，仅保留公开、聚合或研究管理端点。
+# 下列白名单需要人工审查后扩展，其余同蓝图新端点会默认关闭。
+FORMAL_WEB_ALLOWED_USER_ENDPOINTS = frozenset({
+    'user.community_dashboard',
+    'user.community_detail',
+    'user.community_wechat',
+    'user.community_announce',
+    'user.community_risk',
+    'user.heat_exposure_gis',
+})
+
+FORMAL_WEB_ALLOWED_ANALYSIS_ENDPOINTS = frozenset({
+    'analysis.analysis_history',
+    'analysis.analysis_heatmap',
+    'analysis.analysis_lag',
+    'analysis.analysis_community_compare',
+    'analysis.alerts_history',
+    'analysis.alerts_accuracy',
+    'analysis.reports_center',
+    'analysis.reports_export',
+    'analysis.pilot_dashboard',
+    'analysis.pilot_review_delivery',
+    'analysis.pilot_export_csv',
+    'analysis.model_quality',
+})
+
+FORMAL_WEB_ALLOWED_API_ENDPOINTS = frozenset({
+    'api.api_v1_current_weather',
+    'api.api_current_weather',
+    'api.api_v1_weather_nowcast',
+    'api.api_weather_nowcast',
+    'api.api_v1_community_risk_map',
+    'api.api_community_risk_map',
+    'api.api_v1_disease_weather_stats',
+    'api.api_disease_weather_stats',
+    'api.api_v1_ml_predict_community',
+    'api.api_ml_predict_community',
+    'api.api_v1_ml_status',
+    'api.api_ml_status',
+    'api.api_v1_dlnm_summary',
+    'api.api_dlnm_summary',
+    'api.api_v1_community_risk_map_v2',
+    'api.api_community_risk_map_v2',
+    'api.api_v1_community_vulnerability',
+    'api.api_community_vulnerability',
+    'api.api_v1_community_list',
+    'api.api_community_list',
+    'api.api_v1_chronic_population',
+    'api.api_chronic_population',
+    'api.api_v1_chronic_rules_version',
+    'api.api_chronic_rules_version',
+})
+
+
+def _formal_web_gate_kind(endpoint):
+    """返回正式微信态端点的门禁类型，None 表示可继续处理。"""
+    endpoint = str(endpoint or '')
+    blueprint = endpoint.partition('.')[0]
+    if blueprint in {'health', 'tools'}:
+        return 'html'
+    if blueprint == 'user':
+        return None if endpoint in FORMAL_WEB_ALLOWED_USER_ENDPOINTS else 'html'
+    if blueprint == 'analysis':
+        return None if endpoint in FORMAL_WEB_ALLOWED_ANALYSIS_ENDPOINTS else 'html'
+    if blueprint == 'api':
+        return None if endpoint in FORMAL_WEB_ALLOWED_API_ENDPOINTS else 'json'
+    return None
 
 
 def _redact_sensitive_path(path):
     """结构化日志不得记录行动链接或点击追踪 token。"""
-    path = str(path or '')
-    for prefix in ('/e/', '/t/'):
-        if not path.startswith(prefix):
-            continue
-        remainder = path[len(prefix):]
-        suffix = ''
-        if '/' in remainder:
-            _, tail = remainder.split('/', 1)
-            suffix = f'/{tail}'
-        return f'{prefix}<token>{suffix}'
-    return path
+    return sanitize_request_path(path)
 
 
 def _exceeds_json_depth(value, max_depth, current_depth=1):
@@ -60,14 +148,83 @@ def _valid_key_length(value):
     return isinstance(value, str) and 20 <= len(value) <= 100
 
 
+def _trusted_seo_base_url(config):
+    """canonical 只使用 HTTPS 受信 origin，避免 Host 头污染搜索结果。"""
+    configured = str(config.get('PUBLIC_BASE_URL') or '').strip().rstrip('/')
+    parsed = urlsplit(configured)
+    if (
+        parsed.scheme == 'https'
+        and parsed.netloc
+        and parsed.hostname
+        and not parsed.username
+        and not parsed.password
+        and parsed.path in ('', '/')
+        and not parsed.query
+        and not parsed.fragment
+    ):
+        return configured
+    return SEO_FALLBACK_BASE_URL
+
+
 def register_hooks(app):
     """Register app hooks, filters, and context processors."""
     @app.before_request
     def init_request_context():
         """初始化请求上下文（结构化日志使用）"""
-        g.request_id = request.headers.get('X-Request-Id') or secrets.token_hex(8)
+        # 请求编号属于服务端审计边界，不能采纳客户端可伪造的请求头。
+        g.request_id = secrets.token_hex(8)
         g.request_start = time.perf_counter()
         g.external_api_timings = []
+
+    @app.before_request
+    def formal_wechat_web_gate():
+        """按显式双端开关决定是否在业务处理前关闭网页私密入口。"""
+        if not app.config.get('WECHAT_FORMAL_RUNTIME'):
+            return None
+        gate_kind = _formal_web_gate_kind(request.endpoint)
+        if gate_kind is None:
+            return None
+        if app.config.get('WEB_PRIVATE_FEATURES_ENABLED'):
+            # 中央层保留最小登录边界，路由继续负责更细的角色与 CSRF 校验。
+            if current_user.is_authenticated:
+                return None
+            g.formal_web_gate_blocked = True
+            if gate_kind == 'json':
+                response = jsonify({
+                    'success': False,
+                    'error': 'authentication_required',
+                    'message': '请先登录后使用此功能。',
+                })
+                response.status_code = 401
+            else:
+                next_target = (
+                    request.full_path.rstrip('?')
+                    if request.query_string
+                    else request.path
+                )
+                response = redirect(
+                    flask_url_for(
+                        'public.login',
+                        next=next_target,
+                    ),
+                    code=302,
+                )
+            response.headers['Cache-Control'] = (
+                'no-store, private, max-age=0'
+            )
+            return response
+        g.formal_web_gate_blocked = True
+        if gate_kind == 'json':
+            response = jsonify({
+                'success': False,
+                'error': 'wechat_formal_web_private_disabled',
+                'message': '正式版本请在微信小程序中使用此私密功能。',
+            })
+            response.status_code = 403
+        else:
+            response = redirect(flask_url_for('public.action_check'), code=303)
+        response.headers['Cache-Control'] = 'no-store, private, max-age=0'
+        return response
 
     @app.before_request
     def csrf_protect():
@@ -81,7 +238,63 @@ def register_hooks(app):
 
     @app.after_request
     def log_request(response):
-        """结构化请求日志"""
+        """统一安全响应头，并按配置写入结构化请求日志。"""
+        response.headers.setdefault('X-Content-Type-Options', 'nosniff')
+        response.headers.setdefault('X-Frame-Options', 'DENY')
+        response.headers.setdefault(
+            'Content-Security-Policy',
+            "base-uri 'self'; frame-ancestors 'none'; object-src 'none'",
+        )
+        if (
+            request.endpoint == 'public.cooling_resources'
+            or request.path == '/cooling'
+        ):
+            # 避暑资源页仅在用户点击后调用一次浏览器定位，其他能力继续关闭。
+            permissions_policy = (
+                'camera=(), microphone=(), geolocation=(self), payment=(), usb=()'
+            )
+        else:
+            permissions_policy = (
+                'camera=(), microphone=(), geolocation=(), payment=(), usb=()'
+            )
+        response.headers.setdefault('Permissions-Policy', permissions_policy)
+        if request.path.startswith(('/e/', '/t/')):
+            # 行动与投递 token 绝不能进入外站 Referer。
+            response.headers['Referrer-Policy'] = 'no-referrer'
+        else:
+            response.headers.setdefault('Referrer-Policy', 'strict-origin-when-cross-origin')
+        if not app.config.get('DEBUG'):
+            response.headers.setdefault(
+                'Strict-Transport-Security',
+                'max-age=31536000; includeSubDomains',
+            )
+        if request.endpoint in SEO_INDEXABLE_ENDPOINTS:
+            # 公开白名单页面声明可用于搜索与即时 AI 引用，训练用途不授权。
+            response.headers.setdefault(
+                'Content-Signal',
+                SEO_PUBLIC_CONTENT_SIGNAL,
+            )
+            if request.endpoint == 'public.index':
+                # llms.txt 是站点说明，只从首页用已注册的 describedby 关系发现。
+                response.headers.setdefault('Link', SEO_HOME_DISCOVERY_LINK)
+        if request.endpoint in {
+            'public.account_link',
+            'public.account_link_phone',
+            'public.account_link_code',
+        }:
+            # 绑定码和手机号页面禁止被浏览器、代理或搜索引擎保存。
+            response.headers['Cache-Control'] = 'no-store, private, max-age=0'
+            response.headers['Pragma'] = 'no-cache'
+            response.headers['X-Robots-Tag'] = 'noindex, nofollow, noarchive'
+        elif (
+            request.endpoint not in SEO_INDEXABLE_ENDPOINTS
+            and request.endpoint not in SEO_TECHNICAL_ENDPOINTS
+        ):
+            # 默认关闭新增页面索引，只有人工审查后的匿名内容页进入白名单。
+            response.headers.setdefault(
+                'X-Robots-Tag',
+                'noindex, nofollow, noarchive',
+            )
         if not app.config.get('FEATURE_STRUCTURED_LOGS'):
             return response
         try:
@@ -90,7 +303,10 @@ def register_hooks(app):
                 duration_ms = round((time.perf_counter() - g.request_start) * 1000, 2)
             user_id = None
             user_role = None
-            if current_user.is_authenticated:
+            if (
+                not getattr(g, 'formal_web_gate_blocked', False)
+                and current_user.is_authenticated
+            ):
                 user_id = getattr(current_user, 'id', None)
                 user_role = getattr(current_user, 'role', None)
             log_payload = {
@@ -104,7 +320,10 @@ def register_hooks(app):
                 'duration_ms': duration_ms,
                 'external_api': getattr(g, 'external_api_timings', [])
             }
-            logger.info(json.dumps(log_payload, ensure_ascii=False))
+            if app.config.get('WECHAT_FORMAL_RUNTIME'):
+                logger.info(formal_request_log_event(log_payload))
+            else:
+                logger.info(json.dumps(log_payload, ensure_ascii=False))
             if getattr(g, 'request_id', None):
                 response.headers['X-Request-Id'] = g.request_id
         except Exception as exc:
@@ -156,6 +375,8 @@ def register_hooks(app):
     def inject_now():
         """注入当前时间到模板"""
         current_location = normalize_location_name(get_user_location_value())
+        seo_base_url = _trusted_seo_base_url(app.config)
+        canonical_path = SEO_INDEXABLE_ENDPOINTS.get(request.endpoint)
         payload = {
             'now': lambda: datetime.now(tz=__import__('zoneinfo').ZoneInfo('Asia/Shanghai')),
             'csrf_token': generate_csrf_token,
@@ -164,6 +385,17 @@ def register_hooks(app):
             'ai_models': app.config.get('AI_ALLOWED_MODELS', []),
             'metric_explanations': get_metric_explanations(),
             'metric_explanation_groups': get_metric_explanation_groups(),
+            'seo_base_url': seo_base_url,
+            'seo_canonical_url': (
+                f'{seo_base_url}{canonical_path}'
+                if canonical_path
+                else None
+            ),
+            'seo_robots': (
+                'index, follow'
+                if canonical_path
+                else 'noindex, nofollow, noarchive'
+            ),
             'feature_flags': {
                 'explain_output': app.config.get('FEATURE_EXPLAIN_OUTPUT'),
                 'emergency_triage': app.config.get('FEATURE_EMERGENCY_TRIAGE'),
@@ -172,16 +404,22 @@ def register_hooks(app):
                 'heat_exposure_gis': app.config.get('FEATURE_HEAT_EXPOSURE_GIS')
             }
         }
-        map_endpoints = {'user.community_risk', 'public.cooling_resources'}
-        map_paths = {'/community-risk', '/cooling'}
+        map_endpoints = {
+            'user.community_risk',
+            'user.heat_exposure_gis',
+            'public.cooling_resources',
+        }
+        map_paths = {'/community-risk', '/heat-exposure-gis', '/cooling'}
         needs_map_keys = request.endpoint in map_endpoints or request.path in map_paths
         if needs_map_keys:
-            amap_key = app.config.get('AMAP_KEY', '')
+            amap_key = app.config.get('AMAP_JS_API_KEY', '')
             amap_code = app.config.get('AMAP_SECURITY_JS_CODE', '')
             if _valid_key_length(amap_key):
                 payload['amap_key'] = amap_key
             elif amap_key:
-                logger.warning("Invalid AMAP_KEY length; skipping template injection")
+                logger.warning(
+                    "Invalid AMAP_JS_API_KEY length; skipping template injection"
+                )
             if _valid_key_length(amap_code):
                 payload['amap_security_js_code'] = amap_code
             elif amap_code:

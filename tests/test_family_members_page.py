@@ -6,7 +6,7 @@ import json
 
 def _login_as(client, user_id: int, csrf_token='test-csrf-token'):
     with client.session_transaction() as session:
-        session['_user_id'] = str(user_id)
+        session['_user_id'] = f'{user_id}:1'
         session['_fresh'] = True
         session['_csrf_token'] = csrf_token
 

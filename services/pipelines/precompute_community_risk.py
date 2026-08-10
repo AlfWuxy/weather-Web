@@ -115,7 +115,10 @@ def precompute_community_risk(app=None, locations=None, window_days_list=None, d
         }
 
         for location in locations:
-            weather_data, weather_from_cache = get_weather_with_cache(location)
+            weather_data, weather_from_cache = get_weather_with_cache(
+                location,
+                cache_only=True,
+            )
             if not is_qweather_online_weather(weather_data):
                 summary['weather_skipped'] += 1
                 logger.warning(

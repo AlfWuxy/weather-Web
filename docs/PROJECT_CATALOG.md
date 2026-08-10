@@ -17,7 +17,7 @@ case-weather/
 │   ├── deploy.sh                   # 部署脚本
 │   ├── backup.sh                   # 数据库自动备份脚本（保留30天）
 │   ├── start.bat                   # Windows启动脚本
-│   ├── sync.sh                     # 快速同步脚本
+│   ├── sync.sh                     # 旧命令兼容入口，转入不可变发布
 │   ├── (moved to private ops)      # 生产备份下载脚本不再留在公开仓库
 │   ├── weather_sync.sh             # 天气同步脚本
 │   ├── weather_cache_sync.sh       # 天气缓存同步脚本

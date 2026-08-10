@@ -107,11 +107,11 @@ docs: 补充仓库开发流程说明
 ```bash
 git fetch origin --prune
 conda run -n case-weather-py312 python -m pytest -q
-conda run -n case-weather-py312 python -m pytest -q -m manual
+conda run -n case-weather-py312 python -m pytest -q -m "manual and not network"
 python app.py
 ```
 
-当前 macOS 本机以 `case-weather-py312` 为 canonical 测试环境。不要把裸 `pytest`、仓库 `.venv` 或 `venv` 当作默认验证入口；如需验证 Python 3.12 弃用警告，用 `conda run -n case-weather-py312 python -m pytest -q -W error::DeprecationWarning` 单独执行。若只剩 Flask-Login 0.6.3 的三方 remember-cookie warning，使用 `-W ignore::DeprecationWarning:flask_login.login_manager` 做命令级精确过滤，不写入全局 pytest 配置。
+当前 macOS 本机以 `case-weather-py312` 为 canonical 测试环境。不要把裸 `pytest`、仓库 `.venv` 或 `venv` 当作默认验证入口；Python 3.12 弃用警告专项命令为 `conda run -n case-weather-py312 python -m pytest -q -W error::DeprecationWarning -W ignore::DeprecationWarning:flask_login.login_manager -W ignore::DeprecationWarning:dateutil.tz.tz`。其中仅过滤当前固定三方依赖的已知警告。真实第三方 API 诊断使用 `network` 标记，需要联网时单独运行 `-m "manual and network"`。
 
 ## 开工前检查
 

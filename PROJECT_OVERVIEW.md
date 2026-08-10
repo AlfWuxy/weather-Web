@@ -477,9 +477,10 @@ PAIR_TOKEN_PEPPER=<独立的加密盐>
 QWEATHER_KEY=<你的和风天气 API 密钥>
 QWEATHER_API_BASE=<在本地环境中显式配置的 QWeather Host>
 
-# 高德地图
-AMAP_KEY=<你的高德地图 API 密钥>
-AMAP_SECURITY_JS_CODE=<高德地图安全代码>
+# 高德地图（浏览器与服务端凭据必须分离）
+AMAP_JS_API_KEY=<你的高德地图 Web 端 JS API Key>
+AMAP_WEB_SERVICE_KEY=<你的高德地图 Web 服务 API Key>
+AMAP_SECURITY_JS_CODE=<你的高德地图 JS API 安全密钥>
 
 # 硅基流动 AI
 SILICONFLOW_API_KEY=<你的硅基流动 API 密钥>

@@ -61,7 +61,7 @@ class TestPasswordChangeRequiresOldPassword:
             resp = client.post('/profile', data={
                 'form_id': 'password',
                 'old_password': 'WrongOldPass!',
-                'new_password': 'NewPass456!',
+                'new_password': 'NewPass456!x',
                 'csrf_token': csrf,
             }, follow_redirects=True)
 
@@ -80,13 +80,13 @@ class TestPasswordChangeRequiresOldPassword:
             resp = client.post('/profile', data={
                 'form_id': 'password',
                 'old_password': 'OldPass123!',
-                'new_password': 'NewPass456!',
+                'new_password': 'NewPass456!x',
                 'csrf_token': csrf,
             }, follow_redirects=True)
 
             db.session.refresh(user)
             assert user.password_hash != original_hash, "密码哈希应当改变"
-            assert user.check_password('NewPass456!'), "应当能用新密码验证"
+            assert user.check_password('NewPass456!x'), "应当能用新密码验证"
 
     def test_missing_old_password_rejected(self, app, client):
         """负向: 不提交旧密码 → 拒绝。"""
@@ -107,6 +107,53 @@ class TestPasswordChangeRequiresOldPassword:
             db.session.refresh(user)
             assert user.password_hash == original_hash, "未提供旧密码时密码不应改变"
 
+    def test_password_requires_twelve_chars_and_revokes_api_tokens(self, app, client):
+        """密码升级成功时，同一事务撤销现有小程序绑定凭证。"""
+        from core.db_models import ApiToken
+        from core.extensions import db
+        from core.time_utils import utcnow
+
+        with app.app_context():
+            db.create_all()
+            user = _make_user(db.session, 'pwuser-token-revoke', 'OldPass123!')
+            token = ApiToken(
+                user_id=user.id,
+                name='旧绑定凭证',
+                token_hash='a' * 64,
+                created_at=utcnow(),
+                expires_at=utcnow(),
+                scopes='miniapp:read',
+                privacy_consent_version='privacy-v1',
+            )
+            db.session.add(token)
+            db.session.commit()
+            csrf, _ = _login(client, 'pwuser-token-revoke', 'OldPass123!')
+
+            short_response = client.post('/profile', data={
+                'form_id': 'password',
+                'old_password': 'OldPass123!',
+                'new_password': 'ShortPass1!',
+                'csrf_token': csrf,
+            }, follow_redirects=False)
+            assert short_response.status_code in (301, 302)
+            db.session.refresh(user)
+            db.session.refresh(token)
+            assert user.check_password('OldPass123!')
+            assert token.revoked_at is None
+
+            response = client.post('/profile', data={
+                'form_id': 'password',
+                'old_password': 'OldPass123!',
+                'new_password': 'LongNewPass1!',
+                'csrf_token': csrf,
+            }, follow_redirects=False)
+
+            assert response.status_code in (301, 302)
+            db.session.refresh(user)
+            db.session.refresh(token)
+            assert user.check_password('LongNewPass1!')
+            assert token.revoked_at is not None
+
 
 # ====================================================================
 # 登录锁定兜底（Redis 不可用时）
@@ -122,7 +169,11 @@ class TestLoginLockoutFallback:
 
         with app.app_context():
             db.create_all()
-            _make_user(db.session, 'lockdbuser', 'RightPass123!')
+            user_id = _make_user(
+                db.session,
+                'lockdbuser',
+                'RightPass123!',
+            ).id
             app.config['RATE_LIMIT_LOGIN'] = '100 per minute'
             app.config['LOGIN_MAX_FAILURES'] = 2
             app.config['LOGIN_LOCKOUT_SECONDS'] = 300
@@ -150,7 +201,8 @@ class TestLoginLockoutFallback:
             assert not sess.get('_user_id'), "锁定期间不应写入登录态"
 
         with app.app_context():
-            key_hash = hash_identifier('login:lockdbuser')
+            # 已识别账号按内部 user_id 共用锁定桶，数据库不保留明文登录标识。
+            key_hash = hash_identifier(f'login:user:{user_id}')
             row = ShortCodeAttempt.query.filter_by(key_hash=key_hash).first()
             assert row is not None
             assert (row.failed_count or 0) >= 2
@@ -269,15 +321,21 @@ class TestMpApiAtomicCreate:
         from core.extensions import db
         from core.db_models import FamilyMember, Pair
         from core.usage import create_api_token
+        from core.time_utils import utcnow
+        from services.miniprogram_auth import current_privacy_version
         with app.app_context():
             db.create_all()
             user = _make_user(db.session, 'mpuser', 'MpPass123!')
+            user.health_sensitive_consent_version = current_privacy_version()
+            user.health_sensitive_consented_at = utcnow()
+            db.session.commit()
             token = create_api_token(user.id, name='test')
 
             resp = client.post('/mp/api/v1/elders',
                                data=json.dumps({
                                    'name': '测试老人',
                                    'relation': '父亲',
+                                   'age': 70,
                                    'location_query': '北京市',
                                }),
                                content_type='application/json',
@@ -298,9 +356,14 @@ class TestMpApiAtomicCreate:
         from core.extensions import db
         from core.db_models import FamilyMember
         from core.usage import create_api_token
+        from core.time_utils import utcnow
+        from services.miniprogram_auth import current_privacy_version
         with app.app_context():
             db.create_all()
             user = _make_user(db.session, 'mpuser2', 'MpPass123!')
+            user.health_sensitive_consent_version = current_privacy_version()
+            user.health_sensitive_consented_at = utcnow()
+            db.session.commit()
             token = create_api_token(user.id, name='test')
 
             resp = client.post('/mp/api/v1/elders',
@@ -365,7 +428,7 @@ class TestOpenMeteoAqiFlag:
             from services.weather_service import WeatherService
             ws = WeatherService()
             ws.qweather_key = 'test_key'
-            ws.api_base_url = 'https://test.api'
+            ws.api_base_url = 'https://unit-test.qweatherapi.com/v7'
 
             mock_resp = MagicMock()
             mock_resp.status_code = 200
@@ -453,7 +516,7 @@ class TestOpenMeteoAqiFlag:
             from services.weather_service import WeatherService
             ws = WeatherService()
             ws.qweather_key = 'test_key'
-            ws.api_base_url = 'https://test.api'
+            ws.api_base_url = 'https://unit-test.qweatherapi.com/v7'
 
             mock_now = MagicMock()
             mock_now.status_code = 200

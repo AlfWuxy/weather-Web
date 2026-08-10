@@ -1,0 +1,5921 @@
+# -*- coding: utf-8 -*-
+"""不可变发布激活事务的行为级回归测试。"""
+
+import hashlib
+import gzip
+import json
+import os
+import grp
+import pwd
+import re
+import shlex
+import shutil
+import signal
+import sqlite3
+import stat
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+import pytest
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+
+ROOT = Path(__file__).resolve().parents[1]
+ACTIVATE_SCRIPT = ROOT / 'scripts' / 'activate_release.sh'
+START_TIMER_UNITS = (
+    'case-weather-backup.timer',
+    'case-weather-cache-bootstrap.timer',
+    'case-weather-risk-precompute.timer',
+    'case-weather-usage-cleanup.timer',
+)
+DEFERRED_TIMER_UNITS = ('case-weather-cache.timer',)
+MANAGED_TIMER_UNITS = START_TIMER_UNITS + DEFERRED_TIMER_UNITS
+LEGACY_TIMER_UNITS = (
+    'case-weather-dispatch.timer',
+    'case-weather-sync.timer',
+)
+LEGACY_SERVICE_UNITS = ('case-weather-sync.service',)
+LEGACY_UNITS = LEGACY_TIMER_UNITS + LEGACY_SERVICE_UNITS
+SERVICE_UNITS = (
+    'case-weather-backup.service',
+    'case-weather-cache.service',
+    'case-weather-dispatch.service',
+    'case-weather-risk-precompute.service',
+    'case-weather-usage-cleanup.service',
+    'case-weather.service',
+)
+RETIRED_BOOTSTRAP_UNITS = (
+    'case-weather-cache-bootstrap.service',
+)
+# 这些 oneshot 服务由 timer 或其他 unit 触发，本身没有 [Install] 段。
+STATIC_SERVICE_UNITS = (
+    'case-weather-backup.service',
+    'case-weather-cache.service',
+    'case-weather-dispatch.service',
+    'case-weather-risk-precompute.service',
+    'case-weather-usage-cleanup.service',
+    'case-weather-sync.service',
+    'case-weather-cache-bootstrap.service',
+)
+INSTALL_UNITS = MANAGED_TIMER_UNITS + SERVICE_UNITS
+ALL_UNITS = INSTALL_UNITS + LEGACY_UNITS + RETIRED_BOOTSTRAP_UNITS
+FORMAL_COMMIT = 'a' * 40
+TEST_RELEASE_BRANCH = 'codex/miniprogram-v1.1.1-unified'
+# 保持运行时格式真实，同时避免测试夹具被静态扫描识别为正式 AppID。
+TEST_MINIPROGRAM_APPID = ''.join(('w', 'x', '1234567890abcdef'))
+ROTATED_TEST_MINIPROGRAM_APPID = ''.join(('w', 'x', 'abcdef1234567890'))
+QWEATHER_PROTECTED_KEYS = (
+    'ALLOW_WEATHER_UNAVAILABLE',
+    'FORECAST_CACHE_TTL_MINUTES',
+    'QWEATHER_API_BASE',
+    'QWEATHER_AUTH_MODE',
+    'QWEATHER_BUDGET_FAIL_CLOSED',
+    'QWEATHER_CANONICAL_LOCATION',
+    'QWEATHER_CONSOLE_USAGE_BASELINE',
+    'QWEATHER_CONSOLE_USAGE_MONTH',
+    'QWEATHER_DEDICATED_CREDENTIAL_CONFIRMED',
+    'QWEATHER_EXPECTED_KID',
+    'QWEATHER_EXPECTED_PROJECT_ID',
+    'QWEATHER_JWT_KID',
+    'QWEATHER_JWT_PRIVATE_KEY_PATH',
+    'QWEATHER_JWT_PROJECT_ID',
+    'QWEATHER_KEY',
+    'QWEATHER_MONTHLY_REQUEST_LIMIT',
+    'QWEATHER_NETWORK_NOT_BEFORE_EPOCH',
+    'QWEATHER_REQUIRE_PERSISTENT_BUDGET',
+    'QWEATHER_WARNING_CACHE_TTL_MINUTES',
+    'REDIS_URL',
+    'WEATHER_CACHE_REDIS_URL',
+    'WEATHER_CACHE_TTL_MINUTES',
+    'WEATHER_SYNC_LOCATIONS',
+)
+
+
+def _legacy_cron_lines(state_dir):
+    return (
+        f'0 3 * * * {state_dir}/backup.sh >> {state_dir}/backups/backup.log 2>&1',
+        (
+            f'0 6 * * * TZ=Asia/Shanghai {state_dir}/venv/bin/python3 '
+            f'{state_dir}/services/pipelines/sync_weather_data.py --daily '
+            f'>> {state_dir}/logs/weather_sync.log 2>&1'
+        ),
+    )
+
+
+def _release_backup_cron_line(state_dir, release_root):
+    return (
+        f'0 3 * * * PROJECT_DIR={state_dir} ENV_FILE={state_dir}/.env '
+        f'BACKUP_DIR={state_dir}/backups '
+        f'{release_root}/current/app/scripts/backup.sh '
+        f'>> {state_dir}/backups/backup.log 2>&1'
+    )
+
+
+def _write_executable(path, content):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding='utf-8')
+    path.chmod(0o755)
+
+
+def _write_private_json(path, payload):
+    path.write_text(
+        json.dumps(payload, ensure_ascii=False, sort_keys=True) + '\n',
+        encoding='utf-8',
+    )
+    path.chmod(0o600)
+
+
+def _locked_pip_inspect_payload(lock_bytes):
+    """把正式锁文件转换成最小、真实结构的 pip inspect 测试收据。"""
+    requirement_pattern = re.compile(
+        r'^([A-Za-z0-9][A-Za-z0-9._-]*)(?:\[[^\]]+\])?==([^\s\\;]+)'
+    )
+    installed = []
+    for line in lock_bytes.decode('utf-8').splitlines():
+        if not line or line.startswith('#') or line[0].isspace():
+            continue
+        match = requirement_pattern.match(line)
+        assert match is not None
+        installed.append({
+            'metadata': {
+                'name': match.group(1),
+                'version': match.group(2),
+            },
+        })
+    assert installed
+    return {
+        'version': '1',
+        'pip_version': 'activation-test',
+        'installed': installed,
+    }
+
+
+def _write_ci_proof(path, *, workflow, proof_job, commit=FORMAL_COMMIT):
+    run_id = 101 if workflow.endswith('/ci.yml') else 102
+    _write_private_json(
+        path,
+        {
+            'schema_version': 1,
+            'kind': 'github-actions-ci-proof',
+            'repository': 'AlfWuxy/weather-Web',
+            'workflow': workflow,
+            'branch': TEST_RELEASE_BRANCH,
+            'commit_sha': commit,
+            'event': 'push',
+            'proof_job': proof_job,
+            'verified_at': '2026-07-31T01:02:30Z',
+            'run': {
+                'id': run_id,
+                'attempt': 1,
+                'path': f'{workflow}@refs/heads/{TEST_RELEASE_BRANCH}',
+                'head_branch': TEST_RELEASE_BRANCH,
+                'head_sha': commit,
+                'event': 'push',
+                'status': 'completed',
+                'conclusion': 'success',
+                'repository': 'AlfWuxy/weather-Web',
+                'head_repository': 'AlfWuxy/weather-Web',
+                'created_at': '2026-07-31T01:00:00Z',
+                'updated_at': '2026-07-31T01:02:00Z',
+                'html_url': f'https://github.com/example/actions/runs/{run_id}',
+            },
+            'job': {
+                'id': run_id + 100,
+                'name': proof_job,
+                'run_id': run_id,
+                'head_sha': commit,
+                'status': 'completed',
+                'conclusion': 'success',
+                'started_at': '2026-07-31T01:02:01Z',
+                'completed_at': '2026-07-31T01:02:20Z',
+                'html_url': (
+                    f'https://github.com/example/actions/jobs/{run_id + 100}'
+                ),
+            },
+        },
+    )
+
+
+def _write_runtime_smoke_receipt(path, *, app_dir, python_path, commit=FORMAL_COMMIT):
+    lock_text = (app_dir / 'requirements.lock').read_text(encoding='utf-8')
+    packages = {}
+    for package in ('alembic', 'flask', 'gunicorn', 'sqlalchemy'):
+        match = re.search(
+            rf'^{package}==([^\s\\]+)',
+            lock_text,
+            flags=re.MULTILINE,
+        )
+        assert match is not None
+        packages[package] = match.group(1)
+    python_realpath = python_path.resolve()
+    prefix_realpath = python_path.parent.parent.resolve()
+    _write_private_json(
+        path,
+        {
+            'schema_version': 1,
+            'receipt_type': 'case-weather-release-runtime-smoke',
+            'status': 'passed',
+            'commit_sha': commit,
+            'created_at_utc': '2026-07-31T01:03:00Z',
+            'python': {
+                'executable': str(python_path.absolute()),
+                'executable_realpath': str(python_realpath),
+                'minor': '3.11',
+                'prefix_realpath': str(prefix_realpath),
+                'version': '3.11.9',
+            },
+            'requirements': {
+                'lock_sha256': hashlib.sha256(
+                    (app_dir / 'requirements.lock').read_bytes()
+                ).hexdigest(),
+                'pip_check': 'passed',
+            },
+            'packages': packages,
+            'alembic': {'heads': ['0027_cross_platform_identity']},
+            'resource': {'ru_maxrss_kib': 65536},
+            'checks': {
+                'alembic_single_head': True,
+                'interpreter_path': True,
+                'package_imports': True,
+                'package_versions': True,
+                'pip_check': True,
+                'python_minor': True,
+                'requirements_lock': True,
+            },
+        },
+    )
+
+
+def _write_test_ed25519_private_key(path, *, mode=0o600):
+    key = Ed25519PrivateKey.generate()
+    path.write_bytes(
+        key.private_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PrivateFormat.PKCS8,
+            encryption_algorithm=serialization.NoEncryption(),
+        )
+    )
+    path.chmod(mode)
+    return path
+
+
+def _make_fake_sync(path):
+    _write_executable(
+        path,
+        """#!/usr/bin/env python3
+import json
+import os
+import signal
+import sqlite3
+from pathlib import Path
+
+state_dir = Path(os.environ['STATE_DIR'])
+count_file = Path(os.environ['FAKE_SYNC_COUNT_FILE'])
+audit_file = Path(os.environ['FAKE_SYNC_AUDIT_FILE'])
+count = int(count_file.read_text(encoding='utf-8')) + 1 if count_file.exists() else 1
+count_file.write_text(str(count), encoding='utf-8')
+transactions = sorted((state_dir / 'backups' / 'deploy-transactions').iterdir())
+transaction = transactions[-1]
+actions_path = Path(os.environ['FAKE_SYSTEMCTL_LOG'])
+actions = actions_path.read_text(encoding='utf-8').splitlines() if actions_path.exists() else []
+database = Path(os.environ['FAKE_DURABILITY_DATABASE'])
+database_value = ''
+if database.exists():
+    connection = sqlite3.connect(database)
+    try:
+        row = connection.execute('SELECT value FROM release_state').fetchone()
+        database_value = row[0] if row else ''
+    finally:
+        connection.close()
+receipt_root = state_dir / 'deployments' / 'formal-cache-smokes'
+started_receipts = list(receipt_root.glob('*/started')) if receipt_root.exists() else []
+completed_receipts = list(receipt_root.glob('*/completed')) if receipt_root.exists() else []
+live_env = (state_dir / '.env').read_text(encoding='utf-8')
+event = {
+    'call': count,
+    'capture_checkpoint': (transaction / 'CAPTURED_STATE_DURABLE').is_file(),
+    'recovery_checkpoint': (transaction / 'RECOVERY_MATERIALS_DURABLE').is_file(),
+    'env_backup': (transaction / 'environment-before.env').is_file(),
+    'backup_env_backup': (transaction / 'backup-runtime-before.env').is_file(),
+    'db_backup': (transaction / 'database-before.db').is_file(),
+    'guard': (state_dir / 'deployments' / 'activation-in-progress').is_file(),
+    'stop_seen': any(action.startswith('stop ') for action in actions),
+    'live_release_new': 'RELEASE_VALUE=new' in live_env,
+    'network_gate_high': 'QWEATHER_NETWORK_NOT_BEFORE_EPOCH=4102444800' in live_env,
+    'database_value': database_value,
+    'started_receipt': len(started_receipts) == 1,
+    'completed_receipt': len(completed_receipts) == 1,
+    'weather_count_exists': Path(os.environ['FAKE_WEATHER_COUNT_FILE']).exists(),
+}
+with audit_file.open('a', encoding='utf-8') as stream:
+    stream.write(json.dumps(event, sort_keys=True) + '\\n')
+if count == int(os.environ.get('FAKE_SYNC_FAIL_ON', '0')):
+    raise SystemExit(23)
+if count == int(os.environ.get('FAKE_SYNC_KILL_ON', '0')):
+    os.kill(os.getppid(), signal.SIGKILL)
+""",
+    )
+
+
+def _make_fake_systemctl(path):
+    _write_executable(
+        path,
+        """#!/usr/bin/env python3
+import gzip
+import json
+import os
+import signal
+import sqlite3
+import sys
+from pathlib import Path
+
+state = Path(os.environ['FAKE_SYSTEMCTL_STATE'])
+unit_dir = Path(os.environ['UNIT_DIR'])
+args = sys.argv[1:]
+command = args[0]
+unit = next((value for value in reversed(args[1:]) if not value.startswith('-')), '')
+action_log = os.environ.get('FAKE_SYSTEMCTL_LOG')
+if action_log:
+    with open(action_log, 'a', encoding='utf-8') as stream:
+        stream.write(' '.join(args) + '\\n')
+
+key_audit = os.environ.get('FAKE_QWEATHER_KEY_STOP_AUDIT', '')
+if command == 'stop' and key_audit and not Path(key_audit).exists():
+    pending = Path(os.environ['FAKE_QWEATHER_PENDING_KEY'])
+    final = Path(os.environ['FAKE_QWEATHER_FINAL_KEY'])
+    pending_stat = pending.lstat()
+    Path(key_audit).write_text(json.dumps({
+        'unit': unit,
+        'pending_mode': oct(pending_stat.st_mode & 0o777),
+        'pending_regular': pending.is_file() and not pending.is_symlink(),
+        'final_exists': final.exists() or final.is_symlink(),
+    }, sort_keys=True), encoding='utf-8')
+    if os.environ.get('FAKE_REPLACE_QWEATHER_PRIVATE_DIR_ON_STOP') == '1':
+        private_dir = pending.parent
+        original_dir = private_dir.with_name(private_dir.name + '.original')
+        private_dir.rename(original_dir)
+        private_dir.mkdir(mode=0o700)
+        replacement = private_dir / pending.name
+        replacement.write_bytes((original_dir / pending.name).read_bytes())
+        replacement.chmod(0o600)
+
+def marker(kind):
+    return state / f'{unit}.{kind}'
+
+def sequence_value(env_name, counter_name, default):
+    values = [
+        value.strip()
+        for value in os.environ.get(env_name, default).split(',')
+        if value.strip()
+    ]
+    counter = state / counter_name
+    count = int(counter.read_text(encoding='utf-8')) + 1 if counter.exists() else 1
+    counter.write_text(str(count), encoding='utf-8')
+    return values[min(count - 1, len(values) - 1)]
+
+if command == 'cat':
+    unit_file = unit_dir / unit
+    if not marker('exists').exists() and not unit_file.exists():
+        raise SystemExit(1)
+    if unit_file.is_file():
+        print(f'# {unit_file}')
+        print(unit_file.read_text(encoding='utf-8'), end='')
+    dropin_dir = unit_dir / f'{unit}.d'
+    if dropin_dir.is_dir():
+        for dropin in sorted(dropin_dir.glob('*.conf')):
+            print(f'# {dropin}')
+            print(dropin.read_text(encoding='utf-8'), end='')
+    raise SystemExit(0)
+if command == 'show':
+    load_state = os.environ.get('FAKE_BACKUP_LOAD_STATE', '') or (
+        'loaded'
+        if marker('exists').exists() or (unit_dir / unit).exists()
+        else 'not-found'
+    )
+    if '--property=LoadState' in args and '--property=ActiveState' in args:
+        state_query_counter = state / 'backup-state-query-count'
+        state_query_count = (
+            int(state_query_counter.read_text(encoding='utf-8')) + 1
+            if state_query_counter.exists()
+            else 1
+        )
+        state_query_counter.write_text(str(state_query_count), encoding='utf-8')
+        if os.environ.get('FAKE_FAIL_BACKUP_STATE_QUERY_ON') == str(state_query_count):
+            raise SystemExit(9)
+        if os.environ.get('FAKE_FAIL_BACKUP_STATE_QUERY') == '1':
+            raise SystemExit(9)
+        combined_load_state = (
+            os.environ.get('FAKE_COMBINED_BACKUP_LOAD_STATE', '') or load_state
+        )
+        active_state = next(
+            (
+                value
+                for value in ('active', 'activating', 'reloading', 'deactivating')
+                if marker(value).exists()
+            ),
+            'inactive',
+        )
+        active_state = os.environ.get('FAKE_BACKUP_ACTIVE_STATE', '') or active_state
+        if unit == 'case-weather-backup.service' and active_state in {
+            'active', 'activating', 'reloading', 'deactivating'
+        }:
+            finish_on = os.environ.get('FAKE_BACKUP_FINISH_ON_ACTIVE_CHECK', '')
+            if finish_on:
+                counter = state / 'backup-active-check-count'
+                count = int(counter.read_text(encoding='utf-8')) + 1 if counter.exists() else 1
+                counter.write_text(str(count), encoding='utf-8')
+                if count >= int(finish_on):
+                    for value in ('active', 'activating', 'reloading', 'deactivating'):
+                        marker(value).unlink(missing_ok=True)
+                    active_state = 'inactive'
+        print(f'LoadState={combined_load_state}')
+        print(f'ActiveState={active_state}')
+        raise SystemExit(0)
+    if '--property=LoadState' in args:
+        query_counter = state / f'{unit}.load-state-query-count'
+        query_count = (
+            int(query_counter.read_text(encoding='utf-8')) + 1
+            if query_counter.exists()
+            else 1
+        )
+        query_counter.write_text(str(query_count), encoding='utf-8')
+        fail_on = os.environ.get('FAKE_FAIL_LOAD_STATE_QUERY_ON', '')
+        if fail_on == f'{unit}:{query_count}':
+            raise SystemExit(9)
+        if os.environ.get('FAKE_FAIL_LOAD_STATE_QUERY') == unit:
+            raise SystemExit(9)
+        print(load_state)
+        raise SystemExit(0)
+    if '--property=NeedDaemonReload' in args:
+        print(os.environ.get('FAKE_NEED_DAEMON_RELOAD_UNIT') == unit and 'yes' or 'no')
+        raise SystemExit(0)
+    if '--property=FragmentPath' in args:
+        print(unit_dir / unit)
+        raise SystemExit(0)
+    if '--property=ActiveEnterTimestampMonotonic' in args:
+        print(sequence_value(
+            'FAKE_BOOTSTRAP_ACTIVE_ENTER_SEQUENCE',
+            'bootstrap-active-enter-query-count',
+            '200000000',
+        ))
+        raise SystemExit(0)
+    if '--property=Result' in args:
+        print('success')
+        raise SystemExit(0)
+    if '--property=ExecMainStatus' in args:
+        print('0')
+        raise SystemExit(0)
+    if '--property=OnSuccess' in args:
+        if os.environ.get('FAKE_BAD_ON_SUCCESS_UNIT') == unit:
+            print('')
+            raise SystemExit(0)
+        if unit == 'case-weather-cache.service':
+            print('case-weather-dispatch.service case-weather-cache.timer')
+            raise SystemExit(0)
+    if '--property=OnFailure' in args:
+        if os.environ.get('FAKE_BAD_ON_FAILURE_UNIT') == unit:
+            print('')
+            raise SystemExit(0)
+        if unit == 'case-weather-cache.service':
+            print('case-weather-cache.timer')
+            raise SystemExit(0)
+    print('')
+    raise SystemExit(0)
+if command == 'is-enabled':
+    if marker('static').exists():
+        print('static')
+        raise SystemExit(0)
+    if marker('enabled-runtime').exists():
+        print('enabled-runtime')
+        raise SystemExit(0)
+    if marker('enabled').exists():
+        print('enabled')
+        raise SystemExit(0)
+    print('disabled')
+    raise SystemExit(1)
+if command == 'is-active':
+    active_state = next(
+        (
+            value
+            for value in ('active', 'activating', 'reloading', 'deactivating')
+            if marker(value).exists()
+        ),
+        '',
+    )
+    if active_state:
+        if unit == 'case-weather-backup.service' and '--quiet' in args:
+            finish_on = os.environ.get('FAKE_BACKUP_FINISH_ON_ACTIVE_CHECK', '')
+            if finish_on:
+                counter = state / 'backup-active-check-count'
+                count = int(counter.read_text(encoding='utf-8')) + 1 if counter.exists() else 1
+                counter.write_text(str(count), encoding='utf-8')
+                if count >= int(finish_on):
+                    marker('active').unlink(missing_ok=True)
+                    raise SystemExit(3)
+        stop_on_check = os.environ.get('FAKE_STOP_CACHE_ON_ACTIVE_CHECK', '')
+        if (
+            unit in {'case-weather-cache.timer', 'case-weather-cache-bootstrap.timer'}
+            and '--quiet' in args
+            and stop_on_check
+        ):
+            counter = state / f'{unit}.active-check-count'
+            count = int(counter.read_text(encoding='utf-8')) + 1 if counter.exists() else 1
+            counter.write_text(str(count), encoding='utf-8')
+            if count == int(stop_on_check):
+                marker('active').unlink(missing_ok=True)
+                raise SystemExit(3)
+        if '--quiet' not in args:
+            print(active_state)
+        raise SystemExit(0)
+    if '--quiet' not in args:
+        print('inactive')
+    raise SystemExit(3)
+if command == 'stop':
+    if os.environ.get('FAKE_FAIL_STOP_UNIT') == unit:
+        raise SystemExit(9)
+    for value in ('active', 'activating', 'reloading', 'deactivating'):
+        marker(value).unlink(missing_ok=True)
+    if (
+        unit == 'case-weather-backup.timer'
+        and os.environ.get('FAKE_START_BACKUP_AFTER_TIMER_STOP') == '1'
+    ):
+        (state / 'case-weather-backup.service.activating').touch()
+    raise SystemExit(0)
+if command in {'start', 'restart'}:
+    failure_marker = state / 'start-failure-consumed'
+    should_fail_once = os.environ.get('FAKE_FAIL_START_UNIT') == unit and not failure_marker.exists()
+    should_fail_always = os.environ.get('FAKE_FAIL_START_ALWAYS') == unit
+    if should_fail_once or should_fail_always:
+        failure_marker.touch()
+        raise SystemExit(9)
+    if unit == 'case-weather-backup.service':
+        if os.environ.get('FAKE_FAIL_ACTUAL_BACKUP_SERVICE') == '1':
+            raise SystemExit(9)
+        runtime_env = Path(os.environ['STATE_DIR']) / 'backups' / 'backup-runtime.env'
+        values = {}
+        for line in runtime_env.read_text(encoding='utf-8').splitlines():
+            key, value = line.split('=', 1)
+            values[key] = value
+        source_database = Path(values['BACKUP_DATABASE_FILE'])
+        destination = Path(os.environ['STATE_DIR']) / 'backups' / 'daily'
+        destination.mkdir(parents=True, exist_ok=True)
+        counter = state / 'actual-backup-count'
+        count = int(counter.read_text(encoding='utf-8')) + 1 if counter.exists() else 1
+        counter.write_text(str(count), encoding='utf-8')
+        raw_database = destination / f'health_weather_actual_{count}.db'
+        source = sqlite3.connect(f'file:{source_database}?mode=ro', uri=True)
+        target = sqlite3.connect(raw_database)
+        try:
+            source.backup(target)
+        finally:
+            target.close()
+            source.close()
+        with raw_database.open('rb') as input_stream, gzip.open(
+            destination / f'health_weather_actual_{count}.db.gz',
+            'wb',
+        ) as output_stream:
+            output_stream.write(input_stream.read())
+        raw_database.unlink()
+        marker('active').unlink(missing_ok=True)
+        raise SystemExit(0)
+    marker('active').touch()
+    if (
+        command == 'restart'
+        and unit == 'case-weather.service'
+        and os.environ.get('FAKE_REPLACE_QWEATHER_FINAL_AFTER_RESTART') == '1'
+    ):
+        final_key = Path(os.environ['FAKE_QWEATHER_FINAL_KEY'])
+        payload = final_key.read_bytes()
+        replacement = final_key.with_name(f'{final_key.name}.replacement')
+        replacement.write_bytes(payload)
+        replacement.chmod(0o640)
+        os.replace(replacement, final_key)
+    if os.environ.get('FAKE_KILL_PARENT_AFTER_RESTART_UNIT') == unit and command == 'restart':
+        os.kill(os.getppid(), signal.SIGKILL)
+    cache_result = os.environ.get('FAKE_CACHE_RESULT', '')
+    if unit == 'case-weather-cache.service' and cache_result in {'success', 'failure'}:
+        hook_name = 'OnSuccess' if cache_result == 'success' else 'OnFailure'
+        hook_units = []
+        for line in (unit_dir / unit).read_text(encoding='utf-8').splitlines():
+            key, separator, value = line.partition('=')
+            if separator and key.strip() == hook_name:
+                hook_units.extend(value.split())
+        marker('active').unlink(missing_ok=True)
+        for hook_unit in hook_units:
+            (state / f'{hook_unit}.active').touch()
+        raise SystemExit(0 if cache_result == 'success' else 1)
+    if (
+        command == 'restart'
+        and unit == 'case-weather-backup.timer'
+        and os.environ.get('FAKE_START_BACKUP_AFTER_TIMER_RESTART') == '1'
+    ):
+        (state / 'case-weather-backup.service.activating').touch()
+    raise SystemExit(0)
+if command == 'enable':
+    if '--runtime' in args:
+        marker('enabled-runtime').touch()
+    else:
+        marker('enabled').touch()
+    if '--now' in args:
+        marker('active').touch()
+    raise SystemExit(0)
+if command == 'disable':
+    marker('enabled').unlink(missing_ok=True)
+    marker('enabled-runtime').unlink(missing_ok=True)
+    raise SystemExit(0)
+if command == 'daemon-reload':
+    for exists_marker in state.glob('*.exists'):
+        current_unit = exists_marker.name[:-len('.exists')]
+        if not (unit_dir / current_unit).exists():
+            exists_marker.unlink(missing_ok=True)
+    for unit_file in unit_dir.iterdir():
+        if unit_file.is_file():
+            (state / f'{unit_file.name}.exists').touch()
+    raise SystemExit(0)
+if command == 'status':
+    raise SystemExit(0)
+raise SystemExit(f'unsupported fake systemctl call: {args}')
+""",
+    )
+
+
+def _make_fake_crontab(path):
+    _write_executable(
+        path,
+        """#!/usr/bin/env python3
+import os
+import sys
+from pathlib import Path
+
+store = Path(os.environ['FAKE_ROOT_CRONTAB'])
+state = Path(os.environ['FAKE_SYSTEMCTL_STATE'])
+args = sys.argv[1:]
+if '-l' in args:
+    if not store.exists():
+        print('no crontab for root', file=sys.stderr)
+        raise SystemExit(1)
+    sys.stdout.buffer.write(store.read_bytes())
+    read_counter = state / 'crontab-read-count'
+    read_count = int(read_counter.read_text(encoding='ascii')) + 1 if read_counter.exists() else 1
+    read_counter.write_text(str(read_count), encoding='ascii')
+    append_after_read = os.environ.get('FAKE_CRONTAB_APPEND_AFTER_READ_COUNT', '')
+    append_before_install = os.environ.get('FAKE_CRONTAB_APPEND_BEFORE_INSTALL', '')
+    if append_after_read and read_count == int(append_after_read) and append_before_install:
+        with store.open('ab') as stream:
+            stream.write(append_before_install.encode('utf-8'))
+    counter = state / 'crontab-install-count'
+    appended_marker = state / 'concurrent-cron-appended'
+    appended = os.environ.get('FAKE_CRONTAB_APPEND_AFTER_REMOVE', '')
+    if counter.exists() and counter.read_text(encoding='ascii') == '1' and appended and not appended_marker.exists():
+        with store.open('ab') as stream:
+            stream.write(appended.encode('utf-8'))
+        appended_marker.touch()
+    raise SystemExit(0)
+
+source = Path(args[-1])
+store.write_bytes(source.read_bytes())
+counter = state / 'crontab-install-count'
+count = int(counter.read_text(encoding='ascii')) + 1 if counter.exists() else 1
+counter.write_text(str(count), encoding='ascii')
+if os.environ.get('FAKE_START_BACKUP_AFTER_CRONTAB_INSTALL') == '1':
+    (state / 'case-weather-backup.service.activating').touch()
+""",
+    )
+
+
+def _make_fake_pgrep(path):
+    _write_executable(
+        path,
+        """#!/bin/sh
+if [ -f \"$FAKE_SYSTEMCTL_STATE/legacy-process-running\" ]; then
+    printf '%s\\n' 4321
+    exit 0
+fi
+case "$*" in
+    *"-u $RUNTIME_USER"*)
+        if [ -f "$FAKE_SYSTEMCTL_STATE/runtime-user-process-running" ]; then
+            printf '%s\\n' 4999
+            exit 0
+        fi
+        ;;
+    *'/current/app/scripts/backup.sh'*)
+        for state in active activating reloading deactivating; do
+            if [ -f "$FAKE_SYSTEMCTL_STATE/case-weather-backup.service.$state" ]; then
+                printf '%s\\n' 4322
+                exit 0
+            fi
+        done
+        ;;
+esac
+exit 1
+""",
+    )
+
+
+def _make_fake_systemd_run(path):
+    _write_executable(
+        path,
+        """#!/usr/bin/env python3
+import gzip
+import os
+import sqlite3
+import sys
+from pathlib import Path
+
+args = sys.argv[1:]
+action_log = os.environ.get('FAKE_SYSTEMCTL_LOG')
+if action_log:
+    with open(action_log, 'a', encoding='utf-8') as stream:
+        stream.write('systemd-run ' + ' '.join(args) + '\\n')
+if os.environ.get('FAKE_FAIL_SYSTEMD_RUN') == '1':
+    raise SystemExit(9)
+values = {}
+for value in args:
+    if value.startswith('--setenv='):
+        key, item = value[len('--setenv='):].split('=', 1)
+        values[key] = item
+destination = Path(values['BACKUP_DIR'])
+destination.mkdir(parents=True, exist_ok=True)
+if os.environ.get('FAKE_INVALID_SQLITE_BACKUP') == '1':
+    with gzip.open(destination / 'health_weather_fake.db.gz', 'wb') as stream:
+        stream.write(b'not a sqlite database')
+    raise SystemExit(0)
+raw_database = destination / 'health_weather_fake.db'
+connection = sqlite3.connect(raw_database)
+try:
+    connection.execute('CREATE TABLE validation_state (value TEXT NOT NULL)')
+    connection.execute("INSERT INTO validation_state(value) VALUES ('ok')")
+    connection.commit()
+finally:
+    connection.close()
+with raw_database.open('rb') as source, gzip.open(
+    destination / 'health_weather_fake.db.gz', 'wb'
+) as stream:
+    stream.write(source.read())
+raw_database.unlink()
+raise SystemExit(0)
+""",
+    )
+
+
+def _database_value(path):
+    connection = sqlite3.connect(path)
+    try:
+        return connection.execute('SELECT value FROM release_state').fetchone()[0]
+    finally:
+        connection.close()
+
+
+def _captured_enable_states(transaction_dir):
+    states = {}
+    for line in (transaction_dir / 'unit-state.tsv').read_text(
+        encoding='utf-8'
+    ).splitlines():
+        unit, _exists, enabled, _active = line.split('\t')
+        states[unit] = enabled
+    return states
+
+
+def _prepare_transaction(
+    tmp_path,
+    *,
+    migration_exit=0,
+    candidate_health_ok=True,
+    candidate_contract_failure=None,
+    public_health_ok=True,
+    weather_timer_phase='recurring',
+):
+    if weather_timer_phase not in {'recurring', 'bootstrap', 'writer'}:
+        raise ValueError(f'unsupported weather timer phase: {weather_timer_phase}')
+    if candidate_contract_failure not in {None, 'ml', 'bootstrap', 'risk'}:
+        raise ValueError(
+            f'unsupported candidate contract failure: {candidate_contract_failure}'
+        )
+
+    state_dir = tmp_path / 'state'
+    release_root = tmp_path / 'deploy'
+    old_release = release_root / 'releases' / 'old'
+    new_release = release_root / 'releases' / 'new'
+    current_link = release_root / 'current'
+    unit_dir = tmp_path / 'units'
+    fake_state = tmp_path / 'systemctl-state'
+    fake_bin = tmp_path / 'fake-bin'
+    root_crontab = tmp_path / 'root-crontab'
+    systemctl_log = tmp_path / 'systemctl-actions.log'
+    database_file = state_dir / 'instance' / 'health_weather.db'
+    runtime_guard_dir = tmp_path / 'runtime-boot-guard'
+    qweather_private_dir = state_dir / 'private'
+    fake_python_modules = tmp_path / 'fake-python-modules'
+    fake_pip_inspect_file = tmp_path / 'fake-pip-inspect.json'
+
+    for directory in (
+        state_dir / 'instance',
+        state_dir / 'backups',
+        state_dir / 'deployments',
+        qweather_private_dir,
+        old_release,
+        new_release / 'app' / 'scripts',
+        new_release / 'private-metadata',
+        new_release / 'venv' / 'bin',
+        new_release / 'systemd',
+        unit_dir,
+        fake_state,
+        fake_bin,
+        fake_python_modules / 'pip',
+        fake_python_modules / 'gunicorn',
+    ):
+        directory.mkdir(parents=True, exist_ok=True)
+    qweather_private_dir.chmod(0o700)
+    database_uri = f'sqlite:///{database_file.as_posix()}'
+    (state_dir / '.env').write_text(
+        f'DEBUG=true\nWECHAT_FORMAL_RUNTIME=0\n'
+        f'WEB_PRIVATE_FEATURES_ENABLED=0\n'
+        f'RELEASE_VALUE=old\nDATABASE_URI={database_uri}\n',
+        encoding='utf-8',
+    )
+    (state_dir / '.env').chmod(0o600)
+    (new_release / 'staged.env').write_text(
+        f'DEBUG=true\nWECHAT_FORMAL_RUNTIME=0\n'
+        f'WEB_PRIVATE_FEATURES_ENABLED=0\n'
+        f'RELEASE_VALUE=new\nDATABASE_URI={database_uri}\n',
+        encoding='utf-8',
+    )
+    current_link.symlink_to(old_release)
+    current_release_ledger = state_dir / 'deployments' / 'current-release'
+    current_release_ledger.write_text(
+        f'{old_release}\n',
+        encoding='utf-8',
+    )
+    current_release_ledger.chmod(0o600)
+    root_crontab.write_bytes(
+        (
+            'MAILTO=ops@example.invalid\n'
+            '@reboot /usr/local/sbin/unrelated-health-check'
+        ).encode('utf-8')
+    )
+
+    requirements_lock = (ROOT / 'requirements.lock').read_bytes()
+    (new_release / 'app' / 'requirements.lock').write_bytes(requirements_lock)
+    (new_release / 'app' / 'scripts' / 'backup.sh').write_text(
+        (ROOT / 'scripts' / 'backup.sh').read_text(encoding='utf-8'),
+        encoding='utf-8',
+    )
+    (new_release / 'app' / 'scripts' / 'backup.sh').chmod(0o755)
+    for script_name in (
+        'model_artifact.py',
+        'verify_github_ci.py',
+        'release_runtime_smoke.py',
+    ):
+        target = new_release / 'app' / 'scripts' / script_name
+        target.write_text(
+            (ROOT / 'scripts' / script_name).read_text(encoding='utf-8'),
+            encoding='utf-8',
+        )
+    core_dir = new_release / 'app' / 'core'
+    core_dir.mkdir()
+    (core_dir / '__init__.py').write_text('', encoding='utf-8')
+    (core_dir / 'app.py').write_text(
+        """from contextlib import nullcontext
+from pathlib import Path
+import os
+
+
+class _ConfigApp:
+    def __init__(self, values):
+        self.config = dict(values)
+        self.config['SQLALCHEMY_DATABASE_URI'] = values['DATABASE_URI']
+        self.instance_path = str(Path.cwd() / 'instance')
+
+    def app_context(self):
+        return nullcontext()
+
+
+def create_app(register_blueprints=False):
+    env_file = Path(os.environ['CASE_WEATHER_ENV_FILE'])
+    values = {}
+    for line in env_file.read_text(encoding='utf-8').splitlines():
+        key, separator, value = line.partition('=')
+        if separator:
+            values[key] = value
+    return _ConfigApp(values)
+""",
+        encoding='utf-8',
+    )
+    model_payloads = {
+        'disease_predictor.pkl': b'activation-test-predictor\n',
+        'scaler.pkl': b'activation-test-scaler\n',
+        'label_encoder.pkl': b'activation-test-labels\n',
+    }
+    model_files = {
+        filename: {
+            'sha256': hashlib.sha256(payload).hexdigest(),
+            'size_bytes': len(payload),
+        }
+        for filename, payload in model_payloads.items()
+    }
+    model_dir = new_release / 'app' / 'models'
+    model_dir.mkdir(mode=0o750)
+    model_dir.chmod(0o750)
+    for filename, payload in model_payloads.items():
+        artifact = model_dir / filename
+        artifact.write_bytes(payload)
+        artifact.chmod(0o640)
+    (model_dir / 'feature_config.json').write_text(
+        json.dumps(
+            {
+                'runtime_artifacts': {
+                    'expected_sklearn_version': '1.7.2',
+                    'files': model_files,
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding='utf-8',
+    )
+    (core_dir / 'config.py').write_text(
+        """from pathlib import Path
+
+
+def resolve_sqlite_db_path(uri, *, repo_root, instance_dir):
+    if not uri.startswith('sqlite:///') or uri == 'sqlite:///:memory:':
+        return None
+    raw = uri[len('sqlite:///'):]
+    path = Path(raw)
+    if not path.is_absolute():
+        path = Path(instance_dir) / path
+    return path.resolve(strict=False)
+""",
+        encoding='utf-8',
+    )
+    services_dir = new_release / 'app' / 'services'
+    services_dir.mkdir()
+    (services_dir / '__init__.py').write_text('', encoding='utf-8')
+    (services_dir / 'qweather_auth.py').write_text(
+        (ROOT / 'services' / 'qweather_auth.py').read_text(encoding='utf-8'),
+        encoding='utf-8',
+    )
+    (new_release / 'private-metadata' / 'requirements-lock.sha256').write_text(
+        hashlib.sha256(requirements_lock).hexdigest() + '\n',
+        encoding='utf-8',
+    )
+    version_result = subprocess.run(
+        [sys.executable, '--version'],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    python_version = (version_result.stdout or version_result.stderr).strip()
+    (new_release / 'private-metadata' / 'python-version.txt').write_text(
+        python_version + '\n',
+        encoding='utf-8',
+    )
+    pip_inspect_bytes = (
+        json.dumps(
+            _locked_pip_inspect_payload(requirements_lock),
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+        + '\n'
+    ).encode('utf-8')
+    (new_release / 'private-metadata' / 'pip-inspect.json').write_bytes(
+        pip_inspect_bytes,
+    )
+    fake_pip_inspect_file.write_bytes(pip_inspect_bytes)
+    (fake_python_modules / 'pip' / '__init__.py').write_text(
+        '',
+        encoding='utf-8',
+    )
+    (fake_python_modules / 'pip' / '__main__.py').write_text(
+        """import os
+from pathlib import Path
+import sys
+
+arguments = sys.argv[1:]
+if arguments == ['inspect', '--local']:
+    print(
+        Path(os.environ['FAKE_PIP_INSPECT_FILE']).read_text(encoding='utf-8'),
+        end='',
+    )
+elif arguments == ['check']:
+    raise SystemExit(0)
+else:
+    raise SystemExit(2)
+""",
+        encoding='utf-8',
+    )
+    (fake_python_modules / 'gunicorn' / '__init__.py').write_text(
+        '',
+        encoding='utf-8',
+    )
+    (fake_python_modules / 'gunicorn' / '__main__.py').write_text(
+        """import sys
+
+if sys.argv[1:] == ['--version']:
+    print('gunicorn (version activation-test)')
+else:
+    raise SystemExit(2)
+""",
+        encoding='utf-8',
+    )
+    for dependency_metadata_name in (
+        'requirements-lock.sha256',
+        'python-version.txt',
+        'pip-inspect.json',
+    ):
+        (
+            new_release / 'private-metadata' / dependency_metadata_name
+        ).chmod(0o600)
+    _write_private_json(
+        new_release / 'private-metadata' / 'dependency-receipt.json',
+        {
+            'schema_version': 1,
+            'method': 'fresh-install',
+            'requirements_lock_sha256': hashlib.sha256(
+                requirements_lock
+            ).hexdigest(),
+            'pip_inspect_sha256': hashlib.sha256(
+                pip_inspect_bytes
+            ).hexdigest(),
+            'python_major_minor': (
+                f'{sys.version_info.major}.{sys.version_info.minor}'
+            ),
+            'python_version': python_version,
+            'source_release_id': None,
+            'source_pip_inspect_sha256': None,
+        },
+    )
+
+    connection = sqlite3.connect(database_file)
+    connection.execute('CREATE TABLE release_state (value TEXT NOT NULL)')
+    connection.execute("INSERT INTO release_state(value) VALUES ('old')")
+    connection.commit()
+    connection.close()
+
+    migration = f"""#!/bin/bash
+set -euo pipefail
+/usr/bin/sqlite3 "$DATABASE_FILE" "UPDATE release_state SET value='new';"
+exit {migration_exit}
+"""
+    _write_executable(new_release / 'app' / 'scripts' / 'server_migrate.sh', migration)
+    (new_release / 'app' / 'scripts' / 'update_env_value.py').write_text(
+        (ROOT / 'scripts' / 'update_env_value.py').read_text(encoding='utf-8'),
+        encoding='utf-8',
+    )
+    _write_executable(
+        new_release / 'venv' / 'bin' / 'python',
+        (
+            '#!/bin/sh\n'
+            'if [ "$#" -ge 2 ] && [ "$1" = "-m" ] '
+            '&& [ "$2" = "gunicorn" ]; then\n'
+            '  trap "exit 0" TERM INT\n'
+            '  while :; do sleep 1; done\n'
+            'fi\n'
+            f'exec {shlex.quote(sys.executable)} "$@"\n'
+        ),
+    )
+    _write_executable(
+        new_release / 'venv' / 'bin' / 'gunicorn',
+        '#!/bin/sh\ntrap "exit 0" TERM INT\nwhile :; do sleep 1; done\n',
+    )
+    source_commit = new_release / 'private-metadata' / 'source-commit.txt'
+    source_commit.write_text(FORMAL_COMMIT + '\n', encoding='utf-8')
+    source_commit.chmod(0o600)
+    _write_private_json(
+        new_release / 'private-metadata' / 'model-artifacts.json',
+        {
+            'schema_version': 1,
+            'receipt_type': 'yilao-model-artifact-snapshot',
+            'status': 'passed',
+            'commit': FORMAL_COMMIT,
+            'expected_sklearn_version': '1.7.2',
+            'files': model_files,
+        },
+    )
+    _write_ci_proof(
+        new_release / 'private-metadata' / 'ci-proof.json',
+        workflow='.github/workflows/ci.yml',
+        proof_job='可发布提交证明',
+    )
+    _write_ci_proof(
+        new_release / 'private-metadata' / 'miniprogram-ci-proof.json',
+        workflow='.github/workflows/miniprogram.yml',
+        proof_job='小程序可发布提交证明',
+    )
+    _write_runtime_smoke_receipt(
+        new_release / 'private-metadata' / 'runtime-smoke.json',
+        app_dir=new_release / 'app',
+        python_path=new_release / 'venv' / 'bin' / 'python',
+    )
+
+    for unit in INSTALL_UNITS:
+        if unit == 'case-weather-backup.service':
+            unit_text = f"""[Unit]
+Description=Case Weather test backup
+ConditionPathExists=|!{state_dir}/deployments/activation-in-progress
+ConditionPathExists=|{runtime_guard_dir}/activation-permit
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+PrivateNetwork=true
+ProtectSystem=strict
+EnvironmentFile={state_dir}/backups/backup-runtime.env
+ExecStart=/bin/bash {current_link}/app/scripts/backup.sh
+TimeoutStartSec=15min
+"""
+        else:
+            unit_text = f'new unit {unit}\n'
+        (new_release / 'systemd' / unit).write_text(unit_text, encoding='utf-8')
+    for unit in ALL_UNITS:
+        (unit_dir / unit).write_text(f'old unit {unit}\n', encoding='utf-8')
+        dropin_dir = unit_dir / f'{unit}.d'
+        dropin_dir.mkdir()
+        (dropin_dir / '10-case-weather-activation-guard.conf').write_text(
+            '[Unit]\n'
+            f'ConditionPathExists=|!{state_dir}/deployments/activation-in-progress\n'
+            f'ConditionPathExists=|{runtime_guard_dir}/activation-permit\n',
+            encoding='utf-8',
+        )
+        (dropin_dir / '10-case-weather-activation-guard.conf').chmod(0o644)
+        (fake_state / f'{unit}.exists').touch()
+        unit_file_state = 'static' if unit in STATIC_SERVICE_UNITS else 'enabled'
+        (fake_state / f'{unit}.{unit_file_state}').touch()
+    for unit in (
+        'case-weather.service',
+        'case-weather-backup.timer',
+        'case-weather-risk-precompute.timer',
+        'case-weather-usage-cleanup.timer',
+    ) + LEGACY_UNITS:
+        (fake_state / f'{unit}.active').touch()
+    if weather_timer_phase == 'recurring':
+        (fake_state / 'case-weather-cache.timer.active').touch()
+        (fake_state / 'case-weather-cache-bootstrap.timer.enabled').unlink(missing_ok=True)
+    elif weather_timer_phase == 'bootstrap':
+        (fake_state / 'case-weather-cache-bootstrap.timer.active').touch()
+        (fake_state / 'case-weather-cache.timer.enabled').unlink(missing_ok=True)
+    else:
+        (fake_state / 'case-weather-cache.timer.enabled').unlink(missing_ok=True)
+        (fake_state / 'case-weather-cache.service.activating').touch()
+
+    fake_systemctl = fake_bin / 'systemctl'
+    _make_fake_systemctl(fake_systemctl)
+    fake_crontab = fake_bin / 'crontab'
+    _make_fake_crontab(fake_crontab)
+    fake_pgrep = fake_bin / 'pgrep'
+    _make_fake_pgrep(fake_pgrep)
+    fake_systemd_run = fake_bin / 'systemd-run'
+    _make_fake_systemd_run(fake_systemd_run)
+    fake_curl = fake_bin / 'curl'
+    _write_executable(
+        fake_curl,
+        """#!/usr/bin/env python3
+import os
+import sys
+from pathlib import Path
+
+url = sys.argv[-1]
+if ':5001/' in url:
+    healthy = os.environ.get('FAKE_CANDIDATE_HEALTH_OK') == '1'
+    failure = os.environ.get('FAKE_CANDIDATE_CONTRACT_FAILURE', '')
+    if not healthy:
+        print('{"status":"unavailable"}')
+    elif url.endswith('/healthz'):
+        print('{"status":"ok"}')
+    elif url.endswith('/api/ml/status'):
+        if failure == 'ml':
+            print('{"success":true,"status":{"model_loaded":false}}')
+        else:
+            print('{"success":true,"status":{"model_loaded":true,'
+                  '"runtime_sklearn_version":"1.7.2",'
+                  '"expected_sklearn_version":"1.7.2",'
+                  '"sklearn_compatible":true}}')
+    elif url.endswith('/mp/api/v1/bootstrap'):
+        smoke_counter = os.environ.get('FAKE_FORMAL_SMOKE_COUNTER', '')
+        smoke_completed = not smoke_counter or Path(smoke_counter).is_file()
+        if failure == 'bootstrap' or not smoke_completed:
+            print('{"success":true,"data":{"available":false,"stale":true}}')
+        else:
+            print('{"success":true,"data":{"available":true,"stale":false,'
+                  '"snapshot_id":"snapshot-test","current":{"data_source":"QWeather"},'
+                  '"risk":{"score":56,"summary":"天气较热"},'
+                  '"source_status":{"weather":{"provider":"QWeather"}}}}')
+    elif url.endswith('/risk'):
+        padding = 'x' * int(os.environ.get('FAKE_CANDIDATE_RISK_PADDING_SIZE', '0'))
+        if failure == 'risk':
+            print('<h5>天气更新中</h5>' + padding)
+        else:
+            print('<h5>当前风险：中风险</h5>' + padding)
+    else:
+        print('{"status":"unavailable"}')
+else:
+    healthy = os.environ.get('FAKE_PUBLIC_HEALTH_OK') == '1'
+    print('{"status":"ok"}' if healthy else '{"status":"unavailable"}')
+""",
+    )
+    fake_busctl = fake_bin / 'busctl'
+    _write_executable(
+        fake_busctl,
+        """#!/usr/bin/env python3
+import os
+from pathlib import Path
+
+state = Path(os.environ['FAKE_SYSTEMCTL_STATE'])
+values = [
+    value.strip()
+    for value in os.environ.get(
+        'FAKE_BOOTSTRAP_NEXT_ELAPSE_SEQUENCE',
+        '2000000000',
+    ).split(',')
+    if value.strip()
+]
+counter = state / 'bootstrap-next-elapse-query-count'
+count = int(counter.read_text(encoding='utf-8')) + 1 if counter.exists() else 1
+counter.write_text(str(count), encoding='utf-8')
+print(f't {values[min(count - 1, len(values) - 1)]}')
+""",
+    )
+    uptime_file = tmp_path / 'uptime'
+    uptime_file.write_text('200.00 100.00\n', encoding='utf-8')
+
+    environment = os.environ.copy()
+    environment.pop('DATABASE_FILE', None)
+    environment.pop('DATABASE_URI', None)
+    environment.update({
+        'STATE_DIR': str(state_dir),
+        'RELEASE_ROOT': str(release_root),
+        'NEW_RELEASE': str(new_release),
+        'CURRENT_LINK': str(current_link),
+        'ENV_FILE': str(state_dir / '.env'),
+        'STAGED_ENV_FILE': str(new_release / 'staged.env'),
+        'UNIT_DIR': str(unit_dir),
+        'SYSTEMCTL_BIN': str(fake_systemctl),
+        'SYSTEMD_RUN_BIN': str(fake_systemd_run),
+        'CRONTAB_BIN': str(fake_crontab),
+        'PGREP_BIN': str(fake_pgrep),
+        'SQLITE3_BIN': '/usr/bin/sqlite3',
+        'CURL_BIN': str(fake_curl),
+        'FLOCK_BIN': '/usr/bin/true',
+        'BUSCTL_BIN': str(fake_busctl),
+        'UPTIME_FILE': str(uptime_file),
+        'FAKE_SYSTEMCTL_STATE': str(fake_state),
+        'FAKE_SYSTEMCTL_LOG': str(systemctl_log),
+        'FAKE_ROOT_CRONTAB': str(root_crontab),
+        'HEALTH_ATTEMPTS': '1',
+        'HEALTH_SLEEP_SECONDS': '0',
+        'POST_COMMIT_STABILITY_SECONDS': '0',
+        'POST_COMMIT_STABILITY_INTERVAL_SECONDS': '1',
+        'FAKE_CANDIDATE_HEALTH_OK': '1' if candidate_health_ok else '0',
+        'FAKE_CANDIDATE_CONTRACT_FAILURE': candidate_contract_failure or '',
+        'FAKE_PUBLIC_HEALTH_OK': '1' if public_health_ok else '0',
+        'DEPLOY_INTENT': 'web_backend_only',
+        'EXPECTED_WECHAT_FORMAL_RUNTIME': '0',
+        'EXPECTED_WEB_PRIVATE_FEATURES_ENABLED': '0',
+        'EXPECTED_RELEASE_COMMIT': FORMAL_COMMIT,
+        'EXPECTED_RELEASE_BRANCH': TEST_RELEASE_BRANCH,
+        'RUNTIME_USER': pwd.getpwuid(os.getuid()).pw_name,
+        'RUNTIME_GROUP': grp.getgrgid(os.getgid()).gr_name,
+        'RUNTIME_BOOT_GUARD_DIR': str(runtime_guard_dir),
+        'ALLOW_NONROOT_TEST_RUNTIME_GUARD': '1',
+        'SYNC_BIN': '/usr/bin/true',
+        'CHOWN_BIN': '/usr/bin/true',
+        'CONTROL_OWNER_UID': str(os.getuid()),
+        'CONTROL_OWNER_GID': str(os.getgid()),
+        'PYTHONPATH': str(fake_python_modules),
+        'FAKE_PIP_INSPECT_FILE': str(fake_pip_inspect_file),
+    })
+    return {
+        'env': environment,
+        'state_dir': state_dir,
+        'release_root': release_root,
+        'old_release': old_release,
+        'new_release': new_release,
+        'current_link': current_link,
+        'unit_dir': unit_dir,
+        'fake_state': fake_state,
+        'root_crontab': root_crontab,
+        'systemctl_log': systemctl_log,
+        'database_file': database_file,
+        'qweather_private_dir': qweather_private_dir,
+    }
+
+
+def _run_activation(transaction, *, refresh_base_state=True):
+    pending_raw = transaction['env'].get('QWEATHER_PENDING_KEY_PATH', '')
+    if pending_raw and transaction.get('auto_stage_qweather_pending', True):
+        pending = Path(pending_raw)
+        if not pending.exists() and not pending.is_symlink():
+            staged_values = {}
+            staged_env = transaction['new_release'] / 'staged.env'
+            if staged_env.exists():
+                for line in staged_env.read_text(encoding='utf-8').splitlines():
+                    key, separator, value = line.partition('=')
+                    if separator:
+                        staged_values[key] = value
+            final = Path(staged_values.get('QWEATHER_JWT_PRIVATE_KEY_PATH', ''))
+            if final.is_file() and not final.is_symlink():
+                pending.write_bytes(final.read_bytes())
+                pending.chmod(0o600)
+    if refresh_base_state:
+        _write_candidate_base_state(transaction)
+    return subprocess.run(
+        ['bash', str(ACTIVATE_SCRIPT)],
+        cwd=ROOT,
+        env=transaction['env'],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+
+def _write_candidate_base_state(transaction):
+    active_env = Path(transaction['env']['ENV_FILE'])
+    current_link = Path(transaction['env']['CURRENT_LINK'])
+    if current_link.is_symlink():
+        current_payload = b'link\0' + os.fsencode(os.readlink(current_link))
+    elif not current_link.exists():
+        current_payload = b'absent'
+    else:
+        raise AssertionError('current link fixture must be a symlink or absent')
+    def qweather_hash(payload):
+        values = {}
+        for raw_line in payload.decode('utf-8').splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith('#') or '=' not in raw_line:
+                continue
+            key, value = raw_line.split('=', 1)
+            key = key.strip()
+            if key in QWEATHER_PROTECTED_KEYS:
+                values[key] = value
+        canonical = b''.join(
+            key.encode('ascii')
+            + b'='
+            + values.get(key, '').encode('utf-8')
+            + b'\0'
+            for key in QWEATHER_PROTECTED_KEYS
+        )
+        return hashlib.sha256(canonical).hexdigest()
+
+    active_content = active_env.read_bytes()
+    runtime_values = {}
+    for key in ('WECHAT_FORMAL_RUNTIME', 'WEB_PRIVATE_FEATURES_ENABLED'):
+        matches = []
+        for raw_line in active_content.decode('utf-8').splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith('#') or '=' not in raw_line:
+                continue
+            candidate_key, value = raw_line.split('=', 1)
+            if candidate_key.strip() == key:
+                matches.append(value.strip().strip('"').strip("'"))
+        if key == 'WEB_PRIVATE_FEATURES_ENABLED' and not matches:
+            matches = ['0']
+        if len(matches) != 1 or matches[0] not in {'0', '1'}:
+            raise AssertionError(f'{key} fixture must be explicit and unique')
+        runtime_values[key] = matches[0]
+    payload = {
+        'active_env_sha256': hashlib.sha256(active_content).hexdigest(),
+        'current_link_state_sha256': hashlib.sha256(current_payload).hexdigest(),
+        'deployment_intent': transaction['env']['DEPLOY_INTENT'],
+        'qweather_config_sha256': qweather_hash(active_content),
+        'wechat_formal_runtime': runtime_values['WECHAT_FORMAL_RUNTIME'],
+        'web_private_features_enabled': runtime_values[
+            'WEB_PRIVATE_FEATURES_ENABLED'
+        ],
+        'version': 3,
+    }
+    metadata = (
+        transaction['new_release']
+        / 'private-metadata'
+        / 'candidate-base-state.json'
+    )
+    metadata.write_text(
+        json.dumps(payload, sort_keys=True, separators=(',', ':')) + '\n',
+        encoding='utf-8',
+    )
+    metadata.chmod(0o600)
+    return metadata
+
+
+def _seed_interrupted_activation_guard(
+    transaction,
+    name,
+    *,
+    terminal=None,
+    include_runtime_permit=True,
+):
+    transaction_dir = (
+        transaction['state_dir']
+        / 'backups'
+        / 'deploy-transactions'
+        / name
+    )
+    transaction_dir.mkdir(parents=True)
+    (transaction_dir / 'ACTIVATION_STARTED').write_text(
+        'interrupted-release\n',
+        encoding='utf-8',
+    )
+    if terminal:
+        (transaction_dir / terminal).write_text('success\n', encoding='utf-8')
+        (transaction_dir / terminal).chmod(0o600)
+    deployments = transaction['state_dir'] / 'deployments'
+    deployments.mkdir(parents=True, exist_ok=True)
+    persistent_guard = deployments / 'activation-in-progress'
+    persistent_guard.write_text(
+        'release_id=interrupted-release\n'
+        f'transaction={transaction_dir}\n'
+        'started_at=2026-07-18T00:00:00Z\n',
+        encoding='utf-8',
+    )
+    persistent_guard.chmod(0o600)
+    runtime_guard = Path(transaction['env']['RUNTIME_BOOT_GUARD_DIR'])
+    if include_runtime_permit:
+        runtime_guard.mkdir(parents=True)
+        permit = runtime_guard / 'activation-permit'
+        permit.write_text(
+            'release_id=interrupted-release\n'
+            f'transaction={transaction_dir}\n',
+            encoding='utf-8',
+        )
+        permit.chmod(0o600)
+    return transaction_dir
+
+
+def _run_formal_runtime_healthz_probe(
+    tmp_path,
+    *,
+    status='200',
+    curl_exit=0,
+    terminal=None,
+    terminal_mode=0o600,
+    terminal_payload='success\n',
+    both_terminals=False,
+    acknowledgement=None,
+    acknowledgement_verified_this_run=False,
+    omit_guard=False,
+    invalid_guard_mode=False,
+    symlink_guard=False,
+    symlink_terminal=False,
+    grow_log=False,
+):
+    """直接执行正式 healthz 探针策略，覆盖停机恢复的 fail-closed 分支。"""
+    script = ACTIVATE_SCRIPT.read_text(encoding='utf-8')
+    guard_functions = script[
+        script.index('read_activation_guard_transaction() {'):
+        script.index('validate_runtime_guard_permit() {')
+    ]
+    probe_function = script[
+        script.index('verify_formal_runtime_healthz_probe() {'):
+        script.index('verify_formal_runtime_log_boundary() {')
+    ]
+
+    probe_root = tmp_path / 'formal-probe'
+    transaction_root = probe_root / 'deploy-transactions'
+    deployments = probe_root / 'deployments'
+    transaction_root.mkdir(parents=True, mode=0o700)
+    deployments.mkdir(mode=0o700)
+    transaction = transaction_root / 'guarded-transaction'
+    transaction.mkdir(mode=0o700)
+    (transaction / 'ACTIVATION_STARTED').write_text(
+        'interrupted-release\n',
+        encoding='utf-8',
+    )
+    terminal_names = []
+    if terminal:
+        terminal_names.append(terminal)
+    if both_terminals:
+        terminal_names = ['COMMITTED', 'ROLLED_BACK']
+    for terminal_name in terminal_names:
+        terminal_marker = transaction / terminal_name
+        if symlink_terminal:
+            terminal_target = probe_root / f'{terminal_name}-target'
+            terminal_target.write_text('success\n', encoding='utf-8')
+            terminal_marker.symlink_to(terminal_target)
+        else:
+            terminal_marker.write_text(terminal_payload, encoding='utf-8')
+            terminal_marker.chmod(terminal_mode)
+
+    guard = deployments / 'activation-in-progress'
+    guard_payload = (
+        'release_id=interrupted-release\n'
+        f'transaction={transaction}\n'
+        'started_at=2026-07-31T00:00:00Z\n'
+    )
+    if symlink_guard:
+        guard_target = probe_root / 'guard-target'
+        guard_target.write_text(guard_payload, encoding='utf-8')
+        guard_target.chmod(0o600)
+        guard.symlink_to(guard_target)
+    elif not omit_guard and (
+        terminal is not None
+        or both_terminals
+        or acknowledgement is not None
+        or invalid_guard_mode
+    ):
+        guard.write_text(guard_payload, encoding='utf-8')
+        guard.chmod(0o644 if invalid_guard_mode else 0o600)
+
+    acknowledged_transaction = ''
+    if acknowledgement == 'exact':
+        acknowledged_transaction = str(transaction)
+    elif acknowledgement == 'mismatch':
+        mismatched = transaction_root / 'other-transaction'
+        mismatched.mkdir(mode=0o700)
+        (mismatched / 'ACTIVATION_STARTED').write_text(
+            'other-release\n',
+            encoding='utf-8',
+        )
+        acknowledged_transaction = str(mismatched)
+
+    verified_transaction = (
+        acknowledged_transaction if acknowledgement_verified_this_run else ''
+    )
+
+    venv_python = probe_root / 'venv' / 'bin' / 'python'
+    venv_python.parent.mkdir(parents=True)
+    venv_python.symlink_to(Path(sys.executable))
+    access_log = probe_root / 'access.log'
+    error_log = probe_root / 'error.log'
+    access_log.write_text('', encoding='utf-8')
+    error_log.write_text('', encoding='utf-8')
+
+    fake_curl = probe_root / 'curl'
+    _write_executable(
+        fake_curl,
+        """#!/bin/sh
+if [ "${FAKE_CURL_EXIT:-0}" -ne 0 ]; then
+    exit "$FAKE_CURL_EXIT"
+fi
+if [ -n "${FAKE_GROW_LOG:-}" ]; then
+    printf x >> "$FAKE_GROW_LOG"
+fi
+printf '%s' "${FAKE_CURL_STATUS:-200}"
+""",
+    )
+    fake_stat = probe_root / 'stat'
+    _write_executable(
+        fake_stat,
+        """#!/bin/sh
+[ "$1" = "-c" ] && [ "$2" = "%s" ] || exit 64
+wc -c < "$3" | tr -d ' '
+""",
+    )
+    harness = probe_root / 'probe-harness.sh'
+    _write_executable(
+        harness,
+        f"""#!/bin/bash
+set -u
+fail() {{ printf '%s\\n' "$*" >&2; }}
+log() {{ printf '%s\\n' "$*" >&2; }}
+RECOVERY_ACKNOWLEDGEMENT_VERIFIED_THIS_RUN={shlex.quote(verified_transaction)}
+{guard_functions}
+{probe_function}
+verify_formal_runtime_healthz_probe "$1" "$2" "$3"
+""",
+    )
+    env = os.environ.copy()
+    env.update({
+        'ACTIVATION_BOOT_GUARD_FILE': str(guard),
+        'CONTROL_OWNER_GID': str(os.getgid()),
+        'CONTROL_OWNER_UID': str(os.getuid()),
+        'CURL_BIN': str(fake_curl),
+        'FAKE_CURL_EXIT': str(curl_exit),
+        'FAKE_CURL_STATUS': status,
+        'FAKE_GROW_LOG': str(access_log) if grow_log else '',
+        'RECOVERY_ACKNOWLEDGED_TRANSACTION': acknowledged_transaction,
+        'TRANSACTION_ROOT': str(transaction_root),
+        'VENV_DIR': str(venv_python.parent.parent),
+    })
+    return subprocess.run(
+        [harness, access_log, error_log, fake_stat],
+        cwd=ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+
+def _configure_formal_smoke(transaction, *, provider='QWeather'):
+    """为激活事务准备完全离线的正式天气烟测桩。"""
+    runtime_log_helper = transaction['state_dir'] / 'runtime-log-boundary-test-helper'
+    _write_executable(
+        runtime_log_helper,
+        "#!/bin/sh\nexit 0\n",
+    )
+    transaction['env']['RUNTIME_LOG_BOUNDARY_TEST_HELPER'] = str(
+        runtime_log_helper
+    )
+    private_key = transaction['qweather_private_dir'] / 'qweather-formal-current.pem'
+    pending_key = (
+        transaction['qweather_private_dir']
+        / f'.qweather-jwt.pending-{transaction["new_release"].name}'
+    )
+    if not pending_key.exists() and not pending_key.is_symlink():
+        if private_key.is_file() and not private_key.is_symlink():
+            pending_key.write_bytes(private_key.read_bytes())
+            pending_key.chmod(0o600)
+        else:
+            _write_test_ed25519_private_key(pending_key, mode=0o600)
+    transaction['env']['QWEATHER_PENDING_KEY_PATH'] = str(pending_key)
+    transaction['env']['FAKE_QWEATHER_PENDING_KEY'] = str(pending_key)
+    transaction['env']['FAKE_QWEATHER_FINAL_KEY'] = str(private_key)
+    transaction['env']['FAKE_QWEATHER_KEY_STOP_AUDIT'] = str(
+        transaction['state_dir'] / 'qweather-key-stop-audit.json'
+    )
+    transaction['qweather_pending_key'] = pending_key
+    transaction['qweather_final_key'] = private_key
+    active_env = Path(transaction['env']['ENV_FILE'])
+    active_text = active_env.read_text(encoding='utf-8')
+    if (
+        'REDIS_URL=' not in active_text
+        and 'WEATHER_CACHE_REDIS_URL=' not in active_text
+    ):
+        active_env.write_text(
+            active_text + 'REDIS_URL=redis://127.0.0.1:6379/0\n',
+            encoding='utf-8',
+        )
+        active_env.chmod(0o600)
+    staged_text = f"""DEBUG=false
+WECHAT_FORMAL_RUNTIME=1
+WEB_PRIVATE_FEATURES_ENABLED=1
+RELEASE_VALUE=new
+QWEATHER_AUTH_MODE=jwt
+DATABASE_URI=sqlite:///{transaction['database_file'].as_posix()}
+REDIS_URL=redis://127.0.0.1:6379/0
+QWEATHER_KEY=
+QWEATHER_API_BASE=https://unit-test.qweatherapi.com/v7
+QWEATHER_JWT_KID=test-kid
+QWEATHER_JWT_PROJECT_ID=test-project
+QWEATHER_JWT_PRIVATE_KEY_PATH={private_key}
+QWEATHER_EXPECTED_KID=test-kid
+QWEATHER_EXPECTED_PROJECT_ID=test-project
+QWEATHER_CANONICAL_LOCATION=116.20,29.27
+QWEATHER_MONTHLY_REQUEST_LIMIT=40000
+QWEATHER_BUDGET_FAIL_CLOSED=1
+QWEATHER_REQUIRE_PERSISTENT_BUDGET=1
+ALLOW_WEATHER_UNAVAILABLE=0
+WEATHER_CACHE_TTL_MINUTES=30
+FORECAST_CACHE_TTL_MINUTES=30
+QWEATHER_WARNING_CACHE_TTL_MINUTES=30
+WEATHER_SYNC_LOCATIONS=都昌县
+WXPUSHER_APP_TOKEN=test-wxpusher-token
+FEATURE_HEAT_EXPOSURE_GIS=1
+WX_MINIPROGRAM_APPID={TEST_MINIPROGRAM_APPID}
+WX_MINIPROGRAM_SECRET=test-miniprogram-secret
+WX_MINIPROGRAM_PRIVACY_VERSION=2026-07-18
+PUBLIC_BASE_URL=https://yilaoweather.org
+"""
+    (transaction['new_release'] / 'staged.env').write_text(staged_text, encoding='utf-8')
+    (transaction['new_release'] / 'private-metadata' / 'source-commit.txt').write_text(
+        FORMAL_COMMIT + '\n',
+        encoding='utf-8',
+    )
+    transaction['env']['REQUIRE_WECHAT_READY'] = '1'
+    transaction['env']['DEPLOY_INTENT'] = 'wechat_formal'
+    transaction['env']['EXPECTED_WECHAT_FORMAL_RUNTIME'] = '1'
+    transaction['env']['EXPECTED_WEB_PRIVATE_FEATURES_ENABLED'] = '1'
+    transaction['env']['EXPECTED_RELEASE_COMMIT'] = FORMAL_COMMIT
+    counter_file = transaction['state_dir'] / 'formal-smoke-request-count'
+    transaction['env']['FAKE_FORMAL_SMOKE_COUNTER'] = str(counter_file)
+    budget_mode_file = transaction['state_dir'] / 'formal-smoke-budget-mode'
+    budget_helper = transaction['state_dir'] / 'formal-smoke-budget-snapshot'
+    _write_executable(
+        budget_helper,
+        f"""#!/usr/bin/env python3
+import json
+from pathlib import Path
+
+counter = Path({str(counter_file)!r})
+mode_file = Path({str(budget_mode_file)!r})
+count = int(counter.read_text(encoding='utf-8')) if counter.exists() else 0
+mode = mode_file.read_text(encoding='utf-8').strip() if mode_file.exists() else 'valid'
+if mode == 'duplicate':
+    used = 10 + (count * 4)
+    endpoints = {{
+        'weather_now': count * 2,
+        'weather_7d_forecast': count,
+        'weatheralert_v1_current': count,
+    }} if count else {{}}
+elif mode == 'zero':
+    used = 10
+    endpoints = {{}}
+elif mode == 'unexpected':
+    used = 10 + (count * 3)
+    endpoints = {{
+        'weather_now': count,
+        'weather_7d_forecast': count,
+        'airquality_v1_current': count,
+    }} if count else {{}}
+else:
+    used = 10 + (count * 3)
+    endpoints = {{
+        'weather_now': count,
+        'weather_7d_forecast': count,
+        'weatheralert_v1_current': count,
+    }} if count else {{}}
+print(json.dumps({{
+    'backend': 'redis',
+    'month': '2026-07',
+    'used': used,
+    'endpoints': endpoints,
+}}, sort_keys=True, separators=(',', ':')))
+""",
+    )
+    transaction['env']['QWEATHER_BUDGET_SNAPSHOT_HELPER'] = str(budget_helper)
+    lease_token_file = transaction['state_dir'] / 'formal-smoke-lease-token'
+    lease_mode_file = transaction['state_dir'] / 'formal-smoke-lease-mode'
+    lease_reservation_count = (
+        transaction['state_dir'] / 'formal-smoke-lease-reservation-count'
+    )
+    lease_renewal_count = (
+        transaction['state_dir'] / 'formal-smoke-lease-renewal-count'
+    )
+    lease_release_count = (
+        transaction['state_dir'] / 'formal-smoke-lease-release-count'
+    )
+    lease_observation_file = (
+        transaction['state_dir'] / 'formal-smoke-lease-observation.json'
+    )
+    lease_action_log = transaction['state_dir'] / 'formal-smoke-lease-actions.log'
+    lease_helper = transaction['state_dir'] / 'formal-smoke-lease-reserve'
+    _write_executable(
+        lease_helper,
+        f"""#!/usr/bin/env python3
+import json
+import os
+import sqlite3
+import time
+from pathlib import Path
+
+token = os.environ.get('CASE_WEATHER_FORMAL_SMOKE_LEASE_TOKEN', '')
+if len(token) != 64 or any(char not in '0123456789abcdef' for char in token):
+    raise SystemExit(92)
+action = os.environ.get('CASE_WEATHER_FORMAL_SMOKE_LEASE_ACTION', '')
+mode_file = Path({str(lease_mode_file)!r})
+mode = mode_file.read_text(encoding='utf-8').strip() if mode_file.exists() else ''
+token_file = Path({str(lease_token_file)!r})
+action_log = Path({str(lease_action_log)!r})
+with action_log.open('a', encoding='utf-8') as handle:
+    handle.write(action + '\\n')
+
+def increment(path_value):
+    path = Path(path_value)
+    count = int(path.read_text(encoding='utf-8')) + 1 if path.exists() else 1
+    path.write_text(str(count), encoding='utf-8')
+
+if action == 'reserve':
+    increment({str(lease_reservation_count)!r})
+    transaction_root = Path({str(transaction['state_dir'] / 'backups' / 'deploy-transactions')!r})
+    journals = list(transaction_root.glob('*/formal-smoke-lease.journal'))
+    if len(journals) != 1:
+        raise SystemExit(94)
+    journal_values = {{}}
+    for line in journals[0].read_text(encoding='utf-8').splitlines():
+        key, separator, value = line.partition('=')
+        if not separator or key in journal_values:
+            raise SystemExit(95)
+        journal_values[key] = value
+    if (
+        set(journal_values)
+        != {{'transaction_id', 'redis_backend_sha256', 'lease_token'}}
+        or journal_values['transaction_id'] != journals[0].parent.name
+        or journal_values['lease_token'] != token
+        or len(journal_values['redis_backend_sha256']) != 64
+        or any(
+            char not in '0123456789abcdef'
+            for char in journal_values['redis_backend_sha256']
+        )
+    ):
+        raise SystemExit(96)
+    active_env = Path({str(transaction['state_dir'] / '.env')!r})
+    active_values = {{}}
+    for line in active_env.read_text(encoding='utf-8').splitlines():
+        key, separator, value = line.partition('=')
+        if separator:
+            active_values[key] = value
+    with sqlite3.connect({str(transaction['database_file'])!r}) as connection:
+        database_value = connection.execute(
+            'SELECT value FROM release_state'
+        ).fetchone()[0]
+    systemctl_log = Path({str(transaction['systemctl_log'])!r})
+    Path({str(lease_observation_file)!r}).write_text(
+        json.dumps({{
+            'active_env_release': active_values.get('RELEASE_VALUE'),
+            'current_release': str(Path({str(transaction['current_link'])!r}).resolve()),
+            'database_value': database_value,
+            'lease_env_file': os.environ.get('CASE_WEATHER_ENV_FILE'),
+            'lease_journal_fields': sorted(journal_values),
+            'lease_journal_precedes_reserve': True,
+            'systemctl_actions': (
+                systemctl_log.read_text(encoding='utf-8').splitlines()
+                if systemctl_log.exists()
+                else []
+            ),
+        }}, sort_keys=True),
+        encoding='utf-8',
+    )
+    if mode == 'busy':
+        raise SystemExit(75)
+    token_file.write_text(token, encoding='ascii')
+    if mode == 'error-after-reserve':
+        raise SystemExit(75)
+    if mode == 'pause-after-reserve':
+        while True:
+            time.sleep(0.05)
+elif action == 'renew':
+    increment({str(lease_renewal_count)!r})
+    if mode == 'expire-before-renew':
+        token_file.unlink(missing_ok=True)
+        raise SystemExit(75)
+    if mode == 'foreign-before-renew':
+        token_file.write_text('f' * 64, encoding='ascii')
+        raise SystemExit(75)
+    if not token_file.exists() or token_file.read_text(encoding='ascii') != token:
+        raise SystemExit(75)
+elif action == 'release':
+    increment({str(lease_release_count)!r})
+    if token_file.exists() and token_file.read_text(encoding='ascii') == token:
+        token_file.unlink()
+else:
+    raise SystemExit(93)
+""",
+    )
+    transaction['env']['FORMAL_SMOKE_LEASE_HELPER'] = str(lease_helper)
+    weather_sync = transaction['new_release'] / 'app' / 'scripts' / 'weather_cache_sync.sh'
+    _write_executable(
+        weather_sync,
+        f"""#!/bin/bash
+set -euo pipefail
+if [ "$#" -ne 1 ] || [ "$1" != "--skip-nowcast" ]; then
+    echo '正式烟测必须显式跳过 nowcast' >&2
+    exit 91
+fi
+if [ -z "${{CASE_WEATHER_FORMAL_SMOKE_LEASE_TOKEN:-}}" ] \
+    || [ "$(cat {str(lease_token_file)!r})" != "$CASE_WEATHER_FORMAL_SMOKE_LEASE_TOKEN" ]; then
+    echo '正式烟测缺少预占的全局租约' >&2
+    exit 92
+fi
+"$VENV_PY" - "$DATABASE_FILE" "{counter_file}" "{provider}" <<'PY'
+import json
+import sqlite3
+import sys
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+database, counter_path, provider = sys.argv[1:]
+counter = Path(counter_path)
+count = int(counter.read_text(encoding='utf-8')) + 1 if counter.exists() else 1
+counter.write_text(str(count), encoding='utf-8')
+now = datetime.now(timezone.utc)
+snapshot_id = f'formal-snapshot-{{count}}'
+current = {{'temperature': 31, 'humidity': 70, 'data_source': provider, 'is_mock': False}}
+forecast = [{{
+    'date': now.date().isoformat(),
+    'temperature_max': 34,
+    'temperature_min': 27,
+    'data_source': provider,
+    'is_mock': False,
+}}]
+source_status = {{
+    'weather': {{'available': True, 'provider': provider, 'is_mock': False}},
+    'forecast': {{
+        'available': True,
+        'providers': [provider],
+        'meta': {{'source': provider}},
+    }},
+    'warnings': {{'available': True, 'count': 0, 'status': 'ok'}},
+}}
+connection = sqlite3.connect(database)
+try:
+    connection.execute(
+        '''
+        INSERT INTO miniprogram_snapshots(
+            snapshot_id, fetched_at, expires_at, available,
+            current_json, forecast_json, source_status_json
+        ) VALUES (?, ?, ?, 1, ?, ?, ?)
+        ''',
+        (
+            snapshot_id,
+            now.isoformat(),
+            (now + timedelta(hours=1)).isoformat(),
+            json.dumps(current),
+            json.dumps(forecast),
+            json.dumps(source_status),
+        ),
+    )
+    connection.commit()
+finally:
+    connection.close()
+PY
+""",
+    )
+    connection = sqlite3.connect(transaction['database_file'])
+    try:
+        connection.execute(
+            '''
+            CREATE TABLE IF NOT EXISTS miniprogram_snapshots (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                snapshot_id TEXT NOT NULL UNIQUE,
+                fetched_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                available INTEGER NOT NULL,
+                current_json TEXT,
+                forecast_json TEXT,
+                source_status_json TEXT
+            )
+            '''
+        )
+        connection.commit()
+    finally:
+        connection.close()
+    return staged_text, counter_file
+
+
+def _configure_web_formal_mini_only(transaction):
+    """模拟已在线的 formal=1、双端网页关闭态做网页/后端升级。"""
+    staged_text, counter_file = _configure_formal_smoke(transaction)
+    staged_text = staged_text.replace(
+        'WEB_PRIVATE_FEATURES_ENABLED=1',
+        'WEB_PRIVATE_FEATURES_ENABLED=0',
+    )
+    staged_env = transaction['new_release'] / 'staged.env'
+    staged_env.write_text(staged_text, encoding='utf-8')
+
+    pending_key = transaction['qweather_pending_key']
+    final_key = transaction['qweather_final_key']
+    final_key.write_bytes(pending_key.read_bytes())
+    final_key.chmod(0o640)
+    pending_key.unlink()
+
+    active_text = staged_text.replace('RELEASE_VALUE=new', 'RELEASE_VALUE=old')
+    active_env = Path(transaction['env']['ENV_FILE'])
+    active_env.write_text(active_text, encoding='utf-8')
+    active_env.chmod(0o600)
+
+    transaction['env']['DEPLOY_INTENT'] = 'web_backend_only'
+    transaction['env']['REQUIRE_WECHAT_READY'] = '1'
+    transaction['env']['EXPECTED_WECHAT_FORMAL_RUNTIME'] = '1'
+    transaction['env']['EXPECTED_WEB_PRIVATE_FEATURES_ENABLED'] = '0'
+    transaction['env']['QWEATHER_PENDING_KEY_PATH'] = ''
+    transaction['env'].pop('FAKE_QWEATHER_KEY_STOP_AUDIT', None)
+    transaction['auto_stage_qweather_pending'] = False
+    return counter_file
+
+
+def _retarget_formal_retry(transaction, suffix='retry'):
+    """用新的 release ID 重试同一冻结 commit，避免复用旧 pending 路径。"""
+    source_release = transaction['new_release']
+    retry_release = source_release.parent / f'{source_release.name}-{suffix}'
+    shutil.copytree(source_release, retry_release, symlinks=True)
+    pending = (
+        transaction['qweather_private_dir']
+        / f'.qweather-jwt.pending-{retry_release.name}'
+    )
+    transaction['new_release'] = retry_release
+    transaction['qweather_pending_key'] = pending
+    transaction['env']['NEW_RELEASE'] = str(retry_release)
+    transaction['env']['STAGED_ENV_FILE'] = str(retry_release / 'staged.env')
+    transaction['env']['QWEATHER_PENDING_KEY_PATH'] = str(pending)
+    transaction['env']['FAKE_QWEATHER_PENDING_KEY'] = str(pending)
+    _write_runtime_smoke_receipt(
+        retry_release / 'private-metadata' / 'runtime-smoke.json',
+        app_dir=retry_release / 'app',
+        python_path=retry_release / 'venv' / 'bin' / 'python',
+    )
+    return retry_release
+
+
+def _configure_formal_jwt_smoke(transaction, private_key, *, provider='QWeather'):
+    staged_text, counter_file = _configure_formal_smoke(
+        transaction,
+        provider=provider,
+    )
+    pending = transaction['qweather_pending_key']
+    pending.unlink(missing_ok=True)
+    if private_key.is_symlink():
+        pending.symlink_to(private_key)
+    else:
+        pending.write_bytes(private_key.read_bytes())
+        pending.chmod(0o600)
+    return staged_text, counter_file
+
+
+@pytest.mark.parametrize('changed_state', ('active-env', 'current-link'))
+def test_stale_candidate_base_state_is_rejected_inside_activation_lock(
+    tmp_path,
+    changed_state,
+):
+    transaction = _prepare_transaction(tmp_path)
+    _write_candidate_base_state(transaction)
+    if changed_state == 'active-env':
+        active_env = Path(transaction['env']['ENV_FILE'])
+        active_env.write_text(
+            active_env.read_text(encoding='utf-8') + 'CONCURRENT_VALUE=1\n',
+            encoding='utf-8',
+        )
+    else:
+        concurrent_release = transaction['release_root'] / 'releases' / 'concurrent'
+        concurrent_release.mkdir()
+        transaction['current_link'].unlink()
+        transaction['current_link'].symlink_to(concurrent_release)
+
+    result = _run_activation(transaction, refresh_base_state=False)
+
+    assert result.returncode != 0
+    assert '候选配置基线已变化' in result.stderr
+    assert _database_value(transaction['database_file']) == 'old'
+    assert not (
+        transaction['state_dir']
+        / 'deployments'
+        / 'activation-in-progress'
+    ).exists()
+    transaction_root = (
+        transaction['state_dir']
+        / 'backups'
+        / 'deploy-transactions'
+    )
+    assert not transaction_root.exists() or not list(transaction_root.iterdir())
+
+
+def test_web_backend_candidate_cannot_change_qweather_baseline(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    _write_candidate_base_state(transaction)
+    staged_env = transaction['new_release'] / 'staged.env'
+    staged_env.write_text(
+        staged_env.read_text(encoding='utf-8')
+        + 'QWEATHER_AUTH_MODE=disabled\n',
+        encoding='utf-8',
+    )
+
+    result = _run_activation(transaction, refresh_base_state=False)
+
+    assert result.returncode != 0
+    assert '候选配置基线已变化' in result.stderr
+    assert _database_value(transaction['database_file']) == 'old'
+    assert not list(
+        (
+            transaction['state_dir']
+            / 'backups'
+            / 'deploy-transactions'
+        ).iterdir()
+    )
+
+
+def test_formal_runtime_cannot_be_downgraded_by_deploy_gate(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    staged_env = transaction['new_release'] / 'staged.env'
+    staged_env.write_text(
+        staged_env.read_text(encoding='utf-8').replace(
+            'WECHAT_FORMAL_RUNTIME=0',
+            'WECHAT_FORMAL_RUNTIME=1',
+        ).replace(
+            'WEB_PRIVATE_FEATURES_ENABLED=0',
+            'WEB_PRIVATE_FEATURES_ENABLED=1',
+        ),
+        encoding='utf-8',
+    )
+
+    result = _run_activation(transaction)
+
+    assert result.returncode != 0
+    assert '部署门禁与候选 WECHAT_FORMAL_RUNTIME 不一致' in result.stderr
+    assert _database_value(transaction['database_file']) == 'old'
+
+
+def test_formal_activation_rejects_disabled_dual_web_before_mutation(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    _configure_formal_smoke(transaction)
+    staged_env = transaction['new_release'] / 'staged.env'
+    staged_env.write_text(
+        staged_env.read_text(encoding='utf-8').replace(
+            'WEB_PRIVATE_FEATURES_ENABLED=1',
+            'WEB_PRIVATE_FEATURES_ENABLED=0',
+        ),
+        encoding='utf-8',
+    )
+
+    result = _run_activation(transaction)
+
+    assert result.returncode != 0
+    assert '正式态与双端网页开关均为 1' in result.stderr
+    assert _database_value(transaction['database_file']) == 'old'
+    transaction_root = (
+        transaction['state_dir']
+        / 'backups'
+        / 'deploy-transactions'
+    )
+    assert not transaction_root.exists() or not list(transaction_root.iterdir())
+
+
+def test_web_backend_candidate_cannot_enable_dual_web_over_closed_base(
+    tmp_path,
+):
+    transaction = _prepare_transaction(tmp_path)
+    staged_env = transaction['new_release'] / 'staged.env'
+    staged_env.write_text(
+        staged_env.read_text(encoding='utf-8').replace(
+            'WEB_PRIVATE_FEATURES_ENABLED=0',
+            'WEB_PRIVATE_FEATURES_ENABLED=1',
+        ),
+        encoding='utf-8',
+    )
+    transaction['env']['EXPECTED_WEB_PRIVATE_FEATURES_ENABLED'] = '1'
+
+    result = _run_activation(transaction)
+
+    assert result.returncode != 0
+    assert '必须继承活动环境的正式态与双端网页开关' in result.stderr
+    assert _database_value(transaction['database_file']) == 'old'
+    transaction_root = (
+        transaction['state_dir']
+        / 'backups'
+        / 'deploy-transactions'
+    )
+    assert not transaction_root.exists() or not list(transaction_root.iterdir())
+
+
+@pytest.mark.parametrize(
+    'mutation',
+    ('missing', 'duplicate', 'invalid'),
+)
+def test_runtime_gate_rejects_non_unique_candidate_before_mutation(
+    tmp_path,
+    mutation,
+):
+    transaction = _prepare_transaction(tmp_path)
+    staged_env = transaction['new_release'] / 'staged.env'
+    staged_text = staged_env.read_text(encoding='utf-8')
+    if mutation == 'missing':
+        staged_text = staged_text.replace(
+            'WEB_PRIVATE_FEATURES_ENABLED=0\n',
+            '',
+        )
+    elif mutation == 'duplicate':
+        staged_text += 'WEB_PRIVATE_FEATURES_ENABLED=0\n'
+    else:
+        staged_text = staged_text.replace(
+            'WEB_PRIVATE_FEATURES_ENABLED=0',
+            'WEB_PRIVATE_FEATURES_ENABLED=yes',
+        )
+    staged_env.write_text(staged_text, encoding='utf-8')
+
+    result = _run_activation(transaction)
+
+    assert result.returncode != 0
+    assert '候选正式态、双端网页开关或活动基线不完整' in result.stderr
+    assert _database_value(transaction['database_file']) == 'old'
+    transaction_root = (
+        transaction['state_dir']
+        / 'backups'
+        / 'deploy-transactions'
+    )
+    assert not transaction_root.exists() or not list(transaction_root.iterdir())
+
+
+def test_activation_requires_explicit_runtime_gate_expectations(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    transaction['env'].pop('EXPECTED_WEB_PRIVATE_FEATURES_ENABLED')
+
+    result = _run_activation(transaction)
+
+    assert result.returncode != 0
+    assert (
+        'EXPECTED_WEB_PRIVATE_FEATURES_ENABLED 必须显式设置为 0 或 1'
+        in result.stderr
+    )
+    assert _database_value(transaction['database_file']) == 'old'
+    transaction_root = (
+        transaction['state_dir']
+        / 'backups'
+        / 'deploy-transactions'
+    )
+    assert not transaction_root.exists()
+
+
+@pytest.mark.parametrize(
+    ('migration_exit', 'expected_returncode'),
+    ((0, 0), (1, 1)),
+)
+def test_web_backend_formal_mini_only_can_activate_or_rollback(
+    tmp_path,
+    migration_exit,
+    expected_returncode,
+):
+    transaction = _prepare_transaction(
+        tmp_path,
+        migration_exit=migration_exit,
+    )
+    _configure_web_formal_mini_only(transaction)
+    if migration_exit == 0:
+        active_env = Path(transaction['env']['ENV_FILE'])
+        active_env.write_text(
+            active_env.read_text(encoding='utf-8').replace(
+                'WEB_PRIVATE_FEATURES_ENABLED=0\n',
+                '',
+            ),
+            encoding='utf-8',
+        )
+
+    result = _run_activation(transaction)
+
+    assert result.returncode == expected_returncode, result.stderr
+    if migration_exit == 0:
+        assert transaction['current_link'].resolve() == transaction[
+            'new_release'
+        ].resolve()
+        assert _database_value(transaction['database_file']) == 'new'
+        assert 'WEB_PRIVATE_FEATURES_ENABLED=0' in Path(
+            transaction['env']['ENV_FILE']
+        ).read_text(encoding='utf-8')
+    else:
+        assert transaction['current_link'].resolve() == transaction[
+            'old_release'
+        ].resolve()
+        assert _database_value(transaction['database_file']) == 'old'
+        assert 'WEB_PRIVATE_FEATURES_ENABLED=0' in Path(
+            transaction['env']['ENV_FILE']
+        ).read_text(encoding='utf-8')
+
+
+def test_success_switches_release_only_after_migration_and_health(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    started_at = int(time.time())
+    original_crontab = transaction['root_crontab'].read_bytes()
+
+    result = _run_activation(transaction)
+
+    assert result.returncode == 0, result.stderr
+    assert transaction['current_link'].resolve() == transaction['new_release'].resolve()
+    assert _database_value(transaction['database_file']) == 'new'
+    assert (transaction['state_dir'] / 'deployments' / 'current-release').read_text(
+        encoding='utf-8'
+    ).strip() == str(transaction['new_release'])
+    assert 'RELEASE_VALUE=new' in (transaction['state_dir'] / '.env').read_text(
+        encoding='utf-8'
+    )
+    assert not (transaction['new_release'] / 'staged.env').exists()
+    for unit in INSTALL_UNITS:
+        installed = (transaction['unit_dir'] / unit).read_text(encoding='utf-8')
+        if unit == 'case-weather-backup.service':
+            assert 'EnvironmentFile=' in installed
+            assert 'ExecStart=/bin/bash ' in installed
+            assert 'TimeoutStartSec=15min' in installed
+        else:
+            assert installed == f'new unit {unit}\n'
+    for unit in LEGACY_UNITS + RETIRED_BOOTSTRAP_UNITS:
+        assert not (transaction['unit_dir'] / unit).exists()
+        assert not (transaction['fake_state'] / f'{unit}.enabled').exists()
+        assert not (transaction['fake_state'] / f'{unit}.active').exists()
+    for unit in ('case-weather.service',) + START_TIMER_UNITS:
+        assert (transaction['fake_state'] / f'{unit}.active').exists()
+    for unit in DEFERRED_TIMER_UNITS:
+        assert not (transaction['fake_state'] / f'{unit}.active').exists()
+        assert not (transaction['fake_state'] / f'{unit}.enabled').exists()
+    cron_bytes = transaction['root_crontab'].read_bytes()
+    assert cron_bytes == original_crontab
+    assert not (transaction['fake_state'] / 'crontab-install-count').exists()
+    env_text = (transaction['state_dir'] / '.env').read_text(encoding='utf-8')
+    gate_line = next(
+        line for line in env_text.splitlines()
+        if line.startswith('QWEATHER_NETWORK_NOT_BEFORE_EPOCH=')
+    )
+    assert int(gate_line.split('=', 1)[1]) >= started_at + 1800
+    committed_markers = list(
+        (transaction['state_dir'] / 'backups').rglob('COMMITTED')
+    )
+    assert len(committed_markers) == 1
+    transaction_dir = committed_markers[0].parent
+    captured_enable_states = _captured_enable_states(transaction_dir)
+    assert {
+        unit: captured_enable_states[unit]
+        for unit in STATIC_SERVICE_UNITS
+    } == dict.fromkeys(STATIC_SERVICE_UNITS, 'static')
+    assert (transaction_dir / 'root-crontab.before').read_bytes() == original_crontab
+    assert (transaction_dir / 'root-crontab.before.sha256').read_text(
+        encoding='ascii'
+    ).strip() == hashlib.sha256(original_crontab).hexdigest()
+    validation_archives = list(
+        (transaction_dir / 'managed-backup-validation').glob('*.db.gz')
+    )
+    assert len(validation_archives) == 1
+    assert (transaction_dir / 'managed-backup-validation.db').is_file()
+    assert (transaction_dir / 'managed-daily-backup-validation.db').is_file()
+    assert (transaction_dir / 'ACTUAL_BACKUP_UNIT_VERIFIED').is_file()
+    assert not (
+        transaction['state_dir'] / 'deployments' / 'activation-in-progress'
+    ).exists()
+    assert not (
+        Path(transaction['env']['RUNTIME_BOOT_GUARD_DIR']) / 'activation-permit'
+    ).exists()
+    backup_runtime = (
+        transaction['state_dir'] / 'backups' / 'backup-runtime.env'
+    ).read_text(encoding='utf-8')
+    assert f'BACKUP_DATABASE_FILE={transaction["database_file"]}' in backup_runtime
+    actions = transaction['systemctl_log'].read_text(encoding='utf-8').splitlines()
+    transient_index = next(
+        index for index, action in enumerate(actions)
+        if action.startswith('systemd-run ')
+    )
+    transient_action = actions[transient_index]
+    assert '--property=TimeoutStartSec=15min' in transient_action
+    assert '--if-present' not in transient_action
+    assert f'--setenv=BACKUP_DATABASE_FILE={transaction["database_file"]}' in transient_action
+    actual_backup_index = actions.index('start case-weather-backup.service')
+    assert transient_index < actions.index('restart case-weather.service')
+    assert transient_index < actual_backup_index < actions.index('restart case-weather.service')
+
+
+def test_crontab_migration_is_idempotent_when_legacy_lines_are_absent(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    unrelated = b'MAILTO=ops@example.invalid\n17 2 * * * /usr/local/bin/unrelated-job'
+    transaction['root_crontab'].write_bytes(unrelated)
+
+    result = _run_activation(transaction)
+
+    assert result.returncode == 0, result.stderr
+    assert transaction['root_crontab'].read_bytes() == unrelated
+    assert not (transaction['fake_state'] / 'crontab-install-count').exists()
+
+
+def test_second_release_with_no_legacy_cron_still_rolls_back_migration_failure(
+    tmp_path,
+):
+    transaction = _prepare_transaction(tmp_path, migration_exit=23)
+    unrelated = b'MAILTO=ops@example.invalid\n17 2 * * * /usr/local/bin/unrelated-job'
+    transaction['root_crontab'].write_bytes(unrelated)
+
+    result = _run_activation(transaction)
+
+    assert result.returncode == 23
+    assert transaction['root_crontab'].read_bytes() == unrelated
+    assert _database_value(transaction['database_file']) == 'old'
+    assert transaction['current_link'].resolve() == transaction['old_release'].resolve()
+    assert 'RELEASE_VALUE=old' in (transaction['state_dir'] / '.env').read_text(
+        encoding='utf-8'
+    )
+
+    assert list((transaction['state_dir'] / 'backups').rglob('ROLLED_BACK'))
+    assert (transaction['fake_state'] / 'case-weather.service.active').exists()
+
+
+def test_crontab_migration_keeps_missing_root_crontab_absent(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    transaction['root_crontab'].unlink()
+
+    result = _run_activation(transaction)
+
+    assert result.returncode == 0, result.stderr
+    assert not transaction['root_crontab'].exists()
+    assert not (transaction['fake_state'] / 'crontab-install-count').exists()
+
+
+@pytest.mark.parametrize('backup_style', ('legacy', 'release'))
+def test_activation_rejects_legacy_cron_until_controlled_migration(
+    tmp_path,
+    backup_style,
+):
+    transaction = _prepare_transaction(tmp_path)
+    legacy_backup, sync_cron = _legacy_cron_lines(transaction['state_dir'])
+    backup_cron = (
+        legacy_backup
+        if backup_style == 'legacy'
+        else _release_backup_cron_line(
+            transaction['state_dir'],
+            transaction['release_root'],
+        )
+    )
+    transaction['root_crontab'].write_text(
+        f'MAILTO=ops@example.invalid\n{backup_cron}\n{sync_cron}\n',
+        encoding='utf-8',
+    )
+    original = transaction['root_crontab'].read_bytes()
+
+    result = _run_activation(transaction)
+
+    assert result.returncode != 0
+    assert '受控维护窗口' in result.stderr
+    assert transaction['root_crontab'].read_bytes() == original
+    assert not (transaction['fake_state'] / 'crontab-install-count').exists()
+    actions = transaction['systemctl_log'].read_text(encoding='utf-8').splitlines()
+    assert not any(
+        action.startswith(('stop ', 'start ', 'restart ', 'enable ', 'disable '))
+        for action in actions
+    )
+
+
+def test_crontab_concurrent_unrelated_change_is_preserved_without_install(
+    tmp_path,
+):
+    transaction = _prepare_transaction(tmp_path)
+    original = transaction['root_crontab'].read_bytes()
+    concurrent = '\n15 4 * * * /usr/local/sbin/concurrent-before-install\n'
+    transaction['env']['FAKE_CRONTAB_APPEND_AFTER_READ_COUNT'] = '1'
+    transaction['env']['FAKE_CRONTAB_APPEND_BEFORE_INSTALL'] = concurrent
+
+    result = _run_activation(transaction)
+
+    assert result.returncode == 0, result.stderr
+    assert transaction['root_crontab'].read_bytes() == original + concurrent.encode('utf-8')
+    assert not (transaction['fake_state'] / 'crontab-install-count').exists()
+
+
+@pytest.mark.parametrize('cron_state', ('partial', 'duplicate', 'drift'))
+def test_crontab_preflight_rejects_partial_duplicate_or_drift_before_mutation(
+    tmp_path,
+    cron_state,
+):
+    transaction = _prepare_transaction(tmp_path)
+    backup_cron, sync_cron = _legacy_cron_lines(transaction['state_dir'])
+    if cron_state == 'partial':
+        cron_text = f'MAILTO=ops@example.invalid\n{backup_cron}\n'
+    elif cron_state == 'duplicate':
+        cron_text = f'{backup_cron}\n{backup_cron}\n{sync_cron}\n'
+    else:
+        cron_text = f'5 3 * * * {transaction["state_dir"]}/backup.sh\n{sync_cron}\n'
+    original = cron_text.encode('utf-8')
+    transaction['root_crontab'].write_bytes(original)
+
+    result = _run_activation(transaction)
+
+    assert result.returncode != 0
+    assert '尚未修改生产状态' in result.stderr
+    assert transaction['root_crontab'].read_bytes() == original
+    assert _database_value(transaction['database_file']) == 'old'
+    assert transaction['current_link'].resolve() == transaction['old_release'].resolve()
+    actions = transaction['systemctl_log'].read_text(encoding='utf-8').splitlines()
+    assert not any(action.startswith(('stop ', 'start ', 'restart ', 'enable ', 'disable ')) for action in actions)
+    assert not (transaction['fake_state'] / 'crontab-install-count').exists()
+
+
+def test_scheduler_stop_order_and_rollback_never_restart_legacy_oneshots(tmp_path):
+    transaction = _prepare_transaction(tmp_path, migration_exit=23)
+
+    result = _run_activation(transaction)
+
+    assert result.returncode == 23
+    actions = transaction['systemctl_log'].read_text(encoding='utf-8').splitlines()
+    stoppable_units = tuple(
+        unit for unit in ALL_UNITS if unit != 'case-weather-backup.service'
+    )
+    first_stop = {
+        unit: actions.index(f'stop {unit}')
+        for unit in stoppable_units
+    }
+    assert max(first_stop[unit] for unit in MANAGED_TIMER_UNITS + LEGACY_TIMER_UNITS) < min(
+        first_stop[unit]
+        for unit in SERVICE_UNITS + LEGACY_SERVICE_UNITS
+        if unit != 'case-weather-backup.service'
+    )
+    assert 'stop case-weather-backup.service' not in actions
+    for unit in ('case-weather-backup.service',) + LEGACY_SERVICE_UNITS:
+        assert f'start {unit}' not in actions
+        assert f'restart {unit}' not in actions
+
+
+def test_rollback_never_rewrites_unrelated_cron(tmp_path):
+    transaction = _prepare_transaction(tmp_path, migration_exit=23)
+    original = transaction['root_crontab'].read_bytes()
+
+    result = _run_activation(transaction)
+
+    assert result.returncode == 23
+    assert transaction['root_crontab'].read_bytes() == original
+    assert not (transaction['fake_state'] / 'crontab-install-count').exists()
+
+
+def test_activation_fails_closed_when_legacy_process_survives_stop(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    (transaction['fake_state'] / 'legacy-process-running').touch()
+    original = transaction['root_crontab'].read_bytes()
+
+    result = _run_activation(transaction)
+
+    assert result.returncode != 0
+    assert '仍在运行的旧调度进程' in result.stderr
+    assert transaction['root_crontab'].read_bytes() == original
+    assert _database_value(transaction['database_file']) == 'old'
+
+
+def test_active_daily_backup_blocks_release_before_any_mutation(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    (transaction['fake_state'] / 'case-weather-backup.service.activating').touch()
+    original_crontab = transaction['root_crontab'].read_bytes()
+
+    result = _run_activation(transaction)
+
+    assert result.returncode != 0
+    assert '未中止备份' in result.stderr
+    assert transaction['root_crontab'].read_bytes() == original_crontab
+    assert _database_value(transaction['database_file']) == 'old'
+    actions = transaction['systemctl_log'].read_text(encoding='utf-8').splitlines()
+    assert 'stop case-weather-backup.service' not in actions
+    assert not any(
+        action.startswith(('stop ', 'start ', 'restart ', 'enable ', 'disable '))
+        for action in actions
+    )
+
+
+@pytest.mark.parametrize(
+    ('environment', 'expected_message'),
+    (
+        ({'FAKE_FAIL_BACKUP_STATE_QUERY': '1'}, 'LoadState/ActiveState'),
+        ({'FAKE_BACKUP_ACTIVE_STATE': 'maintenance'}, 'LoadState/ActiveState'),
+        (
+            {
+                'FAKE_COMBINED_BACKUP_LOAD_STATE': 'maintenance',
+                'FAKE_BACKUP_ACTIVE_STATE': 'inactive',
+            },
+            'LoadState/ActiveState',
+        ),
+    ),
+)
+def test_backup_state_uncertainty_fails_closed_before_mutation(
+    tmp_path,
+    environment,
+    expected_message,
+):
+    transaction = _prepare_transaction(tmp_path)
+    transaction['env'].update(environment)
+    original_crontab = transaction['root_crontab'].read_bytes()
+
+    result = _run_activation(transaction)
+
+    assert result.returncode != 0
+    assert expected_message in result.stderr
+    assert transaction['root_crontab'].read_bytes() == original_crontab
+    assert _database_value(transaction['database_file']) == 'old'
+    actions = transaction['systemctl_log'].read_text(encoding='utf-8').splitlines()
+    assert not any(
+        action.startswith(('stop ', 'start ', 'restart ', 'enable ', 'disable '))
+        for action in actions
+    )
+
+
+def test_load_state_query_failure_during_capture_is_pre_mutation(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    transaction['env']['FAKE_FAIL_LOAD_STATE_QUERY'] = 'case-weather.service'
+
+    result = _run_activation(transaction)
+
+    assert result.returncode != 0
+    assert '无法可靠读取 systemd 单元 LoadState' in result.stderr
+    assert transaction['current_link'].resolve() == transaction['old_release'].resolve()
+    assert _database_value(transaction['database_file']) == 'old'
+    assert 'RELEASE_VALUE=old' in (transaction['state_dir'] / '.env').read_text(
+        encoding='utf-8'
+    )
+    actions = transaction['systemctl_log'].read_text(encoding='utf-8').splitlines()
+    assert not any(
+        action.startswith(('stop ', 'start ', 'restart ', 'enable ', 'disable '))
+        for action in actions
+    )
+    for unit in ALL_UNITS:
+        assert (transaction['unit_dir'] / unit).read_text(encoding='utf-8') == (
+            f'old unit {unit}\n'
+        )
+
+
+def test_load_state_query_failure_during_quiesce_never_reaches_migration(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    transaction['env']['FAKE_FAIL_LOAD_STATE_QUERY_ON'] = 'case-weather.service:3'
+
+    result = _run_activation(transaction)
+
+    assert result.returncode != 0
+    assert '无法可靠读取 systemd 单元 LoadState' in result.stderr
+    assert transaction['current_link'].resolve() == transaction['old_release'].resolve()
+    assert _database_value(transaction['database_file']) == 'old'
+    assert 'RELEASE_VALUE=old' in (transaction['state_dir'] / '.env').read_text(
+        encoding='utf-8'
+    )
+    assert list((transaction['state_dir'] / 'backups').rglob('ROLLED_BACK'))
+    assert not list((transaction['state_dir'] / 'backups').rglob('ROLLBACK_REQUIRED.txt'))
+
+
+def test_missing_guard_dropin_is_installed_inside_activation_transaction(
+    tmp_path,
+):
+    transaction = _prepare_transaction(tmp_path)
+    target = (
+        transaction['unit_dir']
+        / 'case-weather.service.d'
+        / '10-case-weather-activation-guard.conf'
+    )
+    target.unlink()
+    result = _run_activation(transaction)
+
+    assert result.returncode == 0, result.stderr
+    assert target.read_text(encoding='utf-8') == (
+        '[Unit]\n'
+        f'ConditionPathExists=|!{transaction["state_dir"]}/deployments/'
+        'activation-in-progress\n'
+        f'ConditionPathExists=|{transaction["env"]["RUNTIME_BOOT_GUARD_DIR"]}/'
+        'activation-permit\n'
+    )
+
+
+def test_guard_temp_rename_failure_rolls_back_without_residue(tmp_path):
+    transaction = _prepare_transaction(tmp_path, migration_exit=23)
+    fake_bin = Path(transaction['env']['SYSTEMCTL_BIN']).parent
+    failing_mv = fake_bin / 'mv'
+    failure_marker = tmp_path / 'guard-temp-mv-failed-once'
+    _write_executable(
+        failing_mv,
+        """#!/bin/sh
+source_path="$1"
+if [ "$source_path" = "-f" ]; then
+    source_path="$2"
+fi
+case "$source_path" in
+    */.10-case-weather-activation-guard.conf.next)
+        if [ ! -e "$FAKE_GUARD_MV_FAIL_MARKER" ]; then
+            : > "$FAKE_GUARD_MV_FAIL_MARKER"
+            exit 42
+        fi
+        ;;
+esac
+exec /bin/mv "$@"
+""",
+    )
+    transaction['env']['PATH'] = (
+        f'{fake_bin}:{transaction["env"].get("PATH", "")}'
+    )
+    transaction['env']['FAKE_GUARD_MV_FAIL_MARKER'] = str(failure_marker)
+
+    result = _run_activation(transaction)
+
+    assert result.returncode != 0
+    assert failure_marker.is_file(), result.stderr
+    transaction_root = transaction['state_dir'] / 'backups' / 'deploy-transactions'
+    assert len(list(transaction_root.rglob('ROLLED_BACK'))) == 1
+    assert not list(transaction_root.rglob('ROLLBACK_REQUIRED.txt'))
+    assert not list(
+        transaction['unit_dir'].rglob(
+            '.10-case-weather-activation-guard.conf.next'
+        )
+    )
+
+
+def test_guard_rejects_group_or_world_writable_existing_directory(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    directory = transaction['unit_dir'] / 'case-weather.service.d'
+    directory.chmod(0o777)
+    original_database = _database_value(transaction['database_file'])
+
+    result = _run_activation(transaction)
+
+    assert result.returncode != 0
+    assert 'systemd drop-in 目录身份异常' in result.stderr
+    assert _database_value(transaction['database_file']) == original_database
+    assert stat.S_IMODE(directory.stat().st_mode) == 0o777
+
+
+def test_guard_directory_metadata_is_restored_on_rollback(tmp_path):
+    transaction = _prepare_transaction(tmp_path, migration_exit=23)
+    directory = (
+        transaction['unit_dir']
+        / 'case-weather.service.d'
+    )
+    directory.chmod(0o700)
+
+    result = _run_activation(transaction)
+
+    assert result.returncode != 0
+    assert stat.S_IMODE(directory.stat().st_mode) == 0o700
+    transaction_root = transaction['state_dir'] / 'backups' / 'deploy-transactions'
+    assert len(list(transaction_root.rglob('ROLLED_BACK'))) == 1
+    assert not list(transaction_root.rglob('ROLLBACK_REQUIRED.txt'))
+
+
+@pytest.mark.parametrize(
+    'override',
+    (
+        '[Unit]\nConditionArchitecture=\n',
+        '[Unit]\nConditionKernelCommandLine=|always-allow\n',
+        '[Unit]\nConditionPathExists=|/\n',
+    ),
+)
+def test_later_dropin_cannot_reset_or_bypass_activation_guard(
+    tmp_path,
+    override,
+):
+    transaction = _prepare_transaction(tmp_path)
+    bypass = (
+        transaction['unit_dir']
+        / 'case-weather.service.d'
+        / '99-bypass.conf'
+    )
+    bypass.write_text(override, encoding='utf-8')
+    bypass.chmod(0o644)
+    managed = (
+        transaction['unit_dir']
+        / 'case-weather.service.d'
+        / '10-case-weather-activation-guard.conf'
+    )
+    original_managed = managed.read_bytes()
+
+    result = _run_activation(transaction)
+
+    assert result.returncode != 0
+    assert '尚未加载预期的断电保护' in result.stderr
+    assert _database_value(transaction['database_file']) == 'old'
+    assert not (
+        transaction['state_dir'] / 'deployments' / 'activation-in-progress'
+    ).exists()
+    assert managed.read_bytes() == original_managed
+
+
+def test_guard_preflight_rejects_stale_systemd_manager_state(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    transaction['env']['FAKE_NEED_DAEMON_RELOAD_UNIT'] = 'case-weather.service'
+    managed = (
+        transaction['unit_dir']
+        / 'case-weather.service.d'
+        / '10-case-weather-activation-guard.conf'
+    )
+    managed.write_text('[Unit]\n# old managed content\n', encoding='utf-8')
+    original_managed = managed.read_bytes()
+
+    result = _run_activation(transaction)
+
+    assert result.returncode != 0
+    assert '尚未加载磁盘上的最新断电保护配置' in result.stderr
+    assert _database_value(transaction['database_file']) == 'old'
+    assert managed.read_bytes() == original_managed
+
+
+@pytest.mark.parametrize('database_config', ('missing', 'duplicate'))
+def test_invalid_backup_database_config_blocks_before_mutation(
+    tmp_path,
+    database_config,
+):
+    transaction = _prepare_transaction(tmp_path)
+    database_uri = f'sqlite:///{transaction["database_file"].as_posix()}'
+    if database_config == 'missing':
+        staged = (
+            'DEBUG=true\n'
+            'WECHAT_FORMAL_RUNTIME=0\n'
+            'WEB_PRIVATE_FEATURES_ENABLED=0\n'
+            'RELEASE_VALUE=new\n'
+        )
+    else:
+        staged = (
+            'DEBUG=true\n'
+            'WECHAT_FORMAL_RUNTIME=0\n'
+            'WEB_PRIVATE_FEATURES_ENABLED=0\n'
+            'RELEASE_VALUE=new\n'
+            f'DATABASE_URI={database_uri}\n'
+            f'DATABASE_URI={database_uri}\n'
+        )
+    (transaction['new_release'] / 'staged.env').write_text(staged, encoding='utf-8')
+    original_crontab = transaction['root_crontab'].read_bytes()
+
+    result = _run_activation(transaction)
+
+    assert result.returncode != 0
+    assert '备份配置不唯一或格式无效' in result.stderr
+    assert transaction['root_crontab'].read_bytes() == original_crontab
+    assert _database_value(transaction['database_file']) == 'old'
+    actions = transaction['systemctl_log'].read_text(encoding='utf-8').splitlines()
+    assert not any(
+        action.startswith(('stop ', 'start ', 'restart ', 'enable ', 'disable '))
+        for action in actions
+    )
+
+
+def test_external_database_path_is_rejected_before_runtime_mutation(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    external_database = tmp_path / 'external' / 'live.db'
+    (transaction['new_release'] / 'staged.env').write_text(
+        f'DEBUG=true\n'
+        f'WECHAT_FORMAL_RUNTIME=0\n'
+        f'WEB_PRIVATE_FEATURES_ENABLED=0\n'
+        f'RELEASE_VALUE=new\n'
+        f'DATABASE_URI=sqlite:///{external_database.as_posix()}\n',
+        encoding='utf-8',
+    )
+    original_crontab = transaction['root_crontab'].read_bytes()
+
+    result = _run_activation(transaction)
+
+    assert result.returncode != 0
+    assert '受控 instance 或 storage' in result.stderr
+    assert transaction['root_crontab'].read_bytes() == original_crontab
+    assert _database_value(transaction['database_file']) == 'old'
+    actions = transaction['systemctl_log'].read_text(encoding='utf-8').splitlines()
+    assert not any(
+        action.startswith(('stop ', 'start ', 'restart ', 'enable ', 'disable '))
+        for action in actions
+    )
+
+
+@pytest.mark.parametrize('variable', ('DATABASE_FILE', 'DATABASE_URI'))
+def test_inherited_database_override_is_rejected_before_runtime_mutation(
+    tmp_path,
+    variable,
+):
+    transaction = _prepare_transaction(tmp_path)
+    transaction['env'][variable] = '/tmp/forbidden-override'
+    original_crontab = transaction['root_crontab'].read_bytes()
+
+    result = _run_activation(transaction)
+
+    assert result.returncode == 2
+    assert '禁止继承 DATABASE_FILE 或 DATABASE_URI' in result.stderr
+    assert transaction['root_crontab'].read_bytes() == original_crontab
+    assert not transaction['systemctl_log'].exists()
+
+
+def test_backup_start_race_waits_for_completion_without_killing_backup(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    transaction['env']['FAKE_START_BACKUP_AFTER_TIMER_STOP'] = '1'
+    transaction['env']['FAKE_BACKUP_FINISH_ON_ACTIVE_CHECK'] = '2'
+    transaction['env']['BACKUP_WAIT_ATTEMPTS'] = '3'
+    transaction['env']['BACKUP_WAIT_SLEEP_SECONDS'] = '0'
+
+    result = _run_activation(transaction)
+
+    assert result.returncode == 0, result.stderr
+    actions = transaction['systemctl_log'].read_text(encoding='utf-8').splitlines()
+    assert 'stop case-weather-backup.service' not in actions
+    assert not any(
+        (
+            transaction['fake_state']
+            / f'case-weather-backup.service.{state}'
+        ).exists()
+        for state in ('active', 'activating', 'reloading', 'deactivating')
+    )
+
+
+def test_post_commit_allows_managed_backup_started_by_persistent_timer(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    transaction['env']['FAKE_START_BACKUP_AFTER_TIMER_RESTART'] = '1'
+    transaction['env']['FAKE_BACKUP_FINISH_ON_ACTIVE_CHECK'] = '2'
+    transaction['env']['BACKUP_WAIT_ATTEMPTS'] = '3'
+    transaction['env']['BACKUP_WAIT_SLEEP_SECONDS'] = '0'
+
+    result = _run_activation(transaction)
+
+    assert result.returncode == 0, result.stderr
+    actions = transaction['systemctl_log'].read_text(encoding='utf-8').splitlines()
+    assert 'restart case-weather-backup.timer' in actions
+    assert 'stop case-weather-backup.service' not in actions
+    assert not list(
+        (transaction['state_dir'] / 'backups').rglob('POST_COMMIT_ATTENTION.txt')
+    )
+
+
+def test_stalled_backup_race_restores_only_backup_schedule(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    original_crontab = transaction['root_crontab'].read_bytes()
+    transaction['env']['FAKE_START_BACKUP_AFTER_TIMER_STOP'] = '1'
+    transaction['env']['BACKUP_WAIT_ATTEMPTS'] = '1'
+    transaction['env']['BACKUP_WAIT_SLEEP_SECONDS'] = '0'
+
+    result = _run_activation(transaction)
+
+    assert result.returncode != 0
+    assert '公网服务保持原状态' in result.stderr
+    assert transaction['root_crontab'].read_bytes() == original_crontab
+    assert (transaction['fake_state'] / 'case-weather.service.active').exists()
+    assert (transaction['fake_state'] / 'case-weather-backup.timer.active').exists()
+    assert (
+        transaction['fake_state'] / 'case-weather-backup.service.activating'
+    ).exists()
+    assert list((transaction['state_dir'] / 'backups').rglob('ROLLED_BACK'))
+    actions = transaction['systemctl_log'].read_text(encoding='utf-8').splitlines()
+    assert 'stop case-weather.service' not in actions
+    assert 'stop case-weather-backup.service' not in actions
+
+
+def test_stability_window_detects_post_activation_timer_cleanup(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    transaction['env']['POST_COMMIT_STABILITY_SECONDS'] = '1'
+    transaction['env']['FAKE_STOP_CACHE_ON_ACTIVE_CHECK'] = '3'
+
+    result = _run_activation(transaction)
+
+    assert result.returncode != 0
+    assert '发布后单元未处于 active: case-weather-cache-bootstrap.timer' in result.stderr
+    markers = list(
+        (transaction['state_dir'] / 'backups').rglob('POST_COMMIT_ATTENTION.txt')
+    )
+    assert len(markers) == 1
+    assert not list((transaction['state_dir'] / 'backups').rglob('COMMITTED'))
+    assert (
+        transaction['fake_state'] / 'case-weather-cache-bootstrap.timer.active'
+    ).exists()
+    assert '已逐个补齐并复核' in markers[0].read_text(encoding='utf-8')
+
+
+def test_bootstrap_timer_interval_is_independent_of_host_uptime(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    transaction['env']['UPTIME_FILE'] = str(tmp_path / 'missing-uptime')
+
+    result = _run_activation(transaction)
+
+    assert result.returncode == 0, result.stderr
+    assert list((transaction['state_dir'] / 'backups').rglob('COMMITTED'))
+
+
+@pytest.mark.parametrize(
+    ('active_enter', 'next_elapse', 'message'),
+    (
+        ('200000000', '1949000000', '未保留完整的首轮 30 分钟等待窗口'),
+        ('200000000', '2011000000', '未保留完整的首轮 30 分钟等待窗口'),
+        ('invalid', '2000000000', '单调时钟状态无效'),
+        ('0', '2000000000', '单调时钟状态无效'),
+        ('0200000000', '2000000000', '单调时钟状态无效'),
+        ('200000000', 'invalid', '单调时钟状态无效'),
+        ('200000000', '02000000000', '单调时钟状态无效'),
+    ),
+)
+def test_bootstrap_timer_invalid_schedule_fails_closed(
+    tmp_path,
+    active_enter,
+    next_elapse,
+    message,
+):
+    transaction = _prepare_transaction(tmp_path)
+    transaction['env']['FAKE_BOOTSTRAP_ACTIVE_ENTER_SEQUENCE'] = active_enter
+    transaction['env']['FAKE_BOOTSTRAP_NEXT_ELAPSE_SEQUENCE'] = next_elapse
+
+    result = _run_activation(transaction)
+
+    assert result.returncode != 0
+    assert message in result.stderr
+    markers = list(
+        (transaction['state_dir'] / 'backups').rglob('POST_COMMIT_ATTENTION.txt')
+    )
+    assert len(markers) == 1
+    assert not list((transaction['state_dir'] / 'backups').rglob('COMMITTED'))
+
+
+def test_stability_window_rejects_bootstrap_timer_deadline_change(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    transaction['env']['POST_COMMIT_STABILITY_SECONDS'] = '1'
+    transaction['env']['FAKE_BOOTSTRAP_NEXT_ELAPSE_SEQUENCE'] = (
+        '2000000000,2005000000'
+    )
+
+    result = _run_activation(transaction)
+
+    assert result.returncode != 0
+    assert 'bootstrap timer 在稳定观察期间被重启或改期' in result.stderr
+    markers = list(
+        (transaction['state_dir'] / 'backups').rglob('POST_COMMIT_ATTENTION.txt')
+    )
+    assert len(markers) == 1
+    assert (markers[0].parent / 'FORWARD_ONLY_REQUIRED').is_file()
+    assert not list((transaction['state_dir'] / 'backups').rglob('COMMITTED'))
+
+
+def test_stability_window_rejects_bootstrap_timer_synchronized_restart(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    transaction['env']['POST_COMMIT_STABILITY_SECONDS'] = '1'
+    transaction['env']['FAKE_BOOTSTRAP_ACTIVE_ENTER_SEQUENCE'] = (
+        '200000000,205000000'
+    )
+    transaction['env']['FAKE_BOOTSTRAP_NEXT_ELAPSE_SEQUENCE'] = (
+        '2000000000,2005000000'
+    )
+
+    result = _run_activation(transaction)
+
+    assert result.returncode != 0
+    assert 'bootstrap timer 在稳定观察期间被重启或改期' in result.stderr
+    markers = list(
+        (transaction['state_dir'] / 'backups').rglob('POST_COMMIT_ATTENTION.txt')
+    )
+    assert len(markers) == 1
+    assert (markers[0].parent / 'FORWARD_ONLY_REQUIRED').is_file()
+    assert not list((transaction['state_dir'] / 'backups').rglob('COMMITTED'))
+
+
+def test_migration_failure_restores_database_release_and_unit_state(tmp_path):
+    transaction = _prepare_transaction(tmp_path, migration_exit=23)
+    original_crontab = transaction['root_crontab'].read_bytes()
+
+    result = _run_activation(transaction)
+
+    assert result.returncode == 23
+    assert transaction['current_link'].resolve() == transaction['old_release'].resolve()
+    assert _database_value(transaction['database_file']) == 'old'
+    active_env = transaction['state_dir'] / '.env'
+    assert 'RELEASE_VALUE=old' in active_env.read_text(encoding='utf-8')
+    assert stat.S_IMODE(active_env.stat().st_mode) == 0o600
+    for unit in ALL_UNITS:
+        assert (transaction['unit_dir'] / unit).read_text(encoding='utf-8') == f'old unit {unit}\n'
+    for unit in (
+        'case-weather.service',
+        'case-weather-backup.timer',
+        'case-weather-cache.timer',
+        'case-weather-risk-precompute.timer',
+        'case-weather-usage-cleanup.timer',
+    ) + LEGACY_TIMER_UNITS:
+        assert (transaction['fake_state'] / f'{unit}.active').exists()
+    for unit in ('case-weather-backup.service',) + LEGACY_SERVICE_UNITS:
+        assert not (transaction['fake_state'] / f'{unit}.active').exists()
+    assert transaction['root_crontab'].read_bytes() == original_crontab
+    assert not (
+        transaction['fake_state'] / 'case-weather-cache-bootstrap.timer.active'
+    ).exists()
+    assert (transaction['fake_state'] / 'case-weather-cache.timer.enabled').exists()
+    assert not (
+        transaction['fake_state'] / 'case-weather-cache-bootstrap.timer.enabled'
+    ).exists()
+    assert not list((transaction['state_dir'] / 'backups').rglob('ROLLBACK_REQUIRED.txt'))
+    rolled_back_markers = list(
+        (transaction['state_dir'] / 'backups').rglob('ROLLED_BACK')
+    )
+    assert len(rolled_back_markers) == 1
+    captured_enable_states = _captured_enable_states(rolled_back_markers[0].parent)
+    assert {
+        unit: captured_enable_states[unit]
+        for unit in STATIC_SERVICE_UNITS
+    } == dict.fromkeys(STATIC_SERVICE_UNITS, 'static')
+    actions = transaction['systemctl_log'].read_text(encoding='utf-8').splitlines()
+    for unit in STATIC_SERVICE_UNITS:
+        toggles = [
+            action for action in actions
+            if action in {
+                f'enable {unit}',
+                f'enable --runtime {unit}',
+                f'disable {unit}',
+            }
+        ]
+        assert toggles == []
+        assert (transaction['fake_state'] / f'{unit}.static').exists()
+    assert not (
+        transaction['state_dir'] / 'backups' / 'backup-runtime.env'
+    ).exists()
+    assert len(
+        list(
+            (transaction['state_dir'] / 'backups').rglob(
+                'backup-runtime-from-failed-release.env'
+            )
+        )
+    ) == 1
+
+
+def test_migration_failure_restores_previous_backup_runtime_environment(tmp_path):
+    transaction = _prepare_transaction(tmp_path, migration_exit=23)
+    runtime_env = transaction['state_dir'] / 'backups' / 'backup-runtime.env'
+    previous = (
+        f'BACKUP_DATABASE_FILE={transaction["state_dir"]}/storage/previous.db\n'
+        'BACKUP_PRUNE=1\n'
+    )
+    runtime_env.write_text(previous, encoding='utf-8')
+    runtime_env.chmod(0o600)
+
+    result = _run_activation(transaction)
+
+    assert result.returncode == 23
+    assert runtime_env.read_text(encoding='utf-8') == previous
+    assert runtime_env.stat().st_mode & 0o777 == 0o600
+
+
+def test_migration_failure_restores_runtime_enable_without_persisting_it(tmp_path):
+    transaction = _prepare_transaction(tmp_path, migration_exit=23)
+    unit = 'case-weather-cache.timer'
+    (transaction['fake_state'] / f'{unit}.enabled').unlink()
+    (transaction['fake_state'] / f'{unit}.enabled-runtime').touch()
+
+    result = _run_activation(transaction)
+
+    assert result.returncode == 23
+    assert (transaction['fake_state'] / f'{unit}.enabled-runtime').exists()
+    assert not (transaction['fake_state'] / f'{unit}.enabled').exists()
+
+
+def test_migration_failure_restores_reloading_public_service(tmp_path):
+    transaction = _prepare_transaction(tmp_path, migration_exit=23)
+    unit = 'case-weather.service'
+    (transaction['fake_state'] / f'{unit}.active').unlink()
+    (transaction['fake_state'] / f'{unit}.reloading').touch()
+
+    result = _run_activation(transaction)
+
+    assert result.returncode == 23
+    assert (transaction['fake_state'] / f'{unit}.active').exists()
+    assert not (transaction['fake_state'] / f'{unit}.reloading').exists()
+
+
+@pytest.mark.parametrize(
+    ('weather_timer_phase', 'unit', 'captured_state', 'expected_timer'),
+    (
+        ('recurring', 'case-weather-cache.timer', 'activating', 'case-weather-cache.timer'),
+        ('recurring', 'case-weather-cache.timer', 'reloading', 'case-weather-cache.timer'),
+        ('recurring', 'case-weather-cache.timer', 'deactivating', 'case-weather-cache.timer'),
+        (
+            'bootstrap',
+            'case-weather-cache-bootstrap.timer',
+            'activating',
+            'case-weather-cache-bootstrap.timer',
+        ),
+        (
+            'bootstrap',
+            'case-weather-cache-bootstrap.timer',
+            'reloading',
+            'case-weather-cache-bootstrap.timer',
+        ),
+        (
+            'bootstrap',
+            'case-weather-cache-bootstrap.timer',
+            'deactivating',
+            'case-weather-cache-bootstrap.timer',
+        ),
+        (
+            'writer',
+            'case-weather-cache.service',
+            'deactivating',
+            'case-weather-cache-bootstrap.timer',
+        ),
+    ),
+)
+def test_migration_failure_restores_transitional_weather_phase(
+    tmp_path,
+    weather_timer_phase,
+    unit,
+    captured_state,
+    expected_timer,
+):
+    transaction = _prepare_transaction(
+        tmp_path,
+        migration_exit=23,
+        weather_timer_phase=weather_timer_phase,
+    )
+    for state in ('active', 'activating', 'reloading', 'deactivating'):
+        (transaction['fake_state'] / f'{unit}.{state}').unlink(missing_ok=True)
+    (transaction['fake_state'] / f'{unit}.{captured_state}').touch()
+
+    result = _run_activation(transaction)
+
+    assert result.returncode == 23
+    assert (
+        transaction['fake_state'] / f'{expected_timer}.active'
+    ).exists()
+    other_timer = (
+        'case-weather-cache-bootstrap.timer'
+        if expected_timer == 'case-weather-cache.timer'
+        else 'case-weather-cache.timer'
+    )
+    assert not (transaction['fake_state'] / f'{other_timer}.active').exists()
+    for state in ('activating', 'reloading', 'deactivating'):
+        assert not (transaction['fake_state'] / f'{unit}.{state}').exists()
+
+
+def test_migration_failure_restores_bootstrap_wait_state_without_recurring_timer(tmp_path):
+    transaction = _prepare_transaction(
+        tmp_path,
+        migration_exit=23,
+        weather_timer_phase='bootstrap',
+    )
+
+    result = _run_activation(transaction)
+
+    assert result.returncode == 23
+    assert transaction['current_link'].resolve() == transaction['old_release'].resolve()
+    assert _database_value(transaction['database_file']) == 'old'
+    assert (
+        transaction['fake_state'] / 'case-weather-cache-bootstrap.timer.active'
+    ).exists()
+    assert (
+        transaction['fake_state'] / 'case-weather-cache-bootstrap.timer.enabled'
+    ).exists()
+    assert not (transaction['fake_state'] / 'case-weather-cache.timer.active').exists()
+    assert not (transaction['fake_state'] / 'case-weather-cache.timer.enabled').exists()
+    assert not (transaction['fake_state'] / 'case-weather-cache.service.active').exists()
+
+
+def test_migration_failure_rearms_bootstrap_after_interrupting_active_writer(tmp_path):
+    transaction = _prepare_transaction(
+        tmp_path,
+        migration_exit=23,
+        weather_timer_phase='writer',
+    )
+
+    result = _run_activation(transaction)
+
+    assert result.returncode == 23
+    assert (
+        transaction['fake_state'] / 'case-weather-cache-bootstrap.timer.active'
+    ).exists()
+    assert not (transaction['fake_state'] / 'case-weather-cache.timer.active').exists()
+    assert not (
+        transaction['fake_state'] / 'case-weather-cache.service.active'
+    ).exists()
+    assert not (
+        transaction['fake_state'] / 'case-weather-cache.service.activating'
+    ).exists()
+
+
+def test_first_release_prepare_failure_removes_new_weather_unit_enable_links(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    for unit in (
+        'case-weather-cache-bootstrap.timer',
+        'case-weather-cache.timer',
+        'case-weather-cache.service',
+    ):
+        (transaction['unit_dir'] / unit).unlink()
+        (transaction['fake_state'] / f'{unit}.exists').unlink()
+        (transaction['fake_state'] / f'{unit}.enabled').unlink(missing_ok=True)
+        (transaction['fake_state'] / f'{unit}.active').unlink(missing_ok=True)
+    (transaction['new_release'] / 'app' / 'scripts' / 'update_env_value.py').write_text(
+        'raise SystemExit(31)\n',
+        encoding='utf-8',
+    )
+
+    result = _run_activation(transaction)
+
+    assert result.returncode == 31
+    assert transaction['current_link'].resolve() == transaction['old_release'].resolve()
+    for unit in (
+        'case-weather-cache-bootstrap.timer',
+        'case-weather-cache.timer',
+        'case-weather-cache.service',
+    ):
+        assert not (transaction['unit_dir'] / unit).exists()
+        assert not (transaction['fake_state'] / f'{unit}.enabled').exists()
+
+
+def test_candidate_health_failure_rolls_back_new_code_database_and_units(tmp_path):
+    transaction = _prepare_transaction(tmp_path, candidate_health_ok=False)
+
+    result = _run_activation(transaction)
+
+    assert result.returncode != 0
+    assert transaction['current_link'].resolve() == transaction['old_release'].resolve()
+    assert _database_value(transaction['database_file']) == 'old'
+    assert (
+        transaction['state_dir'] / 'deployments' / 'current-release'
+    ).read_text(encoding='utf-8').strip() == str(transaction['old_release'])
+    assert 'RELEASE_VALUE=old' in (transaction['state_dir'] / '.env').read_text(encoding='utf-8')
+    for unit in ALL_UNITS:
+        assert (transaction['unit_dir'] / unit).read_text(encoding='utf-8') == f'old unit {unit}\n'
+
+
+def test_candidate_ml_contract_failure_rolls_back_before_link_switch(tmp_path):
+    transaction = _prepare_transaction(
+        tmp_path,
+        candidate_contract_failure='ml',
+    )
+
+    result = _run_activation(transaction)
+
+    assert result.returncode != 0
+    assert 'ML 运行态版本或模型状态异常' in result.stderr
+    assert transaction['current_link'].resolve() == transaction['old_release'].resolve()
+    assert _database_value(transaction['database_file']) == 'old'
+    assert 'RELEASE_VALUE=old' in (
+        transaction['state_dir'] / '.env'
+    ).read_text(encoding='utf-8')
+
+
+@pytest.mark.parametrize(
+    ('failure', 'message'),
+    (
+        ('bootstrap', '天气快照仍处于缺失、陈旧或待刷新状态'),
+        ('risk', '公开风险页仍显示待刷新状态'),
+    ),
+)
+def test_candidate_weather_contract_failure_is_forward_only_after_formal_smoke(
+    tmp_path,
+    failure,
+    message,
+):
+    transaction = _prepare_transaction(
+        tmp_path,
+        candidate_contract_failure=failure,
+    )
+    _staged_text, counter_file = _configure_formal_smoke(transaction)
+
+    result = _run_activation(transaction)
+
+    assert result.returncode != 0
+    assert message in result.stderr
+    assert counter_file.read_text(encoding='utf-8') == '1'
+    assert transaction['current_link'].resolve() == transaction['new_release'].resolve()
+    assert _database_value(transaction['database_file']) == 'new'
+    assert (
+        transaction['state_dir'] / 'deployments' / 'current-release'
+    ).read_text(encoding='utf-8').strip() == str(transaction['new_release'])
+    forward_markers = list(
+        (transaction['state_dir'] / 'backups').rglob('FORWARD_ONLY_REQUIRED')
+    )
+    assert len(forward_markers) == 1
+    assert (
+        forward_markers[0].read_text(encoding='utf-8').strip()
+        == 'phase=formal-smoke-started'
+    )
+    assert (forward_markers[0].parent / 'POST_COMMIT_ATTENTION.txt').is_file()
+    assert not (forward_markers[0].parent / 'ROLLED_BACK').exists()
+    for unit in ALL_UNITS:
+        assert not (transaction['fake_state'] / f'{unit}.active').exists()
+
+
+def test_large_candidate_risk_page_does_not_trigger_pipefail_false_negative(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    _staged_text, counter_file = _configure_formal_smoke(transaction)
+    transaction['env']['FAKE_CANDIDATE_RISK_PADDING_SIZE'] = str(4 * 1024 * 1024)
+
+    result = _run_activation(transaction)
+
+    assert result.returncode == 0, result.stderr
+    assert counter_file.read_text(encoding='utf-8') == '1'
+    assert transaction['current_link'].resolve() == transaction['new_release'].resolve()
+    committed_markers = list(
+        (transaction['state_dir'] / 'backups').rglob('COMMITTED')
+    )
+    assert len(committed_markers) == 1
+
+
+def test_large_pending_candidate_risk_page_keeps_precise_failure(tmp_path):
+    transaction = _prepare_transaction(
+        tmp_path,
+        candidate_contract_failure='risk',
+    )
+    _staged_text, counter_file = _configure_formal_smoke(transaction)
+    transaction['env']['FAKE_CANDIDATE_RISK_PADDING_SIZE'] = str(4 * 1024 * 1024)
+
+    result = _run_activation(transaction)
+
+    assert result.returncode != 0
+    assert '公开风险页仍显示待刷新状态' in result.stderr
+    assert counter_file.read_text(encoding='utf-8') == '1'
+    assert transaction['current_link'].resolve() == transaction['new_release'].resolve()
+    assert _database_value(transaction['database_file']) == 'new'
+    forward_markers = list(
+        (transaction['state_dir'] / 'backups').rglob('FORWARD_ONLY_REQUIRED')
+    )
+    assert len(forward_markers) == 1
+    assert (
+        forward_markers[0].read_text(encoding='utf-8').strip()
+        == 'phase=formal-smoke-started'
+    )
+    assert (forward_markers[0].parent / 'POST_COMMIT_ATTENTION.txt').is_file()
+    assert not (forward_markers[0].parent / 'ROLLED_BACK').exists()
+    for unit in ALL_UNITS:
+        assert not (transaction['fake_state'] / f'{unit}.active').exists()
+
+
+def test_candidate_risk_contract_avoids_pipefail_prone_quiet_grep():
+    script = ACTIVATE_SCRIPT.read_text(encoding='utf-8')
+    function_body = script.split(
+        'validate_candidate_weather_contracts() {',
+        1,
+    )[1].split('\n}\n\nstop_candidate_release()', 1)[0]
+
+    assert 'risk_body" | grep' not in function_body
+    assert 'case "$risk_body" in' in function_body
+
+
+def test_managed_backup_validation_failure_rolls_back_before_public_switch(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    transaction['env']['FAKE_FAIL_SYSTEMD_RUN'] = '1'
+    original_crontab = transaction['root_crontab'].read_bytes()
+
+    result = _run_activation(transaction)
+
+    assert result.returncode != 0
+    assert '备份 transient unit 验证失败' in result.stderr
+    assert transaction['current_link'].resolve() == transaction['old_release'].resolve()
+    assert _database_value(transaction['database_file']) == 'old'
+    assert transaction['root_crontab'].read_bytes() == original_crontab
+    assert not list((transaction['state_dir'] / 'backups' / 'daily').glob('*.db.gz'))
+    assert 'restart case-weather.service' not in (
+        transaction['systemctl_log'].read_text(encoding='utf-8').splitlines()
+    )
+
+
+def test_managed_backup_non_sqlite_archive_fails_quick_check(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    transaction['env']['FAKE_INVALID_SQLITE_BACKUP'] = '1'
+    original_crontab = transaction['root_crontab'].read_bytes()
+
+    result = _run_activation(transaction)
+
+    assert result.returncode != 0
+    assert '未通过 SQLite quick_check' in result.stderr
+    assert transaction['current_link'].resolve() == transaction['old_release'].resolve()
+    assert _database_value(transaction['database_file']) == 'old'
+    assert transaction['root_crontab'].read_bytes() == original_crontab
+    assert 'restart case-weather.service' not in (
+        transaction['systemctl_log'].read_text(encoding='utf-8').splitlines()
+    )
+
+
+def test_actual_installed_backup_unit_failure_rolls_back_before_public_start(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    transaction['env']['FAKE_FAIL_ACTUAL_BACKUP_SERVICE'] = '1'
+
+    result = _run_activation(transaction)
+
+    assert result.returncode != 0
+    assert '正式日备份 unit 实际执行失败' in result.stderr
+    assert transaction['current_link'].resolve() == transaction['old_release'].resolve()
+    assert _database_value(transaction['database_file']) == 'old'
+    actions = transaction['systemctl_log'].read_text(encoding='utf-8').splitlines()
+    assert 'start case-weather-backup.service' in actions
+    assert 'restart case-weather.service' not in actions
+
+
+@pytest.mark.parametrize(
+    'failure_environment',
+    (
+        {'FAKE_FAIL_SYSTEMD_RUN': '1'},
+        {'FAKE_FAIL_ACTUAL_BACKUP_SERVICE': '1'},
+    ),
+)
+def test_formal_backup_failures_happen_before_the_only_weather_request(
+    tmp_path,
+    failure_environment,
+):
+    transaction = _prepare_transaction(tmp_path)
+    _staged_text, counter_file = _configure_formal_smoke(transaction)
+    transaction['env'].update(failure_environment)
+
+    result = _run_activation(transaction)
+
+    assert result.returncode != 0
+    assert not counter_file.exists()
+    receipt_root = (
+        transaction['state_dir'] / 'deployments' / 'formal-cache-smokes'
+    )
+    assert not receipt_root.exists()
+    assert transaction['current_link'].resolve() == transaction['old_release'].resolve()
+    assert _database_value(transaction['database_file']) == 'old'
+    actions = transaction['systemctl_log'].read_text(encoding='utf-8').splitlines()
+    assert 'restart case-weather.service' not in actions
+
+
+def test_public_health_failure_keeps_forward_migrated_database(tmp_path):
+    transaction = _prepare_transaction(tmp_path, public_health_ok=False)
+    original_crontab = transaction['root_crontab'].read_bytes()
+
+    result = _run_activation(transaction)
+
+    assert result.returncode != 0
+    assert transaction['current_link'].resolve() == transaction['new_release'].resolve()
+    assert _database_value(transaction['database_file']) == 'new'
+    assert 'RELEASE_VALUE=new' in (transaction['state_dir'] / '.env').read_text(
+        encoding='utf-8'
+    )
+    markers = list((transaction['state_dir'] / 'backups').rglob('POST_COMMIT_ATTENTION.txt'))
+    assert len(markers) == 1
+    assert '持久开机门保持启用' in markers[0].read_text(encoding='utf-8')
+    assert not (transaction['fake_state'] / 'case-weather.service.active').exists()
+    for unit in START_TIMER_UNITS:
+        assert (transaction['fake_state'] / f'{unit}.enabled').exists()
+        assert not (transaction['fake_state'] / f'{unit}.active').exists()
+    for unit in DEFERRED_TIMER_UNITS:
+        assert not (transaction['fake_state'] / f'{unit}.enabled').exists()
+        assert not (transaction['fake_state'] / f'{unit}.active').exists()
+    assert transaction['root_crontab'].read_bytes() == original_crontab
+    assert (
+        transaction['state_dir'] / 'deployments' / 'activation-in-progress'
+    ).is_file()
+    assert (
+        Path(transaction['env']['RUNTIME_BOOT_GUARD_DIR']) / 'activation-permit'
+    ).exists() is False
+
+
+def test_timer_start_failure_keeps_committed_release_and_user_writes(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    transaction['env']['FAKE_FAIL_START_UNIT'] = 'case-weather-risk-precompute.timer'
+
+    result = _run_activation(transaction)
+
+    assert result.returncode != 0
+    assert transaction['current_link'].resolve() == transaction['new_release'].resolve()
+    assert _database_value(transaction['database_file']) == 'new'
+    assert 'RELEASE_VALUE=new' in (transaction['state_dir'] / '.env').read_text(encoding='utf-8')
+    markers = list((transaction['state_dir'] / 'backups').rglob('POST_COMMIT_ATTENTION.txt'))
+    assert len(markers) == 1
+    assert '不会回滚数据库' in markers[0].read_text(encoding='utf-8')
+    assert (transaction['fake_state'] / 'case-weather.service.active').exists()
+    assert not (transaction['fake_state'] / 'case-weather-dispatch.timer.active').exists()
+    for unit in START_TIMER_UNITS:
+        assert (transaction['fake_state'] / f'{unit}.active').exists()
+    marker_text = markers[0].read_text(encoding='utf-8')
+    assert '已逐个补齐并复核' in marker_text
+
+
+@pytest.mark.parametrize(
+    'broken_hook',
+    ('FAKE_BAD_ON_SUCCESS_UNIT', 'FAKE_BAD_ON_FAILURE_UNIT'),
+)
+def test_post_start_verification_failure_persists_blocking_marker(
+    tmp_path,
+    broken_hook,
+):
+    transaction = _prepare_transaction(tmp_path)
+    transaction['env'][broken_hook] = 'case-weather-cache.service'
+
+    result = _run_activation(transaction)
+
+    assert result.returncode != 0
+    assert transaction['current_link'].resolve() == transaction['new_release'].resolve()
+    assert _database_value(transaction['database_file']) == 'new'
+    markers = list(
+        (transaction['state_dir'] / 'backups').rglob('POST_COMMIT_ATTENTION.txt')
+    )
+    assert len(markers) == 1
+    transaction_dir = markers[0].parent
+    assert not (transaction_dir / 'COMMITTED').exists()
+    shutil.copyfile(
+        transaction['state_dir'] / '.env',
+        transaction['new_release'] / 'staged.env',
+    )
+
+    blocked = _run_activation(transaction)
+
+    assert blocked.returncode != 0
+    assert '尚未人工确认' in blocked.stderr
+    assert transaction['current_link'].resolve() == transaction['new_release'].resolve()
+    assert _database_value(transaction['database_file']) == 'new'
+
+
+@pytest.mark.parametrize(
+    ('cache_result', 'expected_returncode', 'dispatch_expected'),
+    (
+        ('success', 0, True),
+        ('failure', 1, False),
+    ),
+)
+def test_cache_attempt_transitions_to_recurring_timer(
+    tmp_path,
+    cache_result,
+    expected_returncode,
+    dispatch_expected,
+):
+    transaction = _prepare_transaction(tmp_path)
+    cache_unit = transaction['new_release'] / 'systemd' / 'case-weather-cache.service'
+    cache_unit.write_text(
+        '[Unit]\n'
+        'OnSuccess=case-weather-dispatch.service case-weather-cache.timer\n'
+        'OnFailure=case-weather-cache.timer\n'
+        '[Service]\n'
+        'Type=oneshot\n',
+        encoding='utf-8',
+    )
+    activated = _run_activation(transaction)
+    assert activated.returncode == 0, activated.stderr
+    (transaction['fake_state'] / 'case-weather-cache-bootstrap.timer.active').unlink()
+    transaction['env']['FAKE_CACHE_RESULT'] = cache_result
+
+    attempted = subprocess.run(
+        [
+            transaction['env']['SYSTEMCTL_BIN'],
+            'start',
+            'case-weather-cache.service',
+        ],
+        cwd=ROOT,
+        env=transaction['env'],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert attempted.returncode == expected_returncode
+    assert (
+        transaction['fake_state'] / 'case-weather-cache.timer.active'
+    ).exists()
+    assert (
+        transaction['fake_state'] / 'case-weather-dispatch.service.active'
+    ).exists() is dispatch_expected
+
+
+def test_rollback_failure_is_loud_and_leaves_all_units_stopped(tmp_path):
+    transaction = _prepare_transaction(tmp_path, migration_exit=23)
+    transaction['env']['FAKE_FAIL_START_ALWAYS'] = 'case-weather-risk-precompute.timer'
+
+    result = _run_activation(transaction)
+
+    assert result.returncode == 70
+    markers = list((transaction['state_dir'] / 'backups').rglob('ROLLBACK_REQUIRED.txt'))
+    assert len(markers) == 1
+    assert '人工核对数据库' in markers[0].read_text(encoding='utf-8')
+    for unit in ALL_UNITS:
+        assert not (transaction['fake_state'] / f'{unit}.active').exists()
+
+
+def test_unfinished_previous_transaction_blocks_new_mutation(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    unfinished = (
+        transaction['state_dir']
+        / 'backups'
+        / 'deploy-transactions'
+        / 'interrupted-release'
+    )
+    unfinished.mkdir(parents=True)
+    (unfinished / 'ACTIVATION_STARTED').write_text('old-release\n', encoding='utf-8')
+
+    result = _run_activation(transaction)
+
+    assert result.returncode != 0
+    assert '未完成事务' in result.stderr
+    assert transaction['current_link'].resolve() == transaction['old_release'].resolve()
+    assert _database_value(transaction['database_file']) == 'old'
+    assert 'RELEASE_VALUE=old' in (transaction['state_dir'] / '.env').read_text(
+        encoding='utf-8'
+    )
+
+    transaction['env']['RECOVERY_ACKNOWLEDGED_TRANSACTION'] = str(unfinished)
+    confirmed = _run_activation(transaction)
+
+    assert confirmed.returncode == 0, confirmed.stderr
+    assert (unfinished / 'RECOVERY_CONFIRMED').is_file()
+    assert transaction['current_link'].resolve() == transaction['new_release'].resolve()
+
+
+def test_interrupted_guard_requires_exact_ack_then_recovers(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    interrupted = _seed_interrupted_activation_guard(
+        transaction,
+        'interrupted-with-guard',
+    )
+
+    blocked = _run_activation(transaction)
+
+    assert blocked.returncode != 0
+    assert '未完成事务' in blocked.stderr
+    assert (
+        transaction['state_dir'] / 'deployments' / 'activation-in-progress'
+    ).is_file()
+    assert not (interrupted / 'RECOVERY_CONFIRMED').exists()
+
+    transaction['env']['RECOVERY_ACKNOWLEDGED_TRANSACTION'] = str(interrupted)
+    recovered = _run_activation(transaction)
+
+    assert recovered.returncode == 0, recovered.stderr
+    assert (interrupted / 'RECOVERY_CONFIRMED').is_file()
+    assert (interrupted / 'activation-in-progress.recovered').is_file()
+    assert not (
+        transaction['state_dir'] / 'deployments' / 'activation-in-progress'
+    ).exists()
+    assert not (
+        Path(transaction['env']['RUNTIME_BOOT_GUARD_DIR'])
+        / 'activation-permit'
+    ).exists()
+
+
+def test_archived_guard_is_restored_for_boundary_then_rearchived(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    _configure_formal_smoke(transaction)
+    interrupted = _seed_interrupted_activation_guard(
+        transaction,
+        'interrupted-with-archived-guard',
+    )
+    persistent_guard = (
+        transaction['state_dir'] / 'deployments' / 'activation-in-progress'
+    )
+    recovered_guard = interrupted / 'activation-in-progress.recovered'
+    persistent_guard.rename(recovered_guard)
+    observed = transaction['state_dir'] / 'boundary-observed-live-guard'
+    helper = transaction['state_dir'] / 'runtime-log-boundary-live-guard-helper'
+    _write_executable(
+        helper,
+        f"""#!/bin/sh
+set -eu
+[ -f {shlex.quote(str(persistent_guard))} ]
+[ ! -e {shlex.quote(str(recovered_guard))} ]
+: > {shlex.quote(str(observed))}
+""",
+    )
+    transaction['env'].update({
+        'RECOVERY_ACKNOWLEDGED_TRANSACTION': str(interrupted),
+        'RUNTIME_LOG_BOUNDARY_TEST_HELPER': str(helper),
+    })
+
+    result = _run_activation(transaction)
+
+    assert result.returncode == 0, result.stderr
+    assert observed.is_file()
+    assert recovered_guard.is_file()
+    assert not persistent_guard.exists()
+
+
+@pytest.mark.parametrize('tamper', ('symlink', 'mode', 'transaction'))
+def test_archived_guard_restore_rejects_untrusted_evidence(tmp_path, tamper):
+    transaction = _prepare_transaction(tmp_path)
+    interrupted = _seed_interrupted_activation_guard(
+        transaction,
+        f'interrupted-archived-{tamper}',
+    )
+    persistent_guard = (
+        transaction['state_dir'] / 'deployments' / 'activation-in-progress'
+    )
+    recovered_guard = interrupted / 'activation-in-progress.recovered'
+    original_payload = persistent_guard.read_text(encoding='utf-8')
+    if tamper == 'symlink':
+        target = transaction['state_dir'] / 'untrusted-archived-guard'
+        persistent_guard.rename(target)
+        recovered_guard.symlink_to(target)
+    else:
+        persistent_guard.rename(recovered_guard)
+        if tamper == 'mode':
+            recovered_guard.chmod(0o644)
+        else:
+            other = interrupted.parent / 'other-archived-transaction'
+            other.mkdir()
+            recovered_guard.write_text(
+                original_payload.replace(
+                    f'transaction={interrupted}',
+                    f'transaction={other}',
+                ),
+                encoding='utf-8',
+            )
+            recovered_guard.chmod(0o600)
+    transaction['env']['RECOVERY_ACKNOWLEDGED_TRANSACTION'] = str(interrupted)
+
+    result = _run_activation(transaction)
+
+    assert result.returncode != 0
+    assert '已归档开机门与本轮确认的恢复事务不匹配' in result.stderr
+    assert not persistent_guard.exists()
+
+
+@pytest.mark.parametrize('terminal', ('COMMITTED', 'ROLLED_BACK'))
+def test_terminal_transaction_leftover_guard_recovers_automatically(
+    tmp_path,
+    terminal,
+):
+    transaction = _prepare_transaction(tmp_path)
+    completed = _seed_interrupted_activation_guard(
+        transaction,
+        f'interrupted-after-{terminal.lower()}',
+        terminal=terminal,
+        include_runtime_permit=False,
+    )
+
+    result = _run_activation(transaction)
+
+    assert result.returncode == 0, result.stderr
+    assert (completed / 'activation-in-progress.recovered').is_file()
+    assert not (
+        transaction['state_dir'] / 'deployments' / 'activation-in-progress'
+    ).exists()
+
+
+def test_interrupted_guard_rejects_mismatched_acknowledgement(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    guarded = _seed_interrupted_activation_guard(transaction, 'guarded-transaction')
+    mismatched = (
+        transaction['state_dir']
+        / 'backups'
+        / 'deploy-transactions'
+        / 'different-transaction'
+    )
+    mismatched.mkdir()
+    (mismatched / 'ACTIVATION_STARTED').write_text('other\n', encoding='utf-8')
+    transaction['env']['RECOVERY_ACKNOWLEDGED_TRANSACTION'] = str(mismatched)
+
+    result = _run_activation(transaction)
+
+    assert result.returncode != 0
+    assert '不匹配' in result.stderr
+    assert not (mismatched / 'RECOVERY_CONFIRMED').exists()
+    assert (
+        transaction['state_dir'] / 'deployments' / 'activation-in-progress'
+    ).is_file()
+    assert guarded.is_dir()
+
+
+def test_partial_recovery_cannot_delete_old_guard_and_ack_is_retryable(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    interrupted = _seed_interrupted_activation_guard(
+        transaction,
+        'retryable-interrupted-transaction',
+    )
+    other = interrupted.parent / 'other-existing-transaction'
+    other.mkdir()
+    permit = (
+        Path(transaction['env']['RUNTIME_BOOT_GUARD_DIR'])
+        / 'activation-permit'
+    )
+    permit.write_text(
+        'release_id=interrupted-release\n'
+        f'transaction={other}\n',
+        encoding='utf-8',
+    )
+    permit.chmod(0o600)
+    persistent_guard = (
+        transaction['state_dir'] / 'deployments' / 'activation-in-progress'
+    )
+    original_guard = persistent_guard.read_bytes()
+    transaction['env']['RECOVERY_ACKNOWLEDGED_TRANSACTION'] = str(interrupted)
+
+    first = _run_activation(transaction)
+
+    assert first.returncode != 0
+    assert '运行期开机许可' in first.stderr
+    assert (interrupted / 'RECOVERY_CONFIRMED').is_file()
+    assert persistent_guard.read_bytes() == original_guard
+
+    transaction['env'].pop('RECOVERY_ACKNOWLEDGED_TRANSACTION')
+    second = _run_activation(transaction)
+
+    assert second.returncode != 0
+    assert '必须显式确认其精确事务' in second.stderr
+    assert persistent_guard.read_bytes() == original_guard
+
+    permit.write_text(
+        'release_id=interrupted-release\n'
+        f'transaction={interrupted}\n',
+        encoding='utf-8',
+    )
+    permit.chmod(0o600)
+    transaction['env']['RECOVERY_ACKNOWLEDGED_TRANSACTION'] = str(interrupted)
+    third = _run_activation(transaction)
+
+    assert third.returncode == 0, third.stderr
+    assert (interrupted / 'activation-in-progress.recovered').is_file()
+    assert not persistent_guard.exists()
+
+
+def test_rollback_required_blocks_until_exact_transaction_is_acknowledged(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    failed = (
+        transaction['state_dir']
+        / 'backups'
+        / 'deploy-transactions'
+        / 'failed-release'
+    )
+    failed.mkdir(parents=True)
+    (failed / 'ACTIVATION_STARTED').write_text('old-release\n', encoding='utf-8')
+    (failed / 'ROLLBACK_REQUIRED.txt').write_text('manual review required\n', encoding='utf-8')
+
+    blocked = _run_activation(transaction)
+
+    assert blocked.returncode != 0
+    assert '尚未人工确认' in blocked.stderr
+    assert not (failed / 'RECOVERY_CONFIRMED').exists()
+    assert transaction['current_link'].resolve() == transaction['old_release'].resolve()
+    assert _database_value(transaction['database_file']) == 'old'
+
+    transaction['env']['RECOVERY_ACKNOWLEDGED_TRANSACTION'] = str(failed)
+    confirmed = _run_activation(transaction)
+
+    assert confirmed.returncode == 0, confirmed.stderr
+    assert (failed / 'RECOVERY_CONFIRMED').is_file()
+    assert transaction['current_link'].resolve() == transaction['new_release'].resolve()
+
+
+def test_recovery_ack_rejects_symlink_escape_and_symlinked_marker(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    transaction_root = (
+        transaction['state_dir'] / 'backups' / 'deploy-transactions'
+    )
+    transaction_root.mkdir()
+    outside = tmp_path / 'outside-transaction'
+    outside.mkdir()
+    (outside / 'ROLLBACK_REQUIRED.txt').write_text(
+        'manual review required\n',
+        encoding='utf-8',
+    )
+    escaped = transaction_root / 'linked-transaction'
+    escaped.symlink_to(outside, target_is_directory=True)
+    transaction['env']['RECOVERY_ACKNOWLEDGED_TRANSACTION'] = str(escaped)
+
+    escaped_result = _run_activation(transaction)
+
+    assert escaped_result.returncode != 0
+    assert 'realpath' in escaped_result.stderr
+    assert not (outside / 'RECOVERY_CONFIRMED').exists()
+    assert transaction['current_link'].resolve() == transaction['old_release'].resolve()
+
+    escaped.unlink()
+    direct = transaction_root / 'direct-transaction'
+    direct.mkdir()
+    marker_target = tmp_path / 'outside-marker.txt'
+    marker_target.write_text('manual review required\n', encoding='utf-8')
+    (direct / 'ROLLBACK_REQUIRED.txt').symlink_to(marker_target)
+    transaction['env']['RECOVERY_ACKNOWLEDGED_TRANSACTION'] = str(direct)
+
+    marker_result = _run_activation(transaction)
+
+    assert marker_result.returncode != 0
+    assert '故障标记不得为符号链接' in marker_result.stderr
+    assert not (direct / 'RECOVERY_CONFIRMED').exists()
+
+    canonical = transaction_root / 'canonical-transaction'
+    canonical.mkdir()
+    (canonical / 'ROLLBACK_REQUIRED.txt').write_text(
+        'manual review required\n',
+        encoding='utf-8',
+    )
+    nested = transaction_root / 'nested'
+    nested.mkdir()
+    transaction['env']['RECOVERY_ACKNOWLEDGED_TRANSACTION'] = (
+        f"{nested}/../{canonical.name}"
+    )
+
+    dotdot_result = _run_activation(transaction)
+
+    assert dotdot_result.returncode != 0
+    assert 'realpath' in dotdot_result.stderr
+    assert not (canonical / 'RECOVERY_CONFIRMED').exists()
+
+
+def test_control_directories_are_private_and_owner_asserted(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+
+    result = _run_activation(transaction)
+
+    assert result.returncode == 0, result.stderr
+    for directory in (
+        transaction['state_dir'] / 'backups',
+        transaction['state_dir'] / 'deployments',
+        transaction['state_dir'] / 'backups' / 'deploy-transactions',
+    ):
+        file_stat = directory.stat()
+        assert file_stat.st_mode & 0o777 == 0o700
+        assert file_stat.st_uid == os.getuid()
+        assert file_stat.st_gid == os.getgid()
+
+
+def test_committed_transaction_with_post_commit_attention_still_blocks(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    failed = (
+        transaction['state_dir']
+        / 'backups'
+        / 'deploy-transactions'
+        / 'committed-but-unverified'
+    )
+    failed.mkdir(parents=True)
+    (failed / 'ACTIVATION_STARTED').write_text('old-release\n', encoding='utf-8')
+    (failed / 'COMMITTED').write_text('success\n', encoding='utf-8')
+    (failed / 'POST_COMMIT_ATTENTION.txt').write_text(
+        'manual review required\n',
+        encoding='utf-8',
+    )
+
+    result = _run_activation(transaction)
+
+    assert result.returncode != 0
+    assert '尚未人工确认' in result.stderr
+    assert transaction['current_link'].resolve() == transaction['old_release'].resolve()
+    assert _database_value(transaction['database_file']) == 'old'
+
+
+def test_formal_activation_rejects_release_commit_metadata_mismatch_before_mutation(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    _staged_text, counter_file = _configure_formal_smoke(transaction)
+    (transaction['new_release'] / 'private-metadata' / 'source-commit.txt').write_text(
+        ('b' * 40) + '\n',
+        encoding='utf-8',
+    )
+
+    result = _run_activation(transaction)
+
+    assert result.returncode != 0
+    assert '上传 release 与冻结 commit 票据不一致' in result.stderr
+    assert transaction['current_link'].resolve() == transaction['old_release'].resolve()
+    assert _database_value(transaction['database_file']) == 'old'
+    assert not counter_file.exists()
+
+
+@pytest.mark.parametrize(
+    ('receipt_name', 'tamper_key', 'message'),
+    (
+        ('ci-proof.json', 'commit_sha', 'GitHub Python CI 收据'),
+        ('model-artifacts.json', 'commit', '模型制品收据'),
+        ('runtime-smoke.json', 'commit_sha', '服务器低内存运行态收据'),
+    ),
+)
+def test_release_proof_mismatch_stops_before_any_activation_mutation(
+    tmp_path,
+    receipt_name,
+    tamper_key,
+    message,
+):
+    transaction = _prepare_transaction(tmp_path)
+    receipt = transaction['new_release'] / 'private-metadata' / receipt_name
+    payload = json.loads(receipt.read_text(encoding='utf-8'))
+    payload[tamper_key] = 'b' * 40
+    _write_private_json(receipt, payload)
+
+    result = _run_activation(transaction)
+
+    assert result.returncode != 0
+    assert message in result.stderr
+    assert transaction['current_link'].resolve() == transaction['old_release'].resolve()
+    assert _database_value(transaction['database_file']) == 'old'
+    transaction_root = (
+        transaction['state_dir'] / 'backups' / 'deploy-transactions'
+    )
+    assert not transaction_root.exists()
+
+
+def test_model_artifact_tamper_stops_before_any_activation_mutation(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    artifact = (
+        transaction['new_release']
+        / 'app'
+        / 'models'
+        / 'scaler.pkl'
+    )
+    artifact.write_bytes(b'tampered-model\n')
+    artifact.chmod(0o640)
+
+    result = _run_activation(transaction)
+
+    assert result.returncode != 0
+    assert '模型制品收据或运行制品' in result.stderr
+    assert transaction['current_link'].resolve() == transaction['old_release'].resolve()
+    assert _database_value(transaction['database_file']) == 'old'
+    transaction_root = (
+        transaction['state_dir'] / 'backups' / 'deploy-transactions'
+    )
+    assert not transaction_root.exists()
+
+
+def test_formal_activation_requires_miniprogram_ci_proof_before_mutation(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    _staged_text, counter_file = _configure_formal_smoke(transaction)
+    (
+        transaction['new_release']
+        / 'private-metadata'
+        / 'miniprogram-ci-proof.json'
+    ).unlink()
+
+    result = _run_activation(transaction)
+
+    assert result.returncode != 0
+    assert 'miniprogram-ci-proof.json' in result.stderr
+    assert transaction['current_link'].resolve() == transaction['old_release'].resolve()
+    assert _database_value(transaction['database_file']) == 'old'
+    assert not counter_file.exists()
+
+
+def test_web_backend_formal_runtime_requires_miniprogram_proof_before_mutation(
+    tmp_path,
+):
+    transaction = _prepare_transaction(tmp_path)
+    counter_file = _configure_web_formal_mini_only(transaction)
+    (
+        transaction['new_release']
+        / 'private-metadata'
+        / 'miniprogram-ci-proof.json'
+    ).unlink()
+
+    result = _run_activation(transaction)
+
+    assert result.returncode != 0
+    assert 'miniprogram-ci-proof.json' in result.stderr
+    assert transaction['current_link'].resolve() == transaction[
+        'old_release'
+    ].resolve()
+    assert _database_value(transaction['database_file']) == 'old'
+    assert not counter_file.exists()
+
+
+def test_formal_runtime_log_guard_runs_after_lease_before_mutation(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    _configure_formal_smoke(transaction)
+    lock_marker = tmp_path / 'deploy-lock-acquired'
+    audit_file = tmp_path / 'runtime-log-guard-audit.json'
+    fake_flock = tmp_path / 'fake-bin' / 'flock'
+    _write_executable(
+        fake_flock,
+        """#!/bin/sh
+set -eu
+[ "$1" = "-n" ]
+[ "$2" = "9" ]
+: > "$FAKE_DEPLOY_LOCK_ACQUIRED"
+""",
+    )
+    helper = tmp_path / 'runtime-log-boundary-order-helper'
+    _write_executable(
+        helper,
+        f"""#!/usr/bin/env python3
+import json
+import os
+import sqlite3
+import sys
+from pathlib import Path
+
+lock_path, transaction_path, mutation_started = sys.argv[1:]
+current_link = Path(os.environ['CURRENT_LINK'])
+database = Path({str(transaction['database_file'])!r})
+connection = sqlite3.connect(database)
+try:
+    database_value = connection.execute(
+        'SELECT value FROM release_state'
+    ).fetchone()[0]
+finally:
+    connection.close()
+event = {{
+    'lock_argument': lock_path,
+    'lock_file_exists': Path(lock_path).is_file(),
+    'flock_marker_exists': Path(
+        os.environ['FAKE_DEPLOY_LOCK_ACQUIRED']
+    ).is_file(),
+    'transaction_exists': Path(transaction_path).exists(),
+    'lease_reserved': Path(
+        {str(transaction['state_dir'] / 'formal-smoke-lease-token')!r}
+    ).is_file(),
+    'mutation_started': mutation_started,
+    'current_is_old': current_link.resolve() == Path(
+        {str(transaction['old_release'])!r}
+    ).resolve(),
+    'database_value': database_value,
+    'live_env_is_old': 'RELEASE_VALUE=old' in Path(
+        os.environ['ENV_FILE']
+    ).read_text(encoding='utf-8'),
+}}
+Path({str(audit_file)!r}).write_text(
+    json.dumps(event, sort_keys=True),
+    encoding='utf-8',
+)
+if not all((
+    event['lock_file_exists'],
+    event['flock_marker_exists'],
+    event['transaction_exists'],
+    event['lease_reserved'],
+    event['mutation_started'] == '0',
+    event['current_is_old'],
+    event['database_value'] == 'old',
+    event['live_env_is_old'],
+)):
+    raise SystemExit(91)
+raise SystemExit(47)
+""",
+    )
+    transaction['env'].update({
+        'FLOCK_BIN': str(fake_flock),
+        'FAKE_DEPLOY_LOCK_ACQUIRED': str(lock_marker),
+        'RUNTIME_LOG_BOUNDARY_TEST_HELPER': str(helper),
+    })
+
+    result = _run_activation(transaction)
+
+    assert result.returncode == 47
+    assert json.loads(audit_file.read_text(encoding='utf-8')) == {
+        'lock_argument': str(transaction['release_root'] / 'deploy.lock'),
+        'lock_file_exists': True,
+        'flock_marker_exists': True,
+        'transaction_exists': True,
+        'lease_reserved': True,
+        'mutation_started': '0',
+        'current_is_old': True,
+        'database_value': 'old',
+        'live_env_is_old': True,
+    }
+    assert transaction['current_link'].resolve() == transaction['old_release'].resolve()
+    assert _database_value(transaction['database_file']) == 'old'
+    assert not (
+        transaction['state_dir'] / 'formal-smoke-lease-token'
+    ).exists()
+    assert (
+        transaction['state_dir'] / 'formal-smoke-lease-release-count'
+    ).read_text(encoding='utf-8') == '1'
+    rollback_markers = list(
+        (transaction['state_dir'] / 'backups').rglob('ROLLED_BACK')
+    )
+    assert len(rollback_markers) == 1
+    assert rollback_markers[0].read_text(encoding='utf-8').strip() == 'pre-mutation'
+
+
+def test_formal_runtime_log_guard_failure_leaves_production_state_unchanged(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    _configure_formal_smoke(transaction)
+    helper = tmp_path / 'runtime-log-boundary-failing-helper'
+    _write_executable(helper, "#!/bin/sh\nexit 47\n")
+    transaction['env']['RUNTIME_LOG_BOUNDARY_TEST_HELPER'] = str(helper)
+    live_env_before = (transaction['state_dir'] / '.env').read_bytes()
+    staged_env_before = (transaction['new_release'] / 'staged.env').read_bytes()
+
+    result = _run_activation(transaction)
+
+    assert result.returncode == 47
+    assert transaction['current_link'].resolve() == transaction['old_release'].resolve()
+    assert _database_value(transaction['database_file']) == 'old'
+    assert (transaction['state_dir'] / '.env').read_bytes() == live_env_before
+    assert (transaction['new_release'] / 'staged.env').read_bytes() == staged_env_before
+    rollback_markers = list(
+        (transaction['state_dir'] / 'backups').rglob('ROLLED_BACK')
+    )
+    assert len(rollback_markers) == 1
+    assert rollback_markers[0].read_text(encoding='utf-8').strip() == 'pre-mutation'
+    assert not (
+        transaction['state_dir'] / 'formal-smoke-lease-token'
+    ).exists()
+    assert (
+        transaction['state_dir'] / 'formal-smoke-lease-release-count'
+    ).read_text(encoding='utf-8') == '1'
+    assert not any(
+        action.split()[0] in {
+            'daemon-reload', 'disable', 'enable', 'reload', 'restart', 'start', 'stop',
+        }
+        for action in transaction['systemctl_log'].read_text(
+            encoding='utf-8'
+        ).splitlines()
+    )
+
+
+def test_formal_runtime_log_guard_forces_local_probe_to_bypass_proxy():
+    """本机日志零增长探针必须命中真实 Nginx 回环入口。"""
+    script = ACTIVATE_SCRIPT.read_text(encoding='utf-8')
+    probe = script.split('verify_formal_runtime_healthz_probe() {', 1)[1].split(
+        '\n}',
+        1,
+    )[0]
+    guard = script.split(
+        'formal_runtime_stopped_probe_is_allowed() {',
+        1,
+    )[1].split('\n}', 1)[0]
+
+    assert "--noproxy '*'" in probe
+    assert "--header 'Host: yilaoweather.org'" in probe
+    assert 'http://127.0.0.1:8080/healthz' in probe
+    assert "--write-out '%{http_code}'" in probe
+    assert 'allow_stopped_recovery=1' in probe
+    assert (
+        'guard_transaction" != "$RECOVERY_ACKNOWLEDGED_TRANSACTION'
+        in guard
+    )
+    assert '502)' in probe
+    assert '200)' in probe
+    assert '--fail' not in probe
+    assert '--resolve yilaoweather.org:443:127.0.0.1' not in probe
+    assert 'https://yilaoweather.org/healthz' not in probe
+
+
+def test_formal_runtime_healthz_probe_accepts_ordinary_200(tmp_path):
+    result = _run_formal_runtime_healthz_probe(tmp_path, status='200')
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_formal_runtime_healthz_probe_rejects_ordinary_502(tmp_path):
+    result = _run_formal_runtime_healthz_probe(tmp_path, status='502')
+
+    assert result.returncode != 0
+    assert '非预期状态: 502' in result.stderr
+
+
+def test_formal_runtime_healthz_probe_accepts_exact_ack_guard_502(tmp_path):
+    result = _run_formal_runtime_healthz_probe(
+        tmp_path,
+        status='502',
+        acknowledgement='exact',
+        acknowledgement_verified_this_run=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert '接受预期 502' in result.stderr
+
+
+def test_formal_runtime_healthz_probe_rejects_verified_ack_without_live_guard(
+    tmp_path,
+):
+    result = _run_formal_runtime_healthz_probe(
+        tmp_path,
+        status='502',
+        acknowledgement='exact',
+        acknowledgement_verified_this_run=True,
+        omit_guard=True,
+    )
+
+    assert result.returncode != 0
+    assert '非预期状态: 502' in result.stderr
+
+
+def test_formal_runtime_healthz_probe_rejects_raw_ack_without_this_run_proof(
+    tmp_path,
+):
+    result = _run_formal_runtime_healthz_probe(
+        tmp_path,
+        status='502',
+        acknowledgement='exact',
+    )
+
+    assert result.returncode != 0
+    assert '尚未在本轮完成精确事务校验' in result.stderr
+
+
+def test_recovery_probe_verification_state_is_not_inherited():
+    script = ACTIVATE_SCRIPT.read_text(encoding='utf-8')
+
+    assert '\nRECOVERY_ACKNOWLEDGEMENT_VERIFIED_THIS_RUN=""\n' in script
+    assert 'RECOVERY_ACKNOWLEDGEMENT_VERIFIED_THIS_RUN="${' not in script
+
+
+def test_recovery_probe_precedes_guard_archive_in_activation_flow():
+    script = ACTIVATE_SCRIPT.read_text(encoding='utf-8')
+
+    acknowledgement = script.rindex('\nacknowledge_recovery_transaction\n')
+    lease = script.rindex('\npreflight_formal_smoke_cycle_lease\n')
+    restore = script.rindex(
+        '\nrestore_archived_activation_boot_guard_if_acknowledged\n'
+    )
+    probe = script.rindex('\nverify_formal_runtime_log_boundary\n')
+    archive = script.rindex('\nrecover_activation_boot_guard_if_acknowledged\n')
+    activation = script.rindex('\nwrite_durable_marker "$STARTED_MARKER"')
+
+    assert acknowledgement < lease < restore < probe < archive < activation
+
+
+@pytest.mark.parametrize(
+    'kwargs, expected_error',
+    (
+        (
+            {
+                'acknowledgement': 'mismatch',
+                'acknowledgement_verified_this_run': True,
+            },
+            '事务不匹配',
+        ),
+        (
+            {'acknowledgement': 'exact', 'invalid_guard_mode': True},
+            '无效的持久开机门',
+        ),
+        (
+            {'acknowledgement': 'exact', 'symlink_guard': True},
+            '无效的持久开机门',
+        ),
+        (
+            {
+                'terminal': 'COMMITTED',
+                'symlink_terminal': True,
+            },
+            '无效或冲突的事务终态标记',
+        ),
+        (
+            {
+                'terminal': 'COMMITTED',
+                'terminal_mode': 0o644,
+            },
+            '无效或冲突的事务终态标记',
+        ),
+        (
+            {
+                'both_terminals': True,
+            },
+            '无效或冲突的事务终态标记',
+        ),
+        (
+            {
+                'terminal': 'COMMITTED',
+                'terminal_payload': 'unexpected\n',
+            },
+            '无效或冲突的事务终态标记',
+        ),
+    ),
+)
+def test_formal_runtime_healthz_probe_rejects_untrusted_guard(
+    tmp_path,
+    kwargs,
+    expected_error,
+):
+    result = _run_formal_runtime_healthz_probe(
+        tmp_path,
+        status='502',
+        **kwargs,
+    )
+
+    assert result.returncode != 0
+    assert expected_error in result.stderr
+
+
+@pytest.mark.parametrize(
+    'kwargs, expected_error',
+    (
+        ({'status': '503'}, '非预期状态: 503'),
+        ({'curl_exit': 7}, 'healthz 请求失败'),
+    ),
+)
+def test_formal_runtime_healthz_probe_rejects_other_failures(
+    tmp_path,
+    kwargs,
+    expected_error,
+):
+    result = _run_formal_runtime_healthz_probe(tmp_path, **kwargs)
+
+    assert result.returncode != 0
+    assert expected_error in result.stderr
+
+
+def test_formal_runtime_healthz_probe_rejects_502_log_growth(tmp_path):
+    result = _run_formal_runtime_healthz_probe(
+        tmp_path,
+        status='502',
+        acknowledgement='exact',
+        acknowledgement_verified_this_run=True,
+        grow_log=True,
+    )
+
+    assert result.returncode != 0
+    assert '访问者日志增长' in result.stderr
+
+
+@pytest.mark.parametrize(
+    'terminal, terminal_payload',
+    (
+        ('COMMITTED', 'success\n'),
+        ('ROLLED_BACK', 'success\n'),
+        ('ROLLED_BACK', 'pre-mutation\n'),
+    ),
+)
+def test_formal_runtime_healthz_probe_accepts_terminal_guard_502(
+    tmp_path,
+    terminal,
+    terminal_payload,
+):
+    result = _run_formal_runtime_healthz_probe(
+        tmp_path,
+        status='502',
+        terminal=terminal,
+        terminal_payload=terminal_payload,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert '接受预期 502' in result.stderr
+
+
+def test_durable_checkpoints_precede_mutation_and_the_only_weather_request(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    runtime_env = transaction['state_dir'] / 'backups' / 'backup-runtime.env'
+    runtime_env.write_text(
+        f'BACKUP_DATABASE_FILE={transaction["database_file"]}\nBACKUP_PRUNE=1\n',
+        encoding='utf-8',
+    )
+    staged_text, counter_file = _configure_formal_smoke(transaction)
+    (transaction['new_release'] / 'staged.env').write_text(
+        staged_text + 'QWEATHER_NETWORK_NOT_BEFORE_EPOCH=4102444800\n',
+        encoding='utf-8',
+    )
+    fake_sync = tmp_path / 'fake-bin' / 'sync'
+    _make_fake_sync(fake_sync)
+    audit_file = tmp_path / 'durability-audit.jsonl'
+    transaction['env'].update({
+        'SYNC_BIN': str(fake_sync),
+        'FAKE_SYNC_COUNT_FILE': str(tmp_path / 'sync-count'),
+        'FAKE_SYNC_AUDIT_FILE': str(audit_file),
+        'FAKE_SYNC_KILL_ON': '3',
+        'FAKE_DURABILITY_DATABASE': str(transaction['database_file']),
+        'FAKE_WEATHER_COUNT_FILE': str(counter_file),
+    })
+
+    result = _run_activation(transaction)
+
+    assert result.returncode == -signal.SIGKILL
+    events = [json.loads(line) for line in audit_file.read_text(encoding='utf-8').splitlines()]
+    assert [event['call'] for event in events] == [1, 2, 3]
+    captured, recovery, smoke_started = events
+    assert captured == {
+        'call': 1,
+        'capture_checkpoint': True,
+        'recovery_checkpoint': False,
+        'env_backup': False,
+        'backup_env_backup': False,
+        'db_backup': False,
+        'guard': False,
+        'stop_seen': False,
+        'live_release_new': False,
+        'network_gate_high': False,
+        'database_value': 'old',
+        'started_receipt': False,
+        'completed_receipt': False,
+        'weather_count_exists': False,
+    }
+    assert recovery['capture_checkpoint'] is True
+    assert recovery['recovery_checkpoint'] is True
+    assert recovery['env_backup'] is True
+    assert recovery['backup_env_backup'] is True
+    assert recovery['db_backup'] is True
+    assert recovery['guard'] is True
+    assert recovery['stop_seen'] is True
+    assert recovery['live_release_new'] is False
+    assert recovery['database_value'] == 'old'
+    assert recovery['started_receipt'] is False
+    assert recovery['weather_count_exists'] is False
+    assert smoke_started['started_receipt'] is True
+    assert smoke_started['completed_receipt'] is False
+    assert smoke_started['weather_count_exists'] is False
+    assert smoke_started['live_release_new'] is True
+    assert smoke_started['network_gate_high'] is True
+    assert smoke_started['database_value'] == 'new'
+    assert not counter_file.exists()
+    receipt_dirs = list(
+        (transaction['state_dir'] / 'deployments' / 'formal-cache-smokes').iterdir()
+    )
+    assert len(receipt_dirs) == 1
+    assert (receipt_dirs[0] / 'started').is_file()
+    assert not (receipt_dirs[0] / 'completed').exists()
+
+
+def test_completed_receipt_is_reused_after_pre_public_failure(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    _staged_text, counter_file = _configure_formal_smoke(transaction)
+    transaction['env']['FAKE_PUBLIC_HEALTH_OK'] = '0'
+
+    first = _run_activation(transaction)
+
+    assert first.returncode != 0
+    assert counter_file.read_text(encoding='utf-8') == '1'
+    lease_reservation_count = (
+        transaction['state_dir'] / 'formal-smoke-lease-reservation-count'
+    )
+    lease_renewal_count = (
+        transaction['state_dir'] / 'formal-smoke-lease-renewal-count'
+    )
+    assert lease_reservation_count.read_text(encoding='utf-8') == '1'
+    assert lease_renewal_count.read_text(encoding='utf-8') == '1'
+    receipt_dirs = list(
+        (transaction['state_dir'] / 'deployments' / 'formal-cache-smokes').iterdir()
+    )
+    assert len(receipt_dirs) == 1
+    assert (receipt_dirs[0] / 'completed').is_file()
+    assert transaction['current_link'].resolve() == transaction['new_release'].resolve()
+    assert _database_value(transaction['database_file']) == 'new'
+    connection = sqlite3.connect(transaction['database_file'])
+    try:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM miniprogram_snapshots WHERE snapshot_id = 'formal-snapshot-1'"
+        ).fetchone()[0] == 1
+    finally:
+        connection.close()
+    markers = list(
+        (transaction['state_dir'] / 'backups').rglob('POST_COMMIT_ATTENTION.txt')
+    )
+    assert len(markers) == 1
+    assert (
+        transaction['state_dir'] / 'deployments' / 'activation-in-progress'
+    ).is_file()
+    assert not (
+        Path(transaction['env']['RUNTIME_BOOT_GUARD_DIR']) / 'activation-permit'
+    ).exists()
+    for unit in ALL_UNITS:
+        assert not (transaction['fake_state'] / f'{unit}.active').exists()
+
+    forward_release = transaction['new_release']
+    _retarget_formal_retry(transaction)
+    (transaction['new_release'] / 'staged.env').write_text(
+        (transaction['state_dir'] / '.env').read_text(encoding='utf-8'),
+        encoding='utf-8',
+    )
+    transaction['env']['FAKE_PUBLIC_HEALTH_OK'] = '1'
+    transaction['env']['RECOVERY_ACKNOWLEDGED_TRANSACTION'] = str(markers[0].parent)
+    current_release_ledger = (
+        transaction['state_dir'] / 'deployments' / 'current-release'
+    )
+    current_release_ledger.write_text(
+        f'{transaction["old_release"]}\n',
+        encoding='utf-8',
+    )
+
+    second = _run_activation(transaction)
+
+    assert second.returncode == 0, second.stderr
+    assert counter_file.read_text(encoding='utf-8') == '1'
+    assert lease_reservation_count.read_text(encoding='utf-8') == '1'
+    assert lease_renewal_count.read_text(encoding='utf-8') == '1'
+    assert '未再次请求上游' in second.stdout
+    assert (
+        markers[0].parent / 'CURRENT_RELEASE_RECONCILED'
+    ).read_text(encoding='utf-8') == (
+        f'release={forward_release}\n'
+    )
+
+
+def test_quarantine_stops_other_units_when_backup_state_query_fails(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    _staged_text, counter_file = _configure_formal_smoke(transaction)
+    transaction['env']['FAKE_PUBLIC_HEALTH_OK'] = '0'
+    transaction['env']['FAKE_FAIL_BACKUP_STATE_QUERY_ON'] = '4'
+
+    result = _run_activation(transaction)
+
+    assert result.returncode == 70
+    assert counter_file.read_text(encoding='utf-8') == '1'
+    for unit in ALL_UNITS:
+        assert not (transaction['fake_state'] / f'{unit}.active').exists()
+        assert not (transaction['fake_state'] / f'{unit}.activating').exists()
+    assert (
+        transaction['state_dir'] / 'deployments' / 'activation-in-progress'
+    ).is_file()
+    assert not (
+        Path(transaction['env']['RUNTIME_BOOT_GUARD_DIR']) / 'activation-permit'
+    ).exists()
+    attention = list(
+        (transaction['state_dir'] / 'backups').rglob('POST_COMMIT_ATTENTION.txt')
+    )
+    assert len(attention) == 1
+
+
+def test_formal_qweather_smoke_writes_completed_receipt_and_reuses_without_request(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    _staged_text, counter_file = _configure_formal_smoke(transaction)
+
+    first = _run_activation(transaction)
+
+    assert first.returncode == 0, first.stderr
+    assert counter_file.read_text(encoding='utf-8') == '1'
+    receipt_dirs = list(
+        (transaction['state_dir'] / 'deployments' / 'formal-cache-smokes').iterdir()
+    )
+    assert len(receipt_dirs) == 1
+    receipt = receipt_dirs[0]
+    assert (receipt / 'started').is_file()
+    assert (receipt / 'completed').is_file()
+    started_text = (receipt / 'started').read_text(encoding='utf-8')
+    assert 'budget_month=2026-07' in started_text
+    assert 'budget_used_before=10' in started_text
+    assert 'budget_endpoints_before_json={}' in started_text
+    assert re.search(r'^formal_smoke_binding=[0-9a-f]{64}$', started_text, re.MULTILINE)
+    assert re.search(
+        r'^formal_smoke_token_sha256=[0-9a-f]{64}$',
+        started_text,
+        re.MULTILINE,
+    )
+    assert re.search(
+        r'^formal_smoke_lease_token_sha256=[0-9a-f]{64}$',
+        started_text,
+        re.MULTILINE,
+    )
+    lease_token = (
+        transaction['state_dir'] / 'formal-smoke-lease-token'
+    ).read_text(encoding='ascii')
+    assert (
+        f'formal_smoke_lease_token_sha256='
+        f'{hashlib.sha256(lease_token.encode("ascii")).hexdigest()}'
+    ) in started_text
+    lease_reservation_count = (
+        transaction['state_dir'] / 'formal-smoke-lease-reservation-count'
+    )
+    lease_renewal_count = (
+        transaction['state_dir'] / 'formal-smoke-lease-renewal-count'
+    )
+    assert lease_reservation_count.read_text(encoding='utf-8') == '1'
+    assert lease_renewal_count.read_text(encoding='utf-8') == '1'
+    assert list((transaction['state_dir'] / 'run').glob('formal-weather-smoke-*.ticket')) == []
+    completed_text = (receipt / 'completed').read_text(encoding='utf-8')
+    assert 'snapshot_id=formal-snapshot-1' in (receipt / 'completed').read_text(
+        encoding='utf-8'
+    )
+    assert 'budget_used_after=13' in completed_text
+    assert 'budget_total_delta=3' in completed_text
+    assert (
+        'budget_endpoint_deltas_json='
+        '{"weather_7d_forecast":1,"weather_now":1,"weatheralert_v1_current":1}'
+    ) in completed_text
+
+    # 动态网络闸门和非天气发布字段轮换都不能获得第二次自动烟测机会。
+    rotated_config = (transaction['state_dir'] / '.env').read_text(encoding='utf-8')
+    for old, new in (
+        ('WXPUSHER_APP_TOKEN=test-wxpusher-token', 'WXPUSHER_APP_TOKEN=rotated-token'),
+        ('FEATURE_HEAT_EXPOSURE_GIS=1', 'FEATURE_HEAT_EXPOSURE_GIS=0'),
+        (
+            f'WX_MINIPROGRAM_APPID={TEST_MINIPROGRAM_APPID}',
+            f'WX_MINIPROGRAM_APPID={ROTATED_TEST_MINIPROGRAM_APPID}',
+        ),
+        ('WX_MINIPROGRAM_SECRET=test-miniprogram-secret', 'WX_MINIPROGRAM_SECRET=rotated-secret'),
+        ('WX_MINIPROGRAM_PRIVACY_VERSION=2026-07-18', 'WX_MINIPROGRAM_PRIVACY_VERSION=2026-07-19'),
+        ('PUBLIC_BASE_URL=https://yilaoweather.org', 'PUBLIC_BASE_URL=https://preview.example.invalid'),
+    ):
+        assert old in rotated_config
+        rotated_config = rotated_config.replace(old, new)
+    (transaction['new_release'] / 'staged.env').write_text(
+        rotated_config,
+        encoding='utf-8',
+    )
+    second = _run_activation(transaction)
+
+    assert second.returncode == 0, second.stderr
+    assert counter_file.read_text(encoding='utf-8') == '1'
+    assert lease_reservation_count.read_text(encoding='utf-8') == '1'
+    assert lease_renewal_count.read_text(encoding='utf-8') == '1'
+    assert '未再次请求上游' in second.stdout
+    assert list(
+        (transaction['state_dir'] / 'deployments' / 'formal-cache-smokes').iterdir()
+    ) == [receipt]
+
+
+def test_qweather_kid_change_creates_new_weather_fingerprint(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    _staged_text, counter_file = _configure_formal_smoke(transaction)
+    first = _run_activation(transaction)
+    assert first.returncode == 0, first.stderr
+    assert counter_file.read_text(encoding='utf-8') == '1'
+
+    weather_config = (transaction['state_dir'] / '.env').read_text(encoding='utf-8')
+    assert 'QWEATHER_JWT_KID=test-kid' in weather_config
+    weather_config = weather_config.replace(
+        'QWEATHER_JWT_KID=test-kid',
+        'QWEATHER_JWT_KID=rotated-test-kid',
+    ).replace(
+        'QWEATHER_EXPECTED_KID=test-kid',
+        'QWEATHER_EXPECTED_KID=rotated-test-kid',
+    )
+    (transaction['new_release'] / 'staged.env').write_text(
+        weather_config,
+        encoding='utf-8',
+    )
+    second = _run_activation(transaction)
+
+    assert second.returncode == 0, second.stderr
+    assert counter_file.read_text(encoding='utf-8') == '2'
+    receipt_dirs = list(
+        (transaction['state_dir'] / 'deployments' / 'formal-cache-smokes').iterdir()
+    )
+    assert len(receipt_dirs) == 2
+    assert all((receipt / 'completed').is_file() for receipt in receipt_dirs)
+
+
+def test_weather_cache_redis_backend_change_is_rejected_before_mutation(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    _staged_text, counter_file = _configure_formal_smoke(transaction)
+    first = _run_activation(transaction)
+    assert first.returncode == 0, first.stderr
+    assert counter_file.read_text(encoding='utf-8') == '1'
+
+    redis_config = (transaction['state_dir'] / '.env').read_text(
+        encoding='utf-8'
+    )
+    assert 'WEATHER_CACHE_REDIS_URL=' not in redis_config
+    redis_config += 'WEATHER_CACHE_REDIS_URL=redis://127.0.0.1:6379/9\n'
+    (transaction['new_release'] / 'staged.env').write_text(
+        redis_config,
+        encoding='utf-8',
+    )
+
+    transaction_count_before = len(list(
+        (
+            transaction['state_dir']
+            / 'backups'
+            / 'deploy-transactions'
+        ).iterdir()
+    ))
+    current_before = transaction['current_link'].resolve()
+    database_before = _database_value(transaction['database_file'])
+    environment_before = (transaction['state_dir'] / '.env').read_bytes()
+    transaction['systemctl_log'].write_text('', encoding='utf-8')
+
+    second = _run_activation(transaction)
+
+    assert second.returncode != 0
+    assert '有效 Redis 后端不同' in second.stderr
+    assert counter_file.read_text(encoding='utf-8') == '1'
+    receipt_dirs = list(
+        (transaction['state_dir'] / 'deployments' / 'formal-cache-smokes').iterdir()
+    )
+    assert len(receipt_dirs) == 1
+    assert all((receipt / 'completed').is_file() for receipt in receipt_dirs)
+    assert transaction['current_link'].resolve() == current_before
+    assert _database_value(transaction['database_file']) == database_before
+    assert (transaction['state_dir'] / '.env').read_bytes() == environment_before
+    assert len(list(
+        (
+            transaction['state_dir']
+            / 'backups'
+            / 'deploy-transactions'
+        ).iterdir()
+    )) == transaction_count_before
+    assert transaction['systemctl_log'].read_text(encoding='utf-8') == ''
+
+
+def test_equivalent_effective_redis_urls_share_one_backend_identity(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    staged_text, counter_file = _configure_formal_smoke(transaction)
+    active_env = Path(transaction['env']['ENV_FILE'])
+    active_env.write_text(
+        active_env.read_text(encoding='utf-8').replace(
+            'REDIS_URL=redis://127.0.0.1:6379/0',
+            'REDIS_URL=redis://LOCALHOST/0',
+        ),
+        encoding='utf-8',
+    )
+    (transaction['new_release'] / 'staged.env').write_text(
+        staged_text.replace(
+            'REDIS_URL=redis://127.0.0.1:6379/0',
+            'REDIS_URL=redis://localhost:6379/0',
+        ),
+        encoding='utf-8',
+    )
+
+    result = _run_activation(transaction)
+
+    assert result.returncode == 0, result.stderr
+    assert counter_file.read_text(encoding='utf-8') == '1'
+
+
+def test_duplicate_redis_query_keys_are_rejected_before_formal_mutation(
+    tmp_path,
+):
+    transaction = _prepare_transaction(tmp_path)
+    staged_text, counter_file = _configure_formal_smoke(transaction)
+    active_env = Path(transaction['env']['ENV_FILE'])
+    active_env.write_text(
+        active_env.read_text(encoding='utf-8').replace(
+            'redis://127.0.0.1:6379/0',
+            'redis://127.0.0.1/0?port=6380&port=6379',
+        ),
+        encoding='utf-8',
+    )
+    (transaction['new_release'] / 'staged.env').write_text(
+        staged_text.replace(
+            'redis://127.0.0.1:6379/0',
+            'redis://127.0.0.1/0?port=6379&port=6380',
+        ),
+        encoding='utf-8',
+    )
+
+    result = _run_activation(transaction)
+
+    assert result.returncode != 0
+    assert 'Redis 后端身份无法安全解析' in result.stderr
+    assert not counter_file.exists()
+    assert transaction['current_link'].resolve() == transaction['old_release'].resolve()
+    assert _database_value(transaction['database_file']) == 'old'
+    transaction_root = (
+        transaction['state_dir'] / 'backups' / 'deploy-transactions'
+    )
+    assert transaction_root.is_dir()
+    assert list(transaction_root.iterdir()) == []
+    systemctl_actions = (
+        transaction['systemctl_log'].read_text(encoding='utf-8').splitlines()
+        if transaction['systemctl_log'].exists()
+        else []
+    )
+    assert not any(
+        action.split()[0] in {'disable', 'enable', 'restart', 'start', 'stop'}
+        for action in systemctl_actions
+    )
+
+
+def test_lost_completed_receipt_never_retries_the_weather_request(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    _staged_text, counter_file = _configure_formal_smoke(transaction)
+    first = _run_activation(transaction)
+    assert first.returncode == 0, first.stderr
+    assert counter_file.read_text(encoding='utf-8') == '1'
+    receipt_dirs = list(
+        (transaction['state_dir'] / 'deployments' / 'formal-cache-smokes').iterdir()
+    )
+    assert len(receipt_dirs) == 1
+    (receipt_dirs[0] / 'completed').unlink()
+    (transaction['new_release'] / 'staged.env').write_text(
+        (transaction['state_dir'] / '.env').read_text(encoding='utf-8'),
+        encoding='utf-8',
+    )
+
+    second = _run_activation(transaction)
+
+    assert second.returncode != 0
+    assert '禁止自动重试' in second.stderr
+    assert counter_file.read_text(encoding='utf-8') == '1'
+
+
+def test_jwt_private_key_content_change_creates_new_weather_fingerprint(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    private_key = tmp_path / 'qweather-private.pem'
+    _write_test_ed25519_private_key(private_key)
+    _staged_text, counter_file = _configure_formal_jwt_smoke(
+        transaction,
+        private_key,
+    )
+
+    first = _run_activation(transaction)
+
+    assert first.returncode == 0, first.stderr
+    assert counter_file.read_text(encoding='utf-8') == '1'
+
+    _write_test_ed25519_private_key(private_key)
+    rotated_final = transaction['qweather_private_dir'] / 'qweather-formal-rotated.pem'
+    rotated_config = (transaction['state_dir'] / '.env').read_text(encoding='utf-8')
+    rotated_config = rotated_config.replace(
+        f'QWEATHER_JWT_PRIVATE_KEY_PATH={transaction["qweather_final_key"]}',
+        f'QWEATHER_JWT_PRIVATE_KEY_PATH={rotated_final}',
+    )
+    (transaction['new_release'] / 'staged.env').write_text(rotated_config, encoding='utf-8')
+    transaction['qweather_pending_key'].write_bytes(private_key.read_bytes())
+    transaction['qweather_pending_key'].chmod(0o600)
+    second = _run_activation(transaction)
+
+    assert second.returncode == 0, second.stderr
+    assert counter_file.read_text(encoding='utf-8') == '2'
+    receipt_dirs = list(
+        (transaction['state_dir'] / 'deployments' / 'formal-cache-smokes').iterdir()
+    )
+    assert len(receipt_dirs) == 2
+
+
+def test_jwt_private_key_symlink_fails_before_weather_request(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    private_key = tmp_path / 'qweather-private.pem'
+    private_key.write_bytes(b'private-key-material')
+    private_key.chmod(0o640)
+    linked_key = tmp_path / 'linked-private.pem'
+    linked_key.symlink_to(private_key)
+    _staged_text, counter_file = _configure_formal_jwt_smoke(
+        transaction,
+        linked_key,
+    )
+
+    result = _run_activation(transaction)
+
+    assert result.returncode != 0
+    assert 'QWeather pending/final 私钥或转换计划校验失败' in result.stderr
+    assert str(private_key) not in result.stderr
+    assert not counter_file.exists()
+    assert not (
+        transaction['state_dir'] / 'deployments' / 'formal-cache-smokes'
+    ).exists()
+
+
+def test_malformed_jwt_key_fails_offline_before_started_receipt(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    private_key = tmp_path / 'qweather-private.pem'
+    private_key.write_bytes(b'malformed-private-key')
+    private_key.chmod(0o640)
+    _staged_text, counter_file = _configure_formal_jwt_smoke(
+        transaction,
+        private_key,
+    )
+
+    result = _run_activation(transaction)
+
+    assert result.returncode != 0
+    assert '正式 JWT 运行用户离线签名预检失败' in result.stderr
+    assert not counter_file.exists()
+    assert not (
+        transaction['state_dir'] / 'deployments' / 'formal-cache-smokes'
+    ).exists()
+
+
+def test_jwt_private_key_0600_fails_before_weather_request(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    private_key = tmp_path / 'qweather-private.pem'
+    _write_test_ed25519_private_key(private_key)
+    private_key.chmod(0o600)
+    _staged_text, counter_file = _configure_formal_jwt_smoke(
+        transaction,
+        private_key,
+    )
+    transaction['qweather_final_key'].write_bytes(private_key.read_bytes())
+    transaction['qweather_final_key'].chmod(0o600)
+
+    result = _run_activation(transaction)
+
+    assert result.returncode != 0
+    assert 'QWeather pending/final 私钥或转换计划校验失败' in result.stderr
+    assert not counter_file.exists()
+    assert not (
+        transaction['state_dir'] / 'deployments' / 'formal-cache-smokes'
+    ).exists()
+
+
+def test_formal_jwt_key_checks_root_group_read_only_state():
+    content = ACTIVATE_SCRIPT.read_text(encoding='utf-8')
+
+    assert 'stat.S_IMODE(before.st_mode) != 0o640' in content
+    assert 'before.st_uid != expected_key_owner_uid' in content
+    assert 'before.st_gid != expected_key_group_gid' in content
+    assert 'stat.S_IMODE(key_stat.st_mode) != 0o640' in content
+    assert 'key_stat.st_uid != expected_key_owner_uid' in content
+    assert 'key_stat.st_gid != expected_key_group_gid' in content
+    assert content.index(
+        'reconcile_qweather_key_plan "$TRANSACTION_DIR" committed'
+    ) < content.index('COMMITTED=1')
+
+
+def test_qweather_key_create_then_reuse_only_after_quiescence(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    _staged_text, _counter_file = _configure_formal_smoke(transaction)
+
+    first = _run_activation(transaction)
+
+    assert first.returncode == 0, first.stderr
+    stop_audit = json.loads(
+        Path(transaction['env']['FAKE_QWEATHER_KEY_STOP_AUDIT']).read_text(
+            encoding='utf-8'
+        )
+    )
+    assert stop_audit == {
+        'unit': 'case-weather-backup.timer',
+        'pending_mode': '0o600',
+        'pending_regular': True,
+        'final_exists': False,
+    }
+    assert transaction['qweather_final_key'].is_file()
+    assert transaction['qweather_final_key'].stat().st_mode & 0o777 == 0o640
+    assert not transaction['qweather_pending_key'].exists()
+    plans = sorted(
+        (transaction['state_dir'] / 'backups' / 'deploy-transactions').glob(
+            '*/qweather-key-transition.json'
+        )
+    )
+    assert [json.loads(path.read_text(encoding='utf-8'))['action'] for path in plans] == [
+        'create'
+    ]
+
+    (transaction['new_release'] / 'staged.env').write_text(
+        (transaction['state_dir'] / '.env').read_text(encoding='utf-8'),
+        encoding='utf-8',
+    )
+    second = _run_activation(transaction)
+
+    assert second.returncode == 0, second.stderr
+    plans = sorted(
+        (transaction['state_dir'] / 'backups' / 'deploy-transactions').glob(
+            '*/qweather-key-transition.json'
+        )
+    )
+    assert [json.loads(path.read_text(encoding='utf-8'))['action'] for path in plans] == [
+        'create',
+        'reuse',
+    ]
+    assert not transaction['qweather_pending_key'].exists()
+
+
+@pytest.mark.parametrize(
+    'fault_point',
+    ('before-promotion', 'after-link', 'after-permissions', 'after-pending-unlink'),
+)
+def test_qweather_key_transition_fault_recovers_before_old_units_restart(
+    tmp_path,
+    fault_point,
+):
+    transaction = _prepare_transaction(tmp_path)
+    _staged_text, counter_file = _configure_formal_smoke(transaction)
+    transaction['env']['QWEATHER_KEY_TRANSITION_FAIL_AT'] = fault_point
+
+    result = _run_activation(transaction)
+
+    assert result.returncode != 0
+    assert not counter_file.exists()
+    assert not transaction['qweather_final_key'].exists()
+    assert not transaction['qweather_pending_key'].exists()
+    transaction_dirs = list(
+        (transaction['state_dir'] / 'backups' / 'deploy-transactions').iterdir()
+    )
+    assert len(transaction_dirs) == 1
+    archive = transaction_dirs[0] / 'qweather-key-recovery'
+    assert archive.is_dir()
+    assert all(path.stat().st_mode & 0o777 == 0o600 for path in archive.iterdir())
+    assert all(path.stat().st_nlink == 1 for path in archive.iterdir())
+    assert transaction['qweather_private_dir'].stat().st_mode & 0o777 == 0o700
+    assert (transaction_dirs[0] / 'ROLLED_BACK').is_file()
+    assert not (
+        transaction['state_dir'] / 'deployments' / 'activation-in-progress'
+    ).exists()
+    assert (transaction['fake_state'] / 'case-weather.service.active').is_file()
+
+
+@pytest.mark.parametrize(
+    ('fault_point', 'pending_exists', 'final_mode', 'final_nlink', 'private_mode'),
+    (
+        ('after-link-cleanup', True, 0o600, 2, 0o700),
+        ('after-pending-unlink-cleanup', False, 0o600, 1, 0o700),
+        ('after-permissions-cleanup', False, 0o640, 1, 0o750),
+    ),
+)
+def test_qweather_key_cleanup_failure_keeps_units_stopped_and_guarded(
+    tmp_path,
+    fault_point,
+    pending_exists,
+    final_mode,
+    final_nlink,
+    private_mode,
+):
+    transaction = _prepare_transaction(tmp_path)
+    _staged_text, counter_file = _configure_formal_smoke(transaction)
+    transaction['env']['QWEATHER_KEY_TRANSITION_FAIL_AT'] = fault_point
+
+    result = _run_activation(transaction)
+
+    assert result.returncode != 0
+    assert not counter_file.exists()
+    assert (
+        transaction['state_dir'] / 'deployments' / 'activation-in-progress'
+    ).is_file()
+    assert list(
+        (transaction['state_dir'] / 'backups').rglob('ROLLBACK_REQUIRED.txt')
+    )
+    assert transaction['qweather_pending_key'].exists() is pending_exists
+    assert transaction['qweather_final_key'].stat().st_mode & 0o777 == final_mode
+    assert transaction['qweather_final_key'].stat().st_nlink == final_nlink
+    assert transaction['qweather_private_dir'].stat().st_mode & 0o777 == private_mode
+    assert not (
+        Path(transaction['env']['RUNTIME_BOOT_GUARD_DIR']) / 'activation-permit'
+    ).exists()
+    for unit in ALL_UNITS:
+        assert not (transaction['fake_state'] / f'{unit}.active').exists()
+        assert not (transaction['fake_state'] / f'{unit}.activating').exists()
+
+
+def test_qweather_different_existing_final_fails_before_mutation(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    _staged_text, counter_file = _configure_formal_smoke(transaction)
+    _write_test_ed25519_private_key(
+        transaction['qweather_final_key'],
+        mode=0o640,
+    )
+
+    result = _run_activation(transaction)
+
+    assert result.returncode != 0
+    assert 'QWeather pending/final 私钥或转换计划校验失败' in result.stderr
+    assert not counter_file.exists()
+    assert transaction['qweather_pending_key'].stat().st_mode & 0o777 == 0o600
+    assert not Path(transaction['env']['FAKE_QWEATHER_KEY_STOP_AUDIT']).exists()
+    assert not (
+        transaction['state_dir'] / 'deployments' / 'activation-in-progress'
+    ).exists()
+
+
+def test_qweather_pending_extra_hardlink_fails_before_plan_or_mutation(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    _staged_text, counter_file = _configure_formal_smoke(transaction)
+    alias = tmp_path / 'pending-alias.pem'
+    os.link(transaction['qweather_pending_key'], alias)
+
+    result = _run_activation(transaction)
+
+    assert result.returncode != 0
+    assert 'QWeather pending/final 私钥或转换计划校验失败' in result.stderr
+    assert transaction['qweather_pending_key'].stat().st_nlink == 2
+    assert alias.stat().st_nlink == 2
+    assert not counter_file.exists()
+    assert not Path(transaction['env']['FAKE_QWEATHER_KEY_STOP_AUDIT']).exists()
+    assert (transaction['fake_state'] / 'case-weather.service.active').is_file()
+
+
+def test_qweather_plan_failure_before_started_recovers_pending_and_can_retry(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    _staged_text, counter_file = _configure_formal_smoke(transaction)
+    transaction['env']['QWEATHER_KEY_TRANSITION_FAIL_AT'] = 'after-plan'
+
+    first = _run_activation(transaction)
+
+    assert first.returncode != 0
+    transaction_dirs = list(
+        (transaction['state_dir'] / 'backups' / 'deploy-transactions').iterdir()
+    )
+    assert len(transaction_dirs) == 1
+    old_transaction = transaction_dirs[0]
+    assert not (old_transaction / 'ACTIVATION_STARTED').exists()
+    assert (old_transaction / 'ROLLED_BACK').is_file()
+    recovered_pending = old_transaction / 'qweather-key-recovery' / 'pending.pem'
+    assert recovered_pending.is_file()
+    assert recovered_pending.stat().st_mode & 0o777 == 0o600
+    assert recovered_pending.stat().st_nlink == 1
+    assert not transaction['qweather_pending_key'].exists()
+    assert not (
+        transaction['state_dir'] / 'deployments' / 'activation-in-progress'
+    ).exists()
+
+    transaction['qweather_pending_key'].write_bytes(recovered_pending.read_bytes())
+    transaction['qweather_pending_key'].chmod(0o600)
+    transaction['env'].pop('QWEATHER_KEY_TRANSITION_FAIL_AT')
+    second = _run_activation(transaction)
+
+    assert second.returncode == 0, second.stderr
+    assert counter_file.read_text(encoding='utf-8') == '1'
+
+
+def test_qweather_plan_cleanup_failure_is_registered_and_blocks_retry(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    _staged_text, counter_file = _configure_formal_smoke(transaction)
+    transaction['env']['QWEATHER_KEY_TRANSITION_FAIL_AT'] = 'after-plan-cleanup'
+
+    first = _run_activation(transaction)
+
+    assert first.returncode == 70
+    failures = list(
+        (transaction['state_dir'] / 'backups').rglob('ROLLBACK_REQUIRED.txt')
+    )
+    assert len(failures) == 1
+    assert not (failures[0].parent / 'ACTIVATION_STARTED').exists()
+    assert transaction['qweather_pending_key'].is_file()
+    assert transaction['qweather_pending_key'].stat().st_mode & 0o777 == 0o600
+    assert not counter_file.exists()
+
+    transaction['env'].pop('QWEATHER_KEY_TRANSITION_FAIL_AT')
+    second = _run_activation(transaction)
+
+    assert second.returncode != 0
+    assert '尚未人工确认' in second.stderr
+    assert transaction['qweather_pending_key'].is_file()
+
+
+def test_runtime_uid_process_with_arbitrary_argv_blocks_key_promotion(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    _staged_text, counter_file = _configure_formal_smoke(transaction)
+    (transaction['fake_state'] / 'runtime-user-process-running').touch()
+
+    result = _run_activation(transaction)
+
+    assert result.returncode == 70
+    assert '运行账户仍有未归属进程' in result.stderr
+    assert not transaction['qweather_final_key'].exists()
+    assert not counter_file.exists()
+    assert (
+        transaction['state_dir'] / 'deployments' / 'activation-in-progress'
+    ).is_file()
+    assert not (
+        Path(transaction['env']['RUNTIME_BOOT_GUARD_DIR']) / 'activation-permit'
+    ).exists()
+    for unit in ALL_UNITS:
+        assert not (transaction['fake_state'] / f'{unit}.active').exists()
+
+
+def test_private_directory_inode_replacement_is_preserved_and_quarantined(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    _staged_text, counter_file = _configure_formal_smoke(transaction)
+    transaction['env']['FAKE_REPLACE_QWEATHER_PRIVATE_DIR_ON_STOP'] = '1'
+
+    result = _run_activation(transaction)
+
+    assert result.returncode == 70
+    replacement_dir = transaction['qweather_private_dir']
+    original_dir = replacement_dir.with_name(replacement_dir.name + '.original')
+    assert replacement_dir.is_dir()
+    assert original_dir.is_dir()
+    replacement_pending = replacement_dir / transaction['qweather_pending_key'].name
+    original_pending = original_dir / transaction['qweather_pending_key'].name
+    assert replacement_pending.is_file()
+    assert original_pending.is_file()
+    assert replacement_pending.stat().st_ino != original_pending.stat().st_ino
+    assert not counter_file.exists()
+    assert (
+        transaction['state_dir'] / 'deployments' / 'activation-in-progress'
+    ).is_file()
+    assert not (
+        Path(transaction['env']['RUNTIME_BOOT_GUARD_DIR']) / 'activation-permit'
+    ).exists()
+
+
+def test_private_directory_restore_interruption_can_resume_safely(tmp_path):
+    transaction = _prepare_transaction(tmp_path, candidate_health_ok=False)
+    _staged_text, counter_file = _configure_formal_smoke(transaction)
+    transaction['env']['QWEATHER_KEY_TRANSITION_FAIL_AT'] = (
+        'during-directory-restore'
+    )
+
+    first = _run_activation(transaction)
+
+    assert first.returncode == 70
+    failures = list(
+        (transaction['state_dir'] / 'backups').rglob('ROLLBACK_REQUIRED.txt')
+    )
+    assert len(failures) == 1
+    old_transaction = failures[0].parent
+    assert transaction['qweather_private_dir'].stat().st_mode & 0o777 == 0o700
+    archived_keys = list((old_transaction / 'qweather-key-recovery').iterdir())
+    assert len(archived_keys) == 1
+    assert not (
+        Path(transaction['env']['RUNTIME_BOOT_GUARD_DIR']) / 'activation-permit'
+    ).exists()
+
+    _retarget_formal_retry(transaction, suffix='directory-restore-retry')
+    transaction['qweather_pending_key'].write_bytes(archived_keys[0].read_bytes())
+    transaction['qweather_pending_key'].chmod(0o600)
+    (transaction['new_release'] / 'staged.env').write_text(
+        (transaction['state_dir'] / '.env').read_text(encoding='utf-8'),
+        encoding='utf-8',
+    )
+    transaction['env']['FAKE_CANDIDATE_HEALTH_OK'] = '1'
+    transaction['env'].pop('QWEATHER_KEY_TRANSITION_FAIL_AT')
+    transaction['env']['RECOVERY_ACKNOWLEDGED_TRANSACTION'] = str(old_transaction)
+    second = _run_activation(transaction)
+
+    assert second.returncode == 0, second.stderr
+    assert (old_transaction / 'RECOVERY_CONFIRMED').is_file()
+    assert counter_file.read_text(encoding='utf-8') == '1'
+
+
+def test_sync_failure_after_started_receipt_uses_durable_forward_marker(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    _staged_text, counter_file = _configure_formal_smoke(transaction)
+    fake_sync = tmp_path / 'fake-bin' / 'sync'
+    _make_fake_sync(fake_sync)
+    transaction['env'].update({
+        'SYNC_BIN': str(fake_sync),
+        'FAKE_SYNC_COUNT_FILE': str(tmp_path / 'sync-count'),
+        'FAKE_SYNC_AUDIT_FILE': str(tmp_path / 'sync-audit.jsonl'),
+        'FAKE_SYNC_FAIL_ON': '3',
+        'FAKE_DURABILITY_DATABASE': str(transaction['database_file']),
+        'FAKE_WEATHER_COUNT_FILE': str(counter_file),
+    })
+
+    result = _run_activation(transaction)
+
+    assert result.returncode != 0
+    forward_markers = list(
+        (transaction['state_dir'] / 'backups').rglob('FORWARD_ONLY_REQUIRED')
+    )
+    assert len(forward_markers) == 1
+    assert forward_markers[0].read_text(encoding='utf-8').strip() == (
+        'phase=formal-smoke-started'
+    )
+    assert (forward_markers[0].parent / 'POST_COMMIT_ATTENTION.txt').is_file()
+    assert not (forward_markers[0].parent / 'ROLLED_BACK').exists()
+    assert transaction['qweather_final_key'].is_file()
+    assert transaction['qweather_final_key'].stat().st_mode & 0o777 == 0o640
+    assert not counter_file.exists()
+    assert (
+        transaction['state_dir'] / 'deployments' / 'activation-in-progress'
+    ).is_file()
+
+
+def test_public_restart_sigkill_ack_preserves_key_and_reuses_receipt(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    _staged_text, counter_file = _configure_formal_smoke(transaction)
+    transaction['env']['FAKE_KILL_PARENT_AFTER_RESTART_UNIT'] = 'case-weather.service'
+
+    first = _run_activation(transaction)
+
+    assert first.returncode == -signal.SIGKILL
+    public_markers = list(
+        (transaction['state_dir'] / 'backups').rglob('PUBLIC_START_ATTEMPTED')
+    )
+    assert len(public_markers) == 1
+    old_transaction = public_markers[0].parent
+    assert (old_transaction / 'FORWARD_ONLY_REQUIRED').is_file()
+    assert not (old_transaction / 'COMMITTED').exists()
+    final_identity = (
+        transaction['qweather_final_key'].stat().st_dev,
+        transaction['qweather_final_key'].stat().st_ino,
+    )
+
+    _retarget_formal_retry(transaction, suffix='sigkill-retry')
+    (transaction['new_release'] / 'staged.env').write_text(
+        (transaction['state_dir'] / '.env').read_text(encoding='utf-8'),
+        encoding='utf-8',
+    )
+    transaction['env'].pop('FAKE_KILL_PARENT_AFTER_RESTART_UNIT')
+    transaction['env']['RECOVERY_ACKNOWLEDGED_TRANSACTION'] = str(old_transaction)
+    second = _run_activation(transaction)
+
+    assert second.returncode == 0, second.stderr
+    assert counter_file.read_text(encoding='utf-8') == '1'
+    assert (
+        transaction['qweather_final_key'].stat().st_dev,
+        transaction['qweather_final_key'].stat().st_ino,
+    ) == final_identity
+    assert (old_transaction / 'RECOVERY_CONFIRMED').is_file()
+
+
+def test_same_content_final_inode_replacement_blocks_commit_and_ack(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    _staged_text, counter_file = _configure_formal_smoke(transaction)
+    transaction['env']['FAKE_REPLACE_QWEATHER_FINAL_AFTER_RESTART'] = '1'
+
+    first = _run_activation(transaction)
+
+    assert first.returncode != 0
+    attention = list(
+        (transaction['state_dir'] / 'backups').rglob('POST_COMMIT_ATTENTION.txt')
+    )
+    assert len(attention) == 1
+    old_transaction = attention[0].parent
+    assert not (old_transaction / 'COMMITTED').exists()
+    replacement_identity = (
+        transaction['qweather_final_key'].stat().st_dev,
+        transaction['qweather_final_key'].stat().st_ino,
+    )
+    assert (
+        transaction['state_dir'] / 'deployments' / 'activation-in-progress'
+    ).is_file()
+    assert not (
+        Path(transaction['env']['RUNTIME_BOOT_GUARD_DIR']) / 'activation-permit'
+    ).exists()
+
+    (transaction['fake_state'] / 'case-weather.service.active').touch()
+    runtime_guard = Path(transaction['env']['RUNTIME_BOOT_GUARD_DIR'])
+    runtime_guard.mkdir(parents=True, exist_ok=True)
+    permit = runtime_guard / 'activation-permit'
+    unrelated_transaction = old_transaction.parent / 'unrelated-permit-transaction'
+    unrelated_transaction.mkdir(mode=0o700)
+    permit.write_text(
+        'release_id=new\n'
+        f'transaction={unrelated_transaction}\n',
+        encoding='utf-8',
+    )
+    permit.chmod(0o600)
+    (transaction['new_release'] / 'staged.env').write_text(
+        (transaction['state_dir'] / '.env').read_text(encoding='utf-8'),
+        encoding='utf-8',
+    )
+    transaction['auto_stage_qweather_pending'] = False
+    transaction['env']['RECOVERY_ACKNOWLEDGED_TRANSACTION'] = str(old_transaction)
+    second = _run_activation(transaction)
+
+    assert second.returncode != 0
+    assert (
+        transaction['qweather_final_key'].stat().st_dev,
+        transaction['qweather_final_key'].stat().st_ino,
+    ) == replacement_identity
+    assert not (old_transaction / 'RECOVERY_CONFIRMED').exists()
+    assert (
+        transaction['state_dir'] / 'deployments' / 'activation-in-progress'
+    ).is_file()
+    assert not permit.exists(), second.stderr
+    assert list(runtime_guard.glob('activation-permit.quarantined.*'))
+    for unit in ALL_UNITS:
+        assert not (transaction['fake_state'] / f'{unit}.active').exists()
+
+
+def test_formal_smoke_rejects_duplicate_endpoint_budget_delta(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    _staged_text, counter_file = _configure_formal_smoke(transaction)
+    (transaction['state_dir'] / 'formal-smoke-budget-mode').write_text(
+        'duplicate\n',
+        encoding='utf-8',
+    )
+
+    result = _run_activation(transaction)
+
+    assert result.returncode != 0
+    assert '必须由 now、7d 与 weatheralert 三项各增加 1 次' in result.stderr
+    assert counter_file.read_text(encoding='utf-8') == '1'
+    receipt_dirs = list(
+        (transaction['state_dir'] / 'deployments' / 'formal-cache-smokes').iterdir()
+    )
+    assert len(receipt_dirs) == 1
+    assert (receipt_dirs[0] / 'started').is_file()
+    assert not (receipt_dirs[0] / 'completed').exists()
+
+
+def test_formal_smoke_rejects_unexpected_endpoint_budget_delta(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    _staged_text, counter_file = _configure_formal_smoke(transaction)
+    (transaction['state_dir'] / 'formal-smoke-budget-mode').write_text(
+        'unexpected\n',
+        encoding='utf-8',
+    )
+
+    result = _run_activation(transaction)
+
+    assert result.returncode != 0
+    assert '必须由 now、7d 与 weatheralert 三项各增加 1 次' in result.stderr
+    assert counter_file.read_text(encoding='utf-8') == '1'
+    receipt_dirs = list(
+        (transaction['state_dir'] / 'deployments' / 'formal-cache-smokes').iterdir()
+    )
+    assert len(receipt_dirs) == 1
+    assert (receipt_dirs[0] / 'started').is_file()
+    assert not (receipt_dirs[0] / 'completed').exists()
+    assert list((transaction['state_dir'] / 'run').glob('formal-weather-smoke-*.ticket')) == []
+
+
+def test_formal_smoke_requires_weather_sync_lock_quiescence(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    _staged_text, counter_file = _configure_formal_smoke(transaction)
+    sync_lock = transaction['state_dir'] / 'run' / 'case-weather-sync.lock'
+    sync_lock.parent.mkdir(parents=True, exist_ok=True)
+    sync_lock.write_text('', encoding='ascii')
+    fake_flock = transaction['state_dir'] / 'fake-weather-flock'
+    _write_executable(
+        fake_flock,
+        """#!/bin/sh
+if [ "$1" = "-n" ] && [ "$2" = "8" ]; then
+    exit 1
+fi
+exit 0
+""",
+    )
+    transaction['env']['FLOCK_BIN'] = str(fake_flock)
+
+    result = _run_activation(transaction)
+
+    assert result.returncode != 0
+    assert '仍有同步周期持有同机锁' in result.stderr
+    assert not counter_file.exists()
+    assert not (
+        transaction['state_dir'] / 'deployments' / 'formal-cache-smokes'
+    ).exists()
+    assert not (
+        transaction['state_dir'] / 'formal-smoke-lease-token'
+    ).exists()
+    assert (
+        transaction['state_dir'] / 'formal-smoke-lease-reservation-count'
+    ).read_text(encoding='utf-8') == '1'
+    assert (
+        transaction['state_dir'] / 'formal-smoke-lease-release-count'
+    ).read_text(encoding='utf-8') == '1'
+
+
+def test_formal_smoke_busy_global_lease_fails_before_started_receipt(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    _staged_text, counter_file = _configure_formal_smoke(transaction)
+    (transaction['state_dir'] / 'formal-smoke-lease-mode').write_text(
+        'busy\n',
+        encoding='utf-8',
+    )
+
+    result = _run_activation(transaction)
+
+    assert result.returncode != 0
+    assert '无法在生产变更前取得全局租约' in result.stderr
+    assert not counter_file.exists()
+    receipt_root = (
+        transaction['state_dir'] / 'deployments' / 'formal-cache-smokes'
+    )
+    assert not receipt_root.exists()
+    assert list(
+        (transaction['state_dir'] / 'run').glob('formal-weather-smoke-*.ticket')
+    ) == []
+    assert transaction['current_link'].resolve() == transaction['old_release'].resolve()
+    assert _database_value(transaction['database_file']) == 'old'
+    assert 'RELEASE_VALUE=old' in (
+        transaction['state_dir'] / '.env'
+    ).read_text(encoding='utf-8')
+    assert (
+        transaction['state_dir'] / 'deployments' / 'current-release'
+    ).read_text(encoding='utf-8').strip() == str(transaction['old_release'])
+    observation = json.loads(
+        (
+            transaction['state_dir'] / 'formal-smoke-lease-observation.json'
+        ).read_text(encoding='utf-8')
+    )
+    assert observation['active_env_release'] == 'old'
+    assert observation['current_release'] == str(transaction['old_release'])
+    assert observation['database_value'] == 'old'
+    assert observation['lease_env_file'] == str(
+        transaction['new_release'] / 'staged.env'
+    )
+    assert observation['lease_journal_precedes_reserve'] is True
+    assert observation['lease_journal_fields'] == [
+        'lease_token',
+        'redis_backend_sha256',
+        'transaction_id',
+    ]
+    assert not any(
+        action.split()[0] in {'disable', 'enable', 'restart', 'start', 'stop'}
+        for action in observation['systemctl_actions']
+    )
+    rollback_markers = list(
+        (transaction['state_dir'] / 'backups').rglob('ROLLED_BACK')
+    )
+    assert len(rollback_markers) == 1
+    assert rollback_markers[0].read_text(encoding='utf-8').strip() == 'pre-mutation'
+    assert not (rollback_markers[0].parent / 'formal-smoke-lease.journal').exists()
+
+
+def test_formal_smoke_unknown_reserve_result_releases_from_durable_journal(
+    tmp_path,
+):
+    transaction = _prepare_transaction(tmp_path)
+    _staged_text, counter_file = _configure_formal_smoke(transaction)
+    (transaction['state_dir'] / 'formal-smoke-lease-mode').write_text(
+        'error-after-reserve\n',
+        encoding='utf-8',
+    )
+
+    result = _run_activation(transaction)
+
+    assert result.returncode != 0
+    assert '无法在生产变更前取得全局租约' in result.stderr
+    assert not counter_file.exists()
+    assert not (
+        transaction['state_dir'] / 'formal-smoke-lease-token'
+    ).exists()
+    assert (
+        transaction['state_dir'] / 'formal-smoke-lease-reservation-count'
+    ).read_text(encoding='utf-8') == '1'
+    assert (
+        transaction['state_dir'] / 'formal-smoke-lease-release-count'
+    ).read_text(encoding='utf-8') == '1'
+    assert (
+        transaction['state_dir'] / 'formal-smoke-lease-actions.log'
+    ).read_text(encoding='utf-8').splitlines() == ['reserve', 'release']
+    rollback_markers = list(
+        (transaction['state_dir'] / 'backups').rglob('ROLLED_BACK')
+    )
+    assert len(rollback_markers) == 1
+    assert rollback_markers[0].read_text(encoding='utf-8').strip() == 'pre-mutation'
+    assert not (rollback_markers[0].parent / 'formal-smoke-lease.journal').exists()
+    assert transaction['current_link'].resolve() == transaction['old_release'].resolve()
+    assert _database_value(transaction['database_file']) == 'old'
+
+
+def test_sigkill_before_started_receipt_is_recovered_from_lease_journal(
+    tmp_path,
+):
+    transaction = _prepare_transaction(tmp_path)
+    _configure_formal_smoke(transaction)
+    mode_file = transaction['state_dir'] / 'formal-smoke-lease-mode'
+    mode_file.write_text('pause-after-reserve\n', encoding='utf-8')
+    _write_candidate_base_state(transaction)
+    process = subprocess.Popen(
+        ['bash', str(ACTIVATE_SCRIPT)],
+        cwd=ROOT,
+        env=transaction['env'],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        start_new_session=True,
+    )
+    transaction_root = (
+        transaction['state_dir'] / 'backups' / 'deploy-transactions'
+    )
+    token_file = transaction['state_dir'] / 'formal-smoke-lease-token'
+    journal = None
+    try:
+        for _attempt in range(200):
+            journals = list(transaction_root.glob('*/formal-smoke-lease.journal'))
+            if token_file.is_file() and len(journals) == 1:
+                journal = journals[0]
+                break
+            if process.poll() is not None:
+                break
+            time.sleep(0.05)
+        assert process.poll() is None
+        assert journal is not None
+        journal_payload = journal.read_text(encoding='utf-8')
+        journal_values = dict(
+            line.split('=', 1) for line in journal_payload.splitlines()
+        )
+        assert set(journal_values) == {
+            'transaction_id',
+            'redis_backend_sha256',
+            'lease_token',
+        }
+        assert journal_values['transaction_id'] == journal.parent.name
+        assert journal_values['lease_token'] == token_file.read_text(encoding='ascii')
+        assert re.fullmatch(
+            r'[0-9a-f]{64}',
+            journal_values['redis_backend_sha256'],
+        )
+        assert 'redis://' not in journal_payload
+        os.killpg(process.pid, signal.SIGKILL)
+        process.communicate(timeout=10)
+    finally:
+        if process.poll() is None:
+            os.killpg(process.pid, signal.SIGKILL)
+            process.communicate(timeout=10)
+
+    assert process.returncode == -signal.SIGKILL
+    assert journal.is_file()
+    assert token_file.is_file()
+    mode_file.unlink()
+
+    retry = _run_activation(transaction)
+
+    assert retry.returncode != 0
+    assert '未完成事务' in retry.stderr
+    assert '已用 owner token 安全回收' in retry.stdout
+    assert not journal.exists()
+    assert not token_file.exists()
+    assert (
+        transaction['state_dir'] / 'formal-smoke-lease-actions.log'
+    ).read_text(encoding='utf-8').splitlines() == ['reserve', 'release']
+    assert transaction['current_link'].resolve() == transaction['old_release'].resolve()
+    assert _database_value(transaction['database_file']) == 'old'
+    assert not any(
+        action.split()[0] in {'disable', 'enable', 'restart', 'start', 'stop'}
+        for action in transaction['systemctl_log'].read_text(
+            encoding='utf-8'
+        ).splitlines()
+    )
+
+
+def test_corrupt_forward_marker_with_old_current_never_rewrites_release_ledger(
+    tmp_path,
+):
+    transaction = _prepare_transaction(tmp_path)
+    _configure_formal_smoke(transaction)
+    corrupting_helper = transaction['state_dir'] / 'corrupt-forward-marker-helper'
+    transaction_root = (
+        transaction['state_dir'] / 'backups' / 'deploy-transactions'
+    )
+    _write_executable(
+        corrupting_helper,
+        f"""#!/usr/bin/env python3
+import os
+from pathlib import Path
+
+if os.environ.get('CASE_WEATHER_FORMAL_SMOKE_LEASE_ACTION') != 'reserve':
+    raise SystemExit(93)
+transactions = list(Path({str(transaction_root)!r}).iterdir())
+if len(transactions) != 1:
+    raise SystemExit(94)
+marker = transactions[0] / 'FORWARD_ONLY_REQUIRED'
+marker.write_text('phase=corrupt\\n', encoding='utf-8')
+marker.chmod(0o600)
+raise SystemExit(75)
+""",
+    )
+    transaction['env']['FORMAL_SMOKE_LEASE_HELPER'] = str(corrupting_helper)
+
+    result = _run_activation(transaction)
+
+    assert result.returncode == 70
+    assert 'current 链接与目标版本不一致' in result.stderr
+    assert transaction['current_link'].resolve() == transaction['old_release'].resolve()
+    assert _database_value(transaction['database_file']) == 'old'
+    assert (
+        transaction['state_dir'] / 'deployments' / 'current-release'
+    ).read_text(encoding='utf-8').strip() == str(transaction['old_release'])
+    assert not list(
+        (transaction['state_dir'] / 'deployments').glob('current-release.next.*')
+    )
+    attention = list(
+        (transaction['state_dir'] / 'backups').rglob('POST_COMMIT_ATTENTION.txt')
+    )
+    assert len(attention) == 1
+    assert (
+        attention[0].parent / 'FORWARD_ONLY_REQUIRED'
+    ).read_text(encoding='utf-8') == 'phase=corrupt\n'
+    assert not (attention[0].parent / 'COMMITTED').exists()
+
+
+@pytest.mark.parametrize(
+    ('lease_mode', 'remaining_token'),
+    (
+        ('expire-before-renew', None),
+        ('foreign-before-renew', 'f' * 64),
+    ),
+)
+def test_formal_smoke_lease_renewal_failure_rolls_back_before_started_receipt(
+    tmp_path,
+    lease_mode,
+    remaining_token,
+):
+    transaction = _prepare_transaction(tmp_path)
+    _staged_text, counter_file = _configure_formal_smoke(transaction)
+    (transaction['state_dir'] / 'formal-smoke-lease-mode').write_text(
+        f'{lease_mode}\n',
+        encoding='utf-8',
+    )
+
+    result = _run_activation(transaction)
+
+    assert result.returncode != 0
+    assert '租约在不可逆 receipt 前已过期或不再属于本事务' in result.stderr
+    assert not counter_file.exists()
+    assert transaction['current_link'].resolve() == transaction['old_release'].resolve()
+    assert _database_value(transaction['database_file']) == 'old'
+    assert 'RELEASE_VALUE=old' in (
+        transaction['state_dir'] / '.env'
+    ).read_text(encoding='utf-8')
+    assert (
+        transaction['state_dir'] / 'deployments' / 'current-release'
+    ).read_text(encoding='utf-8').strip() == str(transaction['old_release'])
+    assert not list(
+        (transaction['state_dir'] / 'backups').rglob('FORWARD_ONLY_REQUIRED')
+    )
+    receipt_root = (
+        transaction['state_dir'] / 'deployments' / 'formal-cache-smokes'
+    )
+    assert receipt_root.is_dir()
+    assert list(receipt_root.iterdir()) == []
+    assert (
+        transaction['state_dir'] / 'formal-smoke-lease-reservation-count'
+    ).read_text(encoding='utf-8') == '1'
+    assert (
+        transaction['state_dir'] / 'formal-smoke-lease-renewal-count'
+    ).read_text(encoding='utf-8') == '1'
+    assert (
+        transaction['state_dir'] / 'formal-smoke-lease-release-count'
+    ).read_text(encoding='utf-8') == '1'
+    token_file = transaction['state_dir'] / 'formal-smoke-lease-token'
+    if remaining_token is None:
+        assert not token_file.exists()
+    else:
+        assert token_file.read_text(encoding='ascii') == remaining_token
+
+
+def test_formal_fallback_snapshot_is_rejected_and_started_receipt_blocks_retry(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    staged_text, counter_file = _configure_formal_smoke(
+        transaction,
+        provider='Open-Meteo',
+    )
+
+    first = _run_activation(transaction)
+
+    assert first.returncode != 0
+    assert '实况来源不是 QWeather 官方数据' in first.stderr
+    assert counter_file.read_text(encoding='utf-8') == '1'
+    receipt_dirs = list(
+        (transaction['state_dir'] / 'deployments' / 'formal-cache-smokes').iterdir()
+    )
+    assert len(receipt_dirs) == 1
+    assert (receipt_dirs[0] / 'started').is_file()
+    assert not (receipt_dirs[0] / 'completed').exists()
+    attention = list(
+        (transaction['state_dir'] / 'backups').rglob('POST_COMMIT_ATTENTION.txt')
+    )
+    assert len(attention) == 1
+
+    # 即使下一事务的桩能生成 QWeather 数据，同一绑定也必须在请求前关闭。
+    _configure_formal_smoke(transaction, provider='QWeather')
+    reprovisioned_identity = (
+        transaction['qweather_pending_key'].stat().st_dev,
+        transaction['qweather_pending_key'].stat().st_ino,
+    )
+    committed_final_identity = (
+        transaction['qweather_final_key'].stat().st_dev,
+        transaction['qweather_final_key'].stat().st_ino,
+    )
+    assert reprovisioned_identity != committed_final_identity
+    assert transaction['qweather_pending_key'].stat().st_nlink == 1
+    assert transaction['qweather_pending_key'].stat().st_mode & 0o777 == 0o600
+    (transaction['new_release'] / 'staged.env').write_text(staged_text, encoding='utf-8')
+    transaction['env']['RECOVERY_ACKNOWLEDGED_TRANSACTION'] = str(
+        attention[0].parent
+    )
+    second = _run_activation(transaction)
+
+    assert second.returncode != 0
+    assert '禁止自动重试' in second.stderr
+    assert counter_file.read_text(encoding='utf-8') == '1'
+    assert (attention[0].parent / 'RECOVERY_CONFIRMED').is_file()
+
+
+@pytest.mark.parametrize('pending_tamper', ('hardlink-final', 'wrong-digest', 'wrong-mode'))
+def test_started_receipt_ack_rejects_untrusted_reprovisioned_pending(
+    tmp_path,
+    pending_tamper,
+):
+    transaction = _prepare_transaction(tmp_path)
+    staged_text, counter_file = _configure_formal_smoke(
+        transaction,
+        provider='Open-Meteo',
+    )
+    first = _run_activation(transaction)
+    assert first.returncode != 0
+    attention = list(
+        (transaction['state_dir'] / 'backups').rglob('POST_COMMIT_ATTENTION.txt')
+    )
+    assert len(attention) == 1
+
+    _configure_formal_smoke(transaction, provider='QWeather')
+    pending = transaction['qweather_pending_key']
+    if pending_tamper == 'hardlink-final':
+        pending.unlink()
+        os.link(transaction['qweather_final_key'], pending)
+    elif pending_tamper == 'wrong-digest':
+        _write_test_ed25519_private_key(pending, mode=0o600)
+    else:
+        pending.chmod(0o640)
+    (transaction['new_release'] / 'staged.env').write_text(staged_text, encoding='utf-8')
+    transaction['env']['RECOVERY_ACKNOWLEDGED_TRANSACTION'] = str(
+        attention[0].parent
+    )
+
+    second = _run_activation(transaction)
+
+    assert second.returncode != 0
+    assert 'QWeather 私钥转换计划的 committed 状态校验或回收失败' in second.stderr
+    assert counter_file.read_text(encoding='utf-8') == '1'
+    assert not (attention[0].parent / 'RECOVERY_CONFIRMED').exists()
+
+
+def test_completed_receipt_with_expired_snapshot_fails_closed_without_request(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    _staged_text, counter_file = _configure_formal_smoke(transaction)
+    first = _run_activation(transaction)
+    assert first.returncode == 0, first.stderr
+    assert counter_file.read_text(encoding='utf-8') == '1'
+
+    connection = sqlite3.connect(transaction['database_file'])
+    try:
+        connection.execute(
+            "UPDATE miniprogram_snapshots SET expires_at = '2000-01-01T00:00:00+00:00'"
+        )
+        connection.commit()
+    finally:
+        connection.close()
+    (transaction['new_release'] / 'staged.env').write_text(
+        (transaction['state_dir'] / '.env').read_text(encoding='utf-8'),
+        encoding='utf-8',
+    )
+    current_before = transaction['current_link'].resolve()
+    environment_before = (transaction['state_dir'] / '.env').read_bytes()
+    transaction['systemctl_log'].write_text('', encoding='utf-8')
+
+    second = _run_activation(transaction)
+
+    assert second.returncode != 0
+    assert '持久化快照不可用或已经过期' in second.stderr
+    assert counter_file.read_text(encoding='utf-8') == '1'
+    assert transaction['current_link'].resolve() == current_before
+    assert _database_value(transaction['database_file']) == 'new'
+    assert (transaction['state_dir'] / '.env').read_bytes() == environment_before
+    assert (
+        transaction['state_dir'] / 'deployments' / 'current-release'
+    ).read_text(encoding='utf-8').strip() == str(current_before)
+    assert (
+        transaction['state_dir'] / 'formal-smoke-lease-reservation-count'
+    ).read_text(encoding='utf-8') == '1'
+    assert not any(
+        action.split()[0] in {'disable', 'enable', 'reload', 'restart', 'start', 'stop'}
+        for action in transaction['systemctl_log'].read_text(
+            encoding='utf-8'
+        ).splitlines()
+    )
+    rollback_markers = list(
+        (transaction['state_dir'] / 'backups').rglob('ROLLED_BACK')
+    )
+    assert len(rollback_markers) == 1
+    assert rollback_markers[0].read_text(encoding='utf-8').strip() == 'pre-mutation'

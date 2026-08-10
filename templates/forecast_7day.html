@@ -196,7 +196,7 @@ document.addEventListener('DOMContentLoaded', function() {
             interaction: { mode:'index', intersect:false },
             scales: {
                 y: { beginAtZero:true, max:100, title:{display:true,text:'风险评分'}, grid:{color:'#F4EDDF'} },
-                y1:{ position:'right', grid:{display:false}, title:{display:true,text:'气温 °C'} }
+                y1:{ position:'right', suggestedMin:0, suggestedMax:45, grid:{display:false}, title:{display:true,text:'气温 °C'} }
             }
         }
     });

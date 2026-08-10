@@ -523,6 +523,8 @@ let riskRows = [];
 let riskCoords = {};
 let riskLevelChart = null;
 let vulnScatterChart = null;
+let riskRequestController = null;
+let riskRequestSequence = 0;
 
 const impactLevelLabels = {
     low: '低',
@@ -1228,6 +1230,85 @@ function destroyCharts() {
     }
 }
 
+function appendTablePlaceholder(elementId, colspan, message) {
+    const body = document.getElementById(elementId);
+    clearElement(body);
+    if (!body) return;
+
+    const row = document.createElement('tr');
+    const cell = document.createElement('td');
+    cell.colSpan = colspan;
+    cell.className = 'text-muted';
+    cell.textContent = message;
+    row.appendChild(cell);
+    body.appendChild(row);
+}
+
+function appendBlockPlaceholder(elementId, message) {
+    const container = document.getElementById(elementId);
+    clearElement(container);
+    if (!container) return;
+
+    const text = document.createElement('p');
+    text.className = 'text-muted small mb-0';
+    text.textContent = message;
+    container.appendChild(text);
+}
+
+function clearRiskResults(errorCode) {
+    const weatherUnavailable = errorCode === 'weather_unavailable';
+    const unavailableText = weatherUnavailable ? '天气更新中，暂不显示。' : '暂时无法加载。';
+
+    riskRows = [];
+    clearRiskOverlays();
+    if (map && typeof map.clearInfoWindow === 'function') {
+        map.clearInfoWindow();
+    }
+
+    document.getElementById('analysisMeta').textContent = weatherUnavailable ? '天气更新中' : '加载失败';
+    [
+        'kpiCommunities',
+        'kpiHighRisk',
+        'kpiEquityPriority',
+        'kpiHotspot',
+        'kpiCoverage',
+        'kpiUncertainty',
+        'kpiExcess'
+    ].forEach(elementId => {
+        document.getElementById(elementId).textContent = '--';
+    });
+
+    const list = document.getElementById('community-list');
+    clearElement(list);
+    const listMessage = document.createElement('div');
+    listMessage.className = weatherUnavailable ? 'text-warning p-3' : 'text-danger p-3';
+    listMessage.textContent = weatherUnavailable
+        ? '社区排序将在天气更新后显示。'
+        : '暂时无法加载社区风险，请稍后再试。';
+    list.appendChild(listMessage);
+
+    appendBlockPlaceholder('managementSuggestions', unavailableText);
+    appendTablePlaceholder('impactLikelihoodBody', 5, unavailableText);
+    appendTablePlaceholder('equityQuartileBody', 5, unavailableText);
+    appendBlockPlaceholder('equityPriorityList', unavailableText);
+    appendTablePlaceholder('detailTableBody', 13, unavailableText);
+
+    const methodology = document.getElementById('methodologyList');
+    clearElement(methodology);
+    const methodologyItem = document.createElement('li');
+    methodologyItem.textContent = unavailableText;
+    methodology.appendChild(methodologyItem);
+
+    destroyCharts();
+    ['riskLevelChart', 'vulnScatterChart'].forEach(elementId => {
+        const canvas = document.getElementById(elementId);
+        const context = canvas && canvas.getContext ? canvas.getContext('2d') : null;
+        if (context) {
+            context.clearRect(0, 0, canvas.width, canvas.height);
+        }
+    });
+}
+
 function renderCharts(rankings, summary) {
     if (!window.Chart) {
         return;
@@ -1326,7 +1407,6 @@ function loadRiskMap() {
     const analysisDate = document.getElementById('analysisDate').value;
     const windowDays = document.getElementById('windowDays').value;
     const disease = document.getElementById('diseaseFilter').value;
-    const layerKey = document.getElementById('layerSelect').value;
     const weatherAlert = document.getElementById('weatherUnavailableAlert');
     if (weatherAlert) {
         weatherAlert.classList.add('d-none');
@@ -1339,29 +1419,47 @@ function loadRiskMap() {
         disease: disease || ''
     };
 
-    fetch('/api/community/risk-map-v2', {
+    if (riskRequestController) {
+        riskRequestController.abort();
+    }
+    const requestId = ++riskRequestSequence;
+    const requestController = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    riskRequestController = requestController;
+    const requestOptions = {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify(payload)
-    })
+    };
+    if (requestController) {
+        requestOptions.signal = requestController.signal;
+    }
+
+    fetch('/api/community/risk-map-v2', requestOptions)
     .then(async response => {
         const data = await response.json();
-        if (!response.ok && data && data.error === 'weather_unavailable') {
-            const err = new Error(data.message || '天气正在更新，社区风险暂不显示。请稍后再试。');
-            err.code = data.error;
+        if (!response.ok) {
+            const err = new Error(data && data.message ? data.message : '风险数据请求失败');
+            err.code = data && data.error ? data.error : 'request_failed';
             throw err;
         }
         return data;
     })
     .then(data => {
+        // 即使浏览器无法中止请求，旧响应也不得覆盖最新筛选。
+        if (requestId !== riskRequestSequence) {
+            return;
+        }
         if (!data || !data.success) {
-            throw new Error(data && data.message ? data.message : '风险数据请求失败');
+            const err = new Error(data && data.message ? data.message : '风险数据请求失败');
+            err.code = data && data.error ? data.error : 'request_failed';
+            throw err;
         }
 
         riskRows = Array.isArray(data.rankings) ? data.rankings : [];
-        renderLayerLegend(layerKey);
-        addRiskOverlays(riskRows, layerKey);
-        renderRanking(riskRows, layerKey);
+        const activeLayerKey = document.getElementById('layerSelect').value;
+        renderLayerLegend(activeLayerKey);
+        addRiskOverlays(riskRows, activeLayerKey);
+        renderRanking(riskRows, activeLayerKey);
         renderSummary(data.summary || {});
         renderImpactLikelihoodMatrix(data.impact_likelihood_matrix || {});
         renderEquityStratification(data.equity_stratification || {});
@@ -1371,6 +1469,9 @@ function loadRiskMap() {
         renderSuggestions(data.management_suggestions || []);
     })
     .catch(error => {
+        if (error.name === 'AbortError' || requestId !== riskRequestSequence) {
+            return;
+        }
         if (error.code !== 'weather_unavailable') {
             console.warn('社区风险地图当前不可用:', error);
         }
@@ -1378,18 +1479,12 @@ function loadRiskMap() {
             weatherAlert.textContent = '天气正在更新，社区风险暂不显示。你仍可查看避暑资源和居民反馈。';
             weatherAlert.classList.remove('d-none');
         }
-        const meta = document.getElementById('analysisMeta');
-        if (meta && error.code === 'weather_unavailable') {
-            meta.textContent = '天气更新中';
+        clearRiskResults(error.code);
+    })
+    .finally(() => {
+        if (requestId === riskRequestSequence) {
+            riskRequestController = null;
         }
-        const list = document.getElementById('community-list');
-        clearElement(list);
-        const div = document.createElement('div');
-        div.className = error.code === 'weather_unavailable' ? 'text-warning p-3' : 'text-danger p-3';
-        div.textContent = error.code === 'weather_unavailable'
-            ? '社区排序将在天气更新后显示。'
-            : '暂时无法加载社区风险，请稍后再试。';
-        list.appendChild(div);
     });
 }
 

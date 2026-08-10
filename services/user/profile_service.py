@@ -3,19 +3,29 @@
 import json
 import logging
 import math
+from datetime import timedelta
 from urllib.parse import urlparse
 
 from flask import current_app, flash, redirect, render_template, request, session, url_for
-from flask_login import current_user
+from flask_login import current_user, login_user
+from sqlalchemy.exc import IntegrityError
 
 from core.analytics import get_high_risk_streak
-from core.db_models import Community, HealthRiskAssessment
+from core.db_models import (
+    ApiToken,
+    Community,
+    HealthRiskAssessment,
+    MiniProgramLinkChallenge,
+    MiniProgramSession,
+    User,
+)
 from core.extensions import db
 from core.guest import build_guest_profile, get_guest_assessment, is_guest_user
 from core.notifications import create_notification
 from core.time_utils import utcnow
 from core.usage import create_api_token
 from core.weather import (
+    compact_assessment_weather_condition,
     ensure_user_location_valid,
     get_weather_with_cache,
     is_qweather_online_weather,
@@ -29,8 +39,18 @@ from utils.validators import (
     validate_gender,
     validate_password
 )
+from services.user.owner_write_guard import OwnerInactiveError, owner_write_guard
+from services.miniprogram_auth import current_privacy_version
 
 logger = logging.getLogger(__name__)
+
+
+def _wxpusher_consent_is_current(user, required_version):
+    """只有版本和时间都存在时才继续认可第三方推送同意。"""
+    return bool(
+        getattr(user, 'wxpusher_consented_at', None) is not None
+        and getattr(user, 'wxpusher_consent_version', None) == required_version
+    )
 
 
 def _personal_weather_available(weather_data):
@@ -65,6 +85,22 @@ def _safe_referrer_or_dashboard():
 def health_assessment():
     """健康风险评估"""
     if request.method == 'POST':
+        screening_options = {
+            'outdoor_exposure': {'low', 'medium', 'high'},
+            'symptom_level': {'none', 'mild', 'moderate', 'severe'},
+            'hydration': {'good', 'normal', 'poor'},
+            'medication_adherence': {'good', 'partial', 'poor'},
+            'sleep_quality': {'good', 'fair', 'poor'},
+        }
+        screening = {}
+        for name, allowed in screening_options.items():
+            value = sanitize_input(request.form.get(name), max_length=20)
+            value = value.strip().lower() if isinstance(value, str) else ''
+            if value not in allowed:
+                flash('请完整选择全部 5 项健康筛查后再提交。', 'error')
+                return redirect(url_for('user.health_assessment'))
+            screening[name] = value
+
         try:
             # 执行风险评估（多路径融合版）
             from services.health_risk_service import HealthRiskService
@@ -86,20 +122,6 @@ def health_assessment():
                 'community': current_user.community or '',
                 'has_chronic_disease': current_user.has_chronic_disease or False,
                 'chronic_diseases': safe_json_loads(current_user.chronic_diseases, [])
-            }
-
-            # 个人即时筛查（可选项）
-            def _select(name, allowed, default):
-                value = sanitize_input(request.form.get(name), max_length=20) or default
-                value = value.strip().lower()
-                return value if value in allowed else default
-
-            screening = {
-                'outdoor_exposure': _select('outdoor_exposure', {'low', 'medium', 'high'}, 'medium'),
-                'symptom_level': _select('symptom_level', {'none', 'mild', 'moderate', 'severe'}, 'none'),
-                'hydration': _select('hydration', {'good', 'normal', 'poor'}, 'normal'),
-                'medication_adherence': _select('medication_adherence', {'good', 'partial', 'poor'}, 'good'),
-                'sleep_quality': _select('sleep_quality', {'good', 'fair', 'poor'}, 'good')
             }
 
             risk_result = health_service.assess_personal_weather_health_risk(
@@ -143,44 +165,49 @@ def health_assessment():
                 }
                 flash('健康风险评估完成（游客模式不保存记录）', 'success')
             else:
-                # 保存评估记录
-                assessment = HealthRiskAssessment(
-                    user_id=current_user.id,
-                    assessment_date=utcnow(),
-                    weather_condition=json.dumps(weather_data),
-                    risk_score=risk_result['risk_score'],
-                    risk_level=risk_result['risk_level'],
-                    disease_risks=json.dumps(disease_risks, ensure_ascii=False),
-                    recommendations=json.dumps(recommendations, ensure_ascii=False),
-                    explain=json_or_none(explain_payload)
-                )
+                owner_user_id = int(current_user.id)
+                with owner_write_guard(owner_user_id):
+                    # 评估、通知与账号状态在同一受保护事务内落库。
+                    assessment = HealthRiskAssessment(
+                        user_id=owner_user_id,
+                        assessment_date=utcnow(),
+                        weather_condition=compact_assessment_weather_condition(weather_data),
+                        risk_score=risk_result['risk_score'],
+                        risk_level=risk_result['risk_level'],
+                        disease_risks=json.dumps(disease_risks, ensure_ascii=False),
+                        recommendations=json.dumps(recommendations, ensure_ascii=False),
+                        explain=json_or_none(explain_payload)
+                    )
+                    db.session.add(assessment)
 
-                db.session.add(assessment)
-                db.session.commit()
-
-                if current_app.config.get('FEATURE_NOTIFICATIONS'):
-                    if risk_result['risk_level'] == '高风险':
-                        create_notification(
-                            current_user.id,
-                            title='健康风险偏高',
-                            message='今日天气对健康影响较大，建议减少外出并加强防护。',
-                            level='warning',
-                            category='risk',
-                            action_url=url_for('user.health_assessment')
-                        )
-                    streak = get_high_risk_streak(current_user.id)
-                    threshold_days = current_app.config.get('NOTIFICATION_ESCALATION_DAYS', 3)
-                    if threshold_days and streak >= threshold_days:
-                        create_notification(
-                            current_user.id,
-                            title='高风险持续提醒',
-                            message=f'已连续{streak}天高风险，建议联系家属或村医协助。',
-                            level='danger',
-                            category='risk',
-                            action_url=url_for('user.health_assessment')
-                        )
+                    if current_app.config.get('FEATURE_NOTIFICATIONS'):
+                        if risk_result['risk_level'] == '高风险':
+                            create_notification(
+                                owner_user_id,
+                                title='健康风险偏高',
+                                message='今日天气对健康影响较大，建议减少外出并加强防护。',
+                                level='warning',
+                                category='risk',
+                                action_url=url_for('user.health_assessment'),
+                                commit=False,
+                            )
+                        streak = get_high_risk_streak(owner_user_id)
+                        threshold_days = current_app.config.get('NOTIFICATION_ESCALATION_DAYS', 3)
+                        if threshold_days and streak >= threshold_days:
+                            create_notification(
+                                owner_user_id,
+                                title='高风险持续提醒',
+                                message=f'已连续{streak}天高风险，建议联系家属或村医协助。',
+                                level='danger',
+                                category='risk',
+                                action_url=url_for('user.health_assessment'),
+                                commit=False,
+                            )
+                    db.session.commit()
 
                 flash('健康风险评估完成', 'success')
+        except OwnerInactiveError:
+            flash('账号已失效，请重新登录。', 'error')
         except Exception:
             logger.exception("健康风险评估失败")
             flash('评估过程出现异常，请稍后重试。', 'error')
@@ -225,10 +252,30 @@ def profile():
 
         if form_id == 'api_token':
             token_name = sanitize_input(request.form.get('token_name'), max_length=80)
+            if request.form.get('miniprogram_privacy_consent') != '1':
+                flash('请先阅读并同意小程序隐私说明，再生成绑定凭证。', 'error')
+                return redirect(url_for('user.profile'))
             try:
-                plain = create_api_token(current_user.id, name=token_name)
+                owner_user_id = int(current_user.id)
+                with owner_write_guard(owner_user_id):
+                    plain = create_api_token(
+                        owner_user_id,
+                        name=token_name,
+                        privacy_consent_version=current_app.config.get(
+                            'WX_MINIPROGRAM_PRIVACY_VERSION'
+                        ),
+                        commit=False,
+                    )
+                    db.session.commit()
                 session['last_api_token_plain'] = plain
-                flash('API Token 已生成（仅展示一次，请立即复制保存）', 'success')
+                ttl_days = current_app.config.get('API_TOKEN_TTL_DAYS', 30)
+                flash(
+                    f'API Token 已生成，有效期 {ttl_days} 天（仅展示一次，请立即复制保存）',
+                    'success',
+                )
+            except OwnerInactiveError:
+                flash('账号已失效，请重新登录。', 'error')
+                return redirect(url_for('public.login'))
             except Exception:
                 logger.exception("API token create failed")
                 flash('生成失败，请稍后重试。', 'error')
@@ -240,17 +287,71 @@ def profile():
             if not old_password:
                 flash('请输入当前密码', 'error')
                 return redirect(url_for('user.profile'))
-            if not current_user.check_password(old_password):
-                flash('当前密码不正确', 'error')
-                return redirect(url_for('user.profile'))
             if new_password:
                 valid, result = validate_password(new_password)
                 if not valid:
                     flash(result, 'error')
                     return redirect(url_for('user.profile'))
-                current_user.set_password(result)
-                db.session.commit()
-                flash('密码已更新', 'success')
+                try:
+                    owner_user_id = int(current_user.id)
+                    remember_cookie_name = current_app.config.get(
+                        'REMEMBER_COOKIE_NAME',
+                        'remember_token',
+                    )
+                    refresh_remember_cookie = bool(
+                        request.cookies.get(remember_cookie_name)
+                    )
+                    with owner_write_guard(owner_user_id) as locked_user:
+                        if not locked_user.check_password(old_password):
+                            flash('当前密码不正确', 'error')
+                            return redirect(url_for('user.profile'))
+                        locked_user.set_password(result)
+                        locked_user.auth_version = int(locked_user.auth_version) + 1
+                        now = utcnow()
+                        ApiToken.query.filter(
+                            ApiToken.user_id == owner_user_id,
+                            ApiToken.revoked_at.is_(None),
+                        ).update(
+                            {ApiToken.revoked_at: now},
+                            synchronize_session=False,
+                        )
+                        MiniProgramSession.query.filter(
+                            MiniProgramSession.user_id == owner_user_id,
+                            MiniProgramSession.revoked_at.is_(None),
+                        ).update(
+                            {MiniProgramSession.revoked_at: now},
+                            synchronize_session=False,
+                        )
+                        MiniProgramLinkChallenge.query.filter(
+                            MiniProgramLinkChallenge.user_id == owner_user_id,
+                            MiniProgramLinkChallenge.consumed_at.is_(None),
+                            MiniProgramLinkChallenge.revoked_at.is_(None),
+                        ).update(
+                            {MiniProgramLinkChallenge.revoked_at: now},
+                            synchronize_session=False,
+                        )
+                        db.session.commit()
+                        # 当前浏览器已再次验证密码，签发新版本会话并按需轮换记住登录。
+                        login_user(
+                            locked_user,
+                            remember=refresh_remember_cookie,
+                            duration=(
+                                timedelta(days=30)
+                                if refresh_remember_cookie
+                                else None
+                            ),
+                        )
+                    flash(
+                        '密码已更新，其他网页登录、小程序会话及绑定凭证均已失效',
+                        'success',
+                    )
+                except OwnerInactiveError:
+                    flash('账号已失效，请重新登录。', 'error')
+                    return redirect(url_for('public.login'))
+                except (OSError, RuntimeError, ValueError):
+                    db.session.rollback()
+                    logger.exception('密码更新授权锁不可用，修改未保存')
+                    flash('密码暂时无法更新，请稍后重试。', 'error')
             else:
                 flash('未填写新密码', 'info')
             return redirect(url_for('user.profile'))
@@ -261,52 +362,135 @@ def profile():
         if not valid:
             flash(result, 'error')
             return redirect(url_for('user.profile'))
-        current_user.age = result
+        age = result
 
         # 验证性别
         valid, result = validate_gender(request.form.get('gender'))
         if not valid:
             flash(result, 'error')
             return redirect(url_for('user.profile'))
-        current_user.gender = result
+        gender = result
 
         # 清理社区输入并校验
         community_value = sanitize_input(request.form.get('community'), max_length=100)
-        current_user.community = normalize_location_name(community_value)
+        community = normalize_location_name(community_value)
 
         # 验证邮箱
         valid, result = validate_email(request.form.get('email'))
         if not valid:
             flash(result, 'error')
             return redirect(url_for('user.profile'))
-        current_user.email = result
+        email = result
+        duplicate_email = None
+        if email:
+            duplicate_email = User.query.filter(
+                User.id != current_user.id,
+                db.func.lower(User.email) == email.lower()
+            ).first()
+        if duplicate_email:
+            flash('该邮箱已被其他账号使用，请更换邮箱。', 'error')
+            return redirect(url_for('user.profile'))
 
-        # 更新密码
-        # 密码更新已拆分到 form_id=password
-
-        # 更新慢性病信息
-        has_chronic = request.form.get('has_chronic_disease') == 'on'
-        current_user.has_chronic_disease = has_chronic
-
-        if has_chronic:
-            chronic_diseases = request.form.getlist('chronic_diseases')
-            # 清理慢性病输入
-            chronic_diseases = [sanitize_input(d, max_length=50) for d in chronic_diseases if d]
-            current_user.chronic_diseases = json.dumps(chronic_diseases)
-        else:
-            current_user.chronic_diseases = None
-
-        # 试点推送设置
+        # 先完整校验第三方推送，再统一修改用户对象，避免配置缺失时部分保存档案。
+        wxpusher_feature_enabled = bool(
+            current_app.config.get('FEATURE_WXPUSHER', False)
+        )
+        wx_uid_field_present = 'wxpusher_uid' in request.form
         wx_uid = sanitize_input(request.form.get('wxpusher_uid'), max_length=80)
-        current_user.wxpusher_uid = (wx_uid.strip() if isinstance(wx_uid, str) else None) or None
+        wx_uid = (wx_uid.strip() if isinstance(wx_uid, str) else None) or None
         push_enabled = request.form.get('push_enabled') == 'on'
-        if push_enabled and not current_user.wxpusher_uid:
+        wxpusher_available = bool(
+            wxpusher_feature_enabled
+            and (current_app.config.get('WXPUSHER_APP_TOKEN') or '').strip()
+        )
+        required_wxpusher_version = current_privacy_version()
+        submitted_wxpusher_version = request.form.get('wxpusher_consent_version')
+        submitted_wxpusher_version = (
+            submitted_wxpusher_version.strip()
+            if (
+                isinstance(submitted_wxpusher_version, str)
+                and len(submitted_wxpusher_version) <= 64
+            )
+            else None
+        ) or None
+        if not wxpusher_feature_enabled and (wx_uid or push_enabled):
+            flash('首发版本暂未开放第三方推送设置，本次更改未保存。', 'error')
+            return redirect(url_for('user.profile'))
+        if push_enabled and not wxpusher_available:
+            flash('第三方推送服务暂不可用，本次更改未保存。', 'error')
+            return redirect(url_for('user.profile'))
+        if push_enabled and not wx_uid:
             push_enabled = False
             flash('已关闭自动推送：需要先填写 WxPusher UID', 'warning')
-        current_user.push_enabled = bool(push_enabled)
 
-        db.session.commit()
-        logger.info("用户更新个人信息: %s", current_user.username)
+        try:
+            owner_user_id = int(current_user.id)
+            with owner_write_guard(owner_user_id) as locked_user:
+                consent_is_current = _wxpusher_consent_is_current(
+                    locked_user,
+                    required_wxpusher_version,
+                )
+                consent_required = bool(
+                    push_enabled
+                    and (
+                        not bool(locked_user.push_enabled)
+                        or not consent_is_current
+                    )
+                )
+                if consent_required:
+                    if request.form.get('wxpusher_consent') != '1':
+                        db.session.rollback()
+                        flash('请先确认本次开启涉及的第三方传输范围。', 'error')
+                        return redirect(url_for('user.profile'))
+                    if submitted_wxpusher_version != required_wxpusher_version:
+                        db.session.rollback()
+                        flash('推送传输说明已更新，请刷新页面后重新确认。', 'error')
+                        return redirect(url_for('user.profile'))
+
+                locked_user.age = age
+                locked_user.gender = gender
+                locked_user.community = community
+                locked_user.email = email
+
+                has_chronic = request.form.get('has_chronic_disease') == 'on'
+                locked_user.has_chronic_disease = has_chronic
+                if has_chronic:
+                    chronic_diseases = request.form.getlist('chronic_diseases')
+                    chronic_diseases = [
+                        sanitize_input(d, max_length=50)
+                        for d in chronic_diseases
+                        if d
+                    ]
+                    locked_user.chronic_diseases = json.dumps(chronic_diseases)
+                else:
+                    locked_user.chronic_diseases = None
+
+                if wxpusher_feature_enabled:
+                    locked_user.wxpusher_uid = wx_uid
+                    locked_user.push_enabled = bool(push_enabled)
+                else:
+                    # 隐藏入口时保留历史接收码；显式清空仍可完成数据最小化。
+                    if wx_uid_field_present:
+                        locked_user.wxpusher_uid = None
+                    locked_user.push_enabled = False
+                if consent_required:
+                    locked_user.wxpusher_consent_version = required_wxpusher_version
+                    locked_user.wxpusher_consented_at = utcnow()
+                db.session.commit()
+        except OwnerInactiveError:
+            flash('账号已失效，请重新登录。', 'error')
+            return redirect(url_for('public.login'))
+        except IntegrityError:
+            # 并发更新时仍以数据库唯一约束为最终防线。
+            db.session.rollback()
+            flash('该邮箱已被其他账号使用，请更换邮箱。', 'error')
+            return redirect(url_for('user.profile'))
+        except (OSError, RuntimeError, ValueError):
+            db.session.rollback()
+            logger.exception('推送授权锁不可用，个人信息未保存')
+            flash('个人信息暂时无法保存，请稍后重试。', 'error')
+            return redirect(url_for('user.profile'))
+        logger.info("用户更新个人信息: user_id=%s", owner_user_id)
         flash('个人信息更新成功', 'success')
         return redirect(url_for('user.profile'))
 
@@ -314,11 +498,29 @@ def profile():
     chronic_diseases_list = safe_json_loads(current_user.chronic_diseases, [])
 
     last_api_token_plain = session.pop('last_api_token_plain', None)
+    wxpusher_feature_enabled = bool(
+        current_app.config.get('FEATURE_WXPUSHER', False)
+    )
+    required_wxpusher_version = current_privacy_version()
     return render_template(
         'profile.html',
         communities=communities,
         chronic_diseases_list=chronic_diseases_list,
-        last_api_token_plain=last_api_token_plain
+        last_api_token_plain=last_api_token_plain,
+        wxpusher_feature_enabled=wxpusher_feature_enabled,
+        wxpusher_available=bool(
+            wxpusher_feature_enabled
+            and (current_app.config.get('WXPUSHER_APP_TOKEN') or '').strip()
+        ),
+        required_wxpusher_consent_version=required_wxpusher_version,
+        wxpusher_reconsent_required=bool(
+            wxpusher_feature_enabled
+            and current_user.push_enabled
+            and not _wxpusher_consent_is_current(
+                current_user,
+                required_wxpusher_version,
+            )
+        ),
     )
 
 
@@ -338,8 +540,19 @@ def update_location():
         profile['community'] = normalized
         session['guest_profile'] = profile
     else:
-        current_user.community = normalized
-        db.session.commit()
+        try:
+            owner_user_id = int(current_user.id)
+            with owner_write_guard(owner_user_id) as locked_user:
+                locked_user.community = normalized
+                db.session.commit()
+        except OwnerInactiveError:
+            flash('账号已失效，请重新登录。', 'error')
+            return redirect(url_for('public.login'))
+        except (OSError, RuntimeError, ValueError):
+            db.session.rollback()
+            logger.exception('位置更新授权锁不可用，修改未保存')
+            flash('位置暂时无法更新，请稍后重试。', 'error')
+            return redirect(_safe_referrer_or_dashboard())
 
     flash(f'定位已更新为 {normalized}', 'success')
     return redirect(_safe_referrer_or_dashboard())

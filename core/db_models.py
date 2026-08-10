@@ -7,12 +7,52 @@
 - 显示给用户时，使用 core.time_utils 中的本地时区转换函数
 - 避免使用已废弃的 lambda: datetime.now(timezone.utc)()（返回 naive datetime）
 """
+import sqlite3
 from datetime import datetime, timezone
+
 from flask_login import UserMixin
+from sqlalchemy import event
+from sqlalchemy.engine import Engine
 from werkzeug.security import generate_password_hash, check_password_hash
 
 from core.extensions import db
 from core.time_utils import today_local, utcnow, ensure_utc_aware
+
+
+@event.listens_for(Engine, 'connect')
+def _configure_sqlite_connection(dbapi_connection, _connection_record):
+    """SQLite 连接统一开启约束、忙等待和并发友好模式。"""
+    if not isinstance(dbapi_connection, sqlite3.Connection):
+        return
+    cursor = dbapi_connection.cursor()
+    try:
+        # 忙等待先生效，避免并发写入时立即报 database is locked。
+        cursor.execute('PRAGMA busy_timeout=5000')
+        cursor.execute('PRAGMA foreign_keys=ON')
+
+        database_rows = cursor.execute('PRAGMA database_list').fetchall()
+        main_filename = next(
+            (str(row[2] or '') for row in database_rows if len(row) >= 3 and row[1] == 'main'),
+            '',
+        )
+        is_memory_database = not main_filename or main_filename == ':memory:'
+        if not is_memory_database:
+            try:
+                current_mode = cursor.execute('PRAGMA journal_mode').fetchone()
+                if not current_mode or str(current_mode[0]).lower() != 'wal':
+                    # WAL 是文件库的持久属性；只读连接无法切换时继续提供读取。
+                    cursor.execute('PRAGMA journal_mode=WAL').fetchone()
+            except sqlite3.DatabaseError:
+                pass
+
+        try:
+            # NORMAL 在 WAL 下减少每次提交的同步开销，不改变事务原子性。
+            cursor.execute('PRAGMA synchronous=NORMAL')
+        except sqlite3.DatabaseError:
+            # 某些只读连接禁止调整安全等级，不应因性能选项阻断读取。
+            pass
+    finally:
+        cursor.close()
 
 
 class User(UserMixin, db.Model):
@@ -22,10 +62,29 @@ class User(UserMixin, db.Model):
     username = db.Column(db.String(80), unique=True, nullable=False)
     password_hash = db.Column(db.String(200), nullable=False)
     email = db.Column(db.String(120), unique=True)
+    # 账号来源由服务端写入，不能依赖用户可控的用户名判断系统占位账号。
+    account_origin = db.Column(
+        db.String(32),
+        nullable=False,
+        default='web',
+        server_default='web',
+    )
+    # 手机号先保存为待验证标识；未完成验证前不得用于登录或视为已核验联系方式。
+    phone_normalized = db.Column(db.String(32))
+    phone_verified_at = db.Column(db.DateTime)
     role = db.Column(db.String(20), default='user')  # admin/user/caregiver/community
+    # 每次修改密码递增，用于同时撤销 Web 会话与记住登录 Cookie。
+    auth_version = db.Column(
+        db.Integer,
+        nullable=False,
+        default=1,
+        server_default='1',
+    )
     # 使用 timezone-aware UTC 时间戳（推荐做法）
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
     last_login = db.Column(db.DateTime)
+    # 注销墓碑用于阻断并发中的旧会话和后续写入。
+    deleted_at = db.Column(db.DateTime)
 
     # 个人健康信息
     age = db.Column(db.Integer)
@@ -37,12 +96,40 @@ class User(UserMixin, db.Model):
     # 试点推送设置（子女端）
     wxpusher_uid = db.Column(db.String(80))
     push_enabled = db.Column(db.Boolean, default=False)
+    # 第三方传输同意回执；文案版本变更后发送端自动失效。
+    wxpusher_consent_version = db.Column(db.String(64))
+    wxpusher_consented_at = db.Column(db.DateTime)
+    # 健康敏感信息单独留存同意回执，不能由一般隐私同意或第三方推送同意替代。
+    health_sensitive_consent_version = db.Column(db.String(64))
+    health_sensitive_consented_at = db.Column(db.DateTime)
+
+    __table_args__ = (
+        # 普通索引支持按号码查询待验证记录，不让未验证号码形成唯一占用。
+        db.Index(
+            'ix_users_phone_normalized',
+            'phone_normalized',
+        ),
+        # 只有已验证手机号形成唯一身份；待验证记录继续允许重复保存。
+        db.Index(
+            'uq_users_verified_phone_normalized',
+            'phone_normalized',
+            unique=True,
+            sqlite_where=db.text('phone_verified_at IS NOT NULL'),
+            postgresql_where=db.text('phone_verified_at IS NOT NULL'),
+        ),
+    )
 
     def set_password(self, password):
         self.password_hash = generate_password_hash(password)
 
     def check_password(self, password):
         return check_password_hash(self.password_hash, password)
+
+    def get_id(self):
+        """把认证版本绑定到 Flask-Login 的会话标识。"""
+        if self.id is None:
+            raise ValueError('未持久化用户不能建立登录会话')
+        return f'{int(self.id)}:{int(self.auth_version)}'
 
 
 class MedicalRecord(db.Model):
@@ -132,6 +219,8 @@ class HealthRiskAssessment(db.Model):
     __tablename__ = 'health_risk_assessments'
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'))
+    # 小程序端可为本人或已绑定老人提交评估，始终由 user_id 做 owner scope。
+    member_id = db.Column(db.Integer, db.ForeignKey('family_members.id'))
     assessment_date = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
     weather_condition = db.Column(db.String(100))
     risk_score = db.Column(db.Float)  # 风险评分
@@ -139,6 +228,16 @@ class HealthRiskAssessment(db.Model):
     disease_risks = db.Column(db.Text)  # JSON格式：各类疾病风险
     recommendations = db.Column(db.Text)  # 健康建议
     explain = db.Column(db.Text)  # JSON格式：可解释输出
+
+    __table_args__ = (
+        db.Index(
+            'ix_assessment_owner_member_date_id',
+            'user_id',
+            'member_id',
+            'assessment_date',
+            'id',
+        ),
+    )
 
 
 class WeatherAlert(db.Model):
@@ -152,6 +251,12 @@ class WeatherAlert(db.Model):
     description = db.Column(db.Text)
     affected_communities = db.Column(db.Text)  # JSON格式：受影响社区
     disease_correlation = db.Column(db.Text)  # JSON格式：疾病相关性分析
+    # 新投递使用 64 位摘要做并发幂等；历史记录保持 NULL，不做推测性回填。
+    dedupe_key = db.Column(db.String(64), nullable=True)
+
+    __table_args__ = (
+        db.Index('uq_weather_alerts_dedupe_key', 'dedupe_key', unique=True),
+    )
 
 
 class FamilyMember(db.Model):
@@ -199,6 +304,16 @@ class HealthDiary(db.Model):
     notes = db.Column(db.Text)
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
+    __table_args__ = (
+        db.Index(
+            'ix_health_diary_owner_member_date_id',
+            'user_id',
+            'member_id',
+            'entry_date',
+            'id',
+        ),
+    )
+
 
 class MedicationReminder(db.Model):
     """用药提醒"""
@@ -214,6 +329,15 @@ class MedicationReminder(db.Model):
     is_active = db.Column(db.Boolean, default=True)
     last_notified_at = db.Column(db.DateTime)
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+
+    __table_args__ = (
+        db.Index(
+            'ix_medication_owner_member_id',
+            'user_id',
+            'member_id',
+            'id',
+        ),
+    )
 
 
 class Notification(db.Model):
@@ -371,6 +495,7 @@ class DailyStatus(db.Model):
     debrief_optin = db.Column(db.Boolean, default=False)
     caregiver_actions = db.Column(db.Text)  # JSON
     caregiver_note = db.Column(db.Text)
+    elder_actions = db.Column(db.Text)  # JSON，小程序老人自护行动，与照护端行动分离
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
@@ -411,12 +536,15 @@ class CoolingResource(db.Model):
     address_hint = db.Column(db.String(200))
     latitude = db.Column(db.Float)
     longitude = db.Column(db.Float)
+    coordinate_system = db.Column(db.String(16))
+    coordinate_source = db.Column(db.String(500))
+    coordinate_verified_at = db.Column(db.DateTime)
     open_hours = db.Column(db.String(100))
     has_ac = db.Column(db.Boolean, default=False)
     is_accessible = db.Column(db.Boolean, default=False)
     contact_hint = db.Column(db.String(100))
     notes = db.Column(db.Text)
-    is_active = db.Column(db.Boolean, default=True)
+    is_active = db.Column(db.Boolean, default=False)
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
     __table_args__ = (
@@ -430,7 +558,17 @@ class Debrief(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     date = db.Column(db.Date, nullable=False)
     community_code = db.Column(db.String(100), nullable=False)
-    pair_id = db.Column(db.Integer, db.ForeignKey('pairs.id'))
+    owner_user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    # origin_pair_id 固定本次复盘的来源家人；pair_id 只控制当前是否展示到家人记录。
+    origin_pair_id = db.Column(
+        db.Integer,
+        db.ForeignKey('pairs.id', ondelete='SET NULL'),
+        nullable=True,
+    )
+    pair_id = db.Column(
+        db.Integer,
+        db.ForeignKey('pairs.id', ondelete='SET NULL'),
+    )
     question_1 = db.Column(db.String(200))
     question_2 = db.Column(db.String(200))
     question_3 = db.Column(db.String(200))
@@ -438,6 +576,8 @@ class Debrief(db.Model):
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
     __table_args__ = (
+        db.Index('ix_debriefs_owner_user_id', 'owner_user_id'),
+        db.Index('ix_debriefs_origin_pair_id', 'origin_pair_id'),
         db.Index('ix_debriefs_community_date', 'community_code', 'date'),
         db.Index('ix_debriefs_pair_date', 'pair_id', 'date'),
     )
@@ -451,12 +591,16 @@ class ApiToken(db.Model):
     name = db.Column(db.String(80))
     token_hash = db.Column(db.String(64), nullable=False)
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    expires_at = db.Column(db.DateTime)
+    scopes = db.Column(db.String(200))
+    privacy_consent_version = db.Column(db.String(64))
     last_used_at = db.Column(db.DateTime)
     revoked_at = db.Column(db.DateTime)
 
     __table_args__ = (
         db.Index('ix_api_tokens_user_id', 'user_id'),
         db.Index('ix_api_tokens_token_hash', 'token_hash'),
+        db.Index('ix_api_tokens_expires_at', 'expires_at'),
     )
 
 
@@ -464,9 +608,12 @@ class UsageEvent(db.Model):
     """试点埋点事件（用于打开率/触发/反馈等指标）"""
     __tablename__ = 'usage_events'
     id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer, db.ForeignKey('users.id'))
-    pair_id = db.Column(db.Integer, db.ForeignKey('pairs.id'))
-    member_id = db.Column(db.Integer, db.ForeignKey('family_members.id'))
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id', ondelete='SET NULL'))
+    pair_id = db.Column(db.Integer, db.ForeignKey('pairs.id', ondelete='SET NULL'))
+    member_id = db.Column(
+        db.Integer,
+        db.ForeignKey('family_members.id', ondelete='SET NULL'),
+    )
     event_type = db.Column(db.String(50), nullable=False)
     meta_json = db.Column(db.Text)
     source = db.Column(db.String(20))
@@ -486,16 +633,46 @@ class AlertDelivery(db.Model):
     alert_id = db.Column(db.Integer, db.ForeignKey('weather_alerts.id'), nullable=False)
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
     pair_id = db.Column(db.Integer, db.ForeignKey('pairs.id'))
-    channel = db.Column(db.String(20))
-    status = db.Column(db.String(20))  # sent/failed
+    channel = db.Column(
+        db.String(20),
+        nullable=False,
+        default='wxpusher',
+        server_default='wxpusher',
+    )
+    # sending 仅表示已占位且正在外呼；failed/uncertain 均需人工确认后才能重试。
+    status = db.Column(
+        db.String(20),
+        nullable=False,
+        default='uncertain',
+        server_default='uncertain',
+    )
     error = db.Column(db.Text)
     delivery_token = db.Column(db.String(64), unique=True, nullable=False)
     sent_at = db.Column(db.DateTime)
     clicked_at = db.Column(db.DateTime)
+    attempt_count = db.Column(
+        db.Integer,
+        nullable=False,
+        default=1,
+        server_default='1',
+    )
+    reviewed_at = db.Column(db.DateTime)
+    reviewed_by_user_id = db.Column(
+        db.Integer,
+        db.ForeignKey('users.id', ondelete='SET NULL'),
+    )
+    review_action = db.Column(db.String(20))
 
     __table_args__ = (
+        db.UniqueConstraint(
+            'alert_id',
+            'user_id',
+            'channel',
+            name='uq_alert_deliveries_alert_user_channel',
+        ),
         db.Index('ix_alert_deliveries_alert_user', 'alert_id', 'user_id'),
         db.Index('ix_alert_deliveries_delivery_token', 'delivery_token'),
+        db.Index('ix_alert_deliveries_status_sent_at', 'status', 'sent_at'),
     )
 
 
@@ -514,4 +691,154 @@ class LocationCache(db.Model):
     __table_args__ = (
         db.Index('ix_location_cache_query', query_text),
         db.Index('ix_location_cache_updated_at', 'updated_at'),
+    )
+
+
+class MiniProgramSnapshot(db.Model):
+    """小程序只读天气快照，由 30 分钟后台任务统一写入。"""
+    __tablename__ = 'miniprogram_snapshots'
+    id = db.Column(db.Integer, primary_key=True)
+    snapshot_id = db.Column(db.String(36), nullable=False, unique=True)
+    location_name = db.Column(db.String(100), nullable=False, default='都昌县')
+    location_code = db.Column(db.String(100), nullable=False, default='116.20,29.27')
+    fetched_at = db.Column(db.DateTime, nullable=False)
+    expires_at = db.Column(db.DateTime, nullable=False)
+    available = db.Column(db.Boolean, nullable=False, default=False)
+    current_json = db.Column(db.Text)
+    forecast_json = db.Column(db.Text)
+    warnings_json = db.Column(db.Text)
+    risk_json = db.Column(db.Text)
+    actions_json = db.Column(db.Text)
+    source_status_json = db.Column(db.Text)
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+
+    __table_args__ = (
+        db.Index('ix_miniprogram_snapshots_fetched_at', 'fetched_at'),
+        db.Index('ix_miniprogram_snapshots_expires_at', 'expires_at'),
+    )
+
+
+class MiniProgramIdentity(db.Model):
+    """微信身份映射，仅保存带独立 pepper 的 OpenID 哈希。"""
+    __tablename__ = 'miniprogram_identities'
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(
+        db.Integer,
+        db.ForeignKey('users.id', ondelete='CASCADE'),
+        nullable=False,
+    )
+    openid_hash = db.Column(db.String(64), nullable=False, unique=True)
+    privacy_consent_version = db.Column(db.String(64), nullable=False)
+    privacy_consented_at = db.Column(db.DateTime, nullable=False)
+    # 首次登录来源只保留固定枚举，供聚合转化分析使用。
+    acquisition_source = db.Column(db.String(20), nullable=False, default='direct')
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    last_login_at = db.Column(db.DateTime)
+    # 绑定码错误次数按微信身份持久化，配合 IP 限流抵御分布式枚举。
+    link_failed_count = db.Column(
+        db.Integer,
+        nullable=False,
+        default=0,
+        server_default='0',
+    )
+    link_first_failed_at = db.Column(db.DateTime)
+    link_locked_until = db.Column(db.DateTime)
+    # 微信绑定只对创建或重新绑定时的账号认证版本有效，改密后必须重新串联。
+    binding_auth_version = db.Column(
+        db.Integer,
+        nullable=False,
+        default=1,
+        server_default='1',
+    )
+
+    __table_args__ = (
+        db.UniqueConstraint(
+            'id',
+            'user_id',
+            name='uq_miniprogram_identities_id_user_id',
+        ),
+        db.Index(
+            'uq_miniprogram_identities_user_id',
+            'user_id',
+            unique=True,
+        ),
+        db.Index('ix_miniprogram_identities_user_id', 'user_id'),
+        db.Index('ix_miniprogram_identities_openid_hash', 'openid_hash'),
+        db.Index('ix_miniprogram_identities_created_at', 'created_at'),
+    )
+
+
+class MiniProgramLinkChallenge(db.Model):
+    """网页账号与微信身份之间的一次性短码挑战，仅保存带 pepper 的摘要。"""
+    __tablename__ = 'miniprogram_link_challenges'
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(
+        db.Integer,
+        db.ForeignKey('users.id', ondelete='CASCADE'),
+        nullable=False,
+    )
+    code_hash = db.Column(db.String(64), nullable=False, unique=True)
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    expires_at = db.Column(db.DateTime, nullable=False)
+    auth_version_at_create = db.Column(
+        db.Integer,
+        nullable=False,
+        default=1,
+        server_default='1',
+    )
+    consumed_at = db.Column(db.DateTime)
+    consumed_identity_id = db.Column(
+        db.Integer,
+        db.ForeignKey('miniprogram_identities.id', ondelete='SET NULL'),
+    )
+    revoked_at = db.Column(db.DateTime)
+    attempt_count = db.Column(
+        db.Integer,
+        nullable=False,
+        default=0,
+        server_default='0',
+    )
+
+    __table_args__ = (
+        db.Index('ix_mp_link_challenges_user_id', 'user_id'),
+        db.Index('ix_mp_link_challenges_code_hash', 'code_hash'),
+        db.Index('ix_mp_link_challenges_expires_at', 'expires_at'),
+        db.Index(
+            'uq_mp_link_active_user',
+            'user_id',
+            unique=True,
+            sqlite_where=db.text(
+                'consumed_at IS NULL AND revoked_at IS NULL'
+            ),
+            postgresql_where=db.text(
+                'consumed_at IS NULL AND revoked_at IS NULL'
+            ),
+        ),
+    )
+
+
+class MiniProgramSession(db.Model):
+    """可撤销、可过期的小程序签名会话，仅保存 token 哈希。"""
+    __tablename__ = 'miniprogram_sessions'
+    id = db.Column(db.Integer, primary_key=True)
+    identity_id = db.Column(db.Integer, nullable=False)
+    user_id = db.Column(db.Integer, nullable=False)
+    token_hash = db.Column(db.String(64), nullable=False, unique=True)
+    privacy_consent_version = db.Column(db.String(64), nullable=False)
+    expires_at = db.Column(db.DateTime, nullable=False)
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    last_used_at = db.Column(db.DateTime)
+    revoked_at = db.Column(db.DateTime)
+
+    __table_args__ = (
+        db.ForeignKeyConstraint(
+            ['identity_id', 'user_id'],
+            ['miniprogram_identities.id', 'miniprogram_identities.user_id'],
+            name='fk_miniprogram_sessions_identity_owner',
+            ondelete='CASCADE',
+        ),
+        db.Index('ix_miniprogram_sessions_identity_id', 'identity_id'),
+        db.Index('ix_miniprogram_sessions_user_id', 'user_id'),
+        db.Index('ix_miniprogram_sessions_token_hash', 'token_hash'),
+        db.Index('ix_miniprogram_sessions_expires_at', 'expires_at'),
     )

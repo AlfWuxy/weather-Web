@@ -10,8 +10,12 @@ from sklearn.preprocessing import LabelEncoder, StandardScaler
 from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier
 from sklearn.metrics import classification_report, accuracy_score, f1_score
 import joblib
-import json
 from pathlib import Path
+
+if __package__:
+    from .feature_config_writer import write_feature_config
+else:
+    from feature_config_writer import write_feature_config
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
 DATA_PATH = ROOT_DIR / 'data' / 'research' / '数据.xlsx'
@@ -248,8 +252,7 @@ def train_model():
         'feature_importance': {name: float(imp) for name, imp in feature_importance}
     }
     
-    with open(MODELS_DIR / 'feature_config.json', 'w', encoding='utf-8') as f:
-        json.dump(config, f, ensure_ascii=False, indent=2)
+    write_feature_config(MODELS_DIR / 'feature_config.json', config)
     
     print(f"\n   模型已保存到 {MODELS_DIR}/ 目录")
     

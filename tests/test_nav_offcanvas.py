@@ -14,10 +14,29 @@ def _set_logged_in_user(client, db_session, *, username, role):
     db_session.commit()
     with client.session_transaction() as session:
         session.clear()
-        session['_user_id'] = str(user.id)
+        session['_user_id'] = user.get_id()
         session['_fresh'] = True
         session['_csrf_token'] = 'nav-csrf'
     return user
+
+
+def _read_response_text(client, path):
+    """读取响应正文，并立即释放静态文件句柄。"""
+    response = client.get(path)
+    try:
+        assert response.status_code == 200
+        return response.get_data(as_text=True)
+    finally:
+        response.close()
+
+
+def _assert_response_ok(client, path):
+    """确认资源可访问，并立即释放响应。"""
+    response = client.get(path)
+    try:
+        assert response.status_code == 200
+    finally:
+        response.close()
 
 
 def test_nav_offcanvas_present(client):
@@ -43,12 +62,15 @@ def test_base_loads_light_motion_assets(client):
     assert '/static/js/yilao-motion.js' in body
     assert '/static/js/yilao-data-fx.js' in body
     assert '/static/js/yilao-data-fx-extra.js' in body
-    assert client.get('/static/css/yilao-motion.css').status_code == 200
-    assert client.get('/static/css/yilao-data-fx.css').status_code == 200
-    assert client.get('/static/css/yilao-data-fx-extra.css').status_code == 200
-    assert client.get('/static/js/yilao-motion.js').status_code == 200
-    assert client.get('/static/js/yilao-data-fx.js').status_code == 200
-    assert client.get('/static/js/yilao-data-fx-extra.js').status_code == 200
+    for path in (
+        '/static/css/yilao-motion.css',
+        '/static/css/yilao-data-fx.css',
+        '/static/css/yilao-data-fx-extra.css',
+        '/static/js/yilao-motion.js',
+        '/static/js/yilao-data-fx.js',
+        '/static/js/yilao-data-fx-extra.js',
+    ):
+        _assert_response_ok(client, path)
 
 
 def test_base_has_skip_link_nav_hooks_and_footer_links(client):
@@ -65,8 +87,8 @@ def test_base_has_skip_link_nav_hooks_and_footer_links(client):
 
 def test_narrow_guest_nav_moves_registration_into_drawer(client):
     """320px 顶栏隐藏注册按钮，抽屉仍保留注册入口。"""
-    body = client.get('/').get_data(as_text=True)
-    css = client.get('/static/css/apple-polish.css').get_data(as_text=True)
+    body = _read_response_text(client, '/')
+    css = _read_response_text(client, '/static/css/apple-polish.css')
 
     assert 'data-nav-auth="register"' in body
     assert '<i class="bi bi-person-plus me-2"></i>注册</a>' in body

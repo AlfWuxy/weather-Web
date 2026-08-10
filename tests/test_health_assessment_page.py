@@ -102,6 +102,10 @@ def test_health_assessment_post_persists_academic_payload(
     assert assessment is not None
     assert assessment.risk_score is not None
     assert assessment.risk_level in ['低风险', '中风险', '高风险']
+    assert len(assessment.weather_condition) <= 100
+    weather_summary = safe_json_loads(assessment.weather_condition, {})
+    assert weather_summary['t'] == 31.0
+    assert weather_summary['wx'] == '多云'
 
     explain_payload = safe_json_loads(assessment.explain, {})
     assert 'academic_profile' in explain_payload
@@ -143,6 +147,31 @@ def test_health_assessment_post_persists_academic_payload(
 
     disease_risks = safe_json_loads(assessment.disease_risks, {})
     assert isinstance(disease_risks, dict)
+
+
+def test_compact_assessment_weather_condition_is_bounded_and_valid_json():
+    from core.weather import compact_assessment_weather_condition
+
+    compact = compact_assessment_weather_condition(
+        {
+            'temperature': float('nan'),
+            'temperature_max': 39.876,
+            'temperature_min': -999,
+            'humidity': 101,
+            'aqi': 62.4,
+            'weather_condition': '超长中文天气说明🔥' * 20,
+        }
+    )
+
+    assert len(compact) <= 100
+    parsed = json.loads(compact)
+    assert 't' not in parsed
+    assert parsed['hi'] == 39.9
+    assert 'lo' not in parsed
+    assert 'rh' not in parsed
+    assert parsed['aqi'] == 62.0
+    assert len(parsed['wx']) == 12
+    assert compact_assessment_weather_condition(None) == '{}'
 
 
 @pytest.mark.parametrize(

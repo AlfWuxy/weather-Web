@@ -1,27 +1,53 @@
-<view style="padding: 16px;">
-  <view class="card">
-    <view style="font-size: 18px; font-weight: 700;">绑定 API Token</view>
-    <view class="muted" style="margin-top: 8px;">
-      试点阶段先在网页端生成 Token，在这里输入完成绑定。
-    </view>
-
-    <view style="margin-top: 14px;">
-      <input
-        placeholder="粘贴 Web 生成的 Token"
-        value="{{tokenInput}}"
-        bindinput="onInput"
-        style="border: 1px solid #e5e7eb; border-radius: 10px; padding: 10px 12px; background: #fff;"
-      />
-    </view>
-
-    <view style="display:flex; gap: 10px; margin-top: 14px;">
-      <button class="btn-primary" style="flex:1;" bindtap="onBind">绑定并进入</button>
-      <button class="btn-outline" style="flex:1;" bindtap="onClear">清空</button>
-    </view>
-
-    <view class="muted" style="margin-top: 10px; font-size: 12px;">
-      注意：小程序请求域名必须配置 HTTPS 合法域名，且与后端一致。
-    </view>
+<view class="page-shell">
+  <view class="welcome-card">
+    <view class="brand-mark"><image src="/assets/icons/sunny.png" mode="aspectFit" aria-hidden="true" /></view>
+    <view class="welcome-title">宜老天气通</view>
+    <view class="welcome-subtitle">都昌县天气预警与家庭照护</view>
   </view>
-</view>
 
+  <view wx:if="{{linkMode}}" class="card login-card link-card motion-enter">
+    <view class="section-title">串联网页账号</view>
+    <view class="section-copy">在网页版“个人设置”生成一次性 8 位码，并在 10 分钟内输入。绑定完成后，网页和微信小程序会使用同一份家庭照护数据。</view>
+    <label class="field-label" for="accountLinkCode">网页绑定码</label>
+    <input
+      id="accountLinkCode"
+      class="text-input link-code-input"
+      type="number"
+      maxlength="8"
+      value="{{linkCode}}"
+      bindinput="onLinkCodeInput"
+      placeholder="请输入 8 位数字"
+      aria-label="网页一次性绑定码"
+    />
+    <view wx:if="{{linkHint}}" class="status-hint" role="status" aria-role="status" aria-live="polite">{{linkHint}}</view>
+    <button wx:if="{{alreadyLoggedIn}}" class="wechat-button link-button" loading="{{busy}}" disabled="{{busy}}" bindtap="onLinkAccount" hover-class="button-pressed">确认串联账号</button>
+    <view wx:else class="security-note">输入后继续完成下方微信登录，系统会在登录成功后自动消费这次绑定码。</view>
+  </view>
+
+  <view wx:if="{{!alreadyLoggedIn}}" class="card login-card motion-enter">
+    <view class="section-title">登录后管理家人</view>
+    <view class="section-copy">使用微信快捷登录。登录过程只读取所需的临时凭证，不读取你的聊天、通讯录或位置；避暑资源页的可选定位会另行逐次说明并征得同意。</view>
+
+    <view class="consent-row" role="group" aria-role="group" aria-label="登录协议确认区">
+      <label class="consent-check" for="privacyAgreementCheckbox" aria-label="勾选表示已阅读并同意隐私说明和用户协议">
+        <checkbox-group class="consent-check-group" bindchange="onConsentChange" role="group" aria-role="group" aria-label="隐私说明和用户协议确认">
+          <checkbox id="privacyAgreementCheckbox" value="agreed" checked="{{privacyAgreed}}" color="#b64815" aria-label="勾选表示已阅读并同意隐私说明和用户协议" />
+        </checkbox-group>
+        <view class="consent-copy">我已阅读并同意</view>
+      </label>
+      <view class="consent-body">
+        <button class="privacy-link" catchtap="openPrivacy" aria-label="阅读隐私说明">《隐私说明》</button>
+        <view class="consent-tail">
+          <view class="consent-copy">和</view>
+          <button class="privacy-link" catchtap="openAgreement" aria-label="阅读用户协议">《用户协议》</button>
+        </view>
+      </view>
+    </view>
+
+    <button class="wechat-button" loading="{{busy}}" disabled="{{busy}}" bindtap="onWechatLogin" hover-class="button-pressed" aria-label="{{loginFailed ? '重新微信登录' : '微信快捷登录'}}">{{loginFailed ? '重新微信登录' : '微信快捷登录'}}</button>
+    <view wx:if="{{loginHint}}" class="status-hint" role="status" aria-role="status" aria-live="polite">{{loginHint}}</view>
+  </view>
+
+  <view class="public-note">无需登录也可以从小程序首页查看都昌县公共天气和预警。</view>
+  <button class="public-home-button" bindtap="goPublicHome" hover-class="button-pressed">先查看公共天气</button>
+</view>

@@ -1,17 +1,21 @@
-Heat Action Weather Sync (QWeather)
-=================================
+Heat Action Projection (Cache Only)
+===================================
 
-CLI
+唯一联网天气周期
+- 由 case-weather-cache.timer 每 30 分钟触发 case-weather-cache.service。
+- 手工诊断只可运行 ./scripts/weather_cache_sync.sh，命令与 timer 共用同机锁和 Redis lease。
+
+旧行动投影入口（只读已落地缓存）
 - python -m services.pipelines.sync_weather_data --daily --action-daily
 - python -m services.pipelines.sync_weather_data --action-daily --community "YourCommunity"
-
-Shell
 - ./scripts/weather_sync.sh
 - ./scripts/weather_sync.sh 2025-01-15
 
-Cron example (runs at 07:00/12:00/18:00)
-- 0 7,12,18 * * * /path/to/case-weather/scripts/weather_sync.sh >> /path/to/logs/weather_sync.log 2>&1
+已退役
+- 不要为 weather_sync.sh 或 sync_weather_data.py 配置 cron。
+- 旧入口不会访问 QWeather，只用于把统一快照投影到 WeatherData、DailyStatus 与 CommunityDaily。
 
 Notes
-- Set QWEATHER_KEY and DEFAULT_CITY (or CITY_LOCATION_MAP) in env or config.py.
-- The script writes WeatherData + DailyStatus/CommunityDaily for action dashboards.
+- QWeather 凭据只供受管 case-weather-cache.service 使用。
+- Redis 不可用、同机锁被占用或 30 分钟 lease 未到期时，同步会在访问上游前退出。
+- 正式发布烟测只允许由 activate_release.sh 在 started receipt 前预占全局 30 分钟租约，并在 started 耐久落盘后签发一次性 ticket；禁止人工设置 CASE_WEATHER_FORMAL_SMOKE_*。ticket 消费后即使同步失败也不得自动重试。

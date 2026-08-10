@@ -31,7 +31,7 @@ REAL_WEATHER = {
 
 def _login_as(client, user_id, csrf_token='test-csrf-token'):
     with client.session_transaction() as session:
-        session['_user_id'] = str(user_id)
+        session['_user_id'] = f'{user_id}:1'
         session['_fresh'] = True
         session['_csrf_token'] = csrf_token
 
@@ -156,6 +156,76 @@ def test_caregiver_action_log_keeps_risk_null_when_weather_is_mock(
     assert status.risk_level is None
     assert json.loads(status.caregiver_actions) == ['remind']
     assert status.caregiver_note == '已电话确认'
+
+
+def test_elder_action_labels_cover_current_plans_and_hide_unknown_values():
+    """老人自报项只映射固定中文标题，未知原始值不进入页面。"""
+    from services.user.caregiver_service import _build_elder_action_labels
+
+    action_ids = [
+        'drink_water',
+        'avoid_noon',
+        'cool_rest',
+        'keep_warm',
+        'avoid_fall',
+        'safe_heating',
+        'check_weather',
+        'carry_water',
+        'contact_family',
+        'sensitive_unknown_value',
+    ]
+
+    labels = _build_elder_action_labels(json.dumps(action_ids, ensure_ascii=False))
+
+    assert labels == [
+        '少量多次喝水',
+        '避开中午外出',
+        '到凉快处休息',
+        '及时添衣保暖',
+        '减少湿滑路面外出',
+        '安全使用取暖设备',
+        '出门前看天气',
+        '随身带水',
+        '和家人报个平安',
+        '其他自护行动（旧版本记录）',
+    ]
+    assert 'sensitive_unknown_value' not in labels
+
+
+def test_caregiver_detail_separates_elder_self_report_from_caregiver_form(
+    client,
+    db_session,
+):
+    """老人自报行动单独展示，且绝不成为照护人表单选项。"""
+    user = _create_user(db_session, 'caregiver_elder_action_view', 'caregiver')
+    pair = _create_pair(db_session, user.id, short_code='27182819')
+    db_session.add(DailyStatus(
+        pair_id=pair.id,
+        status_date=today_local(),
+        community_code='都昌',
+        confirmed_at=utcnow(),
+        actions_done_count=2,
+        elder_actions=json.dumps(
+            ['drink_water', 'sensitive_unknown_value'],
+            ensure_ascii=False,
+        ),
+        caregiver_actions=json.dumps(['remind'], ensure_ascii=False),
+        caregiver_note='已电话提醒',
+    ))
+    db_session.commit()
+    _login_as(client, user.id)
+
+    response = client.get(f'/caregiver/pair/{pair.id}')
+
+    assert response.status_code == 200
+    body = response.get_data(as_text=True)
+    assert '老人自报的今日行动' in body
+    assert '少量多次喝水' in body
+    assert '其他自护行动（旧版本记录）' in body
+    assert 'sensitive_unknown_value' not in body
+    assert '照护人行动记录' in body
+    assert 'name="caregiver_actions" value="remind"' in body
+    assert 'name="caregiver_actions" value="drink_water"' not in body
 
 
 def test_community_pages_do_not_generate_mock_risk_messages(

@@ -20,11 +20,9 @@ from utils.validators import sanitize_input
 from ._common import (
     ANNOUNCE_DISCLAIMER_LINES,
     ANNOUNCE_SOURCE_LINES,
-    AUTO_ESCALATE_STAGE,
     HEAT_RISK_LABELS,
     _action_plan,
     _normalize_code,
-    _relay_stage_rank,
     _require_roles
 )
 from ._helpers import (
@@ -33,7 +31,6 @@ from ._helpers import (
     _build_community_message,
     _build_community_snapshot,
     _build_outreach_suggestions,
-    _build_risk_counts,
     _community_access_allowed,
 )
 
@@ -138,18 +135,11 @@ def community_dashboard():
             record=community_daily_by_comm.get(comm.name),
             statuses=statuses
         )
-        risk_statuses = [
-            status for status in statuses
-            if status.risk_level in HEAT_RISK_LABELS.values()
-        ]
-        risk_counts, confirmed_counts = _build_risk_counts(risk_statuses)
-        confirmed_total = sum(1 for status in statuses if status.confirmed_at)
-        help_count = sum(1 for s in statuses if s.help_flag)
-        escalation_count = sum(
-            1 for s in statuses if _relay_stage_rank(s.relay_stage) >= _relay_stage_rank(AUTO_ESCALATE_STAGE)
-        )
-        total_people = snapshot.get('total_people', 0)
-        help_rate = (help_count / total_people) if total_people else 0
+        risk_counts = snapshot['risk_distribution']
+        confirmed_counts = snapshot['confirmed_risk_distribution']
+        confirmed_total = snapshot['confirmed_count']
+        help_count = snapshot['help_count']
+        escalation_count = snapshot['escalation_count']
 
         location = normalize_location_name(comm.name)
         _weather_data, _heat_result, risk_label = _load_heat_risk(location)
@@ -172,7 +162,7 @@ def community_dashboard():
             'confirmed_total': confirmed_total,
             'help_count': help_count,
             'escalation_count': escalation_count,
-            'help_rate': round(help_rate, 4),
+            'help_rate': snapshot['help_rate'],
             'flag_count': escalation_count,
             'risk_label': risk_label,
             'weather_available': weather_available,
@@ -218,16 +208,11 @@ def community_detail(community_code):
         pairs = Pair.query.filter(Pair.id.in_(pair_ids)).all() if pair_ids else []
         pair_map = {pair.id: pair for pair in pairs}
 
-    risk_statuses = [
-        status for status in statuses
-        if status.risk_level in HEAT_RISK_LABELS.values()
-    ]
-    risk_counts, confirmed_counts = _build_risk_counts(risk_statuses)
-    confirmed_total = sum(1 for status in statuses if status.confirmed_at)
-    help_count = sum(1 for s in statuses if s.help_flag)
-    escalation_count = sum(
-        1 for s in statuses if _relay_stage_rank(s.relay_stage) >= _relay_stage_rank(AUTO_ESCALATE_STAGE)
-    )
+    risk_counts = snapshot['risk_distribution']
+    confirmed_counts = snapshot['confirmed_risk_distribution']
+    confirmed_total = snapshot['confirmed_count']
+    help_count = snapshot['help_count']
+    escalation_count = snapshot['escalation_count']
 
     location = normalize_location_name(community_code)
     _weather_data, _heat_result, risk_label = _load_heat_risk(location)

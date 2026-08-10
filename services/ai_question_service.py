@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import time
+from urllib.parse import urlsplit
 from services.external_api import record_external_api_timing as _record_external_api_timing
 try:
     import requests
@@ -17,16 +18,40 @@ class AIQuestionService:
     """AI问答服务类（OpenAI兼容接口）"""
 
     _knowledge_cache = None
+    _OFFICIAL_API_HOST = 'api.siliconflow.cn'
+    _OFFICIAL_API_PATH = '/v1'
 
     def __init__(self, api_key, api_base, allowed_models, connect_timeout=8, read_timeout=60, retries=1, max_tokens=800):
         self.api_key = api_key
-        self.api_base = api_base.rstrip('/')
+        self.api_base = self._validate_api_base(api_base)
         self.allowed_models = allowed_models
         self.logger = logging.getLogger(__name__)
         self.connect_timeout = self._safe_number(connect_timeout, 8.0, is_int=False)
         self.read_timeout = self._safe_number(read_timeout, 60.0, is_int=False)
         self.retries = int(self._safe_number(retries, 1, is_int=True))
         self.max_tokens = int(self._safe_number(max_tokens, 800, is_int=True))
+
+    @classmethod
+    def _validate_api_base(cls, api_base):
+        """凭据只能发送到硅基流动官方 HTTPS v1 端点。"""
+        value = str(api_base or '').strip().rstrip('/')
+        try:
+            parsed = urlsplit(value)
+            port = parsed.port
+        except ValueError as exc:
+            raise ValueError('AI API 地址无效') from exc
+        if (
+            parsed.scheme.lower() != 'https'
+            or (parsed.hostname or '').lower().rstrip('.') != cls._OFFICIAL_API_HOST
+            or port not in (None, 443)
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.query
+            or parsed.fragment
+            or parsed.path != cls._OFFICIAL_API_PATH
+        ):
+            raise ValueError('AI API 地址必须使用官方 HTTPS /v1 端点')
+        return f'https://{cls._OFFICIAL_API_HOST}{cls._OFFICIAL_API_PATH}'
 
     def _safe_number(self, value, default, is_int=False):
         try:
@@ -76,7 +101,8 @@ class AIQuestionService:
                     url,
                     headers=headers,
                     json=payload,
-                    timeout=(self.connect_timeout, self.read_timeout)
+                    timeout=(self.connect_timeout, self.read_timeout),
+                    allow_redirects=False,
                 )
                 elapsed_ms = round((time.perf_counter() - start_ts) * 1000, 2)
                 _record_external_api_timing('ai_chat', elapsed_ms, response.status_code)

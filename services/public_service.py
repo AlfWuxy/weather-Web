@@ -4,18 +4,29 @@ import json
 import logging
 import math
 import secrets
+from contextlib import contextmanager
 from datetime import timedelta
 from urllib.parse import urlparse
 
-from flask import current_app, flash, redirect, render_template, request, session, url_for
+from flask import (
+    current_app,
+    flash,
+    make_response,
+    redirect,
+    render_template,
+    request,
+    session,
+    url_for,
+)
 from flask_login import current_user, login_user, logout_user
 from sqlalchemy import or_
+from sqlalchemy.exc import IntegrityError
+from werkzeug.security import check_password_hash, generate_password_hash
 
 from core.constants import GUEST_ID_PREFIX
 from core.extensions import db
 from core.security import hash_identifier, hash_pair_token, hash_short_code, rate_limit_key, verify_pair_token
 from core.time_utils import today_local, utcnow, ensure_utc_aware
-from core.usage import log_usage_event
 from core.weather import (
     get_consecutive_hot_days,
     get_weather_with_cache,
@@ -27,14 +38,31 @@ from core.db_models import (
     Community,
     CoolingResource,
     DailyStatus,
-    Debrief,
     Pair,
     PairActionToken,
     PairLink,
     ShortCodeAttempt,
     User
 )
+from services.care_action_service import (
+    get_or_create_daily_status,
+    stage_confirm_action,
+    stage_debrief_action,
+    stage_help_action,
+)
+from services.community_daily_service import (
+    refresh_community_daily as _refresh_community_daily,
+    refresh_community_daily_best_effort as _refresh_community_daily_best_effort,
+)
 from services.heat_action_service import HeatActionService
+from services.miniprogram_service import get_bootstrap_payload
+from services.cross_platform_identity import (
+    AccountLinkError,
+    create_account_link_challenge,
+    is_reserved_internal_username,
+    normalize_phone,
+)
+from services.user.owner_write_guard import OwnerInactiveError, owner_write_guard
 from utils.parsers import parse_bool, parse_float
 from utils.audit_log import log_security_event
 from utils.database import atomic_transaction
@@ -48,6 +76,9 @@ from utils.validators import (
 )
 
 logger = logging.getLogger(__name__)
+_DUMMY_LOGIN_PASSWORD_HASH = generate_password_hash(
+    "yilao-login-dummy-password-check"
+)
 
 HEAT_RISK_LABELS = {
     'low': '低风险',
@@ -57,6 +88,9 @@ HEAT_RISK_LABELS = {
 }
 
 PAIR_TOKEN_SESSION_KEY = 'pair_token'
+FORMAL_WEB_ACTION_READ_ONLY_MESSAGE = (
+    '微信正式版的网页家庭行动页仅供查看。请在微信小程序中登录后完成确认、求助或复盘。'
+)
 
 _HEAT_RISK_WEATHER_FIELDS = (
     'temperature',
@@ -64,6 +98,9 @@ _HEAT_RISK_WEATHER_FIELDS = (
     'temperature_min',
     'humidity',
 )
+COOLING_MAP_CENTER_LATITUDE = 29.27
+COOLING_MAP_CENTER_LONGITUDE = 116.20
+COOLING_MAP_MAX_DISTANCE_KM = 80.0
 
 
 def _heat_risk_weather_is_ready(weather_data):
@@ -85,6 +122,19 @@ def _get_pair_token():
 
 def _clear_pair_token():
     session.pop(PAIR_TOKEN_SESSION_KEY, None)
+
+
+def _formal_web_actions_are_read_only():
+    """正式微信运行态关闭网页家庭行动写入口。"""
+    return bool(current_app.config.get('WECHAT_FORMAL_RUNTIME', False))
+
+
+def _reject_formal_web_action_write():
+    """在读取表单、解析 Pair 或触发数据库写入前统一拒绝网页动作。"""
+    if not _formal_web_actions_are_read_only():
+        return None
+    flash(FORMAL_WEB_ACTION_READ_ONLY_MESSAGE, 'warning')
+    return redirect(url_for('public.action_check'), code=303)
 
 
 def _safe_next_url(next_url):
@@ -114,23 +164,50 @@ def _normalize_login_identifier(username):
     return normalized
 
 
-def _login_lockout_key(username):
-    normalized = _normalize_login_identifier(username)
+def _find_user_by_username(identifier):
+    """优先精确匹配，兼容唯一的大小写不敏感历史用户名。"""
+    username = (str(identifier or '')).strip()
+    exact_user = User.query.filter(
+        User.deleted_at.is_(None),
+        User.username == username,
+    ).first()
+    if exact_user is not None:
+        return exact_user
+
+    candidates = User.query.filter(
+        User.deleted_at.is_(None),
+        db.func.lower(User.username) == _normalize_login_identifier(username),
+    ).limit(2).all()
+    if len(candidates) == 1:
+        return candidates[0]
+    return None
+
+
+def _login_attempt_subject(user, identifier):
+    """已知账号统一按 user_id 锁定，未知输入只使用不可逆摘要。"""
+    if user is not None and getattr(user, 'id', None) is not None:
+        return f'user:{int(user.id)}'
+    normalized = _normalize_login_identifier(identifier)
     if not normalized:
         return None
-    return f'login_failures:{normalized}'
+    return f'identifier:{hash_identifier(normalized)}'
 
 
-def _login_attempt_key_hash(username):
-    """按用户名生成登录失败计数键（哈希后落库）。"""
-    normalized = _normalize_login_identifier(username)
-    if not normalized:
+def _login_lockout_key(subject):
+    if not subject:
         return None
-    return hash_identifier(f"login:{normalized}")
+    return f'login_failures:{hash_identifier(subject)}'
 
 
-def _get_login_attempt_record(username):
-    key_hash = _login_attempt_key_hash(username)
+def _login_attempt_key_hash(subject):
+    """按账号主体生成数据库失败计数键，任何外部标识都不明文落库。"""
+    if not subject:
+        return None
+    return hash_identifier(f"login:{subject}")
+
+
+def _get_login_attempt_record(subject):
+    key_hash = _login_attempt_key_hash(subject)
     if not key_hash:
         return None
     attempt = ShortCodeAttempt.query.filter_by(key_hash=key_hash).order_by(ShortCodeAttempt.id.desc()).first()
@@ -140,9 +217,9 @@ def _get_login_attempt_record(username):
     return attempt
 
 
-def _get_login_lock_state_from_db(username, max_failures, lockout_seconds):
+def _get_login_lock_state_from_db(subject, max_failures, lockout_seconds):
     """Redis 不可用时，使用数据库兜底登录锁定。"""
-    attempt = _get_login_attempt_record(username)
+    attempt = _get_login_attempt_record(subject)
     if attempt is None:
         return False, 0
 
@@ -171,8 +248,8 @@ def _get_login_lock_state_from_db(username, max_failures, lockout_seconds):
     return False, 0
 
 
-def _record_login_failure_db(username, max_failures, lockout_seconds):
-    attempt = _get_login_attempt_record(username)
+def _record_login_failure_db(subject, max_failures, lockout_seconds):
+    attempt = _get_login_attempt_record(subject)
     if attempt is None:
         return
 
@@ -192,8 +269,8 @@ def _record_login_failure_db(username, max_failures, lockout_seconds):
     db.session.commit()
 
 
-def _clear_login_failures_db(username):
-    attempt = _get_login_attempt_record(username)
+def _clear_login_failures_db(subject):
+    attempt = _get_login_attempt_record(subject)
     if attempt is None:
         return
     attempt.failed_count = 0
@@ -399,7 +476,7 @@ def _short_code_expires_at():
     return utcnow() + timedelta(days=max(1, days))
 
 
-def _validate_pair_action_token(pair, short_code, token):
+def _validate_pair_action_token(pair, short_code, token, mark_used=True):
     token = (token or '').strip()
     short_code = (short_code or '').replace(' ', '').strip()
     if not pair or not token or not short_code:
@@ -416,24 +493,13 @@ def _validate_pair_action_token(pair, short_code, token):
         return False
     if ensure_utc_aware(record.expires_at) < utcnow():
         return False
-    if not record.used_at:
+    if mark_used and not record.used_at:
         record.used_at = utcnow()
     return True
 
 
 def _get_or_create_daily_status(pair, status_date, risk_label):
-    status = DailyStatus.query.filter_by(pair_id=pair.id, status_date=status_date).first()
-    if not status:
-        status = DailyStatus(
-            pair_id=pair.id,
-            status_date=status_date,
-            community_code=pair.community_code,
-            risk_level=risk_label
-        )
-        db.session.add(status)
-    elif risk_label and not status.risk_level:
-        status.risk_level = risk_label
-    return status
+    return get_or_create_daily_status(pair, status_date, risk_label)
 
 
 def _build_recent_series(pair_id, days=7):
@@ -459,84 +525,33 @@ def _build_recent_series(pair_id, days=7):
     return series
 
 
-def _refresh_community_daily(community_code, status_date):
-    from core.db_models import CommunityDaily
-
-    total_people = Pair.query.filter_by(status='active', community_code=community_code).count()
-    statuses = DailyStatus.query.join(
-        Pair,
-        Pair.id == DailyStatus.pair_id,
-    ).filter(
-        DailyStatus.community_code == community_code,
-        DailyStatus.status_date == status_date,
-        Pair.community_code == community_code,
-        Pair.status == 'active',
-    ).all()
-    confirmed_count = min(sum(1 for s in statuses if s.confirmed_at), total_people)
-    help_count = sum(1 for s in statuses if s.help_flag)
-    escalation_count = min(
-        sum(1 for s in statuses if s.relay_stage in ('backup', 'community', 'emergency')),
-        total_people,
-    )
-    risk_dist = {'低风险': 0, '中风险': 0, '高风险': 0, '极高': 0}
-    for status in statuses:
-        if status.risk_level in risk_dist:
-            risk_dist[status.risk_level] += 1
-    if total_people <= 0:
-        summary = '暂无可用行动数据。'
-    else:
-        pending = max(total_people - confirmed_count, 0)
-        if escalation_count > 0:
-            summary = f'已有{escalation_count}个家庭进入升级链，优先安排社区跟进。'
-        elif help_count > 0:
-            summary = f'已有{help_count}个家庭发出求助，请尽快联系。'
-        elif pending > 0:
-            summary = f'仍有{pending}个家庭未确认，建议分批提醒。'
-        else:
-            summary = '全部家庭已完成确认，继续关注高温变化。'
-
-    confirm_rate = (confirmed_count / total_people) if total_people else 0
-    escalation_rate = (escalation_count / total_people) if total_people else 0
-
-    record = CommunityDaily.query.filter_by(
-        community_code=community_code,
-        date=status_date
-    ).first()
-    if not record:
-        record = CommunityDaily(community_code=community_code, date=status_date)
-        db.session.add(record)
-    record.total_people = total_people
-    record.confirm_rate = round(confirm_rate, 4)
-    record.escalation_rate = round(escalation_rate, 4)
-    record.risk_distribution = json.dumps(risk_dist, ensure_ascii=False)
-    record.outreach_summary = summary
-    db.session.commit()
-
-
 def _build_action_context(pair, status_date):
-    location = normalize_location_name(pair.location_query or pair.community_code)
-    weather_data, _ = get_weather_with_cache(location)
+    snapshot = get_bootstrap_payload()
     resources = CoolingResource.query.filter_by(
         community_code=pair.community_code,
         is_active=True
     ).all()
-    if not _heat_risk_weather_is_ready(weather_data):
+    risk = snapshot.get('risk') if isinstance(snapshot.get('risk'), dict) else {}
+    calculation = risk.get('calculation') if isinstance(risk.get('calculation'), dict) else {}
+    stored_heat_result = calculation.get('heat_result')
+    stored_risk_reasons = calculation.get('risk_reasons')
+    risk_available = (
+        risk.get('available') is True
+        and risk.get('score') is not None
+        and snapshot.get('stale') is not True
+        and isinstance(stored_heat_result, dict)
+        and isinstance(stored_risk_reasons, list)
+    )
+    if not risk_available:
         status = _get_or_create_daily_status(pair, status_date, None)
         return status, [], resources, None, None, None, []
 
-    heat_service = HeatActionService()
-    consecutive_hot_days = get_consecutive_hot_days(
-        location,
-        today_max=weather_data.get('temperature_max')
-    )
-    heat_result = heat_service.calculate_heat_risk(
-        weather_data,
-        consecutive_hot_days=consecutive_hot_days
-    )
-    risk_label = HEAT_RISK_LABELS.get(heat_result['risk_level'], '低风险')
-    risk_reasons = heat_service.build_risk_reasons(heat_result)
+    weather_data = snapshot.get('current')
+    heat_result = dict(stored_heat_result)
+    risk_label = str(risk.get('level'))
+    risk_reasons = list(stored_risk_reasons)
     status = _get_or_create_daily_status(pair, status_date, risk_label)
-    actions = _action_plan(risk_label)
+    actions = snapshot.get('actions') if isinstance(snapshot.get('actions'), list) else []
     return status, actions, resources, weather_data, heat_result, risk_label, risk_reasons
 
 
@@ -572,7 +587,8 @@ def _render_action_page(
         confirm_action=confirm_action,
         help_action=help_action,
         debrief_action=debrief_action,
-        focus_debrief=focus_debrief
+        focus_debrief=focus_debrief,
+        web_actions_read_only=_formal_web_actions_are_read_only(),
     )
 
 
@@ -592,6 +608,16 @@ def _resolve_action_routes(token=None, confirm_action=None, help_action=None, de
 
 
 def _handle_action_lookup(token=None, entry_action=None, confirm_action=None, help_action=None, debrief_action=None):
+    if _formal_web_actions_are_read_only():
+        # 正式微信首发不读取短码、不兑换链接，也不创建家庭状态记录。
+        return render_template(
+            'action_checkin.html',
+            stage='lookup',
+            short_code='',
+            entry_action=entry_action,
+            web_actions_read_only=True,
+        )
+
     if token:
         _store_pair_token(token)
 
@@ -675,7 +701,7 @@ def _handle_action_lookup(token=None, entry_action=None, confirm_action=None, he
     )
 
 
-def _resolve_pair_from_session_or_code(short_code, token=None):
+def _resolve_pair_from_session_or_code(short_code, token=None, mark_token_used=True):
     pair = None
     short_code = (short_code or '').replace(' ', '').strip()
     if token is None:
@@ -692,7 +718,12 @@ def _resolve_pair_from_session_or_code(short_code, token=None):
         if (
             pair
             and not _pair_short_code_is_valid(pair)
-            and not _validate_pair_action_token(pair, short_code, token)
+            and not _validate_pair_action_token(
+                pair,
+                short_code,
+                token,
+                mark_used=mark_token_used,
+            )
         ):
             return None
     if not pair and short_code:
@@ -701,10 +732,36 @@ def _resolve_pair_from_session_or_code(short_code, token=None):
         if (
             pair
             and not _pair_short_code_is_valid(pair)
-            and not _validate_pair_action_token(pair, short_code, token)
+            and not _validate_pair_action_token(
+                pair,
+                short_code,
+                token,
+                mark_used=mark_token_used,
+            )
         ):
             return None
     return pair
+
+
+@contextmanager
+def _active_pair_write_guard(pair):
+    """锁定账号后重新读取 active Pair，阻断注销或停用后的陈旧写入。"""
+    pair_id = int(getattr(pair, 'id', 0) or 0)
+    owner_id = int(getattr(pair, 'caregiver_id', 0) or 0)
+    if not pair_id or not owner_id:
+        raise OwnerInactiveError('pair owner is missing')
+
+    with owner_write_guard(owner_id):
+        locked_pair = db.session.execute(
+            db.select(Pair)
+            .where(
+                Pair.id == pair_id,
+                Pair.caregiver_id == owner_id,
+                Pair.status == 'active',
+            )
+            .execution_options(populate_existing=True)
+        ).scalar_one_or_none()
+        yield locked_pair
 
 
 def _validate_pair_token_binding(pair, short_code, token):
@@ -729,35 +786,102 @@ def _validate_pair_token_binding(pair, short_code, token):
 
 
 def _handle_action_confirm(token=None, confirm_action=None, debrief_action=None):
+    formal_rejection = _reject_formal_web_action_write()
+    if formal_rejection is not None:
+        return formal_rejection
+
     short_code = sanitize_input(request.form.get('short_code'), max_length=12) or ''
     short_code = short_code.replace(' ', '').strip()
     token = sanitize_input(request.form.get('token') or token, max_length=200)
-    pair = _resolve_pair_from_session_or_code(short_code, token=token)
+    resolution_token = token or _get_pair_token()
+    pair = _resolve_pair_from_session_or_code(
+        short_code,
+        token=resolution_token,
+        mark_token_used=False,
+    )
     if not pair:
         flash('短码无效或已失效', 'error')
         return redirect(url_for('public.action_check'))
-
-    if (token or request.path.startswith('/e/')) and not _validate_pair_token_binding(pair, short_code, token):
-        flash('短码或令牌无效，请联系照护人确认。', 'error')
+    try:
+        with _active_pair_write_guard(pair) as locked_pair:
+            if locked_pair is None:
+                flash('绑定已停用，无法记录确认。', 'error')
+                return redirect(url_for('public.action_check'))
+            pair = locked_pair
+            if (token or request.path.startswith('/e/')) and not _validate_pair_token_binding(
+                pair, short_code, token
+            ):
+                flash('短码或令牌无效，请联系照护人确认。', 'error')
+                return redirect(url_for('public.action_check'))
+            if (
+                not _pair_short_code_is_valid(pair)
+                and not _validate_pair_action_token(pair, short_code, resolution_token)
+            ):
+                flash('短码或令牌无效，请联系照护人确认。', 'error')
+                return redirect(url_for('public.action_check'))
+            status_date = today_local()
+            (
+                status,
+                actions,
+                resources,
+                weather_data,
+                heat_result,
+                risk_label,
+                risk_reasons,
+            ) = _build_action_context(pair, status_date)
+            actions_done = request.form.getlist('actions_done')
+            allowed_action_ids = {
+                str(item.get('id') or '')
+                for item in actions
+                if isinstance(item, dict) and item.get('id')
+            }
+            if (
+                len(actions_done) > 20
+                or len(actions_done) != len(set(actions_done))
+                or any(action_id not in allowed_action_ids for action_id in actions_done)
+            ):
+                flash('行动清单已更新，请刷新后重新选择。', 'error')
+                action_routes = _resolve_action_routes(
+                    token=token,
+                    confirm_action=confirm_action,
+                    debrief_action=debrief_action,
+                )
+                return _render_action_page(
+                    pair,
+                    status,
+                    actions,
+                    resources,
+                    weather_data,
+                    heat_result,
+                    risk_label,
+                    risk_reasons=risk_reasons,
+                    **action_routes,
+                ), 400
+            mutation = stage_confirm_action(
+                pair,
+                status,
+                actions_done_count=len(actions_done),
+                elder_actions=actions_done,
+                source='web',
+            )
+            # 提交后注销可立即删除数据库行，响应渲染使用本次已写入快照。
+            db.session.flush()
+            db.session.expunge(pair)
+            db.session.expunge(status)
+            db.session.commit()
+    except OwnerInactiveError:
+        flash('照护账号已失效，无法记录确认。', 'error')
         return redirect(url_for('public.action_check'))
-    status_date = today_local()
-    status, actions, resources, weather_data, heat_result, risk_label, risk_reasons = _build_action_context(
-        pair, status_date
+    except (OSError, RuntimeError, ValueError):
+        db.session.rollback()
+        logger.exception('公开确认授权锁不可用，记录未保存')
+        flash('确认暂时无法保存，请稍后重试。', 'error')
+        return redirect(url_for('public.action_check'))
+    _refresh_community_daily_best_effort(
+        mutation.community_code,
+        mutation.status_date,
+        event_logger=logger,
     )
-    actions_done = request.form.getlist('actions_done')
-    status.actions_done_count = len(actions_done)
-    status.confirmed_at = utcnow()
-    pair.last_active_at = utcnow()
-    db.session.commit()
-    log_usage_event(
-        'checkin_confirmed',
-        user_id=pair.caregiver_id,
-        pair_id=pair.id,
-        member_id=getattr(pair, 'member_id', None),
-        source='web',
-        meta={'actions_done_count': len(actions_done)},
-    )
-    _refresh_community_daily(pair.community_code, status_date)
     flash('已记录今日确认。', 'success')
     action_routes = _resolve_action_routes(token=token, confirm_action=confirm_action, debrief_action=debrief_action)
     return _render_action_page(
@@ -774,36 +898,69 @@ def _handle_action_confirm(token=None, confirm_action=None, debrief_action=None)
 
 
 def _handle_action_help(token=None, confirm_action=None, debrief_action=None):
+    formal_rejection = _reject_formal_web_action_write()
+    if formal_rejection is not None:
+        return formal_rejection
+
     short_code = sanitize_input(request.form.get('short_code'), max_length=12) or ''
     short_code = short_code.replace(' ', '').strip()
     token = sanitize_input(request.form.get('token') or token, max_length=200)
-    pair = _resolve_pair_from_session_or_code(short_code, token=token)
+    resolution_token = token or _get_pair_token()
+    pair = _resolve_pair_from_session_or_code(
+        short_code,
+        token=resolution_token,
+        mark_token_used=False,
+    )
     if not pair:
         flash('短码无效或已失效', 'error')
         return redirect(url_for('public.action_check'))
-
-    if (token or request.path.startswith('/e/')) and not _validate_pair_token_binding(pair, short_code, token):
-        flash('短码或令牌无效，请联系照护人确认。', 'error')
+    try:
+        with _active_pair_write_guard(pair) as locked_pair:
+            if locked_pair is None:
+                flash('绑定已停用，无法记录求助。', 'error')
+                return redirect(url_for('public.action_check'))
+            pair = locked_pair
+            if (token or request.path.startswith('/e/')) and not _validate_pair_token_binding(
+                pair, short_code, token
+            ):
+                flash('短码或令牌无效，请联系照护人确认。', 'error')
+                return redirect(url_for('public.action_check'))
+            if (
+                not _pair_short_code_is_valid(pair)
+                and not _validate_pair_action_token(pair, short_code, resolution_token)
+            ):
+                flash('短码或令牌无效，请联系照护人确认。', 'error')
+                return redirect(url_for('public.action_check'))
+            status_date = today_local()
+            (
+                status,
+                actions,
+                resources,
+                weather_data,
+                heat_result,
+                risk_label,
+                risk_reasons,
+            ) = _build_action_context(pair, status_date)
+            mutation = stage_help_action(pair, status, source='web')
+            # 提交后注销可立即删除数据库行，响应渲染使用本次已写入快照。
+            db.session.flush()
+            db.session.expunge(pair)
+            db.session.expunge(status)
+            db.session.commit()
+    except OwnerInactiveError:
+        flash('照护账号已失效，无法记录求助。', 'error')
         return redirect(url_for('public.action_check'))
-    status_date = today_local()
-    status, actions, resources, weather_data, heat_result, risk_label, risk_reasons = _build_action_context(
-        pair, status_date
+    except (OSError, RuntimeError, ValueError):
+        db.session.rollback()
+        logger.exception('公开求助授权锁不可用，记录未保存')
+        flash('求助暂时无法保存，请稍后重试。', 'error')
+        return redirect(url_for('public.action_check'))
+    _refresh_community_daily_best_effort(
+        mutation.community_code,
+        mutation.status_date,
+        event_logger=logger,
     )
-    status.help_flag = True
-    if not status.relay_stage or status.relay_stage == 'none':
-        status.relay_stage = 'caregiver'
-    pair.last_active_at = utcnow()
-    db.session.commit()
-    log_usage_event(
-        'help_flagged',
-        user_id=pair.caregiver_id,
-        pair_id=pair.id,
-        member_id=getattr(pair, 'member_id', None),
-        source='web',
-        meta={'relay_stage': status.relay_stage},
-    )
-    _refresh_community_daily(pair.community_code, status_date)
-    flash('已记录求助，照护人将收到提醒。', 'success')
+    flash('求助需求已记录，请同时直接联系照护人。', 'success')
     action_routes = _resolve_action_routes(token=token, confirm_action=confirm_action, debrief_action=debrief_action)
     return _render_action_page(
         pair,
@@ -819,59 +976,87 @@ def _handle_action_help(token=None, confirm_action=None, debrief_action=None):
 
 
 def _handle_action_debrief(token=None, confirm_action=None, debrief_action=None, focus_debrief=False):
+    formal_rejection = _reject_formal_web_action_write()
+    if formal_rejection is not None:
+        return formal_rejection
+
     short_code = sanitize_input(request.form.get('short_code'), max_length=12) or ''
     short_code = short_code.replace(' ', '').strip()
     token = sanitize_input(request.form.get('token') or token, max_length=200)
-    pair = _resolve_pair_from_session_or_code(short_code, token=token)
+    resolution_token = token or _get_pair_token()
+    pair = _resolve_pair_from_session_or_code(
+        short_code,
+        token=resolution_token,
+        mark_token_used=False,
+    )
     if not pair:
         flash('短码无效或已失效', 'error')
         return redirect(url_for('public.action_check'))
 
-    if (token or request.path.startswith('/e/')) and not _validate_pair_token_binding(pair, short_code, token):
-        flash('短码或令牌无效，请联系照护人确认。', 'error')
-        return redirect(url_for('public.action_check'))
-    status_date = today_local()
     q1 = sanitize_input(request.form.get('question_1'), max_length=200)
     q2 = sanitize_input(request.form.get('question_2'), max_length=200)
     q3 = sanitize_input(request.form.get('question_3'), max_length=200)
     difficulty = sanitize_input(request.form.get('difficulty'), max_length=500)
     optin = request.form.get('debrief_optin') == '1'
 
-    if optin:
-        debrief = Debrief.query.filter_by(pair_id=pair.id, date=status_date).first()
-    else:
-        debrief = None
-
-    if not debrief:
-        debrief = Debrief(
-            date=status_date,
-            community_code=pair.community_code,
-            pair_id=pair.id if optin else None
-        )
-        db.session.add(debrief)
-
-    debrief.question_1 = q1
-    debrief.question_2 = q2
-    debrief.question_3 = q3
-    debrief.difficulty = difficulty
-
-    status = _get_or_create_daily_status(pair, status_date, None)
-    status.debrief_optin = optin
-    db.session.commit()
-    log_usage_event(
-        'feedback_submitted',
-        user_id=pair.caregiver_id,
-        pair_id=pair.id,
-        member_id=getattr(pair, 'member_id', None),
-        source='web',
-        meta={'optin': bool(optin), 'difficulty_len': len(difficulty or '')},
+    try:
+        with _active_pair_write_guard(pair) as locked_pair:
+            if locked_pair is None:
+                flash('绑定已停用，无法保存复盘。', 'error')
+                return redirect(url_for('public.action_check'))
+            pair = locked_pair
+            if (token or request.path.startswith('/e/')) and not _validate_pair_token_binding(
+                pair, short_code, token
+            ):
+                flash('短码或令牌无效，请联系照护人确认。', 'error')
+                return redirect(url_for('public.action_check'))
+            if (
+                not _pair_short_code_is_valid(pair)
+                and not _validate_pair_action_token(pair, short_code, resolution_token)
+            ):
+                flash('短码或令牌无效，请联系照护人确认。', 'error')
+                return redirect(url_for('public.action_check'))
+            status_date = today_local()
+            (
+                status,
+                actions,
+                resources,
+                weather_data,
+                heat_result,
+                risk_label,
+                risk_reasons,
+            ) = _build_action_context(pair, status_date)
+            mutation = stage_debrief_action(
+                pair,
+                status,
+                answers={
+                    'question_1': q1,
+                    'question_2': q2,
+                    'question_3': q3,
+                },
+                difficulty=difficulty,
+                opt_in=optin,
+                source='web',
+            )
+            # 提交后注销可立即删除数据库行，响应渲染使用本次已写入快照。
+            db.session.flush()
+            db.session.expunge(pair)
+            db.session.expunge(status)
+            db.session.commit()
+    except OwnerInactiveError:
+        flash('照护账号已失效，无法保存复盘。', 'error')
+        return redirect(url_for('public.action_check'))
+    except (OSError, RuntimeError, ValueError):
+        db.session.rollback()
+        logger.exception('公开复盘授权锁不可用，记录未保存')
+        flash('复盘暂时无法保存，请稍后重试。', 'error')
+        return redirect(url_for('public.action_check'))
+    _refresh_community_daily_best_effort(
+        mutation.community_code,
+        mutation.status_date,
+        event_logger=logger,
     )
-    _refresh_community_daily(pair.community_code, status_date)
     flash('复盘已提交，感谢反馈。', 'success')
-
-    status, actions, resources, weather_data, heat_result, risk_label, risk_reasons = _build_action_context(
-        pair, status_date
-    )
     action_routes = _resolve_action_routes(token=token, confirm_action=confirm_action, debrief_action=debrief_action)
     return _render_action_page(
         pair,
@@ -943,17 +1128,104 @@ def render_role_entry():
     )
 
 
+def render_account_link_page():
+    """只呈现跨端账号所需的最小信息，不读取健康档案。"""
+    last_link_code = session.pop('last_mini_link_code', None)
+    last_link_expires_at = session.pop('last_mini_link_expires_at', None)
+    return render_template(
+        'account_link.html',
+        last_link_code=last_link_code,
+        last_link_expires_at=last_link_expires_at,
+    )
+
+
+def handle_account_link_phone():
+    """复验当前密码后更新待验证手机号标识。"""
+    try:
+        phone_normalized = normalize_phone(request.form.get('phone'), required=True)
+    except ValueError as exc:
+        flash(str(exc), 'error')
+        return redirect(url_for('public.account_link'))
+
+    current_password = request.form.get('current_password', '')
+    if not current_password:
+        flash('请输入当前密码后再保存手机号。', 'error')
+        return redirect(url_for('public.account_link'))
+
+    try:
+        owner_user_id = int(current_user.id)
+        with owner_write_guard(owner_user_id) as locked_user:
+            if not locked_user.check_password(current_password):
+                flash('当前密码不正确，本次更改未保存。', 'error')
+                return redirect(url_for('public.account_link'))
+            if locked_user.phone_normalized != phone_normalized:
+                locked_user.phone_normalized = phone_normalized
+                locked_user.phone_verified_at = None
+            db.session.commit()
+    except OwnerInactiveError:
+        flash('账号已失效，请重新登录。', 'error')
+        return redirect(url_for('public.login'))
+    except IntegrityError:
+        db.session.rollback()
+        flash('手机号暂时无法保存，请稍后重试。', 'error')
+        return redirect(url_for('public.account_link'))
+    except (OSError, RuntimeError, ValueError):
+        db.session.rollback()
+        logger.exception('跨端账号手机号保存失败')
+        flash('手机号暂时无法保存，请稍后重试。', 'error')
+        return redirect(url_for('public.account_link'))
+
+    flash('手机号已保存为待验证标识，当前不能用于登录。', 'success')
+    return redirect(url_for('public.account_link'))
+
+
+def handle_account_link_code():
+    """复验当前密码后生成一次性八位绑定码。"""
+    if request.form.get('miniprogram_privacy_consent') != '1':
+        flash('请先阅读并同意跨端绑定说明。', 'error')
+        return redirect(url_for('public.account_link'))
+    current_password = request.form.get('current_password', '')
+    if not current_password:
+        flash('请输入当前密码后再生成绑定码。', 'error')
+        return redirect(url_for('public.account_link'))
+
+    try:
+        owner_user_id = int(current_user.id)
+        with owner_write_guard(owner_user_id) as locked_user:
+            if not locked_user.check_password(current_password):
+                flash('当前密码不正确，未生成绑定码。', 'error')
+                return redirect(url_for('public.account_link'))
+            challenge = create_account_link_challenge(owner_user_id)
+        session['last_mini_link_code'] = challenge['code']
+        session['last_mini_link_expires_at'] = challenge['expires_at']
+        flash('一次性绑定码已生成，请在 10 分钟内到微信小程序输入。', 'success')
+    except OwnerInactiveError:
+        flash('账号已失效，请重新登录。', 'error')
+        return redirect(url_for('public.login'))
+    except AccountLinkError as exc:
+        flash(exc.message, 'error')
+    except (OSError, RuntimeError, ValueError):
+        db.session.rollback()
+        logger.exception('小程序一次性绑定码生成失败')
+        flash('绑定码暂时无法生成，请稍后重试。', 'error')
+    return redirect(url_for('public.account_link'))
+
+
 def handle_login(next_url):
     if request.method == 'POST':
         # 输入验证
         username = request.form.get('username', '').strip()
         normalized_username = _normalize_login_identifier(username)
+        try:
+            normalized_phone = normalize_phone(username)
+        except ValueError:
+            normalized_phone = None
         password = request.form.get('password', '')
         remember_flag = request.form.get('remember') in ('1', 'on', 'true', 'yes')
 
         # 基本验证
         if not username or not password:
-            flash('请输入用户名和密码', 'error')
+            flash('请输入用户名或已验证手机号和密码', 'error')
             return render_template('login.html', next=next_url)
 
         # 限制长度防止攻击
@@ -961,10 +1233,26 @@ def handle_login(next_url):
             flash('输入内容过长', 'error')
             return render_template('login.html', next=next_url)
 
-        user = User.query.filter_by(username=username).first()
+        if normalized_phone:
+            user = User.query.filter(
+                User.deleted_at.is_(None),
+                User.phone_normalized == normalized_phone,
+                User.phone_verified_at.is_not(None),
+            ).first()
+            if user is None:
+                user = _find_user_by_username(username)
+            canonical_identifier = (
+                normalized_phone
+                if user is None
+                else _normalize_login_identifier(user.username)
+            )
+        else:
+            user = _find_user_by_username(username)
+            canonical_identifier = normalized_username
+        login_subject = _login_attempt_subject(user, canonical_identifier)
 
         # 账户锁定检查（防暴力破解）
-        lockout_key = _login_lockout_key(normalized_username)
+        lockout_key = _login_lockout_key(login_subject)
         max_failures = current_app.config.get('LOGIN_MAX_FAILURES', 5)
         lockout_seconds = current_app.config.get('LOGIN_LOCKOUT_SECONDS', 300)
         redis_client = None
@@ -980,7 +1268,12 @@ def handle_login(next_url):
                 if fail_count >= max_failures:
                     ttl = redis_client.ttl(lockout_key)
                     remaining = max(ttl, 0)
-                    logger.warning("账户被锁定(redis): %s (剩余%ds)", username, remaining)
+                    logger.warning(
+                        "账户被锁定(redis): user_id=%s identifier_len=%s remaining=%ds",
+                        getattr(user, 'id', None),
+                        len(username),
+                        remaining,
+                    )
                     flash(f'登录失败次数过多，请 {remaining // 60 + 1} 分钟后再试', 'error')
                     return render_template('login.html', next=next_url)
             except Exception:
@@ -989,15 +1282,30 @@ def handle_login(next_url):
 
         if not redis_client:
             try:
-                db_locked, db_remaining = _get_login_lock_state_from_db(normalized_username, max_failures, lockout_seconds)
+                db_locked, db_remaining = _get_login_lock_state_from_db(
+                    login_subject,
+                    max_failures,
+                    lockout_seconds,
+                )
                 if db_locked:
-                    logger.warning("账户被锁定(db): %s (剩余%ds)", username, db_remaining)
+                    logger.warning(
+                        "账户被锁定(db): user_id=%s identifier_len=%s remaining=%ds",
+                        getattr(user, 'id', None),
+                        len(username),
+                        db_remaining,
+                    )
                     flash(f'登录失败次数过多，请 {db_remaining // 60 + 1} 分钟后再试', 'error')
                     return render_template('login.html', next=next_url)
             except Exception:
                 logger.warning("数据库锁定检查失败", exc_info=True)
 
-        if user and user.check_password(password):
+        # 不存在的账号也执行同成本密码校验，缩小账号枚举的时间差。
+        password_matches = (
+            user.check_password(password)
+            if user is not None
+            else check_password_hash(_DUMMY_LOGIN_PASSWORD_HASH, password)
+        )
+        if user and password_matches:
             # 登录成功，清除失败计数
             if redis_client:
                 try:
@@ -1007,7 +1315,7 @@ def handle_login(next_url):
                     redis_client = None
             if not redis_client:
                 try:
-                    _clear_login_failures_db(normalized_username)
+                    _clear_login_failures_db(login_subject)
                 except Exception:
                     logger.warning("数据库清除失败计数失败", exc_info=True)
             login_user(
@@ -1017,11 +1325,18 @@ def handle_login(next_url):
             )
             user.last_login = utcnow()
             db.session.commit()
-            logger.info("用户登录成功: %s", username)
+            logger.info("用户登录成功: user_id=%s", user.id)
 
             safe_next = _safe_next_url(next_url)
             if safe_next:
                 return redirect(safe_next)
+
+            if (
+                current_app.config.get('WECHAT_FORMAL_RUNTIME')
+                and not current_app.config.get('WEB_PRIVATE_FEATURES_ENABLED')
+                and user.role in {'user', 'caregiver'}
+            ):
+                return redirect(url_for('public.account_link'))
 
             # 没有显式 next 时，让每种角色直达自己的主工作台。
             landing_endpoint = {
@@ -1043,12 +1358,16 @@ def handle_login(next_url):
                 redis_client = None
         if not redis_client:
             try:
-                _record_login_failure_db(normalized_username, max_failures, lockout_seconds)
+                _record_login_failure_db(
+                    login_subject,
+                    max_failures,
+                    lockout_seconds,
+                )
             except Exception:
                 logger.warning("数据库递增失败计数失败", exc_info=True)
 
-        logger.warning("登录失败: %s", username)
-        flash('用户名或密码错误', 'error')
+        logger.warning("登录失败: identifier_len=%s", len(username))
+        flash('用户名、已验证手机号或密码错误', 'error')
 
     return render_template('login.html', next=next_url)
 
@@ -1061,6 +1380,16 @@ def handle_register():
             flash(result, 'error')
             return redirect(url_for('public.register'))
         username = result
+        if is_reserved_internal_username(username):
+            flash('该用户名属于系统保留命名空间，请换一个用户名。', 'error')
+            return redirect(url_for('public.register'))
+        try:
+            username_as_phone = normalize_phone(username)
+        except ValueError:
+            username_as_phone = None
+        if username_as_phone:
+            flash('用户名不能使用手机号格式，请换一个用户名。', 'error')
+            return redirect(url_for('public.register'))
 
         # 验证密码
         valid, result = validate_password(request.form.get('password'))
@@ -1075,6 +1404,13 @@ def handle_register():
             flash(result, 'error')
             return redirect(url_for('public.register'))
         email = result
+
+        # 手机号只保存为待验证标识；接入短信校验前不能用于登录。
+        try:
+            phone_normalized = normalize_phone(request.form.get('phone'))
+        except ValueError as exc:
+            flash(str(exc), 'error')
+            return redirect(url_for('public.register'))
 
         # 验证年龄
         valid, result = validate_age(request.form.get('age'))
@@ -1093,37 +1429,140 @@ def handle_register():
         # 社区信息
         community = sanitize_input(request.form.get('community'), max_length=100)
 
-        # 检查用户名是否已存在
-        if User.query.filter_by(username=username).first():
-            flash('用户名已存在', 'error')
-            return redirect(url_for('public.register'))
-
-        # 检查邮箱是否已存在
-        if email and User.query.filter_by(email=email).first():
-            flash('邮箱已被注册', 'error')
-            return redirect(url_for('public.register'))
-
         user = User(
             username=username,
             email=email,
+            phone_normalized=phone_normalized,
             age=age,
             gender=gender,
             community=community
         )
         user.set_password(password)
 
-        db.session.add(user)
-        db.session.commit()
+        # 所有占用结果使用相同提示与跳转，减少匿名访客据此枚举手机号或邮箱。
+        processed_message = (
+            '注册申请已处理，请尝试登录。若无法登录，请更换用户名或联系管理员。'
+        )
+        username_taken = User.query.filter(
+            db.func.lower(User.username) == _normalize_login_identifier(username)
+        ).first() is not None
+        email_taken = bool(
+            email and User.query.filter_by(email=email).first() is not None
+        )
+        if any(
+            (
+                username_taken,
+                email_taken,
+            )
+        ):
+            flash(processed_message, 'success')
+            return redirect(
+                url_for('public.login', next=url_for('public.account_link'))
+            )
 
-        logger.info("新用户注册: %s", username)
-        flash('注册成功，请登录', 'success')
-        return redirect(url_for('public.login'))
+        try:
+            db.session.add(user)
+            db.session.commit()
+        except IntegrityError:
+            # 用户名与邮箱唯一索引负责处理并发注册竞争。
+            db.session.rollback()
+            flash(processed_message, 'success')
+            return redirect(
+                url_for('public.login', next=url_for('public.account_link'))
+            )
+
+        logger.info("新用户注册: user_id=%s", user.id)
+        flash(processed_message, 'success')
+        return redirect(
+            url_for('public.login', next=url_for('public.account_link'))
+        )
 
     communities = Community.query.all()
     return render_template('register.html', communities=communities)
 
 
-def render_cooling_resources_page(community, resource_type, has_ac_raw, is_accessible_raw, open_only):
+def _verified_cooling_map_point(resource):
+    """把仍在人工核验有效期内的 GCJ-02 点位转换为公开地图数据。"""
+    if (
+        resource.coordinate_verified_at is None
+        or resource.coordinate_system != 'GCJ-02'
+        or not str(resource.coordinate_source or '').strip()
+        or resource.latitude is None
+        or resource.longitude is None
+    ):
+        return None
+
+    try:
+        latitude = float(resource.latitude)
+        longitude = float(resource.longitude)
+        verified_at = ensure_utc_aware(resource.coordinate_verified_at)
+    except (TypeError, ValueError):
+        return None
+    if (
+        not math.isfinite(latitude)
+        or not math.isfinite(longitude)
+        or not -90 <= latitude <= 90
+        or not -180 <= longitude <= 180
+    ):
+        return None
+
+    now = utcnow()
+    verification_ttl_days = current_app.config.get(
+        'COOLING_COORDINATE_VERIFICATION_TTL_DAYS',
+        365,
+    )
+    try:
+        verification_ttl_days = max(30, min(int(verification_ttl_days), 730))
+    except (TypeError, ValueError):
+        verification_ttl_days = 365
+    if (
+        verified_at > now + timedelta(minutes=5)
+        or now - verified_at > timedelta(days=verification_ttl_days)
+    ):
+        return None
+
+    center_latitude = math.radians(COOLING_MAP_CENTER_LATITUDE)
+    point_latitude = math.radians(latitude)
+    latitude_delta = point_latitude - center_latitude
+    longitude_delta = math.radians(
+        longitude - COOLING_MAP_CENTER_LONGITUDE
+    )
+    haversine = (
+        math.sin(latitude_delta / 2) ** 2
+        + math.cos(center_latitude)
+        * math.cos(point_latitude)
+        * math.sin(longitude_delta / 2) ** 2
+    )
+    distance_km = 6371.0088 * 2 * math.atan2(
+        math.sqrt(haversine),
+        math.sqrt(max(0.0, 1 - haversine)),
+    )
+    if distance_km > COOLING_MAP_MAX_DISTANCE_KM:
+        return None
+
+    return {
+        'id': resource.id,
+        'name': resource.name,
+        'community': resource.community_code,
+        'type': resource.resource_type,
+        'address': resource.address_hint,
+        'open_hours': resource.open_hours,
+        'has_ac': bool(resource.has_ac),
+        'is_accessible': bool(resource.is_accessible),
+        'lat': latitude,
+        'lng': longitude,
+        'coordinate_system': 'GCJ-02',
+    }
+
+
+def render_cooling_resources_page(
+    community,
+    resource_type,
+    has_ac_raw,
+    is_accessible_raw,
+    open_only,
+    cooling_candidates=None,
+):
     open_only_flag = parse_bool(open_only, default=False)
     location_query = sanitize_input(request.args.get('location'), max_length=100)
     weather_location = normalize_location_name(community or location_query or None)
@@ -1165,28 +1604,24 @@ def render_cooling_resources_page(community, resource_type, has_ac_raw, is_acces
         CoolingResource.name
     ).all()
     all_resources = CoolingResource.query.filter_by(is_active=True).all()
+    candidate_preview = (
+        list(cooling_candidates or [])
+        if not all_resources
+        else []
+    )
     communities = sorted({item.community_code for item in all_resources if item.community_code})
     resource_types = sorted({item.resource_type for item in all_resources if item.resource_type})
     grouped = {}
     map_points = []
     for item in resources:
         grouped.setdefault(item.community_code or '未标注社区', []).append(item)
-        if item.latitude is not None and item.longitude is not None:
-            map_points.append({
-                'name': item.name,
-                'community': item.community_code,
-                'type': item.resource_type,
-                'address': item.address_hint,
-                'open_hours': item.open_hours,
-                'has_ac': bool(item.has_ac),
-                'is_accessible': bool(item.is_accessible),
-                'lat': item.latitude,
-                'lng': item.longitude
-            })
+        map_point = _verified_cooling_map_point(item)
+        if map_point is not None:
+            map_points.append(map_point)
 
-    amap_key = current_app.config.get('AMAP_KEY')
+    amap_key = current_app.config.get('AMAP_JS_API_KEY')
     amap_security_js_code = current_app.config.get('AMAP_SECURITY_JS_CODE')
-    return render_template(
+    response = make_response(render_template(
         'cooling.html',
         resources_by_community=grouped,
         total=len(resources),
@@ -1198,48 +1633,56 @@ def render_cooling_resources_page(community, resource_type, has_ac_raw, is_acces
         selected_is_accessible=is_accessible_raw if is_accessible_raw is not None else '',
         open_only=open_only_flag,
         map_points=map_points,
+        map_point_ids={point['id'] for point in map_points},
         amap_key=amap_key,
         amap_security_js_code=amap_security_js_code,
         cooling_weather=cooling_weather,
         cooling_weather_location=weather_location,
-        outdoor_temp=outdoor_temp
-    )
+        outdoor_temp=outdoor_temp,
+        cooling_candidates=candidate_preview,
+    ))
+    if not map_points:
+        # 没有可计算距离的正式点位时，浏览器不应提供定位能力。
+        response.headers['Permissions-Policy'] = (
+            'camera=(), microphone=(), geolocation=(), payment=(), usb=()'
+        )
+    return response
 
 
 def render_public_risk_page(location):
-    location = normalize_location_name(location) if location else normalize_location_name(None)
-    weather_data, _ = get_weather_with_cache(location)
-    if not _heat_risk_weather_is_ready(weather_data):
-        return render_template(
-            'risk.html',
-            location=location,
-            weather=None,
-            heat_result=None,
-            risk_label=None,
-            actions=[],
-            risk_reasons=[]
-        )
-
-    heat_service = HeatActionService()
-    consecutive_hot_days = get_consecutive_hot_days(
-        location,
-        today_max=weather_data.get('temperature_max')
+    """公开风险页与小程序 bootstrap 读取同一持久化快照。"""
+    snapshot = get_bootstrap_payload()
+    snapshot_location = snapshot.get('location') or {}
+    fallback_location = (
+        normalize_location_name(location)
+        if location
+        else normalize_location_name(None)
     )
-    heat_result = heat_service.calculate_heat_risk(
-        weather_data,
-        consecutive_hot_days=consecutive_hot_days
+    location_name = str(snapshot_location.get('name') or fallback_location)
+    risk = snapshot.get('risk') or {}
+    calculation = risk.get('calculation') if isinstance(risk.get('calculation'), dict) else {}
+    stored_heat_result = calculation.get('heat_result')
+    stored_risk_reasons = calculation.get('risk_reasons')
+    risk_ready = (
+        risk.get('available') is True
+        and risk.get('score') is not None
+        and isinstance(stored_heat_result, dict)
+        and isinstance(stored_risk_reasons, list)
     )
-    risk_label = HEAT_RISK_LABELS.get(heat_result['risk_level'], '低风险')
-    actions = _action_plan(risk_label)
-    risk_reasons = heat_service.build_risk_reasons(heat_result)
+    weather_data = snapshot.get('current') if risk_ready else None
+    heat_result = dict(stored_heat_result) if risk_ready else None
+    risk_reasons = list(stored_risk_reasons) if risk_ready else []
+    risk_label = risk.get('level') if risk_ready else None
     return render_template(
         'risk.html',
-        location=location,
+        location=location_name,
         weather=weather_data,
         heat_result=heat_result,
         risk_label=risk_label,
-        actions=actions,
-        risk_reasons=risk_reasons
+        risk=risk,
+        actions=snapshot.get('actions') or [],
+        risk_reasons=risk_reasons,
+        family_reminder=snapshot.get('family_reminder'),
     )
 
 

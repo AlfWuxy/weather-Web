@@ -11,6 +11,9 @@ os.environ["DATABASE_URI"] = f"sqlite:///{TEST_DB_PATH}"
 os.environ["QWEATHER_KEY"] = ""
 os.environ["AMAP_KEY"] = ""
 os.environ["SILICONFLOW_API_KEY"] = ""
+os.environ["REDIS_URL"] = ""
+os.environ["WEATHER_CACHE_REDIS_URL"] = ""
+os.environ["RATE_LIMIT_STORAGE_URI"] = "memory://"
 os.environ["SECRET_KEY"] = "test-secret-key-for-smoke-tests-123456"
 os.environ["PAIR_TOKEN_PEPPER"] = "test-pair-token-pepper-1234567890"
 os.environ["DEBUG"] = "true"
@@ -70,6 +73,11 @@ def test_public_pages(client):
     assert robots.mimetype == "text/plain"
     assert "User-agent: *" in robots.get_data(as_text=True)
     assert "Disallow: /admin" in robots.get_data(as_text=True)
+
+    health = client.get('/healthz')
+    assert health.status_code == 200
+    assert health.get_json() == {'status': 'ok'}
+    assert health.headers['Cache-Control'] == 'no-store'
 
 
 def test_authenticated_pages(client):

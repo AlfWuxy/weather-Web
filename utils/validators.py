@@ -8,6 +8,7 @@ import logging
 import re
 
 logger = logging.getLogger(__name__)
+_PHONE_SHAPED_USERNAME_RE = re.compile(r'^(?:(?:0086|86)?1[3-9]\d{9})$')
 
 
 def validate_username(username):
@@ -19,15 +20,17 @@ def validate_username(username):
         return False, '用户名长度需在3-25字符之间'
     if not re.match(r'^[\w\u4e00-\u9fa5]+$', username):
         return False, '用户名只能包含字母、数字、下划线和中文'
+    if _PHONE_SHAPED_USERNAME_RE.fullmatch(username):
+        return False, '用户名不能使用手机号格式'
     return True, username
 
 
 def validate_password(password):
-    """验证密码：至少6位"""
+    """验证密码：至少12位。"""
     if not password or not isinstance(password, str):
         return False, '密码不能为空'
-    if len(password) < 6:
-        return False, '密码长度至少6位'
+    if len(password) < 12:
+        return False, '密码长度至少12位'
     if len(password) > 100:
         return False, '密码长度不能超过100位'
     return True, password

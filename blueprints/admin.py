@@ -2,15 +2,28 @@
 """Admin routes."""
 import json
 import logging
+import math
 from datetime import datetime, timedelta
+from pathlib import Path
 
 from flask import Blueprint, current_app, flash, redirect, render_template, request, url_for
 from flask_login import current_user, login_required
 
 from core.extensions import db
 from core.audit import log_audit
-from core.db_models import Community, CoolingResource, HealthRiskAssessment, MedicalRecord, User, WeatherAlert
+from core.db_models import (
+    ApiToken,
+    Community,
+    CoolingResource,
+    HealthRiskAssessment,
+    MedicalRecord,
+    MiniProgramIdentity,
+    MiniProgramSession,
+    User,
+    WeatherAlert,
+)
 from core.time_utils import utcnow
+from services.cross_platform_identity import is_reserved_internal_username
 from utils.parsers import parse_bool, parse_float, parse_int
 from utils.validators import (
     sanitize_input, validate_age, validate_email, validate_gender, validate_password, validate_username
@@ -19,6 +32,128 @@ from utils.validators import (
 logger = logging.getLogger(__name__)
 
 bp = Blueprint('admin', __name__)
+
+COOLING_GCJ02_CENTER_LATITUDE = 29.27
+COOLING_GCJ02_CENTER_LONGITUDE = 116.20
+COOLING_GCJ02_MAX_DISTANCE_KM = 80.0
+COOLING_CANDIDATE_PATH = (
+    Path(__file__).resolve().parent.parent
+    / 'data'
+    / 'cooling_resource_candidates.json'
+)
+
+
+def _load_cooling_candidates():
+    """读取只读候选库；异常数据不会进入正式资源表。"""
+    try:
+        payload = json.loads(COOLING_CANDIDATE_PATH.read_text(encoding='utf-8'))
+        if (
+            not isinstance(payload, dict)
+            or payload.get('publication_status') != 'candidate_only'
+            or payload.get('coordinate_system') != 'GCJ-02'
+            or not isinstance(payload.get('items'), list)
+        ):
+            raise ValueError('candidate_contract_invalid')
+        items = [
+            item for item in payload['items']
+            if (
+                isinstance(item, dict)
+                and item.get('verification_status') == 'pending_human_verification'
+                and item.get('is_active') is False
+            )
+        ]
+        return {**payload, 'items': items}
+    except (OSError, ValueError, json.JSONDecodeError):
+        logger.exception('避暑资源候选库读取失败')
+        return {
+            'publication_status': 'candidate_only',
+            'coordinate_system': 'GCJ-02',
+            'notice': '候选库暂时无法读取。',
+            'items': [],
+        }
+
+
+def _coordinate_distance_km(latitude, longitude):
+    """计算资源点到都昌服务中心的球面距离。"""
+    earth_radius_km = 6371.0088
+    center_latitude = math.radians(COOLING_GCJ02_CENTER_LATITUDE)
+    point_latitude = math.radians(latitude)
+    latitude_delta = point_latitude - center_latitude
+    longitude_delta = math.radians(longitude - COOLING_GCJ02_CENTER_LONGITUDE)
+    value = (
+        math.sin(latitude_delta / 2) ** 2
+        + math.cos(center_latitude)
+        * math.cos(point_latitude)
+        * math.sin(longitude_delta / 2) ** 2
+    )
+    return earth_radius_km * 2 * math.atan2(math.sqrt(value), math.sqrt(max(0.0, 1 - value)))
+
+
+def _parse_cooling_coordinates(latitude_raw, longitude_raw):
+    """校验避暑资源 GCJ-02 坐标，空值必须成对出现。"""
+    latitude_text = str(latitude_raw or '').strip()
+    longitude_text = str(longitude_raw or '').strip()
+    if bool(latitude_text) != bool(longitude_text):
+        raise ValueError('coordinates_must_be_paired')
+    if not latitude_text:
+        return None, None
+
+    latitude = parse_float(latitude_text)
+    longitude = parse_float(longitude_text)
+    if (
+        latitude is None
+        or longitude is None
+        or not math.isfinite(latitude)
+        or not math.isfinite(longitude)
+        or not -90 <= latitude <= 90
+        or not -180 <= longitude <= 180
+    ):
+        raise ValueError('invalid_coordinates')
+    if _coordinate_distance_km(latitude, longitude) > COOLING_GCJ02_MAX_DISTANCE_KM:
+        raise ValueError('outside_duchang_service_area')
+    return latitude, longitude
+
+
+def _parse_cooling_coordinate_submission(form, existing=None):
+    """解析坐标核验表单，并让任何来源或坐标变更重新取得回执。"""
+    latitude, longitude = _parse_cooling_coordinates(
+        form.get('latitude'),
+        form.get('longitude'),
+    )
+    if latitude is None:
+        return None, None, None, None, None
+
+    coordinate_system = sanitize_input(
+        form.get('coordinate_system'),
+        max_length=16,
+    )
+    coordinate_source = sanitize_input(
+        form.get('coordinate_source'),
+        max_length=500,
+    )
+    if coordinate_system != 'GCJ-02':
+        raise ValueError('coordinate_system_must_be_gcj02')
+    if not coordinate_source:
+        raise ValueError('coordinate_source_required')
+
+    verified_at = None
+    if parse_bool(form.get('coordinate_verified'), default=False):
+        unchanged = bool(
+            existing is not None
+            and existing.latitude == latitude
+            and existing.longitude == longitude
+            and existing.coordinate_system == coordinate_system
+            and existing.coordinate_source == coordinate_source
+            and existing.coordinate_verified_at is not None
+        )
+        verified_at = existing.coordinate_verified_at if unchanged else utcnow()
+    return (
+        latitude,
+        longitude,
+        coordinate_system,
+        coordinate_source,
+        verified_at,
+    )
 
 
 @bp.route('/admin', endpoint='admin_dashboard')
@@ -465,12 +600,15 @@ def admin_delete_user(user_id):
         flash('权限不足', 'error')
         return redirect(url_for('user.user_dashboard'))
 
-    user = User.query.get_or_404(user_id)
+    user = User.query.filter_by(id=user_id).with_for_update().first_or_404()
     if user.role == 'admin':
         flash('不能删除管理员账户', 'error')
         return redirect(url_for('admin.admin_users'))
 
     try:
+        # 显式清理可兼容未启用外键的旧 SQLite；新数据库同时有 CASCADE 兜底。
+        MiniProgramSession.query.filter_by(user_id=user.id).delete(synchronize_session=False)
+        MiniProgramIdentity.query.filter_by(user_id=user.id).delete(synchronize_session=False)
         db.session.delete(user)
         db.session.commit()
         flash(f'用户 {user.username} 已删除', 'success')
@@ -488,7 +626,12 @@ def admin_edit_user(user_id):
         flash('权限不足', 'error')
         return redirect(url_for('user.user_dashboard'))
 
-    user = User.query.get_or_404(user_id)
+    user_query = User.query.filter_by(id=user_id)
+    user = (
+        user_query.with_for_update().first_or_404()
+        if request.method == 'POST'
+        else user_query.first_or_404()
+    )
 
     if request.method == 'POST':
         # 验证用户名
@@ -497,7 +640,17 @@ def admin_edit_user(user_id):
             flash(result, 'error')
             return redirect(url_for('admin.admin_edit_user', user_id=user_id))
         username = result
-        if username != user.username and User.query.filter_by(username=username).first():
+        if (
+            username != user.username
+            and is_reserved_internal_username(username)
+        ):
+            flash('该用户名属于系统保留命名空间', 'error')
+            return redirect(url_for('admin.admin_edit_user', user_id=user_id))
+        username_conflict = User.query.filter(
+            User.id != user.id,
+            db.func.lower(User.username) == username.lower(),
+        ).first()
+        if username_conflict is not None:
             flash('用户名已存在', 'error')
             return redirect(url_for('admin.admin_edit_user', user_id=user_id))
 
@@ -534,6 +687,22 @@ def admin_edit_user(user_id):
                 flash(result, 'error')
                 return redirect(url_for('admin.admin_edit_user', user_id=user_id))
             user.set_password(result)
+            user.auth_version = int(user.auth_version) + 1
+            revoked_at = utcnow()
+            ApiToken.query.filter(
+                ApiToken.user_id == user.id,
+                ApiToken.revoked_at.is_(None),
+            ).update(
+                {ApiToken.revoked_at: revoked_at},
+                synchronize_session=False,
+            )
+            MiniProgramSession.query.filter(
+                MiniProgramSession.user_id == user.id,
+                MiniProgramSession.revoked_at.is_(None),
+            ).update(
+                {MiniProgramSession.revoked_at: revoked_at},
+                synchronize_session=False,
+            )
 
         role = request.form.get('role', user.role or 'user')
         if role not in ['admin', 'user', 'caregiver', 'community']:
@@ -569,6 +738,9 @@ def admin_add_user():
             flash(result, 'error')
             return redirect(url_for('admin.admin_add_user'))
         username = result
+        if is_reserved_internal_username(username):
+            flash('该用户名属于系统保留命名空间', 'error')
+            return redirect(url_for('admin.admin_add_user'))
 
         # 验证密码
         valid, result = validate_password(request.form.get('password'))
@@ -603,7 +775,9 @@ def admin_add_user():
         if role not in ['admin', 'user', 'caregiver', 'community']:
             role = 'user'
 
-        if User.query.filter_by(username=username).first():
+        if User.query.filter(
+            db.func.lower(User.username) == username.lower()
+        ).first():
             flash('用户名已存在', 'error')
             return redirect(url_for('admin.admin_add_user'))
 
@@ -689,7 +863,7 @@ def admin_edit_community(community_id):
         flash('权限不足', 'error')
         return redirect(url_for('user.user_dashboard'))
 
-    community = Community.query.get_or_404(community_id)
+    community = db.get_or_404(Community, community_id)
 
     if request.method == 'POST':
         name = sanitize_input(request.form.get('name'), max_length=100)
@@ -752,6 +926,22 @@ def admin_cooling_resources():
     )
 
 
+@bp.route('/admin/cooling/candidates', endpoint='admin_cooling_candidates')
+@login_required
+def admin_cooling_candidates():
+    """展示高德候选点，必须人工核验后再转录到正式资源表。"""
+    if current_user.role != 'admin':
+        flash('权限不足', 'error')
+        return redirect(url_for('user.user_dashboard'))
+
+    payload = _load_cooling_candidates()
+    return render_template(
+        'admin_cooling_candidates.html',
+        candidate_payload=payload,
+        candidates=payload['items'],
+    )
+
+
 @bp.route('/admin/cooling/add', methods=['GET', 'POST'], endpoint='admin_add_cooling_resource')
 @login_required
 def admin_add_cooling_resource():
@@ -767,19 +957,37 @@ def admin_add_cooling_resource():
             flash('请填写社区和名称', 'error')
             return redirect(url_for('admin.admin_add_cooling_resource'))
 
+        try:
+            (
+                latitude,
+                longitude,
+                coordinate_system,
+                coordinate_source,
+                coordinate_verified_at,
+            ) = _parse_cooling_coordinate_submission(request.form)
+        except ValueError:
+            flash(
+                '坐标必须成对填写并位于都昌周边 80 公里内；填写坐标时请选择 GCJ-02 并注明来源',
+                'error',
+            )
+            return redirect(url_for('admin.admin_add_cooling_resource'))
+
         resource = CoolingResource(
             community_code=community_code,
             name=name,
             resource_type=sanitize_input(request.form.get('resource_type'), max_length=50),
             address_hint=sanitize_input(request.form.get('address_hint'), max_length=200),
-            latitude=parse_float(request.form.get('latitude')),
-            longitude=parse_float(request.form.get('longitude')),
+            latitude=latitude,
+            longitude=longitude,
+            coordinate_system=coordinate_system,
+            coordinate_source=coordinate_source,
+            coordinate_verified_at=coordinate_verified_at,
             open_hours=sanitize_input(request.form.get('open_hours'), max_length=100),
             has_ac=parse_bool(request.form.get('has_ac'), default=False),
             is_accessible=parse_bool(request.form.get('is_accessible'), default=False),
             contact_hint=sanitize_input(request.form.get('contact_hint'), max_length=100),
             notes=sanitize_input(request.form.get('notes'), max_length=500),
-            is_active=parse_bool(request.form.get('is_active'), default=True)
+            is_active=parse_bool(request.form.get('is_active'), default=False)
         )
         db.session.add(resource)
         db.session.commit()
@@ -787,7 +995,45 @@ def admin_add_cooling_resource():
         return redirect(url_for('admin.admin_cooling_resources'))
 
     communities = Community.query.order_by(Community.name).all()
-    return render_template('admin_add_cooling_resource.html', communities=communities)
+    candidate_id = sanitize_input(request.args.get('candidate'), max_length=64)
+    candidate = None
+    if candidate_id:
+        candidate = next(
+            (
+                item for item in _load_cooling_candidates()['items']
+                if item.get('source_id') == candidate_id
+            ),
+            None,
+        )
+    role_labels = {
+        'cooling_candidate': '待核验公共避暑资源',
+        'service_candidate': '待核验志愿服务',
+        'medical_support': '医疗支持',
+    }
+    prefill = {}
+    if candidate:
+        prefill = {
+            'name': candidate.get('name') or '',
+            'resource_type': role_labels.get(
+                candidate.get('public_role'),
+                '待核验资源',
+            ),
+            'address_hint': candidate.get('address') or '',
+            'latitude': candidate.get('latitude'),
+            'longitude': candidate.get('longitude'),
+            'coordinate_system': 'GCJ-02',
+            'coordinate_source': (
+                f"高德 Place Text API v5 候选 {candidate['source_id']}，"
+                "仍需管理员现场或电话人工核验"
+            ),
+            'open_hours': candidate.get('opening_hours_hint') or '',
+        }
+    return render_template(
+        'admin_add_cooling_resource.html',
+        communities=communities,
+        prefill=prefill,
+        candidate=candidate,
+    )
 
 
 @bp.route('/admin/cooling/<int:resource_id>/edit', methods=['GET', 'POST'], endpoint='admin_edit_cooling_resource')
@@ -798,7 +1044,7 @@ def admin_edit_cooling_resource(resource_id):
         flash('权限不足', 'error')
         return redirect(url_for('user.user_dashboard'))
 
-    resource = CoolingResource.query.get_or_404(resource_id)
+    resource = db.get_or_404(CoolingResource, resource_id)
     if request.method == 'POST':
         community_code = sanitize_input(request.form.get('community_code'), max_length=100)
         name = sanitize_input(request.form.get('name'), max_length=120)
@@ -806,18 +1052,36 @@ def admin_edit_cooling_resource(resource_id):
             flash('请填写社区和名称', 'error')
             return redirect(url_for('admin.admin_edit_cooling_resource', resource_id=resource_id))
 
+        try:
+            (
+                latitude,
+                longitude,
+                coordinate_system,
+                coordinate_source,
+                coordinate_verified_at,
+            ) = _parse_cooling_coordinate_submission(request.form, existing=resource)
+        except ValueError:
+            flash(
+                '坐标必须成对填写并位于都昌周边 80 公里内；填写坐标时请选择 GCJ-02 并注明来源',
+                'error',
+            )
+            return redirect(url_for('admin.admin_edit_cooling_resource', resource_id=resource_id))
+
         resource.community_code = community_code
         resource.name = name
         resource.resource_type = sanitize_input(request.form.get('resource_type'), max_length=50)
         resource.address_hint = sanitize_input(request.form.get('address_hint'), max_length=200)
-        resource.latitude = parse_float(request.form.get('latitude'))
-        resource.longitude = parse_float(request.form.get('longitude'))
+        resource.latitude = latitude
+        resource.longitude = longitude
+        resource.coordinate_system = coordinate_system
+        resource.coordinate_source = coordinate_source
+        resource.coordinate_verified_at = coordinate_verified_at
         resource.open_hours = sanitize_input(request.form.get('open_hours'), max_length=100)
         resource.has_ac = parse_bool(request.form.get('has_ac'), default=False)
         resource.is_accessible = parse_bool(request.form.get('is_accessible'), default=False)
         resource.contact_hint = sanitize_input(request.form.get('contact_hint'), max_length=100)
         resource.notes = sanitize_input(request.form.get('notes'), max_length=500)
-        resource.is_active = parse_bool(request.form.get('is_active'), default=True)
+        resource.is_active = parse_bool(request.form.get('is_active'), default=False)
 
         db.session.commit()
         flash('避暑资源已更新', 'success')
