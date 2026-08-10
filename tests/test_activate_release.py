@@ -4226,6 +4226,54 @@ def test_recovery_ack_rejects_symlink_escape_and_symlinked_marker(tmp_path):
     assert not (canonical / 'RECOVERY_CONFIRMED').exists()
 
 
+def test_existing_recovery_ack_is_validated_before_ledger_reconciliation(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    transaction_root = (
+        transaction['state_dir'] / 'backups' / 'deploy-transactions'
+    )
+    transaction_root.mkdir()
+    recovery = transaction_root / 'forward-only-old-candidate'
+    recovery.mkdir()
+    (recovery / 'ACTIVATION_STARTED').write_text(
+        f"{transaction['new_release']}\n",
+        encoding='utf-8',
+    )
+    (recovery / 'ACTIVATION_STARTED').chmod(0o600)
+    (recovery / 'FORWARD_ONLY_REQUIRED').write_text(
+        'phase=public-service-start\n',
+        encoding='utf-8',
+    )
+    (recovery / 'FORWARD_ONLY_REQUIRED').chmod(0o600)
+    (recovery / 'PUBLIC_START_ATTEMPTED').write_text(
+        'phase=public-service-start\n',
+        encoding='utf-8',
+    )
+    (recovery / 'PUBLIC_START_ATTEMPTED').chmod(0o600)
+    (recovery / 'POST_COMMIT_ATTENTION.txt').write_text(
+        'manual review required\n',
+        encoding='utf-8',
+    )
+    confirmation = recovery / 'RECOVERY_CONFIRMED'
+    confirmation.write_text(
+        'confirmed_at=2026-08-10T00:00:00Z\n',
+        encoding='utf-8',
+    )
+    confirmation.chmod(0o600)
+    transaction['current_link'].unlink()
+    transaction['current_link'].symlink_to(transaction['new_release'])
+    ledger = transaction['state_dir'] / 'deployments' / 'current-release'
+    ledger_before = ledger.read_bytes()
+    transaction['env']['RECOVERY_ACKNOWLEDGED_TRANSACTION'] = str(recovery)
+
+    result = _run_activation(transaction)
+
+    assert result.returncode != 0
+    assert '已有恢复确认标记的内容或权限无效' in result.stderr
+    assert ledger.read_bytes() == ledger_before
+    assert not (recovery / 'CURRENT_RELEASE_RECONCILED').exists()
+    assert not transaction['systemctl_log'].exists()
+
+
 def test_control_directories_are_private_and_owner_asserted(tmp_path):
     transaction = _prepare_transaction(tmp_path)
 

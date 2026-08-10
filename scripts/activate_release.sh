@@ -1303,6 +1303,7 @@ PY
 
 acknowledge_recovery_transaction() {
     local confirmation guard_transaction="" has_fault_marker=0
+    local confirmation_exists=0
     [ -n "$RECOVERY_ACKNOWLEDGED_TRANSACTION" ] || return 0
     if [ ! -d "$RECOVERY_ACKNOWLEDGED_TRANSACTION" ] \
         || [ -L "$RECOVERY_ACKNOWLEDGED_TRANSACTION" ]; then
@@ -1337,11 +1338,6 @@ acknowledge_recovery_transaction() {
             fi
         fi
     fi
-    # 人工确认只能在本事务的私钥计划已回收或已验证为向前保留状态后落盘。
-    reconcile_acknowledged_qweather_key_plan "$RECOVERY_ACKNOWLEDGED_TRANSACTION"
-    # forward-only 事务已经保留新入口；精确人工确认时同步修复历史账本。
-    reconcile_acknowledged_current_release_ledger \
-        "$RECOVERY_ACKNOWLEDGED_TRANSACTION"
     confirmation="$RECOVERY_ACKNOWLEDGED_TRANSACTION/$RECOVERY_CONFIRMED_MARKER_NAME"
     if [ -e "$confirmation" ] || [ -L "$confirmation" ]; then
         if ! "$VENV_DIR/bin/python" - \
@@ -1375,6 +1371,14 @@ PY
             fail "已有恢复确认标记的内容或权限无效"
             return 1
         fi
+        confirmation_exists=1
+    fi
+    # 先验证已有事务确认标记，再允许任何私钥或账本修复写入。
+    reconcile_acknowledged_qweather_key_plan "$RECOVERY_ACKNOWLEDGED_TRANSACTION"
+    # forward-only 事务已经保留新入口；精确人工确认时同步修复历史账本。
+    reconcile_acknowledged_current_release_ledger \
+        "$RECOVERY_ACKNOWLEDGED_TRANSACTION"
+    if [ "$confirmation_exists" -eq 1 ]; then
         RECOVERY_ACKNOWLEDGEMENT_VERIFIED_THIS_RUN="$RECOVERY_ACKNOWLEDGED_TRANSACTION"
         log "复用已安全落盘的人工恢复确认: $RECOVERY_ACKNOWLEDGED_TRANSACTION"
         return 0
