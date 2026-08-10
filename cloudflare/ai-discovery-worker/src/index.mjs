@@ -6,6 +6,7 @@
  */
 
 export const EDGE_VERSION = "v1.1.1";
+export const EDGE_REVISION = "public-pages-6-heat-map";
 export const CONTENT_SIGNAL =
   "ai-train=no, search=yes, ai-input=yes";
 
@@ -123,6 +124,7 @@ function discoveryHeaders(resource) {
     "Content-Type": resource.contentType,
     "X-Content-Type-Options": "nosniff",
     "X-Yilao-Edge-Discovery": EDGE_VERSION,
+    "X-Yilao-Edge-Discovery-Revision": EDGE_REVISION,
   });
   if (resource.robotsTag) {
     headers.set("X-Robots-Tag", resource.robotsTag);
@@ -146,6 +148,7 @@ export async function handleRequest(request, originFetch = fetch) {
         "Content-Type": "text/plain; charset=utf-8",
         "X-Content-Type-Options": "nosniff",
         "X-Yilao-Edge-Discovery": EDGE_VERSION,
+        "X-Yilao-Edge-Discovery-Revision": EDGE_REVISION,
       },
     });
   }

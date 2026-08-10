@@ -36,6 +36,16 @@ def _canonical(body):
     return match.group(1)
 
 
+def _property_content(body, property_name):
+    match = re.search(
+        rf'<meta\s+property="{re.escape(property_name)}"\s+content="([^"]*)"',
+        body,
+        flags=re.IGNORECASE,
+    )
+    assert match is not None
+    return match.group(1)
+
+
 def test_robots_points_to_sitemap_and_keeps_private_routes_blocked(client):
     response = client.get("/robots.txt")
     body = response.get_data(as_text=True)
@@ -110,6 +120,15 @@ def test_home_has_search_metadata_canonical_and_valid_json_ld(client):
     assert 'rel="alternate"' not in response.headers["Link"]
     assert _canonical(body) == "https://yilaoweather.org/"
     assert _meta_content(body, "robots") == "index, follow"
+    assert _property_content(body, "og:image") == (
+        "https://yilaoweather.org/static/brand/yilao-avatar.png"
+    )
+    assert _meta_content(body, "twitter:card") == "summary"
+    assert _meta_content(body, "twitter:title")
+    assert _meta_content(body, "twitter:description")
+    assert _meta_content(body, "twitter:image") == (
+        "https://yilaoweather.org/static/brand/yilao-avatar.png"
+    )
     description = _meta_content(body, "description")
     assert "都昌县" in description
     assert "高温" in description
@@ -140,6 +159,19 @@ def test_public_pages_link_back_to_heat_vulnerability_map(client):
     for path in ("/", "/risk", "/transparency"):
         body = client.get(path).get_data(as_text=True)
         assert 'href="/duchang-heat-vulnerability-map"' in body
+
+
+def test_footer_links_to_trust_network_and_public_copy_avoids_internal_notes(client):
+    home = client.get("/").get_data(as_text=True)
+    trust = client.get("/about/trust-network").get_data(as_text=True)
+
+    assert 'href="/about/trust-network"' in home
+    assert "家庭信任网络" in home
+    assert "你的论文" not in trust
+    assert "登录后管理家庭照护" in trust
+    assert "受限的账号级产品事件" in trust
+    assert "原始 IP" in trust
+    assert "不代表个人健康结果" in trust
 
 
 def test_llms_txt_lists_only_public_discovery_pages_and_privacy_boundary(client):

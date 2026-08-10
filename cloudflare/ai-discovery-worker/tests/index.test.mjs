@@ -5,6 +5,7 @@ import test from "node:test";
 import worker, {
   CONTENT_SIGNAL,
   DISCOVERY_RESOURCES,
+  EDGE_REVISION,
   EDGE_VERSION,
   PUBLIC_URLS,
   handleRequest,
@@ -35,6 +36,11 @@ test("robots 允许公开抓取并保留私密路径与内容用途边界", asyn
   assert.equal(
     response.headers.get("x-yilao-edge-discovery"),
     EDGE_VERSION,
+  );
+  assert.equal(EDGE_REVISION, "public-pages-6-heat-map");
+  assert.equal(
+    response.headers.get("x-yilao-edge-discovery-revision"),
+    EDGE_REVISION,
   );
   assert.equal(
     response.headers.get("cloudflare-cdn-cache-control"),
@@ -129,6 +135,10 @@ test("发现文件拒绝写方法", async () => {
   assert.equal(response.status, 405);
   assert.equal(response.headers.get("allow"), "GET, HEAD");
   assert.equal(response.headers.get("cache-control"), "no-store");
+  assert.equal(
+    response.headers.get("x-yilao-edge-discovery-revision"),
+    EDGE_REVISION,
+  );
 });
 
 test("相似后缀和其他主机必须回源", async () => {
