@@ -1794,9 +1794,9 @@ def test_activate_transaction_stops_every_writer_and_commits_last():
     )
     commit_flow = content.split('\nCOMMITTED=1\n', 1)[1]
     assert commit_flow.index('start_release_timers\n') < commit_flow.index(
-        'verify_release_state\n'
+        'verify_release_state initial\n'
     )
-    assert commit_flow.index('verify_release_state\n') < commit_flow.index(
+    assert commit_flow.index('verify_release_state initial\n') < commit_flow.index(
         'observe_post_commit_stability\n'
     )
     assert commit_flow.index('observe_post_commit_stability\n') < commit_flow.index(
@@ -1843,8 +1843,11 @@ def test_activation_forward_only_and_recovery_keep_current_release_ledger_exact(
         'reconcile_acknowledged_current_release_ledger'
     )
     assert acknowledge_flow.index(
-        'reconcile_acknowledged_current_release_ledger'
-    ) < acknowledge_flow.index('confirmation=')
+        'confirmation="$RECOVERY_ACKNOWLEDGED_TRANSACTION/'
+    ) < acknowledge_flow.index('reconcile_acknowledged_qweather_key_plan')
+    assert acknowledge_flow.index('confirmation_exists=1') < (
+        acknowledge_flow.index('reconcile_acknowledged_qweather_key_plan')
+    )
     fingerprint_keys = content.split('keys = (', 1)[1].split('\n)', 1)[0]
     assert "'REDIS_URL'" in fingerprint_keys
     assert "'WEATHER_CACHE_REDIS_URL'" in fingerprint_keys
