@@ -1307,6 +1307,31 @@ def _run_activation(transaction, *, refresh_base_state=True):
     )
 
 
+def _set_bootstrap_timer_observations(transaction, observations):
+    """让 fake busctl 按顺序返回 timer 绝对时刻并推进单调时钟。"""
+    observation_file = transaction['state_dir'] / 'bootstrap-timer-observations'
+    uptime_file = Path(transaction['env']['UPTIME_FILE'])
+    busctl = Path(transaction['env']['BUSCTL_BIN'])
+    _write_executable(
+        busctl,
+        f"""#!/usr/bin/env python3
+from pathlib import Path
+
+observations = {observations!r}
+counter = Path({str(observation_file)!r})
+uptime = Path({str(uptime_file)!r})
+call_count = int(counter.read_text(encoding='ascii')) if counter.exists() else 0
+if call_count >= len(observations):
+    raise SystemExit(92)
+next_us, uptime_seconds = observations[call_count]
+counter.write_text(str(call_count + 1), encoding='ascii')
+uptime.write_text(f'{{uptime_seconds:.2f}} 100.00\\n', encoding='utf-8')
+print(f't {{next_us}}')
+""",
+    )
+    return observation_file
+
+
 def _write_candidate_base_state(transaction):
     active_env = Path(transaction['env']['ENV_FILE'])
     current_link = Path(transaction['env']['CURRENT_LINK'])
@@ -3229,6 +3254,50 @@ def test_stability_window_detects_post_activation_timer_cleanup(tmp_path):
         transaction['fake_state'] / 'case-weather-cache-bootstrap.timer.active'
     ).exists()
     assert '已逐个补齐并复核' in markers[0].read_text(encoding='utf-8')
+
+
+def test_stability_window_allows_bootstrap_timer_natural_countdown(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    observation_file = _set_bootstrap_timer_observations(
+        transaction,
+        [
+            (2_000_000_000, 200.0),
+            (2_000_000_000, 251.0),
+        ],
+    )
+    transaction['env']['POST_COMMIT_STABILITY_SECONDS'] = '1'
+
+    result = _run_activation(transaction)
+
+    assert result.returncode == 0, result.stderr
+    assert observation_file.read_text(encoding='ascii') == '2'
+    assert list((transaction['state_dir'] / 'backups').rglob('COMMITTED'))
+    assert not list(
+        (transaction['state_dir'] / 'backups').rglob('POST_COMMIT_ATTENTION.txt')
+    )
+
+
+def test_stability_window_rejects_bootstrap_timer_restart(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    observation_file = _set_bootstrap_timer_observations(
+        transaction,
+        [
+            (2_000_000_000, 200.0),
+            (2_051_000_000, 251.0),
+        ],
+    )
+    transaction['env']['POST_COMMIT_STABILITY_SECONDS'] = '1'
+
+    result = _run_activation(transaction)
+
+    assert result.returncode != 0
+    assert 'bootstrap timer 在稳定观察期间被重新排程' in result.stderr
+    assert observation_file.read_text(encoding='ascii') == '2'
+    assert not list((transaction['state_dir'] / 'backups').rglob('COMMITTED'))
+    markers = list(
+        (transaction['state_dir'] / 'backups').rglob('POST_COMMIT_ATTENTION.txt')
+    )
+    assert len(markers) == 1
 
 
 def test_migration_failure_restores_database_release_and_unit_state(tmp_path):

@@ -203,6 +203,9 @@ ACTIVE_HARD_TIMEOUT_PID=""
 FORMAL_SMOKE_REDIS_BACKEND_SHA256=""
 FORMAL_SMOKE_LEASE_RESERVED=0
 FORMAL_SMOKE_RECEIPT_REUSE_CANDIDATE=0
+BOOTSTRAP_TIMER_EXPECTED_NEXT_US=""
+BOOTSTRAP_TIMER_LAST_UPTIME_US=""
+BOOTSTRAP_TIMER_LAST_REMAINING_US=""
 
 log() {
     printf '[activate_release] %s\n' "$*"
@@ -6918,7 +6921,16 @@ repair_release_timers_best_effort() {
 }
 
 verify_release_state() {
+    local timer_phase="${1:-}"
     local unit unit_file_state on_success next_us uptime_us remaining_us link_target
+
+    case "$timer_phase" in
+        initial|observe) ;;
+        *)
+            fail "bootstrap timer 校验阶段无效: ${timer_phase:-missing}"
+            return 1
+            ;;
+    esac
 
     for unit in case-weather.service \
         case-weather-backup.timer \
@@ -6997,10 +7009,40 @@ verify_release_state() {
         return 1
     fi
     remaining_us=$((next_us - uptime_us))
-    if [ "$remaining_us" -lt 1750000000 ] || [ "$remaining_us" -gt 1810000000 ]; then
-        fail "bootstrap timer 未保留完整的首轮 30 分钟等待窗口"
-        return 1
+    if [ "$timer_phase" = initial ]; then
+        if [ -n "$BOOTSTRAP_TIMER_EXPECTED_NEXT_US" ]; then
+            fail "bootstrap timer 首次单调时钟基线被重复设置"
+            return 1
+        fi
+        if [ "$remaining_us" -lt 1750000000 ] \
+            || [ "$remaining_us" -gt 1810000000 ]; then
+            fail "bootstrap timer 未保留完整的首轮 30 分钟等待窗口"
+            return 1
+        fi
+        BOOTSTRAP_TIMER_EXPECTED_NEXT_US="$next_us"
+    else
+        if [[ ! "$BOOTSTRAP_TIMER_EXPECTED_NEXT_US" =~ ^[0-9]+$ \
+            || ! "$BOOTSTRAP_TIMER_LAST_UPTIME_US" =~ ^[0-9]+$ \
+            || ! "$BOOTSTRAP_TIMER_LAST_REMAINING_US" =~ ^[0-9]+$ ]]; then
+            fail "bootstrap timer 缺少首次单调时钟基线"
+            return 1
+        fi
+        if [ "$next_us" != "$BOOTSTRAP_TIMER_EXPECTED_NEXT_US" ]; then
+            fail "bootstrap timer 在稳定观察期间被重新排程"
+            return 1
+        fi
+        if [ "$uptime_us" -lt "$BOOTSTRAP_TIMER_LAST_UPTIME_US" ] \
+            || [ "$remaining_us" -gt "$BOOTSTRAP_TIMER_LAST_REMAINING_US" ]; then
+            fail "bootstrap timer 的单调倒计时在稳定观察期间发生倒退"
+            return 1
+        fi
+        if [ "$remaining_us" -le 0 ]; then
+            fail "bootstrap timer 在稳定观察期间提前耗尽"
+            return 1
+        fi
     fi
+    BOOTSTRAP_TIMER_LAST_UPTIME_US="$uptime_us"
+    BOOTSTRAP_TIMER_LAST_REMAINING_US="$remaining_us"
 
     link_target="$(readlink "$CURRENT_LINK")"
     if [ "$link_target" != "$NEW_RELEASE" ]; then
@@ -7030,7 +7072,7 @@ observe_post_commit_stability() {
         fi
         sleep "$wait_seconds"
         elapsed=$((elapsed + wait_seconds))
-        verify_release_state
+        verify_release_state observe
     done
     log "发布稳定观察窗通过"
 }
@@ -7860,7 +7902,7 @@ write_current_release_ledger "$NEW_RELEASE"
 reconcile_qweather_key_plan "$TRANSACTION_DIR" committed
 COMMITTED=1
 start_release_timers
-verify_release_state
+verify_release_state initial
 observe_post_commit_stability
 durably_sync_release_state commit
 write_durable_marker "$TRANSACTION_DIR/COMMITTED" success
