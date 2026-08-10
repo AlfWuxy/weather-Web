@@ -1428,6 +1428,8 @@ def _run_formal_runtime_healthz_probe(
     terminal_payload='success\n',
     both_terminals=False,
     acknowledgement=None,
+    acknowledgement_verified_this_run=False,
+    omit_guard=False,
     invalid_guard_mode=False,
     symlink_guard=False,
     symlink_terminal=False,
@@ -1481,7 +1483,7 @@ def _run_formal_runtime_healthz_probe(
         guard_target.write_text(guard_payload, encoding='utf-8')
         guard_target.chmod(0o600)
         guard.symlink_to(guard_target)
-    elif (
+    elif not omit_guard and (
         terminal is not None
         or both_terminals
         or acknowledgement is not None
@@ -1501,6 +1503,10 @@ def _run_formal_runtime_healthz_probe(
             encoding='utf-8',
         )
         acknowledged_transaction = str(mismatched)
+
+    verified_transaction = (
+        acknowledged_transaction if acknowledgement_verified_this_run else ''
+    )
 
     venv_python = probe_root / 'venv' / 'bin' / 'python'
     venv_python.parent.mkdir(parents=True)
@@ -1538,6 +1544,7 @@ wc -c < "$3" | tr -d ' '
 set -u
 fail() {{ printf '%s\\n' "$*" >&2; }}
 log() {{ printf '%s\\n' "$*" >&2; }}
+RECOVERY_ACKNOWLEDGEMENT_VERIFIED_THIS_RUN={shlex.quote(verified_transaction)}
 {guard_functions}
 {probe_function}
 verify_formal_runtime_healthz_probe "$1" "$2" "$3"
@@ -3706,7 +3713,7 @@ def test_post_start_verification_failure_persists_blocking_marker(
     blocked = _run_activation(transaction)
 
     assert blocked.returncode != 0
-    assert '必须显式确认其精确事务' in blocked.stderr
+    assert '尚未人工确认' in blocked.stderr
     assert transaction['current_link'].resolve() == transaction['new_release'].resolve()
     assert _database_value(transaction['database_file']) == 'new'
 
@@ -3814,7 +3821,7 @@ def test_interrupted_guard_requires_exact_ack_then_recovers(tmp_path):
     blocked = _run_activation(transaction)
 
     assert blocked.returncode != 0
-    assert '必须显式确认其精确事务' in blocked.stderr
+    assert '未完成事务' in blocked.stderr
     assert (
         transaction['state_dir'] / 'deployments' / 'activation-in-progress'
     ).is_file()
@@ -3833,6 +3840,82 @@ def test_interrupted_guard_requires_exact_ack_then_recovers(tmp_path):
         Path(transaction['env']['RUNTIME_BOOT_GUARD_DIR'])
         / 'activation-permit'
     ).exists()
+
+
+def test_archived_guard_is_restored_for_boundary_then_rearchived(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    _configure_formal_smoke(transaction)
+    interrupted = _seed_interrupted_activation_guard(
+        transaction,
+        'interrupted-with-archived-guard',
+    )
+    persistent_guard = (
+        transaction['state_dir'] / 'deployments' / 'activation-in-progress'
+    )
+    recovered_guard = interrupted / 'activation-in-progress.recovered'
+    persistent_guard.rename(recovered_guard)
+    observed = transaction['state_dir'] / 'boundary-observed-live-guard'
+    helper = transaction['state_dir'] / 'runtime-log-boundary-live-guard-helper'
+    _write_executable(
+        helper,
+        f"""#!/bin/sh
+set -eu
+[ -f {shlex.quote(str(persistent_guard))} ]
+[ ! -e {shlex.quote(str(recovered_guard))} ]
+: > {shlex.quote(str(observed))}
+""",
+    )
+    transaction['env'].update({
+        'RECOVERY_ACKNOWLEDGED_TRANSACTION': str(interrupted),
+        'RUNTIME_LOG_BOUNDARY_TEST_HELPER': str(helper),
+    })
+
+    result = _run_activation(transaction)
+
+    assert result.returncode == 0, result.stderr
+    assert observed.is_file()
+    assert recovered_guard.is_file()
+    assert not persistent_guard.exists()
+
+
+@pytest.mark.parametrize('tamper', ('symlink', 'mode', 'transaction'))
+def test_archived_guard_restore_rejects_untrusted_evidence(tmp_path, tamper):
+    transaction = _prepare_transaction(tmp_path)
+    interrupted = _seed_interrupted_activation_guard(
+        transaction,
+        f'interrupted-archived-{tamper}',
+    )
+    persistent_guard = (
+        transaction['state_dir'] / 'deployments' / 'activation-in-progress'
+    )
+    recovered_guard = interrupted / 'activation-in-progress.recovered'
+    original_payload = persistent_guard.read_text(encoding='utf-8')
+    if tamper == 'symlink':
+        target = transaction['state_dir'] / 'untrusted-archived-guard'
+        persistent_guard.rename(target)
+        recovered_guard.symlink_to(target)
+    else:
+        persistent_guard.rename(recovered_guard)
+        if tamper == 'mode':
+            recovered_guard.chmod(0o644)
+        else:
+            other = interrupted.parent / 'other-archived-transaction'
+            other.mkdir()
+            recovered_guard.write_text(
+                original_payload.replace(
+                    f'transaction={interrupted}',
+                    f'transaction={other}',
+                ),
+                encoding='utf-8',
+            )
+            recovered_guard.chmod(0o600)
+    transaction['env']['RECOVERY_ACKNOWLEDGED_TRANSACTION'] = str(interrupted)
+
+    result = _run_activation(transaction)
+
+    assert result.returncode != 0
+    assert '已归档开机门与本轮确认的恢复事务不匹配' in result.stderr
+    assert not persistent_guard.exists()
 
 
 @pytest.mark.parametrize('terminal', ('COMMITTED', 'ROLLED_BACK'))
@@ -4360,16 +4443,73 @@ def test_formal_runtime_healthz_probe_accepts_exact_ack_guard_502(tmp_path):
         tmp_path,
         status='502',
         acknowledgement='exact',
+        acknowledgement_verified_this_run=True,
     )
 
     assert result.returncode == 0, result.stderr
-    assert '接受持久开机门下的预期 502' in result.stderr
+    assert '接受预期 502' in result.stderr
+
+
+def test_formal_runtime_healthz_probe_rejects_verified_ack_without_live_guard(
+    tmp_path,
+):
+    result = _run_formal_runtime_healthz_probe(
+        tmp_path,
+        status='502',
+        acknowledgement='exact',
+        acknowledgement_verified_this_run=True,
+        omit_guard=True,
+    )
+
+    assert result.returncode != 0
+    assert '非预期状态: 502' in result.stderr
+
+
+def test_formal_runtime_healthz_probe_rejects_raw_ack_without_this_run_proof(
+    tmp_path,
+):
+    result = _run_formal_runtime_healthz_probe(
+        tmp_path,
+        status='502',
+        acknowledgement='exact',
+    )
+
+    assert result.returncode != 0
+    assert '尚未在本轮完成精确事务校验' in result.stderr
+
+
+def test_recovery_probe_verification_state_is_not_inherited():
+    script = ACTIVATE_SCRIPT.read_text(encoding='utf-8')
+
+    assert '\nRECOVERY_ACKNOWLEDGEMENT_VERIFIED_THIS_RUN=""\n' in script
+    assert 'RECOVERY_ACKNOWLEDGEMENT_VERIFIED_THIS_RUN="${' not in script
+
+
+def test_recovery_probe_precedes_guard_archive_in_activation_flow():
+    script = ACTIVATE_SCRIPT.read_text(encoding='utf-8')
+
+    acknowledgement = script.rindex('\nacknowledge_recovery_transaction\n')
+    lease = script.rindex('\npreflight_formal_smoke_cycle_lease\n')
+    restore = script.rindex(
+        '\nrestore_archived_activation_boot_guard_if_acknowledged\n'
+    )
+    probe = script.rindex('\nverify_formal_runtime_log_boundary\n')
+    archive = script.rindex('\nrecover_activation_boot_guard_if_acknowledged\n')
+    activation = script.rindex('\nwrite_durable_marker "$STARTED_MARKER"')
+
+    assert acknowledgement < lease < restore < probe < archive < activation
 
 
 @pytest.mark.parametrize(
     'kwargs, expected_error',
     (
-        ({'acknowledgement': 'mismatch'}, '事务不匹配'),
+        (
+            {
+                'acknowledgement': 'mismatch',
+                'acknowledgement_verified_this_run': True,
+            },
+            '事务不匹配',
+        ),
         (
             {'acknowledgement': 'exact', 'invalid_guard_mode': True},
             '无效的持久开机门',
@@ -4445,6 +4585,7 @@ def test_formal_runtime_healthz_probe_rejects_502_log_growth(tmp_path):
         tmp_path,
         status='502',
         acknowledgement='exact',
+        acknowledgement_verified_this_run=True,
         grow_log=True,
     )
 
@@ -4473,7 +4614,7 @@ def test_formal_runtime_healthz_probe_accepts_terminal_guard_502(
     )
 
     assert result.returncode == 0, result.stderr
-    assert '接受持久开机门下的预期 502' in result.stderr
+    assert '接受预期 502' in result.stderr
 
 
 def test_durable_checkpoints_precede_mutation_and_the_only_weather_request(tmp_path):
