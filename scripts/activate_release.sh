@@ -33,7 +33,6 @@ CHOWN_BIN="${CHOWN_BIN:-chown}"
 ENV_BIN="${ENV_BIN:-/usr/bin/env}"
 CRONTAB_BIN="${CRONTAB_BIN:-crontab}"
 PGREP_BIN="${PGREP_BIN:-pgrep}"
-UPTIME_FILE="${UPTIME_FILE:-/proc/uptime}"
 INHERITED_DATABASE_FILE="${DATABASE_FILE:-}"
 INHERITED_DATABASE_URI="${DATABASE_URI:-}"
 DATABASE_FILE=""
@@ -196,6 +195,9 @@ FORMAL_SMOKE_LEASE_TOKEN_SHA256=""
 FORMAL_SMOKE_REDIS_BACKEND_SHA256=""
 FORMAL_SMOKE_LEASE_RESERVED=0
 FORMAL_SMOKE_RECEIPT_REUSE_CANDIDATE=0
+# 首轮记录 bootstrap timer 的单调时钟基线，稳定观察期间禁止重启或改期。
+BOOTSTRAP_TIMER_ACTIVE_ENTER_BASELINE_US=""
+BOOTSTRAP_TIMER_NEXT_ELAPSE_BASELINE_US=""
 
 log() {
     printf '[activate_release] %s\n' "$*"
@@ -6700,7 +6702,7 @@ repair_release_timers_best_effort() {
 }
 
 verify_release_state() {
-    local unit unit_file_state on_success next_us uptime_us remaining_us link_target
+    local unit unit_file_state on_success active_enter_us next_us scheduled_interval_us link_target
 
     for unit in case-weather.service \
         case-weather-backup.timer \
@@ -6767,20 +6769,36 @@ verify_release_state() {
     verify_no_retired_processes
     verify_root_crontab_retired
 
+    active_enter_us="$($SYSTEMCTL_BIN show \
+        case-weather-cache-bootstrap.timer \
+        --property=ActiveEnterTimestampMonotonic \
+        --value)"
     next_us="$($BUSCTL_BIN get-property \
         org.freedesktop.systemd1 \
         /org/freedesktop/systemd1/unit/case_2dweather_2dcache_2dbootstrap_2etimer \
         org.freedesktop.systemd1.Timer \
         NextElapseUSecMonotonic \
         | awk '{print $2}')"
-    uptime_us="$(awk '{printf "%.0f", $1 * 1000000}' "$UPTIME_FILE")"
-    if [[ ! "$next_us" =~ ^[0-9]+$ || ! "$uptime_us" =~ ^[0-9]+$ ]]; then
+    if [[ ! "$active_enter_us" =~ ^[1-9][0-9]*$ \
+        || ! "$next_us" =~ ^[1-9][0-9]*$ \
+        || "${#active_enter_us}" -gt 18 \
+        || "${#next_us}" -gt 18 \
+        || "$next_us" -le "$active_enter_us" ]]; then
         fail "bootstrap timer 单调时钟状态无效"
         return 1
     fi
-    remaining_us=$((next_us - uptime_us))
-    if [ "$remaining_us" -lt 1750000000 ] || [ "$remaining_us" -gt 1810000000 ]; then
+    scheduled_interval_us=$((next_us - active_enter_us))
+    if [ "$scheduled_interval_us" -lt 1790000000 ] \
+        || [ "$scheduled_interval_us" -gt 1810000000 ]; then
         fail "bootstrap timer 未保留完整的首轮 30 分钟等待窗口"
+        return 1
+    fi
+    if [ -z "$BOOTSTRAP_TIMER_ACTIVE_ENTER_BASELINE_US" ]; then
+        BOOTSTRAP_TIMER_ACTIVE_ENTER_BASELINE_US="$active_enter_us"
+        BOOTSTRAP_TIMER_NEXT_ELAPSE_BASELINE_US="$next_us"
+    elif [ "$active_enter_us" != "$BOOTSTRAP_TIMER_ACTIVE_ENTER_BASELINE_US" ] \
+        || [ "$next_us" != "$BOOTSTRAP_TIMER_NEXT_ELAPSE_BASELINE_US" ]; then
+        fail "bootstrap timer 在稳定观察期间被重启或改期"
         return 1
     fi
 
@@ -7493,7 +7511,6 @@ if [ "$(id -u)" != "$(id -u "$RUNTIME_USER")" ]; then
 fi
 command -v "$CHOWN_BIN" >/dev/null 2>&1 || require_executable "$CHOWN_BIN"
 command -v "$ENV_BIN" >/dev/null 2>&1 || require_executable "$ENV_BIN"
-require_file "$UPTIME_FILE"
 verify_effective_runtime_gate
 validate_release_dependencies
 validate_release_identity

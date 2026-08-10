@@ -166,7 +166,7 @@
 - [ ] 后端使用不可变 release 目录完成预检，生产目录未被 rsync 原地覆盖。
 - [ ] 发布后 `case-weather-cache-bootstrap.timer` 为 active，`case-weather-cache.timer` 在首轮等待期间为 inactive 且 disabled。
 - [ ] 五个业务运行服务使用无登录权限的 `case-weather` 账号，只允许写入 `instance/`、`storage/` 和 `run/`；root-only SQLite 备份服务关闭网络、限制 capability，只允许写入 `backups/daily`、`instance/` 和 `storage/`，且所有服务均启用 systemd 沙箱。
-- [ ] 激活事务在写入 `COMMITTED` 前已核对服务、两阶段 timer、缓存服务的 `OnSuccess`/`OnFailure`、bootstrap 剩余窗口、暂存环境清理与公网健康检查；`current` 符号链接解析出的不可变 release 与 `deployments/current-release` 普通文件记录完全一致。
+- [ ] 激活事务在写入 `COMMITTED` 前已核对服务、两阶段 timer、缓存服务的 `OnSuccess`/`OnFailure`、bootstrap 激活至触发的 30 分钟单调时钟调度间隔、稳定观察期间未重启或改期、暂存环境清理与公网健康检查；`current` 符号链接解析出的不可变 release 与 `deployments/current-release` 普通文件记录完全一致。
 - [ ] 激活事务已验证迁移失败和候选端口健康检查失败会恢复数据库、旧 release 与原 systemd 状态。
 - [ ] 公网服务启动后出现故障会保留向前迁移的数据库与新 release，并同时写入 `FORWARD_ONLY_REQUIRED` 和 `POST_COMMIT_ATTENTION.txt`；`current` 与 `deployments/current-release` 均记录新 release，不会覆盖可能已经确认的用户写入。
 - [ ] `/healthz` 只执行应用与数据库检查，不会触发天气、地图、第三方消息服务或其他外部 API。

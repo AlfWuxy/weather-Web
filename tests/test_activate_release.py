@@ -365,6 +365,17 @@ if command == 'stop' and key_audit and not Path(key_audit).exists():
 def marker(kind):
     return state / f'{unit}.{kind}'
 
+def sequence_value(env_name, counter_name, default):
+    values = [
+        value.strip()
+        for value in os.environ.get(env_name, default).split(',')
+        if value.strip()
+    ]
+    counter = state / counter_name
+    count = int(counter.read_text(encoding='utf-8')) + 1 if counter.exists() else 1
+    counter.write_text(str(count), encoding='utf-8')
+    return values[min(count - 1, len(values) - 1)]
+
 if command == 'cat':
     unit_file = unit_dir / unit
     if not marker('exists').exists() and not unit_file.exists():
@@ -443,6 +454,13 @@ if command == 'show':
         raise SystemExit(0)
     if '--property=FragmentPath' in args:
         print(unit_dir / unit)
+        raise SystemExit(0)
+    if '--property=ActiveEnterTimestampMonotonic' in args:
+        print(sequence_value(
+            'FAKE_BOOTSTRAP_ACTIVE_ENTER_SEQUENCE',
+            'bootstrap-active-enter-query-count',
+            '200000000',
+        ))
         raise SystemExit(0)
     if '--property=Result' in args:
         print('success')
@@ -1201,8 +1219,23 @@ else:
     fake_busctl = fake_bin / 'busctl'
     _write_executable(
         fake_busctl,
-        """#!/bin/sh
-printf 't 2000000000\n'
+        """#!/usr/bin/env python3
+import os
+from pathlib import Path
+
+state = Path(os.environ['FAKE_SYSTEMCTL_STATE'])
+values = [
+    value.strip()
+    for value in os.environ.get(
+        'FAKE_BOOTSTRAP_NEXT_ELAPSE_SEQUENCE',
+        '2000000000',
+    ).split(',')
+    if value.strip()
+]
+counter = state / 'bootstrap-next-elapse-query-count'
+count = int(counter.read_text(encoding='utf-8')) + 1 if counter.exists() else 1
+counter.write_text(str(count), encoding='utf-8')
+print(f't {values[min(count - 1, len(values) - 1)]}')
 """,
     )
     uptime_file = tmp_path / 'uptime'
@@ -2876,6 +2909,90 @@ def test_stability_window_detects_post_activation_timer_cleanup(tmp_path):
         transaction['fake_state'] / 'case-weather-cache-bootstrap.timer.active'
     ).exists()
     assert '已逐个补齐并复核' in markers[0].read_text(encoding='utf-8')
+
+
+def test_bootstrap_timer_interval_is_independent_of_host_uptime(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    transaction['env']['UPTIME_FILE'] = str(tmp_path / 'missing-uptime')
+
+    result = _run_activation(transaction)
+
+    assert result.returncode == 0, result.stderr
+    assert list((transaction['state_dir'] / 'backups').rglob('COMMITTED'))
+
+
+@pytest.mark.parametrize(
+    ('active_enter', 'next_elapse', 'message'),
+    (
+        ('200000000', '1949000000', '未保留完整的首轮 30 分钟等待窗口'),
+        ('200000000', '2011000000', '未保留完整的首轮 30 分钟等待窗口'),
+        ('invalid', '2000000000', '单调时钟状态无效'),
+        ('0', '2000000000', '单调时钟状态无效'),
+        ('0200000000', '2000000000', '单调时钟状态无效'),
+        ('200000000', 'invalid', '单调时钟状态无效'),
+        ('200000000', '02000000000', '单调时钟状态无效'),
+    ),
+)
+def test_bootstrap_timer_invalid_schedule_fails_closed(
+    tmp_path,
+    active_enter,
+    next_elapse,
+    message,
+):
+    transaction = _prepare_transaction(tmp_path)
+    transaction['env']['FAKE_BOOTSTRAP_ACTIVE_ENTER_SEQUENCE'] = active_enter
+    transaction['env']['FAKE_BOOTSTRAP_NEXT_ELAPSE_SEQUENCE'] = next_elapse
+
+    result = _run_activation(transaction)
+
+    assert result.returncode != 0
+    assert message in result.stderr
+    markers = list(
+        (transaction['state_dir'] / 'backups').rglob('POST_COMMIT_ATTENTION.txt')
+    )
+    assert len(markers) == 1
+    assert not list((transaction['state_dir'] / 'backups').rglob('COMMITTED'))
+
+
+def test_stability_window_rejects_bootstrap_timer_deadline_change(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    transaction['env']['POST_COMMIT_STABILITY_SECONDS'] = '1'
+    transaction['env']['FAKE_BOOTSTRAP_NEXT_ELAPSE_SEQUENCE'] = (
+        '2000000000,2005000000'
+    )
+
+    result = _run_activation(transaction)
+
+    assert result.returncode != 0
+    assert 'bootstrap timer 在稳定观察期间被重启或改期' in result.stderr
+    markers = list(
+        (transaction['state_dir'] / 'backups').rglob('POST_COMMIT_ATTENTION.txt')
+    )
+    assert len(markers) == 1
+    assert (markers[0].parent / 'FORWARD_ONLY_REQUIRED').is_file()
+    assert not list((transaction['state_dir'] / 'backups').rglob('COMMITTED'))
+
+
+def test_stability_window_rejects_bootstrap_timer_synchronized_restart(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    transaction['env']['POST_COMMIT_STABILITY_SECONDS'] = '1'
+    transaction['env']['FAKE_BOOTSTRAP_ACTIVE_ENTER_SEQUENCE'] = (
+        '200000000,205000000'
+    )
+    transaction['env']['FAKE_BOOTSTRAP_NEXT_ELAPSE_SEQUENCE'] = (
+        '2000000000,2005000000'
+    )
+
+    result = _run_activation(transaction)
+
+    assert result.returncode != 0
+    assert 'bootstrap timer 在稳定观察期间被重启或改期' in result.stderr
+    markers = list(
+        (transaction['state_dir'] / 'backups').rglob('POST_COMMIT_ATTENTION.txt')
+    )
+    assert len(markers) == 1
+    assert (markers[0].parent / 'FORWARD_ONLY_REQUIRED').is_file()
+    assert not list((transaction['state_dir'] / 'backups').rglob('COMMITTED'))
 
 
 def test_migration_failure_restores_database_release_and_unit_state(tmp_path):

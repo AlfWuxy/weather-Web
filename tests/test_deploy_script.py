@@ -875,8 +875,13 @@ def test_deploy_script_uses_two_stage_failure_safe_cache_timers():
     activate = _load_activate_script()
     assert 'cache-bootstrap-' not in content
     assert 'cache-bootstrap.success' not in activate
+    assert 'ActiveEnterTimestampMonotonic' in activate
     assert 'NextElapseUSecMonotonic' in activate
-    assert 'remaining_us' in activate
+    assert 'scheduled_interval_us' in activate
+    assert 'BOOTSTRAP_TIMER_ACTIVE_ENTER_BASELINE_US' in activate
+    assert 'BOOTSTRAP_TIMER_NEXT_ELAPSE_BASELINE_US' in activate
+    assert 'remaining_us' not in activate
+    assert 'UPTIME_FILE' not in activate
     assert 'bootstrap timer 未保留完整的首轮 30 分钟等待窗口' in activate
     assert 'case_2dweather_2dcache_2dbootstrap_2etimer' in activate
     assert 'case-weather-cache-bootstrap.service --property=OnSuccess --value' not in activate
