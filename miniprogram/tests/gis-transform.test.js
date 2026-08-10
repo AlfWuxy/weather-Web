@@ -94,8 +94,39 @@ test('现有网格可在内存中派生 65+ 与地表温度比较图层且不改
   assert.deepEqual(cells.map((feature) => feature.properties.age65_population_support), [1, 0, 1]);
   assert.deepEqual(cells.map((feature) => feature.properties.q3_lst_delta_median_c), [-10, 0, 10]);
   assert.deepEqual(cells.map((feature) => feature.properties.q3_lst_percentile), [33, 67, 100]);
+  const deltaLayer = enriched.metadata.layers.q3_lst_delta_median_c;
+  assert.deepEqual(
+    deltaLayer.palette,
+    ['#2c7bb6', '#abd9e9', '#f7f7f7', '#fdae61', '#d7191c']
+  );
+  assert.deepEqual(deltaLayer.breaks, [-10, -5, -0.1, 0.1, 5, 10]);
+  assert.deepEqual(deltaLayer.neutral_range, [-0.1, 0.1]);
+  assert.equal(deltaLayer.neutral_color_index, 2);
+  assert.equal(colorForValue(0, deltaLayer), '#f7f7f7');
+  assert.equal(colorForValue(-0.05, deltaLayer), '#f7f7f7');
+  assert.equal(colorForValue(0.05, deltaLayer), '#f7f7f7');
+  assert.equal(colorForValue(-0.1, deltaLayer), '#f7f7f7');
+  assert.equal(colorForValue(0.1, deltaLayer), '#f7f7f7');
+  assert.equal(colorForValue(-0.1001, deltaLayer), '#abd9e9');
+  assert.equal(colorForValue(0.1001, deltaLayer), '#fdae61');
   assert.equal(enriched.metadata.layers.age65_percentile.valid_cells, 2);
   assert.equal(enriched.metadata.layers.age65_percentile.missing_cells, 1);
+  assert.deepEqual(
+    [
+      enriched.metadata.layers.age65_percentile.min,
+      enriched.metadata.layers.age65_percentile.median,
+      enriched.metadata.layers.age65_percentile.max,
+    ],
+    [50, 75, 100]
+  );
+  assert.deepEqual(
+    [
+      enriched.metadata.layers.q3_lst_percentile.min,
+      enriched.metadata.layers.q3_lst_percentile.median,
+      enriched.metadata.layers.q3_lst_percentile.max,
+    ],
+    [33, 67, 100]
+  );
   assert.equal(
     formatLayerValue(0, enriched.metadata.layers.age65_population_support),
     '无正人口支持'
@@ -103,6 +134,31 @@ test('现有网格可在内存中派生 65+ 与地表温度比较图层且不改
   assert.deepEqual(
     legendEntries(enriched.metadata.layers.age65_population_support).map((item) => item.label),
     ['无正人口支持', '有正人口支持']
+  );
+});
+
+test('单网格与全同值的派生图层使用真实百分位和支持状态统计', () => {
+  const collection = sampleCollection();
+  collection.features[1].properties.positive_population_support = true;
+  collection.features[1].properties.q3_lst_c_mean = 30;
+
+  const enriched = enrichDerivedLayers(collection);
+  const cell = enriched.features[1];
+  const layers = enriched.metadata.layers;
+
+  assert.equal(cell.properties.age65_percentile, 100);
+  assert.equal(cell.properties.q3_lst_percentile, 100);
+  assert.deepEqual(
+    [layers.age65_percentile.min, layers.age65_percentile.median, layers.age65_percentile.max],
+    [100, 100, 100]
+  );
+  assert.deepEqual(
+    [layers.q3_lst_percentile.min, layers.q3_lst_percentile.median, layers.q3_lst_percentile.max],
+    [100, 100, 100]
+  );
+  assert.deepEqual(
+    [layers.age65_population_support.min, layers.age65_population_support.median, layers.age65_population_support.max],
+    [1, 1, 1]
   );
 });
 

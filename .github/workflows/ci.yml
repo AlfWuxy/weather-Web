@@ -162,12 +162,35 @@ jobs:
           ], plugins=[ShardPlugin()]))
           PY
 
+  web-js:
+    name: Web 前端运行测试
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: 配置 Node.js 20
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: "20"
+
+      - name: 检查 Web 地图脚本语法
+        run: |
+          node --check static/js/heat-vulnerability-preview.js
+          node --check static/js/heat-exposure-gis.js
+
+      - name: 运行 Web 地图真实行为测试
+        run: node --test tests/*.test.js tests/js/*.test.mjs
+
   release-proof:
     name: 可发布提交证明
     needs:
       - test
       - activation
-    if: ${{ github.event_name == 'push' && needs.test.result == 'success' && needs.activation.result == 'success' }}
+      - web-js
+    if: ${{ github.event_name == 'push' && needs.test.result == 'success' && needs.activation.result == 'success' && needs.web-js.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 2
 

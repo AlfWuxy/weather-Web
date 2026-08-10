@@ -288,6 +288,20 @@
 
     function colorForValue(value, spec) {
         if (!isFiniteNumber(value)) return '#dfe4e5';
+        const neutralRange = spec.neutral_range;
+        const neutralColorIndex = Number(spec.neutral_color_index);
+        if (
+            Array.isArray(neutralRange)
+            && neutralRange.length === 2
+            && neutralRange.every(isFiniteNumber)
+            && Number.isInteger(neutralColorIndex)
+            && neutralColorIndex >= 0
+            && neutralColorIndex < spec.palette.length
+            && value >= neutralRange[0]
+            && value <= neutralRange[1]
+        ) {
+            return spec.palette[neutralColorIndex];
+        }
         for (let index = 1; index < spec.breaks.length; index += 1) {
             if (value <= spec.breaks[index]) return spec.palette[index - 1];
         }
@@ -349,19 +363,27 @@
             properties.q3_lst_percentile = percentileRank(lstSummary.sorted, lstValue);
         });
         const deltaSummary = summarize(cells.map((feature) => feature.properties.q3_lst_delta_median_c));
+        const agePercentileSummary = summarize(cells.map((feature) => feature.properties.age65_percentile));
+        const supportSummary = summarize(cells.map((feature) => feature.properties.age65_population_support));
+        const lstPercentileSummary = summarize(cells.map((feature) => feature.properties.q3_lst_percentile));
         const maxDelta = Math.max(
             Math.abs(deltaSummary.min || 0),
             Math.abs(deltaSummary.max || 0),
             1
         );
+        // 给 0 附近保留独立中性色带，避免将无偏差误画成冷色。
+        const zeroBand = Math.min(
+            maxDelta / 4,
+            Math.max(.05, maxDelta / 100)
+        );
         const deltaBreaks = [
             -maxDelta,
             -maxDelta / 2,
-            0,
+            -zeroBand,
+            zeroBand,
             maxDelta / 2,
             maxDelta
         ].map((value) => Number(value.toFixed(4)));
-        const supportValid = cells.filter((feature) => isFiniteNumber(feature.properties.age65_population_support)).length;
         const sharedAge = {
             metric_key: 'gis_age65_share',
             details_anchor: 'gis-age65-share'
@@ -380,11 +402,11 @@
                 palette: ['#f1eef6', '#d7b5d8', '#df65b0', '#ce1256', '#7a0177'],
                 breaks: [0, 20, 40, 60, 80, 100],
                 source: '由 ASPECT 2020 有效网格计算',
-                min: ageSummary.sorted.length ? 1 : null,
-                median: 50,
-                max: ageSummary.sorted.length ? 100 : null,
-                valid_cells: ageSummary.sorted.length,
-                missing_cells: cells.length - ageSummary.sorted.length,
+                min: agePercentileSummary.min,
+                median: agePercentileSummary.median,
+                max: agePercentileSummary.max,
+                valid_cells: agePercentileSummary.sorted.length,
+                missing_cells: cells.length - agePercentileSummary.sorted.length,
                 definition: '把有正人口支持网格的模型化 65+ 人口比例放入全县有效网格分布，使用并列值上界计算相对百分位。',
                 ...sharedAge
             },
@@ -398,11 +420,11 @@
                 value_labels: {'0': '无正人口支持', '1': '有正人口支持'},
                 classification_label: '模型化人口支持状态',
                 source: 'ASPECT 2020 支持状态',
-                min: 0,
-                median: 1,
-                max: 1,
-                valid_cells: supportValid,
-                missing_cells: cells.length - supportValid,
+                min: supportSummary.min,
+                median: supportSummary.median,
+                max: supportSummary.max,
+                valid_cells: supportSummary.sorted.length,
+                missing_cells: cells.length - supportSummary.sorted.length,
                 definition: '仅区分该网格是否具有正的模型化人口支持。无正人口支持不等于 65+ 人口比例为 0。',
                 ...sharedAge
             },
@@ -411,8 +433,11 @@
                 short_label: '地表温度偏差',
                 unit: '°C',
                 digits: 1,
-                palette: ['#2c7bb6', '#abd9e9', '#fdae61', '#d7191c'],
+                palette: ['#2c7bb6', '#abd9e9', '#f7f7f7', '#fdae61', '#d7191c'],
                 breaks: deltaBreaks,
+                neutral_range: [-zeroBand, zeroBand],
+                neutral_color_index: 2,
+                classification_label: '相对全县有效网格中位数的分级，中性色表示接近 0°C',
                 source: '由 MYD11A1.061 有效网格计算',
                 min: deltaSummary.min,
                 median: deltaSummary.median,
@@ -430,11 +455,11 @@
                 palette: ['#ffffcc', '#fed976', '#fd8d3c', '#e31a1c', '#800026'],
                 breaks: [0, 20, 40, 60, 80, 100],
                 source: '由 MYD11A1.061 有效网格计算',
-                min: lstSummary.sorted.length ? 1 : null,
-                median: 50,
-                max: lstSummary.sorted.length ? 100 : null,
-                valid_cells: lstSummary.sorted.length,
-                missing_cells: cells.length - lstSummary.sorted.length,
+                min: lstPercentileSummary.min,
+                median: lstPercentileSummary.median,
+                max: lstPercentileSummary.max,
+                valid_cells: lstPercentileSummary.sorted.length,
+                missing_cells: cells.length - lstPercentileSummary.sorted.length,
                 definition: '把卫星晴空地表温度均值放入全县有效网格分布，使用并列值上界计算相对百分位。',
                 ...sharedLst
             }
@@ -445,6 +470,9 @@
     function percentileText(field, value) {
         if (!isFiniteNumber(value)) {
             return field === 'age65_share_pct' ? '该网格无正人口支持，比例不显示' : '该图层在本格无有效值';
+        }
+        if (field === 'age65_population_support') {
+            return '人口支持状态不计算百分位';
         }
         const values = state.sortedValues.get(field) || [];
         if (!values.length) return '暂无全县比较值';

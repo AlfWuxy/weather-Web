@@ -18,6 +18,7 @@ require.cache[publicDataPath] = {
 
 let modalCalls;
 let locationCalls;
+let openSettingCalls;
 let openLocationCalls;
 let storageWrites;
 let toastCalls;
@@ -83,9 +84,25 @@ function renderSample(page) {
   });
 }
 
+function requestDeniedLocation(page) {
+  const confirmationIndex = modalCalls.length;
+  const locationIndex = locationCalls.length;
+  page.startNearbyLocation.call(page);
+  modalCalls[confirmationIndex].success({ confirm: true, cancel: false });
+  locationCalls[locationIndex].fail({ errMsg: 'getLocation:fail auth deny' });
+  return modalCalls.at(-1);
+}
+
+function openDeniedLocationSettings(page) {
+  const permissionModal = requestDeniedLocation(page);
+  permissionModal.success({ confirm: true, cancel: false });
+  return openSettingCalls.at(-1);
+}
+
 test.beforeEach(() => {
   modalCalls = [];
   locationCalls = [];
+  openSettingCalls = [];
   openLocationCalls = [];
   storageWrites = [];
   toastCalls = [];
@@ -94,6 +111,7 @@ test.beforeEach(() => {
     getLocation: (options) => { locationCalls.push(options); },
     makePhoneCall: () => {},
     openLocation: (options) => { openLocationCalls.push(options); },
+    openSetting: (options) => { openSettingCalls.push(options); },
     setClipboardData: () => {},
     setStorageSync: (...args) => { storageWrites.push(args); },
     showModal: (options) => { modalCalls.push(options); },
@@ -152,7 +170,7 @@ test('每次点击先自定义确认，确认后仅用单次 GCJ-02 定位做端
   assert.equal(page._locationPoint, null);
 });
 
-test('取消确认或定位失败后回退社区 picker，手选不读取设备位置', () => {
+test('取消确认或定位失败后回退社区 picker，拒绝授权可去设置恢复', () => {
   const page = makePage();
   renderSample(page);
 
@@ -176,8 +194,117 @@ test('取消确认或定位失败后回退社区 picker，手选不读取设备�
   assert.equal(page.data.locationMode, 'manual');
   assert.equal(page.data.selectedCommunity, '');
   assert.equal(page._locationPoint, null);
-  assert.match(page.data.locationHint, /手动选择社区/);
+  assert.match(page.data.locationHint, /定位权限尚未开启/);
+  assert.equal(modalCalls.length, 3);
+  assert.equal(modalCalls[2].confirmText, '去设置');
+  modalCalls[2].success({ confirm: true, cancel: false });
+  assert.equal(openSettingCalls.length, 1);
+  openSettingCalls[0].success({ authSetting: { 'scope.userLocation': true } });
+  assert.match(page.data.locationHint, /再次点击.*按当前位置找附近/);
+  assert.equal(locationCalls.length, 1);
   assert.equal(storageWrites.length, 0);
+});
+
+test('进入设置页触发 onHide 后，返回 onShow 仍可提示授权结果且不自动定位', () => {
+  const page = makePage();
+  renderSample(page);
+  const settingsRequest = openDeniedLocationSettings(page);
+  const recoveryToken = page._locationRecoveryToken;
+
+  page.onHide.call(page);
+  assert.equal(page.data.locationMode, 'idle');
+  assert.equal(page._locationRecoveryToken, recoveryToken);
+  page.onShow.call(page);
+  settingsRequest.success({ authSetting: { 'scope.userLocation': true } });
+
+  assert.equal(page._locationRecoveryToken, recoveryToken);
+  assert.match(page.data.locationHint, /权限已开启.*再次点击/);
+  assert.equal(locationCalls.length, 1);
+  assert.equal(page._locationPoint, null);
+});
+
+test('设置结果先于 onShow 到达时仅暂存在页面内存，恢复后再显示', () => {
+  const page = makePage();
+  renderSample(page);
+  const settingsRequest = openDeniedLocationSettings(page);
+
+  page.onHide.call(page);
+  settingsRequest.success({ authSetting: { 'scope.userLocation': true } });
+  assert.equal(page.data.locationMode, 'idle');
+  assert.equal(
+    page.data.locationHint,
+    '定位默认关闭。你可逐次确认本次定位，或直接手动选择社区。'
+  );
+  assert.equal(page._pendingLocationRecovery.message.includes('权限已开启'), true);
+
+  page.onShow.call(page);
+  assert.match(page.data.locationHint, /权限已开启.*再次点击/);
+  assert.equal(page._pendingLocationRecovery, null);
+  assert.equal(locationCalls.length, 1);
+  assert.equal(page._locationPoint, null);
+});
+
+test('取消去设置保持手选状态，openSetting 失败给出可操作提示', () => {
+  const page = makePage();
+  renderSample(page);
+
+  const permissionModal = requestDeniedLocation(page);
+  const deniedHint = page.data.locationHint;
+  permissionModal.success({ confirm: false, cancel: true });
+  assert.equal(openSettingCalls.length, 0);
+  assert.equal(page.data.locationMode, 'manual');
+  assert.equal(page.data.locationHint, deniedHint);
+
+  const settingsRequest = openDeniedLocationSettings(page);
+  settingsRequest.fail({ errMsg: 'openSetting:fail' });
+  assert.match(page.data.locationHint, /无法打开微信设置.*手动选择社区/);
+  assert.equal(page.data.locationMode, 'manual');
+  assert.equal(locationCalls.length, 2);
+});
+
+test('设置页迟到回调不会覆盖新的定位流程或手选状态', () => {
+  const choosePage = makePage();
+  renderSample(choosePage);
+  const chooseSettingsRequest = openDeniedLocationSettings(choosePage);
+  const communityIndex = choosePage.data.communityOptions.indexOf('甲社区');
+  choosePage.chooseCommunity.call(choosePage, { detail: { value: String(communityIndex) } });
+  const chosenHint = choosePage.data.locationHint;
+  chooseSettingsRequest.success({ authSetting: { 'scope.userLocation': true } });
+  assert.equal(choosePage.data.selectedCommunity, '甲社区');
+  assert.equal(choosePage.data.locationHint, chosenHint);
+
+  const manualPage = makePage();
+  renderSample(manualPage);
+  const manualSettingsRequest = openDeniedLocationSettings(manualPage);
+  manualPage.showManualSelection.call(manualPage);
+  const manualHint = manualPage.data.locationHint;
+  manualSettingsRequest.fail({ errMsg: 'openSetting:fail delayed' });
+  assert.equal(manualPage.data.locationHint, manualHint);
+
+  const restartPage = makePage();
+  renderSample(restartPage);
+  const restartSettingsRequest = openDeniedLocationSettings(restartPage);
+  restartPage.startNearbyLocation.call(restartPage);
+  const restartHint = restartPage.data.locationHint;
+  restartSettingsRequest.success({ authSetting: { 'scope.userLocation': true } });
+  assert.equal(restartPage.data.locationBusy, true);
+  assert.equal(restartPage.data.locationHint, restartHint);
+  assert.match(restartPage.data.locationHint, /确认本次是否使用当前位置/);
+});
+
+test('onUnload 使设置页的迟到成功与失败回调全部失效', () => {
+  const page = makePage();
+  renderSample(page);
+  const settingsRequest = openDeniedLocationSettings(page);
+  const hintBeforeUnload = page.data.locationHint;
+
+  page.onUnload.call(page);
+  settingsRequest.success({ authSetting: { 'scope.userLocation': true } });
+  settingsRequest.fail({ errMsg: 'openSetting:fail delayed' });
+
+  assert.equal(page.data.locationHint, hintBeforeUnload);
+  assert.equal(page._locationPoint, null);
+  assert.deepEqual(page._allResources, []);
 });
 
 test('定位排序后筛选保持距离顺序，缺坐标继续排在有坐标资源之后', () => {

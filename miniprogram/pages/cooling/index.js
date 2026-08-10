@@ -47,6 +47,8 @@ Page({
     this._allResources = [];
     this._locationPoint = null;
     this._locationFlowToken = 0;
+    this._locationRecoveryToken = 0;
+    this._pendingLocationRecovery = null;
     this._locationFlowActive = false;
     beginPublicPage(this);
     showPublicShareMenu();
@@ -54,6 +56,7 @@ Page({
 
   onShow() {
     showPublicPage(this, () => this.loadData());
+    this.flushPendingLocationRecovery();
   },
 
   onHide() {
@@ -63,6 +66,7 @@ Page({
 
   onUnload() {
     this._locationFlowToken = (Number(this._locationFlowToken) || 0) + 1;
+    this.invalidateLocationRecovery();
     this._locationFlowActive = false;
     this._locationPoint = null;
     unloadPublicPage(this);
@@ -169,6 +173,8 @@ Page({
 
   startNearbyLocation() {
     if (this._locationFlowActive) return;
+    // 新一轮定位由用户再次主动发起，先废止旧的设置页回调。
+    this.invalidateLocationRecovery();
     if (!Array.isArray(this._allResources) || !this._allResources.length) {
       this.setData({ locationHint: '暂无可排序的真实避暑资源，请联系当地社区确认可用场所。' });
       return;
@@ -251,11 +257,90 @@ Page({
           resources: this.resourcesFor(this.data.filter, '', point),
         });
       },
-      fail: () => {
+      fail: (error) => {
         if (!this.locationFlowCanContinue(flowToken)) return;
-        this.activateManualFallback('未取得本次位置，请手动选择社区继续查看。');
+        this.handleLocationFailure(error);
       },
     });
+  },
+
+  handleLocationFailure(error) {
+    const errorMessage = String(error && error.errMsg || '').toLowerCase();
+    const permissionDenied = errorMessage.includes('auth deny')
+      || errorMessage.includes('auth denied')
+      || errorMessage.includes('scope.userlocation');
+    if (!permissionDenied) {
+      this.activateManualFallback('未取得本次位置，请手动选择社区继续查看。');
+      return;
+    }
+
+    const recoveryToken = this.activateManualFallback('定位权限尚未开启，可前往微信设置授权；也可以继续手动选择社区。');
+    if (typeof wx.showModal !== 'function' || typeof wx.openSetting !== 'function') return;
+    wx.showModal({
+      title: '定位权限尚未开启',
+      content: '前往微信设置开启“位置信息”后，请返回本页再次点击“按当前位置找附近”。未开启时仍可手动选择社区。',
+      confirmText: '去设置',
+      cancelText: '手选社区',
+      success: (result) => {
+        if (!result || !result.confirm || !this.locationRecoveryCanContinue(recoveryToken)) return;
+        wx.openSetting({
+          success: (settings) => {
+            const enabled = Boolean(
+              settings
+              && settings.authSetting
+              && settings.authSetting['scope.userLocation']
+            );
+            this.applyLocationRecoveryResult(
+              recoveryToken,
+              enabled
+                ? '定位权限已开启，请再次点击“按当前位置找附近”并确认本次使用。'
+                : '定位权限仍未开启，请手动选择社区继续查看。'
+            );
+          },
+          fail: () => {
+            this.applyLocationRecoveryResult(
+              recoveryToken,
+              '暂时无法打开微信设置，请手动选择社区继续查看。'
+            );
+          },
+        });
+      },
+    });
+  },
+
+  invalidateLocationRecovery() {
+    this._locationRecoveryToken = (Number(this._locationRecoveryToken) || 0) + 1;
+    this._pendingLocationRecovery = null;
+    return this._locationRecoveryToken;
+  },
+
+  locationRecoveryCanContinue(recoveryToken) {
+    return Boolean(
+      this._locationRecoveryToken === recoveryToken
+      && pageCanRender(this)
+    );
+  },
+
+  applyLocationRecoveryResult(recoveryToken, message) {
+    if (this._locationRecoveryToken !== recoveryToken) return;
+    if (!pageCanRender(this)) {
+      // 微信设置回调可能先于 onShow 到达，只在当前页面内存中暂存提示。
+      this._pendingLocationRecovery = { recoveryToken, message };
+      return;
+    }
+    this._pendingLocationRecovery = null;
+    this.setData({ locationHint: message });
+  },
+
+  flushPendingLocationRecovery() {
+    const pending = this._pendingLocationRecovery;
+    if (!pending || !pageCanRender(this)) return;
+    if (pending.recoveryToken !== this._locationRecoveryToken) {
+      this._pendingLocationRecovery = null;
+      return;
+    }
+    this._pendingLocationRecovery = null;
+    this.setData({ locationHint: pending.message });
   },
 
   showManualSelection() {
@@ -263,6 +348,7 @@ Page({
   },
 
   activateManualFallback(message) {
+    const recoveryToken = this.invalidateLocationRecovery();
     this._locationFlowToken = (Number(this._locationFlowToken) || 0) + 1;
     this._locationFlowActive = false;
     this._locationPoint = null;
@@ -274,6 +360,7 @@ Page({
       communityIndex: 0,
       resources: this.resourcesFor(this.data.filter, '', null),
     });
+    return recoveryToken;
   },
 
   chooseCommunity(event) {
@@ -281,6 +368,7 @@ Page({
     const options = Array.isArray(this.data.communityOptions) ? this.data.communityOptions : [];
     if (!Number.isInteger(index) || index < 0 || index >= options.length) return;
     const selectedCommunity = options[index];
+    this.invalidateLocationRecovery();
     this._locationFlowToken = (Number(this._locationFlowToken) || 0) + 1;
     this._locationFlowActive = false;
     this._locationPoint = null;
