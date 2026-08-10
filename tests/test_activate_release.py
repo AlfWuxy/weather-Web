@@ -5985,6 +5985,8 @@ def test_sigkill_before_started_receipt_is_recovered_from_lease_journal(
 ):
     transaction = _prepare_transaction(tmp_path)
     _configure_formal_smoke(transaction)
+    # 本用例验证父进程强杀后的 journal 恢复，使用旧 5 秒窗口避免管道等待遮蔽目标。
+    transaction['env']['FORMAL_SMOKE_LEASE_ATTEMPT_TIMEOUT_SECONDS'] = '5'
     mode_file = transaction['state_dir'] / 'formal-smoke-lease-mode'
     mode_file.write_text('pause-after-reserve\n', encoding='utf-8')
     _write_candidate_base_state(transaction)
