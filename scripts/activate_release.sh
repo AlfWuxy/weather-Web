@@ -4351,14 +4351,21 @@ raise SystemExit(0 if valid else 1)
         fail "候选应用公开风险页不可用"
         return 1
     }
-    if printf '%s' "$risk_body" | grep -Eq '天气更新中|风险待刷新'; then
-        fail "候选应用公开风险页仍显示待刷新状态"
-        return 1
-    fi
-    if ! printf '%s' "$risk_body" | grep -Fq '当前风险：'; then
-        fail "候选应用公开风险页缺少已生成的风险结果"
-        return 1
-    fi
+    # 页面可能超过管道缓冲区；grep -q 提前退出会让 pipefail 把 printf 的
+    # SIGPIPE 误判为契约失败。直接在 Bash 内匹配完整响应，保留严格门槛。
+    case "$risk_body" in
+        *天气更新中*|*风险待刷新*)
+            fail "候选应用公开风险页仍显示待刷新状态"
+            return 1
+            ;;
+    esac
+    case "$risk_body" in
+        *当前风险：*) ;;
+        *)
+            fail "候选应用公开风险页缺少已生成的风险结果"
+            return 1
+            ;;
+    esac
 }
 
 stop_candidate_release() {
