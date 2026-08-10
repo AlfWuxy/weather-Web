@@ -5275,6 +5275,56 @@ def test_formal_smoke_waits_for_expiring_lease_after_runtime_quiescence(tmp_path
     assert (receipt_dirs[0] / 'completed').is_file()
 
 
+def test_formal_smoke_default_timeouts_allow_six_second_runtime_startup(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    transaction['env'].pop('FORMAL_SMOKE_LEASE_ATTEMPT_TIMEOUT_SECONDS', None)
+    transaction['env'].pop('QWEATHER_BUDGET_SNAPSHOT_TIMEOUT_SECONDS', None)
+    _staged_text, counter_file = _configure_formal_smoke(transaction)
+    _set_formal_wait_network_gate(transaction)
+    _set_recurring_timer_active_disabled(transaction)
+    budget_helper = Path(transaction['env']['QWEATHER_BUDGET_SNAPSHOT_HELPER'])
+    delayed_budget_helper = transaction['state_dir'] / 'delayed-budget-snapshot'
+    _write_executable(
+        delayed_budget_helper,
+        '#!/bin/sh\n'
+        'sleep 6\n'
+        f'exec {shlex.quote(str(budget_helper))}\n',
+    )
+    transaction['env']['QWEATHER_BUDGET_SNAPSHOT_HELPER'] = str(
+        delayed_budget_helper
+    )
+    _write_formal_lease_scenario(
+        transaction,
+        [{
+            'outcome': 'acquired-after-cold-start',
+            'exit_code': 0,
+            'sleep_seconds': 6,
+        }],
+    )
+
+    result = _run_activation(transaction)
+
+    assert result.returncode == 0, result.stderr
+    assert transaction['formal_lease_attempt_file'].read_text(
+        encoding='ascii'
+    ) == '1'
+    assert transaction['formal_lease_token_file'].is_file()
+    assert counter_file.read_text(encoding='utf-8') == '1'
+    budget_events = _formal_budget_audit_events(transaction)
+    assert len(budget_events) == 2
+    assert [event['formal_count'] for event in budget_events] == [0, 1]
+    assert all(event['lease_acquired'] for event in budget_events)
+    script = ACTIVATE_SCRIPT.read_text(encoding='utf-8')
+    assert (
+        'FORMAL_SMOKE_LEASE_ATTEMPT_TIMEOUT_SECONDS="'
+        '${FORMAL_SMOKE_LEASE_ATTEMPT_TIMEOUT_SECONDS:-15}"'
+    ) in script
+    assert (
+        'QWEATHER_BUDGET_SNAPSHOT_TIMEOUT_SECONDS="'
+        '${QWEATHER_BUDGET_SNAPSHOT_TIMEOUT_SECONDS:-15}"'
+    ) in script
+
+
 def test_formal_smoke_blocking_lease_helper_hits_hard_limit_and_rolls_back(
     tmp_path,
 ):
