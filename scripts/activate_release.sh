@@ -39,6 +39,8 @@ INHERITED_DATABASE_URI="${DATABASE_URI:-}"
 DATABASE_FILE=""
 unset DATABASE_URI
 RECOVERY_ACKNOWLEDGED_TRANSACTION="${RECOVERY_ACKNOWLEDGED_TRANSACTION:-}"
+# 仅由本进程写入已完成精确校验的事务路径，禁止从环境继承恢复放行状态。
+RECOVERY_ACKNOWLEDGEMENT_VERIFIED_THIS_RUN=""
 REQUIRE_WECHAT_READY="${REQUIRE_WECHAT_READY:-0}"
 DEPLOY_INTENT="${DEPLOY_INTENT:-web_backend_only}"
 EXPECTED_WECHAT_FORMAL_RUNTIME="${EXPECTED_WECHAT_FORMAL_RUNTIME:-}"
@@ -1061,8 +1063,9 @@ PY
 }
 
 read_activation_guard_transaction() {
+    local guard_file="${1:-$ACTIVATION_BOOT_GUARD_FILE}"
     "$VENV_DIR/bin/python" - \
-        "$ACTIVATION_BOOT_GUARD_FILE" \
+        "$guard_file" \
         "$TRANSACTION_ROOT" \
         "$CONTROL_OWNER_UID" \
         "$CONTROL_OWNER_GID" <<'PY'
@@ -1152,6 +1155,11 @@ formal_runtime_stopped_probe_is_allowed() {
         return 2
     fi
     if [ -n "$RECOVERY_ACKNOWLEDGED_TRANSACTION" ]; then
+        if [ "$RECOVERY_ACKNOWLEDGEMENT_VERIFIED_THIS_RUN" \
+            != "$RECOVERY_ACKNOWLEDGED_TRANSACTION" ]; then
+            fail "Nginx 停机恢复探针尚未在本轮完成精确事务校验"
+            return 2
+        fi
         if [ "$guard_transaction" != "$RECOVERY_ACKNOWLEDGED_TRANSACTION" ]; then
             fail "Nginx 停机恢复探针与持久开机门事务不匹配"
             return 2
@@ -1357,6 +1365,7 @@ PY
             fail "已有恢复确认标记的内容或权限无效"
             return 1
         fi
+        RECOVERY_ACKNOWLEDGEMENT_VERIFIED_THIS_RUN="$RECOVERY_ACKNOWLEDGED_TRANSACTION"
         log "复用已安全落盘的人工恢复确认: $RECOVERY_ACKNOWLEDGED_TRANSACTION"
         return 0
     fi
@@ -1394,7 +1403,34 @@ PY
         return 1
     fi
     fsync_directory "$RECOVERY_ACKNOWLEDGED_TRANSACTION"
+    RECOVERY_ACKNOWLEDGEMENT_VERIFIED_THIS_RUN="$RECOVERY_ACKNOWLEDGED_TRANSACTION"
     log "已登记人工恢复确认: $RECOVERY_ACKNOWLEDGED_TRANSACTION"
+}
+
+restore_archived_activation_boot_guard_if_acknowledged() {
+    local guard_transaction="" recovered_guard=""
+    if [ -e "$ACTIVATION_BOOT_GUARD_FILE" ] \
+        || [ -L "$ACTIVATION_BOOT_GUARD_FILE" ]; then
+        return 0
+    fi
+    [ -n "$RECOVERY_ACKNOWLEDGED_TRANSACTION" ] || return 0
+    if [ "$RECOVERY_ACKNOWLEDGEMENT_VERIFIED_THIS_RUN" \
+        != "$RECOVERY_ACKNOWLEDGED_TRANSACTION" ]; then
+        fail "恢复已归档开机门前尚未在本轮完成精确事务校验"
+        return 1
+    fi
+    recovered_guard="$RECOVERY_ACKNOWLEDGED_TRANSACTION/activation-in-progress.recovered"
+    [ -e "$recovered_guard" ] || [ -L "$recovered_guard" ] || return 0
+    if ! guard_transaction="$(read_activation_guard_transaction "$recovered_guard")" \
+        || [ "$guard_transaction" != "$RECOVERY_ACKNOWLEDGED_TRANSACTION" ]; then
+        fail "已归档开机门与本轮确认的恢复事务不匹配"
+        return 1
+    fi
+    mv "$recovered_guard" "$ACTIVATION_BOOT_GUARD_FILE"
+    chmod 0600 "$ACTIVATION_BOOT_GUARD_FILE"
+    fsync_directory "$RECOVERY_ACKNOWLEDGED_TRANSACTION"
+    fsync_directory "$STATE_DIR/deployments"
+    log "已还原本轮确认事务的断电保护门，等待停机态探针复核"
 }
 
 recover_activation_boot_guard_if_acknowledged() {
@@ -5149,7 +5185,7 @@ verify_formal_runtime_healthz_probe() {
                 fail "Nginx 本机 healthz 返回非预期状态: $probe_status"
                 return 1
             fi
-            log "已验证恢复事务，接受持久开机门下的预期 502 停机态"
+            log "已验证恢复事务，接受预期 502 停机态"
             ;;
         *)
             fail "Nginx 本机 healthz 返回非预期状态: $probe_status"
@@ -7478,7 +7514,6 @@ verify_effective_redis_backend_identity
 recover_abandoned_formal_smoke_lease_journals
 
 acknowledge_recovery_transaction
-recover_activation_boot_guard_if_acknowledged
 detect_unfinished_transactions
 mkdir -p "$TRANSACTION_DIR"
 fsync_directory "$TRANSACTION_ROOT"
@@ -7495,7 +7530,9 @@ verify_backup_not_running
 verify_root_crontab_retired_before_activation
 preflight_formal_smoke_cycle_lease
 # Nginx reload 也属于生产 mutation，必须晚于全局天气租约预检。
+restore_archived_activation_boot_guard_if_acknowledged
 verify_formal_runtime_log_boundary
+recover_activation_boot_guard_if_acknowledged
 write_durable_marker "$STARTED_MARKER" "$NEW_RELEASE"
 
 MUTATION_STARTED=1
