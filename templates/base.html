@@ -68,6 +68,14 @@
     <meta property="og:title" content="{{ self.title()|striptags|trim }}">
     <meta property="og:description" content="{{ self.meta_description()|striptags|trim }}">
     <meta property="og:locale" content="zh_CN">
+    <meta property="og:image" content="https://yilaoweather.org/static/brand/yilao-avatar.png">
+    <meta property="og:image:width" content="512">
+    <meta property="og:image:height" content="512">
+    <meta property="og:image:alt" content="宜老天气通标志">
+    <meta name="twitter:card" content="summary">
+    <meta name="twitter:title" content="{{ self.title()|striptags|trim }}">
+    <meta name="twitter:description" content="{{ self.meta_description()|striptags|trim }}">
+    <meta name="twitter:image" content="https://yilaoweather.org/static/brand/yilao-avatar.png">
     {% block structured_data %}{% endblock %}
     <link rel="icon" type="image/png" href="{{ url_for('static', filename='brand/yilao-avatar.png') }}">
     <link rel="apple-touch-icon" href="{{ url_for('static', filename='brand/yilao-avatar.png') }}">
@@ -432,6 +440,7 @@
                 <a href="{{ url_for('public.cooling_resources') }}">避暑资源</a>
                 <a href="{{ url_for('public.heat_vulnerability_preview') }}">热脆弱性地图</a>
                 <a href="{{ url_for('public.transparency') }}">计算与透明度</a>
+                <a href="{{ url_for('public.about_trust_network') }}">家庭信任网络</a>
                 <a href="{{ url_for('public.transparency') }}#privacy">隐私边界</a>
             </nav>
             <p class="mb-0">© {{ now().year }} · 宜老天气通 · 把天气变成照护提醒</p>

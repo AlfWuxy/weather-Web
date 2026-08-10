@@ -10,7 +10,7 @@
 
 Worker 不接管网页、登录、API、天气、风险或用户数据。源站发布完成并验证三个端点后，应删除 Worker Route，避免长期维护两份内容。
 
-当前 sitemap 与 `llms.txt` 只列出实测返回 HTTP 200 的五个公开页面。`/duchang-heat-vulnerability-map` 在旧源站仍为 404，暂不进入发现清单；源站 v1.1.1 上线并实测该页面返回 200 后，再恢复该 URL。
+当前候选 sitemap 与 `llms.txt` 列出六个公开页面，其中包含 `/duchang-heat-vulnerability-map`。正式发布六页 Worker 前，必须先确认该地图页面连续稳定返回 HTTP 200，且匿名响应不含家庭、手机号、微信身份、绑定码或精确位置。
 
 ## 内容用途边界
 
@@ -51,10 +51,11 @@ https://www.yilaoweather.org/llms.txt*
 
 - HTTP 200。
 - `X-Yilao-Edge-Discovery: v1.1.1`。
+- `X-Yilao-Edge-Discovery-Revision: public-pages-6-heat-map`。
 - `Content-Signal: ai-train=no, search=yes, ai-input=yes`。
 - Content-Type 与正文正确。
 - `robots.txt` 含 Sitemap 和私密路径边界。
-- Sitemap 只含五个当前在线匿名 URL，不含 404 页面。
+- Sitemap 只含六个已验收的匿名 URL，不含 404 页面。
 - `llms.txt` 不含私密页面 URL。
 
 还要确认 `/`、`/risk`、`/healthz`、`/admin` 和 `/mp/api/` 的状态、安全头与缓存行为没有变化。
