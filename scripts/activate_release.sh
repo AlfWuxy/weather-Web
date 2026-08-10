@@ -1220,15 +1220,20 @@ detect_unfinished_transactions() {
     local transaction transaction_list
     if ! transaction_list="$($VENV_DIR/bin/python - \
         "$TRANSACTION_ROOT" \
+        "$RELEASE_ROOT" \
         "$CONTROL_OWNER_UID" \
         "$CONTROL_OWNER_GID" <<'PY'
+from datetime import datetime
 from pathlib import Path
 import stat
 import sys
 
 root = Path(sys.argv[1]).resolve(strict=True)
-owner_uid = int(sys.argv[2])
-owner_gid = int(sys.argv[3])
+release_directory = (Path(sys.argv[2]).resolve(strict=True) / 'releases').resolve(
+    strict=True
+)
+owner_uid = int(sys.argv[3])
+owner_gid = int(sys.argv[4])
 marker_names = (
     'ACTIVATION_STARTED',
     'RECOVERY_CONFIRMED',
@@ -1261,6 +1266,7 @@ for transaction in sorted(root.iterdir()):
             or marker_stat.st_gid != owner_gid
             or (
                 name in {
+                    'RECOVERY_CONFIRMED',
                     'FORWARD_ONLY_REQUIRED',
                     'PUBLIC_START_ATTEMPTED',
                     'qweather-key-transition.json',
@@ -1270,6 +1276,32 @@ for transaction in sorted(root.iterdir()):
             )
         ):
             raise SystemExit(1)
+    confirmation = transaction / 'RECOVERY_CONFIRMED'
+    if confirmation.exists():
+        values = {}
+        try:
+            for line in confirmation.read_text(encoding='utf-8').splitlines():
+                key, separator, value = line.partition('=')
+                if not separator or not key or not value or key in values:
+                    raise ValueError
+                values[key] = value
+            if set(values) != {'confirmed_at', 'confirmed_before_release'}:
+                raise ValueError
+            datetime.strptime(values['confirmed_at'], '%Y-%m-%dT%H:%M:%SZ')
+            confirmed_release = Path(values['confirmed_before_release'])
+            if (
+                not confirmed_release.is_absolute()
+                or str(confirmed_release)
+                != str(confirmed_release.resolve(strict=False))
+                or confirmed_release.parent.resolve(strict=True) != release_directory
+                or any(
+                    character in values['confirmed_before_release']
+                    for character in ('\x00', '\t', '\r', '\n')
+                )
+            ):
+                raise ValueError
+        except (OSError, UnicodeError, ValueError):
+            raise SystemExit(1) from None
     if (
         started.exists()
         or (transaction / 'qweather-key-transition.json').exists()
@@ -1343,7 +1375,9 @@ acknowledge_recovery_transaction() {
         if ! "$VENV_DIR/bin/python" - \
             "$confirmation" \
             "$CONTROL_OWNER_UID" \
-            "$CONTROL_OWNER_GID" <<'PY'
+            "$CONTROL_OWNER_GID" \
+            "$RELEASE_ROOT" <<'PY'
+from datetime import datetime
 from pathlib import Path
 import stat
 import sys
@@ -1366,6 +1400,25 @@ for line in path.read_text(encoding='utf-8').splitlines():
     values[key] = value
 if set(values) != {'confirmed_at', 'confirmed_before_release'}:
     raise SystemExit(1)
+try:
+    datetime.strptime(values['confirmed_at'], '%Y-%m-%dT%H:%M:%SZ')
+    confirmed_release = Path(values['confirmed_before_release'])
+    release_directory = (
+        Path(sys.argv[4]).resolve(strict=True) / 'releases'
+    ).resolve(strict=True)
+    if (
+        not confirmed_release.is_absolute()
+        or str(confirmed_release)
+        != str(confirmed_release.resolve(strict=False))
+        or confirmed_release.parent.resolve(strict=True) != release_directory
+        or any(
+            character in values['confirmed_before_release']
+            for character in ('\x00', '\t', '\r', '\n')
+        )
+    ):
+        raise ValueError
+except (OSError, ValueError):
+    raise SystemExit(1) from None
 PY
         then
             fail "已有恢复确认标记的内容或权限无效"
@@ -1388,9 +1441,15 @@ PY
         "$NEW_RELEASE" <<'PY'
 from datetime import datetime, timezone
 import os
+from pathlib import Path
+import secrets
 import sys
 
 path, release = sys.argv[1:]
+path = Path(path)
+temporary = path.with_name(
+    f'.{path.name}.next.{os.getpid()}.{secrets.token_hex(8)}'
+)
 flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, 'O_CLOEXEC', 0)
 flags |= getattr(os, 'O_NOFOLLOW', 0)
 payload = (
@@ -1398,7 +1457,7 @@ payload = (
     f"confirmed_before_release={release}\n"
 ).encode('utf-8')
 try:
-    descriptor = os.open(path, flags, 0o600)
+    descriptor = os.open(temporary, flags, 0o600)
     try:
         view = memoryview(payload)
         while view:
@@ -1409,8 +1468,19 @@ try:
         os.fsync(descriptor)
     finally:
         os.close(descriptor)
+    os.link(temporary, path, follow_symlinks=False)
+    directory = os.open(path.parent, os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0))
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
 except OSError:
     raise SystemExit(1) from None
+finally:
+    try:
+        os.unlink(temporary)
+    except FileNotFoundError:
+        pass
 PY
     then
         fail "恢复确认标记无法安全创建"

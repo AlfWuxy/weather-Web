@@ -3934,7 +3934,35 @@ def test_unfinished_previous_transaction_blocks_new_mutation(tmp_path):
 
     assert confirmed.returncode == 0, confirmed.stderr
     assert (unfinished / 'RECOVERY_CONFIRMED').is_file()
+    assert not list(unfinished.glob('.RECOVERY_CONFIRMED.next.*'))
     assert transaction['current_link'].resolve() == transaction['new_release'].resolve()
+
+
+def test_invalid_recovery_confirmation_without_ack_fails_closed(tmp_path):
+    transaction = _prepare_transaction(tmp_path)
+    transaction_root = (
+        transaction['state_dir'] / 'backups' / 'deploy-transactions'
+    )
+    unfinished = transaction_root / 'interrupted-with-partial-confirmation'
+    unfinished.mkdir(parents=True)
+    activation = unfinished / 'ACTIVATION_STARTED'
+    activation.write_text('old-release\n', encoding='utf-8')
+    activation.chmod(0o600)
+    confirmation = unfinished / 'RECOVERY_CONFIRMED'
+    confirmation.write_text(
+        'confirmed_at=2026-08-10T00:00:00Z\n',
+        encoding='utf-8',
+    )
+    confirmation.chmod(0o600)
+
+    result = _run_activation(transaction)
+
+    assert result.returncode != 0
+    assert '无法完整枚举或验证历史部署事务' in result.stderr
+    assert sorted(transaction_root.iterdir()) == [unfinished]
+    assert transaction['current_link'].resolve() == transaction['old_release'].resolve()
+    assert _database_value(transaction['database_file']) == 'old'
+    assert not transaction['systemctl_log'].exists()
 
 
 def test_interrupted_guard_requires_exact_ack_then_recovers(tmp_path):

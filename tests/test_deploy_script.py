@@ -1848,6 +1848,12 @@ def test_activation_forward_only_and_recovery_keep_current_release_ledger_exact(
     assert acknowledge_flow.index('confirmation_exists=1') < (
         acknowledge_flow.index('reconcile_acknowledged_qweather_key_plan')
     )
+    assert acknowledge_flow.index('os.fsync(descriptor)') < (
+        acknowledge_flow.index('os.link(temporary, path, follow_symlinks=False)')
+    )
+    assert acknowledge_flow.index(
+        'os.link(temporary, path, follow_symlinks=False)'
+    ) < acknowledge_flow.index('os.unlink(temporary)')
     fingerprint_keys = content.split('keys = (', 1)[1].split('\n)', 1)[0]
     assert "'REDIS_URL'" in fingerprint_keys
     assert "'WEATHER_CACHE_REDIS_URL'" in fingerprint_keys
