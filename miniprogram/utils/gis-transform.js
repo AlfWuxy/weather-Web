@@ -17,7 +17,7 @@ const FALLBACK_LAYERS = {
   age65_percentile: { label: '65+ 人口比例全县相对分位', short_label: '65+ 相对分位', unit: '%', digits: 0, palette: ['#f1eef6', '#d7b5d8', '#df65b0', '#ce1256', '#7a0177'], breaks: [0, 20, 40, 60, 80, 100], source: '由 ASPECT 2020 有效网格计算' },
   age65_population_support: { label: '65+ 比例人口支持状态', short_label: '人口支持状态', unit: '', digits: 0, palette: ['#d9dfe2', '#237a57'], breaks: [0, 0, 1], value_labels: { 0: '无正人口支持', 1: '有正人口支持' }, source: 'ASPECT 2020 支持状态' },
   q3_lst_c_mean: { label: '晴空地表温度均值', short_label: '地表温度', unit: '°C', digits: 1, palette: ['#fff4d9', '#f8cf7a', '#ec9748', '#d85d19', '#8f2717'], breaks: [20, 28, 32, 36, 40, 60], source: 'NASA MYD11A1.061' },
-  q3_lst_delta_median_c: { label: '地表温度相对全县中位数偏差', short_label: '地表温度偏差', unit: '°C', digits: 1, palette: ['#2c7bb6', '#abd9e9', '#fdae61', '#d7191c'], breaks: [-10, -5, 0, 5, 10], source: '由 MYD11A1.061 有效网格计算' },
+  q3_lst_delta_median_c: { label: '地表温度相对全县中位数偏差', short_label: '地表温度偏差', unit: '°C', digits: 1, palette: ['#2c7bb6', '#abd9e9', '#f7f7f7', '#fdae61', '#d7191c'], breaks: [-10, -5, -0.1, 0.1, 5, 10], neutral_range: [-0.1, 0.1], neutral_color_index: 2, source: '由 MYD11A1.061 有效网格计算' },
   q3_lst_percentile: { label: '地表温度全县相对分位', short_label: '地表温度分位', unit: '%', digits: 0, palette: ['#ffffcc', '#fed976', '#fd8d3c', '#e31a1c', '#800026'], breaks: [0, 20, 40, 60, 80, 100], source: '由 MYD11A1.061 有效网格计算' },
   q3_coverage_pct: { label: 'Q3 观测覆盖率', short_label: '观测覆盖', unit: '%', digits: 1, palette: ['#eef4f8', '#c9dfea', '#83bed4', '#438ead', '#205b7a'], breaks: [0, 20, 40, 60, 80, 100], source: '独立复核程序 v3' },
   tree_cover_pct: { label: '树木覆盖比例', short_label: '树木覆盖', unit: '%', digits: 1, palette: ['#f0f4df', '#d5e6b5', '#a5cb78', '#6fa347', '#3e6f2d'], breaks: [0, 10, 25, 45, 70, 100], source: 'ESA WorldCover 2020' },
@@ -100,15 +100,30 @@ function enrichDerivedLayers(collection) {
   const deltaSummary = summary(
     derivedCells.map((feature) => feature.properties.q3_lst_delta_median_c)
   );
+  const agePercentileSummary = summary(
+    derivedCells.map((feature) => feature.properties.age65_percentile)
+  );
+  const supportSummary = summary(
+    derivedCells.map((feature) => feature.properties.age65_population_support)
+  );
+  const lstPercentileSummary = summary(
+    derivedCells.map((feature) => feature.properties.q3_lst_percentile)
+  );
   const maxDelta = Math.max(
     Math.abs(deltaSummary.min || 0),
     Math.abs(deltaSummary.max || 0),
     1
   );
+  // 为零值保留窄的中性色带，避免将接近全县中位数的网格误显示为冷或热。
+  const zeroBand = Math.min(
+    maxDelta / 4,
+    Math.max(0.05, maxDelta / 100)
+  );
   const deltaBreaks = [
     -maxDelta,
     -maxDelta / 2,
-    0,
+    -zeroBand,
+    zeroBand,
     maxDelta / 2,
     maxDelta,
   ].map((value) => Number(value.toFixed(4)));
@@ -117,22 +132,22 @@ function enrichDerivedLayers(collection) {
   const definitions = {
     age65_percentile: {
       ...FALLBACK_LAYERS.age65_percentile,
-      min: ageSummary.sorted.length ? 1 : null,
-      median: 50,
-      max: ageSummary.sorted.length ? 100 : null,
-      valid_cells: ageSummary.sorted.length,
-      missing_cells: derivedCells.length - ageSummary.sorted.length,
+      min: agePercentileSummary.min,
+      median: agePercentileSummary.median,
+      max: agePercentileSummary.max,
+      valid_cells: agePercentileSummary.sorted.length,
+      missing_cells: derivedCells.length - agePercentileSummary.sorted.length,
       definition: '把有正人口支持网格的模型化 65+ 人口比例放入全县有效网格分布，使用并列值上界计算相对百分位。',
       metric_key: 'gis_age65_share',
       details_anchor: 'gis-age65-share',
     },
     age65_population_support: {
       ...FALLBACK_LAYERS.age65_population_support,
-      min: 0,
-      median: 1,
-      max: 1,
-      valid_cells: derivedCells.filter((feature) => isFiniteNumber(feature.properties.age65_population_support)).length,
-      missing_cells: derivedCells.filter((feature) => !isFiniteNumber(feature.properties.age65_population_support)).length,
+      min: supportSummary.min,
+      median: supportSummary.median,
+      max: supportSummary.max,
+      valid_cells: supportSummary.sorted.length,
+      missing_cells: derivedCells.length - supportSummary.sorted.length,
       definition: '仅区分该网格是否具有正的模型化人口支持。无正人口支持不等于 65+ 人口比例为 0。',
       metric_key: 'gis_age65_share',
       details_anchor: 'gis-age65-share',
@@ -140,6 +155,8 @@ function enrichDerivedLayers(collection) {
     q3_lst_delta_median_c: {
       ...FALLBACK_LAYERS.q3_lst_delta_median_c,
       breaks: deltaBreaks,
+      neutral_range: [-zeroBand, zeroBand],
+      neutral_color_index: 2,
       min: deltaSummary.min,
       median: deltaSummary.median,
       max: deltaSummary.max,
@@ -151,11 +168,11 @@ function enrichDerivedLayers(collection) {
     },
     q3_lst_percentile: {
       ...FALLBACK_LAYERS.q3_lst_percentile,
-      min: lstSummary.sorted.length ? 1 : null,
-      median: 50,
-      max: lstSummary.sorted.length ? 100 : null,
-      valid_cells: lstSummary.sorted.length,
-      missing_cells: derivedCells.length - lstSummary.sorted.length,
+      min: lstPercentileSummary.min,
+      median: lstPercentileSummary.median,
+      max: lstPercentileSummary.max,
+      valid_cells: lstPercentileSummary.sorted.length,
+      missing_cells: derivedCells.length - lstPercentileSummary.sorted.length,
       definition: '把卫星晴空地表温度均值放入全县有效网格分布，使用并列值上界计算相对百分位。',
       metric_key: 'gis_lst_mean',
       details_anchor: 'gis-lst-mean',
@@ -225,6 +242,20 @@ function colorForValue(value, spec) {
   if (!isFiniteNumber(value)) return '#ddd8d3';
   const breaks = spec.breaks || [];
   const palette = spec.palette || [];
+  const neutralRange = spec.neutral_range;
+  const neutralColorIndex = Number(spec.neutral_color_index);
+  if (
+    Array.isArray(neutralRange)
+    && neutralRange.length === 2
+    && neutralRange.every(isFiniteNumber)
+    && Number.isInteger(neutralColorIndex)
+    && neutralColorIndex >= 0
+    && neutralColorIndex < palette.length
+    && value >= neutralRange[0]
+    && value <= neutralRange[1]
+  ) {
+    return palette[neutralColorIndex];
+  }
   for (let index = 1; index < breaks.length; index += 1) {
     if (value <= breaks[index]) return palette[Math.min(index - 1, palette.length - 1)];
   }

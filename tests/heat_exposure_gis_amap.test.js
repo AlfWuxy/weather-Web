@@ -47,6 +47,26 @@ function loadHitIndex() {
   return Function(source)();
 }
 
+function loadColorForValue() {
+  const source = [
+    functionSource('isFiniteNumber'),
+    functionSource('colorForValue'),
+    'return {colorForValue};',
+  ].join('\n');
+  return Function(source)();
+}
+
+function loadPercentileText() {
+  const source = [
+    functionSource('isFiniteNumber'),
+    functionSource('upperBound'),
+    "const state = {sortedValues: new Map([['age65_share_pct', [10, 20, 30]]])};",
+    functionSource('percentileText'),
+    'return {percentileText};',
+  ].join('\n');
+  return Function(source)();
+}
+
 test('高德显示转换只生成 GCJ-02 副本，不修改科研 WGS84 几何', () => {
   const { wgs84ToGcj02, displayShape } = loadDisplayTransform();
   const feature = {
@@ -119,4 +139,37 @@ test('地图手势结束后才重绘，命中索引不会逐次扫描全部网�
   assert.doesNotMatch(functionSource('renderMapCanvas'), /hoverIndex/);
   assert.doesNotMatch(script, /map\.on\('mapmove'/);
   assert.doesNotMatch(script, /map\.on\('zoomchange'/);
+});
+
+test('温差图层的对称中性色带包含正负边界值', () => {
+  const { colorForValue } = loadColorForValue();
+  const spec = {
+    breaks: [-10, -5, -0.1, 0.1, 5, 10],
+    palette: ['#2c7bb6', '#abd9e9', '#f7f7f7', '#fdae61', '#d7191c'],
+    neutral_range: [-0.1, 0.1],
+    neutral_color_index: 2,
+  };
+
+  for (const value of [-0.1, 0, 0.1]) {
+    assert.equal(colorForValue(value, spec), '#f7f7f7');
+  }
+  assert.equal(colorForValue(-0.1001, spec), '#abd9e9');
+  assert.equal(colorForValue(0.1001, spec), '#fdae61');
+});
+
+test('人口支持状态不显示虚假的全县百分位', () => {
+  const { percentileText } = loadPercentileText();
+
+  assert.equal(
+    percentileText('age65_population_support', 1),
+    '人口支持状态不计算百分位'
+  );
+  assert.equal(
+    percentileText('age65_population_support', null),
+    '该图层在本格无有效值'
+  );
+  assert.equal(
+    percentileText('age65_share_pct', 20),
+    '位于全县有效网格第 67 百分位'
+  );
 });
