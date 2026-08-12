@@ -320,10 +320,17 @@ def profile():
         if form_id == 'password':
             old_password = request.form.get('old_password', '')
             new_password = request.form.get('new_password')
+            confirm_password = request.form.get('confirm_password', '')
             if not old_password:
                 flash('请输入当前密码', 'error')
                 return redirect(url_for('user.profile'))
             if new_password:
+                if not confirm_password:
+                    flash('请再次输入新密码', 'error')
+                    return redirect(url_for('user.profile'))
+                if new_password != confirm_password:
+                    flash('两次输入的新密码不一致', 'error')
+                    return redirect(url_for('user.profile'))
                 valid, result = validate_password(new_password)
                 if not valid:
                     flash(result, 'error')

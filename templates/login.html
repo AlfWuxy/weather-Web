@@ -71,23 +71,22 @@
 
                 <div class="card auth-form-card">
                     <div class="card-body p-4">
-                        <form method="POST" action="{{ url_for('public.login') }}">
+                        <form method="POST" action="{{ url_for('public.login') }}" novalidate>
                             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                             {% if next %}<input type="hidden" name="next" value="{{ next }}">{% endif %}
 
                             <div class="mb-3">
-                                <label for="username" class="form-label">用户名或已验证手机号</label>
-                                <input type="text" class="form-control" id="username" name="username" placeholder="请输入用户名" autocomplete="username" required autofocus>
-                                <small class="text-muted">手机号尚未接入短信验证，保存后仍需使用用户名登录。</small>
+                                <label for="username" class="form-label">用户名</label>
+                                <input type="text" class="form-control" id="username" name="username" value="{{ login_form.get('username', '') }}" placeholder="请输入用户名" autocomplete="username" autofocus>
                             </div>
                             <div class="mb-3">
                                 <label for="password" class="form-label">密码</label>
-                                <input type="password" class="form-control" id="password" name="password" placeholder="请输入密码" required>
+                                <input type="password" class="form-control" id="password" name="password" placeholder="请输入密码" autocomplete="current-password">
                             </div>
 
                             <div class="mb-3 d-flex justify-content-between align-items-center">
                                 <div class="form-check">
-                                    <input type="checkbox" class="form-check-input" id="remember" name="remember" value="1">
+                                    <input type="checkbox" class="form-check-input" id="remember" name="remember" value="1" {% if login_form.get('remember') %}checked{% endif %}>
                                     <label class="form-check-label" for="remember" style="font-size:.9rem;">记住我(30 天)</label>
                                 </div>
                             </div>

@@ -9,14 +9,16 @@ from flask import abort, current_app, has_app_context, jsonify, request, session
 
 logger = logging.getLogger(__name__)
 from flask_login import current_user
-from flask_limiter.util import get_remote_address
 
 
 def rate_limit_key():
-    """按用户或IP进行限流"""
-    if current_user.is_authenticated:
-        return str(getattr(current_user, 'id', 'anonymous'))
-    return get_remote_address()
+    """正式账号按账号限流，匿名与游客按临时客户端摘要限流。"""
+    if (
+        current_user.is_authenticated
+        and not bool(getattr(current_user, 'is_guest', False))
+    ):
+        return f'user:{getattr(current_user, "id", "anonymous")}'
+    return client_rate_limit_key()
 
 
 def generate_csrf_token():
@@ -51,6 +53,21 @@ def csrf_failure_response():
 
 
 _AUTO_PEPPER: str | None = None  # 进程级自动生成的 pepper 回退
+_RATE_LIMIT_CLIENT_SECRET = secrets.token_bytes(32)
+
+
+def client_rate_limit_key():
+    """按受信代理边界解析客户端，并生成只在本进程有效的限流摘要。"""
+    # 延迟导入避免 core.audit 在模块加载时与本模块形成循环依赖。
+    from core.audit import _get_client_ip
+
+    client_ip = _get_client_ip() or request.remote_addr or 'unknown'
+    digest = hashlib.blake2s(
+        str(client_ip).encode('utf-8'),
+        key=_RATE_LIMIT_CLIENT_SECRET,
+        digest_size=20,
+    ).hexdigest()
+    return f'client:{digest}'
 
 
 def _pair_token_pepper():
