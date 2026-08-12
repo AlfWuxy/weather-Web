@@ -39,6 +39,53 @@ def _login_as(client, user_id, csrf_token='test-csrf-token'):
         session['_csrf_token'] = csrf_token
 
 
+def _dashboard_snapshot(current=None, forecast=None, *, risk_available=True):
+    """构造 dashboard 契约使用的县级持久化快照。"""
+    weather = current or {
+        'temperature': 27.5,
+        'temperature_max': 30,
+        'temperature_min': 22,
+        'humidity': 64,
+        'pressure': 1008,
+        'weather_condition': '多云',
+        'wind_speed': 2.5,
+        'aqi': 42,
+        'is_mock': False,
+        'data_source': 'QWeather',
+    }
+    risk = {
+        'available': risk_available,
+        'level': '低风险' if risk_available else '未知',
+        'score': 28 if risk_available else None,
+        'calculation': {
+            'heat_result': {
+                'risk_level': 'low',
+                'risk_score': 28,
+                'heat_index': 28,
+                'night_min': weather.get('temperature_min'),
+                'consecutive_hot_days': 0,
+            },
+        } if risk_available else {},
+    }
+    return {
+        'snapshot_id': '87654321-1234-5678-1234-567812345678',
+        'fetched_at': '2026-08-12T01:02:03+00:00',
+        'expires_at': '2026-08-12T01:32:03+00:00',
+        'available': True,
+        'stale': False,
+        'current_stale': False,
+        'forecast_stale': False,
+        'warnings_stale': False,
+        'risk_stale': not risk_available,
+        'location': {'name': '都昌县', 'code': '116.20,29.27'},
+        'current': weather,
+        'forecast': forecast or [],
+        'risk': risk,
+        'actions': [{'title': '日常补水', 'detail': '少量多次喝水'}] if risk_available else [],
+        'source_status': {},
+    }
+
+
 def test_dashboard_renders_temperature_and_registered_metric_widgets(client, db_session, monkeypatch):
     from core.db_models import FamilyMember, FamilyMemberProfile, User
 
@@ -61,25 +108,8 @@ def test_dashboard_renders_temperature_and_registered_metric_widgets(client, db_
     db_session.commit()
     _login_as(client, user.id)
     monkeypatch.setattr(
-        'services.user.dashboard_service.get_weather_with_cache',
-        lambda location: ({
-            'temperature': 27.5,
-            'temperature_max': 30,
-            'temperature_min': 22,
-            'humidity': 64,
-            'pressure': 1008,
-            'weather_condition': '多云',
-            'wind_speed': 2.5,
-            'aqi': 42,
-            'is_mock': False,
-            'data_source': 'QWeather',
-        }, False),
-        raising=False,
-    )
-    monkeypatch.setattr(
-        'services.user.dashboard_service.get_qweather_forecast_with_cache',
-        lambda location, days=7: ([], False, {'error': 'qweather_unavailable'}),
-        raising=False,
+        'services.user.dashboard_service.get_bootstrap_payload',
+        lambda: _dashboard_snapshot(),
     )
 
     response = client.get('/dashboard')
@@ -93,7 +123,126 @@ def test_dashboard_renders_temperature_and_registered_metric_widgets(client, db_
     assert '橙线 = 当前登记值定位' in body
 
 
-def test_dashboard_forecast_uses_qweather_cards(client, db_session, monkeypatch):
+def test_dashboard_uses_one_persisted_snapshot_without_cache_or_weather_write(
+    client,
+    db_session,
+    monkeypatch,
+):
+    """正式快照存在时，天气、风险和页面编号必须来自同一份只读记录。"""
+    from core.db_models import User, WeatherData
+
+    user = User(username='dashboard_snapshot_user', role='user', community='都昌')
+    user.set_password('testpass')
+    db_session.add(user)
+    db_session.commit()
+    _login_as(client, user.id)
+    snapshot = {
+        'snapshot_id': '12345678-1234-5678-1234-567812345678',
+        'fetched_at': '2026-08-12T01:02:03+00:00',
+        'expires_at': '2026-08-12T01:32:03+00:00',
+        'available': True,
+        'stale': False,
+        'current_stale': False,
+        'forecast_stale': False,
+        'warnings_stale': False,
+        'risk_stale': False,
+        'location': {'name': '都昌县', 'code': '116.20,29.27'},
+        'current': {
+            'temperature': 31.25,
+            'temperature_max': 35,
+            'temperature_min': 25,
+            'humidity': 66,
+            'pressure': 1005,
+            'weather_condition': '晴',
+            'wind_speed': 2,
+            'aqi': 40,
+            'data_source': 'QWeather',
+            'is_mock': False,
+        },
+        'forecast': [],
+        'risk': {
+            'available': True,
+            'level': '中风险',
+            'score': 66,
+            'calculation': {
+                'heat_result': {
+                    'risk_level': 'medium',
+                    'risk_score': 66,
+                    'heat_index': 35,
+                    'night_min': 25,
+                    'consecutive_hot_days': 1,
+                },
+            },
+        },
+        'actions': [{'title': '及时补水', 'detail': '少量多次喝水'}],
+        'source_status': {'current': {'available': True, 'stale': False}},
+    }
+    monkeypatch.setattr(
+        'services.user.dashboard_service.get_bootstrap_payload',
+        lambda: snapshot,
+    )
+    from services.user import dashboard_service
+    assert not hasattr(dashboard_service, 'get_weather_with_cache')
+    assert not hasattr(dashboard_service, 'get_qweather_forecast_with_cache')
+
+    response = client.get('/dashboard')
+
+    assert response.status_code == 200
+    body = response.get_data(as_text=True)
+    assert 'data-weather-snapshot-id="12345678-1234-5678-1234-567812345678"' in body
+    assert '2026-08-12 09:02' in body
+    assert '<span>31.25</span>' in body
+    assert '<span>66</span>' in body
+    assert 'data-target="31.25"' not in body
+    assert 'data-target="66"' not in body
+    assert '中风险' in body
+    assert WeatherData.query.count() == 0
+
+
+def test_dashboard_without_snapshot_fails_closed_without_weather_cache(
+    client,
+    db_session,
+    monkeypatch,
+):
+    """快照缺失或读取失败时，登录页不能私自切换到另一套天气来源。"""
+    from core.db_models import User, WeatherData
+
+    user = User(username='dashboard_missing_snapshot', role='user', community='都昌')
+    user.set_password('testpass')
+    db_session.add(user)
+    db_session.commit()
+    _login_as(client, user.id)
+    monkeypatch.setattr(
+        'services.user.dashboard_service.get_bootstrap_payload',
+        lambda: {
+            'snapshot_id': None,
+            'current_stale': True,
+            'risk_stale': True,
+            'forecast_stale': True,
+            'current': {'is_mock': True},
+            'risk': {'available': False},
+            'forecast': [],
+            'source_status': {'status': 'missing'},
+        },
+    )
+    monkeypatch.setattr(
+        'services.user.dashboard_service.get_weather_with_cache',
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError('无快照时也不得切换到另一份天气缓存')
+        ),
+        raising=False,
+    )
+
+    response = client.get('/dashboard')
+
+    assert response.status_code == 200
+    body = response.get_data(as_text=True)
+    assert '天气正在更新，风险等级暂不显示' in body
+    assert 'data-weather-snapshot-id=' not in body
+    assert WeatherData.query.count() == 0
+
+
+def test_dashboard_forecast_uses_persisted_snapshot_cards(client, db_session, monkeypatch):
     from core.db_models import User
 
     user = User(username='dashboard_qweather_user', role='user', community='都昌')
@@ -118,62 +267,26 @@ def test_dashboard_forecast_uses_qweather_cards(client, db_session, monkeypatch)
         })
     qweather_days[1]['temperature_max'] = 26
     qweather_days[1]['temperature_min'] = 18
+    qweather_days[1]['risk_level'] = '中风险'
+    qweather_days[1]['risk_score'] = 43
 
-    captured = {}
-
-    def fake_qweather(location, days=7):
-        captured['location'] = location
-        captured['days'] = days
-        return qweather_days, False, {'source': 'QWeather'}
-
-    class FakeForecastService:
-        def generate_7day_forecast(self, forecast_temps, start_date=None, context=None):
-            captured['start_date'] = start_date
-            captured['context'] = context
-            forecasts = []
-            for idx, _entry in enumerate(forecast_temps):
-                day = start + timedelta(days=idx)
-                forecasts.append({
-                    'date': day.strftime('%Y-%m-%d'),
-                    'probability_high_visits': 10 + idx,
-                    'composite_exposure': {'score': 18 + idx, 'level': '低'},
-                })
-            return forecasts, {'recommendations': []}
-
+    for idx, item in enumerate(qweather_days):
+        item.setdefault('risk_score', 18 + idx)
+        item.setdefault('risk_level', '低风险')
+        item['risk_available'] = True
     monkeypatch.setattr(
-        'services.user.dashboard_service.get_qweather_forecast_with_cache',
-        fake_qweather,
-        raising=False,
+        'services.user.dashboard_service.get_bootstrap_payload',
+        lambda: _dashboard_snapshot(forecast=qweather_days),
     )
-    monkeypatch.setattr(
-        'services.user.dashboard_service.get_weather_with_cache',
-        lambda _location: ({
-            'temperature': 27,
-            'temperature_max': 30,
-            'temperature_min': 22,
-            'humidity': 64,
-            'pm25': 18,
-            'aqi': 42,
-            'data_source': 'QWeather',
-            'is_mock': False,
-        }, False),
-        raising=False,
-    )
-    monkeypatch.setattr(
-        'services.user.dashboard_service.get_forecast_service',
-        lambda: FakeForecastService(),
-        raising=False,
-    )
+    from services.user import dashboard_service
+    assert not hasattr(dashboard_service, 'get_qweather_forecast_with_cache')
 
     response = client.get('/dashboard')
 
     assert response.status_code == 200
     body = response.get_data(as_text=True)
-    assert captured['location'] == '都昌'
-    assert captured['days'] == 7
-    assert captured['start_date'] == start
-    assert captured['context'] == {'pm25': 18.0, 'aqi': 42.0}
     assert '26° / 18°' in body
+    assert '中风险' in body
     assert '演示风险' not in body
     assert '34°/26°' not in body
 
@@ -202,7 +315,7 @@ def test_dashboard_forecast_failure_does_not_render_demo_heat(client, db_session
     assert '34°/26°' not in body
 
 
-def test_dashboard_forecast_generation_failure_marks_risk_unknown(client, db_session, monkeypatch):
+def test_dashboard_forecast_snapshot_marks_unavailable_risk_unknown(client, db_session, monkeypatch):
     from core.db_models import User
 
     user = User(username='dashboard_forecast_unknown_user', role='user', community='都昌')
@@ -226,19 +339,11 @@ def test_dashboard_forecast_generation_failure_marks_risk_unknown(client, db_ses
             'is_mock': False,
         })
 
-    class FailingForecastService:
-        def generate_7day_forecast(self, forecast_temps, start_date=None, context=None):
-            raise RuntimeError('forecast unavailable')
-
+    for item in qweather_days:
+        item.update(risk_available=False, risk_score=None, risk_level='未知')
     monkeypatch.setattr(
-        'services.user.dashboard_service.get_qweather_forecast_with_cache',
-        lambda location, days=7: (qweather_days, False, {'source': 'QWeather'}),
-        raising=False,
-    )
-    monkeypatch.setattr(
-        'services.user.dashboard_service.get_forecast_service',
-        lambda: FailingForecastService(),
-        raising=False,
+        'services.user.dashboard_service.get_bootstrap_payload',
+        lambda: _dashboard_snapshot(forecast=qweather_days),
     )
 
     response = client.get('/dashboard')

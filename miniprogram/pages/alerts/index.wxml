@@ -11,7 +11,7 @@
   <block wx:if="{{current}}">
     <freshness-bar updated-text="{{freshness.updatedText}}" stale="{{freshness.stale}}" source="{{freshness.source}}" refresh-deferred="{{freshness.refreshDeferred}}" refresh-started="{{freshness.refreshStarted}}" />
     <view class="card weather-strip">
-      <view><view class="small muted">{{freshness.stale ? '较早观测' : '当前'}}</view><view class="strip-value">{{current.temperatureText}}</view></view>
+      <view><view class="small muted">{{current.stale ? '较早观测' : '当前'}}</view><view class="strip-value">{{current.temperatureText}}</view></view>
       <view><view class="small muted">最高</view><view class="strip-value">{{current.highText}}</view></view>
       <view><view class="small muted">最低</view><view class="strip-value">{{current.lowText}}</view></view>
     </view>

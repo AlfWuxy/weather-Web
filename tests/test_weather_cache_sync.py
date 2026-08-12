@@ -644,3 +644,112 @@ def test_snapshot_expiry_uses_earliest_required_source(app, db_session):
     assert payload["expires_at"] == (forecast_time + timedelta(minutes=30)).isoformat()
     assert payload["source_status"]["forecast"]["fetched_at"] == forecast_time.isoformat()
     assert payload["source_status"]["budget_guard"] == "enabled"
+
+
+def test_stale_forecast_does_not_hide_fresh_current_risk(app, db_session):
+    """总快照过期时，各页面仍应按自己依赖的来源判断可用性。"""
+    from core.time_utils import utcnow
+    from services.miniprogram_service import persist_snapshot, snapshot_payload
+
+    cycle_time = utcnow().replace(microsecond=0)
+    forecast_time = cycle_time - timedelta(minutes=31)
+    current = {
+        "temperature": 35,
+        "temperature_max": 38,
+        "temperature_min": 27,
+        "humidity": 70,
+        "data_source": "QWeather",
+        "is_mock": False,
+    }
+    forecast = [{
+        "date": cycle_time.date().isoformat(),
+        "temperature_max": 38,
+        "temperature_min": 27,
+        "temperature_mean": 32.5,
+        "humidity": 70,
+        "data_source": "QWeather",
+        "is_mock": False,
+    }]
+    with app.app_context():
+        record = persist_snapshot(
+            current,
+            forecast,
+            [],
+            fetched_at=cycle_time,
+            forecast_meta={"source": "QWeather"},
+            warning_status={"available": True, "status": "ok"},
+            source_timing={
+                "current": {
+                    "fetched_at": cycle_time,
+                    "expires_at": cycle_time + timedelta(minutes=30),
+                },
+                "forecast": {
+                    "fetched_at": forecast_time,
+                    "expires_at": forecast_time + timedelta(minutes=30),
+                },
+                "warnings": {
+                    "fetched_at": cycle_time,
+                    "expires_at": cycle_time + timedelta(minutes=30),
+                },
+            },
+        )
+        payload = snapshot_payload(record, now=cycle_time)
+
+    assert payload["stale"] is True
+    assert payload["forecast_stale"] is True
+    assert payload["current_stale"] is False
+    assert payload["warnings_stale"] is False
+    assert payload["risk_stale"] is False
+    assert payload["risk"]["available"] is True
+    assert payload["source_status"]["forecast"]["stale"] is True
+    assert payload["source_status"]["risk"]["stale"] is False
+
+
+def test_stale_warnings_do_not_feed_family_reminder(app, db_session, monkeypatch):
+    """预警来源过期时，提醒只能继续使用新鲜的当前天气。"""
+    from core.time_utils import utcnow
+    from services import miniprogram_service
+
+    cycle_time = utcnow().replace(microsecond=0)
+    captured = {}
+
+    def fake_reminder(current, warnings, **_kwargs):
+        captured["warnings"] = warnings
+        return {"date": cycle_time.date().isoformat(), "message": "安全提醒"}
+
+    monkeypatch.setattr(
+        miniprogram_service,
+        "build_public_family_reminder",
+        fake_reminder,
+    )
+    with app.app_context():
+        record = miniprogram_service.persist_snapshot(
+            {
+                "temperature": 35,
+                "temperature_max": 38,
+                "temperature_min": 27,
+                "humidity": 70,
+                "data_source": "QWeather",
+                "is_mock": False,
+            },
+            [],
+            [{"title": "旧高温预警"}],
+            fetched_at=cycle_time,
+            warning_status={"available": True, "status": "ok"},
+            source_timing={
+                "current": {
+                    "fetched_at": cycle_time,
+                    "expires_at": cycle_time + timedelta(minutes=30),
+                },
+                "warnings": {
+                    "fetched_at": cycle_time - timedelta(minutes=31),
+                    "expires_at": cycle_time - timedelta(minutes=1),
+                },
+            },
+        )
+        captured.clear()
+        payload = miniprogram_service.snapshot_payload(record, now=cycle_time)
+
+    assert payload["warnings_stale"] is True
+    assert payload["risk_stale"] is False
+    assert captured["warnings"] == []

@@ -79,6 +79,53 @@ test('更新时间优先采用服务端真实抓取时间', () => {
   assert.match(view.updatedText, /08:00/);
 });
 
+test('页面只按自身依赖来源判断快照新鲜度', () => {
+  const now = Date.parse('2026-07-17T08:00:00Z');
+  const snapshot = normalizeBootstrap({
+    stale: true,
+    current_stale: false,
+    forecast_stale: true,
+    warnings_stale: false,
+    risk_stale: false,
+    current: { temperature: 35 },
+    risk: { available: true, score: 28, level: '低风险' },
+    source_status: {
+      current: { available: true, stale: false, expires_at: '2026-07-17T08:30:00Z' },
+      forecast: { available: true, stale: true, expires_at: '2026-07-17T07:59:00Z' },
+      warnings: { available: true, stale: false, expires_at: '2026-07-17T08:30:00Z' },
+      risk: { available: true, stale: false, expires_at: '2026-07-17T08:30:00Z' },
+    },
+  });
+
+  assert.equal(freshnessView({ stale: true }, snapshot, 'risk', now).stale, false);
+  assert.equal(freshnessView({ stale: true }, snapshot, 'forecast', now).stale, true);
+  assert.equal(freshnessView({ stale: true }, snapshot, 'warnings', now).stale, false);
+  assert.equal(
+    freshnessView({ stale: true }, snapshot, 'risk', Date.parse('2026-07-17T08:31:00Z')).stale,
+    true,
+  );
+  assert.equal(snapshot.current.available, true);
+  assert.equal(snapshot.risk.available, true);
+
+  const warningsExpired = normalizeBootstrap({
+    warnings_stale: true,
+    warnings: [{ title: '旧高温预警' }],
+    source_status: {
+      warnings: { available: true, stale: true },
+    },
+  });
+  assert.deepEqual(warningsExpired.warnings, []);
+  assert.equal(warningsExpired.warningsSourceAvailable, false);
+  assert.equal(warningsExpired.warningsStatusText, '来源暂不可用');
+
+  const legacyWithoutExpiry = normalizeBootstrap({
+    risk_stale: false,
+    risk: { available: true, score: 28, level: '低风险' },
+    source_status: { risk: { available: true, stale: false } },
+  });
+  assert.equal(freshnessView({ stale: true }, legacyWithoutExpiry, 'risk', now).stale, true);
+});
+
 test('都昌县时间展示不受运行环境时区影响', () => {
   assert.equal(formatDateTime('2026-07-17T00:00:00Z'), '07月17日 08:00');
   assert.equal(formatDateTime('2026-07-17 08:00:00'), '07月17日 08:00');

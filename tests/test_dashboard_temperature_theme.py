@@ -75,10 +75,12 @@ def test_dashboard_renders_weather_alert_real_fields_with_local_date(
     monkeypatch.setattr(
         'services.user.dashboard_service.get_weather_with_cache',
         lambda _location: ({'data_source': 'Demo', 'is_mock': True}, False),
+        raising=False,
     )
     monkeypatch.setattr(
         'services.user.dashboard_service.get_qweather_forecast_with_cache',
         lambda _location, days=7: ([], False, {'error': 'qweather_unavailable'}),
+        raising=False,
     )
 
     response = authenticated_client.get('/dashboard')

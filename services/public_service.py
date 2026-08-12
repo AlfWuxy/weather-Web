@@ -58,7 +58,7 @@ from services.community_daily_service import (
     refresh_community_daily_best_effort as _refresh_community_daily_best_effort,
 )
 from services.heat_action_service import HeatActionService
-from services.miniprogram_service import get_bootstrap_payload
+from services.miniprogram_service import get_bootstrap_payload, snapshot_display_time
 from services.cross_platform_identity import (
     AccountLinkError,
     create_account_link_challenge,
@@ -1750,6 +1750,12 @@ def render_public_risk_page(location):
         actions=snapshot.get('actions') or [],
         risk_reasons=risk_reasons,
         family_reminder=snapshot.get('family_reminder'),
+        weather_snapshot_id=snapshot.get('snapshot_id'),
+        weather_snapshot_fetched_at=snapshot.get('fetched_at'),
+        weather_snapshot_display_time=snapshot_display_time(snapshot.get('fetched_at')),
+        weather_snapshot_expires_at=snapshot.get('expires_at'),
+        weather_risk_stale=snapshot.get('risk_stale', True),
+        weather_source_status=snapshot.get('source_status') or {},
     )
 
 

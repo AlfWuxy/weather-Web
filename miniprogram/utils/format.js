@@ -271,13 +271,38 @@ function warningStatusText(warnings, sourceAvailable) {
 
 function normalizeBootstrap(payload) {
   const data = payload && typeof payload === 'object' ? payload : {};
+  const sourceStatus = data.source_status && typeof data.source_status === 'object'
+    ? data.source_status
+    : {};
+  const currentState = sourceStatus.current || sourceStatus.weather || {};
+  const forecastState = sourceStatus.forecast || {};
+  const warningsState = sourceStatus.warnings || {};
+  const riskState = sourceStatus.risk || {};
   const currentSource = data.current && typeof data.current === 'object' ? data.current : {};
   const riskSource = data.risk && typeof data.risk === 'object' ? data.risk : {};
   const temperature = finiteNumber(firstDefined(currentSource, ['temperature', 'temp', 'temp_now', 'temperature_current'], null));
   const high = finiteNumber(firstDefined(currentSource, ['temperature_max', 'temp_max', 'tempMax', 'high'], null));
   const low = finiteNumber(firstDefined(currentSource, ['temperature_min', 'temp_min', 'tempMin', 'low'], null));
   const riskScore = finiteNumber(firstDefined(riskSource, ['score', 'risk_score', 'value', 'index'], null));
-  const riskAvailable = data.available !== false && riskSource.available !== false && (riskScore !== null || Boolean(riskSource.level || riskSource.label));
+  const currentStale = Boolean(data.current_stale === true || currentState.stale === true);
+  const forecastStale = Boolean(data.forecast_stale === true || forecastState.stale === true);
+  const warningsStale = Boolean(data.warnings_stale === true || warningsState.stale === true);
+  const riskStale = Boolean(data.risk_stale === true || riskState.stale === true);
+  const componentFreshness = (state, stale, explicitKey) => {
+    const expiresValue = state && (state.expires_at || state.expiresAt);
+    const expiresAt = expiresValue ? Date.parse(String(expiresValue)) : NaN;
+    return {
+      stale,
+      // 只有服务端已判定过期，或有可验证的过期时间时，组件状态才能覆盖旧全局合同。
+      known: stale || Number.isFinite(expiresAt),
+      expiresAt: Number.isFinite(expiresAt) ? expiresAt : null,
+      explicit: explicitKey in data,
+    };
+  };
+  const riskAvailable = data.available !== false
+    && riskSource.available !== false
+    && !riskStale
+    && (riskScore !== null || Boolean(riskSource.level || riskSource.label));
   const riskLevelValue = firstDefined(riskSource, ['label', 'level', 'risk_level'], '');
   const forecastRaw = Array.isArray(data.forecast)
     ? data.forecast
@@ -288,8 +313,9 @@ function normalizeBootstrap(payload) {
   const actionsRaw = Array.isArray(data.actions)
     ? data.actions
     : (Array.isArray(data.actions && data.actions.items) ? data.actions.items : []);
-  const warnings = warningsRaw.map(normalizeWarning);
-  const warningsSourceAvailable = warningSourceAvailable(data.source_status);
+  // 过期预警不能继续以“当前有效”展示，首页与预警页共用这个安全结果。
+  const warnings = warningsStale ? [] : warningsRaw.map(normalizeWarning);
+  const warningsSourceAvailable = !warningsStale && warningSourceAvailable(data.source_status);
   return {
     snapshotId: String(data.snapshot_id || ''),
     location: {
@@ -302,8 +328,19 @@ function normalizeBootstrap(payload) {
     ttlSeconds: finiteNumber(data.ttl_seconds) || 1800,
     available: data.available !== false,
     stale: Boolean(data.stale),
+    currentStale,
+    forecastStale,
+    warningsStale,
+    riskStale,
+    freshness: {
+      current: componentFreshness(currentState, currentStale, 'current_stale'),
+      forecast: componentFreshness(forecastState, forecastStale, 'forecast_stale'),
+      warnings: componentFreshness(warningsState, warningsStale, 'warnings_stale'),
+      risk: componentFreshness(riskState, riskStale, 'risk_stale'),
+    },
     current: {
-      available: data.available !== false && currentSource.available !== false && temperature !== null,
+      available: data.available !== false && currentSource.available !== false && !currentStale && temperature !== null,
+      stale: currentStale,
       temperature,
       temperatureText: formatTemperature(temperature),
       high,
@@ -320,6 +357,7 @@ function normalizeBootstrap(payload) {
     warningsStatusText: warningStatusText(warnings, warningsSourceAvailable),
     risk: {
       available: riskAvailable,
+      stale: riskStale,
       score: riskScore,
       scoreText: riskScore === null ? '待计算' : String(Math.round(riskScore)),
       level: String(riskLevelValue),
@@ -421,13 +459,21 @@ function normalizeCommunity(payload) {
   };
 }
 
-function freshnessView(resultMeta, snapshot) {
+function freshnessView(resultMeta, snapshot, component, nowMs) {
   const meta = resultMeta || {};
   const data = snapshot || {};
   const storedAt = data.fetchedAt || data.generatedAt || meta.storedAt;
+  const componentState = component && data.freshness && data.freshness[component];
+  const currentTime = Number.isFinite(Number(nowMs)) ? Number(nowMs) : Date.now();
+  const stale = componentState && componentState.known
+    ? Boolean(
+      componentState.stale
+      || (Number.isFinite(componentState.expiresAt) && currentTime > componentState.expiresAt)
+    )
+    : Boolean(meta.stale || data.stale);
   return {
     updatedText: formatDateTime(storedAt),
-    stale: Boolean(meta.stale || data.stale),
+    stale,
     source: meta.source || 'unknown',
     refreshDeferred: Boolean(meta.refreshDeferred),
     refreshStarted: Boolean(meta.refreshStarted),
