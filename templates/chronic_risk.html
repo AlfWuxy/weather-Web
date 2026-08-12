@@ -10,7 +10,7 @@
         <p>填写近 7 天血压、血糖和当前状态，结合天气查看今天需要留意的事项。结果只用于日常照护参考。</p>
     </section>
 
-    <form method="POST" action="{{ url_for('tools.chronic_risk') }}" class="yl-section mb-4 yl-fade-up yl-fade-up-d1">
+    <form method="POST" action="{{ url_for('tools.chronic_risk') }}" class="yl-section mb-4 yl-fade-up yl-fade-up-d1" novalidate>
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 
         <div class="row g-3">
@@ -25,11 +25,15 @@
             </div>
             <div class="col-md-4">
                 <label class="form-label">近 7 天最高血压(mmHg)</label>
-                <input type="number" class="form-control" name="sbp" value="{{ form_state.sbp if form_state else '' }}" placeholder="例:142">
+                <input type="text" inputmode="decimal" class="form-control{% if vital_errors and vital_errors.sbp %} is-invalid{% endif %}" name="sbp" value="{{ form_state.sbp if form_state else '' }}" placeholder="例:142" maxlength="20" aria-describedby="sbpHelp{% if vital_errors and vital_errors.sbp %} sbpError{% endif %}">
+                <div class="form-text" id="sbpHelp">可不填；填写时接受 60 至 260 mmHg。</div>
+                {% if vital_errors and vital_errors.sbp %}<div class="invalid-feedback" id="sbpError">{{ vital_errors.sbp }}</div>{% endif %}
             </div>
             <div class="col-md-4">
                 <label class="form-label">近 7 天空腹血糖(mmol/L)</label>
-                <input type="number" step="0.1" class="form-control" name="fbg" value="{{ form_state.fbg if form_state else '' }}" placeholder="例:7.8">
+                <input type="text" inputmode="decimal" class="form-control{% if vital_errors and vital_errors.fbg %} is-invalid{% endif %}" name="fbg" value="{{ form_state.fbg if form_state else '' }}" placeholder="例:7.8" maxlength="20" aria-describedby="fbgHelp{% if vital_errors and vital_errors.fbg %} fbgError{% endif %}">
+                <div class="form-text" id="fbgHelp">可不填；填写时接受 2 至 30 mmol/L。</div>
+                {% if vital_errors and vital_errors.fbg %}<div class="invalid-feedback" id="fbgError">{{ vital_errors.fbg }}</div>{% endif %}
             </div>
             <div class="col-md-4">
                 <label class="form-label">用药依从</label>
@@ -50,8 +54,8 @@
     </form>
 
     {% if risk_error %}
-    <div class="alert alert-warning yl-fade-up yl-fade-up-d2" role="status">
-        <i class="bi bi-cloud-slash me-1"></i>天气正在更新，本次提醒暂未生成。请稍后再试。
+    <div class="alert alert-warning yl-fade-up yl-fade-up-d2" role="alert">
+        <i class="bi bi-exclamation-triangle me-1"></i>{{ risk_error }}
     </div>
     {% endif %}
 

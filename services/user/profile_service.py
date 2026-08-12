@@ -57,6 +57,14 @@ _ACADEMIC_MAPPING_FIELDS = (
     'rr_breakdown',
 )
 
+_HEALTH_SCREENING_OPTIONS = {
+    'outdoor_exposure': {'low', 'medium', 'high'},
+    'symptom_level': {'none', 'mild', 'moderate', 'severe'},
+    'hydration': {'good', 'normal', 'poor'},
+    'medication_adherence': {'good', 'partial', 'poor'},
+    'sleep_quality': {'good', 'fair', 'poor'},
+}
+
 
 def _normalize_academic_profile(raw_profile):
     """把历史评估中的不可信 JSON 形状收敛到模板可安全读取的结构。"""
@@ -112,24 +120,66 @@ def _safe_referrer_or_dashboard():
     return referrer
 
 
+def _render_health_assessment_page(*, form_state=None, form_errors=None, status=200):
+    """渲染健康评估页，并在校验失败时保留已完成选项。"""
+    normalized_form_errors = form_errors or {}
+    first_form_error = next(
+        (name for name in _HEALTH_SCREENING_OPTIONS if name in normalized_form_errors),
+        None,
+    )
+    latest_assessment = None
+    if is_guest_user(current_user):
+        latest_assessment = get_guest_assessment()
+    else:
+        latest_assessment = HealthRiskAssessment.query.filter_by(
+            user_id=current_user.id
+        ).order_by(HealthRiskAssessment.assessment_date.desc()).first()
+    explain_data = {}
+    disease_risks_data = {}
+    if latest_assessment and getattr(latest_assessment, 'explain', None):
+        explain_data = safe_json_loads(latest_assessment.explain, {})
+    if latest_assessment and getattr(latest_assessment, 'disease_risks', None):
+        disease_risks_data = safe_json_loads(latest_assessment.disease_risks, {})
+    if not isinstance(explain_data, dict):
+        explain_data = {}
+    academic_profile = _normalize_academic_profile(
+        explain_data.get('academic_profile')
+    )
+    explain_data = dict(explain_data)
+    explain_data['academic_profile'] = academic_profile
+    if not isinstance(disease_risks_data, dict):
+        disease_risks_data = {}
+
+    return render_template(
+        'health_assessment.html',
+        assessment=latest_assessment,
+        assessment_explain=explain_data,
+        assessment_disease_risks=disease_risks_data,
+        assessment_academic=academic_profile,
+        form_state=form_state or {},
+        form_errors=normalized_form_errors,
+        first_form_error=first_form_error,
+    ), status
+
+
 def health_assessment():
     """健康风险评估"""
     if request.method == 'POST':
-        screening_options = {
-            'outdoor_exposure': {'low', 'medium', 'high'},
-            'symptom_level': {'none', 'mild', 'moderate', 'severe'},
-            'hydration': {'good', 'normal', 'poor'},
-            'medication_adherence': {'good', 'partial', 'poor'},
-            'sleep_quality': {'good', 'fair', 'poor'},
-        }
         screening = {}
-        for name, allowed in screening_options.items():
+        form_errors = {}
+        for name, allowed in _HEALTH_SCREENING_OPTIONS.items():
             value = sanitize_input(request.form.get(name), max_length=20)
             value = value.strip().lower() if isinstance(value, str) else ''
             if value not in allowed:
-                flash('请完整选择全部 5 项健康筛查后再提交。', 'error')
-                return redirect(url_for('user.health_assessment'))
-            screening[name] = value
+                form_errors[name] = '请选择这一项后再提交。'
+            else:
+                screening[name] = value
+        if form_errors:
+            return _render_health_assessment_page(
+                form_state=screening,
+                form_errors=form_errors,
+                status=422,
+            )
 
         try:
             # 执行风险评估（多路径融合版）
@@ -245,37 +295,7 @@ def health_assessment():
 
         return redirect(url_for('user.health_assessment'))
 
-    latest_assessment = None
-    if is_guest_user(current_user):
-        latest_assessment = get_guest_assessment()
-    else:
-        latest_assessment = HealthRiskAssessment.query.filter_by(
-            user_id=current_user.id
-        ).order_by(HealthRiskAssessment.assessment_date.desc()).first()
-    explain_data = {}
-    disease_risks_data = {}
-    academic_profile = {}
-    if latest_assessment and getattr(latest_assessment, 'explain', None):
-        explain_data = safe_json_loads(latest_assessment.explain, {})
-    if latest_assessment and getattr(latest_assessment, 'disease_risks', None):
-        disease_risks_data = safe_json_loads(latest_assessment.disease_risks, {})
-    if not isinstance(explain_data, dict):
-        explain_data = {}
-    academic_profile = _normalize_academic_profile(
-        explain_data.get('academic_profile')
-    )
-    explain_data = dict(explain_data)
-    explain_data['academic_profile'] = academic_profile
-    if not isinstance(disease_risks_data, dict):
-        disease_risks_data = {}
-
-    return render_template(
-        'health_assessment.html',
-        assessment=latest_assessment,
-        assessment_explain=explain_data,
-        assessment_disease_risks=disease_risks_data,
-        assessment_academic=academic_profile
-    )
+    return _render_health_assessment_page()
 
 
 def profile():
