@@ -97,7 +97,7 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='css/yilao-data-fx.css') }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/yilao-data-fx-extra.css') }}">
 
-    <noscript><style>.page-loader{display:none !important;}[data-motion] .yl-fade-up,[data-motion] .yl-section,[data-motion] .narrative-step,[data-motion] [data-animate-in]{opacity:1 !important;transform:none !important;}</style></noscript>
+    <noscript><style>[data-motion] .yl-fade-up,[data-motion] .yl-section,[data-motion] .narrative-step,[data-motion] [data-animate-in]{opacity:1 !important;transform:none !important;}</style></noscript>
     {% block extra_css %}{% endblock %}
     <link rel="stylesheet" href="{{ url_for('static', filename='css/apple-polish.css') }}">
 </head>
@@ -134,11 +134,6 @@
     {% set nav_care_active = nav_care_primary_active or nav_family_active %}
 
     <a class="visually-hidden-focusable skip-link" href="#main-content">跳到主要内容</a>
-
-    <div class="page-loader" id="pageLoader">
-        <div class="loader-spinner"></div>
-        <div class="loader-text">加载中…</div>
-    </div>
 
     {# ===================== 顶部导航 ===================== #}
     <nav class="navbar sticky-top" aria-label="主导航">
@@ -469,14 +464,6 @@
     {% endif %}
 
     <script>
-        function hideLoader() {
-            const loader = document.getElementById('pageLoader');
-            if (loader) loader.classList.add('hidden');
-        }
-        document.addEventListener('DOMContentLoaded', function() { setTimeout(hideLoader, 100); });
-        window.addEventListener('load', function() { setTimeout(hideLoader, 100); });
-        setTimeout(hideLoader, 3000);
-
         document.addEventListener('DOMContentLoaded', function() {
             document.querySelectorAll('form').forEach(form => {
                 form.addEventListener('submit', function() {
@@ -490,7 +477,6 @@
                 });
             });
         });
-        window.addEventListener('error', function() { hideLoader(); });
     </script>
 
     <script>
