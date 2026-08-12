@@ -72,7 +72,7 @@
             [point.type, point.community].filter(Boolean).join(' · ') || '避暑资源'
         ));
         content.appendChild(textRow(point.address || '地址未标注'));
-        content.appendChild(textRow(point.open_hours || '开放时间未标注'));
+        content.appendChild(textRow(point.open_hours || '开放时间未核验，请出发前确认'));
         return content;
     }
 

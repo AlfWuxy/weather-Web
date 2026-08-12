@@ -19,7 +19,7 @@ from flask import (
     url_for,
 )
 from flask_login import current_user, login_user, logout_user
-from sqlalchemy import or_
+from sqlalchemy import false, or_
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from werkzeug.exceptions import MethodNotAllowed, NotFound
 from werkzeug.routing import RequestRedirect
@@ -27,6 +27,7 @@ from werkzeug.security import check_password_hash, generate_password_hash
 
 from core.constants import GUEST_ID_PREFIX
 from core.extensions import db
+from core.location_resolution import get_user_location_options, resolve_user_location
 from core.security import hash_identifier, hash_pair_token, hash_short_code, rate_limit_key, verify_pair_token
 from core.time_utils import today_local, utcnow, ensure_utc_aware
 from core.weather import (
@@ -1632,20 +1633,62 @@ def render_cooling_resources_page(
 ):
     open_only_flag = parse_bool(open_only, default=False)
     location_query = sanitize_input(request.args.get('location'), max_length=100)
-    weather_location = normalize_location_name(community or location_query or None)
+    raw_location = community or location_query or ''
+    all_resources = CoolingResource.query.filter_by(is_active=True).all()
+    communities = sorted({item.community_code for item in all_resources if item.community_code})
+    resource_types = sorted({item.resource_type for item in all_resources if item.resource_type})
+    location_resolution = resolve_user_location(
+        raw_location,
+        extra_names=communities,
+    )
+    location_error = location_resolution.error if not location_resolution.valid else None
+    weather_location = (
+        location_resolution.value
+        if location_resolution.valid
+        else location_resolution.raw
+    )
     cooling_weather = {}
-    try:
-        cooling_weather, _ = get_weather_with_cache(weather_location)
-    except Exception as exc:
-        logger.warning("避暑资源页天气读取失败，已隐藏室外温度计: %s", exc)
-        cooling_weather = {}
+    snapshot_meta = {}
+    if not location_error:
+        snapshot = get_bootstrap_payload()
+        snapshot_id = snapshot.get('snapshot_id')
+        if snapshot_id:
+            current_stale = snapshot.get('current_stale', snapshot.get('stale', True))
+            risk_stale = snapshot.get('risk_stale', snapshot.get('stale', True))
+            current_snapshot = snapshot.get('current')
+            if (
+                current_stale is False
+                and risk_stale is False
+                and is_qweather_online_weather(current_snapshot)
+            ):
+                cooling_weather = current_snapshot
+            snapshot_location = snapshot.get('location') or {}
+            if isinstance(snapshot_location, dict) and snapshot_location.get('name'):
+                weather_location = str(snapshot_location['name'])
+            snapshot_meta = {
+                'id_short': str(snapshot_id)[:8],
+                'fetched_at': snapshot.get('fetched_at'),
+            }
+        else:
+            # 本地测试和首次启动尚无持久快照时兼容旧缓存；线上已有快照后不混读。
+            try:
+                cooling_weather, _ = get_weather_with_cache(weather_location)
+            except Exception as exc:
+                logger.warning("避暑资源页天气读取失败，已隐藏室外温度计: %s", exc)
+                cooling_weather = {}
     outdoor_temp = None
-    if cooling_weather and not cooling_weather.get('is_mock'):
-        outdoor_temp = cooling_weather.get('temperature')
+    if is_qweather_online_weather(cooling_weather):
+        parsed_temperature = parse_float(cooling_weather.get('temperature'))
+        if parsed_temperature is not None and math.isfinite(parsed_temperature):
+            outdoor_temp = parsed_temperature
 
     query = CoolingResource.query.filter_by(is_active=True)
-    if community:
-        query = query.filter(CoolingResource.community_code == community)
+    if location_error:
+        query = query.filter(false())
+    elif raw_location and location_resolution.value not in {'都昌', '都昌县'}:
+        query = query.filter(
+            CoolingResource.community_code == location_resolution.value
+        )
     if resource_type:
         query = query.filter(CoolingResource.resource_type == resource_type)
     if has_ac_raw not in (None, ''):
@@ -1670,14 +1713,21 @@ def render_cooling_resources_page(
         CoolingResource.community_code,
         CoolingResource.name
     ).all()
-    all_resources = CoolingResource.query.filter_by(is_active=True).all()
+    location_filter_active = bool(
+        raw_location and location_resolution.value not in {'都昌', '都昌县'}
+    )
+    filters_active = bool(
+        location_filter_active
+        or resource_type
+        or has_ac_raw not in (None, '')
+        or is_accessible_raw not in (None, '')
+        or open_only_flag
+    )
     candidate_preview = (
         list(cooling_candidates or [])
-        if not all_resources
+        if not all_resources and not filters_active and not location_error
         else []
     )
-    communities = sorted({item.community_code for item in all_resources if item.community_code})
-    resource_types = sorted({item.resource_type for item in all_resources if item.resource_type})
     grouped = {}
     map_points = []
     for item in resources:
@@ -1694,7 +1744,7 @@ def render_cooling_resources_page(
         total=len(resources),
         communities=communities,
         resource_types=resource_types,
-        selected_community=community or '',
+        selected_community=location_resolution.raw if raw_location else '',
         selected_resource_type=resource_type or '',
         selected_has_ac=has_ac_raw if has_ac_raw is not None else '',
         selected_is_accessible=is_accessible_raw if is_accessible_raw is not None else '',
@@ -1707,7 +1757,12 @@ def render_cooling_resources_page(
         cooling_weather_location=weather_location,
         outdoor_temp=outdoor_temp,
         cooling_candidates=candidate_preview,
+        cooling_location_error=location_error,
+        cooling_location_options=get_user_location_options(extra_names=communities),
+        cooling_snapshot_meta=snapshot_meta,
     ))
+    if location_error:
+        response.status_code = 422
     if not map_points:
         # 没有可计算距离的正式点位时，浏览器不应提供定位能力。
         response.headers['Permissions-Policy'] = (

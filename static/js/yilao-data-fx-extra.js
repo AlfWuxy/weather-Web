@@ -403,7 +403,10 @@
             }
         }
         if (bulb) bulb.dataset.zone = zone;
-        if (valEl) animateNumber(valEl, 0, t, { duration: 1500, decimals: 1 });
+        // 服务端首帧已给出正式数值时，只动画水银柱，避免数字先跳回 0。
+        if (valEl && el.dataset.staticValue !== '1') {
+            animateNumber(valEl, 0, t, { duration: 1500, decimals: 1 });
+        }
 
         if (zone === 'danger') el.classList.add('danger-active');
         else el.classList.remove('danger-active');
