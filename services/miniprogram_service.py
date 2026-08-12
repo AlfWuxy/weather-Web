@@ -231,7 +231,7 @@ def _component_state(
             break
     expires_at = _source_datetime(raw.get("expires_at")) or fallback_expires_at
     fetched_at = _source_datetime(raw.get("fetched_at"))
-    stale = expires_at is None or now > expires_at
+    stale = expires_at is None or now >= expires_at
     available = bool(raw.get("available", fallback_available))
     state = {
         **raw,
@@ -268,7 +268,8 @@ def _payload_source_status(record, current, forecast, warnings, *, now, expires_
         "warnings",
         now=now,
         fallback_expires_at=expires_at,
-        fallback_available=isinstance(warnings, list),
+        # 未知预警来源不能因为 payload 恰好是列表就被视为核验成功。
+        fallback_available=False,
     )
     risk_stale = current_state["stale"] or not current_state["available"]
     risk_state = {
@@ -553,7 +554,7 @@ def snapshot_payload(record=None, *, now=None) -> dict:
     current = safe_json_loads(record.current_json, {})
     forecast = safe_json_loads(record.forecast_json, [])
     warnings = safe_json_loads(record.warnings_json, [])
-    stale = current_time > expires_at
+    stale = current_time >= expires_at
     source_status = _payload_source_status(
         record,
         current,
@@ -570,7 +571,7 @@ def snapshot_payload(record=None, *, now=None) -> dict:
         record,
         current,
         # 过期预警不能继续参与家庭提醒话术，当前天气风险仍可独立使用。
-        [] if warnings_stale else warnings,
+        [] if warnings_stale or not source_status["warnings"]["available"] else warnings,
         available=bool(record.available) and not risk_stale,
         date_value=current_time,
     )

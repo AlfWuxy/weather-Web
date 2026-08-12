@@ -3,7 +3,6 @@
 import json
 import logging
 import math
-from datetime import timedelta
 from types import SimpleNamespace
 
 from flask import current_app, has_app_context, render_template, request
@@ -25,7 +24,6 @@ from core.db_models import (
     HealthRiskAssessment,
     MedicationReminder,
     Notification,
-    WeatherAlert,
 )
 from services.forecast_cards import build_forecast_cards
 from utils.parsers import safe_json_loads
@@ -139,6 +137,31 @@ def _dashboard_alert_card(alert):
         'alert_date_local': local_date.strftime('%Y-%m-%d') if local_date else '日期未标注',
         'location': location,
         'description': alert.description,
+        'is_high': is_high,
+    }
+
+
+def _dashboard_snapshot_alert_card(warning, location):
+    """将同一县级快照中的官方预警转换成首页卡片。"""
+    row = warning if isinstance(warning, dict) else {}
+    level_text = str(row.get('level') or row.get('severity') or '未分级').strip()
+    normalized_level = level_text.lower()
+    is_high = normalized_level in {'high', 'extreme', 'severe', 'moderate', 'red'} or any(
+        marker in level_text for marker in ('高', '严重', '红', '橙')
+    )
+    published_at = str(
+        row.get('start_time')
+        or row.get('issued_at')
+        or row.get('published_at')
+        or ''
+    ).strip()
+    date_text = published_at[:10] if len(published_at) >= 10 else '日期未标注'
+    return {
+        'alert_type': str(row.get('title') or row.get('type') or '天气预警').strip(),
+        'alert_level': level_text,
+        'alert_date_local': date_text,
+        'location': location or '都昌县',
+        'description': str(row.get('text') or row.get('instruction') or '').strip(),
         'is_high': is_high,
     }
 
@@ -295,7 +318,6 @@ def user_dashboard(force_elder=False):
     # 首页和公开风险、小程序共用同一份只读快照；缺少快照时统一安全降级。
     today = today_local()
     user_location = ensure_user_location_valid()
-    alert_locations = _dashboard_alert_locations(user_location)
     snapshot = get_bootstrap_payload()
     snapshot_id = snapshot.get('snapshot_id')
     snapshot_mode = bool(snapshot_id)
@@ -362,11 +384,17 @@ def user_dashboard(force_elder=False):
     if latest_assessment and getattr(latest_assessment, 'explain', None):
         assessment_explain = safe_json_loads(latest_assessment.explain, {})
 
-    # 获取天气预警（最近24小时）
-    alerts = WeatherAlert.query.filter(
-        WeatherAlert.alert_date >= utcnow() - timedelta(days=1),
-        WeatherAlert.location.in_(alert_locations)
-    ).order_by(WeatherAlert.alert_date.desc()).limit(5).all()
+    # 预警与温度、风险共用同一快照；来源未知、不可用或过期时不展示旧预警。
+    warning_state = (snapshot.get('source_status') or {}).get('warnings') or {}
+    warnings_ready = (
+        snapshot_mode
+        and not snapshot.get('warnings_stale')
+        and warning_state.get('available') is True
+    )
+    alerts = [
+        _dashboard_snapshot_alert_card(item, weather_source_city)
+        for item in (snapshot.get('warnings') or [])[:5]
+    ] if warnings_ready else []
 
     # 用药提醒（根据天气触发）
     reminders = []
@@ -451,7 +479,7 @@ def user_dashboard(force_elder=False):
             weather_source_status=snapshot.get('source_status') or {},
         )
 
-    alert_cards = [_dashboard_alert_card(alert) for alert in alerts]
+    alert_cards = alerts
 
     return render_template('user_dashboard.html',
                          weather=weather if weather_available else None,

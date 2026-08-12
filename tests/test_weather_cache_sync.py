@@ -753,3 +753,49 @@ def test_stale_warnings_do_not_feed_family_reminder(app, db_session, monkeypatch
     assert payload["warnings_stale"] is True
     assert payload["risk_stale"] is False
     assert captured["warnings"] == []
+
+
+def test_unavailable_warnings_do_not_feed_family_reminder(app, db_session, monkeypatch):
+    """来源失败但记录尚未总过期时，也不能把旧预警继续用于提醒。"""
+    from core.time_utils import utcnow
+    from services import miniprogram_service
+
+    cycle_time = utcnow().replace(microsecond=0)
+    captured = {}
+
+    def fake_reminder(current, warnings, **_kwargs):
+        captured["warnings"] = warnings
+        return {"date": cycle_time.date().isoformat(), "message": "安全提醒"}
+
+    monkeypatch.setattr(
+        miniprogram_service,
+        "build_public_family_reminder",
+        fake_reminder,
+    )
+    with app.app_context():
+        record = miniprogram_service.persist_snapshot(
+            {
+                "temperature": 35,
+                "temperature_max": 38,
+                "temperature_min": 27,
+                "humidity": 70,
+                "data_source": "QWeather",
+                "is_mock": False,
+            },
+            [],
+            [{"title": "来源失败前的旧预警"}],
+            fetched_at=cycle_time,
+            warning_status={"available": False, "status": "fetch_failed"},
+            source_timing={
+                "current": {
+                    "fetched_at": cycle_time,
+                    "expires_at": cycle_time + timedelta(minutes=30),
+                },
+            },
+        )
+        captured.clear()
+        payload = miniprogram_service.snapshot_payload(record, now=cycle_time)
+
+    assert payload["warnings_stale"] is False
+    assert payload["source_status"]["warnings"]["available"] is False
+    assert captured["warnings"] == []

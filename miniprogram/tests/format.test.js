@@ -101,7 +101,7 @@ test('页面只按自身依赖来源判断快照新鲜度', () => {
   assert.equal(freshnessView({ stale: true }, snapshot, 'forecast', now).stale, true);
   assert.equal(freshnessView({ stale: true }, snapshot, 'warnings', now).stale, false);
   assert.equal(
-    freshnessView({ stale: true }, snapshot, 'risk', Date.parse('2026-07-17T08:31:00Z')).stale,
+    freshnessView({ stale: true }, snapshot, 'risk', Date.parse('2026-07-17T08:30:00Z')).stale,
     true,
   );
   assert.equal(snapshot.current.available, true);
@@ -117,6 +117,21 @@ test('页面只按自身依赖来源判断快照新鲜度', () => {
   assert.deepEqual(warningsExpired.warnings, []);
   assert.equal(warningsExpired.warningsSourceAvailable, false);
   assert.equal(warningsExpired.warningsStatusText, '来源暂不可用');
+
+  const warningsUnavailable = normalizeBootstrap({
+    warnings_stale: false,
+    warnings: [{ title: '来源失败前的旧高温预警' }],
+    source_status: {
+      warnings: {
+        available: false,
+        stale: false,
+        expires_at: '2026-07-17T08:30:00Z',
+      },
+    },
+  });
+  assert.deepEqual(warningsUnavailable.warnings, []);
+  assert.equal(warningsUnavailable.warningsSourceAvailable, false);
+  assert.equal(freshnessView({}, warningsUnavailable, 'warnings', now).stale, true);
 
   const legacyWithoutExpiry = normalizeBootstrap({
     risk_stale: false,
@@ -179,6 +194,7 @@ test('预警列表为空时区分暂无预警与来源不可用', () => {
 
 test('预警保留发布单位、发布时间和生效时间', () => {
   const result = normalizeBootstrap({
+    source_status: { warnings: { available: true, stale: false } },
     warnings: [{
       title: '高温黄色预警',
       start_time: '2026-07-17T08:30:00+08:00',
@@ -199,11 +215,13 @@ test('预警保留发布单位、发布时间和生效时间', () => {
   assert.match(warning.effectiveText, /08:30/);
 
   const objectSender = normalizeBootstrap({
+    source_status: { warnings: { available: true, stale: false } },
     warnings: [{ raw: { sender: { name: '九江市气象台' } } }],
   });
   assert.equal(objectSender.warnings[0].issuer, '九江市气象台');
 
   const publishedOnly = normalizeBootstrap({
+    source_status: { warnings: { available: true, stale: false } },
     warnings: [{
       start_time: '2026-07-17T08:00:00+08:00',
       raw: { pubTime: '2026-07-17T08:00:00+08:00' },

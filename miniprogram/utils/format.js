@@ -286,7 +286,11 @@ function normalizeBootstrap(payload) {
   const riskScore = finiteNumber(firstDefined(riskSource, ['score', 'risk_score', 'value', 'index'], null));
   const currentStale = Boolean(data.current_stale === true || currentState.stale === true);
   const forecastStale = Boolean(data.forecast_stale === true || forecastState.stale === true);
-  const warningsStale = Boolean(data.warnings_stale === true || warningsState.stale === true);
+  const warningsStale = Boolean(
+    data.warnings_stale === true
+    || warningsState.stale === true
+    || warningsState.available !== true
+  );
   const riskStale = Boolean(data.risk_stale === true || riskState.stale === true);
   const componentFreshness = (state, stale, explicitKey) => {
     const expiresValue = state && (state.expires_at || state.expiresAt);
@@ -468,7 +472,7 @@ function freshnessView(resultMeta, snapshot, component, nowMs) {
   const stale = componentState && componentState.known
     ? Boolean(
       componentState.stale
-      || (Number.isFinite(componentState.expiresAt) && currentTime > componentState.expiresAt)
+      || (Number.isFinite(componentState.expiresAt) && currentTime >= componentState.expiresAt)
     )
     : Boolean(meta.stale || data.stale);
   return {

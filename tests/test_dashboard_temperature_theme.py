@@ -56,31 +56,39 @@ def test_dashboard_renders_weather_alert_real_fields_with_local_date(
     db_session,
     monkeypatch,
 ):
-    from core.db_models import User, WeatherAlert
+    from core.db_models import User
 
     fixed_now = datetime(2026, 1, 1, 20, 0, tzinfo=timezone.utc)
     user = User.query.filter_by(username='testuser').one()
     user.community = '都昌'
     app.config['QWEATHER_CANONICAL_LOCATION'] = '116.20,29.27'
-    db_session.add(WeatherAlert(
-        alert_date=datetime(2026, 1, 1, 18, 0, tzinfo=timezone.utc),
-        location='116.20,29.27',
-        alert_type='高温预警',
-        alert_level='红色',
-        description='测试预警详情',
-    ))
     db_session.commit()
 
     monkeypatch.setattr('services.user.dashboard_service.utcnow', lambda: fixed_now)
     monkeypatch.setattr(
-        'services.user.dashboard_service.get_weather_with_cache',
-        lambda _location: ({'data_source': 'Demo', 'is_mock': True}, False),
-        raising=False,
-    )
-    monkeypatch.setattr(
-        'services.user.dashboard_service.get_qweather_forecast_with_cache',
-        lambda _location, days=7: ([], False, {'error': 'qweather_unavailable'}),
-        raising=False,
+        'services.user.dashboard_service.get_bootstrap_payload',
+        lambda: {
+            'snapshot_id': 'dashboard-warning-snapshot',
+            'fetched_at': '2026-01-02T02:00:00+08:00',
+            'current_stale': True,
+            'forecast_stale': True,
+            'warnings_stale': False,
+            'risk_stale': True,
+            'location': {'name': '都昌县', 'code': '116.20,29.27'},
+            'current': {'is_mock': True},
+            'forecast': [],
+            'warnings': [{
+                'title': '高温预警',
+                'level': '红色',
+                'text': '测试预警详情',
+                'start_time': '2026-01-02T02:00:00+08:00',
+            }],
+            'risk': {'available': False},
+            'actions': [],
+            'source_status': {
+                'warnings': {'available': True, 'stale': False},
+            },
+        },
     )
 
     response = authenticated_client.get('/dashboard')
