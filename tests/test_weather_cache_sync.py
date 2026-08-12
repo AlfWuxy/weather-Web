@@ -798,4 +798,5 @@ def test_unavailable_warnings_do_not_feed_family_reminder(app, db_session, monke
 
     assert payload["warnings_stale"] is False
     assert payload["source_status"]["warnings"]["available"] is False
+    assert payload["warnings"] == []
     assert captured["warnings"] == []

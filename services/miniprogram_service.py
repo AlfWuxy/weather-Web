@@ -567,11 +567,16 @@ def snapshot_payload(record=None, *, now=None) -> dict:
     forecast_stale = bool(source_status["forecast"]["stale"])
     warnings_stale = bool(source_status["warnings"]["stale"])
     risk_stale = bool(source_status["risk"]["stale"])
+    warnings_usable = (
+        not warnings_stale
+        and source_status["warnings"]["available"] is True
+    )
+    public_warnings = warnings if warnings_usable else []
     public_context = _persisted_public_context(
         record,
         current,
         # 过期预警不能继续参与家庭提醒话术，当前天气风险仍可独立使用。
-        [] if warnings_stale or not source_status["warnings"]["available"] else warnings,
+        public_warnings,
         available=bool(record.available) and not risk_stale,
         date_value=current_time,
     )
@@ -593,7 +598,7 @@ def snapshot_payload(record=None, *, now=None) -> dict:
         "risk_stale": risk_stale,
         "current": current,
         "forecast": forecast,
-        "warnings": warnings,
+        "warnings": public_warnings,
         "risk": public_context["risk"],
         "actions": public_context["actions"],
         "family_reminder": public_context["family_reminder"],
