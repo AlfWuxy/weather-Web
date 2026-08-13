@@ -56,6 +56,7 @@ from core.usage import (
 from core.weather import (
     compact_assessment_weather_condition,
     get_weather_with_cache,
+    is_complete_qweather_weather,
     is_qweather_online_weather,
 )
 from services.location_resolver import resolve_location
@@ -92,6 +93,7 @@ from services.miniprogram_service import (
     public_communities_payload,
     public_cooling_resources_payload,
     public_gis_metadata_payload,
+    snapshot_component_status,
 )
 from services.push.locks import push_owner_lock
 from utils.parsers import safe_json_loads
@@ -1411,7 +1413,8 @@ def elders_list():
     # 只有受支持的 Pair 才读取县级快照；所有受支持老人共享同一 snapshot_id。
     snapshot = get_bootstrap_payload() if any(support_map.values()) else {}
     current = snapshot.get("current") if isinstance(snapshot.get("current"), dict) else {}
-    weather_available = bool(snapshot.get("available"))
+    current_status = snapshot_component_status(snapshot, "current")
+    weather_available = current_status["usable"]
     tmax_value = _finite_or_none(current.get("temperature_max")) if weather_available else None
     tmin_value = _finite_or_none(current.get("temperature_min")) if weather_available else None
     trigger = None
@@ -1480,7 +1483,7 @@ def elders_list():
                     "weather_available": bool(
                         miniprogram_supported and weather_available
                     ),
-                    "stale": bool(snapshot.get("stale")) if miniprogram_supported else False,
+                    "stale": current_status["stale"] if miniprogram_supported else False,
                     "is_mock": bool(current.get("is_mock")) if miniprogram_supported else False,
                 },
             }
@@ -1901,11 +1904,18 @@ def health_assessment():
                 raise ValueError(f"invalid_{field}")
             screening[field] = value
         snapshot = get_bootstrap_payload()
-        if not snapshot.get("available"):
+        current_status = snapshot_component_status(snapshot, "current")
+        if not current_status["available"]:
             return _error("weather_snapshot_unavailable", "天气快照尚未可用，请稍后重试。", 503)
-        if snapshot.get("stale"):
+        if current_status["stale"]:
             return _error("weather_snapshot_stale", "天气快照正在更新，请稍后重试。", 503)
         current = snapshot.get("current") or {}
+        if not is_complete_qweather_weather(current):
+            return _error(
+                "weather_snapshot_incomplete",
+                "天气快照字段尚未完整，请稍后重试。",
+                503,
+            )
         user = db.session.get(User, g.api_user_id)
         profile = {
             "age": member.age if member and member.age is not None else (user.age or 45),
@@ -1974,10 +1984,10 @@ def _daily_status_for_pair(pair):
         snapshot = get_bootstrap_payload()
         current = snapshot.get("current") if isinstance(snapshot.get("current"), dict) else None
         risk = snapshot.get("risk") if isinstance(snapshot.get("risk"), dict) else {}
+        risk_status = snapshot_component_status(snapshot, "risk")
         if (
             not snapshot.get("snapshot_id")
-            or snapshot.get("available") is not True
-            or snapshot.get("stale") is not False
+            or not risk_status["usable"]
             or not is_qweather_online_weather(current)
             or risk.get("available") is not True
         ):
@@ -2163,7 +2173,10 @@ def alerts_list():
 
     snapshot = get_bootstrap_payload()
     weather_data = snapshot.get("current") if isinstance(snapshot.get("current"), dict) else {}
-    weather_available = bool(snapshot.get("available"))
+    current_status = snapshot_component_status(snapshot, "current")
+    warnings_status = snapshot_component_status(snapshot, "warnings")
+    weather_available = current_status["usable"]
+    warnings_available = warnings_status["usable"]
     location = snapshot.get("location") or {}
 
     return jsonify(
@@ -2172,12 +2185,14 @@ def alerts_list():
             "data": {
                 "snapshot_id": snapshot.get("snapshot_id"),
                 "location": location,
-                "warnings": snapshot.get("warnings") or [],
+                "warnings": (snapshot.get("warnings") or []) if warnings_available else [],
+                "warnings_available": warnings_available,
+                "warnings_stale": warnings_status["stale"],
                 "weather": {
                     "temperature_max": weather_data.get("temperature_max") if weather_available else None,
                     "temperature_min": weather_data.get("temperature_min") if weather_available else None,
                     "weather_available": weather_available,
-                    "stale": bool(snapshot.get("stale")),
+                    "stale": current_status["stale"],
                     "is_mock": bool(weather_data.get("is_mock")),
                 },
             },

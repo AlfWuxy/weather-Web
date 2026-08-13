@@ -7,6 +7,52 @@ function firstDefined(object, keys, fallback) {
   return fallback;
 }
 
+function isPlainRecord(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+
+function componentSourceContract(sourceStatus, aliases) {
+  const source = isPlainRecord(sourceStatus) ? sourceStatus : {};
+  const entries = aliases
+    .filter((key) => Object.prototype.hasOwnProperty.call(source, key))
+    .map((key) => source[key]);
+  const present = entries.length > 0;
+  const valid = !present || entries.every((state) => {
+    if (!isPlainRecord(state) || typeof state.available !== 'boolean') return false;
+    const hasStale = Object.prototype.hasOwnProperty.call(state, 'stale');
+    if (hasStale && typeof state.stale !== 'boolean') {
+      return false;
+    }
+    const expiresValue = firstDefined(state, ['expires_at', 'expiresAt'], '');
+    const hasValidExpiry = Boolean(expiresValue)
+      && Number.isFinite(Date.parse(String(expiresValue)));
+    if (expiresValue && !hasValidExpiry) return false;
+    // 显式组件状态必须带可核验的新鲜度信号，不能只凭 available 解锁。
+    return hasStale || hasValidExpiry;
+  });
+  const states = entries.filter(isPlainRecord);
+  const available = present && valid && states.every((state) => state.available === true);
+  const independentlyVerifiable = available && states.every((state) => {
+    const expiresValue = firstDefined(state, ['expires_at', 'expiresAt'], '');
+    const expiresAt = Date.parse(String(expiresValue || ''));
+    return state.stale === false && Number.isFinite(expiresAt);
+  });
+  return {
+    present,
+    valid,
+    available,
+    independentlyVerifiable,
+    stale: present && (
+      !valid
+      || !available
+      || states.some((state) => state.stale === true)
+    ),
+    state: states[0] || {},
+  };
+}
+
 function finiteNumber(value) {
   if (value === null || value === undefined || value === '') return null;
   const number = Number(value);
@@ -219,12 +265,23 @@ function normalizeAction(item, index) {
 
 function normalizeFamilyReminder(value) {
   const source = value && typeof value === 'object' ? value : {};
+  const hasSnakeDependencies = Object.prototype.hasOwnProperty.call(source, 'depends_on');
+  const hasCamelDependencies = Object.prototype.hasOwnProperty.call(source, 'dependsOn');
+  const rawDependencies = hasSnakeDependencies
+    ? source.depends_on
+    : (hasCamelDependencies ? source.dependsOn : undefined);
+  const allowedDependencies = new Set(['current', 'warnings']);
+  const dependenciesValid = Array.isArray(rawDependencies)
+    && rawDependencies.every((item) => typeof item === 'string' && allowedDependencies.has(item))
+    && new Set(rawDependencies).size === rawDependencies.length;
   return {
     id: String(firstDefined(source, ['id'], '')),
     date: String(firstDefined(source, ['date'], '')),
     message: String(firstDefined(source, ['message'], '')),
     followUpQuestion: String(firstDefined(source, ['follow_up_question', 'followUpQuestion'], '')),
     text: String(firstDefined(source, ['text'], '')),
+    dependsOn: Array.isArray(rawDependencies) ? rawDependencies.slice() : [],
+    dependenciesValid,
   };
 }
 
@@ -253,12 +310,8 @@ function normalizeSources(sourceStatus) {
 }
 
 function warningSourceAvailable(sourceStatus) {
-  if (!sourceStatus || typeof sourceStatus !== 'object' || Array.isArray(sourceStatus)) return false;
-  const warnings = sourceStatus.warnings;
-  if (typeof warnings === 'boolean') return warnings;
-  if (warnings && typeof warnings === 'object' && typeof warnings.available === 'boolean') {
-    return warnings.available;
-  }
+  const contract = componentSourceContract(sourceStatus, ['warnings']);
+  if (contract.present) return contract.valid && contract.available;
   // 来源状态缺失时无法确认确实没有预警，按不可用处理更安全。
   return false;
 }
@@ -271,13 +324,84 @@ function warningStatusText(warnings, sourceAvailable) {
 
 function normalizeBootstrap(payload) {
   const data = payload && typeof payload === 'object' ? payload : {};
-  const currentSource = data.current && typeof data.current === 'object' ? data.current : {};
-  const riskSource = data.risk && typeof data.risk === 'object' ? data.risk : {};
+  const sourceStatus = isPlainRecord(data.source_status)
+    ? data.source_status
+    : {};
+  const currentContract = componentSourceContract(
+    sourceStatus,
+    ['current', 'current_weather', 'weather'],
+  );
+  const forecastContract = componentSourceContract(sourceStatus, ['forecast']);
+  const warningsContract = componentSourceContract(sourceStatus, ['warnings']);
+  const riskContract = componentSourceContract(sourceStatus, ['risk']);
+  const currentState = currentContract.state;
+  const forecastState = sourceStatus.forecast || {};
+  const warningsState = warningsContract.state;
+  const riskState = riskContract.state;
+  const currentCandidate = data.current || data.current_weather || data.weather;
+  const currentSource = isPlainRecord(currentCandidate) ? currentCandidate : {};
+  const riskSource = isPlainRecord(data.risk) ? data.risk : {};
   const temperature = finiteNumber(firstDefined(currentSource, ['temperature', 'temp', 'temp_now', 'temperature_current'], null));
   const high = finiteNumber(firstDefined(currentSource, ['temperature_max', 'temp_max', 'tempMax', 'high'], null));
   const low = finiteNumber(firstDefined(currentSource, ['temperature_min', 'temp_min', 'tempMin', 'low'], null));
   const riskScore = finiteNumber(firstDefined(riskSource, ['score', 'risk_score', 'value', 'index'], null));
-  const riskAvailable = data.available !== false && riskSource.available !== false && (riskScore !== null || Boolean(riskSource.level || riskSource.label));
+  const rootAvailable = Object.prototype.hasOwnProperty.call(data, 'available')
+    ? data.available === true
+    : true;
+  const currentRootAvailable = rootAvailable;
+  const riskRootAvailable = rootAvailable;
+  const warningsRootAvailable = rootAvailable;
+  const currentStateAvailable = currentContract.present ? currentContract.available : true;
+  const riskStateAvailable = riskContract.present ? riskContract.available : true;
+  const warningsStateAvailable = warningsContract.present && warningsContract.available;
+  const warningsIndependentAvailable = warningsRootAvailable
+    || (warningsContract.present && warningsContract.independentlyVerifiable);
+  const malformedTopStale = (key) => (
+    Object.prototype.hasOwnProperty.call(data, key) && typeof data[key] !== 'boolean'
+  );
+  const currentStale = Boolean(
+    malformedTopStale('current_stale')
+    || data.current_stale === true
+    || currentContract.stale
+    || (currentContract.present && !currentRootAvailable)
+  );
+  const forecastStale = Boolean(
+    malformedTopStale('forecast_stale')
+    || data.forecast_stale === true
+    || forecastState.stale === true
+    || forecastContract.stale
+  );
+  const warningsStale = Boolean(
+    malformedTopStale('warnings_stale')
+    || data.warnings_stale === true
+    || warningsContract.stale
+    || !warningsStateAvailable
+    || !warningsIndependentAvailable
+  );
+  const riskStale = Boolean(
+    malformedTopStale('risk_stale')
+    || data.risk_stale === true
+    || riskContract.stale
+    || (riskContract.present && !riskRootAvailable)
+  );
+  const componentFreshness = (state, stale, explicitKey) => {
+    const expiresValue = state && (state.expires_at || state.expiresAt);
+    const expiresAt = expiresValue ? Date.parse(String(expiresValue)) : NaN;
+    const fetchedAt = state && firstDefined(state, ['fetched_at', 'fetchedAt', 'updated_at'], '');
+    return {
+      stale,
+      // 只有服务端已判定过期，或有可验证的过期时间时，组件状态才能覆盖旧全局合同。
+      known: stale || Number.isFinite(expiresAt),
+      expiresAt: Number.isFinite(expiresAt) ? expiresAt : null,
+      explicit: explicitKey in data,
+      fetchedAt: String(fetchedAt || ''),
+    };
+  };
+  const riskAvailable = riskRootAvailable
+    && riskStateAvailable
+    && (!Object.prototype.hasOwnProperty.call(riskSource, 'available') || riskSource.available === true)
+    && !riskStale
+    && (riskScore !== null || Boolean(riskSource.level || riskSource.label));
   const riskLevelValue = firstDefined(riskSource, ['label', 'level', 'risk_level'], '');
   const forecastRaw = Array.isArray(data.forecast)
     ? data.forecast
@@ -288,8 +412,9 @@ function normalizeBootstrap(payload) {
   const actionsRaw = Array.isArray(data.actions)
     ? data.actions
     : (Array.isArray(data.actions && data.actions.items) ? data.actions.items : []);
-  const warnings = warningsRaw.map(normalizeWarning);
-  const warningsSourceAvailable = warningSourceAvailable(data.source_status);
+  // 过期预警不能继续以“当前有效”展示，首页与预警页共用这个安全结果。
+  const warnings = warningsStale ? [] : warningsRaw.map(normalizeWarning);
+  const warningsSourceAvailable = !warningsStale && warningsStateAvailable;
   return {
     snapshotId: String(data.snapshot_id || ''),
     location: {
@@ -300,10 +425,25 @@ function normalizeBootstrap(payload) {
     fetchedAt: data.fetched_at || data.generated_at || '',
     expiresAt: data.expires_at || '',
     ttlSeconds: finiteNumber(data.ttl_seconds) || 1800,
-    available: data.available !== false,
+    available: rootAvailable,
     stale: Boolean(data.stale),
+    currentStale,
+    forecastStale,
+    warningsStale,
+    riskStale,
+    freshness: {
+      current: componentFreshness(currentState, currentStale, 'current_stale'),
+      forecast: componentFreshness(forecastState, forecastStale, 'forecast_stale'),
+      warnings: componentFreshness(warningsState, warningsStale, 'warnings_stale'),
+      risk: componentFreshness(riskState, riskStale, 'risk_stale'),
+    },
     current: {
-      available: data.available !== false && currentSource.available !== false && temperature !== null,
+      available: currentRootAvailable
+        && currentStateAvailable
+        && (!Object.prototype.hasOwnProperty.call(currentSource, 'available') || currentSource.available === true)
+        && !currentStale
+        && temperature !== null,
+      stale: currentStale,
       temperature,
       temperatureText: formatTemperature(temperature),
       high,
@@ -320,6 +460,7 @@ function normalizeBootstrap(payload) {
     warningsStatusText: warningStatusText(warnings, warningsSourceAvailable),
     risk: {
       available: riskAvailable,
+      stale: riskStale,
       score: riskScore,
       scoreText: riskScore === null ? '待计算' : String(Math.round(riskScore)),
       level: String(riskLevelValue),
@@ -421,13 +562,24 @@ function normalizeCommunity(payload) {
   };
 }
 
-function freshnessView(resultMeta, snapshot) {
+function freshnessView(resultMeta, snapshot, component, nowMs) {
   const meta = resultMeta || {};
   const data = snapshot || {};
-  const storedAt = data.fetchedAt || data.generatedAt || meta.storedAt;
+  const componentState = component && data.freshness && data.freshness[component];
+  const storedAt = (componentState && componentState.fetchedAt)
+    || data.fetchedAt
+    || data.generatedAt
+    || meta.storedAt;
+  const currentTime = Number.isFinite(Number(nowMs)) ? Number(nowMs) : Date.now();
+  const stale = componentState && componentState.known
+    ? Boolean(
+      componentState.stale
+      || (Number.isFinite(componentState.expiresAt) && currentTime >= componentState.expiresAt)
+    )
+    : Boolean(meta.stale || data.stale);
   return {
     updatedText: formatDateTime(storedAt),
-    stale: Boolean(meta.stale || data.stale),
+    stale,
     source: meta.source || 'unknown',
     refreshDeferred: Boolean(meta.refreshDeferred),
     refreshStarted: Boolean(meta.refreshStarted),

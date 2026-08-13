@@ -105,15 +105,22 @@ def build_public_family_reminder(
     date_value=None,
 ) -> dict:
     """只使用已持久化天气与风险，稳定生成当日家庭提醒。"""
-    weather = current if isinstance(current, dict) and available else {}
-    warning_rows = warnings if isinstance(warnings, list) and available else []
+    weather = current if isinstance(current, dict) and current and available is True else {}
+    # 官方预警有独立来源状态，当前天气不可用时仍可生成 warning-only 提醒。
+    warning_rows = warnings if isinstance(warnings, list) else []
     risk_payload = risk if isinstance(risk, dict) else {}
-    return select_action_reminder(
+    reminder = select_action_reminder(
         date_value=date_value,
-        risk_level=(risk_payload.get("level") if available else "low"),
+        risk_level=(risk_payload.get("level") if available is True else "low"),
         weather_tags=infer_weather_tags(weather, warning_rows),
         audience="family_group",
     )
+    dependencies = []
+    if weather:
+        dependencies.append("current")
+    if warning_rows:
+        dependencies.append("warnings")
+    return {**reminder, "depends_on": dependencies}
 
 
 def build_public_risk_context(

@@ -1,20 +1,22 @@
 # -*- coding: utf-8 -*-
 """Tooling and prediction pages."""
 from datetime import datetime
+from decimal import Decimal, InvalidOperation
 import math
+import re
 
 from flask import Blueprint, current_app, flash, render_template, request
 from flask_login import current_user, login_required
 
-from core.db_models import FamilyMember
+from core.guest import is_guest_user
+from core.location_resolution import get_user_location_options, resolve_user_location
+from core.db_models import Community, FamilyMember
 from core.time_utils import today_local
 from core.weather import (
     ensure_user_location_valid,
-    get_location_options,
     get_qweather_forecast_with_cache,
     get_weather_with_cache,
     is_qweather_online_weather,
-    normalize_location_name,
 )
 from services.chronic_risk_service import get_chronic_service
 from services.forecast_cards import build_forecast_cards
@@ -55,22 +57,47 @@ def _selected_member(member_id):
     return FamilyMember.query.filter_by(id=parsed_id, user_id=current_user.id).first()
 
 
-def _normalized_location(raw_location):
-    """清洗并标准化地点输入。"""
-    location = sanitize_input(raw_location, max_length=100)
-    if location:
-        return normalize_location_name(location)
-    return ensure_user_location_valid()
+def _tool_location_options():
+    """合并静态县内别名与管理员维护的社区表。"""
+    dynamic_names = []
+    try:
+        communities = Community.query.with_entities(
+            Community.name,
+        ).all()
+    except Exception as exc:
+        current_app.logger.warning('读取工具页社区候选失败: %s', exc)
+        communities = []
+    for (name,) in communities:
+        clean_name = str(name or '').strip()
+        if clean_name:
+            dynamic_names.append(clean_name)
+    return get_user_location_options(extra_names=dynamic_names)
 
 
-def _coerce_age(raw_age, default_age):
-    """安全转换年龄，避免模板和服务层接到异常值。"""
-    age = parse_int(raw_age)
-    if age is None:
-        age = default_age
-    if age is None:
-        age = 65
-    return max(1, min(int(age), 120))
+def _resolve_tool_location(raw_location, *, location_options=None):
+    """解析工具页地点，非法输入不得回退到默认县域。"""
+    raw = raw_location.strip() if isinstance(raw_location, str) else ''
+    candidate = raw or ensure_user_location_valid()
+    return resolve_user_location(
+        candidate,
+        extra_names=location_options or _tool_location_options(),
+    )
+
+
+_ML_AGE_RE = re.compile(r'^[0-9]{1,3}$')
+
+
+def _parse_ml_age(raw_age, default_age):
+    """严格解析 ML 年龄，禁止静默截断或用默认值吞掉非法输入。"""
+    submitted = str(raw_age or '').strip()
+    candidate = submitted or str(default_age or 65).strip()
+    display_value = submitted[:32] if submitted else candidate[:32]
+    if not _ML_AGE_RE.fullmatch(candidate):
+        return None, display_value, '年龄需填写 1 到 120 之间的整数。'
+    age = int(candidate)
+    if age < 1 or age > 120:
+        return None, display_value, '年龄需填写 1 到 120 之间的整数。'
+    return age, age, None
 
 
 def _score_level(score):
@@ -215,16 +242,72 @@ def _build_chronic_breakdown(result, adherence, symptoms):
     return breakdown[:4]
 
 
+_PLAIN_DECIMAL_RE = re.compile(r'^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$')
+
+
+def _parse_optional_vital(raw_value, *, label, minimum, maximum):
+    """只接受短、有限且不使用指数写法的十进制生命体征。"""
+    if raw_value is None:
+        return None, None
+    raw = str(raw_value).strip()
+    if not raw:
+        return None, None
+    if len(raw) > 20:
+        return None, f'{label}输入过长，请重新填写。'
+    if not _PLAIN_DECIMAL_RE.fullmatch(raw):
+        return None, f'{label}格式不正确，请填写普通数字。'
+    try:
+        value = Decimal(raw)
+    except InvalidOperation:
+        return None, f'{label}格式不正确，请填写普通数字。'
+    if not value.is_finite():
+        return None, f'{label}格式不正确，请填写有限数字。'
+    if value < Decimal(str(minimum)) or value > Decimal(str(maximum)):
+        return None, f'{label}需在 {minimum} 到 {maximum} 之间。'
+    return float(value), None
+
+
 def _parse_chronic_vitals(form_state):
-    """解析慢病表单中的自测血压/血糖。"""
-    sbp = parse_float(form_state.get('sbp'))
-    fbg = parse_float(form_state.get('fbg'))
+    """严格解析慢病表单中的可选血压与血糖。"""
     vitals = {}
-    if sbp is not None and 60 <= sbp <= 260:
+    errors = {}
+    sbp, sbp_error = _parse_optional_vital(
+        form_state.get('sbp'),
+        label='最高收缩压',
+        minimum=60,
+        maximum=260,
+    )
+    fbg, fbg_error = _parse_optional_vital(
+        form_state.get('fbg'),
+        label='空腹血糖',
+        minimum=2,
+        maximum=30,
+    )
+    if sbp_error:
+        errors['sbp'] = sbp_error
+    elif sbp is not None:
         vitals['sbp'] = sbp
-    if fbg is not None and 2 <= fbg <= 30:
+    if fbg_error:
+        errors['fbg'] = fbg_error
+    elif fbg is not None:
         vitals['fbg'] = fbg
-    return vitals
+    return vitals, errors
+
+
+def _classified_ml_error(raw_error=None, *, code='model_unavailable'):
+    """把模型内部错误收敛为可安全展示的有限分类。"""
+    normalized = str(raw_error or '').strip().lower()
+    if code == 'auth_required':
+        message = '游客可以浏览说明；生成个人类别线索需要注册或登录正式账号。'
+    elif code in {'invalid_location', 'invalid_age'}:
+        message = str(raw_error)
+    elif code == 'weather_unavailable':
+        message = '健康关注线索暂时无法生成：官方天气快照正在更新，请稍后再试。'
+    elif any(marker in normalized for marker in ('model', '模型', 'load', '加载')):
+        message = '类别线索模型正在维护，请稍后再试。'
+    else:
+        message = '类别线索服务暂时不可用，请稍后再试。'
+    return {'code': code, 'message': message}
 
 
 def _normalize_chronic_suggestions(items):
@@ -245,6 +328,7 @@ def ml_prediction():
     """ML预测页面。"""
     family_members = _tool_family_members()
     current_location = ensure_user_location_valid()
+    location_options = _tool_location_options()
     form_state = {
         'member_id': '',
         'location': current_location,
@@ -253,48 +337,82 @@ def ml_prediction():
     prediction = None
     factors = None
     prediction_error = None
+    response_status = 200
 
     if request.method == 'POST':
         selected_member = _selected_member(request.form.get('member_id'))
         default_age = selected_member.age if selected_member and selected_member.age else current_user.age or 65
         default_gender = selected_member.gender if selected_member and selected_member.gender else current_user.gender or '男'
+        raw_location = request.form.get('location')
+        location_resolution = _resolve_tool_location(
+            raw_location,
+            location_options=location_options,
+        )
+        parsed_age, age_form_value, age_error = _parse_ml_age(
+            request.form.get('age'),
+            default_age,
+        )
         form_state = {
             'member_id': str(selected_member.id) if selected_member else '',
-            'location': _normalized_location(request.form.get('location')),
-            'age': _coerce_age(request.form.get('age'), default_age),
+            'location': (
+                location_resolution.raw
+                if not location_resolution.valid
+                else location_resolution.value
+            ),
+            'age': age_form_value,
         }
 
-        weather_info, _ = get_weather_with_cache(form_state['location'])
-        if not is_qweather_online_weather(weather_info):
-            prediction_error = '天气正在更新，类别线索暂不显示。请稍后再试。'
+        if is_guest_user(current_user):
+            prediction_error = _classified_ml_error(code='auth_required')
+            response_status = 403
+        elif not location_resolution.valid:
+            prediction_error = _classified_ml_error(
+                location_resolution.error,
+                code='invalid_location',
+            )
+            response_status = 422
+        elif age_error:
+            prediction_error = _classified_ml_error(
+                age_error,
+                code='invalid_age',
+            )
+            response_status = 422
         else:
-            user_info = {
-                'age': form_state['age'],
-                'gender': default_gender,
-            }
-            result = get_ml_service().predict_disease_risk(user_info, weather_info)
-            if result.get('success'):
-                prediction = []
-                for rank, item in enumerate((result.get('predictions') or [])[:3], start=1):
-                    adjusted_probability = float(item.get('probability') or 0.0)
-                    original_probability = float(
-                        item.get('original_probability')
-                        if item.get('original_probability') is not None
-                        else adjusted_probability
-                    )
-                    multiplier = item.get('weather_multiplier')
-                    if multiplier is None:
-                        multiplier = adjusted_probability / original_probability if original_probability > 0 else 1.0
-                    prediction.append({
-                        'disease': item.get('disease', '未知风险'),
-                        'score': round(adjusted_probability * 100.0, 1),
-                        'original_score': round(original_probability * 100.0, 1),
-                        'weather_multiplier': round(float(multiplier), 3),
-                        'label': f'关注排序第 {rank}',
-                    })
-                factors = _build_ml_factor_cards(result, form_state['age'], weather_info)
+            weather_info, _ = get_weather_with_cache(form_state['location'])
+            if not is_qweather_online_weather(weather_info):
+                prediction_error = _classified_ml_error(code='weather_unavailable')
             else:
-                prediction_error = result.get('error') or '预测暂时不可用，请稍后再试。'
+                user_info = {
+                    'age': parsed_age,
+                    'gender': default_gender,
+                }
+                try:
+                    result = get_ml_service().predict_disease_risk(user_info, weather_info)
+                except Exception:
+                    current_app.logger.exception('ML 类别线索服务调用失败')
+                    result = {'success': False, 'error': 'service_exception'}
+                if result.get('success'):
+                    prediction = []
+                    for rank, item in enumerate((result.get('predictions') or [])[:3], start=1):
+                        adjusted_probability = float(item.get('probability') or 0.0)
+                        original_probability = float(
+                            item.get('original_probability')
+                            if item.get('original_probability') is not None
+                            else adjusted_probability
+                        )
+                        multiplier = item.get('weather_multiplier')
+                        if multiplier is None:
+                            multiplier = adjusted_probability / original_probability if original_probability > 0 else 1.0
+                        prediction.append({
+                            'disease': item.get('disease', '未知风险'),
+                            'score': round(adjusted_probability * 100.0, 1),
+                            'original_score': round(original_probability * 100.0, 1),
+                            'weather_multiplier': round(float(multiplier), 3),
+                            'label': f'关注排序第 {rank}',
+                        })
+                    factors = _build_ml_factor_cards(result, parsed_age, weather_info)
+                else:
+                    prediction_error = _classified_ml_error(result.get('error'))
 
     return render_template(
         'ml_prediction.html',
@@ -303,7 +421,9 @@ def ml_prediction():
         prediction=prediction,
         factors=factors,
         prediction_error=prediction_error,
-    )
+        is_guest=is_guest_user(current_user),
+        location_options=location_options,
+    ), response_status
 
 
 @bp.route('/ai-qa', endpoint='ai_qa')
@@ -318,12 +438,37 @@ def ai_qa():
 @login_required
 def forecast_7day():
     """7天健康预测页面"""
-    current_location = _normalized_location(request.args.get('location'))
+    location_options = _tool_location_options()
+    location_resolution = _resolve_tool_location(
+        request.args.get('location'),
+        location_options=location_options,
+    )
+    current_location = (
+        location_resolution.value
+        if location_resolution.valid
+        else location_resolution.raw
+    )
     start_date = today_local()
     forecast_days = []
     weekly_tips = None
     forecast_error = None
+    location_error = None
     forecast_meta = {'source': 'QWeather'}
+    if not location_resolution.valid:
+        location_error = location_resolution.error
+        return render_template(
+            'forecast_7day.html',
+            family_members=_tool_family_members(),
+            current_location=current_location,
+            location_input=location_resolution.raw,
+            location_options=location_options,
+            location_error=location_error,
+            forecast_days=[],
+            forecast_error=None,
+            forecast_meta=forecast_meta,
+            weekly_tips=None,
+        ), 422
+
     qweather_days, from_cache, forecast_meta = get_qweather_forecast_with_cache(current_location, days=7)
     forecast_meta = dict(forecast_meta or {})
     forecast_meta['source_label'] = '和风天气'
@@ -363,7 +508,9 @@ def forecast_7day():
         'forecast_7day.html',
         family_members=_tool_family_members(),
         current_location=current_location,
-        location_options=get_location_options(),
+        location_input=current_location,
+        location_options=location_options,
+        location_error=location_error,
         forecast_days=forecast_days,
         forecast_error=forecast_error,
         forecast_meta=forecast_meta,
@@ -387,46 +534,55 @@ def chronic_risk():
     breakdown = None
     suggestions = None
     risk_error = None
+    vital_errors = {}
+    response_status = 200
 
     if request.method == 'POST':
         disease_key = sanitize_input(request.form.get('disease'), max_length=32) or 'hypertension'
         disease_key = disease_key if disease_key in CHRONIC_FORM_LABELS else 'hypertension'
         form_state = {
             'disease': disease_key,
-            'sbp': sanitize_input(request.form.get('sbp'), max_length=10) or '',
-            'fbg': sanitize_input(request.form.get('fbg'), max_length=10) or '',
+            'sbp': sanitize_input(request.form.get('sbp'), max_length=32) or '',
+            'fbg': sanitize_input(request.form.get('fbg'), max_length=32) or '',
             'adherence': sanitize_input(request.form.get('adherence'), max_length=20) or 'strict',
             'symptoms': sanitize_input(request.form.get('symptoms'), max_length=100) or '',
         }
 
-        weather_data, _ = get_weather_with_cache(ensure_user_location_valid())
-        if not is_qweather_online_weather(weather_data):
-            risk_error = '天气正在更新，慢病风险提示暂不显示。请稍后再试。'
+        vitals, vital_errors = _parse_chronic_vitals({
+            'sbp': request.form.get('sbp'),
+            'fbg': request.form.get('fbg'),
+        })
+        if vital_errors:
+            risk_error = '请先修正生命体征输入，再生成慢病风险提示。'
+            response_status = 422
         else:
-            vitals = _parse_chronic_vitals(form_state)
-            result = get_chronic_service().predict_individual_risk(
-                {
-                    'age': current_user.age or 65,
-                    'gender': current_user.gender or '未知',
-                    'chronic_diseases': [CHRONIC_FORM_LABELS[disease_key]],
-                    'vitals': vitals,
-                    'sbp': vitals.get('sbp'),
-                    'fbg': vitals.get('fbg'),
-                },
-                weather_data,
-            )
+            weather_data, _ = get_weather_with_cache(ensure_user_location_valid())
+            if not is_qweather_online_weather(weather_data):
+                risk_error = '天气正在更新，本次提醒暂未生成。请稍后再试。'
+            else:
+                result = get_chronic_service().predict_individual_risk(
+                    {
+                        'age': current_user.age or 65,
+                        'gender': current_user.gender or '未知',
+                        'chronic_diseases': [CHRONIC_FORM_LABELS[disease_key]],
+                        'vitals': vitals,
+                        'sbp': vitals.get('sbp'),
+                        'fbg': vitals.get('fbg'),
+                    },
+                    weather_data,
+                )
 
-            overall = result.get('overall_risk') or {}
-            risk_score = int(round(overall.get('score', 0) or 0))
-            risk_level = overall.get('level') or _score_level(risk_score)
-            risk_comment = (
-                f"当前以{CHRONIC_FORM_LABELS[disease_key]}为重点观察对象，结合天气条件判定为{risk_level}。"
-            )
-            vital_factors = ((result.get('vital_adjustment') or {}).get('factors') or [])
-            if vital_factors:
-                risk_comment = f"{risk_comment} 已参考{'；'.join(vital_factors[:2])}。"
-            breakdown = _build_chronic_breakdown(result, form_state['adherence'], form_state['symptoms'])
-            suggestions = _normalize_chronic_suggestions(result.get('recommendations'))[:5]
+                overall = result.get('overall_risk') or {}
+                risk_score = int(round(overall.get('score', 0) or 0))
+                risk_level = overall.get('level') or _score_level(risk_score)
+                risk_comment = (
+                    f"当前以{CHRONIC_FORM_LABELS[disease_key]}为重点观察对象，结合天气条件判定为{risk_level}。"
+                )
+                vital_factors = ((result.get('vital_adjustment') or {}).get('factors') or [])
+                if vital_factors:
+                    risk_comment = f"{risk_comment} 已参考{'；'.join(vital_factors[:2])}。"
+                breakdown = _build_chronic_breakdown(result, form_state['adherence'], form_state['symptoms'])
+                suggestions = _normalize_chronic_suggestions(result.get('recommendations'))[:5]
 
     return render_template(
         'chronic_risk.html',
@@ -436,4 +592,5 @@ def chronic_risk():
         breakdown=breakdown,
         suggestions=suggestions,
         risk_error=risk_error,
-    )
+        vital_errors=vital_errors,
+    ), response_status

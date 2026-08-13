@@ -1,5 +1,10 @@
 const { authApi, getSnapshot, requireToken } = require('../elders/care-session');
-const { buildReminderMessage, normalizeList, normalizeSnapshot } = require('../elders/care-logic');
+const {
+  buildReminderMessage,
+  normalizeList,
+  normalizeSnapshot,
+  trustedWeatherTrigger,
+} = require('../elders/care-logic');
 
 function lifecycleIsActive(page, lifecycle) {
   return page._unloaded !== true && Number(page._lifecycleGeneration || 0) === lifecycle;
@@ -103,11 +108,15 @@ Page({
       }
       const member = item.member || {};
       const weather = normalizeSnapshot(snapshot);
-      const usesGenericWeather = weather.stale || !weather.available;
-      const weatherNotice = weather.stale
+      const trigger = trustedWeatherTrigger(weather);
+      const currentStatus = weather.componentStatus && weather.componentStatus.current;
+      const weatherNotice = trigger
+        ? ''
+        : (currentStatus && currentStatus.stale
         ? '天气数据较早，复制内容已切换为通用提醒。'
-        : (!weather.available ? '天气数据待更新，复制内容使用通用提醒。' : '');
-      const trigger = usesGenericWeather ? '' : weather.trigger;
+        : (!currentStatus || !currentStatus.usable
+          ? '天气数据待更新，复制内容使用通用提醒。'
+          : ''));
       const message = buildReminderMessage({
         trigger,
         elderName: member.name,

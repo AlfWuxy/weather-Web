@@ -183,7 +183,7 @@ def test_account_delete_finishes_before_web_write_and_blocks_all_private_rows(
 
 
 @pytest.mark.parametrize(
-    ("path", "payload"),
+    ("path", "payload", "owner_role"),
     (
         (
             "/health-assessment",
@@ -194,6 +194,7 @@ def test_account_delete_finishes_before_web_write_and_blocks_all_private_rows(
                 "medication_adherence": "good",
                 "sleep_quality": "good",
             },
+            "user",
         ),
         (
             "/profile",
@@ -201,7 +202,9 @@ def test_account_delete_finishes_before_web_write_and_blocks_all_private_rows(
                 "form_id": "api_token",
                 "token_name": "删除竞态令牌",
                 "miniprogram_privacy_consent": "1",
+                "current_password": "web-owner-write-test-password",
             },
+            "admin",
         ),
         (
             "/profile",
@@ -209,9 +212,11 @@ def test_account_delete_finishes_before_web_write_and_blocks_all_private_rows(
                 "form_id": "password",
                 "old_password": "web-owner-write-test-password",
                 "new_password": "NewConcurrentPassword!",
+                "confirm_password": "NewConcurrentPassword!",
             },
+            "user",
         ),
-        ("/location", {"location": "都昌县"}),
+        ("/location", {"location": "都昌县"}, "user"),
     ),
     ids=("assessment", "api-token", "password", "location"),
 )
@@ -221,13 +226,18 @@ def test_profile_delete_first_blocks_all_profile_private_writes(
     monkeypatch,
     path,
     payload,
+    owner_role,
 ):
     """资料路由完成计算后若注销先提交，不得重建评估、凭证或位置。"""
     from services.health_risk_service import HealthRiskService
     from services.user import profile_service
     from services.user.owner_write_guard import owner_write_guard as real_guard
 
-    owner = _new_owner(db_session, f"profile-delete-first-{path.rsplit('/', 1)[-1]}")
+    owner = _new_owner(
+        db_session,
+        f"profile-delete-first-{path.rsplit('/', 1)[-1]}",
+        role=owner_role,
+    )
     owner_id = int(owner.id)
     original_password_hash = owner.password_hash
     app.config["FEATURE_NOTIFICATIONS"] = False

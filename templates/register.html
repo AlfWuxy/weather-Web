@@ -19,8 +19,19 @@
 
                 <div class="card auth-form-card">
                     <div class="card-body p-4 p-md-5">
-                        <form method="POST" action="{{ url_for('public.register') }}">
+                        <form method="POST" action="{{ url_for('public.register') }}" novalidate>
                             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+                            {% if form_errors.get('account') %}
+                            <div class="alert alert-danger" role="alert">
+                                {{ form_errors.get('account') }}
+                            </div>
+                            {% endif %}
+                            {% if form_errors %}
+                            <div class="alert alert-warning" role="status">
+                                请检查下方标出的内容。密码不会被保留，请重新输入。
+                            </div>
+                            {% endif %}
 
                             {# 基础 #}
                             <div class="mb-3" style="font-size:.8rem; color:var(--yl-muted); text-transform:uppercase; letter-spacing:.05em; font-weight:600;">
@@ -32,32 +43,30 @@
                                     <label for="username" class="form-label">
                                         <i class="bi bi-person me-1"></i>用户名 <span style="color:var(--yl-danger);">*</span>
                                     </label>
-                                    <input type="text" class="form-control" id="username" name="username" required>
+                                    <input type="text" class="form-control{% if form_errors.get('username') %} is-invalid{% endif %}" id="username" name="username" value="{{ form_data.get('username', '') }}" autocomplete="username" aria-describedby="usernameError" {% if form_errors.get('username') %}aria-invalid="true"{% endif %}>
+                                    <div class="invalid-feedback" id="usernameError">{{ form_errors.get('username', '') }}</div>
                                 </div>
                                 <div class="col-md-6">
                                     <label for="email" class="form-label">
                                         <i class="bi bi-envelope me-1"></i>邮箱
                                     </label>
-                                    <input type="email" class="form-control" id="email" name="email" placeholder="可选">
-                                </div>
-                                <div class="col-md-6">
-                                    <label for="phone" class="form-label">
-                                        <i class="bi bi-phone me-1"></i>手机号
-                                    </label>
-                                    <input type="tel" class="form-control" id="phone" name="phone" inputmode="tel" autocomplete="tel" placeholder="可选，例如 13800138000">
-                                    <small class="text-muted">当前不发送短信验证码，仅保存为待验证标识，不能用于登录。</small>
+                                    <input type="email" class="form-control{% if form_errors.get('email') %} is-invalid{% endif %}" id="email" name="email" value="{{ form_data.get('email', '') }}" placeholder="可选" autocomplete="email" aria-describedby="emailError" {% if form_errors.get('email') %}aria-invalid="true"{% endif %}>
+                                    <div class="invalid-feedback" id="emailError">{{ form_errors.get('email', '') }}</div>
                                 </div>
                                 <div class="col-md-6">
                                     <label for="password" class="form-label">
                                         <i class="bi bi-lock me-1"></i>密码 <span style="color:var(--yl-danger);">*</span>
                                     </label>
-                                    <input type="password" class="form-control" id="password" name="password" required>
+                                    <input type="password" class="form-control{% if form_errors.get('password') %} is-invalid{% endif %}" id="password" name="password" autocomplete="new-password" aria-describedby="passwordHelp passwordError" {% if form_errors.get('password') %}aria-invalid="true"{% endif %}>
+                                    <div class="form-text" id="passwordHelp">至少 12 位；提交失败后需要重新输入。</div>
+                                    <div class="invalid-feedback" id="passwordError">{{ form_errors.get('password', '') }}</div>
                                 </div>
                                 <div class="col-md-6">
                                     <label for="confirm_password" class="form-label">
                                         <i class="bi bi-lock-fill me-1"></i>确认密码 <span style="color:var(--yl-danger);">*</span>
                                     </label>
-                                    <input type="password" class="form-control" id="confirm_password" name="confirm_password" required>
+                                    <input type="password" class="form-control{% if form_errors.get('confirm_password') %} is-invalid{% endif %}" id="confirm_password" name="confirm_password" autocomplete="new-password" aria-describedby="confirmPasswordError" {% if form_errors.get('confirm_password') %}aria-invalid="true"{% endif %}>
+                                    <div class="invalid-feedback" id="confirmPasswordError">{{ form_errors.get('confirm_password', '') }}</div>
                                 </div>
                             </div>
 
@@ -69,24 +78,30 @@
                             <div class="row g-3">
                                 <div class="col-md-4">
                                     <label for="age" class="form-label"><i class="bi bi-calendar me-1"></i>年龄</label>
-                                    <input type="number" class="form-control" id="age" name="age" min="1" max="120" placeholder="可选">
+                                    <input type="number" class="form-control{% if form_errors.get('age') %} is-invalid{% endif %}" id="age" name="age" value="{{ form_data.get('age', '') }}" min="1" max="150" placeholder="可选" aria-describedby="ageError" {% if form_errors.get('age') %}aria-invalid="true"{% endif %}>
+                                    <div class="invalid-feedback" id="ageError">{{ form_errors.get('age', '') }}</div>
                                 </div>
                                 <div class="col-md-4">
                                     <label for="gender" class="form-label"><i class="bi bi-gender-ambiguous me-1"></i>性别</label>
-                                    <select class="form-select" id="gender" name="gender">
+                                    <select class="form-select{% if form_errors.get('gender') %} is-invalid{% endif %}" id="gender" name="gender" aria-describedby="genderError" {% if form_errors.get('gender') %}aria-invalid="true"{% endif %}>
                                         <option value="">请选择</option>
-                                        <option value="男性">男性</option>
-                                        <option value="女性">女性</option>
+                                        <option value="男性" {% if form_data.get('gender') == '男性' %}selected{% endif %}>男性</option>
+                                        <option value="女性" {% if form_data.get('gender') == '女性' %}selected{% endif %}>女性</option>
                                     </select>
+                                    <div class="invalid-feedback" id="genderError">{{ form_errors.get('gender', '') }}</div>
                                 </div>
                                 <div class="col-md-4">
                                     <label for="community" class="form-label"><i class="bi bi-geo-alt me-1"></i>所属社区</label>
-                                    <select class="form-select" id="community" name="community">
+                                    <select class="form-select{% if form_errors.get('community') %} is-invalid{% endif %}" id="community" name="community" aria-describedby="communityError" {% if form_errors.get('community') %}aria-invalid="true"{% endif %}>
                                         <option value="">请选择</option>
+                                        {% if form_errors.get('community') and form_data.get('community') %}
+                                            <option value="{{ form_data.get('community') }}" selected>{{ form_data.get('community') }}（无效，请重选）</option>
+                                        {% endif %}
                                         {% for comm in communities %}
-                                            <option value="{{ comm.name }}">{{ comm.name }}</option>
+                                            <option value="{{ comm.name }}" {% if form_data.get('community') == comm.name %}selected{% endif %}>{{ comm.name }}</option>
                                         {% endfor %}
                                     </select>
+                                    <div class="invalid-feedback" id="communityError">{{ form_errors.get('community', '') }}</div>
                                 </div>
                             </div>
 

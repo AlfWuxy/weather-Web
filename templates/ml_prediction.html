@@ -10,9 +10,16 @@
         <p>根据年龄、性别和当前天气，整理需要优先关注的健康类别。分数用于安排日常观察，不代表发病概率，也不能用于诊断。</p>
     </section>
 
+    {% if is_guest %}
+    <div class="alert alert-info yl-fade-up" role="status" data-testid="ml-guest-requirement">
+        <strong>游客可以先浏览这项功能说明。</strong>
+        生成个人类别线索需要<a href="{{ url_for('public.login', next=request.path) }}" class="alert-link">登录正式账号</a>或<a href="{{ url_for('public.register') }}" class="alert-link">注册账号</a>。
+    </div>
+    {% endif %}
+
     <div class="row g-4">
         <div class="col-lg-4">
-            <form method="POST" action="{{ url_for('tools.ml_prediction') }}" class="yl-section yl-fade-up yl-fade-up-d1">
+            <form method="POST" action="{{ url_for('tools.ml_prediction') }}" class="yl-section yl-fade-up yl-fade-up-d1" novalidate>
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <h4 style="font-size:1.05rem;">输入信息</h4>
 
@@ -27,24 +34,36 @@
                 </div>
                 <div class="mb-3">
                     <label class="form-label">所在地</label>
-                    <input type="text" class="form-control" name="location" value="{{ form_state.location if form_state else (current_location or '') }}" list="locOpts">
+                    <input type="text" class="form-control{% if prediction_error and prediction_error.code == 'invalid_location' %} is-invalid{% endif %}" name="location" value="{{ form_state.location if form_state else (current_location or '') }}" list="locOpts" aria-describedby="mlLocationHelp{% if prediction_error and prediction_error.code == 'invalid_location' %} mlLocationError{% endif %}">
                     <datalist id="locOpts">{% for loc in (location_options or []) %}<option value="{{ loc }}"></option>{% endfor %}</datalist>
+                    <div class="form-text" id="mlLocationHelp">目前仅支持都昌县及列表中的乡镇、社区。</div>
+                    {% if prediction_error and prediction_error.code == 'invalid_location' %}
+                    <div class="invalid-feedback" id="mlLocationError">{{ prediction_error.message }}</div>
+                    {% endif %}
                 </div>
                 <div class="mb-3">
-                    <label class="form-label">年龄</label>
-                    <input type="number" class="form-control" name="age" value="{{ form_state.age if form_state else (age or 65) }}" min="1" max="120">
+                    <label class="form-label" for="mlAge">年龄</label>
+                    <input type="text" inputmode="numeric" pattern="[0-9]*" class="form-control{% if prediction_error and prediction_error.code == 'invalid_age' %} is-invalid{% endif %}" id="mlAge" name="age" value="{{ form_state.age if form_state else (age or 65) }}" aria-describedby="mlAgeHelp{% if prediction_error and prediction_error.code == 'invalid_age' %} mlAgeError{% endif %}" {% if prediction_error and prediction_error.code == 'invalid_age' %}aria-invalid="true"{% endif %}>
+                    <div class="form-text" id="mlAgeHelp">请填写 1 到 120 之间的整数。</div>
+                    {% if prediction_error and prediction_error.code == 'invalid_age' %}
+                    <div class="invalid-feedback" id="mlAgeError">{{ prediction_error.message }}</div>
+                    {% endif %}
                 </div>
                 <div class="alert alert-light border small" role="note">
                     慢病档案不会参与这项类别排序。需要查看慢病与天气的关系，请使用“慢病风险评估”。
                 </div>
+                {% if is_guest %}
+                <a class="btn btn-primary w-100" href="{{ url_for('public.login', next=request.path) }}"><i class="bi bi-box-arrow-in-right me-1"></i>登录后生成</a>
+                {% else %}
                 <button type="submit" class="btn btn-primary w-100"><i class="bi bi-magic me-1"></i>生成类别线索</button>
+                {% endif %}
             </form>
         </div>
 
         <div class="col-lg-8">
             {% if prediction_error %}
             <section class="yl-section yl-fade-up yl-fade-up-d2 mb-3">
-                <div class="alert alert-warning mb-0">健康关注线索暂时无法生成，请稍后再试。</div>
+                <div class="alert alert-warning mb-0" role="alert" data-error-code="{{ prediction_error.code }}">{{ prediction_error.message }}</div>
             </section>
             {% endif %}
             {% if prediction %}

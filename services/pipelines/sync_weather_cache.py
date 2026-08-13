@@ -40,6 +40,7 @@ from services.miniprogram_service import (  # noqa: E402
     latest_snapshot_record,
     qweather_runtime_configured,
     refresh_snapshot_from_cycle,
+    snapshot_component_status,
     snapshot_payload,
 )
 from services.weather_service import WeatherService  # noqa: E402
@@ -486,7 +487,7 @@ def _resolve_locations(locations):
 
 
 def _trusted_complete_snapshot(payload):
-    """只有三项官方来源都成功时，本周期才可触发下游预警派发。"""
+    """保留三项官方来源完整度指标，供观测降级状态。"""
     source_status = (payload or {}).get('source_status') or {}
     weather_status = source_status.get('weather') or {}
     forecast_status = source_status.get('forecast') or {}
@@ -506,15 +507,39 @@ def _trusted_complete_snapshot(payload):
     )
 
 
+def _dispatch_ready_snapshot(payload, *, updated, previous_snapshot_id):
+    """当前天气或官方预警任一形成新鲜组件时即可触发派发。"""
+    if (
+        not isinstance(payload, dict)
+        or not payload.get("snapshot_id")
+        or payload.get("snapshot_id") == previous_snapshot_id
+    ):
+        return False
+    current_status = snapshot_component_status(payload, "current")
+    warnings_status = snapshot_component_status(payload, "warnings")
+    current = payload.get("current")
+    current_ready = bool(
+        updated == 1
+        and current_status["usable"]
+        and isinstance(current, dict)
+        and not current.get("is_mock")
+    )
+    warnings_ready = bool(
+        warnings_status["explicit"] and warnings_status["usable"]
+    )
+    return current_ready or warnings_ready
+
+
 def _trusted_cycle_current(payload, *, fetched_at, previous_snapshot_id):
     """只返回本周期补齐且可供网页风险使用的同源实况。"""
     if (
         not isinstance(payload, dict)
         or not payload.get('snapshot_id')
         or payload.get('snapshot_id') == previous_snapshot_id
-        or not payload.get('available')
-        or payload.get('stale', True)
     ):
+        return None
+    current_status = snapshot_component_status(payload, 'current')
+    if not current_status['usable']:
         return None
     current = payload.get('current')
     weather_status = (payload.get('source_status') or {}).get('weather') or {}
@@ -660,14 +685,10 @@ def _sync_weather_cache_locked(locations=None, update_daily=True, include_nowcas
                 CANONICAL_LOCATION_NAME,
                 cycle_current,
             )
-        snapshot_ready = bool(
-            updated == 1
-            and persisted.get('snapshot_id')
-            and persisted.get('snapshot_id') != previous_snapshot_id
-            and persisted.get('available')
-            and not persisted.get('stale', True)
-            and not (persisted.get('current') or {}).get('is_mock', False)
-            and trusted_complete_cycle
+        snapshot_ready = _dispatch_ready_snapshot(
+            persisted,
+            updated=updated,
+            previous_snapshot_id=previous_snapshot_id,
         )
         return {
             'locations': 1,

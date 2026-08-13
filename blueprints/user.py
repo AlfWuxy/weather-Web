@@ -148,6 +148,13 @@ def community_risk():
 @login_required
 def heat_exposure_gis():
     """都昌县 1 km 网格级热暴露 GIS"""
+    if is_guest_user(current_user):
+        return redirect(
+            url_for(
+                'public.login',
+                next=url_for('user.heat_exposure_gis'),
+            )
+        )
     if not current_app.config.get('FEATURE_HEAT_EXPOSURE_GIS'):
         abort(404)
 

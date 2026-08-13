@@ -19,7 +19,7 @@ from flask import (
     url_for,
 )
 from flask_login import current_user, login_user, logout_user
-from sqlalchemy import or_
+from sqlalchemy import false, or_
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from werkzeug.exceptions import MethodNotAllowed, NotFound
 from werkzeug.routing import RequestRedirect
@@ -27,6 +27,7 @@ from werkzeug.security import check_password_hash, generate_password_hash
 
 from core.constants import GUEST_ID_PREFIX
 from core.extensions import db
+from core.location_resolution import get_user_location_options, resolve_user_location
 from core.security import hash_identifier, hash_pair_token, hash_short_code, rate_limit_key, verify_pair_token
 from core.time_utils import today_local, utcnow, ensure_utc_aware
 from core.weather import (
@@ -58,7 +59,11 @@ from services.community_daily_service import (
     refresh_community_daily_best_effort as _refresh_community_daily_best_effort,
 )
 from services.heat_action_service import HeatActionService
-from services.miniprogram_service import get_bootstrap_payload
+from services.miniprogram_service import (
+    get_bootstrap_payload,
+    snapshot_component_status,
+    snapshot_display_time,
+)
 from services.cross_platform_identity import (
     AccountLinkError,
     create_account_link_challenge,
@@ -577,10 +582,10 @@ def _build_action_context(pair, status_date):
     stored_heat_result = calculation.get('heat_result')
     stored_risk_reasons = calculation.get('risk_reasons')
     current = snapshot.get('current') if isinstance(snapshot.get('current'), dict) else None
+    risk_status = snapshot_component_status(snapshot, 'risk')
     risk_available = (
         bool(snapshot.get('snapshot_id'))
-        and snapshot.get('available') is True
-        and snapshot.get('stale') is False
+        and risk_status['usable']
         and is_qweather_online_weather(current)
         and risk.get('available') is True
         and risk.get('score') is not None
@@ -1279,6 +1284,10 @@ def handle_account_link_code():
 
 def handle_login(next_url):
     safe_next = _safe_next_url(next_url)
+    login_form = {
+        'username': '',
+        'remember': False,
+    }
     if request.method == 'POST':
         # 输入验证
         username = request.form.get('username', '').strip()
@@ -1289,16 +1298,28 @@ def handle_login(next_url):
             normalized_phone = None
         password = request.form.get('password', '')
         remember_flag = request.form.get('remember') in ('1', 'on', 'true', 'yes')
+        login_form = {
+            'username': username,
+            'remember': remember_flag,
+        }
 
         # 基本验证
         if not username or not password:
-            flash('请输入用户名或已验证手机号和密码', 'error')
-            return render_template('login.html', next=safe_next)
+            flash('请输入用户名和密码', 'error')
+            return render_template(
+                'login.html',
+                next=safe_next,
+                login_form=login_form,
+            )
 
         # 限制长度防止攻击
         if len(username) > 50 or len(password) > 100:
             flash('输入内容过长', 'error')
-            return render_template('login.html', next=safe_next)
+            return render_template(
+                'login.html',
+                next=safe_next,
+                login_form=login_form,
+            )
 
         if normalized_phone:
             user = User.query.filter(
@@ -1342,7 +1363,11 @@ def handle_login(next_url):
                         remaining,
                     )
                     flash(f'登录失败次数过多，请 {remaining // 60 + 1} 分钟后再试', 'error')
-                    return render_template('login.html', next=safe_next)
+                    return render_template(
+                        'login.html',
+                        next=safe_next,
+                        login_form=login_form,
+                    )
             except Exception:
                 logger.warning("Redis 锁定检查失败，回退数据库兜底", exc_info=True)
                 redis_client = None
@@ -1362,7 +1387,11 @@ def handle_login(next_url):
                         db_remaining,
                     )
                     flash(f'登录失败次数过多，请 {db_remaining // 60 + 1} 分钟后再试', 'error')
-                    return render_template('login.html', next=safe_next)
+                    return render_template(
+                        'login.html',
+                        next=safe_next,
+                        login_form=login_form,
+                    )
             except Exception:
                 logger.warning("数据库锁定检查失败", exc_info=True)
 
@@ -1434,98 +1463,124 @@ def handle_login(next_url):
                 logger.warning("数据库递增失败计数失败", exc_info=True)
 
         logger.warning("登录失败: identifier_len=%s", len(username))
-        flash('用户名、已验证手机号或密码错误', 'error')
+        # 页面只承诺用户名登录；后端继续兼容已经完成验证的历史手机号。
+        flash('用户名或密码错误', 'error')
 
-    return render_template('login.html', next=safe_next)
+    return render_template(
+        'login.html',
+        next=safe_next,
+        login_form=login_form,
+    )
 
 
 def handle_register():
+    communities = Community.query.all()
+    community_names = [
+        community.name
+        for community in communities
+        if str(community.name or '').strip()
+    ]
+    form_data = {
+        'username': '',
+        'email': '',
+        'age': '',
+        'gender': '',
+        'community': '',
+    }
+    form_errors = {}
     if request.method == 'POST':
-        # 验证用户名
-        valid, result = validate_username(request.form.get('username'))
+        form_data = {
+            'username': str(request.form.get('username') or '').strip()[:25],
+            'email': str(request.form.get('email') or '').strip()[:120],
+            'age': str(request.form.get('age') or '').strip()[:3],
+            'gender': str(request.form.get('gender') or '').strip()[:10],
+            'community': str(request.form.get('community') or '').strip()[:100],
+        }
+
+        valid, username_result = validate_username(request.form.get('username'))
+        username = username_result if valid else None
         if not valid:
-            flash(result, 'error')
-            return redirect(url_for('public.register'))
-        username = result
-        if is_reserved_internal_username(username):
-            flash('该用户名属于系统保留命名空间，请换一个用户名。', 'error')
-            return redirect(url_for('public.register'))
-        try:
-            username_as_phone = normalize_phone(username)
-        except ValueError:
-            username_as_phone = None
-        if username_as_phone:
-            flash('用户名不能使用手机号格式，请换一个用户名。', 'error')
-            return redirect(url_for('public.register'))
+            form_errors['username'] = username_result
+        elif is_reserved_internal_username(username):
+            form_errors['username'] = '该用户名属于系统保留命名空间，请换一个用户名。'
+        else:
+            try:
+                username_as_phone = normalize_phone(username)
+            except ValueError:
+                username_as_phone = None
+            if username_as_phone:
+                form_errors['username'] = '用户名不能使用手机号格式，请换一个用户名。'
 
-        # 验证密码
-        valid, result = validate_password(request.form.get('password'))
+        raw_password = request.form.get('password', '')
+        valid, password_result = validate_password(raw_password)
+        password = password_result if valid else None
         if not valid:
-            flash(result, 'error')
-            return redirect(url_for('public.register'))
-        password = result
+            form_errors['password'] = password_result
 
-        # 验证邮箱
-        valid, result = validate_email(request.form.get('email'))
+        confirm_password = request.form.get('confirm_password', '')
+        if not confirm_password:
+            form_errors['confirm_password'] = '请再次输入密码'
+        elif confirm_password != raw_password:
+            form_errors['confirm_password'] = '两次输入的密码不一致'
+
+        valid, email_result = validate_email(request.form.get('email'))
+        email = email_result if valid else None
         if not valid:
-            flash(result, 'error')
-            return redirect(url_for('public.register'))
-        email = result
+            form_errors['email'] = email_result
 
-        # 手机号只保存为待验证标识；接入短信校验前不能用于登录。
-        try:
-            phone_normalized = normalize_phone(request.form.get('phone'))
-        except ValueError as exc:
-            flash(str(exc), 'error')
-            return redirect(url_for('public.register'))
-
-        # 验证年龄
-        valid, result = validate_age(request.form.get('age'))
+        valid, age_result = validate_age(request.form.get('age'))
+        age = age_result if valid else None
         if not valid:
-            flash(result, 'error')
-            return redirect(url_for('public.register'))
-        age = result
+            form_errors['age'] = age_result
 
-        # 验证性别
-        valid, result = validate_gender(request.form.get('gender'))
+        valid, gender_result = validate_gender(request.form.get('gender'))
+        gender = gender_result if valid else None
         if not valid:
-            flash(result, 'error')
-            return redirect(url_for('public.register'))
-        gender = result
+            form_errors['gender'] = gender_result
 
-        # 社区信息
-        community = sanitize_input(request.form.get('community'), max_length=100)
+        community_resolution = resolve_user_location(
+            request.form.get('community'),
+            extra_names=community_names,
+            default_if_blank=False,
+        )
+        community = community_resolution.value
+        if not community_resolution.valid:
+            form_errors['community'] = community_resolution.error
+
+        if form_errors:
+            return render_template(
+                'register.html',
+                communities=communities,
+                form_data=form_data,
+                form_errors=form_errors,
+            ), 422
 
         user = User(
             username=username,
             email=email,
-            phone_normalized=phone_normalized,
             age=age,
             gender=gender,
-            community=community
+            community=community,
+            last_login=utcnow(),
         )
         user.set_password(password)
 
-        # 所有占用结果使用相同提示与跳转，减少匿名访客据此枚举手机号或邮箱。
-        processed_message = (
-            '注册申请已处理，请尝试登录。若无法登录，请更换用户名或联系管理员。'
-        )
         username_taken = User.query.filter(
             db.func.lower(User.username) == _normalize_login_identifier(username)
         ).first() is not None
         email_taken = bool(
             email and User.query.filter_by(email=email).first() is not None
         )
-        if any(
-            (
-                username_taken,
-                email_taken,
+        if username_taken or email_taken:
+            form_errors['account'] = (
+                '这些账号信息暂时无法使用，请更换用户名或邮箱后重试。'
             )
-        ):
-            flash(processed_message, 'success')
-            return redirect(
-                url_for('public.login', next=url_for('public.account_link'))
-            )
+            return render_template(
+                'register.html',
+                communities=communities,
+                form_data=form_data,
+                form_errors=form_errors,
+            ), 422
 
         try:
             db.session.add(user)
@@ -1533,19 +1588,44 @@ def handle_register():
         except IntegrityError:
             # 用户名与邮箱唯一索引负责处理并发注册竞争。
             db.session.rollback()
-            flash(processed_message, 'success')
-            return redirect(
-                url_for('public.login', next=url_for('public.account_link'))
+            form_errors['account'] = (
+                '这些账号信息暂时无法使用，请更换用户名或邮箱后重试。'
             )
+            return render_template(
+                'register.html',
+                communities=communities,
+                form_data=form_data,
+                form_errors=form_errors,
+            ), 422
+        except SQLAlchemyError:
+            db.session.rollback()
+            logger.exception("注册事务提交失败")
+            form_errors['account'] = '注册暂时无法完成，请稍后重试。'
+            return render_template(
+                'register.html',
+                communities=communities,
+                form_data=form_data,
+                form_errors=form_errors,
+            ), 503
 
         logger.info("新用户注册: user_id=%s", user.id)
-        flash(processed_message, 'success')
-        return redirect(
-            url_for('public.login', next=url_for('public.account_link'))
-        )
+        # 只有账号事务落库后，才替换浏览器里的游客或旧身份状态。
+        _clear_identity_scoped_session()
+        login_user(user, remember=False)
+        flash('注册成功，已登录。现在可以添加需要照护的家人。', 'success')
+        if (
+            current_app.config.get('WECHAT_FORMAL_RUNTIME')
+            and not current_app.config.get('WEB_PRIVATE_FEATURES_ENABLED')
+        ):
+            return redirect(url_for('public.account_link'))
+        return redirect(url_for('user.pair_management', welcome=1))
 
-    communities = Community.query.all()
-    return render_template('register.html', communities=communities)
+    return render_template(
+        'register.html',
+        communities=communities,
+        form_data=form_data,
+        form_errors=form_errors,
+    )
 
 
 def _verified_cooling_map_point(resource):
@@ -1632,20 +1712,61 @@ def render_cooling_resources_page(
 ):
     open_only_flag = parse_bool(open_only, default=False)
     location_query = sanitize_input(request.args.get('location'), max_length=100)
-    weather_location = normalize_location_name(community or location_query or None)
+    raw_location = community or location_query or ''
+    all_resources = CoolingResource.query.filter_by(is_active=True).all()
+    communities = sorted({item.community_code for item in all_resources if item.community_code})
+    resource_types = sorted({item.resource_type for item in all_resources if item.resource_type})
+    location_resolution = resolve_user_location(
+        raw_location,
+        extra_names=communities,
+    )
+    location_error = location_resolution.error if not location_resolution.valid else None
+    weather_location = (
+        location_resolution.value
+        if location_resolution.valid
+        else location_resolution.raw
+    )
     cooling_weather = {}
-    try:
-        cooling_weather, _ = get_weather_with_cache(weather_location)
-    except Exception as exc:
-        logger.warning("避暑资源页天气读取失败，已隐藏室外温度计: %s", exc)
-        cooling_weather = {}
+    snapshot_meta = {}
+    if not location_error:
+        snapshot = get_bootstrap_payload()
+        snapshot_id = snapshot.get('snapshot_id')
+        if snapshot_id:
+            current_status = snapshot_component_status(snapshot, 'current')
+            current_snapshot = snapshot.get('current')
+            if (
+                current_status['usable']
+                and is_qweather_online_weather(current_snapshot)
+            ):
+                cooling_weather = current_snapshot
+            snapshot_location = snapshot.get('location') or {}
+            if isinstance(snapshot_location, dict) and snapshot_location.get('name'):
+                weather_location = str(snapshot_location['name'])
+            snapshot_meta = {
+                'id_short': str(snapshot_id)[:8],
+                'fetched_at': snapshot.get('fetched_at'),
+                'display_time': snapshot_display_time(snapshot.get('fetched_at')),
+            }
+        else:
+            # 本地测试和首次启动尚无持久快照时兼容旧缓存；线上已有快照后不混读。
+            try:
+                cooling_weather, _ = get_weather_with_cache(weather_location)
+            except Exception as exc:
+                logger.warning("避暑资源页天气读取失败，已隐藏室外温度计: %s", exc)
+                cooling_weather = {}
     outdoor_temp = None
-    if cooling_weather and not cooling_weather.get('is_mock'):
-        outdoor_temp = cooling_weather.get('temperature')
+    if is_qweather_online_weather(cooling_weather):
+        parsed_temperature = parse_float(cooling_weather.get('temperature'))
+        if parsed_temperature is not None and math.isfinite(parsed_temperature):
+            outdoor_temp = parsed_temperature
 
     query = CoolingResource.query.filter_by(is_active=True)
-    if community:
-        query = query.filter(CoolingResource.community_code == community)
+    if location_error:
+        query = query.filter(false())
+    elif raw_location and location_resolution.value not in {'都昌', '都昌县'}:
+        query = query.filter(
+            CoolingResource.community_code == location_resolution.value
+        )
     if resource_type:
         query = query.filter(CoolingResource.resource_type == resource_type)
     if has_ac_raw not in (None, ''):
@@ -1670,14 +1791,21 @@ def render_cooling_resources_page(
         CoolingResource.community_code,
         CoolingResource.name
     ).all()
-    all_resources = CoolingResource.query.filter_by(is_active=True).all()
+    location_filter_active = bool(
+        raw_location and location_resolution.value not in {'都昌', '都昌县'}
+    )
+    filters_active = bool(
+        location_filter_active
+        or resource_type
+        or has_ac_raw not in (None, '')
+        or is_accessible_raw not in (None, '')
+        or open_only_flag
+    )
     candidate_preview = (
         list(cooling_candidates or [])
-        if not all_resources
+        if not all_resources and not filters_active and not location_error
         else []
     )
-    communities = sorted({item.community_code for item in all_resources if item.community_code})
-    resource_types = sorted({item.resource_type for item in all_resources if item.resource_type})
     grouped = {}
     map_points = []
     for item in resources:
@@ -1694,7 +1822,7 @@ def render_cooling_resources_page(
         total=len(resources),
         communities=communities,
         resource_types=resource_types,
-        selected_community=community or '',
+        selected_community=location_resolution.raw if raw_location else '',
         selected_resource_type=resource_type or '',
         selected_has_ac=has_ac_raw if has_ac_raw is not None else '',
         selected_is_accessible=is_accessible_raw if is_accessible_raw is not None else '',
@@ -1707,7 +1835,12 @@ def render_cooling_resources_page(
         cooling_weather_location=weather_location,
         outdoor_temp=outdoor_temp,
         cooling_candidates=candidate_preview,
+        cooling_location_error=location_error,
+        cooling_location_options=get_user_location_options(extra_names=communities),
+        cooling_snapshot_meta=snapshot_meta,
     ))
+    if location_error:
+        response.status_code = 422
     if not map_points:
         # 没有可计算距离的正式点位时，浏览器不应提供定位能力。
         response.headers['Permissions-Policy'] = (
@@ -1727,11 +1860,13 @@ def render_public_risk_page(location):
     )
     location_name = str(snapshot_location.get('name') or fallback_location)
     risk = snapshot.get('risk') or {}
+    risk_status = snapshot_component_status(snapshot, 'risk')
     calculation = risk.get('calculation') if isinstance(risk.get('calculation'), dict) else {}
     stored_heat_result = calculation.get('heat_result')
     stored_risk_reasons = calculation.get('risk_reasons')
     risk_ready = (
-        risk.get('available') is True
+        risk_status['usable']
+        and risk.get('available') is True
         and risk.get('score') is not None
         and isinstance(stored_heat_result, dict)
         and isinstance(stored_risk_reasons, list)
@@ -1750,6 +1885,12 @@ def render_public_risk_page(location):
         actions=snapshot.get('actions') or [],
         risk_reasons=risk_reasons,
         family_reminder=snapshot.get('family_reminder'),
+        weather_snapshot_id=snapshot.get('snapshot_id'),
+        weather_snapshot_fetched_at=snapshot.get('fetched_at'),
+        weather_snapshot_display_time=snapshot_display_time(snapshot.get('fetched_at')),
+        weather_snapshot_expires_at=snapshot.get('expires_at'),
+        weather_risk_stale=snapshot.get('risk_stale', True),
+        weather_source_status=snapshot.get('source_status') or {},
     )
 
 

@@ -43,6 +43,22 @@ function isCompletionReceiptShare(options) {
   return Boolean(event.from === 'button' && dataset && dataset.shareKind === 'completion_receipt');
 }
 
+function usableFamilyReminder(reminder, snapshot, currentFreshness, warningsFreshness) {
+  const source = reminder && typeof reminder === 'object' ? reminder : null;
+  if (!source || source.dependenciesValid !== true || !source.message) return null;
+  const dependencies = Array.isArray(source.dependsOn) ? source.dependsOn : [];
+  const currentUsable = snapshot.current
+    && snapshot.current.available === true
+    && currentFreshness.stale === false;
+  const warningsUsable = snapshot.warningsSourceAvailable === true
+    && Array.isArray(snapshot.warnings)
+    && snapshot.warnings.length > 0
+    && warningsFreshness.stale === false;
+  if (dependencies.includes('current') && !currentUsable) return null;
+  if (dependencies.includes('warnings') && !warningsUsable) return null;
+  return source;
+}
+
 Page({
   data: {
     loading: true,
@@ -116,8 +132,12 @@ Page({
 
   renderActions(result) {
     const snapshot = normalizeBootstrap(result.data);
-    const freshness = freshnessView(result.meta, snapshot);
-    const generalMode = freshness.stale || !snapshot.available || !snapshot.actions.length;
+    const freshness = freshnessView(result.meta, snapshot, 'risk');
+    const currentFreshness = freshnessView(result.meta, snapshot, 'current');
+    const warningsFreshness = freshnessView(result.meta, snapshot, 'warnings');
+    const generalMode = freshness.stale
+      || snapshot.risk.available !== true
+      || !snapshot.actions.length;
     const sourceActions = generalMode ? GENERAL_ACTIONS : snapshot.actions;
     const actions = this.mergeChecked(sourceActions);
     const completedCount = actions.filter((item) => item.checked).length;
@@ -128,7 +148,12 @@ Page({
       completedCount,
       progressPercent: actions.length ? Math.round(completedCount / actions.length * 100) : 0,
       generalMode,
-      familyReminder: freshness.stale ? null : snapshot.familyReminder,
+      familyReminder: usableFamilyReminder(
+        snapshot.familyReminder,
+        snapshot,
+        currentFreshness,
+        warningsFreshness,
+      ),
       locationName: snapshot.location.name,
       freshness,
     });

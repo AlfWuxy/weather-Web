@@ -25,6 +25,22 @@ def test_heat_exposure_gis_requires_login(client):
     assert "/login" in response.headers["Location"]
 
 
+def test_heat_exposure_gis_rejects_authenticated_guest(client):
+    guest_entry = client.get(
+        "/guest?next=/heat-exposure-gis",
+        follow_redirects=False,
+    )
+    assert guest_entry.status_code == 302
+    assert guest_entry.headers["Location"].endswith("/heat-exposure-gis")
+
+    response = client.get("/heat-exposure-gis", follow_redirects=False)
+
+    assert response.status_code == 302
+    assert response.headers["Location"].endswith(
+        "/login?next=/heat-exposure-gis"
+    )
+
+
 def test_heat_exposure_gis_page_has_academic_contract(app, authenticated_client):
     app.config["AMAP_JS_API_KEY"] = "j" * 32
     app.config["AMAP_SECURITY_JS_CODE"] = "s" * 32

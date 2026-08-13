@@ -2,13 +2,13 @@
 """Profile and assessment routes."""
 import json
 import logging
-import math
 from datetime import timedelta
 from urllib.parse import urlparse
 
-from flask import current_app, flash, redirect, render_template, request, session, url_for
+from flask import abort, current_app, flash, redirect, render_template, request, session, url_for
 from flask_login import current_user, login_user
 from sqlalchemy.exc import IntegrityError
+from werkzeug.exceptions import HTTPException
 
 from core.analytics import get_high_risk_streak
 from core.db_models import (
@@ -21,6 +21,7 @@ from core.db_models import (
 )
 from core.extensions import db
 from core.guest import build_guest_profile, get_guest_assessment, is_guest_user
+from core.location_resolution import resolve_user_location
 from core.notifications import create_notification
 from core.time_utils import utcnow
 from core.usage import create_api_token
@@ -28,8 +29,7 @@ from core.weather import (
     compact_assessment_weather_condition,
     ensure_user_location_valid,
     get_weather_with_cache,
-    is_qweather_online_weather,
-    normalize_location_name,
+    is_complete_qweather_weather,
 )
 from utils.parsers import json_or_none, safe_json_loads
 from utils.validators import (
@@ -56,6 +56,14 @@ _ACADEMIC_MAPPING_FIELDS = (
     'weather',
     'rr_breakdown',
 )
+
+_HEALTH_SCREENING_OPTIONS = {
+    'outdoor_exposure': {'low', 'medium', 'high'},
+    'symptom_level': {'none', 'mild', 'moderate', 'severe'},
+    'hydration': {'good', 'normal', 'poor'},
+    'medication_adherence': {'good', 'partial', 'poor'},
+    'sleep_quality': {'good', 'fair', 'poor'},
+}
 
 
 def _normalize_academic_profile(raw_profile):
@@ -84,14 +92,8 @@ def _wxpusher_consent_is_current(user, required_version):
 
 
 def _personal_weather_available(weather_data):
-    """个人评估只接受来源明确且温度可计算的真实和风天气。"""
-    if not is_qweather_online_weather(weather_data):
-        return False
-    try:
-        temperature = float(weather_data.get('temperature'))
-    except (AttributeError, TypeError, ValueError):
-        return False
-    return math.isfinite(temperature)
+    """个人评估只接受风险模型必需字段完整的真实和风天气。"""
+    return is_complete_qweather_weather(weather_data)
 
 
 def _safe_referrer_or_dashboard():
@@ -112,24 +114,66 @@ def _safe_referrer_or_dashboard():
     return referrer
 
 
+def _render_health_assessment_page(*, form_state=None, form_errors=None, status=200):
+    """渲染健康评估页，并在校验失败时保留已完成选项。"""
+    normalized_form_errors = form_errors or {}
+    first_form_error = next(
+        (name for name in _HEALTH_SCREENING_OPTIONS if name in normalized_form_errors),
+        None,
+    )
+    latest_assessment = None
+    if is_guest_user(current_user):
+        latest_assessment = get_guest_assessment()
+    else:
+        latest_assessment = HealthRiskAssessment.query.filter_by(
+            user_id=current_user.id
+        ).order_by(HealthRiskAssessment.assessment_date.desc()).first()
+    explain_data = {}
+    disease_risks_data = {}
+    if latest_assessment and getattr(latest_assessment, 'explain', None):
+        explain_data = safe_json_loads(latest_assessment.explain, {})
+    if latest_assessment and getattr(latest_assessment, 'disease_risks', None):
+        disease_risks_data = safe_json_loads(latest_assessment.disease_risks, {})
+    if not isinstance(explain_data, dict):
+        explain_data = {}
+    academic_profile = _normalize_academic_profile(
+        explain_data.get('academic_profile')
+    )
+    explain_data = dict(explain_data)
+    explain_data['academic_profile'] = academic_profile
+    if not isinstance(disease_risks_data, dict):
+        disease_risks_data = {}
+
+    return render_template(
+        'health_assessment.html',
+        assessment=latest_assessment,
+        assessment_explain=explain_data,
+        assessment_disease_risks=disease_risks_data,
+        assessment_academic=academic_profile,
+        form_state=form_state or {},
+        form_errors=normalized_form_errors,
+        first_form_error=first_form_error,
+    ), status
+
+
 def health_assessment():
     """健康风险评估"""
     if request.method == 'POST':
-        screening_options = {
-            'outdoor_exposure': {'low', 'medium', 'high'},
-            'symptom_level': {'none', 'mild', 'moderate', 'severe'},
-            'hydration': {'good', 'normal', 'poor'},
-            'medication_adherence': {'good', 'partial', 'poor'},
-            'sleep_quality': {'good', 'fair', 'poor'},
-        }
         screening = {}
-        for name, allowed in screening_options.items():
+        form_errors = {}
+        for name, allowed in _HEALTH_SCREENING_OPTIONS.items():
             value = sanitize_input(request.form.get(name), max_length=20)
             value = value.strip().lower() if isinstance(value, str) else ''
             if value not in allowed:
-                flash('请完整选择全部 5 项健康筛查后再提交。', 'error')
-                return redirect(url_for('user.health_assessment'))
-            screening[name] = value
+                form_errors[name] = '请选择这一项后再提交。'
+            else:
+                screening[name] = value
+        if form_errors:
+            return _render_health_assessment_page(
+                form_state=screening,
+                form_errors=form_errors,
+                status=422,
+            )
 
         try:
             # 执行风险评估（多路径融合版）
@@ -245,37 +289,7 @@ def health_assessment():
 
         return redirect(url_for('user.health_assessment'))
 
-    latest_assessment = None
-    if is_guest_user(current_user):
-        latest_assessment = get_guest_assessment()
-    else:
-        latest_assessment = HealthRiskAssessment.query.filter_by(
-            user_id=current_user.id
-        ).order_by(HealthRiskAssessment.assessment_date.desc()).first()
-    explain_data = {}
-    disease_risks_data = {}
-    academic_profile = {}
-    if latest_assessment and getattr(latest_assessment, 'explain', None):
-        explain_data = safe_json_loads(latest_assessment.explain, {})
-    if latest_assessment and getattr(latest_assessment, 'disease_risks', None):
-        disease_risks_data = safe_json_loads(latest_assessment.disease_risks, {})
-    if not isinstance(explain_data, dict):
-        explain_data = {}
-    academic_profile = _normalize_academic_profile(
-        explain_data.get('academic_profile')
-    )
-    explain_data = dict(explain_data)
-    explain_data['academic_profile'] = academic_profile
-    if not isinstance(disease_risks_data, dict):
-        disease_risks_data = {}
-
-    return render_template(
-        'health_assessment.html',
-        assessment=latest_assessment,
-        assessment_explain=explain_data,
-        assessment_disease_risks=disease_risks_data,
-        assessment_academic=academic_profile
-    )
+    return _render_health_assessment_page()
 
 
 def profile():
@@ -287,13 +301,25 @@ def profile():
         form_id = sanitize_input(request.form.get('form_id'), max_length=30) or 'basic'
 
         if form_id == 'api_token':
+            if current_user.role != 'admin':
+                abort(403)
             token_name = sanitize_input(request.form.get('token_name'), max_length=80)
             if request.form.get('miniprogram_privacy_consent') != '1':
                 flash('请先阅读并同意小程序隐私说明，再生成绑定凭证。', 'error')
                 return redirect(url_for('user.profile'))
+            current_password = request.form.get('current_password', '')
+            if not current_password:
+                flash('请输入当前密码，再生成旧版 API Token。', 'error')
+                return redirect(url_for('user.profile'))
             try:
                 owner_user_id = int(current_user.id)
-                with owner_write_guard(owner_user_id):
+                with owner_write_guard(owner_user_id) as locked_user:
+                    # 角色与密码都在 owner 锁内重新读取，阻断降权并发和陈旧会话。
+                    if locked_user.role != 'admin':
+                        abort(403)
+                    if not locked_user.check_password(current_password):
+                        flash('当前密码不正确，未生成旧版 API Token。', 'error')
+                        return redirect(url_for('user.profile'))
                     plain = create_api_token(
                         owner_user_id,
                         name=token_name,
@@ -312,6 +338,8 @@ def profile():
             except OwnerInactiveError:
                 flash('账号已失效，请重新登录。', 'error')
                 return redirect(url_for('public.login'))
+            except HTTPException:
+                raise
             except Exception:
                 logger.exception("API token create failed")
                 flash('生成失败，请稍后重试。', 'error')
@@ -320,10 +348,17 @@ def profile():
         if form_id == 'password':
             old_password = request.form.get('old_password', '')
             new_password = request.form.get('new_password')
+            confirm_password = request.form.get('confirm_password', '')
             if not old_password:
                 flash('请输入当前密码', 'error')
                 return redirect(url_for('user.profile'))
             if new_password:
+                if not confirm_password:
+                    flash('请再次输入新密码', 'error')
+                    return redirect(url_for('user.profile'))
+                if new_password != confirm_password:
+                    flash('两次输入的新密码不一致', 'error')
+                    return redirect(url_for('user.profile'))
                 valid, result = validate_password(new_password)
                 if not valid:
                     flash(result, 'error')
@@ -407,9 +442,17 @@ def profile():
             return redirect(url_for('user.profile'))
         gender = result
 
-        # 清理社区输入并校验
-        community_value = sanitize_input(request.form.get('community'), max_length=100)
-        community = normalize_location_name(community_value)
+        # 个人档案只接受县内配置地点；旧县外值必须由用户明确重选。
+        communities = Community.query.all()
+        community_resolution = resolve_user_location(
+            request.form.get('community'),
+            extra_names=[community.name for community in communities],
+            default_if_blank=False,
+        )
+        if not community_resolution.valid:
+            flash(community_resolution.error, 'error')
+            return redirect(url_for('user.profile'))
+        community = community_resolution.value
 
         # 验证邮箱
         valid, result = validate_email(request.form.get('email'))
@@ -568,6 +611,11 @@ def profile():
         return redirect(url_for('user.profile'))
 
     communities = Community.query.all()
+    current_location_resolution = resolve_user_location(
+        current_user.community,
+        extra_names=[community.name for community in communities],
+        default_if_blank=False,
+    )
     chronic_diseases_list = safe_json_loads(current_user.chronic_diseases, [])
 
     last_api_token_plain = session.pop('last_api_token_plain', None)
@@ -594,6 +642,11 @@ def profile():
                 required_wxpusher_version,
             )
         ),
+        profile_location_error=(
+            current_location_resolution.error
+            if not current_location_resolution.valid
+            else None
+        ),
     )
 
 
@@ -604,9 +657,19 @@ def update_location():
         flash('请填写有效的地点', 'error')
         return redirect(_safe_referrer_or_dashboard())
 
-    normalized = normalize_location_name(location)
-    if normalized != location:
-        flash(f'未识别的地点，已自动调整为 {normalized}', 'error')
+    communities = Community.query.all()
+    location_resolution = resolve_user_location(
+        location,
+        extra_names=[community.name for community in communities],
+        default_if_blank=False,
+    )
+    if not location_resolution.valid or not location_resolution.value:
+        flash(
+            location_resolution.error or '请填写有效的地点',
+            'error',
+        )
+        return redirect(_safe_referrer_or_dashboard())
+    normalized = location_resolution.value
 
     if is_guest_user(current_user):
         profile = build_guest_profile()

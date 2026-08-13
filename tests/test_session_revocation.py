@@ -130,6 +130,7 @@ def test_password_change_revokes_all_other_sessions_and_refreshes_current_browse
             'form_id': 'password',
             'old_password': 'OldPassword1!',
             'new_password': 'NewPassword2!',
+            'confirm_password': 'NewPassword2!',
             'csrf_token': current_csrf,
         },
         follow_redirects=False,

@@ -153,10 +153,12 @@ def _load_daily_risk_snapshot():
     snapshot_id = str(snapshot.get('snapshot_id') or '').strip()
     current = snapshot.get('current')
     risk = snapshot.get('risk')
+    from services.miniprogram_service import snapshot_component_status
+
+    risk_status = snapshot_component_status(snapshot, 'risk')
     if (
         not snapshot_id
-        or snapshot.get('available') is not True
-        or snapshot.get('stale') is not False
+        or not risk_status['usable']
         or not _heat_weather_available(current)
         or not isinstance(risk, dict)
         or risk.get('available') is not True

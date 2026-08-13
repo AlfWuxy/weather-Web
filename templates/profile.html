@@ -48,12 +48,19 @@
                             </div>
                             <div class="col-md-4 mb-3">
                                 <label for="community" class="form-label">所属社区</label>
-                                <select class="form-select" id="community" name="community">
+                                <select class="form-select{% if profile_location_error %} is-invalid{% endif %}" id="community" name="community" aria-describedby="profileCommunityHelp{% if profile_location_error %} profileCommunityError{% endif %}" {% if profile_location_error %}aria-invalid="true"{% endif %}>
                                     <option value="">请选择</option>
+                                    {% if profile_location_error and current_user.community %}
+                                        <option value="{{ current_user.community }}" selected>{{ current_user.community }}（不再支持，请重选）</option>
+                                    {% endif %}
                                     {% for comm in communities %}
                                         <option value="{{ comm.name }}" {% if current_user.community == comm.name %}selected{% endif %}>{{ comm.name }}</option>
                                     {% endfor %}
                                 </select>
+                                <div class="form-text" id="profileCommunityHelp">仅支持都昌县及已配置的乡镇、社区，也可以留空。</div>
+                                {% if profile_location_error %}
+                                <div class="invalid-feedback d-block" id="profileCommunityError">历史地点“{{ current_user.community }}”已无法继续使用，请重新选择县内地点或留空。</div>
+                                {% endif %}
                             </div>
                         </div>
 
@@ -178,7 +185,7 @@
                         </div>
                         <div class="mb-3">
                             <label for="confirm_password" class="form-label">确认新密码</label>
-                            <input type="password" class="form-control" id="confirm_password">
+                            <input type="password" class="form-control" id="confirm_password" name="confirm_password" autocomplete="new-password">
                         </div>
                         <button type="submit" class="btn btn-warning">修改密码</button>
                     </form>
@@ -193,12 +200,13 @@
                 </div>
                 <div class="card-body">
                     <p class="text-muted small mb-2">
-                        使用独立的跨端账号页保存手机号，并在复验当前密码后生成 8 位一次性绑定码。
+                        在跨端账号页复验当前密码后生成 8 位一次性绑定码。绑定不需要手机号。
                     </p>
                     <a class="btn btn-primary w-100" href="{{ url_for('public.account_link') }}">
                         <i class="bi bi-link-45deg"></i> 打开跨端账号页
                     </a>
 
+                    {% if current_user.role == 'admin' %}
                     <details class="mt-3">
                         <summary class="small text-muted">旧版 API Token 兼容入口</summary>
                         {% if last_api_token_plain %}
@@ -211,6 +219,8 @@
                             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                             <input type="hidden" name="form_id" value="api_token">
                             <input class="form-control mb-2" name="token_name" placeholder="备注，例如：旧版设备">
+                            <label class="form-label small" for="legacyTokenCurrentPassword">当前密码</label>
+                            <input class="form-control mb-2" type="password" id="legacyTokenCurrentPassword" name="current_password" autocomplete="current-password" required>
                             <div class="form-check mb-2">
                                 <input class="form-check-input" type="checkbox" value="1" name="miniprogram_privacy_consent" id="legacyTokenConsent" required>
                                 <label class="form-check-label small" for="legacyTokenConsent">我确认仅在自己的旧版设备上使用。</label>
@@ -218,6 +228,7 @@
                             <button type="submit" class="btn btn-outline-secondary btn-sm w-100">生成旧版 Token</button>
                         </form>
                     </details>
+                    {% endif %}
                 </div>
             </div>
 

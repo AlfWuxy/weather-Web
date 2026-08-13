@@ -3,7 +3,6 @@
 import json
 import logging
 import math
-from datetime import timedelta
 from types import SimpleNamespace
 
 from flask import current_app, has_app_context, render_template, request
@@ -15,9 +14,6 @@ from core.health_profiles import reminder_triggered
 from core.time_utils import today_local, utc_to_local_date, utcnow
 from core.weather import (
     ensure_user_location_valid,
-    get_consecutive_hot_days,
-    get_qweather_forecast_with_cache,
-    get_weather_with_cache,
     is_demo_mode,
     is_qweather_online_weather,
     resolve_weather_city_label
@@ -28,15 +24,9 @@ from core.db_models import (
     HealthRiskAssessment,
     MedicationReminder,
     Notification,
-    WeatherAlert,
-    WeatherData
 )
-from services.heat_action_service import HeatActionService
 from services.forecast_cards import build_forecast_cards
-from services.forecast_service import get_forecast_service
 from utils.parsers import safe_json_loads
-
-from ._common import HEAT_RISK_LABELS, _action_plan
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +36,27 @@ _REQUIRED_DASHBOARD_WEATHER_FIELDS = (
     'temperature_min',
     'humidity',
 )
+
+
+def get_bootstrap_payload(*args, **kwargs):
+    """延迟导入快照服务，避免 services.user 包初始化时形成循环依赖。"""
+    from services.miniprogram_service import get_bootstrap_payload as load_payload
+
+    return load_payload(*args, **kwargs)
+
+
+def snapshot_display_time(value):
+    """延迟导入快照时间格式化函数。"""
+    from services.miniprogram_service import snapshot_display_time as format_time
+
+    return format_time(value)
+
+
+def snapshot_component_status(payload, component):
+    """延迟导入组件状态解析，保持 user 服务初始化无循环依赖。"""
+    from services.miniprogram_service import snapshot_component_status as load_status
+
+    return load_status(payload, component)
 
 
 def _clamp(value, lower=0.0, upper=1.0):
@@ -137,6 +148,31 @@ def _dashboard_alert_card(alert):
     }
 
 
+def _dashboard_snapshot_alert_card(warning, location):
+    """将同一县级快照中的官方预警转换成首页卡片。"""
+    row = warning if isinstance(warning, dict) else {}
+    level_text = str(row.get('level') or row.get('severity') or '未分级').strip()
+    normalized_level = level_text.lower()
+    is_high = normalized_level in {'high', 'extreme', 'severe', 'moderate', 'red'} or any(
+        marker in level_text for marker in ('高', '严重', '红', '橙')
+    )
+    published_at = str(
+        row.get('start_time')
+        or row.get('issued_at')
+        or row.get('published_at')
+        or ''
+    ).strip()
+    date_text = published_at[:10] if len(published_at) >= 10 else '日期未标注'
+    return {
+        'alert_type': str(row.get('title') or row.get('type') or '天气预警').strip(),
+        'alert_level': level_text,
+        'alert_date_local': date_text,
+        'location': location or '都昌县',
+        'description': str(row.get('text') or row.get('instruction') or '').strip(),
+        'is_high': is_high,
+    }
+
+
 def _dashboard_alert_locations(user_location):
     """都昌页面同时读取县名和唯一 canonical 坐标写入的预警。"""
     locations = [str(user_location or '').strip()]
@@ -167,18 +203,6 @@ def _dashboard_weather_available(weather_data):
         if value is None or not math.isfinite(value):
             return False
     return True
-
-
-def _forecast_weather_context(weather_data):
-    """提取真实和风实况中的有限空气质量值，供未来日代理链使用。"""
-    if not is_qweather_online_weather(weather_data):
-        return {}
-    context = {}
-    for field in ('pm25', 'aqi'):
-        value = _parse_float((weather_data or {}).get(field))
-        if value is not None and math.isfinite(value):
-            context[field] = value
-    return context
 
 
 def _parse_systolic(value):
@@ -253,28 +277,41 @@ def _dashboard_metric_cards(user_id):
     return [cards[key] for key in ('sbp', 'heart_rate', 'blood_sugar') if key in cards]
 
 
-def _dashboard_forecast_days(location, start_date, current_weather=None):
-    """首页 7 日预测只使用和风实时预报，失败时不展示演示风险。"""
-    qweather_days, _, meta = get_qweather_forecast_with_cache(location, days=7)
-    if len(qweather_days or []) < 7:
-        logger.warning(
-            "首页和风7日预报不可用: location=%s meta=%s count=%s",
-            location,
-            meta,
-            len(qweather_days or []),
-        )
+def _dashboard_snapshot_forecast_days(snapshot, start_date, *, usable):
+    """把已落库的逐日天气风险直接转换成首页卡片。"""
+    if not usable:
         return []
-
-    health_forecasts = []
-    try:
-        health_forecasts, _ = get_forecast_service().generate_7day_forecast(
-            qweather_days,
-            start_date=start_date,
-            context=_forecast_weather_context(current_weather),
+    forecast = snapshot.get('forecast')
+    if not isinstance(forecast, list):
+        return []
+    cards = build_forecast_cards(forecast, [], start_date)
+    source_by_date = {
+        str(item.get('date') or item.get('forecast_date')): item
+        for item in forecast
+        if isinstance(item, dict) and (item.get('date') or item.get('forecast_date'))
+    }
+    for card in cards:
+        item = source_by_date.get(card.get('full_date')) or {}
+        score = _parse_float(item.get('risk_score'))
+        available = (
+            item.get('risk_available') is True
+            and score is not None
+            and math.isfinite(score)
         )
-    except Exception as exc:
-        logger.warning("首页7日健康预测生成失败，仅展示和风天气: %s", exc)
-    return build_forecast_cards(qweather_days, health_forecasts, start_date)
+        if not available:
+            continue
+        label = str(item.get('risk_level') or '待计算')
+        card.update({
+            'risk_available': True,
+            'risk_score': max(0, min(100, int(round(score)))),
+            'risk_label': label,
+            'risk_level': (
+                'high' if '高' in label or '极' in label
+                else 'mid' if '中' in label
+                else 'low'
+            ),
+        })
+    return cards
 
 
 def user_dashboard(force_elder=False):
@@ -285,12 +322,24 @@ def user_dashboard(force_elder=False):
     )
     is_guest = is_guest_user(current_user)
     demo_mode = is_demo_mode()
-    # 获取当前天气
+    # 首页和公开风险、小程序共用同一份只读快照；缺少快照时统一安全降级。
     today = today_local()
     user_location = ensure_user_location_valid()
-    alert_locations = _dashboard_alert_locations(user_location)
-    weather_source_city = resolve_weather_city_label(user_location)
-    weather_data, used_cache = get_weather_with_cache(user_location)
+    snapshot = get_bootstrap_payload()
+    snapshot_id = snapshot.get('snapshot_id')
+    snapshot_mode = bool(snapshot_id)
+    snapshot_location = snapshot.get('location') or {}
+    current_status = snapshot_component_status(snapshot, 'current')
+    risk_status = snapshot_component_status(snapshot, 'risk')
+    forecast_status = snapshot_component_status(snapshot, 'forecast')
+    warnings_status = snapshot_component_status(snapshot, 'warnings')
+    weather_source_city = str(
+        snapshot_location.get('name')
+        or resolve_weather_city_label(user_location)
+    )
+    weather_data = snapshot.get('current') or {}
+    if not snapshot_mode or not current_status['usable']:
+        weather_data = {}
     weather_is_mock = bool(weather_data.get('is_mock'))
     weather_available = _dashboard_weather_available(weather_data)
 
@@ -305,75 +354,38 @@ def user_dashboard(force_elder=False):
             logger.warning("极端天气识别失败，已跳过: %s", exc)
             extreme_result = {'is_extreme': False, 'conditions': []}
 
-    weather = WeatherData.query.filter_by(
-        date=today,
-        location=user_location
-    ).order_by(WeatherData.id.desc()).first()
-
-    if weather_available and (not weather or not used_cache):
-        if not weather:
-            weather = WeatherData(date=today, location=user_location)
-            db.session.add(weather)
-        weather.temperature = weather_data.get('temperature')
-        weather.temperature_max = weather_data.get('temperature_max')
-        weather.temperature_min = weather_data.get('temperature_min')
-        weather.humidity = weather_data.get('humidity')
-        weather.pressure = weather_data.get('pressure')
-        weather.weather_condition = weather_data.get('weather_condition')
-        weather.wind_speed = weather_data.get('wind_speed')
-        weather.pm25 = weather_data.get('pm25')
-        weather.aqi = weather_data.get('aqi')
-        weather.is_extreme = extreme_result['is_extreme']
-        weather.extreme_type = '、'.join([c['type'] for c in extreme_result['conditions']]) if extreme_result['is_extreme'] else None
-        db.session.commit()
-
-    if weather_available and not weather:
+    weather = None
+    if weather_available:
         weather = SimpleNamespace(**weather_data)
         weather.is_extreme = extreme_result['is_extreme']
         weather.extreme_type = '、'.join([c['type'] for c in extreme_result['conditions']]) if extreme_result['is_extreme'] else None
 
-    heat_service = HeatActionService()
-    if not weather_available:
+    risk = snapshot.get('risk') or {} if snapshot_mode else {}
+    calculation = risk.get('calculation') if isinstance(risk, dict) else {}
+    stored_heat_result = calculation.get('heat_result') if isinstance(calculation, dict) else None
+    snapshot_risk_ready = (
+        snapshot_mode
+        and risk_status['usable']
+        and risk.get('available') is True
+        and isinstance(stored_heat_result, dict)
+    )
+    if snapshot_risk_ready:
+        heat_result = dict(stored_heat_result)
+        heat_risk_label = risk.get('level') or '暂不可用'
+        heat_actions = snapshot.get('actions') or []
+    else:
         heat_result = None
         heat_risk_label = '暂不可用'
         heat_actions = []
-    else:
-        consecutive_hot_days = get_consecutive_hot_days(
-            user_location,
-            today_max=weather_data.get('temperature_max')
-        )
-        heat_result = heat_service.calculate_heat_risk(
-            weather_data,
-            consecutive_hot_days=consecutive_hot_days
-        )
-        heat_risk_label = HEAT_RISK_LABELS.get(heat_result['risk_level'], '低风险')
-        heat_actions = _action_plan(heat_risk_label)
     dashboard_hero_theme = _dashboard_hero_theme(
         getattr(weather, 'temperature', None) if weather_available else None
     )
     dashboard_metric_cards = [] if is_guest else _dashboard_metric_cards(current_user.id)
-    forecast_days = _dashboard_forecast_days(user_location, today, weather_data)
-
-    # 如果是极端天气，生成预警（避免重复）
-    if weather_available and extreme_result['is_extreme'] and not used_cache:
-        recent_alert = WeatherAlert.query.filter(
-            WeatherAlert.location.in_(alert_locations),
-            WeatherAlert.alert_date >= utcnow() - timedelta(hours=6)
-        ).first()
-        if not recent_alert:
-            alert = weather_service.generate_weather_alert(user_location, weather_data)
-            if alert:
-                weather_alert = WeatherAlert(
-                    alert_date=utcnow(),
-                    location=alert['location'],
-                    alert_type=alert['alert_type'],
-                    alert_level=alert['alert_level'],
-                    description=alert['description'],
-                    affected_communities=json.dumps([user_location]),
-                    disease_correlation=json.dumps({})
-                )
-                db.session.add(weather_alert)
-                db.session.commit()
+    forecast_days = _dashboard_snapshot_forecast_days(
+        snapshot,
+        today,
+        usable=forecast_status['usable'],
+    ) if snapshot_mode else []
 
     # 获取最新风险评估
     if is_guest:
@@ -387,43 +399,15 @@ def user_dashboard(force_elder=False):
     if latest_assessment and getattr(latest_assessment, 'explain', None):
         assessment_explain = safe_json_loads(latest_assessment.explain, {})
 
-    # 获取天气预警（最近24小时）
-    alerts = WeatherAlert.query.filter(
-        WeatherAlert.alert_date >= utcnow() - timedelta(days=1),
-        WeatherAlert.location.in_(alert_locations)
-    ).order_by(WeatherAlert.alert_date.desc()).limit(5).all()
-
-    # 如果没有预警但有极端天气，创建预警
-    if weather_available and not alerts and weather and weather.is_extreme:
-        from services.weather_service import WeatherService
-        weather_service = WeatherService()
-        weather_data = {
-            'temperature': weather.temperature,
-            'temperature_max': weather.temperature_max,
-            'temperature_min': weather.temperature_min,
-            'humidity': weather.humidity,
-            'aqi': weather.aqi,
-            'wind_speed': weather.wind_speed,
-        }
-        recent_alert = WeatherAlert.query.filter(
-            WeatherAlert.location.in_(alert_locations),
-            WeatherAlert.alert_date >= utcnow() - timedelta(hours=6)
-        ).first()
-        if not recent_alert:
-            alert = weather_service.generate_weather_alert(user_location, weather_data)
-            if alert:
-                weather_alert = WeatherAlert(
-                    alert_date=utcnow(),
-                    location=alert['location'],
-                    alert_type=alert['alert_type'],
-                    alert_level=alert['alert_level'],
-                    description=alert['description'],
-                    affected_communities=json.dumps([user_location]),
-                    disease_correlation=json.dumps({})
-                )
-                db.session.add(weather_alert)
-                db.session.commit()
-                alerts = [weather_alert]
+    # 预警与温度、风险共用同一快照；来源未知、不可用或过期时不展示旧预警。
+    warnings_ready = (
+        snapshot_mode
+        and warnings_status['usable']
+    )
+    alerts = [
+        _dashboard_snapshot_alert_card(item, weather_source_city)
+        for item in (snapshot.get('warnings') or [])[:5]
+    ] if warnings_ready else []
 
     # 用药提醒（根据天气触发）
     reminders = []
@@ -501,10 +485,14 @@ def user_dashboard(force_elder=False):
             heat_result=heat_result,
             heat_risk_label=heat_risk_label,
             heat_actions=heat_actions,
-            is_guest=is_guest
+            is_guest=is_guest,
+            weather_snapshot_id=snapshot_id,
+            weather_snapshot_fetched_at=snapshot.get('fetched_at'),
+            weather_snapshot_display_time=snapshot_display_time(snapshot.get('fetched_at')),
+            weather_source_status=snapshot.get('source_status') or {},
         )
 
-    alert_cards = [_dashboard_alert_card(alert) for alert in alerts]
+    alert_cards = alerts
 
     return render_template('user_dashboard.html',
                          weather=weather if weather_available else None,
@@ -523,7 +511,11 @@ def user_dashboard(force_elder=False):
                          alerts=alert_cards,
                          reminders=reminders,
                          notifications=notifications,
-                         is_guest=is_guest)
+                         is_guest=is_guest,
+                         weather_snapshot_id=snapshot_id,
+                         weather_snapshot_fetched_at=snapshot.get('fetched_at'),
+                         weather_snapshot_display_time=snapshot_display_time(snapshot.get('fetched_at')),
+                         weather_source_status=snapshot.get('source_status') or {})
 
 
 def elder_dashboard():

@@ -15,8 +15,10 @@
         <div class="row g-3 align-items-end">
             <div class="col-md-8">
                 <label class="form-label">所在地</label>
-                <input type="text" class="form-control" name="location" value="{{ request.args.get('location', current_location) }}" list="locOpts">
+                <input type="text" class="form-control{% if location_error %} is-invalid{% endif %}" name="location" value="{{ location_input if location_input is defined else current_location }}" list="locOpts" aria-describedby="forecastLocationHelp{% if location_error %} forecastLocationError{% endif %}">
                 <datalist id="locOpts">{% for loc in (location_options or []) %}<option value="{{ loc }}"></option>{% endfor %}</datalist>
+                <div class="form-text" id="forecastLocationHelp">目前仅支持都昌县及列表中的乡镇、社区。</div>
+                {% if location_error %}<div class="invalid-feedback" id="forecastLocationError">{{ location_error }}</div>{% endif %}
             </div>
             <div class="col-md-4 d-grid">
                 <button class="btn btn-primary" type="submit"><i class="bi bi-graph-up me-1"></i>生成预测</button>
@@ -24,6 +26,7 @@
         </div>
     </form>
 
+    {% if not location_error %}
     <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3 yl-fade-up yl-fade-up-d2">
         <div class="text-muted" style="font-size:.9rem;">
             来源：{{ forecast_meta.source_label or '和风天气' }}
@@ -31,6 +34,11 @@
             {% if forecast_meta.from_cache %} · 最近一次有效数据{% endif %}
         </div>
     </div>
+    {% else %}
+    <div class="alert alert-warning yl-fade-up yl-fade-up-d2" role="alert" data-error-code="invalid_location">
+        <i class="bi bi-geo-alt me-1"></i>{{ location_error }}
+    </div>
+    {% endif %}
 
     {% if forecast_error %}
     <div class="alert alert-warning yl-fade-up yl-fade-up-d2" role="alert">
@@ -114,7 +122,7 @@
         </div>
         {% endfor %}
     </div>
-    {% else %}
+    {% elif not location_error %}
     <section class="yl-section text-center yl-fade-up yl-fade-up-d2">
         <div style="font-size:2rem; color:var(--yl-orange-500);"><i class="bi bi-cloud-slash"></i></div>
         <h4 class="mt-2" style="font-size:1.05rem;">7 天预报正在更新</h4>
@@ -122,6 +130,7 @@
     </section>
     {% endif %}
 
+    {% if not location_error %}
     <div class="row g-4 mb-4">
         <div class="col-lg-8">
             <section class="yl-section yl-fade-up yl-fade-up-d3">
@@ -176,6 +185,7 @@
             {% endfor %}
         </div>
     </section>
+    {% endif %}
 </div>
 
 <script>

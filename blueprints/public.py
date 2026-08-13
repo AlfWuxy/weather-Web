@@ -38,7 +38,7 @@ from core.extensions import limiter
 from core.extensions import db
 from core.audit import log_audit
 from core.guest import is_guest_user
-from core.security import rate_limit_key
+from core.security import client_rate_limit_key, rate_limit_key
 from core.time_utils import ensure_utc_aware, utcnow
 from core.usage import log_usage_event
 from core.db_models import AlertDelivery, WeatherAlert
@@ -457,7 +457,14 @@ def role_entry():
 
 
 @bp.route('/login', methods=['GET', 'POST'], endpoint='login')
-@limiter.limit(lambda: current_app.config.get('RATE_LIMIT_LOGIN', '5 per 5 minutes'), methods=['POST'], key_func=rate_limit_key)
+@limiter.limit(
+    lambda: current_app.config.get('RATE_LIMIT_LOGIN', '5 per 5 minutes'),
+    methods=['POST'],
+    key_func=client_rate_limit_key,
+    deduct_when=lambda response: response.status_code not in {
+        301, 302, 303, 307, 308,
+    },
+)
 def login():
     """登录"""
     # URL 不经过 HTML 清理，避免把 & 重复转义为 &amp;。
@@ -470,7 +477,7 @@ def login():
 @limiter.limit(
     lambda: current_app.config.get('RATE_LIMIT_REGISTER', '5 per hour'),
     methods=['POST'],
-    key_func=rate_limit_key,
+    key_func=client_rate_limit_key,
 )
 def register():
     """注册"""

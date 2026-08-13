@@ -8,7 +8,11 @@ const {
   suspendHealthMutation,
   trackHealthMutation,
 } = require('../elders/care-session');
-const { normalizeList, normalizeSnapshot } = require('../elders/care-logic');
+const {
+  normalizeList,
+  normalizeSnapshot,
+  trustedWeatherTrigger,
+} = require('../elders/care-logic');
 const { duchangDateKey } = require('../../utils/format');
 
 const ACTION_PLANS = {
@@ -39,10 +43,11 @@ function actionPlan(trigger) {
 }
 
 function weatherStatus(weather) {
+  const trigger = trustedWeatherTrigger(weather);
+  if (trigger === 'heat') return '高温留意';
+  if (trigger === 'cold') return '低温留意';
   if (!weather || !weather.available) return '天气待更新';
   if (weather.stale) return '较早天气，待刷新';
-  if (weather.trigger === 'heat') return '高温留意';
-  if (weather.trigger === 'cold') return '低温留意';
   return '常规天气提示';
 }
 
@@ -288,7 +293,7 @@ Page({
         throw new Error('miniprogram_pair_unsupported');
       }
       const weather = normalizeSnapshot(snapshot);
-      const plan = actionPlan(weather.stale ? '' : weather.trigger);
+      const plan = actionPlan(trustedWeatherTrigger(weather));
       const restored = restoreTodayActions(plan, elder.today);
       this.setData({
         elderName: elder.member && elder.member.name ? elder.member.name : '家人',

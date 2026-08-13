@@ -221,6 +221,113 @@ function pickFirst(source, keys) {
   return undefined;
 }
 
+function hasOwn(source, key) {
+  return Boolean(source && Object.prototype.hasOwnProperty.call(source, key));
+}
+
+function componentAliases(component) {
+  return component === 'current' ? ['current', 'current_weather', 'weather'] : [component];
+}
+
+function snapshotComponentStatus(rootValue, metaValue, component, fallbackAvailable, nowMs) {
+  const root = rootValue && typeof rootValue === 'object' ? rootValue : {};
+  const meta = metaValue && typeof metaValue === 'object' ? metaValue : {};
+  const sourceStatus = root.source_status && typeof root.source_status === 'object'
+    && !Array.isArray(root.source_status)
+    ? root.source_status
+    : {};
+  const aliases = componentAliases(component);
+  const stateEntries = aliases
+    .filter((key) => hasOwn(sourceStatus, key))
+    .map((key) => ({ key, value: sourceStatus[key] }));
+  const stateObjects = stateEntries
+    .map((entry) => entry.value)
+    .filter((value) => value && typeof value === 'object' && !Array.isArray(value));
+  const stateContractValid = stateEntries.every((entry) => {
+    const state = entry.value;
+    const expiresValue = state && pickFirst(state, ['expires_at', 'expiresAt']);
+    const hasValidExpiry = expiresValue !== undefined
+      && Number.isFinite(Date.parse(String(expiresValue)));
+    const hasStale = Boolean(state && hasOwn(state, 'stale'));
+    return Boolean(
+      state
+      && typeof state === 'object'
+      && !Array.isArray(state)
+      && typeof state.available === 'boolean'
+      && (!hasStale || typeof state.stale === 'boolean')
+      && (expiresValue === undefined || hasValidExpiry)
+      && (hasStale || hasValidExpiry)
+    );
+  });
+  const stateAvailable = stateEntries.length === 0
+    || (stateContractValid && stateObjects.every((state) => state.available === true));
+  const componentPayload = aliases
+    .map((key) => root[key])
+    .find((value) => value && typeof value === 'object' && !Array.isArray(value));
+  const payloadAvailable = componentPayload && hasOwn(componentPayload, 'available')
+    ? componentPayload.available === true
+    : true;
+  const currentTime = Number.isFinite(Number(nowMs)) ? Number(nowMs) : Date.now();
+  const expiryValues = stateObjects.map((state) => pickFirst(state, ['expires_at', 'expiresAt']));
+  const parsedExpiries = expiryValues.map((value) => Date.parse(String(value || '')));
+  const invalidExpiry = expiryValues.some((value, index) => value !== undefined && !Number.isFinite(parsedExpiries[index]));
+  const expired = parsedExpiries.some((value) => Number.isFinite(value) && currentTime >= value);
+  const staleKeys = aliases.map((key) => `${key}_stale`);
+  const malformedRootStale = staleKeys.some((key) => hasOwn(root, key) && typeof root[key] !== 'boolean');
+  const explicitRootStale = staleKeys.some((key) => root[key] === true);
+  const explicitStateStale = stateObjects.some((state) => state.stale === true);
+  const globalStale = meta.stale === true
+    || cleanText(meta.source, 30) === 'stale-cache'
+    || root.stale === true;
+  const verifiedFreshState = stateEntries.length > 0
+    && stateContractValid
+    && stateObjects.every((state, index) => (
+      state.available === true
+      && state.stale === false
+      && Number.isFinite(parsedExpiries[index])
+      && currentTime < parsedExpiries[index]
+    ));
+  const stale = malformedRootStale
+    || invalidExpiry
+    || expired
+    || explicitRootStale
+    || explicitStateStale
+    || (globalStale && !verifiedFreshState);
+  const rootAvailabilityDeclared = hasOwn(root, 'available');
+  const rootCurrentAvailable = !rootAvailabilityDeclared || root.available === true;
+  const rootAvailable = component === 'warnings'
+    ? (stateEntries.length > 0
+      ? (root.available === true || verifiedFreshState)
+      : root.available === true)
+    : (['current', 'risk'].includes(component)
+      ? rootCurrentAvailable
+      : true);
+  const available = Boolean(fallbackAvailable)
+    && stateContractValid
+    && stateAvailable
+    && payloadAvailable
+    && rootAvailable;
+  const firstState = stateObjects[0] || {};
+  const expiresValue = pickFirst(firstState, ['expires_at', 'expiresAt']);
+  return {
+    available,
+    stale,
+    usable: available && !stale,
+    verified: verifiedFreshState,
+    expiresAt: expiresValue === undefined ? '' : cleanText(expiresValue, 50),
+    fetchedAt: cleanText(pickFirst(firstState, ['fetched_at', 'fetchedAt', 'updated_at']), 50),
+  };
+}
+
+function warningTrigger(warnings) {
+  const text = (Array.isArray(warnings) ? warnings : [])
+    .map((item) => `${item && item.title ? item.title : ''}${item && item.type ? item.type : ''}`)
+    .join(' ');
+  if (/高温|heat/i.test(text)) return 'heat';
+  if (/寒潮|低温|cold/i.test(text)) return 'cold';
+  return '';
+}
+
 function normalizeSnapshot(snapshot) {
   const envelope = snapshot && typeof snapshot === 'object' ? snapshot : {};
   const meta = envelope.meta && typeof envelope.meta === 'object' ? envelope.meta : {};
@@ -244,16 +351,30 @@ function normalizeSnapshot(snapshot) {
   const warnings = Array.isArray(warningsSource)
     ? warningsSource
     : (warningsSource && (warningsSource.items || warningsSource.list)) || [];
-  const warningText = warnings.map((item) => `${item.title || ''}${item.type || ''}`).join(' ');
-  let trigger = '';
-  if (/高温|heat/i.test(warningText) || (tmax !== null && tmax >= 35)) trigger = 'heat';
-  else if (/寒潮|低温|cold/i.test(warningText) || (tmin !== null && tmin <= 5)) trigger = 'cold';
-  const available = temperature !== null || tmax !== null || tmin !== null || warnings.length > 0;
+  const currentStatus = snapshotComponentStatus(
+    root,
+    meta,
+    'current',
+    temperature !== null || tmax !== null || tmin !== null,
+  );
+  const warningsStatus = snapshotComponentStatus(root, meta, 'warnings', true);
+  const riskSource = root.risk && typeof root.risk === 'object' ? root.risk : {};
+  const riskFallback = riskSource.available === true
+    || toFiniteNumber(pickFirst(riskSource, ['score', 'risk_score'])) !== null
+    || Boolean(cleanText(pickFirst(riskSource, ['level', 'label', 'risk_level']), 30));
+  const riskStatus = snapshotComponentStatus(root, meta, 'risk', riskFallback);
+  const safeWarnings = warningsStatus.usable ? warnings : [];
+  let trigger = warningTrigger(safeWarnings);
+  if (!trigger && currentStatus.usable && tmax !== null && tmax >= 35) trigger = 'heat';
+  else if (!trigger && currentStatus.usable && tmin !== null && tmin <= 5) trigger = 'cold';
+  const available = currentStatus.available;
   const cacheSource = cleanText(meta.source, 30);
-  const stale = available && (meta.stale === true || cacheSource === 'stale-cache' || root.stale === true);
+  const stale = available && currentStatus.stale;
   const freshnessState = !available ? 'unavailable' : (stale ? 'stale' : 'fresh');
   const rootUpdatedValue = pickFirst(root, ['updated_at', 'updatedAt', 'fetched_at', 'generated_at']);
-  const updatedValue = rootUpdatedValue !== undefined ? rootUpdatedValue : pickFirst(meta, ['storedAt']);
+  const componentUpdatedValue = currentStatus.fetchedAt || warningsStatus.fetchedAt;
+  const updatedValue = componentUpdatedValue
+    || (rootUpdatedValue !== undefined ? rootUpdatedValue : pickFirst(meta, ['storedAt']));
   const updatedAt = typeof updatedValue === 'number' && Number.isFinite(updatedValue)
     ? new Date(updatedValue).toISOString()
     : cleanText(updatedValue, 40);
@@ -265,25 +386,61 @@ function normalizeSnapshot(snapshot) {
     humidity,
     condition: cleanText(pickFirst(current, ['condition', 'text', 'weather', 'weather_text']), 40),
     trigger,
-    warnings,
+    warnings: safeWarnings,
     updatedAt,
     updatedText: formatDateTime(updatedValue),
     available,
     stale,
     cacheSource,
     freshnessState,
+    componentStatus: {
+      current: currentStatus,
+      warnings: warningsStatus,
+      risk: riskStatus,
+    },
   };
 }
 
 function markSnapshotStale(weather) {
   const source = weather && typeof weather === 'object' ? weather : normalizeSnapshot({});
   const available = Boolean(source.available);
+  const componentStatus = Object.keys(source.componentStatus || {}).reduce((result, key) => {
+    const status = source.componentStatus[key] || {};
+    result[key] = {
+      ...status,
+      stale: Boolean(status.available),
+      usable: false,
+      verified: false,
+    };
+    return result;
+  }, {});
   return {
     ...source,
+    trigger: '',
+    warnings: [],
     stale: available,
     cacheSource: available ? 'stale-cache' : (source.cacheSource || ''),
     freshnessState: available ? 'stale' : 'unavailable',
+    componentStatus,
   };
+}
+
+function trustedWeatherTrigger(weather) {
+  const source = weather && typeof weather === 'object' ? weather : {};
+  const status = source.componentStatus && typeof source.componentStatus === 'object'
+    ? source.componentStatus
+    : {};
+  const warnings = Array.isArray(source.warnings) ? source.warnings : [];
+  const fromWarning = status.warnings && status.warnings.usable
+    ? warningTrigger(warnings)
+    : '';
+  if (fromWarning) return fromWarning;
+  if (!status.current || !status.current.usable) return '';
+  const tmax = toFiniteNumber(source.temperatureMax);
+  const tmin = toFiniteNumber(source.temperatureMin);
+  if (tmax !== null && tmax >= 35) return 'heat';
+  if (tmin !== null && tmin <= 5) return 'cold';
+  return '';
 }
 
 function buildReminderMessage(input) {
@@ -332,7 +489,9 @@ module.exports = {
   markSnapshotStale,
   normalizeList,
   normalizeSnapshot,
+  snapshotComponentStatus,
   splitChronic,
+  trustedWeatherTrigger,
   validateAssessment,
   validateDiaryInput,
   validateElderInput,

@@ -28,7 +28,9 @@ const {
   isValidDateText,
   markSnapshotStale,
   normalizeSnapshot,
+  snapshotComponentStatus,
   splitChronic,
+  trustedWeatherTrigger,
   validateAssessment,
   validateDiaryInput,
   validateElderInput,
@@ -206,6 +208,151 @@ test('照护天气明确区分 fresh、stale 和 unavailable', () => {
   assert.equal(unavailable.available, false);
   assert.equal(unavailable.stale, false);
   assert.equal(unavailable.updatedText, '07月17日 12:00');
+});
+
+test('照护组件支持当前天气别名并严格校验 available', () => {
+  ['current', 'current_weather', 'weather'].forEach((alias) => {
+    const normalized = normalizeSnapshot({
+      data: {
+        available: true,
+        stale: true,
+        [alias]: { temperature: 36, temperature_max: 38, temperature_min: 28 },
+        risk: { available: true, level: '高风险' },
+        source_status: {
+          [alias]: {
+            available: true,
+            stale: false,
+            expires_at: '2099-01-01T00:00:00Z',
+          },
+          risk: {
+            available: true,
+            stale: false,
+            expires_at: '2099-01-01T00:00:00Z',
+          },
+        },
+      },
+      meta: { source: 'stale-cache', stale: true },
+    });
+
+    assert.equal(normalized.componentStatus.current.usable, true, alias);
+    assert.equal(normalized.componentStatus.risk.usable, true, alias);
+    assert.equal(trustedWeatherTrigger(normalized), 'heat', alias);
+  });
+
+  const malformedStates = [
+    { available: 'false', stale: false, expires_at: '2099-01-01T00:00:00Z' },
+    { stale: false, expires_at: '2099-01-01T00:00:00Z' },
+  ];
+  malformedStates.forEach((state) => {
+    const root = {
+      available: true,
+      current: { temperature: 36, temperature_max: 38, temperature_min: 28 },
+      warnings: [{ title: '来源不明的高温预警' }],
+      source_status: { current: state, warnings: state },
+    };
+    assert.equal(
+      snapshotComponentStatus(root, { source: 'network', stale: false }, 'current', true).usable,
+      false,
+    );
+    assert.equal(
+      snapshotComponentStatus(root, { source: 'network', stale: false }, 'warnings', true).usable,
+      false,
+    );
+  });
+});
+
+test('旧缓存只有精确布尔状态和未来过期时间才能解锁组件', () => {
+  const malformedStates = [
+    { available: true },
+    { available: true, expires_at: '不是日期' },
+    { available: 'true', expires_at: '2099-01-01T00:00:00Z' },
+    { expires_at: '2099-01-01T00:00:00Z' },
+  ];
+
+  malformedStates.forEach((state) => {
+    const root = {
+      available: true,
+      stale: true,
+      current: { temperature: 36, temperature_max: 38, temperature_min: 28 },
+      warnings: [{ title: '旧高温预警' }],
+      source_status: { current: state, warnings: state },
+    };
+    const normalized = normalizeSnapshot({ data: root, meta: { source: 'stale-cache', stale: true } });
+    assert.equal(normalized.componentStatus.current.usable, false);
+    assert.equal(normalized.componentStatus.warnings.usable, false);
+    assert.deepEqual(normalized.warnings, []);
+    assert.equal(trustedWeatherTrigger(normalized), '');
+  });
+});
+
+test('新鲜官方预警可在当前天气不可用时独立触发照护提醒', () => {
+  const normalized = normalizeSnapshot({
+    data: {
+      available: false,
+      stale: true,
+      current_stale: true,
+      risk_stale: true,
+      warnings_stale: false,
+      current: {},
+      risk: { available: false, level: '未知' },
+      warnings: [{ title: '都昌县高温橙色预警' }],
+      source_status: {
+        current: { available: false, expires_at: '2099-01-01T00:00:00Z' },
+        risk: { available: false, expires_at: '2099-01-01T00:00:00Z' },
+        warnings: { available: true, stale: false, expires_at: '2099-01-01T00:00:00Z' },
+      },
+    },
+    meta: { source: 'stale-cache', stale: true },
+  });
+
+  assert.equal(normalized.available, false);
+  assert.equal(normalized.componentStatus.warnings.usable, true);
+  assert.equal(normalized.warnings.length, 1);
+  assert.equal(normalized.trigger, 'heat');
+  assert.equal(trustedWeatherTrigger(normalized), 'heat');
+});
+
+test('根快照不可用时预警必须有显式精确来源状态', () => {
+  [false, undefined].forEach((rootAvailable) => {
+    const data = {
+      warnings: [{ title: '无来源状态的高温预警' }],
+    };
+    if (rootAvailable !== undefined) data.available = rootAvailable;
+    const legacy = normalizeSnapshot({
+      data,
+      meta: { source: 'network', stale: false },
+    });
+    assert.equal(legacy.componentStatus.warnings.usable, false);
+    assert.deepEqual(legacy.warnings, []);
+    assert.equal(trustedWeatherTrigger(legacy), '');
+  });
+
+  const explicit = normalizeSnapshot({
+    data: {
+      available: false,
+      warnings: [{ title: '都昌县高温橙色预警' }],
+      source_status: {
+        warnings: { available: true, stale: false, expires_at: '2099-01-01T00:00:00Z' },
+      },
+    },
+    meta: { source: 'stale-cache', stale: true },
+  });
+  assert.equal(explicit.componentStatus.warnings.usable, true);
+  assert.equal(trustedWeatherTrigger(explicit), 'heat');
+});
+
+test('根快照明确不可用时旧 current 无来源状态也不能解锁', () => {
+  const normalized = normalizeSnapshot({
+    data: {
+      available: false,
+      current: { temperature: 38, temperature_max: 40 },
+    },
+    meta: { source: 'network', stale: false },
+  });
+
+  assert.equal(normalized.componentStatus.current.usable, false);
+  assert.equal(normalized.available, false);
+  assert.equal(trustedWeatherTrigger(normalized), '');
 });
 
 test('刷新失败保留旧天气并降级为 stale，空天气保持 unavailable', () => {

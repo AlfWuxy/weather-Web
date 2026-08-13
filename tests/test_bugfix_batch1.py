@@ -62,6 +62,7 @@ class TestPasswordChangeRequiresOldPassword:
                 'form_id': 'password',
                 'old_password': 'WrongOldPass!',
                 'new_password': 'NewPass456!x',
+                'confirm_password': 'NewPass456!x',
                 'csrf_token': csrf,
             }, follow_redirects=True)
 
@@ -81,6 +82,7 @@ class TestPasswordChangeRequiresOldPassword:
                 'form_id': 'password',
                 'old_password': 'OldPass123!',
                 'new_password': 'NewPass456!x',
+                'confirm_password': 'NewPass456!x',
                 'csrf_token': csrf,
             }, follow_redirects=True)
 
@@ -101,6 +103,7 @@ class TestPasswordChangeRequiresOldPassword:
                 'form_id': 'password',
                 'old_password': '',
                 'new_password': 'NewPass456!',
+                'confirm_password': 'NewPass456!',
                 'csrf_token': csrf,
             }, follow_redirects=True)
 
@@ -133,6 +136,7 @@ class TestPasswordChangeRequiresOldPassword:
                 'form_id': 'password',
                 'old_password': 'OldPass123!',
                 'new_password': 'ShortPass1!',
+                'confirm_password': 'ShortPass1!',
                 'csrf_token': csrf,
             }, follow_redirects=False)
             assert short_response.status_code in (301, 302)
@@ -145,6 +149,7 @@ class TestPasswordChangeRequiresOldPassword:
                 'form_id': 'password',
                 'old_password': 'OldPass123!',
                 'new_password': 'LongNewPass1!',
+                'confirm_password': 'LongNewPass1!',
                 'csrf_token': csrf,
             }, follow_redirects=False)
 

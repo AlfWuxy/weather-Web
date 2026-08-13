@@ -53,8 +53,10 @@ def test_health_assessment_marks_every_screening_group_required(authenticated_cl
             continue
         assert f'name="{field_name}"' in html
         assert f'name="{field_name}" value=' in html
-    assert html.count('class="visually-hidden assess-opt" required') == 16
-    assert 'class="d-none assess-opt" required' not in html
+    assert html.count('class="visually-hidden assess-opt"') == 16
+    assert 'assess-opt" required' not in html
+    assert 'novalidate' in html
+    assert 'validateAssessment()' in html
 
 
 @pytest.mark.parametrize(
@@ -87,11 +89,44 @@ def test_health_assessment_rejects_missing_or_invalid_screening_without_side_eff
     response = authenticated_client.post(
         '/health-assessment',
         data=data,
+    )
+
+    assert response.status_code == 422
+    body = response.get_data(as_text=True)
+    assert '还差 <span id="assessmentMissingCount">1</span> 项' in body
+    assert 'assessment-question is-invalid' in body
+    assert HealthRiskAssessment.query.count() == 0
+
+
+def test_web_health_assessment_rejects_partial_weather_before_model_or_write(
+    authenticated_client,
+    monkeypatch,
+):
+    """Web 评估不能用模型默认值补齐缺失天气后生成正式结果。"""
+    monkeypatch.setattr(
+        'services.user.profile_service.get_weather_with_cache',
+        lambda _location: ({
+            'temperature': 39,
+            'data_source': 'QWeather',
+            'is_mock': False,
+        }, False),
+    )
+
+    def unexpected(*_args, **_kwargs):
+        raise AssertionError('不完整天气不得进入健康风险模型')
+
+    monkeypatch.setattr(
+        'services.health_risk_service.HealthRiskService.assess_personal_weather_health_risk',
+        unexpected,
+    )
+    response = authenticated_client.post(
+        '/health-assessment',
+        data=SCREENING_DATA,
         follow_redirects=True,
     )
 
     assert response.status_code == 200
-    assert '请完整选择全部 5 项健康筛查后再提交' in response.get_data(as_text=True)
+    assert '天气正在更新，本次评估暂未完成' in response.get_data(as_text=True)
     assert HealthRiskAssessment.query.count() == 0
 
 
@@ -100,7 +135,7 @@ def _profile_form(email):
         'form_id': 'basic',
         'age': '66',
         'gender': '男性',
-        'community': '新社区',
+        'community': '都昌县',
         'email': email,
         'csrf_token': 'test-csrf-token',
     }

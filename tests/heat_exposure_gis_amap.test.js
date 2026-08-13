@@ -67,6 +67,72 @@ function loadPercentileText() {
   return Function(source)();
 }
 
+function loadCameraTransactionHarness() {
+  const frames = new Map();
+  let nextFrameId = 1;
+  const state = {
+    map: {},
+    renderFrame: null,
+    cameraInMotion: false,
+    cameraSettleFrame: null,
+    hoverIndex: 8,
+    drawCache: [{polygons: []}],
+    hitBuckets: new Map([['0:0', [0]]]),
+    renderCalls: 0,
+  };
+  const ui = {gridCanvas: {hidden: false}};
+  const window = {
+    requestAnimationFrame(callback) {
+      const frameId = nextFrameId;
+      nextFrameId += 1;
+      frames.set(frameId, callback);
+      return frameId;
+    },
+    cancelAnimationFrame(frameId) {
+      frames.delete(frameId);
+    },
+  };
+  let tooltipHides = 0;
+  const hideMapTooltip = () => {
+    tooltipHides += 1;
+  };
+  const factory = Function(
+    'state',
+    'ui',
+    'window',
+    'hideMapTooltip',
+    [
+      'function renderMapCanvas() {',
+      '  state.renderFrame = null;',
+      '  state.renderCalls += 1;',
+      '  ui.gridCanvas.hidden = false;',
+      '}',
+      functionSource('scheduleMapRender'),
+      functionSource('beginCameraTransaction'),
+      functionSource('settleCameraTransaction'),
+      'return {beginCameraTransaction, settleCameraTransaction};',
+    ].join('\n'),
+  );
+  const camera = factory(state, ui, window, hideMapTooltip);
+
+  function flushNextFrame() {
+    const next = frames.entries().next();
+    assert.equal(next.done, false, '预期存在待执行的动画帧');
+    const [frameId, callback] = next.value;
+    frames.delete(frameId);
+    callback();
+  }
+
+  return {
+    ...camera,
+    state,
+    ui,
+    frames,
+    flushNextFrame,
+    tooltipHides: () => tooltipHides,
+  };
+}
+
 test('高德显示转换只生成 GCJ-02 副本，不修改科研 WGS84 几何', () => {
   const { wgs84ToGcj02, displayShape } = loadDisplayTransform();
   const feature = {
@@ -132,13 +198,81 @@ test('地图手势结束后才重绘，命中索引不会逐次扫描全部网�
   assert.match(script, /map\.on\('moveend'/);
   assert.match(script, /map\.on\('zoomstart'/);
   assert.match(script, /map\.on\('zoomend'/);
-  assert.match(functionSource('suspendMapCanvas'), /state\.drawCache = \[\]/);
-  assert.match(functionSource('suspendMapCanvas'), /state\.hitBuckets = new Map\(\)/);
+  assert.match(functionSource('beginCameraTransaction'), /state\.drawCache = \[\]/);
+  assert.match(functionSource('beginCameraTransaction'), /state\.hitBuckets = new Map\(\)/);
   assert.match(functionSource('cellAtPixel'), /ui\.gridCanvas\.hidden/);
   assert.doesNotMatch(functionSource('updateMapHover'), /scheduleMapRender/);
   assert.doesNotMatch(functionSource('renderMapCanvas'), /hoverIndex/);
   assert.doesNotMatch(script, /map\.on\('mapmove'/);
   assert.doesNotMatch(script, /map\.on\('zoomchange'/);
+});
+
+test('zoomstart 后交错 movestart，即使缺少 moveend 也会恢复 Canvas', () => {
+  const harness = loadCameraTransactionHarness();
+
+  harness.beginCameraTransaction();
+  harness.beginCameraTransaction();
+  harness.settleCameraTransaction();
+
+  assert.equal(harness.state.cameraInMotion, true);
+  assert.equal(harness.ui.gridCanvas.hidden, true);
+  assert.deepEqual(harness.state.drawCache, []);
+  assert.equal(harness.state.hitBuckets.size, 0);
+  assert.equal(harness.tooltipHides(), 2);
+  harness.flushNextFrame();
+  assert.equal(harness.state.cameraInMotion, false);
+  assert.notEqual(harness.state.renderFrame, null, '结束事务后应安排重绘');
+  harness.flushNextFrame();
+  assert.equal(harness.ui.gridCanvas.hidden, false);
+  assert.equal(harness.state.renderCalls, 1);
+});
+
+test('movestart 后交错 zoomstart，即使缺少 zoomend 也会恢复 Canvas', () => {
+  const harness = loadCameraTransactionHarness();
+
+  harness.beginCameraTransaction();
+  harness.beginCameraTransaction();
+  harness.settleCameraTransaction();
+  harness.flushNextFrame();
+
+  assert.equal(harness.state.cameraInMotion, false);
+  assert.notEqual(harness.state.renderFrame, null, '结束事务后应安排重绘');
+  harness.flushNextFrame();
+  assert.equal(harness.ui.gridCanvas.hidden, false);
+  assert.equal(harness.state.renderCalls, 1);
+});
+
+test('新的 start 会取消待结算帧，长拖拽期间不会提前重绘', () => {
+  const harness = loadCameraTransactionHarness();
+
+  harness.beginCameraTransaction();
+  harness.settleCameraTransaction();
+  assert.equal(harness.frames.size, 1);
+  harness.beginCameraTransaction();
+
+  assert.equal(harness.frames.size, 0);
+  assert.equal(harness.state.cameraInMotion, true);
+  assert.equal(harness.ui.gridCanvas.hidden, true);
+  assert.equal(harness.state.renderCalls, 0);
+  assert.doesNotMatch(functionSource('settleCameraTransaction'), /setTimeout/);
+});
+
+test('后续 end 会重新校准稳定帧并再次重绘', () => {
+  const harness = loadCameraTransactionHarness();
+
+  harness.beginCameraTransaction();
+  harness.settleCameraTransaction();
+  harness.settleCameraTransaction();
+  assert.equal(harness.frames.size, 1);
+  harness.flushNextFrame();
+  harness.flushNextFrame();
+  assert.equal(harness.state.renderCalls, 1);
+
+  harness.settleCameraTransaction();
+  harness.flushNextFrame();
+  harness.flushNextFrame();
+  assert.equal(harness.ui.gridCanvas.hidden, false);
+  assert.equal(harness.state.renderCalls, 2);
 });
 
 test('温差图层的对称中性色带包含正负边界值', () => {

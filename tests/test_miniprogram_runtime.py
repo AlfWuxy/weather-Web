@@ -121,6 +121,53 @@ def _adult_pair(db_session, user, code):
     return _pair(db_session, user, code, member=member)
 
 
+def test_alerts_api_hides_expired_warning_component(
+    client,
+    db_session,
+    monkeypatch,
+):
+    """私密预警接口也必须拒绝组件已过期的旧官方预警。"""
+    owner, token = _user_and_token(db_session, "alerts-expired-owner")
+    pair = _pair(db_session, owner, "70000010")
+    monkeypatch.setattr(
+        "blueprints.mp_api.get_bootstrap_payload",
+        lambda: {
+            "snapshot_id": "snapshot-alerts-expired",
+            "available": True,
+            "stale": False,
+            "current_stale": False,
+            "warnings_stale": False,
+            "location": {"name": "都昌县"},
+            "current": dict(CURRENT),
+            "warnings": [{
+                "title": "已过期红色预警",
+                "level": "红色",
+                "text": "这条旧预警正文不得返回",
+            }],
+            "source_status": {
+                "current": {"available": True, "stale": False},
+                "warnings": {
+                    "available": True,
+                    "stale": True,
+                    "expires_at": "2000-01-01T01:00:00+08:00",
+                },
+            },
+        },
+    )
+
+    response = client.get(
+        f"/mp/api/v1/alerts?pair_id={pair.id}",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+    data = response.get_json()["data"]
+    assert data["warnings"] == []
+    assert data["warnings_available"] is False
+    assert data["warnings_stale"] is True
+    assert data["weather"]["weather_available"] is True
+
+
 def _grant_health_consent(db_session, user_id, app):
     """会话测试按当前版本显式准备独立健康同意回执。"""
     from core.db_models import User
@@ -157,10 +204,13 @@ def test_snapshot_fresh_at_2959_and_stale_at_3001(app, db_session):
 
         record = MiniProgramSnapshot.query.filter_by(snapshot_id=snapshot_id).one()
         fresh = snapshot_payload(record, now=fetched_at + timedelta(minutes=29, seconds=59))
+        exact_expiry = snapshot_payload(record, now=fetched_at + timedelta(minutes=30))
         stale = snapshot_payload(record, now=fetched_at + timedelta(minutes=30, seconds=1))
 
     assert fresh["ttl_seconds"] == 1800
     assert fresh["stale"] is False
+    assert exact_expiry["stale"] is True
+    assert exact_expiry["current_stale"] is True
     assert stale["stale"] is True
     assert fresh["snapshot_id"] == stale["snapshot_id"]
     assert fresh["family_reminder"]["date"]
@@ -1916,6 +1966,57 @@ def test_health_assessment_submit_latest_and_owner_scope(
         headers={"Authorization": f"Bearer {outsider_token}"},
         json=payload,
     ).status_code == 404
+
+
+def test_health_assessment_rejects_partial_current_before_model_or_write(
+    client,
+    db_session,
+    monkeypatch,
+):
+    """只有温度的快照不得靠模型默认值生成正式个人风险。"""
+    from core.db_models import HealthRiskAssessment
+
+    _owner, token = _user_and_token(db_session, "assessment-partial-current")
+    monkeypatch.setattr(
+        "blueprints.mp_api.get_bootstrap_payload",
+        lambda: {
+            "snapshot_id": "snapshot-partial-current",
+            "available": True,
+            "stale": False,
+            "current_stale": False,
+            "current": {
+                "temperature": 39,
+                "data_source": "QWeather",
+                "is_mock": False,
+            },
+            "source_status": {
+                "current": {"available": True, "stale": False},
+            },
+        },
+    )
+
+    def unexpected(*_args, **_kwargs):
+        raise AssertionError("不完整天气不得进入健康风险模型")
+
+    monkeypatch.setattr(
+        "services.health_risk_service.HealthRiskService.assess_personal_weather_health_risk",
+        unexpected,
+    )
+    response = client.post(
+        "/mp/api/v1/health/assessment",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "outdoor_exposure": "medium",
+            "symptom_level": "none",
+            "hydration": "normal",
+            "medication_adherence": "good",
+            "sleep_quality": "fair",
+        },
+    )
+
+    assert response.status_code == 503
+    assert response.get_json()["error"] == "weather_snapshot_incomplete"
+    assert HealthRiskAssessment.query.count() == 0
 
 
 def test_health_assessment_database_failure_does_not_log_sensitive_values(

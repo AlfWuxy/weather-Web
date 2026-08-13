@@ -519,6 +519,138 @@ def test_dispatch_accepts_complete_qweather_cycle():
     ) is True
 
 
+def test_dispatch_readiness_accepts_warning_only_snapshot():
+    from services.pipelines import sync_weather_cache as pipeline
+
+    payload = {
+        "snapshot_id": "warning-only",
+        "available": False,
+        "stale": True,
+        "current_stale": True,
+        "warnings_stale": False,
+        "current": {},
+        "warnings": [{"type": "高温", "level": "红色"}],
+        "source_status": {
+            "current": {"available": False, "stale": True},
+            "warnings": {"available": True, "stale": False},
+        },
+    }
+
+    assert pipeline._dispatch_ready_snapshot(
+        payload,
+        updated=0,
+        previous_snapshot_id="older",
+    ) is True
+
+
+def test_dispatch_readiness_rejects_double_unavailable_snapshot():
+    from services.pipelines import sync_weather_cache as pipeline
+
+    payload = {
+        "snapshot_id": "double-unavailable",
+        "available": False,
+        "stale": True,
+        "current_stale": True,
+        "warnings_stale": True,
+        "current": {},
+        "warnings": [],
+        "source_status": {
+            "current": {"available": False, "stale": True},
+            "warnings": {"available": False, "stale": True},
+        },
+    }
+
+    assert pipeline._dispatch_ready_snapshot(
+        payload,
+        updated=0,
+        previous_snapshot_id="older",
+    ) is False
+
+
+def test_refresh_persists_fresh_warning_with_expired_carried_current(
+    app,
+    db_session,
+    monkeypatch,
+):
+    from core.time_utils import utcnow
+    from services import miniprogram_service
+    from services import warning_service
+
+    cycle_time = utcnow().replace(microsecond=0)
+    current_fetched_at = cycle_time - timedelta(minutes=60)
+    current_expires_at = cycle_time - timedelta(minutes=30)
+    warning_expires_at = cycle_time + timedelta(minutes=30)
+    current = {
+        "temperature": 36,
+        "temperature_max": 38,
+        "temperature_min": 27,
+        "humidity": 70,
+        "data_source": "QWeather",
+        "is_mock": False,
+    }
+    warning = {
+        "type": "高温",
+        "level": "红色",
+        "title": "高温红色预警",
+        "text": "减少户外活动。",
+    }
+
+    with app.app_context():
+        previous = miniprogram_service.persist_snapshot(
+            current,
+            [],
+            [],
+            fetched_at=current_fetched_at,
+            warning_status={"available": False, "status": "fetch_failed"},
+            source_timing={
+                "current": {
+                    "fetched_at": current_fetched_at,
+                    "expires_at": current_expires_at,
+                },
+            },
+        )
+        previous_id = previous.snapshot_id
+        monkeypatch.setattr(
+            miniprogram_service,
+            "qweather_runtime_configured",
+            lambda: True,
+        )
+        monkeypatch.setattr(
+            miniprogram_service,
+            "get_qweather_forecast_with_cache",
+            lambda *_args, **_kwargs: ([], False, {"source": "QWeather"}),
+        )
+        monkeypatch.setattr(
+            warning_service,
+            "get_qweather_warnings_result",
+            lambda *_args, **_kwargs: {
+                "available": True,
+                "status": "success",
+                "warnings": [warning],
+                "fetched_at": cycle_time.isoformat(),
+                "expires_at": warning_expires_at.isoformat(),
+            },
+        )
+
+        record = miniprogram_service.refresh_snapshot_from_cycle(
+            {},
+            weather_service=object(),
+            fetched_at=cycle_time,
+        )
+        payload = miniprogram_service.snapshot_payload(record, now=cycle_time)
+
+    assert payload["snapshot_id"] != previous_id
+    assert payload["available"] is False
+    assert payload["current_stale"] is True
+    assert payload["warnings_stale"] is False
+    assert payload["warnings"] == [warning]
+    assert payload["source_status"]["current"]["expires_at"] == current_expires_at.isoformat()
+    assert payload["source_status"]["warnings"]["fetched_at"] == cycle_time.isoformat()
+    assert payload["source_status"]["warnings"]["expires_at"] == warning_expires_at.isoformat()
+    assert miniprogram_service.snapshot_component_status(payload, "current")["usable"] is False
+    assert miniprogram_service.snapshot_component_status(payload, "warnings")["usable"] is True
+
+
 def test_force_refresh_does_not_reuse_29_minute_forecast(
     app,
     db_session,
@@ -644,3 +776,165 @@ def test_snapshot_expiry_uses_earliest_required_source(app, db_session):
     assert payload["expires_at"] == (forecast_time + timedelta(minutes=30)).isoformat()
     assert payload["source_status"]["forecast"]["fetched_at"] == forecast_time.isoformat()
     assert payload["source_status"]["budget_guard"] == "enabled"
+
+
+def test_stale_forecast_does_not_hide_fresh_current_risk(app, db_session):
+    """总快照过期时，各页面仍应按自己依赖的来源判断可用性。"""
+    from core.time_utils import utcnow
+    from services.miniprogram_service import persist_snapshot, snapshot_payload
+    from services.pipelines.sync_weather_cache import _trusted_cycle_current
+
+    cycle_time = utcnow().replace(microsecond=0)
+    forecast_time = cycle_time - timedelta(minutes=31)
+    current = {
+        "temperature": 35,
+        "temperature_max": 38,
+        "temperature_min": 27,
+        "humidity": 70,
+        "data_source": "QWeather",
+        "is_mock": False,
+    }
+    forecast = [{
+        "date": cycle_time.date().isoformat(),
+        "temperature_max": 38,
+        "temperature_min": 27,
+        "temperature_mean": 32.5,
+        "humidity": 70,
+        "data_source": "QWeather",
+        "is_mock": False,
+    }]
+    with app.app_context():
+        record = persist_snapshot(
+            current,
+            forecast,
+            [],
+            fetched_at=cycle_time,
+            forecast_meta={"source": "QWeather"},
+            warning_status={"available": True, "status": "ok"},
+            source_timing={
+                "current": {
+                    "fetched_at": cycle_time,
+                    "expires_at": cycle_time + timedelta(minutes=30),
+                },
+                "forecast": {
+                    "fetched_at": forecast_time,
+                    "expires_at": forecast_time + timedelta(minutes=30),
+                },
+                "warnings": {
+                    "fetched_at": cycle_time,
+                    "expires_at": cycle_time + timedelta(minutes=30),
+                },
+            },
+        )
+        payload = snapshot_payload(record, now=cycle_time)
+
+    assert payload["stale"] is True
+    assert payload["forecast_stale"] is True
+    assert payload["current_stale"] is False
+    assert payload["warnings_stale"] is False
+    assert payload["risk_stale"] is False
+    assert payload["risk"]["available"] is True
+    assert payload["source_status"]["forecast"]["stale"] is True
+    assert payload["source_status"]["risk"]["stale"] is False
+    assert _trusted_cycle_current(
+        payload,
+        fetched_at=cycle_time,
+        previous_snapshot_id="older-snapshot",
+    ) == current
+
+
+def test_stale_warnings_do_not_feed_family_reminder(app, db_session, monkeypatch):
+    """预警来源过期时，提醒只能继续使用新鲜的当前天气。"""
+    from core.time_utils import utcnow
+    from services import miniprogram_service
+
+    cycle_time = utcnow().replace(microsecond=0)
+    captured = {}
+
+    def fake_reminder(current, warnings, **_kwargs):
+        captured["warnings"] = warnings
+        return {"date": cycle_time.date().isoformat(), "message": "安全提醒"}
+
+    monkeypatch.setattr(
+        miniprogram_service,
+        "build_public_family_reminder",
+        fake_reminder,
+    )
+    with app.app_context():
+        record = miniprogram_service.persist_snapshot(
+            {
+                "temperature": 35,
+                "temperature_max": 38,
+                "temperature_min": 27,
+                "humidity": 70,
+                "data_source": "QWeather",
+                "is_mock": False,
+            },
+            [],
+            [{"title": "旧高温预警"}],
+            fetched_at=cycle_time,
+            warning_status={"available": True, "status": "ok"},
+            source_timing={
+                "current": {
+                    "fetched_at": cycle_time,
+                    "expires_at": cycle_time + timedelta(minutes=30),
+                },
+                "warnings": {
+                    "fetched_at": cycle_time - timedelta(minutes=31),
+                    "expires_at": cycle_time - timedelta(minutes=1),
+                },
+            },
+        )
+        captured.clear()
+        payload = miniprogram_service.snapshot_payload(record, now=cycle_time)
+
+    assert payload["warnings_stale"] is True
+    assert payload["risk_stale"] is False
+    assert captured["warnings"] == []
+
+
+def test_unavailable_warnings_do_not_feed_family_reminder(app, db_session, monkeypatch):
+    """来源失败但记录尚未总过期时，也不能把旧预警继续用于提醒。"""
+    from core.time_utils import utcnow
+    from services import miniprogram_service
+
+    cycle_time = utcnow().replace(microsecond=0)
+    captured = {}
+
+    def fake_reminder(current, warnings, **_kwargs):
+        captured["warnings"] = warnings
+        return {"date": cycle_time.date().isoformat(), "message": "安全提醒"}
+
+    monkeypatch.setattr(
+        miniprogram_service,
+        "build_public_family_reminder",
+        fake_reminder,
+    )
+    with app.app_context():
+        record = miniprogram_service.persist_snapshot(
+            {
+                "temperature": 35,
+                "temperature_max": 38,
+                "temperature_min": 27,
+                "humidity": 70,
+                "data_source": "QWeather",
+                "is_mock": False,
+            },
+            [],
+            [{"title": "来源失败前的旧预警"}],
+            fetched_at=cycle_time,
+            warning_status={"available": False, "status": "fetch_failed"},
+            source_timing={
+                "current": {
+                    "fetched_at": cycle_time,
+                    "expires_at": cycle_time + timedelta(minutes=30),
+                },
+            },
+        )
+        captured.clear()
+        payload = miniprogram_service.snapshot_payload(record, now=cycle_time)
+
+    assert payload["warnings_stale"] is False
+    assert payload["source_status"]["warnings"]["available"] is False
+    assert payload["warnings"] == []
+    assert captured["warnings"] == []

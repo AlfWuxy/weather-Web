@@ -82,7 +82,7 @@ Page({
 
   renderForecast(result) {
     const snapshot = normalizeBootstrap(result.data);
-    const freshness = freshnessView(result.meta, snapshot);
+    const freshness = freshnessView(result.meta, snapshot, 'forecast');
     const forecast = freshness.stale
       ? staleForecast(snapshot.forecast)
       : snapshot.forecast;

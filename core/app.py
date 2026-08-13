@@ -18,6 +18,7 @@ from core.config import configure_app
 from core.constants import CHRONIC_OPTIONS, DEFAULT_CITY_LABEL, GUEST_ID_PREFIX, RISK_TAG_OPTIONS
 from core.extensions import db, init_extensions, login_manager
 from core.hooks import register_hooks
+from core.http_errors import register_http_error_handlers
 from core.logging_privacy import install_formal_logging_privacy
 from core.db_models import (
     AlertDelivery,
@@ -105,6 +106,7 @@ def create_app(register_blueprints=True):
     init_extensions(app)
     register_user_loader(login_manager)
     register_hooks(app)
+    register_http_error_handlers(app)
     if register_blueprints:
         _register_blueprints(app)
     register_cli(app)

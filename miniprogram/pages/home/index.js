@@ -17,26 +17,26 @@ const {
   sourceFromShareEvent,
 } = require('../../utils/share');
 
-function homeSnapshotView(snapshot) {
+function homeSnapshotView(snapshot, warningsStale) {
   const source = snapshot || {};
   // 首页只跨逻辑层与视图层传递实际渲染字段，避免复制预报、来源等整份快照。
   return {
     available: source.available,
     location: source.location,
     current: source.current,
-    warnings: Array.isArray(source.warnings) ? source.warnings : [],
-    warningsSourceAvailable: source.warningsSourceAvailable === true,
-    warningsStatusText: source.warningsStatusText,
+    warnings: warningsStale ? [] : (Array.isArray(source.warnings) ? source.warnings : []),
+    warningsSourceAvailable: warningsStale ? false : source.warningsSourceAvailable === true,
+    warningsStatusText: warningsStale ? '官方预警待刷新' : source.warningsStatusText,
     risk: source.risk,
   };
 }
 
-function staleHomeSnapshot(snapshot) {
+function staleHomeSnapshot(snapshot, warningsStale) {
   if (!snapshot) return null;
   return Object.assign({}, snapshot, {
-    warnings: [],
-    warningsSourceAvailable: false,
-    warningsStatusText: '官方预警待刷新',
+    warnings: warningsStale ? [] : (Array.isArray(snapshot.warnings) ? snapshot.warnings : []),
+    warningsSourceAvailable: warningsStale ? false : snapshot.warningsSourceAvailable === true,
+    warningsStatusText: warningsStale ? '官方预警待刷新' : snapshot.warningsStatusText,
     risk: Object.assign({}, snapshot.risk || {}, {
       available: false,
       score: null,
@@ -49,12 +49,26 @@ function staleHomeSnapshot(snapshot) {
   });
 }
 
+function networkFailureMessage(riskStale, warningsStale) {
+  if (riskStale && warningsStale) {
+    return '天气联网刷新失败，风险、预警和定制行动已暂停。稍后会自动重试。';
+  }
+  if (riskStale) {
+    return '天气联网刷新失败，风险和定制行动已暂停；已核验的官方预警仍可查看。稍后会自动重试。';
+  }
+  if (warningsStale) {
+    return '天气联网刷新失败，当前风险和行动仍可使用；官方预警待刷新。稍后会自动重试。';
+  }
+  return '天气联网刷新失败，正在显示仍然有效的风险、预警和行动。稍后会自动重试。';
+}
+
 Page({
   data: {
     loading: true,
     error: '',
     snapshot: null,
     freshness: {},
+    warningsFreshness: {},
     topActions: [],
     familyShareEntry: false,
     entryContextReady: false,
@@ -129,33 +143,44 @@ Page({
     } catch (error) {
       if (!pageCanRender(this)) return;
       const hasSnapshot = Boolean(this.data.snapshot);
-      const freshness = staleRetryMeta(this.data.freshness, PUBLIC_RETRY_DELAY_MS);
+      const retryMeta = staleRetryMeta(this.data.freshness, PUBLIC_RETRY_DELAY_MS);
+      // 请求完全失败时没有组件级到期证明，旧页面状态按不可核验处理。
+      const riskStale = true;
+      const warningsStale = true;
+      const freshness = retryMeta;
       this.setData({
         loading: false,
         error: hasSnapshot
-          ? '天气更新失败，正在显示较早观测；风险、预警和定制行动已暂停。稍后会自动重试。'
+          ? networkFailureMessage(riskStale, warningsStale)
           : '天气数据暂时无法获取。请检查网络，稍后再试。',
-        snapshot: hasSnapshot ? staleHomeSnapshot(this.data.snapshot) : null,
-        topActions: [],
+        snapshot: hasSnapshot && riskStale
+          ? staleHomeSnapshot(this.data.snapshot, warningsStale)
+          : this.data.snapshot,
+        topActions: riskStale ? [] : this.data.topActions,
         freshness,
       });
-      schedulePublicRefresh(this, freshness, () => this.loadData());
+      schedulePublicRefresh(this, retryMeta, () => this.loadData());
     }
   },
 
   renderSnapshot(result) {
     const snapshot = normalizeBootstrap(result.data);
-    const freshness = freshnessView(result.meta, snapshot);
+    const freshness = freshnessView(result.meta, snapshot, 'risk');
+    const warningsFreshness = freshnessView(result.meta, snapshot, 'warnings');
     // 较早天气可以继续展示观测值，风险分数和定制行动必须等刷新后再启用。
-    const displaySnapshot = freshness.stale ? staleHomeSnapshot(snapshot) : snapshot;
+    const displaySnapshot = freshness.stale
+      ? staleHomeSnapshot(snapshot, warningsFreshness.stale)
+      : snapshot;
+    const riskUsable = !freshness.stale && snapshot.risk.available === true;
     this.setData({
       loading: false,
       error: result.meta && result.meta.networkError
-        ? '天气更新失败，正在显示较早观测；风险、预警和定制行动已暂停。稍后会自动重试。'
+        ? networkFailureMessage(!riskUsable, warningsFreshness.stale)
         : '',
-      snapshot: homeSnapshotView(displaySnapshot),
-      topActions: freshness.stale ? [] : snapshot.actions.slice(0, 3),
+      snapshot: homeSnapshotView(displaySnapshot, warningsFreshness.stale),
+      topActions: riskUsable ? snapshot.actions.slice(0, 3) : [],
       freshness,
+      warningsFreshness,
     });
     schedulePublicRefresh(this, result.meta, () => this.loadData());
   },

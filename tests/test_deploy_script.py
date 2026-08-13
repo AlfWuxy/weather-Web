@@ -407,6 +407,44 @@ os.chmod(output, 0o600)
     return source
 
 
+def _run_prepare_release_source(source, deploy_temp_dir, verified_commit_file):
+    """在 pipefail 下执行冻结快照准备函数，覆盖 GNU 与 macOS 工具链。"""
+    function_source = _extract_shell_function(
+        _load_deploy_script(),
+        'prepare_release_source',
+    )
+    environment = os.environ.copy()
+    environment.update(
+        {
+            'DEPLOY_TEST_LOCAL_DIR': str(source),
+            'DEPLOY_TEST_TEMP_DIR': str(deploy_temp_dir),
+            'DEPLOY_TEST_COMMIT_FILE': str(verified_commit_file),
+        }
+    )
+    return subprocess.run(
+        [
+            'bash',
+            '-c',
+            'set -euo pipefail\n'
+            + function_source
+            + '\nLOCAL_DIR="$DEPLOY_TEST_LOCAL_DIR"\n'
+            + 'LOCAL_DEPLOY_TEMP_DIR="$DEPLOY_TEST_TEMP_DIR"\n'
+            + 'VERIFIED_COMMIT_FILE="$DEPLOY_TEST_COMMIT_FILE"\n'
+            + 'VERIFIED_COMMIT=""\n'
+            + 'VERIFIED_RELEASE_BRANCH=""\n'
+            + 'LOCAL_RELEASE_EXPORT_DIR=""\n'
+            + 'RELEASE_SOURCE_DIR="$LOCAL_DIR"\n'
+            + 'prepare_release_source\n',
+        ],
+        cwd=ROOT,
+        env=environment,
+        stdin=subprocess.DEVNULL,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+
 def _extract_shell_function(content, name):
     start = content.index(f'{name}() {{')
     end = content.index('\n}\n', start) + len('\n}\n')
@@ -1671,7 +1709,16 @@ def test_formal_deploy_uploads_verified_commit_snapshot_instead_of_live_tree():
         in content
     )
     assert 'IFS= read -r VERIFIED_COMMIT < "$VERIFIED_COMMIT_FILE"' in content
-    assert 'git -C "$LOCAL_DIR" archive --format=tar "$VERIFIED_COMMIT"' in content
+    assert 'local release_archive="$LOCAL_DEPLOY_TEMP_DIR/release-source.tar"' in content
+    assert (
+        'git -C "$LOCAL_DIR" archive \\\n'
+        '        --format=tar \\\n'
+        '        --output="$release_archive" \\\n'
+        '        "$VERIFIED_COMMIT"'
+    ) in content
+    assert 'chmod 0600 "$release_archive"' in content
+    assert 'tar -xf "$release_archive" -C "$LOCAL_RELEASE_EXPORT_DIR"' in content
+    assert '| tar -xf - -C "$LOCAL_RELEASE_EXPORT_DIR"' not in content
     assert 'RELEASE_SOURCE_DIR="$LOCAL_RELEASE_EXPORT_DIR"' in content
     assert '$NEW_RELEASE/private-metadata/source-commit.txt' in content
     assert (
@@ -1684,6 +1731,74 @@ def test_formal_deploy_uploads_verified_commit_snapshot_instead_of_live_tree():
     )
     assert content.count('"$RELEASE_SOURCE_DIR/" "$USER@$SERVER:$remote_target/"') == 2
     assert '"$LOCAL_DIR/" "$USER@$SERVER:$remote_target/"' not in content
+
+
+def test_prepare_release_source_uses_private_tar_and_frozen_commit(tmp_path):
+    source = _create_clean_git_source(tmp_path)
+    verified_commit = subprocess.check_output(
+        ['git', '-C', str(source), 'rev-parse', 'HEAD'],
+        text=True,
+    ).strip()
+    deploy_temp_dir = tmp_path / 'case-weather-deploy.test'
+    deploy_temp_dir.mkdir(mode=0o700)
+    verified_commit_file = deploy_temp_dir / 'verified-commit'
+    verified_commit_file.write_text(f'{verified_commit}\n', encoding='utf-8')
+    verified_commit_file.chmod(0o600)
+
+    # 票据生成后的工作树变化不得进入冻结发布快照。
+    (source / 'README.md').write_text('live tree changed\n', encoding='utf-8')
+    (source / 'live-only.txt').write_text('uncommitted\n', encoding='utf-8')
+
+    result = _run_prepare_release_source(
+        source,
+        deploy_temp_dir,
+        verified_commit_file,
+    )
+
+    assert result.returncode == 0, result.stderr
+    release_archive = deploy_temp_dir / 'release-source.tar'
+    release_source = deploy_temp_dir / 'release-source'
+    assert release_archive.is_file()
+    assert stat.S_IMODE(release_archive.stat().st_mode) == 0o600
+    assert stat.S_IMODE(release_source.stat().st_mode) == 0o700
+    assert (release_source / 'README.md').read_text(
+        encoding='utf-8'
+    ) == 'release fixture\n'
+    assert not (release_source / 'live-only.txt').exists()
+
+
+def test_deploy_exit_cleanup_removes_private_release_archive(tmp_path):
+    content = _load_deploy_script()
+    cleanup_source = _extract_shell_function(
+        content,
+        'cleanup_local_deploy_temp',
+    )
+    deploy_temp_dir = tmp_path / 'case-weather-deploy.cleanup'
+    deploy_temp_dir.mkdir(mode=0o700)
+    (deploy_temp_dir / 'release-source.tar').write_bytes(b'private archive')
+    environment = os.environ.copy()
+    environment['DEPLOY_TEST_TEMP_DIR'] = str(deploy_temp_dir)
+
+    result = subprocess.run(
+        [
+            'bash',
+            '-c',
+            'set -euo pipefail\n'
+            + cleanup_source
+            + '\nLOCAL_DEPLOY_TEMP_DIR="$DEPLOY_TEST_TEMP_DIR"\n'
+            + 'REMOTE_QWEATHER_PREACTIVATION_ACTIVE=0\n'
+            + 'trap cleanup_local_deploy_temp EXIT\n',
+        ],
+        cwd=ROOT,
+        env=environment,
+        stdin=subprocess.DEVNULL,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert not deploy_temp_dir.exists()
 
 
 def test_deploy_archive_target_comes_from_same_validation_ticket():

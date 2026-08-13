@@ -2,8 +2,11 @@
 {% from "partials/metric_info.html" import metric_info with context %}
 {% set needs_chartjs = true %}
 {% set web_actions_read_only = web_actions_read_only|default(config.get('WECHAT_FORMAL_RUNTIME', false)) %}
+{% set mini_program_name = config.get('WX_MINIPROGRAM_NAME', '宜老平安') %}
+{% set mini_program_action_path = config.get('WX_MINIPROGRAM_ACTION_PATH', 'pages/actions/index') %}
+{% set mini_program_code_image = config.get('WX_MINIPROGRAM_ACTION_CODE_IMAGE', '') %}
 
-{% block title %}行动打卡 - 天气健康风险预测系统{% endblock %}
+{% block title %}今日行动入口 · 宜老天气通{% endblock %}
 
 {% block content %}
 <div class="container my-4">
@@ -11,8 +14,8 @@
         <div class="col-12">
             <h2><i class="bi bi-clipboard-check"></i> 行动型热健康预警</h2>
             {% if web_actions_read_only %}
-                <p class="text-muted mb-0">当前网页仅显示家庭行动入口的停用说明（不含医疗诊断/治疗建议）。</p>
-                <p class="text-muted small mt-2 mb-0">微信正式版不会在网页读取短码或家庭安全链接。确认、求助和复盘请在微信小程序中登录并完成健康资料单独同意后操作。</p>
+                <p class="text-muted mb-0">网页提供今日公共行动清单，并把家庭确认安全地交接到“{{ mini_program_name }}”小程序。</p>
+                <p class="text-muted small mt-2 mb-0">微信正式版不会在网页读取短码或家庭安全链接；不会读取短码、兑换安全链接或写入家庭记录。家庭确认、求助和复盘请在小程序中登录后完成。</p>
             {% else %}
                 <p class="text-muted mb-0">输入短码即可完成今日确认或求助（不含医疗诊断/治疗建议）。</p>
                 <p class="text-muted small mt-2 mb-0">未登录者可使用照护人提供的有效短码或有时效家庭行动安全链接。只有主动提交时，行动确认、求助需求或复盘才会写入对应照护账号；该入口不等于登录，不能查看账号内其他资料。</p>
@@ -25,13 +28,52 @@
             <div class="col-lg-6">
                 <div class="card shadow-sm">
                     <div class="card-header bg-light">
+                        {% if web_actions_read_only %}
+                        <h5 class="mb-0"><i class="bi bi-wechat"></i> 去“{{ mini_program_name }}”完成家庭打卡</h5>
+                        {% else %}
                         <h5 class="mb-0"><i class="bi bi-key"></i> 短码确认</h5>
+                        {% endif %}
                     </div>
                     <div class="card-body">
                         {% if web_actions_read_only %}
-                        <div class="alert alert-info mb-0" role="status" data-testid="web-actions-read-only">
-                            <strong>当前网页仅供查看停用说明。</strong>
-                            为保护家庭资料，首发不会读取短码、兑换安全链接或写入家庭记录。请打开微信小程序并登录后操作。
+                        <div data-testid="miniprogram-action-handoff"
+                             data-miniprogram-path="{{ mini_program_action_path }}">
+                            {% if mini_program_code_image %}
+                            <div class="text-center mb-3">
+                                <img src="{% if mini_program_code_image.startswith('https://') %}{{ mini_program_code_image }}{% else %}{{ url_for('static', filename=mini_program_code_image) }}{% endif %}"
+                                     alt="{{ mini_program_name }}官方小程序码，进入今日行动页"
+                                     width="220"
+                                     height="220"
+                                     loading="eager"
+                                     referrerpolicy="no-referrer"
+                                     class="img-fluid rounded border">
+                                <div class="text-muted small mt-2">微信扫码后进入“今日行动”页。</div>
+                            </div>
+                            {% else %}
+                            <div class="alert alert-info" role="status" data-testid="miniprogram-code-fallback">
+                                <strong>当前没有可展示的官方小程序码。</strong>
+                                请打开微信，搜索小程序“{{ mini_program_name }}”，进入后点“今日行动”。页面不会显示占位码或未经核验的二维码。
+                            </div>
+                            {% endif %}
+
+                            <div class="d-flex flex-wrap align-items-center gap-2 mb-3">
+                                <span>小程序名称：<strong id="miniProgramName">{{ mini_program_name }}</strong></span>
+                                <button type="button" class="btn btn-sm btn-outline-primary" id="copyMiniProgramName" data-copy-value="{{ mini_program_name }}">
+                                    <i class="bi bi-copy me-1" aria-hidden="true"></i>复制名称
+                                </button>
+                                <span class="small text-success" id="copyMiniProgramFeedback" role="status" aria-live="polite"></span>
+                            </div>
+
+                            <ol class="small ps-3 mb-3">
+                                <li class="mb-1">打开“{{ mini_program_name }}”，进入“今日行动”。</li>
+                                <li class="mb-1">公共行动可直接在本机勾选，无需先选择家人。</li>
+                                <li>需要保存家庭确认、求助或复盘时，从“照护”选择对应家人。</li>
+                            </ol>
+
+                            <div class="d-flex flex-wrap gap-2">
+                                <a class="btn btn-primary" href="{{ url_for('public.public_risk') }}"><i class="bi bi-shield-check me-1"></i>返回今日风险</a>
+                                <a class="btn btn-outline-secondary" href="{{ url_for('public.index') }}"><i class="bi bi-house me-1"></i>返回首页</a>
+                            </div>
                         </div>
                         {% else %}
                         <form method="POST" action="{{ entry_action or url_for('public.action_check') }}">
@@ -52,10 +94,23 @@
             <div class="col-lg-6 mt-4 mt-lg-0">
                 <div class="card shadow-sm">
                     <div class="card-header bg-light">
+                        {% if web_actions_read_only %}
+                        <h5 class="mb-0"><i class="bi bi-list-check"></i> 今天先做这 3 件事</h5>
+                        {% else %}
                         <h5 class="mb-0"><i class="bi bi-shield-check"></i> 统一免责声明</h5>
+                        {% endif %}
                     </div>
                     <div class="card-body">
+                        {% if web_actions_read_only %}
+                        <div class="d-grid gap-3" data-testid="public-action-fallback-list">
+                            <div><strong>1. 少量多次补水</strong><div class="text-muted small">根据自身饮水限制安排，别等明显口渴才喝。</div></div>
+                            <div><strong>2. 避开午后高温</strong><div class="text-muted small">尽量在室内休息，外出优先安排在上午或傍晚。</div></div>
+                            <div><strong>3. 主动联系家人</strong><div class="text-muted small">身体不适或需要帮助时直接电话、微信联系；紧急情况拨打 120。</div></div>
+                            <a class="btn btn-outline-primary" href="{{ url_for('public.cooling_resources') }}"><i class="bi bi-snow2 me-1"></i>查看已核验避暑资源</a>
+                        </div>
+                        {% else %}
                         {% include "partials/disclaimer_block.html" %}
+                        {% endif %}
                     </div>
                 </div>
             </div>
@@ -379,6 +434,20 @@
 
 <script>
 document.addEventListener('DOMContentLoaded', function () {
+    const copyMiniProgramButton = document.getElementById('copyMiniProgramName');
+    const copyMiniProgramFeedback = document.getElementById('copyMiniProgramFeedback');
+    if (copyMiniProgramButton && copyMiniProgramFeedback) {
+        copyMiniProgramButton.addEventListener('click', async function () {
+            const value = copyMiniProgramButton.dataset.copyValue || '';
+            try {
+                await navigator.clipboard.writeText(value);
+                copyMiniProgramFeedback.textContent = '已复制';
+            } catch (_error) {
+                copyMiniProgramFeedback.textContent = '复制失败，请长按名称复制';
+            }
+        });
+    }
+
     const nameInput = document.getElementById('localContactName');
     const phoneInput = document.getElementById('localContactPhone');
     const saveBtn = document.getElementById('saveLocalContact');

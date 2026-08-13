@@ -48,6 +48,76 @@ def _action_snapshot():
     }
 
 
+def test_snapshot_component_status_keeps_only_precise_independent_warning():
+    from services.miniprogram_service import snapshot_component_status
+
+    precise_warning = {
+        "available": False,
+        "stale": True,
+        "warnings_stale": False,
+        "source_status": {
+            "warnings": {"available": True, "stale": False},
+        },
+    }
+    incomplete_warning = {
+        "available": False,
+        "stale": False,
+        "source_status": {"warnings": {"available": True}},
+    }
+    contradictory_current = {
+        "available": False,
+        "stale": True,
+        "current_stale": False,
+        "source_status": {
+            "current": {"available": True, "stale": False},
+        },
+    }
+    malformed_current = {
+        "available": True,
+        "stale": False,
+        "current_stale": False,
+        "source_status": {
+            "current": {"available": "false", "stale": False},
+        },
+    }
+    malformed_warning_stale = {
+        "available": False,
+        "stale": True,
+        "warnings_stale": False,
+        "source_status": {
+            "warnings": {"available": True, "stale": "false"},
+        },
+    }
+
+    assert snapshot_component_status(precise_warning, "warnings")["usable"] is True
+    assert snapshot_component_status(incomplete_warning, "warnings")["usable"] is False
+    assert snapshot_component_status(contradictory_current, "current")["usable"] is False
+    assert snapshot_component_status(malformed_current, "current")["usable"] is False
+    assert snapshot_component_status(malformed_warning_stale, "warnings")["usable"] is False
+
+
+def test_public_risk_page_rejects_root_unavailable_contradictory_risk(
+    client,
+    monkeypatch,
+):
+    from services import public_service
+
+    payload = _action_snapshot()
+    payload.update({
+        'available': False,
+        'risk_stale': False,
+        'source_status': {
+            'risk': {'available': True, 'stale': False},
+        },
+    })
+    monkeypatch.setattr(public_service, 'get_bootstrap_payload', lambda: payload)
+
+    body = client.get('/risk').get_data(as_text=True)
+
+    assert '公开天气快照暂未就绪' in body
+    assert '当前风险：高风险' not in body
+
+
 def _forbid_weather_requests(monkeypatch):
     def forbidden(*_args, **_kwargs):
         pytest.fail("公开风险读取不得触发天气或预警请求")
@@ -390,3 +460,54 @@ def test_web_and_miniprogram_persist_the_same_valid_snapshot_risk(
         pair_id=pair.id,
         status_date=today_local(),
     ).count() == 1
+
+
+def test_forecast_only_stale_keeps_web_and_miniprogram_risk_actions(
+    app,
+    db_session,
+    monkeypatch,
+):
+    from blueprints import mp_api
+    from core.db_models import Pair, User
+    from core.security import hash_short_code
+    from core.time_utils import today_local
+    from services import public_service
+
+    snapshot = _action_snapshot()
+    snapshot.update({
+        'stale': True,
+        'forecast_stale': True,
+        'current_stale': False,
+        'risk_stale': False,
+        'source_status': {
+            'current': {'available': True, 'stale': False},
+            'risk': {'available': True, 'stale': False},
+            'forecast': {'available': True, 'stale': True},
+        },
+    })
+    monkeypatch.setattr(public_service, 'get_bootstrap_payload', lambda: snapshot)
+    monkeypatch.setattr(mp_api, 'get_bootstrap_payload', lambda: snapshot)
+    owner = User(username='forecast-stale-shared', role='caregiver')
+    owner.set_password('forecast-stale-password')
+    db_session.add(owner)
+    db_session.flush()
+    pair = Pair(
+        caregiver_id=owner.id,
+        community_code='都昌县',
+        location_query='都昌县',
+        elder_code='forecast-stale-shared',
+        short_code='76427642',
+        short_code_hash=hash_short_code('76427642'),
+        status='active',
+        created_at=FIXED_NOW,
+        last_active_at=FIXED_NOW,
+    )
+    db_session.add(pair)
+    db_session.flush()
+
+    web_context = public_service._build_action_context(pair, today_local())
+    mini_status = mp_api._daily_status_for_pair(pair)
+
+    assert web_context[1] == snapshot['actions']
+    assert web_context[5] == '高风险'
+    assert mini_status.risk_level == '高风险'
