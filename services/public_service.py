@@ -59,7 +59,11 @@ from services.community_daily_service import (
     refresh_community_daily_best_effort as _refresh_community_daily_best_effort,
 )
 from services.heat_action_service import HeatActionService
-from services.miniprogram_service import get_bootstrap_payload, snapshot_display_time
+from services.miniprogram_service import (
+    get_bootstrap_payload,
+    snapshot_component_status,
+    snapshot_display_time,
+)
 from services.cross_platform_identity import (
     AccountLinkError,
     create_account_link_challenge,
@@ -578,10 +582,10 @@ def _build_action_context(pair, status_date):
     stored_heat_result = calculation.get('heat_result')
     stored_risk_reasons = calculation.get('risk_reasons')
     current = snapshot.get('current') if isinstance(snapshot.get('current'), dict) else None
+    risk_status = snapshot_component_status(snapshot, 'risk')
     risk_available = (
         bool(snapshot.get('snapshot_id'))
-        and snapshot.get('available') is True
-        and snapshot.get('stale') is False
+        and risk_status['usable']
         and is_qweather_online_weather(current)
         and risk.get('available') is True
         and risk.get('score') is not None
@@ -1471,6 +1475,11 @@ def handle_login(next_url):
 
 def handle_register():
     communities = Community.query.all()
+    community_names = [
+        community.name
+        for community in communities
+        if str(community.name or '').strip()
+    ]
     form_data = {
         'username': '',
         'email': '',
@@ -1529,10 +1538,14 @@ def handle_register():
         if not valid:
             form_errors['gender'] = gender_result
 
-        community = sanitize_input(
+        community_resolution = resolve_user_location(
             request.form.get('community'),
-            max_length=100,
+            extra_names=community_names,
+            default_if_blank=False,
         )
+        community = community_resolution.value
+        if not community_resolution.valid:
+            form_errors['community'] = community_resolution.error
 
         if form_errors:
             return render_template(
@@ -1547,7 +1560,8 @@ def handle_register():
             email=email,
             age=age,
             gender=gender,
-            community=community
+            community=community,
+            last_login=utcnow(),
         )
         user.set_password(password)
 
@@ -1583,12 +1597,21 @@ def handle_register():
                 form_data=form_data,
                 form_errors=form_errors,
             ), 422
+        except SQLAlchemyError:
+            db.session.rollback()
+            logger.exception("注册事务提交失败")
+            form_errors['account'] = '注册暂时无法完成，请稍后重试。'
+            return render_template(
+                'register.html',
+                communities=communities,
+                form_data=form_data,
+                form_errors=form_errors,
+            ), 503
 
         logger.info("新用户注册: user_id=%s", user.id)
+        # 只有账号事务落库后，才替换浏览器里的游客或旧身份状态。
         _clear_identity_scoped_session()
         login_user(user, remember=False)
-        user.last_login = utcnow()
-        db.session.commit()
         flash('注册成功，已登录。现在可以添加需要照护的家人。', 'success')
         if (
             current_app.config.get('WECHAT_FORMAL_RUNTIME')
@@ -1709,12 +1732,10 @@ def render_cooling_resources_page(
         snapshot = get_bootstrap_payload()
         snapshot_id = snapshot.get('snapshot_id')
         if snapshot_id:
-            current_stale = snapshot.get('current_stale', snapshot.get('stale', True))
-            risk_stale = snapshot.get('risk_stale', snapshot.get('stale', True))
+            current_status = snapshot_component_status(snapshot, 'current')
             current_snapshot = snapshot.get('current')
             if (
-                current_stale is False
-                and risk_stale is False
+                current_status['usable']
                 and is_qweather_online_weather(current_snapshot)
             ):
                 cooling_weather = current_snapshot
@@ -1724,6 +1745,7 @@ def render_cooling_resources_page(
             snapshot_meta = {
                 'id_short': str(snapshot_id)[:8],
                 'fetched_at': snapshot.get('fetched_at'),
+                'display_time': snapshot_display_time(snapshot.get('fetched_at')),
             }
         else:
             # 本地测试和首次启动尚无持久快照时兼容旧缓存；线上已有快照后不混读。
@@ -1838,11 +1860,13 @@ def render_public_risk_page(location):
     )
     location_name = str(snapshot_location.get('name') or fallback_location)
     risk = snapshot.get('risk') or {}
+    risk_status = snapshot_component_status(snapshot, 'risk')
     calculation = risk.get('calculation') if isinstance(risk.get('calculation'), dict) else {}
     stored_heat_result = calculation.get('heat_result')
     stored_risk_reasons = calculation.get('risk_reasons')
     risk_ready = (
-        risk.get('available') is True
+        risk_status['usable']
+        and risk.get('available') is True
         and risk.get('score') is not None
         and isinstance(stored_heat_result, dict)
         and isinstance(stored_risk_reasons, list)

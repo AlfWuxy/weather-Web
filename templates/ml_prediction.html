@@ -42,8 +42,12 @@
                     {% endif %}
                 </div>
                 <div class="mb-3">
-                    <label class="form-label">年龄</label>
-                    <input type="number" class="form-control" name="age" value="{{ form_state.age if form_state else (age or 65) }}" min="1" max="120">
+                    <label class="form-label" for="mlAge">年龄</label>
+                    <input type="text" inputmode="numeric" pattern="[0-9]*" class="form-control{% if prediction_error and prediction_error.code == 'invalid_age' %} is-invalid{% endif %}" id="mlAge" name="age" value="{{ form_state.age if form_state else (age or 65) }}" aria-describedby="mlAgeHelp{% if prediction_error and prediction_error.code == 'invalid_age' %} mlAgeError{% endif %}" {% if prediction_error and prediction_error.code == 'invalid_age' %}aria-invalid="true"{% endif %}>
+                    <div class="form-text" id="mlAgeHelp">请填写 1 到 120 之间的整数。</div>
+                    {% if prediction_error and prediction_error.code == 'invalid_age' %}
+                    <div class="invalid-feedback" id="mlAgeError">{{ prediction_error.message }}</div>
+                    {% endif %}
                 </div>
                 <div class="alert alert-light border small" role="note">
                     慢病档案不会参与这项类别排序。需要查看慢病与天气的关系，请使用“慢病风险评估”。

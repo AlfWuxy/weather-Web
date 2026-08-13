@@ -138,6 +138,84 @@ def test_invalid_tool_location_returns_422_preserves_input_and_skips_services(
     assert 'data-error-code="invalid_location"' in body
 
 
+@pytest.mark.parametrize('invalid_age', ['0', '121', '99999', 'abc'])
+def test_ml_invalid_age_returns_422_preserves_input_and_skips_services(
+    client,
+    db_session,
+    monkeypatch,
+    invalid_age,
+):
+    user = _create_user(
+        db_session,
+        username=f'ml-invalid-age-{len(invalid_age)}-{ord(invalid_age[0])}',
+    )
+    _login_as(client, user.id)
+
+    def unexpected(*_args, **_kwargs):
+        raise AssertionError('非法年龄不得调用天气或模型服务')
+
+    monkeypatch.setattr('blueprints.tools.get_weather_with_cache', unexpected)
+    monkeypatch.setattr('blueprints.tools.get_ml_service', unexpected)
+    response = client.post(
+        '/ml-prediction',
+        data={
+            'location': '都昌',
+            'age': invalid_age,
+            'csrf_token': 'test-csrf-token',
+        },
+    )
+
+    body = response.get_data(as_text=True)
+    assert response.status_code == 422
+    assert f'value="{invalid_age}"' in body
+    assert '年龄需填写 1 到 120 之间的整数' in body
+    assert 'data-error-code="invalid_age"' in body
+    assert 'id="mlAge"' in body
+    assert 'aria-invalid="true"' in body
+
+
+@pytest.mark.parametrize('valid_age', ['1', '120'])
+def test_ml_age_accepts_inclusive_boundaries(
+    client,
+    db_session,
+    monkeypatch,
+    valid_age,
+):
+    user = _create_user(
+        db_session,
+        username=f'ml-valid-age-{valid_age}',
+    )
+    _login_as(client, user.id)
+    captured = {}
+
+    monkeypatch.setattr(
+        'blueprints.tools.get_weather_with_cache',
+        lambda _location: (_online_weather(), False),
+    )
+
+    class BoundaryService:
+        def predict_disease_risk(self, user_info, _weather_info):
+            captured['age'] = user_info['age']
+            return {
+                'success': True,
+                'predictions': [{'disease': '健康观察', 'probability': 0.2}],
+            }
+
+    monkeypatch.setattr('blueprints.tools.get_ml_service', lambda: BoundaryService())
+    response = client.post(
+        '/ml-prediction',
+        data={
+            'location': '都昌',
+            'age': valid_age,
+            'csrf_token': 'test-csrf-token',
+        },
+    )
+
+    assert response.status_code == 200
+    assert captured['age'] == int(valid_age)
+    assert f'value="{valid_age}"' in response.get_data(as_text=True)
+
+
 def test_ml_guest_gets_explicit_auth_requirement_without_weather_call(
     client,
     db_session,
@@ -438,7 +516,8 @@ def test_cooling_uses_fresh_bootstrap_snapshot_and_renders_final_temperature_fir
         'services.public_service.get_bootstrap_payload',
         lambda: {
             'snapshot_id': 'snapshot-cooling-12345678',
-            'fetched_at': '2026-08-12T20:30:00+08:00',
+            'fetched_at': '2026-08-12T12:30:00+00:00',
+            'available': True,
             'stale': False,
             'current_stale': False,
             'risk_stale': False,
@@ -459,6 +538,71 @@ def test_cooling_uses_fresh_bootstrap_snapshot_and_renders_final_temperature_fir
     assert '<span class="num">31.4</span>' in body
     assert '<span class="num">0</span>' not in body
     assert '天气快照 snapshot' in body
+    assert '北京时间 2026-08-12 20:30' in body
+
+
+def test_cooling_rejects_carried_current_marked_unavailable(
+    client,
+    db_session,
+    monkeypatch,
+):
+    """独立来源更新可携带旧实况做溯源，避暑页不得把它当当前温度。"""
+    del db_session
+    monkeypatch.setattr(
+        'services.public_service.get_bootstrap_payload',
+        lambda: {
+            'snapshot_id': 'snapshot-cooling-unavailable',
+            'fetched_at': '2026-08-12T12:30:00+00:00',
+            'available': False,
+            'stale': False,
+            'current_stale': False,
+            'risk_stale': False,
+            'current': _online_weather(39.5),
+            'source_status': {
+                'current': {'available': False, 'stale': False},
+            },
+        },
+    )
+
+    def unexpected(*_args, **_kwargs):
+        raise AssertionError('已有快照时不得回退读取另一套天气缓存')
+
+    monkeypatch.setattr('services.public_service.get_weather_with_cache', unexpected)
+    response = client.get('/cooling?location=都昌')
+    body = response.get_data(as_text=True)
+
+    assert response.status_code == 200
+    assert 'data-temp="39.5"' not in body
+    assert '<span class="num">39.5</span>' not in body
+
+
+def test_action_cta_matches_web_and_formal_runtime(app, client, monkeypatch):
+    monkeypatch.setattr(
+        'services.public_service.get_bootstrap_payload',
+        lambda: {
+            'snapshot_id': None,
+            'available': False,
+            'stale': True,
+            'risk_stale': True,
+            'location': {'name': '都昌县'},
+            'current': {},
+            'risk': {},
+            'actions': [],
+            'family_reminder': None,
+            'source_status': {},
+        },
+    )
+
+    app.config['WECHAT_FORMAL_RUNTIME'] = False
+    web_body = client.get('/risk').get_data(as_text=True)
+    assert '在网页记录今天' in web_body
+    assert '打开网页行动入口' in web_body
+    assert '实际确认和求助在微信小程序完成' not in web_body
+
+    app.config['WECHAT_FORMAL_RUNTIME'] = True
+    formal_body = client.get('/risk').get_data(as_text=True)
+    assert '正式行动交接' in formal_body
+    assert '实际确认和求助在微信小程序完成' in formal_body
 
 
 @pytest.mark.parametrize(

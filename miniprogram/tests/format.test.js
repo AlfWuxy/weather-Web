@@ -24,6 +24,7 @@ test('bootstrap 兼容正式天气字段与 reasons', () => {
       date: '2026-07-17',
       message: '今天高温，我们一人负责一次联系。',
       follow_up_question: '上午谁先联系？',
+      depends_on: ['current'],
     },
   });
   assert.equal(result.current.condition, '晴');
@@ -53,6 +54,28 @@ test('不完整天气的未知风险必须保持不可用', () => {
   assert.equal(result.risk.scoreText, '待计算');
 });
 
+test('畸形组件 available 在新鲜网络响应中也会关闭天气和风险', () => {
+  [
+    { available: 'false', stale: false, expires_at: '2099-01-01T00:00:00Z' },
+    { available: true, stale: 'false', expires_at: 'garbage' },
+    { available: true },
+  ].forEach((state) => {
+    const result = normalizeBootstrap({
+      available: true,
+      current: { temperature: 38, temperature_max: 40 },
+      risk: { available: true, score: 90, level: '高风险' },
+      actions: [{ id: 'old-risk-action', title: '旧高温行动' }],
+      source_status: { current: state, risk: state },
+    });
+
+    assert.equal(result.current.available, false);
+    assert.equal(result.current.stale, true);
+    assert.equal(result.risk.available, false);
+    assert.equal(result.risk.stale, true);
+    assert.equal(freshnessView({ source: 'network', stale: false }, result, 'risk').stale, true);
+  });
+});
+
 test('归一化结果不保留未使用的原始大对象镜像', () => {
   const bootstrap = normalizeBootstrap({
     forecast: [{ date: '2026-07-18', temperature_max: 36, provider_payload: { verbose: true } }],
@@ -77,6 +100,47 @@ test('更新时间优先采用服务端真实抓取时间', () => {
     { fetchedAt: '2026-07-17T08:00:00+08:00' }
   );
   assert.match(view.updatedText, /08:00/);
+});
+
+test('组件更新时间优先采用自己的 fetched_at', () => {
+  const snapshot = normalizeBootstrap({
+    fetched_at: '2026-07-17T08:00:00+08:00',
+    source_status: {
+      warnings: {
+        available: true,
+        stale: false,
+        fetched_at: '2026-07-17T10:00:00+08:00',
+        expires_at: '2099-01-01T00:00:00Z',
+      },
+    },
+    warnings: [],
+  });
+
+  assert.equal(snapshot.freshness.warnings.fetchedAt, '2026-07-17T10:00:00+08:00');
+  assert.equal(freshnessView({}, snapshot, 'warnings').updatedText, '07月17日 10:00');
+});
+
+test('家庭提醒依赖允许明确空数组且拒绝缺失未知和重复值', () => {
+  const normalizeReminder = (familyReminder) => normalizeBootstrap({
+    family_reminder: familyReminder,
+  }).familyReminder;
+
+  const generic = normalizeReminder({
+    id: 'generic',
+    message: '今天方便时问问家里老人。',
+    depends_on: [],
+  });
+  assert.equal(generic.dependenciesValid, true);
+  assert.deepEqual(generic.dependsOn, []);
+
+  [
+    { id: 'missing', message: '旧格式提醒' },
+    { id: 'not-array', message: '畸形提醒', depends_on: 'current' },
+    { id: 'unknown', message: '未知依赖', depends_on: ['forecast'] },
+    { id: 'duplicate', message: '重复依赖', depends_on: ['current', 'current'] },
+  ].forEach((value) => {
+    assert.equal(normalizeReminder(value).dependenciesValid, false, value.id);
+  });
 });
 
 test('页面只按自身依赖来源判断快照新鲜度', () => {
@@ -180,7 +244,7 @@ test('预警列表为空时区分暂无预警与来源不可用', () => {
 
   const noWarnings = normalizeBootstrap({
     warnings: [],
-    source_status: { warnings: { available: true } },
+    source_status: { warnings: { available: true, stale: false } },
   });
   assert.equal(noWarnings.warnings.length, 0);
   assert.equal(noWarnings.warningsSourceAvailable, true);

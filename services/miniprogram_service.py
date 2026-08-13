@@ -146,6 +146,7 @@ def _source_status(
     forecast_meta=None,
     warning_status=None,
     source_timing=None,
+    current_available=None,
 ) -> dict:
     source = str((current or {}).get("data_source") or (current or {}).get("source") or "").strip()
     forecast_sources = sorted(
@@ -167,7 +168,11 @@ def _source_status(
         "refresh_interval_seconds": SNAPSHOT_TTL_SECONDS,
         "canonical_location_only": True,
         "weather": {
-            "available": _weather_available(current),
+            "available": (
+                _weather_available(current)
+                if current_available is None
+                else current_available is True
+            ),
             "provider": source or "unavailable",
             "is_mock": bool((current or {}).get("is_mock")),
             **(timing.get("current") or {}),
@@ -202,6 +207,94 @@ def _source_datetime(value):
         return ensure_utc_aware(datetime.fromisoformat(str(value)))
     except (TypeError, ValueError, OverflowError):
         return None
+
+
+def snapshot_component_status(payload, component, *, now=None) -> dict:
+    """按精确组件合同判断可用性，旧快照才回退到总状态。"""
+    data = payload if isinstance(payload, dict) else {}
+    component_name = str(component or "").strip().lower()
+    aliases = {
+        "current": ("current", "current_weather", "weather"),
+        "risk": ("risk",),
+        "forecast": ("forecast",),
+        "warnings": ("warnings",),
+    }
+    source_status = data.get("source_status")
+    source_status = source_status if isinstance(source_status, dict) else {}
+    state = None
+    state_present = False
+    for key in aliases.get(component_name, (component_name,)):
+        if key in source_status:
+            state_present = True
+            candidate = source_status.get(key)
+            state = candidate if isinstance(candidate, dict) else {}
+            break
+    state_is_mapping = isinstance(state, dict)
+    state = state if state_is_mapping else {}
+
+    root_available = data.get("available") is True
+    root_stale = data.get("stale") is not False
+    state_has_availability = isinstance(state.get("available"), bool)
+    state_stale_value = state.get("stale")
+    state_stale_valid = (
+        "stale" not in state or isinstance(state_stale_value, bool)
+    )
+    raw_expires_at = state.get("expires_at")
+    expires_at = _source_datetime(raw_expires_at)
+    state_expiry_valid = raw_expires_at in (None, "") or expires_at is not None
+    state_contract_valid = (
+        (not state_present)
+        or (
+            state_is_mapping
+            and state_has_availability
+            and state_stale_valid
+            and state_expiry_valid
+        )
+    )
+    component_available = (
+        state["available"]
+        if state_contract_valid and state_has_availability
+        else False if state_present else root_available
+    )
+
+    stale_signals = []
+    top_stale = data.get(f"{component_name}_stale")
+    if isinstance(top_stale, bool):
+        stale_signals.append(top_stale)
+    state_stale = state_stale_value
+    if isinstance(state_stale, bool):
+        stale_signals.append(state_stale)
+    if expires_at is not None:
+        stale_signals.append(ensure_utc_aware(now or utcnow()) >= expires_at)
+
+    explicit_contract = (
+        state_present
+        and state_contract_valid
+        and state_has_availability
+        and bool(stale_signals)
+    )
+    component_stale = (
+        True
+        if state_present and not state_contract_valid
+        else any(stale_signals) if stale_signals else root_stale
+    )
+    if component_name in {"current", "risk"}:
+        # 根 available 表示当前天气是否可用，风险必须继承这一硬门禁。
+        available = root_available and component_available
+    elif explicit_contract:
+        # 预报与官方预警可在当前天气失败时独立存活。
+        available = component_available
+    else:
+        available = root_available and component_available
+
+    return {
+        "available": available,
+        "stale": component_stale,
+        "usable": available and not component_stale,
+        "explicit": explicit_contract,
+        "fetched_at": state.get("fetched_at"),
+        "expires_at": state.get("expires_at"),
+    }
 
 
 def snapshot_display_time(value):
@@ -349,6 +442,7 @@ def persist_snapshot(
     forecast_meta=None,
     warning_status=None,
     source_timing=None,
+    current_available=None,
     commit=True,
 ):
     """在一个事务中保存完整快照，所有消费者共享同一 snapshot_id。"""
@@ -379,7 +473,11 @@ def persist_snapshot(
         location_code=location["code"],
         fetched_at=fetched_at,
         expires_at=expires_at,
-        available=_weather_available(current),
+        available=(
+            _weather_available(current)
+            if current_available is None
+            else current_available is True
+        ),
         current_json=json.dumps(current, ensure_ascii=False),
         forecast_json=json.dumps(forecast, ensure_ascii=False),
         warnings_json=json.dumps(warnings, ensure_ascii=False),
@@ -393,6 +491,7 @@ def persist_snapshot(
                 forecast_meta,
                 warning_status,
                 source_timing,
+                current_available,
             ),
             ensure_ascii=False,
         ),
@@ -681,6 +780,7 @@ def refresh_snapshot_from_cycle(
     commit=True,
 ):
     """完成一次 canonical 同步周期的预报/预警收集并落库。"""
+    current_available = None
     forecast = []
     forecast_meta = {}
     warnings = []
@@ -758,10 +858,47 @@ def refresh_snapshot_from_cycle(
             today_max=current.get("temperature_max"),
         )
 
+    source_timing = dict(cycle_source_timing)
     if not _weather_available(current):
         existing = latest_snapshot_record()
-        if existing is not None and existing.available:
-            return existing
+        independent_update = bool(forecast) or warning_status.get("available") is True
+        if existing is not None:
+            stored_current = safe_json_loads(existing.current_json, {})
+            if _weather_available(stored_current):
+                # 保留旧实况仅供溯源；current_available=False 会阻止任何消费者使用它。
+                current = stored_current
+            stored_status = safe_json_loads(existing.source_status_json, {})
+            stored_status = stored_status if isinstance(stored_status, dict) else {}
+            stored_current_status = (
+                stored_status.get("current")
+                or stored_status.get("current_weather")
+                or stored_status.get("weather")
+                or {}
+            )
+            if isinstance(stored_current_status, dict):
+                source_timing.setdefault(
+                    "current",
+                    {
+                        key: stored_current_status.get(key)
+                        for key in ("fetched_at", "expires_at")
+                        if stored_current_status.get(key) is not None
+                    },
+                )
+            if not independent_update:
+                return existing
+        current_available = False
+
+    if "current" not in source_timing and (current_fetched_at or fetched_at):
+        source_time = ensure_utc_aware(current_fetched_at or fetched_at)
+        source_timing["current"] = {
+            "fetched_at": source_time,
+            "expires_at": source_time + timedelta(seconds=SNAPSHOT_TTL_SECONDS),
+        }
+    if forecast and "forecast" not in source_timing:
+        source_timing["forecast"] = forecast_meta
+    if warning_status.get("available") is True and "warnings" not in source_timing:
+        source_timing["warnings"] = warning_status
+
     return persist_snapshot(
         current,
         forecast,
@@ -769,19 +906,8 @@ def refresh_snapshot_from_cycle(
         fetched_at=fetched_at,
         forecast_meta=forecast_meta,
         warning_status=warning_status,
-        source_timing=cycle_source_timing or {
-            "current": {
-                "fetched_at": (current_fetched_at or fetched_at),
-                "expires_at": (
-                    ensure_utc_aware(current_fetched_at or fetched_at)
-                    + timedelta(seconds=SNAPSHOT_TTL_SECONDS)
-                    if (current_fetched_at or fetched_at) is not None
-                    else None
-                ),
-            },
-            "forecast": forecast_meta,
-            "warnings": warning_status,
-        },
+        source_timing=source_timing,
+        current_available=current_available,
         commit=commit,
     )
 

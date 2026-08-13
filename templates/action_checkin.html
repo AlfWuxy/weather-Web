@@ -15,7 +15,7 @@
             <h2><i class="bi bi-clipboard-check"></i> 行动型热健康预警</h2>
             {% if web_actions_read_only %}
                 <p class="text-muted mb-0">网页提供今日公共行动清单，并把家庭确认安全地交接到“{{ mini_program_name }}”小程序。</p>
-                <p class="text-muted small mt-2 mb-0">网页不会读取短码、兑换安全链接或写入家庭记录。家庭确认、求助和复盘请在小程序中登录后完成。</p>
+                <p class="text-muted small mt-2 mb-0">微信正式版不会在网页读取短码或家庭安全链接；不会读取短码、兑换安全链接或写入家庭记录。家庭确认、求助和复盘请在小程序中登录后完成。</p>
             {% else %}
                 <p class="text-muted mb-0">输入短码即可完成今日确认或求助（不含医疗诊断/治疗建议）。</p>
                 <p class="text-muted small mt-2 mb-0">未登录者可使用照护人提供的有效短码或有时效家庭行动安全链接。只有主动提交时，行动确认、求助需求或复盘才会写入对应照护账号；该入口不等于登录，不能查看账号内其他资料。</p>

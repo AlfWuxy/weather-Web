@@ -52,6 +52,13 @@ def snapshot_display_time(value):
     return format_time(value)
 
 
+def snapshot_component_status(payload, component):
+    """延迟导入组件状态解析，保持 user 服务初始化无循环依赖。"""
+    from services.miniprogram_service import snapshot_component_status as load_status
+
+    return load_status(payload, component)
+
+
 def _clamp(value, lower=0.0, upper=1.0):
     return max(lower, min(upper, value))
 
@@ -270,9 +277,9 @@ def _dashboard_metric_cards(user_id):
     return [cards[key] for key in ('sbp', 'heart_rate', 'blood_sugar') if key in cards]
 
 
-def _dashboard_snapshot_forecast_days(snapshot, start_date):
+def _dashboard_snapshot_forecast_days(snapshot, start_date, *, usable):
     """把已落库的逐日天气风险直接转换成首页卡片。"""
-    if snapshot.get('forecast_stale'):
+    if not usable:
         return []
     forecast = snapshot.get('forecast')
     if not isinstance(forecast, list):
@@ -322,12 +329,16 @@ def user_dashboard(force_elder=False):
     snapshot_id = snapshot.get('snapshot_id')
     snapshot_mode = bool(snapshot_id)
     snapshot_location = snapshot.get('location') or {}
+    current_status = snapshot_component_status(snapshot, 'current')
+    risk_status = snapshot_component_status(snapshot, 'risk')
+    forecast_status = snapshot_component_status(snapshot, 'forecast')
+    warnings_status = snapshot_component_status(snapshot, 'warnings')
     weather_source_city = str(
         snapshot_location.get('name')
         or resolve_weather_city_label(user_location)
     )
     weather_data = snapshot.get('current') or {}
-    if not snapshot_mode or snapshot.get('current_stale'):
+    if not snapshot_mode or not current_status['usable']:
         weather_data = {}
     weather_is_mock = bool(weather_data.get('is_mock'))
     weather_available = _dashboard_weather_available(weather_data)
@@ -354,7 +365,7 @@ def user_dashboard(force_elder=False):
     stored_heat_result = calculation.get('heat_result') if isinstance(calculation, dict) else None
     snapshot_risk_ready = (
         snapshot_mode
-        and not snapshot.get('risk_stale')
+        and risk_status['usable']
         and risk.get('available') is True
         and isinstance(stored_heat_result, dict)
     )
@@ -370,7 +381,11 @@ def user_dashboard(force_elder=False):
         getattr(weather, 'temperature', None) if weather_available else None
     )
     dashboard_metric_cards = [] if is_guest else _dashboard_metric_cards(current_user.id)
-    forecast_days = _dashboard_snapshot_forecast_days(snapshot, today) if snapshot_mode else []
+    forecast_days = _dashboard_snapshot_forecast_days(
+        snapshot,
+        today,
+        usable=forecast_status['usable'],
+    ) if snapshot_mode else []
 
     # 获取最新风险评估
     if is_guest:
@@ -385,11 +400,9 @@ def user_dashboard(force_elder=False):
         assessment_explain = safe_json_loads(latest_assessment.explain, {})
 
     # 预警与温度、风险共用同一快照；来源未知、不可用或过期时不展示旧预警。
-    warning_state = (snapshot.get('source_status') or {}).get('warnings') or {}
     warnings_ready = (
         snapshot_mode
-        and not snapshot.get('warnings_stale')
-        and warning_state.get('available') is True
+        and warnings_status['usable']
     )
     alerts = [
         _dashboard_snapshot_alert_card(item, weather_source_city)

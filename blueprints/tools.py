@@ -84,14 +84,20 @@ def _resolve_tool_location(raw_location, *, location_options=None):
     )
 
 
-def _coerce_age(raw_age, default_age):
-    """安全转换年龄，避免模板和服务层接到异常值。"""
-    age = parse_int(raw_age)
-    if age is None:
-        age = default_age
-    if age is None:
-        age = 65
-    return max(1, min(int(age), 120))
+_ML_AGE_RE = re.compile(r'^[0-9]{1,3}$')
+
+
+def _parse_ml_age(raw_age, default_age):
+    """严格解析 ML 年龄，禁止静默截断或用默认值吞掉非法输入。"""
+    submitted = str(raw_age or '').strip()
+    candidate = submitted or str(default_age or 65).strip()
+    display_value = submitted[:32] if submitted else candidate[:32]
+    if not _ML_AGE_RE.fullmatch(candidate):
+        return None, display_value, '年龄需填写 1 到 120 之间的整数。'
+    age = int(candidate)
+    if age < 1 or age > 120:
+        return None, display_value, '年龄需填写 1 到 120 之间的整数。'
+    return age, age, None
 
 
 def _score_level(score):
@@ -293,7 +299,7 @@ def _classified_ml_error(raw_error=None, *, code='model_unavailable'):
     normalized = str(raw_error or '').strip().lower()
     if code == 'auth_required':
         message = '游客可以浏览说明；生成个人类别线索需要注册或登录正式账号。'
-    elif code == 'invalid_location':
+    elif code in {'invalid_location', 'invalid_age'}:
         message = str(raw_error)
     elif code == 'weather_unavailable':
         message = '健康关注线索暂时无法生成：官方天气快照正在更新，请稍后再试。'
@@ -342,6 +348,10 @@ def ml_prediction():
             raw_location,
             location_options=location_options,
         )
+        parsed_age, age_form_value, age_error = _parse_ml_age(
+            request.form.get('age'),
+            default_age,
+        )
         form_state = {
             'member_id': str(selected_member.id) if selected_member else '',
             'location': (
@@ -349,7 +359,7 @@ def ml_prediction():
                 if not location_resolution.valid
                 else location_resolution.value
             ),
-            'age': _coerce_age(request.form.get('age'), default_age),
+            'age': age_form_value,
         }
 
         if is_guest_user(current_user):
@@ -361,13 +371,19 @@ def ml_prediction():
                 code='invalid_location',
             )
             response_status = 422
+        elif age_error:
+            prediction_error = _classified_ml_error(
+                age_error,
+                code='invalid_age',
+            )
+            response_status = 422
         else:
             weather_info, _ = get_weather_with_cache(form_state['location'])
             if not is_qweather_online_weather(weather_info):
                 prediction_error = _classified_ml_error(code='weather_unavailable')
             else:
                 user_info = {
-                    'age': form_state['age'],
+                    'age': parsed_age,
                     'gender': default_gender,
                 }
                 try:
@@ -394,7 +410,7 @@ def ml_prediction():
                             'weather_multiplier': round(float(multiplier), 3),
                             'label': f'关注排序第 {rank}',
                         })
-                    factors = _build_ml_factor_cards(result, form_state['age'], weather_info)
+                    factors = _build_ml_factor_cards(result, parsed_age, weather_info)
                 else:
                     prediction_error = _classified_ml_error(result.get('error'))
 

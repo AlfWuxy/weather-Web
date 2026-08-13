@@ -87,7 +87,7 @@
                 </p>
 
                 <div class="yl-academic-actions">
-                    <a class="btn btn-primary" href="{{ url_for('public.elder_entry') }}">去宜老平安小程序打卡</a>
+                    <a class="btn btn-primary" href="{{ url_for('public.elder_entry') }}">{% if config.get('WECHAT_FORMAL_RUNTIME') %}查看正式行动交接{% else %}在网页记录今天{% endif %}</a>
                     <a class="btn btn-outline-secondary" href="{{ url_for('tools.forecast_7day') }}">看 7 天趋势</a>
                 </div>
 
@@ -182,7 +182,7 @@
             <strong>{{ heat_actions[0].title }}</strong>
             <p>{{ heat_actions[0].detail }}</p>
         </div>
-        <a class="btn btn-sm btn-outline-primary" href="{{ url_for('public.elder_entry') }}">查看小程序交接方式 <i class="bi bi-arrow-right"></i></a>
+        <a class="btn btn-sm btn-outline-primary" href="{{ url_for('public.elder_entry') }}">{% if config.get('WECHAT_FORMAL_RUNTIME') %}查看正式行动交接{% else %}在网页记录今天{% endif %} <i class="bi bi-arrow-right"></i></a>
     </section>
     {% endif %}
 
@@ -224,7 +224,7 @@
                         <img src="{{ url_for('static', filename='illustrations/dashboard/today-actions.png') }}" alt="" width="1254" height="1254" loading="lazy" decoding="async">
                     </div>
                 </div>
-                <a class="btn btn-sm btn-outline-primary" href="{{ url_for('public.elder_entry') }}">去宜老平安小程序打卡 <i class="bi bi-arrow-right"></i></a>
+                <a class="btn btn-sm btn-outline-primary" href="{{ url_for('public.elder_entry') }}">{% if config.get('WECHAT_FORMAL_RUNTIME') %}查看正式行动交接{% else %}打开网页行动入口{% endif %} <i class="bi bi-arrow-right"></i></a>
             </div>
             <div class="yl-action-list mt-3">
                 {% if not weather_available %}

@@ -989,31 +989,62 @@ def test_elder_profiles_require_sensitive_scope_for_read_and_write(
         assert denied.get_json()["error"] == "insufficient_scope"
 
 
-def test_profile_requires_privacy_consent_before_generating_api_token(
+def test_admin_profile_requires_consent_and_current_password_for_legacy_token(
     app,
-    authenticated_client,
+    admin_client,
     db_session,
 ):
     from core.db_models import ApiToken
 
-    missing_consent = authenticated_client.post(
+    profile_html = admin_client.get("/profile").get_data(as_text=True)
+    assert 'name="current_password"' in profile_html
+    assert 'autocomplete="current-password"' in profile_html
+
+    missing_consent = admin_client.post(
         "/profile",
         data={
             "csrf_token": "test-csrf-token",
             "form_id": "api_token",
             "token_name": "未同意设备",
+            "current_password": "testpass",
         },
     )
     assert missing_consent.status_code == 302
     assert ApiToken.query.count() == 0
 
-    accepted = authenticated_client.post(
+    missing_password = admin_client.post(
+        "/profile",
+        data={
+            "csrf_token": "test-csrf-token",
+            "form_id": "api_token",
+            "token_name": "缺少密码设备",
+            "miniprogram_privacy_consent": "1",
+        },
+    )
+    assert missing_password.status_code == 302
+    assert ApiToken.query.count() == 0
+
+    wrong_password = admin_client.post(
+        "/profile",
+        data={
+            "csrf_token": "test-csrf-token",
+            "form_id": "api_token",
+            "token_name": "错密设备",
+            "miniprogram_privacy_consent": "1",
+            "current_password": "wrong-password",
+        },
+    )
+    assert wrong_password.status_code == 302
+    assert ApiToken.query.count() == 0
+
+    accepted = admin_client.post(
         "/profile",
         data={
             "csrf_token": "test-csrf-token",
             "form_id": "api_token",
             "token_name": "本人手机",
             "miniprogram_privacy_consent": "1",
+            "current_password": "testpass",
         },
     )
     assert accepted.status_code == 302
@@ -1021,6 +1052,70 @@ def test_profile_requires_privacy_consent_before_generating_api_token(
     assert record.expires_at is not None
     assert record.scopes
     assert record.privacy_consent_version == app.config["WX_MINIPROGRAM_PRIVACY_VERSION"]
+
+
+def test_non_admin_roles_cannot_post_legacy_api_token(
+    client,
+    db_session,
+):
+    from core.db_models import ApiToken, User
+
+    for index, role in enumerate(("user", "caregiver", "community"), start=1):
+        user = User(username=f"legacy-token-{role}", role=role)
+        user.set_password("RolePassword1!")
+        db_session.add(user)
+        db_session.commit()
+        with client.session_transaction() as flask_session:
+            flask_session.clear()
+            flask_session["_user_id"] = user.get_id()
+            flask_session["_fresh"] = True
+            flask_session["_csrf_token"] = f"legacy-token-role-{index}"
+
+        denied = client.post(
+            "/profile",
+            data={
+                "csrf_token": f"legacy-token-role-{index}",
+                "form_id": "api_token",
+                "token_name": "越权设备",
+                "miniprogram_privacy_consent": "1",
+                "current_password": "RolePassword1!",
+            },
+        )
+        assert denied.status_code == 403
+        assert ApiToken.query.count() == 0
+
+
+def test_legacy_api_token_rechecks_admin_role_inside_owner_guard(
+    admin_client,
+    db_session,
+    monkeypatch,
+):
+    from types import SimpleNamespace
+
+    from core.db_models import ApiToken
+    from services.user import profile_service
+
+    @contextmanager
+    def demoted_owner_guard(_owner_user_id):
+        yield SimpleNamespace(
+            role="user",
+            check_password=lambda _password: True,
+        )
+
+    monkeypatch.setattr(profile_service, "owner_write_guard", demoted_owner_guard)
+    response = admin_client.post(
+        "/profile",
+        data={
+            "csrf_token": "test-csrf-token",
+            "form_id": "api_token",
+            "token_name": "降权竞态设备",
+            "miniprogram_privacy_consent": "1",
+            "current_password": "testpass",
+        },
+    )
+
+    assert response.status_code == 403
+    assert ApiToken.query.count() == 0
 
 
 def test_mp_api_rate_limit_key_uses_stable_client_ip(app):

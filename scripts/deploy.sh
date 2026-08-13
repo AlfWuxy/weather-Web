@@ -772,6 +772,8 @@ LOCAL_RELEASE_EXPORT_DIR=""
 
 # 两种远端模式都只上传冻结提交快照，避免 rsync 在校验后继续读取可变化的工作目录。
 prepare_release_source() {
+    local release_archive="$LOCAL_DEPLOY_TEMP_DIR/release-source.tar"
+
     if [ -z "$VERIFIED_COMMIT_FILE" ] || [ ! -f "$VERIFIED_COMMIT_FILE" ]; then
         echo "远端发布缺少同一次校验生成的目标提交票据。" >&2
         exit 64
@@ -796,8 +798,14 @@ prepare_release_source() {
     esac
     LOCAL_RELEASE_EXPORT_DIR="$LOCAL_DEPLOY_TEMP_DIR/release-source"
     mkdir -m 0700 "$LOCAL_RELEASE_EXPORT_DIR"
-    git -C "$LOCAL_DIR" archive --format=tar "$VERIFIED_COMMIT" \
-        | tar -xf - -C "$LOCAL_RELEASE_EXPORT_DIR"
+    # macOS 的 tar 可能提前关闭管道，令 git archive 在 pipefail 下以 141 退出。
+    # 先在本轮 0700 临时目录生成 0600 归档，再从同一文件解包。
+    (umask 077; git -C "$LOCAL_DIR" archive \
+        --format=tar \
+        --output="$release_archive" \
+        "$VERIFIED_COMMIT")
+    chmod 0600 "$release_archive"
+    tar -xf "$release_archive" -C "$LOCAL_RELEASE_EXPORT_DIR"
     RELEASE_SOURCE_DIR="$LOCAL_RELEASE_EXPORT_DIR"
 }
 

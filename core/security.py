@@ -53,18 +53,36 @@ def csrf_failure_response():
 
 
 _AUTO_PEPPER: str | None = None  # 进程级自动生成的 pepper 回退
-_RATE_LIMIT_CLIENT_SECRET = secrets.token_bytes(32)
+
+
+def _rate_limit_client_secret():
+    """从生产稳定密钥派生限流专用密钥，避免跨用途直接复用。"""
+    configured = (
+        current_app.config.get('PAIR_TOKEN_PEPPER')
+        or current_app.config.get('SECRET_KEY')
+        or os.getenv('PAIR_TOKEN_PEPPER')
+        or os.getenv('SECRET_KEY')
+        or _pair_token_pepper()
+    )
+    raw_secret = (
+        configured
+        if isinstance(configured, bytes)
+        else str(configured).encode('utf-8')
+    )
+    return hashlib.sha256(
+        b'yilao-client-rate-limit-v1\0' + raw_secret
+    ).digest()
 
 
 def client_rate_limit_key():
-    """按受信代理边界解析客户端，并生成只在本进程有效的限流摘要。"""
+    """按受信代理边界解析客户端，并生成跨 worker 稳定的限流摘要。"""
     # 延迟导入避免 core.audit 在模块加载时与本模块形成循环依赖。
     from core.audit import _get_client_ip
 
     client_ip = _get_client_ip() or request.remote_addr or 'unknown'
     digest = hashlib.blake2s(
         str(client_ip).encode('utf-8'),
-        key=_RATE_LIMIT_CLIENT_SECRET,
+        key=_rate_limit_client_secret(),
         digest_size=20,
     ).hexdigest()
     return f'client:{digest}'

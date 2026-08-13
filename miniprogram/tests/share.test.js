@@ -275,6 +275,257 @@ test('较早公共天气隐藏旧风险分数并退回通用行动', () => {
   assert.match(actionsView, /较早天气已切换为通用清单/);
 });
 
+test('首页保留独立新鲜的官方预警', () => {
+  const page = pageInstance(loadHomePageDefinition());
+  page.renderSnapshot.call(page, {
+    data: {
+      available: false,
+      stale: true,
+      current_stale: true,
+      risk_stale: true,
+      warnings_stale: false,
+      location: { name: '都昌县' },
+      current: {},
+      risk: { available: false, level: '未知', score: null },
+      warnings: [{ id: 'fresh-warning', title: '都昌县高温橙色预警' }],
+      source_status: {
+        current: { available: false, expires_at: '2099-01-01T00:00:00Z' },
+        risk: { available: false, expires_at: '2099-01-01T00:00:00Z' },
+        warnings: { available: true, stale: false, expires_at: '2099-01-01T00:00:00Z' },
+      },
+    },
+    meta: { source: 'stale-cache', stale: true },
+  });
+
+  assert.equal(page.data.freshness.stale, true);
+  assert.equal(page.data.snapshot.risk.label, '风险待刷新');
+  assert.equal(page.data.snapshot.warnings.length, 1);
+  assert.equal(page.data.snapshot.warnings[0].id, 'fresh-warning');
+  assert.equal(page.data.snapshot.warningsSourceAvailable, true);
+  assert.equal(page.data.snapshot.warningsStatusText, '1 条有效信息');
+});
+
+test('风险组件仍新鲜时联网失败文案不宣称风险行动暂停', () => {
+  const page = pageInstance(loadHomePageDefinition());
+  page.renderSnapshot.call(page, {
+    data: {
+      available: true,
+      stale: true,
+      current_stale: false,
+      risk_stale: false,
+      warnings_stale: false,
+      location: { name: '都昌县' },
+      current: { temperature: 35 },
+      risk: { available: true, score: 72, level: '高风险' },
+      warnings: [],
+      actions: [{ id: 'hydrate', title: '少量多次补水' }],
+      source_status: {
+        current: { available: true, stale: false, expires_at: '2099-01-01T00:00:00Z' },
+        risk: { available: true, stale: false, expires_at: '2099-01-01T00:00:00Z' },
+        warnings: { available: true, stale: false, expires_at: '2099-01-01T00:00:00Z' },
+      },
+    },
+    meta: { source: 'stale-cache', stale: true, networkError: true },
+  });
+
+  assert.equal(page.data.freshness.stale, false);
+  assert.equal(page.data.snapshot.risk.available, true);
+  assert.deepEqual(page.data.topActions.map((item) => item.id), ['hydrate']);
+  assert.match(page.data.error, /联网|网络/);
+  assert.doesNotMatch(page.data.error, /风险.*暂停|行动.*暂停|较早观测/);
+
+  const view = fs.readFileSync(path.join(__dirname, '..', 'pages/home/index.wxml'), 'utf8');
+  assert.match(view, /freshness\.stale \? '天气更新失败，风险信息已暂停'/);
+});
+
+test('首页和行动页拒绝畸形 fresh-network 风险状态', () => {
+  [
+    { available: 'false', stale: false, expires_at: '2099-01-01T00:00:00Z' },
+    { available: true, stale: 'false', expires_at: 'garbage' },
+  ].forEach((state) => {
+    const result = {
+      data: {
+        available: true,
+        location: { name: '都昌县' },
+        current: { temperature: 38, temperature_max: 40 },
+        risk: { available: true, score: 90, level: '高风险' },
+        actions: [{ id: 'old-risk-action', title: '旧高温行动' }],
+        source_status: {
+          current: state,
+          risk: state,
+          warnings: { available: true, stale: false, expires_at: '2099-01-01T00:00:00Z' },
+        },
+      },
+      meta: { source: 'network', stale: false },
+    };
+
+    const home = pageInstance(loadHomePageDefinition());
+    home.renderSnapshot.call(home, result);
+    assert.equal(home.data.freshness.stale, true);
+    assert.equal(home.data.snapshot.risk.available, false);
+    assert.deepEqual(home.data.topActions, []);
+
+    const actions = pageInstance(loadActionsPageDefinition());
+    actions.renderActions.call(actions, result);
+    assert.equal(actions.data.generalMode, true);
+    assert.equal(actions.data.actions.some((item) => item.id === 'old-risk-action'), false);
+  });
+});
+
+test('行动页按风险可用性和提醒依赖分别校验', () => {
+  const componentStates = {
+    current: { available: true, stale: false, expires_at: '2099-01-01T00:00:00Z' },
+    risk: { available: true, stale: false, expires_at: '2099-01-01T00:00:00Z' },
+    warnings: { available: true, stale: true, expires_at: '2000-01-01T00:00:00Z' },
+  };
+  const baseData = {
+    available: true,
+    stale: true,
+    current_stale: false,
+    risk_stale: false,
+    warnings_stale: true,
+    location: { name: '都昌县' },
+    current: { temperature: 36 },
+    risk: { available: true, score: 72, level: '高风险' },
+    warnings: [],
+    actions: [{ id: 'hydrate', title: '少量多次补水' }],
+    source_status: componentStates,
+  };
+
+  const currentOnly = pageInstance(loadActionsPageDefinition());
+  currentOnly.renderActions.call(currentOnly, {
+    data: {
+      ...baseData,
+      family_reminder: {
+        id: 'current-only',
+        message: '今天较热，记得联系家人。',
+        depends_on: ['current'],
+      },
+    },
+    meta: { source: 'network', stale: true },
+  });
+  assert.equal(currentOnly.data.familyReminder.id, 'current-only');
+
+  const generic = pageInstance(loadActionsPageDefinition());
+  generic.renderActions.call(generic, {
+    data: {
+      ...baseData,
+      available: false,
+      current_stale: true,
+      risk_stale: true,
+      risk: { available: false, level: '未知' },
+      actions: [],
+      source_status: {
+        current: { available: false, stale: true, expires_at: '2000-01-01T00:00:00Z' },
+        risk: { available: false, stale: true, expires_at: '2000-01-01T00:00:00Z' },
+        warnings: { available: false, stale: true, expires_at: '2000-01-01T00:00:00Z' },
+      },
+      family_reminder: {
+        id: 'generic',
+        message: '今天方便时问问家里老人。',
+        depends_on: [],
+      },
+    },
+    meta: { source: 'stale-cache', stale: true },
+  });
+  assert.equal(generic.data.familyReminder.id, 'generic');
+  assert.deepEqual(generic.data.familyReminder.dependsOn, []);
+
+  const warningOnly = pageInstance(loadActionsPageDefinition());
+  warningOnly.renderActions.call(warningOnly, {
+    data: {
+      ...baseData,
+      available: false,
+      current_stale: true,
+      risk_stale: true,
+      warnings_stale: false,
+      current: {},
+      risk: { available: false, level: '未知' },
+      actions: [],
+      warnings: [{ title: '都昌县高温橙色预警' }],
+      source_status: {
+        current: { available: false, stale: true, expires_at: '2000-01-01T00:00:00Z' },
+        risk: { available: false, stale: true, expires_at: '2000-01-01T00:00:00Z' },
+        warnings: { available: true, stale: false, expires_at: '2099-01-01T00:00:00Z' },
+      },
+      family_reminder: {
+        id: 'warning-only',
+        message: '高温预警已生效，请联系家人。',
+        depends_on: ['warnings'],
+      },
+    },
+    meta: { source: 'stale-cache', stale: true },
+  });
+  assert.equal(warningOnly.data.familyReminder.id, 'warning-only');
+  assert.deepEqual(warningOnly.data.familyReminder.dependsOn, ['warnings']);
+
+  const invalidReminders = [
+    { id: 'missing', message: '旧预警提醒。' },
+    { id: 'unknown', message: '未知依赖提醒。', depends_on: ['forecast'] },
+    { id: 'duplicate', message: '重复依赖提醒。', depends_on: ['current', 'current'] },
+    { id: 'expired-warning', message: '旧高温预警提醒。', depends_on: ['warnings'] },
+  ];
+  invalidReminders.forEach((familyReminder) => {
+    const page = pageInstance(loadActionsPageDefinition());
+    page.renderActions.call(page, {
+      data: { ...baseData, family_reminder: familyReminder },
+      meta: { source: 'network', stale: true },
+    });
+    assert.equal(page.data.familyReminder, null, familyReminder.id);
+  });
+
+  const unavailableRisk = pageInstance(loadActionsPageDefinition());
+  unavailableRisk.renderActions.call(unavailableRisk, {
+    data: {
+      ...baseData,
+      risk: { available: false, level: '未知' },
+      actions: [{ id: 'old-risk-action', title: '旧风险行动' }],
+      source_status: {
+        ...componentStates,
+        risk: { available: false, stale: false, expires_at: '2099-01-01T00:00:00Z' },
+      },
+    },
+    meta: { source: 'network', stale: false },
+  });
+  assert.equal(unavailableRisk.data.generalMode, true);
+  assert.equal(unavailableRisk.data.actions.some((item) => item.id === 'old-risk-action'), false);
+});
+
+test('旧预警提醒被隐藏后复制内容不含旧预警', () => {
+  const page = pageInstance(loadActionsPageDefinition());
+  page.renderActions.call(page, {
+    data: {
+      available: true,
+      current_stale: false,
+      risk_stale: false,
+      warnings_stale: true,
+      current: { temperature: 35 },
+      risk: { available: true, score: 72, level: '高风险' },
+      warnings: [],
+      actions: [{ id: 'hydrate', title: '少量多次补水' }],
+      family_reminder: { id: 'legacy', message: '旧高温预警仍然生效。' },
+      source_status: {
+        current: { available: true, stale: false, expires_at: '2099-01-01T00:00:00Z' },
+        risk: { available: true, stale: false, expires_at: '2099-01-01T00:00:00Z' },
+        warnings: { available: true, stale: true, expires_at: '2000-01-01T00:00:00Z' },
+      },
+    },
+    meta: { source: 'network', stale: false },
+  });
+
+  let clipboard = '';
+  const previousWx = global.wx;
+  global.wx = { setClipboardData: ({ data }) => { clipboard = data; } };
+  try {
+    page.copyReminder.call(page);
+  } finally {
+    global.wx = previousWx;
+  }
+  assert.equal(page.data.familyReminder, null);
+  assert.doesNotMatch(clipboard, /旧高温预警/);
+  assert.match(clipboard, /少量多次补水/);
+});
+
 test('复制给家人的提醒使用当日模板并保留未确认行动', () => {
   const definition = loadActionsPageDefinition();
   const page = pageInstance(definition);
@@ -313,7 +564,10 @@ test('首页只向视图层传递当前天气和前三项行动', () => {
       current: { temperature: 35, temperature_max: 38, temperature_min: 28 },
       risk: { score: 72, level: '高风险' },
       warnings: [],
-      source_status: { warnings: { available: true }, weather: { available: true } },
+      source_status: {
+        warnings: { available: true, stale: false },
+        weather: { available: true, stale: false },
+      },
       forecast: Array.from({ length: 7 }, (_, index) => ({
         date: `2026-07-${String(index + 18).padStart(2, '0')}`,
         temperature_max: 36 + index,

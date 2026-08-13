@@ -28,7 +28,11 @@ from core.time_utils import ensure_utc_aware, utcnow
 from core.usage import log_usage_event
 from core.weather import is_qweather_online_weather
 from services.miniprogram_auth import current_privacy_version
-from services.miniprogram_service import canonical_location, get_bootstrap_payload
+from services.miniprogram_service import (
+    canonical_location,
+    get_bootstrap_payload,
+    snapshot_component_status,
+)
 from services.push.locks import push_owner_lock
 from services.push.wxpusher import send as wxpusher_send
 
@@ -727,7 +731,7 @@ def _pair_allows_family_push(pair: Pair, profile_map: Dict[int, FamilyMemberProf
 
 
 def _load_dispatch_snapshot(now) -> Optional[Tuple[Dict[str, Any], Dict[str, str]]]:
-    """只接收新鲜、可用且属于都昌县的持久化快照。"""
+    """按当前天气与官方预警各自状态读取都昌县持久化快照。"""
     canonical = canonical_location()
     try:
         payload = get_bootstrap_payload(now=now)
@@ -738,12 +742,8 @@ def _load_dispatch_snapshot(now) -> Optional[Tuple[Dict[str, Any], Dict[str, str
     if not isinstance(payload, dict):
         logger.warning("小程序天气快照格式无效，本轮推送已关闭")
         return None
-    if (
-        not payload.get("snapshot_id")
-        or payload.get("available") is not True
-        or bool(payload.get("stale", True))
-    ):
-        logger.info("小程序天气快照缺失、不可用或已陈旧，本轮推送已关闭")
+    if not payload.get("snapshot_id"):
+        logger.info("小程序天气快照缺失，本轮推送已关闭")
         return None
 
     location = payload.get("location")
@@ -755,7 +755,18 @@ def _load_dispatch_snapshot(now) -> Optional[Tuple[Dict[str, Any], Dict[str, str
     if snapshot_name != canonical["name"] or snapshot_code != canonical["code"]:
         logger.warning("小程序天气快照不属于当前都昌县范围，本轮推送已关闭")
         return None
-    return payload, canonical
+    current_status = snapshot_component_status(payload, "current", now=now)
+    warnings_status = snapshot_component_status(payload, "warnings", now=now)
+    if not current_status["usable"] and not warnings_status["usable"]:
+        logger.info("当前天气与官方预警均不可用，本轮推送已关闭")
+        return None
+
+    sanitized = dict(payload)
+    if not current_status["usable"]:
+        sanitized["current"] = {}
+    if not warnings_status["usable"]:
+        sanitized["warnings"] = []
+    return sanitized, canonical
 
 
 def _render_push_content(

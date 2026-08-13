@@ -663,6 +663,110 @@ def test_dispatch_fails_closed_without_fresh_available_snapshot(
         assert AlertDelivery.query.count() == 0
 
 
+def test_dispatch_sends_fresh_official_warning_without_current_weather(
+    app,
+    db_session,
+    monkeypatch,
+):
+    from core.db_models import AlertDelivery, WeatherAlert
+    from core.time_utils import utcnow
+    from services.push import dispatch as dispatch_mod
+    from services.miniprogram_service import canonical_location
+
+    with app.app_context():
+        _create_push_recipient(
+            db_session,
+            username="warning-only-recipient",
+            short_code="91000004",
+        )
+        now = utcnow()
+        payload = {
+            "snapshot_id": "warning-only-dispatch",
+            "available": False,
+            "stale": True,
+            "current_stale": True,
+            "warnings_stale": False,
+            "location": canonical_location(),
+            # 旧实况故意保留高温值，派发层必须把它清空。
+            "current": dict(DISPATCH_CURRENT),
+            "warnings": [{
+                "type": "高温",
+                "level": "红色",
+                "title": "高温红色预警",
+                "text": "请减少户外活动。",
+            }],
+            "source_status": {
+                "current": {"available": False, "stale": True},
+                "warnings": {"available": True, "stale": False},
+            },
+        }
+        monkeypatch.setattr(
+            dispatch_mod,
+            "get_bootstrap_payload",
+            lambda **_kwargs: payload,
+        )
+        monkeypatch.setattr(
+            dispatch_mod,
+            "wxpusher_send",
+            lambda *_args, **_kwargs: {"ok": True, "msg_id": "warning-only"},
+        )
+        _forbid_weather_upstream(monkeypatch)
+
+        result = dispatch_mod.dispatch_alerts(now=now)
+
+        assert result["sent"] == 1
+        assert AlertDelivery.query.filter_by(status="sent").count() == 1
+        alert = WeatherAlert.query.one()
+        assert alert.alert_type == "高温"
+        assert alert.alert_level == "红色"
+
+
+def test_dispatch_stops_when_current_and_warnings_are_unusable(
+    app,
+    db_session,
+    monkeypatch,
+):
+    from core.time_utils import utcnow
+    from services.push import dispatch as dispatch_mod
+    from services.miniprogram_service import canonical_location
+
+    with app.app_context():
+        _create_push_recipient(
+            db_session,
+            username="double-unavailable-recipient",
+            short_code="91000005",
+        )
+        payload = {
+            "snapshot_id": "double-unavailable-dispatch",
+            "available": False,
+            "stale": True,
+            "current_stale": True,
+            "warnings_stale": True,
+            "location": canonical_location(),
+            "current": dict(DISPATCH_CURRENT),
+            "warnings": [{"type": "高温", "level": "红色"}],
+            "source_status": {
+                "current": {"available": False, "stale": True},
+                "warnings": {"available": False, "stale": True},
+            },
+        }
+        monkeypatch.setattr(
+            dispatch_mod,
+            "get_bootstrap_payload",
+            lambda **_kwargs: payload,
+        )
+        monkeypatch.setattr(
+            dispatch_mod,
+            "wxpusher_send",
+            lambda *_args, **_kwargs: pytest.fail("双组件不可用时不得推送"),
+        )
+
+        result = dispatch_mod.dispatch_alerts(now=utcnow())
+
+        assert result["status"] == "snapshot_unavailable"
+        assert result["alerts"] == 0
+
+
 def test_threshold_alert_rejects_mock_weather():
     from services.push.dispatch import _threshold_alert
 

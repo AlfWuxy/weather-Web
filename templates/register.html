@@ -92,12 +92,16 @@
                                 </div>
                                 <div class="col-md-4">
                                     <label for="community" class="form-label"><i class="bi bi-geo-alt me-1"></i>所属社区</label>
-                                    <select class="form-select" id="community" name="community">
+                                    <select class="form-select{% if form_errors.get('community') %} is-invalid{% endif %}" id="community" name="community" aria-describedby="communityError" {% if form_errors.get('community') %}aria-invalid="true"{% endif %}>
                                         <option value="">请选择</option>
+                                        {% if form_errors.get('community') and form_data.get('community') %}
+                                            <option value="{{ form_data.get('community') }}" selected>{{ form_data.get('community') }}（无效，请重选）</option>
+                                        {% endif %}
                                         {% for comm in communities %}
                                             <option value="{{ comm.name }}" {% if form_data.get('community') == comm.name %}selected{% endif %}>{{ comm.name }}</option>
                                         {% endfor %}
                                     </select>
+                                    <div class="invalid-feedback" id="communityError">{{ form_errors.get('community', '') }}</div>
                                 </div>
                             </div>
 

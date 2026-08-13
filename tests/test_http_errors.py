@@ -1,6 +1,11 @@
 # -*- coding: utf-8 -*-
 """中文错误页、限流响应和可信代理客户端键回归。"""
+import importlib
+
 from flask import abort
+from flask_login import current_user
+from sqlalchemy import event, text
+from sqlalchemy.exc import OperationalError
 
 
 def _set_csrf(client, token):
@@ -170,6 +175,34 @@ def test_client_rate_limit_key_obeys_trusted_proxy_boundary(app):
     )
 
 
+def test_client_rate_limit_key_is_stable_across_worker_reload(app):
+    import core.security as security
+
+    app.config['PAIR_TOKEN_PEPPER'] = 'pair-pepper-stable-across-workers'
+    app.config['SECRET_KEY'] = 'different-session-secret'
+    request_kwargs = {
+        'headers': {'X-Forwarded-For': '8.8.4.4'},
+        'environ_base': {'REMOTE_ADDR': '127.0.0.1'},
+    }
+
+    with app.test_request_context('/', **request_kwargs):
+        first_worker = security.client_rate_limit_key()
+
+    importlib.reload(security)
+    app.config['SECRET_KEY'] = 'rotated-but-lower-priority-session-secret'
+    with app.test_request_context('/', **request_kwargs):
+        restarted_worker = security.client_rate_limit_key()
+
+    assert restarted_worker == first_worker
+    assert first_worker.startswith('client:')
+    assert '8.8.4.4' not in first_worker
+
+    app.config['PAIR_TOKEN_PEPPER'] = 'rotated-pair-pepper'
+    with app.test_request_context('/', **request_kwargs):
+        rotated_pepper = security.client_rate_limit_key()
+    assert rotated_pepper != first_worker
+
+
 def test_html_and_api_not_found_are_content_negotiated(client, db_session):
     html_response = client.get('/settings')
     api_response = client.get('/api/does-not-exist')
@@ -201,6 +234,68 @@ def test_forbidden_and_internal_errors_use_station_pages(app, client, db_session
     assert failed.status_code == 500
     assert '页面暂时不可用' in failed.get_data(as_text=True)
     assert 'raw-private-error-text' not in failed.get_data(as_text=True)
+
+
+def test_authenticated_database_failure_500_never_queries_database_again(
+    app,
+    authenticated_client,
+):
+    from core.extensions import db
+
+    app.config['PROPAGATE_EXCEPTIONS'] = False
+    app.config['FEATURE_STRUCTURED_LOGS'] = True
+    state = {'database_offline': False, 'query_count': 0}
+
+    with app.app_context():
+        engine = db.engine
+
+    def reject_queries_after_failure(
+        _connection,
+        _cursor,
+        statement,
+        parameters,
+        _context,
+        _executemany,
+    ):
+        if not state['database_offline']:
+            return
+        state['query_count'] += 1
+        raise OperationalError(
+            statement,
+            parameters,
+            RuntimeError('database unavailable'),
+        )
+
+    def _test_authenticated_db_failure():
+        assert current_user.is_authenticated
+        loaded_user = current_user._get_current_object()
+        db.session.expire(loaded_user)
+        state['database_offline'] = True
+        db.session.execute(text('SELECT 1'))
+        raise AssertionError('数据库故障必须在这里终止请求')
+
+    endpoint = 'user.user_dashboard'
+    original_view = app.view_functions[endpoint]
+    app.view_functions[endpoint] = _test_authenticated_db_failure
+    event.listen(engine, 'before_cursor_execute', reject_queries_after_failure)
+    try:
+        response = authenticated_client.get('/dashboard')
+    finally:
+        app.view_functions[endpoint] = original_view
+        event.remove(
+            engine,
+            'before_cursor_execute',
+            reject_queries_after_failure,
+        )
+
+    body = response.get_data(as_text=True)
+    assert response.status_code == 500
+    assert state['query_count'] == 1
+    assert '页面暂时不可用' in body
+    assert response.headers['X-Request-ID']
+    assert response.headers['X-Request-ID'] in body
+    assert response.headers['Cache-Control'] == 'no-store, private, max-age=0'
+    assert 'database unavailable' not in body
 
 
 def test_community_permission_message_names_required_role(

@@ -887,6 +887,89 @@ test('提醒话术遇到较早或不可用天气时退回通用提醒', async ()
   assert.match(unavailablePage.data.message, /【都昌县天气提醒】/);
 });
 
+test('只有新鲜官方预警时仍生成对应家庭行动和提醒', async () => {
+  authApiImpl = async () => ({
+    items: [{ pair_id: 9, member: { name: '奶奶', relation: '祖母' } }],
+  });
+  snapshotImpl = async () => ({
+    data: {
+      available: false,
+      stale: true,
+      current_stale: true,
+      risk_stale: true,
+      warnings_stale: false,
+      current: {},
+      risk: { available: false, level: '未知' },
+      warnings: [{ title: '都昌县高温橙色预警' }],
+      source_status: {
+        current: { available: false, expires_at: '2099-01-01T00:00:00Z' },
+        risk: { available: false, expires_at: '2099-01-01T00:00:00Z' },
+        warnings: { available: true, stale: false, expires_at: '2099-01-01T00:00:00Z' },
+      },
+    },
+    meta: { source: 'stale-cache', stale: true },
+  });
+
+  const actionDefinition = loadPage('../pages/action-checkin/index');
+  const actionPage = makePage(actionDefinition, { pairId: 9 });
+  await actionPage.loadContext.call(actionPage);
+
+  assert.equal(actionPage.data.weather.available, false);
+  assert.equal(actionPage.data.weather.componentStatus.warnings.usable, true);
+  assert.equal(actionPage.data.weatherStatus, '高温留意');
+  assert.deepEqual(actionPage.data.actions.map((item) => item.id), [
+    'drink_water',
+    'avoid_noon',
+    'cool_rest',
+  ]);
+
+  const templateDefinition = loadPage('../pages/template/index');
+  const templatePage = makePage(templateDefinition, { pairId: 9 });
+  await templatePage.loadTemplate.call(templatePage);
+
+  assert.equal(templatePage.data.trigger, 'heat');
+  assert.equal(templatePage.data.weatherNotice, '');
+  assert.match(templatePage.data.message, /【都昌县高温提醒】/);
+  assert.doesNotMatch(templatePage.data.message, /最高约/);
+});
+
+test('畸形 fresh-network 状态不能触发高温行动或提醒', async () => {
+  authApiImpl = async () => ({
+    items: [{ pair_id: 9, member: { name: '奶奶', relation: '祖母' } }],
+  });
+  snapshotImpl = async () => ({
+    data: {
+      available: true,
+      stale: false,
+      current: { temperature: 38, temperature_max: 40, temperature_min: 30 },
+      risk: { available: true, level: '高风险' },
+      warnings: [{ title: '来源不明的高温预警' }],
+      source_status: {
+        current: { available: 'false', stale: false, expires_at: '2099-01-01T00:00:00Z' },
+        risk: { available: 'false', stale: false, expires_at: '2099-01-01T00:00:00Z' },
+        warnings: { available: 'false', stale: false, expires_at: '2099-01-01T00:00:00Z' },
+      },
+    },
+    meta: { source: 'network', stale: false },
+  });
+
+  const actionDefinition = loadPage('../pages/action-checkin/index');
+  const actionPage = makePage(actionDefinition, { pairId: 9 });
+  await actionPage.loadContext.call(actionPage);
+  assert.deepEqual(actionPage.data.actions.map((item) => item.id), [
+    'check_weather',
+    'carry_water',
+    'contact_family',
+  ]);
+
+  const templateDefinition = loadPage('../pages/template/index');
+  const templatePage = makePage(templateDefinition, { pairId: 9 });
+  await templatePage.loadTemplate.call(templatePage);
+  assert.equal(templatePage.data.trigger, '');
+  assert.match(templatePage.data.message, /【都昌县天气提醒】/);
+  assert.doesNotMatch(templatePage.data.message, /高温提醒/);
+});
+
 test('复制提醒事件不上传家庭配对标识', () => {
   const requests = [];
   authApiImpl = (options) => {
@@ -1064,7 +1147,7 @@ test('公共天气页面失败会安全降级、统一退避并提供真实重�
     const alertsView = fs.readFileSync(path.join(miniRoot, 'pages/alerts/index.wxml'), 'utf8');
     const actionsView = fs.readFileSync(path.join(miniRoot, 'pages/actions/index.wxml'), 'utf8');
     const transparencyView = fs.readFileSync(path.join(miniRoot, 'pages/transparency/index.wxml'), 'utf8');
-    assert.match(homeView, /wx:if="\{\{error\}\}"[^>]*title="天气更新失败，风险信息已暂停"/);
+    assert.match(homeView, /wx:if="\{\{error\}\}"[^>]*freshness\.stale \? '天气更新失败，风险信息已暂停'/);
     assert.match(forecastView, /wx:if="\{\{error\}\}"[^>]*title="预报更新失败，风险等级已暂停"/);
     assert.match(alertsView, /error \? '预警更新失败，有效性待核对'/);
     assert.match(actionsView, /action-label="\{\{error \? '重新获取天气' : ''\}\}"[^>]*bind:action="retry"/);

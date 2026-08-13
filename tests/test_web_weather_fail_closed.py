@@ -179,6 +179,14 @@ def test_daily_risk_snapshot_requires_fresh_real_snapshot(monkeypatch):
         {**valid, 'current': {**REAL_WEATHER, 'is_demo': True}},
         {**valid, 'risk': {'available': False, 'level': '高风险'}},
         {**valid, 'risk': {'available': True, 'level': '未知'}},
+        {
+            **valid,
+            'available': False,
+            'source_status': {
+                'risk': {'available': True, 'stale': False},
+            },
+            'risk_stale': False,
+        },
     ]
 
     for payload in invalid_payloads:
@@ -193,6 +201,26 @@ def test_daily_risk_snapshot_requires_fresh_real_snapshot(monkeypatch):
         caregiver_service,
         'get_bootstrap_payload',
         lambda: valid,
+    )
+    assert caregiver_service._load_daily_risk_snapshot() == {
+        'snapshot_id': 'fresh-real-snapshot',
+        'risk_level': '高风险',
+    }
+
+    forecast_only_stale = {
+        **valid,
+        'stale': True,
+        'forecast_stale': True,
+        'risk_stale': False,
+        'source_status': {
+            'risk': {'available': True, 'stale': False},
+            'forecast': {'available': True, 'stale': True},
+        },
+    }
+    monkeypatch.setattr(
+        caregiver_service,
+        'get_bootstrap_payload',
+        lambda: forecast_only_stale,
     )
     assert caregiver_service._load_daily_risk_snapshot() == {
         'snapshot_id': 'fresh-real-snapshot',

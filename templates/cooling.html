@@ -27,7 +27,7 @@
                         <div class="v"><span class="num">{{ outdoor_temp }}</span><span class="unit">°C</span></div>
                         <div class="k">{{ cooling_weather_location or current_location or '当前位置' }} · 当前室外</div>
                         {% if cooling_snapshot_meta and cooling_snapshot_meta.id_short %}
-                        <div class="text-muted small mt-1">天气快照 {{ cooling_snapshot_meta.id_short }}{% if cooling_snapshot_meta.fetched_at %} · {{ cooling_snapshot_meta.fetched_at[:16]|replace('T', ' ') }}{% endif %}</div>
+                        <div class="text-muted small mt-1">天气快照 {{ cooling_snapshot_meta.id_short }}{% if cooling_snapshot_meta.display_time %} · 北京时间 {{ cooling_snapshot_meta.display_time }}{% endif %}</div>
                         {% endif %}
                     </div>
                 </div>

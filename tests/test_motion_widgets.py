@@ -118,6 +118,8 @@ def test_dashboard_renders_temperature_and_registered_metric_widgets(client, db_
     body = response.get_data(as_text=True)
     assert 'data-fx="thermo-bar"' in body
     assert '已登记健康指标' in body
+    assert '在网页记录今天' in body
+    assert '查看小程序交接方式' not in body
     assert 'data-fx="sparkline"' in body
     assert '父亲 · 当前登记' in body
     assert '橙线 = 当前登记值定位' in body
@@ -240,6 +242,221 @@ def test_dashboard_without_snapshot_fails_closed_without_weather_cache(
     assert '天气正在更新，风险等级暂不显示' in body
     assert 'data-weather-snapshot-id=' not in body
     assert WeatherData.query.count() == 0
+
+
+def test_dashboard_rejects_carried_current_marked_unavailable(
+    client,
+    db_session,
+    monkeypatch,
+):
+    """独立预警更新可携带旧实况做溯源，但首页不得继续显示它。"""
+    from core.db_models import User
+
+    user = User(username='dashboard_carried_current', role='user', community='都昌')
+    user.set_password('testpass')
+    db_session.add(user)
+    db_session.commit()
+    _login_as(client, user.id)
+    snapshot = _dashboard_snapshot()
+    snapshot.update({
+        'available': False,
+        'stale': False,
+        'current_stale': False,
+        'risk_stale': True,
+        'source_status': {
+            'current': {'available': False, 'stale': False},
+            'risk': {'available': False, 'stale': True},
+            'warnings': {'available': True, 'stale': False},
+        },
+    })
+    monkeypatch.setattr(
+        'services.user.dashboard_service.get_bootstrap_payload',
+        lambda: snapshot,
+    )
+
+    body = client.get('/dashboard').get_data(as_text=True)
+
+    assert '天气正在更新，风险等级暂不显示' in body
+    assert '<span>27.5</span>' not in body
+
+
+def test_dashboard_rejects_risk_when_root_snapshot_is_unavailable(
+    client,
+    db_session,
+    monkeypatch,
+):
+    """根快照不可用时，不得继续展示矛盾组件里的旧风险和行动。"""
+    from core.db_models import User
+
+    user = User(username='dashboard_unavailable_risk', role='user', community='都昌')
+    user.set_password('testpass')
+    db_session.add(user)
+    db_session.commit()
+    _login_as(client, user.id)
+    snapshot = _dashboard_snapshot()
+    snapshot.update({
+        'available': False,
+        'risk_stale': False,
+        'risk': {
+            'available': True,
+            'level': '高风险',
+            'score': 92,
+            'calculation': {
+                'heat_result': {
+                    'risk_level': 'high',
+                    'risk_score': 92,
+                },
+            },
+        },
+        'actions': [{'title': '旧高温行动', 'detail': '这条行动不得展示'}],
+        'source_status': {
+            'risk': {'available': True, 'stale': False},
+        },
+    })
+    monkeypatch.setattr(
+        'services.user.dashboard_service.get_bootstrap_payload',
+        lambda: snapshot,
+    )
+
+    body = client.get('/dashboard').get_data(as_text=True)
+
+    assert '<span>92</span>' not in body
+    assert '旧高温行动' not in body
+    assert '天气正在更新，风险等级暂不显示' in body
+
+
+def test_dashboard_rejects_expired_warning_component(
+    client,
+    db_session,
+    monkeypatch,
+):
+    """顶层标记与组件冲突时，以组件过期状态关闭旧官方预警。"""
+    from core.db_models import User
+
+    user = User(username='dashboard_expired_warning', role='user', community='都昌')
+    user.set_password('testpass')
+    db_session.add(user)
+    db_session.commit()
+    _login_as(client, user.id)
+    snapshot = _dashboard_snapshot()
+    snapshot.update({
+        'warnings_stale': False,
+        'warnings': [{
+            'title': '已过期红色预警',
+            'level': '红色',
+            'text': '这条旧预警正文不得展示',
+            'issued_at': '2000-01-01T00:00:00+08:00',
+        }],
+        'source_status': {
+            'warnings': {
+                'available': True,
+                'stale': True,
+                'expires_at': '2000-01-01T01:00:00+08:00',
+            },
+        },
+    })
+    monkeypatch.setattr(
+        'services.user.dashboard_service.get_bootstrap_payload',
+        lambda: snapshot,
+    )
+
+    body = client.get('/dashboard').get_data(as_text=True)
+
+    assert '已过期红色预警' not in body
+    assert '这条旧预警正文不得展示' not in body
+
+
+def test_dashboard_rejects_expired_forecast_component(
+    client,
+    db_session,
+    monkeypatch,
+):
+    """组件已过期时，顶层 fresh 标记不能继续放行旧逐日预报。"""
+    from core.db_models import User
+
+    user = User(username='dashboard_expired_forecast', role='user', community='都昌')
+    user.set_password('testpass')
+    db_session.add(user)
+    db_session.commit()
+    _login_as(client, user.id)
+    day = today_local() + timedelta(days=1)
+    snapshot = _dashboard_snapshot(forecast=[{
+        'date': day.strftime('%Y-%m-%d'),
+        'temperature_max': 49,
+        'temperature_min': 39,
+        'humidity': 80,
+        'condition': '旧预报标记',
+        'risk_available': True,
+        'risk_score': 99,
+        'risk_level': '极高风险',
+    }])
+    snapshot.update({
+        'available': False,
+        'stale': True,
+        'forecast_stale': False,
+        'source_status': {
+            'forecast': {
+                'available': True,
+                'stale': True,
+                'expires_at': '2000-01-01T01:00:00+08:00',
+            },
+        },
+    })
+    monkeypatch.setattr(
+        'services.user.dashboard_service.get_bootstrap_payload',
+        lambda: snapshot,
+    )
+
+    body = client.get('/dashboard').get_data(as_text=True)
+
+    assert '49° / 39°' not in body
+    assert '旧预报标记' not in body
+    assert '极高风险' not in body
+
+
+def test_dashboard_allows_independently_fresh_forecast_component(
+    client,
+    db_session,
+    monkeypatch,
+):
+    """当前天气失败时，明确新鲜的独立预报仍可展示。"""
+    from core.db_models import User
+
+    user = User(username='dashboard_fresh_forecast', role='user', community='都昌')
+    user.set_password('testpass')
+    db_session.add(user)
+    db_session.commit()
+    _login_as(client, user.id)
+    day = today_local() + timedelta(days=1)
+    snapshot = _dashboard_snapshot(forecast=[{
+        'date': day.strftime('%Y-%m-%d'),
+        'temperature_max': 25,
+        'temperature_min': 17,
+        'humidity': 60,
+        'condition': '独立新鲜预报',
+        'risk_available': True,
+        'risk_score': 20,
+        'risk_level': '低风险',
+    }])
+    snapshot.update({
+        'available': False,
+        'stale': True,
+        'current_stale': True,
+        'risk_stale': True,
+        'forecast_stale': False,
+        'source_status': {
+            'forecast': {'available': True, 'stale': False},
+        },
+    })
+    monkeypatch.setattr(
+        'services.user.dashboard_service.get_bootstrap_payload',
+        lambda: snapshot,
+    )
+
+    body = client.get('/dashboard').get_data(as_text=True)
+
+    assert '25° / 17°' in body
+    assert '独立新鲜预报' in body
 
 
 def test_dashboard_forecast_uses_persisted_snapshot_cards(client, db_session, monkeypatch):
