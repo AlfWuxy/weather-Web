@@ -3,7 +3,6 @@
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager
 from flask_limiter import Limiter
-from flask_limiter.util import get_remote_address
 
 db = SQLAlchemy()
 # SQLAlchemy 连接池配置（在 core/config.py 的 configure_app 中设置）
@@ -15,7 +14,15 @@ db = SQLAlchemy()
 # }
 
 login_manager = LoginManager()
-limiter = Limiter(get_remote_address)
+
+
+def _limiter_key_func():
+    """默认 Limiter 复用 security.rate_limit_key；函数内 import 避免模块级环依赖。"""
+    from core.security import rate_limit_key
+    return rate_limit_key()
+
+
+limiter = Limiter(_limiter_key_func)
 
 
 def init_extensions(app):
