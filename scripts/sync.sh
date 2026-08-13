@@ -76,12 +76,13 @@ if use_sshpass && [ -n "$SSHPASS" ]; then
         --exclude .venv2 \
         --exclude .env \
         --exclude .env.local \
+        --exclude=/analysis/ \
         -e ssh "$LOCAL_DIR/" "$USER@$SERVER:$PROJECT_DIR/"
 elif use_expect && [ -n "$SSHPASS" ]; then
     expect -c "
         set timeout 600
         set password \$env(SSHPASS)
-        spawn rsync -avz --exclude __pycache__ --exclude *.pyc --exclude instance --exclude storage --exclude health_weather.db --exclude .git --exclude venv --exclude .venv --exclude .venv2 --exclude .env --exclude .env.local -e ssh $LOCAL_DIR/ $USER@$SERVER:$PROJECT_DIR/
+        spawn rsync -avz --exclude __pycache__ --exclude *.pyc --exclude instance --exclude storage --exclude health_weather.db --exclude .git --exclude venv --exclude .venv --exclude .venv2 --exclude .env --exclude .env.local --exclude=/analysis/ -e ssh $LOCAL_DIR/ $USER@$SERVER:$PROJECT_DIR/
         expect {
             \"*password:\" {
                 send \"\$password\r\"
@@ -97,7 +98,7 @@ elif use_expect && [ -n "$SSHPASS" ]; then
         exit [lindex \$wait_result 3]
     "
 else
-    rsync -avz --exclude __pycache__ --exclude *.pyc --exclude instance --exclude storage --exclude health_weather.db --exclude .git --exclude venv --exclude .venv --exclude .venv2 --exclude .env --exclude .env.local -e ssh "$LOCAL_DIR/" "$USER@$SERVER:$PROJECT_DIR/"
+    rsync -avz --exclude __pycache__ --exclude *.pyc --exclude instance --exclude storage --exclude health_weather.db --exclude .git --exclude venv --exclude .venv --exclude .venv2 --exclude .env --exclude .env.local --exclude=/analysis/ -e ssh "$LOCAL_DIR/" "$USER@$SERVER:$PROJECT_DIR/"
 fi
 
 # 重启服务
