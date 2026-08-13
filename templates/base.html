@@ -97,7 +97,7 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='css/yilao-data-fx.css') }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/yilao-data-fx-extra.css') }}">
 
-    <noscript><style>.page-loader{display:none !important;}[data-motion] .yl-fade-up,[data-motion] .yl-section,[data-motion] .narrative-step,[data-motion] [data-animate-in]{opacity:1 !important;transform:none !important;}</style></noscript>
+    <noscript><style>[data-motion] .yl-fade-up,[data-motion] .yl-section,[data-motion] .narrative-step,[data-motion] [data-animate-in]{opacity:1 !important;transform:none !important;}</style></noscript>
     {% block extra_css %}{% endblock %}
     <link rel="stylesheet" href="{{ url_for('static', filename='css/apple-polish.css') }}">
 </head>
@@ -134,11 +134,6 @@
     {% set nav_care_active = nav_care_primary_active or nav_family_active %}
 
     <a class="visually-hidden-focusable skip-link" href="#main-content">跳到主要内容</a>
-
-    <div class="page-loader" id="pageLoader">
-        <div class="loader-spinner"></div>
-        <div class="loader-text">加载中…</div>
-    </div>
 
     {# ===================== 顶部导航 ===================== #}
     <nav class="navbar sticky-top" aria-label="主导航">
@@ -240,7 +235,14 @@
             {% endif %}
 
             <div class="d-flex align-items-center gap-2 ms-auto">
-                {% if current_user.is_authenticated %}
+                {% if nav_is_guest %}
+                    <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('public.login') }}">登录正式账号</a>
+                    <a class="btn btn-sm btn-primary nav-auth-register" data-nav-auth="register" href="{{ url_for('public.register') }}">注册</a>
+                    <form method="POST" action="{{ url_for('public.logout') }}" class="d-none d-md-inline m-0">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <button class="btn btn-sm btn-outline-secondary" type="submit">结束体验</button>
+                    </form>
+                {% elif current_user.is_authenticated %}
                     {% if current_user.role == 'admin' %}
                         <a class="btn btn-sm btn-outline-secondary d-none d-md-inline-flex" href="{{ url_for('admin.admin_dashboard') }}">
                             <i class="bi bi-speedometer2 me-1"></i>后台
@@ -278,7 +280,7 @@
 
             {% if current_user.is_authenticated %}
                 <div class="mb-3 p-3" style="background:var(--yl-orange-50); border-radius:12px;">
-                    <div class="small text-muted">当前账号</div>
+                    <div class="small text-muted">{% if nav_is_guest %}当前为游客体验{% else %}当前账号{% endif %}</div>
                     <div class="fw-semibold"><i class="bi bi-person-circle me-1"></i>{{ current_user.username }}</div>
                     <div class="small text-muted mt-1">
                         <i class="bi bi-geo-alt"></i> {{ current_location or '未设置定位' }}
@@ -400,11 +402,12 @@
                         </div>
                     {% endif %}
                 {% else %}
+                    <a class="nav-link" href="{{ url_for('public.login') }}"><i class="bi bi-box-arrow-in-right me-2"></i>登录正式账号</a>
                     <a class="nav-link" href="{{ url_for('public.register') }}"><i class="bi bi-person-plus me-2"></i>注册账号</a>
                 {% endif %}
                 <form method="POST" action="{{ url_for('public.logout') }}" class="mt-2">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                    <button class="btn btn-outline-secondary btn-sm w-100" type="submit"><i class="bi bi-box-arrow-right me-1"></i>退出登录</button>
+                    <button class="btn btn-outline-secondary btn-sm w-100" type="submit"><i class="bi bi-box-arrow-right me-1"></i>{% if nav_is_guest %}结束游客体验{% else %}退出登录{% endif %}</button>
                 </form>
             </nav>
             {% else %}
@@ -461,14 +464,6 @@
     {% endif %}
 
     <script>
-        function hideLoader() {
-            const loader = document.getElementById('pageLoader');
-            if (loader) loader.classList.add('hidden');
-        }
-        document.addEventListener('DOMContentLoaded', function() { setTimeout(hideLoader, 100); });
-        window.addEventListener('load', function() { setTimeout(hideLoader, 100); });
-        setTimeout(hideLoader, 3000);
-
         document.addEventListener('DOMContentLoaded', function() {
             document.querySelectorAll('form').forEach(form => {
                 form.addEventListener('submit', function() {
@@ -482,7 +477,6 @@
                 });
             });
         });
-        window.addEventListener('error', function() { hideLoader(); });
     </script>
 
     <script>

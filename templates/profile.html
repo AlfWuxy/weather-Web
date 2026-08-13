@@ -178,7 +178,7 @@
                         </div>
                         <div class="mb-3">
                             <label for="confirm_password" class="form-label">确认新密码</label>
-                            <input type="password" class="form-control" id="confirm_password">
+                            <input type="password" class="form-control" id="confirm_password" name="confirm_password" autocomplete="new-password">
                         </div>
                         <button type="submit" class="btn btn-warning">修改密码</button>
                     </form>
@@ -193,12 +193,13 @@
                 </div>
                 <div class="card-body">
                     <p class="text-muted small mb-2">
-                        使用独立的跨端账号页保存手机号，并在复验当前密码后生成 8 位一次性绑定码。
+                        在跨端账号页复验当前密码后生成 8 位一次性绑定码。绑定不需要手机号。
                     </p>
                     <a class="btn btn-primary w-100" href="{{ url_for('public.account_link') }}">
                         <i class="bi bi-link-45deg"></i> 打开跨端账号页
                     </a>
 
+                    {% if current_user.role == 'admin' %}
                     <details class="mt-3">
                         <summary class="small text-muted">旧版 API Token 兼容入口</summary>
                         {% if last_api_token_plain %}
@@ -218,6 +219,7 @@
                             <button type="submit" class="btn btn-outline-secondary btn-sm w-100">生成旧版 Token</button>
                         </form>
                     </details>
+                    {% endif %}
                 </div>
             </div>
 

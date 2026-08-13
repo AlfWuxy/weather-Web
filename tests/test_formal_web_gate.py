@@ -142,7 +142,7 @@ def test_formal_web_registration_keeps_minimal_account_creation(
     client,
     db_session,
 ):
-    """正式态保留待验证手机号保存，并继续执行 CSRF 与输入校验。"""
+    """小程序独占正式态注册后建立会话并落到账号绑定页。"""
     from core.db_models import User
 
     app.config["WECHAT_FORMAL_RUNTIME"] = True
@@ -156,6 +156,7 @@ def test_formal_web_registration_keeps_minimal_account_creation(
         data={
             "username": "formal_link_user",
             "password": "formal-test-password",
+            "confirm_password": "formal-test-password",
             "phone": "13800138000",
             "csrf_token": csrf,
         },
@@ -163,10 +164,12 @@ def test_formal_web_registration_keeps_minimal_account_creation(
     )
 
     assert response.status_code in (301, 302, 303)
-    assert "/login" in response.headers["Location"]
+    assert response.headers["Location"].endswith("/account-link")
     user = User.query.filter_by(username="formal_link_user").one()
-    assert user.phone_normalized == "+8613800138000"
+    assert user.phone_normalized is None
     assert user.phone_verified_at is None
+    with client.session_transaction() as flask_session:
+        assert flask_session.get("_user_id")
 
 
 def test_formal_web_gate_preserves_public_aggregate_and_admin_inventory(app):

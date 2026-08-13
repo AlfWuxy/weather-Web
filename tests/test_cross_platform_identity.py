@@ -816,6 +816,7 @@ def test_password_change_revokes_existing_link_code(
             "form_id": "password",
             "old_password": "long-web-password",
             "new_password": "new-long-web-password",
+            "confirm_password": "new-long-web-password",
         },
         follow_redirects=False,
     )
@@ -881,6 +882,7 @@ def test_password_change_detaches_wechat_until_fresh_relink(
             "form_id": "password",
             "old_password": "long-web-password",
             "new_password": "new-long-web-password",
+            "confirm_password": "new-long-web-password",
         },
         follow_redirects=False,
     )
@@ -977,6 +979,7 @@ def test_password_change_allows_different_wechat_to_replace_stale_identity(
             "form_id": "password",
             "old_password": "long-web-password",
             "new_password": "new-long-web-password",
+            "confirm_password": "new-long-web-password",
         },
         follow_redirects=False,
     )
@@ -1103,12 +1106,14 @@ def test_registration_rejects_phone_shaped_username(app, client, db_session):
         data={
             "username": "13800138000",
             "password": "long-registration-password",
+            "confirm_password": "long-registration-password",
             "csrf_token": csrf,
         },
         follow_redirects=False,
     )
 
-    assert response.status_code in (301, 302, 303)
+    assert response.status_code == 422
+    assert "用户名不能使用手机号格式" in response.get_data(as_text=True)
     assert User.query.filter_by(username="13800138000").first() is None
 
 
@@ -1130,103 +1135,37 @@ def test_registration_rejects_internal_username_namespaces(
             data={
                 "username": username,
                 "password": "long-registration-password",
+                "confirm_password": "long-registration-password",
                 "csrf_token": csrf,
             },
             follow_redirects=False,
         )
-        assert response.status_code in (301, 302, 303)
+        assert response.status_code == 422
         assert User.query.filter_by(username=username).first() is None
 
 
-def test_registration_hides_phone_occupancy_in_response(
-    app,
-    db_session,
-):
+def test_registration_ignores_legacy_phone_field(app, db_session):
     from core.db_models import User
 
-    occupied = User(
-        username="occupied_phone_owner",
-        phone_normalized="+8613900000001",
-    )
-    occupied.set_password("existing-password-long")
-    db_session.add(occupied)
-    db_session.commit()
-
-    def submit(username, phone):
-        test_client = app.test_client()
-        csrf = f"csrf-{username}"
-        with test_client.session_transaction() as flask_session:
-            flask_session["_csrf_token"] = csrf
-        response = test_client.post(
-            "/register",
-            data={
-                "username": username,
-                "password": "registration-password-long",
-                "phone": phone,
-                "csrf_token": csrf,
-            },
-            follow_redirects=False,
-        )
-        with test_client.session_transaction() as flask_session:
-            flashes = list(flask_session.get("_flashes") or [])
-        return response, flashes
-
-    occupied_response, occupied_flashes = submit(
-        "phone_probe_occupied",
-        "13900000001",
-    )
-    available_response, available_flashes = submit(
-        "phone_probe_available",
-        "13900000002",
+    test_client = app.test_client()
+    csrf = "legacy-register-phone-csrf"
+    with test_client.session_transaction() as flask_session:
+        flask_session["_csrf_token"] = csrf
+    response = test_client.post(
+        "/register",
+        data={
+            "username": "legacy_phone_field",
+            "password": "registration-password-long",
+            "confirm_password": "registration-password-long",
+            "phone": "13900000001",
+            "csrf_token": csrf,
+        },
+        follow_redirects=False,
     )
 
-    assert occupied_response.status_code == available_response.status_code
-    assert occupied_response.headers["Location"] == available_response.headers["Location"]
-    assert occupied_flashes == available_flashes
-    assert "手机号" not in occupied_flashes[0][1]
-    duplicate_user = User.query.filter_by(username="phone_probe_occupied").one()
-    assert duplicate_user.phone_normalized == "+8613900000001"
-    assert duplicate_user.phone_verified_at is None
-    assert User.query.filter_by(username="phone_probe_available").one()
-    assert User.query.filter_by(
-        phone_normalized="+8613900000001",
-    ).count() == 2
-
-    def attempt_pending_phone_login(phone, password):
-        test_client = app.test_client()
-        csrf = f"csrf-{phone}-{password}"
-        with test_client.session_transaction() as flask_session:
-            flask_session["_csrf_token"] = csrf
-        response = test_client.post(
-            "/login",
-            data={
-                "username": phone,
-                "password": password,
-                "csrf_token": csrf,
-            },
-            follow_redirects=False,
-        )
-        with test_client.session_transaction() as flask_session:
-            flashes = list(flask_session.get("_flashes") or [])
-            logged_in = "_user_id" in flask_session
-        return response.status_code, flashes, logged_in
-
-    occupied_phone_result = attempt_pending_phone_login(
-        "13900000001",
-        "registration-password-long",
-    )
-    available_phone_result = attempt_pending_phone_login(
-        "13900000002",
-        "registration-password-long",
-    )
-    existing_owner_result = attempt_pending_phone_login(
-        "13900000001",
-        "existing-password-long",
-    )
-    assert occupied_phone_result == available_phone_result
-    assert occupied_phone_result == existing_owner_result
-    assert occupied_phone_result[0] == 200
-    assert occupied_phone_result[2] is False
+    assert response.status_code in (301, 302, 303)
+    created = User.query.filter_by(username="legacy_phone_field").one()
+    assert created.phone_normalized is None
 
 
 def test_registration_post_has_dedicated_rate_limit(app, db_session):
@@ -1240,8 +1179,9 @@ def test_registration_post_has_dedicated_rate_limit(app, db_session):
         test_client.post(
             "/register",
             data={
-                "username": f"rate_limited_registration_{index}",
+                "username": f"rate_register_{index}",
                 "password": "registration-password-long",
+                "confirm_password": "registration-password-long",
                 "csrf_token": csrf,
             },
             follow_redirects=False,

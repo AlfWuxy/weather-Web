@@ -1279,6 +1279,10 @@ def handle_account_link_code():
 
 def handle_login(next_url):
     safe_next = _safe_next_url(next_url)
+    login_form = {
+        'username': '',
+        'remember': False,
+    }
     if request.method == 'POST':
         # 输入验证
         username = request.form.get('username', '').strip()
@@ -1289,16 +1293,28 @@ def handle_login(next_url):
             normalized_phone = None
         password = request.form.get('password', '')
         remember_flag = request.form.get('remember') in ('1', 'on', 'true', 'yes')
+        login_form = {
+            'username': username,
+            'remember': remember_flag,
+        }
 
         # 基本验证
         if not username or not password:
-            flash('请输入用户名或已验证手机号和密码', 'error')
-            return render_template('login.html', next=safe_next)
+            flash('请输入用户名和密码', 'error')
+            return render_template(
+                'login.html',
+                next=safe_next,
+                login_form=login_form,
+            )
 
         # 限制长度防止攻击
         if len(username) > 50 or len(password) > 100:
             flash('输入内容过长', 'error')
-            return render_template('login.html', next=safe_next)
+            return render_template(
+                'login.html',
+                next=safe_next,
+                login_form=login_form,
+            )
 
         if normalized_phone:
             user = User.query.filter(
@@ -1342,7 +1358,11 @@ def handle_login(next_url):
                         remaining,
                     )
                     flash(f'登录失败次数过多，请 {remaining // 60 + 1} 分钟后再试', 'error')
-                    return render_template('login.html', next=safe_next)
+                    return render_template(
+                        'login.html',
+                        next=safe_next,
+                        login_form=login_form,
+                    )
             except Exception:
                 logger.warning("Redis 锁定检查失败，回退数据库兜底", exc_info=True)
                 redis_client = None
@@ -1362,7 +1382,11 @@ def handle_login(next_url):
                         db_remaining,
                     )
                     flash(f'登录失败次数过多，请 {db_remaining // 60 + 1} 分钟后再试', 'error')
-                    return render_template('login.html', next=safe_next)
+                    return render_template(
+                        'login.html',
+                        next=safe_next,
+                        login_form=login_form,
+                    )
             except Exception:
                 logger.warning("数据库锁定检查失败", exc_info=True)
 
@@ -1434,98 +1458,114 @@ def handle_login(next_url):
                 logger.warning("数据库递增失败计数失败", exc_info=True)
 
         logger.warning("登录失败: identifier_len=%s", len(username))
-        flash('用户名、已验证手机号或密码错误', 'error')
+        # 页面只承诺用户名登录；后端继续兼容已经完成验证的历史手机号。
+        flash('用户名或密码错误', 'error')
 
-    return render_template('login.html', next=safe_next)
+    return render_template(
+        'login.html',
+        next=safe_next,
+        login_form=login_form,
+    )
 
 
 def handle_register():
+    communities = Community.query.all()
+    form_data = {
+        'username': '',
+        'email': '',
+        'age': '',
+        'gender': '',
+        'community': '',
+    }
+    form_errors = {}
     if request.method == 'POST':
-        # 验证用户名
-        valid, result = validate_username(request.form.get('username'))
+        form_data = {
+            'username': str(request.form.get('username') or '').strip()[:25],
+            'email': str(request.form.get('email') or '').strip()[:120],
+            'age': str(request.form.get('age') or '').strip()[:3],
+            'gender': str(request.form.get('gender') or '').strip()[:10],
+            'community': str(request.form.get('community') or '').strip()[:100],
+        }
+
+        valid, username_result = validate_username(request.form.get('username'))
+        username = username_result if valid else None
         if not valid:
-            flash(result, 'error')
-            return redirect(url_for('public.register'))
-        username = result
-        if is_reserved_internal_username(username):
-            flash('该用户名属于系统保留命名空间，请换一个用户名。', 'error')
-            return redirect(url_for('public.register'))
-        try:
-            username_as_phone = normalize_phone(username)
-        except ValueError:
-            username_as_phone = None
-        if username_as_phone:
-            flash('用户名不能使用手机号格式，请换一个用户名。', 'error')
-            return redirect(url_for('public.register'))
+            form_errors['username'] = username_result
+        elif is_reserved_internal_username(username):
+            form_errors['username'] = '该用户名属于系统保留命名空间，请换一个用户名。'
+        else:
+            try:
+                username_as_phone = normalize_phone(username)
+            except ValueError:
+                username_as_phone = None
+            if username_as_phone:
+                form_errors['username'] = '用户名不能使用手机号格式，请换一个用户名。'
 
-        # 验证密码
-        valid, result = validate_password(request.form.get('password'))
+        raw_password = request.form.get('password', '')
+        valid, password_result = validate_password(raw_password)
+        password = password_result if valid else None
         if not valid:
-            flash(result, 'error')
-            return redirect(url_for('public.register'))
-        password = result
+            form_errors['password'] = password_result
 
-        # 验证邮箱
-        valid, result = validate_email(request.form.get('email'))
+        confirm_password = request.form.get('confirm_password', '')
+        if not confirm_password:
+            form_errors['confirm_password'] = '请再次输入密码'
+        elif confirm_password != raw_password:
+            form_errors['confirm_password'] = '两次输入的密码不一致'
+
+        valid, email_result = validate_email(request.form.get('email'))
+        email = email_result if valid else None
         if not valid:
-            flash(result, 'error')
-            return redirect(url_for('public.register'))
-        email = result
+            form_errors['email'] = email_result
 
-        # 手机号只保存为待验证标识；接入短信校验前不能用于登录。
-        try:
-            phone_normalized = normalize_phone(request.form.get('phone'))
-        except ValueError as exc:
-            flash(str(exc), 'error')
-            return redirect(url_for('public.register'))
-
-        # 验证年龄
-        valid, result = validate_age(request.form.get('age'))
+        valid, age_result = validate_age(request.form.get('age'))
+        age = age_result if valid else None
         if not valid:
-            flash(result, 'error')
-            return redirect(url_for('public.register'))
-        age = result
+            form_errors['age'] = age_result
 
-        # 验证性别
-        valid, result = validate_gender(request.form.get('gender'))
+        valid, gender_result = validate_gender(request.form.get('gender'))
+        gender = gender_result if valid else None
         if not valid:
-            flash(result, 'error')
-            return redirect(url_for('public.register'))
-        gender = result
+            form_errors['gender'] = gender_result
 
-        # 社区信息
-        community = sanitize_input(request.form.get('community'), max_length=100)
+        community = sanitize_input(
+            request.form.get('community'),
+            max_length=100,
+        )
+
+        if form_errors:
+            return render_template(
+                'register.html',
+                communities=communities,
+                form_data=form_data,
+                form_errors=form_errors,
+            ), 422
 
         user = User(
             username=username,
             email=email,
-            phone_normalized=phone_normalized,
             age=age,
             gender=gender,
             community=community
         )
         user.set_password(password)
 
-        # 所有占用结果使用相同提示与跳转，减少匿名访客据此枚举手机号或邮箱。
-        processed_message = (
-            '注册申请已处理，请尝试登录。若无法登录，请更换用户名或联系管理员。'
-        )
         username_taken = User.query.filter(
             db.func.lower(User.username) == _normalize_login_identifier(username)
         ).first() is not None
         email_taken = bool(
             email and User.query.filter_by(email=email).first() is not None
         )
-        if any(
-            (
-                username_taken,
-                email_taken,
+        if username_taken or email_taken:
+            form_errors['account'] = (
+                '这些账号信息暂时无法使用，请更换用户名或邮箱后重试。'
             )
-        ):
-            flash(processed_message, 'success')
-            return redirect(
-                url_for('public.login', next=url_for('public.account_link'))
-            )
+            return render_template(
+                'register.html',
+                communities=communities,
+                form_data=form_data,
+                form_errors=form_errors,
+            ), 422
 
         try:
             db.session.add(user)
@@ -1533,19 +1573,35 @@ def handle_register():
         except IntegrityError:
             # 用户名与邮箱唯一索引负责处理并发注册竞争。
             db.session.rollback()
-            flash(processed_message, 'success')
-            return redirect(
-                url_for('public.login', next=url_for('public.account_link'))
+            form_errors['account'] = (
+                '这些账号信息暂时无法使用，请更换用户名或邮箱后重试。'
             )
+            return render_template(
+                'register.html',
+                communities=communities,
+                form_data=form_data,
+                form_errors=form_errors,
+            ), 422
 
         logger.info("新用户注册: user_id=%s", user.id)
-        flash(processed_message, 'success')
-        return redirect(
-            url_for('public.login', next=url_for('public.account_link'))
-        )
+        _clear_identity_scoped_session()
+        login_user(user, remember=False)
+        user.last_login = utcnow()
+        db.session.commit()
+        flash('注册成功，已登录。现在可以添加需要照护的家人。', 'success')
+        if (
+            current_app.config.get('WECHAT_FORMAL_RUNTIME')
+            and not current_app.config.get('WEB_PRIVATE_FEATURES_ENABLED')
+        ):
+            return redirect(url_for('public.account_link'))
+        return redirect(url_for('user.pair_management', welcome=1))
 
-    communities = Community.query.all()
-    return render_template('register.html', communities=communities)
+    return render_template(
+        'register.html',
+        communities=communities,
+        form_data=form_data,
+        form_errors=form_errors,
+    )
 
 
 def _verified_cooling_map_point(resource):

@@ -290,5 +290,8 @@ def _normalize_code(value):
 def _require_roles(*roles):
     if getattr(current_user, 'role', None) in roles:
         return True
-    flash('权限不足', 'error')
+    if 'community' in roles:
+        flash('该页面仅限社区工作人员或管理员使用，请切换对应账号。', 'error')
+    else:
+        flash('当前账号没有此页面所需权限。', 'error')
     return False

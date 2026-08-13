@@ -9,22 +9,22 @@
         <span class="section-kicker">网页版与微信小程序</span>
         <h1 class="mt-2 mb-2">把两端串成同一个账号</h1>
         <p class="text-muted mb-0">
-            手机号当前只保存为待验证标识，不发送短信验证码，也不能用于登录。
+            生成一次性绑定码只需要确认当前密码并同意绑定说明，不需要填写手机号。
         </p>
     </header>
 
     <div class="alert alert-light border" role="note">
         <strong>推荐顺序：</strong>
-        先保存手机号，再到微信小程序完成微信登录，最后输入这里生成的 8 位码。绑定完成后，两端会读取同一份家庭照护数据。
+        先在这里生成 8 位码，再到微信小程序登录并输入。绑定完成后，两端会读取同一份家庭照护数据。
     </div>
 
     <div class="row g-4">
-        <div class="col-lg-6">
+        <div class="col-lg-6 order-2">
             <section class="card shadow-sm h-100">
                 <div class="card-body p-4">
                     <div class="d-flex align-items-center gap-2 mb-3">
-                        <span class="badge text-bg-primary">1</span>
-                        <h2 class="h5 mb-0">保存待验证手机号</h2>
+                        <span class="badge text-bg-secondary">可选</span>
+                        <h2 class="h5 mb-0">保存联系手机号</h2>
                     </div>
                     <form method="POST" action="{{ url_for('public.account_link_phone') }}">
                         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -41,7 +41,7 @@
                                 placeholder="例如 13800138000"
                                 required
                             >
-                            <div class="form-text">保存后仍需使用用户名登录。状态：待验证。</div>
+                            <div class="form-text">当前仅保存为待验证联系信息，不用于登录，也不影响小程序绑定。</div>
                         </div>
                         <div class="mb-3">
                             <label class="form-label" for="phoneCurrentPassword">当前密码</label>
@@ -53,11 +53,11 @@
             </section>
         </div>
 
-        <div class="col-lg-6">
+        <div class="col-lg-6 order-1">
             <section class="card shadow-sm h-100">
                 <div class="card-body p-4">
                     <div class="d-flex align-items-center gap-2 mb-3">
-                        <span class="badge text-bg-primary">2</span>
+                        <span class="badge text-bg-primary">1</span>
                         <h2 class="h5 mb-0">生成一次性绑定码</h2>
                     </div>
 

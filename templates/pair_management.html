@@ -12,6 +12,17 @@
                 为家中老人设置所在地，高温或寒潮来临时及时收到提醒。慢病类别可选填，用于提供更贴合的日常建议。
                 所在地和关联档案仅用于天气查询与提醒，请勿填写精确门牌信息。
             </p>
+            {% if request.args.get('welcome') == '1' and not pair_cards %}
+            <div class="alert alert-success mt-3 mb-0" role="status">
+                <div class="fw-semibold">账号已准备好，按这 3 步开始照护</div>
+                <ol class="mb-0 mt-2 ps-3">
+                    <li>在下方添加需要关注的家人。</li>
+                    <li>核对家人所在县、市或乡镇，无需填写门牌地址。</li>
+                    <li>查看今日风险，再复制提醒发给家人。</li>
+                </ol>
+                <div class="small mt-2">绑定微信小程序是可选步骤，可稍后在个人设置中完成。</div>
+            </div>
+            {% endif %}
             {% if wxpusher_feature_enabled %}
             {% if not current_user.push_enabled or not current_user.wxpusher_uid %}
                 <div class="alert alert-warning mt-3 mb-0">
@@ -256,6 +267,11 @@
                         <div class="text-muted small mt-3">升级链仅记录状态，请结合实际情况与社区沟通。</div>
                     {% else %}
                         <div class="text-muted">暂无监测对象，请先在左侧添加老人并设置所在地。</div>
+                        <ol class="small text-muted mt-3 mb-0 ps-3">
+                            <li>添加家人</li>
+                            <li>核对所在地</li>
+                            <li>查看风险并发送提醒</li>
+                        </ol>
                     {% endif %}
                 </div>
             </div>
