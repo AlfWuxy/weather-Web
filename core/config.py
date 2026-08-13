@@ -443,6 +443,38 @@ def _normalized_env_value(key, default=None):
     return value if value else default
 
 
+def _validated_miniprogram_code_image(value, static_folder):
+    """只接受 HTTPS 图片或已存在的 static 相对图片。"""
+    normalized = (value or '').strip()
+    if not normalized:
+        return ''
+    allowed_suffixes = {'.png', '.jpg', '.jpeg', '.webp'}
+    try:
+        parsed = urlparse(normalized)
+    except ValueError:
+        return ''
+    if parsed.scheme or parsed.netloc:
+        if (
+            parsed.scheme == 'https'
+            and parsed.hostname
+            and not parsed.username
+            and not parsed.password
+            and Path(parsed.path).suffix.lower() in allowed_suffixes
+        ):
+            return parsed.geturl()
+        return ''
+    if normalized.startswith(('/', '\\')) or '\\' in normalized:
+        return ''
+    relative_path = Path(normalized)
+    if '..' in relative_path.parts or relative_path.suffix.lower() not in allowed_suffixes:
+        return ''
+    static_root = Path(static_folder).resolve()
+    candidate = (static_root / relative_path).resolve()
+    if static_root not in candidate.parents or not candidate.is_file():
+        return ''
+    return relative_path.as_posix()
+
+
 def configure_app(app, logger):
     """Load configuration into the Flask app."""
     secret_key_is_generated = False
@@ -516,6 +548,10 @@ def configure_app(app, logger):
     wx_miniprogram_secret = _normalized_env_value('WX_MINIPROGRAM_SECRET', '')
     wx_miniprogram_openid_pepper = _normalized_env_value('WX_MINIPROGRAM_OPENID_PEPPER', '')
     wx_miniprogram_session_secret = _normalized_env_value('WX_MINIPROGRAM_SESSION_SECRET', '')
+    wx_miniprogram_action_code_image = _validated_miniprogram_code_image(
+        _normalized_env_value('WX_MINIPROGRAM_ACTION_CODE_IMAGE', ''),
+        app.static_folder,
+    )
     account_link_code_pepper = _normalized_env_value('ACCOUNT_LINK_CODE_PEPPER', '')
     wechat_formal_runtime_raw = _normalized_env_value('WECHAT_FORMAL_RUNTIME', '')
     web_private_features_enabled = parse_bool(
@@ -612,6 +648,9 @@ def configure_app(app, logger):
     app.config['WX_MINIPROGRAM_SECRET'] = wx_miniprogram_secret
     app.config['WX_MINIPROGRAM_OPENID_PEPPER'] = wx_miniprogram_openid_pepper
     app.config['WX_MINIPROGRAM_SESSION_SECRET'] = wx_miniprogram_session_secret
+    app.config['WX_MINIPROGRAM_ACTION_CODE_IMAGE'] = wx_miniprogram_action_code_image
+    app.config['WX_MINIPROGRAM_ACTION_PATH'] = 'pages/actions/index'
+    app.config['WX_MINIPROGRAM_NAME'] = '宜老平安'
     app.config['ACCOUNT_LINK_CODE_PEPPER'] = account_link_code_pepper or secret_key
     app.config['WX_MINIPROGRAM_PRIVACY_VERSION'] = wx_miniprogram_privacy_version
     app.config['ANALYTICS_TEST_USER_IDS'] = analytics_test_user_ids

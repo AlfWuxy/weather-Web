@@ -243,7 +243,8 @@ def test_formal_wechat_runtime_stops_web_entry_before_reading_family_data(
     entry = client.get("/e/formal-readonly-page-token", follow_redirects=False)
     assert entry.status_code == 200
     entry_body = entry.get_data(as_text=True)
-    assert "当前网页仅供查看停用说明" in entry_body
+    assert "去“宜老平安”完成家庭打卡" in entry_body
+    assert "data-miniprogram-path=\"pages/actions/index\"" in entry_body
     assert 'name="short_code"' not in entry_body
     response = client.post(
         "/elder/enter",
@@ -253,7 +254,8 @@ def test_formal_wechat_runtime_stops_web_entry_before_reading_family_data(
 
     assert response.status_code == 200
     body = response.get_data(as_text=True)
-    assert "当前网页仅供查看停用说明" in body
+    assert "去“宜老平安”完成家庭打卡" in body
+    assert "data-miniprogram-path=\"pages/actions/index\"" in body
     assert "不会读取短码、兑换安全链接或写入家庭记录" in body
     assert 'name="short_code"' not in body
     assert 'action="/e/formal-readonly-page-token/checkin"' not in body
@@ -306,7 +308,8 @@ def test_formal_wechat_runtime_stops_debrief_get_before_family_lookup(
 
     assert response.status_code == 200
     body = response.get_data(as_text=True)
-    assert "当前网页仅供查看停用说明" in body
+    assert "去“宜老平安”完成家庭打卡" in body
+    assert "data-miniprogram-path=\"pages/actions/index\"" in body
     assert 'name="short_code"' not in body
 
 

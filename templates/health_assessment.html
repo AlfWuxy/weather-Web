@@ -1,6 +1,13 @@
 {% extends "base.html" %}
 {% from "partials/metric_info.html" import metric_info with context %}
 {% block title %}健康评估 · 宜老天气通{% endblock %}
+{% set questions = questions or [
+    {'id':'outdoor_exposure','text':'今日户外暴露情况','options':[('low','低,主要在室内'),('medium','中,约 1 到 3 小时'),('high','高,超过 3 小时')]},
+    {'id':'symptom_level','text':'当前不适症状','options':[('none','无明显不适'),('mild','轻微'),('moderate','中等'),('severe','明显或严重')]},
+    {'id':'hydration','text':'今天的饮水情况','options':[('good','充足'),('normal','一般'),('poor','不足')]},
+    {'id':'medication_adherence','text':'近期服药规律性','options':[('good','规律'),('partial','偶尔漏服'),('poor','经常漏服')]},
+    {'id':'sleep_quality','text':'最近睡眠质量','options':[('good','较好'),('fair','一般'),('poor','较差')]}
+] %}
 
 {% block content %}
 <div class="container" style="max-width:900px;">
@@ -19,7 +26,7 @@
         <div class="progress"><div class="progress-bar" id="progressBar" style="width:0%"></div></div>
     </div>
 
-    <form method="POST" action="{{ url_for('user.health_assessment') }}" id="assessForm" class="yl-fade-up yl-fade-up-d2">
+    <form method="POST" action="{{ url_for('user.health_assessment') }}" id="assessForm" class="yl-fade-up yl-fade-up-d2" novalidate>
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 
         <div class="alert alert-light border small" role="note">
@@ -36,6 +43,10 @@
                 border-color: var(--yl-orange-500);
                 color: #fff;
             }
+            .assessment-question.is-invalid {
+                border-color: var(--bs-danger);
+                box-shadow: 0 0 0 .15rem rgba(220, 53, 69, .12);
+            }
         </style>
 
         <div class="section-heading mb-3">
@@ -43,16 +54,22 @@
             <p>根据你今天的状态与近几天感受,快速完成这份筛查。</p>
         </div>
 
-        {% set questions = questions or [
-            {'id':'outdoor_exposure','text':'今日户外暴露情况','options':[('low','低,主要在室内'),('medium','中,约 1 到 3 小时'),('high','高,超过 3 小时')]},
-            {'id':'symptom_level','text':'当前不适症状','options':[('none','无明显不适'),('mild','轻微'),('moderate','中等'),('severe','明显或严重')]},
-            {'id':'hydration','text':'今天的饮水情况','options':[('good','充足'),('normal','一般'),('poor','不足')]},
-            {'id':'medication_adherence','text':'近期服药规律性','options':[('good','规律'),('partial','偶尔漏服'),('poor','经常漏服')]},
-            {'id':'sleep_quality','text':'最近睡眠质量','options':[('good','较好'),('fair','一般'),('poor','较差')]}
-        ] %}
+        <div class="alert alert-danger{% if not form_errors %} d-none{% endif %}"
+             id="assessmentErrorSummary"
+             role="alert"
+             tabindex="-1"
+             aria-live="assertive">
+            <strong>还差 <span id="assessmentMissingCount">{{ form_errors|length }}</span> 项。</strong>
+            请完成标红的问题后再提交，已选择的答案会保留。
+        </div>
 
         {% for q in questions %}
-        <div class="card mb-3">
+        <div class="card mb-3 assessment-question{% if form_errors.get(q.id) %} is-invalid{% endif %}"
+             id="assessmentQuestion-{{ q.id }}"
+             data-assessment-question="{{ q.id }}"
+             tabindex="-1"
+             {% if first_form_error == q.id %}autofocus{% endif %}
+             {% if form_errors.get(q.id) %}aria-invalid="true"{% endif %}>
             <div class="card-body">
                 <div class="d-flex gap-3">
                     <div class="fw-bold" style="color:var(--yl-orange-500); font-size:1.1rem;">{{ loop.index }}.</div>
@@ -61,10 +78,13 @@
                         <div class="d-flex flex-wrap gap-2">
                             {% for val, label in q.options %}
                             <label class="btn btn-outline-secondary assess-choice">
-                                <input type="radio" name="{{ q.id }}" value="{{ val }}" class="visually-hidden assess-opt" required>
+                                <input type="radio" name="{{ q.id }}" value="{{ val }}" class="visually-hidden assess-opt" {% if form_state.get(q.id) == val %}checked{% endif %}>
                                 {{ label }}
                             </label>
                             {% endfor %}
+                        </div>
+                        <div class="text-danger small mt-2{% if not form_errors.get(q.id) %} d-none{% endif %}" data-assessment-error="{{ q.id }}">
+                            {{ form_errors.get(q.id) or '请选择这一项后再提交。' }}
                         </div>
                     </div>
                 </div>
@@ -293,13 +313,63 @@
         document.getElementById('progressTxt').textContent = n + ' / ' + total;
         document.getElementById('progressBar').style.width = (n / total * 100) + '%';
     }
+    function setQuestionError(name, hasError) {
+        const card = document.querySelector(`[data-assessment-question="${name}"]`);
+        const message = document.querySelector(`[data-assessment-error="${name}"]`);
+        if (card) {
+            card.classList.toggle('is-invalid', hasError);
+            if (hasError) card.setAttribute('aria-invalid', 'true');
+            else card.removeAttribute('aria-invalid');
+        }
+        if (message) message.classList.toggle('d-none', !hasError);
+    }
+    function validateAssessment() {
+        return Array.from(document.querySelectorAll('[data-assessment-question]'))
+            .map(card => card.dataset.assessmentQuestion)
+            .filter(name => !document.querySelector(`.assess-opt[name="${name}"]:checked`));
+    }
     document.querySelectorAll('.assess-opt').forEach(input => {
         input.addEventListener('change', () => {
             syncGroup(input.name);
+            setQuestionError(input.name, false);
             update();
+            const missing = validateAssessment();
+            document.getElementById('assessmentMissingCount').textContent = String(missing.length);
+            summary.classList.toggle('d-none', missing.length === 0);
         });
         syncGroup(input.name);
     });
+    update();
+
+    const form = document.getElementById('assessForm');
+    const summary = document.getElementById('assessmentErrorSummary');
+    if (form && summary) {
+        form.addEventListener('submit', event => {
+            const missing = validateAssessment();
+            document.querySelectorAll('[data-assessment-question]').forEach(card => {
+                setQuestionError(card.dataset.assessmentQuestion, missing.includes(card.dataset.assessmentQuestion));
+            });
+            if (!missing.length) return;
+            event.preventDefault();
+            document.getElementById('assessmentMissingCount').textContent = String(missing.length);
+            summary.classList.remove('d-none');
+            summary.focus({ preventScroll: true });
+            const firstCard = document.querySelector(`[data-assessment-question="${missing[0]}"]`);
+            if (firstCard) {
+                firstCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                firstCard.focus({ preventScroll: true });
+            }
+        });
+    }
+
+    const serverMissing = validateAssessment().filter(name => {
+        const card = document.querySelector(`[data-assessment-question="${name}"]`);
+        return card && card.classList.contains('is-invalid');
+    });
+    if (serverMissing.length) {
+        const firstCard = document.querySelector(`[data-assessment-question="${serverMissing[0]}"]`);
+        if (firstCard) firstCard.focus();
+    }
 })();
 </script>
 {% endblock %}

@@ -18,14 +18,17 @@
         <div class="row g-4 align-items-center">
             <div class="col-md-auto">
                 <div class="fx-thermometer" data-fx="thermometer"
-                     data-temp="{{ outdoor_temp }}" data-min="-5" data-max="45">
+                     data-temp="{{ outdoor_temp }}" data-min="-5" data-max="45" data-static-value="1">
                     <div class="fx-thermometer-tube">
                         <div class="fx-thermometer-mercury"></div>
                         <div class="fx-thermometer-bulb"></div>
                     </div>
                     <div class="fx-thermometer-info">
-                        <div class="v"><span class="num">0</span><span class="unit">°C</span></div>
+                        <div class="v"><span class="num">{{ outdoor_temp }}</span><span class="unit">°C</span></div>
                         <div class="k">{{ cooling_weather_location or current_location or '当前位置' }} · 当前室外</div>
+                        {% if cooling_snapshot_meta and cooling_snapshot_meta.id_short %}
+                        <div class="text-muted small mt-1">天气快照 {{ cooling_snapshot_meta.id_short }}{% if cooling_snapshot_meta.fetched_at %} · {{ cooling_snapshot_meta.fetched_at[:16]|replace('T', ' ') }}{% endif %}</div>
+                        {% endif %}
                     </div>
                 </div>
             </div>
@@ -52,8 +55,10 @@
         <div class="row g-3 align-items-end">
             <div class="col-md-5">
                 <label class="form-label">所在地</label>
-                <input type="text" class="form-control" name="community" value="{{ selected_community or current_location or '' }}" list="locOpts">
-                <datalist id="locOpts">{% for loc in (communities or location_options or []) %}<option value="{{ loc }}"></option>{% endfor %}</datalist>
+                <input type="text" class="form-control{% if cooling_location_error %} is-invalid{% endif %}" name="community" value="{{ selected_community or '' }}" list="locOpts" aria-describedby="coolingLocationHelp{% if cooling_location_error %} coolingLocationError{% endif %}">
+                <datalist id="locOpts">{% for loc in (cooling_location_options or []) %}<option value="{{ loc }}"></option>{% endfor %}</datalist>
+                <div class="form-text" id="coolingLocationHelp">目前仅支持都昌县及列表中的乡镇、社区。</div>
+                {% if cooling_location_error %}<div class="invalid-feedback" id="coolingLocationError">{{ cooling_location_error }}</div>{% endif %}
             </div>
             <div class="col-md-4">
                 <label class="form-label">类型</label>
@@ -70,6 +75,12 @@
         </div>
     </form>
 
+    {% if cooling_location_error %}
+    <div class="alert alert-warning mb-4 yl-fade-up yl-fade-up-d2" role="alert" data-error-code="invalid_location">
+        <i class="bi bi-geo-alt me-1"></i>{{ cooling_location_error }} 原输入已保留，请修改后重新查找。
+    </div>
+    {% endif %}
+
     <section class="yl-section mb-4 yl-fade-up yl-fade-up-d2 cooling-map-panel"
              id="coolingMapPanel"
              data-has-map-key="{{ '1' if amap_key else '0' }}">
@@ -78,13 +89,21 @@
                 <h2 class="cooling-map-title">地图查看避暑资源</h2>
                 <p class="cooling-map-copy mb-0">地图只接收已核验的公开资源点。只有你点击按钮后，浏览器才会申请一次位置权限；精确位置仅在本页内存计算距离，不上传至本项目服务器或保存，也不会用于地图打点。</p>
             </div>
-            <button type="button"
-                    class="btn btn-outline-primary cooling-locate-button"
-                    id="coolingLocateButton"
-                    {% if not map_points or not amap_key %}disabled{% endif %}>
-                <i class="bi bi-crosshair me-1" aria-hidden="true"></i>
-                按当前位置找附近
-            </button>
+            <div class="text-lg-end">
+                <button type="button"
+                        class="btn btn-outline-primary cooling-locate-button"
+                        id="coolingLocateButton"
+                    {% if not map_points or not amap_key %}disabled
+                        aria-describedby="coolingLocateAvailability"{% endif %}>
+                    <i class="bi bi-crosshair me-1" aria-hidden="true"></i>
+                    按当前位置找附近
+                </button>
+                {% if not map_points %}
+                <div class="text-muted small mt-1" id="coolingLocateAvailability">当前没有已核验地图点位，暂不能按位置查找。</div>
+                {% elif not amap_key %}
+                <div class="text-muted small mt-1" id="coolingLocateAvailability">地图服务尚未配置，暂不能读取位置。</div>
+                {% endif %}
+            </div>
         </div>
         <div class="cooling-map-canvas" id="coolingMap" role="region" aria-label="都昌县避暑资源地图">
             <div class="cooling-map-fallback">
@@ -127,7 +146,7 @@
                     <div class="text-muted" style="font-size:.85rem;">{{ r.resource_type or '避暑资源' }} · {{ community }}</div>
 
                     <div class="mt-3" style="font-size:.88rem; color:var(--yl-ink-soft);">
-                        <div class="mb-1"><i class="bi bi-clock me-1 text-muted"></i>{{ r.open_hours or '开放时间未标注' }}</div>
+                        <div class="mb-1"><i class="bi bi-clock me-1 text-muted"></i>{{ r.open_hours or '开放时间未核验，请出发前确认' }}</div>
                         <div><i class="bi bi-geo-alt me-1 text-muted"></i>{{ r.address_hint or '地址未标注' }}</div>
                         {% if r.is_accessible %}
                         <div class="mt-1"><i class="bi bi-universal-access me-1 text-muted"></i>适合行动不便老人</div>
@@ -176,7 +195,7 @@
             <div>
                 <span class="section-kicker">预览资料</span>
                 <h2 class="h4 mb-1" id="coolingCandidateTitle">待核验场所预览</h2>
-                <p class="text-muted mb-0">这些信息来自高德公开 POI，仅帮助后续人工核验和联系确认。</p>
+                <p class="text-muted mb-0">这些信息来自高德公开 POI，仅帮助后续人工核验和联系确认。候选资料不参与上方地点、类型或开放条件筛选。</p>
             </div>
             <span class="badge bg-warning-subtle text-warning-emphasis align-self-start">全部待人工核验</span>
         </div>
