@@ -131,8 +131,8 @@
         geometryMode: 'rectified',
         renderFrame: null,
         resizeFrame: null,
-        mapMoving: false,
-        mapZooming: false
+        cameraInMotion: false,
+        cameraSettleFrame: null
     };
 
     const GCJ_PI = Math.PI;
@@ -818,8 +818,7 @@
         state.renderFrame = null;
         if (
             !state.map
-            || state.mapMoving
-            || state.mapZooming
+            || state.cameraInMotion
             || !ui.gridCanvas
             || !resizeGridCanvas()
         ) return;
@@ -851,7 +850,7 @@
     }
 
     function scheduleMapRender() {
-        if (!state.map || state.mapMoving || state.mapZooming || state.renderFrame) return;
+        if (!state.map || state.cameraInMotion || state.renderFrame) return;
         state.renderFrame = window.requestAnimationFrame(renderMapCanvas);
     }
 
@@ -878,8 +877,7 @@
 
     function cellAtPixel(point) {
         if (
-            state.mapMoving
-            || state.mapZooming
+            state.cameraInMotion
             || ui.gridCanvas.hidden
         ) return null;
         const key = hitBucketKey(
@@ -1013,8 +1011,12 @@
         if (error) console.error('高德热暴露地图初始化失败', error);
     }
 
-    function suspendMapCanvas(motionType) {
-        state[motionType] = true;
+    function beginCameraTransaction() {
+        if (state.cameraSettleFrame !== null) {
+            window.cancelAnimationFrame(state.cameraSettleFrame);
+            state.cameraSettleFrame = null;
+        }
+        state.cameraInMotion = true;
         state.hoverIndex = null;
         // 手势结束后的下一帧之前禁用旧像素索引，避免点击命中移动前的网格。
         state.drawCache = [];
@@ -1023,10 +1025,16 @@
         ui.gridCanvas.hidden = true;
     }
 
-    function resumeMapCanvas(motionType) {
-        state[motionType] = false;
-        if (state.mapMoving || state.mapZooming) return;
-        scheduleMapRender();
+    function settleCameraTransaction() {
+        if (state.cameraSettleFrame !== null) {
+            window.cancelAnimationFrame(state.cameraSettleFrame);
+        }
+        // 高德的缩放和移动事件可能交错或缺少配对 end；任一 end 都以相机稳定帧为准完成事务。
+        state.cameraSettleFrame = window.requestAnimationFrame(function () {
+            state.cameraSettleFrame = null;
+            state.cameraInMotion = false;
+            scheduleMapRender();
+        });
     }
 
     function initializeMap() {
@@ -1074,16 +1082,16 @@
         });
         // 手势期间只移动高德底图，结束后一次性重投影网格，避免低端手机逐帧计算全部顶点。
         state.map.on('movestart', function () {
-            suspendMapCanvas('mapMoving');
+            beginCameraTransaction();
         });
         state.map.on('moveend', function () {
-            resumeMapCanvas('mapMoving');
+            settleCameraTransaction();
         });
         state.map.on('zoomstart', function () {
-            suspendMapCanvas('mapZooming');
+            beginCameraTransaction();
         });
         state.map.on('zoomend', function () {
-            resumeMapCanvas('mapZooming');
+            settleCameraTransaction();
         });
         state.map.on('mousemove', function (event) {
             const longitude = Number(event.lnglat?.getLng?.());
