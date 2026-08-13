@@ -73,7 +73,8 @@ Page({
 
   renderWarnings(result) {
     const snapshot = normalizeBootstrap(result.data);
-    const freshness = freshnessView(result.meta, snapshot);
+    const freshness = freshnessView(result.meta, snapshot, 'warnings');
+    const currentFreshness = freshnessView(result.meta, snapshot, 'current');
     this.setData({
       loading: false,
       error: result.meta && result.meta.networkError
@@ -82,7 +83,7 @@ Page({
       // 较早缓存中的预警可能已经失效，刷新前不继续标成有效预警。
       warnings: freshness.stale ? [] : snapshot.warnings,
       warningsSourceAvailable: freshness.stale ? false : snapshot.warningsSourceAvailable,
-      current: snapshot.current,
+      current: Object.assign({}, snapshot.current, { stale: currentFreshness.stale }),
       locationName: snapshot.location.name,
       freshness,
     });

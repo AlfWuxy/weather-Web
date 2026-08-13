@@ -116,7 +116,8 @@ Page({
 
   renderActions(result) {
     const snapshot = normalizeBootstrap(result.data);
-    const freshness = freshnessView(result.meta, snapshot);
+    const freshness = freshnessView(result.meta, snapshot, 'risk');
+    const warningsFreshness = freshnessView(result.meta, snapshot, 'warnings');
     const generalMode = freshness.stale || !snapshot.available || !snapshot.actions.length;
     const sourceActions = generalMode ? GENERAL_ACTIONS : snapshot.actions;
     const actions = this.mergeChecked(sourceActions);
@@ -128,7 +129,7 @@ Page({
       completedCount,
       progressPercent: actions.length ? Math.round(completedCount / actions.length * 100) : 0,
       generalMode,
-      familyReminder: freshness.stale ? null : snapshot.familyReminder,
+      familyReminder: freshness.stale || warningsFreshness.stale ? null : snapshot.familyReminder,
       locationName: snapshot.location.name,
       freshness,
     });

@@ -79,6 +79,68 @@ test('更新时间优先采用服务端真实抓取时间', () => {
   assert.match(view.updatedText, /08:00/);
 });
 
+test('页面只按自身依赖来源判断快照新鲜度', () => {
+  const now = Date.parse('2026-07-17T08:00:00Z');
+  const snapshot = normalizeBootstrap({
+    stale: true,
+    current_stale: false,
+    forecast_stale: true,
+    warnings_stale: false,
+    risk_stale: false,
+    current: { temperature: 35 },
+    risk: { available: true, score: 28, level: '低风险' },
+    source_status: {
+      current: { available: true, stale: false, expires_at: '2026-07-17T08:30:00Z' },
+      forecast: { available: true, stale: true, expires_at: '2026-07-17T07:59:00Z' },
+      warnings: { available: true, stale: false, expires_at: '2026-07-17T08:30:00Z' },
+      risk: { available: true, stale: false, expires_at: '2026-07-17T08:30:00Z' },
+    },
+  });
+
+  assert.equal(freshnessView({ stale: true }, snapshot, 'risk', now).stale, false);
+  assert.equal(freshnessView({ stale: true }, snapshot, 'forecast', now).stale, true);
+  assert.equal(freshnessView({ stale: true }, snapshot, 'warnings', now).stale, false);
+  assert.equal(
+    freshnessView({ stale: true }, snapshot, 'risk', Date.parse('2026-07-17T08:30:00Z')).stale,
+    true,
+  );
+  assert.equal(snapshot.current.available, true);
+  assert.equal(snapshot.risk.available, true);
+
+  const warningsExpired = normalizeBootstrap({
+    warnings_stale: true,
+    warnings: [{ title: '旧高温预警' }],
+    source_status: {
+      warnings: { available: true, stale: true },
+    },
+  });
+  assert.deepEqual(warningsExpired.warnings, []);
+  assert.equal(warningsExpired.warningsSourceAvailable, false);
+  assert.equal(warningsExpired.warningsStatusText, '来源暂不可用');
+
+  const warningsUnavailable = normalizeBootstrap({
+    warnings_stale: false,
+    warnings: [{ title: '来源失败前的旧高温预警' }],
+    source_status: {
+      warnings: {
+        available: false,
+        stale: false,
+        expires_at: '2026-07-17T08:30:00Z',
+      },
+    },
+  });
+  assert.deepEqual(warningsUnavailable.warnings, []);
+  assert.equal(warningsUnavailable.warningsSourceAvailable, false);
+  assert.equal(freshnessView({}, warningsUnavailable, 'warnings', now).stale, true);
+
+  const legacyWithoutExpiry = normalizeBootstrap({
+    risk_stale: false,
+    risk: { available: true, score: 28, level: '低风险' },
+    source_status: { risk: { available: true, stale: false } },
+  });
+  assert.equal(freshnessView({ stale: true }, legacyWithoutExpiry, 'risk', now).stale, true);
+});
+
 test('都昌县时间展示不受运行环境时区影响', () => {
   assert.equal(formatDateTime('2026-07-17T00:00:00Z'), '07月17日 08:00');
   assert.equal(formatDateTime('2026-07-17 08:00:00'), '07月17日 08:00');
@@ -132,6 +194,7 @@ test('预警列表为空时区分暂无预警与来源不可用', () => {
 
 test('预警保留发布单位、发布时间和生效时间', () => {
   const result = normalizeBootstrap({
+    source_status: { warnings: { available: true, stale: false } },
     warnings: [{
       title: '高温黄色预警',
       start_time: '2026-07-17T08:30:00+08:00',
@@ -152,11 +215,13 @@ test('预警保留发布单位、发布时间和生效时间', () => {
   assert.match(warning.effectiveText, /08:30/);
 
   const objectSender = normalizeBootstrap({
+    source_status: { warnings: { available: true, stale: false } },
     warnings: [{ raw: { sender: { name: '九江市气象台' } } }],
   });
   assert.equal(objectSender.warnings[0].issuer, '九江市气象台');
 
   const publishedOnly = normalizeBootstrap({
+    source_status: { warnings: { available: true, stale: false } },
     warnings: [{
       start_time: '2026-07-17T08:00:00+08:00',
       raw: { pubTime: '2026-07-17T08:00:00+08:00' },

@@ -17,16 +17,16 @@ const {
   sourceFromShareEvent,
 } = require('../../utils/share');
 
-function homeSnapshotView(snapshot) {
+function homeSnapshotView(snapshot, warningsStale) {
   const source = snapshot || {};
   // 首页只跨逻辑层与视图层传递实际渲染字段，避免复制预报、来源等整份快照。
   return {
     available: source.available,
     location: source.location,
     current: source.current,
-    warnings: Array.isArray(source.warnings) ? source.warnings : [],
-    warningsSourceAvailable: source.warningsSourceAvailable === true,
-    warningsStatusText: source.warningsStatusText,
+    warnings: warningsStale ? [] : (Array.isArray(source.warnings) ? source.warnings : []),
+    warningsSourceAvailable: warningsStale ? false : source.warningsSourceAvailable === true,
+    warningsStatusText: warningsStale ? '官方预警待刷新' : source.warningsStatusText,
     risk: source.risk,
   };
 }
@@ -145,7 +145,8 @@ Page({
 
   renderSnapshot(result) {
     const snapshot = normalizeBootstrap(result.data);
-    const freshness = freshnessView(result.meta, snapshot);
+    const freshness = freshnessView(result.meta, snapshot, 'risk');
+    const warningsFreshness = freshnessView(result.meta, snapshot, 'warnings');
     // 较早天气可以继续展示观测值，风险分数和定制行动必须等刷新后再启用。
     const displaySnapshot = freshness.stale ? staleHomeSnapshot(snapshot) : snapshot;
     this.setData({
@@ -153,7 +154,7 @@ Page({
       error: result.meta && result.meta.networkError
         ? '天气更新失败，正在显示较早观测；风险、预警和定制行动已暂停。稍后会自动重试。'
         : '',
-      snapshot: homeSnapshotView(displaySnapshot),
+      snapshot: homeSnapshotView(displaySnapshot, warningsFreshness.stale),
       topActions: freshness.stale ? [] : snapshot.actions.slice(0, 3),
       freshness,
     });

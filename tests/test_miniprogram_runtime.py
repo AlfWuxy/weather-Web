@@ -157,10 +157,13 @@ def test_snapshot_fresh_at_2959_and_stale_at_3001(app, db_session):
 
         record = MiniProgramSnapshot.query.filter_by(snapshot_id=snapshot_id).one()
         fresh = snapshot_payload(record, now=fetched_at + timedelta(minutes=29, seconds=59))
+        exact_expiry = snapshot_payload(record, now=fetched_at + timedelta(minutes=30))
         stale = snapshot_payload(record, now=fetched_at + timedelta(minutes=30, seconds=1))
 
     assert fresh["ttl_seconds"] == 1800
     assert fresh["stale"] is False
+    assert exact_expiry["stale"] is True
+    assert exact_expiry["current_stale"] is True
     assert stale["stale"] is True
     assert fresh["snapshot_id"] == stale["snapshot_id"]
     assert fresh["family_reminder"]["date"]

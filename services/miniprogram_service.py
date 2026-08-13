@@ -24,7 +24,13 @@ from core.db_models import (
     WeatherCache,
 )
 from core.extensions import db
-from core.time_utils import ensure_utc_aware, today_local, utc_to_local_date, utcnow
+from core.time_utils import (
+    ensure_utc_aware,
+    today_local,
+    utc_to_local_date,
+    utc_to_local_datetime,
+    utcnow,
+)
 from core.weather import get_consecutive_hot_days, get_qweather_forecast_with_cache
 from services.qweather_auth import is_qweather_configured
 from services.miniprogram_auth import current_privacy_version
@@ -196,6 +202,92 @@ def _source_datetime(value):
         return ensure_utc_aware(datetime.fromisoformat(str(value)))
     except (TypeError, ValueError, OverflowError):
         return None
+
+
+def snapshot_display_time(value):
+    """把快照 UTC 时间转换为都昌页面使用的本地时间文字。"""
+    parsed = _source_datetime(value)
+    if parsed is None:
+        return None
+    return utc_to_local_datetime(parsed).strftime("%Y-%m-%d %H:%M")
+
+
+def _component_state(
+    source_status,
+    name,
+    *,
+    now,
+    fallback_expires_at,
+    fallback_available,
+):
+    """在读取时计算单个来源的新鲜度，旧快照继续回退到总过期时间。"""
+    source = source_status if isinstance(source_status, dict) else {}
+    aliases = {"current": ("current", "weather")}
+    raw = {}
+    for key in aliases.get(name, (name,)):
+        candidate = source.get(key)
+        if isinstance(candidate, dict):
+            raw = dict(candidate)
+            break
+    expires_at = _source_datetime(raw.get("expires_at")) or fallback_expires_at
+    fetched_at = _source_datetime(raw.get("fetched_at"))
+    stale = expires_at is None or now >= expires_at
+    available = bool(raw.get("available", fallback_available))
+    state = {
+        **raw,
+        "available": available,
+        "stale": stale,
+    }
+    if fetched_at is not None:
+        state["fetched_at"] = fetched_at.isoformat()
+    if expires_at is not None:
+        state["expires_at"] = expires_at.isoformat()
+    return state
+
+
+def _payload_source_status(record, current, forecast, warnings, *, now, expires_at):
+    """补齐各来源状态；总 stale 保留兼容，页面按组件状态决定是否展示。"""
+    stored = safe_json_loads(record.source_status_json, {})
+    stored = dict(stored) if isinstance(stored, dict) else {}
+    current_state = _component_state(
+        stored,
+        "current",
+        now=now,
+        fallback_expires_at=expires_at,
+        fallback_available=bool(record.available) and _weather_available(current),
+    )
+    forecast_state = _component_state(
+        stored,
+        "forecast",
+        now=now,
+        fallback_expires_at=expires_at,
+        fallback_available=bool(forecast),
+    )
+    warnings_state = _component_state(
+        stored,
+        "warnings",
+        now=now,
+        fallback_expires_at=expires_at,
+        # 未知预警来源不能因为 payload 恰好是列表就被视为核验成功。
+        fallback_available=False,
+    )
+    risk_stale = current_state["stale"] or not current_state["available"]
+    risk_state = {
+        "available": not risk_stale and public_risk_weather_is_ready(current),
+        "stale": risk_stale,
+        "depends_on": ["current"],
+        "fetched_at": current_state.get("fetched_at"),
+        "expires_at": current_state.get("expires_at"),
+    }
+    # weather 是旧客户端使用的键，current 是新合同的直观别名。
+    stored.update({
+        "weather": dict(current_state),
+        "current": dict(current_state),
+        "forecast": forecast_state,
+        "warnings": warnings_state,
+        "risk": risk_state,
+    })
+    return stored
 
 
 def _normalize_source_timing(
@@ -431,6 +523,10 @@ def snapshot_payload(record=None, *, now=None) -> dict:
             "ttl_seconds": SNAPSHOT_TTL_SECONDS,
             "available": False,
             "stale": True,
+            "current_stale": True,
+            "forecast_stale": True,
+            "warnings_stale": True,
+            "risk_stale": True,
             "current": {"is_mock": True},
             "forecast": [],
             "warnings": [],
@@ -442,18 +538,46 @@ def snapshot_payload(record=None, *, now=None) -> dict:
                 "status": "missing",
                 "refresh_interval_seconds": SNAPSHOT_TTL_SECONDS,
                 "canonical_location_only": True,
+                "current": {"available": False, "stale": True},
+                "weather": {"available": False, "stale": True},
+                "forecast": {"available": False, "stale": True},
+                "warnings": {"available": False, "stale": True},
+                "risk": {
+                    "available": False,
+                    "stale": True,
+                    "depends_on": ["current"],
+                },
             },
             "required_privacy_consent_version": current_privacy_version(),
         }
     expires_at = ensure_utc_aware(record.expires_at)
     current = safe_json_loads(record.current_json, {})
+    forecast = safe_json_loads(record.forecast_json, [])
     warnings = safe_json_loads(record.warnings_json, [])
-    stale = current_time > expires_at
+    stale = current_time >= expires_at
+    source_status = _payload_source_status(
+        record,
+        current,
+        forecast,
+        warnings,
+        now=current_time,
+        expires_at=expires_at,
+    )
+    current_stale = bool(source_status["current"]["stale"])
+    forecast_stale = bool(source_status["forecast"]["stale"])
+    warnings_stale = bool(source_status["warnings"]["stale"])
+    risk_stale = bool(source_status["risk"]["stale"])
+    warnings_usable = (
+        not warnings_stale
+        and source_status["warnings"]["available"] is True
+    )
+    public_warnings = warnings if warnings_usable else []
     public_context = _persisted_public_context(
         record,
         current,
-        warnings,
-        available=bool(record.available) and not stale,
+        # 过期预警不能继续参与家庭提醒话术，当前天气风险仍可独立使用。
+        public_warnings,
+        available=bool(record.available) and not risk_stale,
         date_value=current_time,
     )
     return {
@@ -468,13 +592,17 @@ def snapshot_payload(record=None, *, now=None) -> dict:
         "ttl_seconds": SNAPSHOT_TTL_SECONDS,
         "available": bool(record.available),
         "stale": stale,
+        "current_stale": current_stale,
+        "forecast_stale": forecast_stale,
+        "warnings_stale": warnings_stale,
+        "risk_stale": risk_stale,
         "current": current,
-        "forecast": safe_json_loads(record.forecast_json, []),
-        "warnings": warnings,
+        "forecast": forecast,
+        "warnings": public_warnings,
         "risk": public_context["risk"],
         "actions": public_context["actions"],
         "family_reminder": public_context["family_reminder"],
-        "source_status": safe_json_loads(record.source_status_json, {}),
+        "source_status": source_status,
         "required_privacy_consent_version": current_privacy_version(),
     }
 
