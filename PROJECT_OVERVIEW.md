@@ -92,7 +92,6 @@
 │   ├── weather_service.py           # 天气数据服务
 │   ├── api_service.py               # API 业务逻辑
 │   ├── health_risk_service.py       # 健康风险评估（部分历史逻辑）
-│   ├── prediction_service.py        # 预测服务协调（已标记废弃）
 │   ├── ml_prediction_service.py     # 机器学习预测
 │   ├── dlnm_risk_service.py         # 分布滞后非线性模型
 │   ├── chronic_risk_service.py      # 慢性病风险预测
@@ -163,6 +162,8 @@
 ├── storage/                         # SQLite 数据库
 └── .env                             # 环境变量配置
 ```
+
+已删除无运行时引用的 `services/prediction_service.py` 与 `services/data_driven_prediction.py`；预测由 `ml_prediction_service.py` 承担。
 
 ---
 

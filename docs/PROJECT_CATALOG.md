@@ -73,14 +73,12 @@ case-weather/
 │   ├── chronic_disease_service.py  # 慢病服务(旧版) [SERVICE] 🔴 LEGACY
 │   ├── chronic_risk_service.py     # 慢病风险服务 [SERVICE]
 │   ├── community_risk_service.py   # 社区风险服务 [SERVICE]
-│   ├── data_driven_prediction.py   # 数据驱动预测 [SERVICE] 🔴 UNUSED
 │   ├── dlnm_risk_service.py        # DLNM风险服务 [SERVICE]
 │   ├── emergency_triage.py         # 紧急分诊服务 [SERVICE]
 │   ├── external_api.py             # 外部API工具 [UTILS, CLIENT]
 │   ├── forecast_service.py         # 预测服务 [SERVICE]
 │   ├── health_risk_service.py      # 健康风险服务 [SERVICE] ⚠️ 部分废弃
 │   ├── ml_prediction_service.py    # ML预测服务 [SERVICE]
-│   ├── prediction_service.py       # 预测服务(旧版) [SERVICE] 🔴 UNUSED
 │   └── weather_service.py          # 天气服务 [SERVICE, CLIENT]
 │
 ├── static/
@@ -153,34 +151,32 @@ case-weather/
 | `emergency_triage.py` | ✅ 活跃 | 是 | 紧急分诊 |
 | `external_api.py` | ✅ 活跃 | 被服务引用 | API计时工具 |
 | `chronic_disease_service.py` | 🔴 LEGACY | 否 | 已被chronic_risk_service取代 |
-| `prediction_service.py` | 🔴 UNUSED | 否 | 未被任何文件引用 |
-| `data_driven_prediction.py` | 🔴 UNUSED | 否 | 未被任何文件引用 |
+
+已删除（无运行时引用）：`prediction_service.py`、`data_driven_prediction.py`。预测能力由 `ml_prediction_service.py` 承担。
 
 ---
 
 ## 4. 重复代码识别
 
-### 4.1 `parse_age` 函数重复 (6处)
+### 4.1 `parse_age` 函数重复 (5处)
 
 | 位置 | 文件 |
 |------|------|
-| 1 | `services/data_driven_prediction.py:53` |
-| 2 | `services/dlnm_risk_service.py:135` |
-| 3 | `services/ml_prediction_service.py` (隐式) |
-| 4 | `train_binary_model.py:38` |
-| 5 | `train_multiclass_model.py:15` |
-| 6 | `analyze_for_model.py:27` |
+| 1 | `services/dlnm_risk_service.py:135` |
+| 2 | `services/ml_prediction_service.py` (隐式) |
+| 3 | `train_binary_model.py:38` |
+| 4 | `train_multiclass_model.py:15` |
+| 5 | `analyze_for_model.py:27` |
 
 **建议**: 提取到 `utils/parsers.py`
 
-### 4.2 `get_age_group` 函数重复 (4处)
+### 4.2 `get_age_group` 函数重复 (3处)
 
 | 位置 | 文件 |
 |------|------|
-| 1 | `services/data_driven_prediction.py:69` |
-| 2 | `services/ml_prediction_service.py:95` |
-| 3 | `services/chronic_risk_service.py:375` |
-| 4 | `train_multiclass_model.py:42` |
+| 1 | `services/ml_prediction_service.py:95` |
+| 2 | `services/chronic_risk_service.py:375` |
+| 3 | `train_multiclass_model.py:42` |
 
 **建议**: 提取到 `utils/parsers.py`
 
