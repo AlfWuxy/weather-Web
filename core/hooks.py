@@ -7,9 +7,11 @@ import secrets
 import time
 from datetime import datetime
 
-from flask import g, request, session, url_for as flask_url_for
+from flask import g, jsonify, make_response, render_template, request, session, url_for as flask_url_for
+from flask_limiter import RateLimitExceeded
 from flask_login import current_user
 
+from core.extensions import limiter
 from core.metric_explanations import (
     get_metric_explanation_groups,
     get_metric_explanations,
@@ -25,6 +27,10 @@ logger = logging.getLogger(__name__)
 
 MAX_JSON_BYTES = 10 * 1024
 MAX_JSON_DEPTH = 5
+JSON_RATE_LIMIT_PREFIXES = ('/api/', '/mp/api/', '/_AMapService/')
+RATE_LIMITED_JSON_MESSAGE = '请求过于频繁，请稍后再试'
+GUEST_ELDER_MODE_FALLBACK = '/guest?next=/elder-mode'
+PUBLIC_RISK_FALLBACK = '/risk'
 
 
 def _redact_sensitive_path(path):
@@ -60,8 +66,80 @@ def _valid_key_length(value):
     return isinstance(value, str) and 20 <= len(value) <= 100
 
 
+def _wants_rate_limit_json(path=None):
+    """429 JSON 只按路径分流，不复用只认 /api/ 的 Accept 判断。"""
+    path = path if path is not None else (request.path or '')
+    return path.startswith(JSON_RATE_LIMIT_PREFIXES)
+
+
+def _retry_after_seconds():
+    """剩余秒数来自 limiter.current_limit.reset_at；exc.retry_after 恒为 None。"""
+    try:
+        current = limiter.current_limit
+        reset_at = getattr(current, 'reset_at', None) if current is not None else None
+        if reset_at is None:
+            return 0
+        return max(0, int(reset_at) - int(time.time()))
+    except Exception:
+        logger.debug("读取限流 reset_at 失败", exc_info=True)
+        return 0
+
+
+def _safe_url_for(endpoint, fallback, **values):
+    """url_for 失败时回退硬编码路径，避免 429 处理器自己变成 500。"""
+    try:
+        return flask_url_for(endpoint, **values)
+    except Exception:
+        logger.debug("429 逃生链接 url_for 失败: %s", endpoint, exc_info=True)
+        return fallback
+
+
+def _rate_limited_json_response(retry_after):
+    response = jsonify({
+        'success': False,
+        'error': 'rate_limited',
+        'message': RATE_LIMITED_JSON_MESSAGE,
+        'retry_after': retry_after,
+    })
+    response.status_code = 429
+    response.headers['Retry-After'] = str(retry_after)
+    return response
+
+
+def _rate_limited_html_response(retry_after):
+    risk_url = _safe_url_for('public.public_risk', PUBLIC_RISK_FALLBACK)
+    elder_mode_url = _safe_url_for(
+        'public.guest_login',
+        GUEST_ELDER_MODE_FALLBACK,
+        next='/elder-mode',
+    )
+    try:
+        html = render_template(
+            '429.html',
+            retry_after=retry_after,
+            risk_url=risk_url,
+            elder_mode_url=elder_mode_url,
+            request_method=request.method,
+        )
+        response = make_response(html, 429)
+    except Exception:
+        logger.exception("渲染中文 429 页失败，回退纯文本")
+        response = make_response(RATE_LIMITED_JSON_MESSAGE, 429)
+        response.mimetype = 'text/plain'
+    response.headers['Retry-After'] = str(retry_after)
+    return response
+
+
 def register_hooks(app):
     """Register app hooks, filters, and context processors."""
+    @app.errorhandler(RateLimitExceeded)
+    def handle_rate_limit_exceeded(_exc):
+        """Limiter 3.7 默认英文 Werkzeug HTML；按路径拆成 JSON / 中文页。"""
+        retry_after = _retry_after_seconds()
+        if _wants_rate_limit_json():
+            return _rate_limited_json_response(retry_after)
+        return _rate_limited_html_response(retry_after)
+
     @app.before_request
     def init_request_context():
         """初始化请求上下文（结构化日志使用）"""
