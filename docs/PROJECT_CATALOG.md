@@ -70,7 +70,6 @@ case-weather/
 │
 ├── services/
 │   ├── ai_question_service.py      # AI问答服务 [SERVICE, CLIENT]
-│   ├── chronic_disease_service.py  # 慢病服务(旧版) [SERVICE] 🔴 LEGACY
 │   ├── chronic_risk_service.py     # 慢病风险服务 [SERVICE]
 │   ├── community_risk_service.py   # 社区风险服务 [SERVICE]
 │   ├── dlnm_risk_service.py        # DLNM风险服务 [SERVICE]
@@ -150,9 +149,9 @@ case-weather/
 | `health_risk_service.py` | ⚠️ 部分活跃 | 是 | 仅calculate_community_vulnerability_index被使用 |
 | `emergency_triage.py` | ✅ 活跃 | 是 | 紧急分诊 |
 | `external_api.py` | ✅ 活跃 | 被服务引用 | API计时工具 |
-| `chronic_disease_service.py` | 🔴 LEGACY | 否 | 已被chronic_risk_service取代 |
-
 已删除（无运行时引用）：`prediction_service.py`、`data_driven_prediction.py`。预测能力由 `ml_prediction_service.py` 承担。
+
+`chronic_disease_service.py` 在本批次基线中已不存在，慢病风险能力由 `chronic_risk_service.py` 承担。
 
 ---
 
