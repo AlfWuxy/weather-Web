@@ -1940,7 +1940,9 @@ def test_web_only_deploy_excludes_miniprogram_and_verifies_remote_release():
     content = _load_deploy_script()
 
     assert 'release_excludes+=(--exclude=/miniprogram/)' in content
+    assert 'release_excludes=()' not in content
     assert content.count('"${release_excludes[@]}"') == 2
+    assert '[ -e $RELEASE_APP/miniprogram ] || [ -L $RELEASE_APP/miniprogram ]' in content
     assert "网页/后端发布不得包含微信小程序源码。" in content
     assert content.index('upload_files "$RELEASE_APP"') < content.index(
         "网页/后端发布不得包含微信小程序源码。"

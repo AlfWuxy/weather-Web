@@ -2764,7 +2764,7 @@ reconcile_qweather_preactivation_transactions
 remote_exec "if [ -e $NEW_RELEASE ]; then echo '发布 ID 已存在，拒绝覆盖不可变版本: $NEW_RELEASE' >&2; exit 1; fi; mkdir -p $RELEASE_APP $NEW_RELEASE/systemd"
 upload_files "$RELEASE_APP"
 if [ "$DEPLOY_MODE" = "web_backend_only" ]; then
-    remote_exec "if [ -e $RELEASE_APP/miniprogram ]; then echo '网页/后端发布不得包含微信小程序源码。' >&2; exit 1; fi"
+    remote_exec "if [ -e $RELEASE_APP/miniprogram ] || [ -L $RELEASE_APP/miniprogram ]; then echo '网页/后端发布不得包含微信小程序源码。' >&2; exit 1; fi"
 fi
 remote_exec "ln -s $PROJECT_DIR/instance $RELEASE_APP/instance && ln -s $PROJECT_DIR/storage $RELEASE_APP/storage && ln -s $PROJECT_DIR/backups $RELEASE_APP/backups"
 upload_model_artifacts
