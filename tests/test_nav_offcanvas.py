@@ -60,7 +60,13 @@ def test_base_has_skip_link_nav_hooks_and_footer_links(client):
     assert 'id="main-content"' in body
     assert 'aria-label="主导航"' in body
     assert 'aria-label="页脚导航"' in body
+    assert 'href="/risk"' in body
+    assert 'href="/cooling"' in body
+    assert 'href="/transparency"' in body
     assert 'href="/transparency#privacy"' in body
+    assert '运营主体：宜老天气通' in body
+    assert 'mailto:wuxy.alf2024@gdhfi.com' in body
+    assert 'admin@example.com' not in body
 
 
 def test_narrow_guest_nav_moves_registration_into_drawer(client):
