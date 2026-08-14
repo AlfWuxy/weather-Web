@@ -2655,6 +2655,10 @@ CANDIDATE_RUNTIME_READER_PY")"; then
 # 使用 rsync 上传已准备好的发布源；正式发布源是冻结提交的本机快照。
 upload_files() {
     local remote_target="$1"
+    local -a release_excludes=(--exclude=/analysis/)
+    if [ "$DEPLOY_MODE" = "web_backend_only" ]; then
+        release_excludes+=(--exclude=/miniprogram/)
+    fi
     if use_sshpass && [ -n "${SSHPASS:-}" ]; then
         SSHPASS="${SSHPASS:-$PASSWORD}" sshpass -e rsync -avz \
             --exclude '__pycache__' \
@@ -2684,6 +2688,7 @@ upload_files() {
             --exclude 'tmp' \
             --exclude 'output' \
             --exclude 'blueprints/tools 2.py' \
+            "${release_excludes[@]}" \
             -e "ssh $SSH_OPTS" "$RELEASE_SOURCE_DIR/" "$USER@$SERVER:$remote_target/"
         return
     fi
@@ -2693,7 +2698,7 @@ upload_files() {
         return 64
     fi
 
-    rsync -avz --exclude '__pycache__' --exclude '*.pyc' --exclude 'instance' --exclude 'storage' --exclude 'health_weather.db' --exclude 'data/research/*.xlsx' --exclude 'data/research/*.xls' --exclude 'models/*.pkl' --exclude '.git' --exclude '.claude' --exclude 'venv' --exclude '.venv' --exclude '.venv2' --exclude '.env*' --exclude '.secrets/' --exclude '*.pem' --exclude '*.key' --exclude 'project.private.config.json' --exclude '.superpowers' --exclude '.pytest_cache' --exclude '.playwright-cli' --exclude '.vscode' --exclude '.DS_Store' --exclude 'backups' --exclude 'tmp' --exclude 'output' --exclude 'blueprints/tools 2.py' -e "ssh $SSH_OPTS" "$RELEASE_SOURCE_DIR/" "$USER@$SERVER:$remote_target/"
+    rsync -avz --exclude '__pycache__' --exclude '*.pyc' --exclude 'instance' --exclude 'storage' --exclude 'health_weather.db' --exclude 'data/research/*.xlsx' --exclude 'data/research/*.xls' --exclude 'models/*.pkl' --exclude '.git' --exclude '.claude' --exclude 'venv' --exclude '.venv2' --exclude '.env*' --exclude '.secrets/' --exclude '*.pem' --exclude '*.key' --exclude 'project.private.config.json' --exclude '.superpowers' --exclude '.pytest_cache' --exclude '.playwright-cli' --exclude '.vscode' --exclude '.DS_Store' --exclude 'backups' --exclude 'tmp' --exclude 'output' --exclude 'blueprints/tools 2.py' "${release_excludes[@]}" -e "ssh $SSH_OPTS" "$RELEASE_SOURCE_DIR/" "$USER@$SERVER:$remote_target/"
 }
 
 upload_model_artifacts() {
@@ -2758,6 +2763,9 @@ remote_exec "mkdir -p $PROJECT_DIR/instance $PROJECT_DIR/storage $PROJECT_DIR/ru
 reconcile_qweather_preactivation_transactions
 remote_exec "if [ -e $NEW_RELEASE ]; then echo '发布 ID 已存在，拒绝覆盖不可变版本: $NEW_RELEASE' >&2; exit 1; fi; mkdir -p $RELEASE_APP $NEW_RELEASE/systemd"
 upload_files "$RELEASE_APP"
+if [ "$DEPLOY_MODE" = "web_backend_only" ]; then
+    remote_exec "if [ -e $RELEASE_APP/miniprogram ] || [ -L $RELEASE_APP/miniprogram ]; then echo '网页/后端发布不得包含微信小程序源码。' >&2; exit 1; fi"
+fi
 remote_exec "ln -s $PROJECT_DIR/instance $RELEASE_APP/instance && ln -s $PROJECT_DIR/storage $RELEASE_APP/storage && ln -s $PROJECT_DIR/backups $RELEASE_APP/backups"
 upload_model_artifacts
 if [ "$FORMAL_WECHAT_CONFIG_ALLOWED" = "1" ]; then
