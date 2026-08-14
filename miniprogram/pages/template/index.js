@@ -15,6 +15,8 @@ function buildMessage({ trigger, elderName, relation, locationText, tmax, tmin }
       '建议：尽量少出门，外出注意保暖防滑；室内注意保暖，别受凉。',
       `地点：${locationText || '-'}`,
       '说明：这是行动提醒，不提供医疗诊断/治疗建议；如明显不适请及时就医。',
+      '可在网页行动页输入短码完成确认。',
+      '微信小程序也可查看提醒。',
     ].join('\n');
   }
   if (trigger === 'heat') {
@@ -26,12 +28,16 @@ function buildMessage({ trigger, elderName, relation, locationText, tmax, tmin }
       '建议：避开中午外出，多喝水；室内开风扇/空调或找阴凉处休息。',
       `地点：${locationText || '-'}`,
       '说明：这是行动提醒，不提供医疗诊断/治疗建议；如明显不适请及时就医。',
+      '可在网页行动页输入短码完成确认。',
+      '微信小程序也可查看提醒。',
     ].join('\n');
   }
   return [
     `【日常提醒】${address}，我这边看看你那边天气有变化，注意劳逸结合，出门记得带水/外套。`,
     `地点：${locationText || '-'}`,
     '说明：这是行动提醒，不提供医疗诊断/治疗建议；如明显不适请及时就医。',
+    '可在网页行动页输入短码完成确认。',
+    '微信小程序也可查看提醒。',
   ].join('\n');
 }
 
