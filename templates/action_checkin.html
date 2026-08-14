@@ -2,7 +2,7 @@
 {% from "partials/metric_info.html" import metric_info with context %}
 {% set needs_chartjs = true %}
 
-{% block title %}行动打卡 - 天气健康风险预测系统{% endblock %}
+{% block title %}行动打卡 · 宜老天气通{% endblock %}
 
 {% block content %}
 <div class="container my-4">
@@ -44,6 +44,11 @@
                         {% include "partials/disclaimer_block.html" %}
                     </div>
                 </div>
+            </div>
+        </div>
+        <div class="row mt-4">
+            <div class="col-lg-6">
+                {% include "partials/mp_bridge.html" %}
             </div>
         </div>
     {% else %}
@@ -266,6 +271,9 @@
             </div>
 
             <div class="col-lg-4">
+                <div class="mb-4">
+                    {% include "partials/mp_bridge.html" %}
+                </div>
                 <div class="card shadow-sm mb-4">
                     <div class="card-header bg-light">
                         <h6 class="mb-0"><i class="bi bi-geo-alt"></i> 备选联系人（仅本机保存）</h6>
