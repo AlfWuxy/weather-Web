@@ -277,7 +277,7 @@ class ChronicRiskService:
     
     @staticmethod
     def _parse_night_temperature(weather_data):
-        """Parse overnight min temp: temperature_min → tmin → missing."""
+        """解析夜间最低温度：temperature_min → tmin → 缺失。"""
         if not isinstance(weather_data, dict):
             return None
         for key in ('temperature_min', 'tmin'):

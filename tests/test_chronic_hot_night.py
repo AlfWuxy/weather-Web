@@ -79,6 +79,23 @@ def test_legacy_tmin_22_still_triggers(chronic_service):
     assert '22' in blob
 
 
+def test_invalid_temperature_min_falls_back_to_valid_tmin(chronic_service):
+    weather_data = {'temperature': 28, 'temperature_min': 'n/a', 'tmin': 23.0}
+    assert ChronicRiskService._parse_night_temperature(weather_data) == pytest.approx(23.0)
+
+    result = _predict(chronic_service, weather_data)
+    assert 'heat_night' in _rule_ids(result)
+    assert '23' in _advice_blob(result)
+
+
+def test_temperature_min_takes_priority_over_legacy_tmin(chronic_service):
+    weather_data = {'temperature': 28, 'temperature_min': 21.9, 'tmin': 23.0}
+    assert ChronicRiskService._parse_night_temperature(weather_data) == pytest.approx(21.9)
+
+    result = _predict(chronic_service, weather_data)
+    assert 'heat_night' not in _rule_ids(result)
+
+
 @pytest.mark.parametrize(
     'weather_data',
     [
