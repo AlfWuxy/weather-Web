@@ -1926,6 +1926,7 @@ def test_deploy_script_excludes_local_design_drafts():
     assert "--exclude 'output'" in content
     assert "--exclude 'tmp'" in content
     assert "--exclude 'blueprints/tools 2.py'" in content
+    assert 'release_excludes=(--exclude=/analysis/)' in content
     assert content.count("--exclude '.env*'") == 2
     assert content.count("--exclude '.secrets/'") == 2
     assert content.count("--exclude '*.pem'") == 2
@@ -1933,6 +1934,17 @@ def test_deploy_script_excludes_local_design_drafts():
     assert content.count("--exclude 'project.private.config.json'") == 2
     assert "--exclude '.env'" not in content
     assert "--exclude '.env.local'" not in content
+
+
+def test_web_only_deploy_excludes_miniprogram_and_verifies_remote_release():
+    content = _load_deploy_script()
+
+    assert 'release_excludes+=(--exclude=/miniprogram/)' in content
+    assert content.count('"${release_excludes[@]}"') == 2
+    assert "网页/后端发布不得包含微信小程序源码。" in content
+    assert content.index('upload_files "$RELEASE_APP"') < content.index(
+        "网页/后端发布不得包含微信小程序源码。"
+    )
 
 
 def test_deploy_script_requires_https_public_base_url():
