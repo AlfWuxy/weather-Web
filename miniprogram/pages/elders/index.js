@@ -1,9 +1,11 @@
 const { api } = require('../../utils/request');
+const { WEB_ACTION_URL } = require('../../config');
 
 Page({
   data: {
     elders: [],
     loading: false,
+    webActionUrl: WEB_ACTION_URL || '/action',
   },
 
   async onShow() {
@@ -57,6 +59,11 @@ Page({
 
   goSettings() {
     wx.navigateTo({ url: '/pages/settings/index' });
+  },
+
+  copyWebAction() {
+    const url = (this.data.webActionUrl || '/action').trim();
+    wx.setClipboardData({ data: url });
   },
 });
 

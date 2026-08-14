@@ -4,4 +4,6 @@ module.exports = {
   // 公开仓库默认留空。调试或联调前，必须先改成真实 HTTPS API 地址。
   // Production: must be HTTPS and whitelisted in WeChat MiniProgram console.
   API_BASE_URL: '',
+  // Elders still confirm on the website. Copy this path; do not invent a production host here.
+  WEB_ACTION_URL: '/action',
 };
