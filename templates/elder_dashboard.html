@@ -43,7 +43,7 @@
         </div>
     </dialog>
 
-    <section class="yl-elder-hero yl-fade-up" aria-label="今日健康小结">
+    <section class="yl-elder-hero yl-fade-up" id="today" aria-label="今日健康小结">
         <div class="yl-elder-status">
             <span>今天</span>
             <h1>
@@ -163,6 +163,10 @@
 
     <p class="yl-elder-disclaimer">提示只用于日常行动参考，身体明显不舒服时请及时寻求专业帮助。</p>
 </div>
+<a href="#today" class="yl-elder-back-today" id="yl-elder-back-today" hidden>
+    <i class="bi bi-chevron-up" aria-hidden="true"></i>
+    回到今天
+</a>
 {% endblock %}
 
 {% block extra_js %}
@@ -184,6 +188,36 @@ document.addEventListener('DOMContentLoaded', function () {
             dialog.close();
         });
     }
+});
+</script>
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+    var todayEl = document.getElementById('today');
+    var callEl = document.querySelector('.yl-elder-call-card');
+    var backBtn = document.getElementById('yl-elder-back-today');
+    if (!todayEl || !callEl || !backBtn || !('IntersectionObserver' in window)) {
+        return;
+    }
+    var todayInView = true;
+    var callInView = false;
+    function syncBackToday() {
+        var show = !todayInView && !callInView;
+        backBtn.hidden = !show;
+        backBtn.classList.toggle('is-visible', show);
+    }
+    var observer = new IntersectionObserver(function (entries) {
+        for (var i = 0; i < entries.length; i++) {
+            var entry = entries[i];
+            if (entry.target === todayEl) {
+                todayInView = entry.isIntersecting;
+            } else if (entry.target === callEl) {
+                callInView = entry.isIntersecting;
+            }
+        }
+        syncBackToday();
+    }, { threshold: 0 });
+    observer.observe(todayEl);
+    observer.observe(callEl);
 });
 </script>
 {% endblock %}
