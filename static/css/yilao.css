@@ -1900,6 +1900,41 @@ body.elder-focus-page .yl-elder-120-dialog-actions {
     display: grid;
     gap: 12px;
 }
+
+/* 左下角「回到今天」：默认隐藏，避开右下角 AI 浮窗；非全宽、非危险按钮。 */
+body.elder-focus-page .yl-elder-back-today {
+    position: fixed;
+    left: max(16px, env(safe-area-inset-left));
+    right: auto;
+    bottom: max(20px, env(safe-area-inset-bottom));
+    z-index: 1025;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    width: auto;
+    max-width: min(16rem, calc(100vw - 96px));
+    min-height: 56px;
+    padding: 12px 20px;
+    border-radius: 999px;
+    background: #1F2A34;
+    color: #FFFFFF;
+    font-size: 1.12rem;
+    font-weight: 700;
+    line-height: 1.2;
+    text-decoration: none;
+    box-shadow: 0 10px 28px rgba(31, 42, 52, .22);
+}
+body.elder-focus-page .yl-elder-back-today.is-visible {
+    display: inline-flex;
+}
+body.elder-focus-page .yl-elder-back-today[hidden] {
+    display: none !important;
+}
+body.elder-focus-page .yl-elder-back-today:focus-visible {
+    outline: 3px solid #D85B16;
+    outline-offset: 3px;
+}
 .yl-elder-shell {
     max-width: 1040px;
     margin: 0 auto;
@@ -2119,6 +2154,13 @@ body.elder-focus-page .yl-elder-120-dialog-actions {
     }
     body.elder-focus-page .yl-elder-sos-actions.has-family {
         grid-template-columns: minmax(0, 1fr);
+    }
+    body.elder-focus-page .yl-elder-back-today {
+        left: max(12px, env(safe-area-inset-left));
+        right: auto;
+        width: auto;
+        min-height: 52px;
+        font-size: 1.05rem;
     }
 }
 
