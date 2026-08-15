@@ -27,7 +27,14 @@ from werkzeug.security import check_password_hash, generate_password_hash
 
 from core.constants import GUEST_ID_PREFIX
 from core.extensions import db
-from core.security import hash_identifier, hash_pair_token, hash_short_code, rate_limit_key, verify_pair_token
+from core.security import (
+    hash_identifier,
+    hash_pair_token,
+    hash_short_code,
+    rate_limit_key,
+    reserve_registration_processed_quota,
+    verify_pair_token,
+)
 from core.time_utils import today_local, utcnow, ensure_utc_aware
 from core.weather import (
     get_consecutive_hot_days,
@@ -40,6 +47,7 @@ from core.db_models import (
     Community,
     CoolingResource,
     DailyStatus,
+    MiniProgramIdentity,
     Pair,
     PairActionToken,
     PairLink,
@@ -72,6 +80,7 @@ from utils.database import atomic_transaction
 from utils.validators import (
     validate_username,
     validate_password,
+    validate_password_confirmation,
     validate_email,
     validate_age,
     validate_gender,
@@ -180,6 +189,9 @@ def _safe_next_url(next_url):
     if not next_url.startswith('/'):
         return None
     if next_url.startswith(("//", "\\\\", "/\\")):
+        return None
+    if parsed.path == '/logout':
+        # 登录跳转目标不能进入退出流程，避免登录后立即再次要求退出。
         return None
     adapter = current_app.url_map.bind_to_environ(request.environ)
     for method in ('GET', 'HEAD'):
@@ -1439,62 +1451,126 @@ def handle_login(next_url):
     return render_template('login.html', next=safe_next)
 
 
+_REGISTRATION_FORM_FIELD_LIMITS = {
+    'username': 25,
+    'email': 120,
+    'phone': 24,
+    'age': 3,
+    'gender': 10,
+    'community': 100,
+}
+
+
+def _preserve_registration_form_data():
+    """只在会话中暂存可回填字段，密码和 CSRF 永不保留。"""
+    session['registration_form_data'] = {
+        field: str(request.form.get(field) or '')[:max_length]
+        for field, max_length in _REGISTRATION_FORM_FIELD_LIMITS.items()
+    }
+
+
+def _registration_validation_error(messages):
+    _preserve_registration_form_data()
+    if isinstance(messages, str):
+        messages = [messages]
+    unique_messages = list(dict.fromkeys(messages))
+    flash('请检查以下内容：' + '；'.join(unique_messages), 'error')
+    return redirect(url_for('public.register'))
+
+
+def _registration_processed_response():
+    # 占用与新建对外保持相同响应，防止匿名访客枚举账号。
+    session.pop('registration_form_data', None)
+    flash(
+        '注册信息已提交，请尝试登录。'
+        '若无法登录，请更换用户名后重新注册。',
+        'success',
+    )
+    response = redirect(
+        url_for('public.login', next=url_for('public.account_link'))
+    )
+    return response
+
+
 def handle_register():
     if request.method == 'POST':
+        validation_errors = []
+
         # 验证用户名
         valid, result = validate_username(request.form.get('username'))
-        if not valid:
-            flash(result, 'error')
-            return redirect(url_for('public.register'))
-        username = result
-        if is_reserved_internal_username(username):
-            flash('该用户名属于系统保留命名空间，请换一个用户名。', 'error')
-            return redirect(url_for('public.register'))
-        try:
-            username_as_phone = normalize_phone(username)
-        except ValueError:
-            username_as_phone = None
-        if username_as_phone:
-            flash('用户名不能使用手机号格式，请换一个用户名。', 'error')
-            return redirect(url_for('public.register'))
+        if valid:
+            username = result
+            if is_reserved_internal_username(username):
+                validation_errors.append(
+                    '该用户名属于系统保留命名空间，请换一个用户名。'
+                )
+            try:
+                username_as_phone = normalize_phone(username)
+            except ValueError:
+                username_as_phone = None
+            if username_as_phone:
+                validation_errors.append(
+                    '用户名不能使用手机号格式，请换一个用户名。'
+                )
+        else:
+            username = None
+            validation_errors.append(result)
 
         # 验证密码
         valid, result = validate_password(request.form.get('password'))
+        if valid:
+            password = result
+        else:
+            password = None
+            validation_errors.append(result)
+        valid, confirmation_result = validate_password_confirmation(
+            request.form.get('password'),
+            request.form.get('confirm_password'),
+        )
         if not valid:
-            flash(result, 'error')
-            return redirect(url_for('public.register'))
-        password = result
+            validation_errors.append(confirmation_result)
 
         # 验证邮箱
         valid, result = validate_email(request.form.get('email'))
-        if not valid:
-            flash(result, 'error')
-            return redirect(url_for('public.register'))
-        email = result
+        if valid:
+            email = result
+        else:
+            email = None
+            validation_errors.append(result)
 
         # 手机号只保存为待验证标识；接入短信校验前不能用于登录。
         try:
             phone_normalized = normalize_phone(request.form.get('phone'))
         except ValueError as exc:
-            flash(str(exc), 'error')
-            return redirect(url_for('public.register'))
+            phone_normalized = None
+            validation_errors.append(str(exc))
 
         # 验证年龄
         valid, result = validate_age(request.form.get('age'))
-        if not valid:
-            flash(result, 'error')
-            return redirect(url_for('public.register'))
-        age = result
+        if valid:
+            age = result
+        else:
+            age = None
+            validation_errors.append(result)
 
         # 验证性别
         valid, result = validate_gender(request.form.get('gender'))
-        if not valid:
-            flash(result, 'error')
-            return redirect(url_for('public.register'))
-        gender = result
+        if valid:
+            gender = result
+        else:
+            gender = None
+            validation_errors.append(result)
 
         # 社区信息
         community = sanitize_input(request.form.get('community'), max_length=100)
+
+        if validation_errors:
+            return _registration_validation_error(validation_errors)
+
+        # 所有语法合法的注册处理在任何身份占用查询前先原子预留配额。
+        # 新建、已占用与并发唯一索引竞争统一消耗一次，避免配额成为枚举信号。
+        session.pop('registration_form_data', None)
+        reserve_registration_processed_quota()
 
         user = User(
             username=username,
@@ -1506,10 +1582,6 @@ def handle_register():
         )
         user.set_password(password)
 
-        # 所有占用结果使用相同提示与跳转，减少匿名访客据此枚举手机号或邮箱。
-        processed_message = (
-            '注册申请已处理，请尝试登录。若无法登录，请更换用户名或联系管理员。'
-        )
         username_taken = User.query.filter(
             db.func.lower(User.username) == _normalize_login_identifier(username)
         ).first() is not None
@@ -1522,10 +1594,7 @@ def handle_register():
                 email_taken,
             )
         ):
-            flash(processed_message, 'success')
-            return redirect(
-                url_for('public.login', next=url_for('public.account_link'))
-            )
+            return _registration_processed_response()
 
         try:
             db.session.add(user)
@@ -1533,19 +1602,18 @@ def handle_register():
         except IntegrityError:
             # 用户名与邮箱唯一索引负责处理并发注册竞争。
             db.session.rollback()
-            flash(processed_message, 'success')
-            return redirect(
-                url_for('public.login', next=url_for('public.account_link'))
-            )
+            return _registration_processed_response()
 
         logger.info("新用户注册: user_id=%s", user.id)
-        flash(processed_message, 'success')
-        return redirect(
-            url_for('public.login', next=url_for('public.account_link'))
-        )
+        return _registration_processed_response()
 
     communities = Community.query.all()
-    return render_template('register.html', communities=communities)
+    form_data = session.pop('registration_form_data', {})
+    return render_template(
+        'register.html',
+        communities=communities,
+        form_data=form_data,
+    )
 
 
 def _verified_cooling_map_point(resource):
@@ -1777,6 +1845,40 @@ def handle_guest_login(next_url=None):
 
 
 def handle_logout():
+    if request.method in ('GET', 'HEAD'):
+        return render_template('logout_confirm.html')
+
+    if not is_guest_user(current_user):
+        owner_user_id = int(current_user.id)
+        try:
+            with owner_write_guard(owner_user_id) as locked_user:
+                # 一次主动退出撤销同账号所有旧 Web/remember 身份。
+                previous_auth_version = int(locked_user.auth_version)
+                next_auth_version = previous_auth_version + 1
+                locked_user.auth_version = next_auth_version
+                # 网页退出不应误踢仍有效的小程序会话；仅迁移当前有效绑定，
+                # 已因改密失效的旧绑定继续保持失效，不能被退出操作重新激活。
+                MiniProgramIdentity.query.filter(
+                    MiniProgramIdentity.user_id == owner_user_id,
+                    MiniProgramIdentity.binding_auth_version
+                    == previous_auth_version,
+                ).update(
+                    {
+                        MiniProgramIdentity.binding_auth_version:
+                        next_auth_version,
+                    },
+                    synchronize_session=False,
+                )
+                db.session.commit()
+        except OwnerInactiveError:
+            # 账号已在并发请求中注销，旧身份已由墓碑失效，继续清理本地会话。
+            db.session.rollback()
+        except (OSError, RuntimeError, SQLAlchemyError, ValueError):
+            db.session.rollback()
+            logger.exception('退出时撤销账号会话失败: user_id=%s', owner_user_id)
+            flash('退出暂时未完成，请稍后重试。', 'error')
+            return render_template('logout_confirm.html'), 503
+
     _clear_identity_scoped_session()
     logout_user()
     return redirect(url_for('public.index'))

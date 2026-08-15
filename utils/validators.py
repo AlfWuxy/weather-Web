@@ -36,6 +36,15 @@ def validate_password(password):
     return True, password
 
 
+def validate_password_confirmation(password, confirmation):
+    """确认密码必须存在且与已校验密码完全一致。"""
+    if not confirmation or not isinstance(confirmation, str):
+        return False, '请再次输入密码'
+    if password != confirmation:
+        return False, '两次输入的密码不一致'
+    return True, confirmation
+
+
 def validate_email(email):
     """验证邮箱格式"""
     if not email:

@@ -816,6 +816,7 @@ def test_password_change_revokes_existing_link_code(
             "form_id": "password",
             "old_password": "long-web-password",
             "new_password": "new-long-web-password",
+            "confirm_password": "new-long-web-password",
         },
         follow_redirects=False,
     )
@@ -881,6 +882,7 @@ def test_password_change_detaches_wechat_until_fresh_relink(
             "form_id": "password",
             "old_password": "long-web-password",
             "new_password": "new-long-web-password",
+            "confirm_password": "new-long-web-password",
         },
         follow_redirects=False,
     )
@@ -977,6 +979,7 @@ def test_password_change_allows_different_wechat_to_replace_stale_identity(
             "form_id": "password",
             "old_password": "long-web-password",
             "new_password": "new-long-web-password",
+            "confirm_password": "new-long-web-password",
         },
         follow_redirects=False,
     )
@@ -1103,6 +1106,7 @@ def test_registration_rejects_phone_shaped_username(app, client, db_session):
         data={
             "username": "13800138000",
             "password": "long-registration-password",
+            "confirm_password": "long-registration-password",
             "csrf_token": csrf,
         },
         follow_redirects=False,
@@ -1130,6 +1134,7 @@ def test_registration_rejects_internal_username_namespaces(
             data={
                 "username": username,
                 "password": "long-registration-password",
+                "confirm_password": "long-registration-password",
                 "csrf_token": csrf,
             },
             follow_redirects=False,
@@ -1162,6 +1167,7 @@ def test_registration_hides_phone_occupancy_in_response(
             data={
                 "username": username,
                 "password": "registration-password-long",
+                "confirm_password": "registration-password-long",
                 "phone": phone,
                 "csrf_token": csrf,
             },
@@ -1240,8 +1246,9 @@ def test_registration_post_has_dedicated_rate_limit(app, db_session):
         test_client.post(
             "/register",
             data={
-                "username": f"rate_limited_registration_{index}",
+                "username": f"rate_limit_reg_{index}",
                 "password": "registration-password-long",
+                "confirm_password": "registration-password-long",
                 "csrf_token": csrf,
             },
             follow_redirects=False,

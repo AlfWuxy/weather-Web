@@ -740,6 +740,10 @@ def configure_app(app, logger):
     app.config.setdefault('RATE_LIMIT_AI', os.getenv('RATE_LIMIT_AI', '20 per minute'))
     app.config.setdefault('RATE_LIMIT_LOGIN', os.getenv('RATE_LIMIT_LOGIN', '5 per 5 minutes'))
     app.config.setdefault('RATE_LIMIT_REGISTER', os.getenv('RATE_LIMIT_REGISTER', '5 per hour'))
+    app.config.setdefault(
+        'RATE_LIMIT_REGISTER_ATTEMPTS',
+        os.getenv('RATE_LIMIT_REGISTER_ATTEMPTS', '30 per hour'),
+    )
     app.config.setdefault('LOGIN_MAX_FAILURES', parse_int(os.getenv('LOGIN_MAX_FAILURES', '5'), default=5))
     app.config.setdefault('LOGIN_LOCKOUT_SECONDS', parse_int(os.getenv('LOGIN_LOCKOUT_SECONDS', '300'), default=300))
     app.config.setdefault('RATE_LIMIT_SHORT_CODE', os.getenv('RATE_LIMIT_SHORT_CODE', '3 per hour'))

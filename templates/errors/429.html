@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+
+{% block title %}操作太频繁 · 宜老天气通{% endblock %}
+
+{% block content %}
+<div class="container py-5">
+    <div class="row justify-content-center">
+        <div class="col-md-8 col-lg-6">
+            <section class="card shadow-sm border-0" aria-labelledby="rateLimitTitle">
+                <div class="card-body p-4 p-md-5 text-center">
+                    <div class="display-5 text-warning mb-3" aria-hidden="true">
+                        <i class="bi bi-hourglass-split"></i>
+                    </div>
+                    <h1 class="h3" id="rateLimitTitle">操作太频繁</h1>
+                    <p class="text-muted mt-3 mb-2">为了保护账号和服务稳定，请稍等一会再试。</p>
+                    <p class="fs-5" id="rateLimitStatus" aria-live="polite">
+                        约 <strong data-rate-limit-countdown>{{ retry_after_seconds }}</strong> 秒后可重试
+                    </p>
+                    <div class="d-flex flex-column flex-sm-row justify-content-center gap-2 mt-4">
+                        <button type="button" class="btn btn-primary" id="rateLimitBack">返回上一页</button>
+                        <a class="btn btn-outline-secondary" href="/">回首页</a>
+                    </div>
+                </div>
+            </section>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+(function() {
+    const countdown = document.querySelector('[data-rate-limit-countdown]');
+    const status = document.getElementById('rateLimitStatus');
+    const backButton = document.getElementById('rateLimitBack');
+    if (backButton) {
+        backButton.addEventListener('click', function() {
+            if (window.history.length > 1) {
+                window.history.back();
+                return;
+            }
+            window.location.assign('/');
+        });
+    }
+    if (!countdown || !status) return;
+
+    let remaining = Number.parseInt(countdown.textContent, 10);
+    if (!Number.isFinite(remaining) || remaining < 1) remaining = 1;
+    const timer = window.setInterval(function() {
+        remaining -= 1;
+        if (remaining <= 0) {
+            window.clearInterval(timer);
+            status.textContent = '现在可以重试了。';
+            return;
+        }
+        countdown.textContent = String(remaining);
+    }, 1000);
+})();
+</script>
+{% endblock %}

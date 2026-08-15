@@ -38,7 +38,10 @@ from core.extensions import limiter
 from core.extensions import db
 from core.audit import log_audit
 from core.guest import is_guest_user
-from core.security import rate_limit_key
+from core.security import (
+    rate_limit_key,
+    registration_rate_limit_key,
+)
 from core.time_utils import ensure_utc_aware, utcnow
 from core.usage import log_usage_event
 from core.db_models import AlertDelivery, WeatherAlert
@@ -468,9 +471,12 @@ def login():
 
 @bp.route('/register', methods=['GET', 'POST'], endpoint='register')
 @limiter.limit(
-    lambda: current_app.config.get('RATE_LIMIT_REGISTER', '5 per hour'),
+    lambda: current_app.config.get(
+        'RATE_LIMIT_REGISTER_ATTEMPTS',
+        '30 per hour',
+    ),
     methods=['POST'],
-    key_func=rate_limit_key,
+    key_func=registration_rate_limit_key,
 )
 def register():
     """注册"""
@@ -710,10 +716,10 @@ def guest_login():
     return handle_guest_login(next_url)
 
 
-@bp.route('/logout', methods=['POST'], endpoint='logout')
+@bp.route('/logout', methods=['GET', 'POST'], endpoint='logout')
 @login_required
 def logout():
-    """登出"""
+    """展示退出确认页，并在用户主动提交后撤销会话。"""
     return handle_logout()
 
 

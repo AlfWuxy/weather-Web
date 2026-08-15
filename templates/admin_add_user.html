@@ -37,7 +37,8 @@
                         <div class="row">
                             <div class="col-md-6 mb-3">
                                 <label for="password" class="form-label">密码 *</label>
-                                <input type="password" class="form-control" id="password" name="password" required>
+                                <input type="password" class="form-control" id="password" name="password" minlength="12" maxlength="100" autocomplete="new-password" aria-describedby="adminAddPasswordHint" required>
+                                <small class="text-muted" id="adminAddPasswordHint">密码至少 12 位。</small>
                             </div>
                             <div class="col-md-6 mb-3">
                                 <label for="role" class="form-label">角色</label>
@@ -99,7 +100,6 @@
     </div>
 </div>
 {% endblock %}
-
 
 
 

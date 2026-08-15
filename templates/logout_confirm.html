@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+
+{% block title %}确认退出 · 宜老天气通{% endblock %}
+
+{% block content %}
+<div class="container py-5">
+    <div class="row justify-content-center">
+        <div class="col-lg-6 col-xl-5">
+            <section class="card border-0 shadow-sm" aria-labelledby="logout-title">
+                <div class="card-body p-4 p-md-5">
+                    <div class="text-center mb-4">
+                        <i class="bi bi-box-arrow-right text-primary" style="font-size: 2.5rem;" aria-hidden="true"></i>
+                        <h1 class="h3 mt-3 mb-2" id="logout-title">确认退出登录</h1>
+                        <p class="text-muted mb-0">
+                            退出后，这个账号在其他浏览器中的旧网页登录状态和“记住我”凭证都会失效。
+                        </p>
+                    </div>
+
+                    <form method="POST" action="{{ url_for('public.logout') }}">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <button class="btn btn-primary btn-lg w-100" type="submit">
+                            确认退出
+                        </button>
+                    </form>
+                    <a class="btn btn-outline-secondary btn-lg w-100 mt-3" href="{{ url_for('user.user_dashboard') }}">
+                        返回，不退出
+                    </a>
+                </div>
+            </section>
+        </div>
+    </div>
+</div>
+{% endblock %}

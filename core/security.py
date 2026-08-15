@@ -2,14 +2,27 @@
 """Security helpers."""
 import hashlib
 import logging
+import math
 import os
 import secrets
+import time
+from datetime import datetime, timezone
 
-from flask import abort, current_app, has_app_context, jsonify, request, session
+from flask import (
+    abort,
+    current_app,
+    has_app_context,
+    jsonify,
+    render_template,
+    request,
+    session,
+)
 
 logger = logging.getLogger(__name__)
 from flask_login import current_user
 from flask_limiter.util import get_remote_address
+from limits import parse_many
+from werkzeug.exceptions import TooManyRequests
 
 from core.constants import GUEST_ID_PREFIX
 
@@ -45,6 +58,128 @@ def rate_limit_key():
         uid = str(getattr(current_user, 'id', '') or '')
         return f'user:{uid}'
     return f'ip:{_client_ip_for_rate_limit()}'
+
+
+def registration_rate_limit_key():
+    """注册始终按受信客户端 IP 分桶，避免会话或游客账号轮换配额。"""
+    return f'ip:{_client_ip_for_rate_limit()}'
+
+
+_REGISTRATION_PROCESSED_SCOPE = 'public.register.processed'
+
+
+def reserve_registration_processed_quota():
+    """在身份占用查询前，通过共享限流存储原子预留一次注册处理配额。"""
+    from core.extensions import limiter
+
+    limit_value = str(
+        current_app.config.get('RATE_LIMIT_REGISTER', '5 per hour')
+    )
+    try:
+        limit_items = parse_many(limit_value)
+    except ValueError as exc:
+        logger.error('RATE_LIMIT_REGISTER 配置无效: %r', limit_value)
+        raise RuntimeError('注册限流配置无效') from exc
+
+    identifiers = (
+        _REGISTRATION_PROCESSED_SCOPE,
+        registration_rate_limit_key(),
+    )
+    retry_after_seconds = 0
+    reservation_allowed = True
+    for limit_item in limit_items:
+        allowed = limiter.limiter.hit(limit_item, *identifiers)
+        if allowed:
+            continue
+        reservation_allowed = False
+        try:
+            reset_at, _remaining = limiter.limiter.get_window_stats(
+                limit_item,
+                *identifiers,
+            )
+            retry_after_seconds = max(
+                retry_after_seconds,
+                math.ceil(float(reset_at) - time.time()),
+            )
+        except Exception:
+            logger.warning('读取注册处理配额重置时间失败', exc_info=True)
+            retry_after_seconds = max(
+                retry_after_seconds,
+                int(limit_item.get_expiry()),
+            )
+
+    if not reservation_allowed:
+        raise TooManyRequests(retry_after=max(1, retry_after_seconds))
+
+
+def _rate_limit_retry_after_seconds(error):
+    """优先采用限流存储返回的窗口重置时间，无法取得时保守回退。"""
+    retry_after = getattr(error, 'retry_after', None)
+    if isinstance(retry_after, datetime):
+        aware_retry_after = (
+            retry_after.replace(tzinfo=timezone.utc)
+            if retry_after.tzinfo is None
+            else retry_after
+        )
+        return max(
+            1,
+            math.ceil(aware_retry_after.timestamp() - time.time()),
+        )
+    if isinstance(retry_after, (int, float)):
+        return max(1, math.ceil(float(retry_after)))
+
+    try:
+        from core.extensions import limiter
+
+        request_limit = limiter.current_limit
+        if request_limit is not None and request_limit.reset_at:
+            return max(1, math.ceil(float(request_limit.reset_at) - time.time()))
+    except Exception:
+        logger.warning('读取限流窗口重置时间失败', exc_info=True)
+
+    try:
+        fallback_seconds = int(
+            current_app.config.get('RATE_LIMIT_RETRY_AFTER_FALLBACK_SECONDS', 60)
+        )
+    except (TypeError, ValueError):
+        fallback_seconds = 60
+    return max(1, fallback_seconds)
+
+
+def _is_api_path(path):
+    return path.startswith('/api/') or path.startswith('/mp/api/')
+
+
+def handle_rate_limit_exceeded(error):
+    """为 API 保留 JSON 契约，为网页返回中文站内提示。"""
+    retry_after_seconds = _rate_limit_retry_after_seconds(error)
+    if _is_api_path(request.path):
+        response = jsonify(
+            {
+                'success': False,
+                'error': 'rate_limit_exceeded',
+                'message': '请求太频繁，请稍后再试。',
+                'data': {
+                    'retry_after_seconds': retry_after_seconds,
+                },
+            }
+        )
+    else:
+        response = current_app.make_response(
+            render_template(
+                'errors/429.html',
+                retry_after_seconds=retry_after_seconds,
+            )
+        )
+    response.status_code = 429
+    response.headers['Retry-After'] = str(retry_after_seconds)
+    response.headers['Cache-Control'] = 'no-store'
+    return response
+
+
+def register_rate_limit_error_handler(app):
+    """注册一次统一 429 处理器；路由本身继续使用声明式限流。"""
+    app.register_error_handler(429, handle_rate_limit_exceeded)
 
 
 def generate_csrf_token():
