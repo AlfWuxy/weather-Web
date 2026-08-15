@@ -24,7 +24,7 @@
                         <div class="fx-thermometer-bulb"></div>
                     </div>
                     <div class="fx-thermometer-info">
-                        <div class="v"><span class="num">0</span><span class="unit">°C</span></div>
+                        <div class="v"><span class="num">{{ outdoor_temp|round(1) }}</span><span class="unit">°C</span></div>
                         <div class="k">{{ cooling_weather_location or current_location or '当前位置' }} · 当前室外</div>
                     </div>
                 </div>
@@ -51,13 +51,20 @@
     <form method="GET" class="yl-section mb-4 yl-fade-up yl-fade-up-d1">
         <div class="row g-3 align-items-end">
             <div class="col-md-5">
-                <label class="form-label">所在地</label>
-                <input type="text" class="form-control" name="community" value="{{ selected_community or current_location or '' }}" list="locOpts">
+                <label class="form-label" for="coolingCommunity">所在地</label>
+                <input type="text"
+                       class="form-control"
+                       id="coolingCommunity"
+                       name="community"
+                       value="{{ selected_community or '' }}"
+                       placeholder="输入社区名（可选）"
+                       autocomplete="off"
+                       list="locOpts">
                 <datalist id="locOpts">{% for loc in (communities or location_options or []) %}<option value="{{ loc }}"></option>{% endfor %}</datalist>
             </div>
             <div class="col-md-4">
-                <label class="form-label">类型</label>
-                <select name="resource_type" class="form-select">
+                <label class="form-label" for="coolingResourceType">类型</label>
+                <select name="resource_type" id="coolingResourceType" class="form-select">
                     <option value="">全部</option>
                     {% for item_type in (resource_types or []) %}
                     <option value="{{ item_type }}" {% if selected_resource_type == item_type %}selected{% endif %}>{{ item_type }}</option>
@@ -206,6 +213,17 @@
         </div>
     </section>
     {% endif %}
+
+    <section class="yl-section mt-4 yl-fade-up d-flex flex-column flex-md-row justify-content-between align-items-md-center gap-3">
+        <div>
+            <h2 class="h5 mb-1">共建避暑资源</h2>
+            <p class="text-muted small mb-0">知道新的纳凉点、开放时间或无障碍信息？请附场所名称、地址、核验日期和现场照片，运营人员会人工核验后再发布。</p>
+        </div>
+        <a class="btn btn-outline-primary flex-shrink-0"
+           href="mailto:wuxy.alf2024@gdhfi.com?subject=宜老天气通避暑资源共建">
+            <i class="bi bi-envelope me-1"></i>提交资源线索
+        </a>
+    </section>
 
     <section class="alert alert-primary mt-4 yl-fade-up">
         <i class="bi bi-info-circle me-1"></i>

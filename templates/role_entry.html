@@ -22,7 +22,11 @@
                         <h5 class="mb-0">老人自用</h5>
                     </div>
                     <p class="text-muted small flex-grow-1">
-                        如果老人会用手机，可用照护码完成今日确认或求助；家属也能代为记录。
+                        {% if config.get('WECHAT_FORMAL_RUNTIME') %}
+                            在微信搜索“宜老平安”，进入“宜老天气通”的“行动”查看今天怎么做；家属可在“照护”中选择家人。
+                        {% else %}
+                            如果老人会用手机，可用照护码完成今日确认或求助；家属也能代为记录。
+                        {% endif %}
                     </p>
                     <a class="btn btn-outline-primary w-100" data-entry-key="elder" href="{{ elder_target }}">
                         查看今天行动
@@ -40,7 +44,7 @@
                         <h5 class="mb-0">家属 / 子女</h5>
                     </div>
                     <p class="text-muted small flex-grow-1">
-                        关注家人所在地，查看风险提醒，复制沟通话术并记录是否完成。
+                        关注家人所在地，查看风险提醒，复制沟通话术并跟进行动。
                     </p>
                     {% if caregiver_requires_login %}
                         <div class="text-muted small mb-2">需登录后进入照护工作台。</div>

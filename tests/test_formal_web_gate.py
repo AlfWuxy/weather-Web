@@ -156,6 +156,7 @@ def test_formal_web_registration_keeps_minimal_account_creation(
         data={
             "username": "formal_link_user",
             "password": "formal-test-password",
+            "confirm_password": "formal-test-password",
             "phone": "13800138000",
             "csrf_token": csrf,
         },

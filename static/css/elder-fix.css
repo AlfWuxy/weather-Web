@@ -1,0 +1,54 @@
+/* 老人模式补丁：风险结论优先，返回导航保持在文档流内。 */
+.yl-elder-risk-card .yl-elder-risk-label {
+    margin: 14px 0 20px;
+    color: #9f2d20;
+    font-size: clamp(2rem, 5vw, 3.5rem);
+    line-height: 1.1;
+}
+
+.yl-elder-score-line {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px 16px;
+    padding-top: 16px;
+    border-top: 1px solid #dde6df;
+}
+
+.yl-elder-score-value {
+    color: #1f2a34 !important;
+    font-size: clamp(1.4rem, 3vw, 2rem) !important;
+    font-weight: 750 !important;
+    font-variant-numeric: tabular-nums;
+}
+
+.yl-elder-call-card > .btn + .btn {
+    margin-top: 12px;
+}
+
+.yl-elder-return-nav {
+    position: relative;
+    margin-top: 20px;
+    padding: 14px;
+    border: 1px solid #dfe6e1;
+    border-radius: 18px;
+    background: #fff;
+}
+
+.yl-elder-return-nav .btn {
+    display: flex;
+    min-height: 64px;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    width: 100%;
+    font-size: 1.2rem;
+}
+
+@media (max-width: 680px) {
+    .yl-elder-score-line {
+        align-items: flex-start;
+        flex-direction: column;
+    }
+}

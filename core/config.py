@@ -51,6 +51,56 @@ def _is_valid_redis_uri(uri):
         return False
 
 
+def _validated_miniprogram_action_code_image(value, static_folder=None):
+    """只接受站内 static 相对路径或无凭据的 HTTPS 图片地址。"""
+    normalized = (value or '').strip()
+    if not normalized:
+        return ''
+    if normalized.startswith('static/'):
+        parsed_path = Path(normalized)
+        if (
+            parsed_path.is_absolute()
+            or '..' in parsed_path.parts
+            or normalized.endswith('/')
+            or '?' in normalized
+            or '#' in normalized
+            or '\\' in normalized
+        ):
+            raise RuntimeError(
+                'WX_MINIPROGRAM_ACTION_CODE_IMAGE 必须是 static 相对文件或 HTTPS 地址。'
+            )
+        static_root = Path(
+            static_folder or Path(__file__).resolve().parents[1] / 'static'
+        ).resolve()
+        image_path = (static_root / Path(*parsed_path.parts[1:])).resolve()
+        try:
+            image_path.relative_to(static_root)
+        except ValueError as exc:
+            raise RuntimeError(
+                'WX_MINIPROGRAM_ACTION_CODE_IMAGE 必须位于应用 static 目录。'
+            ) from exc
+        # 文件缺失时安全降级到微信搜索步骤，避免正式页展示破图。
+        if not image_path.is_file():
+            return ''
+        return normalized
+    try:
+        parsed = urlparse(normalized)
+    except ValueError as exc:
+        raise RuntimeError(
+            'WX_MINIPROGRAM_ACTION_CODE_IMAGE 必须是 static 相对文件或 HTTPS 地址。'
+        ) from exc
+    if (
+        parsed.scheme != 'https'
+        or not parsed.hostname
+        or parsed.username
+        or parsed.password
+    ):
+        raise RuntimeError(
+            'WX_MINIPROGRAM_ACTION_CODE_IMAGE 必须是 static 相对文件或 HTTPS 地址。'
+        )
+    return normalized
+
+
 def resolve_database_uri():
     """Resolve database URI from env or local storage."""
     env_uri = (os.getenv('DATABASE_URI') or '').strip()
@@ -516,6 +566,10 @@ def configure_app(app, logger):
     wx_miniprogram_secret = _normalized_env_value('WX_MINIPROGRAM_SECRET', '')
     wx_miniprogram_openid_pepper = _normalized_env_value('WX_MINIPROGRAM_OPENID_PEPPER', '')
     wx_miniprogram_session_secret = _normalized_env_value('WX_MINIPROGRAM_SESSION_SECRET', '')
+    wx_miniprogram_action_code_image = _validated_miniprogram_action_code_image(
+        _normalized_env_value('WX_MINIPROGRAM_ACTION_CODE_IMAGE', ''),
+        app.static_folder,
+    )
     account_link_code_pepper = _normalized_env_value('ACCOUNT_LINK_CODE_PEPPER', '')
     wechat_formal_runtime_raw = _normalized_env_value('WECHAT_FORMAL_RUNTIME', '')
     web_private_features_enabled = parse_bool(
@@ -612,6 +666,7 @@ def configure_app(app, logger):
     app.config['WX_MINIPROGRAM_SECRET'] = wx_miniprogram_secret
     app.config['WX_MINIPROGRAM_OPENID_PEPPER'] = wx_miniprogram_openid_pepper
     app.config['WX_MINIPROGRAM_SESSION_SECRET'] = wx_miniprogram_session_secret
+    app.config['WX_MINIPROGRAM_ACTION_CODE_IMAGE'] = wx_miniprogram_action_code_image
     app.config['ACCOUNT_LINK_CODE_PEPPER'] = account_link_code_pepper or secret_key
     app.config['WX_MINIPROGRAM_PRIVACY_VERSION'] = wx_miniprogram_privacy_version
     app.config['ANALYTICS_TEST_USER_IDS'] = analytics_test_user_ids
