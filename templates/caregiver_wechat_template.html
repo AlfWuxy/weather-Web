@@ -8,7 +8,13 @@
         <div class="col-12 d-flex flex-wrap justify-content-between align-items-center">
             <div>
                 <h2><i class="bi bi-wechat"></i> 照护人微信模板</h2>
-                <p class="text-muted mb-0">仅包含短码与行动链接，不含个人身份信息。</p>
+                <p class="text-muted mb-0">
+                    {% if formal_action_handoff %}
+                        仅包含天气行动与小程序操作说明，不含家庭链接、短码或个人身份信息。
+                    {% else %}
+                        仅包含短码与行动链接，不含个人身份信息。
+                    {% endif %}
+                </p>
             </div>
             <a class="btn btn-outline-secondary" href="{{ url_for('user.caregiver_dashboard') }}">
                 <i class="bi bi-arrow-left"></i> 返回工作台
@@ -24,14 +30,20 @@
             {% if not weather_available %}
             <div class="alert alert-warning" role="status">
                 <strong>天气更新中</strong><br>
-                风险等级暂不显示。你仍可复制行动链接和短码，提醒对方完成安全确认或求助。
+                风险等级暂不显示。你仍可复制{% if formal_action_handoff %}小程序操作说明{% else %}行动链接和短码{% endif %}，提醒对方完成安全确认或求助。
             </div>
             {% endif %}
             <textarea class="form-control" rows="10" id="wechatMessage" readonly>{{ message }}</textarea>
             <button class="btn btn-primary mt-3" type="button" id="copyMessage">
-                <i class="bi bi-clipboard"></i> {% if weather_available %}复制文本{% else %}复制行动链接说明{% endif %}
+                <i class="bi bi-clipboard"></i> {% if weather_available %}复制文本{% elif formal_action_handoff %}复制小程序操作说明{% else %}复制行动链接说明{% endif %}
             </button>
-            <div class="text-muted small mt-2">建议提醒对方进入链接并输入短码完成确认。</div>
+            <div class="text-muted small mt-2">
+                {% if formal_action_handoff %}
+                    建议提醒对方在微信搜索“宜老平安”，进入“宜老天气通”的“行动”；照护人先选择家人。
+                {% else %}
+                    建议提醒对方进入链接并输入短码完成确认。
+                {% endif %}
+            </div>
         </div>
     </div>
 </div>

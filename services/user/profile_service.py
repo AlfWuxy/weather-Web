@@ -37,7 +37,8 @@ from utils.validators import (
     validate_age,
     validate_email,
     validate_gender,
-    validate_password
+    validate_password,
+    validate_password_confirmation,
 )
 from services.user.owner_write_guard import OwnerInactiveError, owner_write_guard
 from services.miniprogram_auth import current_privacy_version
@@ -320,6 +321,7 @@ def profile():
         if form_id == 'password':
             old_password = request.form.get('old_password', '')
             new_password = request.form.get('new_password')
+            confirm_password = request.form.get('confirm_password')
             if not old_password:
                 flash('请输入当前密码', 'error')
                 return redirect(url_for('user.profile'))
@@ -327,6 +329,13 @@ def profile():
                 valid, result = validate_password(new_password)
                 if not valid:
                     flash(result, 'error')
+                    return redirect(url_for('user.profile'))
+                valid, confirmation_result = validate_password_confirmation(
+                    result,
+                    confirm_password,
+                )
+                if not valid:
+                    flash(confirmation_result, 'error')
                     return redirect(url_for('user.profile'))
                 try:
                     owner_user_id = int(current_user.id)

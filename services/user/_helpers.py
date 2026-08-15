@@ -3,6 +3,7 @@
 import json
 from datetime import timedelta
 
+from flask import current_app
 from flask_login import current_user
 
 from core.extensions import db
@@ -33,6 +34,14 @@ from ._common import (
 )
 
 _MISSING = object()
+
+
+def _formal_miniprogram_action_handoff_lines():
+    """返回正式网页统一的小程序行动交接，不携带家庭链接或短码。"""
+    return [
+        '请在微信中搜索“宜老平安”小程序，进入“宜老天气通”。',
+        '打开“行动”（pages/actions/index）；照护人请在“照护”中选择家人。',
+    ]
 
 
 def _auto_escalate_overdue_statuses(statuses, status_date, target_stage=AUTO_ESCALATE_STAGE):
@@ -182,12 +191,14 @@ def _build_caregiver_message(pair, alert_kind=None, weather_data=None, member=No
     lines.extend(_personalized_care_notes(chronic_diseases))
 
     lines.append('说明：这是行动提醒，不提供医疗诊断/治疗建议；如明显不适请及时就医。')
-    lines.append(f'（可选）行动页：{action_link}  短码：{pair.short_code}')
+    if current_app.config.get('WECHAT_FORMAL_RUNTIME'):
+        lines.extend(_formal_miniprogram_action_handoff_lines())
+    else:
+        lines.append(f'（可选）行动页：{action_link}  短码：{pair.short_code}')
     return '\n'.join([line for line in lines if line])
 
 
 def _build_community_message(community_code, risk_label, resources):
-    action_link = _trusted_public_url('public.action_check')
     lines = [
         '【社区高温行动提醒】',
         f'社区：{community_code}',
@@ -203,7 +214,11 @@ def _build_community_message(community_code, risk_label, resources):
             if item.address_hint:
                 name_line += f'（{item.address_hint}）'
             lines.append(name_line)
-    lines.append(f'行动入口：{action_link}')
+    if current_app.config.get('WECHAT_FORMAL_RUNTIME'):
+        lines.extend(_formal_miniprogram_action_handoff_lines())
+    else:
+        action_link = _trusted_public_url('public.action_check')
+        lines.append(f'行动入口：{action_link}')
     lines.append('如需帮助请联系社区服务人员。')
     return '\n'.join(lines)
 

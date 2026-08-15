@@ -169,16 +169,16 @@
                         <input type="hidden" name="form_id" value="password">
                         <div class="mb-3">
                             <label for="old_password" class="form-label">当前密码</label>
-                            <input type="password" class="form-control" id="old_password" name="old_password" required>
+                            <input type="password" class="form-control" id="old_password" name="old_password" autocomplete="current-password" required>
                         </div>
                         <div class="mb-3">
                             <label for="new_password" class="form-label">新密码</label>
-                            <input type="password" class="form-control" id="new_password" name="new_password">
-                            <small class="text-muted">留空表示不修改密码</small>
+                            <input type="password" class="form-control" id="new_password" name="new_password" minlength="12" maxlength="100" autocomplete="new-password" aria-describedby="profilePasswordHint">
+                            <small class="text-muted" id="profilePasswordHint">留空表示不修改；新密码至少 12 位。</small>
                         </div>
                         <div class="mb-3">
                             <label for="confirm_password" class="form-label">确认新密码</label>
-                            <input type="password" class="form-control" id="confirm_password">
+                            <input type="password" class="form-control" id="confirm_password" name="confirm_password" minlength="12" maxlength="100" autocomplete="new-password">
                         </div>
                         <button type="submit" class="btn btn-warning">修改密码</button>
                     </form>

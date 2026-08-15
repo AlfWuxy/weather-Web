@@ -88,6 +88,11 @@
                         <h6 class="mb-0"><i class="bi bi-check-circle"></i> 已创建监测对象</h6>
                     </div>
                     <div class="card-body">
+                        {% if config.get('WECHAT_FORMAL_RUNTIME') %}
+                        <div class="alert alert-info mb-0">
+                            请在微信搜索“宜老平安”，进入“宜老天气通”，再从“照护”选择家人完成行动。网页不会生成或展示家庭行动链接。
+                        </div>
+                        {% else %}
                         <div class="mb-2">
                             <div class="text-muted small">短码</div>
                             <div class="fs-3 fw-bold">{{ created_pair.short_code }}</div>
@@ -97,6 +102,7 @@
                             <input class="form-control" value="{{ created_action_link }}" readonly>
                         </div>
                         <div class="text-muted small">把行动链接发给家人后，可在这里继续查看是否已确认。</div>
+                        {% endif %}
                     </div>
                 </div>
             {% endif %}
@@ -148,7 +154,9 @@
                                         <div class="card-body">
                                             <div class="d-flex justify-content-between align-items-start">
                                                 <div>
-                                                    <div class="text-muted small">短码 {{ item.pair.short_code }}</div>
+                                                    {% if not config.get('WECHAT_FORMAL_RUNTIME') %}
+                                                        <div class="text-muted small">短码 {{ item.pair.short_code }}</div>
+                                                    {% endif %}
                                                     <div class="fs-5 fw-bold">{{ item.elder_name or '老人' }}</div>
                                                     <div class="text-muted small">地点 {{ item.location_display or item.pair.community_code }}</div>
                                                     {% if item.weather_available %}
@@ -169,7 +177,7 @@
                                                     {% else %}
                                                     <div class="alert alert-warning py-2 px-3 mt-2 mb-0 small" role="status">
                                                         <strong>天气更新中</strong><br>
-                                                        风险等级暂不显示。仍可发送行动链接并记录确认结果。
+                                                        风险等级暂不显示。{% if config.get('WECHAT_FORMAL_RUNTIME') %}仍可复制小程序操作说明并人工跟进。{% else %}仍可发送行动链接并记录确认结果。{% endif %}
                                                     </div>
                                                     {% endif %}
                                                 </div>
@@ -205,7 +213,7 @@
                                                         data-member-id="{{ item.pair.member_id or '' }}"
                                                         data-alert-kind="{{ item.alert_kind or '' }}"
                                                         data-message="{{ item.reminder_message | replace('\n', '\\n') | e }}">
-                                                    <i class="bi bi-clipboard"></i> {% if item.weather_available %}复制提醒话术{% else %}复制行动链接说明{% endif %}
+                                                    <i class="bi bi-clipboard"></i> {% if item.weather_available %}复制提醒话术{% elif config.get('WECHAT_FORMAL_RUNTIME') %}复制小程序操作说明{% else %}复制行动链接说明{% endif %}
                                                 </button>
                                                 <button class="btn btn-outline-success btn-sm feedback-btn"
                                                         type="button"
@@ -245,9 +253,13 @@
                                                     </a>
                                                 {% endif %}
                                             </div>
-                                            <div class="text-muted small mt-2">
-                                                行动入口：<a href="{{ item.action_link }}" target="_blank">打开短码页</a>
-                                            </div>
+                                            {% if item.action_link %}
+                                                <div class="text-muted small mt-2">
+                                                    行动入口：<a href="{{ item.action_link }}" target="_blank">打开短码页</a>
+                                                </div>
+                                            {% elif config.get('WECHAT_FORMAL_RUNTIME') %}
+                                                <div class="text-muted small mt-2">微信“宜老平安”小程序 → “宜老天气通” → “照护”选择家人。</div>
+                                            {% endif %}
                                         </div>
                                     </div>
                                 </div>

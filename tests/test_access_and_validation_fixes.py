@@ -9,10 +9,11 @@ def test_analysis_route_redirects_non_admin(authenticated_client):
     assert '/dashboard' in response.headers.get('Location', '')
 
 
-def test_logout_requires_post(authenticated_client):
+def test_logout_get_shows_confirmation(authenticated_client):
     response = authenticated_client.get('/logout', follow_redirects=False)
 
-    assert response.status_code == 405
+    assert response.status_code == 200
+    assert '确认退出登录' in response.get_data(as_text=True)
 
 
 def test_forecast_api_rejects_incomplete_forecast_temps(authenticated_client):

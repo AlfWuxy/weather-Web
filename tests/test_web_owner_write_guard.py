@@ -209,6 +209,7 @@ def test_account_delete_finishes_before_web_write_and_blocks_all_private_rows(
                 "form_id": "password",
                 "old_password": "web-owner-write-test-password",
                 "new_password": "NewConcurrentPassword!",
+                "confirm_password": "NewConcurrentPassword!",
             },
         ),
         ("/location", {"location": "都昌县"}),

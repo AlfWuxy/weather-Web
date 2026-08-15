@@ -59,7 +59,7 @@ def test_safe_next_accepts_only_registered_get_targets_and_preserves_query(app, 
         "/profile\r\nLocation: https://evil.example",
     ),
 )
-def test_safe_next_rejects_external_unknown_and_post_only_targets(app, target):
+def test_safe_next_rejects_external_unknown_and_identity_transition_targets(app, target):
     from services.public_service import _safe_next_url
 
     with app.test_request_context("/login"):
@@ -96,7 +96,7 @@ def test_guest_invalid_next_falls_back_to_dashboard(client, target):
         ("/dashboard", "private"),
         ("/risk", "public"),
         ("/missing-route", "missing"),
-        ("/logout", "post_only"),
+        ("/logout", "auth_private"),
     ),
 )
 def test_anonymous_web_route_matrix_has_distinct_destinations(
@@ -116,7 +116,11 @@ def test_anonymous_web_route_matrix_has_distinct_destinations(
     response = client.get(path, follow_redirects=False)
     location = response.headers.get("Location", "")
 
-    if expected_kind == "private" and mode == "mini_only":
+    if expected_kind == "auth_private":
+        assert response.status_code in (301, 302, 303)
+        assert "/login" in location
+        assert "next=" in location
+    elif expected_kind == "private" and mode == "mini_only":
         assert response.status_code == 303
         assert location.endswith("/action")
     elif expected_kind == "private":

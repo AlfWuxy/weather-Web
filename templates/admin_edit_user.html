@@ -80,8 +80,8 @@
 
                         <div class="mb-3">
                             <label for="password" class="form-label">新密码</label>
-                            <input type="password" class="form-control" id="password" name="password">
-                            <small class="text-muted">留空表示不修改密码</small>
+                            <input type="password" class="form-control" id="password" name="password" minlength="12" maxlength="100" autocomplete="new-password" aria-describedby="adminEditPasswordHint">
+                            <small class="text-muted" id="adminEditPasswordHint">留空表示不修改；新密码至少 12 位。</small>
                         </div>
 
                         <hr>
@@ -99,7 +99,6 @@
     </div>
 </div>
 {% endblock %}
-
 
 
 

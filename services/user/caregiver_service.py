@@ -54,6 +54,7 @@ from ._helpers import (
     _build_caregiver_message,
     _build_community_snapshot,
     _build_recent_series,
+    _formal_miniprogram_action_handoff_lines,
     _refresh_community_daily
 )
 
@@ -107,15 +108,19 @@ def _heat_weather_available(weather_data):
 
 
 def _build_weather_waiting_message(pair, action_link):
-    """天气不可用时只保留行动入口，不生成风险结论或风险建议。"""
+    """天气不可用时不生成风险结论或风险建议。"""
     location = (pair.location_query or pair.community_code or '').strip()
     lines = [
         '【天气更新中】',
-        '风险等级暂不显示。仍可打开行动页完成安全确认或求助。',
+        '风险等级暂不显示。',
     ]
     if location:
         lines.append(f'地点：{location}')
-    lines.append(f'（可选）行动页：{action_link}  短码：{pair.short_code}')
+    if current_app.config.get('WECHAT_FORMAL_RUNTIME'):
+        lines.extend(_formal_miniprogram_action_handoff_lines())
+    else:
+        lines.append('仍可打开行动页完成安全确认或求助。')
+        lines.append(f'（可选）行动页：{action_link}  短码：{pair.short_code}')
     return '\n'.join(lines)
 
 
@@ -302,9 +307,10 @@ def _build_pair_management_context(caregiver_mode=False):
             DailyStatus.status_date == status_date
         ).all()
         status_map = {status.pair_id: status for status in statuses}
-    action_links = _build_active_pair_action_links(
-        int(current_user.id),
-        pair_ids,
+    action_links = (
+        {}
+        if current_app.config.get('WECHAT_FORMAL_RUNTIME')
+        else _build_active_pair_action_links(int(current_user.id), pair_ids)
     )
     created_action_link = action_links.get(created_pair.id) if created_pair else None
 
@@ -577,7 +583,7 @@ def caregiver_pair_detail(pair_id):
         query = query.filter_by(caregiver_id=current_user.id)
     pair = query.first_or_404()
     action_link = None
-    if pair.status == 'active':
+    if pair.status == 'active' and not current_app.config.get('WECHAT_FORMAL_RUNTIME'):
         action_link = _build_active_pair_action_links(
             int(pair.caregiver_id),
             [pair.id],
@@ -718,8 +724,9 @@ def caregiver_wechat_template():
     short_code = sanitize_input(request.args.get('short_code'), max_length=12)
     token = sanitize_input(request.args.get('token'), max_length=200)
     community_code = sanitize_input(request.args.get('community_code'), max_length=100)
+    formal_action_handoff = bool(current_app.config.get('WECHAT_FORMAL_RUNTIME'))
 
-    if not token and short_code:
+    if not formal_action_handoff and not token and short_code:
         pair_query = Pair.query.filter_by(short_code=short_code, status='active')
         if getattr(current_user, 'role', None) != 'admin':
             pair_query = pair_query.filter_by(caregiver_id=current_user.id)
@@ -736,7 +743,9 @@ def caregiver_wechat_template():
                     else None
                 )
 
-    if token:
+    if formal_action_handoff:
+        action_link = ''
+    elif token:
         action_link = _trusted_public_url(
             'public.elder_token_entry',
             token=token,
@@ -762,8 +771,6 @@ def caregiver_wechat_template():
     if weather_available:
         message_lines = [
             '【高温行动提醒】',
-            f'行动链接：{action_link}',
-            f'短码：{short_code or "请填写"}'
         ]
         if community_code:
             message_lines.insert(1, f'社区：{community_code}')
@@ -771,14 +778,27 @@ def caregiver_wechat_template():
         message_lines.append('行动建议（非医疗诊断/治疗）：')
         for item in actions:
             message_lines.append(f'- {item["title"]}：{item["detail"]}')
-        message_lines.append('如需帮助请在页面内点击“我需要帮助”。')
+        if formal_action_handoff:
+            message_lines.extend(_formal_miniprogram_action_handoff_lines())
+        else:
+            message_lines.extend([
+                f'行动链接：{action_link}',
+                f'短码：{short_code or "请填写"}',
+                '如需帮助请在页面内点击“我需要帮助”。',
+            ])
     else:
         message_lines = [
             '【天气更新中】',
-            '风险等级暂不显示。仍可打开行动页完成安全确认或求助。',
-            f'行动链接：{action_link}',
-            f'短码：{short_code or "请填写"}',
+            '风险等级暂不显示。',
         ]
+        if formal_action_handoff:
+            message_lines.extend(_formal_miniprogram_action_handoff_lines())
+        else:
+            message_lines.extend([
+                '仍可打开行动页完成安全确认或求助。',
+                f'行动链接：{action_link}',
+                f'短码：{short_code or "请填写"}',
+            ])
 
     return render_template(
         'caregiver_wechat_template.html',
@@ -788,6 +808,7 @@ def caregiver_wechat_template():
         community_code=community_code,
         weather=weather_data,
         weather_available=weather_available,
+        formal_action_handoff=formal_action_handoff,
     )
 
 

@@ -403,7 +403,16 @@
             }
         }
         if (bulb) bulb.dataset.zone = zone;
-        if (valEl) animateNumber(valEl, 0, t, { duration: 1500, decimals: 1 });
+        if (valEl) {
+            // 优先沿用服务端首屏温度，避免脚本初始化时短暂闪回 0°C。
+            const renderedValue = parseFloat(valEl.textContent);
+            const startValue = Number.isFinite(renderedValue) ? renderedValue : 0;
+            if (Math.abs(startValue - t) < 0.05) {
+                valEl.textContent = t.toFixed(1);
+            } else {
+                animateNumber(valEl, startValue, t, { duration: 1500, decimals: 1 });
+            }
+        }
 
         if (zone === 'danger') el.classList.add('danger-active');
         else el.classList.remove('danger-active');

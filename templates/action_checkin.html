@@ -11,8 +11,8 @@
         <div class="col-12">
             <h2><i class="bi bi-clipboard-check"></i> 行动型热健康预警</h2>
             {% if web_actions_read_only %}
-                <p class="text-muted mb-0">当前网页仅显示家庭行动入口的停用说明（不含医疗诊断/治疗建议）。</p>
-                <p class="text-muted small mt-2 mb-0">微信正式版不会在网页读取短码或家庭安全链接。确认、求助和复盘请在微信小程序中登录并完成健康资料单独同意后操作。</p>
+                <p class="text-muted mb-0">网页保留公开说明，家庭确认、求助和复盘请在微信小程序完成（不含医疗诊断/治疗建议）。</p>
+                <p class="text-muted small mt-2 mb-0">微信正式版不会在网页读取短码或家庭安全链接。网页不会读取短码、兑换安全链接或写入家庭记录。</p>
             {% else %}
                 <p class="text-muted mb-0">输入短码即可完成今日确认或求助（不含医疗诊断/治疗建议）。</p>
                 <p class="text-muted small mt-2 mb-0">未登录者可使用照护人提供的有效短码或有时效家庭行动安全链接。只有主动提交时，行动确认、求助需求或复盘才会写入对应照护账号；该入口不等于登录，不能查看账号内其他资料。</p>
@@ -29,9 +29,38 @@
                     </div>
                     <div class="card-body">
                         {% if web_actions_read_only %}
-                        <div class="alert alert-info mb-0" role="status" data-testid="web-actions-read-only">
-                            <strong>当前网页仅供查看停用说明。</strong>
-                            为保护家庭资料，首发不会读取短码、兑换安全链接或写入家庭记录。请打开微信小程序并登录后操作。
+                        {% set action_code_image = config.get('WX_MINIPROGRAM_ACTION_CODE_IMAGE', '') %}
+                        <div data-testid="web-actions-read-only">
+                            <h3 class="h5">请到“宜老平安”小程序完成</h3>
+                            <p class="text-muted small">当前网页仅供查看停用说明；可完成的具体步骤如下。</p>
+                            <ol class="mt-3 mb-3 ps-4">
+                                <li class="mb-2">打开微信，搜索小程序“宜老平安”。</li>
+                                <li class="mb-2">进入服务“宜老天气通”并登录。</li>
+                                <li class="mb-2">打开“行动”，页面路径为 <code>pages/actions/index</code>。</li>
+                                <li>替家人操作时，请先在“照护”中选择家人，再完成确认、求助或复盘。</li>
+                            </ol>
+                            {% if action_code_image %}
+                                {% if action_code_image.startswith('static/') %}
+                                    {% set action_code_src = url_for('static', filename=action_code_image[7:]) %}
+                                {% else %}
+                                    {% set action_code_src = action_code_image %}
+                                {% endif %}
+                                <figure class="text-center mb-3">
+                                    <img src="{{ action_code_src }}"
+                                         data-testid="miniprogram-action-code"
+                                         alt="宜老平安小程序码"
+                                         width="220"
+                                         height="220"
+                                         loading="eager"
+                                         decoding="async">
+                                    <figcaption class="small text-muted mt-2">微信扫一扫，进入“宜老平安”小程序</figcaption>
+                                </figure>
+                            {% else %}
+                                <div class="alert alert-info mb-3" role="status">
+                                    当前未提供小程序码图片，请直接使用微信搜索“宜老平安”。
+                                </div>
+                            {% endif %}
+                            <p class="text-muted small mb-0">为保护家庭资料，本页不会读取或回显短码。明显不适时请联系家人、社区或专业医疗服务；紧急情况请拨打 120。</p>
                         </div>
                         {% else %}
                         <form method="POST" action="{{ entry_action or url_for('public.action_check') }}">

@@ -19,6 +19,7 @@ from core.constants import CHRONIC_OPTIONS, DEFAULT_CITY_LABEL, GUEST_ID_PREFIX,
 from core.extensions import db, init_extensions, login_manager
 from core.hooks import register_hooks
 from core.logging_privacy import install_formal_logging_privacy
+from core.security import register_rate_limit_error_handler
 from core.db_models import (
     AlertDelivery,
     AuditLog,
@@ -103,6 +104,7 @@ def create_app(register_blueprints=True):
     configure_app(app, logger)
     install_formal_logging_privacy(app.config.get('WECHAT_FORMAL_RUNTIME'))
     init_extensions(app)
+    register_rate_limit_error_handler(app)
     register_user_loader(login_manager)
     register_hooks(app)
     if register_blueprints:
