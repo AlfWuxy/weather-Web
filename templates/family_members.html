@@ -18,6 +18,18 @@
         </a>
     </div>
 
+    {% if unpaired_member_count %}
+    <div class="alert alert-info d-flex flex-column flex-md-row align-items-md-center justify-content-between gap-3 yl-fade-up" role="status">
+        <div>
+            <div class="fw-semibold">档案已建立，还有 {{ unpaired_member_count }} 位家人尚未加入监测。</div>
+            <div class="small">下一步填写所在地，开始查看对应的天气风险与照护行动。</div>
+        </div>
+        <a href="{{ url_for('user.pair_management') }}" class="btn btn-primary flex-shrink-0">
+            下一步：添加监测对象
+        </a>
+    </div>
+    {% endif %}
+
     {# 概览 #}
     <div class="row g-3 mb-4 yl-fade-up yl-fade-up-d1">
         <div class="col-6 col-md-3">

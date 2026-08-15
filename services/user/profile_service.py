@@ -22,7 +22,7 @@ from core.db_models import (
 from core.extensions import db
 from core.guest import build_guest_profile, get_guest_assessment, is_guest_user
 from core.notifications import create_notification
-from core.time_utils import utcnow
+from core.time_utils import utc_to_local_datetime, utcnow
 from core.usage import create_api_token
 from core.weather import (
     compact_assessment_weather_condition,
@@ -588,6 +588,8 @@ def profile():
         'profile.html',
         communities=communities,
         chronic_diseases_list=chronic_diseases_list,
+        created_at_local=utc_to_local_datetime(current_user.created_at),
+        last_login_local=utc_to_local_datetime(current_user.last_login),
         last_api_token_plain=last_api_token_plain,
         wxpusher_feature_enabled=wxpusher_feature_enabled,
         wxpusher_available=bool(

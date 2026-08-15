@@ -103,6 +103,9 @@
 </head>
 <body class="{% block body_class %}{% endblock %}" data-viewport-tier="wide" data-motion="m1 m2 m4 m5">
     {% set nav_endpoint = request.endpoint or '' %}
+    {% set nav_today_url = url_for('user.elder_dashboard') if nav_endpoint == 'user.elder_dashboard' else url_for('user.user_dashboard') %}
+    {% set nav_desktop_today_active = nav_endpoint in ['user.user_dashboard', 'user.elder_dashboard'] %}
+    {% set nav_drawer_today_active = nav_endpoint == 'user.user_dashboard' or (nav_endpoint == 'user.elder_dashboard' and not feature_flags.elder_mode) %}
     {% set nav_is_guest = current_user.is_authenticated and current_user.role == 'guest' %}
     {% if nav_is_guest or not current_user.is_authenticated %}
         {% set nav_community_risk_url = url_for('public.public_risk') %}
@@ -151,9 +154,9 @@
             {# 高频入口,仅登录后显示在桌面端 #}
             {% if current_user.is_authenticated %}
                 <div class="app-desktop-nav d-none d-lg-flex align-items-center gap-1 mx-auto">
-                    <a class="nav-link {% if request.endpoint == 'user.user_dashboard' %}active{% endif %}"
-                       href="{{ url_for('user.user_dashboard') }}" data-nav-key="today"
-                       {% if request.endpoint == 'user.user_dashboard' %}aria-current="page"{% endif %}>今天</a>
+                    <a class="nav-link {% if nav_desktop_today_active %}active{% endif %}"
+                       href="{{ nav_today_url }}" data-nav-key="today"
+                       {% if nav_desktop_today_active %}aria-current="page"{% endif %}>今天</a>
 
                     <a class="nav-link {% if nav_care_active %}active{% endif %}"
                        href="{{ nav_care_url }}" data-nav-key="care"
@@ -289,7 +292,7 @@
             <nav class="nav flex-column mb-3" aria-label="今天">
                 <a class="nav-link {% if nav_endpoint == 'public.index' %}active{% endif %}" href="{{ url_for('public.index') }}" data-nav-key="home" {% if nav_endpoint == 'public.index' %}aria-current="page"{% endif %}><i class="bi bi-house-door me-2"></i>首页</a>
                 {% if current_user.is_authenticated %}
-                    <a class="nav-link {% if nav_endpoint == 'user.user_dashboard' %}active{% endif %}" href="{{ url_for('user.user_dashboard') }}" data-nav-key="today" {% if nav_endpoint == 'user.user_dashboard' %}aria-current="page"{% endif %}><i class="bi bi-heart-pulse me-2"></i>今日主页</a>
+                    <a class="nav-link {% if nav_drawer_today_active %}active{% endif %}" href="{{ nav_today_url }}" data-nav-key="today" {% if nav_drawer_today_active %}aria-current="page"{% endif %}><i class="bi bi-heart-pulse me-2"></i>今日主页</a>
                     {% if feature_flags.elder_mode %}
                         <a class="nav-link {% if nav_endpoint == 'user.elder_dashboard' %}active{% endif %}" href="{{ url_for('user.elder_dashboard') }}" data-nav-key="elder" {% if nav_endpoint == 'user.elder_dashboard' %}aria-current="page"{% endif %}><i class="bi bi-eyeglasses me-2"></i>老人模式</a>
                     {% endif %}

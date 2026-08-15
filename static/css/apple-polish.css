@@ -327,6 +327,75 @@ body.motion-ready[data-motion~="m1"] .yl-feature-icon {
 }
 
 @media (max-width: 767.98px) {
+    /* 手机端只扩明确控件的触控区，正文中的普通链接保持原排版。 */
+    .btn {
+        min-width: 44px;
+        min-height: 44px;
+    }
+
+    .navbar-toggler {
+        display: inline-flex;
+        min-width: 44px;
+        min-height: 44px;
+        align-items: center;
+        justify-content: center;
+    }
+
+    .btn-close {
+        width: 44px;
+        height: 44px;
+        padding: 0;
+        background-size: 16px;
+    }
+
+    .yl-metric-info {
+        width: 44px;
+        height: 44px;
+        min-width: 44px;
+        min-height: 44px;
+    }
+
+    .site-footer nav a,
+    .site-footer p a {
+        display: inline-flex;
+        min-height: 44px;
+        align-items: center;
+        padding: 4px 8px;
+    }
+
+    details > summary {
+        min-height: 44px;
+        box-sizing: border-box;
+        padding-top: 10px;
+        padding-bottom: 10px;
+        cursor: pointer;
+    }
+
+    /* 保留原生选择控件，整行标签提供 44px 命中区。 */
+    .form-check {
+        display: flex;
+        min-height: 44px;
+        align-items: center;
+    }
+
+    .form-check .form-check-input {
+        flex: 0 0 auto;
+        width: 24px;
+        height: 24px;
+        margin-top: 0;
+    }
+
+    .form-check-label {
+        display: inline-flex;
+        min-height: 44px;
+        align-items: center;
+        padding-left: 4px;
+    }
+
+    .form-switch .form-check-input {
+        width: 40px;
+    }
+
     .ai-floating-chat:not(.open) {
         right: max(16px, env(safe-area-inset-right));
         bottom: max(16px, env(safe-area-inset-bottom));

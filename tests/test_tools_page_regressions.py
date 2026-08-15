@@ -657,6 +657,11 @@ def test_cooling_page_empty_database_renders_safe_candidate_preview(
     assert '29.249263' not in body
     assert 'data-publication-status="candidate-only"' in body
     assert 'data-verification-status="pending-human-verification"' in body
+    assert body.count('data-cooling-candidate="pending"') == 7
+    assert '筛选将在人工核验发布后开放，待核验预览不参与筛选' in body
+    assert re.search(r'id="coolingCommunity"[^>]*\sdisabled(?:\s|>)', body)
+    assert re.search(r'id="coolingResourceType"[^>]*\sdisabled(?:\s|>)', body)
+    assert re.search(r'id="coolingFilterSubmit"[^>]*\sdisabled(?:\s|>)', body)
     assert 'data-cooling-map-focus' not in body
     assert 'id="coolingLocateButton"' in body
     assert 'id="coolingLocateButton"\n                    disabled' in body
@@ -671,6 +676,8 @@ def test_cooling_page_empty_database_renders_safe_candidate_preview(
 
 
 def test_cooling_page_renders_real_resources_only(client, db_session, monkeypatch):
+    import re
+
     from core.db_models import CoolingResource
 
     monkeypatch.setattr(
@@ -704,6 +711,31 @@ def test_cooling_page_renders_real_resources_only(client, db_session, monkeypatc
     assert '都昌县图书馆' not in body
     assert '万达广场' not in body
     assert '待核验场所预览' not in body
+    assert '筛选将在人工核验发布后开放，待核验预览不参与筛选' not in body
+    assert not re.search(r'id="coolingCommunity"[^>]*\sdisabled(?:\s|>)', body)
+    assert not re.search(r'id="coolingResourceType"[^>]*\sdisabled(?:\s|>)', body)
+    assert not re.search(r'id="coolingFilterSubmit"[^>]*\sdisabled(?:\s|>)', body)
+
+
+def test_cooling_location_button_meets_minimum_touch_target():
+    import re
+    from pathlib import Path
+
+    stylesheet = (
+        Path(__file__).resolve().parents[1]
+        / 'static'
+        / 'css'
+        / 'cooling-map.css'
+    ).read_text(encoding='utf-8')
+    rule = re.search(
+        r'\.cooling-locate-button\s*\{(?P<body>.*?)\}',
+        stylesheet,
+        re.DOTALL,
+    )
+
+    assert rule is not None
+    assert re.search(r'min-height:\s*44px', rule.group('body'))
+    assert re.search(r'min-width:\s*44px', rule.group('body'))
 
 
 def test_public_cooling_candidates_reject_unapproved_category(

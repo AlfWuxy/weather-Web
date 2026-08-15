@@ -1739,6 +1739,7 @@ def render_cooling_resources_page(
         CoolingResource.name
     ).all()
     all_resources = CoolingResource.query.filter_by(is_active=True).all()
+    cooling_filters_enabled = bool(all_resources)
     candidate_preview = (
         list(cooling_candidates or [])
         if not all_resources
@@ -1775,6 +1776,7 @@ def render_cooling_resources_page(
         cooling_weather_location=weather_location,
         outdoor_temp=outdoor_temp,
         cooling_candidates=candidate_preview,
+        cooling_filters_enabled=cooling_filters_enabled,
     ))
     if not map_points:
         # 没有可计算距离的正式点位时，浏览器不应提供定位能力。

@@ -581,3 +581,124 @@ def test_web_family_member_delete_detaches_pair_and_removes_all_member_records(
     assert retained_pair.status == 'inactive'
     assert retained_pair.member_id is None
     assert refreshed_communities == [{'都昌县'}]
+
+
+def test_family_members_only_prompts_for_unpaired_active_members(
+    authenticated_client,
+    db_session,
+    monkeypatch,
+):
+    """建档页只在仍有家人未加入 active 监测时显示下一步。"""
+    from core.db_models import FamilyMember, Pair
+
+    owner = User.query.filter_by(username='testuser').one()
+    linked_member = FamilyMember(user_id=owner.id, name='已监测家人', relation='母亲')
+    unpaired_member = FamilyMember(user_id=owner.id, name='待监测家人', relation='父亲')
+    db_session.add_all([linked_member, unpaired_member])
+    db_session.flush()
+    db_session.add_all([
+        Pair(
+            caregiver_id=owner.id,
+            member_id=linked_member.id,
+            community_code='都昌县',
+            location_query='都昌县',
+            elder_code='linked-elder',
+            short_code='71111111',
+            status='active',
+        ),
+        Pair(
+            caregiver_id=owner.id,
+            member_id=unpaired_member.id,
+            community_code='都昌县',
+            location_query='都昌县',
+            elder_code='inactive-elder',
+            short_code='72222222',
+            status='inactive',
+        ),
+    ])
+    db_session.commit()
+    monkeypatch.setattr('blueprints.health.ensure_user_location_valid', lambda: '都昌县')
+    monkeypatch.setattr(
+        'blueprints.health.get_weather_with_cache',
+        lambda _location: ({'data_source': 'Demo', 'is_mock': True}, None),
+    )
+
+    pending_response = authenticated_client.get('/family-members')
+
+    assert pending_response.status_code == 200
+    pending_html = pending_response.get_data(as_text=True)
+    assert '还有 1 位家人尚未加入监测' in pending_html
+    assert 'href="/pairs"' in pending_html
+
+    db_session.add(Pair(
+        caregiver_id=owner.id,
+        member_id=unpaired_member.id,
+        community_code='都昌县',
+        location_query='都昌县',
+        elder_code='new-active-elder',
+        short_code='73333333',
+        status='active',
+    ))
+    db_session.commit()
+
+    complete_response = authenticated_client.get('/family-members')
+
+    assert complete_response.status_code == 200
+    assert '尚未加入监测' not in complete_response.get_data(as_text=True)
+
+
+def test_pair_empty_state_explains_three_steps_for_formal_and_web_runtime(
+    app,
+    authenticated_client,
+):
+    """空工作台给出完整三步，正式态只引导微信小程序。"""
+    app.config['WECHAT_FORMAL_RUNTIME'] = True
+    app.config['WEB_PRIVATE_FEATURES_ENABLED'] = True
+
+    formal_response = authenticated_client.get('/pairs')
+
+    assert formal_response.status_code == 200
+    formal_html = formal_response.get_data(as_text=True)
+    assert '按下面三步完成设置' in formal_html
+    assert '1. 建立家人档案' in formal_html
+    assert '2. 添加监测对象' in formal_html
+    assert '3. 微信搜索宜老平安 → 宜老天气通 → 照护选择家人' in formal_html
+    assert '复制网页行动链接' not in formal_html
+
+    app.config['WECHAT_FORMAL_RUNTIME'] = False
+
+    web_response = authenticated_client.get('/pairs')
+
+    assert web_response.status_code == 200
+    web_html = web_response.get_data(as_text=True)
+    assert '按下面三步完成设置' in web_html
+    assert '3. 创建后可把网页行动入口发给家人' in web_html
+
+
+def test_family_member_detail_renders_destructive_delete_form(
+    authenticated_client,
+    db_session,
+    monkeypatch,
+):
+    """详情页明确删除影响，并使用已有 POST 与 CSRF 删除路由。"""
+    from core.db_models import FamilyMember
+
+    owner = User.query.filter_by(username='testuser').one()
+    member = FamilyMember(user_id=owner.id, name='可删除家人', relation='家人')
+    db_session.add(member)
+    db_session.commit()
+    monkeypatch.setattr('blueprints.health.ensure_user_location_valid', lambda: '都昌县')
+    monkeypatch.setattr(
+        'blueprints.health.get_weather_with_cache',
+        lambda _location: ({'data_source': 'Demo', 'is_mock': True}, None),
+    )
+
+    response = authenticated_client.get(f'/family-members/{member.id}')
+
+    assert response.status_code == 200
+    html = response.get_data(as_text=True)
+    assert f'action="/family-members/{member.id}/delete"' in html
+    assert 'method="POST"' in html
+    assert 'name="csrf_token"' in html
+    assert '档案与相关健康记录会被删除' in html
+    assert '关联监测对象会停用并解除' in html

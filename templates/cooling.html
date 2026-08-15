@@ -48,7 +48,9 @@
     </section>
     {% endif %}
 
-    <form method="GET" class="yl-section mb-4 yl-fade-up yl-fade-up-d1">
+    <form method="GET"
+          class="yl-section mb-4 yl-fade-up yl-fade-up-d1"
+          {% if not cooling_filters_enabled %}aria-describedby="coolingFilterAvailability"{% endif %}>
         <div class="row g-3 align-items-end">
             <div class="col-md-5">
                 <label class="form-label" for="coolingCommunity">所在地</label>
@@ -59,12 +61,16 @@
                        value="{{ selected_community or '' }}"
                        placeholder="输入社区名（可选）"
                        autocomplete="off"
-                       list="locOpts">
+                       list="locOpts"
+                       {% if not cooling_filters_enabled %}disabled aria-disabled="true"{% endif %}>
                 <datalist id="locOpts">{% for loc in (communities or location_options or []) %}<option value="{{ loc }}"></option>{% endfor %}</datalist>
             </div>
             <div class="col-md-4">
                 <label class="form-label" for="coolingResourceType">类型</label>
-                <select name="resource_type" id="coolingResourceType" class="form-select">
+                <select name="resource_type"
+                        id="coolingResourceType"
+                        class="form-select"
+                        {% if not cooling_filters_enabled %}disabled aria-disabled="true"{% endif %}>
                     <option value="">全部</option>
                     {% for item_type in (resource_types or []) %}
                     <option value="{{ item_type }}" {% if selected_resource_type == item_type %}selected{% endif %}>{{ item_type }}</option>
@@ -72,9 +78,18 @@
                 </select>
             </div>
             <div class="col-md-3 d-grid">
-                <button class="btn btn-primary"><i class="bi bi-search me-1"></i>查找</button>
+                <button class="btn btn-primary"
+                        id="coolingFilterSubmit"
+                        {% if not cooling_filters_enabled %}disabled aria-disabled="true"{% endif %}>
+                    <i class="bi bi-search me-1"></i>查找
+                </button>
             </div>
         </div>
+        {% if not cooling_filters_enabled %}
+        <p class="text-muted small mt-3 mb-0" id="coolingFilterAvailability" role="status">
+            筛选将在人工核验发布后开放，待核验预览不参与筛选。
+        </p>
+        {% endif %}
     </form>
 
     <section class="yl-section mb-4 yl-fade-up yl-fade-up-d2 cooling-map-panel"
@@ -168,7 +183,11 @@
             <section class="yl-section text-center mb-0">
                 <div style="font-size:2rem; color:var(--yl-orange-500);"><i class="bi bi-geo-alt"></i></div>
                 <h4 class="mt-2" style="font-size:1.05rem;">暂无已发布且完成核验的避暑资源</h4>
+                {% if cooling_filters_enabled %}
                 <p class="text-muted mb-0" style="font-size:.9rem;">当前筛选条件下没有可展示的正式资源。请调整地区或类型，或等待管理员完成现场核验。</p>
+                {% else %}
+                <p class="text-muted mb-0" style="font-size:.9rem;">运营人员完成现场核验并发布后，正式资源、地图点位和筛选功能才会开放。</p>
+                {% endif %}
             </section>
         </div>
         {% endif %}
