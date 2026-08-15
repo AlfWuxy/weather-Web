@@ -143,6 +143,22 @@ def family_members():
 
     members = FamilyMember.query.filter_by(user_id=current_user.id).order_by(FamilyMember.created_at.desc()).all()
     member_ids = [m.id for m in members]
+    active_paired_member_ids = set()
+    if member_ids:
+        # 仅 active 关系代表档案已真正加入当前照护人的监测。
+        active_paired_member_ids = {
+            row[0]
+            for row in Pair.query.with_entities(Pair.member_id).filter(
+                Pair.caregiver_id == current_user.id,
+                Pair.status == 'active',
+                Pair.member_id.in_(member_ids),
+            ).all()
+            if row[0] is not None
+        }
+    unpaired_member_count = sum(
+        1 for member_id in member_ids
+        if member_id not in active_paired_member_ids
+    )
     profiles = []
     if member_ids:
         profiles = FamilyMemberProfile.query.filter(FamilyMemberProfile.member_id.in_(member_ids)).all()
@@ -251,7 +267,8 @@ def family_members():
         risk_chart_labels=risk_chart_labels,
         risk_chart_values=risk_chart_values,
         risk_tag_options=risk_tag_options,
-        chronic_options=chronic_options
+        chronic_options=chronic_options,
+        unpaired_member_count=unpaired_member_count
     )
 
 

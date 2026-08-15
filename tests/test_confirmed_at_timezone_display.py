@@ -198,3 +198,41 @@ def test_confirmed_at_templates_never_format_database_utc_directly():
     assert "status_today.confirmed_at.strftime('%H:%M')" not in caregiver_detail
     assert 'item.confirmed_at_local_display' in pair_management
     assert 'confirmed_at_local_display' in caregiver_detail
+
+
+def test_profile_displays_account_times_in_app_timezone(
+    app,
+    client,
+    db_session,
+):
+    """个人资料页的注册与最后登录时间都应由 UTC 转成应用时区。"""
+    app.config['APP_TIMEZONE'] = 'Asia/Shanghai'
+    user = User(
+        username='profile_timezone_user',
+        role='user',
+        created_at=datetime(2026, 8, 9, 16, 30),
+        last_login=datetime(2026, 8, 9, 4, 0),
+    )
+    user.set_password('profile-timezone-test-password')
+    db_session.add(user)
+    db_session.commit()
+    _login_as(client, user.id)
+
+    response = client.get('/profile')
+
+    assert response.status_code == 200
+    body = response.get_data(as_text=True)
+    assert '2026-08-10' in body
+    assert '2026-08-09 12:00' in body
+
+
+def test_profile_template_never_formats_database_utc_directly():
+    """个人资料模板只消费服务层准备好的本地时间。"""
+    profile_template = (
+        PROJECT_ROOT / 'templates' / 'profile.html'
+    ).read_text(encoding='utf-8')
+
+    assert 'current_user.created_at.strftime' not in profile_template
+    assert 'current_user.last_login.strftime' not in profile_template
+    assert 'created_at_local.strftime' in profile_template
+    assert 'last_login_local.strftime' in profile_template

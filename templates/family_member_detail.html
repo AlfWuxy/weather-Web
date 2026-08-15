@@ -212,5 +212,24 @@
             </div>
         </div>
     </div>
+
+    <div class="card border-danger mt-4">
+        <div class="card-body d-flex flex-column flex-md-row align-items-md-center justify-content-between gap-3">
+            <div>
+                <h6 class="text-danger mb-2">删除家人档案</h6>
+                <p class="mb-0 text-muted">
+                    档案与相关健康记录会被删除，关联监测对象会停用并解除。此操作无法撤销。
+                </p>
+            </div>
+            <form method="POST"
+                  action="{{ url_for('health.family_member_delete', member_id=member.id) }}"
+                  onsubmit="return confirm('确定删除这份家人档案吗？此操作无法撤销。');">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <button type="submit" class="btn btn-outline-danger flex-shrink-0">
+                    <i class="bi bi-trash me-1"></i>删除档案
+                </button>
+            </form>
+        </div>
+    </div>
 </div>
 {% endblock %}

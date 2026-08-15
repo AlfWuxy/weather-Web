@@ -46,6 +46,36 @@
     font-size: 1.2rem;
 }
 
+/* 老人页单独扩大精细控件，避免影响普通页面的信息密度。 */
+body.elder-focus-page .yl-metric-info {
+    width: 44px;
+    height: 44px;
+    min-width: 44px;
+    min-height: 44px;
+}
+
+body.elder-focus-page .navbar-toggler {
+    display: inline-flex;
+    min-width: 44px;
+    min-height: 44px;
+    align-items: center;
+    justify-content: center;
+}
+
+body.elder-focus-page .btn-close {
+    width: 44px;
+    height: 44px;
+    padding: 0;
+    background-size: 16px;
+}
+
+body.elder-focus-page .site-footer nav a {
+    display: inline-flex;
+    min-height: 44px;
+    align-items: center;
+    padding: 4px 10px;
+}
+
 @media (max-width: 680px) {
     .yl-elder-score-line {
         align-items: flex-start;

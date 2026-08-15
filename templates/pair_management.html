@@ -51,7 +51,7 @@
                     </div>
                 </div>
                 <div class="card-body">
-                    <form method="POST" action="{{ pair_create_action or url_for('user.pair_management') }}">
+                    <form id="pairCreateForm" method="POST" action="{{ pair_create_action or url_for('user.pair_management') }}">
                         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                         <div class="mb-3">
                             <label class="form-label">关联老人档案（可选）</label>
@@ -267,7 +267,18 @@
                         </div>
                         <div class="text-muted small mt-3">升级链仅记录状态，请结合实际情况与社区沟通。</div>
                     {% else %}
-                        <div class="text-muted">暂无监测对象，请先在左侧添加老人并设置所在地。</div>
+                        <div class="alert alert-info mb-0">
+                            <div class="fw-semibold mb-2">暂无监测对象，按下面三步完成设置：</div>
+                            <ol class="list-unstyled mb-0">
+                                <li class="mb-2">1. 建立家人档案，可在<a href="{{ url_for('health.family_members') }}">家庭成员</a>中补充慢病信息。</li>
+                                <li class="mb-2">2. 添加监测对象，在左侧选择家人并填写所在地。</li>
+                                {% if config.get('WECHAT_FORMAL_RUNTIME') %}
+                                    <li>3. 微信搜索宜老平安 → 宜老天气通 → 照护选择家人。</li>
+                                {% else %}
+                                    <li>3. 创建后可把网页行动入口发给家人，完成今日确认或求助。</li>
+                                {% endif %}
+                            </ol>
+                        </div>
                     {% endif %}
                 </div>
             </div>

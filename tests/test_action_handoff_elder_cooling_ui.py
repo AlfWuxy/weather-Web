@@ -197,7 +197,61 @@ def test_elder_page_prioritizes_risk_and_confirms_calls(
     assert '直接联系 家人小吴' in body
     assert '紧急情况直接拨打 120' in body
     assert '回到今天' in body
+    assert re.search(
+        r'class="btn btn-outline-primary btn-lg" href="/elder-mode"[^>]*>.*?回到今天',
+        body,
+        re.DOTALL,
+    )
+    assert body.count('href="/elder-mode" data-nav-key="today"') == 2
+    assert re.search(
+        r'class="nav-link active"\s+href="/elder-mode" data-nav-key="today"\s+aria-current="page">今天</a>',
+        body,
+    )
+    assert body.count('href="/elder-mode" data-nav-key="today" aria-current="page"') == 1
     assert '/static/css/elder-fix.css' in body
+
+    family_response = client.get('/dashboard')
+    family_body = family_response.get_data(as_text=True)
+    assert family_response.status_code == 200
+    assert family_body.count('href="/dashboard" data-nav-key="today"') == 2
+
+
+def test_mobile_touch_target_styles_cover_controls_without_expanding_body_links():
+    polish_css = (
+        PROJECT_ROOT / 'static/css/apple-polish.css'
+    ).read_text(encoding='utf-8')
+    elder_css = (
+        PROJECT_ROOT / 'static/css/elder-fix.css'
+    ).read_text(encoding='utf-8')
+
+    assert '@media (max-width: 767.98px)' in polish_css
+    assert '.btn {' in polish_css
+    assert 'min-width: 44px;' in polish_css
+    assert 'min-height: 44px;' in polish_css
+    assert '.navbar-toggler {' in polish_css
+    assert '.btn-close {' in polish_css
+    assert '.yl-metric-info {' in polish_css
+    assert '.site-footer nav a,' in polish_css
+    assert '.site-footer p a {' in polish_css
+    assert 'details > summary {' in polish_css
+    assert '.form-check {' in polish_css
+    assert '.form-check-label {' in polish_css
+    assert '.form-check .form-check-input {' in polish_css
+    assert 'width: 24px;' in polish_css
+    form_control_rule = re.search(
+        r'\.form-check \.form-check-input\s*\{(?P<body>.*?)\}',
+        polish_css,
+        re.DOTALL,
+    )
+    assert form_control_rule is not None
+    assert 'opacity:' not in form_control_rule.group('body')
+    assert '.page-shell a {' not in polish_css
+    assert 'main a {' not in polish_css
+
+    assert 'body.elder-focus-page .yl-metric-info {' in elder_css
+    assert 'body.elder-focus-page .navbar-toggler {' in elder_css
+    assert 'body.elder-focus-page .btn-close {' in elder_css
+    assert 'body.elder-focus-page .site-footer nav a {' in elder_css
 
 
 def test_formal_wechat_template_uses_miniprogram_copy_label():

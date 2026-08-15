@@ -27,7 +27,8 @@
 
 .cooling-locate-button {
     flex: 0 0 auto;
-    min-height: 42px;
+    min-width: 44px;
+    min-height: 44px;
 }
 
 .cooling-map-canvas {
