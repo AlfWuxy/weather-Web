@@ -22,12 +22,12 @@ def validate_username(username):
     return True, username
 
 
-def validate_password(password):
-    """验证密码：至少6位"""
+def validate_password(password, min_length=6):
+    """验证密码：至少 min_length 位（默认 6）。"""
     if not password or not isinstance(password, str):
         return False, '密码不能为空'
-    if len(password) < 6:
-        return False, '密码长度至少6位'
+    if len(password) < min_length:
+        return False, f'密码长度至少{min_length}位'
     if len(password) > 100:
         return False, '密码长度不能超过100位'
     return True, password

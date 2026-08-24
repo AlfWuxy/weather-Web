@@ -11,7 +11,12 @@ logger = logging.getLogger(__name__)
 
 from core.extensions import limiter
 from core.extensions import db
-from core.security import rate_limit_key
+from core.security import (
+    rate_limit_key,
+    register_limit_is_exempt,
+    register_limit_should_deduct,
+    register_rate_limit_key,
+)
 from core.time_utils import utcnow
 from core.usage import log_usage_event
 from core.db_models import AlertDelivery
@@ -101,6 +106,14 @@ def login():
 
 
 @bp.route('/register', methods=['GET', 'POST'], endpoint='register')
+@limiter.limit(
+    lambda: current_app.config.get('RATE_LIMIT_REGISTER', '5 per hour'),
+    methods=['POST'],
+    key_func=register_rate_limit_key,
+    deduct_when=register_limit_should_deduct,
+    exempt_when=register_limit_is_exempt,
+    override_defaults=False,
+)
 def register():
     """注册"""
     return handle_register()
