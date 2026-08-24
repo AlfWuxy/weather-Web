@@ -187,6 +187,8 @@ def _build_caregiver_message(pair, alert_kind=None, weather_data=None, member=No
 
     lines.append('说明：这是行动提醒，不提供医疗诊断/治疗建议；如明显不适请及时就医。')
     lines.append(f'（可选）行动页：{action_link}  短码：{pair.short_code}')
+    lines.append('可在网页行动页输入短码完成确认。')
+    lines.append('微信小程序也可查看提醒。')
     return '\n'.join([line for line in lines if line])
 
 

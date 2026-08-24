@@ -318,6 +318,8 @@ def community_wechat(community_code):
                     name_line += f'（{item.address_hint}）'
                 message_lines.append(name_line)
         message_lines.append('如需帮助请联系社区服务人员。')
+        message_lines.append('可在网页行动页输入短码完成确认。')
+        message_lines.append('微信小程序也可查看提醒。')
 
     return render_template(
         'community_wechat.html',

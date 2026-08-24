@@ -76,7 +76,9 @@ def _build_weather_waiting_message(pair, action_link):
     location = (pair.location_query or pair.community_code or '').strip()
     lines = [
         '【天气更新中】',
-        '风险等级暂不显示。仍可打开行动页完成安全确认或求助。',
+        '风险等级暂不显示。',
+        '可在网页行动页输入短码完成确认。',
+        '微信小程序也可查看提醒。',
     ]
     if location:
         lines.append(f'地点：{location}')
@@ -582,10 +584,14 @@ def caregiver_wechat_template():
         for item in actions:
             message_lines.append(f'- {item["title"]}：{item["detail"]}')
         message_lines.append('如需帮助请在页面内点击“我需要帮助”。')
+        message_lines.append('可在网页行动页输入短码完成确认。')
+        message_lines.append('微信小程序也可查看提醒。')
     else:
         message_lines = [
             '【天气更新中】',
-            '风险等级暂不显示。仍可打开行动页完成安全确认或求助。',
+            '风险等级暂不显示。',
+            '可在网页行动页输入短码完成确认。',
+            '微信小程序也可查看提醒。',
             f'行动链接：{action_link}',
             f'短码：{short_code or "请填写"}',
         ]
