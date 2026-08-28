@@ -644,11 +644,21 @@ def test_scheduled_weather_sync_leaves_usage_event_retention_to_daily_cleanup(
 
     monkeypatch.setattr(pipeline, "app", app)
     monkeypatch.setattr(pipeline, "qweather_runtime_configured", lambda: False)
-    monkeypatch.setattr(
-        pipeline,
-        "WeatherService",
-        lambda: pytest.fail("未配置和风天气时不应启动天气客户端"),
-    )
+    class OpenMeteoUnavailableStub:
+        def get_current_weather(self, *_args, **_kwargs):
+            return {}
+
+        def get_short_term_nowcast(self, *_args, **_kwargs):
+            return {}
+
+        def get_openmeteo_daily_forecast(self, *_args, **_kwargs):
+            return {
+                "success": False,
+                "daily": [],
+                "meta": {"source": "Open-Meteo", "error": "test_unavailable"},
+            }
+
+    monkeypatch.setattr(pipeline, "WeatherService", OpenMeteoUnavailableStub)
     monkeypatch.setattr(pipeline, "refresh_snapshot_from_cycle", lambda *_args, **_kwargs: None)
 
     result = pipeline.sync_weather_cache(update_daily=False)

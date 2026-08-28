@@ -16,7 +16,8 @@ from core.constants import DEFAULT_CITY_LABEL  # noqa: E402
 from core.time_utils import today_local  # noqa: E402
 from core.weather import (  # noqa: E402
     get_weather_with_cache,
-    is_qweather_online_weather,
+    is_qweather_production_ready,
+    normalize_health_model_weather,
     normalize_location_name,
     weather_source_label,
 )
@@ -119,10 +120,10 @@ def precompute_community_risk(app=None, locations=None, window_days_list=None, d
                 location,
                 cache_only=True,
             )
-            if not is_qweather_online_weather(weather_data):
+            if not is_qweather_production_ready(weather_data):
                 summary['weather_skipped'] += 1
                 logger.warning(
-                    "跳过社区风险预计算：非和风真实天气 location=%s source=%s is_mock=%s",
+                    "跳过社区风险预计算：和风实况不满足生产门 location=%s source=%s is_mock=%s",
                     location,
                     weather_source_label(weather_data),
                     weather_data.get('is_mock') if isinstance(weather_data, dict) else None,
@@ -130,6 +131,7 @@ def precompute_community_risk(app=None, locations=None, window_days_list=None, d
                 continue
             if weather_from_cache:
                 summary['weather_cache_hits'] += 1
+            weather_data = normalize_health_model_weather(weather_data)
 
             for window_days in window_days_list:
                 for disease_filter in disease_filters:

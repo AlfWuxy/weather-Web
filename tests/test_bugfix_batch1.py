@@ -41,6 +41,18 @@ def _csrf(client, token='test-csrf'):
     return token
 
 
+def _fresh_weather_times():
+    """返回与当前本地日期一致的上游观测及预报夹具时间。"""
+    from core.time_utils import now_local, today_local
+
+    local_now = now_local()
+    return {
+        'observed': local_now.isoformat(timespec='seconds'),
+        'openmeteo_current': local_now.replace(tzinfo=None).isoformat(timespec='minutes'),
+        'today': today_local().isoformat(),
+    }
+
+
 # ====================================================================
 # #2  修改密码需校验旧密码
 # ====================================================================
@@ -390,16 +402,18 @@ class TestOpenMeteoAqiFlag:
     """Bug #4: Open-Meteo 回退时 AQI/PM2.5 不应标记为真实数据。"""
 
     def test_openmeteo_returns_estimated_aqi(self, app):
-        """正向: Open-Meteo 回退返回 aqi=0, pm25=0, aqi_estimated=True（非伪造的高值）。"""
+        """正向: Open-Meteo 回退保留天气实况，空气质量明确不可用。"""
         from unittest.mock import patch, MagicMock
         with app.app_context():
             from services.weather_service import WeatherService
             ws = WeatherService()
+            times = _fresh_weather_times()
 
             mock_resp = MagicMock()
             mock_resp.status_code = 200
             mock_resp.json.return_value = {
                 'current': {
+                    'time': times['openmeteo_current'],
                     'temperature_2m': 28,
                     'relative_humidity_2m': 65,
                     'surface_pressure': 1010,
@@ -407,6 +421,7 @@ class TestOpenMeteoAqiFlag:
                     'wind_speed_10m': 5,
                 },
                 'daily': {
+                    'time': [times['today']],
                     'temperature_2m_max': [36],
                     'temperature_2m_min': [18],
                 },
@@ -417,10 +432,10 @@ class TestOpenMeteoAqiFlag:
                 result = ws._get_openmeteo_weather('测试城市')
 
             assert result is not None
-            # AQI/PM2.5 应为 0（安全占位），而非之前硬编码的 75/50
-            assert result['aqi'] == 0, "AQI 应为 0（未知），而非硬编码虚假值"
-            assert result['pm25'] == 0, "PM2.5 应为 0（未知），而非硬编码虚假值"
-            assert result.get('aqi_estimated') is True, "应标记为估算数据"
+            assert result['aqi'] is None
+            assert result['pm25'] is None
+            assert result['air_quality_available'] is False
+            assert result['air_observed_at'] is None
             assert result['temperature_max'] == 36
             assert result['temperature_min'] == 18
             assert result.get('temperature_estimated') is False, "应优先采用 daily 的真实高低温"
@@ -434,12 +449,14 @@ class TestOpenMeteoAqiFlag:
             ws = WeatherService()
             ws.qweather_key = 'test_key'
             ws.api_base_url = 'https://unit-test.qweatherapi.com/v7'
+            times = _fresh_weather_times()
 
             mock_resp = MagicMock()
             mock_resp.status_code = 200
             mock_resp.json.return_value = {
                 'code': '200',
                 'now': {
+                    'obsTime': times['observed'],
                     'temp': '30',
                     'humidity': '60',
                     'pressure': '1013',
@@ -458,7 +475,11 @@ class TestOpenMeteoAqiFlag:
             mock_daily.status_code = 200
             mock_daily.json.return_value = {
                 'code': '200',
-                'daily': [{'tempMax': '37', 'tempMin': '19'}]
+                'daily': [{
+                    'fxDate': times['today'],
+                    'tempMax': '37',
+                    'tempMin': '19',
+                }]
             }
 
             with patch('requests.get', side_effect=[mock_resp, mock_daily, mock_air]):
@@ -475,11 +496,13 @@ class TestOpenMeteoAqiFlag:
         with app.app_context():
             from services.weather_service import WeatherService
             ws = WeatherService()
+            times = _fresh_weather_times()
 
             mock_now = MagicMock()
             mock_now.status_code = 200
             mock_now.json.return_value = {
                 'current': {
+                    'time': times['openmeteo_current'],
                     'temperature_2m': 28,
                     'relative_humidity_2m': 65,
                     'surface_pressure': 1010,
@@ -496,10 +519,10 @@ class TestOpenMeteoAqiFlag:
             mock_hourly.json.return_value = {
                 'hourly': {
                     'time': [
-                        '2026-02-17T00:00',
-                        '2026-02-17T06:00',
-                        '2026-02-17T12:00',
-                        '2026-02-17T18:00',
+                        f"{times['today']}T00:00",
+                        f"{times['today']}T06:00",
+                        f"{times['today']}T12:00",
+                        f"{times['today']}T18:00",
                     ],
                     'temperature_2m': [18, 22, 35, 25],
                 }
@@ -522,12 +545,20 @@ class TestOpenMeteoAqiFlag:
             ws = WeatherService()
             ws.qweather_key = 'test_key'
             ws.api_base_url = 'https://unit-test.qweatherapi.com/v7'
+            times = _fresh_weather_times()
 
             mock_now = MagicMock()
             mock_now.status_code = 200
             mock_now.json.return_value = {
                 'code': '200',
-                'now': {'temp': '30', 'humidity': '60', 'pressure': '1013', 'text': '晴', 'windSpeed': '5'}
+                'now': {
+                    'obsTime': times['observed'],
+                    'temp': '30',
+                    'humidity': '60',
+                    'pressure': '1013',
+                    'text': '晴',
+                    'windSpeed': '5',
+                }
             }
             mock_daily_fail = MagicMock()
             mock_daily_fail.status_code = 500
@@ -537,12 +568,12 @@ class TestOpenMeteoAqiFlag:
             mock_hourly.json.return_value = {
                 'code': '200',
                 'hourly': [
-                    {'temp': '18'},
-                    {'temp': '22'},
-                    {'temp': '30'},
-                    {'temp': '35'},
-                    {'temp': '26'},
-                    {'temp': '20'},
+                    {'fxTime': f"{times['today']}T00:00+08:00", 'temp': '18'},
+                    {'fxTime': f"{times['today']}T04:00+08:00", 'temp': '22'},
+                    {'fxTime': f"{times['today']}T08:00+08:00", 'temp': '30'},
+                    {'fxTime': f"{times['today']}T12:00+08:00", 'temp': '35'},
+                    {'fxTime': f"{times['today']}T16:00+08:00", 'temp': '26'},
+                    {'fxTime': f"{times['today']}T20:00+08:00", 'temp': '20'},
                 ]
             }
             mock_air = MagicMock()
@@ -564,13 +595,21 @@ class TestOpenMeteoAqiFlag:
             from services.weather_service import WeatherService
             ws = WeatherService()
             ws.qweather_key = 'test_key'
-            ws.api_base_url = 'https://test.api'
+            ws.api_base_url = 'https://unit-test.qweatherapi.com/v7'
+            times = _fresh_weather_times()
 
             mock_now = MagicMock()
             mock_now.status_code = 200
             mock_now.json.return_value = {
                 'code': '200',
-                'now': {'temp': '30', 'humidity': '60', 'pressure': '1013', 'text': '晴', 'windSpeed': '5'}
+                'now': {
+                    'obsTime': times['observed'],
+                    'temp': '30',
+                    'humidity': '60',
+                    'pressure': '1013',
+                    'text': '晴',
+                    'windSpeed': '5',
+                }
             }
             mock_daily_fail = MagicMock()
             mock_daily_fail.status_code = 500

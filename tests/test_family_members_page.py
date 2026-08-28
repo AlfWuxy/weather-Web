@@ -3,6 +3,8 @@
 
 import json
 
+from core.time_utils import utcnow
+
 
 def _login_as(client, user_id: int, csrf_token='test-csrf-token'):
     with client.session_transaction() as session:
@@ -46,7 +48,23 @@ def test_family_members_page_uses_new_route_and_renders_member_alerts(client, db
     monkeypatch.setattr('blueprints.health.ensure_user_location_valid', lambda: '都昌')
     monkeypatch.setattr(
         'blueprints.health.get_weather_with_cache',
-        lambda location: ({'temperature': 36, 'humidity': 72, 'aqi': 88, 'data_source': 'QWeather', 'is_mock': False}, None),
+        lambda location: ({
+            'temperature': 36,
+            'temperature_max': 38,
+            'temperature_min': 28,
+            'humidity': 72,
+            'pressure': 1002,
+            'weather_condition': '晴',
+            'wind_speed': 2.0,
+            'aqi': 88,
+            'pm25': 42,
+            'observed_at': utcnow().isoformat(),
+            'air_observed_at': utcnow().isoformat(),
+            'air_quality_available': True,
+            'quality_version': 1,
+            'data_source': 'QWeather',
+            'is_mock': False,
+        }, None),
     )
 
     response = client.get('/family-members')

@@ -110,7 +110,7 @@ def test_switching_real_accounts_clears_old_state_and_old_remember_cookie(
     response = _login(client, second.username, remember=False, csrf=csrf)
 
     assert response.status_code in (301, 302, 303)
-    assert response.headers["Location"].endswith("/dashboard")
+    assert response.headers["Location"].endswith("/pairs")
     assert "remember_token=;" in _cookie_headers(response)
     with client.session_transaction() as flask_session:
         _assert_identity_state_removed(flask_session)
@@ -140,7 +140,7 @@ def test_guest_to_real_login_removes_guest_identity_and_pair_state(client, db_se
     response = _login(client, user.username, csrf=csrf)
 
     assert response.status_code in (301, 302, 303)
-    assert response.headers["Location"].endswith("/dashboard")
+    assert response.headers["Location"].endswith("/pairs")
     with client.session_transaction() as flask_session:
         _assert_identity_state_removed(flask_session)
         _assert_csrf_and_flash_preserved(flask_session, csrf)

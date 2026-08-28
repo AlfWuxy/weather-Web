@@ -78,11 +78,15 @@ def test_community_service():
             'chronic_disease_ratio': 0.2,
             'green_space_ratio': 0.1
         })
-        print(f'   ✅ 脆弱性指数: VI={vi["vulnerability_index"]:.2f} ({vi["level"]})')
+        assert vi['vulnerability_index'] is None
+        assert vi['ranking_eligible'] is False
+        assert {'heat_island_index', 'medical_accessibility'} <= set(vi['missing_fields'])
+        print(f'   ✅ 脆弱性门禁: {vi["level"]}（不生成伪分数）')
         
         # 测试风险地图生成
         result = cs.generate_community_risk_map({'temperature': 30})
-        print(f'   ✅ 风险地图生成: {len(result.get("rankings", []))}个社区排名')
+        ranked = int((result.get('summary') or {}).get('ranked_communities') or 0)
+        print(f'   ✅ 风险地图门禁: {ranked}个社区具备排名证据')
         
         return
     except Exception as e:

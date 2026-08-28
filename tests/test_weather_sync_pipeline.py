@@ -25,6 +25,10 @@ VALID_QWEATHER = {
     'wind_speed': 2.0,
     'pm25': 20,
     'aqi': 45,
+    'observed_at': utcnow().isoformat(),
+    'air_observed_at': utcnow().isoformat(),
+    'air_quality_available': True,
+    'quality_version': 1,
     'is_mock': False,
     'data_source': 'QWeather',
 }
@@ -200,9 +204,11 @@ def test_qweather_air_quality_v1_uses_origin_and_lat_lon(monkeypatch):
             'text': '晴',
             'windSpeed': '3',
             'feelsLike': '33',
+            'obsTime': utcnow().isoformat(),
         },
     })
     air_response = _Response(200, {
+        'now': {'pubTime': utcnow().isoformat()},
         'indexes': [
             {'code': 'cn-mee-1h', 'aqi': 99, 'category': '良'},
             {'code': 'qaqi', 'aqi': 2.4, 'category': 'Good'},
@@ -235,6 +241,8 @@ def test_qweather_air_quality_v1_uses_origin_and_lat_lon(monkeypatch):
     assert result['aqi'] == 83
     assert result['pm25'] == 27.5
     assert result['air_quality'] == '良'
+    assert result['air_quality_available'] is True
+    assert result['air_observed_at'] is not None
     assert calls[0][0] == 'https://unit-test.qweatherapi.com/v7/weather/now'
     assert calls[1][0] == 'https://unit-test.qweatherapi.com/airquality/v1/current/29.27/116.20'
     assert calls[0][1]['allow_redirects'] is False
@@ -255,7 +263,12 @@ def test_qweather_air_quality_failure_keeps_weather_available(monkeypatch):
     responses = iter([
         _Response(200, {
             'code': '200',
-            'now': {'temp': '30', 'humidity': '70', 'text': '晴'},
+            'now': {
+                'temp': '30',
+                'humidity': '70',
+                'text': '晴',
+                'obsTime': utcnow().isoformat(),
+            },
         }),
         _Response(403, {}),
     ])
@@ -302,7 +315,7 @@ def test_qweather_air_quality_does_not_use_generic_qaqi(monkeypatch):
 
     result = service._get_qweather_air_quality('116.20,29.27')
 
-    assert result == {'pm25': 18.0}
+    assert result == {}
 
 
 def test_qweather_air_quality_budget_guard_skips_http(monkeypatch):
@@ -407,7 +420,7 @@ def test_sync_daily_weather_writes_complete_qweather(
     assert result['weather_source'] == 'QWeather'
     record = WeatherData.query.filter_by(
         date=target_date,
-        location='同步测试社区',
+        location='都昌县',
     ).one()
     assert record.temperature_max == 40.0
     assert record.temperature_min == 29.0
@@ -683,7 +696,7 @@ def test_sync_action_daily_refreshes_projection_locks_in_sorted_order(
     result = pipeline.sync_action_daily(target_date=target_date)
 
     assert result['processed_communities'] == 3
-    assert weather_calls == ['都昌']
+    assert weather_calls == ['都昌县']
     assert refresh_calls == [
         (code, target_date, False)
         for code in sorted(insertion_order)
@@ -812,7 +825,7 @@ def test_sync_action_daily_sync_first_serializes_pair_stop(
 
     assert not writer.is_alive()
     assert not stopper.is_alive()
-    assert weather_calls == ['都昌']
+    assert weather_calls == ['都昌县']
     assert outcome['sync']['updated'] == 1
     assert outcome['stopped'] is True
     db_session.expire_all()

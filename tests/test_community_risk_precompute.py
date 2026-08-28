@@ -1,8 +1,27 @@
 # -*- coding: utf-8 -*-
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 import json
 
 import pytest
+
+
+def _trusted_weather(temperature=31.0, **overrides):
+    payload = {
+        'temperature': temperature,
+        'temperature_max': temperature + 3,
+        'temperature_min': temperature - 5,
+        'humidity': 70,
+        'pressure': 1005,
+        'wind_speed': 1.8,
+        'weather_condition': '晴',
+        'aqi': 60,
+        'data_source': 'QWeather',
+        'observed_at': datetime.now(timezone.utc).isoformat(),
+        'quality_version': 1,
+        'is_mock': False,
+    }
+    payload.update(overrides)
+    return payload
 
 
 def test_precompute_community_risk_builds_and_reuses_cache(app, monkeypatch):
@@ -32,7 +51,7 @@ def test_precompute_community_risk_builds_and_reuses_cache(app, monkeypatch):
     def fake_get_weather_with_cache(location, cache_only=False):
         calls['weather'] += 1
         calls['cache_only'].append(cache_only)
-        return ({'temperature': 31.0, 'humidity': 70, 'aqi': 60, 'data_source': 'QWeather', 'is_mock': False}, True)
+        return (_trusted_weather(), True)
 
     monkeypatch.setattr('services.pipelines.precompute_community_risk.get_weather_with_cache', fake_get_weather_with_cache)
     monkeypatch.setattr('services.pipelines.precompute_community_risk.get_community_service', lambda: FakeCommunityService())

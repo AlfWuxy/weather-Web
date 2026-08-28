@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 """注册与限流响应的回归契约。"""
 
+from urllib.parse import parse_qs, urlparse
+
 from core.db_models import User
 
 
@@ -93,6 +95,50 @@ def test_register_missing_confirmation_is_rejected(app, client, db_session):
     assert response.status_code in (301, 302, 303)
     assert response.headers['Location'].endswith('/register')
     assert User.query.filter_by(username='confirm_missing').first() is None
+
+
+def test_web_registration_creates_caregiver_and_guides_login_to_pairs(
+    app,
+    client,
+    db_session,
+):
+    app.config['WECHAT_FORMAL_RUNTIME'] = False
+    app.config['WEB_PRIVATE_FEATURES_ENABLED'] = True
+    csrf = _csrf(client, 'register-caregiver-csrf')
+
+    response = _post_register(
+        client,
+        csrf,
+        _registration_data('new_caregiver_role'),
+        remote_addr='198.51.100.33',
+    )
+
+    assert response.status_code in (301, 302, 303)
+    location = urlparse(response.headers['Location'])
+    assert location.path.endswith('/login')
+    assert parse_qs(location.query).get('next') == ['/pairs']
+    created = User.query.filter_by(username='new_caregiver_role').one()
+    assert created.role == 'caregiver'
+
+
+def test_empty_community_table_uses_free_text_location_with_suggestions(
+    app,
+    client,
+    db_session,
+):
+    from core.db_models import Community
+
+    Community.query.delete()
+    db_session.commit()
+
+    body = client.get('/register').get_data(as_text=True)
+
+    assert 'name="community" list="locationSuggestions"' in body
+    assert '例如：都昌县 / 牛家垄周村' in body
+    assert '这里的年龄和性别属于照护者账号' in body
+    assert '老人的年龄、慢病和称呼' in body
+    for location in app.config['COMMUNITY_COORDS_GCJ']:
+        assert f'value="{location}"' in body
 
 
 def test_empty_registration_reports_all_required_fields_in_chinese(

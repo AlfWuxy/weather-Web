@@ -11,13 +11,17 @@ from core.time_utils import today_local
 from core.weather import (
     ensure_user_location_valid,
     get_location_options,
+    get_openmeteo_forecast_with_cache,
     get_qweather_forecast_with_cache,
     get_weather_with_cache,
-    is_qweather_online_weather,
+    normalize_health_model_weather,
     normalize_location_name,
 )
 from services.chronic_risk_service import get_chronic_service
-from services.forecast_cards import build_forecast_cards
+from services.forecast_cards import (
+    build_forecast_cards,
+    build_weather_only_forecast_cards,
+)
 from services.forecast_service import get_forecast_service
 from services.ml_prediction_service import get_ml_service
 from utils.parsers import parse_float, parse_int
@@ -103,11 +107,12 @@ def _format_qweather_update_time(raw_value):
 
 def _forecast_weather_context(weather_data):
     """仅把真实和风实况中的有限空气质量值传给未来日风险计算。"""
-    if not is_qweather_online_weather(weather_data):
+    normalized = normalize_health_model_weather(weather_data)
+    if normalized is None:
         return {}
     context = {}
     for field in ('pm25', 'aqi'):
-        value = parse_float((weather_data or {}).get(field))
+        value = parse_float(normalized.get(field))
         if value is not None and math.isfinite(value):
             context[field] = value
     return context
@@ -265,14 +270,15 @@ def ml_prediction():
         }
 
         weather_info, _ = get_weather_with_cache(form_state['location'])
-        if not is_qweather_online_weather(weather_info):
+        health_weather = normalize_health_model_weather(weather_info)
+        if health_weather is None:
             prediction_error = '天气正在更新，类别线索暂不显示。请稍后再试。'
         else:
             user_info = {
                 'age': form_state['age'],
                 'gender': default_gender,
             }
-            result = get_ml_service().predict_disease_risk(user_info, weather_info)
+            result = get_ml_service().predict_disease_risk(user_info, health_weather)
             if result.get('success'):
                 prediction = []
                 for rank, item in enumerate((result.get('predictions') or [])[:3], start=1):
@@ -292,7 +298,7 @@ def ml_prediction():
                         'weather_multiplier': round(float(multiplier), 3),
                         'label': f'关注排序第 {rank}',
                     })
-                factors = _build_ml_factor_cards(result, form_state['age'], weather_info)
+                factors = _build_ml_factor_cards(result, form_state['age'], health_weather)
             else:
                 prediction_error = result.get('error') or '预测暂时不可用，请稍后再试。'
 
@@ -311,13 +317,21 @@ def ml_prediction():
 def ai_qa():
     """AI问答页面"""
     models = current_app.config.get('AI_ALLOWED_MODELS', [])
-    return render_template('ai_question.html', models=models)
+    ai_available = bool(
+        current_app.config.get('FEATURE_WEB_AI')
+        and current_app.config.get('SILICONFLOW_API_KEY')
+    )
+    return render_template(
+        'ai_question.html',
+        models=models,
+        ai_available=ai_available,
+    )
 
 
 @bp.route('/forecast-7day', endpoint='forecast_7day')
 @login_required
 def forecast_7day():
-    """7天健康预测页面"""
+    """7天预报页面；请求只读后台缓存，健康模型仅使用和风完整输入。"""
     current_location = _normalized_location(request.args.get('location'))
     start_date = today_local()
     forecast_days = []
@@ -326,38 +340,58 @@ def forecast_7day():
     forecast_meta = {'source': 'QWeather'}
     qweather_days, from_cache, forecast_meta = get_qweather_forecast_with_cache(current_location, days=7)
     forecast_meta = dict(forecast_meta or {})
-    forecast_meta['source_label'] = '和风天气'
-    forecast_meta['from_cache'] = bool(from_cache)
-    forecast_meta['update_time_label'] = _format_qweather_update_time(forecast_meta.get('update_time'))
 
-    if len(qweather_days or []) < 7:
-        forecast_error = '7 天天气正在更新，预报暂不显示。请稍后重试。'
-    else:
+    if len(qweather_days or []) >= 7:
+        forecast_meta['source'] = 'QWeather'
+        forecast_meta['source_label'] = '和风天气'
+        forecast_meta['from_cache'] = bool(from_cache)
+        forecast_meta['update_time_label'] = _format_qweather_update_time(
+            forecast_meta.get('update_time') or forecast_meta.get('fetched_at')
+        )
         health_forecasts = []
-        current_weather, _ = get_weather_with_cache(current_location)
-        weather_context = _forecast_weather_context(current_weather)
-        try:
-            health_forecasts, summary = get_forecast_service().generate_7day_forecast(
-                qweather_days,
-                start_date=start_date,
-                context=weather_context,
-            )
-            recommendations = (summary or {}).get('recommendations') or []
-            if recommendations:
-                weekly_tips = [
-                    {
-                        'icon': 'lightbulb',
-                        'title': item.get('category') or item.get('priority') or '健康提醒',
-                        'detail': item.get('advice') or item.get('description') or '',
-                    }
-                    for item in recommendations[:4]
-                    if isinstance(item, dict)
-                ] or None
-        except Exception as exc:
-            current_app.logger.warning("7天健康预测生成失败，仅展示和风天气: %s", exc)
+        if forecast_meta.get('stale') is not True:
+            current_weather, _ = get_weather_with_cache(current_location)
+            weather_context = _forecast_weather_context(current_weather)
+            try:
+                health_forecasts, summary = get_forecast_service().generate_7day_forecast(
+                    qweather_days,
+                    start_date=start_date,
+                    context=weather_context,
+                )
+                recommendations = (summary or {}).get('recommendations') or []
+                if recommendations:
+                    weekly_tips = [
+                        {
+                            'icon': 'lightbulb',
+                            'title': item.get('category') or item.get('priority') or '健康提醒',
+                            'detail': item.get('advice') or item.get('description') or '',
+                        }
+                        for item in recommendations[:4]
+                        if isinstance(item, dict)
+                    ] or None
+            except Exception as exc:
+                current_app.logger.warning("7天健康预测生成失败，仅展示和风天气: %s", exc)
         forecast_days = build_forecast_cards(qweather_days, health_forecasts, start_date)
-        if not forecast_days:
-            forecast_error = '7 天天气正在更新，预报暂不显示。请稍后重试。'
+    else:
+        openmeteo_days, from_cache, forecast_meta = get_openmeteo_forecast_with_cache(
+            current_location,
+            days=7,
+        )
+        forecast_meta = dict(forecast_meta or {})
+        forecast_meta['source'] = 'Open-Meteo'
+        forecast_meta['source_label'] = 'Open-Meteo'
+        forecast_meta['from_cache'] = bool(from_cache)
+        forecast_meta['update_time_label'] = _format_qweather_update_time(
+            forecast_meta.get('update_time') or forecast_meta.get('fetched_at')
+        )
+        if len(openmeteo_days or []) >= 7:
+            forecast_days = build_weather_only_forecast_cards(
+                openmeteo_days,
+                start_date,
+            )
+
+    if not forecast_days:
+        forecast_error = '7 天天气正在更新，预报暂不显示。请稍后重试。'
 
     return render_template(
         'forecast_7day.html',
@@ -400,7 +434,8 @@ def chronic_risk():
         }
 
         weather_data, _ = get_weather_with_cache(ensure_user_location_valid())
-        if not is_qweather_online_weather(weather_data):
+        health_weather = normalize_health_model_weather(weather_data)
+        if health_weather is None:
             risk_error = '天气正在更新，慢病风险提示暂不显示。请稍后再试。'
         else:
             vitals = _parse_chronic_vitals(form_state)
@@ -413,7 +448,7 @@ def chronic_risk():
                     'sbp': vitals.get('sbp'),
                     'fbg': vitals.get('fbg'),
                 },
-                weather_data,
+                health_weather,
             )
 
             overall = result.get('overall_risk') or {}

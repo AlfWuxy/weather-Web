@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 import json
 
+from core.time_utils import utcnow
+
 
 def _dummy_weather_payload():
     return {
@@ -13,6 +15,10 @@ def _dummy_weather_payload():
         'wind_speed': 1.8,
         'pm25': 20,
         'aqi': 40,
+        'observed_at': utcnow().isoformat(),
+        'air_observed_at': utcnow().isoformat(),
+        'air_quality_available': True,
+        'quality_version': 1,
         'is_mock': True,
         'data_source': 'Mock'
     }
@@ -57,6 +63,7 @@ class DummyWeatherFetcher:
                     'temperature_mean': 22,
                     'humidity': 70,
                     'condition': '阴',
+                    'wind_speed': 2.0,
                     'data_source': 'QWeather',
                     'is_mock': False,
                 }
@@ -268,6 +275,8 @@ def test_qweather_only_forecast_ignores_stale_date_cache(app, db_session):
                 'temperature_min': 24,
                 'temperature_mean': 27.5,
                 'humidity': 70,
+                'condition': '多云',
+                'wind_speed': 2.0,
                 'data_source': 'QWeather',
                 'is_mock': False,
             }
@@ -387,7 +396,11 @@ def test_cycle_forecast_persists_and_reuses_forecast_cache(app, db_session, monk
         app.extensions['redis_client'] = None
         monkeypatch.setattr(
             'services.warning_service.get_qweather_warnings_result',
-            lambda _location: {'available': True, 'status': 'ok', 'warnings': []},
+            lambda _location, **_kwargs: {
+                'available': True,
+                'status': 'ok',
+                'warnings': [],
+            },
         )
         fetcher = DummyWeatherFetcher()
         current = dict(_dummy_weather_payload(), is_mock=False, data_source='QWeather')

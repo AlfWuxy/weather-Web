@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 
 {% block title %}家庭信任网络与天气提醒｜宜老天气通{% endblock %}
-{% block meta_description %}了解宜老天气通如何通过子女和家属这一可信节点，把都昌天气预警转成老人更容易执行和跟进的行动提醒。{% endblock %}
+{% block meta_description %}了解宜老天气通如何提供家属转述、行动确认和后续跟进入口。{% endblock %}
 
 {% block content %}
 <div class="container my-4">
@@ -11,8 +11,8 @@
         <div class="card-body p-4">
           <h1 class="h2 mb-3"><i class="bi bi-diagram-3"></i> 为什么天气防护需要家人参与？</h1>
           <p class="text-muted">
-            天气风险信息从“看见”到“做到”，往往需要熟悉的人解释、提醒和跟进。
-            宜老天气通把公开风险、简短行动话术和家庭记录入口放在同一条流程中，帮助家属通过<strong>信任网络</strong>转述当天能执行的防护建议。
+            本工具采用一项待观察的设计假设：部分老人收到家属转述的天气行动建议时，可能更容易理解并采取行动。
+            宜老天气通把公开风险、简短行动话术和家庭记录入口放在同一条流程中，同时保留老人直接使用大字今日页和行动短码的入口。
           </p>
 
           <div class="row g-3 mt-1">
@@ -48,9 +48,11 @@
       </div>
 
       <div class="d-flex flex-wrap gap-2 mt-3">
-        <a class="btn btn-primary" href="{{ url_for('user.pair_management') }}">
-          <i class="bi bi-people"></i> 登录后管理家庭照护
-        </a>
+        {% if current_user.is_authenticated and current_user.role == 'community' %}
+          <a class="btn btn-primary" href="{{ url_for('public.role_entry') }}"><i class="bi bi-diagram-3"></i> 查看家庭账号入口</a>
+        {% else %}
+          <a class="btn btn-primary" href="{{ url_for('user.pair_management') }}"><i class="bi bi-people"></i> 登录后管理家庭照护</a>
+        {% endif %}
         <a class="btn btn-outline-secondary" href="{{ url_for('public.index') }}">返回首页</a>
       </div>
     </div>

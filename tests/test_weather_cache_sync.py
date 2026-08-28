@@ -519,6 +519,60 @@ def test_dispatch_accepts_complete_qweather_cycle():
     ) is True
 
 
+def test_health_weather_masks_stale_raw_air_and_rejects_openmeteo(app):
+    from core.time_utils import utcnow
+    from core.weather import normalize_health_model_weather
+    from services.weather_service import WeatherService
+
+    now = utcnow()
+    base = {
+        "temperature": 30,
+        "temperature_max": 34,
+        "temperature_min": 24,
+        "humidity": 65,
+        "pressure": 1005,
+        "wind_speed": 2.5,
+        "weather_condition": "多云",
+        "observed_at": now.isoformat(),
+        "quality_version": 1,
+        "data_source": "QWeather",
+        "is_mock": False,
+    }
+    stale_air = {
+        **base,
+        "aqi": 300,
+        "pm25": 180,
+        "air_quality_available": True,
+        "air_observed_at": (now - timedelta(hours=3)).isoformat(),
+    }
+    openmeteo = {
+        **base,
+        "data_source": "Open-Meteo",
+        "aqi": 300,
+        "pm25": 180,
+        "air_quality_available": True,
+        "air_observed_at": now.isoformat(),
+    }
+
+    with app.app_context():
+        app.config.update(
+            WEATHER_OBSERVATION_MAX_AGE_MINUTES=120,
+            AIR_QUALITY_OBSERVATION_MAX_AGE_MINUTES=120,
+        )
+        normalized = normalize_health_model_weather(stale_air)
+        assert normalized is not None
+        assert normalized["aqi"] is None
+        assert normalized["pm25"] is None
+        assert normalized["air_quality_available"] is False
+        assert normalize_health_model_weather(openmeteo) is None
+        extreme = WeatherService().identify_extreme_weather(stale_air)
+
+    assert all(
+        "空气污染" not in item.get("type", "")
+        for item in extreme["conditions"]
+    )
+
+
 def test_force_refresh_does_not_reuse_29_minute_forecast(
     app,
     db_session,
@@ -538,9 +592,11 @@ def test_force_refresh_does_not_reuse_29_minute_forecast(
                 "forecast_date": (start + timedelta(days=index)).isoformat(),
                 "temperature_max": temperature,
                 "temperature_min": 20,
-                "temperature_mean": (temperature + 20) / 2,
-                "humidity": 60,
-                "data_source": "QWeather",
+                    "temperature_mean": (temperature + 20) / 2,
+                    "humidity": 60,
+                    "wind_speed": 2.5,
+                    "condition": "多云",
+                    "data_source": "QWeather",
                 "is_mock": False,
             }
             for index in range(7)
@@ -591,6 +647,68 @@ def test_force_refresh_does_not_reuse_29_minute_forecast(
     assert data[0]["temperature_max"] == 39
     assert meta["fetched_at"] == fixed_now.isoformat()
     assert meta["expires_at"] == (fixed_now + timedelta(minutes=30)).isoformat()
+
+
+def test_openmeteo_forecast_http_path_is_cache_only(
+    app,
+    db_session,
+):
+    from core import weather
+    from core.db_models import ForecastCache
+    from core.time_utils import today_local, utcnow
+
+    start = today_local()
+    cached_days = [
+        {
+            "date": (start + timedelta(days=index)).isoformat(),
+            "forecast_date": (start + timedelta(days=index)).isoformat(),
+            "temperature_max": 31 + index,
+            "temperature_min": 22 + index,
+            "temperature_mean": 26.5 + index,
+            "condition": "多云",
+            "precip_probability": 20,
+            "humidity": None,
+            "wind_speed": None,
+            "data_source": "Open-Meteo",
+            "is_mock": False,
+        }
+        for index in range(7)
+    ]
+    db_session.add(
+        ForecastCache(
+            location="openmeteo-only:都昌县",
+            days=7,
+            fetched_at=utcnow(),
+            payload=json.dumps(
+                {
+                    "daily": cached_days,
+                    "meta": {"source": "Open-Meteo"},
+                },
+                ensure_ascii=False,
+            ),
+            is_mock=False,
+        )
+    )
+    db_session.commit()
+
+    class ForbiddenFetcher:
+        def get_openmeteo_daily_forecast(self, *_args, **_kwargs):
+            pytest.fail("HTTP 请求路径不得直连 Open-Meteo")
+
+    app.config["DEMO_MODE"] = False
+    with app.test_request_context("/forecast-7day"):
+        data, from_cache, meta = weather.get_openmeteo_forecast_with_cache(
+            "都昌县",
+            days=7,
+            cache_only=False,
+            fetcher=ForbiddenFetcher(),
+            force_refresh=True,
+        )
+
+    assert from_cache is True
+    assert len(data) == 7
+    assert data[0]["data_source"] == "Open-Meteo"
+    assert meta["source"] == "Open-Meteo"
 
 
 def test_snapshot_expiry_uses_earliest_required_source(app, db_session):

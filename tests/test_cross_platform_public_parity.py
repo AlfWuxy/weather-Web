@@ -9,13 +9,18 @@ import json
 import pytest
 
 
+FIXED_NOW = datetime.now(timezone.utc).replace(microsecond=0)
 CURRENT = {
     "temperature": 36.0,
     "temperature_max": 38.0,
     "temperature_min": 28.0,
     "humidity": 72.0,
+    "pressure": 1002.0,
     "weather_condition": "晴",
+    "wind_speed": 2.0,
     "consecutive_hot_days": 3,
+    "observed_at": FIXED_NOW.isoformat(),
+    "quality_version": 1,
     "is_mock": False,
     "data_source": "QWeather",
 }
@@ -26,9 +31,6 @@ WARNINGS = [
         "text": "午后减少户外活动。",
     }
 ]
-FIXED_NOW = datetime(2026, 7, 31, 4, 0, tzinfo=timezone.utc)
-
-
 def _action_snapshot():
     return {
         "snapshot_id": "snapshot-contract-001",

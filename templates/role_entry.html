@@ -7,7 +7,7 @@
     <div class="row mb-3">
         <div class="col-12">
             <h2><i class="bi bi-diagram-3"></i> 选择适合你的入口</h2>
-            <p class="text-muted mb-0">老人看今天行动，家属跟进提醒，社区人员安排走访和资源。</p>
+            <p class="text-muted mb-0">行动短码用于确认或求助，大字今日页用于阅读今天的风险和行动；家属与社区入口各自处理跟进。</p>
         </div>
     </div>
 
@@ -19,17 +19,20 @@
                         <div class="icon-box bg-primary bg-opacity-10 text-primary rounded p-2 me-2">
                             <i class="bi bi-person"></i>
                         </div>
-                        <h5 class="mb-0">老人自用</h5>
+                        <h5 class="mb-0">老人行动短码</h5>
                     </div>
                     <p class="text-muted small flex-grow-1">
                         {% if config.get('WECHAT_FORMAL_RUNTIME') %}
                             在微信搜索“宜老平安”，进入“宜老天气通”的“行动”查看今天怎么做；家属可在“照护”中选择家人。
                         {% else %}
-                            如果老人会用手机，可用照护码完成今日确认或求助；家属也能代为记录。
+                            已收到家属提供的行动码时，从这里输入短码，完成今日确认或记录求助。
                         {% endif %}
                     </p>
                     <a class="btn btn-outline-primary w-100" data-entry-key="elder" href="{{ elder_target }}">
-                        查看今天行动
+                        进入行动短码
+                    </a>
+                    <a class="btn btn-link w-100 mt-2" data-entry-key="elder-mode" href="{{ url_for('public.guest_login', next=url_for('user.elder_dashboard')) if not current_user.is_authenticated else url_for('user.elder_dashboard') }}">
+                        打开大字今日页
                     </a>
                 </div>
             </div>
@@ -46,12 +49,20 @@
                     <p class="text-muted small flex-grow-1">
                         关注家人所在地，查看风险提醒，复制沟通话术并跟进行动。
                     </p>
-                    {% if caregiver_requires_login %}
+                    {% if current_user.is_authenticated and current_user.role == 'community' %}
+                        <div class="text-muted small mb-2">当前是社区账号。家庭照护需使用家庭账号登录。</div>
+                    {% elif caregiver_requires_login %}
                         <div class="text-muted small mb-2">需登录后进入照护工作台。</div>
                     {% endif %}
+                    {% if current_user.is_authenticated and current_user.role == 'community' %}
+                    <span class="btn btn-secondary disabled w-100" data-entry-key="care" aria-disabled="true">
+                        家庭账号入口
+                    </span>
+                    {% else %}
                     <a class="btn btn-success w-100" data-entry-key="care" href="{{ caregiver_target }}">
                         {{ caregiver_action_label }}
                     </a>
+                    {% endif %}
                 </div>
             </div>
         </div>
@@ -66,7 +77,7 @@
                     </div>
                     <p class="text-muted small flex-grow-1">查看哪些社区需要优先提醒、走访和安排避暑资源。</p>
                     {% if community_requires_login %}
-                        <div class="text-muted small mb-2">需登录后进入社区看板。</div>
+                        <div class="text-muted small mb-2">登录后可查看公开风险；社区工作台需管理员开通角色。</div>
                     {% endif %}
                     <a class="btn btn-outline-info w-100" data-entry-key="community" href="{{ community_target }}">
                         {{ community_action_label }}

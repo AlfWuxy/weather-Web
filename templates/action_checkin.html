@@ -3,20 +3,21 @@
 {% set needs_chartjs = true %}
 {% set web_actions_read_only = web_actions_read_only|default(config.get('WECHAT_FORMAL_RUNTIME', false)) %}
 
-{% block title %}行动打卡 - 天气健康风险预测系统{% endblock %}
+{% block title %}行动短码 · 宜老天气通{% endblock %}
 
 {% block content %}
 <div class="container my-4">
     <div class="row mb-3">
         <div class="col-12">
-            <h2><i class="bi bi-clipboard-check"></i> 行动型热健康预警</h2>
+            <h1 class="h2"><i class="bi bi-clipboard-check"></i> 行动短码</h1>
             {% if web_actions_read_only %}
                 <p class="text-muted mb-0">网页保留公开说明，家庭确认、求助和复盘请在微信小程序完成（不含医疗诊断/治疗建议）。</p>
                 <p class="text-muted small mt-2 mb-0">微信正式版不会在网页读取短码或家庭安全链接。网页不会读取短码、兑换安全链接或写入家庭记录。</p>
             {% else %}
-                <p class="text-muted mb-0">输入短码即可完成今日确认或求助（不含医疗诊断/治疗建议）。</p>
+                <p class="text-muted mb-0">输入家属提供的短码，可记录今日确认或求助状态。本页不提供医疗诊断或治疗建议。</p>
                 <p class="text-muted small mt-2 mb-0">未登录者可使用照护人提供的有效短码或有时效家庭行动安全链接。只有主动提交时，行动确认、求助需求或复盘才会写入对应照护账号；该入口不等于登录，不能查看账号内其他资料。</p>
             {% endif %}
+            <p class="mt-2 mb-0">只想用大字查看今天的天气和行动？<a href="{{ url_for('user.elder_dashboard') if current_user.is_authenticated else url_for('public.guest_login', next=url_for('user.elder_dashboard')) }}">打开大字今日页</a>。</p>
         </div>
     </div>
 
@@ -372,8 +373,8 @@
 
                 <div class="card shadow-sm" id="cooling-resources">
                     <div class="card-header bg-light d-flex align-items-center justify-content-between">
-                        <h6 class="mb-0"><i class="bi bi-sunrise"></i> 附近避暑点</h6>
-                        <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('public.cooling_resources') }}">全部资源</a>
+                        <h6 class="mb-0"><i class="bi bi-sunrise"></i> 本地已录入避暑点</h6>
+                        <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('public.cooling_resources') }}">查看资源</a>
                     </div>
                     <div class="card-body">
                         {% if resources and resources|length > 0 %}
@@ -397,7 +398,7 @@
                                 {% endfor %}
                             </ul>
                         {% else %}
-                            <div class="text-muted">暂无避暑点数据，可由社区管理员维护。</div>
+                            <div class="text-muted">该所在地暂无已录入避暑点，可由社区管理员维护。</div>
                         {% endif %}
                     </div>
                 </div>

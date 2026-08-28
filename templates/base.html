@@ -88,7 +88,7 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/animations.css') }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/page-transitions.css') }}">
-    {% if config.get('FEATURE_WEB_AI') %}
+    {% if config.get('FEATURE_WEB_AI') and config.get('SILICONFLOW_API_KEY') %}
     <link rel="stylesheet" href="{{ url_for('static', filename='css/ai-floating-chat.css') }}">
     {% endif %}
     {# 新的视觉主题,放在最后覆盖旧样式 #}
@@ -103,9 +103,15 @@
 </head>
 <body class="{% block body_class %}{% endblock %}" data-viewport-tier="wide" data-motion="m1 m2 m4 m5">
     {% set nav_endpoint = request.endpoint or '' %}
-    {% set nav_today_url = url_for('user.elder_dashboard') if nav_endpoint == 'user.elder_dashboard' else url_for('user.user_dashboard') %}
-    {% set nav_desktop_today_active = nav_endpoint in ['user.user_dashboard', 'user.elder_dashboard'] %}
-    {% set nav_drawer_today_active = nav_endpoint == 'user.user_dashboard' or (nav_endpoint == 'user.elder_dashboard' and not feature_flags.elder_mode) %}
+    {% if current_user.is_authenticated and current_user.role == 'community' %}
+        {% set nav_today_url = url_for('user.community_risk') %}
+        {% set nav_desktop_today_active = nav_endpoint == 'user.community_risk' %}
+        {% set nav_drawer_today_active = nav_endpoint == 'user.community_risk' %}
+    {% else %}
+        {% set nav_today_url = url_for('user.elder_dashboard') if nav_endpoint == 'user.elder_dashboard' else url_for('user.user_dashboard') %}
+        {% set nav_desktop_today_active = nav_endpoint in ['user.user_dashboard', 'user.elder_dashboard'] %}
+        {% set nav_drawer_today_active = nav_endpoint in ['user.user_dashboard', 'user.elder_dashboard'] %}
+    {% endif %}
     {% set nav_is_guest = current_user.is_authenticated and current_user.role == 'guest' %}
     {% if nav_is_guest or not current_user.is_authenticated %}
         {% set nav_community_risk_url = url_for('public.public_risk') %}
@@ -125,8 +131,8 @@
         {% set nav_care_url = url_for('user.community_dashboard') %}
         {% set nav_care_label = '社区工作台' %}
         {% set nav_care_primary_active = nav_endpoint in ['user.community_dashboard', 'user.community_detail', 'user.community_wechat', 'user.community_announce'] %}
-    {% elif current_user.role in ['caregiver', 'admin'] %}
-        {% set nav_care_url = url_for('user.caregiver_dashboard') %}
+    {% elif current_user.role in ['user', 'caregiver', 'admin'] %}
+        {% set nav_care_url = url_for('user.pair_management') %}
         {% set nav_care_label = '照护' %}
         {% set nav_care_primary_active = nav_endpoint.startswith('user.caregiver') or nav_endpoint.startswith('user.pair_') %}
     {% else %}
@@ -170,7 +176,7 @@
                        href="{{ nav_community_risk_url }}" data-nav-key="community-risk"
                        {% if request.endpoint == nav_community_risk_endpoint %}aria-current="page"{% endif %}>社区风险</a>
 
-                    {% if feature_flags.elder_mode %}
+                    {% if feature_flags.elder_mode and current_user.role != 'community' %}
                         <a class="nav-link {% if request.endpoint == 'user.elder_dashboard' %}active{% endif %}"
                            href="{{ url_for('user.elder_dashboard') }}" data-nav-key="elder"
                            {% if request.endpoint == 'user.elder_dashboard' %}aria-current="page"{% endif %}>老人模式</a>
@@ -202,18 +208,24 @@
                                     <a class="app-mega-link" href="{{ url_for('public.action_check') }}">行动打卡</a>
                                 </section>
 
+                                {% if current_user.role != 'community' %}
                                 <section class="app-mega-group">
                                     <div class="app-mega-kicker">健康</div>
                                     <a class="app-mega-link" href="{{ url_for('user.health_assessment') }}">健康评估</a>
-                                    <a class="app-mega-link" href="{{ url_for('tools.ml_prediction') }}">AI 疾病预测</a>
-                                    <a class="app-mega-link" href="{{ url_for('tools.ai_qa') }}">AI 提问</a>
-                                    <a class="app-mega-link" href="{{ url_for('tools.chronic_risk') }}">慢病风险评估</a>
                                     {% if not nav_is_guest %}
                                         <a class="app-mega-link" href="{{ url_for('health.health_diary') }}">健康日记</a>
                                         <a class="app-mega-link" href="{{ url_for('health.medication_reminders') }}">用药提醒</a>
+                                    {% endif %}
+                                    {% if current_user.role == 'admin' %}
+                                        <a class="app-mega-link" href="{{ url_for('tools.ml_prediction') }}">健康关注线索</a>
+                                        <a class="app-mega-link" href="{{ url_for('tools.chronic_risk') }}">慢病风险评估</a>
                                         <a class="app-mega-link" href="{{ url_for('analysis.annual_report') }}">年度健康报告</a>
+                                        {% if config.get('FEATURE_WEB_AI') and config.get('SILICONFLOW_API_KEY') %}
+                                            <a class="app-mega-link" href="{{ url_for('tools.ai_qa') }}">AI 提问</a>
+                                        {% endif %}
                                     {% endif %}
                                 </section>
+                                {% endif %}
 
                                 {% if current_user.role == 'admin' %}
                                 <section class="app-mega-group">
@@ -229,7 +241,7 @@
                                     <div class="app-mega-kicker">账号与设置</div>
                                     {% if current_user.role != 'guest' %}
                                         <a class="app-mega-link" href="{{ url_for('user.profile') }}">个人设置</a>
-                                        {% if feature_flags.elder_mode %}
+                                        {% if feature_flags.elder_mode and current_user.role != 'community' %}
                                             <a class="app-mega-link" href="{{ url_for('user.elder_dashboard') }}">老人模式</a>
                                         {% endif %}
                                     {% else %}
@@ -293,7 +305,7 @@
                 <a class="nav-link {% if nav_endpoint == 'public.index' %}active{% endif %}" href="{{ url_for('public.index') }}" data-nav-key="home" {% if nav_endpoint == 'public.index' %}aria-current="page"{% endif %}><i class="bi bi-house-door me-2"></i>首页</a>
                 {% if current_user.is_authenticated %}
                     <a class="nav-link {% if nav_drawer_today_active %}active{% endif %}" href="{{ nav_today_url }}" data-nav-key="today" {% if nav_drawer_today_active %}aria-current="page"{% endif %}><i class="bi bi-heart-pulse me-2"></i>今日主页</a>
-                    {% if feature_flags.elder_mode %}
+                    {% if feature_flags.elder_mode and current_user.role != 'community' %}
                         <a class="nav-link {% if nav_endpoint == 'user.elder_dashboard' %}active{% endif %}" href="{{ url_for('user.elder_dashboard') }}" data-nav-key="elder" {% if nav_endpoint == 'user.elder_dashboard' %}aria-current="page"{% endif %}><i class="bi bi-eyeglasses me-2"></i>老人模式</a>
                     {% endif %}
                 {% endif %}
@@ -324,20 +336,26 @@
             </nav>
 
             {% if current_user.is_authenticated %}
+            {% if current_user.role != 'community' %}
             {# ----- 健康 ----- #}
             <div class="mb-2" style="font-size:.72rem; color:var(--yl-muted); text-transform:uppercase; letter-spacing:.05em; padding:0 4px;">健康</div>
             <nav class="nav flex-column mb-3" aria-label="健康">
                 <a class="nav-link {% if nav_endpoint == 'user.health_assessment' %}active{% endif %}" href="{{ url_for('user.health_assessment') }}" data-nav-key="assessment" {% if nav_endpoint == 'user.health_assessment' %}aria-current="page"{% endif %}><i class="bi bi-clipboard-pulse me-2"></i>健康评估</a>
-                <a class="nav-link {% if nav_endpoint == 'tools.ml_prediction' %}active{% endif %}" href="{{ url_for('tools.ml_prediction') }}" data-nav-key="ml-prediction" {% if nav_endpoint == 'tools.ml_prediction' %}aria-current="page"{% endif %}><i class="bi bi-cpu me-2"></i>AI 疾病预测</a>
-                <a class="nav-link {% if nav_endpoint == 'tools.forecast_7day' %}active{% endif %}" href="{{ url_for('tools.forecast_7day') }}" data-nav-key="forecast" {% if nav_endpoint == 'tools.forecast_7day' %}aria-current="page"{% endif %}><i class="bi bi-calendar-week me-2"></i>7 天健康预测</a>
-                <a class="nav-link {% if nav_endpoint == 'tools.chronic_risk' %}active{% endif %}" href="{{ url_for('tools.chronic_risk') }}" data-nav-key="chronic-risk" {% if nav_endpoint == 'tools.chronic_risk' %}aria-current="page"{% endif %}><i class="bi bi-heart-pulse me-2"></i>慢病风险评估</a>
-                <a class="nav-link {% if nav_endpoint == 'tools.ai_qa' %}active{% endif %}" href="{{ url_for('tools.ai_qa') }}" data-nav-key="ai-qa" {% if nav_endpoint == 'tools.ai_qa' %}aria-current="page"{% endif %}><i class="bi bi-chat-dots me-2"></i>AI 提问</a>
+                <a class="nav-link {% if nav_endpoint == 'tools.forecast_7day' %}active{% endif %}" href="{{ url_for('tools.forecast_7day') }}" data-nav-key="forecast" {% if nav_endpoint == 'tools.forecast_7day' %}aria-current="page"{% endif %}><i class="bi bi-calendar-week me-2"></i>7 天预报</a>
                 {% if not nav_is_guest %}
                     <a class="nav-link {% if nav_endpoint == 'health.health_diary' %}active{% endif %}" href="{{ url_for('health.health_diary') }}" data-nav-key="health-diary" {% if nav_endpoint == 'health.health_diary' %}aria-current="page"{% endif %}><i class="bi bi-journal me-2"></i>健康日记</a>
                     <a class="nav-link {% if nav_endpoint == 'health.medication_reminders' %}active{% endif %}" href="{{ url_for('health.medication_reminders') }}" data-nav-key="medication" {% if nav_endpoint == 'health.medication_reminders' %}aria-current="page"{% endif %}><i class="bi bi-capsule me-2"></i>用药提醒</a>
+                {% endif %}
+                {% if current_user.role == 'admin' %}
+                    <a class="nav-link {% if nav_endpoint == 'tools.ml_prediction' %}active{% endif %}" href="{{ url_for('tools.ml_prediction') }}" data-nav-key="ml-prediction" {% if nav_endpoint == 'tools.ml_prediction' %}aria-current="page"{% endif %}><i class="bi bi-cpu me-2"></i>健康关注线索</a>
+                    <a class="nav-link {% if nav_endpoint == 'tools.chronic_risk' %}active{% endif %}" href="{{ url_for('tools.chronic_risk') }}" data-nav-key="chronic-risk" {% if nav_endpoint == 'tools.chronic_risk' %}aria-current="page"{% endif %}><i class="bi bi-heart-pulse me-2"></i>慢病风险评估</a>
                     <a class="nav-link {% if nav_endpoint == 'analysis.annual_report' %}active{% endif %}" href="{{ url_for('analysis.annual_report') }}" data-nav-key="annual-report" {% if nav_endpoint == 'analysis.annual_report' %}aria-current="page"{% endif %}><i class="bi bi-journal-text me-2"></i>年度健康报告</a>
+                    {% if config.get('FEATURE_WEB_AI') and config.get('SILICONFLOW_API_KEY') %}
+                        <a class="nav-link {% if nav_endpoint == 'tools.ai_qa' %}active{% endif %}" href="{{ url_for('tools.ai_qa') }}" data-nav-key="ai-qa" {% if nav_endpoint == 'tools.ai_qa' %}aria-current="page"{% endif %}><i class="bi bi-chat-dots me-2"></i>AI 提问</a>
+                    {% endif %}
                 {% endif %}
             </nav>
+            {% endif %}
 
             {% if current_user.role == 'admin' %}
             <div class="mb-2" style="font-size:.72rem; color:var(--yl-muted); text-transform:uppercase; letter-spacing:.05em; padding:0 4px;">社区</div>
@@ -393,7 +411,7 @@
             <nav class="nav flex-column">
                 {% if current_user.role != 'guest' %}
                     <a class="nav-link" href="{{ url_for('user.profile') }}"><i class="bi bi-gear me-2"></i>个人设置</a>
-                    {% if feature_flags.elder_mode %}
+                    {% if feature_flags.elder_mode and current_user.role != 'community' %}
                         <a class="nav-link" href="{{ url_for('user.elder_dashboard') }}"><i class="bi bi-eyeglasses me-2"></i>老人模式</a>
                         <div class="form-check form-switch px-3 mt-2">
                             <input class="form-check-input" type="checkbox" id="elderModeToggle">
@@ -435,7 +453,7 @@
         {% block content %}{% endblock %}
     </main>
 
-    {% if config.get('FEATURE_WEB_AI') %}
+    {% if config.get('FEATURE_WEB_AI') and config.get('SILICONFLOW_API_KEY') %}
     {% include 'partials/ai_floating_chat.html' %}
     {% endif %}
 
@@ -611,7 +629,7 @@
 
     <script src="{{ url_for('static', filename='js/clipboard.js') }}"></script>
     <script src="{{ url_for('static', filename='js/metric-explanations.js') }}"></script>
-    {% if config.get('FEATURE_WEB_AI') %}
+    {% if config.get('FEATURE_WEB_AI') and config.get('SILICONFLOW_API_KEY') %}
     <script src="{{ url_for('static', filename='js/ai-floating-chat.js') }}"></script>
     {% endif %}
     <script src="{{ url_for('static', filename='js/yilao-motion.js') }}"></script>

@@ -24,6 +24,11 @@ REAL_WEATHER = {
     'temperature_max': 39.0,
     'temperature_min': 29.0,
     'humidity': 70.0,
+    'pressure': 1002.0,
+    'weather_condition': '晴',
+    'wind_speed': 1.5,
+    'observed_at': utcnow().isoformat(),
+    'quality_version': 1,
     'data_source': 'QWeather',
     'is_mock': False,
 }
@@ -107,7 +112,7 @@ def test_caregiver_dashboard_does_not_calculate_mock_weather(
         lambda *_args, **_kwargs: pytest.fail('mock 天气不应进入热风险计算'),
     )
 
-    response = client.get('/caregiver')
+    response = client.get('/pairs')
 
     assert response.status_code == 200
     body = response.get_data(as_text=True)
@@ -413,7 +418,7 @@ def test_real_qweather_still_generates_caregiver_and_community_risk(
         lambda *_args, **_kwargs: 0,
     )
 
-    caregiver = client.get('/caregiver')
+    caregiver = client.get('/pairs')
     community = client.get('/community')
 
     assert caregiver.status_code == 200

@@ -216,6 +216,11 @@ class WeatherData(db.Model):
     wind_speed = db.Column(db.Float)  # 风速
     pm25 = db.Column(db.Float)  # PM2.5
     aqi = db.Column(db.Integer)  # 空气质量指数
+    data_source = db.Column(db.String(32), nullable=True)  # 旧行保持 NULL，不伪造来源
+    observed_at = db.Column(db.DateTime(timezone=True), nullable=True)  # 上游天气观测时刻（UTC）
+    air_observed_at = db.Column(db.DateTime(timezone=True), nullable=True)  # 空气质量独立观测时刻（UTC）
+    quality_version = db.Column(db.Integer, nullable=False, default=0, server_default='0')
+    air_quality_available = db.Column(db.Boolean, nullable=False, default=False, server_default='0')
     is_extreme = db.Column(db.Boolean, default=False)  # 是否极端天气
     extreme_type = db.Column(db.String(50))  # 极端天气类型
 
@@ -286,7 +291,7 @@ class HealthRiskAssessment(db.Model):
 
 
 class WeatherAlert(db.Model):
-    """天气预警记录"""
+    """天气提醒记录；只有带来源与有效期的记录才能标为官方预警。"""
     __tablename__ = 'weather_alerts'
     id = db.Column(db.Integer, primary_key=True)
     alert_date = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
@@ -294,6 +299,10 @@ class WeatherAlert(db.Model):
     alert_type = db.Column(db.String(50))  # 预警类型
     alert_level = db.Column(db.String(20))  # 预警等级
     description = db.Column(db.Text)
+    source = db.Column(db.String(50), nullable=True)  # QWeather / AppThreshold / Legacy
+    is_official = db.Column(db.Boolean, nullable=False, default=False, server_default='0')
+    starts_at = db.Column(db.DateTime(timezone=True), nullable=True)
+    ends_at = db.Column(db.DateTime(timezone=True), nullable=True)
     affected_communities = db.Column(db.Text)  # JSON格式：受影响社区
     disease_correlation = db.Column(db.Text)  # JSON格式：疾病相关性分析
     # 新投递使用 64 位摘要做并发幂等；历史记录保持 NULL，不做推测性回填。

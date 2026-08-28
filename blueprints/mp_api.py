@@ -56,7 +56,8 @@ from core.usage import (
 from core.weather import (
     compact_assessment_weather_condition,
     get_weather_with_cache,
-    is_qweather_online_weather,
+    is_qweather_production_ready,
+    normalize_health_model_weather,
 )
 from services.location_resolver import resolve_location
 from services.warning_service import get_qweather_warnings
@@ -1906,6 +1907,13 @@ def health_assessment():
         if snapshot.get("stale"):
             return _error("weather_snapshot_stale", "天气快照正在更新，请稍后重试。", 503)
         current = snapshot.get("current") or {}
+        health_weather = normalize_health_model_weather(current)
+        if health_weather is None:
+            return _error(
+                "weather_snapshot_untrusted",
+                "健康评估需要完整的新鲜和风天气，请稍后重试。",
+                503,
+            )
         user = db.session.get(User, g.api_user_id)
         profile = {
             "age": member.age if member and member.age is not None else (user.age or 45),
@@ -1923,7 +1931,7 @@ def health_assessment():
 
         result = HealthRiskService().assess_personal_weather_health_risk(
             profile,
-            current,
+            health_weather,
             screening=screening,
         )
         explain = {
@@ -1938,7 +1946,7 @@ def health_assessment():
             user_id=g.api_user_id,
             member_id=member.id if member else None,
             assessment_date=utcnow(),
-            weather_condition=compact_assessment_weather_condition(current),
+            weather_condition=compact_assessment_weather_condition(health_weather),
             risk_score=result.get("risk_score"),
             risk_level=result.get("risk_level"),
             disease_risks=json.dumps(result.get("disease_risks") or {}, ensure_ascii=False),
@@ -1978,7 +1986,7 @@ def _daily_status_for_pair(pair):
             not snapshot.get("snapshot_id")
             or snapshot.get("available") is not True
             or snapshot.get("stale") is not False
-            or not is_qweather_online_weather(current)
+            or not is_qweather_production_ready(current)
             or risk.get("available") is not True
         ):
             return None

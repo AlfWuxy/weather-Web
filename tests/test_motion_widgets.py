@@ -4,7 +4,7 @@ import json
 from datetime import timedelta
 from pathlib import Path
 
-from core.time_utils import today_local
+from core.time_utils import today_local, utcnow
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -69,6 +69,7 @@ def test_dashboard_renders_temperature_and_registered_metric_widgets(client, db_
             'humidity': 64,
             'pressure': 1008,
             'weather_condition': '多云',
+            'observed_at': utcnow().isoformat(),
             'wind_speed': 2.5,
             'aqi': 42,
             'is_mock': False,
@@ -113,6 +114,7 @@ def test_dashboard_forecast_uses_qweather_cards(client, db_session, monkeypatch)
             'temperature_mean': 18 + idx,
             'condition': '多云',
             'humidity': 64,
+            'wind_speed': 2.5,
             'data_source': 'QWeather',
             'is_mock': False,
         })
@@ -152,8 +154,15 @@ def test_dashboard_forecast_uses_qweather_cards(client, db_session, monkeypatch)
             'temperature_max': 30,
             'temperature_min': 22,
             'humidity': 64,
+            'pressure': 1008,
+            'wind_speed': 2.5,
+            'weather_condition': '多云',
+            'observed_at': utcnow().isoformat(),
+            'quality_version': 1,
             'pm25': 18,
             'aqi': 42,
+            'air_observed_at': utcnow().isoformat(),
+            'air_quality_available': True,
             'data_source': 'QWeather',
             'is_mock': False,
         }, False),
@@ -267,6 +276,7 @@ def test_dashboard_current_risk_does_not_use_mock_weather(client, db_session, mo
             'humidity': 80,
             'pressure': 1000,
             'weather_condition': '晴',
+            'observed_at': utcnow().isoformat(),
             'wind_speed': 2,
             'aqi': 88,
             'is_mock': True,
@@ -350,6 +360,7 @@ def test_cooling_page_uses_real_weather_for_thermometer(client, db_session, monk
         return ({
             'temperature': 27.5,
             'weather_condition': '多云',
+            'observed_at': utcnow().isoformat(),
             'is_mock': False,
             'data_source': 'QWeather',
         }, False)
@@ -370,6 +381,7 @@ def test_cooling_page_hides_thermometer_for_mock_weather(client, db_session, mon
         return ({
             'temperature': 36.5,
             'weather_condition': '晴',
+            'observed_at': utcnow().isoformat(),
             'is_mock': True,
             'data_source': 'fallback',
         }, False)

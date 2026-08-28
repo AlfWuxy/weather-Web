@@ -11,6 +11,12 @@ DISPATCH_CURRENT = {
     "temperature": 36,
     "temperature_max": 38,
     "temperature_min": 27,
+    "humidity": 65,
+    "pressure": 1005,
+    "wind_speed": 2.5,
+    "weather_condition": "晴",
+    "observed_at": datetime.now(timezone.utc).isoformat(),
+    "quality_version": 1,
     "data_source": "QWeather",
     "is_mock": False,
 }
@@ -68,13 +74,36 @@ def test_dispatch_cli_exits_zero_when_feature_disabled(app, monkeypatch, capsys)
 
 
 def _persist_dispatch_snapshot(*, current=None, warnings=None, fetched_at=None):
+    from core.time_utils import today_local, utcnow
     from services.miniprogram_service import persist_snapshot
 
+    snapshot_time = fetched_at or utcnow()
+    snapshot_current = dict(DISPATCH_CURRENT if current is None else current)
+    if snapshot_current:
+        snapshot_current["observed_at"] = snapshot_time.isoformat()
+    start = today_local()
+    forecast = [
+        {
+            "date": (start + timedelta(days=index)).isoformat(),
+            "forecast_date": (start + timedelta(days=index)).isoformat(),
+            "temperature_max": 38 + index,
+            "temperature_min": 27 + index,
+            "temperature_mean": 32.5 + index,
+            "humidity": 65,
+            "wind_speed": 2.5,
+            "condition": "晴",
+            "data_source": "QWeather",
+            "is_mock": False,
+        }
+        for index in range(7)
+    ]
     return persist_snapshot(
-        DISPATCH_CURRENT if current is None else current,
-        [],
+        snapshot_current,
+        forecast,
         [] if warnings is None else warnings,
-        fetched_at=fetched_at,
+        fetched_at=snapshot_time,
+        forecast_meta={"source": "QWeather"},
+        warning_status={"available": True, "status": "ok"},
     )
 
 
@@ -85,6 +114,72 @@ def _forbid_weather_upstream(monkeypatch):
     monkeypatch.setattr("services.location_resolver.resolve_location", forbidden)
     monkeypatch.setattr("services.warning_service.get_qweather_warnings", forbidden)
     monkeypatch.setattr("core.weather.get_weather_with_cache", forbidden)
+
+
+@pytest.mark.parametrize(
+    "degradation",
+    ["openmeteo", "warning_unavailable", "forecast_mixed"],
+)
+def test_dispatch_snapshot_requires_complete_qweather_source_status(
+    app,
+    monkeypatch,
+    degradation,
+):
+    from core.time_utils import utcnow
+    from services.push import dispatch as dispatch_mod
+
+    now = utcnow()
+    current = {
+        **DISPATCH_CURRENT,
+        "observed_at": now.isoformat(),
+    }
+    source_status = {
+        "weather": {
+            "available": True,
+            "provider": "QWeather",
+            "is_mock": False,
+        },
+        "forecast": {
+            "available": True,
+            "providers": ["QWeather"],
+        },
+        "warnings": {
+            "available": True,
+            "provider": "QWeather",
+            "status": "ok",
+        },
+    }
+    if degradation == "openmeteo":
+        current["data_source"] = "Open-Meteo"
+        source_status["weather"]["provider"] = "Open-Meteo"
+    elif degradation == "warning_unavailable":
+        source_status["warnings"].update(
+            available=False,
+            provider="unavailable",
+            status="network_error",
+        )
+    else:
+        source_status["forecast"]["providers"] = ["QWeather", "Open-Meteo"]
+
+    payload = {
+        "snapshot_id": "snapshot-degraded",
+        "available": True,
+        "stale": False,
+        "location": {"name": "都昌县", "code": "116.20,29.27"},
+        "current": current,
+        "forecast": [],
+        "warnings": [],
+        "source_status": source_status,
+    }
+    monkeypatch.setattr(
+        dispatch_mod,
+        "get_bootstrap_payload",
+        lambda **_kwargs: payload,
+    )
+
+    with app.app_context():
+        app.config["QWEATHER_CANONICAL_LOCATION"] = "116.20,29.27"
+        assert dispatch_mod._load_dispatch_snapshot(now) is None
 
 
 def _create_push_recipient(db_session, *, username, short_code):
@@ -334,6 +429,9 @@ def test_stale_sending_becomes_uncertain_without_retry(
             alert_type="heat_threshold",
             alert_level="阈值",
             description="最高气温提醒",
+            source="AppThreshold",
+            is_official=False,
+            starts_at=now,
             affected_communities="[]",
             disease_correlation="{}",
         )
@@ -676,6 +774,12 @@ def test_threshold_alert_rejects_mock_weather():
         "temperature": 36,
         "temperature_max": 39,
         "temperature_min": 29,
+        "humidity": 65,
+        "pressure": 1005,
+        "wind_speed": 2.5,
+        "weather_condition": "晴",
+        "observed_at": datetime.now(timezone.utc).isoformat(),
+        "quality_version": 1,
         "data_source": "QWeather",
         "is_mock": False,
     }) is not None
@@ -1271,6 +1375,7 @@ def _create_official_alert(db_session, *, now, warning):
     from services.push.dispatch import (
         _build_alert_dedupe_key,
         _get_or_create_weather_alert,
+        _parse_warning_datetime,
     )
 
     alert_type = warning.get("type") or "qweather_warning"
@@ -1292,6 +1397,10 @@ def _create_official_alert(db_session, *, now, warning):
         dedupe_hours=6,
         dedupe_key=dedupe_key,
         exact_dedupe=True,
+        source='QWeather',
+        is_official=True,
+        starts_at=_parse_warning_datetime(warning.get('start_time')),
+        ends_at=_parse_warning_datetime(warning.get('end_time')),
     )
     db_session.commit()
     return record
@@ -1419,6 +1528,8 @@ def test_official_level_upgrade_creates_a_new_delivery(
             short_code="92000020",
         )
         now = utcnow()
+        active_start = (now - timedelta(hours=1)).isoformat()
+        active_end = (now + timedelta(hours=2)).isoformat()
         _forbid_weather_upstream(monkeypatch)
         send_calls = []
         monkeypatch.setattr(
@@ -1428,7 +1539,10 @@ def test_official_level_upgrade_creates_a_new_delivery(
         )
 
         _persist_dispatch_snapshot(
-            warnings=[_official_warning()],
+            warnings=[_official_warning(
+                start_time=active_start,
+                end_time=active_end,
+            )],
             fetched_at=now,
         )
         first = dispatch_mod.dispatch_alerts(now=now)
@@ -1437,7 +1551,9 @@ def test_official_level_upgrade_creates_a_new_delivery(
                 level="橙色",
                 title="高温橙色预警",
                 message_type="update",
-                raw={"updateTime": "2026-07-18T08:15:00+08:00"},
+                start_time=active_start,
+                end_time=active_end,
+                raw={"updateTime": (now + timedelta(minutes=1)).isoformat()},
             )],
             fetched_at=now + timedelta(minutes=1),
         )
@@ -1449,6 +1565,32 @@ def test_official_level_upgrade_creates_a_new_delivery(
         assert WeatherAlert.query.count() == 2
         assert AlertDelivery.query.count() == 2
         assert {item.alert_level for item in WeatherAlert.query.all()} == {"黄色", "橙色"}
+        for alert in WeatherAlert.query.all():
+            assert alert.source == 'QWeather'
+            assert alert.is_official is True
+            assert alert.starts_at is not None
+            assert alert.ends_at is not None
+
+
+def test_official_window_rejects_missing_or_inactive_times():
+    from services.push.dispatch import _active_warning_window
+
+    now = datetime.now(timezone.utc)
+    assert _active_warning_window({
+        'start_time': (now - timedelta(hours=1)).isoformat(),
+        'end_time': '',
+    }, now) is None
+    assert _active_warning_window({
+        'start_time': (now - timedelta(hours=2)).isoformat(),
+        'end_time': (now - timedelta(hours=1)).isoformat(),
+    }, now) is None
+    assert _active_warning_window({
+        'start_time': (now - timedelta(minutes=1)).isoformat(),
+        'end_time': (now + timedelta(minutes=1)).isoformat(),
+    }, now) == (
+        now - timedelta(minutes=1),
+        now + timedelta(minutes=1),
+    )
 
 
 def test_threshold_alert_keeps_rolling_dedupe_across_hash_window_boundary(

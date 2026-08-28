@@ -31,8 +31,14 @@ from core.weather import (  # noqa: E402
     _get_redis_client,
     _redis_cache_key,
     _redis_set_json,
+    canonical_weather_location,
+    get_openmeteo_forecast_with_cache,
+    is_air_quality_available,
     is_complete_qweather_weather,
-    normalize_location_name,
+    is_live_observational_weather,
+    is_qweather_production_ready,
+    normalize_weather_observed_at,
+    weather_source_label,
 )
 from core.time_utils import ensure_utc_aware, today_local, utcnow  # noqa: E402
 from services.miniprogram_service import (  # noqa: E402
@@ -360,7 +366,7 @@ def _dedupe_locations(locations):
     for loc in locations:
         if not loc:
             continue
-        normalized = normalize_location_name(loc)
+        normalized = canonical_weather_location(loc)
         if normalized in seen:
             continue
         seen.add(normalized)
@@ -386,6 +392,17 @@ def _upsert_cache(location, weather_data, fetched_at):
 
 
 def _upsert_daily(location, weather_data, target_date):
+    """只把 fresh、完整和风实况写成 quality v1 日记录。"""
+    if not is_qweather_production_ready(weather_data):
+        return None
+    observed_at = normalize_weather_observed_at(weather_data.get('observed_at'))
+    if observed_at is None:
+        return None
+    air_observed_at = normalize_weather_observed_at(
+        weather_data.get('air_observed_at')
+    )
+    air_available = is_air_quality_available(weather_data)
+    location = canonical_weather_location(location)
     record = WeatherData.query.filter_by(date=target_date, location=location).first()
     if record is None:
         record = WeatherData(date=target_date, location=location)
@@ -398,8 +415,17 @@ def _upsert_daily(location, weather_data, target_date):
     record.pressure = weather_data.get('pressure')
     record.weather_condition = weather_data.get('weather_condition')
     record.wind_speed = weather_data.get('wind_speed')
-    record.pm25 = weather_data.get('pm25')
-    record.aqi = weather_data.get('aqi')
+    record.pm25 = weather_data.get('pm25') if air_available else None
+    record.aqi = weather_data.get('aqi') if air_available else None
+    record.data_source = 'QWeather'
+    record.observed_at = datetime.fromisoformat(observed_at)
+    record.air_observed_at = (
+        datetime.fromisoformat(air_observed_at)
+        if air_observed_at is not None
+        else None
+    )
+    record.quality_version = 1
+    record.air_quality_available = air_available
     return record
 
 
@@ -539,9 +565,9 @@ def _trusted_cycle_current(payload, *, fetched_at, previous_snapshot_id):
     return dict(current)
 
 
-def _replace_current_redis_cache(location, weather_data):
-    """数据库提交后用同一份完整天气原子替换 Redis 当前天气。"""
-    if not is_complete_qweather_weather(weather_data):
+def _replace_display_current_redis_cache(location, weather_data):
+    """数据库提交后用同一份新鲜实况替换 Redis 展示缓存。"""
+    if not is_live_observational_weather(weather_data):
         return
     try:
         ttl_minutes = int(
@@ -563,42 +589,64 @@ def _sync_weather_cache_locked(locations=None, update_daily=True, include_nowcas
         # 小程序与 Web 共用唯一都昌县周期。即使旧命令传入多个地点，也不会形成 API fan-out。
         requested_locations = list(_dedupe_locations(_resolve_locations(locations)))
         locations = [CANONICAL_LOCATION_NAME]
-        weather_service = WeatherService() if qweather_runtime_configured() else None
+        weather_service = WeatherService()
+        qweather_configured = qweather_runtime_configured()
         formal_smoke = _formal_smoke_credentials() is not None
         previous_snapshot = latest_snapshot_record()
         previous_snapshot_id = previous_snapshot.snapshot_id if previous_snapshot else None
         fetched_at = None
         target_date = today_local()
         updated = 0
+        daily_updated = 0
         nowcast_updated = 0
+        openmeteo_forecast_updated = 0
         nowcast = {}
 
-        if weather_service is not None:
-            try:
-                weather_data = weather_service.get_current_weather(
-                    CANONICAL_LOCATION_NAME,
-                    include_enrichment=False,
-                    allow_fallback=not formal_smoke,
-                )
-                fetched_at = utcnow()
-            except Exception as exc:
-                logger.exception("Weather sync failed for %s: %s", CANONICAL_LOCATION_NAME, exc)
-                db.session.rollback()
-                weather_data = {}
-                fetched_at = utcnow()
-            if include_nowcast:
-                try:
-                    nowcast = weather_service.get_short_term_nowcast(
-                        CANONICAL_LOCATION_NAME,
-                        hours=NOWCAST_CACHE_HOURS,
-                    )
-                except Exception as exc:
-                    logger.warning("Nowcast sync failed for %s: %s", CANONICAL_LOCATION_NAME, exc)
-                    nowcast = {}
-        else:
-            # QWeather 未配置时由快照层只读旧缓存并继承原始 fetched_at。
-            # 这里不回写 WeatherCache，避免旧数据被洗成刚抓取。
+        try:
+            weather_data = weather_service.get_current_weather(
+                CANONICAL_LOCATION_NAME,
+                include_enrichment=False,
+                allow_fallback=not formal_smoke,
+            )
+            fetched_at = utcnow()
+        except Exception as exc:
+            logger.exception("Weather sync failed for %s: %s", CANONICAL_LOCATION_NAME, exc)
+            db.session.rollback()
             weather_data = {}
+            fetched_at = utcnow()
+        if include_nowcast:
+            try:
+                nowcast = weather_service.get_short_term_nowcast(
+                    CANONICAL_LOCATION_NAME,
+                    hours=NOWCAST_CACHE_HOURS,
+                )
+            except Exception as exc:
+                logger.warning("Nowcast sync failed for %s: %s", CANONICAL_LOCATION_NAME, exc)
+                nowcast = {}
+
+        # Open-Meteo 7 日预报只允许后台刷新，并写入独立 provider key。
+        if not formal_smoke:
+            try:
+                openmeteo_days, openmeteo_from_cache, openmeteo_meta = (
+                    get_openmeteo_forecast_with_cache(
+                        CANONICAL_LOCATION_NAME,
+                        days=7,
+                        cache_only=False,
+                        fetcher=weather_service,
+                        force_refresh=True,
+                    )
+                )
+                openmeteo_forecast_updated = int(
+                    len(openmeteo_days or []) == 7
+                    and not openmeteo_from_cache
+                    and openmeteo_meta.get('cache_persisted') is True
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Open-Meteo forecast sync failed for %s: %s",
+                    CANONICAL_LOCATION_NAME,
+                    exc,
+                )
 
         weather_is_mock = bool(
             isinstance(weather_data, dict)
@@ -615,7 +663,7 @@ def _sync_weather_cache_locked(locations=None, update_daily=True, include_nowcas
             weather_service=weather_service,
             fetched_at=fetched_at,
             current_fetched_at=fetched_at if weather_data and not weather_is_mock else None,
-            force_refresh_sources=weather_service is not None,
+            force_refresh_sources=qweather_configured,
             commit=False,
         )
         persisted = snapshot_payload(snapshot)
@@ -625,20 +673,28 @@ def _sync_weather_cache_locked(locations=None, update_daily=True, include_nowcas
             fetched_at=fetched_at,
             previous_snapshot_id=previous_snapshot_id,
         )
+        display_current = cycle_current
+        if (
+            display_current is None
+            and is_live_observational_weather(weather_data)
+            and weather_source_label(weather_data) == 'Open-Meteo'
+        ):
+            display_current = dict(weather_data)
         try:
-            if cycle_current is not None:
+            if display_current is not None:
                 _upsert_cache(
                     CANONICAL_LOCATION_NAME,
-                    cycle_current,
+                    display_current,
                     fetched_at,
                 )
-                if update_daily:
-                    _upsert_daily(
-                        CANONICAL_LOCATION_NAME,
-                        cycle_current,
-                        target_date,
-                    )
                 updated = 1
+            if cycle_current is not None and update_daily:
+                if _upsert_daily(
+                    CANONICAL_LOCATION_NAME,
+                    cycle_current,
+                    target_date,
+                ) is not None:
+                    daily_updated = 1
             if _upsert_nowcast(nowcast, fetched_at or utcnow()):
                 nowcast_updated = 1
             db.session.commit()
@@ -650,18 +706,19 @@ def _sync_weather_cache_locked(locations=None, update_daily=True, include_nowcas
             )
             db.session.rollback()
             updated = 0
+            daily_updated = 0
             nowcast_updated = 0
             snapshot = latest_snapshot_record()
             persisted = snapshot_payload(snapshot)
             trusted_complete_cycle = False
             cycle_current = None
         if updated == 1:
-            _replace_current_redis_cache(
+            _replace_display_current_redis_cache(
                 CANONICAL_LOCATION_NAME,
-                cycle_current,
+                display_current,
             )
         snapshot_ready = bool(
-            updated == 1
+            cycle_current is not None
             and persisted.get('snapshot_id')
             and persisted.get('snapshot_id') != previous_snapshot_id
             and persisted.get('available')
@@ -674,7 +731,9 @@ def _sync_weather_cache_locked(locations=None, update_daily=True, include_nowcas
             'requested_locations': len(requested_locations),
             'canonical_location': CANONICAL_LOCATION_NAME,
             'updated': updated,
+            'daily_updated': daily_updated,
             'nowcast_updated': nowcast_updated,
+            'openmeteo_forecast_updated': openmeteo_forecast_updated,
             'update_daily': update_daily,
             'snapshot_id': snapshot.snapshot_id if snapshot else None,
             'snapshot_ready': snapshot_ready,
@@ -702,7 +761,9 @@ def sync_weather_cache(locations=None, update_daily=True, include_nowcast=True):
                 'requested_locations': 0,
                 'canonical_location': CANONICAL_LOCATION_NAME,
                 'updated': 0,
+                'daily_updated': 0,
                 'nowcast_updated': 0,
+                'openmeteo_forecast_updated': 0,
                 'update_daily': update_daily,
                 'snapshot_id': None,
                 'snapshot_ready': False,

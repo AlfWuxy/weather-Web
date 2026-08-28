@@ -210,12 +210,19 @@
         </div>
     </div>
 
+    {% if community_data_redacted %}
+    <div class="alert alert-info" role="status">
+        游客预览仅显示社区名称、位置和粗粒度风险等级；人口、老龄、慢病比例与精确脆弱性数据已隐藏。
+    </div>
+    {% endif %}
+
     <div class="card cr-card mb-3">
         <div class="card-body">
             <form id="riskFilterForm" class="row g-3 align-items-end">
                 <div class="col-xl-2 col-md-4">
                     <label class="form-label">查看日期</label>
                     <input type="date" class="form-control" id="analysisDate" value="{{ default_analysis_date }}">
+                    <div class="form-text">日期格式：YYYY-MM-DD（ISO）</div>
                 </div>
                 <div class="col-xl-2 col-md-4">
                     <label class="form-label">参考时段</label>
@@ -252,6 +259,9 @@
             <div class="alert alert-warning mt-3 mb-0 d-none" id="weatherUnavailableAlert" role="alert">
                 天气正在更新，社区风险暂不显示。你仍可查看避暑资源和居民反馈。
             </div>
+            <div class="alert alert-warning mt-3 mb-0" id="profileDataAlert" role="status">
+                社区关键脆弱性字段正在核对。缺少字段的社区将显示“数据不足，未参与排名”。
+            </div>
         </div>
     </div>
 
@@ -280,7 +290,7 @@
                         <div class="cr-kpi">
                             <div class="name">社区数</div>
                             <div class="value" id="kpiCommunities">--</div>
-                            <div class="sub">本次参与分析</div>
+                            <div class="sub" id="kpiCommunitiesSub">已排名 / 总档案数</div>
                         </div>
                         <div class="cr-kpi">
                             <div class="name">高风险社区</div>
@@ -475,7 +485,8 @@
                 <li>历史分量缺失时：天气与 SVI 权重归一化为 56.25% 和 43.75%，历史统计保持为空且不使用不确定性惩罚。</li>
                 <li>历史分量可用时展示门诊记录 O/E 及 95%CI，并在小样本场景进行平滑。</li>
                 <li>历史分量可用时展示不确定性与热点图层；缺失时显示数据不足。</li>
-                <li>缺少实测绿地、热岛或医疗可达性时使用稳定的中性代理值，相关排序需谨慎解读。</li>
+                <li>人口、老龄率、慢病率、绿地率、热岛指数、医疗可达性或实测基线门诊量缺失时，该社区不计算、不排名、不生成预计就诊或行动优先级。</li>
+                <li>地图只使用 <code>config.COMMUNITY_COORDS_GCJ</code> 同名坐标；无配置坐标时明确显示“无坐标”，不使用数据库坐标兜底。</li>
             </ul>
             </details>
         </div>
@@ -668,33 +679,22 @@ function computeCircleRadii(candidates) {
 }
 
 function getCoordForCommunity(name, row) {
-    // 坐标优先级：
-    // 1) 你原有的 community_coords（保持原坐标体系）
-    // 2) 页面初始化 communities（已按原逻辑映射）
-    // 3) 后端动态返回坐标（仅兜底）
+    // 地图坐标只信任运行时 GCJ-02 同名配置。
+    // 数据库坐标可能与高德坐标系冲突，因此不做静默兜底。
     if (name && communityCoords[name] && communityCoords[name].length === 2) {
-        return [toNumber(communityCoords[name][0], null), toNumber(communityCoords[name][1], null)];
-    }
-
-    const match = communities.find(item => item.name === name);
-    if (match) {
-        const lng = toNumber(match.longitude, null);
-        const lat = toNumber(match.latitude, null);
+        const lng = toNumber(communityCoords[name][0], null);
+        const lat = toNumber(communityCoords[name][1], null);
         if (lng !== null && lat !== null) {
             return [lng, lat];
         }
     }
-
-    const rowLng = toNumber(row && row.longitude, null);
-    const rowLat = toNumber(row && row.latitude, null);
-    if (rowLng !== null && rowLat !== null) {
-        return [rowLng, rowLat];
-    }
-
     return null;
 }
 
 function getLayerStyle(row, layerKey) {
+    if (!row || row.ranking_eligible !== true) {
+        return { color: '#94a3b8', label: '数据不足·未参与排名', valueText: '--' };
+    }
     const riskIndex = toNumber(row.risk_index, 0) || 0;
     const vulnValue = toNumber(row.svi_percentile, 0) || 0;
     const uncertainty = toNumber(row.uncertainty_index, null);
@@ -816,6 +816,16 @@ function renderLayerLegend(layerKey) {
 }
 
 function buildInfoWindowHtml(row, style) {
+    if (row.ranking_eligible !== true) {
+        return [
+            '<div class="cr-info-window" style="width:min(300px,calc(100vw - 72px));max-width:300px;padding:10px;">',
+            `<div style="font-weight:700;color:#64748b;margin-bottom:8px;">${escapeHtml(row.community || '--')}</div>`,
+            '<div style="font-size:12px;font-weight:700;color:#b45309;margin-bottom:6px;">数据不足，未参与排名</div>',
+            `<div style="font-size:12px;color:#475569;">${escapeHtml(row.data_message || '关键脆弱性字段未完整。')}</div>`,
+            '</div>'
+        ].join('');
+    }
+
     const historicalAvailable = row.historical_component_available === true;
     const rrText = historicalAvailable && row.sir !== null && row.sir !== undefined
         ? formatNumber(row.sir, 2)
@@ -867,6 +877,9 @@ function addRiskOverlays(rankings, layerKey) {
 
     const candidates = [];
     rankings.forEach(row => {
+        if (row.ranking_eligible !== true || row.coordinate_available !== true) {
+            return;
+        }
         const coords = getCoordForCommunity(row.community, row);
         if (!coords || coords.length !== 2 || !Number.isFinite(coords[0]) || !Number.isFinite(coords[1])) {
             return;
@@ -935,17 +948,15 @@ function focusOnCommunity(communityName, index) {
     if (!map) {
         return;
     }
-    let coords = null;
-    if (riskOverlays[index] && riskOverlays[index].coords) {
-        coords = riskOverlays[index].coords;
-    } else if (communityName && riskCoords[communityName]) {
-        coords = riskCoords[communityName];
-    }
+    const overlay = riskOverlays.find(item => item.community === communityName);
+    const coords = communityName && riskCoords[communityName]
+        ? riskCoords[communityName]
+        : null;
 
     if (coords && coords.length === 2) {
         map.setZoomAndCenter(14, coords);
-        if (riskOverlays[index] && riskOverlays[index].infoWindow) {
-            riskOverlays[index].infoWindow.open(map, coords);
+        if (overlay && overlay.infoWindow) {
+            overlay.infoWindow.open(map, coords);
         }
     }
 }
@@ -963,12 +974,18 @@ function renderRanking(rankings, layerKey) {
     }
 
     rankings.forEach((row, index) => {
+        const rankingEligible = row.ranking_eligible === true;
         const style = getLayerStyle(row, layerKey);
         const item = document.createElement('button');
         item.type = 'button';
         item.className = 'list-group-item cr-rank-item';
         item.style.borderLeftColor = style.color;
-        item.setAttribute('aria-label', `定位到${row.community || '该社区'}并查看风险详情`);
+        item.setAttribute(
+            'aria-label',
+            rankingEligible && row.coordinate_available === true
+                ? `定位到${row.community || '该社区'}并查看风险详情`
+                : `${row.community || '该社区'}数据状态`
+        );
 
         const title = document.createElement('div');
         title.className = 'd-flex justify-content-between align-items-center';
@@ -976,7 +993,7 @@ function renderRanking(rankings, layerKey) {
         const left = document.createElement('div');
         const badge = document.createElement('span');
         badge.className = 'badge bg-secondary me-2';
-        badge.textContent = `#${row.rank || index + 1}`;
+        badge.textContent = rankingEligible && row.rank ? `#${row.rank}` : '未排名';
         const strong = document.createElement('strong');
         strong.textContent = row.community || '--';
         left.appendChild(badge);
@@ -992,15 +1009,21 @@ function renderRanking(rankings, layerKey) {
 
         const info = document.createElement('div');
         info.className = 'small text-muted mt-1';
-        const probabilityText = row.probability_exceed_baseline === null
-            || row.probability_exceed_baseline === undefined
-            ? '数据不足'
-            : formatPercent(row.probability_exceed_baseline * 100, 1);
-        info.textContent = [
-            `综合风险 ${formatNumber(row.risk_index, 1)}`,
-            `O/E ${row.sir === null || row.sir === undefined ? '--' : formatNumber(row.sir, 2)}`,
-            `P(O/E>1) ${probabilityText}`
-        ].join(' | ');
+        if (!rankingEligible) {
+            const coordinateText = row.coordinate_available === true ? '' : ' | 无坐标';
+            info.textContent = `${row.data_message || '数据不足，未参与排名。'}${coordinateText}`;
+        } else {
+            const probabilityText = row.probability_exceed_baseline === null
+                || row.probability_exceed_baseline === undefined
+                ? '数据不足'
+                : formatPercent(row.probability_exceed_baseline * 100, 1);
+            const coordinateText = row.coordinate_available === true ? '' : ' | 无坐标，不显示地图热点';
+            info.textContent = [
+                `综合风险 ${formatNumber(row.risk_index, 1)}`,
+                `O/E ${row.sir === null || row.sir === undefined ? '--' : formatNumber(row.sir, 2)}`,
+                `P(O/E>1) ${probabilityText}`
+            ].join(' | ') + coordinateText;
+        }
 
         item.appendChild(title);
         item.appendChild(info);
@@ -1016,7 +1039,7 @@ function renderSuggestions(suggestions) {
     if (!suggestions || suggestions.length === 0) {
         const empty = document.createElement('p');
         empty.className = 'text-muted small mb-0';
-        empty.textContent = '暂无建议';
+        empty.textContent = '暂无基于完整社区数据的行动优先级建议。';
         container.appendChild(empty);
         return;
     }
@@ -1032,8 +1055,36 @@ function renderSuggestions(suggestions) {
     });
 }
 
+function renderProfileDataStatus(summary) {
+    const alert = document.getElementById('profileDataAlert');
+    if (!alert) return;
+
+    const total = toNumber(summary.total_communities, 0) || 0;
+    const ranked = toNumber(summary.ranked_communities, total) || 0;
+    const unranked = toNumber(summary.unranked_communities, Math.max(total - ranked, 0)) || 0;
+    const missingCoords = toNumber(summary.missing_coordinate_count, 0) || 0;
+
+    const parts = [];
+    if (summary.data_message) {
+        parts.push(summary.data_message);
+    } else if (unranked > 0) {
+        parts.push(`${unranked} 个社区数据不足，未参与排名。`);
+    } else {
+        parts.push(`${ranked} 个社区已通过完整性检查。`);
+    }
+    if (missingCoords > 0) {
+        parts.push(`${missingCoords} 个社区无 config.COMMUNITY_COORDS_GCJ 同名坐标，不显示地图热点。`);
+    }
+
+    alert.className = ranked > 0 && unranked === 0 && missingCoords === 0
+        ? 'alert alert-success mt-3 mb-0'
+        : 'alert alert-warning mt-3 mb-0';
+    alert.textContent = parts.join(' ');
+}
+
 function renderSummary(summary) {
     const total = toNumber(summary.total_communities, 0) || 0;
+    const ranked = toNumber(summary.ranked_communities, total) || 0;
     const heatCounts = summary.heatrisk_counts || {};
     const hotspotCounts = summary.hotspot_counts || {};
     const highRisk = (toNumber(heatCounts['3'], 0) || 0) + (toNumber(heatCounts['4'], 0) || 0);
@@ -1042,13 +1093,21 @@ function renderSummary(summary) {
         + (toNumber(hotspotCounts['冷点(95%)'], 0) || 0)
         + (toNumber(hotspotCounts['冷点(99%)'], 0) || 0);
 
-    document.getElementById('kpiCommunities').textContent = total;
-    document.getElementById('kpiHighRisk').textContent = highRisk;
-    document.getElementById('kpiEquityPriority').textContent = safeText(summary.equity_priority_count, '--');
-    document.getElementById('kpiHotspot').textContent = hotspotSig;
+    document.getElementById('kpiCommunities').textContent = `${ranked}/${total}`;
+    const communitiesSub = document.getElementById('kpiCommunitiesSub');
+    if (communitiesSub) {
+        communitiesSub.textContent = '已排名 / 总档案数';
+    }
+    document.getElementById('kpiHighRisk').textContent = ranked > 0 ? highRisk : '--';
+    document.getElementById('kpiEquityPriority').textContent = ranked > 0
+        ? safeText(summary.equity_priority_count, '--')
+        : '--';
+    document.getElementById('kpiHotspot').textContent = ranked > 0 ? hotspotSig : '--';
 
     const coverage = toNumber(summary.data_coverage_ratio, null);
-    document.getElementById('kpiCoverage').textContent = coverage === null ? '--' : `${(coverage * 100).toFixed(1)}%`;
+    document.getElementById('kpiCoverage').textContent = ranked === 0 || coverage === null
+        ? '--'
+        : `${(coverage * 100).toFixed(1)}%`;
 
     document.getElementById('kpiUncertainty').textContent = formatNumber(summary.median_uncertainty_index, 1, '--');
     document.getElementById('kpiExcess').textContent = formatNumber(summary.total_expected_excess, 1, '--');
@@ -1064,6 +1123,7 @@ function renderSummary(summary) {
         metaParts.push(`病例 ${summary.matched_records}/${summary.total_records}`);
     }
     document.getElementById('analysisMeta').textContent = metaParts.length ? metaParts.join(' | ') : '分析完成';
+    renderProfileDataStatus(summary);
 }
 
 function matrixClassByScore(score) {
@@ -1082,6 +1142,13 @@ function matrixClassByScore(score) {
 function renderImpactLikelihoodMatrix(matrix) {
     const body = document.getElementById('impactLikelihoodBody');
     clearElement(body);
+
+    if (matrix && matrix.data_available === false) {
+        const tr = document.createElement('tr');
+        tr.innerHTML = '<td colspan="5" class="text-muted">数据不足，未生成行动优先级矩阵</td>';
+        body.appendChild(tr);
+        return;
+    }
 
     const impactLevels = (matrix && matrix.impact_levels) || ['low', 'medium', 'high', 'very_high'];
     const likelihoodLevels = (matrix && matrix.likelihood_levels) || ['low', 'medium', 'high', 'very_high'];
@@ -1169,6 +1236,32 @@ function renderDetailTable(rankings) {
         tr.style.cursor = 'pointer';
         tr.addEventListener('click', () => focusOnCommunity(row.community, idx));
 
+        if (row.ranking_eligible !== true) {
+            const unavailableCells = [
+                '未参与排名',
+                row.community || '--',
+                '数据不足',
+                '数据不足',
+                '数据不足',
+                '数据不足',
+                '数据不足',
+                '数据不足',
+                row.coordinate_available === true ? '数据不足' : '无坐标',
+                '数据不足',
+                '数据不足',
+                '数据不足',
+                '数据不足'
+            ];
+            unavailableCells.forEach(cell => {
+                const td = document.createElement('td');
+                td.textContent = cell;
+                tr.appendChild(td);
+            });
+            tr.title = row.data_message || '关键脆弱性字段不完整。';
+            body.appendChild(tr);
+            return;
+        }
+
         const sirText = row.sir === null || row.sir === undefined ? '--' : formatNumber(row.sir, 2);
         const ciText = (row.ci_low === null || row.ci_low === undefined || row.ci_high === null || row.ci_high === undefined)
             ? '--'
@@ -1208,9 +1301,13 @@ function renderMethodology(lines) {
     const ul = document.getElementById('methodologyList');
     clearElement(ul);
 
-    const methods = Array.isArray(lines) && lines.length > 0
+    const suppliedMethods = Array.isArray(lines) && lines.length > 0
         ? lines
         : ['暂无方法说明'];
+    const integrityGate = '完整性门：关键脆弱性或实测基线字段缺失时，该社区数据不足、未参与排名，且不生成预计就诊或行动优先级。';
+    const methods = suppliedMethods.some(line => safeText(line, '').includes('完整性门'))
+        ? suppliedMethods
+        : [integrityGate, ...suppliedMethods];
 
     methods.forEach(line => {
         const li = document.createElement('li');
@@ -1266,6 +1363,13 @@ function clearRiskResults(errorCode) {
     }
 
     document.getElementById('analysisMeta').textContent = weatherUnavailable ? '天气更新中' : '加载失败';
+    const profileAlert = document.getElementById('profileDataAlert');
+    if (profileAlert) {
+        profileAlert.className = 'alert alert-warning mt-3 mb-0';
+        profileAlert.textContent = weatherUnavailable
+            ? '天气数据不可用，本次未执行社区排名。'
+            : '社区数据状态暂时无法加载。';
+    }
     [
         'kpiCommunities',
         'kpiHighRisk',
@@ -1322,6 +1426,11 @@ function renderCharts(rankings, summary) {
         return;
     }
 
+    const rankedRows = rankings.filter(row => row.ranking_eligible === true);
+    if (!rankedRows.length) {
+        return;
+    }
+
     const heatCounts = summary.heatrisk_counts || {};
     riskLevelChart = new Chart(riskCanvas.getContext('2d'), {
         type: 'bar',
@@ -1350,7 +1459,7 @@ function renderCharts(rankings, summary) {
         }
     });
 
-    const scatterData = rankings.map(row => ({
+    const scatterData = rankedRows.map(row => ({
         x: toNumber(row.svi_percentile, 0) || 0,
         y: toNumber(row.risk_index, 0) || 0,
         r: Math.max(4, Math.min(16, Math.sqrt((toNumber(row.population, 0) || 0) / 120))),

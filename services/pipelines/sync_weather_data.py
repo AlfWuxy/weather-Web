@@ -18,9 +18,14 @@ from core.constants import DEFAULT_CITY_LABEL  # noqa: E402
 from core.db_models import DailyStatus, Pair, WeatherData  # noqa: E402
 from core.extensions import db  # noqa: E402
 from core.weather import (  # noqa: E402
+    canonical_weather_location,
     get_consecutive_hot_days,
     get_weather_with_cache,
-    is_qweather_online_weather,
+    is_air_quality_available,
+    is_qweather_production_ready,
+    is_weather_observation_fresh,
+    normalize_health_model_weather,
+    normalize_weather_observed_at,
 )
 from core.time_utils import today_local  # noqa: E402
 from services.care_action_service import get_or_create_daily_status  # noqa: E402
@@ -94,10 +99,17 @@ def _validate_action_weather(weather_data):
             'weather_source': source,
             'missing_fields': missing_fields,
         }
-    if not is_qweather_online_weather(weather_data):
+    if not is_weather_observation_fresh(weather_data):
         return {
             'valid': False,
-            'reason': 'untrusted_weather_source',
+            'reason': 'stale_or_missing_observation',
+            'weather_source': source,
+            'missing_fields': ['observed_at'],
+        }
+    if not is_qweather_production_ready(weather_data):
+        return {
+            'valid': False,
+            'reason': 'incomplete_weather',
             'weather_source': source,
             'missing_fields': [],
         }
@@ -111,7 +123,38 @@ def _validate_action_weather(weather_data):
 
 def _normalize_location(location):
     default_city = app.config.get('DEFAULT_CITY', DEFAULT_CITY_LABEL) or DEFAULT_CITY_LABEL
-    return location or default_city
+    return canonical_weather_location(location or default_city)
+
+
+def _apply_trusted_weather(record, weather_data):
+    """把通过 production gate 的当前和风实况写成 quality v1。"""
+    weather_data = normalize_health_model_weather(weather_data)
+    if weather_data is None:
+        raise ValueError('weather failed health model gate')
+    observed_at = normalize_weather_observed_at(weather_data.get('observed_at'))
+    if observed_at is None:
+        raise ValueError('invalid observed_at after production gate')
+    air_observed_at = normalize_weather_observed_at(
+        weather_data.get('air_observed_at')
+    )
+    record.temperature = weather_data.get('temperature')
+    record.temperature_max = weather_data.get('temperature_max')
+    record.temperature_min = weather_data.get('temperature_min')
+    record.humidity = weather_data.get('humidity')
+    record.pressure = weather_data.get('pressure')
+    record.weather_condition = weather_data.get('weather_condition')
+    record.wind_speed = weather_data.get('wind_speed')
+    record.pm25 = weather_data.get('pm25')
+    record.aqi = weather_data.get('aqi')
+    record.data_source = 'QWeather'
+    record.observed_at = datetime.fromisoformat(observed_at)
+    record.air_observed_at = (
+        datetime.fromisoformat(air_observed_at)
+        if air_observed_at is not None
+        else None
+    )
+    record.quality_version = 1
+    record.air_quality_available = is_air_quality_available(weather_data)
 
 
 def _parse_date(value):
@@ -156,42 +199,14 @@ def backfill_weather_from_csv(csv_path=None, location=None, overwrite=False, sta
 
     with app.app_context():
         location = _normalize_location(location)
-        dates = df['date'].tolist()
-        existing = WeatherData.query.filter(
-            WeatherData.location == location,
-            WeatherData.date.in_(dates)
-        ).all()
-        existing_map = {item.date: item for item in existing}
-
-        created = 0
-        updated = 0
-        skipped = 0
-
-        for row in df.itertuples(index=False):
-            record = existing_map.get(row.date)
-            if record and not overwrite:
-                skipped += 1
-                continue
-            if record is None:
-                record = WeatherData(date=row.date, location=location)
-                db.session.add(record)
-                created += 1
-            else:
-                updated += 1
-
-            record.temperature = row.temperature
-            record.temperature_max = row.temperature_max
-            record.temperature_min = row.temperature_min
-            record.humidity = row.humidity
-            record.wind_speed = row.wind_speed
-
-        db.session.commit()
+        # CSV 缺少上游来源与观测时刻，禁止继续产生无 provenance 新行。
         return {
             'location': location,
             'rows': len(df),
-            'created': created,
-            'updated': updated,
-            'skipped': skipped
+            'created': 0,
+            'updated': 0,
+            'skipped': len(df),
+            'reason': 'missing_observation_provenance',
         }
 
 
@@ -213,7 +228,10 @@ def sync_daily_weather(target_date=None, location=None, overwrite=True):
                 'missing_fields': validation['missing_fields'],
             }
 
-        extreme = WeatherService().identify_extreme_weather(weather_data)
+        health_weather = normalize_health_model_weather(weather_data)
+        if health_weather is None:
+            raise ValueError('weather failed health model gate')
+        extreme = WeatherService().identify_extreme_weather(health_weather)
         record = WeatherData.query.filter_by(date=target_date, location=location).first()
         if record and not overwrite:
             return {
@@ -229,15 +247,7 @@ def sync_daily_weather(target_date=None, location=None, overwrite=True):
             record = WeatherData(date=target_date, location=location)
             db.session.add(record)
 
-        record.temperature = weather_data.get('temperature')
-        record.temperature_max = weather_data.get('temperature_max')
-        record.temperature_min = weather_data.get('temperature_min')
-        record.humidity = weather_data.get('humidity')
-        record.pressure = weather_data.get('pressure')
-        record.weather_condition = weather_data.get('weather_condition')
-        record.wind_speed = weather_data.get('wind_speed')
-        record.pm25 = weather_data.get('pm25')
-        record.aqi = weather_data.get('aqi')
+        _apply_trusted_weather(record, health_weather)
         record.is_extreme = bool(extreme.get('is_extreme'))
         record.extreme_type = '、'.join([c['type'] for c in extreme.get('conditions', [])]) if extreme.get('is_extreme') else None
 
@@ -320,7 +330,8 @@ def sync_action_daily(target_date=None, community_code=None, overwrite=False):
             consecutive_hot_days = get_consecutive_hot_days(
                 code,
                 target_date=target_date,
-                today_max=weather_data.get('temperature_max')
+                today_max=weather_data.get('temperature_max'),
+                weather_data=weather_data,
             )
             heat_result = heat_service.calculate_heat_risk(
                 weather_data,
@@ -329,19 +340,17 @@ def sync_action_daily(target_date=None, community_code=None, overwrite=False):
             risk_level = _map_heat_level(heat_result['risk_level'])
             risk_by_community[code] = risk_level
 
-            weather_record = WeatherData.query.filter_by(date=target_date, location=code).first()
+            weather_record = WeatherData.query.filter_by(
+                date=target_date,
+                location=weather_location,
+            ).first()
             if weather_record is None:
-                weather_record = WeatherData(date=target_date, location=code)
+                weather_record = WeatherData(
+                    date=target_date,
+                    location=weather_location,
+                )
                 db.session.add(weather_record)
-            weather_record.temperature = weather_data.get('temperature')
-            weather_record.temperature_max = weather_data.get('temperature_max')
-            weather_record.temperature_min = weather_data.get('temperature_min')
-            weather_record.humidity = weather_data.get('humidity')
-            weather_record.pressure = weather_data.get('pressure')
-            weather_record.weather_condition = weather_data.get('weather_condition')
-            weather_record.wind_speed = weather_data.get('wind_speed')
-            weather_record.pm25 = weather_data.get('pm25')
-            weather_record.aqi = weather_data.get('aqi')
+            _apply_trusted_weather(weather_record, weather_data)
             weather_record.is_extreme = bool(weather_data.get('is_extreme'))
             weather_record.extreme_type = weather_data.get('extreme_type')
         # 公共天气先独立提交，后续私密状态始终在 owner 守卫内写入。

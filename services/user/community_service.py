@@ -11,7 +11,7 @@ from core.time_utils import now_local, today_local
 from core.weather import (
     get_consecutive_hot_days,
     get_weather_with_cache,
-    is_qweather_online_weather,
+    is_heat_action_weather_ready,
     normalize_location_name,
 )
 from services.heat_action_service import HeatActionService
@@ -46,8 +46,8 @@ _WEATHER_WAITING_LABEL = '天气更新中'
 
 
 def _heat_weather_available(weather_data):
-    """仅允许字段完整的真实和风天气进入社区热风险计算。"""
-    if not is_qweather_online_weather(weather_data):
+    """基础温湿热行动接受新鲜可信的和风或 Open-Meteo 实况。"""
+    if not is_heat_action_weather_ready(weather_data):
         return False
     for field in _REQUIRED_HEAT_WEATHER_FIELDS:
         try:

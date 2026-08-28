@@ -208,8 +208,8 @@ def test_ambiguous_case_insensitive_login_does_not_choose_an_account(
 @pytest.mark.parametrize(
     ('role', 'expected_path'),
     [
-        ('user', '/dashboard'),
-        ('caregiver', '/caregiver'),
+        ('user', '/pairs'),
+        ('caregiver', '/pairs'),
         ('community', '/community'),
         ('admin', '/admin'),
     ],
@@ -240,8 +240,8 @@ def test_login_uses_role_aware_default_landing(client, db_session, role, expecte
     assert response.headers['Location'].endswith(expected_path)
 
 
-def test_formal_dual_runtime_login_lands_on_web_dashboard(app, client, db_session):
-    """微信正式双端态登录后继续进入网页工作台。"""
+def test_formal_dual_runtime_login_lands_on_care_workspace(app, client, db_session):
+    """微信正式双端态登录后进入家庭照护工作台。"""
     from core.db_models import User
 
     app.config['WECHAT_FORMAL_RUNTIME'] = True
@@ -266,7 +266,7 @@ def test_formal_dual_runtime_login_lands_on_web_dashboard(app, client, db_sessio
     )
 
     assert response.status_code in (302, 303)
-    assert response.headers['Location'].endswith('/dashboard')
+    assert response.headers['Location'].endswith('/pairs')
 
 
 def test_formal_miniprogram_only_login_keeps_account_link_landing(

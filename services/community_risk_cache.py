@@ -13,6 +13,7 @@ logger = logging.getLogger(__name__)
 
 _LOCAL_COMMUNITY_RISK_CACHE = {}
 _LOCAL_CACHE_MAX_ITEMS = 128
+_CACHE_NAMESPACE = 'community_risk:v3'
 _WEATHER_SIGNATURE_KEYS = (
     'temperature',
     'temperature_max',
@@ -172,7 +173,8 @@ def _build_cache_key(cache_params):
         separators=(',', ':')
     )
     digest = hashlib.sha256(normalized.encode('utf-8')).hexdigest()
-    return f'community_risk:v2:{digest}'
+    # v3 隔离早期可能含代理画像排名的缓存结果。
+    return f'{_CACHE_NAMESPACE}:{digest}'
 
 
 def _get_from_local_cache(cache_key):

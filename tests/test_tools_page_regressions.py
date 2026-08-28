@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 """工具页与用户端导航回归测试。"""
 
+import pytest
+
 
 def _login_as(client, user_id: int, csrf_token='test-csrf-token'):
     with client.session_transaction() as session:
@@ -17,6 +19,36 @@ def _create_user(db_session, username='tooluser', role='user'):
     db_session.add(user)
     db_session.commit()
     return user
+
+
+def _trusted_qweather_current(
+    temperature=30,
+    humidity=68,
+    *,
+    aqi=None,
+    pm25=None,
+):
+    from core.time_utils import utcnow
+
+    observed_at = utcnow().isoformat()
+    air_available = aqi is not None and pm25 is not None
+    return {
+        'temperature': temperature,
+        'temperature_max': temperature + 4,
+        'temperature_min': temperature - 5,
+        'humidity': humidity,
+        'pressure': 1005,
+        'wind_speed': 2.5,
+        'weather_condition': '多云',
+        'observed_at': observed_at,
+        'quality_version': 1,
+        'aqi': aqi,
+        'pm25': pm25,
+        'air_observed_at': observed_at if air_available else None,
+        'air_quality_available': air_available,
+        'data_source': 'QWeather',
+        'is_mock': False,
+    }
 
 
 def test_forecast_page_loads_chartjs(client, db_session):
@@ -85,13 +117,10 @@ def test_forecast_page_uses_qweather_only_data(client, db_session, monkeypatch):
     monkeypatch.setattr('blueprints.tools.get_qweather_forecast_with_cache', fake_qweather, raising=False)
     monkeypatch.setattr(
         'blueprints.tools.get_weather_with_cache',
-        lambda _location: ({
-            'temperature': 27,
-            'pm25': 18,
-            'aqi': 42,
-            'data_source': 'QWeather',
-            'is_mock': False,
-        }, False),
+        lambda _location: (
+            _trusted_qweather_current(27, aqi=42, pm25=18),
+            False,
+        ),
         raising=False,
     )
     monkeypatch.setattr('blueprints.tools.get_forecast_service', lambda: FakeForecastService(), raising=False)
@@ -120,6 +149,11 @@ def test_forecast_page_qweather_failure_does_not_render_demo_heat(client, db_ses
         lambda location, days=7: ([], False, {'error': 'qweather_unavailable'}),
         raising=False,
     )
+    monkeypatch.setattr(
+        'blueprints.tools.get_openmeteo_forecast_with_cache',
+        lambda location, days=7: ([], False, {'error': 'cache_miss'}),
+        raising=False,
+    )
 
     response = client.get('/forecast-7day?location=都昌')
 
@@ -128,6 +162,114 @@ def test_forecast_page_qweather_failure_does_not_render_demo_heat(client, db_ses
     assert '7 天天气正在更新' in body
     assert '34° / 26°' not in body
     assert '35° / 27°' not in body
+
+
+def test_forecast_page_reads_openmeteo_cache_without_health_model(
+    client,
+    db_session,
+    monkeypatch,
+):
+    from datetime import timedelta
+
+    from core.time_utils import today_local, utcnow
+
+    user = _create_user(db_session, username='forecast_openmeteo_user')
+    _login_as(client, user.id)
+    start = today_local()
+    openmeteo_days = [
+        {
+            'date': (start + timedelta(days=index)).isoformat(),
+            'forecast_date': (start + timedelta(days=index)).isoformat(),
+            'temperature_max': 31 + index,
+            'temperature_min': 22 + index,
+            'temperature_mean': 26.5 + index,
+            'condition': '多云',
+            'precip_probability': 20,
+            'humidity': None,
+            'wind_speed': None,
+            'data_source': 'Open-Meteo',
+            'is_mock': False,
+        }
+        for index in range(7)
+    ]
+    monkeypatch.setattr(
+        'blueprints.tools.get_qweather_forecast_with_cache',
+        lambda location, days=7: ([], False, {'error': 'cache_miss'}),
+    )
+    monkeypatch.setattr(
+        'blueprints.tools.get_openmeteo_forecast_with_cache',
+        lambda location, days=7: (
+            openmeteo_days,
+            True,
+            {'source': 'Open-Meteo', 'fetched_at': utcnow().isoformat()},
+        ),
+    )
+    monkeypatch.setattr(
+        'blueprints.tools.get_weather_with_cache',
+        lambda *_args, **_kwargs: pytest.fail('Open-Meteo 基础预报不得进入健康模型'),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        'blueprints.tools.get_forecast_service',
+        lambda: pytest.fail('Open-Meteo 基础预报不得创建健康预测服务'),
+    )
+
+    response = client.get('/forecast-7day?location=都昌')
+
+    assert response.status_code == 200
+    body = response.get_data(as_text=True)
+    assert '来源：Open-Meteo' in body
+    assert '31° / 22°' in body
+    assert '健康关注分待计算' in body
+    assert '7 天天气正在更新' not in body
+
+
+def test_forecast_page_stale_qweather_only_renders_weather_cards(
+    client,
+    db_session,
+    monkeypatch,
+):
+    from datetime import timedelta
+
+    from core.time_utils import today_local
+
+    user = _create_user(db_session, username='forecast_stale_qweather_user')
+    _login_as(client, user.id)
+    start = today_local()
+    qweather_days = [
+        {
+            'date': (start + timedelta(days=index)).isoformat(),
+            'temperature_max': 30 + index,
+            'temperature_min': 20 + index,
+            'temperature_mean': 25 + index,
+            'condition': '多云',
+            'humidity': 70,
+            'wind_speed': 2.0,
+            'data_source': 'QWeather',
+            'is_mock': False,
+        }
+        for index in range(7)
+    ]
+    monkeypatch.setattr(
+        'blueprints.tools.get_qweather_forecast_with_cache',
+        lambda location, days=7: (qweather_days, True, {'source': 'QWeather', 'stale': True}),
+    )
+    monkeypatch.setattr(
+        'blueprints.tools.get_weather_with_cache',
+        lambda *_args, **_kwargs: pytest.fail('陈旧预报不得读取健康模型输入'),
+    )
+    monkeypatch.setattr(
+        'blueprints.tools.get_forecast_service',
+        lambda: pytest.fail('陈旧预报不得创建健康预测服务'),
+    )
+
+    response = client.get('/forecast-7day?location=都昌')
+
+    assert response.status_code == 200
+    body = response.get_data(as_text=True)
+    assert '来源：和风天气' in body
+    assert '30° / 20°' in body
+    assert '健康关注分待计算' in body
 
 
 def test_forecast_api_default_uses_qweather_only_data(client, db_session, monkeypatch):
@@ -177,7 +319,10 @@ def test_forecast_api_default_uses_qweather_only_data(client, db_session, monkey
     monkeypatch.setattr('services.api_service.get_qweather_forecast_with_cache', fake_qweather, raising=False)
     monkeypatch.setattr(
         'services.api_service.get_weather_with_cache',
-        lambda location: ({'temperature': 24, 'aqi': 42, 'pm25': 18, 'data_source': 'QWeather', 'is_mock': False}, False),
+        lambda location: (
+            _trusted_qweather_current(24, aqi=42, pm25=18),
+            False,
+        ),
         raising=False,
     )
     monkeypatch.setattr('services.forecast_service.get_forecast_service', lambda: FakeForecastService(), raising=False)
@@ -200,6 +345,30 @@ def test_forecast_api_default_uses_qweather_only_data(client, db_session, monkey
     assert captured['forecast_temps'] == qweather_days
     assert captured['start_date'] == start
     assert captured['context'] == {'aqi': 42, 'pm25': 18}
+
+
+def test_forecast_api_rejects_stale_qweather_forecast(client, db_session, monkeypatch):
+    user = _create_user(db_session, username='forecast_api_stale_user')
+    _login_as(client, user.id)
+    monkeypatch.setattr(
+        'services.api_service.get_qweather_forecast_with_cache',
+        lambda location, days=7: ([{'temperature_mean': 25}] * 7, True, {'stale': True}),
+    )
+    monkeypatch.setattr(
+        'services.api_service.get_weather_with_cache',
+        lambda *_args, **_kwargs: pytest.fail('陈旧预报必须在读取健康上下文前拒绝'),
+    )
+    with client.session_transaction() as session:
+        session['_csrf_token'] = 'forecast-stale-csrf'
+
+    response = client.post(
+        '/api/forecast/7day',
+        json={'city': '都昌'},
+        headers={'X-CSRF-Token': 'forecast-stale-csrf'},
+    )
+
+    assert response.status_code == 503
+    assert response.get_json()['error'] == 'forecast_stale'
 
 
 def test_comprehensive_alert_rejects_mock_current_weather(client, db_session, monkeypatch):
@@ -232,7 +401,10 @@ def test_comprehensive_alert_rejects_incomplete_qweather_forecast(client, db_ses
 
     monkeypatch.setattr(
         'services.api_service.get_weather_with_cache',
-        lambda location: ({'temperature': 24, 'aqi': 35, 'pm25': 12, 'data_source': 'QWeather', 'is_mock': False}, False),
+        lambda location: (
+            _trusted_qweather_current(24, aqi=35, pm25=12),
+            False,
+        ),
         raising=False,
     )
     monkeypatch.setattr(
@@ -309,7 +481,10 @@ def test_comprehensive_alert_uses_qweather_forecast_with_today_start(client, db_
 
     monkeypatch.setattr(
         'services.api_service.get_weather_with_cache',
-        lambda location: ({'temperature': 24, 'aqi': 38, 'pm25': 14, 'data_source': 'QWeather', 'is_mock': False}, False),
+        lambda location: (
+            _trusted_qweather_current(24, aqi=38, pm25=14),
+            False,
+        ),
         raising=False,
     )
     monkeypatch.setattr(
@@ -353,8 +528,11 @@ def test_authenticated_nav_uses_desktop_mega_menu(client, db_session):
     body = response.get_data(as_text=True)
     assert 'id="appMegaMenu"' in body
     assert 'data-nav-more-trigger="desktop"' in body
-    assert 'AI 疾病预测' in body
-    assert 'AI 提问' in body
+    assert '健康关注线索' in body
+    assert 'AI 疾病预测' not in body
+    assert 'AI 提问' not in body
+    assert 'data-nav-key="ml-prediction"' not in body
+    assert 'data-nav-key="ai-qa"' not in body
     assert '健康评估' in body
     assert '家庭成员' in body
 
@@ -381,7 +559,7 @@ def test_ml_prediction_post_renders_result_and_preserves_form(client, db_session
 
     monkeypatch.setattr(
         'blueprints.tools.get_weather_with_cache',
-        lambda _location: ({'temperature': 31, 'humidity': 68, 'data_source': 'QWeather', 'is_mock': False}, False),
+        lambda _location: (_trusted_qweather_current(31, 68), False),
     )
     monkeypatch.setattr('blueprints.tools.get_ml_service', lambda: FakeMLService())
 
@@ -441,7 +619,7 @@ def test_ml_prediction_selected_member_uses_age_and_gender_only(client, db_sessi
 
     monkeypatch.setattr(
         'blueprints.tools.get_weather_with_cache',
-        lambda _location: ({'temperature': 30, 'humidity': 66, 'data_source': 'QWeather', 'is_mock': False}, False),
+        lambda _location: (_trusted_qweather_current(30, 66), False),
     )
     monkeypatch.setattr('blueprints.tools.get_ml_service', lambda: FakeMLService())
 
@@ -511,7 +689,7 @@ def test_chronic_risk_post_no_longer_returns_405(client, db_session, monkeypatch
 
     monkeypatch.setattr(
         'blueprints.tools.get_weather_with_cache',
-        lambda _location: ({'temperature': 32, 'humidity': 70, 'data_source': 'QWeather', 'is_mock': False}, False),
+        lambda _location: (_trusted_qweather_current(32, 70), False),
     )
     monkeypatch.setattr('blueprints.tools.get_chronic_service', lambda: FakeChronicService())
 

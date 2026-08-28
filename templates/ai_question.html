@@ -11,7 +11,12 @@
                     <i class="bi bi-chat-dots display-5 text-primary"></i>
                     <h3 class="mt-3">随时询问天气和行动建议</h3>
                     <p class="text-muted mb-4">点击 AI 助手，可查询天气信息和通用行动建议。身体明显不适时请及时就医。</p>
-                    <button class="btn btn-primary" id="openAiChat">
+                    {% if not ai_available %}
+                    <div class="alert alert-info text-start" role="status">
+                        AI 问答当前未配置，页面不会向第三方模型发送任何信息。请先查看天气、风险说明和通用行动建议。
+                    </div>
+                    {% endif %}
+                    <button class="btn btn-primary" id="openAiChat" {% if not ai_available %}disabled aria-disabled="true"{% endif %}>
                         <i class="bi bi-robot"></i> 打开AI助手
                     </button>
                 </div>
@@ -19,14 +24,17 @@
         </div>
     </div>
 </div>
+{% endblock %}
 
 {% block extra_js %}
+{% if ai_available %}
 <script>
-document.getElementById('openAiChat').addEventListener('click', function() {
+const openAiChatButton = document.getElementById('openAiChat');
+if (openAiChatButton) openAiChatButton.addEventListener('click', function() {
     if (window.AIChat && typeof window.AIChat.open === 'function') {
         window.AIChat.open();
     }
 });
 </script>
-{% endblock %}
+{% endif %}
 {% endblock %}

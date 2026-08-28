@@ -19,7 +19,7 @@ from core.time_utils import (
 from core.weather import (
     get_consecutive_hot_days,
     get_weather_with_cache,
-    is_qweather_online_weather,
+    is_heat_action_weather_ready,
     normalize_location_name,
 )
 from core.usage import log_usage_event
@@ -38,6 +38,7 @@ from utils.validators import sanitize_input
 
 from ._common import (
     AUTO_ESCALATE_STAGE,
+    CARE_ROLES,
     CARE_ACTION_OPTIONS,
     HEAT_RISK_LABELS,
     RELAY_STAGE_LABELS,
@@ -78,6 +79,19 @@ _WEATHER_WAITING_LABEL = '天气更新中'
 _UNKNOWN_ELDER_ACTION_LABEL = '其他自护行动（旧版本记录）'
 
 
+def _require_care_role():
+    """照护域只接受家庭照护角色，避免社区账号跨域读写。"""
+    return _require_roles(*CARE_ROLES)
+
+
+def _configured_location_suggestions():
+    """读取地点建议，不把配置坐标写入社区主数据。"""
+    configured = current_app.config.get('COMMUNITY_COORDS_GCJ') or {}
+    if not isinstance(configured, dict):
+        return []
+    return list(configured)
+
+
 def _build_elder_action_labels(value):
     """把老人自报行动映射为安全展示文案，不回显未知原始值。"""
     parsed = safe_json_loads(value, [])
@@ -94,8 +108,8 @@ def _build_elder_action_labels(value):
 
 
 def _heat_weather_available(weather_data):
-    """仅允许字段完整的真实和风天气进入热风险计算。"""
-    if not is_qweather_online_weather(weather_data):
+    """基础温湿热行动接受新鲜可信的和风或 Open-Meteo 实况。"""
+    if not is_heat_action_weather_ready(weather_data):
         return False
     for field in _REQUIRED_HEAT_WEATHER_FIELDS:
         try:
@@ -466,6 +480,7 @@ def _build_pair_management_context(caregiver_mode=False):
         'status_date': status_date,
         'wxpusher_feature_enabled': wxpusher_feature_enabled,
         'push_channel_ready': push_channel_ready,
+        'location_suggestions': _configured_location_suggestions(),
     }
 
     if caregiver_mode:
@@ -483,6 +498,8 @@ def _build_pair_management_context(caregiver_mode=False):
 
 def pair_management():
     """照护绑定管理"""
+    if not _require_care_role():
+        return redirect(url_for('user.user_dashboard'))
     if is_guest_user(current_user):
         flash('游客模式无法创建绑定，请注册/登录正式账号', 'error')
         return redirect(url_for('user.user_dashboard'))
@@ -523,22 +540,23 @@ def pair_management():
 
 
 def caregiver_dashboard():
-    """照护人工作台"""
-    if not _require_roles('caregiver', 'admin'):
+    """兼容旧书签并统一转向家庭照护工作台。"""
+    if not _require_care_role():
         return redirect(url_for('user.user_dashboard'))
     if is_guest_user(current_user):
         flash('游客模式无法进入照护工作台', 'error')
         return redirect(url_for('user.user_dashboard'))
 
-    context = _build_pair_management_context(caregiver_mode=True)
-    return render_template('pair_management.html', **context)
+    return redirect(url_for('user.pair_management'))
 
 
 def caregiver_pair_create():
     """照护人创建绑定短码"""
+    if not _require_care_role():
+        return redirect(url_for('user.user_dashboard'))
     if is_guest_user(current_user):
         flash('游客模式无法创建绑定', 'error')
-        return redirect(url_for('user.caregiver_dashboard'))
+        return redirect(url_for('user.user_dashboard'))
 
     location_query = sanitize_input(request.form.get('location_query'), max_length=200)
     if not location_query:
@@ -546,7 +564,7 @@ def caregiver_pair_create():
     location_query = (location_query or '').strip()
     if not location_query:
         flash('请填写老人所在地（支持任意中文地点）', 'error')
-        return redirect(url_for('user.caregiver_dashboard'))
+        return redirect(url_for('user.pair_management'))
 
     member_id = request.form.get('member_id')
     try:
@@ -566,13 +584,13 @@ def caregiver_pair_create():
             exc_info=True,
         )
         flash('创建失败，请检查输入后重试。', 'error')
-        return redirect(url_for('user.caregiver_dashboard'))
-    return redirect(url_for('user.caregiver_dashboard', created=pair_id))
+        return redirect(url_for('user.pair_management'))
+    return redirect(url_for('user.pair_management', created=pair_id))
 
 
 def caregiver_pair_detail(pair_id):
     """照护关系详情"""
-    if not _require_roles('caregiver', 'admin'):
+    if not _require_care_role():
         return redirect(url_for('user.user_dashboard'))
     if is_guest_user(current_user):
         flash('游客模式无法查看详情', 'error')
@@ -648,7 +666,7 @@ def caregiver_pair_detail(pair_id):
 
 def caregiver_action_log(pair_id):
     """照护行动记录"""
-    if not _require_roles('caregiver', 'admin'):
+    if not _require_care_role():
         return redirect(url_for('user.user_dashboard'))
     if is_guest_user(current_user):
         flash('游客模式无法记录行动', 'error')
@@ -718,7 +736,7 @@ def caregiver_action_log(pair_id):
 
 def caregiver_wechat_template():
     """照护人微信模板"""
-    if not _require_roles('caregiver', 'admin'):
+    if not _require_care_role():
         return redirect(url_for('user.user_dashboard'))
 
     short_code = sanitize_input(request.args.get('short_code'), max_length=12)
@@ -813,6 +831,8 @@ def caregiver_wechat_template():
 
 
 def _handle_pair_escalate(pair_id, redirect_url, target_stage=None):
+    if not _require_care_role():
+        return redirect(url_for('user.user_dashboard'))
     if is_guest_user(current_user):
         flash('游客模式无法升级', 'error')
         return redirect(url_for('user.user_dashboard'))
@@ -892,25 +912,25 @@ def pair_backup_contact(pair_id):
 
 def caregiver_relay_escalate():
     """照护人升级链推进"""
-    if not _require_roles('caregiver', 'admin'):
+    if not _require_care_role():
         return redirect(url_for('user.user_dashboard'))
 
     pair_id = request.form.get('pair_id', type=int)
     if not pair_id:
         flash('缺少照护关系', 'error')
-        return redirect(url_for('user.caregiver_dashboard'))
+        return redirect(url_for('user.pair_management'))
     return _handle_pair_escalate(pair_id, url_for('user.caregiver_pair_detail', pair_id=pair_id))
 
 
 def caregiver_relay_backup():
     """照护人标记备选联系人已联系"""
-    if not _require_roles('caregiver', 'admin'):
+    if not _require_care_role():
         return redirect(url_for('user.user_dashboard'))
 
     pair_id = request.form.get('pair_id', type=int)
     if not pair_id:
         flash('缺少照护关系', 'error')
-        return redirect(url_for('user.caregiver_dashboard'))
+        return redirect(url_for('user.pair_management'))
     return _handle_pair_escalate(
         pair_id,
         url_for('user.caregiver_pair_detail', pair_id=pair_id),

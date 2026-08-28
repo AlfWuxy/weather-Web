@@ -143,9 +143,11 @@ def test_caregiver_dashboard_displays_confirmed_at_in_app_timezone(
     _login_as(client, user.id)
     _patch_caregiver_weather(monkeypatch)
 
-    response = client.get('/caregiver')
+    response = client.get('/caregiver', follow_redirects=True)
 
     assert response.status_code == 200
+    assert response.history
+    assert response.history[0].headers['Location'].endswith('/pairs')
     assert (
         f'<div class="text-muted small">{expected_display}</div>'
         in response.get_data(as_text=True)

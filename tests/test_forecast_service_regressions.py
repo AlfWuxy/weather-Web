@@ -282,6 +282,7 @@ def test_forecast_cards_do_not_substitute_visit_probability_for_composite_score(
         'temperature_min': 24,
         'temperature_mean': 27.5,
         'humidity': 70,
+        'wind_speed': 2.5,
         'condition': '多云',
         'data_source': 'QWeather',
         'is_mock': False,
@@ -310,6 +311,7 @@ def test_forecast_cards_pass_transparency_inputs():
         'temperature_min': 25,
         'temperature_mean': 29,
         'humidity': 72,
+        'wind_speed': 2.5,
         'condition': '晴',
         'data_source': 'QWeather',
         'is_mock': False,
@@ -396,8 +398,11 @@ def test_forecast_page_embeds_recalculation_context(authenticated_client, monkey
             'temperature_max': 32 + idx,
             'temperature_min': 24 + idx,
             'temperature_mean': 28 + idx,
-            'condition': '晴',
-            'humidity': 75,
+                'condition': '晴',
+                'humidity': 75,
+                'wind_speed': 2.5,
+                'data_source': 'QWeather',
+                'is_mock': False,
         }
         for idx in range(7)
     ]

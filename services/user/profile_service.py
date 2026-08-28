@@ -2,7 +2,6 @@
 """Profile and assessment routes."""
 import json
 import logging
-import math
 from datetime import timedelta
 from urllib.parse import urlparse
 
@@ -28,7 +27,7 @@ from core.weather import (
     compact_assessment_weather_condition,
     ensure_user_location_valid,
     get_weather_with_cache,
-    is_qweather_online_weather,
+    normalize_health_model_weather,
     normalize_location_name,
 )
 from utils.parsers import json_or_none, safe_json_loads
@@ -85,14 +84,8 @@ def _wxpusher_consent_is_current(user, required_version):
 
 
 def _personal_weather_available(weather_data):
-    """个人评估只接受来源明确且温度可计算的真实和风天气。"""
-    if not is_qweather_online_weather(weather_data):
-        return False
-    try:
-        temperature = float(weather_data.get('temperature'))
-    except (AttributeError, TypeError, ValueError):
-        return False
-    return math.isfinite(temperature)
+    """个人评估只接受通过健康模型门禁的和风实况。"""
+    return normalize_health_model_weather(weather_data) is not None
 
 
 def _safe_referrer_or_dashboard():
@@ -144,6 +137,7 @@ def health_assessment():
                     'warning'
                 )
                 return redirect(url_for('user.health_assessment'))
+            health_weather = normalize_health_model_weather(weather_data)
             health_service = HealthRiskService()
 
             # 构建用户健康档案
@@ -157,7 +151,7 @@ def health_assessment():
 
             risk_result = health_service.assess_personal_weather_health_risk(
                 user_health_profile,
-                weather_data,
+                health_weather,
                 screening=screening
             )
 
@@ -203,7 +197,7 @@ def health_assessment():
                     assessment = HealthRiskAssessment(
                         user_id=owner_user_id,
                         assessment_date=utcnow(),
-                        weather_condition=compact_assessment_weather_condition(weather_data),
+                        weather_condition=compact_assessment_weather_condition(health_weather),
                         risk_score=risk_result['risk_score'],
                         risk_level=risk_result['risk_level'],
                         disease_risks=json.dumps(disease_risks, ensure_ascii=False),

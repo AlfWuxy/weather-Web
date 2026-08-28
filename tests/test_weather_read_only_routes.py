@@ -192,6 +192,11 @@ def test_incomplete_redis_current_falls_back_to_complete_database(
         'temperature_max': 39.0,
         'temperature_min': 29.0,
         'humidity': 62.0,
+        'pressure': 1002.0,
+        'weather_condition': '晴',
+        'wind_speed': 1.5,
+        'observed_at': utcnow().isoformat(),
+        'quality_version': 1,
         'data_source': 'QWeather',
         'is_mock': False,
     }
@@ -212,7 +217,10 @@ def test_incomplete_redis_current_falls_back_to_complete_database(
         weather, used_cache = get_weather_with_cache('都昌县')
 
     assert used_cache is True
-    assert weather == complete_weather
+    for key, value in complete_weather.items():
+        assert weather[key] == value
+    assert weather['location'] == '都昌县'
+    assert weather['weather_location'] == '都昌县'
 
 
 @pytest.mark.parametrize(
