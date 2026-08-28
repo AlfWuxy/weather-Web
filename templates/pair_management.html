@@ -1,34 +1,29 @@
 {% extends "base.html" %}
 {% from "partials/metric_info.html" import metric_info with context %}
 
-{% block title %}照护工作台 - 宜老天气通{% endblock %}
+{% block title %}照护工作台 · 宜老天气通{% endblock %}
 
 {% block content %}
 <div class="container my-4">
     <div class="row mb-3">
         <div class="col-12">
-            <h2><i class="bi bi-people"></i> 子女首页 · 照护行动工作台</h2>
+            <h2><i class="bi bi-people"></i> 照护工作台 · 先为家人添加一个关注地点</h2>
             <p class="text-muted mb-0">
-                为家中老人设置所在地，高温或寒潮来临时及时收到提醒。慢病类别可选填，用于提供更贴合的日常建议。
+                为家中老人设置所在地，查看高温或寒潮风险，需要时复制话术手动提醒。
+                {% if wxpusher_feature_enabled %}
+                    自动微信推送需在个人设置中单独配置并开启。
+                {% else %}
+                    当前请复制话术手动提醒。
+                {% endif %}
+                慢病类别可选填，用于提供更贴合的日常建议。
                 所在地和关联档案仅用于天气查询与提醒，请勿填写精确门牌信息。
             </p>
-            {% if wxpusher_feature_enabled %}
-            {% if not current_user.push_enabled or not current_user.wxpusher_uid %}
-                <div class="alert alert-warning mt-3 mb-0">
-                    <div class="fw-semibold">尚未开启自动推送</div>
+            {% if pairs and wxpusher_feature_enabled and (not push_channel_ready or not current_user.push_enabled or not current_user.wxpusher_uid_verified_at) %}
+                <div class="alert alert-info mt-3 mb-0">
                     <div class="small">
-                        请到「<a href="{{ url_for('user.profile') }}">个人设置</a>」填写 WxPusher UID 并开启推送。
+                        提醒不会自动发到微信。需要的话去「<a href="{{ url_for('user.profile') }}">个人设置</a>」绑定接收码；现在仍可复制话术手动发送。
                     </div>
                 </div>
-            {% endif %}
-            {% if not push_channel_ready %}
-                <div class="alert alert-danger mt-3 mb-0">
-                    <div class="fw-semibold">自动推送暂不可用</div>
-                    <div class="small">
-                        你仍可复制提醒话术并手动发送，行动记录不会受到影响。
-                    </div>
-                </div>
-            {% endif %}
             {% endif %}
             {% if current_user.role in ['caregiver', 'admin'] %}
                 <a class="btn btn-sm btn-outline-primary mt-2" href="{{ url_for('user.community_announce') }}">
@@ -62,13 +57,16 @@
                                 {% endfor %}
                             </select>
                             <div class="text-muted small mt-2">
-                                老人档案在「健康管理与照护 → <a href="{{ url_for('health.family_members') }}">家庭成员</a>」里维护（可登记慢病类别）。
+                                还没有档案？去「<a href="{{ url_for('health.family_members') }}">家人档案</a>」补充称呼和慢病信息（可选）。
                             </div>
                         </div>
                         <div class="mb-3">
                             <label class="form-label">老人所在地</label>
                             <input class="form-control" name="location_query" list="communityOptions" placeholder="例如：九江市都昌县/九江某乡镇">
                             <datalist id="communityOptions">
+                                {% for location in location_suggestions|default([]) %}
+                                    <option value="{{ location }}"></option>
+                                {% endfor %}
                                 {% for community in communities %}
                                     <option value="{{ community.name }}"></option>
                                 {% endfor %}
@@ -270,7 +268,7 @@
                         <div class="alert alert-info mb-0">
                             <div class="fw-semibold mb-2">暂无监测对象，按下面三步完成设置：</div>
                             <ol class="list-unstyled mb-0">
-                                <li class="mb-2">1. 建立家人档案，可在<a href="{{ url_for('health.family_members') }}">家庭成员</a>中补充慢病信息。</li>
+                                <li class="mb-2">1. 建立家人档案，可在<a href="{{ url_for('health.family_members') }}">家人档案</a>中补充慢病信息。</li>
                                 <li class="mb-2">2. 添加监测对象，在左侧选择家人并填写所在地。</li>
                                 {% if config.get('WECHAT_FORMAL_RUNTIME') %}
                                     <li>3. 微信搜索宜老平安 → 宜老天气通 → 照护选择家人。</li>

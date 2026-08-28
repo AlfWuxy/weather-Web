@@ -7,6 +7,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from core.time_utils import utcnow
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
@@ -167,14 +169,16 @@ def test_elder_page_prioritizes_risk_and_confirms_calls(
         lambda location: ({
             'temperature': 35.5,
             'temperature_max': 38,
-            'temperature_min': 28,
-            'humidity': 70,
-            'pressure': 1002,
-            'weather_condition': '晴',
-            'wind_speed': 1.5,
-            'aqi': 60,
-            'is_mock': False,
-            'data_source': 'QWeather',
+                'temperature_min': 28,
+                'humidity': 70,
+                'pressure': 1002,
+                'weather_condition': '晴',
+                'wind_speed': 1.5,
+                'aqi': 60,
+                'observed_at': utcnow().isoformat(),
+                'quality_version': 1,
+                'is_mock': False,
+                'data_source': 'QWeather',
         }, False),
     )
     monkeypatch.setattr(
@@ -267,6 +271,7 @@ def test_cooling_first_frame_and_filters_are_truthful(client, db_session, monkey
         'services.public_service.get_weather_with_cache',
         lambda location: ({
             'temperature': 27.5,
+            'observed_at': utcnow().isoformat(),
             'is_mock': False,
             'data_source': 'QWeather',
         }, False),

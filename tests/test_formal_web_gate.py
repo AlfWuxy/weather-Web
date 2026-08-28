@@ -166,6 +166,7 @@ def test_formal_web_registration_keeps_minimal_account_creation(
     assert response.status_code in (301, 302, 303)
     assert "/login" in response.headers["Location"]
     user = User.query.filter_by(username="formal_link_user").one()
+    assert user.role == "caregiver"
     assert user.phone_normalized == "+8613800138000"
     assert user.phone_verified_at is None
 

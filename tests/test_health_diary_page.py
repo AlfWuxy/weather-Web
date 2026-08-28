@@ -4,7 +4,7 @@ from datetime import date
 from core.db_models import Community, FamilyMember, HealthDiary, User, WeatherData
 
 
-def _seed_health_diary_data(db_session, *, with_weather):
+def _seed_health_diary_data(db_session, *, with_weather, weather_location='都昌县'):
     db_session.add(Community(
         name='测试社区',
         population=1200,
@@ -34,7 +34,7 @@ def _seed_health_diary_data(db_session, *, with_weather):
     if with_weather:
         db_session.add(WeatherData(
             date=entry_date,
-            location='测试社区',
+            location=weather_location,
             temperature=31.2,
             humidity=72,
             weather_condition='晴'
@@ -68,3 +68,45 @@ def test_health_diary_page_handles_missing_weather(authenticated_client, db_sess
     assert '李奶奶' in html
     assert '头晕' in html
     assert '°C /' not in html
+
+
+def test_health_diary_page_falls_back_to_legacy_community_weather(
+    authenticated_client,
+    db_session,
+):
+    """县级 canonical 切换后，旧社区键下的历史天气仍可读。"""
+    _seed_health_diary_data(
+        db_session,
+        with_weather=True,
+        weather_location='测试社区',
+    )
+
+    response = authenticated_client.get('/health-diary')
+
+    assert response.status_code == 200
+    html = response.get_data(as_text=True)
+    assert '31.2' in html
+    assert '72' in html
+
+
+def test_health_diary_page_prefers_canonical_weather_for_same_date(
+    authenticated_client,
+    db_session,
+):
+    """同日新旧键并存时，使用县级 canonical 真实记录。"""
+    _seed_health_diary_data(db_session, with_weather=True)
+    db_session.add(WeatherData(
+        date=date(2026, 3, 28),
+        location='测试社区',
+        temperature=19.4,
+        humidity=44,
+        weather_condition='旧记录',
+    ))
+    db_session.commit()
+
+    response = authenticated_client.get('/health-diary')
+
+    assert response.status_code == 200
+    html = response.get_data(as_text=True)
+    assert '31.2' in html
+    assert '19.4' not in html

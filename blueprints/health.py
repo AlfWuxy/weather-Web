@@ -20,7 +20,12 @@ from core.health_profiles import (
 )
 from core.time_utils import today_local
 from core.usage import log_usage_event
-from core.weather import ensure_user_location_valid, get_weather_with_cache, is_qweather_online_weather
+from core.weather import (
+    canonical_weather_location,
+    ensure_user_location_valid,
+    get_weather_with_cache,
+    is_qweather_online_weather,
+)
 from core.db_models import (
     FamilyMember,
     FamilyMemberProfile,
@@ -574,12 +579,20 @@ def health_diary():
 
     entry_dates = sorted({entry.entry_date for entry in entries if entry.entry_date})
     weather_map = {}
-    if entry_dates and current_user.community:
+    if entry_dates:
+        canonical_location = canonical_weather_location(current_user.community)
+        weather_locations = [canonical_location]
+        legacy_location = str(current_user.community or '').strip()
+        if legacy_location and legacy_location != canonical_location:
+            weather_locations.append(legacy_location)
         weather_rows = WeatherData.query.filter(
-            WeatherData.location == current_user.community,
+            WeatherData.location.in_(weather_locations),
             WeatherData.date.in_(entry_dates)
         ).all()
-        weather_map = {item.date: item for item in weather_rows}
+        # 新的县级 canonical 记录优先，旧社区键只填补历史缺口。
+        for item in weather_rows:
+            if item.location == canonical_location or item.date not in weather_map:
+                weather_map[item.date] = item
 
     return render_template(
         'health_diary.html',

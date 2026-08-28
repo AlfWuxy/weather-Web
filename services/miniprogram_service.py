@@ -174,6 +174,13 @@ def _source_status(
         },
         "warnings": {
             "available": warning_available,
+            "provider": (
+                "QWeather"
+                if warning_available
+                and str(warning_state.get("status") or "").strip().casefold()
+                in {"ok", "success"}
+                else "unavailable"
+            ),
             "count": len(warnings or []),
             "status": str(warning_state.get("status") or ("success" if warning_available else "unavailable")),
             **(timing.get("warnings") or {}),

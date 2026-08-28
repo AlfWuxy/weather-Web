@@ -1,5 +1,4 @@
 # -*- coding: utf-8 -*-
-import math
 import re
 from datetime import datetime, timedelta, timezone
 
@@ -36,6 +35,25 @@ def _seed_community_risk_data(db_session):
     db_session.commit()
 
 
+def _trusted_weather(temperature=30.0, **overrides):
+    payload = {
+        'temperature': temperature,
+        'temperature_max': temperature + 3,
+        'temperature_min': temperature - 5,
+        'humidity': 65,
+        'pressure': 1005,
+        'wind_speed': 1.8,
+        'weather_condition': '晴',
+        'aqi': 45,
+        'data_source': 'QWeather',
+        'observed_at': datetime.now(timezone.utc).isoformat(),
+        'quality_version': 1,
+        'is_mock': False,
+    }
+    payload.update(overrides)
+    return payload
+
+
 def test_community_risk_page_has_academic_sections(authenticated_client):
     response = authenticated_client.get('/community-risk')
     assert response.status_code == 200
@@ -67,8 +85,12 @@ def test_community_risk_page_has_academic_sections(authenticated_client):
     assert 'BaselineVisits' in html
 
 
-def test_community_risk_api_returns_extended_fields(authenticated_client, db_session):
+def test_community_risk_api_excludes_incomplete_profiles(authenticated_client, db_session, monkeypatch):
     _seed_community_risk_data(db_session)
+    monkeypatch.setattr(
+        'services.api_service.get_weather_with_cache',
+        lambda city: (_trusted_weather(), True),
+    )
 
     response = authenticated_client.post(
         '/api/community/risk-map-v2',
@@ -76,13 +98,6 @@ def test_community_risk_api_returns_extended_fields(authenticated_client, db_ses
             'analysis_date': '2025-10-30',
             'window_days': 30,
             'disease': '呼吸系统',
-            'weather': {
-                'temperature': 30,
-                'humidity': 65,
-                'aqi': 45,
-                'data_source': 'QWeather',
-                'is_mock': False,
-            }
         },
         headers={'X-CSRF-Token': 'test-csrf-token'}
     )
@@ -91,87 +106,26 @@ def test_community_risk_api_returns_extended_fields(authenticated_client, db_ses
     payload = response.get_json()
     assert payload['success'] is True
 
-    assert 'rankings' in payload
-    assert len(payload['rankings']) >= 1
-    first = payload['rankings'][0]
-    assert 'risk_index' in first
-    assert 'weather_hazard_score' in first
-    assert 'burden_percentile' in first
-    assert 'uncertainty_penalty' in first
-    assert 'historical_component_available' in first
-    assert 'risk_weights' in first
-    assert 'risk_contributions' in first
-    assert 'hazard_formula' in first
-    assert 'svi_percentile' in first
-    assert 'sir' in first
-    assert 'ci_low' in first
-    assert 'ci_high' in first
-    assert 'uncertainty_index' in first
-    assert 'hotspot_category' in first
-    assert 'impact_bucket' in first
-    assert 'likelihood_bucket' in first
-    assert 'matrix_score' in first
-
-    assert first['historical_component_available'] is True
-    assert first['risk_weights'] == {'weather': 0.45, 'svi': 0.35, 'burden': 0.2}
-    weights = first['risk_weights']
-    recomputed = (
-        weights['weather'] * first['weather_hazard_score']
-        + weights['svi'] * first['svi_percentile']
-        + weights['burden'] * first['burden_percentile']
-    ) * first['uncertainty_penalty']
-    assert abs(recomputed - first['risk_index']) <= 0.2
-    contributions = first['risk_contributions']
-    assert abs(contributions['weather'] - weights['weather'] * first['weather_hazard_score']) <= 0.02
-    assert abs(contributions['svi'] - weights['svi'] * first['svi_percentile']) <= 0.02
-    assert abs(contributions['burden'] - weights['burden'] * first['burden_percentile']) <= 0.02
-
-    hazard_formula = first['hazard_formula']
-    assert set(hazard_formula) == {
-        'expression',
-        'weather_rr',
-        'vi',
-        'baseline_visits',
-        'excess',
-        'efold',
-        'hazard',
-    }
-    recomputed_excess = (
-        max(hazard_formula['weather_rr'] - 1.0, 0.0)
-        * hazard_formula['vi']
-        * hazard_formula['baseline_visits']
-    )
-    recomputed_hazard = min(
-        100.0,
-        max(
-            0.0,
-            (1.0 - math.exp(-recomputed_excess / hazard_formula['efold'])) * 100.0,
-        ),
-    )
-    assert math.isclose(hazard_formula['excess'], recomputed_excess, rel_tol=0, abs_tol=1e-12)
-    assert math.isclose(hazard_formula['hazard'], recomputed_hazard, rel_tol=0, abs_tol=1e-12)
-    assert abs(hazard_formula['hazard'] - first['weather_hazard_score']) <= 0.05
-
-    first_feature = payload['map_data']['features'][0]
-    assert first_feature['properties']['hazard_formula'] == hazard_formula
-
-    assert 'impact_likelihood_matrix' in payload
-    matrix = payload['impact_likelihood_matrix']
-    assert matrix['impact_levels'] == ['low', 'medium', 'high', 'very_high']
-    assert matrix['likelihood_levels'] == ['low', 'medium', 'high', 'very_high']
-
-    assert 'layers' in payload
-    assert 'risk_index' in payload['layers']
-    assert 'equity_stratification' in payload
-    assert 'quartiles' in payload['equity_stratification']
-    assert 'methodology' in payload
-    assert len(payload['methodology']) >= 3
-
-    summary = payload.get('summary', {})
-    assert summary.get('window_days') == 30
-    assert summary.get('total_communities', 0) >= 1
-    assert summary.get('historical_component_available') is True
-    assert 'equity_priority_count' in summary
+    assert len(payload['rankings']) == 3
+    for row in payload['rankings']:
+        assert row['rank'] is None
+        assert row['ranking_eligible'] is False
+        assert row['data_status'] == 'insufficient_vulnerability_data'
+        assert row['risk_index'] is None
+        assert row['weather_hazard_score'] is None
+        assert row['expected_excess_visits'] is None
+        assert row['hazard_formula'] is None
+        assert row['matrix_score'] is None
+    assert payload['map_data']['features'] == []
+    assert all(not values for values in payload['layers'].values())
+    assert payload['equity_stratification']['quartiles'] == []
+    summary = payload['summary']
+    assert summary['data_available'] is False
+    assert summary['data_status'] == 'insufficient_vulnerability_data'
+    assert summary['ranked_communities'] == 0
+    assert summary['unranked_communities'] == 3
+    assert summary['total_expected_excess'] is None
+    assert summary['historical_component_available'] is False
 
 
 def test_all_unmatched_records_keep_historical_component_unavailable(
@@ -199,6 +153,10 @@ def test_all_unmatched_records_keep_historical_component_unavailable(
 
     # 强制本次请求重新读取当前测试数据库中的社区与病例。
     monkeypatch.setattr(risk_module, '_community_service', None)
+    monkeypatch.setattr(
+        'services.api_service.get_weather_with_cache',
+        lambda city: (_trusted_weather(32, humidity=68, aqi=42), True),
+    )
     clear_local_community_risk_cache()
 
     response = authenticated_client.post(
@@ -207,13 +165,6 @@ def test_all_unmatched_records_keep_historical_component_unavailable(
             'analysis_date': '2026-01-10',
             'window_days': 30,
             'disease': '呼吸系统',
-            'weather': {
-                'temperature': 32,
-                'humidity': 68,
-                'aqi': 42,
-                'data_source': 'QWeather',
-                'is_mock': False,
-            },
         },
         headers={'X-CSRF-Token': 'test-csrf-token'},
     )
@@ -229,6 +180,9 @@ def test_all_unmatched_records_keep_historical_component_unavailable(
     assert summary['median_uncertainty_index'] is None
 
     for row in payload['rankings']:
+        assert row['ranking_eligible'] is False
+        assert row['risk_index'] is None
+        assert row['expected_excess_visits'] is None
         assert row['historical_component_available'] is False
         assert row['observed_cases'] is None
         assert row['sir'] is None
@@ -238,14 +192,5 @@ def test_all_unmatched_records_keep_historical_component_unavailable(
         assert row['probability_exceed_baseline'] is None
         assert row['burden_percentile'] is None
         assert row['uncertainty_index'] is None
-        assert row['uncertainty_penalty'] == 1.0
-        assert row['risk_weights'] == {
-            'weather': 0.5625,
-            'svi': 0.4375,
-            'burden': 0.0,
-        }
-        recomputed = (
-            row['risk_weights']['weather'] * row['weather_hazard_score']
-            + row['risk_weights']['svi'] * row['svi_percentile']
-        )
-        assert abs(recomputed - row['risk_index']) <= 0.2
+        assert row['uncertainty_penalty'] is None
+        assert row['risk_weights'] == {}

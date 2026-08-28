@@ -49,7 +49,11 @@ CURRENT = {
     "temperature_max": 38.0,
     "temperature_min": 28.0,
     "humidity": 72.0,
+    "pressure": 1002.0,
+    "wind_speed": 2.0,
     "weather_condition": "晴",
+    "observed_at": utcnow().isoformat(),
+    "quality_version": 1,
     "is_mock": False,
     "data_source": "QWeather",
 }
@@ -61,6 +65,8 @@ FORECAST = [
         "temperature_max": 39.0,
         "temperature_min": 29.0,
         "humidity": 70.0,
+        "wind_speed": 2.0,
+        "condition": "晴",
         "is_mock": False,
         "data_source": "QWeather",
     }
@@ -1918,6 +1924,54 @@ def test_health_assessment_submit_latest_and_owner_scope(
     ).status_code == 404
 
 
+def test_health_assessment_rejects_openmeteo_snapshot(
+    app,
+    client,
+    db_session,
+    monkeypatch,
+):
+    from core.db_models import FamilyMember
+    from services.miniprogram_service import persist_snapshot
+
+    owner, token = _user_and_token(db_session, "assessment_openmeteo_owner")
+    member = FamilyMember(
+        user_id=owner.id,
+        name="基础天气老人",
+        relation="家人",
+        age=72,
+    )
+    db_session.add(member)
+    db_session.commit()
+    pair = _pair(db_session, owner, "72456789", member=member)
+    with app.app_context():
+        persist_snapshot(
+            {**CURRENT, "data_source": "Open-Meteo"},
+            FORECAST,
+            [],
+            fetched_at=utcnow(),
+        )
+    monkeypatch.setattr(
+        "services.health_risk_service.HealthRiskService.assess_personal_weather_health_risk",
+        lambda *_args, **_kwargs: pytest.fail("Open-Meteo 不得进入健康模型"),
+    )
+
+    response = client.post(
+        "/mp/api/v1/health/assessment",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "pair_id": pair.id,
+            "outdoor_exposure": "medium",
+            "symptom_level": "none",
+            "hydration": "normal",
+            "medication_adherence": "good",
+            "sleep_quality": "fair",
+        },
+    )
+
+    assert response.status_code == 503
+    assert response.get_json()["error"] == "weather_snapshot_untrusted"
+
+
 def test_health_assessment_database_failure_does_not_log_sensitive_values(
     app,
     client,
@@ -3110,6 +3164,11 @@ def test_sync_cycle_calls_each_qweather_endpoint_at_most_once_and_enriches_forec
                 "temperature_max": None,
                 "temperature_min": None,
                 "humidity": 70,
+                "pressure": 1002,
+                "wind_speed": 2.0,
+                "weather_condition": "晴",
+                "observed_at": utcnow().isoformat(),
+                "quality_version": 1,
                 "data_source": "QWeather",
                 "is_mock": False,
             }
@@ -3167,8 +3226,8 @@ def test_sync_cycle_calls_each_qweather_endpoint_at_most_once_and_enriches_forec
     record = MiniProgramSnapshot.query.filter_by(snapshot_id=result["snapshot_id"]).one()
     payload = __import__("services.miniprogram_service", fromlist=["snapshot_payload"]).snapshot_payload(record)
     assert payload["current"]["temperature_max"] == 39.0
-    assert payload["forecast"][0]["risk_available"] is True
-    assert payload["forecast"][0]["risk_score"] is not None
+    assert payload["forecast"][0]["risk_available"] is False
+    assert payload["forecast"][0]["risk_score"] is None
     assert payload["risk"]["summary"]
     cached_record = WeatherCache.query.filter_by(location="都昌县").one()
     cached_payload = json.loads(cached_record.payload)
@@ -3200,56 +3259,99 @@ def test_sync_cycle_calls_each_qweather_endpoint_at_most_once_and_enriches_forec
     assert smoke_result["nowcast_updated"] == 0
 
 
-def test_sync_with_qweather_empty_never_instantiates_fetcher_or_uses_network(
+def test_sync_without_qweather_persists_openmeteo_display_only(
     app,
     db_session,
     monkeypatch,
 ):
-    from core.db_models import ForecastCache, MiniProgramSnapshot, WeatherCache
+    from core.db_models import (
+        ForecastCache,
+        MiniProgramSnapshot,
+        WeatherCache,
+        WeatherData,
+    )
+    from core.time_utils import today_local
     from services.miniprogram_service import snapshot_payload
     from services.pipelines import sync_weather_cache as pipeline
 
     app.config.update(QWEATHER_AUTH_MODE="disabled", QWEATHER_KEY="", QWEATHER_API_BASE="")
     monkeypatch.setattr(pipeline, "app", app)
-    monkeypatch.setattr(
-        pipeline,
-        "WeatherService",
-        lambda: pytest.fail("QWeather 为空时不应创建联网 fetcher"),
-    )
-    monkeypatch.setattr(
-        "requests.get",
-        lambda *_args, **_kwargs: pytest.fail("测试禁止外网"),
-    )
-    old_fetched_at = utcnow() - timedelta(hours=2)
-    db_session.add_all(
-        [
-            WeatherCache(
-                location="都昌县",
-                fetched_at=old_fetched_at,
-                payload=json.dumps(CURRENT, ensure_ascii=False),
-                is_mock=False,
-            ),
-            ForecastCache(
-                location="qweather-only:都昌县",
-                days=7,
-                fetched_at=old_fetched_at,
-                payload=json.dumps({"daily": FORECAST}, ensure_ascii=False),
-                is_mock=False,
-            ),
-        ]
-    )
-    db_session.commit()
+    observed_at = utcnow()
+    start = today_local()
+    calls = {"current": 0, "forecast": 0}
 
-    result = pipeline.sync_weather_cache(update_daily=False)
+    class OpenMeteoOnlyWeather:
+        def get_current_weather(self, *_args, **kwargs):
+            calls["current"] += 1
+            assert kwargs["include_enrichment"] is False
+            assert kwargs["allow_fallback"] is True
+            return {
+                "temperature": 31.0,
+                "temperature_max": 35.0,
+                "temperature_min": 24.0,
+                "humidity": 68.0,
+                "pressure": 1006.0,
+                "wind_speed": 2.5,
+                "weather_condition": "多云",
+                "observed_at": observed_at.isoformat(),
+                "air_quality_available": False,
+                "air_observed_at": None,
+                "quality_version": 1,
+                "data_source": "Open-Meteo",
+                "is_mock": False,
+            }
+
+        def get_openmeteo_daily_forecast(self, _location, days=7):
+            calls["forecast"] += 1
+            return {
+                "success": True,
+                "daily": [
+                    {
+                        "date": (start + timedelta(days=index)).isoformat(),
+                        "forecast_date": (start + timedelta(days=index)).isoformat(),
+                        "temperature_max": 35.0 + index,
+                        "temperature_min": 24.0 + index,
+                        "temperature_mean": 29.5 + index,
+                        "condition": "多云",
+                        "precip_probability": 20.0,
+                        "humidity": None,
+                        "wind_speed": None,
+                        "data_source": "Open-Meteo",
+                        "is_mock": False,
+                    }
+                    for index in range(days)
+                ],
+                "meta": {"source": "Open-Meteo"},
+            }
+
+        def get_short_term_nowcast(self, *_args, **_kwargs):
+            return {}
+
+    monkeypatch.setattr(pipeline, "WeatherService", OpenMeteoOnlyWeather)
+
+    result = pipeline.sync_weather_cache(update_daily=True)
 
     assert result["locations"] == 1
+    assert result["updated"] == 1
+    assert result["daily_updated"] == 0
+    assert result["openmeteo_forecast_updated"] == 1
+    assert result["snapshot_ready"] is False
     assert result["snapshot_id"]
+    assert calls == {"current": 1, "forecast": 1}
     record = MiniProgramSnapshot.query.filter_by(snapshot_id=result["snapshot_id"]).one()
     payload = snapshot_payload(record)
-    assert payload["stale"] is True
-    assert record.fetched_at == old_fetched_at.replace(tzinfo=None)
+    assert payload["source_status"]["weather"]["provider"] == "Open-Meteo"
     cached = WeatherCache.query.filter_by(location="都昌县").one()
-    assert cached.fetched_at == old_fetched_at.replace(tzinfo=None)
+    assert json.loads(cached.payload)["data_source"] == "Open-Meteo"
+    assert WeatherData.query.count() == 0
+    assert ForecastCache.query.filter_by(
+        location="openmeteo-only:都昌县",
+        days=7,
+    ).count() == 1
+    assert ForecastCache.query.filter_by(
+        location="qweather-only:都昌县",
+        days=7,
+    ).count() == 0
 
 
 def test_failed_current_cycle_does_not_reuse_fresh_snapshot_as_success(

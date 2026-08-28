@@ -1,5 +1,24 @@
 # -*- coding: utf-8 -*-
-from datetime import date
+from datetime import date, datetime, timezone
+
+
+def _trusted_weather(temperature=30.0, **overrides):
+    payload = {
+        'temperature': temperature,
+        'temperature_max': temperature + 3,
+        'temperature_min': temperature - 5,
+        'humidity': 65,
+        'pressure': 1005,
+        'wind_speed': 1.8,
+        'weather_condition': '晴',
+        'aqi': 45,
+        'data_source': 'QWeather',
+        'observed_at': datetime.now(timezone.utc).isoformat(),
+        'quality_version': 1,
+        'is_mock': False,
+    }
+    payload.update(overrides)
+    return payload
 
 
 def test_community_risk_api_reuses_cached_result(authenticated_client, monkeypatch):
@@ -27,7 +46,7 @@ def test_community_risk_api_reuses_cached_result(authenticated_client, monkeypat
             }
 
     def fake_get_weather_with_cache(city):
-        return ({'temperature': 30.0, 'humidity': 65, 'aqi': 45, 'data_source': 'QWeather', 'is_mock': False}, True)
+        return (_trusted_weather(), True)
 
     monkeypatch.setattr('services.api_service.get_weather_with_cache', fake_get_weather_with_cache)
     monkeypatch.setattr('services.community_risk_service.get_community_service', lambda: FakeCommunityService())
@@ -76,7 +95,7 @@ def test_community_risk_api_recomputes_for_different_payload(authenticated_clien
 
     monkeypatch.setattr(
         'services.api_service.get_weather_with_cache',
-        lambda city: ({'temperature': 29.0, 'humidity': 60, 'aqi': 40, 'data_source': 'QWeather', 'is_mock': False}, True),
+        lambda city: (_trusted_weather(29.0, humidity=60, aqi=40), True),
     )
     monkeypatch.setattr('services.community_risk_service.get_community_service', lambda: FakeCommunityService())
 
@@ -103,17 +122,7 @@ def test_precompute_cache_is_reused_by_risk_map_api(authenticated_client, monkey
     app.config['COMMUNITY_RISK_CACHE_TTL_SECONDS'] = 600
 
     calls = {'risk': 0}
-    weather = {
-        'temperature': 31.0,
-        'temperature_max': 34.0,
-        'temperature_min': 25.0,
-        'humidity': 70,
-        'aqi': 60,
-        'wind_speed': 1.8,
-        'weather_condition': '晴',
-        'data_source': 'QWeather',
-        'is_mock': False,
-    }
+    weather = _trusted_weather(31.0, humidity=70, aqi=60)
 
     class FakeCommunityService:
         def generate_community_risk_map(self, weather_data, target_date=None, window_days=None, disease_filter=None):
@@ -159,7 +168,7 @@ def test_precompute_cache_is_reused_by_risk_map_api(authenticated_client, monkey
     clear_local_community_risk_cache()
 
 
-def test_community_risk_api_recomputes_for_different_lag_temperatures(authenticated_client, monkeypatch):
+def test_community_risk_api_recomputes_for_different_canonical_lag_temperatures(authenticated_client, monkeypatch):
     from services.community_risk_cache import clear_local_community_risk_cache
 
     clear_local_community_risk_cache()
@@ -181,6 +190,14 @@ def test_community_risk_api_recomputes_for_different_lag_temperatures(authentica
                 'management_suggestions': [],
             }
 
+    canonical_weather = iter([
+        _trusted_weather(30, humidity=60, aqi=40, lag_temperatures=[30, 29, 28]),
+        _trusted_weather(30, humidity=60, aqi=40, lag_temperatures=[30, 12, 10]),
+    ])
+    monkeypatch.setattr(
+        'services.api_service.get_weather_with_cache',
+        lambda city: (next(canonical_weather), True),
+    )
     monkeypatch.setattr('services.community_risk_service.get_community_service', lambda: FakeCommunityService())
     headers = {'X-CSRF-Token': 'test-csrf-token'}
     base_payload = {
@@ -192,12 +209,12 @@ def test_community_risk_api_recomputes_for_different_lag_temperatures(authentica
 
     response_a = authenticated_client.post(
         '/api/community/risk-map-v2',
-        json={**base_payload, 'weather': {'temperature': 30, 'humidity': 60, 'aqi': 40, 'lag_temperatures': [30, 29, 28], 'data_source': 'QWeather', 'is_mock': False}},
+        json=base_payload,
         headers=headers
     )
     response_b = authenticated_client.post(
         '/api/community/risk-map-v2',
-        json={**base_payload, 'weather': {'temperature': 30, 'humidity': 60, 'aqi': 40, 'lag_temperatures': [30, 12, 10], 'data_source': 'QWeather', 'is_mock': False}},
+        json=base_payload,
         headers=headers
     )
 
@@ -206,6 +223,23 @@ def test_community_risk_api_recomputes_for_different_lag_temperatures(authentica
     assert calls['risk'] == 2
 
     clear_local_community_risk_cache()
+
+
+def test_community_risk_api_rejects_client_weather(authenticated_client):
+    response = authenticated_client.post(
+        '/api/community/risk-map-v2',
+        json={
+            'analysis_date': '2025-10-30',
+            'window_days': 30,
+            'disease': '呼吸系统',
+            'city': '都昌',
+            'weather': _trusted_weather(42, data_source='QWeather'),
+        },
+        headers={'X-CSRF-Token': 'test-csrf-token'},
+    )
+
+    assert response.status_code == 400
+    assert response.get_json()['error'] == 'client_weather_not_allowed'
 
 
 def test_community_risk_api_rejects_mock_weather(authenticated_client, monkeypatch):

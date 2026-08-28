@@ -12,6 +12,7 @@ def _response(payload, status_code=200):
 
 def test_openmeteo_current_weather_contract_marks_source_and_uncertainty(app, monkeypatch):
     with app.app_context():
+        from core.time_utils import today_local, utc_to_local_datetime, utcnow
         from services.weather_service import WeatherService
         import services.weather_service as weather_module
 
@@ -25,6 +26,7 @@ def test_openmeteo_current_weather_contract_marks_source_and_uncertainty(app, mo
             calls.append((url, params or {}, timeout))
             return _response({
                 'current': {
+                    'time': utc_to_local_datetime(utcnow()).isoformat(timespec='minutes'),
                     'temperature_2m': 33.4,
                     'relative_humidity_2m': 66,
                     'surface_pressure': 1008,
@@ -32,6 +34,7 @@ def test_openmeteo_current_weather_contract_marks_source_and_uncertainty(app, mo
                     'wind_speed_10m': 4.2,
                 },
                 'daily': {
+                    'time': [today_local().isoformat()],
                     'temperature_2m_max': [37.1],
                     'temperature_2m_min': [26.2],
                 },
@@ -43,9 +46,12 @@ def test_openmeteo_current_weather_contract_marks_source_and_uncertainty(app, mo
 
     assert result['data_source'] == 'Open-Meteo'
     assert result['is_mock'] is False
-    assert result['aqi'] == 0
-    assert result['pm25'] == 0
-    assert result['aqi_estimated'] is True
+    assert result['aqi'] is None
+    assert result['pm25'] is None
+    assert result['air_quality_available'] is False
+    assert result['air_observed_at'] is None
+    assert 'aqi_estimated' not in result
+    assert result['observed_at']
     assert result['temperature_range_source'] == 'daily'
     assert result['temperature_range_confidence'] == 'high'
     assert calls[0][1]['timezone'] == 'Asia/Shanghai'
@@ -120,20 +126,26 @@ def test_multimodel_forecast_contract_preserves_provider_names(app):
 
 
 def test_qweather_production_guard_rejects_non_finite_temperature():
+    from datetime import datetime, timezone
+
     from core.weather import is_qweather_online_weather, weather_source_label
 
+    observed_at = datetime.now(timezone.utc).isoformat()
     assert is_qweather_online_weather({
         'temperature': 31,
+        'observed_at': observed_at,
         'data_source': 'QWeather',
         'is_mock': False,
     }) is True
     assert is_qweather_online_weather({
         'temperature': 'NaN',
+        'observed_at': observed_at,
         'data_source': 'QWeather',
         'is_mock': False,
     }) is False
     assert is_qweather_online_weather({
         'temperature': float('inf'),
+        'observed_at': observed_at,
         'data_source': 'QWeather',
         'is_mock': False,
     }) is False

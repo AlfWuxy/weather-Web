@@ -14,7 +14,7 @@
                         <i class="bi bi-person-plus-fill"></i>
                     </div>
                     <h2>注册账号</h2>
-                    <p>几步就好——大多数字段都可选</p>
+                    <p>几步就好，大多数字段都可选</p>
                 </div>
 
                 <div class="card auth-form-card">
@@ -62,9 +62,9 @@
                                 </div>
                             </div>
 
-                            {# 画像 #}
+                            {# 照护者资料 #}
                             <div class="mb-3" style="font-size:.8rem; color:var(--yl-muted); text-transform:uppercase; letter-spacing:.05em; font-weight:600;">
-                                基础画像 <span style="text-transform:none; letter-spacing:0; color:var(--yl-muted); font-weight:400;">· 选填,用于更贴合的风险评估</span>
+                                照护者资料 <span style="text-transform:none; letter-spacing:0; color:var(--yl-muted); font-weight:400;">· 选填，这里填写的是账号使用者本人</span>
                             </div>
 
                             <div class="row g-3">
@@ -81,18 +81,27 @@
                                     </select>
                                 </div>
                                 <div class="col-md-4">
-                                    <label for="community" class="form-label"><i class="bi bi-geo-alt me-1"></i>所属社区</label>
+                                    <label for="community" class="form-label"><i class="bi bi-geo-alt me-1"></i>家人所在地</label>
+                                    {% if communities %}
                                     <select class="form-select" id="community" name="community">
                                         <option value="">请选择</option>
                                         {% for comm in communities %}
                                             <option value="{{ comm.name }}" {% if form_data.get('community') == comm.name %}selected{% endif %}>{{ comm.name }}</option>
                                         {% endfor %}
                                     </select>
+                                    {% else %}
+                                    <input type="text" class="form-control" id="community" name="community" list="locationSuggestions" value="{{ form_data.get('community', '') }}" maxlength="100" placeholder="例如：都昌县 / 牛家垄周村">
+                                    <datalist id="locationSuggestions">
+                                        {% for location in location_suggestions %}
+                                            <option value="{{ location }}"></option>
+                                        {% endfor %}
+                                    </datalist>
+                                    {% endif %}
                                 </div>
                             </div>
 
                             <div class="alert alert-info mt-4 mb-4">
-                                <i class="bi bi-info-circle me-1"></i>填写年龄和慢病信息不是必需的,但能让风险评估更贴近你的情况。
+                                <i class="bi bi-info-circle me-1"></i>这里的年龄和性别属于照护者账号。老人的年龄、慢病和称呼请在注册后的“家人档案”中按实际情况补充。
                             </div>
 
                             <div class="d-grid">
@@ -100,7 +109,7 @@
                             </div>
 
                             <div class="text-center mt-3">
-                                <span class="text-muted" style="font-size:.88rem;">已有账号?</span>
+                                <span class="text-muted" style="font-size:.88rem;">已有账号？</span>
                                 <a href="{{ url_for('public.login') }}" class="text-decoration-none fw-semibold" style="font-size:.88rem;">立即登录</a>
                             </div>
                         </form>

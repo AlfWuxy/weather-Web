@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Shared helpers for rendering QWeather-based 7-day health forecasts."""
+"""Shared helpers for rendering provenance-aware 7-day forecasts."""
 from datetime import datetime
 import math
 
@@ -25,7 +25,7 @@ def level_bucket(score):
 
 
 def forecast_date(value):
-    """解析和风日期字段。"""
+    """解析逐日预报日期字段。"""
     try:
         return datetime.strptime(str(value), '%Y-%m-%d').date()
     except Exception:
@@ -42,6 +42,18 @@ def forecast_temp(value):
     return round(parsed, 1)
 
 
+def _finite_float(value):
+    """风险展示字段只接受有限数值。"""
+    parsed = parse_float(value)
+    if parsed is None or not math.isfinite(parsed):
+        return None
+    return parsed
+
+
+def _dict_or_empty(value):
+    return value if isinstance(value, dict) else {}
+
+
 def forecast_day_labels(day, start_date):
     """生成卡片用的“今/明/周几”标签。"""
     delta = (day - start_date).days
@@ -53,20 +65,33 @@ def forecast_day_labels(day, start_date):
     return weekday, f'周{weekday}'
 
 
-def build_forecast_cards(qweather_days, health_forecasts, start_date):
-    """把和风日预报与健康预测合并为模板卡片。"""
-    entries = list(qweather_days or [])
+def build_forecast_cards(forecast_days, health_forecasts, start_date):
+    """把逐日天气与可选健康预测合并为来源可追溯的模板卡片。"""
+    entries = list(forecast_days or [])
+    health_entries = list(health_forecasts or [])
+    require_health_inputs = bool(health_entries)
     for entry in entries:
         if not isinstance(entry, dict):
             return []
-        for field in ('temperature_max', 'temperature_min', 'humidity'):
+        source = str(entry.get('data_source') or entry.get('source') or '').strip()
+        if not source:
+            return []
+        for field in ('temperature_max', 'temperature_min'):
             value = parse_float(entry.get(field))
             if value is None or not math.isfinite(value):
                 return []
+        for field in ('humidity', 'wind_speed'):
+            value = parse_float(entry.get(field))
+            if require_health_inputs and (value is None or not math.isfinite(value)):
+                return []
+            if value is not None and not math.isfinite(value):
+                return []
+        if not str(entry.get('condition') or '').strip():
+            return []
 
     health_by_date = {
         item.get('date'): item
-        for item in (health_forecasts or [])
+        for item in health_entries
         if isinstance(item, dict) and item.get('date')
     }
     cards = []
@@ -75,34 +100,38 @@ def build_forecast_cards(qweather_days, health_forecasts, start_date):
         if not day:
             continue
         dow, date_label = forecast_day_labels(day, start_date)
-        health = health_by_date.get(day.strftime('%Y-%m-%d'), {})
-        composite = health.get('composite_exposure') or {}
-        components = composite.get('components') or {}
-        composite_inputs = composite.get('inputs') or {}
-        temperature_input = composite_inputs.get('temperature') or {}
-        temp_min_input = composite_inputs.get('temp_min') or {}
-        humidity_input = composite_inputs.get('humidity') or {}
-        pm25_input = composite_inputs.get('pm25') or {}
-        visits = health.get('visits') or {}
+        health = _dict_or_empty(health_by_date.get(day.strftime('%Y-%m-%d')))
+        composite = _dict_or_empty(health.get('composite_exposure'))
+        components = _dict_or_empty(composite.get('components'))
+        composite_inputs = _dict_or_empty(composite.get('inputs'))
+        temperature_input = _dict_or_empty(composite_inputs.get('temperature'))
+        temp_min_input = _dict_or_empty(composite_inputs.get('temp_min'))
+        humidity_input = _dict_or_empty(composite_inputs.get('humidity'))
+        pm25_input = _dict_or_empty(composite_inputs.get('pm25'))
+        visits = _dict_or_empty(health.get('visits'))
         probability_calibrated = visits.get('probability_calibrated') is True
         model_warning_status = health.get('model_warning_status') or (
             'enabled_calibrated' if probability_calibrated else 'disabled_uncalibrated'
         )
-        predictability = health.get('predictability') or {}
-        predictability_inputs = predictability.get('inputs') or {}
-        score = parse_float(composite.get('final_score'))
+        predictability = _dict_or_empty(health.get('predictability'))
+        predictability_inputs = _dict_or_empty(predictability.get('inputs'))
+        score = _finite_float(composite.get('final_score'))
         if score is None:
-            score = parse_float(composite.get('score'))
+            score = _finite_float(composite.get('score'))
         risk_available = score is not None
         if risk_available:
             score = max(0, min(100, int(round(score))))
         cards.append({
+            'data_source': str(
+                entry.get('data_source') or entry.get('source') or ''
+            ).strip(),
             'dow': dow,
             'date': date_label,
             'full_date': day.strftime('%Y-%m-%d'),
             'temp_high': forecast_temp(entry.get('temperature_max')),
             'temp_low': forecast_temp(entry.get('temperature_min')),
             'condition': entry.get('condition') or entry.get('condition_night') or '未知',
+            'precip_probability': _finite_float(entry.get('precip_probability')),
             'risk_level': level_bucket(score) if risk_available else 'unknown',
             'risk_score': score,
             'risk_label': score_level(score) if risk_available else '待计算',
@@ -159,3 +188,17 @@ def build_forecast_cards(qweather_days, health_forecasts, start_date):
             'predictability_model_bonus': parse_float(predictability_inputs.get('model_bonus')),
         })
     return cards
+
+
+def build_weather_only_forecast_cards(openmeteo_days, start_date):
+    """把可信 Open-Meteo 基础预报转换为不含健康模型结论的卡片。"""
+    entries = list(openmeteo_days or [])
+    if not entries or any(
+        not isinstance(entry, dict)
+        or entry.get('data_source') != 'Open-Meteo'
+        or entry.get('is_mock')
+        or entry.get('is_demo')
+        for entry in entries
+    ):
+        return []
+    return build_forecast_cards(entries, [], start_date)

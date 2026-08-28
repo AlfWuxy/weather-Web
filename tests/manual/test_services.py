@@ -109,23 +109,36 @@ def test_community_service():
         communities = service.get_all_communities()
         print(f"\n已加载社区数: {len(communities)} 个")
         
-        if communities:
+        eligible = [item for item in communities if item.get('ranking_eligible') is True]
+        held = [item for item in communities if item.get('ranking_eligible') is not True]
+        if eligible:
             print("\n社区脆弱性排名 (Top 3):")
-            for i, comm in enumerate(communities[:3]):
+            for i, comm in enumerate(eligible[:3]):
                 print(f"  {i+1}. {comm['name']}: VI={comm['vulnerability_index']:.2f}, "
                       f"老龄率={comm['elderly_ratio']*100:.0f}%")
+        if held:
+            print(f"\n数据不足待核验: {len(held)} 个社区（不生成伪排名）")
+            assert all(item['vulnerability_index'] is None for item in held)
         
         # 测试风险地图
         print("\n社区风险地图测试 (35°C高温):")
         weather = {'temperature': 35, 'humidity': 80, 'aqi': 100}
         result = service.generate_community_risk_map(weather)
         
-        print(f"高风险社区: {result['summary']['high_risk_count']} 个")
-        print(f"中风险社区: {result['summary']['medium_risk_count']} 个")
-        
-        if result['rankings']:
-            print(f"\n最高风险社区: {result['rankings'][0]['community']} "
-                  f"(风险分数: {result['rankings'][0]['risk_score']})")
+        summary = result['summary']
+        print(f"具备排名证据的社区: {summary['ranked_communities']} 个")
+        print(f"数据不足社区: {summary['unranked_communities']} 个")
+
+        ranked_rows = [
+            item for item in result['rankings']
+            if item.get('ranking_eligible') is True
+        ]
+        if ranked_rows:
+            print(f"\n最高风险社区: {ranked_rows[0]['community']} "
+                  f"(风险分数: {ranked_rows[0]['risk_score']})")
+        else:
+            assert result['data_available'] is False
+            print("\n风险排名 HOLD：社区实测字段不完整。")
         
         print("\n✅ 社区服务测试通过")
         

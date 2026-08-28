@@ -3,23 +3,32 @@
 import json
 import logging
 import math
-from datetime import timedelta
+from datetime import datetime, timedelta
 from types import SimpleNamespace
 
 from flask import current_app, has_app_context, render_template, request
 from flask_login import current_user
+from sqlalchemy import and_, or_
 
 from core.extensions import db
 from core.guest import get_guest_assessment, is_guest_user
 from core.health_profiles import reminder_triggered
-from core.time_utils import today_local, utc_to_local_date, utcnow
+from core.time_utils import ensure_utc_aware, today_local, utc_to_local_date, utcnow
 from core.weather import (
+    canonical_weather_location,
     ensure_user_location_valid,
     get_consecutive_hot_days,
+    get_openmeteo_forecast_with_cache,
     get_qweather_forecast_with_cache,
     get_weather_with_cache,
+    is_air_quality_available,
     is_demo_mode,
-    is_qweather_online_weather,
+    is_heat_action_weather_ready,
+    is_live_observational_weather,
+    is_qweather_production_ready,
+    normalize_health_model_weather,
+    normalize_weather_observed_at,
+    weather_source_label as get_weather_source_label,
     resolve_weather_city_label
 )
 from core.db_models import (
@@ -32,21 +41,16 @@ from core.db_models import (
     WeatherData
 )
 from services.heat_action_service import HeatActionService
-from services.forecast_cards import build_forecast_cards
+from services.forecast_cards import (
+    build_forecast_cards,
+    build_weather_only_forecast_cards,
+)
 from services.forecast_service import get_forecast_service
 from utils.parsers import safe_json_loads
 
 from ._common import HEAT_RISK_LABELS, _action_plan
 
 logger = logging.getLogger(__name__)
-
-_REQUIRED_DASHBOARD_WEATHER_FIELDS = (
-    'temperature',
-    'temperature_max',
-    'temperature_min',
-    'humidity',
-)
-
 
 def _clamp(value, lower=0.0, upper=1.0):
     return max(lower, min(upper, value))
@@ -108,10 +112,21 @@ def _dashboard_hero_theme(temperature):
     }
 
 
-def _dashboard_alert_card(alert):
-    """将 WeatherAlert 真字段转换成首页展示字段。"""
+def _dashboard_alert_card(alert, now=None):
+    """将提醒记录转换成首页字段，严格区分官方预警与应用提醒。"""
+    now = ensure_utc_aware(now or utcnow())
     local_date = utc_to_local_date(alert.alert_date)
     level_text = (alert.alert_level or '未分级').strip()
+    source = str(getattr(alert, 'source', None) or '').strip()
+    starts_at = ensure_utc_aware(getattr(alert, 'starts_at', None))
+    ends_at = ensure_utc_aware(getattr(alert, 'ends_at', None))
+    is_verified_official = bool(
+        getattr(alert, 'is_official', False)
+        and source == 'QWeather'
+        and starts_at is not None
+        and ends_at is not None
+        and starts_at <= now <= ends_at
+    )
     normalized_level = level_text.lower()
     is_high = normalized_level in {'high', 'extreme', 'severe', 'moderate', 'red'} or any(
         marker in level_text for marker in ('高', '严重', '红', '橙')
@@ -128,12 +143,29 @@ def _dashboard_alert_card(alert):
             if location == '都昌':
                 location = '都昌县'
     return {
-        'alert_type': alert.alert_type or '天气预警',
+        'alert_type': alert.alert_type or '天气提醒',
         'alert_level': level_text,
         'alert_date_local': local_date.strftime('%Y-%m-%d') if local_date else '日期未标注',
         'location': location,
         'description': alert.description,
         'is_high': is_high,
+        'is_official': is_verified_official,
+        'kind_label': '官方预警' if is_verified_official else '应用天气提醒',
+        'source_label': (
+            'QWeather 官方预警'
+            if is_verified_official
+            else '应用阈值规则'
+            if source == 'AppThreshold'
+            else '来源未标明'
+        ),
+        'validity_label': (
+            f"有效期 {utc_to_local_date(starts_at).isoformat()} 至 "
+            f"{utc_to_local_date(ends_at).isoformat()}"
+            if is_verified_official
+            else f"生成于 {local_date.isoformat()}"
+            if local_date
+            else '生成时间未标明'
+        ),
     }
 
 
@@ -151,6 +183,75 @@ def _dashboard_alert_locations(user_location):
     return list(dict.fromkeys(location for location in locations if location))
 
 
+def _application_alert_level(value):
+    """应用规则只使用提醒语义，禁止伪装成官方颜色预警。"""
+    level = str(value or '天气提醒').strip() or '天气提醒'
+    return level.replace('预警', '提醒')[:20]
+
+
+def _get_or_create_application_alert(
+    weather_service,
+    location,
+    weather_data,
+    alert_locations,
+):
+    """持久化应用推导提醒；不与官方预警互相去重。"""
+    alert = weather_service.generate_weather_alert(location, weather_data)
+    if not alert:
+        return None
+    now = utcnow()
+    alert_type = str(alert.get('alert_type') or '天气提醒')[:50]
+    alert_level = _application_alert_level(alert.get('alert_level'))
+    recent = WeatherAlert.query.filter(
+        WeatherAlert.location.in_(alert_locations),
+        WeatherAlert.alert_type == alert_type,
+        WeatherAlert.alert_level == alert_level,
+        WeatherAlert.source == 'AppThreshold',
+        WeatherAlert.is_official.is_(False),
+        WeatherAlert.alert_date >= now - timedelta(hours=6),
+    ).order_by(WeatherAlert.alert_date.desc()).first()
+    if recent:
+        return recent
+    record = WeatherAlert(
+        alert_date=now,
+        location=alert.get('location') or location,
+        alert_type=alert_type,
+        alert_level=alert_level,
+        description=alert.get('description'),
+        source='AppThreshold',
+        is_official=False,
+        starts_at=now,
+        ends_at=None,
+        affected_communities=json.dumps([location], ensure_ascii=False),
+        disease_correlation=json.dumps({}, ensure_ascii=False),
+    )
+    db.session.add(record)
+    db.session.commit()
+    return record
+
+
+def _dashboard_visible_alerts(alert_locations, now=None, limit=5):
+    """只返回有效官方预警与最近应用提醒。"""
+    now = ensure_utc_aware(now or utcnow())
+    return WeatherAlert.query.filter(
+        WeatherAlert.location.in_(alert_locations),
+        or_(
+            and_(
+                WeatherAlert.is_official.is_(True),
+                WeatherAlert.source == 'QWeather',
+                WeatherAlert.starts_at.is_not(None),
+                WeatherAlert.ends_at.is_not(None),
+                WeatherAlert.starts_at <= now,
+                WeatherAlert.ends_at >= now,
+            ),
+            and_(
+                WeatherAlert.is_official.is_(False),
+                WeatherAlert.alert_date >= now - timedelta(days=1),
+            ),
+        ),
+    ).order_by(WeatherAlert.alert_date.desc()).limit(limit).all()
+
+
 def _parse_float(value):
     try:
         return float(value)
@@ -159,19 +260,16 @@ def _parse_float(value):
 
 
 def _dashboard_weather_available(weather_data):
-    """真实和风天气且热风险关键输入完整时才允许展示和落库。"""
-    if not is_qweather_online_weather(weather_data):
-        return False
-    for field in _REQUIRED_DASHBOARD_WEATHER_FIELDS:
-        value = _parse_float(weather_data.get(field))
-        if value is None or not math.isfinite(value):
-            return False
-    return True
+    """兼容旧调用：weather_available 只表示真实实况可展示。"""
+    return is_live_observational_weather(weather_data)
 
 
 def _forecast_weather_context(weather_data):
     """提取真实和风实况中的有限空气质量值，供未来日代理链使用。"""
-    if not is_qweather_online_weather(weather_data):
+    if not (
+        is_qweather_production_ready(weather_data)
+        and is_air_quality_available(weather_data)
+    ):
         return {}
     context = {}
     for field in ('pm25', 'aqi'):
@@ -254,7 +352,7 @@ def _dashboard_metric_cards(user_id):
 
 
 def _dashboard_forecast_days(location, start_date, current_weather=None):
-    """首页 7 日预测只使用和风实时预报，失败时不展示演示风险。"""
+    """首页优先和风健康预报，缺失时只读 Open-Meteo 基础天气缓存。"""
     qweather_days, _, meta = get_qweather_forecast_with_cache(location, days=7)
     if len(qweather_days or []) < 7:
         logger.warning(
@@ -263,9 +361,28 @@ def _dashboard_forecast_days(location, start_date, current_weather=None):
             meta,
             len(qweather_days or []),
         )
-        return []
+        openmeteo_days, _, openmeteo_meta = get_openmeteo_forecast_with_cache(
+            location,
+            days=7,
+        )
+        if len(openmeteo_days or []) < 7:
+            logger.warning(
+                "首页Open-Meteo 7日预报不可用: location=%s meta=%s count=%s",
+                location,
+                openmeteo_meta,
+                len(openmeteo_days or []),
+            )
+            return []
+        return build_weather_only_forecast_cards(openmeteo_days, start_date)
 
     health_forecasts = []
+    if (meta or {}).get('stale') is True:
+        return build_forecast_cards(qweather_days, [], start_date)
+    if not (
+        is_qweather_production_ready(current_weather)
+        and is_air_quality_available(current_weather)
+    ):
+        return build_forecast_cards(qweather_days, [], start_date)
     try:
         health_forecasts, _ = get_forecast_service().generate_7day_forecast(
             qweather_days,
@@ -288,59 +405,95 @@ def user_dashboard(force_elder=False):
     # 获取当前天气
     today = today_local()
     user_location = ensure_user_location_valid()
+    weather_location = canonical_weather_location(user_location)
     alert_locations = _dashboard_alert_locations(user_location)
     weather_source_city = resolve_weather_city_label(user_location)
     weather_data, used_cache = get_weather_with_cache(user_location)
     weather_is_mock = bool(weather_data.get('is_mock'))
-    weather_available = _dashboard_weather_available(weather_data)
+    display_weather_available = _dashboard_weather_available(weather_data)
+    heat_action_weather_ready = is_heat_action_weather_ready(weather_data)
+    air_quality_available = is_air_quality_available(weather_data)
+    qweather_production_ready = is_qweather_production_ready(weather_data)
+    health_weather = normalize_health_model_weather(weather_data)
+    weather_source_name = get_weather_source_label(weather_data)
+    # 兼容旧模板：weather_available 只表示可以展示实况。
+    weather_available = display_weather_available
 
     from services.weather_service import WeatherService
     weather_service = WeatherService()
-    if not weather_available:
+    if health_weather is None:
         extreme_result = {'is_extreme': False, 'conditions': []}
     else:
         try:
-            extreme_result = weather_service.identify_extreme_weather(weather_data)
+            extreme_result = weather_service.identify_extreme_weather(health_weather)
         except Exception as exc:
             logger.warning("极端天气识别失败，已跳过: %s", exc)
             extreme_result = {'is_extreme': False, 'conditions': []}
 
-    weather = WeatherData.query.filter_by(
+    persisted_weather = WeatherData.query.filter_by(
         date=today,
-        location=user_location
+        location=weather_location,
     ).order_by(WeatherData.id.desc()).first()
 
-    if weather_available and (not weather or not used_cache):
-        if not weather:
-            weather = WeatherData(date=today, location=user_location)
-            db.session.add(weather)
-        weather.temperature = weather_data.get('temperature')
-        weather.temperature_max = weather_data.get('temperature_max')
-        weather.temperature_min = weather_data.get('temperature_min')
-        weather.humidity = weather_data.get('humidity')
-        weather.pressure = weather_data.get('pressure')
-        weather.weather_condition = weather_data.get('weather_condition')
-        weather.wind_speed = weather_data.get('wind_speed')
-        weather.pm25 = weather_data.get('pm25')
-        weather.aqi = weather_data.get('aqi')
-        weather.is_extreme = extreme_result['is_extreme']
-        weather.extreme_type = '、'.join([c['type'] for c in extreme_result['conditions']]) if extreme_result['is_extreme'] else None
+    if qweather_production_ready and (not persisted_weather or not used_cache):
+        if not persisted_weather:
+            persisted_weather = WeatherData(date=today, location=weather_location)
+            db.session.add(persisted_weather)
+        persisted_weather.temperature = weather_data.get('temperature')
+        persisted_weather.temperature_max = weather_data.get('temperature_max')
+        persisted_weather.temperature_min = weather_data.get('temperature_min')
+        persisted_weather.humidity = weather_data.get('humidity')
+        persisted_weather.pressure = weather_data.get('pressure')
+        persisted_weather.weather_condition = weather_data.get('weather_condition')
+        persisted_weather.wind_speed = weather_data.get('wind_speed')
+        persisted_weather.pm25 = health_weather.get('pm25')
+        persisted_weather.aqi = health_weather.get('aqi')
+        persisted_weather.data_source = 'QWeather'
+        observed_at = normalize_weather_observed_at(weather_data.get('observed_at'))
+        persisted_weather.observed_at = datetime.fromisoformat(observed_at)
+        air_observed_at = normalize_weather_observed_at(
+            health_weather.get('air_observed_at')
+        )
+        persisted_weather.air_observed_at = (
+            datetime.fromisoformat(air_observed_at)
+            if air_observed_at is not None
+            else None
+        )
+        persisted_weather.quality_version = 1
+        persisted_weather.air_quality_available = air_quality_available
+        persisted_weather.is_extreme = extreme_result['is_extreme']
+        persisted_weather.extreme_type = (
+            '、'.join([c['type'] for c in extreme_result['conditions']])
+            if extreme_result['is_extreme']
+            else None
+        )
         db.session.commit()
 
-    if weather_available and not weather:
-        weather = SimpleNamespace(**weather_data)
-        weather.is_extreme = extreme_result['is_extreme']
-        weather.extreme_type = '、'.join([c['type'] for c in extreme_result['conditions']]) if extreme_result['is_extreme'] else None
+    weather = None
+    if display_weather_available:
+        display_payload = health_weather if health_weather is not None else weather_data
+        weather = SimpleNamespace(**display_payload)
+        weather.is_extreme = (
+            bool(extreme_result.get('is_extreme'))
+            if qweather_production_ready
+            else False
+        )
+        weather.extreme_type = (
+            '、'.join([c['type'] for c in extreme_result.get('conditions', [])])
+            if weather.is_extreme
+            else None
+        )
 
     heat_service = HeatActionService()
-    if not weather_available:
+    if not heat_action_weather_ready:
         heat_result = None
         heat_risk_label = '暂不可用'
         heat_actions = []
     else:
         consecutive_hot_days = get_consecutive_hot_days(
             user_location,
-            today_max=weather_data.get('temperature_max')
+            today_max=weather_data.get('temperature_max'),
+            weather_data=weather_data,
         )
         heat_result = heat_service.calculate_heat_risk(
             weather_data,
@@ -349,31 +502,19 @@ def user_dashboard(force_elder=False):
         heat_risk_label = HEAT_RISK_LABELS.get(heat_result['risk_level'], '低风险')
         heat_actions = _action_plan(heat_risk_label)
     dashboard_hero_theme = _dashboard_hero_theme(
-        getattr(weather, 'temperature', None) if weather_available else None
+        getattr(weather, 'temperature', None) if display_weather_available else None
     )
     dashboard_metric_cards = [] if is_guest else _dashboard_metric_cards(current_user.id)
     forecast_days = _dashboard_forecast_days(user_location, today, weather_data)
 
-    # 如果是极端天气，生成预警（避免重复）
-    if weather_available and extreme_result['is_extreme'] and not used_cache:
-        recent_alert = WeatherAlert.query.filter(
-            WeatherAlert.location.in_(alert_locations),
-            WeatherAlert.alert_date >= utcnow() - timedelta(hours=6)
-        ).first()
-        if not recent_alert:
-            alert = weather_service.generate_weather_alert(user_location, weather_data)
-            if alert:
-                weather_alert = WeatherAlert(
-                    alert_date=utcnow(),
-                    location=alert['location'],
-                    alert_type=alert['alert_type'],
-                    alert_level=alert['alert_level'],
-                    description=alert['description'],
-                    affected_communities=json.dumps([user_location]),
-                    disease_correlation=json.dumps({})
-                )
-                db.session.add(weather_alert)
-                db.session.commit()
+    # 页面规则只生成“应用天气提醒”，不会冒充官方颜色预警。
+    if qweather_production_ready and extreme_result['is_extreme'] and not used_cache:
+        _get_or_create_application_alert(
+            weather_service,
+            user_location,
+            health_weather,
+            alert_locations,
+        )
 
     # 获取最新风险评估
     if is_guest:
@@ -387,47 +528,28 @@ def user_dashboard(force_elder=False):
     if latest_assessment and getattr(latest_assessment, 'explain', None):
         assessment_explain = safe_json_loads(latest_assessment.explain, {})
 
-    # 获取天气预警（最近24小时）
-    alerts = WeatherAlert.query.filter(
-        WeatherAlert.alert_date >= utcnow() - timedelta(days=1),
-        WeatherAlert.location.in_(alert_locations)
-    ).order_by(WeatherAlert.alert_date.desc()).limit(5).all()
+    # 官方预警必须在有效期内；应用提醒只保留最近 24 小时。
+    alert_now = utcnow()
+    alerts = _dashboard_visible_alerts(alert_locations, now=alert_now)
 
-    # 如果没有预警但有极端天气，创建预警
-    if weather_available and not alerts and weather and weather.is_extreme:
-        from services.weather_service import WeatherService
-        weather_service = WeatherService()
-        weather_data = {
-            'temperature': weather.temperature,
-            'temperature_max': weather.temperature_max,
-            'temperature_min': weather.temperature_min,
-            'humidity': weather.humidity,
-            'aqi': weather.aqi,
-            'wind_speed': weather.wind_speed,
-        }
-        recent_alert = WeatherAlert.query.filter(
-            WeatherAlert.location.in_(alert_locations),
-            WeatherAlert.alert_date >= utcnow() - timedelta(hours=6)
-        ).first()
-        if not recent_alert:
-            alert = weather_service.generate_weather_alert(user_location, weather_data)
-            if alert:
-                weather_alert = WeatherAlert(
-                    alert_date=utcnow(),
-                    location=alert['location'],
-                    alert_type=alert['alert_type'],
-                    alert_level=alert['alert_level'],
-                    description=alert['description'],
-                    affected_communities=json.dumps([user_location]),
-                    disease_correlation=json.dumps({})
-                )
-                db.session.add(weather_alert)
-                db.session.commit()
-                alerts = [weather_alert]
+    if (
+        qweather_production_ready
+        and not alerts
+        and weather
+        and weather.is_extreme
+    ):
+        application_alert = _get_or_create_application_alert(
+            weather_service,
+            user_location,
+            health_weather,
+            alert_locations,
+        )
+        if application_alert:
+            alerts = [application_alert]
 
     # 用药提醒（根据天气触发）
     reminders = []
-    if not is_guest and weather_available and weather:
+    if not is_guest and qweather_production_ready and weather:
         now = utcnow()
         reminders_query = MedicationReminder.query.filter_by(
             user_id=current_user.id,
@@ -493,6 +615,11 @@ def user_dashboard(force_elder=False):
             weather_source_city=weather_source_city,
             weather_is_mock=weather_is_mock,
             weather_available=weather_available,
+            display_weather_available=display_weather_available,
+            heat_action_weather_ready=heat_action_weather_ready,
+            air_quality_available=air_quality_available,
+            qweather_production_ready=qweather_production_ready,
+            weather_source_label=weather_source_name,
             demo_mode=demo_mode,
             assessment=latest_assessment,
             assessment_explain=assessment_explain,
@@ -504,13 +631,18 @@ def user_dashboard(force_elder=False):
             is_guest=is_guest
         )
 
-    alert_cards = [_dashboard_alert_card(alert) for alert in alerts]
+    alert_cards = [_dashboard_alert_card(alert, now=alert_now) for alert in alerts]
 
     return render_template('user_dashboard.html',
                          weather=weather if weather_available else None,
                          weather_source_city=weather_source_city,
                          weather_is_mock=weather_is_mock,
                          weather_available=weather_available,
+                         display_weather_available=display_weather_available,
+                         heat_action_weather_ready=heat_action_weather_ready,
+                         air_quality_available=air_quality_available,
+                         qweather_production_ready=qweather_production_ready,
+                         weather_source_label=weather_source_name,
                          demo_mode=demo_mode,
                          assessment=latest_assessment,
                          assessment_explain=assessment_explain,

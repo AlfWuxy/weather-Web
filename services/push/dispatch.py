@@ -13,11 +13,13 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
 import secrets
 import unicodedata
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
+from zoneinfo import ZoneInfo
 
 from flask import current_app, has_app_context
 from sqlalchemy.exc import IntegrityError
@@ -26,7 +28,10 @@ from core.db_models import AlertDelivery, FamilyMemberProfile, Pair, User, Weath
 from core.extensions import db
 from core.time_utils import ensure_utc_aware, utcnow
 from core.usage import log_usage_event
-from core.weather import is_qweather_online_weather
+from core.weather import (
+    is_qweather_production_ready,
+    normalize_health_model_weather,
+)
 from services.miniprogram_auth import current_privacy_version
 from services.miniprogram_service import canonical_location, get_bootstrap_payload
 from services.push.locks import push_owner_lock
@@ -482,9 +487,46 @@ def _choose_primary_warning(warnings: List[Dict[str, Any]]) -> Optional[Dict[str
     )[0]
 
 
+def _parse_warning_datetime(value: Any) -> Optional[datetime]:
+    """把供应商预警时间解析为 UTC aware datetime。"""
+    if isinstance(value, datetime):
+        parsed = value
+    else:
+        text = str(value or '').strip()
+        if not text:
+            return None
+        if text.endswith(('Z', 'z')):
+            text = f'{text[:-1]}+00:00'
+        try:
+            parsed = datetime.fromisoformat(text)
+        except (TypeError, ValueError):
+            logger.info('忽略无法解析的和风预警时间：%s', value)
+            return None
+
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        # 和风中国城市预警的无偏移时间按中国标准时间解释。
+        parsed = parsed.replace(tzinfo=ZoneInfo('Asia/Shanghai'))
+    return parsed.astimezone(timezone.utc)
+
+
+def _active_warning_window(
+    warning: Dict[str, Any],
+    now: datetime,
+) -> Optional[Tuple[datetime, datetime]]:
+    """只有有效期完整且当前生效的预警才能标记为官方。"""
+    starts_at = _parse_warning_datetime((warning or {}).get('start_time'))
+    ends_at = _parse_warning_datetime((warning or {}).get('end_time'))
+    if starts_at is None or ends_at is None or ends_at < starts_at:
+        return None
+    current = ensure_utc_aware(now)
+    if current < starts_at or current > ends_at:
+        return None
+    return starts_at, ends_at
+
+
 def _threshold_alert(weather_data: Dict[str, Any]) -> Optional[Tuple[str, str, str]]:
     """返回阈值规则对应的预警类型、级别与说明。"""
-    if not is_qweather_online_weather(weather_data):
+    if not is_qweather_production_ready(weather_data):
         return None
     try:
         tmax = weather_data.get("temperature_max")
@@ -493,6 +535,10 @@ def _threshold_alert(weather_data: Dict[str, Any]) -> Optional[Tuple[str, str, s
         tmin_v = float(tmin) if tmin is not None else None
     except Exception:
         tmax_v = None
+        tmin_v = None
+    if tmax_v is not None and not math.isfinite(tmax_v):
+        tmax_v = None
+    if tmin_v is not None and not math.isfinite(tmin_v):
         tmin_v = None
 
     if tmax_v is not None and tmax_v >= 35:
@@ -519,11 +565,17 @@ def _get_or_create_weather_alert(
     dedupe_hours: int = 6,
     dedupe_key: Optional[str] = None,
     exact_dedupe: bool = False,
+    source: str = 'Legacy',
+    is_official: bool = False,
+    starts_at: Optional[datetime] = None,
+    ends_at: Optional[datetime] = None,
 ) -> WeatherAlert:
     """创建预警记录；官方修订精确去重，阈值提醒保留滚动窗口。"""
     # 查询与写入使用相同长度，避免 v1 长事件名绕过去重。
     alert_type = str(alert_type or "")[:50]
     alert_level = str(alert_level or "")[:20]
+    source = str(source or 'Legacy').strip()[:50] or 'Legacy'
+    is_official = bool(is_official)
     if exact_dedupe and not dedupe_key:
         raise ValueError("官方预警精确去重必须提供修订键")
     dedupe_key = dedupe_key or _build_alert_dedupe_key(
@@ -537,6 +589,12 @@ def _get_or_create_weather_alert(
         # 官方事件只能命中同一修订键，禁止回退到粗粒度时间窗。
         exact = WeatherAlert.query.filter_by(dedupe_key=dedupe_key).first()
         if exact is not None:
+            # 升级前已有精确修订键时补齐来源，不根据旧文案猜测。
+            exact.source = source
+            exact.is_official = is_official
+            exact.starts_at = starts_at
+            exact.ends_at = ends_at
+            db.session.flush()
             return exact
     else:
         cutoff = now - timedelta(hours=max(int(dedupe_hours), 1))
@@ -544,6 +602,8 @@ def _get_or_create_weather_alert(
             WeatherAlert.location == location_key,
             WeatherAlert.alert_type == alert_type,
             WeatherAlert.alert_level == alert_level,
+            WeatherAlert.source == source,
+            WeatherAlert.is_official.is_(is_official),
             WeatherAlert.alert_date >= cutoff,
         ).order_by(WeatherAlert.alert_date.desc()).first()
         if recent:
@@ -558,6 +618,10 @@ def _get_or_create_weather_alert(
         affected_communities=json.dumps([location_key], ensure_ascii=False),
         disease_correlation=json.dumps({}, ensure_ascii=False),
         dedupe_key=dedupe_key,
+        source=source,
+        is_official=is_official,
+        starts_at=starts_at,
+        ends_at=ends_at,
     )
     db.session.add(record)
     try:
@@ -569,6 +633,11 @@ def _get_or_create_weather_alert(
         winner = WeatherAlert.query.filter_by(dedupe_key=dedupe_key).first()
         if winner is None:
             raise
+        winner.source = source
+        winner.is_official = is_official
+        winner.starts_at = starts_at
+        winner.ends_at = ends_at
+        db.session.flush()
         return winner
 
 
@@ -755,6 +824,35 @@ def _load_dispatch_snapshot(now) -> Optional[Tuple[Dict[str, Any], Dict[str, str
     if snapshot_name != canonical["name"] or snapshot_code != canonical["code"]:
         logger.warning("小程序天气快照不属于当前都昌县范围，本轮推送已关闭")
         return None
+    current = payload.get("current")
+    source_status = payload.get("source_status")
+    if not isinstance(source_status, dict):
+        logger.warning("小程序天气快照缺少来源状态，本轮推送已关闭")
+        return None
+    weather_status = source_status.get("weather") or {}
+    forecast_status = source_status.get("forecast") or {}
+    warning_status = source_status.get("warnings") or {}
+    forecast_providers = {
+        str(provider).strip().casefold()
+        for provider in (forecast_status.get("providers") or [])
+    }
+    trusted_sources = bool(
+        is_qweather_production_ready(current)
+        and weather_status.get("available") is True
+        and weather_status.get("is_mock") is not True
+        and str(weather_status.get("provider") or "").strip().casefold()
+        == "qweather"
+        and forecast_status.get("available") is True
+        and forecast_providers == {"qweather"}
+        and warning_status.get("available") is True
+        and str(warning_status.get("provider") or "").strip().casefold()
+        == "qweather"
+        and str(warning_status.get("status") or "").strip().casefold()
+        in {"ok", "success"}
+    )
+    if not trusted_sources:
+        logger.warning("小程序天气快照来源不完整或不可信，本轮推送已关闭")
+        return None
     return payload, canonical
 
 
@@ -874,17 +972,44 @@ def dispatch_alerts(now=None, dedupe_hours: int = 6) -> Dict[str, Any]:
         if isinstance(raw_warnings, list)
         else []
     )
-    primary_warning = _choose_primary_warning(warnings)
+    active_warnings = []
+    for warning in warnings:
+        window = _active_warning_window(warning, reference_time)
+        if window is not None:
+            active_warnings.append((warning, window))
+    primary_warning = _choose_primary_warning(
+        [warning for warning, _window in active_warnings]
+    )
+    official_window = next(
+        (
+            window
+            for warning, window in active_warnings
+            if warning is primary_warning
+        ),
+        None,
+    )
     weather_data = snapshot.get("current")
-    threshold = _threshold_alert(weather_data if isinstance(weather_data, dict) else {})
+    threshold_weather = normalize_health_model_weather(
+        weather_data if isinstance(weather_data, dict) else {}
+    )
+    threshold = _threshold_alert(threshold_weather or {})
 
-    if primary_warning:
+    if primary_warning and official_window:
         alert_type = primary_warning.get("type") or "qweather_warning"
         alert_level = primary_warning.get("level") or primary_warning.get("severity") or ""
         description = primary_warning.get("title") or primary_warning.get("text") or "官方预警"
+        source = 'QWeather'
+        is_official = True
+        starts_at, ends_at = official_window
     elif threshold:
         alert_type, alert_level, description = threshold
+        source = 'AppThreshold'
+        is_official = False
+        starts_at = reference_time
+        ends_at = None
     else:
+        if warnings:
+            logger.warning('快照预警缺少完整当前有效期，官方派发分支已关闭')
         stats["status"] = "idle_no_alert"
         return stats
 
@@ -904,6 +1029,10 @@ def dispatch_alerts(now=None, dedupe_hours: int = 6) -> Dict[str, Any]:
             warning=primary_warning,
         ),
         exact_dedupe=primary_warning is not None,
+        source=source,
+        is_official=is_official,
+        starts_at=starts_at,
+        ends_at=ends_at,
     )
     weather_alert_id = int(weather_alert.id)
     # 新预警必须先独立提交，后续 10 秒外呼期间不得持有 SQLite 写锁。

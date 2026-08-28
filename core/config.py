@@ -720,7 +720,7 @@ def configure_app(app, logger):
     app.config.setdefault('FEATURE_API_V1', parse_bool(os.getenv('FEATURE_API_V1', '1'), default=True))
     app.config.setdefault('FEATURE_EXPLAIN_OUTPUT', parse_bool(os.getenv('FEATURE_EXPLAIN_OUTPUT', '0'), default=False))
     app.config.setdefault('FEATURE_EMERGENCY_TRIAGE', parse_bool(os.getenv('FEATURE_EMERGENCY_TRIAGE', '0'), default=False))
-    app.config.setdefault('FEATURE_ELDER_MODE', parse_bool(os.getenv('FEATURE_ELDER_MODE', '0'), default=False))
+    app.config.setdefault('FEATURE_ELDER_MODE', parse_bool(os.getenv('FEATURE_ELDER_MODE', '1'), default=True))
     app.config.setdefault('FEATURE_NOTIFICATIONS', parse_bool(os.getenv('FEATURE_NOTIFICATIONS', '0'), default=False))
     app.config.setdefault('FEATURE_HEAT_EXPOSURE_GIS', parse_bool(os.getenv('FEATURE_HEAT_EXPOSURE_GIS', '0'), default=False))
     app.config.setdefault('FEATURE_AUDIT_LOGS', parse_bool(os.getenv('FEATURE_AUDIT_LOGS', '0'), default=False))
@@ -743,6 +743,36 @@ def configure_app(app, logger):
     app.config.setdefault(
         'QWEATHER_WARNING_CACHE_TTL_MINUTES',
         max(parse_int(os.getenv('QWEATHER_WARNING_CACHE_TTL_MINUTES', '30'), default=30), 10)
+    )
+    app.config.setdefault(
+        'WEATHER_OBSERVATION_MAX_AGE_MINUTES',
+        max(
+            parse_int(
+                os.getenv('WEATHER_OBSERVATION_MAX_AGE_MINUTES', '120'),
+                default=120,
+            ),
+            0,
+        ),
+    )
+    app.config.setdefault(
+        'AIR_QUALITY_OBSERVATION_MAX_AGE_MINUTES',
+        max(
+            parse_int(
+                os.getenv('AIR_QUALITY_OBSERVATION_MAX_AGE_MINUTES', '120'),
+                default=120,
+            ),
+            0,
+        ),
+    )
+    app.config.setdefault(
+        'WEATHER_OBSERVATION_FUTURE_TOLERANCE_MINUTES',
+        max(
+            parse_int(
+                os.getenv('WEATHER_OBSERVATION_FUTURE_TOLERANCE_MINUTES', '15'),
+                default=15,
+            ),
+            0,
+        ),
     )
     app.config.setdefault(
         'QWEATHER_MONTHLY_REQUEST_LIMIT',

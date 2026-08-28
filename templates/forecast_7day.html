@@ -1,14 +1,14 @@
 {% set needs_chartjs = true %}
 {% extends "base.html" %}
 {% from "partials/metric_info.html" import metric_info with context %}
-{% block title %}7 天健康预测 · 宜老天气通{% endblock %}
+{% block title %}7 天天气与健康关注 · 宜老天气通{% endblock %}
 
 {% block content %}
 <div class="container" style="max-width:1160px;">
     <section class="section-heading yl-fade-up">
-        <span class="section-kicker"><i class="bi bi-calendar-week"></i> 7 天健康预测</span>
-        <h2>接下来一周，哪几天要特别留心？</h2>
-        <p>暴露关注分综合温度、PM2.5、湿度与热夜。它是地区级行动沟通分，不使用个人慢病资料，也不作为模型天气预警。</p>
+        <span class="section-kicker"><i class="bi bi-calendar-week"></i> 7 天天气与健康关注</span>
+        <h2>接下来一周，哪几天天气需要留意？</h2>
+        <p>页面先展示逐日天气。只有来源、时效和字段都通过健康模型门禁时，才会显示地区级暴露关注分；它不使用个人慢病资料，也不是官方天气预警。</p>
     </section>
 
     <form method="GET" class="yl-section mb-4 yl-fade-up yl-fade-up-d1">
@@ -26,7 +26,7 @@
 
     <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3 yl-fade-up yl-fade-up-d2">
         <div class="text-muted" style="font-size:.9rem;">
-            来源：{{ forecast_meta.source_label or '和风天气' }}
+            来源：{{ forecast_meta.source_label or '天气缓存待更新' }}
             {% if forecast_meta.update_time_label %} · 更新时间：{{ forecast_meta.update_time_label }}{% endif %}
             {% if forecast_meta.from_cache %} · 最近一次有效数据{% endif %}
         </div>
@@ -70,7 +70,7 @@
                         } %}
                         <span class="badge risk-badge text-bg-light"
                               data-detail="温度 {{ d.temp_high }}°/{{ d.temp_low }}° · {{ d.condition }}">
-                            {% if d.risk_available %}关注分 {{ d.risk_score }}{% else %}关注分待计算{% endif %}
+                            {% if d.risk_available %}关注分 {{ d.risk_score }}{% else %}健康关注分待计算{% endif %}
                         </span>
                         {{ metric_info('forecast_exposure_score', forecast_context) }}
                     </div>

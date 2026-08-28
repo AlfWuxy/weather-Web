@@ -21,6 +21,9 @@ HEAT_RISK_LABELS = {
     'extreme': '极高'
 }
 
+# 照护域采用正向角色清单，社区角色继续由独立 ACL 管理。
+CARE_ROLES = frozenset({'user', 'caregiver', 'admin'})
+
 RELAY_STAGE_ORDER = ['none', 'caregiver', 'backup', 'community', 'emergency']
 RELAY_STAGE_LABELS = {
     'caregiver': '照护人',

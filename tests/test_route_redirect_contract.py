@@ -278,5 +278,5 @@ def test_login_invalid_next_uses_role_default_and_never_forecast(
     )
 
     assert response.status_code in (301, 302, 303)
-    assert response.headers["Location"].endswith("/dashboard")
+    assert response.headers["Location"].endswith("/pairs")
     assert "/forecast-7day" not in response.headers["Location"]

@@ -1259,7 +1259,7 @@ def test_caregiver_get_creates_token_only_for_active_pair(
     inactive_detail = client.get(f"/caregiver/pair/{inactive_pair.id}")
     active_detail_first = client.get(f"/caregiver/pair/{active_pair.id}")
     active_detail_second = client.get(f"/caregiver/pair/{active_pair.id}")
-    management = client.get("/caregiver")
+    management = client.get("/pairs")
 
     assert inactive_detail.status_code == 200
     assert active_detail_first.status_code == 200

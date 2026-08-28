@@ -25,7 +25,7 @@ from werkzeug.exceptions import MethodNotAllowed, NotFound
 from werkzeug.routing import RequestRedirect
 from werkzeug.security import check_password_hash, generate_password_hash
 
-from core.constants import GUEST_ID_PREFIX
+from core.constants import DEFAULT_CITY_LABEL, GUEST_ID_PREFIX
 from core.extensions import db
 from core.security import (
     hash_identifier,
@@ -39,8 +39,11 @@ from core.time_utils import today_local, utcnow, ensure_utc_aware
 from core.weather import (
     get_consecutive_hot_days,
     get_weather_with_cache,
+    is_heat_action_weather_ready,
+    is_live_observational_weather,
     is_qweather_online_weather,
     normalize_location_name,
+    weather_source_label,
 )
 from core.guest import GuestUser, is_guest_user
 from core.db_models import (
@@ -131,8 +134,8 @@ COOLING_MAP_MAX_DISTANCE_KM = 80.0
 
 
 def _heat_risk_weather_is_ready(weather_data):
-    """生产热风险只接受来源明确且关键字段齐全的真实天气。"""
-    if not is_qweather_online_weather(weather_data):
+    """基础温湿热展示接受新鲜可信的和风或 Open-Meteo 实况。"""
+    if not is_heat_action_weather_ready(weather_data):
         return False
     values = [parse_float(weather_data.get(field)) for field in _HEAT_RISK_WEATHER_FIELDS]
     return all(value is not None and math.isfinite(value) for value in values)
@@ -203,6 +206,24 @@ def _safe_next_url(next_url):
         except (NotFound, RequestRedirect):
             return None
     return None
+
+
+def _role_landing_endpoint(role):
+    """返回正式账号在网页端的默认工作入口。"""
+    return {
+        'admin': 'admin.admin_dashboard',
+        'community': 'user.community_dashboard',
+        'caregiver': 'user.pair_management',
+        'user': 'user.pair_management',
+    }.get(role, 'user.user_dashboard')
+
+
+def _configured_location_suggestions():
+    """读取地点建议，不把配置坐标误写成已核验社区主数据。"""
+    configured = current_app.config.get('COMMUNITY_COORDS_GCJ') or {}
+    if not isinstance(configured, dict):
+        return []
+    return list(configured)
 
 
 def _short_code_guard_config():
@@ -1157,20 +1178,20 @@ def render_role_entry():
     role = getattr(current_user, 'role', None) if is_authenticated else None
     # Pilot定位：老人不一定会用网页；主要入口是子女端（照护工作台）
     default_caregiver_next = url_for('user.pair_management')
-    caregiver_next = (
-        url_for('user.caregiver_dashboard')
-        if role in ('caregiver', 'admin')
-        else default_caregiver_next
-    )
+    caregiver_next = default_caregiver_next
     community_next = url_for('user.community_dashboard')
 
     if is_guest:
         caregiver_target = url_for('public.register')
         caregiver_action_label = '注册开启照护'
         caregiver_requires_login = False
-    elif is_real_user:
+    elif is_real_user and role in {'user', 'caregiver', 'admin'}:
         caregiver_target = caregiver_next
         caregiver_action_label = '进入照护工作台'
+        caregiver_requires_login = False
+    elif is_real_user:
+        caregiver_target = url_for('public.role_entry')
+        caregiver_action_label = '请使用家庭账号'
         caregiver_requires_login = False
     else:
         caregiver_target = url_for('public.login', next=default_caregiver_next)
@@ -1190,8 +1211,11 @@ def render_role_entry():
         community_action_label = '查看社区风险'
         community_requires_login = False
     else:
-        community_target = url_for('public.login', next=community_next)
-        community_action_label = '进入社区看板'
+        community_target = url_for(
+            'public.login',
+            next=url_for('user.community_risk'),
+        )
+        community_action_label = '登录后查看社区风险'
         community_requires_login = True
 
     return render_template(
@@ -1418,12 +1442,7 @@ def handle_login(next_url):
                 return redirect(url_for('public.account_link'))
 
             # 没有显式 next 时，让每种角色直达自己的主工作台。
-            landing_endpoint = {
-                'admin': 'admin.admin_dashboard',
-                'caregiver': 'user.caregiver_dashboard',
-                'community': 'user.community_dashboard',
-            }.get(user.role, 'user.user_dashboard')
-            return redirect(url_for(landing_endpoint))
+            return redirect(url_for(_role_landing_endpoint(user.role)))
 
         # 登录失败，递增失败计数
         if redis_client:
@@ -1486,13 +1505,23 @@ def _registration_processed_response():
         '若无法登录，请更换用户名后重新注册。',
         'success',
     )
-    response = redirect(
-        url_for('public.login', next=url_for('public.account_link'))
-    )
+    if (
+        current_app.config.get('WECHAT_FORMAL_RUNTIME')
+        and not current_app.config.get('WEB_PRIVATE_FEATURES_ENABLED')
+    ):
+        next_endpoint = 'public.account_link'
+    else:
+        next_endpoint = 'user.pair_management'
+    response = redirect(url_for('public.login', next=url_for(next_endpoint)))
     return response
 
 
 def handle_register():
+    if current_user.is_authenticated and not is_guest_user(current_user):
+        return redirect(
+            url_for(_role_landing_endpoint(getattr(current_user, 'role', None)))
+        )
+
     if request.method == 'POST':
         validation_errors = []
 
@@ -1578,7 +1607,8 @@ def handle_register():
             phone_normalized=phone_normalized,
             age=age,
             gender=gender,
-            community=community
+            community=community,
+            role='caregiver',
         )
         user.set_password(password)
 
@@ -1613,6 +1643,7 @@ def handle_register():
         'register.html',
         communities=communities,
         form_data=form_data,
+        location_suggestions=_configured_location_suggestions(),
     )
 
 
@@ -1708,8 +1739,10 @@ def render_cooling_resources_page(
         logger.warning("避暑资源页天气读取失败，已隐藏室外温度计: %s", exc)
         cooling_weather = {}
     outdoor_temp = None
-    if cooling_weather and not cooling_weather.get('is_mock'):
+    cooling_weather_source = None
+    if is_live_observational_weather(cooling_weather):
         outdoor_temp = cooling_weather.get('temperature')
+        cooling_weather_source = weather_source_label(cooling_weather)
 
     query = CoolingResource.query.filter_by(is_active=True)
     if community:
@@ -1774,6 +1807,7 @@ def render_cooling_resources_page(
         amap_security_js_code=amap_security_js_code,
         cooling_weather=cooling_weather,
         cooling_weather_location=weather_location,
+        cooling_weather_source=cooling_weather_source,
         outdoor_temp=outdoor_temp,
         cooling_candidates=candidate_preview,
         cooling_filters_enabled=cooling_filters_enabled,
@@ -1825,14 +1859,16 @@ def render_public_risk_page(location):
 
 def handle_guest_login(next_url=None):
     if current_user.is_authenticated and not is_guest_user(current_user):
-        return redirect(url_for('user.user_dashboard'))
+        return redirect(
+            url_for(_role_landing_endpoint(getattr(current_user, 'role', None)))
+        )
 
     _clear_identity_scoped_session()
     session['guest_profile'] = {
         'username': '游客',
         'age': None,
         'gender': '未知',
-        'community': '朝阳社区',
+        'community': DEFAULT_CITY_LABEL,
         'has_chronic_disease': False,
         'chronic_diseases': None
     }
