@@ -1,0 +1,17 @@
+{
+  "name": "Weather Web (Flask)",
+  "user": "ubuntu",
+  "install": "bash .cursor/install.sh",
+  "terminals": [
+    {
+      "name": "flask-dev-server",
+      "command": "cd /workspace && DEBUG=true FLASK_HOST=0.0.0.0 FLASK_PORT=5000 .venv/bin/python app.py"
+    }
+  ],
+  "ports": [
+    {
+      "name": "flask web server",
+      "port": 5000
+    }
+  ]
+}
