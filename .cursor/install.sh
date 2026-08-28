@@ -9,4 +9,5 @@ cd "$ROOT_DIR"
 python3 -m venv .venv
 .venv/bin/python -m pip install --upgrade pip
 .venv/bin/pip install -r requirements.txt
-FLASK_APP=app.py .venv/bin/flask init-db
+# Match Cloud Agent start (DEBUG=true). Production config otherwise requires SECRET_KEY.
+DEBUG=true FLASK_APP=app.py .venv/bin/flask init-db
