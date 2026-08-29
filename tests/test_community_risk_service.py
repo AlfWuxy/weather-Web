@@ -5,6 +5,50 @@ import math
 from services.community_risk_service import CommunityRiskService
 
 
+STATIC_CLINICAL_NULL_FIELDS = (
+    "risk_index",
+    "weather_hazard_score",
+    "expected_excess_visits",
+    "observed_cases",
+    "expected_cases",
+    "sir",
+    "ci_low",
+    "ci_high",
+    "smoothed_sir",
+    "probability_exceed_baseline",
+    "burden_percentile",
+    "uncertainty_index",
+    "hotspot_z",
+    "hotspot_p",
+    "matrix_score",
+)
+
+
+def _assert_public_gis_screening(result):
+    """公开 GIS 筛查必须有排序，同时保持临床输出关闭。"""
+    assert result["data_available"] is True
+    assert result["ranking_mode"] == "exploratory_geospatial_screening"
+    assert result["data_status"]["code"] == "exploratory_geospatial_screening"
+    assert len(result["rankings"]) == 16
+    assert len(result["map_data"]["features"]) == 16
+    assert result["summary"]["data_available"] is True
+    assert result["summary"]["ranked_communities"] == 16
+    assert result["summary"]["total_communities"] == 16
+    assert result["summary"]["historical_component_available"] is False
+    assert result["summary"]["total_expected_excess"] is None
+    assert result["impact_likelihood_matrix"]["data_available"] is False
+    assert result["equity_stratification"]["quartiles"] == []
+    assert result["management_suggestions"] == []
+
+    for row in result["rankings"]:
+        assert row["ranking_eligible"] is True
+        assert row["screening_score"] is not None
+        assert row["risk_weights"] == {}
+        assert row["historical_component_available"] is False
+        for field in STATIC_CLINICAL_NULL_FIELDS:
+            assert row[field] is None
+
+
 def _build_service_with_fixed_profile():
     service = CommunityRiskService()
     service.community_profiles = {
@@ -107,7 +151,11 @@ def test_default_community_proxies_are_stable_and_distinct():
         assert 0.55 <= profile["medical_accessibility"] <= 0.65
 
 
-def test_empty_community_table_fails_closed_in_flask_app_context(app, db_session):
+def test_empty_community_table_returns_public_gis_screening_when_dlnm_unavailable(
+    app,
+    db_session,
+    monkeypatch,
+):
     service = CommunityRiskService()
 
     assert service.community_profiles == {}
@@ -118,19 +166,19 @@ def test_empty_community_table_fails_closed_in_flask_app_context(app, db_session
         "message": "Community 表暂无社区档案，本次不生成社区风险排名。",
     }
 
+    monkeypatch.setattr(
+        "services.dlnm_risk_service.get_dlnm_service",
+        lambda: (_ for _ in ()).throw(RuntimeError("DLNM unavailable")),
+    )
+
     result = service.generate_community_risk_map({"temperature": 35})
 
-    assert result["data_available"] is False
-    assert result["data_status"]["code"] == "community_table_empty"
-    assert result["map_data"]["features"] == []
-    assert result["rankings"] == []
-    assert result["summary"]["data_available"] is False
-    assert result["summary"]["data_status"] == "community_table_empty"
-    assert result["summary"]["total_communities"] == 0
-    assert result["management_suggestions"] == []
+    _assert_public_gis_screening(result)
+    assert result["macro_weather"]["available"] is False
+    assert result["macro_weather"]["used_in_ranking"] is False
 
 
-def test_community_query_failure_fails_closed_in_flask_app_context(
+def test_community_query_failure_returns_public_gis_screening_in_flask_context(
     app,
     db_session,
     monkeypatch,
@@ -151,12 +199,8 @@ def test_community_query_failure_fails_closed_in_flask_app_context(
 
     result = service.generate_community_risk_map({"temperature": 35})
 
-    assert result["data_available"] is False
-    assert result["data_status"]["code"] == "community_query_failed"
-    assert result["map_data"]["features"] == []
-    assert result["rankings"] == []
-    assert result["summary"]["data_status"] == "community_query_failed"
-    assert result["summary"]["total_communities"] == 0
+    _assert_public_gis_screening(result)
+    assert result["macro_weather"]["used_in_ranking"] is False
 
 
 def test_generate_map_passes_lag_temperatures_to_dlnm(monkeypatch):
@@ -198,6 +242,10 @@ def test_no_records_keep_historical_metrics_null_and_renormalize_weights(monkeyp
     result = service.generate_community_risk_map({"temperature": 35})
     row = result["rankings"][0]
 
+    assert result.get("ranking_mode") != "exploratory_geospatial_screening"
+    assert result["data_status"]["code"] == "available"
+    assert row["ranking_eligible"] is True
+    assert row["risk_index"] is not None
     assert result["summary"]["matched_records"] == 0
     assert result["summary"]["total_records"] == 0
     assert result["summary"]["historical_component_available"] is False

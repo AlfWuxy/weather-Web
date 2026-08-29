@@ -242,7 +242,13 @@ def test_community_risk_api_rejects_client_weather(authenticated_client):
     assert response.get_json()['error'] == 'client_weather_not_allowed'
 
 
-def test_community_risk_api_rejects_mock_weather(authenticated_client, monkeypatch):
+def test_community_risk_api_serves_static_screening_for_mock_weather(
+    authenticated_client,
+    monkeypatch,
+):
+    from services.community_risk_cache import clear_local_community_risk_cache
+
+    clear_local_community_risk_cache()
     monkeypatch.setattr(
         'services.api_service.get_weather_with_cache',
         lambda city: ({'temperature': 37, 'humidity': 70, 'aqi': 90, 'is_mock': True, 'data_source': 'Demo'}, False),
@@ -254,7 +260,56 @@ def test_community_risk_api_rejects_mock_weather(authenticated_client, monkeypat
         headers={'X-CSRF-Token': 'test-csrf-token'}
     )
 
-    assert response.status_code == 503
+    assert response.status_code == 200
     payload = response.get_json()
-    assert payload['error'] == 'weather_unavailable'
-    assert payload['is_mock'] is True
+    assert payload['success'] is True
+    assert payload['ranking_mode'] == 'exploratory_geospatial_screening'
+    assert payload['summary']['ranked_communities'] == 16
+    assert len(payload['rankings']) == 16
+    assert payload['macro_weather']['available'] is False
+    assert payload['macro_weather']['used_in_ranking'] is False
+    assert all(row['risk_index'] is None for row in payload['rankings'])
+    assert all(row['expected_excess_visits'] is None for row in payload['rankings'])
+    assert all(row['observed_cases'] is None for row in payload['rankings'])
+    clear_local_community_risk_cache()
+
+
+def test_community_risk_api_keeps_503_when_formal_service_returns_none(
+    authenticated_client,
+    monkeypatch,
+):
+    from services.community_risk_cache import clear_local_community_risk_cache
+
+    class UnavailableCommunityService:
+        def get_ranking_input_signature(self):
+            return 'formal-none-test'
+
+        def generate_community_risk_map(
+            self,
+            weather_data,
+            target_date=None,
+            window_days=None,
+            disease_filter=None,
+        ):
+            del weather_data, target_date, window_days, disease_filter
+            return None
+
+    clear_local_community_risk_cache()
+    monkeypatch.setattr(
+        'services.api_service.get_weather_with_cache',
+        lambda city: (_trusted_weather(31), True),
+    )
+    monkeypatch.setattr(
+        'services.community_risk_service.get_community_service',
+        lambda: UnavailableCommunityService(),
+    )
+
+    response = authenticated_client.post(
+        '/api/community/risk-map-v2',
+        json={'analysis_date': '2025-10-30', 'window_days': 30, 'disease': '', 'city': '都昌'},
+        headers={'X-CSRF-Token': 'test-csrf-token'},
+    )
+
+    assert response.status_code == 503
+    assert response.get_json()['error'] == 'community_risk_unavailable'
+    clear_local_community_risk_cache()

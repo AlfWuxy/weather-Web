@@ -790,25 +790,47 @@ def _api_community_risk_map_v2():
             logger.warning("Community risk map weather cache unavailable: %s", exc)
             weather_data = {}
 
+        invalid_weather_response = None
         if not is_qweather_production_ready(weather_data):
             logger.warning(
-                'community_risk_map_v2 rejected weather below production gate: '
+                'community_risk_map_v2 weather below production gate; '
+                'serve frozen public GIS screening only: '
                 'source=%s is_mock=%s',
                 weather_source_label(weather_data),
                 weather_data.get('is_mock') if isinstance(weather_data, dict) else None,
             )
-            return _weather_unavailable_response(weather_data)
-        weather_data = normalize_health_model_weather(weather_data)
+            invalid_weather_response = _weather_unavailable_response(weather_data)
+        else:
+            weather_data = normalize_health_model_weather(weather_data)
+
+        screening_only = invalid_weather_response is not None
+        signature_builder = getattr(community_service, 'get_ranking_input_signature', None)
+        ranking_input_signature = signature_builder() if callable(signature_builder) else ''
 
         cache_params = build_community_risk_cache_params(
             analysis_date=target_date,
             window_days=window_days,
             disease_filter=disease_filter,
             city=city,
-            weather_data=weather_data,
+            weather_data=None if screening_only else weather_data,
+            ranking_path='exploratory_only' if screening_only else 'auto',
+            input_signature=ranking_input_signature,
         )
 
         def _build_result():
+            if screening_only:
+                screening_builder = getattr(
+                    community_service,
+                    'generate_exploratory_geospatial_screening',
+                    None,
+                )
+                if not callable(screening_builder):
+                    return None
+                return screening_builder(
+                    target_date=target_date,
+                    window_days=window_days,
+                    disease_filter=disease_filter,
+                )
             return community_service.generate_community_risk_map(
                 weather_data,
                 target_date=target_date,
@@ -817,10 +839,21 @@ def _api_community_risk_map_v2():
             )
 
         result, cache_hit = get_or_build_community_risk_result(cache_params, _build_result)
+        if result is None:
+            if invalid_weather_response is not None:
+                return invalid_weather_response
+            return jsonify({
+                'success': False,
+                'error': 'community_risk_unavailable',
+                'message': '社区分析暂时不可用，请稍后再试。',
+            }), 503
 
         return jsonify({
             'success': True,
             'cache_hit': cache_hit,
+            'ranking_mode': result.get('ranking_mode'),
+            'ranking_status': result.get('ranking_status'),
+            'ranking_metadata': result.get('ranking_metadata', {}),
             'map_data': result.get('map_data', {}),
             'rankings': result.get('rankings', []),
             'summary': result.get('summary', {}),

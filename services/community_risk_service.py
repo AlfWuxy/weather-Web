@@ -896,6 +896,593 @@ class CommunityRiskService:
             'expected_excess_visits': round(excess_risk_score, 1)
         }
 
+    @staticmethod
+    def _exploratory_omitted_fields(evidence_metadata):
+        """合并证据模块与完整画像门中统一省略的字段说明。"""
+        omitted_by_field = {}
+        for item in evidence_metadata.get('omitted_fields', []):
+            if not isinstance(item, dict):
+                continue
+            field_name = item.get('field')
+            if field_name:
+                omitted_by_field[field_name] = dict(item)
+
+        additional_fields = (
+            (
+                'green_space_ratio',
+                'ESA 树木覆盖类别与社区总绿地率口径不同，本次只使用 tree_cover_pct。',
+            ),
+            (
+                'heat_island_index',
+                'NASA 历史夏季地表温度与社区热岛指数口径不同，本次只使用 q3_lst_c_mean。',
+            ),
+            (
+                'medical_accessibility',
+                '缺少同口径、可追溯的 16 社区共同医疗可达性来源。',
+            ),
+        )
+        for field_name, reason in additional_fields:
+            omitted_by_field.setdefault(field_name, {
+                'field': field_name,
+                'reason': reason,
+            })
+
+        field_order = (
+            'population',
+            'elderly_ratio',
+            'chronic_disease_ratio',
+            'green_space_ratio',
+            'heat_island_index',
+            'medical_accessibility',
+            'baseline_visits',
+            'medical_records',
+            'vulnerability_index',
+            'risk_level',
+        )
+        ordered = [
+            omitted_by_field[field_name]
+            for field_name in field_order
+            if field_name in omitted_by_field
+        ]
+        ordered.extend(
+            item for field_name, item in omitted_by_field.items()
+            if field_name not in field_order
+        )
+        return ordered
+
+    def _exploratory_community_names(self):
+        """从项目规范坐标中取得可做公开空间筛查的社区名。"""
+        if not has_app_context():
+            return []
+
+        from config import CITY_LOCATION_MAP
+
+        configured_coords = current_app.config.get('COMMUNITY_COORDS_GCJ') or {}
+        if not isinstance(configured_coords, dict):
+            return []
+        return [name for name in configured_coords if name in CITY_LOCATION_MAP]
+
+    def get_ranking_input_signature(self):
+        """生成社区画像、坐标和冻结 GIS 证据共同输入指纹。"""
+        if has_app_context():
+            self._load_community_profiles()
+
+        from config import CITY_LOCATION_MAP
+        from services.community_vulnerability_evidence import get_evidence_bundle_sha256
+
+        configured_coords = (
+            current_app.config.get('COMMUNITY_COORDS_GCJ')
+            if has_app_context()
+            else {}
+        ) or {}
+        profile_fields = self.REQUIRED_RISK_PROFILE_FIELDS + (
+            'vulnerability_index',
+            'risk_level',
+        )
+        profiles = []
+        for name in sorted(self.community_profiles):
+            profile = self.community_profiles[name]
+            profiles.append({
+                'name': name,
+                **{field: profile.get(field) for field in profile_fields},
+            })
+
+        exploratory_communities = self._exploratory_community_names()
+        signature_payload = {
+            'profiles': profiles,
+            'exploratory_communities': exploratory_communities,
+            'evidence_coordinates_wgs84': {
+                name: CITY_LOCATION_MAP.get(name)
+                for name in exploratory_communities
+            },
+            'display_coordinates': {
+                str(name): configured_coords[name]
+                for name in sorted(configured_coords)
+            } if isinstance(configured_coords, dict) else {},
+            'evidence_bundle_sha256': get_evidence_bundle_sha256(),
+        }
+        encoded = json.dumps(
+            signature_payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(',', ':'),
+            default=str,
+        ).encode('utf-8')
+        return hashlib.sha256(encoded).hexdigest()
+
+    def generate_exploratory_geospatial_screening(
+        self,
+        *,
+        target_date=None,
+        window_days=30,
+        disease_filter='',
+    ):
+        """在实时天气不可用时独立生成冻结公开 GIS 筛查。"""
+        if has_app_context():
+            self._load_community_profiles()
+
+        try:
+            from core.time_utils import today_local
+        except Exception:
+            today_local = lambda: datetime.now().date()  # noqa: E731
+
+        if target_date is None:
+            target_date = today_local()
+        try:
+            normalized_window_days = max(7, min(int(window_days or 30), 120))
+        except (TypeError, ValueError):
+            normalized_window_days = 30
+
+        return self._build_exploratory_geospatial_screening_result(
+            target_date=target_date,
+            window_days=normalized_window_days,
+            disease_filter=disease_filter,
+        )
+
+    def _build_exploratory_geospatial_screening_result(
+        self,
+        *,
+        target_date,
+        window_days,
+        disease_filter,
+    ):
+        """在完整画像无人过门时，尝试构建公开 GIS 探索性筛查结果。"""
+        community_names = self._exploratory_community_names()
+        if not community_names:
+            return None
+
+        from services.community_vulnerability_evidence import (
+            RANKING_MODE,
+            build_exploratory_rankings,
+        )
+
+        evidence_result = build_exploratory_rankings(community_names)
+        ranking_status = evidence_result.get('status')
+        evidence_rankings = evidence_result.get('rankings')
+        evidence_metadata = evidence_result.get('metadata') or {}
+        if ranking_status not in {'available', 'partial'} or not evidence_rankings:
+            reason = evidence_metadata.get('reason') or '冻结公开 GIS 证据当前不可用。'
+            requested_count = int(
+                evidence_metadata.get('requested_community_count')
+                or len(community_names)
+            )
+            omitted_field_details = self._exploratory_omitted_fields(evidence_metadata)
+            methodology = [
+                f'探索性社区空间筛查暂不可用：{reason}',
+                '当前没有使用旧代理值、哈希生成字段或数据库默认值恢复排名。',
+                (
+                    '正式健康风险、预计额外就诊、O/E、SIR、Gi*、Impact×Likelihood '
+                    '与医疗资源建议继续保持关闭。'
+                ),
+            ]
+            ranking_metadata = dict(evidence_metadata)
+            ranking_metadata.update({
+                'ranking_mode': RANKING_MODE,
+                'status': 'unavailable',
+                'methodology': methodology,
+                'omitted_fields': omitted_field_details,
+                'clinical_outputs_enabled': False,
+                'weather_used_in_ranking': False,
+                'weather_context_available': False,
+                'weather_health_model_calculated': False,
+                'request_filters_used': False,
+                'full_profile_ranked_count': 0,
+            })
+            return {
+                'data_available': False,
+                'data_status': {
+                    'available': False,
+                    'code': 'exploratory_geospatial_screening_unavailable',
+                    'source': 'frozen_public_gis_bundle',
+                    'message': reason,
+                },
+                'ranking_mode': RANKING_MODE,
+                'ranking_status': 'unavailable',
+                'ranking_metadata': ranking_metadata,
+                'map_data': {
+                    'type': 'FeatureCollection',
+                    'features': [],
+                    'unmapped_communities': list(community_names),
+                },
+                'rankings': [],
+                'summary': {
+                    'data_available': False,
+                    'data_status': 'exploratory_geospatial_screening_unavailable',
+                    'data_message': reason,
+                    'ranking_mode': RANKING_MODE,
+                    'ranking_status': 'unavailable',
+                    'ranking_eligible_communities': 0,
+                    'ranking_excluded_communities': requested_count,
+                    'ranking_unique_cells': 0,
+                    'total_communities': requested_count,
+                    'ranked_communities': 0,
+                    'unranked_communities': requested_count,
+                    'missing_coordinate_count': 0,
+                    'high_risk_count': 0,
+                    'medium_risk_count': 0,
+                    'low_risk_count': 0,
+                    'total_expected_excess': None,
+                    'analysis_date': str(target_date),
+                    'window_days': None,
+                    'disease_filter': '',
+                    'requested_window_days': window_days,
+                    'requested_disease_filter': disease_filter or '',
+                    'request_filters_used': False,
+                    'historical_component_available': False,
+                    'risk_weights': {},
+                    'screening_level_counts': {},
+                    'used_evidence_fields': [],
+                    'omitted_fields': [
+                        item['field'] for item in omitted_field_details
+                    ],
+                },
+                'macro_weather': {
+                    'available': False,
+                    'temperature': None,
+                    'rr': None,
+                    'lag_temperatures_used': 0,
+                    'used_in_ranking': False,
+                    'role': 'not_calculated_for_screening',
+                },
+                'impact_likelihood_matrix': {
+                    'data_available': False,
+                    'impact_levels': [],
+                    'likelihood_levels': [],
+                    'counts': {},
+                },
+                'layers': {
+                    'risk_index': [],
+                    'vulnerability': [],
+                    'uncertainty': [],
+                    'hotspot': [],
+                },
+                'equity_stratification': {
+                    'quartiles': [],
+                    'priority_communities': [],
+                },
+                'methodology': methodology,
+                'management_suggestions': [],
+            }
+
+        ranking_metadata = dict(evidence_metadata)
+        omitted_field_details = self._exploratory_omitted_fields(evidence_metadata)
+        omitted_field_names = [item['field'] for item in omitted_field_details]
+        eligible_count = len(evidence_rankings)
+        requested_count = int(
+            ranking_metadata.get('requested_community_count')
+            or len(self.community_profiles)
+        )
+        excluded_count = int(
+            ranking_metadata.get('excluded_community_count')
+            or max(requested_count - eligible_count, 0)
+        )
+
+        data_message = (
+            f'{eligible_count} 个社区已按共同公开 GIS 证据完成探索性相对脆弱性筛查；'
+            'ASPECT 65+ 占比、NASA 历史夏季地表温度与 ESA 低树木覆盖三主题等权计分。'
+        )
+        if excluded_count:
+            data_message += f' {excluded_count} 个社区因空间证据不完整未进入筛查。'
+
+        methodology_details = evidence_metadata.get('methodology')
+        methodology = [
+            data_message,
+            (
+                '筛查得分=(老年人口模型化比例分位+历史夏季地表温度分位+'
+                '低树木覆盖分位)/3；各主题使用同一批证据完整社区作参照。'
+            ),
+            (
+                '社区证据落格使用 CITY_LOCATION_MAP 的 WGS84 点与原生 MODIS Polygon '
+                '包含判定；网页显示继续使用 config.COMMUNITY_COORDS_GCJ。'
+            ),
+            '相同未四舍五入得分使用 dense rank 并列名次；共享同一约 1 km 网格的社区保留为并列行。',
+            'Q3 观测覆盖率是必需的证据质量字段，仅用于展示，不进入综合分。',
+            (
+                '人口、数据库老龄率、慢病率、社区绿地率、热岛指数、医疗可达性、'
+                '实测门诊基线与病历记录统一省略，不进入本次筛查。'
+            ),
+            (
+                '本模式只提供社区间探索性筛查顺序；临床健康风险、预计额外就诊、'
+                'O/E、SIR、Gi*、Impact×Likelihood 与医疗资源建议均保持关闭。'
+            ),
+        ]
+        ranking_metadata.update({
+            'ranking_mode': RANKING_MODE,
+            'status': ranking_status,
+            'methodology_details': (
+                dict(methodology_details)
+                if isinstance(methodology_details, dict)
+                else methodology_details
+            ),
+            'methodology': methodology,
+            'omitted_fields': omitted_field_details,
+            'clinical_outputs_enabled': False,
+            'weather_used_in_ranking': False,
+            'weather_context_available': False,
+            'weather_health_model_calculated': False,
+            'request_filters_used': False,
+            'full_profile_ranked_count': 0,
+        })
+
+        rankings = []
+        for evidence_row in evidence_rankings:
+            community = evidence_row['community']
+            coordinate = self._configured_coordinate(community)
+            row = dict(evidence_row)
+            row.update({
+                'ranking_mode': RANKING_MODE,
+                'ranking_eligible': True,
+                'data_status': 'exploratory_geospatial_screening',
+                'data_message': '共同公开 GIS 证据完整，已参与探索性筛查。',
+                'missing_fields': [],
+                'invalid_fields': [],
+                'omitted_fields': list(omitted_field_names),
+                'omitted_field_details': [dict(item) for item in omitted_field_details],
+                'uses_proxy_values': False,
+                'uses_modelled_geospatial_values': True,
+                'latitude': coordinate['latitude'],
+                'longitude': coordinate['longitude'],
+                'coordinate_available': coordinate['available'],
+                'coordinate_source': coordinate['source'],
+                'coordinate_status': coordinate['status'],
+                'coordinate_message': coordinate['message'],
+                'risk_score': None,
+                'risk_level': None,
+                'population': None,
+                'elderly_ratio': None,
+                'chronic_disease_ratio': None,
+                'vulnerability_index': None,
+                'expected_excess_visits': None,
+                'relative_index': None,
+                'percentile_rank': None,
+                'risk_index': None,
+                'weather_hazard_score': None,
+                'historical_component_available': False,
+                'burden_percentile': None,
+                'uncertainty_penalty': None,
+                'risk_weights': {},
+                'risk_contributions': {},
+                'hazard_formula': None,
+                'heatrisk_level': None,
+                'heatrisk_label': None,
+                'heatrisk_color': None,
+                'svi_percentile': None,
+                'theme_scores': {},
+                'observed_cases': None,
+                'expected_cases': None,
+                'sir': None,
+                'ci_low': None,
+                'ci_high': None,
+                'smoothed_sir': None,
+                'probability_exceed_baseline': None,
+                'certainty': 'unavailable',
+                'uncertainty_index': None,
+                'hotspot_category': None,
+                'hotspot_z': None,
+                'hotspot_p': None,
+                'impact_bucket': None,
+                'likelihood_bucket': None,
+                'matrix_score': None,
+                'equity_stratum': None,
+            })
+            rankings.append(row)
+
+        geojson_features = []
+        for row in rankings:
+            if row.get('coordinate_available') is not True:
+                continue
+            geojson_features.append({
+                'type': 'Feature',
+                'geometry': {
+                    'type': 'Point',
+                    'coordinates': [row['longitude'], row['latitude']],
+                },
+                'properties': {
+                    'name': row['community'],
+                    'ranking_mode': RANKING_MODE,
+                    'rank': row['rank'],
+                    'rank_label': row['rank_label'],
+                    'is_tied': row['is_tied'],
+                    'tie_count': row['tie_count'],
+                    'screening_score': row['screening_score'],
+                    'screening_level': row['screening_level'],
+                    'screening_label': row['screening_label'],
+                    'screening_color': row['screening_color'],
+                    'cell_id': row['cell_id'],
+                    'raw_values': dict(row['raw_values']),
+                },
+            })
+
+        q3_coverage_values = [
+            float(row['raw_values']['q3_coverage_pct'])
+            for row in rankings
+        ]
+        screening_level_counts = {}
+        for row in rankings:
+            level = row['screening_level']
+            screening_level_counts[level] = screening_level_counts.get(level, 0) + 1
+
+        summary = {
+            'data_available': True,
+            'data_status': 'exploratory_geospatial_screening',
+            'data_message': data_message,
+            'ranking_mode': RANKING_MODE,
+            'ranking_status': ranking_status,
+            'ranking_method_version': ranking_metadata.get('method_version'),
+            'ranking_eligible_communities': eligible_count,
+            'ranking_excluded_communities': excluded_count,
+            'ranking_unique_cells': ranking_metadata.get('unique_cell_count', 0),
+            'total_communities': requested_count,
+            'ranked_communities': eligible_count,
+            'unranked_communities': excluded_count,
+            'missing_coordinate_count': sum(
+                1 for row in rankings if row.get('coordinate_available') is not True
+            ),
+            'ranked_missing_coordinate_count': sum(
+                1 for row in rankings if row.get('coordinate_available') is not True
+            ),
+            'high_risk_count': 0,
+            'medium_risk_count': 0,
+            'low_risk_count': 0,
+            'total_expected_excess': None,
+            'analysis_date': str(target_date),
+            'window_days': None,
+            'disease_filter': '',
+            'requested_window_days': window_days,
+            'requested_disease_filter': disease_filter or '',
+            'request_filters_used': False,
+            'matched_records': None,
+            'total_records': None,
+            'unmatched_records': None,
+            'excluded_incomplete_profile_records': None,
+            'historical_component_available': False,
+            'risk_weights': {},
+            'data_coverage_ratio': None,
+            'evidence_coverage_ratio': round(eligible_count / requested_count, 4),
+            'baseline_rate_per_person_day': None,
+            'median_uncertainty_index': None,
+            'heatrisk_counts': {},
+            'hotspot_counts': {},
+            'equity_priority_count': 0,
+            'screening_level_counts': screening_level_counts,
+            'q3_coverage_median_pct': round(float(np.median(q3_coverage_values)), 2),
+            'used_evidence_fields': list(
+                ranking_metadata.get('required_evidence_fields', [])
+            ),
+            'omitted_fields': list(omitted_field_names),
+        }
+
+        # 保留所有候选社区的可见性；证据不足的社区以灰色未排名行展示原因。
+        for excluded in evidence_metadata.get('excluded_communities') or []:
+            community = excluded.get('community')
+            if not community:
+                continue
+            coordinate = self._configured_coordinate(community)
+            rankings.append({
+                'community': community,
+                'ranking_mode': RANKING_MODE,
+                'ranking_eligible': False,
+                'data_status': 'exploratory_evidence_incomplete',
+                'data_message': excluded.get('reason') or '共同空间证据不完整。',
+                'reason_code': excluded.get('reason_code'),
+                'missing_fields': [],
+                'invalid_fields': list(excluded.get('invalid_fields') or []),
+                'omitted_fields': list(omitted_field_names),
+                'omitted_field_details': [dict(item) for item in omitted_field_details],
+                'uses_proxy_values': False,
+                'uses_modelled_geospatial_values': True,
+                'latitude': coordinate['latitude'],
+                'longitude': coordinate['longitude'],
+                'coordinate_available': coordinate['available'],
+                'coordinate_source': coordinate['source'],
+                'coordinate_status': coordinate['status'],
+                'coordinate_message': coordinate['message'],
+                'rank': None,
+                'rank_label': '未进入筛查',
+                'is_tied': False,
+                'tie_count': 0,
+                'screening_score': None,
+                'screening_level': None,
+                'screening_label': '证据不足',
+                'screening_color': '#94a3b8',
+                'cell_id': excluded.get('cell_id'),
+                'raw_values': {},
+                'theme_percentiles': {},
+                'risk_score': None,
+                'risk_level': None,
+                'population': None,
+                'elderly_ratio': None,
+                'chronic_disease_ratio': None,
+                'vulnerability_index': None,
+                'expected_excess_visits': None,
+                'risk_index': None,
+                'weather_hazard_score': None,
+                'observed_cases': None,
+                'expected_cases': None,
+                'sir': None,
+                'ci_low': None,
+                'ci_high': None,
+                'smoothed_sir': None,
+                'probability_exceed_baseline': None,
+                'uncertainty_index': None,
+                'hotspot_category': None,
+                'matrix_score': None,
+            })
+
+        return {
+            'data_available': True,
+            'data_status': {
+                'available': True,
+                'code': 'exploratory_geospatial_screening',
+                'source': 'frozen_public_gis_bundle',
+                'message': data_message,
+            },
+            'ranking_mode': RANKING_MODE,
+            'ranking_status': ranking_status,
+            'ranking_metadata': ranking_metadata,
+            'map_data': {
+                'type': 'FeatureCollection',
+                'features': geojson_features,
+                'unmapped_communities': [
+                    row['community']
+                    for row in rankings
+                    if row.get('coordinate_available') is not True
+                ],
+            },
+            'rankings': rankings,
+            'summary': summary,
+            'macro_weather': {
+                'available': False,
+                'temperature': None,
+                'rr': None,
+                'lag_temperatures_used': 0,
+                'used_in_ranking': False,
+                'role': 'not_calculated_for_screening',
+            },
+            'impact_likelihood_matrix': {
+                'data_available': False,
+                'impact_levels': [],
+                'likelihood_levels': [],
+                'counts': {},
+            },
+            'layers': {
+                'screening_score': [
+                    {'community': row['community'], 'value': row['screening_score']}
+                    for row in rankings
+                ],
+                'risk_index': [],
+                'vulnerability': [],
+                'uncertainty': [],
+                'hotspot': [],
+            },
+            'equity_stratification': {
+                'quartiles': [],
+                'priority_communities': [],
+            },
+            'methodology': methodology,
+            'management_suggestions': [],
+        }
+
     def generate_community_risk_map(self, weather_data, target_date=None, window_days=30, disease_filter=''):
         """
         生成社区风险地图数据（学术增强版）。
@@ -907,8 +1494,6 @@ class CommunityRiskService:
         4) 空间热点显著性（Gi* 近似）
         5) 0-4等级风险与 Impact×Likelihood 矩阵
         """
-        from services.dlnm_risk_service import get_dlnm_service
-
         # 社区表可在服务单例创建后继续增改。每次计算前刷新小型档案表，
         # 避免新社区病历被旧内存清单误判为“未匹配”。
         if has_app_context():
@@ -919,10 +1504,30 @@ class CommunityRiskService:
         except Exception:
             today_local = lambda: datetime.now().date()  # noqa: E731
 
-        dlnm = get_dlnm_service()
-        window_days = max(7, min(int(window_days or 30), 120))
+        try:
+            window_days = max(7, min(int(window_days or 30), 120))
+        except (TypeError, ValueError):
+            window_days = 30
         if target_date is None:
             target_date = today_local()
+
+        has_complete_profile = any(
+            self._profile_readiness(profile)['ready']
+            for profile in self.community_profiles.values()
+        )
+        if not has_complete_profile:
+            # 静态筛查始终与天气、DLNM 和病历隔离，避免混入临床风险语义。
+            exploratory_result = self._build_exploratory_geospatial_screening_result(
+                target_date=target_date,
+                window_days=window_days,
+                disease_filter=disease_filter,
+            )
+            if exploratory_result is not None:
+                return exploratory_result
+
+        from services.dlnm_risk_service import get_dlnm_service
+
+        dlnm = get_dlnm_service()
 
         # 1) 天气宏观风险（DLNM）
         try:
@@ -952,6 +1557,14 @@ class CommunityRiskService:
             community_risks.append(risk)
 
         if not community_risks:
+            exploratory_result = self._build_exploratory_geospatial_screening_result(
+                target_date=target_date,
+                window_days=window_days,
+                disease_filter=disease_filter,
+            )
+            if exploratory_result is not None:
+                return exploratory_result
+
             profile_status = getattr(self, 'community_profile_status', {
                 'available': False,
                 'code': 'community_profiles_unavailable',
@@ -1008,6 +1621,17 @@ class CommunityRiskService:
         ineligible_risks = [
             item for item in community_risks if item.get('ranking_eligible') is not True
         ]
+
+        # 完整画像无人通过时，公开 GIS 筛查使用独立字段、独立语义与独立输出。
+        # 证据模块无法识别当前 Community 表时继续沿用下方失败关闭结果。
+        if not eligible_risks:
+            exploratory_result = self._build_exploratory_geospatial_screening_result(
+                target_date=target_date,
+                window_days=window_days,
+                disease_filter=disease_filter,
+            )
+            if exploratory_result is not None:
+                return exploratory_result
 
         # 3) 相对指数与分位只在字段完整的社区之间计算。
         risk_scores = np.array(

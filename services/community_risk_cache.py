@@ -8,12 +8,13 @@ import time
 from flask import current_app
 
 from core.weather import _get_redis_client, _redis_get_json, _redis_set_json
+from services.community_vulnerability_evidence import RANKING_METHOD_VERSION
 
 logger = logging.getLogger(__name__)
 
 _LOCAL_COMMUNITY_RISK_CACHE = {}
 _LOCAL_CACHE_MAX_ITEMS = 128
-_CACHE_NAMESPACE = 'community_risk:v3'
+_CACHE_NAMESPACE = 'community_risk:v5'
 _WEATHER_SIGNATURE_KEYS = (
     'temperature',
     'temperature_max',
@@ -95,6 +96,8 @@ def build_community_risk_cache_params(
     disease_filter='',
     city='',
     weather_data=None,
+    ranking_path='auto',
+    input_signature='',
 ):
     """统一生成 API 与预计算任务共享的社区风险缓存参数。"""
     if hasattr(analysis_date, 'isoformat'):
@@ -105,10 +108,13 @@ def build_community_risk_cache_params(
         analysis_date = str(analysis_date)
 
     return {
+        'ranking_contract': RANKING_METHOD_VERSION,
         'analysis_date': analysis_date,
         'window_days': _normalize_window_days(window_days),
         'disease_filter': _normalize_disease_filter(disease_filter),
         'city': str(city or '').strip(),
+        'ranking_path': str(ranking_path or 'auto').strip(),
+        'input_signature': str(input_signature or '').strip(),
         'weather': build_community_weather_signature(weather_data),
     }
 
@@ -173,7 +179,7 @@ def _build_cache_key(cache_params):
         separators=(',', ':')
     )
     digest = hashlib.sha256(normalized.encode('utf-8')).hexdigest()
-    # v3 隔离早期可能含代理画像排名的缓存结果。
+    # v5 进一步绑定排名路径和证据输入指纹。
     return f'{_CACHE_NAMESPACE}:{digest}'
 
 
@@ -245,8 +251,9 @@ def get_or_build_community_risk_result(cache_params, builder):
 
     try:
         payload = builder()
-        _set_local_cache(cache_key, payload, ttl_seconds)
-        _redis_set_json(redis_client, cache_key, ttl_seconds, payload)
+        if payload is not None:
+            _set_local_cache(cache_key, payload, ttl_seconds)
+            _redis_set_json(redis_client, cache_key, ttl_seconds, payload)
     finally:
         if redis_client is not None and has_lock:
             try:

@@ -5,6 +5,28 @@ import json
 import pytest
 
 
+def _static_screening_payload():
+    """构造预计算路径可缓存的 16 行公开筛查结果。"""
+    return {
+        'ranking_mode': 'exploratory_geospatial_screening',
+        'rankings': [
+            {
+                'community': f'静态筛查村{i + 1}',
+                'rank': i + 1,
+                'screening_score': round(100 - i, 1),
+                'risk_index': None,
+                'expected_excess_visits': None,
+                'observed_cases': None,
+            }
+            for i in range(16)
+        ],
+        'summary': {
+            'ranked_communities': 16,
+            'historical_component_available': False,
+        },
+    }
+
+
 def _trusted_weather(temperature=31.0, **overrides):
     payload = {
         'temperature': temperature,
@@ -82,18 +104,33 @@ def test_precompute_community_risk_builds_and_reuses_cache(app, monkeypatch):
     clear_local_community_risk_cache()
 
 
-def test_precompute_community_risk_skips_mock_weather(app, monkeypatch):
+def test_precompute_community_risk_builds_static_screening_for_mock_weather(
+    app,
+    monkeypatch,
+):
     from services.community_risk_cache import clear_local_community_risk_cache
     from services.pipelines.precompute_community_risk import precompute_community_risk
 
     clear_local_community_risk_cache()
 
-    calls = {'risk': 0}
+    calls = {'formal': 0, 'screening': 0, 'screening_payload': None}
 
     class FakeCommunityService:
         def generate_community_risk_map(self, weather_data, target_date=None, window_days=None, disease_filter=None):
-            calls['risk'] += 1
-            return {}
+            del weather_data, target_date, window_days, disease_filter
+            calls['formal'] += 1
+            pytest.fail('mock 天气不得进入正式社区风险轨')
+
+        def generate_exploratory_geospatial_screening(
+            self,
+            target_date=None,
+            window_days=None,
+            disease_filter=None,
+        ):
+            del target_date, window_days, disease_filter
+            calls['screening'] += 1
+            calls['screening_payload'] = _static_screening_payload()
+            return calls['screening_payload']
 
     monkeypatch.setattr(
         'services.pipelines.precompute_community_risk.get_weather_with_cache',
@@ -112,8 +149,18 @@ def test_precompute_community_risk_skips_mock_weather(app, monkeypatch):
     )
 
     assert result['weather_skipped'] == 1
-    assert result['combinations'] == 0
-    assert calls['risk'] == 0
+    assert result['screening_only'] == 1
+    assert result['combinations'] == 1
+    assert result['computed'] == 1
+    assert calls['formal'] == 0
+    assert calls['screening'] == 1
+    assert len(calls['screening_payload']['rankings']) == 16
+    assert all(
+        row['risk_index'] is None
+        and row['expected_excess_visits'] is None
+        and row['observed_cases'] is None
+        for row in calls['screening_payload']['rankings']
+    )
 
     clear_local_community_risk_cache()
 
@@ -143,10 +190,24 @@ def test_precompute_skips_expired_real_cache_without_fetcher(app, db_session, mo
     ))
     db_session.commit()
 
+    calls = {'formal': 0, 'screening': 0, 'screening_payload': None}
+
     class FakeCommunityService:
         def generate_community_risk_map(self, weather_data, target_date=None, window_days=None, disease_filter=None):
             del weather_data, target_date, window_days, disease_filter
-            pytest.fail('过期天气不得进入社区风险计算')
+            calls['formal'] += 1
+            pytest.fail('过期天气不得进入正式社区风险计算')
+
+        def generate_exploratory_geospatial_screening(
+            self,
+            target_date=None,
+            window_days=None,
+            disease_filter=None,
+        ):
+            del target_date, window_days, disease_filter
+            calls['screening'] += 1
+            calls['screening_payload'] = _static_screening_payload()
+            return calls['screening_payload']
 
     monkeypatch.setattr(
         'core.weather.get_weather_fetcher',
@@ -166,8 +227,12 @@ def test_precompute_skips_expired_real_cache_without_fetcher(app, db_session, mo
 
     assert result['weather_cache_hits'] == 0
     assert result['weather_skipped'] == 1
-    assert result['computed'] == 0
-    assert result['combinations'] == 0
+    assert result['screening_only'] == 1
+    assert result['computed'] == 1
+    assert result['combinations'] == 1
+    assert calls['formal'] == 0
+    assert calls['screening'] == 1
+    assert len(calls['screening_payload']['rankings']) == 16
 
     clear_local_community_risk_cache()
 
@@ -181,9 +246,24 @@ def test_precompute_missing_cache_never_fetches_or_writes_fallback(app, db_sessi
     app.config['DEMO_MODE'] = False
     app.extensions['redis_client'] = None
 
+    calls = {'formal': 0, 'screening': 0, 'screening_payload': None}
+
     class FakeCommunityService:
         def generate_community_risk_map(self, weather_data, target_date=None, window_days=None, disease_filter=None):
-            pytest.fail('缺少真实天气缓存时不应计算社区风险')
+            del weather_data, target_date, window_days, disease_filter
+            calls['formal'] += 1
+            pytest.fail('缺少真实天气缓存时不应计算正式社区风险')
+
+        def generate_exploratory_geospatial_screening(
+            self,
+            target_date=None,
+            window_days=None,
+            disease_filter=None,
+        ):
+            del target_date, window_days, disease_filter
+            calls['screening'] += 1
+            calls['screening_payload'] = _static_screening_payload()
+            return calls['screening_payload']
 
     monkeypatch.setattr(
         'core.weather.get_weather_fetcher',
@@ -202,7 +282,12 @@ def test_precompute_missing_cache_never_fetches_or_writes_fallback(app, db_sessi
     )
 
     assert result['weather_skipped'] == 1
-    assert result['combinations'] == 0
+    assert result['screening_only'] == 1
+    assert result['combinations'] == 1
+    assert result['computed'] == 1
+    assert calls['formal'] == 0
+    assert calls['screening'] == 1
+    assert len(calls['screening_payload']['rankings']) == 16
     assert WeatherCache.query.count() == 0
 
     clear_local_community_risk_cache()
