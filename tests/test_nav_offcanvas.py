@@ -54,19 +54,26 @@ def test_nav_offcanvas_present(client):
     assert '/static/vendor/bootstrap/bootstrap.bundle.min.js' in body
 
 
-def test_base_loads_light_motion_assets(client):
+def test_home_loads_core_motion_and_skips_optional_data_fx(client):
     resp = client.get('/')
     assert resp.status_code == 200
     body = resp.get_data(as_text=True)
 
     assert 'data-motion="m1 m2 m4 m5"' in body
     assert '/static/css/yilao-motion.css' in body
-    assert '/static/css/yilao-data-fx.css' in body
-    assert '/static/css/yilao-data-fx-extra.css' in body
     assert '/static/css/apple-polish.css' in body
     assert '/static/js/yilao-motion.js' in body
-    assert '/static/js/yilao-data-fx.js' in body
-    assert '/static/js/yilao-data-fx-extra.js' in body
+    assert '/static/css/yilao-data-fx.css' not in body
+    assert '/static/css/yilao-data-fx-extra.css' not in body
+    assert '/static/js/yilao-data-fx.js' not in body
+    assert '/static/js/yilao-data-fx-extra.js' not in body
+
+    transparency = _read_response_text(client, '/transparency')
+    assert '/static/css/yilao-data-fx.css' in transparency
+    assert '/static/css/yilao-data-fx-extra.css' in transparency
+    assert '/static/js/yilao-data-fx.js' in transparency
+    assert '/static/js/yilao-data-fx-extra.js' in transparency
+
     for path in (
         '/static/css/yilao-motion.css',
         '/static/css/yilao-data-fx.css',
