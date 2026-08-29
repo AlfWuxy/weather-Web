@@ -7,53 +7,37 @@
     <script>
         (function() {
             const root = document.documentElement;
+            const tightViewport = window.matchMedia('(max-width: 680px)');
+            const compactViewport = window.matchMedia('(max-width: 980px)');
+
+            function getViewportTier() {
+                if (tightViewport.matches) return 'tight';
+                if (compactViewport.matches) return 'compact';
+                return 'wide';
+            }
 
             function syncViewportTier() {
-                const viewport = window.visualViewport;
-                const width = Math.round(viewport ? viewport.width : window.innerWidth);
-                const height = Math.round(viewport ? viewport.height : window.innerHeight);
-                const scale = viewport && viewport.scale ? viewport.scale : 1;
-                let tier = 'wide';
-
-                if (width <= 680) {
-                    tier = 'tight';
-                } else if (width <= 980) {
-                    tier = 'compact';
+                const tier = getViewportTier();
+                if (root.dataset.viewportTier !== tier) {
+                    root.dataset.viewportTier = tier;
                 }
-
-                root.dataset.viewportTier = tier;
-                root.style.setProperty('--app-vw', width + 'px');
-                root.style.setProperty('--app-vh', height + 'px');
-                root.style.setProperty('--app-scale', String(scale));
-
-                if (document.body) {
+                if (document.body && document.body.dataset.viewportTier !== tier) {
                     document.body.dataset.viewportTier = tier;
                 }
             }
 
-            let rafToken = null;
-            function scheduleViewportSync() {
-                if (rafToken !== null) {
-                    cancelAnimationFrame(rafToken);
+            function subscribeToViewport(query) {
+                if (typeof query.addEventListener === 'function') {
+                    query.addEventListener('change', syncViewportTier);
+                } else if (typeof query.addListener === 'function') {
+                    query.addListener(syncViewportTier);
                 }
-                rafToken = requestAnimationFrame(function() {
-                    rafToken = null;
-                    syncViewportTier();
-                });
             }
 
-            window.__syncViewportTier = scheduleViewportSync;
+            window.__syncViewportTier = syncViewportTier;
             syncViewportTier();
-
-            window.addEventListener('resize', scheduleViewportSync, { passive: true });
-            window.addEventListener('orientationchange', scheduleViewportSync, { passive: true });
-
-            if (window.visualViewport) {
-                window.visualViewport.addEventListener('resize', scheduleViewportSync, { passive: true });
-                window.visualViewport.addEventListener('scroll', scheduleViewportSync, { passive: true });
-            }
-
-            document.addEventListener('DOMContentLoaded', syncViewportTier);
+            subscribeToViewport(tightViewport);
+            subscribeToViewport(compactViewport);
         })();
     </script>
     <title>{% block title %}宜老天气通{% endblock %}</title>
@@ -77,8 +61,8 @@
     <meta name="twitter:description" content="{{ self.meta_description()|striptags|trim }}">
     <meta name="twitter:image" content="https://yilaoweather.org/static/brand/yilao-avatar.png">
     {% block structured_data %}{% endblock %}
-    <link rel="icon" type="image/png" href="{{ url_for('static', filename='brand/yilao-avatar.png') }}">
-    <link rel="apple-touch-icon" href="{{ url_for('static', filename='brand/yilao-avatar.png') }}">
+    <link rel="icon" type="image/png" sizes="64x64" href="{{ url_for('static', filename='brand/yilao-favicon-64.png') }}">
+    <link rel="apple-touch-icon" sizes="180x180" href="{{ url_for('static', filename='brand/yilao-apple-touch-icon-180.png') }}">
 
     <link rel="stylesheet" href="{{ url_for('static', filename='vendor/bootstrap/bootstrap.min.css') }}">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css">
@@ -86,22 +70,23 @@
         <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     {% endif %}
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/animations.css') }}">
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/page-transitions.css') }}">
     {% if config.get('FEATURE_WEB_AI') and config.get('SILICONFLOW_API_KEY') %}
     <link rel="stylesheet" href="{{ url_for('static', filename='css/ai-floating-chat.css') }}">
     {% endif %}
     {# 新的视觉主题,放在最后覆盖旧样式 #}
     <link rel="stylesheet" href="{{ url_for('static', filename='css/yilao.css') }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/yilao-motion.css') }}">
+    {% if request.endpoint != 'public.index' %}
     <link rel="stylesheet" href="{{ url_for('static', filename='css/yilao-data-fx.css') }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/yilao-data-fx-extra.css') }}">
+    {% endif %}
 
-    <noscript><style>.page-loader{display:none !important;}[data-motion] .yl-fade-up,[data-motion] .yl-section,[data-motion] .narrative-step,[data-motion] [data-animate-in]{opacity:1 !important;transform:none !important;}</style></noscript>
+    <noscript><style>[data-motion] .yl-fade-up,[data-motion] .yl-section,[data-motion] .narrative-step,[data-motion] [data-animate-in]{opacity:1 !important;transform:none !important;}</style></noscript>
     {% block extra_css %}{% endblock %}
     <link rel="stylesheet" href="{{ url_for('static', filename='css/apple-polish.css') }}">
 </head>
 <body class="{% block body_class %}{% endblock %}" data-viewport-tier="wide" data-motion="m1 m2 m4 m5">
+    <script>window.__syncViewportTier();</script>
     {% set nav_endpoint = request.endpoint or '' %}
     {% if current_user.is_authenticated and current_user.role == 'community' %}
         {% set nav_today_url = url_for('user.community_risk') %}
@@ -144,16 +129,11 @@
 
     <a class="visually-hidden-focusable skip-link" href="#main-content">跳到主要内容</a>
 
-    <div class="page-loader" id="pageLoader">
-        <div class="loader-spinner"></div>
-        <div class="loader-text">加载中…</div>
-    </div>
-
     {# ===================== 顶部导航 ===================== #}
     <nav class="navbar sticky-top" aria-label="主导航">
         <div class="container-fluid">
             <a class="navbar-brand" href="{{ url_for('public.index') }}">
-                <img class="yl-brand-avatar" src="{{ url_for('static', filename='brand/yilao-avatar.png') }}" alt="" width="34" height="34" decoding="async">
+                <img class="yl-brand-avatar" src="{{ url_for('static', filename='brand/yilao-avatar-64.webp') }}" alt="" width="34" height="34" decoding="async">
                 <span>宜老天气通</span>
             </a>
 
@@ -282,7 +262,7 @@
     <div class="offcanvas offcanvas-end" tabindex="-1" id="appNavDrawer" aria-labelledby="appNavDrawerLabel" style="width: 340px;">
         <div class="offcanvas-header" style="border-bottom:1px solid var(--yl-line-soft);">
             <div class="d-flex align-items-center gap-2">
-                <img class="yl-drawer-brand-avatar" src="{{ url_for('static', filename='brand/yilao-avatar.png') }}" alt="" width="30" height="30" loading="lazy" decoding="async">
+                <img class="yl-drawer-brand-avatar" src="{{ url_for('static', filename='brand/yilao-avatar-64.webp') }}" alt="" width="30" height="30" loading="lazy" decoding="async">
                 <h5 class="offcanvas-title mb-0" id="appNavDrawerLabel">宜老天气通 · 更多</h5>
             </div>
             <button type="button" class="btn-close" data-bs-dismiss="offcanvas" aria-label="关闭"></button>
@@ -476,20 +456,14 @@
     </footer>
 
     <script src="{{ url_for('static', filename='vendor/bootstrap/bootstrap.bundle.min.js') }}"></script>
+    {% if request.endpoint != 'public.index' %}
     <script id="metricExplanationCatalog" type="application/json">{{ metric_explanations|tojson }}</script>
+    {% endif %}
     {% if needs_chartjs %}
         <script src="{{ url_for('static', filename='vendor/chartjs/chart.umd.min.js') }}"></script>
     {% endif %}
 
     <script>
-        function hideLoader() {
-            const loader = document.getElementById('pageLoader');
-            if (loader) loader.classList.add('hidden');
-        }
-        document.addEventListener('DOMContentLoaded', function() { setTimeout(hideLoader, 100); });
-        window.addEventListener('load', function() { setTimeout(hideLoader, 100); });
-        setTimeout(hideLoader, 3000);
-
         document.addEventListener('DOMContentLoaded', function() {
             document.querySelectorAll('form').forEach(form => {
                 form.addEventListener('submit', function() {
@@ -503,7 +477,6 @@
                 });
             });
         });
-        window.addEventListener('error', function() { hideLoader(); });
     </script>
 
     <script>
@@ -627,14 +600,18 @@
         })();
     </script>
 
-    <script src="{{ url_for('static', filename='js/clipboard.js') }}"></script>
-    <script src="{{ url_for('static', filename='js/metric-explanations.js') }}"></script>
+    {% if request.endpoint != 'public.index' %}
+        <script src="{{ url_for('static', filename='js/clipboard.js') }}"></script>
+        <script src="{{ url_for('static', filename='js/metric-explanations.js') }}"></script>
+    {% endif %}
     {% if config.get('FEATURE_WEB_AI') and config.get('SILICONFLOW_API_KEY') %}
     <script src="{{ url_for('static', filename='js/ai-floating-chat.js') }}"></script>
     {% endif %}
     <script src="{{ url_for('static', filename='js/yilao-motion.js') }}"></script>
+    {% if request.endpoint != 'public.index' %}
     <script src="{{ url_for('static', filename='js/yilao-data-fx.js') }}"></script>
     <script src="{{ url_for('static', filename='js/yilao-data-fx-extra.js') }}"></script>
+    {% endif %}
 
     {% if show_motion_switcher|default(false) or request.args.get('motion_switcher') == '1' %}
     <button type="button" class="motion-trigger" id="motionTrigger" title="动效模板" aria-label="动效模板">

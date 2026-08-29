@@ -24,6 +24,13 @@
 } %}
 <script type="application/ld+json">{{ website_schema|tojson }}</script>
 <script type="application/ld+json">{{ application_schema|tojson }}</script>
+<link rel="preload"
+      as="image"
+      type="image/webp"
+      href="{{ url_for('static', filename='illustrations/lifestyle/home-hero-elder-window-640.webp') }}"
+      imagesrcset="{{ url_for('static', filename='illustrations/lifestyle/home-hero-elder-window-640.webp') }} 640w, {{ url_for('static', filename='illustrations/lifestyle/home-hero-elder-window-1280.webp') }} 1280w"
+      imagesizes="(max-width: 980px) calc(100vw - 24px), 680px"
+      fetchpriority="high">
 {% endblock %}
 
 {% block content %}
@@ -105,7 +112,13 @@
         </div>
 
         <figure class="yl-lifestyle-media yl-parallax-media">
-            <img src="{{ url_for('static', filename='illustrations/lifestyle/home-hero-elder-window.jpg') }}" alt="老人坐在窗边，桌上有水杯和手机" width="1536" height="1024" loading="eager" decoding="async" fetchpriority="high">
+            <picture>
+                <source
+                    type="image/webp"
+                    srcset="{{ url_for('static', filename='illustrations/lifestyle/home-hero-elder-window-640.webp') }} 640w, {{ url_for('static', filename='illustrations/lifestyle/home-hero-elder-window-1280.webp') }} 1280w"
+                    sizes="(max-width: 980px) calc(100vw - 24px), 680px">
+                <img src="{{ url_for('static', filename='illustrations/lifestyle/home-hero-elder-window.jpg') }}" alt="老人坐在窗边，桌上有水杯和手机" width="1536" height="1024" loading="eager" decoding="async" fetchpriority="high">
+            </picture>
         </figure>
     </section>
 
@@ -117,10 +130,10 @@
 
     <section class="yl-home-story">
         {% for item in [
-            ('01', '识别风险', '结合官方预警和最新可用天气，判断今天是否需要加强防护。', 'weather-action-water-phone.jpg'),
-            ('02', '发出提醒', '生成可以直接转发的话，清楚告诉家人现在该做什么。', 'family-care-video-call.jpg'),
-            ('03', '记录行动', '记录是否已提醒、是否已做到，方便家人继续跟进。', 'weather-action-water-phone.jpg'),
-            ('04', '查找避暑资源', '家里降温条件不足时，按所在地查询已录入的避暑资源。', 'community-cooling-room.jpg')
+            ('01', '识别风险', '结合官方预警和最新可用天气，判断今天是否需要加强防护。', 'weather-action-water-phone'),
+            ('02', '发出提醒', '生成可以直接转发的话，清楚告诉家人现在该做什么。', 'family-care-video-call'),
+            ('03', '记录行动', '记录是否已提醒、是否已做到，方便家人继续跟进。', 'weather-action-water-phone'),
+            ('04', '查找避暑资源', '家里降温条件不足时，按所在地查询已录入的避暑资源。', 'community-cooling-room')
         ] %}
         <article class="yl-story-row yl-fade-up {% if loop.index is odd %}is-reversed{% endif %}" data-step="{{ item[0] }}">
             <div class="yl-story-copy">
@@ -129,7 +142,13 @@
                 <p>{{ item[2] }}</p>
             </div>
             <figure class="yl-story-image yl-parallax-media">
-                <img src="{{ url_for('static', filename='illustrations/lifestyle/' ~ item[3]) }}" alt="" width="1536" height="1024" loading="lazy" decoding="async">
+                <picture>
+                    <source
+                        type="image/webp"
+                        srcset="{{ url_for('static', filename='illustrations/lifestyle/' ~ item[3] ~ '-640.webp') }} 640w, {{ url_for('static', filename='illustrations/lifestyle/' ~ item[3] ~ '-1280.webp') }} 1280w"
+                        sizes="(max-width: 980px) calc(100vw - 24px), 700px">
+                    <img src="{{ url_for('static', filename='illustrations/lifestyle/' ~ item[3] ~ '.jpg') }}" alt="" width="1536" height="1024" loading="lazy" decoding="async">
+                </picture>
             </figure>
         </article>
         {% endfor %}
