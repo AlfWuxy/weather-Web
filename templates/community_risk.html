@@ -73,6 +73,39 @@
     color: #94a3b8;
 }
 
+.community-risk-page .cr-metric-explainer-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+}
+
+.community-risk-page .cr-metric-explainer {
+    border: 1px solid #e2e8f0;
+    border-radius: 12px;
+    padding: 13px 14px;
+    background: #fcfdff;
+}
+
+.community-risk-page .cr-metric-explainer .label {
+    margin-bottom: 5px;
+    color: #475569;
+    font-size: 13px;
+    font-weight: 700;
+}
+
+.community-risk-page .cr-metric-explainer p {
+    margin-bottom: 7px;
+    color: #64748b;
+    font-size: 12px;
+    line-height: 1.6;
+}
+
+.community-risk-page .cr-metric-direction {
+    color: #334155;
+    font-size: 11px;
+    line-height: 1.5;
+}
+
 .community-risk-page .cr-rank-list {
     max-height: 360px;
     overflow-y: auto;
@@ -190,6 +223,10 @@
         flex-wrap: wrap;
         gap: 6px;
     }
+
+    .community-risk-page .cr-metric-explainer-grid {
+        grid-template-columns: minmax(0, 1fr);
+    }
 }
 </style>
 {% endblock %}
@@ -208,9 +245,10 @@
                 <span class="cr-chip"><i class="bi bi-clock-history"></i> 历史健康负担 {{ metric_info('sir') }}</span>
             </div>
             <div class="d-flex flex-wrap gap-2 d-none" data-screening-only hidden>
-                <span class="cr-chip"><i class="bi bi-people"></i> ASPECT 65+ 占比</span>
-                <span class="cr-chip"><i class="bi bi-thermometer-sun"></i> NASA 历史夏季 LST</span>
-                <span class="cr-chip"><i class="bi bi-tree"></i> ESA 树木覆盖</span>
+                <span class="cr-chip"><i class="bi bi-bar-chart-steps"></i> 相对筛查得分 {{ metric_info('community_screening_score') }}</span>
+                <span class="cr-chip"><i class="bi bi-people"></i> ASPECT 65+ 占比 {{ metric_info('gis_age65_share') }}</span>
+                <span class="cr-chip"><i class="bi bi-thermometer-sun"></i> NASA 历史夏季 LST {{ metric_info('gis_lst_mean') }}</span>
+                <span class="cr-chip"><i class="bi bi-tree"></i> ESA 树木覆盖 {{ metric_info('gis_tree_cover') }}</span>
             </div>
         </div>
     </div>
@@ -343,19 +381,60 @@
                             <div class="sub">完成评分 / 候选社区</div>
                         </div>
                         <div class="cr-kpi">
-                            <div class="name">最高筛查得分</div>
+                            <div class="name">最高筛查得分 {{ metric_info('community_screening_score') }}</div>
                             <div class="value" id="kpiScreeningMaxScore">--</div>
                             <div class="sub">相对脆弱性 0–100</div>
                         </div>
                         <div class="cr-kpi">
-                            <div class="name">GIS 单元</div>
+                            <div class="name">GIS 单元 {{ metric_info('gis_native_grid') }}</div>
                             <div class="value" id="kpiScreeningCells">--</div>
                             <div class="sub">已匹配的独立空间单元</div>
                         </div>
                         <div class="cr-kpi">
-                            <div class="name">Q3 观测覆盖</div>
+                            <div class="name">Q3 观测覆盖 {{ metric_info('gis_q3_coverage') }}</div>
                             <div class="value" id="kpiScreeningCoverage">--</div>
                             <div class="sub">社区中位数，仅表示证据质量</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card cr-card mb-3 d-none" data-screening-only hidden>
+                <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+                    <h3 class="h6 mb-0"><i class="bi bi-info-circle"></i> 这些指标怎么读</h3>
+                    <span class="text-muted small">点击每项旁的说明按钮可查看公式、时间范围和缺失处理</span>
+                </div>
+                <div class="card-body">
+                    <div class="cr-metric-explainer-grid">
+                        <div class="cr-metric-explainer">
+                            <h4 class="label">相对脆弱性筛查得分 {{ metric_info('community_screening_score') }}</h4>
+                            <p>三个主题在当前证据完整社区中分别转成相对分位，再按各 1/3 等权合成。</p>
+                            <div class="cr-metric-direction"><strong>怎么读：</strong>分数越高，只表示后续核查顺序越靠前，不代表个人健康风险或当日预警等级。</div>
+                        </div>
+                        <div class="cr-metric-explainer">
+                            <h4 class="label">ASPECT 65+ 占比 {{ metric_info('gis_age65_share') }}</h4>
+                            <p>ASPECT 2020 年模型化年龄结构人口中，65 岁及以上人口占模型化总人口的比例。</p>
+                            <div class="cr-metric-direction"><strong>入分方向：</strong>比例越高，年龄敏感性分位越高；它不等同于社区普查老龄率。</div>
+                        </div>
+                        <div class="cr-metric-explainer">
+                            <h4 class="label">NASA 历史夏季 LST {{ metric_info('gis_lst_mean') }}</h4>
+                            <p>2020–2024 年每年 6–8 月，Aqua 白天 Q3 晴空地表温度的多年均值。</p>
+                            <div class="cr-metric-direction"><strong>入分方向：</strong>温度越高，历史地表热暴露分位越高；它不是当前气温、室内温度或人体体感。</div>
+                        </div>
+                        <div class="cr-metric-explainer">
+                            <h4 class="label">ESA 树木覆盖 {{ metric_info('gis_tree_cover') }}</h4>
+                            <p>ESA WorldCover 2020 v100 的树木覆盖类别，按有效源像元覆盖权重聚合到 MODIS 网格。</p>
+                            <div class="cr-metric-direction"><strong>入分方向：</strong>实际使用 100−树木覆盖率，覆盖越低，植被缺口分位越高；它不表示公园或树荫可达性。</div>
+                        </div>
+                        <div class="cr-metric-explainer">
+                            <h4 class="label">Q3 观测覆盖 {{ metric_info('gis_q3_coverage') }}</h4>
+                            <p>448 个冻结夏季场景中，通过 Q3 质量筛选的网格日比例，用来显示云遮和有效观测稀疏程度。</p>
+                            <div class="cr-metric-direction"><strong>评分作用：</strong>它是进入筛查所需的证据质量字段，只展示、不计分。</div>
+                        </div>
+                        <div class="cr-metric-explainer">
+                            <h4 class="label">GIS 单元 {{ metric_info('gis_native_grid') }}</h4>
+                            <p>社区配置点通过 point-in-polygon 匹配到约 926.6 米边长的原生 MODIS 网格，不使用最近网格兜底。</p>
+                            <div class="cr-metric-direction"><strong>怎么读：</strong>共享同一网格的社区会共享三个原始指标、筛查得分和并列名次。</div>
                         </div>
                     </div>
                 </div>
@@ -522,12 +601,12 @@
                         <tr>
                             <th>筛查名次</th>
                             <th>社区</th>
-                            <th>相对脆弱性筛查得分</th>
-                            <th>GIS 单元</th>
-                            <th>ASPECT 65+ 占比</th>
-                            <th>NASA 历史夏季 LST</th>
-                            <th>ESA 树木覆盖</th>
-                            <th>Q3 观测覆盖</th>
+                            <th>相对脆弱性筛查得分 {{ metric_info('community_screening_score') }}</th>
+                            <th>GIS 单元 {{ metric_info('gis_native_grid') }}</th>
+                            <th>ASPECT 65+ 占比 {{ metric_info('gis_age65_share') }}</th>
+                            <th>NASA 历史夏季 LST {{ metric_info('gis_lst_mean') }}</th>
+                            <th>ESA 树木覆盖 {{ metric_info('gis_tree_cover') }}</th>
+                            <th>Q3 观测覆盖 {{ metric_info('gis_q3_coverage') }}</th>
                             <th>状态 / 原因</th>
                         </tr>
                     </thead>

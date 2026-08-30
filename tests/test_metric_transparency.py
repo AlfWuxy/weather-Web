@@ -49,16 +49,25 @@ def test_transparency_page_renders_formula_index(client):
     assert '每一个风险数字都应该能被解释' in body
     assert 'Score = 100 × [0.50×HI_norm + 0.30×Night_norm + 0.20×Streak_norm]' in body
     assert 'id="community-risk-index"' in body
+    assert 'id="community-screening-score"' in body
     assert 'id="sir"' in body
     assert 'id="gis-native-grid"' in body
     assert 'id="gis-lst-mean"' in body
     assert 'id="gis-validation"' in body
     assert 'LST_C = Raw×0.02−273.15；Mean = ΣLST_C / n_Q3' in body
+    assert 'Score = [P(age65_share_pct) + P(q3_lst_c_mean) + P(100−tree_cover_pct)] / 3' in body
     assert 'Publish = 1{validation_pass = true ∧ status = pass ∧ hard_failures = 0}' in body
     assert '缺失值处理' in body
     assert '已知局限' in body
     assert 'Open-Meteo' in body
     assert 'metric-explanations.js' in body
+    assert '探索性空间筛查轨与完整画像风险轨分开运行' in body
+    assert '探索性筛查得分只用于安排后续核查与数据收集顺序' in body
+    assert '不授权医疗资源配置' in body
+    assert '来源证据状态：HOLD' in body
+    assert '现有程序尚未机器核验字段来源、单位、观测时点、社区标识或基线时间窗口' in body
+    assert '稳定的中性代理值' not in body
+    assert '通过来源、单位和有效值核验' not in body
 
 
 def test_public_risk_exposes_current_inputs_in_info_button(
@@ -157,11 +166,36 @@ def test_public_risk_fails_closed_when_required_weather_field_is_missing(
     assert '当前风险：' not in body
 
 
-def test_metric_info_script_supports_hover_focus_click_and_escape():
+def test_metric_info_script_supports_single_popover_and_keyboard_escape():
     script = (ROOT / 'static/js/metric-explanations.js').read_text(encoding='utf-8')
 
-    assert "trigger: 'hover focus click'" in script
+    assert "trigger: 'hover click'" in script
+    assert "trigger: 'hover focus click'" not in script
     assert 'instance._activeTrigger' in script
     assert "event.key !== 'Escape'" in script
+    assert 'activeController' in script
+    assert "tip.setAttribute('role', 'dialog')" in script
+    assert "button.setAttribute('aria-controls', tip.id)" in script
+    assert 'focusTarget.focus({ preventScroll: true })' in script
+    assert "if (event.key === 'Enter' || event.key === ' ')" in script
+    assert "if (event.key === 'Tab')" in script
+    assert 'const leavesPopover' in script
+    assert 'instance.show()' in script
+    assert 'controller.close(true)' in script
+    assert "document.addEventListener('pointerdown'" in script
+    assert 'button.blur()' not in script
     assert 'MutationObserver' in script
     assert 'escapeHtml' in script
+
+
+def test_metric_popover_is_scrollable_on_narrow_screens():
+    css = (ROOT / 'static/css/yilao.css').read_text(encoding='utf-8')
+
+    assert 'position: fixed !important' in css
+    assert 'inset: auto 12px 12px !important' in css
+    assert 'max-height: calc(100dvh - 24px - env(safe-area-inset-bottom, 0px))' in css
+    assert 'flex-direction: column' in css
+    assert 'overflow-y: auto' in css
+    assert 'overscroll-behavior: contain' in css
+    assert '.yl-metric-popover .popover-arrow' in css
+    assert 'display: none' in css

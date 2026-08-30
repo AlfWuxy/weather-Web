@@ -2123,6 +2123,38 @@ body.elder-focus-page main.page-shell {
     line-height: 1.55;
 }
 
+@media (max-width: 575.98px) {
+    .yl-metric-popover {
+        --bs-popover-max-width: none;
+        position: fixed !important;
+        inset: auto 12px 12px !important;
+        width: auto !important;
+        max-width: none !important;
+        max-height: calc(100vh - 24px);
+        max-height: calc(100dvh - 24px - env(safe-area-inset-bottom, 0px));
+        display: flex;
+        flex-direction: column;
+        transform: none !important;
+        z-index: 1090;
+    }
+
+    .yl-metric-popover .popover-header {
+        flex: 0 0 auto;
+    }
+
+    .yl-metric-popover .popover-body {
+        min-height: 0;
+        max-height: none;
+        flex: 1 1 auto;
+        overflow-y: auto;
+        overscroll-behavior: contain;
+    }
+
+    .yl-metric-popover .popover-arrow {
+        display: none;
+    }
+}
+
 .yl-popover-summary {
     margin: 0 0 .7rem;
 }

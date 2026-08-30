@@ -121,6 +121,34 @@ def test_screening_mode_contract_and_amap_independent_startup(authenticated_clie
     assert "Q4：相对脆弱性较高" not in html
 
 
+def test_screening_metrics_have_visible_explanations_and_metric_details(authenticated_client):
+    html = authenticated_client.get("/community-risk").get_data(as_text=True)
+
+    assert "这些指标怎么读" in html
+    assert '<h3 class="h6 mb-0"><i class="bi bi-info-circle"></i> 这些指标怎么读</h3>' in html
+    assert '<h4 class="label">相对脆弱性筛查得分' in html
+    assert '<h4 class="label">Q3 观测覆盖' in html
+    assert "三个主题在当前证据完整社区中分别转成相对分位" in html
+    assert "它不等同于社区普查老龄率" in html
+    assert "它不是当前气温、室内温度或人体体感" in html
+    assert "实际使用 100−树木覆盖率" in html
+    assert "它是进入筛查所需的证据质量字段，只展示、不计分" in html
+    assert "共享同一网格的社区会共享三个原始指标、筛查得分和并列名次" in html
+
+    for metric_key in (
+        "community_screening_score",
+        "gis_native_grid",
+        "gis_age65_share",
+        "gis_lst_mean",
+        "gis_tree_cover",
+        "gis_q3_coverage",
+    ):
+        assert f'data-metric-info="{metric_key}"' in html
+
+    assert '/transparency#community-screening-score' in html
+    assert 'aria-label="查看“探索性相对脆弱性筛查得分（0–100）”的计算说明"' in html
+
+
 def test_successful_refresh_restores_mode_specific_button_state():
     """成功请求结束后必须恢复刷新按钮，不能停在“正在刷新”。"""
     node = shutil.which("node")
