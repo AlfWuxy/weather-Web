@@ -65,7 +65,14 @@
     <link rel="apple-touch-icon" sizes="180x180" href="{{ url_for('static', filename='brand/yilao-apple-touch-icon-180.png') }}">
 
     <link rel="stylesheet" href="{{ url_for('static', filename='vendor/bootstrap/bootstrap.min.css') }}">
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css">
+    {% set bootstrap_icons_url = 'https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css' %}
+    {% if request.endpoint == 'public.index' and not current_user.is_authenticated %}
+        {# 首页首屏不依赖图标字体，低优先级加载以缩短关键渲染链。 #}
+        <link rel="stylesheet" href="{{ bootstrap_icons_url }}" media="print" onload="this.onload=null;this.media='all'">
+        <noscript><link rel="stylesheet" href="{{ bootstrap_icons_url }}"></noscript>
+    {% else %}
+        <link rel="stylesheet" href="{{ bootstrap_icons_url }}">
+    {% endif %}
     {% if needs_fontawesome %}
         <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     {% endif %}
@@ -75,7 +82,14 @@
     {% endif %}
     {# 新的视觉主题,放在最后覆盖旧样式 #}
     <link rel="stylesheet" href="{{ url_for('static', filename='css/yilao.css') }}">
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/yilao-motion.css') }}">
+    {% set yilao_motion_url = url_for('static', filename='css/yilao-motion.css') %}
+    {% if request.endpoint == 'public.index' and not current_user.is_authenticated %}
+        {# 动效层不参与首页首屏布局，延后加载并保留无脚本回退。 #}
+        <link rel="stylesheet" href="{{ yilao_motion_url }}" media="print" onload="this.onload=null;this.media='all'">
+        <noscript><link rel="stylesheet" href="{{ yilao_motion_url }}"></noscript>
+    {% else %}
+        <link rel="stylesheet" href="{{ yilao_motion_url }}">
+    {% endif %}
     {% if request.endpoint != 'public.index' %}
     <link rel="stylesheet" href="{{ url_for('static', filename='css/yilao-data-fx.css') }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/yilao-data-fx-extra.css') }}">
@@ -252,7 +266,13 @@
                 {% endif %}
 
                 <button class="navbar-toggler d-lg-none" type="button" data-bs-toggle="offcanvas" data-bs-target="#appNavDrawer" aria-controls="appNavDrawer" aria-label="打开菜单">
-                    <i class="bi bi-list" style="font-size:1.4rem;"></i>
+                    {% if request.endpoint == 'public.index' and not current_user.is_authenticated %}
+                        <svg class="bi" data-inline-menu-icon aria-hidden="true" focusable="false" width="24" height="24" viewBox="0 0 16 16" fill="currentColor">
+                            <path fill-rule="evenodd" d="M2.5 12a.5.5 0 0 1 .5-.5h10a.5.5 0 0 1 0 1H3a.5.5 0 0 1-.5-.5m0-4a.5.5 0 0 1 .5-.5h10a.5.5 0 0 1 0 1H3a.5.5 0 0 1-.5-.5m0-4a.5.5 0 0 1 .5-.5h10a.5.5 0 0 1 0 1H3a.5.5 0 0 1-.5-.5"/>
+                        </svg>
+                    {% else %}
+                        <i class="bi bi-list" style="font-size:1.4rem;"></i>
+                    {% endif %}
                 </button>
             </div>
         </div>
