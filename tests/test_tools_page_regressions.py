@@ -547,6 +547,8 @@ def test_chronic_risk_post_no_longer_returns_405(client, db_session, monkeypatch
 
 def test_ml_and_chronic_pages_reject_mock_weather(client, db_session, monkeypatch):
     user = _create_user(db_session, username='tool_mock_weather_user')
+    user.age = 72
+    db_session.commit()
     _login_as(client, user.id)
 
     monkeypatch.setattr(
@@ -665,6 +667,8 @@ def test_chronic_risk_post_redirects_and_refresh_keeps_result(client, db_session
 
 def test_chronic_risk_weather_error_survives_refresh_without_resubmit(client, db_session, monkeypatch):
     user = _create_user(db_session, username='chronic_error_persist_user')
+    user.age = 72
+    db_session.commit()
     _login_as(client, user.id)
     calls = {'count': 0}
 
@@ -965,6 +969,30 @@ def test_ml_prediction_post_without_age_does_not_invent_65(client, db_session, m
     assert response.status_code == 200
     assert '请先填写年龄' in body
     assert '本次天气调整关注分' not in body
+
+
+def test_chronic_risk_missing_age_is_reported_even_when_weather_is_unavailable(client, db_session, monkeypatch):
+    user = _create_user(db_session, username='chronic_age_before_weather')
+    _login_as(client, user.id)
+
+    class UnexpectedChronic:
+        def predict_individual_risk(self, *_args, **_kwargs):
+            raise AssertionError('缺年龄不应进入慢病评估')
+
+    monkeypatch.setattr(
+        'blueprints.tools.get_weather_with_cache',
+        lambda _location: ({'temperature': 37, 'humidity': 70, 'data_source': 'Demo', 'is_mock': True}, False),
+    )
+    monkeypatch.setattr('blueprints.tools.get_chronic_service', lambda: UnexpectedChronic())
+
+    response = client.post(
+        '/chronic-risk',
+        data={'disease': 'hypertension', 'csrf_token': 'test-csrf-token'},
+        follow_redirects=True,
+    )
+    body = response.get_data(as_text=True)
+    assert '请先在个人设置填写年龄' in body
+    assert '综合风险评分' not in body
 
 
 def test_chronic_risk_post_without_age_does_not_invent_65(client, db_session, monkeypatch):

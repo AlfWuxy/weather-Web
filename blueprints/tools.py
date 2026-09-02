@@ -440,13 +440,13 @@ def chronic_risk():
             'symptoms': sanitize_input(request.form.get('symptoms'), max_length=100) or '',
         }
 
-        weather_data, _ = get_weather_with_cache(ensure_user_location_valid())
-        if not is_qweather_online_weather(weather_data):
-            risk_error = '天气正在更新，本次提醒暂未生成。请稍后再试。'
+        profile_age = _coerce_age(current_user.age)
+        if profile_age is None:
+            risk_error = '请先在个人设置填写年龄，再查看慢病风险。'
         else:
-            profile_age = _coerce_age(current_user.age)
-            if profile_age is None:
-                risk_error = '请先在个人设置填写年龄，再查看慢病风险。'
+            weather_data, _ = get_weather_with_cache(ensure_user_location_valid())
+            if not is_qweather_online_weather(weather_data):
+                risk_error = '天气正在更新，本次提醒暂未生成。请稍后再试。'
             else:
                 vitals = _parse_chronic_vitals(form_state)
                 result = get_chronic_service().predict_individual_risk(
