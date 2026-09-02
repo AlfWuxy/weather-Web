@@ -265,8 +265,30 @@ def test_api_current_weather_structure(client):
     payload = response.get_json()
     assert payload['success'] is True
     data = payload.get('data') or {}
-    for key in ('temperature', 'humidity', 'data_source', 'from_cache'):
+    for key in ('temperature', 'humidity', 'data_source', 'from_cache', 'weather_available', 'air_quality_available'):
         assert key in data
+
+
+def test_api_current_weather_hides_unavailable_open_meteo_aqi(client, monkeypatch):
+    monkeypatch.setattr(
+        'services.api_service.get_weather_with_cache',
+        lambda _location: ({
+            'temperature': 28,
+            'humidity': 70,
+            'weather_condition': '晴',
+            'aqi': 0,
+            'pm25': 0,
+            'is_mock': False,
+            'data_source': 'Open-Meteo',
+        }, False),
+    )
+    payload = client.get('/api/weather/current').get_json()
+    assert payload['success'] is True
+    data = payload['data']
+    assert data['weather_available'] is False
+    assert data['air_quality_available'] is False
+    assert data['aqi'] is None
+    assert data['pm25'] is None
 
 
 def test_api_nowcast_structure(client):

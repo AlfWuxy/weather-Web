@@ -834,6 +834,9 @@ function buildInfoWindowHtml(row, style) {
         `<div style="font-size:12px;margin-bottom:4px;">社区脆弱性：<strong>${escapeHtml(formatNumber(row.svi_percentile, 1))}%</strong></div>`,
         `<div style="font-size:12px;margin-bottom:4px;">历史健康负担：<strong>${escapeHtml(rrText)}</strong></div>`,
         `<div style="font-size:12px;margin-bottom:6px;">热点状态：<strong>${escapeHtml(row.hotspot_category || '--')}</strong></div>`,
+        row.coords_estimated
+            ? '<div style="font-size:12px;color:#92400e;margin-bottom:6px;">地图位置为估算坐标，不是实测点。</div>'
+            : '',
         `<div style="font-size:12px;color:#475569;border-top:1px solid #e5e7eb;padding-top:6px;">${escapeHtml(actionHint)}</div>`,
         '</div>'
     ].join('');

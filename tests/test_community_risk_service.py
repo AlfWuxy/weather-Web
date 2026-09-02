@@ -105,6 +105,7 @@ def test_default_community_proxies_are_stable_and_distinct():
         assert 0.08 <= profile["green_space_ratio"] <= 0.12
         assert 0.45 <= profile["heat_island_index"] <= 0.55
         assert 0.55 <= profile["medical_accessibility"] <= 0.65
+        assert profile["coords_estimated"] is True
 
 
 def test_empty_community_table_fails_closed_in_flask_app_context(app, db_session):
@@ -240,3 +241,53 @@ def test_no_records_keep_historical_metrics_null_and_renormalize_weights(monkeyp
         row["risk_contributions"]["svi"]
         - row["risk_weights"]["svi"] * row["svi_percentile"]
     ) <= 0.02
+
+
+def test_missing_community_coordinates_are_marked_estimated(app, db_session, monkeypatch):
+    from core.db_models import Community
+
+    db_session.add(Community(
+        name='无坐标村',
+        population=100,
+        elderly_ratio=0.4,
+        chronic_disease_ratio=0.1,
+    ))
+    db_session.add(Community(
+        name='有坐标村',
+        population=80,
+        elderly_ratio=0.3,
+        chronic_disease_ratio=0.1,
+        latitude=29.28,
+        longitude=116.21,
+    ))
+    db_session.commit()
+
+    class StubDLNM:
+        def calculate_rr(self, temperature, lag_temperatures=None):
+            return 1.8, {}
+
+    monkeypatch.setattr(
+        "services.dlnm_risk_service.get_dlnm_service",
+        lambda: StubDLNM(),
+    )
+
+    service = CommunityRiskService()
+    assert service.community_profiles['无坐标村']['coords_estimated'] is True
+    assert service.community_profiles['有坐标村']['coords_estimated'] is False
+
+    result = service.generate_community_risk_map({"temperature": 35})
+    by_name = {row['community']: row for row in result['rankings']}
+    assert by_name['无坐标村']['coords_estimated'] is True
+    assert by_name['有坐标村']['coords_estimated'] is False
+
+    estimated_feature = next(
+        feature for feature in result['map_data']['features']
+        if feature['properties']['name'] == '无坐标村'
+    )
+    surveyed_feature = next(
+        feature for feature in result['map_data']['features']
+        if feature['properties']['name'] == '有坐标村'
+    )
+    assert estimated_feature['properties']['coords_estimated'] is True
+    assert surveyed_feature['properties']['coords_estimated'] is False
+    assert any('估算坐标' in item for item in result['methodology'])

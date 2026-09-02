@@ -441,12 +441,14 @@ class CommunityRiskService:
             for comm in communities:
                 population = comm.population or 100
                 proxy = self._stable_proxy_profile(comm.name)
+                coords_estimated = comm.latitude is None or comm.longitude is None
                 loaded_profiles[comm.name] = {
                     'id': comm.id,
                     'name': comm.name,
                     'location': comm.location,
                     'latitude': comm.latitude if comm.latitude is not None else proxy['latitude'],
                     'longitude': comm.longitude if comm.longitude is not None else proxy['longitude'],
+                    'coords_estimated': coords_estimated,
                     'population': population,
                     'elderly_ratio': comm.elderly_ratio or 0.2,
                     'chronic_disease_ratio': comm.chronic_disease_ratio or 0.15,
@@ -502,16 +504,19 @@ class CommunityRiskService:
             proxy = self._stable_proxy_profile(comm['name'])
             if coords and len(coords) == 2:
                 longitude, latitude = coords[0], coords[1]
+                coords_estimated = False
             else:
                 # 坐标缺失时使用按社区标识固定的都昌县附近坐标，避免每次启动位置变化。
                 latitude = proxy['latitude']
                 longitude = proxy['longitude']
+                coords_estimated = True
             self.community_profiles[comm['name']] = {
                 'id': i + 1,
                 'name': comm['name'],
                 'location': f"江西省九江市都昌县{comm['name']}",
                 'latitude': latitude,
                 'longitude': longitude,
+                'coords_estimated': coords_estimated,
                 'population': comm['population'],
                 'elderly_ratio': comm['elderly_ratio'],
                 'chronic_disease_ratio': comm['chronic_disease_ratio'],
@@ -663,6 +668,7 @@ class CommunityRiskService:
             'vi_details': vi_result,
             'population': profile.get('population', 0),
             'elderly_ratio': profile.get('elderly_ratio', 0),
+            'coords_estimated': bool(profile.get('coords_estimated')),
             'expected_excess_visits': round(excess_risk_score, 1)
         }
     
@@ -711,6 +717,7 @@ class CommunityRiskService:
             risk = self.calculate_community_risk_score(name, macro_rr, target_date)
             risk['latitude'] = profile.get('latitude', 29.35)
             risk['longitude'] = profile.get('longitude', 116.37)
+            risk['coords_estimated'] = bool(profile.get('coords_estimated'))
             risk['green_space_ratio'] = profile.get('green_space_ratio', 0.1)
             risk['heat_island_index'] = profile.get('heat_island_index', 0.5)
             risk['medical_accessibility'] = profile.get('medical_accessibility', 0.6)
@@ -1000,6 +1007,7 @@ class CommunityRiskService:
                 },
                 'properties': {
                     'name': row['community'],
+                    'coords_estimated': bool(row.get('coords_estimated')),
                     'risk_score': row['normalized_score'],
                     'risk_level': row['risk_level'],
                     'color': row['color'],
@@ -1165,6 +1173,7 @@ class CommunityRiskService:
                     'community': row['community'],
                     'latitude': row.get('latitude'),
                     'longitude': row.get('longitude'),
+                    'coords_estimated': bool(row.get('coords_estimated')),
                     'risk_score': row['normalized_score'],
                     'risk_level': row['risk_level'],
                     'population': row['population'],
@@ -1271,8 +1280,11 @@ class CommunityRiskService:
                     if historical_component_available else
                     '历史概率缺失时不生成 Impact×Likelihood 分值；综合风险仅用于人工分流、核查与行动排序。'
                 ),
-                '公平性分层按脆弱性分位(Q1-Q4)聚合，优先识别“高脆弱+高风险”社区。'
-            ],
+                '公平性分层按脆弱性分位(Q1-Q4)聚合，优先识别“高脆弱+高风险”社区。',
+            ] + (
+                ['部分社区地图位置为估算坐标，不是实测点位。']
+                if any(row.get('coords_estimated') for row in rankings) else []
+            ),
             'management_suggestions': management_suggestions
         }
     

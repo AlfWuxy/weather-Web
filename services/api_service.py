@@ -149,6 +149,11 @@ def _api_current_weather():
     weather_data, from_cache = get_weather_with_cache(location)
 
     if weather_data:
+        weather_available = is_qweather_online_weather(weather_data)
+        air_quality_available = bool(
+            weather_available
+            and weather_data.get('aqi') is not None
+        )
         return jsonify({
             'success': True,
             'data': {
@@ -159,11 +164,13 @@ def _api_current_weather():
                 'pressure': weather_data.get('pressure'),
                 'condition': weather_data.get('weather_condition'),
                 'wind_speed': weather_data.get('wind_speed'),
-                'aqi': weather_data.get('aqi'),
-                'pm25': weather_data.get('pm25'),
+                'aqi': weather_data.get('aqi') if air_quality_available else None,
+                'pm25': weather_data.get('pm25') if air_quality_available else None,
                 'is_mock': weather_data.get('is_mock', False),
                 'data_source': weather_source_label(weather_data),
-                'from_cache': from_cache
+                'from_cache': from_cache,
+                'weather_available': weather_available,
+                'air_quality_available': air_quality_available,
             }
         })
 
