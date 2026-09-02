@@ -1335,72 +1335,11 @@ class CommunityRiskService:
         }
     
     def _generate_management_suggestions(self, high_risk_communities, weather_data):
-        """生成管控建议（医生端）"""
-        suggestions = []
-        
-        temp = weather_data.get('temperature') if isinstance(weather_data, dict) else None
-        try:
-            temp = float(temp)
-        except (TypeError, ValueError):
-            temp = None
-        if temp is not None and not math.isfinite(temp):
-            temp = None
-        
-        # 资源调度建议
-        if len(high_risk_communities) >= 3:
-            suggestions.append({
-                'category': '资源调配',
-                'priority': 'high',
-                'advice': f'建议向 {high_risk_communities[0]["community"]}、{high_risk_communities[1]["community"]} 等高风险社区增派医疗资源',
-                'target_communities': [c['community'] for c in high_risk_communities[:3]]
-            })
-        
-        # 巡访建议
-        for comm in high_risk_communities[:3]:
-            if comm.get('elderly_ratio', 0) > 0.4:
-                suggestions.append({
-                    'category': '健康巡访',
-                    'priority': 'high',
-                    'advice': f'{comm["community"]} 老龄化程度高({comm["elderly_ratio"]*100:.0f}%)，建议加强独居老人巡访',
-                    'target_communities': [comm['community']]
-                })
-        
-        # 温度相关建议
-        if temp is not None and temp > 32:
-            suggestions.append({
-                'category': '防暑措施',
-                'priority': 'high',
-                'advice': '高温天气，建议在高风险社区开放避暑点、发放防暑物资',
-                'target_communities': [c['community'] for c in high_risk_communities]
-            })
-        elif temp is not None and temp < 5:
-            suggestions.append({
-                'category': '防寒措施',
-                'priority': 'high',
-                'advice': '低温天气，建议检查高风险社区供暖情况、关注独居老人',
-                'target_communities': [c['community'] for c in high_risk_communities]
-            })
-        
-        # 门诊准备
-        total_excess = sum(c.get('expected_excess_visits', 0) for c in high_risk_communities)
-        if total_excess > 10:
-            suggestions.append({
-                'category': '门诊准备',
-                'priority': 'medium',
-                'advice': f'预计高风险社区额外增加约 {total_excess:.0f} 人次就诊，建议门诊做好准备',
-                'target_communities': [c['community'] for c in high_risk_communities]
-            })
-        
-        if not suggestions:
-            suggestions.append({
-                'category': '常规管理',
-                'priority': 'low',
-                'advice': '各社区风险处于正常水平，保持常规健康管理工作',
-                'target_communities': []
-            })
-        
-        return suggestions
-    
+        """生成本页优先行动（文案来自 data/content/community_action_tips.json）。"""
+        from core.community_copy import generate_community_action_tips
+
+        return generate_community_action_tips(high_risk_communities, weather_data)
+
     def update_community_sensitivity(self, community_name, heat_sensitivity=None, cold_sensitivity=None):
         """
         更新社区天气敏感性参数 (v_c)
