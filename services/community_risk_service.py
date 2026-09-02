@@ -111,14 +111,32 @@ class CommunityRiskService:
         }
 
     def _estimate_baseline_visits(self, population):
-        """按人口估算社区日基线门诊，替代固定常数。"""
+        """按人口估算社区日基线门诊。缺人口时不编造 100 人基线。"""
+        if population is None:
+            return None
         try:
-            pop = float(population) if population is not None else 100.0
+            pop = float(population)
         except (TypeError, ValueError):
-            pop = 100.0
+            return None
+        if not math.isfinite(pop) or pop <= 0:
+            return None
         pop = max(10.0, pop)
         estimated = pop * self.baseline_visit_rate
         return float(np.clip(estimated, self.min_baseline_visits, self.max_baseline_visits))
+
+    def _profile_ready_for_ranking(self, profile):
+        """人口、老龄率和门诊基线齐全后才进入社区排名。"""
+        if not isinstance(profile, dict):
+            return False
+        if profile.get('population') is None:
+            return False
+        if profile.get('elderly_ratio') is None:
+            return False
+        if profile.get('chronic_disease_ratio') is None:
+            return False
+        if profile.get('baseline_visits') is None:
+            return False
+        return True
 
     def _normalize_excess_risk(self, excess_risk_score):
         """把超额风险映射到0-100，避免线性缩放导致快速打满。"""
@@ -439,7 +457,7 @@ class CommunityRiskService:
             # 先组装局部结果。任一档案读取异常时整批保持为空，避免发布半套排名。
             loaded_profiles = {}
             for comm in communities:
-                population = comm.population or 100
+                population = comm.population
                 proxy = self._stable_proxy_profile(comm.name)
                 coords_estimated = comm.latitude is None or comm.longitude is None
                 loaded_profiles[comm.name] = {
@@ -450,8 +468,8 @@ class CommunityRiskService:
                     'longitude': comm.longitude if comm.longitude is not None else proxy['longitude'],
                     'coords_estimated': coords_estimated,
                     'population': population,
-                    'elderly_ratio': comm.elderly_ratio or 0.2,
-                    'chronic_disease_ratio': comm.chronic_disease_ratio or 0.15,
+                    'elderly_ratio': comm.elderly_ratio,
+                    'chronic_disease_ratio': comm.chronic_disease_ratio,
                     'vulnerability_index': comm.vulnerability_index,
                     'risk_level': comm.risk_level,
 
@@ -718,6 +736,8 @@ class CommunityRiskService:
         # 2) 计算天气驱动风险底图
         community_risks = []
         for name, profile in self.community_profiles.items():
+            if not self._profile_ready_for_ranking(profile):
+                continue
             risk = self.calculate_community_risk_score(name, macro_rr, target_date)
             risk['latitude'] = profile.get('latitude', 29.35)
             risk['longitude'] = profile.get('longitude', 116.37)

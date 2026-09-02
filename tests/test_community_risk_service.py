@@ -291,3 +291,43 @@ def test_missing_community_coordinates_are_marked_estimated(app, db_session, mon
     assert estimated_feature['properties']['coords_estimated'] is True
     assert surveyed_feature['properties']['coords_estimated'] is False
     assert any('估算坐标' in item for item in result['methodology'])
+
+
+def test_missing_community_population_is_not_filled_with_100(app, db_session, monkeypatch):
+    from core.db_models import Community
+
+    db_session.add(Community(
+        name='缺人口村',
+        elderly_ratio=0.4,
+        chronic_disease_ratio=0.1,
+        latitude=29.28,
+        longitude=116.21,
+    ))
+    db_session.add(Community(
+        name='有人口村',
+        population=80,
+        elderly_ratio=0.3,
+        chronic_disease_ratio=0.1,
+        latitude=29.29,
+        longitude=116.22,
+    ))
+    db_session.commit()
+
+    class StubDLNM:
+        def calculate_rr(self, temperature, lag_temperatures=None):
+            return 1.8, {}
+
+    monkeypatch.setattr(
+        "services.dlnm_risk_service.get_dlnm_service",
+        lambda: StubDLNM(),
+    )
+
+    service = CommunityRiskService()
+    assert service.community_profiles['缺人口村']['population'] is None
+    assert service.community_profiles['缺人口村']['population'] != 100
+    assert service.community_profiles['有人口村']['population'] == 80
+
+    result = service.generate_community_risk_map({"temperature": 35})
+    names = [row['community'] for row in result['rankings']]
+    assert '缺人口村' not in names
+    assert '有人口村' in names
