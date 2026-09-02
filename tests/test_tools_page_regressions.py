@@ -128,6 +128,9 @@ def test_forecast_page_qweather_failure_does_not_render_demo_heat(client, db_ses
     assert '7 天天气正在更新' in body
     assert '34° / 26°' not in body
     assert '35° / 27°' not in body
+    assert '早晚测血压' not in body
+    assert '补水 1.5L+' not in body
+    assert '就诊负担升高' not in body
 
 
 def test_forecast_api_default_uses_qweather_only_data(client, db_session, monkeypatch):

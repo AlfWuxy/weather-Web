@@ -154,6 +154,8 @@ def test_forecast_page_keeps_weather_and_hides_visit_burden_when_health_unavaila
     assert '就诊负担升高' not in body
     assert '26° / 18°' in body
     assert '7 天天气正在更新' not in body
+    assert '早晚测血压' not in body
+    assert '补水 1.5L+' not in body
 
 
 def test_forecast_page_still_explains_missing_weather(client, db_session, monkeypatch):
