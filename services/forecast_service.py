@@ -33,6 +33,7 @@ class ForecastService:
         
         # 加载历史数据
         self._load_historical_data()
+        self.visit_thresholds_fallback = True
         self._calculate_thresholds()
     
     def _load_historical_data(self):
@@ -136,6 +137,7 @@ class ForecastService:
                 round(self.visit_threshold_p90, 2),
                 round(self.visit_mean, 2)
             )
+            self.visit_thresholds_fallback = False
             
         except Exception as e:
             logging.getLogger(__name__).warning("Visit thresholds calculation failed: %s", e)
@@ -143,6 +145,7 @@ class ForecastService:
             self.visit_mean = 10
             self.visit_std = 5
             self.max_observed_daily_visits = 30
+            self.visit_thresholds_fallback = True
 
     def _safe_float(self, value, default=None):
         try:
@@ -659,6 +662,27 @@ class ForecastService:
                 data_sources.append('default')
         
         return lag_profile, data_sources
+
+    def _lag_sources_are_live(self, sources):
+        return bool(sources) and all(src in ('observation', 'forecast') for src in sources)
+
+    def _health_inputs_ready(self, start_date, forecast_temps_dict):
+        if getattr(self, 'visit_thresholds_fallback', True):
+            return False, '门诊基线数据不可用，就诊负担预测暂不显示。'
+        for lead_day in range(1, 8):
+            target_date = start_date + timedelta(days=lead_day - 1)
+            past_temp_map = {
+                d: (e.get('temp', 15.0) if isinstance(e, dict) else float(e))
+                for d, e in forecast_temps_dict.items()
+                if d < target_date
+            }
+            _lags, sources = self.get_lag_temperature_profile(
+                target_date,
+                forecast_temps=past_temp_map,
+            )
+            if not self._lag_sources_are_live(sources):
+                return False, '近几日气温观测不足，就诊负担预测暂不显示。'
+        return True, ''
     
     def predict_daily_visits(self, temperature, lag_temps=None, month=None, dow=None):
         """
@@ -810,6 +834,18 @@ class ForecastService:
                 forecast_temps_dict[key] = self._normalize_forecast_entry(v)
         else:
             raise ValueError("forecast_temps must be a list or dict")
+
+        ready, reason = self._health_inputs_ready(start_date, forecast_temps_dict)
+        if not ready:
+            return [], {
+                'health_forecast_available': False,
+                'health_forecast_reason': reason,
+                'forecast_period': {
+                    'start': start_date.strftime('%Y-%m-%d'),
+                    'end': (start_date + timedelta(days=6)).strftime('%Y-%m-%d'),
+                },
+                'recommendations': [],
+            }
         
         forecasts = []
         total_expected_visits = 0
@@ -1027,7 +1063,8 @@ class ForecastService:
             },
             'impact_likelihood_matrix': self._build_impact_likelihood_matrix(forecasts),
             'model_sources': sorted(model_sources),
-            'generated_at': now_local().strftime('%Y-%m-%d %H:%M:%S')
+            'generated_at': now_local().strftime('%Y-%m-%d %H:%M:%S'),
+            'health_forecast_available': True,
         }
         summary['role_action_cards'] = self._build_role_action_cards(forecasts, summary)
         

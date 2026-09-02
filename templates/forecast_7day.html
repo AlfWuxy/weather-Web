@@ -34,7 +34,12 @@
 
     {% if forecast_error %}
     <div class="alert alert-warning yl-fade-up yl-fade-up-d2" role="alert">
-        <i class="bi bi-exclamation-triangle me-1"></i>7 天天气正在更新，预报暂不显示。请稍后重试。
+        <i class="bi bi-exclamation-triangle me-1"></i>{{ forecast_error }}
+    </div>
+    {% endif %}
+    {% if health_unavailable %}
+    <div class="alert alert-warning yl-fade-up yl-fade-up-d2" role="status">
+        <i class="bi bi-exclamation-triangle me-1"></i>{{ health_unavailable }}
     </div>
     {% endif %}
 

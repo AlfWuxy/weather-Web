@@ -341,6 +341,7 @@ def forecast_7day():
     forecast_days = []
     weekly_tips = None
     forecast_error = None
+    health_unavailable = None
     forecast_meta = {'source': 'QWeather'}
     qweather_days, from_cache, forecast_meta = get_qweather_forecast_with_cache(current_location, days=7)
     forecast_meta = dict(forecast_meta or {})
@@ -360,17 +361,24 @@ def forecast_7day():
                 start_date=start_date,
                 context=weather_context,
             )
-            recommendations = (summary or {}).get('recommendations') or []
-            if recommendations:
-                weekly_tips = [
-                    {
-                        'icon': 'lightbulb',
-                        'title': item.get('category') or item.get('priority') or '健康提醒',
-                        'detail': item.get('advice') or item.get('description') or '',
-                    }
-                    for item in recommendations[:4]
-                    if isinstance(item, dict)
-                ] or None
+            if summary and summary.get('health_forecast_available') is False:
+                health_forecasts = []
+                weekly_tips = None
+                health_unavailable = summary.get('health_forecast_reason') or (
+                    '近几日气温观测不足，就诊负担预测暂不显示。'
+                )
+            else:
+                recommendations = (summary or {}).get('recommendations') or []
+                if recommendations:
+                    weekly_tips = [
+                        {
+                            'icon': 'lightbulb',
+                            'title': item.get('category') or item.get('priority') or '健康提醒',
+                            'detail': item.get('advice') or item.get('description') or '',
+                        }
+                        for item in recommendations[:4]
+                        if isinstance(item, dict)
+                    ] or None
         except Exception as exc:
             current_app.logger.warning("7天健康预测生成失败，仅展示和风天气: %s", exc)
         forecast_days = build_forecast_cards(qweather_days, health_forecasts, start_date)
@@ -386,6 +394,7 @@ def forecast_7day():
         forecast_error=forecast_error,
         forecast_meta=forecast_meta,
         weekly_tips=weekly_tips,
+        health_unavailable=health_unavailable,
     )
 
 
