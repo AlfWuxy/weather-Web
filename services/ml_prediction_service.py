@@ -5,6 +5,7 @@
 """
 import joblib
 import logging
+import math
 import numpy as np
 import os
 import threading
@@ -13,6 +14,30 @@ from core.time_utils import now_local
 logger = logging.getLogger(__name__)
 
 GENERIC_ERROR_MESSAGE = '服务暂时不可用，请稍后再试'
+
+def _finite_or_none(value):
+    if value in (None, ''):
+        return None
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(parsed):
+        return None
+    return parsed
+
+def _weather_metrics(weather_info):
+    payload = weather_info if isinstance(weather_info, dict) else {}
+    temp = _finite_or_none(payload.get('tmean'))
+    if temp is None:
+        temp = _finite_or_none(payload.get('temperature'))
+    return {
+        'temp': temp,
+        'humidity': _finite_or_none(payload.get('humidity')),
+        'aqi': _finite_or_none(payload.get('aqi')),
+        'wind_speed': _finite_or_none(payload.get('wind_speed')),
+        'feels_like': _finite_or_none(payload.get('feels_like')),
+    }
 EXPECTED_SKLEARN_VERSION = os.getenv('ML_EXPECTED_SKLEARN_VERSION', '1.7.2')
 _ml_service_instance = None
 _ml_service_lock = threading.Lock()
@@ -353,9 +378,9 @@ class MLPredictionService:
                     'chronic_diseases': [],
                     'has_chronic_disease': False,
                     'disease_count': 0,
-                    'aqi': weather_info.get('aqi', 50) if weather_info else 50,
+                    'aqi': _finite_or_none(weather_info.get('aqi')) if weather_info else None,
                     'hot_night': False,
-                    'hot_night_temp': weather_info.get('tmin', 22) if weather_info else 22,
+                    'hot_night_temp': _finite_or_none(weather_info.get('tmin')) if weather_info else None,
                     'heat_wave_days': weather_info.get('heat_wave_days', 0) if weather_info else 0,
                     'cold_wave_days': weather_info.get('cold_wave_days', 0) if weather_info else 0
                 }
@@ -415,23 +440,24 @@ class MLPredictionService:
         sensitivity = self.disease_weather_sensitivity[disease]
         adjustment = 1.0
         
-        temp = weather_info.get('tmean', weather_info.get('temperature', 15))
-        humidity = weather_info.get('humidity', 70)
-        
+        metrics = _weather_metrics(weather_info)
+        temp = metrics['temp']
+        humidity = metrics['humidity']
+
         # 低温调整
-        if 'low_temp' in sensitivity and temp < 10:
+        if temp is not None and 'low_temp' in sensitivity and temp < 10:
             adjustment *= sensitivity['low_temp'] * (1 + (10 - temp) / 20)
-        
+
         # 高温调整
-        if 'high_temp' in sensitivity and temp > 30:
+        if temp is not None and 'high_temp' in sensitivity and temp > 30:
             adjustment *= sensitivity['high_temp'] * (1 + (temp - 30) / 20)
-        
+
         # 高湿度调整
-        if 'high_humidity' in sensitivity and humidity > 80:
+        if humidity is not None and 'high_humidity' in sensitivity and humidity > 80:
             adjustment *= sensitivity['high_humidity']
-        
+
         # 低湿度调整
-        if 'low_humidity' in sensitivity and humidity < 40:
+        if humidity is not None and 'low_humidity' in sensitivity and humidity < 40:
             adjustment *= sensitivity['low_humidity']
         
         # 限制调整幅度
@@ -464,44 +490,39 @@ class MLPredictionService:
         
         # 基于天气的风险
         if weather_info:
-            temp = weather_info.get('tmean') or weather_info.get('temperature') or 20
-            humidity = weather_info.get('humidity') or 70
-            aqi = weather_info.get('aqi') or 50
-            wind_speed = weather_info.get('wind_speed') or 2.5
-            
-            # 确保数值类型
-            try:
-                temp = float(temp)
-                humidity = float(humidity)
-                aqi = float(aqi)
-                wind_speed = float(wind_speed)
-            except (TypeError, ValueError):
-                temp, humidity, aqi, wind_speed = 20, 70, 50, 2.5
-            
+            metrics = _weather_metrics(weather_info)
+            temp = metrics['temp']
+            humidity = metrics['humidity']
+            aqi = metrics['aqi']
+            wind_speed = metrics['wind_speed']
+
             # 极端温度
-            if temp < 0 or temp > 38:
-                risk_score += 15
-            elif temp < 5 or temp > 35:
-                risk_score += 10
-            elif temp < 10 or temp > 32:
-                risk_score += 5
-            
+            if temp is not None:
+                if temp < 0 or temp > 38:
+                    risk_score += 15
+                elif temp < 5 or temp > 35:
+                    risk_score += 10
+                elif temp < 10 or temp > 32:
+                    risk_score += 5
+
             # 极端湿度
-            if humidity > 90 or humidity < 30:
-                risk_score += 8
-            elif humidity > 85 or humidity < 40:
-                risk_score += 4
-            
+            if humidity is not None:
+                if humidity > 90 or humidity < 30:
+                    risk_score += 8
+                elif humidity > 85 or humidity < 40:
+                    risk_score += 4
+
             # 空气质量
-            if aqi > 150:
-                risk_score += 15
-            elif aqi > 100:
-                risk_score += 8
-            elif aqi > 75:
-                risk_score += 4
-            
+            if aqi is not None:
+                if aqi > 150:
+                    risk_score += 15
+                elif aqi > 100:
+                    risk_score += 8
+                elif aqi > 75:
+                    risk_score += 4
+
             # 强风
-            if wind_speed > 10:
+            if wind_speed is not None and wind_speed > 10:
                 risk_score += 5
         
         return min(risk_score, 100)
@@ -517,55 +538,46 @@ class MLPredictionService:
             factors.append(f'年龄({age}岁)为儿童，免疫系统发育中')
         
         if weather_info:
-            temp = weather_info.get('tmean') or weather_info.get('temperature') or 20
-            humidity = weather_info.get('humidity') or 70
-            aqi = weather_info.get('aqi') or 50
-            wind_speed = weather_info.get('wind_speed') or 2.5
-            feels_like = weather_info.get('feels_like')
+            metrics = _weather_metrics(weather_info)
+            temp = metrics['temp']
+            humidity = metrics['humidity']
+            aqi = metrics['aqi']
+            wind_speed = metrics['wind_speed']
+            feels_like = metrics['feels_like']
             if feels_like is None:
-                feels_like = temp  # 默认使用实际温度
-            
-            # 确保数值类型
-            try:
-                temp = float(temp)
-                humidity = float(humidity)
-                aqi = float(aqi)
-                wind_speed = float(wind_speed)
-                feels_like = float(feels_like)
-            except (TypeError, ValueError):
-                temp, humidity, aqi, wind_speed, feels_like = 20, 70, 50, 2.5, 20
+                feels_like = temp
             
             # 温度因素
-            if temp < 5:
+            if temp is not None and temp < 5:
                 factors.append(f'低温天气({temp}°C)增加呼吸道和心血管疾病风险')
-            elif temp > 35:
+            elif temp is not None and temp > 35:
                 factors.append(f'高温天气({temp}°C)增加中暑和胃肠道疾病风险')
-            elif temp < 10:
+            elif temp is not None and temp < 10:
                 factors.append(f'气温偏低({temp}°C)，注意保暖防寒')
-            elif temp > 32:
+            elif temp is not None and temp > 32:
                 factors.append(f'气温偏高({temp}°C)，注意防暑降温')
             
             # 体感温度
-            if feels_like is not None:
+            if feels_like is not None and temp is not None:
                 if feels_like < temp - 5:
                     factors.append(f'体感温度({feels_like:.1f}°C)明显低于实际温度，风寒效应显著')
                 elif feels_like > temp + 5:
                     factors.append(f'体感温度({feels_like:.1f}°C)明显高于实际温度，闷热感强')
             
             # 湿度因素
-            if humidity > 85:
+            if humidity is not None and humidity > 85:
                 factors.append(f'湿度过高({humidity:.0f}%)，易引发关节炎和皮肤问题')
-            elif humidity < 40:
+            elif humidity is not None and humidity < 40:
                 factors.append(f'湿度过低({humidity:.0f}%)，呼吸道黏膜易干燥')
             
             # 空气质量
-            if aqi > 150:
+            if aqi is not None and aqi > 150:
                 factors.append(f'空气质量差(AQI:{aqi})，呼吸系统疾病风险显著增加')
-            elif aqi > 100:
+            elif aqi is not None and aqi > 100:
                 factors.append(f'空气质量一般(AQI:{aqi})，敏感人群需注意')
             
             # 风速
-            if wind_speed > 8:
+            if wind_speed is not None and wind_speed > 8:
                 factors.append(f'大风天气({wind_speed:.1f}m/s)，体感温度降低，注意防风')
         
         # 疾病概率因素
@@ -582,43 +594,36 @@ class MLPredictionService:
         impact_score = 0
         impacts = []
         
-        temp = weather_info.get('tmean') or weather_info.get('temperature') or 20
-        humidity = weather_info.get('humidity') or 70
-        aqi = weather_info.get('aqi') or 50
-        
-        # 确保数值类型
-        try:
-            temp = float(temp)
-            humidity = float(humidity)
-            aqi = float(aqi)
-        except (TypeError, ValueError):
-            temp, humidity, aqi = 20, 70, 50
+        metrics = _weather_metrics(weather_info)
+        temp = metrics['temp']
+        humidity = metrics['humidity']
+        aqi = metrics['aqi']
         
         # 温度影响
-        if temp < 5 or temp > 35:
+        if temp is not None and (temp < 5 or temp > 35):
             impact_score += 3
             impacts.append('极端温度')
-        elif temp < 10 or temp > 32:
+        elif temp is not None and (temp < 10 or temp > 32):
             impact_score += 2
             impacts.append('温度偏离舒适区')
-        elif 15 <= temp <= 25:
+        elif temp is not None and 15 <= temp <= 25:
             impacts.append('温度适宜')
         
         # 湿度影响
-        if humidity > 85 or humidity < 35:
+        if humidity is not None and (humidity > 85 or humidity < 35):
             impact_score += 2
             impacts.append('湿度不适')
-        elif 50 <= humidity <= 70:
+        elif humidity is not None and 50 <= humidity <= 70:
             impacts.append('湿度适宜')
         
         # 空气质量影响
-        if aqi > 150:
+        if aqi is not None and aqi > 150:
             impact_score += 3
             impacts.append('空气污染严重')
-        elif aqi > 100:
+        elif aqi is not None and aqi > 100:
             impact_score += 2
             impacts.append('空气轻度污染')
-        elif aqi <= 50:
+        elif aqi is not None and aqi <= 50:
             impacts.append('空气质量优')
         
         # 综合影响等级
@@ -662,31 +667,32 @@ class MLPredictionService:
             })
         
         if weather_info:
-            temp = weather_info.get('tmean', weather_info.get('temperature', 20))
-            humidity = weather_info.get('humidity', 70)
-            aqi = weather_info.get('aqi', 50)
-            wind_speed = weather_info.get('wind_speed', 2.5)
+            metrics = _weather_metrics(weather_info)
+            temp = metrics['temp']
+            humidity = metrics['humidity']
+            aqi = metrics['aqi']
+            wind_speed = metrics['wind_speed']
             
             # 温度相关建议
-            if temp < 5:
+            if temp is not None and temp < 5:
                 recommendations.append({
                     'category': '低温防护',
                     'advice': '天气寒冷，注意添衣保暖，特别是头部、颈部和脚部。室内保持适宜温度(18-22°C)',
                     'priority': 'high'
                 })
-            elif temp < 10:
+            elif temp is not None and temp < 10:
                 recommendations.append({
                     'category': '防寒提醒',
                     'advice': '气温较低，早晚温差大，注意保暖防寒，预防感冒',
                     'priority': 'medium'
                 })
-            elif temp > 35:
+            elif temp is not None and temp > 35:
                 recommendations.append({
                     'category': '高温防护',
                     'advice': '天气炎热，多饮水，避免10-14点高温时段外出，注意防暑降温',
                     'priority': 'high'
                 })
-            elif temp > 30:
+            elif temp is not None and temp > 30:
                 recommendations.append({
                     'category': '防暑提醒',
                     'advice': '气温较高，适当增加饮水量，饮食清淡，注意食品卫生',
@@ -694,13 +700,13 @@ class MLPredictionService:
                 })
             
             # 湿度相关建议
-            if humidity > 85:
+            if humidity is not None and humidity > 85:
                 recommendations.append({
                     'category': '高湿度提醒',
                     'advice': '空气湿度较大，注意室内通风除湿，衣物及时晾晒',
                     'priority': 'low'
                 })
-            elif humidity < 40:
+            elif humidity is not None and humidity < 40:
                 recommendations.append({
                     'category': '干燥提醒',
                     'advice': '空气干燥，多饮水，可使用加湿器，注意皮肤保湿',
@@ -708,13 +714,13 @@ class MLPredictionService:
                 })
             
             # 空气质量建议
-            if aqi > 150:
+            if aqi is not None and aqi > 150:
                 recommendations.append({
                     'category': '空气质量警告',
                     'advice': '空气质量差，建议减少户外活动，外出务必佩戴口罩，使用空气净化器',
                     'priority': 'high'
                 })
-            elif aqi > 100:
+            elif aqi is not None and aqi > 100:
                 recommendations.append({
                     'category': '空气质量提醒',
                     'advice': '空气质量一般，敏感人群减少户外活动，外出建议佩戴口罩',
@@ -722,7 +728,7 @@ class MLPredictionService:
                 })
             
             # 大风建议
-            if wind_speed > 8:
+            if wind_speed is not None and wind_speed > 8:
                 recommendations.append({
                     'category': '大风提醒',
                     'advice': '风力较大，外出注意防风，避免在高大建筑物附近停留',
@@ -842,14 +848,15 @@ class MLPredictionService:
                 high_risk_groups.append('老年人群体')
             
             if weather_info:
-                temp = weather_info.get('tmean', weather_info.get('temperature', 20))
-                aqi = weather_info.get('aqi', 50)
-                
-                if temp < 10:
+                metrics = _weather_metrics(weather_info)
+                temp = metrics['temp']
+                aqi = metrics['aqi']
+
+                if temp is not None and temp < 10:
                     high_risk_groups.extend(['心血管疾病患者', '呼吸系统疾病患者'])
-                if temp > 32:
+                if temp is not None and temp > 32:
                     high_risk_groups.extend(['心血管疾病患者', '户外工作者'])
-                if aqi > 100:
+                if aqi is not None and aqi > 100:
                     high_risk_groups.append('呼吸系统疾病患者')
             
             return {
@@ -924,30 +931,31 @@ class MLPredictionService:
             recommendations.append('社区卫生站做好应急药品储备')
         
         if weather_info:
-            temp = weather_info.get('tmean', weather_info.get('temperature', 20))
-            aqi = weather_info.get('aqi', 50)
-            humidity = weather_info.get('humidity', 70)
+            metrics = _weather_metrics(weather_info)
+            temp = metrics['temp']
+            aqi = metrics['aqi']
+            humidity = metrics['humidity']
             
-            if temp < 5:
+            if temp is not None and temp < 5:
                 recommendations.append('开放社区暖心驿站')
                 recommendations.append('提醒居民注意防寒保暖')
-            elif temp < 10:
+            elif temp is not None and temp < 10:
                 recommendations.append('关注独居老人保暖情况')
             
-            if temp > 35:
+            if temp is not None and temp > 35:
                 recommendations.append('设立防暑降温点')
                 recommendations.append('关注独居老人防暑情况')
-            elif temp > 32:
+            elif temp is not None and temp > 32:
                 recommendations.append('提醒居民多饮水避暑')
             
-            if aqi > 150:
+            if aqi is not None and aqi > 150:
                 recommendations.append('发布空气质量红色预警')
                 recommendations.append('建议居民减少户外活动')
-            elif aqi > 100:
+            elif aqi is not None and aqi > 100:
                 recommendations.append('发布空气质量提醒')
                 recommendations.append('建议敏感人群减少外出')
             
-            if humidity > 85:
+            if humidity is not None and humidity > 85:
                 recommendations.append('提醒居民注意室内通风除湿')
         
         # 基于疾病风险
