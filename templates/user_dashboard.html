@@ -230,15 +230,7 @@
                     </div>
                     {% endfor %}
                 {% endif %}
-                {% if not weather_available %}
-                    <div class="yl-action">
-                        <i class="bi bi-cloud-slash"></i>
-                        <div>
-                            <strong>先做好日常防护</strong>
-                            <div class="detail">补水、留意体感，需要降温时查看附近避暑资源。</div>
-                        </div>
-                    </div>
-                {% elif heat_actions %}
+                {% if heat_actions %}
                     {% for act in heat_actions %}
                     <div class="yl-action">
                         <i class="bi bi-{{ act.icon or 'check-circle' }}"></i>
@@ -249,11 +241,13 @@
                     </div>
                     {% endfor %}
                 {% else %}
-                    {# 兜底，保证页面始终有内容可看 #}
-                    <div class="yl-action"><i class="bi bi-cup-hot"></i><div><strong>多喝温水</strong><div class="detail">建议 1.5L，少量多次</div></div></div>
-                    <div class="yl-action"><i class="bi bi-sun"></i><div><strong>避开午后外出</strong><div class="detail">11:00–15:00 紫外线强</div></div></div>
-                    <div class="yl-action"><i class="bi bi-heart-pulse"></i><div><strong>关注血压</strong><div class="detail">早晚各测一次</div></div></div>
-                    <div class="yl-action"><i class="bi bi-capsule"></i><div><strong>按时服药</strong><div class="detail">别漏降压药</div></div></div>
+                    <div class="yl-action">
+                        <i class="bi bi-cloud-slash"></i>
+                        <div>
+                            <strong>先做好日常防护</strong>
+                            <div class="detail">补水、留意体感，需要降温时查看附近避暑资源。</div>
+                        </div>
+                    </div>
                 {% endif %}
             </div>
         </section>

@@ -86,3 +86,36 @@ def test_dashboard_renders_weather_alert_real_fields_with_local_date(
     assert '测试预警详情' in html
     assert 'yl-alert-item level-high' in html
     assert '<strong></strong>' not in html
+
+
+def test_dashboard_does_not_invent_hydration_volume_or_bp_when_actions_empty(
+    authenticated_client,
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        'services.user.dashboard_service.get_weather_with_cache',
+        lambda _location: ({
+            'temperature': 27,
+            'temperature_max': 31,
+            'temperature_min': 22,
+            'humidity': 68,
+            'data_source': 'QWeather',
+            'is_mock': False,
+        }, False),
+    )
+    monkeypatch.setattr(
+        'services.user.dashboard_service.get_qweather_forecast_with_cache',
+        lambda _location, days=7: ([], False, {'error': 'qweather_unavailable'}),
+    )
+    monkeypatch.setattr(
+        'services.user.dashboard_service._action_plan',
+        lambda _label: [],
+    )
+
+    body = authenticated_client.get('/dashboard').get_data(as_text=True)
+
+    assert '建议 1.5L' not in body
+    assert '多喝温水' not in body
+    assert '早晚各测一次' not in body
+    assert '别漏降压药' not in body
+    assert '先做好日常防护' in body
