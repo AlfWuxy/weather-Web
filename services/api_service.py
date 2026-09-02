@@ -49,6 +49,18 @@ def _weather_unavailable_response(weather_data=None, message=None):
     return jsonify(payload), 503
 
 
+def _require_request_age(data):
+    """JSON 或当前用户资料必须有有效年龄，不用 40/50 岁顶上。"""
+    payload = data if isinstance(data, dict) else {}
+    raw = payload.get('age')
+    if raw in (None, ''):
+        raw = getattr(current_user, 'age', None)
+    age = parse_int(raw)
+    if age is None or age < 1 or age > 150:
+        raise ValueError('请提供年龄')
+    return age
+
+
 def _validate_qweather_for_risk(weather_data, context):
     """校验风险计算输入，防止 demo/mock/fallback 数据污染结果。"""
     if is_qweather_online_weather(weather_data):
@@ -270,8 +282,8 @@ def _api_ml_predict():
 
         # 获取用户信息
         user_info = {
-            'age': data.get('age') or current_user.age or 40,
-            'gender': data.get('gender') or current_user.gender or '男'
+            'age': _require_request_age(data),
+            'gender': data.get('gender') or current_user.gender or '未知'
         }
 
         sunshine_seconds = _normalize_sunshine_seconds(data)
@@ -804,7 +816,7 @@ def _api_chronic_individual():
 
         # 用户信息
         user_info = {
-            'age': data.get('age') or current_user.age or 50,
+            'age': _require_request_age(data),
             'gender': data.get('gender') or current_user.gender or '未知',
             'chronic_diseases': data.get('chronic_diseases') or (
                 safe_json_loads(current_user.chronic_diseases, [])
