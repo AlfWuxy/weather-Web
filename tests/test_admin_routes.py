@@ -79,6 +79,34 @@ def test_pilot_dashboard_renders_for_admin(client, db_session):
     assert '试点数据看板' in response.get_data(as_text=True)
 
 
+def test_pilot_export_csv_rejects_get(client, db_session):
+    from core.db_models import User
+
+    admin = User(username='admin_pilot_export_get', role='admin')
+    admin.set_password('testpass')
+    db_session.add(admin)
+    db_session.commit()
+
+    _login_as(client, admin.id)
+    response = client.get('/analysis/pilot/export.csv?days=30')
+
+    assert response.status_code == 405
+
+
+def test_pilot_export_csv_rejects_post_without_csrf(client, db_session):
+    from core.db_models import User
+
+    admin = User(username='admin_pilot_export_csrf', role='admin')
+    admin.set_password('testpass')
+    db_session.add(admin)
+    db_session.commit()
+
+    _login_as(client, admin.id)
+    response = client.post('/analysis/pilot/export.csv', data={'days': '30'})
+
+    assert response.status_code == 400
+
+
 def test_pilot_export_csv_returns_empty_export_for_admin(client, db_session):
     from core.db_models import User
 
@@ -88,7 +116,12 @@ def test_pilot_export_csv_returns_empty_export_for_admin(client, db_session):
     db_session.commit()
 
     _login_as(client, admin.id)
-    response = client.get('/analysis/pilot/export.csv?days=30')
+    with client.session_transaction() as session:
+        session['_csrf_token'] = 'pilot-csv-csrf'
+    response = client.post(
+        '/analysis/pilot/export.csv',
+        data={'days': '30', 'csrf_token': 'pilot-csv-csrf'},
+    )
 
     assert response.status_code == 200
     assert response.mimetype == 'text/csv'
@@ -116,10 +149,33 @@ def test_pilot_export_csv_neutralizes_formula_injection(client, db_session):
     db_session.commit()
 
     _login_as(client, admin.id)
-    response = client.get('/analysis/pilot/export.csv?days=30')
+    with client.session_transaction() as session:
+        session['_csrf_token'] = 'pilot-csv-csrf'
+    response = client.post(
+        '/analysis/pilot/export.csv',
+        data={'days': '30', 'csrf_token': 'pilot-csv-csrf'},
+    )
     body = response.get_data(as_text=True)
 
     assert response.status_code == 200
     assert "'=CMD|" in body
     assert "'+1+1" in body
     assert not any(line.lstrip().startswith('=CMD') for line in body.splitlines())
+
+
+def test_pilot_dashboard_export_is_post_form(client, db_session):
+    from core.db_models import User
+
+    admin = User(username='admin_pilot_form', role='admin')
+    admin.set_password('testpass')
+    db_session.add(admin)
+    db_session.commit()
+
+    _login_as(client, admin.id)
+    response = client.get('/analysis/pilot?days=30')
+    body = response.get_data(as_text=True)
+
+    assert 'method="POST"' in body
+    assert 'action="/analysis/pilot/export.csv"' in body
+    assert 'name="csrf_token"' in body
+    assert 'href="/analysis/pilot/export.csv' not in body

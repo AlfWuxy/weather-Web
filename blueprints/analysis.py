@@ -3304,14 +3304,14 @@ def pilot_dashboard():
     )
 
 
-@bp.route('/analysis/pilot/export.csv', endpoint='pilot_export_csv')
+@bp.route('/analysis/pilot/export.csv', methods=['POST'], endpoint='pilot_export_csv')
 @login_required
 def pilot_export_csv():
     """导出试点埋点（CSV）"""
     if not _require_admin():
         return redirect(url_for('user.user_dashboard'))
 
-    days = request.args.get('days', default=30, type=int)
+    days = request.form.get('days', default=30, type=int)
     days = max(1, min(days, 365))
     start_ts = utcnow() - timedelta(days=days)
 
