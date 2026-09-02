@@ -111,5 +111,29 @@
     "emergency": "如出现胸痛、呼吸困难、意识模糊等，请立即就医或拨打120。",
     "family_help": "建议及时联系家属协助观察。",
     "air_quality": "若持续咳喘或胸闷，请联系医生评估。"
+  },
+  "vitals": {
+    "sbp_very_high": {
+      "factor_template": "近7天最高收缩压{sbp}mmHg，已按明显偏高处理",
+      "advice": "近7天最高血压明显偏高，请尽快联系家属并就医复核。"
+    },
+    "sbp_high": {
+      "factor_template": "近7天最高收缩压{sbp}mmHg，血压控制偏高",
+      "advice": "建议连续记录早晚血压，并按医嘱调整复诊计划。"
+    },
+    "sbp_mild": {
+      "factor_template": "近7天最高收缩压{sbp}mmHg，血压略高"
+    },
+    "fbg_very_high": {
+      "factor_template": "近7天空腹血糖{fbg}mmol/L，已按明显偏高处理",
+      "advice": "空腹血糖明显偏高，建议尽快复测并咨询医生。"
+    },
+    "fbg_high": {
+      "factor_template": "近7天空腹血糖{fbg}mmol/L，血糖控制偏高",
+      "advice": "建议记录空腹血糖变化，减少高糖饮食并按医嘱复诊。"
+    },
+    "fbg_mild": {
+      "factor_template": "近7天空腹血糖{fbg}mmol/L，血糖略高"
+    }
   }
 }

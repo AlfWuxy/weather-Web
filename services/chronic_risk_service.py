@@ -147,40 +147,46 @@ class ChronicRiskService:
         return parsed
 
     def _analyze_submitted_vitals(self, user_info):
-        """保守评估用户本次提交的血压/血糖指标。"""
+        """保守评估用户本次提交的血压/血糖指标。文案从 JSON 读取。"""
+        from core.chronic_copy import load_chronic_recommendation_copy
+
         vitals = user_info.get('vitals') if isinstance(user_info.get('vitals'), dict) else {}
         sbp = self._parse_vital_number(user_info.get('sbp', vitals.get('sbp')), 60, 260)
         fbg = self._parse_vital_number(user_info.get('fbg', vitals.get('fbg')), 2.0, 30.0)
+        copy = load_chronic_recommendation_copy()['vitals']
 
         score_adjustment = 0.0
         factors = []
         recommendations = []
 
+        def add_vital(key, score, **template_values):
+            nonlocal score_adjustment
+            entry = copy.get(key) or {}
+            score_adjustment += score
+            template = entry.get('factor_template')
+            if template:
+                factors.append(template.format(**template_values))
+            advice = entry.get('advice')
+            if advice:
+                recommendations.append(advice)
+
         if sbp is not None:
+            sbp_text = f'{sbp:g}'
             if sbp >= 180:
-                score_adjustment += 14
-                factors.append(f'近7天最高收缩压{sbp:g}mmHg，已按明显偏高处理')
-                recommendations.append('近7天最高血压明显偏高，建议尽快联系社区医生复核。')
+                add_vital('sbp_very_high', 14, sbp=sbp_text)
             elif sbp >= 160:
-                score_adjustment += 10
-                factors.append(f'近7天最高收缩压{sbp:g}mmHg，血压控制偏高')
-                recommendations.append('建议连续记录早晚血压，并按医嘱调整复诊计划。')
+                add_vital('sbp_high', 10, sbp=sbp_text)
             elif sbp >= 140:
-                score_adjustment += 6
-                factors.append(f'近7天最高收缩压{sbp:g}mmHg，血压略高')
+                add_vital('sbp_mild', 6, sbp=sbp_text)
 
         if fbg is not None:
+            fbg_text = f'{fbg:g}'
             if fbg >= 11.1:
-                score_adjustment += 12
-                factors.append(f'近7天空腹血糖{fbg:g}mmol/L，已按明显偏高处理')
-                recommendations.append('空腹血糖明显偏高，建议尽快复测并咨询医生。')
+                add_vital('fbg_very_high', 12, fbg=fbg_text)
             elif fbg >= 7.0:
-                score_adjustment += 8
-                factors.append(f'近7天空腹血糖{fbg:g}mmol/L，血糖控制偏高')
-                recommendations.append('建议记录空腹血糖变化，减少高糖饮食并按医嘱复诊。')
+                add_vital('fbg_high', 8, fbg=fbg_text)
             elif fbg >= 6.1:
-                score_adjustment += 4
-                factors.append(f'近7天空腹血糖{fbg:g}mmol/L，血糖略高')
+                add_vital('fbg_mild', 4, fbg=fbg_text)
 
         return {
             'sbp': sbp,

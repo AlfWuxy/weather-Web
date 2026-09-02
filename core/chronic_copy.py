@@ -50,4 +50,21 @@ def load_chronic_recommendation_copy():
     fallback = payload.get('fallback_actions')
     if not isinstance(fallback, list) or not fallback:
         raise ValueError('chronic_recommendation_copy.json missing fallback_actions')
+    vitals = payload.get('vitals')
+    vital_keys = (
+        'sbp_very_high', 'sbp_high', 'sbp_mild',
+        'fbg_very_high', 'fbg_high', 'fbg_mild',
+    )
+    if not isinstance(vitals, dict):
+        raise ValueError('chronic_recommendation_copy.json vitals must be an object')
+    missing_vitals = [
+        key for key in vital_keys
+        if not isinstance(vitals.get(key), dict) or not vitals[key].get('factor_template')
+    ]
+    if missing_vitals:
+        raise ValueError(
+            f'chronic_recommendation_copy.json vitals missing: {", ".join(missing_vitals)}'
+        )
+    if not vitals['sbp_very_high'].get('advice') or not vitals['fbg_very_high'].get('advice'):
+        raise ValueError('chronic_recommendation_copy.json vitals missing advice')
     return payload
