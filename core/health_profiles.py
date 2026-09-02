@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """Health profile helpers."""
+from datetime import time as dt_time
 import json
 import logging
 import re
@@ -115,6 +116,53 @@ def reminder_triggered(reminder, weather):
         reasons.append(f"AQI≥{high_aqi}")
 
     return bool(reasons), '、'.join(reasons) if reasons else None
+
+
+def _parse_hhmm(value):
+    text = str(value or '').strip()
+    if not text:
+        return None
+    parts = text.split(':')
+    if len(parts) < 2:
+        return None
+    try:
+        hour = int(parts[0])
+        minute = int(parts[1])
+    except (TypeError, ValueError):
+        return None
+    if hour < 0 or hour > 23 or minute < 0 or minute > 59:
+        return None
+    return dt_time(hour=hour, minute=minute)
+
+
+def reminder_schedule_due(reminder, now_local):
+    parsed = _parse_hhmm(getattr(reminder, 'time_of_day', None))
+    if parsed is None or now_local is None:
+        return False, None
+    current = now_local.time().replace(second=0, microsecond=0)
+    if current >= parsed:
+        return True, f"到点 {reminder.time_of_day}"
+    return False, None
+
+
+def reminder_is_due(reminder, weather=None, now_local=None):
+    """到点服药，或天气触发额外提醒。不要求必须有慢病。"""
+    reasons = []
+    scheduled, scheduled_reason = reminder_schedule_due(reminder, now_local)
+    if scheduled:
+        reasons.append(scheduled_reason)
+    weather_on, weather_reason = reminder_triggered(reminder, weather)
+    if weather_on:
+        reasons.append(weather_reason)
+    return bool(reasons), '、'.join(reasons) if reasons else None
+
+
+def reminder_notified_on_local_date(reminder, local_date):
+    last = getattr(reminder, 'last_notified_at', None)
+    if last is None or local_date is None:
+        return False
+    from core.time_utils import utc_to_local_date
+    return utc_to_local_date(last) == local_date
 
 
 def member_weather_triggered(profile, weather):

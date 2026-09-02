@@ -11,8 +11,8 @@ from flask_login import current_user
 
 from core.extensions import db
 from core.guest import get_guest_assessment, is_guest_user
-from core.health_profiles import reminder_triggered
-from core.time_utils import today_local, utc_to_local_date, utcnow
+from core.health_profiles import reminder_is_due, reminder_notified_on_local_date
+from core.time_utils import now_local, today_local, utc_to_local_date, utcnow
 from core.weather import (
     ensure_user_location_valid,
     get_consecutive_hot_days,
@@ -402,35 +402,30 @@ def user_dashboard(force_elder=False):
                 db.session.commit()
                 alerts = [weather_alert]
 
-    # 用药提醒（根据天气触发）
+    # 用药提醒：到点服药，天气触发作为额外原因。不要求慢病或在线天气。
     reminders = []
-    if not is_guest and weather_available and weather:
-        now = utcnow()
+    if not is_guest:
+        now_local_dt = now_local()
+        local_today = today_local()
         reminders_query = MedicationReminder.query.filter_by(
             user_id=current_user.id,
             is_active=True
         ).all()
+        weather_for_meds = weather if weather_available else None
         updated = False
         for reminder in reminders_query:
-            if reminder.member_id:
-                member = FamilyMember.query.filter_by(id=reminder.member_id, user_id=current_user.id).first()
-                if not member or not member.chronic_diseases:
-                    continue
-            else:
-                if not current_user.has_chronic_disease:
-                    continue
-            triggered, reason = reminder_triggered(reminder, weather)
-            if triggered:
-                last_notified = reminder.last_notified_at
-                if not last_notified or last_notified.date() != now.date():
-                    reminder.last_notified_at = now
-                    updated = True
-                reminders.append({
-                    'medicine_name': reminder.medicine_name,
-                    'dosage': reminder.dosage,
-                    'time_of_day': reminder.time_of_day,
-                    'reason': reason
-                })
+            due, reason = reminder_is_due(reminder, weather_for_meds, now_local_dt)
+            if not due:
+                continue
+            if not reminder_notified_on_local_date(reminder, local_today):
+                reminder.last_notified_at = utcnow()
+                updated = True
+            reminders.append({
+                'medicine_name': reminder.medicine_name,
+                'dosage': reminder.dosage,
+                'time_of_day': reminder.time_of_day,
+                'reason': reason
+            })
         if updated:
             db.session.commit()
 

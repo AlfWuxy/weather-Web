@@ -219,6 +219,17 @@
                 <a class="btn btn-sm btn-outline-primary" href="{{ url_for('public.action_check') }}">打卡 <i class="bi bi-arrow-right"></i></a>
             </div>
             <div class="yl-action-list mt-3">
+                {% if reminders %}
+                    {% for rem in reminders %}
+                    <div class="yl-action">
+                        <i class="bi bi-capsule"></i>
+                        <div>
+                            <strong>服药：{{ rem.medicine_name }}{% if rem.dosage %} {{ rem.dosage }}{% endif %}</strong>
+                            <div class="detail">{% if rem.time_of_day %}{{ rem.time_of_day }}{% endif %}{% if rem.reason %}{% if rem.time_of_day %} · {% endif %}{{ rem.reason }}{% endif %}</div>
+                        </div>
+                    </div>
+                    {% endfor %}
+                {% endif %}
                 {% if not weather_available %}
                     <div class="yl-action">
                         <i class="bi bi-cloud-slash"></i>
