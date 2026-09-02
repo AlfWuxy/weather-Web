@@ -326,6 +326,56 @@ def test_legacy_assessment_without_matrix_does_not_render_false_low_bucket(
     assert '影响程度：<strong>low</strong>' not in html
 
 
+def test_legacy_proxy_assessment_does_not_keep_community_path_label(
+    authenticated_client,
+    db_session,
+):
+    _seed_health_assessment_user(db_session)
+    user = User.query.filter_by(username='testuser').first()
+    user.community = ''
+    db_session.add(HealthRiskAssessment(
+        user_id=user.id,
+        assessment_date=utcnow(),
+        weather_condition=json.dumps({'temperature': 30}, ensure_ascii=False),
+        risk_score=52.1,
+        risk_level='中风险',
+        disease_risks='{}',
+        recommendations='[]',
+        explain=json.dumps({
+            'academic_profile': {
+                'model_paths': [
+                    {'name': 'DLNM个体模型', 'score': 52.7, 'weight': 0.382, 'contribution': 20.14},
+                    {'name': '规则暴露模型', 'score': 11.8, 'weight': 0.255, 'contribution': 3.0},
+                    {'name': '社区脆弱性模型', 'score': 65.6, 'weight': 0.212, 'contribution': 13.93},
+                    {'name': '慢病专项模型', 'score': 100.0, 'weight': 0.15, 'contribution': 15.0},
+                ],
+                'fusion_breakdown': {
+                    'path_fused_score': 43.6,
+                    'chronic_overall_score': 100.0,
+                    'final_score': 52.1,
+                    'contribution_total': 52.07,
+                    'community_in_score': False,
+                },
+                'community_context': {
+                    'community': '未设置',
+                    'vulnerability_index': 45.0,
+                    'vulnerability_level': '中',
+                    'vulnerability_source': 'default_proxy',
+                    'source': 'user_profile_missing',
+                    'warnings': ['个人资料未设置社区，社区 VI 仅作 45 分中性参考，不计入个人风险分。'],
+                    'burden_available': False,
+                },
+            }
+        }, ensure_ascii=False),
+    ))
+    db_session.commit()
+
+    html = authenticated_client.get('/health-assessment').get_data(as_text=True)
+    assert '个体与气温' in html
+    assert '社区脆弱性模型' not in html
+    assert '没有计入' in html
+
+
 def test_health_assessment_restores_saved_screening_radios(
     authenticated_client,
     db_session,

@@ -230,7 +230,7 @@
                         <div class="d-grid gap-2">
                             {% for path in model_paths %}
                             <div class="d-flex justify-content-between small">
-                                <span>{{ path.get('name', '未命名路径') }}</span>
+                                <span>{% if not fusion_breakdown.get('community_in_score') and path.get('name') == '社区脆弱性模型' %}个体与气温{% else %}{{ path.get('name', '未命名路径') }}{% endif %}</span>
                                 <span class="text-muted">分值 {{ path.get('score', '-') }} × 最终权重 {{ ((path.get('weight', 0) * 100)|round(1)) }}% = 贡献 {{ path.get('contribution', '-') }}</span>
                             </div>
                             {% endfor %}
