@@ -7,7 +7,7 @@
       慢病信息仅填写“类别”（可选），用于生成更贴近实际的提醒话术。
     </view>
 
-    <block wx:if="{{mode === 'create'}}">
+    <block>
       <view style="margin-top: 14px;">
         <view class="muted" style="font-size: 12px;">姓名/称呼</view>
         <input value="{{name}}" bindinput="onName" placeholder="例如：妈妈/爸爸" style="border: 1px solid #e5e7eb; border-radius: 10px; padding: 10px 12px; background:#fff;" />

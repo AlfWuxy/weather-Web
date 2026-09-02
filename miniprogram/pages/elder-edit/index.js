@@ -87,37 +87,34 @@ Page({
     }
     this.setData({ busy: true });
     try {
+      if (!this.data.name) {
+        wx.showToast({ title: '请填写称呼/姓名', icon: 'none' });
+        return;
+      }
+      const chronic = splitChronic(this.data.chronicText);
+      const profile = {
+        name: this.data.name,
+        relation: this.data.relation,
+        age: this.data.age ? parseInt(this.data.age, 10) : null,
+        gender: this.data.gender,
+        location_query: this.data.locationQuery,
+        chronic_diseases: chronic,
+      };
       if (this.data.mode === 'create') {
-        if (!this.data.name) {
-          wx.showToast({ title: '请填写称呼/姓名', icon: 'none' });
-          return;
-        }
-        const chronic = splitChronic(this.data.chronicText);
         await api({
           method: 'POST',
           path: '/mp/api/v1/elders',
           token,
-          data: {
-            name: this.data.name,
-            relation: this.data.relation,
-            age: this.data.age ? parseInt(this.data.age, 10) : null,
-            gender: this.data.gender,
-            location_query: this.data.locationQuery,
-            chronic_diseases: chronic,
-          },
+          data: profile,
         });
         wx.showToast({ title: '已创建', icon: 'success' });
         wx.navigateBack();
       } else {
-        const chronic = splitChronic(this.data.chronicText);
         await api({
           method: 'PATCH',
           path: `/mp/api/v1/elders/${this.data.pairId}`,
           token,
-          data: {
-            location_query: this.data.locationQuery,
-            chronic_diseases: chronic,
-          },
+          data: profile,
         });
         wx.showToast({ title: '已保存', icon: 'success' });
         wx.navigateBack();

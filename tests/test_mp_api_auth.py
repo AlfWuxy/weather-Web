@@ -221,3 +221,72 @@ def test_mp_elders_does_not_create_trigger_from_mock_weather(app, client, db_ses
     assert alert_weather['weather_available'] is False
     assert alert_weather['temperature_max'] is None
     assert alert_weather['temperature_min'] is None
+
+
+def test_mp_elders_patch_updates_member_profile_fields(app, client, db_session):
+    from core.db_models import FamilyMember, Pair, User
+    from core.security import hash_short_code
+    from core.time_utils import utcnow
+    from core.usage import create_api_token
+    from services.user._common import _create_pair_record
+
+    with app.app_context():
+        user = User(username='mp_patch_member_user', role='user')
+        user.set_password('pw123456')
+        db_session.add(user)
+        db_session.commit()
+        member = FamilyMember(
+            user_id=user.id,
+            name='旧称呼',
+            relation='亲戚',
+            age=66,
+            gender='男性',
+            chronic_diseases='["高血压"]',
+        )
+        db_session.add(member)
+        db_session.flush()
+        pair = _create_pair_record(
+            caregiver_id=user.id,
+            location_query='都昌县',
+            member_id=member.id,
+            flush=True,
+        )
+        pair.short_code_hash = hash_short_code(pair.short_code)
+        pair.last_active_at = utcnow()
+        db_session.commit()
+        pair_id = pair.id
+        member_id = member.id
+        plain = create_api_token(user.id, name='patch-member')
+
+    response = client.patch(
+        f'/mp/api/v1/elders/{pair_id}',
+        json={
+            'name': '妈妈',
+            'relation': '母亲',
+            'age': 78,
+            'gender': '女',
+            'location_query': '九江市都昌县',
+            'chronic_diseases': ['高血压', '糖尿病'],
+        },
+        headers={'Authorization': f'Bearer {plain}'},
+    )
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload['success'] is True
+    assert payload['data']['pair_id'] == pair_id
+    assert payload['data']['member']['name'] == '妈妈'
+    assert payload['data']['member']['relation'] == '母亲'
+    assert payload['data']['member']['age'] == 78
+    assert payload['data']['member']['gender'] == '女性'
+    assert payload['data']['member']['chronic_diseases'] == ['高血压', '糖尿病']
+    assert payload['data']['location_query'] == '九江市都昌县'
+
+    with app.app_context():
+        member = db_session.get(FamilyMember, member_id)
+        pair = db_session.get(Pair, pair_id)
+        assert member.name == '妈妈'
+        assert member.relation == '母亲'
+        assert member.age == 78
+        assert member.gender == '女性'
+        assert pair.location_query == '九江市都昌县'

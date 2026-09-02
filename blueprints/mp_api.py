@@ -28,8 +28,8 @@ from services.api_service import PILOT_EVENT_TYPES
 from services.location_resolver import resolve_location
 from services.warning_service import get_qweather_warnings
 from services.user._common import _create_pair_record
-from utils.parsers import safe_json_loads
-from utils.validators import sanitize_input
+from utils.parsers import parse_int, safe_json_loads
+from utils.validators import sanitize_input, validate_gender
 
 bp = Blueprint("mp_api", __name__, url_prefix="/mp/api/v1")
 MP_EVENT_META_MAX_CHARS = 2048
@@ -75,6 +75,47 @@ def _pair_for_user(pair_id: int):
     # admin token is not supported in pilot; restrict to owner
     q = q.filter_by(caregiver_id=g.api_user_id)
     return q.first()
+
+
+def _member_payload(member):
+    if not member:
+        return None
+    return {
+        "id": member.id,
+        "name": member.name,
+        "relation": member.relation,
+        "age": member.age,
+        "gender": member.gender,
+        "chronic_diseases": safe_json_loads(member.chronic_diseases, []),
+    }
+
+
+def _apply_member_patch(member, payload):
+    """Update identity fields on an existing family member. Returns error tuple or None."""
+    if "name" in payload:
+        name = sanitize_input(payload.get("name"), max_length=50) or ""
+        if not name:
+            return "missing_fields", 400
+        member.name = name
+    if "relation" in payload:
+        member.relation = sanitize_input(payload.get("relation"), max_length=20) or ""
+    if "age" in payload:
+        age = payload.get("age")
+        if age is None or str(age).strip() == "":
+            member.age = None
+        else:
+            parsed_age = parse_int(age)
+            if parsed_age is None:
+                return "invalid_age", 400
+            if parsed_age < 1 or parsed_age > 150:
+                return "invalid_age", 400
+            member.age = parsed_age
+    if "gender" in payload:
+        valid, gender = validate_gender(payload.get("gender"))
+        if not valid:
+            return "invalid_gender", 400
+        member.gender = gender
+    return None
 
 
 @bp.route("/me", endpoint="me")
@@ -170,18 +211,7 @@ def elders_list():
                 "pair_id": p.id,
                 "location_query": p.location_query,
                 "community_code": p.community_code,
-                "member": (
-                    {
-                        "id": member.id,
-                        "name": member.name,
-                        "relation": member.relation,
-                        "age": member.age,
-                        "gender": member.gender,
-                        "chronic_diseases": safe_json_loads(member.chronic_diseases, []),
-                    }
-                    if member
-                    else None
-                ),
+                "member": _member_payload(member),
                 "today": {
                     "trigger": trigger,
                     "temperature_max": tmax_value if weather_available else None,
@@ -280,13 +310,21 @@ def elders_patch(pair_id: int):
         if location_query:
             pair.community_code = location_query[:100]
 
-    chronic = payload.get("chronic_diseases")
-    if chronic is not None and pair.member_id:
-        chronic = chronic if isinstance(chronic, list) else []
-        chronic = [sanitize_input(item, max_length=50) for item in chronic if item]
-        chronic = [c for c in chronic if c]
+    member = None
+    if pair.member_id:
         member = FamilyMember.query.filter_by(id=pair.member_id, user_id=g.api_user_id).first()
-        if member:
+
+    if member:
+        patch_error = _apply_member_patch(member, payload)
+        if patch_error:
+            error, status = patch_error
+            return jsonify({"success": False, "error": error}), status
+
+        chronic = payload.get("chronic_diseases")
+        if chronic is not None:
+            chronic = chronic if isinstance(chronic, list) else []
+            chronic = [sanitize_input(item, max_length=50) for item in chronic if item]
+            chronic = [c for c in chronic if c]
             member.chronic_diseases = json.dumps(chronic, ensure_ascii=False) if chronic else None
 
     db.session.commit()
@@ -298,7 +336,17 @@ def elders_patch(pair_id: int):
         source="miniprogram",
         meta={"updated_fields": list(payload.keys())[:20]},
     )
-    return jsonify({"success": True})
+    return jsonify(
+        {
+            "success": True,
+            "data": {
+                "pair_id": pair.id,
+                "location_query": pair.location_query,
+                "community_code": pair.community_code,
+                "member": _member_payload(member),
+            },
+        }
+    )
 
 
 @bp.route("/alerts", endpoint="alerts_list")
