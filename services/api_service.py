@@ -2,6 +2,7 @@
 """API routes."""
 import json
 import logging
+import math
 
 from flask import current_app, jsonify, request
 from flask_login import current_user, login_required
@@ -150,6 +151,98 @@ def _normalize_sunshine_seconds(payload):
     return value
 
 
+def _optional_finite_float(value):
+    if value in (None, ''):
+        return None
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(parsed):
+        return None
+    return parsed
+
+
+def _require_finite_float(value, error_message):
+    parsed = _optional_finite_float(value)
+    if parsed is None:
+        raise ValueError(error_message)
+    return parsed
+
+
+_ML_INLINE_WEATHER_KEYS = (
+    'temperature', 'temp', 'tmean', 'tmin', 'tmax', 'feels_like',
+    'humidity', 'aqi', 'wind_speed', 'wind', 'precipitation',
+)
+
+
+def _ml_weather_from_request(data):
+    """Build ML weather without inventing 20°C / humidity 70 / AQI 50.
+
+    Returns (weather_info, error_response). error_response is set when live
+    weather is mock/demo/missing and the caller did not send inline weather.
+    """
+    payload = data if isinstance(data, dict) else {}
+    has_inline = any(key in payload for key in _ML_INLINE_WEATHER_KEYS)
+
+    if has_inline:
+        raw_temp = payload.get('temperature', payload.get('temp', payload.get('tmean')))
+        temperature = _require_finite_float(raw_temp, '请提供气温')
+        tmean = _optional_finite_float(payload.get('tmean'))
+        if tmean is None:
+            tmean = temperature
+        return ({
+            'temperature': temperature,
+            'tmean': tmean,
+            'tmin': _optional_finite_float(payload.get('tmin')),
+            'tmax': _optional_finite_float(payload.get('tmax')),
+            'feels_like': _optional_finite_float(payload.get('feels_like')),
+            'humidity': _optional_finite_float(payload.get('humidity')),
+            'wind_speed': _optional_finite_float(
+                payload.get('wind_speed', payload.get('wind'))
+            ),
+            'precipitation': _optional_finite_float(payload.get('precipitation')),
+            'aqi': _optional_finite_float(payload.get('aqi')),
+        }, None)
+
+    city = sanitize_input(payload.get('city'), max_length=100)
+    if city:
+        city = normalize_location_name(city)
+    else:
+        city = ensure_user_location_valid()
+    weather_data, _ = get_weather_with_cache(city)
+    invalid_weather_response = _validate_qweather_for_risk(weather_data, 'ml_predict')
+    if invalid_weather_response:
+        return None, invalid_weather_response
+
+    temperature = _optional_finite_float(weather_data.get('temperature'))
+    if temperature is None:
+        return None, _weather_unavailable_response(weather_data, '天气数据缺少气温')
+
+    tmean = _optional_finite_float(weather_data.get('tmean'))
+    if tmean is None:
+        tmean = temperature
+    return ({
+        'temperature': temperature,
+        'tmean': tmean,
+        'tmin': _optional_finite_float(
+            weather_data.get('tmin', weather_data.get('temperature_min'))
+        ),
+        'tmax': _optional_finite_float(
+            weather_data.get('tmax', weather_data.get('temperature_max'))
+        ),
+        'feels_like': _optional_finite_float(weather_data.get('feels_like')),
+        'humidity': _optional_finite_float(weather_data.get('humidity')),
+        'wind_speed': _optional_finite_float(weather_data.get('wind_speed')),
+        'precipitation': _optional_finite_float(weather_data.get('precipitation')),
+        'aqi': _optional_finite_float(weather_data.get('aqi')),
+        'location': weather_data.get('location'),
+        'weather': weather_data.get('weather'),
+        'data_source': weather_data.get('data_source'),
+        'is_mock': weather_data.get('is_mock', False),
+    }, None)
+
+
 # ======================== 天气/社区基础API ========================
 
 def _api_current_weather():
@@ -287,28 +380,12 @@ def _api_ml_predict():
         }
 
         sunshine_seconds = _normalize_sunshine_seconds(data)
-        # 获取天气信息（扩展版本，支持更多天气因素）
-        weather_info = {
-            # 温度相关
-            'temperature': data.get('temperature', 20),
-            'tmean': data.get('tmean', data.get('temperature', 20)),
-            'tmin': data.get('tmin', data.get('temperature', 20) - 5),
-            'tmax': data.get('tmax', data.get('temperature', 20) + 5),
-            'feels_like': data.get('feels_like'),  # 体感温度，可选
-            # 湿度
-            'humidity': data.get('humidity', 70),
-            # 风速
-            'wind_speed': data.get('wind_speed', 2.5),
-            # 降水量
-            'precipitation': data.get('precipitation', 0),
-            # 训练特征沿用 sunshine_hours 字段名，但单位统一为秒
-            'sunshine_hours': sunshine_seconds,
-            'sunshine_duration_seconds': sunshine_seconds,
-            # 空气质量
-            'aqi': data.get('aqi', 50),
-            # 时间
-            'month': data.get('month', now_local().month)
-        }
+        weather_info, weather_error = _ml_weather_from_request(data)
+        if weather_error:
+            return weather_error
+        weather_info['sunshine_hours'] = sunshine_seconds
+        weather_info['sunshine_duration_seconds'] = sunshine_seconds
+        weather_info['month'] = data.get('month', now_local().month)
 
         # 执行预测
         result = ml_service.predict_disease_risk(user_info, weather_info)
@@ -370,28 +447,12 @@ def _api_ml_predict_community():
             }
 
         sunshine_seconds = _normalize_sunshine_seconds(data)
-        # 获取天气信息（扩展版本）
-        weather_info = {
-            # 温度相关
-            'temperature': data.get('temperature', 20),
-            'tmean': data.get('tmean', data.get('temperature', 20)),
-            'tmin': data.get('tmin', data.get('temperature', 20) - 5),
-            'tmax': data.get('tmax', data.get('temperature', 20) + 5),
-            'feels_like': data.get('feels_like'),
-            # 湿度
-            'humidity': data.get('humidity', 70),
-            # 风速
-            'wind_speed': data.get('wind_speed', 2.5),
-            # 降水量
-            'precipitation': data.get('precipitation', 0),
-            # 日照时长（秒）
-            'sunshine_hours': sunshine_seconds,
-            'sunshine_duration_seconds': sunshine_seconds,
-            # 空气质量
-            'aqi': data.get('aqi', 50),
-            # 时间
-            'month': data.get('month', now_local().month)
-        }
+        weather_info, weather_error = _ml_weather_from_request(data)
+        if weather_error:
+            return weather_error
+        weather_info['sunshine_hours'] = sunshine_seconds
+        weather_info['sunshine_duration_seconds'] = sunshine_seconds
+        weather_info['month'] = data.get('month', now_local().month)
 
         # 执行预测
         result = ml_service.predict_community_risk(community_info, weather_info)
