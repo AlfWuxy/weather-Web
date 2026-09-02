@@ -37,7 +37,7 @@
                 </div>
                 <div class="mb-3">
                     <label class="form-label">年龄</label>
-                    <input type="number" class="form-control" name="age" value="{{ form_state.age if form_state else (age or 65) }}" min="1" max="120">
+                    <input type="number" class="form-control" name="age" value="{{ form_state.age if form_state and form_state.age else '' }}" min="1" max="120">
                 </div>
                 <div class="alert alert-light border small" role="note">
                     慢病档案不会参与这项类别排序。需要查看慢病与天气的关系，请使用“慢病风险评估”。
@@ -50,7 +50,7 @@
         <div class="col-lg-8">
             {% if prediction_error %}
             <section class="yl-section yl-fade-up yl-fade-up-d2 mb-3">
-                <div class="alert alert-warning mb-0">健康关注线索暂时无法生成，请稍后再试。</div>
+                <div class="alert alert-warning mb-0">{{ prediction_error }}</div>
             </section>
             {% endif %}
             {% if prediction %}

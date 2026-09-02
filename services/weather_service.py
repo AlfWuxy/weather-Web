@@ -434,7 +434,10 @@ class WeatherService:
                 weather_code = current.get('weather_code', 0)
                 weather_condition = self._weather_code_to_text(weather_code)
 
-                temp = current.get('temperature_2m', 20)
+                temp = self._safe_float(current.get('temperature_2m'))
+                if temp is None:
+                    logger.info("Open-Meteo 缺气温，丢弃本次实况")
+                    return None
                 daily = data.get('daily', {})
                 tmax_list = daily.get('temperature_2m_max') or []
                 tmin_list = daily.get('temperature_2m_min') or []
@@ -460,6 +463,9 @@ class WeatherService:
                         temp_estimated = True
                         temp_range_source = 'unavailable'
                         temp_range_confidence = 'none'
+                humidity = self._safe_float(current.get('relative_humidity_2m'))
+                pressure = self._safe_float(current.get('surface_pressure'))
+                wind_speed = self._safe_float(current.get('wind_speed_10m'))
                 result = {
                     'temperature': round(temp, 1),
                     'temperature_max': tmax,
@@ -467,10 +473,10 @@ class WeatherService:
                     'temperature_estimated': temp_estimated,
                     'temperature_range_source': temp_range_source,
                     'temperature_range_confidence': temp_range_confidence,
-                    'humidity': round(current.get('relative_humidity_2m', 60), 1),
-                    'pressure': round(current.get('surface_pressure', 1013), 1),
+                    'humidity': round(humidity, 1) if humidity is not None else None,
+                    'pressure': round(pressure, 1) if pressure is not None else None,
                     'weather_condition': weather_condition,
-                    'wind_speed': round(current.get('wind_speed_10m', 3), 1),
+                    'wind_speed': round(wind_speed, 1) if wind_speed is not None else None,
                     'pm25': 0,  # Open-Meteo不提供空气质量数据，0表示未知
                     'aqi': 0,  # 同上，0 而非真实值
                     'aqi_estimated': True,  # 标记为非真实 AQI，下游可据此降权或隐藏

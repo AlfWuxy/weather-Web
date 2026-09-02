@@ -52,6 +52,38 @@ def test_openmeteo_current_weather_contract_marks_source_and_uncertainty(app, mo
     assert 'temperature_2m,relative_humidity_2m' in calls[0][1]['current']
 
 
+def test_openmeteo_missing_humidity_is_not_defaulted_to_60(app, monkeypatch):
+    with app.app_context():
+        from services.weather_service import WeatherService
+        import services.weather_service as weather_module
+
+        service = WeatherService()
+        monkeypatch.setattr(service, '_get_location', lambda city: '116.20,29.27')
+        monkeypatch.setattr(service, '_parse_lon_lat', lambda location: (116.20, 29.27))
+
+        def fake_get(url, params=None, timeout=None):
+            return _response({
+                'current': {
+                    'temperature_2m': 33.4,
+                    'surface_pressure': 1008,
+                    'weather_code': 1,
+                    'wind_speed_10m': 4.2,
+                },
+                'daily': {
+                    'temperature_2m_max': [37.1],
+                    'temperature_2m_min': [26.2],
+                },
+            })
+
+        monkeypatch.setattr(weather_module.requests, 'get', fake_get)
+        result = service._get_openmeteo_weather('都昌')
+
+    assert result is not None
+    assert result['humidity'] is None
+    assert result['temperature'] == 33.4
+    assert result['is_mock'] is False
+
+
 def test_openmeteo_daily_forecast_contract_uses_no_sdk_or_live_network(app, monkeypatch):
     with app.app_context():
         from services.weather_service import WeatherService

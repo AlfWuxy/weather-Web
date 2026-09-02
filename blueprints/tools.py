@@ -65,13 +65,13 @@ def _normalized_location(raw_location):
     return ensure_user_location_valid()
 
 
-def _coerce_age(raw_age, default_age):
-    """安全转换年龄，避免模板和服务层接到异常值。"""
+def _coerce_age(raw_age, fallback_age=None):
+    """把年龄转成 1–120；缺测时返回 None，不用 65 岁顶上。"""
     age = parse_int(raw_age)
     if age is None:
-        age = default_age
+        age = parse_int(fallback_age)
     if age is None:
-        age = 65
+        return None
     return max(1, min(int(age), 120))
 
 
@@ -266,7 +266,7 @@ def ml_prediction():
     form_state = {
         'member_id': '',
         'location': current_location,
-        'age': current_user.age or 65,
+        'age': current_user.age,
     }
     prediction = None
     factors = None
@@ -285,45 +285,47 @@ def ml_prediction():
 
     if request.method == 'POST':
         selected_member = _selected_member(request.form.get('member_id'))
-        default_age = selected_member.age if selected_member and selected_member.age else current_user.age or 65
-        default_gender = selected_member.gender if selected_member and selected_member.gender else current_user.gender or '男'
+        fallback_age = selected_member.age if selected_member and selected_member.age else current_user.age
         form_state = {
             'member_id': str(selected_member.id) if selected_member else '',
             'location': _normalized_location(request.form.get('location')),
-            'age': _coerce_age(request.form.get('age'), default_age),
+            'age': _coerce_age(request.form.get('age'), fallback_age),
         }
 
-        weather_info, _ = get_weather_with_cache(form_state['location'])
-        if not is_qweather_online_weather(weather_info):
-            prediction_error = '天气正在更新，类别线索暂不显示。请稍后再试。'
+        if form_state['age'] is None:
+            prediction_error = '请先填写年龄，再生成类别线索。'
         else:
-            user_info = {
-                'age': form_state['age'],
-                'gender': default_gender,
-            }
-            result = get_ml_service().predict_disease_risk(user_info, weather_info)
-            if result.get('success'):
-                prediction = []
-                for rank, item in enumerate((result.get('predictions') or [])[:3], start=1):
-                    adjusted_probability = float(item.get('probability') or 0.0)
-                    original_probability = float(
-                        item.get('original_probability')
-                        if item.get('original_probability') is not None
-                        else adjusted_probability
-                    )
-                    multiplier = item.get('weather_multiplier')
-                    if multiplier is None:
-                        multiplier = adjusted_probability / original_probability if original_probability > 0 else 1.0
-                    prediction.append({
-                        'disease': item.get('disease', '未知风险'),
-                        'score': round(adjusted_probability * 100.0, 1),
-                        'original_score': round(original_probability * 100.0, 1),
-                        'weather_multiplier': round(float(multiplier), 3),
-                        'label': f'关注排序第 {rank}',
-                    })
-                factors = _build_ml_factor_cards(result, form_state['age'], weather_info)
+            weather_info, _ = get_weather_with_cache(form_state['location'])
+            if not is_qweather_online_weather(weather_info):
+                prediction_error = '天气正在更新，类别线索暂不显示。请稍后再试。'
             else:
-                prediction_error = result.get('error') or '预测暂时不可用，请稍后再试。'
+                user_info = {
+                    'age': form_state['age'],
+                    'gender': selected_member.gender if selected_member and selected_member.gender else current_user.gender or '未知',
+                }
+                result = get_ml_service().predict_disease_risk(user_info, weather_info)
+                if result.get('success'):
+                    prediction = []
+                    for rank, item in enumerate((result.get('predictions') or [])[:3], start=1):
+                        adjusted_probability = float(item.get('probability') or 0.0)
+                        original_probability = float(
+                            item.get('original_probability')
+                            if item.get('original_probability') is not None
+                            else adjusted_probability
+                        )
+                        multiplier = item.get('weather_multiplier')
+                        if multiplier is None:
+                            multiplier = adjusted_probability / original_probability if original_probability > 0 else 1.0
+                        prediction.append({
+                            'disease': item.get('disease', '未知风险'),
+                            'score': round(adjusted_probability * 100.0, 1),
+                            'original_score': round(original_probability * 100.0, 1),
+                            'weather_multiplier': round(float(multiplier), 3),
+                            'label': f'关注排序第 {rank}',
+                        })
+                    factors = _build_ml_factor_cards(result, form_state['age'], weather_info)
+                else:
+                    prediction_error = result.get('error') or '预测暂时不可用，请稍后再试。'
 
     return render_template(
         'ml_prediction.html',
@@ -440,32 +442,36 @@ def chronic_risk():
 
         weather_data, _ = get_weather_with_cache(ensure_user_location_valid())
         if not is_qweather_online_weather(weather_data):
-            risk_error = '天气正在更新，慢病风险提示暂不显示。请稍后再试。'
+            risk_error = '天气正在更新，本次提醒暂未生成。请稍后再试。'
         else:
-            vitals = _parse_chronic_vitals(form_state)
-            result = get_chronic_service().predict_individual_risk(
-                {
-                    'age': current_user.age or 65,
-                    'gender': current_user.gender or '未知',
-                    'chronic_diseases': [CHRONIC_FORM_LABELS[disease_key]],
-                    'vitals': vitals,
-                    'sbp': vitals.get('sbp'),
-                    'fbg': vitals.get('fbg'),
-                },
-                weather_data,
-            )
+            profile_age = _coerce_age(current_user.age)
+            if profile_age is None:
+                risk_error = '请先在个人设置填写年龄，再查看慢病风险。'
+            else:
+                vitals = _parse_chronic_vitals(form_state)
+                result = get_chronic_service().predict_individual_risk(
+                    {
+                        'age': profile_age,
+                        'gender': current_user.gender or '未知',
+                        'chronic_diseases': [CHRONIC_FORM_LABELS[disease_key]],
+                        'vitals': vitals,
+                        'sbp': vitals.get('sbp'),
+                        'fbg': vitals.get('fbg'),
+                    },
+                    weather_data,
+                )
 
-            overall = result.get('overall_risk') or {}
-            risk_score = int(round(overall.get('score', 0) or 0))
-            risk_level = overall.get('level') or _score_level(risk_score)
-            risk_comment = (
-                f"当前以{CHRONIC_FORM_LABELS[disease_key]}为重点观察对象，结合天气条件判定为{risk_level}。"
-            )
-            vital_factors = ((result.get('vital_adjustment') or {}).get('factors') or [])
-            if vital_factors:
-                risk_comment = f"{risk_comment} 已参考{'；'.join(vital_factors[:2])}。"
-            breakdown = _build_chronic_breakdown(result, form_state['adherence'], form_state['symptoms'])
-            suggestions = _normalize_chronic_suggestions(result.get('recommendations'))[:5]
+                overall = result.get('overall_risk') or {}
+                risk_score = int(round(overall.get('score', 0) or 0))
+                risk_level = overall.get('level') or _score_level(risk_score)
+                risk_comment = (
+                    f"当前以{CHRONIC_FORM_LABELS[disease_key]}为重点观察对象，结合天气条件判定为{risk_level}。"
+                )
+                vital_factors = ((result.get('vital_adjustment') or {}).get('factors') or [])
+                if vital_factors:
+                    risk_comment = f"{risk_comment} 已参考{'；'.join(vital_factors[:2])}。"
+                breakdown = _build_chronic_breakdown(result, form_state['adherence'], form_state['symptoms'])
+                suggestions = _normalize_chronic_suggestions(result.get('recommendations'))[:5]
 
         _store_chronic_risk_result({
             'form_state': form_state,
