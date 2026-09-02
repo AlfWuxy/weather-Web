@@ -122,7 +122,7 @@ class ChronicRiskService:
             # 空气质量相关
             'aqi_high': {
                 'name': '空气质量较差',
-                'trigger': lambda ctx: ctx.get('aqi', 0) >= 150,
+                'trigger': lambda ctx: (ctx.get('aqi') or 0) >= 150,
                 'priority': 'high',
                 'category': '空气质量',
                 'thresholds': {'aqi': '>=150'},
@@ -133,7 +133,7 @@ class ChronicRiskService:
             },
             'aqi_moderate': {
                 'name': '空气质量一般',
-                'trigger': lambda ctx: 100 <= ctx.get('aqi', 0) < 150,
+                'trigger': lambda ctx: 100 <= (ctx.get('aqi') or 0) < 150,
                 'priority': 'medium',
                 'category': '空气质量',
                 'thresholds': {'aqi': '100-149'},
@@ -431,7 +431,7 @@ class ChronicRiskService:
             'chronic_diseases': chronic_diseases,
             'has_chronic_disease': len(chronic_diseases) > 0,
             'disease_count': len(chronic_diseases),
-            'aqi': weather_data.get('aqi', 50),
+            'aqi': weather_data.get('aqi'),
             'hot_night': night_temp is not None and night_temp >= 22.0,
             'hot_night_temp': night_temp,
             'heat_wave_days': weather_data.get('heat_wave_days', 0),
@@ -538,7 +538,7 @@ class ChronicRiskService:
             'chronic_diseases': context.get('chronic_diseases', []),
             'has_chronic_disease': context.get('has_chronic_disease', False),
             'disease_count': context.get('disease_count', 0),
-            'aqi': context.get('aqi', 50),
+            'aqi': context.get('aqi'),
             'hot_night': context.get('hot_night', False),
             'hot_night_temp': context.get('hot_night_temp'),
             'heat_wave_days': context.get('heat_wave_days', 0),
@@ -654,7 +654,7 @@ class ChronicRiskService:
             escalation.append('如出现胸痛、呼吸困难、意识模糊等，请立即就医或拨打120。')
         if safe_context.get('age', 0) >= 75 or safe_context.get('disease_count', 0) >= 2:
             escalation.append('建议及时联系家属或村医协助观察。')
-        if safe_context.get('aqi', 0) >= 200:
+        if (safe_context.get('aqi') or 0) >= 200:
             escalation.append('若持续咳喘或胸闷，请联系医生评估。')
 
         return {

@@ -89,37 +89,69 @@ class HealthRiskService:
         )
         temp_score = self._clamp((float(base_rr) - 1.0) / 1.2 * 100.0, 0.0, 100.0)
         personal_susceptibility = self._calc_personal_susceptibility_score(profile)
-        model_a_score = self._clamp(
-            0.50 * temp_score + 0.28 * personal_susceptibility + 0.22 * self._aqi_score(weather['aqi']),
-            0.0,
-            100.0
-        )
+        aqi_in_score = weather.get('aqi') is not None
+        aqi_score = self._aqi_score(weather['aqi']) if aqi_in_score else 0.0
+        if aqi_in_score:
+            model_a_score = self._clamp(
+                0.50 * temp_score + 0.28 * personal_susceptibility + 0.22 * aqi_score,
+                0.0,
+                100.0
+            )
+        else:
+            model_a_score = self._clamp(
+                (0.50 * temp_score + 0.28 * personal_susceptibility) / 0.78,
+                0.0,
+                100.0
+            )
 
         # 路径 B：规则暴露（空气/湿度/极端天气）+ 即时筛查
         weather_service = WeatherService()
         extreme = weather_service.identify_extreme_weather(weather_data)
         extreme_score = self._clamp(len(extreme.get('conditions', [])) * 25.0, 0.0, 100.0)
         humidity_score = self._humidity_score(weather['humidity'])
-        aqi_score = self._aqi_score(weather['aqi'])
         screening_score = self._screening_score(screening_data)
-        model_b_score = self._clamp(
-            0.30 * extreme_score + 0.30 * aqi_score + 0.15 * humidity_score + 0.25 * screening_score,
-            0.0,
-            100.0
-        )
+        if aqi_in_score:
+            model_b_score = self._clamp(
+                0.30 * extreme_score + 0.30 * aqi_score + 0.15 * humidity_score + 0.25 * screening_score,
+                0.0,
+                100.0
+            )
+        else:
+            model_b_score = self._clamp(
+                (0.30 * extreme_score + 0.15 * humidity_score + 0.25 * screening_score) / 0.70,
+                0.0,
+                100.0
+            )
 
         # 路径 C：社区脆弱性 + 社区近期负担 + 个体基础敏感性
         community_context = self._build_community_context(profile.get('community'))
-        community_score = self._clamp(
-            0.65 * community_context['vulnerability_index'] + 0.35 * community_context['burden_score'],
-            0.0,
-            100.0
-        )
-        model_c_score = self._clamp(
-            0.40 * community_score + 0.35 * personal_susceptibility + 0.25 * temp_score,
-            0.0,
-            100.0
-        )
+        vi_in_score = community_context.get('vulnerability_source') != 'default_proxy'
+        burden_in_score = bool(community_context.get('burden_available'))
+        community_in_score = vi_in_score or burden_in_score
+        if vi_in_score and burden_in_score:
+            community_score = self._clamp(
+                0.65 * community_context['vulnerability_index'] + 0.35 * community_context['burden_score'],
+                0.0,
+                100.0
+            )
+        elif vi_in_score:
+            community_score = self._clamp(community_context['vulnerability_index'], 0.0, 100.0)
+        elif burden_in_score:
+            community_score = self._clamp(community_context['burden_score'], 0.0, 100.0)
+        else:
+            community_score = 0.0
+        if community_in_score:
+            model_c_score = self._clamp(
+                0.40 * community_score + 0.35 * personal_susceptibility + 0.25 * temp_score,
+                0.0,
+                100.0
+            )
+        else:
+            model_c_score = self._clamp(
+                (0.35 * personal_susceptibility + 0.25 * temp_score) / 0.60,
+                0.0,
+                100.0
+            )
 
         # 慢病专项（用于病种风险与解释）
         chronic_service = get_chronic_service()
@@ -260,9 +292,13 @@ class HealthRiskService:
                 'chronic_overall_score': round(chronic_overall_score, 2),
                 'final_score': round(fused_score, 1),
                 'contribution_total': round(sum(path['contribution'] for path in model_paths), 2),
+                'community_in_score': community_in_score,
+                'aqi_in_score': aqi_in_score,
             },
             'component_scores': component_scores,
             'community_context': community_context,
+            'community_in_score': community_in_score,
+            'aqi_in_score': aqi_in_score,
             'screening': screening_data,
             'weather': weather,
             'disease_risks': chronic_result.get('disease_risks', {}),
@@ -273,7 +309,7 @@ class HealthRiskService:
             'methodology': [
                 '路径A: DLNM温度风险 + 年龄/慢病敏感性',
                 '路径B: 规则暴露(空气质量/湿度/极端天气) + 即时筛查',
-                '路径C: 社区脆弱性指数 + 30天病例负担',
+                '路径C: 有社区实测资料时纳入脆弱性/30天负担；代理值不进入融合',
                 '融合分数 = 0.45*A + 0.30*B + 0.25*C，并与慢病专项结果做轻量校准',
                 '概率化输出基于分数分布计算低/中/高风险概率，并给出区间与不确定性等级',
                 '行动优先级采用 Impact × Likelihood 四级矩阵（1-16分）'
@@ -312,14 +348,29 @@ class HealthRiskService:
         }
 
     def _normalize_weather_data(self, weather_data):
+        aqi = self._measured_aqi(weather_data)
         return {
             'temperature': self._to_float(weather_data.get('temperature'), 20.0),
             'humidity': self._clamp(self._to_float(weather_data.get('humidity'), 60.0), 0.0, 100.0),
-            'aqi': self._clamp(self._to_float(weather_data.get('aqi'), 50.0), 0.0, 500.0),
+            'aqi': aqi,
             'pressure': self._to_float(weather_data.get('pressure'), 1013.0),
             'wind_speed': self._to_float(weather_data.get('wind_speed'), 3.0),
             'weather_condition': str(weather_data.get('weather_condition') or '')
         }
+
+    def _measured_aqi(self, weather_data):
+        if (weather_data or {}).get('aqi_estimated'):
+            return None
+        raw = (weather_data or {}).get('aqi')
+        if raw is None or raw == '':
+            return None
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            return None
+        if not math.isfinite(value):
+            return None
+        return self._clamp(value, 0.0, 500.0)
 
     def _normalize_screening(self, screening):
         mapping = {
@@ -708,7 +759,7 @@ class HealthRiskService:
         elif weather['temperature'] <= 5:
             add_item('低温防护', '外出注意分层保暖，尤其关注头颈和四肢。', 'high')
 
-        if weather['aqi'] >= 150:
+        if (weather.get('aqi') or 0) >= 150:
             add_item('空气质量', '空气质量偏差，尽量减少户外运动，必要时佩戴防护口罩。', 'high')
 
         if screening.get('symptom_level') in ('moderate', 'severe'):

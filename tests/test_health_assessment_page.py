@@ -350,3 +350,142 @@ def test_health_assessment_restores_saved_screening_radios(
     assert 'name="hydration" value="poor" class="d-none assess-opt" checked' in html
     assert 'name="medication_adherence" value="partial" class="d-none assess-opt" checked' in html
     assert 'name="sleep_quality" value="poor" class="d-none assess-opt" checked' in html
+
+
+def _assessment_weather(**overrides):
+    payload = {
+        'temperature': 31,
+        'humidity': 68,
+        'aqi': 62,
+        'pm25': 38,
+        'weather_condition': '多云',
+        'data_source': 'QWeather',
+        'is_mock': False,
+        'is_demo': False,
+    }
+    payload.update(overrides)
+    return payload
+
+
+def _assessment_profile(**overrides):
+    payload = {
+        'age': 72,
+        'gender': '男',
+        'community': '',
+        'has_chronic_disease': True,
+        'chronic_diseases': ['高血压'],
+    }
+    payload.update(overrides)
+    return payload
+
+
+def _assessment_screening():
+    return {
+        'outdoor_exposure': 'medium',
+        'symptom_level': 'none',
+        'hydration': 'normal',
+        'medication_adherence': 'good',
+        'sleep_quality': 'good',
+    }
+
+
+def test_imputed_community_proxy_is_not_fused_into_personal_score(db_session):
+    from services.health_risk_service import HealthRiskService
+
+    db_session.add(Community(
+        name='低脆弱社区',
+        population=1000,
+        elderly_ratio=0.1,
+        chronic_disease_ratio=0.05,
+        vulnerability_index=10.0,
+        risk_level='低',
+    ))
+    db_session.add(Community(
+        name='高脆弱社区',
+        population=1000,
+        elderly_ratio=0.4,
+        chronic_disease_ratio=0.2,
+        vulnerability_index=90.0,
+        risk_level='高',
+    ))
+    db_session.commit()
+
+    service = HealthRiskService()
+    weather = _assessment_weather()
+    screening = _assessment_screening()
+    missing = service.assess_personal_weather_health_risk(
+        _assessment_profile(community=''),
+        weather,
+        screening,
+    )
+    low = service.assess_personal_weather_health_risk(
+        _assessment_profile(community='低脆弱社区'),
+        weather,
+        screening,
+    )
+    high = service.assess_personal_weather_health_risk(
+        _assessment_profile(community='高脆弱社区'),
+        weather,
+        screening,
+    )
+
+    assert missing['community_context']['imputed'] is True
+    assert missing['community_in_score'] is False
+    assert low['community_in_score'] is True
+    assert high['community_in_score'] is True
+    assert high['risk_score'] > low['risk_score']
+
+
+def test_missing_aqi_is_not_scored_as_default_50(db_session):
+    from services.health_risk_service import HealthRiskService
+
+    service = HealthRiskService()
+    profile = _assessment_profile()
+    screening = _assessment_screening()
+    with_aqi = service.assess_personal_weather_health_risk(
+        profile,
+        _assessment_weather(aqi=180),
+        screening,
+    )
+    without_aqi = service.assess_personal_weather_health_risk(
+        profile,
+        _assessment_weather(aqi=None),
+        screening,
+    )
+
+    assert with_aqi['aqi_in_score'] is True
+    assert without_aqi['aqi_in_score'] is False
+    assert without_aqi['component_scores']['空气质量风险'] == 0
+    assert with_aqi['risk_score'] > without_aqi['risk_score']
+
+
+def test_health_assessment_page_says_proxy_community_is_not_in_score(
+    authenticated_client,
+    db_session,
+    monkeypatch,
+):
+    user = User.query.filter_by(username='testuser').first()
+    user.community = ''
+    db_session.commit()
+    monkeypatch.setattr(
+        'services.user.profile_service.get_weather_with_cache',
+        lambda _location: (_assessment_weather(), False),
+    )
+
+    response = authenticated_client.post(
+        '/health-assessment',
+        data={
+            'outdoor_exposure': 'medium',
+            'symptom_level': 'none',
+            'hydration': 'normal',
+            'medication_adherence': 'good',
+            'sleep_quality': 'good',
+            'csrf_token': 'test-csrf-token',
+        },
+        follow_redirects=True,
+    )
+
+    body = response.get_data(as_text=True)
+    assert response.status_code == 200
+    assert '没有计入' in body
+    assert '当前风险得分使用了社区参考值' not in body
