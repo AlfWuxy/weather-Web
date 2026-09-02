@@ -91,9 +91,6 @@ def test_default_community_proxies_are_stable_and_distinct():
     proxy_fields = (
         "latitude",
         "longitude",
-        "green_space_ratio",
-        "heat_island_index",
-        "medical_accessibility",
     )
     assert tuple(first[field] for field in proxy_fields) != tuple(
         second[field] for field in proxy_fields
@@ -102,9 +99,9 @@ def test_default_community_proxies_are_stable_and_distinct():
     for profile in (first, second):
         assert 29.315 <= profile["latitude"] <= 29.385
         assert 116.335 <= profile["longitude"] <= 116.405
-        assert 0.08 <= profile["green_space_ratio"] <= 0.12
-        assert 0.45 <= profile["heat_island_index"] <= 0.55
-        assert 0.55 <= profile["medical_accessibility"] <= 0.65
+        assert profile["green_space_ratio"] is None
+        assert profile["heat_island_index"] is None
+        assert profile["medical_accessibility"] is None
         assert profile["coords_estimated"] is True
 
 
@@ -331,3 +328,56 @@ def test_missing_community_population_is_not_filled_with_100(app, db_session, mo
     names = [row['community'] for row in result['rankings']]
     assert '缺人口村' not in names
     assert '有人口村' in names
+
+
+def test_unmeasured_environment_fields_are_not_scored(app, db_session, monkeypatch):
+    from core.db_models import Community
+
+    db_session.add(Community(
+        name='甲村',
+        population=100,
+        elderly_ratio=0.4,
+        chronic_disease_ratio=0.1,
+        latitude=29.28,
+        longitude=116.21,
+    ))
+    db_session.add(Community(
+        name='乙村',
+        population=100,
+        elderly_ratio=0.4,
+        chronic_disease_ratio=0.1,
+        latitude=29.29,
+        longitude=116.22,
+    ))
+    db_session.commit()
+
+    class StubDLNM:
+        def calculate_rr(self, temperature, lag_temperatures=None):
+            return 1.8, {}
+
+    monkeypatch.setattr(
+        "services.dlnm_risk_service.get_dlnm_service",
+        lambda: StubDLNM(),
+    )
+
+    service = CommunityRiskService()
+    profile = service.community_profiles['甲村']
+    assert profile['green_space_ratio'] is None
+    assert profile['heat_island_index'] is None
+    assert profile['medical_accessibility'] is None
+
+    vi_a = service.calculate_vulnerability_index(profile)
+    vi_b = service.calculate_vulnerability_index(service.community_profiles['乙村'])
+    assert vi_a['breakdown']['green_contribution'] == 0
+    assert vi_a['breakdown']['heat_island_contribution'] == 0
+    assert vi_a['breakdown']['medical_contribution'] == 0
+    assert vi_a.get('environment_in_score') is False
+    assert vi_a['vulnerability_index'] == vi_b['vulnerability_index']
+
+    result = service.generate_community_risk_map({"temperature": 35})
+    by_name = {row['community']: row for row in result['rankings']}
+    assert by_name['甲村']['vulnerability_index'] == by_name['乙村']['vulnerability_index']
+    assert by_name['甲村'].get('environment_in_score') is False
+    assert by_name['甲村']['theme_scores'].get('exposure') is None
+    assert by_name['甲村']['theme_scores'].get('adaptive_gap') is None
+    assert any('绿地' in item and '不计入' in item for item in result['methodology'])
