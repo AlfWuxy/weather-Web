@@ -9,6 +9,7 @@ from flask_login import current_user, login_required
 
 from core.extensions import db
 from core.audit import log_audit
+from core.auth import find_user_by_username
 from core.db_models import Community, CoolingResource, HealthRiskAssessment, MedicalRecord, User, WeatherAlert
 from core.time_utils import utcnow
 from utils.parsers import parse_bool, parse_float, parse_int
@@ -497,7 +498,8 @@ def admin_edit_user(user_id):
             flash(result, 'error')
             return redirect(url_for('admin.admin_edit_user', user_id=user_id))
         username = result
-        if username != user.username and User.query.filter_by(username=username).first():
+        existing = find_user_by_username(username)
+        if existing and existing.id != user.id:
             flash('用户名已存在', 'error')
             return redirect(url_for('admin.admin_edit_user', user_id=user_id))
 
@@ -603,7 +605,7 @@ def admin_add_user():
         if role not in ['admin', 'user', 'caregiver', 'community']:
             role = 'user'
 
-        if User.query.filter_by(username=username).first():
+        if find_user_by_username(username):
             flash('用户名已存在', 'error')
             return redirect(url_for('admin.admin_add_user'))
 

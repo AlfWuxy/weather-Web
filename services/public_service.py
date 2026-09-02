@@ -11,6 +11,7 @@ from flask import current_app, flash, redirect, render_template, request, sessio
 from flask_login import current_user, login_user, logout_user
 from sqlalchemy import or_
 
+from core.auth import find_user_by_username
 from core.constants import GUEST_ID_PREFIX
 from core.extensions import db
 from core.security import hash_identifier, hash_pair_token, hash_short_code, rate_limit_key, verify_pair_token
@@ -995,7 +996,7 @@ def handle_login(next_url):
             flash('输入内容过长', 'error')
             return render_template('login.html', next=next_url)
 
-        user = User.query.filter_by(username=username).first()
+        user = find_user_by_username(username)
 
         # 账户锁定检查（防暴力破解）
         lockout_key = _login_lockout_key(normalized_username)
@@ -1054,6 +1055,11 @@ def handle_login(next_url):
             logger.info("用户登录成功: %s", username)
 
             safe_next = _safe_next_url(next_url)
+            if safe_next in ('/pairs',):
+                if user.role in ('caregiver', 'admin'):
+                    return redirect(url_for('user.caregiver_dashboard'))
+                if user.role == 'community':
+                    return redirect(url_for('user.community_dashboard'))
             if safe_next:
                 return redirect(safe_next)
 
@@ -1127,8 +1133,8 @@ def handle_register():
         # 社区信息
         community = sanitize_input(request.form.get('community'), max_length=100)
 
-        # 检查用户名是否已存在
-        if User.query.filter_by(username=username).first():
+        # 检查用户名是否已存在（大小写不敏感，与登录锁定桶一致）
+        if find_user_by_username(username):
             flash('用户名已存在', 'error')
             return redirect(url_for('public.register'))
 
