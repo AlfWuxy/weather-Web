@@ -271,6 +271,17 @@ def ml_prediction():
     prediction = None
     factors = None
     prediction_error = None
+    ml_service = get_ml_service()
+    if not getattr(ml_service, 'model_loaded', False):
+        return render_template(
+            'ml_prediction.html',
+            family_members=family_members,
+            form_state=form_state,
+            prediction=None,
+            factors=None,
+            prediction_error=None,
+            model_unavailable=True,
+        )
 
     if request.method == 'POST':
         selected_member = _selected_member(request.form.get('member_id'))
@@ -321,6 +332,7 @@ def ml_prediction():
         prediction=prediction,
         factors=factors,
         prediction_error=prediction_error,
+        model_unavailable=False,
     )
 
 

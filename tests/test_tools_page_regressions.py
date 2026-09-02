@@ -356,6 +356,8 @@ def test_ml_prediction_post_renders_result_and_preserves_form(client, db_session
     captured = {}
 
     class FakeMLService:
+        model_loaded = True
+
         def predict_disease_risk(self, user_info, weather_info=None):
             captured['user_info'] = user_info
             return {
@@ -422,6 +424,8 @@ def test_ml_prediction_selected_member_uses_age_and_gender_only(client, db_sessi
     captured = {}
 
     class FakeMLService:
+        model_loaded = True
+
         def predict_disease_risk(self, user_info, weather_info=None):
             captured['user_info'] = user_info
             return {
@@ -546,6 +550,8 @@ def test_ml_and_chronic_pages_reject_mock_weather(client, db_session, monkeypatc
     )
 
     class UnexpectedService:
+        model_loaded = True
+
         def __getattr__(self, _name):
             raise AssertionError('模拟天气不应进入风险服务')
 
