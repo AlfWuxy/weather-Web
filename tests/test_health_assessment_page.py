@@ -270,6 +270,8 @@ def test_community_context_marks_default_vi_and_unavailable_burden(db_session):
     assert missing_community['cases_30d'] is None
     assert missing_community['burden_per_1000'] is None
     assert missing_community['imputed_fields'] == ['vulnerability_index', 'burden_score']
+    assert all('模型使用' not in item for item in missing_community['warnings'])
+    assert all('不计入' in item for item in missing_community['warnings'])
 
     missing_population = service._build_community_context('人口缺失社区')
     assert missing_population['source'] == 'community_table'

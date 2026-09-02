@@ -472,8 +472,8 @@ class HealthRiskService:
                 'imputed': True,
                 'imputed_fields': ['vulnerability_index', 'burden_score'],
                 'warnings': [
-                    '个人资料未设置社区，社区 VI 使用 45 分中性代理值。',
-                    '社区名缺失，30 日门诊记录与每千人负担无法计算，模型使用 30 分中性负担代理值。'
+                    '个人资料未设置社区，社区 VI 仅作 45 分中性参考，不计入个人风险分。',
+                    '社区名缺失，30 日门诊记录与每千人负担无法计算，负担参考不计入个人风险分。'
                 ]
             }
 
@@ -520,7 +520,7 @@ class HealthRiskService:
                     vulnerability_level = str(community_row.risk_level)
             else:
                 imputed_fields.append('vulnerability_index')
-                warnings.append('社区表缺少 VI，当前使用 45 分中性代理值。')
+                warnings.append('社区表缺少 VI，当前 45 分仅作参考，不计入个人风险分。')
         elif profile_data:
             source = 'bundled_profile'
             source_label = '内置社区档案'
@@ -533,11 +533,11 @@ class HealthRiskService:
             if profile_data.get('chronic_disease_ratio') is not None:
                 chronic_ratio = self._clamp(self._to_float(profile_data.get('chronic_disease_ratio')), 0.0, 1.0)
             imputed_fields.append('vulnerability_index')
-            warnings.append('未匹配社区表 VI，当前使用 45 分中性代理值。')
+            warnings.append('未匹配社区表 VI，当前 45 分仅作参考，不计入个人风险分。')
         else:
             imputed_fields.extend(['population', 'vulnerability_index'])
             warnings.extend([
-                '未匹配社区表或内置档案，社区 VI 使用 45 分中性代理值。',
+                '未匹配社区表或内置档案，社区 VI 仅作 45 分中性参考，不计入个人风险分。',
                 '人口数缺失，每千人负担无法计算。'
             ])
 
@@ -553,9 +553,9 @@ class HealthRiskService:
             burden_source = burden['reason']
             imputed_fields.append('burden_score')
             if burden['reason'] == 'unavailable_query_failed':
-                warnings.append('30 日门诊记录查询失败，模型使用 30 分中性负担代理值。')
+                warnings.append('30 日门诊记录查询失败，负担参考不计入个人风险分。')
             else:
-                warnings.append('因人口数缺失，30 日每千人负担无法计算，模型使用 30 分中性负担代理值。')
+                warnings.append('因人口数缺失，30 日每千人负担无法计算，负担参考不计入个人风险分。')
 
         # 保持字段顺序稳定，方便页面与导出结果审计。
         imputed_fields = list(dict.fromkeys(imputed_fields))
