@@ -239,11 +239,16 @@ def elders_create():
         return jsonify({"success": False, "error": "missing_fields"}), 400
 
     age = payload.get("age")
-    try:
-        age = int(age) if age is not None and str(age).strip() else None
-    except Exception:
+    if age is None or str(age).strip() == "":
         age = None
-    gender = sanitize_input(payload.get("gender"), max_length=10)
+    else:
+        parsed_age = parse_int(age)
+        if parsed_age is None or parsed_age < 1 or parsed_age > 150:
+            return jsonify({"success": False, "error": "invalid_age"}), 400
+        age = parsed_age
+    valid, gender = validate_gender(payload.get("gender"))
+    if not valid:
+        return jsonify({"success": False, "error": "invalid_gender"}), 400
     chronic = payload.get("chronic_diseases")
     chronic = chronic if isinstance(chronic, list) else []
     chronic = [sanitize_input(item, max_length=50) for item in chronic if item]

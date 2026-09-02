@@ -312,6 +312,54 @@ class TestMpApiAtomicCreate:
             count = FamilyMember.query.filter_by(user_id=user.id).count()
             assert count == 0, "校验失败不应留下残留记录"
 
+    def test_invalid_gender_is_rejected(self, app, client):
+        from core.extensions import db
+        from core.db_models import FamilyMember
+        from core.usage import create_api_token
+        with app.app_context():
+            db.create_all()
+            user = _make_user(db.session, 'mpgender', 'MpPass123!')
+            token = create_api_token(user.id, name='test')
+
+            resp = client.post(
+                '/mp/api/v1/elders',
+                data=json.dumps({
+                    'name': '测试老人',
+                    'relation': '父亲',
+                    'location_query': '都昌',
+                    'gender': '不明生物',
+                }),
+                content_type='application/json',
+                headers={'Authorization': f'Bearer {token}'},
+            )
+            assert resp.status_code == 400
+            assert resp.get_json()['error'] == 'invalid_gender'
+            assert FamilyMember.query.filter_by(user_id=user.id).count() == 0
+
+    def test_male_gender_is_normalized(self, app, client):
+        from core.extensions import db
+        from core.db_models import FamilyMember
+        from core.usage import create_api_token
+        with app.app_context():
+            db.create_all()
+            user = _make_user(db.session, 'mpgender2', 'MpPass123!')
+            token = create_api_token(user.id, name='test')
+
+            resp = client.post(
+                '/mp/api/v1/elders',
+                data=json.dumps({
+                    'name': '测试老人',
+                    'relation': '父亲',
+                    'location_query': '都昌',
+                    'gender': '男',
+                }),
+                content_type='application/json',
+                headers={'Authorization': f'Bearer {token}'},
+            )
+            assert resp.status_code == 200
+            member = FamilyMember.query.filter_by(user_id=user.id).first()
+            assert member.gender == '男性'
+
 
 # ====================================================================
 # #4  Open-Meteo 回退 AQI 标记修正
