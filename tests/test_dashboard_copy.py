@@ -34,6 +34,8 @@ def test_dashboard_family_cards_do_not_invent_low_when_risk_missing():
     assert "m.risk_label or '低风险'" not in family_html
     assert "m.risk_level or 'low'" not in family_html
     assert "m.risk_label or '风险未知'" in family_html
+    assert '{{ m.age }}岁' not in family_html
+    assert '{{ m.age }}岁' not in today_html
 
 
 def test_dashboard_templates_read_headlines_from_json():

@@ -35,7 +35,7 @@
                     <div class="d-flex align-items-start justify-content-between">
                         <div>
                             <h5 class="mb-1">基础信息</h5>
-                            <div class="text-muted">{{ member.gender or '-' }} · {{ member.age or '-' }}岁</div>
+                            <div class="text-muted">{{ member.gender or '-' }} · {{ (member.age ~ '岁') if member.age else '年龄未填' }}</div>
                         </div>
                         <span class="badge risk-badge risk-{{ risk.level }}">{{ risk.label }}</span>
                         {{ metric_info('member_risk_score', {'本次得分': risk.score, '原因': risk.reasons|join('、') if risk.reasons else '暂无加分原因'}) }}

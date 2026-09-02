@@ -251,6 +251,11 @@ def test_family_members_page_does_not_invent_low_risk_when_age_missing(client, d
     assert "risk-label or '低风险'" not in body
     card = body[body.index('邻居阿婆'): body.index('邻居阿婆') + 800]
     assert '低风险' not in card
+    assert 'None岁' not in body
+    assert '年龄未填' in body
+    detail = client.get(f'/family-members/{member.id}').get_data(as_text=True)
+    assert 'None岁' not in detail
+    assert '年龄未填' in detail
 
 
 def test_family_member_pages_expose_delete_and_toggle_forms(client, db_session):

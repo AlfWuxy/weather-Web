@@ -90,7 +90,7 @@
                             <div class="flex-grow-1 min-w-0">
                                 <h5 class="mb-0 text-truncate">{{ m.name }}</h5>
                                 <div class="text-muted" style="font-size:.85rem;">
-                                    {{ m.age }}岁 · {{ m.gender or '—' }} · 与我的关系:{{ m.relation or '—' }}
+                                    {{ (m.age ~ '岁') if m.age else '年龄未填' }} · {{ m.gender or '—' }} · 与我的关系:{{ m.relation or '—' }}
                                 </div>
                             </div>
                             <span class="risk-badge risk-{{ m.risk_level or 'unknown' }} badge">{{ m.risk_label or '风险未知' }}</span>
