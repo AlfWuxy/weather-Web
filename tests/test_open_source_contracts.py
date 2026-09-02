@@ -118,6 +118,65 @@ def test_openmeteo_daily_forecast_contract_uses_no_sdk_or_live_network(app, monk
     assert result[1]['condition'] == '小雨'
 
 
+def test_openmeteo_forecast_skips_days_without_temperature(app, monkeypatch):
+    with app.app_context():
+        from services.weather_service import WeatherService
+        import services.weather_service as weather_module
+
+        service = WeatherService()
+        monkeypatch.setattr(service, '_get_location', lambda city: '116.20,29.27')
+        monkeypatch.setattr(service, '_parse_lon_lat', lambda location: (116.20, 29.27))
+
+        def fake_get(url, params=None, timeout=None):
+            return _response({
+                'daily': {
+                    'time': ['2026-06-01', '2026-06-02'],
+                    'temperature_2m_max': [36.0, None],
+                    'temperature_2m_min': [26.0, None],
+                    'precipitation_probability_max': [30, 45],
+                    'weather_code': [1, 61],
+                },
+            })
+
+        monkeypatch.setattr(weather_module.requests, 'get', fake_get)
+        result = service._get_openmeteo_forecast('都昌', days=2)
+
+    assert len(result) == 1
+    assert result[0]['date'] == '2026-06-01'
+    assert result[0]['temperature_max'] == 36.0
+    assert all(row.get('temperature_max') != 25.0 for row in result)
+    assert all(row.get('temperature_min') != 15.0 for row in result)
+
+
+def test_openmeteo_nowcast_skips_hours_without_temperature(app, monkeypatch):
+    with app.app_context():
+        from services.weather_service import WeatherService
+        import services.weather_service as weather_module
+
+        service = WeatherService()
+        monkeypatch.setattr(service, '_get_location', lambda city: '116.20,29.27')
+        monkeypatch.setattr(service, '_parse_lon_lat', lambda location: (116.20, 29.27))
+
+        def fake_get(url, params=None, timeout=None):
+            return _response({
+                'hourly': {
+                    'time': ['2026-06-01T08:00', '2026-06-01T09:00'],
+                    'precipitation_probability': [20, 40],
+                    'precipitation': [0.0, 0.2],
+                    'temperature_2m': [31.5, None],
+                    'weather_code': [1, 61],
+                },
+            })
+
+        monkeypatch.setattr(weather_module.requests, 'get', fake_get)
+        result = service.get_short_term_nowcast('都昌', hours=2)
+
+    assert result['available'] is True
+    assert len(result['timeline']) == 1
+    assert result['timeline'][0]['temperature'] == 31.5
+    assert all(item.get('temperature') != 0.0 for item in result['timeline'])
+
+
 def test_multimodel_forecast_contract_preserves_provider_names(app):
     with app.app_context():
         from services.weather_service import WeatherService

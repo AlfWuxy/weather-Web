@@ -858,8 +858,10 @@ class WeatherService:
             entries = []
             max_len = min(days, len(dates), len(tmax_list), len(tmin_list))
             for idx in range(max_len):
-                tmax = self._safe_float(tmax_list[idx], 25.0)
-                tmin = self._safe_float(tmin_list[idx], 15.0)
+                tmax = self._safe_float(tmax_list[idx])
+                tmin = self._safe_float(tmin_list[idx])
+                if tmax is None or tmin is None:
+                    continue
                 entries.append({
                     'date': dates[idx],
                     'temperature_max': tmax,
@@ -1013,12 +1015,15 @@ class WeatherService:
             size = min(hours, len(times), len(pops), len(precs), len(temps))
             timeline = []
             for i in range(size):
+                temp = self._safe_float(temps[i])
+                if temp is None:
+                    continue
                 pop = self._safe_float(pops[i], 0.0) or 0.0
                 entry = {
                     'time': str(times[i]),
                     'precipitation_probability': round(pop, 1),
                     'precipitation_mm': round(self._safe_float(precs[i], 0.0) or 0.0, 2),
-                    'temperature': round(self._safe_float(temps[i], 0.0) or 0.0, 1),
+                    'temperature': round(temp, 1),
                     'condition': self._weather_code_to_text(wcodes[i] if i < len(wcodes) else None),
                     'risk_level': '高' if pop >= 70 else '中' if pop >= 40 else '低'
                 }
