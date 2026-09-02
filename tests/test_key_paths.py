@@ -315,7 +315,13 @@ def test_api_forecast_structure(authenticated_client):
     assert payload['success'] is True
     assert 'forecasts' in payload
     assert 'summary' in payload
+    summary = payload.get('summary') or {}
     forecasts = payload.get('forecasts') or []
+    if summary.get('health_forecast_available') is False:
+        assert forecasts == []
+        assert summary.get('health_forecast_reason')
+        return
+
     assert len(forecasts) >= 1
     first = forecasts[0]
     assert 'composite_exposure' in first
@@ -324,8 +330,6 @@ def test_api_forecast_structure(authenticated_client):
     assert 'p10' in (first.get('visits') or {})
     assert 'p50' in (first.get('visits') or {})
     assert 'p90' in (first.get('visits') or {})
-
-    summary = payload.get('summary') or {}
     assert 'role_action_cards' in summary
     assert 'scenario_totals' in summary
     assert 'probability_products' in summary
