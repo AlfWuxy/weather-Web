@@ -1312,6 +1312,7 @@ def handle_logout():
         session.pop('guest_id', None)
     session.pop('pair_session_id', None)
     session.pop('pair_session_code', None)
+    session.pop('chronic_risk_last', None)
     _clear_pair_token()
     logout_user()
     return redirect(url_for('public.index'))

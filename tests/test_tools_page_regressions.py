@@ -590,6 +590,132 @@ def test_chronic_risk_get_shows_empty_state_without_synthetic_result(client, db_
     assert '血压波动' not in body
 
 
+def _fake_chronic_service(score=87.3):
+    class FakeChronicService:
+        def predict_individual_risk(self, user_info, weather_data, target_diseases=None):
+            return {
+                'overall_risk': {'score': score, 'level': '高风险'},
+                'disease_risks': {
+                    'cardiovascular': {
+                        'risk_score': score,
+                        'risk_level': '高风险',
+                        'raw_dlnm_rr': 1.2,
+                        'dlnm_disease_modifier': 1.1,
+                        'dlnm_age_modifier': 1.3,
+                        'dlnm_adjusted_rr': 1.716,
+                        'dlnm_rr_cap': 3.5,
+                        'chronic_age_amplifier': 1.1,
+                        'comorbidity_amplifier': 1.4,
+                        'personal_rr': 2.643,
+                        'vital_adjustment': 8,
+                    },
+                },
+                'recommendations': [{'advice': '按时服药'}],
+                'vital_adjustment': {'score_adjustment': 8, 'factors': []},
+            }
+
+    return FakeChronicService()
+
+
+def test_chronic_risk_post_redirects_and_refresh_keeps_result(client, db_session, monkeypatch):
+    user = _create_user(db_session, username='chronic_persist_user')
+    _login_as(client, user.id)
+    monkeypatch.setattr(
+        'blueprints.tools.get_weather_with_cache',
+        lambda _location: ({'temperature': 32, 'humidity': 70, 'data_source': 'QWeather', 'is_mock': False}, False),
+    )
+    monkeypatch.setattr('blueprints.tools.get_chronic_service', lambda: _fake_chronic_service())
+
+    posted = client.post(
+        '/chronic-risk',
+        data={
+            'disease': 'hypertension',
+            'sbp': '142',
+            'fbg': '7.8',
+            'adherence': 'loose',
+            'symptoms': '头晕',
+            'csrf_token': 'test-csrf-token',
+        },
+        follow_redirects=False,
+    )
+
+    assert posted.status_code in (302, 303)
+    assert posted.headers['Location'].endswith('/chronic-risk')
+
+    refreshed = client.get('/chronic-risk')
+    body = refreshed.get_data(as_text=True)
+    assert refreshed.status_code == 200
+    assert '综合风险评分' in body
+    assert '按时服药' in body
+    assert 'value="142"' in body
+
+
+def test_chronic_risk_weather_error_survives_refresh_without_resubmit(client, db_session, monkeypatch):
+    user = _create_user(db_session, username='chronic_error_persist_user')
+    _login_as(client, user.id)
+    calls = {'count': 0}
+
+    def fake_weather(_location):
+        calls['count'] += 1
+        return ({'temperature': 37, 'humidity': 70, 'data_source': 'Demo', 'is_mock': True}, False)
+
+    monkeypatch.setattr('blueprints.tools.get_weather_with_cache', fake_weather)
+    monkeypatch.setattr(
+        'blueprints.tools.get_chronic_service',
+        lambda: (_ for _ in ()).throw(AssertionError('模拟天气不应进入风险服务')),
+    )
+
+    posted = client.post(
+        '/chronic-risk',
+        data={'disease': 'hypertension', 'csrf_token': 'test-csrf-token'},
+        follow_redirects=False,
+    )
+
+    assert posted.status_code in (302, 303)
+    refreshed = client.get('/chronic-risk')
+    body = refreshed.get_data(as_text=True)
+    assert '天气正在更新，本次提醒暂未生成' in body
+    assert '综合风险评分' not in body
+    assert calls['count'] == 1
+
+
+def test_chronic_risk_result_cleared_after_logout(client, db_session, monkeypatch):
+    user = _create_user(db_session, username='chronic_logout_user')
+    user.set_password('testpass')
+    db_session.commit()
+    _login_as(client, user.id)
+    monkeypatch.setattr(
+        'blueprints.tools.get_weather_with_cache',
+        lambda _location: ({'temperature': 32, 'humidity': 70, 'data_source': 'QWeather', 'is_mock': False}, False),
+    )
+    monkeypatch.setattr('blueprints.tools.get_chronic_service', lambda: _fake_chronic_service())
+
+    client.post(
+        '/chronic-risk',
+        data={'disease': 'hypertension', 'csrf_token': 'test-csrf-token'},
+        follow_redirects=True,
+    )
+    client.post('/logout', data={'csrf_token': 'test-csrf-token'}, follow_redirects=False)
+
+    with client.session_transaction() as stored:
+        assert 'chronic_risk_last' not in stored
+        stored['_csrf_token'] = 'after-logout-csrf'
+
+    client.post(
+        '/login',
+        data={
+            'username': 'chronic_logout_user',
+            'password': 'testpass',
+            'csrf_token': 'after-logout-csrf',
+        },
+        follow_redirects=True,
+    )
+    response = client.get('/chronic-risk')
+    body = response.get_data(as_text=True)
+    assert '填写信息后生成评估' in body
+    assert '综合风险评分' not in body
+
+
 def test_chronic_risk_service_uses_submitted_vitals():
     from services.chronic_risk_service import ChronicRiskService
 

@@ -3,7 +3,7 @@
 from datetime import datetime
 import math
 
-from flask import Blueprint, current_app, flash, render_template, request
+from flask import Blueprint, current_app, flash, redirect, render_template, request, session, url_for
 from flask_login import current_user, login_required
 
 from core.db_models import FamilyMember
@@ -25,6 +25,8 @@ from utils.validators import sanitize_input
 
 bp = Blueprint('tools', __name__)
 
+
+CHRONIC_RISK_SESSION_KEY = 'chronic_risk_last'
 
 CHRONIC_FORM_LABELS = {
     'hypertension': '高血压',
@@ -213,6 +215,22 @@ def _build_chronic_breakdown(result, adherence, symptoms):
     })
 
     return breakdown[:4]
+
+
+def _store_chronic_risk_result(payload):
+    saved = dict(payload)
+    saved['user_id'] = getattr(current_user, 'id', None)
+    session[CHRONIC_RISK_SESSION_KEY] = saved
+
+
+def _load_chronic_risk_result():
+    saved = session.get(CHRONIC_RISK_SESSION_KEY)
+    if not isinstance(saved, dict):
+        return None
+    if saved.get('user_id') != getattr(current_user, 'id', None):
+        session.pop(CHRONIC_RISK_SESSION_KEY, None)
+        return None
+    return saved
 
 
 def _parse_chronic_vitals(form_state):
@@ -427,6 +445,25 @@ def chronic_risk():
                 risk_comment = f"{risk_comment} 已参考{'；'.join(vital_factors[:2])}。"
             breakdown = _build_chronic_breakdown(result, form_state['adherence'], form_state['symptoms'])
             suggestions = _normalize_chronic_suggestions(result.get('recommendations'))[:5]
+
+        _store_chronic_risk_result({
+            'form_state': form_state,
+            'risk_score': risk_score,
+            'risk_comment': risk_comment,
+            'breakdown': breakdown,
+            'suggestions': suggestions,
+            'risk_error': risk_error,
+        })
+        return redirect(url_for('tools.chronic_risk'))
+
+    saved = _load_chronic_risk_result()
+    if saved:
+        form_state = saved.get('form_state') or form_state
+        risk_score = saved.get('risk_score')
+        risk_comment = saved.get('risk_comment')
+        breakdown = saved.get('breakdown')
+        suggestions = saved.get('suggestions')
+        risk_error = saved.get('risk_error')
 
     return render_template(
         'chronic_risk.html',
