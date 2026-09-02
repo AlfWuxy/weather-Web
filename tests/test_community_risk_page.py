@@ -6,6 +6,18 @@ from datetime import datetime, timedelta, timezone
 from core.db_models import Community, MedicalRecord
 
 
+def test_community_risk_json_apis_require_login(client):
+    """社区风险 JSON 不能对未登录访客公开。"""
+    for path in (
+        '/api/community/list',
+        '/api/v1/community/list',
+        '/api/community/risk-map',
+        '/api/community/vulnerability/甲村',
+    ):
+        response = client.get(path, follow_redirects=False)
+        assert response.status_code in (302, 401), path
+
+
 def _seed_community_risk_data(db_session):
     communities = [
         Community(name='甲村', population=1200, elderly_ratio=0.33, chronic_disease_ratio=0.12),

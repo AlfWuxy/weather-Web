@@ -96,3 +96,30 @@ def test_pilot_export_csv_returns_empty_export_for_admin(client, db_session):
     assert response.get_data(as_text=True).startswith(
         '\ufeffcreated_at,event_type,user_id,pair_id,member_id,source,meta_json'
     )
+
+
+def test_pilot_export_csv_neutralizes_formula_injection(client, db_session):
+    from core.db_models import UsageEvent, User
+    from core.time_utils import utcnow
+
+    admin = User(username='admin_csv_inject', role='admin')
+    admin.set_password('testpass')
+    db_session.add(admin)
+    db_session.flush()
+    db_session.add(UsageEvent(
+        user_id=admin.id,
+        event_type='opened',
+        source='=CMD|"/c calc"!A0',
+        meta_json='+1+1',
+        created_at=utcnow(),
+    ))
+    db_session.commit()
+
+    _login_as(client, admin.id)
+    response = client.get('/analysis/pilot/export.csv?days=30')
+    body = response.get_data(as_text=True)
+
+    assert response.status_code == 200
+    assert "'=CMD|" in body
+    assert "'+1+1" in body
+    assert not any(line.lstrip().startswith('=CMD') for line in body.splitlines())

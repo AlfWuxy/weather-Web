@@ -15,6 +15,32 @@ def test_logout_requires_post(authenticated_client):
     assert response.status_code == 405
 
 
+def test_unversioned_ai_ask_uses_dedicated_rate_limit(app, authenticated_client):
+    from core.extensions import limiter
+
+    app.config['RATE_LIMIT_AI'] = '1 per hour'
+    limiter.reset()
+    csrf = 'ai-alias-csrf'
+    with authenticated_client.session_transaction() as session:
+        session['_csrf_token'] = csrf
+
+    try:
+        first = authenticated_client.post(
+            '/api/ai/ask',
+            json={'question': '今天热不热？'},
+            headers={'X-CSRF-Token': csrf},
+        )
+        second = authenticated_client.post(
+            '/api/ai/ask',
+            json={'question': '还热吗？'},
+            headers={'X-CSRF-Token': csrf},
+        )
+        assert first.status_code != 429
+        assert second.status_code == 429
+    finally:
+        limiter.reset()
+
+
 def test_forecast_api_rejects_incomplete_forecast_temps(authenticated_client):
     with authenticated_client.session_transaction() as session:
         session['_csrf_token'] = 'forecast-csrf'

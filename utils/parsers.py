@@ -165,3 +165,16 @@ def json_or_none(value):
     if value in (None, '', [], {}):
         return None
     return json.dumps(value, ensure_ascii=False)
+
+
+_CSV_FORMULA_PREFIXES = frozenset('=+-@\t\r\n')
+
+
+def csv_safe_cell(value):
+    """避免 CSV 公式注入：以公式前缀开头的单元格加单引号。"""
+    if value is None:
+        return ''
+    text = str(value)
+    if text[:1] in _CSV_FORMULA_PREFIXES:
+        return "'" + text
+    return text

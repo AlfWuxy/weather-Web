@@ -44,6 +44,7 @@ def api_weather_nowcast():
 
 
 @bp.route('/api/v1/community/risk-map', endpoint='api_v1_community_risk_map')
+@login_required
 def api_v1_community_risk_map():
     """获取社区风险地图数据（v1）"""
     return api_service._api_community_risk_map()
@@ -182,6 +183,7 @@ def api_community_risk_map_v2():
 
 
 @bp.route('/api/v1/community/vulnerability/<community_name>', endpoint='api_v1_community_vulnerability')
+@login_required
 def api_v1_community_vulnerability(community_name):
     """获取单个社区脆弱性指数（v1）"""
     return api_service._api_community_vulnerability(community_name)
@@ -194,6 +196,7 @@ def api_community_vulnerability(community_name):
 
 
 @bp.route('/api/v1/community/list', endpoint='api_v1_community_list')
+@login_required
 def api_v1_community_list():
     """获取所有社区列表及脆弱性（v1）"""
     return api_service._api_community_list()
