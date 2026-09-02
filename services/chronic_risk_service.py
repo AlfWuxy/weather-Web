@@ -21,6 +21,25 @@ import json
 
 
 from core.time_utils import utcnow
+from utils.parsers import parse_float, parse_int
+
+
+def _require_profile_age(user_info):
+    age = parse_int((user_info or {}).get('age'))
+    if age is None or age < 1 or age > 150:
+        raise ValueError('请提供年龄')
+    return age
+
+
+def _require_weather_temperature(weather_data):
+    if not isinstance(weather_data, dict):
+        raise ValueError('请提供气温')
+    temperature = parse_float(weather_data.get('temperature'))
+    if temperature is None or not math.isfinite(temperature):
+        raise ValueError('请提供气温')
+    return temperature
+
+
 class ChronicRiskService:
     """慢病风险预测服务"""
     
@@ -312,13 +331,7 @@ class ChronicRiskService:
         
         dlnm = get_dlnm_service()
         
-        # 安全获取和转换年龄
-        try:
-            age = int(user_info.get('age', 50))
-            if age < 0 or age > 150:
-                age = 50
-        except (TypeError, ValueError):
-            age = 50
+        age = _require_profile_age(user_info)
         
         # 安全处理慢性病列表
         chronic_diseases = user_info.get('chronic_diseases', [])
@@ -337,11 +350,7 @@ class ChronicRiskService:
         if not isinstance(chronic_diseases, list):
             chronic_diseases = [str(chronic_diseases)] if chronic_diseases else []
         
-        # 安全获取温度
-        try:
-            temperature = float(weather_data.get('temperature', 20))
-        except (TypeError, ValueError):
-            temperature = 20.0
+        temperature = _require_weather_temperature(weather_data)
         
         # 确定目标疾病类型
         if target_diseases is None:
@@ -531,8 +540,8 @@ class ChronicRiskService:
     def _build_safe_context(self, context):
         """构建安全上下文"""
         return {
-            'age': context.get('age', 50),
-            'temperature': context.get('temperature', 20),
+            'age': context.get('age'),
+            'temperature': context.get('temperature'),
             'rr': context.get('rr', 1.0),
             'disease_type': context.get('disease_type', 'general'),
             'chronic_diseases': context.get('chronic_diseases', []),
@@ -679,7 +688,7 @@ class ChronicRiskService:
         from services.dlnm_risk_service import get_dlnm_service
         
         dlnm = get_dlnm_service()
-        temperature = weather_data.get('temperature', 20)
+        temperature = _require_weather_temperature(weather_data)
         
         # 定义人群分层
         strata = {

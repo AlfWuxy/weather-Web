@@ -132,3 +132,24 @@ def test_safe_context_does_not_fake_missing_hot_night_temp(chronic_service):
     safe = chronic_service._build_safe_context({'hot_night': False})
     assert safe['hot_night'] is False
     assert safe['hot_night_temp'] is None
+    assert safe['temperature'] is None
+    assert safe['age'] is None
+
+
+def test_predict_individual_risk_without_temperature_does_not_invent_20(chronic_service):
+    with pytest.raises(ValueError, match='气温'):
+        chronic_service.predict_individual_risk(USER, {}, target_diseases=['cardiovascular'])
+
+
+def test_predict_individual_risk_without_age_does_not_invent_50(chronic_service):
+    with pytest.raises(ValueError, match='年龄'):
+        chronic_service.predict_individual_risk(
+            {'chronic_diseases': ['高血压']},
+            {'temperature': 31},
+            target_diseases=['cardiovascular'],
+        )
+
+
+def test_predict_population_risk_without_temperature_does_not_invent_20(chronic_service):
+    with pytest.raises(ValueError, match='气温'):
+        chronic_service.predict_population_risk({}, {})
