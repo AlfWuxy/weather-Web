@@ -141,6 +141,19 @@ def test_logged_in_nav_shows_elder_mode_by_default(client, db_session):
     assert '老人模式' in body
 
 
+def test_desktop_mega_menu_includes_location_form_and_family_archive(client, db_session):
+    """笔记本用户不能只靠抽屉改定位或进入家人档案。"""
+    _set_logged_in_user(client, db_session, username='desktop-mega-user', role='user')
+    body = client.get('/').get_data(as_text=True)
+    mega = body.split('id="appMegaMenu"', 1)[1].split('id="appNavDrawer"', 1)[0]
+
+    assert 'href="/family-members"' in mega
+    assert '家人档案' in mega
+    assert 'action="/location"' in mega
+    assert 'id="locationOptionsMega"' in mega
+    assert 'id="locationOptionsDrawer"' in body.split('id="appNavDrawer"', 1)[1]
+
+
 def test_anonymous_elder_card_enters_guest_elder_mode(client):
     body = client.get('/').get_data(as_text=True)
     assert 'href="/guest?next=/elder-mode" class="yl-role-card variant-elder"' in body

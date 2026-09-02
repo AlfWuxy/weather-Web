@@ -15,7 +15,7 @@ from __future__ import annotations
 import json
 from functools import wraps
 
-from flask import Blueprint, current_app, g, jsonify, request
+from flask import Blueprint, current_app, g, jsonify, request, url_for
 
 from core.audit import _get_client_ip
 from core.db_models import FamilyMember, FamilyMemberProfile, Pair, User
@@ -211,6 +211,8 @@ def elders_list():
                 "pair_id": p.id,
                 "location_query": p.location_query,
                 "community_code": p.community_code,
+                "short_code": p.short_code,
+                "action_url": url_for("public.elder_entry", short_code=p.short_code, _external=True),
                 "member": _member_payload(member),
                 "today": {
                     "trigger": trigger,

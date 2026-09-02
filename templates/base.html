@@ -1,3 +1,4 @@
+{% from "partials/location_form.html" import location_form with context %}
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -177,6 +178,7 @@
                                     <a class="app-mega-link" href="{{ url_for('tools.ai_qa') }}">AI 提问</a>
                                     <a class="app-mega-link" href="{{ url_for('tools.chronic_risk') }}">慢病风险评估</a>
                                     {% if not nav_is_guest %}
+                                        <a class="app-mega-link" href="{{ url_for('health.family_members') }}">家人档案</a>
                                         <a class="app-mega-link" href="{{ url_for('health.health_diary') }}">健康日记</a>
                                         <a class="app-mega-link" href="{{ url_for('health.medication_reminders') }}">用药提醒</a>
                                         <a class="app-mega-link" href="{{ url_for('analysis.annual_report') }}">年度健康报告</a>
@@ -195,6 +197,9 @@
 
                                 <section class="app-mega-group">
                                     <div class="app-mega-kicker">账号与设置</div>
+                                    {% if current_user.is_authenticated %}
+                                        {{ location_form('locationOptionsMega') }}
+                                    {% endif %}
                                     {% if current_user.role != 'guest' %}
                                         <a class="app-mega-link" href="{{ url_for('user.profile') }}">个人设置</a>
                                         {% if feature_flags.elder_mode %}
@@ -344,18 +349,7 @@
             {# ----- 定位 ----- #}
             <div class="mb-2" style="font-size:.72rem; color:var(--yl-muted); text-transform:uppercase; letter-spacing:.05em; padding:0 4px;">定位设置</div>
             <div class="p-3 mb-3" style="background:#fff; border:1px solid var(--yl-line-soft); border-radius:12px;">
-                <form method="POST" action="{{ url_for('user.update_location') }}">
-                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                    <label class="form-label small mb-1">当前所在地</label>
-                    <input class="form-control form-control-sm" name="location" list="locationOptions" value="{{ current_location }}">
-                    <datalist id="locationOptions">
-                        {% for loc in location_options %}
-                            <option value="{{ loc }}"></option>
-                        {% endfor %}
-                    </datalist>
-                    <div class="text-muted small mt-2">输入城市或社区名</div>
-                    <button class="btn btn-primary btn-sm w-100 mt-2">更新定位</button>
-                </form>
+                {{ location_form('locationOptionsDrawer') }}
             </div>
 
             {# ----- 账号 ----- #}

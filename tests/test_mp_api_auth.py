@@ -223,6 +223,61 @@ def test_mp_elders_does_not_create_trigger_from_mock_weather(app, client, db_ses
     assert alert_weather['temperature_min'] is None
 
 
+def test_mp_elders_list_includes_action_fields_and_keeps_zero_temps(app, client, db_session, monkeypatch):
+    from core.db_models import Pair, User
+    from core.security import hash_short_code
+    from core.time_utils import utcnow
+    from core.usage import create_api_token
+
+    with app.app_context():
+        user = User(username='mp_zero_temp_user', role='user')
+        user.set_password('pw123456')
+        db_session.add(user)
+        db_session.commit()
+        pair = Pair(
+            caregiver_id=user.id,
+            community_code='都昌',
+            location_query='都昌',
+            elder_code='mp-zero-elder',
+            short_code='42424242',
+            short_code_hash=hash_short_code('42424242'),
+            status='active',
+            last_active_at=utcnow(),
+        )
+        db_session.add(pair)
+        db_session.commit()
+        plain = create_api_token(user.id, name='zero-temp')
+
+    monkeypatch.setattr(
+        'blueprints.mp_api.resolve_location',
+        lambda _label: {'location_code': '101240201', 'provider': 'QWeather'},
+    )
+    monkeypatch.setattr(
+        'blueprints.mp_api.get_weather_with_cache',
+        lambda _location: ({
+            'temperature': 2,
+            'temperature_max': 3,
+            'temperature_min': 0,
+            'data_source': 'QWeather',
+            'is_mock': False,
+        }, False),
+    )
+
+    response = client.get(
+        '/mp/api/v1/elders',
+        headers={'Authorization': f'Bearer {plain}'},
+    )
+
+    assert response.status_code == 200
+    item = response.get_json()['data'][0]
+    assert item['short_code'] == '42424242'
+    assert item['action_url']
+    assert '/action' in item['action_url'] or '/e/' in item['action_url'] or '/elder' in item['action_url']
+    assert item['today']['weather_available'] is True
+    assert item['today']['temperature_min'] == 0
+    assert item['today']['trigger'] == 'cold'
+
+
 def test_mp_elders_patch_updates_member_profile_fields(app, client, db_session):
     from core.db_models import FamilyMember, Pair, User
     from core.security import hash_short_code
