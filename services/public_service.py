@@ -15,6 +15,7 @@ from core.constants import GUEST_ID_PREFIX
 from core.extensions import db
 from core.security import hash_identifier, hash_pair_token, hash_short_code, rate_limit_key, verify_pair_token
 from core.time_utils import today_local, utcnow, ensure_utc_aware
+from core.notifications import create_notification
 from core.usage import log_usage_event
 from core.weather import (
     get_consecutive_hot_days,
@@ -576,9 +577,20 @@ def _render_action_page(
     )
 
 
+def _render_lookup_page(short_code='', entry_action=None, token=None):
+    return render_template(
+        'action_checkin.html',
+        stage='lookup',
+        short_code=short_code,
+        entry_action=entry_action,
+        token=token,
+    )
+
+
 def _resolve_action_routes(token=None, confirm_action=None, help_action=None, debrief_action=None):
     routes = {}
     if token:
+        routes['token'] = token
         routes['confirm_action'] = url_for('public.elder_token_checkin', token=token)
         routes['help_action'] = url_for('public.elder_token_help', token=token)
         routes['debrief_action'] = url_for('public.elder_token_debrief', token=token)
@@ -591,6 +603,43 @@ def _resolve_action_routes(token=None, confirm_action=None, help_action=None, de
     return routes
 
 
+def _notify_caregiver_of_help(pair):
+    caregiver_id = getattr(pair, 'caregiver_id', None)
+    if not caregiver_id:
+        return
+    location = (getattr(pair, 'location_query', None) or getattr(pair, 'community_code', None) or '').strip()
+    title = '监测对象发出求助'
+    message = f'短码 {pair.short_code} 的监测对象点击了「我需要帮助」。'
+    if location:
+        message += f' 地点：{location}'
+    action_url = url_for('user.caregiver_pair_detail', pair_id=pair.id)
+    create_notification(
+        caregiver_id,
+        title=title,
+        message=message,
+        level='danger',
+        category='help',
+        member_id=getattr(pair, 'member_id', None),
+        action_url=action_url,
+        meta={'pair_id': pair.id, 'short_code': pair.short_code},
+    )
+    caregiver = db.session.get(User, caregiver_id)
+    wx_uid = (getattr(caregiver, 'wxpusher_uid', None) or '').strip() if caregiver else ''
+    if not caregiver or not getattr(caregiver, 'push_enabled', False) or not wx_uid:
+        return
+    try:
+        from services.push import wxpusher
+
+        wxpusher.send(
+            wx_uid,
+            title,
+            message,
+            url=url_for('user.caregiver_pair_detail', pair_id=pair.id, _external=True),
+        )
+    except Exception as exc:
+        logger.warning('求助推送失败: %s', exc)
+
+
 def _handle_action_lookup(token=None, entry_action=None, confirm_action=None, help_action=None, debrief_action=None):
     if token:
         _store_pair_token(token)
@@ -598,11 +647,10 @@ def _handle_action_lookup(token=None, entry_action=None, confirm_action=None, he
     if request.method == 'POST':
         if _short_code_is_locked():
             flash('尝试次数过多，请稍后再试。', 'error')
-            return render_template(
-                'action_checkin.html',
-                stage='lookup',
+            return _render_lookup_page(
                 short_code=sanitize_input(request.form.get('short_code'), max_length=12) or '',
-                entry_action=entry_action
+                entry_action=entry_action,
+                token=token,
             )
 
         short_code = sanitize_input(request.form.get('short_code'), max_length=12) or ''
@@ -613,12 +661,7 @@ def _handle_action_lookup(token=None, entry_action=None, confirm_action=None, he
 
         if not short_code:
             flash('请输入短码', 'error')
-            return render_template(
-                'action_checkin.html',
-                stage='lookup',
-                short_code=short_code,
-                entry_action=entry_action
-            )
+            return _render_lookup_page(short_code=short_code, entry_action=entry_action, token=token)
 
         pair, error = _resolve_pair(short_code, token)
         if error:
@@ -630,12 +673,7 @@ def _handle_action_lookup(token=None, entry_action=None, confirm_action=None, he
                     flash('短码或令牌无效，请联系照护人确认。', 'error')
                 else:
                     flash(error, 'error')
-            return render_template(
-                'action_checkin.html',
-                stage='lookup',
-                short_code=short_code,
-                entry_action=entry_action
-            )
+            return _render_lookup_page(short_code=short_code, entry_action=entry_action, token=token)
 
         session['pair_session_id'] = pair.id
         session['pair_session_code'] = pair.short_code
@@ -667,12 +705,7 @@ def _handle_action_lookup(token=None, entry_action=None, confirm_action=None, he
         )
 
     short_code = sanitize_input(request.args.get('short_code'), max_length=12)
-    return render_template(
-        'action_checkin.html',
-        stage='lookup',
-        short_code=short_code,
-        entry_action=entry_action
-    )
+    return _render_lookup_page(short_code=short_code, entry_action=entry_action, token=token)
 
 
 def _resolve_pair_from_session_or_code(short_code, token=None):
@@ -803,6 +836,7 @@ def _handle_action_help(token=None, confirm_action=None, debrief_action=None):
         meta={'relay_stage': status.relay_stage},
     )
     _refresh_community_daily(pair.community_code, status_date)
+    _notify_caregiver_of_help(pair)
     flash('已记录求助，照护人将收到提醒。', 'success')
     action_routes = _resolve_action_routes(token=token, confirm_action=confirm_action, debrief_action=debrief_action)
     return _render_action_page(
@@ -1270,5 +1304,8 @@ def handle_logout():
         session.pop('guest_profile', None)
         session.pop('guest_assessment', None)
         session.pop('guest_id', None)
+    session.pop('pair_session_id', None)
+    session.pop('pair_session_code', None)
+    _clear_pair_token()
     logout_user()
     return redirect(url_for('public.index'))

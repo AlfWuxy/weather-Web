@@ -2,7 +2,7 @@
 {% from "partials/metric_info.html" import metric_info with context %}
 {% set needs_chartjs = true %}
 
-{% block title %}行动打卡 - 天气健康风险预测系统{% endblock %}
+{% block title %}行动打卡 · 宜老天气通{% endblock %}
 
 {% block content %}
 <div class="container my-4">
@@ -23,6 +23,9 @@
                     <div class="card-body">
                         <form method="POST" action="{{ entry_action or url_for('public.action_check') }}">
                             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                            {% if token %}
+                            <input type="hidden" name="token" value="{{ token }}">
+                            {% endif %}
                             <div class="mb-3">
                                 <label class="form-label">短码</label>
                                 <input class="form-control" name="short_code" value="{{ short_code or '' }}" placeholder="例如 123456" maxlength="12" required>
@@ -156,6 +159,9 @@
                         <hr>
                         <form method="POST" action="{{ confirm_action or url_for('public.action_confirm') }}">
                             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                            {% if token %}
+                            <input type="hidden" name="token" value="{{ token }}">
+                            {% endif %}
                             <input type="hidden" name="short_code" value="{{ pair.short_code }}">
                             <div class="mb-3">
                                 {% if actions %}
@@ -185,6 +191,9 @@
                         <hr>
                         <form method="POST" action="{{ help_action or url_for('public.action_help') }}">
                             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                            {% if token %}
+                            <input type="hidden" name="token" value="{{ token }}">
+                            {% endif %}
                             <input type="hidden" name="short_code" value="{{ pair.short_code }}">
                             <div class="d-flex flex-wrap gap-2 align-items-center">
                                 <button class="btn btn-danger btn-lg" type="submit">
@@ -216,6 +225,9 @@
                     <div class="card-body">
                         <form method="POST" action="{{ debrief_action or url_for('public.action_debrief') }}">
                             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                            {% if token %}
+                            <input type="hidden" name="token" value="{{ token }}">
+                            {% endif %}
                             <input type="hidden" name="short_code" value="{{ pair.short_code }}">
                             <div class="row g-3">
                                 <div class="col-md-4">
