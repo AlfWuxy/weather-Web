@@ -49,7 +49,7 @@
 |------|--------|------|
 | 巨型模块仍在 | 🟡 中 | `blueprints/analysis.py`（约 3300 行）、`community_risk_service.py`、`weather_service.py`、`community_risk.html` 仍过重，后续应按页面/用例拆分 |
 | 样式层叠过多 | 🟡 中 | 每页同时加载 `style.css`、`yilao.css`、`apple-polish.css` 与多套 motion/data-fx，长期应收敛成一套主题 |
-| 内容写死在代码里 | 🟡 中 | 每日提示、照护话术、避暑分档、指标解释、今日/长者标题、7 天照护建议已在 `data/content/`。慢病/ML/健康评估/社区「管控建议」以及 7 天 API 里的角色行动卡仍有代码内规则。 |
+| 内容写死在代码里 | 🟡 中 | 每日提示、照护话术、避暑分档、指标解释、今日/长者标题、7 天照护建议、社区优先行动已在 `data/content/`。慢病/ML/健康评估以及 7 天 API 里的角色行动卡仍有代码内规则。 |
 | 研究页仍在主路径 | 🟡 中 | 「AI 疾病预测」在模型未加载时已从导航和今日主页拿掉；`/ml-prediction` 直链仍在。仓库没有 `models/*.pkl` |
 | 小程序发布配置 | 🟡 中 | 公开仓库里 `miniprogram/config.js` 的 `API_BASE_URL` 必须留空；发布前在本地填写真实域名 |
 | 服务层依赖框架上下文 | 🟡 中 | 部分服务仍依赖 request/current_app，影响可测性 |
