@@ -77,128 +77,30 @@ class ChronicRiskService:
         self.rules_version = '1.0.0'
     
     def _init_recommendation_rules(self):
-        """初始化建议规则库"""
-        return {
-            # 高温相关规则
-            'heat_high_rr': {
-                'name': '高温风险升高',
-                'trigger': lambda ctx: ctx['rr'] >= 1.3 and ctx['temperature'] >= 32,
-                'priority': 'high',
-                'category': '高温风险',
-                'thresholds': {'temperature': '>=32', 'rr': '>=1.3'},
-                'context_fields': ['temperature', 'rr'],
-                'reason_template': '气温偏高（{temperature}°C），风险升高',
-                'template': '高温天气({temperature}°C)下您的{disease_type}风险显著增加(RR={rr:.2f})，建议：减少外出，保持室内凉爽，多饮水',
-                'diseases': ['cardiovascular', 'general']
-            },
-            'heat_night': {
-                'name': '热夜预警',
-                'trigger': lambda ctx: ctx.get('hot_night', False),
-                'priority': 'high',
-                'category': '热夜预警',
-                'thresholds': {'hot_night': True, 'hot_night_temp': '>=22'},
-                'context_fields': ['hot_night_temp'],
-                'reason_template': '预计夜间最低温度为 {hot_night_temp}°C',
-                'template': '今晚预计为热夜(预计夜间最低温度为 {hot_night_temp}°C)，心血管疾病风险增加，建议：使用空调或风扇，保持卧室凉爽',
-                'diseases': ['cardiovascular']
-            },
-            'heat_wave': {
-                'name': '热浪预警',
-                'trigger': lambda ctx: ctx.get('heat_wave_days', 0) >= 3,
-                'priority': 'urgent',
-                'category': '热浪预警',
-                'thresholds': {'heat_wave_days': '>=3'},
-                'context_fields': ['heat_wave_days'],
-                'reason_template': '连续高温{heat_wave_days}天，累积风险增加',
-                'template': '连续{heat_wave_days}天高温热浪，累积风险显著增加，建议：尽量待在室内，避免剧烈活动，如有不适立即就医',
-                'diseases': ['cardiovascular', 'general']
-            },
-            
-            # 低温相关规则
-            'cold_high_rr': {
-                'name': '低温风险升高',
-                'trigger': lambda ctx: ctx['rr'] >= 1.2 and ctx['temperature'] <= 5,
-                'priority': 'high',
-                'category': '低温风险',
-                'thresholds': {'temperature': '<=5', 'rr': '>=1.2'},
-                'context_fields': ['temperature', 'rr'],
-                'reason_template': '气温偏低（{temperature}°C），风险上升',
-                'template': '低温天气({temperature}°C)下您的{disease_type}风险增加(RR={rr:.2f})，建议：注意保暖，避免受凉',
-                'diseases': ['respiratory', 'cardiovascular']
-            },
-            'cold_wave': {
-                'name': '寒潮预警',
-                'trigger': lambda ctx: ctx.get('cold_wave_days', 0) >= 3,
-                'priority': 'urgent',
-                'category': '寒潮预警',
-                'thresholds': {'cold_wave_days': '>=3'},
-                'context_fields': ['cold_wave_days'],
-                'reason_template': '连续低温{cold_wave_days}天，风险持续',
-                'template': '连续{cold_wave_days}天低温寒潮，呼吸道疾病风险持续升高，建议：室内保暖，减少外出，预防感冒',
-                'diseases': ['respiratory']
-            },
-            
-            # 空气质量相关
-            'aqi_high': {
-                'name': '空气质量较差',
-                'trigger': lambda ctx: (ctx.get('aqi') or 0) >= 150,
-                'priority': 'high',
-                'category': '空气质量',
-                'thresholds': {'aqi': '>=150'},
-                'context_fields': ['aqi'],
-                'reason_template': '空气质量较差（AQI {aqi}）',
-                'template': '空气质量差(AQI={aqi})，呼吸系统疾病风险增加，建议：减少户外活动，外出佩戴口罩，关闭门窗',
-                'diseases': ['respiratory']
-            },
-            'aqi_moderate': {
-                'name': '空气质量一般',
-                'trigger': lambda ctx: 100 <= (ctx.get('aqi') or 0) < 150,
-                'priority': 'medium',
-                'category': '空气质量',
-                'thresholds': {'aqi': '100-149'},
-                'context_fields': ['aqi'],
-                'reason_template': '空气质量一般（AQI {aqi}）',
-                'template': '空气质量一般(AQI={aqi})，敏感人群建议减少户外运动',
-                'diseases': ['respiratory']
-            },
-            
-            # 慢病管理
-            'elderly_extreme_weather': {
-                'name': '老年极端天气',
-                'trigger': lambda ctx: ctx['age'] >= 65 and (ctx['temperature'] <= 5 or ctx['temperature'] >= 32),
-                'priority': 'high',
-                'category': '老年健康',
-                'thresholds': {'age': '>=65', 'temperature': '<=5 or >=32'},
-                'context_fields': ['age', 'temperature'],
-                'reason_template': '年龄较高且遇到极端天气',
-                'template': '您属于{age}岁老年人，在当前极端天气下需特别注意：定期测量血压，按时服药，如有不适及时就医',
-                'diseases': ['general']
-            },
-            'comorbidity_risk': {
-                'name': '多病共存',
-                'trigger': lambda ctx: len(ctx.get('chronic_diseases', [])) >= 2 and ctx['rr'] >= 1.2,
-                'priority': 'high',
-                'category': '多病共存',
-                'thresholds': {'disease_count': '>=2', 'rr': '>=1.2'},
-                'context_fields': ['disease_count', 'rr'],
-                'reason_template': '多种慢病叠加，风险提高',
-                'template': '您有{disease_count}种慢性病共存，当前天气条件下综合风险较高，建议：密切关注身体状况，保持规律用药',
-                'diseases': ['general']
-            },
-            
-            # 服药提醒
-            'medication_reminder': {
-                'name': '规律用药提醒',
-                'trigger': lambda ctx: ctx.get('has_chronic_disease', False),
-                'priority': 'low',
-                'category': '用药提醒',
-                'thresholds': {'has_chronic_disease': True},
-                'context_fields': ['disease_count'],
-                'reason_template': '慢病管理需要规律用药',
-                'template': '请按时服用您的慢性病药物，不要自行停药或改变剂量',
-                'diseases': ['general']
-            }
+        """初始化建议规则库：触发条件留在代码，文案从 JSON 读取。"""
+        from core.chronic_copy import load_chronic_recommendation_copy
+
+        copy = load_chronic_recommendation_copy()
+        triggers = {
+            'heat_high_rr': lambda ctx: ctx['rr'] >= 1.3 and ctx['temperature'] >= 32,
+            'heat_night': lambda ctx: ctx.get('hot_night', False),
+            'heat_wave': lambda ctx: ctx.get('heat_wave_days', 0) >= 3,
+            'cold_high_rr': lambda ctx: ctx['rr'] >= 1.2 and ctx['temperature'] <= 5,
+            'cold_wave': lambda ctx: ctx.get('cold_wave_days', 0) >= 3,
+            'aqi_high': lambda ctx: (ctx.get('aqi') or 0) >= 150,
+            'aqi_moderate': lambda ctx: 100 <= (ctx.get('aqi') or 0) < 150,
+            'elderly_extreme_weather': lambda ctx: ctx['age'] >= 65 and (
+                ctx['temperature'] <= 5 or ctx['temperature'] >= 32
+            ),
+            'comorbidity_risk': lambda ctx: len(ctx.get('chronic_diseases', [])) >= 2 and ctx['rr'] >= 1.2,
+            'medication_reminder': lambda ctx: ctx.get('has_chronic_disease', False),
         }
+        rules = {}
+        for rule_id, trigger in triggers.items():
+            payload = dict(copy['rules'][rule_id])
+            payload['trigger'] = trigger
+            rules[rule_id] = payload
+        return rules
     
     def get_age_amplifier(self, age, disease_type='general'):
         """获取年龄放大系数"""
@@ -601,13 +503,14 @@ class ChronicRiskService:
                 'applicable_diseases': rule.get('diseases', ['general'])
             })
         
-        # 至少有一条建议
         if not recommendations:
+            from core.chronic_copy import load_chronic_recommendation_copy
+            copy = load_chronic_recommendation_copy()
             recommendations.append({
                 'rule_id': 'default',
                 'category': '日常健康',
                 'priority': 'low',
-                'advice': '保持健康生活方式，适量运动，均衡饮食，如有不适及时就医',
+                'advice': copy['default_advice'],
                 'applicable_diseases': ['general']
             })
         
@@ -650,21 +553,19 @@ class ChronicRiskService:
                     actions.append(advice)
                 if len(actions) >= 5:
                     break
+        from core.chronic_copy import load_chronic_recommendation_copy
+        copy = load_chronic_recommendation_copy()
         if not actions:
-            actions = [
-                '注意补水，避免在高温或低温时段外出。',
-                '按时服药，规律作息，保持室内通风。',
-                '如有不适，请及时休息并观察。'
-            ]
+            actions = list(copy['fallback_actions'])
 
         # 紧急分流提示
         escalation = []
         if safe_context.get('rr', 1.0) >= 1.5 or safe_context.get('heat_wave_days', 0) >= 3 or safe_context.get('cold_wave_days', 0) >= 3:
-            escalation.append('如出现胸痛、呼吸困难、意识模糊等，请立即就医或拨打120。')
+            escalation.append(copy['escalation']['emergency'])
         if safe_context.get('age', 0) >= 75 or safe_context.get('disease_count', 0) >= 2:
-            escalation.append('建议及时联系家属或村医协助观察。')
+            escalation.append(copy['escalation']['family_help'])
         if (safe_context.get('aqi') or 0) >= 200:
-            escalation.append('若持续咳喘或胸闷，请联系医生评估。')
+            escalation.append(copy['escalation']['air_quality'])
 
         return {
             'reasons': reasons[:3],
