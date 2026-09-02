@@ -370,7 +370,8 @@
                             '湿度分项': d.risk_components.humidity if d.risk_components and d.risk_components.humidity is not none else '--',
                             '热夜分项': d.risk_components.hot_night if d.risk_components and d.risk_components.hot_night is not none else '--',
                             'PM2.5实际使用': ((d.pm25_used|string) ~ ' μg/m³') if d.pm25_used is not none else '--',
-                            'PM2.5来源': ('未来日直接值' if d.pm25_source == 'direct' else '当前实况复用（非未来预报）' if d.pm25_source == 'current_observation_reuse' else '未来日AQI×0.65代理' if d.pm25_source == 'aqi_proxy' else '当前实况AQI×0.65代理' if d.pm25_source == 'current_observation_aqi_proxy' else '默认AQI 50代理' if d.pm25_source == 'default_aqi_50' else '--'),
+                            'PM2.5来源': d.pm25_source_label or '--',
+                            'PM2.5是否计入评分': ('是' if d.pm25_in_score else '否'),
                             'AQI代理输入': d.pm25_aqi_used if d.pm25_source in ['aqi_proxy', 'current_observation_aqi_proxy', 'default_aqi_50'] and d.pm25_aqi_used is not none else '--',
                             '湿度实际使用': ((d.humidity_used|string) ~ '%' ~ ('（插补）' if d.humidity_imputed else '（直接）')) if d.humidity_used is not none else '--',
                             '夜间最低温实际使用': ((d.temp_min_used|string) ~ '°C' ~ ('（插补）' if d.temp_min_imputed else '（直接）')) if d.temp_min_used is not none else '--'

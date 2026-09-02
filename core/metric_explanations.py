@@ -176,9 +176,9 @@ METRIC_EXPLANATIONS = {
     },
     'forecast_exposure_score': {
         'anchor': 'forecast-exposure',
-        'title': '7 天复合暴露评分（0–100）',
-        'summary': '地区级天气与环境暴露分数。当前计算不使用家庭成员的慢病资料。',
-        'formula': 'Score = clip(0.34×Heat + 0.28×PM2.5 + 0.18×Humidity + 0.20×HotNight + SynergyBonus, 0, 100)',
+        'title': '7 天暴露评分（0–100）',
+        'summary': '地区级天气暴露分数。有当天污染物预报时才纳入 PM2.5；否则只按气温、湿度和热夜计分。不使用家庭成员的慢病资料。',
+        'formula': '有 PM 预报：clip(0.34×Heat + 0.28×PM2.5 + 0.18×Humidity + 0.20×HotNight + SynergyBonus, 0, 100)；无 PM 预报：clip(0.34×Heat + 0.18×Humidity + 0.20×HotNight + 热湿协同, 0, 100)',
         'variables': [
             'Heat = clip((校正平均温度−28)×6, 0, 100)',
             'PM2.5 = clip((PM2.5−35)×1.8, 0, 100)',
@@ -189,8 +189,8 @@ METRIC_EXPLANATIONS = {
         'thresholds': ['低 <45', '中 45–69.9', '高 ≥70'],
         'method': 'ForecastService 复合暴露规则',
         'window': '未来 7 天逐日预报',
-        'missing': '生产页面要求 7 天逐日最高温、最低温、平均温和湿度均为有限数，任一缺失时整页显示预报不可用。PM2.5 优先级：未来日直接值 → 当前实况 PM2.5 复用 → 未来日 AQI×0.65 → 当前实况 AQI×0.65 → 默认 AQI 50×0.65；浮层逐日标记真实来源。底层独立调用仍保留湿度60%与最低温回退，并明确标为插补。',
-        'limitations': ['地区级筛查分数', '不等于个人疾病概率', '当前实况复用不代表未来日空气质量预报', 'AQI 转 PM2.5 与默认 AQI 50 均为代理值'],
+        'missing': '生产页面要求 7 天逐日最高温、最低温、平均温和湿度均为有限数，任一缺失时整页显示预报不可用。PM2.5 优先级：未来日直接值 → 未来日 AQI×0.65 → 当前实况 PM2.5 复用（仅追溯，不计入评分）→ 当前实况 AQI×0.65（仅追溯）→ 默认 AQI 50（仅追溯）。浮层逐日标记是否计入评分。底层独立调用仍保留湿度60%与最低温回退，并明确标为插补。',
+        'limitations': ['地区级筛查分数', '不等于个人疾病概率', '当前实况复用和默认 AQI 50 不代表未来日空气质量，也不抬高热风险分数'],
         'source_file': 'services/forecast_service.py',
     },
     'forecast_visit_probability': {

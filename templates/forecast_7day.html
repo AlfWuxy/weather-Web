@@ -8,7 +8,7 @@
     <section class="section-heading yl-fade-up">
         <span class="section-kicker"><i class="bi bi-calendar-week"></i> 7 天健康预测</span>
         <h2>接下来一周,哪几天要特别留心?</h2>
-        <p>风险评分综合温度、PM2.5、湿度与热夜。当前是地区级暴露评分，不使用个人慢病资料。</p>
+        <p>有当天污染物预报时，评分才纳入 PM2.5；否则只按气温、湿度和热夜计算热风险，不会用今天的空气质量去填后面几天。</p>
     </section>
 
     <form method="GET" class="yl-section mb-4 yl-fade-up yl-fade-up-d1">
@@ -67,14 +67,15 @@
                             '湿度分项': d.risk_components.humidity if d.risk_components.humidity is not none else '--',
                             '热夜分项': d.risk_components.hot_night if d.risk_components.hot_night is not none else '--',
                             'PM2.5实际使用': ((d.pm25_used|string) ~ ' μg/m³') if d.pm25_used is not none else '--',
-                            'PM2.5来源': ('未来日直接值' if d.pm25_source == 'direct' else '当前实况复用（非未来预报）' if d.pm25_source == 'current_observation_reuse' else '未来日AQI×0.65代理' if d.pm25_source == 'aqi_proxy' else '当前实况AQI×0.65代理' if d.pm25_source == 'current_observation_aqi_proxy' else '默认AQI 50代理' if d.pm25_source == 'default_aqi_50' else '--'),
+                            'PM2.5来源': d.pm25_source_label or '--',
+                            'PM2.5是否计入评分': ('是' if d.pm25_in_score else '否'),
                             'AQI代理输入': d.pm25_aqi_used if d.pm25_source in ['aqi_proxy', 'current_observation_aqi_proxy', 'default_aqi_50'] and d.pm25_aqi_used is not none else '--',
                             '湿度实际使用': ((d.humidity_used|string) ~ '%' ~ ('（插补）' if d.humidity_imputed else '（直接）')) if d.humidity_used is not none else '--',
                             '夜间最低温实际使用': ((d.temp_min_used|string) ~ '°C' ~ ('（插补）' if d.temp_min_imputed else '（直接）')) if d.temp_min_used is not none else '--'
                         } %}
                         <span class="badge risk-badge {% if d.risk_level=='high' %}bg-danger-subtle{% elif d.risk_level=='mid' %}bg-warning-subtle{% elif d.risk_level=='low' %}bg-success-subtle{% else %}bg-secondary-subtle{% endif %}"
                               data-detail="温度 {{ d.temp_high }}°/{{ d.temp_low }}° · {{ d.condition }}">
-                            {% if d.risk_available %}风险 {{ d.risk_score }}{% else %}风险待计算{% endif %}
+                            {% if d.risk_available %}{% if d.pm25_in_score %}风险 {{ d.risk_score }}{% else %}热风险 {{ d.risk_score }}{% endif %}{% else %}风险待计算{% endif %}
                         </span>
                         {{ metric_info('forecast_exposure_score', forecast_context) }}
                     </div>
@@ -112,7 +113,7 @@
                         {% endif %}
                     </div>
                     {% endif %}
-                    <div class="why-tip">风险 {{ d.risk_score if d.risk_available else '待计算' }} · {{ d.condition }} · {{ d.temp_high }}°/{{ d.temp_low }}°</div>
+                    <div class="why-tip">{% if d.risk_available %}{% if d.pm25_in_score %}风险{% else %}热风险{% endif %} {{ d.risk_score }}{% else %}风险待计算{% endif %} · {{ d.condition }} · {{ d.temp_high }}°/{{ d.temp_low }}°</div>
                 </div>
             </div>
         </div>

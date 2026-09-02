@@ -170,3 +170,124 @@ def test_forecast_page_still_explains_missing_weather(client, db_session, monkey
 
     assert '7 天天气正在更新' in body
     assert '就诊负担升高' not in body
+
+
+def test_composite_exposure_does_not_score_non_forecast_pm25():
+    from services.forecast_service import ForecastService
+
+    service = ForecastService.__new__(ForecastService)
+    kwargs = dict(temperature=32, temp_min=24, humidity=80)
+
+    reused = service._composite_exposure_risk(
+        pm25=80,
+        pm25_origin='current_weather_context',
+        **kwargs,
+    )
+    current_aqi = service._composite_exposure_risk(
+        pm25=None,
+        aqi=180,
+        aqi_origin='current_weather_context',
+        **kwargs,
+    )
+    defaulted = service._composite_exposure_risk(**kwargs)
+    forecast_pm = service._composite_exposure_risk(pm25=80, **kwargs)
+    day_aqi = service._composite_exposure_risk(pm25=None, aqi=180, **kwargs)
+
+    assert reused['pm25_source'] == 'current_observation_reuse'
+    assert reused['pm25_in_score'] is False
+    assert reused['score_basis'] == 'heat_humidity_hot_night'
+    assert reused['score'] < forecast_pm['score']
+    assert reused['components']['pm25'] == forecast_pm['components']['pm25']
+
+    assert current_aqi['pm25_source'] == 'current_observation_aqi_proxy'
+    assert current_aqi['pm25_in_score'] is False
+    assert current_aqi['score'] < day_aqi['score']
+
+    assert defaulted['pm25_source'] == 'default_aqi_50'
+    assert defaulted['pm25_in_score'] is False
+    assert defaulted['score'] == reused['score']
+
+    assert forecast_pm['pm25_in_score'] is True
+    assert forecast_pm['score_basis'] == 'composite'
+    assert day_aqi['pm25_in_score'] is True
+
+
+def test_generate_7day_forecast_does_not_score_reused_current_pm25():
+    service = _service_with_history(fallback_thresholds=False)
+    service.qm_params = {}
+    start = today_local()
+    week = []
+    for idx in range(7):
+        day = start + __import__('datetime').timedelta(days=idx)
+        week.append({
+            'date': day.strftime('%Y-%m-%d'),
+            'temperature_mean': 32.0,
+            'temperature_min': 24.0,
+            'humidity': 80.0,
+        })
+
+    forecasts, summary = service.generate_7day_forecast(
+        week,
+        start_date=start,
+        context={'pm25': 80.0, 'aqi': 160.0},
+    )
+
+    assert forecasts
+    assert summary.get('health_forecast_available') is not False
+    sources = {(row.get('composite_exposure') or {}).get('pm25_source') for row in forecasts}
+    assert sources == {'current_observation_reuse'}
+    assert all(
+        (row.get('composite_exposure') or {}).get('pm25_in_score') is False
+        for row in forecasts
+    )
+    scores = [(row.get('composite_exposure') or {}).get('score') for row in forecasts]
+    with_forecast_pm = service._composite_exposure_risk(
+        temperature=32,
+        temp_min=24,
+        humidity=80,
+        pm25=80,
+    )['score']
+    assert all(score is not None and score < with_forecast_pm for score in scores)
+
+
+def test_forecast_cards_label_heat_risk_when_pm_is_reused():
+    from datetime import date as _date
+
+    from services.forecast_cards import build_forecast_cards
+
+    qweather_days = [{
+        'date': '2026-07-10',
+        'temperature_max': 33,
+        'temperature_min': 25,
+        'temperature_mean': 29,
+        'humidity': 72,
+        'condition': '晴',
+        'data_source': 'QWeather',
+        'is_mock': False,
+    }]
+    health_forecasts = [{
+        'date': '2026-07-10',
+        'composite_exposure': {
+            'score': 27.0,
+            'final_score': 27.0,
+            'pm25_source': 'current_observation_reuse',
+            'pm25_in_score': False,
+            'score_basis': 'heat_humidity_hot_night',
+            'components': {'heat': 24, 'pm25': 81, 'humidity': 24, 'hot_night': 72},
+            'inputs': {
+                'pm25': {
+                    'used_value': 80.0,
+                    'imputed': True,
+                    'source': 'current_observation_reuse',
+                    'included_in_score': False,
+                },
+            },
+        },
+    }]
+
+    card = build_forecast_cards(qweather_days, health_forecasts, _date(2026, 7, 10))[0]
+
+    assert card['risk_available'] is True
+    assert card['pm25_in_score'] is False
+    assert card['risk_label'] == '热风险低'
+    assert '高风险' not in card['risk_label']

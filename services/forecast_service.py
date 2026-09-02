@@ -305,17 +305,21 @@ class ForecastService:
         humidity_score = float(np.clip((hum - 70.0) * 2.4, 0.0, 100.0))
         hot_night_score = 100.0 if tmin >= 26 else 72.0 if tmin >= 24 else 45.0 if tmin >= 22 else 8.0
 
+        # 只有当天污染物预报才计入评分；实况复用和默认 AQI 50 只做追溯，不抬高 7 天风险。
+        pm25_in_score = pm25_source in ('direct', 'aqi_proxy')
+        scored_pollution = pollution_score if pm25_in_score else 0.0
+
         synergy_bonus = 0.0
-        if heat_score >= 45 and pollution_score >= 40:
+        if heat_score >= 45 and scored_pollution >= 40:
             synergy_bonus += 8.0
         if heat_score >= 45 and humidity_score >= 40:
             synergy_bonus += 6.0
-        if hot_night_score >= 70 and pollution_score >= 35:
+        if hot_night_score >= 70 and scored_pollution >= 35:
             synergy_bonus += 4.0
 
         pre_clip_score = (
             0.34 * heat_score
-            + 0.28 * pollution_score
+            + 0.28 * scored_pollution
             + 0.18 * humidity_score
             + 0.20 * hot_night_score
             + synergy_bonus
@@ -335,6 +339,8 @@ class ForecastService:
             'final_score': round(final_score, 1),
             'synergy_bonus': round(synergy_bonus, 1),
             'level': level,
+            'score_basis': 'composite' if pm25_in_score else 'heat_humidity_hot_night',
+            'pm25_in_score': pm25_in_score,
             'components': {
                 'heat': round(heat_score, 1),
                 'pm25': round(pollution_score, 1),
@@ -368,6 +374,7 @@ class ForecastService:
                     'detail_source': pm25_detail_source,
                     'aqi_used': round(aqi_used, 1) if aqi_used is not None else None,
                     'aqi_imputed': aqi_imputed,
+                    'included_in_score': pm25_in_score,
                 },
             },
         }
@@ -674,7 +681,7 @@ class ForecastService:
             past_temp_map = {
                 d: (e.get('temp', 15.0) if isinstance(e, dict) else float(e))
                 for d, e in forecast_temps_dict.items()
-                if d < target_date
+                if d <= target_date
             }
             _lags, sources = self.get_lag_temperature_profile(
                 target_date,
@@ -905,7 +912,7 @@ class ForecastService:
             past_temp_map = {
                 d: (e.get('temp', 15.0) if isinstance(e, dict) else float(e))
                 for d, e in forecast_temps_dict.items()
-                if d < target_date
+                if d <= target_date
             }
             lag_temps, sources = self.get_lag_temperature_profile(
                 target_date, 
