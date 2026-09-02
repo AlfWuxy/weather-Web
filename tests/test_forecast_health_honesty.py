@@ -352,3 +352,19 @@ def test_forecast_cards_label_heat_risk_when_pm_is_reused():
     assert card['pm25_in_score'] is False
     assert card['risk_label'] == '热风险低'
     assert '高风险' not in card['risk_label']
+
+
+def test_heat_risk_does_not_reuse_daytime_temp_as_night_min():
+    from services.heat_action_service import HeatActionService
+
+    service = HeatActionService()
+    missing_night = service.calculate_heat_risk({'temperature': 36, 'humidity': 70})
+    known_hot_night = service.calculate_heat_risk({
+        'temperature': 36,
+        'humidity': 70,
+        'temperature_min': 32,
+    })
+
+    assert missing_night['night_min'] != 36
+    assert missing_night['night_min'] is None
+    assert missing_night['risk_score'] < known_hot_night['risk_score']

@@ -12,8 +12,7 @@ class HeatActionService:
         heat_index = self._heat_index_c(temp, humidity)
 
         night_min = parse_float(weather_data.get('temperature_min'))
-        if night_min is None:
-            night_min = temp
+        night_score = self._normalize_night_temp(night_min)
 
         streak_days = consecutive_hot_days
         if streak_days is None:
