@@ -170,6 +170,29 @@
                             <input class="form-control mt-2" value="{{ last_api_token_plain }}" readonly>
                         </div>
                     {% endif %}
+                    {% if api_tokens %}
+                        <ul class="list-unstyled small mb-3">
+                            {% for token in api_tokens %}
+                            <li class="border rounded p-2 mb-2">
+                                <div class="d-flex justify-content-between align-items-start gap-2">
+                                    <div>
+                                        <div class="fw-semibold">{{ token.name or '未命名凭证' }}</div>
+                                        <div class="text-muted">创建于 {{ token.created_at.strftime('%Y-%m-%d %H:%M') if token.created_at else '-' }}</div>
+                                        <div class="text-muted">最近使用 {{ token.last_used_at.strftime('%Y-%m-%d %H:%M') if token.last_used_at else '尚未使用' }}</div>
+                                    </div>
+                                    <form method="POST" action="{{ url_for('user.profile') }}" class="flex-shrink-0">
+                                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                        <input type="hidden" name="form_id" value="revoke_api_token">
+                                        <input type="hidden" name="token_id" value="{{ token.id }}">
+                                        <button type="submit" class="btn btn-outline-danger btn-sm">撤销</button>
+                                    </form>
+                                </div>
+                            </li>
+                            {% endfor %}
+                        </ul>
+                    {% else %}
+                        <p class="text-muted small">还没有有效的绑定凭证。</p>
+                    {% endif %}
                     <form method="POST" action="{{ url_for('user.profile') }}">
                         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                         <input type="hidden" name="form_id" value="api_token">

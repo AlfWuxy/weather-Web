@@ -14,14 +14,14 @@ from core.extensions import db
 from core.guest import build_guest_profile, get_guest_assessment, is_guest_user
 from core.notifications import create_notification
 from core.time_utils import utcnow
-from core.usage import create_api_token
+from core.usage import create_api_token, list_active_api_tokens, revoke_api_token
 from core.weather import (
     ensure_user_location_valid,
     get_weather_with_cache,
     is_qweather_online_weather,
     normalize_location_name,
 )
-from utils.parsers import json_or_none, safe_json_loads
+from utils.parsers import json_or_none, parse_int, safe_json_loads
 from utils.validators import (
     sanitize_input,
     validate_age,
@@ -234,6 +234,14 @@ def profile():
                 flash('生成失败，请稍后重试。', 'error')
             return redirect(url_for('user.profile'))
 
+        if form_id == 'revoke_api_token':
+            token_id = parse_int(request.form.get('token_id'))
+            if revoke_api_token(current_user.id, token_id):
+                flash('已撤销该绑定凭证', 'success')
+            else:
+                flash('未能撤销该凭证', 'error')
+            return redirect(url_for('user.profile'))
+
         if form_id == 'password':
             old_password = request.form.get('old_password', '')
             new_password = request.form.get('new_password')
@@ -314,11 +322,13 @@ def profile():
     chronic_diseases_list = safe_json_loads(current_user.chronic_diseases, [])
 
     last_api_token_plain = session.pop('last_api_token_plain', None)
+    api_tokens = list_active_api_tokens(current_user.id)
     return render_template(
         'profile.html',
         communities=communities,
         chronic_diseases_list=chronic_diseases_list,
-        last_api_token_plain=last_api_token_plain
+        last_api_token_plain=last_api_token_plain,
+        api_tokens=api_tokens,
     )
 
 
