@@ -423,60 +423,9 @@ class ForecastService:
         }
 
     def _build_role_action_cards(self, forecasts, summary):
-        """按角色输出行动卡：居民 / 村医 / 社区干部。"""
-        high_days = [row for row in forecasts if (self._safe_float(row.get('probability_high_visits'), 0.0) or 0.0) >= 50]
-        composite_high_days = [row for row in forecasts if (row.get('composite_exposure') or {}).get('level') == '高']
-        scenario = summary.get('scenario_totals') or {}
-        baseline_total = self._safe_float(scenario.get('baseline_total'), 0.0) or 0.0
-        worst_total = self._safe_float(scenario.get('worst_case_total'), baseline_total) or baseline_total
-        extra = max(0.0, worst_total - baseline_total)
-
-        resident_cards = [
-            {
-                'priority': 'high' if high_days else 'medium',
-                'title': '居民日常行动',
-                'action': '根据预警概率调整外出时段，优先早晚活动，午后减少户外暴露。'
-            }
-        ]
-        if composite_high_days:
-            resident_cards.append({
-                'priority': 'high',
-                'title': '复合暴露防护',
-                'action': '出现“高温+污染/湿度”叠加风险，建议补水、降温并减少高强度活动。'
-            })
-
-        doctor_cards = [
-            {
-                'priority': 'high' if high_days else 'medium',
-                'title': '村医排班准备',
-                'action': f'未来7天最坏情景较基线多约 {round(extra, 1)} 人次，建议提前安排门急诊与随访。'
-            }
-        ]
-        if any((row.get('cap_semantics') or {}).get('urgency') == 'immediate' for row in forecasts):
-            doctor_cards.append({
-                'priority': 'high',
-                'title': '高危人群追踪',
-                'action': '对老年慢病与近期不适人群进行电话回访，必要时上门复核。'
-            })
-
-        community_cards = [
-            {
-                'priority': 'high' if len(high_days) >= 2 else 'medium',
-                'title': '社区资源调度',
-                'action': '根据高风险日分布，动态调整避暑点开放时段和宣传频次。'
-            },
-            {
-                'priority': 'medium',
-                'title': '公众信息发布',
-                'action': '同步发布“开始降雨时间/结束时间”和分时段行动建议，减少信息摩擦。'
-            }
-        ]
-
-        return {
-            'resident': resident_cards,
-            'doctor': doctor_cards,
-            'community': community_cards
-        }
+        """按角色输出行动卡：居民 / 照护 / 社区。口吻走 JSON，接口键保持 resident/doctor/community。"""
+        from core.forecast_copy import build_role_action_cards
+        return build_role_action_cards(forecasts, summary)
 
     def _calculate_predictability(self, lead_day, model_spread=None, model_count=1, external_score=None):
         """
