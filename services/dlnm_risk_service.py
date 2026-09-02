@@ -888,13 +888,36 @@ class DLNMRiskService:
         
         # 考虑滞后效应
         if lag_temperatures is not None and len(lag_temperatures) > 0:
-            # 确保滞后温度都是数值
             clean_lag_temps = []
+            lags_complete = True
             for t in lag_temperatures:
                 try:
-                    clean_lag_temps.append(float(t) if t is not None else temperature)
+                    parsed = float(t)
                 except (TypeError, ValueError):
-                    clean_lag_temps.append(temperature)
+                    lags_complete = False
+                    break
+                if not np.isfinite(parsed):
+                    lags_complete = False
+                    break
+                clean_lag_temps.append(parsed)
+            if not lags_complete:
+                return None, {
+                    'error': '滞后气温缺测，相对风险暂不计算',
+                    'calculation_branch': 'lag_unavailable',
+                    'base_rr': None,
+                    'raw_dlnm_rr': None,
+                    'disease_modifier': None,
+                    'dlnm_disease_modifier': None,
+                    'age_modifier': None,
+                    'dlnm_age_modifier': None,
+                    'uncapped_final_rr': None,
+                    'dlnm_adjusted_rr': None,
+                    'rr_cap': None,
+                    'rr_cap_applied': False,
+                    'final_rr': None,
+                    'temperature': temperature,
+                    'mmt': mmt,
+                }
             if clean_lag_temps:
                 rr = self._apply_lag_effects(temperature, clean_lag_temps, rr)
         

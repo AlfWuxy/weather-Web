@@ -207,6 +207,28 @@ def test_generate_map_passes_lag_temperatures_to_dlnm(monkeypatch):
     assert result["macro_weather"]["lag_temperatures_used"] == 4
 
 
+def test_generate_map_does_not_shift_lags_when_a_day_is_missing(monkeypatch):
+    service = _build_service_with_fixed_profile()
+    captured = {}
+
+    class StubDLNM:
+        def calculate_rr(self, temperature, lag_temperatures=None):
+            captured["lag_temperatures"] = lag_temperatures
+            return 1.8, {}
+
+    monkeypatch.setattr(
+        "services.dlnm_risk_service.get_dlnm_service",
+        lambda: StubDLNM(),
+    )
+
+    result = service.generate_community_risk_map(
+        {"temperature": 10, "lag_temperatures": [9, None, 7]}
+    )
+
+    assert captured["lag_temperatures"] is None
+    assert result["macro_weather"]["lag_temperatures_used"] == 0
+
+
 def test_generate_map_fails_closed_when_dlnm_rr_invalid(monkeypatch):
     service = _build_service_with_fixed_profile()
 

@@ -48,6 +48,21 @@ def test_generate_7day_forecast_skips_health_when_lags_are_climatology():
     assert '观测' in summary['health_forecast_reason']
 
 
+def test_lag_profile_does_not_invent_15_when_history_and_climatology_missing():
+    from services.forecast_service import ForecastService
+
+    service = ForecastService.__new__(ForecastService)
+    service.weather_history = pd.DataFrame()
+    service.qm_params = {}
+
+    lags, sources = service.get_lag_temperature_profile(today_local())
+
+    assert 15.0 not in lags
+    assert all(value is None for value in lags)
+    assert sources
+    assert all(src == 'missing' for src in sources)
+
+
 def test_generate_7day_forecast_skips_health_when_visit_baseline_is_fallback():
     service = _service_with_history(fallback_thresholds=True)
     forecasts, summary = service.generate_7day_forecast(

@@ -79,6 +79,34 @@ def test_dlnm_trained_without_mmt_does_not_invent_20_or_23():
     assert breakdown['calculation_branch'] == 'mmt_unavailable'
 
 
+def test_dlnm_does_not_fill_missing_lags_with_current_temperature():
+    from services.dlnm_risk_service import DLNMRiskService
+
+    service = object.__new__(DLNMRiskService)
+    service.model_trained = True
+    service.mmt = 20.0
+    service.disease_specific_rr = {}
+    service.rr_cap_cumulative = 3.5
+    service.literature_weight = 0.3
+    service.literature_priors = {'age_modifiers': {}}
+    service._get_base_rr = lambda _temperature: 1.25
+    captured = {}
+
+    def unexpected_apply(current_temp, lag_temps, base_rr):
+        captured['lags'] = list(lag_temps)
+        captured['current'] = current_temp
+        return 9.99
+
+    service._apply_lag_effects = unexpected_apply
+
+    final_rr, breakdown = service.calculate_rr(32, lag_temperatures=[32, None, 30])
+
+    assert captured == {}
+    assert final_rr is None
+    assert breakdown['calculation_branch'] == 'lag_unavailable'
+    assert breakdown.get('final_rr') is None
+
+
 def test_dlnm_breakdown_marks_cap_without_changing_result():
     from services.dlnm_risk_service import DLNMRiskService
 

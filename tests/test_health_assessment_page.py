@@ -690,6 +690,17 @@ def test_assessment_without_temperature_does_not_invent_20(db_session):
         )
 
 
+def test_health_lag_extract_does_not_shift_when_a_day_is_missing():
+    from services.health_risk_service import HealthRiskService
+
+    lags = HealthRiskService()._extract_lag_temperatures(
+        {'lag_temperatures': [31, None, 29]},
+        32,
+    )
+
+    assert lags is None
+
+
 def test_missing_chronic_score_is_not_fused_as_30(monkeypatch, db_session):
     from services.health_risk_service import HealthRiskService
 

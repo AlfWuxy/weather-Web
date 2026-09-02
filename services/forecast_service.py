@@ -627,8 +627,8 @@ class ForecastService:
                 lag_profile.append(float(self.qm_params['mean']))
                 data_sources.append('climatology')
             else:
-                lag_profile.append(15.0)  # 默认值
-                data_sources.append('default')
+                lag_profile.append(None)
+                data_sources.append('missing')
         
         return lag_profile, data_sources
 

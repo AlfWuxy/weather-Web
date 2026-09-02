@@ -508,9 +508,12 @@ class HealthRiskService:
             lag_temps = []
             for value in values:
                 try:
-                    lag_temps.append(float(value))
+                    parsed = float(value)
                 except (TypeError, ValueError):
-                    continue
+                    return None
+                if not math.isfinite(parsed):
+                    return None
+                lag_temps.append(parsed)
             if not lag_temps:
                 continue
             if abs(lag_temps[0] - float(current_temp)) > 0.01:
