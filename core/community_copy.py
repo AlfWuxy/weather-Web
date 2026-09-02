@@ -6,7 +6,10 @@ from functools import lru_cache
 from pathlib import Path
 
 _TIPS_PATH = Path(__file__).resolve().parents[1] / 'data' / 'content' / 'community_action_tips.json'
-_REQUIRED_KEYS = ('heading', 'many_high_risk', 'high_aging', 'hot', 'cold', 'extra_visits', 'routine')
+_REQUIRED_KEYS = (
+    'heading', 'many_high_risk', 'high_aging', 'hot', 'cold', 'extra_visits', 'routine', 'equity'
+)
+_EQUITY_KEYS = ('heat', 'data_gap', 'routine')
 
 
 @lru_cache(maxsize=1)
@@ -17,6 +20,15 @@ def load_community_action_tips():
     missing = [key for key in _REQUIRED_KEYS if not payload.get(key)]
     if missing:
         raise ValueError(f'community_action_tips.json missing: {", ".join(missing)}')
+    equity = payload.get('equity')
+    if not isinstance(equity, dict):
+        raise ValueError('community_action_tips.json equity must be an object')
+    equity_missing = [
+        key for key in _EQUITY_KEYS
+        if not (isinstance(equity.get(key), dict) and equity[key].get('advice'))
+    ]
+    if equity_missing:
+        raise ValueError(f'community_action_tips.json equity missing: {", ".join(equity_missing)}')
     return payload
 
 
@@ -100,3 +112,20 @@ def generate_community_action_tips(high_risk_communities, weather_data):
             suggestions.append(tip)
 
     return suggestions
+
+
+def equity_recommended_action(row):
+    """Caregiver-facing equity action; skip clinic staffing language."""
+    copy = load_community_action_tips()['equity']
+    try:
+        heat_level = int((row or {}).get('heatrisk_level') or 0)
+    except (TypeError, ValueError):
+        heat_level = 0
+    uncertainty = _safe_float((row or {}).get('uncertainty_index')) or 0.0
+    if heat_level >= 3:
+        entry = copy['heat']
+    elif uncertainty >= 70:
+        entry = copy['data_gap']
+    else:
+        entry = copy['routine']
+    return entry.get('advice') or ''

@@ -1190,14 +1190,9 @@ class CommunityRiskService:
                 reverse=True
             )[:5]
 
+        from core.community_copy import equity_recommended_action
         priority_rows = []
         for row in priority_candidates[:8]:
-            if int(row.get('heatrisk_level') or 0) >= 3:
-                action = '优先安排巡访与高风险人群随访，必要时增加临时接诊能力。'
-            elif float(row.get('uncertainty_index') or 0.0) >= 70:
-                action = '优先补全数据与病例核验，避免高脆弱社区因样本不足低估风险。'
-            else:
-                action = '优先开展健康宣教与分层干预，提前准备防暑/防寒资源。'
             priority_rows.append({
                 'community': row.get('community'),
                 'equity_stratum': row.get('equity_stratum', 'Q4'),
@@ -1205,7 +1200,7 @@ class CommunityRiskService:
                 'risk_index': round(float(row.get('risk_index') or 0.0), 1),
                 'heatrisk_level': int(row.get('heatrisk_level') or 0),
                 'uncertainty_index': round(float(row.get('uncertainty_index') or 0.0), 1),
-                'recommended_action': action
+                'recommended_action': equity_recommended_action(row)
             })
         equity_priority_count = len(priority_rows)
 
