@@ -80,6 +80,24 @@ def test_generate_7day_forecast_skips_health_when_a_day_has_no_temperature():
     assert '气温' in summary['health_forecast_reason']
 
 
+def test_composite_exposure_does_not_invent_20_when_temperature_missing():
+    from services.forecast_service import ForecastService
+
+    service = ForecastService.__new__(ForecastService)
+    try:
+        result = service._composite_exposure_risk(
+            temperature=None,
+            temp_min=24,
+            humidity=80,
+        )
+    except ValueError as exc:
+        assert '气温' in str(exc)
+        return
+    used = ((result.get('inputs') or {}).get('temperature') or {}).get('used_value')
+    assert used != 20.0
+    assert (result.get('inputs') or {}).get('temperature', {}).get('imputed') is not True
+
+
 def test_live_forecast_service_does_not_emit_visit_burden_from_stale_csv():
     from services.forecast_service import ForecastService
 

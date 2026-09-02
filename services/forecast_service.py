@@ -252,8 +252,10 @@ class ForecastService:
         输出 0-100 及分项贡献。
         """
         temp_input = self._safe_float(temperature, None)
-        temp_imputed = temp_input is None
-        temp = 20.0 if temp_imputed else temp_input
+        if temp_input is None:
+            raise ValueError('请提供气温')
+        temp_imputed = False
+        temp = temp_input
 
         tmin_input = self._safe_float(temp_min, None)
         temp_min_imputed = tmin_input is None
