@@ -34,6 +34,18 @@ def test_dlnm_breakdown_exposes_raw_and_internal_modifiers():
     assert breakdown['rr_cap_applied'] is False
 
 
+def test_dlnm_calculate_rr_does_not_invent_20_when_temperature_missing():
+    from services.dlnm_risk_service import DLNMRiskService
+
+    service = object.__new__(DLNMRiskService)
+    service.model_trained = False
+
+    with pytest.raises(ValueError, match='气温'):
+        service.calculate_rr(None)
+    with pytest.raises(ValueError, match='气温'):
+        service.calculate_rr('bad')
+
+
 def test_dlnm_untrained_branch_keeps_uniform_breakdown():
     from services.dlnm_risk_service import DLNMRiskService
 

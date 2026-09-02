@@ -837,9 +837,11 @@ class DLNMRiskService:
         """
         # 确保温度为数值类型
         try:
-            temperature = float(temperature) if temperature is not None else 20.0
+            temperature = float(temperature)
         except (TypeError, ValueError):
-            temperature = 20.0
+            raise ValueError('请提供气温')
+        if not np.isfinite(temperature):
+            raise ValueError('请提供气温')
         
         # 如果模型未训练，使用简化公式
         if not self.model_trained:
