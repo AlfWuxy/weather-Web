@@ -70,29 +70,9 @@ def _relay_stage_rank(stage):
 
 
 def _action_plan(risk_label):
-    if risk_label == '极高':
-        return [
-            {'id': 'stay_cool', 'title': '留在有降温条件的室内', 'detail': '尽量避免外出，保持室内通风降温。'},
-            {'id': 'contact_now', 'title': '立即联系照护人/邻里', 'detail': '提前告知今日风险与行动安排。'},
-            {'id': 'cooling_center', 'title': '条件不足时优先去避暑点', 'detail': '优先选择就近、开放的避暑场所。'}
-        ]
-    if risk_label == '高风险':
-        return [
-            {'id': 'stay_indoor', 'title': '尽量待在阴凉通风处', 'detail': '避开正午高温时段外出。'},
-            {'id': 'hydrate', 'title': '少量多次补水', 'detail': '身边备好水或淡盐饮品。'},
-            {'id': 'check_in', 'title': '安排每日确认', 'detail': '与家人/邻里保持联系。'}
-        ]
-    if risk_label == '中风险':
-        return [
-            {'id': 'avoid_sun', 'title': '减少连续暴晒', 'detail': '户外活动分段进行。'},
-            {'id': 'cooling', 'title': '准备降温物品', 'detail': '风扇、湿毛巾或遮阳物品。'},
-            {'id': 'watch_signs', 'title': '关注体感变化', 'detail': '感到不适及时休息。'}
-        ]
-    return [
-        {'id': 'water', 'title': '规律补水', 'detail': '保持日常饮水习惯。'},
-        {'id': 'ventilate', 'title': '室内通风', 'detail': '早晚开窗换气。'},
-        {'id': 'shade', 'title': '适度遮阳', 'detail': '外出注意遮阳防晒。'}
-    ]
+    from core.daily_tips import action_plan_for_risk
+
+    return action_plan_for_risk(risk_label)
 
 
 def _generate_short_code():

@@ -305,7 +305,7 @@
                 {% if ml_model_available %}
                 <a class="nav-link {% if nav_endpoint == 'tools.ml_prediction' %}active{% endif %}" href="{{ url_for('tools.ml_prediction') }}" data-nav-key="ml-prediction" {% if nav_endpoint == 'tools.ml_prediction' %}aria-current="page"{% endif %}><i class="bi bi-cpu me-2"></i>AI 疾病预测</a>
                 {% endif %}
-                <a class="nav-link {% if nav_endpoint == 'tools.forecast_7day' %}active{% endif %}" href="{{ url_for('tools.forecast_7day') }}" data-nav-key="forecast" {% if nav_endpoint == 'tools.forecast_7day' %}aria-current="page"{% endif %}><i class="bi bi-calendar-week me-2"></i>7 天健康预测</a>
+                <a class="nav-link {% if nav_endpoint == 'tools.forecast_7day' %}active{% endif %}" href="{{ url_for('tools.forecast_7day') }}" data-nav-key="forecast" {% if nav_endpoint == 'tools.forecast_7day' %}aria-current="page"{% endif %}><i class="bi bi-calendar-week me-2"></i>7 天预报</a>
                 <a class="nav-link {% if nav_endpoint == 'tools.chronic_risk' %}active{% endif %}" href="{{ url_for('tools.chronic_risk') }}" data-nav-key="chronic-risk" {% if nav_endpoint == 'tools.chronic_risk' %}aria-current="page"{% endif %}><i class="bi bi-heart-pulse me-2"></i>慢病风险评估</a>
                 <a class="nav-link {% if nav_endpoint == 'tools.ai_qa' %}active{% endif %}" href="{{ url_for('tools.ai_qa') }}" data-nav-key="ai-qa" {% if nav_endpoint == 'tools.ai_qa' %}aria-current="page"{% endif %}><i class="bi bi-chat-dots me-2"></i>AI 提问</a>
                 {% if not nav_is_guest %}
