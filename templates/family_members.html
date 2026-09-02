@@ -83,7 +83,7 @@
         <div class="row g-3 yl-fade-up yl-fade-up-d2">
             {% for m in family_members %}
             <div class="col-md-6 col-xl-4">
-                <div class="card member-card risk-{{ m.risk_level or 'low' }} h-100">
+                <div class="card member-card risk-{{ m.risk_level or 'unknown' }} h-100">
                     <div class="card-body">
                         <div class="d-flex align-items-center gap-3 mb-3">
                             <div class="member-avatar">{{ m.name[:1] }}</div>
@@ -93,7 +93,7 @@
                                     {{ m.age }}岁 · {{ m.gender or '—' }} · 与我的关系:{{ m.relation or '—' }}
                                 </div>
                             </div>
-                            <span class="risk-badge risk-{{ m.risk_level or 'low' }} badge">{{ m.risk_label or '低风险' }}</span>
+                            <span class="risk-badge risk-{{ m.risk_level or 'unknown' }} badge">{{ m.risk_label or '风险未知' }}</span>
                             {{ metric_info('member_risk_score', {'成员': m.name, '本次得分': m.risk.score if m.risk else '--', '原因': m.risk.reasons|join('、') if m.risk and m.risk.reasons else '暂无加分原因'}) }}
                         </div>
 

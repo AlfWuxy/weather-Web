@@ -431,7 +431,7 @@
                         <div class="fw-semibold text-truncate">{{ m.name }}</div>
                         <div class="text-muted" style="font-size:.8rem;">{{ m.age }}岁 · {{ m.location or '未设定所在地' }}</div>
                     </div>
-                    <span class="risk-badge risk-{{ m.risk_level or 'low' }} badge">{{ m.risk_label or '低' }}</span>
+                    <span class="risk-badge risk-{{ m.risk_level or 'unknown' }} badge">{{ m.risk_label or '风险未知' }}</span>
                 </a>
                 {% endfor %}
             </div>

@@ -220,6 +220,39 @@ def test_family_member_delete_unlinks_pairs_and_related_rows(client, db_session)
     assert all(event.member_id is None for event in leftover_events)
 
 
+def test_compute_member_risk_without_age_is_unknown():
+    from types import SimpleNamespace
+
+    from core.health_profiles import compute_member_risk
+
+    unknown = compute_member_risk(SimpleNamespace(age=None, chronic_diseases=None), None)
+    assert unknown['level'] == 'unknown'
+    assert unknown['label'] == '风险未知'
+    assert unknown['score'] is None
+
+    aged = compute_member_risk(SimpleNamespace(age=76, chronic_diseases=None), None)
+    assert aged['level'] == 'low'
+    assert aged['score'] == 25
+    assert '老年' in aged['reasons']
+
+
+def test_family_members_page_does_not_invent_low_risk_when_age_missing(client, db_session):
+    from core.db_models import FamilyMember
+
+    user = _create_user(db_session, username='family_unknown_risk_user')
+    member = FamilyMember(user_id=user.id, name='邻居阿婆', relation='邻居', age=None, gender='女性')
+    db_session.add(member)
+    db_session.commit()
+    _login_as(client, user.id)
+
+    body = client.get('/family-members').get_data(as_text=True)
+    assert '邻居阿婆' in body
+    assert '风险未知' in body
+    assert "risk-label or '低风险'" not in body
+    card = body[body.index('邻居阿婆'): body.index('邻居阿婆') + 800]
+    assert '低风险' not in card
+
+
 def test_family_member_pages_expose_delete_and_toggle_forms(client, db_session):
     """删除和开关提醒路由已存在，页面必须给出可提交的表单。"""
     from core.db_models import FamilyMember, FamilyMemberProfile

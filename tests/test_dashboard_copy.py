@@ -26,6 +26,16 @@ def test_dashboard_headlines_do_not_treat_unknown_as_low():
     assert copy['elder']['empty_plan']['title'] == '先做好日常防护'
 
 
+def test_dashboard_family_cards_do_not_invent_low_when_risk_missing():
+    today_html = (_REPO_ROOT / 'templates' / 'user_dashboard.html').read_text(encoding='utf-8')
+    family_html = (_REPO_ROOT / 'templates' / 'family_members.html').read_text(encoding='utf-8')
+    assert "m.risk_label or '低'" not in today_html
+    assert "m.risk_level or 'low'" not in today_html
+    assert "m.risk_label or '低风险'" not in family_html
+    assert "m.risk_level or 'low'" not in family_html
+    assert "m.risk_label or '风险未知'" in family_html
+
+
 def test_dashboard_templates_read_headlines_from_json():
     from core.dashboard_copy import load_dashboard_copy
 

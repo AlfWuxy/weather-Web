@@ -194,11 +194,25 @@ def member_weather_triggered(profile, weather):
 
 
 def compute_member_risk(member, profile):
-    """估算成员健康风险"""
-    score = 15
-    reasons = []
+    """估算成员健康风险。未填写年龄时不编造低风险。"""
+    unknown = {
+        'score': None,
+        'level': 'unknown',
+        'label': '风险未知',
+        'reasons': ['未填写年龄'],
+    }
+    raw_age = getattr(member, 'age', None)
+    if raw_age is None or str(raw_age).strip() == '':
+        return unknown
+    try:
+        age = int(raw_age)
+    except (TypeError, ValueError):
+        return unknown
+    if age < 1:
+        return unknown
 
-    age = member.age or 0
+    score = 0
+    reasons = []
     if age >= 80:
         score += 30
         reasons.append('高龄')

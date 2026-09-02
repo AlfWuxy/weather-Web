@@ -166,7 +166,8 @@ def family_members():
             chronic_count += 1
 
         risk = compute_member_risk(member, profile)
-        risk_counts[risk['level']] += 1
+        if risk['level'] in risk_counts:
+            risk_counts[risk['level']] += 1
         completion = compute_profile_completion(member, profile)
         completion_values.append(completion['percent'])
 
