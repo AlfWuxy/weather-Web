@@ -49,7 +49,7 @@
 |------|--------|------|
 | 巨型模块仍在 | 🟡 中 | `blueprints/analysis.py`（约 3300 行）、`community_risk_service.py`、`weather_service.py`、`community_risk.html` 仍过重，后续应按页面/用例拆分 |
 | 样式层叠过多 | 🟡 中 | 每页同时加载 `style.css`、`yilao.css`、`apple-polish.css` 与多套 motion/data-fx，长期应收敛成一套主题 |
-| 内容写死在代码里 | 🟡 中 | 每日提示、照护话术、避暑分档、指标解释、今日/长者标题、7 天照护建议与角色卡、社区优先行动与公平性行动、健康评估建议、慢病规则文案已在 `data/content/`。ML 社区建议和血压/血糖 vitals 提示仍有代码内规则。 |
+| 内容写死在代码里 | 🟡 中 | 每日提示、照护话术、避暑分档、指标解释、今日/长者标题、7 天照护建议与角色卡、社区优先行动与公平性行动、健康评估建议、慢病规则文案、ML 个人/社区建议已在 `data/content/`。血压/血糖 vitals 提示仍有代码内规则。 |
 | 研究页仍在主路径 | 🟡 中 | 「AI 疾病预测」在模型未加载时已从导航和今日主页拿掉；`/ml-prediction` 直链仍在。仓库没有 `models/*.pkl` |
 | 小程序发布配置 | 🟡 中 | 公开仓库里 `miniprogram/config.js` 的 `API_BASE_URL` 必须留空；发布前在本地填写真实域名 |
 | 服务层依赖框架上下文 | 🟡 中 | 部分服务仍依赖 request/current_app，影响可测性 |
@@ -61,7 +61,7 @@
 面向长期维护、可持续更新内容的网站 + 小程序，建议按这个顺序收敛，而不是继续加研究页：
 
 1. **一条主路径**：今天风险 → 提醒家人 → 记录是否做到 → 附近避暑。Web 主导航保持「今天 / 照护 / 7 天 / 社区风险 / 老人模式」，研究分析只留在管理员。小程序保持薄客户端：档案、预警、话术；打卡和避暑在网页完成。
-2. **内容与代码分离**：每日行动提示已进入 `data/content/daily_action_tips.json`；照护提醒话术已进入 `data/content/caregiver_tip_scripts.json`（小程序同文案副本在 `miniprogram/content/`，改一处必须同步另一处）；避暑页导语、页脚和温度分档已进入 `data/content/cooling_page.json`；指标说明已进入 `data/content/metric_explanations.json`；今日页/长者页标题和空清单已进入 `data/content/dashboard_copy.json`；7 天「本周建议」和角色行动卡已进入 `data/content/forecast_week_tips.json`；社区风险页「优先行动」和公平性行动已进入 `data/content/community_action_tips.json`；健康评估建议已进入 `data/content/health_assessment_tips.json`；慢病规则文案已进入 `data/content/chronic_recommendation_copy.json`。改 JSON 后需重启 Flask（loader 有 `lru_cache`）。下一步再抽 ML 社区建议。`docs/REFACTOR_PLAN.md` 是 2026-01 历史稿，以本节为准。
+2. **内容与代码分离**：每日行动提示已进入 `data/content/daily_action_tips.json`；照护提醒话术已进入 `data/content/caregiver_tip_scripts.json`（小程序同文案副本在 `miniprogram/content/`，改一处必须同步另一处）；避暑页导语、页脚和温度分档已进入 `data/content/cooling_page.json`；指标说明已进入 `data/content/metric_explanations.json`；今日页/长者页标题和空清单已进入 `data/content/dashboard_copy.json`；7 天「本周建议」和角色行动卡已进入 `data/content/forecast_week_tips.json`；社区风险页「优先行动」和公平性行动已进入 `data/content/community_action_tips.json`；健康评估建议已进入 `data/content/health_assessment_tips.json`；慢病规则文案已进入 `data/content/chronic_recommendation_copy.json`；ML 个人/社区建议已进入 `data/content/ml_recommendation_copy.json`。改 JSON 后需重启 Flask（loader 有 `lru_cache`）。下一步再抽血压/血糖 vitals 提示。`docs/REFACTOR_PLAN.md` 是 2026-01 历史稿，以本节为准。
 3. **样式一套**：合并 `style.css` / `yilao.css` / `apple-polish.css`，motion 按需加载，去掉对每页都生效的研究仪表盘装饰。
 4. **拆巨型文件**：`analysis.py` 按 heatmap/lag/history/alerts/reports 拆蓝图；`community_risk.html` 拆成地图组件 + 说明组件。
 5. **双端同一领域模型**：Web 家庭成员与小程序 elders 共用同一套档案字段与删除/解绑语义（本轮已对齐 PATCH 与删除解绑）。
