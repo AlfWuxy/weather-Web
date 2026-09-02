@@ -215,8 +215,8 @@ def test_care_destination_is_role_aware(client, db_session, role, destination):
     [
         ('user', '/community-risk', '查看社区风险'),
         ('caregiver', '/community-risk', '查看社区风险'),
-        ('community', '/community', '进入社区看板'),
-        ('admin', '/community', '进入社区看板'),
+        ('community', '/community', '进入社区工作台'),
+        ('admin', '/community', '进入社区工作台'),
     ],
 )
 def test_role_entry_uses_authorized_community_destination(

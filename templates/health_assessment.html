@@ -7,8 +7,15 @@
     <section class="section-heading yl-fade-up">
         <span class="section-kicker"><i class="bi bi-clipboard-pulse"></i> 健康评估</span>
         <h2>健康风险评估</h2>
-        <p>5 项快速筛查,大约需要 2 分钟,帮你建立一份当天风险画像。</p>
+        <p>5 项快速筛查大约需要 2 分钟。提交前需要已填写年龄，并答完全部题目。</p>
     </section>
+
+    {% if not profile_age %}
+    <div class="alert alert-warning" role="status">
+        请先在个人设置填写年龄，再提交评估。年龄会进入个人易感性，系统不会用默认岁数代替。
+        <a href="{{ url_for('user.profile') }}" class="alert-link">去个人设置</a>
+    </div>
+    {% endif %}
 
     {# 进度条 #}
     <div class="yl-section yl-fade-up yl-fade-up-d1 mb-3" style="padding:16px 22px;">
@@ -62,7 +69,7 @@
                         <div class="d-flex flex-wrap gap-2">
                             {% for val, label in q.options %}
                             <label class="btn btn-outline-secondary assess-choice">
-                                <input type="radio" name="{{ q.id }}" value="{{ val }}" class="d-none assess-opt"{% if last_screening.get(q.id) == val %} checked{% endif %}>
+                                <input type="radio" name="{{ q.id }}" value="{{ val }}" class="d-none assess-opt" required{% if last_screening.get(q.id) == val %} checked{% endif %}>
                                 {{ label }}
                             </label>
                             {% endfor %}
@@ -75,7 +82,7 @@
 
         <div class="d-flex gap-2 justify-content-end mt-4">
             <a href="{{ url_for('user.user_dashboard') }}" class="btn btn-outline-secondary">取消</a>
-            <button type="submit" class="btn btn-primary"><i class="bi bi-check2-circle me-1"></i>提交评估</button>
+            <button type="submit" class="btn btn-primary"{% if not profile_age %} disabled{% endif %}><i class="bi bi-check2-circle me-1"></i>提交评估</button>
         </div>
     </form>
 
@@ -121,7 +128,7 @@
                         <div class="text-muted small mb-2">天气参考</div>
                         <div class="fw-semibold mb-2">{{ weather_ref.get('weather_condition') or weather_ref.get('condition') or '以最近一次可用天气为准' }}</div>
                         <div class="text-muted small">
-                            温度 {{ weather_ref.get('temperature', '--') }}°C / 湿度 {{ weather_ref.get('humidity', '--') }}%
+                            温度 {{ weather_ref.get('temperature', '--') }}°C / 湿度 {% if weather_ref.get('humidity') is not none %}{{ weather_ref.get('humidity') }}%{% else %}--{% endif %}
                         </div>
                     </div>
                 </div>
@@ -186,7 +193,11 @@
                         </div>
                     </div>
                 </div>
-                {% if community_context.get('warnings') %}
+                {% if fusion_breakdown.get('community_in_score') %}
+                <div class="alert alert-light border small mt-3 mb-0" role="note">
+                    <p class="mb-0">社区资料已计入个人风险分。</p>
+                </div>
+                {% elif community_context.get('warnings') %}
                 <div class="alert alert-warning small mt-3 mb-0" role="note">
                     <div class="fw-semibold mb-1"><i class="bi bi-exclamation-triangle me-1" aria-hidden="true"></i>数据说明</div>
                     <p class="mb-0">部分社区资料尚未完善。当前风险得分没有计入这些社区代理值，下面数字只作参考。</p>

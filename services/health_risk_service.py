@@ -108,20 +108,27 @@ class HealthRiskService:
         weather_service = WeatherService()
         extreme = weather_service.identify_extreme_weather(weather_data)
         extreme_score = self._clamp(len(extreme.get('conditions', [])) * 25.0, 0.0, 100.0)
-        humidity_score = self._humidity_score(weather['humidity'])
+        humidity_in_score = weather.get('humidity') is not None
+        humidity_score = self._humidity_score(weather['humidity']) if humidity_in_score else 0.0
         screening_score = self._screening_score(screening_data)
-        if aqi_in_score:
-            model_b_score = self._clamp(
-                0.30 * extreme_score + 0.30 * aqi_score + 0.15 * humidity_score + 0.25 * screening_score,
-                0.0,
-                100.0
+        path_b_weight = 0.30
+        path_b_aqi_weight = 0.30 if aqi_in_score else 0.0
+        path_b_humidity_weight = 0.15 if humidity_in_score else 0.0
+        path_b_screening_weight = 0.25
+        path_b_present = (
+            path_b_weight + path_b_aqi_weight + path_b_humidity_weight + path_b_screening_weight
+        )
+        model_b_score = self._clamp(
+            (
+                path_b_weight * extreme_score
+                + path_b_aqi_weight * aqi_score
+                + path_b_humidity_weight * humidity_score
+                + path_b_screening_weight * screening_score
             )
-        else:
-            model_b_score = self._clamp(
-                (0.30 * extreme_score + 0.15 * humidity_score + 0.25 * screening_score) / 0.70,
-                0.0,
-                100.0
-            )
+            / path_b_present,
+            0.0,
+            100.0
+        )
 
         # 路径 C：社区脆弱性 + 社区近期负担 + 个体基础敏感性
         community_context = self._build_community_context(profile.get('community'))
@@ -190,7 +197,7 @@ class HealthRiskService:
                 'contribution': round(model_b_score * 0.85 * 0.30, 2),
             },
             {
-                'name': '社区脆弱性模型',
+                'name': '社区脆弱性模型' if community_in_score else '个体与气温',
                 'score': round(model_c_score, 1),
                 'path_weight': 0.25,
                 'weight': 0.85 * 0.25,
@@ -246,7 +253,19 @@ class HealthRiskService:
         explain = chronic_result.get('explain') or {'reasons': [], 'actions': [], 'escalation': []}
         explain['reasons'] = self._merge_unique(
             explain.get('reasons', []),
-            self._top_component_reasons(component_scores)
+            self._top_component_reasons(
+                component_scores,
+                skip_names={
+                    name
+                    for name, included in (
+                        ('空气质量风险', aqi_in_score),
+                        ('湿度风险', humidity_in_score),
+                        ('社区脆弱性', vi_in_score),
+                        ('社区病例负担', burden_in_score),
+                    )
+                    if not included
+                }
+            )
         )[:4]
         explain['actions'] = self._merge_unique(
             explain.get('actions', []),
@@ -294,11 +313,13 @@ class HealthRiskService:
                 'contribution_total': round(sum(path['contribution'] for path in model_paths), 2),
                 'community_in_score': community_in_score,
                 'aqi_in_score': aqi_in_score,
+                'humidity_in_score': humidity_in_score,
             },
             'component_scores': component_scores,
             'community_context': community_context,
             'community_in_score': community_in_score,
             'aqi_in_score': aqi_in_score,
+            'humidity_in_score': humidity_in_score,
             'screening': screening_data,
             'weather': weather,
             'disease_risks': chronic_result.get('disease_risks', {}),
@@ -351,12 +372,24 @@ class HealthRiskService:
         aqi = self._measured_aqi(weather_data)
         return {
             'temperature': self._to_float(weather_data.get('temperature'), 20.0),
-            'humidity': self._clamp(self._to_float(weather_data.get('humidity'), 60.0), 0.0, 100.0),
+            'humidity': self._measured_humidity(weather_data),
             'aqi': aqi,
             'pressure': self._to_float(weather_data.get('pressure'), 1013.0),
             'wind_speed': self._to_float(weather_data.get('wind_speed'), 3.0),
             'weather_condition': str(weather_data.get('weather_condition') or '')
         }
+
+    def _measured_humidity(self, weather_data):
+        raw = (weather_data or {}).get('humidity')
+        if raw is None or raw == '':
+            return None
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            return None
+        if not math.isfinite(value):
+            return None
+        return self._clamp(value, 0.0, 100.0)
 
     def _measured_aqi(self, weather_data):
         if (weather_data or {}).get('aqi_estimated'):
@@ -780,7 +813,7 @@ class HealthRiskService:
         result.sort(key=lambda item: priority_order.get(item.get('priority', 'medium'), 9))
         return result[:8]
 
-    def _top_component_reasons(self, component_scores):
+    def _top_component_reasons(self, component_scores, skip_names=None):
         labels = {
             '温度风险': '温度暴露已偏离舒适区',
             '空气质量风险': '空气质量因素导致风险上升',
@@ -791,14 +824,17 @@ class HealthRiskService:
             '社区脆弱性': '所在社区脆弱性较高',
             '社区病例负担': '近期社区病例负担偏高'
         }
+        skipped = set(skip_names or ())
         sorted_items = sorted(component_scores.items(), key=lambda x: float(x[1]), reverse=True)
         reasons = []
-        for name, score in sorted_items[:4]:
-            if float(score) < 40:
+        for name, score in sorted_items:
+            if name in skipped or float(score) < 40:
                 continue
             reason = labels.get(name)
             if reason:
                 reasons.append(reason)
+            if len(reasons) >= 4:
+                break
         return reasons
 
     def _matrix_actions(self, impact_likelihood):

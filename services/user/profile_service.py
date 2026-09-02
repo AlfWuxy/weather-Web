@@ -34,14 +34,42 @@ logger = logging.getLogger(__name__)
 
 
 def _personal_weather_available(weather_data):
-    """个人评估只接受来源明确且温度可计算的真实和风天气。"""
+    """个人评估只接受来源明确、气温和湿度都可计算的真实和风天气。"""
     if not is_qweather_online_weather(weather_data):
         return False
     try:
         temperature = float(weather_data.get('temperature'))
+        humidity = float(weather_data.get('humidity'))
     except (AttributeError, TypeError, ValueError):
         return False
-    return math.isfinite(temperature)
+    return math.isfinite(temperature) and math.isfinite(humidity)
+
+
+def _profile_age_for_assessment(user):
+    try:
+        age = int(user.age)
+    except (TypeError, ValueError):
+        return None
+    if age < 1 or age > 150:
+        return None
+    return age
+
+
+def _required_screening(form):
+    mapping = {
+        'outdoor_exposure': {'low', 'medium', 'high'},
+        'symptom_level': {'none', 'mild', 'moderate', 'severe'},
+        'hydration': {'good', 'normal', 'poor'},
+        'medication_adherence': {'good', 'partial', 'poor'},
+        'sleep_quality': {'good', 'fair', 'poor'},
+    }
+    screening = {}
+    for name, allowed in mapping.items():
+        value = (sanitize_input(form.get(name), max_length=20) or '').strip().lower()
+        if value not in allowed:
+            return None
+        screening[name] = value
+    return screening
 
 
 def _safe_referrer_or_dashboard():
@@ -77,29 +105,24 @@ def health_assessment():
                     'warning'
                 )
                 return redirect(url_for('user.health_assessment'))
+            profile_age = _profile_age_for_assessment(current_user)
+            if profile_age is None:
+                flash('请先在个人设置填写年龄，再提交评估。', 'warning')
+                return redirect(url_for('user.health_assessment'))
+
+            screening = _required_screening(request.form)
+            if screening is None:
+                flash('请完成全部 5 项筛查后再提交。', 'warning')
+                return redirect(url_for('user.health_assessment'))
+
             health_service = HealthRiskService()
 
-            # 构建用户健康档案
             user_health_profile = {
-                'age': current_user.age or 30,
+                'age': profile_age,
                 'gender': current_user.gender or '未知',
                 'community': current_user.community or '',
                 'has_chronic_disease': current_user.has_chronic_disease or False,
                 'chronic_diseases': safe_json_loads(current_user.chronic_diseases, [])
-            }
-
-            # 个人即时筛查（可选项）
-            def _select(name, allowed, default):
-                value = sanitize_input(request.form.get(name), max_length=20) or default
-                value = value.strip().lower()
-                return value if value in allowed else default
-
-            screening = {
-                'outdoor_exposure': _select('outdoor_exposure', {'low', 'medium', 'high'}, 'medium'),
-                'symptom_level': _select('symptom_level', {'none', 'mild', 'moderate', 'severe'}, 'none'),
-                'hydration': _select('hydration', {'good', 'normal', 'poor'}, 'normal'),
-                'medication_adherence': _select('medication_adherence', {'good', 'partial', 'poor'}, 'good'),
-                'sleep_quality': _select('sleep_quality', {'good', 'fair', 'poor'}, 'good')
             }
 
             risk_result = health_service.assess_personal_weather_health_risk(
@@ -211,7 +234,8 @@ def health_assessment():
         assessment=latest_assessment,
         assessment_explain=explain_data,
         assessment_disease_risks=disease_risks_data,
-        assessment_academic=academic_profile
+        assessment_academic=academic_profile,
+        profile_age=_profile_age_for_assessment(current_user),
     )
 
 

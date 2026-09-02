@@ -172,8 +172,14 @@ def test_health_assessment_post_persists_academic_payload(
             'humidity': 70,
             'data_source': 'QWeather',
         },
+        {
+            'temperature': 30,
+            'humidity': None,
+            'data_source': 'QWeather',
+            'is_mock': False,
+        },
     ],
-    ids=['demo', 'mock', 'non-qweather', 'missing-temperature']
+    ids=['demo', 'mock', 'non-qweather', 'missing-temperature', 'missing-humidity']
 )
 def test_health_assessment_post_waits_for_real_weather_without_side_effects(
     authenticated_client,
@@ -347,11 +353,11 @@ def test_health_assessment_restores_saved_screening_radios(
 
     html = post.get_data(as_text=True)
     assert 'name="outdoor_exposure" value="high"' in html
-    assert 'name="outdoor_exposure" value="high" class="d-none assess-opt" checked' in html
-    assert 'name="symptom_level" value="moderate" class="d-none assess-opt" checked' in html
-    assert 'name="hydration" value="poor" class="d-none assess-opt" checked' in html
-    assert 'name="medication_adherence" value="partial" class="d-none assess-opt" checked' in html
-    assert 'name="sleep_quality" value="poor" class="d-none assess-opt" checked' in html
+    assert 'name="outdoor_exposure" value="high" class="d-none assess-opt" required checked' in html
+    assert 'name="symptom_level" value="moderate" class="d-none assess-opt" required checked' in html
+    assert 'name="hydration" value="poor" class="d-none assess-opt" required checked' in html
+    assert 'name="medication_adherence" value="partial" class="d-none assess-opt" required checked' in html
+    assert 'name="sleep_quality" value="poor" class="d-none assess-opt" required checked' in html
 
 
 def _assessment_weather(**overrides):
@@ -468,6 +474,7 @@ def test_health_assessment_page_says_proxy_community_is_not_in_score(
 ):
     user = User.query.filter_by(username='testuser').first()
     user.community = ''
+    user.age = 72
     db_session.commit()
     monkeypatch.setattr(
         'services.user.profile_service.get_weather_with_cache',
@@ -491,3 +498,159 @@ def test_health_assessment_page_says_proxy_community_is_not_in_score(
     assert response.status_code == 200
     assert '没有计入' in body
     assert '当前风险得分使用了社区参考值' not in body
+    assert '已计入个人风险分' not in body
+    assert '社区脆弱性模型' not in body
+
+
+def _screening_post(**overrides):
+    payload = {
+        'outdoor_exposure': 'medium',
+        'symptom_level': 'none',
+        'hydration': 'normal',
+        'medication_adherence': 'good',
+        'sleep_quality': 'good',
+        'csrf_token': 'test-csrf-token',
+    }
+    payload.update(overrides)
+    return payload
+
+
+def test_health_assessment_post_without_age_does_not_invent_a_default(
+    authenticated_client,
+    db_session,
+    monkeypatch,
+):
+    user = User.query.filter_by(username='testuser').first()
+    user.age = None
+    db_session.commit()
+    monkeypatch.setattr(
+        'services.user.profile_service.get_weather_with_cache',
+        lambda _location: (_assessment_weather(), False),
+    )
+
+    response = authenticated_client.post(
+        '/health-assessment',
+        data=_screening_post(),
+        follow_redirects=True,
+    )
+
+    html = response.get_data(as_text=True)
+    assert response.status_code == 200
+    assert '请先在个人设置填写年龄' in html
+    assert HealthRiskAssessment.query.count() == 0
+
+
+def test_health_assessment_get_asks_for_age_when_missing(authenticated_client, db_session):
+    user = User.query.filter_by(username='testuser').first()
+    user.age = None
+    db_session.commit()
+
+    html = authenticated_client.get('/health-assessment').get_data(as_text=True)
+    assert '请先在个人设置填写年龄' in html
+    assert 'href="/profile"' in html
+
+
+def test_health_assessment_post_without_screening_does_not_use_optimistic_defaults(
+    authenticated_client,
+    db_session,
+    monkeypatch,
+):
+    user = User.query.filter_by(username='testuser').first()
+    user.age = 72
+    db_session.commit()
+    monkeypatch.setattr(
+        'services.user.profile_service.get_weather_with_cache',
+        lambda _location: (_assessment_weather(), False),
+    )
+
+    response = authenticated_client.post(
+        '/health-assessment',
+        data={'csrf_token': 'test-csrf-token'},
+        follow_redirects=True,
+    )
+
+    html = response.get_data(as_text=True)
+    assert response.status_code == 200
+    assert '请完成全部 5 项筛查' in html
+    assert HealthRiskAssessment.query.count() == 0
+
+
+def test_proxy_community_is_not_named_or_reasoned_as_scored_community(db_session):
+    from services.health_risk_service import HealthRiskService
+
+    result = HealthRiskService().assess_personal_weather_health_risk(
+        _assessment_profile(community=''),
+        _assessment_weather(),
+        _assessment_screening(),
+    )
+
+    assert result['community_in_score'] is False
+    path_names = [path['name'] for path in result['model_paths']]
+    assert '社区脆弱性模型' not in path_names
+    assert any('个体' in name and '气温' in name for name in path_names)
+    reasons = (result.get('explain') or {}).get('reasons') or []
+    assert all('社区脆弱性' not in item for item in reasons)
+    assert result['community_context']['vulnerability_index'] == 45.0
+
+
+def test_real_community_path_is_labeled_and_can_appear_in_reasons(db_session):
+    from services.health_risk_service import HealthRiskService
+
+    db_session.add(Community(
+        name='高脆弱社区',
+        population=1000,
+        elderly_ratio=0.4,
+        chronic_disease_ratio=0.2,
+        vulnerability_index=90.0,
+        risk_level='高',
+    ))
+    db_session.commit()
+
+    result = HealthRiskService().assess_personal_weather_health_risk(
+        _assessment_profile(community='高脆弱社区'),
+        _assessment_weather(),
+        _assessment_screening(),
+    )
+
+    assert result['community_in_score'] is True
+    assert any(path['name'] == '社区脆弱性模型' for path in result['model_paths'])
+    reasons = (result.get('explain') or {}).get('reasons') or []
+    assert any('社区脆弱性' in item for item in reasons)
+
+
+def test_missing_humidity_is_not_scored_or_shown_as_60(db_session):
+    from services.health_risk_service import HealthRiskService
+
+    result = HealthRiskService().assess_personal_weather_health_risk(
+        _assessment_profile(),
+        _assessment_weather(humidity=None),
+        _assessment_screening(),
+    )
+
+    assert result['weather'].get('humidity') is None
+    assert result['component_scores']['湿度风险'] == 0
+    assert result['fusion_breakdown'].get('humidity_in_score') is False
+
+
+def test_health_assessment_page_says_real_community_is_in_score(
+    authenticated_client,
+    db_session,
+    monkeypatch,
+):
+    _seed_health_assessment_user(db_session)
+    monkeypatch.setattr(
+        'services.user.profile_service.get_weather_with_cache',
+        lambda _location: (_assessment_weather(), False),
+    )
+
+    response = authenticated_client.post(
+        '/health-assessment',
+        data=_screening_post(),
+        follow_redirects=True,
+    )
+
+    body = response.get_data(as_text=True)
+    assert response.status_code == 200
+    assert '已计入个人风险分' in body
+    assert '当前风险得分没有计入这些社区代理值' not in body
+    assert '社区脆弱性模型' in body

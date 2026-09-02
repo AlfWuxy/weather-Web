@@ -937,7 +937,7 @@ def render_role_entry():
     if is_real_user:
         if role in ('community', 'admin'):
             community_target = community_next
-            community_action_label = '进入社区看板'
+            community_action_label = '进入社区工作台'
         else:
             community_target = url_for('user.community_risk')
             community_action_label = '查看社区风险'
@@ -948,7 +948,7 @@ def render_role_entry():
         community_requires_login = False
     else:
         community_target = url_for('public.login', next=community_next)
-        community_action_label = '进入社区看板'
+        community_action_label = '进入社区工作台'
         community_requires_login = True
 
     return render_template(
