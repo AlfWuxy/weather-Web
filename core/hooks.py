@@ -188,6 +188,13 @@ def register_hooks(app):
                 payload['amap_security_js_code'] = amap_code
             elif amap_code:
                 logger.warning("Invalid AMAP_SECURITY_JS_CODE length; skipping template injection")
+        ml_available = False
+        try:
+            from services.ml_prediction_service import get_ml_service
+            ml_available = bool(get_ml_service().model_loaded)
+        except Exception:
+            logger.warning("ML 模型状态读取失败，已隐藏预测入口", exc_info=True)
+        payload['ml_model_available'] = ml_available
         return payload
 
     app.jinja_env.globals['csrf_token'] = generate_csrf_token

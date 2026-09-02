@@ -281,6 +281,7 @@
                         <img src="{{ url_for('static', filename='illustrations/dashboard/care-workbench.png') }}" alt="" width="1254" height="1254" loading="lazy" decoding="async">
                     </div>
                 </a>
+                {% if ml_model_available %}
                 <a href="{{ url_for('tools.ml_prediction') }}" class="yl-feature yl-feature-spotlight">
                     <div class="yl-feature-copy">
                         <div class="yl-feature-icon yl-feature-icon-badge"><i class="bi bi-cpu"></i></div>
@@ -290,6 +291,7 @@
                         <img src="{{ url_for('static', filename='illustrations/dashboard/ai-prediction.png') }}" alt="" width="1254" height="1254" loading="lazy" decoding="async">
                     </div>
                 </a>
+                {% endif %}
                 <a href="{{ url_for('tools.chronic_risk') }}" class="yl-feature">
                     <div class="yl-feature-icon"><i class="bi bi-heart-pulse"></i></div>
                     <div><h5>慢病风险评估</h5><p>评估当前慢病状态</p></div>

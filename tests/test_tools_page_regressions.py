@@ -345,7 +345,6 @@ def test_authenticated_nav_uses_desktop_mega_menu(client, db_session):
     body = response.get_data(as_text=True)
     assert 'id="appMegaMenu"' in body
     assert 'data-nav-more-trigger="desktop"' in body
-    assert 'AI 疾病预测' in body
     assert 'AI 提问' in body
     assert '健康评估' in body
     assert '家庭成员' in body
