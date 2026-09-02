@@ -261,3 +261,36 @@ def test_all_unmatched_records_keep_historical_component_unavailable(
             + row['risk_weights']['svi'] * row['svi_percentile']
         )
         assert abs(recomputed - row['risk_index']) <= 0.2
+
+
+def test_community_risk_map_v2_does_not_fill_missing_temperature_with_20(
+    authenticated_client,
+    monkeypatch,
+):
+    captured = {}
+
+    def unexpected(_self, weather_data, target_date=None, window_days=None, disease_filter=None):
+        captured['weather'] = weather_data
+        raise AssertionError('缺气温不应生成社区风险图')
+
+    monkeypatch.setattr(
+        'services.community_risk_service.CommunityRiskService.generate_community_risk_map',
+        unexpected,
+    )
+
+    response = authenticated_client.post(
+        '/api/community/risk-map-v2',
+        json={
+            'weather': {
+                'humidity': 65,
+                'aqi': 45,
+                'data_source': 'QWeather',
+                'is_mock': False,
+            }
+        },
+        headers={'X-CSRF-Token': 'test-csrf-token'},
+    )
+    assert response.status_code == 503
+    assert captured == {}
+    body = response.get_json()
+    assert body['success'] is False

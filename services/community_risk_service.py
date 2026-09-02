@@ -701,10 +701,14 @@ class CommunityRiskService:
             target_date = today_local()
 
         # 1) 天气宏观风险（DLNM）
+        if not isinstance(weather_data, dict):
+            raise ValueError('请提供气温')
         try:
-            temperature = float(weather_data.get('temperature', 20))
+            temperature = float(weather_data.get('temperature'))
         except (TypeError, ValueError):
-            temperature = 20.0
+            raise ValueError('请提供气温')
+        if not math.isfinite(temperature):
+            raise ValueError('请提供气温')
         lag_temperatures = self._extract_lag_temperatures(weather_data, temperature)
         if lag_temperatures:
             macro_rr, _ = dlnm.calculate_rr(temperature, lag_temperatures=lag_temperatures)
@@ -1292,7 +1296,13 @@ class CommunityRiskService:
         """生成管控建议（医生端）"""
         suggestions = []
         
-        temp = weather_data.get('temperature', 20)
+        temp = weather_data.get('temperature') if isinstance(weather_data, dict) else None
+        try:
+            temp = float(temp)
+        except (TypeError, ValueError):
+            temp = None
+        if temp is not None and not math.isfinite(temp):
+            temp = None
         
         # 资源调度建议
         if len(high_risk_communities) >= 3:
@@ -1314,14 +1324,14 @@ class CommunityRiskService:
                 })
         
         # 温度相关建议
-        if temp > 32:
+        if temp is not None and temp > 32:
             suggestions.append({
                 'category': '防暑措施',
                 'priority': 'high',
                 'advice': '高温天气，建议在高风险社区开放避暑点、发放防暑物资',
                 'target_communities': [c['community'] for c in high_risk_communities]
             })
-        elif temp < 5:
+        elif temp is not None and temp < 5:
             suggestions.append({
                 'category': '防寒措施',
                 'priority': 'high',

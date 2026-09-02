@@ -750,17 +750,14 @@ def _api_community_risk_map_v2():
         # 获取天气数据
         if 'weather' in data and isinstance(data['weather'], dict):
             weather_data = data['weather']
-            # 确保有必要的字段
-            if 'temperature' not in weather_data:
-                weather_data['temperature'] = 20
         else:
             if not city:
                 city = ensure_user_location_valid()
             try:
                 weather_data, _ = get_weather_with_cache(city)
             except (ValueError, TypeError, RuntimeError, OSError) as exc:
-                logger.warning("Community risk map weather fallback: %s", exc)
-                weather_data = {'temperature': 20, 'humidity': 60, 'aqi': 50}
+                logger.warning("Community risk map weather unavailable: %s", exc)
+                return _weather_unavailable_response(None)
 
         invalid_weather_response = _validate_qweather_for_risk(weather_data, 'community_risk_map_v2')
         if invalid_weather_response:
