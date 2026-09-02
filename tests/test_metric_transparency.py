@@ -6,6 +6,20 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def test_metric_explanations_load_from_content_json():
+    import json
+    from core.metric_explanations import (
+        METRIC_EXPLANATION_GROUPS,
+        METRIC_EXPLANATIONS,
+        _CATALOG_PATH,
+    )
+
+    assert _CATALOG_PATH.name == 'metric_explanations.json'
+    payload = json.loads(_CATALOG_PATH.read_text(encoding='utf-8'))
+    assert payload['groups'] == METRIC_EXPLANATION_GROUPS
+    assert payload['metrics'] == METRIC_EXPLANATIONS
+
+
 def test_metric_catalog_is_complete_and_has_unique_anchors():
     from core.metric_explanations import (
         METRIC_EXPLANATION_GROUPS,
