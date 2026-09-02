@@ -41,6 +41,7 @@ class ChronicRiskService:
             '糖尿病': {'cardiovascular': 1.3, 'general': 1.2, 'heat_sensitive': True},
             '冠心病': {'cardiovascular': 1.6, 'general': 1.3, 'cold_sensitive': True, 'heat_sensitive': True},
             'COPD': {'respiratory': 1.5, 'general': 1.3, 'cold_sensitive': True},
+            '慢阻肺': {'respiratory': 1.5, 'general': 1.3, 'cold_sensitive': True},
             '慢性阻塞性肺病': {'respiratory': 1.5, 'general': 1.3, 'cold_sensitive': True},
             '哮喘': {'respiratory': 1.4, 'general': 1.2, 'aqi_sensitive': True},
             '慢性支气管炎': {'respiratory': 1.3, 'general': 1.1, 'cold_sensitive': True},

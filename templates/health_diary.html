@@ -71,6 +71,7 @@
                                     <th>严重程度</th>
                                     <th>天气</th>
                                     <th>症状</th>
+                                    <th>备注</th>
                                 </tr>
                             </thead>
                             <tbody>
@@ -98,6 +99,7 @@
                                         {% endif %}
                                     </td>
                                     <td>{{ entry.symptoms or '-' }}</td>
+                                    <td>{{ entry.notes or '-' }}</td>
                                 </tr>
                                 {% endfor %}
                             </tbody>

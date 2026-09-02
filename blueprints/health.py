@@ -429,6 +429,10 @@ def health_diary():
         severity = sanitize_input(request.form.get('severity'), max_length=20)
         notes = sanitize_input(request.form.get('notes'), max_length=500)
 
+        if not (symptoms or severity or notes):
+            flash('请填写症状、严重程度或备注', 'error')
+            return redirect(url_for('health.health_diary'))
+
         # 校验 member_id 归属当前用户
         if member_id:
             member = FamilyMember.query.filter_by(id=member_id, user_id=current_user.id).first()

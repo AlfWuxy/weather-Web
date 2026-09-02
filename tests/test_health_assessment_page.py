@@ -316,3 +316,37 @@ def test_legacy_assessment_without_matrix_does_not_render_false_low_bucket(
     assert '发生可能性：<strong>--</strong>' in html
     assert '综合位置 -- / 16' in html
     assert '影响程度：<strong>low</strong>' not in html
+
+
+def test_health_assessment_restores_saved_screening_radios(
+    authenticated_client,
+    db_session,
+    monkeypatch,
+):
+    _seed_health_assessment_user(db_session)
+    monkeypatch.setattr(
+        'services.user.profile_service.get_weather_with_cache',
+        lambda _location: (_qweather_payload(), False)
+    )
+
+    post = authenticated_client.post(
+        '/health-assessment',
+        data={
+            'outdoor_exposure': 'high',
+            'symptom_level': 'moderate',
+            'hydration': 'poor',
+            'medication_adherence': 'partial',
+            'sleep_quality': 'poor',
+            'csrf_token': 'test-csrf-token'
+        },
+        follow_redirects=True,
+    )
+    assert post.status_code == 200
+
+    html = post.get_data(as_text=True)
+    assert 'name="outdoor_exposure" value="high"' in html
+    assert 'name="outdoor_exposure" value="high" class="d-none assess-opt" checked' in html
+    assert 'name="symptom_level" value="moderate" class="d-none assess-opt" checked' in html
+    assert 'name="hydration" value="poor" class="d-none assess-opt" checked' in html
+    assert 'name="medication_adherence" value="partial" class="d-none assess-opt" checked' in html
+    assert 'name="sleep_quality" value="poor" class="d-none assess-opt" checked' in html
