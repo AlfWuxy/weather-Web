@@ -431,7 +431,7 @@ class WeatherService:
                 current = data.get('current', {})
                 
                 # 天气代码转中文
-                weather_code = current.get('weather_code', 0)
+                weather_code = current.get('weather_code')
                 weather_condition = self._weather_code_to_text(weather_code)
 
                 temp = self._safe_float(current.get('temperature_2m'))
@@ -500,8 +500,8 @@ class WeatherService:
         try:
             code = int(weather_code)
         except Exception:
-            return '多云'
-        return weather_map.get(code, '多云')
+            return ''
+        return weather_map.get(code, '')
 
     def _safe_float(self, value, default=None):
         try:
@@ -1223,12 +1223,12 @@ class WeatherService:
         - 重度污染：AQI>200
         """
         extreme_conditions = []
-        temp_now = self._safe_float(weather_data.get('temperature'), 0.0)
-        humidity = self._safe_float(weather_data.get('humidity'), 0.0)
-        wind_speed = self._safe_float(weather_data.get('wind_speed'), 0.0)
+        temp_now = self._safe_float(weather_data.get('temperature'))
+        humidity = self._safe_float(weather_data.get('humidity'))
+        wind_speed = self._safe_float(weather_data.get('wind_speed'))
 
         # 高温
-        if temp_now > 35:
+        if temp_now is not None and temp_now > 35:
             extreme_conditions.append({
                 'type': '高温',
                 'severity': '高',
@@ -1236,7 +1236,7 @@ class WeatherService:
             })
         
         # 低温
-        if temp_now < -10:
+        if temp_now is not None and temp_now < -10:
             extreme_conditions.append({
                 'type': '低温',
                 'severity': '高',
@@ -1269,7 +1269,7 @@ class WeatherService:
             })
         
         # 高湿度
-        if humidity > 85:
+        if humidity is not None and humidity > 85:
             extreme_conditions.append({
                 'type': '高湿度',
                 'severity': '中',
@@ -1277,7 +1277,7 @@ class WeatherService:
             })
         
         # 强风
-        if wind_speed > 10:
+        if wind_speed is not None and wind_speed > 10:
             extreme_conditions.append({
                 'type': '强风',
                 'severity': '中',
@@ -1285,20 +1285,20 @@ class WeatherService:
             })
         
         # 空气污染
-        aqi = self._safe_float(weather_data.get('aqi'), 0.0)
-        if aqi > 200:
+        aqi = self._safe_float(weather_data.get('aqi'))
+        if aqi is not None and aqi > 200:
             extreme_conditions.append({
                 'type': '重度空气污染',
                 'severity': '高',
                 'description': f"AQI达{aqi}，严重影响呼吸系统，建议佩戴口罩"
             })
-        elif aqi > 150:
+        elif aqi is not None and aqi > 150:
             extreme_conditions.append({
                 'type': '中度空气污染',
                 'severity': '中',
                 'description': f"AQI达{aqi}，敏感人群应减少户外活动"
             })
-        elif aqi > 100:
+        elif aqi is not None and aqi > 100:
             extreme_conditions.append({
                 'type': '轻度空气污染',
                 'severity': '低',
@@ -1432,9 +1432,11 @@ class WeatherService:
         # 特定疾病与天气的关联
         chronic_diseases = user_health_profile.get('chronic_diseases', [])
         for disease in chronic_diseases:
-            if '呼吸' in disease and (self._safe_float(weather_data.get('aqi'), 0.0) > 100):
+            aqi_now = self._safe_float(weather_data.get('aqi'))
+            temp_cvd = self._safe_float(weather_data.get('temperature'))
+            if '呼吸' in disease and aqi_now is not None and aqi_now > 100:
                 risk_score += 20
-            if '心血管' in disease and abs(weather_data.get('temperature', 20) - 20) > 10:
+            if '心血管' in disease and temp_cvd is not None and abs(temp_cvd - 20) > 10:
                 risk_score += 20
             if '关节' in disease and weather_data.get('humidity', 0) > 80:
                 risk_score += 15

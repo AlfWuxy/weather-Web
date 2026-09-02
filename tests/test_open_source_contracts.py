@@ -177,6 +177,50 @@ def test_openmeteo_nowcast_skips_hours_without_temperature(app, monkeypatch):
     assert all(item.get('temperature') != 0.0 for item in result['timeline'])
 
 
+def test_weather_code_to_text_does_not_invent_cloudy_when_missing(app):
+    with app.app_context():
+        from services.weather_service import WeatherService
+
+        service = WeatherService()
+
+    assert service._weather_code_to_text(None) == ''
+    assert service._weather_code_to_text('bad') == ''
+    assert service._weather_code_to_text(4) == ''
+    assert service._weather_code_to_text(0) == '晴'
+    assert service._weather_code_to_text(2) == '多云'
+
+
+def test_openmeteo_current_missing_weather_code_is_not_sunny(app, monkeypatch):
+    with app.app_context():
+        from services.weather_service import WeatherService
+        import services.weather_service as weather_module
+
+        service = WeatherService()
+        monkeypatch.setattr(service, '_get_location', lambda city: '116.20,29.27')
+        monkeypatch.setattr(service, '_parse_lon_lat', lambda location: (116.20, 29.27))
+
+        def fake_get(url, params=None, timeout=None):
+            return _response({
+                'current': {
+                    'temperature_2m': 33.4,
+                    'relative_humidity_2m': 66,
+                    'surface_pressure': 1008,
+                    'wind_speed_10m': 4.2,
+                },
+                'daily': {
+                    'temperature_2m_max': [37.1],
+                    'temperature_2m_min': [26.2],
+                },
+            })
+
+        monkeypatch.setattr(weather_module.requests, 'get', fake_get)
+        result = service._get_openmeteo_weather('都昌')
+
+    assert result['weather_condition'] == ''
+    assert result['weather_condition'] != '晴'
+    assert result['weather_condition'] != '多云'
+
+
 def test_multimodel_forecast_contract_preserves_provider_names(app):
     with app.app_context():
         from services.weather_service import WeatherService

@@ -538,6 +538,23 @@ class TestOpenMeteoAqiFlag:
             types = [item['type'] for item in result.get('conditions', [])]
             assert '温差过大' in types
 
+    def test_extreme_weather_skips_missing_temperature_and_aqi(self, app):
+        """缺测气温/AQI 不得当成 0°C / AQI 0 去判定极端天气。"""
+        with app.app_context():
+            from services.weather_service import WeatherService
+            ws = WeatherService()
+            result = ws.identify_extreme_weather({
+                'humidity': 90,
+                'wind_speed': 1,
+            })
+            types = [item['type'] for item in result.get('conditions', [])]
+            assert '高温' not in types
+            assert '低温' not in types
+            assert '重度空气污染' not in types
+            assert '中度空气污染' not in types
+            assert '轻度空气污染' not in types
+            assert '高湿度' in types
+
 
 class TestSunshineInputNormalization:
     """#5 协议级修复：统一日照输入单位为秒，兼容小时输入。"""
