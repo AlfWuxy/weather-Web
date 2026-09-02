@@ -267,6 +267,9 @@ def test_composite_exposure_does_not_score_non_forecast_pm25():
     assert defaulted['pm25_source'] == 'default_aqi_50'
     assert defaulted['pm25_in_score'] is False
     assert defaulted['score'] == reused['score']
+    assert defaulted['inputs']['pm25']['aqi_used'] is None
+    assert defaulted['inputs']['pm25']['used_value'] is None
+    assert defaulted['pm25_proxy'] is None
 
     assert forecast_pm['pm25_in_score'] is True
     assert forecast_pm['score_basis'] == 'composite'

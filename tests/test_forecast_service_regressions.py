@@ -104,7 +104,9 @@ def test_composite_exposure_returns_score_stages_and_input_trace():
     )
     assert default_aqi_result['pm25_source'] == 'default_aqi_50'
     assert default_aqi_result['inputs']['pm25']['source'] == 'default_aqi_50'
-    assert default_aqi_result['inputs']['pm25']['aqi_used'] == 50.0
+    assert default_aqi_result['inputs']['pm25']['aqi_used'] is None
+    assert default_aqi_result['inputs']['pm25']['used_value'] is None
+    assert default_aqi_result['pm25_proxy'] is None
     assert default_aqi_result['inputs']['pm25']['aqi_imputed'] is True
 
 

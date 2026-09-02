@@ -282,19 +282,19 @@ class ForecastService:
         if pm is None:
             aqi_input = self._safe_float(aqi, None)
             aqi_imputed = aqi_input is None
-            aqi_v = 50.0 if aqi_imputed else aqi_input
-            # AQI 到 PM2.5 的保守近似（用于无PM预报时）
-            pm = max(5.0, min(220.0, aqi_v * 0.65))
             if aqi_imputed:
                 pm25_source = 'default_aqi_50'
                 pm25_detail_source = 'default_aqi_50'
-            elif aqi_origin == 'current_weather_context':
-                pm25_source = 'current_observation_aqi_proxy'
-                pm25_detail_source = 'current_weather_context'
             else:
-                pm25_source = 'aqi_proxy'
-                pm25_detail_source = 'day_aqi_input'
-            aqi_used = aqi_v
+                # AQI 到 PM2.5 的保守近似（仅在有当日 AQI 时使用）
+                pm = max(5.0, min(220.0, aqi_input * 0.65))
+                if aqi_origin == 'current_weather_context':
+                    pm25_source = 'current_observation_aqi_proxy'
+                    pm25_detail_source = 'current_weather_context'
+                else:
+                    pm25_source = 'aqi_proxy'
+                    pm25_detail_source = 'day_aqi_input'
+                aqi_used = aqi_input
         elif pm25_origin == 'current_weather_context':
             # 未来日没有污染物预报时复用当前实况，必须与未来日直接预报区分。
             pm25_source = 'current_observation_reuse'
@@ -304,7 +304,7 @@ class ForecastService:
             pm25_detail_source = pm25_origin or 'forecast_input'
 
         heat_score = float(np.clip((temp - 28.0) * 6.0, 0.0, 100.0))
-        pollution_score = float(np.clip((pm - 35.0) * 1.8, 0.0, 100.0))
+        pollution_score = float(np.clip((pm - 35.0) * 1.8, 0.0, 100.0)) if pm is not None else 0.0
         humidity_score = float(np.clip((hum - 70.0) * 2.4, 0.0, 100.0)) if humidity_in_score else 0.0
         hot_night_in_score = tmin is not None
         if hot_night_in_score:
@@ -312,7 +312,7 @@ class ForecastService:
         else:
             hot_night_score = 0.0
 
-        # 只有当天污染物预报才计入评分；实况复用和默认 AQI 50 只做追溯，不抬高 7 天风险。
+        # 只有当天污染物预报才计入评分；实况复用和缺测 PM/AQI 只做追溯，不编造默认 AQI 50。
         pm25_in_score = pm25_source in ('direct', 'aqi_proxy')
         scored_pollution = pollution_score if pm25_in_score else 0.0
         scored_humidity = humidity_score if humidity_in_score else 0.0
@@ -360,7 +360,7 @@ class ForecastService:
             },
             'hot_night': bool(hot_night_in_score and tmin >= 22),
             # pm25_proxy 保留旧接口语义；来源请以 pm25_source 为准。
-            'pm25_proxy': round(pm, 1),
+            'pm25_proxy': round(pm, 1) if pm is not None else None,
             'pm25_source': pm25_source,
             'inputs': {
                 'temperature': {
@@ -381,7 +381,7 @@ class ForecastService:
                     'included_in_score': humidity_in_score,
                 },
                 'pm25': {
-                    'used_value': round(pm, 1),
+                    'used_value': round(pm, 1) if pm is not None else None,
                     'imputed': pm25_source != 'direct',
                     'source': pm25_source,
                     'detail_source': pm25_detail_source,

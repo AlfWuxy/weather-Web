@@ -12,7 +12,7 @@ PM25_SOURCE_LABELS = {
     'current_observation_reuse': '当前实况复用（非未来预报）',
     'aqi_proxy': '未来日AQI×0.65代理',
     'current_observation_aqi_proxy': '当前实况AQI×0.65代理',
-    'default_aqi_50': '默认AQI 50代理',
+    'default_aqi_50': '缺测 PM2.5/AQI，未编造默认值',
 }
 HEAT_RISK_LABELS = {
     '高风险': '热风险高',
