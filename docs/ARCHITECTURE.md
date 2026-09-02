@@ -1,7 +1,7 @@
 # 系统架构文档
 
-> 版本: 2026-01-29  
-> 项目: 天气变化与社区居民健康风险预测系统
+> 版本: 2026-09-02  
+> 项目: 宜老天气通（天气变化与社区居民健康风险预测系统）
 
 ---
 
@@ -45,11 +45,23 @@
 
 | 问题 | 严重性 | 说明 |
 |------|--------|------|
-| 文档与代码不一致 | 🔴 高 | 架构文档仍描述旧的巨型 app.py 与目录结构 |
+| 巨型模块仍在 | 🟡 中 | `blueprints/analysis.py`（约 3300 行）、`community_risk_service.py`、`weather_service.py`、`community_risk.html` 仍过重，后续应按页面/用例拆分 |
+| 样式层叠过多 | 🟡 中 | 每页同时加载 `style.css`、`yilao.css`、`apple-polish.css` 与多套 motion/data-fx，长期应收敛成一套主题 |
+| 内容写死在代码里 | 🟡 中 | 话术、指标解释、医学建议分散在模板与 `core/metric_explanations.py`，内容更新成本高 |
 | 服务层依赖框架上下文 | 🟡 中 | 部分服务仍依赖 request/current_app，影响可测性 |
-| 废弃模块未清理 | 🟡 中 | 部分服务文件已标记废弃但仍保留 |
-| API 规范化不足 | 🟡 中 | 缺少统一的 OpenAPI 文档与请求校验 |
+| API 规范化不足 | 🟢 低 | 缺少统一的 OpenAPI 文档与请求校验 |
 | 可观测性不足 | 🟢 低 | 仅日志+可选 Sentry，缺少指标/Tracing |
+
+### 1.3 产品简洁化方向（下一步，不在本轮一次做完）
+
+面向长期维护、可持续更新内容的网站 + 小程序，建议按这个顺序收敛，而不是继续加研究页：
+
+1. **一条主路径**：今天风险 → 提醒家人 → 记录是否做到。Web 主导航保持「今天 / 照护 / 7 天 / 社区风险 / 老人模式」，研究分析只留在管理员。
+2. **内容与代码分离**：指标说明、提醒话术、慢病建议、避暑点文案进入 `data/` JSON（或后续 CMS），代码只渲染。
+3. **样式一套**：合并 `style.css` / `yilao.css` / `apple-polish.css`，motion 按需加载，去掉对每页都生效的研究仪表盘装饰。
+4. **拆巨型文件**：`analysis.py` 按 heatmap/lag/history/alerts/reports 拆蓝图；`community_risk.html` 拆成地图组件 + 说明组件。
+5. **双端同一领域模型**：Web 家庭成员与小程序 elders 共用同一套档案字段与删除/解绑语义（本轮已对齐 PATCH 与删除解绑）。
+6. **训练脚本不进主路径**：`services/pipelines/train_*.py` 保持离线工具，不再复制 `parse_age`。
 
 ---
 
@@ -87,13 +99,10 @@
 │   └── ...
 │
 ├── utils/                    # 工具函数
-│   ├── parsers.py
-│   ├── validators.py
-│   └── error_handlers.py
-│   ├── validators.py        # 输入验证
-│   ├── parsers.py           # 数据解析 (parse_age, parse_int等)
-│   ├── helpers.py           # 通用工具 (天气缓存, 通知等)
-│   └── response.py          # JSON响应封装
+│   ├── parsers.py            # parse_age / parse_int 等
+│   ├── validators.py         # 输入验证
+│   ├── error_handlers.py
+│   └── audit_log.py
 │
 ├── templates/                # 模板 (保持现状)
 ├── static/                   # 静态资源 (保持现状)
@@ -137,9 +146,10 @@
 | 项目 | 状态 | 说明 |
 |------|------|------|
 | 架构文档与概览对齐 | ✅ | 更新 `docs/ARCHITECTURE.md` 与 `PROJECT_OVERVIEW.md` |
-| 清理废弃模块 | ⏳ | 标记废弃服务迁移计划，移除未被引用代码 |
+| 清理废弃模块 | ✅ | 已删除无引用预测服务；`health_risk_service` 废弃空方法已移除 |
 | API 规范化 | ⏳ | 增加 OpenAPI 草案 + 基础请求校验 |
 | 测试补强 | ⏳ | 覆盖关键服务与 API 的边界用例 |
+| 产品简洁化 | 📋 | 见上文 1.3：主路径、内容分离、样式一套、拆巨型文件 |
 
 ---
 
