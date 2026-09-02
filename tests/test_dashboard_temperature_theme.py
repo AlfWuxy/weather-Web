@@ -121,6 +121,36 @@ def test_dashboard_does_not_invent_hydration_volume_or_bp_when_actions_empty(
     assert '先做好日常防护' in body
 
 
+def test_elder_dashboard_does_not_invent_heat_actions_when_plan_empty(
+    authenticated_client, monkeypatch,
+):
+    monkeypatch.setattr(
+        'services.user.dashboard_service.get_weather_with_cache',
+        lambda _location: ({
+            'temperature': 28,
+            'temperature_max': 30,
+            'temperature_min': 22,
+            'humidity': 68,
+            'data_source': 'QWeather',
+            'is_mock': False,
+        }, False),
+    )
+    monkeypatch.setattr(
+        'services.user.dashboard_service.get_qweather_forecast_with_cache',
+        lambda _location, days=7: ([], False, {'error': 'qweather_unavailable'}),
+    )
+    monkeypatch.setattr(
+        'services.user.dashboard_service._action_plan',
+        lambda _label: [],
+    )
+
+    body = authenticated_client.get('/elder-mode').get_data(as_text=True)
+
+    assert '身边放一杯水' not in body
+    assert '先待在阴凉处' not in body
+    assert '先做好日常防护' in body
+
+
 def test_dashboard_hero_sequences_care_action_and_cooling(authenticated_client):
     body = authenticated_client.get('/dashboard').get_data(as_text=True)
 
