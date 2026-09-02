@@ -86,7 +86,7 @@ def test_ml_predict_api_without_weather_does_not_invent_20_70_50(
 
     response = authenticated_client.post(
         '/api/v1/ml/predict',
-        json={'age': 72},
+        json={'age': 72, 'sunshine_duration_hours': 6},
         headers={'X-CSRF-Token': 'test-csrf-token'},
     )
     assert response.status_code == 503
@@ -117,7 +117,7 @@ def test_ml_predict_api_does_not_fill_missing_humidity_or_aqi(
 
     response = authenticated_client.post(
         '/api/v1/ml/predict',
-        json={'age': 72, 'temperature': 31},
+        json={'age': 72, 'temperature': 31, 'sunshine_duration_hours': 6},
         headers={'X-CSRF-Token': 'test-csrf-token'},
     )
     assert response.status_code == 200
@@ -152,7 +152,12 @@ def test_ml_community_predict_api_without_weather_does_not_invent_20_70_50(
 
     response = authenticated_client.post(
         '/api/v1/ml/predict-community',
-        json={'name': '测试社区', 'elderly_ratio': 0.3, 'population': 800},
+        json={
+            'name': '测试社区',
+            'elderly_ratio': 0.3,
+            'population': 800,
+            'sunshine_duration_hours': 6,
+        },
         headers={'X-CSRF-Token': 'test-csrf-token'},
     )
     assert response.status_code == 503
@@ -179,7 +184,13 @@ def test_ml_community_predict_api_does_not_fill_missing_humidity_or_aqi(
 
     response = authenticated_client.post(
         '/api/v1/ml/predict-community',
-        json={'name': '测试社区', 'temperature': 31, 'elderly_ratio': 0.3, 'population': 800},
+        json={
+            'name': '测试社区',
+            'temperature': 31,
+            'elderly_ratio': 0.3,
+            'population': 800,
+            'sunshine_duration_hours': 6,
+        },
         headers={'X-CSRF-Token': 'test-csrf-token'},
     )
     assert response.status_code == 200
@@ -188,3 +199,120 @@ def test_ml_community_predict_api_does_not_fill_missing_humidity_or_aqi(
     assert weather.get('humidity') is None
     assert weather.get('aqi') is None
     assert weather.get('wind_speed') is None
+
+
+def test_ml_predict_api_without_sunshine_does_not_invent_20000(
+    authenticated_client,
+    db_session,
+    monkeypatch,
+):
+    user = User.query.filter_by(username='testuser').first()
+    user.age = 72
+    db_session.commit()
+    captured = {}
+
+    def unexpected(_self, user_info, weather_info=None):
+        captured['weather'] = weather_info
+        raise AssertionError('缺日照不应进入 ML 预测')
+
+    monkeypatch.setattr(
+        'services.ml_prediction_service.MLPredictionService.predict_disease_risk',
+        unexpected,
+    )
+
+    response = authenticated_client.post(
+        '/api/v1/ml/predict',
+        json={'age': 72, 'temperature': 31},
+        headers={'X-CSRF-Token': 'test-csrf-token'},
+    )
+    assert response.status_code == 400
+    assert captured == {}
+    body = response.get_json()
+    assert body['success'] is False
+    assert '日照' in (body.get('error_detail') or body.get('error') or '')
+
+
+def test_ml_community_predict_api_without_population_does_not_invent_100(
+    authenticated_client,
+    monkeypatch,
+):
+    captured = {}
+
+    def unexpected(_self, community_info, weather_info=None):
+        captured['community'] = community_info
+        raise AssertionError('缺人口不应进入社区 ML 预测')
+
+    monkeypatch.setattr(
+        'services.ml_prediction_service.MLPredictionService.predict_community_risk',
+        unexpected,
+    )
+
+    response = authenticated_client.post(
+        '/api/v1/ml/predict-community',
+        json={
+            'name': '测试社区',
+            'temperature': 31,
+            'elderly_ratio': 0.3,
+            'sunshine_duration_hours': 6,
+        },
+        headers={'X-CSRF-Token': 'test-csrf-token'},
+    )
+    assert response.status_code == 400
+    assert captured == {}
+    body = response.get_json()
+    assert body['success'] is False
+    assert '人口' in (body.get('error_detail') or body.get('error') or '')
+
+
+def test_dlnm_risk_api_without_temperature_does_not_invent_20(
+    authenticated_client,
+    monkeypatch,
+):
+    captured = {}
+
+    def unexpected(*_args, **_kwargs):
+        captured['called'] = True
+        raise AssertionError('缺气温不应进入 DLNM')
+
+    monkeypatch.setattr(
+        'services.dlnm_risk_service.DLNMRiskService.calculate_rr',
+        unexpected,
+    )
+
+    response = authenticated_client.post(
+        '/api/v1/dlnm/risk',
+        json={},
+        headers={'X-CSRF-Token': 'test-csrf-token'},
+    )
+    assert response.status_code == 400
+    assert captured == {}
+    body = response.get_json()
+    assert body['success'] is False
+    assert '气温' in (body.get('error_detail') or body.get('error') or '')
+
+
+def test_forecast_daily_api_without_temperature_does_not_invent_20(
+    authenticated_client,
+    monkeypatch,
+):
+    captured = {}
+
+    def unexpected(*_args, **_kwargs):
+        captured['called'] = True
+        raise AssertionError('缺气温不应进入单日门诊预测')
+
+    monkeypatch.setattr(
+        'services.forecast_service.ForecastService.predict_daily_visits',
+        unexpected,
+    )
+
+    response = authenticated_client.post(
+        '/api/v1/forecast/daily',
+        json={},
+        headers={'X-CSRF-Token': 'test-csrf-token'},
+    )
+    assert response.status_code == 400
+    assert captured == {}
+    body = response.get_json()
+    assert body['success'] is False
+    assert '气温' in (body.get('error_detail') or body.get('error') or '')

@@ -116,10 +116,10 @@ def _normalize_sunshine_seconds(payload):
     Legacy compatibility:
     - sunshine_hours is treated as *hours* only.
     - values > 24 are considered ambiguous and rejected to avoid unit confusion.
+    Missing sunshine is rejected; the API does not invent 20000 seconds.
     """
-    default_seconds = 20000.0
     if not isinstance(payload, dict):
-        return default_seconds
+        raise ValueError('请提供日照时长')
 
     if payload.get('sunshine_duration_seconds') is not None:
         raw = payload.get('sunshine_duration_seconds')
@@ -131,13 +131,12 @@ def _normalize_sunshine_seconds(payload):
         raw = payload.get('sunshine_hours')
         as_hours = True
     else:
-        raw = default_seconds
-        as_hours = False
+        raise ValueError('请提供日照时长')
 
     try:
         value = float(raw)
-    except (TypeError, ValueError):
-        return default_seconds
+    except (TypeError, ValueError) as exc:
+        raise ValueError('请提供有效日照时长') from exc
 
     if as_hours:
         if value > 24.0:
@@ -439,11 +438,19 @@ def _api_ml_predict_community():
             else:
                 return jsonify({'success': False, 'error': '社区不存在'})
         else:
+            elderly_ratio = _optional_finite_float(data.get('elderly_ratio'))
+            population = _optional_finite_float(data.get('population'))
+            if elderly_ratio is None:
+                raise ValueError('请提供老龄人口比例')
+            if population is None or population <= 0:
+                raise ValueError('请提供人口')
             community_info = {
-                'name': data.get('name', '未知社区'),
-                'elderly_ratio': data.get('elderly_ratio', 0.2),
-                'chronic_disease_ratio': data.get('chronic_disease_ratio', 0.1),
-                'population': data.get('population', 100)
+                'name': data.get('name') or '未知社区',
+                'elderly_ratio': elderly_ratio,
+                'chronic_disease_ratio': _optional_finite_float(
+                    data.get('chronic_disease_ratio')
+                ),
+                'population': population
             }
 
         sunshine_seconds = _normalize_sunshine_seconds(data)
@@ -505,11 +512,7 @@ def _api_dlnm_risk():
 
         data = request.get_json() or {}
 
-        # 安全的参数获取和类型转换
-        try:
-            temperature = float(data.get('temperature', 20))
-        except (TypeError, ValueError):
-            temperature = 20.0
+        temperature = _require_finite_float(data.get('temperature'), '请提供气温')
 
         disease_type = data.get('disease_type')
         if disease_type and disease_type not in ['respiratory', 'cardiovascular', 'digestive', 'general']:
@@ -691,7 +694,7 @@ def _api_forecast_daily():
         forecast_service = get_forecast_service()
         data = request.get_json() or {}
 
-        temperature = data.get('temperature', 20)
+        temperature = _require_finite_float(data.get('temperature'), '请提供气温')
         lag_temps = data.get('lag_temperatures')
         month = data.get('month', now_local().month)
         dow = data.get('day_of_week', now_local().weekday())
@@ -1092,7 +1095,9 @@ def _api_comprehensive_alert():
         invalid_weather_response = _validate_qweather_for_risk(current_weather, 'comprehensive_alert')
         if invalid_weather_response:
             return invalid_weather_response
-        temperature = current_weather.get('temperature', 20)
+        temperature = _optional_finite_float(current_weather.get('temperature'))
+        if temperature is None:
+            return _weather_unavailable_response(current_weather, '天气数据缺少气温')
 
         # 计算当前风险
         rr, _ = dlnm.calculate_rr(temperature)
