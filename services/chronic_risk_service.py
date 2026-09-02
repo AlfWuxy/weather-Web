@@ -275,18 +275,25 @@ class ChronicRiskService:
                 disease_type=disease_type,
                 age=age
             )
+            dlnm_breakdown = dlnm_breakdown or {}
 
-            # DLNM 内部已经包含病种与年龄修正，这里拆开保存，避免和慢病层修正混在一起。
-            raw_dlnm_rr = float(
-                dlnm_breakdown.get('raw_dlnm_rr', dlnm_breakdown.get('base_rr', dlnm_adjusted_rr))
-            )
-            dlnm_disease_modifier = float(
-                dlnm_breakdown.get('dlnm_disease_modifier', dlnm_breakdown.get('disease_modifier', 1.0))
-            )
-            dlnm_age_modifier = float(
-                dlnm_breakdown.get('dlnm_age_modifier', dlnm_breakdown.get('age_modifier', 1.0))
-            )
-            dlnm_adjusted_rr = float(dlnm_adjusted_rr)
+            try:
+                dlnm_adjusted_rr = float(dlnm_adjusted_rr)
+                raw_dlnm_rr = float(
+                    dlnm_breakdown.get('raw_dlnm_rr', dlnm_breakdown.get('base_rr', dlnm_adjusted_rr))
+                )
+                dlnm_disease_modifier = float(
+                    dlnm_breakdown.get('dlnm_disease_modifier', dlnm_breakdown.get('disease_modifier', 1.0))
+                )
+                dlnm_age_modifier = float(
+                    dlnm_breakdown.get('dlnm_age_modifier', dlnm_breakdown.get('age_modifier', 1.0))
+                )
+            except (TypeError, ValueError):
+                continue
+            if not math.isfinite(dlnm_adjusted_rr) or dlnm_adjusted_rr <= 0:
+                continue
+            if not math.isfinite(raw_dlnm_rr):
+                continue
             
             # 年龄放大
             age_amp = self.get_age_amplifier(age, disease_type)
@@ -338,47 +345,53 @@ class ChronicRiskService:
             if personal_rr > max_risk['rr']:
                 max_risk = {'rr': personal_rr, 'disease_type': disease_type}
         
-        # 生成个性化建议
-        night_temp = self._parse_night_temperature(weather_data)
-        context = {
-            'age': age,
-            'temperature': temperature,
-            'rr': max_risk['rr'],
-            'disease_type': max_risk['disease_type'],
-            'chronic_diseases': chronic_diseases,
-            'has_chronic_disease': len(chronic_diseases) > 0,
-            'disease_count': len(chronic_diseases),
-            'aqi': weather_data.get('aqi'),
-            'hot_night': night_temp is not None and night_temp >= 22.0,
-            'hot_night_temp': night_temp,
-            'heat_wave_days': weather_data.get('heat_wave_days', 0),
-            'cold_wave_days': weather_data.get('cold_wave_days', 0)
-        }
-        
-        recommendations = self._generate_recommendations(context, risks)
-        if vital_adjustment['recommendations']:
-            existing_advice = {
-                item.get('advice')
-                for item in recommendations
-                if isinstance(item, dict)
+        if not risks:
+            recommendations = []
+            explain, triggered_rules = {'reasons': [], 'actions': [], 'escalation': []}, []
+            overall_rr = None
+            overall_score = None
+            overall_level = None
+        else:
+            # 生成个性化建议
+            night_temp = self._parse_night_temperature(weather_data)
+            context = {
+                'age': age,
+                'temperature': temperature,
+                'rr': max_risk['rr'],
+                'disease_type': max_risk['disease_type'],
+                'chronic_diseases': chronic_diseases,
+                'has_chronic_disease': len(chronic_diseases) > 0,
+                'disease_count': len(chronic_diseases),
+                'aqi': weather_data.get('aqi'),
+                'hot_night': night_temp is not None and night_temp >= 22.0,
+                'hot_night_temp': night_temp,
+                'heat_wave_days': weather_data.get('heat_wave_days', 0),
+                'cold_wave_days': weather_data.get('cold_wave_days', 0)
             }
-            for advice in vital_adjustment['recommendations']:
-                if advice in existing_advice:
-                    continue
-                recommendations.append({
-                    'rule_id': 'submitted_vitals',
-                    'category': '自测指标',
-                    'priority': 'medium',
-                    'advice': advice,
-                    'applicable_diseases': ['cardiovascular', 'general']
-                })
-                existing_advice.add(advice)
-        explain, triggered_rules = self.build_explain(context, recommendations)
-        
-        # 确定总体风险等级
-        overall_rr = max(r['personal_rr'] for r in risks.values()) if risks else 1.0
-        overall_score = max((r.get('risk_score', 0) for r in risks.values()), default=round(overall_rr * 30, 1))
-        overall_level = self._get_score_risk_level(overall_score)
+
+            recommendations = self._generate_recommendations(context, risks)
+            if vital_adjustment['recommendations']:
+                existing_advice = {
+                    item.get('advice')
+                    for item in recommendations
+                    if isinstance(item, dict)
+                }
+                for advice in vital_adjustment['recommendations']:
+                    if advice in existing_advice:
+                        continue
+                    recommendations.append({
+                        'rule_id': 'submitted_vitals',
+                        'category': '自测指标',
+                        'priority': 'medium',
+                        'advice': advice,
+                        'applicable_diseases': ['cardiovascular', 'general']
+                    })
+                    existing_advice.add(advice)
+            explain, triggered_rules = self.build_explain(context, recommendations)
+
+            overall_rr = max(r['personal_rr'] for r in risks.values())
+            overall_score = max((r.get('risk_score', 0) for r in risks.values()), default=round(overall_rr * 30, 1))
+            overall_level = self._get_score_risk_level(overall_score)
         
         return {
             'user_profile': {
@@ -398,10 +411,14 @@ class ChronicRiskService:
             },
             'disease_risks': risks,
             'overall_risk': {
-                'rr': round(overall_rr, 3),
+                'rr': round(overall_rr, 3) if overall_rr is not None else None,
                 'level': overall_level,
-                'color': 'danger' if overall_level == '高风险' else 'warning' if overall_level == '中风险' else 'success',
-                'score': min(100, round(overall_score, 1))
+                'color': (
+                    'danger' if overall_level == '高风险'
+                    else 'warning' if overall_level == '中风险'
+                    else 'success' if overall_level else None
+                ),
+                'score': min(100, round(overall_score, 1)) if overall_score is not None else None
             },
             'recommendations': recommendations,
             'vital_adjustment': vital_adjustment,

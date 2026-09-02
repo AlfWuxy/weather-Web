@@ -744,6 +744,36 @@ def test_chronic_score_is_fused_when_present(monkeypatch, db_session):
     assert abs(final - expected) <= 0.1
 
 
+def test_missing_dlnm_rr_is_not_fused_as_zero_or_one(monkeypatch, db_session):
+    from services.health_risk_service import HealthRiskService
+
+    class UnavailableDLNM:
+        def calculate_rr(self, *_args, **_kwargs):
+            return None, {
+                'calculation_branch': 'untrained_unavailable',
+                'final_rr': None,
+            }
+
+    monkeypatch.setattr(
+        'services.dlnm_risk_service.get_dlnm_service',
+        lambda: UnavailableDLNM(),
+    )
+
+    result = HealthRiskService().assess_personal_weather_health_risk(
+        _assessment_profile(),
+        _assessment_weather(),
+        _assessment_screening(),
+    )
+
+    path_names = [path['name'] for path in result['model_paths']]
+    assert 'DLNM个体模型' not in path_names
+    assert result.get('dlnm_in_score') is False
+    assert result['fusion_breakdown'].get('dlnm_in_score') is False
+    assert result['component_scores']['温度风险'] is None
+    assert result['risk_score'] is not None
+    assert result['chronic_in_score'] is False
+
+
 def test_missing_humidity_is_not_scored_or_shown_as_60(db_session):
     from services.health_risk_service import HealthRiskService
 

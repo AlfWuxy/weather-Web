@@ -845,29 +845,43 @@ class DLNMRiskService:
         
         # 如果模型未训练，使用简化公式
         if not self.model_trained:
-            # 简化RR计算：偏离20度越多，风险越高
-            deviation = abs(temperature - 20)
-            rr = 1.0 + 0.015 * deviation
-            return rr, {
-                'error': '模型未训练，使用简化公式',
-                'calculation_branch': 'untrained_fallback',
-                'base_rr': rr,
-                'raw_dlnm_rr': rr,
-                'disease_modifier': 1.0,
-                'dlnm_disease_modifier': 1.0,
-                'age_modifier': 1.0,
-                'dlnm_age_modifier': 1.0,
-                'uncapped_final_rr': rr,
-                'dlnm_adjusted_rr': rr,
+            return None, {
+                'error': '模型未训练，相对风险暂不计算',
+                'calculation_branch': 'untrained_unavailable',
+                'base_rr': None,
+                'raw_dlnm_rr': None,
+                'disease_modifier': None,
+                'dlnm_disease_modifier': None,
+                'age_modifier': None,
+                'dlnm_age_modifier': None,
+                'uncapped_final_rr': None,
+                'dlnm_adjusted_rr': None,
                 'rr_cap': None,
                 'rr_cap_applied': False,
-                'final_rr': rr,
+                'final_rr': None,
                 'temperature': temperature,
-                'deviation_from_mmt': deviation,
+                'mmt': None,
             }
         
-        # 获取MMT，如果未计算则使用默认值
-        mmt = self.mmt if self.mmt is not None else 20.0
+        if self.mmt is None:
+            return None, {
+                'error': '最适温度未计算，相对风险暂不计算',
+                'calculation_branch': 'mmt_unavailable',
+                'base_rr': None,
+                'raw_dlnm_rr': None,
+                'disease_modifier': None,
+                'dlnm_disease_modifier': None,
+                'age_modifier': None,
+                'dlnm_age_modifier': None,
+                'uncapped_final_rr': None,
+                'dlnm_adjusted_rr': None,
+                'rr_cap': None,
+                'rr_cap_applied': False,
+                'final_rr': None,
+                'temperature': temperature,
+                'mmt': None,
+            }
+        mmt = float(self.mmt)
         
         # 基础RR计算
         rr = self._get_base_rr(temperature)

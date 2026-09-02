@@ -87,11 +87,25 @@ class HealthRiskService:
             disease_type='general',
             age=profile['age']
         )
-        temp_score = self._clamp((float(base_rr) - 1.0) / 1.2 * 100.0, 0.0, 100.0)
+        try:
+            base_rr_value = float(base_rr)
+        except (TypeError, ValueError):
+            base_rr_value = None
+        dlnm_in_score = (
+            base_rr_value is not None
+            and math.isfinite(base_rr_value)
+            and base_rr_value > 0
+        )
+        temp_score = (
+            self._clamp((base_rr_value - 1.0) / 1.2 * 100.0, 0.0, 100.0)
+            if dlnm_in_score else None
+        )
         personal_susceptibility = self._calc_personal_susceptibility_score(profile)
         aqi_in_score = weather.get('aqi') is not None
         aqi_score = self._aqi_score(weather['aqi']) if aqi_in_score else 0.0
-        if aqi_in_score:
+        if not dlnm_in_score:
+            model_a_score = None
+        elif aqi_in_score:
             model_a_score = self._clamp(
                 0.50 * temp_score + 0.28 * personal_susceptibility + 0.22 * aqi_score,
                 0.0,
@@ -147,18 +161,26 @@ class HealthRiskService:
             community_score = self._clamp(community_context['burden_score'], 0.0, 100.0)
         else:
             community_score = 0.0
-        if community_in_score:
+        if community_in_score and dlnm_in_score:
             model_c_score = self._clamp(
                 0.40 * community_score + 0.35 * personal_susceptibility + 0.25 * temp_score,
                 0.0,
                 100.0
             )
-        else:
+        elif community_in_score:
+            model_c_score = self._clamp(
+                (0.40 * community_score + 0.35 * personal_susceptibility) / 0.75,
+                0.0,
+                100.0
+            )
+        elif dlnm_in_score:
             model_c_score = self._clamp(
                 (0.35 * personal_susceptibility + 0.25 * temp_score) / 0.60,
                 0.0,
                 100.0
             )
+        else:
+            model_c_score = self._clamp(personal_susceptibility, 0.0, 100.0)
 
         # 慢病专项（用于病种风险与解释）
         chronic_service = get_chronic_service()
@@ -177,34 +199,29 @@ class HealthRiskService:
         chronic_in_score = chronic_overall_score is not None
 
         # 模型融合 + 不确定性
-        path_fused_score = (
-            model_a_score * 0.45
-            + model_b_score * 0.30
-            + model_c_score * 0.25
+        path_entries = []
+        if dlnm_in_score:
+            path_entries.append(('DLNM个体模型', model_a_score, 0.45))
+        path_entries.append(('规则暴露模型', model_b_score, 0.30))
+        path_c_name = (
+            '社区脆弱性模型' if community_in_score
+            else ('个体与气温' if dlnm_in_score else '个体易感性')
         )
+        path_entries.append((path_c_name, model_c_score, 0.25))
+        path_weight_sum = sum(weight for _, _, weight in path_entries)
+        path_fused_score = sum(
+            score * weight for _, score, weight in path_entries
+        ) / path_weight_sum
         path_scale = 0.85 if chronic_in_score else 1.0
         model_paths = [
             {
-                'name': 'DLNM个体模型',
-                'score': round(model_a_score, 1),
-                'path_weight': 0.45,
-                'weight': path_scale * 0.45,
-                'contribution': round(model_a_score * path_scale * 0.45, 2),
-            },
-            {
-                'name': '规则暴露模型',
-                'score': round(model_b_score, 1),
-                'path_weight': 0.30,
-                'weight': path_scale * 0.30,
-                'contribution': round(model_b_score * path_scale * 0.30, 2),
-            },
-            {
-                'name': '社区脆弱性模型' if community_in_score else '个体与气温',
-                'score': round(model_c_score, 1),
-                'path_weight': 0.25,
-                'weight': path_scale * 0.25,
-                'contribution': round(model_c_score * path_scale * 0.25, 2),
-            },
+                'name': name,
+                'score': round(score, 1),
+                'path_weight': weight,
+                'weight': path_scale * weight / path_weight_sum,
+                'contribution': round(score * path_scale * weight / path_weight_sum, 2),
+            }
+            for name, score, weight in path_entries
         ]
         if chronic_in_score:
             model_paths.append({
@@ -220,7 +237,11 @@ class HealthRiskService:
         )
         fused_score = self._clamp(fused_score, 0.0, 100.0)
 
-        spread = pstdev([model_a_score, model_b_score, model_c_score]) if len(model_paths) > 1 else 0.0
+        spread_scores = [
+            score for score in (model_a_score, model_b_score, model_c_score)
+            if score is not None
+        ]
+        spread = pstdev(spread_scores) if len(spread_scores) > 1 else 0.0
         spread = max(spread, 4.0)
         interval_half = self._clamp(spread * 1.45, 6.0, 22.0)
         score_low = self._clamp(fused_score - interval_half, 0.0, 100.0)
@@ -246,7 +267,7 @@ class HealthRiskService:
         )
 
         component_scores = {
-            '温度风险': round(temp_score, 1),
+            '温度风险': round(temp_score, 1) if temp_score is not None else None,
             '空气质量风险': round(aqi_score, 1),
             '湿度风险': round(humidity_score, 1),
             '极端天气暴露': round(extreme_score, 1),
@@ -264,6 +285,7 @@ class HealthRiskService:
                 skip_names={
                     name
                     for name, included in (
+                        ('温度风险', dlnm_in_score),
                         ('空气质量风险', aqi_in_score),
                         ('湿度风险', humidity_in_score),
                         ('社区脆弱性', vi_in_score),
@@ -319,6 +341,7 @@ class HealthRiskService:
                 'contribution_total': round(sum(path['contribution'] for path in model_paths), 2),
                 'community_in_score': community_in_score,
                 'chronic_in_score': chronic_in_score,
+                'dlnm_in_score': dlnm_in_score,
                 'aqi_in_score': aqi_in_score,
                 'humidity_in_score': humidity_in_score,
             },
@@ -326,6 +349,7 @@ class HealthRiskService:
             'community_context': community_context,
             'community_in_score': community_in_score,
             'chronic_in_score': chronic_in_score,
+            'dlnm_in_score': dlnm_in_score,
             'aqi_in_score': aqi_in_score,
             'humidity_in_score': humidity_in_score,
             'screening': screening_data,
@@ -850,7 +874,12 @@ class HealthRiskService:
             '社区病例负担': '近期社区病例负担偏高'
         }
         skipped = set(skip_names or ())
-        sorted_items = sorted(component_scores.items(), key=lambda x: float(x[1]), reverse=True)
+        sortable = [
+            (name, score)
+            for name, score in component_scores.items()
+            if score is not None
+        ]
+        sorted_items = sorted(sortable, key=lambda x: float(x[1]), reverse=True)
         reasons = []
         for name, score in sorted_items:
             if name in skipped or float(score) < 40:

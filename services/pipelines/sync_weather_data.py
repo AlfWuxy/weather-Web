@@ -254,7 +254,7 @@ def _map_heat_level(level):
         'medium': '中风险',
         'high': '高风险',
         'extreme': '极高'
-    }.get(level, '低风险')
+    }.get(level)
 
 
 def _outreach_summary(total_people, confirmed_count, help_count, escalation_count):

@@ -291,6 +291,69 @@ def test_dlnm_risk_api_without_temperature_does_not_invent_20(
     assert '气温' in (body.get('error_detail') or body.get('error') or '')
 
 
+def test_dlnm_risk_api_does_not_substitute_1_when_rr_unavailable(
+    authenticated_client,
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        'services.dlnm_risk_service.DLNMRiskService.calculate_rr',
+        lambda *_args, **_kwargs: (None, {
+            'error': '模型未训练，相对风险暂不计算',
+            'calculation_branch': 'untrained_unavailable',
+            'final_rr': None,
+        }),
+    )
+
+    response = authenticated_client.post(
+        '/api/v1/dlnm/risk',
+        json={'temperature': 30},
+        headers={'X-CSRF-Token': 'test-csrf-token'},
+    )
+    body = response.get_json()
+    assert response.status_code == 503
+    assert body['success'] is False
+    assert body.get('rr') != 1.0
+    assert '相对风险' in (body.get('message') or body.get('error') or '')
+
+
+def test_comprehensive_alert_does_not_treat_missing_rr_as_low(
+    authenticated_client,
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        'services.api_service.get_weather_with_cache',
+        lambda _location: ({
+            'temperature': 24,
+            'aqi': 38,
+            'pm25': 14,
+            'data_source': 'QWeather',
+            'is_mock': False,
+        }, False),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        'services.dlnm_risk_service.get_dlnm_service',
+        lambda: type('FakeDlnm', (), {
+            'calculate_rr': staticmethod(lambda *_a, **_k: (None, {
+                'calculation_branch': 'untrained_unavailable',
+            })),
+            'identify_extreme_weather_events': staticmethod(lambda *_a, **_k: []),
+        })(),
+        raising=False,
+    )
+
+    response = authenticated_client.post(
+        '/api/v1/alert/comprehensive',
+        json={'city': '都昌'},
+        headers={'X-CSRF-Token': 'test-csrf-token'},
+    )
+    body = response.get_json()
+    assert response.status_code == 503
+    assert body['success'] is False
+    assert (body.get('alert') or {}).get('level') != 'blue'
+    assert '相对风险' in (body.get('message') or body.get('error') or '')
+
+
 def test_forecast_daily_api_without_temperature_does_not_invent_20(
     authenticated_client,
     monkeypatch,

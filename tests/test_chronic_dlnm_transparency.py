@@ -46,7 +46,7 @@ def test_dlnm_calculate_rr_does_not_invent_20_when_temperature_missing():
         service.calculate_rr('bad')
 
 
-def test_dlnm_untrained_branch_keeps_uniform_breakdown():
+def test_dlnm_untrained_does_not_invent_rr_from_20c():
     from services.dlnm_risk_service import DLNMRiskService
 
     service = object.__new__(DLNMRiskService)
@@ -54,12 +54,29 @@ def test_dlnm_untrained_branch_keeps_uniform_breakdown():
 
     final_rr, breakdown = service.calculate_rr(30)
 
-    assert final_rr == pytest.approx(1.15)
-    assert breakdown['calculation_branch'] == 'untrained_fallback'
-    assert breakdown['raw_dlnm_rr'] == pytest.approx(final_rr)
-    assert breakdown['dlnm_disease_modifier'] == pytest.approx(1.0)
-    assert breakdown['dlnm_age_modifier'] == pytest.approx(1.0)
-    assert breakdown['dlnm_adjusted_rr'] == pytest.approx(final_rr)
+    assert final_rr is None
+    assert breakdown['calculation_branch'] == 'untrained_unavailable'
+    assert breakdown.get('mmt') is None
+    assert breakdown.get('final_rr') is None
+
+
+def test_dlnm_trained_without_mmt_does_not_invent_20_or_23():
+    from services.dlnm_risk_service import DLNMRiskService
+
+    service = object.__new__(DLNMRiskService)
+    service.model_trained = True
+    service.mmt = None
+    service.disease_specific_rr = {}
+    service.rr_cap_cumulative = 3.5
+    service.literature_weight = 0.3
+    service.literature_priors = {'age_modifiers': {}}
+    service._get_base_rr = lambda _temperature: 1.25
+
+    final_rr, breakdown = service.calculate_rr(32)
+
+    assert final_rr is None
+    assert breakdown.get('mmt') is None
+    assert breakdown['calculation_branch'] == 'mmt_unavailable'
 
 
 def test_dlnm_breakdown_marks_cap_without_changing_result():
@@ -129,3 +146,35 @@ def test_chronic_service_exposes_both_modifier_layers(monkeypatch):
     assert risk['chronic_age_amplifier'] == pytest.approx(1.1)
     assert risk['comorbidity_amplifier'] == pytest.approx(1.4)
     assert risk['personal_rr'] == pytest.approx(1.716 * 1.1 * 1.4, abs=0.001)
+
+
+def test_chronic_service_fails_closed_when_dlnm_rr_unavailable(monkeypatch):
+    from services.chronic_risk_service import ChronicRiskService
+
+    class UnavailableDLNMService:
+        def calculate_rr(self, temperature, lag_temperatures=None, disease_type=None, age=None):
+            del temperature, lag_temperatures, disease_type, age
+            return None, {
+                'error': '模型未训练，相对风险暂不计算',
+                'calculation_branch': 'untrained_unavailable',
+                'final_rr': None,
+            }
+
+    monkeypatch.setattr(
+        'services.dlnm_risk_service.get_dlnm_service',
+        lambda: UnavailableDLNMService(),
+    )
+
+    service = ChronicRiskService()
+    result = service.predict_individual_risk(
+        {'age': 45, 'gender': '男', 'chronic_diseases': ['高血压']},
+        {'temperature': 32, 'humidity': 60, 'aqi': 50},
+        target_diseases=['cardiovascular'],
+    )
+
+    assert result['disease_risks'] == {}
+    overall = result['overall_risk']
+    assert overall.get('rr') is None
+    assert overall.get('score') is None
+    assert overall.get('level') is None
+    assert overall.get('rr') != 1.0

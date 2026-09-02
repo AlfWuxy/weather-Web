@@ -536,13 +536,24 @@ def _api_dlnm_risk():
             disease_type=disease_type,
             age=age
         )
+        try:
+            rr_value = float(rr)
+        except (TypeError, ValueError):
+            rr_value = None
+        if rr_value is None or not math.isfinite(rr_value) or rr_value <= 0:
+            return jsonify({
+                'success': False,
+                'error': 'dlnm_rr_unavailable',
+                'message': '天气相对风险当前不可用',
+                'breakdown': breakdown,
+            }), 503
 
         # 识别极端天气
         extreme_events = dlnm.identify_extreme_weather_events(temperature)
 
         return jsonify({
             'success': True,
-            'rr': round(rr, 4) if rr else 1.0,
+            'rr': round(rr_value, 4),
             'breakdown': breakdown,
             'extreme_events': extreme_events,
             'thresholds': dlnm.get_risk_thresholds()
@@ -1098,6 +1109,17 @@ def _api_comprehensive_alert():
 
         # 计算当前风险
         rr, _ = dlnm.calculate_rr(temperature)
+        try:
+            rr_value = float(rr)
+        except (TypeError, ValueError):
+            rr_value = None
+        if rr_value is None or not math.isfinite(rr_value) or rr_value <= 0:
+            return jsonify({
+                'success': False,
+                'error': 'dlnm_rr_unavailable',
+                'message': '天气相对风险当前不可用',
+            }), 503
+        rr = rr_value
         extreme_events = dlnm.identify_extreme_weather_events(temperature)
 
         # 获取7天预报：综合预警只使用和风天气，避免 mock 或融合缓存抬高风险。

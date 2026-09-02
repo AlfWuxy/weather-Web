@@ -657,6 +657,14 @@ class ForecastService:
             )
             if not self._lag_sources_are_live(sources):
                 return False, '近几日气温观测不足，就诊负担预测暂不显示。'
+        from services.dlnm_risk_service import get_dlnm_service
+        sample_rr, _ = get_dlnm_service().calculate_rr(day_temp)
+        try:
+            sample_rr = float(sample_rr)
+        except (TypeError, ValueError):
+            sample_rr = None
+        if sample_rr is None or sample_rr != sample_rr or sample_rr <= 0:
+            return False, '天气相对风险当前不可用，就诊负担预测暂不显示。'
         return True, ''
     
     def predict_daily_visits(self, temperature, lag_temps=None, month=None, dow=None):
@@ -680,7 +688,13 @@ class ForecastService:
         
         # 获取相对风险
         rr, breakdown = dlnm.calculate_rr(temperature, lag_temps)
-        
+        try:
+            rr = float(rr)
+        except (TypeError, ValueError):
+            rr = None
+        if rr is None or rr != rr or rr <= 0:
+            raise ValueError('天气相对风险当前不可用')
+
         # 基础门诊量（考虑季节性）
         if month and month in dlnm.seasonal_baseline:
             baseline = dlnm.seasonal_baseline[month]['avg_visits']

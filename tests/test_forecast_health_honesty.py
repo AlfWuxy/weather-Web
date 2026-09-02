@@ -3,6 +3,7 @@
 from datetime import timedelta
 
 import pandas as pd
+import pytest
 
 from core.time_utils import today_local
 
@@ -371,3 +372,70 @@ def test_heat_risk_does_not_reuse_daytime_temp_as_night_min():
     assert missing_night['night_min'] != 36
     assert missing_night['night_min'] is None
     assert missing_night['risk_score'] < known_hot_night['risk_score']
+
+
+def test_predict_daily_visits_fails_closed_when_dlnm_rr_unavailable(monkeypatch):
+    from services.forecast_service import ForecastService
+
+    class UnavailableDLNM:
+        seasonal_baseline = {}
+
+        def calculate_rr(self, temperature, lag_temps=None):
+            del temperature, lag_temps
+            return None, {'calculation_branch': 'untrained_unavailable'}
+
+    monkeypatch.setattr(
+        'services.dlnm_risk_service.get_dlnm_service',
+        lambda: UnavailableDLNM(),
+    )
+
+    service = ForecastService.__new__(ForecastService)
+    service.visit_mean = 50.0
+    service.visit_threshold_p90 = 30.0
+    service.max_observed_daily_visits = 20.0
+
+    with pytest.raises(ValueError, match='相对风险'):
+        service.predict_daily_visits(temperature=35, lag_temps=[35], dow=6)
+
+
+def test_generate_7day_forecast_skips_health_when_dlnm_rr_unavailable(monkeypatch):
+    class UnavailableDLNM:
+        seasonal_baseline = {}
+
+        def calculate_rr(self, temperature, lag_temps=None, lag_temperatures=None, **_kwargs):
+            del temperature, lag_temps, lag_temperatures
+            return None, {'calculation_branch': 'untrained_unavailable'}
+
+        def identify_extreme_weather_events(self, temperature):
+            del temperature
+            return []
+
+    monkeypatch.setattr(
+        'services.dlnm_risk_service.get_dlnm_service',
+        lambda: UnavailableDLNM(),
+    )
+
+    service = _service_with_history(fallback_thresholds=False)
+    forecasts, summary = service.generate_7day_forecast(
+        [28, 29, 30, 31, 30, 29, 28],
+        start_date=today_local(),
+    )
+
+    assert forecasts == []
+    assert summary['health_forecast_available'] is False
+    assert '相对风险' in summary['health_forecast_reason']
+
+
+def test_heat_index_does_not_use_air_temp_when_humidity_missing():
+    from services.heat_action_service import HeatActionService
+
+    service = HeatActionService()
+    missing = service.calculate_heat_risk({'temperature': 36})
+    ready = service.calculate_heat_risk({'temperature': 36, 'humidity': 70})
+
+    assert missing['heat_index'] is None
+    assert missing['risk_level'] is None
+    assert missing['risk_score'] is None
+    assert ready['heat_index'] is not None
+    assert ready['heat_index'] != 36
+    assert ready['risk_level'] is not None
