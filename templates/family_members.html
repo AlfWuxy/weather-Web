@@ -125,6 +125,12 @@
                             <a href="{{ url_for('health.family_member_edit', member_id=m.id) }}" class="btn btn-sm btn-outline-secondary" aria-label="编辑 {{ m.name }} 的档案">
                                 <i class="bi bi-pencil"></i>
                             </a>
+                            <form method="POST" action="{{ url_for('health.family_member_delete', member_id=m.id) }}" onsubmit="return confirm('确定删除 {{ m.name }} 的档案？相关配对会解除。');">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                <button type="submit" class="btn btn-sm btn-outline-danger" aria-label="删除 {{ m.name }}">
+                                    <i class="bi bi-trash"></i>
+                                </button>
+                            </form>
                         </div>
                     </div>
                 </div>

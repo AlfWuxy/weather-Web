@@ -14,6 +14,16 @@
             <div class="d-flex gap-2">
                 <a class="btn btn-outline-secondary" href="{{ url_for('health.family_members') }}">返回列表</a>
                 <a class="btn btn-outline-warning" href="{{ url_for('health.family_member_edit', member_id=member.id) }}">编辑</a>
+                <form method="POST" action="{{ url_for('health.family_member_toggle_alert', member_id=member.id) }}">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <button type="submit" class="btn btn-outline-primary">
+                        {{ '暂停提醒' if profile.alert_enabled else '开启提醒' }}
+                    </button>
+                </form>
+                <form method="POST" action="{{ url_for('health.family_member_delete', member_id=member.id) }}" onsubmit="return confirm('确定删除 {{ member.name }} 的档案？相关配对会解除。');">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <button type="submit" class="btn btn-outline-danger">删除</button>
+                </form>
             </div>
         </div>
     </div>

@@ -522,7 +522,7 @@ def medication_reminders():
         MedicationReminder.created_at.desc()
     ).all()
     members = FamilyMember.query.filter_by(user_id=current_user.id).order_by(FamilyMember.created_at.desc()).all()
-    member_map = {m.id: m for m in members}
+    member_map = {m.id: m.name for m in members}
 
     return render_template('medication_reminders.html', reminders=reminders, members=members, member_map=member_map)
 

@@ -218,3 +218,23 @@ def test_family_member_delete_unlinks_pairs_and_related_rows(client, db_session)
     leftover_events = UsageEvent.query.filter_by(user_id=user.id).all()
     assert leftover_events
     assert all(event.member_id is None for event in leftover_events)
+
+
+def test_family_member_pages_expose_delete_and_toggle_forms(client, db_session):
+    """删除和开关提醒路由已存在，页面必须给出可提交的表单。"""
+    from core.db_models import FamilyMember, FamilyMemberProfile
+
+    user = _create_user(db_session, username='family_action_ui_user')
+    member = FamilyMember(user_id=user.id, name='姨妈', relation='姨妈', age=68, gender='女性')
+    db_session.add(member)
+    db_session.flush()
+    db_session.add(FamilyMemberProfile(member_id=member.id, alert_enabled=True))
+    db_session.commit()
+    _login_as(client, user.id)
+
+    list_body = client.get('/family-members').get_data(as_text=True)
+    assert f'action="/family-members/{member.id}/delete"' in list_body
+
+    detail_body = client.get(f'/family-members/{member.id}').get_data(as_text=True)
+    assert f'action="/family-members/{member.id}/delete"' in detail_body
+    assert f'action="/family-members/{member.id}/toggle-alert"' in detail_body
