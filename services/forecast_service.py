@@ -262,8 +262,8 @@ class ForecastService:
         if temp_min_imputed:
             fallback_value = self._safe_float(temp_min_fallback, None)
             if fallback_value is None:
-                tmin = temp - 4.0
-                temp_min_source = 'temperature_minus_4'
+                tmin = None
+                temp_min_source = 'unavailable'
             else:
                 tmin = fallback_value
                 temp_min_source = 'temperature_uncertainty_lower'
@@ -273,7 +273,8 @@ class ForecastService:
 
         humidity_input = self._safe_float(humidity, None)
         humidity_imputed = humidity_input is None
-        hum = 60.0 if humidity_imputed else humidity_input
+        humidity_in_score = not humidity_imputed
+        hum = humidity_input
 
         pm = self._safe_float(pm25, None)
         aqi_used = None
@@ -304,26 +305,32 @@ class ForecastService:
 
         heat_score = float(np.clip((temp - 28.0) * 6.0, 0.0, 100.0))
         pollution_score = float(np.clip((pm - 35.0) * 1.8, 0.0, 100.0))
-        humidity_score = float(np.clip((hum - 70.0) * 2.4, 0.0, 100.0))
-        hot_night_score = 100.0 if tmin >= 26 else 72.0 if tmin >= 24 else 45.0 if tmin >= 22 else 8.0
+        humidity_score = float(np.clip((hum - 70.0) * 2.4, 0.0, 100.0)) if humidity_in_score else 0.0
+        hot_night_in_score = tmin is not None
+        if hot_night_in_score:
+            hot_night_score = 100.0 if tmin >= 26 else 72.0 if tmin >= 24 else 45.0 if tmin >= 22 else 8.0
+        else:
+            hot_night_score = 0.0
 
         # 只有当天污染物预报才计入评分；实况复用和默认 AQI 50 只做追溯，不抬高 7 天风险。
         pm25_in_score = pm25_source in ('direct', 'aqi_proxy')
         scored_pollution = pollution_score if pm25_in_score else 0.0
+        scored_humidity = humidity_score if humidity_in_score else 0.0
+        scored_hot_night = hot_night_score if hot_night_in_score else 0.0
 
         synergy_bonus = 0.0
         if heat_score >= 45 and scored_pollution >= 40:
             synergy_bonus += 8.0
-        if heat_score >= 45 and humidity_score >= 40:
+        if heat_score >= 45 and scored_humidity >= 40:
             synergy_bonus += 6.0
-        if hot_night_score >= 70 and scored_pollution >= 35:
+        if scored_hot_night >= 70 and scored_pollution >= 35:
             synergy_bonus += 4.0
 
         pre_clip_score = (
             0.34 * heat_score
             + 0.28 * scored_pollution
-            + 0.18 * humidity_score
-            + 0.20 * hot_night_score
+            + 0.18 * scored_humidity
+            + 0.20 * scored_hot_night
             + synergy_bonus
         )
         final_score = float(np.clip(pre_clip_score, 0.0, 100.0))
@@ -343,13 +350,15 @@ class ForecastService:
             'level': level,
             'score_basis': 'composite' if pm25_in_score else 'heat_humidity_hot_night',
             'pm25_in_score': pm25_in_score,
+            'humidity_in_score': humidity_in_score,
+            'hot_night_in_score': hot_night_in_score,
             'components': {
                 'heat': round(heat_score, 1),
                 'pm25': round(pollution_score, 1),
                 'humidity': round(humidity_score, 1),
                 'hot_night': round(hot_night_score, 1)
             },
-            'hot_night': bool(tmin >= 22),
+            'hot_night': bool(hot_night_in_score and tmin >= 22),
             # pm25_proxy 保留旧接口语义；来源请以 pm25_source 为准。
             'pm25_proxy': round(pm, 1),
             'pm25_source': pm25_source,
@@ -360,14 +369,16 @@ class ForecastService:
                     'source': 'default_20' if temp_imputed else 'corrected_forecast',
                 },
                 'temp_min': {
-                    'used_value': round(tmin, 1),
+                    'used_value': round(tmin, 1) if tmin is not None else None,
                     'imputed': temp_min_imputed,
                     'source': temp_min_source,
+                    'included_in_score': hot_night_in_score,
                 },
                 'humidity': {
-                    'used_value': round(hum, 1),
+                    'used_value': round(hum, 1) if hum is not None else None,
                     'imputed': humidity_imputed,
-                    'source': 'default_60' if humidity_imputed else 'forecast_input',
+                    'source': 'forecast_input' if humidity_in_score else 'missing',
+                    'included_in_score': humidity_in_score,
                 },
                 'pm25': {
                     'used_value': round(pm, 1),

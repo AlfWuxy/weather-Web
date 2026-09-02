@@ -98,6 +98,28 @@ def test_composite_exposure_does_not_invent_20_when_temperature_missing():
     assert (result.get('inputs') or {}).get('temperature', {}).get('imputed') is not True
 
 
+def test_composite_exposure_does_not_invent_hot_night_from_daytime_minus_4():
+    from services.forecast_service import ForecastService
+
+    service = ForecastService.__new__(ForecastService)
+    missing_night = service._composite_exposure_risk(
+        temperature=36,
+        temp_min=None,
+        humidity=80,
+    )
+    known_hot_night = service._composite_exposure_risk(
+        temperature=36,
+        temp_min=32,
+        humidity=80,
+    )
+
+    night = (missing_night.get('inputs') or {}).get('temp_min') or {}
+    assert night.get('used_value') != 32.0
+    assert night.get('source') != 'temperature_minus_4'
+    assert missing_night.get('hot_night_in_score') is False
+    assert missing_night['score'] < known_hot_night['score']
+
+
 def test_live_forecast_service_does_not_emit_visit_burden_from_stale_csv():
     from services.forecast_service import ForecastService
 

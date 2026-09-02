@@ -60,12 +60,15 @@ def test_composite_exposure_returns_score_stages_and_input_trace():
         'aqi_imputed': False,
         'included_in_score': True,
     }
-    assert result['inputs']['humidity']['used_value'] == 60.0
+    assert result['inputs']['humidity']['used_value'] is None
     assert result['inputs']['humidity']['imputed'] is True
+    assert result['inputs']['humidity']['source'] == 'missing'
+    assert result['inputs']['humidity']['included_in_score'] is False
     assert result['inputs']['temp_min'] == {
         'used_value': 26.0,
         'imputed': True,
         'source': 'temperature_uncertainty_lower',
+        'included_in_score': True,
     }
 
     reused_observation_result = service._composite_exposure_risk(
