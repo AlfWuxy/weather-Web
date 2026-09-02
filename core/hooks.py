@@ -15,6 +15,7 @@ from core.metric_explanations import (
     get_metric_explanations,
 )
 from core.security import csrf_failure_response, generate_csrf_token, validate_csrf
+from core.time_utils import today_local
 from core.weather import (
     get_location_options,
     get_user_location_value,
@@ -158,6 +159,7 @@ def register_hooks(app):
         current_location = normalize_location_name(get_user_location_value())
         payload = {
             'now': lambda: datetime.now(tz=__import__('zoneinfo').ZoneInfo('Asia/Shanghai')),
+            'today_date': today_local().isoformat(),
             'csrf_token': generate_csrf_token,
             'current_location': current_location,
             'location_options': get_location_options(),

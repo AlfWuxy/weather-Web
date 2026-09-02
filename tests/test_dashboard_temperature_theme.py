@@ -44,6 +44,8 @@ def test_dashboard_renders_temperature_theme(authenticated_client):
     assert 'data-temp-intensity="' in html
     assert "--yl-hero-primary:" in html
     assert "家庭照护今日页" in html
+    from core.time_utils import today_local
+    assert today_local().isoformat() in html
 
 
 def test_dashboard_renders_weather_alert_real_fields_with_local_date(
