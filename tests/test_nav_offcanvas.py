@@ -134,6 +134,13 @@ def test_home_copy_is_capability_focused_and_community_icon_exists(client):
     assert '页面只把需要行动的部分放到前面' not in body
 
 
+def test_logged_in_nav_shows_elder_mode_by_default(client, db_session):
+    _set_logged_in_user(client, db_session, username='elder-nav-user', role='user')
+    body = client.get('/').get_data(as_text=True)
+    assert 'href="/elder-mode"' in body
+    assert '老人模式' in body
+
+
 def test_anonymous_elder_card_enters_guest_elder_mode(client):
     body = client.get('/').get_data(as_text=True)
     assert 'href="/guest?next=/elder-mode" class="yl-role-card variant-elder"' in body
