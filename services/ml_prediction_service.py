@@ -38,6 +38,51 @@ def _weather_metrics(weather_info):
         'wind_speed': _finite_or_none(payload.get('wind_speed')),
         'feels_like': _finite_or_none(payload.get('feels_like')),
     }
+
+def _require_profile_age(user_info):
+    payload = user_info if isinstance(user_info, dict) else {}
+    age = _finite_or_none(payload.get('age'))
+    if age is None:
+        raise ValueError('请提供年龄')
+    age_int = int(age)
+    if age_int < 1 or age_int > 150:
+        raise ValueError('请提供年龄')
+    return age_int
+
+
+def _require_model_weather(weather_info):
+    payload = weather_info if isinstance(weather_info, dict) else {}
+    tmean = _finite_or_none(payload.get('tmean'))
+    if tmean is None:
+        tmean = _finite_or_none(payload.get('temperature'))
+    if tmean is None:
+        raise ValueError('请提供气温')
+    tmin = _finite_or_none(payload.get('tmin'))
+    if tmin is None:
+        tmin = _finite_or_none(payload.get('temperature_min'))
+    tmax = _finite_or_none(payload.get('tmax'))
+    if tmax is None:
+        tmax = _finite_or_none(payload.get('temperature_max'))
+    humidity = _finite_or_none(payload.get('humidity'))
+    wind_speed = _finite_or_none(payload.get('wind_speed'))
+    precipitation = _finite_or_none(payload.get('precipitation'))
+    sunshine = _finite_or_none(payload.get('sunshine_hours'))
+    if sunshine is None:
+        sunshine = _finite_or_none(payload.get('sunshine_duration_seconds'))
+    feels_like = _finite_or_none(payload.get('feels_like'))
+    if any(value is None for value in (tmin, tmax, humidity, wind_speed, precipitation, sunshine)):
+        raise ValueError('天气要素不完整，无法生成类别线索。')
+    return {
+        'tmean': tmean,
+        'tmin': tmin,
+        'tmax': tmax,
+        'humidity': humidity,
+        'wind_speed': wind_speed,
+        'precipitation': precipitation,
+        'sunshine_hours': sunshine,
+        'feels_like': feels_like,
+    }
+
 EXPECTED_SKLEARN_VERSION = os.getenv('ML_EXPECTED_SKLEARN_VERSION', '1.7.2')
 _ml_service_instance = None
 _ml_service_lock = threading.Lock()
@@ -231,57 +276,52 @@ class MLPredictionService:
             }
         
         try:
-            # 提取用户信息
-            age = user_info.get('age', 40)
-            gender = user_info.get('gender', '男')
-            
-            # 时间特征
+            age = _require_profile_age(user_info)
+            gender = (user_info or {}).get('gender') or '未知'
+
             now = now_local()
             month = int(weather_info.get('month', now.month)) if weather_info else now.month
             weekday = now.weekday()
             hour = now.hour
-            
-            # 计算派生特征
+
             season = self._get_season(month)
             age_group = self._get_age_group(age)
             gender_code = 1 if gender in ['男', '男性'] else 0
-            
-            # 提取天气特征
-            if weather_info:
-                # 温度 - 支持多种参数名
-                tmean = weather_info.get('tmean', weather_info.get('temperature', self.weather_defaults['tmean']))
-                tmin = weather_info.get('tmin', weather_info.get('temperature_min', tmean - 5))
-                tmax = weather_info.get('tmax', weather_info.get('temperature_max', tmean + 5))
-                
-                # 湿度
-                humidity = weather_info.get('humidity', self.weather_defaults['humidity'])
-                
-                # 风速
-                wind_speed = weather_info.get('wind_speed', self.weather_defaults['wind_speed'])
-                
-                # 体感温度 - 如果没提供则计算
-                feels_like = weather_info.get('feels_like')
-                if feels_like is None:
-                    feels_like = self._calculate_feels_like(tmean, humidity, wind_speed)
-                
-                # 降水量
-                precipitation = weather_info.get('precipitation', self.weather_defaults['precipitation'])
 
-                # 日照时长（统一为秒）
-                sunshine_hours = self._normalize_sunshine_seconds(weather_info)
+            feature_cols = (getattr(self, 'model_info', None) or {}).get('feature_cols', [])
+            if 'tmean' in feature_cols:
+                weather_features = _require_model_weather(weather_info)
             else:
-                tmean = self.weather_defaults['tmean']
-                tmin = self.weather_defaults['tmin']
-                tmax = self.weather_defaults['tmax']
-                feels_like = self.weather_defaults['feels_like']
-                humidity = self.weather_defaults['humidity']
-                wind_speed = self.weather_defaults['wind_speed']
-                precipitation = self.weather_defaults['precipitation']
-                sunshine_hours = self._normalize_sunshine_seconds(None)
-            
-            # 检查模型特征列
-            feature_cols = self.model_info.get('feature_cols', [])
-            
+                if not weather_info:
+                    raise ValueError('请提供气温')
+                payload = weather_info if isinstance(weather_info, dict) else {}
+                tmean_only = _finite_or_none(payload.get('tmean'))
+                if tmean_only is None:
+                    tmean_only = _finite_or_none(payload.get('temperature'))
+                if tmean_only is None:
+                    raise ValueError('请提供气温')
+                weather_features = {
+                    'tmean': tmean_only,
+                    'tmin': _finite_or_none(payload.get('tmin') if payload.get('tmin') is not None else payload.get('temperature_min')),
+                    'tmax': _finite_or_none(payload.get('tmax') if payload.get('tmax') is not None else payload.get('temperature_max')),
+                    'humidity': _finite_or_none(payload.get('humidity')),
+                    'wind_speed': _finite_or_none(payload.get('wind_speed')),
+                    'precipitation': _finite_or_none(payload.get('precipitation')),
+                    'sunshine_hours': _finite_or_none(payload.get('sunshine_hours')),
+                    'feels_like': _finite_or_none(payload.get('feels_like')),
+                }
+            tmean = weather_features['tmean']
+            tmin = weather_features['tmin']
+            tmax = weather_features['tmax']
+            humidity = weather_features['humidity']
+            wind_speed = weather_features['wind_speed']
+            precipitation = weather_features['precipitation']
+            sunshine_hours = weather_features['sunshine_hours']
+            feels_like = weather_features['feels_like']
+            if feels_like is None and tmean is not None and humidity is not None and wind_speed is not None:
+                feels_like = self._calculate_feels_like(tmean, humidity, wind_speed)
+
+            # 根据已解析的特征列构建向量
             # 根据模型配置构建特征向量
             if 'tmean' in feature_cols:
                 # 新模型（包含天气特征）
@@ -424,6 +464,12 @@ class MLPredictionService:
                 }
             }
             
+        except ValueError as exc:
+            return {
+                'success': False,
+                'error': str(exc),
+                'predictions': []
+            }
         except Exception as exc:
             logger.exception("ML疾病风险预测失败")
             return {

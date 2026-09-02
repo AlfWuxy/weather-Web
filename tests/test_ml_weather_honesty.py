@@ -78,3 +78,40 @@ def test_risk_score_keeps_real_temperature_when_aqi_is_invalid():
         'wind_speed': 2.5,
     })
     assert heat > mild
+
+
+def test_predict_disease_risk_does_not_invent_age_40():
+    service = _service()
+    service.model_loaded = True
+    result = service.predict_disease_risk(
+        {},
+        {
+            'temperature': 31,
+            'tmean': 31,
+            'tmin': 26,
+            'tmax': 36,
+            'humidity': 70,
+            'wind_speed': 2.5,
+            'precipitation': 0,
+            'sunshine_hours': 20000,
+        },
+    )
+    assert result['success'] is False
+    assert '年龄' in (result.get('error') or '')
+    assert result.get('error') != '服务暂时不可用，请稍后再试'
+
+
+def test_predict_disease_risk_does_not_fill_weather_defaults():
+    service = _service()
+    service.model_loaded = True
+    service.model_info = {'feature_cols': ['tmean', 'humidity']}
+    result = service.predict_disease_risk({'age': 72, 'gender': '女'}, None)
+    assert result['success'] is False
+    assert '气温' in (result.get('error') or '') or '天气' in (result.get('error') or '')
+
+    incomplete = service.predict_disease_risk(
+        {'age': 72, 'gender': '女'},
+        {'temperature': 31, 'tmean': 31, 'humidity': None},
+    )
+    assert incomplete['success'] is False
+    assert incomplete.get('weather_conditions', {}).get('humidity') != 70
