@@ -351,6 +351,7 @@ def configure_app(app, logger):
     app.config.setdefault('NOTIFICATION_ESCALATION_DAYS', parse_int(os.getenv('NOTIFICATION_ESCALATION_DAYS', '3'), default=3))
     app.config.setdefault('NOTIFICATION_MAX_DAILY', parse_int(os.getenv('NOTIFICATION_MAX_DAILY', '5'), default=5))
     app.config.setdefault('HEAT_HOT_DAY_THRESHOLD', parse_float(os.getenv('HEAT_HOT_DAY_THRESHOLD', '35'), default=35.0))
+    app.config.setdefault('COLD_DAY_THRESHOLD', parse_float(os.getenv('COLD_DAY_THRESHOLD', '5'), default=5.0))
     app.config.setdefault('RATE_LIMITS', os.getenv('RATE_LIMITS', '200 per minute'))
 
     rate_limit_storage_env = _normalized_env_value('RATE_LIMIT_STORAGE_URI')

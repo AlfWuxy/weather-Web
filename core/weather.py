@@ -350,7 +350,13 @@ def _weather_cache_location(location):
 
 
 def get_weather_with_cache(location, ttl_minutes=None):
-    """获取带缓存的天气数据"""
+    """获取带缓存的天气数据，并在和风实况上附加热浪/寒潮连续天数。"""
+    weather_data, from_cache = _load_weather_with_cache(location, ttl_minutes)
+    attach_location = location if is_demo_mode() else _weather_cache_location(location)
+    return _attach_wave_days(weather_data, attach_location), from_cache
+
+
+def _load_weather_with_cache(location, ttl_minutes=None):
     if is_demo_mode():
         return get_demo_weather_data(), False
     location = _weather_cache_location(location)
@@ -681,3 +687,76 @@ def get_consecutive_hot_days(location, target_date=None, today_max=None, thresho
         count += 1
         expected = expected - timedelta(days=1)
     return count
+
+
+def get_consecutive_cold_days(location, target_date=None, today_min=None, threshold=None, max_days=7):
+    """Count consecutive cold days up to target_date (tmin at or below threshold)."""
+    if is_demo_mode():
+        return 0
+    if not location:
+        return 0
+    if threshold is None:
+        if has_app_context():
+            threshold = current_app.config.get('COLD_DAY_THRESHOLD', 5)
+        else:
+            threshold = 5
+    try:
+        threshold = float(threshold)
+    except (TypeError, ValueError):
+        threshold = 5
+    if target_date is None:
+        target_date = today_local()
+
+    if today_min is None:
+        record = WeatherData.query.filter_by(
+            date=target_date,
+            location=location
+        ).first()
+        if record and record.temperature_min is not None:
+            today_min = record.temperature_min
+    if today_min is None:
+        return 0
+    try:
+        today_min = float(today_min)
+    except (TypeError, ValueError):
+        return 0
+    if today_min > threshold:
+        return 0
+
+    count = 1
+    if max_days is None or max_days <= 1:
+        return count
+    lookback = max_days - 1
+    records = WeatherData.query.filter(
+        WeatherData.location == location,
+        WeatherData.date < target_date
+    ).order_by(WeatherData.date.desc()).limit(lookback).all()
+    expected = target_date - timedelta(days=1)
+    for record in records:
+        if record.date != expected:
+            break
+        if record.temperature_min is None or record.temperature_min > threshold:
+            break
+        count += 1
+        expected = expected - timedelta(days=1)
+    return count
+
+
+def _attach_wave_days(weather_data, location):
+    """Only QWeather live observations carry consecutive heat/cold wave lengths."""
+    if not isinstance(weather_data, dict):
+        return weather_data
+    attached = dict(weather_data)
+    attached.pop('heat_wave_days', None)
+    attached.pop('cold_wave_days', None)
+    if not is_qweather_online_weather(attached):
+        return attached
+    attached['heat_wave_days'] = get_consecutive_hot_days(
+        location,
+        today_max=attached.get('temperature_max'),
+    )
+    attached['cold_wave_days'] = get_consecutive_cold_days(
+        location,
+        today_min=attached.get('temperature_min'),
+    )
+    return attached
