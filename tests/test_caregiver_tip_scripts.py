@@ -97,3 +97,28 @@ def test_web_helpers_use_shared_caregiver_scripts():
 def test_mp_template_requires_shared_caregiver_scripts():
     text = (ROOT / 'miniprogram' / 'pages' / 'template' / 'index.js').read_text(encoding='utf-8')
     assert "require('../../content/caregiver_tip_scripts.json')" in text
+
+
+def test_mp_template_rounds_temp_and_appends_chronic_note_like_web():
+    text = (ROOT / 'miniprogram' / 'pages' / 'template' / 'index.js').read_text(encoding='utf-8')
+    assert 'Math.round' in text
+    assert '慢病提示（可选登记）' in text
+    assert 'chronic_diseases' in text
+
+
+def test_web_helpers_append_chronic_note_to_caregiver_message():
+    from types import SimpleNamespace
+
+    from services.user._helpers import _build_caregiver_message
+
+    pair = SimpleNamespace(short_code='12345678', location_query='都昌', community_code='都昌')
+    member = SimpleNamespace(name='王奶奶', relation='邻居', chronic_diseases='["高血压"]')
+    heat = _build_caregiver_message(
+        pair,
+        alert_kind='heat',
+        weather_data={'temperature_max': 36.4, 'temperature_min': 26.2},
+        member=member,
+        action_link='https://example.test/a',
+    )
+    assert '最高约 36°C' in heat
+    assert '慢病提示（可选登记）：高血压' in heat

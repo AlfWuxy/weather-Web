@@ -11,6 +11,14 @@ def test_mp_alerts_wxml_does_not_promise_threshold_temps_when_weather_missing():
     assert '仍会展示温度阈值信息供参考' not in text
 
 
+def test_mp_alerts_missing_pair_is_not_shown_as_empty_warnings():
+    wxml = (ROOT / 'miniprogram' / 'pages' / 'alerts' / 'index.wxml').read_text(encoding='utf-8')
+    js = (ROOT / 'miniprogram' / 'pages' / 'alerts' / 'index.js').read_text(encoding='utf-8')
+    assert 'missingPairId' in js
+    assert '缺少照护对象' in wxml
+    assert 'missingPairId' in wxml
+
+
 def test_mp_bind_token_explains_missing_api_base():
     text = (ROOT / 'miniprogram' / 'pages' / 'bind-token' / 'index.js').read_text(encoding='utf-8')
     assert 'miniapp_api_base_missing' in text

@@ -7,6 +7,7 @@ Page({
     warnings: [],
     location: {},
     weather: {},
+    missingPairId: false,
   },
 
   getToken() {
@@ -15,7 +16,7 @@ Page({
 
   async onLoad(options) {
     const pairId = options.pair_id ? parseInt(options.pair_id, 10) : null;
-    this.setData({ pairId });
+    this.setData({ pairId, missingPairId: !pairId });
     if (pairId) {
       await this.loadAlerts(pairId);
     }

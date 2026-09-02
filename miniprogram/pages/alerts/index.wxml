@@ -21,7 +21,11 @@
     <view class="muted" style="text-align:center; padding: 20px;">加载中…</view>
   </block>
 
-  <block wx:if="{{!loading && warnings.length === 0}}">
+  <block wx:elif="{{missingPairId}}">
+    <view class="muted" style="text-align:center; padding: 20px;">缺少照护对象</view>
+  </block>
+
+  <block wx:elif="{{warnings.length === 0}}">
     <view class="muted" style="text-align:center; padding: 20px;">暂无官方预警</view>
   </block>
 

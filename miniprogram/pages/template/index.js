@@ -3,10 +3,12 @@ const scripts = require('../../content/caregiver_tip_scripts.json');
 
 function formatTemp(value) {
   if (value === null || value === undefined || value === '') return '';
-  return String(value);
+  const n = Number(value);
+  if (!Number.isFinite(n)) return '';
+  return String(Math.round(n));
 }
 
-function buildMessage({ trigger, elderName, relation, locationText, tmax, tmin, weatherAvailable, actionUrl, shortCode }) {
+function buildMessage({ trigger, elderName, relation, locationText, tmax, tmin, weatherAvailable, actionUrl, shortCode, chronicDiseases }) {
   let address = '你';
   if (relation === '母亲' || relation === '妈妈' || relation === '妈') address = '妈';
   else if (relation === '父亲' || relation === '爸爸' || relation === '爸') address = '爸';
@@ -36,6 +38,10 @@ function buildMessage({ trigger, elderName, relation, locationText, tmax, tmin, 
 
   if (locationText) {
     lines.push((scripts.location_line || '').replace('{location}', locationText));
+  }
+  const diseases = Array.isArray(chronicDiseases) ? chronicDiseases.filter(Boolean) : [];
+  if (diseases.length) {
+    lines.push(`慢病提示（可选登记）：${diseases.join('、')}`);
   }
   if (weatherAvailable) {
     lines.push(scripts.disclaimer);
@@ -93,6 +99,7 @@ Page({
       const tmin = formatTemp(item.today && item.today.temperature_min);
       const trigger = item.today && item.today.trigger ? item.today.trigger : '';
       const weatherAvailable = !!(item.today && item.today.weather_available);
+      const chronicDiseases = item.member && item.member.chronic_diseases ? item.member.chronic_diseases : [];
       const message = buildMessage({
         trigger,
         elderName,
@@ -103,6 +110,7 @@ Page({
         weatherAvailable,
         actionUrl: item.action_url || '',
         shortCode: item.short_code || '',
+        chronicDiseases,
       });
       this.setData({ message, locationText, elderName, relation, tmax, tmin, trigger });
     } catch (e) {
