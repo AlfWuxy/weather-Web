@@ -668,6 +668,28 @@ def test_real_community_path_is_labeled_and_can_appear_in_reasons(db_session):
     assert any('社区脆弱性' in item for item in reasons)
 
 
+def test_assessment_without_age_does_not_invent_45(db_session):
+    from services.health_risk_service import HealthRiskService
+
+    with pytest.raises(ValueError, match='年龄'):
+        HealthRiskService().assess_personal_weather_health_risk(
+            _assessment_profile(age=None),
+            _assessment_weather(),
+            _assessment_screening(),
+        )
+
+
+def test_assessment_without_temperature_does_not_invent_20(db_session):
+    from services.health_risk_service import HealthRiskService
+
+    with pytest.raises(ValueError, match='气温'):
+        HealthRiskService().assess_personal_weather_health_risk(
+            _assessment_profile(),
+            _assessment_weather(temperature=None),
+            _assessment_screening(),
+        )
+
+
 def test_missing_humidity_is_not_scored_or_shown_as_60(db_session):
     from services.health_risk_service import HealthRiskService
 

@@ -360,8 +360,11 @@ class HealthRiskService:
         cleaned = [str(item).strip() for item in diseases if str(item).strip()]
         has_chronic = bool(user_profile.get('has_chronic_disease')) or bool(cleaned)
 
+        age = self._to_int(user_profile.get('age'), default=None, min_value=1, max_value=150)
+        if age is None:
+            raise ValueError('请提供年龄')
         return {
-            'age': self._to_int(user_profile.get('age'), 45, min_value=0, max_value=110),
+            'age': age,
             'gender': str(user_profile.get('gender') or '未知'),
             'community': str(user_profile.get('community') or '').strip(),
             'has_chronic_disease': has_chronic,
@@ -370,12 +373,15 @@ class HealthRiskService:
 
     def _normalize_weather_data(self, weather_data):
         aqi = self._measured_aqi(weather_data)
+        temperature = self._to_float(weather_data.get('temperature'), None)
+        if temperature is None:
+            raise ValueError('请提供气温')
         return {
-            'temperature': self._to_float(weather_data.get('temperature'), 20.0),
+            'temperature': temperature,
             'humidity': self._measured_humidity(weather_data),
             'aqi': aqi,
-            'pressure': self._to_float(weather_data.get('pressure'), 1013.0),
-            'wind_speed': self._to_float(weather_data.get('wind_speed'), 3.0),
+            'pressure': self._to_float(weather_data.get('pressure'), None),
+            'wind_speed': self._to_float(weather_data.get('wind_speed'), None),
             'weather_condition': str(weather_data.get('weather_condition') or '')
         }
 
@@ -863,20 +869,23 @@ class HealthRiskService:
     @staticmethod
     def _to_float(value, default=0.0):
         try:
-            return float(value)
+            parsed = float(value)
         except (TypeError, ValueError):
-            return float(default)
+            return default
+        if not math.isfinite(parsed):
+            return default
+        return parsed
 
     @staticmethod
     def _to_int(value, default=0, min_value=None, max_value=None):
         try:
             result = int(value)
         except (TypeError, ValueError):
-            result = int(default)
-        if min_value is not None:
-            result = max(int(min_value), result)
-        if max_value is not None:
-            result = min(int(max_value), result)
+            return default
+        if min_value is not None and result < min_value:
+            return default
+        if max_value is not None and result > max_value:
+            return default
         return result
 
     @staticmethod
