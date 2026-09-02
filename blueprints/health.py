@@ -21,7 +21,16 @@ from core.health_profiles import (
 from core.time_utils import today_local
 from core.usage import log_usage_event
 from core.weather import ensure_user_location_valid, get_weather_with_cache, is_qweather_online_weather
-from core.db_models import FamilyMember, FamilyMemberProfile, HealthDiary, MedicationReminder, WeatherData
+from core.db_models import (
+    FamilyMember,
+    FamilyMemberProfile,
+    HealthDiary,
+    MedicationReminder,
+    Notification,
+    Pair,
+    UsageEvent,
+    WeatherData,
+)
 from utils.parsers import parse_int, parse_date, parse_float, safe_json_loads
 from utils.validators import sanitize_input, validate_gender
 
@@ -318,9 +327,17 @@ def family_member_delete(member_id):
 
     member = FamilyMember.query.filter_by(id=member_id, user_id=current_user.id).first_or_404()
     try:
-        # 先清理关联的健康日记和用药提醒
         HealthDiary.query.filter_by(member_id=member.id, user_id=current_user.id).delete()
         MedicationReminder.query.filter_by(member_id=member.id, user_id=current_user.id).delete()
+        Notification.query.filter_by(member_id=member.id, user_id=current_user.id).delete()
+        UsageEvent.query.filter_by(member_id=member.id, user_id=current_user.id).update(
+            {UsageEvent.member_id: None},
+            synchronize_session=False,
+        )
+        pairs = Pair.query.filter_by(member_id=member.id, caregiver_id=current_user.id).all()
+        for pair in pairs:
+            pair.member_id = None
+            pair.status = 'inactive'
         profile = FamilyMemberProfile.query.filter_by(member_id=member.id).first()
         if profile:
             db.session.delete(profile)

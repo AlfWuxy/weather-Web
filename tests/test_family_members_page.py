@@ -154,3 +154,67 @@ def test_family_member_edit_prefills_existing_chronic_diseases(client, db_sessio
     snippet_start = body.index(marker)
     snippet = body[max(0, snippet_start - 80): snippet_start + 120]
     assert 'checked' in snippet
+
+
+def test_family_member_delete_unlinks_pairs_and_related_rows(client, db_session):
+    from core.db_models import (
+        FamilyMember,
+        FamilyMemberProfile,
+        Notification,
+        Pair,
+        UsageEvent,
+    )
+    from core.security import hash_short_code
+    from core.time_utils import utcnow
+
+    user = _create_user(db_session, username='family_delete_user')
+    member = FamilyMember(user_id=user.id, name='舅舅', relation='舅舅', age=70, gender='男性')
+    db_session.add(member)
+    db_session.flush()
+    db_session.add(FamilyMemberProfile(member_id=member.id, alert_enabled=True))
+    pair = Pair(
+        caregiver_id=user.id,
+        community_code='都昌',
+        location_query='都昌',
+        member_id=member.id,
+        elder_code='delete-elder-1',
+        short_code='41414141',
+        short_code_hash=hash_short_code('41414141'),
+        status='active',
+        last_active_at=utcnow(),
+    )
+    db_session.add(pair)
+    db_session.add(Notification(
+        user_id=user.id,
+        member_id=member.id,
+        title='测试通知',
+        message='删除前应一并清理',
+    ))
+    db_session.add(UsageEvent(
+        user_id=user.id,
+        member_id=member.id,
+        event_type='elder_profile_created',
+        source='web',
+    ))
+    db_session.commit()
+    member_id = member.id
+    pair_id = pair.id
+    _login_as(client, user.id)
+
+    response = client.post(
+        f'/family-members/{member_id}/delete',
+        data={'csrf_token': 'test-csrf-token'},
+        follow_redirects=True,
+    )
+
+    assert response.status_code == 200
+    assert '家庭成员已删除' in response.get_data(as_text=True)
+    assert db_session.get(FamilyMember, member_id) is None
+    remaining_pair = db_session.get(Pair, pair_id)
+    assert remaining_pair is not None
+    assert remaining_pair.member_id is None
+    assert remaining_pair.status == 'inactive'
+    assert Notification.query.filter_by(member_id=member_id).count() == 0
+    leftover_events = UsageEvent.query.filter_by(user_id=user.id).all()
+    assert leftover_events
+    assert all(event.member_id is None for event in leftover_events)
