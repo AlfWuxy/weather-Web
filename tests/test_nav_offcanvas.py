@@ -191,6 +191,8 @@ def test_role_entry_uses_consistent_community_role_name(client):
     assert '选择适合你的入口' in body
     assert '家属也能代为记录' in body
     assert '试点核心闭环' not in body
+    assert '用照护码确认' in body
+    assert 'data-entry-key="elder" href="/elder"' in body
 
 
 @pytest.mark.parametrize(
