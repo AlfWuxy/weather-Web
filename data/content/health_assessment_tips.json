@@ -1,0 +1,42 @@
+{
+  "hot": {
+    "category": "高温防护",
+    "priority": "high",
+    "advice": "减少午后外出，优先在阴凉或空调环境活动，主动补水。"
+  },
+  "cold": {
+    "category": "低温防护",
+    "priority": "high",
+    "advice": "外出注意分层保暖，尤其关注头颈和四肢。"
+  },
+  "aqi": {
+    "category": "空气质量",
+    "priority": "high",
+    "advice": "空气质量偏差，尽量减少户外运动，必要时佩戴防护口罩。"
+  },
+  "symptom": {
+    "category": "症状管理",
+    "priority": "high",
+    "advice": "已出现明显不适，请减少活动并监测症状变化。"
+  },
+  "medication": {
+    "category": "用药依从",
+    "priority": "high",
+    "advice": "请按医嘱规律服药，不要自行停药或减量。"
+  },
+  "emergency": {
+    "category": "紧急分流",
+    "priority": "urgent",
+    "advice": "若出现胸痛、呼吸困难、意识模糊等症状，请立即就医。"
+  },
+  "escalate": {
+    "category": "行动升级",
+    "priority": "high",
+    "advice": "当前风险已进入高优先级，请联系家属协助观察。"
+  },
+  "routine": {
+    "category": "日常管理",
+    "priority": "low",
+    "advice": "保持规律作息、均衡饮食与适量活动，留意天气变化。"
+  }
+}

@@ -197,7 +197,7 @@ def health_assessment():
                         create_notification(
                             current_user.id,
                             title='高风险持续提醒',
-                            message=f'已连续{streak}天高风险，建议联系家属或村医协助。',
+                            message=f'已连续{streak}天高风险，建议联系家属协助。',
                             level='danger',
                             category='risk',
                             action_url=url_for('user.health_assessment')

@@ -105,7 +105,7 @@
         {% set health_context = {
             '最终分': assessment.risk_score|round(1) if assessment.risk_score is not none else '--',
             'A/B/C融合分': fusion_breakdown.get('path_fused_score', '--'),
-            '慢病专项分': fusion_breakdown.get('chronic_overall_score', '--'),
+            '慢病专项分': fusion_breakdown.get('chronic_overall_score') if fusion_breakdown.get('chronic_in_score') else '--',
             '区间下界': risk_interval.get('low', '--'),
             '区间上界': risk_interval.get('high', '--'),
             '不确定性': risk_interval.get('label', '--')

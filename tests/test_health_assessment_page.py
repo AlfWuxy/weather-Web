@@ -690,6 +690,60 @@ def test_assessment_without_temperature_does_not_invent_20(db_session):
         )
 
 
+def test_missing_chronic_score_is_not_fused_as_30(monkeypatch, db_session):
+    from services.health_risk_service import HealthRiskService
+
+    class _MissingChronic:
+        def predict_individual_risk(self, *_args, **_kwargs):
+            return {'overall_risk': {}, 'recommendations': []}
+
+    monkeypatch.setattr(
+        'services.chronic_risk_service.get_chronic_service',
+        lambda: _MissingChronic(),
+    )
+
+    result = HealthRiskService().assess_personal_weather_health_risk(
+        _assessment_profile(),
+        _assessment_weather(),
+        _assessment_screening(),
+    )
+
+    path = result['fusion_breakdown']['path_fused_score']
+    final = result['fusion_breakdown']['final_score']
+    invented = round(0.85 * path + 0.15 * 30.0, 1)
+
+    assert result.get('chronic_in_score') is False
+    assert result['fusion_breakdown'].get('chronic_in_score') is False
+    assert final != invented
+    assert abs(final - round(path, 1)) <= 0.1
+
+
+def test_chronic_score_is_fused_when_present(monkeypatch, db_session):
+    from services.health_risk_service import HealthRiskService
+
+    class _HighChronic:
+        def predict_individual_risk(self, *_args, **_kwargs):
+            return {'overall_risk': {'score': 90.0}, 'recommendations': []}
+
+    monkeypatch.setattr(
+        'services.chronic_risk_service.get_chronic_service',
+        lambda: _HighChronic(),
+    )
+
+    result = HealthRiskService().assess_personal_weather_health_risk(
+        _assessment_profile(),
+        _assessment_weather(),
+        _assessment_screening(),
+    )
+
+    path = result['fusion_breakdown']['path_fused_score']
+    final = result['fusion_breakdown']['final_score']
+    expected = round(0.85 * path + 0.15 * 90.0, 1)
+
+    assert result.get('chronic_in_score') is True
+    assert abs(final - expected) <= 0.1
+
+
 def test_missing_humidity_is_not_scored_or_shown_as_60(db_session):
     from services.health_risk_service import HealthRiskService
 

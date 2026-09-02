@@ -172,8 +172,9 @@ class HealthRiskService:
         )
         chronic_overall_score = self._to_float(
             (chronic_result.get('overall_risk') or {}).get('score'),
-            30.0
+            None
         )
+        chronic_in_score = chronic_overall_score is not None
 
         # 模型融合 + 不确定性
         path_fused_score = (
@@ -181,37 +182,42 @@ class HealthRiskService:
             + model_b_score * 0.30
             + model_c_score * 0.25
         )
+        path_scale = 0.85 if chronic_in_score else 1.0
         model_paths = [
             {
                 'name': 'DLNM个体模型',
                 'score': round(model_a_score, 1),
                 'path_weight': 0.45,
-                'weight': 0.85 * 0.45,
-                'contribution': round(model_a_score * 0.85 * 0.45, 2),
+                'weight': path_scale * 0.45,
+                'contribution': round(model_a_score * path_scale * 0.45, 2),
             },
             {
                 'name': '规则暴露模型',
                 'score': round(model_b_score, 1),
                 'path_weight': 0.30,
-                'weight': 0.85 * 0.30,
-                'contribution': round(model_b_score * 0.85 * 0.30, 2),
+                'weight': path_scale * 0.30,
+                'contribution': round(model_b_score * path_scale * 0.30, 2),
             },
             {
                 'name': '社区脆弱性模型' if community_in_score else '个体与气温',
                 'score': round(model_c_score, 1),
                 'path_weight': 0.25,
-                'weight': 0.85 * 0.25,
-                'contribution': round(model_c_score * 0.85 * 0.25, 2),
+                'weight': path_scale * 0.25,
+                'contribution': round(model_c_score * path_scale * 0.25, 2),
             },
-            {
+        ]
+        if chronic_in_score:
+            model_paths.append({
                 'name': '慢病专项模型',
                 'score': round(chronic_overall_score, 1),
                 'path_weight': 1.0,
                 'weight': 0.15,
                 'contribution': round(chronic_overall_score * 0.15, 2),
-            },
-        ]
-        fused_score = 0.85 * path_fused_score + 0.15 * chronic_overall_score
+            })
+        fused_score = (
+            0.85 * path_fused_score + 0.15 * chronic_overall_score
+            if chronic_in_score else path_fused_score
+        )
         fused_score = self._clamp(fused_score, 0.0, 100.0)
 
         spread = pstdev([model_a_score, model_b_score, model_c_score]) if len(model_paths) > 1 else 0.0
@@ -308,16 +314,18 @@ class HealthRiskService:
             'model_paths': model_paths,
             'fusion_breakdown': {
                 'path_fused_score': round(path_fused_score, 2),
-                'chronic_overall_score': round(chronic_overall_score, 2),
+                'chronic_overall_score': round(chronic_overall_score, 2) if chronic_in_score else None,
                 'final_score': round(fused_score, 1),
                 'contribution_total': round(sum(path['contribution'] for path in model_paths), 2),
                 'community_in_score': community_in_score,
+                'chronic_in_score': chronic_in_score,
                 'aqi_in_score': aqi_in_score,
                 'humidity_in_score': humidity_in_score,
             },
             'component_scores': component_scores,
             'community_context': community_context,
             'community_in_score': community_in_score,
+            'chronic_in_score': chronic_in_score,
             'aqi_in_score': aqi_in_score,
             'humidity_in_score': humidity_in_score,
             'screening': screening_data,
@@ -785,6 +793,17 @@ class HealthRiskService:
                 'advice': advice
             })
 
+        from core.health_copy import load_health_assessment_tips
+        copy = load_health_assessment_tips()
+
+        def add_from_copy(key):
+            entry = copy.get(key) or {}
+            add_item(
+                entry.get('category', '健康建议'),
+                entry.get('advice', ''),
+                entry.get('priority', 'medium'),
+            )
+
         for item in chronic_recommendations or []:
             if isinstance(item, dict):
                 add_item(
@@ -794,26 +813,26 @@ class HealthRiskService:
                 )
 
         if weather['temperature'] >= 32:
-            add_item('高温防护', '减少午后外出，优先在阴凉或空调环境活动，主动补水。', 'high')
+            add_from_copy('hot')
         elif weather['temperature'] <= 5:
-            add_item('低温防护', '外出注意分层保暖，尤其关注头颈和四肢。', 'high')
+            add_from_copy('cold')
 
         if (weather.get('aqi') or 0) >= 150:
-            add_item('空气质量', '空气质量偏差，尽量减少户外运动，必要时佩戴防护口罩。', 'high')
+            add_from_copy('aqi')
 
         if screening.get('symptom_level') in ('moderate', 'severe'):
-            add_item('症状管理', '已出现明显不适，请减少活动并监测症状变化。', 'high')
+            add_from_copy('symptom')
 
         if screening.get('medication_adherence') in ('partial', 'poor') and profile.get('has_chronic_disease'):
-            add_item('用药依从', '请按医嘱规律服药，不要自行停药或减量。', 'high')
+            add_from_copy('medication')
 
         if cap_semantics['urgency'] == 'immediate':
-            add_item('紧急分流', '若出现胸痛、呼吸困难、意识模糊等症状，请立即就医。', 'urgent')
+            add_from_copy('emergency')
         elif impact_likelihood['matrix_score'] >= 12:
-            add_item('行动升级', '当前风险已进入高优先级，请联系家属或村医协助观察。', 'high')
+            add_from_copy('escalate')
 
         if not result:
-            add_item('日常管理', '保持规律作息、均衡饮食与适量活动，留意天气变化。', 'low')
+            add_from_copy('routine')
 
         priority_order = {'urgent': 0, 'high': 1, 'medium': 2, 'low': 3}
         result.sort(key=lambda item: priority_order.get(item.get('priority', 'medium'), 9))
