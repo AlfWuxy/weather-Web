@@ -283,17 +283,6 @@ class HealthRiskService:
         }
 
     # ---------------------------
-    # 兼容旧接口（已废弃）
-    # ---------------------------
-    def assess_user_risk(self, user_id):
-        """旧接口：保留兼容。"""
-        return None
-
-    def generate_community_risk_map_data(self):
-        """旧接口：保留兼容。"""
-        return []
-
-    # ---------------------------
     # 内部工具函数
     # ---------------------------
     def _normalize_user_profile(self, user_profile):
