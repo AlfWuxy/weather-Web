@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 """Community-related routes."""
 import logging
-import math
 
 from flask import current_app, flash, redirect, render_template, request, url_for
 from flask_login import current_user
@@ -11,7 +10,7 @@ from core.time_utils import now_local, today_local
 from core.weather import (
     get_consecutive_hot_days,
     get_weather_with_cache,
-    is_qweather_online_weather,
+    heat_weather_available as _heat_weather_available,
     normalize_location_name,
 )
 from services.heat_action_service import HeatActionService
@@ -40,27 +39,7 @@ from ._helpers import (
 
 logger = logging.getLogger(__name__)
 
-_REQUIRED_HEAT_WEATHER_FIELDS = (
-    'temperature',
-    'temperature_max',
-    'temperature_min',
-    'humidity',
-)
 _WEATHER_WAITING_LABEL = '天气更新中'
-
-
-def _heat_weather_available(weather_data):
-    """仅允许字段完整的真实和风天气进入社区热风险计算。"""
-    if not is_qweather_online_weather(weather_data):
-        return False
-    for field in _REQUIRED_HEAT_WEATHER_FIELDS:
-        try:
-            value = float(weather_data.get(field))
-        except (AttributeError, TypeError, ValueError):
-            return False
-        if not math.isfinite(value):
-            return False
-    return True
 
 
 def _load_heat_risk(location):

@@ -23,7 +23,7 @@ from core.extensions import db, limiter
 from core.security import hash_identifier
 from core.time_utils import utcnow
 from core.usage import log_usage_event, verify_api_token
-from core.weather import get_weather_with_cache, is_qweather_online_weather
+from core.weather import get_weather_with_cache, heat_weather_available
 from services.api_service import PILOT_EVENT_TYPES
 from services.location_resolver import resolve_location
 from services.warning_service import get_qweather_warnings
@@ -182,24 +182,13 @@ def elders_list():
         resolved = resolve_location(label)
         code = resolved.get("location_code") or ""
         weather_data, _ = get_weather_with_cache(code or label)
-        # Lightweight summary; detailed warnings via /alerts
+        weather_available = heat_weather_available(weather_data)
         trigger = None
         tmax_value = None
         tmin_value = None
-        try:
-            tmax = weather_data.get("temperature_max")
-            tmin = weather_data.get("temperature_min")
-            tmax_value = float(tmax) if tmax is not None else None
-            tmin_value = float(tmin) if tmin is not None else None
-        except (AttributeError, TypeError, ValueError):
-            tmax_value = None
-            tmin_value = None
-        weather_available = (
-            is_qweather_online_weather(weather_data)
-            and tmax_value is not None
-            and tmin_value is not None
-        )
         if weather_available:
+            tmax_value = float(weather_data.get("temperature_max"))
+            tmin_value = float(weather_data.get("temperature_min"))
             if tmax_value >= 35:
                 trigger = "heat"
             elif tmin_value <= 5:
@@ -372,7 +361,7 @@ def alerts_list():
     code = resolved.get("location_code") or ""
     warnings = get_qweather_warnings(code) if code else []
     weather_data, _ = get_weather_with_cache(code or label)
-    weather_available = is_qweather_online_weather(weather_data)
+    weather_available = heat_weather_available(weather_data)
 
     return jsonify(
         {

@@ -180,6 +180,14 @@ def weather_source_label(weather_data):
     return ''
 
 
+REQUIRED_HEAT_WEATHER_FIELDS = (
+    'temperature',
+    'temperature_max',
+    'temperature_min',
+    'humidity',
+)
+
+
 def is_qweather_online_weather(weather_data):
     """判断当前天气是否可用于生产风险计算。"""
     if not isinstance(weather_data, dict):
@@ -197,6 +205,20 @@ def is_qweather_online_weather(weather_data):
     source = str(weather_data.get('data_source') or weather_data.get('source') or '').strip()
     if source != 'QWeather':
         return False
+    return True
+
+
+def heat_weather_available(weather_data):
+    """仅允许字段完整的真实和风天气进入热风险计算。"""
+    if not is_qweather_online_weather(weather_data):
+        return False
+    for field in REQUIRED_HEAT_WEATHER_FIELDS:
+        try:
+            value = float(weather_data.get(field))
+        except (AttributeError, TypeError, ValueError):
+            return False
+        if not math.isfinite(value):
+            return False
     return True
 
 

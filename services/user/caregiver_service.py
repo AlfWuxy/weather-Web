@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 """Caregiver-related routes and helpers."""
 import logging
-import math
 from datetime import datetime, timedelta
 
 from flask import current_app, flash, redirect, render_template, request, session, url_for
@@ -14,7 +13,7 @@ from core.time_utils import today_local, utcnow, local_datetime_to_utc, ensure_u
 from core.weather import (
     get_consecutive_hot_days,
     get_weather_with_cache,
-    is_qweather_online_weather,
+    heat_weather_available as _heat_weather_available,
     normalize_location_name,
 )
 from core.usage import log_usage_event
@@ -50,27 +49,7 @@ from ._helpers import (
 
 logger = logging.getLogger(__name__)
 
-_REQUIRED_HEAT_WEATHER_FIELDS = (
-    'temperature',
-    'temperature_max',
-    'temperature_min',
-    'humidity',
-)
 _WEATHER_WAITING_LABEL = '天气更新中'
-
-
-def _heat_weather_available(weather_data):
-    """仅允许字段完整的真实和风天气进入热风险计算。"""
-    if not is_qweather_online_weather(weather_data):
-        return False
-    for field in _REQUIRED_HEAT_WEATHER_FIELDS:
-        try:
-            value = float(weather_data.get(field))
-        except (AttributeError, TypeError, ValueError):
-            return False
-        if not math.isfinite(value):
-            return False
-    return True
 
 
 def _build_weather_waiting_message(pair, action_link):
