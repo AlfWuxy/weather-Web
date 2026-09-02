@@ -53,8 +53,13 @@ def test_forecast_service():
         # 测试7天预测
         forecast_temps = [20, 22, 25, 23, 21, 19, 18]
         forecasts, summary = fs.generate_7day_forecast(forecast_temps)
-        print(f'   ✅ 7天预测成功: 高风险天数={summary["high_risk_days"]}')
-        print(f'   预计总门诊: {summary["total_expected_visits"]:.0f}人次')
+        if summary.get('health_forecast_available') is False:
+            print(f'   ✅ 7天预测诚实关闭: {summary.get("health_forecast_reason")}')
+            assert forecasts == []
+            assert summary.get('health_forecast_reason')
+        else:
+            print(f'   ✅ 7天预测成功: 高风险天数={summary["high_risk_days"]}')
+            print(f'   预计总门诊: {summary["total_expected_visits"]:.0f}人次')
         
         return
     except Exception as e:
