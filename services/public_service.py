@@ -24,6 +24,7 @@ from core.weather import (
     is_qweather_online_weather,
     normalize_location_name,
 )
+from core.daily_tips import label_for_heat_level
 from core.guest import GuestUser, is_guest_user
 from core.db_models import (
     Community,
@@ -50,13 +51,6 @@ from utils.validators import (
 )
 
 logger = logging.getLogger(__name__)
-
-HEAT_RISK_LABELS = {
-    'low': '低风险',
-    'medium': '中风险',
-    'high': '高风险',
-    'extreme': '极高'
-}
 
 PAIR_TOKEN_SESSION_KEY = 'pair_token'
 
@@ -515,7 +509,7 @@ def _build_action_context(pair, status_date):
         weather_data,
         consecutive_hot_days=consecutive_hot_days
     )
-    risk_label = HEAT_RISK_LABELS.get(heat_result['risk_level'], '低风险')
+    risk_label = label_for_heat_level(heat_result.get('risk_level') if heat_result else None)
     risk_reasons = heat_service.build_risk_reasons(heat_result)
     status = _get_or_create_daily_status(pair, status_date, risk_label)
     actions = _action_plan(risk_label)
@@ -1259,7 +1253,7 @@ def render_public_risk_page(location):
         weather_data,
         consecutive_hot_days=consecutive_hot_days
     )
-    risk_label = HEAT_RISK_LABELS.get(heat_result['risk_level'], '低风险')
+    risk_label = label_for_heat_level(heat_result.get('risk_level') if heat_result else None)
     actions = _action_plan(risk_label)
     risk_reasons = heat_service.build_risk_reasons(heat_result)
     return render_template(

@@ -82,7 +82,7 @@ def _build_risk_counts(statuses):
     counts = {'低风险': 0, '中风险': 0, '高风险': 0, '极高': 0}
     confirmed = {'低风险': 0, '中风险': 0, '高风险': 0, '极高': 0}
     for status in statuses:
-        label = status.risk_level or '低风险'
+        label = status.risk_level
         if label not in counts:
             continue
         counts[label] += 1

@@ -1101,55 +1101,11 @@ class ForecastService:
         return forecasts, summary
     
     def _generate_forecast_recommendations(self, forecasts, high_risk_days):
-        """生成预测建议"""
-        recommendations = []
-        
-        # 分析高风险天数
-        if high_risk_days >= 3:
-            recommendations.append({
-                'priority': 'high',
-                'category': '资源调配',
-                'advice': f'未来一周有{high_risk_days}天门诊量预计较高，建议提前增派医护人员'
-            })
-        
-        # 分析极端天气
-        extreme_days = [f for f in forecasts if f['extreme_events']]
-        if extreme_days:
-            for day in extreme_days:
-                for event in day['extreme_events']:
-                    recommendations.append({
-                        'priority': 'high' if event['severity'] == 'extreme' else 'medium',
-                        'category': '极端天气',
-                        'advice': f"{day['date']}: {event['description']}"
-                    })
-        
-        # 温度趋势分析
-        temps = [f['temperature']['corrected'] for f in forecasts]
-        if max(temps) - min(temps) > 10:
-            recommendations.append({
-                'priority': 'medium',
-                'category': '温差预警',
-                'advice': f'未来一周温差较大({min(temps):.0f}°C ~ {max(temps):.0f}°C)，注意防范温度骤变影响'
-            })
-        
-        # 周末高峰预警
-        weekend_high = [f for f in forecasts if f['day_of_week'] in ['周六', '周日'] and f['risk_level'] in ['红色预警', '橙色预警']]
-        if weekend_high:
-            recommendations.append({
-                'priority': 'medium',
-                'category': '周末安排',
-                'advice': '周末预计有就诊高峰，建议安排值班人员'
-            })
-        
-        if not recommendations:
-            recommendations.append({
-                'priority': 'low',
-                'category': '常规管理',
-                'advice': '未来一周天气和就诊量预计正常，保持常规医疗资源配置'
-            })
-        
-        return recommendations
-    
+        """生成本周照护建议（文案来自 data/content/forecast_week_tips.json）。"""
+        from core.forecast_copy import generate_forecast_week_tips
+
+        return generate_forecast_week_tips(forecasts, high_risk_days)
+
     def calculate_forecast_accuracy(self, forecast_date, actual_visits):
         """
         回测：计算预报准确性

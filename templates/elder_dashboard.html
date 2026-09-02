@@ -20,17 +20,7 @@
     <section class="yl-elder-hero yl-fade-up" aria-label="今日健康小结">
         <div class="yl-elder-status">
             <span>今天</span>
-            <h1>
-                {% if risk_level in ['high', 'extreme'] %}
-                    先别急着出门
-                {% elif risk_level == 'medium' %}
-                    出门前先准备好
-                {% elif not weather_available %}
-                    天气更新中
-                {% else %}
-                    可以按平常来
-                {% endif %}
-            </h1>
+            <h1>{{ elder_headline }}</h1>
             <p>
                 {% if weather_available %}
                     {{ weather.weather_condition if weather.weather_condition else '天气未知' }},
@@ -68,8 +58,8 @@
                 <div class="yl-elder-action">
                     <i class="bi bi-cloud-slash"></i>
                     <div>
-                        <strong>先做好日常防护</strong>
-                        <p>补水、通风并避免暴晒，不舒服时及时联系家人。</p>
+                        <strong>{{ dashboard_copy.elder.empty_plan.title }}</strong>
+                        <p>{{ dashboard_copy.elder.empty_plan.detail }}</p>
                     </div>
                 </div>
             {% elif action_items %}
@@ -91,8 +81,8 @@
                 <div class="yl-elder-action">
                     <i class="bi bi-check2"></i>
                     <div>
-                        <strong>先做好日常防护</strong>
-                        <p>补水、通风并避免暴晒，不舒服时及时联系家人。</p>
+                        <strong>{{ dashboard_copy.elder.empty_plan.title }}</strong>
+                        <p>{{ dashboard_copy.elder.empty_plan.detail }}</p>
                     </div>
                 </div>
             {% endif %}

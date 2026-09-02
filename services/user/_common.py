@@ -10,15 +10,8 @@ from core.extensions import db
 from core.db_models import Pair, PairActionToken, PairLink
 from core.security import hash_identifier, hash_pair_token, hash_short_code
 from core.time_utils import utcnow
+from core.daily_tips import HEAT_RISK_LABELS, label_for_heat_level
 from utils.validators import sanitize_input
-
-
-HEAT_RISK_LABELS = {
-    'low': '低风险',
-    'medium': '中风险',
-    'high': '高风险',
-    'extreme': '极高'
-}
 
 RELAY_STAGE_ORDER = ['none', 'caregiver', 'backup', 'community', 'emergency']
 RELAY_STAGE_LABELS = {

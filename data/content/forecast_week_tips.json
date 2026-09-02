@@ -1,0 +1,22 @@
+{
+  "high_visit_days": {
+    "priority": "high",
+    "category": "照护安排",
+    "advice_template": "未来一周有{high_risk_days}天就诊负担可能偏高，提前确认家人是否有人提醒、补水和避暑安排。"
+  },
+  "temperature_swing": {
+    "priority": "medium",
+    "category": "温差",
+    "advice_template": "未来一周温差较大({min_temp}°C ~ {max_temp}°C)，出门前提前加减衣服，并留意室内温度。"
+  },
+  "weekend_peak": {
+    "priority": "medium",
+    "category": "周末",
+    "advice": "周末可能更热或外出更多，提前约好谁来确认家人状态。"
+  },
+  "routine": {
+    "priority": "low",
+    "category": "日常",
+    "advice": "未来一周没有突出高温负担，保持日常提醒、补水和通风。"
+  }
+}

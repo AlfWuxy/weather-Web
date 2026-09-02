@@ -932,17 +932,17 @@ class WeatherService:
                 tmin = self._safe_float(src.get('temperature_min'))
                 if tmax is not None and tmin is not None:
                     ranges.append(max(2.0, tmax - tmin))
-            diurnal_range = mean(ranges) if ranges else 8.0
-            tmax_ens = ensemble_mean + diurnal_range / 2
-            tmin_ens = ensemble_mean - diurnal_range / 2
+            diurnal_range = mean(ranges) if ranges else None
+            tmax_ens = None if diurnal_range is None else ensemble_mean + diurnal_range / 2
+            tmin_ens = None if diurnal_range is None else ensemble_mean - diurnal_range / 2
 
             predictability_score, predictability_label = self._predictability_from_spread(ensemble_std, lead_day=idx)
 
             merged.append({
                 'date': date,
                 'forecast_date': date,
-                'temperature_max': round(tmax_ens, 1),
-                'temperature_min': round(tmin_ens, 1),
+                'temperature_max': round(tmax_ens, 1) if tmax_ens is not None else None,
+                'temperature_min': round(tmin_ens, 1) if tmin_ens is not None else None,
                 'temperature_ensemble_mean': round(ensemble_mean, 2),
                 'temperature_ensemble_p10': round(p10, 2),
                 'temperature_ensemble_p50': round(ensemble_mean, 2),
@@ -1177,8 +1177,8 @@ class WeatherService:
             return openmeteo_forecast
 
         # 返回模拟预报数据
-        logger.warning("所有预报源均不可用，使用模拟预报")
-        return self._get_mock_forecast(days)
+        logger.warning("所有预报源均不可用，不使用模拟预报")
+        return []
     
     def _get_mock_forecast(self, days=7):
         """生成模拟的天气预报数据"""
@@ -1203,7 +1203,9 @@ class WeatherService:
                 'wind_speed': round(random.uniform(1, 8), 1),
                 'uv_index': str(random.randint(1, 10)),
                 'sunrise': '06:30',
-                'sunset': '18:00'
+                'sunset': '18:00',
+                'is_mock': True,
+                'data_source': 'Mock',
             })
             
             # 温度有一定连续性

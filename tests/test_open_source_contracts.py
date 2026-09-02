@@ -252,6 +252,46 @@ def test_multimodel_forecast_contract_preserves_provider_names(app):
     assert row['model_names'] == ['QWeather', 'Open-Meteo']
     assert row['data_source'] == 'QWeather+Open-Meteo'
     assert row['temperature_ensemble_p10'] <= row['temperature_ensemble_p50'] <= row['temperature_ensemble_p90']
+    assert row['temperature_max'] is not None
+    assert row['temperature_min'] is not None
+
+
+def test_multimodel_forecast_does_not_invent_diurnal_span_when_max_min_missing(app):
+    with app.app_context():
+        from services.weather_service import WeatherService
+
+        service = WeatherService()
+        merged = service._merge_multimodel_forecast(
+            [{
+                'date': '2026-06-01',
+                'temperature_mean': 32,
+                'condition': '晴',
+                'data_source': 'QWeather',
+            }],
+            [],
+            days=1,
+        )
+
+    assert len(merged) == 1
+    row = merged[0]
+    assert row['temperature_ensemble_mean'] == 32
+    assert row['temperature_max'] is None
+    assert row['temperature_min'] is None
+
+
+def test_weather_forecast_returns_empty_when_real_sources_fail(app, monkeypatch):
+    with app.app_context():
+        from services.weather_service import WeatherService
+
+        service = WeatherService()
+        monkeypatch.setattr(service, '_qweather_is_configured', lambda: False)
+        monkeypatch.setattr(service, '_get_openmeteo_forecast', lambda *_args, **_kwargs: [])
+        monkeypatch.setattr(service, '_merge_multimodel_forecast', lambda *_args, **_kwargs: [])
+
+        result = service.get_weather_forecast('都昌', days=7)
+
+    assert result == []
+    assert all(day.get('is_mock') for day in result)
 
 
 def test_qweather_production_guard_rejects_non_finite_temperature():

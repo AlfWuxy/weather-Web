@@ -33,7 +33,7 @@
 {% endif %}
 {% set risk_score = heat_result.risk_score if heat_result else none %}
 {% set risk_level = heat_result.risk_level if heat_result else none %}
-{% set risk_score_class = 'is-risk-high' if risk_level in ['high', 'extreme'] else 'is-risk-mid' if risk_level == 'medium' else 'is-risk-low' %}
+{% set risk_score_class = 'is-risk-high' if risk_level in ['high', 'extreme'] else 'is-risk-mid' if risk_level == 'medium' else 'is-risk-low' if risk_level == 'low' else 'is-risk-unknown' %}
 {% set risk_bar_width = risk_score if risk_score is not none else 0 %}
 {% set hero_temperature = weather.temperature if weather_available and weather.temperature is not none else none %}
 {% set hero_motion_risk = 'high' if risk_level in ['high', 'extreme'] else 'cold' if hero_temperature is not none and hero_temperature|float < 10 else '' %}
@@ -61,17 +61,7 @@
                     <span>{{ today_date or '今天' }}</span>
                     <span><i class="bi bi-geo-alt"></i> {{ current_location or '未设置' }}</span>
                 </div>
-                <h1>
-                    {% if risk_level in ['high', 'extreme'] %}
-                        今天先把外出和补水安排好。
-                    {% elif risk_level == 'medium' %}
-                        今天适合提前做一点防护。
-                    {% elif not weather_available %}
-                        天气正在更新，先按日常防护安排。
-                    {% else %}
-                        今天风险较低，保持日常照护。
-                    {% endif %}
-                </h1>
+                <h1>{{ today_headline }}</h1>
                 <p>
                     {% if weather_available %}
                         当前天气为 {{ weather.weather_condition if weather.weather_condition else '未知' }}，
@@ -246,8 +236,8 @@
                     <div class="yl-action">
                         <i class="bi bi-cloud-slash"></i>
                         <div>
-                            <strong>先做好日常防护</strong>
-                            <div class="detail">补水、留意体感，需要降温时查看附近避暑资源。</div>
+                            <strong>{{ dashboard_copy.today.empty_plan.title }}</strong>
+                            <div class="detail">{{ dashboard_copy.today.empty_plan.detail }}</div>
                         </div>
                     </div>
                 {% endif %}

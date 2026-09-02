@@ -36,6 +36,7 @@ from ._common import (
     _build_pair_action_link,
     _create_pair_link_record,
     _create_pair_record,
+    label_for_heat_level,
     _relay_stage_rank,
     _require_roles
 )
@@ -102,7 +103,7 @@ def _load_heat_risk(location):
     except Exception:
         logger.warning("真实天气热风险计算失败，已停止输出结论", exc_info=True)
         return weather_data, None, None
-    risk_label = HEAT_RISK_LABELS.get(heat_result['risk_level'], '低风险')
+    risk_label = label_for_heat_level(heat_result.get('risk_level') if heat_result else None)
     return weather_data, heat_result, risk_label
 
 
@@ -254,7 +255,7 @@ def _build_pair_management_context(caregiver_mode=False):
                     weather_data,
                     consecutive_hot_days=consecutive_hot_days
                 )
-                risk_label = HEAT_RISK_LABELS.get(heat_result['risk_level'], '低风险')
+                risk_label = label_for_heat_level(heat_result.get('risk_level') if heat_result else None)
             except Exception:
                 weather_available = False
                 heat_result = {}

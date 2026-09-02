@@ -77,6 +77,9 @@ def test_community_risk_page_has_academic_sections(authenticated_client):
     assert '社区排序将在天气更新后显示' in html
     assert '加载失败：' not in html
     assert 'BaselineVisits' in html
+    assert 'toNumber(row.risk_index, 55)' not in html
+    assert 'toNumber(row.risk_index, 0) || 0' not in html
+    assert 'toNumber(row.svi_percentile, 0) || 0' not in html
 
 
 def test_community_risk_api_returns_extended_fields(authenticated_client, db_session):

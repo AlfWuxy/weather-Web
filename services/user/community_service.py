@@ -25,7 +25,8 @@ from ._common import (
     _action_plan,
     _normalize_code,
     _relay_stage_rank,
-    _require_roles
+    _require_roles,
+    label_for_heat_level,
 )
 from ._helpers import (
     _auto_escalate_overdue_statuses,
@@ -79,7 +80,7 @@ def _load_heat_risk(location):
     except Exception:
         logger.warning("真实天气热风险计算失败，已停止输出结论", exc_info=True)
         return weather_data, None, None
-    risk_label = HEAT_RISK_LABELS.get(heat_result['risk_level'], '低风险')
+    risk_label = label_for_heat_level(heat_result.get('risk_level') if heat_result else None)
     return weather_data, heat_result, risk_label
 
 

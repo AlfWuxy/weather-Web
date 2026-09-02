@@ -6,6 +6,14 @@ from pathlib import Path
 
 _TIPS_PATH = Path(__file__).resolve().parents[1] / 'data' / 'content' / 'daily_action_tips.json'
 
+HEAT_RISK_LABELS = {
+    'low': '低风险',
+    'medium': '中风险',
+    'high': '高风险',
+    'extreme': '极高',
+}
+UNKNOWN_HEAT_RISK_LABEL = '风险未知'
+
 
 @lru_cache(maxsize=1)
 def load_daily_action_tips():
@@ -15,9 +23,15 @@ def load_daily_action_tips():
     return payload
 
 
+def label_for_heat_level(risk_level):
+    if not risk_level:
+        return UNKNOWN_HEAT_RISK_LABEL
+    return HEAT_RISK_LABELS.get(risk_level, UNKNOWN_HEAT_RISK_LABEL)
+
+
 def action_plan_for_risk(risk_label):
+    if not risk_label or risk_label == UNKNOWN_HEAT_RISK_LABEL:
+        return []
     tips = load_daily_action_tips()
-    plan = tips.get(risk_label)
-    if not plan:
-        plan = tips.get('低风险') or []
+    plan = tips.get(risk_label) or []
     return [dict(item) for item in plan]

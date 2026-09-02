@@ -1,0 +1,28 @@
+{
+  "today": {
+    "headlines": {
+      "high": "今天先把外出和补水安排好。",
+      "medium": "今天适合提前做一点防护。",
+      "low": "今天风险较低，保持日常照护。",
+      "weather_unavailable": "天气正在更新，先按日常防护安排。",
+      "unknown": "今日风险还算不出来，先按日常防护安排。"
+    },
+    "empty_plan": {
+      "title": "先做好日常防护",
+      "detail": "补水、留意体感，需要降温时查看附近避暑资源。"
+    }
+  },
+  "elder": {
+    "headlines": {
+      "high": "先别急着出门",
+      "medium": "出门前先准备好",
+      "low": "可以按平常来",
+      "weather_unavailable": "天气更新中",
+      "unknown": "先按日常防护来"
+    },
+    "empty_plan": {
+      "title": "先做好日常防护",
+      "detail": "补水、通风并避免暴晒，不舒服时及时联系家人。"
+    }
+  }
+}

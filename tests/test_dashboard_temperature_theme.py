@@ -160,3 +160,73 @@ def test_dashboard_hero_sequences_care_action_and_cooling(authenticated_client):
     assert 'href="/cooling"' in body
     assert '照护工作台' in body
     assert '看 7 天趋势' in body
+
+
+def _real_qweather():
+    return {
+        'temperature': 28,
+        'temperature_max': 30,
+        'temperature_min': 22,
+        'humidity': 68,
+        'weather_condition': '多云',
+        'data_source': 'QWeather',
+        'is_mock': False,
+    }, False
+
+
+def test_dashboard_unknown_heat_level_is_not_shown_as_low_risk(authenticated_client, monkeypatch):
+    monkeypatch.setattr(
+        'services.user.dashboard_service.get_weather_with_cache',
+        lambda _location: _real_qweather(),
+    )
+    monkeypatch.setattr(
+        'services.user.dashboard_service.get_qweather_forecast_with_cache',
+        lambda _location, days=7: ([], False, {'error': 'qweather_unavailable'}),
+    )
+    monkeypatch.setattr(
+        'services.user.dashboard_service.HeatActionService.calculate_heat_risk',
+        lambda self, weather_data, consecutive_hot_days=None: {
+            'risk_level': 'not-a-real-level',
+            'risk_score': 40,
+            'heat_index': 28,
+            'night_min': 22,
+            'consecutive_hot_days': 0,
+            'factor_scores': [],
+        },
+    )
+
+    body = authenticated_client.get('/dashboard').get_data(as_text=True)
+
+    assert '风险未知' in body
+    assert '今天风险较低' not in body
+    assert '规律补水' not in body
+    assert '先做好日常防护' in body
+
+
+def test_elder_unknown_heat_level_is_not_shown_as_ordinary_day(authenticated_client, monkeypatch):
+    monkeypatch.setattr(
+        'services.user.dashboard_service.get_weather_with_cache',
+        lambda _location: _real_qweather(),
+    )
+    monkeypatch.setattr(
+        'services.user.dashboard_service.get_qweather_forecast_with_cache',
+        lambda _location, days=7: ([], False, {'error': 'qweather_unavailable'}),
+    )
+    monkeypatch.setattr(
+        'services.user.dashboard_service.HeatActionService.calculate_heat_risk',
+        lambda self, weather_data, consecutive_hot_days=None: {
+            'risk_level': 'not-a-real-level',
+            'risk_score': 40,
+            'heat_index': 28,
+            'night_min': 22,
+            'consecutive_hot_days': 0,
+            'factor_scores': [],
+        },
+    )
+
+    body = authenticated_client.get('/elder-mode').get_data(as_text=True)
+
+    assert '风险未知' in body
+    assert '可以按平常来' not in body
+    assert '规律补水' not in body
+    assert '先做好日常防护' in body

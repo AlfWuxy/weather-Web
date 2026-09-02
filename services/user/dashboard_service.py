@@ -31,12 +31,13 @@ from core.db_models import (
     WeatherAlert,
     WeatherData
 )
+from core.dashboard_copy import load_dashboard_copy, select_dashboard_headline
 from services.heat_action_service import HeatActionService
 from services.forecast_cards import build_forecast_cards
 from services.forecast_service import get_forecast_service
 from utils.parsers import safe_json_loads
 
-from ._common import HEAT_RISK_LABELS, _action_plan
+from ._common import _action_plan, label_for_heat_level
 
 logger = logging.getLogger(__name__)
 
@@ -323,10 +324,23 @@ def user_dashboard(force_elder=False):
             weather_data,
             consecutive_hot_days=consecutive_hot_days
         )
-        heat_risk_label = HEAT_RISK_LABELS.get(heat_result['risk_level'], '低风险')
+        heat_risk_label = label_for_heat_level(heat_result.get('risk_level') if heat_result else None)
         heat_actions = _action_plan(heat_risk_label)
     dashboard_hero_theme = _dashboard_hero_theme(
         getattr(weather, 'temperature', None) if weather_available else None
+    )
+    dashboard_copy = load_dashboard_copy()
+    today_headline = select_dashboard_headline(
+        dashboard_copy,
+        section='today',
+        risk_level=heat_result.get('risk_level') if heat_result else None,
+        weather_available=weather_available,
+    )
+    elder_headline = select_dashboard_headline(
+        dashboard_copy,
+        section='elder',
+        risk_level=heat_result.get('risk_level') if heat_result else None,
+        weather_available=weather_available,
     )
     dashboard_metric_cards = [] if is_guest else _dashboard_metric_cards(current_user.id)
     forecast_days = _dashboard_forecast_days(user_location, today, weather_data)
@@ -473,6 +487,8 @@ def user_dashboard(force_elder=False):
             heat_result=heat_result,
             heat_risk_label=heat_risk_label,
             heat_actions=heat_actions,
+            dashboard_copy=dashboard_copy,
+            elder_headline=elder_headline,
             is_guest=is_guest
         )
 
@@ -489,6 +505,8 @@ def user_dashboard(force_elder=False):
                          heat_result=heat_result,
                          heat_risk_label=heat_risk_label,
                          heat_actions=heat_actions,
+                         dashboard_copy=dashboard_copy,
+                         today_headline=today_headline,
                          dashboard_hero_theme=dashboard_hero_theme,
                          dashboard_metric_cards=dashboard_metric_cards,
                          forecast_days=forecast_days,

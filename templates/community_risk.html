@@ -623,11 +623,12 @@ function computeCircleRadii(candidates) {
 
     for (let i = 0; i < count; i += 1) {
         const row = candidates[i].row || {};
-        const risk = toNumber(row.risk_index, 55) || 55;
+        const risk = toNumber(row.risk_index, null);
         const population = Math.max(0, toNumber(row.population, 0) || 0);
+        const riskBoost = risk === null ? 0 : Math.min(980, risk * 7.0);
 
-        // 风险和人口越大，目标覆盖半径越大（但后续会被无重叠约束裁剪）
-        const target = 360 + Math.min(980, risk * 7.0) + Math.min(520, Math.sqrt(population) * 3.4);
+        // 有实测风险时按风险放大半径；缺测时只用人口，不把缺测当成中等风险 55
+        const target = 360 + riskBoost + Math.min(520, Math.sqrt(population) * 3.4);
 
         let nearest = null;
         for (let j = 0; j < count; j += 1) {
@@ -693,12 +694,15 @@ function getCoordForCommunity(name, row) {
 }
 
 function getLayerStyle(row, layerKey) {
-    const riskIndex = toNumber(row.risk_index, 0) || 0;
-    const vulnValue = toNumber(row.svi_percentile, 0) || 0;
+    const riskIndex = toNumber(row.risk_index, null);
+    const vulnValue = toNumber(row.svi_percentile, null);
     const uncertainty = toNumber(row.uncertainty_index, null);
     const hotspotCategory = safeText(row.hotspot_category, '数据不足');
 
     if (layerKey === 'vulnerability') {
+        if (vulnValue === null) {
+            return { color: '#94a3b8', label: '数据不足', valueText: '--' };
+        }
         if (vulnValue >= 80) {
             return { color: '#1e3a8a', label: '脆弱性极高', valueText: `${formatNumber(vulnValue, 0)}%` };
         }
@@ -743,6 +747,9 @@ function getLayerStyle(row, layerKey) {
         return { color: '#64748b', label: hotspotCategory, valueText: `z=${formatNumber(row.hotspot_z, 2)}` };
     }
 
+    if (riskIndex === null) {
+        return { color: '#94a3b8', label: '数据不足', valueText: '--' };
+    }
     if (riskIndex >= 80) {
         return { color: '#7f1d1d', label: '项目综合风险等级 4', valueText: `${formatNumber(riskIndex, 1)}` };
     }
@@ -768,7 +775,8 @@ function renderLayerLegend(layerKey) {
             { color: '#1e3a8a', text: '>=80：脆弱性极高' },
             { color: '#2563eb', text: '60-79：脆弱性较高' },
             { color: '#0ea5e9', text: '40-59：脆弱性中等' },
-            { color: '#22c55e', text: '<40：脆弱性较低' }
+            { color: '#22c55e', text: '<40：脆弱性较低' },
+            { color: '#94a3b8', text: '灰色：数据不足' }
         ];
     } else if (layerKey === 'uncertainty') {
         items = [
@@ -792,7 +800,8 @@ function renderLayerLegend(layerKey) {
             { color: '#84cc16', text: '20-39：项目综合风险等级 1' },
             { color: '#f59e0b', text: '40-59：项目综合风险等级 2' },
             { color: '#dc2626', text: '60-79：项目综合风险等级 3' },
-            { color: '#7f1d1d', text: '80-100：项目综合风险等级 4' }
+            { color: '#7f1d1d', text: '80-100：项目综合风险等级 4' },
+            { color: '#94a3b8', text: '灰色：数据不足' }
         ];
     }
 
@@ -1272,12 +1281,19 @@ function renderCharts(rankings, summary) {
         }
     });
 
-    const scatterData = rankings.map(row => ({
-        x: toNumber(row.svi_percentile, 0) || 0,
-        y: toNumber(row.risk_index, 0) || 0,
-        r: Math.max(4, Math.min(16, Math.sqrt((toNumber(row.population, 0) || 0) / 120))),
-        label: row.community || '--'
-    }));
+    const scatterData = rankings.flatMap(row => {
+        const x = toNumber(row.svi_percentile, null);
+        const y = toNumber(row.risk_index, null);
+        if (x === null || y === null) {
+            return [];
+        }
+        return [{
+            x,
+            y,
+            r: Math.max(4, Math.min(16, Math.sqrt((toNumber(row.population, 0) || 0) / 120))),
+            label: row.community || '--'
+        }];
+    });
 
     vulnScatterChart = new Chart(scatterCanvas.getContext('2d'), {
         type: 'bubble',
