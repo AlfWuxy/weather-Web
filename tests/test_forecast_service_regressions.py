@@ -149,6 +149,12 @@ def test_qweather_normalizer_does_not_insert_temperature_or_humidity_defaults():
     assert normalized['temperature_min'] is None
     assert normalized['temperature_mean'] is None
     assert normalized['humidity'] is None
+    assert normalized['condition'] != '晴'
+    assert not normalized['condition']
+    assert normalized['condition_night'] != '晴'
+    assert not normalized['condition_night']
+    assert normalized['wind_speed'] is None
+    assert normalized['wind_speed'] != 3.0
 
 
 def test_predict_daily_visits_exposes_raw_probability_inputs(monkeypatch):

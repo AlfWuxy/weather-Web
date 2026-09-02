@@ -449,6 +449,43 @@ class TestOpenMeteoAqiFlag:
             assert result['temperature_min'] == 19.0
             assert result.get('temperature_estimated') is False
 
+    def test_qweather_realtime_missing_text_is_not_sunny(self, app):
+        from unittest.mock import patch, MagicMock
+        with app.app_context():
+            from services.weather_service import WeatherService
+            ws = WeatherService()
+            ws.qweather_key = 'test_key'
+            ws.api_base_url = 'https://test.api'
+
+            mock_resp = MagicMock()
+            mock_resp.status_code = 200
+            mock_resp.json.return_value = {
+                'code': '200',
+                'now': {
+                    'temp': '30',
+                    'humidity': '60',
+                    'pressure': '1013',
+                    'windSpeed': '5',
+                }
+            }
+            mock_air = MagicMock()
+            mock_air.status_code = 200
+            mock_air.json.return_value = {'code': '404'}
+            mock_daily = MagicMock()
+            mock_daily.status_code = 200
+            mock_daily.json.return_value = {
+                'code': '200',
+                'daily': [{'tempMax': '37', 'tempMin': '19'}]
+            }
+
+            with patch('requests.get', side_effect=[mock_resp, mock_daily, mock_air]):
+                result = ws.get_current_weather('测试城市')
+
+            assert result is not None
+            assert result.get('weather_condition') != '晴'
+            assert not result.get('weather_condition')
+            assert result.get('feels_like') is None or result.get('feels_like') != result.get('temperature')
+
     def test_openmeteo_uses_hourly_when_daily_missing(self, app):
         """负向: Open-Meteo 缺失 daily 时应回退 hourly 推导，不使用固定 ±3。"""
         from unittest.mock import patch, MagicMock
