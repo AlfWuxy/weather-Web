@@ -120,7 +120,6 @@ class CommunityRiskService:
             return None
         if not math.isfinite(pop) or pop <= 0:
             return None
-        pop = max(10.0, pop)
         estimated = pop * self.baseline_visit_rate
         return float(np.clip(estimated, self.min_baseline_visits, self.max_baseline_visits))
 
@@ -639,14 +638,20 @@ class CommunityRiskService:
         vi = vi_result['vulnerability_index']
         
         # 获取基线门诊率
-        baseline_rate = profile.get('baseline_visits', 5)
-        
+        try:
+            baseline_rate = float(profile.get('baseline_visits'))
+        except (TypeError, ValueError):
+            return {'error': '门诊基线无效'}
+        if not math.isfinite(baseline_rate) or baseline_rate <= 0:
+            return {'error': '门诊基线无效'}
+
         # 标准化输入RR，避免非数值污染
         try:
             weather_rr = float(weather_rr)
         except (TypeError, ValueError):
-            weather_rr = 1.0
-        weather_rr = max(0.01, weather_rr)
+            return {'error': '天气相对风险无效'}
+        if not math.isfinite(weather_rr) or weather_rr <= 0:
+            return {'error': '天气相对风险无效'}
 
         # 计算风险得分（总量）与超额风险（天气导致增量）
         risk_score = weather_rr * vi * baseline_rate
@@ -744,27 +749,49 @@ class CommunityRiskService:
         else:
             macro_rr, _ = dlnm.calculate_rr(temperature)
 
+        rr_available = True
+        try:
+            macro_rr = float(macro_rr)
+        except (TypeError, ValueError):
+            rr_available = False
+            macro_rr = None
+        else:
+            if not math.isfinite(macro_rr) or macro_rr <= 0:
+                rr_available = False
+                macro_rr = None
+
         # 2) 计算天气驱动风险底图
         community_risks = []
-        for name, profile in self.community_profiles.items():
-            if not self._profile_ready_for_ranking(profile):
-                continue
-            risk = self.calculate_community_risk_score(name, macro_rr, target_date)
-            risk['latitude'] = profile.get('latitude', 29.35)
-            risk['longitude'] = profile.get('longitude', 116.37)
-            risk['coords_estimated'] = bool(profile.get('coords_estimated'))
-            risk['green_space_ratio'] = profile.get('green_space_ratio')
-            risk['heat_island_index'] = profile.get('heat_island_index')
-            risk['medical_accessibility'] = profile.get('medical_accessibility')
-            community_risks.append(risk)
+        if rr_available:
+            for name, profile in self.community_profiles.items():
+                if not self._profile_ready_for_ranking(profile):
+                    continue
+                risk = self.calculate_community_risk_score(name, macro_rr, target_date)
+                if not isinstance(risk, dict) or risk.get('error'):
+                    continue
+                risk['latitude'] = profile.get('latitude', 29.35)
+                risk['longitude'] = profile.get('longitude', 116.37)
+                risk['coords_estimated'] = bool(profile.get('coords_estimated'))
+                risk['green_space_ratio'] = profile.get('green_space_ratio')
+                risk['heat_island_index'] = profile.get('heat_island_index')
+                risk['medical_accessibility'] = profile.get('medical_accessibility')
+                community_risks.append(risk)
 
         if not community_risks:
-            profile_status = getattr(self, 'community_profile_status', {
-                'available': False,
-                'code': 'community_profiles_unavailable',
-                'source': 'community_table',
-                'message': '社区档案当前不可用，本次不生成社区风险排名。',
-            })
+            if not rr_available:
+                profile_status = {
+                    'available': False,
+                    'code': 'weather_rr_unavailable',
+                    'source': 'dlnm',
+                    'message': '天气相对风险当前不可用，本次不生成社区风险排名。',
+                }
+            else:
+                profile_status = getattr(self, 'community_profile_status', {
+                    'available': False,
+                    'code': 'community_profiles_unavailable',
+                    'source': 'community_table',
+                    'message': '社区档案当前不可用，本次不生成社区风险排名。',
+                })
             return {
                 'data_available': False,
                 'data_status': profile_status,
@@ -787,7 +814,7 @@ class CommunityRiskService:
                 },
                 'macro_weather': {
                     'temperature': temperature,
-                    'rr': round(macro_rr, 3),
+                    'rr': None if macro_rr is None else round(macro_rr, 3),
                     'lag_temperatures_used': len(lag_temperatures) if lag_temperatures else 0
                 },
                 'impact_likelihood_matrix': {

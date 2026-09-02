@@ -75,6 +75,32 @@ def test_baseline_visits_estimation_scales_with_population():
     assert large == 6.0
 
 
+def test_baseline_visits_estimation_does_not_floor_small_population():
+    service = CommunityRiskService()
+    service.min_baseline_visits = 0.01
+
+    tiny = service._estimate_baseline_visits(5)
+    ten = service._estimate_baseline_visits(10)
+
+    assert tiny == 5 * service.baseline_visit_rate
+    assert ten == 10 * service.baseline_visit_rate
+    assert tiny < ten
+
+
+def test_community_risk_score_rejects_invalid_rr_and_missing_baseline():
+    service = _build_service_with_fixed_profile()
+
+    assert "error" in service.calculate_community_risk_score("测试社区", weather_rr=None)
+    assert "error" in service.calculate_community_risk_score("测试社区", weather_rr="bad")
+    assert "error" in service.calculate_community_risk_score("测试社区", weather_rr=float("nan"))
+
+    service.community_profiles["测试社区"]["baseline_visits"] = None
+    assert "error" in service.calculate_community_risk_score("测试社区", weather_rr=1.8)
+
+    service.community_profiles["测试社区"]["baseline_visits"] = 0
+    assert "error" in service.calculate_community_risk_score("测试社区", weather_rr=1.8)
+
+
 def test_default_community_proxies_are_reproducible_across_instances():
     first_service = CommunityRiskService()
     second_service = CommunityRiskService()
@@ -179,6 +205,26 @@ def test_generate_map_passes_lag_temperatures_to_dlnm(monkeypatch):
     assert captured["temperature"] == 10.0
     assert captured["lag_temperatures"] == [10.0, 9.0, 8.0, 7.0]
     assert result["macro_weather"]["lag_temperatures_used"] == 4
+
+
+def test_generate_map_fails_closed_when_dlnm_rr_invalid(monkeypatch):
+    service = _build_service_with_fixed_profile()
+
+    class StubDLNM:
+        def calculate_rr(self, temperature, lag_temperatures=None):
+            return None, {}
+
+    monkeypatch.setattr(
+        "services.dlnm_risk_service.get_dlnm_service",
+        lambda: StubDLNM(),
+    )
+
+    result = service.generate_community_risk_map({"temperature": 35})
+
+    assert result["data_available"] is False
+    assert result["rankings"] == []
+    assert result["data_status"]["code"] == "weather_rr_unavailable"
+    assert result["macro_weather"]["rr"] is None
 
 
 def test_no_records_keep_historical_metrics_null_and_renormalize_weights(monkeypatch):
