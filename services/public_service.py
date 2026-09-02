@@ -607,7 +607,7 @@ def _resolve_action_routes(token=None, confirm_action=None, help_action=None, de
 def _notify_caregiver_of_help(pair):
     caregiver_id = getattr(pair, 'caregiver_id', None)
     if not caregiver_id:
-        return
+        return False
     location = (getattr(pair, 'location_query', None) or getattr(pair, 'community_code', None) or '').strip()
     title = '监测对象发出求助'
     message = f'短码 {pair.short_code} 的监测对象点击了「我需要帮助」。'
@@ -627,7 +627,7 @@ def _notify_caregiver_of_help(pair):
     caregiver = db.session.get(User, caregiver_id)
     wx_uid = (getattr(caregiver, 'wxpusher_uid', None) or '').strip() if caregiver else ''
     if not caregiver or not getattr(caregiver, 'push_enabled', False) or not wx_uid:
-        return
+        return False
     try:
         from services.push import wxpusher
 
@@ -637,8 +637,10 @@ def _notify_caregiver_of_help(pair):
             message,
             url=url_for('user.caregiver_pair_detail', pair_id=pair.id, _external=True),
         )
+        return True
     except Exception as exc:
         logger.warning('求助推送失败: %s', exc)
+        return False
 
 
 def _handle_action_lookup(token=None, entry_action=None, confirm_action=None, help_action=None, debrief_action=None):
@@ -837,8 +839,11 @@ def _handle_action_help(token=None, confirm_action=None, debrief_action=None):
         meta={'relay_stage': status.relay_stage},
     )
     _refresh_community_daily(pair.community_code, status_date)
-    _notify_caregiver_of_help(pair)
-    flash('已记录求助，照护人将收到提醒。', 'success')
+    pushed = _notify_caregiver_of_help(pair)
+    if pushed:
+        flash('已记录求助，并已向照护人推送提醒。', 'success')
+    else:
+        flash('已记录求助。请家属打开照护工作台查看（未开通推送）。', 'success')
     action_routes = _resolve_action_routes(token=token, confirm_action=confirm_action, debrief_action=debrief_action)
     return _render_action_page(
         pair,

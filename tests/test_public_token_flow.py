@@ -448,6 +448,39 @@ def test_help_creates_caregiver_notification_and_attempts_push(app, client, db_s
         assert status.help_flag is True
     assert sent and sent[0]['uid'] == 'UID_HELP'
     assert '求助' in sent[0]['title']
+    assert '已向照护人推送提醒' in response.get_data(as_text=True)
+
+
+def test_help_without_push_does_not_claim_caregiver_will_be_notified(app, client, db_session):
+    with app.app_context():
+        user = _create_user('help_nopush_user', 'help_nopush_pass')
+        pair = Pair(
+            caregiver_id=user.id,
+            community_code='求助无推送社区',
+            location_query='都昌',
+            elder_code='elder-help-nopush',
+            short_code='44332300',
+            short_code_hash=hash_short_code('44332300'),
+            status='active',
+            created_at=utcnow(),
+            last_active_at=utcnow(),
+        )
+        db.session.add(pair)
+        db.session.commit()
+
+    with client.session_transaction() as sess:
+        sess['_csrf_token'] = 'help-nopush-csrf'
+
+    response = client.post(
+        '/action/help',
+        data={'short_code': '44332300', 'csrf_token': 'help-nopush-csrf'},
+        follow_redirects=False,
+    )
+    body = response.get_data(as_text=True)
+
+    assert response.status_code == 200
+    assert '未开通推送' in body
+    assert '照护人将收到提醒' not in body
 
 
 def test_token_entry_lookup_form_includes_hidden_token(app, client):
