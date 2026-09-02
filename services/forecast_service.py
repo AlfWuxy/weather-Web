@@ -161,7 +161,7 @@ class ForecastService:
         - 兼容含 ensemble 字段的 dict
         """
         base = {
-            'temp': 15.0,
+            'temp': None,
             'temp_min': None,
             'temp_max': None,
             'temperature_p10': None,
@@ -204,7 +204,7 @@ class ForecastService:
             if tmax is not None and tmin is not None:
                 temp = (tmax + tmin) / 2.0
 
-        base['temp'] = self._safe_float(temp, 15.0)
+        base['temp'] = self._safe_float(temp)
         base['temp_min'] = tmin
         base['temp_max'] = tmax
         base['temperature_p10'] = p10
@@ -678,11 +678,17 @@ class ForecastService:
             return False, '门诊基线数据不可用，就诊负担预测暂不显示。'
         for lead_day in range(1, 8):
             target_date = start_date + timedelta(days=lead_day - 1)
-            past_temp_map = {
-                d: (e.get('temp', 15.0) if isinstance(e, dict) else float(e))
-                for d, e in forecast_temps_dict.items()
-                if d <= target_date
-            }
+            selected = forecast_temps_dict.get(target_date)
+            day_temp = self._safe_float(selected.get('temp') if isinstance(selected, dict) else selected)
+            if day_temp is None:
+                return False, '预报气温缺失，就诊负担预测暂不显示。'
+            past_temp_map = {}
+            for day, entry in forecast_temps_dict.items():
+                if day > target_date:
+                    continue
+                parsed = self._safe_float(entry.get('temp') if isinstance(entry, dict) else entry)
+                if parsed is not None:
+                    past_temp_map[day] = parsed
             _lags, sources = self.get_lag_temperature_profile(
                 target_date,
                 forecast_temps=past_temp_map,
@@ -865,7 +871,7 @@ class ForecastService:
         composite_high_days = 0
 
         # 获取温度列表用于备选
-        temp_values = [entry.get('temp', 15.0) for entry in forecast_temps_dict.values()]
+        temp_values = [entry.get('temp') for entry in forecast_temps_dict.values()]
         context = context or {}
         context_aqi = self._safe_float(context.get('aqi'))
         context_pm25 = self._safe_float(context.get('pm25'))
@@ -881,7 +887,9 @@ class ForecastService:
                 selected_entry = self._normalize_forecast_entry(temp_values[lead_day - 1])
             else:
                 raise ValueError(f"insufficient forecast data for day {lead_day}")
-            raw_temp = selected_entry.get('temp', 15.0)
+            raw_temp = self._safe_float(selected_entry.get('temp'))
+            if raw_temp is None:
+                continue
             model_spread = selected_entry.get('model_spread')
             model_count = selected_entry.get('model_count', 1)
             model_names = selected_entry.get('model_names', []) or []
@@ -909,11 +917,13 @@ class ForecastService:
             )
             
             # 获取滞后温度profile
-            past_temp_map = {
-                d: (e.get('temp', 15.0) if isinstance(e, dict) else float(e))
-                for d, e in forecast_temps_dict.items()
-                if d <= target_date
-            }
+            past_temp_map = {}
+            for day, entry in forecast_temps_dict.items():
+                if day > target_date:
+                    continue
+                parsed = self._safe_float(entry.get('temp') if isinstance(entry, dict) else entry)
+                if parsed is not None:
+                    past_temp_map[day] = parsed
             lag_temps, sources = self.get_lag_temperature_profile(
                 target_date, 
                 forecast_temps=past_temp_map

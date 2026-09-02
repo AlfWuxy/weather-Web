@@ -59,6 +59,27 @@ def test_generate_7day_forecast_skips_health_when_visit_baseline_is_fallback():
     assert '门诊' in summary['health_forecast_reason']
 
 
+def test_generate_7day_forecast_skips_health_when_a_day_has_no_temperature():
+    service = _service_with_history(fallback_thresholds=False)
+    service.qm_params = {}
+    start = today_local()
+    week = []
+    for idx in range(7):
+        day = start + timedelta(days=idx)
+        week.append({
+            'date': day.strftime('%Y-%m-%d'),
+            'temperature_mean': None if idx == 2 else 32.0,
+            'temperature_min': 24.0,
+            'humidity': 80.0,
+        })
+
+    forecasts, summary = service.generate_7day_forecast(week, start_date=start)
+
+    assert forecasts == []
+    assert summary['health_forecast_available'] is False
+    assert '气温' in summary['health_forecast_reason']
+
+
 def test_live_forecast_service_does_not_emit_visit_burden_from_stale_csv():
     from services.forecast_service import ForecastService
 

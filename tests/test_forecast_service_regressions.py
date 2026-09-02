@@ -21,6 +21,18 @@ def test_normalize_forecast_entry_preserves_zero_p50():
     assert normalized['temp'] == 0.0
 
 
+def test_normalize_forecast_entry_does_not_invent_15_when_temperature_missing():
+    from services.forecast_service import ForecastService
+
+    service = ForecastService()
+    empty = service._normalize_forecast_entry({})
+    humidity_only = service._normalize_forecast_entry({'humidity': 80})
+
+    assert empty['temp'] is None
+    assert humidity_only['temp'] is None
+    assert humidity_only['humidity'] == 80.0
+
+
 def test_composite_exposure_returns_score_stages_and_input_trace():
     from services.forecast_service import ForecastService
 
