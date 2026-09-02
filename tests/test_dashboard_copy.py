@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 from pathlib import Path
 
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+
 
 def test_dashboard_headlines_do_not_treat_unknown_as_low():
     from core.dashboard_copy import load_dashboard_copy, select_dashboard_headline
@@ -28,8 +30,8 @@ def test_dashboard_templates_read_headlines_from_json():
     from core.dashboard_copy import load_dashboard_copy
 
     copy = load_dashboard_copy()
-    today_html = Path('/workspace/templates/user_dashboard.html').read_text(encoding='utf-8')
-    elder_html = Path('/workspace/templates/elder_dashboard.html').read_text(encoding='utf-8')
+    today_html = (_REPO_ROOT / 'templates' / 'user_dashboard.html').read_text(encoding='utf-8')
+    elder_html = (_REPO_ROOT / 'templates' / 'elder_dashboard.html').read_text(encoding='utf-8')
 
     assert '{{ today_headline }}' in today_html
     assert '{{ elder_headline }}' in elder_html
