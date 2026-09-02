@@ -119,3 +119,14 @@ def test_dashboard_does_not_invent_hydration_volume_or_bp_when_actions_empty(
     assert '早晚各测一次' not in body
     assert '别漏降压药' not in body
     assert '先做好日常防护' in body
+
+
+def test_dashboard_hero_sequences_care_action_and_cooling(authenticated_client):
+    body = authenticated_client.get('/dashboard').get_data(as_text=True)
+
+    assert '记录今天是否做到' in body
+    assert 'href="/action"' in body or 'action_check' in body
+    assert '附近避暑点' in body
+    assert 'href="/cooling"' in body
+    assert '照护工作台' in body
+    assert '看 7 天趋势' in body

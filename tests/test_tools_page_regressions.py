@@ -765,6 +765,29 @@ def test_cooling_page_does_not_claim_free_entry_or_id_check(client, db_session, 
     assert '多数免费开放' not in body
     assert '登记身份证' not in body
     assert '以各点标注为准' in body
+    assert '高血压、心脑血管病人' not in body
+
+
+def test_cooling_page_reads_temperature_advice_from_json(client, db_session, monkeypatch):
+    monkeypatch.setattr(
+        'services.public_service.get_weather_with_cache',
+        lambda location: ({
+            'temperature': 36.0,
+            'is_mock': False,
+            'data_source': 'QWeather',
+        }, False),
+    )
+
+    body = client.get('/cooling?location=都昌').get_data(as_text=True)
+    from core.cooling_copy import load_cooling_page_copy
+
+    load_cooling_page_copy.cache_clear()
+    copy = load_cooling_page_copy()
+    assert copy['footer']
+    assert any(band.get('min') == 35 for band in copy['bands'])
+    assert copy['bands'][0]['title'] in body
+    assert copy['footer'] in body
+    assert '高血压、心脑血管病人' not in body
 
 
 def test_cooling_page_empty_database_does_not_render_default_resources(client, db_session, monkeypatch):

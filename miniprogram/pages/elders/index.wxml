@@ -19,7 +19,7 @@
   </block>
 
   <block wx:if="{{!loading && elders.length === 0}}">
-    <view class="muted" style="text-align:center; padding: 20px;">暂无老人，请先新增或在网页端添加。</view>
+    <view class="muted" style="text-align:center; padding: 20px;">暂无老人，请先新增，或到网页「照护工作台」添加。</view>
   </block>
 
   <block wx:for="{{elders}}" wx:key="pair_id">

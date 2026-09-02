@@ -4,7 +4,7 @@
       {{mode === 'create' ? '新增老人' : '编辑老人'}}
     </view>
     <view class="muted" style="margin-top: 6px; font-size: 12px;">
-      慢病信息仅填写“类别”（可选），用于生成更贴近实际的提醒话术。
+      慢病信息仅填写“类别”（可选），便于档案对照。
     </view>
 
     <block>

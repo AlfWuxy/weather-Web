@@ -26,18 +26,10 @@
                 </div>
             </div>
             <div class="col-md">
-                {% if outdoor_temp >= 35 %}
-                    <span class="yl-temp-status is-danger">高温危险</span>
-                    <h4 class="mt-2 mb-1" style="font-size:1.15rem; color:var(--yl-risk-high);">建议优先选择室内纳凉点</h4>
-                    <p class="text-muted mb-0" style="font-size:.9rem;">当前室外温度偏高,高血压、心脑血管病人建议减少户外停留,下方可筛选空调开放点。</p>
-                {% elif outdoor_temp >= 28 %}
-                    <span class="yl-temp-status is-hot">炎热</span>
-                    <h4 class="mt-2 mb-1" style="font-size:1.15rem;">户外注意补水与遮阳</h4>
-                    <p class="text-muted mb-0" style="font-size:.9rem;">外出建议随身携带水壶和遮阳伞,尽量避开午后高温时段。</p>
-                {% else %}
-                    <span class="yl-temp-status is-comfort">凉爽舒适</span>
-                    <h4 class="mt-2 mb-1" style="font-size:1.15rem;">当前适合短时户外活动</h4>
-                    <p class="text-muted mb-0" style="font-size:.9rem;">仍建议关注老人补水和行走安全,根据体感灵活安排出门时间。</p>
+                {% if cooling_temp_band %}
+                    <span class="yl-temp-status {{ cooling_temp_band.status_class }}">{{ cooling_temp_band.status }}</span>
+                    <h4 class="mt-2 mb-1" style="font-size:1.15rem;{% if cooling_temp_band.status_class == 'is-danger' %} color:var(--yl-risk-high);{% endif %}">{{ cooling_temp_band.title }}</h4>
+                    <p class="text-muted mb-0" style="font-size:.9rem;">{{ cooling_temp_band.detail }}</p>
                 {% endif %}
             </div>
         </div>
@@ -114,7 +106,7 @@
 
     <section class="alert alert-primary mt-4 yl-fade-up">
         <i class="bi bi-info-circle me-1"></i>
-        高温天(35°C 以上)建议带老人上午 10 点前或傍晚 6 点后出门,并随身带水和遮阳伞。
+        {{ cooling_copy.footer }}
     </section>
 </div>
 {% endblock %}

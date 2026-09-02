@@ -4,7 +4,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_web_and_mp_caregiver_scripts_share_json():
+def test_miniprogram_elder_copy_does_not_invent_web_family_or_tip_personalization():
+    elders = (ROOT / 'miniprogram' / 'pages' / 'elders' / 'index.wxml').read_text(encoding='utf-8')
+    edit = (ROOT / 'miniprogram' / 'pages' / 'elder-edit' / 'index.wxml').read_text(encoding='utf-8')
+
+    assert '网页端添加' not in elders
+    assert '照护工作台' in elders
+    assert '提醒话术' not in edit
     web = (ROOT / 'data' / 'content' / 'caregiver_tip_scripts.json').read_text(encoding='utf-8')
     mp = (ROOT / 'miniprogram' / 'content' / 'caregiver_tip_scripts.json').read_text(encoding='utf-8')
     assert web == mp

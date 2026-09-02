@@ -82,7 +82,9 @@
                 </p>
 
                 <div class="yl-academic-actions">
-                    <a class="btn btn-primary" href="{{ url_for('public.action_check') }}">记录今天是否做到</a>
+                    <a class="btn btn-primary" href="{{ dashboard_care_url }}">{{ dashboard_care_title }}</a>
+                    <a class="btn btn-outline-secondary" href="{{ url_for('public.action_check') }}">记录今天是否做到</a>
+                    <a class="btn btn-outline-secondary" href="{{ url_for('public.cooling_resources') }}">附近避暑点</a>
                     <a class="btn btn-outline-secondary" href="{{ url_for('tools.forecast_7day') }}">看 7 天趋势</a>
                 </div>
 
