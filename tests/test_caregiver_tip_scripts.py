@@ -4,6 +4,25 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def test_personalized_care_notes_do_not_invent_clinical_advice():
+    from services.user._helpers import _personalized_care_notes
+
+    notes = _personalized_care_notes(['高血压', '慢性支气管炎'])
+    joined = ' '.join(notes)
+    assert '高血压' in joined
+    assert '慢性支气管炎' in joined
+    assert '预防感冒' not in joined
+    assert '头晕胸闷' not in joined
+    assert '注意补水' not in joined
+
+
+def test_miniprogram_template_points_action_and_cooling_to_web():
+    template = (ROOT / 'miniprogram' / 'pages' / 'template' / 'index.wxml').read_text(encoding='utf-8')
+    assert '网页' in template
+    assert '记录' in template or '打卡' in template
+    assert '避暑' in template
+
+
 def test_miniprogram_elder_copy_does_not_invent_web_family_or_tip_personalization():
     elders = (ROOT / 'miniprogram' / 'pages' / 'elders' / 'index.wxml').read_text(encoding='utf-8')
     edit = (ROOT / 'miniprogram' / 'pages' / 'elder-edit' / 'index.wxml').read_text(encoding='utf-8')

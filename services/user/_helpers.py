@@ -120,13 +120,6 @@ def _personalized_care_notes(chronic_diseases):
     if not text:
         return []
     notes = [f'慢病提示（可选登记）：{text}']
-    # Light personalization only; avoid medical claims.
-    cold_sensitive = any('呼吸' in d or '慢阻肺' in d or '支气管' in d for d in diseases)
-    heat_sensitive = any('高血压' in d or '冠心病' in d or '脑卒中' in d for d in diseases)
-    if cold_sensitive:
-        notes.append('寒冷时更要注意保暖、减少外出，预防感冒与呼吸道不适。')
-    if heat_sensitive:
-        notes.append('高温时注意补水、避免暴晒和剧烈活动，留意头晕胸闷等不适。')
     return notes
 
 

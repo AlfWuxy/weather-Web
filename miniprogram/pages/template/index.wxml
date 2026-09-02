@@ -2,7 +2,7 @@
   <view class="card">
     <view style="font-size: 18px; font-weight: 700;">一键提醒话术</view>
     <view class="muted" style="margin-top: 6px; font-size: 12px;">
-      你作为“可信节点”把行动建议转述给家人。话术为通用建议，不提供医疗诊断/治疗建议。
+      你作为“可信节点”把行动建议转述给家人。话术为通用建议，不提供医疗诊断/治疗建议。记录今天是否做到和附近避暑点请在网页完成。
     </view>
   </view>
 
