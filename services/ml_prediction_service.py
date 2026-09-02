@@ -695,127 +695,11 @@ class MLPredictionService:
         }
     
     def _generate_recommendations(self, age, gender, top_predictions, weather_info):
-        """生成健康建议"""
-        recommendations = []
-        
-        # 基于年龄的建议
-        if age >= 65:
-            recommendations.append({
-                'category': '老年健康',
-                'advice': '建议定期测量血压和血糖，外出注意防滑防摔，随身携带常用药物',
-                'priority': 'high'
-            })
-        elif age < 10:
-            recommendations.append({
-                'category': '儿童健康',
-                'advice': '注意营养均衡，保证充足睡眠，避免接触传染源',
-                'priority': 'medium'
-            })
-        
-        if weather_info:
-            metrics = _weather_metrics(weather_info)
-            temp = metrics['temp']
-            humidity = metrics['humidity']
-            aqi = metrics['aqi']
-            wind_speed = metrics['wind_speed']
-            
-            # 温度相关建议
-            if temp is not None and temp < 5:
-                recommendations.append({
-                    'category': '低温防护',
-                    'advice': '天气寒冷，注意添衣保暖，特别是头部、颈部和脚部。室内保持适宜温度(18-22°C)',
-                    'priority': 'high'
-                })
-            elif temp is not None and temp < 10:
-                recommendations.append({
-                    'category': '防寒提醒',
-                    'advice': '气温较低，早晚温差大，注意保暖防寒，预防感冒',
-                    'priority': 'medium'
-                })
-            elif temp is not None and temp > 35:
-                recommendations.append({
-                    'category': '高温防护',
-                    'advice': '天气炎热，多饮水，避免10-14点高温时段外出，注意防暑降温',
-                    'priority': 'high'
-                })
-            elif temp is not None and temp > 30:
-                recommendations.append({
-                    'category': '防暑提醒',
-                    'advice': '气温较高，适当增加饮水量，饮食清淡，注意食品卫生',
-                    'priority': 'medium'
-                })
-            
-            # 湿度相关建议
-            if humidity is not None and humidity > 85:
-                recommendations.append({
-                    'category': '高湿度提醒',
-                    'advice': '空气湿度较大，注意室内通风除湿，衣物及时晾晒',
-                    'priority': 'low'
-                })
-            elif humidity is not None and humidity < 40:
-                recommendations.append({
-                    'category': '干燥提醒',
-                    'advice': '空气干燥，多饮水，可使用加湿器，注意皮肤保湿',
-                    'priority': 'low'
-                })
-            
-            # 空气质量建议
-            if aqi is not None and aqi > 150:
-                recommendations.append({
-                    'category': '空气质量警告',
-                    'advice': '空气质量差，建议减少户外活动，外出务必佩戴口罩，使用空气净化器',
-                    'priority': 'high'
-                })
-            elif aqi is not None and aqi > 100:
-                recommendations.append({
-                    'category': '空气质量提醒',
-                    'advice': '空气质量一般，敏感人群减少户外活动，外出建议佩戴口罩',
-                    'priority': 'medium'
-                })
-            
-            # 大风建议
-            if wind_speed is not None and wind_speed > 8:
-                recommendations.append({
-                    'category': '大风提醒',
-                    'advice': '风力较大，外出注意防风，避免在高大建筑物附近停留',
-                    'priority': 'medium'
-                })
-        
-        # 基于预测疾病的建议
-        for pred in top_predictions:
-            disease = pred['disease']
-            if '呼吸' in disease or '支气管' in disease or '肺' in disease:
-                recommendations.append({
-                    'category': '呼吸系统',
-                    'advice': f'当前{disease}风险较高，注意保暖防寒，保持室内通风，避免接触烟尘',
-                    'priority': 'high' if pred['probability'] > 0.3 else 'medium'
-                })
-            elif '胃' in disease or '肠' in disease or '消化' in disease:
-                recommendations.append({
-                    'category': '消化系统',
-                    'advice': f'当前{disease}风险较高，饮食规律清淡，避免生冷辛辣，注意食品卫生',
-                    'priority': 'high' if pred['probability'] > 0.3 else 'medium'
-                })
-            elif '高血压' in disease or '心血管' in disease:
-                recommendations.append({
-                    'category': '心血管系统',
-                    'advice': f'当前{disease}风险较高，避免剧烈运动，保持情绪稳定，按时服药',
-                    'priority': 'high' if pred['probability'] > 0.3 else 'medium'
-                })
-        
-        # 通用建议
-        recommendations.append({
-            'category': '日常健康',
-            'advice': '保持规律作息，适量运动，均衡饮食，如有不适及时就医',
-            'priority': 'low'
-        })
-        
-        # 按优先级排序
-        priority_order = {'high': 0, 'medium': 1, 'low': 2}
-        recommendations.sort(key=lambda x: priority_order.get(x.get('priority', 'low'), 2))
-        
-        return recommendations
-    
+        """生成健康建议。文案从 JSON 读取。"""
+        from core.ml_copy import generate_ml_personal_recommendations
+        metrics = _weather_metrics(weather_info) if weather_info else {}
+        return generate_ml_personal_recommendations(age, top_predictions, metrics)
+
     def predict_community_risk(self, community_info, weather_info):
         """
         预测社区健康风险（多分类版本）
@@ -969,54 +853,11 @@ class MLPredictionService:
         return max(0.0, min(value, 86400.0))
     
     def _generate_community_recommendations(self, elderly_ratio, weather_info, disease_risks):
-        """生成社区健康建议"""
-        recommendations = []
-        
-        if elderly_ratio > 0.3:
-            recommendations.append('加强对独居老人的健康巡访')
-            recommendations.append('社区卫生站做好应急药品储备')
-        
-        if weather_info:
-            metrics = _weather_metrics(weather_info)
-            temp = metrics['temp']
-            aqi = metrics['aqi']
-            humidity = metrics['humidity']
-            
-            if temp is not None and temp < 5:
-                recommendations.append('开放社区暖心驿站')
-                recommendations.append('提醒居民注意防寒保暖')
-            elif temp is not None and temp < 10:
-                recommendations.append('关注独居老人保暖情况')
-            
-            if temp is not None and temp > 35:
-                recommendations.append('设立防暑降温点')
-                recommendations.append('关注独居老人防暑情况')
-            elif temp is not None and temp > 32:
-                recommendations.append('提醒居民多饮水避暑')
-            
-            if aqi is not None and aqi > 150:
-                recommendations.append('发布空气质量红色预警')
-                recommendations.append('建议居民减少户外活动')
-            elif aqi is not None and aqi > 100:
-                recommendations.append('发布空气质量提醒')
-                recommendations.append('建议敏感人群减少外出')
-            
-            if humidity is not None and humidity > 85:
-                recommendations.append('提醒居民注意室内通风除湿')
-        
-        # 基于疾病风险
-        if disease_risks:
-            top_diseases = [d[0] for d in disease_risks[:3]]
-            if any('呼吸' in d or '支气管' in d for d in top_diseases):
-                recommendations.append('开展呼吸道疾病预防宣教')
-            if any('胃' in d or '肠' in d for d in top_diseases):
-                recommendations.append('加强食品卫生宣传')
-        
-        if not recommendations:
-            recommendations.append('保持常规健康管理工作')
-        
-        return recommendations
-    
+        """生成社区健康建议。文案从 JSON 读取，面向照护。"""
+        from core.ml_copy import generate_ml_community_recommendations
+        metrics = _weather_metrics(weather_info) if weather_info else {}
+        return generate_ml_community_recommendations(elderly_ratio, metrics, disease_risks)
+
     def get_model_status(self):
         """获取模型状态"""
         return {

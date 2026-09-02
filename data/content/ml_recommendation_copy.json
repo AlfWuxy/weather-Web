@@ -1,0 +1,114 @@
+{
+  "personal": {
+    "elderly": {
+      "category": "老年健康",
+      "priority": "high",
+      "advice": "提醒家人按时服药，外出注意防滑，随身带常用药。"
+    },
+    "child": {
+      "category": "儿童健康",
+      "priority": "medium",
+      "advice": "注意作息和饮食，少去人多密闭场所。"
+    },
+    "cold": {
+      "category": "低温防护",
+      "priority": "high",
+      "advice": "天气寒冷，提醒家人添衣保暖，尤其头颈和脚。室内不要太冷。"
+    },
+    "chilly": {
+      "category": "防寒提醒",
+      "priority": "medium",
+      "advice": "气温较低，早晚温差大，出门前提醒加减衣服。"
+    },
+    "hot_extreme": {
+      "category": "高温防护",
+      "priority": "high",
+      "advice": "天气炎热，提醒家人多补水，少在10-14点出门，确认附近避暑点。"
+    },
+    "hot": {
+      "category": "防暑提醒",
+      "priority": "medium",
+      "advice": "气温较高，提醒家人增加饮水，饮食清淡。"
+    },
+    "humid": {
+      "category": "高湿度提醒",
+      "priority": "low",
+      "advice": "空气较湿，提醒家人开窗通风。"
+    },
+    "dry": {
+      "category": "干燥提醒",
+      "priority": "low",
+      "advice": "空气干燥，提醒家人多饮水。"
+    },
+    "aqi_high": {
+      "category": "空气质量警告",
+      "priority": "high",
+      "advice": "空气质量差，提醒家人减少户外活动，出门戴口罩。"
+    },
+    "aqi_moderate": {
+      "category": "空气质量提醒",
+      "priority": "medium",
+      "advice": "空气质量一般，敏感家人减少外出，出门建议戴口罩。"
+    },
+    "windy": {
+      "category": "大风提醒",
+      "priority": "medium",
+      "advice": "风力较大，外出注意防风，少在高楼附近停留。"
+    },
+    "respiratory": {
+      "category": "呼吸系统",
+      "advice_template": "当前{disease}风险较高，注意保暖、保持室内通风，避免烟尘。"
+    },
+    "digestive": {
+      "category": "消化系统",
+      "advice_template": "当前{disease}风险较高，饮食规律清淡，避免生冷辛辣。"
+    },
+    "cardio": {
+      "category": "心血管系统",
+      "advice_template": "当前{disease}风险较高，避免费力活动，按时服药，保持情绪平稳。"
+    },
+    "routine": {
+      "category": "日常健康",
+      "priority": "low",
+      "advice": "保持规律作息、适量活动和均衡饮食，如有不适及时就医。"
+    }
+  },
+  "community": {
+    "high_aging": [
+      "先安排人确认独居老人今天是否有人联系。",
+      "备好常用药和补水，不要等到午后再出门。"
+    ],
+    "cold": [
+      "确认保暖和有人探望。",
+      "提醒家人少在清晨出门。"
+    ],
+    "cool": [
+      "留意独居老人是否保暖。"
+    ],
+    "hot_extreme": [
+      "确认附近避暑点是否开放。",
+      "提醒家人少在午后出门、及时补水。"
+    ],
+    "hot": [
+      "提醒家人多补水、少在午后出门。"
+    ],
+    "aqi_high": [
+      "空气偏差，提醒家人减少户外活动，出门戴口罩。"
+    ],
+    "aqi_moderate": [
+      "空气一般，敏感家人减少外出。"
+    ],
+    "humid": [
+      "提醒家人开窗通风除湿。"
+    ],
+    "respiratory": [
+      "有呼吸道风险时，提醒保暖、通风，少接触烟尘。"
+    ],
+    "digestive": [
+      "饮食清淡规律，注意食物是否放凉、是否新鲜。"
+    ],
+    "routine": [
+      "保持日常提醒、补水和通风。"
+    ]
+  }
+}
