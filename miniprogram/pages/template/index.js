@@ -1,4 +1,5 @@
 const { api } = require('../../utils/request');
+const scripts = require('../../content/caregiver_tip_scripts.json');
 
 function formatTemp(value) {
   if (value === null || value === undefined || value === '') return '';
@@ -11,47 +12,42 @@ function buildMessage({ trigger, elderName, relation, locationText, tmax, tmin, 
   else if (relation === '父亲' || relation === '爸爸' || relation === '爸') address = '爸';
   else if (elderName) address = elderName;
 
-  const footer = [
-    `地点：${locationText || '-'}`,
-    '说明：这是行动提醒，不提供医疗诊断/治疗建议；如明显不适请及时就医。',
-  ];
-  if (actionUrl || shortCode) {
-    footer.push(`（可选）行动页：${actionUrl || '-'}  短码：${shortCode || '-'}`);
-  }
-
+  const lines = [];
   if (!weatherAvailable) {
-    return [
-      `【天气更新中】${address}，这边暂时拿不到可靠天气，先做好日常防护，天气恢复后再看是否需要加减衣服或避暑。`,
-      ...footer,
-    ].join('\n');
+    lines.push(scripts.weather_unavailable.title);
+    lines.push(scripts.weather_unavailable.lead);
+  } else {
+    const kind = trigger === 'cold' ? 'cold' : trigger === 'heat' ? 'heat' : 'daily';
+    const block = scripts[kind] || scripts.daily;
+    lines.push(block.title);
+    let lead = (block.lead || '').replace('{address}', address);
+    if (kind === 'cold' && tmin) {
+      lead += (block.temp_clause || '').replace('{tmin}', tmin);
+      if (!lead.endsWith('。')) lead += '。';
+    } else if (kind === 'heat' && tmax) {
+      lead += (block.temp_clause || '').replace('{tmax}', tmax);
+      if (!lead.endsWith('。')) lead += '。';
+    } else if ((kind === 'cold' || kind === 'heat') && !lead.endsWith('。')) {
+      lead += '。';
+    }
+    lines.push(lead);
+    if (block.advice) lines.push(block.advice);
   }
 
-  if (trigger === 'cold') {
-    let line1 = `【寒潮提醒】${address}，我看到你那边今天可能比较冷`;
-    if (tmax !== '' || tmin !== '') {
-      if (tmin !== '') line1 += `（最低约 ${tmin}°C）`;
-    }
-    line1 += '。';
-    return [
-      line1,
-      '建议：尽量少出门，外出注意保暖防滑；室内注意保暖，别受凉。',
-      ...footer,
-    ].join('\n');
+  if (locationText) {
+    lines.push((scripts.location_line || '').replace('{location}', locationText));
   }
-  if (trigger === 'heat') {
-    let line1 = `【高温提醒】${address}，我看到你那边今天可能会很热`;
-    if (tmax !== '') line1 += `（最高约 ${tmax}°C）`;
-    line1 += '。';
-    return [
-      line1,
-      '建议：避开中午外出，多喝水；室内开风扇/空调或找阴凉处休息。',
-      ...footer,
-    ].join('\n');
+  if (weatherAvailable) {
+    lines.push(scripts.disclaimer);
   }
-  return [
-    `【日常提醒】${address}，我这边看看你那边天气有变化，注意劳逸结合，出门记得带水/外套。`,
-    ...footer,
-  ].join('\n');
+  if (actionUrl || shortCode) {
+    lines.push(
+      (scripts.action_line || '')
+        .replace('{action_link}', actionUrl || '-')
+        .replace('{short_code}', shortCode || '-')
+    );
+  }
+  return lines.filter(Boolean).join('\n');
 }
 
 Page({

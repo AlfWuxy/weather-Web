@@ -10,7 +10,7 @@ from flask_login import current_user
 from core.db_models import Community, DailyStatus, Debrief, FamilyMember, Pair, PairLink
 from core.extensions import db
 from core.guest import is_guest_user
-from core.time_utils import today_local, utcnow, local_datetime_to_utc
+from core.time_utils import today_local, utcnow, local_datetime_to_utc, ensure_utc_aware
 from core.weather import (
     get_consecutive_hot_days,
     get_weather_with_cache,
@@ -26,6 +26,7 @@ from utils.parsers import json_or_none, safe_json_loads
 from utils.validators import sanitize_input
 
 from ._common import (
+    AUTO_ESCALATE_AFTER,
     AUTO_ESCALATE_STAGE,
     CARE_ACTION_OPTIONS,
     HEAT_RISK_LABELS,
@@ -73,15 +74,15 @@ def _heat_weather_available(weather_data):
 
 def _build_weather_waiting_message(pair, action_link):
     """天气不可用时只保留行动入口，不生成风险结论或风险建议。"""
+    from core.caregiver_scripts import format_caregiver_script
+
     location = (pair.location_query or pair.community_code or '').strip()
-    lines = [
-        '【天气更新中】',
-        '风险等级暂不显示。仍可打开行动页完成安全确认或求助。',
-    ]
-    if location:
-        lines.append(f'地点：{location}')
-    lines.append(f'（可选）行动页：{action_link}  短码：{pair.short_code}')
-    return '\n'.join(lines)
+    return format_caregiver_script(
+        kind='weather_unavailable',
+        location=location,
+        action_link=action_link,
+        short_code=pair.short_code,
+    )
 
 
 def _load_heat_risk(location):
@@ -281,6 +282,10 @@ def _build_pair_management_context(caregiver_mode=False):
         relay_stage_label = None
         if relay_stage and relay_stage != 'none':
             relay_stage_label = RELAY_STAGE_LABELS.get(relay_stage, relay_stage)
+        escalate_deadline_iso = None
+        if status and not confirmed and status.created_at:
+            escalate_at = ensure_utc_aware(status.created_at) + AUTO_ESCALATE_AFTER
+            escalate_deadline_iso = escalate_at.isoformat().replace('+00:00', 'Z')
         member = member_map.get(pair.member_id) if getattr(pair, 'member_id', None) else None
         action_link = _build_pair_action_link(pair)
         reminder_message = (
@@ -311,7 +316,8 @@ def _build_pair_management_context(caregiver_mode=False):
             'help_flag': bool(status and status.help_flag),
             'is_overdue': is_overdue,
             'relay_stage': relay_stage,
-            'relay_stage_label': relay_stage_label
+            'relay_stage_label': relay_stage_label,
+            'escalate_deadline_iso': escalate_deadline_iso,
         })
 
     if pair_cards or created_action_link:

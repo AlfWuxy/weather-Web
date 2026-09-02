@@ -181,7 +181,14 @@
                                                 </div>
                                             </div>
                                             <div class="text-muted small mt-2">
-                                                倒计时 <span class="countdown" data-deadline-hour="20"></span>
+                                                今日确认 <span class="countdown" data-deadline-hour="20"></span>
+                                                {% if item.status and not item.status.confirmed_at %}
+                                                    {% if item.relay_stage and item.relay_stage not in ['none', 'caregiver'] %}
+                                                        · 已转{{ item.relay_stage_label }}
+                                                    {% elif item.escalate_deadline_iso %}
+                                                        · 转备用 <span class="countdown" data-deadline="{{ item.escalate_deadline_iso }}"></span>
+                                                    {% endif %}
+                                                {% endif %}
                                             </div>
                                             {% if item.help_flag or item.relay_stage_label or item.is_overdue %}
                                                 <div class="d-flex flex-wrap gap-2 mt-2">
@@ -325,11 +332,16 @@ document.addEventListener('DOMContentLoaded', function () {
     const updateCountdowns = () => {
         const now = new Date();
         document.querySelectorAll('.countdown').forEach(el => {
-            const hour = parseInt(el.dataset.deadlineHour || '20', 10);
-            const deadline = new Date();
-            deadline.setHours(hour, 0, 0, 0);
-            if (deadline < now) {
-                deadline.setDate(deadline.getDate() + 1);
+            let deadline;
+            if (el.dataset.deadline) {
+                deadline = new Date(el.dataset.deadline);
+            } else {
+                const hour = parseInt(el.dataset.deadlineHour || '20', 10);
+                deadline = new Date();
+                deadline.setHours(hour, 0, 0, 0);
+                if (deadline < now) {
+                    deadline.setDate(deadline.getDate() + 1);
+                }
             }
             const diff = Math.max(0, deadline - now);
             const hours = Math.floor(diff / (1000 * 60 * 60));
