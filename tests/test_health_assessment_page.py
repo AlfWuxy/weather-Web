@@ -140,6 +140,8 @@ def test_health_assessment_post_persists_academic_payload(
     assert '代理值' not in html
     assert 'methodology' in academic
     assert len(academic['methodology']) >= 4
+    assert academic['weather']['weather_condition'] == '多云'
+    assert '多云' in html
 
     disease_risks = safe_json_loads(assessment.disease_risks, {})
     assert isinstance(disease_risks, dict)
@@ -220,6 +222,31 @@ def test_health_assessment_post_waits_for_real_weather_without_side_effects(
     assert '天气正在更新，本次评估暂未完成' in html
     assert '未保存记录' not in html
     assert HealthRiskAssessment.query.count() == 0
+
+
+def test_personal_susceptibility_accepts_full_gender_labels():
+    from services.health_risk_service import HealthRiskService
+
+    service = HealthRiskService()
+    male_short = service._calc_personal_susceptibility_score(
+        {'age': 60, 'gender': '男', 'chronic_diseases': []}
+    )
+    male_full = service._calc_personal_susceptibility_score(
+        {'age': 60, 'gender': '男性', 'chronic_diseases': []}
+    )
+    female_short = service._calc_personal_susceptibility_score(
+        {'age': 75, 'gender': '女', 'chronic_diseases': []}
+    )
+    female_full = service._calc_personal_susceptibility_score(
+        {'age': 75, 'gender': '女性', 'chronic_diseases': []}
+    )
+    unknown = service._calc_personal_susceptibility_score(
+        {'age': 60, 'gender': '未知', 'chronic_diseases': []}
+    )
+
+    assert male_short == male_full
+    assert female_short == female_full
+    assert male_full > unknown
 
 
 def test_community_context_marks_default_vi_and_unavailable_burden(db_session):

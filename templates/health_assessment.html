@@ -118,7 +118,7 @@
                 <div class="card h-100 border-0 shadow-sm">
                     <div class="card-body">
                         <div class="text-muted small mb-2">天气参考</div>
-                        <div class="fw-semibold mb-2">{{ weather_ref.get('condition', '以最近一次可用天气为准') }}</div>
+                        <div class="fw-semibold mb-2">{{ weather_ref.get('weather_condition') or weather_ref.get('condition') or '以最近一次可用天气为准' }}</div>
                         <div class="text-muted small">
                             温度 {{ weather_ref.get('temperature', '--') }}°C / 湿度 {{ weather_ref.get('humidity', '--') }}%
                         </div>
