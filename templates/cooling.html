@@ -4,9 +4,9 @@
 {% block content %}
 <div class="container" style="max-width:1160px;">
     <section class="section-heading yl-fade-up">
-        <span class="section-kicker"><i class="bi bi-snow2"></i> 避暑资源</span>
-        <h2>离你最近的纳凉点</h2>
-        <p>高温天,可以带老人去这些地方避暑。多数免费开放,部分需登记身份证。</p>
+        <span class="section-kicker"><i class="bi bi-snow2"></i> {{ cooling_copy.kicker }}</span>
+        <h2>{{ cooling_copy.title }}</h2>
+        <p>{{ cooling_copy.lead }}</p>
     </section>
 
     {% if outdoor_temp is not none %}

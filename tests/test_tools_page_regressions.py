@@ -745,6 +745,19 @@ def test_chronic_risk_service_uses_submitted_vitals():
     assert high['vital_adjustment']['score_adjustment'] > base['vital_adjustment']['score_adjustment']
 
 
+def test_cooling_page_does_not_claim_free_entry_or_id_check(client, db_session, monkeypatch):
+    monkeypatch.setattr(
+        'services.public_service.get_weather_with_cache',
+        lambda location: ({'temperature': 27.5, 'is_mock': False, 'data_source': 'QWeather'}, False),
+    )
+
+    body = client.get('/cooling?location=都昌').get_data(as_text=True)
+
+    assert '多数免费开放' not in body
+    assert '登记身份证' not in body
+    assert '以各点标注为准' in body
+
+
 def test_cooling_page_empty_database_does_not_render_default_resources(client, db_session, monkeypatch):
     monkeypatch.setattr(
         'services.public_service.get_weather_with_cache',

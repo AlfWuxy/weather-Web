@@ -43,13 +43,13 @@
 
 ### 1.2 当前问题
 
-本轮已修的用户路径问题：登录用户名大小写与锁定桶对齐；用药提醒按 `time_of_day` 到点出现（不再要求慢病+在线天气）；健康评估筛查回填；家庭档案「慢阻肺」与 COPD 同义；社区缺测坐标标为估算；天气 API 不再把 Open-Meteo 的 AQI=0 当成实测；照护页区分「20:00 前确认」与「2 小时未确认转备用联系人」，卡片同时显示两套倒计时；`/entry` 老人入口改为照护码确认，首页仍进极简模式。慢病评估改为 PRG，刷新保留上次结果；和风实况写入热浪/寒潮连续天数；试点 CSV 改为带 CSRF 的 POST；个人设置可撤销 API 凭证。7 天健康预测在滞后观测不足或门诊基线缺失时不再编造就诊负担百分比；无模型时 `/ml-prediction` 不提供生成入口；求助文案区分是否开通推送。每日行动提示已抽到 `data/content/daily_action_tips.json`；照护提醒话术已抽到 `data/content/caregiver_tip_scripts.json`。
+本轮已修的用户路径问题：登录用户名大小写与锁定桶对齐；用药提醒按 `time_of_day` 到点出现（不再要求慢病+在线天气）；健康评估筛查回填；家庭档案「慢阻肺」与 COPD 同义；社区缺测坐标标为估算；天气 API 不再把 Open-Meteo 的 AQI=0 当成实测；照护页区分「20:00 前确认」与「2 小时未确认转备用联系人」，卡片同时显示两套倒计时；`/entry` 老人入口改为照护码确认，首页仍进极简模式。慢病评估改为 PRG，刷新保留上次结果；和风实况写入热浪/寒潮连续天数；试点 CSV 改为带 CSRF 的 POST；个人设置可撤销 API 凭证。7 天健康预测在滞后观测不足或门诊基线缺失时不再编造就诊负担百分比；无当天污染物预报时，7 天暴露分只按气温、湿度和热夜计分，不把当前实况 PM 或默认 AQI 50 算进「风险 N」。无模型时 `/ml-prediction` 不提供生成入口；求助文案区分是否开通推送。每日行动提示已抽到 `data/content/daily_action_tips.json`；照护提醒话术已抽到 `data/content/caregiver_tip_scripts.json`；避暑页导语已抽到 `data/content/cooling_page.json`。
 
 | 问题 | 严重性 | 说明 |
 |------|--------|------|
 | 巨型模块仍在 | 🟡 中 | `blueprints/analysis.py`（约 3300 行）、`community_risk_service.py`、`weather_service.py`、`community_risk.html` 仍过重，后续应按页面/用例拆分 |
 | 样式层叠过多 | 🟡 中 | 每页同时加载 `style.css`、`yilao.css`、`apple-polish.css` 与多套 motion/data-fx，长期应收敛成一套主题 |
-| 内容写死在代码里 | 🟡 中 | 话术、指标解释、医学建议分散在模板与 `core/metric_explanations.py`，内容更新成本高 |
+| 内容写死在代码里 | 🟡 中 | 指标解释、医学建议仍分散在模板与 `core/metric_explanations.py`；每日行动、照护话术、避暑导语已迁出 JSON |
 | 研究页仍在主路径 | 🟡 中 | 「AI 疾病预测」在模型未加载时已从导航和今日主页拿掉；`/ml-prediction` 直链仍在。仓库没有 `models/*.pkl` |
 | 小程序发布配置 | 🟡 中 | 公开仓库里 `miniprogram/config.js` 的 `API_BASE_URL` 必须留空；发布前在本地填写真实域名 |
 | 服务层依赖框架上下文 | 🟡 中 | 部分服务仍依赖 request/current_app，影响可测性 |
@@ -61,7 +61,7 @@
 面向长期维护、可持续更新内容的网站 + 小程序，建议按这个顺序收敛，而不是继续加研究页：
 
 1. **一条主路径**：今天风险 → 提醒家人 → 记录是否做到。Web 主导航保持「今天 / 照护 / 7 天 / 社区风险 / 老人模式」，研究分析只留在管理员。
-2. **内容与代码分离**：每日行动提示已进入 `data/content/daily_action_tips.json`；照护提醒话术已进入 `data/content/caregiver_tip_scripts.json`（小程序同文案副本在 `miniprogram/content/`）。指标说明、避暑点文案仍待继续迁出。
+2. **内容与代码分离**：每日行动提示已进入 `data/content/daily_action_tips.json`；照护提醒话术已进入 `data/content/caregiver_tip_scripts.json`（小程序同文案副本在 `miniprogram/content/`）；避暑页导语已进入 `data/content/cooling_page.json`。指标说明仍待继续迁出。
 3. **样式一套**：合并 `style.css` / `yilao.css` / `apple-polish.css`，motion 按需加载，去掉对每页都生效的研究仪表盘装饰。
 4. **拆巨型文件**：`analysis.py` 按 heatmap/lag/history/alerts/reports 拆蓝图；`community_risk.html` 拆成地图组件 + 说明组件。
 5. **双端同一领域模型**：Web 家庭成员与小程序 elders 共用同一套档案字段与删除/解绑语义（本轮已对齐 PATCH 与删除解绑）。

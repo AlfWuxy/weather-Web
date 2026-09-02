@@ -1211,6 +1211,8 @@ def render_cooling_resources_page(community, resource_type, has_ac_raw, is_acces
 
     amap_key = current_app.config.get('AMAP_KEY')
     amap_security_js_code = current_app.config.get('AMAP_SECURITY_JS_CODE')
+    from core.cooling_copy import load_cooling_page_copy
+
     return render_template(
         'cooling.html',
         resources_by_community=grouped,
@@ -1227,7 +1229,8 @@ def render_cooling_resources_page(community, resource_type, has_ac_raw, is_acces
         amap_security_js_code=amap_security_js_code,
         cooling_weather=cooling_weather,
         cooling_weather_location=weather_location,
-        outdoor_temp=outdoor_temp
+        outdoor_temp=outdoor_temp,
+        cooling_copy=load_cooling_page_copy(),
     )
 
 
