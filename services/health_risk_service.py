@@ -844,7 +844,7 @@ class HealthRiskService:
         elif weather['temperature'] <= 5:
             add_from_copy('cold')
 
-        if (weather.get('aqi') or 0) >= 150:
+        if weather.get('aqi') is not None and weather.get('aqi') >= 150:
             add_from_copy('aqi')
 
         if screening.get('symptom_level') in ('moderate', 'severe'):

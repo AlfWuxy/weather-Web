@@ -69,3 +69,13 @@ def test_vital_copy_comes_from_json():
 def test_chronic_service_does_not_hardcode_clinic_vital_copy():
     source = (_REPO_ROOT / 'services' / 'chronic_risk_service.py').read_text(encoding='utf-8')
     assert '建议尽快联系社区医生复核' not in source
+
+
+def test_chronic_aqi_rules_do_not_treat_missing_as_zero():
+    from services.chronic_risk_service import ChronicRiskService
+
+    service = ChronicRiskService()
+    ctx = {'aqi': None, 'rr': 1.0, 'temperature': 26, 'age': 70}
+
+    assert service.recommendation_rules['aqi_high']['trigger'](ctx) is False
+    assert service.recommendation_rules['aqi_moderate']['trigger'](ctx) is False

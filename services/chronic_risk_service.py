@@ -87,8 +87,8 @@ class ChronicRiskService:
             'heat_wave': lambda ctx: ctx.get('heat_wave_days', 0) >= 3,
             'cold_high_rr': lambda ctx: ctx['rr'] >= 1.2 and ctx['temperature'] <= 5,
             'cold_wave': lambda ctx: ctx.get('cold_wave_days', 0) >= 3,
-            'aqi_high': lambda ctx: (ctx.get('aqi') or 0) >= 150,
-            'aqi_moderate': lambda ctx: 100 <= (ctx.get('aqi') or 0) < 150,
+            'aqi_high': lambda ctx: ctx.get('aqi') is not None and ctx.get('aqi') >= 150,
+            'aqi_moderate': lambda ctx: ctx.get('aqi') is not None and 100 <= ctx.get('aqi') < 150,
             'elderly_extreme_weather': lambda ctx: ctx['age'] >= 65 and (
                 ctx['temperature'] <= 5 or ctx['temperature'] >= 32
             ),
@@ -587,7 +587,7 @@ class ChronicRiskService:
             escalation.append(copy['escalation']['emergency'])
         if safe_context.get('age', 0) >= 75 or safe_context.get('disease_count', 0) >= 2:
             escalation.append(copy['escalation']['family_help'])
-        if (safe_context.get('aqi') or 0) >= 200:
+        if safe_context.get('aqi') is not None and safe_context.get('aqi') >= 200:
             escalation.append(copy['escalation']['air_quality'])
 
         return {

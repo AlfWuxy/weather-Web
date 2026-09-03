@@ -97,22 +97,22 @@ def reminder_triggered(reminder, weather):
         return False, None
 
     reasons = []
-    temp = weather.temperature or 0
-    humidity = weather.humidity or 0
-    aqi = weather.aqi or 0
+    temp = parse_float(getattr(weather, 'temperature', None))
+    humidity = parse_float(getattr(weather, 'humidity', None))
+    aqi = parse_float(getattr(weather, 'aqi', None))
 
     high_temp = triggers.get('high_temp')
     low_temp = triggers.get('low_temp')
     high_humidity = triggers.get('high_humidity')
     high_aqi = triggers.get('high_aqi')
 
-    if high_temp is not None and temp >= high_temp:
+    if high_temp is not None and temp is not None and temp >= high_temp:
         reasons.append(f"高温≥{high_temp}°C")
-    if low_temp is not None and temp <= low_temp:
+    if low_temp is not None and temp is not None and temp <= low_temp:
         reasons.append(f"低温≤{low_temp}°C")
-    if high_humidity is not None and humidity >= high_humidity:
+    if high_humidity is not None and humidity is not None and humidity >= high_humidity:
         reasons.append(f"高湿度≥{high_humidity}%")
-    if high_aqi is not None and aqi >= high_aqi:
+    if high_aqi is not None and aqi is not None and aqi >= high_aqi:
         reasons.append(f"AQI≥{high_aqi}")
 
     return bool(reasons), '、'.join(reasons) if reasons else None
@@ -173,22 +173,22 @@ def member_weather_triggered(profile, weather):
     if not thresholds:
         return []
     reasons = []
-    temp = getattr(weather, 'temperature', None) or 0
-    humidity = getattr(weather, 'humidity', None) or 0
-    aqi = getattr(weather, 'aqi', None) or 0
+    temp = parse_float(getattr(weather, 'temperature', None))
+    humidity = parse_float(getattr(weather, 'humidity', None))
+    aqi = parse_float(getattr(weather, 'aqi', None))
 
     high_temp = thresholds.get('high_temp')
     low_temp = thresholds.get('low_temp')
     high_humidity = thresholds.get('high_humidity')
     high_aqi = thresholds.get('high_aqi')
 
-    if high_temp is not None and temp >= high_temp:
+    if high_temp is not None and temp is not None and temp >= high_temp:
         reasons.append(f"高温≥{high_temp}°C")
-    if low_temp is not None and temp <= low_temp:
+    if low_temp is not None and temp is not None and temp <= low_temp:
         reasons.append(f"低温≤{low_temp}°C")
-    if high_humidity is not None and humidity >= high_humidity:
+    if high_humidity is not None and humidity is not None and humidity >= high_humidity:
         reasons.append(f"高湿度≥{high_humidity}%")
-    if high_aqi is not None and aqi >= high_aqi:
+    if high_aqi is not None and aqi is not None and aqi >= high_aqi:
         reasons.append(f"AQI≥{high_aqi}")
     return reasons
 
