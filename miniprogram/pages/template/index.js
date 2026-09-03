@@ -67,6 +67,8 @@ Page({
     tmax: '',
     tmin: '',
     trigger: '',
+    weatherAvailable: false,
+    missingPairId: false,
   },
 
   getToken() {
@@ -75,7 +77,7 @@ Page({
 
   async onLoad(options) {
     const pairId = options.pair_id ? parseInt(options.pair_id, 10) : null;
-    this.setData({ pairId });
+    this.setData({ pairId, missingPairId: !pairId });
     if (pairId) {
       await this.loadTemplate(pairId);
     }
@@ -112,7 +114,16 @@ Page({
         shortCode: item.short_code || '',
         chronicDiseases,
       });
-      this.setData({ message, locationText, elderName, relation, tmax, tmin, trigger });
+      this.setData({
+        message,
+        locationText,
+        elderName,
+        relation,
+        tmax,
+        tmin,
+        trigger,
+        weatherAvailable,
+      });
     } catch (e) {
       wx.showToast({ title: '加载失败', icon: 'none' });
     } finally {

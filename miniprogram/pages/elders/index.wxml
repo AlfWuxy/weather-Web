@@ -1,7 +1,7 @@
 <view style="padding: 16px;">
   <view class="card">
     <view style="display:flex; align-items:center; justify-content: space-between;">
-      <view style="font-size: 18px; font-weight: 700;">监测对象</view>
+      <view style="font-size: 18px; font-weight: 700;">照护对象</view>
       <button size="mini" class="btn-outline" bindtap="goSettings">设置</button>
     </view>
     <view class="muted" style="margin-top: 6px; font-size: 12px;">
@@ -41,7 +41,7 @@
         <view>
           <view wx:if="{{item.today.trigger === 'heat'}}" style="background:#fee2e2; color:#991b1b; padding:4px 8px; border-radius: 999px; font-size: 12px;">高温</view>
           <view wx:elif="{{item.today.trigger === 'cold'}}" style="background:#dbeafe; color:#1d4ed8; padding:4px 8px; border-radius: 999px; font-size: 12px;">寒潮</view>
-          <view wx:elif="{{item.today.weather_available}}" style="background:#f3f4f6; color:#374151; padding:4px 8px; border-radius: 999px; font-size: 12px;">正常</view>
+          <view wx:elif="{{item.today.weather_available}}" style="background:#f3f4f6; color:#374151; padding:4px 8px; border-radius: 999px; font-size: 12px;">暂无预警</view>
           <view wx:else style="background:#fff7ed; color:#9a3412; padding:4px 8px; border-radius: 999px; font-size: 12px;">天气更新中</view>
         </view>
       </view>

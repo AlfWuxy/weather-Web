@@ -1,5 +1,12 @@
 const { api } = require('../../utils/request');
 
+function formatTemp(value) {
+  if (value === null || value === undefined || value === '') return '';
+  const n = Number(value);
+  if (!Number.isFinite(n)) return '';
+  return String(Math.round(n));
+}
+
 Page({
   data: {
     elders: [],
@@ -23,7 +30,17 @@ Page({
     this.setData({ loading: true });
     try {
       const data = await api({ method: 'GET', path: '/mp/api/v1/elders', token });
-      this.setData({ elders: data || [] });
+      const elders = (data || []).map((item) => {
+        const today = Object.assign({}, item.today || {});
+        if (today.weather_available) {
+          const tmax = formatTemp(today.temperature_max);
+          const tmin = formatTemp(today.temperature_min);
+          if (tmax) today.temperature_max = tmax;
+          if (tmin) today.temperature_min = tmin;
+        }
+        return Object.assign({}, item, { today });
+      });
+      this.setData({ elders });
     } catch (e) {
       if (String(e && e.message) === 'unauthorized') {
         wx.removeStorageSync('api_token');
