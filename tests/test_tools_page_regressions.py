@@ -377,6 +377,13 @@ def test_admin_nav_keeps_research_tools(client, db_session):
     assert '健康日记' in body
     assert '年度健康报告' in body
     assert 'id="ai-floating-chat"' in body
+    assert 'id="ai-chat-window"' in body
+    assert 'role="dialog"' in body
+    assert 'aria-labelledby="ai-chat-title"' in body
+    assert 'aria-hidden="true"' in body
+    assert 'aria-controls="ai-chat-window"' in body
+    assert 'aria-expanded="false"' in body
+    assert 'role="log"' in body
 
 
 def test_caregiver_dashboard_hides_ai_floating_chat(client, db_session):
