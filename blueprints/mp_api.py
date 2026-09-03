@@ -6,6 +6,7 @@ Endpoints:
 - GET  /mp/api/v1/elders
 - POST /mp/api/v1/elders
 - PATCH /mp/api/v1/elders/<pair_id>
+- DELETE /mp/api/v1/elders/<pair_id>
 - GET  /mp/api/v1/alerts?pair_id=...
 - POST /mp/api/v1/events
 """
@@ -27,7 +28,7 @@ from core.weather import get_weather_with_cache, heat_weather_available
 from services.api_service import PILOT_EVENT_TYPES
 from services.location_resolver import resolve_location
 from services.warning_service import get_qweather_warnings
-from services.user._common import _create_pair_record
+from services.user._common import _create_pair_record, unbind_pair_for_caregiver
 from utils.parsers import parse_int, safe_json_loads
 from utils.validators import sanitize_input, validate_gender
 
@@ -343,6 +344,31 @@ def elders_patch(pair_id: int):
             },
         }
     )
+
+
+@bp.route("/elders/<int:pair_id>", methods=["DELETE"], endpoint="elders_delete")
+@limiter.limit(lambda: current_app.config.get("RATE_LIMIT_MP_WRITE", "30 per minute"), key_func=_mp_rate_limit_key)
+@require_api_token
+def elders_delete(pair_id: int):
+    pair = _pair_for_user(pair_id)
+    if not pair:
+        return jsonify({"success": False, "error": "not_found"}), 404
+
+    try:
+        unbind_pair_for_caregiver(g.api_user_id, pair)
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        return jsonify({"success": False, "error": "delete_failed"}), 500
+
+    log_usage_event(
+        "pair_unbound",
+        user_id=g.api_user_id,
+        pair_id=pair.id,
+        source="miniprogram",
+        meta={"via": "mp_api"},
+    )
+    return jsonify({"success": True, "data": {"pair_id": pair.id}})
 
 
 @bp.route("/alerts", endpoint="alerts_list")

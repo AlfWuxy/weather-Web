@@ -431,3 +431,153 @@ def test_mp_elders_patch_updates_member_profile_fields(app, client, db_session):
         assert member.age == 78
         assert member.gender == '女性'
         assert pair.location_query == '九江市都昌县'
+
+
+def test_mp_elders_delete_unbinds_member_like_web(app, client, db_session):
+    from core.db_models import (
+        FamilyMember,
+        FamilyMemberProfile,
+        Notification,
+        Pair,
+        UsageEvent,
+        User,
+    )
+    from core.usage import create_api_token
+    from services.user._common import _create_pair_record
+
+    with app.app_context():
+        user = User(username='mp_delete_user', role='user')
+        user.set_password('pw123456')
+        db_session.add(user)
+        db_session.commit()
+        member = FamilyMember(
+            user_id=user.id,
+            name='李奶奶',
+            relation='母亲',
+            age=80,
+            gender='女性',
+        )
+        db_session.add(member)
+        db_session.flush()
+        db_session.add(FamilyMemberProfile(member_id=member.id, alert_enabled=True))
+        pair = _create_pair_record(
+            caregiver_id=user.id,
+            location_query='都昌县',
+            member_id=member.id,
+            flush=True,
+        )
+        db_session.add(Notification(
+            user_id=user.id,
+            member_id=member.id,
+            title='测试通知',
+            message='删除前应一并清理',
+        ))
+        db_session.add(UsageEvent(
+            user_id=user.id,
+            member_id=member.id,
+            pair_id=pair.id,
+            event_type='elder_profile_created',
+            source='miniprogram',
+        ))
+        db_session.commit()
+        pair_id = pair.id
+        member_id = member.id
+        user_id = user.id
+        plain = create_api_token(user.id, name='delete-elder')
+
+    response = client.delete(
+        f'/mp/api/v1/elders/{pair_id}',
+        headers={'Authorization': f'Bearer {plain}'},
+    )
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload['success'] is True
+
+    listed = client.get(
+        '/mp/api/v1/elders',
+        headers={'Authorization': f'Bearer {plain}'},
+    )
+    assert listed.status_code == 200
+    assert listed.get_json()['data'] == []
+
+    with app.app_context():
+        assert db_session.get(FamilyMember, member_id) is None
+        remaining_pair = db_session.get(Pair, pair_id)
+        assert remaining_pair is not None
+        assert remaining_pair.member_id is None
+        assert remaining_pair.status == 'inactive'
+        assert Notification.query.filter_by(member_id=member_id).count() == 0
+        leftover_events = UsageEvent.query.filter_by(user_id=user_id).all()
+        assert leftover_events
+        assert all(event.member_id is None for event in leftover_events)
+
+
+def test_mp_elders_delete_rejects_other_users_pair(app, client, db_session):
+    from core.db_models import FamilyMember, Pair, User
+    from core.usage import create_api_token
+    from services.user._common import _create_pair_record
+
+    with app.app_context():
+        owner = User(username='mp_delete_owner', role='user')
+        owner.set_password('pw123456')
+        stranger = User(username='mp_delete_stranger', role='user')
+        stranger.set_password('pw123456')
+        db_session.add_all([owner, stranger])
+        db_session.commit()
+        member = FamilyMember(user_id=owner.id, name='王爷爷', relation='父亲', age=82)
+        db_session.add(member)
+        db_session.flush()
+        pair = _create_pair_record(
+            caregiver_id=owner.id,
+            location_query='都昌县',
+            member_id=member.id,
+            flush=True,
+        )
+        db_session.commit()
+        pair_id = pair.id
+        member_id = member.id
+        stranger_token = create_api_token(stranger.id, name='stranger')
+
+    response = client.delete(
+        f'/mp/api/v1/elders/{pair_id}',
+        headers={'Authorization': f'Bearer {stranger_token}'},
+    )
+
+    assert response.status_code == 404
+    assert response.get_json()['error'] == 'not_found'
+    with app.app_context():
+        assert db_session.get(FamilyMember, member_id) is not None
+        assert db_session.get(Pair, pair_id).status == 'active'
+
+
+def test_mp_elders_delete_location_only_pair_stays_inactive(app, client, db_session):
+    from core.db_models import Pair, User
+    from core.usage import create_api_token
+    from services.user._common import _create_pair_record
+
+    with app.app_context():
+        user = User(username='mp_delete_location_user', role='user')
+        user.set_password('pw123456')
+        db_session.add(user)
+        db_session.commit()
+        pair = _create_pair_record(
+            caregiver_id=user.id,
+            location_query='都昌县',
+            member_id=None,
+            flush=True,
+        )
+        db_session.commit()
+        pair_id = pair.id
+        plain = create_api_token(user.id, name='delete-location')
+
+    response = client.delete(
+        f'/mp/api/v1/elders/{pair_id}',
+        headers={'Authorization': f'Bearer {plain}'},
+    )
+
+    assert response.status_code == 200
+    with app.app_context():
+        remaining = db_session.get(Pair, pair_id)
+        assert remaining.status == 'inactive'
+        assert remaining.member_id is None

@@ -48,3 +48,14 @@ def test_mp_template_missing_pair_is_not_blank_temps():
     assert '缺少照护对象' in wxml
     assert 'missingPairId' in wxml
     assert '可信节点' not in wxml
+
+
+def test_mp_elders_can_unbind_like_web():
+    wxml = (ROOT / 'miniprogram' / 'pages' / 'elders' / 'index.wxml').read_text(encoding='utf-8')
+    js = (ROOT / 'miniprogram' / 'pages' / 'elders' / 'index.js').read_text(encoding='utf-8')
+    assert '解除照护' in wxml
+    assert 'unbindElder' in wxml
+    assert 'unbindElder' in js
+    assert "method: 'DELETE'" in js
+    assert 'showModal' in js
+    assert '/mp/api/v1/elders/' in js

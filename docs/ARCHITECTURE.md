@@ -1,6 +1,6 @@
 # 系统架构文档
 
-> 版本: 2026-09-02
+> 版本: 2026-09-03
 > 项目: 宜老天气通（天气变化与社区居民健康风险预测系统）
 
 ---
@@ -64,7 +64,7 @@
 2. **内容与代码分离**：每日行动提示已进入 `data/content/daily_action_tips.json`；照护提醒话术已进入 `data/content/caregiver_tip_scripts.json`（小程序同文案副本在 `miniprogram/content/`，改一处必须同步另一处，`tests/test_caregiver_tip_scripts.py` 锁字节一致）；避暑页导语、页脚和温度分档已进入 `data/content/cooling_page.json`；指标说明已进入 `data/content/metric_explanations.json`；今日页/长者页标题和空清单已进入 `data/content/dashboard_copy.json`；7 天「本周建议」和角色行动卡已进入 `data/content/forecast_week_tips.json`；社区风险页「优先行动」和公平性行动已进入 `data/content/community_action_tips.json`；健康评估建议已进入 `data/content/health_assessment_tips.json`；慢病规则文案和血压/血糖 vitals 提示已进入 `data/content/chronic_recommendation_copy.json`；ML 个人/社区建议已进入 `data/content/ml_recommendation_copy.json`。改 JSON 后需重启 Flask（loader 有 `lru_cache`）。慢病**触发阈值**仍在 `services/chronic_risk_service.py`，改「何时出现」还要改代码。`docs/REFACTOR_PLAN.md` 是 2026-01 历史稿，以本节为准。
 3. **样式一套**：合并 `style.css` / `yilao.css` / `apple-polish.css`，motion 按需加载，去掉对每页都生效的研究仪表盘装饰。本轮不拆，避免无视觉回归的大 CSS 合并。
 4. **拆巨型文件**：`analysis.py` 按 heatmap/lag/history/alerts/reports 拆蓝图；`community_risk.html` 拆成地图组件 + 说明组件。本轮不拆，除非解锁具体页面改动。
-5. **双端同一领域模型**：Web 家庭成员与小程序 elders 共用同一套档案字段。热风险天气门槛已抽到 `core/weather.py` 的 `heat_weather_available`。话术温度取整、无预警文案、缺 pair 空态已对齐。打卡和避暑仍只在网页；小程序解绑/DELETE 与位置-only pair 仍未做，下一轮再补。
+5. **双端同一领域模型**：Web 家庭成员与小程序 elders 共用同一套档案字段。热风险天气门槛已抽到 `core/weather.py` 的 `heat_weather_available`。话术温度取整、无预警文案、缺 pair 空态已对齐。小程序 `DELETE /mp/api/v1/elders/<pair_id>` 与网页删除家人共用 `unbind_family_member_for_caregiver`：删档案、清日记/提醒/通知、UsageEvent 去掉 member_id、Pair 行保留为 inactive；仅地点、没有成员的配对只停用本条。打卡和避暑仍只在网页，小程序话术页已提示到网页完成。
 6. **训练脚本不进主路径**：`services/pipelines/train_*.py` 保持离线工具，不再复制 `parse_age`。
 
 ### 1.4 内容更新与后续迭代（实证）
@@ -72,7 +72,7 @@
 - **改一句提示**：只动 `data/content/*.json`（话术还要同步 `miniprogram/content/caregiver_tip_scripts.json`），重启 Flask。
 - **改阈值何时触发**：动对应 Python 服务（慢病规则、DLNM 分位数、热风险门槛），补测试，不要在模板里写死数字。
 - **改导航 IA**：`templates/base.html` + `tests/test_tools_page_regressions.py` / `tests/test_nav_offcanvas.py`；研究页还要改路由守卫。
-- **下一轮产品**：小程序补解绑；可选把打卡/避暑做成网页深链而不是再做一套原生页；社区表若要真实 VI，给后台表单加医疗可达性/环境质量字段，而不是再写假设值。
+- **下一轮产品**：可选把小程序打卡/避暑做成网页深链而不是再做一套原生页；社区表若要真实 VI，给后台表单加医疗可达性/环境质量字段，而不是再写假设值。
 
 ---
 

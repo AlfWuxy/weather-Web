@@ -7,7 +7,17 @@ from flask import current_app, flash, has_app_context, url_for
 from flask_login import current_user
 
 from core.extensions import db
-from core.db_models import Pair, PairActionToken, PairLink
+from core.db_models import (
+    FamilyMember,
+    FamilyMemberProfile,
+    HealthDiary,
+    MedicationReminder,
+    Notification,
+    Pair,
+    PairActionToken,
+    PairLink,
+    UsageEvent,
+)
 from core.security import hash_identifier, hash_pair_token, hash_short_code
 from core.time_utils import utcnow
 from core.daily_tips import HEAT_RISK_LABELS, label_for_heat_level
@@ -131,6 +141,53 @@ def _create_pair_record(caregiver_id, location_query, member_id=None, flush=Fals
     if flush:
         db.session.flush()
     return pair
+
+
+def unbind_family_member_for_caregiver(user_id, member_id):
+    """删除照护人名下的家庭成员，并解绑其所有配对。不提交事务。
+
+    Pair 行保留：member_id 置空、status 设为 inactive。该成员的健康日记、
+    用药提醒和通知删除；UsageEvent 保留行但去掉 member_id。
+    找不到归属该照护人的成员时返回 False。
+    """
+    member = FamilyMember.query.filter_by(id=member_id, user_id=user_id).first()
+    if not member:
+        return False
+
+    HealthDiary.query.filter_by(member_id=member.id, user_id=user_id).delete()
+    MedicationReminder.query.filter_by(member_id=member.id, user_id=user_id).delete()
+    Notification.query.filter_by(member_id=member.id, user_id=user_id).delete()
+    UsageEvent.query.filter_by(member_id=member.id, user_id=user_id).update(
+        {UsageEvent.member_id: None},
+        synchronize_session=False,
+    )
+    pairs = Pair.query.filter_by(member_id=member.id, caregiver_id=user_id).all()
+    for pair in pairs:
+        pair.member_id = None
+        pair.status = 'inactive'
+    profile = FamilyMemberProfile.query.filter_by(member_id=member.id).first()
+    if profile:
+        db.session.delete(profile)
+    db.session.delete(member)
+    return True
+
+
+def unbind_pair_for_caregiver(user_id, pair):
+    """解绑照护人名下的一条配对。不提交事务。
+
+    若配对挂了该照护人的家庭成员，语义与网页删除家人相同（删档案并停用
+    该成员的全部配对）。仅有地点、没有成员的配对只把本条标为 inactive。
+    """
+    if pair is None or pair.caregiver_id != user_id:
+        return False
+    if pair.member_id:
+        unbound = unbind_family_member_for_caregiver(user_id, pair.member_id)
+        if not unbound:
+            pair.member_id = None
+            pair.status = 'inactive'
+        return True
+    pair.status = 'inactive'
+    return True
 
 
 def _derive_pair_action_token(record):

@@ -50,6 +50,7 @@
         <button size="mini" class="btn-outline" data-pair-id="{{item.pair_id}}" bindtap="goAlerts">预警</button>
         <button size="mini" class="btn-outline" data-pair-id="{{item.pair_id}}" bindtap="goTemplate">话术</button>
         <button size="mini" class="btn-outline" data-pair-id="{{item.pair_id}}" bindtap="goEdit">编辑</button>
+        <button size="mini" class="btn-outline" data-pair-id="{{item.pair_id}}" bindtap="unbindElder">解除照护</button>
       </view>
     </view>
   </block>

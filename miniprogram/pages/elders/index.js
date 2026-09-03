@@ -68,6 +68,24 @@ Page({
     wx.navigateTo({ url: `/pages/elder-edit/index?pair_id=${pairId}` });
   },
 
+  unbindElder(e) {
+    const pairId = e.currentTarget.dataset.pairId;
+    if (!pairId) return;
+    wx.showModal({
+      title: '解除照护',
+      content: '将删除该照护对象档案并停止提醒。配对记录会保留为已停用。',
+      success: (res) => {
+        if (!res.confirm) return;
+        const token = this.getToken();
+        api({ method: 'DELETE', path: `/mp/api/v1/elders/${pairId}`, token })
+          .then(() => this.loadElders())
+          .catch(() => {
+            wx.showToast({ title: '解除失败', icon: 'none' });
+          });
+      },
+    });
+  },
+
   goCreate() {
     wx.navigateTo({ url: '/pages/elder-edit/index?mode=create' });
   },
