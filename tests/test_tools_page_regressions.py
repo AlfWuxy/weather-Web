@@ -376,11 +376,31 @@ def test_admin_nav_keeps_research_tools(client, db_session):
     assert '慢病风险评估' in body
     assert '健康日记' in body
     assert '年度健康报告' in body
+    assert 'id="ai-floating-chat"' in body
+
+
+def test_caregiver_dashboard_hides_ai_floating_chat(client, db_session):
+    user = _create_user(db_session, username='care_ai_float_user', role='user')
+    _login_as(client, user.id)
+
+    body = client.get('/dashboard').get_data(as_text=True)
+    assert 'id="ai-floating-chat"' not in body
+    assert 'ai-floating-chat.js' not in body
+
+
+def test_caregiver_cannot_open_research_tools(client, db_session):
+    user = _create_user(db_session, username='care_research_block_user', role='user')
+    _login_as(client, user.id)
+
+    for path in ('/ai-qa', '/chronic-risk', '/ml-prediction', '/annual-report'):
+        response = client.get(path, follow_redirects=False)
+        assert response.status_code in (302, 303), path
+        assert '/dashboard' in (response.headers.get('Location') or ''), path
 
 
 
 def test_ml_prediction_post_renders_result_and_preserves_form(client, db_session, monkeypatch):
-    user = _create_user(db_session, username='ml_user')
+    user = _create_user(db_session, username='ml_user', role='admin')
     _login_as(client, user.id)
     captured = {}
 
@@ -438,7 +458,7 @@ def test_ml_prediction_selected_member_uses_age_and_gender_only(client, db_sessi
     import json
     from core.db_models import FamilyMember
 
-    user = _create_user(db_session, username='ml_member_user')
+    user = _create_user(db_session, username='ml_member_user', role='admin')
     member = FamilyMember(
         user_id=user.id,
         name='母亲',
@@ -489,7 +509,7 @@ def test_ml_prediction_selected_member_uses_age_and_gender_only(client, db_sessi
 
 
 def test_chronic_risk_post_no_longer_returns_405(client, db_session, monkeypatch):
-    user = _create_user(db_session, username='chronic_user')
+    user = _create_user(db_session, username='chronic_user', role='admin')
     user.age = 72
     db_session.commit()
     _login_as(client, user.id)
@@ -572,7 +592,7 @@ def test_chronic_risk_post_no_longer_returns_405(client, db_session, monkeypatch
 
 
 def test_ml_and_chronic_pages_reject_mock_weather(client, db_session, monkeypatch):
-    user = _create_user(db_session, username='tool_mock_weather_user')
+    user = _create_user(db_session, username='tool_mock_weather_user', role='admin')
     user.age = 72
     db_session.commit()
     _login_as(client, user.id)
@@ -613,7 +633,7 @@ def test_ml_and_chronic_pages_reject_mock_weather(client, db_session, monkeypatc
 
 
 def test_chronic_risk_get_shows_empty_state_without_synthetic_result(client, db_session):
-    user = _create_user(db_session, username='chronic_empty_user')
+    user = _create_user(db_session, username='chronic_empty_user', role='admin')
     _login_as(client, user.id)
 
     response = client.get('/chronic-risk')
@@ -657,7 +677,7 @@ def _fake_chronic_service(score=87.3):
 
 
 def test_chronic_risk_post_redirects_and_refresh_keeps_result(client, db_session, monkeypatch):
-    user = _create_user(db_session, username='chronic_persist_user')
+    user = _create_user(db_session, username='chronic_persist_user', role='admin')
     user.age = 72
     db_session.commit()
     _login_as(client, user.id)
@@ -692,7 +712,7 @@ def test_chronic_risk_post_redirects_and_refresh_keeps_result(client, db_session
 
 
 def test_chronic_risk_weather_error_survives_refresh_without_resubmit(client, db_session, monkeypatch):
-    user = _create_user(db_session, username='chronic_error_persist_user')
+    user = _create_user(db_session, username='chronic_error_persist_user', role='admin')
     user.age = 72
     db_session.commit()
     _login_as(client, user.id)
@@ -723,7 +743,7 @@ def test_chronic_risk_weather_error_survives_refresh_without_resubmit(client, db
 
 
 def test_chronic_risk_result_cleared_after_logout(client, db_session, monkeypatch):
-    user = _create_user(db_session, username='chronic_logout_user')
+    user = _create_user(db_session, username='chronic_logout_user', role='admin')
     user.age = 72
     user.set_password('testpass')
     db_session.commit()
@@ -977,7 +997,7 @@ def test_cooling_community_filter_supports_new_and_legacy_query_names(client, db
 
 
 def test_ml_prediction_get_does_not_prefill_default_age_65(client, db_session, monkeypatch):
-    user = _create_user(db_session, username='ml_no_age_get')
+    user = _create_user(db_session, username='ml_no_age_get', role='admin')
     _login_as(client, user.id)
 
     class FakeMLService:
@@ -994,7 +1014,7 @@ def test_ml_prediction_get_does_not_prefill_default_age_65(client, db_session, m
 
 
 def test_ml_prediction_post_without_age_does_not_invent_65(client, db_session, monkeypatch):
-    user = _create_user(db_session, username='ml_no_age_post')
+    user = _create_user(db_session, username='ml_no_age_post', role='admin')
     _login_as(client, user.id)
 
     class FakeMLService:
@@ -1021,7 +1041,7 @@ def test_ml_prediction_post_without_age_does_not_invent_65(client, db_session, m
 
 
 def test_chronic_risk_missing_age_is_reported_even_when_weather_is_unavailable(client, db_session, monkeypatch):
-    user = _create_user(db_session, username='chronic_age_before_weather')
+    user = _create_user(db_session, username='chronic_age_before_weather', role='admin')
     _login_as(client, user.id)
 
     class UnexpectedChronic:
@@ -1045,7 +1065,7 @@ def test_chronic_risk_missing_age_is_reported_even_when_weather_is_unavailable(c
 
 
 def test_chronic_risk_post_without_age_does_not_invent_65(client, db_session, monkeypatch):
-    user = _create_user(db_session, username='chronic_no_age')
+    user = _create_user(db_session, username='chronic_no_age', role='admin')
     _login_as(client, user.id)
 
     class UnexpectedChronic:

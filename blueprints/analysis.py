@@ -3178,8 +3178,7 @@ def reports_export():
 @login_required
 def annual_report():
     """年度健康报告"""
-    if is_guest_user(current_user):
-        flash('游客模式无法生成年度报告，请注册/登录正式账号', 'error')
+    if not _require_admin():
         return redirect(url_for('user.user_dashboard'))
 
     end_date = today_local()

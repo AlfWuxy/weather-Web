@@ -28,6 +28,13 @@ bp = Blueprint('tools', __name__)
 
 CHRONIC_RISK_SESSION_KEY = 'chronic_risk_last'
 
+
+def _require_admin():
+    if getattr(current_user, 'role', None) != 'admin':
+        flash('权限不足', 'error')
+        return False
+    return True
+
 CHRONIC_FORM_LABELS = {
     'hypertension': '高血压',
     'diabetes': '糖尿病',
@@ -261,6 +268,8 @@ def _normalize_chronic_suggestions(items):
 @login_required
 def ml_prediction():
     """ML预测页面。"""
+    if not _require_admin():
+        return redirect(url_for('user.user_dashboard'))
     family_members = _tool_family_members()
     current_location = ensure_user_location_valid()
     form_state = {
@@ -342,6 +351,8 @@ def ml_prediction():
 @login_required
 def ai_qa():
     """AI问答页面"""
+    if not _require_admin():
+        return redirect(url_for('user.user_dashboard'))
     models = current_app.config.get('AI_ALLOWED_MODELS', [])
     return render_template('ai_question.html', models=models)
 
@@ -416,6 +427,8 @@ def forecast_7day():
 @login_required
 def chronic_risk():
     """慢病风险预测页面"""
+    if not _require_admin():
+        return redirect(url_for('user.user_dashboard'))
     form_state = {
         'disease': 'hypertension',
         'sbp': '',

@@ -47,7 +47,7 @@ def test_admin_dashboard_shows_ml_prediction_when_model_loaded(admin_client, mon
     assert 'href="/ml-prediction"' in html
 
 
-def test_ml_prediction_page_has_no_generate_form_when_model_missing(authenticated_client, monkeypatch):
+def test_ml_prediction_page_has_no_generate_form_when_model_missing(admin_client, monkeypatch):
     class _Missing:
         model_loaded = False
 
@@ -59,6 +59,6 @@ def test_ml_prediction_page_has_no_generate_form_when_model_missing(authenticate
         lambda: _Missing(),
     )
 
-    html = authenticated_client.get('/ml-prediction').get_data(as_text=True)
+    html = admin_client.get('/ml-prediction').get_data(as_text=True)
     assert '生成类别线索' not in html
     assert '模型未部署' in html
