@@ -20,7 +20,7 @@ from core.health_profiles import (
 )
 from core.time_utils import today_local
 from core.usage import log_usage_event
-from core.weather import ensure_user_location_valid, get_weather_with_cache, is_qweather_online_weather
+from core.weather import ensure_user_location_valid, get_weather_with_cache, heat_weather_available
 from core.db_models import (
     FamilyMember,
     FamilyMemberProfile,
@@ -30,7 +30,7 @@ from core.db_models import (
 )
 from services.user._common import unbind_family_member_for_caregiver
 from utils.parsers import parse_int, parse_date, parse_float, safe_json_loads
-from utils.validators import sanitize_input, validate_gender
+from utils.validators import sanitize_input, validate_age, validate_gender
 
 logger = logging.getLogger(__name__)
 
@@ -53,7 +53,10 @@ def _apply_family_member_form(member):
     """将表单内容写回成员对象，并返回画像载荷。"""
     member.name = sanitize_input(request.form.get('name'), max_length=50)
     member.relation = sanitize_input(request.form.get('relation'), max_length=20)
-    member.age = parse_int(request.form.get('age'))
+    valid_age, age = validate_age(request.form.get('age'))
+    if not valid_age:
+        return None, age
+    member.age = age
 
     raw_gender = request.form.get('gender')
     member.gender = sanitize_input(raw_gender, max_length=10)
@@ -147,7 +150,7 @@ def family_members():
 
     user_location = ensure_user_location_valid()
     weather_data, _ = get_weather_with_cache(user_location)
-    weather_available = is_qweather_online_weather(weather_data)
+    weather_available = heat_weather_available(weather_data)
     weather = SimpleNamespace(**weather_data) if weather_available else None
 
     member_cards = []
@@ -378,7 +381,7 @@ def family_member_detail(member_id):
     ).all()
     user_location = ensure_user_location_valid()
     weather_data, _ = get_weather_with_cache(user_location)
-    weather_available = is_qweather_online_weather(weather_data)
+    weather_available = heat_weather_available(weather_data)
     weather = SimpleNamespace(**weather_data) if weather_available else None
     alerts = []
     if profile_ctx['alert_enabled'] and weather_available:

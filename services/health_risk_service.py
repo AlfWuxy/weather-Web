@@ -134,7 +134,10 @@ class HealthRiskService:
         )
         personal_susceptibility = self._calc_personal_susceptibility_score(profile)
         aqi_in_score = weather.get('aqi') is not None
-        aqi_score = self._aqi_score(weather['aqi']) if aqi_in_score else 0.0
+        aqi_score = self._aqi_score(weather['aqi']) if aqi_in_score else None
+        if aqi_score is None:
+            aqi_in_score = False
+            aqi_score = 0.0
         if not dlnm_in_score:
             model_a_score = None
         elif aqi_in_score:
@@ -155,7 +158,10 @@ class HealthRiskService:
         extreme = weather_service.identify_extreme_weather(weather_data)
         extreme_score = self._clamp(len(extreme.get('conditions', [])) * 25.0, 0.0, 100.0)
         humidity_in_score = weather.get('humidity') is not None
-        humidity_score = self._humidity_score(weather['humidity']) if humidity_in_score else 0.0
+        humidity_score = self._humidity_score(weather['humidity']) if humidity_in_score else None
+        if humidity_score is None:
+            humidity_in_score = False
+            humidity_score = 0.0
         screening_score = self._screening_score(screening_data)
         path_b_weight = 0.30
         path_b_aqi_weight = 0.30 if aqi_in_score else 0.0
@@ -477,17 +483,23 @@ class HealthRiskService:
 
     def _normalize_screening(self, screening):
         mapping = {
-            'outdoor_exposure': ({'low', 'medium', 'high'}, 'medium'),
-            'symptom_level': ({'none', 'mild', 'moderate', 'severe'}, 'none'),
-            'hydration': ({'good', 'normal', 'poor'}, 'normal'),
-            'medication_adherence': ({'good', 'partial', 'poor'}, 'good'),
-            'sleep_quality': ({'good', 'fair', 'poor'}, 'good')
+            'outdoor_exposure': {'low', 'medium', 'high'},
+            'symptom_level': {'none', 'mild', 'moderate', 'severe'},
+            'hydration': {'good', 'normal', 'poor'},
+            'medication_adherence': {'good', 'partial', 'poor'},
+            'sleep_quality': {'good', 'fair', 'poor'}
         }
         data = {}
-        for key, pair in mapping.items():
-            allowed, default = pair
-            value = str(screening.get(key) or '').strip().lower()
-            data[key] = value if value in allowed else default
+        missing = []
+        payload = screening or {}
+        for key, allowed in mapping.items():
+            value = str(payload.get(key) or '').strip().lower()
+            if value not in allowed:
+                missing.append(key)
+            else:
+                data[key] = value
+        if missing:
+            raise ValueError('请完成全部筛查')
         return data
 
     def _screening_score(self, screening):
@@ -720,7 +732,10 @@ class HealthRiskService:
         }
 
     def _aqi_score(self, aqi):
-        aqi = self._clamp(self._to_float(aqi, 50.0), 0.0, 500.0)
+        parsed = self._to_float(aqi, None)
+        if parsed is None:
+            return None
+        aqi = self._clamp(parsed, 0.0, 500.0)
         if aqi <= 50:
             return 8.0
         if aqi <= 100:
@@ -734,7 +749,10 @@ class HealthRiskService:
         return 96.0
 
     def _humidity_score(self, humidity):
-        humidity = self._clamp(self._to_float(humidity, 60.0), 0.0, 100.0)
+        parsed = self._to_float(humidity, None)
+        if parsed is None:
+            return None
+        humidity = self._clamp(parsed, 0.0, 100.0)
         if humidity < 35:
             return self._clamp((35.0 - humidity) * 2.4, 0.0, 100.0)
         if humidity > 75:

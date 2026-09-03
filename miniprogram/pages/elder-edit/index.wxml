@@ -23,7 +23,11 @@
         </view>
         <view style="flex:1;">
           <view class="muted" style="font-size: 12px;">性别（可选）</view>
-          <input value="{{gender}}" bindinput="onGender" placeholder="男性/女性" style="border: 1px solid #e5e7eb; border-radius: 10px; padding: 10px 12px; background:#fff;" />
+          <picker mode="selector" range="{{genderOptions}}" value="{{genderIndex}}" bindchange="onGender">
+            <view style="border: 1px solid #e5e7eb; border-radius: 10px; padding: 10px 12px; background:#fff;">
+              {{gender ? gender : '请选择'}}
+            </view>
+          </picker>
         </view>
       </view>
     </block>

@@ -50,6 +50,27 @@ def test_mp_template_missing_pair_is_not_blank_temps():
     assert '可信节点' not in wxml
 
 
+def test_mp_alerts_rounds_temps_like_elders_and_web():
+    js = (ROOT / 'miniprogram' / 'pages' / 'alerts' / 'index.js').read_text(encoding='utf-8')
+    assert 'Math.round' in js
+    assert 'formatTemp' in js
+
+
+def test_mp_elders_points_action_and_cooling_to_web():
+    wxml = (ROOT / 'miniprogram' / 'pages' / 'elders' / 'index.wxml').read_text(encoding='utf-8')
+    assert '记录今天是否做到' in wxml
+    assert '避暑' in wxml
+    assert '网页' in wxml
+
+
+def test_mp_elder_edit_offers_gender_choices_like_web():
+    wxml = (ROOT / 'miniprogram' / 'pages' / 'elder-edit' / 'index.wxml').read_text(encoding='utf-8')
+    js = (ROOT / 'miniprogram' / 'pages' / 'elder-edit' / 'index.js').read_text(encoding='utf-8')
+    assert 'picker' in wxml
+    assert "['男性', '女性']" in js
+    assert 'onGender' in wxml
+
+
 def test_mp_elders_can_unbind_like_web():
     wxml = (ROOT / 'miniprogram' / 'pages' / 'elders' / 'index.wxml').read_text(encoding='utf-8')
     js = (ROOT / 'miniprogram' / 'pages' / 'elders' / 'index.js').read_text(encoding='utf-8')

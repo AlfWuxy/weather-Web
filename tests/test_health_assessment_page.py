@@ -679,6 +679,27 @@ def test_assessment_without_age_does_not_invent_45(db_session):
         )
 
 
+def test_assessment_without_screening_does_not_invent_healthy_answers(db_session):
+    from services.health_risk_service import HealthRiskService
+
+    with pytest.raises(ValueError, match='筛查'):
+        HealthRiskService().assess_personal_weather_health_risk(
+            _assessment_profile(),
+            _assessment_weather(),
+            {},
+        )
+
+
+def test_aqi_and_humidity_scores_do_not_invent_50_or_60():
+    from services.health_risk_service import HealthRiskService
+
+    service = HealthRiskService()
+    assert service._aqi_score(None) is None
+    assert service._humidity_score(None) is None
+    assert service._aqi_score('not-a-number') is None
+    assert service._humidity_score('not-a-number') is None
+
+
 def test_assessment_without_temperature_does_not_invent_20(db_session):
     from services.health_risk_service import HealthRiskService
 

@@ -93,7 +93,7 @@
                                     <td>
                                         {% set w = weather_map.get(entry.entry_date) %}
                                         {% if w %}
-                                            {{ w.temperature|round(1) }}°C / {{ w.humidity|round(0) }}%
+                                            {% if w.temperature is not none %}{{ w.temperature|round(1) }}°C{% else %}--{% endif %} / {% if w.humidity is not none %}{{ w.humidity|round(0) }}%{% else %}--{% endif %}
                                         {% else %}
                                             -
                                         {% endif %}

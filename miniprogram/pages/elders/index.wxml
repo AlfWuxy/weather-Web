@@ -5,7 +5,7 @@
       <button size="mini" class="btn-outline" bindtap="goSettings">设置</button>
     </view>
     <view class="muted" style="margin-top: 6px; font-size: 12px;">
-      官方预警来自 QWeather。天气可用时才套用温度阈值。
+      官方预警来自 QWeather。天气可用时才套用温度阈值。记录今天是否做到和附近避暑点请在网页完成。
     </view>
     <view style="margin-top: 12px;">
       <button class="btn-primary" bindtap="goCreate">新增老人</button>

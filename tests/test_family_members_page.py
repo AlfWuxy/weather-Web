@@ -46,7 +46,15 @@ def test_family_members_page_uses_new_route_and_renders_member_alerts(client, db
     monkeypatch.setattr('blueprints.health.ensure_user_location_valid', lambda: '都昌')
     monkeypatch.setattr(
         'blueprints.health.get_weather_with_cache',
-        lambda location: ({'temperature': 36, 'humidity': 72, 'aqi': 88, 'data_source': 'QWeather', 'is_mock': False}, None),
+        lambda location: ({
+            'temperature': 36,
+            'temperature_max': 36,
+            'temperature_min': 26,
+            'humidity': 72,
+            'aqi': 88,
+            'data_source': 'QWeather',
+            'is_mock': False,
+        }, None),
     )
 
     response = client.get('/family-members')
@@ -218,6 +226,79 @@ def test_family_member_delete_unlinks_pairs_and_related_rows(client, db_session)
     leftover_events = UsageEvent.query.filter_by(user_id=user.id).all()
     assert leftover_events
     assert all(event.member_id is None for event in leftover_events)
+
+
+def test_family_member_detail_survives_missing_humidity(client, db_session, monkeypatch):
+    from core.db_models import FamilyMember, FamilyMemberProfile
+
+    user = _create_user(db_session, username='family_missing_humidity_user')
+    member = FamilyMember(user_id=user.id, name='周奶奶', relation='母亲', age=81, gender='女性')
+    db_session.add(member)
+    db_session.flush()
+    db_session.add(FamilyMemberProfile(
+        member_id=member.id,
+        weather_thresholds=json.dumps({'high_temp': 32, 'high_humidity': 80}, ensure_ascii=False),
+        alert_enabled=True,
+    ))
+    db_session.commit()
+    _login_as(client, user.id)
+
+    monkeypatch.setattr('blueprints.health.ensure_user_location_valid', lambda: '都昌')
+    monkeypatch.setattr(
+        'blueprints.health.get_weather_with_cache',
+        lambda _location: ({
+            'temperature': 36,
+            'temperature_max': 36,
+            'temperature_min': 26,
+            'humidity': None,
+            'aqi': 88,
+            'data_source': 'QWeather',
+            'is_mock': False,
+        }, None),
+    )
+
+    response = client.get(f'/family-members/{member.id}')
+    assert response.status_code == 200
+    body = response.get_data(as_text=True)
+    assert '周奶奶' in body
+    assert '天气更新中' in body
+    assert '湿度 None' not in body
+    assert '触发：高温' not in body
+
+
+def test_family_member_form_rejects_age_zero(client, db_session):
+    from core.db_models import FamilyMember
+
+    user = _create_user(db_session, username='family_age_zero_user')
+    _login_as(client, user.id)
+
+    response = client.post(
+        '/family-members/new',
+        data={
+            'name': '邻居',
+            'relation': '邻居',
+            'age': '0',
+            'gender': '女性',
+            'csrf_token': 'test-csrf-token',
+        },
+        follow_redirects=True,
+    )
+
+    assert response.status_code == 200
+    assert '年龄需在1-150之间' in response.get_data(as_text=True)
+    assert FamilyMember.query.filter_by(user_id=user.id).count() == 0
+
+
+def test_family_member_edit_form_age_bounds_match_api():
+    from pathlib import Path
+
+    html = (Path(__file__).resolve().parents[1] / 'templates' / 'family_member_edit.html').read_text(
+        encoding='utf-8'
+    )
+    assert 'min="1"' in html
+    assert 'max="150"' in html
+    assert 'min="0"' not in html
+    assert 'max="120"' not in html
 
 
 def test_compute_member_risk_without_age_is_unknown():

@@ -97,7 +97,7 @@
                             <span class="badge bg-success-subtle text-success border">未触发</span>
                         {% endif %}
                         {% if weather_available and weather %}
-                            <div class="text-muted small mt-2">天气：{{ weather.temperature|round(1) }}°C / 湿度 {{ weather.humidity|round(0) }}% / AQI {{ weather.aqi or '--' }}</div>
+                            <div class="text-muted small mt-2">天气：{% if weather.temperature is not none %}{{ weather.temperature|round(1) }}°C{% else %}--{% endif %} / 湿度 {% if weather.humidity is not none %}{{ weather.humidity|round(0) }}%{% else %}--{% endif %} / AQI {{ weather.aqi if weather.aqi is not none else '--' }}</div>
                         {% else %}
                             <div class="text-muted small mt-2">风险提醒将在天气更新后显示。现在可先查看档案和日常防护建议。</div>
                         {% endif %}

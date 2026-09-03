@@ -21,6 +21,8 @@ Page({
     relation: '',
     age: '',
     gender: '',
+    genderOptions: ['男性', '女性'],
+    genderIndex: 0,
     locationQuery: '',
     chronicText: '',
     busy: false,
@@ -54,13 +56,16 @@ Page({
         return;
       }
       const chronic = (item.member && item.member.chronic_diseases) ? item.member.chronic_diseases : [];
+      const gender = (item.member && item.member.gender) ? item.member.gender : '';
+      const genderIndex = Math.max(0, this.data.genderOptions.indexOf(gender));
       this.setData({
         locationQuery: item.location_query || item.community_code || '',
         chronicText: (chronic || []).join(', '),
         name: (item.member && item.member.name) ? item.member.name : '',
         relation: (item.member && item.member.relation) ? item.member.relation : '',
         age: (item.member && item.member.age) ? String(item.member.age) : '',
-        gender: (item.member && item.member.gender) ? item.member.gender : '',
+        gender,
+        genderIndex,
       });
     } catch (e) {
       wx.showToast({ title: '加载失败', icon: 'none' });
@@ -70,7 +75,14 @@ Page({
   onName(e) { this.setData({ name: (e.detail.value || '').trim() }); },
   onRelation(e) { this.setData({ relation: (e.detail.value || '').trim() }); },
   onAge(e) { this.setData({ age: (e.detail.value || '').trim() }); },
-  onGender(e) { this.setData({ gender: (e.detail.value || '').trim() }); },
+  onGender(e) {
+    const idx = parseInt(e.detail.value, 10);
+    const options = this.data.genderOptions || [];
+    this.setData({
+      genderIndex: Number.isFinite(idx) ? idx : 0,
+      gender: options[idx] || '',
+    });
+  },
   onLocation(e) { this.setData({ locationQuery: (e.detail.value || '').trim() }); },
   onChronic(e) { this.setData({ chronicText: e.detail.value || '' }); },
 

@@ -27,7 +27,7 @@
                     当前 {{ weather.temperature|round(0) if weather.temperature is not none else '--' }}°C,
                     {{ heat_risk_label or '风险待计算' }}。
                 {% else %}
-                    先补水、通风并避免暴晒，不舒服时及时联系家人。
+                    {{ dashboard_copy.elder.empty_plan.detail }}
                 {% endif %}
             </p>
         </div>

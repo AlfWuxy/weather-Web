@@ -51,3 +51,5 @@ def test_dashboard_templates_read_headlines_from_json():
     assert copy['elder']['headlines']['low'] not in elder_html
     assert 'dashboard_copy.today.empty_plan.title' in today_html
     assert 'dashboard_copy.elder.empty_plan.title' in elder_html
+    assert 'dashboard_copy.elder.empty_plan.detail' in elder_html
+    assert '先补水、通风并避免暴晒，不舒服时及时联系家人。' not in elder_html
