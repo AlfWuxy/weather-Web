@@ -1063,14 +1063,23 @@ class DLNMRiskService:
         }
     
     def get_risk_thresholds(self):
-        """获取风险阈值"""
+        """获取风险阈值。缺测分位数不填文献默认值。"""
+        def _finite_or_none(value):
+            try:
+                parsed = float(value)
+            except (TypeError, ValueError):
+                return None
+            if not np.isfinite(parsed):
+                return None
+            return parsed
+
         return {
-            'heat_extreme': self.percentiles.get('p95', 35),
-            'heat_warning': self.percentiles.get('p90', 32),
-            'cold_warning': self.percentiles.get('p10', 5),
-            'cold_extreme': self.percentiles.get('p5', 2),
+            'heat_extreme': _finite_or_none(self.percentiles.get('p95')),
+            'heat_warning': _finite_or_none(self.percentiles.get('p90')),
+            'cold_warning': _finite_or_none(self.percentiles.get('p10')),
+            'cold_extreme': _finite_or_none(self.percentiles.get('p5')),
             'mmt': self.mmt,
-            'hot_night_threshold': self.tmin_p90 if self.tmin_p90 is not None else 22
+            'hot_night_threshold': _finite_or_none(self.tmin_p90),
         }
     
     def identify_extreme_weather_events(self, temperature, duration=1, is_night_temp=False):
@@ -1086,11 +1095,22 @@ class DLNMRiskService:
         - event_type: 事件类型
         - severity: 严重程度
         """
+        try:
+            temperature = float(temperature)
+        except (TypeError, ValueError):
+            return []
+        if not np.isfinite(temperature):
+            return []
         thresholds = self.get_risk_thresholds()
         events = []
+        heat_extreme = thresholds.get('heat_extreme')
+        heat_warning = thresholds.get('heat_warning')
+        cold_extreme = thresholds.get('cold_extreme')
+        cold_warning = thresholds.get('cold_warning')
+        hot_night_threshold = thresholds.get('hot_night_threshold')
         
         # 热浪检测
-        if temperature >= thresholds['heat_extreme']:
+        if heat_extreme is not None and temperature >= heat_extreme:
             if duration >= 3:
                 events.append({
                     'type': '热浪',
@@ -1105,7 +1125,7 @@ class DLNMRiskService:
                     'description': f'极端高温({temperature:.1f}°C)',
                     'rr_multiplier': 1.3
                 })
-        elif temperature >= thresholds['heat_warning']:
+        elif heat_warning is not None and temperature >= heat_warning:
             events.append({
                 'type': '高温预警',
                 'severity': 'medium',
@@ -1114,7 +1134,7 @@ class DLNMRiskService:
             })
         
         # 寒潮检测
-        if temperature <= thresholds['cold_extreme']:
+        if cold_extreme is not None and temperature <= cold_extreme:
             if duration >= 3:
                 events.append({
                     'type': '寒潮',
@@ -1129,7 +1149,7 @@ class DLNMRiskService:
                     'description': f'极端低温({temperature:.1f}°C)',
                     'rr_multiplier': 1.25
                 })
-        elif temperature <= thresholds['cold_warning']:
+        elif cold_warning is not None and temperature <= cold_warning:
             events.append({
                 'type': '低温预警',
                 'severity': 'medium',
@@ -1138,7 +1158,7 @@ class DLNMRiskService:
             })
         
         # 热夜检测
-        if is_night_temp and temperature >= thresholds.get('hot_night_threshold', 22):
+        if is_night_temp and hot_night_threshold is not None and temperature >= hot_night_threshold:
             events.append({
                 'type': '热夜',
                 'severity': 'medium',
