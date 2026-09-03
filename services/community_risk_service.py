@@ -991,17 +991,16 @@ class CommunityRiskService:
             svi_weight_sum = sum(weight for weight, _ in svi_parts) or 1.0
             svi_percentile = sum(weight * value for weight, value in svi_parts) / svi_weight_sum
             hazard_pct = float(item.get('normalized_score') or 0.0)
-            if historical_component_available:
-                burden = burden_pct.get(name, 50.0)
+            burden = burden_pct.get(name) if historical_component_available else None
+            if burden is None:
+                # 该社区没有历史负担分位时，不把 50 当中位，只按天气和脆弱性计分。
+                risk_weights = {'weather': 0.5625, 'svi': 0.4375, 'burden': 0.0}
+                uncertainty_penalty = 1.0
+            else:
                 risk_weights = {'weather': 0.45, 'svi': 0.35, 'burden': 0.20}
                 uncertainty_penalty = (
                     0.93 if float(item.get('uncertainty_index') or 0.0) >= 70 else 1.0
                 )
-            else:
-                # 历史分量缺失时，把可用权重 0.45/0.35 重新归一化到总和 1。
-                burden = None
-                risk_weights = {'weather': 0.5625, 'svi': 0.4375, 'burden': 0.0}
-                uncertainty_penalty = 1.0
 
             weather_contribution = risk_weights['weather'] * hazard_pct
             svi_contribution = risk_weights['svi'] * svi_percentile

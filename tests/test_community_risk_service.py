@@ -449,3 +449,65 @@ def test_unmeasured_environment_fields_are_not_scored(app, db_session, monkeypat
     assert by_name['甲村']['theme_scores'].get('exposure') is None
     assert by_name['甲村']['theme_scores'].get('adaptive_gap') is None
     assert any('绿地' in item and '不计入' in item for item in result['methodology'])
+
+
+def test_missing_sir_does_not_invent_median_burden(app, db_session, monkeypatch):
+    from datetime import datetime, timezone
+
+    from core.db_models import Community, MedicalRecord
+
+    db_session.add_all([
+        Community(
+            name='甲村',
+            population=120,
+            elderly_ratio=0.33,
+            chronic_disease_ratio=0.12,
+            latitude=29.35,
+            longitude=116.37,
+        ),
+        Community(
+            name='乙村',
+            population=80,
+            elderly_ratio=0.41,
+            chronic_disease_ratio=0.17,
+            latitude=29.36,
+            longitude=116.38,
+        ),
+    ])
+    db_session.add(MedicalRecord(
+        patient_name='甲村-样本',
+        visit_time=datetime.now(timezone.utc),
+        disease_category='呼吸系统',
+        community='甲村',
+    ))
+    db_session.commit()
+
+    original_rr = CommunityRiskService._rr_with_ci
+
+    def fake_rr(self, observed, expected):
+        if int(observed or 0) == 0:
+            return None, None, None
+        return original_rr(self, observed, expected)
+
+    monkeypatch.setattr(CommunityRiskService, '_rr_with_ci', fake_rr)
+
+    class StubDLNM:
+        def calculate_rr(self, temperature, lag_temperatures=None):
+            return 1.8, {}
+
+    monkeypatch.setattr(
+        'services.dlnm_risk_service.get_dlnm_service',
+        lambda: StubDLNM(),
+    )
+
+    result = CommunityRiskService().generate_community_risk_map({'temperature': 35})
+    by_name = {row['community']: row for row in result['rankings']}
+
+    assert result['summary']['historical_component_available'] is True
+    assert by_name['甲村']['sir'] is not None
+    assert by_name['甲村']['risk_weights']['burden'] == 0.20
+    assert by_name['乙村']['sir'] is None
+    assert by_name['乙村']['burden_percentile'] is None
+    assert by_name['乙村']['burden_percentile'] != 50.0
+    assert by_name['乙村']['risk_weights']['burden'] == 0.0
+    assert by_name['乙村']['risk_contributions']['burden'] == 0.0
