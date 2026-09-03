@@ -16,7 +16,10 @@ def test_dashboard_hides_ml_prediction_when_model_missing(authenticated_client, 
     assert 'data-nav-key="ml-prediction"' not in html
 
 
-def test_dashboard_shows_ml_prediction_when_model_loaded(authenticated_client, monkeypatch):
+def test_dashboard_hides_ml_prediction_for_normal_user_even_when_model_loaded(
+    authenticated_client,
+    monkeypatch,
+):
     class _Ready:
         model_loaded = True
 
@@ -26,6 +29,20 @@ def test_dashboard_shows_ml_prediction_when_model_loaded(authenticated_client, m
     )
 
     html = authenticated_client.get('/dashboard').get_data(as_text=True)
+    assert 'AI 疾病预测' not in html
+    assert 'href="/ml-prediction"' not in html
+
+
+def test_admin_dashboard_shows_ml_prediction_when_model_loaded(admin_client, monkeypatch):
+    class _Ready:
+        model_loaded = True
+
+    monkeypatch.setattr(
+        'services.ml_prediction_service.get_ml_service',
+        lambda: _Ready(),
+    )
+
+    html = admin_client.get('/dashboard').get_data(as_text=True)
     assert 'AI 疾病预测' in html
     assert 'href="/ml-prediction"' in html
 

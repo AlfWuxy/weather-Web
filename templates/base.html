@@ -171,16 +171,22 @@
                                 <section class="app-mega-group">
                                     <div class="app-mega-kicker">健康</div>
                                     <a class="app-mega-link" href="{{ url_for('user.health_assessment') }}">健康评估</a>
+                                    {% if current_user.role == 'admin' %}
                                     {% if ml_model_available %}
                                     <a class="app-mega-link" href="{{ url_for('tools.ml_prediction') }}">AI 疾病预测</a>
                                     {% endif %}
                                     <a class="app-mega-link" href="{{ url_for('tools.ai_qa') }}">AI 提问</a>
                                     <a class="app-mega-link" href="{{ url_for('tools.chronic_risk') }}">慢病风险评估</a>
+                                    {% endif %}
                                     {% if not nav_is_guest %}
                                         <a class="app-mega-link" href="{{ url_for('health.family_members') }}">家人档案</a>
+                                        {% if current_user.role == 'admin' %}
                                         <a class="app-mega-link" href="{{ url_for('health.health_diary') }}">健康日记</a>
+                                        {% endif %}
                                         <a class="app-mega-link" href="{{ url_for('health.medication_reminders') }}">用药提醒</a>
+                                        {% if current_user.role == 'admin' %}
                                         <a class="app-mega-link" href="{{ url_for('analysis.annual_report') }}">年度健康报告</a>
+                                        {% endif %}
                                     {% endif %}
                                 </section>
 
@@ -302,16 +308,20 @@
             <div class="mb-2" style="font-size:.72rem; color:var(--yl-muted); text-transform:uppercase; letter-spacing:.05em; padding:0 4px;">健康</div>
             <nav class="nav flex-column mb-3" aria-label="健康">
                 <a class="nav-link {% if nav_endpoint == 'user.health_assessment' %}active{% endif %}" href="{{ url_for('user.health_assessment') }}" data-nav-key="assessment" {% if nav_endpoint == 'user.health_assessment' %}aria-current="page"{% endif %}><i class="bi bi-clipboard-pulse me-2"></i>健康评估</a>
+                <a class="nav-link {% if nav_endpoint == 'tools.forecast_7day' %}active{% endif %}" href="{{ url_for('tools.forecast_7day') }}" data-nav-key="forecast" {% if nav_endpoint == 'tools.forecast_7day' %}aria-current="page"{% endif %}><i class="bi bi-calendar-week me-2"></i>7 天预报</a>
+                {% if not nav_is_guest %}
+                    <a class="nav-link {% if nav_endpoint == 'health.medication_reminders' %}active{% endif %}" href="{{ url_for('health.medication_reminders') }}" data-nav-key="medication" {% if nav_endpoint == 'health.medication_reminders' %}aria-current="page"{% endif %}><i class="bi bi-capsule me-2"></i>用药提醒</a>
+                {% endif %}
+                {% if current_user.role == 'admin' %}
                 {% if ml_model_available %}
                 <a class="nav-link {% if nav_endpoint == 'tools.ml_prediction' %}active{% endif %}" href="{{ url_for('tools.ml_prediction') }}" data-nav-key="ml-prediction" {% if nav_endpoint == 'tools.ml_prediction' %}aria-current="page"{% endif %}><i class="bi bi-cpu me-2"></i>AI 疾病预测</a>
                 {% endif %}
-                <a class="nav-link {% if nav_endpoint == 'tools.forecast_7day' %}active{% endif %}" href="{{ url_for('tools.forecast_7day') }}" data-nav-key="forecast" {% if nav_endpoint == 'tools.forecast_7day' %}aria-current="page"{% endif %}><i class="bi bi-calendar-week me-2"></i>7 天预报</a>
                 <a class="nav-link {% if nav_endpoint == 'tools.chronic_risk' %}active{% endif %}" href="{{ url_for('tools.chronic_risk') }}" data-nav-key="chronic-risk" {% if nav_endpoint == 'tools.chronic_risk' %}aria-current="page"{% endif %}><i class="bi bi-heart-pulse me-2"></i>慢病风险评估</a>
                 <a class="nav-link {% if nav_endpoint == 'tools.ai_qa' %}active{% endif %}" href="{{ url_for('tools.ai_qa') }}" data-nav-key="ai-qa" {% if nav_endpoint == 'tools.ai_qa' %}aria-current="page"{% endif %}><i class="bi bi-chat-dots me-2"></i>AI 提问</a>
                 {% if not nav_is_guest %}
                     <a class="nav-link {% if nav_endpoint == 'health.health_diary' %}active{% endif %}" href="{{ url_for('health.health_diary') }}" data-nav-key="health-diary" {% if nav_endpoint == 'health.health_diary' %}aria-current="page"{% endif %}><i class="bi bi-journal me-2"></i>健康日记</a>
-                    <a class="nav-link {% if nav_endpoint == 'health.medication_reminders' %}active{% endif %}" href="{{ url_for('health.medication_reminders') }}" data-nav-key="medication" {% if nav_endpoint == 'health.medication_reminders' %}aria-current="page"{% endif %}><i class="bi bi-capsule me-2"></i>用药提醒</a>
                     <a class="nav-link {% if nav_endpoint == 'analysis.annual_report' %}active{% endif %}" href="{{ url_for('analysis.annual_report') }}" data-nav-key="annual-report" {% if nav_endpoint == 'analysis.annual_report' %}aria-current="page"{% endif %}><i class="bi bi-journal-text me-2"></i>年度健康报告</a>
+                {% endif %}
                 {% endif %}
             </nav>
 

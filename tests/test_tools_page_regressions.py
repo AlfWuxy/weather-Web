@@ -348,9 +348,35 @@ def test_authenticated_nav_uses_desktop_mega_menu(client, db_session):
     body = response.get_data(as_text=True)
     assert 'id="appMegaMenu"' in body
     assert 'data-nav-more-trigger="desktop"' in body
-    assert 'AI 提问' in body
+    assert 'AI 提问' not in body
     assert '健康评估' in body
     assert '家庭成员' in body
+
+
+def test_authenticated_nav_hides_research_tools_from_caregiver(client, db_session):
+    user = _create_user(db_session, username='care_nav_user', role='user')
+    _login_as(client, user.id)
+
+    body = client.get('/dashboard').get_data(as_text=True)
+    assert 'AI 提问' not in body
+    assert '慢病风险评估' not in body
+    assert '健康日记' not in body
+    assert '年度健康报告' not in body
+    assert 'href="/ml-prediction"' not in body
+    assert '健康评估' in body
+    assert '社区风险' in body
+
+
+def test_admin_nav_keeps_research_tools(client, db_session):
+    user = _create_user(db_session, username='admin_nav_user', role='admin')
+    _login_as(client, user.id)
+
+    body = client.get('/dashboard').get_data(as_text=True)
+    assert 'AI 提问' in body
+    assert '慢病风险评估' in body
+    assert '健康日记' in body
+    assert '年度健康报告' in body
+
 
 
 def test_ml_prediction_post_renders_result_and_preserves_form(client, db_session, monkeypatch):
