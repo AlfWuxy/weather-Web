@@ -32,17 +32,49 @@ class HealthRiskService:
         """
         计算社区脆弱性指数（0-100）。
         """
-        elderly_ratio = self._clamp(self._to_float(community_data.get('elderly_ratio'), 0.0), 0.0, 1.0)
-        chronic_ratio = self._clamp(self._to_float(community_data.get('chronic_disease_ratio'), 0.0), 0.0, 1.0)
-        medical_accessibility = self._clamp(self._to_float(community_data.get('medical_accessibility'), 50.0), 0.0, 100.0)
-        env_quality = self._clamp(self._to_float(community_data.get('env_quality_score'), 50.0), 0.0, 100.0)
+        elderly_ratio = self._to_float(community_data.get('elderly_ratio'), None)
+        chronic_ratio = self._to_float(community_data.get('chronic_disease_ratio'), None)
+        medical_accessibility = self._to_float(community_data.get('medical_accessibility'), None)
+        env_quality = self._to_float(community_data.get('env_quality_score'), None)
 
-        aging_score = elderly_ratio * 100.0 * 0.30
-        disease_score = chronic_ratio * 100.0 * 0.35
-        medical_score = (100.0 - medical_accessibility) * 0.20
-        env_score = (100.0 - env_quality) * 0.15
+        if all(value is None for value in (
+            elderly_ratio, chronic_ratio, medical_accessibility, env_quality
+        )):
+            return {
+                'vulnerability_index': None,
+                'risk_level': None,
+                'level': None,
+                'breakdown': {
+                    'aging_score': None,
+                    'disease_score': None,
+                    'medical_score': None,
+                    'env_score': None,
+                }
+            }
 
-        vulnerability_index = self._clamp(aging_score + disease_score + medical_score + env_score, 0.0, 100.0)
+        aging_score = (
+            0.0 if elderly_ratio is None
+            else self._clamp(elderly_ratio, 0.0, 1.0) * 100.0 * 0.30
+        )
+        disease_score = (
+            0.0 if chronic_ratio is None
+            else self._clamp(chronic_ratio, 0.0, 1.0) * 100.0 * 0.35
+        )
+        medical_score = (
+            None if medical_accessibility is None
+            else (100.0 - self._clamp(medical_accessibility, 0.0, 100.0)) * 0.20
+        )
+        env_score = (
+            None if env_quality is None
+            else (100.0 - self._clamp(env_quality, 0.0, 100.0)) * 0.15
+        )
+
+        vulnerability_index = aging_score + disease_score
+        if medical_score is not None:
+            vulnerability_index += medical_score
+        if env_score is not None:
+            vulnerability_index += env_score
+        vulnerability_index = self._clamp(vulnerability_index, 0.0, 100.0)
         risk_level = self._bucket_three(vulnerability_index, low=30.0, high=60.0, labels=('低', '中', '高'))
 
         return {
@@ -52,8 +84,8 @@ class HealthRiskService:
             'breakdown': {
                 'aging_score': round(aging_score, 2),
                 'disease_score': round(disease_score, 2),
-                'medical_score': round(medical_score, 2),
-                'env_score': round(env_score, 2)
+                'medical_score': None if medical_score is None else round(medical_score, 2),
+                'env_score': None if env_score is None else round(env_score, 2)
             }
         }
 

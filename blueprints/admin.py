@@ -658,18 +658,15 @@ def admin_add_community():
             latitude=parse_float(request.form.get('latitude')),
             longitude=parse_float(request.form.get('longitude')),
             population=parse_int(request.form.get('population')),
-            elderly_ratio=parse_float(request.form.get('elderly_ratio'), default=0),
-            chronic_disease_ratio=parse_float(request.form.get('chronic_disease_ratio'), default=0)
+            elderly_ratio=parse_float(request.form.get('elderly_ratio')),
+            chronic_disease_ratio=parse_float(request.form.get('chronic_disease_ratio'))
         )
 
-        # 计算脆弱性指数
         from services.health_risk_service import HealthRiskService
         service = HealthRiskService()
         result = service.calculate_community_vulnerability_index({
-            'elderly_ratio': community.elderly_ratio or 0,
-            'chronic_disease_ratio': community.chronic_disease_ratio or 0,
-            'medical_accessibility': 60,
-            'env_quality_score': 70
+            'elderly_ratio': community.elderly_ratio,
+            'chronic_disease_ratio': community.chronic_disease_ratio,
         })
         community.vulnerability_index = result['vulnerability_index']
         community.risk_level = result['risk_level']
@@ -707,17 +704,14 @@ def admin_edit_community(community_id):
         community.latitude = parse_float(request.form.get('latitude'))
         community.longitude = parse_float(request.form.get('longitude'))
         community.population = parse_int(request.form.get('population'))
-        community.elderly_ratio = parse_float(request.form.get('elderly_ratio'), default=0)
-        community.chronic_disease_ratio = parse_float(request.form.get('chronic_disease_ratio'), default=0)
+        community.elderly_ratio = parse_float(request.form.get('elderly_ratio'))
+        community.chronic_disease_ratio = parse_float(request.form.get('chronic_disease_ratio'))
 
-        # 重新计算脆弱性指数
         from services.health_risk_service import HealthRiskService
         service = HealthRiskService()
         result = service.calculate_community_vulnerability_index({
             'elderly_ratio': community.elderly_ratio,
             'chronic_disease_ratio': community.chronic_disease_ratio,
-            'medical_accessibility': 60,
-            'env_quality_score': 70
         })
         community.vulnerability_index = result['vulnerability_index']
         community.risk_level = result['risk_level']
