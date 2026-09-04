@@ -23,6 +23,12 @@ function request({ method, path, token, data }) {
 async function api({ method, path, token, data }) {
   const res = await request({ method, path, token, data });
   if (res.statusCode === 401) {
+    try {
+      wx.removeStorageSync('api_token');
+    } catch (err) {
+      // ignore storage failures
+    }
+    wx.reLaunch({ url: '/pages/bind-token/index' });
     throw new Error('unauthorized');
   }
   const body = res.data || {};

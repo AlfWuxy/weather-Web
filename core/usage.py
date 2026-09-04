@@ -38,6 +38,32 @@ def create_api_token(user_id, name=None):
     return plain
 
 
+def list_active_api_tokens(user_id):
+    """Return the caller's active (not revoked) API tokens, newest first."""
+    if not user_id:
+        return []
+    return (
+        ApiToken.query.filter(
+            ApiToken.user_id == user_id,
+            ApiToken.revoked_at.is_(None),
+        )
+        .order_by(ApiToken.created_at.desc())
+        .all()
+    )
+
+
+def revoke_api_token(user_id, token_id):
+    """Revoke one of the caller's tokens. Returns True if a row was revoked."""
+    if not user_id or not token_id:
+        return False
+    record = ApiToken.query.filter_by(id=token_id, user_id=user_id).first()
+    if record is None or record.revoked_at is not None:
+        return False
+    record.revoked_at = utcnow()
+    db.session.commit()
+    return True
+
+
 def verify_api_token(plain_token):
     """Verify a plain token and return ApiToken row if valid (not revoked)."""
     if not plain_token:

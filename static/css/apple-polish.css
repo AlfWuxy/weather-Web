@@ -85,6 +85,8 @@ a:hover {
 .btn-primary:disabled,
 .btn-primary.disabled {
     box-shadow: none;
+    opacity: 0.55;
+    cursor: not-allowed;
 }
 
 .btn-outline-primary {

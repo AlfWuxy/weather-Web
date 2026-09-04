@@ -111,14 +111,43 @@ class CommunityRiskService:
         }
 
     def _estimate_baseline_visits(self, population):
-        """按人口估算社区日基线门诊，替代固定常数。"""
+        """按人口估算社区日基线门诊。缺人口时不编造 100 人基线。"""
+        if population is None:
+            return None
         try:
-            pop = float(population) if population is not None else 100.0
+            pop = float(population)
         except (TypeError, ValueError):
-            pop = 100.0
-        pop = max(10.0, pop)
+            return None
+        if not math.isfinite(pop) or pop <= 0:
+            return None
         estimated = pop * self.baseline_visit_rate
         return float(np.clip(estimated, self.min_baseline_visits, self.max_baseline_visits))
+
+    def _profile_ready_for_ranking(self, profile):
+        """人口、老龄率和门诊基线齐全后才进入社区排名。"""
+        if not isinstance(profile, dict):
+            return False
+        if profile.get('population') is None:
+            return False
+        if profile.get('elderly_ratio') is None:
+            return False
+        if profile.get('chronic_disease_ratio') is None:
+            return False
+        if profile.get('baseline_visits') is None:
+            return False
+        return True
+
+    def _scored_profile_value(self, value):
+        """把档案字段转成可计分的有限数值；缺测返回 None，不填默认值。"""
+        if value is None:
+            return None
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            return None
+        if not math.isfinite(parsed):
+            return None
+        return parsed
 
     def _normalize_excess_risk(self, excess_risk_score):
         """把超额风险映射到0-100，避免线性缩放导致快速打满。"""
@@ -146,9 +175,12 @@ class CommunityRiskService:
             lag_temps = []
             for value in values:
                 try:
-                    lag_temps.append(float(value))
+                    parsed = float(value)
                 except (TypeError, ValueError):
-                    continue
+                    return None
+                if not math.isfinite(parsed):
+                    return None
+                lag_temps.append(parsed)
             if not lag_temps:
                 continue
             if abs(lag_temps[0] - current_temperature) > 0.01:
@@ -439,24 +471,25 @@ class CommunityRiskService:
             # 先组装局部结果。任一档案读取异常时整批保持为空，避免发布半套排名。
             loaded_profiles = {}
             for comm in communities:
-                population = comm.population or 100
+                population = comm.population
                 proxy = self._stable_proxy_profile(comm.name)
+                coords_estimated = comm.latitude is None or comm.longitude is None
                 loaded_profiles[comm.name] = {
                     'id': comm.id,
                     'name': comm.name,
                     'location': comm.location,
                     'latitude': comm.latitude if comm.latitude is not None else proxy['latitude'],
                     'longitude': comm.longitude if comm.longitude is not None else proxy['longitude'],
+                    'coords_estimated': coords_estimated,
                     'population': population,
-                    'elderly_ratio': comm.elderly_ratio or 0.2,
-                    'chronic_disease_ratio': comm.chronic_disease_ratio or 0.15,
+                    'elderly_ratio': comm.elderly_ratio,
+                    'chronic_disease_ratio': comm.chronic_disease_ratio,
                     'vulnerability_index': comm.vulnerability_index,
                     'risk_level': comm.risk_level,
-
-                    # 数据库尚无这些实测字段，暂用稳定中性代理；接入真实数据后应直接替换。
-                    'green_space_ratio': proxy['green_space_ratio'],
-                    'heat_island_index': proxy['heat_island_index'],
-                    'medical_accessibility': proxy['medical_accessibility'],
+                    # Community 表没有绿地、热岛、医疗可达性实测列，缺测时不编造代理值参与计分。
+                    'green_space_ratio': None,
+                    'heat_island_index': None,
+                    'medical_accessibility': None,
                     'baseline_visits': self._estimate_baseline_visits(population)
                 }
 
@@ -502,23 +535,26 @@ class CommunityRiskService:
             proxy = self._stable_proxy_profile(comm['name'])
             if coords and len(coords) == 2:
                 longitude, latitude = coords[0], coords[1]
+                coords_estimated = False
             else:
                 # 坐标缺失时使用按社区标识固定的都昌县附近坐标，避免每次启动位置变化。
                 latitude = proxy['latitude']
                 longitude = proxy['longitude']
+                coords_estimated = True
             self.community_profiles[comm['name']] = {
                 'id': i + 1,
                 'name': comm['name'],
                 'location': f"江西省九江市都昌县{comm['name']}",
                 'latitude': latitude,
                 'longitude': longitude,
+                'coords_estimated': coords_estimated,
                 'population': comm['population'],
                 'elderly_ratio': comm['elderly_ratio'],
                 'chronic_disease_ratio': comm['chronic_disease_ratio'],
-                # 以下字段为稳定中性代理，不能替代社区实测绿地、热岛和医疗可达性数据。
-                'green_space_ratio': proxy['green_space_ratio'],
-                'heat_island_index': proxy['heat_island_index'],
-                'medical_accessibility': proxy['medical_accessibility'],
+                # 离线演示档案同样没有绿地、热岛、医疗可达性实测，不把代理值写进计分字段。
+                'green_space_ratio': None,
+                'heat_island_index': None,
+                'medical_accessibility': None,
                 'baseline_visits': self._estimate_baseline_visits(comm['population'])
             }
     
@@ -535,20 +571,19 @@ class CommunityRiskService:
         - vi: 脆弱性指数（>1表示比平均更脆弱）
         - breakdown: 各因子贡献分解
         """
-        # 获取各因子值
-        elderly_ratio = community_data.get('elderly_ratio', 0.2)
-        chronic_ratio = community_data.get('chronic_disease_ratio', 0.15)
-        green_ratio = community_data.get('green_space_ratio', 0.1)
-        heat_island = community_data.get('heat_island_index', 0.5)
-        medical_access = community_data.get('medical_accessibility', 0.5)
-        
-        # 计算各因子贡献
+        elderly_ratio = self._scored_profile_value(community_data.get('elderly_ratio'))
+        chronic_ratio = self._scored_profile_value(community_data.get('chronic_disease_ratio'))
+        green_ratio = self._scored_profile_value(community_data.get('green_space_ratio'))
+        heat_island = self._scored_profile_value(community_data.get('heat_island_index'))
+        medical_access = self._scored_profile_value(community_data.get('medical_accessibility'))
+        environment_in_score = any(value is not None for value in (green_ratio, heat_island, medical_access))
+
         breakdown = {
-            'elderly_contribution': self.vi_weights['elderly_ratio'] * elderly_ratio,
-            'chronic_contribution': self.vi_weights['chronic_disease_ratio'] * chronic_ratio,
-            'green_contribution': self.vi_weights['green_space_ratio'] * green_ratio,
-            'heat_island_contribution': self.vi_weights['heat_island_index'] * heat_island,
-            'medical_contribution': self.vi_weights['medical_accessibility'] * medical_access
+            'elderly_contribution': self.vi_weights['elderly_ratio'] * (0.0 if elderly_ratio is None else elderly_ratio),
+            'chronic_contribution': self.vi_weights['chronic_disease_ratio'] * (0.0 if chronic_ratio is None else chronic_ratio),
+            'green_contribution': self.vi_weights['green_space_ratio'] * (0.0 if green_ratio is None else green_ratio),
+            'heat_island_contribution': self.vi_weights['heat_island_index'] * (0.0 if heat_island is None else heat_island),
+            'medical_contribution': self.vi_weights['medical_accessibility'] * (0.0 if medical_access is None else medical_access),
         }
         
         # 计算VI
@@ -575,6 +610,7 @@ class CommunityRiskService:
             'level': level,
             'color': color,
             'breakdown': breakdown,
+            'environment_in_score': environment_in_score,
             'interpretation': f'该社区脆弱性指数为{vi:.2f}，{level}。'
                             f'主要因素：老龄率贡献{breakdown["elderly_contribution"]:.2f}，'
                             f'慢病率贡献{breakdown["chronic_contribution"]:.2f}'
@@ -605,14 +641,20 @@ class CommunityRiskService:
         vi = vi_result['vulnerability_index']
         
         # 获取基线门诊率
-        baseline_rate = profile.get('baseline_visits', 5)
-        
+        try:
+            baseline_rate = float(profile.get('baseline_visits'))
+        except (TypeError, ValueError):
+            return {'error': '门诊基线无效'}
+        if not math.isfinite(baseline_rate) or baseline_rate <= 0:
+            return {'error': '门诊基线无效'}
+
         # 标准化输入RR，避免非数值污染
         try:
             weather_rr = float(weather_rr)
         except (TypeError, ValueError):
-            weather_rr = 1.0
-        weather_rr = max(0.01, weather_rr)
+            return {'error': '天气相对风险无效'}
+        if not math.isfinite(weather_rr) or weather_rr <= 0:
+            return {'error': '天气相对风险无效'}
 
         # 计算风险得分（总量）与超额风险（天气导致增量）
         risk_score = weather_rr * vi * baseline_rate
@@ -663,6 +705,7 @@ class CommunityRiskService:
             'vi_details': vi_result,
             'population': profile.get('population', 0),
             'elderly_ratio': profile.get('elderly_ratio', 0),
+            'coords_estimated': bool(profile.get('coords_estimated')),
             'expected_excess_visits': round(excess_risk_score, 1)
         }
     
@@ -695,34 +738,63 @@ class CommunityRiskService:
             target_date = today_local()
 
         # 1) 天气宏观风险（DLNM）
+        if not isinstance(weather_data, dict):
+            raise ValueError('请提供气温')
         try:
-            temperature = float(weather_data.get('temperature', 20))
+            temperature = float(weather_data.get('temperature'))
         except (TypeError, ValueError):
-            temperature = 20.0
+            raise ValueError('请提供气温')
+        if not math.isfinite(temperature):
+            raise ValueError('请提供气温')
         lag_temperatures = self._extract_lag_temperatures(weather_data, temperature)
         if lag_temperatures:
             macro_rr, _ = dlnm.calculate_rr(temperature, lag_temperatures=lag_temperatures)
         else:
             macro_rr, _ = dlnm.calculate_rr(temperature)
 
+        rr_available = True
+        try:
+            macro_rr = float(macro_rr)
+        except (TypeError, ValueError):
+            rr_available = False
+            macro_rr = None
+        else:
+            if not math.isfinite(macro_rr) or macro_rr <= 0:
+                rr_available = False
+                macro_rr = None
+
         # 2) 计算天气驱动风险底图
         community_risks = []
-        for name, profile in self.community_profiles.items():
-            risk = self.calculate_community_risk_score(name, macro_rr, target_date)
-            risk['latitude'] = profile.get('latitude', 29.35)
-            risk['longitude'] = profile.get('longitude', 116.37)
-            risk['green_space_ratio'] = profile.get('green_space_ratio', 0.1)
-            risk['heat_island_index'] = profile.get('heat_island_index', 0.5)
-            risk['medical_accessibility'] = profile.get('medical_accessibility', 0.6)
-            community_risks.append(risk)
+        if rr_available:
+            for name, profile in self.community_profiles.items():
+                if not self._profile_ready_for_ranking(profile):
+                    continue
+                risk = self.calculate_community_risk_score(name, macro_rr, target_date)
+                if not isinstance(risk, dict) or risk.get('error'):
+                    continue
+                risk['latitude'] = profile.get('latitude', 29.35)
+                risk['longitude'] = profile.get('longitude', 116.37)
+                risk['coords_estimated'] = bool(profile.get('coords_estimated'))
+                risk['green_space_ratio'] = profile.get('green_space_ratio')
+                risk['heat_island_index'] = profile.get('heat_island_index')
+                risk['medical_accessibility'] = profile.get('medical_accessibility')
+                community_risks.append(risk)
 
         if not community_risks:
-            profile_status = getattr(self, 'community_profile_status', {
-                'available': False,
-                'code': 'community_profiles_unavailable',
-                'source': 'community_table',
-                'message': '社区档案当前不可用，本次不生成社区风险排名。',
-            })
+            if not rr_available:
+                profile_status = {
+                    'available': False,
+                    'code': 'weather_rr_unavailable',
+                    'source': 'dlnm',
+                    'message': '天气相对风险当前不可用，本次不生成社区风险排名。',
+                }
+            else:
+                profile_status = getattr(self, 'community_profile_status', {
+                    'available': False,
+                    'code': 'community_profiles_unavailable',
+                    'source': 'community_table',
+                    'message': '社区档案当前不可用，本次不生成社区风险排名。',
+                })
             return {
                 'data_available': False,
                 'data_status': profile_status,
@@ -745,7 +817,7 @@ class CommunityRiskService:
                 },
                 'macro_weather': {
                     'temperature': temperature,
-                    'rr': round(macro_rr, 3),
+                    'rr': None if macro_rr is None else round(macro_rr, 3),
                     'lag_temperatures_used': len(lag_temperatures) if lag_temperatures else 0
                 },
                 'impact_likelihood_matrix': {
@@ -870,16 +942,22 @@ class CommunityRiskService:
             name = item['community']
             elderly = float(item.get('elderly_ratio') or 0.0)
             chronic = float(item.get('chronic_disease_ratio') or 0.0)
-            heat_island = float(item.get('heat_island_index') or 0.0)
-            green_space = float(item.get('green_space_ratio') or 0.0)
-            medical_access = float(item.get('medical_accessibility') or 0.0)
             sensitivity_raw[name] = 0.6 * elderly + 0.4 * chronic
-            exposure_raw[name] = heat_island
-            adaptive_gap_raw[name] = 0.5 * (1.0 - green_space) + 0.5 * (1.0 - medical_access)
+            heat_island = self._scored_profile_value(item.get('heat_island_index'))
+            green_space = self._scored_profile_value(item.get('green_space_ratio'))
+            medical_access = self._scored_profile_value(item.get('medical_accessibility'))
+            if heat_island is not None:
+                exposure_raw[name] = heat_island
+            if green_space is not None and medical_access is not None:
+                adaptive_gap_raw[name] = 0.5 * (1.0 - green_space) + 0.5 * (1.0 - medical_access)
+            elif green_space is not None:
+                adaptive_gap_raw[name] = 1.0 - green_space
+            elif medical_access is not None:
+                adaptive_gap_raw[name] = 1.0 - medical_access
 
         sensitivity_pct = self._percentile_map(sensitivity_raw)
-        exposure_pct = self._percentile_map(exposure_raw)
-        adaptive_gap_pct = self._percentile_map(adaptive_gap_raw)
+        exposure_pct = self._percentile_map(exposure_raw) if exposure_raw else {}
+        adaptive_gap_pct = self._percentile_map(adaptive_gap_raw) if adaptive_gap_raw else {}
 
         # 6) 风险综合：天气危险度 + 脆弱性 + 历史负担
         if historical_component_available:
@@ -905,23 +983,24 @@ class CommunityRiskService:
 
         for item in community_risks:
             name = item['community']
-            svi_percentile = (
-                0.40 * sensitivity_pct.get(name, 0.0)
-                + 0.25 * exposure_pct.get(name, 0.0)
-                + 0.35 * adaptive_gap_pct.get(name, 0.0)
-            )
+            svi_parts = [(0.40, sensitivity_pct.get(name, 0.0))]
+            if exposure_pct:
+                svi_parts.append((0.25, exposure_pct.get(name, 0.0)))
+            if adaptive_gap_pct:
+                svi_parts.append((0.35, adaptive_gap_pct.get(name, 0.0)))
+            svi_weight_sum = sum(weight for weight, _ in svi_parts) or 1.0
+            svi_percentile = sum(weight * value for weight, value in svi_parts) / svi_weight_sum
             hazard_pct = float(item.get('normalized_score') or 0.0)
-            if historical_component_available:
-                burden = burden_pct.get(name, 50.0)
+            burden = burden_pct.get(name) if historical_component_available else None
+            if burden is None:
+                # 该社区没有历史负担分位时，不把 50 当中位，只按天气和脆弱性计分。
+                risk_weights = {'weather': 0.5625, 'svi': 0.4375, 'burden': 0.0}
+                uncertainty_penalty = 1.0
+            else:
                 risk_weights = {'weather': 0.45, 'svi': 0.35, 'burden': 0.20}
                 uncertainty_penalty = (
                     0.93 if float(item.get('uncertainty_index') or 0.0) >= 70 else 1.0
                 )
-            else:
-                # 历史分量缺失时，把可用权重 0.45/0.35 重新归一化到总和 1。
-                burden = None
-                risk_weights = {'weather': 0.5625, 'svi': 0.4375, 'burden': 0.0}
-                uncertainty_penalty = 1.0
 
             weather_contribution = risk_weights['weather'] * hazard_pct
             svi_contribution = risk_weights['svi'] * svi_percentile
@@ -954,9 +1033,10 @@ class CommunityRiskService:
             item['svi_percentile'] = round(svi_percentile, 1)
             item['theme_scores'] = {
                 'sensitivity': round(sensitivity_pct.get(name, 0.0), 1),
-                'exposure': round(exposure_pct.get(name, 0.0), 1),
-                'adaptive_gap': round(adaptive_gap_pct.get(name, 0.0), 1)
+                'exposure': round(exposure_pct[name], 1) if name in exposure_pct else None,
+                'adaptive_gap': round(adaptive_gap_pct[name], 1) if name in adaptive_gap_pct else None,
             }
+            item['environment_in_score'] = bool(exposure_pct or adaptive_gap_pct)
             item['historical_component_available'] = historical_component_available
             item['burden_percentile'] = round(float(burden), 1) if burden is not None else None
             item['weather_hazard_score'] = round(hazard_pct, 1)
@@ -1000,6 +1080,7 @@ class CommunityRiskService:
                 },
                 'properties': {
                     'name': row['community'],
+                    'coords_estimated': bool(row.get('coords_estimated')),
                     'risk_score': row['normalized_score'],
                     'risk_level': row['risk_level'],
                     'color': row['color'],
@@ -1138,14 +1219,9 @@ class CommunityRiskService:
                 reverse=True
             )[:5]
 
+        from core.community_copy import equity_recommended_action
         priority_rows = []
         for row in priority_candidates[:8]:
-            if int(row.get('heatrisk_level') or 0) >= 3:
-                action = '优先安排巡访与高风险人群随访，必要时增加临时接诊能力。'
-            elif float(row.get('uncertainty_index') or 0.0) >= 70:
-                action = '优先补全数据与病例核验，避免高脆弱社区因样本不足低估风险。'
-            else:
-                action = '优先开展健康宣教与分层干预，提前准备防暑/防寒资源。'
             priority_rows.append({
                 'community': row.get('community'),
                 'equity_stratum': row.get('equity_stratum', 'Q4'),
@@ -1153,7 +1229,7 @@ class CommunityRiskService:
                 'risk_index': round(float(row.get('risk_index') or 0.0), 1),
                 'heatrisk_level': int(row.get('heatrisk_level') or 0),
                 'uncertainty_index': round(float(row.get('uncertainty_index') or 0.0), 1),
-                'recommended_action': action
+                'recommended_action': equity_recommended_action(row)
             })
         equity_priority_count = len(priority_rows)
 
@@ -1165,6 +1241,7 @@ class CommunityRiskService:
                     'community': row['community'],
                     'latitude': row.get('latitude'),
                     'longitude': row.get('longitude'),
+                    'coords_estimated': bool(row.get('coords_estimated')),
                     'risk_score': row['normalized_score'],
                     'risk_level': row['risk_level'],
                     'population': row['population'],
@@ -1202,7 +1279,8 @@ class CommunityRiskService:
                     'impact_bucket': row.get('impact_bucket', 'low'),
                     'likelihood_bucket': row.get('likelihood_bucket', 'low'),
                     'matrix_score': row.get('matrix_score', 1),
-                    'equity_stratum': row.get('equity_stratum', 'Q1')
+                    'equity_stratum': row.get('equity_stratum', 'Q1'),
+                    'environment_in_score': bool(row.get('environment_in_score')),
                 }
                 for row in rankings
             ],
@@ -1271,72 +1349,21 @@ class CommunityRiskService:
                     if historical_component_available else
                     '历史概率缺失时不生成 Impact×Likelihood 分值；综合风险仅用于人工分流、核查与行动排序。'
                 ),
-                '公平性分层按脆弱性分位(Q1-Q4)聚合，优先识别“高脆弱+高风险”社区。'
-            ],
+                '公平性分层按脆弱性分位(Q1-Q4)聚合，优先识别“高脆弱+高风险”社区。',
+                '缺少实测绿地、热岛或医疗可达性时，这些字段不计入脆弱性指数和 SVI 暴露/适应力分位。',
+            ] + (
+                ['部分社区地图位置为估算坐标，不是实测点位。']
+                if any(row.get('coords_estimated') for row in rankings) else []
+            ),
             'management_suggestions': management_suggestions
         }
     
     def _generate_management_suggestions(self, high_risk_communities, weather_data):
-        """生成管控建议（医生端）"""
-        suggestions = []
-        
-        temp = weather_data.get('temperature', 20)
-        
-        # 资源调度建议
-        if len(high_risk_communities) >= 3:
-            suggestions.append({
-                'category': '资源调配',
-                'priority': 'high',
-                'advice': f'建议向 {high_risk_communities[0]["community"]}、{high_risk_communities[1]["community"]} 等高风险社区增派医疗资源',
-                'target_communities': [c['community'] for c in high_risk_communities[:3]]
-            })
-        
-        # 巡访建议
-        for comm in high_risk_communities[:3]:
-            if comm.get('elderly_ratio', 0) > 0.4:
-                suggestions.append({
-                    'category': '健康巡访',
-                    'priority': 'high',
-                    'advice': f'{comm["community"]} 老龄化程度高({comm["elderly_ratio"]*100:.0f}%)，建议加强独居老人巡访',
-                    'target_communities': [comm['community']]
-                })
-        
-        # 温度相关建议
-        if temp > 32:
-            suggestions.append({
-                'category': '防暑措施',
-                'priority': 'high',
-                'advice': '高温天气，建议在高风险社区开放避暑点、发放防暑物资',
-                'target_communities': [c['community'] for c in high_risk_communities]
-            })
-        elif temp < 5:
-            suggestions.append({
-                'category': '防寒措施',
-                'priority': 'high',
-                'advice': '低温天气，建议检查高风险社区供暖情况、关注独居老人',
-                'target_communities': [c['community'] for c in high_risk_communities]
-            })
-        
-        # 门诊准备
-        total_excess = sum(c.get('expected_excess_visits', 0) for c in high_risk_communities)
-        if total_excess > 10:
-            suggestions.append({
-                'category': '门诊准备',
-                'priority': 'medium',
-                'advice': f'预计高风险社区额外增加约 {total_excess:.0f} 人次就诊，建议门诊做好准备',
-                'target_communities': [c['community'] for c in high_risk_communities]
-            })
-        
-        if not suggestions:
-            suggestions.append({
-                'category': '常规管理',
-                'priority': 'low',
-                'advice': '各社区风险处于正常水平，保持常规健康管理工作',
-                'target_communities': []
-            })
-        
-        return suggestions
-    
+        """生成本页优先行动（文案来自 data/content/community_action_tips.json）。"""
+        from core.community_copy import generate_community_action_tips
+
+        return generate_community_action_tips(high_risk_communities, weather_data)
+
     def update_community_sensitivity(self, community_name, heat_sensitivity=None, cold_sensitivity=None):
         """
         更新社区天气敏感性参数 (v_c)

@@ -396,6 +396,220 @@ def test_help_does_not_count_as_confirmation(app, client):
         assert aggregate.confirm_rate == 0
 
 
+def test_help_creates_caregiver_notification_and_attempts_push(app, client, db_session, monkeypatch):
+    """求助必须通知照护人，不能只写 help_flag。"""
+    from core.db_models import Notification
+
+    sent = []
+
+    def fake_wxpusher_send(uid, title, content, url=None):
+        sent.append({'uid': uid, 'title': title, 'content': content, 'url': url})
+        return {'ok': True, 'msg_id': 'help-1'}
+
+    monkeypatch.setattr('services.push.wxpusher.send', fake_wxpusher_send)
+    app.config['FEATURE_NOTIFICATIONS'] = True
+
+    with app.app_context():
+        user = _create_user('help_notify_user', 'help_notify_pass')
+        user.wxpusher_uid = 'UID_HELP'
+        user.push_enabled = True
+        pair = Pair(
+            caregiver_id=user.id,
+            community_code='求助通知社区',
+            location_query='都昌',
+            elder_code='elder-help-notify',
+            short_code='44332299',
+            short_code_hash=hash_short_code('44332299'),
+            status='active',
+            created_at=utcnow(),
+            last_active_at=utcnow(),
+        )
+        db.session.add(pair)
+        db.session.commit()
+        pair_id = pair.id
+        caregiver_id = user.id
+
+    with client.session_transaction() as sess:
+        sess['_csrf_token'] = 'help-notify-csrf'
+
+    response = client.post(
+        '/action/help',
+        data={'short_code': '44332299', 'csrf_token': 'help-notify-csrf'},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 200
+    with app.app_context():
+        notes = Notification.query.filter_by(user_id=caregiver_id, category='help').all()
+        assert len(notes) == 1
+        assert '求助' in notes[0].title
+        assert notes[0].action_url
+        status = DailyStatus.query.filter_by(pair_id=pair_id, status_date=today_local()).one()
+        assert status.help_flag is True
+    assert sent and sent[0]['uid'] == 'UID_HELP'
+    assert '求助' in sent[0]['title']
+    assert '已向照护人推送提醒' in response.get_data(as_text=True)
+
+
+def test_help_without_push_does_not_claim_caregiver_will_be_notified(app, client, db_session):
+    with app.app_context():
+        user = _create_user('help_nopush_user', 'help_nopush_pass')
+        pair = Pair(
+            caregiver_id=user.id,
+            community_code='求助无推送社区',
+            location_query='都昌',
+            elder_code='elder-help-nopush',
+            short_code='44332300',
+            short_code_hash=hash_short_code('44332300'),
+            status='active',
+            created_at=utcnow(),
+            last_active_at=utcnow(),
+        )
+        db.session.add(pair)
+        db.session.commit()
+
+    with client.session_transaction() as sess:
+        sess['_csrf_token'] = 'help-nopush-csrf'
+
+    response = client.post(
+        '/action/help',
+        data={'short_code': '44332300', 'csrf_token': 'help-nopush-csrf'},
+        follow_redirects=False,
+    )
+    body = response.get_data(as_text=True)
+
+    assert response.status_code == 200
+    assert '未开通推送' in body
+    assert '照护人将收到提醒' not in body
+
+
+def test_token_entry_lookup_form_includes_hidden_token(app, client):
+    """微信等环境可能丢 cookie，查找表单必须带上 URL 中的 token。"""
+    with app.app_context():
+        db.create_all()
+        user = _create_user('token_form_user', 'token_form_pass')
+        pair = Pair(
+            caregiver_id=user.id,
+            community_code='都昌',
+            location_query='都昌',
+            elder_code='elder-token-form',
+            short_code='66778899',
+            short_code_hash=hash_short_code('66778899'),
+            status='active',
+            created_at=utcnow(),
+            last_active_at=utcnow(),
+        )
+        db.session.add(pair)
+        db.session.flush()
+        db.session.add(PairLink(
+            caregiver_id=user.id,
+            short_code='66778899',
+            short_code_hash=hash_short_code('66778899'),
+            token_hash=hash_pair_token('lookup-form-token'),
+            community_code='都昌',
+            status='redeemed',
+            pair_id=pair.id,
+            expires_at=utcnow() + timedelta(days=1),
+            created_at=utcnow(),
+        ))
+        db.session.commit()
+
+    response = client.get('/e/lookup-form-token')
+    assert response.status_code == 200
+    body = response.get_data(as_text=True)
+    assert 'name="token"' in body
+    assert 'value="lookup-form-token"' in body
+
+
+def test_help_without_session_cookie_uses_form_token(app, client):
+    """丢 cookie 后，求助 POST 仍能凭表单 token 完成。"""
+    with app.app_context():
+        db.create_all()
+        user = _create_user('help_form_token_user', 'help_form_token_pass')
+        pair = Pair(
+            caregiver_id=user.id,
+            community_code='都昌',
+            location_query='都昌',
+            elder_code='elder-help-form-token',
+            short_code='11223344',
+            short_code_hash=hash_short_code('11223344'),
+            status='active',
+            created_at=utcnow(),
+            last_active_at=utcnow(),
+        )
+        db.session.add(pair)
+        db.session.flush()
+        db.session.add(PairActionToken(
+            pair_id=pair.id,
+            token_hash=hash_pair_token('help-form-token'),
+            expires_at=utcnow() + timedelta(days=90),
+            created_at=utcnow(),
+        ))
+        db.session.commit()
+        pair_id = pair.id
+
+    with client.session_transaction() as sess:
+        sess['_csrf_token'] = 'help-form-token-csrf'
+        sess.pop('pair_session_id', None)
+        sess.pop('pair_session_code', None)
+        sess.pop('pair_token', None)
+
+    response = client.post(
+        '/action/help',
+        data={
+            'short_code': '11223344',
+            'token': 'help-form-token',
+            'csrf_token': 'help-form-token-csrf',
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 200
+    with app.app_context():
+        status = DailyStatus.query.filter_by(pair_id=pair_id, status_date=today_local()).one()
+        assert status.help_flag is True
+
+
+def test_logout_clears_pair_session_keys(app, client):
+    """退出登录不能把行动短码会话留给下一个使用者。"""
+    with app.app_context():
+        db.create_all()
+        user = _create_user('logout_pair_user', 'logout_pair_pass')
+        pair = Pair(
+            caregiver_id=user.id,
+            community_code='都昌',
+            location_query='都昌',
+            elder_code='elder-logout-pair',
+            short_code='99881122',
+            short_code_hash=hash_short_code('99881122'),
+            status='active',
+            created_at=utcnow(),
+            last_active_at=utcnow(),
+        )
+        db.session.add(pair)
+        db.session.commit()
+        pair_id = pair.id
+
+    _login(client, 'logout_pair_user', 'logout_pair_pass')
+    with client.session_transaction() as sess:
+        sess['pair_session_id'] = pair_id
+        sess['pair_session_code'] = '99881122'
+        sess['pair_token'] = 'stale-pair-token'
+        sess['_csrf_token'] = 'logout-pair-csrf'
+
+    response = client.post(
+        '/logout',
+        data={'csrf_token': 'logout-pair-csrf'},
+        follow_redirects=False,
+    )
+    assert response.status_code == 302
+
+    with client.session_transaction() as sess:
+        assert 'pair_session_id' not in sess
+        assert 'pair_session_code' not in sess
+        assert 'pair_token' not in sess
+
+
 def test_token_debrief_get_rejects_mismatched_token(app, client):
     """复盘 GET 页面也必须校验 token 与短码绑定。"""
     with app.app_context():

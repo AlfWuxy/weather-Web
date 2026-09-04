@@ -1,38 +1,59 @@
 const { api } = require('../../utils/request');
+const scripts = require('../../content/caregiver_tip_scripts.json');
 
-function buildMessage({ trigger, elderName, relation, locationText, tmax, tmin }) {
+function formatTemp(value) {
+  if (value === null || value === undefined || value === '') return '';
+  const n = Number(value);
+  if (!Number.isFinite(n)) return '';
+  return String(Math.round(n));
+}
+
+function buildMessage({ trigger, elderName, relation, locationText, tmax, tmin, weatherAvailable, actionUrl, shortCode, chronicDiseases }) {
   let address = '你';
   if (relation === '母亲' || relation === '妈妈' || relation === '妈') address = '妈';
   else if (relation === '父亲' || relation === '爸爸' || relation === '爸') address = '爸';
   else if (elderName) address = elderName;
 
-  if (trigger === 'cold') {
-    let line1 = `【寒潮提醒】${address}，我看到你那边今天可能比较冷`;
-    if (tmin) line1 += `（最低约 ${tmin}°C）`;
-    line1 += '。';
-    return [
-      line1,
-      '建议：尽量少出门，外出注意保暖防滑；室内注意保暖，别受凉。',
-      `地点：${locationText || '-'}`,
-      '说明：这是行动提醒，不提供医疗诊断/治疗建议；如明显不适请及时就医。',
-    ].join('\n');
+  const lines = [];
+  if (!weatherAvailable) {
+    lines.push(scripts.weather_unavailable.title);
+    lines.push(scripts.weather_unavailable.lead);
+  } else {
+    const kind = trigger === 'cold' ? 'cold' : trigger === 'heat' ? 'heat' : 'daily';
+    const block = scripts[kind] || scripts.daily;
+    lines.push(block.title);
+    let lead = (block.lead || '').replace('{address}', address);
+    if (kind === 'cold' && tmin) {
+      lead += (block.temp_clause || '').replace('{tmin}', tmin);
+      if (!lead.endsWith('。')) lead += '。';
+    } else if (kind === 'heat' && tmax) {
+      lead += (block.temp_clause || '').replace('{tmax}', tmax);
+      if (!lead.endsWith('。')) lead += '。';
+    } else if ((kind === 'cold' || kind === 'heat') && !lead.endsWith('。')) {
+      lead += '。';
+    }
+    lines.push(lead);
+    if (block.advice) lines.push(block.advice);
   }
-  if (trigger === 'heat') {
-    let line1 = `【高温提醒】${address}，我看到你那边今天可能会很热`;
-    if (tmax) line1 += `（最高约 ${tmax}°C）`;
-    line1 += '。';
-    return [
-      line1,
-      '建议：避开中午外出，多喝水；室内开风扇/空调或找阴凉处休息。',
-      `地点：${locationText || '-'}`,
-      '说明：这是行动提醒，不提供医疗诊断/治疗建议；如明显不适请及时就医。',
-    ].join('\n');
+
+  if (locationText) {
+    lines.push((scripts.location_line || '').replace('{location}', locationText));
   }
-  return [
-    `【日常提醒】${address}，我这边看看你那边天气有变化，注意劳逸结合，出门记得带水/外套。`,
-    `地点：${locationText || '-'}`,
-    '说明：这是行动提醒，不提供医疗诊断/治疗建议；如明显不适请及时就医。',
-  ].join('\n');
+  const diseases = Array.isArray(chronicDiseases) ? chronicDiseases.filter(Boolean) : [];
+  if (diseases.length) {
+    lines.push(`慢病提示（可选登记）：${diseases.join('、')}`);
+  }
+  if (weatherAvailable) {
+    lines.push(scripts.disclaimer);
+  }
+  if (actionUrl || shortCode) {
+    lines.push(
+      (scripts.action_line || '')
+        .replace('{action_link}', actionUrl || '-')
+        .replace('{short_code}', shortCode || '-')
+    );
+  }
+  return lines.filter(Boolean).join('\n');
 }
 
 Page({
@@ -46,6 +67,8 @@ Page({
     tmax: '',
     tmin: '',
     trigger: '',
+    weatherAvailable: false,
+    missingPairId: false,
   },
 
   getToken() {
@@ -54,7 +77,7 @@ Page({
 
   async onLoad(options) {
     const pairId = options.pair_id ? parseInt(options.pair_id, 10) : null;
-    this.setData({ pairId });
+    this.setData({ pairId, missingPairId: !pairId });
     if (pairId) {
       await this.loadTemplate(pairId);
     }
@@ -74,11 +97,33 @@ Page({
       const elderName = item.member && item.member.name ? item.member.name : '';
       const relation = item.member && item.member.relation ? item.member.relation : '';
       const locationText = item.location_query || item.community_code || '';
-      const tmax = item.today && item.today.temperature_max ? String(item.today.temperature_max) : '';
-      const tmin = item.today && item.today.temperature_min ? String(item.today.temperature_min) : '';
+      const tmax = formatTemp(item.today && item.today.temperature_max);
+      const tmin = formatTemp(item.today && item.today.temperature_min);
       const trigger = item.today && item.today.trigger ? item.today.trigger : '';
-      const message = buildMessage({ trigger, elderName, relation, locationText, tmax, tmin });
-      this.setData({ message, locationText, elderName, relation, tmax, tmin, trigger });
+      const weatherAvailable = !!(item.today && item.today.weather_available);
+      const chronicDiseases = item.member && item.member.chronic_diseases ? item.member.chronic_diseases : [];
+      const message = buildMessage({
+        trigger,
+        elderName,
+        relation,
+        locationText,
+        tmax,
+        tmin,
+        weatherAvailable,
+        actionUrl: item.action_url || '',
+        shortCode: item.short_code || '',
+        chronicDiseases,
+      });
+      this.setData({
+        message,
+        locationText,
+        elderName,
+        relation,
+        tmax,
+        tmin,
+        trigger,
+        weatherAvailable,
+      });
     } catch (e) {
       wx.showToast({ title: '加载失败', icon: 'none' });
     } finally {

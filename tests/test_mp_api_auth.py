@@ -79,6 +79,24 @@ def test_mp_api_rate_limit_key_uses_stable_client_ip(app):
     assert key_other_ip != key_a
 
 
+def test_mp_api_user_rate_limit_key_separates_users_on_same_ip(app):
+    from flask import g
+    from blueprints.mp_api import _mp_user_rate_limit_key
+
+    same_ip = {"REMOTE_ADDR": "203.0.113.10"}
+    with app.test_request_context("/mp/api/v1/me", environ_base=same_ip):
+        g.api_user_id = 11
+        key_a = _mp_user_rate_limit_key()
+
+    with app.test_request_context("/mp/api/v1/me", environ_base=same_ip):
+        g.api_user_id = 12
+        key_b = _mp_user_rate_limit_key()
+
+    assert key_a.startswith("mp-user:")
+    assert key_b.startswith("mp-user:")
+    assert key_a != key_b
+
+
 def test_mp_api_invalid_bearer_rotation_cannot_bypass_ip_limit(
     app,
     client,
@@ -87,7 +105,7 @@ def test_mp_api_invalid_bearer_rotation_cannot_bypass_ip_limit(
     """同一 IP 轮换无效 Bearer 仍应命中同一个外层限流桶。"""
     from core.extensions import limiter
 
-    app.config['RATE_LIMIT_MP_READ'] = '1 per minute'
+    app.config['RATE_LIMIT_MP_IP'] = '1 per minute'
     limiter.reset()
     same_ip = {'REMOTE_ADDR': '203.0.113.20'}
     other_ip = {'REMOTE_ADDR': '203.0.113.21'}
@@ -112,6 +130,55 @@ def test_mp_api_invalid_bearer_rotation_cannot_bypass_ip_limit(
         assert first.status_code == 401
         assert rotated.status_code == 429
         assert separate_ip.status_code == 401
+    finally:
+        limiter.reset()
+
+
+def test_mp_api_authenticated_users_on_same_nat_have_separate_quotas(
+    app,
+    client,
+    db_session,
+):
+    """同一 NAT IP 下，认证后应按用户限流，不能互相挤占配额。"""
+    from core.db_models import User
+    from core.extensions import limiter
+    from core.usage import create_api_token
+
+    app.config['RATE_LIMIT_MP_IP'] = '100 per minute'
+    app.config['RATE_LIMIT_MP_READ'] = '1 per minute'
+    limiter.reset()
+    same_ip = {'REMOTE_ADDR': '203.0.113.30'}
+
+    with app.app_context():
+        user_a = User(username='mp_nat_a', role='user')
+        user_a.set_password('pw123456')
+        user_b = User(username='mp_nat_b', role='user')
+        user_b.set_password('pw123456')
+        db_session.add_all([user_a, user_b])
+        db_session.commit()
+        token_a = create_api_token(user_a.id, name='nat-a')
+        token_b = create_api_token(user_b.id, name='nat-b')
+
+    try:
+        first_a = client.get(
+            '/mp/api/v1/me',
+            headers={'Authorization': f'Bearer {token_a}'},
+            environ_overrides=same_ip,
+        )
+        second_a = client.get(
+            '/mp/api/v1/me',
+            headers={'Authorization': f'Bearer {token_a}'},
+            environ_overrides=same_ip,
+        )
+        first_b = client.get(
+            '/mp/api/v1/me',
+            headers={'Authorization': f'Bearer {token_b}'},
+            environ_overrides=same_ip,
+        )
+
+        assert first_a.status_code == 200
+        assert second_a.status_code == 429
+        assert first_b.status_code == 200
     finally:
         limiter.reset()
 
@@ -221,3 +288,363 @@ def test_mp_elders_does_not_create_trigger_from_mock_weather(app, client, db_ses
     assert alert_weather['weather_available'] is False
     assert alert_weather['temperature_max'] is None
     assert alert_weather['temperature_min'] is None
+
+
+def test_mp_elders_list_includes_action_fields_and_keeps_zero_temps(app, client, db_session, monkeypatch):
+    from core.db_models import Pair, User
+    from core.security import hash_short_code
+    from core.time_utils import utcnow
+    from core.usage import create_api_token
+
+    with app.app_context():
+        user = User(username='mp_zero_temp_user', role='user')
+        user.set_password('pw123456')
+        db_session.add(user)
+        db_session.commit()
+        pair = Pair(
+            caregiver_id=user.id,
+            community_code='都昌',
+            location_query='都昌',
+            elder_code='mp-zero-elder',
+            short_code='42424242',
+            short_code_hash=hash_short_code('42424242'),
+            status='active',
+            last_active_at=utcnow(),
+        )
+        db_session.add(pair)
+        db_session.commit()
+        plain = create_api_token(user.id, name='zero-temp')
+
+    monkeypatch.setattr(
+        'blueprints.mp_api.resolve_location',
+        lambda _label: {'location_code': '101240201', 'provider': 'QWeather'},
+    )
+    monkeypatch.setattr(
+        'blueprints.mp_api.get_weather_with_cache',
+        lambda _location: ({
+            'temperature': 2,
+            'temperature_max': 3,
+            'temperature_min': 0,
+            'humidity': 70,
+            'data_source': 'QWeather',
+            'is_mock': False,
+        }, False),
+    )
+
+    response = client.get(
+        '/mp/api/v1/elders',
+        headers={'Authorization': f'Bearer {plain}'},
+    )
+
+    assert response.status_code == 200
+    item = response.get_json()['data'][0]
+    assert item['short_code'] == '42424242'
+    assert item['action_url']
+    assert '/action' in item['action_url'] or '/e/' in item['action_url'] or '/elder' in item['action_url']
+    assert item['today']['weather_available'] is True
+    assert item['today']['temperature_min'] == 0
+    assert item['today']['trigger'] == 'cold'
+
+
+def test_mp_elders_and_alerts_require_humidity_like_web(app, client, db_session, monkeypatch):
+    from core.db_models import Pair, User
+    from core.security import hash_short_code
+    from core.time_utils import utcnow
+    from core.usage import create_api_token
+
+    with app.app_context():
+        user = User(username='mp_humidity_gate_user', role='user')
+        user.set_password('pw123456')
+        db_session.add(user)
+        db_session.commit()
+        pair = Pair(
+            caregiver_id=user.id,
+            community_code='都昌',
+            location_query='都昌',
+            elder_code='mp-humidity-elder',
+            short_code='43434343',
+            short_code_hash=hash_short_code('43434343'),
+            status='active',
+            last_active_at=utcnow(),
+        )
+        db_session.add(pair)
+        db_session.commit()
+        pair_id = pair.id
+        plain = create_api_token(user.id, name='humidity-gate')
+
+    monkeypatch.setattr(
+        'blueprints.mp_api.resolve_location',
+        lambda _label: {'location_code': '101240201', 'provider': 'QWeather'},
+    )
+    weather_without_humidity = {
+        'temperature': 37,
+        'temperature_max': 39,
+        'temperature_min': 29,
+        'data_source': 'QWeather',
+        'is_mock': False,
+    }
+    monkeypatch.setattr(
+        'blueprints.mp_api.get_weather_with_cache',
+        lambda _location: (dict(weather_without_humidity), False),
+    )
+    monkeypatch.setattr('blueprints.mp_api.get_qweather_warnings', lambda _code: [])
+
+    elders = client.get(
+        '/mp/api/v1/elders',
+        headers={'Authorization': f'Bearer {plain}'},
+    )
+    today = elders.get_json()['data'][0]['today']
+    assert today['weather_available'] is False
+    assert today['trigger'] is None
+    assert today['temperature_max'] is None
+    assert today['temperature_min'] is None
+
+    alerts = client.get(
+        f'/mp/api/v1/alerts?pair_id={pair_id}',
+        headers={'Authorization': f'Bearer {plain}'},
+    )
+    alert_weather = alerts.get_json()['data']['weather']
+    assert alert_weather['weather_available'] is False
+    assert alert_weather['temperature_max'] is None
+    assert alert_weather['temperature_min'] is None
+
+    weather_with_humidity = dict(weather_without_humidity, humidity=70)
+    monkeypatch.setattr(
+        'blueprints.mp_api.get_weather_with_cache',
+        lambda _location: (dict(weather_with_humidity), False),
+    )
+    elders_ready = client.get(
+        '/mp/api/v1/elders',
+        headers={'Authorization': f'Bearer {plain}'},
+    )
+    ready_today = elders_ready.get_json()['data'][0]['today']
+    assert ready_today['weather_available'] is True
+    assert ready_today['trigger'] == 'heat'
+    assert ready_today['temperature_max'] == 39.0
+
+    alerts_ready = client.get(
+        f'/mp/api/v1/alerts?pair_id={pair_id}',
+        headers={'Authorization': f'Bearer {plain}'},
+    )
+    ready_alert = alerts_ready.get_json()['data']['weather']
+    assert ready_alert['weather_available'] is True
+    assert ready_alert['temperature_max'] == 39
+
+
+def test_mp_elders_patch_updates_member_profile_fields(app, client, db_session):
+    from core.db_models import FamilyMember, Pair, User
+    from core.security import hash_short_code
+    from core.time_utils import utcnow
+    from core.usage import create_api_token
+    from services.user._common import _create_pair_record
+
+    with app.app_context():
+        user = User(username='mp_patch_member_user', role='user')
+        user.set_password('pw123456')
+        db_session.add(user)
+        db_session.commit()
+        member = FamilyMember(
+            user_id=user.id,
+            name='旧称呼',
+            relation='亲戚',
+            age=66,
+            gender='男性',
+            chronic_diseases='["高血压"]',
+        )
+        db_session.add(member)
+        db_session.flush()
+        pair = _create_pair_record(
+            caregiver_id=user.id,
+            location_query='都昌县',
+            member_id=member.id,
+            flush=True,
+        )
+        pair.short_code_hash = hash_short_code(pair.short_code)
+        pair.last_active_at = utcnow()
+        db_session.commit()
+        pair_id = pair.id
+        member_id = member.id
+        plain = create_api_token(user.id, name='patch-member')
+
+    response = client.patch(
+        f'/mp/api/v1/elders/{pair_id}',
+        json={
+            'name': '妈妈',
+            'relation': '母亲',
+            'age': 78,
+            'gender': '女',
+            'location_query': '九江市都昌县',
+            'chronic_diseases': ['高血压', '糖尿病'],
+        },
+        headers={'Authorization': f'Bearer {plain}'},
+    )
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload['success'] is True
+    assert payload['data']['pair_id'] == pair_id
+    assert payload['data']['member']['name'] == '妈妈'
+    assert payload['data']['member']['relation'] == '母亲'
+    assert payload['data']['member']['age'] == 78
+    assert payload['data']['member']['gender'] == '女性'
+    assert payload['data']['member']['chronic_diseases'] == ['高血压', '糖尿病']
+    assert payload['data']['location_query'] == '九江市都昌县'
+
+    with app.app_context():
+        member = db_session.get(FamilyMember, member_id)
+        pair = db_session.get(Pair, pair_id)
+        assert member.name == '妈妈'
+        assert member.relation == '母亲'
+        assert member.age == 78
+        assert member.gender == '女性'
+        assert pair.location_query == '九江市都昌县'
+
+
+def test_mp_elders_delete_unbinds_member_like_web(app, client, db_session):
+    from core.db_models import (
+        FamilyMember,
+        FamilyMemberProfile,
+        Notification,
+        Pair,
+        UsageEvent,
+        User,
+    )
+    from core.usage import create_api_token
+    from services.user._common import _create_pair_record
+
+    with app.app_context():
+        user = User(username='mp_delete_user', role='user')
+        user.set_password('pw123456')
+        db_session.add(user)
+        db_session.commit()
+        member = FamilyMember(
+            user_id=user.id,
+            name='李奶奶',
+            relation='母亲',
+            age=80,
+            gender='女性',
+        )
+        db_session.add(member)
+        db_session.flush()
+        db_session.add(FamilyMemberProfile(member_id=member.id, alert_enabled=True))
+        pair = _create_pair_record(
+            caregiver_id=user.id,
+            location_query='都昌县',
+            member_id=member.id,
+            flush=True,
+        )
+        db_session.add(Notification(
+            user_id=user.id,
+            member_id=member.id,
+            title='测试通知',
+            message='删除前应一并清理',
+        ))
+        db_session.add(UsageEvent(
+            user_id=user.id,
+            member_id=member.id,
+            pair_id=pair.id,
+            event_type='elder_profile_created',
+            source='miniprogram',
+        ))
+        db_session.commit()
+        pair_id = pair.id
+        member_id = member.id
+        user_id = user.id
+        plain = create_api_token(user.id, name='delete-elder')
+
+    response = client.delete(
+        f'/mp/api/v1/elders/{pair_id}',
+        headers={'Authorization': f'Bearer {plain}'},
+    )
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload['success'] is True
+
+    listed = client.get(
+        '/mp/api/v1/elders',
+        headers={'Authorization': f'Bearer {plain}'},
+    )
+    assert listed.status_code == 200
+    assert listed.get_json()['data'] == []
+
+    with app.app_context():
+        assert db_session.get(FamilyMember, member_id) is None
+        remaining_pair = db_session.get(Pair, pair_id)
+        assert remaining_pair is not None
+        assert remaining_pair.member_id is None
+        assert remaining_pair.status == 'inactive'
+        assert Notification.query.filter_by(member_id=member_id).count() == 0
+        leftover_events = UsageEvent.query.filter_by(user_id=user_id).all()
+        assert leftover_events
+        assert all(event.member_id is None for event in leftover_events)
+
+
+def test_mp_elders_delete_rejects_other_users_pair(app, client, db_session):
+    from core.db_models import FamilyMember, Pair, User
+    from core.usage import create_api_token
+    from services.user._common import _create_pair_record
+
+    with app.app_context():
+        owner = User(username='mp_delete_owner', role='user')
+        owner.set_password('pw123456')
+        stranger = User(username='mp_delete_stranger', role='user')
+        stranger.set_password('pw123456')
+        db_session.add_all([owner, stranger])
+        db_session.commit()
+        member = FamilyMember(user_id=owner.id, name='王爷爷', relation='父亲', age=82)
+        db_session.add(member)
+        db_session.flush()
+        pair = _create_pair_record(
+            caregiver_id=owner.id,
+            location_query='都昌县',
+            member_id=member.id,
+            flush=True,
+        )
+        db_session.commit()
+        pair_id = pair.id
+        member_id = member.id
+        stranger_token = create_api_token(stranger.id, name='stranger')
+
+    response = client.delete(
+        f'/mp/api/v1/elders/{pair_id}',
+        headers={'Authorization': f'Bearer {stranger_token}'},
+    )
+
+    assert response.status_code == 404
+    assert response.get_json()['error'] == 'not_found'
+    with app.app_context():
+        assert db_session.get(FamilyMember, member_id) is not None
+        assert db_session.get(Pair, pair_id).status == 'active'
+
+
+def test_mp_elders_delete_location_only_pair_stays_inactive(app, client, db_session):
+    from core.db_models import Pair, User
+    from core.usage import create_api_token
+    from services.user._common import _create_pair_record
+
+    with app.app_context():
+        user = User(username='mp_delete_location_user', role='user')
+        user.set_password('pw123456')
+        db_session.add(user)
+        db_session.commit()
+        pair = _create_pair_record(
+            caregiver_id=user.id,
+            location_query='都昌县',
+            member_id=None,
+            flush=True,
+        )
+        db_session.commit()
+        pair_id = pair.id
+        plain = create_api_token(user.id, name='delete-location')
+
+    response = client.delete(
+        f'/mp/api/v1/elders/{pair_id}',
+        headers={'Authorization': f'Bearer {plain}'},
+    )
+
+    assert response.status_code == 200
+    with app.app_context():
+        remaining = db_session.get(Pair, pair_id)
+        assert remaining.status == 'inactive'
+        assert remaining.member_id is None

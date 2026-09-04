@@ -43,7 +43,7 @@ def triage_symptoms(text, keywords=None):
     if is_emergency:
         actions = [
             '如出现胸痛、呼吸困难或意识不清，请立即就医或拨打120。',
-            '建议尽快联系家属或村医协助处理。'
+            '建议尽快联系家属协助处理。'
         ]
 
     return {

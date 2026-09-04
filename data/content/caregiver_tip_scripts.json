@@ -1,0 +1,25 @@
+{
+  "cold": {
+    "title": "【寒潮行动提醒】",
+    "lead": "{address}，我看到你那边今天可能比较冷",
+    "temp_clause": "（最低约 {tmin}°C）",
+    "advice": "建议：尽量少出门，外出注意保暖防滑；室内注意保暖，别受凉。"
+  },
+  "heat": {
+    "title": "【高温行动提醒】",
+    "lead": "{address}，我看到你那边今天可能会很热",
+    "temp_clause": "（最高约 {tmax}°C）",
+    "advice": "建议：避开中午外出，多喝水；室内开风扇/空调或找阴凉处休息。"
+  },
+  "daily": {
+    "title": "【日常提醒】",
+    "lead": "{address}，我这边看看你那边天气有变化，注意劳逸结合，出门记得带水/外套。"
+  },
+  "weather_unavailable": {
+    "title": "【天气更新中】",
+    "lead": "风险等级暂不显示。仍可打开行动页完成安全确认或求助。"
+  },
+  "disclaimer": "说明：这是行动提醒，不提供医疗诊断/治疗建议；如明显不适请及时就医。",
+  "location_line": "地点：{location}",
+  "action_line": "（可选）行动页：{action_link}  短码：{short_code}"
+}

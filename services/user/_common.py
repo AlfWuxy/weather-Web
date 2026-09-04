@@ -7,18 +7,21 @@ from flask import current_app, flash, has_app_context, url_for
 from flask_login import current_user
 
 from core.extensions import db
-from core.db_models import Pair, PairActionToken, PairLink
+from core.db_models import (
+    FamilyMember,
+    FamilyMemberProfile,
+    HealthDiary,
+    MedicationReminder,
+    Notification,
+    Pair,
+    PairActionToken,
+    PairLink,
+    UsageEvent,
+)
 from core.security import hash_identifier, hash_pair_token, hash_short_code
 from core.time_utils import utcnow
+from core.daily_tips import HEAT_RISK_LABELS, label_for_heat_level
 from utils.validators import sanitize_input
-
-
-HEAT_RISK_LABELS = {
-    'low': '低风险',
-    'medium': '中风险',
-    'high': '高风险',
-    'extreme': '极高'
-}
 
 RELAY_STAGE_ORDER = ['none', 'caregiver', 'backup', 'community', 'emergency']
 RELAY_STAGE_LABELS = {
@@ -70,29 +73,9 @@ def _relay_stage_rank(stage):
 
 
 def _action_plan(risk_label):
-    if risk_label == '极高':
-        return [
-            {'id': 'stay_cool', 'title': '留在有降温条件的室内', 'detail': '尽量避免外出，保持室内通风降温。'},
-            {'id': 'contact_now', 'title': '立即联系照护人/邻里', 'detail': '提前告知今日风险与行动安排。'},
-            {'id': 'cooling_center', 'title': '条件不足时优先去避暑点', 'detail': '优先选择就近、开放的避暑场所。'}
-        ]
-    if risk_label == '高风险':
-        return [
-            {'id': 'stay_indoor', 'title': '尽量待在阴凉通风处', 'detail': '避开正午高温时段外出。'},
-            {'id': 'hydrate', 'title': '少量多次补水', 'detail': '身边备好水或淡盐饮品。'},
-            {'id': 'check_in', 'title': '安排每日确认', 'detail': '与家人/邻里保持联系。'}
-        ]
-    if risk_label == '中风险':
-        return [
-            {'id': 'avoid_sun', 'title': '减少连续暴晒', 'detail': '户外活动分段进行。'},
-            {'id': 'cooling', 'title': '准备降温物品', 'detail': '风扇、湿毛巾或遮阳物品。'},
-            {'id': 'watch_signs', 'title': '关注体感变化', 'detail': '感到不适及时休息。'}
-        ]
-    return [
-        {'id': 'water', 'title': '规律补水', 'detail': '保持日常饮水习惯。'},
-        {'id': 'ventilate', 'title': '室内通风', 'detail': '早晚开窗换气。'},
-        {'id': 'shade', 'title': '适度遮阳', 'detail': '外出注意遮阳防晒。'}
-    ]
+    from core.daily_tips import action_plan_for_risk
+
+    return action_plan_for_risk(risk_label)
 
 
 def _generate_short_code():
@@ -158,6 +141,53 @@ def _create_pair_record(caregiver_id, location_query, member_id=None, flush=Fals
     if flush:
         db.session.flush()
     return pair
+
+
+def unbind_family_member_for_caregiver(user_id, member_id):
+    """删除照护人名下的家庭成员，并解绑其所有配对。不提交事务。
+
+    Pair 行保留：member_id 置空、status 设为 inactive。该成员的健康日记、
+    用药提醒和通知删除；UsageEvent 保留行但去掉 member_id。
+    找不到归属该照护人的成员时返回 False。
+    """
+    member = FamilyMember.query.filter_by(id=member_id, user_id=user_id).first()
+    if not member:
+        return False
+
+    HealthDiary.query.filter_by(member_id=member.id, user_id=user_id).delete()
+    MedicationReminder.query.filter_by(member_id=member.id, user_id=user_id).delete()
+    Notification.query.filter_by(member_id=member.id, user_id=user_id).delete()
+    UsageEvent.query.filter_by(member_id=member.id, user_id=user_id).update(
+        {UsageEvent.member_id: None},
+        synchronize_session=False,
+    )
+    pairs = Pair.query.filter_by(member_id=member.id, caregiver_id=user_id).all()
+    for pair in pairs:
+        pair.member_id = None
+        pair.status = 'inactive'
+    profile = FamilyMemberProfile.query.filter_by(member_id=member.id).first()
+    if profile:
+        db.session.delete(profile)
+    db.session.delete(member)
+    return True
+
+
+def unbind_pair_for_caregiver(user_id, pair):
+    """解绑照护人名下的一条配对。不提交事务。
+
+    若配对挂了该照护人的家庭成员，语义与网页删除家人相同（删档案并停用
+    该成员的全部配对）。仅有地点、没有成员的配对只把本条标为 inactive。
+    """
+    if pair is None or pair.caregiver_id != user_id:
+        return False
+    if pair.member_id:
+        unbound = unbind_family_member_for_caregiver(user_id, pair.member_id)
+        if not unbound:
+            pair.member_id = None
+            pair.status = 'inactive'
+        return True
+    pair.status = 'inactive'
+    return True
 
 
 def _derive_pair_action_token(record):

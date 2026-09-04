@@ -35,7 +35,11 @@ Page({
       wx.setStorageSync('api_token', token);
       wx.reLaunch({ url: '/pages/elders/index' });
     } catch (e) {
-      wx.showToast({ title: '绑定失败：Token 无效', icon: 'none' });
+      const missingBase = String(e && e.message) === 'miniapp_api_base_missing';
+      wx.showToast({
+        title: missingBase ? '未配置 API 地址' : '绑定失败：Token 无效',
+        icon: 'none',
+      });
     } finally {
       this.setData({ busy: false });
     }

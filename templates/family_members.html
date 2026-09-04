@@ -83,17 +83,17 @@
         <div class="row g-3 yl-fade-up yl-fade-up-d2">
             {% for m in family_members %}
             <div class="col-md-6 col-xl-4">
-                <div class="card member-card risk-{{ m.risk_level or 'low' }} h-100">
+                <div class="card member-card risk-{{ m.risk_level or 'unknown' }} h-100">
                     <div class="card-body">
                         <div class="d-flex align-items-center gap-3 mb-3">
                             <div class="member-avatar">{{ m.name[:1] }}</div>
                             <div class="flex-grow-1 min-w-0">
                                 <h5 class="mb-0 text-truncate">{{ m.name }}</h5>
                                 <div class="text-muted" style="font-size:.85rem;">
-                                    {{ m.age }}岁 · {{ m.gender or '—' }} · 与我的关系:{{ m.relation or '—' }}
+                                    {{ (m.age ~ '岁') if m.age else '年龄未填' }} · {{ m.gender or '—' }} · 与我的关系:{{ m.relation or '—' }}
                                 </div>
                             </div>
-                            <span class="risk-badge risk-{{ m.risk_level or 'low' }} badge">{{ m.risk_label or '低风险' }}</span>
+                            <span class="risk-badge risk-{{ m.risk_level or 'unknown' }} badge">{{ m.risk_label or '风险未知' }}</span>
                             {{ metric_info('member_risk_score', {'成员': m.name, '本次得分': m.risk.score if m.risk else '--', '原因': m.risk.reasons|join('、') if m.risk and m.risk.reasons else '暂无加分原因'}) }}
                         </div>
 
@@ -125,6 +125,12 @@
                             <a href="{{ url_for('health.family_member_edit', member_id=m.id) }}" class="btn btn-sm btn-outline-secondary" aria-label="编辑 {{ m.name }} 的档案">
                                 <i class="bi bi-pencil"></i>
                             </a>
+                            <form method="POST" action="{{ url_for('health.family_member_delete', member_id=m.id) }}" onsubmit="return confirm('确定删除 {{ m.name }} 的档案？相关配对会解除。');">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                <button type="submit" class="btn btn-sm btn-outline-danger" aria-label="删除 {{ m.name }}">
+                                    <i class="bi bi-trash"></i>
+                                </button>
+                            </form>
                         </div>
                     </div>
                 </div>

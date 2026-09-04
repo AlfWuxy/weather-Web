@@ -312,6 +312,54 @@ class TestMpApiAtomicCreate:
             count = FamilyMember.query.filter_by(user_id=user.id).count()
             assert count == 0, "校验失败不应留下残留记录"
 
+    def test_invalid_gender_is_rejected(self, app, client):
+        from core.extensions import db
+        from core.db_models import FamilyMember
+        from core.usage import create_api_token
+        with app.app_context():
+            db.create_all()
+            user = _make_user(db.session, 'mpgender', 'MpPass123!')
+            token = create_api_token(user.id, name='test')
+
+            resp = client.post(
+                '/mp/api/v1/elders',
+                data=json.dumps({
+                    'name': '测试老人',
+                    'relation': '父亲',
+                    'location_query': '都昌',
+                    'gender': '不明生物',
+                }),
+                content_type='application/json',
+                headers={'Authorization': f'Bearer {token}'},
+            )
+            assert resp.status_code == 400
+            assert resp.get_json()['error'] == 'invalid_gender'
+            assert FamilyMember.query.filter_by(user_id=user.id).count() == 0
+
+    def test_male_gender_is_normalized(self, app, client):
+        from core.extensions import db
+        from core.db_models import FamilyMember
+        from core.usage import create_api_token
+        with app.app_context():
+            db.create_all()
+            user = _make_user(db.session, 'mpgender2', 'MpPass123!')
+            token = create_api_token(user.id, name='test')
+
+            resp = client.post(
+                '/mp/api/v1/elders',
+                data=json.dumps({
+                    'name': '测试老人',
+                    'relation': '父亲',
+                    'location_query': '都昌',
+                    'gender': '男',
+                }),
+                content_type='application/json',
+                headers={'Authorization': f'Bearer {token}'},
+            )
+            assert resp.status_code == 200
+            member = FamilyMember.query.filter_by(user_id=user.id).first()
+            assert member.gender == '男性'
+
 
 # ====================================================================
 # #4  Open-Meteo 回退 AQI 标记修正
@@ -400,6 +448,43 @@ class TestOpenMeteoAqiFlag:
             assert result['temperature_max'] == 37.0
             assert result['temperature_min'] == 19.0
             assert result.get('temperature_estimated') is False
+
+    def test_qweather_realtime_missing_text_is_not_sunny(self, app):
+        from unittest.mock import patch, MagicMock
+        with app.app_context():
+            from services.weather_service import WeatherService
+            ws = WeatherService()
+            ws.qweather_key = 'test_key'
+            ws.api_base_url = 'https://test.api'
+
+            mock_resp = MagicMock()
+            mock_resp.status_code = 200
+            mock_resp.json.return_value = {
+                'code': '200',
+                'now': {
+                    'temp': '30',
+                    'humidity': '60',
+                    'pressure': '1013',
+                    'windSpeed': '5',
+                }
+            }
+            mock_air = MagicMock()
+            mock_air.status_code = 200
+            mock_air.json.return_value = {'code': '404'}
+            mock_daily = MagicMock()
+            mock_daily.status_code = 200
+            mock_daily.json.return_value = {
+                'code': '200',
+                'daily': [{'tempMax': '37', 'tempMin': '19'}]
+            }
+
+            with patch('requests.get', side_effect=[mock_resp, mock_daily, mock_air]):
+                result = ws.get_current_weather('测试城市')
+
+            assert result is not None
+            assert result.get('weather_condition') != '晴'
+            assert not result.get('weather_condition')
+            assert result.get('feels_like') is None or result.get('feels_like') != result.get('temperature')
 
     def test_openmeteo_uses_hourly_when_daily_missing(self, app):
         """负向: Open-Meteo 缺失 daily 时应回退 hourly 推导，不使用固定 ±3。"""
@@ -537,6 +622,23 @@ class TestOpenMeteoAqiFlag:
             })
             types = [item['type'] for item in result.get('conditions', [])]
             assert '温差过大' in types
+
+    def test_extreme_weather_skips_missing_temperature_and_aqi(self, app):
+        """缺测气温/AQI 不得当成 0°C / AQI 0 去判定极端天气。"""
+        with app.app_context():
+            from services.weather_service import WeatherService
+            ws = WeatherService()
+            result = ws.identify_extreme_weather({
+                'humidity': 90,
+                'wind_speed': 1,
+            })
+            types = [item['type'] for item in result.get('conditions', [])]
+            assert '高温' not in types
+            assert '低温' not in types
+            assert '重度空气污染' not in types
+            assert '中度空气污染' not in types
+            assert '轻度空气污染' not in types
+            assert '高湿度' in types
 
 
 class TestSunshineInputNormalization:

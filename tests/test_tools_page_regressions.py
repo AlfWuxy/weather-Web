@@ -128,6 +128,9 @@ def test_forecast_page_qweather_failure_does_not_render_demo_heat(client, db_ses
     assert '7 天天气正在更新' in body
     assert '34° / 26°' not in body
     assert '35° / 27°' not in body
+    assert '早晚测血压' not in body
+    assert '补水 1.5L+' not in body
+    assert '就诊负担升高' not in body
 
 
 def test_forecast_api_default_uses_qweather_only_data(client, db_session, monkeypatch):
@@ -345,18 +348,72 @@ def test_authenticated_nav_uses_desktop_mega_menu(client, db_session):
     body = response.get_data(as_text=True)
     assert 'id="appMegaMenu"' in body
     assert 'data-nav-more-trigger="desktop"' in body
-    assert 'AI 疾病预测' in body
-    assert 'AI 提问' in body
+    assert 'AI 提问' not in body
     assert '健康评估' in body
     assert '家庭成员' in body
 
 
+def test_authenticated_nav_hides_research_tools_from_caregiver(client, db_session):
+    user = _create_user(db_session, username='care_nav_user', role='user')
+    _login_as(client, user.id)
+
+    body = client.get('/dashboard').get_data(as_text=True)
+    assert 'AI 提问' not in body
+    assert '慢病风险评估' not in body
+    assert '健康日记' not in body
+    assert '年度健康报告' not in body
+    assert 'href="/ml-prediction"' not in body
+    assert '健康评估' in body
+    assert '社区风险' in body
+
+
+def test_admin_nav_keeps_research_tools(client, db_session):
+    user = _create_user(db_session, username='admin_nav_user', role='admin')
+    _login_as(client, user.id)
+
+    body = client.get('/dashboard').get_data(as_text=True)
+    assert 'AI 提问' in body
+    assert '慢病风险评估' in body
+    assert '健康日记' in body
+    assert '年度健康报告' in body
+    assert 'id="ai-floating-chat"' in body
+    assert 'id="ai-chat-window"' in body
+    assert 'role="dialog"' in body
+    assert 'aria-labelledby="ai-chat-title"' in body
+    assert 'aria-hidden="true"' in body
+    assert 'aria-controls="ai-chat-window"' in body
+    assert 'aria-expanded="false"' in body
+    assert 'role="log"' in body
+
+
+def test_caregiver_dashboard_hides_ai_floating_chat(client, db_session):
+    user = _create_user(db_session, username='care_ai_float_user', role='user')
+    _login_as(client, user.id)
+
+    body = client.get('/dashboard').get_data(as_text=True)
+    assert 'id="ai-floating-chat"' not in body
+    assert 'ai-floating-chat.js' not in body
+
+
+def test_caregiver_cannot_open_research_tools(client, db_session):
+    user = _create_user(db_session, username='care_research_block_user', role='user')
+    _login_as(client, user.id)
+
+    for path in ('/ai-qa', '/chronic-risk', '/ml-prediction', '/annual-report'):
+        response = client.get(path, follow_redirects=False)
+        assert response.status_code in (302, 303), path
+        assert '/dashboard' in (response.headers.get('Location') or ''), path
+
+
+
 def test_ml_prediction_post_renders_result_and_preserves_form(client, db_session, monkeypatch):
-    user = _create_user(db_session, username='ml_user')
+    user = _create_user(db_session, username='ml_user', role='admin')
     _login_as(client, user.id)
     captured = {}
 
     class FakeMLService:
+        model_loaded = True
+
         def predict_disease_risk(self, user_info, weather_info=None):
             captured['user_info'] = user_info
             return {
@@ -401,14 +458,14 @@ def test_ml_prediction_post_renders_result_and_preserves_form(client, db_session
     assert 'value="都昌"' in body
     assert 'name="chronic"' not in body
     assert '慢病档案不会参与这项类别排序' in body
-    assert captured['user_info'] == {'age': 72, 'gender': '男'}
+    assert captured['user_info'] == {'age': 72, 'gender': '未知'}
 
 
 def test_ml_prediction_selected_member_uses_age_and_gender_only(client, db_session, monkeypatch):
     import json
     from core.db_models import FamilyMember
 
-    user = _create_user(db_session, username='ml_member_user')
+    user = _create_user(db_session, username='ml_member_user', role='admin')
     member = FamilyMember(
         user_id=user.id,
         name='母亲',
@@ -423,6 +480,8 @@ def test_ml_prediction_selected_member_uses_age_and_gender_only(client, db_sessi
     captured = {}
 
     class FakeMLService:
+        model_loaded = True
+
         def predict_disease_risk(self, user_info, weather_info=None):
             captured['user_info'] = user_info
             return {
@@ -457,7 +516,9 @@ def test_ml_prediction_selected_member_uses_age_and_gender_only(client, db_sessi
 
 
 def test_chronic_risk_post_no_longer_returns_405(client, db_session, monkeypatch):
-    user = _create_user(db_session, username='chronic_user')
+    user = _create_user(db_session, username='chronic_user', role='admin')
+    user.age = 72
+    db_session.commit()
     _login_as(client, user.id)
     captured = {}
 
@@ -538,7 +599,9 @@ def test_chronic_risk_post_no_longer_returns_405(client, db_session, monkeypatch
 
 
 def test_ml_and_chronic_pages_reject_mock_weather(client, db_session, monkeypatch):
-    user = _create_user(db_session, username='tool_mock_weather_user')
+    user = _create_user(db_session, username='tool_mock_weather_user', role='admin')
+    user.age = 72
+    db_session.commit()
     _login_as(client, user.id)
 
     monkeypatch.setattr(
@@ -547,6 +610,8 @@ def test_ml_and_chronic_pages_reject_mock_weather(client, db_session, monkeypatc
     )
 
     class UnexpectedService:
+        model_loaded = True
+
         def __getattr__(self, _name):
             raise AssertionError('模拟天气不应进入风险服务')
 
@@ -566,7 +631,7 @@ def test_ml_and_chronic_pages_reject_mock_weather(client, db_session, monkeypatc
 
     assert ml_response.status_code == 200
     assert chronic_response.status_code == 200
-    assert '健康关注线索暂时无法生成' in ml_response.get_data(as_text=True)
+    assert '天气正在更新，类别线索暂不显示' in ml_response.get_data(as_text=True)
     assert '天气正在更新，本次提醒暂未生成' in chronic_response.get_data(as_text=True)
     assert '模拟值不会进入' not in ml_response.get_data(as_text=True)
     assert '模拟值不会进入' not in chronic_response.get_data(as_text=True)
@@ -575,7 +640,7 @@ def test_ml_and_chronic_pages_reject_mock_weather(client, db_session, monkeypatc
 
 
 def test_chronic_risk_get_shows_empty_state_without_synthetic_result(client, db_session):
-    user = _create_user(db_session, username='chronic_empty_user')
+    user = _create_user(db_session, username='chronic_empty_user', role='admin')
     _login_as(client, user.id)
 
     response = client.get('/chronic-risk')
@@ -589,6 +654,137 @@ def test_chronic_risk_get_shows_empty_state_without_synthetic_result(client, db_
     assert '本周内到社区医生处复诊' not in body
     assert '综合当前数据,控制偏向偏松' not in body
     assert '血压波动' not in body
+
+
+def _fake_chronic_service(score=87.3):
+    class FakeChronicService:
+        def predict_individual_risk(self, user_info, weather_data, target_diseases=None):
+            return {
+                'overall_risk': {'score': score, 'level': '高风险'},
+                'disease_risks': {
+                    'cardiovascular': {
+                        'risk_score': score,
+                        'risk_level': '高风险',
+                        'raw_dlnm_rr': 1.2,
+                        'dlnm_disease_modifier': 1.1,
+                        'dlnm_age_modifier': 1.3,
+                        'dlnm_adjusted_rr': 1.716,
+                        'dlnm_rr_cap': 3.5,
+                        'chronic_age_amplifier': 1.1,
+                        'comorbidity_amplifier': 1.4,
+                        'personal_rr': 2.643,
+                        'vital_adjustment': 8,
+                    },
+                },
+                'recommendations': [{'advice': '按时服药'}],
+                'vital_adjustment': {'score_adjustment': 8, 'factors': []},
+            }
+
+    return FakeChronicService()
+
+
+def test_chronic_risk_post_redirects_and_refresh_keeps_result(client, db_session, monkeypatch):
+    user = _create_user(db_session, username='chronic_persist_user', role='admin')
+    user.age = 72
+    db_session.commit()
+    _login_as(client, user.id)
+    monkeypatch.setattr(
+        'blueprints.tools.get_weather_with_cache',
+        lambda _location: ({'temperature': 32, 'humidity': 70, 'data_source': 'QWeather', 'is_mock': False}, False),
+    )
+    monkeypatch.setattr('blueprints.tools.get_chronic_service', lambda: _fake_chronic_service())
+
+    posted = client.post(
+        '/chronic-risk',
+        data={
+            'disease': 'hypertension',
+            'sbp': '142',
+            'fbg': '7.8',
+            'adherence': 'loose',
+            'symptoms': '头晕',
+            'csrf_token': 'test-csrf-token',
+        },
+        follow_redirects=False,
+    )
+
+    assert posted.status_code in (302, 303)
+    assert posted.headers['Location'].endswith('/chronic-risk')
+
+    refreshed = client.get('/chronic-risk')
+    body = refreshed.get_data(as_text=True)
+    assert refreshed.status_code == 200
+    assert '综合风险评分' in body
+    assert '按时服药' in body
+    assert 'value="142"' in body
+
+
+def test_chronic_risk_weather_error_survives_refresh_without_resubmit(client, db_session, monkeypatch):
+    user = _create_user(db_session, username='chronic_error_persist_user', role='admin')
+    user.age = 72
+    db_session.commit()
+    _login_as(client, user.id)
+    calls = {'count': 0}
+
+    def fake_weather(_location):
+        calls['count'] += 1
+        return ({'temperature': 37, 'humidity': 70, 'data_source': 'Demo', 'is_mock': True}, False)
+
+    monkeypatch.setattr('blueprints.tools.get_weather_with_cache', fake_weather)
+    monkeypatch.setattr(
+        'blueprints.tools.get_chronic_service',
+        lambda: (_ for _ in ()).throw(AssertionError('模拟天气不应进入风险服务')),
+    )
+
+    posted = client.post(
+        '/chronic-risk',
+        data={'disease': 'hypertension', 'csrf_token': 'test-csrf-token'},
+        follow_redirects=False,
+    )
+
+    assert posted.status_code in (302, 303)
+    refreshed = client.get('/chronic-risk')
+    body = refreshed.get_data(as_text=True)
+    assert '天气正在更新，本次提醒暂未生成' in body
+    assert '综合风险评分' not in body
+    assert calls['count'] == 1
+
+
+def test_chronic_risk_result_cleared_after_logout(client, db_session, monkeypatch):
+    user = _create_user(db_session, username='chronic_logout_user', role='admin')
+    user.age = 72
+    user.set_password('testpass')
+    db_session.commit()
+    _login_as(client, user.id)
+    monkeypatch.setattr(
+        'blueprints.tools.get_weather_with_cache',
+        lambda _location: ({'temperature': 32, 'humidity': 70, 'data_source': 'QWeather', 'is_mock': False}, False),
+    )
+    monkeypatch.setattr('blueprints.tools.get_chronic_service', lambda: _fake_chronic_service())
+
+    client.post(
+        '/chronic-risk',
+        data={'disease': 'hypertension', 'csrf_token': 'test-csrf-token'},
+        follow_redirects=True,
+    )
+    client.post('/logout', data={'csrf_token': 'test-csrf-token'}, follow_redirects=False)
+
+    with client.session_transaction() as stored:
+        assert 'chronic_risk_last' not in stored
+        stored['_csrf_token'] = 'after-logout-csrf'
+
+    client.post(
+        '/login',
+        data={
+            'username': 'chronic_logout_user',
+            'password': 'testpass',
+            'csrf_token': 'after-logout-csrf',
+        },
+        follow_redirects=True,
+    )
+    response = client.get('/chronic-risk')
+    body = response.get_data(as_text=True)
+    assert '填写信息后生成评估' in body
+    assert '综合风险评分' not in body
 
 
 def test_chronic_risk_service_uses_submitted_vitals():
@@ -609,6 +805,42 @@ def test_chronic_risk_service_uses_submitted_vitals():
 
     assert high['overall_risk']['score'] > base['overall_risk']['score']
     assert high['vital_adjustment']['score_adjustment'] > base['vital_adjustment']['score_adjustment']
+
+
+def test_cooling_page_does_not_claim_free_entry_or_id_check(client, db_session, monkeypatch):
+    monkeypatch.setattr(
+        'services.public_service.get_weather_with_cache',
+        lambda location: ({'temperature': 27.5, 'is_mock': False, 'data_source': 'QWeather'}, False),
+    )
+
+    body = client.get('/cooling?location=都昌').get_data(as_text=True)
+
+    assert '多数免费开放' not in body
+    assert '登记身份证' not in body
+    assert '以各点标注为准' in body
+    assert '高血压、心脑血管病人' not in body
+
+
+def test_cooling_page_reads_temperature_advice_from_json(client, db_session, monkeypatch):
+    monkeypatch.setattr(
+        'services.public_service.get_weather_with_cache',
+        lambda location: ({
+            'temperature': 36.0,
+            'is_mock': False,
+            'data_source': 'QWeather',
+        }, False),
+    )
+
+    body = client.get('/cooling?location=都昌').get_data(as_text=True)
+    from core.cooling_copy import load_cooling_page_copy
+
+    load_cooling_page_copy.cache_clear()
+    copy = load_cooling_page_copy()
+    assert copy['footer']
+    assert any(band.get('min') == 35 for band in copy['bands'])
+    assert copy['bands'][0]['title'] in body
+    assert copy['footer'] in body
+    assert '高血压、心脑血管病人' not in body
 
 
 def test_cooling_page_empty_database_does_not_render_default_resources(client, db_session, monkeypatch):
@@ -769,3 +1001,99 @@ def test_cooling_community_filter_supports_new_and_legacy_query_names(client, db
     assert '甲村纳凉点' not in legacy_body
     assert 'name="community"' in legacy_body
     assert 'value="乙村"' in legacy_body
+
+
+def test_ml_prediction_get_does_not_prefill_default_age_65(client, db_session, monkeypatch):
+    user = _create_user(db_session, username='ml_no_age_get', role='admin')
+    _login_as(client, user.id)
+
+    class FakeMLService:
+        model_loaded = True
+
+        def predict_disease_risk(self, *_args, **_kwargs):
+            raise AssertionError('GET 不应预测')
+
+    monkeypatch.setattr('blueprints.tools.get_ml_service', lambda: FakeMLService())
+
+    body = client.get('/ml-prediction').get_data(as_text=True)
+    assert 'name="age"' in body
+    assert 'value="65"' not in body
+
+
+def test_ml_prediction_post_without_age_does_not_invent_65(client, db_session, monkeypatch):
+    user = _create_user(db_session, username='ml_no_age_post', role='admin')
+    _login_as(client, user.id)
+
+    class FakeMLService:
+        model_loaded = True
+
+        def predict_disease_risk(self, *_args, **_kwargs):
+            raise AssertionError('缺年龄不应进入预测')
+
+    monkeypatch.setattr(
+        'blueprints.tools.get_weather_with_cache',
+        lambda _location: ({'temperature': 31, 'humidity': 68, 'data_source': 'QWeather', 'is_mock': False}, False),
+    )
+    monkeypatch.setattr('blueprints.tools.get_ml_service', lambda: FakeMLService())
+
+    response = client.post(
+        '/ml-prediction',
+        data={'location': '都昌', 'csrf_token': 'test-csrf-token'},
+        follow_redirects=True,
+    )
+    body = response.get_data(as_text=True)
+    assert response.status_code == 200
+    assert '请先填写年龄' in body
+    assert '本次天气调整关注分' not in body
+
+
+def test_chronic_risk_missing_age_is_reported_even_when_weather_is_unavailable(client, db_session, monkeypatch):
+    user = _create_user(db_session, username='chronic_age_before_weather', role='admin')
+    _login_as(client, user.id)
+
+    class UnexpectedChronic:
+        def predict_individual_risk(self, *_args, **_kwargs):
+            raise AssertionError('缺年龄不应进入慢病评估')
+
+    monkeypatch.setattr(
+        'blueprints.tools.get_weather_with_cache',
+        lambda _location: ({'temperature': 37, 'humidity': 70, 'data_source': 'Demo', 'is_mock': True}, False),
+    )
+    monkeypatch.setattr('blueprints.tools.get_chronic_service', lambda: UnexpectedChronic())
+
+    response = client.post(
+        '/chronic-risk',
+        data={'disease': 'hypertension', 'csrf_token': 'test-csrf-token'},
+        follow_redirects=True,
+    )
+    body = response.get_data(as_text=True)
+    assert '请先在个人设置填写年龄' in body
+    assert '综合风险评分' not in body
+
+
+def test_chronic_risk_post_without_age_does_not_invent_65(client, db_session, monkeypatch):
+    user = _create_user(db_session, username='chronic_no_age', role='admin')
+    _login_as(client, user.id)
+
+    class UnexpectedChronic:
+        def predict_individual_risk(self, *_args, **_kwargs):
+            raise AssertionError('缺年龄不应进入慢病评估')
+
+    monkeypatch.setattr(
+        'blueprints.tools.get_weather_with_cache',
+        lambda _location: ({'temperature': 32, 'humidity': 70, 'data_source': 'QWeather', 'is_mock': False}, False),
+    )
+    monkeypatch.setattr('blueprints.tools.get_chronic_service', lambda: UnexpectedChronic())
+
+    response = client.post(
+        '/chronic-risk',
+        data={
+            'disease': 'hypertension',
+            'csrf_token': 'test-csrf-token',
+        },
+        follow_redirects=True,
+    )
+    body = response.get_data(as_text=True)
+    assert response.status_code == 200
+    assert '请先在个人设置填写年龄' in body
+    assert '综合风险评分' not in body

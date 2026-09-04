@@ -1,11 +1,11 @@
 <view style="padding: 16px;">
   <view class="card">
     <view style="display:flex; align-items:center; justify-content: space-between;">
-      <view style="font-size: 18px; font-weight: 700;">监测对象</view>
+      <view style="font-size: 18px; font-weight: 700;">照护对象</view>
       <button size="mini" class="btn-outline" bindtap="goSettings">设置</button>
     </view>
     <view class="muted" style="margin-top: 6px; font-size: 12px;">
-      支持多地区；预警触发逻辑以“官方预警 + 阈值规则”为主。
+      官方预警来自 QWeather。天气可用时才套用温度阈值。记录今天是否做到和附近避暑点请在网页完成。
     </view>
     <view style="margin-top: 12px;">
       <button class="btn-primary" bindtap="goCreate">新增老人</button>
@@ -19,7 +19,7 @@
   </block>
 
   <block wx:if="{{!loading && elders.length === 0}}">
-    <view class="muted" style="text-align:center; padding: 20px;">暂无老人，请先新增或在网页端添加。</view>
+    <view class="muted" style="text-align:center; padding: 20px;">暂无老人，请先新增，或到网页「照护工作台」添加。</view>
   </block>
 
   <block wx:for="{{elders}}" wx:key="pair_id">
@@ -34,13 +34,15 @@
             地点：{{item.location_query || item.community_code || '-'}}
           </view>
           <view class="muted" style="margin-top: 4px; font-size: 12px;">
-            Tmax {{item.today.temperature_max || '-'}} · Tmin {{item.today.temperature_min || '-'}}
+            <block wx:if="{{item.today.weather_available}}">Tmax {{item.today.temperature_max}} · Tmin {{item.today.temperature_min}}</block>
+            <block wx:else>天气更新中</block>
           </view>
         </view>
         <view>
           <view wx:if="{{item.today.trigger === 'heat'}}" style="background:#fee2e2; color:#991b1b; padding:4px 8px; border-radius: 999px; font-size: 12px;">高温</view>
           <view wx:elif="{{item.today.trigger === 'cold'}}" style="background:#dbeafe; color:#1d4ed8; padding:4px 8px; border-radius: 999px; font-size: 12px;">寒潮</view>
-          <view wx:else style="background:#f3f4f6; color:#374151; padding:4px 8px; border-radius: 999px; font-size: 12px;">正常</view>
+          <view wx:elif="{{item.today.weather_available}}" style="background:#f3f4f6; color:#374151; padding:4px 8px; border-radius: 999px; font-size: 12px;">暂无预警</view>
+          <view wx:else style="background:#fff7ed; color:#9a3412; padding:4px 8px; border-radius: 999px; font-size: 12px;">天气更新中</view>
         </view>
       </view>
 
@@ -48,6 +50,7 @@
         <button size="mini" class="btn-outline" data-pair-id="{{item.pair_id}}" bindtap="goAlerts">预警</button>
         <button size="mini" class="btn-outline" data-pair-id="{{item.pair_id}}" bindtap="goTemplate">话术</button>
         <button size="mini" class="btn-outline" data-pair-id="{{item.pair_id}}" bindtap="goEdit">编辑</button>
+        <button size="mini" class="btn-outline" data-pair-id="{{item.pair_id}}" bindtap="unbindElder">解除照护</button>
       </view>
     </view>
   </block>

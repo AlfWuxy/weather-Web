@@ -14,6 +14,16 @@
             <div class="d-flex gap-2">
                 <a class="btn btn-outline-secondary" href="{{ url_for('health.family_members') }}">返回列表</a>
                 <a class="btn btn-outline-warning" href="{{ url_for('health.family_member_edit', member_id=member.id) }}">编辑</a>
+                <form method="POST" action="{{ url_for('health.family_member_toggle_alert', member_id=member.id) }}">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <button type="submit" class="btn btn-outline-primary">
+                        {{ '暂停提醒' if profile.alert_enabled else '开启提醒' }}
+                    </button>
+                </form>
+                <form method="POST" action="{{ url_for('health.family_member_delete', member_id=member.id) }}" onsubmit="return confirm('确定删除 {{ member.name }} 的档案？相关配对会解除。');">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <button type="submit" class="btn btn-outline-danger">删除</button>
+                </form>
             </div>
         </div>
     </div>
@@ -25,7 +35,7 @@
                     <div class="d-flex align-items-start justify-content-between">
                         <div>
                             <h5 class="mb-1">基础信息</h5>
-                            <div class="text-muted">{{ member.gender or '-' }} · {{ member.age or '-' }}岁</div>
+                            <div class="text-muted">{{ member.gender or '-' }} · {{ (member.age ~ '岁') if member.age else '年龄未填' }}</div>
                         </div>
                         <span class="badge risk-badge risk-{{ risk.level }}">{{ risk.label }}</span>
                         {{ metric_info('member_risk_score', {'本次得分': risk.score, '原因': risk.reasons|join('、') if risk.reasons else '暂无加分原因'}) }}
@@ -87,7 +97,7 @@
                             <span class="badge bg-success-subtle text-success border">未触发</span>
                         {% endif %}
                         {% if weather_available and weather %}
-                            <div class="text-muted small mt-2">天气：{{ weather.temperature|round(1) }}°C / 湿度 {{ weather.humidity|round(0) }}% / AQI {{ weather.aqi or '--' }}</div>
+                            <div class="text-muted small mt-2">天气：{% if weather.temperature is not none %}{{ weather.temperature|round(1) }}°C{% else %}--{% endif %} / 湿度 {% if weather.humidity is not none %}{{ weather.humidity|round(0) }}%{% else %}--{% endif %} / AQI {{ weather.aqi if weather.aqi is not none else '--' }}</div>
                         {% else %}
                             <div class="text-muted small mt-2">风险提醒将在天气更新后显示。现在可先查看档案和日常防护建议。</div>
                         {% endif %}

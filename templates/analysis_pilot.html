@@ -10,9 +10,13 @@
       <div class="text-muted small">统计口径：最近 {{ days }} 天</div>
     </div>
     <div class="d-flex flex-wrap gap-2">
-      <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('analysis.pilot_export_csv', days=days) }}">
-        <i class="bi bi-download"></i> 导出 CSV
-      </a>
+      <form method="POST" action="{{ url_for('analysis.pilot_export_csv') }}" class="d-inline">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="days" value="{{ days }}">
+        <button type="submit" class="btn btn-outline-secondary btn-sm">
+          <i class="bi bi-download"></i> 导出 CSV
+        </button>
+      </form>
       <div class="btn-group btn-group-sm" role="group" aria-label="range">
         <a class="btn btn-outline-primary {% if days == 7 %}active{% endif %}" href="{{ url_for('analysis.pilot_dashboard', days=7) }}">7天</a>
         <a class="btn btn-outline-primary {% if days == 30 %}active{% endif %}" href="{{ url_for('analysis.pilot_dashboard', days=30) }}">30天</a>

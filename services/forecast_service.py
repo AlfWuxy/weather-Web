@@ -33,6 +33,7 @@ class ForecastService:
         
         # 加载历史数据
         self._load_historical_data()
+        self.visit_thresholds_fallback = True
         self._calculate_thresholds()
     
     def _load_historical_data(self):
@@ -136,6 +137,7 @@ class ForecastService:
                 round(self.visit_threshold_p90, 2),
                 round(self.visit_mean, 2)
             )
+            self.visit_thresholds_fallback = False
             
         except Exception as e:
             logging.getLogger(__name__).warning("Visit thresholds calculation failed: %s", e)
@@ -143,6 +145,7 @@ class ForecastService:
             self.visit_mean = 10
             self.visit_std = 5
             self.max_observed_daily_visits = 30
+            self.visit_thresholds_fallback = True
 
     def _safe_float(self, value, default=None):
         try:
@@ -158,7 +161,7 @@ class ForecastService:
         - 兼容含 ensemble 字段的 dict
         """
         base = {
-            'temp': 15.0,
+            'temp': None,
             'temp_min': None,
             'temp_max': None,
             'temperature_p10': None,
@@ -201,7 +204,7 @@ class ForecastService:
             if tmax is not None and tmin is not None:
                 temp = (tmax + tmin) / 2.0
 
-        base['temp'] = self._safe_float(temp, 15.0)
+        base['temp'] = self._safe_float(temp)
         base['temp_min'] = tmin
         base['temp_max'] = tmax
         base['temperature_p10'] = p10
@@ -249,16 +252,18 @@ class ForecastService:
         输出 0-100 及分项贡献。
         """
         temp_input = self._safe_float(temperature, None)
-        temp_imputed = temp_input is None
-        temp = 20.0 if temp_imputed else temp_input
+        if temp_input is None:
+            raise ValueError('请提供气温')
+        temp_imputed = False
+        temp = temp_input
 
         tmin_input = self._safe_float(temp_min, None)
         temp_min_imputed = tmin_input is None
         if temp_min_imputed:
             fallback_value = self._safe_float(temp_min_fallback, None)
             if fallback_value is None:
-                tmin = temp - 4.0
-                temp_min_source = 'temperature_minus_4'
+                tmin = None
+                temp_min_source = 'unavailable'
             else:
                 tmin = fallback_value
                 temp_min_source = 'temperature_uncertainty_lower'
@@ -268,7 +273,8 @@ class ForecastService:
 
         humidity_input = self._safe_float(humidity, None)
         humidity_imputed = humidity_input is None
-        hum = 60.0 if humidity_imputed else humidity_input
+        humidity_in_score = not humidity_imputed
+        hum = humidity_input
 
         pm = self._safe_float(pm25, None)
         aqi_used = None
@@ -276,19 +282,19 @@ class ForecastService:
         if pm is None:
             aqi_input = self._safe_float(aqi, None)
             aqi_imputed = aqi_input is None
-            aqi_v = 50.0 if aqi_imputed else aqi_input
-            # AQI 到 PM2.5 的保守近似（用于无PM预报时）
-            pm = max(5.0, min(220.0, aqi_v * 0.65))
             if aqi_imputed:
                 pm25_source = 'default_aqi_50'
                 pm25_detail_source = 'default_aqi_50'
-            elif aqi_origin == 'current_weather_context':
-                pm25_source = 'current_observation_aqi_proxy'
-                pm25_detail_source = 'current_weather_context'
             else:
-                pm25_source = 'aqi_proxy'
-                pm25_detail_source = 'day_aqi_input'
-            aqi_used = aqi_v
+                # AQI 到 PM2.5 的保守近似（仅在有当日 AQI 时使用）
+                pm = max(5.0, min(220.0, aqi_input * 0.65))
+                if aqi_origin == 'current_weather_context':
+                    pm25_source = 'current_observation_aqi_proxy'
+                    pm25_detail_source = 'current_weather_context'
+                else:
+                    pm25_source = 'aqi_proxy'
+                    pm25_detail_source = 'day_aqi_input'
+                aqi_used = aqi_input
         elif pm25_origin == 'current_weather_context':
             # 未来日没有污染物预报时复用当前实况，必须与未来日直接预报区分。
             pm25_source = 'current_observation_reuse'
@@ -298,23 +304,33 @@ class ForecastService:
             pm25_detail_source = pm25_origin or 'forecast_input'
 
         heat_score = float(np.clip((temp - 28.0) * 6.0, 0.0, 100.0))
-        pollution_score = float(np.clip((pm - 35.0) * 1.8, 0.0, 100.0))
-        humidity_score = float(np.clip((hum - 70.0) * 2.4, 0.0, 100.0))
-        hot_night_score = 100.0 if tmin >= 26 else 72.0 if tmin >= 24 else 45.0 if tmin >= 22 else 8.0
+        pollution_score = float(np.clip((pm - 35.0) * 1.8, 0.0, 100.0)) if pm is not None else 0.0
+        humidity_score = float(np.clip((hum - 70.0) * 2.4, 0.0, 100.0)) if humidity_in_score else 0.0
+        hot_night_in_score = tmin is not None
+        if hot_night_in_score:
+            hot_night_score = 100.0 if tmin >= 26 else 72.0 if tmin >= 24 else 45.0 if tmin >= 22 else 8.0
+        else:
+            hot_night_score = 0.0
+
+        # 只有当天污染物预报才计入评分；实况复用和缺测 PM/AQI 只做追溯，不编造默认 AQI 50。
+        pm25_in_score = pm25_source in ('direct', 'aqi_proxy')
+        scored_pollution = pollution_score if pm25_in_score else 0.0
+        scored_humidity = humidity_score if humidity_in_score else 0.0
+        scored_hot_night = hot_night_score if hot_night_in_score else 0.0
 
         synergy_bonus = 0.0
-        if heat_score >= 45 and pollution_score >= 40:
+        if heat_score >= 45 and scored_pollution >= 40:
             synergy_bonus += 8.0
-        if heat_score >= 45 and humidity_score >= 40:
+        if heat_score >= 45 and scored_humidity >= 40:
             synergy_bonus += 6.0
-        if hot_night_score >= 70 and pollution_score >= 35:
+        if scored_hot_night >= 70 and scored_pollution >= 35:
             synergy_bonus += 4.0
 
         pre_clip_score = (
             0.34 * heat_score
-            + 0.28 * pollution_score
-            + 0.18 * humidity_score
-            + 0.20 * hot_night_score
+            + 0.28 * scored_pollution
+            + 0.18 * scored_humidity
+            + 0.20 * scored_hot_night
             + synergy_bonus
         )
         final_score = float(np.clip(pre_clip_score, 0.0, 100.0))
@@ -332,15 +348,19 @@ class ForecastService:
             'final_score': round(final_score, 1),
             'synergy_bonus': round(synergy_bonus, 1),
             'level': level,
+            'score_basis': 'composite' if pm25_in_score else 'heat_humidity_hot_night',
+            'pm25_in_score': pm25_in_score,
+            'humidity_in_score': humidity_in_score,
+            'hot_night_in_score': hot_night_in_score,
             'components': {
                 'heat': round(heat_score, 1),
                 'pm25': round(pollution_score, 1),
                 'humidity': round(humidity_score, 1),
                 'hot_night': round(hot_night_score, 1)
             },
-            'hot_night': bool(tmin >= 22),
+            'hot_night': bool(hot_night_in_score and tmin >= 22),
             # pm25_proxy 保留旧接口语义；来源请以 pm25_source 为准。
-            'pm25_proxy': round(pm, 1),
+            'pm25_proxy': round(pm, 1) if pm is not None else None,
             'pm25_source': pm25_source,
             'inputs': {
                 'temperature': {
@@ -349,22 +369,25 @@ class ForecastService:
                     'source': 'default_20' if temp_imputed else 'corrected_forecast',
                 },
                 'temp_min': {
-                    'used_value': round(tmin, 1),
+                    'used_value': round(tmin, 1) if tmin is not None else None,
                     'imputed': temp_min_imputed,
                     'source': temp_min_source,
+                    'included_in_score': hot_night_in_score,
                 },
                 'humidity': {
-                    'used_value': round(hum, 1),
+                    'used_value': round(hum, 1) if hum is not None else None,
                     'imputed': humidity_imputed,
-                    'source': 'default_60' if humidity_imputed else 'forecast_input',
+                    'source': 'forecast_input' if humidity_in_score else 'missing',
+                    'included_in_score': humidity_in_score,
                 },
                 'pm25': {
-                    'used_value': round(pm, 1),
+                    'used_value': round(pm, 1) if pm is not None else None,
                     'imputed': pm25_source != 'direct',
                     'source': pm25_source,
                     'detail_source': pm25_detail_source,
                     'aqi_used': round(aqi_used, 1) if aqi_used is not None else None,
                     'aqi_imputed': aqi_imputed,
+                    'included_in_score': pm25_in_score,
                 },
             },
         }
@@ -400,60 +423,9 @@ class ForecastService:
         }
 
     def _build_role_action_cards(self, forecasts, summary):
-        """按角色输出行动卡：居民 / 村医 / 社区干部。"""
-        high_days = [row for row in forecasts if (self._safe_float(row.get('probability_high_visits'), 0.0) or 0.0) >= 50]
-        composite_high_days = [row for row in forecasts if (row.get('composite_exposure') or {}).get('level') == '高']
-        scenario = summary.get('scenario_totals') or {}
-        baseline_total = self._safe_float(scenario.get('baseline_total'), 0.0) or 0.0
-        worst_total = self._safe_float(scenario.get('worst_case_total'), baseline_total) or baseline_total
-        extra = max(0.0, worst_total - baseline_total)
-
-        resident_cards = [
-            {
-                'priority': 'high' if high_days else 'medium',
-                'title': '居民日常行动',
-                'action': '根据预警概率调整外出时段，优先早晚活动，午后减少户外暴露。'
-            }
-        ]
-        if composite_high_days:
-            resident_cards.append({
-                'priority': 'high',
-                'title': '复合暴露防护',
-                'action': '出现“高温+污染/湿度”叠加风险，建议补水、降温并减少高强度活动。'
-            })
-
-        doctor_cards = [
-            {
-                'priority': 'high' if high_days else 'medium',
-                'title': '村医排班准备',
-                'action': f'未来7天最坏情景较基线多约 {round(extra, 1)} 人次，建议提前安排门急诊与随访。'
-            }
-        ]
-        if any((row.get('cap_semantics') or {}).get('urgency') == 'immediate' for row in forecasts):
-            doctor_cards.append({
-                'priority': 'high',
-                'title': '高危人群追踪',
-                'action': '对老年慢病与近期不适人群进行电话回访，必要时上门复核。'
-            })
-
-        community_cards = [
-            {
-                'priority': 'high' if len(high_days) >= 2 else 'medium',
-                'title': '社区资源调度',
-                'action': '根据高风险日分布，动态调整避暑点开放时段和宣传频次。'
-            },
-            {
-                'priority': 'medium',
-                'title': '公众信息发布',
-                'action': '同步发布“开始降雨时间/结束时间”和分时段行动建议，减少信息摩擦。'
-            }
-        ]
-
-        return {
-            'resident': resident_cards,
-            'doctor': doctor_cards,
-            'community': community_cards
-        }
+        """按角色输出行动卡：居民 / 照护 / 社区。口吻走 JSON，接口键保持 resident/doctor/community。"""
+        from core.forecast_copy import build_role_action_cards
+        return build_role_action_cards(forecasts, summary)
 
     def _calculate_predictability(self, lead_day, model_spread=None, model_count=1, external_score=None):
         """
@@ -655,10 +627,45 @@ class ForecastService:
                 lag_profile.append(float(self.qm_params['mean']))
                 data_sources.append('climatology')
             else:
-                lag_profile.append(15.0)  # 默认值
-                data_sources.append('default')
+                lag_profile.append(None)
+                data_sources.append('missing')
         
         return lag_profile, data_sources
+
+    def _lag_sources_are_live(self, sources):
+        return bool(sources) and all(src in ('observation', 'forecast') for src in sources)
+
+    def _health_inputs_ready(self, start_date, forecast_temps_dict):
+        if getattr(self, 'visit_thresholds_fallback', True):
+            return False, '门诊基线数据不可用，就诊负担预测暂不显示。'
+        for lead_day in range(1, 8):
+            target_date = start_date + timedelta(days=lead_day - 1)
+            selected = forecast_temps_dict.get(target_date)
+            day_temp = self._safe_float(selected.get('temp') if isinstance(selected, dict) else selected)
+            if day_temp is None:
+                return False, '预报气温缺失，就诊负担预测暂不显示。'
+            past_temp_map = {}
+            for day, entry in forecast_temps_dict.items():
+                if day > target_date:
+                    continue
+                parsed = self._safe_float(entry.get('temp') if isinstance(entry, dict) else entry)
+                if parsed is not None:
+                    past_temp_map[day] = parsed
+            _lags, sources = self.get_lag_temperature_profile(
+                target_date,
+                forecast_temps=past_temp_map,
+            )
+            if not self._lag_sources_are_live(sources):
+                return False, '近几日气温观测不足，就诊负担预测暂不显示。'
+        from services.dlnm_risk_service import get_dlnm_service
+        sample_rr, _ = get_dlnm_service().calculate_rr(day_temp)
+        try:
+            sample_rr = float(sample_rr)
+        except (TypeError, ValueError):
+            sample_rr = None
+        if sample_rr is None or sample_rr != sample_rr or sample_rr <= 0:
+            return False, '天气相对风险当前不可用，就诊负担预测暂不显示。'
+        return True, ''
     
     def predict_daily_visits(self, temperature, lag_temps=None, month=None, dow=None):
         """
@@ -681,7 +688,13 @@ class ForecastService:
         
         # 获取相对风险
         rr, breakdown = dlnm.calculate_rr(temperature, lag_temps)
-        
+        try:
+            rr = float(rr)
+        except (TypeError, ValueError):
+            rr = None
+        if rr is None or rr != rr or rr <= 0:
+            raise ValueError('天气相对风险当前不可用')
+
         # 基础门诊量（考虑季节性）
         if month and month in dlnm.seasonal_baseline:
             baseline = dlnm.seasonal_baseline[month]['avg_visits']
@@ -810,6 +823,18 @@ class ForecastService:
                 forecast_temps_dict[key] = self._normalize_forecast_entry(v)
         else:
             raise ValueError("forecast_temps must be a list or dict")
+
+        ready, reason = self._health_inputs_ready(start_date, forecast_temps_dict)
+        if not ready:
+            return [], {
+                'health_forecast_available': False,
+                'health_forecast_reason': reason,
+                'forecast_period': {
+                    'start': start_date.strftime('%Y-%m-%d'),
+                    'end': (start_date + timedelta(days=6)).strftime('%Y-%m-%d'),
+                },
+                'recommendations': [],
+            }
         
         forecasts = []
         total_expected_visits = 0
@@ -822,7 +847,7 @@ class ForecastService:
         composite_high_days = 0
 
         # 获取温度列表用于备选
-        temp_values = [entry.get('temp', 15.0) for entry in forecast_temps_dict.values()]
+        temp_values = [entry.get('temp') for entry in forecast_temps_dict.values()]
         context = context or {}
         context_aqi = self._safe_float(context.get('aqi'))
         context_pm25 = self._safe_float(context.get('pm25'))
@@ -838,7 +863,9 @@ class ForecastService:
                 selected_entry = self._normalize_forecast_entry(temp_values[lead_day - 1])
             else:
                 raise ValueError(f"insufficient forecast data for day {lead_day}")
-            raw_temp = selected_entry.get('temp', 15.0)
+            raw_temp = self._safe_float(selected_entry.get('temp'))
+            if raw_temp is None:
+                continue
             model_spread = selected_entry.get('model_spread')
             model_count = selected_entry.get('model_count', 1)
             model_names = selected_entry.get('model_names', []) or []
@@ -866,11 +893,13 @@ class ForecastService:
             )
             
             # 获取滞后温度profile
-            past_temp_map = {
-                d: (e.get('temp', 15.0) if isinstance(e, dict) else float(e))
-                for d, e in forecast_temps_dict.items()
-                if d < target_date
-            }
+            past_temp_map = {}
+            for day, entry in forecast_temps_dict.items():
+                if day > target_date:
+                    continue
+                parsed = self._safe_float(entry.get('temp') if isinstance(entry, dict) else entry)
+                if parsed is not None:
+                    past_temp_map[day] = parsed
             lag_temps, sources = self.get_lag_temperature_profile(
                 target_date, 
                 forecast_temps=past_temp_map
@@ -1027,62 +1056,19 @@ class ForecastService:
             },
             'impact_likelihood_matrix': self._build_impact_likelihood_matrix(forecasts),
             'model_sources': sorted(model_sources),
-            'generated_at': now_local().strftime('%Y-%m-%d %H:%M:%S')
+            'generated_at': now_local().strftime('%Y-%m-%d %H:%M:%S'),
+            'health_forecast_available': True,
         }
         summary['role_action_cards'] = self._build_role_action_cards(forecasts, summary)
         
         return forecasts, summary
     
     def _generate_forecast_recommendations(self, forecasts, high_risk_days):
-        """生成预测建议"""
-        recommendations = []
-        
-        # 分析高风险天数
-        if high_risk_days >= 3:
-            recommendations.append({
-                'priority': 'high',
-                'category': '资源调配',
-                'advice': f'未来一周有{high_risk_days}天门诊量预计较高，建议提前增派医护人员'
-            })
-        
-        # 分析极端天气
-        extreme_days = [f for f in forecasts if f['extreme_events']]
-        if extreme_days:
-            for day in extreme_days:
-                for event in day['extreme_events']:
-                    recommendations.append({
-                        'priority': 'high' if event['severity'] == 'extreme' else 'medium',
-                        'category': '极端天气',
-                        'advice': f"{day['date']}: {event['description']}"
-                    })
-        
-        # 温度趋势分析
-        temps = [f['temperature']['corrected'] for f in forecasts]
-        if max(temps) - min(temps) > 10:
-            recommendations.append({
-                'priority': 'medium',
-                'category': '温差预警',
-                'advice': f'未来一周温差较大({min(temps):.0f}°C ~ {max(temps):.0f}°C)，注意防范温度骤变影响'
-            })
-        
-        # 周末高峰预警
-        weekend_high = [f for f in forecasts if f['day_of_week'] in ['周六', '周日'] and f['risk_level'] in ['红色预警', '橙色预警']]
-        if weekend_high:
-            recommendations.append({
-                'priority': 'medium',
-                'category': '周末安排',
-                'advice': '周末预计有就诊高峰，建议安排值班人员'
-            })
-        
-        if not recommendations:
-            recommendations.append({
-                'priority': 'low',
-                'category': '常规管理',
-                'advice': '未来一周天气和就诊量预计正常，保持常规医疗资源配置'
-            })
-        
-        return recommendations
-    
+        """生成本周照护建议（文案来自 data/content/forecast_week_tips.json）。"""
+        from core.forecast_copy import generate_forecast_week_tips
+
+        return generate_forecast_week_tips(forecasts, high_risk_days)
+
     def calculate_forecast_accuracy(self, forecast_date, actual_visits):
         """
         回测：计算预报准确性

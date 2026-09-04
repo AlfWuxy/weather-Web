@@ -33,7 +33,7 @@
 {% endif %}
 {% set risk_score = heat_result.risk_score if heat_result else none %}
 {% set risk_level = heat_result.risk_level if heat_result else none %}
-{% set risk_score_class = 'is-risk-high' if risk_level in ['high', 'extreme'] else 'is-risk-mid' if risk_level == 'medium' else 'is-risk-low' %}
+{% set risk_score_class = 'is-risk-high' if risk_level in ['high', 'extreme'] else 'is-risk-mid' if risk_level == 'medium' else 'is-risk-low' if risk_level == 'low' else 'is-risk-unknown' %}
 {% set risk_bar_width = risk_score if risk_score is not none else 0 %}
 {% set hero_temperature = weather.temperature if weather_available and weather.temperature is not none else none %}
 {% set hero_motion_risk = 'high' if risk_level in ['high', 'extreme'] else 'cold' if hero_temperature is not none and hero_temperature|float < 10 else '' %}
@@ -61,17 +61,7 @@
                     <span>{{ today_date or '今天' }}</span>
                     <span><i class="bi bi-geo-alt"></i> {{ current_location or '未设置' }}</span>
                 </div>
-                <h1>
-                    {% if risk_level in ['high', 'extreme'] %}
-                        今天先把外出和补水安排好。
-                    {% elif risk_level == 'medium' %}
-                        今天适合提前做一点防护。
-                    {% elif not weather_available %}
-                        天气正在更新，先按日常防护安排。
-                    {% else %}
-                        今天风险较低，保持日常照护。
-                    {% endif %}
-                </h1>
+                <h1>{{ today_headline }}</h1>
                 <p>
                     {% if weather_available %}
                         当前天气为 {{ weather.weather_condition if weather.weather_condition else '未知' }}，
@@ -82,7 +72,9 @@
                 </p>
 
                 <div class="yl-academic-actions">
-                    <a class="btn btn-primary" href="{{ url_for('public.action_check') }}">记录今天是否做到</a>
+                    <a class="btn btn-primary" href="{{ dashboard_care_url }}">{{ dashboard_care_title }}</a>
+                    <a class="btn btn-outline-secondary" href="{{ url_for('public.action_check') }}">记录今天是否做到</a>
+                    <a class="btn btn-outline-secondary" href="{{ url_for('public.cooling_resources') }}">附近避暑点</a>
                     <a class="btn btn-outline-secondary" href="{{ url_for('tools.forecast_7day') }}">看 7 天趋势</a>
                 </div>
 
@@ -219,15 +211,18 @@
                 <a class="btn btn-sm btn-outline-primary" href="{{ url_for('public.action_check') }}">打卡 <i class="bi bi-arrow-right"></i></a>
             </div>
             <div class="yl-action-list mt-3">
-                {% if not weather_available %}
+                {% if reminders %}
+                    {% for rem in reminders %}
                     <div class="yl-action">
-                        <i class="bi bi-cloud-slash"></i>
+                        <i class="bi bi-capsule"></i>
                         <div>
-                            <strong>先做好日常防护</strong>
-                            <div class="detail">补水、留意体感，需要降温时查看附近避暑资源。</div>
+                            <strong>服药：{{ rem.medicine_name }}{% if rem.dosage %} {{ rem.dosage }}{% endif %}</strong>
+                            <div class="detail">{% if rem.time_of_day %}{{ rem.time_of_day }}{% endif %}{% if rem.reason %}{% if rem.time_of_day %} · {% endif %}{{ rem.reason }}{% endif %}</div>
                         </div>
                     </div>
-                {% elif heat_actions %}
+                    {% endfor %}
+                {% endif %}
+                {% if heat_actions %}
                     {% for act in heat_actions %}
                     <div class="yl-action">
                         <i class="bi bi-{{ act.icon or 'check-circle' }}"></i>
@@ -238,11 +233,13 @@
                     </div>
                     {% endfor %}
                 {% else %}
-                    {# 兜底，保证页面始终有内容可看 #}
-                    <div class="yl-action"><i class="bi bi-cup-hot"></i><div><strong>多喝温水</strong><div class="detail">建议 1.5L，少量多次</div></div></div>
-                    <div class="yl-action"><i class="bi bi-sun"></i><div><strong>避开午后外出</strong><div class="detail">11:00–15:00 紫外线强</div></div></div>
-                    <div class="yl-action"><i class="bi bi-heart-pulse"></i><div><strong>关注血压</strong><div class="detail">早晚各测一次</div></div></div>
-                    <div class="yl-action"><i class="bi bi-capsule"></i><div><strong>按时服药</strong><div class="detail">别漏降压药</div></div></div>
+                    <div class="yl-action">
+                        <i class="bi bi-cloud-slash"></i>
+                        <div>
+                            <strong>{{ dashboard_copy.today.empty_plan.title }}</strong>
+                            <div class="detail">{{ dashboard_copy.today.empty_plan.detail }}</div>
+                        </div>
+                    </div>
                 {% endif %}
             </div>
         </section>
@@ -270,6 +267,7 @@
                         <img src="{{ url_for('static', filename='illustrations/dashboard/care-workbench.png') }}" alt="" width="1254" height="1254" loading="lazy" decoding="async">
                     </div>
                 </a>
+                {% if current_user.role == 'admin' and ml_model_available %}
                 <a href="{{ url_for('tools.ml_prediction') }}" class="yl-feature yl-feature-spotlight">
                     <div class="yl-feature-copy">
                         <div class="yl-feature-icon yl-feature-icon-badge"><i class="bi bi-cpu"></i></div>
@@ -279,10 +277,13 @@
                         <img src="{{ url_for('static', filename='illustrations/dashboard/ai-prediction.png') }}" alt="" width="1254" height="1254" loading="lazy" decoding="async">
                     </div>
                 </a>
+                {% endif %}
+                {% if current_user.role == 'admin' %}
                 <a href="{{ url_for('tools.chronic_risk') }}" class="yl-feature">
                     <div class="yl-feature-icon"><i class="bi bi-heart-pulse"></i></div>
                     <div><h5>慢病风险评估</h5><p>评估当前慢病状态</p></div>
                 </a>
+                {% endif %}
                 <a href="{{ url_for('user.health_assessment') }}" class="yl-feature">
                     <div class="yl-feature-icon"><i class="bi bi-clipboard-pulse"></i></div>
                     <div><h5>健康评估</h5><p>完成自评问卷</p></div>
@@ -357,7 +358,8 @@
                             '湿度分项': d.risk_components.humidity if d.risk_components and d.risk_components.humidity is not none else '--',
                             '热夜分项': d.risk_components.hot_night if d.risk_components and d.risk_components.hot_night is not none else '--',
                             'PM2.5实际使用': ((d.pm25_used|string) ~ ' μg/m³') if d.pm25_used is not none else '--',
-                            'PM2.5来源': ('未来日直接值' if d.pm25_source == 'direct' else '当前实况复用（非未来预报）' if d.pm25_source == 'current_observation_reuse' else '未来日AQI×0.65代理' if d.pm25_source == 'aqi_proxy' else '当前实况AQI×0.65代理' if d.pm25_source == 'current_observation_aqi_proxy' else '默认AQI 50代理' if d.pm25_source == 'default_aqi_50' else '--'),
+                            'PM2.5来源': d.pm25_source_label or '--',
+                            'PM2.5是否计入评分': ('是' if d.pm25_in_score else '否'),
                             'AQI代理输入': d.pm25_aqi_used if d.pm25_source in ['aqi_proxy', 'current_observation_aqi_proxy', 'default_aqi_50'] and d.pm25_aqi_used is not none else '--',
                             '湿度实际使用': ((d.humidity_used|string) ~ '%' ~ ('（插补）' if d.humidity_imputed else '（直接）')) if d.humidity_used is not none else '--',
                             '夜间最低温实际使用': ((d.temp_min_used|string) ~ '°C' ~ ('（插补）' if d.temp_min_imputed else '（直接）')) if d.temp_min_used is not none else '--'
@@ -429,9 +431,9 @@
                     <div class="member-avatar" style="width:40px; height:40px; font-size:1rem;">{{ m.name[:1] }}</div>
                     <div class="flex-grow-1 min-w-0">
                         <div class="fw-semibold text-truncate">{{ m.name }}</div>
-                        <div class="text-muted" style="font-size:.8rem;">{{ m.age }}岁 · {{ m.location or '未设定所在地' }}</div>
+                        <div class="text-muted" style="font-size:.8rem;">{{ (m.age ~ '岁') if m.age else '年龄未填' }} · {{ m.location or '未设定所在地' }}</div>
                     </div>
-                    <span class="risk-badge risk-{{ m.risk_level or 'low' }} badge">{{ m.risk_label or '低' }}</span>
+                    <span class="risk-badge risk-{{ m.risk_level or 'unknown' }} badge">{{ m.risk_label or '风险未知' }}</span>
                 </a>
                 {% endfor %}
             </div>

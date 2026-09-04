@@ -75,15 +75,19 @@ def test_forecast_service():
         forecasts, summary = service.generate_7day_forecast(forecast_temps)
         
         print(f"预测期间: {summary['forecast_period']['start']} 至 {summary['forecast_period']['end']}")
-        print(f"预计总门诊量: {summary['total_expected_visits']:.0f} 人次")
-        print(f"高风险天数: {summary['high_risk_days']} 天")
-        
-        print("\n每日预测:")
-        for f in forecasts[:3]:  # 只显示前3天
-            print(f"  {f['date']} ({f['day_of_week']}): "
-                  f"温度{f['temperature']['corrected']:.1f}°C, "
-                  f"预计{f['visits']['point_estimate']}人次, "
-                  f"{f['risk_level']}")
+        if summary.get('health_forecast_available') is False:
+            print(f"健康预测暂不可用: {summary.get('health_forecast_reason')}")
+            assert forecasts == []
+            assert summary.get('health_forecast_reason')
+        else:
+            print(f"预计总门诊量: {summary['total_expected_visits']:.0f} 人次")
+            print(f"高风险天数: {summary['high_risk_days']} 天")
+            print("\n每日预测:")
+            for f in forecasts[:3]:  # 只显示前3天
+                print(f"  {f['date']} ({f['day_of_week']}): "
+                      f"温度{f['temperature']['corrected']:.1f}°C, "
+                      f"预计{f['visits']['point_estimate']}人次, "
+                      f"{f['risk_level']}")
         
         print("\n✅ 预报服务测试通过")
         
@@ -223,8 +227,14 @@ def test_integration():
         forecast_temps = [38, 36, 35, 32, 28, 25, 22]  # 高温后降温
         forecasts, summary = forecast.generate_7day_forecast(forecast_temps)
         print(f"\n7天预测摘要:")
-        print(f"  高风险天数: {summary['high_risk_days']} 天")
-        print(f"  预计总门诊: {summary['total_expected_visits']:.0f} 人次")
+        if summary.get('health_forecast_available') is False:
+            print(f"  健康预测暂不可用: {summary.get('health_forecast_reason')}")
+            assert forecasts == []
+            high_risk_days = 0
+        else:
+            high_risk_days = summary['high_risk_days']
+            print(f"  高风险天数: {high_risk_days} 天")
+            print(f"  预计总门诊: {summary['total_expected_visits']:.0f} 人次")
         
         # 4. 慢病风险
         user = {'age': 75, 'chronic_diseases': ['高血压', '冠心病']}
@@ -233,9 +243,9 @@ def test_integration():
         print(f"  风险等级: {chronic_result['overall_risk']['level']}")
         
         # 确定综合预警
-        if rr >= 1.4 or summary['high_risk_days'] >= 3:
+        if rr >= 1.4 or high_risk_days >= 3:
             alert = '红色预警'
-        elif rr >= 1.2 or summary['high_risk_days'] >= 1:
+        elif rr >= 1.2 or high_risk_days >= 1:
             alert = '橙色预警'
         else:
             alert = '正常'

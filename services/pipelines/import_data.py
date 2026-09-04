@@ -382,8 +382,6 @@ def import_communities():
             vulnerability_result = health_service.calculate_community_vulnerability_index({
                 'elderly_ratio': comm_data['elderly_ratio'],
                 'chronic_disease_ratio': comm_data['chronic_disease_ratio'],
-                'medical_accessibility': 60,  # 假设值
-                'env_quality_score': 70  # 假设值
             })
             
             print(f"  脆弱性指数: {vulnerability_result['vulnerability_index']}")

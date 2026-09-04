@@ -6,6 +6,7 @@ Endpoints:
 - GET  /mp/api/v1/elders
 - POST /mp/api/v1/elders
 - PATCH /mp/api/v1/elders/<pair_id>
+- DELETE /mp/api/v1/elders/<pair_id>
 - GET  /mp/api/v1/alerts?pair_id=...
 - POST /mp/api/v1/events
 """
@@ -15,7 +16,8 @@ from __future__ import annotations
 import json
 from functools import wraps
 
-from flask import Blueprint, current_app, g, jsonify, request
+from flask import Blueprint, current_app, g, jsonify, request, url_for
+from limits import parse
 
 from core.audit import _get_client_ip
 from core.db_models import FamilyMember, FamilyMemberProfile, Pair, User
@@ -23,13 +25,13 @@ from core.extensions import db, limiter
 from core.security import hash_identifier
 from core.time_utils import utcnow
 from core.usage import log_usage_event, verify_api_token
-from core.weather import get_weather_with_cache, is_qweather_online_weather
+from core.weather import get_weather_with_cache, heat_weather_available
 from services.api_service import PILOT_EVENT_TYPES
 from services.location_resolver import resolve_location
 from services.warning_service import get_qweather_warnings
-from services.user._common import _create_pair_record
-from utils.parsers import safe_json_loads
-from utils.validators import sanitize_input
+from services.user._common import _create_pair_record, unbind_pair_for_caregiver
+from utils.parsers import parse_int, safe_json_loads
+from utils.validators import sanitize_input, validate_gender
 
 bp = Blueprint("mp_api", __name__, url_prefix="/mp/api/v1")
 MP_EVENT_META_MAX_CHARS = 2048
@@ -51,6 +53,20 @@ def _mp_rate_limit_key() -> str:
     return f"mp-ip:{hash_identifier(client_ip)}"
 
 
+def _mp_user_rate_limit_key() -> str:
+    """认证后按用户限流，避免同一 NAT 下互相挤占配额。"""
+    user_id = getattr(g, "api_user_id", None)
+    if user_id is None:
+        return "mp-user:unauthenticated"
+    return f"mp-user:{int(user_id)}"
+
+
+def _mp_user_limit_exceeded(limit_key: str, default: str) -> bool:
+    limit_str = current_app.config.get(limit_key, default) or default
+    rate = parse(limit_str)
+    return not limiter.limiter.hit(rate, _mp_user_rate_limit_key(), f"mp-user-limit:{limit_key}")
+
+
 def require_api_token(fn):
     @wraps(fn)
     def wrapper(*args, **kwargs):
@@ -70,6 +86,24 @@ def require_api_token(fn):
     return wrapper
 
 
+def mp_protect(limit_key: str, default: str):
+    """认证前按 IP 粗限流；认证后按用户限流，避免 NAT 下互相挤占。"""
+
+    def decorator(fn):
+        @wraps(fn)
+        def after_auth(*args, **kwargs):
+            if _mp_user_limit_exceeded(limit_key, default):
+                return jsonify({"success": False, "error": "rate_limited"}), 429
+            return fn(*args, **kwargs)
+
+        return limiter.limit(
+            lambda: current_app.config.get("RATE_LIMIT_MP_IP", "600 per minute"),
+            key_func=_mp_rate_limit_key,
+        )(require_api_token(after_auth))
+
+    return decorator
+
+
 def _pair_for_user(pair_id: int):
     q = Pair.query.filter_by(id=pair_id)
     # admin token is not supported in pilot; restrict to owner
@@ -77,9 +111,49 @@ def _pair_for_user(pair_id: int):
     return q.first()
 
 
+def _member_payload(member):
+    if not member:
+        return None
+    return {
+        "id": member.id,
+        "name": member.name,
+        "relation": member.relation,
+        "age": member.age,
+        "gender": member.gender,
+        "chronic_diseases": safe_json_loads(member.chronic_diseases, []),
+    }
+
+
+def _apply_member_patch(member, payload):
+    """Update identity fields on an existing family member. Returns error tuple or None."""
+    if "name" in payload:
+        name = sanitize_input(payload.get("name"), max_length=50) or ""
+        if not name:
+            return "missing_fields", 400
+        member.name = name
+    if "relation" in payload:
+        member.relation = sanitize_input(payload.get("relation"), max_length=20) or ""
+    if "age" in payload:
+        age = payload.get("age")
+        if age is None or str(age).strip() == "":
+            member.age = None
+        else:
+            parsed_age = parse_int(age)
+            if parsed_age is None:
+                return "invalid_age", 400
+            if parsed_age < 1 or parsed_age > 150:
+                return "invalid_age", 400
+            member.age = parsed_age
+    if "gender" in payload:
+        valid, gender = validate_gender(payload.get("gender"))
+        if not valid:
+            return "invalid_gender", 400
+        member.gender = gender
+    return None
+
+
 @bp.route("/me", endpoint="me")
-@limiter.limit(lambda: current_app.config.get("RATE_LIMIT_MP_READ", "120 per minute"), key_func=_mp_rate_limit_key)
-@require_api_token
+@mp_protect("RATE_LIMIT_MP_READ", "120 per minute")
 def me():
     user = db.session.get(User, g.api_user_id)
     if not user:
@@ -98,8 +172,7 @@ def me():
 
 
 @bp.route("/me", methods=["PATCH"], endpoint="me_patch")
-@limiter.limit(lambda: current_app.config.get("RATE_LIMIT_MP_WRITE", "30 per minute"), key_func=_mp_rate_limit_key)
-@require_api_token
+@mp_protect("RATE_LIMIT_MP_WRITE", "30 per minute")
 def me_patch():
     """Update pilot push settings (WxPusher UID + enabled flag)."""
     user = db.session.get(User, g.api_user_id)
@@ -125,8 +198,7 @@ def me_patch():
 
 
 @bp.route("/elders", endpoint="elders_list")
-@limiter.limit(lambda: current_app.config.get("RATE_LIMIT_MP_READ", "120 per minute"), key_func=_mp_rate_limit_key)
-@require_api_token
+@mp_protect("RATE_LIMIT_MP_READ", "120 per minute")
 def elders_list():
     pairs = Pair.query.filter_by(caregiver_id=g.api_user_id, status="active").order_by(Pair.created_at.desc()).all()
     member_ids = [p.member_id for p in pairs if p.member_id]
@@ -141,24 +213,13 @@ def elders_list():
         resolved = resolve_location(label)
         code = resolved.get("location_code") or ""
         weather_data, _ = get_weather_with_cache(code or label)
-        # Lightweight summary; detailed warnings via /alerts
+        weather_available = heat_weather_available(weather_data)
         trigger = None
         tmax_value = None
         tmin_value = None
-        try:
-            tmax = weather_data.get("temperature_max")
-            tmin = weather_data.get("temperature_min")
-            tmax_value = float(tmax) if tmax is not None else None
-            tmin_value = float(tmin) if tmin is not None else None
-        except (AttributeError, TypeError, ValueError):
-            tmax_value = None
-            tmin_value = None
-        weather_available = (
-            is_qweather_online_weather(weather_data)
-            and tmax_value is not None
-            and tmin_value is not None
-        )
         if weather_available:
+            tmax_value = float(weather_data.get("temperature_max"))
+            tmin_value = float(weather_data.get("temperature_min"))
             if tmax_value >= 35:
                 trigger = "heat"
             elif tmin_value <= 5:
@@ -170,18 +231,9 @@ def elders_list():
                 "pair_id": p.id,
                 "location_query": p.location_query,
                 "community_code": p.community_code,
-                "member": (
-                    {
-                        "id": member.id,
-                        "name": member.name,
-                        "relation": member.relation,
-                        "age": member.age,
-                        "gender": member.gender,
-                        "chronic_diseases": safe_json_loads(member.chronic_diseases, []),
-                    }
-                    if member
-                    else None
-                ),
+                "short_code": p.short_code,
+                "action_url": url_for("public.elder_entry", short_code=p.short_code, _external=True),
+                "member": _member_payload(member),
                 "today": {
                     "trigger": trigger,
                     "temperature_max": tmax_value if weather_available else None,
@@ -196,8 +248,7 @@ def elders_list():
 
 
 @bp.route("/elders", methods=["POST"], endpoint="elders_create")
-@limiter.limit(lambda: current_app.config.get("RATE_LIMIT_MP_WRITE", "30 per minute"), key_func=_mp_rate_limit_key)
-@require_api_token
+@mp_protect("RATE_LIMIT_MP_WRITE", "30 per minute")
 def elders_create():
     payload = request.get_json(silent=True) or {}
     name = sanitize_input(payload.get("name"), max_length=50) or ""
@@ -207,11 +258,16 @@ def elders_create():
         return jsonify({"success": False, "error": "missing_fields"}), 400
 
     age = payload.get("age")
-    try:
-        age = int(age) if age is not None and str(age).strip() else None
-    except Exception:
+    if age is None or str(age).strip() == "":
         age = None
-    gender = sanitize_input(payload.get("gender"), max_length=10)
+    else:
+        parsed_age = parse_int(age)
+        if parsed_age is None or parsed_age < 1 or parsed_age > 150:
+            return jsonify({"success": False, "error": "invalid_age"}), 400
+        age = parsed_age
+    valid, gender = validate_gender(payload.get("gender"))
+    if not valid:
+        return jsonify({"success": False, "error": "invalid_gender"}), 400
     chronic = payload.get("chronic_diseases")
     chronic = chronic if isinstance(chronic, list) else []
     chronic = [sanitize_input(item, max_length=50) for item in chronic if item]
@@ -266,8 +322,7 @@ def elders_create():
 
 
 @bp.route("/elders/<int:pair_id>", methods=["PATCH"], endpoint="elders_patch")
-@limiter.limit(lambda: current_app.config.get("RATE_LIMIT_MP_WRITE", "30 per minute"), key_func=_mp_rate_limit_key)
-@require_api_token
+@mp_protect("RATE_LIMIT_MP_WRITE", "30 per minute")
 def elders_patch(pair_id: int):
     pair = _pair_for_user(pair_id)
     if not pair:
@@ -280,13 +335,21 @@ def elders_patch(pair_id: int):
         if location_query:
             pair.community_code = location_query[:100]
 
-    chronic = payload.get("chronic_diseases")
-    if chronic is not None and pair.member_id:
-        chronic = chronic if isinstance(chronic, list) else []
-        chronic = [sanitize_input(item, max_length=50) for item in chronic if item]
-        chronic = [c for c in chronic if c]
+    member = None
+    if pair.member_id:
         member = FamilyMember.query.filter_by(id=pair.member_id, user_id=g.api_user_id).first()
-        if member:
+
+    if member:
+        patch_error = _apply_member_patch(member, payload)
+        if patch_error:
+            error, status = patch_error
+            return jsonify({"success": False, "error": error}), status
+
+        chronic = payload.get("chronic_diseases")
+        if chronic is not None:
+            chronic = chronic if isinstance(chronic, list) else []
+            chronic = [sanitize_input(item, max_length=50) for item in chronic if item]
+            chronic = [c for c in chronic if c]
             member.chronic_diseases = json.dumps(chronic, ensure_ascii=False) if chronic else None
 
     db.session.commit()
@@ -298,12 +361,45 @@ def elders_patch(pair_id: int):
         source="miniprogram",
         meta={"updated_fields": list(payload.keys())[:20]},
     )
-    return jsonify({"success": True})
+    return jsonify(
+        {
+            "success": True,
+            "data": {
+                "pair_id": pair.id,
+                "location_query": pair.location_query,
+                "community_code": pair.community_code,
+                "member": _member_payload(member),
+            },
+        }
+    )
+
+
+@bp.route("/elders/<int:pair_id>", methods=["DELETE"], endpoint="elders_delete")
+@mp_protect("RATE_LIMIT_MP_WRITE", "30 per minute")
+def elders_delete(pair_id: int):
+    pair = _pair_for_user(pair_id)
+    if not pair:
+        return jsonify({"success": False, "error": "not_found"}), 404
+
+    try:
+        unbind_pair_for_caregiver(g.api_user_id, pair)
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        return jsonify({"success": False, "error": "delete_failed"}), 500
+
+    log_usage_event(
+        "pair_unbound",
+        user_id=g.api_user_id,
+        pair_id=pair.id,
+        source="miniprogram",
+        meta={"via": "mp_api"},
+    )
+    return jsonify({"success": True, "data": {"pair_id": pair.id}})
 
 
 @bp.route("/alerts", endpoint="alerts_list")
-@limiter.limit(lambda: current_app.config.get("RATE_LIMIT_MP_ALERTS", "30 per minute"), key_func=_mp_rate_limit_key)
-@require_api_token
+@mp_protect("RATE_LIMIT_MP_ALERTS", "30 per minute")
 def alerts_list():
     pair_id = request.args.get("pair_id", type=int)
     if not pair_id:
@@ -317,7 +413,7 @@ def alerts_list():
     code = resolved.get("location_code") or ""
     warnings = get_qweather_warnings(code) if code else []
     weather_data, _ = get_weather_with_cache(code or label)
-    weather_available = is_qweather_online_weather(weather_data)
+    weather_available = heat_weather_available(weather_data)
 
     return jsonify(
         {
@@ -337,8 +433,7 @@ def alerts_list():
 
 
 @bp.route("/events", methods=["POST"], endpoint="events")
-@limiter.limit(lambda: current_app.config.get("RATE_LIMIT_MP_EVENTS", "60 per minute"), key_func=_mp_rate_limit_key)
-@require_api_token
+@mp_protect("RATE_LIMIT_MP_EVENTS", "60 per minute")
 def events():
     payload = request.get_json(silent=True) or {}
     event_type = sanitize_input(payload.get("event_type"), max_length=50) or ""

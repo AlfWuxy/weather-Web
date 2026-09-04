@@ -134,6 +134,26 @@ def test_home_copy_is_capability_focused_and_community_icon_exists(client):
     assert '页面只把需要行动的部分放到前面' not in body
 
 
+def test_logged_in_nav_shows_elder_mode_by_default(client, db_session):
+    _set_logged_in_user(client, db_session, username='elder-nav-user', role='user')
+    body = client.get('/').get_data(as_text=True)
+    assert 'href="/elder-mode"' in body
+    assert '老人模式' in body
+
+
+def test_desktop_mega_menu_includes_location_form_and_family_archive(client, db_session):
+    """笔记本用户不能只靠抽屉改定位或进入家人档案。"""
+    _set_logged_in_user(client, db_session, username='desktop-mega-user', role='user')
+    body = client.get('/').get_data(as_text=True)
+    mega = body.split('id="appMegaMenu"', 1)[1].split('id="appNavDrawer"', 1)[0]
+
+    assert 'href="/family-members"' in mega
+    assert '家人档案' in mega
+    assert 'action="/location"' in mega
+    assert 'id="locationOptionsMega"' in mega
+    assert 'id="locationOptionsDrawer"' in body.split('id="appNavDrawer"', 1)[1]
+
+
 def test_anonymous_elder_card_enters_guest_elder_mode(client):
     body = client.get('/').get_data(as_text=True)
     assert 'href="/guest?next=/elder-mode" class="yl-role-card variant-elder"' in body
@@ -171,6 +191,8 @@ def test_role_entry_uses_consistent_community_role_name(client):
     assert '选择适合你的入口' in body
     assert '家属也能代为记录' in body
     assert '试点核心闭环' not in body
+    assert '用照护码确认' in body
+    assert 'data-entry-key="elder" href="/elder"' in body
 
 
 @pytest.mark.parametrize(
@@ -193,8 +215,8 @@ def test_care_destination_is_role_aware(client, db_session, role, destination):
     [
         ('user', '/community-risk', '查看社区风险'),
         ('caregiver', '/community-risk', '查看社区风险'),
-        ('community', '/community', '进入社区看板'),
-        ('admin', '/community', '进入社区看板'),
+        ('community', '/community', '进入社区工作台'),
+        ('admin', '/community', '进入社区工作台'),
     ],
 )
 def test_role_entry_uses_authorized_community_destination(

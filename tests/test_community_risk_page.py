@@ -6,6 +6,18 @@ from datetime import datetime, timedelta, timezone
 from core.db_models import Community, MedicalRecord
 
 
+def test_community_risk_json_apis_require_login(client):
+    """社区风险 JSON 不能对未登录访客公开。"""
+    for path in (
+        '/api/community/list',
+        '/api/v1/community/list',
+        '/api/community/risk-map',
+        '/api/community/vulnerability/甲村',
+    ):
+        response = client.get(path, follow_redirects=False)
+        assert response.status_code in (302, 401), path
+
+
 def _seed_community_risk_data(db_session):
     communities = [
         Community(name='甲村', population=1200, elderly_ratio=0.33, chronic_disease_ratio=0.12),
@@ -65,6 +77,9 @@ def test_community_risk_page_has_academic_sections(authenticated_client):
     assert '社区排序将在天气更新后显示' in html
     assert '加载失败：' not in html
     assert 'BaselineVisits' in html
+    assert 'toNumber(row.risk_index, 55)' not in html
+    assert 'toNumber(row.risk_index, 0) || 0' not in html
+    assert 'toNumber(row.svi_percentile, 0) || 0' not in html
 
 
 def test_community_risk_api_returns_extended_fields(authenticated_client, db_session):
@@ -249,3 +264,36 @@ def test_all_unmatched_records_keep_historical_component_unavailable(
             + row['risk_weights']['svi'] * row['svi_percentile']
         )
         assert abs(recomputed - row['risk_index']) <= 0.2
+
+
+def test_community_risk_map_v2_does_not_fill_missing_temperature_with_20(
+    authenticated_client,
+    monkeypatch,
+):
+    captured = {}
+
+    def unexpected(_self, weather_data, target_date=None, window_days=None, disease_filter=None):
+        captured['weather'] = weather_data
+        raise AssertionError('缺气温不应生成社区风险图')
+
+    monkeypatch.setattr(
+        'services.community_risk_service.CommunityRiskService.generate_community_risk_map',
+        unexpected,
+    )
+
+    response = authenticated_client.post(
+        '/api/community/risk-map-v2',
+        json={
+            'weather': {
+                'humidity': 65,
+                'aqi': 45,
+                'data_source': 'QWeather',
+                'is_mock': False,
+            }
+        },
+        headers={'X-CSRF-Token': 'test-csrf-token'},
+    )
+    assert response.status_code == 503
+    assert captured == {}
+    body = response.get_json()
+    assert body['success'] is False

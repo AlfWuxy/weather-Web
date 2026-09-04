@@ -237,10 +237,10 @@ class WeatherService:
                     'temperature_range_confidence': 'none',
                     'humidity': humidity_val,
                     'pressure': self._safe_float(now.get('pressure')),
-                    'weather_condition': now.get('text', '晴'),
+                    'weather_condition': (now.get('text') or '').strip(),
                     'wind_speed': self._safe_float(now.get('windSpeed')),
                     'wind_dir': now.get('windDir', ''),
-                    'feels_like': self._safe_float(now.get('feelsLike'), temp_val),
+                    'feels_like': self._safe_float(now.get('feelsLike')),
                     'pm25': None,
                     'aqi': None,
                     'location': city,
@@ -431,10 +431,13 @@ class WeatherService:
                 current = data.get('current', {})
                 
                 # 天气代码转中文
-                weather_code = current.get('weather_code', 0)
+                weather_code = current.get('weather_code')
                 weather_condition = self._weather_code_to_text(weather_code)
 
-                temp = current.get('temperature_2m', 20)
+                temp = self._safe_float(current.get('temperature_2m'))
+                if temp is None:
+                    logger.info("Open-Meteo 缺气温，丢弃本次实况")
+                    return None
                 daily = data.get('daily', {})
                 tmax_list = daily.get('temperature_2m_max') or []
                 tmin_list = daily.get('temperature_2m_min') or []
@@ -460,6 +463,9 @@ class WeatherService:
                         temp_estimated = True
                         temp_range_source = 'unavailable'
                         temp_range_confidence = 'none'
+                humidity = self._safe_float(current.get('relative_humidity_2m'))
+                pressure = self._safe_float(current.get('surface_pressure'))
+                wind_speed = self._safe_float(current.get('wind_speed_10m'))
                 result = {
                     'temperature': round(temp, 1),
                     'temperature_max': tmax,
@@ -467,10 +473,10 @@ class WeatherService:
                     'temperature_estimated': temp_estimated,
                     'temperature_range_source': temp_range_source,
                     'temperature_range_confidence': temp_range_confidence,
-                    'humidity': round(current.get('relative_humidity_2m', 60), 1),
-                    'pressure': round(current.get('surface_pressure', 1013), 1),
+                    'humidity': round(humidity, 1) if humidity is not None else None,
+                    'pressure': round(pressure, 1) if pressure is not None else None,
                     'weather_condition': weather_condition,
-                    'wind_speed': round(current.get('wind_speed_10m', 3), 1),
+                    'wind_speed': round(wind_speed, 1) if wind_speed is not None else None,
                     'pm25': 0,  # Open-Meteo不提供空气质量数据，0表示未知
                     'aqi': 0,  # 同上，0 而非真实值
                     'aqi_estimated': True,  # 标记为非真实 AQI，下游可据此降权或隐藏
@@ -494,8 +500,8 @@ class WeatherService:
         try:
             code = int(weather_code)
         except Exception:
-            return '多云'
-        return weather_map.get(code, '多云')
+            return ''
+        return weather_map.get(code, '')
 
     def _safe_float(self, value, default=None):
         try:
@@ -698,11 +704,11 @@ class WeatherService:
             'temperature_max': tmax,
             'temperature_min': tmin,
             'temperature_mean': temperature_mean,
-            'condition': day.get('textDay', '晴'),
-            'condition_night': day.get('textNight', '晴'),
+            'condition': (day.get('textDay') or '').strip(),
+            'condition_night': (day.get('textNight') or '').strip(),
             'humidity': humidity,
             'wind_dir': day.get('windDirDay', ''),
-            'wind_speed': self._safe_float(day.get('windSpeedDay'), 3.0),
+            'wind_speed': self._safe_float(day.get('windSpeedDay')),
             'uv_index': day.get('uvIndex', ''),
             'sunrise': day.get('sunrise', ''),
             'sunset': day.get('sunset', ''),
@@ -852,8 +858,10 @@ class WeatherService:
             entries = []
             max_len = min(days, len(dates), len(tmax_list), len(tmin_list))
             for idx in range(max_len):
-                tmax = self._safe_float(tmax_list[idx], 25.0)
-                tmin = self._safe_float(tmin_list[idx], 15.0)
+                tmax = self._safe_float(tmax_list[idx])
+                tmin = self._safe_float(tmin_list[idx])
+                if tmax is None or tmin is None:
+                    continue
                 entries.append({
                     'date': dates[idx],
                     'temperature_max': tmax,
@@ -924,17 +932,17 @@ class WeatherService:
                 tmin = self._safe_float(src.get('temperature_min'))
                 if tmax is not None and tmin is not None:
                     ranges.append(max(2.0, tmax - tmin))
-            diurnal_range = mean(ranges) if ranges else 8.0
-            tmax_ens = ensemble_mean + diurnal_range / 2
-            tmin_ens = ensemble_mean - diurnal_range / 2
+            diurnal_range = mean(ranges) if ranges else None
+            tmax_ens = None if diurnal_range is None else ensemble_mean + diurnal_range / 2
+            tmin_ens = None if diurnal_range is None else ensemble_mean - diurnal_range / 2
 
             predictability_score, predictability_label = self._predictability_from_spread(ensemble_std, lead_day=idx)
 
             merged.append({
                 'date': date,
                 'forecast_date': date,
-                'temperature_max': round(tmax_ens, 1),
-                'temperature_min': round(tmin_ens, 1),
+                'temperature_max': round(tmax_ens, 1) if tmax_ens is not None else None,
+                'temperature_min': round(tmin_ens, 1) if tmin_ens is not None else None,
                 'temperature_ensemble_mean': round(ensemble_mean, 2),
                 'temperature_ensemble_p10': round(p10, 2),
                 'temperature_ensemble_p50': round(ensemble_mean, 2),
@@ -944,8 +952,8 @@ class WeatherService:
                 'model_names': model_names,
                 'predictability_score': predictability_score,
                 'predictability_label': predictability_label,
-                'condition': (qw or om or {}).get('condition', '多云'),
-                'condition_night': (qw or om or {}).get('condition_night', '多云'),
+                'condition': (qw or om or {}).get('condition') or '',
+                'condition_night': (qw or om or {}).get('condition_night') or '',
                 'humidity': (qw or om or {}).get('humidity'),
                 'wind_dir': (qw or om or {}).get('wind_dir', ''),
                 'wind_speed': (qw or om or {}).get('wind_speed'),
@@ -1007,12 +1015,15 @@ class WeatherService:
             size = min(hours, len(times), len(pops), len(precs), len(temps))
             timeline = []
             for i in range(size):
+                temp = self._safe_float(temps[i])
+                if temp is None:
+                    continue
                 pop = self._safe_float(pops[i], 0.0) or 0.0
                 entry = {
                     'time': str(times[i]),
                     'precipitation_probability': round(pop, 1),
                     'precipitation_mm': round(self._safe_float(precs[i], 0.0) or 0.0, 2),
-                    'temperature': round(self._safe_float(temps[i], 0.0) or 0.0, 1),
+                    'temperature': round(temp, 1),
                     'condition': self._weather_code_to_text(wcodes[i] if i < len(wcodes) else None),
                     'risk_level': '高' if pop >= 70 else '中' if pop >= 40 else '低'
                 }
@@ -1166,8 +1177,8 @@ class WeatherService:
             return openmeteo_forecast
 
         # 返回模拟预报数据
-        logger.warning("所有预报源均不可用，使用模拟预报")
-        return self._get_mock_forecast(days)
+        logger.warning("所有预报源均不可用，不使用模拟预报")
+        return []
     
     def _get_mock_forecast(self, days=7):
         """生成模拟的天气预报数据"""
@@ -1192,7 +1203,9 @@ class WeatherService:
                 'wind_speed': round(random.uniform(1, 8), 1),
                 'uv_index': str(random.randint(1, 10)),
                 'sunrise': '06:30',
-                'sunset': '18:00'
+                'sunset': '18:00',
+                'is_mock': True,
+                'data_source': 'Mock',
             })
             
             # 温度有一定连续性
@@ -1212,12 +1225,12 @@ class WeatherService:
         - 重度污染：AQI>200
         """
         extreme_conditions = []
-        temp_now = self._safe_float(weather_data.get('temperature'), 0.0)
-        humidity = self._safe_float(weather_data.get('humidity'), 0.0)
-        wind_speed = self._safe_float(weather_data.get('wind_speed'), 0.0)
+        temp_now = self._safe_float(weather_data.get('temperature'))
+        humidity = self._safe_float(weather_data.get('humidity'))
+        wind_speed = self._safe_float(weather_data.get('wind_speed'))
 
         # 高温
-        if temp_now > 35:
+        if temp_now is not None and temp_now > 35:
             extreme_conditions.append({
                 'type': '高温',
                 'severity': '高',
@@ -1225,7 +1238,7 @@ class WeatherService:
             })
         
         # 低温
-        if temp_now < -10:
+        if temp_now is not None and temp_now < -10:
             extreme_conditions.append({
                 'type': '低温',
                 'severity': '高',
@@ -1258,7 +1271,7 @@ class WeatherService:
             })
         
         # 高湿度
-        if humidity > 85:
+        if humidity is not None and humidity > 85:
             extreme_conditions.append({
                 'type': '高湿度',
                 'severity': '中',
@@ -1266,7 +1279,7 @@ class WeatherService:
             })
         
         # 强风
-        if wind_speed > 10:
+        if wind_speed is not None and wind_speed > 10:
             extreme_conditions.append({
                 'type': '强风',
                 'severity': '中',
@@ -1274,20 +1287,20 @@ class WeatherService:
             })
         
         # 空气污染
-        aqi = self._safe_float(weather_data.get('aqi'), 0.0)
-        if aqi > 200:
+        aqi = self._safe_float(weather_data.get('aqi'))
+        if aqi is not None and aqi > 200:
             extreme_conditions.append({
                 'type': '重度空气污染',
                 'severity': '高',
                 'description': f"AQI达{aqi}，严重影响呼吸系统，建议佩戴口罩"
             })
-        elif aqi > 150:
+        elif aqi is not None and aqi > 150:
             extreme_conditions.append({
                 'type': '中度空气污染',
                 'severity': '中',
                 'description': f"AQI达{aqi}，敏感人群应减少户外活动"
             })
-        elif aqi > 100:
+        elif aqi is not None and aqi > 100:
             extreme_conditions.append({
                 'type': '轻度空气污染',
                 'severity': '低',
@@ -1421,9 +1434,11 @@ class WeatherService:
         # 特定疾病与天气的关联
         chronic_diseases = user_health_profile.get('chronic_diseases', [])
         for disease in chronic_diseases:
-            if '呼吸' in disease and (self._safe_float(weather_data.get('aqi'), 0.0) > 100):
+            aqi_now = self._safe_float(weather_data.get('aqi'))
+            temp_cvd = self._safe_float(weather_data.get('temperature'))
+            if '呼吸' in disease and aqi_now is not None and aqi_now > 100:
                 risk_score += 20
-            if '心血管' in disease and abs(weather_data.get('temperature', 20) - 20) > 10:
+            if '心血管' in disease and temp_cvd is not None and abs(temp_cvd - 20) > 10:
                 risk_score += 20
             if '关节' in disease and weather_data.get('humidity', 0) > 80:
                 risk_score += 15

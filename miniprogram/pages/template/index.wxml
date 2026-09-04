@@ -2,7 +2,7 @@
   <view class="card">
     <view style="font-size: 18px; font-weight: 700;">一键提醒话术</view>
     <view class="muted" style="margin-top: 6px; font-size: 12px;">
-      你作为“可信节点”把行动建议转述给家人。话术为通用建议，不提供医疗诊断/治疗建议。
+      把行动建议转述给家人。话术为通用建议，不提供医疗诊断/治疗建议。记录今天是否做到和附近避暑点请在网页完成。
     </view>
   </view>
 
@@ -12,11 +12,22 @@
     <view class="muted" style="text-align:center; padding: 20px;">加载中…</view>
   </block>
 
-  <block wx:if="{{!loading}}">
+  <block wx:elif="{{missingPairId}}">
+    <view class="card">
+      <view style="font-weight: 700;">缺少照护对象</view>
+      <view class="muted" style="margin-top: 6px;">请先从照护对象列表打开话术。</view>
+      <view style="display:flex; gap: 10px; margin-top: 14px;">
+        <button class="btn-outline" style="flex:1;" bindtap="back">返回</button>
+      </view>
+    </view>
+  </block>
+
+  <block wx:elif="{{!loading}}">
     <view class="card">
       <view class="muted" style="font-size: 12px;">地点：{{locationText}}</view>
       <view class="muted" style="font-size: 12px; margin-top: 4px;">
-        Tmax {{tmax || '-'}} · Tmin {{tmin || '-'}}
+        <block wx:if="{{weatherAvailable}}">Tmax {{tmax}} · Tmin {{tmin}}</block>
+        <block wx:else>天气更新中</block>
       </view>
       <view style="margin-top: 12px; white-space: pre-wrap; line-height: 1.7;">{{message}}</view>
       <view style="display:flex; gap: 10px; margin-top: 14px;">
@@ -26,4 +37,3 @@
     </view>
   </block>
 </view>
-

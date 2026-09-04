@@ -51,7 +51,7 @@
 
     {% if risk_error %}
     <div class="alert alert-warning yl-fade-up yl-fade-up-d2" role="status">
-        <i class="bi bi-cloud-slash me-1"></i>天气正在更新，本次提醒暂未生成。请稍后再试。
+        <i class="bi bi-exclamation-triangle me-1"></i>{{ risk_error }}
     </div>
     {% endif %}
 

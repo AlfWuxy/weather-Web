@@ -21,6 +21,8 @@ Page({
     relation: '',
     age: '',
     gender: '',
+    genderOptions: ['男性', '女性'],
+    genderIndex: 0,
     locationQuery: '',
     chronicText: '',
     busy: false,
@@ -54,13 +56,16 @@ Page({
         return;
       }
       const chronic = (item.member && item.member.chronic_diseases) ? item.member.chronic_diseases : [];
+      const gender = (item.member && item.member.gender) ? item.member.gender : '';
+      const genderIndex = Math.max(0, this.data.genderOptions.indexOf(gender));
       this.setData({
         locationQuery: item.location_query || item.community_code || '',
         chronicText: (chronic || []).join(', '),
         name: (item.member && item.member.name) ? item.member.name : '',
         relation: (item.member && item.member.relation) ? item.member.relation : '',
         age: (item.member && item.member.age) ? String(item.member.age) : '',
-        gender: (item.member && item.member.gender) ? item.member.gender : '',
+        gender,
+        genderIndex,
       });
     } catch (e) {
       wx.showToast({ title: '加载失败', icon: 'none' });
@@ -70,7 +75,14 @@ Page({
   onName(e) { this.setData({ name: (e.detail.value || '').trim() }); },
   onRelation(e) { this.setData({ relation: (e.detail.value || '').trim() }); },
   onAge(e) { this.setData({ age: (e.detail.value || '').trim() }); },
-  onGender(e) { this.setData({ gender: (e.detail.value || '').trim() }); },
+  onGender(e) {
+    const idx = parseInt(e.detail.value, 10);
+    const options = this.data.genderOptions || [];
+    this.setData({
+      genderIndex: Number.isFinite(idx) ? idx : 0,
+      gender: options[idx] || '',
+    });
+  },
   onLocation(e) { this.setData({ locationQuery: (e.detail.value || '').trim() }); },
   onChronic(e) { this.setData({ chronicText: e.detail.value || '' }); },
 
@@ -87,37 +99,34 @@ Page({
     }
     this.setData({ busy: true });
     try {
+      if (!this.data.name) {
+        wx.showToast({ title: '请填写称呼/姓名', icon: 'none' });
+        return;
+      }
+      const chronic = splitChronic(this.data.chronicText);
+      const profile = {
+        name: this.data.name,
+        relation: this.data.relation,
+        age: this.data.age ? parseInt(this.data.age, 10) : null,
+        gender: this.data.gender,
+        location_query: this.data.locationQuery,
+        chronic_diseases: chronic,
+      };
       if (this.data.mode === 'create') {
-        if (!this.data.name) {
-          wx.showToast({ title: '请填写称呼/姓名', icon: 'none' });
-          return;
-        }
-        const chronic = splitChronic(this.data.chronicText);
         await api({
           method: 'POST',
           path: '/mp/api/v1/elders',
           token,
-          data: {
-            name: this.data.name,
-            relation: this.data.relation,
-            age: this.data.age ? parseInt(this.data.age, 10) : null,
-            gender: this.data.gender,
-            location_query: this.data.locationQuery,
-            chronic_diseases: chronic,
-          },
+          data: profile,
         });
         wx.showToast({ title: '已创建', icon: 'success' });
         wx.navigateBack();
       } else {
-        const chronic = splitChronic(this.data.chronicText);
         await api({
           method: 'PATCH',
           path: `/mp/api/v1/elders/${this.data.pairId}`,
           token,
-          data: {
-            location_query: this.data.locationQuery,
-            chronic_diseases: chronic,
-          },
+          data: profile,
         });
         wx.showToast({ title: '已保存', icon: 'success' });
         wx.navigateBack();

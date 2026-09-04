@@ -32,17 +32,49 @@ class HealthRiskService:
         """
         计算社区脆弱性指数（0-100）。
         """
-        elderly_ratio = self._clamp(self._to_float(community_data.get('elderly_ratio'), 0.0), 0.0, 1.0)
-        chronic_ratio = self._clamp(self._to_float(community_data.get('chronic_disease_ratio'), 0.0), 0.0, 1.0)
-        medical_accessibility = self._clamp(self._to_float(community_data.get('medical_accessibility'), 50.0), 0.0, 100.0)
-        env_quality = self._clamp(self._to_float(community_data.get('env_quality_score'), 50.0), 0.0, 100.0)
+        elderly_ratio = self._to_float(community_data.get('elderly_ratio'), None)
+        chronic_ratio = self._to_float(community_data.get('chronic_disease_ratio'), None)
+        medical_accessibility = self._to_float(community_data.get('medical_accessibility'), None)
+        env_quality = self._to_float(community_data.get('env_quality_score'), None)
 
-        aging_score = elderly_ratio * 100.0 * 0.30
-        disease_score = chronic_ratio * 100.0 * 0.35
-        medical_score = (100.0 - medical_accessibility) * 0.20
-        env_score = (100.0 - env_quality) * 0.15
+        if all(value is None for value in (
+            elderly_ratio, chronic_ratio, medical_accessibility, env_quality
+        )):
+            return {
+                'vulnerability_index': None,
+                'risk_level': None,
+                'level': None,
+                'breakdown': {
+                    'aging_score': None,
+                    'disease_score': None,
+                    'medical_score': None,
+                    'env_score': None,
+                }
+            }
 
-        vulnerability_index = self._clamp(aging_score + disease_score + medical_score + env_score, 0.0, 100.0)
+        aging_score = (
+            0.0 if elderly_ratio is None
+            else self._clamp(elderly_ratio, 0.0, 1.0) * 100.0 * 0.30
+        )
+        disease_score = (
+            0.0 if chronic_ratio is None
+            else self._clamp(chronic_ratio, 0.0, 1.0) * 100.0 * 0.35
+        )
+        medical_score = (
+            None if medical_accessibility is None
+            else (100.0 - self._clamp(medical_accessibility, 0.0, 100.0)) * 0.20
+        )
+        env_score = (
+            None if env_quality is None
+            else (100.0 - self._clamp(env_quality, 0.0, 100.0)) * 0.15
+        )
+
+        vulnerability_index = aging_score + disease_score
+        if medical_score is not None:
+            vulnerability_index += medical_score
+        if env_score is not None:
+            vulnerability_index += env_score
+        vulnerability_index = self._clamp(vulnerability_index, 0.0, 100.0)
         risk_level = self._bucket_three(vulnerability_index, low=30.0, high=60.0, labels=('低', '中', '高'))
 
         return {
@@ -52,8 +84,8 @@ class HealthRiskService:
             'breakdown': {
                 'aging_score': round(aging_score, 2),
                 'disease_score': round(disease_score, 2),
-                'medical_score': round(medical_score, 2),
-                'env_score': round(env_score, 2)
+                'medical_score': None if medical_score is None else round(medical_score, 2),
+                'env_score': None if env_score is None else round(env_score, 2)
             }
         }
 
@@ -87,39 +119,106 @@ class HealthRiskService:
             disease_type='general',
             age=profile['age']
         )
-        temp_score = self._clamp((float(base_rr) - 1.0) / 1.2 * 100.0, 0.0, 100.0)
-        personal_susceptibility = self._calc_personal_susceptibility_score(profile)
-        model_a_score = self._clamp(
-            0.50 * temp_score + 0.28 * personal_susceptibility + 0.22 * self._aqi_score(weather['aqi']),
-            0.0,
-            100.0
+        try:
+            base_rr_value = float(base_rr)
+        except (TypeError, ValueError):
+            base_rr_value = None
+        dlnm_in_score = (
+            base_rr_value is not None
+            and math.isfinite(base_rr_value)
+            and base_rr_value > 0
         )
+        temp_score = (
+            self._clamp((base_rr_value - 1.0) / 1.2 * 100.0, 0.0, 100.0)
+            if dlnm_in_score else None
+        )
+        personal_susceptibility = self._calc_personal_susceptibility_score(profile)
+        aqi_in_score = weather.get('aqi') is not None
+        aqi_score = self._aqi_score(weather['aqi']) if aqi_in_score else None
+        if aqi_score is None:
+            aqi_in_score = False
+            aqi_score = 0.0
+        if not dlnm_in_score:
+            model_a_score = None
+        elif aqi_in_score:
+            model_a_score = self._clamp(
+                0.50 * temp_score + 0.28 * personal_susceptibility + 0.22 * aqi_score,
+                0.0,
+                100.0
+            )
+        else:
+            model_a_score = self._clamp(
+                (0.50 * temp_score + 0.28 * personal_susceptibility) / 0.78,
+                0.0,
+                100.0
+            )
 
         # 路径 B：规则暴露（空气/湿度/极端天气）+ 即时筛查
         weather_service = WeatherService()
         extreme = weather_service.identify_extreme_weather(weather_data)
         extreme_score = self._clamp(len(extreme.get('conditions', [])) * 25.0, 0.0, 100.0)
-        humidity_score = self._humidity_score(weather['humidity'])
-        aqi_score = self._aqi_score(weather['aqi'])
+        humidity_in_score = weather.get('humidity') is not None
+        humidity_score = self._humidity_score(weather['humidity']) if humidity_in_score else None
+        if humidity_score is None:
+            humidity_in_score = False
+            humidity_score = 0.0
         screening_score = self._screening_score(screening_data)
+        path_b_weight = 0.30
+        path_b_aqi_weight = 0.30 if aqi_in_score else 0.0
+        path_b_humidity_weight = 0.15 if humidity_in_score else 0.0
+        path_b_screening_weight = 0.25
+        path_b_present = (
+            path_b_weight + path_b_aqi_weight + path_b_humidity_weight + path_b_screening_weight
+        )
         model_b_score = self._clamp(
-            0.30 * extreme_score + 0.30 * aqi_score + 0.15 * humidity_score + 0.25 * screening_score,
+            (
+                path_b_weight * extreme_score
+                + path_b_aqi_weight * aqi_score
+                + path_b_humidity_weight * humidity_score
+                + path_b_screening_weight * screening_score
+            )
+            / path_b_present,
             0.0,
             100.0
         )
 
         # 路径 C：社区脆弱性 + 社区近期负担 + 个体基础敏感性
         community_context = self._build_community_context(profile.get('community'))
-        community_score = self._clamp(
-            0.65 * community_context['vulnerability_index'] + 0.35 * community_context['burden_score'],
-            0.0,
-            100.0
-        )
-        model_c_score = self._clamp(
-            0.40 * community_score + 0.35 * personal_susceptibility + 0.25 * temp_score,
-            0.0,
-            100.0
-        )
+        vi_in_score = community_context.get('vulnerability_source') != 'default_proxy'
+        burden_in_score = bool(community_context.get('burden_available'))
+        community_in_score = vi_in_score or burden_in_score
+        if vi_in_score and burden_in_score:
+            community_score = self._clamp(
+                0.65 * community_context['vulnerability_index'] + 0.35 * community_context['burden_score'],
+                0.0,
+                100.0
+            )
+        elif vi_in_score:
+            community_score = self._clamp(community_context['vulnerability_index'], 0.0, 100.0)
+        elif burden_in_score:
+            community_score = self._clamp(community_context['burden_score'], 0.0, 100.0)
+        else:
+            community_score = 0.0
+        if community_in_score and dlnm_in_score:
+            model_c_score = self._clamp(
+                0.40 * community_score + 0.35 * personal_susceptibility + 0.25 * temp_score,
+                0.0,
+                100.0
+            )
+        elif community_in_score:
+            model_c_score = self._clamp(
+                (0.40 * community_score + 0.35 * personal_susceptibility) / 0.75,
+                0.0,
+                100.0
+            )
+        elif dlnm_in_score:
+            model_c_score = self._clamp(
+                (0.35 * personal_susceptibility + 0.25 * temp_score) / 0.60,
+                0.0,
+                100.0
+            )
+        else:
+            model_c_score = self._clamp(personal_susceptibility, 0.0, 100.0)
 
         # 慢病专项（用于病种风险与解释）
         chronic_service = get_chronic_service()
@@ -133,49 +232,54 @@ class HealthRiskService:
         )
         chronic_overall_score = self._to_float(
             (chronic_result.get('overall_risk') or {}).get('score'),
-            30.0
+            None
         )
+        chronic_in_score = chronic_overall_score is not None
 
         # 模型融合 + 不确定性
-        path_fused_score = (
-            model_a_score * 0.45
-            + model_b_score * 0.30
-            + model_c_score * 0.25
+        path_entries = []
+        if dlnm_in_score:
+            path_entries.append(('DLNM个体模型', model_a_score, 0.45))
+        path_entries.append(('规则暴露模型', model_b_score, 0.30))
+        path_c_name = (
+            '社区脆弱性模型' if community_in_score
+            else ('个体与气温' if dlnm_in_score else '个体易感性')
         )
+        path_entries.append((path_c_name, model_c_score, 0.25))
+        path_weight_sum = sum(weight for _, _, weight in path_entries)
+        path_fused_score = sum(
+            score * weight for _, score, weight in path_entries
+        ) / path_weight_sum
+        path_scale = 0.85 if chronic_in_score else 1.0
         model_paths = [
             {
-                'name': 'DLNM个体模型',
-                'score': round(model_a_score, 1),
-                'path_weight': 0.45,
-                'weight': 0.85 * 0.45,
-                'contribution': round(model_a_score * 0.85 * 0.45, 2),
-            },
-            {
-                'name': '规则暴露模型',
-                'score': round(model_b_score, 1),
-                'path_weight': 0.30,
-                'weight': 0.85 * 0.30,
-                'contribution': round(model_b_score * 0.85 * 0.30, 2),
-            },
-            {
-                'name': '社区脆弱性模型',
-                'score': round(model_c_score, 1),
-                'path_weight': 0.25,
-                'weight': 0.85 * 0.25,
-                'contribution': round(model_c_score * 0.85 * 0.25, 2),
-            },
-            {
+                'name': name,
+                'score': round(score, 1),
+                'path_weight': weight,
+                'weight': path_scale * weight / path_weight_sum,
+                'contribution': round(score * path_scale * weight / path_weight_sum, 2),
+            }
+            for name, score, weight in path_entries
+        ]
+        if chronic_in_score:
+            model_paths.append({
                 'name': '慢病专项模型',
                 'score': round(chronic_overall_score, 1),
                 'path_weight': 1.0,
                 'weight': 0.15,
                 'contribution': round(chronic_overall_score * 0.15, 2),
-            },
-        ]
-        fused_score = 0.85 * path_fused_score + 0.15 * chronic_overall_score
+            })
+        fused_score = (
+            0.85 * path_fused_score + 0.15 * chronic_overall_score
+            if chronic_in_score else path_fused_score
+        )
         fused_score = self._clamp(fused_score, 0.0, 100.0)
 
-        spread = pstdev([model_a_score, model_b_score, model_c_score]) if len(model_paths) > 1 else 0.0
+        spread_scores = [
+            score for score in (model_a_score, model_b_score, model_c_score)
+            if score is not None
+        ]
+        spread = pstdev(spread_scores) if len(spread_scores) > 1 else 0.0
         spread = max(spread, 4.0)
         interval_half = self._clamp(spread * 1.45, 6.0, 22.0)
         score_low = self._clamp(fused_score - interval_half, 0.0, 100.0)
@@ -201,7 +305,7 @@ class HealthRiskService:
         )
 
         component_scores = {
-            '温度风险': round(temp_score, 1),
+            '温度风险': round(temp_score, 1) if temp_score is not None else None,
             '空气质量风险': round(aqi_score, 1),
             '湿度风险': round(humidity_score, 1),
             '极端天气暴露': round(extreme_score, 1),
@@ -214,7 +318,20 @@ class HealthRiskService:
         explain = chronic_result.get('explain') or {'reasons': [], 'actions': [], 'escalation': []}
         explain['reasons'] = self._merge_unique(
             explain.get('reasons', []),
-            self._top_component_reasons(component_scores)
+            self._top_component_reasons(
+                component_scores,
+                skip_names={
+                    name
+                    for name, included in (
+                        ('温度风险', dlnm_in_score),
+                        ('空气质量风险', aqi_in_score),
+                        ('湿度风险', humidity_in_score),
+                        ('社区脆弱性', vi_in_score),
+                        ('社区病例负担', burden_in_score),
+                    )
+                    if not included
+                }
+            )
         )[:4]
         explain['actions'] = self._merge_unique(
             explain.get('actions', []),
@@ -257,12 +374,22 @@ class HealthRiskService:
             'model_paths': model_paths,
             'fusion_breakdown': {
                 'path_fused_score': round(path_fused_score, 2),
-                'chronic_overall_score': round(chronic_overall_score, 2),
+                'chronic_overall_score': round(chronic_overall_score, 2) if chronic_in_score else None,
                 'final_score': round(fused_score, 1),
                 'contribution_total': round(sum(path['contribution'] for path in model_paths), 2),
+                'community_in_score': community_in_score,
+                'chronic_in_score': chronic_in_score,
+                'dlnm_in_score': dlnm_in_score,
+                'aqi_in_score': aqi_in_score,
+                'humidity_in_score': humidity_in_score,
             },
             'component_scores': component_scores,
             'community_context': community_context,
+            'community_in_score': community_in_score,
+            'chronic_in_score': chronic_in_score,
+            'dlnm_in_score': dlnm_in_score,
+            'aqi_in_score': aqi_in_score,
+            'humidity_in_score': humidity_in_score,
             'screening': screening_data,
             'weather': weather,
             'disease_risks': chronic_result.get('disease_risks', {}),
@@ -273,7 +400,7 @@ class HealthRiskService:
             'methodology': [
                 '路径A: DLNM温度风险 + 年龄/慢病敏感性',
                 '路径B: 规则暴露(空气质量/湿度/极端天气) + 即时筛查',
-                '路径C: 社区脆弱性指数 + 30天病例负担',
+                '路径C: 有社区实测资料时纳入脆弱性/30天负担；代理值不进入融合',
                 '融合分数 = 0.45*A + 0.30*B + 0.25*C，并与慢病专项结果做轻量校准',
                 '概率化输出基于分数分布计算低/中/高风险概率，并给出区间与不确定性等级',
                 '行动优先级采用 Impact × Likelihood 四级矩阵（1-16分）'
@@ -281,17 +408,6 @@ class HealthRiskService:
             'model_version': self.model_version,
             'rr_breakdown': rr_breakdown
         }
-
-    # ---------------------------
-    # 兼容旧接口（已废弃）
-    # ---------------------------
-    def assess_user_risk(self, user_id):
-        """旧接口：保留兼容。"""
-        return None
-
-    def generate_community_risk_map_data(self):
-        """旧接口：保留兼容。"""
-        return []
 
     # ---------------------------
     # 内部工具函数
@@ -314,8 +430,11 @@ class HealthRiskService:
         cleaned = [str(item).strip() for item in diseases if str(item).strip()]
         has_chronic = bool(user_profile.get('has_chronic_disease')) or bool(cleaned)
 
+        age = self._to_int(user_profile.get('age'), default=None, min_value=1, max_value=150)
+        if age is None:
+            raise ValueError('请提供年龄')
         return {
-            'age': self._to_int(user_profile.get('age'), 45, min_value=0, max_value=110),
+            'age': age,
             'gender': str(user_profile.get('gender') or '未知'),
             'community': str(user_profile.get('community') or '').strip(),
             'has_chronic_disease': has_chronic,
@@ -323,28 +442,64 @@ class HealthRiskService:
         }
 
     def _normalize_weather_data(self, weather_data):
+        aqi = self._measured_aqi(weather_data)
+        temperature = self._to_float(weather_data.get('temperature'), None)
+        if temperature is None:
+            raise ValueError('请提供气温')
         return {
-            'temperature': self._to_float(weather_data.get('temperature'), 20.0),
-            'humidity': self._clamp(self._to_float(weather_data.get('humidity'), 60.0), 0.0, 100.0),
-            'aqi': self._clamp(self._to_float(weather_data.get('aqi'), 50.0), 0.0, 500.0),
-            'pressure': self._to_float(weather_data.get('pressure'), 1013.0),
-            'wind_speed': self._to_float(weather_data.get('wind_speed'), 3.0),
+            'temperature': temperature,
+            'humidity': self._measured_humidity(weather_data),
+            'aqi': aqi,
+            'pressure': self._to_float(weather_data.get('pressure'), None),
+            'wind_speed': self._to_float(weather_data.get('wind_speed'), None),
             'weather_condition': str(weather_data.get('weather_condition') or '')
         }
 
+    def _measured_humidity(self, weather_data):
+        raw = (weather_data or {}).get('humidity')
+        if raw is None or raw == '':
+            return None
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            return None
+        if not math.isfinite(value):
+            return None
+        return self._clamp(value, 0.0, 100.0)
+
+    def _measured_aqi(self, weather_data):
+        if (weather_data or {}).get('aqi_estimated'):
+            return None
+        raw = (weather_data or {}).get('aqi')
+        if raw is None or raw == '':
+            return None
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            return None
+        if not math.isfinite(value):
+            return None
+        return self._clamp(value, 0.0, 500.0)
+
     def _normalize_screening(self, screening):
         mapping = {
-            'outdoor_exposure': ({'low', 'medium', 'high'}, 'medium'),
-            'symptom_level': ({'none', 'mild', 'moderate', 'severe'}, 'none'),
-            'hydration': ({'good', 'normal', 'poor'}, 'normal'),
-            'medication_adherence': ({'good', 'partial', 'poor'}, 'good'),
-            'sleep_quality': ({'good', 'fair', 'poor'}, 'good')
+            'outdoor_exposure': {'low', 'medium', 'high'},
+            'symptom_level': {'none', 'mild', 'moderate', 'severe'},
+            'hydration': {'good', 'normal', 'poor'},
+            'medication_adherence': {'good', 'partial', 'poor'},
+            'sleep_quality': {'good', 'fair', 'poor'}
         }
         data = {}
-        for key, pair in mapping.items():
-            allowed, default = pair
-            value = str(screening.get(key) or '').strip().lower()
-            data[key] = value if value in allowed else default
+        missing = []
+        payload = screening or {}
+        for key, allowed in mapping.items():
+            value = str(payload.get(key) or '').strip().lower()
+            if value not in allowed:
+                missing.append(key)
+            else:
+                data[key] = value
+        if missing:
+            raise ValueError('请完成全部筛查')
         return data
 
     def _screening_score(self, screening):
@@ -378,8 +533,9 @@ class HealthRiskService:
         disease_count = len(profile['chronic_diseases'])
         chronic_score = 12.0 if disease_count == 0 else self._clamp(45.0 + disease_count * 14.0, 45.0, 98.0)
 
-        male_cardio_bonus = 8.0 if profile['gender'] == '男' and age >= 55 else 0.0
-        female_elder_bonus = 5.0 if profile['gender'] == '女' and age >= 70 else 0.0
+        gender = str(profile['gender'] or '').strip()
+        male_cardio_bonus = 8.0 if gender in ('男', '男性') and age >= 55 else 0.0
+        female_elder_bonus = 5.0 if gender in ('女', '女性') and age >= 70 else 0.0
 
         return self._clamp(
             0.55 * age_score + 0.40 * chronic_score + male_cardio_bonus + female_elder_bonus,
@@ -396,9 +552,12 @@ class HealthRiskService:
             lag_temps = []
             for value in values:
                 try:
-                    lag_temps.append(float(value))
+                    parsed = float(value)
                 except (TypeError, ValueError):
-                    continue
+                    return None
+                if not math.isfinite(parsed):
+                    return None
+                lag_temps.append(parsed)
             if not lag_temps:
                 continue
             if abs(lag_temps[0] - float(current_temp)) > 0.01:
@@ -431,8 +590,8 @@ class HealthRiskService:
                 'imputed': True,
                 'imputed_fields': ['vulnerability_index', 'burden_score'],
                 'warnings': [
-                    '个人资料未设置社区，社区 VI 使用 45 分中性代理值。',
-                    '社区名缺失，30 日门诊记录与每千人负担无法计算，模型使用 30 分中性负担代理值。'
+                    '个人资料未设置社区，社区 VI 仅作 45 分中性参考，不计入个人风险分。',
+                    '社区名缺失，30 日门诊记录与每千人负担无法计算，负担参考不计入个人风险分。'
                 ]
             }
 
@@ -479,7 +638,7 @@ class HealthRiskService:
                     vulnerability_level = str(community_row.risk_level)
             else:
                 imputed_fields.append('vulnerability_index')
-                warnings.append('社区表缺少 VI，当前使用 45 分中性代理值。')
+                warnings.append('社区表缺少 VI，当前 45 分仅作参考，不计入个人风险分。')
         elif profile_data:
             source = 'bundled_profile'
             source_label = '内置社区档案'
@@ -492,11 +651,11 @@ class HealthRiskService:
             if profile_data.get('chronic_disease_ratio') is not None:
                 chronic_ratio = self._clamp(self._to_float(profile_data.get('chronic_disease_ratio')), 0.0, 1.0)
             imputed_fields.append('vulnerability_index')
-            warnings.append('未匹配社区表 VI，当前使用 45 分中性代理值。')
+            warnings.append('未匹配社区表 VI，当前 45 分仅作参考，不计入个人风险分。')
         else:
             imputed_fields.extend(['population', 'vulnerability_index'])
             warnings.extend([
-                '未匹配社区表或内置档案，社区 VI 使用 45 分中性代理值。',
+                '未匹配社区表或内置档案，社区 VI 仅作 45 分中性参考，不计入个人风险分。',
                 '人口数缺失，每千人负担无法计算。'
             ])
 
@@ -512,9 +671,9 @@ class HealthRiskService:
             burden_source = burden['reason']
             imputed_fields.append('burden_score')
             if burden['reason'] == 'unavailable_query_failed':
-                warnings.append('30 日门诊记录查询失败，模型使用 30 分中性负担代理值。')
+                warnings.append('30 日门诊记录查询失败，负担参考不计入个人风险分。')
             else:
-                warnings.append('因人口数缺失，30 日每千人负担无法计算，模型使用 30 分中性负担代理值。')
+                warnings.append('因人口数缺失，30 日每千人负担无法计算，负担参考不计入个人风险分。')
 
         # 保持字段顺序稳定，方便页面与导出结果审计。
         imputed_fields = list(dict.fromkeys(imputed_fields))
@@ -573,7 +732,10 @@ class HealthRiskService:
         }
 
     def _aqi_score(self, aqi):
-        aqi = self._clamp(self._to_float(aqi, 50.0), 0.0, 500.0)
+        parsed = self._to_float(aqi, None)
+        if parsed is None:
+            return None
+        aqi = self._clamp(parsed, 0.0, 500.0)
         if aqi <= 50:
             return 8.0
         if aqi <= 100:
@@ -587,7 +749,10 @@ class HealthRiskService:
         return 96.0
 
     def _humidity_score(self, humidity):
-        humidity = self._clamp(self._to_float(humidity, 60.0), 0.0, 100.0)
+        parsed = self._to_float(humidity, None)
+        if parsed is None:
+            return None
+        humidity = self._clamp(parsed, 0.0, 100.0)
         if humidity < 35:
             return self._clamp((35.0 - humidity) * 2.4, 0.0, 100.0)
         if humidity > 75:
@@ -705,6 +870,17 @@ class HealthRiskService:
                 'advice': advice
             })
 
+        from core.health_copy import load_health_assessment_tips
+        copy = load_health_assessment_tips()
+
+        def add_from_copy(key):
+            entry = copy.get(key) or {}
+            add_item(
+                entry.get('category', '健康建议'),
+                entry.get('advice', ''),
+                entry.get('priority', 'medium'),
+            )
+
         for item in chronic_recommendations or []:
             if isinstance(item, dict):
                 add_item(
@@ -714,32 +890,32 @@ class HealthRiskService:
                 )
 
         if weather['temperature'] >= 32:
-            add_item('高温防护', '减少午后外出，优先在阴凉或空调环境活动，主动补水。', 'high')
+            add_from_copy('hot')
         elif weather['temperature'] <= 5:
-            add_item('低温防护', '外出注意分层保暖，尤其关注头颈和四肢。', 'high')
+            add_from_copy('cold')
 
-        if weather['aqi'] >= 150:
-            add_item('空气质量', '空气质量偏差，尽量减少户外运动，必要时佩戴防护口罩。', 'high')
+        if weather.get('aqi') is not None and weather.get('aqi') >= 150:
+            add_from_copy('aqi')
 
         if screening.get('symptom_level') in ('moderate', 'severe'):
-            add_item('症状管理', '已出现明显不适，请减少活动并监测症状变化。', 'high')
+            add_from_copy('symptom')
 
         if screening.get('medication_adherence') in ('partial', 'poor') and profile.get('has_chronic_disease'):
-            add_item('用药依从', '请按医嘱规律服药，不要自行停药或减量。', 'high')
+            add_from_copy('medication')
 
         if cap_semantics['urgency'] == 'immediate':
-            add_item('紧急分流', '若出现胸痛、呼吸困难、意识模糊等症状，请立即就医。', 'urgent')
+            add_from_copy('emergency')
         elif impact_likelihood['matrix_score'] >= 12:
-            add_item('行动升级', '当前风险已进入高优先级，请联系家属或村医协助观察。', 'high')
+            add_from_copy('escalate')
 
         if not result:
-            add_item('日常管理', '保持规律作息、均衡饮食与适量活动，留意天气变化。', 'low')
+            add_from_copy('routine')
 
         priority_order = {'urgent': 0, 'high': 1, 'medium': 2, 'low': 3}
         result.sort(key=lambda item: priority_order.get(item.get('priority', 'medium'), 9))
         return result[:8]
 
-    def _top_component_reasons(self, component_scores):
+    def _top_component_reasons(self, component_scores, skip_names=None):
         labels = {
             '温度风险': '温度暴露已偏离舒适区',
             '空气质量风险': '空气质量因素导致风险上升',
@@ -750,14 +926,22 @@ class HealthRiskService:
             '社区脆弱性': '所在社区脆弱性较高',
             '社区病例负担': '近期社区病例负担偏高'
         }
-        sorted_items = sorted(component_scores.items(), key=lambda x: float(x[1]), reverse=True)
+        skipped = set(skip_names or ())
+        sortable = [
+            (name, score)
+            for name, score in component_scores.items()
+            if score is not None
+        ]
+        sorted_items = sorted(sortable, key=lambda x: float(x[1]), reverse=True)
         reasons = []
-        for name, score in sorted_items[:4]:
-            if float(score) < 40:
+        for name, score in sorted_items:
+            if name in skipped or float(score) < 40:
                 continue
             reason = labels.get(name)
             if reason:
                 reasons.append(reason)
+            if len(reasons) >= 4:
+                break
         return reasons
 
     def _matrix_actions(self, impact_likelihood):
@@ -786,20 +970,23 @@ class HealthRiskService:
     @staticmethod
     def _to_float(value, default=0.0):
         try:
-            return float(value)
+            parsed = float(value)
         except (TypeError, ValueError):
-            return float(default)
+            return default
+        if not math.isfinite(parsed):
+            return default
+        return parsed
 
     @staticmethod
     def _to_int(value, default=0, min_value=None, max_value=None):
         try:
             result = int(value)
         except (TypeError, ValueError):
-            result = int(default)
-        if min_value is not None:
-            result = max(int(min_value), result)
-        if max_value is not None:
-            result = min(int(max_value), result)
+            return default
+        if min_value is not None and result < min_value:
+            return default
+        if max_value is not None and result > max_value:
+            return default
         return result
 
     @staticmethod

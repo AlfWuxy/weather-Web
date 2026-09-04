@@ -95,7 +95,7 @@ def test_caregiver_dashboard_does_not_calculate_mock_weather(
 ):
     """照护工作台遇到 mock 时只显示等待状态和中性行动链接说明。"""
     user = _create_user(db_session, 'caregiver_mock_guard', 'caregiver')
-    _create_pair(db_session, user.id)
+    pair = _create_pair(db_session, user.id)
     _login_as(client, user.id)
     _patch_caregiver_location(monkeypatch)
     monkeypatch.setattr(
@@ -113,11 +113,11 @@ def test_caregiver_dashboard_does_not_calculate_mock_weather(
     body = response.get_data(as_text=True)
     assert '天气更新中' in body
     assert '风险等级暂不显示' in body
-    assert '仍可发送行动链接并记录确认结果' in body
+    assert '仍可发送行动链接并记录提交结果' in body
     assert '复制行动链接说明' in body
     assert '热风险：极高' not in body
     assert '高温（39°C）' not in body
-    assert DailyStatus.query.count() == 0
+    assert DailyStatus.query.filter_by(pair_id=pair.id).count() == 0
 
 
 def test_caregiver_action_log_keeps_risk_null_when_weather_is_mock(
@@ -176,6 +176,7 @@ def test_community_pages_do_not_generate_mock_risk_messages(
         'services.user.community_service.HeatActionService.calculate_heat_risk',
         lambda *_args, **_kwargs: pytest.fail('mock 天气不应进入社区热风险计算'),
     )
+    status_count_before = DailyStatus.query.count()
 
     dashboard = client.get('/community')
     wechat = client.get('/community/都昌/wechat')
@@ -201,7 +202,7 @@ def test_community_pages_do_not_generate_mock_risk_messages(
     assert '状态：天气更新中' in announce_body
     assert 'class="btn btn-primary mt-3 copy-message"' not in announce_body
     assert '今日热风险：极高' not in announce_body
-    assert DailyStatus.query.count() == 0
+    assert DailyStatus.query.count() == status_count_before
 
 
 def test_real_qweather_still_generates_caregiver_and_community_risk(

@@ -101,6 +101,7 @@ def login():
 
 
 @bp.route('/register', methods=['GET', 'POST'], endpoint='register')
+@limiter.limit(lambda: current_app.config.get('RATE_LIMIT_REGISTER', '5 per 5 minutes'), methods=['POST'], key_func=rate_limit_key)
 def register():
     """注册"""
     return handle_register()

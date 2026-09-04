@@ -1,0 +1,48 @@
+{
+  "high_visit_days": {
+    "priority": "high",
+    "category": "照护安排",
+    "advice_template": "未来一周有{high_risk_days}天就诊负担可能偏高，提前确认家人是否有人提醒、补水和避暑安排。"
+  },
+  "temperature_swing": {
+    "priority": "medium",
+    "category": "温差",
+    "advice_template": "未来一周温差较大({min_temp}°C ~ {max_temp}°C)，出门前提前加减衣服，并留意室内温度。"
+  },
+  "weekend_peak": {
+    "priority": "medium",
+    "category": "周末",
+    "advice": "周末可能更热或外出更多，提前约好谁来确认家人状态。"
+  },
+  "routine": {
+    "priority": "low",
+    "category": "日常",
+    "advice": "未来一周没有突出高温负担，保持日常提醒、补水和通风。"
+  },
+  "role_cards": {
+    "resident_daily": {
+      "title": "家人日常",
+      "action": "根据预警调整外出时段，优先早晚出门，午后少在户外。"
+    },
+    "resident_composite": {
+      "title": "高温叠加天",
+      "action": "高温再叠加污染或湿度时，提醒家人补水、降温，并减少费力活动。"
+    },
+    "doctor_prepare": {
+      "title": "就诊负担提醒",
+      "action_template": "未来7天最坏情景较平时可能多约 {extra} 人次需要陪同或照看，提前约好谁来确认、谁来陪同。"
+    },
+    "doctor_followup": {
+      "title": "高危家人确认",
+      "action": "对年纪大、有慢病或最近不适的家人打电话确认，必要时上门看看。"
+    },
+    "community_cooling": {
+      "title": "避暑点与提醒",
+      "action": "高风险日确认附近避暑点是否开放，并提醒家人少在午后出门。"
+    },
+    "community_info": {
+      "title": "把天气告诉家人",
+      "action": "把降雨起止和分时段注意事项同步给家人，减少漏看消息。"
+    }
+  }
+}

@@ -265,8 +265,30 @@ def test_api_current_weather_structure(client):
     payload = response.get_json()
     assert payload['success'] is True
     data = payload.get('data') or {}
-    for key in ('temperature', 'humidity', 'data_source', 'from_cache'):
+    for key in ('temperature', 'humidity', 'data_source', 'from_cache', 'weather_available', 'air_quality_available'):
         assert key in data
+
+
+def test_api_current_weather_hides_unavailable_open_meteo_aqi(client, monkeypatch):
+    monkeypatch.setattr(
+        'services.api_service.get_weather_with_cache',
+        lambda _location: ({
+            'temperature': 28,
+            'humidity': 70,
+            'weather_condition': '晴',
+            'aqi': 0,
+            'pm25': 0,
+            'is_mock': False,
+            'data_source': 'Open-Meteo',
+        }, False),
+    )
+    payload = client.get('/api/weather/current').get_json()
+    assert payload['success'] is True
+    data = payload['data']
+    assert data['weather_available'] is False
+    assert data['air_quality_available'] is False
+    assert data['aqi'] is None
+    assert data['pm25'] is None
 
 
 def test_api_nowcast_structure(client):
@@ -293,7 +315,13 @@ def test_api_forecast_structure(authenticated_client):
     assert payload['success'] is True
     assert 'forecasts' in payload
     assert 'summary' in payload
+    summary = payload.get('summary') or {}
     forecasts = payload.get('forecasts') or []
+    if summary.get('health_forecast_available') is False:
+        assert forecasts == []
+        assert summary.get('health_forecast_reason')
+        return
+
     assert len(forecasts) >= 1
     first = forecasts[0]
     assert 'composite_exposure' in first
@@ -302,8 +330,6 @@ def test_api_forecast_structure(authenticated_client):
     assert 'p10' in (first.get('visits') or {})
     assert 'p50' in (first.get('visits') or {})
     assert 'p90' in (first.get('visits') or {})
-
-    summary = payload.get('summary') or {}
     assert 'role_action_cards' in summary
     assert 'scenario_totals' in summary
     assert 'probability_products' in summary

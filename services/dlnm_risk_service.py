@@ -837,48 +837,87 @@ class DLNMRiskService:
         """
         # 确保温度为数值类型
         try:
-            temperature = float(temperature) if temperature is not None else 20.0
+            temperature = float(temperature)
         except (TypeError, ValueError):
-            temperature = 20.0
+            raise ValueError('请提供气温')
+        if not np.isfinite(temperature):
+            raise ValueError('请提供气温')
         
         # 如果模型未训练，使用简化公式
         if not self.model_trained:
-            # 简化RR计算：偏离20度越多，风险越高
-            deviation = abs(temperature - 20)
-            rr = 1.0 + 0.015 * deviation
-            return rr, {
-                'error': '模型未训练，使用简化公式',
-                'calculation_branch': 'untrained_fallback',
-                'base_rr': rr,
-                'raw_dlnm_rr': rr,
-                'disease_modifier': 1.0,
-                'dlnm_disease_modifier': 1.0,
-                'age_modifier': 1.0,
-                'dlnm_age_modifier': 1.0,
-                'uncapped_final_rr': rr,
-                'dlnm_adjusted_rr': rr,
+            return None, {
+                'error': '模型未训练，相对风险暂不计算',
+                'calculation_branch': 'untrained_unavailable',
+                'base_rr': None,
+                'raw_dlnm_rr': None,
+                'disease_modifier': None,
+                'dlnm_disease_modifier': None,
+                'age_modifier': None,
+                'dlnm_age_modifier': None,
+                'uncapped_final_rr': None,
+                'dlnm_adjusted_rr': None,
                 'rr_cap': None,
                 'rr_cap_applied': False,
-                'final_rr': rr,
+                'final_rr': None,
                 'temperature': temperature,
-                'deviation_from_mmt': deviation,
+                'mmt': None,
             }
         
-        # 获取MMT，如果未计算则使用默认值
-        mmt = self.mmt if self.mmt is not None else 20.0
+        if self.mmt is None:
+            return None, {
+                'error': '最适温度未计算，相对风险暂不计算',
+                'calculation_branch': 'mmt_unavailable',
+                'base_rr': None,
+                'raw_dlnm_rr': None,
+                'disease_modifier': None,
+                'dlnm_disease_modifier': None,
+                'age_modifier': None,
+                'dlnm_age_modifier': None,
+                'uncapped_final_rr': None,
+                'dlnm_adjusted_rr': None,
+                'rr_cap': None,
+                'rr_cap_applied': False,
+                'final_rr': None,
+                'temperature': temperature,
+                'mmt': None,
+            }
+        mmt = float(self.mmt)
         
         # 基础RR计算
         rr = self._get_base_rr(temperature)
         
         # 考虑滞后效应
         if lag_temperatures is not None and len(lag_temperatures) > 0:
-            # 确保滞后温度都是数值
             clean_lag_temps = []
+            lags_complete = True
             for t in lag_temperatures:
                 try:
-                    clean_lag_temps.append(float(t) if t is not None else temperature)
+                    parsed = float(t)
                 except (TypeError, ValueError):
-                    clean_lag_temps.append(temperature)
+                    lags_complete = False
+                    break
+                if not np.isfinite(parsed):
+                    lags_complete = False
+                    break
+                clean_lag_temps.append(parsed)
+            if not lags_complete:
+                return None, {
+                    'error': '滞后气温缺测，相对风险暂不计算',
+                    'calculation_branch': 'lag_unavailable',
+                    'base_rr': None,
+                    'raw_dlnm_rr': None,
+                    'disease_modifier': None,
+                    'dlnm_disease_modifier': None,
+                    'age_modifier': None,
+                    'dlnm_age_modifier': None,
+                    'uncapped_final_rr': None,
+                    'dlnm_adjusted_rr': None,
+                    'rr_cap': None,
+                    'rr_cap_applied': False,
+                    'final_rr': None,
+                    'temperature': temperature,
+                    'mmt': mmt,
+                }
             if clean_lag_temps:
                 rr = self._apply_lag_effects(temperature, clean_lag_temps, rr)
         
@@ -1024,14 +1063,23 @@ class DLNMRiskService:
         }
     
     def get_risk_thresholds(self):
-        """获取风险阈值"""
+        """获取风险阈值。缺测分位数不填文献默认值。"""
+        def _finite_or_none(value):
+            try:
+                parsed = float(value)
+            except (TypeError, ValueError):
+                return None
+            if not np.isfinite(parsed):
+                return None
+            return parsed
+
         return {
-            'heat_extreme': self.percentiles.get('p95', 35),
-            'heat_warning': self.percentiles.get('p90', 32),
-            'cold_warning': self.percentiles.get('p10', 5),
-            'cold_extreme': self.percentiles.get('p5', 2),
+            'heat_extreme': _finite_or_none(self.percentiles.get('p95')),
+            'heat_warning': _finite_or_none(self.percentiles.get('p90')),
+            'cold_warning': _finite_or_none(self.percentiles.get('p10')),
+            'cold_extreme': _finite_or_none(self.percentiles.get('p5')),
             'mmt': self.mmt,
-            'hot_night_threshold': self.tmin_p90 if self.tmin_p90 is not None else 22
+            'hot_night_threshold': _finite_or_none(self.tmin_p90),
         }
     
     def identify_extreme_weather_events(self, temperature, duration=1, is_night_temp=False):
@@ -1047,11 +1095,22 @@ class DLNMRiskService:
         - event_type: 事件类型
         - severity: 严重程度
         """
+        try:
+            temperature = float(temperature)
+        except (TypeError, ValueError):
+            return []
+        if not np.isfinite(temperature):
+            return []
         thresholds = self.get_risk_thresholds()
         events = []
+        heat_extreme = thresholds.get('heat_extreme')
+        heat_warning = thresholds.get('heat_warning')
+        cold_extreme = thresholds.get('cold_extreme')
+        cold_warning = thresholds.get('cold_warning')
+        hot_night_threshold = thresholds.get('hot_night_threshold')
         
         # 热浪检测
-        if temperature >= thresholds['heat_extreme']:
+        if heat_extreme is not None and temperature >= heat_extreme:
             if duration >= 3:
                 events.append({
                     'type': '热浪',
@@ -1066,7 +1125,7 @@ class DLNMRiskService:
                     'description': f'极端高温({temperature:.1f}°C)',
                     'rr_multiplier': 1.3
                 })
-        elif temperature >= thresholds['heat_warning']:
+        elif heat_warning is not None and temperature >= heat_warning:
             events.append({
                 'type': '高温预警',
                 'severity': 'medium',
@@ -1075,7 +1134,7 @@ class DLNMRiskService:
             })
         
         # 寒潮检测
-        if temperature <= thresholds['cold_extreme']:
+        if cold_extreme is not None and temperature <= cold_extreme:
             if duration >= 3:
                 events.append({
                     'type': '寒潮',
@@ -1090,7 +1149,7 @@ class DLNMRiskService:
                     'description': f'极端低温({temperature:.1f}°C)',
                     'rr_multiplier': 1.25
                 })
-        elif temperature <= thresholds['cold_warning']:
+        elif cold_warning is not None and temperature <= cold_warning:
             events.append({
                 'type': '低温预警',
                 'severity': 'medium',
@@ -1099,7 +1158,7 @@ class DLNMRiskService:
             })
         
         # 热夜检测
-        if is_night_temp and temperature >= thresholds.get('hot_night_threshold', 22):
+        if is_night_temp and hot_night_threshold is not None and temperature >= hot_night_threshold:
             events.append({
                 'type': '热夜',
                 'severity': 'medium',

@@ -6,6 +6,20 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def test_metric_explanations_load_from_content_json():
+    import json
+    from core.metric_explanations import (
+        METRIC_EXPLANATION_GROUPS,
+        METRIC_EXPLANATIONS,
+        _CATALOG_PATH,
+    )
+
+    assert _CATALOG_PATH.name == 'metric_explanations.json'
+    payload = json.loads(_CATALOG_PATH.read_text(encoding='utf-8'))
+    assert payload['groups'] == METRIC_EXPLANATION_GROUPS
+    assert payload['metrics'] == METRIC_EXPLANATIONS
+
+
 def test_metric_catalog_is_complete_and_has_unique_anchors():
     from core.metric_explanations import (
         METRIC_EXPLANATION_GROUPS,
@@ -148,3 +162,13 @@ def test_metric_info_script_supports_hover_focus_click_and_escape():
     assert "event.key !== 'Escape'" in script
     assert 'MutationObserver' in script
     assert 'escapeHtml' in script
+
+
+def test_forecast_explanations_do_not_claim_default_aqi_50_is_used():
+    catalog = (ROOT / 'data' / 'content' / 'metric_explanations.json').read_text(encoding='utf-8')
+    transparency = (ROOT / 'templates' / 'transparency.html').read_text(encoding='utf-8')
+    assert '默认 AQI 50（仅追溯）' not in catalog
+    assert '默认 AQI 50 不代表' not in catalog
+    assert '默认 AQI 50 代理' not in transparency
+    assert '未编造默认值' in catalog
+    assert '不再编造默认 AQI 50' in transparency

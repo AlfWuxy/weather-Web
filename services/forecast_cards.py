@@ -6,6 +6,21 @@ import math
 from utils.parsers import parse_float
 
 
+FORECAST_PM25_SOURCES = frozenset({'direct', 'aqi_proxy'})
+PM25_SOURCE_LABELS = {
+    'direct': '未来日直接值',
+    'current_observation_reuse': '当前实况复用（非未来预报）',
+    'aqi_proxy': '未来日AQI×0.65代理',
+    'current_observation_aqi_proxy': '当前实况AQI×0.65代理',
+    'default_aqi_50': '缺测 PM2.5/AQI，未编造默认值',
+}
+HEAT_RISK_LABELS = {
+    '高风险': '热风险高',
+    '中等风险': '热风险中',
+    '低风险': '热风险低',
+}
+
+
 def score_level(score):
     """按分值映射页面展示等级。"""
     if score >= 70:
@@ -53,6 +68,29 @@ def forecast_day_labels(day, start_date):
     return weekday, f'周{weekday}'
 
 
+def pm25_in_score_flag(composite, source):
+    flagged = composite.get('pm25_in_score')
+    if flagged is None:
+        return source in FORECAST_PM25_SOURCES
+    return bool(flagged)
+
+
+def pm25_source_label(source, in_score):
+    label = PM25_SOURCE_LABELS.get(source)
+    if not label:
+        return '--'
+    if not in_score:
+        return f'{label}，未纳入评分'
+    return label
+
+
+def display_risk_label(score, pm25_in_score):
+    base = score_level(score)
+    if pm25_in_score:
+        return base
+    return HEAT_RISK_LABELS[base]
+
+
 def build_forecast_cards(qweather_days, health_forecasts, start_date):
     """把和风日预报与健康预测合并为模板卡片。"""
     entries = list(qweather_days or [])
@@ -92,6 +130,8 @@ def build_forecast_cards(qweather_days, health_forecasts, start_date):
         risk_available = score is not None
         if risk_available:
             score = max(0, min(100, int(round(score))))
+        pm25_source = composite.get('pm25_source') or pm25_input.get('source')
+        pm25_in_score = pm25_in_score_flag(composite, pm25_source)
         cards.append({
             'dow': dow,
             'date': date_label,
@@ -101,8 +141,13 @@ def build_forecast_cards(qweather_days, health_forecasts, start_date):
             'condition': entry.get('condition') or entry.get('condition_night') or '未知',
             'risk_level': level_bucket(score) if risk_available else 'unknown',
             'risk_score': score,
-            'risk_label': score_level(score) if risk_available else '待计算',
+            'risk_label': display_risk_label(score, pm25_in_score) if risk_available else '待计算',
             'risk_available': risk_available,
+            'pm25_in_score': pm25_in_score,
+            'score_basis': composite.get('score_basis') or (
+                'composite' if pm25_in_score else 'heat_humidity_hot_night'
+            ),
+            'pm25_source_label': pm25_source_label(pm25_source, pm25_in_score),
             'risk_components': {
                 'heat': parse_float(components.get('heat')),
                 'pm25': parse_float(components.get('pm25')),
@@ -122,7 +167,7 @@ def build_forecast_cards(qweather_days, health_forecasts, start_date):
             'humidity_source': humidity_input.get('source'),
             'pm25_used': parse_float(pm25_input.get('used_value')),
             'pm25_imputed': pm25_input.get('imputed'),
-            'pm25_source': composite.get('pm25_source') or pm25_input.get('source'),
+            'pm25_source': pm25_source,
             'pm25_detail_source': pm25_input.get('detail_source'),
             'pm25_aqi_used': parse_float(pm25_input.get('aqi_used')),
             'pm25_proxy': parse_float(composite.get('pm25_proxy')),

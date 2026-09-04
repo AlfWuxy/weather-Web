@@ -44,6 +44,8 @@ def test_dashboard_renders_temperature_theme(authenticated_client):
     assert 'data-temp-intensity="' in html
     assert "--yl-hero-primary:" in html
     assert "家庭照护今日页" in html
+    from core.time_utils import today_local
+    assert today_local().isoformat() in html
 
 
 def test_dashboard_renders_weather_alert_real_fields_with_local_date(
@@ -84,3 +86,147 @@ def test_dashboard_renders_weather_alert_real_fields_with_local_date(
     assert '测试预警详情' in html
     assert 'yl-alert-item level-high' in html
     assert '<strong></strong>' not in html
+
+
+def test_dashboard_does_not_invent_hydration_volume_or_bp_when_actions_empty(
+    authenticated_client,
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        'services.user.dashboard_service.get_weather_with_cache',
+        lambda _location: ({
+            'temperature': 27,
+            'temperature_max': 31,
+            'temperature_min': 22,
+            'humidity': 68,
+            'data_source': 'QWeather',
+            'is_mock': False,
+        }, False),
+    )
+    monkeypatch.setattr(
+        'services.user.dashboard_service.get_qweather_forecast_with_cache',
+        lambda _location, days=7: ([], False, {'error': 'qweather_unavailable'}),
+    )
+    monkeypatch.setattr(
+        'services.user.dashboard_service._action_plan',
+        lambda _label: [],
+    )
+
+    body = authenticated_client.get('/dashboard').get_data(as_text=True)
+
+    assert '建议 1.5L' not in body
+    assert '多喝温水' not in body
+    assert '早晚各测一次' not in body
+    assert '别漏降压药' not in body
+    assert '先做好日常防护' in body
+
+
+def test_elder_dashboard_does_not_invent_heat_actions_when_plan_empty(
+    authenticated_client, monkeypatch,
+):
+    monkeypatch.setattr(
+        'services.user.dashboard_service.get_weather_with_cache',
+        lambda _location: ({
+            'temperature': 28,
+            'temperature_max': 30,
+            'temperature_min': 22,
+            'humidity': 68,
+            'data_source': 'QWeather',
+            'is_mock': False,
+        }, False),
+    )
+    monkeypatch.setattr(
+        'services.user.dashboard_service.get_qweather_forecast_with_cache',
+        lambda _location, days=7: ([], False, {'error': 'qweather_unavailable'}),
+    )
+    monkeypatch.setattr(
+        'services.user.dashboard_service._action_plan',
+        lambda _label: [],
+    )
+
+    body = authenticated_client.get('/elder-mode').get_data(as_text=True)
+
+    assert '身边放一杯水' not in body
+    assert '先待在阴凉处' not in body
+    assert '先做好日常防护' in body
+
+
+def test_dashboard_hero_sequences_care_action_and_cooling(authenticated_client):
+    body = authenticated_client.get('/dashboard').get_data(as_text=True)
+
+    assert '记录今天是否做到' in body
+    assert 'href="/action"' in body or 'action_check' in body
+    assert '附近避暑点' in body
+    assert 'href="/cooling"' in body
+    assert '照护工作台' in body
+    assert '看 7 天趋势' in body
+
+
+def _real_qweather():
+    return {
+        'temperature': 28,
+        'temperature_max': 30,
+        'temperature_min': 22,
+        'humidity': 68,
+        'weather_condition': '多云',
+        'data_source': 'QWeather',
+        'is_mock': False,
+    }, False
+
+
+def test_dashboard_unknown_heat_level_is_not_shown_as_low_risk(authenticated_client, monkeypatch):
+    monkeypatch.setattr(
+        'services.user.dashboard_service.get_weather_with_cache',
+        lambda _location: _real_qweather(),
+    )
+    monkeypatch.setattr(
+        'services.user.dashboard_service.get_qweather_forecast_with_cache',
+        lambda _location, days=7: ([], False, {'error': 'qweather_unavailable'}),
+    )
+    monkeypatch.setattr(
+        'services.user.dashboard_service.HeatActionService.calculate_heat_risk',
+        lambda self, weather_data, consecutive_hot_days=None: {
+            'risk_level': 'not-a-real-level',
+            'risk_score': 40,
+            'heat_index': 28,
+            'night_min': 22,
+            'consecutive_hot_days': 0,
+            'factor_scores': [],
+        },
+    )
+
+    body = authenticated_client.get('/dashboard').get_data(as_text=True)
+
+    assert '风险未知' in body
+    assert '今天风险较低' not in body
+    assert '规律补水' not in body
+    assert '先做好日常防护' in body
+
+
+def test_elder_unknown_heat_level_is_not_shown_as_ordinary_day(authenticated_client, monkeypatch):
+    monkeypatch.setattr(
+        'services.user.dashboard_service.get_weather_with_cache',
+        lambda _location: _real_qweather(),
+    )
+    monkeypatch.setattr(
+        'services.user.dashboard_service.get_qweather_forecast_with_cache',
+        lambda _location, days=7: ([], False, {'error': 'qweather_unavailable'}),
+    )
+    monkeypatch.setattr(
+        'services.user.dashboard_service.HeatActionService.calculate_heat_risk',
+        lambda self, weather_data, consecutive_hot_days=None: {
+            'risk_level': 'not-a-real-level',
+            'risk_score': 40,
+            'heat_index': 28,
+            'night_min': 22,
+            'consecutive_hot_days': 0,
+            'factor_scores': [],
+        },
+    )
+
+    body = authenticated_client.get('/elder-mode').get_data(as_text=True)
+
+    assert '风险未知' in body
+    assert '可以按平常来' not in body
+    assert '规律补水' not in body
+    assert '先做好日常防护' in body

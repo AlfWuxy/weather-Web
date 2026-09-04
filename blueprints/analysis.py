@@ -28,7 +28,7 @@ from core.db_models import (
     WeatherData
 )
 from core.time_utils import today_local, date_to_utc_start, date_to_utc_end, utc_to_local_date, utcnow
-from utils.parsers import parse_date
+from utils.parsers import csv_safe_cell, parse_date
 from utils.validators import sanitize_input
 
 logger = logging.getLogger(__name__)
@@ -3178,8 +3178,7 @@ def reports_export():
 @login_required
 def annual_report():
     """年度健康报告"""
-    if is_guest_user(current_user):
-        flash('游客模式无法生成年度报告，请注册/登录正式账号', 'error')
+    if not _require_admin():
         return redirect(url_for('user.user_dashboard'))
 
     end_date = today_local()
@@ -3304,14 +3303,14 @@ def pilot_dashboard():
     )
 
 
-@bp.route('/analysis/pilot/export.csv', endpoint='pilot_export_csv')
+@bp.route('/analysis/pilot/export.csv', methods=['POST'], endpoint='pilot_export_csv')
 @login_required
 def pilot_export_csv():
     """导出试点埋点（CSV）"""
     if not _require_admin():
         return redirect(url_for('user.user_dashboard'))
 
-    days = request.args.get('days', default=30, type=int)
+    days = request.form.get('days', default=30, type=int)
     days = max(1, min(days, 365))
     start_ts = utcnow() - timedelta(days=days)
 
@@ -3324,13 +3323,13 @@ def pilot_export_csv():
     writer.writerow(['created_at', 'event_type', 'user_id', 'pair_id', 'member_id', 'source', 'meta_json'])
     for e in events:
         writer.writerow([
-            e.created_at.isoformat() if e.created_at else '',
-            e.event_type or '',
-            e.user_id or '',
-            e.pair_id or '',
-            e.member_id or '',
-            e.source or '',
-            e.meta_json or '',
+            csv_safe_cell(e.created_at.isoformat() if e.created_at else ''),
+            csv_safe_cell(e.event_type or ''),
+            csv_safe_cell(e.user_id or ''),
+            csv_safe_cell(e.pair_id or ''),
+            csv_safe_cell(e.member_id or ''),
+            csv_safe_cell(e.source or ''),
+            csv_safe_cell(e.meta_json or ''),
         ])
 
     data = out.getvalue().encode('utf-8-sig')  # Excel-friendly

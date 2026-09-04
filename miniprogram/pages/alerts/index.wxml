@@ -2,13 +2,16 @@
   <view class="card">
     <view style="font-size: 18px; font-weight: 700;">预警</view>
     <view class="muted" style="margin-top: 6px; font-size: 12px;">
-      官方预警来自 QWeather；无官方预警时，页面仍会展示温度阈值信息供参考。
+      官方预警来自 QWeather。天气未更新时不展示温度阈值。
     </view>
     <view class="muted" style="margin-top: 10px;">
       地点：{{location.query || '-'}}
     </view>
-    <view class="muted" style="margin-top: 4px; font-size: 12px;">
-      Tmax {{weather.temperature_max || '-'}} · Tmin {{weather.temperature_min || '-'}}
+    <view wx:if="{{weather.weather_available}}" class="muted" style="margin-top: 4px; font-size: 12px;">
+      Tmax {{weather.temperature_max}} · Tmin {{weather.temperature_min}}
+    </view>
+    <view wx:else class="muted" style="margin-top: 4px; font-size: 12px;">
+      天气更新中，阈值暂不可用
     </view>
   </view>
 
@@ -18,7 +21,11 @@
     <view class="muted" style="text-align:center; padding: 20px;">加载中…</view>
   </block>
 
-  <block wx:if="{{!loading && warnings.length === 0}}">
+  <block wx:elif="{{missingPairId}}">
+    <view class="muted" style="text-align:center; padding: 20px;">缺少照护对象</view>
+  </block>
+
+  <block wx:elif="{{warnings.length === 0}}">
     <view class="muted" style="text-align:center; padding: 20px;">暂无官方预警</view>
   </block>
 

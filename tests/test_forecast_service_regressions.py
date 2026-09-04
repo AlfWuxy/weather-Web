@@ -21,6 +21,18 @@ def test_normalize_forecast_entry_preserves_zero_p50():
     assert normalized['temp'] == 0.0
 
 
+def test_normalize_forecast_entry_does_not_invent_15_when_temperature_missing():
+    from services.forecast_service import ForecastService
+
+    service = ForecastService()
+    empty = service._normalize_forecast_entry({})
+    humidity_only = service._normalize_forecast_entry({'humidity': 80})
+
+    assert empty['temp'] is None
+    assert humidity_only['temp'] is None
+    assert humidity_only['humidity'] == 80.0
+
+
 def test_composite_exposure_returns_score_stages_and_input_trace():
     from services.forecast_service import ForecastService
 
@@ -46,13 +58,17 @@ def test_composite_exposure_returns_score_stages_and_input_trace():
         'detail_source': 'day_aqi_input',
         'aqi_used': 100.0,
         'aqi_imputed': False,
+        'included_in_score': True,
     }
-    assert result['inputs']['humidity']['used_value'] == 60.0
+    assert result['inputs']['humidity']['used_value'] is None
     assert result['inputs']['humidity']['imputed'] is True
+    assert result['inputs']['humidity']['source'] == 'missing'
+    assert result['inputs']['humidity']['included_in_score'] is False
     assert result['inputs']['temp_min'] == {
         'used_value': 26.0,
         'imputed': True,
         'source': 'temperature_uncertainty_lower',
+        'included_in_score': True,
     }
 
     reused_observation_result = service._composite_exposure_risk(
@@ -88,7 +104,9 @@ def test_composite_exposure_returns_score_stages_and_input_trace():
     )
     assert default_aqi_result['pm25_source'] == 'default_aqi_50'
     assert default_aqi_result['inputs']['pm25']['source'] == 'default_aqi_50'
-    assert default_aqi_result['inputs']['pm25']['aqi_used'] == 50.0
+    assert default_aqi_result['inputs']['pm25']['aqi_used'] is None
+    assert default_aqi_result['inputs']['pm25']['used_value'] is None
+    assert default_aqi_result['pm25_proxy'] is None
     assert default_aqi_result['inputs']['pm25']['aqi_imputed'] is True
 
 
@@ -133,6 +151,12 @@ def test_qweather_normalizer_does_not_insert_temperature_or_humidity_defaults():
     assert normalized['temperature_min'] is None
     assert normalized['temperature_mean'] is None
     assert normalized['humidity'] is None
+    assert normalized['condition'] != '晴'
+    assert not normalized['condition']
+    assert normalized['condition_night'] != '晴'
+    assert not normalized['condition_night']
+    assert normalized['wind_speed'] is None
+    assert normalized['wind_speed'] != 3.0
 
 
 def test_predict_daily_visits_exposes_raw_probability_inputs(monkeypatch):
@@ -429,8 +453,11 @@ def test_forecast_page_embeds_recalculation_context(authenticated_client, monkey
     predictability_context = contexts_by_metric['forecast_predictability'][0]
     assert exposure_context['限幅前评分'] == 72.0
     assert exposure_context['协同加分'] == 12.0
-    assert exposure_context['PM2.5来源'] == '当前实况复用（非未来预报）'
+    assert exposure_context['PM2.5来源'] == '当前实况复用（非未来预报），未纳入评分'
+    assert exposure_context['PM2.5是否计入评分'] == '否'
     assert contexts_by_metric['forecast_exposure_score'][1]['PM2.5来源'] == '未来日AQI×0.65代理'
+    assert '热风险' in body
+    assert '不会用今天的空气质量去填后面几天' in body
     assert visit_context['概率所用原始门诊量'] == 39.5
     assert visit_context['历史P90阈值'] == 38.0
     assert predictability_context['计算分支'] == '上游外部分数'

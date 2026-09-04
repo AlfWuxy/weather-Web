@@ -52,6 +52,38 @@ def test_openmeteo_current_weather_contract_marks_source_and_uncertainty(app, mo
     assert 'temperature_2m,relative_humidity_2m' in calls[0][1]['current']
 
 
+def test_openmeteo_missing_humidity_is_not_defaulted_to_60(app, monkeypatch):
+    with app.app_context():
+        from services.weather_service import WeatherService
+        import services.weather_service as weather_module
+
+        service = WeatherService()
+        monkeypatch.setattr(service, '_get_location', lambda city: '116.20,29.27')
+        monkeypatch.setattr(service, '_parse_lon_lat', lambda location: (116.20, 29.27))
+
+        def fake_get(url, params=None, timeout=None):
+            return _response({
+                'current': {
+                    'temperature_2m': 33.4,
+                    'surface_pressure': 1008,
+                    'weather_code': 1,
+                    'wind_speed_10m': 4.2,
+                },
+                'daily': {
+                    'temperature_2m_max': [37.1],
+                    'temperature_2m_min': [26.2],
+                },
+            })
+
+        monkeypatch.setattr(weather_module.requests, 'get', fake_get)
+        result = service._get_openmeteo_weather('都昌')
+
+    assert result is not None
+    assert result['humidity'] is None
+    assert result['temperature'] == 33.4
+    assert result['is_mock'] is False
+
+
 def test_openmeteo_daily_forecast_contract_uses_no_sdk_or_live_network(app, monkeypatch):
     with app.app_context():
         from services.weather_service import WeatherService
@@ -86,6 +118,109 @@ def test_openmeteo_daily_forecast_contract_uses_no_sdk_or_live_network(app, monk
     assert result[1]['condition'] == '小雨'
 
 
+def test_openmeteo_forecast_skips_days_without_temperature(app, monkeypatch):
+    with app.app_context():
+        from services.weather_service import WeatherService
+        import services.weather_service as weather_module
+
+        service = WeatherService()
+        monkeypatch.setattr(service, '_get_location', lambda city: '116.20,29.27')
+        monkeypatch.setattr(service, '_parse_lon_lat', lambda location: (116.20, 29.27))
+
+        def fake_get(url, params=None, timeout=None):
+            return _response({
+                'daily': {
+                    'time': ['2026-06-01', '2026-06-02'],
+                    'temperature_2m_max': [36.0, None],
+                    'temperature_2m_min': [26.0, None],
+                    'precipitation_probability_max': [30, 45],
+                    'weather_code': [1, 61],
+                },
+            })
+
+        monkeypatch.setattr(weather_module.requests, 'get', fake_get)
+        result = service._get_openmeteo_forecast('都昌', days=2)
+
+    assert len(result) == 1
+    assert result[0]['date'] == '2026-06-01'
+    assert result[0]['temperature_max'] == 36.0
+    assert all(row.get('temperature_max') != 25.0 for row in result)
+    assert all(row.get('temperature_min') != 15.0 for row in result)
+
+
+def test_openmeteo_nowcast_skips_hours_without_temperature(app, monkeypatch):
+    with app.app_context():
+        from services.weather_service import WeatherService
+        import services.weather_service as weather_module
+
+        service = WeatherService()
+        monkeypatch.setattr(service, '_get_location', lambda city: '116.20,29.27')
+        monkeypatch.setattr(service, '_parse_lon_lat', lambda location: (116.20, 29.27))
+
+        def fake_get(url, params=None, timeout=None):
+            return _response({
+                'hourly': {
+                    'time': ['2026-06-01T08:00', '2026-06-01T09:00'],
+                    'precipitation_probability': [20, 40],
+                    'precipitation': [0.0, 0.2],
+                    'temperature_2m': [31.5, None],
+                    'weather_code': [1, 61],
+                },
+            })
+
+        monkeypatch.setattr(weather_module.requests, 'get', fake_get)
+        result = service.get_short_term_nowcast('都昌', hours=2)
+
+    assert result['available'] is True
+    assert len(result['timeline']) == 1
+    assert result['timeline'][0]['temperature'] == 31.5
+    assert all(item.get('temperature') != 0.0 for item in result['timeline'])
+
+
+def test_weather_code_to_text_does_not_invent_cloudy_when_missing(app):
+    with app.app_context():
+        from services.weather_service import WeatherService
+
+        service = WeatherService()
+
+    assert service._weather_code_to_text(None) == ''
+    assert service._weather_code_to_text('bad') == ''
+    assert service._weather_code_to_text(4) == ''
+    assert service._weather_code_to_text(0) == '晴'
+    assert service._weather_code_to_text(2) == '多云'
+
+
+def test_openmeteo_current_missing_weather_code_is_not_sunny(app, monkeypatch):
+    with app.app_context():
+        from services.weather_service import WeatherService
+        import services.weather_service as weather_module
+
+        service = WeatherService()
+        monkeypatch.setattr(service, '_get_location', lambda city: '116.20,29.27')
+        monkeypatch.setattr(service, '_parse_lon_lat', lambda location: (116.20, 29.27))
+
+        def fake_get(url, params=None, timeout=None):
+            return _response({
+                'current': {
+                    'temperature_2m': 33.4,
+                    'relative_humidity_2m': 66,
+                    'surface_pressure': 1008,
+                    'wind_speed_10m': 4.2,
+                },
+                'daily': {
+                    'temperature_2m_max': [37.1],
+                    'temperature_2m_min': [26.2],
+                },
+            })
+
+        monkeypatch.setattr(weather_module.requests, 'get', fake_get)
+        result = service._get_openmeteo_weather('都昌')
+
+    assert result['weather_condition'] == ''
+    assert result['weather_condition'] != '晴'
+    assert result['weather_condition'] != '多云'
+
+
 def test_multimodel_forecast_contract_preserves_provider_names(app):
     with app.app_context():
         from services.weather_service import WeatherService
@@ -117,6 +252,46 @@ def test_multimodel_forecast_contract_preserves_provider_names(app):
     assert row['model_names'] == ['QWeather', 'Open-Meteo']
     assert row['data_source'] == 'QWeather+Open-Meteo'
     assert row['temperature_ensemble_p10'] <= row['temperature_ensemble_p50'] <= row['temperature_ensemble_p90']
+    assert row['temperature_max'] is not None
+    assert row['temperature_min'] is not None
+
+
+def test_multimodel_forecast_does_not_invent_diurnal_span_when_max_min_missing(app):
+    with app.app_context():
+        from services.weather_service import WeatherService
+
+        service = WeatherService()
+        merged = service._merge_multimodel_forecast(
+            [{
+                'date': '2026-06-01',
+                'temperature_mean': 32,
+                'condition': '晴',
+                'data_source': 'QWeather',
+            }],
+            [],
+            days=1,
+        )
+
+    assert len(merged) == 1
+    row = merged[0]
+    assert row['temperature_ensemble_mean'] == 32
+    assert row['temperature_max'] is None
+    assert row['temperature_min'] is None
+
+
+def test_weather_forecast_returns_empty_when_real_sources_fail(app, monkeypatch):
+    with app.app_context():
+        from services.weather_service import WeatherService
+
+        service = WeatherService()
+        monkeypatch.setattr(service, '_qweather_is_configured', lambda: False)
+        monkeypatch.setattr(service, '_get_openmeteo_forecast', lambda *_args, **_kwargs: [])
+        monkeypatch.setattr(service, '_merge_multimodel_forecast', lambda *_args, **_kwargs: [])
+
+        result = service.get_weather_forecast('都昌', days=7)
+
+    assert result == []
+    assert all(day.get('is_mock') for day in result)
 
 
 def test_qweather_production_guard_rejects_non_finite_temperature():

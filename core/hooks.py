@@ -15,6 +15,7 @@ from core.metric_explanations import (
     get_metric_explanations,
 )
 from core.security import csrf_failure_response, generate_csrf_token, validate_csrf
+from core.time_utils import today_local
 from core.weather import (
     get_location_options,
     get_user_location_value,
@@ -158,6 +159,7 @@ def register_hooks(app):
         current_location = normalize_location_name(get_user_location_value())
         payload = {
             'now': lambda: datetime.now(tz=__import__('zoneinfo').ZoneInfo('Asia/Shanghai')),
+            'today_date': today_local().isoformat(),
             'csrf_token': generate_csrf_token,
             'current_location': current_location,
             'location_options': get_location_options(),
@@ -186,6 +188,13 @@ def register_hooks(app):
                 payload['amap_security_js_code'] = amap_code
             elif amap_code:
                 logger.warning("Invalid AMAP_SECURITY_JS_CODE length; skipping template injection")
+        ml_available = False
+        try:
+            from services.ml_prediction_service import get_ml_service
+            ml_available = bool(get_ml_service().model_loaded)
+        except Exception:
+            logger.warning("ML 模型状态读取失败，已隐藏预测入口", exc_info=True)
+        payload['ml_model_available'] = ml_available
         return payload
 
     app.jinja_env.globals['csrf_token'] = generate_csrf_token

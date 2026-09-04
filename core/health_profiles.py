@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """Health profile helpers."""
+from datetime import time as dt_time
 import json
 import logging
 import re
@@ -96,25 +97,72 @@ def reminder_triggered(reminder, weather):
         return False, None
 
     reasons = []
-    temp = weather.temperature or 0
-    humidity = weather.humidity or 0
-    aqi = weather.aqi or 0
+    temp = parse_float(getattr(weather, 'temperature', None))
+    humidity = parse_float(getattr(weather, 'humidity', None))
+    aqi = parse_float(getattr(weather, 'aqi', None))
 
     high_temp = triggers.get('high_temp')
     low_temp = triggers.get('low_temp')
     high_humidity = triggers.get('high_humidity')
     high_aqi = triggers.get('high_aqi')
 
-    if high_temp is not None and temp >= high_temp:
+    if high_temp is not None and temp is not None and temp >= high_temp:
         reasons.append(f"高温≥{high_temp}°C")
-    if low_temp is not None and temp <= low_temp:
+    if low_temp is not None and temp is not None and temp <= low_temp:
         reasons.append(f"低温≤{low_temp}°C")
-    if high_humidity is not None and humidity >= high_humidity:
+    if high_humidity is not None and humidity is not None and humidity >= high_humidity:
         reasons.append(f"高湿度≥{high_humidity}%")
-    if high_aqi is not None and aqi >= high_aqi:
+    if high_aqi is not None and aqi is not None and aqi >= high_aqi:
         reasons.append(f"AQI≥{high_aqi}")
 
     return bool(reasons), '、'.join(reasons) if reasons else None
+
+
+def _parse_hhmm(value):
+    text = str(value or '').strip()
+    if not text:
+        return None
+    parts = text.split(':')
+    if len(parts) < 2:
+        return None
+    try:
+        hour = int(parts[0])
+        minute = int(parts[1])
+    except (TypeError, ValueError):
+        return None
+    if hour < 0 or hour > 23 or minute < 0 or minute > 59:
+        return None
+    return dt_time(hour=hour, minute=minute)
+
+
+def reminder_schedule_due(reminder, now_local):
+    parsed = _parse_hhmm(getattr(reminder, 'time_of_day', None))
+    if parsed is None or now_local is None:
+        return False, None
+    current = now_local.time().replace(second=0, microsecond=0)
+    if current >= parsed:
+        return True, f"到点 {reminder.time_of_day}"
+    return False, None
+
+
+def reminder_is_due(reminder, weather=None, now_local=None):
+    """到点服药，或天气触发额外提醒。不要求必须有慢病。"""
+    reasons = []
+    scheduled, scheduled_reason = reminder_schedule_due(reminder, now_local)
+    if scheduled:
+        reasons.append(scheduled_reason)
+    weather_on, weather_reason = reminder_triggered(reminder, weather)
+    if weather_on:
+        reasons.append(weather_reason)
+    return bool(reasons), '、'.join(reasons) if reasons else None
+
+
+def reminder_notified_on_local_date(reminder, local_date):
+    last = getattr(reminder, 'last_notified_at', None)
+    if last is None or local_date is None:
+        return False
+    from core.time_utils import utc_to_local_date
+    return utc_to_local_date(last) == local_date
 
 
 def member_weather_triggered(profile, weather):
@@ -125,32 +173,46 @@ def member_weather_triggered(profile, weather):
     if not thresholds:
         return []
     reasons = []
-    temp = getattr(weather, 'temperature', None) or 0
-    humidity = getattr(weather, 'humidity', None) or 0
-    aqi = getattr(weather, 'aqi', None) or 0
+    temp = parse_float(getattr(weather, 'temperature', None))
+    humidity = parse_float(getattr(weather, 'humidity', None))
+    aqi = parse_float(getattr(weather, 'aqi', None))
 
     high_temp = thresholds.get('high_temp')
     low_temp = thresholds.get('low_temp')
     high_humidity = thresholds.get('high_humidity')
     high_aqi = thresholds.get('high_aqi')
 
-    if high_temp is not None and temp >= high_temp:
+    if high_temp is not None and temp is not None and temp >= high_temp:
         reasons.append(f"高温≥{high_temp}°C")
-    if low_temp is not None and temp <= low_temp:
+    if low_temp is not None and temp is not None and temp <= low_temp:
         reasons.append(f"低温≤{low_temp}°C")
-    if high_humidity is not None and humidity >= high_humidity:
+    if high_humidity is not None and humidity is not None and humidity >= high_humidity:
         reasons.append(f"高湿度≥{high_humidity}%")
-    if high_aqi is not None and aqi >= high_aqi:
+    if high_aqi is not None and aqi is not None and aqi >= high_aqi:
         reasons.append(f"AQI≥{high_aqi}")
     return reasons
 
 
 def compute_member_risk(member, profile):
-    """估算成员健康风险"""
-    score = 15
-    reasons = []
+    """估算成员健康风险。未填写年龄时不编造低风险。"""
+    unknown = {
+        'score': None,
+        'level': 'unknown',
+        'label': '风险未知',
+        'reasons': ['未填写年龄'],
+    }
+    raw_age = getattr(member, 'age', None)
+    if raw_age is None or str(raw_age).strip() == '':
+        return unknown
+    try:
+        age = int(raw_age)
+    except (TypeError, ValueError):
+        return unknown
+    if age < 1:
+        return unknown
 
-    age = member.age or 0
+    score = 0
+    reasons = []
     if age >= 80:
         score += 30
         reasons.append('高龄')

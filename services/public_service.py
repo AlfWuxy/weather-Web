@@ -11,10 +11,12 @@ from flask import current_app, flash, redirect, render_template, request, sessio
 from flask_login import current_user, login_user, logout_user
 from sqlalchemy import or_
 
+from core.auth import find_user_by_username
 from core.constants import GUEST_ID_PREFIX
 from core.extensions import db
 from core.security import hash_identifier, hash_pair_token, hash_short_code, rate_limit_key, verify_pair_token
 from core.time_utils import today_local, utcnow, ensure_utc_aware
+from core.notifications import create_notification
 from core.usage import log_usage_event
 from core.weather import (
     get_consecutive_hot_days,
@@ -22,6 +24,7 @@ from core.weather import (
     is_qweather_online_weather,
     normalize_location_name,
 )
+from core.daily_tips import label_for_heat_level
 from core.guest import GuestUser, is_guest_user
 from core.db_models import (
     Community,
@@ -48,13 +51,6 @@ from utils.validators import (
 )
 
 logger = logging.getLogger(__name__)
-
-HEAT_RISK_LABELS = {
-    'low': '低风险',
-    'medium': '中风险',
-    'high': '高风险',
-    'extreme': '极高'
-}
 
 PAIR_TOKEN_SESSION_KEY = 'pair_token'
 
@@ -287,29 +283,9 @@ def _risk_level_value(label):
 
 
 def _action_plan(risk_label):
-    if risk_label == '极高':
-        return [
-            {'id': 'stay_cool', 'title': '留在有降温条件的室内', 'detail': '尽量避免外出，保持室内通风降温。'},
-            {'id': 'contact_now', 'title': '立即联系照护人/邻里', 'detail': '提前告知今日风险与行动安排。'},
-            {'id': 'cooling_center', 'title': '条件不足时优先去避暑点', 'detail': '优先选择就近、开放的避暑场所。'}
-        ]
-    if risk_label == '高风险':
-        return [
-            {'id': 'stay_indoor', 'title': '尽量待在阴凉通风处', 'detail': '避开正午高温时段外出。'},
-            {'id': 'hydrate', 'title': '少量多次补水', 'detail': '身边备好水或淡盐饮品。'},
-            {'id': 'check_in', 'title': '安排每日确认', 'detail': '与家人/邻里保持联系。'}
-        ]
-    if risk_label == '中风险':
-        return [
-            {'id': 'avoid_sun', 'title': '减少连续暴晒', 'detail': '户外活动分段进行。'},
-            {'id': 'cooling', 'title': '准备降温物品', 'detail': '风扇、湿毛巾或遮阳物品。'},
-            {'id': 'watch_signs', 'title': '关注体感变化', 'detail': '感到不适及时休息。'}
-        ]
-    return [
-        {'id': 'water', 'title': '规律补水', 'detail': '保持日常饮水习惯。'},
-        {'id': 'ventilate', 'title': '室内通风', 'detail': '早晚开窗换气。'},
-        {'id': 'shade', 'title': '适度遮阳', 'detail': '外出注意遮阳防晒。'}
-    ]
+    from core.daily_tips import action_plan_for_risk
+
+    return action_plan_for_risk(risk_label)
 
 
 def _resolve_pair(short_code, token):
@@ -533,7 +509,7 @@ def _build_action_context(pair, status_date):
         weather_data,
         consecutive_hot_days=consecutive_hot_days
     )
-    risk_label = HEAT_RISK_LABELS.get(heat_result['risk_level'], '低风险')
+    risk_label = label_for_heat_level(heat_result.get('risk_level') if heat_result else None)
     risk_reasons = heat_service.build_risk_reasons(heat_result)
     status = _get_or_create_daily_status(pair, status_date, risk_label)
     actions = _action_plan(risk_label)
@@ -576,9 +552,20 @@ def _render_action_page(
     )
 
 
+def _render_lookup_page(short_code='', entry_action=None, token=None):
+    return render_template(
+        'action_checkin.html',
+        stage='lookup',
+        short_code=short_code,
+        entry_action=entry_action,
+        token=token,
+    )
+
+
 def _resolve_action_routes(token=None, confirm_action=None, help_action=None, debrief_action=None):
     routes = {}
     if token:
+        routes['token'] = token
         routes['confirm_action'] = url_for('public.elder_token_checkin', token=token)
         routes['help_action'] = url_for('public.elder_token_help', token=token)
         routes['debrief_action'] = url_for('public.elder_token_debrief', token=token)
@@ -591,6 +578,45 @@ def _resolve_action_routes(token=None, confirm_action=None, help_action=None, de
     return routes
 
 
+def _notify_caregiver_of_help(pair):
+    caregiver_id = getattr(pair, 'caregiver_id', None)
+    if not caregiver_id:
+        return False
+    location = (getattr(pair, 'location_query', None) or getattr(pair, 'community_code', None) or '').strip()
+    title = '监测对象发出求助'
+    message = f'短码 {pair.short_code} 的监测对象点击了「我需要帮助」。'
+    if location:
+        message += f' 地点：{location}'
+    action_url = url_for('user.caregiver_pair_detail', pair_id=pair.id)
+    create_notification(
+        caregiver_id,
+        title=title,
+        message=message,
+        level='danger',
+        category='help',
+        member_id=getattr(pair, 'member_id', None),
+        action_url=action_url,
+        meta={'pair_id': pair.id, 'short_code': pair.short_code},
+    )
+    caregiver = db.session.get(User, caregiver_id)
+    wx_uid = (getattr(caregiver, 'wxpusher_uid', None) or '').strip() if caregiver else ''
+    if not caregiver or not getattr(caregiver, 'push_enabled', False) or not wx_uid:
+        return False
+    try:
+        from services.push import wxpusher
+
+        wxpusher.send(
+            wx_uid,
+            title,
+            message,
+            url=url_for('user.caregiver_pair_detail', pair_id=pair.id, _external=True),
+        )
+        return True
+    except Exception as exc:
+        logger.warning('求助推送失败: %s', exc)
+        return False
+
+
 def _handle_action_lookup(token=None, entry_action=None, confirm_action=None, help_action=None, debrief_action=None):
     if token:
         _store_pair_token(token)
@@ -598,11 +624,10 @@ def _handle_action_lookup(token=None, entry_action=None, confirm_action=None, he
     if request.method == 'POST':
         if _short_code_is_locked():
             flash('尝试次数过多，请稍后再试。', 'error')
-            return render_template(
-                'action_checkin.html',
-                stage='lookup',
+            return _render_lookup_page(
                 short_code=sanitize_input(request.form.get('short_code'), max_length=12) or '',
-                entry_action=entry_action
+                entry_action=entry_action,
+                token=token,
             )
 
         short_code = sanitize_input(request.form.get('short_code'), max_length=12) or ''
@@ -613,12 +638,7 @@ def _handle_action_lookup(token=None, entry_action=None, confirm_action=None, he
 
         if not short_code:
             flash('请输入短码', 'error')
-            return render_template(
-                'action_checkin.html',
-                stage='lookup',
-                short_code=short_code,
-                entry_action=entry_action
-            )
+            return _render_lookup_page(short_code=short_code, entry_action=entry_action, token=token)
 
         pair, error = _resolve_pair(short_code, token)
         if error:
@@ -630,12 +650,7 @@ def _handle_action_lookup(token=None, entry_action=None, confirm_action=None, he
                     flash('短码或令牌无效，请联系照护人确认。', 'error')
                 else:
                     flash(error, 'error')
-            return render_template(
-                'action_checkin.html',
-                stage='lookup',
-                short_code=short_code,
-                entry_action=entry_action
-            )
+            return _render_lookup_page(short_code=short_code, entry_action=entry_action, token=token)
 
         session['pair_session_id'] = pair.id
         session['pair_session_code'] = pair.short_code
@@ -667,12 +682,7 @@ def _handle_action_lookup(token=None, entry_action=None, confirm_action=None, he
         )
 
     short_code = sanitize_input(request.args.get('short_code'), max_length=12)
-    return render_template(
-        'action_checkin.html',
-        stage='lookup',
-        short_code=short_code,
-        entry_action=entry_action
-    )
+    return _render_lookup_page(short_code=short_code, entry_action=entry_action, token=token)
 
 
 def _resolve_pair_from_session_or_code(short_code, token=None):
@@ -758,7 +768,10 @@ def _handle_action_confirm(token=None, confirm_action=None, debrief_action=None)
         meta={'actions_done_count': len(actions_done)},
     )
     _refresh_community_daily(pair.community_code, status_date)
-    flash('已记录今日确认。', 'success')
+    if actions_done:
+        flash(f'已记下今日情况（勾选 {len(actions_done)} 项）。这不代表已现场核验。', 'success')
+    else:
+        flash('已记下今日查看。未勾选完成项，不代表已经安全。', 'success')
     action_routes = _resolve_action_routes(token=token, confirm_action=confirm_action, debrief_action=debrief_action)
     return _render_action_page(
         pair,
@@ -803,7 +816,11 @@ def _handle_action_help(token=None, confirm_action=None, debrief_action=None):
         meta={'relay_stage': status.relay_stage},
     )
     _refresh_community_daily(pair.community_code, status_date)
-    flash('已记录求助，照护人将收到提醒。', 'success')
+    pushed = _notify_caregiver_of_help(pair)
+    if pushed:
+        flash('已记录求助，并已向照护人推送提醒。', 'success')
+    else:
+        flash('已记录求助。请家属打开照护工作台查看（未开通推送）。', 'success')
     action_routes = _resolve_action_routes(token=token, confirm_action=confirm_action, debrief_action=debrief_action)
     return _render_action_page(
         pair,
@@ -917,7 +934,7 @@ def render_role_entry():
     if is_real_user:
         if role in ('community', 'admin'):
             community_target = community_next
-            community_action_label = '进入社区看板'
+            community_action_label = '进入社区工作台'
         else:
             community_target = url_for('user.community_risk')
             community_action_label = '查看社区风险'
@@ -928,7 +945,7 @@ def render_role_entry():
         community_requires_login = False
     else:
         community_target = url_for('public.login', next=community_next)
-        community_action_label = '进入社区看板'
+        community_action_label = '进入社区工作台'
         community_requires_login = True
 
     return render_template(
@@ -961,7 +978,7 @@ def handle_login(next_url):
             flash('输入内容过长', 'error')
             return render_template('login.html', next=next_url)
 
-        user = User.query.filter_by(username=username).first()
+        user = find_user_by_username(username)
 
         # 账户锁定检查（防暴力破解）
         lockout_key = _login_lockout_key(normalized_username)
@@ -1020,6 +1037,11 @@ def handle_login(next_url):
             logger.info("用户登录成功: %s", username)
 
             safe_next = _safe_next_url(next_url)
+            if safe_next in ('/pairs',):
+                if user.role in ('caregiver', 'admin'):
+                    return redirect(url_for('user.caregiver_dashboard'))
+                if user.role == 'community':
+                    return redirect(url_for('user.community_dashboard'))
             if safe_next:
                 return redirect(safe_next)
 
@@ -1093,8 +1115,8 @@ def handle_register():
         # 社区信息
         community = sanitize_input(request.form.get('community'), max_length=100)
 
-        # 检查用户名是否已存在
-        if User.query.filter_by(username=username).first():
+        # 检查用户名是否已存在（大小写不敏感，与登录锁定桶一致）
+        if find_user_by_username(username):
             flash('用户名已存在', 'error')
             return redirect(url_for('public.register'))
 
@@ -1186,6 +1208,9 @@ def render_cooling_resources_page(community, resource_type, has_ac_raw, is_acces
 
     amap_key = current_app.config.get('AMAP_KEY')
     amap_security_js_code = current_app.config.get('AMAP_SECURITY_JS_CODE')
+    from core.cooling_copy import load_cooling_page_copy, select_cooling_temperature_band
+
+    cooling_copy = load_cooling_page_copy()
     return render_template(
         'cooling.html',
         resources_by_community=grouped,
@@ -1202,7 +1227,9 @@ def render_cooling_resources_page(community, resource_type, has_ac_raw, is_acces
         amap_security_js_code=amap_security_js_code,
         cooling_weather=cooling_weather,
         cooling_weather_location=weather_location,
-        outdoor_temp=outdoor_temp
+        outdoor_temp=outdoor_temp,
+        cooling_copy=cooling_copy,
+        cooling_temp_band=select_cooling_temperature_band(cooling_copy, outdoor_temp),
     )
 
 
@@ -1229,7 +1256,7 @@ def render_public_risk_page(location):
         weather_data,
         consecutive_hot_days=consecutive_hot_days
     )
-    risk_label = HEAT_RISK_LABELS.get(heat_result['risk_level'], '低风险')
+    risk_label = label_for_heat_level(heat_result.get('risk_level') if heat_result else None)
     actions = _action_plan(risk_label)
     risk_reasons = heat_service.build_risk_reasons(heat_result)
     return render_template(
@@ -1270,5 +1297,9 @@ def handle_logout():
         session.pop('guest_profile', None)
         session.pop('guest_assessment', None)
         session.pop('guest_id', None)
+    session.pop('pair_session_id', None)
+    session.pop('pair_session_code', None)
+    session.pop('chronic_risk_last', None)
+    _clear_pair_token()
     logout_user()
     return redirect(url_for('public.index'))

@@ -1,0 +1,44 @@
+{
+  "heading": "优先行动",
+  "many_high_risk": {
+    "category": "提醒走访",
+    "priority": "high",
+    "advice_template": "先安排人提醒 {communities} 等地的家人：补水、少出门、确认今天是否有人联系。"
+  },
+  "high_aging": {
+    "category": "独居确认",
+    "priority": "high",
+    "advice_template": "{community} 老龄比例较高（{elderly_pct}%），优先确认独居老人今天是否有人联系。"
+  },
+  "hot": {
+    "category": "避暑",
+    "priority": "high",
+    "advice": "高温天优先确认避暑点是否开放，并提醒高风险社区少在午后出门。"
+  },
+  "cold": {
+    "category": "防寒",
+    "priority": "high",
+    "advice": "低温天优先确认高风险社区的保暖，并安排有人探望。"
+  },
+  "extra_visits": {
+    "category": "陪同就医",
+    "priority": "medium",
+    "advice": "这些社区接下来可能更需要家人陪同就医，提前约好谁来接应。"
+  },
+  "routine": {
+    "category": "日常",
+    "priority": "low",
+    "advice": "各社区暂无突出高温负担，保持日常提醒和避暑点信息更新。"
+  },
+  "equity": {
+    "heat": {
+      "advice": "先安排人提醒这里的家人：少在午后出门、补水，并确认今天是否有人联系。"
+    },
+    "data_gap": {
+      "advice": "这里的资料还不完整，先按高风险来提醒家人，不要因为缺数据就当成没事。"
+    },
+    "routine": {
+      "advice": "提前确认避暑或保暖安排，并保持日常提醒。"
+    }
+  }
+}

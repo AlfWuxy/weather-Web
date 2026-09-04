@@ -50,6 +50,15 @@ class _PipelineWeatherService:
         return {'is_extreme': False, 'conditions': []}
 
 
+def test_map_heat_level_does_not_treat_unknown_as_low():
+    from services.pipelines.sync_weather_data import _map_heat_level
+
+    assert _map_heat_level(None) is None
+    assert _map_heat_level('') is None
+    assert _map_heat_level('mystery') is None
+    assert _map_heat_level('low') == '低风险'
+
+
 def _load_pipeline(app, monkeypatch):
     from services.pipelines import sync_weather_data as pipeline
 

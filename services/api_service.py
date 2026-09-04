@@ -2,6 +2,7 @@
 """API routes."""
 import json
 import logging
+import math
 
 from flask import current_app, jsonify, request
 from flask_login import current_user, login_required
@@ -47,6 +48,18 @@ def _weather_unavailable_response(weather_data=None, message=None):
         'is_mock': bool(weather_data.get('is_mock')) if isinstance(weather_data, dict) else None,
     }
     return jsonify(payload), 503
+
+
+def _require_request_age(data):
+    """JSON 或当前用户资料必须有有效年龄，不用 40/50 岁顶上。"""
+    payload = data if isinstance(data, dict) else {}
+    raw = payload.get('age')
+    if raw in (None, ''):
+        raw = getattr(current_user, 'age', None)
+    age = parse_int(raw)
+    if age is None or age < 1 or age > 150:
+        raise ValueError('请提供年龄')
+    return age
 
 
 def _validate_qweather_for_risk(weather_data, context):
@@ -103,10 +116,10 @@ def _normalize_sunshine_seconds(payload):
     Legacy compatibility:
     - sunshine_hours is treated as *hours* only.
     - values > 24 are considered ambiguous and rejected to avoid unit confusion.
+    Missing sunshine is rejected; the API does not invent 20000 seconds.
     """
-    default_seconds = 20000.0
     if not isinstance(payload, dict):
-        return default_seconds
+        raise ValueError('请提供日照时长')
 
     if payload.get('sunshine_duration_seconds') is not None:
         raw = payload.get('sunshine_duration_seconds')
@@ -118,13 +131,12 @@ def _normalize_sunshine_seconds(payload):
         raw = payload.get('sunshine_hours')
         as_hours = True
     else:
-        raw = default_seconds
-        as_hours = False
+        raise ValueError('请提供日照时长')
 
     try:
         value = float(raw)
-    except (TypeError, ValueError):
-        return default_seconds
+    except (TypeError, ValueError) as exc:
+        raise ValueError('请提供有效日照时长') from exc
 
     if as_hours:
         if value > 24.0:
@@ -138,6 +150,98 @@ def _normalize_sunshine_seconds(payload):
     return value
 
 
+def _optional_finite_float(value):
+    if value in (None, ''):
+        return None
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(parsed):
+        return None
+    return parsed
+
+
+def _require_finite_float(value, error_message):
+    parsed = _optional_finite_float(value)
+    if parsed is None:
+        raise ValueError(error_message)
+    return parsed
+
+
+_ML_INLINE_WEATHER_KEYS = (
+    'temperature', 'temp', 'tmean', 'tmin', 'tmax', 'feels_like',
+    'humidity', 'aqi', 'wind_speed', 'wind', 'precipitation',
+)
+
+
+def _ml_weather_from_request(data):
+    """Build ML weather without inventing 20°C / humidity 70 / AQI 50.
+
+    Returns (weather_info, error_response). error_response is set when live
+    weather is mock/demo/missing and the caller did not send inline weather.
+    """
+    payload = data if isinstance(data, dict) else {}
+    has_inline = any(key in payload for key in _ML_INLINE_WEATHER_KEYS)
+
+    if has_inline:
+        raw_temp = payload.get('temperature', payload.get('temp', payload.get('tmean')))
+        temperature = _require_finite_float(raw_temp, '请提供气温')
+        tmean = _optional_finite_float(payload.get('tmean'))
+        if tmean is None:
+            tmean = temperature
+        return ({
+            'temperature': temperature,
+            'tmean': tmean,
+            'tmin': _optional_finite_float(payload.get('tmin')),
+            'tmax': _optional_finite_float(payload.get('tmax')),
+            'feels_like': _optional_finite_float(payload.get('feels_like')),
+            'humidity': _optional_finite_float(payload.get('humidity')),
+            'wind_speed': _optional_finite_float(
+                payload.get('wind_speed', payload.get('wind'))
+            ),
+            'precipitation': _optional_finite_float(payload.get('precipitation')),
+            'aqi': _optional_finite_float(payload.get('aqi')),
+        }, None)
+
+    city = sanitize_input(payload.get('city'), max_length=100)
+    if city:
+        city = normalize_location_name(city)
+    else:
+        city = ensure_user_location_valid()
+    weather_data, _ = get_weather_with_cache(city)
+    invalid_weather_response = _validate_qweather_for_risk(weather_data, 'ml_predict')
+    if invalid_weather_response:
+        return None, invalid_weather_response
+
+    temperature = _optional_finite_float(weather_data.get('temperature'))
+    if temperature is None:
+        return None, _weather_unavailable_response(weather_data, '天气数据缺少气温')
+
+    tmean = _optional_finite_float(weather_data.get('tmean'))
+    if tmean is None:
+        tmean = temperature
+    return ({
+        'temperature': temperature,
+        'tmean': tmean,
+        'tmin': _optional_finite_float(
+            weather_data.get('tmin', weather_data.get('temperature_min'))
+        ),
+        'tmax': _optional_finite_float(
+            weather_data.get('tmax', weather_data.get('temperature_max'))
+        ),
+        'feels_like': _optional_finite_float(weather_data.get('feels_like')),
+        'humidity': _optional_finite_float(weather_data.get('humidity')),
+        'wind_speed': _optional_finite_float(weather_data.get('wind_speed')),
+        'precipitation': _optional_finite_float(weather_data.get('precipitation')),
+        'aqi': _optional_finite_float(weather_data.get('aqi')),
+        'location': weather_data.get('location'),
+        'weather': weather_data.get('weather'),
+        'data_source': weather_data.get('data_source'),
+        'is_mock': weather_data.get('is_mock', False),
+    }, None)
+
+
 # ======================== 天气/社区基础API ========================
 
 def _api_current_weather():
@@ -149,6 +253,11 @@ def _api_current_weather():
     weather_data, from_cache = get_weather_with_cache(location)
 
     if weather_data:
+        weather_available = is_qweather_online_weather(weather_data)
+        air_quality_available = bool(
+            weather_available
+            and weather_data.get('aqi') is not None
+        )
         return jsonify({
             'success': True,
             'data': {
@@ -159,11 +268,13 @@ def _api_current_weather():
                 'pressure': weather_data.get('pressure'),
                 'condition': weather_data.get('weather_condition'),
                 'wind_speed': weather_data.get('wind_speed'),
-                'aqi': weather_data.get('aqi'),
-                'pm25': weather_data.get('pm25'),
+                'aqi': weather_data.get('aqi') if air_quality_available else None,
+                'pm25': weather_data.get('pm25') if air_quality_available else None,
                 'is_mock': weather_data.get('is_mock', False),
                 'data_source': weather_source_label(weather_data),
-                'from_cache': from_cache
+                'from_cache': from_cache,
+                'weather_available': weather_available,
+                'air_quality_available': air_quality_available,
             }
         })
 
@@ -263,33 +374,17 @@ def _api_ml_predict():
 
         # 获取用户信息
         user_info = {
-            'age': data.get('age') or current_user.age or 40,
-            'gender': data.get('gender') or current_user.gender or '男'
+            'age': _require_request_age(data),
+            'gender': data.get('gender') or current_user.gender or '未知'
         }
 
         sunshine_seconds = _normalize_sunshine_seconds(data)
-        # 获取天气信息（扩展版本，支持更多天气因素）
-        weather_info = {
-            # 温度相关
-            'temperature': data.get('temperature', 20),
-            'tmean': data.get('tmean', data.get('temperature', 20)),
-            'tmin': data.get('tmin', data.get('temperature', 20) - 5),
-            'tmax': data.get('tmax', data.get('temperature', 20) + 5),
-            'feels_like': data.get('feels_like'),  # 体感温度，可选
-            # 湿度
-            'humidity': data.get('humidity', 70),
-            # 风速
-            'wind_speed': data.get('wind_speed', 2.5),
-            # 降水量
-            'precipitation': data.get('precipitation', 0),
-            # 训练特征沿用 sunshine_hours 字段名，但单位统一为秒
-            'sunshine_hours': sunshine_seconds,
-            'sunshine_duration_seconds': sunshine_seconds,
-            # 空气质量
-            'aqi': data.get('aqi', 50),
-            # 时间
-            'month': data.get('month', now_local().month)
-        }
+        weather_info, weather_error = _ml_weather_from_request(data)
+        if weather_error:
+            return weather_error
+        weather_info['sunshine_hours'] = sunshine_seconds
+        weather_info['sunshine_duration_seconds'] = sunshine_seconds
+        weather_info['month'] = data.get('month', now_local().month)
 
         # 执行预测
         result = ml_service.predict_disease_risk(user_info, weather_info)
@@ -343,36 +438,28 @@ def _api_ml_predict_community():
             else:
                 return jsonify({'success': False, 'error': '社区不存在'})
         else:
+            elderly_ratio = _optional_finite_float(data.get('elderly_ratio'))
+            population = _optional_finite_float(data.get('population'))
+            if elderly_ratio is None:
+                raise ValueError('请提供老龄人口比例')
+            if population is None or population <= 0:
+                raise ValueError('请提供人口')
             community_info = {
-                'name': data.get('name', '未知社区'),
-                'elderly_ratio': data.get('elderly_ratio', 0.2),
-                'chronic_disease_ratio': data.get('chronic_disease_ratio', 0.1),
-                'population': data.get('population', 100)
+                'name': data.get('name') or '未知社区',
+                'elderly_ratio': elderly_ratio,
+                'chronic_disease_ratio': _optional_finite_float(
+                    data.get('chronic_disease_ratio')
+                ),
+                'population': population
             }
 
         sunshine_seconds = _normalize_sunshine_seconds(data)
-        # 获取天气信息（扩展版本）
-        weather_info = {
-            # 温度相关
-            'temperature': data.get('temperature', 20),
-            'tmean': data.get('tmean', data.get('temperature', 20)),
-            'tmin': data.get('tmin', data.get('temperature', 20) - 5),
-            'tmax': data.get('tmax', data.get('temperature', 20) + 5),
-            'feels_like': data.get('feels_like'),
-            # 湿度
-            'humidity': data.get('humidity', 70),
-            # 风速
-            'wind_speed': data.get('wind_speed', 2.5),
-            # 降水量
-            'precipitation': data.get('precipitation', 0),
-            # 日照时长（秒）
-            'sunshine_hours': sunshine_seconds,
-            'sunshine_duration_seconds': sunshine_seconds,
-            # 空气质量
-            'aqi': data.get('aqi', 50),
-            # 时间
-            'month': data.get('month', now_local().month)
-        }
+        weather_info, weather_error = _ml_weather_from_request(data)
+        if weather_error:
+            return weather_error
+        weather_info['sunshine_hours'] = sunshine_seconds
+        weather_info['sunshine_duration_seconds'] = sunshine_seconds
+        weather_info['month'] = data.get('month', now_local().month)
 
         # 执行预测
         result = ml_service.predict_community_risk(community_info, weather_info)
@@ -425,11 +512,7 @@ def _api_dlnm_risk():
 
         data = request.get_json() or {}
 
-        # 安全的参数获取和类型转换
-        try:
-            temperature = float(data.get('temperature', 20))
-        except (TypeError, ValueError):
-            temperature = 20.0
+        temperature = _require_finite_float(data.get('temperature'), '请提供气温')
 
         disease_type = data.get('disease_type')
         if disease_type and disease_type not in ['respiratory', 'cardiovascular', 'digestive', 'general']:
@@ -453,13 +536,24 @@ def _api_dlnm_risk():
             disease_type=disease_type,
             age=age
         )
+        try:
+            rr_value = float(rr)
+        except (TypeError, ValueError):
+            rr_value = None
+        if rr_value is None or not math.isfinite(rr_value) or rr_value <= 0:
+            return jsonify({
+                'success': False,
+                'error': 'dlnm_rr_unavailable',
+                'message': '天气相对风险当前不可用',
+                'breakdown': breakdown,
+            }), 503
 
         # 识别极端天气
         extreme_events = dlnm.identify_extreme_weather_events(temperature)
 
         return jsonify({
             'success': True,
-            'rr': round(rr, 4) if rr else 1.0,
+            'rr': round(rr_value, 4),
             'breakdown': breakdown,
             'extreme_events': extreme_events,
             'thresholds': dlnm.get_risk_thresholds()
@@ -611,7 +705,7 @@ def _api_forecast_daily():
         forecast_service = get_forecast_service()
         data = request.get_json() or {}
 
-        temperature = data.get('temperature', 20)
+        temperature = _require_finite_float(data.get('temperature'), '请提供气温')
         lag_temps = data.get('lag_temperatures')
         month = data.get('month', now_local().month)
         dow = data.get('day_of_week', now_local().weekday())
@@ -667,17 +761,14 @@ def _api_community_risk_map_v2():
         # 获取天气数据
         if 'weather' in data and isinstance(data['weather'], dict):
             weather_data = data['weather']
-            # 确保有必要的字段
-            if 'temperature' not in weather_data:
-                weather_data['temperature'] = 20
         else:
             if not city:
                 city = ensure_user_location_valid()
             try:
                 weather_data, _ = get_weather_with_cache(city)
             except (ValueError, TypeError, RuntimeError, OSError) as exc:
-                logger.warning("Community risk map weather fallback: %s", exc)
-                weather_data = {'temperature': 20, 'humidity': 60, 'aqi': 50}
+                logger.warning("Community risk map weather unavailable: %s", exc)
+                return _weather_unavailable_response(None)
 
         invalid_weather_response = _validate_qweather_for_risk(weather_data, 'community_risk_map_v2')
         if invalid_weather_response:
@@ -797,7 +888,7 @@ def _api_chronic_individual():
 
         # 用户信息
         user_info = {
-            'age': data.get('age') or current_user.age or 50,
+            'age': _require_request_age(data),
             'gender': data.get('gender') or current_user.gender or '未知',
             'chronic_diseases': data.get('chronic_diseases') or (
                 safe_json_loads(current_user.chronic_diseases, [])
@@ -1012,10 +1103,23 @@ def _api_comprehensive_alert():
         invalid_weather_response = _validate_qweather_for_risk(current_weather, 'comprehensive_alert')
         if invalid_weather_response:
             return invalid_weather_response
-        temperature = current_weather.get('temperature', 20)
+        temperature = _optional_finite_float(current_weather.get('temperature'))
+        if temperature is None:
+            return _weather_unavailable_response(current_weather, '天气数据缺少气温')
 
         # 计算当前风险
         rr, _ = dlnm.calculate_rr(temperature)
+        try:
+            rr_value = float(rr)
+        except (TypeError, ValueError):
+            rr_value = None
+        if rr_value is None or not math.isfinite(rr_value) or rr_value <= 0:
+            return jsonify({
+                'success': False,
+                'error': 'dlnm_rr_unavailable',
+                'message': '天气相对风险当前不可用',
+            }), 503
+        rr = rr_value
         extreme_events = dlnm.identify_extreme_weather_events(temperature)
 
         # 获取7天预报：综合预警只使用和风天气，避免 mock 或融合缓存抬高风险。

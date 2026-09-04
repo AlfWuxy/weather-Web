@@ -82,7 +82,7 @@ def _build_risk_counts(statuses):
     counts = {'低风险': 0, '中风险': 0, '高风险': 0, '极高': 0}
     confirmed = {'低风险': 0, '中风险': 0, '高风险': 0, '极高': 0}
     for status in statuses:
-        label = status.risk_level or '低风险'
+        label = status.risk_level
         if label not in counts:
             continue
         counts[label] += 1
@@ -120,13 +120,6 @@ def _personalized_care_notes(chronic_diseases):
     if not text:
         return []
     notes = [f'慢病提示（可选登记）：{text}']
-    # Light personalization only; avoid medical claims.
-    cold_sensitive = any('呼吸' in d or '慢阻肺' in d or '支气管' in d for d in diseases)
-    heat_sensitive = any('高血压' in d or '冠心病' in d or '脑卒中' in d for d in diseases)
-    if cold_sensitive:
-        notes.append('寒冷时更要注意保暖、减少外出，预防感冒与呼吸道不适。')
-    if heat_sensitive:
-        notes.append('高温时注意补水、避免暴晒和剧烈活动，留意头晕胸闷等不适。')
     return notes
 
 
@@ -158,36 +151,20 @@ def _build_caregiver_message(pair, alert_kind=None, weather_data=None, member=No
     if not action_link:
         action_link = url_for('public.elder_entry', short_code=pair.short_code, _external=True)
 
-    lines = []
-    if alert_kind == 'cold':
-        lines.append('【寒潮行动提醒】')
-        summary = f'{address}，我看到你那边今天可能比较冷'
-        if tmin_s is not None:
-            summary += f'（最低约 {tmin_s}°C）'
-        summary += '。'
-        lines.append(summary)
-        lines.append('建议：尽量少出门，外出注意保暖防滑；室内注意保暖，别受凉。')
-    elif alert_kind == 'heat':
-        lines.append('【高温行动提醒】')
-        summary = f'{address}，我看到你那边今天可能会很热'
-        if tmax_s is not None:
-            summary += f'（最高约 {tmax_s}°C）'
-        summary += '。'
-        lines.append(summary)
-        lines.append('建议：避开中午外出，多喝水；室内开风扇/空调或找阴凉处休息。')
-    else:
-        lines.append('【日常提醒】')
-        lines.append(f'{address}，我这边看看你那边天气有变化，注意劳逸结合，出门记得带水/外套。')
-
-    if location:
-        lines.append(f'地点：{location}')
+    from core.caregiver_scripts import format_caregiver_script
 
     chronic_diseases = safe_json_loads(getattr(member, 'chronic_diseases', None), []) if member else []
-    lines.extend(_personalized_care_notes(chronic_diseases))
-
-    lines.append('说明：这是行动提醒，不提供医疗诊断/治疗建议；如明显不适请及时就医。')
-    lines.append(f'（可选）行动页：{action_link}  短码：{pair.short_code}')
-    return '\n'.join([line for line in lines if line])
+    kind = 'cold' if alert_kind == 'cold' else 'heat' if alert_kind == 'heat' else 'daily'
+    return format_caregiver_script(
+        kind=kind,
+        address=address,
+        location=location,
+        tmax=tmax_s,
+        tmin=tmin_s,
+        action_link=action_link,
+        short_code=pair.short_code,
+        extra_lines=_personalized_care_notes(chronic_diseases),
+    )
 
 
 def _build_community_message(community_code, risk_label, resources):

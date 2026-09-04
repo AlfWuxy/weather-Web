@@ -77,11 +77,9 @@ def test_authenticated_pages(client):
     assert client.get("/dashboard").status_code == 200
     assert client.get("/health-assessment").status_code == 200
     assert client.get("/community-risk").status_code == 200
-    ai_response = client.get("/ai-qa")
-    assert ai_response.status_code == 200
-    ai_body = ai_response.get_data(as_text=True)
-    assert "查询天气信息和通用行动建议" in ai_body
-    assert "全站悬浮助手" not in ai_body
+    ai_response = client.get("/ai-qa", follow_redirects=False)
+    assert ai_response.status_code in (302, 303)
+    assert "/dashboard" in (ai_response.headers.get("Location") or "")
 
 
 def test_key_api_endpoints(client):

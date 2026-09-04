@@ -68,3 +68,80 @@ def test_health_diary_page_handles_missing_weather(authenticated_client, db_sess
     assert '李奶奶' in html
     assert '头晕' in html
     assert '°C /' not in html
+
+
+def test_health_diary_page_handles_missing_humidity(authenticated_client, db_session):
+    from datetime import date as date_cls
+
+    from core.db_models import Community, FamilyMember, HealthDiary, User, WeatherData
+
+    user = User.query.filter_by(username='testuser').first()
+    user.community = '测试社区'
+    if Community.query.filter_by(name='测试社区').first() is None:
+        db_session.add(Community(name='测试社区', population=1200, elderly_ratio=0.31))
+    member = FamilyMember(user_id=user.id, name='王爷爷', relation='父亲')
+    db_session.add(member)
+    db_session.flush()
+    entry_date = date_cls(2026, 4, 1)
+    db_session.add(HealthDiary(
+        user_id=user.id,
+        member_id=member.id,
+        entry_date=entry_date,
+        symptoms='乏力',
+        severity='轻微',
+    ))
+    db_session.add(WeatherData(
+        date=entry_date,
+        location='测试社区',
+        temperature=30.4,
+        humidity=None,
+        weather_condition='多云',
+    ))
+    db_session.commit()
+
+    response = authenticated_client.get('/health-diary')
+    assert response.status_code == 200
+    html = response.get_data(as_text=True)
+    assert '王爷爷' in html
+    assert '30.4' in html
+    assert 'None%' not in html
+    assert '乏力' in html
+
+
+def test_health_diary_rejects_empty_entry(authenticated_client, db_session):
+    from core.db_models import HealthDiary
+
+    _seed_health_diary_data(db_session, with_weather=False)
+    before = HealthDiary.query.count()
+
+    response = authenticated_client.post(
+        '/health-diary',
+        data={
+            'entry_date': '2026-03-29',
+            'csrf_token': 'test-csrf-token',
+        },
+        follow_redirects=True,
+    )
+
+    assert response.status_code == 200
+    html = response.get_data(as_text=True)
+    assert '请填写症状、严重程度或备注' in html
+    assert HealthDiary.query.count() == before
+
+
+def test_health_diary_lists_notes(authenticated_client, db_session):
+    from core.db_models import HealthDiary, User
+
+    _seed_health_diary_data(db_session, with_weather=False)
+    user = User.query.filter_by(username='testuser').first()
+    db_session.add(HealthDiary(
+        user_id=user.id,
+        entry_date=date(2026, 3, 29),
+        notes='午睡后头晕好转',
+    ))
+    db_session.commit()
+
+    response = authenticated_client.get('/health-diary')
+    html = response.get_data(as_text=True)
+    assert '午睡后头晕好转' in html
+    assert '>备注<' in html
