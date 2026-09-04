@@ -94,7 +94,7 @@
                             <div class="text-muted small">行动链接（需要时转发）</div>
                             <input class="form-control" value="{{ created_action_link }}" readonly>
                         </div>
-                        <div class="text-muted small">把行动链接发给家人后，可在这里继续查看是否已确认。</div>
+                        <div class="text-muted small">把行动链接发给家人后，可在这里继续查看是否已记录。</div>
                     </div>
                 </div>
             {% endif %}
@@ -132,7 +132,7 @@
                 <div class="card-header bg-light">
                     <div class="d-flex align-items-center justify-content-between flex-wrap gap-2">
                         <h5 class="mb-0"><i class="bi bi-list-check"></i> 老人卡片（{{ status_date.strftime('%Y-%m-%d') }}）</h5>
-                        <span class="text-muted small">每日 20:00 前确认；2 小时未确认会转备用联系人</span>
+                        <span class="text-muted small">每日 20:00 前记录；2 小时未记录会转备用联系人</span>
                     </div>
                 </div>
                 <div class="card-body">
@@ -167,21 +167,21 @@
                                                     {% else %}
                                                     <div class="alert alert-warning py-2 px-3 mt-2 mb-0 small" role="status">
                                                         <strong>天气更新中</strong><br>
-                                                        风险等级暂不显示。仍可发送行动链接并记录确认结果。
+                                                        风险等级暂不显示。仍可发送行动链接并记录提交结果。
                                                     </div>
                                                     {% endif %}
                                                 </div>
                                                 <div class="text-end">
                                                     {% if status and status.confirmed_at %}
-                                                        <span class="badge bg-success">已确认</span>
+                                                        <span class="badge bg-success">已记录</span>
                                                         <div class="text-muted small">{{ status.confirmed_at.strftime('%H:%M') }}</div>
                                                     {% else %}
-                                                        <span class="badge bg-secondary">未确认</span>
+                                                        <span class="badge bg-secondary">未记录</span>
                                                     {% endif %}
                                                 </div>
                                             </div>
                                             <div class="text-muted small mt-2">
-                                                今日确认 <span class="countdown" data-deadline-hour="20"></span>
+                                                今日记录 <span class="countdown" data-deadline-hour="20"></span>
                                                 {% if item.status and not item.status.confirmed_at %}
                                                     {% if item.relay_stage and item.relay_stage not in ['none', 'caregiver'] %}
                                                         · 已转{{ item.relay_stage_label }}

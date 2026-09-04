@@ -33,6 +33,9 @@ def test_profile_lists_active_tokens_without_hashes(client, db_session):
     assert response.status_code == 200
     assert '我的手机' in body
     assert '撤销' in body
+    assert '一次性绑定凭证' not in body
+    assert '明文只显示一次' in body
+    assert '长期使用' in body
     assert 'token_hash' not in body
     assert 'sha256' not in body.lower()
 

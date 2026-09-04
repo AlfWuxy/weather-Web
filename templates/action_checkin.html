@@ -9,7 +9,7 @@
     <div class="row mb-3">
         <div class="col-12">
             <h2><i class="bi bi-clipboard-check"></i> 行动型热健康预警</h2>
-            <p class="text-muted mb-0">输入短码即可完成今日确认或求助（不含医疗诊断/治疗建议）。</p>
+            <p class="text-muted mb-0">输入短码即可记下今日情况或求助（不含医疗诊断/治疗建议）。</p>
         </div>
     </div>
 
@@ -145,7 +145,7 @@
                         {% else %}
                         <div class="alert alert-warning mb-3" role="status">
                             <strong>天气正在更新。</strong>
-                            风险等级暂不显示。你仍可完成安全确认、发出求助或查看避暑资源。
+                            风险等级暂不显示。你仍可记下今日情况、发出求助或查看避暑资源。
                         </div>
                         <div class="d-flex flex-wrap gap-2">
                             <a class="btn btn-outline-primary" href="{{ url_for('public.cooling_resources') }}">
@@ -178,14 +178,14 @@
                                     {% endfor %}
                                 {% else %}
                                     <h6 class="mb-2">安全确认</h6>
-                                    <div class="text-muted small">天气风险清单已暂停；你仍可完成安全确认或直接发出求助。</div>
+                                    <div class="text-muted small">天气风险清单已暂停；你仍可记下今日查看或直接发出求助。</div>
                                 {% endif %}
                             </div>
                             <div class="d-flex flex-wrap gap-2 align-items-center">
                                 <button class="btn btn-success btn-lg" type="submit">
-                                    <i class="bi bi-check-circle"></i> 我很安全
+                                    <i class="bi bi-check-circle"></i> 记下今日情况
                                 </button>
-                                <span class="text-muted small">确认后记录今日完成情况。</span>
+                                <span class="text-muted small">可勾选已做的事项。不勾选也可以提交；这只记下「已查看」，不代表已经安全或做完全部防护。</span>
                             </div>
                         </form>
                         <hr>
@@ -211,7 +211,7 @@
                     </div>
                     <div class="card-body">
                         <div id="recentRiskEmpty" class="text-muted small mb-2">
-                            暂无近7天数据，完成今日确认后将显示趋势。
+                            暂无近7天数据，记下今日情况后将显示趋势。
                         </div>
                         <canvas id="recentRiskChart" height="170"></canvas>
                         <div class="text-muted small mt-2">数据来源：行动确认记录；空数据仅显示提示。</div>
@@ -434,7 +434,7 @@ document.addEventListener('DOMContentLoaded', function () {
                         },
                         {
                             type: 'bar',
-                            label: '确认',
+                            label: '记录',
                             data: confirmedValues,
                             backgroundColor: 'rgba(14, 159, 110, 0.6)',
                             yAxisID: 'y1'
@@ -462,7 +462,7 @@ document.addEventListener('DOMContentLoaded', function () {
                             grid: { drawOnChartArea: false },
                             ticks: {
                                 stepSize: 1,
-                                callback: value => (value === 1 ? '已确认' : '')
+                                callback: value => (value === 1 ? '已记录' : '')
                             }
                         }
                     }

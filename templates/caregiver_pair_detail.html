@@ -47,7 +47,7 @@
                 <div class="card-body">
                     {% if status_today %}
                         <div class="mb-2"><span class="text-muted">风险等级：</span>{{ status_today.risk_level or '-' }}</div>
-                        <div class="mb-2"><span class="text-muted">确认时间：</span>{{ status_today.confirmed_at.strftime('%H:%M') if status_today.confirmed_at else '未确认' }}</div>
+                        <div class="mb-2"><span class="text-muted">记录时间：</span>{{ status_today.confirmed_at.strftime('%H:%M') if status_today.confirmed_at else '未记录' }}</div>
                         <div class="mb-2"><span class="text-muted">求助：</span>{{ '是' if status_today.help_flag else '否' }}</div>
                         <div class="mb-2"><span class="text-muted">完成项数：</span>{{ status_today.actions_done_count or 0 }}</div>
                         <div class="mb-2"><span class="text-muted">升级链：</span>{{ status_today.relay_stage or 'none' }}</div>
@@ -249,7 +249,7 @@ document.addEventListener('DOMContentLoaded', function () {
                             grid: { drawOnChartArea: false },
                             ticks: {
                                 stepSize: 1,
-                                callback: value => (value === 1 ? '已确认' : '')
+                                callback: value => (value === 1 ? '已记录' : '')
                             }
                         }
                     }

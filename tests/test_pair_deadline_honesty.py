@@ -5,8 +5,8 @@ def test_pair_page_explains_confirm_deadline_and_backup_escalate(authenticated_c
     response = authenticated_client.get('/pairs')
     assert response.status_code == 200
     html = response.get_data(as_text=True)
-    assert '每日 20:00 前确认' in html
-    assert '2 小时未确认会转备用联系人' in html
+    assert '每日 20:00 前记录' in html
+    assert '2 小时未记录会转备用联系人' in html
 
 
 def test_pair_page_shows_backup_clock_for_unconfirmed_status(authenticated_client, db_session):
@@ -38,7 +38,7 @@ def test_pair_page_shows_backup_clock_for_unconfirmed_status(authenticated_clien
     db_session.commit()
 
     html = authenticated_client.get('/pairs').get_data(as_text=True)
-    assert '今日确认' in html
+    assert '今日记录' in html
     assert '转备用' in html
     assert 'data-deadline-hour="20"' in html
     assert 'data-deadline=' in html

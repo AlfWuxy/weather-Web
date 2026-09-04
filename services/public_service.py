@@ -768,7 +768,10 @@ def _handle_action_confirm(token=None, confirm_action=None, debrief_action=None)
         meta={'actions_done_count': len(actions_done)},
     )
     _refresh_community_daily(pair.community_code, status_date)
-    flash('已记录今日确认。', 'success')
+    if actions_done:
+        flash(f'已记下今日情况（勾选 {len(actions_done)} 项）。这不代表已现场核验。', 'success')
+    else:
+        flash('已记下今日查看。未勾选完成项，不代表已经安全。', 'success')
     action_routes = _resolve_action_routes(token=token, confirm_action=confirm_action, debrief_action=debrief_action)
     return _render_action_page(
         pair,
