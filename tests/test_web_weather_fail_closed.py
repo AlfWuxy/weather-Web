@@ -113,7 +113,7 @@ def test_caregiver_dashboard_does_not_calculate_mock_weather(
     body = response.get_data(as_text=True)
     assert '天气更新中' in body
     assert '风险等级暂不显示' in body
-    assert '仍可发送行动链接并记录确认结果' in body
+    assert '仍可发送行动链接并记录提交结果' in body
     assert '复制行动链接说明' in body
     assert '热风险：极高' not in body
     assert '高温（39°C）' not in body
