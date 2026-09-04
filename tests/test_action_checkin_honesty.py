@@ -17,6 +17,8 @@ def test_action_checkin_submit_is_not_labeled_i_am_safe():
     assert '我很安全' not in html
     assert '记下今日情况' in html
     assert '不代表已经安全' in html
+    assert '近7天风险与记录' in html
+    assert '近7天风险与确认' not in html
 
 
 def test_caregiver_pair_badge_records_submit_not_safety():
