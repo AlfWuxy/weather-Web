@@ -17,6 +17,7 @@ import json
 from functools import wraps
 
 from flask import Blueprint, current_app, g, jsonify, request, url_for
+from limits import parse
 
 from core.audit import _get_client_ip
 from core.db_models import FamilyMember, FamilyMemberProfile, Pair, User
@@ -52,6 +53,20 @@ def _mp_rate_limit_key() -> str:
     return f"mp-ip:{hash_identifier(client_ip)}"
 
 
+def _mp_user_rate_limit_key() -> str:
+    """认证后按用户限流，避免同一 NAT 下互相挤占配额。"""
+    user_id = getattr(g, "api_user_id", None)
+    if user_id is None:
+        return "mp-user:unauthenticated"
+    return f"mp-user:{int(user_id)}"
+
+
+def _mp_user_limit_exceeded(limit_key: str, default: str) -> bool:
+    limit_str = current_app.config.get(limit_key, default) or default
+    rate = parse(limit_str)
+    return not limiter.limiter.hit(rate, _mp_user_rate_limit_key(), f"mp-user-limit:{limit_key}")
+
+
 def require_api_token(fn):
     @wraps(fn)
     def wrapper(*args, **kwargs):
@@ -69,6 +84,24 @@ def require_api_token(fn):
         return fn(*args, **kwargs)
 
     return wrapper
+
+
+def mp_protect(limit_key: str, default: str):
+    """认证前按 IP 粗限流；认证后按用户限流，避免 NAT 下互相挤占。"""
+
+    def decorator(fn):
+        @wraps(fn)
+        def after_auth(*args, **kwargs):
+            if _mp_user_limit_exceeded(limit_key, default):
+                return jsonify({"success": False, "error": "rate_limited"}), 429
+            return fn(*args, **kwargs)
+
+        return limiter.limit(
+            lambda: current_app.config.get("RATE_LIMIT_MP_IP", "600 per minute"),
+            key_func=_mp_rate_limit_key,
+        )(require_api_token(after_auth))
+
+    return decorator
 
 
 def _pair_for_user(pair_id: int):
@@ -120,8 +153,7 @@ def _apply_member_patch(member, payload):
 
 
 @bp.route("/me", endpoint="me")
-@limiter.limit(lambda: current_app.config.get("RATE_LIMIT_MP_READ", "120 per minute"), key_func=_mp_rate_limit_key)
-@require_api_token
+@mp_protect("RATE_LIMIT_MP_READ", "120 per minute")
 def me():
     user = db.session.get(User, g.api_user_id)
     if not user:
@@ -140,8 +172,7 @@ def me():
 
 
 @bp.route("/me", methods=["PATCH"], endpoint="me_patch")
-@limiter.limit(lambda: current_app.config.get("RATE_LIMIT_MP_WRITE", "30 per minute"), key_func=_mp_rate_limit_key)
-@require_api_token
+@mp_protect("RATE_LIMIT_MP_WRITE", "30 per minute")
 def me_patch():
     """Update pilot push settings (WxPusher UID + enabled flag)."""
     user = db.session.get(User, g.api_user_id)
@@ -167,8 +198,7 @@ def me_patch():
 
 
 @bp.route("/elders", endpoint="elders_list")
-@limiter.limit(lambda: current_app.config.get("RATE_LIMIT_MP_READ", "120 per minute"), key_func=_mp_rate_limit_key)
-@require_api_token
+@mp_protect("RATE_LIMIT_MP_READ", "120 per minute")
 def elders_list():
     pairs = Pair.query.filter_by(caregiver_id=g.api_user_id, status="active").order_by(Pair.created_at.desc()).all()
     member_ids = [p.member_id for p in pairs if p.member_id]
@@ -218,8 +248,7 @@ def elders_list():
 
 
 @bp.route("/elders", methods=["POST"], endpoint="elders_create")
-@limiter.limit(lambda: current_app.config.get("RATE_LIMIT_MP_WRITE", "30 per minute"), key_func=_mp_rate_limit_key)
-@require_api_token
+@mp_protect("RATE_LIMIT_MP_WRITE", "30 per minute")
 def elders_create():
     payload = request.get_json(silent=True) or {}
     name = sanitize_input(payload.get("name"), max_length=50) or ""
@@ -293,8 +322,7 @@ def elders_create():
 
 
 @bp.route("/elders/<int:pair_id>", methods=["PATCH"], endpoint="elders_patch")
-@limiter.limit(lambda: current_app.config.get("RATE_LIMIT_MP_WRITE", "30 per minute"), key_func=_mp_rate_limit_key)
-@require_api_token
+@mp_protect("RATE_LIMIT_MP_WRITE", "30 per minute")
 def elders_patch(pair_id: int):
     pair = _pair_for_user(pair_id)
     if not pair:
@@ -347,8 +375,7 @@ def elders_patch(pair_id: int):
 
 
 @bp.route("/elders/<int:pair_id>", methods=["DELETE"], endpoint="elders_delete")
-@limiter.limit(lambda: current_app.config.get("RATE_LIMIT_MP_WRITE", "30 per minute"), key_func=_mp_rate_limit_key)
-@require_api_token
+@mp_protect("RATE_LIMIT_MP_WRITE", "30 per minute")
 def elders_delete(pair_id: int):
     pair = _pair_for_user(pair_id)
     if not pair:
@@ -372,8 +399,7 @@ def elders_delete(pair_id: int):
 
 
 @bp.route("/alerts", endpoint="alerts_list")
-@limiter.limit(lambda: current_app.config.get("RATE_LIMIT_MP_ALERTS", "30 per minute"), key_func=_mp_rate_limit_key)
-@require_api_token
+@mp_protect("RATE_LIMIT_MP_ALERTS", "30 per minute")
 def alerts_list():
     pair_id = request.args.get("pair_id", type=int)
     if not pair_id:
@@ -407,8 +433,7 @@ def alerts_list():
 
 
 @bp.route("/events", methods=["POST"], endpoint="events")
-@limiter.limit(lambda: current_app.config.get("RATE_LIMIT_MP_EVENTS", "60 per minute"), key_func=_mp_rate_limit_key)
-@require_api_token
+@mp_protect("RATE_LIMIT_MP_EVENTS", "60 per minute")
 def events():
     payload = request.get_json(silent=True) or {}
     event_type = sanitize_input(payload.get("event_type"), max_length=50) or ""

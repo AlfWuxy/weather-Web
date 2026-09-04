@@ -79,6 +79,24 @@ def test_mp_api_rate_limit_key_uses_stable_client_ip(app):
     assert key_other_ip != key_a
 
 
+def test_mp_api_user_rate_limit_key_separates_users_on_same_ip(app):
+    from flask import g
+    from blueprints.mp_api import _mp_user_rate_limit_key
+
+    same_ip = {"REMOTE_ADDR": "203.0.113.10"}
+    with app.test_request_context("/mp/api/v1/me", environ_base=same_ip):
+        g.api_user_id = 11
+        key_a = _mp_user_rate_limit_key()
+
+    with app.test_request_context("/mp/api/v1/me", environ_base=same_ip):
+        g.api_user_id = 12
+        key_b = _mp_user_rate_limit_key()
+
+    assert key_a.startswith("mp-user:")
+    assert key_b.startswith("mp-user:")
+    assert key_a != key_b
+
+
 def test_mp_api_invalid_bearer_rotation_cannot_bypass_ip_limit(
     app,
     client,
@@ -87,7 +105,7 @@ def test_mp_api_invalid_bearer_rotation_cannot_bypass_ip_limit(
     """同一 IP 轮换无效 Bearer 仍应命中同一个外层限流桶。"""
     from core.extensions import limiter
 
-    app.config['RATE_LIMIT_MP_READ'] = '1 per minute'
+    app.config['RATE_LIMIT_MP_IP'] = '1 per minute'
     limiter.reset()
     same_ip = {'REMOTE_ADDR': '203.0.113.20'}
     other_ip = {'REMOTE_ADDR': '203.0.113.21'}
@@ -112,6 +130,55 @@ def test_mp_api_invalid_bearer_rotation_cannot_bypass_ip_limit(
         assert first.status_code == 401
         assert rotated.status_code == 429
         assert separate_ip.status_code == 401
+    finally:
+        limiter.reset()
+
+
+def test_mp_api_authenticated_users_on_same_nat_have_separate_quotas(
+    app,
+    client,
+    db_session,
+):
+    """同一 NAT IP 下，认证后应按用户限流，不能互相挤占配额。"""
+    from core.db_models import User
+    from core.extensions import limiter
+    from core.usage import create_api_token
+
+    app.config['RATE_LIMIT_MP_IP'] = '100 per minute'
+    app.config['RATE_LIMIT_MP_READ'] = '1 per minute'
+    limiter.reset()
+    same_ip = {'REMOTE_ADDR': '203.0.113.30'}
+
+    with app.app_context():
+        user_a = User(username='mp_nat_a', role='user')
+        user_a.set_password('pw123456')
+        user_b = User(username='mp_nat_b', role='user')
+        user_b.set_password('pw123456')
+        db_session.add_all([user_a, user_b])
+        db_session.commit()
+        token_a = create_api_token(user_a.id, name='nat-a')
+        token_b = create_api_token(user_b.id, name='nat-b')
+
+    try:
+        first_a = client.get(
+            '/mp/api/v1/me',
+            headers={'Authorization': f'Bearer {token_a}'},
+            environ_overrides=same_ip,
+        )
+        second_a = client.get(
+            '/mp/api/v1/me',
+            headers={'Authorization': f'Bearer {token_a}'},
+            environ_overrides=same_ip,
+        )
+        first_b = client.get(
+            '/mp/api/v1/me',
+            headers={'Authorization': f'Bearer {token_b}'},
+            environ_overrides=same_ip,
+        )
+
+        assert first_a.status_code == 200
+        assert second_a.status_code == 429
+        assert first_b.status_code == 200
     finally:
         limiter.reset()
 
