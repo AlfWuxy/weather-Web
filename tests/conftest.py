@@ -29,7 +29,11 @@ def setup_test_environment():
         'DATABASE_URI': f'sqlite:///{temp_db_path}',
         'SECRET_KEY': 'test-secret-key-for-pytest',
         'DEBUG': 'true',
+        'QWEATHER_AUTH_MODE': 'api_key',
         'QWEATHER_KEY': '',  # 测试中禁用外部 API
+        'QWEATHER_JWT_KID': '',
+        'QWEATHER_JWT_PROJECT_ID': '',
+        'QWEATHER_JWT_PRIVATE_KEY_PATH': '',
         'AMAP_KEY': '',
         'SILICONFLOW_API_KEY': '',
         'DEMO_MODE': '1',  # 启用演示模式，使用 mock 数据

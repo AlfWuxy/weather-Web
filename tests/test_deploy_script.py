@@ -70,6 +70,21 @@ def test_deploy_script_excludes_local_design_drafts():
     assert "--exclude 'blueprints/tools 2.py'" in content
 
 
+def test_deploy_script_excludes_root_analysis_dir():
+    content = _load_deploy_script()
+    flag = "--exclude=/analysis/"
+
+    assert content.count(flag) == 3
+    assert "--exclude '/analysis/'" not in content
+
+    rsync_starts = [idx for idx in range(len(content)) if content.startswith("rsync -avz", idx)]
+    assert len(rsync_starts) == 3
+    for start in rsync_starts:
+        end = content.find("$PROJECT_DIR/", start)
+        assert end != -1
+        assert flag in content[start:end]
+
+
 def test_deploy_script_requires_https_public_base_url():
     content = _load_deploy_script()
 

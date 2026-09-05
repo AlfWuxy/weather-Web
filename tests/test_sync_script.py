@@ -56,3 +56,18 @@ def test_sync_script_expect_branch_propagates_child_status():
     assert "set -euo pipefail" in content
     assert content.count("set wait_result [wait]") == 2
     assert content.count("exit [lindex \\$wait_result 3]") == 2
+
+
+def test_sync_script_excludes_root_analysis_dir():
+    content = SYNC_SCRIPT.read_text(encoding="utf-8")
+    flag = "--exclude=/analysis/"
+
+    assert content.count(flag) == 3
+    assert "--exclude '/analysis/'" not in content
+
+    rsync_starts = [idx for idx in range(len(content)) if content.startswith("rsync -avz", idx)]
+    assert len(rsync_starts) == 3
+    for start in rsync_starts:
+        end = content.find("$PROJECT_DIR/", start)
+        assert end != -1
+        assert flag in content[start:end]

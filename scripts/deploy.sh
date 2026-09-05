@@ -177,6 +177,7 @@ upload_files() {
             --exclude 'tmp' \
             --exclude 'output' \
             --exclude 'blueprints/tools 2.py' \
+            --exclude=/analysis/ \
             -e "ssh $SSH_OPTS" "$LOCAL_DIR/" "$USER@$SERVER:$PROJECT_DIR/"
         return
     fi
@@ -185,7 +186,7 @@ upload_files() {
         expect -c "
             set timeout 600
             set password \$env(SSHPASS)
-        spawn rsync -avz --exclude '__pycache__' --exclude '*.pyc' --exclude 'instance' --exclude 'storage' --exclude 'health_weather.db' --exclude 'data/research/*.xlsx' --exclude 'data/research/*.xls' --exclude '.git' --exclude '.claude' --exclude 'venv' --exclude '.venv' --exclude '.venv2' --exclude '.env' --exclude '.env.local' --exclude '.superpowers' --exclude '.pytest_cache' --exclude '.playwright-cli' --exclude '.vscode' --exclude '.DS_Store' --exclude 'backups' --exclude 'tmp' --exclude 'output' --exclude 'blueprints/tools 2.py' -e \"ssh $SSH_OPTS\" $LOCAL_DIR/ $USER@$SERVER:$PROJECT_DIR/
+        spawn rsync -avz --exclude '__pycache__' --exclude '*.pyc' --exclude 'instance' --exclude 'storage' --exclude 'health_weather.db' --exclude 'data/research/*.xlsx' --exclude 'data/research/*.xls' --exclude '.git' --exclude '.claude' --exclude 'venv' --exclude '.venv' --exclude '.venv2' --exclude '.env' --exclude '.env.local' --exclude '.superpowers' --exclude '.pytest_cache' --exclude '.playwright-cli' --exclude '.vscode' --exclude '.DS_Store' --exclude 'backups' --exclude 'tmp' --exclude 'output' --exclude 'blueprints/tools 2.py' --exclude=/analysis/ -e \"ssh $SSH_OPTS\" $LOCAL_DIR/ $USER@$SERVER:$PROJECT_DIR/
         expect {
                 \"*password:\" {
                     send \"\$password\r\"
@@ -201,7 +202,7 @@ upload_files() {
         return
     fi
 
-    rsync -avz --exclude '__pycache__' --exclude '*.pyc' --exclude 'instance' --exclude 'storage' --exclude 'health_weather.db' --exclude 'data/research/*.xlsx' --exclude 'data/research/*.xls' --exclude '.git' --exclude '.claude' --exclude 'venv' --exclude '.venv' --exclude '.venv2' --exclude '.env' --exclude '.env.local' --exclude '.superpowers' --exclude '.pytest_cache' --exclude '.playwright-cli' --exclude '.vscode' --exclude '.DS_Store' --exclude 'backups' --exclude 'tmp' --exclude 'output' --exclude 'blueprints/tools 2.py' -e "ssh $SSH_OPTS" "$LOCAL_DIR/" "$USER@$SERVER:$PROJECT_DIR/"
+    rsync -avz --exclude '__pycache__' --exclude '*.pyc' --exclude 'instance' --exclude 'storage' --exclude 'health_weather.db' --exclude 'data/research/*.xlsx' --exclude 'data/research/*.xls' --exclude '.git' --exclude '.claude' --exclude 'venv' --exclude '.venv' --exclude '.venv2' --exclude '.env' --exclude '.env.local' --exclude '.superpowers' --exclude '.pytest_cache' --exclude '.playwright-cli' --exclude '.vscode' --exclude '.DS_Store' --exclude 'backups' --exclude 'tmp' --exclude 'output' --exclude 'blueprints/tools 2.py' --exclude=/analysis/ -e "ssh $SSH_OPTS" "$LOCAL_DIR/" "$USER@$SERVER:$PROJECT_DIR/"
 }
 
 echo "步骤1: 测试服务器连接..."

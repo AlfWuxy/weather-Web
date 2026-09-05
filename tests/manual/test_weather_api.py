@@ -4,8 +4,16 @@
 用于诊断API调用问题
 """
 import os
+from urllib.parse import urlsplit
 import requests
 import pytest
+
+from services.qweather_auth import (
+    QWeatherAuthError,
+    get_qweather_auth_mode,
+    get_qweather_request_headers,
+    is_qweather_configured,
+)
 
 pytestmark = [pytest.mark.manual, pytest.mark.network]
 
@@ -16,18 +24,24 @@ def test_qweather_api():
     print("=" * 50)
     
     # API配置（如使用付费订阅版，请在本地环境变量里显式提供专属域名）
-    key = os.getenv("QWEATHER_KEY")
     base_url = os.getenv("QWEATHER_API_BASE")
     location = "116.20,29.27"  # 都昌县
 
-    if not key:
-        pytest.skip("未设置 QWEATHER_KEY")
+    if not is_qweather_configured():
+        pytest.skip("未完整配置 QWeather 认证")
     if not base_url:
         pytest.skip("未设置 QWEATHER_API_BASE")
     if "your-qweather-host.example.com" in base_url:
         pytest.skip("QWEATHER_API_BASE 仍是占位值")
+
+    parsed_base = urlsplit(base_url)
+    api_origin = f"{parsed_base.scheme}://{parsed_base.netloc}"
+    try:
+        headers = get_qweather_request_headers(api_base=base_url)
+    except QWeatherAuthError as exc:
+        pytest.fail(f"QWeather 认证配置错误: {exc}")
     
-    print("\nAPI Key: 已配置")
+    print(f"\n认证模式: {get_qweather_auth_mode()}")
     print(f"Base URL: {base_url}")
     print(f"Location: {location}")
     
@@ -38,10 +52,10 @@ def test_qweather_api():
     
     try:
         url = f"{base_url}/weather/now"
-        params = {'key': key, 'location': location}
+        params = {'location': location}
         
         print(f"请求URL: {url}")
-        response = requests.get(url, params=params, timeout=10)
+        response = requests.get(url, params=params, headers=headers, timeout=10)
         
         print(f"HTTP状态码: {response.status_code}")
         
@@ -63,9 +77,9 @@ def test_qweather_api():
     
     try:
         url = f"{base_url}/weather/7d"
-        params = {'key': key, 'location': location}
+        params = {'location': location}
         
-        response = requests.get(url, params=params, timeout=10)
+        response = requests.get(url, params=params, headers=headers, timeout=10)
         print(f"HTTP状态码: {response.status_code}")
         
         assert response.status_code == 200, f"7天预报 HTTP {response.status_code}"
@@ -80,24 +94,23 @@ def test_qweather_api():
     
     # 测试3: 空气质量
     print("\n" + "-" * 40)
-    print("测试3: 空气质量 (/air/now)")
+    print("测试3: 空气质量 (/airquality/v1/current)")
     print("-" * 40)
     
     try:
-        url = f"{base_url}/air/now"
-        params = {'key': key, 'location': location}
+        lon, lat = location.split(',')
+        url = f"{api_origin}/airquality/v1/current/{lat}/{lon}"
+        params = {'lang': 'zh'}
         
-        response = requests.get(url, params=params, timeout=10)
+        response = requests.get(url, params=params, headers=headers, timeout=10)
         print(f"HTTP状态码: {response.status_code}")
         
         assert response.status_code == 200, f"空气质量 HTTP {response.status_code}"
         data = response.json()
-        code = data.get('code')
-        assert code in {'200', '204'}, f"空气质量业务码 {code}"
-        if code == '200':
-            now = data.get('now') or {}
-            assert now.get('aqi') is not None
-            assert now.get('pm2p5') is not None
+        indexes = data.get('indexes') or []
+        pollutants = data.get('pollutants') or []
+        assert any(item.get('code') in {'cn-mee', 'cn-mee-1h'} for item in indexes)
+        assert any(item.get('code') == 'pm2p5' for item in pollutants)
             
     except requests.RequestException as exc:
         pytest.fail(f"空气质量请求失败: {type(exc).__name__}")

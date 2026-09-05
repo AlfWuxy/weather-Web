@@ -35,18 +35,18 @@
 
 ---
 
-### P0.2 标记废弃服务 (待执行)
+### P0.2 标记废弃服务 ✅ 已完成
 
 **改动**:
-- `services/prediction_service.py` 添加废弃警告注释
-- `services/chronic_disease_service.py` 添加废弃警告注释
-- `services/data_driven_prediction.py` 添加废弃警告注释
+- `services/prediction_service.py` 已删除（无运行时引用，见 P1.3）
+- `services/chronic_disease_service.py` 在本批次基线中已不存在，无需处理
+- `services/data_driven_prediction.py` 已删除（无运行时引用，见 P1.3）
 
 **收益**:
 - 明确标识不再维护的代码
 - 为后续删除做准备
 
-**风险**: 无 (仅添加注释)
+**风险**: 低（删除前已确认运行时代码零引用，可通过 revert 回滚）
 
 ---
 
@@ -83,7 +83,6 @@
 - `services/dlnm_risk_service.py` 使用 `utils.parsers.parse_age`
 - `services/ml_prediction_service.py` 使用 `utils.parsers`
 - `services/chronic_risk_service.py` 使用 `utils.parsers`
-- `services/data_driven_prediction.py` 使用 `utils.parsers` (如保留)
 
 **收益**: 
 - 减少约 80 行重复代码
@@ -109,18 +108,18 @@
 
 ---
 
-### P1.3 删除未使用的服务文件 (待执行)
+### P1.3 删除未使用的服务文件 ✅ 已完成
 
 **条件**: 确认无外部系统调用
 
 **改动**:
-- 删除 `services/prediction_service.py` (175行)
-- 删除 `services/chronic_disease_service.py` (489行)
-- 删除 `services/data_driven_prediction.py` (600行)
+- ✅ 已删除 `services/prediction_service.py`（无运行时引用）
+- ℹ️ `services/chronic_disease_service.py` 在本批次基线中已不存在
+- ✅ 已删除 `services/data_driven_prediction.py`（无运行时引用）
 
-**收益**: 减少约 1264 行死代码
+**收益**: 已删除两个无引用模块，并将目录文档与实际服务清单对齐
 
-**风险**: 中 (需确认无隐藏依赖)
+**风险**: 低（运行时精确引用扫描为零，并由全量测试验证）
 
 **回滚**: 从 git 恢复文件
 
@@ -176,8 +175,8 @@
 | P0.4 | 合并测试脚本 | 📋 待执行 | -160 |
 | P1.1 | 服务层复用工具 | 📋 待执行 | -80 |
 | P1.2 | app.py 复用工具 | ✅ 完成 | -130 |
-| P1.3 | 删除废弃服务 | 📋 待执行 | -1264 |
-| **P0+P1 总计** | | | **约 -1574 行** |
+| P1.3 | 删除废弃服务 | ✅ 完成 | 约 -790 行；chronic_disease_service 在基线中已不存在 |
+| **P0+P1 总计** | | | **以各完成项提交 diff 为准** |
 
 ---
 

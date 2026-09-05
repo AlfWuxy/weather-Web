@@ -13,6 +13,7 @@ PersonalRisk = DLNMRR × Chronic-layer Age Amplifier × Comorbidity Amplifier
 
 触发条件（可审计）→ 建议模板（可版本化）
 """
+import math
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
@@ -75,10 +76,10 @@ class ChronicRiskService:
                 'trigger': lambda ctx: ctx.get('hot_night', False),
                 'priority': 'high',
                 'category': '热夜预警',
-                'thresholds': {'hot_night': True, 'hot_night_temp': '>22'},
+                'thresholds': {'hot_night': True, 'hot_night_temp': '>=22'},
                 'context_fields': ['hot_night_temp'],
-                'reason_template': '夜间温度偏高（{hot_night_temp}°C）',
-                'template': '今晚预计为热夜(夜间温度>{hot_night_temp}°C)，心血管疾病风险增加，建议：使用空调或风扇，保持卧室凉爽',
+                'reason_template': '预计夜间最低温度为 {hot_night_temp}°C',
+                'template': '今晚预计为热夜(预计夜间最低温度为 {hot_night_temp}°C)，心血管疾病风险增加，建议：使用空调或风扇，保持卧室凉爽',
                 'diseases': ['cardiovascular']
             },
             'heat_wave': {
@@ -274,6 +275,25 @@ class ChronicRiskService:
             return '中风险'
         return '低风险'
     
+    @staticmethod
+    def _parse_night_temperature(weather_data):
+        """解析夜间最低温度：temperature_min → tmin → 缺失。"""
+        if not isinstance(weather_data, dict):
+            return None
+        for key in ('temperature_min', 'tmin'):
+            if key not in weather_data:
+                continue
+            raw = weather_data.get(key)
+            if raw is None:
+                continue
+            try:
+                value = float(raw)
+            except (TypeError, ValueError):
+                continue
+            if math.isfinite(value):
+                return value
+        return None
+
     def predict_individual_risk(self, user_info, weather_data, target_diseases=None):
         """
         预测个体慢病风险
@@ -401,6 +421,7 @@ class ChronicRiskService:
                 max_risk = {'rr': personal_rr, 'disease_type': disease_type}
         
         # 生成个性化建议
+        night_temp = self._parse_night_temperature(weather_data)
         context = {
             'age': age,
             'temperature': temperature,
@@ -410,8 +431,8 @@ class ChronicRiskService:
             'has_chronic_disease': len(chronic_diseases) > 0,
             'disease_count': len(chronic_diseases),
             'aqi': weather_data.get('aqi', 50),
-            'hot_night': weather_data.get('tmin', 15) >= 22 if 'tmin' in weather_data else False,
-            'hot_night_temp': weather_data.get('tmin', 22),
+            'hot_night': night_temp is not None and night_temp >= 22.0,
+            'hot_night_temp': night_temp,
             'heat_wave_days': weather_data.get('heat_wave_days', 0),
             'cold_wave_days': weather_data.get('cold_wave_days', 0)
         }
@@ -518,7 +539,7 @@ class ChronicRiskService:
             'disease_count': context.get('disease_count', 0),
             'aqi': context.get('aqi', 50),
             'hot_night': context.get('hot_night', False),
-            'hot_night_temp': context.get('hot_night_temp', 22),
+            'hot_night_temp': context.get('hot_night_temp'),
             'heat_wave_days': context.get('heat_wave_days', 0),
             'cold_wave_days': context.get('cold_wave_days', 0)
         }
