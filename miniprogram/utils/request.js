@@ -1,4 +1,4 @@
-const { API_BASE_URL } = require('../config');
+const config = require('../config');
 
 const BIND_TOKEN_ROUTE = 'pages/bind-token/index';
 
@@ -35,6 +35,7 @@ function normalizeRequestFailure(error) {
 
 function request({ method, path, token, data }) {
   return new Promise((resolve, reject) => {
+    const API_BASE_URL = config.getApiBaseUrl ? config.getApiBaseUrl() : config.API_BASE_URL;
     if (!API_BASE_URL) {
       reject(createApiError('miniapp_api_base_missing', 'config'));
       return;

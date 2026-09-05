@@ -1,0 +1,81 @@
+<view class="page">
+  <block wx:if="{{loading}}">
+    <view class="muted center">加载中…</view>
+  </block>
+
+  <block wx:else>
+    <view class="section-title">未结求助</view>
+    <block wx:if="{{openHelp.length === 0}}">
+      <view class="card muted center">暂无未结求助</view>
+    </block>
+    <block wx:for="{{openHelp}}" wx:key="pair_id">
+      <view class="card pair-card">
+        <view class="pair-title">{{item.displayLabel}}</view>
+        <view class="strip" aria-label="当日行动链">
+          <text wx:for="{{item.cells}}" wx:for-item="cell" wx:key="key" class="cell {{cell.on ? 'on' : 'off'}}">{{cell.label}} {{cell.on ? '✓' : '—'}}</text>
+        </view>
+        <view class="actions">
+          <button class="btn-primary" size="mini" data-pair-id="{{item.pair_id}}" bindtap="onAck" disabled="{{busy}}">已收到</button>
+          <button class="btn-outline" size="mini" data-pair-id="{{item.pair_id}}" bindtap="openDeliver" disabled="{{busy}}">已转告老人</button>
+        </view>
+      </view>
+    </block>
+
+    <view class="section-title">待核验</view>
+    <block wx:if="{{toVerify.length === 0}}">
+      <view class="card muted center">暂无待核验</view>
+    </block>
+    <block wx:for="{{toVerify}}" wx:key="pair_id">
+      <view class="card pair-card">
+        <view class="pair-title">{{item.displayLabel}}</view>
+        <view class="strip" aria-label="当日行动链">
+          <text wx:for="{{item.cells}}" wx:for-item="cell" wx:key="key" class="cell {{cell.on ? 'on' : 'off'}}">{{cell.label}} {{cell.on ? '✓' : '—'}}</text>
+        </view>
+        <view class="actions">
+          <button class="btn-primary" size="mini" data-pair-id="{{item.pair_id}}" bindtap="onVerify" disabled="{{busy}}">核验：已做到</button>
+          <button class="btn-outline" size="mini" data-pair-id="{{item.pair_id}}" bindtap="openDeliver" disabled="{{busy}}">已转告老人</button>
+        </view>
+      </view>
+    </block>
+
+    <view class="section-title">可结案</view>
+    <block wx:if="{{closable.length === 0}}">
+      <view class="card muted center">暂无可结案</view>
+    </block>
+    <block wx:for="{{closable}}" wx:key="pair_id">
+      <view class="card pair-card">
+        <view class="pair-title">{{item.displayLabel}}</view>
+        <view class="strip" aria-label="当日行动链">
+          <text wx:for="{{item.cells}}" wx:for-item="cell" wx:key="key" class="cell {{cell.on ? 'on' : 'off'}}">{{cell.label}} {{cell.on ? '✓' : '—'}}</text>
+        </view>
+        <view class="actions">
+          <button class="btn-primary" size="mini" data-pair-id="{{item.pair_id}}" bindtap="onClose" disabled="{{busy}}">结案</button>
+          <button class="btn-outline" size="mini" data-pair-id="{{item.pair_id}}" bindtap="openDeliver" disabled="{{busy}}">已转告老人</button>
+        </view>
+      </view>
+    </block>
+  </block>
+
+  <view wx:if="{{pickerVisible}}" class="mask" catchtap="closePicker">
+    <view class="sheet" catchtap="noop">
+      <view class="sheet-title">已转告老人</view>
+      <view class="muted sheet-hint">选择转告人与渠道，下次默认上次选择</view>
+      <view class="picker-row">
+        <view class="muted">转告人</view>
+        <picker mode="selector" range="{{roleLabels}}" value="{{roleIndex}}" bindchange="onRoleChange">
+          <view class="picker-value">{{roleLabels[roleIndex]}}</view>
+        </picker>
+      </view>
+      <view class="picker-row">
+        <view class="muted">渠道</view>
+        <picker mode="selector" range="{{channelLabels}}" value="{{channelIndex}}" bindchange="onChannelChange">
+          <view class="picker-value">{{channelLabels[channelIndex]}}</view>
+        </picker>
+      </view>
+      <view class="sheet-actions">
+        <button class="btn-outline" size="mini" bindtap="closePicker">取消</button>
+        <button class="btn-primary" size="mini" bindtap="confirmDeliver" disabled="{{busy}}">确认转告</button>
+      </view>
+    </view>
+  </view>
+</view>

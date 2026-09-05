@@ -1,4 +1,5 @@
 const { api, isUnauthorizedError } = require('../../utils/request');
+const { refreshPendingBadge } = require('../../utils/pendingBadge');
 
 Page({
   data: {
@@ -24,6 +25,7 @@ Page({
     try {
       const data = await api({ method: 'GET', path: '/mp/api/v1/elders', token });
       this.setData({ elders: data || [] });
+      refreshPendingBadge();
     } catch (e) {
       if (isUnauthorizedError(e)) return;
       wx.showToast({ title: '加载失败', icon: 'none' });
