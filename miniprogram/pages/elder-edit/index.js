@@ -77,7 +77,10 @@ Page({
         loading: false,
       });
     } catch (e) {
-      if (handleApiError(e, { fallbackTitle: '加载失败' })) return;
+      if (e && e.code === 'unauthorized') {
+        handleApiError(e, { fallbackTitle: '加载失败' });
+        return;
+      }
       toastThenBack('加载失败', 'none');
     }
   },

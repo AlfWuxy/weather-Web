@@ -6,8 +6,5 @@ App({
   onLaunch() {
     const token = (wx.getStorageSync('api_token') || '').trim();
     this.globalData.apiToken = token || null;
-    if (token) {
-      wx.reLaunch({ url: '/pages/elders/index' });
-    }
   },
 });

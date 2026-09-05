@@ -1,4 +1,4 @@
-const { api, getToken, setToken, clearToken, handleApiError } = require('../../utils/request');
+const { api, getToken, setToken, clearToken, handleApiError, isApiConfigured } = require('../../utils/request');
 
 Page({
   data: {
@@ -15,7 +15,7 @@ Page({
 
   onShow() {
     const saved = getToken();
-    if (saved) {
+    if (saved && isApiConfigured()) {
       wx.reLaunch({ url: '/pages/elders/index' });
     }
   },

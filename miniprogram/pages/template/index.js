@@ -1,4 +1,4 @@
-const { api, requireAuth, handleApiError } = require('../../utils/request');
+const { api, getToken, requireAuth, handleApiError } = require('../../utils/request');
 const { parsePairId, formatTemp, buildMessage } = require('../../utils/careMessage');
 
 Page({
@@ -74,7 +74,6 @@ Page({
   },
 
   async copyMessage() {
-    const token = requireAuth();
     const message = this.data.message || '';
     if (!message) return;
     try {
@@ -86,6 +85,7 @@ Page({
         });
       });
       wx.showToast({ title: '已复制', icon: 'success' });
+      const token = getToken();
       if (token) {
         api({
           method: 'POST',

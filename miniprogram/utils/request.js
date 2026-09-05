@@ -13,6 +13,10 @@ function apiError(code, message, details) {
   return err;
 }
 
+function isApiConfigured() {
+  return !!(API_BASE_URL || '').trim();
+}
+
 function getToken() {
   return (wx.getStorageSync(TOKEN_KEY) || '').trim();
 }
@@ -152,4 +156,5 @@ module.exports = {
   handleApiError,
   apiError,
   classifyHttp,
+  isApiConfigured,
 };

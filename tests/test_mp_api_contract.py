@@ -345,6 +345,42 @@ def test_miniprogram_request_rejects_empty_api_base_url():
     assert re.search(r"!API_BASE_URL|!base", text)
 
 
+def test_miniprogram_classify_http_error_codes():
+    script = r"""
+const { classifyHttp, api } = require('./miniprogram/utils/request');
+function expectCode(status, data, code) {
+  const result = classifyHttp(status, data);
+  if (result.ok) throw new Error('expected failure for ' + status);
+  if (result.error.code !== code) throw new Error('got ' + result.error.code);
+}
+expectCode(401, {}, 'unauthorized');
+expectCode(429, '<html>429</html>', 'rate_limited');
+expectCode(429, {success: false, error: 'rate_limited'}, 'rate_limited');
+expectCode(404, {success: false, error: 'not_found'}, 'request_failed');
+const ok = classifyHttp(200, {success: true, data: {a: 1}});
+if (!ok.ok || !ok.data || ok.data.a !== 1) throw new Error('ok payload');
+const missingData = classifyHttp(200, {success: true});
+if (!missingData.ok) throw new Error('success without data should pass');
+api({ method: 'GET', path: '/mp/api/v1/me' }).then(() => {
+  throw new Error('empty base should reject');
+}).catch((err) => {
+  if (err.code !== 'miniapp_api_base_missing') throw err;
+  console.log('ok');
+});
+"""
+    import subprocess
+
+    proc = subprocess.run(
+        ["node", "-e", script],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "ok" in proc.stdout
+
+
 def test_miniprogram_packaging_files_exist():
     cfg = ROOT / "project.config.json"
     sitemap = ROOT / "miniprogram" / "sitemap.json"
