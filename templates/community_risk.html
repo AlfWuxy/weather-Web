@@ -195,29 +195,41 @@
 {% endblock %}
 
 {% block content %}
-<div class="container-fluid community-risk-page">
+<div class="container-fluid community-risk-page" id="communityRiskPage" data-ranking-mode="pending" aria-busy="true">
     <div class="row mb-3">
         <div class="col-12 d-flex flex-wrap justify-content-between gap-2 align-items-start">
             <div>
-                <h2 class="mb-1"><i class="bi bi-map"></i> 社区风险与行动地图</h2>
-                <p class="text-muted mb-0">查看哪些社区需要优先提醒、走访和安排避暑资源。</p>
+                <h2 class="mb-1" id="communityRiskPageTitle"><i class="bi bi-map"></i> 社区空间分析</h2>
+                <p class="text-muted mb-0" id="communityRiskPageSubtitle">正在确认可用数据与分析模式...</p>
             </div>
-            <div class="d-flex flex-wrap gap-2">
+            <div class="d-flex flex-wrap gap-2 d-none" data-clinical-only hidden>
                 <span class="cr-chip"><i class="bi bi-cloud-sun"></i> 天气与预警 {{ metric_info('community_weather_hazard') }}</span>
                 <span class="cr-chip"><i class="bi bi-people"></i> 社区脆弱性 {{ metric_info('community_svi') }}</span>
                 <span class="cr-chip"><i class="bi bi-clock-history"></i> 历史健康负担 {{ metric_info('sir') }}</span>
             </div>
+            <div class="d-flex flex-wrap gap-2 d-none" data-screening-only hidden>
+                <span class="cr-chip"><i class="bi bi-people"></i> ASPECT 65+ 占比</span>
+                <span class="cr-chip"><i class="bi bi-thermometer-sun"></i> NASA 历史夏季 LST</span>
+                <span class="cr-chip"><i class="bi bi-tree"></i> ESA 树木覆盖</span>
+            </div>
         </div>
     </div>
+
+    {% if community_data_redacted %}
+    <div class="alert alert-info" role="status">
+        游客预览仅显示社区名称、位置和粗粒度风险等级；人口、老龄、慢病比例与精确脆弱性数据已隐藏。
+    </div>
+    {% endif %}
 
     <div class="card cr-card mb-3">
         <div class="card-body">
             <form id="riskFilterForm" class="row g-3 align-items-end">
-                <div class="col-xl-2 col-md-4">
+                <div class="col-xl-2 col-md-4 d-none" data-clinical-only hidden>
                     <label class="form-label">查看日期</label>
                     <input type="date" class="form-control" id="analysisDate" value="{{ default_analysis_date }}">
+                    <div class="form-text">日期格式：YYYY-MM-DD（ISO）</div>
                 </div>
-                <div class="col-xl-2 col-md-4">
+                <div class="col-xl-2 col-md-4 d-none" data-clinical-only hidden>
                     <label class="form-label">参考时段</label>
                     <select class="form-select" id="windowDays">
                         {% for option in [14, 30, 60, 90] %}
@@ -225,7 +237,7 @@
                         {% endfor %}
                     </select>
                 </div>
-                <div class="col-xl-3 col-md-4">
+                <div class="col-xl-3 col-md-4 d-none" data-clinical-only hidden>
                     <label class="form-label">健康类别</label>
                     <select class="form-select" id="diseaseFilter">
                         <option value="">全部疾病</option>
@@ -237,20 +249,23 @@
                 <div class="col-xl-3 col-md-6">
                     <label class="form-label">地图显示</label>
                     <select class="form-select" id="layerSelect">
-                        <option value="risk_index">综合风险（0-100）</option>
-                        <option value="vulnerability">脆弱性分位（SVI-like）</option>
-                        <option value="uncertainty">不确定性指数（CI宽度）</option>
-                        <option value="hotspot">热点显著性（Gi*）</option>
+                        <option value="risk_index" id="riskIndexLayerOption">载入后显示可用图层</option>
+                        <option value="vulnerability" data-clinical-layer hidden disabled>脆弱性分位（SVI-like）</option>
+                        <option value="uncertainty" data-clinical-layer hidden disabled>不确定性指数（CI宽度）</option>
+                        <option value="hotspot" data-clinical-layer hidden disabled>热点显著性（Gi*）</option>
                     </select>
                 </div>
                 <div class="col-xl-2 col-md-6 d-grid">
-                    <button class="btn btn-primary" id="refreshRiskMap" type="submit">
-                        <i class="bi bi-arrow-repeat me-1"></i>查看社区风险
+                    <button class="btn btn-primary" id="refreshRiskMap" type="submit" disabled>
+                        <i class="bi bi-arrow-repeat me-1"></i><span id="refreshRiskMapLabel">正在载入社区分析...</span>
                     </button>
                 </div>
             </form>
             <div class="alert alert-warning mt-3 mb-0 d-none" id="weatherUnavailableAlert" role="alert">
                 天气正在更新，社区风险暂不显示。你仍可查看避暑资源和居民反馈。
+            </div>
+            <div class="alert alert-info mt-3 mb-0" id="profileDataAlert" role="status" aria-live="polite">
+                正在确认当前可用的社区数据和分析轨道...
             </div>
         </div>
     </div>
@@ -259,8 +274,8 @@
         <div class="col-lg-8">
             <div class="card cr-card h-100">
                 <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
-                    <h6 class="mb-0"><i class="bi bi-geo-alt"></i> 风险分布地图</h6>
-                    <span class="text-muted small" id="analysisMeta">等待载入...</span>
+                    <h6 class="mb-0" id="communityMapHeading"><i class="bi bi-geo-alt"></i> 社区空间地图</h6>
+                    <span class="text-muted small" id="analysisMeta">正在确认分析模式...</span>
                 </div>
                 <div class="card-body p-2">
                     <div class="cr-map-wrap">
@@ -271,7 +286,7 @@
         </div>
 
         <div class="col-lg-4">
-            <div class="card cr-card mb-3">
+            <div class="card cr-card mb-3 d-none" data-clinical-only hidden>
                 <div class="card-header">
                     <h6 class="mb-0"><i class="bi bi-bar-chart"></i> 核心指标</h6>
                 </div>
@@ -280,7 +295,7 @@
                         <div class="cr-kpi">
                             <div class="name">社区数</div>
                             <div class="value" id="kpiCommunities">--</div>
-                            <div class="sub">本次参与分析</div>
+                            <div class="sub" id="kpiCommunitiesSub">已排名 / 总档案数</div>
                         </div>
                         <div class="cr-kpi">
                             <div class="name">高风险社区</div>
@@ -316,6 +331,36 @@
                 </div>
             </div>
 
+            <div class="card cr-card mb-3 d-none" data-screening-only hidden>
+                <div class="card-header">
+                    <h6 class="mb-0"><i class="bi bi-bar-chart"></i> 探索性筛查摘要</h6>
+                </div>
+                <div class="card-body">
+                    <div class="cr-kpi-grid">
+                        <div class="cr-kpi">
+                            <div class="name">已筛查社区</div>
+                            <div class="value" id="kpiScreeningCommunities">--</div>
+                            <div class="sub">完成评分 / 候选社区</div>
+                        </div>
+                        <div class="cr-kpi">
+                            <div class="name">最高筛查得分</div>
+                            <div class="value" id="kpiScreeningMaxScore">--</div>
+                            <div class="sub">相对脆弱性 0–100</div>
+                        </div>
+                        <div class="cr-kpi">
+                            <div class="name">GIS 单元</div>
+                            <div class="value" id="kpiScreeningCells">--</div>
+                            <div class="sub">已匹配的独立空间单元</div>
+                        </div>
+                        <div class="cr-kpi">
+                            <div class="name">Q3 观测覆盖</div>
+                            <div class="value" id="kpiScreeningCoverage">--</div>
+                            <div class="sub">社区中位数，仅表示证据质量</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
             <div class="card cr-card mb-3">
                 <div class="card-header">
                     <h6 class="mb-0"><i class="bi bi-palette"></i> 图层图例</h6>
@@ -325,12 +370,12 @@
 
             <div class="card cr-card mb-3">
                 <div class="card-header">
-                    <h6 class="mb-0"><i class="bi bi-list-ol"></i> 社区风险排名</h6>
+                    <h6 class="mb-0" id="communityRankingHeading"><i class="bi bi-list-ol"></i> 社区分析结果</h6>
                 </div>
                 <div class="card-body p-0 cr-rank-list" id="community-list"></div>
             </div>
 
-            <div class="card cr-card">
+            <div class="card cr-card d-none" data-clinical-only hidden>
                 <div class="card-header">
                     <h6 class="mb-0"><i class="bi bi-lightbulb"></i> 管控建议</h6>
                 </div>
@@ -341,7 +386,7 @@
         </div>
     </div>
 
-    <div class="row g-3 mb-3">
+    <div class="row g-3 mb-3 d-none" data-clinical-only hidden>
         <div class="col-lg-4">
             <div class="card cr-card h-100">
                 <div class="card-header">
@@ -397,7 +442,7 @@
         </div>
     </div>
 
-    <div class="card cr-card mb-3">
+    <div class="card cr-card mb-3 d-none" data-clinical-only hidden>
         <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
             <h6 class="mb-0"><i class="bi bi-people"></i> 公平性分层（脆弱社区优先）</h6>
             <span class="text-muted small">Q4 为最高脆弱分层</span>
@@ -432,7 +477,7 @@
         </div>
     </div>
 
-    <div class="card cr-card mb-3">
+    <div class="card cr-card mb-3 d-none" data-clinical-only hidden>
         <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
             <h6 class="mb-0"><i class="bi bi-table"></i> 社区风险明细</h6>
             <span class="text-muted small">点击排名项可定位地图</span>
@@ -465,17 +510,44 @@
         </div>
     </div>
 
+    <div class="card cr-card mb-3 d-none" data-screening-only hidden>
+        <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+            <h6 class="mb-0"><i class="bi bi-table"></i> 探索性筛查证据明细</h6>
+            <span class="text-muted small">同分使用并列名次；点击行可定位地图</span>
+        </div>
+        <div class="card-body">
+            <div class="cr-table-wrap">
+                <table class="table cr-table" aria-describedby="screeningEvidenceNote">
+                    <thead>
+                        <tr>
+                            <th>筛查名次</th>
+                            <th>社区</th>
+                            <th>相对脆弱性筛查得分</th>
+                            <th>GIS 单元</th>
+                            <th>ASPECT 65+ 占比</th>
+                            <th>NASA 历史夏季 LST</th>
+                            <th>ESA 树木覆盖</th>
+                            <th>Q3 观测覆盖</th>
+                            <th>状态 / 原因</th>
+                        </tr>
+                    </thead>
+                    <tbody id="screeningDetailTableBody">
+                        <tr><td colspan="9" class="text-muted">等待载入...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <p class="text-muted small mt-2 mb-0" id="screeningEvidenceNote">
+                筛查得分由老龄人口、历史地表热暴露与低树木覆盖三个主题等权合成。Q3 覆盖率仅作证据质量展示，不进入评分。省略的临床字段不进入评分。
+            </p>
+        </div>
+    </div>
+
     <div class="card cr-card">
         <div class="card-body">
             <details>
-            <summary class="fw-semibold"><i class="bi bi-journal-text"></i> 查看计算说明</summary>
+            <summary class="fw-semibold" id="methodologySummary"><i class="bi bi-journal-text"></i> 查看方法与数据边界</summary>
             <ul class="mb-0 text-muted" id="methodologyList">
-                <li>天气危险度上游 {{ metric_info('community_weather_hazard') }}：Excess=max(Weather RR-1, 0)×VI×BaselineVisits；Hazard=clip((1-exp(-Excess/Efold))×100, 0, 100)，本次实际输入可在地图弹窗查看。</li>
-                <li>历史分量可用时：社区风险 = 45% 天气危险度 + 35% SVI-like 脆弱性 + 20% 历史负担；高不确定性时乘 0.93。</li>
-                <li>历史分量缺失时：天气与 SVI 权重归一化为 56.25% 和 43.75%，历史统计保持为空且不使用不确定性惩罚。</li>
-                <li>历史分量可用时展示门诊记录 O/E 及 95%CI，并在小样本场景进行平滑。</li>
-                <li>历史分量可用时展示不确定性与热点图层；缺失时显示数据不足。</li>
-                <li>缺少实测绿地、热岛或医疗可达性时使用稳定的中性代理值，相关排序需谨慎解读。</li>
+                <li>正在载入当前模式的方法与证据边界...</li>
             </ul>
             </details>
         </div>
@@ -499,6 +571,7 @@ const communities = {{ communities|tojson|safe }};
 const communityCoords = {{ community_coords|tojson|safe }};
 
 let map = null;
+let mapReady = false;
 if (typeof AMap !== 'undefined') {
     map = new AMap.Map('map', {
         zoom: 12,
@@ -512,9 +585,10 @@ if (typeof AMap !== 'undefined') {
         map.addControl(new AMap.ToolBar());
     });
 } else {
+    mapReady = true;
     const mapContainer = document.getElementById('map');
     if (mapContainer) {
-        mapContainer.innerHTML = '<div class="h-100 d-flex align-items-center justify-content-center text-center text-muted p-4"><div><i class="bi bi-map fs-2 d-block mb-2"></i>地图密钥未配置，风险表格与指标仍可正常查看。</div></div>';
+        mapContainer.innerHTML = '<div class="h-100 d-flex align-items-center justify-content-center text-center text-muted p-4"><div><i class="bi bi-map fs-2 d-block mb-2"></i>地图密钥未配置，社区分析表格与指标仍可查看。</div></div>';
     }
 }
 
@@ -525,6 +599,10 @@ let riskLevelChart = null;
 let vulnScatterChart = null;
 let riskRequestController = null;
 let riskRequestSequence = 0;
+const SCREENING_RANKING_MODE = 'exploratory_geospatial_screening';
+let activeRankingMode = 'pending';
+let activeRankingMetadata = {};
+let activeRankingStatus = null;
 
 const impactLevelLabels = {
     low: '低',
@@ -589,6 +667,276 @@ function clearElement(element) {
     }
 }
 
+function isScreeningMode(mode = activeRankingMode) {
+    return mode === SCREENING_RANKING_MODE;
+}
+
+function firstAvailable(...values) {
+    for (const value of values) {
+        if (value !== undefined && value !== null && value !== '') {
+            return value;
+        }
+    }
+    return null;
+}
+
+function screeningRawValue(row, key) {
+    const rawValues = row && row.raw_values && typeof row.raw_values === 'object'
+        ? row.raw_values
+        : {};
+    return firstAvailable(rawValues[key], row && row[key]);
+}
+
+function screeningScore(row) {
+    return toNumber(row && row.screening_score, null);
+}
+
+function screeningExclusionReason(row) {
+    return safeText(firstAvailable(
+        row && row.reason,
+        row && row.data_message,
+        row && row.reason_code
+    ), '空间证据不完整。');
+}
+
+function screeningColor(row, fallback) {
+    const supplied = safeText(row && row.screening_color, '').trim();
+    return /^#[0-9a-fA-F]{6}$/.test(supplied) ? supplied : fallback;
+}
+
+function screeningRankLabel(row, index = 0) {
+    const supplied = safeText(row && row.rank_label, '');
+    if (supplied) {
+        return supplied;
+    }
+    const rank = toNumber(row && row.rank, index + 1) || (index + 1);
+    return row && row.is_tied === true ? `并列第 ${rank}` : `第 ${rank}`;
+}
+
+function rowIsRanked(row) {
+    if (isScreeningMode()) {
+        if (row && row.ranking_eligible === false) return false;
+        return screeningScore(row) !== null;
+    }
+    return row && row.ranking_eligible === true;
+}
+
+function rowHasMapCoordinate(row) {
+    if (isScreeningMode()) {
+        return Boolean(getCoordForCommunity(row && row.community, row));
+    }
+    return Boolean(row && row.coordinate_available === true);
+}
+
+function setIconHeading(elementId, iconClass, text) {
+    const heading = document.getElementById(elementId);
+    if (!heading) return;
+    clearElement(heading);
+    const icon = document.createElement('i');
+    icon.className = iconClass;
+    icon.setAttribute('aria-hidden', 'true');
+    heading.appendChild(icon);
+    heading.appendChild(document.createTextNode(` ${text}`));
+}
+
+function setModeVisibility(selector, visible) {
+    document.querySelectorAll(selector).forEach(element => {
+        element.hidden = !visible;
+        element.classList.toggle('d-none', !visible);
+    });
+}
+
+function applyPendingMode() {
+    activeRankingMode = 'pending';
+    setModeVisibility('[data-screening-only]', false);
+    setModeVisibility('[data-clinical-only]', false);
+    document.querySelectorAll('[data-clinical-layer]').forEach(option => {
+        option.hidden = true;
+        option.disabled = true;
+    });
+
+    const page = document.getElementById('communityRiskPage');
+    const layerSelectElement = document.getElementById('layerSelect');
+    const riskIndexOption = document.getElementById('riskIndexLayerOption');
+    const refreshButton = document.getElementById('refreshRiskMap');
+    const refreshLabel = document.getElementById('refreshRiskMapLabel');
+    const subtitle = document.getElementById('communityRiskPageSubtitle');
+    const profileAlert = document.getElementById('profileDataAlert');
+    if (page) {
+        page.dataset.rankingMode = 'pending';
+        page.setAttribute('aria-busy', 'true');
+    }
+    if (layerSelectElement) layerSelectElement.disabled = true;
+    if (riskIndexOption) riskIndexOption.textContent = '载入后显示可用图层';
+    if (refreshButton) refreshButton.disabled = true;
+    if (refreshLabel) refreshLabel.textContent = '正在载入社区分析...';
+    if (subtitle) subtitle.textContent = '正在确认可用数据与分析模式...';
+    if (profileAlert) {
+        profileAlert.className = 'alert alert-info mt-3 mb-0';
+        profileAlert.textContent = '正在确认当前可用的社区数据和分析轨道...';
+    }
+    const methodology = document.getElementById('methodologyList');
+    if (methodology) {
+        clearElement(methodology);
+        const item = document.createElement('li');
+        item.textContent = '正在载入当前模式的方法与证据边界...';
+        methodology.appendChild(item);
+    }
+    setIconHeading('communityRiskPageTitle', 'bi bi-map', '社区空间分析');
+    setIconHeading('communityMapHeading', 'bi bi-geo-alt', '社区空间地图');
+    setIconHeading('communityRankingHeading', 'bi bi-list-ol', '社区分析结果');
+    setIconHeading('methodologySummary', 'bi bi-journal-text', '查看方法与数据边界');
+}
+
+function applyRankingMode(mode) {
+    activeRankingMode = mode === SCREENING_RANKING_MODE ? SCREENING_RANKING_MODE : 'full_profile';
+    const screening = isScreeningMode();
+
+    setModeVisibility('[data-screening-only]', screening);
+    setModeVisibility('[data-clinical-only]', !screening);
+    document.querySelectorAll('[data-clinical-layer]').forEach(option => {
+        option.hidden = screening;
+        option.disabled = screening;
+    });
+
+    const layerSelectElement = document.getElementById('layerSelect');
+    const riskIndexOption = document.getElementById('riskIndexLayerOption');
+    const page = document.getElementById('communityRiskPage');
+    const refreshButton = document.getElementById('refreshRiskMap');
+    if (page) {
+        page.dataset.rankingMode = activeRankingMode;
+        page.setAttribute('aria-busy', 'false');
+    }
+    if (layerSelectElement) layerSelectElement.disabled = false;
+    if (refreshButton) refreshButton.disabled = false;
+    if (riskIndexOption) {
+        riskIndexOption.textContent = screening
+            ? '相对脆弱性筛查得分（0–100）'
+            : '综合风险（0-100）';
+    }
+    if (screening && layerSelectElement) {
+        layerSelectElement.value = 'risk_index';
+    }
+
+    const subtitle = document.getElementById('communityRiskPageSubtitle');
+    const refreshLabel = document.getElementById('refreshRiskMapLabel');
+    const methodologySummary = document.getElementById('methodologySummary');
+    if (screening) {
+        setIconHeading('communityRiskPageTitle', 'bi bi-map', '探索性社区空间筛查');
+        setIconHeading('communityMapHeading', 'bi bi-geo-alt', '探索性相对脆弱性地图');
+        setIconHeading('communityRankingHeading', 'bi bi-list-ol', '探索性筛查优先序');
+        if (subtitle) {
+            subtitle.textContent = '基于开放地理证据比较社区的相对脆弱性，用于后续核查与数据收集排序。';
+        }
+        if (refreshLabel) refreshLabel.textContent = '刷新探索性筛查';
+        if (methodologySummary) {
+            setIconHeading('methodologySummary', 'bi bi-journal-text', '查看筛查方法与边界');
+        }
+    } else {
+        setIconHeading('communityRiskPageTitle', 'bi bi-map', '社区风险与行动地图');
+        setIconHeading('communityMapHeading', 'bi bi-geo-alt', '风险分布地图');
+        setIconHeading('communityRankingHeading', 'bi bi-list-ol', '社区风险排名');
+        if (subtitle) {
+            subtitle.textContent = '查看哪些社区需要优先提醒、走访和安排避暑资源。';
+        }
+        if (refreshLabel) refreshLabel.textContent = '查看社区风险';
+        if (methodologySummary) {
+            setIconHeading('methodologySummary', 'bi bi-journal-text', '查看计算说明');
+        }
+    }
+}
+
+function resolveRankingMode(data) {
+    const directRows = Array.isArray(data && data.rankings) ? data.rankings : [];
+    const nested = data && (
+        data.exploratory_screening
+        || data.geospatial_screening
+        || data.screening
+    );
+    const nestedRows = Array.isArray(nested && nested.rankings) ? nested.rankings : [];
+    return safeText(firstAvailable(
+        data && data.ranking_mode,
+        data && data.ranking_metadata && data.ranking_metadata.ranking_mode,
+        data && data.summary && data.summary.ranking_mode,
+        directRows[0] && directRows[0].ranking_mode,
+        nested && nested.ranking_mode,
+        nested && nested.metadata && nested.metadata.ranking_mode,
+        nestedRows[0] && nestedRows[0].ranking_mode
+    ), 'full_profile');
+}
+
+function resolveRankingPayload(data, mode) {
+    if (!isScreeningMode(mode)) {
+        return data || {};
+    }
+    const nested = data && (
+        data.exploratory_screening
+        || data.geospatial_screening
+        || data.screening
+    );
+    return nested && typeof nested === 'object' ? nested : (data || {});
+}
+
+function resolveScreeningMetadata(data, rankingPayload) {
+    const topLevel = data && data.ranking_metadata;
+    const nested = rankingPayload && rankingPayload.metadata;
+    if (
+        topLevel
+        && typeof topLevel === 'object'
+        && topLevel.ranking_mode === SCREENING_RANKING_MODE
+    ) {
+        return topLevel;
+    }
+    if (
+        nested
+        && typeof nested === 'object'
+        && nested.ranking_mode === SCREENING_RANKING_MODE
+    ) {
+        return nested;
+    }
+    return {};
+}
+
+function screeningMethodologyFromMetadata(metadata) {
+    if (!metadata || metadata.ranking_mode !== SCREENING_RANKING_MODE) {
+        return [];
+    }
+    if (!Array.isArray(metadata.methodology)) {
+        return [];
+    }
+    // 只接受筛查 metadata 的方法说明，并拦截旧完整画像方法行。
+    const fullProfileFragments = [
+        '完整性门：',
+        '均缺少关键脆弱性或实测基线字段',
+        '数据不足，未参与排名',
+        '天气危险度上游公式：',
+        '社区风险=天气危险度',
+        '历史负担采用门诊记录',
+        '有历史分量时同时展示',
+        '空间热点采用 Getis-Ord',
+        '行动优先级使用 Impact×Likelihood',
+        '公平性分层按脆弱性分位',
+        '地图与空间热点只使用'
+    ];
+    return metadata.methodology.filter(line => (
+        typeof line === 'string'
+        && line.trim()
+        && !fullProfileFragments.some(fragment => line.includes(fragment))
+    ));
+}
+
+function median(values) {
+    const numbers = values
+        .map(value => toNumber(value, null))
+        .filter(value => value !== null)
+        .sort((left, right) => left - right);
+    if (!numbers.length) return null;
+    const middle = Math.floor(numbers.length / 2);
+    return numbers.length % 2 === 0
+        ? (numbers[middle - 1] + numbers[middle]) / 2
+        : numbers[middle];
+}
+
 function haversineDistanceMeters(coordA, coordB) {
     if (!coordA || !coordB) return null;
     const lon1 = toNumber(coordA[0], null);
@@ -625,7 +973,7 @@ function computeCircleRadii(candidates) {
 
     for (let i = 0; i < count; i += 1) {
         const row = candidates[i].row || {};
-        const risk = toNumber(row.risk_index, 55) || 55;
+        const risk = firstAvailable(screeningScore(row), toNumber(row.risk_index, 55), 55);
         const population = Math.max(0, toNumber(row.population, 0) || 0);
 
         // 风险和人口越大，目标覆盖半径越大（但后续会被无重叠约束裁剪）
@@ -668,33 +1016,41 @@ function computeCircleRadii(candidates) {
 }
 
 function getCoordForCommunity(name, row) {
-    // 坐标优先级：
-    // 1) 你原有的 community_coords（保持原坐标体系）
-    // 2) 页面初始化 communities（已按原逻辑映射）
-    // 3) 后端动态返回坐标（仅兜底）
+    // 地图坐标只信任运行时 GCJ-02 同名配置。
+    // 数据库坐标可能与高德坐标系冲突，因此不做静默兜底。
     if (name && communityCoords[name] && communityCoords[name].length === 2) {
-        return [toNumber(communityCoords[name][0], null), toNumber(communityCoords[name][1], null)];
-    }
-
-    const match = communities.find(item => item.name === name);
-    if (match) {
-        const lng = toNumber(match.longitude, null);
-        const lat = toNumber(match.latitude, null);
+        const lng = toNumber(communityCoords[name][0], null);
+        const lat = toNumber(communityCoords[name][1], null);
         if (lng !== null && lat !== null) {
             return [lng, lat];
         }
     }
-
-    const rowLng = toNumber(row && row.longitude, null);
-    const rowLat = toNumber(row && row.latitude, null);
-    if (rowLng !== null && rowLat !== null) {
-        return [rowLng, rowLat];
-    }
-
     return null;
 }
 
 function getLayerStyle(row, layerKey) {
+    if (isScreeningMode()) {
+        const score = screeningScore(row);
+        if (!rowIsRanked(row)) {
+            return { color: '#94a3b8', label: '未进入筛查', valueText: '--' };
+        }
+        const level = safeText(row && row.screening_level, '');
+        const colors = {
+            Q1: '#16a34a',
+            Q2: '#84cc16',
+            Q3: '#f59e0b',
+            Q4: '#dc2626'
+        };
+        const fallbackColor = colors[level] || '#2563eb';
+        return {
+            color: screeningColor(row, fallbackColor),
+            label: safeText(row && row.screening_label, level || '相对脆弱性筛查'),
+            valueText: formatNumber(score, 1)
+        };
+    }
+    if (!row || row.ranking_eligible !== true) {
+        return { color: '#94a3b8', label: '数据不足·未参与排名', valueText: '--' };
+    }
     const riskIndex = toNumber(row.risk_index, 0) || 0;
     const vulnValue = toNumber(row.svi_percentile, 0) || 0;
     const uncertainty = toNumber(row.uncertainty_index, null);
@@ -764,8 +1120,24 @@ function renderLayerLegend(layerKey) {
     const legend = document.getElementById('layerLegend');
     clearElement(legend);
 
+    if (activeRankingMode === 'pending') {
+        const pending = document.createElement('p');
+        pending.className = 'text-muted small mb-0';
+        pending.textContent = '正在确认可用图层...';
+        legend.appendChild(pending);
+        return;
+    }
+
     let items = [];
-    if (layerKey === 'vulnerability') {
+    if (isScreeningMode()) {
+        items = [
+            { color: '#dc2626', text: 'Q4：相对脆弱性较高' },
+            { color: '#f59e0b', text: 'Q3：相对脆弱性偏高' },
+            { color: '#84cc16', text: 'Q2：相对脆弱性偏低' },
+            { color: '#16a34a', text: 'Q1：相对脆弱性较低' },
+            { color: '#94a3b8', text: '灰色：筛查证据不足' }
+        ];
+    } else if (layerKey === 'vulnerability') {
         items = [
             { color: '#1e3a8a', text: '>=80：脆弱性极高' },
             { color: '#2563eb', text: '60-79：脆弱性较高' },
@@ -816,6 +1188,46 @@ function renderLayerLegend(layerKey) {
 }
 
 function buildInfoWindowHtml(row, style) {
+    if (isScreeningMode()) {
+        if (!rowIsRanked(row)) {
+            return [
+                '<div class="cr-info-window" style="width:min(320px,calc(100vw - 72px));max-width:320px;padding:10px;">',
+                `<div style="font-weight:700;color:#64748b;margin-bottom:8px;">${escapeHtml(row.community || '--')}</div>`,
+                '<div style="font-size:12px;font-weight:700;color:#64748b;margin-bottom:6px;">未进入筛查</div>',
+                `<div style="font-size:12px;color:#475569;">${escapeHtml(screeningExclusionReason(row))}</div>`,
+                '</div>'
+            ].join('');
+        }
+        const coverage = screeningRawValue(row, 'q3_coverage_pct');
+        const q3Dates = screeningRawValue(row, 'q3_dates');
+        const localDates = screeningRawValue(row, 'local_available_dates');
+        const coverageCount = q3Dates !== null && localDates !== null
+            ? ` (${safeText(q3Dates)}/${safeText(localDates)} 日)`
+            : '';
+        return [
+            '<div class="cr-info-window" style="width:min(320px,calc(100vw - 72px));max-width:320px;padding:10px;">',
+            `<div style="font-weight:700;color:${style.color};margin-bottom:8px;">${escapeHtml(row.community || '--')}</div>`,
+            `<div style="font-size:12px;margin-bottom:4px;">筛查名次：<strong>${escapeHtml(screeningRankLabel(row))}</strong></div>`,
+            `<div style="font-size:12px;margin-bottom:4px;">相对脆弱性筛查得分：<strong>${escapeHtml(formatNumber(screeningScore(row), 1))}</strong></div>`,
+            `<div style="font-size:12px;margin-bottom:4px;">GIS 单元：<strong>${escapeHtml(row.cell_id || '--')}</strong></div>`,
+            `<div style="font-size:12px;margin-bottom:4px;">ASPECT 65+ 占比：<strong>${escapeHtml(formatPercent(screeningRawValue(row, 'age65_share_pct'), 1))}</strong></div>`,
+            `<div style="font-size:12px;margin-bottom:4px;">NASA 历史夏季 LST：<strong>${escapeHtml(formatNumber(screeningRawValue(row, 'q3_lst_c_mean'), 1))} °C</strong></div>`,
+            `<div style="font-size:12px;margin-bottom:4px;">ESA 树木覆盖：<strong>${escapeHtml(formatPercent(screeningRawValue(row, 'tree_cover_pct'), 1))}</strong></div>`,
+            `<div style="font-size:12px;margin-bottom:6px;">Q3 观测覆盖：<strong>${escapeHtml(formatPercent(coverage, 1))}${escapeHtml(coverageCount)}</strong></div>`,
+            '<div style="font-size:12px;color:#475569;border-top:1px solid #e5e7eb;padding-top:6px;">Q3 覆盖仅表示证据质量。省略的临床字段不进入评分。</div>',
+            '</div>'
+        ].join('');
+    }
+    if (row.ranking_eligible !== true) {
+        return [
+            '<div class="cr-info-window" style="width:min(300px,calc(100vw - 72px));max-width:300px;padding:10px;">',
+            `<div style="font-weight:700;color:#64748b;margin-bottom:8px;">${escapeHtml(row.community || '--')}</div>`,
+            '<div style="font-size:12px;font-weight:700;color:#b45309;margin-bottom:6px;">数据不足，未参与排名</div>',
+            `<div style="font-size:12px;color:#475569;">${escapeHtml(row.data_message || '关键脆弱性字段未完整。')}</div>`,
+            '</div>'
+        ].join('');
+    }
+
     const historicalAvailable = row.historical_component_available === true;
     const rrText = historicalAvailable && row.sir !== null && row.sir !== undefined
         ? formatNumber(row.sir, 2)
@@ -861,12 +1273,17 @@ function clearRiskOverlays() {
 
 function addRiskOverlays(rankings, layerKey) {
     clearRiskOverlays();
-    if (!map || typeof AMap === 'undefined') {
+    if (!mapReady || !map || typeof AMap === 'undefined') {
         return;
     }
 
     const candidates = [];
     rankings.forEach(row => {
+        const shouldDraw = rowIsRanked(row)
+            || (isScreeningMode() && row && row.ranking_eligible === false);
+        if (!shouldDraw || !rowHasMapCoordinate(row)) {
+            return;
+        }
         const coords = getCoordForCommunity(row.community, row);
         if (!coords || coords.length !== 2 || !Number.isFinite(coords[0]) || !Number.isFinite(coords[1])) {
             return;
@@ -935,17 +1352,15 @@ function focusOnCommunity(communityName, index) {
     if (!map) {
         return;
     }
-    let coords = null;
-    if (riskOverlays[index] && riskOverlays[index].coords) {
-        coords = riskOverlays[index].coords;
-    } else if (communityName && riskCoords[communityName]) {
-        coords = riskCoords[communityName];
-    }
+    const overlay = riskOverlays.find(item => item.community === communityName);
+    const coords = communityName && riskCoords[communityName]
+        ? riskCoords[communityName]
+        : null;
 
     if (coords && coords.length === 2) {
         map.setZoomAndCenter(14, coords);
-        if (riskOverlays[index] && riskOverlays[index].infoWindow) {
-            riskOverlays[index].infoWindow.open(map, coords);
+        if (overlay && overlay.infoWindow) {
+            overlay.infoWindow.open(map, coords);
         }
     }
 }
@@ -957,18 +1372,27 @@ function renderRanking(rankings, layerKey) {
     if (!rankings || rankings.length === 0) {
         const empty = document.createElement('div');
         empty.className = 'text-muted p-3';
-        empty.textContent = '暂无社区风险数据';
+        empty.textContent = isScreeningMode()
+            ? '暂无可用的探索性空间筛查结果。'
+            : '暂无社区风险数据';
         container.appendChild(empty);
         return;
     }
 
     rankings.forEach((row, index) => {
+        const rankingEligible = rowIsRanked(row);
+        const coordinateAvailable = rowHasMapCoordinate(row);
         const style = getLayerStyle(row, layerKey);
         const item = document.createElement('button');
         item.type = 'button';
         item.className = 'list-group-item cr-rank-item';
         item.style.borderLeftColor = style.color;
-        item.setAttribute('aria-label', `定位到${row.community || '该社区'}并查看风险详情`);
+        item.setAttribute(
+            'aria-label',
+            rankingEligible && coordinateAvailable
+                ? `定位到${row.community || '该社区'}并查看详情`
+                : `${row.community || '该社区'}数据状态`
+        );
 
         const title = document.createElement('div');
         title.className = 'd-flex justify-content-between align-items-center';
@@ -976,7 +1400,9 @@ function renderRanking(rankings, layerKey) {
         const left = document.createElement('div');
         const badge = document.createElement('span');
         badge.className = 'badge bg-secondary me-2';
-        badge.textContent = `#${row.rank || index + 1}`;
+        badge.textContent = isScreeningMode()
+            ? (rankingEligible ? screeningRankLabel(row, index) : '未进入筛查')
+            : (rankingEligible && row.rank ? `#${row.rank}` : '未排名');
         const strong = document.createElement('strong');
         strong.textContent = row.community || '--';
         left.appendChild(badge);
@@ -992,15 +1418,30 @@ function renderRanking(rankings, layerKey) {
 
         const info = document.createElement('div');
         info.className = 'small text-muted mt-1';
-        const probabilityText = row.probability_exceed_baseline === null
-            || row.probability_exceed_baseline === undefined
-            ? '数据不足'
-            : formatPercent(row.probability_exceed_baseline * 100, 1);
-        info.textContent = [
-            `综合风险 ${formatNumber(row.risk_index, 1)}`,
-            `O/E ${row.sir === null || row.sir === undefined ? '--' : formatNumber(row.sir, 2)}`,
-            `P(O/E>1) ${probabilityText}`
-        ].join(' | ');
+        if (isScreeningMode() && !rankingEligible) {
+            info.textContent = screeningExclusionReason(row);
+        } else if (isScreeningMode()) {
+            const coordinateText = coordinateAvailable ? '' : ' | 无可用地图坐标';
+            info.textContent = [
+                `筛查得分 ${formatNumber(screeningScore(row), 1)}`,
+                `GIS 单元 ${safeText(row.cell_id, '--')}`,
+                `ASPECT 65+ ${formatPercent(screeningRawValue(row, 'age65_share_pct'), 1)}`
+            ].join(' | ') + coordinateText;
+        } else if (!rankingEligible) {
+            const coordinateText = row.coordinate_available === true ? '' : ' | 无坐标';
+            info.textContent = `${row.data_message || '数据不足，未参与排名。'}${coordinateText}`;
+        } else {
+            const probabilityText = row.probability_exceed_baseline === null
+                || row.probability_exceed_baseline === undefined
+                ? '数据不足'
+                : formatPercent(row.probability_exceed_baseline * 100, 1);
+            const coordinateText = row.coordinate_available === true ? '' : ' | 无坐标，不显示地图热点';
+            info.textContent = [
+                `综合风险 ${formatNumber(row.risk_index, 1)}`,
+                `O/E ${row.sir === null || row.sir === undefined ? '--' : formatNumber(row.sir, 2)}`,
+                `P(O/E>1) ${probabilityText}`
+            ].join(' | ') + coordinateText;
+        }
 
         item.appendChild(title);
         item.appendChild(info);
@@ -1016,7 +1457,7 @@ function renderSuggestions(suggestions) {
     if (!suggestions || suggestions.length === 0) {
         const empty = document.createElement('p');
         empty.className = 'text-muted small mb-0';
-        empty.textContent = '暂无建议';
+        empty.textContent = '暂无基于完整社区数据的行动优先级建议。';
         container.appendChild(empty);
         return;
     }
@@ -1032,8 +1473,121 @@ function renderSuggestions(suggestions) {
     });
 }
 
-function renderSummary(summary) {
+function renderProfileDataStatus(summary) {
+    const alert = document.getElementById('profileDataAlert');
+    if (!alert) return;
+
+    if (isScreeningMode()) {
+        const screenedCount = riskRows.filter(row => rowIsRanked(row)).length;
+        const excluded = Array.isArray(activeRankingMetadata.excluded_communities)
+            ? activeRankingMetadata.excluded_communities.length
+            : (toNumber(
+                summary.ranking_excluded_communities,
+                Math.max(riskRows.length - screenedCount, 0)
+            ) || 0);
+        const unavailableReason = safeText(firstAvailable(
+            activeRankingMetadata.data_message,
+            activeRankingMetadata.message,
+            activeRankingMetadata.reason,
+            summary.data_message
+        ), '探索性空间证据未通过可用性检查。');
+        // 整体证据不可用时优先解释失败原因，避免把“0 个社区”误读成有效结果。
+        const parts = activeRankingStatus === 'unavailable'
+            ? [`探索性筛查证据不可用：${unavailableReason}`]
+            : [`当前为探索性空间筛查：${screenedCount} 个社区按开放地理证据计算相对脆弱性筛查得分。`];
+        parts.push(
+            '省略的临床字段不进入评分。',
+            '本模式不提供预计额外就诊、SIR、热点显著性、Impact × Likelihood 或医疗资源建议。',
+            'Q3 覆盖率只展示证据质量，不参与评分。'
+        );
+        if (excluded > 0) {
+            parts.push(`${excluded} 个社区因空间证据不完整未进入筛查。`);
+        }
+        if (activeRankingMetadata.weather_context_available === false) {
+            parts.push('实时天气上下文不可用，但未参与本筛查，排名仍可使用。');
+        }
+        alert.className = activeRankingStatus === 'unavailable'
+            ? 'alert alert-warning mt-3 mb-0'
+            : 'alert alert-info mt-3 mb-0';
+        alert.textContent = parts.join(' ');
+        return;
+    }
+
     const total = toNumber(summary.total_communities, 0) || 0;
+    const ranked = toNumber(summary.ranked_communities, total) || 0;
+    const unranked = toNumber(summary.unranked_communities, Math.max(total - ranked, 0)) || 0;
+    const missingCoords = toNumber(summary.missing_coordinate_count, 0) || 0;
+
+    const parts = [];
+    if (summary.data_message) {
+        parts.push(summary.data_message);
+    } else if (unranked > 0) {
+        parts.push(`${unranked} 个社区数据不足，未参与排名。`);
+    } else {
+        parts.push(`${ranked} 个社区已通过完整性检查。`);
+    }
+    if (missingCoords > 0) {
+        parts.push(`${missingCoords} 个社区无 config.COMMUNITY_COORDS_GCJ 同名坐标，不显示地图热点。`);
+    }
+
+    alert.className = ranked > 0 && unranked === 0 && missingCoords === 0
+        ? 'alert alert-success mt-3 mb-0'
+        : 'alert alert-warning mt-3 mb-0';
+    alert.textContent = parts.join(' ');
+}
+
+function renderSummary(summary) {
+    if (isScreeningMode()) {
+        const metadataEligible = Array.isArray(activeRankingMetadata.eligible_communities)
+            ? activeRankingMetadata.eligible_communities.length
+            : activeRankingMetadata.eligible_communities;
+        const eligible = toNumber(
+            firstAvailable(
+                summary.ranking_eligible_communities,
+                metadataEligible,
+                riskRows.length
+            ),
+            riskRows.length
+        ) || riskRows.length;
+        const excludedValue = Array.isArray(activeRankingMetadata.excluded_communities)
+            ? activeRankingMetadata.excluded_communities.length
+            : (toNumber(summary.ranking_excluded_communities, 0) || 0);
+        const total = eligible + excludedValue;
+        const scores = riskRows
+            .map(row => screeningScore(row))
+            .filter(value => value !== null);
+        const uniqueCells = new Set(
+            riskRows.map(row => safeText(row.cell_id, '')).filter(Boolean)
+        );
+        const coverageMedian = median(
+            riskRows.map(row => screeningRawValue(row, 'q3_coverage_pct'))
+        );
+
+        document.getElementById('kpiScreeningCommunities').textContent = `${eligible}/${total || eligible}`;
+        document.getElementById('kpiScreeningMaxScore').textContent = scores.length
+            ? formatNumber(Math.max(...scores), 1)
+            : '--';
+        document.getElementById('kpiScreeningCells').textContent = safeText(firstAvailable(
+            summary.ranking_unique_cells,
+            activeRankingMetadata.unique_cell_count,
+            uniqueCells.size
+        ), '--');
+        document.getElementById('kpiScreeningCoverage').textContent = formatPercent(coverageMedian, 1);
+
+        const metaParts = ['探索性空间筛查'];
+        const bundle = activeRankingMetadata.bundle;
+        const bundleVersion = bundle && typeof bundle === 'object'
+            ? firstAvailable(bundle.version, bundle.dataset_version, bundle.id)
+            : bundle;
+        if (bundleVersion) metaParts.push(`数据包 ${safeText(bundleVersion)}`);
+        metaParts.push('ASPECT · NASA · ESA');
+        document.getElementById('analysisMeta').textContent = metaParts.join(' | ');
+        renderProfileDataStatus(summary);
+        return;
+    }
+
+    const total = toNumber(summary.total_communities, 0) || 0;
+    const ranked = toNumber(summary.ranked_communities, total) || 0;
     const heatCounts = summary.heatrisk_counts || {};
     const hotspotCounts = summary.hotspot_counts || {};
     const highRisk = (toNumber(heatCounts['3'], 0) || 0) + (toNumber(heatCounts['4'], 0) || 0);
@@ -1042,13 +1596,21 @@ function renderSummary(summary) {
         + (toNumber(hotspotCounts['冷点(95%)'], 0) || 0)
         + (toNumber(hotspotCounts['冷点(99%)'], 0) || 0);
 
-    document.getElementById('kpiCommunities').textContent = total;
-    document.getElementById('kpiHighRisk').textContent = highRisk;
-    document.getElementById('kpiEquityPriority').textContent = safeText(summary.equity_priority_count, '--');
-    document.getElementById('kpiHotspot').textContent = hotspotSig;
+    document.getElementById('kpiCommunities').textContent = `${ranked}/${total}`;
+    const communitiesSub = document.getElementById('kpiCommunitiesSub');
+    if (communitiesSub) {
+        communitiesSub.textContent = '已排名 / 总档案数';
+    }
+    document.getElementById('kpiHighRisk').textContent = ranked > 0 ? highRisk : '--';
+    document.getElementById('kpiEquityPriority').textContent = ranked > 0
+        ? safeText(summary.equity_priority_count, '--')
+        : '--';
+    document.getElementById('kpiHotspot').textContent = ranked > 0 ? hotspotSig : '--';
 
     const coverage = toNumber(summary.data_coverage_ratio, null);
-    document.getElementById('kpiCoverage').textContent = coverage === null ? '--' : `${(coverage * 100).toFixed(1)}%`;
+    document.getElementById('kpiCoverage').textContent = ranked === 0 || coverage === null
+        ? '--'
+        : `${(coverage * 100).toFixed(1)}%`;
 
     document.getElementById('kpiUncertainty').textContent = formatNumber(summary.median_uncertainty_index, 1, '--');
     document.getElementById('kpiExcess').textContent = formatNumber(summary.total_expected_excess, 1, '--');
@@ -1064,6 +1626,7 @@ function renderSummary(summary) {
         metaParts.push(`病例 ${summary.matched_records}/${summary.total_records}`);
     }
     document.getElementById('analysisMeta').textContent = metaParts.length ? metaParts.join(' | ') : '分析完成';
+    renderProfileDataStatus(summary);
 }
 
 function matrixClassByScore(score) {
@@ -1082,6 +1645,13 @@ function matrixClassByScore(score) {
 function renderImpactLikelihoodMatrix(matrix) {
     const body = document.getElementById('impactLikelihoodBody');
     clearElement(body);
+
+    if (matrix && matrix.data_available === false) {
+        const tr = document.createElement('tr');
+        tr.innerHTML = '<td colspan="5" class="text-muted">数据不足，未生成行动优先级矩阵</td>';
+        body.appendChild(tr);
+        return;
+    }
 
     const impactLevels = (matrix && matrix.impact_levels) || ['low', 'medium', 'high', 'very_high'];
     const likelihoodLevels = (matrix && matrix.likelihood_levels) || ['low', 'medium', 'high', 'very_high'];
@@ -1169,6 +1739,32 @@ function renderDetailTable(rankings) {
         tr.style.cursor = 'pointer';
         tr.addEventListener('click', () => focusOnCommunity(row.community, idx));
 
+        if (row.ranking_eligible !== true) {
+            const unavailableCells = [
+                '未参与排名',
+                row.community || '--',
+                '数据不足',
+                '数据不足',
+                '数据不足',
+                '数据不足',
+                '数据不足',
+                '数据不足',
+                row.coordinate_available === true ? '数据不足' : '无坐标',
+                '数据不足',
+                '数据不足',
+                '数据不足',
+                '数据不足'
+            ];
+            unavailableCells.forEach(cell => {
+                const td = document.createElement('td');
+                td.textContent = cell;
+                tr.appendChild(td);
+            });
+            tr.title = row.data_message || '关键脆弱性字段不完整。';
+            body.appendChild(tr);
+            return;
+        }
+
         const sirText = row.sir === null || row.sir === undefined ? '--' : formatNumber(row.sir, 2);
         const ciText = (row.ci_low === null || row.ci_low === undefined || row.ci_high === null || row.ci_high === undefined)
             ? '--'
@@ -1204,13 +1800,95 @@ function renderDetailTable(rankings) {
     });
 }
 
+function renderScreeningDetailTable(rankings) {
+    const body = document.getElementById('screeningDetailTableBody');
+    clearElement(body);
+
+    if (!rankings || rankings.length === 0) {
+        appendTablePlaceholder(
+            'screeningDetailTableBody',
+            9,
+            '暂无可用的探索性筛查证据。'
+        );
+        return;
+    }
+
+    rankings.forEach((row, index) => {
+        const tr = document.createElement('tr');
+        const rankingEligible = rowIsRanked(row);
+        const coordinateAvailable = rowHasMapCoordinate(row);
+        if (rankingEligible && coordinateAvailable) {
+            tr.style.cursor = 'pointer';
+            tr.tabIndex = 0;
+            tr.setAttribute('role', 'button');
+            tr.setAttribute('aria-label', `定位到${safeText(row.community, '该社区')}并查看筛查证据`);
+            const focusRow = () => focusOnCommunity(row.community, index);
+            tr.addEventListener('click', focusRow);
+            tr.addEventListener('keydown', event => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
+                    focusRow();
+                }
+            });
+        }
+
+        const q3Dates = screeningRawValue(row, 'q3_dates');
+        const localDates = screeningRawValue(row, 'local_available_dates');
+        const dateCount = q3Dates !== null && localDates !== null
+            ? ` (${safeText(q3Dates)}/${safeText(localDates)} 日)`
+            : '';
+        const lst = screeningRawValue(row, 'q3_lst_c_mean');
+        const cells = [
+            rankingEligible ? screeningRankLabel(row, index) : '未进入筛查',
+            safeText(row.community, '--'),
+            rankingEligible ? formatNumber(screeningScore(row), 1) : '--',
+            safeText(row.cell_id, '--'),
+            formatPercent(screeningRawValue(row, 'age65_share_pct'), 1),
+            lst === null ? '--' : `${formatNumber(lst, 1)} °C`,
+            formatPercent(screeningRawValue(row, 'tree_cover_pct'), 1),
+            `${formatPercent(screeningRawValue(row, 'q3_coverage_pct'), 1)}${dateCount}`,
+            rankingEligible ? '已进入筛查' : screeningExclusionReason(row)
+        ];
+        cells.forEach(value => {
+            const td = document.createElement('td');
+            td.textContent = value;
+            tr.appendChild(td);
+        });
+        body.appendChild(tr);
+    });
+}
+
 function renderMethodology(lines) {
     const ul = document.getElementById('methodologyList');
     clearElement(ul);
 
-    const methods = Array.isArray(lines) && lines.length > 0
+    const suppliedMethods = Array.isArray(lines) && lines.length > 0
         ? lines
         : ['暂无方法说明'];
+    if (isScreeningMode()) {
+        const requiredNotes = [
+            '筛查定位：结果是社区间的探索性相对脆弱性与筛查优先序，不是临床风险、真实个人暴露或资源配置结论。',
+            '评分结构：ASPECT 65+ 占比、NASA 历史夏季地表温度与 ESA 低树木覆盖三个主题等权合成。',
+            'Q3 观测覆盖率只用于证据质量展示，不进入评分。',
+            '省略的临床字段不进入评分；本模式不产生预计额外就诊、SIR、Gi* 热点、Impact × Likelihood 或医疗资源建议。'
+        ];
+        const methods = [...suppliedMethods];
+        requiredNotes.forEach(note => {
+            if (!methods.some(line => safeText(line, '').includes(note.slice(0, 8)))) {
+                methods.push(note);
+            }
+        });
+        methods.forEach(line => {
+            const li = document.createElement('li');
+            li.textContent = line;
+            ul.appendChild(li);
+        });
+        return;
+    }
+    const integrityGate = '完整性门：关键脆弱性或实测基线字段缺失时，该社区数据不足、未参与排名，且不生成预计就诊或行动优先级。';
+    const methods = suppliedMethods.some(line => safeText(line, '').includes('完整性门'))
+        ? suppliedMethods
+        : [integrityGate, ...suppliedMethods];
 
     methods.forEach(line => {
         const li = document.createElement('li');
@@ -1265,7 +1943,26 @@ function clearRiskResults(errorCode) {
         map.clearInfoWindow();
     }
 
-    document.getElementById('analysisMeta').textContent = weatherUnavailable ? '天气更新中' : '加载失败';
+    document.getElementById('analysisMeta').textContent = weatherUnavailable ? '数据更新中' : '加载失败';
+    const page = document.getElementById('communityRiskPage');
+    const refreshButton = document.getElementById('refreshRiskMap');
+    const refreshLabel = document.getElementById('refreshRiskMapLabel');
+    if (page) page.setAttribute('aria-busy', 'false');
+    if (refreshButton) refreshButton.disabled = false;
+    if (refreshLabel) {
+        refreshLabel.textContent = isScreeningMode()
+            ? '重新加载探索性筛查'
+            : '重新加载社区分析';
+    }
+    const profileAlert = document.getElementById('profileDataAlert');
+    if (profileAlert) {
+        profileAlert.className = 'alert alert-warning mt-3 mb-0';
+        profileAlert.textContent = isScreeningMode()
+            ? '探索性空间筛查暂时无法加载。'
+            : (activeRankingMode === 'full_profile'
+                ? '完整社区画像分析暂时无法加载。'
+                : '暂时无法确认社区分析模式。');
+    }
     [
         'kpiCommunities',
         'kpiHighRisk',
@@ -1277,14 +1974,25 @@ function clearRiskResults(errorCode) {
     ].forEach(elementId => {
         document.getElementById(elementId).textContent = '--';
     });
+    [
+        'kpiScreeningCommunities',
+        'kpiScreeningMaxScore',
+        'kpiScreeningCells',
+        'kpiScreeningCoverage'
+    ].forEach(elementId => {
+        const element = document.getElementById(elementId);
+        if (element) element.textContent = '--';
+    });
 
     const list = document.getElementById('community-list');
     clearElement(list);
     const listMessage = document.createElement('div');
     listMessage.className = weatherUnavailable ? 'text-warning p-3' : 'text-danger p-3';
-    listMessage.textContent = weatherUnavailable
-        ? '社区排序将在天气更新后显示。'
-        : '暂时无法加载社区风险，请稍后再试。';
+    listMessage.textContent = isScreeningMode()
+        ? '暂时无法加载探索性筛查结果，请稍后再试。'
+        : (weatherUnavailable
+            ? '社区排序将在天气更新后显示。'
+            : '暂时无法加载社区风险，请稍后再试。');
     list.appendChild(listMessage);
 
     appendBlockPlaceholder('managementSuggestions', unavailableText);
@@ -1292,6 +2000,7 @@ function clearRiskResults(errorCode) {
     appendTablePlaceholder('equityQuartileBody', 5, unavailableText);
     appendBlockPlaceholder('equityPriorityList', unavailableText);
     appendTablePlaceholder('detailTableBody', 13, unavailableText);
+    appendTablePlaceholder('screeningDetailTableBody', 9, unavailableText);
 
     const methodology = document.getElementById('methodologyList');
     clearElement(methodology);
@@ -1309,6 +2018,15 @@ function clearRiskResults(errorCode) {
     });
 }
 
+function redrawCurrentRiskMap() {
+    const layerSelectElement = document.getElementById('layerSelect');
+    const activeLayerKey = layerSelectElement ? layerSelectElement.value : 'risk_index';
+    renderLayerLegend(activeLayerKey);
+    if (mapReady && riskRows && riskRows.length > 0) {
+        addRiskOverlays(riskRows, activeLayerKey);
+    }
+}
+
 function renderCharts(rankings, summary) {
     if (!window.Chart) {
         return;
@@ -1319,6 +2037,11 @@ function renderCharts(rankings, summary) {
     const riskCanvas = document.getElementById('riskLevelChart');
     const scatterCanvas = document.getElementById('vulnScatterChart');
     if (!riskCanvas || !scatterCanvas) {
+        return;
+    }
+
+    const rankedRows = rankings.filter(row => row.ranking_eligible === true);
+    if (!rankedRows.length) {
         return;
     }
 
@@ -1350,7 +2073,7 @@ function renderCharts(rankings, summary) {
         }
     });
 
-    const scatterData = rankings.map(row => ({
+    const scatterData = rankedRows.map(row => ({
         x: toNumber(row.svi_percentile, 0) || 0,
         y: toNumber(row.risk_index, 0) || 0,
         r: Math.max(4, Math.min(16, Math.sqrt((toNumber(row.population, 0) || 0) / 120))),
@@ -1408,6 +2131,14 @@ function loadRiskMap() {
     const windowDays = document.getElementById('windowDays').value;
     const disease = document.getElementById('diseaseFilter').value;
     const weatherAlert = document.getElementById('weatherUnavailableAlert');
+    const page = document.getElementById('communityRiskPage');
+    const refreshButton = document.getElementById('refreshRiskMap');
+    const refreshLabel = document.getElementById('refreshRiskMapLabel');
+    if (page) page.setAttribute('aria-busy', 'true');
+    if (refreshButton) refreshButton.disabled = true;
+    if (refreshLabel && activeRankingMode !== 'pending') {
+        refreshLabel.textContent = '正在刷新...';
+    }
     if (weatherAlert) {
         weatherAlert.classList.add('d-none');
         weatherAlert.textContent = '天气正在更新，社区风险暂不显示。你仍可查看避暑资源和居民反馈。';
@@ -1455,18 +2186,46 @@ function loadRiskMap() {
             throw err;
         }
 
-        riskRows = Array.isArray(data.rankings) ? data.rankings : [];
+        const rankingMode = resolveRankingMode(data);
+        const rankingPayload = resolveRankingPayload(data, rankingMode);
+        const summary = {
+            ...((data.summary && typeof data.summary === 'object') ? data.summary : {}),
+            ...((rankingPayload.summary && typeof rankingPayload.summary === 'object')
+                ? rankingPayload.summary
+                : {})
+        };
+        activeRankingMetadata = rankingMode === SCREENING_RANKING_MODE
+            ? resolveScreeningMetadata(data, rankingPayload)
+            : (
+                rankingPayload.metadata
+                || data.metadata
+                || {}
+            );
+        activeRankingStatus = firstAvailable(
+            rankingPayload.status,
+            data.ranking_status,
+            summary.ranking_status,
+            activeRankingMetadata.status
+        );
+        applyRankingMode(rankingMode);
+        riskRows = Array.isArray(rankingPayload.rankings)
+            ? rankingPayload.rankings
+            : (Array.isArray(data.rankings) ? data.rankings : []);
         const activeLayerKey = document.getElementById('layerSelect').value;
-        renderLayerLegend(activeLayerKey);
-        addRiskOverlays(riskRows, activeLayerKey);
+        redrawCurrentRiskMap();
         renderRanking(riskRows, activeLayerKey);
-        renderSummary(data.summary || {});
-        renderImpactLikelihoodMatrix(data.impact_likelihood_matrix || {});
-        renderEquityStratification(data.equity_stratification || {});
-        renderDetailTable(riskRows);
-        renderCharts(riskRows, data.summary || {});
-        renderMethodology(data.methodology || []);
-        renderSuggestions(data.management_suggestions || []);
+        renderSummary(summary);
+        if (isScreeningMode()) {
+            renderScreeningDetailTable(riskRows);
+            renderMethodology(screeningMethodologyFromMetadata(activeRankingMetadata));
+        } else {
+            renderImpactLikelihoodMatrix(data.impact_likelihood_matrix || {});
+            renderEquityStratification(data.equity_stratification || {});
+            renderDetailTable(riskRows);
+            renderCharts(riskRows, summary);
+            renderMethodology(data.methodology || []);
+            renderSuggestions(data.management_suggestions || []);
+        }
     })
     .catch(error => {
         if (error.name === 'AbortError' || requestId !== riskRequestSequence) {
@@ -1499,9 +2258,8 @@ if (filterForm) {
 const layerSelect = document.getElementById('layerSelect');
 if (layerSelect) {
     layerSelect.addEventListener('change', function() {
-        renderLayerLegend(this.value);
+        redrawCurrentRiskMap();
         if (riskRows && riskRows.length > 0) {
-            addRiskOverlays(riskRows, this.value);
             renderRanking(riskRows, this.value);
         }
     });
@@ -1509,12 +2267,24 @@ if (layerSelect) {
 
 if (map) {
     map.on('complete', function() {
-        renderLayerLegend('risk_index');
-        loadRiskMap();
+        mapReady = true;
+        redrawCurrentRiskMap();
     });
-} else {
-    renderLayerLegend('risk_index');
+}
+
+let communityRiskInitialized = false;
+function initializeCommunityRiskPage() {
+    if (communityRiskInitialized) return;
+    communityRiskInitialized = true;
+    applyPendingMode();
+    redrawCurrentRiskMap();
     loadRiskMap();
+}
+
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initializeCommunityRiskPage, { once: true });
+} else {
+    initializeCommunityRiskPage();
 }
 </script>
 {% endblock %}
