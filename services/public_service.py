@@ -6,7 +6,7 @@ import secrets
 from datetime import timedelta
 from urllib.parse import urlparse
 
-from flask import current_app, flash, redirect, render_template, request, session, url_for
+from flask import current_app, flash, jsonify, redirect, render_template, request, session, url_for
 from flask_login import current_user, login_user, logout_user
 from sqlalchemy import or_
 from sqlalchemy.exc import IntegrityError
@@ -27,6 +27,7 @@ from core.weather import (
 )
 from core.guest import GuestUser, is_guest_user
 from core.db_models import (
+    AlertDelivery,
     Community,
     CoolingResource,
     DailyStatus,
@@ -35,7 +36,15 @@ from core.db_models import (
     PairActionToken,
     PairLink,
     ShortCodeAttempt,
-    User
+    User,
+    WeatherAlert,
+)
+from core.notifications import create_notification
+from services.action_events import (
+    InvalidTransition,
+    record_event,
+    record_seen,
+    today_state,
 )
 from services.heat_action_service import HeatActionService
 from utils.parsers import parse_bool
@@ -504,57 +513,134 @@ def _build_recent_series(pair_id, days=7):
 
 
 def _refresh_community_daily(community_code, status_date):
-    from core.db_models import CommunityDaily
+    from services.user._helpers import _refresh_community_daily as _refresh_community_daily_impl
 
-    total_people = Pair.query.filter_by(status='active', community_code=community_code).count()
-    statuses = DailyStatus.query.join(
-        Pair,
-        Pair.id == DailyStatus.pair_id,
-    ).filter(
-        DailyStatus.community_code == community_code,
-        DailyStatus.status_date == status_date,
-        Pair.community_code == community_code,
-        Pair.status == 'active',
-    ).all()
-    confirmed_count = min(sum(1 for s in statuses if s.confirmed_at), total_people)
-    help_count = sum(1 for s in statuses if s.help_flag)
-    escalation_count = min(
-        sum(1 for s in statuses if s.relay_stage in ('backup', 'community', 'emergency')),
-        total_people,
-    )
-    risk_dist = {'低风险': 0, '中风险': 0, '高风险': 0, '极高': 0}
-    for status in statuses:
-        if status.risk_level in risk_dist:
-            risk_dist[status.risk_level] += 1
-    if total_people <= 0:
-        summary = '暂无可用行动数据。'
-    else:
-        pending = max(total_people - confirmed_count, 0)
-        if escalation_count > 0:
-            summary = f'已有{escalation_count}个家庭进入升级链，优先安排社区跟进。'
-        elif help_count > 0:
-            summary = f'已有{help_count}个家庭发出求助，请尽快联系。'
-        elif pending > 0:
-            summary = f'仍有{pending}个家庭未确认，建议分批提醒。'
+    return _refresh_community_daily_impl(community_code, status_date)
+
+
+def _action_channel(token=None):
+    if request.path.startswith('/elder-mode'):
+        return 'elder_mode'
+    if token or (request.view_args or {}).get('token'):
+        return 'web_token'
+    return 'web_shortcode'
+
+
+def _wants_json_action():
+    if request.is_json:
+        return True
+    requested = (request.headers.get('X-Requested-With') or '').lower()
+    if requested in {'xmlhttprequest', 'fetch'}:
+        return True
+    accept = (request.headers.get('Accept') or '').lower()
+    return 'application/json' in accept and 'text/html' not in accept
+
+
+def _action_payload():
+    payload = request.get_json(silent=True) or {}
+    if not isinstance(payload, dict):
+        payload = {}
+    return payload
+
+
+def _ensure_seen_for_write(pair, channel):
+    record_seen(pair, channel)
+
+
+def _json_state(pair):
+    return today_state(pair, today_local())
+
+
+def _notify_help_requested(pair):
+    """站内通知 + 可选 WxPusher；推送失败不阻断事件。"""
+    action_url = f'/caregiver/pair/{pair.id}'
+    try:
+        action_url = url_for('user.caregiver_pair_detail', pair_id=pair.id)
+    except Exception:
+        pass
+    try:
+        create_notification(
+            pair.caregiver_id,
+            title='老人需要帮助',
+            message='已记录求助，请尽快确认收到。',
+            level='warning',
+            category='help_requested',
+            member_id=getattr(pair, 'member_id', None),
+            action_url=action_url,
+            meta={'type': 'help_requested', 'pair_id': pair.id},
+        )
+    except Exception:
+        logger.warning('help_requested 站内通知失败', exc_info=True)
+        db.session.rollback()
+
+    caregiver = db.session.get(User, pair.caregiver_id) if pair.caregiver_id else None
+    if not caregiver or not getattr(caregiver, 'push_enabled', False):
+        return
+    wx_uid = (getattr(caregiver, 'wxpusher_uid', None) or '').strip()
+    if not wx_uid:
+        return
+
+    try:
+        from services.push.dispatch import _generate_delivery_token
+        from services.push.wxpusher import send as wxpusher_send
+    except Exception:
+        logger.warning('WxPusher 组件不可用', exc_info=True)
+        return
+
+    location = pair.location_query or pair.community_code or '未知'
+    alert = WeatherAlert.query.filter_by(
+        location=location,
+        alert_type='help_requested',
+    ).order_by(WeatherAlert.id.desc()).first()
+    if not alert:
+        alert = WeatherAlert(
+            alert_date=utcnow(),
+            location=location,
+            alert_type='help_requested',
+            alert_level='求助',
+            description='老人端求助推送',
+            source='AppThreshold',
+            is_official=False,
+            starts_at=utcnow(),
+            ends_at=None,
+        )
+        db.session.add(alert)
+        db.session.flush()
+
+    delivery_token = _generate_delivery_token()
+    status = 'failed'
+    error = None
+    try:
+        result = wxpusher_send(
+            wx_uid,
+            title='老人需要帮助',
+            content='已记录求助，请打开照护详情确认收到。',
+            url=None,
+        )
+        if result.get('ok'):
+            status = 'sent'
         else:
-            summary = '全部家庭已完成确认，继续关注高温变化。'
+            error = result.get('error') or 'wxpusher_failed'
+    except Exception as exc:
+        error = str(exc) or 'wxpusher_failed'
+        logger.info('WxPusher help send failed: %s', exc)
 
-    confirm_rate = (confirmed_count / total_people) if total_people else 0
-    escalation_rate = (escalation_count / total_people) if total_people else 0
-
-    record = CommunityDaily.query.filter_by(
-        community_code=community_code,
-        date=status_date
-    ).first()
-    if not record:
-        record = CommunityDaily(community_code=community_code, date=status_date)
-        db.session.add(record)
-    record.total_people = total_people
-    record.confirm_rate = round(confirm_rate, 4)
-    record.escalation_rate = round(escalation_rate, 4)
-    record.risk_distribution = json.dumps(risk_dist, ensure_ascii=False)
-    record.outreach_summary = summary
-    db.session.commit()
+    delivery = AlertDelivery(
+        alert_id=alert.id,
+        user_id=caregiver.id,
+        pair_id=pair.id,
+        channel='wxpusher',
+        status=status,
+        error=error,
+        delivery_token=delivery_token,
+        sent_at=utcnow(),
+    )
+    db.session.add(delivery)
+    try:
+        db.session.commit()
+    except Exception:
+        logger.warning('求助 AlertDelivery 写入失败', exc_info=True)
+        db.session.rollback()
 
 
 def _build_action_context(pair, status_date):
@@ -598,9 +684,16 @@ def _render_action_page(
     confirm_action=None,
     help_action=None,
     debrief_action=None,
+    understood_action=None,
+    select_action=None,
+    state_action=None,
     focus_debrief=False
 ):
+    channel = _action_channel(token)
+    if pair:
+        record_seen(pair, channel)
     recent_series = _build_recent_series(pair.id) if pair else []
+    state = _json_state(pair) if pair else {}
     return render_template(
         'action_checkin.html',
         stage='respond',
@@ -617,16 +710,28 @@ def _render_action_page(
         confirm_action=confirm_action,
         help_action=help_action,
         debrief_action=debrief_action,
+        understood_action=understood_action,
+        select_action=select_action,
+        state_action=state_action,
+        today_state=state,
         focus_debrief=focus_debrief
     )
 
 
 def _resolve_action_routes(token=None, confirm_action=None, help_action=None, debrief_action=None):
-    routes = {}
+    routes = {
+        'understood_action': url_for('public.action_understood'),
+        'select_action': url_for('public.action_select'),
+        'state_action': url_for('public.action_state'),
+    }
     if token:
+        routes['token'] = token
         routes['confirm_action'] = url_for('public.elder_token_checkin', token=token)
         routes['help_action'] = url_for('public.elder_token_help', token=token)
         routes['debrief_action'] = url_for('public.elder_token_debrief', token=token)
+        routes['understood_action'] = url_for('public.elder_token_understood', token=token)
+        routes['select_action'] = url_for('public.elder_token_select', token=token)
+        routes['state_action'] = url_for('public.elder_token_state', token=token)
     if confirm_action:
         routes['confirm_action'] = confirm_action
     if help_action:
@@ -712,6 +817,34 @@ def _handle_action_lookup(token=None, entry_action=None, confirm_action=None, he
         )
 
     short_code = sanitize_input(request.args.get('short_code'), max_length=12)
+    if token and short_code:
+        pair, error = _resolve_pair(short_code.replace(' ', '').strip(), token)
+        if pair and not error:
+            session['pair_session_id'] = pair.id
+            session['pair_session_code'] = pair.short_code
+            pair.last_active_at = utcnow()
+            status_date = today_local()
+            status, actions, resources, weather_data, heat_result, risk_label, risk_reasons = _build_action_context(
+                pair, status_date
+            )
+            db.session.commit()
+            action_routes = _resolve_action_routes(
+                token=token,
+                confirm_action=confirm_action,
+                help_action=help_action,
+                debrief_action=debrief_action
+            )
+            return _render_action_page(
+                pair,
+                status,
+                actions,
+                resources,
+                weather_data,
+                heat_result,
+                risk_label,
+                risk_reasons=risk_reasons,
+                **action_routes
+            )
     return render_template(
         'action_checkin.html',
         stage='lookup',
@@ -841,7 +974,15 @@ def _handle_action_confirm(token=None, confirm_action=None, debrief_action=None)
     }
     actions_done = []
     seen_action_ids = set()
-    for action_id in request.form.getlist('actions_done'):
+    payload = _action_payload()
+    submitted_actions = request.form.getlist('actions_done')
+    if not submitted_actions:
+        raw = payload.get('actions_done') or payload.get('action_id')
+        if isinstance(raw, str):
+            submitted_actions = [raw]
+        elif isinstance(raw, list):
+            submitted_actions = raw
+    for action_id in submitted_actions:
         action_id = str(action_id).strip()
         if action_id not in allowed_action_ids or action_id in seen_action_ids:
             continue
@@ -849,10 +990,24 @@ def _handle_action_confirm(token=None, confirm_action=None, debrief_action=None)
         seen_action_ids.add(action_id)
     # 授权通过后清零短码失败计数，再写库
     _clear_short_code_failures()
-    status.actions_done_count = len(actions_done)
-    status.confirmed_at = utcnow()
-    pair.last_active_at = utcnow()
-    db.session.commit()
+    channel = _action_channel(token)
+    _ensure_seen_for_write(pair, channel)
+    try:
+        if actions_done:
+            for action_key in actions_done:
+                record_event(
+                    pair,
+                    'self_reported',
+                    'elder',
+                    channel,
+                    action_id=action_key,
+                )
+        else:
+            record_event(pair, 'self_reported', 'elder', channel)
+    except InvalidTransition as exc:
+        db.session.rollback()
+        return exc.to_response()
+    status = DailyStatus.query.filter_by(pair_id=pair.id, status_date=status_date).first() or status
     log_usage_event(
         'checkin_confirmed',
         user_id=pair.caregiver_id,
@@ -862,7 +1017,9 @@ def _handle_action_confirm(token=None, confirm_action=None, debrief_action=None)
         meta={'actions_done_count': len(actions_done)},
     )
     _refresh_community_daily(pair.community_code, status_date)
-    flash('已记录今日确认。', 'success')
+    flash('已记录今日完成情况。', 'success')
+    if _wants_json_action():
+        return jsonify({'ok': True, 'state': _json_state(pair), 'actions_done_count': len(actions_done)})
     action_routes = _resolve_action_routes(token=token, confirm_action=confirm_action, debrief_action=debrief_action)
     return _render_action_page(
         pair,
@@ -904,21 +1061,30 @@ def _handle_action_help(token=None, confirm_action=None, debrief_action=None):
     )
     # 授权通过后清零短码失败计数，再写库
     _clear_short_code_failures()
-    status.help_flag = True
-    if not status.relay_stage or status.relay_stage == 'none':
-        status.relay_stage = 'caregiver'
-    pair.last_active_at = utcnow()
-    db.session.commit()
+    channel = _action_channel(token)
+    _ensure_seen_for_write(pair, channel)
+    try:
+        record_event(pair, 'help_requested', 'elder', channel)
+    except InvalidTransition as exc:
+        db.session.rollback()
+        return exc.to_response()
+    _notify_help_requested(pair)
     log_usage_event(
         'help_flagged',
         user_id=pair.caregiver_id,
         pair_id=pair.id,
         member_id=getattr(pair, 'member_id', None),
         source='web',
-        meta={'relay_stage': status.relay_stage},
+        meta={'relay_stage': 'caregiver'},
     )
     _refresh_community_daily(pair.community_code, status_date)
-    flash('已记录求助，照护人将收到提醒。', 'success')
+    flash('已记录，正在通知家属。', 'success')
+    if _wants_json_action():
+        return jsonify({
+            'ok': True,
+            'state': _json_state(pair),
+            'message': '已记录，正在通知家属；家属确认收到后这里会变绿',
+        })
     action_routes = _resolve_action_routes(token=token, confirm_action=confirm_action, debrief_action=debrief_action)
     return _render_action_page(
         pair,
@@ -931,6 +1097,117 @@ def _handle_action_help(token=None, confirm_action=None, debrief_action=None):
         risk_reasons=risk_reasons,
         **action_routes
     )
+
+
+def _authorize_action_or_redirect(token=None):
+    if _short_code_is_locked():
+        if _wants_json_action():
+            return None, jsonify({'error': 'locked'}), 429
+        flash('尝试次数过多，请稍后再试。', 'error')
+        return None, redirect(url_for('public.action_check')), None
+    payload = _action_payload()
+    short_code = sanitize_input(
+        request.form.get('short_code') or payload.get('short_code') or request.args.get('short_code'),
+        max_length=12,
+    ) or ''
+    short_code = short_code.replace(' ', '').strip()
+    token = sanitize_input(request.form.get('token') or payload.get('token') or token, max_length=200)
+    pair = _resolve_pair_from_session_or_code(short_code, token=token)
+    if not pair:
+        _record_short_code_failure()
+        if _wants_json_action() or request.method == 'GET':
+            return None, jsonify({'error': 'unauthorized'}), 400
+        flash('短码无效或已失效', 'error')
+        return None, redirect(url_for('public.action_check')), None
+    if not _authorize_pair_action_write(pair, short_code, token):
+        _record_short_code_failure()
+        if _wants_json_action() or request.method == 'GET':
+            return None, jsonify({'error': 'unauthorized'}), 400
+        flash('请先校验短码或使用完整链接', 'error')
+        return None, redirect(url_for('public.action_check')), None
+    _clear_short_code_failures()
+    return (pair, token, short_code), None, None
+
+
+def _handle_action_understood(token=None, confirm_action=None, debrief_action=None):
+    authorized, error_response, status_code = _authorize_action_or_redirect(token=token)
+    if error_response is not None:
+        return error_response if status_code is None else (error_response, status_code)
+    pair, token, _short_code = authorized
+    channel = _action_channel(token)
+    try:
+        event = record_event(pair, 'understood', 'elder', channel)
+    except InvalidTransition as exc:
+        db.session.rollback()
+        return exc.to_response()
+    _refresh_community_daily(pair.community_code, today_local())
+    if _wants_json_action():
+        return jsonify({'ok': True, 'event_id': event.id, 'state': _json_state(pair), 'teachback': True})
+    status, actions, resources, weather_data, heat_result, risk_label, risk_reasons = _build_action_context(
+        pair, today_local()
+    )
+    action_routes = _resolve_action_routes(token=token, confirm_action=confirm_action, debrief_action=debrief_action)
+    return _render_action_page(
+        pair,
+        status,
+        actions,
+        resources,
+        weather_data,
+        heat_result,
+        risk_label,
+        risk_reasons=risk_reasons,
+        **action_routes
+    )
+
+
+def _handle_action_select(token=None, confirm_action=None, debrief_action=None):
+    authorized, error_response, status_code = _authorize_action_or_redirect(token=token)
+    if error_response is not None:
+        return error_response if status_code is None else (error_response, status_code)
+    pair, token, _short_code = authorized
+    payload = _action_payload()
+    action_id = sanitize_input(
+        request.form.get('action_id') or payload.get('action_id'),
+        max_length=32,
+    ) or 'undecided'
+    channel = _action_channel(token)
+    try:
+        event = record_event(
+            pair,
+            'action_selected',
+            'elder',
+            channel,
+            action_id=action_id,
+            meta={'teachback_action_id': action_id},
+        )
+    except InvalidTransition as exc:
+        db.session.rollback()
+        return exc.to_response()
+    if _wants_json_action():
+        return jsonify({'ok': True, 'event_id': event.id, 'state': _json_state(pair), 'action_id': action_id})
+    status, actions, resources, weather_data, heat_result, risk_label, risk_reasons = _build_action_context(
+        pair, today_local()
+    )
+    action_routes = _resolve_action_routes(token=token, confirm_action=confirm_action, debrief_action=debrief_action)
+    return _render_action_page(
+        pair,
+        status,
+        actions,
+        resources,
+        weather_data,
+        heat_result,
+        risk_label,
+        risk_reasons=risk_reasons,
+        **action_routes
+    )
+
+
+def _handle_action_state(token=None):
+    authorized, error_response, status_code = _authorize_action_or_redirect(token=token)
+    if error_response is not None:
+        return error_response if status_code is None else (error_response, status_code)
+    pair, _token, _short_code = authorized
+    return jsonify({'ok': True, 'state': _json_state(pair)})
 
 
 def _handle_action_debrief(token=None, confirm_action=None, debrief_action=None, focus_debrief=False):

@@ -6,7 +6,7 @@ import math
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 
-from flask import current_app, render_template, request
+from flask import current_app, jsonify, render_template, request
 from flask_login import current_user
 from sqlalchemy import and_, or_
 
@@ -36,6 +36,7 @@ from core.db_models import (
     HealthRiskAssessment,
     MedicationReminder,
     Notification,
+    Pair,
     WeatherAlert,
     WeatherData
 )
@@ -559,6 +560,16 @@ def user_dashboard(force_elder=False):
                     }
                     break
 
+        elder_pair = None
+        today_state = {}
+        checkin_actions = list(heat_actions or [])
+        if not is_guest:
+            elder_pair = _current_elder_pair()
+            if elder_pair:
+                from services.action_events import record_seen, today_state as load_today_state
+                record_seen(elder_pair, 'elder_mode')
+                today_state = load_today_state(elder_pair, today)
+
         return render_template(
             'elder_dashboard.html',
             weather=weather if weather_available else None,
@@ -578,6 +589,9 @@ def user_dashboard(force_elder=False):
             heat_result=heat_result,
             heat_risk_label=heat_risk_label,
             heat_actions=heat_actions,
+            checkin_actions=checkin_actions,
+            elder_pair=elder_pair,
+            today_state=today_state,
             is_guest=is_guest
         )
 
@@ -612,3 +626,83 @@ def user_dashboard(force_elder=False):
 def elder_dashboard():
     """极简老人模式入口"""
     return user_dashboard(force_elder=True)
+
+
+def _current_elder_pair():
+    if not getattr(current_user, 'is_authenticated', False):
+        return None
+    if is_guest_user(current_user):
+        return None
+    return (
+        Pair.query.filter_by(caregiver_id=current_user.id, status='active')
+        .order_by(Pair.id.asc())
+        .first()
+    )
+
+
+def _elder_mode_payload():
+    payload = request.get_json(silent=True) or {}
+    if not isinstance(payload, dict):
+        payload = {}
+    return payload
+
+
+def handle_elder_mode_event(stage):
+    from services.action_events import InvalidTransition, record_event, today_state as load_today_state
+    from services.public_service import _notify_help_requested
+    from services.user._helpers import _refresh_community_daily
+
+    pair = _current_elder_pair()
+    if pair is None:
+        return jsonify({'error': 'no_active_pair'}), 400
+    payload = _elder_mode_payload()
+    action_id = request.form.get('action_id') or payload.get('action_id')
+    actions_done = request.form.getlist('actions_done')
+    if not actions_done:
+        raw = payload.get('actions_done') or payload.get('action_id')
+        if isinstance(raw, list):
+            actions_done = raw
+        elif isinstance(raw, str) and stage == 'self_reported':
+            actions_done = [raw]
+    try:
+        from services.action_events import record_seen
+        record_seen(pair, 'elder_mode')
+        event = None
+        if stage == 'self_reported':
+            submitted = [str(item).strip() for item in actions_done if str(item).strip()]
+            if submitted:
+                for key in submitted:
+                    event = record_event(pair, 'self_reported', 'elder', 'elder_mode', action_id=key)
+            else:
+                event = record_event(pair, 'self_reported', 'elder', 'elder_mode')
+        elif stage == 'action_selected':
+            event = record_event(
+                pair,
+                'action_selected',
+                'elder',
+                'elder_mode',
+                action_id=(str(action_id).strip() if action_id else 'undecided'),
+            )
+        elif stage == 'help_requested':
+            event = record_event(pair, 'help_requested', 'elder', 'elder_mode')
+            _notify_help_requested(pair)
+        else:
+            event = record_event(pair, stage, 'elder', 'elder_mode')
+    except InvalidTransition as exc:
+        db.session.rollback()
+        return exc.to_response()
+    _refresh_community_daily(pair.community_code, today_local())
+    return jsonify({
+        'ok': True,
+        'event_id': getattr(event, 'id', None),
+        'state': load_today_state(pair, today_local()),
+    })
+
+
+def handle_elder_mode_state():
+    from services.action_events import today_state as load_today_state
+
+    pair = _current_elder_pair()
+    if pair is None:
+        return jsonify({'ok': True, 'state': load_today_state(None)})
+    return jsonify({'ok': True, 'state': load_today_state(pair, today_local())})

@@ -1,0 +1,235 @@
+{% set pair_obj = pair if pair is defined else elder_pair %}
+{% set action_list = actions if actions is defined and actions else (checkin_actions if checkin_actions is defined else []) %}
+{% set state = today_state if today_state is defined and today_state else {} %}
+{% set understood_url = understood_action if understood_action is defined else url_for('user.elder_mode_understood') %}
+{% set select_url = select_action if select_action is defined else url_for('user.elder_mode_select') %}
+{% set confirm_url = confirm_action if confirm_action is defined else url_for('user.elder_mode_confirm') %}
+{% set help_url = help_action if help_action is defined else url_for('user.elder_mode_help') %}
+{% set state_url = state_action if state_action is defined else url_for('user.elder_mode_state') %}
+{% set short_code_value = pair_obj.short_code if pair_obj else '' %}
+{% set token_value = token if token is defined else '' %}
+
+<style>
+.elder-three-btn {
+    min-height: 72px;
+    width: 100%;
+    font-size: 1.25rem;
+    font-weight: 700;
+    line-height: 1.3;
+    padding: 0.9rem 1rem;
+}
+.elder-three-stack > * + * { margin-top: 0.75rem; }
+.elder-help-wait.is-acked {
+    background: #d1fae5;
+    border-color: #059669;
+    color: #065f46;
+}
+</style>
+
+<div id="elderThreeButtons" class="elder-three-stack"
+     data-state-url="{{ state_url }}"
+     data-short-code="{{ short_code_value }}"
+     data-token="{{ token_value }}">
+    <form method="POST" action="{{ understood_url }}" class="elder-understood-form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        {% if short_code_value %}
+        <input type="hidden" name="short_code" value="{{ short_code_value }}">
+        {% endif %}
+        {% if token_value %}
+        <input type="hidden" name="token" value="{{ token_value }}">
+        {% endif %}
+        <button class="btn btn-primary elder-three-btn" type="submit" id="btnUnderstood"
+                {% if state.get('understood') %}disabled{% endif %}>
+            我看懂了
+        </button>
+    </form>
+
+    <div id="teachbackPanel" class="{% if not state.get('understood') %}d-none{% endif %}">
+        <form method="POST" action="{{ select_url }}" class="elder-select-form">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            {% if short_code_value %}
+            <input type="hidden" name="short_code" value="{{ short_code_value }}">
+            {% endif %}
+            {% if token_value %}
+            <input type="hidden" name="token" value="{{ token_value }}">
+            {% endif %}
+            <fieldset class="mb-2">
+                <legend class="fw-bold mb-2">今天你准备先做哪一步？</legend>
+                {% for item in action_list %}
+                    {% set action_key = item.id if item is mapping else loop.index %}
+                    {% set action_title = item.title if item is mapping else item %}
+                    <div class="form-check mb-2">
+                        <input class="form-check-input" type="radio" name="action_id" value="{{ action_key }}" id="teach-{{ action_key }}">
+                        <label class="form-check-label fs-5" for="teach-{{ action_key }}">{{ action_title }}</label>
+                    </div>
+                {% endfor %}
+                <div class="form-check mb-2">
+                    <input class="form-check-input" type="radio" name="action_id" value="undecided" id="teach-undecided">
+                    <label class="form-check-label fs-5" for="teach-undecided">还没想好</label>
+                </div>
+            </fieldset>
+            <button class="btn btn-outline-primary elder-three-btn" type="submit">记下这一步</button>
+        </form>
+    </div>
+
+    <button class="btn btn-success elder-three-btn" type="button" id="btnShowChecklist">我做到一项</button>
+    <form method="POST" action="{{ confirm_url }}" id="selfReportForm" class="{% if not state.get('self_reported') %}d-none{% endif %} elder-confirm-form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        {% if short_code_value %}
+        <input type="hidden" name="short_code" value="{{ short_code_value }}">
+        {% endif %}
+        {% if token_value %}
+        <input type="hidden" name="token" value="{{ token_value }}">
+        {% endif %}
+        {% if action_list %}
+            <h6 class="mb-2">勾选今天做到的行动</h6>
+            {% for item in action_list %}
+                {% set action_key = item.id if item is mapping else loop.index %}
+                {% set action_title = item.title if item is mapping else item %}
+                {% set action_detail = item.detail if item is mapping else '' %}
+                <div class="form-check mb-2">
+                    <input class="form-check-input" type="checkbox" name="actions_done" value="{{ action_key }}" id="done-{{ action_key }}">
+                    <label class="form-check-label fs-5" for="done-{{ action_key }}">
+                        <strong>{{ action_title }}</strong>
+                        {% if action_detail %}<span class="text-muted small"> - {{ action_detail }}</span>{% endif %}
+                    </label>
+                </div>
+            {% endfor %}
+        {% else %}
+            <div class="text-muted mb-2">今天没有清单项，仍可记下“做到一项”。</div>
+        {% endif %}
+        <button class="btn btn-success elder-three-btn" type="submit">提交做到的项目</button>
+    </form>
+
+    <form method="POST" action="{{ help_url }}" class="elder-help-form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        {% if short_code_value %}
+        <input type="hidden" name="short_code" value="{{ short_code_value }}">
+        {% endif %}
+        {% if token_value %}
+        <input type="hidden" name="token" value="{{ token_value }}">
+        {% endif %}
+        <button class="btn btn-danger elder-three-btn" type="submit" id="btnHelp">
+            做不到，需要帮助
+        </button>
+    </form>
+    <div id="helpWaitNote" class="alert {% if state.get('help_acknowledged') %}alert-success elder-help-wait is-acked{% else %}alert-warning elder-help-wait{% endif %} {% if not state.get('help_requested') %}d-none{% endif %}" role="status">
+        {% if state.get('help_acknowledged') %}
+            家属已确认收到
+        {% else %}
+            已记录，正在通知家属；家属确认收到后这里会变绿
+        {% endif %}
+    </div>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+    const root = document.getElementById('elderThreeButtons');
+    if (!root) return;
+    const csrfInput = root.querySelector('input[name="csrf_token"]');
+    const csrf = csrfInput ? csrfInput.value : '';
+    const stateUrl = root.getAttribute('data-state-url') || '';
+    const shortCode = root.getAttribute('data-short-code') || '';
+    const token = root.getAttribute('data-token') || '';
+    const teachback = document.getElementById('teachbackPanel');
+    const checklistForm = document.getElementById('selfReportForm');
+    const showChecklist = document.getElementById('btnShowChecklist');
+    const helpNote = document.getElementById('helpWaitNote');
+
+    const postJson = function (url, body) {
+        const payload = Object.assign({ csrf_token: csrf, short_code: shortCode, token: token }, body || {});
+        return fetch(url, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Accept': 'application/json',
+                'X-Requested-With': 'fetch',
+                'X-CSRF-Token': csrf
+            },
+            body: JSON.stringify(payload)
+        }).then(function (response) { return response.json().then(function (data) {
+            return { ok: response.ok, status: response.status, data: data };
+        }).catch(function () { return { ok: response.ok, status: response.status, data: {} }; }); });
+    };
+
+    const applyHelpState = function (state) {
+        if (!helpNote || !state) return;
+        if (state.help_requested) {
+            helpNote.classList.remove('d-none');
+            if (state.help_acknowledged) {
+                helpNote.classList.add('alert-success', 'is-acked');
+                helpNote.classList.remove('alert-warning');
+                helpNote.textContent = '家属已确认收到';
+            } else {
+                helpNote.classList.remove('alert-success', 'is-acked');
+                helpNote.classList.add('alert-warning');
+                helpNote.textContent = '已记录，正在通知家属；家属确认收到后这里会变绿';
+            }
+        }
+    };
+
+    const pollState = function () {
+        if (!stateUrl) return;
+        const query = [];
+        if (shortCode) query.push('short_code=' + encodeURIComponent(shortCode));
+        if (token) query.push('token=' + encodeURIComponent(token));
+        const url = stateUrl + (stateUrl.indexOf('?') >= 0 ? '&' : '?') + query.join('&');
+        fetch(url, { headers: { 'Accept': 'application/json' } })
+            .then(function (response) { return response.json(); })
+            .then(function (data) { applyHelpState(data.state || {}); })
+            .catch(function () {});
+    };
+
+    const understoodForm = root.querySelector('.elder-understood-form');
+    if (understoodForm) {
+        understoodForm.addEventListener('submit', function (event) {
+            event.preventDefault();
+            postJson(understoodForm.getAttribute('action'), {}).then(function (result) {
+                if (result.ok && teachback) teachback.classList.remove('d-none');
+            });
+        });
+    }
+
+    const selectForm = root.querySelector('.elder-select-form');
+    if (selectForm) {
+        selectForm.addEventListener('submit', function (event) {
+            event.preventDefault();
+            const selected = selectForm.querySelector('input[name="action_id"]:checked');
+            postJson(selectForm.getAttribute('action'), { action_id: selected ? selected.value : 'undecided' });
+        });
+    }
+
+    if (showChecklist && checklistForm) {
+        showChecklist.addEventListener('click', function () {
+            checklistForm.classList.remove('d-none');
+        });
+    }
+
+    const confirmForm = root.querySelector('.elder-confirm-form');
+    if (confirmForm) {
+        confirmForm.addEventListener('submit', function (event) {
+            event.preventDefault();
+            const checked = Array.prototype.map.call(
+                confirmForm.querySelectorAll('input[name="actions_done"]:checked'),
+                function (input) { return input.value; }
+            );
+            postJson(confirmForm.getAttribute('action'), { actions_done: checked });
+        });
+    }
+
+    const helpForm = root.querySelector('.elder-help-form');
+    if (helpForm) {
+        helpForm.addEventListener('submit', function (event) {
+            event.preventDefault();
+            postJson(helpForm.getAttribute('action'), {}).then(function (result) {
+                if (result.ok) {
+                    applyHelpState((result.data && result.data.state) || { help_requested: true });
+                    if (typeof setInterval === 'function') {
+                        setInterval(pollState, 30000);
+                    }
+                }
+            });
+        });
+    }
+});
+</script>

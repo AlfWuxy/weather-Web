@@ -39,6 +39,9 @@ from services.public_service import (
     _handle_action_confirm,
     _handle_action_help,
     _handle_action_debrief,
+    _handle_action_understood,
+    _handle_action_select,
+    _handle_action_state,
     _resolve_pair_from_session_or_code,
     _validate_pair_token_binding,
     _build_action_context,
@@ -175,6 +178,27 @@ def action_help():
     return _handle_action_help()
 
 
+@bp.route('/action/understood', methods=['POST'], endpoint='action_understood')
+@limiter.limit(lambda: current_app.config.get('RATE_LIMIT_CONFIRM', '30 per hour'), key_func=rate_limit_key)
+def action_understood():
+    """老人：我看懂了"""
+    return _handle_action_understood()
+
+
+@bp.route('/action/select', methods=['POST'], endpoint='action_select')
+@limiter.limit(lambda: current_app.config.get('RATE_LIMIT_CONFIRM', '30 per hour'), key_func=rate_limit_key)
+def action_select():
+    """老人：teach-back 选择行动"""
+    return _handle_action_select()
+
+
+@bp.route('/action/state', methods=['GET'], endpoint='action_state')
+@limiter.limit(lambda: current_app.config.get('RATE_LIMIT_CONFIRM', '30 per hour'), key_func=rate_limit_key)
+def action_state():
+    """当日行动链状态（按钮变色/轮询）"""
+    return _handle_action_state()
+
+
 @bp.route('/action/debrief', methods=['POST'], endpoint='action_debrief')
 @limiter.limit(lambda: current_app.config.get('RATE_LIMIT_CONFIRM', '30 per hour'), key_func=rate_limit_key)
 def action_debrief():
@@ -217,6 +241,27 @@ def elder_token_help(token):
     """带令牌求助"""
     token = sanitize_input(token, max_length=200)
     return _handle_action_help(token=token)
+
+
+@bp.route('/e/<token>/understood', methods=['POST'], endpoint='elder_token_understood')
+@limiter.limit(lambda: current_app.config.get('RATE_LIMIT_CONFIRM', '30 per hour'), key_func=rate_limit_key)
+def elder_token_understood(token):
+    token = sanitize_input(token, max_length=200)
+    return _handle_action_understood(token=token)
+
+
+@bp.route('/e/<token>/select', methods=['POST'], endpoint='elder_token_select')
+@limiter.limit(lambda: current_app.config.get('RATE_LIMIT_CONFIRM', '30 per hour'), key_func=rate_limit_key)
+def elder_token_select(token):
+    token = sanitize_input(token, max_length=200)
+    return _handle_action_select(token=token)
+
+
+@bp.route('/e/<token>/state', methods=['GET'], endpoint='elder_token_state')
+@limiter.limit(lambda: current_app.config.get('RATE_LIMIT_CONFIRM', '30 per hour'), key_func=rate_limit_key)
+def elder_token_state(token):
+    token = sanitize_input(token, max_length=200)
+    return _handle_action_state(token=token)
 
 
 @bp.route('/e/<token>/debrief', methods=['GET', 'POST'], endpoint='elder_token_debrief')
