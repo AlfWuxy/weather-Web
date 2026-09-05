@@ -17,11 +17,13 @@ from core.constants import CHRONIC_OPTIONS, DEFAULT_CITY_LABEL, GUEST_ID_PREFIX,
 from core.extensions import db, init_extensions, login_manager
 from core.hooks import register_hooks
 from core.db_models import (
+    ActionEvent,
     AlertDelivery,
     AuditLog,
     ApiToken,
     Community,
     CommunityDaily,
+    CoolingFeedback,
     CoolingResource,
     DailyStatus,
     Debrief,
@@ -88,6 +90,7 @@ def register_blueprints(app):
     from blueprints.tools import bp as tools_bp
     from blueprints.api import bp as api_bp
     from blueprints.mp_api import bp as mp_api_bp
+    from blueprints.status import bp as status_bp
 
     app.register_blueprint(public_bp)
     app.register_blueprint(user_bp)
@@ -97,6 +100,7 @@ def register_blueprints(app):
     app.register_blueprint(tools_bp)
     app.register_blueprint(api_bp)
     app.register_blueprint(mp_api_bp)
+    app.register_blueprint(status_bp)
 
 
 _register_blueprints = register_blueprints
@@ -187,13 +191,13 @@ def ensure_db_ready(app=None):
     init_db(app)
 
 
-def main():
+def main(app_instance=None):
     """Run the Flask development server."""
-    app = create_app()
-    ensure_db_ready(app)
+    target_app = app_instance if app_instance is not None else create_app()
+    ensure_db_ready(target_app)
     host = os.getenv('FLASK_HOST', '0.0.0.0')
     port = parse_int(os.getenv('FLASK_PORT'), default=5000)
-    app.run(debug=app.config.get('DEBUG', False), host=host, port=port)
+    target_app.run(debug=target_app.config.get('DEBUG', False), host=host, port=port)
 
 
 if __name__ == '__main__':

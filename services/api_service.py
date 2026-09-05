@@ -2,20 +2,23 @@
 """API routes."""
 import json
 import logging
+import math
 
 from flask import current_app, jsonify, request
 from flask_login import current_user, login_required
 
 from core.constants import DEFAULT_CITY_LABEL
+from core.guest import is_guest_user
 from core.notifications import create_notification
-from core.security import csrf_failure_response, validate_csrf
+from core.security import _is_guest_subject, csrf_failure_response, validate_csrf
 from core.time_utils import now_local, today_local
 from core.weather import (
     ensure_user_location_valid,
     get_qweather_forecast_with_cache,
     get_weather_fetcher,
     get_weather_with_cache,
-    is_qweather_online_weather,
+    is_air_quality_available,
+    is_qweather_production_ready,
     normalize_location_name,
     weather_source_label
 )
@@ -30,6 +33,93 @@ logger = logging.getLogger(__name__)
 
 
 GENERIC_ERROR_MESSAGE = '服务暂时不可用，请稍后再试'
+
+# 社区画像敏感字段：未登录与游客（is_guest）一律剥离，与正式用户分叉
+_COMMUNITY_LIST_PUBLIC_KEYS = ('name', 'vulnerability_level')
+_COMMUNITY_RISK_MAP_PUBLIC_KEYS = (
+    'name', 'latitude', 'longitude', 'risk_level',
+)
+# vulnerability 单村匿名公开键：与 list 对齐，仅名称 + 粗粒度等级
+_COMMUNITY_VULN_PUBLIC_KEYS = ('name', 'vulnerability_level')
+# 禁止出现在 vulnerability 脱敏视图的敏感键（白名单投影后作二次断言）
+_COMMUNITY_DEMOGRAPHIC_KEYS = frozenset({
+    'id',
+    'location',
+    'population',
+    'elderly_ratio',
+    'chronic_disease_ratio',
+    'vulnerability_index',
+    'vulnerability_details',
+    'green_space_ratio',
+    'heat_island_index',
+    'medical_accessibility',
+    'baseline_visits',
+    'latitude',
+    'longitude',
+})
+
+
+def _is_anonymous_or_guest():
+    """未登录或 is_guest：与正式用户分叉，不得看社区人口/老龄/慢病等画像。
+
+    规则（与 V1-A09 / P4 约定一致）：
+    - 未登录（``current_user.is_authenticated`` 为假）→ True
+    - 游客（``is_guest_user`` / ``is_guest`` / role=guest / id 前缀 guest:）→ True
+      **与未登录完全同一策略**，避免 ``is_authenticated=True`` 的 guest 绕过脱敏
+    - 正式登录用户 → False
+    """
+    if not getattr(current_user, 'is_authenticated', False):
+        return True
+    # is_guest_user 覆盖 GuestUser.is_guest；_is_guest_subject 再兜 role / id 前缀
+    if is_guest_user(current_user) or _is_guest_subject():
+        return True
+    return False
+
+
+def _viewer_can_see_community_demographics():
+    """是否可看社区人口/老龄/慢病等画像字段（正式用户 True）。"""
+    return not _is_anonymous_or_guest()
+
+
+def _redact_community_list_item(item):
+    """社区 list 条目脱敏：仅保留 name（及可选 vulnerability_level）。"""
+    if not isinstance(item, dict):
+        return item
+    return {k: item.get(k) for k in _COMMUNITY_LIST_PUBLIC_KEYS if k in item}
+
+
+def _redact_community_risk_map_item(item):
+    """risk-map 条目脱敏：保留地名/坐标/风险等级，去掉 population 与精确 VI。"""
+    if not isinstance(item, dict):
+        return item
+    return {k: item.get(k) for k in _COMMUNITY_RISK_MAP_PUBLIC_KEYS if k in item}
+
+
+def _community_vulnerability_summary(profile, community_name):
+    """单村 vulnerability 脱敏摘要：仅 name + vulnerability_level。"""
+    if not isinstance(profile, dict):
+        profile = {}
+    details = profile.get('vulnerability_details')
+    level = None
+    if isinstance(details, dict):
+        level = details.get('level') or details.get('vulnerability_level')
+    if level is None:
+        level = profile.get('vulnerability_level') or profile.get('risk_level')
+    out = {'name': profile.get('name') or community_name}
+    if level is not None:
+        out['vulnerability_level'] = level
+    # 白名单二次裁剪，防止误塞敏感键
+    return {k: out[k] for k in _COMMUNITY_VULN_PUBLIC_KEYS if k in out}
+
+
+def _redact_community_profile(profile, community_name=None):
+    """单村 vulnerability profile 脱敏：白名单仅 name + vulnerability_level。
+
+    说明：
+    - 不用「删敏感键留其余」：旧实现会漏出 id / location / baseline_visits 等。
+    - vulnerability_level 从 vulnerability_details.level 或顶层字段提取。
+    """
+    return _community_vulnerability_summary(profile, community_name)
 
 INPUT_EXCEPTIONS = (ValueError, KeyError, TypeError, json.JSONDecodeError)
 SERVICE_EXCEPTIONS = (RuntimeError, FileNotFoundError, OSError, TimeoutError)
@@ -49,17 +139,40 @@ def _weather_unavailable_response(weather_data=None, message=None):
     return jsonify(payload), 503
 
 
-def _validate_qweather_for_risk(weather_data, context):
+def _validate_qweather_for_risk(weather_data, context, require_air_quality=False):
     """校验风险计算输入，防止 demo/mock/fallback 数据污染结果。"""
-    if is_qweather_online_weather(weather_data):
+    production_ready = is_qweather_production_ready(weather_data)
+    air_ready = is_air_quality_available(weather_data)
+    if production_ready and (air_ready or not require_air_quality):
         return None
     logger.warning(
-        "%s rejected non-QWeather weather data: source=%s is_mock=%s",
+        "%s rejected weather data: source=%s is_mock=%s production_ready=%s air_ready=%s",
         context,
         weather_source_label(weather_data),
         weather_data.get('is_mock') if isinstance(weather_data, dict) else None,
+        production_ready,
+        air_ready,
     )
     return _weather_unavailable_response(weather_data)
+
+
+def _server_weather_for_risk(data):
+    """生产风险链只信任服务端天气；测试环境保留显式 fixture 注入。"""
+    if (
+        current_app.config.get('TESTING')
+        and isinstance(data, dict)
+        and isinstance(data.get('weather'), dict)
+    ):
+        return dict(data['weather'])
+    city = sanitize_input((data or {}).get('city'), max_length=100)
+    if city:
+        city = normalize_location_name(city)
+    elif current_user.is_authenticated:
+        city = ensure_user_location_valid()
+    else:
+        city = current_app.config.get('DEFAULT_CITY', DEFAULT_CITY_LABEL) or DEFAULT_CITY_LABEL
+    weather_data, _ = get_weather_with_cache(city)
+    return weather_data
 
 PILOT_EVENT_TYPES = {
     'pair_created',
@@ -76,6 +189,27 @@ PILOT_EVENT_TYPES = {
     'wxoa_land',
 }
 _PILOT_EVENT_TYPES = PILOT_EVENT_TYPES
+CLIENT_EVENT_TYPES = {
+    'template_view',
+    'template_copy',
+    'feedback_submitted',
+}
+EVENT_META_MAX_CHARS = 2048
+
+
+def _parse_positive_event_id(value, error_code):
+    """严格解析客户端埋点关联 ID，拒绝布尔值和小数被隐式转换。"""
+    if isinstance(value, bool):
+        raise ValueError(error_code)
+    if isinstance(value, int):
+        parsed = value
+    elif isinstance(value, str) and value.strip().isdecimal():
+        parsed = int(value.strip())
+    else:
+        raise ValueError(error_code)
+    if parsed <= 0:
+        raise ValueError(error_code)
+    return parsed
 
 
 def _handle_api_error(exc, context_msg, include_details=None):
@@ -149,6 +283,7 @@ def _api_current_weather():
     weather_data, from_cache = get_weather_with_cache(location)
 
     if weather_data:
+        air_quality_available = is_air_quality_available(weather_data)
         return jsonify({
             'success': True,
             'data': {
@@ -159,8 +294,11 @@ def _api_current_weather():
                 'pressure': weather_data.get('pressure'),
                 'condition': weather_data.get('weather_condition'),
                 'wind_speed': weather_data.get('wind_speed'),
-                'aqi': weather_data.get('aqi'),
-                'pm25': weather_data.get('pm25'),
+                'aqi': weather_data.get('aqi') if air_quality_available else None,
+                'pm25': weather_data.get('pm25') if air_quality_available else None,
+                'air_quality_available': air_quality_available,
+                'observed_at': weather_data.get('observed_at'),
+                'location': weather_data.get('location'),
                 'is_mock': weather_data.get('is_mock', False),
                 'data_source': weather_source_label(weather_data),
                 'from_cache': from_cache
@@ -208,19 +346,31 @@ def api_current_weather():
 
 
 def _api_community_risk_map():
-    """获取社区风险地图数据"""
+    """获取社区风险地图数据。
+
+    匿名/游客：保留 name、risk_level 色阶、地图所需 lat/lon；去掉 population
+    与精确 vulnerability_index（与 list 同一主体判定）。
+    正式用户：附带 population、vulnerability_index。
+    """
     communities = Community.query.all()
+    # 正式用户可见人口/精确 VI；匿名与游客必须去 population
+    rich = not _is_anonymous_or_guest()
     data = []
 
     for community in communities:
-        data.append({
+        item = {
             'name': community.name,
             'latitude': community.latitude,
             'longitude': community.longitude,
             'risk_level': community.risk_level,
-            'vulnerability_index': community.vulnerability_index,
-            'population': community.population
-        })
+        }
+        if rich:
+            item['vulnerability_index'] = community.vulnerability_index
+            item['population'] = community.population
+        else:
+            # 兜底白名单（防后续误加敏感键）
+            item = _redact_community_risk_map_item(item)
+        data.append(item)
 
     return jsonify({'success': True, 'data': data})
 
@@ -267,26 +417,36 @@ def _api_ml_predict():
             'gender': data.get('gender') or current_user.gender or '男'
         }
 
-        sunshine_seconds = _normalize_sunshine_seconds(data)
-        # 获取天气信息（扩展版本，支持更多天气因素）
+        # 先校验旧单位输入，生产计算不采信客户端天气值。
+        _normalize_sunshine_seconds(data)
+        trusted_weather = _server_weather_for_risk(data)
+        invalid_weather_response = _validate_qweather_for_risk(
+            trusted_weather,
+            'ml_predict',
+            require_air_quality=True,
+        )
+        if invalid_weather_response:
+            return invalid_weather_response
+        sunshine_seconds = _normalize_sunshine_seconds(trusted_weather)
+        # 天气特征全部来自通过门禁的服务端实况。
         weather_info = {
             # 温度相关
-            'temperature': data.get('temperature', 20),
-            'tmean': data.get('tmean', data.get('temperature', 20)),
-            'tmin': data.get('tmin', data.get('temperature', 20) - 5),
-            'tmax': data.get('tmax', data.get('temperature', 20) + 5),
-            'feels_like': data.get('feels_like'),  # 体感温度，可选
+            'temperature': trusted_weather.get('temperature'),
+            'tmean': trusted_weather.get('temperature'),
+            'tmin': trusted_weather.get('temperature_min'),
+            'tmax': trusted_weather.get('temperature_max'),
+            'feels_like': trusted_weather.get('feels_like'),
             # 湿度
-            'humidity': data.get('humidity', 70),
+            'humidity': trusted_weather.get('humidity'),
             # 风速
-            'wind_speed': data.get('wind_speed', 2.5),
+            'wind_speed': trusted_weather.get('wind_speed'),
             # 降水量
-            'precipitation': data.get('precipitation', 0),
+            'precipitation': trusted_weather.get('precipitation', 0),
             # 训练特征沿用 sunshine_hours 字段名，但单位统一为秒
             'sunshine_hours': sunshine_seconds,
             'sunshine_duration_seconds': sunshine_seconds,
             # 空气质量
-            'aqi': data.get('aqi', 50),
+            'aqi': trusted_weather.get('aqi'),
             # 时间
             'month': data.get('month', now_local().month)
         }
@@ -350,26 +510,35 @@ def _api_ml_predict_community():
                 'population': data.get('population', 100)
             }
 
-        sunshine_seconds = _normalize_sunshine_seconds(data)
-        # 获取天气信息（扩展版本）
+        _normalize_sunshine_seconds(data)
+        trusted_weather = _server_weather_for_risk(data)
+        invalid_weather_response = _validate_qweather_for_risk(
+            trusted_weather,
+            'ml_predict_community',
+            require_air_quality=True,
+        )
+        if invalid_weather_response:
+            return invalid_weather_response
+        sunshine_seconds = _normalize_sunshine_seconds(trusted_weather)
+        # 生产社区预测不使用客户端伪造的天气特征。
         weather_info = {
             # 温度相关
-            'temperature': data.get('temperature', 20),
-            'tmean': data.get('tmean', data.get('temperature', 20)),
-            'tmin': data.get('tmin', data.get('temperature', 20) - 5),
-            'tmax': data.get('tmax', data.get('temperature', 20) + 5),
-            'feels_like': data.get('feels_like'),
+            'temperature': trusted_weather.get('temperature'),
+            'tmean': trusted_weather.get('temperature'),
+            'tmin': trusted_weather.get('temperature_min'),
+            'tmax': trusted_weather.get('temperature_max'),
+            'feels_like': trusted_weather.get('feels_like'),
             # 湿度
-            'humidity': data.get('humidity', 70),
+            'humidity': trusted_weather.get('humidity'),
             # 风速
-            'wind_speed': data.get('wind_speed', 2.5),
+            'wind_speed': trusted_weather.get('wind_speed'),
             # 降水量
-            'precipitation': data.get('precipitation', 0),
+            'precipitation': trusted_weather.get('precipitation', 0),
             # 日照时长（秒）
             'sunshine_hours': sunshine_seconds,
             'sunshine_duration_seconds': sunshine_seconds,
             # 空气质量
-            'aqi': data.get('aqi', 50),
+            'aqi': trusted_weather.get('aqi'),
             # 时间
             'month': data.get('month', now_local().month)
         }
@@ -399,7 +568,29 @@ def _api_ml_status():
     try:
         from services.ml_prediction_service import get_ml_service
         ml_service = get_ml_service()
-        status = ml_service.get_model_status()
+        raw_status = ml_service.get_model_status()
+        raw_status = raw_status if isinstance(raw_status, dict) else {}
+        public_fields = (
+            'model_loaded',
+            'loaded',
+            'model_name',
+            'model_type',
+            'accuracy',
+            'f1_score',
+            'classes',
+            'description',
+            'sklearn_compatible',
+        )
+        status = {
+            field: raw_status.get(field)
+            for field in public_fields
+            if field in raw_status
+        }
+        status['availability'] = (
+            'available'
+            if bool(raw_status.get('model_loaded', raw_status.get('loaded')))
+            else 'unavailable'
+        )
         return jsonify({'success': True, 'status': status})
     except API_EXCEPTIONS as exc:
         return handle_api_exception(exc, "ML模型状态获取失败", log=logger)
@@ -421,7 +612,6 @@ def _api_dlnm_risk():
     """DLNM风险函数计算"""
     try:
         from services.dlnm_risk_service import get_dlnm_service
-        dlnm = get_dlnm_service()
 
         data = request.get_json() or {}
 
@@ -430,6 +620,12 @@ def _api_dlnm_risk():
             temperature = float(data.get('temperature', 20))
         except (TypeError, ValueError):
             temperature = 20.0
+        if not math.isfinite(temperature):
+            return jsonify({
+                'success': False,
+                'error': 'invalid_temperature',
+                'message': 'temperature 必须是有限数字'
+            }), 400
 
         disease_type = data.get('disease_type')
         if disease_type and disease_type not in ['respiratory', 'cardiovascular', 'digestive', 'general']:
@@ -446,7 +642,14 @@ def _api_dlnm_risk():
                 lag_temps = [float(t) for t in lag_temps]
             except (TypeError, ValueError):
                 lag_temps = None
+            if lag_temps is not None and not all(math.isfinite(value) for value in lag_temps):
+                return jsonify({
+                    'success': False,
+                    'error': 'invalid_lag_temperatures',
+                    'message': 'lag_temperatures 必须是有限数字列表'
+                }), 400
 
+        dlnm = get_dlnm_service()
         rr, breakdown = dlnm.calculate_rr(
             temperature,
             lag_temperatures=lag_temps,
@@ -484,9 +687,12 @@ def _api_dlnm_summary():
     try:
         from services.dlnm_risk_service import get_dlnm_service
         dlnm = get_dlnm_service()
+        summary = dlnm.get_model_summary()
+        summary = dict(summary) if isinstance(summary, dict) else {}
+        summary.pop('profile_path', None)
         return jsonify({
             'success': True,
-            'summary': dlnm.get_model_summary()
+            'summary': summary
         })
     except API_EXCEPTIONS as exc:
         return handle_api_exception(exc, "DLNM模型摘要获取失败", log=logger)
@@ -523,6 +729,8 @@ def _api_forecast_7day():
                 if not isinstance(forecast_temps, list):
                     raise TypeError('forecast_temps must be a list')
                 forecast_temps = [float(t) for t in forecast_temps]
+                if not all(math.isfinite(t) for t in forecast_temps):
+                    raise ValueError('forecast_temps must contain finite numbers')
             except (TypeError, ValueError):
                 return jsonify({
                     'success': False,
@@ -546,7 +754,11 @@ def _api_forecast_7day():
                 weather_forecast, _, forecast_meta = get_qweather_forecast_with_cache(city, days=7)
                 # 当前空气质量作为复合暴露的背景场（小时级无稳定AQI预报时）
                 current_weather, _ = get_weather_with_cache(city)
-                invalid_weather_response = _validate_qweather_for_risk(current_weather, 'forecast_7day')
+                invalid_weather_response = _validate_qweather_for_risk(
+                    current_weather,
+                    'forecast_7day',
+                    require_air_quality=True,
+                )
                 if invalid_weather_response:
                     return invalid_weather_response
                 forecast_context = {
@@ -608,14 +820,45 @@ def _api_forecast_daily():
     try:
         from services.forecast_service import get_forecast_service
 
-        forecast_service = get_forecast_service()
         data = request.get_json() or {}
 
         temperature = data.get('temperature', 20)
+        try:
+            parsed_temperature = float(temperature)
+        except (TypeError, ValueError):
+            pass
+        else:
+            if not math.isfinite(parsed_temperature):
+                return jsonify({
+                    'success': False,
+                    'error': 'invalid_temperature',
+                    'message': 'temperature 必须是有限数字'
+                }), 400
+            temperature = parsed_temperature
+
         lag_temps = data.get('lag_temperatures')
+        if isinstance(lag_temps, list):
+            has_nonfinite_lag = False
+            for value in lag_temps:
+                if value is None:
+                    continue
+                try:
+                    has_nonfinite_lag = not math.isfinite(float(value))
+                except (TypeError, ValueError):
+                    continue
+                if has_nonfinite_lag:
+                    break
+            if has_nonfinite_lag:
+                return jsonify({
+                    'success': False,
+                    'error': 'invalid_lag_temperatures',
+                    'message': 'lag_temperatures 必须是有限数字列表'
+                }), 400
+
         month = data.get('month', now_local().month)
         dow = data.get('day_of_week', now_local().weekday())
 
+        forecast_service = get_forecast_service()
         result = forecast_service.predict_daily_visits(
             temperature,
             lag_temps=lag_temps,
@@ -664,34 +907,66 @@ def _api_community_risk_map_v2():
         city = sanitize_input(data.get('city'), max_length=100)
         city = normalize_location_name(city) if city else ''
 
-        # 获取天气数据
-        if 'weather' in data and isinstance(data['weather'], dict):
-            weather_data = data['weather']
-            # 确保有必要的字段
+        # 客户端天气仅供测试注入。生产风险结论必须读取服务端规范缓存，
+        # 避免客户端仅声明 data_source=QWeather 就伪造数据来源。
+        allow_test_weather = bool(
+            current_app.config.get('TESTING')
+            and isinstance(data.get('weather'), dict)
+        )
+        if allow_test_weather:
+            weather_data = dict(data['weather'])
             if 'temperature' not in weather_data:
                 weather_data['temperature'] = 20
         else:
+            canonical_location = (
+                current_app.config.get('QWEATHER_CANONICAL_LOCATION')
+                or current_app.config.get('DEFAULT_LOCATION')
+                or current_app.config.get('DEFAULT_CITY')
+                or DEFAULT_CITY_LABEL
+            )
+            canonical_location = normalize_location_name(canonical_location)
+            # 保留既有 city 缓存维度；天气来源固定走服务端规范地点。
             if not city:
-                city = ensure_user_location_valid()
+                default_city = (
+                    current_app.config.get('DEFAULT_CITY')
+                    or DEFAULT_CITY_LABEL
+                )
+                city = normalize_location_name(default_city)
             try:
-                weather_data, _ = get_weather_with_cache(city)
+                weather_data, _ = get_weather_with_cache(canonical_location)
             except (ValueError, TypeError, RuntimeError, OSError) as exc:
-                logger.warning("Community risk map weather fallback: %s", exc)
-                weather_data = {'temperature': 20, 'humidity': 60, 'aqi': 50}
+                logger.warning("Community risk map canonical weather unavailable: %s", exc)
+                weather_data = {}
 
         invalid_weather_response = _validate_qweather_for_risk(weather_data, 'community_risk_map_v2')
-        if invalid_weather_response:
-            return invalid_weather_response
+        screening_only = invalid_weather_response is not None
+        signature_builder = getattr(community_service, 'get_ranking_input_signature', None)
+        ranking_input_signature = signature_builder() if callable(signature_builder) else ''
 
         cache_params = build_community_risk_cache_params(
             analysis_date=target_date,
             window_days=window_days,
             disease_filter=disease_filter,
             city=city,
-            weather_data=weather_data,
+            weather_data=None if screening_only else weather_data,
+            ranking_path='exploratory_only' if screening_only else 'auto',
+            input_signature=ranking_input_signature,
         )
 
         def _build_result():
+            if screening_only:
+                screening_builder = getattr(
+                    community_service,
+                    'generate_exploratory_geospatial_screening',
+                    None,
+                )
+                if not callable(screening_builder):
+                    return None
+                return screening_builder(
+                    target_date=target_date,
+                    window_days=window_days,
+                    disease_filter=disease_filter,
+                )
             return community_service.generate_community_risk_map(
                 weather_data,
                 target_date=target_date,
@@ -700,10 +975,21 @@ def _api_community_risk_map_v2():
             )
 
         result, cache_hit = get_or_build_community_risk_result(cache_params, _build_result)
+        if result is None:
+            if invalid_weather_response is not None:
+                return invalid_weather_response
+            return jsonify({
+                'success': False,
+                'error': 'community_risk_unavailable',
+                'message': '社区分析暂时不可用，请稍后再试。',
+            }), 503
 
         return jsonify({
             'success': True,
             'cache_hit': cache_hit,
+            'ranking_mode': result.get('ranking_mode'),
+            'ranking_status': result.get('ranking_status'),
+            'ranking_metadata': result.get('ranking_metadata', {}),
             'map_data': result.get('map_data', {}),
             'rankings': result.get('rankings', []),
             'summary': result.get('summary', {}),
@@ -730,7 +1016,11 @@ def api_community_risk_map_v2():
 
 
 def _api_community_vulnerability(community_name):
-    """获取单个社区脆弱性指数"""
+    """获取单个社区脆弱性指数。
+
+    匿名/游客：403 + 脱敏摘要（仅 name + vulnerability_level），禁止完整 profile。
+    正式用户：返回完整画像。
+    """
     try:
         from services.community_risk_service import get_community_service
 
@@ -738,6 +1028,17 @@ def _api_community_vulnerability(community_name):
         profile = community_service.get_community_profile(community_name)
 
         if profile:
+            if _is_anonymous_or_guest():
+                # 禁止完整 profile；403 仅 name+level 摘要
+                summary = _community_vulnerability_summary(
+                    profile, community_name
+                )
+                return jsonify({
+                    'success': False,
+                    'error': 'login_required_for_community_profile',
+                    'message': '登录后可查看完整社区画像',
+                    'community': summary,
+                }), 403
             return jsonify({
                 'success': True,
                 'community': profile
@@ -759,12 +1060,22 @@ def api_community_vulnerability(community_name):
 
 
 def _api_community_list():
-    """获取所有社区列表及脆弱性"""
+    """获取所有社区列表及脆弱性。
+
+    匿名/游客：每条仅保留 name（及可选 vulnerability_level 粗粒度）；
+    去掉 population、elderly_ratio、chronic_disease_ratio、vulnerability_index 精确值。
+    正式登录用户：完整画像字段。
+    """
     try:
         from services.community_risk_service import get_community_service
 
         community_service = get_community_service()
         communities = community_service.get_all_communities()
+
+        if _is_anonymous_or_guest():
+            communities = [
+                _redact_community_list_item(c) for c in communities
+            ]
 
         return jsonify({
             'success': True,
@@ -804,18 +1115,14 @@ def _api_chronic_individual():
             )
         }
 
-        # 天气信息
-        if 'weather' in data:
-            weather_data = data['weather']
-        else:
-            city = sanitize_input(data.get('city'), max_length=100)
-            if city:
-                city = normalize_location_name(city)
-            else:
-                city = ensure_user_location_valid()
-            weather_data, _ = get_weather_with_cache(city)
+        # 生产慢病风险只读服务端 canonical 天气。
+        weather_data = _server_weather_for_risk(data)
 
-        invalid_weather_response = _validate_qweather_for_risk(weather_data, 'chronic_individual')
+        invalid_weather_response = _validate_qweather_for_risk(
+            weather_data,
+            'chronic_individual',
+            require_air_quality=True,
+        )
         if invalid_weather_response:
             return invalid_weather_response
 
@@ -856,20 +1163,14 @@ def _api_chronic_population():
 
         data = request.get_json() or {}
 
-        # 天气信息
-        if 'weather' in data:
-            weather_data = data['weather']
-        else:
-            city = sanitize_input(data.get('city'), max_length=100)
-            if city:
-                city = normalize_location_name(city)
-            elif current_user.is_authenticated:
-                city = ensure_user_location_valid()
-            else:
-                city = current_app.config.get('DEFAULT_CITY', DEFAULT_CITY_LABEL) or DEFAULT_CITY_LABEL
-            weather_data, _ = get_weather_with_cache(city)
+        # 生产人群风险只读服务端 canonical 天气。
+        weather_data = _server_weather_for_risk(data)
 
-        invalid_weather_response = _validate_qweather_for_risk(weather_data, 'chronic_population')
+        invalid_weather_response = _validate_qweather_for_risk(
+            weather_data,
+            'chronic_population',
+            require_air_quality=True,
+        )
         if invalid_weather_response:
             return invalid_weather_response
 
@@ -902,6 +1203,15 @@ def _api_ai_ask():
         from services.ai_question_service import AIQuestionService
         data = request.get_json() or {}
 
+        api_key = (current_app.config.get('SILICONFLOW_API_KEY') or '').strip()
+        allowed_models = current_app.config.get('AI_ALLOWED_MODELS', []) or []
+        if not api_key or not allowed_models:
+            return jsonify({
+                'success': False,
+                'error': 'ai_service_unavailable',
+                'message': 'AI 服务当前未配置，请稍后再试。',
+            }), 503
+
         question = data.get('question', '')
         # 降低 AI 问答最大长度，防止滥用和费用激增
         # 可通过环境变量 AI_QUESTION_MAX_LENGTH 覆盖（默认 800）
@@ -909,13 +1219,11 @@ def _api_ai_ask():
         question = sanitize_input(question, max_length=max_question_len)
         model = data.get('model')
 
-        allowed_models = current_app.config.get('AI_ALLOWED_MODELS', [])
         if model not in allowed_models:
             return jsonify({'success': False, 'error': '模型不可用'})
         if not question:
             return jsonify({'success': False, 'error': '问题不能为空'})
 
-        api_key = current_app.config.get('SILICONFLOW_API_KEY')
         api_base = current_app.config.get('SILICONFLOW_API_BASE')
         service = AIQuestionService(
             api_key,
@@ -1009,7 +1317,11 @@ def _api_comprehensive_alert():
 
         # 获取当前天气
         current_weather, _ = get_weather_with_cache(city)
-        invalid_weather_response = _validate_qweather_for_risk(current_weather, 'comprehensive_alert')
+        invalid_weather_response = _validate_qweather_for_risk(
+            current_weather,
+            'comprehensive_alert',
+            require_air_quality=True,
+        )
         if invalid_weather_response:
             return invalid_weather_response
         temperature = current_weather.get('temperature', 20)
@@ -1090,49 +1402,76 @@ def api_comprehensive_alert():
 def _api_usage_event():
     """Write pilot usage event (server-side validation, CSRF-protected)."""
     try:
-        payload = request.get_json(silent=True) or {}
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict):
+            return jsonify({'success': False, 'error': 'invalid_payload'}), 400
         event_type = sanitize_input(payload.get('event_type'), max_length=50) or ''
-        if event_type not in _PILOT_EVENT_TYPES:
+        if event_type not in CLIENT_EVENT_TYPES:
             return jsonify({'success': False, 'error': 'invalid event_type'}), 400
 
         pair_id = payload.get('pair_id')
         member_id = payload.get('member_id')
-        source = sanitize_input(payload.get('source'), max_length=20) or 'web'
-        meta = payload.get('meta') if isinstance(payload.get('meta'), (dict, list)) else None
+        meta_value = payload.get('meta')
+        if meta_value is not None and not isinstance(meta_value, (dict, list)):
+            return jsonify({'success': False, 'error': 'invalid_meta'}), 400
+        meta = meta_value
+        if meta is not None:
+            try:
+                meta_json = json.dumps(meta, ensure_ascii=False)
+            except (TypeError, ValueError):
+                return jsonify({'success': False, 'error': 'invalid_meta'}), 400
+            if len(meta_json) > EVENT_META_MAX_CHARS:
+                return jsonify({'success': False, 'error': 'meta_too_large'}), 400
 
         resolved_pair_id = None
+        pair = None
         if pair_id is not None:
             try:
-                pair_id_int = int(pair_id)
-            except Exception:
-                pair_id_int = None
-            if pair_id_int:
-                q = Pair.query.filter_by(id=pair_id_int)
-                if getattr(current_user, 'role', None) != 'admin':
-                    q = q.filter_by(caregiver_id=current_user.id)
-                pair = q.first()
-                if pair:
-                    resolved_pair_id = pair.id
+                pair_id_int = _parse_positive_event_id(
+                    pair_id,
+                    'invalid_pair_id',
+                )
+            except ValueError:
+                return jsonify({'success': False, 'error': 'invalid_pair_id'}), 400
+            q = Pair.query.filter_by(id=pair_id_int, status='active')
+            if getattr(current_user, 'role', None) != 'admin':
+                q = q.filter_by(caregiver_id=current_user.id)
+            pair = q.first()
+            if not pair:
+                return jsonify({'success': False, 'error': 'pair_not_found'}), 404
+            resolved_pair_id = pair.id
 
         resolved_member_id = None
+        member = None
         if member_id is not None:
             try:
-                member_id_int = int(member_id)
-            except Exception:
-                member_id_int = None
-            if member_id_int:
-                member = FamilyMember.query.filter_by(id=member_id_int, user_id=current_user.id).first()
-                if member:
-                    resolved_member_id = member.id
+                member_id_int = _parse_positive_event_id(
+                    member_id,
+                    'invalid_member_id',
+                )
+            except ValueError:
+                return jsonify({'success': False, 'error': 'invalid_member_id'}), 400
+            member = FamilyMember.query.filter_by(
+                id=member_id_int,
+                user_id=current_user.id,
+            ).first()
+            if not member:
+                return jsonify({'success': False, 'error': 'member_not_found'}), 404
+            resolved_member_id = member.id
 
-        log_usage_event(
+        if pair and member and pair.member_id != member.id:
+            return jsonify({'success': False, 'error': 'member_pair_mismatch'}), 400
+
+        event = log_usage_event(
             event_type,
             user_id=current_user.id,
             pair_id=resolved_pair_id,
             member_id=resolved_member_id,
-            source=source,
+            source='web',
             meta=meta,
         )
+        if event is None:
+            return jsonify({'success': False, 'error': 'event_write_failed'}), 503
         return jsonify({'success': True})
     except INPUT_EXCEPTIONS as exc:
         return handle_api_exception(exc, "usage event 参数错误", log=logger, status_code=400)

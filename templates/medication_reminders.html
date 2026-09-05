@@ -1,13 +1,13 @@
 {% extends "base.html" %}
 
-{% block title %}用药提醒管理 - 天气健康风险预测系统{% endblock %}
+{% block title %}用药提醒 · 宜老天气通{% endblock %}
 
 {% block content %}
 <div class="container">
     <div class="row mb-4">
         <div class="col-12">
-            <h2><i class="bi bi-capsule"></i> 用药提醒管理</h2>
-            <p class="text-muted">根据天气变化提醒慢病患者用药</p>
+            <h1 class="h2"><i class="bi bi-capsule"></i> 用药计划与天气关注阈值</h1>
+            <p class="text-muted">记录原有用药计划和希望关注的天气阈值。本页不用于新增药物、调整剂量或替代医嘱。</p>
         </div>
     </div>
 
@@ -67,9 +67,9 @@
                                     <input type="number" class="form-control" name="high_aqi" placeholder="AQI≥">
                                 </div>
                             </div>
-                            <small class="text-muted">满足任一条件即可触发提醒</small>
+                            <small class="text-muted">满足任一条件时可标记为需要关注；是否发送通知取决于通知通道与账号设置。</small>
                         </div>
-                        <button class="btn btn-primary w-100">添加提醒</button>
+                        <button class="btn btn-primary w-100">保存用药记录</button>
                     </form>
                 </div>
             </div>
@@ -78,7 +78,7 @@
         <div class="col-lg-7">
             <div class="card shadow-sm">
                 <div class="card-header bg-light">
-                    <h5 class="mb-0">提醒列表</h5>
+                    <h5 class="mb-0">用药记录</h5>
                 </div>
                 <div class="card-body">
                     <div class="table-responsive">
@@ -135,7 +135,7 @@
                         </table>
                     </div>
                     {% if reminders|length == 0 %}
-                        <p class="text-muted mb-0">暂无提醒记录</p>
+                        <p class="text-muted mb-0">暂无用药记录</p>
                     {% endif %}
                 </div>
             </div>

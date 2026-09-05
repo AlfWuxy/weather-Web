@@ -12,18 +12,21 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import secrets
 from collections import defaultdict
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
+from zoneinfo import ZoneInfo
 
 from flask import current_app, has_app_context
 
+from core.constants import DEFAULT_CITY_LABEL
 from core.db_models import AlertDelivery, FamilyMemberProfile, Pair, User, WeatherAlert
 from core.extensions import db
 from core.time_utils import utcnow
 from core.usage import log_usage_event
-from core.weather import get_weather_with_cache, is_qweather_online_weather
+from core.weather import get_weather_with_cache, is_qweather_production_ready
 from services.location_resolver import resolve_location
 from services.warning_service import get_qweather_warnings
 from services.push.wxpusher import send as wxpusher_send
@@ -78,9 +81,56 @@ def _choose_primary_warning(warnings: List[Dict[str, Any]]) -> Optional[Dict[str
     )[0]
 
 
+def _parse_warning_datetime(value: Any) -> Optional[datetime]:
+    """把和风预警时间解析为 UTC aware datetime；无效值返回 None。"""
+    if value is None or value == "":
+        return None
+    if isinstance(value, datetime):
+        parsed = value
+    else:
+        text = str(value).strip()
+        if not text:
+            return None
+        if text.endswith(("Z", "z")):
+            text = f"{text[:-1]}+00:00"
+        try:
+            parsed = datetime.fromisoformat(text)
+        except (TypeError, ValueError):
+            logger.info("忽略无法解析的和风预警时间：%s", value)
+            return None
+
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        # 和风天气服务于中国城市；缺少偏移时按其本地时区解释，避免误当 UTC。
+        parsed = parsed.replace(tzinfo=ZoneInfo("Asia/Shanghai"))
+    return parsed.astimezone(timezone.utc)
+
+
+def _active_warning_window(warning: Dict[str, Any], now: datetime) -> Optional[Tuple[datetime, datetime]]:
+    """只有有效期完整且当前生效的供应商预警才能进入官方分支。"""
+    starts_at = _parse_warning_datetime((warning or {}).get('start_time'))
+    ends_at = _parse_warning_datetime((warning or {}).get('end_time'))
+    if starts_at is None or ends_at is None or ends_at < starts_at:
+        return None
+    current = now.astimezone(timezone.utc) if now.tzinfo is not None else now.replace(tzinfo=timezone.utc)
+    if current < starts_at or current > ends_at:
+        return None
+    return starts_at, ends_at
+
+
+def _description_is_more_precise(existing: Optional[str], incoming: Optional[str]) -> bool:
+    """只用信息更充分的文案覆盖旧文案，避免官方记录被空值或短标题降级。"""
+    old_text = str(existing or "").strip()
+    new_text = str(incoming or "").strip()
+    if not new_text or new_text == old_text:
+        return False
+    if not old_text or old_text in {"官方预警", "天气预警"}:
+        return True
+    return len(new_text) >= len(old_text)
+
+
 def _threshold_alert(weather_data: Dict[str, Any]) -> Optional[Tuple[str, str, str]]:
     """Return (alert_type, alert_level, description) for threshold rules."""
-    if not is_qweather_online_weather(weather_data):
+    if not is_qweather_production_ready(weather_data):
         return None
     try:
         tmax = weather_data.get("temperature_max")
@@ -90,18 +140,22 @@ def _threshold_alert(weather_data: Dict[str, Any]) -> Optional[Tuple[str, str, s
     except Exception:
         tmax_v = None
         tmin_v = None
+    if tmax_v is not None and not math.isfinite(tmax_v):
+        tmax_v = None
+    if tmin_v is not None and not math.isfinite(tmin_v):
+        tmin_v = None
 
     if tmax_v is not None and tmax_v >= 35:
         return (
             "heat_threshold",
-            "阈值",
-            f"最高气温预计 ≥ 35°C（当前估计 {tmax_v:.1f}°C）",
+            "行动阈值",
+            f"最高气温预计达到行动阈值 ≥ 35°C（当前估计 {tmax_v:.1f}°C）",
         )
     if tmin_v is not None and tmin_v <= 5:
         return (
             "cold_threshold",
-            "阈值",
-            f"最低气温预计 ≤ 5°C（当前估计 {tmin_v:.1f}°C）",
+            "行动阈值",
+            f"最低气温预计达到行动阈值 ≤ 5°C（当前估计 {tmin_v:.1f}°C）",
         )
     return None
 
@@ -113,22 +167,54 @@ def _get_or_create_weather_alert(
     alert_level: str,
     description: str,
     dedupe_hours: int = 6,
+    *,
+    source: str = "Legacy",
+    is_official: bool = False,
+    starts_at: Optional[datetime] = None,
+    ends_at: Optional[datetime] = None,
 ) -> WeatherAlert:
+    """按 location+type+level+source+official+时间窗去重。
+
+    同级窗口内复用同一行；黄改红这类 level 变化必须新建，禁止复用旧 id，
+    也禁止把旧行原地改级别，否则 delivery 会把升级当成已推送而静默跳过。
+    """
     cutoff = now - timedelta(hours=max(int(dedupe_hours), 1))
+    # 来源和官方性必须进入去重键，避免应用阈值与官方预警互相吞并。
+    type_key = str(alert_type or "")[:50]
+    level_key = str(alert_level or "")[:20]
+    source_key = str(source or "Legacy").strip()[:50] or "Legacy"
+    official_key = bool(is_official)
     recent = WeatherAlert.query.filter(
         WeatherAlert.location == location_key,
-        WeatherAlert.alert_type == alert_type,
+        WeatherAlert.alert_type == type_key,
+        WeatherAlert.alert_level == level_key,
+        WeatherAlert.source == source_key,
+        WeatherAlert.is_official.is_(official_key),
         WeatherAlert.alert_date >= cutoff,
     ).order_by(WeatherAlert.alert_date.desc()).first()
     if recent:
+        if official_key:
+            # 同一官方来源的最新非空时间代表供应商校正，空值不得抹掉已有有效期。
+            if starts_at is not None and recent.starts_at != starts_at:
+                recent.starts_at = starts_at
+            if ends_at is not None and recent.ends_at != ends_at:
+                recent.ends_at = ends_at
+            if _description_is_more_precise(recent.description, description):
+                recent.description = str(description).strip()
+            db.session.flush()
         return recent
 
+    # 级别、来源、官方性不同，或窗口内无同键记录时都必须新建。
     record = WeatherAlert(
         alert_date=now,
         location=location_key,
-        alert_type=str(alert_type or "")[:50],
-        alert_level=str(alert_level or "")[:20],
+        alert_type=type_key,
+        alert_level=level_key,
         description=description,
+        source=source_key,
+        is_official=official_key,
+        starts_at=starts_at,
+        ends_at=ends_at,
         affected_communities=json.dumps([location_key], ensure_ascii=False),
         disease_correlation=json.dumps({}, ensure_ascii=False),
     )
@@ -164,6 +250,8 @@ def _pair_allows_family_push(pair: Pair, profile_map: Dict[int, FamilyMemberProf
 
 def _push_location_label(resolved: Dict[str, Any]) -> str:
     """第三方推送只使用静态公开地点标签，地址解析结果统一降为泛称。"""
+    if _cfg('QWEATHER_CANONICAL_LOCATION'):
+        return DEFAULT_CITY_LABEL
     provider = str((resolved or {}).get("provider") or "").strip().lower()
     display_name = str((resolved or {}).get("display_name") or "").strip()
     if provider in {"map", "default"} and display_name:
@@ -207,7 +295,7 @@ def _render_push_content(
         if text:
             lines.append(text[:220] + ("…" if len(text) > 220 else ""))
     elif threshold_desc:
-        lines.append(f"阈值触发：{threshold_desc}")
+        lines.append(f"天气提醒（行动阈值触发）：{threshold_desc}")
 
     lines.append("提示：本工具不提供医疗诊断；如出现明显不适请及时就医或联系当地卫生服务。")
     content = "\n".join(lines)
@@ -220,6 +308,10 @@ def dispatch_alerts(now=None, dedupe_hours: int = 6) -> Dict[str, Any]:
         raise RuntimeError("dispatch_alerts must run inside Flask app context")
 
     now = now or utcnow()
+    if now.tzinfo is None or now.utcoffset() is None:
+        now = now.replace(tzinfo=timezone.utc)
+    else:
+        now = now.astimezone(timezone.utc)
     pairs = Pair.query.filter_by(status="active").all()
     if not pairs:
         return {"pairs": 0, "locations": 0, "alerts": 0, "deliveries": 0, "sent": 0, "failed": 0}
@@ -258,17 +350,31 @@ def dispatch_alerts(now=None, dedupe_hours: int = 6) -> Dict[str, Any]:
         weather_data, _ = get_weather_with_cache(location_code)
         threshold = _threshold_alert(weather_data)
 
-        if primary_warning:
+        official_window = _active_warning_window(primary_warning, now) if primary_warning else None
+        if primary_warning and official_window:
             alert_type = primary_warning.get("type") or "qweather_warning"
             alert_level = primary_warning.get("level") or ""
-            description = primary_warning.get("title") or primary_warning.get("text") or "官方预警"
+            description = primary_warning.get("text") or primary_warning.get("title") or "官方预警"
+            source = "QWeather"
+            is_official = True
+            starts_at, ends_at = official_window
         elif threshold:
             alert_type, alert_level, description = threshold
+            source = "AppThreshold"
+            is_official = False
+            starts_at = now
+            ends_at = None
         else:
+            if primary_warning and official_window is None:
+                logger.warning("跳过缺失、过期或尚未生效的和风预警，location=%s", location_code)
             continue
 
         # Create / reuse alert record.
-        location_key = location_code  # stable for dedupe
+        location_key = (
+            DEFAULT_CITY_LABEL
+            if _cfg('QWEATHER_CANONICAL_LOCATION')
+            else location_code
+        )
         weather_alert = _get_or_create_weather_alert(
             now=now,
             location_key=location_key,
@@ -276,6 +382,10 @@ def dispatch_alerts(now=None, dedupe_hours: int = 6) -> Dict[str, Any]:
             alert_level=alert_level,
             description=description,
             dedupe_hours=dedupe_hours,
+            source=source,
+            is_official=is_official,
+            starts_at=starts_at,
+            ends_at=ends_at,
         )
         stats["alerts"] += 1
 
@@ -332,6 +442,25 @@ def dispatch_alerts(now=None, dedupe_hours: int = 6) -> Dict[str, Any]:
             )
             db.session.add(delivery)
             db.session.commit()
+
+            if ok:
+                try:
+                    from services.action_events import record_event
+                    for target_pair in user_pairs:
+                        try:
+                            record_event(
+                                target_pair,
+                                "delivered",
+                                "system",
+                                "wxpusher",
+                                alert_id=weather_alert.id,
+                                delivery_id=delivery.id,
+                                now=now,
+                            )
+                        except Exception:
+                            logger.debug("record delivered event failed", exc_info=True)
+                except Exception:
+                    logger.debug("action event import failed", exc_info=True)
 
             stats["deliveries"] += 1
             if ok:

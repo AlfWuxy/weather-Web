@@ -13,6 +13,7 @@ import time
 from statistics import mean, pstdev
 from urllib.parse import urlsplit
 from flask import current_app, has_app_context
+from core.constants import DEFAULT_CITY_LABEL
 from services.external_api import record_external_api_timing as _record_external_api_timing
 from services.qweather_auth import (
     QWeatherAuthError,
@@ -22,6 +23,7 @@ from services.qweather_auth import (
 )
 from services.qweather_budget import reserve_qweather_request
 from core.time_utils import today_local
+from core.weather import normalize_weather_observed_at
 
 class WeatherService:
     """天气服务类"""
@@ -82,8 +84,14 @@ class WeatherService:
 
     def _qweather_auth_config(self):
         """返回当前实例的认证配置，不包含任何日志输出。"""
+        mode = str(self.qweather_auth_mode or '').strip().lower()
+        if mode not in {'api_key', 'jwt', 'disabled'}:
+            mode = 'api_key' if self.qweather_key else 'disabled'
+        # 旧调用方只给实例填 Key、不改 AUTH_MODE；有 Key 时按 api_key 回滚，显式 jwt 不变。
+        if mode == 'disabled' and self.qweather_key:
+            mode = 'api_key'
         return {
-            'QWEATHER_AUTH_MODE': self.qweather_auth_mode,
+            'QWEATHER_AUTH_MODE': mode,
             'QWEATHER_KEY': self.qweather_key,
             'QWEATHER_JWT_KID': self.qweather_jwt_kid,
             'QWEATHER_JWT_PROJECT_ID': self.qweather_jwt_project_id,
@@ -217,8 +225,12 @@ class WeatherService:
                 if not isinstance(now, dict):
                     logger.warning("和风天气API缺少实况字段，尝试备用API")
                     return self._get_fallback_weather(city, logger)
-                temp_val = self._safe_float(now.get('temp'))
-                humidity_val = self._safe_float(now.get('humidity'))
+                observed_at = normalize_weather_observed_at(now.get('obsTime'))
+                if observed_at is None:
+                    logger.warning("和风天气API缺少有效 obsTime，尝试备用API")
+                    return self._get_fallback_weather(city, logger)
+                temp_val = self._bounded_float(now.get('temp'), -90.0, 60.0)
+                humidity_val = self._bounded_float(now.get('humidity'), 0.0, 100.0)
                 if (
                     temp_val is None
                     or humidity_val is None
@@ -236,15 +248,19 @@ class WeatherService:
                     'temperature_range_source': 'unavailable',
                     'temperature_range_confidence': 'none',
                     'humidity': humidity_val,
-                    'pressure': self._safe_float(now.get('pressure')),
-                    'weather_condition': now.get('text', '晴'),
-                    'wind_speed': self._safe_float(now.get('windSpeed')),
-                    'wind_dir': now.get('windDir', ''),
+                    'pressure': self._bounded_float(now.get('pressure'), 800.0, 1100.0),
+                    'weather_condition': now.get('text'),
+                    'wind_speed': self._bounded_float(now.get('windSpeed'), 0.0, 150.0),
+                    'wind_dir': now.get('windDir') or '',
                     'feels_like': self._safe_float(now.get('feelsLike'), temp_val),
                     'pm25': None,
                     'aqi': None,
-                    'location': city,
-                    'update_time': now.get('obsTime', datetime.now().strftime('%Y-%m-%d %H:%M')),
+                    'air_quality_available': False,
+                    'air_observed_at': None,
+                    'location': DEFAULT_CITY_LABEL if self.canonical_location else city,
+                    'update_time': now.get('obsTime'),
+                    'observed_at': observed_at,
+                    'quality_version': 1,
                     'is_mock': False,
                     'data_source': 'QWeather'
                 }
@@ -257,7 +273,7 @@ class WeatherService:
                     result['temperature_range_source'] = range_source
                     result['temperature_range_confidence'] = range_confidence
                 
-                # 空气质量失败不影响实时天气主链路。
+                # 空气质量失败不影响实时天气主链路；v1 接口优先，并尽量保留观测时刻。
                 air_quality = self._get_qweather_air_quality(location, logger)
                 if air_quality:
                     result.update(air_quality)
@@ -337,6 +353,31 @@ class WeatherService:
             if not isinstance(payload, dict):
                 return {}
 
+            # 兼容旧 /air/now：无有效观测时刻则整组空气字段不可用（失败即关闭）。
+            if payload.get('code') == '200' and isinstance(payload.get('now'), dict):
+                air_now = payload['now']
+                pm25 = self._bounded_float(air_now.get('pm2p5'), 0.0, 1000.0)
+                aqi = self._bounded_float(air_now.get('aqi'), 0.0, 500.0)
+                air_observed_at = normalize_weather_observed_at(air_now.get('pubTime'))
+                if air_observed_at is None:
+                    air_observed_at = normalize_weather_observed_at(payload.get('updateTime'))
+                if (
+                    air_observed_at is None
+                    or pm25 is None
+                    or aqi is None
+                ):
+                    return {}
+                result = {
+                    'pm25': pm25,
+                    'aqi': int(round(aqi)),
+                    'air_observed_at': air_observed_at,
+                    'air_quality_available': True,
+                }
+                category = str(air_now.get('category') or '').strip()
+                if category:
+                    result['air_quality'] = category
+                return result
+
             indexes = payload.get('indexes') or []
             # 健康风险阈值优先采用中国 AQI 标准，不能依赖上游数组顺序。
             local_index = None
@@ -386,6 +427,16 @@ class WeatherService:
             )
             if pm25 is not None and math.isfinite(pm25) and pm25 >= 0:
                 result['pm25'] = pm25
+            metadata = payload.get('metadata') if isinstance(payload.get('metadata'), dict) else {}
+            air_observed_at = normalize_weather_observed_at(
+                metadata.get('tag')
+                or metadata.get('updateTime')
+                or payload.get('updateTime')
+                or payload.get('pubTime')
+            )
+            if air_observed_at and ('aqi' in result or 'pm25' in result):
+                result['air_observed_at'] = air_observed_at
+                result['air_quality_available'] = True
             return result
         except requests.exceptions.Timeout:
             logger.debug("空气质量 v1 请求超时")
@@ -428,19 +479,53 @@ class WeatherService:
             )
             if response.status_code == 200:
                 data = response.json()
-                current = data.get('current', {})
-                
-                # 天气代码转中文
-                weather_code = current.get('weather_code', 0)
-                weather_condition = self._weather_code_to_text(weather_code)
+                current = data.get('current')
+                if not isinstance(current, dict):
+                    logger.warning("Open-Meteo实况缺少 current 字段")
+                    return None
+                observed_at = normalize_weather_observed_at(current.get('time'))
+                if observed_at is None:
+                    logger.warning("Open-Meteo实况缺少有效 current.time")
+                    return None
 
-                temp = current.get('temperature_2m', 20)
+                temp = self._bounded_float(current.get('temperature_2m'), -90.0, 60.0)
+                humidity = self._bounded_float(current.get('relative_humidity_2m'), 0.0, 100.0)
+                pressure = self._bounded_float(current.get('surface_pressure'), 800.0, 1100.0)
+                wind_speed = self._bounded_float(current.get('wind_speed_10m'), 0.0, 150.0)
+                weather_code = self._parse_wmo_code(current.get('weather_code'))
+                if any(value is None for value in (temp, humidity, pressure, wind_speed, weather_code)):
+                    logger.warning("Open-Meteo实况关键字段缺失、非有限或越界")
+                    return None
+
+                # 天气代码转中文
+                weather_condition = self._weather_code_to_text(weather_code)
+                if weather_condition == '未知':
+                    logger.warning("Open-Meteo实况 weather_code 无法识别: %s", weather_code)
+                    return None
+
                 daily = data.get('daily', {})
+                daily_dates = daily.get('time') or []
                 tmax_list = daily.get('temperature_2m_max') or []
                 tmin_list = daily.get('temperature_2m_min') or []
-                tmax_daily = self._safe_float(tmax_list[0]) if tmax_list else None
-                tmin_daily = self._safe_float(tmin_list[0]) if tmin_list else None
-                if tmax_daily is not None and tmin_daily is not None:
+                daily_is_today = bool(
+                    daily_dates
+                    and str(daily_dates[0]) == today_local().isoformat()
+                )
+                tmax_daily = (
+                    self._bounded_float(tmax_list[0], -90.0, 60.0)
+                    if daily_is_today and tmax_list
+                    else None
+                )
+                tmin_daily = (
+                    self._bounded_float(tmin_list[0], -90.0, 60.0)
+                    if daily_is_today and tmin_list
+                    else None
+                )
+                if (
+                    tmax_daily is not None
+                    and tmin_daily is not None
+                    and tmax_daily >= tmin_daily
+                ):
                     tmax = round(tmax_daily, 1)
                     tmin = round(tmin_daily, 1)
                     temp_estimated = False
@@ -467,13 +552,18 @@ class WeatherService:
                     'temperature_estimated': temp_estimated,
                     'temperature_range_source': temp_range_source,
                     'temperature_range_confidence': temp_range_confidence,
-                    'humidity': round(current.get('relative_humidity_2m', 60), 1),
-                    'pressure': round(current.get('surface_pressure', 1013), 1),
+                    'humidity': round(humidity, 1),
+                    'pressure': round(pressure, 1),
                     'weather_condition': weather_condition,
-                    'wind_speed': round(current.get('wind_speed_10m', 3), 1),
-                    'pm25': 0,  # Open-Meteo不提供空气质量数据，0表示未知
-                    'aqi': 0,  # 同上，0 而非真实值
-                    'aqi_estimated': True,  # 标记为非真实 AQI，下游可据此降权或隐藏
+                    'wind_speed': round(wind_speed, 1),
+                    'pm25': None,
+                    'aqi': None,
+                    'air_quality_available': False,
+                    'air_observed_at': None,
+                    'update_time': current.get('time'),
+                    'observed_at': observed_at,
+                    'quality_version': 1,
+                    'location': DEFAULT_CITY_LABEL if self.canonical_location else city,
                     'is_mock': False,
                     'data_source': 'Open-Meteo'
                 }
@@ -488,20 +578,41 @@ class WeatherService:
         weather_map = {
             0: '晴', 1: '晴', 2: '多云', 3: '阴',
             45: '雾', 48: '雾', 51: '小雨', 53: '中雨', 55: '大雨',
-            61: '小雨', 63: '中雨', 65: '大雨', 71: '小雪', 73: '中雪', 75: '大雪',
-            80: '阵雨', 81: '阵雨', 82: '暴雨', 95: '雷阵雨', 96: '雷雨夹冰雹', 99: '强雷雨'
+            56: '冻毛毛雨', 57: '强冻毛毛雨', 61: '小雨', 63: '中雨', 65: '大雨',
+            66: '冻雨', 67: '强冻雨', 71: '小雪', 73: '中雪', 75: '大雪', 77: '米雪',
+            80: '阵雨', 81: '阵雨', 82: '暴雨', 85: '阵雪', 86: '强阵雪',
+            95: '雷阵雨', 96: '雷雨夹冰雹', 99: '强雷雨'
         }
-        try:
-            code = int(weather_code)
-        except Exception:
-            return '多云'
-        return weather_map.get(code, '多云')
+        code = self._parse_wmo_code(weather_code)
+        if code is None:
+            return '未知'
+        return weather_map.get(code, '未知')
+
+    def _parse_wmo_code(self, value):
+        """WMO weather_code 必须是有限整数，拒绝小数被 int 静默截断。"""
+        if isinstance(value, bool):
+            return None
+        parsed = self._safe_float(value)
+        if parsed is None or not parsed.is_integer():
+            return None
+        code = int(parsed)
+        if not 0 <= code <= 99:
+            return None
+        return code
 
     def _safe_float(self, value, default=None):
         try:
-            return float(value)
+            parsed = float(value)
         except Exception:
             return default
+        return parsed if math.isfinite(parsed) else default
+
+    def _bounded_float(self, value, lower, upper):
+        """解析有限数值并拒绝明显越界的上游数据。"""
+        parsed = self._safe_float(value)
+        if parsed is None or not lower <= parsed <= upper:
+            return None
+        return parsed
 
     def _temperature_range_confidence(self, sample_count):
         """按样本点数量评估温差推导置信度。"""
@@ -518,7 +629,7 @@ class WeatherService:
         """从温度样本推导 tmax/tmin（样本过少时返回 unavailable）。"""
         temps = []
         for value in samples or []:
-            parsed = self._safe_float(value)
+            parsed = self._bounded_float(value, -90.0, 60.0)
             if parsed is not None:
                 temps.append(parsed)
         if len(temps) < 4:
@@ -530,7 +641,7 @@ class WeatherService:
         return round(tmax, 1), round(tmin, 1), self._temperature_range_confidence(len(temps))
 
     def _get_qweather_hourly_extremes(self, location):
-        """从和风 24 小时温度序列推导温差。"""
+        """只从本地今天的和风小时样本推导温差。"""
         logger = logging.getLogger(__name__)
         if not self._qweather_is_configured():
             return None, None, 'none'
@@ -564,14 +675,20 @@ class WeatherService:
                     invalidate_qweather_token()
                 return None, None, 'none'
             hourly = payload.get('hourly') or []
-            temps = [item.get('temp') for item in hourly if isinstance(item, dict)]
+            today_prefix = today_local().isoformat()
+            temps = [
+                item.get('temp')
+                for item in hourly
+                if isinstance(item, dict)
+                and str(item.get('fxTime') or '')[:10] == today_prefix
+            ]
             return self._derive_temperature_range(temps)
         except Exception as exc:
             logger.debug("获取和风 hourly 高低温失败: %s", exc)
             return None, None, 'none'
 
     def _get_openmeteo_hourly_extremes(self, lon, lat):
-        """从 Open-Meteo 小时序列推导温差（优先当天样本，不足则退回24h样本）。"""
+        """只从本地今天的 Open-Meteo 小时样本推导温差。"""
         logger = logging.getLogger(__name__)
         try:
             url = "https://api.open-meteo.com/v1/forecast"
@@ -602,8 +719,7 @@ class WeatherService:
                 if str(ts).startswith(today_prefix):
                     today_temps.append(value)
 
-            selected = today_temps if len(today_temps) >= 4 else temps
-            return self._derive_temperature_range(selected)
+            return self._derive_temperature_range(today_temps)
         except Exception as exc:
             logger.debug("获取 Open-Meteo hourly 高低温失败: %s", exc)
             return None, None, 'none'
@@ -656,6 +772,9 @@ class WeatherService:
             if not daily:
                 return None, None
             today = daily[0]
+            if str(today.get('fxDate') or '') != today_local().isoformat():
+                logger.warning("和风 daily[0] 不是本地今天，拒绝用于当前日极值")
+                return None, None
             tmax = self._safe_float(today.get('tempMax'))
             tmin = self._safe_float(today.get('tempMin'))
             if tmax is None or tmin is None:
@@ -686,23 +805,20 @@ class WeatherService:
 
     def _normalize_qweather_daily_entry(self, day):
         """将和风天气 daily 条目标准化为统一结构"""
-        tmax = self._safe_float(day.get('tempMax'))
-        tmin = self._safe_float(day.get('tempMin'))
-        humidity = self._safe_float(day.get('humidity'))
-        tmax = tmax if tmax is not None and math.isfinite(tmax) else None
-        tmin = tmin if tmin is not None and math.isfinite(tmin) else None
-        humidity = humidity if humidity is not None and math.isfinite(humidity) else None
+        tmax = self._bounded_float(day.get('tempMax'), -90.0, 60.0)
+        tmin = self._bounded_float(day.get('tempMin'), -90.0, 60.0)
+        humidity = self._bounded_float(day.get('humidity'), 0.0, 100.0)
         temperature_mean = round((tmax + tmin) / 2, 2) if tmax is not None and tmin is not None else None
         return {
             'date': day.get('fxDate', ''),
             'temperature_max': tmax,
             'temperature_min': tmin,
             'temperature_mean': temperature_mean,
-            'condition': day.get('textDay', '晴'),
-            'condition_night': day.get('textNight', '晴'),
+            'condition': day.get('textDay') or '',
+            'condition_night': day.get('textNight') or '',
             'humidity': humidity,
-            'wind_dir': day.get('windDirDay', ''),
-            'wind_speed': self._safe_float(day.get('windSpeedDay'), 3.0),
+            'wind_dir': day.get('windDirDay') or '',
+            'wind_speed': self._bounded_float(day.get('windSpeedDay'), 0.0, 150.0),
             'uv_index': day.get('uvIndex', ''),
             'sunrise': day.get('sunrise', ''),
             'sunset': day.get('sunset', ''),
@@ -719,14 +835,14 @@ class WeatherService:
         except Exception:
             days = 7
 
-        meta = {'source': 'QWeather'}
+        meta = {'source': None}
         if not self._qweather_is_configured():
             meta['error'] = 'qweather_not_configured'
             logger.warning("和风天气预报未配置，跳过和风-only预报")
             return {'success': False, 'daily': [], 'meta': meta}
 
         location = self._get_location(city)
-        meta['location'] = city
+        meta['location'] = DEFAULT_CITY_LABEL if self.canonical_location else city
         meta['location_code'] = location
         try:
             forecast_url = f"{self.api_base_url}/weather/7d"
@@ -782,19 +898,27 @@ class WeatherService:
                 entry['update_time'] = payload.get('updateTime')
             meta['update_time'] = payload.get('updateTime')
             meta['fx_link'] = payload.get('fxLink')
-            required_fields = ('temperature_max', 'temperature_min', 'temperature_mean', 'humidity')
+            required_fields = (
+                'temperature_max',
+                'temperature_min',
+                'temperature_mean',
+                'humidity',
+                'wind_speed',
+            )
             data_complete = len(daily) == days and all(
                 all(
                     isinstance(entry.get(field), (int, float))
                     and math.isfinite(float(entry.get(field)))
                     for field in required_fields
                 )
+                and bool(str(entry.get('condition') or '').strip())
                 for entry in daily
             )
             if not data_complete:
                 meta['error'] = 'qweather_data_incomplete'
                 logger.warning("和风-only预报关键字段不完整，整组数据不进入缓存: city=%s count=%s", city, len(daily))
                 return {'success': False, 'daily': [], 'meta': meta}
+            meta['source'] = 'QWeather'
             return {'success': True, 'daily': daily, 'meta': meta}
         except QWeatherAuthError as auth_error:
             meta['error'] = str(auth_error)
@@ -814,9 +938,10 @@ class WeatherService:
         return {'success': False, 'daily': [], 'meta': meta}
 
     def _get_openmeteo_forecast(self, city="都昌", days=7):
-        """Open-Meteo 逐日预报（用于多模型融合）"""
+        """获取字段完整的 Open-Meteo 逐日预报，缺失时整组标为不可用。"""
         logger = logging.getLogger(__name__)
         try:
+            days = max(1, min(int(days or 7), 7))
             location = self._get_location(city)
             parsed = self._parse_lon_lat(location)
             if not parsed:
@@ -829,6 +954,7 @@ class WeatherService:
                 'latitude': lat,
                 'longitude': lon,
                 'daily': 'temperature_2m_max,temperature_2m_min,precipitation_probability_max,weather_code',
+                'forecast_days': days,
                 'timezone': 'Asia/Shanghai'
             }
             start_ts = time.perf_counter()
@@ -842,32 +968,64 @@ class WeatherService:
                 return []
 
             payload = response.json()
+            if not isinstance(payload, dict):
+                return []
             daily = payload.get('daily') or {}
+            if not isinstance(daily, dict):
+                return []
             dates = daily.get('time') or []
             tmax_list = daily.get('temperature_2m_max') or []
             tmin_list = daily.get('temperature_2m_min') or []
             pop_list = daily.get('precipitation_probability_max') or []
             code_list = daily.get('weather_code') or []
 
+            if any(len(values) < days for values in (dates, tmax_list, tmin_list, pop_list, code_list)):
+                logger.warning("Open-Meteo逐日预报关键数组不足%s天", days)
+                return []
+
             entries = []
-            max_len = min(days, len(dates), len(tmax_list), len(tmin_list))
-            for idx in range(max_len):
-                tmax = self._safe_float(tmax_list[idx], 25.0)
-                tmin = self._safe_float(tmin_list[idx], 15.0)
+            previous_date = None
+            for idx in range(days):
+                try:
+                    forecast_date = datetime.strptime(str(dates[idx]), '%Y-%m-%d').date()
+                except Exception:
+                    logger.warning("Open-Meteo逐日预报日期无效: index=%s value=%s", idx, dates[idx])
+                    return []
+                if previous_date is not None and forecast_date != previous_date + timedelta(days=1):
+                    logger.warning("Open-Meteo逐日预报日期不连续: index=%s", idx)
+                    return []
+                previous_date = forecast_date
+
+                tmax = self._bounded_float(tmax_list[idx], -90.0, 60.0)
+                tmin = self._bounded_float(tmin_list[idx], -90.0, 60.0)
+                precipitation = self._bounded_float(pop_list[idx], 0.0, 100.0)
+                weather_code = self._parse_wmo_code(code_list[idx])
+                condition = self._weather_code_to_text(weather_code)
+                if (
+                    tmax is None
+                    or tmin is None
+                    or tmax < tmin
+                    or precipitation is None
+                    or weather_code is None
+                    or condition == '未知'
+                ):
+                    logger.warning("Open-Meteo逐日预报关键字段无效: index=%s", idx)
+                    return []
                 entries.append({
-                    'date': dates[idx],
+                    'date': forecast_date.isoformat(),
+                    'forecast_date': forecast_date.isoformat(),
                     'temperature_max': tmax,
                     'temperature_min': tmin,
                     'temperature_mean': round((tmax + tmin) / 2, 2),
-                    'condition': self._weather_code_to_text(code_list[idx] if idx < len(code_list) else None),
-                    'condition_night': self._weather_code_to_text(code_list[idx] if idx < len(code_list) else None),
+                    'condition': condition,
+                    'condition_night': condition,
                     'humidity': None,
                     'wind_dir': '',
                     'wind_speed': None,
                     'uv_index': '',
                     'sunrise': '',
                     'sunset': '',
-                    'precip_probability': self._safe_float(pop_list[idx] if idx < len(pop_list) else None),
+                    'precip_probability': precipitation,
                     'data_source': 'Open-Meteo',
                     'is_mock': False,
                 })
@@ -875,6 +1033,24 @@ class WeatherService:
         except Exception as exc:
             logger.warning("Open-Meteo逐日预报调用失败: %s", exc)
             return []
+
+    def get_openmeteo_daily_forecast(self, city="都昌", days=7):
+        """只获取 Open-Meteo 日预报，不融合 QWeather，也不返回模拟值。"""
+        try:
+            days = max(1, min(int(days or 7), 7))
+        except Exception:
+            days = 7
+        meta = {
+            'source': None,
+            'location': DEFAULT_CITY_LABEL if self.canonical_location else city,
+            'location_code': self._get_location(city),
+        }
+        daily = self._get_openmeteo_forecast(city, days=days)
+        if len(daily) != days:
+            meta['error'] = 'openmeteo_data_incomplete'
+            return {'success': False, 'daily': [], 'meta': meta}
+        meta['source'] = 'Open-Meteo'
+        return {'success': True, 'daily': daily, 'meta': meta}
 
     def _merge_multimodel_forecast(self, qweather_forecast, openmeteo_forecast, days=7):
         """融合多模型日预报，并给出概率化统计指标。"""
@@ -924,7 +1100,9 @@ class WeatherService:
                 tmin = self._safe_float(src.get('temperature_min'))
                 if tmax is not None and tmin is not None:
                     ranges.append(max(2.0, tmax - tmin))
-            diurnal_range = mean(ranges) if ranges else 8.0
+            if not ranges:
+                continue
+            diurnal_range = mean(ranges)
             tmax_ens = ensemble_mean + diurnal_range / 2
             tmin_ens = ensemble_mean - diurnal_range / 2
 
@@ -1079,6 +1257,9 @@ class WeatherService:
             'wind_speed': round(random.uniform(1, 8), 1),
             'pm25': random.randint(20, 100),
             'aqi': random.randint(30, 150),
+            'air_quality_available': False,
+            'air_observed_at': None,
+            'location': DEFAULT_CITY_LABEL,
             'is_mock': True,
             'data_source': 'Mock'
         }

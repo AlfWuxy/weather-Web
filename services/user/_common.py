@@ -2,13 +2,14 @@
 """User-facing shared constants and helpers."""
 import secrets
 from datetime import timedelta
+from urllib.parse import urlsplit, urlunsplit
 
 from flask import current_app, flash, has_app_context, url_for
 from flask_login import current_user
 
 from core.extensions import db
 from core.db_models import Pair, PairActionToken, PairLink
-from core.security import hash_identifier, hash_pair_token, hash_short_code
+from core.security import hash_pair_token, hash_short_code
 from core.time_utils import utcnow
 from utils.validators import sanitize_input
 
@@ -19,6 +20,9 @@ HEAT_RISK_LABELS = {
     'high': '高风险',
     'extreme': '极高'
 }
+
+# 仅用于照护域正向授权，不改变系统中 community 等角色的全局语义。
+CARE_ROLES = frozenset({'user', 'caregiver', 'admin'})
 
 RELAY_STAGE_ORDER = ['none', 'caregiver', 'backup', 'community', 'emergency']
 RELAY_STAGE_LABELS = {
@@ -160,34 +164,20 @@ def _create_pair_record(caregiver_id, location_query, member_id=None, flush=Fals
     return pair
 
 
-def _derive_pair_action_token(record):
-    """从令牌记录与服务端 pepper 派生可重复生成的明文 token。"""
-    if not record or not getattr(record, 'id', None) or not getattr(record, 'pair_id', None):
-        return None
-    return hash_identifier(f'pair-action-record:{record.pair_id}:{record.id}')
-
-
 def _create_pair_action_token(pair, flush=False):
-    """创建或复用行动链接 token，数据库始终只保存哈希。"""
+    """创建行动链接 token：真随机 opaque，数据库只保存哈希。
+
+    策略（P5 / RT-08）：
+    - 明文 = secrets.token_urlsafe(32)，一次生成（约 256 bit 熵），与 pair_id/id 无代数关系
+    - 只存 token_hash；服务端无法从 hash 还原旧 plain（故不能「复用同一 URL 明文」）
+    - 不在每次签发时吊销全部旧 active：看板每次刷新都会生成链接，若全吊销会误杀已转发的微信链接
+    - 清理已过期行；同 pair active 超过上限时吊销最旧的，防止无限膨胀
+    """
     if not pair or not getattr(pair, 'id', None):
         raise ValueError('pair id is required')
 
     now = utcnow()
-    reusable = PairActionToken.query.filter(
-        PairActionToken.pair_id == pair.id,
-        PairActionToken.revoked_at.is_(None),
-        PairActionToken.expires_at >= now,
-    ).order_by(PairActionToken.id.desc()).first()
-    if reusable:
-        token = _derive_pair_action_token(reusable)
-        expected_hash = hash_pair_token(token)
-        if (
-            token
-            and expected_hash
-            and reusable.token_hash
-            and secrets.compare_digest(expected_hash, reusable.token_hash)
-        ):
-            return reusable, token
+    max_active = 5
 
     # 清理已经失效的历史记录，避免长期运行后表持续增长。
     PairActionToken.query.filter(
@@ -195,32 +185,77 @@ def _create_pair_action_token(pair, flush=False):
         PairActionToken.expires_at < now,
     ).delete(synchronize_session=False)
 
-    # 先写入一次性占位哈希取得记录 ID，再用 ID 派生可重建 token。
-    placeholder = secrets.token_urlsafe(32)
+    # 真随机 opaque：禁止 pair-action-record:{id} 类确定性派生
+    token = secrets.token_urlsafe(32)
     record = PairActionToken(
         pair_id=pair.id,
-        token_hash=hash_pair_token(f'pending:{placeholder}'),
+        token_hash=hash_pair_token(token),
         expires_at=_action_token_expires_at(),
         created_at=now,
     )
     db.session.add(record)
-    db.session.flush()
-    token = _derive_pair_action_token(record)
-    record.token_hash = hash_pair_token(token)
     if flush:
         db.session.flush()
+
+    # 仅当 active 过多时裁掉最旧的（不含刚写入的本条）
+    active_rows = (
+        PairActionToken.query.filter(
+            PairActionToken.pair_id == pair.id,
+            PairActionToken.revoked_at.is_(None),
+            PairActionToken.expires_at >= now,
+        )
+        .order_by(PairActionToken.id.asc())
+        .all()
+    )
+    overflow = len(active_rows) - max_active
+    if overflow > 0:
+        for row in active_rows[:overflow]:
+            if row.id != getattr(record, 'id', None):
+                row.revoked_at = now
+
     return record, token
 
 
 def _build_pair_action_link(pair, external=True):
     """为照护提醒生成带 token 的行动链接。"""
     _, token = _create_pair_action_token(pair, flush=True)
-    return url_for(
+    relative_url = url_for(
         'public.elder_token_entry',
         token=token,
         short_code=pair.short_code,
-        _external=external
+        _external=False,
     )
+    if not external:
+        return relative_url
+
+    public_base_url = (current_app.config.get('PUBLIC_BASE_URL') or '').strip()
+    if not public_base_url:
+        return relative_url
+
+    parsed = urlsplit(public_base_url)
+    scheme_allowed = parsed.scheme == 'https' or (
+        parsed.scheme == 'http' and current_app.debug
+    )
+    if (
+        not scheme_allowed
+        or not parsed.hostname
+        or parsed.username
+        or parsed.password
+        or parsed.query
+        or parsed.fragment
+    ):
+        return relative_url
+
+    trusted_base = urlunsplit(
+        (
+            parsed.scheme,
+            parsed.netloc,
+            parsed.path.rstrip('/'),
+            '',
+            '',
+        )
+    )
+    return f"{trusted_base}{relative_url}"
 
 
 def _create_pair_link_record(caregiver_id, community_code, expires_after=None, flush=False):

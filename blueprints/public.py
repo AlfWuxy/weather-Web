@@ -4,7 +4,20 @@ import logging
 from urllib.parse import parse_qsl
 
 import requests
-from flask import Blueprint, Response, abort, current_app, redirect, render_template, request, url_for
+from flask import (
+    Blueprint,
+    Response,
+    abort,
+    current_app,
+    flash,
+    jsonify,
+    make_response,
+    redirect,
+    render_template,
+    request,
+    session,
+    url_for,
+)
 from flask_login import current_user, login_required
 
 logger = logging.getLogger(__name__)
@@ -14,8 +27,9 @@ from core.extensions import db
 from core.security import rate_limit_key
 from core.time_utils import utcnow
 from core.usage import log_usage_event
-from core.db_models import AlertDelivery
+from core.db_models import AlertDelivery, CoolingResource
 from core.time_utils import today_local
+from services.cooling_service import FEEDBACK_CODES, record_feedback, resolve_feedback_actor
 from services.public_service import (
     render_role_entry,
     handle_login,
@@ -28,6 +42,9 @@ from services.public_service import (
     _handle_action_confirm,
     _handle_action_help,
     _handle_action_debrief,
+    _handle_action_understood,
+    _handle_action_select,
+    _handle_action_state,
     _resolve_pair_from_session_or_code,
     _validate_pair_token_binding,
     _build_action_context,
@@ -71,6 +88,23 @@ Disallow: /e/
 Disallow: /t/
 """
 
+HOME_EDGE_CACHE_SECONDS = 60
+HOME_STALE_WHILE_REVALIDATE_SECONDS = 30
+
+
+def _is_cacheable_anonymous_home():
+    """仅允许无登录态、无认证 Cookie、无查询参数的首页进入边缘缓存。"""
+    session_cookie_name = current_app.config.get('SESSION_COOKIE_NAME', 'session')
+    remember_cookie_name = current_app.config.get('REMEMBER_COOKIE_NAME', 'remember_token')
+    private_cookie_names = {session_cookie_name, remember_cookie_name} - {None, ''}
+    has_private_cookie = any(name in request.cookies for name in private_cookie_names)
+    return (
+        request.method in {'GET', 'HEAD'}
+        and not request.query_string
+        and not has_private_cookie
+        and not current_user.is_authenticated
+    )
+
 
 @bp.route('/robots.txt', endpoint='robots_txt')
 def robots_txt():
@@ -81,7 +115,27 @@ def robots_txt():
 @bp.route('/', endpoint='index')
 def index():
     """首页"""
-    return render_template('index.html')
+    cacheable_anonymous = _is_cacheable_anonymous_home()
+    template_context = {}
+    if cacheable_anonymous:
+        # 匿名首页没有写操作，避免生成 CSRF Token 时创建 Session Cookie。
+        template_context['csrf_token'] = lambda: ''
+
+    response = make_response(render_template('index.html', **template_context))
+    if cacheable_anonymous and not session.modified:
+        # 浏览器不落盘，Cloudflare 边缘短缓存并在后台刷新。
+        response.headers['Cache-Control'] = 'no-store'
+        response.headers['Cloudflare-CDN-Cache-Control'] = (
+            f'public, max-age={HOME_EDGE_CACHE_SECONDS}, '
+            f'stale-while-revalidate={HOME_STALE_WHILE_REVALIDATE_SECONDS}'
+        )
+        # 已确认请求没有会话 Cookie，清除只读 Session 访问产生的 Vary: Cookie。
+        session.accessed = False
+    else:
+        # 登录态、已有会话或带查询参数的首页必须绕过所有共享缓存。
+        response.headers['Cache-Control'] = 'private, no-store'
+        response.headers['Cloudflare-CDN-Cache-Control'] = 'no-store'
+    return response
 
 
 @bp.route('/entry', endpoint='role_entry')
@@ -127,6 +181,27 @@ def action_help():
     return _handle_action_help()
 
 
+@bp.route('/action/understood', methods=['POST'], endpoint='action_understood')
+@limiter.limit(lambda: current_app.config.get('RATE_LIMIT_CONFIRM', '30 per hour'), key_func=rate_limit_key)
+def action_understood():
+    """老人：我看懂了"""
+    return _handle_action_understood()
+
+
+@bp.route('/action/select', methods=['POST'], endpoint='action_select')
+@limiter.limit(lambda: current_app.config.get('RATE_LIMIT_CONFIRM', '30 per hour'), key_func=rate_limit_key)
+def action_select():
+    """老人：teach-back 选择行动"""
+    return _handle_action_select()
+
+
+@bp.route('/action/state', methods=['GET'], endpoint='action_state')
+@limiter.limit(lambda: current_app.config.get('RATE_LIMIT_CONFIRM', '30 per hour'), key_func=rate_limit_key)
+def action_state():
+    """当日行动链状态（按钮变色/轮询）"""
+    return _handle_action_state()
+
+
 @bp.route('/action/debrief', methods=['POST'], endpoint='action_debrief')
 @limiter.limit(lambda: current_app.config.get('RATE_LIMIT_CONFIRM', '30 per hour'), key_func=rate_limit_key)
 def action_debrief():
@@ -169,6 +244,27 @@ def elder_token_help(token):
     """带令牌求助"""
     token = sanitize_input(token, max_length=200)
     return _handle_action_help(token=token)
+
+
+@bp.route('/e/<token>/understood', methods=['POST'], endpoint='elder_token_understood')
+@limiter.limit(lambda: current_app.config.get('RATE_LIMIT_CONFIRM', '30 per hour'), key_func=rate_limit_key)
+def elder_token_understood(token):
+    token = sanitize_input(token, max_length=200)
+    return _handle_action_understood(token=token)
+
+
+@bp.route('/e/<token>/select', methods=['POST'], endpoint='elder_token_select')
+@limiter.limit(lambda: current_app.config.get('RATE_LIMIT_CONFIRM', '30 per hour'), key_func=rate_limit_key)
+def elder_token_select(token):
+    token = sanitize_input(token, max_length=200)
+    return _handle_action_select(token=token)
+
+
+@bp.route('/e/<token>/state', methods=['GET'], endpoint='elder_token_state')
+@limiter.limit(lambda: current_app.config.get('RATE_LIMIT_CONFIRM', '30 per hour'), key_func=rate_limit_key)
+def elder_token_state(token):
+    token = sanitize_input(token, max_length=200)
+    return _handle_action_state(token=token)
 
 
 @bp.route('/e/<token>/debrief', methods=['GET', 'POST'], endpoint='elder_token_debrief')
@@ -233,6 +329,48 @@ def cooling_resources():
     )
 
 
+def _wants_json_response():
+    if request.is_json:
+        return True
+    accept = request.headers.get('Accept') or ''
+    if 'application/json' in accept and 'text/html' not in accept:
+        return True
+    return request.headers.get('X-Requested-With') == 'XMLHttpRequest'
+
+
+@bp.route('/cooling/<int:resource_id>/feedback', methods=['POST'], endpoint='cooling_feedback')
+@limiter.limit(lambda: current_app.config.get('RATE_LIMIT_CONFIRM', '30 per hour'), key_func=rate_limit_key)
+def cooling_feedback(resource_id):
+    """家属登录或老人短码会话才能提交封闭码反馈；忽略自由文本。"""
+    actor = resolve_feedback_actor(current_user, session)
+    if not actor.ok:
+        if _wants_json_response():
+            return jsonify({'error': 'unauthorized'}), 401
+        return redirect(url_for('public.login'))
+
+    resource = CoolingResource.query.get_or_404(resource_id)
+    payload = request.get_json(silent=True) if request.is_json else None
+    if isinstance(payload, dict):
+        code = payload.get('code')
+    else:
+        code = request.form.get('code')
+    code = sanitize_input(code, max_length=16) if code is not None else ''
+    if code not in FEEDBACK_CODES:
+        if _wants_json_response():
+            return jsonify({'error': 'invalid_code'}), 400
+        abort(400)
+
+    record_feedback(resource, code, pair=actor.pair, channel=actor.channel)
+    if code == 'need_ride':
+        message = '我们会记录，不提供接送服务'
+    else:
+        message = '已记录'
+    if _wants_json_response():
+        return jsonify({'ok': True, 'code': code, 'message': message})
+    flash(message, 'info')
+    return redirect(url_for('public.cooling_resources'))
+
+
 @bp.route('/_AMapService/<path:proxy_path>')
 @limiter.limit(lambda: current_app.config.get('RATE_LIMIT_AMAP_PROXY', '30 per minute'), key_func=rate_limit_key)
 def amap_proxy(proxy_path):
@@ -277,8 +415,9 @@ def public_risk():
 
 
 @bp.route('/guest', endpoint='guest_login')
+@limiter.limit(lambda: current_app.config.get('RATE_LIMIT_GUEST', '10 per hour'), key_func=rate_limit_key)
 def guest_login():
-    """游客模式入口"""
+    """游客模式入口（IP 限流，防脚本无限轮换 guest_id）"""
     raw_next = request.args.get('next')
     next_url = str(raw_next)[:200] if raw_next else None
     return handle_guest_login(next_url)

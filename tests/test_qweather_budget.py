@@ -152,3 +152,18 @@ def test_weather_sync_allows_explicit_location_override(monkeypatch):
     monkeypatch.setenv("WEATHER_SYNC_LOCATIONS", "都昌县,九江")
 
     assert sync_weather_cache._resolve_locations(None) == ["都昌县", "九江"]
+
+
+def test_weather_freshness_and_negative_cache_config_from_env(monkeypatch):
+    from core import config
+
+    monkeypatch.setenv('WEATHER_OBSERVATION_MAX_AGE_MINUTES', '90')
+    monkeypatch.setenv('WEATHER_OBSERVATION_FUTURE_TOLERANCE_MINUTES', '8')
+    monkeypatch.setenv('QWEATHER_FORECAST_NEGATIVE_CACHE_SECONDS', '999')
+
+    app = Flask(__name__)
+    config.configure_app(app, logging.getLogger(__name__))
+
+    assert app.config['WEATHER_OBSERVATION_MAX_AGE_MINUTES'] == 90
+    assert app.config['WEATHER_OBSERVATION_FUTURE_TOLERANCE_MINUTES'] == 8
+    assert app.config['QWEATHER_FORECAST_NEGATIVE_CACHE_SECONDS'] == 300

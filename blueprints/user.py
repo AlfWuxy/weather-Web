@@ -21,7 +21,49 @@ def user_dashboard():
 @login_required
 def elder_dashboard():
     """极简老人模式入口"""
+    if not current_app.config.get('FEATURE_ELDER_MODE'):
+        abort(404)
     return user_service.elder_dashboard()
+
+
+@bp.route('/elder-mode/understood', methods=['POST'], endpoint='elder_mode_understood')
+@login_required
+def elder_mode_understood():
+    if not current_app.config.get('FEATURE_ELDER_MODE'):
+        abort(404)
+    return user_service.handle_elder_mode_event('understood')
+
+
+@bp.route('/elder-mode/select', methods=['POST'], endpoint='elder_mode_select')
+@login_required
+def elder_mode_select():
+    if not current_app.config.get('FEATURE_ELDER_MODE'):
+        abort(404)
+    return user_service.handle_elder_mode_event('action_selected')
+
+
+@bp.route('/elder-mode/confirm', methods=['POST'], endpoint='elder_mode_confirm')
+@login_required
+def elder_mode_confirm():
+    if not current_app.config.get('FEATURE_ELDER_MODE'):
+        abort(404)
+    return user_service.handle_elder_mode_event('self_reported')
+
+
+@bp.route('/elder-mode/help', methods=['POST'], endpoint='elder_mode_help')
+@login_required
+def elder_mode_help():
+    if not current_app.config.get('FEATURE_ELDER_MODE'):
+        abort(404)
+    return user_service.handle_elder_mode_event('help_requested')
+
+
+@bp.route('/elder-mode/state', methods=['GET'], endpoint='elder_mode_state')
+@login_required
+def elder_mode_state():
+    if not current_app.config.get('FEATURE_ELDER_MODE'):
+        abort(404)
+    return user_service.handle_elder_mode_state()
 
 
 @bp.route('/pairs', methods=['GET', 'POST'], endpoint='pair_management')

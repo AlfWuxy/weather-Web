@@ -6,6 +6,8 @@
 运行: pytest tests/test_bugfix_batch1.py -v
 """
 import json
+from datetime import datetime, timezone
+from pathlib import Path
 import pytest
 
 
@@ -39,6 +41,50 @@ def _csrf(client, token='test-csrf'):
     with client.session_transaction() as s:
         s['_csrf_token'] = token
     return token
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_local_storage_json_reads_are_isolated_and_shape_checked():
+    action_template = (PROJECT_ROOT / 'templates' / 'action_checkin.html').read_text()
+    pair_template = (PROJECT_ROOT / 'templates' / 'pair_management.html').read_text()
+
+    assert "const contactStorageKey = 'heat_action_contact';" in action_template
+    assert 'try {' in action_template
+    assert '!Array.isArray(storedContact)' in action_template
+    assert "typeof storedContact.name === 'string'" in action_template
+    assert "typeof storedContact.phone === 'string'" in action_template
+    assert 'localStorage.removeItem(contactStorageKey);' in action_template
+
+    assert "const storageKey = 'heat_action_alt_contacts';" in pair_template
+    assert 'Array.isArray(storedContacts)' in pair_template
+    assert 'storedContacts.every((item)' in pair_template
+    assert "typeof item.name === 'string'" in pair_template
+    assert "typeof item.phone === 'string'" in pair_template
+    assert 'localStorage.removeItem(storageKey);' in pair_template
+
+
+def test_sanitize_input_without_bleach_returns_plain_text(monkeypatch):
+    import builtins
+
+    from utils.validators import sanitize_input
+
+    real_import = builtins.__import__
+
+    def import_without_bleach(name, *args, **kwargs):
+        if name == 'bleach':
+            raise ImportError('测试 bleach 缺失场景')
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, '__import__', import_without_bleach)
+
+    assert sanitize_input('<p>Hello &amp; World</p>') == 'Hello & World'
+    assert sanitize_input('<script>alert(1)</script><b>安全文本</b>') == '安全文本'
+    assert '<' not in sanitize_input('<img src=x onerror=alert(1)>')
+    assert sanitize_input('血压 < 120，> 90') == '血压 < 120，> 90'
+    assert sanitize_input('A &lt; B &gt; C') == 'A < B > C'
+    assert sanitize_input('&lt;script&gt;alert(1)&lt;/script&gt;安全') == '安全'
 
 
 # ====================================================================
@@ -81,12 +127,15 @@ class TestPasswordChangeRequiresOldPassword:
                 'form_id': 'password',
                 'old_password': 'OldPass123!',
                 'new_password': 'NewPass456!',
+                'confirm_password': 'NewPass456!',
                 'csrf_token': csrf,
             }, follow_redirects=True)
 
             db.session.refresh(user)
             assert user.password_hash != original_hash, "密码哈希应当改变"
             assert user.check_password('NewPass456!'), "应当能用新密码验证"
+            with client.session_transaction() as session:
+                assert '_user_id' not in session, "改密后应退出当前会话"
 
     def test_missing_old_password_rejected(self, app, client):
         """负向: 不提交旧密码 → 拒绝。"""
@@ -322,7 +371,7 @@ class TestOpenMeteoAqiFlag:
     """Bug #4: Open-Meteo 回退时 AQI/PM2.5 不应标记为真实数据。"""
 
     def test_openmeteo_returns_estimated_aqi(self, app):
-        """正向: Open-Meteo 回退返回 aqi=0, pm25=0, aqi_estimated=True（非伪造的高值）。"""
+        """正向: Open-Meteo 回退明确标记空气质量不可用。"""
         from unittest.mock import patch, MagicMock
         with app.app_context():
             from services.weather_service import WeatherService
@@ -332,6 +381,7 @@ class TestOpenMeteoAqiFlag:
             mock_resp.status_code = 200
             mock_resp.json.return_value = {
                 'current': {
+                    'time': datetime.now().astimezone().isoformat(timespec='minutes'),
                     'temperature_2m': 28,
                     'relative_humidity_2m': 65,
                     'surface_pressure': 1010,
@@ -339,6 +389,7 @@ class TestOpenMeteoAqiFlag:
                     'wind_speed_10m': 5,
                 },
                 'daily': {
+                    'time': [datetime.now().astimezone().date().isoformat()],
                     'temperature_2m_max': [36],
                     'temperature_2m_min': [18],
                 },
@@ -349,10 +400,10 @@ class TestOpenMeteoAqiFlag:
                 result = ws._get_openmeteo_weather('测试城市')
 
             assert result is not None
-            # AQI/PM2.5 应为 0（安全占位），而非之前硬编码的 75/50
-            assert result['aqi'] == 0, "AQI 应为 0（未知），而非硬编码虚假值"
-            assert result['pm25'] == 0, "PM2.5 应为 0（未知），而非硬编码虚假值"
-            assert result.get('aqi_estimated') is True, "应标记为估算数据"
+            assert result['aqi'] is None
+            assert result['pm25'] is None
+            assert result.get('air_quality_available') is False
+            assert result.get('observed_at')
             assert result['temperature_max'] == 36
             assert result['temperature_min'] == 18
             assert result.get('temperature_estimated') is False, "应优先采用 daily 的真实高低温"
@@ -378,6 +429,7 @@ class TestOpenMeteoAqiFlag:
                     'text': '晴',
                     'windSpeed': '5',
                     'feelsLike': '32',
+                    'obsTime': datetime.now(timezone.utc).isoformat(),
                 }
             }
             # 空气质量请求 mock
@@ -390,7 +442,11 @@ class TestOpenMeteoAqiFlag:
             mock_daily.status_code = 200
             mock_daily.json.return_value = {
                 'code': '200',
-                'daily': [{'tempMax': '37', 'tempMin': '19'}]
+                'daily': [{
+                    'fxDate': datetime.now().astimezone().date().isoformat(),
+                    'tempMax': '37',
+                    'tempMin': '19',
+                }]
             }
 
             with patch('requests.get', side_effect=[mock_resp, mock_daily, mock_air]):
@@ -412,6 +468,7 @@ class TestOpenMeteoAqiFlag:
             mock_now.status_code = 200
             mock_now.json.return_value = {
                 'current': {
+                    'time': datetime.now().astimezone().isoformat(timespec='minutes'),
                     'temperature_2m': 28,
                     'relative_humidity_2m': 65,
                     'surface_pressure': 1010,
@@ -428,10 +485,10 @@ class TestOpenMeteoAqiFlag:
             mock_hourly.json.return_value = {
                 'hourly': {
                     'time': [
-                        '2026-02-17T00:00',
-                        '2026-02-17T06:00',
-                        '2026-02-17T12:00',
-                        '2026-02-17T18:00',
+                        f"{datetime.now().astimezone().date().isoformat()}T00:00",
+                        f"{datetime.now().astimezone().date().isoformat()}T06:00",
+                        f"{datetime.now().astimezone().date().isoformat()}T12:00",
+                        f"{datetime.now().astimezone().date().isoformat()}T18:00",
                     ],
                     'temperature_2m': [18, 22, 35, 25],
                 }
@@ -459,7 +516,14 @@ class TestOpenMeteoAqiFlag:
             mock_now.status_code = 200
             mock_now.json.return_value = {
                 'code': '200',
-                'now': {'temp': '30', 'humidity': '60', 'pressure': '1013', 'text': '晴', 'windSpeed': '5'}
+                'now': {
+                    'temp': '30',
+                    'humidity': '60',
+                    'pressure': '1013',
+                    'text': '晴',
+                    'windSpeed': '5',
+                    'obsTime': datetime.now(timezone.utc).isoformat(),
+                }
             }
             mock_daily_fail = MagicMock()
             mock_daily_fail.status_code = 500
@@ -469,12 +533,12 @@ class TestOpenMeteoAqiFlag:
             mock_hourly.json.return_value = {
                 'code': '200',
                 'hourly': [
-                    {'temp': '18'},
-                    {'temp': '22'},
-                    {'temp': '30'},
-                    {'temp': '35'},
-                    {'temp': '26'},
-                    {'temp': '20'},
+                    {'fxTime': f"{datetime.now().astimezone().date().isoformat()}T00:00+08:00", 'temp': '18'},
+                    {'fxTime': f"{datetime.now().astimezone().date().isoformat()}T04:00+08:00", 'temp': '22'},
+                    {'fxTime': f"{datetime.now().astimezone().date().isoformat()}T08:00+08:00", 'temp': '30'},
+                    {'fxTime': f"{datetime.now().astimezone().date().isoformat()}T12:00+08:00", 'temp': '35'},
+                    {'fxTime': f"{datetime.now().astimezone().date().isoformat()}T16:00+08:00", 'temp': '26'},
+                    {'fxTime': f"{datetime.now().astimezone().date().isoformat()}T20:00+08:00", 'temp': '20'},
                 ]
             }
             mock_air = MagicMock()
@@ -502,7 +566,14 @@ class TestOpenMeteoAqiFlag:
             mock_now.status_code = 200
             mock_now.json.return_value = {
                 'code': '200',
-                'now': {'temp': '30', 'humidity': '60', 'pressure': '1013', 'text': '晴', 'windSpeed': '5'}
+                'now': {
+                    'temp': '30',
+                    'humidity': '60',
+                    'pressure': '1013',
+                    'text': '晴',
+                    'windSpeed': '5',
+                    'obsTime': datetime.now(timezone.utc).isoformat(),
+                }
             }
             mock_daily_fail = MagicMock()
             mock_daily_fail.status_code = 500

@@ -116,6 +116,6 @@ def test_key_api_endpoints(client):
         json={"forecast_temps": [15, 16, 17, 18, 19, 20, 21]},
         headers={"X-CSRF-Token": csrf_token},
     )
-    assert response.status_code == 200
+    assert response.status_code == 403
     payload = response.get_json()
-    assert "success" in payload
+    assert payload["error"] == "guest_not_allowed"

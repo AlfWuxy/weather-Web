@@ -15,6 +15,8 @@ from services.user import (
     community_risk,
     community_wechat,
     elder_dashboard,
+    handle_elder_mode_event,
+    handle_elder_mode_state,
     health_assessment,
     pair_backup_contact,
     pair_escalate,
@@ -27,6 +29,8 @@ from services.user import (
 __all__ = [
     'user_dashboard',
     'elder_dashboard',
+    'handle_elder_mode_event',
+    'handle_elder_mode_state',
     'pair_management',
     'caregiver_dashboard',
     'caregiver_pair_create',

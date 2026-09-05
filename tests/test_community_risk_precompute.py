@@ -1,4 +1,30 @@
 # -*- coding: utf-8 -*-
+from core.time_utils import utcnow
+
+
+def _fresh_qweather(**overrides):
+    """生成满足社区风险生产门的和风实况夹具。"""
+    payload = {
+        'temperature': 31.0,
+        'temperature_max': 34.0,
+        'temperature_min': 25.0,
+        'humidity': 70.0,
+        'pressure': 1005.0,
+        'wind_speed': 1.8,
+        'weather_condition': '晴',
+        'aqi': 60.0,
+        'pm25': 22.0,
+        'air_quality_available': True,
+        'observed_at': utcnow().isoformat(),
+        'air_observed_at': utcnow().isoformat(),
+        'quality_version': 1,
+        'data_source': 'QWeather',
+        'is_mock': False,
+    }
+    payload.update(overrides)
+    return payload
+
+
 def test_precompute_community_risk_builds_and_reuses_cache(app, monkeypatch):
     from services.community_risk_cache import clear_local_community_risk_cache
     from services.pipelines.precompute_community_risk import precompute_community_risk
@@ -25,7 +51,7 @@ def test_precompute_community_risk_builds_and_reuses_cache(app, monkeypatch):
 
     def fake_get_weather_with_cache(location):
         calls['weather'] += 1
-        return ({'temperature': 31.0, 'humidity': 70, 'aqi': 60, 'data_source': 'QWeather', 'is_mock': False}, True)
+        return (_fresh_qweather(), True)
 
     monkeypatch.setattr('services.pipelines.precompute_community_risk.get_weather_with_cache', fake_get_weather_with_cache)
     monkeypatch.setattr('services.pipelines.precompute_community_risk.get_community_service', lambda: FakeCommunityService())
@@ -55,18 +81,29 @@ def test_precompute_community_risk_builds_and_reuses_cache(app, monkeypatch):
     clear_local_community_risk_cache()
 
 
-def test_precompute_community_risk_skips_mock_weather(app, monkeypatch):
+def test_precompute_community_risk_uses_screening_when_weather_is_mock(app, monkeypatch):
     from services.community_risk_cache import clear_local_community_risk_cache
     from services.pipelines.precompute_community_risk import precompute_community_risk
 
     clear_local_community_risk_cache()
 
-    calls = {'risk': 0}
+    calls = {'risk': 0, 'screening': 0}
 
     class FakeCommunityService:
+        def get_ranking_input_signature(self):
+            return 'known-16-bundle-sha'
+
         def generate_community_risk_map(self, weather_data, target_date=None, window_days=None, disease_filter=None):
             calls['risk'] += 1
             return {}
+
+        def generate_exploratory_geospatial_screening(self, **_kwargs):
+            calls['screening'] += 1
+            return {
+                'ranking_mode': 'exploratory_geospatial_screening',
+                'rankings': [{'community': '甲村', 'screening_score': 50.0}],
+                'summary': {'ranked_communities': 1},
+            }
 
     monkeypatch.setattr(
         'services.pipelines.precompute_community_risk.get_weather_with_cache',
@@ -82,7 +119,10 @@ def test_precompute_community_risk_skips_mock_weather(app, monkeypatch):
     )
 
     assert result['weather_skipped'] == 1
-    assert result['combinations'] == 0
+    assert result['screening_only'] == 1
+    assert result['combinations'] == 1
+    assert result['computed'] == 1
     assert calls['risk'] == 0
+    assert calls['screening'] == 1
 
     clear_local_community_risk_cache()

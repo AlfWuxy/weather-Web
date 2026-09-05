@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% from "partials/metric_info.html" import metric_info with context %}
 
-{% block title %}照护工作台 · 宜老天气通{% endblock %}
+{% block title %}家人档案 · 宜老天气通{% endblock %}
 {% block body_class %}family-members-page{% endblock %}
 
 {% block content %}
@@ -9,9 +9,9 @@
 
     <div class="section-heading d-flex justify-content-between align-items-start flex-wrap gap-3 yl-fade-up">
         <div>
-            <span class="section-kicker"><i class="bi bi-people"></i> 照护工作台</span>
-            <h2>你正在关注的家人</h2>
-            <p>管理老人档案、慢病信息与天气阈值，风险变化时第一时间收到提醒。</p>
+            <span class="section-kicker"><i class="bi bi-person-vcard"></i> 家人档案</span>
+            <h1 class="h2">你正在关注的家人</h1>
+            <p>管理家人档案、慢病信息与天气阈值。页面会标出当前查询天气是否达到阈值，通知是否发送取决于通道和账号设置。</p>
         </div>
         <a href="{{ url_for('health.family_member_new') }}" class="btn btn-primary">
             <i class="bi bi-plus-lg me-1"></i>添加家人
@@ -29,22 +29,22 @@
         </div>
         <div class="col-6 col-md-3">
             <div class="yl-stat-card accent">
-                <div class="k">高风险 {{ metric_info('member_risk_score') }}</div>
-                <div class="v" style="color:var(--yl-danger);">{{ high_risk_count or 0 }}</div>
-                <div class="sub">今日需重点关注</div>
+                <div class="k">高关注档案 {{ metric_info('member_risk_score') }}</div>
+                <div class="v" style="color:var(--yl-danger);">{{ risk_counts.high or 0 }}</div>
+                <div class="sub">档案关注等级</div>
             </div>
         </div>
         <div class="col-6 col-md-3">
             <div class="yl-stat-card">
-                <div class="k">今日触发</div>
-                <div class="v" style="color:var(--yl-success);">{{ notified_count or 0 }}</div>
-                <div class="sub">天气阈值提醒</div>
+                <div class="k">今日确认达到阈值</div>
+                <div class="v" style="color:var(--yl-success);">{{ alert_trigger_count or 0 }}</div>
+                <div class="sub">仅统计当前可用天气指标</div>
             </div>
         </div>
         <div class="col-6 col-md-3">
             <div class="yl-stat-card">
                 <div class="k">档案完善 {{ metric_info('profile_completion') }}</div>
-                <div class="v">{{ feedback_rate or 0 }}%</div>
+                <div class="v">{{ avg_completion or 0 }}%</div>
                 <div class="sub">平均完善度</div>
             </div>
         </div>
@@ -58,12 +58,12 @@
                 <input type="text" class="form-control" name="q" value="{{ search_query or '' }}" placeholder="家人名字…">
             </div>
             <div class="col-md-3">
-                <label class="form-label">风险等级</label>
+                <label class="form-label">档案关注等级</label>
                 <select name="risk_level" class="form-select">
                     <option value="">全部</option>
-                    <option value="high" {% if risk_filter == 'high' %}selected{% endif %}>高风险</option>
-                    <option value="medium" {% if risk_filter == 'medium' %}selected{% endif %}>中等</option>
-                    <option value="low" {% if risk_filter == 'low' %}selected{% endif %}>低风险</option>
+                    <option value="high" {% if risk_filter == 'high' %}selected{% endif %}>高关注</option>
+                    <option value="medium" {% if risk_filter == 'medium' %}selected{% endif %}>中关注</option>
+                    <option value="low" {% if risk_filter == 'low' %}selected{% endif %}>常规关注</option>
                 </select>
             </div>
             <div class="col-md-2 d-grid">
@@ -76,12 +76,28 @@
     <div class="alert alert-warning yl-fade-up yl-fade-up-d1" role="status">
         <i class="bi bi-cloud-slash me-1"></i>天气正在更新，家庭成员的阈值提醒稍后恢复。你仍可查看档案并做好日常防护。
     </div>
+    {% elif not heat_action_weather_ready and not air_quality_available %}
+    <div class="alert alert-warning yl-fade-up yl-fade-up-d1" role="status">
+        <i class="bi bi-exclamation-triangle me-1"></i>当前天气可查看，阈值所需字段仍不完整，暂不判断是否达到。
+    </div>
+    {% elif not air_quality_available %}
+    <div class="alert alert-info yl-fade-up yl-fade-up-d1" role="status">
+        <i class="bi bi-info-circle me-1"></i>温湿度阈值可检查；AQI 需要新鲜、非估算且同时含 PM2.5 的和风实况，当前暂不判断 AQI 阈值。
+    </div>
+    {% elif not heat_action_weather_ready %}
+    <div class="alert alert-info yl-fade-up yl-fade-up-d1" role="status">
+        <i class="bi bi-info-circle me-1"></i>AQI 阈值可检查；温湿度字段不完整，当前暂不判断温湿度阈值。
+    </div>
+    {% endif %}
+    {% if weather_available %}
+    <div class="text-muted small mb-3">当前天气来源：{{ weather_source_label or '未标明' }}</div>
     {% endif %}
 
     {# 家人卡片 #}
     {% if family_members %}
         <div class="row g-3 yl-fade-up yl-fade-up-d2">
             {% for m in family_members %}
+            {% set attention_label = {'high': '高关注', 'medium': '中关注', 'low': '常规关注'}.get(m.risk_level, '待完善') %}
             <div class="col-md-6 col-xl-4">
                 <div class="card member-card risk-{{ m.risk_level or 'low' }} h-100">
                     <div class="card-body">
@@ -93,12 +109,14 @@
                                     {{ m.age }}岁 · {{ m.gender or '—' }} · 与我的关系:{{ m.relation or '—' }}
                                 </div>
                             </div>
-                            <span class="risk-badge risk-{{ m.risk_level or 'low' }} badge">{{ m.risk_label or '低风险' }}</span>
+                            <span class="risk-badge risk-{{ m.risk_level or 'low' }} badge">{{ attention_label }}</span>
                             {{ metric_info('member_risk_score', {'成员': m.name, '本次得分': m.risk.score if m.risk else '--', '原因': m.risk.reasons|join('、') if m.risk and m.risk.reasons else '暂无加分原因'}) }}
                         </div>
 
                         <div class="d-flex flex-wrap gap-2 mb-3" style="font-size:.85rem;">
-                            <span class="badge bg-light"><i class="bi bi-geo-alt me-1"></i>{{ m.location or '当前监测地' }}</span>
+                            {% if m.location_scope == 'current_query' and m.location %}
+                                <span class="badge bg-light"><i class="bi bi-geo-alt me-1"></i>当前查询地：{{ m.location }}</span>
+                            {% endif %}
                             {% if m.chronic %}
                                 {% for c in m.chronic %}
                                     <span class="badge bg-info-subtle">{{ c }}</span>
@@ -110,7 +128,7 @@
 
                         {% if m.today_tip %}
                         <div class="p-2 mb-3" style="background:var(--yl-orange-50); border-radius:10px; font-size:.85rem;">
-                            <i class="bi bi-lightbulb text-warning me-1"></i>{{ m.today_tip }}
+                            <i class="bi bi-lightbulb text-warning me-1"></i>今日达到阈值：{{ m.today_tip }}
                         </div>
                         {% else %}
                         <div class="p-2 mb-3" style="background:var(--yl-bg-soft); border-radius:10px; font-size:.85rem;">
@@ -134,11 +152,16 @@
     {% else %}
         <div class="yl-section text-center yl-fade-up yl-fade-up-d2" style="padding:60px 30px;">
             <div style="font-size:3rem; color:var(--yl-orange-400);"><i class="bi bi-people"></i></div>
-            <h4 class="mt-3">还没有添加家人</h4>
-            <p class="text-muted">添加要关注的老人,我们会在风险变化时提醒你。</p>
-            <a href="{{ url_for('health.family_member_new') }}" class="btn btn-primary mt-2">
-                <i class="bi bi-plus-lg me-1"></i>添加第一位家人
-            </a>
+            {% if total_members %}
+                <h4 class="mt-3">没有符合筛选条件的档案</h4>
+                <p class="text-muted">可以清除姓名或关注等级筛选后再查看。</p>
+            {% else %}
+                <h4 class="mt-3">还没有添加家人</h4>
+                <p class="text-muted">添加家人后，可以记录档案并查看当前查询天气是否达到个人阈值。</p>
+                <a href="{{ url_for('health.family_member_new') }}" class="btn btn-primary mt-2">
+                    <i class="bi bi-plus-lg me-1"></i>添加第一位家人
+                </a>
+            {% endif %}
         </div>
     {% endif %}
 </div>

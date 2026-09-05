@@ -30,7 +30,9 @@ class User(UserMixin, db.Model):
     # 个人健康信息
     age = db.Column(db.Integer)
     gender = db.Column(db.String(10))
-    community = db.Column(db.String(100))  # 所属社区
+    community = db.Column(db.String(100))  # 所属社区 / 定位（可自改）
+    # 运营 ACL：社区角色管辖村，仅 admin 可写；缺失时 fail closed，由迁移或管理员补齐
+    authorized_community = db.Column(db.String(100))
     has_chronic_disease = db.Column(db.Boolean, default=False)
     chronic_diseases = db.Column(db.Text)  # JSON格式存储多个慢性病
 
@@ -43,6 +45,15 @@ class User(UserMixin, db.Model):
 
     def check_password(self, password):
         return check_password_hash(self.password_hash, password)
+
+    def get_id(self):
+        """会话身份含密码戳：改密后旧 session/remember 自动失效。
+
+        格式：{user_id}:{password_hash 的短摘要}。无需额外 DB 列。
+        """
+        import hashlib
+        stamp = hashlib.sha256((self.password_hash or '').encode('utf-8')).hexdigest()[:16]
+        return f'{self.id}:{stamp}'
 
 
 class MedicalRecord(db.Model):
@@ -84,6 +95,11 @@ class WeatherData(db.Model):
     wind_speed = db.Column(db.Float)  # 风速
     pm25 = db.Column(db.Float)  # PM2.5
     aqi = db.Column(db.Integer)  # 空气质量指数
+    data_source = db.Column(db.String(32), nullable=True)  # 旧行保持 NULL，不伪造来源
+    observed_at = db.Column(db.DateTime(timezone=True), nullable=True)  # 上游观测时刻（UTC）
+    air_observed_at = db.Column(db.DateTime(timezone=True), nullable=True)  # 空气质量独立观测时刻（UTC）
+    quality_version = db.Column(db.Integer, nullable=False, default=0, server_default='0')
+    air_quality_available = db.Column(db.Boolean, nullable=False, default=False, server_default='0')
     is_extreme = db.Column(db.Boolean, default=False)  # 是否极端天气
     extreme_type = db.Column(db.String(50))  # 极端天气类型
 
@@ -142,7 +158,7 @@ class HealthRiskAssessment(db.Model):
 
 
 class WeatherAlert(db.Model):
-    """天气预警记录"""
+    """天气提醒记录；只有带来源与有效期的记录才能标为官方预警。"""
     __tablename__ = 'weather_alerts'
     id = db.Column(db.Integer, primary_key=True)
     alert_date = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
@@ -150,6 +166,10 @@ class WeatherAlert(db.Model):
     alert_type = db.Column(db.String(50))  # 预警类型
     alert_level = db.Column(db.String(20))  # 预警等级
     description = db.Column(db.Text)
+    source = db.Column(db.String(50), nullable=True)  # QWeather / AppThreshold / Legacy
+    is_official = db.Column(db.Boolean, nullable=False, default=False, server_default='0')
+    starts_at = db.Column(db.DateTime(timezone=True), nullable=True)
+    ends_at = db.Column(db.DateTime(timezone=True), nullable=True)
     affected_communities = db.Column(db.Text)  # JSON格式：受影响社区
     disease_correlation = db.Column(db.Text)  # JSON格式：疾病相关性分析
 
@@ -313,6 +333,7 @@ class Pair(db.Model):
     short_code_hash = db.Column(db.String(64))
     short_code_expires_at = db.Column(db.DateTime)
     status = db.Column(db.String(20), default='active')  # active/inactive
+    is_test = db.Column(db.Boolean, default=False, nullable=False, server_default='0')
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
     last_active_at = db.Column(db.DateTime)
 
@@ -364,7 +385,11 @@ class DailyStatus(db.Model):
     status_date = db.Column(db.Date, nullable=False)
     community_code = db.Column(db.String(100), nullable=False)
     risk_level = db.Column(db.String(20))  # 低风险/中风险/高风险/极高
-    confirmed_at = db.Column(db.DateTime)
+    confirmed_at = db.Column(db.DateTime)  # 语义 = self_reported_at，仅 self_reported 时写入
+    understood_at = db.Column(db.DateTime)
+    verified_at = db.Column(db.DateTime)
+    help_acknowledged_at = db.Column(db.DateTime)
+    closed_at = db.Column(db.DateTime)
     help_flag = db.Column(db.Boolean, default=False)
     actions_done_count = db.Column(db.Integer, default=0)
     relay_stage = db.Column(db.String(20), default='none')
@@ -388,7 +413,12 @@ class CommunityDaily(db.Model):
     community_code = db.Column(db.String(100), nullable=False)
     date = db.Column(db.Date, nullable=False)
     total_people = db.Column(db.Integer, default=0)
-    confirm_rate = db.Column(db.Float, default=0)
+    confirm_rate = db.Column(db.Float, default=0)  # deprecated = self_report_rate
+    understood_rate = db.Column(db.Float, default=0)
+    self_report_rate = db.Column(db.Float, default=0)
+    verified_rate = db.Column(db.Float, default=0)
+    open_help_count = db.Column(db.Integer, default=0)
+    unknown_count = db.Column(db.Integer, default=0)
     escalation_rate = db.Column(db.Float, default=0)
     risk_distribution = db.Column(db.Text)
     outreach_summary = db.Column(db.Text)
@@ -418,9 +448,35 @@ class CoolingResource(db.Model):
     notes = db.Column(db.Text)
     is_active = db.Column(db.Boolean, default=True)
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    last_verified_at = db.Column(db.DateTime)
+    verified_by_role = db.Column(db.String(16))
+    verify_method = db.Column(db.String(16))
+    open_during_alert = db.Column(db.String(16))
+    alert_open_note_code = db.Column(db.String(32))
+    amenities_json = db.Column(db.Text)
+    transport_need = db.Column(db.String(16))
+    verify_status = db.Column(db.String(16))
 
     __table_args__ = (
         db.Index('ix_cooling_resources_community', 'community_code'),
+    )
+
+
+class CoolingFeedback(db.Model):
+    """避暑资源反馈（append-only，只存封闭码，不存自由文本）。"""
+    __tablename__ = 'cooling_feedback'
+    id = db.Column(db.Integer, primary_key=True)
+    resource_id = db.Column(db.Integer, db.ForeignKey('cooling_resources.id'), nullable=False)
+    pair_id = db.Column(db.Integer, db.ForeignKey('pairs.id'))
+    code = db.Column(db.String(16), nullable=False)
+    channel = db.Column(db.String(24))
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+
+    __table_args__ = (
+        db.Index('ix_cooling_feedback_resource_id', 'resource_id'),
+        db.Index('ix_cooling_feedback_pair_id', 'pair_id'),
+        db.Index('ix_cooling_feedback_code', 'code'),
+        db.Index('ix_cooling_feedback_created_at', 'created_at'),
     )
 
 
@@ -457,6 +513,27 @@ class ApiToken(db.Model):
     __table_args__ = (
         db.Index('ix_api_tokens_user_id', 'user_id'),
         db.Index('ix_api_tokens_token_hash', 'token_hash'),
+    )
+
+
+class ActionEvent(db.Model):
+    """老人当日行动链（append-only，无 update/delete 路由）。"""
+    __tablename__ = 'action_events'
+    id = db.Column(db.Integer, primary_key=True)
+    pair_id = db.Column(db.Integer, db.ForeignKey('pairs.id'), nullable=False, index=True)
+    local_date = db.Column(db.Date, nullable=False, index=True)
+    stage = db.Column(db.String(32), nullable=False, index=True)
+    actor_role = db.Column(db.String(16), nullable=False)
+    channel = db.Column(db.String(24), nullable=False)
+    script_version = db.Column(db.String(16))
+    action_id = db.Column(db.String(32))
+    alert_id = db.Column(db.Integer, db.ForeignKey('weather_alerts.id'))
+    delivery_id = db.Column(db.Integer, db.ForeignKey('alert_deliveries.id'))
+    meta_json = db.Column(db.Text)
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), index=True)
+
+    __table_args__ = (
+        db.Index('ix_action_events_pair_date_stage', 'pair_id', 'local_date', 'stage'),
     )
 
 

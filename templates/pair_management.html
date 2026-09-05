@@ -1,30 +1,42 @@
 {% extends "base.html" %}
 {% from "partials/metric_info.html" import metric_info with context %}
 
-{% block title %}照护工作台 - 宜老天气通{% endblock %}
+{% block title %}家庭照护 · 宜老天气通{% endblock %}
 
 {% block content %}
+{% set has_pair_cards = pair_cards and pair_cards|length > 0 %}
+{% if push_notice_state is defined %}
+    {% set effective_push_notice_state = push_notice_state %}
+{% elif not has_pair_cards %}
+    {% set effective_push_notice_state = 'none' %}
+{% elif not (push_channel_ready|default(false)) %}
+    {% set effective_push_notice_state = 'channel_unavailable' %}
+{% elif not current_user.wxpusher_uid or not current_user.push_enabled %}
+    {% set effective_push_notice_state = 'user_setup_required' %}
+{% else %}
+    {% set effective_push_notice_state = 'ready' %}
+{% endif %}
+{% set pair_location_suggestions = location_suggestions if location_suggestions is defined else (communities or []) %}
 <div class="container my-4">
     <div class="row mb-3">
         <div class="col-12">
-            <h2><i class="bi bi-people"></i> 子女首页 · 照护行动工作台</h2>
+            <h1 class="h2"><i class="bi bi-people"></i> 家庭照护</h1>
             <p class="text-muted mb-0">
-                为家中老人设置所在地，高温或寒潮来临时及时收到提醒。慢病类别可选填，用于提供更贴合的日常建议。
-                所在地和关联档案仅用于天气查询与提醒，请勿填写精确门牌信息。
+                添加需要关注的家人，查看都昌县天气风险、复制提醒话术，并记录家人是否已经采取行动。
+                慢病类别可选填；县内地点仅作照护备注，请勿填写精确门牌信息。
             </p>
-            {% if not current_user.push_enabled or not current_user.wxpusher_uid %}
-                <div class="alert alert-warning mt-3 mb-0">
-                    <div class="fw-semibold">尚未开启自动推送</div>
+            {% if has_pair_cards and effective_push_notice_state == 'channel_unavailable' %}
+                <div class="alert alert-info mt-3 mb-0" role="status">
+                    <div class="fw-semibold">自动微信提醒尚未开放</div>
                     <div class="small">
-                        请到「<a href="{{ url_for('user.profile') }}">个人设置</a>」填写 WxPusher UID 并开启推送。
+                        当前仍可复制提醒话术并手动发送，行动记录不受影响。
                     </div>
                 </div>
-            {% endif %}
-            {% if not push_channel_ready %}
-                <div class="alert alert-danger mt-3 mb-0">
-                    <div class="fw-semibold">自动推送暂不可用</div>
+            {% elif has_pair_cards and effective_push_notice_state == 'user_setup_required' %}
+                <div class="alert alert-secondary mt-3 mb-0" role="status">
+                    <div class="fw-semibold">如需微信提醒，请先完成账号设置</div>
                     <div class="small">
-                        你仍可复制提醒话术并手动发送，行动记录不会受到影响。
+                        可到「<a href="{{ url_for('user.profile') }}">个人设置</a>」填写微信接收码并开启开关。完成设置只代表具备发送条件，实际送达以发送记录为准。
                     </div>
                 </div>
             {% endif %}
@@ -60,18 +72,18 @@
                                 {% endfor %}
                             </select>
                             <div class="text-muted small mt-2">
-                                老人档案在「健康管理与照护 → <a href="{{ url_for('health.family_members') }}">家庭成员</a>」里维护（可登记慢病类别）。
+                                家人信息在「<a href="{{ url_for('health.family_members') }}">家人档案</a>」中维护，可选填慢病类别。
                             </div>
                         </div>
                         <div class="mb-3">
-                            <label class="form-label">老人所在地</label>
-                            <input class="form-control" name="location_query" list="communityOptions" placeholder="例如：九江市都昌县/九江某乡镇">
+                            <label class="form-label">县内地点备注</label>
+                            <input class="form-control" name="location_query" list="communityOptions" placeholder="例如：某乡镇或村名，请勿填写门牌">
                             <datalist id="communityOptions">
-                                {% for community in communities %}
-                                    <option value="{{ community.name }}"></option>
+                                {% for location in pair_location_suggestions %}
+                                    <option value="{{ location if location is string else location.name }}"></option>
                                 {% endfor %}
                             </datalist>
-                            <div class="text-muted small mt-2">填写县、市或乡镇即可，用于查询当地天气预警。</div>
+                            <div class="text-muted small mt-2">天气统一使用都昌县观测；此字段只用于县内照护备注，不会切换天气来源。</div>
                         </div>
                         <button class="btn btn-primary w-100" type="submit">
                             <i class="bi bi-plus-circle"></i> 添加监测对象
@@ -131,12 +143,12 @@
             <div class="card shadow-sm">
                 <div class="card-header bg-light">
                     <div class="d-flex align-items-center justify-content-between flex-wrap gap-2">
-                        <h5 class="mb-0"><i class="bi bi-list-check"></i> 老人卡片（{{ status_date.strftime('%Y-%m-%d') }}）</h5>
+                        <h5 class="mb-0"><i class="bi bi-list-check"></i> 照护对象（{{ status_date.strftime('%Y-%m-%d') }}）</h5>
                         <span class="text-muted small">倒计时默认至每日 20:00</span>
                     </div>
                 </div>
                 <div class="card-body">
-                    {% if pair_cards and pair_cards|length > 0 %}
+                    {% if has_pair_cards %}
                         <div class="row g-3">
                             {% for item in pair_cards %}
                                 {% set status = item.status %}
@@ -148,7 +160,7 @@
                                                 <div>
                                                     <div class="text-muted small">短码 {{ item.pair.short_code }}</div>
                                                     <div class="fs-5 fw-bold">{{ item.elder_name or '老人' }}</div>
-                                                    <div class="text-muted small">地点 {{ item.location_display or item.pair.community_code }}</div>
+                                                    <div class="text-muted small">县内备注 {{ item.location_display or item.pair.community_code }}</div>
                                                     {% if item.weather_available %}
                                                     <div class="mt-2">
                                                         <span class="badge bg-{{ alert_badge }}">{{ item.alert_label }}</span>
@@ -164,6 +176,9 @@
                                                         '连续高温': ((item.heat_result.consecutive_hot_days|string) ~ '天') if item.heat_result and item.heat_result.consecutive_hot_days is not none else '--'
                                                     } %}
                                                     <div class="text-muted small mt-1">热风险：{{ item.risk_label }} {{ metric_info('heat_risk_score', pair_heat_context) }}</div>
+                                                    <div class="text-muted small mt-1">
+                                                        数据来源：{{ item.weather_source_label or '未知' }}。基于气温和湿度的行动参考，不代表官方预警。
+                                                    </div>
                                                     {% else %}
                                                     <div class="alert alert-warning py-2 px-3 mt-2 mb-0 small" role="status">
                                                         <strong>天气更新中</strong><br>
@@ -203,7 +218,7 @@
                                                         data-member-id="{{ item.pair.member_id or '' }}"
                                                         data-alert-kind="{{ item.alert_kind or '' }}"
                                                         data-message="{{ item.reminder_message | replace('\n', '\\n') | e }}">
-                                                    <i class="bi bi-clipboard"></i> {% if item.weather_available %}复制提醒话术{% else %}复制行动链接说明{% endif %}
+                                                    <i class="bi bi-clipboard"></i> {% if item.weather_share_available %}复制提醒话术{% else %}复制行动链接说明{% endif %}
                                                 </button>
                                                 <button class="btn btn-outline-success btn-sm feedback-btn"
                                                         type="button"
@@ -253,7 +268,10 @@
                         </div>
                         <div class="text-muted small mt-3">升级链仅记录状态，请结合实际情况与社区沟通。</div>
                     {% else %}
-                        <div class="text-muted">暂无监测对象，请先在左侧添加老人并设置所在地。</div>
+                        <div class="text-center py-4">
+                            <div class="fw-semibold">还没有照护对象</div>
+                            <div class="text-muted small mt-1">请先填写家人的县内地点备注。添加后，这里会显示都昌县天气风险、行动话术和确认记录。</div>
+                        </div>
                     {% endif %}
                 </div>
             </div>
@@ -269,7 +287,25 @@ document.addEventListener('DOMContentLoaded', function () {
     const addBtn = document.getElementById('addAltContact');
     const storageKey = 'heat_action_alt_contacts';
 
-    let contacts = JSON.parse(localStorage.getItem(storageKey) || '[]');
+    let contacts = [];
+    try {
+        const storedContacts = JSON.parse(localStorage.getItem(storageKey) || '[]');
+        const hasValidShape = Array.isArray(storedContacts)
+            && storedContacts.every((item) => (
+                item
+                && typeof item === 'object'
+                && !Array.isArray(item)
+                && (item.name === undefined || typeof item.name === 'string')
+                && (item.phone === undefined || typeof item.phone === 'string')
+            ));
+        if (hasValidShape) {
+            contacts = storedContacts;
+        } else {
+            localStorage.removeItem(storageKey);
+        }
+    } catch (error) {
+        localStorage.removeItem(storageKey);
+    }
 
     const renderList = () => {
         if (!listEl) return;
@@ -328,9 +364,6 @@ document.addEventListener('DOMContentLoaded', function () {
             const hour = parseInt(el.dataset.deadlineHour || '20', 10);
             const deadline = new Date();
             deadline.setHours(hour, 0, 0, 0);
-            if (deadline < now) {
-                deadline.setDate(deadline.getDate() + 1);
-            }
             const diff = Math.max(0, deadline - now);
             const hours = Math.floor(diff / (1000 * 60 * 60));
             const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
@@ -343,9 +376,9 @@ document.addEventListener('DOMContentLoaded', function () {
     const csrfTokenEl = document.querySelector('meta[name="csrf-token"]');
     const csrfToken = csrfTokenEl ? (csrfTokenEl.getAttribute('content') || '') : '';
     const logEvent = async (eventType, data) => {
-        if (!csrfToken) return;
+        if (!csrfToken) return false;
         try {
-            await fetch('/api/v1/events', {
+            const response = await fetch('/api/v1/events', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -353,8 +386,13 @@ document.addEventListener('DOMContentLoaded', function () {
                 },
                 body: JSON.stringify(Object.assign({ event_type: eventType, source: 'web' }, data || {}))
             });
+            if (!response.ok) {
+                return false;
+            }
+            const result = await response.json();
+            return Boolean(result && result.success === true);
         } catch (e) {
-            // fail open
+            return false;
         }
     };
 
@@ -369,20 +407,23 @@ document.addEventListener('DOMContentLoaded', function () {
                 if (!ok) {
                     throw new Error('copy_failed');
                 }
-                const pairId = btn.dataset.pairId ? parseInt(btn.dataset.pairId, 10) : null;
-                const memberId = btn.dataset.memberId ? parseInt(btn.dataset.memberId, 10) : null;
-                const alertKind = btn.dataset.alertKind || '';
-                await logEvent('template_copy', {
-                    pair_id: pairId,
-                    member_id: memberId,
-                    meta: { alert_kind: alertKind }
-                });
+                const originalHtml = btn.innerHTML;
                 btn.classList.add('btn-success');
                 btn.textContent = '已复制';
                 setTimeout(() => {
                     btn.classList.remove('btn-success');
-                    btn.innerHTML = '<i class="bi bi-clipboard"></i> 复制提醒话术';
+                    btn.innerHTML = originalHtml;
                 }, 1200);
+
+                // 复制已成功时即刻反馈，埋点失败不影响复制结果。
+                const pairId = btn.dataset.pairId ? parseInt(btn.dataset.pairId, 10) : null;
+                const memberId = btn.dataset.memberId ? parseInt(btn.dataset.memberId, 10) : null;
+                const alertKind = btn.dataset.alertKind || '';
+                void logEvent('template_copy', {
+                    pair_id: pairId,
+                    member_id: memberId,
+                    meta: { alert_kind: alertKind }
+                });
             } catch (err) {
                 alert('复制失败，请手动选择文本');
             }
@@ -394,14 +435,21 @@ document.addEventListener('DOMContentLoaded', function () {
             const kind = btn.dataset.kind || '';
             const pairId = btn.dataset.pairId ? parseInt(btn.dataset.pairId, 10) : null;
             const memberId = btn.dataset.memberId ? parseInt(btn.dataset.memberId, 10) : null;
-            await logEvent('feedback_submitted', {
+            const originalHtml = btn.innerHTML;
+            btn.disabled = true;
+            const logged = await logEvent('feedback_submitted', {
                 pair_id: pairId,
                 member_id: memberId,
                 meta: { kind }
             });
-            btn.classList.add('btn-success');
-            btn.textContent = '已记录';
-            btn.disabled = true;
+            if (logged) {
+                btn.classList.add('btn-success');
+                btn.textContent = '已记录';
+                return;
+            }
+            btn.innerHTML = originalHtml;
+            btn.disabled = false;
+            alert('记录失败，请检查网络后重试。');
         });
     });
 });

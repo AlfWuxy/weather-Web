@@ -12,6 +12,11 @@
 
     <form method="POST" action="{{ url_for('tools.chronic_risk') }}" class="yl-section mb-4 yl-fade-up yl-fade-up-d1">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        {% if guest_demo %}
+        <div class="alert alert-warning small mb-3" role="note">
+            游客可预览本页；生成评估需注册或登录正式账号。
+        </div>
+        {% endif %}
 
         <div class="row g-3">
             <div class="col-md-4">
@@ -44,7 +49,7 @@
                 <input type="text" class="form-control" name="symptoms" value="{{ form_state.symptoms if form_state else '' }}" placeholder="头晕、胸闷、气短…">
             </div>
             <div class="col-md-4 d-grid align-self-end">
-                <button class="btn btn-primary"><i class="bi bi-clipboard-pulse me-1"></i>开始评估</button>
+                <button class="btn btn-primary" {% if guest_demo %}disabled aria-disabled="true"{% endif %}><i class="bi bi-clipboard-pulse me-1"></i>开始评估</button>
             </div>
         </div>
     </form>

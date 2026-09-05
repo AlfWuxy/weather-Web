@@ -1,10 +1,10 @@
 <view style="padding: 16px;">
   <view class="card">
     <view style="font-size: 18px; font-weight: 700;">
-      {{mode === 'create' ? '新增老人' : '编辑老人'}}
+      {{mode === 'create' ? '新增老人' : '编辑监测信息'}}
     </view>
     <view class="muted" style="margin-top: 6px; font-size: 12px;">
-      慢病信息仅填写“类别”（可选），用于生成更贴近实际的提醒话术。
+      慢病信息仅填写“类别”（可选），用于记录家庭监测档案；当前提醒话术不会根据慢病信息自动调整。
     </view>
 
     <block wx:if="{{mode === 'create'}}">
@@ -44,4 +44,3 @@
     </view>
   </view>
 </view>
-

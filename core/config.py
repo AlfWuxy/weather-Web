@@ -300,7 +300,7 @@ def configure_app(app, logger):
     app.config.setdefault('FEATURE_API_V1', parse_bool(os.getenv('FEATURE_API_V1', '1'), default=True))
     app.config.setdefault('FEATURE_EXPLAIN_OUTPUT', parse_bool(os.getenv('FEATURE_EXPLAIN_OUTPUT', '0'), default=False))
     app.config.setdefault('FEATURE_EMERGENCY_TRIAGE', parse_bool(os.getenv('FEATURE_EMERGENCY_TRIAGE', '0'), default=False))
-    app.config.setdefault('FEATURE_ELDER_MODE', parse_bool(os.getenv('FEATURE_ELDER_MODE', '0'), default=False))
+    app.config.setdefault('FEATURE_ELDER_MODE', parse_bool(os.getenv('FEATURE_ELDER_MODE', '1'), default=True))
     app.config.setdefault('FEATURE_NOTIFICATIONS', parse_bool(os.getenv('FEATURE_NOTIFICATIONS', '0'), default=False))
     app.config.setdefault('FEATURE_HEAT_EXPOSURE_GIS', parse_bool(os.getenv('FEATURE_HEAT_EXPOSURE_GIS', '0'), default=False))
     app.config.setdefault('FEATURE_AUDIT_LOGS', parse_bool(os.getenv('FEATURE_AUDIT_LOGS', '0'), default=False))
@@ -323,6 +323,33 @@ def configure_app(app, logger):
     app.config.setdefault(
         'QWEATHER_WARNING_CACHE_TTL_MINUTES',
         max(parse_int(os.getenv('QWEATHER_WARNING_CACHE_TTL_MINUTES', '30'), default=30), 10)
+    )
+    app.config.setdefault(
+        'WEATHER_OBSERVATION_MAX_AGE_MINUTES',
+        max(parse_int(os.getenv('WEATHER_OBSERVATION_MAX_AGE_MINUTES', '120'), default=120), 0)
+    )
+    app.config.setdefault(
+        'WEATHER_OBSERVATION_FUTURE_TOLERANCE_MINUTES',
+        max(
+            parse_int(
+                os.getenv('WEATHER_OBSERVATION_FUTURE_TOLERANCE_MINUTES', '15'),
+                default=15,
+            ),
+            0,
+        )
+    )
+    app.config.setdefault(
+        'QWEATHER_FORECAST_NEGATIVE_CACHE_SECONDS',
+        min(
+            max(
+                parse_int(
+                    os.getenv('QWEATHER_FORECAST_NEGATIVE_CACHE_SECONDS', '180'),
+                    default=180,
+                ),
+                120,
+            ),
+            300,
+        )
     )
     app.config.setdefault(
         'QWEATHER_MONTHLY_REQUEST_LIMIT',
@@ -351,6 +378,17 @@ def configure_app(app, logger):
     app.config.setdefault('NOTIFICATION_ESCALATION_DAYS', parse_int(os.getenv('NOTIFICATION_ESCALATION_DAYS', '3'), default=3))
     app.config.setdefault('NOTIFICATION_MAX_DAILY', parse_int(os.getenv('NOTIFICATION_MAX_DAILY', '5'), default=5))
     app.config.setdefault('HEAT_HOT_DAY_THRESHOLD', parse_float(os.getenv('HEAT_HOT_DAY_THRESHOLD', '35'), default=35.0))
+    app.config[
+        'MAX_CONTENT_LENGTH'
+    ] = (
+        max(
+            parse_int(
+                os.getenv('MAX_CONTENT_LENGTH_BYTES', str(1024 * 1024)),
+                default=1024 * 1024,
+            ),
+            64 * 1024,
+        )
+    )
     app.config.setdefault('RATE_LIMITS', os.getenv('RATE_LIMITS', '200 per minute'))
 
     rate_limit_storage_env = _normalized_env_value('RATE_LIMIT_STORAGE_URI')
@@ -370,6 +408,8 @@ def configure_app(app, logger):
     app.config.setdefault('RATE_LIMIT_ML', os.getenv('RATE_LIMIT_ML', app.config['RATE_LIMITS']))
     app.config.setdefault('RATE_LIMIT_AI', os.getenv('RATE_LIMIT_AI', '20 per minute'))
     app.config.setdefault('RATE_LIMIT_LOGIN', os.getenv('RATE_LIMIT_LOGIN', '5 per 5 minutes'))
+    # GET /guest 签发游客会话：按 IP 收紧，防脚本轮换 guest 入口（路由挂载见 public.py）
+    app.config.setdefault('RATE_LIMIT_GUEST', os.getenv('RATE_LIMIT_GUEST', '10 per hour'))
     app.config.setdefault('LOGIN_MAX_FAILURES', parse_int(os.getenv('LOGIN_MAX_FAILURES', '5'), default=5))
     app.config.setdefault('LOGIN_LOCKOUT_SECONDS', parse_int(os.getenv('LOGIN_LOCKOUT_SECONDS', '300'), default=300))
     app.config.setdefault('RATE_LIMIT_SHORT_CODE', os.getenv('RATE_LIMIT_SHORT_CODE', '3 per hour'))
