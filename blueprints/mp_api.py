@@ -7,6 +7,8 @@ Endpoints:
 - POST /mp/api/v1/elders
 - PATCH /mp/api/v1/elders/<pair_id>
 - GET  /mp/api/v1/alerts?pair_id=...
+- GET  /mp/api/v1/pending
+- POST /mp/api/v1/pairs/<pair_id>/events
 - POST /mp/api/v1/events
 """
 
@@ -26,6 +28,7 @@ from core.security import hash_identifier
 from core.time_utils import utcnow
 from core.usage import log_usage_event, verify_api_token
 from core.weather import get_weather_with_cache, is_qweather_production_ready
+from services.action_events import InvalidTransition, record_event, today_state
 from services.location_resolver import resolve_location
 from services.warning_service import get_qweather_warnings
 from services.user._common import _create_pair_record
@@ -41,6 +44,30 @@ MP_CLIENT_EVENT_TYPES = frozenset(
         "template_copy",
         "feedback_submitted",
     }
+)
+MP_CAREGIVER_STAGES = frozenset(
+    {
+        "delivered",
+        "help_acknowledged",
+        "caregiver_verified",
+        "closed",
+    }
+)
+MP_PENDING_TODAY_KEYS = (
+    "delivered",
+    "seen",
+    "understood",
+    "self_reported",
+    "help_requested",
+    "help_acknowledged",
+    "caregiver_verified",
+    "closed",
+)
+TEMPLATE_COPY_META_FIELDS = (
+    "script_version",
+    "messenger_role",
+    "channel",
+    "scenario",
 )
 _GENDER_ALIASES = {
     "男": "男性",
@@ -185,6 +212,35 @@ def _parse_positive_id(value, error_code):
     if parsed <= 0:
         raise ValueError(error_code)
     return parsed
+
+
+def _elder_label(member):
+    """家属自设称呼（relation），绝不返回档案姓名。"""
+    if member is None:
+        return ""
+    relation = getattr(member, "relation", None)
+    if not isinstance(relation, str):
+        return ""
+    return relation.strip()
+
+
+def _pending_today(state):
+    source = state or {}
+    return {key: bool(source.get(key)) for key in MP_PENDING_TODAY_KEYS}
+
+
+def _template_copy_meta_invalid(meta):
+    if not isinstance(meta, dict):
+        return True
+    for key in TEMPLATE_COPY_META_FIELDS:
+        value = meta.get(key)
+        if value is None:
+            return True
+        if isinstance(value, bool):
+            return True
+        if not str(value).strip():
+            return True
+    return False
 
 
 @bp.route("/me", endpoint="me")
@@ -525,6 +581,10 @@ def events():
         if len(meta_json) > MP_EVENT_META_MAX_CHARS:
             return jsonify({"success": False, "error": "meta_too_large"}), 400
 
+    if event_type == "template_copy" and "meta" in payload:
+        if _template_copy_meta_invalid(meta):
+            return jsonify({"success": False, "error": "invalid_meta"}), 400
+
     pair = None
     resolved_pair_id = None
     if "pair_id" in payload:
@@ -563,3 +623,88 @@ def events():
     if event is None:
         return jsonify({"success": False, "error": "event_write_failed"}), 503
     return jsonify({"success": True})
+
+
+@bp.route("/pending", endpoint="pending")
+@limiter.limit(lambda: current_app.config.get("RATE_LIMIT_MP_READ", "120 per minute"), key_func=_mp_rate_limit_key)
+@require_api_token
+def pending():
+    pairs = (
+        Pair.query.filter_by(caregiver_id=g.api_user_id, status="active")
+        .order_by(Pair.created_at.desc())
+        .all()
+    )
+    member_ids = [p.member_id for p in pairs if p.member_id]
+    members = FamilyMember.query.filter(FamilyMember.id.in_(member_ids)).all() if member_ids else []
+    member_map = {m.id: m for m in members}
+
+    items = []
+    for pair in pairs:
+        member = member_map.get(pair.member_id) if pair.member_id else None
+        items.append(
+            {
+                "pair_id": pair.id,
+                "elder_label": _elder_label(member),
+                "today": _pending_today(today_state(pair)),
+            }
+        )
+
+    payload = {"pairs": items}
+    return jsonify({"success": True, "data": payload, "pairs": items})
+
+
+@bp.route("/pairs/<int:pair_id>/events", methods=["POST"], endpoint="pair_events")
+@limiter.limit(lambda: current_app.config.get("RATE_LIMIT_MP_WRITE", "30 per minute"), key_func=_mp_rate_limit_key)
+@require_api_token
+def pair_events(pair_id: int):
+    payload = request.get_json(silent=True)
+    if payload is None:
+        payload = {}
+    if not isinstance(payload, dict):
+        return jsonify({"success": False, "error": "invalid_payload"}), 400
+
+    pair = _pair_for_user(pair_id)
+    if not pair:
+        return jsonify({"success": False, "error": "not_found"}), 404
+
+    stage = sanitize_input(payload.get("stage"), max_length=32) or ""
+    if stage not in MP_CAREGIVER_STAGES:
+        return jsonify({"success": False, "error": "forbidden"}), 403
+
+    messenger_role = sanitize_input(payload.get("messenger_role"), max_length=20)
+    messenger_channel = sanitize_input(payload.get("channel"), max_length=24)
+    script_version = sanitize_input(payload.get("script_version"), max_length=16)
+
+    try:
+        event = record_event(
+            pair,
+            stage,
+            "caregiver",
+            "miniprogram",
+            script_version=script_version,
+        )
+    except InvalidTransition as exc:
+        db.session.rollback()
+        return exc.to_response()
+
+    if stage == "delivered":
+        log_usage_event(
+            "caregiver_delivered",
+            user_id=g.api_user_id,
+            pair_id=pair.id,
+            member_id=getattr(pair, "member_id", None),
+            source="miniprogram",
+            meta={
+                "messenger_role": messenger_role,
+                "channel": messenger_channel,
+                "event": "delivered",
+            },
+        )
+
+    state = _pending_today(today_state(pair))
+    return jsonify(
+        {
+            "success": True,
+            "data": {"event_id": event.id, "state": state},
+        }
+    )
