@@ -1,40 +1,52 @@
-{% set needs_chartjs = true %}
+{% set health_risk_available = forecast_meta.health_risk_available|default(false) %}
+{% set needs_chartjs = health_risk_available %}
 {% extends "base.html" %}
 {% from "partials/metric_info.html" import metric_info with context %}
-{% block title %}7 天健康预测 · 宜老天气通{% endblock %}
+{% block title %}{{ '7 天健康预测' if health_risk_available else '7 天天气预报' }} · 宜老天气通{% endblock %}
 
 {% block content %}
 <div class="container" style="max-width:1160px;">
     <section class="section-heading yl-fade-up">
-        <span class="section-kicker"><i class="bi bi-calendar-week"></i> 7 天健康预测</span>
-        <h2>接下来一周,哪几天要特别留心?</h2>
+        <span class="section-kicker"><i class="bi bi-calendar-week"></i> {{ '7 天健康预测' if health_risk_available else '7 天天气预报' }}</span>
+        <h2>{{ '接下来一周，哪几天要特别留心？' if health_risk_available else '接下来一周的天气' }}</h2>
+        {% if not health_risk_available %}
+        <p>当前仅提供天气预报，不生成健康风险评分。健康判断请同时查看当地官方预警。</p>
+        {% else %}
         <p>风险评分综合温度、PM2.5、湿度与热夜。当前是地区级暴露评分，不使用个人慢病资料。</p>
+        {% endif %}
     </section>
 
     <form method="GET" class="yl-section mb-4 yl-fade-up yl-fade-up-d1">
+        {% if guest_demo %}
+        <div class="alert alert-warning small mb-3" role="note">
+            游客可预览本页；生成预测需注册或登录正式账号。
+        </div>
+        {% endif %}
         <div class="row g-3 align-items-end">
             <div class="col-md-8">
-                <label class="form-label">所在地</label>
-                <input type="text" class="form-control" name="location" value="{{ request.args.get('location', current_location) }}" list="locOpts">
+                <label class="form-label">天气地点</label>
+                <input type="text" class="form-control" name="location" value="{{ weather_location }}" list="locOpts">
                 <datalist id="locOpts">{% for loc in (location_options or []) %}<option value="{{ loc }}"></option>{% endfor %}</datalist>
             </div>
             <div class="col-md-4 d-grid">
-                <button class="btn btn-primary" type="submit"><i class="bi bi-graph-up me-1"></i>生成预测</button>
+                <button class="btn btn-primary" type="submit" {% if guest_demo %}disabled aria-disabled="true"{% endif %}><i class="bi bi-graph-up me-1"></i>生成预测</button>
             </div>
         </div>
     </form>
 
     <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3 yl-fade-up yl-fade-up-d2">
+        {% if forecast_meta.source_label %}
         <div class="text-muted" style="font-size:.9rem;">
-            来源：{{ forecast_meta.source_label or '和风天气' }}
+            来源：{{ forecast_meta.source_label }}
             {% if forecast_meta.update_time_label %} · 更新时间：{{ forecast_meta.update_time_label }}{% endif %}
             {% if forecast_meta.from_cache %} · 最近一次有效数据{% endif %}
         </div>
+        {% endif %}
     </div>
 
     {% if forecast_error %}
     <div class="alert alert-warning yl-fade-up yl-fade-up-d2" role="alert">
-        <i class="bi bi-exclamation-triangle me-1"></i>7 天天气正在更新，预报暂不显示。请稍后重试。
+        <i class="bi bi-exclamation-triangle me-1"></i>{{ forecast_error }}
     </div>
     {% endif %}
 
@@ -52,7 +64,13 @@
                     <div class="my-2" style="font-size:1.8rem; color:var(--yl-orange-500);"><i class="bi bi-cloud-sun"></i></div>
                     <div style="font-size:1rem; font-weight:600;">{{ d.temp_high }}° / {{ d.temp_low }}°</div>
                     <div class="text-muted" style="font-size:.78rem;">{{ d.condition }}</div>
+                    {% if d.precip_probability is not none %}
+                    <div class="text-muted" style="font-size:.76rem;">降水概率 {{ d.precip_probability|round(0) }}%</div>
+                    {% endif %}
                     <div class="mt-2">
+                        {% if not health_risk_available %}
+                        <span class="badge risk-badge bg-secondary-subtle">未生成健康风险</span>
+                        {% else %}
                         {% set forecast_context = {
                             '限幅前评分': d.composite_pre_clip_score if d.composite_pre_clip_score is not none else '--',
                             '最终评分': d.composite_final_score if d.composite_final_score is not none else '--',
@@ -72,6 +90,7 @@
                             {% if d.risk_available %}风险 {{ d.risk_score }}{% else %}风险待计算{% endif %}
                         </span>
                         {{ metric_info('forecast_exposure_score', forecast_context) }}
+                        {% endif %}
                     </div>
                     {% if d.probability_high_visits is not none or d.predictability_score is not none %}
                     <div class="text-muted mt-2" style="font-size:.72rem; line-height:1.45;">
@@ -107,7 +126,7 @@
                         {% endif %}
                     </div>
                     {% endif %}
-                    <div class="why-tip">风险 {{ d.risk_score if d.risk_available else '待计算' }} · {{ d.condition }} · {{ d.temp_high }}°/{{ d.temp_low }}°</div>
+                    <div class="why-tip">{% if not health_risk_available %}{{ d.condition }} · {{ d.temp_high }}°/{{ d.temp_low }}°{% if d.precip_probability is not none %} · 降水概率 {{ d.precip_probability|round(0) }}%{% endif %}{% else %}风险 {{ d.risk_score if d.risk_available else '待计算' }} · {{ d.condition }} · {{ d.temp_high }}°/{{ d.temp_low }}°{% endif %}</div>
                 </div>
             </div>
         </div>
@@ -116,11 +135,12 @@
     {% else %}
     <section class="yl-section text-center yl-fade-up yl-fade-up-d2">
         <div style="font-size:2rem; color:var(--yl-orange-500);"><i class="bi bi-cloud-slash"></i></div>
-        <h4 class="mt-2" style="font-size:1.05rem;">7 天预报正在更新</h4>
-        <p class="text-muted mb-0">7 天天气正在更新。稍后重试，也可先查看今日风险和通用防护。</p>
+        <h4 class="mt-2" style="font-size:1.05rem;">{% if guest_demo %}游客可预览本页{% else %}7 天预报正在更新{% endif %}</h4>
+        <p class="text-muted mb-0">{% if guest_demo %}游客仅可浏览页面；7 天预报需注册或登录正式账号。{% else %}7 天天气正在更新。稍后重试，也可先查看今日风险和通用防护。{% endif %}</p>
     </section>
     {% endif %}
 
+    {% if health_risk_available %}
     <div class="row g-4 mb-4">
         <div class="col-lg-8">
             <section class="yl-section yl-fade-up yl-fade-up-d3">
@@ -175,8 +195,10 @@
             {% endfor %}
         </div>
     </section>
+    {% endif %}
 </div>
 
+{% if health_risk_available %}
 <script>
 document.addEventListener('DOMContentLoaded', function() {
     const ctx = document.getElementById('forecastChart');
@@ -202,4 +224,5 @@ document.addEventListener('DOMContentLoaded', function() {
     });
 });
 </script>
+{% endif %}
 {% endblock %}

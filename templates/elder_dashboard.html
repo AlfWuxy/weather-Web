@@ -1,14 +1,15 @@
 {% extends "base.html" %}
 {% from "partials/metric_info.html" import metric_info with context %}
 
-{% block title %}老人模式 · 宜老天气通{% endblock %}
+{% block title %}大字今日页 · 宜老天气通{% endblock %}
 {% block body_class %}elder-focus-page{% endblock %}
 
 {% block content %}
-{% set weather_available = weather and weather_available %}
-{% set risk_score = heat_result.risk_score if heat_result else none %}
-{% set risk_level = heat_result.risk_level if heat_result else none %}
-{% set action_items = elder_actions if elder_actions else heat_actions %}
+{% set elder_weather_available = display_weather_available if display_weather_available is defined else (weather and weather_available) %}
+{% set elder_heat_action_ready = heat_action_weather_ready if heat_action_weather_ready is defined else (elder_weather_available and heat_result) %}
+{% set risk_score = heat_result.risk_score if elder_heat_action_ready and heat_result else none %}
+{% set risk_level = heat_result.risk_level if elder_heat_action_ready and heat_result else none %}
+{% set action_items = (elder_actions if elder_actions else heat_actions) if elder_heat_action_ready else [] %}
 {% set elder_risk_context = {
     '今日分数': risk_score if risk_score is not none else '--',
     '体感热': ((heat_result.heat_index|string) ~ '°C') if heat_result and heat_result.heat_index is not none else '--',
@@ -25,21 +26,31 @@
                     先别急着出门
                 {% elif risk_level == 'medium' %}
                     出门前先准备好
-                {% elif not weather_available %}
+                {% elif not elder_heat_action_ready and elder_weather_available %}
+                    风险数据还不完整
+                {% elif not elder_weather_available %}
                     天气更新中
                 {% else %}
                     可以按平常来
                 {% endif %}
             </h1>
             <p>
-                {% if weather_available %}
+                {% if elder_heat_action_ready %}
                     {{ weather.weather_condition if weather.weather_condition else '天气未知' }},
                     当前 {{ weather.temperature|round(0) if weather.temperature is not none else '--' }}°C,
                     {{ heat_risk_label or '风险待计算' }}。
+                {% elif elder_weather_available %}
+                    当前天气可以查看，计算今日热风险所需的数据还不完整。先补水、通风并留意体感。
                 {% else %}
                     先补水、通风并避免暴晒，不舒服时及时联系家人。
                 {% endif %}
             </p>
+            {% if elder_weather_available and weather_source_label %}
+            <p class="small mb-0">
+                数据来源：{{ weather_source_label }}{% if weather_source_city %}（{{ weather_source_city }}）{% endif %}。
+                基于气温和湿度的行动参考，不代表官方预警。{% if weather_source_label == 'Open-Meteo' %}空气质量暂无可用观测。{% endif %}
+            </p>
+            {% endif %}
         </div>
 
         <div class="yl-elder-risk-card">
@@ -47,13 +58,11 @@
             <strong>
                 {% if risk_score is not none %}
                     {{ risk_score|round(0) }}
-                {% elif assessment and weather_available %}
-                    {{ assessment.risk_level }}
                 {% else %}
                     --
                 {% endif %}
             </strong>
-            <em>{% if weather_available %}{{ heat_risk_label or '暂无评估' }}{% else %}天气更新中{% endif %}</em>
+            <em>{% if elder_heat_action_ready %}{{ heat_risk_label or '暂无评估' }}{% elif elder_weather_available %}风险数据不足{% else %}天气更新中{% endif %}</em>
         </div>
     </section>
 
@@ -64,7 +73,7 @@
         </div>
 
         <div class="yl-elder-action-list">
-            {% if not weather_available %}
+            {% if not elder_heat_action_ready %}
                 <div class="yl-elder-action">
                     <i class="bi bi-cloud-slash"></i>
                     <div>

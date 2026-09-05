@@ -28,6 +28,11 @@
                 </div>
                 <div class="card-body">
                     <div class="mb-2 text-muted">地区：{{ location }}</div>
+                    {% if weather_source_label %}
+                    <div class="mb-3 text-muted small">
+                        数据来源：{{ weather_source_label }}{% if weather_source_city %}（{{ weather_source_city }}）{% endif %}。基于气温和湿度的行动参考，不代表官方预警。
+                    </div>
+                    {% endif %}
                     <div class="mb-3">
                         <span class="badge bg-light text-dark">综合评分 {{ heat_result.risk_score if heat_result and heat_result.risk_score is not none else '--' }} {{ metric_info('heat_risk_score', heat_context) }}</span>
                         <span class="badge bg-light text-dark">体感热 {{ heat_result.heat_index if heat_result and heat_result.heat_index is not none else '--' }} {{ metric_info('heat_index', {'当前气温': (weather.temperature|string ~ '°C') if weather and weather.temperature is not none else '--', '当前湿度': (weather.humidity|string ~ '%') if weather and weather.humidity is not none else '--', '计算体感热': (heat_result.heat_index|string ~ '°C') if heat_result and heat_result.heat_index is not none else '--'}) }}</span>
@@ -80,7 +85,10 @@
                 </div>
                 <div class="card-body">
                     <div class="mb-2 text-muted">地区：{{ location }}</div>
-                    <p class="mb-0">风险等级暂不显示。你可以先查看通用防护和附近避暑资源。</p>
+                    {% if weather_source_label %}
+                    <div class="mb-2 text-muted small">最近数据来源：{{ weather_source_label }}{% if weather_source_city %}（{{ weather_source_city }}）{% endif %}</div>
+                    {% endif %}
+                    <p class="mb-0">风险等级暂不显示。你可以先查看通用防护和已录入的避暑资源。</p>
                 </div>
             </div>
             {% endif %}
@@ -88,10 +96,19 @@
         <div class="col-lg-5">
             <div class="card shadow-sm mb-3">
                 <div class="card-body">
-                    <h6 class="mb-2"><i class="bi bi-clipboard-check"></i> 去行动打卡</h6>
-                    <p class="text-muted small">使用短码完成今日确认或求助。</p>
+                    <h6 class="mb-2"><i class="bi bi-clipboard-check"></i> 行动短码入口</h6>
+                    <p class="text-muted small">已收到家属提供的短码时，可用它完成今日确认或记录求助。</p>
                     <a class="btn btn-primary w-100" href="{{ url_for('public.elder_entry') }}">
-                        进入行动入口
+                        输入行动短码
+                    </a>
+                </div>
+            </div>
+            <div class="card shadow-sm mb-3">
+                <div class="card-body">
+                    <h6 class="mb-2"><i class="bi bi-snow2"></i> 已录入的避暑资源</h6>
+                    <p class="text-muted small">查看系统中已经登记的纳凉点，开放情况请以现场或资源方最新说明为准。</p>
+                    <a class="btn btn-outline-primary w-100" href="{{ url_for('public.cooling_resources', location=location) }}">
+                        查看已录入的避暑资源
                     </a>
                 </div>
             </div>

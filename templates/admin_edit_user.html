@@ -58,13 +58,24 @@
                                 </select>
                             </div>
                             <div class="col-md-4 mb-3">
-                                <label for="community" class="form-label">所属社区</label>
+                                <label for="community" class="form-label">定位/所属社区</label>
                                 <select class="form-select" id="community" name="community">
                                     <option value="">请选择</option>
                                     {% for comm in communities %}
                                         <option value="{{ comm.name }}" {% if user.community == comm.name %}selected{% endif %}>{{ comm.name }}</option>
                                     {% endfor %}
                                 </select>
+                                <small class="text-muted">用户可自改的定位字段</small>
+                            </div>
+                            <div class="col-md-4 mb-3">
+                                <label for="authorized_community" class="form-label">管辖社区（ACL）</label>
+                                <select class="form-select" id="authorized_community" name="authorized_community">
+                                    <option value="">未指定</option>
+                                    {% for comm in communities %}
+                                        <option value="{{ comm.name }}" {% if user.authorized_community == comm.name %}selected{% endif %}>{{ comm.name }}</option>
+                                    {% endfor %}
+                                </select>
+                                <small class="text-muted">仅管理员可改；社区角色看板按此授权</small>
                             </div>
                         </div>
 

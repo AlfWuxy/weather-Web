@@ -10,12 +10,9 @@
 {% elif current_user.role == 'community' %}
     {% set workspace_url = url_for('user.community_dashboard') %}
     {% set workspace_label = '进入社区工作台' %}
-{% elif current_user.role in ['caregiver', 'admin'] %}
-    {% set workspace_url = url_for('user.caregiver_dashboard') %}
-    {% set workspace_label = '进入照护工作台' %}
 {% else %}
     {% set workspace_url = url_for('user.pair_management') %}
-    {% set workspace_label = '进入照护工作台' %}
+    {% set workspace_label = '进入家庭照护' %}
 {% endif %}
 {% if current_user.is_authenticated and current_user.role in ['community', 'admin'] %}
     {% set community_url = url_for('user.community_dashboard') %}
@@ -24,15 +21,24 @@
     {% set community_url = url_for('user.community_risk') %}
     {% set community_cta = '查看社区风险' %}
 {% else %}
-    {% set community_url = url_for('public.login', next=url_for('user.community_dashboard')) %}
-    {% set community_cta = '社区人员登录' %}
+    {% set community_url = url_for('public.login', next=url_for('user.community_risk')) %}
+    {% set community_cta = '登录后查看社区风险' %}
 {% endif %}
 {% if not current_user.is_authenticated or current_user.role == 'guest' %}
     {% set family_role_url = url_for('public.register') %}
-{% elif current_user.role in ['caregiver', 'admin'] %}
-    {% set family_role_url = url_for('user.caregiver_dashboard') %}
+    {% set family_role_title = '家属 / 子女' %}
+    {% set family_role_description = '管理家人所在地、查看今日风险、复制提醒话术。' %}
+    {% set family_role_cta = '进入照护路径' %}
+{% elif current_user.role == 'community' %}
+    {% set family_role_url = url_for('public.role_entry') %}
+    {% set family_role_title = '家庭照护账号' %}
+    {% set family_role_description = '当前是社区账号。家庭照护需使用家庭账号登录。' %}
+    {% set family_role_cta = '查看入口说明' %}
 {% else %}
     {% set family_role_url = url_for('user.pair_management') %}
+    {% set family_role_title = '家属 / 子女' %}
+    {% set family_role_description = '管理家人所在地、查看今日风险、复制提醒话术。' %}
+    {% set family_role_cta = '进入照护路径' %}
 {% endif %}
 
 <div class="yl-home-shell">
@@ -78,10 +84,10 @@
 
     <section class="yl-home-story">
         {% for item in [
-            ('01', '识别风险', '结合官方预警和实时天气，判断今天是否需要加强防护。', 'weather-action-water-phone.jpg'),
+            ('01', '识别风险', '结合官方预警和最新可用天气，判断今天是否需要加强防护。', 'weather-action-water-phone.jpg'),
             ('02', '发出提醒', '生成可以直接转发的话，清楚告诉家人现在该做什么。', 'family-care-video-call.jpg'),
             ('03', '记录行动', '记录是否已提醒、是否已做到，方便家人继续跟进。', 'weather-action-water-phone.jpg'),
-            ('04', '找到避暑点', '家里降温条件不足时，查看附近避暑点和社区支持。', 'community-cooling-room.jpg')
+            ('04', '查找避暑资源', '家里降温条件不足时，按所在地查询已录入的避暑资源。', 'community-cooling-room.jpg')
         ] %}
         <article class="yl-story-row yl-fade-up {% if loop.index is odd %}is-reversed{% endif %}" data-step="{{ item[0] }}">
             <div class="yl-story-copy">
@@ -104,15 +110,21 @@
     <div class="yl-role-strip">
         <a href="{{ family_role_url }}" class="yl-role-card variant-family" data-role-card="family">
             <div class="yl-role-icon"><i class="bi bi-people"></i></div>
-            <h3>家属 / 子女</h3>
-            <p>管理家人所在地、查看今日风险、复制提醒话术。</p>
-            <span class="role-cta">进入照护路径 <i class="bi bi-arrow-right"></i></span>
+            <h3>{{ family_role_title }}</h3>
+            <p>{{ family_role_description }}</p>
+            <span class="role-cta">{{ family_role_cta }} <i class="bi bi-arrow-right"></i></span>
         </a>
-        <a href="{{ url_for('public.guest_login', next=url_for('user.elder_dashboard')) if not current_user.is_authenticated else url_for('user.elder_dashboard') }}" class="yl-role-card variant-elder">
+        <a href="{% if feature_flags.elder_mode %}{{ url_for('public.guest_login', next=url_for('user.elder_dashboard')) if not current_user.is_authenticated else url_for('user.elder_dashboard') }}{% else %}{{ url_for('public.elder_entry') }}{% endif %}" class="yl-role-card variant-elder">
             <div class="yl-role-icon"><i class="bi bi-eyeglasses"></i></div>
-            <h3>老人自用</h3>
-            <p>大字号、高对比，只看今天风险和该做的事。</p>
-            <span class="role-cta">打开极简模式 <i class="bi bi-arrow-right"></i></span>
+            {% if feature_flags.elder_mode %}
+                <h3>老人自用 · 大字今日页</h3>
+                <p>大字号、高对比，只看今天风险和该做的事。收到家属提供的行动码时，请使用行动短码入口。</p>
+                <span class="role-cta">打开大字今日页 <i class="bi bi-arrow-right"></i></span>
+            {% else %}
+                <h3>老人行动短码</h3>
+                <p>输入家属提供的行动短码，完成今日确认或记录求助。</p>
+                <span class="role-cta">输入行动短码 <i class="bi bi-arrow-right"></i></span>
+            {% endif %}
         </a>
         <a href="{{ community_url }}" class="yl-role-card variant-doctor" data-role-card="community">
             <div class="yl-role-icon"><i class="bi bi-building"></i></div>

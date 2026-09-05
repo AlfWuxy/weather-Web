@@ -2,7 +2,7 @@
 {% from "partials/metric_info.html" import metric_info with context %}
 {% set needs_chartjs = true %}
 
-{% block title %}照护详情 - 天气健康风险预测系统{% endblock %}
+{% block title %}照护详情 · 宜老天气通{% endblock %}
 
 {% block content %}
 <div class="container my-4">
@@ -13,7 +13,7 @@
                 <p class="text-muted mb-0">仅记录短码与行动状态，不含个人身份信息。</p>
             </div>
             <div class="d-flex gap-2">
-                <a class="btn btn-outline-secondary" href="{{ url_for('user.caregiver_dashboard') }}">
+                <a class="btn btn-outline-secondary" href="{{ url_for('user.pair_management') }}">
                     <i class="bi bi-arrow-left"></i> 返回列表
                 </a>
                 {% if wechat_template_url %}

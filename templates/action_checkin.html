@@ -2,14 +2,18 @@
 {% from "partials/metric_info.html" import metric_info with context %}
 {% set needs_chartjs = true %}
 
-{% block title %}行动打卡 - 天气健康风险预测系统{% endblock %}
+{% block title %}行动短码 · 宜老天气通{% endblock %}
 
 {% block content %}
 <div class="container my-4">
     <div class="row mb-3">
         <div class="col-12">
-            <h2><i class="bi bi-clipboard-check"></i> 行动型热健康预警</h2>
-            <p class="text-muted mb-0">输入短码即可完成今日确认或求助（不含医疗诊断/治疗建议）。</p>
+            <h1 class="h2"><i class="bi bi-clipboard-check"></i> 行动短码</h1>
+            <p class="text-muted mb-0">输入家属提供的短码，可记录今日确认或求助状态。本页不提供医疗诊断或治疗建议。</p>
+            <p class="mt-2 mb-0">
+                只想用大字查看今天的天气和行动？
+                <a href="{{ url_for('user.elder_dashboard') if current_user.is_authenticated else url_for('public.guest_login', next=url_for('user.elder_dashboard')) }}">打开大字今日页</a>。
+            </p>
         </div>
     </div>
 
@@ -190,7 +194,7 @@
                                 <button class="btn btn-danger btn-lg" type="submit">
                                     <i class="bi bi-life-preserver"></i> 我需要帮助
                                 </button>
-                                <span class="text-muted small">仅用于触发协助流程，不包含医疗处置。</span>
+                                <span class="text-muted small">提交后只记录求助状态，不代表家属、社区或急救人员已收到通知；情况紧急时请同时直接联系他们。</span>
                             </div>
                         </form>
                     </div>
@@ -288,8 +292,8 @@
 
                 <div class="card shadow-sm" id="cooling-resources">
                     <div class="card-header bg-light d-flex align-items-center justify-content-between">
-                        <h6 class="mb-0"><i class="bi bi-sunrise"></i> 附近避暑点</h6>
-                        <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('public.cooling_resources') }}">全部资源</a>
+                        <h6 class="mb-0"><i class="bi bi-sunrise"></i> 本地已录入避暑点</h6>
+                        <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('public.cooling_resources') }}">查看资源</a>
                     </div>
                     <div class="card-body">
                         {% if resources and resources|length > 0 %}
@@ -313,7 +317,7 @@
                                 {% endfor %}
                             </ul>
                         {% else %}
-                            <div class="text-muted">暂无避暑点数据，可由社区管理员维护。</div>
+                            <div class="text-muted">该所在地暂无已录入避暑点，可由社区管理员维护。</div>
                         {% endif %}
                     </div>
                 </div>
@@ -328,7 +332,23 @@ document.addEventListener('DOMContentLoaded', function () {
     const phoneInput = document.getElementById('localContactPhone');
     const saveBtn = document.getElementById('saveLocalContact');
     if (nameInput && phoneInput && saveBtn) {
-        const stored = JSON.parse(localStorage.getItem('heat_action_contact') || '{}');
+        const contactStorageKey = 'heat_action_contact';
+        let stored = {};
+        try {
+            const storedContact = JSON.parse(localStorage.getItem(contactStorageKey) || '{}');
+            const hasValidShape = storedContact
+                && typeof storedContact === 'object'
+                && !Array.isArray(storedContact)
+                && (storedContact.name === undefined || typeof storedContact.name === 'string')
+                && (storedContact.phone === undefined || typeof storedContact.phone === 'string');
+            if (hasValidShape) {
+                stored = storedContact;
+            } else {
+                localStorage.removeItem(contactStorageKey);
+            }
+        } catch (error) {
+            localStorage.removeItem(contactStorageKey);
+        }
         if (stored.name) nameInput.value = stored.name;
         if (stored.phone) phoneInput.value = stored.phone;
         saveBtn.addEventListener('click', function () {
@@ -336,7 +356,7 @@ document.addEventListener('DOMContentLoaded', function () {
                 name: nameInput.value || '',
                 phone: phoneInput.value || ''
             };
-            localStorage.setItem('heat_action_contact', JSON.stringify(payload));
+            localStorage.setItem(contactStorageKey, JSON.stringify(payload));
             saveBtn.classList.add('btn-success');
             saveBtn.textContent = '已保存';
             setTimeout(() => {

@@ -2,6 +2,8 @@
 """指标解释目录、页面入口和交互资源的回归测试。"""
 from pathlib import Path
 
+from core.time_utils import utcnow
+
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -50,6 +52,11 @@ def test_transparency_page_renders_formula_index(client):
     assert 'Score = 100 × [0.50×HI_norm + 0.30×Night_norm + 0.20×Streak_norm]' in body
     assert 'id="community-risk-index"' in body
     assert 'id="sir"' in body
+    assert 'id="gis-native-grid"' in body
+    assert 'id="gis-lst-mean"' in body
+    assert 'id="gis-validation"' in body
+    assert 'LST_C = Raw×0.02−273.15；Mean = ΣLST_C / n_Q3' in body
+    assert 'Publish = 1{validation_pass = true ∧ status = pass ∧ hard_failures = 0}' in body
     assert '缺失值处理' in body
     assert '已知局限' in body
     assert 'Open-Meteo' in body
@@ -63,6 +70,7 @@ def test_public_risk_exposes_current_inputs_in_info_button(client, monkeypatch):
         'temperature_min': 28.0,
         'humidity': 72.0,
         'data_source': 'QWeather',
+        'observed_at': utcnow().isoformat(),
         'is_mock': False,
     }
     monkeypatch.setattr(
@@ -71,7 +79,7 @@ def test_public_risk_exposes_current_inputs_in_info_button(client, monkeypatch):
     )
     monkeypatch.setattr(
         'services.public_service.get_consecutive_hot_days',
-        lambda _location, today_max=None: 3,
+        lambda _location, today_max=None, weather_data=None: 3,
     )
 
     response = client.get('/risk?location=都昌')
@@ -110,7 +118,7 @@ def test_public_risk_fails_closed_for_mock_weather(client, monkeypatch):
     assert '当前风险：低风险' not in body
     assert '综合评分 0.0' not in body
     assert '风险等级暂不显示' in body
-    assert '附近避暑资源' in body
+    assert '查看已录入的避暑资源' in body
 
 
 def test_public_risk_fails_closed_when_required_weather_field_is_missing(client, monkeypatch):

@@ -24,7 +24,7 @@
                         <div class="row">
                             <div class="col-md-6 mb-3">
                                 <label for="username" class="form-label">用户名</label>
-                                <input type="text" class="form-control" id="username" value="{{ current_user.username }}" readonly>
+                                <input type="text" class="form-control" id="username" name="username" value="{{ current_user.username }}" readonly>
                                 <small class="text-muted">用户名不可更改</small>
                             </div>
                             <div class="col-md-6 mb-3">
@@ -109,20 +109,26 @@
 
                         <h6 class="mb-3">消息提醒（子女端）</h6>
                         <div class="mb-3">
-                            <label for="wxpusher_uid" class="form-label">WxPusher 接收码</label>
+                            <label for="wxpusher_uid" class="form-label">微信提醒接收码（选填）</label>
                             <input type="text" class="form-control" id="wxpusher_uid" name="wxpusher_uid" value="{{ current_user.wxpusher_uid or '' }}" placeholder="例如：UID_xxxxx">
-                            <small class="text-muted">关注 WxPusher 后，将收到的 UID 粘贴到这里。</small>
+                            <small class="text-muted">粘贴试点微信提醒通道提供的 UID 格式接收码。消息通道需由管理员配置；通道未配置时不会自动推送，仍可复制话术手动发送。</small>
                         </div>
                         <div class="mb-3 form-check">
                             <input class="form-check-input" type="checkbox" id="push_enabled" name="push_enabled" {% if current_user.push_enabled %}checked{% endif %}>
                             <label class="form-check-label" for="push_enabled">
-                                开启自动推送（高温/寒潮预警触发时）
+                                通道可用时开启自动推送（高温/寒潮预警触发时）
                             </label>
                         </div>
 
                         <div class="d-grid gap-2 mt-4">
                             <button type="submit" class="btn btn-primary">保存更改</button>
-                            <a href="{{ url_for('admin.admin_dashboard') if current_user.role == 'admin' else url_for('user.user_dashboard') }}" class="btn btn-outline-secondary">取消</a>
+                            {% if current_user.role == 'admin' %}
+                                <a href="{{ url_for('admin.admin_dashboard') }}" class="btn btn-outline-secondary">取消</a>
+                            {% elif current_user.role == 'community' %}
+                                <a href="{{ url_for('user.community_dashboard') }}" class="btn btn-outline-secondary">取消</a>
+                            {% else %}
+                                <a href="{{ url_for('user.pair_management') }}" class="btn btn-outline-secondary">取消</a>
+                            {% endif %}
                         </div>
                     </form>
                 </div>
@@ -142,12 +148,12 @@
                         </div>
                         <div class="mb-3">
                             <label for="new_password" class="form-label">新密码</label>
-                            <input type="password" class="form-control" id="new_password" name="new_password">
-                            <small class="text-muted">留空表示不修改密码</small>
+                            <input type="password" class="form-control" id="new_password" name="new_password" minlength="8" maxlength="100" required autocomplete="new-password">
+                            <small class="text-muted">至少 8 位。修改成功后需要重新登录。</small>
                         </div>
                         <div class="mb-3">
                             <label for="confirm_password" class="form-label">确认新密码</label>
-                            <input type="password" class="form-control" id="confirm_password">
+                            <input type="password" class="form-control" id="confirm_password" name="confirm_password" minlength="8" maxlength="100" required autocomplete="new-password">
                         </div>
                         <button type="submit" class="btn btn-warning">修改密码</button>
                     </form>
@@ -251,6 +257,3 @@ if (passwordForm) {
 }
 </script>
 {% endblock %}
-
-
-
