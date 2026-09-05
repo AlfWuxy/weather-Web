@@ -17,6 +17,7 @@ from core.constants import CHRONIC_OPTIONS, DEFAULT_CITY_LABEL, GUEST_ID_PREFIX,
 from core.extensions import db, init_extensions, login_manager
 from core.hooks import register_hooks
 from core.db_models import (
+    ActionEvent,
     AlertDelivery,
     AuditLog,
     ApiToken,

@@ -333,6 +333,7 @@ class Pair(db.Model):
     short_code_hash = db.Column(db.String(64))
     short_code_expires_at = db.Column(db.DateTime)
     status = db.Column(db.String(20), default='active')  # active/inactive
+    is_test = db.Column(db.Boolean, default=False, nullable=False, server_default='0')
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
     last_active_at = db.Column(db.DateTime)
 
@@ -384,7 +385,11 @@ class DailyStatus(db.Model):
     status_date = db.Column(db.Date, nullable=False)
     community_code = db.Column(db.String(100), nullable=False)
     risk_level = db.Column(db.String(20))  # 低风险/中风险/高风险/极高
-    confirmed_at = db.Column(db.DateTime)
+    confirmed_at = db.Column(db.DateTime)  # 语义 = self_reported_at，仅 self_reported 时写入
+    understood_at = db.Column(db.DateTime)
+    verified_at = db.Column(db.DateTime)
+    help_acknowledged_at = db.Column(db.DateTime)
+    closed_at = db.Column(db.DateTime)
     help_flag = db.Column(db.Boolean, default=False)
     actions_done_count = db.Column(db.Integer, default=0)
     relay_stage = db.Column(db.String(20), default='none')
@@ -408,7 +413,12 @@ class CommunityDaily(db.Model):
     community_code = db.Column(db.String(100), nullable=False)
     date = db.Column(db.Date, nullable=False)
     total_people = db.Column(db.Integer, default=0)
-    confirm_rate = db.Column(db.Float, default=0)
+    confirm_rate = db.Column(db.Float, default=0)  # deprecated = self_report_rate
+    understood_rate = db.Column(db.Float, default=0)
+    self_report_rate = db.Column(db.Float, default=0)
+    verified_rate = db.Column(db.Float, default=0)
+    open_help_count = db.Column(db.Integer, default=0)
+    unknown_count = db.Column(db.Integer, default=0)
     escalation_rate = db.Column(db.Float, default=0)
     risk_distribution = db.Column(db.Text)
     outreach_summary = db.Column(db.Text)
@@ -477,6 +487,27 @@ class ApiToken(db.Model):
     __table_args__ = (
         db.Index('ix_api_tokens_user_id', 'user_id'),
         db.Index('ix_api_tokens_token_hash', 'token_hash'),
+    )
+
+
+class ActionEvent(db.Model):
+    """老人当日行动链（append-only，无 update/delete 路由）。"""
+    __tablename__ = 'action_events'
+    id = db.Column(db.Integer, primary_key=True)
+    pair_id = db.Column(db.Integer, db.ForeignKey('pairs.id'), nullable=False, index=True)
+    local_date = db.Column(db.Date, nullable=False, index=True)
+    stage = db.Column(db.String(32), nullable=False, index=True)
+    actor_role = db.Column(db.String(16), nullable=False)
+    channel = db.Column(db.String(24), nullable=False)
+    script_version = db.Column(db.String(16))
+    action_id = db.Column(db.String(32))
+    alert_id = db.Column(db.Integer, db.ForeignKey('weather_alerts.id'))
+    delivery_id = db.Column(db.Integer, db.ForeignKey('alert_deliveries.id'))
+    meta_json = db.Column(db.Text)
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), index=True)
+
+    __table_args__ = (
+        db.Index('ix_action_events_pair_date_stage', 'pair_id', 'local_date', 'stage'),
     )
 
 
