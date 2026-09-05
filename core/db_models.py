@@ -30,7 +30,9 @@ class User(UserMixin, db.Model):
     # 个人健康信息
     age = db.Column(db.Integer)
     gender = db.Column(db.String(10))
-    community = db.Column(db.String(100))  # 所属社区
+    community = db.Column(db.String(100))  # 所属社区 / 定位（可自改）
+    # 运营 ACL：社区角色管辖村，仅 admin 可写；缺失时 fail closed，由迁移或管理员补齐
+    authorized_community = db.Column(db.String(100))
     has_chronic_disease = db.Column(db.Boolean, default=False)
     chronic_diseases = db.Column(db.Text)  # JSON格式存储多个慢性病
 
@@ -43,6 +45,15 @@ class User(UserMixin, db.Model):
 
     def check_password(self, password):
         return check_password_hash(self.password_hash, password)
+
+    def get_id(self):
+        """会话身份含密码戳：改密后旧 session/remember 自动失效。
+
+        格式：{user_id}:{password_hash 的短摘要}。无需额外 DB 列。
+        """
+        import hashlib
+        stamp = hashlib.sha256((self.password_hash or '').encode('utf-8')).hexdigest()[:16]
+        return f'{self.id}:{stamp}'
 
 
 class MedicalRecord(db.Model):
@@ -84,6 +95,11 @@ class WeatherData(db.Model):
     wind_speed = db.Column(db.Float)  # 风速
     pm25 = db.Column(db.Float)  # PM2.5
     aqi = db.Column(db.Integer)  # 空气质量指数
+    data_source = db.Column(db.String(32), nullable=True)  # 旧行保持 NULL，不伪造来源
+    observed_at = db.Column(db.DateTime(timezone=True), nullable=True)  # 上游观测时刻（UTC）
+    air_observed_at = db.Column(db.DateTime(timezone=True), nullable=True)  # 空气质量独立观测时刻（UTC）
+    quality_version = db.Column(db.Integer, nullable=False, default=0, server_default='0')
+    air_quality_available = db.Column(db.Boolean, nullable=False, default=False, server_default='0')
     is_extreme = db.Column(db.Boolean, default=False)  # 是否极端天气
     extreme_type = db.Column(db.String(50))  # 极端天气类型
 
@@ -142,7 +158,7 @@ class HealthRiskAssessment(db.Model):
 
 
 class WeatherAlert(db.Model):
-    """天气预警记录"""
+    """天气提醒记录；只有带来源与有效期的记录才能标为官方预警。"""
     __tablename__ = 'weather_alerts'
     id = db.Column(db.Integer, primary_key=True)
     alert_date = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
@@ -150,6 +166,10 @@ class WeatherAlert(db.Model):
     alert_type = db.Column(db.String(50))  # 预警类型
     alert_level = db.Column(db.String(20))  # 预警等级
     description = db.Column(db.Text)
+    source = db.Column(db.String(50), nullable=True)  # QWeather / AppThreshold / Legacy
+    is_official = db.Column(db.Boolean, nullable=False, default=False, server_default='0')
+    starts_at = db.Column(db.DateTime(timezone=True), nullable=True)
+    ends_at = db.Column(db.DateTime(timezone=True), nullable=True)
     affected_communities = db.Column(db.Text)  # JSON格式：受影响社区
     disease_correlation = db.Column(db.Text)  # JSON格式：疾病相关性分析
 
