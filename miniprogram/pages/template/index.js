@@ -1,4 +1,20 @@
-const { api } = require('../../utils/request');
+const { api, isUnauthorizedError } = require('../../utils/request');
+
+function parsePairId(value) {
+  const text = String(value || '').trim();
+  if (!/^[1-9]\d*$/.test(text)) return null;
+  const pairId = Number(text);
+  return Number.isSafeInteger(pairId) ? pairId : null;
+}
+
+function showInvalidPairAndReturn() {
+  wx.showModal({
+    title: '无法打开',
+    content: '监测对象不存在或链接已失效，将返回监测对象列表。',
+    showCancel: false,
+    complete: () => wx.reLaunch({ url: '/pages/elders/index' }),
+  });
+}
 
 function buildMessage({ trigger, elderName, relation, locationText, tmax, tmin }) {
   let address = '你';
@@ -7,7 +23,7 @@ function buildMessage({ trigger, elderName, relation, locationText, tmax, tmin }
   else if (elderName) address = elderName;
 
   if (trigger === 'cold') {
-    let line1 = `【寒潮提醒】${address}，我看到你那边今天可能比较冷`;
+    let line1 = `【低温提醒】${address}，我看到你那边今天可能比较冷`;
     if (tmin) line1 += `（最低约 ${tmin}°C）`;
     line1 += '。';
     return [
@@ -52,12 +68,14 @@ Page({
     return (wx.getStorageSync('api_token') || '').trim();
   },
 
-  async onLoad(options) {
-    const pairId = options.pair_id ? parseInt(options.pair_id, 10) : null;
+  async onLoad(options = {}) {
+    const pairId = parsePairId(options.pair_id);
     this.setData({ pairId });
-    if (pairId) {
-      await this.loadTemplate(pairId);
+    if (!pairId) {
+      showInvalidPairAndReturn();
+      return;
     }
+    await this.loadTemplate(pairId);
   },
 
   async loadTemplate(pairId) {
@@ -70,7 +88,10 @@ Page({
     try {
       const elders = await api({ method: 'GET', path: '/mp/api/v1/elders', token });
       const item = (elders || []).find((x) => x.pair_id === pairId);
-      if (!item) throw new Error('not_found');
+      if (!item) {
+        showInvalidPairAndReturn();
+        return;
+      }
       const elderName = item.member && item.member.name ? item.member.name : '';
       const relation = item.member && item.member.relation ? item.member.relation : '';
       const locationText = item.location_query || item.community_code || '';
@@ -82,6 +103,7 @@ Page({
       const message = buildMessage({ trigger, elderName, relation, locationText, tmax, tmin });
       this.setData({ message, locationText, elderName, relation, tmax, tmin, trigger });
     } catch (e) {
+      if (isUnauthorizedError(e)) return;
       wx.showToast({ title: '加载失败', icon: 'none' });
     } finally {
       this.setData({ loading: false });
@@ -115,6 +137,7 @@ Page({
         }).catch(() => {});
       }
     } catch (e) {
+      if (isUnauthorizedError(e)) return;
       wx.showToast({ title: '复制失败', icon: 'none' });
     }
   },

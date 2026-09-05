@@ -13,6 +13,8 @@ Endpoints:
 from __future__ import annotations
 
 import json
+import math
+import re
 from functools import wraps
 
 from flask import Blueprint, current_app, g, jsonify, request
@@ -23,8 +25,7 @@ from core.extensions import db, limiter
 from core.security import hash_identifier
 from core.time_utils import utcnow
 from core.usage import log_usage_event, verify_api_token
-from core.weather import get_weather_with_cache, is_qweather_online_weather
-from services.api_service import PILOT_EVENT_TYPES
+from core.weather import get_weather_with_cache, is_qweather_production_ready
 from services.location_resolver import resolve_location
 from services.warning_service import get_qweather_warnings
 from services.user._common import _create_pair_record
@@ -33,6 +34,23 @@ from utils.validators import sanitize_input
 
 bp = Blueprint("mp_api", __name__, url_prefix="/mp/api/v1")
 MP_EVENT_META_MAX_CHARS = 2048
+MP_CHRONIC_DISEASES_MAX_ITEMS = 20
+MP_CLIENT_EVENT_TYPES = frozenset(
+    {
+        "template_view",
+        "template_copy",
+        "feedback_submitted",
+    }
+)
+_GENDER_ALIASES = {
+    "男": "男性",
+    "男性": "男性",
+    "女": "女性",
+    "女性": "女性",
+    "其他": "其他",
+    "未知": "未知",
+}
+_MISSING = object()
 
 
 def _bearer_token() -> str:
@@ -71,7 +89,7 @@ def require_api_token(fn):
 
 
 def _pair_for_user(pair_id: int):
-    q = Pair.query.filter_by(id=pair_id)
+    q = Pair.query.filter_by(id=pair_id, status="active")
     # admin token is not supported in pilot; restrict to owner
     q = q.filter_by(caregiver_id=g.api_user_id)
     return q.first()
@@ -88,6 +106,85 @@ def _parse_strict_bool(value) -> bool:
         if normalized == "false":
             return False
     raise ValueError("push_enabled must be a boolean")
+
+
+def _parse_optional_age(value):
+    """严格解析可选年龄，拒绝布尔值、小数和越界值。"""
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return None
+    if isinstance(value, bool):
+        raise ValueError("invalid_age")
+    if isinstance(value, int):
+        age = value
+    elif isinstance(value, str) and re.fullmatch(r"\d{1,3}", value.strip()):
+        age = int(value.strip())
+    else:
+        raise ValueError("invalid_age")
+    if age < 1 or age > 150:
+        raise ValueError("invalid_age")
+    return age
+
+
+def _parse_optional_gender(value):
+    """严格解析可选性别，并归一化为数据库现有枚举。"""
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return None
+    if not isinstance(value, str):
+        raise ValueError("invalid_gender")
+    normalized = _GENDER_ALIASES.get(value.strip())
+    if not normalized:
+        raise ValueError("invalid_gender")
+    return normalized
+
+
+def _parse_chronic_diseases(value):
+    """严格解析慢病类别列表，避免错误类型被静默当成清空。"""
+    if value is None:
+        return []
+    if not isinstance(value, list) or len(value) > MP_CHRONIC_DISEASES_MAX_ITEMS:
+        raise ValueError("invalid_chronic_diseases")
+
+    result = []
+    seen = set()
+    for item in value:
+        if not isinstance(item, str):
+            raise ValueError("invalid_chronic_diseases")
+        raw = item.strip()
+        if not raw or len(raw) > 50:
+            raise ValueError("invalid_chronic_diseases")
+        cleaned = sanitize_input(raw, max_length=50)
+        if not cleaned:
+            raise ValueError("invalid_chronic_diseases")
+        if cleaned not in seen:
+            seen.add(cleaned)
+            result.append(cleaned)
+    return result
+
+
+def _parse_required_location(value):
+    """严格解析必填地点，拒绝空字符串和非文本值。"""
+    if not isinstance(value, str):
+        raise ValueError("invalid_location_query")
+    location = sanitize_input(value, max_length=200)
+    location = location.strip() if isinstance(location, str) else ""
+    if not location:
+        raise ValueError("invalid_location_query")
+    return location
+
+
+def _parse_positive_id(value, error_code):
+    """严格解析客户端提交的正整数关联 ID。"""
+    if isinstance(value, bool):
+        raise ValueError(error_code)
+    if isinstance(value, int):
+        parsed = value
+    elif isinstance(value, str) and re.fullmatch(r"[1-9]\d*", value.strip()):
+        parsed = int(value.strip())
+    else:
+        raise ValueError(error_code)
+    if parsed <= 0:
+        raise ValueError(error_code)
+    return parsed
 
 
 @bp.route("/me", endpoint="me")
@@ -189,9 +286,11 @@ def elders_list():
             tmax_value = None
             tmin_value = None
         weather_available = (
-            is_qweather_online_weather(weather_data)
+            is_qweather_production_ready(weather_data)
             and tmax_value is not None
             and tmin_value is not None
+            and math.isfinite(tmax_value)
+            and math.isfinite(tmin_value)
         )
         if weather_available:
             if tmax_value >= 35:
@@ -223,6 +322,8 @@ def elders_list():
                     "temperature_min": tmin_value if weather_available else None,
                     "weather_available": weather_available,
                     "is_mock": bool(weather_data.get("is_mock")),
+                    "location": weather_data.get("location"),
+                    "observed_at": weather_data.get("observed_at") if weather_available else None,
                 },
             }
         )
@@ -234,23 +335,24 @@ def elders_list():
 @limiter.limit(lambda: current_app.config.get("RATE_LIMIT_MP_WRITE", "30 per minute"), key_func=_mp_rate_limit_key)
 @require_api_token
 def elders_create():
-    payload = request.get_json(silent=True) or {}
+    payload = request.get_json(silent=True)
+    if payload is None:
+        payload = {}
+    if not isinstance(payload, dict):
+        return jsonify({"success": False, "error": "invalid_payload"}), 400
+
     name = sanitize_input(payload.get("name"), max_length=50) or ""
     relation = sanitize_input(payload.get("relation"), max_length=20) or ""
-    location_query = sanitize_input(payload.get("location_query"), max_length=200) or ""
-    if not name or not location_query:
+    if not name:
         return jsonify({"success": False, "error": "missing_fields"}), 400
 
-    age = payload.get("age")
     try:
-        age = int(age) if age is not None and str(age).strip() else None
-    except Exception:
-        age = None
-    gender = sanitize_input(payload.get("gender"), max_length=10)
-    chronic = payload.get("chronic_diseases")
-    chronic = chronic if isinstance(chronic, list) else []
-    chronic = [sanitize_input(item, max_length=50) for item in chronic if item]
-    chronic = [c for c in chronic if c]
+        location_query = _parse_required_location(payload.get("location_query"))
+        age = _parse_optional_age(payload.get("age"))
+        gender = _parse_optional_gender(payload.get("gender"))
+        chronic = _parse_chronic_diseases(payload.get("chronic_diseases"))
+    except ValueError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
 
     try:
         member = FamilyMember(
@@ -308,20 +410,45 @@ def elders_patch(pair_id: int):
     if not pair:
         return jsonify({"success": False, "error": "not_found"}), 404
 
-    payload = request.get_json(silent=True) or {}
-    location_query = sanitize_input(payload.get("location_query"), max_length=200)
-    if location_query is not None:
-        pair.location_query = location_query
-        if location_query:
-            pair.community_code = location_query[:100]
+    payload = request.get_json(silent=True)
+    if payload is None:
+        payload = {}
+    if not isinstance(payload, dict):
+        return jsonify({"success": False, "error": "invalid_payload"}), 400
 
-    chronic = payload.get("chronic_diseases")
-    if chronic is not None and pair.member_id:
-        chronic = chronic if isinstance(chronic, list) else []
-        chronic = [sanitize_input(item, max_length=50) for item in chronic if item]
-        chronic = [c for c in chronic if c]
+    location_query = _MISSING
+    age = _MISSING
+    gender = _MISSING
+    chronic = _MISSING
+    try:
+        if "location_query" in payload:
+            location_query = _parse_required_location(payload.get("location_query"))
+        if "age" in payload:
+            age = _parse_optional_age(payload.get("age"))
+        if "gender" in payload:
+            gender = _parse_optional_gender(payload.get("gender"))
+        if "chronic_diseases" in payload:
+            chronic = _parse_chronic_diseases(payload.get("chronic_diseases"))
+    except ValueError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
+
+    member = None
+    if age is not _MISSING or gender is not _MISSING or chronic is not _MISSING:
         member = FamilyMember.query.filter_by(id=pair.member_id, user_id=g.api_user_id).first()
-        if member:
+        if not member:
+            return jsonify({"success": False, "error": "member_not_found"}), 404
+
+    # 所有字段校验完成后才写入 ORM，避免后续失败留下部分更新。
+    if location_query is not _MISSING:
+        pair.location_query = location_query
+        pair.community_code = location_query[:100]
+
+    if member:
+        if age is not _MISSING:
+            member.age = age
+        if gender is not _MISSING:
+            member.gender = gender
+        if chronic is not _MISSING:
             member.chronic_diseases = json.dumps(chronic, ensure_ascii=False) if chronic else None
 
     db.session.commit()
@@ -352,7 +479,7 @@ def alerts_list():
     code = resolved.get("location_code") or ""
     warnings = get_qweather_warnings(code) if code else []
     weather_data, _ = get_weather_with_cache(code or label)
-    weather_available = is_qweather_online_weather(weather_data)
+    weather_available = is_qweather_production_ready(weather_data)
 
     return jsonify(
         {
@@ -365,6 +492,8 @@ def alerts_list():
                     "temperature_min": weather_data.get("temperature_min") if weather_available else None,
                     "weather_available": weather_available,
                     "is_mock": bool(weather_data.get("is_mock")),
+                    "location": weather_data.get("location"),
+                    "observed_at": weather_data.get("observed_at") if weather_available else None,
                 },
             },
         }
@@ -375,13 +504,19 @@ def alerts_list():
 @limiter.limit(lambda: current_app.config.get("RATE_LIMIT_MP_EVENTS", "60 per minute"), key_func=_mp_rate_limit_key)
 @require_api_token
 def events():
-    payload = request.get_json(silent=True) or {}
+    payload = request.get_json(silent=True)
+    if payload is None:
+        payload = {}
+    if not isinstance(payload, dict):
+        return jsonify({"success": False, "error": "invalid_payload"}), 400
+
     event_type = sanitize_input(payload.get("event_type"), max_length=50) or ""
-    if event_type not in PILOT_EVENT_TYPES:
+    if event_type not in MP_CLIENT_EVENT_TYPES:
         return jsonify({"success": False, "error": "invalid_event_type"}), 400
-    pair_id = payload.get("pair_id")
-    member_id = payload.get("member_id")
-    meta = payload.get("meta") if isinstance(payload.get("meta"), (dict, list)) else None
+
+    if "meta" in payload and payload.get("meta") is not None and not isinstance(payload.get("meta"), (dict, list)):
+        return jsonify({"success": False, "error": "invalid_meta"}), 400
+    meta = payload.get("meta")
     if meta is not None:
         try:
             meta_json = json.dumps(meta, ensure_ascii=False)
@@ -390,27 +525,32 @@ def events():
         if len(meta_json) > MP_EVENT_META_MAX_CHARS:
             return jsonify({"success": False, "error": "meta_too_large"}), 400
 
+    pair = None
     resolved_pair_id = None
-    if pair_id is not None:
+    if "pair_id" in payload:
         try:
-            pair_id_int = int(pair_id)
-        except Exception:
-            pair_id_int = None
-        if pair_id_int:
-            pair = _pair_for_user(pair_id_int)
-            if pair:
-                resolved_pair_id = pair.id
+            pair_id = _parse_positive_id(payload.get("pair_id"), "invalid_pair_id")
+        except ValueError as exc:
+            return jsonify({"success": False, "error": str(exc)}), 400
+        pair = _pair_for_user(pair_id)
+        if not pair:
+            return jsonify({"success": False, "error": "not_found"}), 404
+        resolved_pair_id = pair.id
 
+    member = None
     resolved_member_id = None
-    if member_id is not None:
+    if "member_id" in payload:
         try:
-            member_id_int = int(member_id)
-        except Exception:
-            member_id_int = None
-        if member_id_int:
-            member = FamilyMember.query.filter_by(id=member_id_int, user_id=g.api_user_id).first()
-            if member:
-                resolved_member_id = member.id
+            member_id = _parse_positive_id(payload.get("member_id"), "invalid_member_id")
+        except ValueError as exc:
+            return jsonify({"success": False, "error": str(exc)}), 400
+        member = FamilyMember.query.filter_by(id=member_id, user_id=g.api_user_id).first()
+        if not member:
+            return jsonify({"success": False, "error": "member_not_found"}), 404
+        resolved_member_id = member.id
+
+    if pair and member and pair.member_id != member.id:
+        return jsonify({"success": False, "error": "pair_member_mismatch"}), 400
 
     event = log_usage_event(
         event_type,

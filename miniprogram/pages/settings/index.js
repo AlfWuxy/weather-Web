@@ -1,4 +1,4 @@
-const { api } = require('../../utils/request');
+const { api, isUnauthorizedError } = require('../../utils/request');
 
 Page({
   data: {
@@ -30,6 +30,7 @@ Page({
         pushEnabled: !!me.push_enabled,
       });
     } catch (e) {
+      if (isUnauthorizedError(e)) return;
       wx.showToast({ title: '加载失败', icon: 'none' });
     } finally {
       this.setData({ loading: false });
@@ -62,6 +63,7 @@ Page({
       wx.showToast({ title: '已保存', icon: 'success' });
       await this.loadMe();
     } catch (e) {
+      if (isUnauthorizedError(e)) return;
       wx.showToast({ title: '保存失败', icon: 'none' });
     } finally {
       this.setData({ busy: false });
@@ -73,4 +75,3 @@ Page({
     wx.reLaunch({ url: '/pages/bind-token/index' });
   },
 });
-

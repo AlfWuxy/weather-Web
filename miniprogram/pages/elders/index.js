@@ -1,4 +1,4 @@
-const { api } = require('../../utils/request');
+const { api, isUnauthorizedError } = require('../../utils/request');
 
 Page({
   data: {
@@ -25,11 +25,7 @@ Page({
       const data = await api({ method: 'GET', path: '/mp/api/v1/elders', token });
       this.setData({ elders: data || [] });
     } catch (e) {
-      if (String(e && e.message) === 'unauthorized') {
-        wx.removeStorageSync('api_token');
-        wx.reLaunch({ url: '/pages/bind-token/index' });
-        return;
-      }
+      if (isUnauthorizedError(e)) return;
       wx.showToast({ title: '加载失败', icon: 'none' });
     } finally {
       this.setData({ loading: false });
@@ -59,4 +55,3 @@ Page({
     wx.navigateTo({ url: '/pages/settings/index' });
   },
 });
-

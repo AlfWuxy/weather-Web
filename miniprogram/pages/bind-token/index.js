@@ -1,5 +1,13 @@
 const { api } = require('../../utils/request');
 
+function bindingErrorMessage(error) {
+  if (error && error.kind === 'token') return 'Token 无效或已失效';
+  if (error && error.kind === 'config') return '服务配置有误，请联系管理员';
+  if (error && error.kind === 'network') return '网络连接失败，请检查网络';
+  if (error && error.kind === 'service') return '服务暂时不可用，请稍后重试';
+  return '绑定失败，请稍后重试';
+}
+
 Page({
   data: {
     tokenInput: '',
@@ -35,10 +43,9 @@ Page({
       wx.setStorageSync('api_token', token);
       wx.reLaunch({ url: '/pages/elders/index' });
     } catch (e) {
-      wx.showToast({ title: '绑定失败：Token 无效', icon: 'none' });
+      wx.showToast({ title: bindingErrorMessage(e), icon: 'none' });
     } finally {
       this.setData({ busy: false });
     }
   },
 });
-
