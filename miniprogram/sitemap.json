@@ -1,0 +1,27 @@
+{
+  "desc": "只允许索引无需登录的公共页面，照护和账号页面全部排除。",
+  "rules": [
+    { "action": "allow", "page": "pages/home/index" },
+    { "action": "allow", "page": "pages/forecast/index" },
+    { "action": "allow", "page": "pages/alerts/index" },
+    { "action": "allow", "page": "pages/actions/index" },
+    { "action": "allow", "page": "pages/community/index" },
+    { "action": "allow", "page": "pages/cooling/index" },
+    { "action": "allow", "page": "pages/gis/index" },
+    { "action": "allow", "page": "pages/transparency/index" },
+    { "action": "allow", "page": "pages/privacy/index" },
+    { "action": "allow", "page": "pages/agreement/index" },
+    { "action": "allow", "page": "pages/about/index" },
+    { "action": "disallow", "page": "pages/elders/index" },
+    { "action": "disallow", "page": "pages/elder-edit/index" },
+    { "action": "disallow", "page": "pages/health-assessment/index" },
+    { "action": "disallow", "page": "pages/diary/index" },
+    { "action": "disallow", "page": "pages/medications/index" },
+    { "action": "disallow", "page": "pages/action-checkin/index" },
+    { "action": "disallow", "page": "pages/account/index" },
+    { "action": "disallow", "page": "pages/settings/index" },
+    { "action": "disallow", "page": "pages/bind-token/index" },
+    { "action": "disallow", "page": "pages/template/index" },
+    { "action": "disallow", "page": "*" }
+  ]
+}

@@ -92,7 +92,7 @@ def _load_cli():
 
 def test_cooling_verification_migration_is_current_head():
     script = ScriptDirectory.from_config(Config('alembic.ini'))
-    assert script.get_heads() == ['0016_cooling_verification']
+    assert script.get_heads() == ['0018_health_consent_care']
 
 
 def test_cooling_verification_migration_up_and_down_on_sqlite(monkeypatch):

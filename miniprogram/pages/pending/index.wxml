@@ -3,19 +3,25 @@
     <view class="muted center">加载中…</view>
   </block>
 
+  <block wx:elif="{{loadError}}">
+    <view class="card muted center">{{loadErrorText || '待处理列表暂时无法读取'}}</view>
+    <button class="btn-primary" bindtap="loadPending">重试</button>
+  </block>
+
   <block wx:else>
     <view class="section-title">未结求助</view>
-    <block wx:if="{{openHelp.length === 0}}">
+    <block wx:if="{{showEmptyOpenHelp}}">
       <view class="card muted center">暂无未结求助</view>
     </block>
-    <block wx:for="{{openHelp}}" wx:key="pair_id">
+    <block wx:for="{{openHelp}}" wx:key="help_id">
       <view class="card pair-card">
         <view class="pair-title">{{item.displayLabel}}</view>
+        <view class="muted" wx:if="{{item.status_label}}">{{item.status_label}} · 编号 {{item.help_id}}</view>
         <view class="strip" aria-label="当日行动链">
           <text wx:for="{{item.cells}}" wx:for-item="cell" wx:key="key" class="cell {{cell.on ? 'on' : 'off'}}">{{cell.label}} {{cell.on ? '✓' : '—'}}</text>
         </view>
         <view class="actions">
-          <button class="btn-primary" size="mini" data-pair-id="{{item.pair_id}}" bindtap="onAck" disabled="{{busy}}">已收到</button>
+          <button class="btn-primary" size="mini" data-pair-id="{{item.pair_id}}" data-help-id="{{item.help_id}}" data-version="{{item.version}}" bindtap="onAck" disabled="{{busy}}">已收到</button>
           <button class="btn-outline" size="mini" data-pair-id="{{item.pair_id}}" bindtap="openDeliver" disabled="{{busy}}">已转告老人</button>
         </view>
       </view>
@@ -49,7 +55,7 @@
           <text wx:for="{{item.cells}}" wx:for-item="cell" wx:key="key" class="cell {{cell.on ? 'on' : 'off'}}">{{cell.label}} {{cell.on ? '✓' : '—'}}</text>
         </view>
         <view class="actions">
-          <button class="btn-primary" size="mini" data-pair-id="{{item.pair_id}}" bindtap="onClose" disabled="{{busy}}">结案</button>
+          <button class="btn-primary" size="mini" data-pair-id="{{item.pair_id}}" data-help-id="{{item.help_id}}" data-version="{{item.version}}" bindtap="onClose" disabled="{{busy}}">结案</button>
           <button class="btn-outline" size="mini" data-pair-id="{{item.pair_id}}" bindtap="openDeliver" disabled="{{busy}}">已转告老人</button>
         </view>
       </view>

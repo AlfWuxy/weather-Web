@@ -1,0 +1,10 @@
+{
+  "navigationBarTitleText": "热暴露 GIS",
+  "enablePullDownRefresh": true,
+  "backgroundTextStyle": "dark",
+  "disableScroll": false,
+  "usingComponents": {
+    "status-card": "/components/status-card/index",
+    "freshness-bar": "/components/freshness-bar/index"
+  }
+}

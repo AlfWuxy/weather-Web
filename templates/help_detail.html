@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+
+{% block title %}求助详情 · 宜老天气通{% endblock %}
+
+{% block content %}
+<div class="container my-4">
+    <a class="btn btn-outline-secondary btn-sm mb-3" href="{{ url_for('user.help_inbox') }}">返回待处理</a>
+    <h1 class="h3">求助详情</h1>
+    <p class="text-muted">编号 {{ detail.id }} · {{ detail.status_label }}</p>
+    <p>发起时间 {{ detail.created_at or '—' }}</p>
+    <p>家属收到时间 {{ detail.acknowledged_at or '尚未接收' }}</p>
+    <p>解决时间 {{ detail.resolved_at or '尚未解决' }}</p>
+    {% if detail.events %}
+    <h2 class="h5 mt-4">处理记录</h2>
+    <ul class="list-group">
+        {% for event in detail.events %}
+        <li class="list-group-item">
+            {{ event.created_at }} · {{ event.type_label or '进度更新' }}
+            {% if event.from_status_label or event.to_status_label %}（{{ event.from_status_label or '—' }} → {{ event.to_status_label or '—' }}）{% endif %}
+        </li>
+        {% endfor %}
+    </ul>
+    {% endif %}
+    <p class="small text-muted mt-3">「家属已收到」不等于老人安全或健康改善。</p>
+</div>
+{% endblock %}

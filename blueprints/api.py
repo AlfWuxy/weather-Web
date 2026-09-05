@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """API routes."""
-from flask import Blueprint, current_app
-from flask_login import login_required
+from flask import Blueprint, current_app, request
+from flask_login import current_user, login_required
 
 from core.extensions import limiter
 from core.security import rate_limit_key, reject_guest
@@ -296,3 +296,244 @@ def api_comprehensive_alert():
 def api_v1_events():
     """写入试点埋点事件（v1）"""
     return api_service._api_usage_event()
+
+
+def _help_ok(data, status=200):
+    from flask import g, jsonify
+    return jsonify({'success': True, 'data': data, 'request_id': getattr(g, 'request_id', None)}), status
+
+
+@bp.route('/api/v1/capabilities', endpoint='api_v1_capabilities')
+def api_v1_capabilities():
+    from services.help_request_service import capabilities
+    return _help_ok(capabilities())
+
+
+@bp.route('/api/v1/scripts', endpoint='api_v1_scripts')
+def api_v1_scripts():
+    from services.content_scripts import script_catalog
+    return _help_ok(script_catalog())
+
+
+@bp.route('/api/v1/help-requests', endpoint='api_v1_help_list')
+@login_required
+@reject_guest
+@limiter.limit(lambda: current_app.config.get('RATE_LIMIT_MP_PENDING_USER', '360 per minute'), key_func=rate_limit_key)
+def api_v1_help_list():
+    from services.help_http import handle_domain_error
+    from services.help_request_service import list_help_requests
+    try:
+        return _help_ok(list_help_requests(
+            current_user,
+            status=request.args.get('status') or 'open',
+            cursor=request.args.get('cursor'),
+            limit=request.args.get('limit') or 20,
+        ))
+    except Exception as exc:
+        return handle_domain_error(exc)
+
+
+@bp.route('/api/v1/help-requests', methods=['POST'], endpoint='api_v1_help_create')
+@login_required
+@reject_guest
+@limiter.limit(lambda: current_app.config.get('RATE_LIMIT_HELP', '10 per hour'), key_func=rate_limit_key)
+def api_v1_help_create():
+    from core.db_models import Pair
+    from core.extensions import db
+    from services.family_access import can_access_pair
+    from services.help_http import error_payload, handle_domain_error, json_body
+    from services.help_request_service import create_help_request
+    from services.notification_outbox import process_outbox_batch
+    try:
+        payload = json_body()
+        pair = Pair.query.filter_by(id=int(payload.get('pair_id') or 0), status='active').first()
+        if not pair or not can_access_pair(current_user, pair, 'create_help'):
+            return error_payload('not_found', '对象不存在或无权访问。', 404)
+        body, _created = create_help_request(
+            current_user,
+            pair,
+            category=payload.get('category') or 'cannot_complete',
+            origin_channel='web',
+            idempotency_key=payload.get('idempotency_key'),
+            is_proxy=True,
+            actor_role='elder_proxy',
+            commit=True,
+        )
+        process_outbox_batch(limit=10)
+        return _help_ok(body)
+    except Exception as exc:
+        from core.extensions import db
+        db.session.rollback()
+        return handle_domain_error(exc)
+
+
+@bp.route('/api/v1/help-requests/<public_id>', endpoint='api_v1_help_detail')
+@login_required
+@reject_guest
+def api_v1_help_detail(public_id):
+    from services.help_http import handle_domain_error
+    from services.help_request_service import get_help_request
+    try:
+        return _help_ok(get_help_request(current_user, public_id))
+    except Exception as exc:
+        return handle_domain_error(exc)
+
+
+@bp.route('/api/v1/help-requests/<public_id>/ack', methods=['POST'], endpoint='api_v1_help_ack')
+@login_required
+@reject_guest
+def api_v1_help_ack(public_id):
+    from core.extensions import db
+    from services.help_http import handle_domain_error, json_body
+    from services.help_request_service import ack_help_request
+    from services.notification_outbox import process_outbox_batch
+    try:
+        payload = json_body() if request.get_json(silent=True) is not None else {}
+        body = ack_help_request(
+            current_user,
+            public_id,
+            expected_version=payload.get('expected_version'),
+            idempotency_key=payload.get('idempotency_key'),
+            origin_channel='web',
+            commit=True,
+        )
+        process_outbox_batch(limit=10)
+        return _help_ok(body)
+    except Exception as exc:
+        db.session.rollback()
+        return handle_domain_error(exc)
+
+
+@bp.route('/api/v1/help-requests/<public_id>/start', methods=['POST'], endpoint='api_v1_help_start')
+@login_required
+@reject_guest
+def api_v1_help_start(public_id):
+    from core.extensions import db
+    from services.help_http import handle_domain_error, json_body
+    from services.help_request_service import start_help_request
+    try:
+        payload = json_body() if request.get_json(silent=True) is not None else {}
+        return _help_ok(start_help_request(
+            current_user,
+            public_id,
+            expected_version=payload.get('expected_version'),
+            idempotency_key=payload.get('idempotency_key'),
+            origin_channel='web',
+            commit=True,
+        ))
+    except Exception as exc:
+        db.session.rollback()
+        return handle_domain_error(exc)
+
+
+@bp.route('/api/v1/help-requests/<public_id>/resolve', methods=['POST'], endpoint='api_v1_help_resolve')
+@login_required
+@reject_guest
+def api_v1_help_resolve(public_id):
+    from core.extensions import db
+    from services.help_http import handle_domain_error, json_body
+    from services.help_request_service import resolve_help_request
+    from services.notification_outbox import process_outbox_batch
+    try:
+        payload = json_body() if request.get_json(silent=True) is not None else {}
+        body = resolve_help_request(
+            current_user,
+            public_id,
+            expected_version=payload.get('expected_version'),
+            resolution_code=payload.get('resolution_code') or 'reached_elder',
+            idempotency_key=payload.get('idempotency_key'),
+            origin_channel='web',
+            commit=True,
+        )
+        process_outbox_batch(limit=10)
+        return _help_ok(body)
+    except Exception as exc:
+        db.session.rollback()
+        return handle_domain_error(exc)
+
+
+@bp.route('/api/v1/help-requests/<public_id>/cancel', methods=['POST'], endpoint='api_v1_help_cancel')
+@login_required
+@reject_guest
+def api_v1_help_cancel(public_id):
+    from core.extensions import db
+    from services.help_http import handle_domain_error, json_body
+    from services.help_request_service import cancel_help_request
+    try:
+        payload = json_body() if request.get_json(silent=True) is not None else {}
+        body = cancel_help_request(
+            current_user,
+            public_id,
+            expected_version=payload.get('expected_version'),
+            reason_code=payload.get('cancel_reason') or payload.get('reason_code') or 'other',
+            idempotency_key=payload.get('idempotency_key'),
+            origin_channel='web',
+            commit=True,
+        )
+        return _help_ok(body)
+    except Exception as exc:
+        db.session.rollback()
+        return handle_domain_error(exc)
+
+
+@bp.route('/api/v1/family-invites', methods=['POST'], endpoint='api_v1_family_invite_create')
+@login_required
+@reject_guest
+def api_v1_family_invite_create():
+    from core.db_models import Pair
+    from core.extensions import db
+    from services.family_access import create_invite
+    from services.help_http import error_payload, handle_domain_error, json_body
+    try:
+        payload = json_body()
+        pair = Pair.query.filter_by(id=int(payload.get('pair_id') or 0), status='active').first()
+        if not pair:
+            return error_payload('not_found', '对象不存在或无权访问。', 404)
+        invite, plain = create_invite(
+            current_user,
+            pair,
+            payload.get('role') or 'caregiver',
+            ttl_hours=payload.get('ttl_hours') or 72,
+            max_uses=payload.get('max_uses') or 1,
+        )
+        db.session.commit()
+        return _help_ok({
+            'invite_id': invite.id,
+            'role': invite.role,
+            'expires_at': invite.expires_at.isoformat() if invite.expires_at else None,
+            'code': plain,
+        })
+    except Exception as exc:
+        from core.extensions import db
+        db.session.rollback()
+        return handle_domain_error(exc)
+
+
+@bp.route('/api/v1/family-invites/<code>', endpoint='api_v1_family_invite_preview')
+@login_required
+def api_v1_family_invite_preview(code):
+    from services.family_access import preview_invite
+    from services.help_http import handle_domain_error
+    try:
+        return _help_ok(preview_invite(code))
+    except Exception as exc:
+        return handle_domain_error(exc)
+
+
+@bp.route('/api/v1/family-invites/<code>/accept', methods=['POST'], endpoint='api_v1_family_invite_accept')
+@login_required
+@reject_guest
+def api_v1_family_invite_accept(code):
+    from core.extensions import db
+    from services.family_access import consume_invite
+    from services.help_http import handle_domain_error
+    try:
+        membership, invite = consume_invite(current_user, code)
+        db.session.commit()
+        return _help_ok({
+            'role': membership.role,
+            'family_space_id': invite.family_space_id,
+        })
+    except Exception as exc:
+        db.session.rollback()
+        return handle_domain_error(exc)

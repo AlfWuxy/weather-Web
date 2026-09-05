@@ -418,9 +418,29 @@ def configure_app(app, logger):
     app.config.setdefault('RATE_LIMIT_ESCALATE', os.getenv('RATE_LIMIT_ESCALATE', '10 per hour'))
     app.config.setdefault('RATE_LIMIT_AMAP_PROXY', os.getenv('RATE_LIMIT_AMAP_PROXY', '30 per minute'))
     app.config.setdefault('RATE_LIMIT_MP_READ', os.getenv('RATE_LIMIT_MP_READ', '120 per minute'))
+    # 待处理轮询：20 台同 NAT 每 5 秒约 240/min，IP 桶必须高于此；用户桶防止单账号拖垮他人。
+    app.config.setdefault(
+        'RATE_LIMIT_MP_PENDING_IP',
+        os.getenv('RATE_LIMIT_MP_PENDING_IP', '400 per minute'),
+    )
+    app.config.setdefault(
+        'RATE_LIMIT_MP_PENDING_USER',
+        os.getenv('RATE_LIMIT_MP_PENDING_USER', '360 per minute'),
+    )
     app.config.setdefault('RATE_LIMIT_MP_WRITE', os.getenv('RATE_LIMIT_MP_WRITE', '30 per minute'))
     app.config.setdefault('RATE_LIMIT_MP_ALERTS', os.getenv('RATE_LIMIT_MP_ALERTS', '30 per minute'))
     app.config.setdefault('RATE_LIMIT_MP_EVENTS', os.getenv('RATE_LIMIT_MP_EVENTS', '60 per minute'))
+    sandbox_raw = (os.getenv('HELP_NOTIFY_SANDBOX', '1') or '1').strip().lower()
+    app.config.setdefault('HELP_NOTIFY_SANDBOX', sandbox_raw not in {'0', 'false', 'no', 'off'})
+    app.config.setdefault('RATE_LIMIT_MP_AUTH', os.getenv('RATE_LIMIT_MP_AUTH', '10 per 5 minutes'))
+    app.config.setdefault('RATE_LIMIT_MP_PUBLIC', os.getenv('RATE_LIMIT_MP_PUBLIC', '120 per minute'))
+    app.config.setdefault('WX_MINIPROGRAM_LAST_USED_TOUCH_SECONDS', parse_int(os.getenv('WX_MINIPROGRAM_LAST_USED_TOUCH_SECONDS', '60'), default=60))
+    app.config.setdefault('WX_MINIPROGRAM_APPID', os.getenv('WX_MINIPROGRAM_APPID', ''))
+    app.config.setdefault('WX_MINIPROGRAM_SECRET', os.getenv('WX_MINIPROGRAM_SECRET', ''))
+    app.config.setdefault('WX_MINIPROGRAM_SESSION_SECRET', os.getenv('WX_MINIPROGRAM_SESSION_SECRET', ''))
+    app.config.setdefault('WX_MINIPROGRAM_OPENID_PEPPER', os.getenv('WX_MINIPROGRAM_OPENID_PEPPER', ''))
+    app.config.setdefault('WX_MINIPROGRAM_PRIVACY_VERSION', os.getenv('WX_MINIPROGRAM_PRIVACY_VERSION', '2026-07-18'))
+    app.config.setdefault('WX_MINIPROGRAM_SESSION_TTL_SECONDS', parse_int(os.getenv('WX_MINIPROGRAM_SESSION_TTL_SECONDS', '604800'), default=604800))
     app.config.setdefault('PAIR_ACTION_TOKEN_TTL_DAYS', parse_int(os.getenv('PAIR_ACTION_TOKEN_TTL_DAYS', '90'), default=90))
     app.config.setdefault('SHORT_CODE_TTL_DAYS', parse_int(os.getenv('SHORT_CODE_TTL_DAYS', '90'), default=90))
 

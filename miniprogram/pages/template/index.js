@@ -1,148 +1,220 @@
-const { api, isUnauthorizedError } = require('../../utils/request');
+const { authApi, getSnapshot, requireToken } = require('../elders/care-session');
+const { buildReminderMessage, normalizeList, normalizeSnapshot } = require('../elders/care-logic');
 
-function parsePairId(value) {
-  const text = String(value || '').trim();
-  if (!/^[1-9]\d*$/.test(text)) return null;
-  const pairId = Number(text);
-  return Number.isSafeInteger(pairId) ? pairId : null;
+function lifecycleIsActive(page, lifecycle) {
+  return page._unloaded !== true && Number(page._lifecycleGeneration || 0) === lifecycle;
 }
 
-function showInvalidPairAndReturn() {
-  wx.showModal({
-    title: '无法打开',
-    content: '监测对象不存在或链接已失效，将返回监测对象列表。',
-    showCancel: false,
-    complete: () => wx.reLaunch({ url: '/pages/elders/index' }),
-  });
+function beginLoad(page) {
+  page._loadRequestId = Number(page._loadRequestId || 0) + 1;
+  return {
+    lifecycle: Number(page._lifecycleGeneration || 0),
+    requestId: page._loadRequestId,
+  };
 }
 
-function buildMessage({ trigger, elderName, relation, locationText, tmax, tmin }) {
-  let address = '你';
-  if (relation === '母亲' || relation === '妈妈' || relation === '妈') address = '妈';
-  else if (relation === '父亲' || relation === '爸爸' || relation === '爸') address = '爸';
-  else if (elderName) address = elderName;
-
-  if (trigger === 'cold') {
-    let line1 = `【低温提醒】${address}，我看到你那边今天可能比较冷`;
-    if (tmin) line1 += `（最低约 ${tmin}°C）`;
-    line1 += '。';
-    return [
-      line1,
-      '建议：尽量少出门，外出注意保暖防滑；室内注意保暖，别受凉。',
-      `地点：${locationText || '-'}`,
-      '说明：这是行动提醒，不提供医疗诊断/治疗建议；如明显不适请及时就医。',
-    ].join('\n');
-  }
-  if (trigger === 'heat') {
-    let line1 = `【高温提醒】${address}，我看到你那边今天可能会很热`;
-    if (tmax) line1 += `（最高约 ${tmax}°C）`;
-    line1 += '。';
-    return [
-      line1,
-      '建议：避开中午外出，多喝水；室内开风扇/空调或找阴凉处休息。',
-      `地点：${locationText || '-'}`,
-      '说明：这是行动提醒，不提供医疗诊断/治疗建议；如明显不适请及时就医。',
-    ].join('\n');
-  }
-  return [
-    `【日常提醒】${address}，我这边看看你那边天气有变化，注意劳逸结合，出门记得带水/外套。`,
-    `地点：${locationText || '-'}`,
-    '说明：这是行动提醒，不提供医疗诊断/治疗建议；如明显不适请及时就医。',
-  ].join('\n');
+function loadIsActive(page, request) {
+  return lifecycleIsActive(page, request.lifecycle) && page._loadRequestId === request.requestId;
 }
 
 Page({
   data: {
     pairId: null,
-    loading: false,
-    message: '',
-    locationText: '',
-    elderName: '',
-    relation: '',
-    tmax: '',
-    tmin: '',
+    elderName: '家人',
     trigger: '',
+    message: '',
+    weather: normalizeSnapshot({}),
+    weatherNotice: '',
+    scriptVersion: '',
+    scriptHash: '',
+    scenario: 'normal',
+    messengerRole: 'child',
+    channel: 'wechat_text',
+    loading: false,
+    contextReady: false,
+    loadError: '',
   },
 
-  getToken() {
-    return (wx.getStorageSync('api_token') || '').trim();
+  async onLoad(options) {
+    this._unloaded = false;
+    this._lifecycleGeneration = Number(this._lifecycleGeneration || 0) + 1;
+    if (!requireToken()) return;
+    const pairId = Number(options.pair_id || 0) || null;
+    this.setData({
+      pairId,
+      contextReady: false,
+      loadError: pairId ? '' : '缺少家人信息，请返回家庭照护重新选择。',
+    });
+    if (pairId) await this.loadTemplate();
   },
 
-  async onLoad(options = {}) {
-    const pairId = parsePairId(options.pair_id);
-    this.setData({ pairId });
+  onShow() {
+    requireToken();
+  },
+
+  onUnload() {
+    this._unloaded = true;
+    this._lifecycleGeneration = Number(this._lifecycleGeneration || 0) + 1;
+    this._loadRequestId = Number(this._loadRequestId || 0) + 1;
+  },
+
+  onSessionInvalidated() {
+    this._lifecycleGeneration = Number(this._lifecycleGeneration || 0) + 1;
+    this._loadRequestId = Number(this._loadRequestId || 0) + 1;
+    if (this._unloaded) return;
+    this.setData({
+      pairId: null,
+      elderName: '家人',
+      trigger: '',
+      message: '',
+      weather: normalizeSnapshot({}),
+      weatherNotice: '',
+      loading: false,
+      contextReady: false,
+      loadError: '',
+    });
+  },
+
+  async loadTemplate() {
+    if (this._unloaded) return;
+    const pairId = Number(this.data.pairId || 0);
     if (!pairId) {
-      showInvalidPairAndReturn();
-      return;
-    }
-    await this.loadTemplate(pairId);
-  },
-
-  async loadTemplate(pairId) {
-    const token = this.getToken();
-    if (!token) {
-      wx.reLaunch({ url: '/pages/bind-token/index' });
-      return;
-    }
-    this.setData({ loading: true });
-    try {
-      const elders = await api({ method: 'GET', path: '/mp/api/v1/elders', token });
-      const item = (elders || []).find((x) => x.pair_id === pairId);
-      if (!item) {
-        showInvalidPairAndReturn();
-        return;
-      }
-      const elderName = item.member && item.member.name ? item.member.name : '';
-      const relation = item.member && item.member.relation ? item.member.relation : '';
-      const locationText = item.location_query || item.community_code || '';
-      const tmax = item.today && (item.today.temperature_max || item.today.temperature_max === 0)
-        ? String(item.today.temperature_max) : '';
-      const tmin = item.today && (item.today.temperature_min || item.today.temperature_min === 0)
-        ? String(item.today.temperature_min) : '';
-      const trigger = item.today && item.today.trigger ? item.today.trigger : '';
-      const message = buildMessage({ trigger, elderName, relation, locationText, tmax, tmin });
-      this.setData({ message, locationText, elderName, relation, tmax, tmin, trigger });
-    } catch (e) {
-      if (isUnauthorizedError(e)) return;
-      wx.showToast({ title: '加载失败', icon: 'none' });
-    } finally {
-      this.setData({ loading: false });
-    }
-  },
-
-  async copyMessage() {
-    const token = this.getToken();
-    const message = this.data.message || '';
-    if (!message) return;
-    try {
-      await new Promise((resolve, reject) => {
-        wx.setClipboardData({
-          data: message,
-          success: resolve,
-          fail: reject,
-        });
+      this.setData({
+        message: '',
+        loading: false,
+        contextReady: false,
+        loadError: '缺少家人信息，请返回家庭照护重新选择。',
       });
-      wx.showToast({ title: '已复制', icon: 'success' });
-      if (token) {
-        // fire-and-forget
-        api({
+      return;
+    }
+    const request = beginLoad(this);
+    this.setData({
+      message: '',
+      loading: true,
+      contextReady: false,
+      loadError: '',
+    });
+    try {
+      const [elderData, snapshot, scripts] = await Promise.all([
+        authApi({ method: 'GET', path: '/mp/api/v1/elders' }),
+        getSnapshot().catch(() => ({})),
+        authApi({ method: 'GET', path: '/mp/api/v1/scripts' }).catch(() => null),
+      ]);
+      const item = normalizeList(elderData, ['items', 'elders'])
+        .find((elder) => Number(elder.pair_id) === pairId);
+      if (!loadIsActive(this, request)) return;
+      if (!item) throw new Error('not_found');
+      const member = item.member || {};
+      const weather = normalizeSnapshot(snapshot);
+      const usesGenericWeather = weather.stale || !weather.available;
+      const weatherNotice = weather.stale
+        ? '天气数据较早，复制内容已切换为通用提醒。'
+        : (!weather.available ? '天气数据待更新，复制内容使用通用提醒。' : '');
+      const scenario = usesGenericWeather
+        ? 'normal'
+        : (weather.trigger === 'heat' || weather.trigger === 'cold' ? weather.trigger : 'normal');
+      const trigger = usesGenericWeather ? '' : scenario;
+      const catalog = scripts || {};
+      const version = catalog.default || 'v2_gist_why';
+      const versions = catalog.versions || {};
+      const template = (versions[version] && versions[version][scenario])
+        || (versions.v2_gist_why && versions.v2_gist_why[scenario])
+        || '';
+      const placeholders = {
+        elder_call: member.name || member.relation || '家里',
+        tmax: weather.temperatureMax == null ? '--' : weather.temperatureMax,
+        tmin: weather.temperatureMin == null ? '--' : weather.temperatureMin,
+        window: '中午前后',
+        messenger_self: '家里人',
+        callback_time: '傍晚',
+      };
+      let message = template;
+      Object.keys(placeholders).forEach((key) => {
+        message = String(message).split('{' + key + '}').join(String(placeholders[key]));
+      });
+      if (!message || !String(message).trim()) {
+        message = buildReminderMessage({
+          trigger: scenario === 'normal' ? '' : scenario,
+          elderName: member.name,
+          relation: member.relation,
+          tmax: weather.temperatureMax,
+          tmin: weather.temperatureMin,
+        });
+      }
+      if (!message || !String(message).trim()) throw new Error('empty_message');
+      this.setData({
+        elderName: member.name || '家人',
+        trigger,
+        weather,
+        weatherNotice,
+        message,
+        scriptVersion: version,
+        scriptHash: catalog.version_hash || '',
+        scenario,
+        messengerRole: 'child',
+        channel: 'wechat_text',
+        contextReady: true,
+        loadError: '',
+      });
+    } catch (error) {
+      if (loadIsActive(this, request)) {
+        this.setData({
+          message: '',
+          contextReady: false,
+          loadError: '提醒话术暂时无法生成，请检查网络后重试。',
+        });
+      }
+    } finally {
+      if (loadIsActive(this, request)) this.setData({ loading: false });
+    }
+  },
+
+  copyMessage() {
+    if (!this.data.contextReady || !this.data.message || this._unloaded) {
+      if (!this._unloaded) wx.showToast({ title: '提醒话术尚未准备好', icon: 'none' });
+      return;
+    }
+    const lifecycle = Number(this._lifecycleGeneration || 0);
+    wx.setClipboardData({
+      data: this.data.message,
+      success: () => {
+        if (!lifecycleIsActive(this, lifecycle)) return;
+        wx.showToast({ title: '已复制，可以发给家人', icon: 'success' });
+        authApi({
           method: 'POST',
           path: '/mp/api/v1/events',
-          token,
           data: {
             event_type: 'template_copy',
-            pair_id: this.data.pairId,
-            meta: { trigger: this.data.trigger },
+            meta: {
+              script_version: this.data.scriptVersion || 'v2_gist_why',
+              messenger_role: this.data.messengerRole || 'child',
+              channel: this.data.channel || 'wechat_text',
+              scenario: this.data.scenario || 'normal',
+            },
           },
-        }).catch(() => {});
-      }
-    } catch (e) {
-      if (isUnauthorizedError(e)) return;
-      wx.showToast({ title: '复制失败', icon: 'none' });
+        }).catch(() => {
+          if (lifecycleIsActive(this, lifecycle)) {
+            wx.showToast({ title: '已复制，但记录未保存', icon: 'none' });
+          }
+        });
+      },
+      fail: () => {
+        if (lifecycleIsActive(this, lifecycle)) wx.showToast({ title: '复制失败，请重试', icon: 'none' });
+      },
+    });
+  },
+
+  goCheckin() {
+    if (this._unloaded) return;
+    if (!this.data.contextReady || !this.data.message || !this.data.pairId) {
+      wx.showToast({ title: '请先生成提醒话术', icon: 'none' });
+      return;
     }
+    wx.redirectTo({ url: `/pages/action-checkin/index?pair_id=${this.data.pairId}` });
   },
 
   back() {
+    if (this._unloaded) return;
     wx.navigateBack();
   },
 });

@@ -1,77 +1,130 @@
-const { api, isUnauthorizedError } = require('../../utils/request');
+const {
+  authApi,
+  clear,
+  getToken,
+  tokenApi,
+} = require('../elders/care-session');
+const { clearAcquisitionContext } = require('../../utils/share');
 
 Page({
   data: {
-    loading: false,
-    wxpusherUid: '',
-    pushEnabled: false,
     busy: false,
+    loggedIn: false,
+    inviteCode: '',
+    inviteHint: '',
   },
 
-  getToken() {
-    return (wx.getStorageSync('api_token') || '').trim();
+  onShow() {
+    this.setData({ loggedIn: !!getToken(), busy: false });
   },
 
-  async onShow() {
-    await this.loadMe();
+  onSessionInvalidated() {
+    this.setData({ loggedIn: false, busy: false });
   },
 
-  async loadMe() {
-    const token = this.getToken();
-    if (!token) {
-      wx.reLaunch({ url: '/pages/bind-token/index' });
+  goAccount() {
+    wx.navigateTo({ url: '/pages/account/index' });
+  },
+
+  goLogin() {
+    wx.navigateTo({ url: '/pages/bind-token/index' });
+  },
+
+  goPrivacy() {
+    wx.navigateTo({ url: '/pages/privacy/index' });
+  },
+
+  goHealthConsent() {
+    if (!getToken()) {
+      this.goLogin();
       return;
     }
-    this.setData({ loading: true });
-    try {
-      const me = await api({ method: 'GET', path: '/mp/api/v1/me', token });
-      this.setData({
-        wxpusherUid: me.wxpusher_uid || '',
-        pushEnabled: !!me.push_enabled,
-      });
-    } catch (e) {
-      if (isUnauthorizedError(e)) return;
-      wx.showToast({ title: '加载失败', icon: 'none' });
-    } finally {
-      this.setData({ loading: false });
+    wx.navigateTo({ url: '/pages/health-consent/index?manage=1' });
+  },
+
+  goAgreement() {
+    wx.navigateTo({ url: '/pages/agreement/index' });
+  },
+
+  goAbout() {
+    wx.navigateTo({ url: '/pages/about/index' });
+  },
+
+  goTransparency() {
+    wx.navigateTo({ url: '/pages/transparency/index' });
+  },
+
+  goPending() {
+    if (!getToken()) {
+      this.goLogin();
+      return;
     }
+    wx.navigateTo({ url: '/pages/pending/index' });
   },
 
-  onUid(e) {
-    this.setData({ wxpusherUid: (e.detail.value || '').trim() });
+  onInviteInput(event) {
+    this.setData({ inviteCode: event.detail.value || '', inviteHint: '' });
   },
 
-  onToggle(e) {
-    this.setData({ pushEnabled: !!e.detail.value });
-  },
-
-  async onSave() {
-    if (this.data.busy) return;
-    const token = this.getToken();
-    if (!token) return;
-    this.setData({ busy: true });
+  async acceptInvite() {
+    const code = String(this.data.inviteCode || '').trim();
+    if (!code) {
+      this.setData({ inviteHint: '请填写邀请码。' });
+      return;
+    }
+    if (!getToken()) {
+      this.goLogin();
+      return;
+    }
+    this.setData({ busy: true, inviteHint: '' });
     try {
-      await api({
-        method: 'PATCH',
-        path: '/mp/api/v1/me',
-        token,
-        data: {
-          wxpusher_uid: this.data.wxpusherUid,
-          push_enabled: this.data.pushEnabled,
-        },
+      await authApi({
+        method: 'GET',
+        path: `/mp/api/v1/family-invites/${encodeURIComponent(code)}`,
       });
-      wx.showToast({ title: '已保存', icon: 'success' });
-      await this.loadMe();
-    } catch (e) {
-      if (isUnauthorizedError(e)) return;
-      wx.showToast({ title: '保存失败', icon: 'none' });
+      await authApi({
+        method: 'POST',
+        path: `/mp/api/v1/family-invites/${encodeURIComponent(code)}/accept`,
+      });
+      this.setData({ inviteCode: '', inviteHint: '已加入家庭。可到照护页查看同一对象。' });
+      wx.showToast({ title: '已加入家庭', icon: 'success' });
+    } catch (error) {
+      this.setData({ inviteHint: '邀请无效、已过期或已使用。' });
     } finally {
       this.setData({ busy: false });
     }
   },
 
   logout() {
-    wx.removeStorageSync('api_token');
-    wx.reLaunch({ url: '/pages/bind-token/index' });
+    if (this.data.busy) return;
+    wx.showModal({
+      title: '退出登录？',
+      content: '会清理本机登录状态，公共天气仍可继续查看。',
+      confirmText: '退出登录',
+      success: async (result) => {
+        if (!result.confirm) return;
+        const sessionToken = getToken();
+        let logoutRequest = null;
+        try {
+          if (sessionToken) {
+            logoutRequest = tokenApi(sessionToken, {
+              method: 'POST',
+              path: '/mp/api/v1/auth/logout',
+            });
+          }
+        } catch (error) {
+          logoutRequest = null;
+        }
+        clear();
+        clearAcquisitionContext();
+        this.setData({ loggedIn: false, busy: false });
+        wx.reLaunch({ url: '/pages/home/index' });
+        try {
+          if (logoutRequest) await logoutRequest;
+        } catch (error) {
+          // 远端注销失败时，本机私人数据仍已立即清除。
+        }
+      },
+    });
   },
 });

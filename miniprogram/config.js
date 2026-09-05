@@ -1,31 +1,13 @@
-// Backend base URL (must be HTTPS for real MiniProgram requests).
-// During local dev you can temporarily use a LAN IP + HTTPS tunnel.
-const PROD_API_BASE_URL = 'https://yilaoweather.org';
-// 开发者工具可改成局域网隧道地址；留空则 develop 也走正式域名。
-const DEV_API_BASE_URL = '';
-
-function getMiniProgramEnvVersion() {
-  try {
-    if (typeof wx === 'undefined' || typeof wx.getAccountInfoSync !== 'function') {
-      return '';
-    }
-    const account = wx.getAccountInfoSync();
-    return (account && account.miniProgram && account.miniProgram.envVersion) || '';
-  } catch (e) {
-    return '';
-  }
-}
-
-function getApiBaseUrl() {
-  const envVersion = getMiniProgramEnvVersion();
-  if (envVersion === 'develop' && DEV_API_BASE_URL) {
-    return String(DEV_API_BASE_URL).replace(/\/$/, '');
-  }
-  return PROD_API_BASE_URL;
-}
-
-module.exports = {
-  API_BASE_URL: getApiBaseUrl(),
-  DEV_API_BASE_URL,
-  getApiBaseUrl,
+// 生产域名属于公开网络配置，第三方密钥始终只保存在服务端。
+const defaults = {
+  API_BASE_URL: '',
+  PUBLIC_CACHE_TTL_MS: 30 * 60 * 1000,
+  REQUEST_TIMEOUT_MS: 12000,
+  GIS_REQUEST_TIMEOUT_MS: 30000,
+  PRIVACY_CONSENT_VERSION: '2026-07-21',
 };
+
+// 该模块始终存在，确保正式提交可复现并可直接编译。
+const runtimeConfig = require('./config.runtime');
+
+module.exports = Object.assign({}, defaults, runtimeConfig || {});

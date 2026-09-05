@@ -1,0 +1,9 @@
+{
+  "navigationBarTitleText": "宜老天气通",
+  "enablePullDownRefresh": true,
+  "backgroundTextStyle": "dark",
+  "usingComponents": {
+    "status-card": "/components/status-card/index",
+    "freshness-bar": "/components/freshness-bar/index"
+  }
+}

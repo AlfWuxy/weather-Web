@@ -159,7 +159,13 @@
                                             <div class="d-flex justify-content-between align-items-start">
                                                 <div>
                                                     <div class="text-muted small">短码 {{ item.pair.short_code }}</div>
-                                                    <div class="fs-5 fw-bold">{{ item.elder_name or '老人' }}</div>
+                                                    <div class="fs-5 fw-bold">
+                                                        {% if item.pair_detail_url %}
+                                                            <a href="{{ item.pair_detail_url }}" class="text-decoration-none">{{ item.elder_name or '老人' }}</a>
+                                                        {% else %}
+                                                            {{ item.elder_name or '老人' }}
+                                                        {% endif %}
+                                                    </div>
                                                     <div class="text-muted small">县内备注 {{ item.location_display or item.pair.community_code }}</div>
                                                     {% if item.weather_available %}
                                                     <div class="mt-2">
@@ -201,7 +207,9 @@
                                             {% if item.help_flag or item.relay_stage_label or item.is_overdue %}
                                                 <div class="d-flex flex-wrap gap-2 mt-2">
                                                     {% if item.help_flag %}
-                                                        <span class="badge bg-danger">求助</span>
+                                                        <a class="badge bg-danger text-decoration-none" href="{{ url_for('user.help_request_detail', public_id=item.open_help.id) if item.open_help else url_for('user.help_inbox') }}">
+                                                            {{ item.open_help.status_label if item.open_help else '未结求助' }}
+                                                        </a>
                                                     {% endif %}
                                                     {% if item.relay_stage_label %}
                                                         <span class="badge bg-warning text-dark">升级链 {{ item.relay_stage_label }}</span>
@@ -257,6 +265,9 @@
                                                         <i class="bi bi-eye"></i> 详情
                                                     </a>
                                                 {% endif %}
+                                                <button class="btn btn-outline-primary btn-sm invite-family-btn" type="button" data-pair-id="{{ item.pair.id }}">
+                                                    邀请家属加入
+                                                </button>
                                             </div>
                                             <div class="text-muted small mt-2">
                                                 行动入口：<a href="{{ item.action_link }}" target="_blank">打开短码页</a>
@@ -422,7 +433,12 @@ document.addEventListener('DOMContentLoaded', function () {
                 void logEvent('template_copy', {
                     pair_id: pairId,
                     member_id: memberId,
-                    meta: { alert_kind: alertKind }
+                    meta: {
+                        script_version: 'v2_gist_why',
+                        messenger_role: 'child',
+                        channel: 'wechat_text',
+                        scenario: alertKind === 'cold' ? 'cold' : (alertKind === 'heat' ? 'heat' : 'normal'),
+                    }
                 });
             } catch (err) {
                 alert('复制失败，请手动选择文本');
@@ -450,6 +466,39 @@ document.addEventListener('DOMContentLoaded', function () {
             btn.innerHTML = originalHtml;
             btn.disabled = false;
             alert('记录失败，请检查网络后重试。');
+        });
+    });
+
+    document.querySelectorAll('.invite-family-btn').forEach(function (btn) {
+        btn.addEventListener('click', async function () {
+            const pairId = parseInt(btn.dataset.pairId, 10);
+            if (!pairId) return;
+            btn.disabled = true;
+            try {
+                const response = await fetch('/api/v1/family-invites', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-CSRF-Token': csrfToken
+                    },
+                    credentials: 'same-origin',
+                    body: JSON.stringify({ pair_id: pairId, role: 'caregiver', ttl_hours: 72, max_uses: 1 })
+                });
+                const result = await response.json();
+                if (!response.ok || !result.success) {
+                    throw new Error((result && result.message) || 'invite_failed');
+                }
+                const code = result.data && result.data.code;
+                const text = '请用微信登录后确认加入家庭。邀请码：' + code + '（72小时内有效，确认后才会授权）';
+                if (window.CWClipboard && typeof window.CWClipboard.copyText === 'function') {
+                    await window.CWClipboard.copyText(text);
+                }
+                alert(text);
+            } catch (err) {
+                alert('邀请未能创建。只有家庭管理人可以邀请，且角色由服务器决定。');
+            } finally {
+                btn.disabled = false;
+            }
         });
     });
 });
