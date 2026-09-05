@@ -84,8 +84,14 @@ class WeatherService:
 
     def _qweather_auth_config(self):
         """返回当前实例的认证配置，不包含任何日志输出。"""
+        mode = str(self.qweather_auth_mode or '').strip().lower()
+        if mode not in {'api_key', 'jwt', 'disabled'}:
+            mode = 'api_key' if self.qweather_key else 'disabled'
+        # 旧调用方只给实例填 Key、不改 AUTH_MODE；有 Key 时按 api_key 回滚，显式 jwt 不变。
+        if mode == 'disabled' and self.qweather_key:
+            mode = 'api_key'
         return {
-            'QWEATHER_AUTH_MODE': self.qweather_auth_mode,
+            'QWEATHER_AUTH_MODE': mode,
             'QWEATHER_KEY': self.qweather_key,
             'QWEATHER_JWT_KID': self.qweather_jwt_kid,
             'QWEATHER_JWT_PROJECT_ID': self.qweather_jwt_project_id,
@@ -346,6 +352,27 @@ class WeatherService:
             payload = response.json()
             if not isinstance(payload, dict):
                 return {}
+
+            # 兼容旧 /air/now：溯源测试与部分 Host 仍返回 code/now/pubTime。
+            if payload.get('code') == '200' and isinstance(payload.get('now'), dict):
+                air_now = payload['now']
+                result = {}
+                pm25 = self._bounded_float(air_now.get('pm2p5'), 0.0, 1000.0)
+                aqi = self._bounded_float(air_now.get('aqi'), 0.0, 500.0)
+                if pm25 is not None:
+                    result['pm25'] = pm25
+                if aqi is not None:
+                    result['aqi'] = int(round(aqi))
+                category = str(air_now.get('category') or '').strip()
+                if category:
+                    result['air_quality'] = category
+                air_observed_at = normalize_weather_observed_at(air_now.get('pubTime'))
+                if air_observed_at is None:
+                    air_observed_at = normalize_weather_observed_at(payload.get('updateTime'))
+                if air_observed_at and ('pm25' in result or 'aqi' in result):
+                    result['air_observed_at'] = air_observed_at
+                    result['air_quality_available'] = True
+                return result
 
             indexes = payload.get('indexes') or []
             # 健康风险阈值优先采用中国 AQI 标准，不能依赖上游数组顺序。

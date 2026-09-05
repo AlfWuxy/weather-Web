@@ -253,6 +253,7 @@ def test_weather_service_uses_jwt_for_seven_day_forecast(jwt_material, monkeypat
                         "tempMax": "35",
                         "tempMin": "27",
                         "humidity": "70",
+                        "windSpeedDay": "3",
                         "textDay": "晴",
                     }
                     for index in range(7)
