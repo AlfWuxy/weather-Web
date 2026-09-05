@@ -1,11 +1,11 @@
 {% set pair_obj = pair if pair is defined else elder_pair %}
 {% set action_list = actions if actions is defined and actions else (checkin_actions if checkin_actions is defined else []) %}
 {% set state = today_state if today_state is defined and today_state else {} %}
-{% set understood_url = understood_action if understood_action is defined else url_for('user.elder_mode_understood') %}
-{% set select_url = select_action if select_action is defined else url_for('user.elder_mode_select') %}
-{% set confirm_url = confirm_action if confirm_action is defined else url_for('user.elder_mode_confirm') %}
-{% set help_url = help_action if help_action is defined else url_for('user.elder_mode_help') %}
-{% set state_url = state_action if state_action is defined else url_for('user.elder_mode_state') %}
+{% set understood_url = understood_action if understood_action else url_for('user.elder_mode_understood') %}
+{% set select_url = select_action if select_action else url_for('user.elder_mode_select') %}
+{% set confirm_url = confirm_action if confirm_action else url_for('user.elder_mode_confirm') %}
+{% set help_url = help_action if help_action else url_for('user.elder_mode_help') %}
+{% set state_url = state_action if state_action else url_for('user.elder_mode_state') %}
 {% set short_code_value = pair_obj.short_code if pair_obj else '' %}
 {% set token_value = token if token is defined else '' %}
 

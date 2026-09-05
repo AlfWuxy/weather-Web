@@ -9,6 +9,7 @@
 """
 from datetime import datetime, timezone
 from flask_login import UserMixin
+from sqlalchemy import Index, text
 from werkzeug.security import generate_password_hash, check_password_hash
 
 from core.extensions import db
@@ -39,6 +40,11 @@ class User(UserMixin, db.Model):
     # 试点推送设置（子女端）
     wxpusher_uid = db.Column(db.String(80))
     push_enabled = db.Column(db.Boolean, default=False)
+    # 账号删除：置位后立即收回家庭授权与小程序会话
+    deleted_at = db.Column(db.DateTime)
+    # 健康敏感信息单独同意，不能由一般隐私同意替代。
+    health_sensitive_consent_version = db.Column(db.String(64))
+    health_sensitive_consented_at = db.Column(db.DateTime)
 
     def set_password(self, password):
         self.password_hash = generate_password_hash(password)
@@ -148,6 +154,7 @@ class HealthRiskAssessment(db.Model):
     __tablename__ = 'health_risk_assessments'
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'))
+    member_id = db.Column(db.Integer, db.ForeignKey('family_members.id'))
     assessment_date = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
     weather_condition = db.Column(db.String(100))
     risk_score = db.Column(db.Float)  # 风险评分
@@ -326,6 +333,7 @@ class Pair(db.Model):
     community_code = db.Column(db.String(100), nullable=False)
     # 关联到家庭成员（老人档案，可选）
     member_id = db.Column(db.Integer, db.ForeignKey('family_members.id'))
+    family_space_id = db.Column(db.Integer, db.ForeignKey('family_spaces.id'))
     # 原始自由输入的地点（如“九江某乡镇”），用于地理编码与多地区支持
     location_query = db.Column(db.String(200))
     elder_code = db.Column(db.String(40), unique=True, nullable=False)
@@ -342,6 +350,7 @@ class Pair(db.Model):
         db.Index('ix_pairs_community_code', 'community_code'),
         db.Index('ix_pairs_short_code_hash', 'short_code_hash'),
         db.Index('ix_pairs_member_id', 'member_id'),
+        db.Index('ix_pairs_family_space_id', 'family_space_id'),
     )
 
     @property
@@ -530,10 +539,224 @@ class ActionEvent(db.Model):
     alert_id = db.Column(db.Integer, db.ForeignKey('weather_alerts.id'))
     delivery_id = db.Column(db.Integer, db.ForeignKey('alert_deliveries.id'))
     meta_json = db.Column(db.Text)
+    help_request_id = db.Column(db.Integer, db.ForeignKey('help_requests.id'))
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), index=True)
 
     __table_args__ = (
         db.Index('ix_action_events_pair_date_stage', 'pair_id', 'local_date', 'stage'),
+        db.Index('ix_action_events_help_request_id', 'help_request_id'),
+    )
+
+
+class FamilySpace(db.Model):
+    """家庭空间：网页与小程序共享的授权边界。"""
+    __tablename__ = 'family_spaces'
+    id = db.Column(db.Integer, primary_key=True)
+    public_id = db.Column(db.String(32), unique=True, nullable=False)
+    name = db.Column(db.String(80), nullable=False)
+    created_by_user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    is_test = db.Column(db.Boolean, default=False, nullable=False, server_default='0')
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+
+    __table_args__ = (
+        db.Index('ix_family_spaces_created_by', 'created_by_user_id'),
+    )
+
+
+class FamilyMembership(db.Model):
+    """家庭成员授权。角色由服务端邀请决定，客户端不可伪造。"""
+    __tablename__ = 'family_memberships'
+    id = db.Column(db.Integer, primary_key=True)
+    family_space_id = db.Column(db.Integer, db.ForeignKey('family_spaces.id'), nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    role = db.Column(db.String(32), nullable=False)
+    status = db.Column(db.String(16), nullable=False, default='active')
+    invited_by_user_id = db.Column(db.Integer, db.ForeignKey('users.id'))
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    revoked_at = db.Column(db.DateTime)
+
+    __table_args__ = (
+        db.Index('ix_family_memberships_user_id', 'user_id'),
+        db.Index('ix_family_memberships_space_id', 'family_space_id'),
+        Index(
+            'uq_family_memberships_active_user',
+            'family_space_id',
+            'user_id',
+            unique=True,
+            sqlite_where=text("status = 'active'"),
+            postgresql_where=text("status = 'active'"),
+        ),
+    )
+
+
+class FamilyInvite(db.Model):
+    """家庭邀请。只存哈希；GET 预览不消费。"""
+    __tablename__ = 'family_invites'
+    id = db.Column(db.Integer, primary_key=True)
+    family_space_id = db.Column(db.Integer, db.ForeignKey('family_spaces.id'), nullable=False)
+    code_hash = db.Column(db.String(64), unique=True, nullable=False)
+    role = db.Column(db.String(32), nullable=False)
+    expires_at = db.Column(db.DateTime, nullable=False)
+    max_uses = db.Column(db.Integer, nullable=False, default=1)
+    use_count = db.Column(db.Integer, nullable=False, default=0)
+    revoked_at = db.Column(db.DateTime)
+    created_by_user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    last_consumed_at = db.Column(db.DateTime)
+
+    __table_args__ = (
+        db.Index('ix_family_invites_space_id', 'family_space_id'),
+        db.Index('ix_family_invites_expires_at', 'expires_at'),
+    )
+
+
+class HelpRequest(db.Model):
+    """跨天持续存在的求助工单；同一对象最多一条未结。"""
+    __tablename__ = 'help_requests'
+    id = db.Column(db.Integer, primary_key=True)
+    public_id = db.Column(db.String(32), unique=True, nullable=False)
+    family_space_id = db.Column(db.Integer, db.ForeignKey('family_spaces.id'), nullable=False)
+    pair_id = db.Column(db.Integer, db.ForeignKey('pairs.id'), nullable=False)
+    status = db.Column(db.String(24), nullable=False)
+    origin_channel = db.Column(db.String(24), nullable=False)
+    actor_user_id = db.Column(db.Integer, db.ForeignKey('users.id'))
+    actor_role = db.Column(db.String(24), nullable=False)
+    is_proxy = db.Column(db.Boolean, nullable=False, default=False)
+    category = db.Column(db.String(32), nullable=False, default='cannot_complete')
+    version = db.Column(db.Integer, nullable=False, default=1)
+    acknowledged_by_user_id = db.Column(db.Integer, db.ForeignKey('users.id'))
+    acknowledged_at = db.Column(db.DateTime)
+    started_by_user_id = db.Column(db.Integer, db.ForeignKey('users.id'))
+    started_at = db.Column(db.DateTime)
+    resolved_by_user_id = db.Column(db.Integer, db.ForeignKey('users.id'))
+    resolved_at = db.Column(db.DateTime)
+    resolution_code = db.Column(db.String(32))
+    cancelled_by_user_id = db.Column(db.Integer, db.ForeignKey('users.id'))
+    cancelled_at = db.Column(db.DateTime)
+    cancel_reason_code = db.Column(db.String(32))
+    is_test = db.Column(db.Boolean, nullable=False, default=False, server_default='0')
+    legacy_source = db.Column(db.String(32))
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+
+    __table_args__ = (
+        db.Index('ix_help_requests_pair_id', 'pair_id'),
+        db.Index('ix_help_requests_space_status', 'family_space_id', 'status'),
+        db.Index('ix_help_requests_updated_at', 'updated_at'),
+        Index(
+            'uq_help_requests_open_pair',
+            'pair_id',
+            unique=True,
+            sqlite_where=text(
+                "status IN ('pending_ack', 'acknowledged', 'in_progress')"
+            ),
+            postgresql_where=text(
+                "status IN ('pending_ack', 'acknowledged', 'in_progress')"
+            ),
+        ),
+    )
+
+
+class HelpRequestEvent(db.Model):
+    """求助生命周期事件，与行动证据 ActionEvent 分离。"""
+    __tablename__ = 'help_request_events'
+    id = db.Column(db.Integer, primary_key=True)
+    help_request_id = db.Column(db.Integer, db.ForeignKey('help_requests.id'), nullable=False)
+    actor_user_id = db.Column(db.Integer, db.ForeignKey('users.id'))
+    actor_role = db.Column(db.String(24), nullable=False)
+    from_status = db.Column(db.String(24))
+    to_status = db.Column(db.String(24), nullable=False)
+    event_type = db.Column(db.String(32), nullable=False)
+    channel = db.Column(db.String(24), nullable=False)
+    meta_json = db.Column(db.Text)
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), index=True)
+
+    __table_args__ = (
+        db.Index('ix_help_request_events_request_id', 'help_request_id'),
+    )
+
+
+class NotificationOutbox(db.Model):
+    """与求助同事务写入的待投递通知；不含凭据。"""
+    __tablename__ = 'notification_outbox'
+    id = db.Column(db.Integer, primary_key=True)
+    help_request_id = db.Column(db.Integer, db.ForeignKey('help_requests.id'))
+    help_event_id = db.Column(db.Integer, db.ForeignKey('help_request_events.id'))
+    recipient_user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    channel = db.Column(db.String(24), nullable=False)
+    event_type = db.Column(db.String(32), nullable=False)
+    dedupe_key = db.Column(db.String(160), unique=True, nullable=False)
+    status = db.Column(db.String(16), nullable=False, default='pending')
+    attempt_count = db.Column(db.Integer, nullable=False, default=0)
+    next_attempt_at = db.Column(db.DateTime)
+    last_error_type = db.Column(db.String(64))
+    provider_accepted_at = db.Column(db.DateTime)
+    opened_at = db.Column(db.DateTime)
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+
+    __table_args__ = (
+        db.Index('ix_notification_outbox_status_next', 'status', 'next_attempt_at'),
+        db.Index('ix_notification_outbox_recipient', 'recipient_user_id'),
+    )
+
+
+class ApiIdempotencyKey(db.Model):
+    """写操作幂等键；同 key 不同载荷拒绝。"""
+    __tablename__ = 'api_idempotency_keys'
+    id = db.Column(db.Integer, primary_key=True)
+    scope = db.Column(db.String(80), nullable=False)
+    key = db.Column(db.String(80), nullable=False)
+    request_hash = db.Column(db.String(64), nullable=False)
+    resource_type = db.Column(db.String(32), nullable=False)
+    resource_public_id = db.Column(db.String(32))
+    response_json = db.Column(db.Text)
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+
+    __table_args__ = (
+        db.UniqueConstraint('scope', 'key', name='uq_api_idempotency_scope_key'),
+    )
+
+
+class MiniProgramIdentity(db.Model):
+    """微信身份映射，仅保存带独立 pepper 的 OpenID 哈希。"""
+    __tablename__ = 'miniprogram_identities'
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    openid_hash = db.Column(db.String(64), nullable=False, unique=True)
+    privacy_consent_version = db.Column(db.String(64), nullable=False)
+    privacy_consented_at = db.Column(db.DateTime, nullable=False)
+    acquisition_source = db.Column(db.String(20), nullable=False, default='direct')
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    last_login_at = db.Column(db.DateTime)
+
+    __table_args__ = (
+        db.UniqueConstraint('id', 'user_id', name='uq_miniprogram_identities_id_user_id'),
+        db.Index('ix_miniprogram_identities_user_id', 'user_id'),
+    )
+
+
+class MiniProgramSession(db.Model):
+    """可撤销、可过期的小程序会话，仅保存 token 哈希。"""
+    __tablename__ = 'miniprogram_sessions'
+    id = db.Column(db.Integer, primary_key=True)
+    identity_id = db.Column(db.Integer, nullable=False)
+    user_id = db.Column(db.Integer, nullable=False)
+    token_hash = db.Column(db.String(64), nullable=False, unique=True)
+    privacy_consent_version = db.Column(db.String(64), nullable=False)
+    expires_at = db.Column(db.DateTime, nullable=False)
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    last_used_at = db.Column(db.DateTime)
+    revoked_at = db.Column(db.DateTime)
+
+    __table_args__ = (
+        db.ForeignKeyConstraint(
+            ['identity_id', 'user_id'],
+            ['miniprogram_identities.id', 'miniprogram_identities.user_id'],
+            name='fk_miniprogram_sessions_identity_owner',
+        ),
+        db.Index('ix_miniprogram_sessions_user_id', 'user_id'),
+        db.Index('ix_miniprogram_sessions_expires_at', 'expires_at'),
     )
 
 

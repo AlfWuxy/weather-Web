@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """User-facing routes."""
-from flask import Blueprint, abort, current_app
+from flask import Blueprint, abort, current_app, flash, redirect, render_template, request, url_for
 from flask_login import login_required
 
 from core.extensions import limiter
@@ -99,6 +99,65 @@ def caregiver_pair_detail(pair_id):
 def caregiver_action_log(pair_id):
     """照护行动记录"""
     return user_service.caregiver_action_log(pair_id)
+
+
+@bp.route('/caregiver/help', endpoint='help_inbox')
+@login_required
+def help_inbox():
+    """登录后的待处理求助工作台。"""
+    from flask_login import current_user
+    from services.help_request_service import list_help_requests
+    data = list_help_requests(current_user, status='open', limit=50)
+    return user_service.render_help_inbox(data)
+
+
+@bp.route('/caregiver/help/<public_id>', endpoint='help_request_detail')
+@login_required
+def help_request_detail(public_id):
+    from flask_login import current_user
+    from services.help_request_service import get_help_request
+    try:
+        detail = get_help_request(current_user, public_id)
+    except Exception:
+        abort(404)
+    return user_service.render_help_detail(detail)
+
+
+@bp.route('/caregiver/invite', methods=['GET', 'POST'], endpoint='family_invite_accept')
+@login_required
+def family_invite_accept():
+    """登录后预览并确认家庭邀请。GET 不消费。"""
+    from flask_login import current_user
+    from services.family_access import FamilyAccessError, consume_invite, preview_invite
+    from core.extensions import db
+
+    code = (request.values.get('code') or '').strip()
+    preview = None
+    error = None
+    if code:
+        try:
+            preview = preview_invite(code)
+        except FamilyAccessError as exc:
+            error = exc.message
+            preview = None
+    if request.method == 'POST':
+        if not code:
+            flash('请填写邀请码。', 'warning')
+        elif error:
+            flash(error, 'warning')
+        else:
+            try:
+                consume_invite(current_user, code)
+                db.session.commit()
+                flash('已加入家庭。现在可以看到同一照护对象。', 'success')
+                return redirect(url_for('user.help_inbox'))
+            except FamilyAccessError as exc:
+                db.session.rollback()
+                flash(exc.message, 'warning')
+            except Exception:
+                db.session.rollback()
+                flash('加入家庭失败，请稍后重试。', 'danger')
+    return render_template('family_invite.html', code=code, preview=preview, error=error)
 
 
 @bp.route('/caregiver/wechat_template', endpoint='caregiver_wechat_template')

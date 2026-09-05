@@ -23,6 +23,7 @@ wheels/
 # 虚拟环境
 venv/
 .venv/
+.venv-mac/
 ENV/
 env/
 
@@ -86,9 +87,8 @@ backups/
 *.pem
 *.key
 
-# 系统文件
-.DS_Store
-Thumbs.db
+# 微信开发者工具本机私有配置，不含密钥但也不入库
+/project.private.config.json
 
 # 模型与敏感数据
 models/*.pkl

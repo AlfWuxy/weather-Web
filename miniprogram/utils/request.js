@@ -1,83 +1,124 @@
-const config = require('../config');
+const {
+  API_BASE_URL,
+  REQUEST_TIMEOUT_MS,
+  GIS_REQUEST_TIMEOUT_MS,
+} = require('../config');
 
-const BIND_TOKEN_ROUTE = 'pages/bind-token/index';
+function trimTrailingSlash(value) {
+  return String(value || '').replace(/\/+$/, '');
+}
 
-function createApiError(code, kind, statusCode, detail) {
-  const error = new Error(code);
+function buildBackendUrl(pathOrUrl) {
+  const base = trimTrailingSlash(API_BASE_URL);
+  if (!base) throw new Error('miniapp_api_base_missing');
+  const value = String(pathOrUrl || '').trim();
+  if (!value) throw new Error('request_path_missing');
+  const fullUrl = /^https:\/\//i.test(value)
+    ? value
+    : `${base}${value.charAt(0) === '/' ? value : `/${value}`}`;
+  const baseHost = base.replace(/^https:\/\//i, '').split('/')[0].toLowerCase();
+  const targetHost = fullUrl.replace(/^https:\/\//i, '').split('/')[0].toLowerCase();
+  if (!/^https:\/\//i.test(fullUrl) || targetHost !== baseHost) {
+    throw new Error('backend_url_not_allowed');
+  }
+  return fullUrl;
+}
+
+function createApiError(response, fallbackCode) {
+  const statusCode = Number(response && response.statusCode) || 0;
+  const body = response && response.data && typeof response.data === 'object' ? response.data : {};
+  const code = String(body.error || body.code || fallbackCode || (statusCode === 401 ? 'unauthorized' : `http_${statusCode || 'error'}`));
+  const message = String(body.message || code);
+  const error = new Error(message);
   error.code = code;
-  error.kind = kind;
-  error.statusCode = statusCode || 0;
-  error.detail = detail || '';
+  error.statusCode = statusCode;
+  error.kind = statusCode === 401 ? 'token' : (statusCode >= 500 ? 'service' : 'service');
+  if (body.data !== undefined) error.data = body.data;
   return error;
-}
-
-function currentRoute() {
-  if (typeof getCurrentPages !== 'function') return '';
-  const pages = getCurrentPages();
-  const current = pages && pages.length ? pages[pages.length - 1] : null;
-  return current && current.route ? current.route : '';
-}
-
-function clearTokenAndRebind() {
-  wx.removeStorageSync('api_token');
-  // 绑定页自己展示 Token 错误，其他页面统一回到绑定入口。
-  if (currentRoute() === BIND_TOKEN_ROUTE) return;
-  wx.reLaunch({ url: `/${BIND_TOKEN_ROUTE}` });
 }
 
 function normalizeRequestFailure(error) {
   const detail = String((error && error.errMsg) || (error && error.message) || '');
-  if (/domain list|合法域名|invalid url/i.test(detail)) {
-    return createApiError('request_domain_not_configured', 'config', 0, detail);
-  }
-  return createApiError('network_error', 'network', 0, detail);
+  const wrapped = new Error(/domain list|合法域名|invalid url/i.test(detail) ? 'request_domain_not_configured' : 'network_error');
+  wrapped.code = wrapped.message;
+  wrapped.kind = /domain list|合法域名|invalid url/i.test(detail) ? 'config' : 'network';
+  wrapped.statusCode = 0;
+  wrapped.detail = detail;
+  return wrapped;
 }
 
-function request({ method, path, token, data }) {
-  return new Promise((resolve, reject) => {
-    const API_BASE_URL = config.getApiBaseUrl ? config.getApiBaseUrl() : config.API_BASE_URL;
-    if (!API_BASE_URL) {
-      reject(createApiError('miniapp_api_base_missing', 'config'));
-      return;
-    }
-    wx.request({
-      url: `${API_BASE_URL}${path}`,
+function request({ method, path, token, data, timeout }) {
+  let url;
+  try {
+    url = buildBackendUrl(path);
+  } catch (error) {
+    return Promise.reject(error);
+  }
+  let requestTask = null;
+  const pending = new Promise((resolve, reject) => {
+    requestTask = wx.request({
+      url,
       method: method || 'GET',
       data: data || undefined,
+      timeout: timeout || REQUEST_TIMEOUT_MS,
       header: Object.assign(
-        { 'Content-Type': 'application/json' },
+        { Accept: 'application/json', 'Content-Type': 'application/json' },
         token ? { Authorization: `Bearer ${token}` } : {}
       ),
-      success: (res) => resolve(res),
-      fail: (err) => reject(normalizeRequestFailure(err)),
+      success: (response) => resolve(response),
+      fail: (error) => reject(normalizeRequestFailure(error)),
     });
   });
+  pending.abort = () => {
+    if (requestTask && typeof requestTask.abort === 'function') requestTask.abort();
+  };
+  return pending;
 }
 
-async function api({ method, path, token, data }) {
-  const res = await request({ method, path, token, data });
-  if (res.statusCode === 401) {
-    clearTokenAndRebind();
-    throw createApiError('unauthorized', 'token', 401);
+async function api({ method, path, token, data, timeout }) {
+  const response = await request({ method, path, token, data, timeout });
+  if (response.statusCode < 200 || response.statusCode >= 300) {
+    throw createApiError(response);
   }
-  const body = res.data && typeof res.data === 'object' && !Array.isArray(res.data)
-    ? res.data : {};
-  if (res.statusCode >= 500) {
-    throw createApiError('service_unavailable', 'service', res.statusCode);
-  }
-  if (res.statusCode < 200 || res.statusCode >= 300) {
-    const code = body.error || body.message || 'service_request_failed';
-    throw createApiError(code, 'service', res.statusCode);
-  }
+  const body = response.data || {};
   if (!body.success) {
-    const code = body.error || body.message || 'invalid_service_response';
-    throw createApiError(code, 'service', res.statusCode);
+    throw createApiError(response, 'request_failed');
   }
   return body.data;
 }
 
 function isUnauthorizedError(error) {
-  return !!error && error.code === 'unauthorized';
+  return !!error && (error.code === 'unauthorized' || Number(error.statusCode) === 401);
 }
 
-module.exports = { api, isUnauthorizedError };
+function mapAbortable(pending, transform) {
+  const mapped = pending.then(transform);
+  mapped.abort = () => {
+    if (pending && typeof pending.abort === 'function') pending.abort();
+  };
+  return mapped;
+}
+
+function backendJson(pathOrUrl) {
+  const pending = request({
+    method: 'GET',
+    path: pathOrUrl,
+    timeout: GIS_REQUEST_TIMEOUT_MS,
+  });
+  return mapAbortable(pending, (response) => {
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw new Error(`http_${response.statusCode}`);
+    }
+    return response.data;
+  });
+}
+
+module.exports = {
+  api,
+  backendJson,
+  buildBackendUrl,
+  createApiError,
+  isUnauthorizedError,
+  mapAbortable,
+  request,
+};

@@ -300,54 +300,59 @@ def test_forecast_normalization_never_propagates_nonfinite_optional_values():
 
 
 def test_miniprogram_temperature_views_preserve_zero_celsius():
-    template_js = (PROJECT_ROOT / "miniprogram/pages/template/index.js").read_text(encoding="utf-8")
+    template_wxml = (PROJECT_ROOT / "miniprogram/pages/template/index.wxml").read_text(encoding="utf-8")
     elders_wxml = (PROJECT_ROOT / "miniprogram/pages/elders/index.wxml").read_text(encoding="utf-8")
-    alerts_wxml = (PROJECT_ROOT / "miniprogram/pages/alerts/index.wxml").read_text(encoding="utf-8")
+    action_wxml = (PROJECT_ROOT / "miniprogram/pages/action-checkin/index.wxml").read_text(encoding="utf-8")
+    format_js = (PROJECT_ROOT / "miniprogram/utils/format.js").read_text(encoding="utf-8")
 
-    assert "item.today.temperature_max || item.today.temperature_max === 0" in template_js
-    assert "item.today.temperature_min || item.today.temperature_min === 0" in template_js
-    for source in (elders_wxml, alerts_wxml):
-        assert "temperature_max === 0" in source
-        assert "temperature_min === 0" in source
+    for source in (template_wxml, elders_wxml, action_wxml):
+        assert "temperatureMax === null" in source
+        assert "temperatureMin === null" in source
+        assert "|| item.today.temperature_max" not in source
+    assert "if (value === null || value === undefined || value === '') return null;" in format_js
+    assert "return Number.isFinite(number) ? number : null;" in format_js
 
 
 def test_miniprogram_auth_errors_are_centralized_and_binding_errors_are_distinct():
     request_js = (PROJECT_ROOT / "miniprogram/utils/request.js").read_text(encoding="utf-8")
+    session_js = (PROJECT_ROOT / "miniprogram/pages/elders/care-session.js").read_text(encoding="utf-8")
     bind_js = (PROJECT_ROOT / "miniprogram/pages/bind-token/index.js").read_text(encoding="utf-8")
 
-    assert "clearTokenAndRebind();" in request_js
-    assert "wx.removeStorageSync('api_token');" in request_js
-    assert "wx.reLaunch({ url: `/${BIND_TOKEN_ROUTE}` });" in request_js
-    assert "error.code === 'unauthorized'" in request_js
+    assert "statusCode === 401 ? 'unauthorized'" in request_js
+    assert "function isUnauthorizedError" in request_js
+    assert "url: '/pages/bind-token/index'" in session_js
+    assert "function goLogin()" in session_js
+    assert "wx.removeStorageSync" in (PROJECT_ROOT / "miniprogram/utils/session.js").read_text(encoding="utf-8")
 
-    for kind in ("token", "config", "network", "service"):
-        assert f"error.kind === '{kind}'" in bind_js
-    assert "Token 无效或已失效" in bind_js
-    assert "服务配置有误" in bind_js
-    assert "网络连接失败" in bind_js
-    assert "服务暂时不可用" in bind_js
+    assert "onWechatLogin()" in bind_js
+    assert "请先阅读并勾选同意" in bind_js
+    assert "登录失败，请重试" in bind_js
+    assert "onBindWebToken()" not in bind_js
 
 
 def test_miniprogram_invalid_pair_deep_links_return_to_list():
-    for relative_path in (
-        "miniprogram/pages/alerts/index.js",
-        "miniprogram/pages/template/index.js",
-        "miniprogram/pages/elder-edit/index.js",
-    ):
-        source = (PROJECT_ROOT / relative_path).read_text(encoding="utf-8")
-        assert "/^[1-9]\\d*$/.test(text)" in source
-        assert "Number.isSafeInteger(pairId)" in source
-        assert "showInvalidPairAndReturn()" in source
-        assert "监测对象不存在或链接已失效" in source
-        assert "wx.reLaunch({ url: '/pages/elders/index' })" in source
+    template_js = (PROJECT_ROOT / "miniprogram/pages/template/index.js").read_text(encoding="utf-8")
+    action_js = (PROJECT_ROOT / "miniprogram/pages/action-checkin/index.js").read_text(encoding="utf-8")
+    template_wxml = (PROJECT_ROOT / "miniprogram/pages/template/index.wxml").read_text(encoding="utf-8")
+
+    assert "缺少家人信息，请返回家庭照护重新选择。" in template_js
+    assert "缺少家人信息，请返回上一页重新选择。" in action_js
+    assert "loadError" in template_wxml
 
 
 def test_miniprogram_monitoring_copy_matches_actual_behavior():
+    scripts_py = (PROJECT_ROOT / "services/content_scripts.py").read_text(encoding="utf-8")
     template_js = (PROJECT_ROOT / "miniprogram/pages/template/index.js").read_text(encoding="utf-8")
     edit_wxml = (PROJECT_ROOT / "miniprogram/pages/elder-edit/index.wxml").read_text(encoding="utf-8")
+    care_logic = (PROJECT_ROOT / "miniprogram/pages/elders/care-logic.js").read_text(encoding="utf-8")
 
-    assert "【低温提醒】" in template_js
-    assert "【寒潮提醒】" not in template_js
-    assert "编辑监测信息" in edit_wxml
-    assert "用于记录家庭监测档案" in edit_wxml
-    assert "当前提醒话术不会根据慢病信息自动调整" in edit_wxml
+    assert "【低温提醒】" in scripts_py
+    assert "【寒潮提醒】" not in scripts_py
+    assert "/mp/api/v1/scripts" in template_js
+    assert "script_version" in template_js
+    assert "messenger_role" in template_js
+    assert "已复制，但记录未保存" in template_js
+    assert ".catch(() => {});" not in template_js
+    assert "编辑老人资料" in edit_wxml
+    assert "【都昌县低温提醒】" in care_logic
+    assert "【寒潮提醒】" not in care_logic

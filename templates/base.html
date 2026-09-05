@@ -150,6 +150,13 @@
                     <a class="nav-link {% if nav_care_active %}active{% endif %}"
                        href="{{ nav_care_url }}" data-nav-key="care"
                        {% if nav_care_active %}aria-current="page"{% endif %}>{{ nav_care_label }}</a>
+                    {% if current_user.role != 'guest' and current_user.role != 'community' %}
+                    <a class="nav-link {% if request.endpoint in ['user.help_inbox', 'user.help_request_detail', 'user.family_invite_accept'] %}active{% endif %}"
+                       href="{{ url_for('user.help_inbox') }}" data-nav-key="help-inbox"
+                       id="navHelpInbox">
+                        待处理求助 <span class="badge bg-danger d-none" id="navHelpBadge">0</span>
+                    </a>
+                    {% endif %}
                 {% endif %}
 
                 <div class="app-more-menu" id="appMoreMenu">
@@ -662,5 +669,43 @@
     {% endif %}
 
     {% block extra_js %}{% endblock %}
+    {% if current_user.is_authenticated and current_user.role != 'guest' %}
+    <script>
+    (function () {
+        const badge = document.getElementById('navHelpBadge');
+        if (!badge) return;
+        if (document.getElementById('helpInboxRoot')) return;
+        let timer = null;
+        let inflight = false;
+        function loadHelpBadge() {
+            if (document.hidden || inflight) return;
+            inflight = true;
+            fetch('/api/v1/help-requests?status=open&limit=1', {
+                headers: { 'Accept': 'application/json' },
+                credentials: 'same-origin'
+            }).then(function (res) { return res.json().then(function (data) {
+                return { ok: res.ok, data: data };
+            }); }).then(function (result) {
+                if (!result.ok || !result.data || !result.data.success) return;
+                const count = (result.data.data && result.data.data.open_count) || 0;
+                badge.textContent = String(count);
+                badge.classList.toggle('d-none', count < 1);
+            }).catch(function () {}).finally(function () { inflight = false; });
+        }
+        function start() {
+            if (timer) return;
+            loadHelpBadge();
+            timer = setInterval(loadHelpBadge, 5000 + Math.floor(Math.random() * 800));
+        }
+        function stop() {
+            if (timer) { clearInterval(timer); timer = null; }
+        }
+        document.addEventListener('visibilitychange', function () {
+            if (document.hidden) stop(); else start();
+        });
+        start();
+    })();
+    </script>
+    {% endif %}
 </body>
 </html>

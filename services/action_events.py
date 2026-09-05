@@ -239,8 +239,14 @@ def record_event(
     delivery_id=None,
     meta=None,
     now=None,
+    commit=True,
+    sync_help_request=True,
 ):
-    """写入一条行动事件。非法转移抛出 InvalidTransition，不落库。"""
+    """写入一条行动事件。非法转移抛出 InvalidTransition，不落库。
+
+    commit=False 时只 flush，供外层与求助/通知同事务提交。
+    sync_help_request=False 时不回写 HelpRequest，避免与求助服务互相递归。
+    """
     if pair is None:
         raise InvalidTransition(None, stage)
     stage = str(stage or '').strip()
@@ -260,6 +266,8 @@ def record_event(
 
     existing = _find_idempotent(pair.id, local_date, stage, actor_role, action_id, now)
     if existing:
+        if sync_help_request:
+            _sync_help_lifecycle(pair, stage, actor_role, channel, commit=False)
         return existing
 
     present = _stages_present(pair.id, local_date)
@@ -300,8 +308,45 @@ def record_event(
     _apply_daily_status(pair, status, stage, action_id, now)
     pair.last_active_at = now
     db.session.flush()
-    db.session.commit()
+    if sync_help_request:
+        _sync_help_lifecycle(pair, stage, actor_role, channel, commit=False)
+    if commit:
+        db.session.commit()
     return event
+
+
+def _sync_help_lifecycle(pair, stage, actor_role, channel, *, commit=False):
+    """把旧 ActionEvent 求助阶段接到同一 HelpRequest，不另开事务。"""
+    if stage not in {'help_requested', 'help_acknowledged', 'closed'}:
+        return
+    from core.db_models import User
+    from services.help_request_service import apply_pair_help_stage, create_help_request
+
+    caregiver = db.session.get(User, pair.caregiver_id) if pair.caregiver_id else None
+    origin = 'miniprogram' if channel == 'miniprogram' else (
+        'elder_mode' if channel == 'elder_mode' else 'web_shortcode'
+    )
+    if stage == 'help_requested':
+        create_help_request(
+            caregiver,
+            pair,
+            origin_channel=origin,
+            is_proxy=actor_role != 'elder',
+            actor_role='elder' if actor_role == 'elder' else 'elder_proxy',
+            skip_access_check=True,
+            commit=commit,
+        )
+        return
+    try:
+        apply_pair_help_stage(
+            caregiver,
+            pair,
+            stage,
+            origin_channel=origin,
+            commit=commit,
+        )
+    except Exception:
+        logger.info('action_event 同步求助状态跳过 pair=%s stage=%s', getattr(pair, 'id', None), stage)
 
 
 def today_state(pair, local_date=None):

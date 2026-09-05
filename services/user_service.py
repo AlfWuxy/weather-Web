@@ -22,6 +22,8 @@ from services.user import (
     pair_escalate,
     pair_management,
     profile,
+    render_help_detail,
+    render_help_inbox,
     update_location,
     user_dashboard,
 )
@@ -32,6 +34,8 @@ __all__ = [
     'handle_elder_mode_event',
     'handle_elder_mode_state',
     'pair_management',
+    'render_help_inbox',
+    'render_help_detail',
     'caregiver_dashboard',
     'caregiver_pair_create',
     'caregiver_pair_detail',

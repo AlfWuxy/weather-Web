@@ -649,7 +649,6 @@ def _elder_mode_payload():
 
 def handle_elder_mode_event(stage):
     from services.action_events import InvalidTransition, record_event, today_state as load_today_state
-    from services.public_service import _notify_help_requested
     from services.user._helpers import _refresh_community_daily
 
     pair = _current_elder_pair()
@@ -684,13 +683,35 @@ def handle_elder_mode_event(stage):
                 action_id=(str(action_id).strip() if action_id else 'undecided'),
             )
         elif stage == 'help_requested':
-            event = record_event(pair, 'help_requested', 'elder', 'elder_mode')
-            _notify_help_requested(pair)
+            from services.help_request_service import create_help_request
+            body, _created = create_help_request(
+                current_user,
+                pair,
+                origin_channel='elder_mode',
+                is_proxy=False,
+                actor_role='elder',
+                commit=True,
+            )
+            _refresh_community_daily(pair.community_code, today_local())
+            return jsonify({
+                'ok': True,
+                'event_id': None,
+                'help_request': body,
+                'state': load_today_state(pair, today_local()),
+            })
         else:
             event = record_event(pair, stage, 'elder', 'elder_mode')
     except InvalidTransition as exc:
         db.session.rollback()
         return exc.to_response()
+    except Exception as exc:
+        from services.help_http import handle_domain_error
+        from services.family_access import FamilyAccessError
+        from services.help_request_service import HelpRequestError
+        if isinstance(exc, (HelpRequestError, FamilyAccessError)):
+            db.session.rollback()
+            return handle_domain_error(exc)
+        raise
     _refresh_community_daily(pair.community_code, today_local())
     return jsonify({
         'ok': True,

@@ -161,6 +161,8 @@ def _create_pair_record(caregiver_id, location_query, member_id=None, flush=Fals
     db.session.add(pair)
     if flush:
         db.session.flush()
+        from services.family_access import ensure_space_for_pair
+        ensure_space_for_pair(pair)
     return pair
 
 

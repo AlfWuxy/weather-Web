@@ -1,196 +1,328 @@
-const { api, isUnauthorizedError } = require('../../utils/request');
+const {
+  authApi,
+  finishHealthMutation,
+  guardHealthSensitivePage,
+  requireToken,
+  resumeHealthMutation,
+  suspendHealthMutation,
+  trackHealthMutation,
+} = require('../elders/care-session');
+const { FIXED_LOCATION, normalizeList, validateElderInput } = require('../elders/care-logic');
 
-function parsePairId(value) {
-  const text = String(value || '').trim();
-  if (!/^[1-9]\d*$/.test(text)) return null;
-  const pairId = Number(text);
-  return Number.isSafeInteger(pairId) ? pairId : null;
+const GENDER_OPTIONS = ['未填写', '女性', '男性'];
+
+function lifecycleIsActive(page, lifecycle) {
+  return page._unloaded !== true && Number(page._lifecycleGeneration || 0) === lifecycle;
 }
 
-function showInvalidPairAndReturn() {
-  wx.showModal({
-    title: '无法打开',
-    content: '监测对象不存在或链接已失效，将返回监测对象列表。',
-    showCancel: false,
-    complete: () => wx.reLaunch({ url: '/pages/elders/index' }),
-  });
-}
-
-function splitChronic(text) {
-  const raw = (text || '').split(/[,，]/).map((s) => s.trim()).filter(Boolean);
-  // 慢病类别去重，保留用户原始顺序。
-  const seen = new Set();
-  const out = [];
-  raw.forEach((x) => {
-    if (seen.has(x)) return;
-    seen.add(x);
-    out.push(x);
-  });
-  return out;
-}
-
-function parseOptionalAge(value) {
-  const text = String(value || '').trim();
-  if (!text) return { valid: true, value: null };
-  if (!/^\d{1,3}$/.test(text)) return { valid: false, value: null };
-  const age = Number(text);
-  return { valid: age >= 1 && age <= 150, value: age };
-}
-
-function normalizeOptionalGender(value) {
-  const text = String(value || '').trim();
-  if (!text) return { valid: true, value: '' };
-  const aliases = {
-    男: '男性',
-    男性: '男性',
-    女: '女性',
-    女性: '女性',
-    其他: '其他',
-    未知: '未知',
+function beginLoad(page) {
+  page._loadRequestId = Number(page._loadRequestId || 0) + 1;
+  return {
+    lifecycle: Number(page._lifecycleGeneration || 0),
+    requestId: page._loadRequestId,
   };
-  return { valid: !!aliases[text], value: aliases[text] || '' };
+}
+
+function loadIsActive(page, request) {
+  return page._hidden !== true
+    && lifecycleIsActive(page, request.lifecycle)
+    && page._loadRequestId === request.requestId;
+}
+
+function markPreviousCarePageForReload() {
+  const pages = typeof getCurrentPages === 'function' ? getCurrentPages() : [];
+  const previous = pages.length > 1 ? pages[pages.length - 2] : null;
+  if (
+    previous
+    && (previous.route === 'pages/elders/index' || typeof previous.loadCareHome === 'function')
+  ) {
+    previous._healthConsentReloadPending = true;
+  }
 }
 
 Page({
   data: {
-    mode: 'edit',
+    mode: 'create',
     pairId: null,
     name: '',
     relation: '',
     age: '',
-    gender: '',
-    locationQuery: '',
+    gender: '未填写',
+    genderOptions: GENDER_OPTIONS,
+    genderIndex: 0,
     chronicText: '',
+    fixedLocation: FIXED_LOCATION,
+    contextReady: false,
+    loadError: '',
+    loading: true,
     busy: false,
   },
 
-  getToken() {
-    return (wx.getStorageSync('api_token') || '').trim();
+  async onLoad(options) {
+    this._unloaded = false;
+    this._hidden = false;
+    this._lifecycleGeneration = Number(this._lifecycleGeneration || 0) + 1;
+    this._loadRequestId = Number(this._loadRequestId || 0) + 1;
+    if (!requireToken()) return;
+    const pairId = Number(options.pair_id || 0) || null;
+    const mode = options.mode === 'create' || !pairId ? 'create' : 'edit';
+    this._routePairId = pairId;
+    this._routeMode = mode;
+    this._preserveDraftAfterSaveFailure = false;
+    this.setData({ mode, pairId, contextReady: false, loadError: '', loading: true });
+    await this.loadAuthorizedPage();
   },
 
-  async onLoad(options = {}) {
-    const mode = options.mode === 'create' ? 'create' : 'edit';
-    const pairId = parsePairId(options.pair_id);
-    this.setData({ mode, pairId });
-
-    if (mode === 'edit' && !pairId) {
-      showInvalidPairAndReturn();
+  async onShow() {
+    this._hidden = false;
+    if (!requireToken()) return;
+    const resumed = await resumeHealthMutation(this);
+    if (this._unloaded || this._hidden) return;
+    if (resumed.resumed) this.setData({ busy: false });
+    if (resumed.resumed && !requireToken()) return;
+    const resumedSave = resumed.resumed
+      && (resumed.kind === 'elder-create' || resumed.kind === 'elder-edit');
+    if (resumedSave && resumed.ok) markPreviousCarePageForReload();
+    if (resumedSave && resumed.ok && resumed.kind === 'elder-create') {
+      wx.navigateBack();
       return;
     }
-    if (mode === 'edit') {
-      await this.loadPair(pairId);
-    }
-  },
-
-  async loadPair(pairId) {
-    const token = this.getToken();
-    if (!token) {
-      wx.reLaunch({ url: '/pages/bind-token/index' });
+    if (resumedSave && !resumed.ok && this.data.contextReady === true) {
+      // 后台保存失败时保留用户已经输入的草稿，返回后允许直接再次保存。
+      this._preserveDraftAfterSaveFailure = true;
+      this.setData({ busy: false, loading: false, loadError: '' });
+      wx.showToast({ title: '保存失败，请检查网络后重试', icon: 'none' });
+      await guardHealthSensitivePage(this, async () => {});
       return;
     }
-    try {
-      const elders = await api({ method: 'GET', path: '/mp/api/v1/elders', token });
-      const item = (elders || []).find((x) => x.pair_id === pairId);
-      if (!item) {
-        showInvalidPairAndReturn();
-        return;
-      }
-      const chronic = (item.member && item.member.chronic_diseases) ? item.member.chronic_diseases : [];
+    if (resumedSave && resumed.ok) {
+      this._preserveDraftAfterSaveFailure = false;
+      this.setData({ loading: true });
+    }
+    if (this._preserveDraftAfterSaveFailure && this.data.contextReady === true) {
+      this.setData({ busy: false, loading: false, loadError: '' });
+      // 只重新核验健康资料门禁，不读取服务器资料覆盖尚未保存的草稿。
+      await guardHealthSensitivePage(this, async () => {});
+      return;
+    }
+    if (this.data.contextReady !== true && this.data.pairId === null && this._routeMode) {
       this.setData({
-        locationQuery: item.location_query || item.community_code || '',
-        chronicText: (chronic || []).join(', '),
-        name: (item.member && item.member.name) ? item.member.name : '',
-        relation: (item.member && item.member.relation) ? item.member.relation : '',
-        age: (item.member && item.member.age) ? String(item.member.age) : '',
-        gender: (item.member && item.member.gender) ? item.member.gender : '',
+        mode: this._routeMode,
+        pairId: this._routePairId,
+        contextReady: false,
+        loadError: '',
+        loading: true,
       });
-    } catch (e) {
-      if (isUnauthorizedError(e)) return;
-      wx.showToast({ title: '加载失败', icon: 'none' });
+    }
+    await this.loadAuthorizedPage();
+  },
+
+  onHide() {
+    suspendHealthMutation(this);
+    this._hidden = true;
+    this._lifecycleGeneration = Number(this._lifecycleGeneration || 0) + 1;
+    this._loadRequestId = Number(this._loadRequestId || 0) + 1;
+  },
+
+  onSessionInvalidated() {
+    this._healthConsentLoadedOnce = false;
+    this._healthConsentLoadedToken = '';
+    this._lifecycleGeneration = Number(this._lifecycleGeneration || 0) + 1;
+    this._loadRequestId = Number(this._loadRequestId || 0) + 1;
+    if (this._returnTimer) clearTimeout(this._returnTimer);
+    this._returnTimer = null;
+    this._routePairId = null;
+    this._routeMode = 'create';
+    this._preserveDraftAfterSaveFailure = false;
+    if (this._unloaded) return;
+    this.setData({
+      mode: 'create',
+      pairId: null,
+      name: '',
+      relation: '',
+      age: '',
+      gender: '未填写',
+      genderIndex: 0,
+      chronicText: '',
+      contextReady: false,
+      loadError: '',
+      loading: false,
+      busy: false,
+    });
+  },
+
+  onHealthConsentRequired() {
+    this._healthConsentReloadPending = true;
+    this._lifecycleGeneration = Number(this._lifecycleGeneration || 0) + 1;
+    this._loadRequestId = Number(this._loadRequestId || 0) + 1;
+    if (this._returnTimer) clearTimeout(this._returnTimer);
+    this._returnTimer = null;
+    this._preserveDraftAfterSaveFailure = false;
+    if (this._unloaded) return;
+    this.setData({
+      mode: 'create',
+      pairId: null,
+      name: '',
+      relation: '',
+      age: '',
+      gender: '未填写',
+      genderIndex: 0,
+      chronicText: '',
+      contextReady: false,
+      loadError: '',
+      loading: true,
+      busy: false,
+    });
+  },
+
+  onHealthConsentGuardError() {
+    this._loadRequestId = Number(this._loadRequestId || 0) + 1;
+    if (this._unloaded || this._hidden) return;
+    this.setData({
+      contextReady: false,
+      loadError: '健康资料授权状态暂时没有核验成功，请检查网络后重新加载。',
+      loading: false,
+      busy: false,
+    });
+  },
+
+  onUnload() {
+    this._unloaded = true;
+    this._lifecycleGeneration = Number(this._lifecycleGeneration || 0) + 1;
+    this._loadRequestId = Number(this._loadRequestId || 0) + 1;
+    if (this._returnTimer) clearTimeout(this._returnTimer);
+    this._returnTimer = null;
+    this._preserveDraftAfterSaveFailure = false;
+  },
+
+  async loadAuthorizedPage(event) {
+    if (this._unloaded || this._hidden) return false;
+    const manualRetry = Boolean(event && event.currentTarget);
+    if (manualRetry) {
+      // 可见重试必须重新经过健康同意门禁，不能直接调用私密资料 loader。
+      this._healthConsentReloadPending = true;
+      this.setData({ contextReady: false, loadError: '', loading: true });
+    }
+    return guardHealthSensitivePage(this, () => this.loadAuthorizedContent());
+  },
+
+  async loadAuthorizedContent() {
+    if (this._unloaded || this._hidden) return;
+    const mode = this._routeMode || this.data.mode;
+    const pairId = this._routePairId || this.data.pairId;
+    this.setData({ mode, pairId, contextReady: false, loadError: '' });
+    if (mode === 'edit') {
+      await this.loadElder();
+      return;
+    }
+    this.setData({ contextReady: true, loadError: '', loading: false });
+  },
+
+  async loadElder() {
+    if (this._unloaded || this._hidden) return;
+    const request = beginLoad(this);
+    const pairId = Number(this.data.pairId || 0);
+    this.setData({
+      name: '',
+      relation: '',
+      age: '',
+      gender: '未填写',
+      genderIndex: 0,
+      chronicText: '',
+      contextReady: false,
+      loadError: '',
+      loading: true,
+    });
+    try {
+      const data = await authApi({ method: 'GET', path: '/mp/api/v1/elders' });
+      if (!loadIsActive(this, request)) return;
+      const item = normalizeList(data, ['items', 'elders']).find((elder) => Number(elder.pair_id) === pairId);
+      if (!item) throw new Error('not_found');
+      const member = item.member || {};
+      const genderIndex = Math.max(0, GENDER_OPTIONS.indexOf(member.gender || '未填写'));
+      this.setData({
+        name: member.name || '',
+        relation: member.relation || '',
+        age: member.age ? String(member.age) : '',
+        gender: GENDER_OPTIONS[genderIndex],
+        genderIndex,
+        chronicText: Array.isArray(member.chronic_diseases) ? member.chronic_diseases.join('、') : '',
+        contextReady: true,
+        loadError: '',
+      });
+      this._preserveDraftAfterSaveFailure = false;
+    } catch (error) {
+      if (loadIsActive(this, request)) {
+        this.setData({
+          contextReady: false,
+          loadError: '没有找到这位家人的资料，请检查网络后重试。',
+        });
+      }
+    } finally {
+      if (loadIsActive(this, request)) this.setData({ loading: false });
     }
   },
 
-  onName(e) { this.setData({ name: (e.detail.value || '').trim() }); },
-  onRelation(e) { this.setData({ relation: (e.detail.value || '').trim() }); },
-  onAge(e) { this.setData({ age: (e.detail.value || '').trim() }); },
-  onGender(e) { this.setData({ gender: (e.detail.value || '').trim() }); },
-  onLocation(e) { this.setData({ locationQuery: (e.detail.value || '').trim() }); },
-  onChronic(e) { this.setData({ chronicText: e.detail.value || '' }); },
+  onName(event) { this.setData({ name: event.detail.value || '' }); },
+  onRelation(event) { this.setData({ relation: event.detail.value || '' }); },
+  onAge(event) { this.setData({ age: event.detail.value || '' }); },
+  onChronic(event) { this.setData({ chronicText: event.detail.value || '' }); },
+
+  onGender(event) {
+    const genderIndex = Number(event.detail.value || 0);
+    this.setData({ genderIndex, gender: GENDER_OPTIONS[genderIndex] });
+  },
 
   async onSave() {
-    if (this.data.busy) return;
-    const token = this.getToken();
-    if (!token) {
-      wx.reLaunch({ url: '/pages/bind-token/index' });
+    if (this.data.busy || this._unloaded) return;
+    if (!this.data.contextReady) {
+      wx.showToast({ title: '请先重新加载家人资料', icon: 'none' });
       return;
     }
-    if (!this.data.locationQuery) {
-      wx.showToast({ title: '请填写所在地', icon: 'none' });
+    const validation = validateElderInput(this.data, { mode: this.data.mode });
+    if (!validation.valid) {
+      wx.showToast({ title: validation.error, icon: 'none' });
       return;
     }
-    const chronic = splitChronic(this.data.chronicText);
-    if (chronic.length > 20 || chronic.some((item) => item.length > 50)) {
-      wx.showToast({ title: '慢病类别填写过多或过长', icon: 'none' });
-      return;
-    }
-    const age = parseOptionalAge(this.data.age);
-    if (this.data.mode === 'create' && !age.valid) {
-      wx.showToast({ title: '年龄需为 1-150 的整数', icon: 'none' });
-      return;
-    }
-    const gender = normalizeOptionalGender(this.data.gender);
-    if (this.data.mode === 'create' && !gender.valid) {
-      wx.showToast({ title: '性别请填写男性、女性、其他或未知', icon: 'none' });
-      return;
-    }
+    const lifecycle = Number(this._lifecycleGeneration || 0);
+    const mode = this.data.mode;
+    const pairId = this.data.pairId;
     this.setData({ busy: true });
+    let mutation = null;
     try {
-      if (this.data.mode === 'create') {
-        if (!this.data.name) {
-          wx.showToast({ title: '请填写称呼/姓名', icon: 'none' });
-          return;
-        }
-        await api({
-          method: 'POST',
-          path: '/mp/api/v1/elders',
-          token,
-          data: {
-            name: this.data.name,
-            relation: this.data.relation,
-            age: age.value,
-            gender: gender.value,
-            location_query: this.data.locationQuery,
-            chronic_diseases: chronic,
-          },
-        });
-        wx.showToast({ title: '已创建', icon: 'success' });
-        wx.navigateBack();
-      } else {
-        await api({
-          method: 'PATCH',
-          path: `/mp/api/v1/elders/${this.data.pairId}`,
-          token,
-          data: {
-            location_query: this.data.locationQuery,
-            chronic_diseases: chronic,
-          },
-        });
-        wx.showToast({ title: '已保存', icon: 'success' });
-        wx.navigateBack();
+      const options = mode === 'create'
+        ? { method: 'POST', path: '/mp/api/v1/elders', data: validation.payload }
+        : { method: 'PATCH', path: `/mp/api/v1/elders/${pairId}`, data: validation.payload };
+      mutation = trackHealthMutation(
+        this,
+        authApi(options),
+        mode === 'create' ? 'elder-create' : 'elder-edit'
+      );
+      await mutation;
+      if (!lifecycleIsActive(this, lifecycle)) return;
+      this._preserveDraftAfterSaveFailure = false;
+      markPreviousCarePageForReload();
+      wx.showToast({ title: mode === 'create' ? '已添加' : '已保存', icon: 'success' });
+      if (this._returnTimer) clearTimeout(this._returnTimer);
+      this._returnTimer = setTimeout(() => {
+        this._returnTimer = null;
+        if (lifecycleIsActive(this, lifecycle)) wx.navigateBack();
+      }, 300);
+    } catch (error) {
+      if (lifecycleIsActive(this, lifecycle)) {
+        this._preserveDraftAfterSaveFailure = true;
+        this.setData({ loading: false, loadError: '' });
+        wx.showToast({ title: '保存失败，请检查网络后重试', icon: 'none' });
       }
-    } catch (e) {
-      if (isUnauthorizedError(e)) return;
-      if (e && e.code === 'not_found') {
-        showInvalidPairAndReturn();
-        return;
-      }
-      wx.showToast({ title: '保存失败', icon: 'none' });
     } finally {
-      this.setData({ busy: false });
+      finishHealthMutation(this, mutation);
+      if (lifecycleIsActive(this, lifecycle)) this.setData({ busy: false });
     }
   },
 
   onCancel() {
+    if (this._returnTimer) clearTimeout(this._returnTimer);
+    this._returnTimer = null;
     wx.navigateBack();
   },
 });

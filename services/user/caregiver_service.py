@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from flask import current_app, flash, jsonify, redirect, render_template, request, session, url_for
 from flask_login import current_user
 
-from core.db_models import Community, DailyStatus, Debrief, FamilyMember, Pair, PairLink
+from core.db_models import Community, DailyStatus, Debrief, FamilyMember, HelpRequest, Pair, PairLink
 from core.extensions import db
 from core.guest import is_guest_user
 from core.time_utils import today_local, utcnow, local_datetime_to_utc
@@ -180,9 +180,19 @@ def _load_created_pair():
 
 
 def _build_pair_management_context(caregiver_mode=False):
+    from services.family_access import visible_pair_ids_for_user
+
     created_pair = _load_created_pair()
     status_date = today_local()
-    pairs = Pair.query.filter_by(caregiver_id=current_user.id).order_by(Pair.created_at.desc()).all()
+    visible_ids = visible_pair_ids_for_user(current_user.id)
+    if visible_ids:
+        pairs = (
+            Pair.query.filter(Pair.id.in_(visible_ids), Pair.status == 'active')
+            .order_by(Pair.created_at.desc())
+            .all()
+        )
+    else:
+        pairs = Pair.query.filter_by(caregiver_id=current_user.id, status='active').order_by(Pair.created_at.desc()).all()
     communities = Community.query.order_by(Community.name).all()
     family_members = []
     try:
@@ -242,6 +252,15 @@ def _build_pair_management_context(caregiver_mode=False):
         except Exception:
             db.session.rollback()
             logger.warning("加载成员映射失败，已降级为空映射", exc_info=True)
+
+    open_help_by_pair = {}
+    if pairs:
+        from services.help_request_service import OPEN_STATUSES, serialize_help
+        for row in HelpRequest.query.filter(
+            HelpRequest.pair_id.in_([item.id for item in pairs]),
+            HelpRequest.status.in_(OPEN_STATUSES),
+        ).all():
+            open_help_by_pair[row.pair_id] = row
 
     heat_service = HeatActionService()
 
@@ -326,7 +345,12 @@ def _build_pair_management_context(caregiver_mode=False):
             'elder_name': (member.name if member else None),
             'action_link': action_link,
             'reminder_message': reminder_message,
-            'help_flag': bool(status and status.help_flag),
+            'open_help': (
+                serialize_help(open_help_by_pair[pair.id], user=current_user, pair=pair)
+                if pair.id in open_help_by_pair else None
+            ),
+            'help_flag': pair.id in open_help_by_pair,
+            'pair_detail_url': url_for('user.caregiver_pair_detail', pair_id=pair.id),
             'is_overdue': is_overdue,
             'relay_stage': relay_stage,
             'relay_stage_label': relay_stage_label
@@ -401,6 +425,24 @@ def pair_management():
 
     context = _build_pair_management_context()
     return render_template('pair_management.html', **context)
+
+
+def render_help_inbox(data):
+    if not _require_care_role():
+        return redirect(url_for('user.user_dashboard'))
+    if is_guest_user(current_user):
+        flash('游客模式无法查看求助。', 'error')
+        return redirect(url_for('user.user_dashboard'))
+    return render_template('help_inbox.html', data=data)
+
+
+def render_help_detail(detail):
+    if not _require_care_role():
+        return redirect(url_for('user.user_dashboard'))
+    if is_guest_user(current_user):
+        flash('游客模式无法查看求助。', 'error')
+        return redirect(url_for('user.user_dashboard'))
+    return render_template('help_detail.html', detail=detail)
 
 
 def caregiver_dashboard():
@@ -556,14 +598,52 @@ def caregiver_action_log(pair_id):
                     },
                 )
             elif event_name == 'help_acknowledged':
-                event = record_event(pair, 'help_acknowledged', actor, 'manual')
+                from services.help_request_service import apply_pair_help_stage
+                help_body = apply_pair_help_stage(
+                    current_user, pair, 'help_acknowledged', origin_channel='web', commit=True,
+                )
+                _refresh_community_daily(pair.community_code, today_local())
+                if wants_json:
+                    return jsonify({
+                        'ok': True,
+                        'event_id': None,
+                        'help_request': help_body,
+                        'state': load_today_state(pair, today_local()),
+                    })
+                flash('已记录照护动作。收到不等于老人已经安全。', 'success')
+                return redirect(url_for('user.caregiver_pair_detail', pair_id=pair.id))
             elif event_name == 'caregiver_verified':
                 event = record_event(pair, 'caregiver_verified', 'caregiver', 'manual')
+            elif event_name == 'closed':
+                from services.help_request_service import apply_pair_help_stage, open_help_for_pair
+                if open_help_for_pair(pair.id):
+                    help_body = apply_pair_help_stage(
+                        current_user, pair, 'closed', origin_channel='web', commit=True,
+                    )
+                    _refresh_community_daily(pair.community_code, today_local())
+                    if wants_json:
+                        return jsonify({
+                            'ok': True,
+                            'event_id': None,
+                            'help_request': help_body,
+                            'state': load_today_state(pair, today_local()),
+                        })
+                    flash('已记录照护动作。', 'success')
+                    return redirect(url_for('user.caregiver_pair_detail', pair_id=pair.id))
+                event = record_event(pair, 'closed', actor, 'manual')
             else:
                 event = record_event(pair, 'closed', actor, 'manual')
         except InvalidTransition as exc:
             db.session.rollback()
             return exc.to_response()
+        except Exception as exc:
+            from services.help_http import handle_domain_error
+            from services.family_access import FamilyAccessError
+            from services.help_request_service import HelpRequestError
+            if isinstance(exc, (HelpRequestError, FamilyAccessError)):
+                db.session.rollback()
+                return handle_domain_error(exc)
+            raise
         _refresh_community_daily(pair.community_code, today_local())
         if wants_json:
             return jsonify({

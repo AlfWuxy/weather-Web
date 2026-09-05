@@ -17,7 +17,9 @@ from .caregiver_service import (
     caregiver_wechat_template,
     pair_backup_contact,
     pair_escalate,
-    pair_management
+    pair_management,
+    render_help_detail,
+    render_help_inbox,
 )
 from .community_service import (
     community_announce,
@@ -34,6 +36,8 @@ __all__ = [
     'handle_elder_mode_event',
     'handle_elder_mode_state',
     'pair_management',
+    'render_help_inbox',
+    'render_help_detail',
     'caregiver_dashboard',
     'caregiver_pair_create',
     'caregiver_pair_detail',
