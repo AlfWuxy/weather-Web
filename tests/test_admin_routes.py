@@ -8,8 +8,13 @@ from datetime import datetime
 
 
 def _login_as(client, user_id: int):
+    from core.db_models import User
+    from core.extensions import db
+
+    user = db.session.get(User, user_id)
+    assert user is not None
     with client.session_transaction() as session:
-        session['_user_id'] = str(user_id)
+        session['_user_id'] = user.get_id()
         session['_fresh'] = True
 
 

@@ -227,9 +227,16 @@ def test_validators_comprehensive():
     valid, msg = validate_username('ab')  # 太短
     assert valid is False
 
-    # 密码验证
+    # 密码验证（P7：最少 8 位）
     valid, result = validate_password('password123')
     assert valid is True
+
+    valid, result = validate_password('12345678')  # 刚好 8 位
+    assert valid is True
+
+    valid, msg = validate_password('1234567')  # 7 位不足
+    assert valid is False
+    assert '8' in msg
 
     valid, msg = validate_password('123')  # 太短
     assert valid is False
@@ -326,6 +333,40 @@ def test_location_update_blocks_external_referrer(app, client, db_session):
     assert resp.headers['Location'].endswith('/dashboard')
 
 
+@pytest.mark.parametrize(
+    ('base_url', 'referrer', 'expected'),
+    [
+        (
+            'https://weather.example',
+            'https://weather.example/profile?tab=care&from=location',
+            '/profile?tab=care&from=location',
+        ),
+        ('https://weather.example', '/profile?tab=care&from=location', '/profile?tab=care&from=location'),
+        ('https://evil.example', 'https://evil.example//attacker.example', '/dashboard'),
+        ('https://weather.example', '//attacker.example/path', '/dashboard'),
+        ('https://weather.example', '///attacker.example/path', '/dashboard'),
+        ('https://weather.example', '/profile\\attacker.example', '/dashboard'),
+        ('https://weather.example', '/profile/%5C%5Cattacker.example', '/dashboard'),
+        ('https://weather.example', '/profile%0d%0aLocation:%20//attacker.example', '/dashboard'),
+        ('https://weather.example', 'https://other.example/profile', '/dashboard'),
+    ],
+)
+def test_safe_referrer_normalizes_to_local_path_and_rejects_host_tricks(
+    app,
+    base_url,
+    referrer,
+    expected,
+):
+    from services.user.profile_service import _safe_referrer_or_dashboard
+
+    with app.test_request_context(
+        '/location',
+        base_url=base_url,
+        headers={'Referer': referrer},
+    ):
+        assert _safe_referrer_or_dashboard() == expected
+
+
 def test_create_notification_fails_closed_on_quota_error(app, monkeypatch):
     """通知配额检查异常时应阻止发送（fail-closed）"""
     from core import notifications
@@ -361,6 +402,136 @@ def test_structured_logs_redact_action_and_tracking_tokens(app, client, monkeypa
 
     assert any('"path": "/e/<token>"' in message for message in messages)
     assert all('action-secret' not in message for message in messages)
+
+
+def test_user_get_id_embeds_password_stamp(db_session):
+    """P7：User.get_id 为 {id}:{password_hash 短摘要}，改密后 stamp 变化。"""
+    import hashlib
+    from core.db_models import User
+
+    user = User(username='stamp_user', role='user')
+    user.set_password('OldPass12')
+    db_session.add(user)
+    db_session.commit()
+
+    gid = user.get_id()
+    assert isinstance(gid, str)
+    assert ':' in gid
+    uid_part, stamp = gid.split(':', 1)
+    assert uid_part == str(user.id)
+    expected = hashlib.sha256((user.password_hash or '').encode('utf-8')).hexdigest()[:16]
+    assert stamp == expected
+
+    user.set_password('NewPass34')
+    db_session.commit()
+    gid2 = user.get_id()
+    assert gid2 != gid
+    assert gid2.startswith(f'{user.id}:')
+    assert gid2.split(':', 1)[1] != stamp
+
+
+def test_password_change_invalidates_session(app, client, db_session):
+    """P7：改密后旧 session 中的 password stamp 与库中不一致 → 会话失效。
+
+    模拟：登录拿到带 stamp 的 _user_id → POST 改密 → 再访问需登录页应被踢回登录。
+
+    注意：pytest 的 db_session 在整个用例内保持同一 app_context，Flask-Login 会把
+    已加载用户缓存在 g._login_user；生产环境每个请求独立 app_context，无此缓存。
+    因此在二次请求前显式清掉 g 缓存，才能测到 loader 的 stamp 校验。
+    """
+    import hashlib
+    from flask import g
+    from core.db_models import User
+    from core.extensions import login_manager
+
+    def _clear_login_user_cache():
+        # 清掉跨请求残留的 g._login_user，强制下一次走 user_loader
+        if hasattr(g, '_login_user'):
+            delattr(g, '_login_user')
+
+    user = User(username='sess_revoke_u', role='user')
+    user.set_password('OldPass12')
+    db_session.add(user)
+    db_session.commit()
+
+    csrf = 'test-csrf-token'
+    with client.session_transaction() as session:
+        session['_csrf_token'] = csrf
+
+    login_resp = client.post(
+        '/login',
+        data={
+            'username': 'sess_revoke_u',
+            'password': 'OldPass12',
+            'csrf_token': csrf,
+        },
+        follow_redirects=True,
+    )
+    assert login_resp.status_code == 200
+
+    with client.session_transaction() as session:
+        old_user_id = session.get('_user_id')
+    assert old_user_id is not None
+    assert ':' in str(old_user_id), '登录后 _user_id 应含 password stamp'
+
+    # 改密前可进 profile
+    _clear_login_user_cache()
+    before = client.get('/profile', follow_redirects=False)
+    assert before.status_code == 200
+
+    _clear_login_user_cache()
+    change = client.post(
+        '/profile',
+        data={
+            'form_id': 'password',
+            'old_password': 'OldPass12',
+            'new_password': 'NewPass34',
+            'confirm_password': 'NewPass34',
+            'csrf_token': csrf,
+        },
+        follow_redirects=False,
+    )
+    assert change.status_code in (302, 303)
+
+    db_session.refresh(user)
+    new_stamp = hashlib.sha256((user.password_hash or '').encode('utf-8')).hexdigest()[:16]
+    old_stamp = str(old_user_id).split(':', 1)[1]
+    assert old_stamp != new_stamp, '改密后 stamp 必须变化'
+    with client.session_transaction() as session:
+        assert '_user_id' not in session, '改密后必须显式退出当前会话'
+
+    # 直接断言 loader 拒绝旧 stamp（不依赖 g 缓存）
+    assert login_manager._user_callback(old_user_id) is None
+    assert login_manager._user_callback(user.get_id()) is not None
+
+    # 当前会话已退出；清 g 后受保护页面应要求重新登录。
+    _clear_login_user_cache()
+    after = client.get('/profile', follow_redirects=False)
+    assert after.status_code in (302, 303)
+    location = after.headers.get('Location') or ''
+    assert 'login' in location.lower() or '/login' in location
+
+    # 新密码可重新登录，且新会话 stamp 匹配
+    with client.session_transaction() as session:
+        session['_csrf_token'] = csrf
+    _clear_login_user_cache()
+    re_login = client.post(
+        '/login',
+        data={
+            'username': 'sess_revoke_u',
+            'password': 'NewPass34',
+            'csrf_token': csrf,
+        },
+        follow_redirects=True,
+    )
+    assert re_login.status_code == 200
+    with client.session_transaction() as session:
+        new_user_id = session.get('_user_id')
+    assert new_user_id is not None
+    assert str(new_user_id).split(':', 1)[1] == new_stamp
+    _clear_login_user_cache()
+    ok = client.get('/profile', follow_redirects=False)
+    assert ok.status_code == 200
 
 
 if __name__ == '__main__':

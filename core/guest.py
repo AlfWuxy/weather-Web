@@ -8,7 +8,7 @@ import secrets
 from flask import session
 from flask_login import UserMixin
 
-from core.constants import GUEST_ID_PREFIX
+from core.constants import DEFAULT_CITY_LABEL, GUEST_ID_PREFIX
 from core.time_utils import utcnow
 
 logger = logging.getLogger(__name__)
@@ -23,7 +23,7 @@ class GuestUser(UserMixin):
         self.role = 'guest'
         self.age = profile.get('age')
         self.gender = profile.get('gender', '未知')
-        self.community = profile.get('community', '朝阳社区')
+        self.community = profile.get('community', DEFAULT_CITY_LABEL)
         self.has_chronic_disease = profile.get('has_chronic_disease', False)
         self.chronic_diseases = profile.get('chronic_diseases')
         self.is_guest = True
@@ -40,7 +40,7 @@ def build_guest_profile():
             'username': '游客',
             'age': None,
             'gender': '未知',
-            'community': '朝阳社区',
+            'community': DEFAULT_CITY_LABEL,
             'has_chronic_disease': False,
             'chronic_diseases': None
         }
@@ -77,3 +77,8 @@ def get_guest_assessment():
         recommendations=data.get('recommendations'),
         explain=data.get('explain')
     )
+
+
+# 再导出：定义在 core.security，便于 from core.guest import reject_guest
+# security 不反向 import guest，无环依赖
+from core.security import real_login_required, reject_guest  # noqa: E402,F401

@@ -3,6 +3,9 @@
 import pytest
 
 
+PAIR_SESSION_KEYS = ('pair_token', 'pair_session_id', 'pair_session_code')
+
+
 def _extract_set_cookie(resp):
     # Werkzeug headers support getlist; fall back to manual.
     try:
@@ -68,8 +71,8 @@ def test_login_does_not_set_remember_cookie_by_default(client, db_session):
 @pytest.mark.parametrize(
     ('role', 'expected_path'),
     [
-        ('user', '/dashboard'),
-        ('caregiver', '/caregiver'),
+        ('user', '/pairs'),
+        ('caregiver', '/pairs'),
         ('community', '/community'),
         ('admin', '/admin'),
     ],
@@ -213,3 +216,136 @@ def test_login_lockout_uses_normalized_username_key(client, db_session, monkeypa
 
     assert fake_redis.values.get('login_failures:caseuser') == 2
     assert 'login_failures:CaseUser' not in fake_redis.values
+
+
+def test_real_login_clears_guest_session_state(client, db_session):
+    from core.db_models import User
+
+    user = User(username='guest_to_real', role='caregiver')
+    user.set_password('StrongPass123')
+    db_session.add(user)
+    db_session.commit()
+
+    csrf = 'csrf-guest-to-real'
+    with client.session_transaction() as session:
+        session['_csrf_token'] = csrf
+        session['guest_id'] = 'guest_stale'
+        session['guest_profile'] = {'username': '游客'}
+        session['guest_assessment'] = {'risk_level': '低风险'}
+        session['pair_token'] = 'stale-login-token'
+        session['pair_session_id'] = 51
+        session['pair_session_code'] = '51000001'
+
+    response = client.post(
+        '/login',
+        data={
+            'username': user.username,
+            'password': 'StrongPass123',
+            'csrf_token': csrf,
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 302
+    assert response.headers['Location'].endswith('/pairs')
+    with client.session_transaction() as session:
+        assert session.get('_user_id') == user.get_id()
+        assert 'guest_id' not in session
+        assert 'guest_profile' not in session
+        assert 'guest_assessment' not in session
+        for key in PAIR_SESSION_KEYS:
+            assert key not in session
+
+
+def test_logout_always_clears_stale_guest_session_state(client, db_session):
+    from core.db_models import User
+
+    user = User(username='logout_guest_cleanup', role='user')
+    user.set_password('StrongPass123')
+    db_session.add(user)
+    db_session.commit()
+
+    csrf = 'csrf-logout-cleanup'
+    with client.session_transaction() as session:
+        session['_csrf_token'] = csrf
+        session['_user_id'] = user.get_id()
+        session['_fresh'] = True
+        session['guest_id'] = 'guest_stale'
+        session['guest_profile'] = {'username': '游客'}
+        session['guest_assessment'] = {'risk_level': '低风险'}
+        session['pair_token'] = 'stale-logout-token'
+        session['pair_session_id'] = 61
+        session['pair_session_code'] = '61000001'
+
+    response = client.post(
+        '/logout',
+        data={'csrf_token': csrf},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 302
+    with client.session_transaction() as session:
+        assert '_user_id' not in session
+        assert 'guest_id' not in session
+        assert 'guest_profile' not in session
+        assert 'guest_assessment' not in session
+        for key in PAIR_SESSION_KEYS:
+            assert key not in session
+
+
+def test_guest_entry_keeps_existing_pair_action_session(client):
+    with client.session_transaction() as session:
+        session['pair_token'] = 'guest-action-token'
+        session['pair_session_id'] = 71
+        session['pair_session_code'] = '71000001'
+
+    response = client.get('/guest', follow_redirects=False)
+
+    assert response.status_code == 302
+    with client.session_transaction() as session:
+        assert session['pair_token'] == 'guest-action-token'
+        assert session['pair_session_id'] == 71
+        assert session['pair_session_code'] == '71000001'
+        assert session.get('_user_id', '').startswith('guest:')
+
+
+def test_legacy_numeric_session_and_remember_cookie_require_relogin(app, db_session):
+    from flask_login.utils import encode_cookie
+
+    from core.constants import GUEST_ID_PREFIX
+    from core.db_models import User
+    from core.extensions import login_manager
+
+    user = User(username='legacy_numeric_identity', role='user')
+    user.set_password('StrongPass123')
+    db_session.add(user)
+    db_session.commit()
+
+    assert login_manager._user_callback(str(user.id)) is None
+    assert login_manager._user_callback(user.get_id()) is not None
+    stamp = user.get_id().split(':', 1)[1]
+    for malformed_id in (
+        f'{user.id}:',
+        f'0{user.id}:{stamp}',
+        f'{user.id}:{stamp}:extra',
+        f'9223372036854775808:{stamp}',
+    ):
+        assert login_manager._user_callback(malformed_id) is None
+    with app.test_request_context('/'):
+        guest_id = f'{GUEST_ID_PREFIX}loader-control'
+        assert login_manager._user_callback(guest_id).get_id() == guest_id
+
+    session_client = app.test_client()
+    with session_client.session_transaction() as session:
+        session['_user_id'] = str(user.id)
+        session['_fresh'] = True
+    session_response = session_client.get('/profile', follow_redirects=False)
+    assert session_response.status_code == 302
+    assert '/login' in (session_response.headers.get('Location') or '')
+
+    remember_client = app.test_client()
+    remember_cookie_name = app.config.get('REMEMBER_COOKIE_NAME', 'remember_token')
+    remember_client.set_cookie(remember_cookie_name, encode_cookie(str(user.id)))
+    remember_response = remember_client.get('/profile', follow_redirects=False)
+    assert remember_response.status_code == 302
+    assert '/login' in (remember_response.headers.get('Location') or '')

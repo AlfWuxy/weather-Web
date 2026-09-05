@@ -4,19 +4,104 @@ import hashlib
 import logging
 import os
 import secrets
+from functools import wraps
 
-from flask import abort, current_app, has_app_context, jsonify, request, session
+from flask import abort, current_app, flash, has_app_context, jsonify, redirect, request, session, url_for
 
 logger = logging.getLogger(__name__)
 from flask_login import current_user
 from flask_limiter.util import get_remote_address
 
 
+def _client_ip_rate_key():
+    """未登录与游客共用的 IP 限流键。
+
+    必须带 ``ip:`` 前缀：Flask-Limiter 按字符串分桶，
+    若未登录返回裸 IP、游客返回 ``ip:IP``，同一客户端会落两套桶
+    （匿名 weather 与 guest 会话可各刷一份配额）。
+    """
+    return f"ip:{get_remote_address()}"
+
+
 def rate_limit_key():
-    """按用户或IP进行限流"""
+    """按用户或 IP 进行限流。
+
+    游客会话每次 /guest 会换新 id，若仅按 user id 限流会被轮换清空。
+    游客与未登录一律 ``ip:{addr}``（同一 helper，键格式不可分叉）；
+    正式登录用户按 ``user:<id>``。
+    """
     if current_user.is_authenticated:
-        return str(getattr(current_user, 'id', 'anonymous'))
-    return get_remote_address()
+        # 游客：is_guest 或 id 前缀 guest: / role=guest → 与匿名同桶
+        if getattr(current_user, 'is_guest', False):
+            return _client_ip_rate_key()
+        uid = str(getattr(current_user, 'id', '') or '')
+        if uid.startswith('guest:') or getattr(current_user, 'role', None) == 'guest':
+            return _client_ip_rate_key()
+        return f"user:{uid}"
+    # 未登录（含匿名 weather）：与 guest 同为 ip: 前缀
+    return _client_ip_rate_key()
+
+
+def _is_guest_subject():
+    """判断当前主体是否为游客（与 rate_limit_key 判定对齐，含兜底）。"""
+    if not getattr(current_user, 'is_authenticated', False):
+        return False
+    if getattr(current_user, 'is_guest', False):
+        return True
+    if getattr(current_user, 'role', None) == 'guest':
+        return True
+    uid = str(getattr(current_user, 'id', '') or '')
+    return uid.startswith('guest:')
+
+
+def _wants_api_error_payload():
+    """API 路径或显式要 JSON 时返回结构化 403。"""
+    if request.path.startswith('/api/'):
+        return True
+    best = request.accept_mimetypes.best_match(['application/json', 'text/html'])
+    if best == 'application/json' and (
+        request.accept_mimetypes[best] > request.accept_mimetypes['text/html']
+    ):
+        return True
+    return False
+
+
+def reject_guest(view_func):
+    """拒绝游客访问高成本/计费能力。
+
+    用法：与 @login_required 组合（推荐 @login_required 在上）：
+        @login_required
+        @reject_guest
+        def expensive_api(): ...
+
+    行为：
+    - 未登录：不拦截，交给 @login_required（或后续逻辑）
+    - 游客：API → 403 JSON；页面 → flash + 跳转 dashboard
+    - 正式用户：放行
+    """
+    @wraps(view_func)
+    def wrapped(*args, **kwargs):
+        if _is_guest_subject():
+            message = '游客不可用，请注册登录'
+            if _wants_api_error_payload():
+                return jsonify({
+                    'success': False,
+                    'error': 'guest_not_allowed',
+                    'message': message,
+                }), 403
+            flash(message, 'error')
+            try:
+                return redirect(url_for('user.user_dashboard'))
+            except Exception:
+                # 无 dashboard 端点时回退硬 403
+                abort(403)
+        return view_func(*args, **kwargs)
+
+    return wrapped
+
+
+# 别名：语义上表示「需要正式登录用户」
+real_login_required = reject_guest
 
 
 def generate_csrf_token():
