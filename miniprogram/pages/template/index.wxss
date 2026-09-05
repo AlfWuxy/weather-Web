@@ -1,4 +1,5 @@
 .msg {
+  margin-top: 12px;
   white-space: pre-wrap;
+  line-height: 1.7;
 }
-

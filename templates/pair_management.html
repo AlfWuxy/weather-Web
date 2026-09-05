@@ -375,7 +375,7 @@ document.addEventListener('DOMContentLoaded', function () {
                 await logEvent('template_copy', {
                     pair_id: pairId,
                     member_id: memberId,
-                    meta: { alert_kind: alertKind }
+                    meta: { alert_kind: alertKind, trigger: alertKind }
                 });
                 btn.classList.add('btn-success');
                 btn.textContent = '已复制';
