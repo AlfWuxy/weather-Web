@@ -17,6 +17,12 @@
       <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('analysis.pilot_funnel_csv', days=days, window=request.args.get('window'), include_test=1 if include_test else none) }}">
         漏斗 CSV
       </a>
+      <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('analysis.pilot_resource_gaps_csv', days=days, window=request.args.get('window'), include_test=1 if include_test else none) }}">
+        资源缺口 CSV
+      </a>
+      <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('analysis.pilot_resource_gaps_summary_json', days=days, window=request.args.get('window'), include_test=1 if include_test else none) }}">
+        缺口 JSON
+      </a>
       <div class="btn-group btn-group-sm" role="group" aria-label="funnel-window">
         <a class="btn btn-outline-success {% if window == 'today' %}active{% endif %}" href="{{ url_for('analysis.pilot_dashboard', window='today', days=days) }}">当日</a>
         <a class="btn btn-outline-success {% if window == '7d' %}active{% endif %}" href="{{ url_for('analysis.pilot_dashboard', window='7d', days=days) }}">近7日</a>
@@ -122,6 +128,27 @@
         <div class="col-md-4">事件来源完整率：{{ (funnel.event_source_completeness * 100) | round(1) }}%</div>
       </div>
       <p class="text-muted small mb-0 mt-2">不代表老人安全或健康改善；未点击不等于未理解。</p>
+    </div>
+  </div>
+  {% endif %}
+
+  {% if resource_gaps_summary %}
+  <div class="card shadow-sm mt-3">
+    <div class="card-header bg-light">
+      <strong>资源缺口</strong>
+      <span class="text-muted small ms-2">资源可达性审计，不代表公共服务能力</span>
+    </div>
+    <div class="card-body">
+      <div class="row g-2 small">
+        <div class="col-md-4">未核验：{{ resource_gaps_summary.unverified_count }}</div>
+        <div class="col-md-4">已核验：{{ resource_gaps_summary.verified_count }}</div>
+        <div class="col-md-4">超30天未复核：{{ resource_gaps_summary.stale_count }}</div>
+        <div class="col-md-4">近7日核验比例：{% if resource_gaps_summary.verified_within_7d_ratio is not none %}{{ (resource_gaps_summary.verified_within_7d_ratio * 100) | round(1) }}%{% else %}--{% endif %}</div>
+        <div class="col-md-4">用户报关闭：{{ resource_gaps_summary.closed_reported_count }}</div>
+        <div class="col-md-4">需要接送反馈：{{ resource_gaps_summary.need_ride_count }}</div>
+        <div class="col-md-8">至少一处可用资源的户比例：{% if resource_gaps_summary.households_with_one_viable_option_ratio is not none %}{{ (resource_gaps_summary.households_with_one_viable_option_ratio * 100) | round(1) }}%{% else %}--{% endif %}</div>
+      </div>
+      <p class="text-muted small mb-0 mt-2">资源可达性审计，不代表公共服务能力</p>
     </div>
   </div>
   {% endif %}

@@ -8,7 +8,7 @@ import math
 from collections import defaultdict
 from datetime import timedelta
 
-from flask import Blueprint, current_app, flash, redirect, render_template, request, send_file, url_for
+from flask import Blueprint, current_app, flash, jsonify, redirect, render_template, request, send_file, url_for
 from flask_login import current_user, login_required
 
 from core.constants import DEFAULT_CITY_LABEL
@@ -17,6 +17,7 @@ from core.guest import is_guest_user
 from core.analytics import pearson_corr
 from core.audit import log_audit
 from services.action_events import funnel as action_funnel, pair_hash as hash_pair_id
+from services.cooling_service import resource_gaps as cooling_resource_gaps
 from core.db_models import (
     ActionEvent,
     AlertDelivery,
@@ -3332,6 +3333,8 @@ def pilot_dashboard():
     ).group_by(location_expr).order_by(cnt_expr.desc()).limit(20).all()
     location_coverage = [{'location': r[0] or '', 'count': int(r[1] or 0)} for r in location_rows]
 
+    gaps = cooling_resource_gaps(today_local(), include_test=include_test)
+
     return render_template(
         'analysis_pilot.html',
         days=days,
@@ -3351,6 +3354,7 @@ def pilot_dashboard():
         feedback_count=feedback_count,
         wxoa_land=wxoa_land,
         location_coverage=location_coverage,
+        resource_gaps_summary=gaps['summary'],
     )
 
 
@@ -3450,6 +3454,72 @@ def pilot_funnel_csv():
         as_attachment=True,
         download_name=f'pilot_funnel_{window_label}.csv',
     )
+
+
+@bp.route('/analysis/pilot/resource_gaps.csv', endpoint='pilot_resource_gaps_csv')
+@login_required
+def pilot_resource_gaps_csv():
+    """导出避暑资源缺口清单（管理员）。"""
+    if not _require_admin():
+        return redirect(url_for('user.user_dashboard'))
+
+    _date_from, date_to, _window_label, include_test = _pilot_window()
+    gaps = cooling_resource_gaps(date_to, include_test=include_test)
+
+    out = io.StringIO()
+    writer = csv.writer(out)
+    writer.writerow([
+        'id', 'type', 'township', 'verify_status', 'last_verified_at',
+        'open_during_alert', 'transport_need', 'closed_feedback_count',
+        'need_ride_feedback_count',
+    ])
+    for row in gaps['rows']:
+        writer.writerow([
+            row['id'],
+            row['type'],
+            row['township'],
+            row['verify_status'],
+            row['last_verified_at'],
+            row['open_during_alert'],
+            row['transport_need'],
+            row['closed_feedback_count'],
+            row['need_ride_feedback_count'],
+        ])
+    writer.writerow([])
+    writer.writerow(['# summary'])
+    writer.writerow(['metric', 'value'])
+    summary = gaps['summary']
+    for key in (
+        'unverified_count',
+        'verified_count',
+        'stale_count',
+        'verified_within_7d_ratio',
+        'closed_reported_count',
+        'need_ride_count',
+        'households_with_one_viable_option_ratio',
+    ):
+        value = summary.get(key)
+        writer.writerow([key, '' if value is None else value])
+
+    data = out.getvalue().encode('utf-8-sig')
+    return send_file(
+        io.BytesIO(data),
+        mimetype='text/csv',
+        as_attachment=True,
+        download_name='resource_gaps.csv',
+    )
+
+
+@bp.route('/analysis/pilot/resource_gaps_summary.json', endpoint='pilot_resource_gaps_summary_json')
+@login_required
+def pilot_resource_gaps_summary_json():
+    """导出避暑资源缺口汇总（管理员）。"""
+    if not _require_admin():
+        return redirect(url_for('user.user_dashboard'))
+
+    _date_from, date_to, _window_label, include_test = _pilot_window()
+    gaps = cooling_resource_gaps(date_to, include_test=include_test)
+    return jsonify(gaps['summary'])
 
 
 @bp.route('/analysis/model-quality', endpoint='model_quality')
