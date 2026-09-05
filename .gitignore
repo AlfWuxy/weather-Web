@@ -45,6 +45,7 @@ htmlcov/
 .claude/
 .vscode/
 .idea/
+.worktrees/
 *.swp
 *.swo
 *~
@@ -52,7 +53,24 @@ htmlcov/
 # 浏览器与调试产物
 .playwright-cli/
 output/playwright/
-analysis/duchang_health_weather/outputs/
+output/
+/outputs/
+/tmp/
+
+# 本地研究产物与一次性报告（保留磁盘文件，不入库）
+/analysis/
+/_to_delete/
+/.learnings/
+/*.docx
+/*.xlsx
+docs/algorithm-audit/
+docs/product-growth/
+docs/product/
+docs/security/
+
+# Leaflet 仅跟踪压缩 dist；源码与 sourcemap 留在本地
+static/vendor/leaflet/dist/*.map
+static/vendor/leaflet/dist/leaflet-src.*
 
 # 日志与临时文件
 *.log
@@ -65,6 +83,8 @@ backups/
 .env
 .env.*
 !.env.example
+*.pem
+*.key
 
 # 系统文件
 .DS_Store
