@@ -23,6 +23,10 @@ VALID_QWEATHER = {
     'aqi': 45,
     'is_mock': False,
     'data_source': 'QWeather',
+    'observed_at': utcnow().isoformat(),
+    'air_observed_at': utcnow().isoformat(),
+    'quality_version': 1,
+    'air_quality_available': True,
 }
 
 
@@ -147,6 +151,62 @@ def test_qweather_and_openmeteo_failure_then_use_mock(monkeypatch):
     assert service.get_current_weather('都昌') == mock_weather
 
 
+def test_qweather_budget_guard_blocks_http_and_uses_fallback(monkeypatch):
+    """月度保护触发后不得再发和风请求。"""
+    from services import weather_service as weather_module
+
+    service = weather_module.WeatherService()
+    service.qweather_key = 'test-key'
+    service.api_base_url = 'https://qweather.invalid'
+    fallback = {'is_mock': False, 'data_source': 'Open-Meteo'}
+
+    monkeypatch.setattr(weather_module, 'reserve_qweather_request', lambda _endpoint: False)
+    monkeypatch.setattr(
+        weather_module.requests,
+        'get',
+        lambda *_args, **_kwargs: pytest.fail('预算保护后不应发送和风请求'),
+    )
+    monkeypatch.setattr(service, '_get_openmeteo_weather', lambda _city: fallback)
+
+    assert service.get_current_weather('都昌') == fallback
+
+
+def test_csv_backfill_without_provenance_skips_all_weather_rows(
+    app,
+    db_session,
+    monkeypatch,
+    tmp_path,
+):
+    """CSV 缺少来源和观测时刻时不再生成新的 legacy 天气行。"""
+    csv_path = tmp_path / 'weather.csv'
+    csv_path.write_text(
+        '\n'.join([
+            '日期,2米平均气温 (多源融合)(°C),2米最高气温 (多源融合)(°C),'
+            '2米最低气温 (多源融合)(°C),2米平均相对湿度 (多源融合)(%),'
+            '10米平均风速 (多源融合)(m/s)',
+            '2026-08-26,32,36,27,70,2.5',
+        ]),
+        encoding='utf-8',
+    )
+    pipeline = _load_pipeline(app, monkeypatch)
+
+    result = pipeline.backfill_weather_from_csv(
+        csv_path=csv_path,
+        location='北京',
+        overwrite=True,
+    )
+
+    assert result == {
+        'location': '都昌县',
+        'rows': 1,
+        'created': 0,
+        'updated': 0,
+        'skipped': 1,
+        'reason': 'missing_observation_provenance',
+    }
+    assert WeatherData.query.count() == 0
+
+
 @pytest.mark.parametrize(
     ('payload', 'reason'),
     [
@@ -202,10 +262,15 @@ def test_sync_daily_weather_writes_complete_qweather(
     assert result['weather_source'] == 'QWeather'
     record = WeatherData.query.filter_by(
         date=target_date,
-        location='同步测试社区',
+        location='都昌县',
     ).one()
     assert record.temperature_max == 40.0
     assert record.temperature_min == 29.0
+    assert record.data_source == 'QWeather'
+    assert record.observed_at is not None
+    assert record.air_observed_at is not None
+    assert record.quality_version == 1
+    assert record.air_quality_available is True
 
 
 @pytest.mark.parametrize(
@@ -320,3 +385,12 @@ def test_sync_action_daily_aggregates_active_pairs_and_backup_escalation(
     assert record.escalation_rate == 0.5
     assert sum(json.loads(record.risk_distribution).values()) == 2
     assert record.outreach_summary == '已有1个家庭进入升级链，优先安排社区跟进。'
+    weather_record = WeatherData.query.filter_by(
+        date=target_date,
+        location='都昌县',
+    ).one()
+    assert weather_record.data_source == 'QWeather'
+    assert weather_record.observed_at is not None
+    assert weather_record.air_observed_at is not None
+    assert weather_record.quality_version == 1
+    assert weather_record.air_quality_available is True

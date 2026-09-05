@@ -1,5 +1,16 @@
 # -*- coding: utf-8 -*-
 
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def isolate_warning_cache(monkeypatch):
+    from services import warning_service
+
+    warning_service._LOCAL_WARNING_CACHE.clear()
+    monkeypatch.setattr(warning_service, "get_qweather_redis_client", lambda: None)
+    monkeypatch.setattr(warning_service, "reserve_qweather_request", lambda _endpoint: True)
+
 
 def test_warning_service_no_key_returns_empty(app):
     from services.warning_service import get_qweather_warnings
@@ -46,3 +57,34 @@ def test_warning_service_parses_payload(app, monkeypatch):
         assert item["severity"] == "Minor"
         assert item["certainty"] == "Likely"
         assert item["urgency"] == "Expected"
+
+
+def test_warning_service_reuses_duchang_cache_and_hides_key_from_url(app, monkeypatch):
+    from services.warning_service import get_qweather_warnings
+
+    calls = []
+
+    class FakeResp:
+        status_code = 200
+
+        def json(self):
+            return {"code": "200", "warning": []}
+
+    def fake_get(url, **kwargs):
+        calls.append((url, kwargs))
+        return FakeResp()
+
+    monkeypatch.setattr("services.warning_service.requests.get", fake_get)
+
+    with app.app_context():
+        app.config["QWEATHER_KEY"] = "secret-test-key"
+        app.config["QWEATHER_API_BASE"] = "https://example.com/v7"
+        app.config["QWEATHER_CANONICAL_LOCATION"] = "116.20,29.27"
+
+        assert get_qweather_warnings("101010100") == []
+        assert get_qweather_warnings("101020100") == []
+
+    assert len(calls) == 1
+    _url, kwargs = calls[0]
+    assert kwargs["params"] == {"location": "116.20,29.27"}
+    assert kwargs["headers"] == {"X-QW-Api-Key": "secret-test-key"}

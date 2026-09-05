@@ -236,6 +236,10 @@ def configure_app(app, logger):
     demo_mode = os.getenv('DEMO_MODE')
     default_city = _normalized_env_value('DEFAULT_CITY', DEFAULT_CITY)
     default_location = _normalized_env_value('DEFAULT_LOCATION', DEFAULT_LOCATION)
+    qweather_canonical_location = _normalized_env_value(
+        'QWEATHER_CANONICAL_LOCATION',
+        default_location,
+    )
     redis_url = _normalized_env_value('REDIS_URL', '')
     weather_cache_redis_url = _normalized_env_value('WEATHER_CACHE_REDIS_URL', redis_url)
 
@@ -256,6 +260,7 @@ def configure_app(app, logger):
     app.config['SECRET_KEY'] = secret_key
     app.config['QWEATHER_KEY'] = qweather_key
     app.config['QWEATHER_API_BASE'] = qweather_api_base
+    app.config['QWEATHER_CANONICAL_LOCATION'] = qweather_canonical_location
     app.config['AMAP_KEY'] = amap_key
     app.config['AMAP_SECURITY_JS_CODE'] = amap_security_js_code
     app.config['SILICONFLOW_API_KEY'] = siliconflow_key
@@ -283,18 +288,64 @@ def configure_app(app, logger):
     app.config.setdefault('FEATURE_API_V1', parse_bool(os.getenv('FEATURE_API_V1', '1'), default=True))
     app.config.setdefault('FEATURE_EXPLAIN_OUTPUT', parse_bool(os.getenv('FEATURE_EXPLAIN_OUTPUT', '0'), default=False))
     app.config.setdefault('FEATURE_EMERGENCY_TRIAGE', parse_bool(os.getenv('FEATURE_EMERGENCY_TRIAGE', '0'), default=False))
-    app.config.setdefault('FEATURE_ELDER_MODE', parse_bool(os.getenv('FEATURE_ELDER_MODE', '0'), default=False))
+    app.config.setdefault('FEATURE_ELDER_MODE', parse_bool(os.getenv('FEATURE_ELDER_MODE', '1'), default=True))
     app.config.setdefault('FEATURE_NOTIFICATIONS', parse_bool(os.getenv('FEATURE_NOTIFICATIONS', '0'), default=False))
+    app.config.setdefault('FEATURE_HEAT_EXPOSURE_GIS', parse_bool(os.getenv('FEATURE_HEAT_EXPOSURE_GIS', '0'), default=False))
     app.config.setdefault('FEATURE_AUDIT_LOGS', parse_bool(os.getenv('FEATURE_AUDIT_LOGS', '0'), default=False))
     app.config.setdefault('FEATURE_STRUCTURED_LOGS', parse_bool(os.getenv('FEATURE_STRUCTURED_LOGS', '1'), default=True))
     app.config.setdefault('TRUSTED_PROXY_CIDRS', os.getenv('TRUSTED_PROXY_CIDRS', '127.0.0.1/32,::1/128'))
     app.config.setdefault(
         'FORECAST_CACHE_TTL_MINUTES',
-        parse_int(os.getenv('FORECAST_CACHE_TTL_MINUTES', '20'), default=20)
+        max(parse_int(os.getenv('FORECAST_CACHE_TTL_MINUTES', '30'), default=30), 10)
     )
     app.config.setdefault(
         'WEATHER_CACHE_TTL_MINUTES',
-        parse_int(os.getenv('WEATHER_CACHE_TTL_MINUTES', str(WEATHER_CACHE_TTL_MINUTES)), default=WEATHER_CACHE_TTL_MINUTES)
+        max(
+            parse_int(
+                os.getenv('WEATHER_CACHE_TTL_MINUTES', str(WEATHER_CACHE_TTL_MINUTES)),
+                default=WEATHER_CACHE_TTL_MINUTES,
+            ),
+            10,
+        )
+    )
+    app.config.setdefault(
+        'QWEATHER_WARNING_CACHE_TTL_MINUTES',
+        max(parse_int(os.getenv('QWEATHER_WARNING_CACHE_TTL_MINUTES', '30'), default=30), 10)
+    )
+    app.config.setdefault(
+        'WEATHER_OBSERVATION_MAX_AGE_MINUTES',
+        max(parse_int(os.getenv('WEATHER_OBSERVATION_MAX_AGE_MINUTES', '120'), default=120), 0)
+    )
+    app.config.setdefault(
+        'WEATHER_OBSERVATION_FUTURE_TOLERANCE_MINUTES',
+        max(
+            parse_int(
+                os.getenv('WEATHER_OBSERVATION_FUTURE_TOLERANCE_MINUTES', '15'),
+                default=15,
+            ),
+            0,
+        )
+    )
+    app.config.setdefault(
+        'QWEATHER_FORECAST_NEGATIVE_CACHE_SECONDS',
+        min(
+            max(
+                parse_int(
+                    os.getenv('QWEATHER_FORECAST_NEGATIVE_CACHE_SECONDS', '180'),
+                    default=180,
+                ),
+                120,
+            ),
+            300,
+        )
+    )
+    app.config.setdefault(
+        'QWEATHER_MONTHLY_REQUEST_LIMIT',
+        max(parse_int(os.getenv('QWEATHER_MONTHLY_REQUEST_LIMIT', '40000'), default=40000), 0)
+    )
+    app.config.setdefault(
+        'QWEATHER_BUDGET_FAIL_CLOSED',
+        parse_bool(os.getenv('QWEATHER_BUDGET_FAIL_CLOSED', '1'), default=True)
     )
     if qweather_key and not qweather_api_base:
         logger.warning("QWEATHER_KEY 已配置但 QWEATHER_API_BASE 未配置，将跳过 QWeather Host 相关调用并使用兜底链路。")
@@ -303,6 +354,17 @@ def configure_app(app, logger):
     app.config.setdefault('NOTIFICATION_ESCALATION_DAYS', parse_int(os.getenv('NOTIFICATION_ESCALATION_DAYS', '3'), default=3))
     app.config.setdefault('NOTIFICATION_MAX_DAILY', parse_int(os.getenv('NOTIFICATION_MAX_DAILY', '5'), default=5))
     app.config.setdefault('HEAT_HOT_DAY_THRESHOLD', parse_float(os.getenv('HEAT_HOT_DAY_THRESHOLD', '35'), default=35.0))
+    app.config[
+        'MAX_CONTENT_LENGTH'
+    ] = (
+        max(
+            parse_int(
+                os.getenv('MAX_CONTENT_LENGTH_BYTES', str(1024 * 1024)),
+                default=1024 * 1024,
+            ),
+            64 * 1024,
+        )
+    )
     app.config.setdefault('RATE_LIMITS', os.getenv('RATE_LIMITS', '200 per minute'))
 
     rate_limit_storage_env = _normalized_env_value('RATE_LIMIT_STORAGE_URI')
@@ -322,6 +384,8 @@ def configure_app(app, logger):
     app.config.setdefault('RATE_LIMIT_ML', os.getenv('RATE_LIMIT_ML', app.config['RATE_LIMITS']))
     app.config.setdefault('RATE_LIMIT_AI', os.getenv('RATE_LIMIT_AI', '20 per minute'))
     app.config.setdefault('RATE_LIMIT_LOGIN', os.getenv('RATE_LIMIT_LOGIN', '5 per 5 minutes'))
+    # GET /guest 签发游客会话：按 IP 收紧，防脚本轮换 guest 入口（路由挂载见 public.py）
+    app.config.setdefault('RATE_LIMIT_GUEST', os.getenv('RATE_LIMIT_GUEST', '10 per hour'))
     app.config.setdefault('LOGIN_MAX_FAILURES', parse_int(os.getenv('LOGIN_MAX_FAILURES', '5'), default=5))
     app.config.setdefault('LOGIN_LOCKOUT_SECONDS', parse_int(os.getenv('LOGIN_LOCKOUT_SECONDS', '300'), default=300))
     app.config.setdefault('RATE_LIMIT_SHORT_CODE', os.getenv('RATE_LIMIT_SHORT_CODE', '3 per hour'))
