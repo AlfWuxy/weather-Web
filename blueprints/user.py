@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """User-facing routes."""
-from flask import Blueprint, current_app
+from flask import Blueprint, abort, current_app
 from flask_login import login_required
 
 from core.extensions import limiter
@@ -21,6 +21,8 @@ def user_dashboard():
 @login_required
 def elder_dashboard():
     """极简老人模式入口"""
+    if not current_app.config.get('FEATURE_ELDER_MODE'):
+        abort(404)
     return user_service.elder_dashboard()
 
 
@@ -138,6 +140,18 @@ def health_assessment():
 def community_risk():
     """社区风险地图"""
     return user_service.community_risk()
+
+
+@bp.route('/heat-exposure-gis', endpoint='heat_exposure_gis')
+@login_required
+def heat_exposure_gis():
+    """都昌县 1 km 网格级热暴露 GIS"""
+    if not current_app.config.get('FEATURE_HEAT_EXPOSURE_GIS'):
+        abort(404)
+
+    from services.heat_exposure_gis_service import render_heat_exposure_gis
+
+    return render_heat_exposure_gis()
 
 
 @bp.route('/profile', methods=['GET', 'POST'], endpoint='profile')

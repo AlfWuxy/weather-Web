@@ -8,13 +8,18 @@ def _set_logged_in_user(client, db_session, *, username, role):
     """建立指定角色的测试会话。"""
     from core.db_models import User
 
-    user = User(username=username, role=role, community='朝阳社区')
+    user = User(
+        username=username,
+        role=role,
+        community='朝阳社区',
+        authorized_community='朝阳社区' if role == 'community' else None,
+    )
     user.set_password('testpass')
     db_session.add(user)
     db_session.commit()
     with client.session_transaction() as session:
         session.clear()
-        session['_user_id'] = str(user.id)
+        session['_user_id'] = user.get_id()
         session['_fresh'] = True
         session['_csrf_token'] = 'nav-csrf'
     return user
@@ -105,9 +110,9 @@ def test_mobile_navigation_keeps_community_risk_available(client, db_session, ro
     ('role', 'family_target', 'community_target', 'community_label'),
     [
         ('user', '/pairs', '/community-risk', '查看社区风险'),
-        ('caregiver', '/caregiver', '/community-risk', '查看社区风险'),
-        ('community', '/pairs', '/community', '进入社区工作台'),
-        ('admin', '/caregiver', '/community', '进入社区工作台'),
+        ('caregiver', '/pairs', '/community-risk', '查看社区风险'),
+        ('community', '/entry', '/community', '进入社区工作台'),
+        ('admin', '/pairs', '/community', '进入社区工作台'),
     ],
 )
 def test_home_role_cards_match_role_destinations(
@@ -128,6 +133,15 @@ def test_home_copy_is_capability_focused_and_community_icon_exists(client):
     assert '今天的风险、提醒和行动，一眼看清。' in body
     assert '先看风险，再提醒家人或社区，并记录是否已经做到。' in body
     assert 'bi bi-building-heart' not in body
+
+
+def test_anonymous_home_community_card_lands_on_accessible_risk_page(client):
+    """家庭账号登录后进入社区风险页，不被送进受限社区工作台。"""
+    body = client.get('/').get_data(as_text=True)
+
+    assert 'href="/login?next=/community-risk" class="yl-role-card variant-doctor"' in body
+    assert '登录后查看社区风险' in body
+    assert 'href="/login?next=/community" class="yl-role-card variant-doctor"' not in body
     assert 'data-role-card="community"' in body
     assert 'bi bi-building' in body
     assert '页面不追求堆满功能' not in body
@@ -166,20 +180,30 @@ def test_admin_more_trigger_is_active_without_claiming_current_page(client, db_s
 def test_role_entry_uses_consistent_community_role_name(client):
     body = client.get('/entry').get_data(as_text=True)
     assert '<h5 class="mb-0">社区人员</h5>' in body
-    assert '<h5 class="mb-0">老人自用</h5>' in body
+    assert '<h5 class="mb-0">老人行动短码</h5>' in body
     assert '<h5 class="mb-0">家属 / 子女</h5>' in body
     assert '选择适合你的入口' in body
-    assert '家属也能代为记录' in body
+    assert '打开大字今日页' in body
     assert '试点核心闭环' not in body
+
+
+def test_anonymous_role_entry_community_card_uses_accessible_risk_destination(client):
+    """匿名用户登录或注册后仍应落到家庭账号可访问的社区风险页。"""
+    body = client.get('/entry').get_data(as_text=True)
+
+    assert 'data-entry-key="community" href="/login?next=/community-risk"' in body
+    assert '登录后查看社区风险' in body
+    assert '登录后可查看公开风险；社区工作台需管理员开通角色' in body
+    assert 'data-entry-key="community" href="/login?next=/community"' not in body
 
 
 @pytest.mark.parametrize(
     ('role', 'destination'),
     [
         ('user', '/pairs'),
-        ('caregiver', '/caregiver'),
+        ('caregiver', '/pairs'),
         ('community', '/community'),
-        ('admin', '/caregiver'),
+        ('admin', '/pairs'),
     ],
 )
 def test_care_destination_is_role_aware(client, db_session, role, destination):
@@ -214,15 +238,32 @@ def test_role_entry_uses_authorized_community_destination(
     ('role', 'expected_target'),
     [
         ('user', '/pairs'),
-        ('caregiver', '/caregiver'),
-        ('community', '/pairs'),
-        ('admin', '/caregiver'),
+        ('caregiver', '/pairs'),
+        ('admin', '/pairs'),
     ],
 )
 def test_role_entry_uses_role_aware_care_destination(client, db_session, role, expected_target):
     _set_logged_in_user(client, db_session, username=f'entry-care-{role}', role=role)
     body = client.get('/entry').get_data(as_text=True)
     assert f'data-entry-key="care" href="{expected_target}"' in body
+
+
+def test_role_entry_blocks_community_account_from_family_care(client, db_session):
+    _set_logged_in_user(client, db_session, username='entry-care-community', role='community')
+    body = client.get('/entry').get_data(as_text=True)
+
+    assert '家庭照护需使用家庭账号登录' in body
+    assert 'data-entry-key="care" aria-disabled="true"' in body
+    assert 'data-entry-key="care" href="/pairs"' not in body
+
+
+def test_community_account_family_explainers_point_to_entry(client, db_session):
+    _set_logged_in_user(client, db_session, username='explainer-community', role='community')
+
+    for path in ('/wxoa', '/about/trust-network'):
+        body = client.get(path).get_data(as_text=True)
+        assert 'href="/entry"' in body
+        assert 'href="/pairs"' not in body
 
 
 def test_guest_role_entry_offers_registration_instead_of_restricted_care(client):

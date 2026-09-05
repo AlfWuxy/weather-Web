@@ -56,6 +56,7 @@ class DummyWeatherFetcher:
                     'temperature_min': 18,
                     'temperature_mean': 22,
                     'humidity': 70,
+                    'wind_speed': 2.0,
                     'condition': '阴',
                     'data_source': 'QWeather',
                     'is_mock': False,
@@ -130,7 +131,8 @@ def test_forecast_cache_prefers_redis(app, db_session):
             'temperature_min': 18,
             'is_mock': True
         }]
-        redis_key = 'weather:forecast:北京:3'
+        # 产品只使用都昌县天气；旧城市参数也必须命中同一份县级缓存。
+        redis_key = 'weather:forecast:都昌县:3'
         fake_redis.setex(redis_key, 600, json.dumps(cached_forecast, ensure_ascii=False))
 
         fetcher = DummyWeatherFetcher()

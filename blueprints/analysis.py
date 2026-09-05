@@ -555,6 +555,8 @@ def analysis_history():
         end_date = today_local()
     if not start_date:
         start_date = end_date - timedelta(days=30)
+    if start_date > end_date:
+        start_date, end_date = end_date, start_date
 
     communities = Community.query.all()
     diseases = db.session.query(MedicalRecord.disease_category).filter(
@@ -586,24 +588,37 @@ def analysis_history():
     default_city = _default_city()
     weather_source = _weather_source_label(weather_location, default_city)
 
-    weather_by_date = {}
+    weather_sums = {}
     weather_counts = {}
     for w in weather_records:
         date_key = w.date
-        if date_key not in weather_by_date:
-            weather_by_date[date_key] = {
+        if date_key not in weather_sums:
+            weather_sums[date_key] = {
+                'temperature': 0.0,
+                'humidity': 0.0
+            }
+            weather_counts[date_key] = {
                 'temperature': 0,
                 'humidity': 0
             }
-            weather_counts[date_key] = 0
-        weather_by_date[date_key]['temperature'] += w.temperature or 0
-        weather_by_date[date_key]['humidity'] += w.humidity or 0
-        weather_counts[date_key] += 1
+        for metric in ('temperature', 'humidity'):
+            value = getattr(w, metric, None)
+            if value is None:
+                continue
+            weather_sums[date_key][metric] += value
+            weather_counts[date_key][metric] += 1
 
-    for date_key, count in weather_counts.items():
-        if count > 0:
-            weather_by_date[date_key]['temperature'] /= count
-            weather_by_date[date_key]['humidity'] /= count
+    weather_by_date = {}
+    for date_key, sums in weather_sums.items():
+        counts = weather_counts[date_key]
+        weather_by_date[date_key] = {
+            metric: (
+                sums[metric] / counts[metric]
+                if counts[metric] > 0
+                else None
+            )
+            for metric in ('temperature', 'humidity')
+        }
 
     dates = []
     visits = []
@@ -628,8 +643,13 @@ def analysis_history():
 
     total_days = (end_date - start_date).days + 1
     visit_days = len(visits_by_date)
-    weather_days = len(weather_by_date)
-    overlap_days = len(set(visits_by_date.keys()) & set(weather_by_date.keys()))
+    weather_dates = {
+        day
+        for day, weather in weather_by_date.items()
+        if weather['temperature'] is not None or weather['humidity'] is not None
+    }
+    weather_days = len(weather_dates)
+    overlap_days = len(set(visits_by_date.keys()) & weather_dates)
     total_visits = sum(visits)
     data_notes = []
     if auto_range:
@@ -720,6 +740,8 @@ def analysis_heatmap():
         end_date = today_local()
     if not start_date:
         start_date = end_date - timedelta(days=90)
+    if start_date > end_date:
+        start_date, end_date = end_date, start_date
 
     communities = Community.query.all()
     diseases = db.session.query(MedicalRecord.disease_category).filter(
@@ -1021,6 +1043,8 @@ def analysis_lag():
         end_date = today_local()
     if not start_date:
         start_date = end_date - timedelta(days=90)
+    if start_date > end_date:
+        start_date, end_date = end_date, start_date
 
     record_query = MedicalRecord.query.filter(
         MedicalRecord.visit_time.isnot(None),

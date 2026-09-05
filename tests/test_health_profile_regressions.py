@@ -2,7 +2,7 @@
 import pytest
 from sqlalchemy.exc import IntegrityError
 
-from core.db_models import HealthRiskAssessment, User
+from core.db_models import FamilyMember, HealthRiskAssessment, User
 from core.extensions import db
 
 
@@ -183,3 +183,34 @@ def test_profile_rolls_back_concurrent_email_unique_conflict(
     assert '该邮箱已被其他账号使用' in response.get_data(as_text=True)
     assert rollback_called is True
     assert User.query.filter_by(username='testuser').first().email == 'before@example.com'
+
+
+@pytest.mark.parametrize('invalid_age', ['0', '151', 'not-a-number'])
+def test_family_member_create_rejects_invalid_age(
+    authenticated_client,
+    invalid_age,
+):
+    response = authenticated_client.post(
+        '/family-members/new',
+        data={
+            'name': '年龄校验成员',
+            'relation': '家人',
+            'age': invalid_age,
+            'gender': '男性',
+            'csrf_token': 'test-csrf-token',
+        },
+        follow_redirects=True,
+    )
+
+    assert response.status_code == 200
+    assert '年龄' in response.get_data(as_text=True)
+    assert FamilyMember.query.filter_by(name='年龄校验成员').first() is None
+
+
+def test_family_member_age_input_matches_server_range(authenticated_client):
+    response = authenticated_client.get('/family-members/new')
+
+    assert response.status_code == 200
+    html = response.get_data(as_text=True)
+    assert 'name="age"' in html
+    assert 'min="1" max="150"' in html

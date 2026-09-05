@@ -289,11 +289,22 @@ def _ensure_demo_statuses(community_code, status_date, caregiver_id=None, pair_c
     _refresh_community_daily(community_code, status_date)
 
 
+def _user_acl_community(user=None):
+    """运营 ACL 社区只认 authorized_community，缺失时关闭访问。
+
+    - authorized_community：仅 admin 可写，社区角色管辖边界
+    - community：定位/展示，可自改，绝不参与横向 ACL
+    """
+    subject = user if user is not None else current_user
+    return _normalize_code(getattr(subject, 'authorized_community', None))
+
+
 def _community_access_allowed(community_code):
     if getattr(current_user, 'role', None) == 'admin':
         return True
-    user_code = _normalize_code(getattr(current_user, 'community', None))
-    return bool(user_code) and user_code == community_code
+    user_code = _user_acl_community(current_user)
+    target = _normalize_code(community_code)
+    return bool(user_code) and bool(target) and user_code == target
 
 
 def _build_community_snapshot(community_code, status_date, record=_MISSING, statuses=_MISSING):

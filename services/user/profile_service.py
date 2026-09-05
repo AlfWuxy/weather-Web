@@ -2,11 +2,10 @@
 """Profile and assessment routes."""
 import json
 import logging
-import math
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlsplit
 
 from flask import current_app, flash, redirect, render_template, request, session, url_for
-from flask_login import current_user
+from flask_login import current_user, logout_user
 from sqlalchemy.exc import IntegrityError
 
 from core.analytics import get_high_risk_streak
@@ -19,7 +18,8 @@ from core.usage import create_api_token
 from core.weather import (
     ensure_user_location_valid,
     get_weather_with_cache,
-    is_qweather_online_weather,
+    is_air_quality_available,
+    is_qweather_production_ready,
     normalize_location_name,
 )
 from utils.parsers import json_or_none, safe_json_loads
@@ -28,39 +28,55 @@ from utils.validators import (
     validate_age,
     validate_email,
     validate_gender,
-    validate_password
+    validate_password,
+    validate_username,
 )
 
 logger = logging.getLogger(__name__)
 
 
 def _personal_weather_available(weather_data):
-    """个人评估只接受来源明确且温度可计算的真实和风天气。"""
-    if not is_qweather_online_weather(weather_data):
-        return False
-    try:
-        temperature = float(weather_data.get('temperature'))
-    except (AttributeError, TypeError, ValueError):
-        return False
-    return math.isfinite(temperature)
+    """个人健康评分只接受完整和风实况与真实空气质量。"""
+    return (
+        is_qweather_production_ready(weather_data)
+        and is_air_quality_available(weather_data)
+    )
 
 
 def _safe_referrer_or_dashboard():
     referrer = request.referrer or ''
     fallback = url_for('user.user_dashboard')
-    if not referrer or '\r' in referrer or '\n' in referrer:
+    if (
+        not referrer
+        or referrer.startswith('//')
+        or any(char in referrer for char in ('\r', '\n', '\\'))
+    ):
         return fallback
-    parsed = urlparse(referrer)
+
+    parsed = urlsplit(referrer)
     if parsed.scheme or parsed.netloc:
-        if parsed.scheme not in ('http', 'https') or parsed.netloc != request.host:
+        if (
+            parsed.scheme not in ('http', 'https')
+            or parsed.netloc.lower() != request.host.lower()
+        ):
             return fallback
-        path = parsed.path or fallback
-        if parsed.query:
-            path = f'{path}?{parsed.query}'
-        return path
-    if not referrer.startswith('/') or referrer.startswith(("//", "\\\\", "/\\")):
+
+    # 绝对与相对 Referer 最终都收敛成单斜杠开头的本地 path + query。
+    local_target = parsed.path or fallback
+    if parsed.query:
+        local_target = f'{local_target}?{parsed.query}'
+    decoded_target = unquote(local_target)
+    for candidate in (local_target, decoded_target):
+        if (
+            any(char in candidate for char in ('\r', '\n', '\\'))
+            or not candidate.startswith('/')
+            or candidate.startswith('//')
+        ):
+            return fallback
+    local_parts = urlsplit(local_target)
+    if local_parts.scheme or local_parts.netloc:
         return fallback
-    return referrer
+    return local_target
 
 
 def health_assessment():
@@ -239,26 +255,48 @@ def profile():
 
         if form_id == 'password':
             old_password = request.form.get('old_password', '')
-            new_password = request.form.get('new_password')
+            new_password = request.form.get('new_password', '')
+            confirm_password = request.form.get('confirm_password', '')
             if not old_password:
                 flash('请输入当前密码', 'error')
                 return redirect(url_for('user.profile'))
             if not current_user.check_password(old_password):
                 flash('当前密码不正确', 'error')
                 return redirect(url_for('user.profile'))
-            if new_password:
-                valid, result = validate_password(new_password)
-                if not valid:
-                    flash(result, 'error')
-                    return redirect(url_for('user.profile'))
-                current_user.set_password(result)
-                db.session.commit()
-                flash('密码已更新', 'success')
-            else:
-                flash('未填写新密码', 'info')
-            return redirect(url_for('user.profile'))
+            valid, result = validate_password(new_password)
+            if not valid:
+                flash(result, 'error')
+                return redirect(url_for('user.profile'))
+            if new_password != confirm_password:
+                flash('两次输入的新密码不一致', 'error')
+                return redirect(url_for('user.profile'))
+            current_user.set_password(result)
+            db.session.commit()
+            # get_id 含密码摘要，改密后显式退出，给用户清晰的重新认证路径。
+            for key in (
+                'guest_id',
+                'guest_profile',
+                'guest_assessment',
+                'pair_token',
+                'pair_session_id',
+                'pair_session_code',
+            ):
+                session.pop(key, None)
+            logout_user()
+            flash('密码已更新，请使用新密码重新登录', 'success')
+            return redirect(url_for('public.login'))
 
         # default: basic profile update
+        submitted_username = request.form.get('username')
+        if submitted_username is not None:
+            valid, result = validate_username(submitted_username)
+            if not valid:
+                flash(result, 'error')
+                return redirect(url_for('user.profile'))
+            if result != current_user.username:
+                flash('用户名不可更改', 'error')
+                return redirect(url_for('user.profile'))
+
         # 验证年龄
         valid, result = validate_age(request.form.get('age'))
         if not valid:
@@ -295,6 +333,8 @@ def profile():
 
         current_user.age = age
         current_user.gender = gender
+        # P10：community = 定位/展示，可自改；authorized_community = ACL，仅 admin
+        # 忽略客户端提交的 authorized_community（防 mass-assignment）
         current_user.community = community
         current_user.email = email
 
@@ -319,7 +359,7 @@ def profile():
         push_enabled = request.form.get('push_enabled') == 'on'
         if push_enabled and not current_user.wxpusher_uid:
             push_enabled = False
-            flash('已关闭自动推送：需要先填写 WxPusher UID', 'warning')
+            flash('已关闭自动推送：需要先填写微信提醒接收码', 'warning')
         current_user.push_enabled = bool(push_enabled)
 
         try:
@@ -361,6 +401,7 @@ def update_location():
         profile['community'] = normalized
         session['guest_profile'] = profile
     else:
+        # P10：定位只写 community；ACL 看 authorized_community，横向越权已拆字段
         current_user.community = normalized
         db.session.commit()
 

@@ -2,7 +2,6 @@
 """Public-facing business logic extracted from blueprints."""
 import json
 import logging
-import math
 import secrets
 from datetime import timedelta
 from urllib.parse import urlparse
@@ -10,8 +9,9 @@ from urllib.parse import urlparse
 from flask import current_app, flash, redirect, render_template, request, session, url_for
 from flask_login import current_user, login_user, logout_user
 from sqlalchemy import or_
+from sqlalchemy.exc import IntegrityError
 
-from core.constants import GUEST_ID_PREFIX
+from core.constants import DEFAULT_CITY_LABEL, GUEST_ID_PREFIX
 from core.extensions import db
 from core.security import hash_identifier, hash_pair_token, hash_short_code, rate_limit_key, verify_pair_token
 from core.time_utils import today_local, utcnow, ensure_utc_aware
@@ -19,8 +19,11 @@ from core.usage import log_usage_event
 from core.weather import (
     get_consecutive_hot_days,
     get_weather_with_cache,
-    is_qweather_online_weather,
+    is_heat_action_weather_ready,
+    is_live_observational_weather,
     normalize_location_name,
+    resolve_weather_city_label,
+    weather_source_label,
 )
 from core.guest import GuestUser, is_guest_user
 from core.db_models import (
@@ -35,7 +38,7 @@ from core.db_models import (
     User
 )
 from services.heat_action_service import HeatActionService
-from utils.parsers import parse_bool, parse_float
+from utils.parsers import parse_bool
 from utils.audit_log import log_security_event
 from utils.database import atomic_transaction
 from utils.validators import (
@@ -58,20 +61,9 @@ HEAT_RISK_LABELS = {
 
 PAIR_TOKEN_SESSION_KEY = 'pair_token'
 
-_HEAT_RISK_WEATHER_FIELDS = (
-    'temperature',
-    'temperature_max',
-    'temperature_min',
-    'humidity',
-)
-
-
 def _heat_risk_weather_is_ready(weather_data):
-    """生产热风险只接受来源明确且关键字段齐全的真实天气。"""
-    if not is_qweather_online_weather(weather_data):
-        return False
-    values = [parse_float(weather_data.get(field)) for field in _HEAT_RISK_WEATHER_FIELDS]
-    return all(value is not None and math.isfinite(value) for value in values)
+    """基础温湿热行动允许来源明确且新鲜的和风或 Open-Meteo 实况。"""
+    return is_heat_action_weather_ready(weather_data)
 
 
 def _store_pair_token(token):
@@ -100,6 +92,58 @@ def _safe_next_url(next_url):
     if next_url.startswith(("//", "\\\\", "/\\")):
         return None
     return next_url
+
+
+def _role_landing_endpoint(role):
+    """返回正式账号的默认落点。"""
+    return {
+        'admin': 'admin.admin_dashboard',
+        'community': 'user.community_dashboard',
+        'caregiver': 'user.pair_management',
+        'user': 'user.pair_management',
+    }.get(role, 'user.user_dashboard')
+
+
+def _clear_identity_session_state():
+    """清理跨身份继承会造成串写的游客资料与行动授权。"""
+    for key in (
+        'guest_id',
+        'guest_profile',
+        'guest_assessment',
+        PAIR_TOKEN_SESSION_KEY,
+        'pair_session_id',
+        'pair_session_code',
+    ):
+        session.pop(key, None)
+
+
+def _registration_form_data():
+    """仅保留注册失败后可以安全回填的非敏感字段。"""
+    limits = {
+        'username': 80,
+        'email': 120,
+        'age': 10,
+        'gender': 10,
+        'community': 100,
+    }
+    return {
+        field: str(request.form.get(field, '') or '')[:max_length]
+        for field, max_length in limits.items()
+    }
+
+
+def _location_suggestions():
+    """读取配置中的都昌地点建议，不触碰 Community 主数据。"""
+    configured = current_app.config.get('COMMUNITY_COORDS_GCJ') or {}
+    return list(configured.keys()) if isinstance(configured, dict) else []
+
+
+def _render_register(form_data=None):
+    return render_template(
+        'register.html',
+        form_data=form_data or {},
+        location_suggestions=_location_suggestions(),
+    )
 
 
 def _short_code_guard_config():
@@ -527,7 +571,8 @@ def _build_action_context(pair, status_date):
     heat_service = HeatActionService()
     consecutive_hot_days = get_consecutive_hot_days(
         location,
-        today_max=weather_data.get('temperature_max')
+        today_max=weather_data.get('temperature_max'),
+        weather_data=weather_data,
     )
     heat_result = heat_service.calculate_heat_risk(
         weather_data,
@@ -728,23 +773,82 @@ def _validate_pair_token_binding(pair, short_code, token):
     return True
 
 
+def _authorize_pair_action_write(pair, short_code, token):
+    """授权 confirm/help/debrief 写库：须 lookup session 绑定，或有效 token 绑定。
+
+    禁止冷请求仅凭 short_code 写 confirmed_at / help_flag / debrief。
+    """
+    if not pair:
+        return False
+    short_code = (short_code or '').replace(' ', '').strip()
+    session_pair_id = session.get('pair_session_id')
+    session_pair_code = session.get('pair_session_code')
+    # 路径一：lookup 成功写入的 pair_session 与当前 pair、短码一致
+    if session_pair_id is not None and session_pair_code:
+        try:
+            same_pair = int(session_pair_id) == int(pair.id)
+        except (TypeError, ValueError):
+            same_pair = session_pair_id == pair.id
+        pair_code = getattr(pair, 'short_code', None) or ''
+        code_ok = (
+            session_pair_code == short_code
+            or (pair_code and session_pair_code == pair_code)
+        )
+        if same_pair and code_ok:
+            return True
+    # 路径二：有效 PairActionToken / PairLink token 绑定
+    token = (token or '').strip()
+    if token and _validate_pair_token_binding(pair, short_code, token):
+        return True
+    return False
+
+
 def _handle_action_confirm(token=None, confirm_action=None, debrief_action=None):
+    # 入口：短码失败锁定则拒绝写
+    if _short_code_is_locked():
+        flash('尝试次数过多，请稍后再试。', 'error')
+        return redirect(url_for('public.action_check'))
+
     short_code = sanitize_input(request.form.get('short_code'), max_length=12) or ''
     short_code = short_code.replace(' ', '').strip()
     token = sanitize_input(request.form.get('token') or token, max_length=200)
     pair = _resolve_pair_from_session_or_code(short_code, token=token)
     if not pair:
+        _record_short_code_failure()
         flash('短码无效或已失效', 'error')
         return redirect(url_for('public.action_check'))
 
-    if (token or request.path.startswith('/e/')) and not _validate_pair_token_binding(pair, short_code, token):
-        flash('短码或令牌无效，请联系照护人确认。', 'error')
+    # 须 session 绑定或 token 绑定；禁止仅 short_code 冷写
+    if not _authorize_pair_action_write(pair, short_code, token):
+        _record_short_code_failure()
+        flash('请先校验短码或使用完整链接', 'error')
         return redirect(url_for('public.action_check'))
+
     status_date = today_local()
     status, actions, resources, weather_data, heat_result, risk_label, risk_reasons = _build_action_context(
         pair, status_date
     )
-    actions_done = request.form.getlist('actions_done')
+    # 使用首次展示时保存的风险档，避免提交时天气变化导致合法行动被少计。
+    displayed_actions = (
+        _action_plan(status.risk_level)
+        if status.risk_level
+        else []
+    )
+    allowed_action_ids = {
+        str(action.get('id'))
+        for action in displayed_actions
+        if isinstance(action, dict) and action.get('id') is not None
+    }
+    actions_done = []
+    seen_action_ids = set()
+    for action_id in request.form.getlist('actions_done'):
+        action_id = str(action_id).strip()
+        if action_id not in allowed_action_ids or action_id in seen_action_ids:
+            continue
+        actions_done.append(action_id)
+        seen_action_ids.add(action_id)
+    # 授权通过后清零短码失败计数，再写库
+    _clear_short_code_failures()
     status.actions_done_count = len(actions_done)
     status.confirmed_at = utcnow()
     pair.last_active_at = utcnow()
@@ -774,21 +878,32 @@ def _handle_action_confirm(token=None, confirm_action=None, debrief_action=None)
 
 
 def _handle_action_help(token=None, confirm_action=None, debrief_action=None):
+    # 入口：短码失败锁定则拒绝写
+    if _short_code_is_locked():
+        flash('尝试次数过多，请稍后再试。', 'error')
+        return redirect(url_for('public.action_check'))
+
     short_code = sanitize_input(request.form.get('short_code'), max_length=12) or ''
     short_code = short_code.replace(' ', '').strip()
     token = sanitize_input(request.form.get('token') or token, max_length=200)
     pair = _resolve_pair_from_session_or_code(short_code, token=token)
     if not pair:
+        _record_short_code_failure()
         flash('短码无效或已失效', 'error')
         return redirect(url_for('public.action_check'))
 
-    if (token or request.path.startswith('/e/')) and not _validate_pair_token_binding(pair, short_code, token):
-        flash('短码或令牌无效，请联系照护人确认。', 'error')
+    # 须 session 绑定或 token 绑定；禁止仅 short_code 冷写
+    if not _authorize_pair_action_write(pair, short_code, token):
+        _record_short_code_failure()
+        flash('请先校验短码或使用完整链接', 'error')
         return redirect(url_for('public.action_check'))
+
     status_date = today_local()
     status, actions, resources, weather_data, heat_result, risk_label, risk_reasons = _build_action_context(
         pair, status_date
     )
+    # 授权通过后清零短码失败计数，再写库
+    _clear_short_code_failures()
     status.help_flag = True
     if not status.relay_stage or status.relay_stage == 'none':
         status.relay_stage = 'caregiver'
@@ -819,17 +934,26 @@ def _handle_action_help(token=None, confirm_action=None, debrief_action=None):
 
 
 def _handle_action_debrief(token=None, confirm_action=None, debrief_action=None, focus_debrief=False):
+    # 入口：短码失败锁定则拒绝写
+    if _short_code_is_locked():
+        flash('尝试次数过多，请稍后再试。', 'error')
+        return redirect(url_for('public.action_check'))
+
     short_code = sanitize_input(request.form.get('short_code'), max_length=12) or ''
     short_code = short_code.replace(' ', '').strip()
     token = sanitize_input(request.form.get('token') or token, max_length=200)
     pair = _resolve_pair_from_session_or_code(short_code, token=token)
     if not pair:
+        _record_short_code_failure()
         flash('短码无效或已失效', 'error')
         return redirect(url_for('public.action_check'))
 
-    if (token or request.path.startswith('/e/')) and not _validate_pair_token_binding(pair, short_code, token):
-        flash('短码或令牌无效，请联系照护人确认。', 'error')
+    # 须 session 绑定或 token 绑定；禁止仅 short_code 冷写
+    if not _authorize_pair_action_write(pair, short_code, token):
+        _record_short_code_failure()
+        flash('请先校验短码或使用完整链接', 'error')
         return redirect(url_for('public.action_check'))
+
     status_date = today_local()
     q1 = sanitize_input(request.form.get('question_1'), max_length=200)
     q2 = sanitize_input(request.form.get('question_2'), max_length=200)
@@ -857,6 +981,8 @@ def _handle_action_debrief(token=None, confirm_action=None, debrief_action=None,
 
     status = _get_or_create_daily_status(pair, status_date, None)
     status.debrief_optin = optin
+    # 授权通过后清零短码失败计数，再写库
+    _clear_short_code_failures()
     db.session.commit()
     log_usage_event(
         'feedback_submitted',
@@ -894,11 +1020,7 @@ def render_role_entry():
     role = getattr(current_user, 'role', None) if is_authenticated else None
     # Pilot定位：老人不一定会用网页；主要入口是子女端（照护工作台）
     default_caregiver_next = url_for('user.pair_management')
-    caregiver_next = (
-        url_for('user.caregiver_dashboard')
-        if role in ('caregiver', 'admin')
-        else default_caregiver_next
-    )
+    caregiver_next = default_caregiver_next
     community_next = url_for('user.community_dashboard')
 
     if is_guest:
@@ -927,8 +1049,12 @@ def render_role_entry():
         community_action_label = '查看社区风险'
         community_requires_login = False
     else:
-        community_target = url_for('public.login', next=community_next)
-        community_action_label = '进入社区看板'
+        # 新注册家庭账号无社区工作台权限，匿名入口先落到可访问的风险页。
+        community_target = url_for(
+            'public.login',
+            next=url_for('user.community_risk'),
+        )
+        community_action_label = '登录后查看社区风险'
         community_requires_login = True
 
     return render_template(
@@ -1010,13 +1136,15 @@ def handle_login(next_url):
                     _clear_login_failures_db(normalized_username)
                 except Exception:
                     logger.warning("数据库清除失败计数失败", exc_info=True)
+            user.last_login = utcnow()
+            db.session.commit()
+            # 正式登录前清理游客资料与匿名行动授权，再写入正式身份。
+            _clear_identity_session_state()
             login_user(
                 user,
                 remember=remember_flag,
                 duration=timedelta(days=30) if remember_flag else None,
             )
-            user.last_login = utcnow()
-            db.session.commit()
             logger.info("用户登录成功: %s", username)
 
             safe_next = _safe_next_url(next_url)
@@ -1024,12 +1152,7 @@ def handle_login(next_url):
                 return redirect(safe_next)
 
             # 没有显式 next 时，让每种角色直达自己的主工作台。
-            landing_endpoint = {
-                'admin': 'admin.admin_dashboard',
-                'caregiver': 'user.caregiver_dashboard',
-                'community': 'user.community_dashboard',
-            }.get(user.role, 'user.user_dashboard')
-            return redirect(url_for(landing_endpoint))
+            return redirect(url_for(_role_landing_endpoint(user.role)))
 
         # 登录失败，递增失败计数
         if redis_client:
@@ -1054,40 +1177,50 @@ def handle_login(next_url):
 
 
 def handle_register():
+    if current_user.is_authenticated and not is_guest_user(current_user):
+        return redirect(url_for(_role_landing_endpoint(getattr(current_user, 'role', None))))
+
     if request.method == 'POST':
+        form_data = _registration_form_data()
+
         # 验证用户名
         valid, result = validate_username(request.form.get('username'))
         if not valid:
             flash(result, 'error')
-            return redirect(url_for('public.register'))
+            return _render_register(form_data)
         username = result
 
         # 验证密码
-        valid, result = validate_password(request.form.get('password'))
+        password_raw = request.form.get('password', '')
+        confirm_password = request.form.get('confirm_password', '')
+        valid, result = validate_password(password_raw)
         if not valid:
             flash(result, 'error')
-            return redirect(url_for('public.register'))
+            return _render_register(form_data)
         password = result
+        if password != confirm_password:
+            flash('两次输入的密码不一致', 'error')
+            return _render_register(form_data)
 
         # 验证邮箱
         valid, result = validate_email(request.form.get('email'))
         if not valid:
             flash(result, 'error')
-            return redirect(url_for('public.register'))
+            return _render_register(form_data)
         email = result
 
         # 验证年龄
         valid, result = validate_age(request.form.get('age'))
         if not valid:
             flash(result, 'error')
-            return redirect(url_for('public.register'))
+            return _render_register(form_data)
         age = result
 
         # 验证性别
         valid, result = validate_gender(request.form.get('gender'))
         if not valid:
             flash(result, 'error')
-            return redirect(url_for('public.register'))
+            return _render_register(form_data)
         gender = result
 
         # 社区信息
@@ -1096,31 +1229,41 @@ def handle_register():
         # 检查用户名是否已存在
         if User.query.filter_by(username=username).first():
             flash('用户名已存在', 'error')
-            return redirect(url_for('public.register'))
+            return _render_register(form_data)
 
         # 检查邮箱是否已存在
-        if email and User.query.filter_by(email=email).first():
+        if email and User.query.filter(db.func.lower(User.email) == email.lower()).first():
             flash('邮箱已被注册', 'error')
-            return redirect(url_for('public.register'))
+            return _render_register(form_data)
 
         user = User(
             username=username,
             email=email,
             age=age,
             gender=gender,
-            community=community
+            community=community,
+            role='caregiver',
+            last_login=utcnow(),
         )
         user.set_password(password)
 
         db.session.add(user)
-        db.session.commit()
+        try:
+            db.session.commit()
+        except IntegrityError:
+            # 预检查与提交之间仍可能出现唯一键竞争，以数据库约束为准。
+            db.session.rollback()
+            flash('用户名或邮箱已被注册，请更换后重试', 'error')
+            return _render_register(form_data)
 
         logger.info("新用户注册: %s", username)
-        flash('注册成功，请登录', 'success')
-        return redirect(url_for('public.login'))
+        # 用户落库成功后再切换会话，避免失败时丢失当前游客体验。
+        _clear_identity_session_state()
+        login_user(user)
+        flash('注册成功，已进入照护工作台', 'success')
+        return redirect(url_for('user.pair_management'))
 
-    communities = Community.query.all()
-    return render_template('register.html', communities=communities)
+    return _render_register()
 
 
 def render_cooling_resources_page(community, resource_type, has_ac_raw, is_accessible_raw, open_only):
@@ -1134,7 +1277,7 @@ def render_cooling_resources_page(community, resource_type, has_ac_raw, is_acces
         logger.warning("避暑资源页天气读取失败，已隐藏室外温度计: %s", exc)
         cooling_weather = {}
     outdoor_temp = None
-    if cooling_weather and not cooling_weather.get('is_mock'):
+    if is_live_observational_weather(cooling_weather):
         outdoor_temp = cooling_weather.get('temperature')
 
     query = CoolingResource.query.filter_by(is_active=True)
@@ -1202,6 +1345,7 @@ def render_cooling_resources_page(community, resource_type, has_ac_raw, is_acces
         amap_security_js_code=amap_security_js_code,
         cooling_weather=cooling_weather,
         cooling_weather_location=weather_location,
+        cooling_weather_source=weather_source_label(cooling_weather),
         outdoor_temp=outdoor_temp
     )
 
@@ -1213,6 +1357,8 @@ def render_public_risk_page(location):
         return render_template(
             'risk.html',
             location=location,
+            weather_source_city=resolve_weather_city_label(location),
+            weather_source_label=weather_source_label(weather_data),
             weather=None,
             heat_result=None,
             risk_label=None,
@@ -1223,7 +1369,8 @@ def render_public_risk_page(location):
     heat_service = HeatActionService()
     consecutive_hot_days = get_consecutive_hot_days(
         location,
-        today_max=weather_data.get('temperature_max')
+        today_max=weather_data.get('temperature_max'),
+        weather_data=weather_data,
     )
     heat_result = heat_service.calculate_heat_risk(
         weather_data,
@@ -1235,6 +1382,8 @@ def render_public_risk_page(location):
     return render_template(
         'risk.html',
         location=location,
+        weather_source_city=resolve_weather_city_label(location),
+        weather_source_label=weather_source_label(weather_data),
         weather=weather_data,
         heat_result=heat_result,
         risk_label=risk_label,
@@ -1245,18 +1394,27 @@ def render_public_risk_page(location):
 
 def handle_guest_login(next_url=None):
     if current_user.is_authenticated and not is_guest_user(current_user):
-        return redirect(url_for('user.user_dashboard'))
+        return redirect(url_for(_role_landing_endpoint(getattr(current_user, 'role', None))))
 
     session['guest_profile'] = {
         'username': '游客',
         'age': None,
         'gender': '未知',
-        'community': '朝阳社区',
+        'community': DEFAULT_CITY_LABEL,
         'has_chronic_disease': False,
         'chronic_diseases': None
     }
     session.pop('guest_assessment', None)
-    guest_id = f"{GUEST_ID_PREFIX}{secrets.token_urlsafe(12)}"
+    existing_guest_id = session.get('guest_id')
+    # 复用已有游客 ID，减少频繁轮换带来的标识面扩大，有助于降低滥用绕过空间。
+    if (
+        isinstance(existing_guest_id, str)
+        and existing_guest_id.startswith(GUEST_ID_PREFIX)
+        and len(existing_guest_id) > len(GUEST_ID_PREFIX)
+    ):
+        guest_id = existing_guest_id
+    else:
+        guest_id = f"{GUEST_ID_PREFIX}{secrets.token_urlsafe(12)}"
     session['guest_id'] = guest_id
     guest_user = GuestUser(guest_id, session['guest_profile'])
     login_user(guest_user)
@@ -1266,9 +1424,7 @@ def handle_guest_login(next_url=None):
 
 
 def handle_logout():
-    if is_guest_user(current_user):
-        session.pop('guest_profile', None)
-        session.pop('guest_assessment', None)
-        session.pop('guest_id', None)
+    # 退出后清除身份资料与行动授权，避免共享浏览器继续写入上一位长者状态。
+    _clear_identity_session_state()
     logout_user()
     return redirect(url_for('public.index'))

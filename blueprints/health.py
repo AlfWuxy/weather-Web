@@ -20,14 +20,45 @@ from core.health_profiles import (
 )
 from core.time_utils import today_local
 from core.usage import log_usage_event
-from core.weather import ensure_user_location_valid, get_weather_with_cache, is_qweather_online_weather
+from core.weather import (
+    ensure_user_location_valid,
+    get_weather_with_cache,
+    is_air_quality_available,
+    is_heat_action_weather_ready,
+    is_live_observational_weather,
+    weather_source_label,
+)
 from core.db_models import FamilyMember, FamilyMemberProfile, HealthDiary, MedicationReminder, WeatherData
+from services.user._common import CARE_ROLES
 from utils.parsers import parse_int, parse_date, parse_float, safe_json_loads
-from utils.validators import sanitize_input, validate_gender
+from utils.validators import sanitize_input, validate_age, validate_gender
 
 logger = logging.getLogger(__name__)
 
 bp = Blueprint('health', __name__)
+
+
+@bp.before_request
+def require_family_care_role():
+    """家庭健康域只允许明确授权的照护角色进入。"""
+    if not getattr(current_user, 'is_authenticated', False):
+        return None
+    if getattr(current_user, 'role', None) in CARE_ROLES:
+        return None
+    flash('家庭照护需使用家庭账号登录', 'error')
+    return redirect(url_for('public.role_entry'))
+
+
+def _member_alerts_for_capabilities(profile, weather, heat_ready, air_ready):
+    """按温热与空气质量能力门过滤个人阈值结果。"""
+    if not weather or not (heat_ready or air_ready):
+        return []
+    reasons = member_weather_triggered(profile, weather)
+    return [
+        reason for reason in reasons
+        if (reason.startswith('AQI') and air_ready)
+        or (not reason.startswith('AQI') and heat_ready)
+    ]
 
 
 def _empty_family_member():
@@ -46,7 +77,10 @@ def _apply_family_member_form(member):
     """将表单内容写回成员对象，并返回画像载荷。"""
     member.name = sanitize_input(request.form.get('name'), max_length=50)
     member.relation = sanitize_input(request.form.get('relation'), max_length=20)
-    member.age = parse_int(request.form.get('age'))
+    valid, age = validate_age(request.form.get('age'))
+    if not valid:
+        return None, age
+    member.age = age
 
     raw_gender = request.form.get('gender')
     member.gender = sanitize_input(raw_gender, max_length=10)
@@ -140,7 +174,10 @@ def family_members():
 
     user_location = ensure_user_location_valid()
     weather_data, _ = get_weather_with_cache(user_location)
-    weather_available = is_qweather_online_weather(weather_data)
+    weather_available = is_live_observational_weather(weather_data)
+    heat_action_weather_ready = is_heat_action_weather_ready(weather_data)
+    air_quality_available = is_air_quality_available(weather_data)
+    current_weather_source = weather_source_label(weather_data)
     weather = SimpleNamespace(**weather_data) if weather_available else None
 
     member_cards = []
@@ -162,8 +199,13 @@ def family_members():
         completion_values.append(completion['percent'])
 
         alerts = []
-        if profile_ctx['alert_enabled'] and weather_available:
-            alerts = member_weather_triggered(profile, weather)
+        if profile_ctx['alert_enabled']:
+            alerts = _member_alerts_for_capabilities(
+                profile,
+                weather,
+                heat_action_weather_ready,
+                air_quality_available,
+            )
         if alerts:
             alert_trigger_count += 1
 
@@ -176,6 +218,7 @@ def family_members():
             'chronic_diseases': diseases,
             'chronic': diseases,
             'location': user_location,
+            'location_scope': 'current_query',
             'risk': risk,
             'risk_level': risk['level'],
             'risk_label': risk['label'],
@@ -206,7 +249,7 @@ def family_members():
         relation_counts[relation] = relation_counts.get(relation, 0) + 1
 
     avg_completion = int(round(sum(completion_values) / len(completion_values))) if completion_values else 0
-    risk_chart_labels = ['低风险', '中风险', '高风险']
+    risk_chart_labels = ['常规关注', '中关注', '高关注']
     risk_chart_values = [risk_counts['low'], risk_counts['medium'], risk_counts['high']]
 
     return render_template(
@@ -215,15 +258,15 @@ def family_members():
         family_members=filtered_cards,
         total_members=len(members),
         risk_counts=risk_counts,
-        high_risk_count=risk_counts['high'],
         chronic_count=chronic_count,
         avg_completion=avg_completion,
-        feedback_rate=avg_completion,
         relation_counts=relation_counts,
         alert_trigger_count=alert_trigger_count,
-        notified_count=alert_trigger_count,
         today_weather=weather,
         weather_available=weather_available,
+        heat_action_weather_ready=heat_action_weather_ready,
+        air_quality_available=air_quality_available,
+        weather_source_label=current_weather_source,
         search_query=search_query,
         risk_filter=risk_filter,
         risk_chart_labels=risk_chart_labels,
@@ -376,11 +419,19 @@ def family_member_detail(member_id):
     ).all()
     user_location = ensure_user_location_valid()
     weather_data, _ = get_weather_with_cache(user_location)
-    weather_available = is_qweather_online_weather(weather_data)
+    weather_available = is_live_observational_weather(weather_data)
+    heat_action_weather_ready = is_heat_action_weather_ready(weather_data)
+    air_quality_available = is_air_quality_available(weather_data)
+    current_weather_source = weather_source_label(weather_data)
     weather = SimpleNamespace(**weather_data) if weather_available else None
     alerts = []
-    if profile_ctx['alert_enabled'] and weather_available:
-        alerts = member_weather_triggered(profile, weather)
+    if profile_ctx['alert_enabled']:
+        alerts = _member_alerts_for_capabilities(
+            profile,
+            weather,
+            heat_action_weather_ready,
+            air_quality_available,
+        )
 
     return render_template(
         'family_member_detail.html',
@@ -393,6 +444,11 @@ def family_member_detail(member_id):
         reminders=reminders,
         weather=weather,
         weather_available=weather_available,
+        heat_action_weather_ready=heat_action_weather_ready,
+        air_quality_available=air_quality_available,
+        weather_source_label=current_weather_source,
+        weather_location=user_location,
+        weather_location_scope='current_query',
         alerts=alerts
     )
 
