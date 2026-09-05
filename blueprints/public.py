@@ -9,6 +9,8 @@ from flask import (
     Response,
     abort,
     current_app,
+    flash,
+    jsonify,
     make_response,
     redirect,
     render_template,
@@ -25,8 +27,9 @@ from core.extensions import db
 from core.security import rate_limit_key
 from core.time_utils import utcnow
 from core.usage import log_usage_event
-from core.db_models import AlertDelivery
+from core.db_models import AlertDelivery, CoolingResource
 from core.time_utils import today_local
+from services.cooling_service import FEEDBACK_CODES, record_feedback, resolve_feedback_actor
 from services.public_service import (
     render_role_entry,
     handle_login,
@@ -324,6 +327,48 @@ def cooling_resources():
         is_accessible_raw=is_accessible_raw,
         open_only=open_only
     )
+
+
+def _wants_json_response():
+    if request.is_json:
+        return True
+    accept = request.headers.get('Accept') or ''
+    if 'application/json' in accept and 'text/html' not in accept:
+        return True
+    return request.headers.get('X-Requested-With') == 'XMLHttpRequest'
+
+
+@bp.route('/cooling/<int:resource_id>/feedback', methods=['POST'], endpoint='cooling_feedback')
+@limiter.limit(lambda: current_app.config.get('RATE_LIMIT_CONFIRM', '30 per hour'), key_func=rate_limit_key)
+def cooling_feedback(resource_id):
+    """家属登录或老人短码会话才能提交封闭码反馈；忽略自由文本。"""
+    actor = resolve_feedback_actor(current_user, session)
+    if not actor.ok:
+        if _wants_json_response():
+            return jsonify({'error': 'unauthorized'}), 401
+        return redirect(url_for('public.login'))
+
+    resource = CoolingResource.query.get_or_404(resource_id)
+    payload = request.get_json(silent=True) if request.is_json else None
+    if isinstance(payload, dict):
+        code = payload.get('code')
+    else:
+        code = request.form.get('code')
+    code = sanitize_input(code, max_length=16) if code is not None else ''
+    if code not in FEEDBACK_CODES:
+        if _wants_json_response():
+            return jsonify({'error': 'invalid_code'}), 400
+        abort(400)
+
+    record_feedback(resource, code, pair=actor.pair, channel=actor.channel)
+    if code == 'need_ride':
+        message = '我们会记录，不提供接送服务'
+    else:
+        message = '已记录'
+    if _wants_json_response():
+        return jsonify({'ok': True, 'code': code, 'message': message})
+    flash(message, 'info')
+    return redirect(url_for('public.cooling_resources'))
 
 
 @bp.route('/_AMapService/<path:proxy_path>')

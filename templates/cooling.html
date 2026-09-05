@@ -6,6 +6,7 @@
     <section class="section-heading yl-fade-up">
         <span class="section-kicker"><i class="bi bi-snow2"></i> 避暑资源</span>
         <h1 class="h2">已录入的纳凉点</h1>
+        <p class="mb-2">资源点信息由志愿者电话或现场核验，标注核验日期；未核验点仅供参考。</p>
         <p>按所在地和类型查看已录入资源。开放时间、费用和进入要求请以现场或资源方最新说明为准。</p>
     </section>
 
@@ -59,19 +60,45 @@
 
     <div class="row g-3 yl-fade-up yl-fade-up-d2">
         {% if total and total > 0 %}
-        {% for community, items in resources_by_community.items() %}
-        {% for r in items %}
+        {% for r in resource_cards %}
         <div class="col-md-6 col-lg-4">
-            <div class="card h-100">
+            <div class="card h-100{% if r.is_unverified %} yl-cooling-unverified{% endif %}" data-verify-status="{{ r.verify_status }}">
                 <div class="card-body">
+                    {% if r.is_closed_reported %}
+                    <div class="alert alert-warning py-2 px-3 small mb-3">有用户反馈已关闭，待复核</div>
+                    {% endif %}
                     <div class="d-flex justify-content-between align-items-start mb-2">
                         <h5 class="mb-0" style="font-size:1.05rem;">{{ r.name }}</h5>
-                        <span class="badge {% if r.has_ac %}bg-success-subtle{% else %}bg-secondary-subtle{% endif %}">{{ '有空调' if r.has_ac else '未标注空调' }}</span>
+                        {% if r.is_unverified %}
+                        <span class="badge bg-secondary">未核验</span>
+                        {% elif r.has_ac %}
+                        <span class="badge bg-success-subtle">有空调</span>
+                        {% else %}
+                        <span class="badge bg-secondary-subtle">未标注空调</span>
+                        {% endif %}
                     </div>
-                    <div class="text-muted" style="font-size:.85rem;">{{ r.resource_type or '避暑资源' }} · {{ community }}</div>
+                    <div class="text-muted" style="font-size:.85rem;">{{ r.resource_type or '避暑资源' }} · {{ r.community_code or '未标注社区' }}</div>
 
                     <div class="mt-3" style="font-size:.88rem; color:var(--yl-ink-soft);">
                         <div class="mb-1"><i class="bi bi-clock me-1 text-muted"></i>{{ r.open_hours or '开放时间未标注' }}</div>
+                        {% if r.last_verified_label %}
+                        <div class="mb-1"><i class="bi bi-patch-check me-1 text-muted"></i>{{ r.last_verified_label }}</div>
+                        {% endif %}
+                        {% if r.alert_open_label %}
+                        <div class="mb-1"><i class="bi bi-thermometer-sun me-1 text-muted"></i>{{ r.alert_open_label }}</div>
+                        {% endif %}
+                        {% if r.transport_label %}
+                        <div class="mb-1"><i class="bi bi-signpost-2 me-1 text-muted"></i>{{ r.transport_label }}</div>
+                        {% endif %}
+                        {% if r.amenity_items %}
+                        <div class="d-flex flex-wrap gap-2 mt-2 mb-1">
+                            {% for amenity in r.amenity_items %}
+                            <span class="badge bg-light text-dark border" title="{{ amenity.label }}">
+                                <i class="bi {{ amenity.icon }} me-1"></i>{{ amenity.label }}
+                            </span>
+                            {% endfor %}
+                        </div>
+                        {% endif %}
                         <div><i class="bi bi-geo-alt me-1 text-muted"></i>{{ r.address_hint or '地址未标注' }}</div>
                         {% if r.is_accessible %}
                         <div class="mt-1"><i class="bi bi-universal-access me-1 text-muted"></i>适合行动不便老人</div>
@@ -84,13 +111,16 @@
                         {% endif %}
                     </div>
 
-                    <div class="d-flex gap-2 mt-3">
-                        <span class="btn btn-sm btn-outline-primary flex-grow-1 disabled"><i class="bi bi-geo-alt me-1"></i>以实际地址为准</span>
-                    </div>
+                    <form method="POST" action="{{ url_for('public.cooling_feedback', resource_id=r.id) }}" class="d-flex flex-wrap gap-2 mt-3">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <button class="btn btn-sm btn-outline-success" type="submit" name="code" value="reachable">能到达</button>
+                        <button class="btn btn-sm btn-outline-warning" type="submit" name="code" value="need_ride">需要接送</button>
+                        <button class="btn btn-sm btn-outline-danger" type="submit" name="code" value="closed">已关闭 / 找不到</button>
+                    </form>
+                    <div class="text-muted small mt-2">我们会记录，不提供接送服务</div>
                 </div>
             </div>
         </div>
-        {% endfor %}
         {% endfor %}
         {% else %}
         <div class="col-12">

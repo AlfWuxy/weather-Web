@@ -115,3 +115,16 @@ docs/                 架构、流程与治理文档
 scripts/              部署与维护脚本
 ```
 
+## 避暑资源核验（CLI）
+
+电话或现场核验后，用 CLI 写库并追加台账（只记封闭码与日期，不写姓名或电话）：
+
+```bash
+/opt/anaconda3/envs/case-weather-py312/bin/python scripts/cooling_verify.py \
+  --id 12 --method phone --open yes --alert-note same_hours \
+  --ac yes --water yes --seats yes --toilet no --step-free unknown --shade yes \
+  --transport bus --result verified --note ok
+```
+
+台账文件为 `docs/data/cooling_verification_ledger.csv`。问题清单与允许值见 `docs/data/cooling_verification_protocol.md`。未跑 CLI 时也可按该表头手工追加一行，再在 `/admin/cooling` 录入。
+

@@ -36,9 +36,12 @@
                             <th>名称</th>
                             <th>类型</th>
                             <th>开放时间</th>
+                            <th>核验状态</th>
+                            <th>最后核验</th>
+                            <th>预警日开放</th>
+                            <th>交通</th>
                             <th>空调</th>
                             <th>无障碍</th>
-                            <th>坐标</th>
                             <th>状态</th>
                             <th>操作</th>
                         </tr>
@@ -50,6 +53,17 @@
                             <td>{{ item.name }}</td>
                             <td>{{ item.resource_type or '-' }}</td>
                             <td>{{ item.open_hours or '-' }}</td>
+                            <td>{{ item.display_verify_status or item.verify_status or 'unverified' }}</td>
+                            <td>
+                                {% if item.last_verified_at %}
+                                    {{ item.last_verified_at.strftime('%Y-%m-%d') }}
+                                    {% if item.verify_method %} · {{ item.verify_method }}{% endif %}
+                                {% else %}
+                                    -
+                                {% endif %}
+                            </td>
+                            <td>{{ item.open_during_alert or '-' }}</td>
+                            <td>{{ item.transport_need or '-' }}</td>
                             <td>
                                 {% if item.has_ac %}
                                     <span class="badge bg-success">有</span>
@@ -65,13 +79,6 @@
                                 {% endif %}
                             </td>
                             <td>
-                                {% if item.latitude is not none and item.longitude is not none %}
-                                    {{ item.latitude|round(4) }}, {{ item.longitude|round(4) }}
-                                {% else %}
-                                    -
-                                {% endif %}
-                            </td>
-                            <td>
                                 {% if item.is_active %}
                                     <span class="badge bg-success">启用</span>
                                 {% else %}
@@ -82,6 +89,60 @@
                                 <a href="{{ url_for('admin.admin_edit_cooling_resource', resource_id=item.id) }}" class="btn btn-sm btn-outline-warning">
                                     <i class="bi bi-pencil"></i>
                                 </a>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td colspan="12" class="bg-light">
+                                <form method="POST" action="{{ url_for('admin.admin_verify_cooling_resource', resource_id=item.id) }}" class="row g-2 align-items-end py-2">
+                                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                    <div class="col-md-2">
+                                        <label class="form-label small mb-0">核验方式</label>
+                                        <select class="form-select form-select-sm" name="method" required>
+                                            <option value="phone" {% if item.verify_method == 'phone' %}selected{% endif %}>电话</option>
+                                            <option value="onsite" {% if item.verify_method == 'onsite' %}selected{% endif %}>现场</option>
+                                            <option value="official_doc" {% if item.verify_method == 'official_doc' %}selected{% endif %}>官方文件</option>
+                                        </select>
+                                    </div>
+                                    <div class="col-md-2">
+                                        <label class="form-label small mb-0">预警日开放</label>
+                                        <select class="form-select form-select-sm" name="open_during_alert">
+                                            {% for code in open_during_alert_codes %}
+                                            <option value="{{ code }}" {% if item.open_during_alert == code or (not item.open_during_alert and code == 'unknown') %}selected{% endif %}>{{ code }}</option>
+                                            {% endfor %}
+                                        </select>
+                                    </div>
+                                    <div class="col-md-2">
+                                        <label class="form-label small mb-0">开放说明码</label>
+                                        <select class="form-select form-select-sm" name="alert_open_note_code">
+                                            <option value="">-</option>
+                                            {% for code in alert_open_note_codes %}
+                                            <option value="{{ code }}" {% if item.alert_open_note_code == code %}selected{% endif %}>{{ code }}</option>
+                                            {% endfor %}
+                                        </select>
+                                    </div>
+                                    <div class="col-md-2">
+                                        <label class="form-label small mb-0">交通</label>
+                                        <select class="form-select form-select-sm" name="transport_need">
+                                            {% for code in transport_codes %}
+                                            <option value="{{ code }}" {% if item.transport_need == code or (not item.transport_need and code == 'unknown') %}selected{% endif %}>{{ code }}</option>
+                                            {% endfor %}
+                                        </select>
+                                    </div>
+                                    <div class="col-md-3">
+                                        <label class="form-label small mb-0">设施</label>
+                                        <div class="d-flex flex-wrap gap-2 small">
+                                            <label class="form-check mb-0"><input class="form-check-input" type="checkbox" name="amenity_ac" value="1"> 空调</label>
+                                            <label class="form-check mb-0"><input class="form-check-input" type="checkbox" name="amenity_water" value="1"> 饮水</label>
+                                            <label class="form-check mb-0"><input class="form-check-input" type="checkbox" name="amenity_seats" value="1"> 座椅</label>
+                                            <label class="form-check mb-0"><input class="form-check-input" type="checkbox" name="amenity_toilet" value="1"> 厕所</label>
+                                            <label class="form-check mb-0"><input class="form-check-input" type="checkbox" name="amenity_step_free" value="1"> 无台阶</label>
+                                            <label class="form-check mb-0"><input class="form-check-input" type="checkbox" name="amenity_shade" value="1"> 遮阳</label>
+                                        </div>
+                                    </div>
+                                    <div class="col-md-1 d-grid">
+                                        <button class="btn btn-sm btn-primary" type="submit">记录核验</button>
+                                    </div>
+                                </form>
                             </td>
                         </tr>
                         {% endfor %}

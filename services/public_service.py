@@ -46,6 +46,7 @@ from services.action_events import (
     record_seen,
     today_state,
 )
+from services.cooling_service import present_cooling_cards
 from services.heat_action_service import HeatActionService
 from utils.parsers import parse_bool
 from utils.audit_log import log_security_event
@@ -1580,34 +1581,33 @@ def render_cooling_resources_page(community, resource_type, has_ac_raw, is_acces
             CoolingResource.open_hours != ''
         )
 
-    resources = query.order_by(
-        CoolingResource.community_code,
-        CoolingResource.name
-    ).all()
+    resources = query.all()
+    resource_cards = present_cooling_cards(resources, utcnow())
     all_resources = CoolingResource.query.filter_by(is_active=True).all()
     communities = sorted({item.community_code for item in all_resources if item.community_code})
     resource_types = sorted({item.resource_type for item in all_resources if item.resource_type})
     grouped = {}
     map_points = []
-    for item in resources:
-        grouped.setdefault(item.community_code or '未标注社区', []).append(item)
-        if item.latitude is not None and item.longitude is not None:
+    for card in resource_cards:
+        grouped.setdefault(card.community_code or '未标注社区', []).append(card)
+        if card.latitude is not None and card.longitude is not None:
             map_points.append({
-                'name': item.name,
-                'community': item.community_code,
-                'type': item.resource_type,
-                'address': item.address_hint,
-                'open_hours': item.open_hours,
-                'has_ac': bool(item.has_ac),
-                'is_accessible': bool(item.is_accessible),
-                'lat': item.latitude,
-                'lng': item.longitude
+                'name': card.name,
+                'community': card.community_code,
+                'type': card.resource_type,
+                'address': card.address_hint,
+                'open_hours': card.open_hours,
+                'has_ac': bool(card.has_ac),
+                'is_accessible': bool(card.is_accessible),
+                'lat': card.latitude,
+                'lng': card.longitude
             })
 
     amap_key = current_app.config.get('AMAP_KEY')
     amap_security_js_code = current_app.config.get('AMAP_SECURITY_JS_CODE')
     return render_template(
         'cooling.html',
+        resource_cards=resource_cards,
         resources_by_community=grouped,
         total=len(resources),
         communities=communities,

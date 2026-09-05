@@ -11,6 +11,14 @@ from core.extensions import db
 from core.audit import log_audit
 from core.db_models import Community, CoolingResource, HealthRiskAssessment, MedicalRecord, User, WeatherAlert
 from core.time_utils import utcnow
+from services.cooling_service import (
+    ALERT_OPEN_NOTE_CODES,
+    OPEN_DURING_ALERT_CODES,
+    TRANSPORT_CODES,
+    VERIFY_METHODS,
+    compute_verify_status,
+    record_verification,
+)
 from utils.audit_log import log_security_event
 from utils.parsers import parse_bool, parse_float, parse_int
 from utils.validators import (
@@ -887,12 +895,19 @@ def admin_cooling_resources():
         CoolingResource.community_code,
         CoolingResource.name
     ).all()
+    now = utcnow()
+    for item in resources:
+        item.display_verify_status = compute_verify_status(item, now)
     communities = Community.query.order_by(Community.name).all()
     return render_template(
         'admin_cooling_resources.html',
         resources=resources,
         communities=communities,
-        selected_community=community or ''
+        selected_community=community or '',
+        verify_methods=sorted(VERIFY_METHODS),
+        open_during_alert_codes=sorted(OPEN_DURING_ALERT_CODES),
+        alert_open_note_codes=sorted(ALERT_OPEN_NOTE_CODES),
+        transport_codes=sorted(TRANSPORT_CODES),
     )
 
 
@@ -973,3 +988,37 @@ def admin_edit_cooling_resource(resource_id):
         resource=resource,
         communities=communities
     )
+
+
+@bp.route('/admin/cooling/<int:resource_id>/verify', methods=['POST'], endpoint='admin_verify_cooling_resource')
+@login_required
+def admin_verify_cooling_resource(resource_id):
+    """管理员记录一次核验（封闭码，无自由文本）。"""
+    if current_user.role != 'admin':
+        flash('权限不足', 'error')
+        return redirect(url_for('user.user_dashboard'))
+
+    resource = CoolingResource.query.get_or_404(resource_id)
+    amenities = {
+        'ac': parse_bool(request.form.get('amenity_ac'), default=False),
+        'water': parse_bool(request.form.get('amenity_water'), default=False),
+        'seats': parse_bool(request.form.get('amenity_seats'), default=False),
+        'toilet': parse_bool(request.form.get('amenity_toilet'), default=False),
+        'step_free': parse_bool(request.form.get('amenity_step_free'), default=False),
+        'shade': parse_bool(request.form.get('amenity_shade'), default=False),
+    }
+    try:
+        record_verification(
+            resource,
+            sanitize_input(request.form.get('method'), max_length=16),
+            sanitize_input(request.form.get('open_during_alert'), max_length=16),
+            sanitize_input(request.form.get('alert_open_note_code'), max_length=32),
+            amenities,
+            sanitize_input(request.form.get('transport_need'), max_length=16),
+            'admin',
+        )
+    except ValueError:
+        flash('核验字段无效', 'error')
+        return redirect(url_for('admin.admin_cooling_resources'))
+    flash('核验已记录', 'success')
+    return redirect(url_for('admin.admin_cooling_resources'))
