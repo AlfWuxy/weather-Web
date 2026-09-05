@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% from "partials/metric_info.html" import metric_info with context %}
 {% set needs_chartjs = true %}
+{% set web_actions_read_only = web_actions_read_only|default(config.get('WECHAT_FORMAL_RUNTIME', false)) %}
 
 {% block title %}行动短码 · 宜老天气通{% endblock %}
 
@@ -10,6 +11,9 @@
         <div class="col-12">
             <h1 class="h2"><i class="bi bi-clipboard-check"></i> 行动短码</h1>
             <p class="text-muted mb-0">输入家属提供的短码，可记录今日行动或求助。本页不提供医疗诊断或治疗建议。</p>
+            <p class="text-muted small mt-2 mb-0 {% if not web_actions_read_only %}d-none{% endif %}">
+                微信正式版不会在网页读取短码或家庭安全链接。不会读取短码、兑换安全链接或写入家庭记录。确认、求助和复盘请在微信小程序中登录后操作。
+            </p>
             <p class="mt-2 mb-0">
                 只想用大字查看今天的天气和行动？
                 <a href="{{ url_for('user.elder_dashboard') if current_user.is_authenticated else url_for('public.guest_login', next=url_for('user.elder_dashboard')) }}">打开大字今日页</a>。
@@ -159,6 +163,7 @@
                         {% endif %}
                         <hr>
                         {% include "partials/elder_three_buttons.html" %}
+                        <p class="small mt-3 mb-0">登录后提交的求助会生成编号，并写入已授权家属的网页待处理工作台。本轮默认沙盒，不发送真实微信或短信。紧急时请直接联系家人或拨打 120。家属点“已收到”不等于老人已经安全。</p>
                         <p class="mt-3 mb-0">
                             <a class="text-muted small" href="#debrief-section">可选：填写今日复盘</a>
                         </p>
@@ -226,6 +231,7 @@
                                     允许将复盘与绑定关系关联（用于改进服务）
                                 </label>
                             </div>
+                            <p class="text-muted small mt-2 mb-0">关闭后不会显示在这位家人的今日记录中。复盘仍随账号保存，并在账号注销时删除；无论是否关联，都计入当天社区复盘提交数量，社区页只展示提交数量，不展示复盘原文。</p>
                             <button class="btn btn-outline-primary mt-3" type="submit">
                                 <i class="bi bi-send"></i> 提交复盘
                             </button>

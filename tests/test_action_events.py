@@ -201,10 +201,11 @@ def test_action_help_http_notifies(app, client, monkeypatch):
         assert ActionEvent.query.filter_by(pair_id=pair_id, stage='help_requested').count() == 1
         assert Notification.query.filter_by(category='help_requested').count() >= 1
         assert DailyStatus.query.filter_by(pair_id=pair_id).one().help_flag is True
-        failed = AlertDelivery.query.filter_by(pair_id=pair_id, channel='wxpusher').all()
-        assert failed
-        assert all(row.status == 'failed' for row in failed)
-        assert called
+        from core.db_models import HelpRequest, NotificationOutbox
+        assert HelpRequest.query.filter_by(pair_id=pair_id).count() == 1
+        assert NotificationOutbox.query.filter_by(channel='wxpusher').count() >= 1
+        assert AlertDelivery.query.filter_by(pair_id=pair_id, channel='wxpusher').count() == 0
+        assert not called
 
 
 def test_help_requested_notifies_and_survives_wxpusher_failure(app, db_session, monkeypatch):
@@ -223,16 +224,24 @@ def test_help_requested_notifies_and_survives_wxpusher_failure(app, db_session, 
 
     monkeypatch.setattr('services.push.wxpusher.send', boom)
 
-    from services.public_service import _notify_help_requested
+    from services.help_request_service import create_help_request
+    from services.notification_outbox import process_outbox_batch
+    from core.db_models import NotificationOutbox
 
-    record_event(pair, 'help_requested', 'elder', 'web_shortcode', now=now + timedelta(seconds=1))
-    _notify_help_requested(pair)
+    create_help_request(
+        user,
+        pair,
+        origin_channel='web_shortcode',
+        actor_role='elder',
+        skip_access_check=True,
+        commit=True,
+    )
+    process_outbox_batch(limit=20)
 
     assert Notification.query.filter_by(user_id=user.id, category='help_requested').count() >= 1
     assert ActionEvent.query.filter_by(pair_id=pair.id, stage='help_requested').count() == 1
-    deliveries = AlertDelivery.query.filter_by(pair_id=pair.id, channel='wxpusher').all()
-    assert deliveries
-    assert all(row.status == 'failed' for row in deliveries)
+    assert NotificationOutbox.query.filter_by(channel='wxpusher').count() >= 1
+    assert AlertDelivery.query.filter_by(pair_id=pair.id, channel='wxpusher').count() == 0
 
 
 def test_verified_without_self_report_meta(db_session):

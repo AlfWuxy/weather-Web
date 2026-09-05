@@ -553,95 +553,8 @@ def _json_state(pair):
 
 
 def _notify_help_requested(pair):
-    """站内通知 + 可选 WxPusher；推送失败不阻断事件。"""
-    action_url = f'/caregiver/pair/{pair.id}'
-    try:
-        action_url = url_for('user.caregiver_pair_detail', pair_id=pair.id)
-    except Exception:
-        pass
-    try:
-        create_notification(
-            pair.caregiver_id,
-            title='老人需要帮助',
-            message='已记录求助，请尽快确认收到。',
-            level='warning',
-            category='help_requested',
-            member_id=getattr(pair, 'member_id', None),
-            action_url=action_url,
-            meta={'type': 'help_requested', 'pair_id': pair.id},
-        )
-    except Exception:
-        logger.warning('help_requested 站内通知失败', exc_info=True)
-        db.session.rollback()
-
-    caregiver = db.session.get(User, pair.caregiver_id) if pair.caregiver_id else None
-    if not caregiver or not getattr(caregiver, 'push_enabled', False):
-        return
-    wx_uid = (getattr(caregiver, 'wxpusher_uid', None) or '').strip()
-    if not wx_uid:
-        return
-
-    try:
-        from services.push.dispatch import _generate_delivery_token
-        from services.push.wxpusher import send as wxpusher_send
-    except Exception:
-        logger.warning('WxPusher 组件不可用', exc_info=True)
-        return
-
-    location = pair.location_query or pair.community_code or '未知'
-    alert = WeatherAlert.query.filter_by(
-        location=location,
-        alert_type='help_requested',
-    ).order_by(WeatherAlert.id.desc()).first()
-    if not alert:
-        alert = WeatherAlert(
-            alert_date=utcnow(),
-            location=location,
-            alert_type='help_requested',
-            alert_level='求助',
-            description='老人端求助推送',
-            source='AppThreshold',
-            is_official=False,
-            starts_at=utcnow(),
-            ends_at=None,
-        )
-        db.session.add(alert)
-        db.session.flush()
-
-    delivery_token = _generate_delivery_token()
-    status = 'failed'
-    error = None
-    try:
-        result = wxpusher_send(
-            wx_uid,
-            title='老人需要帮助',
-            content='已记录求助，请打开照护详情确认收到。',
-            url=None,
-        )
-        if result.get('ok'):
-            status = 'sent'
-        else:
-            error = result.get('error') or 'wxpusher_failed'
-    except Exception as exc:
-        error = str(exc) or 'wxpusher_failed'
-        logger.info('WxPusher help send failed: %s', exc)
-
-    delivery = AlertDelivery(
-        alert_id=alert.id,
-        user_id=caregiver.id,
-        pair_id=pair.id,
-        channel='wxpusher',
-        status=status,
-        error=error,
-        delivery_token=delivery_token,
-        sent_at=utcnow(),
-    )
-    db.session.add(delivery)
-    try:
-        db.session.commit()
-    except Exception:
-        logger.warning('求助 AlertDelivery 写入失败', exc_info=True)
-        db.session.rollback()
+    """已废弃。求助通知由 NotificationOutbox 与工单同事务写入，避免重复投递。"""
+    return
 
 
 def _build_action_context(pair, status_date):
@@ -695,6 +608,18 @@ def _render_action_page(
         record_seen(pair, channel)
     recent_series = _build_recent_series(pair.id) if pair else []
     state = _json_state(pair) if pair else {}
+    filled = _resolve_action_routes(
+        token=token,
+        confirm_action=confirm_action,
+        help_action=help_action,
+        debrief_action=debrief_action,
+    )
+    if understood_action:
+        filled['understood_action'] = understood_action
+    if select_action:
+        filled['select_action'] = select_action
+    if state_action:
+        filled['state_action'] = state_action
     return render_template(
         'action_checkin.html',
         stage='respond',
@@ -707,23 +632,27 @@ def _render_action_page(
         risk_label=risk_label,
         risk_reasons=risk_reasons,
         recent_series=recent_series,
-        token=token,
-        confirm_action=confirm_action,
-        help_action=help_action,
-        debrief_action=debrief_action,
-        understood_action=understood_action,
-        select_action=select_action,
-        state_action=state_action,
+        token=filled.get('token', token),
+        confirm_action=filled['confirm_action'],
+        help_action=filled['help_action'],
+        debrief_action=filled['debrief_action'],
+        understood_action=filled['understood_action'],
+        select_action=filled['select_action'],
+        state_action=filled['state_action'],
         today_state=state,
         focus_debrief=focus_debrief
     )
 
 
 def _resolve_action_routes(token=None, confirm_action=None, help_action=None, debrief_action=None):
+    """始终给出可提交的真实路径；None 不得进入模板 action。"""
     routes = {
         'understood_action': url_for('public.action_understood'),
         'select_action': url_for('public.action_select'),
         'state_action': url_for('public.action_state'),
+        'confirm_action': url_for('public.action_confirm'),
+        'help_action': url_for('public.action_help'),
+        'debrief_action': url_for('public.action_debrief'),
     }
     if token:
         routes['token'] = token
@@ -1064,12 +993,31 @@ def _handle_action_help(token=None, confirm_action=None, debrief_action=None):
     _clear_short_code_failures()
     channel = _action_channel(token)
     _ensure_seen_for_write(pair, channel)
+    origin = 'web_shortcode' if channel in {'web_shortcode', 'web_token'} else (
+        'elder_mode' if channel == 'elder_mode' else 'web'
+    )
+    caregiver = db.session.get(User, pair.caregiver_id)
     try:
-        record_event(pair, 'help_requested', 'elder', channel)
-    except InvalidTransition as exc:
+        from services.help_request_service import create_help_request
+        from services.notification_outbox import process_outbox_batch
+        create_help_request(
+            caregiver,
+            pair,
+            origin_channel=origin,
+            category='cannot_complete',
+            is_proxy=False,
+            actor_role='elder',
+            skip_access_check=True,
+            commit=True,
+        )
+        process_outbox_batch(limit=10)
+    except Exception:
+        logger.exception('求助写入失败')
         db.session.rollback()
-        return exc.to_response()
-    _notify_help_requested(pair)
+        if _wants_json_action():
+            return jsonify({'ok': False, 'error': 'help_failed'}), 503
+        flash('求助未能保存，请稍后重试。', 'error')
+        return redirect(url_for('public.action_check'))
     log_usage_event(
         'help_flagged',
         user_id=pair.caregiver_id,
