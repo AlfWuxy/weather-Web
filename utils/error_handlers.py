@@ -6,7 +6,7 @@ import json
 import logging
 from typing import Optional, Tuple
 
-from flask import current_app, jsonify
+from flask import current_app, jsonify, request
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +34,24 @@ def classify_exception(exc: Exception) -> Tuple[int, str]:
     if isinstance(exc, RuntimeError):
         return 500, "服务运行异常"
     return 500, DEFAULT_ERROR_MESSAGE
+
+
+def json_error_response(error: str, status_code: int):
+    """Stable JSON envelope used by Mini Program and JSON APIs."""
+    response = jsonify({"success": False, "error": error})
+    response.status_code = status_code
+    return response
+
+
+def rate_limit_exceeded_response(exc):
+    """JSON 429 for API paths; keep Limiter's default body for HTML routes."""
+    path = request.path or ""
+    if path.startswith("/mp/api/") or path.startswith("/api/"):
+        return json_error_response("rate_limited", 429)
+    get_response = getattr(exc, "get_response", None)
+    if callable(get_response):
+        return get_response()
+    return json_error_response("rate_limited", 429)
 
 
 def handle_api_exception(

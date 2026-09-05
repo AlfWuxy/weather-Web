@@ -62,6 +62,14 @@ def _valid_key_length(value):
 
 def register_hooks(app):
     """Register app hooks, filters, and context processors."""
+    from flask_limiter.errors import RateLimitExceeded
+
+    from utils.error_handlers import rate_limit_exceeded_response
+
+    @app.errorhandler(RateLimitExceeded)
+    def _handle_rate_limit_exceeded(exc):
+        return rate_limit_exceeded_response(exc)
+
     @app.before_request
     def init_request_context():
         """初始化请求上下文（结构化日志使用）"""

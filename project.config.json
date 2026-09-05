@@ -1,0 +1,18 @@
+{
+  "description": "Import the git repository root in WeChat DevTools (not miniprogram/). AppID touristappid is a WeChat tourist/placeholder; replace locally with a real AppID for preview/upload. Do not commit a production AppID. API_BASE_URL stays empty in miniprogram/config.js for the public repo.",
+  "miniprogramRoot": "miniprogram/",
+  "compileType": "miniprogram",
+  "appid": "touristappid",
+  "projectname": "weather-Web",
+  "setting": {
+    "es6": true,
+    "urlCheck": true,
+    "enhance": true,
+    "minified": true,
+    "postcss": true
+  },
+  "packOptions": {
+    "ignore": [],
+    "include": []
+  }
+}

@@ -15,6 +15,13 @@ page {
   color: #6b7280;
 }
 
+.btn-primary,
+.btn-outline {
+  margin: 0;
+  width: auto;
+  line-height: 1.4;
+}
+
 .btn-primary {
   background: #16a34a;
   color: #ffffff;
@@ -30,3 +37,135 @@ page {
   padding: 10px 14px;
 }
 
+.btn-primary::after,
+.btn-outline::after {
+  border: none;
+}
+
+.btn-primary.button-hover {
+  background: #15803d;
+  color: #ffffff;
+}
+
+.btn-outline.button-hover {
+  background: #f3f4f6;
+  color: #111827;
+}
+
+.btn-block {
+  width: 100%;
+}
+
+.btn-flex {
+  flex: 1;
+}
+
+.page-pad {
+  padding: 16px;
+}
+
+.page-title {
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.page-lead {
+  margin-top: 6px;
+  font-size: 12px;
+}
+
+.text-sm {
+  font-size: 12px;
+}
+
+.empty {
+  text-align: center;
+  padding: 20px;
+}
+
+.spacer {
+  height: 12px;
+}
+
+.card-item {
+  margin-bottom: 12px;
+}
+
+.input {
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: #fff;
+}
+
+.label {
+  font-size: 12px;
+}
+
+.field {
+  margin-top: 10px;
+}
+
+.field-lg {
+  margin-top: 14px;
+}
+
+.btn-row {
+  display: flex;
+  margin-top: 14px;
+}
+
+.btn-row .btn-flex + .btn-flex {
+  margin-left: 10px;
+}
+
+.switch-row {
+  display: flex;
+  align-items: center;
+  margin-top: 10px;
+}
+
+.switch-row switch {
+  margin-right: 10px;
+}
+
+.field-row {
+  display: flex;
+  margin-top: 10px;
+}
+
+.field-col {
+  flex: 1;
+}
+
+.field-col + .field-col {
+  margin-left: 10px;
+}
+
+.mini-row {
+  display: flex;
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
+
+.mini-row button {
+  margin-right: 10px;
+}
+
+.mini-row button:last-child {
+  margin-right: 0;
+}
+
+.elder-head {
+  display: flex;
+  justify-content: space-between;
+}
+
+.elder-head-main {
+  flex: 1;
+  margin-right: 10px;
+}
+
+.meta-line {
+  margin-top: 4px;
+}

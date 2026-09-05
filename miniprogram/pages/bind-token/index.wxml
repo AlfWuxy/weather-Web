@@ -1,27 +1,26 @@
-<view style="padding: 16px;">
+<view class="page-pad">
   <view class="card">
-    <view style="font-size: 18px; font-weight: 700;">绑定 API Token</view>
-    <view class="muted" style="margin-top: 8px;">
+    <view class="page-title">绑定 API Token</view>
+    <view class="muted page-lead">
       试点阶段先在网页端生成 Token，在这里输入完成绑定。
     </view>
 
-    <view style="margin-top: 14px;">
+    <view class="field-lg">
       <input
+        class="input"
         placeholder="粘贴 Web 生成的 Token"
         value="{{tokenInput}}"
         bindinput="onInput"
-        style="border: 1px solid #e5e7eb; border-radius: 10px; padding: 10px 12px; background: #fff;"
       />
     </view>
 
-    <view style="display:flex; gap: 10px; margin-top: 14px;">
-      <button class="btn-primary" style="flex:1;" bindtap="onBind">绑定并进入</button>
-      <button class="btn-outline" style="flex:1;" bindtap="onClear">清空</button>
+    <view class="btn-row">
+      <button class="btn-primary btn-flex" bindtap="onBind" disabled="{{busy}}">绑定并进入</button>
+      <button class="btn-outline btn-flex" bindtap="onClear" disabled="{{busy}}">清空</button>
     </view>
 
-    <view class="muted" style="margin-top: 10px; font-size: 12px;">
+    <view class="muted hint">
       注意：小程序请求域名必须配置 HTTPS 合法域名，且与后端一致。
     </view>
   </view>
 </view>
-

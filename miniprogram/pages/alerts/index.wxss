@@ -2,3 +2,37 @@
   font-weight: 700;
 }
 
+.alert-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.badge {
+  padding: 4px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+}
+
+.badge-heat {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.badge-cold {
+  background: #dbeafe;
+  color: #1d4ed8;
+}
+
+.warn-body {
+  margin-top: 8px;
+  line-height: 1.6;
+}
+
+.warn-time {
+  margin-top: 8px;
+}
+
+.card-foot {
+  margin-top: 6px;
+}
