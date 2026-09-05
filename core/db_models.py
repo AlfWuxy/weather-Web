@@ -448,9 +448,35 @@ class CoolingResource(db.Model):
     notes = db.Column(db.Text)
     is_active = db.Column(db.Boolean, default=True)
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    last_verified_at = db.Column(db.DateTime)
+    verified_by_role = db.Column(db.String(16))
+    verify_method = db.Column(db.String(16))
+    open_during_alert = db.Column(db.String(16))
+    alert_open_note_code = db.Column(db.String(32))
+    amenities_json = db.Column(db.Text)
+    transport_need = db.Column(db.String(16))
+    verify_status = db.Column(db.String(16))
 
     __table_args__ = (
         db.Index('ix_cooling_resources_community', 'community_code'),
+    )
+
+
+class CoolingFeedback(db.Model):
+    """避暑资源反馈（append-only，只存封闭码，不存自由文本）。"""
+    __tablename__ = 'cooling_feedback'
+    id = db.Column(db.Integer, primary_key=True)
+    resource_id = db.Column(db.Integer, db.ForeignKey('cooling_resources.id'), nullable=False)
+    pair_id = db.Column(db.Integer, db.ForeignKey('pairs.id'))
+    code = db.Column(db.String(16), nullable=False)
+    channel = db.Column(db.String(24))
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+
+    __table_args__ = (
+        db.Index('ix_cooling_feedback_resource_id', 'resource_id'),
+        db.Index('ix_cooling_feedback_pair_id', 'pair_id'),
+        db.Index('ix_cooling_feedback_code', 'code'),
+        db.Index('ix_cooling_feedback_created_at', 'created_at'),
     )
 
 

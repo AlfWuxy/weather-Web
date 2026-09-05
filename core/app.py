@@ -23,6 +23,7 @@ from core.db_models import (
     ApiToken,
     Community,
     CommunityDaily,
+    CoolingFeedback,
     CoolingResource,
     DailyStatus,
     Debrief,
