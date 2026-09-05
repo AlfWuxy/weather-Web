@@ -353,25 +353,29 @@ class WeatherService:
             if not isinstance(payload, dict):
                 return {}
 
-            # 兼容旧 /air/now：溯源测试与部分 Host 仍返回 code/now/pubTime。
+            # 兼容旧 /air/now：无有效观测时刻则整组空气字段不可用（失败即关闭）。
             if payload.get('code') == '200' and isinstance(payload.get('now'), dict):
                 air_now = payload['now']
-                result = {}
                 pm25 = self._bounded_float(air_now.get('pm2p5'), 0.0, 1000.0)
                 aqi = self._bounded_float(air_now.get('aqi'), 0.0, 500.0)
-                if pm25 is not None:
-                    result['pm25'] = pm25
-                if aqi is not None:
-                    result['aqi'] = int(round(aqi))
-                category = str(air_now.get('category') or '').strip()
-                if category:
-                    result['air_quality'] = category
                 air_observed_at = normalize_weather_observed_at(air_now.get('pubTime'))
                 if air_observed_at is None:
                     air_observed_at = normalize_weather_observed_at(payload.get('updateTime'))
-                if air_observed_at and ('pm25' in result or 'aqi' in result):
-                    result['air_observed_at'] = air_observed_at
-                    result['air_quality_available'] = True
+                if (
+                    air_observed_at is None
+                    or pm25 is None
+                    or aqi is None
+                ):
+                    return {}
+                result = {
+                    'pm25': pm25,
+                    'aqi': int(round(aqi)),
+                    'air_observed_at': air_observed_at,
+                    'air_quality_available': True,
+                }
+                category = str(air_now.get('category') or '').strip()
+                if category:
+                    result['air_quality'] = category
                 return result
 
             indexes = payload.get('indexes') or []
