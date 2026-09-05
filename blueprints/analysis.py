@@ -16,7 +16,9 @@ from core.extensions import db
 from core.guest import is_guest_user
 from core.analytics import pearson_corr
 from core.audit import log_audit
+from services.action_events import funnel as action_funnel, pair_hash as hash_pair_id
 from core.db_models import (
+    ActionEvent,
     AlertDelivery,
     Community,
     HealthDiary,
@@ -3245,6 +3247,25 @@ def annual_report():
     )
 
 
+def _pilot_window(days=None):
+    window = (request.args.get('window') or '').strip().lower()
+    include_test = request.args.get('include_test') == '1'
+    today = today_local()
+    if window == 'today':
+        return today, today, 'today', include_test
+    if window == '7d':
+        return today - timedelta(days=6), today, '7d', include_test
+    if window == '30d':
+        return today - timedelta(days=29), today, '30d', include_test
+    day_count = days if days is not None else request.args.get('days', default=30, type=int)
+    try:
+        day_count = int(day_count)
+    except (TypeError, ValueError):
+        day_count = 30
+    day_count = max(1, min(day_count, 365))
+    return today - timedelta(days=day_count - 1), today, f'{day_count}d', include_test
+
+
 @bp.route('/analysis/pilot', endpoint='pilot_dashboard')
 @login_required
 def pilot_dashboard():
@@ -3254,6 +3275,8 @@ def pilot_dashboard():
 
     days = request.args.get('days', default=30, type=int)
     days = max(1, min(days, 365))
+    date_from, date_to, window_label, include_test = _pilot_window(days=days)
+    funnel_data = action_funnel(date_from, date_to, include_test=include_test)
 
     now = utcnow()
     start_ts = now - timedelta(days=days)
@@ -3312,6 +3335,9 @@ def pilot_dashboard():
     return render_template(
         'analysis_pilot.html',
         days=days,
+        window=window_label,
+        include_test=include_test,
+        funnel=funnel_data,
         pairs_total=pairs_total,
         elders_total=elders_total,
         active_7d=active_7d,
@@ -3331,38 +3357,98 @@ def pilot_dashboard():
 @bp.route('/analysis/pilot/export.csv', endpoint='pilot_export_csv')
 @login_required
 def pilot_export_csv():
-    """导出试点埋点（CSV）"""
+    """导出行动事件（CSV，pair_hash 匿名）。"""
     if not _require_admin():
         return redirect(url_for('user.user_dashboard'))
 
     days = request.args.get('days', default=30, type=int)
     days = max(1, min(days, 365))
-    start_ts = utcnow() - timedelta(days=days)
+    date_from, date_to, _window_label, include_test = _pilot_window(days=days)
+    funnel_data = action_funnel(date_from, date_to, include_test=include_test)
+    pair_ids = set()
+    if funnel_data['denominator']:
+        from services.action_events import active_analysis_pair_ids
+        pair_ids = active_analysis_pair_ids(include_test=include_test)
 
-    events = UsageEvent.query.filter(
-        UsageEvent.created_at >= start_ts
-    ).order_by(UsageEvent.created_at.desc()).all()
+    query = ActionEvent.query.filter(
+        ActionEvent.local_date >= date_from,
+        ActionEvent.local_date <= date_to,
+    ).order_by(ActionEvent.created_at.desc())
+    if pair_ids:
+        query = query.filter(ActionEvent.pair_id.in_(pair_ids))
+    elif not include_test:
+        query = query.filter(ActionEvent.pair_id == -1)
+    events = query.all()
 
     out = io.StringIO()
     writer = csv.writer(out)
-    writer.writerow(['created_at', 'event_type', 'user_id', 'pair_id', 'member_id', 'source', 'meta_json'])
-    for e in events:
+    writer.writerow([
+        'pair_hash', 'local_date', 'stage', 'actor_role', 'channel',
+        'script_version', 'action_id', 'created_at', 'meta',
+    ])
+    for event in events:
         writer.writerow([
-            e.created_at.isoformat() if e.created_at else '',
-            e.event_type or '',
-            e.user_id or '',
-            e.pair_id or '',
-            e.member_id or '',
-            e.source or '',
-            e.meta_json or '',
+            hash_pair_id(event.pair_id),
+            event.local_date.isoformat() if event.local_date else '',
+            event.stage or '',
+            event.actor_role or '',
+            event.channel or '',
+            event.script_version or '',
+            event.action_id or '',
+            event.created_at.isoformat() if event.created_at else '',
+            event.meta_json or '',
         ])
 
-    data = out.getvalue().encode('utf-8-sig')  # Excel-friendly
+    data = out.getvalue().encode('utf-8-sig')
     return send_file(
         io.BytesIO(data),
         mimetype='text/csv',
         as_attachment=True,
         download_name=f'pilot_events_last_{days}d.csv',
+    )
+
+
+@bp.route('/analysis/pilot/funnel.csv', endpoint='pilot_funnel_csv')
+@login_required
+def pilot_funnel_csv():
+    """导出漏斗聚合表。"""
+    if not _require_admin():
+        return redirect(url_for('user.user_dashboard'))
+
+    days = request.args.get('days', default=30, type=int)
+    days = max(1, min(days, 365))
+    date_from, date_to, window_label, include_test = _pilot_window(days=days)
+    funnel_data = action_funnel(date_from, date_to, include_test=include_test)
+
+    out = io.StringIO()
+    writer = csv.writer(out)
+    writer.writerow(['window', 'stage', 'pairs', 'denominator', 'rate'])
+    for row in funnel_data['primary'] + funnel_data['help']:
+        writer.writerow([
+            window_label,
+            row['stage'],
+            row['pairs'],
+            row['denominator'],
+            row['rate'],
+        ])
+    writer.writerow([window_label, 'unknown', funnel_data['unknown_count'], funnel_data['denominator'], ''])
+    writer.writerow([window_label, 'open_help_count', funnel_data['open_help_count'], funnel_data['denominator'], ''])
+    writer.writerow([window_label, 'misclick_count', funnel_data['misclick_count'], '', ''])
+    writer.writerow([
+        window_label,
+        'verified_without_self_report_count',
+        funnel_data['verified_without_self_report_count'],
+        '',
+        '',
+    ])
+    writer.writerow([window_label, 'event_source_completeness', funnel_data['event_source_completeness'], '', ''])
+
+    data = out.getvalue().encode('utf-8-sig')
+    return send_file(
+        io.BytesIO(data),
+        mimetype='text/csv',
+        as_attachment=True,
+        download_name=f'pilot_funnel_{window_label}.csv',
     )
 
 

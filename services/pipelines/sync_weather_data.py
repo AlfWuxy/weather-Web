@@ -27,6 +27,7 @@ from core.weather import (  # noqa: E402
     normalize_weather_observed_at,
 )
 from core.time_utils import today_local  # noqa: E402
+from services.action_events import fill_community_daily_action_columns
 from services.heat_action_service import HeatActionService  # noqa: E402
 from services.weather_service import WeatherService  # noqa: E402
 
@@ -404,6 +405,7 @@ def sync_action_daily(target_date=None, community_code=None, overwrite=False):
             record.escalation_rate = round(escalation_rate, 4)
             record.risk_distribution = json.dumps(risk_dist, ensure_ascii=False)
             record.outreach_summary = summary
+            fill_community_daily_action_columns(record, active_pair_ids, target_date, statuses)
 
         db.session.commit()
         skipped = bool(skipped_communities)

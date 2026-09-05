@@ -11,6 +11,7 @@ from core.security import hash_short_code
 from core.time_utils import now_local, today_local, utcnow, ensure_utc_aware
 from core.weather import is_demo_mode
 from core.db_models import CommunityDaily, DailyStatus, Pair
+from services.action_events import fill_community_daily_action_columns
 from utils.parsers import safe_json_loads
 
 from ._common import (
@@ -345,11 +346,21 @@ def _build_community_snapshot(community_code, status_date, record=_MISSING, stat
         for key in ('低风险', '中风险', '高风险', '极高'):
             risk_dist.setdefault(key, 0)
         confirm_rate = (confirmed_count / total_people) if total_people else 0
+        self_report_rate = (
+            getattr(record, 'self_report_rate', None)
+            if getattr(record, 'self_report_rate', None) is not None
+            else confirm_rate
+        )
         escalation_rate = (flag_count / total_people) if total_people else 0
         help_rate = (help_count / total_people) if total_people else 0
         return {
             'total_people': total_people,
             'confirm_rate': round(confirm_rate, 4),
+            'self_report_rate': round(self_report_rate or 0, 4),
+            'understood_rate': round(getattr(record, 'understood_rate', 0) or 0, 4),
+            'verified_rate': round(getattr(record, 'verified_rate', 0) or 0, 4),
+            'open_help_count': int(getattr(record, 'open_help_count', 0) or 0),
+            'unknown_count': int(getattr(record, 'unknown_count', 0) or 0),
             'escalation_rate': round(escalation_rate, 4),
             'risk_distribution': risk_dist,
             'outreach_summary': record.outreach_summary or '',
@@ -379,9 +390,17 @@ def _build_community_snapshot(community_code, status_date, record=_MISSING, stat
     confirm_rate = (confirmed_count / total_people) if total_people else 0
     escalation_rate = (escalation_count / total_people) if total_people else 0
     help_rate = (help_count / total_people) if total_people else 0
+    understood = sum(1 for s in statuses if getattr(s, 'understood_at', None))
+    verified = sum(1 for s in statuses if getattr(s, 'verified_at', None))
+    open_help = sum(1 for s in statuses if s.help_flag and not getattr(s, 'closed_at', None))
     return {
         'total_people': total_people,
         'confirm_rate': round(confirm_rate, 4),
+        'self_report_rate': round(confirm_rate, 4),
+        'understood_rate': round((understood / total_people), 4) if total_people else 0,
+        'verified_rate': round((verified / total_people), 4) if total_people else 0,
+        'open_help_count': open_help,
+        'unknown_count': max(total_people - len({s.pair_id for s in statuses if getattr(s, 'understood_at', None) or s.confirmed_at or s.help_flag}), 0),
         'escalation_rate': round(escalation_rate, 4),
         'risk_distribution': risk_dist,
         'outreach_summary': summary,
@@ -443,4 +462,5 @@ def _refresh_community_daily(community_code, status_date):
     record.escalation_rate = round(escalation_rate, 4)
     record.risk_distribution = json.dumps(risk_dist, ensure_ascii=False)
     record.outreach_summary = summary
+    fill_community_daily_action_columns(record, active_pair_ids, status_date, statuses)
     db.session.commit()

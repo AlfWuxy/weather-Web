@@ -12,7 +12,7 @@ from alembic.script import ScriptDirectory
 
 def test_weather_provenance_migration_is_current_head():
     script = ScriptDirectory.from_config(Config('alembic.ini'))
-    assert script.get_heads() == ['0014_weather_alert_provenance']
+    assert script.get_heads() == ['0015_action_events']
 
 
 def test_weather_provenance_migration_keeps_legacy_rows_untrusted(monkeypatch):

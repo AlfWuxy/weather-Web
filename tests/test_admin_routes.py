@@ -99,5 +99,8 @@ def test_pilot_export_csv_returns_empty_export_for_admin(client, db_session):
     assert response.mimetype == 'text/csv'
     assert 'pilot_events_last_30d.csv' in response.headers['Content-Disposition']
     assert response.get_data(as_text=True).startswith(
-        '\ufeffcreated_at,event_type,user_id,pair_id,member_id,source,meta_json'
+        '\ufeffpair_hash,local_date,stage,actor_role,channel,script_version,action_id,created_at,meta'
     )
+    header = response.get_data(as_text=True).splitlines()[0]
+    assert 'pair_id' not in header.replace('pair_hash', '')
+    assert 'user_id' not in header

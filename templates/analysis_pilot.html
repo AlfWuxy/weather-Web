@@ -7,12 +7,21 @@
   <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
     <div>
       <h2 class="mb-1"><i class="bi bi-bar-chart-line"></i> 试点数据看板</h2>
-      <div class="text-muted small">统计口径：最近 {{ days }} 天</div>
+      <div class="text-muted small">统计口径：最近 {{ days }} 天{% if window %} · 漏斗窗口 {{ window }}{% endif %}</div>
+      <p class="mb-0 mt-2">分析单位 = pair；抽样框 = 当日 status=active 的 pair。以下为描述性统计，不能推断预警导致了行动（因果 HOLD）。描述性统计；因果推断 HOLD。</p>
     </div>
     <div class="d-flex flex-wrap gap-2">
-      <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('analysis.pilot_export_csv', days=days) }}">
+      <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('analysis.pilot_export_csv', days=days, window=request.args.get('window'), include_test=1 if include_test else none) }}">
         <i class="bi bi-download"></i> 导出 CSV
       </a>
+      <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('analysis.pilot_funnel_csv', days=days, window=request.args.get('window'), include_test=1 if include_test else none) }}">
+        漏斗 CSV
+      </a>
+      <div class="btn-group btn-group-sm" role="group" aria-label="funnel-window">
+        <a class="btn btn-outline-success {% if window == 'today' %}active{% endif %}" href="{{ url_for('analysis.pilot_dashboard', window='today', days=days) }}">当日</a>
+        <a class="btn btn-outline-success {% if window == '7d' %}active{% endif %}" href="{{ url_for('analysis.pilot_dashboard', window='7d', days=days) }}">近7日</a>
+        <a class="btn btn-outline-success {% if window == '30d' %}active{% endif %}" href="{{ url_for('analysis.pilot_dashboard', window='30d', days=days) }}">近30日</a>
+      </div>
       <div class="btn-group btn-group-sm" role="group" aria-label="range">
         <a class="btn btn-outline-primary {% if days == 7 %}active{% endif %}" href="{{ url_for('analysis.pilot_dashboard', days=7) }}">7天</a>
         <a class="btn btn-outline-primary {% if days == 30 %}active{% endif %}" href="{{ url_for('analysis.pilot_dashboard', days=30) }}">30天</a>
@@ -59,6 +68,63 @@
       </div>
     </div>
   </div>
+
+  {% if funnel %}
+  <div class="card shadow-sm mt-3">
+    <div class="card-header bg-light">
+      <strong>行动链漏斗</strong>
+      <span class="text-muted small ms-2">分母 = 当前 active pair（{{ funnel.denominator }}）</span>
+    </div>
+    <div class="card-body">
+      <div class="table-responsive">
+        <table class="table table-sm align-middle mb-0">
+          <thead>
+            <tr>
+              <th>阶段</th>
+              <th class="text-end">去重 pair</th>
+              <th class="text-end">分母</th>
+              <th class="text-end">比例</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in funnel.primary %}
+              <tr>
+                <td>{{ row.stage }}</td>
+                <td class="text-end">{{ row.pairs }}</td>
+                <td class="text-end">{{ row.denominator }}</td>
+                <td class="text-end">{{ (row.rate * 100) | round(1) }}%</td>
+              </tr>
+            {% endfor %}
+            {% for row in funnel.help %}
+              <tr>
+                <td>{{ row.stage }}</td>
+                <td class="text-end">{{ row.pairs }}</td>
+                <td class="text-end">{{ row.denominator }}</td>
+                <td class="text-end">{{ (row.rate * 100) | round(1) }}%</td>
+              </tr>
+            {% endfor %}
+            <tr>
+              <td>unknown</td>
+              <td class="text-end">{{ funnel.unknown_count }}</td>
+              <td class="text-end">{{ funnel.denominator }}</td>
+              <td class="text-end">—</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="row g-2 mt-3 small">
+        <div class="col-md-4">任务中位时长（seen→self_reported）：{{ funnel.median_seen_to_self_reported_minutes if funnel.median_seen_to_self_reported_minutes is not none else '--' }} 分钟</div>
+        <div class="col-md-4">求助接收中位时长：{{ funnel.median_help_requested_to_ack_minutes if funnel.median_help_requested_to_ack_minutes is not none else '--' }} 分钟</div>
+        <div class="col-md-4">结案中位时长：{{ funnel.median_to_closed_minutes if funnel.median_to_closed_minutes is not none else '--' }} 分钟</div>
+        <div class="col-md-4">未结求助数：{{ funnel.open_help_count }}</div>
+        <div class="col-md-4">误触疑似数：{{ funnel.misclick_count }}</div>
+        <div class="col-md-4">verified_without_self_report：{{ funnel.verified_without_self_report_count }}</div>
+        <div class="col-md-4">事件来源完整率：{{ (funnel.event_source_completeness * 100) | round(1) }}%</div>
+      </div>
+      <p class="text-muted small mb-0 mt-2">不代表老人安全或健康改善；未点击不等于未理解。</p>
+    </div>
+  </div>
+  {% endif %}
 
   <div class="row g-3 mt-1">
     <div class="col-md-4">
