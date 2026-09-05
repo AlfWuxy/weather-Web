@@ -55,6 +55,65 @@
                     {% else %}
                         <div class="text-muted">今日暂无记录。</div>
                     {% endif %}
+                    {% set strip_state = action_state if action_state is defined else {} %}
+                    <div class="d-flex flex-wrap gap-1 mt-3" aria-label="当日行动链">
+                        {% for cell in [
+                            ('delivered', 'delivered'),
+                            ('seen', 'seen'),
+                            ('understood', 'understood'),
+                            ('self_reported', 'self_reported'),
+                            ('verified', 'caregiver_verified'),
+                            ('help', 'help_requested'),
+                            ('closed', 'closed')
+                        ] %}
+                            {% set reached = strip_state.get(cell[1]) %}
+                            <span class="badge {{ 'bg-success' if reached else 'bg-secondary' }}" style="min-width: 4.5rem;">
+                                {{ cell[0] }} {{ '✓' if reached else '—' }}
+                            </span>
+                        {% endfor %}
+                    </div>
+                    <form method="POST" action="{{ url_for('user.caregiver_action_log', pair_id=pair.id) }}" class="mt-3">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <input type="hidden" name="event" value="delivered">
+                        <div class="row g-2 mb-2">
+                            <div class="col-6">
+                                <label class="form-label small">转告人</label>
+                                <select class="form-select" name="messenger_role">
+                                    {% for role in messenger_roles|default([]) %}
+                                        <option value="{{ role }}">{{ role }}</option>
+                                    {% endfor %}
+                                </select>
+                            </div>
+                            <div class="col-6">
+                                <label class="form-label small">渠道</label>
+                                <select class="form-select" name="channel">
+                                    {% for opt in messenger_channels|default([]) %}
+                                        <option value="{{ opt.id }}">{{ opt.label }}</option>
+                                    {% endfor %}
+                                </select>
+                            </div>
+                        </div>
+                        <button class="btn btn-outline-primary w-100" type="submit">已转告老人</button>
+                    </form>
+                    {% if strip_state.get('help_requested') %}
+                    <form method="POST" action="{{ url_for('user.caregiver_action_log', pair_id=pair.id) }}" class="mt-2">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <input type="hidden" name="event" value="help_acknowledged">
+                        <button class="btn btn-outline-warning w-100" type="submit">已收到求助</button>
+                    </form>
+                    {% endif %}
+                    <form method="POST" action="{{ url_for('user.caregiver_action_log', pair_id=pair.id) }}" class="mt-2">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <input type="hidden" name="event" value="caregiver_verified">
+                        <button class="btn btn-outline-success w-100" type="submit">核验：老人已做到</button>
+                    </form>
+                    {% if strip_state.get('caregiver_verified') or strip_state.get('help_acknowledged') %}
+                    <form method="POST" action="{{ url_for('user.caregiver_action_log', pair_id=pair.id) }}" class="mt-2">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <input type="hidden" name="event" value="closed">
+                        <button class="btn btn-dark w-100" type="submit">结案</button>
+                    </form>
+                    {% endif %}
                     <form method="POST" action="{{ url_for('user.caregiver_relay_escalate') }}" class="mt-3">
                         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                         <input type="hidden" name="pair_id" value="{{ pair.id }}">

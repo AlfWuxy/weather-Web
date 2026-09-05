@@ -443,6 +443,25 @@ def dispatch_alerts(now=None, dedupe_hours: int = 6) -> Dict[str, Any]:
             db.session.add(delivery)
             db.session.commit()
 
+            if ok:
+                try:
+                    from services.action_events import record_event
+                    for target_pair in user_pairs:
+                        try:
+                            record_event(
+                                target_pair,
+                                "delivered",
+                                "system",
+                                "wxpusher",
+                                alert_id=weather_alert.id,
+                                delivery_id=delivery.id,
+                                now=now,
+                            )
+                        except Exception:
+                            logger.debug("record delivered event failed", exc_info=True)
+                except Exception:
+                    logger.debug("action event import failed", exc_info=True)
+
             stats["deliveries"] += 1
             if ok:
                 stats["sent"] += 1

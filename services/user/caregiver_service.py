@@ -3,7 +3,7 @@
 import logging
 from datetime import datetime, timedelta
 
-from flask import current_app, flash, redirect, render_template, request, session, url_for
+from flask import current_app, flash, jsonify, redirect, render_template, request, session, url_for
 from flask_login import current_user
 
 from core.db_models import Community, DailyStatus, Debrief, FamilyMember, Pair, PairLink
@@ -482,6 +482,8 @@ def caregiver_pair_detail(pair_id):
     if not isinstance(actions_today, list):
         actions_today = []
     caregiver_note = status_today.caregiver_note if status_today else None
+    from services.action_events import today_state as load_today_state
+    action_state = load_today_state(pair, status_date)
 
     return render_template(
         'caregiver_pair_detail.html',
@@ -495,12 +497,20 @@ def caregiver_pair_detail(pair_id):
         wechat_template_url=wechat_template_url,
         action_options=CARE_ACTION_OPTIONS,
         actions_today=actions_today,
-        caregiver_note=caregiver_note
+        caregiver_note=caregiver_note,
+        action_state=action_state,
+        messenger_roles=['子女', '孙辈', '配偶', '邻居', '村干部', '村医', '本人'],
+        messenger_channels=[
+            {'id': 'wechat_text', 'label': '微信文字'},
+            {'id': 'wechat_voice', 'label': '微信语音'},
+            {'id': 'phone_call', 'label': '电话'},
+            {'id': 'in_person', 'label': '当面'},
+        ],
     )
 
 
 def caregiver_action_log(pair_id):
-    """照护行动记录"""
+    """照护行动记录；扩展 event=delivered|help_acknowledged|caregiver_verified|closed。"""
     if not _require_care_role():
         return redirect(url_for('user.user_dashboard'))
     if is_guest_user(current_user):
@@ -511,6 +521,58 @@ def caregiver_action_log(pair_id):
     if getattr(current_user, 'role', None) != 'admin':
         query = query.filter_by(caregiver_id=current_user.id)
     pair = query.first_or_404()
+
+    payload = request.get_json(silent=True) or {}
+    if not isinstance(payload, dict):
+        payload = {}
+    event_name = (payload.get('event') or request.form.get('event') or '').strip()
+    wants_json = bool(request.is_json or 'application/json' in (request.headers.get('Accept') or ''))
+
+    if event_name in {'delivered', 'help_acknowledged', 'caregiver_verified', 'closed'}:
+        from services.action_events import InvalidTransition, record_event, today_state as load_today_state
+
+        messenger_role = sanitize_input(
+            payload.get('messenger_role') or request.form.get('messenger_role'),
+            max_length=20,
+        )
+        messenger_channel = sanitize_input(
+            payload.get('channel') or request.form.get('channel'),
+            max_length=24,
+        )
+        actor = 'community' if getattr(current_user, 'role', None) == 'community' else 'caregiver'
+        try:
+            if event_name == 'delivered':
+                event = record_event(pair, 'delivered', 'caregiver', 'manual')
+                log_usage_event(
+                    'caregiver_delivered',
+                    user_id=current_user.id,
+                    pair_id=pair.id,
+                    member_id=getattr(pair, 'member_id', None),
+                    source='web',
+                    meta={
+                        'messenger_role': messenger_role,
+                        'channel': messenger_channel,
+                        'event': 'delivered',
+                    },
+                )
+            elif event_name == 'help_acknowledged':
+                event = record_event(pair, 'help_acknowledged', actor, 'manual')
+            elif event_name == 'caregiver_verified':
+                event = record_event(pair, 'caregiver_verified', 'caregiver', 'manual')
+            else:
+                event = record_event(pair, 'closed', actor, 'manual')
+        except InvalidTransition as exc:
+            db.session.rollback()
+            return exc.to_response()
+        _refresh_community_daily(pair.community_code, today_local())
+        if wants_json:
+            return jsonify({
+                'ok': True,
+                'event_id': event.id,
+                'state': load_today_state(pair, today_local()),
+            })
+        flash('已记录照护动作。', 'success')
+        return redirect(url_for('user.caregiver_pair_detail', pair_id=pair.id))
 
     status_date = today_local()
     status = DailyStatus.query.filter_by(pair_id=pair.id, status_date=status_date).first()
