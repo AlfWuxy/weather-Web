@@ -707,6 +707,7 @@ test('复制提醒事件必须带 pair_id 与四字段', () => {
       channel: 'wechat_text',
       message: '请及时喝水并减少午后外出。',
       contextReady: true,
+      canCopyAdvice: true,
     });
     page._unloaded = false;
     page._lifecycleGeneration = 1;
