@@ -18,24 +18,32 @@ from core.extensions import db, init_extensions, login_manager
 from core.hooks import register_hooks
 from core.db_models import (
     ActionEvent,
+    AdviceContent,
     AlertDelivery,
     AuditLog,
     ApiToken,
+    CareDevice,
     Community,
     CommunityDaily,
     CoolingFeedback,
     CoolingResource,
     DailyStatus,
     Debrief,
+    DeviceEvent,
     FamilyMember,
     FamilyMemberProfile,
+    FamilyMembership,
+    FamilySpace,
     ForecastCache,
     HealthDiary,
     HealthRiskAssessment,
+    HelpRequest,
+    HelpRequestEvent,
     MedicalRecord,
     MedicationReminder,
     LocationCache,
     Notification,
+    NotificationOutbox,
     Pair,
     PairLink,
     User,
@@ -97,6 +105,8 @@ def register_blueprints(app):
     from blueprints.api import bp as api_bp
     from blueprints.mp_api import bp as mp_api_bp
     from blueprints.status import bp as status_bp
+    from blueprints.doctor import bp as doctor_bp
+    from blueprints.device_api import bp as device_api_bp
 
     app.register_blueprint(public_bp)
     app.register_blueprint(user_bp)
@@ -107,6 +117,8 @@ def register_blueprints(app):
     app.register_blueprint(api_bp)
     app.register_blueprint(mp_api_bp)
     app.register_blueprint(status_bp)
+    app.register_blueprint(doctor_bp)
+    app.register_blueprint(device_api_bp)
 
 
 _register_blueprints = register_blueprints

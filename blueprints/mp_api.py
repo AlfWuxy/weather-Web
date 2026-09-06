@@ -411,6 +411,8 @@ def elders_list():
         trigger = "heat"
     elif weather_available and tmin_value is not None and tmin_value <= 5:
         trigger = "cold"
+    elif not weather_available:
+        trigger = "unavailable"
 
     result = []
     for p in pairs:
@@ -472,6 +474,21 @@ def elders_create():
         return jsonify({"success": False, "error": str(exc)}), 400
 
     try:
+        from services.care_enrollment import (
+            CareEnrollmentError,
+            enroll_weather_care,
+            find_recent_duplicate_member,
+        )
+        duplicate = find_recent_duplicate_member(
+            g.api_user_id,
+            name,
+            relation,
+            location_query,
+        )
+        if duplicate:
+            member, pair = duplicate
+            return jsonify({"success": True, "data": {"pair_id": pair.id, "member_id": member.id, "reused": True}})
+
         member = FamilyMember(
             user_id=g.api_user_id,
             name=name,
@@ -482,20 +499,20 @@ def elders_create():
             created_at=utcnow(),
         )
         db.session.add(member)
-        db.session.flush()  # 获取 member.id，但不提交
+        db.session.flush()
 
         profile = FamilyMemberProfile.query.filter_by(member_id=member.id).first()
         if not profile:
             profile = FamilyMemberProfile(member_id=member.id, alert_enabled=True)
             db.session.add(profile)
+            db.session.flush()
 
-        pair = _create_pair_record(
-            caregiver_id=g.api_user_id,
-            location_query=location_query,
-            member_id=member.id,
-            flush=True
-        )
+        user = db.session.get(User, g.api_user_id)
+        pair, _created = enroll_weather_care(user, member, location_query=location_query)
         db.session.commit()
+    except CareEnrollmentError as exc:
+        db.session.rollback()
+        return jsonify({"success": False, "error": exc.code}), 400
     except Exception:
         db.session.rollback()
         return jsonify({"success": False, "error": "create_failed"}), 500
@@ -654,9 +671,9 @@ def events():
         if len(meta_json) > MP_EVENT_META_MAX_CHARS:
             return jsonify({"success": False, "error": "meta_too_large"}), 400
 
-    if event_type == "template_copy" and "meta" in payload:
-        if _template_copy_meta_invalid(meta):
-            return jsonify({"success": False, "error": "invalid_meta"}), 400
+    if event_type == "template_copy":
+        if "pair_id" not in payload:
+            return jsonify({"success": False, "error": "missing_pair_id"}), 400
 
     pair = None
     resolved_pair_id = None
@@ -669,6 +686,9 @@ def events():
         if not pair:
             return jsonify({"success": False, "error": "not_found"}), 404
         resolved_pair_id = pair.id
+
+    if event_type == "template_copy" and _template_copy_meta_invalid(meta):
+        return jsonify({"success": False, "error": "invalid_meta"}), 400
 
     member = None
     resolved_member_id = None
@@ -1125,12 +1145,34 @@ def mp_help_resolve(public_id):
             _current_api_user(),
             public_id,
             expected_version=payload.get("expected_version"),
-            resolution_code=payload.get("resolution_code") or "reached_elder",
+            resolution_code=payload.get("resolution_code"),
             idempotency_key=payload.get("idempotency_key"),
             origin_channel="miniprogram",
             commit=True,
         )
         process_outbox_batch(limit=10)
+        return _ok(body)
+    except Exception as exc:
+        db.session.rollback()
+        return handle_domain_error(exc)
+
+
+@bp.route("/help-requests/<public_id>/request-support", methods=["POST"], endpoint="help_requests_request_support")
+@limiter.limit(lambda: current_app.config.get("RATE_LIMIT_MP_WRITE", "30 per minute"), key_func=_mp_rate_limit_key)
+@require_api_token
+def mp_help_request_support(public_id):
+    payload = json_body() if request.get_json(silent=True) is not None else {}
+    try:
+        from services.help_request_service import request_support
+        body = request_support(
+            _current_api_user(),
+            public_id,
+            support_role=payload.get("support_role"),
+            expected_version=payload.get("expected_version"),
+            idempotency_key=payload.get("idempotency_key"),
+            origin_channel="miniprogram",
+            commit=True,
+        )
         return _ok(body)
     except Exception as exc:
         db.session.rollback()

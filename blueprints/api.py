@@ -328,6 +328,7 @@ def api_v1_help_list():
             status=request.args.get('status') or 'open',
             cursor=request.args.get('cursor'),
             limit=request.args.get('limit') or 20,
+            requested_support_role=request.args.get('requested_support_role'),
         ))
     except Exception as exc:
         return handle_domain_error(exc)
@@ -440,7 +441,7 @@ def api_v1_help_resolve(public_id):
             current_user,
             public_id,
             expected_version=payload.get('expected_version'),
-            resolution_code=payload.get('resolution_code') or 'reached_elder',
+            resolution_code=payload.get('resolution_code'),
             idempotency_key=payload.get('idempotency_key'),
             origin_channel='web',
             commit=True,
@@ -470,6 +471,32 @@ def api_v1_help_cancel(public_id):
             origin_channel='web',
             commit=True,
         )
+        return _help_ok(body)
+    except Exception as exc:
+        db.session.rollback()
+        return handle_domain_error(exc)
+
+
+@bp.route('/api/v1/help-requests/<public_id>/request-support', methods=['POST'], endpoint='api_v1_help_request_support')
+@login_required
+@reject_guest
+def api_v1_help_request_support(public_id):
+    from core.extensions import db
+    from services.help_http import handle_domain_error, json_body
+    from services.help_request_service import request_support
+    from services.notification_outbox import process_outbox_batch
+    try:
+        payload = json_body() if request.get_json(silent=True) is not None else {}
+        body = request_support(
+            current_user,
+            public_id,
+            support_role=payload.get('support_role'),
+            expected_version=payload.get('expected_version'),
+            idempotency_key=payload.get('idempotency_key'),
+            origin_channel='web',
+            commit=True,
+        )
+        process_outbox_batch(limit=10)
         return _help_ok(body)
     except Exception as exc:
         db.session.rollback()

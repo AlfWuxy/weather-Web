@@ -142,6 +142,19 @@ def family_members():
             **profile_payload
         )
         db.session.add(profile)
+        db.session.flush()
+        if request.form.get('join_weather_care') == 'on':
+            from services.care_enrollment import CareEnrollmentError, enroll_weather_care
+            try:
+                enroll_weather_care(
+                    current_user,
+                    member,
+                    location_query=profile_payload.get('location_query') or request.form.get('elder_location_query'),
+                )
+            except CareEnrollmentError as exc:
+                db.session.rollback()
+                flash(exc.message, 'error')
+                return redirect(url_for('health.family_members'))
         db.session.commit()
         log_usage_event(
             'elder_profile_created',
@@ -296,6 +309,20 @@ def family_member_new():
 
         profile = FamilyMemberProfile(member_id=member.id, **profile_payload)
         db.session.add(profile)
+        db.session.flush()
+        join_care = request.form.get('join_weather_care') == 'on'
+        if join_care:
+            from services.care_enrollment import CareEnrollmentError, enroll_weather_care
+            try:
+                enroll_weather_care(
+                    current_user,
+                    member,
+                    location_query=profile_payload.get('location_query') or request.form.get('elder_location_query'),
+                )
+            except CareEnrollmentError as exc:
+                db.session.rollback()
+                flash(exc.message, 'error')
+                return _render_family_member_form(member, None, is_create_mode=True)
         db.session.commit()
         log_usage_event(
             'elder_profile_created',
@@ -336,6 +363,25 @@ def family_member_edit(member_id):
         else:
             profile = FamilyMemberProfile(member_id=member.id, **profile_payload)
             db.session.add(profile)
+
+        db.session.flush()
+        from services.care_enrollment import CareEnrollmentError, deactivate_weather_care, enroll_weather_care
+        try:
+            join_care = request.form.get('join_weather_care') == 'on'
+            leave_care = request.form.get('leave_weather_care') == 'on'
+            if leave_care or not join_care:
+                if leave_care or bool(getattr(profile, 'weather_care_enabled', False)):
+                    deactivate_weather_care(current_user, member)
+            if join_care and not leave_care:
+                enroll_weather_care(
+                    current_user,
+                    member,
+                    location_query=profile_payload.get('location_query') or request.form.get('elder_location_query'),
+                )
+        except CareEnrollmentError as exc:
+            db.session.rollback()
+            flash(exc.message, 'error')
+            return redirect(url_for('health.family_member_edit', member_id=member_id))
 
         db.session.commit()
         log_usage_event(

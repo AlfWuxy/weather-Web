@@ -76,6 +76,8 @@ def register_hooks(app):
             # MiniProgram API uses Bearer token auth and must not require CSRF.
             if request.path.startswith('/mp/api/'):
                 return None
+            if request.path.startswith('/device/api/'):
+                return None
             if not validate_csrf():
                 return csrf_failure_response()
 
