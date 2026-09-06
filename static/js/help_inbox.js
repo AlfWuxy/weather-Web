@@ -16,6 +16,21 @@
     let lastFetchedAt = null;
     let editing = false;
 
+    const ACTION_LABELS = {
+        ack: '接手',
+        start: '开始处理',
+        resolve: '记录结果',
+        cancel: '取消求助',
+        request_support: '请求医生接手'
+    };
+    const ACTION_CLASSES = {
+        ack: 'btn-primary',
+        start: 'btn-primary',
+        resolve: 'btn-success',
+        cancel: 'btn-outline-secondary',
+        request_support: 'btn-outline-primary'
+    };
+
     function headers() {
         return {
             'Accept': 'application/json',
@@ -56,16 +71,18 @@
             node.querySelector('.help-meta').textContent = [
                 '来源 ' + (item.origin_channel === 'miniprogram' ? '微信' : '网页'),
                 item.created_at ? ('发起 ' + item.created_at) : '',
-                item.acknowledged_at ? ('收到 ' + item.acknowledged_at) : '等待家属接收'
+                item.acknowledged_at ? ('接手 ' + item.acknowledged_at) : '尚未接手',
+                item.notification_status && item.notification_status !== 'none' ? ('通知 ' + item.notification_status) : ''
             ].filter(Boolean).join(' · ');
+            const outcomeWrap = node.querySelector('.help-outcome-wrap');
+            const canResolve = (item.allowed_actions || []).indexOf('resolve') >= 0;
+            if (outcomeWrap) outcomeWrap.classList.toggle('d-none', !canResolve);
             const actions = node.querySelector('.help-actions');
             (item.allowed_actions || []).forEach(function (name) {
                 const btn = document.createElement('button');
                 btn.type = 'button';
-                const labels = { ack: '已收到', start: '开始处理', resolve: '已解决', cancel: '取消求助' };
-                const classes = { ack: 'btn-primary', start: 'btn-primary', resolve: 'btn-success', cancel: 'btn-outline-secondary' };
-                btn.className = 'btn btn-sm ' + (classes[name] || 'btn-outline-secondary');
-                btn.textContent = labels[name] || name;
+                btn.className = 'btn btn-sm ' + (ACTION_CLASSES[name] || 'btn-outline-secondary');
+                btn.textContent = ACTION_LABELS[name] || name;
                 btn.addEventListener('click', function () { act(item, name, btn); });
                 actions.appendChild(btn);
             });
@@ -83,7 +100,7 @@
     function load() {
         if (document.hidden || inflight || editing) return;
         inflight = true;
-        fetch(listUrl + '?status=open&limit=50', { headers: headers(), credentials: 'same-origin' })
+        fetch(listUrl + (listUrl.indexOf('?') >= 0 ? '&' : '?') + 'status=open&limit=50', { headers: headers(), credentials: 'same-origin' })
             .then(function (res) {
                 return res.json().then(function (data) { return { ok: res.ok, data: data }; });
             })
@@ -109,12 +126,33 @@
     }
 
     function act(item, name, btn) {
-        const pathMap = { ack: '/ack', start: '/start', resolve: '/resolve', cancel: '/cancel' };
+        const pathMap = {
+            ack: '/ack',
+            start: '/start',
+            resolve: '/resolve',
+            cancel: '/cancel',
+            request_support: '/request-support'
+        };
         const path = pathMap[name];
         if (!path) return;
-        const body = { expected_version: item.version, idempotency_key: item.id + ':' + name };
-        if (name === 'resolve') body.resolution_code = 'reached_elder';
+        const body = { expected_version: item.version, idempotency_key: item.id + ':' + name + ':' + Date.now() };
+        if (name === 'resolve') {
+            const card = btn.closest('.help-card');
+            const select = card ? card.querySelector('.help-outcome') : null;
+            const code = select && select.value;
+            if (!code) {
+                alert('请先选择具体处理结果。收到求助或打开页面都不能记成已经解决。');
+                return;
+            }
+            body.resolution_code = code;
+        }
         if (name === 'cancel') body.cancel_reason = 'other';
+        if (name === 'request_support') {
+            if (!window.confirm('向医生发出协助请求后，事项会回到等待接手。医生明确接受前，跟进责任不会自动转移。这不是急救通道。')) {
+                return;
+            }
+            body.support_role = 'doctor';
+        }
         btn.disabled = true;
         fetch('/api/v1/help-requests/' + encodeURIComponent(item.id) + path, {
             method: 'POST',

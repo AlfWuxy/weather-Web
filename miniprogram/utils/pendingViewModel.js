@@ -8,6 +8,12 @@ const OPEN_HELP_STATUSES = {
   open: true,
 };
 
+const WAITING_STATUSES = {
+  requested: true,
+  pending_ack: true,
+  open: true,
+};
+
 function groupPairsByTodayFlags(pairs) {
   const openHelp = [];
   const toVerify = [];
@@ -37,6 +43,18 @@ function openHelpFromPayload(payload) {
   return groupPairsByTodayFlags(data.pairs || []).openHelp;
 }
 
+function waitingHelpFromPayload(payload) {
+  return openHelpFromPayload(payload).filter((item) => WAITING_STATUSES[item.status] || item.status === 'pending_ack');
+}
+
+function closableHelpFromPayload(payload) {
+  return openHelpFromPayload(payload).filter((item) => {
+    const actions = item.allowed_actions || [];
+    if (actions.length) return actions.indexOf('resolve') >= 0;
+    return item.status === 'acknowledged' || item.status === 'in_progress';
+  });
+}
+
 function applyPendingFetch(result) {
   const ok = !!(result && result.ok);
   if (!ok) {
@@ -51,19 +69,24 @@ function applyPendingFetch(result) {
   }
   const payload = result.payload || {};
   const grouped = groupPairsByTodayFlags(payload.pairs || []);
-  const openHelp = openHelpFromPayload(payload);
+  const waiting = waitingHelpFromPayload(payload);
+  const closable = Array.isArray(payload.help_requests)
+    ? closableHelpFromPayload(payload)
+    : grouped.closable;
   return {
     loading: false,
     loadError: false,
-    showEmptyOpenHelp: openHelp.length === 0,
-    openHelp,
+    showEmptyOpenHelp: waiting.length === 0,
+    openHelp: waiting,
     toVerify: grouped.toVerify,
-    closable: grouped.closable,
+    closable,
   };
 }
 
 module.exports = {
   groupPairsByTodayFlags,
   openHelpFromPayload,
+  waitingHelpFromPayload,
+  closableHelpFromPayload,
   applyPendingFetch,
 };

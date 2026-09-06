@@ -72,6 +72,10 @@ function decorateOpenHelp(item, pairs) {
   card.status = item.status || '';
   card.status_label = item.status_label || item.status || '';
   card.version = item.version;
+  card.allowed_actions = item.allowed_actions || [];
+  card.canAck = (item.allowed_actions || []).indexOf('ack') >= 0;
+  card.canResolve = (item.allowed_actions || []).indexOf('resolve') >= 0;
+  card.canRequestSupport = (item.allowed_actions || []).indexOf('request_support') >= 0;
   return card;
 }
 
@@ -179,7 +183,7 @@ Page({
       const pairs = (payload && payload.pairs) || [];
       state.openHelp = (state.openHelp || []).map((item) => decorateOpenHelp(item, pairs));
       state.toVerify = (state.toVerify || []).map((item) => (item.cells ? item : decoratePair(item)));
-      state.closable = (state.closable || []).map((item) => (item.cells ? item : decoratePair(item)));
+      state.closable = (state.closable || []).map((item) => decorateOpenHelp(item, pairs));
       this.setData(state);
       await refreshPendingBadge();
     } catch (e) {
@@ -244,11 +248,22 @@ Page({
     const helpId = e.currentTarget.dataset.helpId;
     const version = Number(e.currentTarget.dataset.version);
     const pairId = Number(e.currentTarget.dataset.pairId);
+    const code = e.currentTarget.dataset.resolution || 'assisted';
     if (helpId) {
-      this.postHelp(helpId, 'resolve', { expected_version: version, resolution_code: 'reached_elder' });
+      this.postHelp(helpId, 'resolve', { expected_version: version, resolution_code: code });
       return;
     }
     this.postStage(pairId, 'closed');
+  },
+
+  onRequestDoctor(e) {
+    const helpId = e.currentTarget.dataset.helpId;
+    const version = Number(e.currentTarget.dataset.version);
+    if (!helpId) return;
+    this.postHelp(helpId, 'request-support', {
+      expected_version: version,
+      support_role: 'doctor',
+    });
   },
 
   async postHelp(helpId, action, extra) {

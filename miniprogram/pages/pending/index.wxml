@@ -9,9 +9,10 @@
   </block>
 
   <block wx:else>
-    <view class="section-title">未结求助</view>
+    <view class="muted">未结事项跨天保留。接手不等于老人已经安全。本页不是急救通道。</view>
+    <view class="section-title">等待接手</view>
     <block wx:if="{{showEmptyOpenHelp}}">
-      <view class="card muted center">暂无未结求助</view>
+      <view class="card muted center">暂无等待接手的事项</view>
     </block>
     <block wx:for="{{openHelp}}" wx:key="help_id">
       <view class="card pair-card">
@@ -21,7 +22,7 @@
           <text wx:for="{{item.cells}}" wx:for-item="cell" wx:key="key" class="cell {{cell.on ? 'on' : 'off'}}">{{cell.label}} {{cell.on ? '✓' : '—'}}</text>
         </view>
         <view class="actions">
-          <button class="btn-primary" size="mini" data-pair-id="{{item.pair_id}}" data-help-id="{{item.help_id}}" data-version="{{item.version}}" bindtap="onAck" disabled="{{busy}}">已收到</button>
+          <button wx:if="{{item.canAck}}" class="btn-primary" size="mini" data-pair-id="{{item.pair_id}}" data-help-id="{{item.help_id}}" data-version="{{item.version}}" bindtap="onAck" disabled="{{busy}}">接手</button>
           <button class="btn-outline" size="mini" data-pair-id="{{item.pair_id}}" bindtap="openDeliver" disabled="{{busy}}">已转告老人</button>
         </view>
       </view>
@@ -44,18 +45,21 @@
       </view>
     </block>
 
-    <view class="section-title">可结案</view>
+    <view class="section-title">处理中（可记录结果）</view>
     <block wx:if="{{closable.length === 0}}">
-      <view class="card muted center">暂无可结案</view>
+      <view class="card muted center">暂无已接手事项</view>
     </block>
-    <block wx:for="{{closable}}" wx:key="pair_id">
+    <block wx:for="{{closable}}" wx:key="help_id">
       <view class="card pair-card">
         <view class="pair-title">{{item.displayLabel}}</view>
+        <view class="muted" wx:if="{{item.status_label}}">{{item.status_label}} · 编号 {{item.help_id}}</view>
         <view class="strip" aria-label="当日行动链">
           <text wx:for="{{item.cells}}" wx:for-item="cell" wx:key="key" class="cell {{cell.on ? 'on' : 'off'}}">{{cell.label}} {{cell.on ? '✓' : '—'}}</text>
         </view>
         <view class="actions">
-          <button class="btn-primary" size="mini" data-pair-id="{{item.pair_id}}" data-help-id="{{item.help_id}}" data-version="{{item.version}}" bindtap="onClose" disabled="{{busy}}">结案</button>
+          <button wx:if="{{item.canRequestSupport}}" class="btn-outline" size="mini" data-help-id="{{item.help_id}}" data-version="{{item.version}}" bindtap="onRequestDoctor" disabled="{{busy}}">请求医生接手</button>
+          <button wx:if="{{item.canResolve}}" class="btn-primary" size="mini" data-pair-id="{{item.pair_id}}" data-help-id="{{item.help_id}}" data-version="{{item.version}}" data-resolution="assisted" bindtap="onClose" disabled="{{busy}}">已协助处理</button>
+          <button wx:if="{{item.canResolve}}" class="btn-outline" size="mini" data-pair-id="{{item.pair_id}}" data-help-id="{{item.help_id}}" data-version="{{item.version}}" data-resolution="unreachable" bindtap="onClose" disabled="{{busy}}">联系不上</button>
           <button class="btn-outline" size="mini" data-pair-id="{{item.pair_id}}" bindtap="openDeliver" disabled="{{busy}}">已转告老人</button>
         </view>
       </view>
@@ -65,7 +69,7 @@
   <view wx:if="{{pickerVisible}}" class="mask" catchtap="closePicker">
     <view class="sheet" catchtap="noop">
       <view class="sheet-title">已转告老人</view>
-      <view class="muted sheet-hint">选择转告人与渠道，下次默认上次选择</view>
+      <view class="muted sheet-hint">选择转告人与渠道。转告不等于老人已采取防护行动。</view>
       <view class="picker-row">
         <view class="muted">转告人</view>
         <picker mode="selector" range="{{roleLabels}}" value="{{roleIndex}}" bindchange="onRoleChange">

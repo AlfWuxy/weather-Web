@@ -27,12 +27,14 @@ Page({
     weatherNotice: '',
     scriptVersion: '',
     scriptHash: '',
-    scenario: 'normal',
+    scenario: 'heat',
     messengerRole: 'child',
     channel: 'wechat_text',
     loading: false,
     contextReady: false,
+    canCopyAdvice: false,
     loadError: '',
+    locationLabel: '',
   },
 
   async onLoad(options) {
@@ -71,7 +73,9 @@ Page({
       weatherNotice: '',
       loading: false,
       contextReady: false,
+      canCopyAdvice: false,
       loadError: '',
+      locationLabel: '',
     });
   },
 
@@ -106,40 +110,46 @@ Page({
       if (!item) throw new Error('not_found');
       const member = item.member || {};
       const weather = normalizeSnapshot(snapshot);
-      const usesGenericWeather = weather.stale || !weather.available;
+      const weatherUnavailable = weather.stale || !weather.available;
+      const locationLabel = item.location_query || member.location_query || '';
       const weatherNotice = weather.stale
-        ? '天气数据较早，复制内容已切换为通用提醒。'
-        : (!weather.available ? '天气数据待更新，复制内容使用通用提醒。' : '');
-      const scenario = usesGenericWeather
-        ? 'normal'
-        : (weather.trigger === 'heat' || weather.trigger === 'cold' ? weather.trigger : 'normal');
-      const trigger = usesGenericWeather ? '' : scenario;
+        ? '天气数据已过期，不能当作今天情况正常，也不会自动生成日常防护建议。'
+        : (!weather.available ? '天气数据暂不可用，不能当作今天情况正常，也不会自动生成日常防护建议。' : '');
+      const scenario = weatherUnavailable
+        ? 'unavailable'
+        : (weather.trigger === 'heat' || weather.trigger === 'cold' ? weather.trigger : 'heat');
+      const trigger = weatherUnavailable ? '' : scenario;
       const catalog = scripts || {};
       const version = catalog.default || 'v2_gist_why';
       const versions = catalog.versions || {};
-      const template = (versions[version] && versions[version][scenario])
-        || (versions.v2_gist_why && versions.v2_gist_why[scenario])
-        || '';
-      const placeholders = {
-        elder_call: member.name || member.relation || '家里',
-        tmax: weather.temperatureMax == null ? '--' : weather.temperatureMax,
-        tmin: weather.temperatureMin == null ? '--' : weather.temperatureMin,
-        window: '中午前后',
-        messenger_self: '家里人',
-        callback_time: '傍晚',
-      };
-      let message = template;
-      Object.keys(placeholders).forEach((key) => {
-        message = String(message).split('{' + key + '}').join(String(placeholders[key]));
-      });
-      if (!message || !String(message).trim()) {
-        message = buildReminderMessage({
-          trigger: scenario === 'normal' ? '' : scenario,
-          elderName: member.name,
-          relation: member.relation,
-          tmax: weather.temperatureMax,
-          tmin: weather.temperatureMin,
+      let message = '';
+      if (weatherUnavailable) {
+        message = '天气数据暂不可用或已过期，不能显示为正常，也不能生成今天的肯定防护建议。请改用电话或当面提醒家人注意防暑，并以医生已审核内容为准。';
+      } else {
+        const template = (versions[version] && versions[version][scenario])
+          || (versions.v2_gist_why && versions.v2_gist_why[scenario])
+          || '';
+        const placeholders = {
+          elder_call: member.name || member.relation || '家里',
+          tmax: weather.temperatureMax == null ? '--' : weather.temperatureMax,
+          tmin: weather.temperatureMin == null ? '--' : weather.temperatureMin,
+          window: '中午前后',
+          messenger_self: '家里人',
+          callback_time: '傍晚',
+        };
+        message = template;
+        Object.keys(placeholders).forEach((key) => {
+          message = String(message).split('{' + key + '}').join(String(placeholders[key]));
         });
+        if (!message || !String(message).trim()) {
+          message = buildReminderMessage({
+            trigger: scenario,
+            elderName: member.name,
+            relation: member.relation,
+            tmax: weather.temperatureMax,
+            tmin: weather.temperatureMin,
+          });
+        }
       }
       if (!message || !String(message).trim()) throw new Error('empty_message');
       this.setData({
@@ -147,6 +157,7 @@ Page({
         trigger,
         weather,
         weatherNotice,
+        locationLabel,
         message,
         scriptVersion: version,
         scriptHash: catalog.version_hash || '',
@@ -154,6 +165,7 @@ Page({
         messengerRole: 'child',
         channel: 'wechat_text',
         contextReady: true,
+        canCopyAdvice: !weatherUnavailable,
         loadError: '',
       });
     } catch (error) {
@@ -174,6 +186,10 @@ Page({
       if (!this._unloaded) wx.showToast({ title: '提醒话术尚未准备好', icon: 'none' });
       return;
     }
+    if (!this.data.canCopyAdvice) {
+      wx.showToast({ title: '天气不可用，不能复制日常建议', icon: 'none' });
+      return;
+    }
     const lifecycle = Number(this._lifecycleGeneration || 0);
     wx.setClipboardData({
       data: this.data.message,
@@ -185,11 +201,12 @@ Page({
           path: '/mp/api/v1/events',
           data: {
             event_type: 'template_copy',
+            pair_id: this.data.pairId,
             meta: {
               script_version: this.data.scriptVersion || 'v2_gist_why',
               messenger_role: this.data.messengerRole || 'child',
               channel: this.data.channel || 'wechat_text',
-              scenario: this.data.scenario || 'normal',
+              scenario: this.data.scenario || 'heat',
             },
           },
         }).catch(() => {
@@ -199,7 +216,7 @@ Page({
         });
       },
       fail: () => {
-        if (lifecycleIsActive(this, lifecycle)) wx.showToast({ title: '复制失败，请重试', icon: 'none' });
+        if (lifecycleIsActive(this, lifecycle)) wx.showToast({ title: '复制失败，请重试' , icon: 'none' });
       },
     });
   },

@@ -157,6 +157,12 @@
                         待处理求助 <span class="badge bg-danger d-none" id="navHelpBadge">0</span>
                     </a>
                     {% endif %}
+                    {% if current_user.role == 'doctor' %}
+                    <a class="nav-link {% if request.endpoint and request.endpoint.startswith('doctor.') %}active{% endif %}"
+                       href="{{ url_for('doctor.help_inbox') }}" data-nav-key="doctor-help">
+                        医生工作台
+                    </a>
+                    {% endif %}
                 {% endif %}
 
                 <div class="app-more-menu" id="appMoreMenu">

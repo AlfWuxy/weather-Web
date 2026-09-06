@@ -51,6 +51,33 @@
                     </div>
 
                     <div class="accordion-item">
+                        <h2 class="accordion-header" id="editCareHeading">
+                            <button class="accordion-button" type="button" data-bs-toggle="collapse" data-bs-target="#editCare">
+                                天气照护
+                            </button>
+                        </h2>
+                        <div id="editCare" class="accordion-collapse collapse show" data-bs-parent="#editMemberAccordion">
+                            <div class="accordion-body">
+                                <p class="text-muted small">老人所在地需要单独确认，不能默认用你现在的位置。只有勾选加入天气照护后，才会建立或复用提醒关系。历史档案不会被静默全部启用。不按姓名自动合并。</p>
+                                <div class="mb-3">
+                                    <label class="form-label">老人所在地</label>
+                                    <input type="text" class="form-control" name="elder_location_query" value="{{ profile.location_query or '' }}" placeholder="例如：都昌县某某乡，不要填写门牌">
+                                </div>
+                                <div class="form-check mb-2">
+                                    <input class="form-check-input" type="checkbox" name="join_weather_care" id="join_weather_care" {% if profile.weather_care_enabled %}checked{% endif %}>
+                                    <label class="form-check-label" for="join_weather_care">加入天气照护（高温提醒发给我，由我联系老人）</label>
+                                </div>
+                                {% if not is_create_mode %}
+                                <div class="form-check">
+                                    <input class="form-check-input" type="checkbox" name="leave_weather_care" id="leave_weather_care">
+                                    <label class="form-check-label" for="leave_weather_care">停用天气照护（保留档案，撤销提醒协作）</label>
+                                </div>
+                                {% endif %}
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="accordion-item">
                         <h2 class="accordion-header" id="editHealthHeading">
                             <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#editHealth">
                                 健康信息
