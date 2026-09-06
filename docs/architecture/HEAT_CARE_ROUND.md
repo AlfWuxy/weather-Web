@@ -45,7 +45,7 @@ pending_ack 等待接手
 
 结案必须带结果码。**只有 `assisted`（已协助处理）算成功。** 其余（`transferred_confirmed` / `withdrawn` / `unreachable` / `declined` / `false_alarm` / `other`）结束工单但不记成功。别名 `reached_elder`、`action_done` 归一到 `assisted`。
 
-**`pending_ack` 不能结案。** 代码上 `_can_resolve` 对等待接手直接拒绝。无人接手时保持等待。取消（误触、重复、老人已无事等）是另一条终态，不是成功。
+**`pending_ack` 不能结案。** 能看见工单的人（家属、被请求的医生）调用 `/resolve` 得到 **409** `invalid_transition`，文案是「需要先接手，才能记录处理结果」。陌生人仍是 **404**，避免用结案接口探测工单是否存在。取消（误触、重复、老人已无事等）是另一条终态，不是成功。无人接手时保持等待，跨天仍出现在未结列表。
 
 ## 4. 复用（PR #48）与本轮新增
 
@@ -96,3 +96,19 @@ pending_ack 等待接手
 升级内容：`family_member_profiles` 增加 `location_query`、`weather_care_enabled`；`help_requests` 增加 `assignee_user_id`、`requested_support_role`、`proxy_basis`；新建 `advice_contents`、`care_devices`、`device_events`；活跃 Pair 对 `member_id` 部分唯一。
 
 对应实现：`services/help_request_service.py`、`services/care_enrollment.py`、`services/advice_content_service.py`、`services/device_link_service.py`、`blueprints/doctor.py`、`blueprints/device_api.py`。互通契约仍以 `docs/architecture/HELP_FAMILY_INTEROP.md` 为准，本页只覆盖高温照护这一回合的产品决定与落地边界。
+
+## 9. 本轮验证（2026-09-06）
+
+自动化（Flask test client / Node，**不是**真机或真实通知）：
+
+```text
+/workspace/.venv/bin/python -m pytest -q --tb=line
+# 844 passed, 11 deselected
+node --test miniprogram/tests/page-resilience.test.js
+```
+
+覆盖的产品场景：家属自行接手并 `assisted` 结案；请求医生后 `pending_ack` 跨天仍未结；可见账号 409、陌生人 404；未审核内容不可归因；设备事件去重且 `verification_mode=simulated`；天气不可用不得复制肯定建议。
+
+**未验证（暂停，不伪造通过）：** 生产部署与正式站迁移、微信提审 / 开发者工具真机、向真实参与者发消息、WxPusher 生产通道、实体终端固件联调、徐医生实际审核发布、真实老人理解或健康改善。
+
+测试与演练数据默认 `is_test` / `qa_` 前缀，不得并入生产漏斗。

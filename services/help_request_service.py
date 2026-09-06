@@ -650,6 +650,20 @@ def _load_for_write(user, public_id, action, expected_version):
     if action == 'ack':
         allowed = _can_ack(user, pair, help_row)
     elif action == 'resolve':
+        if help_row.status == 'pending_ack':
+            visible = (
+                _can_ack(user, pair, help_row)
+                or pair.caregiver_id == getattr(user, 'id', None)
+                or can_access_pair(user, pair, 'read')
+                or _doctor_can_see(user, help_row)
+            )
+            if visible:
+                raise HelpRequestError(
+                    'invalid_transition',
+                    '需要先接手，才能记录处理结果。收到求助不等于已经解决。',
+                    409,
+                    extra={'latest': serialize_help(help_row, user=user, pair=pair)},
+                )
         allowed = _can_resolve(user, pair, help_row)
     elif action == 'cancel':
         allowed = can_access_pair(user, pair, 'cancel')

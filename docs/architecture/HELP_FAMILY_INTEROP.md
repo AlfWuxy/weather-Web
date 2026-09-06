@@ -33,7 +33,7 @@
 
 `pending_ack` → `acknowledged` → `in_progress`（可选）→ `resolved`  
 取消：`cancelled`（需权限与原因码）  
-请求协助：仅 `acknowledged` / `in_progress` 可 `request_support`，写 `requested_support_role` 后回到 `pending_ack`（清空跟进人）。**不能从 `pending_ack` 结案**；需先接手。收到求助 ≠ 已解决。
+请求协助：仅 `acknowledged` / `in_progress` 可 `request_support`，写 `requested_support_role` 后回到 `pending_ack`（清空跟进人）。**不能从 `pending_ack` 结案**；需先接手。可见账号对 `/resolve` 得到 **409** `invalid_transition`；陌生人仍 **404**。收到求助 ≠ 已解决。
 
 | 状态 | 展示文案 |
 |---|---|

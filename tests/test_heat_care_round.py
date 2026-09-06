@@ -304,7 +304,29 @@ def test_unacked_doctor_ticket_stays_open_across_day(app, client, db_session):
         json={'expected_version': support['version'], 'resolution_code': 'assisted'},
         headers=_api_headers(csrf),
     )
-    assert resolve_resp.status_code != 200
+    assert resolve_resp.status_code == 409, resolve_resp.get_data(as_text=True)
+    assert (resolve_resp.get_json() or {}).get('error') == 'invalid_transition'
+    assert HelpRequest.query.filter_by(public_id=help_id).one().status == 'pending_ack'
+
+    doctor = _user('heat_wait_md', role='doctor')
+    doctor_csrf = _login(client, doctor)
+    doctor_resolve = client.post(
+        f'/api/v1/help-requests/{help_id}/resolve',
+        json={'expected_version': support['version'], 'resolution_code': 'assisted'},
+        headers=_api_headers(doctor_csrf),
+    )
+    assert doctor_resolve.status_code == 409, doctor_resolve.get_data(as_text=True)
+    assert (doctor_resolve.get_json() or {}).get('error') == 'invalid_transition'
+    assert HelpRequest.query.filter_by(public_id=help_id).one().status == 'pending_ack'
+
+    stranger = _user('heat_wait_stranger')
+    stranger_csrf = _login(client, stranger)
+    stranger_resolve = client.post(
+        f'/api/v1/help-requests/{help_id}/resolve',
+        json={'expected_version': support['version'], 'resolution_code': 'assisted'},
+        headers=_api_headers(stranger_csrf),
+    )
+    assert stranger_resolve.status_code == 404
     assert HelpRequest.query.filter_by(public_id=help_id).one().status == 'pending_ack'
 
     closed = client.post(
