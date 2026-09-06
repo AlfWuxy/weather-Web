@@ -210,6 +210,8 @@ class FamilyMemberProfile(db.Model):
     share_with_community = db.Column(db.Boolean, default=False)
     alert_enabled = db.Column(db.Boolean, default=True)
     quiet_hours = db.Column(db.String(20))
+    location_query = db.Column(db.String(200))
+    weather_care_enabled = db.Column(db.Boolean, default=False, nullable=False, server_default='0')
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
@@ -351,6 +353,13 @@ class Pair(db.Model):
         db.Index('ix_pairs_short_code_hash', 'short_code_hash'),
         db.Index('ix_pairs_member_id', 'member_id'),
         db.Index('ix_pairs_family_space_id', 'family_space_id'),
+        Index(
+            'uq_pairs_active_member',
+            'member_id',
+            unique=True,
+            sqlite_where=text("status = 'active' AND member_id IS NOT NULL"),
+            postgresql_where=text("status = 'active' AND member_id IS NOT NULL"),
+        ),
     )
 
     @property
@@ -631,6 +640,9 @@ class HelpRequest(db.Model):
     resolved_by_user_id = db.Column(db.Integer, db.ForeignKey('users.id'))
     resolved_at = db.Column(db.DateTime)
     resolution_code = db.Column(db.String(32))
+    assignee_user_id = db.Column(db.Integer, db.ForeignKey('users.id'))
+    requested_support_role = db.Column(db.String(24))
+    proxy_basis = db.Column(db.String(120))
     cancelled_by_user_id = db.Column(db.Integer, db.ForeignKey('users.id'))
     cancelled_at = db.Column(db.DateTime)
     cancel_reason_code = db.Column(db.String(32))
@@ -814,4 +826,72 @@ class LocationCache(db.Model):
     __table_args__ = (
         db.Index('ix_location_cache_query', query_text),
         db.Index('ix_location_cache_updated_at', 'updated_at'),
+    )
+
+
+class AdviceContent(db.Model):
+    """医生科普与短提醒模板。未由本人审核不得标注医生建议。"""
+    __tablename__ = 'advice_contents'
+    id = db.Column(db.Integer, primary_key=True)
+    public_id = db.Column(db.String(32), unique=True, nullable=False)
+    kind = db.Column(db.String(20), nullable=False)  # science / template
+    status = db.Column(db.String(20), nullable=False, default='draft')
+    title = db.Column(db.String(160), nullable=False)
+    body = db.Column(db.Text, nullable=False)
+    source = db.Column(db.String(200), nullable=False)
+    scenario = db.Column(db.String(20), nullable=False, default='heat')
+    version = db.Column(db.Integer, nullable=False, default=1)
+    author_user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    reviewer_user_id = db.Column(db.Integer, db.ForeignKey('users.id'))
+    published_at = db.Column(db.DateTime)
+    valid_from = db.Column(db.DateTime)
+    valid_until = db.Column(db.DateTime)
+    parent_id = db.Column(db.Integer, db.ForeignKey('advice_contents.id'))
+    is_test = db.Column(db.Boolean, nullable=False, default=False, server_default='0')
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+
+    __table_args__ = (
+        db.Index('ix_advice_contents_status_kind', 'status', 'kind'),
+        db.Index('ix_advice_contents_scenario', 'scenario'),
+    )
+
+
+class CareDevice(db.Model):
+    """经授权关联到照护对象的终端。只存哈希，不含健康档案。"""
+    __tablename__ = 'care_devices'
+    id = db.Column(db.Integer, primary_key=True)
+    public_id = db.Column(db.String(32), unique=True, nullable=False)
+    pair_id = db.Column(db.Integer, db.ForeignKey('pairs.id'), nullable=False)
+    label = db.Column(db.String(80), nullable=False, default='home-terminal')
+    token_hash = db.Column(db.String(64), unique=True, nullable=False)
+    authorized_at = db.Column(db.DateTime, nullable=False)
+    revoked_at = db.Column(db.DateTime)
+    last_seen_at = db.Column(db.DateTime)
+    last_heartbeat_at = db.Column(db.DateTime)
+    created_by_user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+
+    __table_args__ = (
+        db.Index('ix_care_devices_pair_id', 'pair_id'),
+        db.Index('ix_care_devices_token_hash', 'token_hash'),
+    )
+
+
+class DeviceEvent(db.Model):
+    """终端上报事件。重复 client_event_id 不重复计数。"""
+    __tablename__ = 'device_events'
+    id = db.Column(db.Integer, primary_key=True)
+    device_id = db.Column(db.Integer, db.ForeignKey('care_devices.id'), nullable=False)
+    client_event_id = db.Column(db.String(64), nullable=False)
+    event_name = db.Column(db.String(40), nullable=False)
+    device_occurred_at = db.Column(db.DateTime)
+    server_received_at = db.Column(db.DateTime, nullable=False)
+    payload_json = db.Column(db.Text)
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+
+    __table_args__ = (
+        db.UniqueConstraint('device_id', 'client_event_id', name='uq_device_events_client_id'),
+        db.Index('ix_device_events_device_id', 'device_id'),
+        db.Index('ix_device_events_event_name', 'event_name'),
     )

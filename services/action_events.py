@@ -184,7 +184,7 @@ def _apply_daily_status(pair, status, stage, action_id, now):
     if stage == 'understood' and not status.understood_at:
         status.understood_at = now
     if stage == 'self_reported':
-        if not status.confirmed_at:
+        if action_id and action_id != 'undecided' and not status.confirmed_at:
             status.confirmed_at = now
         if action_id and action_id != 'undecided':
             done_ids = {
@@ -259,6 +259,8 @@ def record_event(
     if channel not in ALLOWED_CHANNELS:
         raise InvalidTransition(_latest_stage(pair.id, _local_date_from(now)), stage)
 
+    if stage == 'self_reported' and (not action_id or action_id == 'undecided'):
+        raise InvalidTransition(_latest_stage(pair.id, _local_date_from(now)), stage)
     now = ensure_utc_aware(now) or utcnow()
     local_date = _local_date_from(now)
     action_id = str(action_id).strip()[:32] if action_id else None
@@ -390,6 +392,20 @@ def _active_pair_query(include_test=False):
     return query
 
 
+def analysis_pair_ids(date_to=None, include_test=False):
+    """分母含观察期内已建档对象，停用后仍保留，避免失联从分母消失。"""
+    query = Pair.query
+    if date_to is not None:
+        query = query.filter(Pair.created_at.isnot(None))
+    if not include_test:
+        query = query.outerjoin(User, User.id == Pair.caregiver_id).filter(
+            Pair.is_test.is_(False),
+            ~func.lower(func.coalesce(Pair.elder_code, '')).like('qa\\_%', escape='\\'),
+            ~func.lower(func.coalesce(User.username, '')).like('qa\\_%', escape='\\'),
+        )
+    return {row[0] for row in query.with_entities(Pair.id).all()}
+
+
 def active_analysis_pair_ids(include_test=False):
     return {row[0] for row in _active_pair_query(include_test).with_entities(Pair.id).all()}
 
@@ -430,8 +446,8 @@ def _first_event_times(events, stage):
 
 
 def funnel(date_from, date_to, include_test=False):
-    """按阶段去重 pair 数。分母 = 当前 active pairs。"""
-    pair_ids = active_analysis_pair_ids(include_test=include_test)
+    """按阶段去重 pair 数。分母 = 观察期内已建档对象（含已停用）。"""
+    pair_ids = analysis_pair_ids(date_to, include_test=include_test)
     denominator = len(pair_ids)
     events = []
     if pair_ids:
@@ -465,19 +481,21 @@ def funnel(date_from, date_to, include_test=False):
     unknown_count = len(pair_ids - touched)
 
     open_help_count = 0
-    help_by_date = defaultdict(lambda: {'requested': set(), 'closed': set(), 'acked': set()})
-    for event in events:
-        bucket = help_by_date[event.local_date]
-        if event.stage == 'help_requested':
-            bucket['requested'].add(event.pair_id)
-        elif event.stage == 'closed':
-            bucket['closed'].add(event.pair_id)
-        elif event.stage == 'help_acknowledged':
-            bucket['acked'].add(event.pair_id)
-    open_pairs = set()
-    for bucket in help_by_date.values():
-        open_pairs |= (bucket['requested'] - bucket['closed'])
-    open_help_count = len(open_pairs)
+    if pair_ids:
+        from core.db_models import HelpRequest
+        from services.help_request_service import OPEN_STATUSES, resolution_success
+
+        open_help_count = HelpRequest.query.filter(
+            HelpRequest.pair_id.in_(pair_ids),
+            HelpRequest.status.in_(OPEN_STATUSES),
+        ).count()
+        success_closed = HelpRequest.query.filter(
+            HelpRequest.pair_id.in_(pair_ids),
+            HelpRequest.status == 'resolved',
+        ).all()
+        success_closed_count = sum(1 for row in success_closed if resolution_success(row.resolution_code))
+    else:
+        success_closed_count = 0
 
     seen_times = _first_event_times(events, 'seen')
     self_times = _first_event_times(events, 'self_reported')
@@ -524,6 +542,8 @@ def funnel(date_from, date_to, include_test=False):
         'median_help_requested_to_ack_minutes': _median(help_to_ack),
         'median_to_closed_minutes': _median(to_closed),
         'open_help_count': open_help_count,
+        'success_closed_count': success_closed_count,
+        'denominator_unit': 'pairs_ever_enrolled',
         'misclick_count': misclick_count,
         'verified_without_self_report_count': len(verified_without_self_report_pairs),
         'event_source_completeness': completeness,

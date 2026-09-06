@@ -21,7 +21,11 @@ def error_payload(code, message, status_code, extra=None):
 
 
 def handle_domain_error(exc):
-    if isinstance(exc, (HelpRequestError, FamilyAccessError)):
+    from services.advice_content_service import AdviceContentError
+    from services.care_enrollment import CareEnrollmentError
+    from services.device_link_service import DeviceLinkError
+
+    if isinstance(exc, (HelpRequestError, FamilyAccessError, AdviceContentError, DeviceLinkError, CareEnrollmentError)):
         extra = getattr(exc, 'extra', None)
         return error_payload(exc.code, exc.message, exc.status_code, extra)
     return error_payload('service_unavailable', '服务暂时不可用。', 503)

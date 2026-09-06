@@ -605,7 +605,7 @@ def _render_action_page(
 ):
     channel = _action_channel(token)
     if pair:
-        record_seen(pair, channel)
+        pass  # 页面打开不等于看到或采取行动，不写 ActionEvent.seen
     recent_series = _build_recent_series(pair.id) if pair else []
     state = _json_state(pair) if pair else {}
     filled = _resolve_action_routes(
@@ -933,7 +933,22 @@ def _handle_action_confirm(token=None, confirm_action=None, debrief_action=None)
                     action_id=action_key,
                 )
         else:
-            record_event(pair, 'self_reported', 'elder', channel)
+            db.session.rollback()
+            if _wants_json_action():
+                return jsonify({'ok': False, 'error': 'missing_action'}), 400
+            flash('请先选择完成的一项行动，空提交不会记成已做到。', 'error')
+            action_routes = _resolve_action_routes(token=token, confirm_action=confirm_action, debrief_action=debrief_action)
+            return _render_action_page(
+                pair,
+                status,
+                actions,
+                resources,
+                weather_data,
+                heat_result,
+                risk_label,
+                risk_reasons=risk_reasons,
+                **action_routes
+            )
     except InvalidTransition as exc:
         db.session.rollback()
         return exc.to_response()

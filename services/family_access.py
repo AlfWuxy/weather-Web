@@ -16,22 +16,32 @@ ROLE_OWNER = 'owner'
 ROLE_CAREGIVER = 'caregiver'
 ROLE_ELDER_PROXY = 'elder_proxy'
 ROLE_COMMUNITY_LIMITED = 'community_limited'
+ROLE_DOCTOR_SUPPORT = 'doctor_support'
+ROLE_VOLUNTEER = 'volunteer'
 
 ACTIVE = 'active'
 REVOKED = 'revoked'
 LEFT = 'left'
 
-INVITABLE_ROLES = frozenset({ROLE_CAREGIVER, ROLE_ELDER_PROXY, ROLE_COMMUNITY_LIMITED})
+INVITABLE_ROLES = frozenset({
+    ROLE_CAREGIVER,
+    ROLE_ELDER_PROXY,
+    ROLE_COMMUNITY_LIMITED,
+    ROLE_DOCTOR_SUPPORT,
+    ROLE_VOLUNTEER,
+})
 ALL_ROLES = INVITABLE_ROLES | {ROLE_OWNER}
 
 # 权限矩阵：读对象、发起求助、接收/处理、结案、邀请、撤销
 CAN_READ = ALL_ROLES
-CAN_CREATE_HELP = frozenset({ROLE_OWNER, ROLE_ELDER_PROXY})
-CAN_ACK = frozenset({ROLE_OWNER, ROLE_CAREGIVER, ROLE_COMMUNITY_LIMITED})
-CAN_RESOLVE = frozenset({ROLE_OWNER, ROLE_CAREGIVER, ROLE_COMMUNITY_LIMITED})
+CAN_CREATE_HELP = frozenset({ROLE_OWNER, ROLE_ELDER_PROXY, ROLE_CAREGIVER})
+CAN_ACK = frozenset({ROLE_OWNER, ROLE_CAREGIVER, ROLE_DOCTOR_SUPPORT, ROLE_VOLUNTEER})
+CAN_RESOLVE = frozenset({ROLE_OWNER, ROLE_CAREGIVER, ROLE_DOCTOR_SUPPORT, ROLE_VOLUNTEER})
 CAN_CANCEL = frozenset({ROLE_OWNER, ROLE_CAREGIVER, ROLE_ELDER_PROXY})
 CAN_INVITE = frozenset({ROLE_OWNER})
 CAN_MANAGE_SPACE = frozenset({ROLE_OWNER})
+CAN_VIEW_HEALTH = frozenset({ROLE_OWNER, ROLE_CAREGIVER, ROLE_ELDER_PROXY})
+FAMILY_PRIMARY_ROLES = frozenset({ROLE_OWNER, ROLE_CAREGIVER})
 
 
 class FamilyAccessError(Exception):
@@ -157,6 +167,9 @@ def can_access_pair(user, pair, action):
         authorized = (getattr(user, 'authorized_community', None) or '').strip()
         if not authorized or authorized != (pair.community_code or '').strip():
             return False
+    if membership.role in {ROLE_DOCTOR_SUPPORT, ROLE_VOLUNTEER, ROLE_COMMUNITY_LIMITED}:
+        if action in {'manage', 'invite', 'create_help'}:
+            return False
     return membership.role in allowed
 
 
@@ -165,6 +178,29 @@ def require_pair_access(user, pair, action):
         # 无权对象统一 404，避免枚举
         raise FamilyAccessError('not_found', '对象不存在或无权访问。', 404)
     return True
+
+
+def membership_role_for(user, pair):
+    if user is None or pair is None:
+        return None
+    if pair.family_space_id:
+        membership = active_membership(user.id, pair.family_space_id)
+        if membership:
+            return membership.role
+    if pair.caregiver_id == getattr(user, 'id', None):
+        return ROLE_OWNER
+    if getattr(user, 'role', None) == 'doctor':
+        return ROLE_DOCTOR_SUPPORT
+    return None
+
+
+def can_view_health_profile(user, pair):
+    role = membership_role_for(user, pair)
+    if getattr(user, 'role', None) == 'admin':
+        return True
+    if getattr(user, 'role', None) == 'doctor':
+        return False
+    return role in CAN_VIEW_HEALTH
 
 
 def create_invite(user, pair_or_space, role, *, ttl_hours=72, max_uses=1):

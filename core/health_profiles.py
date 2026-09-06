@@ -82,7 +82,9 @@ def _build_member_profile_form_payload(form):
         'share_with_doctor': form.get('share_with_doctor') == 'on',
         'share_with_community': form.get('share_with_community') == 'on',
         'alert_enabled': form.get('alert_enabled') == 'on',
-        'quiet_hours': sanitize_input(form.get('quiet_hours'), max_length=20)
+        'quiet_hours': sanitize_input(form.get('quiet_hours'), max_length=20),
+        'location_query': sanitize_input(form.get('elder_location_query'), max_length=200),
+        'weather_care_enabled': form.get('join_weather_care') == 'on',
     }
 
 
@@ -273,7 +275,9 @@ def profile_to_context(profile):
             'share_with_doctor': False,
             'share_with_community': False,
             'alert_enabled': True,
-            'quiet_hours': ''
+            'quiet_hours': '',
+            'location_query': '',
+            'weather_care_enabled': False,
         }
     return {
         'allergies': profile.allergies or '',
@@ -286,5 +290,7 @@ def profile_to_context(profile):
         'share_with_doctor': bool(profile.share_with_doctor),
         'share_with_community': bool(profile.share_with_community),
         'alert_enabled': True if profile.alert_enabled is None else bool(profile.alert_enabled),
-        'quiet_hours': profile.quiet_hours or ''
+        'quiet_hours': profile.quiet_hours or '',
+        'location_query': getattr(profile, 'location_query', None) or '',
+        'weather_care_enabled': bool(getattr(profile, 'weather_care_enabled', False)),
     }

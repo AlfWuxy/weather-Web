@@ -22,46 +22,114 @@ from core.db_models import (
 from core.extensions import db
 from core.time_utils import today_local, utcnow
 from services.family_access import (
+    FAMILY_PRIMARY_ROLES,
     FamilyAccessError,
+    ROLE_DOCTOR_SUPPORT,
+    ROLE_OWNER,
+    ROLE_VOLUNTEER,
     can_access_pair,
     ensure_space_for_pair,
+    membership_role_for,
     require_pair_access,
     visible_pair_ids_for_user,
 )
 from services.notification_outbox import enqueue_help_notification
 
-SCHEMA_VERSION = '2026-09-06.help-family-v1'
+SCHEMA_VERSION = '2026-09-06.help-family-v2'
 OPEN_STATUSES = ('pending_ack', 'acknowledged', 'in_progress')
 TERMINAL_STATUSES = ('resolved', 'cancelled')
 CATEGORIES = frozenset({'cannot_complete', 'need_checkin', 'need_cooling', 'other'})
-RESOLUTION_CODES = frozenset({'reached_elder', 'action_done', 'referred', 'false_alarm', 'other'})
-CANCEL_REASONS = frozenset({'misclick', 'duplicate', 'elder_ok', 'other'})
-ORIGIN_CHANNELS = frozenset({'web', 'miniprogram', 'web_shortcode', 'elder_mode'})
+RESOLUTION_DEFINITIONS = {
+    'assisted': {'success': True, 'label': '已协助处理'},
+    'transferred_confirmed': {'success': False, 'label': '已转交并确认接收'},
+    'withdrawn': {'success': False, 'label': '本人撤回'},
+    'unreachable': {'success': False, 'label': '联系不上'},
+    'declined': {'success': False, 'label': '暂不受理'},
+    'false_alarm': {'success': False, 'label': '误报'},
+    'other': {'success': False, 'label': '其他结果'},
+}
+RESOLUTION_ALIASES = {
+    'reached_elder': 'assisted',
+    'action_done': 'assisted',
+    'referred': 'transferred_confirmed',
+}
+RESOLUTION_CODES = frozenset(RESOLUTION_DEFINITIONS) | frozenset(RESOLUTION_ALIASES)
+CANCEL_REASONS = frozenset({'misclick', 'duplicate', 'elder_ok', 'withdrawn', 'other'})
+ORIGIN_CHANNELS = frozenset({'web', 'miniprogram', 'web_shortcode', 'elder_mode', 'device'})
+SUPPORT_ROLES = frozenset({'doctor', 'volunteer'})
 
 STATUS_LABELS = {
-    'pending_ack': '待家属接收',
-    'acknowledged': '家属已收到，待处理',
+    'pending_ack': '等待接手',
+    'acknowledged': '已接手',
     'in_progress': '处理中',
-    'resolved': '已解决',
+    'resolved': '已结束',
     'cancelled': '已取消',
 }
 
 EVENT_LABELS = {
     'created': '已发起求助',
-    'remind': '再次提醒家属',
-    'acknowledged': '家属已收到',
+    'remind': '再次提醒联系人',
+    'acknowledged': '已接手',
     'started': '开始处理',
-    'resolved': '已标记解决',
+    'resolved': '已记录处理结果',
     'cancelled': '已取消',
+    'support_requested': '已请求协助',
 }
 
 ACTIONS_BY_STATUS = {
     'pending_ack': ('ack', 'cancel'),
-    'acknowledged': ('start', 'resolve', 'cancel'),
-    'in_progress': ('resolve', 'cancel'),
+    'acknowledged': ('start', 'resolve', 'cancel', 'request_support'),
+    'in_progress': ('resolve', 'cancel', 'request_support'),
     'resolved': (),
     'cancelled': (),
 }
+
+
+def normalize_resolution_code(code):
+    code = (code or '').strip()
+    return RESOLUTION_ALIASES.get(code, code)
+
+
+def resolution_success(code):
+    normalized = normalize_resolution_code(code)
+    return bool(RESOLUTION_DEFINITIONS.get(normalized, {}).get('success'))
+
+
+def status_label_for(help_row):
+    if help_row.status == 'pending_ack':
+        if help_row.requested_support_role == 'doctor':
+            return '等待医生接手'
+        if help_row.requested_support_role == 'volunteer':
+            return '等待协助者接手'
+        return '等待接手'
+    if help_row.status == 'resolved':
+        normalized = normalize_resolution_code(help_row.resolution_code)
+        return RESOLUTION_DEFINITIONS.get(normalized, {}).get('label') or '已结束'
+    return STATUS_LABELS.get(help_row.status, help_row.status)
+
+
+def _help_actor_role(user, pair, help_row=None):
+    role = membership_role_for(user, pair)
+    if role == ROLE_DOCTOR_SUPPORT or getattr(user, 'role', None) == 'doctor':
+        return 'doctor'
+    if role == ROLE_VOLUNTEER:
+        return 'volunteer'
+    if role == ROLE_OWNER:
+        return 'caregiver'
+    return role or 'caregiver'
+
+
+def _doctor_can_see(user, help_row):
+    return (
+        getattr(user, 'role', None) == 'doctor'
+        and help_row is not None
+        and help_row.requested_support_role == 'doctor'
+    )
+
+
+def sanitize_proxy_basis(value):
+    text = (value or '').strip()
+    return text[:120] if text else None
 
 
 class HelpRequestError(Exception):
@@ -84,7 +152,12 @@ def capabilities():
             'pending_open': True,
             'scripts': True,
             'notification_outbox': True,
+            'doctor_content': True,
+            'device_link': True,
+            'not_emergency_channel': True,
         },
+        'resolution_codes': RESOLUTION_DEFINITIONS,
+        'disclaimer': '平台求助队列不是实时急救通道。无人接手时保持等待，不会假装已有人响应。',
     }
 
 
@@ -164,21 +237,17 @@ def apply_pair_help_stage(user, pair, stage, *, origin_channel='web', commit=Tru
         if not open_row:
             raise HelpRequestError('not_found', '没有未结求助。', 404)
         if open_row.status == 'pending_ack':
-            ack_help_request(
-                user,
-                open_row.public_id,
-                expected_version=open_row.version,
-                origin_channel=origin_channel,
-                commit=False,
+            raise HelpRequestError(
+                'invalid_transition',
+                '需要先接手，才能记录处理结果。收到求助不等于已经解决。',
+                409,
+                extra={'latest': serialize_help(open_row, user=user, pair=pair)},
             )
-            open_row = _open_for_pair(pair.id)
-        if open_row is None:
-            raise HelpRequestError('not_found', '没有未结求助。', 404)
         return resolve_help_request(
             user,
             open_row.public_id,
             expected_version=open_row.version,
-            resolution_code='reached_elder',
+            resolution_code='assisted',
             origin_channel=origin_channel,
             commit=commit,
         )
@@ -230,6 +299,9 @@ def _project_daily(pair, help_row):
         if not status.help_acknowledged_at:
             status.help_acknowledged_at = help_row.acknowledged_at
         status.closed_at = help_row.resolved_at or utcnow()
+    elif help_row.status == 'cancelled':
+        status.help_flag = False
+        status.closed_at = help_row.cancelled_at or utcnow()
     db.session.flush()
     return status
 
@@ -260,19 +332,21 @@ def serialize_help(help_row, *, include_actions=True, user=None, pair=None):
     actions = []
     if include_actions and user is not None and pair is not None:
         for name in ACTIONS_BY_STATUS.get(help_row.status, ()):
-            if name == 'ack' and can_access_pair(user, pair, 'ack'):
+            if name == 'ack' and _can_ack(user, pair, help_row):
                 actions.append('ack')
-            elif name == 'start' and can_access_pair(user, pair, 'ack'):
+            elif name == 'start' and _can_ack(user, pair, help_row):
                 actions.append('start')
-            elif name == 'resolve' and can_access_pair(user, pair, 'resolve'):
+            elif name == 'resolve' and _can_resolve(user, pair, help_row):
                 actions.append('resolve')
             elif name == 'cancel' and can_access_pair(user, pair, 'cancel'):
                 actions.append('cancel')
+            elif name == 'request_support' and can_access_pair(user, pair, 'create_help'):
+                actions.append('request_support')
     elder_label = ''
     if pair is not None and getattr(pair, 'member_id', None):
         member = db.session.get(FamilyMember, pair.member_id)
         if member:
-            elder_label = member.name or member.relation or ''
+            elder_label = member.relation or member.name or ''
     outbox_rows = NotificationOutbox.query.filter_by(help_request_id=help_row.id).all()
     notify_status = 'none'
     if outbox_rows:
@@ -284,16 +358,21 @@ def serialize_help(help_row, *, include_actions=True, user=None, pair=None):
             notify_status = 'accepted'
         else:
             notify_status = 'failed'
+    normalized = normalize_resolution_code(help_row.resolution_code) if help_row.resolution_code else None
     return {
         'id': help_row.public_id,
         'pair_id': help_row.pair_id,
         'elder_label': elder_label,
         'status': help_row.status,
-        'status_label': STATUS_LABELS.get(help_row.status, help_row.status),
+        'status_label': status_label_for(help_row),
         'version': help_row.version,
         'category': help_row.category,
         'origin_channel': help_row.origin_channel,
         'is_proxy': bool(help_row.is_proxy),
+        'proxy_basis': help_row.proxy_basis,
+        'actor_role': help_row.actor_role,
+        'assignee_user_id': help_row.assignee_user_id,
+        'requested_support_role': help_row.requested_support_role,
         'is_test': bool(help_row.is_test),
         'legacy_source': help_row.legacy_source,
         'created_at': help_row.created_at.isoformat() if help_row.created_at else None,
@@ -301,11 +380,36 @@ def serialize_help(help_row, *, include_actions=True, user=None, pair=None):
         'acknowledged_at': help_row.acknowledged_at.isoformat() if help_row.acknowledged_at else None,
         'started_at': help_row.started_at.isoformat() if help_row.started_at else None,
         'resolved_at': help_row.resolved_at.isoformat() if help_row.resolved_at else None,
-        'resolution_code': help_row.resolution_code,
+        'resolution_code': normalized,
+        'outcome_success': resolution_success(normalized) if normalized else None,
+        'outcome_label': RESOLUTION_DEFINITIONS.get(normalized, {}).get('label') if normalized else None,
         'notification_status': notify_status,
         'allowed_actions': actions,
+        'not_emergency_channel': True,
         'schema_version': SCHEMA_VERSION,
     }
+
+
+def _can_ack(user, pair, help_row):
+    if help_row.requested_support_role == 'doctor':
+        if getattr(user, 'role', None) == 'doctor':
+            return True
+        return membership_role_for(user, pair) == ROLE_DOCTOR_SUPPORT
+    if help_row.requested_support_role == 'volunteer':
+        return membership_role_for(user, pair) == ROLE_VOLUNTEER
+    if pair.caregiver_id == getattr(user, 'id', None):
+        return True
+    return membership_role_for(user, pair) in FAMILY_PRIMARY_ROLES
+
+
+def _can_resolve(user, pair, help_row):
+    if help_row.status == 'pending_ack':
+        return False
+    if help_row.assignee_user_id and help_row.assignee_user_id == getattr(user, 'id', None):
+        return True
+    if pair.caregiver_id == getattr(user, 'id', None):
+        return True
+    return can_access_pair(user, pair, 'resolve')
 
 
 def create_help_request(
@@ -318,6 +422,7 @@ def create_help_request(
     is_proxy=False,
     actor_role=None,
     actor_user_id=None,
+    proxy_basis=None,
     commit=False,
     skip_access_check=False,
 ):
@@ -387,6 +492,7 @@ def create_help_request(
         is_proxy=bool(is_proxy),
         category=category,
         version=1,
+        proxy_basis=sanitize_proxy_basis(proxy_basis) if is_proxy else None,
         is_test=bool(getattr(pair, 'is_test', False)),
         created_at=now,
         updated_at=now,
@@ -448,10 +554,11 @@ def get_help_request(user, public_id):
     if not help_row:
         raise HelpRequestError('not_found', '求助不存在。', 404)
     pair = db.session.get(Pair, help_row.pair_id)
-    try:
-        require_pair_access(user, pair, 'read')
-    except FamilyAccessError as exc:
-        raise HelpRequestError('not_found', '求助不存在。', 404) from exc
+    if not _doctor_can_see(user, help_row):
+        try:
+            require_pair_access(user, pair, 'read')
+        except FamilyAccessError as exc:
+            raise HelpRequestError('not_found', '求助不存在。', 404) from exc
     events = (
         HelpRequestEvent.query.filter_by(help_request_id=help_row.id)
         .order_by(HelpRequestEvent.id.asc())
@@ -474,10 +581,23 @@ def get_help_request(user, public_id):
     return body
 
 
-def list_help_requests(user, *, status='open', cursor=None, limit=20):
+def list_help_requests(user, *, status='open', cursor=None, limit=20, requested_support_role=None):
     limit = max(1, min(int(limit or 20), 50))
     pair_ids = visible_pair_ids_for_user(user.id)
+    if getattr(user, 'role', None) == 'doctor':
+        doctor_ids = [
+            row[0]
+            for row in db.session.query(HelpRequest.pair_id).filter(
+                HelpRequest.requested_support_role == 'doctor',
+                HelpRequest.status.in_(OPEN_STATUSES),
+            ).distinct().all()
+        ]
+        pair_ids = set(pair_ids) | set(doctor_ids)
     query = HelpRequest.query.filter(HelpRequest.pair_id.in_(pair_ids or [-1]))
+    if getattr(user, 'role', None) == 'doctor' and not visible_pair_ids_for_user(user.id):
+        query = query.filter(HelpRequest.requested_support_role == 'doctor')
+    if requested_support_role:
+        query = query.filter(HelpRequest.requested_support_role == requested_support_role)
     if status == 'open':
         query = query.filter(HelpRequest.status.in_(OPEN_STATUSES))
     elif status in OPEN_STATUSES + TERMINAL_STATUSES:
@@ -498,18 +618,26 @@ def list_help_requests(user, *, status='open', cursor=None, limit=20):
         pair = db.session.get(Pair, help_row.pair_id)
         items.append(serialize_help(help_row, user=user, pair=pair))
     next_cursor = str(rows[-1].id) if has_more and rows else None
+    count_query = HelpRequest.query.filter(
+        HelpRequest.pair_id.in_(pair_ids or [-1]),
+        HelpRequest.status.in_(OPEN_STATUSES),
+    )
+    pending_query = HelpRequest.query.filter(
+        HelpRequest.pair_id.in_(pair_ids or [-1]),
+        HelpRequest.status == 'pending_ack',
+    )
+    if requested_support_role:
+        count_query = count_query.filter(HelpRequest.requested_support_role == requested_support_role)
+        pending_query = pending_query.filter(HelpRequest.requested_support_role == requested_support_role)
+    elif getattr(user, 'role', None) == 'doctor' and not visible_pair_ids_for_user(user.id):
+        count_query = count_query.filter(HelpRequest.requested_support_role == 'doctor')
+        pending_query = pending_query.filter(HelpRequest.requested_support_role == 'doctor')
     return {
         'schema_version': SCHEMA_VERSION,
         'items': items,
         'next_cursor': next_cursor,
-        'open_count': HelpRequest.query.filter(
-            HelpRequest.pair_id.in_(pair_ids or [-1]),
-            HelpRequest.status.in_(OPEN_STATUSES),
-        ).count() if pair_ids else 0,
-        'pending_ack_count': HelpRequest.query.filter(
-            HelpRequest.pair_id.in_(pair_ids or [-1]),
-            HelpRequest.status == 'pending_ack',
-        ).count() if pair_ids else 0,
+        'open_count': count_query.count() if pair_ids else 0,
+        'pending_ack_count': pending_query.count() if pair_ids else 0,
     }
 
 
@@ -518,7 +646,19 @@ def _load_for_write(user, public_id, action, expected_version):
     if not help_row:
         raise HelpRequestError('not_found', '求助不存在。', 404)
     pair = db.session.get(Pair, help_row.pair_id)
-    require_pair_access(user, pair, action)
+    allowed = False
+    if action == 'ack':
+        allowed = _can_ack(user, pair, help_row)
+    elif action == 'resolve':
+        allowed = _can_resolve(user, pair, help_row)
+    elif action == 'cancel':
+        allowed = can_access_pair(user, pair, 'cancel')
+    elif action == 'request_support':
+        allowed = can_access_pair(user, pair, 'create_help')
+    else:
+        allowed = can_access_pair(user, pair, action)
+    if not allowed:
+        raise HelpRequestError('not_found', '求助不存在。', 404)
     if expected_version is not None and int(expected_version) != help_row.version:
         raise HelpRequestError(
             'version_conflict',
@@ -547,12 +687,13 @@ def ack_help_request(user, public_id, *, expected_version, idempotency_key=None,
     help_row.status = 'acknowledged'
     help_row.acknowledged_by_user_id = user.id
     help_row.acknowledged_at = now
+    help_row.assignee_user_id = user.id
     help_row.version += 1
     help_row.updated_at = now
     event = _append_event(
         help_row,
         actor_user_id=user.id,
-        actor_role='caregiver',
+        actor_role=_help_actor_role(user, pair, help_row),
         from_status=from_status,
         to_status='acknowledged',
         event_type='acknowledged',
@@ -632,6 +773,9 @@ def resolve_help_request(
     commit=False,
 ):
     if resolution_code not in RESOLUTION_CODES:
+        raise HelpRequestError('invalid_resolution', '结案必须选择具体结果，不同结果不会都记成成功解决。', 400)
+    resolution_code = normalize_resolution_code(resolution_code)
+    if resolution_code not in RESOLUTION_DEFINITIONS:
         raise HelpRequestError('invalid_resolution', '结案结果无效。', 400)
     payload = {
         'id': public_id,
@@ -656,12 +800,12 @@ def resolve_help_request(
     event = _append_event(
         help_row,
         actor_user_id=user.id,
-        actor_role='caregiver',
+        actor_role=_help_actor_role(user, pair, help_row),
         from_status=from_status,
         to_status='resolved',
         event_type='resolved',
         channel=origin_channel,
-        meta={'resolution_code': resolution_code},
+        meta={'resolution_code': resolution_code, 'outcome_success': resolution_success(resolution_code)},
     )
     _link_action_event(pair, help_row, 'closed', 'caregiver', origin_channel)
     _project_daily(pair, help_row)
@@ -729,6 +873,62 @@ def cancel_help_request(
         meta={'reason_code': reason_code},
     )
     _project_daily(pair, help_row)
+    body = serialize_help(help_row, user=user, pair=pair)
+    _store_idempotency(
+        _idempotency_scope(user),
+        idempotency_key,
+        _hash_payload(payload),
+        'help_request',
+        help_row.public_id,
+        body,
+    )
+    if commit:
+        db.session.commit()
+    return body
+
+
+def request_support(user, public_id, *, support_role, expected_version, idempotency_key=None, origin_channel='web', commit=False):
+    """家属提出协助后回到等待接手，对方明确接受前不转移跟进责任。"""
+    support_role = (support_role or '').strip()
+    if support_role not in SUPPORT_ROLES:
+        raise HelpRequestError('invalid_support_role', '只能向医生或已授权协助者请求接手。')
+    payload = {
+        'id': public_id,
+        'op': 'request_support',
+        'expected_version': expected_version,
+        'support_role': support_role,
+    }
+    cached = _check_idempotency(user, idempotency_key, payload)
+    if cached is not None:
+        return cached
+    help_row, pair = _load_for_write(user, public_id, 'request_support', expected_version)
+    if help_row.status not in {'acknowledged', 'in_progress'}:
+        raise HelpRequestError('invalid_transition', '需要先由家属接手，再提出协助请求。', 409)
+    now = utcnow()
+    from_status = help_row.status
+    help_row.status = 'pending_ack'
+    help_row.requested_support_role = support_role
+    help_row.assignee_user_id = None
+    help_row.version += 1
+    help_row.updated_at = now
+    event = _append_event(
+        help_row,
+        actor_user_id=user.id,
+        actor_role=_help_actor_role(user, pair, help_row),
+        from_status=from_status,
+        to_status='pending_ack',
+        event_type='support_requested',
+        channel=origin_channel,
+        meta={'support_role': support_role},
+    )
+    _project_daily(pair, help_row)
+    enqueue_help_notification(
+        help_row,
+        event,
+        recipient_user_id=pair.caregiver_id,
+        event_type='support_requested',
+        channel='in_app',
+    )
     body = serialize_help(help_row, user=user, pair=pair)
     _store_idempotency(
         _idempotency_scope(user),

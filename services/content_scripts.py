@@ -24,11 +24,41 @@ SCRIPT_VERSIONS = {
         'normal': '{elder_call}，今天天气有变化，出门慢一点，水或外套带上。这是行动提醒，不提供医疗建议。',
     },
     'v3_kin_time': {
-        'heat': '{elder_call}，我是{messenger_self}。今天 {tmax} 度，{window} 这段你就在家歇着，别去地里。空调开 28 度就行，一天电费不到一块钱，别省。我 {callback_time} 再给你打电话。',
+        'heat': '{elder_call}，我是{messenger_self}。今天 {tmax} 度，{window} 这段你就在家歇着，别去地里。空调开 26 到 28 度即可。我 {callback_time} 再给你打电话。',
         'cold': '{elder_call}，我是{messenger_self}。今天最低 {tmin} 度，你就在家歇着，出门把衣裳穿好。我 {callback_time} 再给你打电话。',
         'normal': '{elder_call}，我是{messenger_self}。今天天气有变化，出门慢一点。我 {callback_time} 再给你打电话。',
     },
 }
+
+
+def _published_doctor_templates():
+    """已审核且仍有效的高温短提醒，供自动提醒复用并记录版本。"""
+    try:
+        from flask import has_app_context
+        from services.advice_content_service import active_templates, serialize_advice
+    except ImportError:
+        return []
+    if not has_app_context():
+        return []
+    try:
+        rows = active_templates('heat')
+    except Exception:
+        return []
+    items = []
+    for row in rows:
+        data = serialize_advice(row)
+        if not data.get('currently_valid'):
+            continue
+        items.append({
+            'id': data['id'],
+            'version': data['version'],
+            'scenario': data['scenario'],
+            'body': data['body'],
+            'source': data['source'],
+            'doctor_attributed': data['doctor_attributed'],
+            'attribution_label': data['attribution_label'],
+        })
+    return items
 
 
 def script_catalog():
@@ -38,6 +68,7 @@ def script_catalog():
         'messenger_roles': sorted(MESSENGER_ROLES),
         'channels': sorted(CHANNELS),
         'scenarios': sorted(SCENARIOS),
+        'doctor_templates': _published_doctor_templates(),
     }
     raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
     payload['version_hash'] = hashlib.sha256(raw.encode('utf-8')).hexdigest()[:16]

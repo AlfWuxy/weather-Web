@@ -566,8 +566,7 @@ def user_dashboard(force_elder=False):
         if not is_guest:
             elder_pair = _current_elder_pair()
             if elder_pair:
-                from services.action_events import record_seen, today_state as load_today_state
-                record_seen(elder_pair, 'elder_mode')
+                from services.action_events import today_state as load_today_state
                 today_state = load_today_state(elder_pair, today)
 
         return render_template(
@@ -673,7 +672,7 @@ def handle_elder_mode_event(stage):
                 for key in submitted:
                     event = record_event(pair, 'self_reported', 'elder', 'elder_mode', action_id=key)
             else:
-                event = record_event(pair, 'self_reported', 'elder', 'elder_mode')
+                return jsonify({'error': 'missing_action', 'message': '请先选择完成的一项行动'}), 400
         elif stage == 'action_selected':
             event = record_event(
                 pair,
