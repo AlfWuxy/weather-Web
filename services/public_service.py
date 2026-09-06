@@ -892,11 +892,7 @@ def _handle_action_confirm(token=None, confirm_action=None, debrief_action=None)
         pair, status_date
     )
     # 使用首次展示时保存的风险档，避免提交时天气变化导致合法行动被少计。
-    displayed_actions = (
-        _action_plan(status.risk_level)
-        if status.risk_level
-        else []
-    )
+    displayed_actions = _action_plan(status.risk_level)
     allowed_action_ids = {
         str(action.get('id'))
         for action in displayed_actions

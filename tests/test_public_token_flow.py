@@ -207,7 +207,7 @@ def test_token_route_accepts_valid_token(app, client):
 
     resp = client.post(
         "/e/valid-token-b/checkin",
-        data={"short_code": "88776655", "csrf_token": "token-csrf-b"},
+        data={"short_code": "88776655", "csrf_token": "token-csrf-b", "actions_done": ["water", "hydrate"]},
         follow_redirects=False,
     )
     assert resp.status_code == 200
@@ -257,7 +257,7 @@ def test_pair_action_token_route_accepts_valid_token(app, client):
 
     resp = client.post(
         "/e/valid-action-token/checkin",
-        data={"short_code": "77889900", "csrf_token": "action-token-csrf"},
+        data={"short_code": "77889900", "csrf_token": "action-token-csrf", "actions_done": ["water", "hydrate"]},
         follow_redirects=False,
     )
 
@@ -447,7 +447,7 @@ def test_generated_action_token_survives_short_code_expiry_and_is_reused(app, cl
     # 第二次签发的 token 必须能走 /e/<token>/checkin 正例
     second_resp = client.post(
         f"/e/{second_token}/checkin",
-        data={"short_code": "55667788", "csrf_token": "generated-token-csrf"},
+        data={"short_code": "55667788", "csrf_token": "generated-token-csrf", "actions_done": ["water", "hydrate"]},
         follow_redirects=False,
     )
     assert second_resp.status_code == 200
@@ -463,7 +463,7 @@ def test_generated_action_token_survives_short_code_expiry_and_is_reused(app, cl
 
     first_resp = client.post(
         f"/e/{first_token}/checkin",
-        data={"short_code": "55667788", "csrf_token": "generated-token-csrf-first"},
+        data={"short_code": "55667788", "csrf_token": "generated-token-csrf-first", "actions_done": ["water", "hydrate"]},
         follow_redirects=False,
     )
     assert first_resp.status_code == 200
@@ -734,7 +734,7 @@ def test_session_after_lookup_allows_confirm(app, client):
 
     confirm_resp = client.post(
         "/action/confirm",
-        data={"short_code": short_code, "csrf_token": "session-lookup-csrf"},
+        data={"short_code": short_code, "csrf_token": "session-lookup-csrf", "actions_done": ["water", "hydrate"]},
         follow_redirects=False,
     )
     assert confirm_resp.status_code == 200
