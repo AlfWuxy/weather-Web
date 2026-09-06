@@ -66,3 +66,69 @@ def test_pending_groups_new_help_request_after_close_by_id():
       console.log('ok');
     """
     assert "ok" in _run_node(script)
+
+
+def test_pending_ack_is_open_help_not_closable():
+    script = f"""
+      const vm = require({json.dumps(str(VIEW_MODEL))});
+      const payload = {{
+        pairs: [{{
+          pair_id: 3,
+          elder_label: '妈',
+          today: {{
+            help_requested: true,
+            help_acknowledged: false,
+            closed: false
+          }}
+        }}],
+        help_requests: [
+          {{ id: 'pending', pair_id: 3, status: 'pending_ack' }}
+        ]
+      }};
+      const openHelp = vm.openHelpFromPayload(payload);
+      if (openHelp.length !== 1 || openHelp[0].id !== 'pending') {{
+        throw new Error('pending_ack must be openHelp, got ' + JSON.stringify(openHelp));
+      }}
+      const grouped = vm.groupPairsByTodayFlags(payload.pairs);
+      if (grouped.closable.length !== 0) {{
+        throw new Error('pending_ack pair must not be closable, got ' + JSON.stringify(grouped.closable));
+      }}
+      const ackPayload = {{
+        pairs: [{{
+          pair_id: 4,
+          elder_label: '爸',
+          today: {{
+            help_requested: true,
+            help_acknowledged: true,
+            closed: false
+          }}
+        }}],
+        help_requests: [
+          {{ id: 'acked', pair_id: 4, status: 'acknowledged' }}
+        ]
+      }};
+      const ackGrouped = vm.groupPairsByTodayFlags(ackPayload.pairs);
+      if (ackGrouped.closable.length !== 1) {{
+        throw new Error('acknowledged pair should be closable');
+      }}
+      const progressPayload = {{
+        pairs: [{{
+          pair_id: 5,
+          elder_label: '姐',
+          today: {{
+            help_requested: true,
+            help_acknowledged: true,
+            closed: false
+          }}
+        }}],
+        help_requests: [
+          {{ id: 'progress', pair_id: 5, status: 'in_progress' }}
+        ]
+      }};
+      const progressGrouped = vm.groupPairsByTodayFlags(progressPayload.pairs);
+      if (progressGrouped.closable.length !== 1) {{
+        throw new Error('in_progress pair should be closable');
+      }}
+      console.log('ok');
+    """
+    assert "ok" in _run_node(script)

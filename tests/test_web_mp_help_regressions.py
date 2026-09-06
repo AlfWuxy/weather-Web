@@ -113,7 +113,8 @@ def test_action_lookup_help_form_posts_to_real_route(app, client, db_session):
     """真实渲染后的求助表单不得指向 /None 或空 action。"""
     with app.app_context():
         user = _user("help_form_owner")
-        _pair(user, "71000001", "elder-help-form")
+        pair = _pair(user, "71000001", "elder-help-form")
+        pair_id = pair.id
 
     token = _csrf(client, "help-form-csrf")
     lookup = client.post(
@@ -121,6 +122,8 @@ def test_action_lookup_help_form_posts_to_real_route(app, client, db_session):
         data={"short_code": "71000001", "csrf_token": token},
     )
     assert lookup.status_code == 200
+    with app.app_context():
+        assert ActionEvent.query.filter_by(pair_id=pair_id, stage="seen").count() == 0
     html = lookup.get_data(as_text=True)
     parser = _FormActionParser()
     parser.feed(html)
@@ -174,13 +177,15 @@ def test_pending_new_help_after_same_day_close_is_a_new_open_item(app, client, d
         first, _ = create_help_request(owner, pair, origin_channel="miniprogram", is_proxy=True, commit=True)
         ack_help_request(owner, first["id"], expected_version=first["version"], commit=True)
         latest = HelpRequest.query.filter_by(public_id=first["id"]).one()
-        resolve_help_request(
+        resolved = resolve_help_request(
             owner,
             first["id"],
             expected_version=latest.version,
             resolution_code="reached_elder",
             commit=True,
         )
+        assert resolved["resolution_code"] == "assisted"
+        assert resolved["outcome_success"] is True
         second, created = create_help_request(
             owner,
             pair,

@@ -650,7 +650,22 @@ test('较早天气明确标注并退回通用安全行动', async () => {
   ]);
 });
 
-test('提醒话术遇到较早或不可用天气时退回通用提醒', async () => {
+function assertUnavailableReminder(page, { stale }) {
+  assert.equal(page.data.weather.stale, stale);
+  if (!stale) assert.equal(page.data.weather.available, false);
+  assert.ok(
+    page.data.scenario === 'unavailable' || page.data.trigger === '',
+    `过期或不可用天气必须使用 scenario=unavailable 或空 trigger，实际 scenario=${page.data.scenario} trigger=${page.data.trigger}`,
+  );
+  assert.match(page.data.weatherNotice, /不可用|过期/);
+  assert.match(page.data.message, /不能当作今天情况正常|暂不可用/);
+  assert.doesNotMatch(page.data.message, /【都昌县天气提醒】/);
+  assert.doesNotMatch(page.data.message, /【都昌县高温提醒】/);
+  assert.doesNotMatch(page.data.message, /今天也要照顾好自己/);
+  assert.doesNotMatch(page.data.message, /按平时安排休息和服药/);
+}
+
+test('提醒话术遇到过期或不可用天气时不得生成肯定性今日提醒', async () => {
   authApiImpl = async () => ({
     items: [{ pair_id: 9, member: { name: '奶奶', relation: '祖母' } }],
   });
@@ -664,24 +679,15 @@ test('提醒话术遇到较早或不可用天气时退回通用提醒', async ()
   const stalePage = makePage(definition, { pairId: 9 });
 
   await stalePage.loadTemplate.call(stalePage);
-
-  assert.equal(stalePage.data.weather.stale, true);
-  assert.equal(stalePage.data.trigger, '');
-  assert.match(stalePage.data.weatherNotice, /较早/);
-  assert.match(stalePage.data.message, /【都昌县天气提醒】/);
-  assert.doesNotMatch(stalePage.data.message, /高温提醒/);
+  assertUnavailableReminder(stalePage, { stale: true });
 
   snapshotImpl = async () => ({});
   const unavailablePage = makePage(definition, { pairId: 9 });
   await unavailablePage.loadTemplate.call(unavailablePage);
-
-  assert.equal(unavailablePage.data.weather.available, false);
-  assert.equal(unavailablePage.data.trigger, '');
-  assert.match(unavailablePage.data.weatherNotice, /待更新/);
-  assert.match(unavailablePage.data.message, /【都昌县天气提醒】/);
+  assertUnavailableReminder(unavailablePage, { stale: false });
 });
 
-test('复制提醒事件不上传家庭配对标识', () => {
+test('复制提醒事件必须带 pair_id 与四字段', () => {
   const requests = [];
   authApiImpl = (options) => {
     requests.push(options);
@@ -716,6 +722,7 @@ test('复制提醒事件不上传家庭配对标识', () => {
     path: '/mp/api/v1/events',
     data: {
       event_type: 'template_copy',
+      pair_id: 9,
       meta: {
         script_version: 'v2_gist_why',
         messenger_role: 'child',
@@ -724,7 +731,50 @@ test('复制提醒事件不上传家庭配对标识', () => {
       },
     },
   });
-  assert.equal(Object.hasOwn(request.data, 'pair_id'), false);
+});
+
+test('待处理页 pending_ack 工单不可结案', () => {
+  const { applyPendingFetch } = require('../utils/pendingViewModel');
+
+  const fromPairField = applyPendingFetch({
+    ok: true,
+    payload: {
+      pairs: [{
+        pair_id: 9,
+        elder_label: '妈',
+        today: {
+          help_requested: true,
+          help_acknowledged: true,
+          caregiver_verified: true,
+          closed: false,
+        },
+        help_request: { id: 'h-pending', status: 'pending_ack' },
+      }],
+      help_requests: [{ id: 'h-pending', pair_id: 9, status: 'pending_ack' }],
+    },
+  });
+  assert.equal(fromPairField.closable.some((item) => Number(item.pair_id) === 9), false);
+  assert.ok(fromPairField.openHelp.some((item) => (
+    Number(item.pair_id) === 9 || item.id === 'h-pending'
+  )));
+
+  const fromHelpRequests = applyPendingFetch({
+    ok: true,
+    payload: {
+      pairs: [{
+        pair_id: 11,
+        elder_label: '爸',
+        today: {
+          help_requested: true,
+          help_acknowledged: true,
+          caregiver_verified: true,
+          closed: false,
+        },
+      }],
+      help_requests: [{ id: 'h2', pair_id: 11, status: 'pending_ack' }],
+    },
+  });
+  assert.equal(fromHelpRequests.closable.some((item) => Number(item.pair_id) === 11), false);
 });
 
 test('公共天气页面失败会安全降级、统一退避并提供真实重试入口', async () => {

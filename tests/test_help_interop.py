@@ -60,10 +60,13 @@ def _auth(user_id):
 
 
 def test_action_page_help_form_does_not_post_to_none(app, client, db_session):
+    from core.db_models import ActionEvent
+
     with app.app_context():
         user = _user('form_none_user')
         pair = _pair(user, code='90111111', elder_code='elder-form-none')
         code = pair.short_code
+        pair_id = pair.id
 
     token = _csrf(client)
     response = client.post(
@@ -75,6 +78,8 @@ def test_action_page_help_form_does_not_post_to_none(app, client, db_session):
     assert 'action="None"' not in html
     assert 'action="/None"' not in html
     assert '/action/help' in html
+    with app.app_context():
+        assert ActionEvent.query.filter_by(pair_id=pair_id, stage='seen').count() == 0
 
 
 def test_yesterday_help_stays_open_and_can_be_acked(db_session):
@@ -117,6 +122,8 @@ def test_resolve_then_new_help_gets_new_id(db_session):
         commit=True,
     )
     assert resolved['status'] == 'resolved'
+    assert resolved['resolution_code'] == 'assisted'
+    assert resolved['outcome_success'] is True
     second, created = create_help_request(
         owner,
         pair,
@@ -402,7 +409,7 @@ def test_help_event_labels_are_chinese(db_session):
     detail = get_help_request(owner, created['id'])
     assert detail['events']
     assert detail['events'][0]['type_label'] == '已发起求助'
-    assert detail['status_label'] == '待家属接收'
+    assert detail['status_label'] == '等待接手'
     assert 'pending_ack' not in detail['events'][0]['type_label']
 
 

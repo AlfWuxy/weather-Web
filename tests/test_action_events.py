@@ -169,6 +169,28 @@ def test_sixty_second_idempotency(db_session):
     assert ActionEvent.query.filter_by(pair_id=pair.id, stage='self_reported').count() == 2
 
 
+def test_empty_self_reported_is_invalid_transition(db_session):
+    user = _user('empty_report_user')
+    pair = _pair(user, code='86660001', elder_code='elder-empty-report')
+    now = utcnow()
+    record_event(pair, 'seen', 'system', 'web_shortcode', now=now)
+    before = ActionEvent.query.filter_by(pair_id=pair.id, stage='self_reported').count()
+    for action_id in (None, '', 'undecided'):
+        try:
+            record_event(
+                pair,
+                'self_reported',
+                'elder',
+                'web_shortcode',
+                action_id=action_id,
+                now=now + timedelta(seconds=1),
+            )
+            assert False, f'self_reported action_id={action_id!r} should be illegal'
+        except InvalidTransition as exc:
+            assert exc.to_stage == 'self_reported'
+    assert ActionEvent.query.filter_by(pair_id=pair.id, stage='self_reported').count() == before
+
+
 def test_action_help_http_notifies(app, client, monkeypatch):
     app.config['FEATURE_NOTIFICATIONS'] = True
     with app.app_context():
@@ -192,6 +214,12 @@ def test_action_help_http_notifies(app, client, monkeypatch):
     token = _csrf(client, 'help-http-csrf')
     lookup = client.post('/action', data={'short_code': '85550001', 'csrf_token': token})
     assert lookup.status_code == 200
+    with app.app_context():
+        assert ActionEvent.query.filter_by(pair_id=pair_id, stage='seen').count() == 0
+    get_page = client.get('/action')
+    assert get_page.status_code == 200
+    with app.app_context():
+        assert ActionEvent.query.filter_by(pair_id=pair_id, stage='seen').count() == 0
     response = client.post(
         '/action/help',
         data={'short_code': '85550001', 'csrf_token': token},
@@ -310,6 +338,7 @@ def test_elder_mode_renders_three_buttons_and_accepts_posts(app, client, db_sess
     assert '我做到一项' in body
     assert '做不到，需要帮助' in body
     assert '我很安全' not in body
+    assert ActionEvent.query.filter_by(pair_id=pair.id, stage='seen').count() == 0
 
     understood = client.post(
         '/elder-mode/understood',

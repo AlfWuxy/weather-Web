@@ -17,6 +17,14 @@ def _create_mp_identity(app, db_session, username):
         return user.id, create_api_token(user.id, name="mp-test")
 
 
+_TEMPLATE_COPY_META = {
+    "script_version": "v1",
+    "messenger_role": "child",
+    "channel": "wechat_text",
+    "scenario": "heat",
+}
+
+
 def _create_member_pair(app, db_session, username, *, status="active"):
     from core.db_models import FamilyMember, Pair, User
     from core.security import hash_short_code
@@ -359,7 +367,11 @@ def test_mp_inactive_pair_is_rejected_by_patch_alerts_and_events(
         client.get(f"/mp/api/v1/alerts?pair_id={pair_id}", headers=headers),
         client.post(
             "/mp/api/v1/events",
-            json={"event_type": "template_copy", "pair_id": pair_id},
+            json={
+                "event_type": "template_copy",
+                "pair_id": pair_id,
+                "meta": _TEMPLATE_COPY_META,
+            },
             headers=headers,
         ),
     ]
@@ -396,9 +408,21 @@ def test_mp_events_only_accepts_client_events_and_strict_owned_relations(
         assert internal_event.status_code == 400
         assert internal_event.get_json()["error"] == "invalid_event_type"
 
+    missing_pair_id = client.post(
+        "/mp/api/v1/events",
+        json={"event_type": "template_copy", "meta": _TEMPLATE_COPY_META},
+        headers=headers,
+    )
+    assert missing_pair_id.status_code == 400
+    assert missing_pair_id.get_json()["error"] == "missing_pair_id"
+
     invalid_pair = client.post(
         "/mp/api/v1/events",
-        json={"event_type": "template_copy", "pair_id": "1.5"},
+        json={
+            "event_type": "template_copy",
+            "pair_id": "1.5",
+            "meta": _TEMPLATE_COPY_META,
+        },
         headers=headers,
     )
     assert invalid_pair.status_code == 400
@@ -406,7 +430,11 @@ def test_mp_events_only_accepts_client_events_and_strict_owned_relations(
 
     missing_pair = client.post(
         "/mp/api/v1/events",
-        json={"event_type": "template_copy", "pair_id": 999999},
+        json={
+            "event_type": "template_copy",
+            "pair_id": 999999,
+            "meta": _TEMPLATE_COPY_META,
+        },
         headers=headers,
     )
     assert missing_pair.status_code == 404
@@ -414,7 +442,12 @@ def test_mp_events_only_accepts_client_events_and_strict_owned_relations(
 
     missing_member = client.post(
         "/mp/api/v1/events",
-        json={"event_type": "template_copy", "member_id": 999999},
+        json={
+            "event_type": "template_copy",
+            "pair_id": pair_id,
+            "member_id": 999999,
+            "meta": _TEMPLATE_COPY_META,
+        },
         headers=headers,
     )
     assert missing_member.status_code == 404
@@ -442,6 +475,7 @@ def test_mp_events_only_accepts_client_events_and_strict_owned_relations(
             "event_type": "template_copy",
             "pair_id": pair_id,
             "member_id": other_member_id,
+            "meta": _TEMPLATE_COPY_META,
         },
         headers=headers,
     )
@@ -454,6 +488,7 @@ def test_mp_events_only_accepts_client_events_and_strict_owned_relations(
             "event_type": "template_copy",
             "pair_id": pair_id,
             "member_id": member_id,
+            "meta": _TEMPLATE_COPY_META,
         },
         headers=headers,
     )
@@ -509,7 +544,8 @@ def test_mp_elders_does_not_create_trigger_from_mock_weather(app, client, db_ses
 
     assert response.status_code == 200
     today = response.get_json()['data'][0]['today']
-    assert today['trigger'] is None
+    assert today['trigger'] not in {'heat', 'cold'}
+    assert today['trigger'] == 'unavailable'
     assert today['weather_available'] is False
     assert today['temperature_max'] is None
     assert today['temperature_min'] is None

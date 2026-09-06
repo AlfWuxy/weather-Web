@@ -294,6 +294,22 @@ def test_template_copy_requires_four_meta_fields(app, client, db_session):
         member_id = member.id
         before = UsageEvent.query.count()
 
+    no_pair = client.post(
+        "/mp/api/v1/events",
+        json={
+            "event_type": "template_copy",
+            "meta": {
+                "script_version": "v1",
+                "messenger_role": "child",
+                "channel": "wechat_text",
+                "scenario": "heat",
+            },
+        },
+        headers=headers,
+    )
+    assert no_pair.status_code == 400
+    assert no_pair.get_json()["error"] == "missing_pair_id"
+
     missing = client.post(
         "/mp/api/v1/events",
         json={
