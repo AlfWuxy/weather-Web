@@ -43,7 +43,7 @@ pending_ack 等待接手
 
 请求协助：`acknowledged` / `in_progress` → 再入 `pending_ack`，`assignee_user_id=null`，`requested_support_role` ∈ {doctor, volunteer}。
 
-结案必须带结果码。**只有 `assisted`（已协助处理）算成功。** 其余（`transferred_confirmed` / `withdrawn` / `unreachable` / `declined` / `false_alarm` / `other`）结束工单但不记成功。别名 `reached_elder`、`action_done` 归一到 `assisted`。
+结案必须带结果码。**只有 `assisted`（已协助处理）算成功。** 其余（`transferred_confirmed` / `withdrawn` / `unreachable` / `declined` / `false_alarm` / `other`）结束工单但不记成功。别名 `reached_elder`、`action_done` 归一到 `assisted`。结案人限于当前 `assignee` 或家属主联系人；管理员和未接手的志愿者不能把工单写成已协助。
 
 **`pending_ack` 不能结案。** 能看见工单的人（家属、被请求的医生）调用 `/resolve` 得到 **409** `invalid_transition`，文案是「需要先接手，才能记录处理结果」。陌生人仍是 **404**，避免用结案接口探测工单是否存在。取消（误触、重复、老人已无事等）是另一条终态，不是成功。无人接手时保持等待，跨天仍出现在未结列表。
 

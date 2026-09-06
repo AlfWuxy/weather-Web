@@ -687,6 +687,62 @@ test('提醒话术遇到过期或不可用天气时不得生成肯定性今日�
   assertUnavailableReminder(unavailablePage, { stale: false });
 });
 
+test('可用但非高温天气不得复制高温建议', async () => {
+  authApiImpl = async (options) => {
+    if (options && options.path === '/mp/api/v1/scripts') {
+      return {
+        default: 'v2_gist_why',
+        versions: {
+          v2_gist_why: { heat: '【都昌县高温提醒】请避开中午外出，少量多次喝水。' },
+        },
+      };
+    }
+    return { items: [{ pair_id: 9, member: { name: '奶奶', relation: '祖母' } }] };
+  };
+  snapshotImpl = async () => ({
+    data: {
+      current: { temperature: 28, temperature_max: 28, temperature_min: 22 },
+    },
+    meta: { source: 'live', stale: false },
+  });
+  const definition = loadPage('../pages/template/index');
+  const page = makePage(definition, { pairId: 9 });
+  await page.loadTemplate.call(page);
+  assert.equal(page.data.canCopyAdvice, false);
+  assert.notEqual(page.data.scenario, 'heat');
+  assert.match(page.data.weatherNotice, /没有高温触发/);
+  assert.doesNotMatch(page.data.message, /【都昌县高温提醒】/);
+  assert.doesNotMatch(page.data.message, /避开中午外出/);
+  assert.doesNotMatch(page.data.message, /今天也要照顾好自己/);
+});
+
+test('高温触发时仍可复制高温建议', async () => {
+  authApiImpl = async (options) => {
+    if (options && options.path === '/mp/api/v1/scripts') {
+      return {
+        default: 'v2_gist_why',
+        versions: {
+          v2_gist_why: { heat: '【都昌县高温提醒】请避开中午外出，少量多次喝水。' },
+        },
+      };
+    }
+    return { items: [{ pair_id: 9, member: { name: '奶奶', relation: '祖母' } }] };
+  };
+  snapshotImpl = async () => ({
+    data: {
+      current: { temperature: 38, temperature_max: 38, temperature_min: 28 },
+    },
+    meta: { source: 'live', stale: false },
+  });
+  const definition = loadPage('../pages/template/index');
+  const page = makePage(definition, { pairId: 9 });
+  await page.loadTemplate.call(page);
+  assert.equal(page.data.canCopyAdvice, true);
+  assert.equal(page.data.scenario, 'heat');
+  assert.equal(page.data.trigger, 'heat');
+  assert.match(page.data.message, /【都昌县高温提醒】/);
+});
+
 test('复制提醒事件必须带 pair_id 与四字段', () => {
   const requests = [];
   authApiImpl = (options) => {

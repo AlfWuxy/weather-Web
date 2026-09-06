@@ -7,6 +7,7 @@ from core.extensions import db
 from core.time_utils import utcnow
 from core.usage import create_api_token
 from services.care_enrollment import enroll_weather_care, find_recent_duplicate_member
+from services.family_access import consume_invite, create_invite
 from services.help_request_service import (
     HelpRequestError,
     RESOLUTION_DEFINITIONS,
@@ -500,3 +501,92 @@ def test_web_resolve_without_resolution_code_is_400(app, client, db_session):
     assert missing.status_code == 400
     row = HelpRequest.query.filter_by(public_id=created['id']).one()
     assert row.status == 'acknowledged'
+
+
+def test_admin_and_volunteer_cannot_resolve_family_acked_ticket(app, client, db_session):
+    caregiver = _user('heat_acl_resolve_owner')
+    volunteer = _user('heat_acl_resolve_vol')
+    admin = _user('heat_acl_resolve_admin', role='admin')
+    _member, pair, _created = _enroll(caregiver, '姨妈', '姨妈', '都昌')
+    csrf = _login(client, caregiver)
+    invite, code = create_invite(caregiver, pair, 'volunteer')
+    db.session.commit()
+    consume_invite(volunteer, code)
+    db.session.commit()
+
+    created = _data(client.post(
+        '/api/v1/help-requests',
+        json={'pair_id': pair.id, 'category': 'cannot_complete'},
+        headers=_api_headers(csrf),
+    ))
+    acked = _data(client.post(
+        f'/api/v1/help-requests/{created["id"]}/ack',
+        json={'expected_version': created['version']},
+        headers=_api_headers(csrf),
+    ))
+    assert acked['status'] == 'acknowledged'
+    assert acked['assignee_user_id'] == caregiver.id
+
+    for actor in (volunteer, admin):
+        actor_csrf = _login(client, actor)
+        closed = client.post(
+            f'/api/v1/help-requests/{created["id"]}/resolve',
+            json={'expected_version': acked['version'], 'resolution_code': 'assisted'},
+            headers=_api_headers(actor_csrf),
+        )
+        assert closed.status_code == 404, actor.username
+    assert HelpRequest.query.filter_by(public_id=created['id']).one().status == 'acknowledged'
+
+
+def test_doctor_with_own_family_does_not_see_foreign_nondoctor_history(app, client, db_session):
+    doctor = _user('heat_doc_own_family', role='doctor')
+    other = _user('heat_doc_other_family')
+    _own_member, own_pair, _ = _enroll(doctor, '自己的母亲', '母亲', '都昌')
+    _other_member, other_pair, _ = _enroll(other, '周溪伯', '父亲', '周溪')
+
+    other_csrf = _login(client, other)
+    first = _data(client.post(
+        '/api/v1/help-requests',
+        json={'pair_id': other_pair.id, 'category': 'cannot_complete'},
+        headers=_api_headers(other_csrf),
+    ))
+    first_acked = _data(client.post(
+        f'/api/v1/help-requests/{first["id"]}/ack',
+        json={'expected_version': first['version']},
+        headers=_api_headers(other_csrf),
+    ))
+    first_resolved = client.post(
+        f'/api/v1/help-requests/{first["id"]}/resolve',
+        json={'expected_version': first_acked['version'], 'resolution_code': 'assisted'},
+        headers=_api_headers(other_csrf),
+    )
+    assert first_resolved.status_code == 200
+
+    second = _data(client.post(
+        '/api/v1/help-requests',
+        json={'pair_id': other_pair.id, 'category': 'need_checkin'},
+        headers=_api_headers(other_csrf),
+    ))
+    second_acked = _data(client.post(
+        f'/api/v1/help-requests/{second["id"]}/ack',
+        json={'expected_version': second['version']},
+        headers=_api_headers(other_csrf),
+    ))
+    support = _data(client.post(
+        f'/api/v1/help-requests/{second["id"]}/request-support',
+        json={'expected_version': second_acked['version'], 'support_role': 'doctor'},
+        headers=_api_headers(other_csrf),
+    ))
+
+    doctor_csrf = _login(client, doctor)
+    own_help = _data(client.post(
+        '/api/v1/help-requests',
+        json={'pair_id': own_pair.id, 'category': 'other'},
+        headers=_api_headers(doctor_csrf),
+    ))
+    listed = client.get('/api/v1/help-requests?status=all')
+    assert listed.status_code == 200
+    ids = [item['id'] for item in _data(listed).get('items') or []]
+    assert support['id'] in ids
+    assert own_help['id'] in ids
+    assert first['id'] not in ids

@@ -27,7 +27,7 @@ Page({
     weatherNotice: '',
     scriptVersion: '',
     scriptHash: '',
-    scenario: 'heat',
+    scenario: '',
     messengerRole: 'child',
     channel: 'wechat_text',
     loading: false,
@@ -112,22 +112,25 @@ Page({
       const weather = normalizeSnapshot(snapshot);
       const weatherUnavailable = weather.stale || !weather.available;
       const locationLabel = item.location_query || member.location_query || '';
+      const heatTriggered = !weatherUnavailable && weather.trigger === 'heat';
       const weatherNotice = weather.stale
         ? '天气数据已过期，不能当作今天情况正常，也不会自动生成日常防护建议。'
-        : (!weather.available ? '天气数据暂不可用，不能当作今天情况正常，也不会自动生成日常防护建议。' : '');
-      const scenario = weatherUnavailable
-        ? 'unavailable'
-        : (weather.trigger === 'heat' || weather.trigger === 'cold' ? weather.trigger : 'heat');
-      const trigger = weatherUnavailable ? '' : scenario;
+        : (!weather.available
+          ? '天气数据暂不可用，不能当作今天情况正常，也不会自动生成日常防护建议。'
+          : (heatTriggered ? '' : '当前没有高温触发，不会生成高温防护建议。天气可用也不等于今天需要按高温行动。'));
+      const scenario = weatherUnavailable ? 'unavailable' : (heatTriggered ? 'heat' : '');
+      const trigger = heatTriggered ? 'heat' : '';
       const catalog = scripts || {};
       const version = catalog.default || 'v2_gist_why';
       const versions = catalog.versions || {};
       let message = '';
       if (weatherUnavailable) {
         message = '天气数据暂不可用或已过期，不能显示为正常，也不能生成今天的肯定防护建议。请改用电话或当面提醒家人注意防暑，并以医生已审核内容为准。';
+      } else if (!heatTriggered) {
+        message = '今天没有适用的高温提醒，不能复制高温防护建议。请先确认老人所在地是否发布高温预警或达到高温阈值。';
       } else {
-        const template = (versions[version] && versions[version][scenario])
-          || (versions.v2_gist_why && versions.v2_gist_why[scenario])
+        const template = (versions[version] && versions[version].heat)
+          || (versions.v2_gist_why && versions.v2_gist_why.heat)
           || '';
         const placeholders = {
           elder_call: member.name || member.relation || '家里',
@@ -143,7 +146,7 @@ Page({
         });
         if (!message || !String(message).trim()) {
           message = buildReminderMessage({
-            trigger: scenario,
+            trigger: 'heat',
             elderName: member.name,
             relation: member.relation,
             tmax: weather.temperatureMax,
@@ -165,7 +168,7 @@ Page({
         messengerRole: 'child',
         channel: 'wechat_text',
         contextReady: true,
-        canCopyAdvice: !weatherUnavailable,
+        canCopyAdvice: heatTriggered,
         loadError: '',
       });
     } catch (error) {
@@ -206,7 +209,7 @@ Page({
               script_version: this.data.scriptVersion || 'v2_gist_why',
               messenger_role: this.data.messengerRole || 'child',
               channel: this.data.channel || 'wechat_text',
-              scenario: this.data.scenario || 'heat',
+              scenario: this.data.scenario || '',
             },
           },
         }).catch(() => {
@@ -223,8 +226,8 @@ Page({
 
   goCheckin() {
     if (this._unloaded) return;
-    if (!this.data.contextReady || !this.data.message || !this.data.pairId) {
-      wx.showToast({ title: '请先生成提醒话术', icon: 'none' });
+    if (!this.data.contextReady || !this.data.message || !this.data.pairId || !this.data.canCopyAdvice) {
+      wx.showToast({ title: this.data.canCopyAdvice ? '请先生成提醒话术' : '当前没有可记录的高温建议', icon: 'none' });
       return;
     }
     wx.redirectTo({ url: `/pages/action-checkin/index?pair_id=${this.data.pairId}` });

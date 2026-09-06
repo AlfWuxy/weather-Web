@@ -27,7 +27,9 @@
 
 `CAN_VIEW_HEALTH` 仅 owner / caregiver / elder_proxy。`doctor_support`、`volunteer` 排除在外；`community_limited` 默认没有健康档案权限。
 
-`User.role=doctor` 不是家庭成员角色：只看见 `requested_support_role=doctor` 的工单。管理员不能冒充医生发布（`publish_advice` 拒绝非医生）。
+`User.role=doctor` 不是家庭成员角色：只看见 `requested_support_role=doctor` 的工单；若医生自己也有家庭对象，其家庭工单与医生工单分开，不把其他家庭的非医生历史工单并进列表。管理员不能冒充医生发布（`publish_advice` 拒绝非医生），也不能代家属把工单结成 `assisted`。
+
+结案：当前 `assignee` 或家属主联系人（owner / caregiver）。志愿者须先被请求并接手。
 
 ## HelpRequest 状态
 

@@ -7,6 +7,7 @@ import json
 import secrets
 from datetime import timedelta
 
+from sqlalchemy import or_
 from sqlalchemy.exc import IntegrityError
 
 from core.db_models import (
@@ -409,7 +410,7 @@ def _can_resolve(user, pair, help_row):
         return True
     if pair.caregiver_id == getattr(user, 'id', None):
         return True
-    return can_access_pair(user, pair, 'resolve')
+    return membership_role_for(user, pair) in FAMILY_PRIMARY_ROLES
 
 
 def create_help_request(
@@ -583,19 +584,26 @@ def get_help_request(user, public_id):
 
 def list_help_requests(user, *, status='open', cursor=None, limit=20, requested_support_role=None):
     limit = max(1, min(int(limit or 20), 50))
-    pair_ids = visible_pair_ids_for_user(user.id)
+    own_pair_ids = set(visible_pair_ids_for_user(user.id) or [])
+    support_pair_ids = set()
     if getattr(user, 'role', None) == 'doctor':
-        doctor_ids = [
+        support_pair_ids = {
             row[0]
             for row in db.session.query(HelpRequest.pair_id).filter(
                 HelpRequest.requested_support_role == 'doctor',
                 HelpRequest.status.in_(OPEN_STATUSES),
             ).distinct().all()
-        ]
-        pair_ids = set(pair_ids) | set(doctor_ids)
+        }
+    pair_ids = own_pair_ids | support_pair_ids
     query = HelpRequest.query.filter(HelpRequest.pair_id.in_(pair_ids or [-1]))
-    if getattr(user, 'role', None) == 'doctor' and not visible_pair_ids_for_user(user.id):
-        query = query.filter(HelpRequest.requested_support_role == 'doctor')
+    if getattr(user, 'role', None) == 'doctor':
+        if own_pair_ids:
+            query = query.filter(or_(
+                HelpRequest.pair_id.in_(own_pair_ids),
+                HelpRequest.requested_support_role == 'doctor',
+            ))
+        else:
+            query = query.filter(HelpRequest.requested_support_role == 'doctor')
     if requested_support_role:
         query = query.filter(HelpRequest.requested_support_role == requested_support_role)
     if status == 'open':
@@ -629,9 +637,19 @@ def list_help_requests(user, *, status='open', cursor=None, limit=20, requested_
     if requested_support_role:
         count_query = count_query.filter(HelpRequest.requested_support_role == requested_support_role)
         pending_query = pending_query.filter(HelpRequest.requested_support_role == requested_support_role)
-    elif getattr(user, 'role', None) == 'doctor' and not visible_pair_ids_for_user(user.id):
-        count_query = count_query.filter(HelpRequest.requested_support_role == 'doctor')
-        pending_query = pending_query.filter(HelpRequest.requested_support_role == 'doctor')
+    elif getattr(user, 'role', None) == 'doctor':
+        if own_pair_ids:
+            count_query = count_query.filter(or_(
+                HelpRequest.pair_id.in_(own_pair_ids),
+                HelpRequest.requested_support_role == 'doctor',
+            ))
+            pending_query = pending_query.filter(or_(
+                HelpRequest.pair_id.in_(own_pair_ids),
+                HelpRequest.requested_support_role == 'doctor',
+            ))
+        else:
+            count_query = count_query.filter(HelpRequest.requested_support_role == 'doctor')
+            pending_query = pending_query.filter(HelpRequest.requested_support_role == 'doctor')
     return {
         'schema_version': SCHEMA_VERSION,
         'items': items,
