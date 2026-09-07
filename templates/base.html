@@ -83,7 +83,7 @@
 
     <noscript><style>[data-motion] .yl-fade-up,[data-motion] .yl-section,[data-motion] .narrative-step,[data-motion] [data-animate-in]{opacity:1 !important;transform:none !important;}</style></noscript>
     {% block extra_css %}{% endblock %}
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/apple-polish.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/apple-polish.css', v='5927afd3418d') }}">
 </head>
 <body class="{% block body_class %}{% endblock %}" data-viewport-tier="wide" data-motion="m1 m2 m4 m5">
     <script>window.__syncViewportTier();</script>
@@ -514,7 +514,16 @@
             let closeTimer = null;
             let pinnedOpen = false;
 
+            function fitPanel() {
+                if (!panel) return;
+                const navbar = menuRoot.closest('.navbar');
+                const anchor = navbar || menuRoot;
+                const room = window.innerHeight - anchor.getBoundingClientRect().bottom - 24;
+                panel.style.setProperty('--app-menu-room', Math.max(0, room) + 'px');
+            }
+
             function setOpen(nextOpen) {
+                if (nextOpen) fitPanel();
                 menuRoot.classList.toggle('is-open', nextOpen);
                 if (trigger) {
                     trigger.setAttribute('aria-expanded', nextOpen ? 'true' : 'false');
@@ -547,6 +556,37 @@
             menuRoot.addEventListener('mouseleave', function() {
                 if (!pinnedOpen) {
                     scheduleClose();
+                }
+            });
+
+            // 明确移到菜单外的焦点才收起；Safari 点击链接时可能暂时没有目标焦点。
+            menuRoot.addEventListener('focusout', function(event) {
+                if (event.relatedTarget && !menuRoot.contains(event.relatedTarget)) {
+                    clearCloseTimer();
+                    pinnedOpen = false;
+                    setOpen(false);
+                }
+            });
+
+            // 部分浏览器 Tab 会先回到页面本身；等默认焦点移动结束再检查。
+            menuRoot.addEventListener('keydown', function(event) {
+                if (event.key !== 'Tab') return;
+                window.setTimeout(function() {
+                    if (!menuRoot.contains(document.activeElement)) {
+                        clearCloseTimer();
+                        pinnedOpen = false;
+                        setOpen(false);
+                    }
+                }, 0);
+            });
+
+            window.addEventListener('resize', function() {
+                if (window.matchMedia('(max-width: 991.98px)').matches) {
+                    clearCloseTimer();
+                    pinnedOpen = false;
+                    setOpen(false);
+                } else if (menuRoot.classList.contains('is-open')) {
+                    fitPanel();
                 }
             });
 
@@ -607,7 +647,7 @@
     {% if config.get('FEATURE_WEB_AI') and config.get('SILICONFLOW_API_KEY') %}
     <script src="{{ url_for('static', filename='js/ai-floating-chat.js') }}"></script>
     {% endif %}
-    <script src="{{ url_for('static', filename='js/yilao-motion.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/yilao-motion.js', v='917824d7f58a') }}"></script>
     {% if request.endpoint != 'public.index' %}
     <script src="{{ url_for('static', filename='js/yilao-data-fx.js') }}"></script>
     <script src="{{ url_for('static', filename='js/yilao-data-fx-extra.js') }}"></script>

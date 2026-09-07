@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 """Regression tests for the offcanvas navigation + local vendor assets."""
 import re
+import hashlib
+from pathlib import Path
 import pytest
 
 
@@ -52,6 +54,24 @@ def test_nav_offcanvas_present(client):
     assert 'data-bs-toggle="offcanvas"' in body
     assert 'id="appNavDrawer"' in body
     assert '/static/vendor/bootstrap/bootstrap.bundle.min.js' in body
+
+
+def test_shared_ui_urls_match_content_version(client):
+    """长缓存的旧浏览器必须通过新 URL 获取本轮样式和交互脚本。"""
+    root = Path(__file__).resolve().parents[1]
+    for page in ('/', '/login', '/risk'):
+        body = _read_response_text(client, page)
+        for asset in ('css/apple-polish.css', 'js/yilao-motion.js'):
+            expected = (root / 'static' / asset).read_bytes()
+            version = hashlib.sha256(expected).hexdigest()[:12]
+            url = f'/static/{asset}?v={version}'
+            assert url in body
+            response = client.get(url)
+            try:
+                assert response.status_code == 200
+                assert response.get_data() == expected
+            finally:
+                response.close()
 
 
 def test_home_loads_core_motion_and_skips_optional_data_fx(client):

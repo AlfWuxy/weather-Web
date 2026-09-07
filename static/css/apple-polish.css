@@ -435,6 +435,249 @@ body.motion-ready[data-motion~="m1"] .yl-feature-icon {
 }
 
 /* 减少动态效果时，滚动和所有视觉过渡立即完成。 */
+/* 首页的文字、照片共用内容边界，避免图片的固有宽度挤出首屏。 */
+.home-page .yl-home-shell {
+    max-width: 1280px;
+    padding: clamp(24px, 3.8vw, 48px) clamp(16px, 3.8vw, 48px) 64px;
+}
+
+.home-page .yl-lifestyle-hero {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.08fr);
+    gap: clamp(32px, 4vw, 56px);
+    min-height: 0;
+    padding-block: clamp(20px, 3.4vw, 44px);
+}
+
+.home-page .yl-lifestyle-copy h1 {
+    max-width: 9em;
+    margin-bottom: 24px;
+    color: #1d1d1f;
+    font-size: clamp(2.75rem, 4.9vw, 4.5rem);
+    font-weight: 650;
+    line-height: 1.16;
+    letter-spacing: -.025em;
+    text-wrap: balance;
+}
+
+.home-page .yl-lifestyle-copy .hero-lead {
+    max-width: 30em;
+    color: #515154;
+    font-size: clamp(1rem, 1.25vw, 1.125rem);
+    line-height: 1.85;
+    text-wrap: pretty;
+}
+
+.home-page .hero-actions .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 48px;
+    padding: 12px 22px;
+    border-radius: 999px;
+}
+
+.home-page .yl-home-proof {
+    gap: 20px;
+    margin-top: 36px;
+    padding-top: 20px;
+}
+
+.home-page .yl-lifestyle-media,
+.home-page .yl-story-image {
+    min-width: 0;
+    min-height: 0;
+    border-radius: 28px;
+    box-shadow: 0 12px 32px rgba(25, 34, 42, .07);
+}
+
+.home-page .yl-lifestyle-media {
+    aspect-ratio: 1.12;
+}
+
+.home-page :is(.yl-lifestyle-media, .yl-story-image) picture {
+    display: block;
+    width: 100%;
+    height: 100%;
+}
+
+.home-page :is(.yl-lifestyle-media, .yl-story-image) img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.home-page .yl-home-section-head {
+    max-width: 780px;
+    margin-top: clamp(64px, 7vw, 96px);
+    margin-bottom: 36px;
+    scroll-margin-top: 96px;
+}
+
+.home-page .yl-home-section-head h2 {
+    color: #1d1d1f;
+    font-size: clamp(1.8rem, 3vw, 2.75rem);
+    line-height: 1.25;
+    letter-spacing: -.02em;
+    text-wrap: balance;
+}
+
+.home-page .yl-home-story {
+    gap: clamp(32px, 4.5vw, 64px);
+}
+
+.home-page .yl-story-row {
+    grid-template-columns: minmax(0, .85fr) minmax(0, 1fr);
+    gap: clamp(32px, 5vw, 64px);
+}
+
+.home-page .yl-story-row.is-reversed {
+    grid-template-columns: minmax(0, 1fr) minmax(0, .85fr);
+}
+
+.home-page .yl-story-copy h3 {
+    font-size: clamp(1.6rem, 2.6vw, 2.5rem);
+    line-height: 1.25;
+}
+
+.home-page .yl-role-card {
+    padding: 28px;
+    border-radius: 24px;
+    background: #f5f5f7;
+    border-color: transparent;
+}
+
+.home-page .yl-role-card p {
+    color: #515154;
+}
+
+/* 导航保留稳定高度；仅颜色与阴影过渡，不动画布局属性。 */
+.navbar .nav-link,
+.navbar .app-more-trigger {
+    transition: background-color .18s ease, color .18s ease;
+}
+
+/* 更多面板相对整条导航居中，避免以右侧按钮为中心时越出屏幕。 */
+@media (min-width: 992px) {
+    .navbar .app-desktop-nav,
+    .navbar .app-more-menu {
+        position: static;
+    }
+
+    .navbar .app-mega-menu {
+        top: calc(100% + 8px);
+        width: min(880px, calc(100vw - 48px));
+        padding: 24px;
+        /* 短屏和放大页面时，菜单末尾仍可在面板内滚动到达。 */
+        max-height: var(--app-menu-room, calc(100vh - 112px));
+        overflow-y: auto;
+        overscroll-behavior: contain;
+    }
+
+    .navbar .app-mega-grid {
+        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    }
+}
+
+.navbar .navbar-toggler {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 44px;
+    min-height: 44px;
+}
+
+#appNavDrawer {
+    max-width: calc(100vw - 16px);
+    border-radius: 24px 0 0 24px;
+    background: #fff;
+}
+
+#appNavDrawer .offcanvas-body {
+    overscroll-behavior: contain;
+    padding-bottom: max(24px, env(safe-area-inset-bottom));
+}
+
+/* 入场由 in-view 统一控制，旧关键帧不在系统动效偏好切换后重放。 */
+body.motion-ready[data-motion~="m1"] .yl-fade-up {
+    animation: none;
+}
+
+/* Tab 到任何区块时立即显现，焦点不会落在透明内容上。 */
+body.motion-ready[data-motion] :is(.yl-fade-up, .yl-section, .narrative-step, [data-animate-in]):focus-within {
+    opacity: 1;
+    transform: none;
+    transition: none;
+}
+
+/* 触屏无需悬停抬升，静态内容和整张入口卡都保持稳定。 */
+@media (hover: none) {
+    body.motion-ready[data-motion] :is(.yl-feature, .yl-role-card, .day):hover {
+        transform: none;
+        box-shadow: none;
+    }
+}
+
+@media (max-width: 980px) {
+    .home-page .yl-lifestyle-hero,
+    .home-page .yl-story-row,
+    .home-page .yl-story-row.is-reversed {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .home-page .yl-lifestyle-copy h1 {
+        max-width: 12em;
+    }
+
+    .home-page .yl-lifestyle-media {
+        aspect-ratio: 3 / 2;
+    }
+
+    .home-page .yl-home-proof {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+}
+
+@media (max-width: 680px) {
+    .home-page .yl-home-shell {
+        padding: 16px 12px 40px;
+    }
+
+    .home-page .yl-lifestyle-hero {
+        padding-block: 20px 0;
+        gap: 28px;
+    }
+
+    .home-page .yl-lifestyle-copy h1 {
+        max-width: 10em;
+        font-size: clamp(2rem, 9vw, 2.75rem);
+        line-height: 1.2;
+        margin-bottom: 20px;
+    }
+
+    .home-page .yl-home-proof {
+        gap: 12px;
+        margin-top: 28px;
+    }
+
+    .home-page .yl-home-proof strong {
+        font-size: .95rem;
+    }
+
+    .home-page .yl-home-proof span {
+        font-size: .875rem;
+    }
+
+    .home-page .yl-lifestyle-media,
+    .home-page .yl-story-image {
+        border-radius: 20px;
+    }
+
+    .home-page .yl-story-row {
+        gap: 20px;
+    }
+}
+
+/* 系统偏好在页面打开后切换，也不留下隐藏区块或位移动画。 */
 @media (prefers-reduced-motion: reduce) {
     html,
     html:focus-within {
@@ -445,9 +688,19 @@ body.motion-ready[data-motion~="m1"] .yl-feature-icon {
     *::before,
     *::after {
         animation-duration: .01ms !important;
+        animation-delay: 0ms !important;
         animation-iteration-count: 1 !important;
         scroll-behavior: auto !important;
         transition-delay: 0ms !important;
         transition-duration: .01ms !important;
+    }
+
+    body.motion-ready[data-motion] :is(.yl-fade-up, .yl-section, .narrative-step, [data-animate-in]) {
+        opacity: 1 !important;
+        transform: none !important;
+    }
+
+    body.motion-ready[data-motion] :is(.btn, button, .yl-role-card, .yl-feature, .day):is(:active, :hover) {
+        transform: none !important;
     }
 }

@@ -184,13 +184,73 @@ jobs:
       - name: 运行 Web 地图真实行为测试
         run: node --test tests/*.test.js tests/js/*.test.mjs
 
+  responsive-ui:
+    name: 手机平板桌面浏览器回归
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: 配置 Python 3.12
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: requirements.lock
+
+      - name: 配置 Node.js 20
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: '20'
+
+      - name: 安装固定版本的测试依赖
+        run: |
+          python -m pip install --index-url https://pypi.org/simple --require-hashes --only-binary=:all: -r requirements.lock
+          npm install --prefix "$RUNNER_TEMP/ui-playwright" --no-save --ignore-scripts playwright@1.62.1
+          node "$RUNNER_TEMP/ui-playwright/node_modules/playwright/cli.js" install --with-deps chromium webkit firefox
+
+      - name: 验证真实页面与多端导航
+        shell: bash
+        run: |
+          python scripts/ui_smoke_server.py --port 8770 > "$RUNNER_TEMP/ui-fixture.log" 2>&1 &
+          fixture_pid=$!
+          trap 'kill "$fixture_pid" 2>/dev/null || true' EXIT
+          python - <<'PY'
+          import time
+          import urllib.request
+          for attempt in range(60):
+              try:
+                  with urllib.request.urlopen('http://127.0.0.1:8770/healthz', timeout=1) as response:
+                      assert response.status == 200
+                  break
+              except Exception:
+                  time.sleep(1)
+          else:
+              raise SystemExit('隔离 UI 服务未就绪')
+          PY
+          export PLAYWRIGHT_MODULE="$RUNNER_TEMP/ui-playwright/node_modules/playwright"
+          export UI_QA_OUTPUT_DIR="$RUNNER_TEMP/ui-browser-results"
+          node scripts/check_responsive_ui.cjs
+
+      - name: 保留跨端检查结果与截图
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: responsive-ui-evidence
+          path: |
+            ${{ runner.temp }}/ui-browser-results
+            ${{ runner.temp }}/ui-fixture.log
+          retention-days: 14
+
   release-proof:
     name: 可发布提交证明
     needs:
       - test
       - activation
       - web-js
-    if: ${{ github.event_name == 'push' && needs.test.result == 'success' && needs.activation.result == 'success' && needs.web-js.result == 'success' }}
+      - responsive-ui
+    if: ${{ github.event_name == 'push' && needs.test.result == 'success' && needs.activation.result == 'success' && needs.web-js.result == 'success' && needs.responsive-ui.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 2
 
