@@ -23,6 +23,7 @@ const ROBOTS_BODY = `User-agent: *
 Content-Signal: ${CONTENT_SIGNAL}
 Allow: /
 Allow: /llms.txt
+Disallow: /cdn-cgi/l/email-protection
 Disallow: /admin
 Disallow: /api/
 Disallow: /mp/api/

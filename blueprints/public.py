@@ -97,6 +97,7 @@ ROBOTS_TXT = """User-agent: *
 Content-Signal: ai-train=no, search=yes, ai-input=yes
 Allow: /
 Allow: /llms.txt
+Disallow: /cdn-cgi/l/email-protection
 Disallow: /admin
 Disallow: /api/
 Disallow: /mp/api/

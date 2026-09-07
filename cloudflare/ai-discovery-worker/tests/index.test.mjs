@@ -24,6 +24,58 @@ async function originStub(incoming) {
   });
 }
 
+function literalRobotsAllows(body, url) {
+  const fields = body.split("\n").filter((line) => line.includes(":"))
+    .map((line) => {
+      const colon = line.indexOf(":");
+      return [line.slice(0, colon).toLowerCase(), line.slice(colon + 1).trim()];
+    });
+  assert.deepEqual(
+    fields.filter(([name]) => name === "user-agent").map(([, value]) => value),
+    ["*"],
+  );
+  const target = new URL(url);
+  const path = target.pathname + target.search;
+  let longest = -1;
+  let allowed = true;
+  for (const [name, prefix] of fields) {
+    if (!["allow", "disallow"].includes(name) || !prefix) continue;
+    // 仅核对当前单组字面路径规则；新增通配符或分组时须扩展验证。
+    assert.ok(!prefix.includes("*") && !prefix.includes("$"));
+    if (!path.startsWith(prefix) || prefix.length < longest) continue;
+    // 最长匹配优先；同长时 Allow 优先，URL 片段不参与 HTTP 抓取。
+    allowed = prefix.length === longest
+      ? allowed || name === "allow"
+      : name === "allow";
+    longest = prefix.length;
+  }
+  return allowed;
+}
+
+test("根域与 www 阻止邮箱伪页且保留公开页、图片与 Cloudflare 脚本抓取", async () => {
+  const allowedPaths = PUBLIC_URLS.map((url) => new URL(url).pathname).concat([
+    "/cdn-cgi/image/width=640,format=auto/static/brand/yilao-avatar.png",
+    "/cdn-cgi/scripts/5c5dd728/cloudflare-static/email-decode.min.js",
+    "/cdn-cgi/challenge-platform/scripts/jsd/main.js",
+    "/static/brand/yilao-avatar.png",
+  ]);
+  for (const host of ["yilaoweather.org", "www.yilaoweather.org"]) {
+    const response = await handleRequest(
+      new Request(`https://${host}/robots.txt`), originStub,
+    );
+    assert.equal(response.status, 200);
+    const body = await response.text();
+    for (const suffix of ["", "#test", "?source=link#test"]) {
+      const url = `https://${host}/cdn-cgi/l/email-protection${suffix}`;
+      assert.equal(literalRobotsAllows(body, url), false, url);
+    }
+    for (const path of allowedPaths) {
+      const url = `https://${host}${path}`;
+      assert.equal(literalRobotsAllows(body, url), true, url);
+    }
+  }
+});
+
 test("robots 允许公开抓取并保留私密路径与内容用途边界", async () => {
   const response = await handleRequest(
     request("/robots.txt?source=agent"),

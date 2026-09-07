@@ -4,6 +4,7 @@
 import json
 import re
 import xml.etree.ElementTree as ET
+from urllib.parse import urlsplit
 
 
 INDEXABLE_PATHS = {
@@ -14,6 +15,45 @@ INDEXABLE_PATHS = {
     "https://yilaoweather.org/transparency",
     "https://yilaoweather.org/about/trust-network",
 }
+
+
+def _literal_robots_allows(body, url):
+    """核对当前单组字面路径规则：最长匹配优先，同长时 Allow 优先。"""
+    fields = [line.split(":", 1) for line in body.splitlines() if ":" in line]
+    fields = [(name.lower(), value.strip()) for name, value in fields]
+    assert [value for name, value in fields if name == "user-agent"] == ["*"]
+    rules = [
+        (value, name == "allow") for name, value in fields
+        if name in {"allow", "disallow"} and value
+    ]
+    # 本辅助函数不模拟通配符或多组爬虫规则，策略变化时必须扩展验证。
+    assert all("*" not in path and "$" not in path for path, _ in rules)
+    target = urlsplit(url)
+    path = target.path + (f"?{target.query}" if target.query else "")
+    matches = [
+        (len(prefix), allowed) for prefix, allowed in rules
+        if path.startswith(prefix)
+    ]
+    return max(matches, default=(0, True))[1]
+
+
+def test_robots_blocks_email_pseudo_page_without_blocking_public_resources(client):
+    allowed_paths = [urlsplit(url).path for url in INDEXABLE_PATHS] + [
+        "/cdn-cgi/image/width=640,format=auto/static/brand/yilao-avatar.png",
+        "/cdn-cgi/scripts/5c5dd728/cloudflare-static/email-decode.min.js",
+        "/cdn-cgi/challenge-platform/scripts/jsd/main.js",
+        "/static/brand/yilao-avatar.png",
+    ]
+    for host in ("yilaoweather.org", "www.yilaoweather.org"):
+        response = client.get("/robots.txt", base_url=f"https://{host}")
+        assert response.status_code == 200
+        body = response.get_data(as_text=True)
+        for suffix in ("", "#test", "?source=link#test"):
+            url = f"https://{host}/cdn-cgi/l/email-protection{suffix}"
+            assert not _literal_robots_allows(body, url), url
+        for path in allowed_paths:
+            url = f"https://{host}{path}"
+            assert _literal_robots_allows(body, url), url
 
 
 def _meta_content(body, name):
