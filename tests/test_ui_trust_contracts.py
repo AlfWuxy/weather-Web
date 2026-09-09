@@ -159,7 +159,7 @@ def test_pair_push_notice_follows_capability_state(
 
     unavailable_body = authenticated_client.get('/pairs').get_data(as_text=True)
     assert '自动微信提醒尚未开放' in unavailable_body
-    assert '当前仍可复制提醒话术并手动发送' in unavailable_body
+    assert '当前仍可复制行动说明并手动发送' in unavailable_body
 
     app.config['WXPUSHER_APP_TOKEN'] = 'configured-channel-token'
     setup_body = authenticated_client.get('/pairs').get_data(as_text=True)

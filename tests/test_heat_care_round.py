@@ -631,8 +631,8 @@ def test_web_pair_copy_is_heat_only(app, client, db_session, monkeypatch):
     response = client.get('/pairs')
     assert response.status_code == 200
     body = response.get_data(as_text=True)
-    assert '复制行动链接说明' in body
-    assert '复制提醒话术' not in body
+    assert '<i class="bi bi-clipboard"></i> 复制行动链接说明' in body
+    assert '<i class="bi bi-clipboard"></i> 复制提醒话术' not in body
     assert '未触发高温' in body
     assert '日常提醒' not in body
     assert '今天就记一件事' not in body
