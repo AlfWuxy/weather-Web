@@ -22,9 +22,9 @@
     {% set dashboard_family_url = url_for('public.role_entry') %}
     {% set dashboard_family_cta = '查看入口说明' %}
 {% else %}
-    {% set dashboard_care_url = url_for('user.pair_management') %}
+    {% set dashboard_care_url = url_for('health.family_members') %}
     {% set dashboard_care_title = '家庭照护' %}
-    {% set dashboard_care_detail = '添加照护对象并跟进行动' %}
+    {% set dashboard_care_detail = '管理家人档案并加入天气照护' %}
     {% set dashboard_care_icon = 'people' %}
     {% set dashboard_family_url = url_for('health.family_members') %}
     {% set dashboard_family_cta = '去补充' %}
@@ -70,7 +70,7 @@
                     {% elif not dashboard_heat_action_ready and dashboard_weather_available %}
                         当前天气可查看，风险数据还不完整。
                     {% elif not dashboard_weather_available %}
-                        天气正在更新，先按日常防护安排。
+                        天气正在更新，暂不生成防护建议。
                     {% else %}
                         今天风险较低，保持日常照护。
                     {% endif %}
@@ -82,7 +82,7 @@
                     {% elif dashboard_weather_available %}
                         当前天气为 {{ weather.weather_condition if weather.weather_condition else '未知' }}，但计算今日热风险所需的数据还不完整，暂不显示风险等级。
                     {% else %}
-                        天气正在更新，风险等级暂不显示。你仍可查看通用防护，并按所在地查询已录入的避暑资源。
+                        天气正在更新，风险等级暂不显示。可查询已录入的避暑资源，但不把现在当成天气正常。
                     {% endif %}
                 </p>
                 {% if dashboard_weather_available and weather_source_label %}
@@ -231,12 +231,20 @@
                 <a class="btn btn-sm btn-outline-primary" href="{{ url_for('public.action_check') }}">打卡 <i class="bi bi-arrow-right"></i></a>
             </div>
             <div class="yl-action-list mt-3">
-                {% if not dashboard_heat_action_ready %}
+                {% if not dashboard_weather_available %}
                     <div class="yl-action">
                         <i class="bi bi-cloud-slash"></i>
                         <div>
-                            <strong>先做好日常防护</strong>
-                            <div class="detail">今日风险数据还不完整。可先补水、留意体感，需要降温时查询已录入的避暑资源。</div>
+                            <strong>天气暂不可判断</strong>
+                            <div class="detail">现在不能按平常来安排，也不生成日常防护建议。天气恢复后再看今日要做的事。</div>
+                        </div>
+                    </div>
+                {% elif not dashboard_heat_action_ready %}
+                    <div class="yl-action">
+                        <i class="bi bi-cloud-slash"></i>
+                        <div>
+                            <strong>风险数据还不完整</strong>
+                            <div class="detail">今日风险所需字段不足，暂不判断该做哪一件。可先查询已录入的避暑资源。</div>
                         </div>
                     </div>
                 {% elif heat_actions %}
@@ -449,7 +457,7 @@
                     <div class="member-avatar" style="width:40px; height:40px; font-size:1rem;">{{ m.name[:1] }}</div>
                     <div class="flex-grow-1 min-w-0">
                         <div class="fw-semibold text-truncate">{{ m.name }}</div>
-                        <div class="text-muted" style="font-size:.8rem;">{{ m.age }}岁 · 当前查询地：{{ m.location or current_location or '未设置' }}</div>
+                        <div class="text-muted" style="font-size:.8rem;">{{ m.age }}岁 · {{ m.relation or '家人' }}</div>
                     </div>
                     <span class="risk-badge risk-{{ m.risk_level or 'low' }} badge">{{ dashboard_attention_label }}</span>
                 </a>

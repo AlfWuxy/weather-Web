@@ -133,7 +133,7 @@ def test_registration_creates_logged_in_caregiver_and_clears_guest_state(client,
     )
 
     assert response.status_code == 302
-    assert response.headers['Location'].endswith('/pairs')
+    assert response.headers['Location'].endswith('/family-members')
     user = User.query.filter_by(username='new_caregiver').one()
     assert user.role == 'caregiver'
     assert user.last_login is not None
@@ -152,8 +152,8 @@ def test_registration_creates_logged_in_caregiver_and_clears_guest_state(client,
 @pytest.mark.parametrize(
     ('role', 'expected_path'),
     [
-        ('user', '/pairs'),
-        ('caregiver', '/pairs'),
+        ('user', '/family-members'),
+        ('caregiver', '/family-members'),
         ('community', '/community'),
         ('admin', '/admin'),
     ],

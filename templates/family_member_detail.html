@@ -79,8 +79,15 @@
                     <div class="text-muted small">{{ completion.percent }}% · 已完善 {{ completion.filled }}/{{ completion.total }}</div>
                     <div class="mt-3">
                         <h6 class="mb-2">今日阈值状态</h6>
-                        {% if not weather_available %}
+                        {% if not profile.weather_care_enabled %}
+                            <span class="badge bg-light text-dark border">未加入天气照护</span>
+                            <div class="text-muted small mt-2">未勾选加入天气照护时，不按天气阈值提醒，也不会用家属当前位置代替老人所在地。</div>
+                        {% elif weather_location_scope == 'missing_elder_location' %}
+                            <span class="badge bg-warning-subtle text-warning-emphasis border">待填写老人所在地</span>
+                            <div class="text-muted small mt-2">已加入天气照护，但还没有老人所在地，暂不判断阈值。</div>
+                        {% elif not weather_available %}
                             <span class="badge bg-warning-subtle text-warning-emphasis border">天气更新中</span>
+                            <div class="text-muted small mt-2">老人所在地：{{ weather_location or '未填写' }}。该地点天气暂不可判断，不显示为正常，也不生成日常防护建议。</div>
                         {% elif alerts %}
                             <span class="badge bg-danger">达到：{{ alerts|join('、') }}</span>
                         {% elif heat_action_weather_ready and air_quality_available %}
@@ -95,7 +102,7 @@
                         {% if weather_available and weather %}
                             {% set current_humidity = weather.humidity if weather.humidity is defined and weather.humidity is not none else none %}
                             <div class="text-muted small mt-2">
-                                当前查询地：{{ weather_location or '未设置' }} · 来源：{{ weather_source_label or '未标明' }} · 天气 {{ weather.temperature|round(1) }}°C / 湿度 {{ (current_humidity|round(0)) ~ '%' if current_humidity is not none else '--' }} / AQI {{ weather.aqi if air_quality_available else '--' }}
+                                老人所在地：{{ weather_location or '未填写' }} · 来源：{{ weather_source_label or '未标明' }} · 天气 {{ weather.temperature|round(1) }}°C / 湿度 {{ (current_humidity|round(0)) ~ '%' if current_humidity is not none else '--' }} / AQI {{ weather.aqi if air_quality_available else '--' }}
                             </div>
                             {% if not air_quality_available %}
                                 <div class="text-muted small mt-1">AQI 暂不可判断：需要新鲜、非估算且同时含 PM2.5 的和风实况。</div>
@@ -103,8 +110,6 @@
                             {% if not heat_action_weather_ready %}
                                 <div class="text-muted small mt-1">温湿度阈值暂不可判断：基础温热字段不完整。</div>
                             {% endif %}
-                        {% else %}
-                            <div class="text-muted small mt-2">风险提醒将在天气更新后显示。现在可先查看档案和日常防护建议。</div>
                         {% endif %}
                     </div>
                 </div>

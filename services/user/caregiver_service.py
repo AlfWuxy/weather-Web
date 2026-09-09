@@ -97,6 +97,19 @@ def _build_weather_waiting_message(pair, action_link):
     return '\n'.join(lines)
 
 
+def _build_non_heat_action_message(pair, action_link):
+    """天气可用但未触发高温时，只给行动入口，不生成日常防护建议。"""
+    location = (pair.location_query or pair.community_code or '').strip()
+    lines = [
+        '【未触发高温】',
+        '当前没有高温行动阈值，不会生成高温防护建议。这条说明只含行动入口。',
+    ]
+    if location:
+        lines.append(f'地点：{location}')
+    lines.append(f'（可选）行动页：{action_link}  短码：{pair.short_code}')
+    return '\n'.join(lines)
+
+
 def _load_heat_risk(location):
     """读取真实天气并计算热风险；任一步失败都返回不可用状态。"""
     weather_data, _ = get_weather_with_cache(location)
@@ -318,17 +331,19 @@ def _build_pair_management_context(caregiver_mode=False):
             relay_stage_label = RELAY_STAGE_LABELS.get(relay_stage, relay_stage)
         member = member_map.get(pair.member_id) if getattr(pair, 'member_id', None) else None
         action_link = _build_pair_action_link(pair)
-        reminder_message = (
-            _build_caregiver_message(
+        copy_heat_script = bool(weather_share_available and alert_kind == 'heat')
+        if copy_heat_script:
+            reminder_message = _build_caregiver_message(
                 pair,
                 alert_kind=alert_kind,
                 weather_data=weather_data,
                 member=member,
                 action_link=action_link
             )
-            if weather_share_available
-            else _build_weather_waiting_message(pair, action_link)
-        )
+        elif weather_share_available:
+            reminder_message = _build_non_heat_action_message(pair, action_link)
+        else:
+            reminder_message = _build_weather_waiting_message(pair, action_link)
         pair_cards.append({
             'pair': pair,
             'status': status,
@@ -336,6 +351,7 @@ def _build_pair_management_context(caregiver_mode=False):
             'heat_result': heat_result,
             'weather_available': weather_available,
             'weather_share_available': weather_share_available,
+            'copy_heat_script': copy_heat_script,
             'weather_source_label': weather_source_label(weather_data) if weather_available else '',
             'alert_kind': alert_kind,
             'alert_label': alert_label,

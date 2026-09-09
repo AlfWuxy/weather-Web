@@ -102,11 +102,12 @@
         {% set nav_care_label = '社区工作台' %}
         {% set nav_care_primary_active = nav_endpoint in ['user.community_dashboard', 'user.community_detail', 'user.community_wechat', 'user.community_announce'] %}
     {% else %}
-        {% set nav_care_url = url_for('user.pair_management') %}
+        {% set nav_care_url = url_for('health.family_members') %}
         {% set nav_care_label = '家庭照护' %}
-        {% set nav_care_primary_active = nav_endpoint.startswith('user.pair_') or nav_endpoint == 'user.caregiver_pair_detail' %}
+        {% set nav_care_primary_active = nav_family_active %}
     {% endif %}
-    {% set nav_care_active = nav_care_primary_active or nav_family_active %}
+    {% set nav_pairs_active = nav_endpoint.startswith('user.pair_') or nav_endpoint == 'user.caregiver_pair_detail' %}
+    {% set nav_care_active = nav_care_primary_active or nav_pairs_active %}
 
     <a class="visually-hidden-focusable skip-link" href="#main-content">跳到主要内容</a>
 
@@ -313,7 +314,7 @@
             <nav class="nav flex-column mb-3" aria-label="照护">
                     <a class="nav-link {% if nav_care_primary_active %}active{% endif %}" href="{{ nav_care_url }}" data-nav-key="care" {% if nav_care_primary_active %}aria-current="page"{% endif %}><i class="bi bi-people me-2"></i>{{ nav_care_label }}</a>
                     {% if not nav_is_guest and current_user.role != 'community' %}
-                        <a class="nav-link {% if nav_family_active %}active{% endif %}" href="{{ url_for('health.family_members') }}" data-nav-key="family" {% if nav_family_active %}aria-current="page"{% endif %}><i class="bi bi-person-vcard me-2"></i>家人档案</a>
+                        <a class="nav-link {% if nav_pairs_active %}active{% endif %}" href="{{ url_for('user.pair_management') }}" data-nav-key="pairs" {% if nav_pairs_active %}aria-current="page"{% endif %}><i class="bi bi-qr-code me-2"></i>提醒与短码</a>
                     {% endif %}
             </nav>
             {% endif %}

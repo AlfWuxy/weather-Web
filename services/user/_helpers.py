@@ -159,7 +159,12 @@ def _build_caregiver_message(pair, alert_kind=None, weather_data=None, member=No
     if not action_link:
         action_link = url_for('public.elder_entry', short_code=pair.short_code, _external=True)
 
-    scenario = 'heat' if alert_kind == 'heat' else ('cold' if alert_kind == 'cold' else 'normal')
+    scenario = 'heat' if alert_kind == 'heat' else None
+    if scenario != 'heat':
+        return (
+            '当前没有高温行动阈值，不会生成高温或日常防护建议。'
+            f'\n行动说明：{action_link}'
+        )
     text = render_script(
         DEFAULT_SCRIPT_VERSION,
         scenario,

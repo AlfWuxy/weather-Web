@@ -366,6 +366,8 @@ def test_dashboard_current_risk_does_not_use_mock_weather(client, db_session, mo
     body = response.get_data(as_text=True)
     assert '天气正在更新，风险等级暂不显示' in body
     assert '天气更新中' in body
+    assert '先按日常防护安排' not in body
+    assert '先做好日常防护' not in body
     assert '36.5' not in body
     assert '高风险' not in body
     assert WeatherData.query.filter_by(date=today_local(), location='都昌').count() == 0
@@ -433,6 +435,7 @@ def test_dashboard_missing_critical_qweather_fields_stays_unavailable_and_does_n
     assert '风险数据还不完整' in elder_body
     assert '当前天气可以查看' in elder_body
     assert '可以按平常来' not in elder_body
+    assert '先做好日常防护' not in elder_body
 
 
 def test_cooling_page_uses_real_weather_for_thermometer(client, db_session, monkeypatch):

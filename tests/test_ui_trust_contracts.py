@@ -199,6 +199,7 @@ def test_ui_copy_avoids_unverified_claims_and_old_brand_titles():
         'templates/pair_management.html',
         'templates/family_members.html',
         'templates/family_member_detail.html',
+        'templates/family_member_edit.html',
         'templates/cooling.html',
         'templates/wxoa_landing.html',
         'templates/about_trust_network.html',
@@ -246,8 +247,10 @@ def test_ui_copy_avoids_unverified_claims_and_old_brand_titles():
     assert 'ui_version' not in history
 
     pair_template = (PROJECT_ROOT / 'templates/pair_management.html').read_text(encoding='utf-8')
-    assert '天气统一使用都昌县观测' in pair_template
-    assert '只用于县内照护备注' in pair_template
+    assert '都昌县研究点' in pair_template
+    assert '不能用家属当前位置代替' in pair_template
+    assert '天气统一使用都昌县观测' not in pair_template
+    assert '只用于县内照护备注' not in pair_template
 
 
 def test_mobile_and_today_shortcuts_keep_core_routes_without_disease_claim(
@@ -256,7 +259,8 @@ def test_mobile_and_today_shortcuts_keep_core_routes_without_disease_claim(
     body = authenticated_client.get('/dashboard').get_data(as_text=True)
     drawer = body.split('id="appNavDrawer"', 1)[1]
 
-    assert 'href="/pairs" data-nav-key="care"' in body
+    assert 'href="/family-members" data-nav-key="care"' in body
+    assert 'href="/pairs" data-nav-key="pairs"' in drawer
     assert 'href="/forecast-7day" data-nav-key="forecast"' in drawer
     assert 'href="/community-risk" data-nav-key="community-risk"' in drawer
     assert '<h5>7 天预报</h5>' in body

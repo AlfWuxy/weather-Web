@@ -40,9 +40,9 @@
                     当前 {{ weather.temperature|round(0) if weather.temperature is not none else '--' }}°C,
                     {{ heat_risk_label or '风险待计算' }}。
                 {% elif elder_weather_available %}
-                    当前天气可以查看，计算今日热风险所需的数据还不完整。先补水、通风并留意体感。
+                    当前天气可以查看，计算今日热风险所需的数据还不完整，暂不判断今天要做哪一件。
                 {% else %}
-                    先补水、通风并避免暴晒，不舒服时及时联系家人。
+                    天气更新中，暂不按平常来，也不生成防护建议。不舒服时及时联系家人。
                 {% endif %}
             </p>
             {% if elder_weather_available and weather_source_label %}
@@ -73,12 +73,20 @@
         </div>
 
         <div class="yl-elder-action-list">
-            {% if not elder_heat_action_ready %}
+            {% if not elder_weather_available %}
                 <div class="yl-elder-action">
                     <i class="bi bi-cloud-slash"></i>
                     <div>
-                        <strong>先做好日常防护</strong>
-                        <p>补水、通风并避免暴晒，不舒服时及时联系家人。</p>
+                        <strong>天气还没准备好</strong>
+                        <p>现在不能按平常来。天气恢复后再看今天要做的事；不舒服时及时联系家人。</p>
+                    </div>
+                </div>
+            {% elif not elder_heat_action_ready %}
+                <div class="yl-elder-action">
+                    <i class="bi bi-cloud-slash"></i>
+                    <div>
+                        <strong>风险数据还不完整</strong>
+                        <p>还不能判断今天要先做哪一件。不舒服时及时联系家人。</p>
                     </div>
                 </div>
             {% elif action_items %}

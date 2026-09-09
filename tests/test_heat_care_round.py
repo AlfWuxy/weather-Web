@@ -590,3 +590,49 @@ def test_doctor_with_own_family_does_not_see_foreign_nondoctor_history(app, clie
     assert support['id'] in ids
     assert own_help['id'] in ids
     assert first['id'] not in ids
+
+
+def test_web_pair_copy_is_heat_only(app, client, db_session, monkeypatch):
+    from core.time_utils import utcnow
+    from services.user import caregiver_service
+
+    caregiver = _user('heat_copy_only')
+    _enroll(caregiver, '伯母', '伯母', '都昌')
+    _login(client, caregiver)
+    observed = utcnow().isoformat()
+    cool_weather = {
+        'temperature': 26.0,
+        'temperature_max': 28.0,
+        'temperature_min': 22.0,
+        'humidity': 60.0,
+        'pressure': 1008.0,
+        'weather_condition': '多云',
+        'wind_speed': 2.0,
+        'aqi': 40,
+        'pm25': 18,
+        'air_quality_available': True,
+        'data_source': 'QWeather',
+        'observed_at': observed,
+        'air_observed_at': observed,
+        'quality_version': 1,
+        'is_mock': False,
+    }
+    monkeypatch.setattr(
+        caregiver_service,
+        'resolve_location',
+        lambda _label: {'location_code': '101240201', 'display_name': '都昌', 'provider': 'map'},
+    )
+    monkeypatch.setattr(
+        caregiver_service,
+        'get_weather_with_cache',
+        lambda _location: (cool_weather, False),
+    )
+
+    response = client.get('/pairs')
+    assert response.status_code == 200
+    body = response.get_data(as_text=True)
+    assert '复制行动链接说明' in body
+    assert '复制提醒话术' not in body
+    assert '未触发高温' in body
+    assert '日常提醒' not in body
+    assert '今天就记一件事' not in body

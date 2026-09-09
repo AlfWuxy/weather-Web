@@ -109,8 +109,8 @@ def _role_landing_endpoint(role):
     return {
         'admin': 'admin.admin_dashboard',
         'community': 'user.community_dashboard',
-        'caregiver': 'user.pair_management',
-        'user': 'user.pair_management',
+        'caregiver': 'health.family_members',
+        'user': 'health.family_members',
     }.get(role, 'user.user_dashboard')
 
 
@@ -1256,7 +1256,7 @@ def render_role_entry():
     is_real_user = is_authenticated and not is_guest
     role = getattr(current_user, 'role', None) if is_authenticated else None
     # Pilot定位：老人不一定会用网页；主要入口是子女端（照护工作台）
-    default_caregiver_next = url_for('user.pair_management')
+    default_caregiver_next = url_for('health.family_members')
     caregiver_next = default_caregiver_next
     community_next = url_for('user.community_dashboard')
 
@@ -1266,11 +1266,11 @@ def render_role_entry():
         caregiver_requires_login = False
     elif is_real_user:
         caregiver_target = caregiver_next
-        caregiver_action_label = '进入照护工作台'
+        caregiver_action_label = '进入家人档案'
         caregiver_requires_login = False
     else:
         caregiver_target = url_for('public.login', next=default_caregiver_next)
-        caregiver_action_label = '进入照护工作台'
+        caregiver_action_label = '登录后进入家人档案'
         caregiver_requires_login = True
 
     if is_real_user:
@@ -1497,8 +1497,8 @@ def handle_register():
         # 用户落库成功后再切换会话，避免失败时丢失当前游客体验。
         _clear_identity_session_state()
         login_user(user)
-        flash('注册成功，已进入照护工作台', 'success')
-        return redirect(url_for('user.pair_management'))
+        flash('注册成功，已进入家人档案', 'success')
+        return redirect(url_for('health.family_members'))
 
     return _render_register()
 

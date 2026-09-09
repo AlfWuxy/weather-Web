@@ -109,10 +109,10 @@ def test_mobile_navigation_keeps_community_risk_available(client, db_session, ro
 @pytest.mark.parametrize(
     ('role', 'family_target', 'community_target', 'community_label'),
     [
-        ('user', '/pairs', '/community-risk', '查看社区风险'),
-        ('caregiver', '/pairs', '/community-risk', '查看社区风险'),
+        ('user', '/family-members', '/community-risk', '查看社区风险'),
+        ('caregiver', '/family-members', '/community-risk', '查看社区风险'),
         ('community', '/entry', '/community', '进入社区工作台'),
-        ('admin', '/pairs', '/community', '进入社区工作台'),
+        ('admin', '/family-members', '/community', '进入社区工作台'),
     ],
 )
 def test_home_role_cards_match_role_destinations(
@@ -200,10 +200,10 @@ def test_anonymous_role_entry_community_card_uses_accessible_risk_destination(cl
 @pytest.mark.parametrize(
     ('role', 'destination'),
     [
-        ('user', '/pairs'),
-        ('caregiver', '/pairs'),
+        ('user', '/family-members'),
+        ('caregiver', '/family-members'),
         ('community', '/community'),
-        ('admin', '/pairs'),
+        ('admin', '/family-members'),
     ],
 )
 def test_care_destination_is_role_aware(client, db_session, role, destination):
@@ -237,9 +237,9 @@ def test_role_entry_uses_authorized_community_destination(
 @pytest.mark.parametrize(
     ('role', 'expected_target'),
     [
-        ('user', '/pairs'),
-        ('caregiver', '/pairs'),
-        ('admin', '/pairs'),
+        ('user', '/family-members'),
+        ('caregiver', '/family-members'),
+        ('admin', '/family-members'),
     ],
 )
 def test_role_entry_uses_role_aware_care_destination(client, db_session, role, expected_target):
@@ -254,6 +254,7 @@ def test_role_entry_blocks_community_account_from_family_care(client, db_session
 
     assert '家庭照护需使用家庭账号登录' in body
     assert 'data-entry-key="care" aria-disabled="true"' in body
+    assert 'data-entry-key="care" href="/family-members"' not in body
     assert 'data-entry-key="care" href="/pairs"' not in body
 
 
@@ -264,6 +265,7 @@ def test_community_account_family_explainers_point_to_entry(client, db_session):
         body = client.get(path).get_data(as_text=True)
         assert 'href="/entry"' in body
         assert 'href="/pairs"' not in body
+        assert 'href="/family-members"' not in body
 
 
 def test_guest_role_entry_offers_registration_instead_of_restricted_care(client):

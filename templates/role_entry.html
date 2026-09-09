@@ -48,7 +48,7 @@
                     {% if current_user.is_authenticated and current_user.role == 'community' %}
                         <div class="text-muted small mb-2">当前是社区账号。家庭照护需使用家庭账号登录。</div>
                     {% elif caregiver_requires_login %}
-                        <div class="text-muted small mb-2">需登录后进入照护工作台。</div>
+                        <div class="text-muted small mb-2">需登录后进入家人档案。</div>
                     {% endif %}
                     {% if current_user.is_authenticated and current_user.role == 'community' %}
                     <span class="btn btn-secondary disabled w-100" data-entry-key="care" aria-disabled="true">

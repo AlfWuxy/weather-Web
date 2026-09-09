@@ -21,7 +21,6 @@ from core.health_profiles import (
 from core.time_utils import today_local
 from core.usage import log_usage_event
 from core.weather import (
-    ensure_user_location_valid,
     get_weather_with_cache,
     is_air_quality_available,
     is_heat_action_weather_ready,
@@ -59,6 +58,46 @@ def _member_alerts_for_capabilities(profile, weather, heat_ready, air_ready):
         if (reason.startswith('AQI') and air_ready)
         or (not reason.startswith('AQI') and heat_ready)
     ]
+
+
+def _empty_member_threshold_weather(*, location_scope='not_enrolled'):
+    return {
+        'location': '',
+        'location_scope': location_scope,
+        'weather': None,
+        'weather_available': False,
+        'heat_action_weather_ready': False,
+        'air_quality_available': False,
+        'weather_source_label': '',
+    }
+
+
+def _member_threshold_weather(profile, weather_cache=None):
+    """只按已入组且手填的老人所在地判断阈值，不用家属当前位置顶替。"""
+    if not profile or not getattr(profile, 'weather_care_enabled', False):
+        return _empty_member_threshold_weather(location_scope='not_enrolled')
+    query = (getattr(profile, 'location_query', None) or '').strip()
+    if not query:
+        return _empty_member_threshold_weather(location_scope='missing_elder_location')
+    cache = weather_cache if weather_cache is not None else {}
+    if query not in cache:
+        try:
+            weather_data, _ = get_weather_with_cache(query)
+        except Exception:
+            logger.warning("家人档案天气读取失败，location=%s", query[:80], exc_info=True)
+            weather_data = {}
+        cache[query] = weather_data or {}
+    weather_data = cache[query]
+    weather_available = is_live_observational_weather(weather_data)
+    return {
+        'location': query,
+        'location_scope': 'elder_location',
+        'weather': SimpleNamespace(**weather_data) if weather_available else None,
+        'weather_available': weather_available,
+        'heat_action_weather_ready': is_heat_action_weather_ready(weather_data),
+        'air_quality_available': is_air_quality_available(weather_data),
+        'weather_source_label': weather_source_label(weather_data) if weather_available else '',
+    }
 
 
 def _empty_family_member():
@@ -185,19 +224,18 @@ def family_members():
         if reminder.member_id and reminder.member_id not in last_reminder_map:
             last_reminder_map[reminder.member_id] = reminder
 
-    user_location = ensure_user_location_valid()
-    weather_data, _ = get_weather_with_cache(user_location)
-    weather_available = is_live_observational_weather(weather_data)
-    heat_action_weather_ready = is_heat_action_weather_ready(weather_data)
-    air_quality_available = is_air_quality_available(weather_data)
-    current_weather_source = weather_source_label(weather_data)
-    weather = SimpleNamespace(**weather_data) if weather_available else None
-
+    weather_cache = {}
     member_cards = []
     risk_counts = {'low': 0, 'medium': 0, 'high': 0}
     completion_values = []
     chronic_count = 0
     alert_trigger_count = 0
+    weather_care_enrolled_count = 0
+    enrolled_weather_pending = False
+    any_enrolled_weather = False
+    any_heat_ready = False
+    any_air_ready = False
+    current_weather_source = ''
 
     for member in members:
         profile = profile_map.get(member.id)
@@ -211,13 +249,30 @@ def family_members():
         completion = compute_profile_completion(member, profile)
         completion_values.append(completion['percent'])
 
+        threshold_weather = _member_threshold_weather(profile, weather_cache)
+        if profile_ctx.get('weather_care_enabled'):
+            weather_care_enrolled_count += 1
+            if threshold_weather['location_scope'] == 'elder_location':
+                if threshold_weather['weather_available']:
+                    any_enrolled_weather = True
+                    if threshold_weather['weather_source_label']:
+                        current_weather_source = threshold_weather['weather_source_label']
+                    if threshold_weather['heat_action_weather_ready']:
+                        any_heat_ready = True
+                    if threshold_weather['air_quality_available']:
+                        any_air_ready = True
+                else:
+                    enrolled_weather_pending = True
+            else:
+                enrolled_weather_pending = True
+
         alerts = []
-        if profile_ctx['alert_enabled']:
+        if profile_ctx['alert_enabled'] and threshold_weather['location_scope'] == 'elder_location':
             alerts = _member_alerts_for_capabilities(
                 profile,
-                weather,
-                heat_action_weather_ready,
-                air_quality_available,
+                threshold_weather['weather'],
+                threshold_weather['heat_action_weather_ready'],
+                threshold_weather['air_quality_available'],
             )
         if alerts:
             alert_trigger_count += 1
@@ -230,8 +285,10 @@ def family_members():
             'gender': member.gender,
             'chronic_diseases': diseases,
             'chronic': diseases,
-            'location': user_location,
-            'location_scope': 'current_query',
+            'location': threshold_weather['location'],
+            'location_scope': threshold_weather['location_scope'],
+            'weather_care_enabled': bool(profile_ctx.get('weather_care_enabled')),
+            'weather_available': threshold_weather['weather_available'],
             'risk': risk,
             'risk_level': risk['level'],
             'risk_label': risk['label'],
@@ -275,11 +332,13 @@ def family_members():
         avg_completion=avg_completion,
         relation_counts=relation_counts,
         alert_trigger_count=alert_trigger_count,
-        today_weather=weather,
-        weather_available=weather_available,
-        heat_action_weather_ready=heat_action_weather_ready,
-        air_quality_available=air_quality_available,
+        today_weather=None,
+        weather_available=any_enrolled_weather,
+        heat_action_weather_ready=any_heat_ready,
+        air_quality_available=any_air_ready,
         weather_source_label=current_weather_source,
+        weather_care_enrolled_count=weather_care_enrolled_count,
+        enrolled_weather_pending=enrolled_weather_pending,
         search_query=search_query,
         risk_filter=risk_filter,
         risk_chart_labels=risk_chart_labels,
@@ -463,20 +522,14 @@ def family_member_detail(member_id):
     reminders = MedicationReminder.query.filter_by(user_id=current_user.id, member_id=member.id).order_by(
         MedicationReminder.created_at.desc()
     ).all()
-    user_location = ensure_user_location_valid()
-    weather_data, _ = get_weather_with_cache(user_location)
-    weather_available = is_live_observational_weather(weather_data)
-    heat_action_weather_ready = is_heat_action_weather_ready(weather_data)
-    air_quality_available = is_air_quality_available(weather_data)
-    current_weather_source = weather_source_label(weather_data)
-    weather = SimpleNamespace(**weather_data) if weather_available else None
+    threshold_weather = _member_threshold_weather(profile)
     alerts = []
-    if profile_ctx['alert_enabled']:
+    if profile_ctx['alert_enabled'] and threshold_weather['location_scope'] == 'elder_location':
         alerts = _member_alerts_for_capabilities(
             profile,
-            weather,
-            heat_action_weather_ready,
-            air_quality_available,
+            threshold_weather['weather'],
+            threshold_weather['heat_action_weather_ready'],
+            threshold_weather['air_quality_available'],
         )
 
     return render_template(
@@ -488,13 +541,13 @@ def family_member_detail(member_id):
         completion=completion,
         diary_entries=entries,
         reminders=reminders,
-        weather=weather,
-        weather_available=weather_available,
-        heat_action_weather_ready=heat_action_weather_ready,
-        air_quality_available=air_quality_available,
-        weather_source_label=current_weather_source,
-        weather_location=user_location,
-        weather_location_scope='current_query',
+        weather=threshold_weather['weather'],
+        weather_available=threshold_weather['weather_available'],
+        heat_action_weather_ready=threshold_weather['heat_action_weather_ready'],
+        air_quality_available=threshold_weather['air_quality_available'],
+        weather_source_label=threshold_weather['weather_source_label'],
+        weather_location=threshold_weather['location'],
+        weather_location_scope=threshold_weather['location_scope'],
         alerts=alerts
     )
 

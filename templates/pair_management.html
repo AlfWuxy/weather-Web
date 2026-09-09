@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% from "partials/metric_info.html" import metric_info with context %}
 
-{% block title %}家庭照护 · 宜老天气通{% endblock %}
+{% block title %}提醒与短码 · 宜老天气通{% endblock %}
 
 {% block content %}
 {% set has_pair_cards = pair_cards and pair_cards|length > 0 %}
@@ -20,10 +20,11 @@
 <div class="container my-4">
     <div class="row mb-3">
         <div class="col-12">
-            <h1 class="h2"><i class="bi bi-people"></i> 家庭照护</h1>
+            <h1 class="h2"><i class="bi bi-qr-code"></i> 提醒与短码</h1>
             <p class="text-muted mb-0">
-                添加需要关注的家人，查看都昌县天气风险、复制提醒话术，并记录家人是否已经采取行动。
-                慢病类别可选填；县内地点仅作照护备注，请勿填写精确门牌信息。
+                加入天气照护请先到「<a href="{{ url_for('health.family_members') }}">家人档案</a>」填写老人所在地并勾选。
+                本页用于查看短码、复制高温话术，并记录是否已经提醒。
+                本轮天气观测仍用都昌县研究点；老人所在地必须手填，不能用家属当前位置代替。
             </p>
             {% if has_pair_cards and effective_push_notice_state == 'channel_unavailable' %}
                 <div class="alert alert-info mt-3 mb-0" role="status">
@@ -53,8 +54,8 @@
             <div class="card shadow-sm yl-workbench-card">
                 <div class="card-header bg-light yl-card-head-art">
                     <div class="yl-card-head-copy">
-                        <div class="yl-card-kicker">照护关系建立</div>
-                        <h5 class="mb-0"><i class="bi bi-person-plus"></i> 新增监测对象（老人）</h5>
+                        <div class="yl-card-kicker">短码与提醒</div>
+                        <h5 class="mb-0"><i class="bi bi-person-plus"></i> 需要短码时再添加</h5>
                     </div>
                     <div class="yl-card-art" aria-hidden="true">
                         <img src="{{ url_for('static', filename='illustrations/dashboard/add-monitoring.png') }}" alt="">
@@ -72,21 +73,21 @@
                                 {% endfor %}
                             </select>
                             <div class="text-muted small mt-2">
-                                家人信息在「<a href="{{ url_for('health.family_members') }}">家人档案</a>」中维护，可选填慢病类别。
+                                日常入组请走「<a href="{{ url_for('health.family_members') }}">家人档案</a>」。这里可选关联已有档案；不选也能生成短码，但不等于已加入天气照护。
                             </div>
                         </div>
                         <div class="mb-3">
-                            <label class="form-label">县内地点备注</label>
-                            <input class="form-control" name="location_query" list="communityOptions" placeholder="例如：某乡镇或村名，请勿填写门牌">
+                            <label class="form-label">老人所在地</label>
+                            <input class="form-control" name="location_query" list="communityOptions" placeholder="例如：都昌县某某乡，请勿填写门牌">
                             <datalist id="communityOptions">
                                 {% for location in pair_location_suggestions %}
                                     <option value="{{ location if location is string else location.name }}"></option>
                                 {% endfor %}
                             </datalist>
-                            <div class="text-muted small mt-2">天气统一使用都昌县观测；此字段只用于县内照护备注，不会切换天气来源。</div>
+                            <div class="text-muted small mt-2">本轮天气观测仍用都昌县研究点。此字段是老人所在地记录，不能用家属当前位置代替，请勿填写精确门牌。</div>
                         </div>
                         <button class="btn btn-primary w-100" type="submit">
-                            <i class="bi bi-plus-circle"></i> 添加监测对象
+                            <i class="bi bi-plus-circle"></i> 生成短码
                         </button>
                     </form>
                 </div>
@@ -166,7 +167,7 @@
                                                             {{ item.elder_name or '老人' }}
                                                         {% endif %}
                                                     </div>
-                                                    <div class="text-muted small">县内备注 {{ item.location_display or item.pair.community_code }}</div>
+                                                    <div class="text-muted small">老人所在地 {{ item.location_display or item.pair.community_code }}</div>
                                                     {% if item.weather_available %}
                                                     <div class="mt-2">
                                                         <span class="badge bg-{{ alert_badge }}">{{ item.alert_label }}</span>
@@ -226,7 +227,7 @@
                                                         data-member-id="{{ item.pair.member_id or '' }}"
                                                         data-alert-kind="{{ item.alert_kind or '' }}"
                                                         data-message="{{ item.reminder_message | replace('\n', '\\n') | e }}">
-                                                    <i class="bi bi-clipboard"></i> {% if item.weather_share_available %}复制提醒话术{% else %}复制行动链接说明{% endif %}
+                                                    <i class="bi bi-clipboard"></i> {% if item.copy_heat_script %}复制提醒话术{% else %}复制行动链接说明{% endif %}
                                                 </button>
                                                 <button class="btn btn-outline-success btn-sm feedback-btn"
                                                         type="button"

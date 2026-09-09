@@ -11,7 +11,7 @@
     {% set workspace_url = url_for('user.community_dashboard') %}
     {% set workspace_label = '进入社区工作台' %}
 {% else %}
-    {% set workspace_url = url_for('user.pair_management') %}
+    {% set workspace_url = url_for('health.family_members') %}
     {% set workspace_label = '进入家庭照护' %}
 {% endif %}
 {% if current_user.is_authenticated and current_user.role in ['community', 'admin'] %}
@@ -35,7 +35,7 @@
     {% set family_role_description = '当前是社区账号。家庭照护需使用家庭账号登录。' %}
     {% set family_role_cta = '查看入口说明' %}
 {% else %}
-    {% set family_role_url = url_for('user.pair_management') %}
+    {% set family_role_url = url_for('health.family_members') %}
     {% set family_role_title = '家属 / 子女' %}
     {% set family_role_description = '管理家人所在地、查看今日风险、复制提醒话术。' %}
     {% set family_role_cta = '进入照护路径' %}

@@ -459,7 +459,7 @@ def track_delivery(delivery_token):
     except Exception:
         db.session.rollback()
 
-    target = url_for('user.pair_management')
+    target = url_for('health.family_members')
     if current_user.is_authenticated:
         return redirect(target)
     return redirect(url_for('public.login', next=target))

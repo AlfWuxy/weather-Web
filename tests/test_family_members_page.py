@@ -64,11 +64,12 @@ def test_family_members_page_uses_new_route_and_renders_member_alerts(client, db
         member_id=member.id,
         weather_thresholds=json.dumps({'high_temp': 32}, ensure_ascii=False),
         alert_enabled=True,
+        weather_care_enabled=True,
+        location_query='都昌',
     ))
     db_session.commit()
     _login_as(client, user)
 
-    monkeypatch.setattr('blueprints.health.ensure_user_location_valid', lambda: '都昌')
     monkeypatch.setattr(
         'blueprints.health.get_weather_with_cache',
         lambda location: (_fresh_qweather(), None),
@@ -83,6 +84,8 @@ def test_family_members_page_uses_new_route_and_renders_member_alerts(client, db
     assert '高血压' in body
     assert '都昌' in body
     assert '高温≥32' in body
+    assert '当前查询地' not in body
+    assert '老人所在地：都昌' in body
 
 
 def test_family_members_page_does_not_trigger_alerts_from_mock_weather(client, db_session, monkeypatch):
@@ -96,11 +99,12 @@ def test_family_members_page_does_not_trigger_alerts_from_mock_weather(client, d
         member_id=member.id,
         weather_thresholds=json.dumps({'high_temp': 32}, ensure_ascii=False),
         alert_enabled=True,
+        weather_care_enabled=True,
+        location_query='都昌',
     ))
     db_session.commit()
     _login_as(client, user)
 
-    monkeypatch.setattr('blueprints.health.ensure_user_location_valid', lambda: '都昌')
     monkeypatch.setattr(
         'blueprints.health.get_weather_with_cache',
         lambda _location: ({'temperature': 37, 'humidity': 70, 'data_source': 'Demo', 'is_mock': True}, False),
@@ -110,11 +114,13 @@ def test_family_members_page_does_not_trigger_alerts_from_mock_weather(client, d
 
     assert response.status_code == 200
     body = response.get_data(as_text=True)
-    assert '天气正在更新' in body
-    assert '家庭成员的阈值提醒稍后恢复' in body
+    assert '天气暂不可用' in body
+    assert '不当作情况正常' in body
     assert '模拟值不会触发通知' not in body
     assert '今日确认达到阈值' in body
     assert '触发：高温' not in body
+    assert '当前查询地' not in body
+    assert '老人所在地：都昌' in body
 
 
 def test_family_member_new_page_supports_post_create(client, db_session):
@@ -247,11 +253,12 @@ def test_family_detail_does_not_trigger_or_clear_unavailable_aqi(
         member_id=member.id,
         weather_thresholds=json.dumps({'high_aqi': 50}, ensure_ascii=False),
         alert_enabled=True,
+        weather_care_enabled=True,
+        location_query='都昌县',
     ))
     db_session.commit()
     _login_as(client, user)
 
-    monkeypatch.setattr('blueprints.health.ensure_user_location_valid', lambda: '都昌县')
     monkeypatch.setattr(
         'blueprints.health.get_weather_with_cache',
         lambda _location: (_fresh_qweather(aqi=180, **weather_overrides), False),
@@ -281,11 +288,12 @@ def test_family_detail_triggers_aqi_only_when_full_gate_is_ready(
         member_id=member.id,
         weather_thresholds=json.dumps({'high_aqi': 50}, ensure_ascii=False),
         alert_enabled=True,
+        weather_care_enabled=True,
+        location_query='都昌县',
     ))
     db_session.commit()
     _login_as(client, user)
 
-    monkeypatch.setattr('blueprints.health.ensure_user_location_valid', lambda: '都昌县')
     monkeypatch.setattr(
         'blueprints.health.get_weather_with_cache',
         lambda _location: (_fresh_qweather(aqi=180, pm25=70), False),
@@ -295,3 +303,38 @@ def test_family_detail_triggers_aqi_only_when_full_gate_is_ready(
 
     assert response.status_code == 200
     assert 'AQI≥50' in response.get_data(as_text=True)
+
+
+def test_unenrolled_family_member_does_not_use_caregiver_location_for_alerts(
+    client,
+    db_session,
+    monkeypatch,
+):
+    from core.db_models import FamilyMember, FamilyMemberProfile
+
+    user = _create_user(db_session, username='family_unenrolled_no_proxy')
+    member = FamilyMember(user_id=user.id, name='舅舅', relation='舅舅', age=78, gender='男性')
+    db_session.add(member)
+    db_session.flush()
+    db_session.add(FamilyMemberProfile(
+        member_id=member.id,
+        weather_thresholds=json.dumps({'high_temp': 32}, ensure_ascii=False),
+        alert_enabled=True,
+        weather_care_enabled=False,
+    ))
+    db_session.commit()
+    _login_as(client, user)
+
+    def fail_if_weather_fetched(_location):
+        pytest.fail('未加入天气照护的家人不应按家属地点取天气')
+
+    monkeypatch.setattr('blueprints.health.get_weather_with_cache', fail_if_weather_fetched)
+
+    response = client.get('/family-members')
+
+    assert response.status_code == 200
+    body = response.get_data(as_text=True)
+    assert '未加入天气照护' in body
+    assert '高温≥32' not in body
+    assert '当前查询地' not in body
+    assert '天气暂不可用' not in body

@@ -71,8 +71,8 @@ def test_login_does_not_set_remember_cookie_by_default(client, db_session):
 @pytest.mark.parametrize(
     ('role', 'expected_path'),
     [
-        ('user', '/pairs'),
-        ('caregiver', '/pairs'),
+        ('user', '/family-members'),
+        ('caregiver', '/family-members'),
         ('community', '/community'),
         ('admin', '/admin'),
     ],
@@ -247,7 +247,7 @@ def test_real_login_clears_guest_session_state(client, db_session):
     )
 
     assert response.status_code == 302
-    assert response.headers['Location'].endswith('/pairs')
+    assert response.headers['Location'].endswith('/family-members')
     with client.session_transaction() as session:
         assert session.get('_user_id') == user.get_id()
         assert 'guest_id' not in session
