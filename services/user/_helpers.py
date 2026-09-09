@@ -11,6 +11,7 @@ from core.security import hash_short_code
 from core.time_utils import now_local, today_local, utcnow, ensure_utc_aware
 from core.weather import is_demo_mode
 from core.db_models import CommunityDaily, DailyStatus, Pair
+from services.action_events import fill_community_daily_action_columns
 from utils.parsers import safe_json_loads
 
 from ._common import (
@@ -132,13 +133,13 @@ def _personalized_care_notes(chronic_diseases):
 
 def _build_caregiver_message(pair, alert_kind=None, weather_data=None, member=None, action_link=None):
     """Build a one-click message the caregiver can forward to the elder."""
+    from services.content_scripts import DEFAULT_SCRIPT_VERSION, render_script
+
     weather_data = weather_data or {}
-    location = (getattr(pair, 'location_query', None) or getattr(pair, 'community_code', None) or '').strip()
     elder_name = getattr(member, 'name', None) if member else None
     relation = (getattr(member, 'relation', None) or '').strip() if member else ''
 
-    # Pick a natural address term.
-    address = '你'
+    address = '家里'
     if relation in ('母亲', '妈妈', '妈'):
         address = '妈'
     elif relation in ('父亲', '爸爸', '爸'):
@@ -149,45 +150,29 @@ def _build_caregiver_message(pair, alert_kind=None, weather_data=None, member=No
     try:
         tmax = weather_data.get('temperature_max')
         tmin = weather_data.get('temperature_min')
-        tmax_s = f"{float(tmax):.0f}" if tmax is not None else None
-        tmin_s = f"{float(tmin):.0f}" if tmin is not None else None
+        tmax_s = f"{float(tmax):.0f}" if tmax is not None else '--'
+        tmin_s = f"{float(tmin):.0f}" if tmin is not None else '--'
     except Exception:
-        tmax_s = None
-        tmin_s = None
+        tmax_s = '--'
+        tmin_s = '--'
 
     if not action_link:
         action_link = url_for('public.elder_entry', short_code=pair.short_code, _external=True)
 
-    lines = []
-    if alert_kind == 'cold':
-        lines.append('【寒潮行动提醒】')
-        summary = f'{address}，我看到你那边今天可能比较冷'
-        if tmin_s is not None:
-            summary += f'（最低约 {tmin_s}°C）'
-        summary += '。'
-        lines.append(summary)
-        lines.append('建议：尽量少出门，外出注意保暖防滑；室内注意保暖，别受凉。')
-    elif alert_kind == 'heat':
-        lines.append('【高温行动提醒】')
-        summary = f'{address}，我看到你那边今天可能会很热'
-        if tmax_s is not None:
-            summary += f'（最高约 {tmax_s}°C）'
-        summary += '。'
-        lines.append(summary)
-        lines.append('建议：避开中午外出，多喝水；室内开风扇/空调或找阴凉处休息。')
-    else:
-        lines.append('【日常提醒】')
-        lines.append(f'{address}，我这边看看你那边天气有变化，注意劳逸结合，出门记得带水/外套。')
-
-    if location:
-        lines.append(f'地点：{location}')
-
-    chronic_diseases = safe_json_loads(getattr(member, 'chronic_diseases', None), []) if member else []
-    lines.extend(_personalized_care_notes(chronic_diseases))
-
-    lines.append('说明：这是行动提醒，不提供医疗诊断/治疗建议；如明显不适请及时就医。')
-    lines.append(f'（可选）行动页：{action_link}  短码：{pair.short_code}')
-    return '\n'.join([line for line in lines if line])
+    scenario = 'heat' if alert_kind == 'heat' else None
+    if scenario != 'heat':
+        return (
+            '当前没有高温行动阈值，不会生成高温或日常防护建议。'
+            f'\n行动说明：{action_link}'
+        )
+    text = render_script(
+        DEFAULT_SCRIPT_VERSION,
+        scenario,
+        elder_call=address,
+        tmax=tmax_s,
+        tmin=tmin_s,
+    )
+    return f"{text}\n行动说明：{action_link}"
 
 
 def _build_community_message(community_code, risk_label, resources):
@@ -289,11 +274,22 @@ def _ensure_demo_statuses(community_code, status_date, caregiver_id=None, pair_c
     _refresh_community_daily(community_code, status_date)
 
 
+def _user_acl_community(user=None):
+    """运营 ACL 社区只认 authorized_community，缺失时关闭访问。
+
+    - authorized_community：仅 admin 可写，社区角色管辖边界
+    - community：定位/展示，可自改，绝不参与横向 ACL
+    """
+    subject = user if user is not None else current_user
+    return _normalize_code(getattr(subject, 'authorized_community', None))
+
+
 def _community_access_allowed(community_code):
     if getattr(current_user, 'role', None) == 'admin':
         return True
-    user_code = _normalize_code(getattr(current_user, 'community', None))
-    return bool(user_code) and user_code == community_code
+    user_code = _user_acl_community(current_user)
+    target = _normalize_code(community_code)
+    return bool(user_code) and bool(target) and user_code == target
 
 
 def _build_community_snapshot(community_code, status_date, record=_MISSING, statuses=_MISSING):
@@ -334,11 +330,21 @@ def _build_community_snapshot(community_code, status_date, record=_MISSING, stat
         for key in ('低风险', '中风险', '高风险', '极高'):
             risk_dist.setdefault(key, 0)
         confirm_rate = (confirmed_count / total_people) if total_people else 0
+        self_report_rate = (
+            getattr(record, 'self_report_rate', None)
+            if getattr(record, 'self_report_rate', None) is not None
+            else confirm_rate
+        )
         escalation_rate = (flag_count / total_people) if total_people else 0
         help_rate = (help_count / total_people) if total_people else 0
         return {
             'total_people': total_people,
             'confirm_rate': round(confirm_rate, 4),
+            'self_report_rate': round(self_report_rate or 0, 4),
+            'understood_rate': round(getattr(record, 'understood_rate', 0) or 0, 4),
+            'verified_rate': round(getattr(record, 'verified_rate', 0) or 0, 4),
+            'open_help_count': int(getattr(record, 'open_help_count', 0) or 0),
+            'unknown_count': int(getattr(record, 'unknown_count', 0) or 0),
             'escalation_rate': round(escalation_rate, 4),
             'risk_distribution': risk_dist,
             'outreach_summary': record.outreach_summary or '',
@@ -368,9 +374,17 @@ def _build_community_snapshot(community_code, status_date, record=_MISSING, stat
     confirm_rate = (confirmed_count / total_people) if total_people else 0
     escalation_rate = (escalation_count / total_people) if total_people else 0
     help_rate = (help_count / total_people) if total_people else 0
+    understood = sum(1 for s in statuses if getattr(s, 'understood_at', None))
+    verified = sum(1 for s in statuses if getattr(s, 'verified_at', None))
+    open_help = sum(1 for s in statuses if s.help_flag and not getattr(s, 'closed_at', None))
     return {
         'total_people': total_people,
         'confirm_rate': round(confirm_rate, 4),
+        'self_report_rate': round(confirm_rate, 4),
+        'understood_rate': round((understood / total_people), 4) if total_people else 0,
+        'verified_rate': round((verified / total_people), 4) if total_people else 0,
+        'open_help_count': open_help,
+        'unknown_count': max(total_people - len({s.pair_id for s in statuses if getattr(s, 'understood_at', None) or s.confirmed_at or s.help_flag}), 0),
         'escalation_rate': round(escalation_rate, 4),
         'risk_distribution': risk_dist,
         'outreach_summary': summary,
@@ -432,4 +446,5 @@ def _refresh_community_daily(community_code, status_date):
     record.escalation_rate = round(escalation_rate, 4)
     record.risk_distribution = json.dumps(risk_dist, ensure_ascii=False)
     record.outreach_summary = summary
+    fill_community_daily_action_columns(record, active_pair_ids, status_date, statuses)
     db.session.commit()

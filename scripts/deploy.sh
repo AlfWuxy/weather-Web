@@ -10,8 +10,12 @@ ENV_FILE="${ENV_FILE:-$ROOT_DIR/.env}"
 # SSH 默认选项：
 # - 禁用 ssh-agent（部分环境下会导致 banner exchange 卡住）
 # - 启用连接复用，减少短时间内频繁建连触发服务器 sshd 惩罚/限流
-# - 关闭 known_hosts 写入，避免非交互部署失败
-DEFAULT_SSH_OPTS="${DEFAULT_SSH_OPTS:--o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o IdentityAgent=none -o ConnectTimeout=15 -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -o ControlMaster=auto -o ControlPersist=300 -o ControlPath=/tmp/cw-ssh-%r@%h-%p}"
+# - P11：默认 accept-new（首次信任并写入 known_hosts，后续校验；禁止永久 no）
+#   仍可用 DEFAULT_SSH_OPTS / SSH_OPTS 覆盖；生产建议固定 known_hosts
+# - 专用 known_hosts 文件，避免 /dev/null 永不记忆指纹
+_CW_KNOWN_HOSTS="${CW_SSH_KNOWN_HOSTS:-$HOME/.ssh/known_hosts_case_weather}"
+mkdir -p "$(dirname "$_CW_KNOWN_HOSTS")" 2>/dev/null || true
+DEFAULT_SSH_OPTS="${DEFAULT_SSH_OPTS:--o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=$_CW_KNOWN_HOSTS -o IdentityAgent=none -o ConnectTimeout=15 -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -o ControlMaster=auto -o ControlPersist=300 -o ControlPath=/tmp/cw-ssh-%r@%h-%p}"
 SSH_OPTS="${SSH_OPTS:-$DEFAULT_SSH_OPTS}"
 
 LOCAL_QWEATHER_KEY=""
@@ -26,7 +30,7 @@ load_deploy_env() {
     while IFS='=' read -r key value; do
         case "$key" in
             ''|\#*) continue ;;
-            DEPLOY_SERVER|DEPLOY_USER|DEPLOY_PASSWORD|DEPLOY_PROJECT_DIR|DEPLOY_LOCAL_DIR|SSHPASS)
+            DEPLOY_SERVER|DEPLOY_USER|DEPLOY_PASSWORD|DEPLOY_PROJECT_DIR|DEPLOY_LOCAL_DIR|DEPLOY_APP_USER|SSHPASS)
                 value="${value%%#*}"
                 value="${value%"${value##*[![:space:]]}"}"
                 value="${value#"${value%%[![:space:]]*}"}"
@@ -40,6 +44,15 @@ load_deploy_env() {
 }
 
 load_deploy_env
+
+# 应用运行用户：默认 root 保持兼容；设 DEPLOY_APP_USER=case-weather 启用专用用户
+# 须在 load_deploy_env 之后求值，才能吃到 .env 里的 DEPLOY_APP_USER
+# 非 root 时会在远端创建系统用户并对项目目录 chown（需 root 部署账号）
+DEPLOY_APP_USER="${DEPLOY_APP_USER:-root}"
+if ! [[ "$DEPLOY_APP_USER" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]]; then
+    echo "非法 DEPLOY_APP_USER: $DEPLOY_APP_USER（仅允许 Linux 用户名字符）" >&2
+    exit 1
+fi
 
 load_local_api_keys() {
     [ -f "$ENV_FILE" ] || return 0
@@ -300,17 +313,24 @@ remote_exec "cd $PROJECT_DIR && $VENV_DIR/bin/python -m pytest -q"
 
 echo ""
 echo "步骤7: 创建 systemd 服务..."
-remote_exec "cat > /etc/systemd/system/case-weather.service << 'EOF'
+# P11：按 DEPLOY_APP_USER 写 User=；非 root 时确保系统用户存在并 chown 项目树
+if [ "$DEPLOY_APP_USER" != "root" ]; then
+    echo "  使用非 root 运行用户: $DEPLOY_APP_USER"
+    # 失败应中止：避免 User= 非 root 但目录仍 root 导致半残服务
+    remote_exec "id -u '$DEPLOY_APP_USER' >/dev/null 2>&1 || useradd --system --home '$PROJECT_DIR' --shell /usr/sbin/nologin '$DEPLOY_APP_USER'"
+    remote_exec "chown -R '$DEPLOY_APP_USER':'$DEPLOY_APP_USER' '$PROJECT_DIR'"
+fi
+remote_exec "cat > /etc/systemd/system/case-weather.service << EOF
 [Unit]
 Description=Case Weather Flask Application
 After=network.target
 
 [Service]
-User=root
+User=$DEPLOY_APP_USER
 WorkingDirectory=$PROJECT_DIR
 EnvironmentFile=$PROJECT_DIR/.env
 Environment=PYTHONUNBUFFERED=1
-ExecStart=$VENV_DIR/bin/gunicorn --workers 3 --bind 0.0.0.0:5000 --timeout 120 app:app
+ExecStart=$VENV_DIR/bin/gunicorn --workers 3 --bind 127.0.0.1:5000 --timeout 120 app:app
 Restart=always
 RestartSec=10
 
@@ -320,14 +340,14 @@ EOF"
 
 echo ""
 echo "步骤7.1: 创建天气缓存定时任务（systemd timer）..."
-remote_exec "cat > /etc/systemd/system/case-weather-cache.service << 'EOF'
+remote_exec "cat > /etc/systemd/system/case-weather-cache.service << EOF
 [Unit]
 Description=Case Weather - refresh Duchang weather cache
 After=network.target case-weather.service
 
 [Service]
 Type=oneshot
-User=root
+User=$DEPLOY_APP_USER
 WorkingDirectory=$PROJECT_DIR
 EnvironmentFile=$PROJECT_DIR/.env
 Environment=PYTHONUNBUFFERED=1
@@ -351,14 +371,14 @@ EOF"
 
 echo ""
 echo "步骤7.2: 创建预警推送定时任务（systemd timer）..."
-remote_exec "cat > /etc/systemd/system/case-weather-dispatch.service << 'EOF'
+remote_exec "cat > /etc/systemd/system/case-weather-dispatch.service << EOF
 [Unit]
 Description=Case Weather - dispatch alerts (WxPusher)
 After=network.target case-weather.service
 
 [Service]
 Type=oneshot
-User=root
+User=$DEPLOY_APP_USER
 WorkingDirectory=$PROJECT_DIR
 EnvironmentFile=$PROJECT_DIR/.env
 Environment=PYTHONUNBUFFERED=1
@@ -380,14 +400,14 @@ EOF"
 
 echo ""
 echo "步骤7.3: 创建社区风险预计算定时任务（systemd timer）..."
-remote_exec "cat > /etc/systemd/system/case-weather-risk-precompute.service << 'EOF'
+remote_exec "cat > /etc/systemd/system/case-weather-risk-precompute.service << EOF
 [Unit]
 Description=Case Weather - precompute community risk cache
 After=network.target case-weather.service
 
 [Service]
 Type=oneshot
-User=root
+User=$DEPLOY_APP_USER
 WorkingDirectory=$PROJECT_DIR
 EnvironmentFile=$PROJECT_DIR/.env
 Environment=PYTHONUNBUFFERED=1
@@ -436,4 +456,7 @@ check_remote_unit_active "case-weather-risk-precompute.timer"
 
 echo ""
 echo "=== 部署完成 ==="
-echo "访问地址: http://$SERVER:5000"
+# P11：勿引导运维直连源站 :5000（gunicorn 仅 127.0.0.1）；优先公网 HTTPS
+_PUBLIC_HINT="${LOCAL_PUBLIC_BASE_URL:-https://yilaoweather.org}"
+echo "访问地址: $_PUBLIC_HINT"
+echo "源站仅本机: 127.0.0.1:5000（经反代）；systemd User=$DEPLOY_APP_USER"

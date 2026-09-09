@@ -54,7 +54,7 @@ class AIQuestionService:
             'Content-Type': 'application/json'
         }
         knowledge_context = self._build_knowledge_context(question)
-        system_prompt = '你是天气健康风险预测系统的智能助手。请用简洁、专业的中文回答。'
+        system_prompt = '你是宜老天气通的天气健康信息助手。请用简洁、专业的中文回答。'
         if knowledge_context:
             system_prompt += f"\n以下是专业医学知识库摘要，仅供参考：\n{knowledge_context}"
 

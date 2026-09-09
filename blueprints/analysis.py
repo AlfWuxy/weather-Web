@@ -8,7 +8,7 @@ import math
 from collections import defaultdict
 from datetime import timedelta
 
-from flask import Blueprint, current_app, flash, redirect, render_template, request, send_file, url_for
+from flask import Blueprint, current_app, flash, jsonify, redirect, render_template, request, send_file, url_for
 from flask_login import current_user, login_required
 
 from core.constants import DEFAULT_CITY_LABEL
@@ -16,7 +16,10 @@ from core.extensions import db
 from core.guest import is_guest_user
 from core.analytics import pearson_corr
 from core.audit import log_audit
+from services.action_events import funnel as action_funnel, pair_hash as hash_pair_id
+from services.cooling_service import resource_gaps as cooling_resource_gaps
 from core.db_models import (
+    ActionEvent,
     AlertDelivery,
     Community,
     HealthDiary,
@@ -555,6 +558,8 @@ def analysis_history():
         end_date = today_local()
     if not start_date:
         start_date = end_date - timedelta(days=30)
+    if start_date > end_date:
+        start_date, end_date = end_date, start_date
 
     communities = Community.query.all()
     diseases = db.session.query(MedicalRecord.disease_category).filter(
@@ -586,24 +591,37 @@ def analysis_history():
     default_city = _default_city()
     weather_source = _weather_source_label(weather_location, default_city)
 
-    weather_by_date = {}
+    weather_sums = {}
     weather_counts = {}
     for w in weather_records:
         date_key = w.date
-        if date_key not in weather_by_date:
-            weather_by_date[date_key] = {
+        if date_key not in weather_sums:
+            weather_sums[date_key] = {
+                'temperature': 0.0,
+                'humidity': 0.0
+            }
+            weather_counts[date_key] = {
                 'temperature': 0,
                 'humidity': 0
             }
-            weather_counts[date_key] = 0
-        weather_by_date[date_key]['temperature'] += w.temperature or 0
-        weather_by_date[date_key]['humidity'] += w.humidity or 0
-        weather_counts[date_key] += 1
+        for metric in ('temperature', 'humidity'):
+            value = getattr(w, metric, None)
+            if value is None:
+                continue
+            weather_sums[date_key][metric] += value
+            weather_counts[date_key][metric] += 1
 
-    for date_key, count in weather_counts.items():
-        if count > 0:
-            weather_by_date[date_key]['temperature'] /= count
-            weather_by_date[date_key]['humidity'] /= count
+    weather_by_date = {}
+    for date_key, sums in weather_sums.items():
+        counts = weather_counts[date_key]
+        weather_by_date[date_key] = {
+            metric: (
+                sums[metric] / counts[metric]
+                if counts[metric] > 0
+                else None
+            )
+            for metric in ('temperature', 'humidity')
+        }
 
     dates = []
     visits = []
@@ -628,8 +646,13 @@ def analysis_history():
 
     total_days = (end_date - start_date).days + 1
     visit_days = len(visits_by_date)
-    weather_days = len(weather_by_date)
-    overlap_days = len(set(visits_by_date.keys()) & set(weather_by_date.keys()))
+    weather_dates = {
+        day
+        for day, weather in weather_by_date.items()
+        if weather['temperature'] is not None or weather['humidity'] is not None
+    }
+    weather_days = len(weather_dates)
+    overlap_days = len(set(visits_by_date.keys()) & weather_dates)
     total_visits = sum(visits)
     data_notes = []
     if auto_range:
@@ -720,6 +743,8 @@ def analysis_heatmap():
         end_date = today_local()
     if not start_date:
         start_date = end_date - timedelta(days=90)
+    if start_date > end_date:
+        start_date, end_date = end_date, start_date
 
     communities = Community.query.all()
     diseases = db.session.query(MedicalRecord.disease_category).filter(
@@ -1021,6 +1046,8 @@ def analysis_lag():
         end_date = today_local()
     if not start_date:
         start_date = end_date - timedelta(days=90)
+    if start_date > end_date:
+        start_date, end_date = end_date, start_date
 
     record_query = MedicalRecord.query.filter(
         MedicalRecord.visit_time.isnot(None),
@@ -3221,6 +3248,25 @@ def annual_report():
     )
 
 
+def _pilot_window(days=None):
+    window = (request.args.get('window') or '').strip().lower()
+    include_test = request.args.get('include_test') == '1'
+    today = today_local()
+    if window == 'today':
+        return today, today, 'today', include_test
+    if window == '7d':
+        return today - timedelta(days=6), today, '7d', include_test
+    if window == '30d':
+        return today - timedelta(days=29), today, '30d', include_test
+    day_count = days if days is not None else request.args.get('days', default=30, type=int)
+    try:
+        day_count = int(day_count)
+    except (TypeError, ValueError):
+        day_count = 30
+    day_count = max(1, min(day_count, 365))
+    return today - timedelta(days=day_count - 1), today, f'{day_count}d', include_test
+
+
 @bp.route('/analysis/pilot', endpoint='pilot_dashboard')
 @login_required
 def pilot_dashboard():
@@ -3230,6 +3276,8 @@ def pilot_dashboard():
 
     days = request.args.get('days', default=30, type=int)
     days = max(1, min(days, 365))
+    date_from, date_to, window_label, include_test = _pilot_window(days=days)
+    funnel_data = action_funnel(date_from, date_to, include_test=include_test)
 
     now = utcnow()
     start_ts = now - timedelta(days=days)
@@ -3285,9 +3333,14 @@ def pilot_dashboard():
     ).group_by(location_expr).order_by(cnt_expr.desc()).limit(20).all()
     location_coverage = [{'location': r[0] or '', 'count': int(r[1] or 0)} for r in location_rows]
 
+    gaps = cooling_resource_gaps(today_local(), include_test=include_test)
+
     return render_template(
         'analysis_pilot.html',
         days=days,
+        window=window_label,
+        include_test=include_test,
+        funnel=funnel_data,
         pairs_total=pairs_total,
         elders_total=elders_total,
         active_7d=active_7d,
@@ -3301,45 +3354,172 @@ def pilot_dashboard():
         feedback_count=feedback_count,
         wxoa_land=wxoa_land,
         location_coverage=location_coverage,
+        resource_gaps_summary=gaps['summary'],
     )
 
 
 @bp.route('/analysis/pilot/export.csv', endpoint='pilot_export_csv')
 @login_required
 def pilot_export_csv():
-    """导出试点埋点（CSV）"""
+    """导出行动事件（CSV，pair_hash 匿名）。"""
     if not _require_admin():
         return redirect(url_for('user.user_dashboard'))
 
     days = request.args.get('days', default=30, type=int)
     days = max(1, min(days, 365))
-    start_ts = utcnow() - timedelta(days=days)
+    date_from, date_to, _window_label, include_test = _pilot_window(days=days)
+    funnel_data = action_funnel(date_from, date_to, include_test=include_test)
+    pair_ids = set()
+    if funnel_data['denominator']:
+        from services.action_events import active_analysis_pair_ids
+        pair_ids = active_analysis_pair_ids(include_test=include_test)
 
-    events = UsageEvent.query.filter(
-        UsageEvent.created_at >= start_ts
-    ).order_by(UsageEvent.created_at.desc()).all()
+    query = ActionEvent.query.filter(
+        ActionEvent.local_date >= date_from,
+        ActionEvent.local_date <= date_to,
+    ).order_by(ActionEvent.created_at.desc())
+    if pair_ids:
+        query = query.filter(ActionEvent.pair_id.in_(pair_ids))
+    elif not include_test:
+        query = query.filter(ActionEvent.pair_id == -1)
+    events = query.all()
 
     out = io.StringIO()
     writer = csv.writer(out)
-    writer.writerow(['created_at', 'event_type', 'user_id', 'pair_id', 'member_id', 'source', 'meta_json'])
-    for e in events:
+    writer.writerow([
+        'pair_hash', 'local_date', 'stage', 'actor_role', 'channel',
+        'script_version', 'action_id', 'created_at', 'meta',
+    ])
+    for event in events:
         writer.writerow([
-            e.created_at.isoformat() if e.created_at else '',
-            e.event_type or '',
-            e.user_id or '',
-            e.pair_id or '',
-            e.member_id or '',
-            e.source or '',
-            e.meta_json or '',
+            hash_pair_id(event.pair_id),
+            event.local_date.isoformat() if event.local_date else '',
+            event.stage or '',
+            event.actor_role or '',
+            event.channel or '',
+            event.script_version or '',
+            event.action_id or '',
+            event.created_at.isoformat() if event.created_at else '',
+            event.meta_json or '',
         ])
 
-    data = out.getvalue().encode('utf-8-sig')  # Excel-friendly
+    data = out.getvalue().encode('utf-8-sig')
     return send_file(
         io.BytesIO(data),
         mimetype='text/csv',
         as_attachment=True,
         download_name=f'pilot_events_last_{days}d.csv',
     )
+
+
+@bp.route('/analysis/pilot/funnel.csv', endpoint='pilot_funnel_csv')
+@login_required
+def pilot_funnel_csv():
+    """导出漏斗聚合表。"""
+    if not _require_admin():
+        return redirect(url_for('user.user_dashboard'))
+
+    days = request.args.get('days', default=30, type=int)
+    days = max(1, min(days, 365))
+    date_from, date_to, window_label, include_test = _pilot_window(days=days)
+    funnel_data = action_funnel(date_from, date_to, include_test=include_test)
+
+    out = io.StringIO()
+    writer = csv.writer(out)
+    writer.writerow(['window', 'stage', 'pairs', 'denominator', 'rate'])
+    for row in funnel_data['primary'] + funnel_data['help']:
+        writer.writerow([
+            window_label,
+            row['stage'],
+            row['pairs'],
+            row['denominator'],
+            row['rate'],
+        ])
+    writer.writerow([window_label, 'unknown', funnel_data['unknown_count'], funnel_data['denominator'], ''])
+    writer.writerow([window_label, 'open_help_count', funnel_data['open_help_count'], funnel_data['denominator'], ''])
+    writer.writerow([window_label, 'misclick_count', funnel_data['misclick_count'], '', ''])
+    writer.writerow([
+        window_label,
+        'verified_without_self_report_count',
+        funnel_data['verified_without_self_report_count'],
+        '',
+        '',
+    ])
+    writer.writerow([window_label, 'event_source_completeness', funnel_data['event_source_completeness'], '', ''])
+
+    data = out.getvalue().encode('utf-8-sig')
+    return send_file(
+        io.BytesIO(data),
+        mimetype='text/csv',
+        as_attachment=True,
+        download_name=f'pilot_funnel_{window_label}.csv',
+    )
+
+
+@bp.route('/analysis/pilot/resource_gaps.csv', endpoint='pilot_resource_gaps_csv')
+@login_required
+def pilot_resource_gaps_csv():
+    """导出避暑资源缺口清单（管理员）。"""
+    if not _require_admin():
+        return redirect(url_for('user.user_dashboard'))
+
+    _date_from, date_to, _window_label, include_test = _pilot_window()
+    gaps = cooling_resource_gaps(date_to, include_test=include_test)
+
+    out = io.StringIO()
+    writer = csv.writer(out)
+    writer.writerow([
+        'id', 'type', 'township', 'verify_status', 'last_verified_at',
+        'open_during_alert', 'transport_need', 'closed_feedback_count',
+        'need_ride_feedback_count',
+    ])
+    for row in gaps['rows']:
+        writer.writerow([
+            row['id'],
+            row['type'],
+            row['township'],
+            row['verify_status'],
+            row['last_verified_at'],
+            row['open_during_alert'],
+            row['transport_need'],
+            row['closed_feedback_count'],
+            row['need_ride_feedback_count'],
+        ])
+    writer.writerow([])
+    writer.writerow(['# summary'])
+    writer.writerow(['metric', 'value'])
+    summary = gaps['summary']
+    for key in (
+        'unverified_count',
+        'verified_count',
+        'stale_count',
+        'verified_within_7d_ratio',
+        'closed_reported_count',
+        'need_ride_count',
+        'households_with_one_viable_option_ratio',
+    ):
+        value = summary.get(key)
+        writer.writerow([key, '' if value is None else value])
+
+    data = out.getvalue().encode('utf-8-sig')
+    return send_file(
+        io.BytesIO(data),
+        mimetype='text/csv',
+        as_attachment=True,
+        download_name='resource_gaps.csv',
+    )
+
+
+@bp.route('/analysis/pilot/resource_gaps_summary.json', endpoint='pilot_resource_gaps_summary_json')
+@login_required
+def pilot_resource_gaps_summary_json():
+    """导出避暑资源缺口汇总（管理员）。"""
+    if not _require_admin():
+        return redirect(url_for('user.user_dashboard'))
+
+    _date_from, date_to, _window_label, include_test = _pilot_window()
+    gaps = cooling_resource_gaps(date_to, include_test=include_test)
+    return jsonify(gaps['summary'])
 
 
 @bp.route('/analysis/model-quality', endpoint='model_quality')

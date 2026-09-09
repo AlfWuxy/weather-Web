@@ -15,7 +15,7 @@ from services.qweather_auth import (
     is_qweather_configured,
 )
 
-pytestmark = pytest.mark.manual
+pytestmark = [pytest.mark.manual, pytest.mark.network]
 
 def test_qweather_api():
     """测试和风天气API"""

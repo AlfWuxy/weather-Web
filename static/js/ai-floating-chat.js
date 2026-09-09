@@ -21,6 +21,8 @@
     const sendButton = chatRoot.querySelector('#ai-chat-send');
     const modelSelect = chatRoot.querySelector('#ai-chat-model');
     const isAuthenticated = chatRoot.dataset.authenticated === '1';
+    const userRole = document.body.dataset.userRole || 'anonymous';
+    const canUseAi = isAuthenticated && userRole !== 'guest';
 
     let chatHistory = [];
     let dragState = null;
@@ -229,8 +231,8 @@
         if (!question) {
             return;
         }
-        if (!isAuthenticated) {
-            addMessage('system', '请先登录后使用AI问答。');
+        if (!canUseAi) {
+            addMessage('system', '游客预览不提供 AI 问答，请注册或登录正式账号。');
             return;
         }
         if (!model) {
@@ -247,10 +249,16 @@
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ question: question, model: model })
         })
-            .then(response => response.json())
-            .then(data => {
+            .then(async response => ({ response, data: await response.json() }))
+            .then(result => {
+                const response = result.response;
+                const data = result.data;
                 if (loadingNode && loadingNode.parentNode) {
                     loadingNode.parentNode.removeChild(loadingNode);
+                }
+                if (response.status === 503 && data.error === 'ai_service_unavailable') {
+                    addMessage('system', data.message || 'AI 服务当前未配置，请稍后再试。');
+                    return;
                 }
                 if (data.success) {
                     if (data.triage && data.triage.is_emergency) {
@@ -266,11 +274,11 @@
                     addMessage('system', data.error || '请求失败，请稍后再试。');
                 }
             })
-            .catch(error => {
+            .catch(() => {
                 if (loadingNode && loadingNode.parentNode) {
                     loadingNode.parentNode.removeChild(loadingNode);
                 }
-                addMessage('system', '请求失败：' + error);
+                addMessage('system', '请求失败，请检查网络后重试。');
             });
     }
 
@@ -348,7 +356,7 @@
         renderHistory();
         applySavedPosition();
         restoreModel();
-        if (!isAuthenticated) {
+        if (!canUseAi) {
             inputEl.setAttribute('disabled', 'disabled');
             sendButton.setAttribute('disabled', 'disabled');
         }

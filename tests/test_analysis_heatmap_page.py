@@ -74,3 +74,28 @@ def test_heatmap_page_post_with_rr_sections(admin_client, db_session):
     assert '高风险格子（Top 5）' in html
     assert '基线日均病例' in html
     assert '温度 × 湿度 复合暴露矩阵（RR）' in html
+
+
+def test_heatmap_page_swaps_inverted_dates(admin_client, monkeypatch):
+    captured = {}
+
+    def capture_template(template_name, **context):
+        captured['template_name'] = template_name
+        captured.update(context)
+        return 'ok'
+
+    monkeypatch.setattr('blueprints.analysis.render_template', capture_template)
+
+    response = admin_client.post(
+        '/analysis/heatmap',
+        data={
+            'start_date': '2025-12-20',
+            'end_date': '2025-11-10',
+            'csrf_token': 'test-csrf-token',
+        },
+    )
+
+    assert response.status_code == 200
+    assert captured['template_name'] == 'analysis_heatmap.html'
+    assert captured['start_date'] == '2025-11-10'
+    assert captured['end_date'] == '2025-12-20'

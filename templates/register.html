@@ -14,7 +14,7 @@
                         <i class="bi bi-person-plus-fill"></i>
                     </div>
                     <h2>注册账号</h2>
-                    <p>几步就好——大多数字段都可选</p>
+                    <p>几步就好，大多数字段都可选</p>
                 </div>
 
                 <div class="card auth-form-card">
@@ -32,59 +32,60 @@
                                     <label for="username" class="form-label">
                                         <i class="bi bi-person me-1"></i>用户名 <span style="color:var(--yl-danger);">*</span>
                                     </label>
-                                    <input type="text" class="form-control" id="username" name="username" required>
+                                    <input type="text" class="form-control" id="username" name="username" value="{{ form_data.get('username', '') }}" required autocomplete="username">
                                 </div>
                                 <div class="col-md-6">
                                     <label for="email" class="form-label">
                                         <i class="bi bi-envelope me-1"></i>邮箱
                                     </label>
-                                    <input type="email" class="form-control" id="email" name="email" placeholder="可选">
+                                    <input type="email" class="form-control" id="email" name="email" value="{{ form_data.get('email', '') }}" placeholder="可选" autocomplete="email">
                                 </div>
                                 <div class="col-md-6">
                                     <label for="password" class="form-label">
                                         <i class="bi bi-lock me-1"></i>密码 <span style="color:var(--yl-danger);">*</span>
                                     </label>
-                                    <input type="password" class="form-control" id="password" name="password" required>
+                                    <input type="password" class="form-control" id="password" name="password" minlength="8" maxlength="100" required autocomplete="new-password">
+                                    <small class="text-muted">至少 8 位</small>
                                 </div>
                                 <div class="col-md-6">
                                     <label for="confirm_password" class="form-label">
                                         <i class="bi bi-lock-fill me-1"></i>确认密码 <span style="color:var(--yl-danger);">*</span>
                                     </label>
-                                    <input type="password" class="form-control" id="confirm_password" name="confirm_password" required>
+                                    <input type="password" class="form-control" id="confirm_password" name="confirm_password" minlength="8" maxlength="100" required autocomplete="new-password">
                                 </div>
                             </div>
 
                             {# 画像 #}
                             <div class="mb-3" style="font-size:.8rem; color:var(--yl-muted); text-transform:uppercase; letter-spacing:.05em; font-weight:600;">
-                                基础画像 <span style="text-transform:none; letter-spacing:0; color:var(--yl-muted); font-weight:400;">· 选填,用于更贴合的风险评估</span>
+                                基础画像 <span style="text-transform:none; letter-spacing:0; color:var(--yl-muted); font-weight:400;">· 选填，用于更贴合的风险评估</span>
                             </div>
 
                             <div class="row g-3">
                                 <div class="col-md-4">
                                     <label for="age" class="form-label"><i class="bi bi-calendar me-1"></i>年龄</label>
-                                    <input type="number" class="form-control" id="age" name="age" min="1" max="120" placeholder="可选">
+                                    <input type="number" class="form-control" id="age" name="age" value="{{ form_data.get('age', '') }}" min="1" max="120" placeholder="可选">
                                 </div>
                                 <div class="col-md-4">
                                     <label for="gender" class="form-label"><i class="bi bi-gender-ambiguous me-1"></i>性别</label>
                                     <select class="form-select" id="gender" name="gender">
                                         <option value="">请选择</option>
-                                        <option value="男性">男性</option>
-                                        <option value="女性">女性</option>
+                                        <option value="男性" {% if form_data.get('gender') in ['男', '男性'] %}selected{% endif %}>男性</option>
+                                        <option value="女性" {% if form_data.get('gender') in ['女', '女性'] %}selected{% endif %}>女性</option>
                                     </select>
                                 </div>
                                 <div class="col-md-4">
-                                    <label for="community" class="form-label"><i class="bi bi-geo-alt me-1"></i>所属社区</label>
-                                    <select class="form-select" id="community" name="community">
-                                        <option value="">请选择</option>
-                                        {% for comm in communities %}
-                                            <option value="{{ comm.name }}">{{ comm.name }}</option>
+                                    <label for="community" class="form-label"><i class="bi bi-geo-alt me-1"></i>家人所在地</label>
+                                    <input type="text" class="form-control" id="community" name="community" list="locationSuggestions" value="{{ form_data.get('community', '') }}" placeholder="可自由填写，村名仅供参考">
+                                    <datalist id="locationSuggestions">
+                                        {% for location in location_suggestions %}
+                                            <option value="{{ location }}"></option>
                                         {% endfor %}
-                                    </select>
+                                    </datalist>
                                 </div>
                             </div>
 
                             <div class="alert alert-info mt-4 mb-4">
-                                <i class="bi bi-info-circle me-1"></i>填写年龄和慢病信息不是必需的,但能让风险评估更贴近你的情况。
+                                <i class="bi bi-info-circle me-1"></i>年龄、性别和慢病等健康情况均为选填。注册后可在个人设置中按实际情况补充。
                             </div>
 
                             <div class="d-grid">
@@ -92,7 +93,7 @@
                             </div>
 
                             <div class="text-center mt-3">
-                                <span class="text-muted" style="font-size:.88rem;">已有账号?</span>
+                                <span class="text-muted" style="font-size:.88rem;">已有账号？</span>
                                 <a href="{{ url_for('public.login') }}" class="text-decoration-none fw-semibold" style="font-size:.88rem;">立即登录</a>
                             </div>
                         </form>

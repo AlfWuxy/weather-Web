@@ -1,0 +1,12 @@
+<view class="freshness" role="status" aria-role="status" aria-live="polite">
+  <view class="dot {{stale || !isOnline ? 'warn' : ''}}"></view>
+  <view class="fresh-copy">
+    <text>{{updatedText || '更新时间未知'}}</text>
+    <text wx:if="{{!isOnline && (source === 'cache' || source === 'stale-cache')}}"> · 当前离线，正在显示上次保存的数据</text>
+    <text wx:elif="{{!isOnline}}"> · 当前离线，暂时无法继续更新</text>
+    <text wx:elif="{{stale && refreshStarted}}"> · 正在显示较早数据，已开始后台更新</text>
+    <text wx:elif="{{stale}}"> · 正在显示较早数据，稍后会重试</text>
+    <text wx:elif="{{refreshDeferred}}"> · 30 分钟内无需重复获取</text>
+    <text wx:elif="{{source === 'cache'}}"> · 已使用 30 分钟缓存</text>
+  </view>
+</view>

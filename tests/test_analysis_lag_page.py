@@ -76,3 +76,28 @@ def test_lag_page_post_renders_academic_sections(admin_client, db_session):
     assert 'Lag Slices（热暴露/冷暴露 RR）' in html
     assert '累计窗口效应（0~k 天平均温度）' in html
     assert '事件语义映射（CAP）' in html
+
+
+def test_lag_page_swaps_inverted_dates(admin_client, monkeypatch):
+    captured = {}
+
+    def capture_template(template_name, **context):
+        captured['template_name'] = template_name
+        captured.update(context)
+        return 'ok'
+
+    monkeypatch.setattr('blueprints.analysis.render_template', capture_template)
+
+    response = admin_client.post(
+        '/analysis/lag',
+        data={
+            'start_date': '2025-12-20',
+            'end_date': '2025-10-10',
+            'csrf_token': 'test-csrf-token',
+        },
+    )
+
+    assert response.status_code == 200
+    assert captured['template_name'] == 'analysis_lag.html'
+    assert captured['start_date'] == '2025-10-10'
+    assert captured['end_date'] == '2025-12-20'

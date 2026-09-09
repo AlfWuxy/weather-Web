@@ -1,0 +1,19 @@
+.forecast-hero { background: linear-gradient(145deg, #9f3a12 0%, #ba4b18 100%); }
+.week-summary { margin-top: 20rpx; }
+.summary-number { color: #b64815; font-size: 72rpx; line-height: 1.1; font-weight: 850; }
+.compact-button { min-height: 88rpx; padding: 14rpx 24rpx; }
+.forecast-card { display: grid; grid-template-columns: 176rpx minmax(0, 1fr) 132rpx; align-items: center; gap: 14rpx; border-left-width: 10rpx; }
+.risk-border-low { border-left-color: #4eaa72; }
+.risk-border-mid { border-left-color: #daa72c; }
+.risk-border-high { border-left-color: #d74b37; }
+.risk-border-unknown { border-left-color: #aaa39d; }
+.day-label { font-size: 15.5px; font-weight: 800; }
+.forecast-day .small { font-size: 14px; white-space: nowrap; }
+.temp-range { margin: 8rpx 0; color: #a34216; font-size: 34rpx; font-weight: 800; }
+.day-risk { padding: 16rpx 12rpx; border-radius: 18rpx; text-align: center; }
+.day-score { margin-top: 4rpx; font-size: 39rpx; font-weight: 850; }
+
+@media screen and (max-width: 340px) {
+  .forecast-card { grid-template-columns: 1fr; align-items: start; }
+  .day-risk { justify-self: start; }
+}

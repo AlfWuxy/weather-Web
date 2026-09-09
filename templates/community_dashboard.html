@@ -36,7 +36,14 @@
                             </div>
                         </div>
                         <div class="card-body">
-                            {% if not item.weather_available %}
+                            {% if item.weather_available %}
+                            <div class="alert alert-light border py-2 px-3" role="status">
+                                <strong>本地基础热风险：{{ item.risk_label }}</strong> · 天气来源：{{ item.weather_source_label }}
+                                {% if not item.public_share_ready %}
+                                <br>当前数据只供本页查看；微信群与公共传播内容待新鲜、完整的和风天气实况恢复后生成。
+                                {% endif %}
+                            </div>
+                            {% else %}
                             <div class="alert alert-warning py-2 px-3" role="status">
                                 <strong>天气更新中</strong>：风险等级和转发内容暂缓更新。仍可查看居民反馈和避暑资源。
                             </div>
@@ -110,13 +117,13 @@
                                         <div class="text-muted small mb-3">暂无建议。</div>
                                     {% endif %}
                                     <h6 class="mb-2">群发模板复制</h6>
-                                    {% if item.weather_available %}
+                                    {% if item.public_share_ready %}
                                     <textarea class="form-control mb-2" rows="5" id="groupMessage-{{ loop.index }}" readonly>{{ item.group_message }}</textarea>
                                     <button class="btn btn-outline-primary btn-sm copy-community" data-target="groupMessage-{{ loop.index }}">
                                         <i class="bi bi-clipboard"></i> 复制群发模板
                                     </button>
                                     {% else %}
-                                    <div class="text-muted small">天气更新后，可复制社区提醒。</div>
+                                    <div class="text-muted small">公开传播待新鲜、完整的和风天气实况恢复后生成。</div>
                                     {% endif %}
                                 </div>
                             </div>

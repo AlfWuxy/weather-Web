@@ -94,6 +94,22 @@ def test_deploy_script_requires_https_public_base_url():
     assert 'DEFAULT_PUBLIC_BASE_URL="http://$SERVER:5000"' in content
 
 
+def test_deploy_script_binds_localhost_not_all_interfaces():
+    content = _load_deploy_script()
+    assert '--bind 127.0.0.1:5000' in content
+    assert '--bind 0.0.0.0:5000' not in content
+
+
+def test_deploy_script_ssh_host_key_not_disabled():
+    """P11：默认不得 StrictHostKeyChecking=no + known_hosts=/dev/null。"""
+    content = _load_deploy_script()
+    # 默认串使用 accept-new；允许环境覆盖，但仓库默认不得写死 no+/dev/null 组合
+    assert 'StrictHostKeyChecking=accept-new' in content
+    assert 'UserKnownHostsFile=/dev/null' not in content.split('DEFAULT_SSH_OPTS')[1].split('\n')[0]
+    assert 'DEPLOY_APP_USER' in content
+    assert '源站仅本机' in content or '127.0.0.1:5000' in content
+
+
 def test_precompute_script_respects_deploy_venv_dir():
     content = _load_precompute_script()
 

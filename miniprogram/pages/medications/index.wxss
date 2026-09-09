@@ -1,0 +1,254 @@
+.page-shell {
+  padding: 30rpx 28rpx calc(70rpx + env(safe-area-inset-bottom));
+}
+
+.page-title {
+  color: #14251c;
+  font-size: 42rpx;
+  font-weight: 700;
+}
+
+.page-copy {
+  margin-top: 10rpx;
+  color: #66736c;
+  font-size: 14px;
+  line-height: 1.65;
+}
+
+.form-card,
+.medicine-card,
+.state-box {
+  margin-top: 24rpx;
+  padding: 28rpx;
+  border-radius: 24rpx;
+  background: #ffffff;
+  box-shadow: 0 12rpx 32rpx rgba(25, 58, 39, 0.07);
+}
+
+.field-group {
+  margin-top: 24rpx;
+}
+
+.first-field {
+  margin-top: 0;
+}
+
+.field-label {
+  margin-bottom: 12rpx;
+  color: #2a3e33;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.field-label text {
+  color: #b42318;
+}
+
+.text-input,
+.picker-field,
+.small-input {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 88rpx;
+  padding: 21rpx 22rpx;
+  border: 2rpx solid #ced9d2;
+  border-radius: 16rpx;
+  background: #ffffff;
+  color: #1e3026;
+  font-size: 14px;
+}
+
+.two-column {
+  display: flex;
+  gap: 18rpx;
+  margin-top: 24rpx;
+}
+
+.column-field {
+  flex: 1;
+  min-width: 0;
+}
+
+.trigger-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10rpx;
+  margin: 24rpx 0 0;
+  background: transparent;
+  color: #176d40;
+  font-size: 14px;
+}
+
+.trigger-icon {
+  width: 32rpx;
+  height: 32rpx;
+  opacity: 0.68;
+}
+
+.trigger-icon.expanded {
+  transform: rotate(180deg);
+}
+
+.trigger-toggle::after,
+.delete-link::after {
+  border: 0;
+}
+
+.trigger-panel {
+  margin-top: 12rpx;
+  padding: 22rpx;
+  border-radius: 18rpx;
+  background: #f2f8f4;
+}
+
+.trigger-copy {
+  color: #5f7167;
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.trigger-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14rpx;
+  margin-top: 16rpx;
+}
+
+.small-input {
+  min-height: 88rpx;
+  padding: 18rpx;
+  font-size: 14px;
+}
+
+.save-button {
+  min-height: 92rpx;
+  margin-top: 26rpx;
+  border-radius: 18rpx;
+  background: #167a43;
+  color: #ffffff;
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 92rpx;
+}
+
+.medicine-warning {
+  margin-top: 16rpx;
+  color: #8a5d13;
+  font-size: 14px;
+  line-height: 1.6;
+  text-align: center;
+}
+
+.section-title {
+  margin-top: 38rpx;
+  color: #21372b;
+  font-size: 33rpx;
+  font-weight: 700;
+}
+
+.state-box {
+  color: #68766e;
+  text-align: center;
+}
+
+.error-state,
+.inline-warning {
+  border: 1rpx solid #efc998;
+  background: #fff4e5;
+  color: #784116;
+}
+
+.state-actions {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 12rpx;
+  margin-top: 18rpx;
+}
+
+.retry-button,
+.return-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 88rpx;
+  margin: 0;
+  border-radius: 16rpx;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+.retry-button {
+  background: #167a43;
+  color: #ffffff;
+}
+
+.return-button {
+  border: 1rpx solid #cbd8d0;
+  background: #ffffff;
+  color: #315340;
+}
+
+.inline-state,
+.inline-warning {
+  margin-top: 18rpx;
+  padding: 18rpx 22rpx;
+  border-radius: 16rpx;
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.inline-state {
+  background: #f2f5f3;
+  color: #5f6f67;
+}
+
+.inline-retry {
+  width: 100%;
+  margin-top: 14rpx;
+}
+
+.medicine-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20rpx;
+}
+
+.medicine-name {
+  color: #243c2f;
+  font-size: 15.5px;
+  font-weight: 700;
+}
+
+.medicine-dose,
+.medicine-meta {
+  margin-top: 9rpx;
+  color: #65736b;
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.time-badge {
+  padding: 10rpx 16rpx;
+  border-radius: 999rpx;
+  background: #edf7f1;
+  color: #176d40;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.delete-link {
+  margin: 18rpx 0 0;
+  padding: 0;
+  background: transparent;
+  color: #9a554f;
+  font-size: 14px;
+  text-align: left;
+}
+
+@media screen and (max-width: 340px) {
+  .two-column { flex-direction: column; }
+  .trigger-grid { grid-template-columns: 1fr; }
+}

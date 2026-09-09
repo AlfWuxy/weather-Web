@@ -6,6 +6,8 @@ from datetime import date
 
 import pytest
 
+from core.time_utils import utcnow
+
 
 def test_normalize_forecast_entry_preserves_zero_p50():
     from services.forecast_service import ForecastService
@@ -207,6 +209,7 @@ def test_forecast_cards_do_not_substitute_visit_probability_for_composite_score(
         'temperature_min': 24,
         'temperature_mean': 27.5,
         'humidity': 70,
+        'wind_speed': 2.0,
         'condition': '多云',
         'data_source': 'QWeather',
         'is_mock': False,
@@ -234,6 +237,7 @@ def test_forecast_cards_pass_transparency_inputs():
         'temperature_min': 25,
         'temperature_mean': 29,
         'humidity': 72,
+        'wind_speed': 2.0,
         'condition': '晴',
         'data_source': 'QWeather',
         'is_mock': False,
@@ -322,6 +326,9 @@ def test_forecast_page_embeds_recalculation_context(authenticated_client, monkey
             'temperature_mean': 28 + idx,
             'condition': '晴',
             'humidity': 75,
+            'wind_speed': 2.0,
+            'data_source': 'QWeather',
+            'is_mock': False,
         }
         for idx in range(7)
     ]
@@ -398,6 +405,26 @@ def test_forecast_page_embeds_recalculation_context(authenticated_client, monkey
     monkeypatch.setattr(
         'blueprints.tools.get_forecast_service',
         lambda: FakeForecastService(),
+    )
+    monkeypatch.setattr(
+        'blueprints.tools.get_weather_with_cache',
+        lambda _location: ({
+            'temperature': 32.0,
+            'temperature_max': 35.0,
+            'temperature_min': 25.0,
+            'humidity': 75.0,
+            'pressure': 1005.0,
+            'wind_speed': 2.0,
+            'weather_condition': '晴',
+            'aqi': 65.0,
+            'pm25': 42.0,
+            'air_quality_available': True,
+            'observed_at': utcnow().isoformat(),
+            'air_observed_at': utcnow().isoformat(),
+            'quality_version': 1,
+            'data_source': 'QWeather',
+            'is_mock': False,
+        }, False),
     )
 
     response = authenticated_client.get('/forecast-7day')

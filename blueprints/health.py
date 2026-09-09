@@ -20,14 +20,84 @@ from core.health_profiles import (
 )
 from core.time_utils import today_local
 from core.usage import log_usage_event
-from core.weather import ensure_user_location_valid, get_weather_with_cache, is_qweather_online_weather
+from core.weather import (
+    get_weather_with_cache,
+    is_air_quality_available,
+    is_heat_action_weather_ready,
+    is_live_observational_weather,
+    weather_source_label,
+)
 from core.db_models import FamilyMember, FamilyMemberProfile, HealthDiary, MedicationReminder, WeatherData
+from services.user._common import CARE_ROLES
 from utils.parsers import parse_int, parse_date, parse_float, safe_json_loads
-from utils.validators import sanitize_input, validate_gender
+from utils.validators import sanitize_input, validate_age, validate_gender
 
 logger = logging.getLogger(__name__)
 
 bp = Blueprint('health', __name__)
+
+
+@bp.before_request
+def require_family_care_role():
+    """家庭健康域只允许明确授权的照护角色进入。"""
+    if not getattr(current_user, 'is_authenticated', False):
+        return None
+    if getattr(current_user, 'role', None) in CARE_ROLES:
+        return None
+    flash('家庭照护需使用家庭账号登录', 'error')
+    return redirect(url_for('public.role_entry'))
+
+
+def _member_alerts_for_capabilities(profile, weather, heat_ready, air_ready):
+    """按温热与空气质量能力门过滤个人阈值结果。"""
+    if not weather or not (heat_ready or air_ready):
+        return []
+    reasons = member_weather_triggered(profile, weather)
+    return [
+        reason for reason in reasons
+        if (reason.startswith('AQI') and air_ready)
+        or (not reason.startswith('AQI') and heat_ready)
+    ]
+
+
+def _empty_member_threshold_weather(*, location_scope='not_enrolled'):
+    return {
+        'location': '',
+        'location_scope': location_scope,
+        'weather': None,
+        'weather_available': False,
+        'heat_action_weather_ready': False,
+        'air_quality_available': False,
+        'weather_source_label': '',
+    }
+
+
+def _member_threshold_weather(profile, weather_cache=None):
+    """只按已入组且手填的老人所在地判断阈值，不用家属当前位置顶替。"""
+    if not profile or not getattr(profile, 'weather_care_enabled', False):
+        return _empty_member_threshold_weather(location_scope='not_enrolled')
+    query = (getattr(profile, 'location_query', None) or '').strip()
+    if not query:
+        return _empty_member_threshold_weather(location_scope='missing_elder_location')
+    cache = weather_cache if weather_cache is not None else {}
+    if query not in cache:
+        try:
+            weather_data, _ = get_weather_with_cache(query)
+        except Exception:
+            logger.warning("家人档案天气读取失败，location=%s", query[:80], exc_info=True)
+            weather_data = {}
+        cache[query] = weather_data or {}
+    weather_data = cache[query]
+    weather_available = is_live_observational_weather(weather_data)
+    return {
+        'location': query,
+        'location_scope': 'elder_location',
+        'weather': SimpleNamespace(**weather_data) if weather_available else None,
+        'weather_available': weather_available,
+        'heat_action_weather_ready': is_heat_action_weather_ready(weather_data),
+        'air_quality_available': is_air_quality_available(weather_data),
+        'weather_source_label': weather_source_label(weather_data) if weather_available else '',
+    }
 
 
 def _empty_family_member():
@@ -46,7 +116,10 @@ def _apply_family_member_form(member):
     """将表单内容写回成员对象，并返回画像载荷。"""
     member.name = sanitize_input(request.form.get('name'), max_length=50)
     member.relation = sanitize_input(request.form.get('relation'), max_length=20)
-    member.age = parse_int(request.form.get('age'))
+    valid, age = validate_age(request.form.get('age'))
+    if not valid:
+        return None, age
+    member.age = age
 
     raw_gender = request.form.get('gender')
     member.gender = sanitize_input(raw_gender, max_length=10)
@@ -108,6 +181,19 @@ def family_members():
             **profile_payload
         )
         db.session.add(profile)
+        db.session.flush()
+        if request.form.get('join_weather_care') == 'on':
+            from services.care_enrollment import CareEnrollmentError, enroll_weather_care
+            try:
+                enroll_weather_care(
+                    current_user,
+                    member,
+                    location_query=profile_payload.get('location_query') or request.form.get('elder_location_query'),
+                )
+            except CareEnrollmentError as exc:
+                db.session.rollback()
+                flash(exc.message, 'error')
+                return redirect(url_for('health.family_members'))
         db.session.commit()
         log_usage_event(
             'elder_profile_created',
@@ -138,16 +224,18 @@ def family_members():
         if reminder.member_id and reminder.member_id not in last_reminder_map:
             last_reminder_map[reminder.member_id] = reminder
 
-    user_location = ensure_user_location_valid()
-    weather_data, _ = get_weather_with_cache(user_location)
-    weather_available = is_qweather_online_weather(weather_data)
-    weather = SimpleNamespace(**weather_data) if weather_available else None
-
+    weather_cache = {}
     member_cards = []
     risk_counts = {'low': 0, 'medium': 0, 'high': 0}
     completion_values = []
     chronic_count = 0
     alert_trigger_count = 0
+    weather_care_enrolled_count = 0
+    enrolled_weather_pending = False
+    any_enrolled_weather = False
+    any_heat_ready = False
+    any_air_ready = False
+    current_weather_source = ''
 
     for member in members:
         profile = profile_map.get(member.id)
@@ -161,9 +249,31 @@ def family_members():
         completion = compute_profile_completion(member, profile)
         completion_values.append(completion['percent'])
 
+        threshold_weather = _member_threshold_weather(profile, weather_cache)
+        if profile_ctx.get('weather_care_enabled'):
+            weather_care_enrolled_count += 1
+            if threshold_weather['location_scope'] == 'elder_location':
+                if threshold_weather['weather_available']:
+                    any_enrolled_weather = True
+                    if threshold_weather['weather_source_label']:
+                        current_weather_source = threshold_weather['weather_source_label']
+                    if threshold_weather['heat_action_weather_ready']:
+                        any_heat_ready = True
+                    if threshold_weather['air_quality_available']:
+                        any_air_ready = True
+                else:
+                    enrolled_weather_pending = True
+            else:
+                enrolled_weather_pending = True
+
         alerts = []
-        if profile_ctx['alert_enabled'] and weather_available:
-            alerts = member_weather_triggered(profile, weather)
+        if profile_ctx['alert_enabled'] and threshold_weather['location_scope'] == 'elder_location':
+            alerts = _member_alerts_for_capabilities(
+                profile,
+                threshold_weather['weather'],
+                threshold_weather['heat_action_weather_ready'],
+                threshold_weather['air_quality_available'],
+            )
         if alerts:
             alert_trigger_count += 1
 
@@ -175,7 +285,10 @@ def family_members():
             'gender': member.gender,
             'chronic_diseases': diseases,
             'chronic': diseases,
-            'location': user_location,
+            'location': threshold_weather['location'],
+            'location_scope': threshold_weather['location_scope'],
+            'weather_care_enabled': bool(profile_ctx.get('weather_care_enabled')),
+            'weather_available': threshold_weather['weather_available'],
             'risk': risk,
             'risk_level': risk['level'],
             'risk_label': risk['label'],
@@ -206,7 +319,7 @@ def family_members():
         relation_counts[relation] = relation_counts.get(relation, 0) + 1
 
     avg_completion = int(round(sum(completion_values) / len(completion_values))) if completion_values else 0
-    risk_chart_labels = ['低风险', '中风险', '高风险']
+    risk_chart_labels = ['常规关注', '中关注', '高关注']
     risk_chart_values = [risk_counts['low'], risk_counts['medium'], risk_counts['high']]
 
     return render_template(
@@ -215,15 +328,17 @@ def family_members():
         family_members=filtered_cards,
         total_members=len(members),
         risk_counts=risk_counts,
-        high_risk_count=risk_counts['high'],
         chronic_count=chronic_count,
         avg_completion=avg_completion,
-        feedback_rate=avg_completion,
         relation_counts=relation_counts,
         alert_trigger_count=alert_trigger_count,
-        notified_count=alert_trigger_count,
-        today_weather=weather,
-        weather_available=weather_available,
+        today_weather=None,
+        weather_available=any_enrolled_weather,
+        heat_action_weather_ready=any_heat_ready,
+        air_quality_available=any_air_ready,
+        weather_source_label=current_weather_source,
+        weather_care_enrolled_count=weather_care_enrolled_count,
+        enrolled_weather_pending=enrolled_weather_pending,
         search_query=search_query,
         risk_filter=risk_filter,
         risk_chart_labels=risk_chart_labels,
@@ -253,6 +368,20 @@ def family_member_new():
 
         profile = FamilyMemberProfile(member_id=member.id, **profile_payload)
         db.session.add(profile)
+        db.session.flush()
+        join_care = request.form.get('join_weather_care') == 'on'
+        if join_care:
+            from services.care_enrollment import CareEnrollmentError, enroll_weather_care
+            try:
+                enroll_weather_care(
+                    current_user,
+                    member,
+                    location_query=profile_payload.get('location_query') or request.form.get('elder_location_query'),
+                )
+            except CareEnrollmentError as exc:
+                db.session.rollback()
+                flash(exc.message, 'error')
+                return _render_family_member_form(member, None, is_create_mode=True)
         db.session.commit()
         log_usage_event(
             'elder_profile_created',
@@ -293,6 +422,25 @@ def family_member_edit(member_id):
         else:
             profile = FamilyMemberProfile(member_id=member.id, **profile_payload)
             db.session.add(profile)
+
+        db.session.flush()
+        from services.care_enrollment import CareEnrollmentError, deactivate_weather_care, enroll_weather_care
+        try:
+            join_care = request.form.get('join_weather_care') == 'on'
+            leave_care = request.form.get('leave_weather_care') == 'on'
+            if leave_care or not join_care:
+                if leave_care or bool(getattr(profile, 'weather_care_enabled', False)):
+                    deactivate_weather_care(current_user, member)
+            if join_care and not leave_care:
+                enroll_weather_care(
+                    current_user,
+                    member,
+                    location_query=profile_payload.get('location_query') or request.form.get('elder_location_query'),
+                )
+        except CareEnrollmentError as exc:
+            db.session.rollback()
+            flash(exc.message, 'error')
+            return redirect(url_for('health.family_member_edit', member_id=member_id))
 
         db.session.commit()
         log_usage_event(
@@ -374,13 +522,15 @@ def family_member_detail(member_id):
     reminders = MedicationReminder.query.filter_by(user_id=current_user.id, member_id=member.id).order_by(
         MedicationReminder.created_at.desc()
     ).all()
-    user_location = ensure_user_location_valid()
-    weather_data, _ = get_weather_with_cache(user_location)
-    weather_available = is_qweather_online_weather(weather_data)
-    weather = SimpleNamespace(**weather_data) if weather_available else None
+    threshold_weather = _member_threshold_weather(profile)
     alerts = []
-    if profile_ctx['alert_enabled'] and weather_available:
-        alerts = member_weather_triggered(profile, weather)
+    if profile_ctx['alert_enabled'] and threshold_weather['location_scope'] == 'elder_location':
+        alerts = _member_alerts_for_capabilities(
+            profile,
+            threshold_weather['weather'],
+            threshold_weather['heat_action_weather_ready'],
+            threshold_weather['air_quality_available'],
+        )
 
     return render_template(
         'family_member_detail.html',
@@ -391,8 +541,13 @@ def family_member_detail(member_id):
         completion=completion,
         diary_entries=entries,
         reminders=reminders,
-        weather=weather,
-        weather_available=weather_available,
+        weather=threshold_weather['weather'],
+        weather_available=threshold_weather['weather_available'],
+        heat_action_weather_ready=threshold_weather['heat_action_weather_ready'],
+        air_quality_available=threshold_weather['air_quality_available'],
+        weather_source_label=threshold_weather['weather_source_label'],
+        weather_location=threshold_weather['location'],
+        weather_location_scope=threshold_weather['location_scope'],
         alerts=alerts
     )
 

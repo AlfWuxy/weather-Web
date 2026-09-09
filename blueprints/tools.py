@@ -3,21 +3,25 @@
 from datetime import datetime
 import math
 
-from flask import Blueprint, current_app, flash, render_template, request
+from flask import Blueprint, current_app, flash, redirect, render_template, request, url_for
 from flask_login import current_user, login_required
 
 from core.db_models import FamilyMember
+from core.guest import is_guest_user
 from core.time_utils import today_local
 from core.weather import (
     ensure_user_location_valid,
+    get_openmeteo_forecast_with_cache,
     get_location_options,
     get_qweather_forecast_with_cache,
     get_weather_with_cache,
-    is_qweather_online_weather,
+    is_air_quality_available,
+    is_qweather_production_ready,
     normalize_location_name,
+    resolve_weather_city_label,
 )
 from services.chronic_risk_service import get_chronic_service
-from services.forecast_cards import build_forecast_cards
+from services.forecast_cards import build_forecast_cards, build_weather_only_forecast_cards
 from services.forecast_service import get_forecast_service
 from services.ml_prediction_service import get_ml_service
 from utils.parsers import parse_float, parse_int
@@ -103,7 +107,10 @@ def _format_qweather_update_time(raw_value):
 
 def _forecast_weather_context(weather_data):
     """仅把真实和风实况中的有限空气质量值传给未来日风险计算。"""
-    if not is_qweather_online_weather(weather_data):
+    if not (
+        is_qweather_production_ready(weather_data)
+        and is_air_quality_available(weather_data)
+    ):
         return {}
     context = {}
     for field in ('pm25', 'aqi'):
@@ -149,7 +156,10 @@ def _build_chronic_breakdown(result, adherence, symptoms):
 
     breakdown = []
     for disease_key, payload in (result.get('disease_risks') or {}).items():
-        risk_score = int(round(payload.get('risk_score', 0) or 0))
+        raw_risk_score = parse_float(payload.get('risk_score'))
+        if raw_risk_score is None or not math.isfinite(raw_risk_score):
+            continue
+        risk_score = int(round(raw_risk_score))
         vital_contribution = float(payload.get('vital_adjustment', 0) or 0)
         raw_dlnm_rr = payload.get('raw_dlnm_rr', payload.get('base_rr'))
         dlnm_disease_modifier = payload.get('dlnm_disease_modifier', 1.0)
@@ -239,10 +249,16 @@ def _normalize_chronic_suggestions(items):
     return suggestions
 
 
+def _guest_demo_flag():
+    """标记当前页面是否处于游客演示模式。"""
+    return is_guest_user(current_user)
+
+
 @bp.route('/ml-prediction', methods=['GET', 'POST'], endpoint='ml_prediction')
 @login_required
 def ml_prediction():
     """ML预测页面。"""
+    guest_demo = _guest_demo_flag()
     family_members = _tool_family_members()
     current_location = ensure_user_location_valid()
     form_state = {
@@ -255,6 +271,10 @@ def ml_prediction():
     prediction_error = None
 
     if request.method == 'POST':
+        if guest_demo:
+            flash('游客模式无法生成类别线索，请注册或登录正式账号', 'error')
+            return redirect(url_for('tools.ml_prediction'))
+
         selected_member = _selected_member(request.form.get('member_id'))
         default_age = selected_member.age if selected_member and selected_member.age else current_user.age or 65
         default_gender = selected_member.gender if selected_member and selected_member.gender else current_user.gender or '男'
@@ -265,7 +285,10 @@ def ml_prediction():
         }
 
         weather_info, _ = get_weather_with_cache(form_state['location'])
-        if not is_qweather_online_weather(weather_info):
+        if not (
+            is_qweather_production_ready(weather_info)
+            and is_air_quality_available(weather_info)
+        ):
             prediction_error = '天气正在更新，类别线索暂不显示。请稍后再试。'
         else:
             user_info = {
@@ -276,12 +299,19 @@ def ml_prediction():
             if result.get('success'):
                 prediction = []
                 for rank, item in enumerate((result.get('predictions') or [])[:3], start=1):
-                    adjusted_probability = float(item.get('probability') or 0.0)
-                    original_probability = float(
+                    adjusted_probability = parse_float(item.get('probability'))
+                    original_probability = parse_float(
                         item.get('original_probability')
                         if item.get('original_probability') is not None
                         else adjusted_probability
                     )
+                    if (
+                        adjusted_probability is None
+                        or original_probability is None
+                        or not math.isfinite(adjusted_probability)
+                        or not math.isfinite(original_probability)
+                    ):
+                        continue
                     multiplier = item.get('weather_multiplier')
                     if multiplier is None:
                         multiplier = adjusted_probability / original_probability if original_probability > 0 else 1.0
@@ -293,6 +323,8 @@ def ml_prediction():
                         'label': f'关注排序第 {rank}',
                     })
                 factors = _build_ml_factor_cards(result, form_state['age'], weather_info)
+                if not prediction:
+                    prediction_error = '模型返回了无效风险分数，请稍后再试。'
             else:
                 prediction_error = result.get('error') or '预测暂时不可用，请稍后再试。'
 
@@ -303,6 +335,7 @@ def ml_prediction():
         prediction=prediction,
         factors=factors,
         prediction_error=prediction_error,
+        guest_demo=guest_demo,
     )
 
 
@@ -311,63 +344,99 @@ def ml_prediction():
 def ai_qa():
     """AI问答页面"""
     models = current_app.config.get('AI_ALLOWED_MODELS', [])
-    return render_template('ai_question.html', models=models)
+    return render_template('ai_question.html', models=models, guest_demo=_guest_demo_flag())
 
 
 @bp.route('/forecast-7day', endpoint='forecast_7day')
 @login_required
 def forecast_7day():
     """7天健康预测页面"""
+    guest_demo = _guest_demo_flag()
     current_location = _normalized_location(request.args.get('location'))
+    weather_location = resolve_weather_city_label(current_location)
     start_date = today_local()
     forecast_days = []
     weekly_tips = None
     forecast_error = None
-    forecast_meta = {'source': 'QWeather'}
-    qweather_days, from_cache, forecast_meta = get_qweather_forecast_with_cache(current_location, days=7)
-    forecast_meta = dict(forecast_meta or {})
-    forecast_meta['source_label'] = '和风天气'
-    forecast_meta['from_cache'] = bool(from_cache)
-    forecast_meta['update_time_label'] = _format_qweather_update_time(forecast_meta.get('update_time'))
+    forecast_weather_only = False
+    forecast_meta = {
+        'source': None,
+        'source_label': None,
+        'from_cache': False,
+        'update_time_label': '',
+        'health_risk_available': False,
+    }
 
-    if len(qweather_days or []) < 7:
-        forecast_error = '7 天天气正在更新，预报暂不显示。请稍后重试。'
-    else:
-        health_forecasts = []
-        current_weather, _ = get_weather_with_cache(current_location)
-        weather_context = _forecast_weather_context(current_weather)
-        try:
-            health_forecasts, summary = get_forecast_service().generate_7day_forecast(
-                qweather_days,
-                start_date=start_date,
-                context=weather_context,
+    if not guest_demo:
+        qweather_days, from_cache, qweather_meta = get_qweather_forecast_with_cache(current_location, days=7)
+
+        if len(qweather_days or []) >= 7:
+            forecast_meta = dict(qweather_meta) if isinstance(qweather_meta, dict) else {}
+            forecast_meta['source'] = 'QWeather'
+            forecast_meta['source_label'] = '和风天气'
+            forecast_meta['from_cache'] = bool(from_cache)
+            forecast_meta['update_time_label'] = _format_qweather_update_time(forecast_meta.get('update_time'))
+            health_forecasts = []
+            current_weather, _ = get_weather_with_cache(current_location)
+            weather_context = _forecast_weather_context(current_weather)
+            if weather_context:
+                try:
+                    health_forecasts, summary = get_forecast_service().generate_7day_forecast(
+                        qweather_days,
+                        start_date=start_date,
+                        context=weather_context,
+                    )
+                    recommendations = (summary or {}).get('recommendations') or []
+                    if recommendations:
+                        weekly_tips = [
+                            {
+                                'icon': 'lightbulb',
+                                'title': item.get('category') or item.get('priority') or '健康提醒',
+                                'detail': item.get('advice') or item.get('description') or '',
+                            }
+                            for item in recommendations[:4]
+                            if isinstance(item, dict)
+                        ] or None
+                except Exception as exc:
+                    current_app.logger.warning("7天健康预测生成失败，仅展示和风天气: %s", exc)
+            forecast_days = build_forecast_cards(qweather_days, health_forecasts, start_date)
+            forecast_meta['health_risk_available'] = any(
+                bool(item.get('risk_available')) for item in forecast_days
             )
-            recommendations = (summary or {}).get('recommendations') or []
-            if recommendations:
-                weekly_tips = [
-                    {
-                        'icon': 'lightbulb',
-                        'title': item.get('category') or item.get('priority') or '健康提醒',
-                        'detail': item.get('advice') or item.get('description') or '',
-                    }
-                    for item in recommendations[:4]
-                    if isinstance(item, dict)
-                ] or None
-        except Exception as exc:
-            current_app.logger.warning("7天健康预测生成失败，仅展示和风天气: %s", exc)
-        forecast_days = build_forecast_cards(qweather_days, health_forecasts, start_date)
-        if not forecast_days:
-            forecast_error = '7 天天气正在更新，预报暂不显示。请稍后重试。'
+            if not forecast_days:
+                forecast_error = '7 天天气正在更新，预报暂不显示。请稍后重试。'
+            elif not forecast_meta['health_risk_available']:
+                forecast_weather_only = True
+        else:
+            openmeteo_days, openmeteo_cached, openmeteo_meta = get_openmeteo_forecast_with_cache(
+                current_location,
+                days=7,
+            )
+            if len(openmeteo_days or []) >= 7:
+                forecast_days = build_weather_only_forecast_cards(openmeteo_days, start_date)
+                if forecast_days:
+                    forecast_weather_only = True
+                    forecast_meta = dict(openmeteo_meta) if isinstance(openmeteo_meta, dict) else {}
+                    forecast_meta['source'] = 'Open-Meteo'
+                    forecast_meta['source_label'] = 'Open-Meteo'
+                    forecast_meta['from_cache'] = bool(openmeteo_cached)
+                    forecast_meta['update_time_label'] = ''
+                    forecast_meta['health_risk_available'] = False
+            if not forecast_days:
+                forecast_error = '7 天天气正在更新，预报暂不显示。请稍后重试。'
 
     return render_template(
         'forecast_7day.html',
         family_members=_tool_family_members(),
         current_location=current_location,
+        weather_location=weather_location,
         location_options=get_location_options(),
         forecast_days=forecast_days,
         forecast_error=forecast_error,
         forecast_meta=forecast_meta,
         weekly_tips=weekly_tips,
+        guest_demo=guest_demo,
+        forecast_weather_only=forecast_weather_only,
     )
 
 
@@ -375,6 +444,7 @@ def forecast_7day():
 @login_required
 def chronic_risk():
     """慢病风险预测页面"""
+    guest_demo = _guest_demo_flag()
     form_state = {
         'disease': 'hypertension',
         'sbp': '',
@@ -389,6 +459,10 @@ def chronic_risk():
     risk_error = None
 
     if request.method == 'POST':
+        if guest_demo:
+            flash('游客模式无法生成慢病风险评估，请注册或登录正式账号', 'error')
+            return redirect(url_for('tools.chronic_risk'))
+
         disease_key = sanitize_input(request.form.get('disease'), max_length=32) or 'hypertension'
         disease_key = disease_key if disease_key in CHRONIC_FORM_LABELS else 'hypertension'
         form_state = {
@@ -400,7 +474,10 @@ def chronic_risk():
         }
 
         weather_data, _ = get_weather_with_cache(ensure_user_location_valid())
-        if not is_qweather_online_weather(weather_data):
+        if not (
+            is_qweather_production_ready(weather_data)
+            and is_air_quality_available(weather_data)
+        ):
             risk_error = '天气正在更新，慢病风险提示暂不显示。请稍后再试。'
         else:
             vitals = _parse_chronic_vitals(form_state)
@@ -417,7 +494,20 @@ def chronic_risk():
             )
 
             overall = result.get('overall_risk') or {}
-            risk_score = int(round(overall.get('score', 0) or 0))
+            parsed_risk_score = parse_float(overall.get('score'))
+            if parsed_risk_score is None or not math.isfinite(parsed_risk_score):
+                risk_error = '模型返回了无效风险分数，请稍后再试。'
+                return render_template(
+                    'chronic_risk.html',
+                    form_state=form_state,
+                    risk_score=None,
+                    risk_comment=None,
+                    breakdown=None,
+                    suggestions=None,
+                    risk_error=risk_error,
+                    guest_demo=guest_demo,
+                )
+            risk_score = int(round(parsed_risk_score))
             risk_level = overall.get('level') or _score_level(risk_score)
             risk_comment = (
                 f"当前以{CHRONIC_FORM_LABELS[disease_key]}为重点观察对象，结合天气条件判定为{risk_level}。"
@@ -436,4 +526,5 @@ def chronic_risk():
         breakdown=breakdown,
         suggestions=suggestions,
         risk_error=risk_error,
+        guest_demo=guest_demo,
     )

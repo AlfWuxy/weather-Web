@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+
+{% block title %}求助详情 · 宜老天气通{% endblock %}
+
+{% block content %}
+<div class="container my-4">
+    <a class="btn btn-outline-secondary btn-sm mb-3" href="{{ url_for('user.help_inbox') }}">返回待处理</a>
+    <h1 class="h3">求助详情</h1>
+    <p class="text-muted">编号 {{ detail.id }} · {{ detail.status_label }}</p>
+    <div class="alert alert-warning">这不是实时急救通道。显示「等待接手」表示尚未有人明确接受，不表示已经有人响应。</div>
+    <p>发起时间 {{ detail.created_at or '—' }}</p>
+    <p>接手时间 {{ detail.acknowledged_at or '尚未接手' }}</p>
+    <p>结束时间 {{ detail.resolved_at or '尚未结束' }}</p>
+    <p>结果 {{ detail.outcome_label or '—' }}{% if detail.outcome_success == False %}（不计入成功解决）{% elif detail.outcome_success %}（成功解决）{% endif %}</p>
+    <p>协助请求 {% if detail.requested_support_role == 'doctor' %}医生{% elif detail.requested_support_role == 'volunteer' %}协助者{% else %}无{% endif %}</p>
+    {% if detail.proxy_basis %}
+    <p>代录依据 {{ detail.proxy_basis }}</p>
+    {% endif %}
+    {% if detail.events %}
+    <h2 class="h5 mt-4">处理记录</h2>
+    <ul class="list-group">
+        {% for event in detail.events %}
+        <li class="list-group-item">
+            {{ event.created_at }} · {{ event.type_label or '进度更新' }}
+            {% if event.from_status_label or event.to_status_label %}（{{ event.from_status_label or '—' }} → {{ event.to_status_label or '—' }}）{% endif %}
+        </li>
+        {% endfor %}
+    </ul>
+    {% endif %}
+    <p class="small text-muted mt-3">复制话术、发送成功、页面打开或设备按键，都不等于老人已采取防护行动。</p>
+</div>
+{% endblock %}
