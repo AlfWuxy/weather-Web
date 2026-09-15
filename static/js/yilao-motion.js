@@ -60,24 +60,68 @@
     }
 
     function initEntranceMotion(body) {
-        const animated = document.querySelectorAll('.yl-fade-up, .yl-section, .narrative-step, [data-animate-in]');
+        const selector = '.yl-fade-up, .yl-section, .narrative-step, [data-animate-in]';
+        const animated = document.querySelectorAll(selector);
+        const motionQuery = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)');
+        let observer = null;
 
-        if (prefersReducedMotion() || !('IntersectionObserver' in window)) {
-            animated.forEach(el => el.classList.add('in-view'));
-            body.classList.add('motion-ready');
-            return;
+        function reveal(el) {
+            el.classList.add('in-view');
+            if (observer) observer.unobserve(el);
         }
 
-        body.classList.add('motion-ready');
-        const observer = new IntersectionObserver((entries) => {
-            entries.forEach((entry) => {
-                if (!entry.isIntersecting) return;
-                entry.target.classList.add('in-view');
-                observer.unobserve(entry.target);
-            });
-        }, { rootMargin: '0px 0px -8% 0px', threshold: 0.05 });
+        function revealAll() {
+            animated.forEach(reveal);
+            if (observer) observer.disconnect();
+        }
 
-        animated.forEach(el => observer.observe(el));
+        function revealFocusedAncestors(target) {
+            for (let el = target; el && el !== body; el = el.parentElement) {
+                if (el.matches && el.matches(selector)) reveal(el);
+            }
+        }
+
+        // 键盘跳转时同时展开所有入场祖先，避免焦点落在透明内容中。
+        body.addEventListener('focusin', function (event) {
+            revealFocusedAncestors(event.target);
+        });
+
+        if ((motionQuery && motionQuery.matches) || !('IntersectionObserver' in window)) {
+            revealAll();
+        } else {
+            observer = new IntersectionObserver((entries) => {
+                entries.forEach((entry) => {
+                    if (entry.isIntersecting) reveal(entry.target);
+                });
+            }, { rootMargin: '0px 0px -8% 0px', threshold: 0.05 });
+
+            const height = window.innerHeight || document.documentElement.clientHeight;
+            const width = window.innerWidth || document.documentElement.clientWidth;
+            animated.forEach((el) => {
+                const rect = el.getBoundingClientRect();
+                // 首屏先显示再启用动效，避免页面加载后出现一次隐藏闪烁。
+                if (rect.bottom > 0 && rect.top < height && rect.right > 0 && rect.left < width) {
+                    reveal(el);
+                } else {
+                    observer.observe(el);
+                }
+            });
+        }
+
+        revealFocusedAncestors(document.activeElement);
+        body.classList.add('motion-ready');
+
+        if (motionQuery) {
+            const onPreferenceChange = function (event) {
+                if (event.matches) revealAll();
+            };
+            if (motionQuery.addEventListener) {
+                motionQuery.addEventListener('change', onPreferenceChange);
+            } else if (motionQuery.addListener) {
+                // 兼容仍使用旧媒体查询监听接口的浏览器。
+                motionQuery.addListener(onPreferenceChange);
+            }
+        }
     }
 
     function initCountUp() {
@@ -103,6 +147,10 @@
                     const start = performance.now();
 
                     function tick(now) {
+                        if (prefersReducedMotion()) {
+                            render(target);
+                            return;
+                        }
                         const progress = Math.min(1, (now - start) / duration);
                         const eased = 1 - Math.pow(1 - progress, 3);
                         render(target * eased);
@@ -121,51 +169,94 @@
     }
 
     function initWordMotion() {
-        if (prefersReducedMotion()) return;
-
         document.querySelectorAll('[data-words]').forEach((el) => {
-            if (el.dataset.wordsReady === '1') return;
-            const text = el.textContent || '';
-            el.textContent = '';
-            Array.from(text).forEach((char, index) => {
-                if (/\s/.test(char)) {
-                    el.appendChild(document.createTextNode(char));
-                    return;
-                }
-                const span = document.createElement('span');
-                span.className = 'word';
-                span.style.animationDelay = (index * 0.035) + 's';
-                span.textContent = char;
-                el.appendChild(span);
-            });
+            // 保留文字、强调与链接原结构，标题整体入场，中文换行和朗读保持自然。
+            el.classList.add('yl-fade-up');
             el.dataset.wordsReady = '1';
         });
     }
 
     function initCopyFeedback() {
-        if (!navigator.clipboard) return;
+        const states = new WeakMap();
+        const liveStatus = document.createElement('span');
+        liveStatus.className = 'visually-hidden';
+        liveStatus.setAttribute('role', 'status');
+        liveStatus.setAttribute('aria-live', 'polite');
+        liveStatus.setAttribute('aria-atomic', 'true');
+        document.body.appendChild(liveStatus);
 
-        document.body.addEventListener('click', function(event) {
-            const button = event.target.closest('[data-copy-target]');
+        function restoreBusyState(button, state) {
+            if (state.originalBusy === null) button.removeAttribute('aria-busy');
+            else button.setAttribute('aria-busy', state.originalBusy);
+        }
+
+        document.body.addEventListener('click', function (event) {
+            const source = event.target && (event.target.closest ? event.target : event.target.parentElement);
+            const button = source && source.closest('[data-copy-target]');
             if (!button) return;
+            event.preventDefault();
 
-            const target = document.querySelector(button.dataset.copyTarget);
-            if (!target) return;
+            let state = states.get(button);
+            if (!state) {
+                const feedback = document.createElement('span');
+                feedback.setAttribute('aria-hidden', 'true');
+                state = { feedback, attempt: 0, timer: null, originalBusy: button.getAttribute('aria-busy') };
+                states.set(button, state);
+            }
+            if (state.timer !== null) window.clearTimeout(state.timer);
+            state.timer = null;
+            const attempt = ++state.attempt;
+            // 保留原按钮节点与事件；只更新独立反馈，不把上次成功文案当作原文。
+            if (!state.feedback.parentElement) button.appendChild(state.feedback);
+            state.feedback.className = 'copy-feedback ms-2';
+            state.feedback.textContent = '正在复制…';
+            button.setAttribute('aria-busy', 'true');
+            liveStatus.textContent = '';
 
-            const originalHtml = button.innerHTML;
-            navigator.clipboard.writeText((target.innerText || '').trim()).then(function() {
-                button.innerHTML = '<i class="bi bi-check2-circle copy-ok"></i> 已复制';
-                button.classList.add('text-success');
-                window.setTimeout(function() {
-                    button.innerHTML = originalHtml;
-                    button.classList.remove('text-success');
-                }, 1400);
-            }).catch(function() {
-                button.classList.add('shake');
-                window.setTimeout(function() {
-                    button.classList.remove('shake');
-                }, 500);
-            });
+            function finish(message, success) {
+                // 较早的剪贴板请求完成时，不覆盖最近一次操作的状态。
+                if (state.attempt !== attempt) return;
+                restoreBusyState(button, state);
+                state.feedback.className = 'copy-feedback ms-2 ' + (success ? 'text-success' : 'text-danger');
+                state.feedback.textContent = message;
+                liveStatus.textContent = message;
+                state.timer = window.setTimeout(function () {
+                    state.feedback.remove();
+                    state.timer = null;
+                }, success ? 1800 : 4000);
+            }
+
+            let target;
+            try {
+                target = document.querySelector(button.dataset.copyTarget || '');
+            } catch (_err) {
+                finish('未找到可复制的内容', false);
+                return;
+            }
+            if (!target) {
+                finish('未找到可复制的内容', false);
+                return;
+            }
+
+            const text = (target.innerText || target.textContent || '').trim();
+            if (!text) {
+                finish('暂无可复制的内容', false);
+                return;
+            }
+            if (!navigator.clipboard || typeof navigator.clipboard.writeText !== 'function') {
+                finish('请长按或选中文本复制', false);
+                return;
+            }
+
+            try {
+                Promise.resolve(navigator.clipboard.writeText(text)).then(function () {
+                    finish('已复制', true);
+                }, function () {
+                    finish('复制未成功，请长按或选中文本复制', false);
+                });
+            } catch (_err) {
+                finish('复制未成功，请长按或选中文本复制', false);
+            }
         });
     }
 

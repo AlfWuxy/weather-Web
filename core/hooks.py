@@ -356,7 +356,8 @@ def register_hooks(app):
         This allows us to set longer cache headers on /static without risking
         stale assets after deployments.
         """
-        if endpoint == 'static':
+        # 模板显式指定内容版本时保留它；其他资源继续使用原有时间戳。
+        if endpoint == 'static' and 'v' not in values:
             filename = values.get('filename')
             if filename:
                 try:
