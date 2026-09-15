@@ -3039,7 +3039,7 @@ systemd-run --quiet --wait --pipe --collect --service-type=exec \
         $RELEASE_APP \
         $RELEASE_VENV \
         $NEW_RELEASE/private-metadata \
-        c7e450c30d7d3c56bdf210f69a58620cba9d99e462e0e2c254ab45456271f853 \
+        b3333fa96ec467479079e05f82f27f744b83147268e338383878c3c12ffd4452 \
         reuse-current \
         $CURRENT_LINK \
         3.11 || INSTALL_REUSE_STATUS=\$?
@@ -3097,7 +3097,7 @@ elif [ \"\$INSTALL_REUSE_STATUS\" = 75 ]; then
             $RELEASE_APP \
             $RELEASE_VENV \
             $NEW_RELEASE/private-metadata \
-            c7e450c30d7d3c56bdf210f69a58620cba9d99e462e0e2c254ab45456271f853 \
+            b3333fa96ec467479079e05f82f27f744b83147268e338383878c3c12ffd4452 \
             install \
             /dev/null \
             3.11
@@ -3236,7 +3236,7 @@ systemd-run --quiet --wait --collect --service-type=exec \
         --expected-commit $VERIFIED_COMMIT \
         --expected-python $RELEASE_VENV/bin/python \
         --expected-python-minor 3.11 \
-        --expected-lock-sha c7e450c30d7d3c56bdf210f69a58620cba9d99e462e0e2c254ab45456271f853 \
+        --expected-lock-sha b3333fa96ec467479079e05f82f27f744b83147268e338383878c3c12ffd4452 \
         --output \"\$PREFLIGHT_RECEIPT\"
 
 install -o root -g root -m 0600 \
@@ -3249,7 +3249,7 @@ $RELEASE_VENV/bin/python $RELEASE_APP/scripts/release_runtime_smoke.py \
     --expected-commit $VERIFIED_COMMIT \
     --expected-python $RELEASE_VENV/bin/python \
     --expected-python-minor 3.11 \
-    --expected-lock-sha c7e450c30d7d3c56bdf210f69a58620cba9d99e462e0e2c254ab45456271f853"
+    --expected-lock-sha b3333fa96ec467479079e05f82f27f744b83147268e338383878c3c12ffd4452"
 
 echo ""
 echo "步骤6.2: 为新版本生成 systemd 单元模板..."

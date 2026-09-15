@@ -13,6 +13,30 @@ from core.time_utils import utcnow
 API = '/api/v1/workbench'
 
 
+def test_worker_runtime_dependencies_and_flask_context(monkeypatch):
+    """按 CI 的正式依赖启动队列入口；不连接 Redis，也能发现缺包。"""
+    from flask import Flask, current_app
+    from core.pilot_runtime import create_celery
+
+    app = Flask('pilot-runtime-smoke')
+    app.config['PILOT_REDIS_URL'] = 'redis://127.0.0.1:6379/15'
+    received = []
+
+    def record_job(job_id):
+        received.append((job_id, current_app.name))
+
+    monkeypatch.setattr('services.data_workbench.jobs.execute_job', record_job)
+    celery = create_celery(app)
+    try:
+        # 构造传输层会加载 Redis 驱动，但这里不建立网络连接。
+        with celery.connection_for_write() as connection:
+            assert connection.transport.driver_type == 'redis'
+        celery.tasks['pilot.execute'].apply(args=['synthetic-job-id'], throw=True)
+        assert received == [('synthetic-job-id', app.name)]
+    finally:
+        celery.close()
+
+
 @pytest.fixture
 def pilot_http(app, db_session, monkeypatch, tmp_path):
     app.config.update(FEATURE_INSTITUTION_WORKBENCH=True, PILOT_TASKS_EAGER=True,
