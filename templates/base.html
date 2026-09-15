@@ -219,6 +219,9 @@
 
                                 <section class="app-mega-group">
                                     <div class="app-mega-kicker">账号与设置</div>
+                                    {% if config.get('FEATURE_INSTITUTION_WORKBENCH') and current_user.is_authenticated and workbench_accessible %}
+                                        <a class="app-mega-link {% if nav_endpoint.startswith('workbench.') %}active{% endif %}" href="/workbench">机构数据工作台</a>
+                                    {% endif %}
                                     {% if current_user.role != 'guest' %}
                                         <a class="app-mega-link" href="{{ url_for('user.profile') }}">个人设置</a>
                                         {% if feature_flags.elder_mode and current_user.role != 'community' %}
@@ -370,6 +373,12 @@
             {% endif %}
 
             {# ----- 定位 ----- #}
+            {% if config.get('FEATURE_INSTITUTION_WORKBENCH') and current_user.is_authenticated and workbench_accessible %}
+            <div class="mb-2" style="font-size:.72rem; color:var(--yl-muted); padding:0 4px;">机构数据</div>
+            <nav class="nav flex-column mb-3" aria-label="机构数据">
+                <a class="nav-link {% if nav_endpoint.startswith('workbench.') %}active{% endif %}" href="/workbench" data-nav-key="institution-workbench">机构数据工作台</a>
+            </nav>
+            {% endif %}
             <div class="mb-2" style="font-size:.72rem; color:var(--yl-muted); text-transform:uppercase; letter-spacing:.05em; padding:0 4px;">定位设置</div>
             <div class="p-3 mb-3" style="background:#fff; border:1px solid var(--yl-line-soft); border-radius:12px;">
                 <form method="POST" action="{{ url_for('user.update_location') }}">

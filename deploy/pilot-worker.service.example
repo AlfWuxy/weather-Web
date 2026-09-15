@@ -1,0 +1,29 @@
+# 替换占位目录及专用服务账户后安装；不要复制实际密钥到 unit。
+[Unit]
+Description=Example institution data pilot worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=exampleapp
+Group=exampleapp
+WorkingDirectory=/srv/example-app
+EnvironmentFile=/var/lib/example-pilot/config/app.env
+EnvironmentFile=/var/lib/example-pilot/config/pilot.env
+EnvironmentFile=/var/lib/example-pilot/secrets/pilot.env
+ExecStart=/srv/example-app/.venv/bin/celery -A pilot_worker:celery worker --queues=institution-pilot --concurrency=1 --loglevel=WARNING --without-gossip --without-mingle
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=930
+KillSignal=SIGTERM
+KillMode=mixed
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

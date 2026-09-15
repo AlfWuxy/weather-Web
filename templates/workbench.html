@@ -1,0 +1,130 @@
+{% extends 'base.html' %}
+{% block title %}机构数据工作台 · 宜老天气通{% endblock %}
+{% block meta_description %}合作机构的数据接入、质量检查与本地模型更新工作台。{% endblock %}
+{% block body_class %}workbench-page{% endblock %}
+{% block extra_css %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/workbench.css') }}">
+{% endblock %}
+{% block content %}
+<div id="workbench" class="wb" data-api-base="{{ api_base|default('/api/v1/workbench') }}" data-can-manage="{{ 'true' if can_manage else 'false' }}">
+    <header class="wb-header">
+        <div>
+            <h1>机构数据工作台</h1>
+            <p class="wb-lead">让每次报送，都成为下一次验证的起点。</p>
+        </div>
+        <div class="wb-institution">
+            <label for="wb-institution">当前机构</label>
+            <select id="wb-institution" class="form-select" {% if not institutions %}disabled{% endif %}>
+                {% for institution in institutions %}
+                <option value="{{ institution.id }}" data-can-manage="{{ 'true' if institution.can_manage else 'false' }}" data-can-upload="{{ 'true' if institution.can_upload else 'false' }}" data-can-export="{{ 'true' if institution.can_export else 'false' }}" data-raw-approved="{{ 'true' if institution.raw_storage_approved else 'false' }}">{{ institution.name }}{% if institution.region_code %} · {{ institution.region_code }}{% endif %}</option>
+                {% endfor %}
+                {% if not institutions %}<option value="">暂无已开通的机构</option>{% endif %}
+            </select>
+        </div>
+    </header>
+
+    <div id="wb-notice" class="wb-notice" role="status" aria-live="polite" hidden></div>
+    <div id="wb-no-institution" class="wb-empty wb-empty-large" {% if institutions %}hidden{% endif %}>
+        <h2>还没有可访问的机构</h2>
+        <p>机构开通并分配成员后，即可在这里上传和查看本机构的数据。</p>
+    </div>
+    <div id="wb-workspace" {% if not institutions %}hidden{% endif %}>
+        <div class="wb-toolbar">
+            <div class="wb-tabs" role="tablist" aria-label="工作台页面">
+                <button id="wb-tab-overview" class="wb-tab" role="tab" aria-selected="true" aria-controls="wb-panel-overview" data-panel="overview" tabindex="0">数据概览</button>
+                <button id="wb-tab-imports" class="wb-tab" role="tab" aria-selected="false" aria-controls="wb-panel-imports" data-panel="imports" tabindex="-1">导入记录</button>
+                <button id="wb-tab-models" class="wb-tab" role="tab" aria-selected="false" aria-controls="wb-panel-models" data-panel="models" tabindex="-1">模型评估</button>
+            </div>
+            <button id="wb-refresh" class="wb-text-button" type="button"><i class="bi bi-arrow-clockwise" aria-hidden="true"></i> 刷新数据</button>
+        </div>
+        <div id="wb-background-jobs" class="wb-background-jobs" aria-label="后台任务" hidden></div>
+
+        <section id="wb-panel-overview" role="tabpanel" aria-labelledby="wb-tab-overview">
+            <div class="wb-summary" aria-label="本机构数据摘要">
+                <div><span>已导入就诊记录</span><strong id="wb-total-records">—</strong><small>本机构，全年龄</small></div>
+                <div><span>已报送天数</span><strong id="wb-total-days">—</strong><small>含已确认的零就诊日</small></div>
+                <div><span>可用于分析的天数</span><strong id="wb-ready-days">—</strong><small>完整报送且有同期天气</small></div>
+                <div><span>最近收到报送</span><strong id="wb-last-received" class="wb-date-value">—</strong><small id="wb-last-received-note">等待机构报送</small></div>
+            </div>
+
+            <section class="wb-section wb-trend-section" aria-labelledby="wb-trend-title">
+                <div class="wb-section-heading">
+                    <div><h2 id="wb-trend-title">天气与就诊趋势</h2><p>60 岁及以上每日就诊人次 · 本机构服务范围</p></div>
+                    <form id="wb-range-form" class="wb-range-form">
+                        <label class="visually-hidden" for="wb-range-start">趋势开始日期</label><input type="date" id="wb-range-start" class="form-control" aria-label="趋势开始日期">
+                        <span aria-hidden="true">至</span>
+                        <label class="visually-hidden" for="wb-range-end">趋势结束日期</label><input type="date" id="wb-range-end" class="form-control" aria-label="趋势结束日期">
+                        <button type="submit" class="btn btn-outline-secondary no-loading">查看</button>
+                    </form>
+                </div>
+                <div class="wb-chart-legend"><span><i class="wb-dot wb-dot-visits"></i>就诊人次</span><span><i class="wb-dot wb-dot-weather"></i>日均温度</span></div>
+                <div class="wb-chart"><canvas id="wb-trend-chart" role="img" aria-label="本机构60岁及以上每日就诊人次与温度趋势"></canvas><div id="wb-trend-empty" class="wb-chart-empty"><p>上传并确认首批数据后，在这里查看趋势。</p><button type="button" class="wb-text-button" data-open-import>开始上传 <span aria-hidden="true">→</span></button></div></div>
+                <p class="wb-footnote" id="wb-weather-note">未报送、部分报送及缺失天气会分别标记；曲线缺口不会补成零。天气关联不等于因果关系。</p>
+                <details class="wb-table-details"><summary>查看每日数据表</summary><div class="wb-table-scroll"><table class="wb-table"><caption class="visually-hidden">图表所使用的每日数据</caption><thead><tr><th scope="col">日期</th><th scope="col">报送状态</th><th scope="col">60+ 就诊人次</th><th scope="col">日均温度 °C</th></tr></thead><tbody id="wb-daily-table"></tbody></table></div></details>
+            </section>
+
+            <section class="wb-section" aria-labelledby="wb-coverage-title">
+                <div class="wb-section-heading"><div><h2 id="wb-coverage-title">月份覆盖</h2><p>点击月份查看报送情况、同期天气和数据来源。</p></div><div class="wb-coverage-legend"><span>完整</span><span>部分</span><span>未报送</span></div></div>
+                <div id="wb-months" class="wb-month-grid"></div>
+            </section>
+
+            <section class="wb-section" aria-labelledby="wb-dataset-title">
+                <div class="wb-section-heading"><div><h2 id="wb-dataset-title">带到本地，开始训练</h2><p>冻结当前数据版本。之后的追加和修订，不会改变已导出的训练包。</p></div></div>
+                <form id="wb-dataset-form" class="wb-export-form">
+                    <div><label for="wb-cutoff">数据截止日期</label><input type="date" id="wb-cutoff" class="form-control" required></div>
+                    <button type="submit" class="btn btn-primary no-loading" id="wb-freeze">冻结并生成训练包</button>
+                    <span class="wb-muted">包含日聚合数据、天气、报送覆盖和版本说明。</span>
+                </form>
+                <div id="wb-datasets" class="wb-list"></div>
+            </section>
+        </section>
+
+        <section id="wb-panel-imports" role="tabpanel" aria-labelledby="wb-tab-imports" hidden>
+            <div class="wb-import-layout">
+                <section class="wb-section wb-upload-section" aria-labelledby="wb-upload-title">
+                    <div class="wb-section-heading"><div><h2 id="wb-upload-title">上传新的报送</h2><p>先检查，再确认。原表只用于本机构的数据处理。</p></div></div>
+                    <form id="wb-upload-form">
+                        <p id="wb-upload-permission-note" class="wb-inline-note" hidden></p>
+                        <div id="wb-revision-notice" class="wb-inline-note" hidden></div>
+                        <input type="hidden" id="wb-revision-of" value="">
+                        <label for="wb-upload-file" class="wb-file-label">就诊历史 Excel <span>.xlsx</span></label>
+                        <input type="file" id="wb-upload-file" class="form-control" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" required aria-describedby="wb-file-help">
+                        <p class="wb-field-help" id="wb-file-help">保留原始列名。数据会先进入质检，确认前不会计入图表。</p>
+                        <div class="wb-form-row"><div><label for="wb-coverage-start">报送开始日期</label><input type="date" id="wb-coverage-start" class="form-control" required></div><div><label for="wb-coverage-end">报送结束日期</label><input type="date" id="wb-coverage-end" class="form-control" required></div></div>
+                        <fieldset class="wb-fieldset"><legend>这段日期的数据是否完整？</legend>
+                            <label class="wb-radio"><input type="radio" name="coverage_mode" value="complete" required><span><strong>完整报送</strong><small>包含这段时间全部就诊记录，无记录且不停诊的日期将确认计为零。</small></span></label>
+                            <label class="wb-radio"><input type="radio" name="coverage_mode" value="partial" required><span><strong>部分报送</strong><small>仍有记录未提交；空白日期保留为未完成，不自动补零。</small></span></label>
+                        </fieldset>
+                        <div class="wb-field"><label for="wb-closed-dates">停诊日期 <span class="wb-optional">可选</span></label><textarea id="wb-closed-dates" class="form-control" rows="2" placeholder="例如：2026-01-01，2026-01-02" aria-describedby="wb-closed-help"></textarea><p id="wb-closed-help" class="wb-field-help">填写报送范围内的实际停诊日期，用逗号或换行分隔。</p></div>
+                        <details class="wb-mapping-details"><summary>自定义列名 <span class="wb-muted">系统会优先自动识别</span></summary><p class="wb-field-help">填写 Excel 表头中的完整列名；不确定时留空，质检后再确认。</p><div id="wb-upload-mapping" class="wb-form-grid"></div></details>
+                        <label class="wb-ack"><input type="checkbox" id="wb-upload-ack" required><span>我已确认当前机构、报送范围及合作授权，可以将此文件上传到机构工作台。</span></label>
+                        <button type="submit" id="wb-upload-button" class="btn btn-primary no-loading">上传并检查数据</button>
+                    </form>
+                </section>
+                <aside class="wb-import-help"><h3>每一次报送都有记录</h3><ol><li><strong>检查数据</strong><span>识别日期、年龄、重复和缺失项。</span></li><li><strong>确认导入</strong><span>核对字段与疑似重复，再确认这一批数据。</span></li><li><strong>更新图表</strong><span>后台匹配同期天气；离开页面后继续处理。</span></li></ol><p>没有患者居住地时，不会根据机构地址推断。导出到本地的默认是按日聚合的数据。</p></aside>
+            </div>
+            <section class="wb-section" aria-labelledby="wb-batches-title"><div class="wb-section-heading"><div><h2 id="wb-batches-title">报送记录</h2><p>查看检查进度、导入结果和修订记录。</p></div></div><div id="wb-batches" class="wb-list"></div></section>
+        </section>
+
+        <section id="wb-panel-models" role="tabpanel" aria-labelledby="wb-tab-models" hidden>
+            <section class="wb-section" aria-labelledby="wb-model-title">
+                <div class="wb-section-heading"><div><h2 id="wb-model-title">模型版本</h2><p>在本地完成训练和评估，再回传候选版本。启用由你决定。</p></div>{% if can_manage %}<button type="button" id="wb-rollback" class="btn btn-outline-secondary" disabled>回退上一版本</button>{% endif %}</div>
+                <p id="wb-model-state" class="wb-inline-note">尚未启用模型。上传数据与查看图表不受影响。</p>
+                <div id="wb-models" class="wb-list"></div>
+                {% if can_manage %}
+                <form id="wb-model-upload-form" class="wb-model-upload"><div><label for="wb-model-file">本地训练生成的模型包</label><input type="file" id="wb-model-file" class="form-control" accept=".json,application/json" required><p class="wb-field-help">仅接收受支持的参数 JSON，最大 2 MB。上传后先检查一致性与评估条件。</p></div><button type="submit" class="btn btn-primary no-loading">上传候选模型</button></form>
+                {% else %}<p class="wb-footnote">模型上传、启用和回退由研究管理员操作。</p>{% endif %}
+            </section>
+
+            <section class="wb-section" aria-labelledby="wb-prediction-title"><div class="wb-section-heading"><div><h2 id="wb-prediction-title">保存当时的预测</h2><p>等待新的真实报送，核对实际就诊与当时预报的预测。</p></div>{% if can_manage %}<button type="button" id="wb-capture-forecast" class="btn btn-outline-secondary" disabled>保存本次预测</button>{% endif %}</div><p id="wb-prediction-note" class="wb-muted">启用模型后，开始积累真实预报验证记录。</p><div class="wb-chart"><canvas id="wb-prediction-chart" role="img" aria-label="保存的就诊预测区间和实际值"></canvas><div id="wb-prediction-empty" class="wb-chart-empty"><p>还没有保存的预测记录。</p></div></div><div id="wb-forecast-summary" class="wb-forecast-summary"></div><div id="wb-forecasts" class="wb-list"></div></section>
+
+            <details class="wb-training-guide"><summary>本地训练如何衔接？</summary><ol><li>在「数据概览」冻结并下载训练包，保存原始压缩包。</li><li>使用项目提供的本地训练入口读取训练包。最新 90 天用于保留评估，之前 90 天用于开发比较。</li><li>先比较日历基线与加入天气的候选。训练数据不足一年时，结果仅作探索。</li><li>上传训练入口生成的参数 JSON，检查一致性、评估范围与基线表现，再手动启用。</li></ol><p>历史实况回测与真实预报验证分别解释。使用过的保留评估集不能反复调参后继续称为独立验证。未来七天累计值为七个未舍入日预测均值之和。</p></details>
+        </section>
+    </div>
+    <dialog id="wb-detail-dialog" class="wb-dialog" aria-labelledby="wb-detail-title"><div class="wb-dialog-header"><h2 id="wb-detail-title">数据详情</h2><button type="button" class="wb-close" data-close-dialog aria-label="关闭详情">×</button></div><div id="wb-detail-body" class="wb-dialog-body"></div></dialog>
+</div>
+{% endblock %}
+{% block extra_js %}
+{% if not needs_chartjs %}<script src="{{ url_for('static', filename='vendor/chartjs/chart.umd.min.js') }}"></script>{% endif %}
+<script src="{{ url_for('static', filename='js/workbench.js') }}" defer></script>
+{% endblock %}

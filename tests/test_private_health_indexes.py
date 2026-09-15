@@ -187,7 +187,7 @@ def test_private_health_index_migration_is_idempotent_and_used_by_queries(
         revision = connection.execute(
             'SELECT version_num FROM alembic_version'
         ).fetchone()[0]
-    assert revision == '0032_weather_alert_provenance'
+    assert revision == '0033_institution_data_pilot'
 
 
 def test_private_health_index_migration_rejects_missing_table_before_mutation(

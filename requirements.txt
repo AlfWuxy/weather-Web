@@ -14,6 +14,8 @@ Flask-Limiter==3.7.0
 
 # 缓存/监控（可选）
 redis==5.0.4
+celery==5.6.3
+cryptography>=42.0.8
 sentry-sdk==2.18.0
 
 # 报告导出（PDF）

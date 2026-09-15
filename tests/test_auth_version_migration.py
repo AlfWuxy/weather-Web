@@ -11,7 +11,7 @@ import pytest
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
-HEAD_REVISION = '0032_weather_alert_provenance'
+HEAD_REVISION = '0033_institution_data_pilot'
 PREVIOUS_REVISION = '0022_private_health_indexes'
 
 
@@ -419,11 +419,11 @@ def test_wxpusher_relative_one_step_downgrade_stops_at_auth_revision(
         ).fetchone() == (2, 0)
 
 
-def test_wxpusher_relative_ten_step_downgrade_runs_auth_guard(
+def test_wxpusher_relative_eleven_step_downgrade_runs_auth_guard(
     monkeypatch,
     tmp_path,
 ):
-    """从 0032 相对降级十阶会跨越 0023，并在首个 DDL 前阻断。"""
+    """从 0033 相对降级十一阶会跨越 0023，并在首个 DDL 前阻断。"""
     database_path = tmp_path / 'wxpusher-relative-two-step.db'
     app, config = _initialize(monkeypatch, database_path)
 
@@ -447,7 +447,7 @@ def test_wxpusher_relative_ten_step_downgrade_runs_auth_guard(
     _dispose(app)
 
     with pytest.raises(RuntimeError, match='auth_version_count=1'):
-        command.downgrade(config, '-10')
+        command.downgrade(config, '-11')
 
     revision, columns = _revision_and_columns(database_path)
     assert revision == HEAD_REVISION
