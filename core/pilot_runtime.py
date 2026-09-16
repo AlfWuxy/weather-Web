@@ -1,11 +1,22 @@
 """机构试点的独立配置、请求边界和后台任务入口。"""
 import os
+from io import BytesIO
 
 from flask import Request, abort, current_app, request
 from flask_login import current_user
 
 
 class PilotRequest(Request):
+    def _get_file_stream(self, total_content_length, content_type, filename=None,
+                         content_length=None):
+        # 病历在加密前只能留在内存；请求总量仍由 max_content_length 限制。
+        if (current_app.config.get('FEATURE_INSTITUTION_WORKBENCH')
+                and self.path.startswith('/api/v1/workbench/')
+                and self.mimetype == 'multipart/form-data'):
+            return BytesIO()
+        return super()._get_file_stream(total_content_length, content_type,
+                                        filename=filename, content_length=content_length)
+
     @property
     def max_content_length(self):
         # 只为工作台的受鉴权上传入口扩大限额，旧站其他入口保持原限制。

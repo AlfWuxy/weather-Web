@@ -258,3 +258,83 @@ def test_daily_schedule_skips_deleted_member(pilot_http):
     jobs = PilotJob.query.filter_by(institution_id=env.a.id).all()
     assert {j.kind for j in jobs} == {'forecast'}
     assert {j.user_id for j in jobs} == {env.other.id}
+
+
+def _synthetic_multipart(payload):
+    """直接构造内存请求体，避免测试客户端自己的临时文件影响验证。"""
+    boundary = 'synthetic-pilot-upload-boundary'
+    body = (f'--{boundary}\r\nContent-Disposition: form-data; name="file"; '
+            'filename="synthetic.xlsx"\r\nContent-Type: application/vnd.openxmlformats-'
+            'officedocument.spreadsheetml.sheet\r\n\r\n').encode()
+    return body + payload + f'\r\n--{boundary}--\r\n'.encode(), f'multipart/form-data; boundary={boundary}'
+
+
+@pytest.fixture
+def pilot_stream_probe():
+    from flask import Flask, request
+    from core.pilot_runtime import PilotRequest
+
+    app = Flask('synthetic-pilot-stream-probe')
+    app.request_class = PilotRequest
+    app.config.update(TESTING=True, FEATURE_INSTITUTION_WORKBENCH=True,
+                      MAX_CONTENT_LENGTH=1024 * 1024)
+
+    @app.post(API + '/stream-probe')
+    @app.post('/legacy-upload')
+    def inspect_upload():
+        upload = request.files['file']
+        return {'memory_only': isinstance(upload.stream, io.BytesIO),
+                'rolled_to_disk': bool(getattr(upload.stream, '_rolled', False)),
+                'length': len(upload.read())}
+
+    return SimpleNamespace(app=app, client=app.test_client())
+
+
+def _reject_disk_upload_stream(*args, **kwargs):
+    raise AssertionError('工作台上传在加密前调用了磁盘临时文件流')
+
+
+def test_large_workbench_multipart_never_uses_disk_spool(pilot_stream_probe, monkeypatch):
+    # 超过 Werkzeug 默认 500 KiB 阈值，实际执行 multipart 解析器。
+    payload = b'SYNTHETIC-ONLY-' * 50000
+    assert len(payload) > 500 * 1024
+    body, content_type = _synthetic_multipart(payload)
+    monkeypatch.setattr('werkzeug.formparser.SpooledTemporaryFile', _reject_disk_upload_stream)
+    monkeypatch.setattr('werkzeug.formparser.TemporaryFile', _reject_disk_upload_stream, raising=False)
+    response = pilot_stream_probe.client.post(API + '/stream-probe', data=body, content_type=content_type)
+    assert response.status_code == 200
+    assert response.json == {'memory_only': True, 'rolled_to_disk': False, 'length': len(payload)}
+
+
+@pytest.mark.parametrize('enabled,path', [(True, '/legacy-upload'), (False, API + '/stream-probe')])
+def test_nonpilot_upload_keeps_default_stream_and_size_limit(pilot_stream_probe, enabled, path):
+    pilot_stream_probe.app.config['FEATURE_INSTITUTION_WORKBENCH'] = enabled
+    body, content_type = _synthetic_multipart(b'SYNTHETIC-ONLY-' * 50000)
+    response = pilot_stream_probe.client.post(path, data=body, content_type=content_type)
+    assert response.status_code == 200
+    assert response.json['memory_only'] is False
+    assert response.json['rolled_to_disk'] is True
+    body, content_type = _synthetic_multipart(b'S' * (1024 * 1024))
+    assert pilot_stream_probe.client.post(path, data=body, content_type=content_type).status_code == 413
+
+
+def test_workbench_multipart_still_rejects_requests_over_twenty_mib(pilot_http, monkeypatch):
+    body, content_type = _synthetic_multipart(b'S' * (20 * 1024 * 1024))
+    assert len(body) > 20 * 1024 * 1024
+    monkeypatch.setattr('werkzeug.formparser.SpooledTemporaryFile', _reject_disk_upload_stream)
+    monkeypatch.setattr('werkzeug.formparser.TemporaryFile', _reject_disk_upload_stream, raising=False)
+    response = pilot_http.client.post(f'{API}/institutions/{pilot_http.a.id}/batches',
+                                     data=body, content_type=content_type, headers=pilot_http.headers)
+    assert response.status_code == 413
+
+
+def test_workbench_file_still_rejects_uploads_over_ten_mib(pilot_http, monkeypatch):
+    # 请求在总量限制内，但文件本身超过 10 MiB，必须在内容解析前拒绝。
+    monkeypatch.setattr('werkzeug.formparser.SpooledTemporaryFile', _reject_disk_upload_stream)
+    monkeypatch.setattr('werkzeug.formparser.TemporaryFile', _reject_disk_upload_stream, raising=False)
+    response = pilot_http.client.post(f'{API}/institutions/{pilot_http.a.id}/batches',
+        headers=pilot_http.headers, data={
+            'file': (io.BytesIO(b'S' * (10 * 1024 * 1024 + 1)), 'synthetic.xlsx'),
+            'coverage_start': '2024-01-01', 'coverage_end': '2024-01-03', 'coverage_mode': 'complete'})
+    assert response.status_code == 400
+    assert '超过上传上限' in response.json['error']
