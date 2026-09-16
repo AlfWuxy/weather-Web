@@ -1,0 +1,17 @@
+{% extends 'base.html' %}
+{% block title %}等待关联机构 · 宜老天气通{% endblock %}
+{% block meta_description %}账户已登录，关联合作机构后即可使用机构数据工作台。{% endblock %}
+{% block body_class %}workbench-page{% endblock %}
+{% block extra_css %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/workbench.css') }}">
+{% endblock %}
+{% block content %}
+<div class="wb">
+    <section class="wb-empty-large" aria-labelledby="pending-workbench-title">
+        <h1 id="pending-workbench-title">等待关联合作机构</h1>
+        <p class="wb-lead">账户已登录，机构数据工作台尚未开放。</p>
+        <p class="wb-muted mt-4">请与管理者确认合作机构的名称、所在地，以及原始报送文件的保存安排。<br>确认并关联机构后，管理者会为你的账户开放相应权限。</p>
+        <a class="btn btn-primary mt-4" href="{{ url_for('public.index') }}">返回首页</a>
+    </section>
+</div>
+{% endblock %}

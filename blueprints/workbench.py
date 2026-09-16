@@ -135,7 +135,7 @@ def page():
         abort(403)
     rows = [institution_json(i, m) for i, m in memberships()]
     if not rows:
-        abort(404)
+        return render_template('workbench_pending.html')
     return render_template('workbench.html', institutions=rows, api_base=API,
                            can_manage=any(i['can_manage'] for i in rows))
 
