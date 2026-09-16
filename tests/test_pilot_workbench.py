@@ -71,9 +71,10 @@ def excel():
     return buff.getvalue()
 
 
-def upload(env):
+def upload(env, file_bytes=None):
+    file_bytes = excel() if file_bytes is None else file_bytes
     return env.client.post(f'{API}/institutions/{env.a.id}/batches', headers=env.headers,
-                           data={'file': (io.BytesIO(excel()), 'synthetic.xlsx'),
+                           data={'file': (io.BytesIO(file_bytes), 'synthetic.xlsx'),
                                  'coverage_start': '2024-01-01', 'coverage_end': '2024-01-03',
                                  'coverage_mode': 'complete'})
 
@@ -93,7 +94,9 @@ def test_disabled_by_default_and_private_headers(pilot_http):
 
 def test_http_upload_confirm_export_and_duplicate(pilot_http):
     env = pilot_http
-    response = upload(env)
+    # Excel 的 ZIP 时间戳会随生成时间变化；文件幂等必须重传同一份字节。
+    file_bytes = excel()
+    response = upload(env, file_bytes=file_bytes)
     assert response.status_code == 202, response.data
     batch = response.json['batch']
     assert batch['status'] == 'ready'
@@ -101,7 +104,7 @@ def test_http_upload_confirm_export_and_duplicate(pilot_http):
     response = env.client.post(endpoint, json={'decisions': {}}, headers=env.headers)
     assert response.json['job']['status'] == 'succeeded', response.json
     assert response.json['batch']['status'] == 'confirmed'
-    again = upload(env)
+    again = upload(env, file_bytes=file_bytes)
     assert again.json['batch']['id'] == batch['id']
     assert PilotEncounter.query.count() == 2
     overview = env.client.get(f'{API}/institutions/{env.a.id}/overview').json['overview']
