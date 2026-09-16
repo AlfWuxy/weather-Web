@@ -1,0 +1,27 @@
+# 每个部署仅运行一个 beat；不能同时启动 worker -B。
+[Unit]
+Description=Example institution data pilot scheduler
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=exampleapp
+Group=exampleapp
+WorkingDirectory=/srv/example-app
+EnvironmentFile=/var/lib/example-pilot/config/app.env
+EnvironmentFile=/var/lib/example-pilot/config/pilot.env
+EnvironmentFile=/var/lib/example-pilot/secrets/pilot.env
+ExecStart=/srv/example-app/.venv/bin/celery -A pilot_worker:celery beat --loglevel=WARNING --schedule=/var/lib/example-pilot/state/celerybeat-schedule --pidfile=/var/lib/example-pilot/state/celerybeat.pid
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=60
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -167,7 +167,7 @@ EXPECTED_PLATFORM_NAME = "宜老平安"
 EXPECTED_SERVICE_NAME = "宜老天气通"
 WXPUSHER_EXPECTED_API_BASE = "https://wxpusher.zjiecode.com/api"
 EXPECTED_REQUIREMENTS_LOCK_SHA256 = (
-    "c7e450c30d7d3c56bdf210f69a58620cba9d99e462e0e2c254ab45456271f853"
+    "b3333fa96ec467479079e05f82f27f744b83147268e338383878c3c12ffd4452"
 )
 EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 APPID_PATTERN = re.compile(r"^wx[A-Za-z0-9]{6,32}$")
