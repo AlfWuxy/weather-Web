@@ -138,6 +138,10 @@ def build_host(tmp_path, monkeypatch, setup_test_environment):
         def build(*, enabled=True, initialize=True):
             directory = (tmp_path / str(len(applications))).resolve()
             directory.mkdir()
+            # 使用真实注销锁实现所需的私有父目录，不替换或绕过守卫。
+            dispatch_locks = directory / "dispatch-locks"
+            dispatch_locks.mkdir(mode=0o700)
+            os.environ["DISPATCH_LOCK_PATH"] = str(dispatch_locks / "case-weather-dispatch.lock")
             os.environ["DATABASE_URI"] = "sqlite:///" + str(directory / "site.sqlite3")
             os.environ["YILAO_AGRICULTURE_ACCOUNT_DB"] = str(directory / "agriculture.sqlite3")
             os.environ["YILAO_AGRICULTURE_ARCHIVE_ROOT"] = str(directory / "weather-archive")
@@ -149,7 +153,10 @@ def build_host(tmp_path, monkeypatch, setup_test_environment):
             if enabled and initialize:
                 monkeypatch.syspath_prepend(str(VENDOR))
                 from integration.account_repository import AccountRepository
+                from integration.weather_jobs import WeatherJobRepository, weather_job_path
                 AccountRepository(directory / "agriculture.sqlite3").initialize()
+                # 队列与账户独立，且仅由本测试夹具显式初始化。
+                WeatherJobRepository(weather_job_path(directory / "agriculture.sqlite3")).initialize()
             factory = importlib.import_module("core.app")
             assert Path(factory.__file__).resolve() == ROOT / "core/app.py"
             app = factory.create_app()
@@ -326,7 +333,12 @@ def test_demo_plan_runs_engine_and_independent_check_without_real_records(host):
     assert json_ok(host.api("/state", headers))["tasks"] == []
 
 
-def test_weather_refresh_uses_host_auth_and_budget_callbacks(host, monkeypatch):
+def test_weather_refresh_queues_then_background_rechecks_user_and_uses_host_budget(host):
+    from flask import has_request_context
+    from core.db_models import User
+    from integration.weather_site_registration import make_site_alert_fetcher, principal_for_site_user
+    from integration.weather_site_worker import run_one, site_owner_validator, site_owner_commit
+    from yilao_agri.official_alert_fetch import fetch_qweather_alerts
     headers, _, _ = host.login()
     state = json_ok(host.api("/state", headers))
     state["plots"] = [{"id": "test-plot", "name": "合成地块", "region_id": "test",
@@ -336,19 +348,94 @@ def test_weather_refresh_uses_host_auth_and_budget_callbacks(host, monkeypatch):
     host.app.config["QWEATHER_API_BASE"] = "https://test.qweatherapi.com/v7"
     forecast = {"source": "合成测试", "kind": "forecast", "issued_at": None, "environment": "outdoor",
                 "alert_status": "not_queried", "warnings": [], "provenance": {}, "records": []}
-    monkeypatch.setattr("yilao_agri.community_service.fetch_weather", lambda *args: forecast)
-    with patch("services.qweather_auth.is_qweather_configured", return_value=True), \
+    jobs = host.app.extensions["yilao_agriculture_weather_jobs"]
+    repository = host.app.extensions["yilao_agriculture_account_repository"]
+    archive = Path(host.app.config["YILAO_AGRICULTURE_ARCHIVE_ROOT"])
+    assert jobs.path != repository.path
+    with patch("yilao_agri.community_service.fetch_weather", return_value=forecast) as forecast_fetch, \
+            patch("yilao_agri.official_alert_fetch.fetch_qweather_alerts", wraps=fetch_qweather_alerts) as alerts_fetch, \
+            patch("services.qweather_auth.is_qweather_configured", return_value=True), \
             patch("services.qweather_auth.get_qweather_request_headers", return_value={
                 "Authorization": "Bearer synthetic-test-only"}) as auth, \
             patch("services.qweather_budget.reserve_qweather_request", return_value=False) as budget:
-        result = json_ok(host.api("/weather/refresh", headers, method="POST", body={
-            "mode": "real", "revision": saved["revision"], "plot_id": "test-plot"}))
+        queued = host.api("/weather/refresh", headers, method="POST", body={
+            "mode": "real", "revision": saved["revision"], "plot_id": "test-plot"})
+        assert queued.status_code == 202, queued.text
+        job = queued.json["job"]
+        assert job["status"] == "queued"
+        for callback in (forecast_fetch, alerts_fetch, auth, budget):
+            callback.assert_not_called()
+        assert not archive.exists()
+        assert not has_request_context(), "后台不能借用保留的HTTP上下文"
+        with host.app.app_context():
+            user = User.query.filter_by(username=host.users["a"]["username"]).one()
+            subject = principal_for_site_user(user).subject
+            assert site_owner_validator(subject) is True
+            assert jobs.read_for_owner(subject, job["id"]) is not None
+            assert run_one(jobs=jobs, repository=repository, archive_root=archive,
+                           validate_owner=site_owner_validator, alert_fetcher=make_site_alert_fetcher(host.app),
+                           owner_commit=site_owner_commit) is True
+        forecast_fetch.assert_called_once()
+        alerts_fetch.assert_called_once()
     auth.assert_called_once_with(config=host.app.config, api_base=host.app.config["QWEATHER_API_BASE"])
     budget.assert_called_once_with("weatheralert_v1_current")
-    assert result["weather"]["alert_acquisition"]["code"] == "ALERT_BUDGET_UNAVAILABLE"
-    assert result["weather"]["alert_feed"]["coverage_status"] == "not_queried"
-    assert result["weather"]["alert_feed"]["query"]["latitude"] == 29.27
-    assert result["weather"]["issued_at"] is None
+    result = json_ok(host.api("/weather/jobs/" + job["id"], headers))
+    assert result["job"]["status"] == "succeeded"
+    assert result["state"]["revision"] > saved["revision"]
+    weather = result["state"]["weather"]["test-plot"]
+    assert weather["alert_acquisition"]["code"] == "ALERT_BUDGET_UNAVAILABLE"
+    assert weather["alert_feed"]["coverage_status"] == "not_queried"
+    assert weather["alert_feed"]["query"]["latitude"] == 29.27
+    assert weather["alert_feed"]["query"]["snapshot_complete"] is False
+    assert weather["alert_feed"]["items"] == []
+    assert "query_snapshot" not in weather["alert_feed"]
+    assert "official_alert_acquisition" not in weather["provenance"]
+    assert weather["issued_at"] is None
+    assert "synthetic-test-only" not in json.dumps(result)
+    assert json_ok(host.api("/state", headers))["weather"]["test-plot"] == weather
+
+
+def test_weather_owner_commit_rechecks_deleted_or_reused_user_before_operation(host):
+    from core.db_models import User
+    from core.extensions import db
+    from integration.weather_site_registration import principal_for_site_user
+    from integration.weather_site_worker import site_owner_commit, site_owner_validator
+    from yilao_agri.community_store import CommunityError
+    host.login()
+    executed = []
+    with host.app.app_context():
+        user = User.query.filter_by(username=host.users["a"]["username"]).one()
+        uid, subject = user.id, principal_for_site_user(user).subject
+        assert site_owner_validator(subject) is True
+        # 初次身份核对已通过，模拟采集期间发生注销，最终CAS必须再次核对。
+        user = db.session.get(User, uid)
+        if hasattr(User, "deleted_at"):
+            user.deleted_at = datetime(2031, 1, 1, tzinfo=timezone.utc)
+        else:
+            db.session.delete(user)
+        db.session.commit()
+
+        def rejected():
+            assert site_owner_validator(subject) is False
+            with pytest.raises(CommunityError) as caught:
+                site_owner_commit(subject, lambda: executed.append("不得执行"))
+            assert caught.value.code == "WEATHER_JOB_ACCOUNT_CHANGED"
+            assert executed == []
+
+        rejected()
+        if hasattr(User, "deleted_at"):
+            db.session.delete(db.session.get(User, uid))
+            db.session.commit()
+        replacement = User(id=uid, username="IMPLEMENTATION_TEST_REUSED_GUARD", role="user",
+                           created_at=datetime(2032, 1, 1, tzinfo=timezone.utc))
+        replacement.set_password("IMPLEMENTATION_TEST_REUSED_GUARD_PASSWORD")
+        db.session.add(replacement)
+        db.session.commit()
+        new_subject = principal_for_site_user(replacement).subject
+        assert new_subject != subject
+        rejected()
+        assert site_owner_validator(new_subject) is True
+        assert site_owner_commit(new_subject, lambda: "IMPLEMENTATION_TEST_ALLOWED") == "IMPLEMENTATION_TEST_ALLOWED"
 
 
 def test_private_downloads_use_current_account_and_keep_draft_claims(host):

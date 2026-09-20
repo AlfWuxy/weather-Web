@@ -460,7 +460,8 @@ class CommunityService:
         old=self.store.read("demonstration")
         return self.store.change("demonstration",old["revision"],"load_demo",lambda _:make_demo())
 
-    def refresh_weather(self,data):
+    def validate_weather_refresh(self,data):
+        """先核对已保存的地块与版本；入队校验不取天气、不创建归档。"""
         if not isinstance(data,dict) or set(data)-{"mode","revision","plot_id"}:
             raise CommunityError("天气更新只接受模式、资料版本和已保存的地块编号")
         if type(data.get("revision")) is not int or data["revision"]<0:
@@ -470,6 +471,10 @@ class CommunityService:
         if data.get("revision")!=state["revision"]: raise CommunityError("资料已更新，请重新读取",code="REVISION_CONFLICT",status=409)
         plot=next((p for p in state["plots"] if p["id"]==data.get("plot_id")),None)
         if plot is None: raise CommunityError("没有找到这个地块")
+        return state,deepcopy(plot)
+
+    def refresh_weather(self,data):
+        state,plot=self.validate_weather_refresh(data)
         weather=deepcopy(fetch_weather(plot,self.archive_dir))
         alerts=self._refresh_alerts(plot)
         feed=alerts["feed"]

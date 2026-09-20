@@ -6,6 +6,54 @@ from pathlib import Path
 import sys
 
 
+def principal_for_site_user(user):
+    """仅使用服务器用户模型；保留创建时刻以拒绝删除后重用ID。"""
+    from integration.proposed_weather_web.agriculture_bridge import Principal
+    if user is None or getattr(user, "deleted_at", None) is not None:
+        return None
+    # 原站密码戳验证会话；ID加不可编辑的创建时刻区分SQLite删除后重用ID的账户。
+    if getattr(user, "is_authenticated", False) is not True:
+        return None
+    uid = getattr(user, "id", None)
+    is_guest = (getattr(user, "is_guest", False) is True
+                or getattr(user, "role", None) == "guest"
+                or str(uid).startswith("guest:"))
+    if is_guest:
+        return Principal("guest:rejected", True, True)
+    if type(uid) is not int or uid <= 0:
+        return None
+    created = getattr(user, "created_at", None)
+    if not isinstance(created, datetime):
+        return None
+    if created.tzinfo is None:
+        created = created.replace(tzinfo=timezone.utc)
+    generation = sha256(created.astimezone(timezone.utc).isoformat(timespec="microseconds").encode()).hexdigest()[:24]
+    return Principal(f"weather-web:user:{uid}:{generation}", True, False)
+
+
+def make_site_alert_fetcher(app):
+    """复用原站认证与预算；不放宽HTTP请求上下文的网络门禁。"""
+    def alert_fetcher(plot, archive_dir):
+        # 只允许受控后台进程取数；网页入队既不生成令牌，也不预占额度。
+        from flask import has_request_context
+        if has_request_context():
+            raise RuntimeError("官方预警必须由后台工作进程采集")
+        from services.qweather_auth import (
+            get_qweather_request_headers, is_qweather_configured, invalidate_qweather_token)
+        from services.qweather_budget import reserve_qweather_request
+        from yilao_agri.official_alert_fetch import fetch_qweather_alerts
+
+        api_base = app.config.get("QWEATHER_API_BASE", "")
+        return fetch_qweather_alerts(
+            plot, archive_dir, api_base=api_base,
+            configured=is_qweather_configured(app.config),
+            auth_headers_provider=lambda: get_qweather_request_headers(config=app.config, api_base=api_base),
+            budget_reserver=lambda: reserve_qweather_request("weatheralert_v1_current"),
+            invalidate_auth=invalidate_qweather_token)
+
+    return alert_fetcher
+
+
 def register_agriculture_workbench(app, *, embed_template=None):
     """原站在注册蓝图时调用；不自动建库、迁移、加载凭据或开启功能。"""
     app.config.setdefault("YILAO_AGRICULTURE_WORKBENCH_ENABLED", False)
@@ -53,24 +101,7 @@ def register_agriculture_workbench(app, *, embed_template=None):
     from core.security import generate_csrf_token, validate_csrf
 
     def principal_provider():
-        # 原站密码戳验证会话；ID加不可编辑的创建时刻区分SQLite删除后重用ID的账户。
-        if getattr(current_user, "is_authenticated", False) is not True:
-            return None
-        uid = getattr(current_user, "id", None)
-        is_guest = (getattr(current_user, "is_guest", False) is True
-                    or getattr(current_user, "role", None) == "guest"
-                    or str(uid).startswith("guest:"))
-        if is_guest:
-            return principal_module.Principal("guest:rejected", True, True)
-        if type(uid) is not int or uid <= 0:
-            return None
-        created = getattr(current_user, "created_at", None)
-        if not isinstance(created, datetime):
-            return None
-        if created.tzinfo is None:
-            created = created.replace(tzinfo=timezone.utc)
-        generation = sha256(created.astimezone(timezone.utc).isoformat(timespec="microseconds").encode()).hexdigest()[:24]
-        return principal_module.Principal(f"weather-web:user:{uid}:{generation}", True, False)
+        return principal_for_site_user(current_user)
 
     page_renderer = None
     if embed_template is not None:
@@ -84,28 +115,17 @@ def register_agriculture_workbench(app, *, embed_template=None):
         # next由服务器固定，不转送任意查询字符串，也不创建共享访客资料。
         return redirect(url_for("public.login", next="/agriculture/"))
 
-    def alert_fetcher(plot, archive_dir):
-        # 只在已认证用户主动更新天气时读取现有服务配置；注册页面不生成令牌或消耗额度。
-        from services.qweather_auth import (
-            get_qweather_request_headers, is_qweather_configured, invalidate_qweather_token)
-        from services.qweather_budget import reserve_qweather_request
-        from yilao_agri.official_alert_fetch import fetch_qweather_alerts
 
-        api_base = app.config.get("QWEATHER_API_BASE", "")
-        return fetch_qweather_alerts(
-            plot, archive_dir, api_base=api_base,
-            configured=is_qweather_configured(app.config),
-            auth_headers_provider=lambda: get_qweather_request_headers(config=app.config, api_base=api_base),
-            budget_reserver=lambda: reserve_qweather_request("weatheralert_v1_current"),
-            invalidate_auth=invalidate_qweather_token)
-
+    from integration.weather_jobs import WeatherJobRepository, weather_job_path
     repository = repository_module.AccountRepository(database)
+    jobs = WeatherJobRepository(weather_job_path(database))
     bp = workbench_module.create_workbench_blueprint(
         repository=repository, principal_provider=principal_provider,
         csrf_token_provider=generate_csrf_token, csrf_validator=validate_csrf,
         archive_root=archive, site_origin=app.config.get("YILAO_AGRICULTURE_SITE_ORIGIN"), enabled=True,
         page_renderer=page_renderer, unauthenticated_page=login_page if embed_template else None,
-        alert_fetcher=alert_fetcher)
+        weather_jobs=jobs)
     app.register_blueprint(bp)
     app.extensions["yilao_agriculture_account_repository"] = repository
+    app.extensions["yilao_agriculture_weather_jobs"] = jobs
     return bp

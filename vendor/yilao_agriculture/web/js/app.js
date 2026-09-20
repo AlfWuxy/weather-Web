@@ -6,11 +6,13 @@ import {editPlot,editTask,editPerson,editResource,editSettings,editPolicy,feedba
 import {reviewView,adoptionPayload} from './review.js';
 import {stageLabel} from './display.js';
 import {predictionView,predictionsView,predictionQuery,freezePayload,predictionBindingField} from './predictions.js';
-import {storageText,savedLocation,applyStorageFrame} from './context.js';
+import {storageText,savedLocation,applyStorageFrame,readContext} from './context.js';
 import {navigationHtml,isAppEvent,parseAppRoute} from './navigation.js';
+import {createWeatherJobs} from './weather-jobs.js';
 
 let state,catalog,estimates,readiness,rateReview=null,route={page:'today',id:''},busy=false,importBundle=null;
 let predictionPreview=null,predictionReview=null;
+let weatherJobs=null;
 const weatherSnapshots=new Map();
 const appRoot=document.getElementById('agri-app');
 const appElement=id=>appRoot.querySelector(`[id="${id}"]`);
@@ -20,6 +22,7 @@ applyStorageFrame();
 function readRoute(){return parseAppRoute(location.hash)||{page:'today',id:'',focus:''};}
 function navigate(page,id='',focus=''){
   if(busy)return;
+  weatherJobs?.pause();
   const hash=`#${page}${id?'/'+encodeURIComponent(id):''}${focus?'?field='+encodeURIComponent(focus):''}`;
   if(location.hash===hash){route={page,id,focus};render(true);fillCorrection();focusRoute();}else location.hash=hash;
 }
@@ -34,6 +37,7 @@ function render(focus=false){
   const pages={today:()=>todayView(state,readiness,estimates),farm:()=>farmView(state,catalog,estimates),people:()=>peopleView(state),weather:()=>weatherView(state),records:()=>recordsView(state),setup:()=>setupView(state),plot:()=>plotForm(state,catalog,route.id),task:()=>state.plots.length?taskForm(state,catalog,route.id):plotForm(state,catalog),person:()=>personForm(state,route.id||state.profile.id),helper:()=>personForm(state,'new'),resource:()=>resourceForm(state,route.id),feedback:()=>feedbackForm(state,route.id),correction:()=>correctionView(route.id),review:()=>reviewView(state,route.id,rateReview),prediction:()=>predictionView(state,route.id,estimates,predictionPreview),predictions:()=>predictionsView(state,predictionReview)};
   main.innerHTML=(pages[page]||pages.today)();
   decorateRemaining();
+  decorateWeatherJobs();
   if(focus){main.focus({preventScroll:true});main.scrollIntoView({block:'start',behavior:'instant'});}
   focusRoute();
 }
@@ -84,6 +88,7 @@ async function refreshEstimates(){
   for(const row of estimates.tasks||[])for(const w of row.workers||[])w.worker_name=[state.profile,...state.helpers].find(x=>x.id===w.worker_id)?.name||'这位人员';
 }
 async function initialLoad(){
+  weatherJobs?.pause();
   try{
     const loaded=await Promise.all([request('/api/state?mode=real'),request('/api/catalog')]);
     [state,catalog]=loaded;await refreshEstimates();route=readRoute();render();fillCorrection();
@@ -96,11 +101,13 @@ function setBusy(flag,trigger){
 }
 async function runAction(trigger,callback){
   if(busy)return;
+  weatherJobs?.pause();
   setBusy(true,trigger);
-  try{await callback();}catch(error){showNotice(error.message,'error');appElement('agri-notice').scrollIntoView({block:'start'});}finally{setBusy(false,trigger);}
+  try{await callback();}catch(error){showNotice(error.message,'error');appElement('agri-notice').scrollIntoView({block:'start'});}finally{setBusy(false,trigger);decorateWeatherJobs();}
 }
 async function saveForm(form,submitter){
   if(busy)return;
+  weatherJobs?.pause();
   const type=form.dataset.form,data=getForm(form);const box=form.querySelector('.form-error');
   if(box)box.textContent='';
   setBusy(true,submitter);
@@ -162,7 +169,7 @@ async function saveForm(form,submitter){
     route={page,id:''};location.hash=`#${page}`;render(true);
   }catch(error){
     if(box){box.textContent=error.message;box.focus();}else showNotice(error.message,'error');
-  }finally{setBusy(false,submitter);}
+  }finally{setBusy(false,submitter);decorateWeatherJobs();}
 }
 
 document.addEventListener('submit',event=>{if(!isAppEvent(appRoot,event))return;const form=event.target.closest('form[data-form]');if(form){event.preventDefault();saveForm(form,event.submitter);}});
@@ -173,7 +180,7 @@ document.addEventListener('click',event=>{
   if(action==='navigate'){navigate(trigger.dataset.page,trigger.dataset.id||'',trigger.dataset.focus||'');return;}
   if(action==='reload'){initialLoad();return;}
   if(action==='locate'){locate(trigger);return;}
-  if(!['enter-demo','exit-demo','plan','weather-refresh','weather-import','export','import','predictions-review','field-collection-export'].includes(action))return;
+  if(!['enter-demo','exit-demo','plan','weather-refresh','weather-job-check','weather-import','export','import','predictions-review','field-collection-export'].includes(action))return;
   runAction(trigger,async()=>{
     if(action==='predictions-review'){
       const review=await request(`/api/predictions/review?mode=${state.mode}`);
@@ -188,7 +195,9 @@ document.addEventListener('click',event=>{
       showNotice(result.plan?'安排草稿已更新。请查看工作、休息和未安排的部分。':'记录已保留。现在还有信息待确认，请先看问题清单。',result.plan?'success':'warning');
       (appElement('plan-result')||main).scrollIntoView({block:'start',behavior:'smooth'});
     }else if(action==='weather-refresh'){
-      const result=await request('/api/weather/refresh',{method:'POST',body:{mode:state.mode,revision:state.revision,plot_id:trigger.dataset.id}});state=result.state;await refreshEstimates();render();showNotice('天气已更新。请查看来源、日期和预警情况；旧安排需要重新计算。');
+      await ensureWeatherJobs().start(trigger.dataset.id,{mode:state.mode,revision:state.revision,plot_id:trigger.dataset.id});
+    }else if(action==='weather-job-check'){
+      ensureWeatherJobs().resume(trigger.dataset.id);
     }else if(action==='weather-import'){
       const snapshot=weatherSnapshots.get(trigger.dataset.id);
       if(!snapshot)throw new Error('请先选择并核对这块地的天气快照文件。');
@@ -294,5 +303,35 @@ function locate(trigger){
     status.textContent=`已填入目前位置，浏览器报告误差约 ${Math.round(position.coords.accuracy)} 米。请确认确实是这块地，再保存。`;trigger.disabled=false;
   },()=>{status.textContent='没有取得定位。原填写内容已保留，可以手工填写坐标。';trigger.disabled=false;},{timeout:12000,maximumAge:0,enableHighAccuracy:false});
 }
-window.addEventListener('hashchange',()=>{const next=parseAppRoute(location.hash);if(!next)return;route=next;render(true);fillCorrection();});
+function decorateWeatherJobs(){
+  if(!weatherJobs||route.page!=='weather')return;
+  for(const trigger of main.querySelectorAll('[data-action="weather-refresh"]')){
+    const entry=weatherJobs.get(trigger.dataset.id);if(!entry)continue;
+    const heading=trigger.closest('.page-heading');if(!heading)continue;
+    const pending=!['failed','succeeded'].includes(entry.phase);
+    trigger.disabled=pending;trigger.textContent=!pending?'更新这块地天气':({account_changed:'请刷新页面',uncertain:'更新结果待确认',paused:'等待查看结果',timeout:'等待查看结果',request_error:'等待查看结果',submitting:'正在请求更新…'}[entry.phase]||'天气正在更新');
+    let output=heading.parentElement.querySelector('[data-weather-job]');
+    if(!output){output=document.createElement('div');output.dataset.weatherJob=trigger.dataset.id;output.setAttribute('aria-live','polite');heading.after(output);}
+    output.innerHTML=note(entry.message,['failed','request_error','uncertain','account_changed'].includes(entry.phase)?'warning':'info')+
+      (entry.canContinue?button('继续查看','weather-job-check','secondary',`data-id="${esc(trigger.dataset.id)}"`):'');
+  }
+}
+function ensureWeatherJobs(){
+  if(!weatherJobs)weatherJobs=createWeatherJobs({request,
+    getContext:()=>{const context=readContext();return {mode:state.mode,revision:state.revision,routeKey:`${route.page}/${route.id||''}`,accountKey:`${context.storageScope}:${context.accountContext}`};},
+    onChange:entry=>{decorateWeatherJobs();if(entry.phase==='account_changed')showNotice(entry.message,'error');},
+    applyResult:async(result,isCurrent)=>{
+      let nextEstimates,nextReadiness;
+      try{[nextEstimates,nextReadiness]=await Promise.all([request(`/api/estimates?mode=${result.state.mode}`),request(`/api/readiness?mode=${result.state.mode}`)]);}
+      catch(error){if(error.details?.error?.code==='ACCOUNT_CONTEXT_CHANGED'||error.details?.code==='ACCOUNT_CONTEXT_CHANGED')throw error;}
+      if(!isCurrent()||result.state.revision<state.revision)return false;
+      state=result.state;estimates=nextEstimates||null;readiness=nextReadiness||null;
+      for(const row of estimates?.tasks||[])for(const worker of row.workers||[])worker.worker_name=[state.profile,...state.helpers].find(person=>person.id===worker.worker_id)?.name||'这位人员';
+      render();showNotice('天气已更新。请查看来源、日期和预警情况；旧安排需要重新计算。');return true;
+    }});
+  return weatherJobs;
+}
+window.addEventListener('hashchange',()=>{const next=parseAppRoute(location.hash);if(!next)return;weatherJobs?.pause();route=next;render(true);fillCorrection();});
+window.addEventListener('pagehide',()=>weatherJobs?.pause());
+window.addEventListener('pageshow',()=>decorateWeatherJobs());
 initialLoad();

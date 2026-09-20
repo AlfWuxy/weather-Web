@@ -66,7 +66,8 @@ def _unique_object(pairs):
 def create_workbench_blueprint(*, repository, principal_provider, csrf_token_provider, csrf_validator,
                                archive_root, site_origin, enabled=False,
                                api_prefix="/api/v1/agriculture/workbench", page_prefix="/agriculture",
-                               page_renderer=None, unauthenticated_page=None, alert_fetcher=None):
+                               page_renderer=None, unauthenticated_page=None, alert_fetcher=None,
+                               weather_jobs=None):
     """注册不创建数据库、归档、迁移或账户；仅服务端回调可提供身份与CSRF。"""
     from flask import Blueprint, Response, current_app, g, redirect, request, send_file
 
@@ -178,6 +179,13 @@ def create_workbench_blueprint(*, repository, principal_provider, csrf_token_pro
     def repository_error(exc):
         return response({"error": {"code": exc.code, "message": str(exc), "field": None}}, exc.status)
 
+    if weather_jobs is not None:
+        from .weather_jobs import WeatherJobError
+
+        @bp.errorhandler(WeatherJobError)
+        def weather_job_error(exc):
+            return response({"error": {"code": exc.code, "message": str(exc), "field": None}}, exc.status)
+
     @bp.errorhandler(InputError)
     def input_error(exc):
         return response({"error": {"code": "PLAN_INPUT_INVALID", "message": str(exc), "field": getattr(exc, "path", None)}}, 422)
@@ -241,6 +249,17 @@ def create_workbench_blueprint(*, repository, principal_provider, csrf_token_pro
     def api(endpoint):
         service = g.yilao_service
         if request.method in {"GET", "HEAD"}:
+            if endpoint.startswith("weather/jobs/") and weather_jobs is not None:
+                job_id = endpoint.removeprefix("weather/jobs/")
+                if request.args or not re.fullmatch(r"[a-f0-9]{32}", job_id):
+                    _fail("没有此天气更新记录", "NOT_FOUND", 404)
+                job = weather_jobs.read_for_owner(g.yilao_subject, job_id)
+                if job is None:
+                    _fail("没有此天气更新记录", "NOT_FOUND", 404)
+                result = {"job": job}
+                if job["status"] == "succeeded":
+                    result["state"] = service.get_state("real")
+                return response(result)
             data = query_values(endpoint)
             selected = data["mode"]
             if endpoint == "health":
@@ -288,6 +307,10 @@ def create_workbench_blueprint(*, repository, principal_provider, csrf_token_pro
                 return response(service.demo())
             if endpoint in POST_ACTIONS:
                 if endpoint == "weather/refresh":
+                    if weather_jobs is not None:
+                        state, plot = service.validate_weather_refresh(data)
+                        job = weather_jobs.enqueue(g.yilao_subject, plot["id"], state["revision"])
+                        return response({"job": job}, 202)
                     # 只有明确刷新天气时才创建归档；每账户独立且其他系统用户不可读。
                     archive.mkdir(parents=True, exist_ok=True, mode=0o700)
                     g.yilao_archive.mkdir(exist_ok=True, mode=0o700)
