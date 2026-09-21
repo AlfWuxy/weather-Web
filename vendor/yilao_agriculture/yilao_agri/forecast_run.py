@@ -143,8 +143,17 @@ def _parse_bundle(response_text, metadata_text, request_url, metadata_url):
         _fail()
     if type(metadata.get("temporal_resolution_seconds")) is not int or metadata["temporal_resolution_seconds"] <= 0:
         _fail()
-    if any((b - a).total_seconds() != metadata["temporal_resolution_seconds"] for a, b in zip(valid, valid[1:])):
-        _fail()
+    resolution = metadata["temporal_resolution_seconds"]
+    if any((b - a).total_seconds() != resolution for a, b in zip(valid, valid[1:])):
+        # IFS 00/12Z 的公开时序为前144小时每3小时，之后至360小时每6小时。
+        # 元数据仍声明基础3小时间隔；只接纳这条明确时序，不把任意缺口当作变步长。
+        if resolution != 10800 or initialised.hour not in {0, 12}:
+            _fail()
+        for start, end in zip(valid, valid[1:]):
+            lead = (start - initialised).total_seconds()
+            expected = 10800 if lead < 144 * 3600 else 21600
+            if (end - start).total_seconds() != expected or end - initialised > timedelta(hours=360):
+                _fail()
     variables = metadata.get("variables")
     if not isinstance(variables, list) or not all(isinstance(v, str) for v in variables):
         _fail()
