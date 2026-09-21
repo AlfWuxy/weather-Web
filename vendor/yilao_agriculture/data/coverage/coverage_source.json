@@ -1,0 +1,136 @@
+{
+  "schema_id": "yilao.coverage_status.v0.1",
+  "contract_version": "0.1.0",
+  "interface_version": "docs/接口约定.md schema 1.0",
+  "task_id": "R14-A10",
+  "model_of_record": "v4.1 flash deepseek",
+  "accepted_source_hash": "0366264ec06dd3e58ba08891f6d00980fbbc753a87345ec0be10cd4223a2cc2c",
+  "note": "覆盖状态表只回答「目录声明了什么、已验收运行时真正支持什么、哪些项没有支持」。它不判断某作物某环节在当地是否农艺适用，不打开推荐，不构成出工许可或个人健康安全结论。未支持项必须逐条出现，不得静默丢弃。",
+  "status_vocabulary": {
+    "SUPPORTED_RUNTIME": "已验收运行时对「该作物组 × 该环节」存在可运行规则或校验；当前为 0。",
+    "CATALOG_ONLY": "目录/别名层有该作物的记录，但运行时没有该作物×环节规则，不可推荐。",
+    "IDENTITY_HOLD": "身份未决（HOLD），不得锁到单一物种；单独标注，不外扩为整组结论。",
+    "UNSUPPORTED": "已验收运行时完全没有任何该组的表示；目录里仍显示该行。"
+  },
+  "runtime_facts": {
+    "source": "对 accepted/project 源码的只读核对（R14-A10）",
+    "evidence_class": "IMPLEMENTATION_TEST",
+    "scheduling_engine": "generic",
+    "crop_id_is_free_text": true,
+    "stage_is_free_text": true,
+    "per_crop_stage_rule_groups": [],
+    "per_stage_rule_ids": [],
+    "recommendation_enabled_default": false,
+    "alias_catalog_present": true,
+    "alias_catalog_path": "data/crops/local_alias_catalog.json",
+    "supported_units": ["mu", "sqm", "kg", "trip", "plant", "m", "m3"],
+    "n_field_validated": 0,
+    "n_professional_reviewed": 0
+  },
+  "alias_id_to_group": {
+    "ALIAS-V07-CAIGUA": "V07",
+    "ALIAS-V07-NANGUA": "V07",
+    "ALIAS-V07-SIGUA": "V07",
+    "ALIAS-V07-WATERMELON-DUCHANG": "V07",
+    "ALIAS-V01-YOUMAI-NATIONAL": "V01",
+    "ALIAS-V01-YOUMAI-DUCHANG": "V01",
+    "ALIAS-V01-LETTUCE-DUCHANG": "V01",
+    "ALIAS-V01-LETTUCE-NATIONAL": "V01",
+    "ALIAS-V01-SPINACH-DUCHANG": "V01",
+    "ALIAS-V06-PEPPER-DUCHANG": "V06",
+    "ALIAS-LEGACY-PEPPER": "V06",
+    "ALIAS-LEGACY-LETTUCE": "V01",
+    "ALIAS-RICE-DUCHANG": "G01",
+    "ALIAS-ZHIMA-DUCHANG": "G04",
+    "ALIAS-TALLSTALK-DUCHANG": "G02",
+    "ALIAS-MAIZE-DUCHANG": "G02"
+  },
+  "alias_identity_hold_statuses": ["IDENTITY_HOLD", "HOLD"],
+  "crop_groups": [
+    {"id": "V01", "kind": "vegetable", "name_zh": "普通叶菜", "responsibility": "R06-A01", "examples_zh": "生菜、油麦菜、菠菜、苋菜、茼蒿"},
+    {"id": "V02", "kind": "vegetable", "name_zh": "白菜与叶用芥菜", "responsibility": "R06-A02", "examples_zh": "大白菜、小白菜、青梗菜、叶用芥菜"},
+    {"id": "V03", "kind": "vegetable", "name_zh": "叶球及嫩叶甘蓝", "responsibility": "R06-A02", "examples_zh": "结球甘蓝、羽衣甘蓝、抱子甘蓝"},
+    {"id": "V04", "kind": "vegetable", "name_zh": "嫩茎、叶柄与嫩梢菜", "responsibility": "R06-A07", "examples_zh": "莴笋、芹菜、菜心、芥蓝、空心菜"},
+    {"id": "V05", "kind": "vegetable", "name_zh": "花球及食用花器", "responsibility": "R06-A02", "examples_zh": "花椰菜、西兰花、食用黄花菜"},
+    {"id": "V06", "kind": "vegetable", "name_zh": "茄果类", "responsibility": "R06-A03", "examples_zh": "辣椒、甜椒、茄子、番茄"},
+    {"id": "V07", "kind": "vegetable", "name_zh": "瓜类", "responsibility": "R06-A04", "examples_zh": "黄瓜、冬瓜、南瓜、西瓜、丝瓜、菜瓜（地方名待核实）"},
+    {"id": "V08", "kind": "vegetable", "name_zh": "鲜豆及食荚豆类", "responsibility": "R06-A05", "examples_zh": "豇豆、菜豆、豌豆、蚕豆、毛豆"},
+    {"id": "V09", "kind": "vegetable", "name_zh": "葱蒜与韭类", "responsibility": "R06-A06", "examples_zh": "大葱、小葱、洋葱、大蒜、韭菜、韭葱"},
+    {"id": "V10", "kind": "vegetable", "name_zh": "肉质根菜", "responsibility": "R06-A07", "examples_zh": "萝卜、胡萝卜、芜菁、根用甜菜"},
+    {"id": "V11", "kind": "vegetable", "name_zh": "薯芋及其他地下贮藏器官作物", "responsibility": "R06-A07", "examples_zh": "马铃薯、甘薯、山药、芋、姜"},
+    {"id": "V12", "kind": "vegetable", "name_zh": "水生蔬菜", "responsibility": "R06-A08", "examples_zh": "莲藕、茭白、荸荠、菱、芡实、水芹"},
+    {"id": "V13", "kind": "vegetable", "name_zh": "多年生及特色蔬菜", "responsibility": "R06-A07", "examples_zh": "芦笋、竹笋、香椿、百合"},
+    {"id": "V14", "kind": "vegetable", "name_zh": "香辛及调味叶菜", "responsibility": "R06-A08", "examples_zh": "香菜、薄荷、紫苏、罗勒、茴香菜"},
+    {"id": "V15", "kind": "vegetable", "name_zh": "食用菌邻近模块", "responsibility": "R06-A08", "examples_zh": "香菇、平菇、木耳、双孢蘑菇"},
+    {"id": "G01", "kind": "grain_oil", "name_zh": "水稻", "responsibility": "R06-A09", "examples_zh": "水稻"},
+    {"id": "G02", "kind": "grain_oil", "name_zh": "其他谷物", "responsibility": "R06-A09", "examples_zh": "玉米、小麦、大麦、高粱、谷子"},
+    {"id": "G03", "kind": "grain_oil", "name_zh": "成熟豆类与粮油兼用作物", "responsibility": "R06-A09", "examples_zh": "大豆、绿豆、红小豆、蚕豆"},
+    {"id": "G04", "kind": "grain_oil", "name_zh": "油料", "responsibility": "R06-A10", "examples_zh": "芝麻、油菜、花生、向日葵"},
+    {"id": "G05", "kind": "grain_oil", "name_zh": "薯类粮食用途", "responsibility": "R06-A09", "examples_zh": "甘薯、马铃薯（与 V11 同实体，按用途标签）"}
+  ],
+  "stages": [
+    {"id": "01", "name_zh": "田块与种植计划", "responsibility": "R07-A01"},
+    {"id": "02", "name_zh": "种苗与物料准备", "responsibility": "R07-A01"},
+    {"id": "03", "name_zh": "有机肥及农资搬运", "responsibility": "R07-A06"},
+    {"id": "04", "name_zh": "整地与田间设施", "responsibility": "R07-A03"},
+    {"id": "05", "name_zh": "基肥与土壤改良", "responsibility": "R07-A03"},
+    {"id": "06", "name_zh": "种子与育苗育秧", "responsibility": "R07-A02"},
+    {"id": "07", "name_zh": "播种与移栽", "responsibility": "R07-A04"},
+    {"id": "08", "name_zh": "出苗与成苗管理", "responsibility": "R07-A02"},
+    {"id": "09", "name_zh": "灌溉与排水", "responsibility": "R07-A05"},
+    {"id": "10", "name_zh": "追肥与分阶段养分管理", "responsibility": "R07-A06"},
+    {"id": "11", "name_zh": "除草与中耕培土", "responsibility": "R07-A07"},
+    {"id": "12", "name_zh": "支架及植株整理", "responsibility": "R07-A07"},
+    {"id": "13", "name_zh": "开花结果与产品管理", "responsibility": "R07-A07"},
+    {"id": "14", "name_zh": "病虫与异常巡查处理", "responsibility": "R07-A08"},
+    {"id": "15", "name_zh": "收获", "responsibility": "R07-A09"},
+    {"id": "16", "name_zh": "田间搬运与初处理", "responsibility": "R07-A09"},
+    {"id": "17", "name_zh": "干燥储藏与收尾", "responsibility": "R07-A09/R07-A10"},
+    {"id": "18", "name_zh": "极端天气前后处理", "responsibility": "R07-A10"}
+  ],
+  "stage_alias_forms": {
+    "vegetative": null,
+    "seedling": null,
+    "flowering": null,
+    "fruiting": null,
+    "harvest": null
+  },
+  "applicability": {
+    "value": "unknown",
+    "reason": "缺少地方农技规则与专业复核；某作物是否经过某环节属未核查事实，不由本表推断。"
+  },
+  "sources": [
+    {
+      "source_id": "SRC-DESIGN-COVERAGE-DRAFT",
+      "kind": "internal_design_doc",
+      "path": "作物与农事覆盖清单_讨论版.md",
+      "evidence_class": "SECONDARY_SUMMARY",
+      "supports": "15 类蔬菜与 5 粮油模块、18 环节的目录编号与命名",
+      "limit": "产品覆盖设计稿，不是已验证的全国农技规则库；目录覆盖不等于已验证"
+    },
+    {
+      "source_id": "SRC-DESIGN-RESPONSIBILITY",
+      "kind": "internal_design_doc",
+      "path": "context/作物农事责任矩阵.md",
+      "evidence_class": "SECONDARY_SUMMARY",
+      "supports": "V01–V15 / G01–G05 / 01–18 的编号与研究责任归属",
+      "limit": "责任分工，不代表已完成或已验收"
+    },
+    {
+      "source_id": "SRC-IMPL-ACCEPTED",
+      "kind": "accepted_code",
+      "path": "accepted/project（full_tree_hash 0366264e…）",
+      "evidence_class": "IMPLEMENTATION_TEST",
+      "supports": "运行时仅通用排程；crop_id/stage 为自由文本；无作物×环节农艺规则；推荐默认关闭",
+      "limit": "工程基线，不是田间效果或健康证据"
+    },
+    {
+      "source_id": "SRC-ALIAS-CATALOG",
+      "kind": "accepted_catalog",
+      "path": "data/crops/local_alias_catalog.json",
+      "evidence_class": "IMPLEMENTATION_TEST",
+      "supports": "别名行的别名 ID、地区、状态、候选数与 local_confirmed",
+      "limit": "R11-A07 合成夹具；地方确认全为 false；菜瓜/芝麻/高杆保持 IDENTITY_HOLD"
+    }
+  ]
+}

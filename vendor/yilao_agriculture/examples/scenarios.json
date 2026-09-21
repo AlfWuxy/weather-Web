@@ -1,0 +1,855 @@
+[
+  {
+    "id": "hotter_day",
+    "description": "合成天气整体升高7摄氏度，工作时段超过示例阈值；紧迫任务也不能越过限制。",
+    "patch": {
+      "weather": {
+        "north_peppers": {
+          "source": "合成演示数据；仅测试算法，不是实测、预报、农技处方或医学标准。 降水表示每个一小时时段总量（mm）；未提供WBGT。",
+          "issued_at": "2026-09-12T05:30:00+08:00",
+          "kind": "synthetic",
+          "environment": "outdoor",
+          "records": [
+            {
+              "start": "2026-09-12T00:00:00+08:00",
+              "end": "2026-09-12T01:00:00+08:00",
+              "temperature_c": 33,
+              "relative_humidity_pct": 65,
+              "wind_m_s": 2,
+              "shortwave_w_m2": 0,
+              "precipitation_mm": 0,
+              "daylight": false,
+              "hazards": []
+            },
+            {
+              "start": "2026-09-12T01:00:00+08:00",
+              "end": "2026-09-12T02:00:00+08:00",
+              "temperature_c": 33,
+              "relative_humidity_pct": 65,
+              "wind_m_s": 2,
+              "shortwave_w_m2": 0,
+              "precipitation_mm": 0,
+              "daylight": false,
+              "hazards": []
+            },
+            {
+              "start": "2026-09-12T02:00:00+08:00",
+              "end": "2026-09-12T03:00:00+08:00",
+              "temperature_c": 33,
+              "relative_humidity_pct": 65,
+              "wind_m_s": 2,
+              "shortwave_w_m2": 0,
+              "precipitation_mm": 0,
+              "daylight": false,
+              "hazards": []
+            },
+            {
+              "start": "2026-09-12T03:00:00+08:00",
+              "end": "2026-09-12T04:00:00+08:00",
+              "temperature_c": 33,
+              "relative_humidity_pct": 65,
+              "wind_m_s": 2,
+              "shortwave_w_m2": 0,
+              "precipitation_mm": 0,
+              "daylight": false,
+              "hazards": []
+            },
+            {
+              "start": "2026-09-12T04:00:00+08:00",
+              "end": "2026-09-12T05:00:00+08:00",
+              "temperature_c": 33,
+              "relative_humidity_pct": 65,
+              "wind_m_s": 2,
+              "shortwave_w_m2": 0,
+              "precipitation_mm": 0,
+              "daylight": false,
+              "hazards": []
+            },
+            {
+              "start": "2026-09-12T05:00:00+08:00",
+              "end": "2026-09-12T06:00:00+08:00",
+              "temperature_c": 33,
+              "relative_humidity_pct": 65,
+              "wind_m_s": 2,
+              "shortwave_w_m2": 0,
+              "precipitation_mm": 0,
+              "daylight": false,
+              "hazards": []
+            },
+            {
+              "start": "2026-09-12T06:00:00+08:00",
+              "end": "2026-09-12T07:00:00+08:00",
+              "temperature_c": 36,
+              "relative_humidity_pct": 65,
+              "wind_m_s": 2,
+              "shortwave_w_m2": 450,
+              "precipitation_mm": 0,
+              "daylight": true,
+              "hazards": []
+            },
+            {
+              "start": "2026-09-12T07:00:00+08:00",
+              "end": "2026-09-12T08:00:00+08:00",
+              "temperature_c": 36,
+              "relative_humidity_pct": 65,
+              "wind_m_s": 2,
+              "shortwave_w_m2": 450,
+              "precipitation_mm": 0,
+              "daylight": true,
+              "hazards": []
+            },
+            {
+              "start": "2026-09-12T08:00:00+08:00",
+              "end": "2026-09-12T09:00:00+08:00",
+              "temperature_c": 36,
+              "relative_humidity_pct": 65,
+              "wind_m_s": 2,
+              "shortwave_w_m2": 450,
+              "precipitation_mm": 0,
+              "daylight": true,
+              "hazards": []
+            },
+            {
+              "start": "2026-09-12T09:00:00+08:00",
+              "end": "2026-09-12T10:00:00+08:00",
+              "temperature_c": 36,
+              "relative_humidity_pct": 65,
+              "wind_m_s": 2,
+              "shortwave_w_m2": 450,
+              "precipitation_mm": 0,
+              "daylight": true,
+              "hazards": []
+            },
+            {
+              "start": "2026-09-12T10:00:00+08:00",
+              "end": "2026-09-12T11:00:00+08:00",
+              "temperature_c": 44,
+              "relative_humidity_pct": 65,
+              "wind_m_s": 2,
+              "shortwave_w_m2": 450,
+              "precipitation_mm": 0,
+              "daylight": true,
+              "hazards": []
+            },
+            {
+              "start": "2026-09-12T11:00:00+08:00",
+              "end": "2026-09-12T12:00:00+08:00",
+              "temperature_c": 44,
+              "relative_humidity_pct": 65,
+              "wind_m_s": 2,
+              "shortwave_w_m2": 450,
+              "precipitation_mm": 0,
+              "daylight": true,
+              "hazards": []
+            },
+            {
+              "start": "2026-09-12T12:00:00+08:00",
+              "end": "2026-09-12T13:00:00+08:00",
+              "temperature_c": 44,
+              "relative_humidity_pct": 65,
+              "wind_m_s": 2,
+              "shortwave_w_m2": 450,
+              "precipitation_mm": 0,
+              "daylight": true,
+              "hazards": []
+            },
+            {
+              "start": "2026-09-12T13:00:00+08:00",
+              "end": "2026-09-12T14:00:00+08:00",
+              "temperature_c": 44,
+              "relative_humidity_pct": 65,
+              "wind_m_s": 2,
+              "shortwave_w_m2": 450,
+              "precipitation_mm": 0,
+              "daylight": true,
+              "hazards": []
+            },
+            {
+              "start": "2026-09-12T14:00:00+08:00",
+              "end": "2026-09-12T15:00:00+08:00",
+              "temperature_c": 44,
+              "relative_humidity_pct": 65,
+              "wind_m_s": 2,
+              "shortwave_w_m2": 450,
+              "precipitation_mm": 0,
+              "daylight": true,
+              "hazards": []
+            },
+            {
+              "start": "2026-09-12T15:00:00+08:00",
+              "end": "2026-09-12T16:00:00+08:00",
+              "temperature_c": 44,
+              "relative_humidity_pct": 65,
+              "wind_m_s": 2,
+              "shortwave_w_m2": 450,
+              "precipitation_mm": 0,
+              "daylight": true,
+              "hazards": []
+            },
+            {
+              "start": "2026-09-12T16:00:00+08:00",
+              "end": "2026-09-12T17:00:00+08:00",
+              "temperature_c": 36,
+              "relative_humidity_pct": 65,
+              "wind_m_s": 2,
+              "shortwave_w_m2": 450,
+              "precipitation_mm": 0,
+              "daylight": true,
+              "hazards": []
+            },
+            {
+              "start": "2026-09-12T17:00:00+08:00",
+              "end": "2026-09-12T18:00:00+08:00",
+              "temperature_c": 36,
+              "relative_humidity_pct": 65,
+              "wind_m_s": 2,
+              "shortwave_w_m2": 450,
+              "precipitation_mm": 0,
+              "daylight": true,
+              "hazards": []
+            },
+            {
+              "start": "2026-09-12T18:00:00+08:00",
+              "end": "2026-09-12T19:00:00+08:00",
+              "temperature_c": 36,
+              "relative_humidity_pct": 65,
+              "wind_m_s": 2,
+              "shortwave_w_m2": 0,
+              "precipitation_mm": 0,
+              "daylight": false,
+              "hazards": []
+            },
+            {
+              "start": "2026-09-12T19:00:00+08:00",
+              "end": "2026-09-12T20:00:00+08:00",
+              "temperature_c": 33,
+              "relative_humidity_pct": 65,
+              "wind_m_s": 2,
+              "shortwave_w_m2": 0,
+              "precipitation_mm": 0,
+              "daylight": false,
+              "hazards": []
+            },
+            {
+              "start": "2026-09-12T20:00:00+08:00",
+              "end": "2026-09-12T21:00:00+08:00",
+              "temperature_c": 33,
+              "relative_humidity_pct": 65,
+              "wind_m_s": 2,
+              "shortwave_w_m2": 0,
+              "precipitation_mm": 0,
+              "daylight": false,
+              "hazards": []
+            },
+            {
+              "start": "2026-09-12T21:00:00+08:00",
+              "end": "2026-09-12T22:00:00+08:00",
+              "temperature_c": 33,
+              "relative_humidity_pct": 65,
+              "wind_m_s": 2,
+              "shortwave_w_m2": 0,
+              "precipitation_mm": 0,
+              "daylight": false,
+              "hazards": []
+            },
+            {
+              "start": "2026-09-12T22:00:00+08:00",
+              "end": "2026-09-12T23:00:00+08:00",
+              "temperature_c": 33,
+              "relative_humidity_pct": 65,
+              "wind_m_s": 2,
+              "shortwave_w_m2": 0,
+              "precipitation_mm": 0,
+              "daylight": false,
+              "hazards": []
+            },
+            {
+              "start": "2026-09-12T23:00:00+08:00",
+              "end": "2026-09-13T00:00:00+08:00",
+              "temperature_c": 33,
+              "relative_humidity_pct": 65,
+              "wind_m_s": 2,
+              "shortwave_w_m2": 0,
+              "precipitation_mm": 0,
+              "daylight": false,
+              "hazards": []
+            }
+          ]
+        },
+        "south_lettuce": {
+          "source": "合成演示数据；仅测试算法，不是实测、预报、农技处方或医学标准。 降水表示每个一小时时段总量（mm）；未提供WBGT。",
+          "issued_at": "2026-09-12T05:30:00+08:00",
+          "kind": "synthetic",
+          "environment": "outdoor",
+          "records": [
+            {
+              "start": "2026-09-12T00:00:00+08:00",
+              "end": "2026-09-12T01:00:00+08:00",
+              "temperature_c": 33,
+              "relative_humidity_pct": 65,
+              "wind_m_s": 2,
+              "shortwave_w_m2": 0,
+              "precipitation_mm": 0,
+              "daylight": false,
+              "hazards": []
+            },
+            {
+              "start": "2026-09-12T01:00:00+08:00",
+              "end": "2026-09-12T02:00:00+08:00",
+              "temperature_c": 33,
+              "relative_humidity_pct": 65,
+              "wind_m_s": 2,
+              "shortwave_w_m2": 0,
+              "precipitation_mm": 0,
+              "daylight": false,
+              "hazards": []
+            },
+            {
+              "start": "2026-09-12T02:00:00+08:00",
+              "end": "2026-09-12T03:00:00+08:00",
+              "temperature_c": 33,
+              "relative_humidity_pct": 65,
+              "wind_m_s": 2,
+              "shortwave_w_m2": 0,
+              "precipitation_mm": 0,
+              "daylight": false,
+              "hazards": []
+            },
+            {
+              "start": "2026-09-12T03:00:00+08:00",
+              "end": "2026-09-12T04:00:00+08:00",
+              "temperature_c": 33,
+              "relative_humidity_pct": 65,
+              "wind_m_s": 2,
+              "shortwave_w_m2": 0,
+              "precipitation_mm": 0,
+              "daylight": false,
+              "hazards": []
+            },
+            {
+              "start": "2026-09-12T04:00:00+08:00",
+              "end": "2026-09-12T05:00:00+08:00",
+              "temperature_c": 33,
+              "relative_humidity_pct": 65,
+              "wind_m_s": 2,
+              "shortwave_w_m2": 0,
+              "precipitation_mm": 0,
+              "daylight": false,
+              "hazards": []
+            },
+            {
+              "start": "2026-09-12T05:00:00+08:00",
+              "end": "2026-09-12T06:00:00+08:00",
+              "temperature_c": 33,
+              "relative_humidity_pct": 65,
+              "wind_m_s": 2,
+              "shortwave_w_m2": 0,
+              "precipitation_mm": 0,
+              "daylight": false,
+              "hazards": []
+            },
+            {
+              "start": "2026-09-12T06:00:00+08:00",
+              "end": "2026-09-12T07:00:00+08:00",
+              "temperature_c": 36,
+              "relative_humidity_pct": 65,
+              "wind_m_s": 2,
+              "shortwave_w_m2": 450,
+              "precipitation_mm": 0,
+              "daylight": true,
+              "hazards": []
+            },
+            {
+              "start": "2026-09-12T07:00:00+08:00",
+              "end": "2026-09-12T08:00:00+08:00",
+              "temperature_c": 36,
+              "relative_humidity_pct": 65,
+              "wind_m_s": 2,
+              "shortwave_w_m2": 450,
+              "precipitation_mm": 0,
+              "daylight": true,
+              "hazards": []
+            },
+            {
+              "start": "2026-09-12T08:00:00+08:00",
+              "end": "2026-09-12T09:00:00+08:00",
+              "temperature_c": 36,
+              "relative_humidity_pct": 65,
+              "wind_m_s": 2,
+              "shortwave_w_m2": 450,
+              "precipitation_mm": 0,
+              "daylight": true,
+              "hazards": []
+            },
+            {
+              "start": "2026-09-12T09:00:00+08:00",
+              "end": "2026-09-12T10:00:00+08:00",
+              "temperature_c": 36,
+              "relative_humidity_pct": 65,
+              "wind_m_s": 2,
+              "shortwave_w_m2": 450,
+              "precipitation_mm": 0,
+              "daylight": true,
+              "hazards": []
+            },
+            {
+              "start": "2026-09-12T10:00:00+08:00",
+              "end": "2026-09-12T11:00:00+08:00",
+              "temperature_c": 44,
+              "relative_humidity_pct": 65,
+              "wind_m_s": 2,
+              "shortwave_w_m2": 450,
+              "precipitation_mm": 0,
+              "daylight": true,
+              "hazards": []
+            },
+            {
+              "start": "2026-09-12T11:00:00+08:00",
+              "end": "2026-09-12T12:00:00+08:00",
+              "temperature_c": 44,
+              "relative_humidity_pct": 65,
+              "wind_m_s": 2,
+              "shortwave_w_m2": 450,
+              "precipitation_mm": 0,
+              "daylight": true,
+              "hazards": []
+            },
+            {
+              "start": "2026-09-12T12:00:00+08:00",
+              "end": "2026-09-12T13:00:00+08:00",
+              "temperature_c": 44,
+              "relative_humidity_pct": 65,
+              "wind_m_s": 2,
+              "shortwave_w_m2": 450,
+              "precipitation_mm": 0,
+              "daylight": true,
+              "hazards": []
+            },
+            {
+              "start": "2026-09-12T13:00:00+08:00",
+              "end": "2026-09-12T14:00:00+08:00",
+              "temperature_c": 44,
+              "relative_humidity_pct": 65,
+              "wind_m_s": 2,
+              "shortwave_w_m2": 450,
+              "precipitation_mm": 0,
+              "daylight": true,
+              "hazards": []
+            },
+            {
+              "start": "2026-09-12T14:00:00+08:00",
+              "end": "2026-09-12T15:00:00+08:00",
+              "temperature_c": 44,
+              "relative_humidity_pct": 65,
+              "wind_m_s": 2,
+              "shortwave_w_m2": 450,
+              "precipitation_mm": 0,
+              "daylight": true,
+              "hazards": []
+            },
+            {
+              "start": "2026-09-12T15:00:00+08:00",
+              "end": "2026-09-12T16:00:00+08:00",
+              "temperature_c": 44,
+              "relative_humidity_pct": 65,
+              "wind_m_s": 2,
+              "shortwave_w_m2": 450,
+              "precipitation_mm": 0,
+              "daylight": true,
+              "hazards": []
+            },
+            {
+              "start": "2026-09-12T16:00:00+08:00",
+              "end": "2026-09-12T17:00:00+08:00",
+              "temperature_c": 36,
+              "relative_humidity_pct": 65,
+              "wind_m_s": 2,
+              "shortwave_w_m2": 450,
+              "precipitation_mm": 0,
+              "daylight": true,
+              "hazards": []
+            },
+            {
+              "start": "2026-09-12T17:00:00+08:00",
+              "end": "2026-09-12T18:00:00+08:00",
+              "temperature_c": 36,
+              "relative_humidity_pct": 65,
+              "wind_m_s": 2,
+              "shortwave_w_m2": 450,
+              "precipitation_mm": 0,
+              "daylight": true,
+              "hazards": []
+            },
+            {
+              "start": "2026-09-12T18:00:00+08:00",
+              "end": "2026-09-12T19:00:00+08:00",
+              "temperature_c": 36,
+              "relative_humidity_pct": 65,
+              "wind_m_s": 2,
+              "shortwave_w_m2": 0,
+              "precipitation_mm": 0,
+              "daylight": false,
+              "hazards": []
+            },
+            {
+              "start": "2026-09-12T19:00:00+08:00",
+              "end": "2026-09-12T20:00:00+08:00",
+              "temperature_c": 33,
+              "relative_humidity_pct": 65,
+              "wind_m_s": 2,
+              "shortwave_w_m2": 0,
+              "precipitation_mm": 0,
+              "daylight": false,
+              "hazards": []
+            },
+            {
+              "start": "2026-09-12T20:00:00+08:00",
+              "end": "2026-09-12T21:00:00+08:00",
+              "temperature_c": 33,
+              "relative_humidity_pct": 65,
+              "wind_m_s": 2,
+              "shortwave_w_m2": 0,
+              "precipitation_mm": 0,
+              "daylight": false,
+              "hazards": []
+            },
+            {
+              "start": "2026-09-12T21:00:00+08:00",
+              "end": "2026-09-12T22:00:00+08:00",
+              "temperature_c": 33,
+              "relative_humidity_pct": 65,
+              "wind_m_s": 2,
+              "shortwave_w_m2": 0,
+              "precipitation_mm": 0,
+              "daylight": false,
+              "hazards": []
+            },
+            {
+              "start": "2026-09-12T22:00:00+08:00",
+              "end": "2026-09-12T23:00:00+08:00",
+              "temperature_c": 33,
+              "relative_humidity_pct": 65,
+              "wind_m_s": 2,
+              "shortwave_w_m2": 0,
+              "precipitation_mm": 0,
+              "daylight": false,
+              "hazards": []
+            },
+            {
+              "start": "2026-09-12T23:00:00+08:00",
+              "end": "2026-09-13T00:00:00+08:00",
+              "temperature_c": 33,
+              "relative_humidity_pct": 65,
+              "wind_m_s": 2,
+              "shortwave_w_m2": 0,
+              "precipitation_mm": 0,
+              "daylight": false,
+              "hazards": []
+            }
+          ]
+        }
+      }
+    }
+  },
+  {
+    "id": "helper_stops_and_cart_unavailable",
+    "description": "合成情境：帮手停止工作，手推车不可用；依赖搬运的施肥不能假定已完成前置工作。",
+    "patch": {
+      "workers": [
+        {
+          "id": "elder",
+          "state": "clear",
+          "availability": [
+            {
+              "start": "2026-09-12T06:00:00+08:00",
+              "end": "2026-09-12T18:00:00+08:00"
+            }
+          ],
+          "limits": {
+            "max_active_minutes_per_day": 120,
+            "max_continuous_active_minutes": 40,
+            "min_rest_minutes": 20,
+            "max_load_kg": 8,
+            "forbidden_tags": [
+              "powered_machinery"
+            ],
+            "source": "合成演示数据；仅测试算法，不是实测、预报、农技处方或医学标准。 演示假设出工前已充分休息。",
+            "review_status": "illustrative"
+          },
+          "used_active_minutes_by_date": {},
+          "initial_rest_confirmed": true
+        },
+        {
+          "id": "helper",
+          "state": "stop",
+          "availability": [
+            {
+              "start": "2026-09-12T06:00:00+08:00",
+              "end": "2026-09-12T18:00:00+08:00"
+            }
+          ],
+          "limits": {
+            "max_active_minutes_per_day": 240,
+            "max_continuous_active_minutes": 60,
+            "min_rest_minutes": 15,
+            "max_load_kg": 20,
+            "forbidden_tags": [],
+            "source": "合成演示数据；仅测试算法，不是实测、预报、农技处方或医学标准。 演示假设出工前已充分休息。",
+            "review_status": "illustrative"
+          },
+          "used_active_minutes_by_date": {},
+          "initial_rest_confirmed": true
+        }
+      ],
+      "resources": [
+        {
+          "id": "drinking_water",
+          "kind": "water",
+          "capacity": 2,
+          "availability": [
+            {
+              "start": "2026-09-12T06:00:00+08:00",
+              "end": "2026-09-12T18:00:00+08:00"
+            }
+          ]
+        },
+        {
+          "id": "shaded_rest",
+          "kind": "rest_place",
+          "capacity": 2,
+          "availability": [
+            {
+              "start": "2026-09-12T06:00:00+08:00",
+              "end": "2026-09-12T18:00:00+08:00"
+            }
+          ]
+        },
+        {
+          "id": "hoe",
+          "kind": "tool",
+          "capacity": 1,
+          "availability": [
+            {
+              "start": "2026-09-12T06:00:00+08:00",
+              "end": "2026-09-12T18:00:00+08:00"
+            }
+          ]
+        },
+        {
+          "id": "handcart",
+          "kind": "tool",
+          "capacity": 1,
+          "availability": []
+        },
+        {
+          "id": "fertilizer_scoop",
+          "kind": "tool",
+          "capacity": 1,
+          "availability": [
+            {
+              "start": "2026-09-12T06:00:00+08:00",
+              "end": "2026-09-12T18:00:00+08:00"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "id": "different_rate_assumptions",
+    "description": "合成情境：老人每单位耗时增加35%，帮手每单位耗时减少30%；不能简单把人数当作效率倍数。",
+    "patch": {
+      "tasks": [
+        {
+          "id": "weed_peppers",
+          "plot_id": "north_peppers",
+          "crop_id": "pepper",
+          "stage": "vegetative",
+          "operation": "weeding",
+          "method": "hand_hoe",
+          "remaining_quantity": {
+            "value": 1600,
+            "unit": "sqm"
+          },
+          "rates": {
+            "elder": {
+              "unit": "sqm",
+              "low": 0.162,
+              "high": 0.27,
+              "scope": "net_work",
+              "source": "合成演示数据；仅测试算法，不是实测、预报、农技处方或医学标准。 情境速率：老人每单位更慢35%，帮手每单位用时减少30%。"
+            },
+            "helper": {
+              "unit": "sqm",
+              "low": 0.056,
+              "high": 0.084,
+              "scope": "net_work",
+              "source": "合成演示数据；仅测试算法，不是实测、预报、农技处方或医学标准。 情境速率：老人每单位更慢35%，帮手每单位用时减少30%。"
+            }
+          },
+          "earliest_start": "2026-09-12T06:00:00+08:00",
+          "deadline": "2026-09-12T18:00:00+08:00",
+          "deadline_source": "合成演示数据；仅测试算法，不是实测、预报、农技处方或医学标准。",
+          "priority": 3,
+          "divisible": true,
+          "min_chunk_minutes": 15,
+          "depends_on": [],
+          "required_resources": [
+            "drinking_water",
+            "shaded_rest",
+            "hoe"
+          ],
+          "tags": [
+            "bending"
+          ],
+          "session": {
+            "setup_minutes": 5,
+            "outbound_minutes": 5,
+            "return_minutes": 5,
+            "cleanup_minutes": 5,
+            "buffer_minutes": 5
+          },
+          "agronomy": {
+            "status": "illustrative",
+            "source": "合成演示数据；仅测试算法，不是实测、预报、农技处方或医学标准。",
+            "conditions": {
+              "soil": "workable"
+            },
+            "weather_limits": {
+              "max_precipitation_mm": 1,
+              "max_wind_m_s": 8
+            }
+          },
+          "load_per_trip_kg": 2
+        },
+        {
+          "id": "carry_material",
+          "plot_id": "south_lettuce",
+          "crop_id": "lettuce",
+          "stage": "vegetative",
+          "operation": "transport",
+          "method": "handcart",
+          "remaining_quantity": {
+            "value": 5,
+            "unit": "trip"
+          },
+          "rates": {
+            "elder": {
+              "unit": "trip",
+              "low": 16.2,
+              "high": 21.6,
+              "scope": "net_work",
+              "source": "合成演示数据；仅测试算法，不是实测、预报、农技处方或医学标准。 情境速率：老人每单位更慢35%，帮手每单位用时减少30%。"
+            },
+            "helper": {
+              "unit": "trip",
+              "low": 5.6,
+              "high": 7.0,
+              "scope": "net_work",
+              "source": "合成演示数据；仅测试算法，不是实测、预报、农技处方或医学标准。 情境速率：老人每单位更慢35%，帮手每单位用时减少30%。"
+            }
+          },
+          "earliest_start": "2026-09-12T06:00:00+08:00",
+          "deadline": "2026-09-12T08:30:00+08:00",
+          "deadline_source": "合成演示数据；仅测试算法，不是实测、预报、农技处方或医学标准。",
+          "priority": 5,
+          "divisible": true,
+          "min_chunk_minutes": 15,
+          "quantity_step": 1,
+          "depends_on": [],
+          "required_resources": [
+            "drinking_water",
+            "shaded_rest",
+            "handcart"
+          ],
+          "tags": [
+            "carrying"
+          ],
+          "load_per_trip_kg": 10,
+          "session": {
+            "setup_minutes": 5,
+            "outbound_minutes": 5,
+            "return_minutes": 5,
+            "cleanup_minutes": 5,
+            "buffer_minutes": 5
+          },
+          "agronomy": {
+            "status": "illustrative",
+            "source": "合成演示数据；仅测试算法，不是实测、预报、农技处方或医学标准。",
+            "conditions": {
+              "soil": "workable"
+            },
+            "weather_limits": {
+              "max_precipitation_mm": 1,
+              "max_wind_m_s": 8
+            }
+          }
+        },
+        {
+          "id": "apply_material",
+          "plot_id": "south_lettuce",
+          "crop_id": "lettuce",
+          "stage": "vegetative",
+          "operation": "fertilization",
+          "method": "manual_application",
+          "remaining_quantity": {
+            "value": 120,
+            "unit": "sqm"
+          },
+          "rates": {
+            "elder": {
+              "unit": "sqm",
+              "low": 0.675,
+              "high": 1.0125,
+              "scope": "net_work",
+              "source": "合成演示数据；仅测试算法，不是实测、预报、农技处方或医学标准。 情境速率：老人每单位更慢35%，帮手每单位用时减少30%。"
+            },
+            "helper": {
+              "unit": "sqm",
+              "low": 0.245,
+              "high": 0.35,
+              "scope": "net_work",
+              "source": "合成演示数据；仅测试算法，不是实测、预报、农技处方或医学标准。 情境速率：老人每单位更慢35%，帮手每单位用时减少30%。"
+            }
+          },
+          "earliest_start": "2026-09-12T06:00:00+08:00",
+          "deadline": "2026-09-12T10:00:00+08:00",
+          "deadline_source": "合成演示数据；仅测试算法，不是实测、预报、农技处方或医学标准。",
+          "priority": 4,
+          "divisible": true,
+          "min_chunk_minutes": 15,
+          "depends_on": [
+            "carry_material"
+          ],
+          "required_resources": [
+            "drinking_water",
+            "shaded_rest",
+            "fertilizer_scoop"
+          ],
+          "tags": [
+            "bending"
+          ],
+          "session": {
+            "setup_minutes": 5,
+            "outbound_minutes": 5,
+            "return_minutes": 5,
+            "cleanup_minutes": 5,
+            "buffer_minutes": 5
+          },
+          "agronomy": {
+            "status": "illustrative",
+            "source": "合成演示数据；仅测试算法，不是实测、预报、农技处方或医学标准。",
+            "conditions": {
+              "soil": "workable"
+            },
+            "weather_limits": {
+              "max_precipitation_mm": 1,
+              "max_wind_m_s": 8
+            }
+          },
+          "load_per_trip_kg": 5
+        }
+      ]
+    }
+  }
+]

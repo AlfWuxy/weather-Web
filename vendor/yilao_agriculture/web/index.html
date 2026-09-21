@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#FBF7EE">
+  <meta name="yilao-api-base" content="/api">
+  <meta name="yilao-body-limit" content="4000000">
+  <meta name="yilao-storage-scope" content="local">
+  <meta name="csrf-token" content="">
+  <meta name="yilao-account-context" content="">
+  <title>宜老农业 · 农活安排</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="./styles.css">
+  <script type="module" src="./js/app.js"></script>
+</head>
+<body style="margin:0;background:#FBF7EE">
+<div id="agri-app">
+  <a class="skip-link" href="#agri-main">跳到农活内容</a>
+  <header class="site-header">
+    <div class="brand"><a href="#today" aria-label="宜老农业首页">宜老农业</a><p>把农活分着做，把休息留出来</p></div>
+  </header>
+  <div class="nav-wrap"><nav id="agri-main-nav" aria-label="农活工作台导航"></nav><div class="module-tools"><span id="agri-mode-label" class="local-label">农活记录</span><a class="settings-link" href="#setup">资料与天气</a></div></div>
+  <div id="agri-mode-banner"></div>
+  <div id="agri-notice" class="notice-region" role="status" aria-live="polite" aria-atomic="true"></div>
+  <section id="agri-main" aria-label="农活工作台内容" tabindex="-1"><div class="loading-state"><h1 id="agri-loading-title">正在打开记录…</h1><p>请稍候。</p></div></section>
+  <footer class="site-footer"><p>天气、身体或现场条件变化时，请重新确认。</p><p id="agri-storage-footer">正在读取记录保存位置。</p></footer>
+  <noscript><div class="notice error">请在浏览器中开启 JavaScript，才能记录农活和查看安排。</div></noscript>
+</div>
+</body>
+</html>
