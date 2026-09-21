@@ -12,12 +12,14 @@ from urllib.parse import urlsplit
 from .account_repository import AccountRepository, AccountRepositoryError, _subject
 from .community_account_store import AccountCommunityStore
 from yilao_agri.community_service import CommunityService, ROOT, estimates, readiness
-from yilao_agri.community_store import CommunityError, MODES, json_text
+from yilao_agri.community_store import CommunityError, MODES, json_text, now_iso
 from yilao_agri.engine import PlanInterrupted
 from yilao_agri.models import InputError
 from yilao_agri.collection_identity import account_collection_key
 
 MAX_BODY = 4_000_000
+DOWNLOAD_FORM_LIMIT = 4096
+DOWNLOAD_FIELDS = {"mode": 16, "kind": 32, "csrf_token": 512, "account_context": 64}
 FORBIDDEN = {"owner", "owner_subject", "subject", "user_id", "account_id", "principal",
              "authenticated", "guest", "db_path", "archive_dir", "now"}
 GET_QUERIES = {
@@ -142,22 +144,42 @@ def create_workbench_blueprint(*, repository, principal_provider, csrf_token_pro
         g.yilao_service = CommunityService(store=AccountCommunityStore(repository, principal),
                                          archive_dir=owner_archive, alert_fetcher=alert_fetcher)
         g.yilao_archive = owner_archive
+        # 仅固定POST下载入口接受原生表单；凭据留在请求体，不生成票据或放入URL。
+        download_form = request.method == "POST" and request.path == api_prefix + "/download"
+        if download_form:
+            if request.args:
+                _fail("下载参数须完整放在表单中", "DOWNLOAD_FORM_INVALID")
+            if request.mimetype != "application/x-www-form-urlencoded":
+                _fail("下载须使用本站表单提交", "CONTENT_TYPE", 415)
+            if request.content_length is None or not 0 < request.content_length <= min(body_limit(), DOWNLOAD_FORM_LIMIT):
+                _fail("下载表单为空或超过本站大小限制", "BODY_SIZE", 413)
+            form = request.form
+            if (set(form) - set(DOWNLOAD_FIELDS) or any(len(values) != 1 for _, values in form.lists())
+                    or any(len(value) > DOWNLOAD_FIELDS[key] for key, value in form.items())):
+                _fail("下载表单含重复、过长或不支持的字段", "DOWNLOAD_FORM_INVALID")
+            g.yilao_download = form.to_dict()
         if request.path.startswith(api_prefix + "/"):
             # 原站登录切换可能保留CSRF；页面上下文另外绑定账户，旧页不能误读写新账户。
-            binding = request.headers.get("X-Yilao-Account-Context")
+            binding = g.yilao_download.get("account_context") if download_form else request.headers.get("X-Yilao-Account-Context")
             expected = page_binding(subject, csrf_token_provider())
             if not isinstance(binding, str) or not re.fullmatch(r"[a-f0-9]{64}", binding) or not hmac.compare_digest(binding, expected):
                 _fail("登录账户或页面会话已变化，请刷新页面后继续", "ACCOUNT_CONTEXT_CHANGED", 409)
         if request.method not in {"GET", "HEAD"}:
             if request.method not in {"POST", "PUT"}:
                 _fail("不支持此请求方法", "METHOD_NOT_ALLOWED", 405)
-            token = request.headers.get("X-CSRF-Token")
+            token = g.yilao_download.get("csrf_token") if download_form else request.headers.get("X-CSRF-Token")
             if not isinstance(token, str) or not token or len(token) > 512 or csrf_validator(token) is not True:
                 _fail("页面验证已失效，请刷新后重试", "CSRF_REJECTED", 403)
-            if request.mimetype != "application/json":
+            if not download_form and request.mimetype != "application/json":
                 _fail("保存资料须为JSON请求", "CONTENT_TYPE", 415)
             if request.content_length is None or not 0 < request.content_length <= body_limit():
                 _fail("请求为空或超过本站资料大小限制", "BODY_SIZE", 413)
+            if download_form:
+                if set(g.yilao_download) != set(DOWNLOAD_FIELDS):
+                    _fail("下载表单字段不完整", "DOWNLOAD_FORM_INVALID")
+                mode(g.yilao_download["mode"])
+                if g.yilao_download["kind"] not in {"backup", "field-collection"}:
+                    _fail("请选择本站支持的下载类型", "DOWNLOAD_KIND_INVALID")
 
     @bp.after_request
     def private_headers(result):
@@ -165,7 +187,15 @@ def create_workbench_blueprint(*, repository, principal_provider, csrf_token_pro
         result.vary.add("Cookie")
         result.vary.add("Authorization")
         result.headers["X-Content-Type-Options"] = "nosniff"
-        result.headers["Referrer-Policy"] = "no-referrer"
+        # 成功的已认证HTML页允许同源表单保留Origin；跨站仍不发送Referer。
+        # 接口、附件、错误和重定向不使用此例外，也不接纳Origin:null。
+        page_origin_policy = (
+            request.method in {"GET", "HEAD"}
+            and request.path in {page_prefix, page_prefix + "/", page_prefix + "/index.html"}
+            and bool(getattr(g, "yilao_subject", None))
+            and result.status_code == 200 and result.mimetype == "text/html"
+        )
+        result.headers["Referrer-Policy"] = "same-origin" if page_origin_policy else "no-referrer"
         result.headers["Cross-Origin-Resource-Policy"] = "same-origin"
         result.headers.setdefault("Content-Security-Policy", ("default-src 'self'; script-src 'self'; style-src 'self'; "
             "img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'self'; form-action 'self'"))
@@ -244,6 +274,18 @@ def create_workbench_blueprint(*, repository, principal_provider, csrf_token_pro
         data = request.args.to_dict()
         data["mode"] = mode(data.get("mode", "real"))
         return data
+
+    @bp.post(api_prefix + "/download")
+    def download():
+        selected, kind = g.yilao_download["mode"], g.yilao_download["kind"]
+        if kind == "backup":
+            data = g.yilao_service.export(selected)
+        else:
+            key = account_collection_key(current_app.secret_key, g.yilao_subject)
+            data = g.yilao_service.field_collection(selected, export_secret=key)
+        # 文件名仅由固定枚举和服务器日期组成；不接受客户端路径或名称，不落盘。
+        filename = f"yilao-{kind}-{selected}-{now_iso()[:10]}.json"
+        return response(data, headers={"Content-Disposition": f'attachment; filename="{filename}"'})
 
     @bp.route(api_prefix + "/<path:endpoint>", methods=["GET", "PUT", "POST"])
     def api(endpoint):

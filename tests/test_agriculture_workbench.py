@@ -1,11 +1,13 @@
 """农业宿主契约：真实工厂和密码登录，仅用合成资料、临时库，禁止外呼。"""
 from contextlib import closing
 from datetime import datetime, timezone
+from hashlib import sha256
 from html.parser import HTMLParser
 import importlib
 import json
 import os
 from pathlib import Path
+import re
 import secrets
 import sqlite3
 import sys
@@ -448,4 +450,122 @@ def test_private_downloads_use_current_account_and_keep_draft_claims(host):
         if endpoint == "/field-collection":
             assert response.json["claims"] == {
                 "n_real": 0, "field_verified": False, "formal_validation_ready": False}
+    assert host.account_rows() == []
+
+
+def _native_download(host, headers, *, mode="real", kind="backup", changes=None, origin=None):
+    # 验证值只放原生POST表单；不借用JSON接口请求头或把凭据放在URL。
+    form = {"mode": mode, "kind": kind, "csrf_token": headers["X-CSRF-Token"],
+            "account_context": headers["X-Yilao-Account-Context"]}
+    for key, value in (changes or {}).items():
+        if value is None:
+            form.pop(key, None)
+        else:
+            form[key] = value
+    return host.request(API + "/download", method="POST", data=form,
+                        content_type="application/x-www-form-urlencoded",
+                        headers={"Origin": origin} if origin is not None else {})
+
+
+def test_unknown_coordinates_save_but_refresh_stops_before_queue_or_network(host):
+    headers, _, _ = host.login()
+    state = json_ok(host.api("/state", headers))
+    state["plots"] = [{"id": "IMPLEMENTATION_TEST_plot", "name": "IMPLEMENTATION_TEST",
+        "area": {"value": 1, "unit": "mu"}, "environment": "outdoor", "conditions": {}}]
+    jobs = host.app.extensions["yilao_agriculture_weather_jobs"]
+    with patch("yilao_agri.community_service.fetch_weather", side_effect=AssertionError("不得取数")) as forecast, \
+            patch("services.qweather_budget.reserve_qweather_request", side_effect=AssertionError("不得占额度")) as budget, \
+            patch.object(jobs, "enqueue", wraps=jobs.enqueue) as enqueue:
+        for coordinates, field in (({}, "latitude"), ({"latitude": None, "longitude": None}, "latitude"),
+                                   ({"latitude": 29.27, "longitude": None}, "longitude")):
+            state["plots"][0].pop("latitude", None)
+            state["plots"][0].pop("longitude", None)
+            state["plots"][0].update(coordinates)
+            state = json_ok(host.api("/state", headers, method="PUT", body=state))
+            response = host.api("/weather/refresh", headers, method="POST", body={
+                "mode": "real", "revision": state["revision"], "plot_id": "IMPLEMENTATION_TEST_plot"})
+            assert response.status_code == 400
+            assert response.json["error"]["code"] == "WEATHER_COORDINATES_MISSING"
+            assert response.json["error"]["field"] == "plots." + field
+            assert json_ok(host.api("/state", headers)) == state
+        enqueue.assert_not_called()
+        assert jobs.claim() is None
+        state["plots"][0].update(latitude=29.27, longitude=116.2)
+        state = json_ok(host.api("/state", headers, method="PUT", body=state))
+        queued = host.api("/weather/refresh", headers, method="POST", body={
+            "mode": "real", "revision": state["revision"], "plot_id": "IMPLEMENTATION_TEST_plot"})
+        assert queued.status_code == 202
+        assert queued.json["job"]["status"] == "queued"
+        enqueue.assert_called_once()
+        forecast.assert_not_called()
+        budget.assert_not_called()
+        assert json_ok(host.api("/state", headers)) == state
+    assert not Path(host.app.config["YILAO_AGRICULTURE_ARCHIVE_ROOT"]).exists()
+
+
+def test_native_download_content_and_referrer_policy_keep_account_and_mode_boundaries(host):
+    from yilao_agri.community_store import json_text
+    from yilao_agri.field_collection_export import projection_sha256
+    headers, _, page = host.login()
+    assert page.headers["Referrer-Policy"] == "same-origin"
+    assert host.request("/agriculture/", method="HEAD").headers["Referrer-Policy"] == "same-origin"
+    assert host.api("/state", headers).headers["Referrer-Policy"] == "no-referrer"
+    state = json_ok(host.api("/state", headers))
+    state["profile"]["name"] = "IMPLEMENTATION_TEST_DOWNLOAD_PRIVATE"
+    saved = json_ok(host.api("/state", headers, method="PUT", body=state))
+    rows = host.account_rows()
+    namespaces = set()
+    for mode in ("real", "demonstration"):
+        for kind in ("backup", "field-collection"):
+            result = _native_download(host, headers, mode=mode, kind=kind, origin=ORIGIN)
+            bundle = json_ok(result)
+            assert re.fullmatch(rf'attachment; filename="yilao-{kind}-{mode}-\d{{4}}-\d{{2}}-\d{{2}}\.json"',
+                                result.headers["Content-Disposition"])
+            assert result.content_type == "application/json; charset=utf-8"
+            assert result.headers["Cache-Control"] == "private, no-store"
+            assert result.headers["Referrer-Policy"] == "no-referrer"
+            assert result.headers["X-Content-Type-Options"] == "nosniff"
+            if kind == "backup":
+                assert bundle["checksum"] == sha256(json_text(bundle["state"]).encode()).hexdigest()
+                assert bundle["state"]["mode"] == mode
+                if mode == "real":
+                    assert bundle["state"] == saved
+                else:
+                    assert bundle["state"]["revision"] == 0
+                    assert "IMPLEMENTATION_TEST_DOWNLOAD_PRIVATE" not in result.text
+            else:
+                assert bundle["schema_version"] == "field-collection-draft-1"
+                assert bundle["projection_sha256"] == projection_sha256(bundle)
+                assert bundle["claims"] == {"n_real": 0, "field_verified": False, "formal_validation_ready": False}
+                namespaces.add(bundle["identity_namespace"])
+    assert len(namespaces) == 2
+    assert host.account_rows() == rows
+    assert json_ok(host.api("/state", headers)) == saved
+    assert host.app.extensions["yilao_agriculture_weather_jobs"].claim() is None
+    assert not Path(host.app.config["YILAO_AGRICULTURE_ARCHIVE_ROOT"]).exists()
+
+
+def test_native_download_preserves_global_csrf_origin_and_old_page_rejection(host):
+    old, _, _ = host.login()
+    for token in (None, "IMPLEMENTATION_TEST_BAD"):
+        result = _native_download(host, old, changes={"csrf_token": token})
+        assert result.status_code == 400, result.text
+        assert "Content-Disposition" not in result.headers
+    for origin in ("null", "https://attacker.example"):
+        result = _native_download(host, old, origin=origin)
+        assert result.status_code == 403, result.text
+        assert result.json["error"]["code"] == "ORIGIN_REJECTED"
+        assert result.headers["Referrer-Policy"] == "no-referrer"
+    for extra in ("owner_subject", "filename", "path"):
+        result = _native_download(host, old, changes={extra: "IMPLEMENTATION_TEST_FORBIDDEN"})
+        assert result.status_code == 400
+        assert result.json["error"]["code"] == "DOWNLOAD_FORM_INVALID"
+    # GET下载仍是原API边界，不能从表单参数免除页面上下文请求头。
+    assert host.request(API + "/download").status_code == 409
+    current, _, _ = host.login("b")
+    stale = _native_download(host, current, changes={"account_context": old["X-Yilao-Account-Context"]})
+    assert stale.status_code == 409
+    assert stale.json["error"]["code"] == "ACCOUNT_CONTEXT_CHANGED"
+    assert "Content-Disposition" not in stale.headers
+    assert json_ok(_native_download(host, current))["state"]["revision"] == 0
     assert host.account_rows() == []

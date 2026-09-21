@@ -1,4 +1,4 @@
-import {request,requestBodyLimit,requestBodyLimitText} from './api.js';
+import {request,requestBodyLimit,requestBodyLimitText,submitAccountDownload} from './api.js';
 import {esc,options,button,showNotice,getForm,makeId,downloadJSON,quantity,units,note,datetimeText} from './ui.js';
 import {plotForm,taskForm,personForm,resourceForm,feedbackForm,methodLabel} from './forms.js';
 import {todayView,farmView,peopleView,weatherView,recordsView,setupView,forecastTimeRows} from './views.js';
@@ -204,10 +204,18 @@ document.addEventListener('click',event=>{
       const result=await request('/api/weather/import',{method:'POST',body:{mode:state.mode,revision:state.revision,plot_id:trigger.dataset.id,snapshot}});
       state=result.state;weatherSnapshots.delete(trigger.dataset.id);await refreshEstimates();render();showNotice(storageText('weatherSnapshotSaved'));
     }else if(action==='field-collection-export'){
+      if(readContext().storageScope==='account'){
+        submitAccountDownload('field-collection',state.mode,{onError:message=>showNotice(message,'error')});
+        showNotice('已请求下载待复核记录，请在浏览器下载位置核对文件。');return;
+      }
       const bundle=await request(`/api/field-collection?mode=${state.mode}`);
       downloadJSON(bundle,`宜老农业-${state.mode==='demonstration'?'演示-':''}待复核记录-${new Date().toISOString().slice(0,10)}.json`);
       showNotice('待复核记录已交给浏览器下载，请核对后再使用。');
     }else if(action==='export'){
+      if(readContext().storageScope==='account'){
+        submitAccountDownload('backup',state.mode,{onError:message=>showNotice(message,'error')});
+        showNotice('已请求下载账户备份，请在浏览器下载位置核对文件。');return;
+      }
       const bundle=await request(`/api/export?mode=${state.mode}`);downloadJSON(bundle,`宜老农业-${state.mode==='demonstration'?'演示':storageText('exportFileLabel')}-${new Date().toISOString().slice(0,10)}.json`);showNotice('备份已交给浏览器下载，请在下载位置查看。');
     }else if(action==='import'){
       if(!importBundle)throw new Error('请先选择需要恢复的备份文件。');

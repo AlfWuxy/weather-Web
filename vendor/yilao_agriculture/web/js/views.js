@@ -79,6 +79,7 @@ export function weatherView(state,now=Date.now()) {
   return `${header('天气与预警','看清地点、日期和更新时间；天气预报与官方预警分开核对。')}${state.mode==='demonstration'?note('演示区使用合成天气，不代表任何地点的真实天气。','warning'):note('更新天气时只发送地块坐标，不发送个人身体资料。')}
   ${state.plots.length?state.plots.map(p=>{
     const w=state.weather[p.id];
+    const coordinatesValid=Number.isFinite(p.latitude)&&Number.isFinite(p.longitude)&&Math.abs(p.latitude)<=90&&Math.abs(p.longitude)<=180;
     const records=w?.records||[];
     const shown=records.filter(r=>r.start?.startsWith(state.settings.planning_date));
     const temperatures=shown.map(r=>r.temperature_c).filter(t=>t!==null&&t!==undefined&&Number.isFinite(Number(t)));
@@ -86,13 +87,13 @@ export function weatherView(state,now=Date.now()) {
     const age=reference?(now-new Date(reference).getTime())/60000:null;
     const invalidTime=state.mode!=='demonstration'&&w&&((age!==null&&!Number.isFinite(age))||(age!==null&&age<0)||('forecast_run_snapshot' in w&&!w.forecast_run_snapshot?.initialised_at));
     const old=w && (w.stale || (state.mode!=='demonstration'&&Number.isFinite(age)&&age>state.policy.max_forecast_age_minutes));
-    return `<section class="panel" data-focus-section="weather:${esc(p.id)}" tabindex="-1"><div class="page-heading"><div><h2>${esc(p.name)}</h2><p>${esc(state.settings.place)} · ${p.latitude==null||p.longitude==null?'坐标待补充':`${esc(p.latitude)}, ${esc(p.longitude)}`} · ${p.environment==='greenhouse'?'棚内':'露天'}</p></div>${state.mode==='real'?button('更新这块地天气','weather-refresh','primary',`data-id="${esc(p.id)}"`):''}</div>
+    return `<section class="panel" data-focus-section="weather:${esc(p.id)}" tabindex="-1"><div class="page-heading"><div><h2>${esc(p.name)}</h2><p>${esc(state.settings.place)} · ${coordinatesValid?`${esc(p.latitude)}, ${esc(p.longitude)}`:'坐标待补充'} · ${p.environment==='greenhouse'?'棚内':'露天'}</p></div>${!coordinatesValid?editButton('先补充地块坐标','plot',p.id):state.mode==='real'?button('更新这块地天气','weather-refresh','primary',`data-id="${esc(p.id)}"`):''}</div>
     ${!w?note('这块地尚未更新天气。没有天气数据时，不会凭空安排工作时段。','warning'):''}
     ${p.environment==='greenhouse'?note('露天预报不能代表棚内条件。棚内作业仍需适用的现场记录。','warning'):''}
     ${old?note('这份天气已过期，请更新后再使用。','warning'):''}${invalidTime?note('这份天气的时间待核对，请重新取得资料。','warning'):''}
     ${w?`<dl class="data-pairs"><dt>数据来源</dt><dd class="weather-source">${esc(typeof w.source==='string'?w.source:w.source?.name||'来源待确认')}</dd><dt>查看日期</dt><dd>${esc(state.settings.planning_date)}</dd><dt>预警情况</dt><dd>${esc(alertStatusText(w,now,state.mode))}</dd></dl><details data-forecast-times><summary>预报时间与来源</summary><dl class="data-pairs">${forecastTimeRows(w,{demonstration:state.mode==='demonstration'})}</dl>${noticeMessages(w.warnings).map(m=>note(m,'warning')).join('')}</details>${note('这里的气象模式预报不等于官方预警。预警未知时，请先核对当地气象部门或乡镇通知。','warning')}${alertQueryView(w,now,state.mode)}
     ${shown.length?`<div class="weather-strip"><span class="temperature">${temperatures.length?`${numberText(Math.min(...temperatures))}—${numberText(Math.max(...temperatures))}℃`:'气温待确认'}</span><span>${esc(state.settings.planning_date)} 的逐时预报</span></div><details><summary>展开逐小时天气（${shown.length} 个时段）</summary><div class="table-scroll"><table><caption class="visually-hidden">${esc(p.name)} ${esc(state.settings.planning_date)} 逐时天气</caption><thead><tr><th scope="col">时段</th><th scope="col">气温</th><th scope="col">湿度</th><th scope="col">风速</th><th scope="col">小时降水</th><th scope="col">昼夜</th></tr></thead><tbody>${shown.map(r=>`<tr><td>${timeText(r.start)}—${timeText(r.end)}</td><td>${numberText(r.temperature_c)}℃</td><td>${numberText(r.relative_humidity_pct)}%</td><td>${numberText(r.wind_m_s)} 米/秒</td><td>${numberText(r.precipitation_mm)} 毫米</td><td>${r.daylight?'白天':'夜间'}</td></tr>`).join('')}</tbody></table></div></details>`:note('这份天气没有覆盖当前安排日期，请调整日期或更新天气。','warning')}`:''}
-    <div class="actions actions-spaced">${editButton('修改地块与坐标','plot',p.id)}</div>${state.mode==='real'?weatherImportPanel(p):''}</section>`;
+    ${coordinatesValid?`<div class="actions actions-spaced">${editButton('修改地块与坐标','plot',p.id)}</div>`:''}${state.mode==='real'?weatherImportPanel(p):''}</section>`;
   }).join(''):'<div class="empty-small">先添加地块，填好地点后才能更新对应天气。</div>'}
   ${settingsForm(state)}<section class="panel">${policyForm(state)}</section>`;
 }

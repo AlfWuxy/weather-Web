@@ -471,6 +471,16 @@ class CommunityService:
         if data.get("revision")!=state["revision"]: raise CommunityError("资料已更新，请重新读取",code="REVISION_CONFLICT",status=409)
         plot=next((p for p in state["plots"] if p["id"]==data.get("plot_id")),None)
         if plot is None: raise CommunityError("没有找到这个地块")
+        # 地块可先保存未知坐标；只有明确刷新时才要求成对有效，避免无效任务进入队列。
+        for key,low,high in (("latitude",-90,90),("longitude",-180,180)):
+            field="plots."+key
+            if plot.get(key) is None:
+                raise CommunityError("请先在地块资料中补齐经纬度，再更新天气",code="WEATHER_COORDINATES_MISSING",field=field)
+            try:
+                finite(plot[key],field,low,high)
+            except (CommunityError,OverflowError):
+                raise CommunityError("请先填写有效的地块坐标：纬度须在-90至90之间，经度须在-180至180之间",
+                    code="WEATHER_COORDINATES_INVALID",field=field) from None
         return state,deepcopy(plot)
 
     def refresh_weather(self,data):
