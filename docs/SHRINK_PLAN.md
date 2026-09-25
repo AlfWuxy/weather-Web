@@ -241,4 +241,3 @@ python -m pytest -q -m manual
 **`_short_code_expires_at()`**：两版都读取 `SHORT_CODE_TTL_DAYS`，解析失败时回退到 90 天，并保证至少 1 天。唯一差别是 `services/user` 版在没有应用上下文时直接返回默认值；该函数只在请求处理中被调用，这条分支在现有调用路径上不会触发。
 
 P4 实施时，由行为锁新增的"请求后数据库差异"对比做最终确认。
-
