@@ -287,6 +287,7 @@ _NORMALIZERS = [
     (re.compile(r'("csrf_token"\s*:\s*")[^"]*'), r'\1<CSRF>'),
     (re.compile(r'([?&]v=)[0-9a-zA-Z._-]+'), r'\1<V>'),
     (re.compile(r'(nonce=")[^"]*'), r'\1<NONCE>'),
+    (re.compile(r'guest:[A-Za-z0-9_-]{8,}'), 'guest:<ID>'),
 ]
 
 
@@ -297,9 +298,70 @@ def _normalize_text(text, root):
     return text
 
 
-def _capture(resp, root):
+# 这些响应头随环境或内容长度自然变化；其余响应头全部参与对比
+_VOLATILE_HEADERS = {'date', 'content-length', 'server', 'set-cookie'}
+# 每次请求随机生成的值：只对比是否存在
+_RANDOM_VALUE_HEADERS = {'x-request-id'}
+XLSX_TYPE = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+
+
+def _capture_headers(resp, root):
+    headers = {}
+    for name, value in resp.headers.items():
+        if name.lower() in _VOLATILE_HEADERS:
+            continue
+        if name.lower() in _RANDOM_VALUE_HEADERS:
+            value = '<RANDOM>'
+        headers.setdefault(name.lower(), []).append(_normalize_text(value, root))
+    return headers
+
+
+def _capture_cookies(resp, app, root):
+    """Set-Cookie 的名称与属性；Flask 会话 cookie 解码为会话内容（flash 等）后对比。"""
+    cookies = []
+    serializer = app.session_interface.get_signing_serializer(app)
+    for raw in resp.headers.getlist('Set-Cookie'):
+        pair, _, attrs = raw.partition(';')
+        name, _, value = pair.partition('=')
+        entry = {'name': name.strip(), 'attrs': sorted(a.strip() for a in attrs.split(';') if a.strip())}
+        if name.strip() == app.config.get('SESSION_COOKIE_NAME', 'session') and value:
+            try:
+                entry['session'] = json.loads(_normalize_text(
+                    json.dumps(serializer.loads(value), default=str, sort_keys=True, ensure_ascii=False), root
+                ))
+            except Exception:
+                entry['session'] = '<undecodable>'
+        else:
+            entry['value_len'] = len(value)
+        cookies.append(entry)
+    return cookies
+
+
+def _capture_binary(ctype, data):
+    """导出文件按内容对比：Excel 取全部单元格，PDF 取页数与逐页文本，其余取哈希。"""
+    import io
+    if ctype == XLSX_TYPE:
+        from openpyxl import load_workbook
+        book = load_workbook(io.BytesIO(data), read_only=True)
+        return {'xlsx': {
+            sheet.title: [[None if c is None else str(c) for c in row] for row in sheet.iter_rows(values_only=True)]
+            for sheet in book.worksheets
+        }}
+    if ctype == 'application/pdf':
+        from pypdf import PdfReader
+        reader = PdfReader(io.BytesIO(data))
+        return {'pdf': {'pages': len(reader.pages), 'text': [page.extract_text() for page in reader.pages]}}
+    return {'sha256': hashlib.sha256(data).hexdigest()}
+
+
+def _capture(resp, root, app):
     ctype = (resp.headers.get('Content-Type') or '').split(';')[0].strip()
-    item = {'status': resp.status_code, 'type': ctype}
+    item = {
+        'status': resp.status_code,
+        'type': ctype,
+        'headers': _capture_headers(resp, root),
+        'cookies': _capture_cookies(resp, app, root),
+    }
     location = resp.headers.get('Location')
     if location:
         item['location'] = _normalize_text(location, root)
@@ -313,8 +375,7 @@ def _capture(resp, root):
     if ctype.startswith('text/') or ctype in ('application/json', 'application/javascript'):
         item['body'] = _normalize_text(data.decode('utf-8', errors='replace'), root)
     else:
-        # 二进制导出（PDF/Excel）内部含生成时间，只记录类型与是否非空
-        item['binary'] = bool(data)
+        item['binary'] = _capture_binary(ctype, data)
     return item
 
 
@@ -400,17 +461,22 @@ def record_profile(root, out, profile):
     requests_plan.extend(('FORM', path, payload) for path, payload in FORM_POSTS)
 
     snapshot = {'frozen_at': FROZEN_AT, 'requests': {}}
+    session_cookie = app.config.get('SESSION_COOKIE_NAME', 'session')
     for role in ROLES:
-        client = app.test_client()
-        with client.session_transaction() as sess:
+        login_client = app.test_client()
+        with login_client.session_transaction() as sess:
             sess['_csrf_token'] = 'behavior-lock-csrf'
         if role != 'guest':
             reset_db()
-            client.post('/login', data={'username': f'bl_{role}', 'password': PASSWORD,
-                                        'csrf_token': 'behavior-lock-csrf'})
+            login_client.post('/login', data={'username': f'bl_{role}', 'password': PASSWORD,
+                                              'csrf_token': 'behavior-lock-csrf'})
+        role_cookie = login_client.get_cookie(session_cookie).value
         for method, path, payload in requests_plan:
+            # 每个请求都从"刚登录完"的状态出发：数据库回到种子，会话回到登录后的 cookie
             reset_db()
             random.seed(0)
+            client = app.test_client()
+            client.set_cookie(session_cookie, role_cookie)
             if method == 'GET':
                 resp = client.get(path)
             elif method == 'FORM':
@@ -420,7 +486,7 @@ def record_profile(root, out, profile):
                 path = f'{path}?{payload_key}'
             else:
                 resp = client.post(path, json=payload, headers={'X-CSRF-Token': 'behavior-lock-csrf'})
-            snapshot['requests'][f'{role} {method} {path}'] = _capture(resp, root)
+            snapshot['requests'][f'{role} {method} {path}'] = _capture(resp, root, app)
 
     freezer.stop()
     with open(out, 'w', encoding='utf-8') as fh:

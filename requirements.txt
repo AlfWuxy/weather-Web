@@ -58,6 +58,7 @@ alembic==1.13.1
 # Flask-Migrate==4.0.5  # 数据库迁移工具
 pytest==8.2.2
 freezegun==1.5.5  # 行为锁 scripts/behavior_lock.py 冻结时间
+pypdf==5.1.0  # 行为锁 scripts/behavior_lock.py 对比 PDF 导出内容
 
 
 
