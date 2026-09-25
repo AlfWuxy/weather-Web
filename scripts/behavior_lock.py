@@ -447,10 +447,16 @@ def diff(base_path, head_path, show=3):
         print(f'[新增] {key}')
     for key in changed:
         print(f'[变化] {key}')
+    def as_lines(item):
+        meta = {k: v for k, v in item.items() if k != 'body'}
+        lines = json.dumps(meta, ensure_ascii=False, indent=1, sort_keys=True).splitlines()
+        return lines + item.get('body', '').splitlines()
+
     for key in changed[:show]:
-        a = json.dumps(base[key], ensure_ascii=False, indent=1, sort_keys=True).splitlines()
-        b = json.dumps(head[key], ensure_ascii=False, indent=1, sort_keys=True).splitlines()
-        print('\n'.join(list(difflib.unified_diff(a, b, 'base', 'head', lineterm='', n=2))[:80]))
+        print(f'--- {key}')
+        print('\n'.join(list(difflib.unified_diff(
+            as_lines(base[key]), as_lines(head[key]), 'base', 'head', lineterm='', n=2
+        ))[:80]))
     print(f'共 {len(base)} 个基线响应：缺失 {len(missing)}，变化 {len(changed)}，新增 {len(added)}')
     return 1 if (missing or changed) else 0
 
