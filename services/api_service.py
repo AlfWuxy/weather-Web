@@ -197,16 +197,6 @@ def _api_weather_nowcast():
     return jsonify({'success': True, 'data': nowcast})
 
 
-def api_v1_current_weather():
-    """获取当前天气（v1）"""
-    return _api_current_weather()
-
-
-def api_current_weather():
-    """获取当前天气（兼容）"""
-    return api_v1_current_weather()
-
-
 def _api_community_risk_map():
     """获取社区风险地图数据"""
     communities = Community.query.all()
@@ -225,30 +215,10 @@ def _api_community_risk_map():
     return jsonify({'success': True, 'data': data})
 
 
-def api_v1_community_risk_map():
-    """获取社区风险地图数据（v1）"""
-    return _api_community_risk_map()
-
-
-def api_community_risk_map():
-    """获取社区风险地图数据（兼容）"""
-    return api_v1_community_risk_map()
-
-
 def _api_disease_weather_stats():
     """疾病与天气相关性统计"""
     # 这里应该实现复杂的统计分析
     return jsonify({'success': True, 'data': {}})
-
-
-def api_v1_disease_weather_stats():
-    """疾病与天气相关性统计（v1）"""
-    return _api_disease_weather_stats()
-
-
-def api_disease_weather_stats():
-    """疾病与天气相关性统计（兼容）"""
-    return api_v1_disease_weather_stats()
 
 
 # ======================== ML预测API ========================
@@ -308,17 +278,6 @@ def _api_ml_predict():
     except SERVICE_EXCEPTIONS as exc:
         # 运行或依赖异常
         return handle_api_exception(exc, "ML疾病风险预测失败", log=logger)
-
-
-@login_required
-def api_v1_ml_predict():
-    """使用机器学习模型进行疾病风险预测（v1）"""
-    return _api_ml_predict()
-
-
-def api_ml_predict():
-    """使用机器学习模型进行疾病风险预测（兼容）"""
-    return api_v1_ml_predict()
 
 
 def _api_ml_predict_community():
@@ -383,17 +342,6 @@ def _api_ml_predict_community():
         return handle_api_exception(exc, "ML社区风险预测失败", log=logger)
 
 
-@login_required
-def api_v1_ml_predict_community():
-    """使用机器学习模型进行社区风险预测（v1）"""
-    return _api_ml_predict_community()
-
-
-def api_ml_predict_community():
-    """使用机器学习模型进行社区风险预测（兼容）"""
-    return api_v1_ml_predict_community()
-
-
 def _api_ml_status():
     """获取ML模型状态"""
     try:
@@ -403,16 +351,6 @@ def _api_ml_status():
         return jsonify({'success': True, 'status': status})
     except API_EXCEPTIONS as exc:
         return handle_api_exception(exc, "ML模型状态获取失败", log=logger)
-
-
-def api_v1_ml_status():
-    """获取ML模型状态（v1）"""
-    return _api_ml_status()
-
-
-def api_ml_status():
-    """获取ML模型状态（兼容）"""
-    return api_v1_ml_status()
 
 
 # ======================== DLNM风险预测API ========================
@@ -468,17 +406,6 @@ def _api_dlnm_risk():
         return handle_api_exception(exc, "DLNM风险计算失败", log=logger)
 
 
-@login_required
-def api_v1_dlnm_risk():
-    """DLNM风险函数计算（v1）"""
-    return _api_dlnm_risk()
-
-
-def api_dlnm_risk():
-    """DLNM风险函数计算（兼容）"""
-    return api_v1_dlnm_risk()
-
-
 def _api_dlnm_summary():
     """获取DLNM模型摘要"""
     try:
@@ -490,16 +417,6 @@ def _api_dlnm_summary():
         })
     except API_EXCEPTIONS as exc:
         return handle_api_exception(exc, "DLNM模型摘要获取失败", log=logger)
-
-
-def api_v1_dlnm_summary():
-    """获取DLNM模型摘要（v1）"""
-    return _api_dlnm_summary()
-
-
-def api_dlnm_summary():
-    """获取DLNM模型摘要（兼容）"""
-    return api_v1_dlnm_summary()
 
 
 # ======================== 7天预测API ========================
@@ -592,17 +509,6 @@ def _api_forecast_7day():
         return handle_api_exception(exc, "7天预测失败", log=logger)
 
 
-@login_required
-def api_v1_forecast_7day():
-    """获取未来7天健康预测（v1）"""
-    return _api_forecast_7day()
-
-
-def api_forecast_7day():
-    """获取未来7天健康预测（兼容）"""
-    return api_v1_forecast_7day()
-
-
 def _api_forecast_daily():
     """获取单日门诊预测"""
     try:
@@ -629,16 +535,6 @@ def _api_forecast_daily():
         })
     except API_EXCEPTIONS as exc:
         return handle_api_exception(exc, "单日门诊预测失败", log=logger)
-
-
-def api_v1_forecast_daily():
-    """获取单日门诊预测（v1）"""
-    return _api_forecast_daily()
-
-
-def api_forecast_daily():
-    """获取单日门诊预测（兼容）"""
-    return api_v1_forecast_daily()
 
 
 # ======================== 社区风险地图API ========================
@@ -718,17 +614,6 @@ def _api_community_risk_map_v2():
         return handle_api_exception(exc, "社区风险地图生成失败", log=logger)
 
 
-@login_required
-def api_v1_community_risk_map_v2():
-    """获取社区风险地图数据（改进版v1）"""
-    return _api_community_risk_map_v2()
-
-
-def api_community_risk_map_v2():
-    """获取社区风险地图数据（改进版兼容）"""
-    return api_v1_community_risk_map_v2()
-
-
 def _api_community_vulnerability(community_name):
     """获取单个社区脆弱性指数"""
     try:
@@ -748,16 +633,6 @@ def _api_community_vulnerability(community_name):
         return handle_api_exception(exc, "社区脆弱性指数获取失败", log=logger)
 
 
-def api_v1_community_vulnerability(community_name):
-    """获取单个社区脆弱性指数（v1）"""
-    return _api_community_vulnerability(community_name)
-
-
-def api_community_vulnerability(community_name):
-    """获取单个社区脆弱性指数（兼容）"""
-    return api_v1_community_vulnerability(community_name)
-
-
 def _api_community_list():
     """获取所有社区列表及脆弱性"""
     try:
@@ -772,16 +647,6 @@ def _api_community_list():
         })
     except API_EXCEPTIONS as exc:
         return handle_api_exception(exc, "社区列表获取失败", log=logger)
-
-
-def api_v1_community_list():
-    """获取所有社区列表及脆弱性（v1）"""
-    return _api_community_list()
-
-
-def api_community_list():
-    """获取所有社区列表及脆弱性（兼容）"""
-    return api_v1_community_list()
 
 
 # ======================== 慢病风险预测API ========================
@@ -836,17 +701,6 @@ def _api_chronic_individual():
         return handle_api_exception(exc, "个体慢病风险预测失败", log=logger)
 
 
-@login_required
-def api_v1_chronic_individual():
-    """个体慢病风险预测（v1）"""
-    return _api_chronic_individual()
-
-
-def api_chronic_individual():
-    """个体慢病风险预测（兼容）"""
-    return api_v1_chronic_individual()
-
-
 def _api_chronic_population():
     """人群分层慢病风险预测"""
     try:
@@ -882,16 +736,6 @@ def _api_chronic_population():
         })
     except API_EXCEPTIONS as exc:
         return handle_api_exception(exc, "人群慢病风险预测失败", log=logger)
-
-
-def api_v1_chronic_population():
-    """人群分层慢病风险预测（v1）"""
-    return _api_chronic_population()
-
-
-def api_chronic_population():
-    """人群分层慢病风险预测（兼容）"""
-    return api_v1_chronic_population()
 
 
 # ======================== AI问答API ========================
@@ -949,19 +793,6 @@ def _api_ai_ask():
         return handle_api_exception(exc, "AI问答失败", log=logger)
 
 
-@login_required
-# 降低 AI 接口限流至按小时计（默认 30/小时），防止费用激增
-# 可通过环境变量 RATE_LIMIT_AI 覆盖
-def api_v1_ai_ask():
-    """AI问答接口（v1）"""
-    return _api_ai_ask()
-
-
-def api_ai_ask():
-    """AI问答接口（兼容）"""
-    return api_v1_ai_ask()
-
-
 def _api_chronic_rules_version():
     """获取慢病规则库版本"""
     try:
@@ -973,16 +804,6 @@ def _api_chronic_rules_version():
         })
     except API_EXCEPTIONS as exc:
         return handle_api_exception(exc, "慢病规则版本获取失败", log=logger)
-
-
-def api_v1_chronic_rules_version():
-    """获取慢病规则库版本（v1）"""
-    return _api_chronic_rules_version()
-
-
-def api_chronic_rules_version():
-    """获取慢病规则库版本（兼容）"""
-    return api_v1_chronic_rules_version()
 
 
 # ======================== 综合预警API ========================
@@ -1075,16 +896,6 @@ def _api_comprehensive_alert():
         })
     except API_EXCEPTIONS as exc:
         return handle_api_exception(exc, "综合预警生成失败", log=logger)
-
-
-def api_v1_comprehensive_alert():
-    """获取综合健康预警（v1）"""
-    return _api_comprehensive_alert()
-
-
-def api_comprehensive_alert():
-    """获取综合健康预警（兼容）"""
-    return api_v1_comprehensive_alert()
 
 
 def _api_usage_event():
