@@ -49,6 +49,39 @@ PARAM_VALUES = {
 }
 SKIP_ENDPOINTS = {'static', 'public.amap_proxy', 'public.logout'}
 
+# 带筛选参数的页面变体：覆盖分层、分箱、滞后、日期交换、非法输入等分支
+EXTRA_GETS = [
+    '/analysis/history?community=牛家垄周村&disease=中暑',
+    '/analysis/history?community=岭背徐村&start_date=2026-05-01&end_date=2026-06-30',
+    '/analysis/history?community=不存在的村&start_date=2026-07-01',
+    '/analysis/heatmap?stratum=elderly&binning=quantile&lag_window=3&min_days=2',
+    '/analysis/heatmap?community=牛家垄周村&disease=呼吸系统疾病&stratum=female&lag_window=0',
+    '/analysis/heatmap?stratum=bogus&binning=bogus&lag_window=abc&min_days=99&end_date=2026-06-15',
+    '/analysis/lag?max_lag=7&stratum=male&community=牛家垄周村',
+    '/analysis/lag?max_lag=21&disease=心血管疾病&min_days=1&start_date=2026-04-01&end_date=2026-07-19',
+    '/analysis/lag?max_lag=9&stratum=non_elderly',
+    '/analysis/community-compare?stratum=elderly&smoothing_alpha=0&top_n=5&min_days=1',
+    '/analysis/community-compare?start_date=2026-07-10&end_date=2026-05-01&disease=中暑',
+    '/analysis/community-compare?smoothing_alpha=99&top_n=1&stratum=female',
+    '/alerts/history?outcome=hit&follow_days=5&min_days=3&threshold_q=0.8',
+    '/alerts/history?outcome=false_alarm&location=都昌&alert_type=高温&alert_level=黄色',
+    '/alerts/history?outcome=insufficient&threshold_q=0.77&start_date=2026-06-01&end_date=2026-03-01',
+    '/alerts/history?threshold_q=abc&follow_days=0&min_days=100&start_date=2026-01-01&end_date=2026-07-20',
+    '/alerts/accuracy?threshold_q=0.75&follow_days=7&min_days=3',
+    '/alerts/accuracy?threshold_q=0.93&location=都昌&start_date=2026-07-20&end_date=2026-02-01',
+    '/alerts/accuracy?alert_type=暴雨&alert_level=红色&min_days=5',
+    '/alerts/accuracy?threshold_q=bad&start_date=2026-01-01&end_date=2026-07-20',
+    '/analysis/pilot?days=7',
+    '/analysis/pilot?days=9999',
+]
+
+# 表单 POST（报告导出）
+FORM_POSTS = [
+    ('/reports/export', {'report_type': 'weekly', 'format': 'excel'}),
+    ('/reports/export', {'report_type': 'monthly', 'format': 'pdf'}),
+    ('/reports/export', {'report_type': 'monthly', 'format': 'doc'}),
+]
+
 # 固定的 API 写请求（JSON 接口，兼容路径与 v1 路径都覆盖）
 API_POSTS = [
     ('/api/ml/predict', {'age': 72, 'gender': '女'}),
@@ -362,7 +395,9 @@ def record_profile(root, out, profile):
         path = _fill(rule)
         if path is not None:
             requests_plan.append(('GET', path, None))
+    requests_plan.extend(('GET', path, None) for path in EXTRA_GETS)
     requests_plan.extend(('POST', path, payload) for path, payload in API_POSTS)
+    requests_plan.extend(('FORM', path, payload) for path, payload in FORM_POSTS)
 
     snapshot = {'frozen_at': FROZEN_AT, 'requests': {}}
     for role in ROLES:
@@ -378,6 +413,11 @@ def record_profile(root, out, profile):
             random.seed(0)
             if method == 'GET':
                 resp = client.get(path)
+            elif method == 'FORM':
+                form = dict(payload, csrf_token='behavior-lock-csrf')
+                resp = client.post(path, data=form)
+                payload_key = '&'.join(f'{k}={v}' for k, v in sorted(payload.items()))
+                path = f'{path}?{payload_key}'
             else:
                 resp = client.post(path, json=payload, headers={'X-CSRF-Token': 'behavior-lock-csrf'})
             snapshot['requests'][f'{role} {method} {path}'] = _capture(resp, root)
