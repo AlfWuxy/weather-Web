@@ -17,12 +17,13 @@ import subprocess
 import sys
 import tempfile
 
+# 统一用小时窗口：固定窗口从首次请求起算，即使 CI 机器很慢，整个序列也不会跨窗口
 LIMIT_ENV = {
-    'RATE_LIMITS': '6 per minute',
-    'RATE_LIMIT_WEATHER': '4 per minute',
-    'RATE_LIMIT_ML': '3 per minute',
-    'RATE_LIMIT_FORECAST': '3 per minute',
-    'RATE_LIMIT_CHRONIC': '3 per minute',
+    'RATE_LIMITS': '6 per hour',
+    'RATE_LIMIT_WEATHER': '4 per hour',
+    'RATE_LIMIT_ML': '3 per hour',
+    'RATE_LIMIT_FORECAST': '3 per hour',
+    'RATE_LIMIT_CHRONIC': '3 per hour',
     'RATE_LIMIT_AI': '3 per hour',
 }
 
@@ -41,8 +42,22 @@ SEQUENCE = [
 ]
 
 
+def _block_network():
+    """禁止一切外网：外部接口统一走兜底分支，请求耗时稳定。返回被拦截次数的计数器。"""
+    import socket
+    blocked = {'count': 0}
+
+    def _refuse(*_args, **_kwargs):
+        blocked['count'] += 1
+        raise OSError('ratelimit_lock: network disabled')
+    socket.socket.connect = _refuse
+    socket.create_connection = _refuse
+    return blocked
+
+
 def _record_in_process(root, out):
     import logging
+    import time
     import warnings
     logging.disable(logging.CRITICAL)
     warnings.simplefilter('ignore')
@@ -56,13 +71,14 @@ def _record_in_process(root, out):
         'REDIS_URL': '', 'SILICONFLOW_API_KEY': '', 'AMAP_KEY': '',
     })
     os.environ.update(LIMIT_ENV)
+    blocked = _block_network()
+    started = time.monotonic()
 
     from core.app import create_app
     from core.db_models import User
     from core.extensions import db, limiter
 
-    # 不冻结时间：限流的内存存储按真实时间过期计数键。固定窗口从首次请求起算，
-    # 整个序列几秒内跑完，不会跨越窗口。
+    # 不冻结时间：限流的内存存储按真实时间过期计数键；小时窗口保证序列不会跨窗口
     app = create_app()
     app.config['TESTING'] = True
     with app.app_context():
@@ -90,7 +106,9 @@ def _record_in_process(root, out):
     with open(out, 'w', encoding='utf-8') as fh:
         json.dump({'statuses': statuses, 'counters': counters}, fh, ensure_ascii=False, indent=1)
     throttled = sum(1 for item in statuses if item.endswith(' 429'))
-    print(f'recorded {len(statuses)} requests ({throttled} throttled), {len(counters)} counters -> {out}')
+    elapsed = time.monotonic() - started
+    print(f'recorded {len(statuses)} requests ({throttled} throttled), {len(counters)} counters, '
+          f'{blocked["count"]} outbound connections blocked, {elapsed:.1f}s -> {out}')
 
 
 def record(root, out):
