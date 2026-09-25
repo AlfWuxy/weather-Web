@@ -85,7 +85,7 @@ jobs:
       - name: 运行手工契约测试
         run: python -m pytest -q -m manual
 
-      - name: 行为锁（与基线分支逐字对比全站响应）
+      - name: 行为锁与限流锁（与基线分支逐字对比全站响应和限流行为）
         # 有意改变页面或接口输出的 PR，加上 behavior-change 标签即可跳过
         if: github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'behavior-change')
         run: |
@@ -93,3 +93,6 @@ jobs:
           python scripts/behavior_lock.py record --root /tmp/behavior-base --out /tmp/behavior-base.json
           python scripts/behavior_lock.py record --root . --out /tmp/behavior-head.json
           python scripts/behavior_lock.py diff /tmp/behavior-base.json /tmp/behavior-head.json
+          python scripts/ratelimit_lock.py record --root /tmp/behavior-base --out /tmp/ratelimit-base.json
+          python scripts/ratelimit_lock.py record --root . --out /tmp/ratelimit-head.json
+          python scripts/ratelimit_lock.py diff /tmp/ratelimit-base.json /tmp/ratelimit-head.json
