@@ -199,64 +199,7 @@ document.addEventListener('DOMContentLoaded', function () {
         const labels = series.map(item => item.date);
         const riskValues = series.map(item => item.risk_value || 0);
         const confirmedValues = series.map(item => item.confirmed || 0);
-        const hasData = riskValues.some(v => v > 0) || confirmedValues.some(v => v > 0);
-        if (!hasData) {
-            chartCanvas.style.display = 'none';
-        } else {
-            if (emptyState) {
-                emptyState.style.display = 'none';
-            }
-            new Chart(chartCanvas.getContext('2d'), {
-                data: {
-                    labels: labels,
-                    datasets: [
-                        {
-                            type: 'line',
-                            label: '风险等级',
-                            data: riskValues,
-                            borderColor: '#dc2626',
-                            backgroundColor: 'rgba(220, 38, 38, 0.15)',
-                            tension: 0.3,
-                            yAxisID: 'y'
-                        },
-                        {
-                            type: 'bar',
-                            label: '确认',
-                            data: confirmedValues,
-                            backgroundColor: 'rgba(14, 159, 110, 0.6)',
-                            yAxisID: 'y1'
-                        }
-                    ]
-                },
-                options: {
-                    responsive: true,
-                    plugins: {
-                        legend: { position: 'top' }
-                    },
-                    scales: {
-                        y: {
-                            min: 0,
-                            max: 4,
-                            ticks: {
-                                stepSize: 1,
-                                callback: value => ({0: '', 1: '低', 2: '中', 3: '高', 4: '极'}[value] || '')
-                            }
-                        },
-                        y1: {
-                            min: 0,
-                            max: 1,
-                            position: 'right',
-                            grid: { drawOnChartArea: false },
-                            ticks: {
-                                stepSize: 1,
-                                callback: value => (value === 1 ? '已确认' : '')
-                            }
-                        }
-                    }
-                }
-            });
-        }
-    }
+{% include 'partials/scripts/recent_risk_chart.html' %}
 });
 </script>
 {% endblock %}

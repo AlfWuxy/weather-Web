@@ -1,0 +1,19 @@
+                    <div class="col-xl-2 col-md-4">
+                        <label class="form-label">疾病分类</label>
+                        <select class="form-select" name="disease">
+                            <option value="">全部</option>
+                            {% for disease in diseases %}
+                                <option value="{{ disease }}" {% if disease_filter == disease %}selected{% endif %}>{{ disease }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-xl-2 col-md-4">
+                        <label class="form-label">人群分层</label>
+                        <select class="form-select" name="stratum">
+                            <option value="all" {% if stratum == 'all' %}selected{% endif %}>全人群</option>
+                            <option value="elderly" {% if stratum == 'elderly' %}selected{% endif %}>老年人(>=65)</option>
+                            <option value="non_elderly" {% if stratum == 'non_elderly' %}selected{% endif %}>非老年(&lt;65)</option>
+                            <option value="male" {% if stratum == 'male' %}selected{% endif %}>男性</option>
+                            <option value="female" {% if stratum == 'female' %}selected{% endif %}>女性</option>
+                        </select>
+                    </div>

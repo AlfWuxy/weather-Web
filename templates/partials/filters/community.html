@@ -1,0 +1,9 @@
+                    <div class="col-xl-2 col-md-4">
+                        <label class="form-label">社区</label>
+                        <select class="form-select" name="community">
+                            <option value="">全部</option>
+                            {% for comm in communities %}
+                                <option value="{{ comm.name }}" {% if community_filter == comm.name %}selected{% endif %}>{{ comm.name }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
