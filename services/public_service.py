@@ -609,18 +609,29 @@ def _validate_pair_token_binding(pair, short_code, token):
     return True
 
 
-def _handle_action_confirm(token=None, confirm_action=None, debrief_action=None):
+def _resolve_posted_pair(token):
+    """行动页 POST 的公共前置：读取短码与令牌，定位配对并校验绑定关系。
+
+    返回 (配对, 令牌, 拒绝响应)；拒绝响应不为空时调用方应直接返回它。
+    """
     short_code = sanitize_input(request.form.get('short_code'), max_length=12) or ''
     short_code = short_code.replace(' ', '').strip()
     token = sanitize_input(request.form.get('token') or token, max_length=200)
     pair = _resolve_pair_from_session_or_code(short_code, token=token)
     if not pair:
         flash('短码无效或已失效', 'error')
-        return redirect(url_for('public.action_check'))
+        return None, token, redirect(url_for('public.action_check'))
 
     if (token or request.path.startswith('/e/')) and not _validate_pair_token_binding(pair, short_code, token):
         flash('短码或令牌无效，请联系照护人确认。', 'error')
-        return redirect(url_for('public.action_check'))
+        return None, token, redirect(url_for('public.action_check'))
+    return pair, token, None
+
+
+def _handle_action_confirm(token=None, confirm_action=None, debrief_action=None):
+    pair, token, rejected = _resolve_posted_pair(token)
+    if rejected:
+        return rejected
     status_date = today_local()
     status, actions, resources, weather_data, heat_result, risk_label, risk_reasons = _build_action_context(
         pair, status_date
@@ -655,17 +666,9 @@ def _handle_action_confirm(token=None, confirm_action=None, debrief_action=None)
 
 
 def _handle_action_help(token=None, confirm_action=None, debrief_action=None):
-    short_code = sanitize_input(request.form.get('short_code'), max_length=12) or ''
-    short_code = short_code.replace(' ', '').strip()
-    token = sanitize_input(request.form.get('token') or token, max_length=200)
-    pair = _resolve_pair_from_session_or_code(short_code, token=token)
-    if not pair:
-        flash('短码无效或已失效', 'error')
-        return redirect(url_for('public.action_check'))
-
-    if (token or request.path.startswith('/e/')) and not _validate_pair_token_binding(pair, short_code, token):
-        flash('短码或令牌无效，请联系照护人确认。', 'error')
-        return redirect(url_for('public.action_check'))
+    pair, token, rejected = _resolve_posted_pair(token)
+    if rejected:
+        return rejected
     status_date = today_local()
     status, actions, resources, weather_data, heat_result, risk_label, risk_reasons = _build_action_context(
         pair, status_date
@@ -700,17 +703,9 @@ def _handle_action_help(token=None, confirm_action=None, debrief_action=None):
 
 
 def _handle_action_debrief(token=None, confirm_action=None, debrief_action=None, focus_debrief=False):
-    short_code = sanitize_input(request.form.get('short_code'), max_length=12) or ''
-    short_code = short_code.replace(' ', '').strip()
-    token = sanitize_input(request.form.get('token') or token, max_length=200)
-    pair = _resolve_pair_from_session_or_code(short_code, token=token)
-    if not pair:
-        flash('短码无效或已失效', 'error')
-        return redirect(url_for('public.action_check'))
-
-    if (token or request.path.startswith('/e/')) and not _validate_pair_token_binding(pair, short_code, token):
-        flash('短码或令牌无效，请联系照护人确认。', 'error')
-        return redirect(url_for('public.action_check'))
+    pair, token, rejected = _resolve_posted_pair(token)
+    if rejected:
+        return rejected
     status_date = today_local()
     q1 = sanitize_input(request.form.get('question_1'), max_length=200)
     q2 = sanitize_input(request.form.get('question_2'), max_length=200)
