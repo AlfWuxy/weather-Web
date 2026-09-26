@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """User-facing helper utilities."""
 import json
+import math
 from datetime import timedelta
 
 from flask import url_for
@@ -9,12 +10,14 @@ from flask_login import current_user
 from core.extensions import db
 from core.security import hash_short_code
 from core.time_utils import now_local, today_local, utcnow, ensure_utc_aware
-from core.weather import is_demo_mode
+from core.weather import is_demo_mode, is_qweather_online_weather
 from core.db_models import CommunityDaily, DailyStatus, Pair
+from services.heat_action_service import HeatActionService
 from utils.parsers import safe_json_loads
 
 from ._common import (
     ANNOUNCE_DISCLAIMER_LINES,
+    HEAT_RISK_LABELS,
     ANNOUNCE_SOURCE_LINES,
     AUTO_ESCALATE_AFTER,
     AUTO_ESCALATE_STAGE,
@@ -27,6 +30,53 @@ from ._common import (
 )
 
 _MISSING = object()
+
+REQUIRED_HEAT_WEATHER_FIELDS = (
+    'temperature',
+    'temperature_max',
+    'temperature_min',
+    'humidity',
+)
+WEATHER_WAITING_LABEL = '天气更新中'
+
+
+def _heat_weather_available(weather_data):
+    """仅允许字段完整的真实和风天气进入热风险计算。"""
+    if not is_qweather_online_weather(weather_data):
+        return False
+    for field in REQUIRED_HEAT_WEATHER_FIELDS:
+        try:
+            value = float(weather_data.get(field))
+        except (AttributeError, TypeError, ValueError):
+            return False
+        if not math.isfinite(value):
+            return False
+    return True
+
+
+def _load_heat_risk_with(location, fetch_weather, count_hot_days, logger):
+    """读取真实天气并计算热风险；任一步失败都返回不可用状态，不输出风险结论。
+
+    取天气、统计连续高温天数的函数和日志记录器由调用方传入，
+    照护端与社区端各自保留替换点和日志来源。
+    """
+    weather_data, _ = fetch_weather(location)
+    if not _heat_weather_available(weather_data):
+        return weather_data, None, None
+    try:
+        consecutive_hot_days = count_hot_days(
+            location,
+            today_max=weather_data.get('temperature_max')
+        )
+        heat_result = HeatActionService().calculate_heat_risk(
+            weather_data,
+            consecutive_hot_days=consecutive_hot_days
+        )
+    except Exception:
+        logger.warning("真实天气热风险计算失败，已停止输出结论", exc_info=True)
+        return weather_data, None, None
+    risk_label = HEAT_RISK_LABELS.get(heat_result['risk_level'], '低风险')
+    return weather_data, heat_result, risk_label
 
 
 def _auto_escalate_overdue_statuses(statuses, status_date, target_stage=AUTO_ESCALATE_STAGE):
