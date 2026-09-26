@@ -1,0 +1,952 @@
+[
+ {
+  "rule": "/",
+  "methods": [
+   "GET"
+  ],
+  "endpoint": "public.index"
+ },
+ {
+  "rule": "/_AMapService/<path:proxy_path>",
+  "methods": [
+   "GET"
+  ],
+  "endpoint": "public.amap_proxy"
+ },
+ {
+  "rule": "/about/trust-network",
+  "methods": [
+   "GET"
+  ],
+  "endpoint": "public.about_trust_network"
+ },
+ {
+  "rule": "/action",
+  "methods": [
+   "GET",
+   "POST"
+  ],
+  "endpoint": "public.action_check"
+ },
+ {
+  "rule": "/action/confirm",
+  "methods": [
+   "POST"
+  ],
+  "endpoint": "public.action_confirm"
+ },
+ {
+  "rule": "/action/debrief",
+  "methods": [
+   "POST"
+  ],
+  "endpoint": "public.action_debrief"
+ },
+ {
+  "rule": "/action/help",
+  "methods": [
+   "POST"
+  ],
+  "endpoint": "public.action_help"
+ },
+ {
+  "rule": "/admin",
+  "methods": [
+   "GET"
+  ],
+  "endpoint": "admin.admin_dashboard"
+ },
+ {
+  "rule": "/admin/communities",
+  "methods": [
+   "GET"
+  ],
+  "endpoint": "admin.admin_communities"
+ },
+ {
+  "rule": "/admin/communities/sync-coordinates",
+  "methods": [
+   "POST"
+  ],
+  "endpoint": "admin.admin_sync_community_coordinates"
+ },
+ {
+  "rule": "/admin/community/<int:community_id>/edit",
+  "methods": [
+   "GET",
+   "POST"
+  ],
+  "endpoint": "admin.admin_edit_community"
+ },
+ {
+  "rule": "/admin/community/add",
+  "methods": [
+   "GET",
+   "POST"
+  ],
+  "endpoint": "admin.admin_add_community"
+ },
+ {
+  "rule": "/admin/cooling",
+  "methods": [
+   "GET"
+  ],
+  "endpoint": "admin.admin_cooling_resources"
+ },
+ {
+  "rule": "/admin/cooling/<int:resource_id>/edit",
+  "methods": [
+   "GET",
+   "POST"
+  ],
+  "endpoint": "admin.admin_edit_cooling_resource"
+ },
+ {
+  "rule": "/admin/cooling/add",
+  "methods": [
+   "GET",
+   "POST"
+  ],
+  "endpoint": "admin.admin_add_cooling_resource"
+ },
+ {
+  "rule": "/admin/records",
+  "methods": [
+   "GET"
+  ],
+  "endpoint": "admin.admin_records"
+ },
+ {
+  "rule": "/admin/statistics",
+  "methods": [
+   "GET"
+  ],
+  "endpoint": "admin.admin_statistics"
+ },
+ {
+  "rule": "/admin/user/<int:user_id>/delete",
+  "methods": [
+   "POST"
+  ],
+  "endpoint": "admin.admin_delete_user"
+ },
+ {
+  "rule": "/admin/user/<int:user_id>/edit",
+  "methods": [
+   "GET",
+   "POST"
+  ],
+  "endpoint": "admin.admin_edit_user"
+ },
+ {
+  "rule": "/admin/user/add",
+  "methods": [
+   "GET",
+   "POST"
+  ],
+  "endpoint": "admin.admin_add_user"
+ },
+ {
+  "rule": "/admin/users",
+  "methods": [
+   "GET"
+  ],
+  "endpoint": "admin.admin_users"
+ },
+ {
+  "rule": "/ai-qa",
+  "methods": [
+   "GET"
+  ],
+  "endpoint": "tools.ai_qa"
+ },
+ {
+  "rule": "/alerts/accuracy",
+  "methods": [
+   "GET",
+   "POST"
+  ],
+  "endpoint": "analysis.alerts_accuracy"
+ },
+ {
+  "rule": "/alerts/history",
+  "methods": [
+   "GET",
+   "POST"
+  ],
+  "endpoint": "analysis.alerts_history"
+ },
+ {
+  "rule": "/analysis/community-compare",
+  "methods": [
+   "GET",
+   "POST"
+  ],
+  "endpoint": "analysis.analysis_community_compare"
+ },
+ {
+  "rule": "/analysis/heatmap",
+  "methods": [
+   "GET",
+   "POST"
+  ],
+  "endpoint": "analysis.analysis_heatmap"
+ },
+ {
+  "rule": "/analysis/history",
+  "methods": [
+   "GET",
+   "POST"
+  ],
+  "endpoint": "analysis.analysis_history"
+ },
+ {
+  "rule": "/analysis/lag",
+  "methods": [
+   "GET",
+   "POST"
+  ],
+  "endpoint": "analysis.analysis_lag"
+ },
+ {
+  "rule": "/analysis/model-quality",
+  "methods": [
+   "GET"
+  ],
+  "endpoint": "analysis.model_quality"
+ },
+ {
+  "rule": "/analysis/pilot",
+  "methods": [
+   "GET"
+  ],
+  "endpoint": "analysis.pilot_dashboard"
+ },
+ {
+  "rule": "/analysis/pilot/export.csv",
+  "methods": [
+   "GET"
+  ],
+  "endpoint": "analysis.pilot_export_csv"
+ },
+ {
+  "rule": "/annual-report",
+  "methods": [
+   "GET"
+  ],
+  "endpoint": "analysis.annual_report"
+ },
+ {
+  "rule": "/api/ai/ask",
+  "methods": [
+   "POST"
+  ],
+  "endpoint": "api.api_ai_ask"
+ },
+ {
+  "rule": "/api/alert/comprehensive",
+  "methods": [
+   "POST"
+  ],
+  "endpoint": "api.api_comprehensive_alert"
+ },
+ {
+  "rule": "/api/chronic/individual",
+  "methods": [
+   "POST"
+  ],
+  "endpoint": "api.api_chronic_individual"
+ },
+ {
+  "rule": "/api/chronic/population",
+  "methods": [
+   "POST"
+  ],
+  "endpoint": "api.api_chronic_population"
+ },
+ {
+  "rule": "/api/chronic/rules-version",
+  "methods": [
+   "GET"
+  ],
+  "endpoint": "api.api_chronic_rules_version"
+ },
+ {
+  "rule": "/api/community/list",
+  "methods": [
+   "GET"
+  ],
+  "endpoint": "api.api_community_list"
+ },
+ {
+  "rule": "/api/community/risk-map",
+  "methods": [
+   "GET"
+  ],
+  "endpoint": "api.api_community_risk_map"
+ },
+ {
+  "rule": "/api/community/risk-map-v2",
+  "methods": [
+   "POST"
+  ],
+  "endpoint": "api.api_community_risk_map_v2"
+ },
+ {
+  "rule": "/api/community/vulnerability/<community_name>",
+  "methods": [
+   "GET"
+  ],
+  "endpoint": "api.api_community_vulnerability"
+ },
+ {
+  "rule": "/api/dlnm/risk",
+  "methods": [
+   "POST"
+  ],
+  "endpoint": "api.api_dlnm_risk"
+ },
+ {
+  "rule": "/api/dlnm/summary",
+  "methods": [
+   "GET"
+  ],
+  "endpoint": "api.api_dlnm_summary"
+ },
+ {
+  "rule": "/api/forecast/7day",
+  "methods": [
+   "POST"
+  ],
+  "endpoint": "api.api_forecast_7day"
+ },
+ {
+  "rule": "/api/forecast/daily",
+  "methods": [
+   "POST"
+  ],
+  "endpoint": "api.api_forecast_daily"
+ },
+ {
+  "rule": "/api/ml/predict",
+  "methods": [
+   "POST"
+  ],
+  "endpoint": "api.api_ml_predict"
+ },
+ {
+  "rule": "/api/ml/predict-community",
+  "methods": [
+   "POST"
+  ],
+  "endpoint": "api.api_ml_predict_community"
+ },
+ {
+  "rule": "/api/ml/status",
+  "methods": [
+   "GET"
+  ],
+  "endpoint": "api.api_ml_status"
+ },
+ {
+  "rule": "/api/statistics/disease-weather",
+  "methods": [
+   "GET"
+  ],
+  "endpoint": "api.api_disease_weather_stats"
+ },
+ {
+  "rule": "/api/v1/ai/ask",
+  "methods": [
+   "POST"
+  ],
+  "endpoint": "api.api_v1_ai_ask"
+ },
+ {
+  "rule": "/api/v1/alert/comprehensive",
+  "methods": [
+   "POST"
+  ],
+  "endpoint": "api.api_v1_comprehensive_alert"
+ },
+ {
+  "rule": "/api/v1/chronic/individual",
+  "methods": [
+   "POST"
+  ],
+  "endpoint": "api.api_v1_chronic_individual"
+ },
+ {
+  "rule": "/api/v1/chronic/population",
+  "methods": [
+   "POST"
+  ],
+  "endpoint": "api.api_v1_chronic_population"
+ },
+ {
+  "rule": "/api/v1/chronic/rules-version",
+  "methods": [
+   "GET"
+  ],
+  "endpoint": "api.api_v1_chronic_rules_version"
+ },
+ {
+  "rule": "/api/v1/community/list",
+  "methods": [
+   "GET"
+  ],
+  "endpoint": "api.api_v1_community_list"
+ },
+ {
+  "rule": "/api/v1/community/risk-map",
+  "methods": [
+   "GET"
+  ],
+  "endpoint": "api.api_v1_community_risk_map"
+ },
+ {
+  "rule": "/api/v1/community/risk-map-v2",
+  "methods": [
+   "POST"
+  ],
+  "endpoint": "api.api_v1_community_risk_map_v2"
+ },
+ {
+  "rule": "/api/v1/community/vulnerability/<community_name>",
+  "methods": [
+   "GET"
+  ],
+  "endpoint": "api.api_v1_community_vulnerability"
+ },
+ {
+  "rule": "/api/v1/dlnm/risk",
+  "methods": [
+   "POST"
+  ],
+  "endpoint": "api.api_v1_dlnm_risk"
+ },
+ {
+  "rule": "/api/v1/dlnm/summary",
+  "methods": [
+   "GET"
+  ],
+  "endpoint": "api.api_v1_dlnm_summary"
+ },
+ {
+  "rule": "/api/v1/events",
+  "methods": [
+   "POST"
+  ],
+  "endpoint": "api.api_v1_events"
+ },
+ {
+  "rule": "/api/v1/forecast/7day",
+  "methods": [
+   "POST"
+  ],
+  "endpoint": "api.api_v1_forecast_7day"
+ },
+ {
+  "rule": "/api/v1/forecast/daily",
+  "methods": [
+   "POST"
+  ],
+  "endpoint": "api.api_v1_forecast_daily"
+ },
+ {
+  "rule": "/api/v1/ml/predict",
+  "methods": [
+   "POST"
+  ],
+  "endpoint": "api.api_v1_ml_predict"
+ },
+ {
+  "rule": "/api/v1/ml/predict-community",
+  "methods": [
+   "POST"
+  ],
+  "endpoint": "api.api_v1_ml_predict_community"
+ },
+ {
+  "rule": "/api/v1/ml/status",
+  "methods": [
+   "GET"
+  ],
+  "endpoint": "api.api_v1_ml_status"
+ },
+ {
+  "rule": "/api/v1/statistics/disease-weather",
+  "methods": [
+   "GET"
+  ],
+  "endpoint": "api.api_v1_disease_weather_stats"
+ },
+ {
+  "rule": "/api/v1/weather/current",
+  "methods": [
+   "GET"
+  ],
+  "endpoint": "api.api_v1_current_weather"
+ },
+ {
+  "rule": "/api/v1/weather/nowcast",
+  "methods": [
+   "GET"
+  ],
+  "endpoint": "api.api_v1_weather_nowcast"
+ },
+ {
+  "rule": "/api/weather/current",
+  "methods": [
+   "GET"
+  ],
+  "endpoint": "api.api_current_weather"
+ },
+ {
+  "rule": "/api/weather/nowcast",
+  "methods": [
+   "GET"
+  ],
+  "endpoint": "api.api_weather_nowcast"
+ },
+ {
+  "rule": "/caregiver",
+  "methods": [
+   "GET"
+  ],
+  "endpoint": "user.caregiver_dashboard"
+ },
+ {
+  "rule": "/caregiver/pair/<int:pair_id>",
+  "methods": [
+   "GET"
+  ],
+  "endpoint": "user.caregiver_pair_detail"
+ },
+ {
+  "rule": "/caregiver/pair/<int:pair_id>/action-log",
+  "methods": [
+   "POST"
+  ],
+  "endpoint": "user.caregiver_action_log"
+ },
+ {
+  "rule": "/caregiver/pair/create",
+  "methods": [
+   "POST"
+  ],
+  "endpoint": "user.caregiver_pair_create"
+ },
+ {
+  "rule": "/caregiver/relay/backup",
+  "methods": [
+   "POST"
+  ],
+  "endpoint": "user.caregiver_relay_backup"
+ },
+ {
+  "rule": "/caregiver/relay/escalate",
+  "methods": [
+   "POST"
+  ],
+  "endpoint": "user.caregiver_relay_escalate"
+ },
+ {
+  "rule": "/caregiver/wechat_template",
+  "methods": [
+   "GET"
+  ],
+  "endpoint": "user.caregiver_wechat_template"
+ },
+ {
+  "rule": "/chronic-risk",
+  "methods": [
+   "GET",
+   "POST"
+  ],
+  "endpoint": "tools.chronic_risk"
+ },
+ {
+  "rule": "/community",
+  "methods": [
+   "GET"
+  ],
+  "endpoint": "user.community_dashboard"
+ },
+ {
+  "rule": "/community-risk",
+  "methods": [
+   "GET"
+  ],
+  "endpoint": "user.community_risk"
+ },
+ {
+  "rule": "/community/<community_code>",
+  "methods": [
+   "GET"
+  ],
+  "endpoint": "user.community_detail"
+ },
+ {
+  "rule": "/community/<community_code>/wechat",
+  "methods": [
+   "GET"
+  ],
+  "endpoint": "user.community_wechat"
+ },
+ {
+  "rule": "/community/announce",
+  "methods": [
+   "GET"
+  ],
+  "endpoint": "user.community_announce"
+ },
+ {
+  "rule": "/cooling",
+  "methods": [
+   "GET"
+  ],
+  "endpoint": "public.cooling_resources"
+ },
+ {
+  "rule": "/dashboard",
+  "methods": [
+   "GET"
+  ],
+  "endpoint": "user.user_dashboard"
+ },
+ {
+  "rule": "/e/<token>",
+  "methods": [
+   "GET"
+  ],
+  "endpoint": "public.elder_token_entry"
+ },
+ {
+  "rule": "/e/<token>/checkin",
+  "methods": [
+   "POST"
+  ],
+  "endpoint": "public.elder_token_checkin"
+ },
+ {
+  "rule": "/e/<token>/debrief",
+  "methods": [
+   "GET",
+   "POST"
+  ],
+  "endpoint": "public.elder_token_debrief"
+ },
+ {
+  "rule": "/e/<token>/help",
+  "methods": [
+   "POST"
+  ],
+  "endpoint": "public.elder_token_help"
+ },
+ {
+  "rule": "/elder",
+  "methods": [
+   "GET"
+  ],
+  "endpoint": "public.elder_entry"
+ },
+ {
+  "rule": "/elder-mode",
+  "methods": [
+   "GET"
+  ],
+  "endpoint": "user.elder_dashboard"
+ },
+ {
+  "rule": "/elder/enter",
+  "methods": [
+   "POST"
+  ],
+  "endpoint": "public.elder_enter"
+ },
+ {
+  "rule": "/entry",
+  "methods": [
+   "GET"
+  ],
+  "endpoint": "public.role_entry"
+ },
+ {
+  "rule": "/family-members",
+  "methods": [
+   "GET",
+   "POST"
+  ],
+  "endpoint": "health.family_members"
+ },
+ {
+  "rule": "/family-members/<int:member_id>",
+  "methods": [
+   "GET"
+  ],
+  "endpoint": "health.family_member_detail"
+ },
+ {
+  "rule": "/family-members/<int:member_id>/delete",
+  "methods": [
+   "POST"
+  ],
+  "endpoint": "health.family_member_delete"
+ },
+ {
+  "rule": "/family-members/<int:member_id>/edit",
+  "methods": [
+   "GET",
+   "POST"
+  ],
+  "endpoint": "health.family_member_edit"
+ },
+ {
+  "rule": "/family-members/<int:member_id>/toggle-alert",
+  "methods": [
+   "POST"
+  ],
+  "endpoint": "health.family_member_toggle_alert"
+ },
+ {
+  "rule": "/family-members/new",
+  "methods": [
+   "GET",
+   "POST"
+  ],
+  "endpoint": "health.family_member_new"
+ },
+ {
+  "rule": "/forecast-7day",
+  "methods": [
+   "GET"
+  ],
+  "endpoint": "tools.forecast_7day"
+ },
+ {
+  "rule": "/guest",
+  "methods": [
+   "GET"
+  ],
+  "endpoint": "public.guest_login"
+ },
+ {
+  "rule": "/health-assessment",
+  "methods": [
+   "GET",
+   "POST"
+  ],
+  "endpoint": "user.health_assessment"
+ },
+ {
+  "rule": "/health-diary",
+  "methods": [
+   "GET",
+   "POST"
+  ],
+  "endpoint": "health.health_diary"
+ },
+ {
+  "rule": "/heat-exposure-gis",
+  "methods": [
+   "GET"
+  ],
+  "endpoint": "user.heat_exposure_gis"
+ },
+ {
+  "rule": "/heat-exposure-gis/daily.json",
+  "methods": [
+   "GET"
+  ],
+  "endpoint": "user.heat_exposure_gis_daily"
+ },
+ {
+  "rule": "/location",
+  "methods": [
+   "POST"
+  ],
+  "endpoint": "user.update_location"
+ },
+ {
+  "rule": "/login",
+  "methods": [
+   "GET",
+   "POST"
+  ],
+  "endpoint": "public.login"
+ },
+ {
+  "rule": "/logout",
+  "methods": [
+   "POST"
+  ],
+  "endpoint": "public.logout"
+ },
+ {
+  "rule": "/medication-reminders",
+  "methods": [
+   "GET",
+   "POST"
+  ],
+  "endpoint": "health.medication_reminders"
+ },
+ {
+  "rule": "/medication-reminders/<int:reminder_id>/delete",
+  "methods": [
+   "POST"
+  ],
+  "endpoint": "health.medication_reminder_delete"
+ },
+ {
+  "rule": "/ml-prediction",
+  "methods": [
+   "GET",
+   "POST"
+  ],
+  "endpoint": "tools.ml_prediction"
+ },
+ {
+  "rule": "/mp/api/v1/alerts",
+  "methods": [
+   "GET"
+  ],
+  "endpoint": "mp_api.alerts_list"
+ },
+ {
+  "rule": "/mp/api/v1/elders",
+  "methods": [
+   "POST"
+  ],
+  "endpoint": "mp_api.elders_create"
+ },
+ {
+  "rule": "/mp/api/v1/elders",
+  "methods": [
+   "GET"
+  ],
+  "endpoint": "mp_api.elders_list"
+ },
+ {
+  "rule": "/mp/api/v1/elders/<int:pair_id>",
+  "methods": [
+   "PATCH"
+  ],
+  "endpoint": "mp_api.elders_patch"
+ },
+ {
+  "rule": "/mp/api/v1/events",
+  "methods": [
+   "POST"
+  ],
+  "endpoint": "mp_api.events"
+ },
+ {
+  "rule": "/mp/api/v1/me",
+  "methods": [
+   "GET"
+  ],
+  "endpoint": "mp_api.me"
+ },
+ {
+  "rule": "/mp/api/v1/me",
+  "methods": [
+   "PATCH"
+  ],
+  "endpoint": "mp_api.me_patch"
+ },
+ {
+  "rule": "/pairs",
+  "methods": [
+   "GET",
+   "POST"
+  ],
+  "endpoint": "user.pair_management"
+ },
+ {
+  "rule": "/pairs/<int:pair_id>/backup",
+  "methods": [
+   "POST"
+  ],
+  "endpoint": "user.pair_backup_contact"
+ },
+ {
+  "rule": "/pairs/<int:pair_id>/escalate",
+  "methods": [
+   "POST"
+  ],
+  "endpoint": "user.pair_escalate"
+ },
+ {
+  "rule": "/profile",
+  "methods": [
+   "GET",
+   "POST"
+  ],
+  "endpoint": "user.profile"
+ },
+ {
+  "rule": "/register",
+  "methods": [
+   "GET",
+   "POST"
+  ],
+  "endpoint": "public.register"
+ },
+ {
+  "rule": "/reports",
+  "methods": [
+   "GET"
+  ],
+  "endpoint": "analysis.reports_center"
+ },
+ {
+  "rule": "/reports/export",
+  "methods": [
+   "POST"
+  ],
+  "endpoint": "analysis.reports_export"
+ },
+ {
+  "rule": "/risk",
+  "methods": [
+   "GET"
+  ],
+  "endpoint": "public.public_risk"
+ },
+ {
+  "rule": "/robots.txt",
+  "methods": [
+   "GET"
+  ],
+  "endpoint": "public.robots_txt"
+ },
+ {
+  "rule": "/static/<path:filename>",
+  "methods": [
+   "GET"
+  ],
+  "endpoint": "static"
+ },
+ {
+  "rule": "/t/<delivery_token>",
+  "methods": [
+   "GET"
+  ],
+  "endpoint": "public.track_delivery"
+ },
+ {
+  "rule": "/transparency",
+  "methods": [
+   "GET"
+  ],
+  "endpoint": "public.transparency"
+ },
+ {
+  "rule": "/wxoa",
+  "methods": [
+   "GET"
+  ],
+  "endpoint": "public.wxoa_landing"
+ }
+]
