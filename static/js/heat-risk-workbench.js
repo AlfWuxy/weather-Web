@@ -32,6 +32,7 @@
 
     const ui = {
         title: document.getElementById('hrwTitle'),
+        metaDay: document.getElementById('hrwMetaDay'),
         lede: document.getElementById('hrwLede'),
         days: document.getElementById('hrwDays'),
         forecastSource: document.getElementById('hrwForecastSource'),
@@ -46,6 +47,7 @@
         swipeHandle: document.getElementById('hrwSwipeHandle'),
         measure: document.getElementById('hrwMeasure'),
         reset: document.getElementById('hrwReset'),
+        controlsToggle: document.getElementById('hrwControlsToggle'),
         map: document.getElementById('hrwMap'),
         mapLoading: document.getElementById('hrwMapLoading'),
         mapFallback: document.getElementById('hrwMapFallback'),
@@ -231,7 +233,7 @@
         const info = levelInfo(level);
         node.textContent = `${prefix || ''}${level} 级 · ${info.label}`;
         node.style.backgroundColor = info.color;
-        node.style.color = level >= 3 ? '#ffffff' : '#1d2a1f';
+        node.style.color = level >= 3 ? '#ffffff' : '#2A2620';
     }
 
     // ------------------------------------------------------------------
@@ -490,15 +492,15 @@
         const L = window.L;
         const segments = hotspotSegments();
         state.layers.hotspot = L.layerGroup([
-            L.polyline(segments[2], {pane: 'hotspotPane', color: '#2a0620', weight: 2, opacity: 0.9, interactive: false}),
-            L.polyline(segments[1], {pane: 'hotspotPane', color: '#2a0620', weight: 1.4, opacity: 0.8, dashArray: '4 3', interactive: false})
+            L.polyline(segments[2], {pane: 'hotspotPane', color: '#2A1414', weight: 2, opacity: 0.9, interactive: false}),
+            L.polyline(segments[1], {pane: 'hotspotPane', color: '#2A1414', weight: 1.4, opacity: 0.8, dashArray: '4 3', interactive: false})
         ]);
 
         const townshipShapes = L.geoJSON({type: 'FeatureCollection', features: state.townships}, {
             pane: 'boundaryPane',
             interactive: false,
             coordsToLatLng: (coords) => window.L.latLng(...toMap(coords[0], coords[1])),
-            style: {color: '#3b4a57', weight: 1.1, opacity: 0.8, dashArray: '6 4', fill: false}
+            style: {color: '#6B5F52', weight: 1.1, opacity: 0.85, dashArray: '6 4', fill: false}
         });
         const townLabels = state.townships.map((feature) => {
             const p = feature.properties;
@@ -516,7 +518,7 @@
                 pane: 'boundaryPane',
                 interactive: false,
                 coordsToLatLng: (coords) => window.L.latLng(...toMap(coords[0], coords[1])),
-                style: {color: '#102b49', weight: 2.4, opacity: 0.95, fill: false}
+                style: {color: '#2A2620', weight: 2.4, opacity: 0.9, fill: false}
             }).addTo(state.map);
         }
 
@@ -527,7 +529,7 @@
                 radius: 3000,
                 pane: 'boundaryPane',
                 interactive: false,
-                color: '#0f766e',
+                color: '#477F42',
                 weight: 1,
                 opacity: 0.55,
                 dashArray: '2 4',
@@ -572,9 +574,9 @@
             const info = levelInfo(level);
             const marker = L.circleMarker(toMap(village.lon_wgs84, village.lat_wgs84), {
                 pane: 'pointPane',
-                radius: 6,
-                color: '#1b2430',
-                weight: 1.5,
+                radius: 7,
+                color: '#ffffff',
+                weight: 2.5,
                 fillColor: info.color,
                 fillOpacity: 1
             });
@@ -610,7 +612,7 @@
         state.layers.selection = L.polygon(cellLatLngs(state.cells[state.selected]), {
             pane: 'selectionPane',
             interactive: false,
-            color: '#0b1f33',
+            color: '#A74407',
             weight: 3,
             fill: false
         }).addTo(state.map);
@@ -771,8 +773,8 @@
             const b = fromMap(state.measurePoints[k]);
             total += haversineKm(a.lon, a.lat, b.lon, b.lat);
         }
-        const line = L.polyline(state.measurePoints, {pane: 'selectionPane', color: '#b45309', weight: 3, dashArray: '6 5', interactive: false});
-        const dots = state.measurePoints.map((point) => L.circleMarker(point, {pane: 'selectionPane', radius: 4, color: '#b45309', fillColor: '#fff', fillOpacity: 1, weight: 2, interactive: false}));
+        const line = L.polyline(state.measurePoints, {pane: 'selectionPane', color: '#A74407', weight: 3, dashArray: '6 5', interactive: false});
+        const dots = state.measurePoints.map((point) => L.circleMarker(point, {pane: 'selectionPane', radius: 4, color: '#A74407', fillColor: '#fff', fillOpacity: 1, weight: 2, interactive: false}));
         const label = L.tooltip({permanent: true, direction: 'right', className: 'hrw-measure-label', offset: [8, 0]})
             .setLatLng(event.latlng)
             .setContent(state.measurePoints.length > 1 ? `${fmt(total, 2)} km（双击结束）` : '继续点击下一点');
@@ -903,7 +905,7 @@
             ui.score.textContent = '—';
             ui.levelChip.textContent = '无常住人口';
             ui.levelChip.style.backgroundColor = NODATA_FILL;
-            ui.levelChip.style.color = '#1d2a1f';
+            ui.levelChip.style.color = '#2A2620';
             ui.scoreSub.textContent = 'ASPECT 模型显示该格无常住人口，不参与评分。';
             ui.dailyChip.textContent = '—';
             ui.dailyChip.style.backgroundColor = '';
@@ -1058,6 +1060,7 @@
         }
         const top = priorityForDay()[0];
         const when = state.dayIndex === 0 ? '今天' : dayLabel(day.date);
+        if (ui.metaDay) ui.metaDay.textContent = state.dayIndex === 0 ? `今天 ${dayLabel(day.date).split(' ')[1] || ''}` : dayLabel(day.date);
         ui.title.textContent = state.dayIndex === 0 ? '今天先去哪几个村' : `${when}先去哪几个村`;
         const reasons = day.reasons.length ? `（${day.reasons.join('，')}）` : '';
         if (!day.level) {
@@ -1109,7 +1112,7 @@
                 const level = combineDailyLevel(hazard.level, staticLevel);
                 const td = el('td', null, `${level} 级`);
                 td.style.backgroundColor = levelInfo(level).color;
-                td.style.color = level >= 3 ? '#fff' : '#1d2a1f';
+                td.style.color = level >= 3 ? '#fff' : '#2A2620';
                 tr.appendChild(td);
             });
             ui.matrixBody.appendChild(tr);
@@ -1218,6 +1221,31 @@
             if (event.key === 'Enter') runSearch();
         });
         ui.print.addEventListener('click', printSheet);
+        ui.controlsToggle.addEventListener('click', () => {
+            const open = !app.classList.contains('hrw-controls-open');
+            app.classList.toggle('hrw-controls-open', open);
+            ui.controlsToggle.setAttribute('aria-expanded', String(open));
+            ui.controlsToggle.setAttribute('aria-pressed', String(open));
+        });
+        const toggleLegend = () => {
+            const collapsed = ui.legend.classList.toggle('is-collapsed');
+            ui.legend.setAttribute('aria-expanded', String(!collapsed));
+        };
+        ui.legend.addEventListener('click', (event) => {
+            if (event.target.closest('button, a')) return;
+            toggleLegend();
+        });
+        ui.legend.addEventListener('keydown', (event) => {
+            if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                toggleLegend();
+            }
+        });
+        // 手机屏幕默认收起图例，避免遮挡地图。
+        if (window.matchMedia && window.matchMedia('(max-width: 860px)').matches) {
+            ui.legend.classList.add('is-collapsed');
+            ui.legend.setAttribute('aria-expanded', 'false');
+        }
         document.addEventListener('keydown', (event) => {
             if (event.key === 'Escape' && state.map) {
                 clearMeasure();
