@@ -8,9 +8,8 @@ from flask import url_for
 from flask_login import current_user
 
 from core.extensions import db
-from core.security import hash_short_code
 from core.time_utils import now_local, today_local, utcnow, ensure_utc_aware
-from core.weather import is_demo_mode, is_qweather_online_weather
+from core.weather import is_qweather_online_weather
 from core.db_models import CommunityDaily, DailyStatus, Pair
 from services.heat_action_service import HeatActionService
 from utils.parsers import safe_json_loads
@@ -22,8 +21,6 @@ from ._common import (
     AUTO_ESCALATE_AFTER,
     AUTO_ESCALATE_STAGE,
     _action_plan,
-    _generate_elder_code,
-    _generate_short_code,
     _normalize_code,
     _relay_stage_rank,
     _risk_level_value
@@ -282,61 +279,6 @@ def _build_announce_message(title, location, risk_label, actions, extra_lines=No
     lines.extend([f'- {item}' for item in ANNOUNCE_SOURCE_LINES])
     lines.append(f'更新时间：{updated_at.strftime("%Y-%m-%d %H:%M")}')
     return '\n'.join(lines)
-
-
-def _ensure_demo_statuses(community_code, status_date, caregiver_id=None, pair_count=3):
-    if not is_demo_mode():
-        return
-    if not community_code:
-        return
-    existing = DailyStatus.query.filter_by(
-        community_code=community_code,
-        status_date=status_date
-    ).count()
-    if existing:
-        return
-
-    pairs = Pair.query.filter_by(
-        community_code=community_code,
-        status='active'
-    ).limit(pair_count).all()
-    if not pairs:
-        if caregiver_id is None:
-            caregiver_id = current_user.id
-        for _ in range(pair_count):
-            short_code = _generate_short_code()
-            pair = Pair(
-                caregiver_id=caregiver_id,
-                community_code=community_code,
-                elder_code=_generate_elder_code(),
-                short_code=short_code,
-                short_code_hash=hash_short_code(short_code),
-                status='active',
-                last_active_at=utcnow()
-            )
-            db.session.add(pair)
-            pairs.append(pair)
-        db.session.flush()
-
-    now = utcnow()
-    risk_labels = ['低风险', '中风险', '高风险', '极高']
-    for idx, pair in enumerate(pairs):
-        status = DailyStatus.query.filter_by(pair_id=pair.id, status_date=status_date).first()
-        if status:
-            continue
-        label = risk_labels[min(idx, len(risk_labels) - 1)]
-        status = DailyStatus(
-            pair_id=pair.id,
-            status_date=status_date,
-            community_code=pair.community_code,
-            risk_level=label,
-            confirmed_at=now - timedelta(hours=idx + 1) if idx % 2 == 0 else None,
-            help_flag=idx == 2,
-            relay_stage='caregiver' if idx == 2 else 'none'
-        )
-        db.session.add(status)
-    db.session.commit()
-    _refresh_community_daily(community_code, status_date)
 
 
 def _community_access_allowed(community_code):

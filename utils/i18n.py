@@ -21,9 +21,3 @@ _DEFAULT_MESSAGES: Dict[str, Dict[str, str]] = {
         "permission_denied": "Permission denied",
     },
 }
-
-
-def get_error_message(key: str, lang: str = "zh") -> str:
-    """Return an error message for a given key and language."""
-    messages = _DEFAULT_MESSAGES.get(lang, _DEFAULT_MESSAGES["zh"])
-    return messages.get(key, messages.get("unknown_error", "Unknown error"))

@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Caregiver-related routes and helpers."""
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from flask import current_app, flash, redirect, render_template, request, session, url_for
 from flask_login import current_user
@@ -18,7 +18,6 @@ from core.weather import (
 from core.usage import log_usage_event
 from services.heat_action_service import HeatActionService
 from services.location_resolver import resolve_location
-from utils.audit_log import log_security_event
 from utils.database import atomic_transaction
 from utils.parsers import json_or_none, safe_json_loads
 from utils.validators import sanitize_input
@@ -31,7 +30,6 @@ from ._common import (
     RELAY_STAGE_ORDER,
     _action_plan,
     _build_pair_action_link,
-    _create_pair_link_record,
     _create_pair_record,
     _relay_stage_rank,
     _require_roles
@@ -65,30 +63,6 @@ def _build_weather_waiting_message(pair, action_link):
 def _load_heat_risk(location):
     """读取真实天气并计算热风险；任一步失败都返回不可用状态。"""
     return _load_heat_risk_with(location, get_weather_with_cache, get_consecutive_hot_days, logger)
-
-
-def _create_pair_link(community_code):
-    with atomic_transaction():
-        link, token = _create_pair_link_record(
-            caregiver_id=current_user.id,
-            community_code=community_code,
-            expires_after=timedelta(days=3),
-            flush=True
-        )
-        log_security_event(
-            action='short_code_generated',
-            actor_id=getattr(current_user, 'id', None),
-            actor_role=getattr(current_user, 'role', None),
-            resource_type='pair_link',
-            resource_id=str(link.id),
-            extra_data={
-                'community_code': community_code,
-                'short_code_hash': link.short_code_hash
-            }
-        )
-    session['pair_link_token'] = token
-    session['pair_link_id'] = link.id
-    return link, token
 
 
 def _create_pair(location_query, member_id=None):
