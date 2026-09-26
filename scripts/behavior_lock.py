@@ -617,6 +617,8 @@ def record_profile(root, out, profile):
                                               'csrf_token': 'behavior-lock-csrf'})
         role_cookies[role] = login_client.get_cookie(session_cookie).value
 
+    reset_db()
+    seed_state = _db_state(app, db)
     for role in ROLES:
         role_cookie = role_cookies[role]
         for method, path, payload in requests_plan:
@@ -634,7 +636,11 @@ def record_profile(root, out, profile):
                 path = f'{path}?{payload_key}'
             else:
                 resp = client.post(path, json=payload, headers={'X-CSRF-Token': 'behavior-lock-csrf'})
-            snapshot['requests'][f'{role} {method} {path}'] = _capture(resp, root, app)
+            item = _capture(resp, root, app)
+            db_changes = _db_diff(seed_state, _db_state(app, db))
+            if db_changes:
+                item['db'] = db_changes
+            snapshot['requests'][f'{role} {method} {path}'] = item
 
     _run_scenarios(app, db, reset_db, role_cookies, root, snapshot)
 

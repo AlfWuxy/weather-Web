@@ -44,6 +44,16 @@ def _expire_link(db, models):
     link.expires_at = utcnow() - timedelta(minutes=1)
 
 
+def _prepare_extreme_day(db, models):
+    """清空最近一天的预警，并把今天的天气标记为极端高温，触发仪表盘自动生成预警。"""
+    from core.time_utils import today_local, utcnow
+    models.WeatherAlert.query.filter(models.WeatherAlert.alert_date >= utcnow() - timedelta(days=1)).delete()
+    for row in models.WeatherData.query.filter_by(date=today_local()).all():
+        row.is_extreme = True
+        row.extreme_type = '高温'
+        row.temperature_max = 39.5
+
+
 SCENARIOS = [
     {
         'name': 'S1-老人令牌链接正常流程',
@@ -233,6 +243,17 @@ SCENARIOS = [
             ('GET', '/'),
             ('POST', '/health-assessment', {'age': '73', 'gender': '女'}),
             ('GET', '/profile'),
+        ],
+    },
+    {
+        'name': 'S11-仪表盘自动生成极端天气预警',
+        'as': 'user',
+        'steps': [
+            ('set', '清空近一天预警并标记今日极端高温', _prepare_extreme_day),
+            ('GET', '/dashboard'),
+            ('GET', '/dashboard'),
+            ('as', 'caregiver'),
+            ('GET', '/dashboard'),
         ],
     },
     {
