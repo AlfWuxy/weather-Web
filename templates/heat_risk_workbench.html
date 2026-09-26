@@ -1,0 +1,227 @@
+{% extends "base.html" %}
+{% from "partials/metric_info.html" import metric_info with context %}
+
+{% block title %}热风险医生工作台｜宜老天气通{% endblock %}
+
+{% block body_class %}heat-risk-workbench-page{% endblock %}
+
+{% block extra_css %}
+<link rel="stylesheet" href="{{ url_for('static', filename='vendor/leaflet/dist/leaflet.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/heat-risk-workbench.css') }}">
+{% endblock %}
+
+{% block content %}
+<div class="hrw-page" id="heatRiskWorkbench"
+     data-geojson-url="{{ gis_data_url }}"
+     data-workbench-url="{{ workbench_data_url }}"
+     data-daily-url="{{ daily_url }}"
+     data-default-cell="{{ default_cell_id }}"
+     data-tianditu-key="{{ tianditu_key }}"
+     data-transparency-url="{{ url_for('public.transparency') }}">
+
+    <header class="hrw-header">
+        <div>
+            <div class="hrw-eyebrow">都昌县 · 热风险医生工作台</div>
+            <h1 id="hrwTitle">今天先去哪几个村</h1>
+            <p class="hrw-lede" id="hrwLede">正在读取 7 天预报与全县 1 km 综合风险分…</p>
+        </div>
+        <div class="hrw-header-actions">
+            <button type="button" class="hrw-button" id="hrwPrint"><i class="bi bi-printer" aria-hidden="true"></i>打印今日巡访单</button>
+            <a class="hrw-button hrw-button--quiet" href="{{ legacy_url }}"><i class="bi bi-journal-text" aria-hidden="true"></i>科研版视图</a>
+        </div>
+    </header>
+
+    <section class="hrw-daystrip" aria-label="未来 7 天热危险等级">
+        <div class="hrw-daystrip-head">
+            <span class="hrw-kicker">7 天热危险等级</span>
+            {{ metric_info('gis_daily_level') }}
+            <span class="hrw-daystrip-source" id="hrwForecastSource"></span>
+        </div>
+        <div class="hrw-days" id="hrwDays" role="tablist" aria-label="选择日期"></div>
+    </section>
+
+    <section class="hrw-workspace" aria-label="热风险地图工作区">
+        <aside class="hrw-panel hrw-priority" aria-labelledby="hrwPriorityTitle">
+            <div class="hrw-panel-head">
+                <span class="hrw-kicker">PRIORITY VISITS</span>
+                <h2 id="hrwPriorityTitle">巡访优先清单</h2>
+                <p class="hrw-panel-note" id="hrwPriorityNote">按当日风险、静态风险分、老人数排序</p>
+            </div>
+            <ol class="hrw-priority-list" id="hrwPriorityList" aria-live="polite"></ol>
+            <div class="hrw-action-card" id="hrwActionCard" aria-live="polite"></div>
+        </aside>
+
+        <div class="hrw-map-column">
+            <div class="hrw-toolbar" aria-label="图层与工具">
+                <div class="hrw-layer-tabs" role="group" aria-label="主题图层" id="hrwLayerTabs">
+                    <button type="button" data-layer="daily" aria-pressed="true">当日风险</button>
+                    <button type="button" data-layer="score" aria-pressed="false">综合风险</button>
+                    <button type="button" data-layer="bivariate" aria-pressed="false">高温×高龄</button>
+                    <button type="button" data-layer="q3_lst_c_mean" aria-pressed="false">地表温度</button>
+                    <button type="button" data-layer="age65_share_pct" aria-pressed="false">65+ 比例</button>
+                    <label class="visually-hidden" for="hrwMoreLayers">更多图层</label>
+                    <select id="hrwMoreLayers" class="hrw-select">
+                        <option value="">更多图层…</option>
+                        <option value="facility_km">到医疗点距离</option>
+                        <option value="tree_cover_pct">树木覆盖</option>
+                        <option value="built_up_pct">建成区</option>
+                        <option value="mean_elevation_m">表面高程</option>
+                        <option value="q3_coverage_pct">观测覆盖</option>
+                    </select>
+                </div>
+                <div class="hrw-tool-row">
+                    <div class="hrw-search">
+                        <label class="visually-hidden" for="hrwSearch">搜索村或乡镇</label>
+                        <input id="hrwSearch" type="search" list="hrwSearchOptions" placeholder="搜索村 / 乡镇" autocomplete="off">
+                        <datalist id="hrwSearchOptions"></datalist>
+                    </div>
+                    <button type="button" class="hrw-tool" id="hrwSwipe" aria-pressed="false" title="左右卷帘对比地表温度与 65+ 比例"><i class="bi bi-layout-split" aria-hidden="true"></i>卷帘</button>
+                    <button type="button" class="hrw-tool" id="hrwMeasure" aria-pressed="false" title="点击地图逐段测距，双击结束"><i class="bi bi-rulers" aria-hidden="true"></i>测距</button>
+                    <button type="button" class="hrw-tool" id="hrwReset" title="恢复县域视图"><i class="bi bi-fullscreen-exit" aria-hidden="true"></i>全县</button>
+                </div>
+            </div>
+
+            <div class="hrw-map-stage">
+                <div id="hrwMap" class="hrw-map" tabindex="0" aria-label="都昌县热风险地图。可用下方乡镇表和巡访清单通过键盘访问同样信息。"></div>
+                <div class="hrw-map-loading" id="hrwMapLoading" role="status"><span class="spinner-border spinner-border-sm" aria-hidden="true"></span>正在载入地图与 2,593 个网格…</div>
+                <div class="hrw-map-fallback" id="hrwMapFallback" hidden><strong>地图暂时无法载入</strong><p>巡访清单与乡镇表仍可使用。</p></div>
+                <div class="hrw-swipe-handle" id="hrwSwipeHandle" hidden>
+                    <span class="hrw-swipe-label hrw-swipe-label--left">地表温度</span>
+                    <span class="hrw-swipe-grip" aria-hidden="true"></span>
+                    <span class="hrw-swipe-label hrw-swipe-label--right">65+ 比例</span>
+                </div>
+                <div class="hrw-map-controls">
+                    <div class="hrw-control-card">
+                        <span class="hrw-control-title">底图</span>
+                        <div class="hrw-seg" role="group" aria-label="底图" id="hrwBasemap">
+                            <button type="button" data-basemap="vector" aria-pressed="true">地图</button>
+                            <button type="button" data-basemap="imagery" aria-pressed="false">影像</button>
+                            <button type="button" data-basemap="none" aria-pressed="false">无</button>
+                        </div>
+                        <label class="hrw-range" for="hrwOpacity">网格透明度 <output id="hrwOpacityValue">70%</output></label>
+                        <input type="range" id="hrwOpacity" min="20" max="100" step="5" value="70">
+                    </div>
+                    <div class="hrw-control-card" role="group" aria-label="叠加图层">
+                        <span class="hrw-control-title">叠加</span>
+                        <label><input type="checkbox" data-overlay="hotspot" checked> 统计热点 {{ metric_info('gis_hotspot') }}</label>
+                        <label><input type="checkbox" data-overlay="townships" checked> 乡镇边界</label>
+                        <label><input type="checkbox" data-overlay="villages" checked> 村点</label>
+                        <label><input type="checkbox" data-overlay="facilities" checked> 医疗点与 3 km 圈 {{ metric_info('gis_facility_access') }}</label>
+                        <label><input type="checkbox" data-overlay="cooling" checked> 避暑点</label>
+                    </div>
+                </div>
+                <div class="hrw-legend" id="hrwLegend" aria-label="图例"></div>
+                <div class="hrw-readout" id="hrwReadout">WGS84</div>
+                <div class="hrw-basemap-note" id="hrwBasemapNote" hidden></div>
+            </div>
+        </div>
+
+        <aside class="hrw-panel hrw-inspector" aria-labelledby="hrwInspectorTitle">
+            <div class="hrw-panel-head">
+                <span class="hrw-kicker">SELECTED PLACE</span>
+                <h2 id="hrwInspectorTitle">选中位置</h2>
+                <p class="hrw-place" id="hrwPlace">—</p>
+                <p class="hrw-coords" id="hrwCoords">—</p>
+            </div>
+            <div class="hrw-score-block">
+                <div class="hrw-score-row">
+                    <div>
+                        <span class="hrw-score-label">综合热风险分 {{ metric_info('gis_risk_score') }}</span>
+                        <strong class="hrw-score" id="hrwScore">—</strong>
+                    </div>
+                    <span class="hrw-level-chip" id="hrwLevelChip">—</span>
+                </div>
+                <p class="hrw-score-sub" id="hrwScoreSub"></p>
+                <div class="hrw-daily-row">
+                    <span>所选日期风险</span>
+                    <span class="hrw-level-chip hrw-level-chip--small" id="hrwDailyChip">—</span>
+                </div>
+            </div>
+            <div class="hrw-breakdown" id="hrwBreakdown" aria-label="风险分构成"></div>
+            <dl class="hrw-facts" id="hrwFacts"></dl>
+            <details class="hrw-provenance">
+                <summary>网格追溯信息</summary>
+                <dl id="hrwProvenance"></dl>
+            </details>
+        </aside>
+    </section>
+
+    <section class="hrw-section" aria-labelledby="hrwTownTitle">
+        <div class="hrw-section-head">
+            <div>
+                <span class="hrw-kicker">TOWNSHIP SUMMARY</span>
+                <h2 id="hrwTownTitle">乡镇汇总</h2>
+                <p>按乡镇内评分网格的第 90 百分位排序，点击乡镇名在地图上定位。边界来自 OpenStreetMap，不作为法定行政边界凭证。</p>
+            </div>
+        </div>
+        <div class="hrw-table-wrap">
+            <table class="hrw-table">
+                <thead>
+                    <tr>
+                        <th scope="col">乡镇</th>
+                        <th scope="col">P90 风险分</th>
+                        <th scope="col">平均分</th>
+                        <th scope="col">高/极高格</th>
+                        <th scope="col">热点格</th>
+                        <th scope="col">评分格 / 全部格</th>
+                    </tr>
+                </thead>
+                <tbody id="hrwTownBody"></tbody>
+            </table>
+        </div>
+    </section>
+
+    <section class="hrw-section hrw-method" aria-labelledby="hrwMethodTitle">
+        <div class="hrw-section-head">
+            <div>
+                <span class="hrw-kicker">METHOD & SOURCES</span>
+                <h2 id="hrwMethodTitle">方法与来源</h2>
+                <p>综合风险分、逐日等级和巡访排序全部可追溯到公开数据与公式。科研版视图保留原始七个图层、原生几何与 SHA-256 指纹。</p>
+            </div>
+        </div>
+        <div class="hrw-method-grid">
+            <article>
+                <h3>1. 综合热风险分 {{ metric_info('gis_risk_score') }}</h3>
+                <p>风险 = 危险性 × 暴露 × 脆弱性（IPCC AR6）。危险性为 2020–2024 夏季 Aqua 白天晴空地表温度，暴露为 ASPECT 65 岁及以上人口比例，脆弱性由树荫缺口、建成区比例与到最近医疗点距离合成。三项在有人居住的陆地网格中取百分位，等权几何平均后乘 100。</p>
+            </article>
+            <article>
+                <h3>2. 湖面屏蔽与双变量 {{ metric_info('gis_bivariate') }}</h3>
+                <p>近似永久水域 ≥ 50% 的 626 个网格视为鄱阳湖湖面，不参与评分与分级。双变量图把地表温度与 65+ 比例各分三档，c3 表示又热又老。</p>
+            </article>
+            <article>
+                <h3>3. 热点与稳定性 {{ metric_info('gis_rank_stability') }}</h3>
+                <p>Getis-Ord Gi* 以 Queen 8 邻域检验成片高风险，经 Benjamini–Hochberg 校正。权重随机扰动 ±20% 重算 500 次，报告每格排名区间，区间窄说明结论不依赖权重设定。</p>
+            </article>
+            <article>
+                <h3>4. 逐日等级与行动 {{ metric_info('gis_daily_level') }}</h3>
+                <p>预报最高气温按中国气象局 35/37/40 °C 口径分级；最低气温达到都昌全年第 95 百分位（热夜）或连续 3 个高温日时上调一级。再与静态风险组合为当日 0–4 级，并给出医生与照护者行动卡。</p>
+            </article>
+        </div>
+        <div class="hrw-matrix-wrap">
+            <table class="hrw-matrix" aria-label="逐日风险矩阵">
+                <caption>逐日风险矩阵：行为当天危险等级，列为网格静态风险等级</caption>
+                <thead><tr><th scope="col">危险等级 \ 静态等级</th><th scope="col">0–1 较低/轻度</th><th scope="col">2 中度</th><th scope="col">3–4 高/极高</th></tr></thead>
+                <tbody id="hrwMatrixBody"></tbody>
+            </table>
+        </div>
+        <div class="hrw-sources">
+            <h3>文献与数据</h3>
+            <ul id="hrwSources"></ul>
+            <p class="hrw-limitations"><strong>使用边界：</strong>地表温度不等于 2 米气温；65+ 为模型化比例；医疗点多为乡镇驻地近似位置；排序尚未用本地就诊结局验证，需结合实地情况判断。</p>
+            <div class="hrw-downloads">
+                <a href="{{ gis_data_url }}" download="duchang_heat_exposure_cells.geojson"><i class="bi bi-download" aria-hidden="true"></i>网格 GeoJSON</a>
+                <a href="{{ workbench_data_url }}" download="duchang_heat_risk_workbench.json"><i class="bi bi-download" aria-hidden="true"></i>风险分 JSON</a>
+                <a href="{{ legacy_url }}"><i class="bi bi-journal-text" aria-hidden="true"></i>科研版视图（v1.2）</a>
+            </div>
+            <p class="hrw-build" id="hrwBuild"></p>
+        </div>
+    </section>
+
+    <section class="hrw-print-sheet" id="hrwPrintSheet" aria-hidden="true"></section>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script src="{{ url_for('static', filename='vendor/leaflet/dist/leaflet.js') }}"></script>
+<script src="{{ url_for('static', filename='js/heat-risk-workbench.js') }}"></script>
+{% endblock %}
