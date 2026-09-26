@@ -2,6 +2,8 @@
 
 版本：v1.2 研究原型
 
+> 2026-09 起，`/heat-exposure-gis` 默认显示基于本数据构建的热风险医生工作台，方法见 [heat-risk-workbench-method.md](heat-risk-workbench-method.md)。本页所述 v1.2 科研版仍可通过 `?ui=legacy` 访问。
+
 生成日期：2026-07-15
 展示坐标系：WGS84，EPSG:4326
 
