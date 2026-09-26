@@ -1,5 +1,13 @@
 # -*- coding: utf-8 -*-
-"""API routes."""
+"""API routes.
+
+每个接口在表里声明一行，统一注册两个地址：
+- `/api/v1/<path>`，endpoint `api_v1_<name>`，挂登录校验与限流；
+- `/api/<path>`（兼容旧地址），endpoint `api_<name>`，转调 v1 视图，因此同样受登录与限流约束。
+
+视图函数名与改造前逐字一致（Flask-Limiter 以函数全名区分限流桶），
+既有客户端、url_for 与限流计数都不受影响。
+"""
 from flask import Blueprint, current_app
 from flask_login import login_required
 
@@ -15,273 +23,77 @@ def _api_csrf_protect():
     return api_service._api_csrf_protect()
 
 
-# ======================== 天气/社区基础API ========================
-
-@bp.route('/api/v1/weather/current', endpoint='api_v1_current_weather')
-@limiter.limit(lambda: current_app.config.get('RATE_LIMIT_WEATHER', '120 per minute'), key_func=rate_limit_key)
-def api_v1_current_weather():
-    """获取当前天气（v1）"""
-    return api_service._api_current_weather()
-
-
-@bp.route('/api/weather/current', endpoint='api_current_weather')
-def api_current_weather():
-    """获取当前天气（兼容）"""
-    return api_v1_current_weather()
-
-
-@bp.route('/api/v1/weather/nowcast', endpoint='api_v1_weather_nowcast')
-@limiter.limit(lambda: current_app.config.get('RATE_LIMIT_WEATHER', '120 per minute'), key_func=rate_limit_key)
-def api_v1_weather_nowcast():
-    """获取短临小时级降水时间轴（v1）"""
-    return api_service._api_weather_nowcast()
-
-
-@bp.route('/api/weather/nowcast', endpoint='api_weather_nowcast')
-def api_weather_nowcast():
-    """获取短临小时级降水时间轴（兼容）"""
-    return api_v1_weather_nowcast()
-
-
-@bp.route('/api/v1/community/risk-map', endpoint='api_v1_community_risk_map')
-def api_v1_community_risk_map():
-    """获取社区风险地图数据（v1）"""
-    return api_service._api_community_risk_map()
-
-
-@bp.route('/api/community/risk-map', endpoint='api_community_risk_map')
-def api_community_risk_map():
-    """获取社区风险地图数据（兼容）"""
-    return api_v1_community_risk_map()
-
-
-@bp.route('/api/v1/statistics/disease-weather', endpoint='api_v1_disease_weather_stats')
-def api_v1_disease_weather_stats():
-    """疾病与天气相关性统计（v1）"""
-    return api_service._api_disease_weather_stats()
-
-
-@bp.route('/api/statistics/disease-weather', endpoint='api_disease_weather_stats')
-def api_disease_weather_stats():
-    """疾病与天气相关性统计（兼容）"""
-    return api_v1_disease_weather_stats()
-
-
-# ======================== ML预测API ========================
-
-@bp.route('/api/v1/ml/predict', methods=['POST'], endpoint='api_v1_ml_predict')
-@login_required
-@limiter.limit(lambda: current_app.config.get('RATE_LIMIT_ML', '60 per minute'), key_func=rate_limit_key)
-def api_v1_ml_predict():
-    """使用机器学习模型进行疾病风险预测（v1）"""
-    return api_service._api_ml_predict()
-
-
-@bp.route('/api/ml/predict', methods=['POST'], endpoint='api_ml_predict')
-def api_ml_predict():
-    """使用机器学习模型进行疾病风险预测（兼容）"""
-    return api_v1_ml_predict()
-
-
-@bp.route('/api/v1/ml/predict-community', methods=['POST'], endpoint='api_v1_ml_predict_community')
-@login_required
-@limiter.limit(lambda: current_app.config.get('RATE_LIMIT_ML', '60 per minute'), key_func=rate_limit_key)
-def api_v1_ml_predict_community():
-    """使用机器学习模型进行社区风险预测（v1）"""
-    return api_service._api_ml_predict_community()
-
-
-@bp.route('/api/ml/predict-community', methods=['POST'], endpoint='api_ml_predict_community')
-def api_ml_predict_community():
-    """使用机器学习模型进行社区风险预测（兼容）"""
-    return api_v1_ml_predict_community()
-
-
-@bp.route('/api/v1/ml/status', endpoint='api_v1_ml_status')
-def api_v1_ml_status():
-    """获取ML模型状态（v1）"""
-    return api_service._api_ml_status()
-
-
-@bp.route('/api/ml/status', endpoint='api_ml_status')
-def api_ml_status():
-    """获取ML模型状态（兼容）"""
-    return api_v1_ml_status()
-
-
-# ======================== DLNM风险预测API ========================
-
-@bp.route('/api/v1/dlnm/risk', methods=['POST'], endpoint='api_v1_dlnm_risk')
-@login_required
-def api_v1_dlnm_risk():
-    """DLNM风险函数计算（v1）"""
-    return api_service._api_dlnm_risk()
-
-
-@bp.route('/api/dlnm/risk', methods=['POST'], endpoint='api_dlnm_risk')
-def api_dlnm_risk():
-    """DLNM风险函数计算（兼容）"""
-    return api_v1_dlnm_risk()
-
-
-@bp.route('/api/v1/dlnm/summary', endpoint='api_v1_dlnm_summary')
-def api_v1_dlnm_summary():
-    """获取DLNM模型摘要（v1）"""
-    return api_service._api_dlnm_summary()
-
-
-@bp.route('/api/dlnm/summary', endpoint='api_dlnm_summary')
-def api_dlnm_summary():
-    """获取DLNM模型摘要（兼容）"""
-    return api_v1_dlnm_summary()
-
-
-# ======================== 7天预测API ========================
-
-@bp.route('/api/v1/forecast/7day', methods=['POST'], endpoint='api_v1_forecast_7day')
-@login_required
-@limiter.limit(lambda: current_app.config.get('RATE_LIMIT_FORECAST', '60 per minute'), key_func=rate_limit_key)
-def api_v1_forecast_7day():
-    """获取未来7天健康预测（v1）"""
-    return api_service._api_forecast_7day()
-
-
-@bp.route('/api/forecast/7day', methods=['POST'], endpoint='api_forecast_7day')
-def api_forecast_7day():
-    """获取未来7天健康预测（兼容）"""
-    return api_v1_forecast_7day()
-
-
-@bp.route('/api/v1/forecast/daily', methods=['POST'], endpoint='api_v1_forecast_daily')
-@login_required
-@limiter.limit(lambda: current_app.config.get('RATE_LIMIT_FORECAST', '60 per minute'), key_func=rate_limit_key)
-def api_v1_forecast_daily():
-    """获取单日门诊预测（v1）"""
-    return api_service._api_forecast_daily()
-
-
-@bp.route('/api/forecast/daily', methods=['POST'], endpoint='api_forecast_daily')
-def api_forecast_daily():
-    """获取单日门诊预测（兼容）"""
-    return api_v1_forecast_daily()
-
-
-# ======================== 社区风险地图API ========================
-
-@bp.route('/api/v1/community/risk-map-v2', methods=['POST'], endpoint='api_v1_community_risk_map_v2')
-@login_required
-def api_v1_community_risk_map_v2():
-    """获取社区风险地图数据（改进版v1）"""
-    return api_service._api_community_risk_map_v2()
-
-
-@bp.route('/api/community/risk-map-v2', methods=['POST'], endpoint='api_community_risk_map_v2')
-def api_community_risk_map_v2():
-    """获取社区风险地图数据（改进版兼容）"""
-    return api_v1_community_risk_map_v2()
-
-
-@bp.route('/api/v1/community/vulnerability/<community_name>', endpoint='api_v1_community_vulnerability')
-def api_v1_community_vulnerability(community_name):
-    """获取单个社区脆弱性指数（v1）"""
-    return api_service._api_community_vulnerability(community_name)
-
-
-@bp.route('/api/community/vulnerability/<community_name>', endpoint='api_community_vulnerability')
-def api_community_vulnerability(community_name):
-    """获取单个社区脆弱性指数（兼容）"""
-    return api_v1_community_vulnerability(community_name)
-
-
-@bp.route('/api/v1/community/list', endpoint='api_v1_community_list')
-def api_v1_community_list():
-    """获取所有社区列表及脆弱性（v1）"""
-    return api_service._api_community_list()
-
-
-@bp.route('/api/community/list', endpoint='api_community_list')
-def api_community_list():
-    """获取所有社区列表及脆弱性（兼容）"""
-    return api_v1_community_list()
-
-
-# ======================== 慢病风险预测API ========================
-
-@bp.route('/api/v1/chronic/individual', methods=['POST'], endpoint='api_v1_chronic_individual')
-@login_required
-@limiter.limit(lambda: current_app.config.get('RATE_LIMIT_CHRONIC', '60 per minute'), key_func=rate_limit_key)
-def api_v1_chronic_individual():
-    """个体慢病风险预测（v1）"""
-    return api_service._api_chronic_individual()
-
-
-@bp.route('/api/chronic/individual', methods=['POST'], endpoint='api_chronic_individual')
-def api_chronic_individual():
-    """个体慢病风险预测（兼容）"""
-    return api_v1_chronic_individual()
-
-
-@bp.route('/api/v1/chronic/population', methods=['POST'], endpoint='api_v1_chronic_population')
-@login_required
-def api_v1_chronic_population():
-    """人群分层慢病风险预测（v1）"""
-    return api_service._api_chronic_population()
-
-
-@bp.route('/api/chronic/population', methods=['POST'], endpoint='api_chronic_population')
-def api_chronic_population():
-    """人群分层慢病风险预测（兼容）"""
-    return api_v1_chronic_population()
-
-
-# ======================== AI问答API ========================
-
-@bp.route('/api/v1/ai/ask', methods=['POST'], endpoint='api_v1_ai_ask')
-@login_required
-@limiter.limit(lambda: current_app.config.get('RATE_LIMIT_AI', '30 per hour'), key_func=rate_limit_key)
-def api_v1_ai_ask():
-    """AI问答接口（v1）"""
-    return api_service._api_ai_ask()
-
-
-@bp.route('/api/ai/ask', methods=['POST'], endpoint='api_ai_ask')
-def api_ai_ask():
-    """AI问答接口（兼容）"""
-    return api_v1_ai_ask()
-
-
-@bp.route('/api/v1/chronic/rules-version', endpoint='api_v1_chronic_rules_version')
-def api_v1_chronic_rules_version():
-    """获取慢病规则库版本（v1）"""
-    return api_service._api_chronic_rules_version()
-
-
-@bp.route('/api/chronic/rules-version', endpoint='api_chronic_rules_version')
-def api_chronic_rules_version():
-    """获取慢病规则库版本（兼容）"""
-    return api_v1_chronic_rules_version()
-
-
-# ======================== 综合预警API ========================
-
-@bp.route('/api/v1/alert/comprehensive', methods=['POST'], endpoint='api_v1_comprehensive_alert')
-@login_required
-@limiter.limit(lambda: current_app.config.get('RATE_LIMIT_FORECAST', '60 per minute'), key_func=rate_limit_key)
-def api_v1_comprehensive_alert():
-    """获取综合健康预警（v1）"""
-    return api_service._api_comprehensive_alert()
-
-
-@bp.route('/api/alert/comprehensive', methods=['POST'], endpoint='api_comprehensive_alert')
-def api_comprehensive_alert():
-    """获取综合健康预警（兼容）"""
-    return api_v1_comprehensive_alert()
-
-
-# ======================== Pilot 埋点API ========================
-
-@bp.route('/api/v1/events', methods=['POST'], endpoint='api_v1_events')
-@login_required
-def api_v1_events():
-    """写入试点埋点事件（v1）"""
-    return api_service._api_usage_event()
+# 限流配置: (配置项, 默认值)
+WEATHER = ('RATE_LIMIT_WEATHER', '120 per minute')
+ML = ('RATE_LIMIT_ML', '60 per minute')
+FORECAST = ('RATE_LIMIT_FORECAST', '60 per minute')
+CHRONIC = ('RATE_LIMIT_CHRONIC', '60 per minute')
+AI = ('RATE_LIMIT_AI', '30 per hour')
+
+POST = ('POST',)
+
+# (endpoint 名, 路径, 处理函数, HTTP 方法, 需要登录, 限流, 保留兼容地址)
+API_ROUTES = [
+    # 天气/社区基础
+    ('current_weather', 'weather/current', api_service._api_current_weather, None, False, WEATHER, True),
+    ('weather_nowcast', 'weather/nowcast', api_service._api_weather_nowcast, None, False, WEATHER, True),
+    ('community_risk_map', 'community/risk-map', api_service._api_community_risk_map, None, False, None, True),
+    ('disease_weather_stats', 'statistics/disease-weather', api_service._api_disease_weather_stats,
+     None, False, None, True),
+    # ML 预测
+    ('ml_predict', 'ml/predict', api_service._api_ml_predict, POST, True, ML, True),
+    ('ml_predict_community', 'ml/predict-community', api_service._api_ml_predict_community, POST, True, ML, True),
+    ('ml_status', 'ml/status', api_service._api_ml_status, None, False, None, True),
+    # DLNM 风险函数
+    ('dlnm_risk', 'dlnm/risk', api_service._api_dlnm_risk, POST, True, None, True),
+    ('dlnm_summary', 'dlnm/summary', api_service._api_dlnm_summary, None, False, None, True),
+    # 7 天与单日预测
+    ('forecast_7day', 'forecast/7day', api_service._api_forecast_7day, POST, True, FORECAST, True),
+    ('forecast_daily', 'forecast/daily', api_service._api_forecast_daily, POST, True, FORECAST, True),
+    # 社区风险地图与脆弱性
+    ('community_risk_map_v2', 'community/risk-map-v2', api_service._api_community_risk_map_v2,
+     POST, True, None, True),
+    ('community_vulnerability', 'community/vulnerability/<community_name>',
+     api_service._api_community_vulnerability, None, False, None, True),
+    ('community_list', 'community/list', api_service._api_community_list, None, False, None, True),
+    # 慢病风险
+    ('chronic_individual', 'chronic/individual', api_service._api_chronic_individual, POST, True, CHRONIC, True),
+    ('chronic_population', 'chronic/population', api_service._api_chronic_population, POST, True, None, True),
+    # AI 问答
+    ('ai_ask', 'ai/ask', api_service._api_ai_ask, POST, True, AI, True),
+    ('chronic_rules_version', 'chronic/rules-version', api_service._api_chronic_rules_version,
+     None, False, None, True),
+    # 综合预警
+    ('comprehensive_alert', 'alert/comprehensive', api_service._api_comprehensive_alert,
+     POST, True, FORECAST, True),
+    # 试点埋点（只有 v1 地址）
+    ('events', 'events', api_service._api_usage_event, POST, True, None, False),
+]
+
+
+def _named(func, name):
+    func.__name__ = name
+    func.__qualname__ = name
+    return func
+
+
+def _register(name, path, handler, methods, needs_login, limit, with_compat):
+    v1_name = f'api_v1_{name}'
+    view = _named(lambda **kwargs: handler(**kwargs), v1_name)
+    if limit:
+        config_key, default = limit
+        view = limiter.limit(
+            lambda: current_app.config.get(config_key, default), key_func=rate_limit_key
+        )(view)
+    if needs_login:
+        view = login_required(view)
+    bp.add_url_rule(f'/api/v1/{path}', endpoint=v1_name, view_func=view, methods=methods)
+
+    if with_compat:
+        compat_name = f'api_{name}'
+        compat = _named(lambda **kwargs: view(**kwargs), compat_name)
+        bp.add_url_rule(f'/api/{path}', endpoint=compat_name, view_func=compat, methods=methods)
+
+
+for _route in API_ROUTES:
+    _register(*_route)
