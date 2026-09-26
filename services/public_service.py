@@ -1,6 +1,5 @@
 # -*- coding: utf-8 -*-
 """Public-facing business logic extracted from blueprints."""
-import json
 import logging
 import math
 import secrets
@@ -35,6 +34,8 @@ from core.db_models import (
     User
 )
 from services.heat_action_service import HeatActionService
+from services.user._common import _action_plan, _short_code_expires_at
+from services.user._helpers import _build_recent_series, _refresh_community_daily
 from utils.parsers import parse_bool, parse_float
 from utils.audit_log import log_security_event
 from utils.database import atomic_transaction
@@ -277,41 +278,6 @@ def _clear_short_code_failures():
             db.session.delete(attempt)
 
 
-def _risk_level_value(label):
-    return {
-        '低风险': 1,
-        '中风险': 2,
-        '高风险': 3,
-        '极高': 4
-    }.get(label, 0)
-
-
-def _action_plan(risk_label):
-    if risk_label == '极高':
-        return [
-            {'id': 'stay_cool', 'title': '留在有降温条件的室内', 'detail': '尽量避免外出，保持室内通风降温。'},
-            {'id': 'contact_now', 'title': '立即联系照护人/邻里', 'detail': '提前告知今日风险与行动安排。'},
-            {'id': 'cooling_center', 'title': '条件不足时优先去避暑点', 'detail': '优先选择就近、开放的避暑场所。'}
-        ]
-    if risk_label == '高风险':
-        return [
-            {'id': 'stay_indoor', 'title': '尽量待在阴凉通风处', 'detail': '避开正午高温时段外出。'},
-            {'id': 'hydrate', 'title': '少量多次补水', 'detail': '身边备好水或淡盐饮品。'},
-            {'id': 'check_in', 'title': '安排每日确认', 'detail': '与家人/邻里保持联系。'}
-        ]
-    if risk_label == '中风险':
-        return [
-            {'id': 'avoid_sun', 'title': '减少连续暴晒', 'detail': '户外活动分段进行。'},
-            {'id': 'cooling', 'title': '准备降温物品', 'detail': '风扇、湿毛巾或遮阳物品。'},
-            {'id': 'watch_signs', 'title': '关注体感变化', 'detail': '感到不适及时休息。'}
-        ]
-    return [
-        {'id': 'water', 'title': '规律补水', 'detail': '保持日常饮水习惯。'},
-        {'id': 'ventilate', 'title': '室内通风', 'detail': '早晚开窗换气。'},
-        {'id': 'shade', 'title': '适度遮阳', 'detail': '外出注意遮阳防晒。'}
-    ]
-
-
 def _resolve_pair(short_code, token):
     short_code_hash = hash_short_code(short_code)
     pair = Pair.query.filter_by(short_code_hash=short_code_hash, status='active').first()
@@ -391,14 +357,6 @@ def _pair_short_code_is_valid(pair):
     return ensure_utc_aware(expires_at) >= utcnow()
 
 
-def _short_code_expires_at():
-    try:
-        days = int(current_app.config.get('SHORT_CODE_TTL_DAYS', 90))
-    except (TypeError, ValueError):
-        days = 90
-    return utcnow() + timedelta(days=max(1, days))
-
-
 def _validate_pair_action_token(pair, short_code, token):
     token = (token or '').strip()
     short_code = (short_code or '').replace(' ', '').strip()
@@ -434,83 +392,6 @@ def _get_or_create_daily_status(pair, status_date, risk_label):
     elif risk_label and not status.risk_level:
         status.risk_level = risk_label
     return status
-
-
-def _build_recent_series(pair_id, days=7):
-    end_date = today_local()
-    start_date = end_date - timedelta(days=days - 1)
-    statuses = DailyStatus.query.filter(
-        DailyStatus.pair_id == pair_id,
-        DailyStatus.status_date >= start_date,
-        DailyStatus.status_date <= end_date
-    ).all()
-    status_map = {item.status_date: item for item in statuses}
-    series = []
-    for offset in range(days):
-        day = start_date + timedelta(days=offset)
-        status = status_map.get(day)
-        risk_label = status.risk_level if status else None
-        series.append({
-            'date': day.strftime('%m-%d'),
-            'risk_label': risk_label,
-            'risk_value': _risk_level_value(risk_label),
-            'confirmed': 1 if status and status.confirmed_at else 0
-        })
-    return series
-
-
-def _refresh_community_daily(community_code, status_date):
-    from core.db_models import CommunityDaily
-
-    total_people = Pair.query.filter_by(status='active', community_code=community_code).count()
-    statuses = DailyStatus.query.join(
-        Pair,
-        Pair.id == DailyStatus.pair_id,
-    ).filter(
-        DailyStatus.community_code == community_code,
-        DailyStatus.status_date == status_date,
-        Pair.community_code == community_code,
-        Pair.status == 'active',
-    ).all()
-    confirmed_count = min(sum(1 for s in statuses if s.confirmed_at), total_people)
-    help_count = sum(1 for s in statuses if s.help_flag)
-    escalation_count = min(
-        sum(1 for s in statuses if s.relay_stage in ('backup', 'community', 'emergency')),
-        total_people,
-    )
-    risk_dist = {'低风险': 0, '中风险': 0, '高风险': 0, '极高': 0}
-    for status in statuses:
-        if status.risk_level in risk_dist:
-            risk_dist[status.risk_level] += 1
-    if total_people <= 0:
-        summary = '暂无可用行动数据。'
-    else:
-        pending = max(total_people - confirmed_count, 0)
-        if escalation_count > 0:
-            summary = f'已有{escalation_count}个家庭进入升级链，优先安排社区跟进。'
-        elif help_count > 0:
-            summary = f'已有{help_count}个家庭发出求助，请尽快联系。'
-        elif pending > 0:
-            summary = f'仍有{pending}个家庭未确认，建议分批提醒。'
-        else:
-            summary = '全部家庭已完成确认，继续关注高温变化。'
-
-    confirm_rate = (confirmed_count / total_people) if total_people else 0
-    escalation_rate = (escalation_count / total_people) if total_people else 0
-
-    record = CommunityDaily.query.filter_by(
-        community_code=community_code,
-        date=status_date
-    ).first()
-    if not record:
-        record = CommunityDaily(community_code=community_code, date=status_date)
-        db.session.add(record)
-    record.total_people = total_people
-    record.confirm_rate = round(confirm_rate, 4)
-    record.escalation_rate = round(escalation_rate, 4)
-    record.risk_distribution = json.dumps(risk_dist, ensure_ascii=False)
-    record.outreach_summary = summary
-    db.session.commit()
 
 
 def _build_action_context(pair, status_date):
