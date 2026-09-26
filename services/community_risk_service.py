@@ -1337,23 +1337,6 @@ class CommunityRiskService:
         
         return suggestions
     
-    def update_community_sensitivity(self, community_name, heat_sensitivity=None, cold_sensitivity=None):
-        """
-        更新社区天气敏感性参数 (v_c)
-        
-        这是模型中的关键参数，表示社区对高温/寒冷的额外敏感性
-        """
-        if community_name not in self.community_sensitivity:
-            self.community_sensitivity[community_name] = {
-                'heat_sensitivity': 1.0,
-                'cold_sensitivity': 1.0
-            }
-        
-        if heat_sensitivity is not None:
-            self.community_sensitivity[community_name]['heat_sensitivity'] = heat_sensitivity
-        
-        if cold_sensitivity is not None:
-            self.community_sensitivity[community_name]['cold_sensitivity'] = cold_sensitivity
     
     def get_community_profile(self, community_name):
         """获取社区档案"""

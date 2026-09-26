@@ -1,8 +1,7 @@
 # -*- coding: utf-8 -*-
 """Caregiver-related routes and helpers."""
 import logging
-import math
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from flask import current_app, flash, redirect, render_template, request, session, url_for
 from flask_login import current_user
@@ -14,13 +13,11 @@ from core.time_utils import today_local, utcnow, local_datetime_to_utc
 from core.weather import (
     get_consecutive_hot_days,
     get_weather_with_cache,
-    is_qweather_online_weather,
     normalize_location_name,
 )
 from core.usage import log_usage_event
 from services.heat_action_service import HeatActionService
 from services.location_resolver import resolve_location
-from utils.audit_log import log_security_event
 from utils.database import atomic_transaction
 from utils.parsers import json_or_none, safe_json_loads
 from utils.validators import sanitize_input
@@ -33,43 +30,22 @@ from ._common import (
     RELAY_STAGE_ORDER,
     _action_plan,
     _build_pair_action_link,
-    _create_pair_link_record,
     _create_pair_record,
     _relay_stage_rank,
     _require_roles
 )
 from ._helpers import (
+    WEATHER_WAITING_LABEL,
     _auto_escalate_overdue_statuses,
     _build_caregiver_message,
     _build_community_snapshot,
     _build_recent_series,
+    _heat_weather_available,
+    _load_heat_risk_with,
     _refresh_community_daily
 )
 
 logger = logging.getLogger(__name__)
-
-_REQUIRED_HEAT_WEATHER_FIELDS = (
-    'temperature',
-    'temperature_max',
-    'temperature_min',
-    'humidity',
-)
-_WEATHER_WAITING_LABEL = '天气更新中'
-
-
-def _heat_weather_available(weather_data):
-    """仅允许字段完整的真实和风天气进入热风险计算。"""
-    if not is_qweather_online_weather(weather_data):
-        return False
-    for field in _REQUIRED_HEAT_WEATHER_FIELDS:
-        try:
-            value = float(weather_data.get(field))
-        except (AttributeError, TypeError, ValueError):
-            return False
-        if not math.isfinite(value):
-            return False
-    return True
-
 
 def _build_weather_waiting_message(pair, action_link):
     """天气不可用时只保留行动入口，不生成风险结论或风险建议。"""
@@ -86,47 +62,7 @@ def _build_weather_waiting_message(pair, action_link):
 
 def _load_heat_risk(location):
     """读取真实天气并计算热风险；任一步失败都返回不可用状态。"""
-    weather_data, _ = get_weather_with_cache(location)
-    if not _heat_weather_available(weather_data):
-        return weather_data, None, None
-    try:
-        consecutive_hot_days = get_consecutive_hot_days(
-            location,
-            today_max=weather_data.get('temperature_max')
-        )
-        heat_result = HeatActionService().calculate_heat_risk(
-            weather_data,
-            consecutive_hot_days=consecutive_hot_days
-        )
-    except Exception:
-        logger.warning("真实天气热风险计算失败，已停止输出结论", exc_info=True)
-        return weather_data, None, None
-    risk_label = HEAT_RISK_LABELS.get(heat_result['risk_level'], '低风险')
-    return weather_data, heat_result, risk_label
-
-
-def _create_pair_link(community_code):
-    with atomic_transaction():
-        link, token = _create_pair_link_record(
-            caregiver_id=current_user.id,
-            community_code=community_code,
-            expires_after=timedelta(days=3),
-            flush=True
-        )
-        log_security_event(
-            action='short_code_generated',
-            actor_id=getattr(current_user, 'id', None),
-            actor_role=getattr(current_user, 'role', None),
-            resource_type='pair_link',
-            resource_id=str(link.id),
-            extra_data={
-                'community_code': community_code,
-                'short_code_hash': link.short_code_hash
-            }
-        )
-    session['pair_link_token'] = token
-    session['pair_link_id'] = link.id
-    return link, token
+    return _load_heat_risk_with(location, get_weather_with_cache, get_consecutive_hot_days, logger)
 
 
 def _create_pair(location_query, member_id=None):
@@ -241,7 +177,7 @@ def _build_pair_management_context(caregiver_mode=False):
         weather_data = weather_by_code.get(code, {}) if code else {}
 
         weather_available = _heat_weather_available(weather_data)
-        risk_label = _WEATHER_WAITING_LABEL
+        risk_label = WEATHER_WAITING_LABEL
         heat_result = {}
         if weather_available:
             try:
@@ -257,7 +193,7 @@ def _build_pair_management_context(caregiver_mode=False):
             except Exception:
                 weather_available = False
                 heat_result = {}
-                risk_label = _WEATHER_WAITING_LABEL
+                risk_label = WEATHER_WAITING_LABEL
                 logger.warning("真实天气热风险计算失败，已停止输出结论", exc_info=True)
 
         # Pilot alert label (heat/cold threshold)

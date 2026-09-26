@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 """Community-related routes."""
 import logging
-import math
 
 from flask import current_app, flash, redirect, render_template, request, url_for
 from flask_login import current_user
@@ -11,10 +10,9 @@ from core.time_utils import now_local, today_local
 from core.weather import (
     get_consecutive_hot_days,
     get_weather_with_cache,
-    is_qweather_online_weather,
     normalize_location_name,
 )
-from services.heat_action_service import HeatActionService
+from services.heat_action_service import HeatActionService  # noqa: F401  测试经由本模块路径替换其方法
 from utils.validators import sanitize_input
 
 from ._common import (
@@ -28,6 +26,7 @@ from ._common import (
     _require_roles
 )
 from ._helpers import (
+    WEATHER_WAITING_LABEL,
     _auto_escalate_overdue_statuses,
     _build_announce_message,
     _build_community_message,
@@ -35,52 +34,15 @@ from ._helpers import (
     _build_outreach_suggestions,
     _build_risk_counts,
     _community_access_allowed,
+    _heat_weather_available,  # noqa: F401  测试从本模块导入
+    _load_heat_risk_with,
 )
 
 logger = logging.getLogger(__name__)
 
-_REQUIRED_HEAT_WEATHER_FIELDS = (
-    'temperature',
-    'temperature_max',
-    'temperature_min',
-    'humidity',
-)
-_WEATHER_WAITING_LABEL = '天气更新中'
-
-
-def _heat_weather_available(weather_data):
-    """仅允许字段完整的真实和风天气进入社区热风险计算。"""
-    if not is_qweather_online_weather(weather_data):
-        return False
-    for field in _REQUIRED_HEAT_WEATHER_FIELDS:
-        try:
-            value = float(weather_data.get(field))
-        except (AttributeError, TypeError, ValueError):
-            return False
-        if not math.isfinite(value):
-            return False
-    return True
-
-
 def _load_heat_risk(location):
     """读取真实天气并计算热风险；失败时不输出风险结论。"""
-    weather_data, _ = get_weather_with_cache(location)
-    if not _heat_weather_available(weather_data):
-        return weather_data, None, None
-    try:
-        consecutive_hot_days = get_consecutive_hot_days(
-            location,
-            today_max=weather_data.get('temperature_max')
-        )
-        heat_result = HeatActionService().calculate_heat_risk(
-            weather_data,
-            consecutive_hot_days=consecutive_hot_days
-        )
-    except Exception:
-        logger.warning("真实天气热风险计算失败，已停止输出结论", exc_info=True)
-        return weather_data, None, None
-    risk_label = HEAT_RISK_LABELS.get(heat_result['risk_level'], '低风险')
-    return weather_data, heat_result, risk_label
+    return _load_heat_risk_with(location, get_weather_with_cache, get_consecutive_hot_days, logger)
 
 
 def community_dashboard():
@@ -155,7 +117,7 @@ def community_dashboard():
         _weather_data, _heat_result, risk_label = _load_heat_risk(location)
         weather_available = risk_label is not None
         if not weather_available:
-            risk_label = _WEATHER_WAITING_LABEL
+            risk_label = WEATHER_WAITING_LABEL
         resources = resources_by_comm.get(comm.name, [])
         outreach_suggestions = _build_outreach_suggestions(
             snapshot.get('total_people', 0),
@@ -233,7 +195,7 @@ def community_detail(community_code):
     _weather_data, _heat_result, risk_label = _load_heat_risk(location)
     weather_available = risk_label is not None
     if not weather_available:
-        risk_label = _WEATHER_WAITING_LABEL
+        risk_label = WEATHER_WAITING_LABEL
 
     debrief_total = Debrief.query.filter_by(
         community_code=community_code,
@@ -323,7 +285,7 @@ def community_wechat(community_code):
         'community_wechat.html',
         message='\n'.join(message_lines),
         community_code=community_code,
-        risk_label=risk_label if weather_available else _WEATHER_WAITING_LABEL,
+        risk_label=risk_label if weather_available else WEATHER_WAITING_LABEL,
         weather_available=weather_available,
         actions=actions,
         resources=resources
@@ -378,7 +340,7 @@ def community_announce():
         'community_announce.html',
         messages=messages,
         location=display_location,
-        risk_label=risk_label if weather_available else _WEATHER_WAITING_LABEL,
+        risk_label=risk_label if weather_available else WEATHER_WAITING_LABEL,
         weather_available=weather_available,
         updated_at=updated_at,
         disclaimer_lines=ANNOUNCE_DISCLAIMER_LINES,

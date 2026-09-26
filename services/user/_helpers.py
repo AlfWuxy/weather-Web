@@ -1,32 +1,79 @@
 # -*- coding: utf-8 -*-
 """User-facing helper utilities."""
 import json
+import math
 from datetime import timedelta
 
 from flask import url_for
 from flask_login import current_user
 
 from core.extensions import db
-from core.security import hash_short_code
 from core.time_utils import now_local, today_local, utcnow, ensure_utc_aware
-from core.weather import is_demo_mode
+from core.weather import is_qweather_online_weather
 from core.db_models import CommunityDaily, DailyStatus, Pair
+from services.heat_action_service import HeatActionService
 from utils.parsers import safe_json_loads
 
 from ._common import (
     ANNOUNCE_DISCLAIMER_LINES,
+    HEAT_RISK_LABELS,
     ANNOUNCE_SOURCE_LINES,
     AUTO_ESCALATE_AFTER,
     AUTO_ESCALATE_STAGE,
     _action_plan,
-    _generate_elder_code,
-    _generate_short_code,
     _normalize_code,
     _relay_stage_rank,
     _risk_level_value
 )
 
 _MISSING = object()
+
+REQUIRED_HEAT_WEATHER_FIELDS = (
+    'temperature',
+    'temperature_max',
+    'temperature_min',
+    'humidity',
+)
+WEATHER_WAITING_LABEL = '天气更新中'
+
+
+def _heat_weather_available(weather_data):
+    """仅允许字段完整的真实和风天气进入热风险计算。"""
+    if not is_qweather_online_weather(weather_data):
+        return False
+    for field in REQUIRED_HEAT_WEATHER_FIELDS:
+        try:
+            value = float(weather_data.get(field))
+        except (AttributeError, TypeError, ValueError):
+            return False
+        if not math.isfinite(value):
+            return False
+    return True
+
+
+def _load_heat_risk_with(location, fetch_weather, count_hot_days, logger):
+    """读取真实天气并计算热风险；任一步失败都返回不可用状态，不输出风险结论。
+
+    取天气、统计连续高温天数的函数和日志记录器由调用方传入，
+    照护端与社区端各自保留替换点和日志来源。
+    """
+    weather_data, _ = fetch_weather(location)
+    if not _heat_weather_available(weather_data):
+        return weather_data, None, None
+    try:
+        consecutive_hot_days = count_hot_days(
+            location,
+            today_max=weather_data.get('temperature_max')
+        )
+        heat_result = HeatActionService().calculate_heat_risk(
+            weather_data,
+            consecutive_hot_days=consecutive_hot_days
+        )
+    except Exception:
+        logger.warning("真实天气热风险计算失败，已停止输出结论", exc_info=True)
+        return weather_data, None, None
+    risk_label = HEAT_RISK_LABELS.get(heat_result['risk_level'], '低风险')
+    return weather_data, heat_result, risk_label
 
 
 def _auto_escalate_overdue_statuses(statuses, status_date, target_stage=AUTO_ESCALATE_STAGE):
@@ -232,61 +279,6 @@ def _build_announce_message(title, location, risk_label, actions, extra_lines=No
     lines.extend([f'- {item}' for item in ANNOUNCE_SOURCE_LINES])
     lines.append(f'更新时间：{updated_at.strftime("%Y-%m-%d %H:%M")}')
     return '\n'.join(lines)
-
-
-def _ensure_demo_statuses(community_code, status_date, caregiver_id=None, pair_count=3):
-    if not is_demo_mode():
-        return
-    if not community_code:
-        return
-    existing = DailyStatus.query.filter_by(
-        community_code=community_code,
-        status_date=status_date
-    ).count()
-    if existing:
-        return
-
-    pairs = Pair.query.filter_by(
-        community_code=community_code,
-        status='active'
-    ).limit(pair_count).all()
-    if not pairs:
-        if caregiver_id is None:
-            caregiver_id = current_user.id
-        for _ in range(pair_count):
-            short_code = _generate_short_code()
-            pair = Pair(
-                caregiver_id=caregiver_id,
-                community_code=community_code,
-                elder_code=_generate_elder_code(),
-                short_code=short_code,
-                short_code_hash=hash_short_code(short_code),
-                status='active',
-                last_active_at=utcnow()
-            )
-            db.session.add(pair)
-            pairs.append(pair)
-        db.session.flush()
-
-    now = utcnow()
-    risk_labels = ['低风险', '中风险', '高风险', '极高']
-    for idx, pair in enumerate(pairs):
-        status = DailyStatus.query.filter_by(pair_id=pair.id, status_date=status_date).first()
-        if status:
-            continue
-        label = risk_labels[min(idx, len(risk_labels) - 1)]
-        status = DailyStatus(
-            pair_id=pair.id,
-            status_date=status_date,
-            community_code=pair.community_code,
-            risk_level=label,
-            confirmed_at=now - timedelta(hours=idx + 1) if idx % 2 == 0 else None,
-            help_flag=idx == 2,
-            relay_stage='caregiver' if idx == 2 else 'none'
-        )
-        db.session.add(status)
-    db.session.commit()
-    _refresh_community_daily(community_code, status_date)
 
 
 def _community_access_allowed(community_code):
