@@ -1,0 +1,24 @@
+                    <div class="col-xl-2 col-md-4">
+                        <label class="form-label">核验窗口(天)</label>
+                        <select class="form-select" name="follow_days">
+                            {% for option in follow_days_options %}
+                                <option value="{{ option }}" {% if follow_days == option %}selected{% endif %}>{{ option }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-xl-2 col-md-4">
+                        <label class="form-label">阈值分位</label>
+                        <select class="form-select" name="threshold_q">
+                            {% for option in threshold_q_options %}
+                                <option value="{{ option }}" {% if threshold_q == option %}selected{% endif %}>P{{ (option * 100)|round(0)|int }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-xl-2 col-md-4">
+                        <label class="form-label">最小样本天</label>
+                        <select class="form-select" name="min_days">
+                            {% for option in min_days_options %}
+                                <option value="{{ option }}" {% if min_days == option %}selected{% endif %}>{{ option }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>

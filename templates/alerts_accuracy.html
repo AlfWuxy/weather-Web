@@ -163,60 +163,9 @@
             <form method="POST" action="{{ url_for('analysis.alerts_accuracy') }}">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <div class="row g-3">
-                    <div class="col-xl-2 col-md-4">
-                        <label class="form-label">开始日期</label>
-                        <input type="date" class="form-control" name="start_date" value="{{ start_date }}">
-                    </div>
-                    <div class="col-xl-2 col-md-4">
-                        <label class="form-label">结束日期</label>
-                        <input type="date" class="form-control" name="end_date" value="{{ end_date }}">
-                    </div>
-                    <div class="col-xl-2 col-md-4">
-                        <label class="form-label">地点检索</label>
-                        <input type="text" class="form-control" name="location" value="{{ location_filter }}" placeholder="支持模糊匹配">
-                    </div>
-                    <div class="col-xl-2 col-md-4">
-                        <label class="form-label">预警类型</label>
-                        <select class="form-select" name="alert_type">
-                            <option value="">全部</option>
-                            {% for item in alert_type_options %}
-                                <option value="{{ item }}" {% if alert_type_filter == item %}selected{% endif %}>{{ item }}</option>
-                            {% endfor %}
-                        </select>
-                    </div>
-                    <div class="col-xl-2 col-md-4">
-                        <label class="form-label">预警等级</label>
-                        <select class="form-select" name="alert_level">
-                            <option value="">全部</option>
-                            {% for item in alert_level_options %}
-                                <option value="{{ item }}" {% if alert_level_filter == item %}selected{% endif %}>{{ item }}</option>
-                            {% endfor %}
-                        </select>
-                    </div>
-                    <div class="col-xl-2 col-md-4">
-                        <label class="form-label">核验窗口(天)</label>
-                        <select class="form-select" name="follow_days">
-                            {% for option in follow_days_options %}
-                                <option value="{{ option }}" {% if follow_days == option %}selected{% endif %}>{{ option }}</option>
-                            {% endfor %}
-                        </select>
-                    </div>
-                    <div class="col-xl-2 col-md-4">
-                        <label class="form-label">阈值分位</label>
-                        <select class="form-select" name="threshold_q">
-                            {% for option in threshold_q_options %}
-                                <option value="{{ option }}" {% if threshold_q == option %}selected{% endif %}>P{{ (option * 100)|round(0)|int }}</option>
-                            {% endfor %}
-                        </select>
-                    </div>
-                    <div class="col-xl-2 col-md-4">
-                        <label class="form-label">最小样本天</label>
-                        <select class="form-select" name="min_days">
-                            {% for option in min_days_options %}
-                                <option value="{{ option }}" {% if min_days == option %}selected{% endif %}>{{ option }}</option>
-                            {% endfor %}
-                        </select>
-                    </div>
+{% include 'partials/filters/date_range.html' %}
+{% include 'partials/filters/alert_location_type_level.html' %}
+{% include 'partials/filters/alert_verification.html' %}
                 </div>
                 <div class="mt-3">
                     <button class="btn btn-primary">刷新统计</button>
