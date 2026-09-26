@@ -339,7 +339,7 @@ def build_workbench_data(
 ) -> dict[str, Any]:
     """从已发布的网格 GeoJSON 生成医生工作台所需的风险数据。"""
     import numpy as np
-    from scipy.stats import norm
+    from scipy.stats import norm, rankdata
 
     collection = json.loads(cells_path.read_text(encoding="utf-8"))
     township_collection = json.loads(townships_path.read_text(encoding="utf-8"))
@@ -417,10 +417,9 @@ def build_workbench_data(
         weights = (1 / 3) * (1 + rng.uniform(-STABILITY_PERTURBATION, STABILITY_PERTURBATION, 3))
         weights /= weights.sum()
         draw_score = weights @ log_components
-        ranks = np.argsort(np.argsort(-draw_score))
-        top_share_draws[d] = (ranks + 1) / m * 100.0
-    base_rank = np.argsort(np.argsort(-score))
-    top_share = (base_rank + 1) / m * 100.0
+        # 并列分值共享最优名次；argsort 对并列值的顺序依赖 CPU 与 numpy 实现，会导致结果不可复现。
+        top_share_draws[d] = rankdata(-draw_score, method="min") / m * 100.0
+    top_share = rankdata(-score, method="min") / m * 100.0
     top_p05 = np.percentile(top_share_draws, 5, axis=0)
     top_p95 = np.percentile(top_share_draws, 95, axis=0)
 
@@ -529,7 +528,7 @@ def build_workbench_data(
             "method": f"三项权重各自随机扰动 ±{STABILITY_PERTURBATION:.0%} 后归一化，重算 {draws} 次排名",
             "seed": seed,
             "draws": draws,
-            "reported": "全县排名“前 x%”的第 5 与第 95 百分位",
+            "reported": "全县排名“前 x%”的第 5 与第 95 百分位；并列分值共享最优名次",
             "stable_span_pct": STABLE_RANK_SPAN_PCT,
         },
         "facilities": {
