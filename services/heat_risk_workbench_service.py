@@ -42,13 +42,13 @@ GI_FDR_Q = 0.05
 GI_FDR_Q_STRONG = 0.01
 EARTH_RADIUS_KM = 6371.0088
 
-# 与 NWS HeatRisk 同构的五级配色：绿、黄、橙、红、品红。
+# 五级配色沿用站内风险色（yilao.css --yl-risk-*），顺序与 NWS HeatRisk 一致：绿、黄、橙、红、深红。
 RISK_LEVELS = [
-    {"level": 0, "label": "较低", "color": "#cfe8c8"},
-    {"level": 1, "label": "轻度", "color": "#f6e27a"},
-    {"level": 2, "label": "中度", "color": "#f5a34b"},
-    {"level": 3, "label": "高", "color": "#d9412b"},
-    {"level": 4, "label": "极高", "color": "#9c1d6b"},
+    {"level": 0, "label": "较低", "color": "#CFE3C8"},
+    {"level": 1, "label": "轻度", "color": "#F6D77E"},
+    {"level": 2, "label": "中度", "color": "#EE7E2D"},
+    {"level": 3, "label": "高", "color": "#C7472E"},
+    {"level": 4, "label": "极高", "color": "#7A2418"},
 ]
 
 # 3×3 双变量配色（Stevens 方案）：字母为地表温度三分位，数字为 65+ 比例三分位。
