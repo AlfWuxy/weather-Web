@@ -478,6 +478,15 @@ def _capture_cookies(resp, app, root):
     return cookies
 
 
+def _xlsx_cell(cell):
+    """单元格记录值、Python 类型、Excel 类型和显示格式：数字变文本、0% 变 0.00 都会被发现。"""
+    value = getattr(cell, 'value', None)
+    if value is None:
+        return None
+    text = value.isoformat() if hasattr(value, 'isoformat') else str(value)
+    return [type(value).__name__, cell.data_type, text, cell.number_format]
+
+
 def _capture_binary(ctype, data):
     """导出文件按内容对比：Excel 取全部单元格，PDF 取页数与逐页文本，其余取哈希。"""
     import io
@@ -485,7 +494,7 @@ def _capture_binary(ctype, data):
         from openpyxl import load_workbook
         book = load_workbook(io.BytesIO(data), read_only=True)
         return {'xlsx': {
-            sheet.title: [[None if c is None else str(c) for c in row] for row in sheet.iter_rows(values_only=True)]
+            sheet.title: [[_xlsx_cell(cell) for cell in row] for row in sheet.iter_rows()]
             for sheet in book.worksheets
         }}
     if ctype == 'application/pdf':
@@ -615,6 +624,8 @@ def record_profile(root, out, profile):
             _reseed()
             login_client.post('/login', data={'username': f'bl_{role}', 'password': PASSWORD,
                                               'csrf_token': 'behavior-lock-csrf'})
+            with login_client.session_transaction() as sess:
+                assert sess.get('_user_id'), f'行为锁预备登录失败: bl_{role}'
         role_cookies[role] = login_client.get_cookie(session_cookie).value
 
     reset_db()
@@ -680,7 +691,7 @@ def diff(base_path, head_path, show=3):
             as_lines(base[key]), as_lines(head[key]), 'base', 'head', lineterm='', n=2
         ))[:80]))
     print(f'共 {len(base)} 个基线响应：缺失 {len(missing)}，变化 {len(changed)}，新增 {len(added)}')
-    return 1 if (missing or changed) else 0
+    return 1 if (missing or changed or added) else 0
 
 
 def main():

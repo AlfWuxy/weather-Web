@@ -54,6 +54,35 @@ def _prepare_extreme_day(db, models):
         row.temperature_max = 39.5
 
 
+def _prepare_community_mix(db, models):
+    """构造当天各种状态的配对：停用配对、跨社区记录、超时未确认、已确认求助、各接力阶段，另留一个空社区。"""
+    from core.time_utils import today_local, utcnow
+    now = utcnow()
+    today = today_local()
+    rows = [
+        # (配对所属社区, 配对状态, 记录所属社区, 创建距今, 已确认, 求助, 接力阶段, 风险)
+        ('牛家垄周村', 'inactive', '牛家垄周村', timedelta(hours=5), False, True, 'community', '高风险'),
+        ('牛家垄周村', 'active', '牛家垄周村', timedelta(hours=3), False, False, 'none', '高风险'),
+        ('牛家垄周村', 'active', '牛家垄周村', timedelta(hours=3), False, False, 'caregiver', '极高'),
+        ('牛家垄周村', 'active', '牛家垄周村', timedelta(hours=4), False, False, 'emergency', '中风险'),
+        ('牛家垄周村', 'active', '牛家垄周村', timedelta(hours=1), False, False, 'none', '低风险'),
+        ('牛家垄周村', 'active', '牛家垄周村', timedelta(hours=6), True, True, 'backup', '高风险'),
+        ('岭背徐村', 'active', '牛家垄周村', timedelta(hours=3), False, True, 'none', '中风险'),
+        ('岭背徐村', 'active', '岭背徐村', timedelta(minutes=30), True, False, 'none', '未知'),
+    ]
+    for index, (pair_comm, pair_status, status_comm, age, confirmed, help_flag, stage, risk) in enumerate(rows):
+        code = f'5{index:07d}'
+        pair = models.Pair(caregiver_id=3, community_code=pair_comm, elder_code=f'bl-mix-{index}', short_code=code,
+                           status=pair_status, created_at=now - timedelta(days=2))
+        db.session.add(pair)
+        db.session.flush()
+        db.session.add(models.DailyStatus(
+            pair_id=pair.id, status_date=today, community_code=status_comm, risk_level=risk,
+            confirmed_at=now - timedelta(minutes=10) if confirmed else None, help_flag=help_flag,
+            actions_done_count=index % 3, relay_stage=stage, created_at=now - age, updated_at=now - age,
+        ))
+
+
 SCENARIOS = [
     {
         'name': 'S1-老人令牌链接正常流程',
@@ -83,6 +112,7 @@ SCENARIOS = [
             ('POST', '/action/help', {'short_code': ELDER_CODE}),
             ('POST', '/action/help', {'short_code': ELDER_CODE}),
             ('POST', '/action/debrief', dict(DEBRIEF, short_code=ELDER_CODE, debrief_optin='0')),
+            ('POST', '/action/debrief', dict(DEBRIEF, short_code=ELDER_CODE, debrief_optin='0', difficulty='匿名第二次')),
             ('POST', '/action/debrief', dict(DEBRIEF, short_code=ELDER_CODE, debrief_optin='1')),
             ('POST', '/action/debrief', dict(DEBRIEF, short_code=ELDER_CODE, debrief_optin='1', difficulty='更新')),
             ('POST', '/elder/enter', {'short_code': ELDER_CODE}),
@@ -254,6 +284,23 @@ SCENARIOS = [
             ('GET', '/dashboard'),
             ('as', 'caregiver'),
             ('GET', '/dashboard'),
+        ],
+    },
+    {
+        'name': 'S12-社区统计口径',
+        'as': 'community',
+        'steps': [
+            ('set', '构造当天多种状态的配对与一个空社区', _prepare_community_mix),
+            ('GET', '/community/牛家垄周村'),
+            ('GET', '/community'),
+            ('GET', '/community/岭背徐村'),
+            ('as', 'admin'),
+            ('GET', '/community'),
+            ('GET', '/community/岭背徐村'),
+            ('GET', '/community/徐家湾'),
+            ('as', 'caregiver'),
+            ('GET', '/caregiver'),
+            ('GET', '/pairs'),
         ],
     },
     {

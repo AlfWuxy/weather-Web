@@ -36,6 +36,8 @@ SEQUENCE = [
     ('POST', '/api/ai/ask', '/api/v1/ai/ask', {'question': 'x'}, 5),
     ('POST', '/api/ml/predict', '/api/v1/ml/predict', {'age': 70, 'gender': '女'}, 5),
     ('POST', '/api/forecast/7day', '/api/v1/forecast/7day', {}, 5),
+    ('POST', '/api/ml/predict-community', '/api/v1/ml/predict-community', {'community': '牛家垄周村'}, 5),
+    ('POST', '/api/forecast/daily', '/api/v1/forecast/daily', {}, 5),
     ('POST', '/api/chronic/individual', '/api/v1/chronic/individual', {'age': 70}, 5),
     ('POST', '/api/alert/comprehensive', '/api/v1/alert/comprehensive', {}, 5),
     ('POST', '/api/dlnm/risk', '/api/v1/dlnm/risk', {'temperature': 36}, 8),
@@ -91,6 +93,8 @@ def _record_in_process(root, out):
     with client.session_transaction() as sess:
         sess['_csrf_token'] = 'rl-csrf'
     client.post('/login', data={'username': 'rl_user', 'password': 'rl-pass', 'csrf_token': 'rl-csrf'})
+    with client.session_transaction() as sess:
+        assert sess.get('_user_id'), '限流锁预备登录失败'
 
     statuses = []
     for method, compat, v1, payload, rounds in SEQUENCE:
