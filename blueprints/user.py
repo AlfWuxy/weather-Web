@@ -147,9 +147,28 @@ def heat_exposure_gis():
     if not current_app.config.get('FEATURE_HEAT_EXPOSURE_GIS'):
         abort(404)
 
-    from services.heat_exposure_gis_service import render_heat_exposure_gis
+    from flask import request
 
-    return render_heat_exposure_gis()
+    from services.heat_exposure_gis_service import render_heat_exposure_gis
+    from services.heat_risk_workbench_service import gis_ui_mode, render_heat_risk_workbench
+
+    if gis_ui_mode(request.args, current_app.config) == 'legacy':
+        return render_heat_exposure_gis()
+    return render_heat_risk_workbench()
+
+
+@bp.route('/heat-exposure-gis/daily.json', endpoint='heat_exposure_gis_daily')
+@login_required
+def heat_exposure_gis_daily():
+    """医生工作台逐日危险等级、村级优先清单与避暑点"""
+    if not current_app.config.get('FEATURE_HEAT_EXPOSURE_GIS'):
+        abort(404)
+
+    from flask import jsonify
+
+    from services.heat_risk_workbench_service import daily_payload_for_request
+
+    return jsonify(daily_payload_for_request())
 
 
 @bp.route('/profile', methods=['GET', 'POST'], endpoint='profile')

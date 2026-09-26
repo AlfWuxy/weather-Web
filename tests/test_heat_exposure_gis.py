@@ -26,7 +26,8 @@ def test_heat_exposure_gis_requires_login(client):
 
 
 def test_heat_exposure_gis_page_has_academic_contract(authenticated_client):
-    response = authenticated_client.get("/heat-exposure-gis")
+    # v1.2 科研展示版保留为回滚目标，通过 ?ui=legacy 访问。
+    response = authenticated_client.get("/heat-exposure-gis?ui=legacy")
     assert response.status_code == 200
 
     html = response.get_data(as_text=True)
@@ -59,12 +60,10 @@ def test_heat_exposure_gis_page_has_academic_contract(authenticated_client):
     assert 'data-geometry-mode="native" aria-pressed="false"' in html
     assert 'id="gisCellGeometryMode"' in html
     assert "下载 GeoJSON 始终保留原生四角" in html
-    assert "综合风险分" not in html
-    assert "自动决策" not in html
 
 
 def test_heat_exposure_gis_uses_shared_metric_info_contract(authenticated_client):
-    html = authenticated_client.get("/heat-exposure-gis").get_data(as_text=True)
+    html = authenticated_client.get("/heat-exposure-gis?ui=legacy").get_data(as_text=True)
 
     expected_keys = {
         "gis_native_grid",

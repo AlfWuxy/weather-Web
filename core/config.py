@@ -303,6 +303,10 @@ def configure_app(app, logger):
     app.config.setdefault('FEATURE_ELDER_MODE', parse_bool(os.getenv('FEATURE_ELDER_MODE', '0'), default=False))
     app.config.setdefault('FEATURE_NOTIFICATIONS', parse_bool(os.getenv('FEATURE_NOTIFICATIONS', '0'), default=False))
     app.config.setdefault('FEATURE_HEAT_EXPOSURE_GIS', parse_bool(os.getenv('FEATURE_HEAT_EXPOSURE_GIS', '0'), default=False))
+    # 热暴露 GIS 界面版本：workbench 为医生工作台，legacy 为 v1.2 科研展示版（回滚开关）。
+    app.config.setdefault('HEAT_EXPOSURE_GIS_UI', os.getenv('HEAT_EXPOSURE_GIS_UI', 'workbench').strip().lower() or 'workbench')
+    # 天地图浏览器端 key；为空时工作台退回高德瓦片并自动做 GCJ-02 纠偏。
+    app.config.setdefault('TIANDITU_TK', os.getenv('TIANDITU_TK', '').strip())
     app.config.setdefault('FEATURE_AUDIT_LOGS', parse_bool(os.getenv('FEATURE_AUDIT_LOGS', '0'), default=False))
     app.config.setdefault('FEATURE_STRUCTURED_LOGS', parse_bool(os.getenv('FEATURE_STRUCTURED_LOGS', '1'), default=True))
     app.config.setdefault('TRUSTED_PROXY_CIDRS', os.getenv('TRUSTED_PROXY_CIDRS', '127.0.0.1/32,::1/128'))
