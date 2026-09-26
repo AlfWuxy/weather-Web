@@ -755,6 +755,13 @@
   "endpoint": "user.heat_exposure_gis"
  },
  {
+  "rule": "/heat-exposure-gis/daily.json",
+  "methods": [
+   "GET"
+  ],
+  "endpoint": "user.heat_exposure_gis_daily"
+ },
+ {
   "rule": "/location",
   "methods": [
    "POST"

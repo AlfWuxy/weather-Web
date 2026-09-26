@@ -80,7 +80,7 @@
 
 ### 3.2 路由清单锁（`tests/test_route_manifest.py`）
 
-131 条路由的（URL、方法、endpoint 名）存成清单，缺一条或多一条都会让测试失败。
+全部路由的（URL、方法、endpoint 名）存成清单，缺一条或多一条都会让测试失败。`main` 新增功能时，用 `UPDATE_ROUTE_MANIFEST=1` 重新生成清单（合入 AlfWuxy/weather-Web#57 后为 132 条）。
 
 ### 3.3 限流锁（`scripts/ratelimit_lock.py`，已接入 CI）
 
