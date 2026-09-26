@@ -10,8 +10,10 @@
     python scripts/behavior_lock.py diff base.json head.json
 
 录制时：
-- 使用临时 SQLite 与固定种子数据，时间冻结在 FROZEN_AT，哈希种子固定；
-- 分两种环境录制：demo（演示天气、默认功能开关）与 live（"在线"天气缓存、全部功能开关）；
+- 使用临时 SQLite 与固定种子数据，时间冻结，哈希种子和 secrets 随机序列固定；
+- 分三种环境录制：demo（夏季、演示天气、默认功能开关）、live（夏季、"在线"高温天气缓存、
+  全部功能开关）与 winter（冬季、"在线"寒冷天气缓存、全部功能开关），种子日期随冻结时间平移；
+- 除逐个请求外，还执行 behavior_scenarios.py 中的连续业务场景，记录每一步的数据库变化；
 - 禁止一切外部网络，外部依赖统一走兜底分支；
 - 以 5 种身份（游客/普通用户/照护人/社区/管理员）访问全部 GET 路由
   与一组固定的 API 写请求，每个请求前把数据库恢复到种子状态；
@@ -27,9 +29,9 @@ import shutil
 import socket
 import sys
 import tempfile
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 
-FROZEN_AT = '2026-07-20 02:00:00'  # UTC，对应北京时间 10:00，处于高温季
+FROZEN_AT = '2026-07-20 02:00:00'  # 夏季时间点（UTC），对应北京时间 10:00，处于高温季
 TOKEN = 'behavior-lock-elder-token'
 PASSWORD = 'behavior-lock-pass'
 ROLES = ('guest', 'user', 'caregiver', 'community', 'admin')
@@ -113,7 +115,27 @@ ALL_FEATURE_FLAGS = (
     'FEATURE_NOTIFICATIONS', 'FEATURE_HEAT_EXPOSURE_GIS', 'FEATURE_AUDIT_LOGS',
 )
 # demo: 演示天气 + 默认功能开关；live: 种子里的"在线"天气缓存 + 全部功能开关打开
-PROFILES = ('demo', 'live')
+# 环境: (冻结时间 UTC, 是否使用"在线"天气缓存, 天气缓存内容)
+HOT_WEATHER = {
+    'temperature': 36.4, 'temperature_max': 38.2, 'temperature_min': 28.6,
+    'feels_like': 40.1, 'humidity': 68, 'pressure': 1003, 'weather_condition': '晴',
+    'wind_speed': 1.8, 'pm25': 42, 'aqi': 78, 'is_mock': False, 'data_source': 'QWeather',
+}
+COLD_WEATHER = {
+    'temperature': 1.2, 'temperature_max': 4.5, 'temperature_min': -3.8,
+    'feels_like': -2.6, 'humidity': 72, 'pressure': 1028, 'weather_condition': '阴',
+    'wind_speed': 4.2, 'pm25': 88, 'aqi': 121, 'is_mock': False, 'data_source': 'QWeather',
+}
+PROFILE_SETTINGS = {
+    'demo': (FROZEN_AT, False, None),
+    'live': (FROZEN_AT, True, HOT_WEATHER),
+    'winter': ('2026-01-15 02:00:00', True, COLD_WEATHER),
+}
+PROFILES = tuple(PROFILE_SETTINGS)
+
+
+def _anchor(profile):
+    return datetime.strptime(PROFILE_SETTINGS[profile][0], '%Y-%m-%d %H:%M:%S').replace(tzinfo=timezone.utc)
 
 
 def _prepare_env(db_path, profile):
@@ -135,24 +157,24 @@ def _prepare_env(db_path, profile):
         'REDIS_URL': '',
         'SENTRY_DSN': '',
     }
-    if profile == 'live':
+    if PROFILE_SETTINGS[profile][1]:
         env['DEMO_MODE'] = '0'
         env.update({flag: '1' for flag in ALL_FEATURE_FLAGS})
     os.environ.update(env)
 
 
-def _seed(db):
-    """写入固定种子数据。只依赖模型字段，不依赖业务服务，确保新旧代码一致。"""
+def _seed(db, now):
+    """写入固定种子数据（所有日期相对冻结时间 now）。只依赖模型字段，不依赖业务服务。"""
     from core.db_models import (
         Community, CommunityDaily, CoolingResource, DailyStatus, FamilyMember,
         FamilyMemberProfile, HealthDiary, MedicalRecord, MedicationReminder,
-        Notification, Pair, PairActionToken, User, WeatherAlert, WeatherData,
+        Notification, Pair, PairActionToken, PairLink, User, WeatherAlert, WeatherData,
     )
+    from behavior_scenarios import LINK_CODE, LINK_TOKEN
     from core.security import hash_pair_token, hash_short_code
 
     rng = random.Random(20260720)
-    now = datetime(2026, 7, 20, 2, 0, 0, tzinfo=timezone.utc)
-    today = date(2026, 7, 20)
+    today = now.date()
     names = ['牛家垄周村', '岭背徐村', '徐家湾']
     coords = [(29.333969, 116.199506), (29.337433, 116.198315), (29.338931, 116.19877)]
 
@@ -180,11 +202,22 @@ def _seed(db):
         db.session.add(user)
         users[role] = user
     db.session.flush()
+    # 第二个照护人（id 在前 4 个用户之后），用于越权场景
+    caregiver2 = User(username='bl_caregiver2', role='caregiver', email='bl_caregiver2@example.org', age=38,
+                      gender='女', community=names[1], created_at=now - timedelta(days=60))
+    caregiver2.set_password(PASSWORD)
+    db.session.add(caregiver2)
+    db.session.flush()
 
     for location in ['都昌', names[0]]:
         for offset in range(150):
             day = today - timedelta(days=offset)
-            base = 30 + 6 * rng.random() if day.month in (6, 7, 8) else 18 + 8 * rng.random()
+            if day.month in (6, 7, 8):
+                base = 30 + 6 * rng.random()
+            elif day.month in (12, 1, 2):
+                base = -2 + 8 * rng.random()
+            else:
+                base = 18 + 8 * rng.random()
             tmax = round(base + 4, 1)
             db.session.add(WeatherData(
                 date=day, location=location, temperature=round(base, 1),
@@ -232,6 +265,11 @@ def _seed(db):
     db.session.flush()
     db.session.add(PairActionToken(pair_id=pair.id, token_hash=hash_pair_token(TOKEN),
                                    expires_at=now + timedelta(days=7), created_at=now - timedelta(days=1)))
+    # 尚未赎回的绑定短码，用于赎回场景
+    db.session.add(PairLink(caregiver_id=users['caregiver'].id, short_code=LINK_CODE,
+                            short_code_hash=hash_short_code(LINK_CODE), token_hash=hash_pair_token(LINK_TOKEN),
+                            community_code=names[1], status='active', expires_at=now + timedelta(days=3),
+                            created_at=now - timedelta(hours=2)))
     for offset in range(1, 8):
         db.session.add(DailyStatus(
             pair_id=pair.id, status_date=today - timedelta(days=offset), community_code=names[0],
@@ -258,17 +296,11 @@ def _seed(db):
     db.session.commit()
 
 
-def _seed_live_weather(db):
+def _seed_live_weather(db, now, payload):
     """写入标记为 QWeather 来源的新鲜天气缓存，让风险计算走真实分支。"""
     from core.db_models import WeatherCache
     from core.weather import _weather_cache_location
 
-    now = datetime(2026, 7, 20, 2, 0, 0, tzinfo=timezone.utc)
-    payload = {
-        'temperature': 36.4, 'temperature_max': 38.2, 'temperature_min': 28.6,
-        'feels_like': 40.1, 'humidity': 68, 'pressure': 1003, 'weather_condition': '晴',
-        'wind_speed': 1.8, 'pm25': 42, 'aqi': 78, 'is_mock': False, 'data_source': 'QWeather',
-    }
     keys = set()
     for raw in ['都昌', '都昌县', '牛家垄周村', '岭背徐村', '徐家湾', '九江', '116.20,29.27', None, '']:
         try:
@@ -279,6 +311,115 @@ def _seed_live_weather(db):
         db.session.add(WeatherCache(location=key, fetched_at=now,
                                     payload=json.dumps(payload, ensure_ascii=False), is_mock=False))
     db.session.commit()
+
+
+_SECRETS_RNG = random.Random(0)
+
+
+def _make_secrets_deterministic():
+    """把 secrets 模块换成固定种子的伪随机序列：短码、令牌、游客 ID 在新旧代码中逐字相同。"""
+    import base64
+    import secrets
+
+    def token_bytes(nbytes=None):
+        return bytes(_SECRETS_RNG.getrandbits(8) for _ in range(nbytes or 32))
+
+    secrets.token_bytes = token_bytes
+    secrets.token_hex = lambda nbytes=None: token_bytes(nbytes).hex()
+    secrets.token_urlsafe = lambda nbytes=None: base64.urlsafe_b64encode(token_bytes(nbytes)).rstrip(b'=').decode()
+    secrets.randbelow = lambda upper: _SECRETS_RNG.randrange(upper)
+    secrets.choice = lambda seq: seq[_SECRETS_RNG.randrange(len(seq))]
+
+
+def _reseed():
+    random.seed(0)
+    _SECRETS_RNG.seed(0)
+
+
+def _db_state(app, db):
+    """读取全部表的全部行（保留所有字段，含外键和业务时间），按主键索引。"""
+    state = {}
+    with app.app_context():
+        for table in db.metadata.sorted_tables:
+            pk_cols = [col.name for col in table.primary_key.columns]
+            rows = {}
+            for row in db.session.execute(table.select()).mappings():
+                key = '|'.join(str(row[col]) for col in pk_cols)
+                rows[key] = {col: (None if value is None else str(value)) for col, value in row.items()}
+            state[table.name] = rows
+        db.session.remove()
+    return state
+
+
+def _db_diff(before, after):
+    """逐表列出新增、删除、修改的行；修改只列变化的字段 [旧值, 新值]。"""
+    diff = {}
+    for table in sorted(set(before) | set(after)):
+        old_rows, new_rows = before.get(table, {}), after.get(table, {})
+        added = {key: new_rows[key] for key in sorted(new_rows.keys() - old_rows.keys())}
+        removed = {key: old_rows[key] for key in sorted(old_rows.keys() - new_rows.keys())}
+        changed = {}
+        for key in sorted(new_rows.keys() & old_rows.keys()):
+            if new_rows[key] != old_rows[key]:
+                changed[key] = {col: [old_rows[key].get(col), value]
+                                for col, value in new_rows[key].items() if old_rows[key].get(col) != value}
+        if added or removed or changed:
+            diff[table] = {'added': added, 'removed': removed, 'changed': changed}
+    return diff
+
+
+def _run_scenarios(app, db, reset_db, role_cookies, root, snapshot):
+    """执行 behavior_scenarios.SCENARIOS：场景内保留状态，每步记录响应与数据库变化。"""
+    from core import db_models
+    from behavior_scenarios import SCENARIOS
+    session_cookie = app.config.get('SESSION_COOKIE_NAME', 'session')
+
+    for scenario in SCENARIOS:
+        reset_db()
+        _reseed()
+        context = {'TOKEN': TOKEN}
+        clients = {}
+        identity = scenario['as']
+        state = _db_state(app, db)
+        for index, step in enumerate(scenario['steps'], start=1):
+            kind = step[0]
+            if kind == 'as':
+                identity = step[1]
+                continue
+            if kind == 'let':
+                with app.app_context():
+                    context[step[1]] = step[2](db, db_models)
+                    db.session.remove()
+                continue
+            label = f"scenario {scenario['name']} #{index:02d} {identity}"
+            if kind == 'set':
+                with app.app_context():
+                    step[2](db, db_models)
+                    db.session.commit()
+                    db.session.remove()
+                new_state = _db_state(app, db)
+                snapshot['requests'][f'{label} SET {step[1]}'] = {'db': _db_diff(state, new_state)}
+                state = new_state
+                continue
+
+            method, path = kind, step[1].format(**context)
+            form = {key: ([v.format(**context) for v in value] if isinstance(value, list) else value.format(**context))
+                    for key, value in (step[2] if len(step) > 2 else {}).items()}
+            if identity not in clients:
+                client = app.test_client()
+                client.set_cookie(session_cookie, role_cookies[identity.split('#')[0]])
+                clients[identity] = client
+            client = clients[identity]
+            if method == 'GET':
+                resp = client.get(path)
+            else:
+                resp = client.post(path, data=dict(form, csrf_token='behavior-lock-csrf'))
+            new_state = _db_state(app, db)
+            snapshot['requests'][f'{label} {method} {path}'] = {
+                'response': _capture(resp, root, app),
+                'db': _db_diff(state, new_state),
+            }
+            state = new_state
 
 
 _NORMALIZERS = [
@@ -391,7 +532,7 @@ def _fill(rule):
 def record(root, out):
     """每个 profile 在独立子进程中录制（固定哈希种子，隔离进程级缓存），再合并。"""
     import subprocess
-    merged = {'frozen_at': FROZEN_AT, 'requests': {}}
+    merged = {'profiles': {name: settings[0] for name, settings in PROFILE_SETTINGS.items()}, 'requests': {}}
     env = dict(os.environ, PYTHONHASHSEED='0')
     for profile in PROFILES:
         part = f'{out}.{profile}.part'
@@ -415,7 +556,8 @@ def record_profile(root, out, profile):
     os.chdir(root)
     sys.path.insert(0, root)
     _block_network()
-    random.seed(0)
+    _make_secrets_deterministic()
+    _reseed()
 
     import logging
     logging.disable(logging.CRITICAL)
@@ -427,7 +569,8 @@ def record_profile(root, out, profile):
     from core.app import create_app
     from core.extensions import db, limiter
     from freezegun import freeze_time
-    freezer = freeze_time(FROZEN_AT, ignore=['pandas', 'numpy', 'scipy', 'sklearn'])
+    frozen_at, _, weather_payload = PROFILE_SETTINGS[profile]
+    freezer = freeze_time(frozen_at, ignore=['pandas', 'numpy', 'scipy', 'sklearn'])
     freezer.start()
 
     app = create_app()
@@ -436,9 +579,9 @@ def record_profile(root, out, profile):
 
     with app.app_context():
         db.create_all()
-        _seed(db)
-        if profile == 'live':
-            _seed_live_weather(db)
+        _seed(db, _anchor(profile))
+        if weather_payload:
+            _seed_live_weather(db, _anchor(profile), weather_payload)
         db.session.remove()
         db.engine.dispose()
     shutil.copyfile(db_path, seed_path)
@@ -460,21 +603,26 @@ def record_profile(root, out, profile):
     requests_plan.extend(('POST', path, payload) for path, payload in API_POSTS)
     requests_plan.extend(('FORM', path, payload) for path, payload in FORM_POSTS)
 
-    snapshot = {'frozen_at': FROZEN_AT, 'requests': {}}
+    snapshot = {'frozen_at': frozen_at, 'requests': {}}
     session_cookie = app.config.get('SESSION_COOKIE_NAME', 'session')
-    for role in ROLES:
+    role_cookies = {}
+    for role in ROLES + ('caregiver2',):
         login_client = app.test_client()
         with login_client.session_transaction() as sess:
             sess['_csrf_token'] = 'behavior-lock-csrf'
         if role != 'guest':
             reset_db()
+            _reseed()
             login_client.post('/login', data={'username': f'bl_{role}', 'password': PASSWORD,
                                               'csrf_token': 'behavior-lock-csrf'})
-        role_cookie = login_client.get_cookie(session_cookie).value
+        role_cookies[role] = login_client.get_cookie(session_cookie).value
+
+    for role in ROLES:
+        role_cookie = role_cookies[role]
         for method, path, payload in requests_plan:
             # 每个请求都从"刚登录完"的状态出发：数据库回到种子，会话回到登录后的 cookie
             reset_db()
-            random.seed(0)
+            _reseed()
             client = app.test_client()
             client.set_cookie(session_cookie, role_cookie)
             if method == 'GET':
@@ -487,6 +635,8 @@ def record_profile(root, out, profile):
             else:
                 resp = client.post(path, json=payload, headers={'X-CSRF-Token': 'behavior-lock-csrf'})
             snapshot['requests'][f'{role} {method} {path}'] = _capture(resp, root, app)
+
+    _run_scenarios(app, db, reset_db, role_cookies, root, snapshot)
 
     freezer.stop()
     with open(out, 'w', encoding='utf-8') as fh:
