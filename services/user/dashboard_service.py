@@ -252,6 +252,31 @@ def _dashboard_forecast_days(location, start_date, current_weather=None):
     return build_forecast_cards(qweather_days, health_forecasts, start_date)
 
 
+def _create_extreme_alert_once(weather_service, user_location, weather_data, alert_locations):
+    """最近 6 小时内同地没有预警时，生成并保存一条极端天气预警；返回新预警，未生成时返回 None。"""
+    recent_alert = WeatherAlert.query.filter(
+        WeatherAlert.location.in_(alert_locations),
+        WeatherAlert.alert_date >= utcnow() - timedelta(hours=6)
+    ).first()
+    if recent_alert:
+        return None
+    alert = weather_service.generate_weather_alert(user_location, weather_data)
+    if not alert:
+        return None
+    weather_alert = WeatherAlert(
+        alert_date=utcnow(),
+        location=alert['location'],
+        alert_type=alert['alert_type'],
+        alert_level=alert['alert_level'],
+        description=alert['description'],
+        affected_communities=json.dumps([user_location]),
+        disease_correlation=json.dumps({})
+    )
+    db.session.add(weather_alert)
+    db.session.commit()
+    return weather_alert
+
+
 def user_dashboard(force_elder=False):
     """用户仪表板"""
     elder_mode = force_elder or (
@@ -333,24 +358,7 @@ def user_dashboard(force_elder=False):
 
     # 如果是极端天气，生成预警（避免重复）
     if weather_available and extreme_result['is_extreme'] and not used_cache:
-        recent_alert = WeatherAlert.query.filter(
-            WeatherAlert.location.in_(alert_locations),
-            WeatherAlert.alert_date >= utcnow() - timedelta(hours=6)
-        ).first()
-        if not recent_alert:
-            alert = weather_service.generate_weather_alert(user_location, weather_data)
-            if alert:
-                weather_alert = WeatherAlert(
-                    alert_date=utcnow(),
-                    location=alert['location'],
-                    alert_type=alert['alert_type'],
-                    alert_level=alert['alert_level'],
-                    description=alert['description'],
-                    affected_communities=json.dumps([user_location]),
-                    disease_correlation=json.dumps({})
-                )
-                db.session.add(weather_alert)
-                db.session.commit()
+        _create_extreme_alert_once(weather_service, user_location, weather_data, alert_locations)
 
     # 获取最新风险评估
     if is_guest:
@@ -382,25 +390,9 @@ def user_dashboard(force_elder=False):
             'aqi': weather.aqi,
             'wind_speed': weather.wind_speed,
         }
-        recent_alert = WeatherAlert.query.filter(
-            WeatherAlert.location.in_(alert_locations),
-            WeatherAlert.alert_date >= utcnow() - timedelta(hours=6)
-        ).first()
-        if not recent_alert:
-            alert = weather_service.generate_weather_alert(user_location, weather_data)
-            if alert:
-                weather_alert = WeatherAlert(
-                    alert_date=utcnow(),
-                    location=alert['location'],
-                    alert_type=alert['alert_type'],
-                    alert_level=alert['alert_level'],
-                    description=alert['description'],
-                    affected_communities=json.dumps([user_location]),
-                    disease_correlation=json.dumps({})
-                )
-                db.session.add(weather_alert)
-                db.session.commit()
-                alerts = [weather_alert]
+        created_alert = _create_extreme_alert_once(weather_service, user_location, weather_data, alert_locations)
+        if created_alert:
+            alerts = [created_alert]
 
     # 用药提醒（根据天气触发）
     reminders = []
