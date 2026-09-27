@@ -71,7 +71,7 @@ def test_heat_gis_receives_only_browser_amap_credentials(
     app.config['AMAP_WEB_SERVICE_KEY'] = 'server-web-key-must-stay-private'
     app.config['AMAP_KEY'] = 'legacy-key-must-stay-unused'
 
-    response = authenticated_client.get('/heat-exposure-gis')
+    response = authenticated_client.get('/heat-exposure-gis?ui=legacy')
     body = response.get_data(as_text=True)
 
     assert response.status_code == 200
