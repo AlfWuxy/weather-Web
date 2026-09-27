@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """Regression tests for the offcanvas navigation + local vendor assets."""
+from html.parser import HTMLParser
 import re
 import pytest
 
@@ -262,3 +263,41 @@ def test_more_menu_escape_only_restores_focus_when_open(client):
 
     assert "event.key === 'Escape' && menuRoot.classList.contains('is-open')" in body
     assert 'trigger.focus();' in body
+
+
+@pytest.mark.parametrize(('role', 'expected_count'), [(None, 2), ('user', 3)])
+def test_heatwave_atlas_links_are_public_and_open_safely(client, db_session, role, expected_count):
+    """匿名访客保留手机与页脚入口，登录后也能从桌面更多菜单进入。"""
+    if role:
+        _set_logged_in_user(client, db_session, username='heatwave-navigation', role=role)
+    response = client.get('/')
+    assert response.status_code == 200
+    body = response.get_data(as_text=True)
+
+    class AtlasLinks(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self.links = []
+
+        def handle_starttag(self, tag, attrs):
+            values = dict(attrs)
+            if tag == 'a' and values.get('data-nav-key') == 'heatwave-atlas':
+                self.links.append(values)
+
+    links = AtlasLinks()
+    links.feed(body)
+    assert len(links.links) == expected_count
+    for link in links.links:
+        assert link['href'] == 'https://heatwave-atlas-lab.yilaoweather.org/#replay?case=chongqing2022'
+        assert link['target'] == '_blank'
+        assert {'noopener', 'noreferrer'} <= set(link['rel'].split())
+
+    marker = 'data-nav-key="heatwave-atlas"'
+    # 天气菜单位于抽屉后续分组，单独定位以免命中页脚。
+    weather = body.split('aria-label="天气"', 1)[1].split('</nav>', 1)[0]
+    footer = body.split('aria-label="页脚导航"', 1)[1].split('</nav>', 1)[0]
+    assert marker in weather
+    assert marker in footer
+    if role:
+        desktop = body.split('id="appMegaMenu"', 1)[1].split('</section>', 1)[0]
+        assert marker in desktop
