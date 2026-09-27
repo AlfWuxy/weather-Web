@@ -193,7 +193,7 @@
             <div>
                 <span class="section-kicker">预览资料</span>
                 <h2 class="h4 mb-1" id="coolingCandidateTitle">待核验场所预览</h2>
-                <p class="text-muted mb-0">这些信息来自高德公开 POI，仅帮助后续人工核验和联系确认。</p>
+                <p class="text-muted mb-0">这些信息来自官方公开资料与公开 POI，仅帮助后续人工核验和联系确认。</p>
             </div>
             <span class="badge bg-warning-subtle text-warning-emphasis align-self-start">全部待人工核验</span>
         </div>
@@ -211,10 +211,19 @@
                         </div>
                         <p class="small text-muted mb-3">{{ candidate.role_label }} · {{ candidate.category_label }}</p>
                         <p class="small mb-2">
-                            <strong>POI 地址提示：</strong>{{ candidate.address or '未提供' }}
+                            <strong>资料地址：</strong>{{ candidate.address or '未提供' }}
                         </p>
+                        <p class="small mb-2">
+                            <strong>原资料时段：</strong>{{ candidate.opening_hours_hint or '未提供，需电话或现场确认' }}
+                        </p>
+                        <p class="small mb-2"><strong>接待对象：</strong>{{ candidate.audience_hint or '待确认' }}</p>
+                        <p class="small mb-2"><strong>设施资料：</strong>{{ candidate.facilities_hint or '待核验' }}</p>
+                        <p class="small mb-2"><strong>当前开放：</strong>未知，前往前须联系确认</p>
+                        <p class="small text-muted mb-2">{{ candidate.verification_note }}</p>
                         <p class="small mb-0">
-                            <strong>POI 时段提示：</strong>{{ candidate.opening_hours_hint or '未提供，需电话或现场确认' }}
+                            <strong>资料来源：</strong>
+                            {% if candidate.source_url %}<a href="{{ candidate.source_url }}" target="_blank" rel="noopener noreferrer">{{ candidate.source_label or '公开资料' }}</a>{% else %}{{ candidate.source_label or '公开资料' }}{% endif %}
+                            {% if candidate.source_date %} · {{ candidate.source_date }}{% endif %}
                         </p>
                     </div>
                 </article>

@@ -21,6 +21,16 @@
         <div class="col-lg-8">
             <div class="card shadow-sm">
                 <div class="card-body">
+                    {% if candidate %}
+                    <div class="alert alert-warning" role="note">
+                        <strong>候选资料，当前开放未知。</strong>
+                        {{ candidate.verification_note }}
+                        <div>接待对象：{{ candidate.audience_hint or '待确认' }}；设施资料：{{ candidate.facilities_hint or '待核验' }}</div>
+                        <div>原资料时段：{{ candidate.opening_hours_hint or '未提供' }}。历史开放时段不作为当前开放承诺。</div>
+                        {% if candidate.latitude is none or candidate.longitude is none %}<div>未取得可核验坐标，坐标字段保持空白。可先保存文字资料，完成核验后再补充。</div>{% endif %}
+                        <div>来源：{% if candidate.source_url %}<a href="{{ candidate.source_url }}" target="_blank" rel="noopener noreferrer">{{ candidate.source_label }}</a>{% else %}{{ candidate.source_label }}{% endif %}{% if candidate.source_date %} · {{ candidate.source_date }}{% endif %}</div>
+                    </div>
+                    {% endif %}
                     <form method="POST" action="{{ url_for('admin.admin_add_cooling_resource') }}">
                         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                         <div class="mb-3">
