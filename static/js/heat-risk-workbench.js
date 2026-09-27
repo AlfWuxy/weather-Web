@@ -28,6 +28,12 @@
     };
     const WATER_FILL = '#a9cfe3';
     const NODATA_FILL = '#c9cdc6';
+    const UNKNOWN_RISK = '风险暂不可判定';
+    const LOCAL_DATE_FORMAT = new Intl.DateTimeFormat('en-US', {
+        timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit'
+    });
+    let dateMinute = null;
+    let cachedLocalDate = null;
     const WEEKDAYS = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
 
     const ui = {
@@ -86,7 +92,7 @@
         boundary: null,
         daily: null,
         dayIndex: 0,
-        layer: 'daily',
+        layer: 'score',
         overlays: {hotspot: true, townships: true, villages: true, facilities: true, cooling: true},
         basemap: 'vector',
         provider: app.dataset.tiandituKey ? 'tianditu' : 'amap',
@@ -103,7 +109,8 @@
         measuring: false,
         measurePoints: [],
         tileStats: {errors: 0, loads: 0},
-        dailyLoaded: false
+        dailyLoaded: false,
+        forecastDate: null
     };
 
     // ------------------------------------------------------------------
@@ -199,7 +206,8 @@
 
     // 逐日风险矩阵（与服务端 combine_daily_level 同一规则）。
     function combineDailyLevel(hazard, staticLevel) {
-        if (!hazard) return 0;
+        if (!isLevel(hazard)) return null;
+        if (hazard === 0) return 0;
         let adjust = 0;
         if (isNum(staticLevel)) {
             if (staticLevel <= 1) adjust = -1;
@@ -213,23 +221,70 @@
         return levels[Math.max(0, Math.min(levels.length - 1, level))];
     }
 
+    function isLevel(value) {
+        return Number.isInteger(value) && value >= 0 && value <= 4;
+    }
+
+    // 预报日期属于都昌；跨时区查看时也按当地日历判断“今天”。
+    function localDate() {
+        const minute = Math.floor(Date.now() / 60000);
+        if (minute !== dateMinute) {
+            const parts = LOCAL_DATE_FORMAT.formatToParts(new Date());
+            const part = (type) => parts.find((item) => item.type === type).value;
+            cachedLocalDate = `${part('year')}-${part('month')}-${part('day')}`;
+            dateMinute = minute;
+        }
+        return cachedLocalDate;
+    }
+
     function currentDay() {
         return state.daily && state.daily.days[state.dayIndex] ? state.daily.days[state.dayIndex] : null;
     }
 
+    function dayHazard(day) {
+        const status = state.daily && state.daily.forecast_status;
+        if (status && !['ok', 'fallback', 'demo'].includes(status)) return null;
+        if (!day || !isLevel(day.level) || !isNum(day.temperature_max) || !isNum(day.temperature_min)) return null;
+        if (day.temperature_max < day.temperature_min || !/^\d{4}-\d{2}-\d{2}$/.test(day.date) || day.date < localDate()) return null;
+        return day.level;
+    }
+
     function currentHazard() {
-        const day = currentDay();
-        return day ? day.level : 0;
+        return dayHazard(currentDay());
+    }
+
+    function demoPrefix() {
+        return state.daily && state.daily.forecast_status === 'demo' ? '演示 · ' : '';
+    }
+
+    function forecastSourceText() {
+        if (!state.daily) return '正在读取天气预报。';
+        const status = state.daily.forecast_status;
+        const prefix = status === 'demo' ? '演示数据，仅供演示 · ' : status === 'fallback' ? '备用预报 · ' : '';
+        const source = state.daily.forecast_source ? `来源：${state.daily.forecast_source}` : '天气预报不可用';
+        const threshold = isNum(state.daily.hot_night_tmin_c) ? ` · 热夜阈值 ${fmt(state.daily.hot_night_tmin_c, 1)} °C` : '';
+        const notice = state.daily.forecast_notice ? ` · ${state.daily.forecast_notice}` : '';
+        return `${prefix}${source}${threshold}${notice}`;
+    }
+
+    function dayReasons(day) {
+        return day && Array.isArray(day.reasons) ? day.reasons : [];
     }
 
     function dayLabel(isoDate) {
         const parts = String(isoDate || '').split('-').map(Number);
         if (parts.length !== 3 || parts.some((part) => !Number.isFinite(part))) return isoDate || '';
         const date = new Date(parts[0], parts[1] - 1, parts[2]);
-        return `${WEEKDAYS[date.getDay()]} ${parts[1]}/${parts[2]}`;
+        return `${isoDate === localDate() ? '今天' : WEEKDAYS[date.getDay()]} ${parts[1]}/${parts[2]}`;
     }
 
     function levelChip(node, level, prefix) {
+        if (!isLevel(level)) {
+            node.textContent = UNKNOWN_RISK;
+            node.style.backgroundColor = NODATA_FILL;
+            node.style.color = '#2A2620';
+            return;
+        }
         const info = levelInfo(level);
         node.textContent = `${prefix || ''}${level} 级 · ${info.label}`;
         node.style.backgroundColor = info.color;
@@ -322,7 +377,7 @@
             if (!cell.scored) return {color: NODATA_FILL, nodata: true};
             if (layer === 'bivariate') return {color: state.meta.bivariate.palette[cell.bivariate]};
             const level = layer === 'daily' ? combineDailyLevel(currentHazard(), cell.level) : cell.level;
-            return {color: levelInfo(level).color};
+            return isLevel(level) ? {color: levelInfo(level).color} : {color: NODATA_FILL, nodata: true};
         }
         if (layer === 'facility_km') return {color: rampColor(cell.facility_km, FACILITY_RAMP.breaks, FACILITY_RAMP.palette)};
         const spec = state.cellMeta.layers[layer];
@@ -446,7 +501,7 @@
         wrapper.appendChild(el('strong', null, town ? town.properties.name_zh : '都昌县'));
         let text;
         if (!cell.land) text = '湖面（不评分）';
-        else if (layer === 'daily') text = cell.scored ? `当日 ${combineDailyLevel(currentHazard(), cell.level)} 级 · 综合分 ${fmt(cell.score, 0)}` : '无常住人口';
+        else if (layer === 'daily') text = !isLevel(currentHazard()) ? UNKNOWN_RISK : cell.scored ? `${demoPrefix()}当日 ${combineDailyLevel(currentHazard(), cell.level)} 级 · 综合分 ${fmt(cell.score, 0)}` : '无常住人口';
         else if (layer === 'score') text = cell.scored ? `综合分 ${fmt(cell.score, 0)} · ${levelInfo(cell.level).label}` : '无常住人口';
         else if (layer === 'bivariate') text = cell.scored ? `${cell.bivariate.toUpperCase()} · 地表 ${fmt(cell.p.q3_lst_c_mean, 1)} °C · 65+ ${fmt(cell.p.age65_share_pct, 1)}%` : '无常住人口';
         else if (layer === 'facility_km') text = `距医疗点 ${fmt(cell.facility_km, 1)} km`;
@@ -571,7 +626,8 @@
         const hazard = currentHazard();
         state.daily.villages.forEach((village) => {
             const level = combineDailyLevel(hazard, village.static_level);
-            const info = levelInfo(level);
+            const info = isLevel(level) ? levelInfo(level) : {color: NODATA_FILL};
+            const dailyText = isLevel(level) ? `${demoPrefix()}当日 ${level} 级` : UNKNOWN_RISK;
             const marker = L.circleMarker(toMap(village.lon_wgs84, village.lat_wgs84), {
                 pane: 'pointPane',
                 radius: 7,
@@ -580,7 +636,7 @@
                 fillColor: info.color,
                 fillOpacity: 1
             });
-            marker.bindTooltip(`${esc(village.name)}<br><small>${esc(village.township)} · 当日 ${level} 级</small>`, {direction: 'top', className: 'hrw-tooltip'});
+            marker.bindTooltip(`${esc(village.name)}<br><small>${esc(village.township)} · ${dailyText}</small>`, {direction: 'top', className: 'hrw-tooltip'});
             marker.on('click', () => selectVillage(village));
             group.addLayer(marker);
             group.addLayer(L.marker(toMap(village.lon_wgs84, village.lat_wgs84), {
@@ -915,7 +971,7 @@
             const span = cell.top_pct_p95 - cell.top_pct_p05;
             const stable = span <= state.meta.stability.stable_span_pct;
             ui.scoreSub.textContent = `全县前 ${fmt(cell.top_pct, 0)}%；权重扰动区间 前 ${fmt(cell.top_pct_p05, 0)}–${fmt(cell.top_pct_p95, 0)}%，${stable ? '排名稳定' : '排名对权重较敏感'}`;
-            levelChip(ui.dailyChip, combineDailyLevel(currentHazard(), cell.level));
+            levelChip(ui.dailyChip, combineDailyLevel(currentHazard(), cell.level), demoPrefix());
         }
 
         const facility = state.facilities[cell.facility];
@@ -969,29 +1025,30 @@
     // ------------------------------------------------------------------
     function renderDays() {
         ui.days.replaceChildren();
+        ui.forecastSource.textContent = forecastSourceText();
         if (!state.daily || !state.daily.days.length) {
-            ui.days.appendChild(el('p', 'hrw-empty', '预报暂不可用：地图显示静态综合风险。'));
+            ui.days.appendChild(el('p', 'hrw-empty', `${UNKNOWN_RISK}：地图显示静态综合风险。`));
             return;
         }
-        ui.forecastSource.textContent = `来源：${state.daily.forecast_source} · 热夜阈值 ${fmt(state.daily.hot_night_tmin_c, 1)} °C`;
         state.daily.days.forEach((day, index) => {
             const button = el('button', 'hrw-day');
             button.type = 'button';
             button.setAttribute('role', 'tab');
             button.setAttribute('aria-selected', String(index === state.dayIndex));
-            const info = levelInfo(day.level);
+            const hazard = dayHazard(day);
+            const info = isLevel(hazard) ? levelInfo(hazard) : {color: NODATA_FILL};
             const swatch = el('i');
             swatch.style.backgroundColor = info.color;
             const levelText = el('strong');
-            levelText.append(swatch, document.createTextNode(`${day.level} 级 ${day.label}`));
+            levelText.append(swatch, document.createTextNode(isLevel(hazard) ? `${demoPrefix()}${hazard} 级 ${day.label || levelInfo(hazard).label}` : UNKNOWN_RISK));
             const temps = `${fmt(day.temperature_max, 0)}° / ${fmt(day.temperature_min, 0)}°`;
             button.append(
-                el('span', 'hrw-day-date', index === 0 ? `今天 ${dayLabel(day.date).split(' ')[1] || ''}` : dayLabel(day.date)),
-                el('span', 'hrw-day-flag', day.escalated ? (day.hot_night ? '热夜 +1' : '热浪 +1') : ''),
+                el('span', 'hrw-day-date', dayLabel(day.date)),
+                el('span', 'hrw-day-flag', isLevel(hazard) && day.escalated ? (day.hot_night ? '热夜 +1' : '热浪 +1') : ''),
                 levelText,
                 el('span', 'hrw-day-temp', temps)
             );
-            button.title = day.reasons.join('；') || '无高温';
+            button.title = isLevel(hazard) ? `${demoPrefix()}${dayReasons(day).join('；') || (hazard === 0 ? '无高温' : day.label || '热危险')}` : UNKNOWN_RISK;
             button.addEventListener('click', () => setDay(index));
             ui.days.appendChild(button);
         });
@@ -999,6 +1056,7 @@
 
     function setDay(index) {
         state.dayIndex = index;
+        syncDailyLayer();
         Array.from(ui.days.querySelectorAll('.hrw-day')).forEach((button, k) => button.setAttribute('aria-selected', String(k === index)));
         restyleCells();
         renderVillages();
@@ -1010,26 +1068,29 @@
     }
 
     function priorityForDay() {
-        if (!state.daily) return [];
+        if (!state.daily || !isLevel(currentHazard())) return [];
         const entry = state.daily.priority[state.dayIndex];
-        return entry ? entry.villages : [];
+        if (!entry || !Array.isArray(entry.villages) || entry.date !== currentDay().date) return [];
+        return entry.villages.filter((village) => isLevel(village.daily_level));
     }
 
     function renderPriority() {
         ui.priorityList.replaceChildren();
         const villages = priorityForDay();
+        const known = isLevel(currentHazard());
+        ui.priorityNote.textContent = known ? `${demoPrefix()}按当日风险、静态风险分、老人数排序` : '仅保留静态风险参考，天气恢复后生成当日巡访顺序。';
         if (!villages.length) {
-            ui.priorityList.appendChild(el('li', 'hrw-empty', state.daily ? '服务区村点暂未配置坐标。' : '预报载入后生成清单。'));
+            ui.priorityList.appendChild(el('li', 'hrw-empty', !known ? UNKNOWN_RISK : '服务区村点暂未配置坐标。'));
         }
         villages.forEach((village, index) => {
             const item = el('li');
             const button = el('button', 'hrw-priority-item');
             button.type = 'button';
             const chip = el('span', 'hrw-level-chip hrw-level-chip--small');
-            levelChip(chip, village.daily_level);
+            levelChip(chip, village.daily_level, demoPrefix());
             const head = el('div', 'hrw-priority-head');
             head.append(el('span', 'hrw-rank', String(index + 1)), el('strong', null, village.name), chip);
-            button.append(head, el('span', 'hrw-priority-town', village.township || ''), el('span', 'hrw-priority-reasons', village.reasons.join(' · ')));
+            button.append(head, el('span', 'hrw-priority-town', village.township || ''), el('span', 'hrw-priority-reasons', (village.reasons || []).join(' · ')));
             button.addEventListener('click', () => selectVillage(village));
             item.appendChild(button);
             ui.priorityList.appendChild(item);
@@ -1038,12 +1099,18 @@
     }
 
     function renderActionCard(level) {
-        const cards = state.daily ? state.daily.action_cards : state.meta.action_cards;
-        const card = cards[String(level)] || cards[level];
-        if (!card) return;
+        const cards = (state.daily && state.daily.action_cards) || state.meta.action_cards || {};
+        const card = isLevel(level) && isLevel(currentHazard()) ? cards[String(level)] : null;
+        if (!card) {
+            ui.actionCard.replaceChildren(
+                el('div', 'hrw-action-title', UNKNOWN_RISK),
+                el('p', 'hrw-empty', '有效天气预报恢复前，暂不生成当日分级行动卡。静态风险、村点和避暑点仍可查阅。')
+            );
+            return;
+        }
         const title = el('div', 'hrw-action-title');
         const chip = el('span', 'hrw-level-chip hrw-level-chip--small');
-        levelChip(chip, level);
+        levelChip(chip, level, demoPrefix());
         title.append(el('strong', null, `行动卡 · ${card.title}`), chip);
         const doctor = el('ul');
         card.doctor.forEach((line) => doctor.appendChild(el('li', null, line)));
@@ -1054,20 +1121,21 @@
 
     function updateHeader() {
         const day = currentDay();
-        if (!day) {
-            ui.lede.textContent = '预报暂不可用。地图显示静态综合热风险分，可按乡镇汇总表安排巡访。';
+        if (ui.metaDay) ui.metaDay.textContent = day ? dayLabel(day.date) : '预报不可用';
+        if (!isLevel(currentHazard())) {
+            ui.title.textContent = UNKNOWN_RISK;
+            ui.lede.textContent = '有效天气预报暂不可用，地图显示静态综合热风险分；暂不生成当日等级和巡访顺序。';
             return;
         }
         const top = priorityForDay()[0];
-        const when = state.dayIndex === 0 ? '今天' : dayLabel(day.date);
-        if (ui.metaDay) ui.metaDay.textContent = state.dayIndex === 0 ? `今天 ${dayLabel(day.date).split(' ')[1] || ''}` : dayLabel(day.date);
-        ui.title.textContent = state.dayIndex === 0 ? '今天先去哪几个村' : `${when}先去哪几个村`;
-        const reasons = day.reasons.length ? `（${day.reasons.join('，')}）` : '';
+        const when = day.date === localDate() ? '今天' : dayLabel(day.date);
+        ui.title.textContent = `${demoPrefix()}${when}先去哪几个村`;
+        const reasons = dayReasons(day).length ? `（${dayReasons(day).join('，')}）` : '';
         if (!day.level) {
-            ui.lede.textContent = `${when}都昌无高温（最高 ${fmt(day.temperature_max, 0)} °C），按常规随访。${top ? `静态风险最高的服务区村：${top.name}（综合分 ${fmt(top.static_score, 0)}）。` : ''}`;
+            ui.lede.textContent = `${demoPrefix()}${when}都昌无高温（最高 ${fmt(day.temperature_max, 0)} °C），按常规随访。${top ? `静态风险最高的服务区村：${top.name}（综合分 ${fmt(top.static_score, 0)}）。` : ''}`;
             return;
         }
-        ui.lede.textContent = `${when}都昌热危险 ${day.level} 级 · ${day.label}${reasons}。${top ? `优先：${top.name}（当日 ${top.daily_level} 级）。` : ''}`;
+        ui.lede.textContent = `${demoPrefix()}${when}都昌热危险 ${day.level} 级 · ${day.label}${reasons}。${top ? `优先：${top.name}（当日 ${top.daily_level} 级）。` : ''}`;
     }
 
     // ------------------------------------------------------------------
@@ -1155,14 +1223,19 @@
     }
 
     function printSheet() {
+        syncDailyLayer();
+        renderPriority();
         const day = currentDay();
         const villages = priorityForDay();
         const sheet = ui.printSheet;
         sheet.replaceChildren();
         sheet.appendChild(el('h1', null, `都昌县热风险巡访单 · ${day ? dayLabel(day.date) : '静态风险'}`));
-        if (day) {
-            sheet.appendChild(el('p', null, `热危险 ${day.level} 级 ${day.label}；最高 ${fmt(day.temperature_max, 0)} °C，最低 ${fmt(day.temperature_min, 0)} °C。${day.reasons.join('；')}`));
+        if (isLevel(currentHazard())) {
+            sheet.appendChild(el('p', null, `${demoPrefix()}热危险 ${day.level} 级 ${day.label}；最高 ${fmt(day.temperature_max, 0)} °C，最低 ${fmt(day.temperature_min, 0)} °C。${dayReasons(day).join('；')}`));
+        } else {
+            sheet.appendChild(el('p', null, `${UNKNOWN_RISK}，暂不生成当日等级和巡访顺序。`));
         }
+        sheet.appendChild(el('p', null, forecastSourceText()));
         const table = el('table');
         const head = el('tr');
         ['序号', '村', '乡镇', '当日等级', '理由', '已巡访 / 备注'].forEach((h) => head.appendChild(el('th', null, h)));
@@ -1188,7 +1261,7 @@
     }
 
     function setLayer(layer) {
-        if (layer === 'daily' && !state.daily && state.dailyLoaded) layer = 'score';
+        if (layer === 'daily' && !isLevel(currentHazard())) layer = 'score';
         state.layer = layer;
         ui.layerTabs.forEach((button) => button.setAttribute('aria-pressed', String(button.dataset.layer === layer)));
         ui.moreLayers.value = ui.layerTabs.some((b) => b.dataset.layer === layer) ? '' : layer;
@@ -1259,15 +1332,34 @@
         });
     }
 
+    function syncDailyLayer() {
+        const unavailable = !isLevel(currentHazard());
+        ui.layerTabs.find((button) => button.dataset.layer === 'daily').disabled = unavailable;
+        if (unavailable && state.layer === 'daily') setLayer('score');
+    }
+
     function applyDaily(daily) {
-        state.daily = daily && Array.isArray(daily.days) && daily.days.length ? daily : null;
+        // 即使无预报也保留村点、避暑点；请求失败时保留已载入的静态资源。
+        const previous = state.daily;
+        const payload = daily && typeof daily === 'object' ? daily : {
+            forecast_status: 'unavailable', forecast_notice: '天气预报请求失败，请稍后重试。'
+        };
+        state.daily = {
+            ...payload,
+            days: Array.isArray(payload.days) ? payload.days.map((day) => day && typeof day === 'object' ? day : {}) : [],
+            priority: Array.isArray(payload.priority) ? payload.priority : [],
+            villages: Array.isArray(payload.villages) ? payload.villages : (previous ? previous.villages : []),
+            cooling_resources: Array.isArray(payload.cooling_resources) ? payload.cooling_resources : (previous ? previous.cooling_resources : [])
+        };
+        const firstLoad = !state.dailyLoaded;
         state.dailyLoaded = true;
-        const requestedDay = Number(initialParams.get('day'));
-        if (state.daily && Number.isInteger(requestedDay) && requestedDay >= 0 && requestedDay < state.daily.days.length) {
-            state.dayIndex = requestedDay;
+        state.forecastDate = localDate();
+        const requestedDay = firstLoad ? Number(initialParams.get('day')) : state.dayIndex;
+        state.dayIndex = Number.isInteger(requestedDay) && requestedDay >= 0 && requestedDay < state.daily.days.length ? requestedDay : 0;
+        syncDailyLayer();
+        if (firstLoad && isLevel(currentHazard()) && (!initialParams.get('layer') || initialParams.get('layer') === 'daily')) {
+            setLayer(initialParams.get('layer') === 'daily' || currentHazard() > 0 ? 'daily' : 'score');
         }
-        if (!state.daily && state.layer === 'daily') setLayer('score');
-        ui.layerTabs.find((b) => b.dataset.layer === 'daily').disabled = !state.daily;
         renderDays();
         renderVillages();
         renderPriority();
@@ -1275,15 +1367,31 @@
         buildSearchOptions();
         restyleCells();
         renderLegend();
-        // 用页面初次载入时的参数判断，避免被初始化阶段写回的 URL 覆盖。
-        if (state.daily && !initialParams.get('layer') && state.layer === 'daily' && !currentHazard()) {
-            setLayer('score');
-        }
-        if (!initialParams.get('cell')) {
+        if (firstLoad && !initialParams.get('cell')) {
             const top = priorityForDay()[0];
             if (top && top.cell_id && state.cellById.has(top.cell_id)) selectCell(state.cellById.get(top.cell_id));
         }
         updateInspector();
+    }
+
+    function loadDaily() {
+        return fetch(app.dataset.dailyUrl, {headers: {Accept: 'application/json'}, credentials: 'same-origin'})
+            .then((response) => (response.ok ? response.json() : null))
+            .catch(() => null)
+            .then(applyDaily);
+    }
+
+    function refreshAfterMidnight() {
+        if (!state.dailyLoaded || state.forecastDate === localDate()) return;
+        state.forecastDate = localDate();
+        // 长期开启的页面先撤下昨天结论，再读取新日期预报。
+        syncDailyLayer();
+        renderDays();
+        renderVillages();
+        renderPriority();
+        updateInspector();
+        updateHeader();
+        loadDaily();
     }
 
     function fail(error) {
@@ -1326,9 +1434,12 @@
         updateInspector();
         drawSelection();
         renderPriority();
-        return fetch(app.dataset.dailyUrl, {headers: {Accept: 'application/json'}, credentials: 'same-origin'})
-            .then((r) => (r.ok ? r.json() : null))
-            .catch(() => null)
-            .then(applyDaily);
+        syncDailyLayer();
+        window.setInterval(refreshAfterMidnight, 60000);
+        window.addEventListener('focus', refreshAfterMidnight);
+        document.addEventListener('visibilitychange', () => {
+            if (!document.hidden) refreshAfterMidnight();
+        });
+        return loadDaily();
     }).catch(fail);
 })();
