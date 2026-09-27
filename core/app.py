@@ -97,6 +97,8 @@ def register_blueprints(app):
     app.register_blueprint(tools_bp)
     app.register_blueprint(api_bp)
     app.register_blueprint(mp_api_bp)
+    from services.agriculture_workbench import register_agriculture_workbench
+    register_agriculture_workbench(app, embed_template="agriculture.html")
 
 
 _register_blueprints = register_blueprints

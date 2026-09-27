@@ -298,6 +298,11 @@ def configure_app(app, logger):
     app.config.setdefault('AI_MAX_TOKENS', parse_int(os.getenv('AI_MAX_TOKENS', '800'), default=800))
     app.config.setdefault('DEMO_MODE', parse_bool(demo_mode, default=False))
     app.config.setdefault('FEATURE_API_V1', parse_bool(os.getenv('FEATURE_API_V1', '1'), default=True))
+    # 农业沿用本站账户；独立私有库须显式初始化，未启用时不加载农业源码。
+    app.config.setdefault('YILAO_AGRICULTURE_WORKBENCH_ENABLED', parse_bool(os.getenv('YILAO_AGRICULTURE_WORKBENCH_ENABLED', '0'), default=False))
+    app.config.setdefault('YILAO_AGRICULTURE_SOURCE_ROOT', os.getenv('YILAO_AGRICULTURE_SOURCE_ROOT') or str(Path(__file__).resolve().parents[1] / 'vendor' / 'yilao_agriculture'))
+    for key in ('YILAO_AGRICULTURE_ACCOUNT_DB', 'YILAO_AGRICULTURE_ARCHIVE_ROOT', 'YILAO_AGRICULTURE_SITE_ORIGIN'):
+        app.config.setdefault(key, os.getenv(key))
     app.config.setdefault('FEATURE_EXPLAIN_OUTPUT', parse_bool(os.getenv('FEATURE_EXPLAIN_OUTPUT', '0'), default=False))
     app.config.setdefault('FEATURE_EMERGENCY_TRIAGE', parse_bool(os.getenv('FEATURE_EMERGENCY_TRIAGE', '0'), default=False))
     app.config.setdefault('FEATURE_ELDER_MODE', parse_bool(os.getenv('FEATURE_ELDER_MODE', '0'), default=False))

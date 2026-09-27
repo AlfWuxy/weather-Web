@@ -1,0 +1,206 @@
+#agri-app {
+  --link:#A74407; --link-hover:#843403; --accent:#F68B33; --accent-hover:#F67932; --accent-ink:#2A1A0F;
+  --ink:#2A2620; --muted:#57504A; --paper:#fff; --ground:#FBF7EE; --line:#ECE3D6; --pale:#FFF3E5;
+  --amber:#FFF0D0; --amber-ink:#664400; --red:#A12B24; --red-bg:#FFF1EF; --radius:18px; --focus:#A76100;
+  background:var(--ground); color:var(--ink); font-size:18px; line-height:1.65;
+  font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","PingFang SC","Hiragino Sans GB","Microsoft YaHei","HarmonyOS Sans SC",system-ui,sans-serif;
+  min-width:0;
+}
+#agri-app,#agri-app * { box-sizing:border-box; }
+#agri-app button,#agri-app input,#agri-app select,#agri-app textarea { font:inherit; }
+#agri-app button,#agri-app a,#agri-app input,#agri-app select,#agri-app textarea,#agri-app summary { touch-action:manipulation; }
+#agri-app button { cursor:pointer; }
+#agri-app button:disabled { cursor:not-allowed; opacity:.58; }
+#agri-app a { color:var(--link); text-underline-offset:4px; }
+#agri-app a:hover { color:var(--link-hover); }
+#agri-app h1,#agri-app h2,#agri-app h3,#agri-app p { margin:0; }
+#agri-app h1 { font-size:32px; line-height:1.35; font-weight:750; letter-spacing:-.02em; }
+#agri-app h2 { font-size:25px; line-height:1.4; }
+#agri-app h3 { font-size:21px; line-height:1.45; }
+#agri-app p+p { margin-top:8px; }
+#agri-app small { font-size:16px; }
+#agri-app ul,#agri-app ol { padding-left:1.4em; }
+#agri-app input,#agri-app select,#agri-app textarea {
+  width:100%; min-width:0; min-height:54px; border:1.5px solid #A99F93; border-radius:12px;
+  background:var(--paper); color:var(--ink); padding:11px 13px;
+}
+#agri-app input[type=checkbox] { width:25px; height:25px; min-height:25px; accent-color:var(--link); flex:none; margin:3px 0 0; }
+#agri-app input[type=file] { padding:12px; background:var(--ground); }
+#agri-app textarea { min-height:110px; resize:vertical; }
+#agri-app input::placeholder,#agri-app textarea::placeholder { color:#746B62; opacity:1; }
+#agri-app :focus-visible { outline:3px solid var(--focus); outline-offset:4px; }
+#agri-app input:focus-visible,#agri-app select:focus-visible,#agri-app textarea:focus-visible { outline-offset:2px; }
+#agri-app fieldset { border:0; padding:0; margin:0; min-width:0; }
+#agri-app legend { font-size:22px; font-weight:700; margin:8px 0 20px; }
+#agri-app label { display:block; font-weight:600; margin-bottom:7px; }
+#agri-app summary { cursor:pointer; min-height:48px; font-size:19px; font-weight:650; padding:12px 0; }
+#agri-app details { border-top:1px solid var(--line); margin-top:24px; padding-top:5px; }
+#agri-app details[open]>summary { margin-bottom:14px; }
+#agri-app .skip-link { position:absolute; left:16px; top:-100px; background:white; padding:16px; z-index:9; }
+#agri-app .skip-link:focus { top:10px; }
+#agri-app .site-header { max-width:1240px; margin:0 auto; padding:25px 32px 16px; }
+#agri-app .brand { display:flex; align-items:center; gap:24px; }
+#agri-app .brand>a { color:var(--ink); text-decoration:none; font-size:32px; font-weight:800; }
+#agri-app .brand p { font-size:17px; color:var(--muted); }
+#agri-app .local-label { font-size:16px; color:var(--muted); }
+#agri-app .nav-wrap { max-width:1240px; margin:auto; padding:8px 32px 0; }
+#agri-app #agri-main-nav { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:8px; background:var(--paper); border:1px solid var(--line); border-radius:16px; padding:5px; }
+#agri-app .nav-item { color:var(--muted); min-height:52px; padding:12px 10px; text-align:center; text-decoration:none; font-size:20px; font-weight:650; border:1px solid transparent; border-radius:12px; line-height:1.4; }
+#agri-app .nav-item[aria-current=page] { background:var(--pale); border-color:#F2CDA9; color:var(--link); }
+#agri-app .nav-item:hover { background:var(--ground); }
+#agri-app .module-tools { display:flex; align-items:center; justify-content:space-between; gap:12px; min-height:48px; }
+#agri-app .settings-link,#agri-app .inline-link { display:inline-flex; align-items:center; min-height:44px; font-weight:650; }
+#agri-app .settings-link[aria-current=page] { text-decoration-thickness:2px; }
+#agri-app #agri-mode-banner:not(:empty) { background:var(--amber); border-bottom:1px solid #D6B373; }
+#agri-app #agri-mode-banner>div { max-width:1176px; margin:auto; padding:12px 24px; display:flex; align-items:center; justify-content:space-between; gap:16px; }
+#agri-app .demo-exit { background:white; color:var(--link); border:1px solid #D8B898; min-height:44px; padding:7px 16px; border-radius:12px; font-weight:700; white-space:nowrap; }
+#agri-app #agri-main { max-width:1240px; margin:0 auto; padding:20px 32px 48px; min-height:60vh; outline:none; }
+#agri-app .notice-region { max-width:1176px; margin:0 auto; }
+#agri-app .notice-region:not(:empty) { padding:20px 0 0; }
+#agri-app .page-heading { margin-bottom:24px; display:flex; justify-content:space-between; align-items:flex-start; gap:20px; }
+#agri-app .page-heading p { margin-top:8px; color:var(--muted); }
+#agri-app .panel { min-width:0; padding:24px; background:var(--paper); border:1px solid var(--line); border-radius:var(--radius); }
+#agri-app .panel+.panel { margin-top:22px; }
+#agri-app .panel h2 { margin-bottom:16px; }
+#agri-app .panel h3 { margin-bottom:9px; }
+#agri-app .button { display:inline-flex; justify-content:center; align-items:center; text-align:center; gap:8px; min-height:52px; padding:12px 22px; border-radius:14px; border:1px solid var(--line); font-weight:700; line-height:1.4; text-decoration:none; }
+#agri-app .button.primary { background:var(--accent); border-color:var(--accent); color:var(--accent-ink); }
+#agri-app .button.primary:hover { background:var(--accent-hover); border-color:var(--accent-hover); }
+#agri-app .button.secondary { background:var(--paper); color:var(--link); border-color:#DCC4AF; }
+#agri-app .button.secondary:hover { background:var(--pale); }
+#agri-app .button.tertiary { color:var(--link); border-color:transparent; background:transparent; padding-left:8px; padding-right:8px; }
+#agri-app .button.danger { color:var(--red); border-color:var(--red); background:var(--paper); }
+#agri-app .actions { display:flex; gap:12px; flex-wrap:wrap; align-items:center; }
+#agri-app .form-actions { margin-top:28px; display:flex; gap:12px; flex-wrap:wrap; align-items:center; }
+#agri-app .actions-spaced { margin:24px 0; }
+#agri-app .today-actions { margin:20px 0 10px; }
+#agri-app .today-actions>.primary { min-width:210px; }
+#agri-app .muted { color:var(--muted); }
+#agri-app .notice { border-radius:14px; padding:16px 20px; background:var(--pale); border-left:4px solid #C67B38; margin:16px 0; overflow-wrap:anywhere; }
+#agri-app .notice strong { display:block; margin-bottom:5px; }
+#agri-app .notice p { margin:0; }
+#agri-app .notice.warning { background:var(--amber); color:var(--amber-ink); border-color:#B77912; }
+#agri-app .notice.error { background:var(--red-bg); color:#762B25; border-color:var(--red); }
+#agri-app .notice.success { background:#EAF4EA; color:#254F32; }
+#agri-app .notice.stop { background:var(--red-bg); color:#762B25; border-color:var(--red); font-size:20px; font-weight:650; }
+#agri-app .safety-note { font-size:19px; font-weight:650; }
+#agri-app .readiness-status { margin-top:18px; color:var(--amber-ink); font-weight:650; }
+#agri-app .readiness-details { margin-top:18px; }
+#agri-app .compact-details { border:0; margin-top:3px; padding:0; }
+#agri-app .compact-details summary { min-height:44px; padding:8px 0; font-size:16px; color:var(--link); }
+#agri-app .compact-details[open]>summary { margin-bottom:4px; }
+#agri-app .plan-details { margin-top:18px; }
+#agri-app .form-grid { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:22px 26px; }
+#agri-app .full-width { grid-column:1/-1; }
+#agri-app .field-hint { font-size:16px; color:var(--muted); margin-top:7px; line-height:1.5; }
+#agri-app .required-note { font-weight:400; font-size:15px; color:var(--muted); }
+#agri-app .field-group { margin:24px 0; }
+#agri-app .check-field { display:flex; align-items:flex-start; gap:13px; background:var(--ground); border:1px solid var(--line); padding:16px; border-radius:14px; font-size:18px; font-weight:550; margin:0; min-height:54px; }
+#agri-app .check-field small { display:block; margin-top:4px; color:var(--muted); font-weight:400; }
+#agri-app .option-group { display:grid; gap:12px; }
+#agri-app .section-divider { border:0; border-top:1px solid var(--line); margin:28px 0; }
+#agri-app .record-list { display:grid; gap:18px; margin-top:22px; }
+#agri-app .record-row { min-width:0; background:var(--paper); border:1px solid var(--line); border-radius:18px; padding:22px 24px; display:flex; gap:20px; justify-content:space-between; align-items:flex-start; }
+#agri-app .record-row>div { min-width:0; }
+#agri-app .record-row>.actions { max-width:420px; }
+#agri-app .record-title { font-size:22px; font-weight:700; overflow-wrap:anywhere; }
+#agri-app .record-meta { color:var(--muted); margin-top:6px; font-size:17px; }
+#agri-app .record-note { margin-top:10px; overflow-wrap:anywhere; }
+#agri-app .mini-list { list-style:none; padding:0; margin:0; }
+#agri-app .mini-list li { padding:13px 0; border-bottom:1px solid var(--line); }
+#agri-app .mini-list li:last-child { border:0; }
+#agri-app .empty-small { padding:30px 24px; background:var(--paper); border:1px dashed #B8AA98; border-radius:18px; color:var(--muted); margin-top:22px; }
+#agri-app .two-sections { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:24px; align-items:start; }
+#agri-app .two-sections>.panel+.panel { margin:0; }
+#agri-app .subheading { display:flex; justify-content:space-between; align-items:center; gap:16px; margin:30px 0 16px; }
+#agri-app .subheading h2 { margin:0; }
+#agri-app .data-pairs { display:grid; grid-template-columns:130px minmax(0,1fr); gap:10px 18px; margin:16px 0; }
+#agri-app .data-pairs dt { color:var(--muted); }
+#agri-app .data-pairs dd { margin:0; overflow-wrap:anywhere; }
+#agri-app .weather-strip { display:flex; align-items:baseline; gap:16px; flex-wrap:wrap; margin:20px 0; }
+#agri-app .temperature { font-size:34px; font-weight:750; color:var(--ink); }
+#agri-app .table-scroll { overflow:auto; border:1px solid var(--line); border-radius:14px; margin-top:18px; }
+#agri-app table { width:100%; border-collapse:collapse; font-size:17px; white-space:nowrap; }
+#agri-app th,#agri-app td { text-align:left; padding:12px 16px; border-bottom:1px solid var(--line); }
+#agri-app th { background:var(--ground); font-weight:650; }
+#agri-app tbody tr:last-child td { border:0; }
+#agri-app .timeline { list-style:none; margin:10px 0 28px; padding:0; }
+#agri-app .timeline li { display:grid; grid-template-columns:72px minmax(0,1fr); gap:23px; position:relative; padding:4px 0 27px; }
+#agri-app .timeline li::before { content:''; position:absolute; left:84px; top:12px; bottom:-12px; width:2px; background:#D8C9B6; }
+#agri-app .timeline li:last-child::before { display:none; }
+#agri-app .timeline li::after { content:''; position:absolute; left:78px; top:12px; width:14px; height:14px; border:3px solid #AD6A30; background:var(--paper); border-radius:50%; }
+#agri-app .timeline li.rest::after { background:#DBE9D5; }
+#agri-app .timeline li.rest .phase-body { background:#F0F5ED; }
+#agri-app .timeline time { font-weight:700; font-variant-numeric:tabular-nums; }
+#agri-app .timeline li::marker { content:''; }
+#agri-app .phase-body { padding:0 10px 0 8px; border-radius:6px; }
+#agri-app .phase-body p { font-size:17px; color:var(--muted); }
+#agri-app .session-head { margin:25px 0 15px; border-top:1px solid var(--line); padding-top:20px; }
+#agri-app .session-head:first-child { border:0; margin-top:0; padding-top:0; }
+#agri-app .session-summary { border-bottom:1px solid var(--line); padding:20px 0; }
+#agri-app .session-summary .session-head { border:0; padding:0; margin:0; }
+#agri-app .session-time { color:var(--ink); font-size:22px; font-weight:750; }
+#agri-app .session-phases { border:0; margin-top:8px; padding:0; }
+#agri-app .session-phases summary { font-size:17px; color:var(--link); }
+#agri-app .session-phases[open]>summary { margin-bottom:16px; }
+#agri-app .remaining-row { padding:18px 0; border-bottom:1px solid var(--line); }
+#agri-app .remaining-row:last-child { border:0; }
+#agri-app .remaining-number { font-size:25px; color:var(--ink); font-weight:750; }
+#agri-app .reason-list { font-size:17px; color:var(--muted); margin:12px 0; }
+#agri-app .reason-list>li { margin-bottom:20px; }
+#agri-app .reason-list .actions { margin-top:12px; }
+#agri-app .form-error:empty { display:none; }
+#agri-app .form-error { background:var(--red-bg); border:1px solid #CB776F; border-radius:14px; padding:15px 20px; margin:22px 0; color:#762B25; }
+#agri-app .inline-summary { background:var(--ground); padding:15px 18px; border-radius:14px; margin:18px 0; }
+#agri-app .site-footer { max-width:1176px; padding:26px 0; margin:auto; border-top:1px solid var(--line); font-size:16px; color:var(--muted); }
+#agri-app .loading-state { padding:55px 0; }
+#agri-app .loading-state p { margin-top:20px; }
+#agri-app .visually-hidden { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
+#agri-app .form-intro { margin-bottom:25px; color:var(--muted); }
+#agri-app .pending-tag { color:#755014; font-size:16px; font-weight:600; margin-left:10px; }
+#agri-app .weather-source { overflow-wrap:anywhere; }
+#agri-app .field[hidden],#agri-app [hidden] { display:none!important; }
+#agri-app[data-host="weather-site"]>.site-header,#agri-app[data-host="weather-site"]>.site-footer { display:none; }
+@media(max-width:1050px) {
+  #agri-app .brand { display:block; }
+  #agri-app .brand p { margin-top:3px; }
+  #agri-app .record-row { display:block; }
+  #agri-app .record-row>.actions { margin-top:17px; max-width:none; }
+  #agri-app .notice-region,#agri-app .site-footer { margin-left:32px; margin-right:32px; }
+}
+@media(max-width:760px) {
+  #agri-app .site-header { padding:20px 16px 12px; }
+  #agri-app .brand>a { font-size:30px; }
+  #agri-app .brand p { font-size:16px; }
+  #agri-app .local-label { font-size:14px; }
+  #agri-app .nav-wrap { padding:8px 16px 0; }
+  #agri-app #agri-main-nav { gap:3px; padding:4px; }
+  #agri-app .nav-item { min-height:48px; font-size:17px; padding:11px 2px; }
+  #agri-app .module-tools { font-size:16px; }
+  #agri-app #agri-main { padding:16px 16px 36px; }
+  #agri-app h1 { font-size:28px; }
+  #agri-app h2 { font-size:24px; }
+  #agri-app .page-heading { display:block; margin-bottom:22px; }
+  #agri-app .page-heading>.button,#agri-app .page-heading>.actions { margin-top:18px; }
+  #agri-app .two-sections,#agri-app .form-grid { grid-template-columns:minmax(0,1fr); gap:20px; }
+  #agri-app .panel { padding:20px 18px; }
+  #agri-app .field.full-width { grid-column:auto; }
+  #agri-app .form-actions>.button { flex:1; min-width:140px; }
+  #agri-app .notice-region { margin:0 16px; }
+  #agri-app .notice-region:not(:empty) { padding-top:10px; }
+  #agri-app .site-footer { margin:0 16px; padding:22px 0; font-size:15px; }
+  #agri-app .record-row { padding:20px; }
+  #agri-app .record-row .actions { gap:8px; }
+  #agri-app .actions>.button { padding-left:18px; padding-right:18px; }
+  #agri-app .today-actions>.primary { width:100%; }
+  #agri-app .subheading { align-items:flex-start; }
+  #agri-app .subheading>.button { padding:10px 13px; }
+  #agri-app .data-pairs { grid-template-columns:96px minmax(0,1fr); font-size:17px; }
+  #agri-app .timeline li { grid-template-columns:62px minmax(0,1fr); gap:24px; }
+  #agri-app .timeline li::before { left:74px; }
+  #agri-app .timeline li::after { left:68px; }
+  #agri-app #agri-mode-banner>div { padding:12px 16px; align-items:flex-start; font-size:16px; }
+  #agri-app .demo-exit { font-size:16px; padding:8px 10px; }
+  #agri-app .temperature { font-size:30px; }
+  #agri-app #agri-main-nav .nav-item:focus-visible { outline-offset:-4px; }
+}
