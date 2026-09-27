@@ -1,38 +1,52 @@
-const { api } = require('../../utils/request');
+const { api, requireAuth, handleApiError } = require('../../utils/request');
 
 Page({
   data: {
     elders: [],
-    loading: false,
+    loading: true,
+    loadError: false,
   },
 
   async onShow() {
     await this.loadElders();
   },
 
-  getToken() {
-    return (wx.getStorageSync('api_token') || '').trim();
+  formatTemp(value) {
+    if (value === null || value === undefined || value === '') return '-';
+    return String(value);
+  },
+
+  shapeElder(item) {
+    const row = item || {};
+    const member = row.member || null;
+    const today = row.today || {};
+    return {
+      pair_id: row.pair_id,
+      displayName: (member && member.name) ? member.name : '老人',
+      relationText: (member && member.relation) ? (' · ' + member.relation) : '',
+      locationText: row.location_query || row.community_code || '-',
+      tempMaxText: this.formatTemp(today.temperature_max),
+      tempMinText: this.formatTemp(today.temperature_min),
+      badgeKind: (today.trigger === 'heat' || today.trigger === 'cold') ? today.trigger : 'normal',
+      hasOfficialWarning: !!today.has_official_warning,
+    };
   },
 
   async loadElders() {
-    const token = this.getToken();
-    if (!token) {
-      wx.reLaunch({ url: '/pages/bind-token/index' });
-      return;
-    }
-    this.setData({ loading: true });
+    const token = requireAuth();
+    if (!token) return;
+    this.setData({ loading: true, loadError: false });
     try {
       const data = await api({ method: 'GET', path: '/mp/api/v1/elders', token });
-      this.setData({ elders: data || [] });
+      const list = Array.isArray(data) ? data : [];
+      this.setData({
+        elders: list.map((row) => this.shapeElder(row)),
+        loading: false,
+        loadError: false,
+      });
     } catch (e) {
-      if (String(e && e.message) === 'unauthorized') {
-        wx.removeStorageSync('api_token');
-        wx.reLaunch({ url: '/pages/bind-token/index' });
-        return;
-      }
-      wx.showToast({ title: '加载失败', icon: 'none' });
-    } finally {
-      this.setData({ loading: false });
+      if (handleApiError(e, { fallbackTitle: '加载失败' })) return;
+      this.setData({ loading: false, loadError: true });
     }
   },
 
@@ -59,4 +73,3 @@ Page({
     wx.navigateTo({ url: '/pages/settings/index' });
   },
 });
-

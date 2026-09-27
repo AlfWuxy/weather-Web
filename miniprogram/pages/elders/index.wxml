@@ -1,55 +1,63 @@
-<view style="padding: 16px;">
+<view class="page-pad">
   <view class="card">
-    <view style="display:flex; align-items:center; justify-content: space-between;">
-      <view style="font-size: 18px; font-weight: 700;">监测对象</view>
+    <view class="row">
+      <view class="page-title">监测对象</view>
       <button size="mini" class="btn-outline" bindtap="goSettings">设置</button>
     </view>
-    <view class="muted" style="margin-top: 6px; font-size: 12px;">
+    <view class="muted page-lead">
       支持多地区；预警触发逻辑以“官方预警 + 阈值规则”为主。
     </view>
-    <view style="margin-top: 12px;">
-      <button class="btn-primary" bindtap="goCreate">新增老人</button>
+    <view class="create-wrap">
+      <button class="btn-primary btn-block" bindtap="goCreate">新增老人</button>
     </view>
   </view>
 
-  <view style="height: 12px;"></view>
+  <view class="spacer"></view>
 
   <block wx:if="{{loading}}">
-    <view class="muted" style="text-align:center; padding: 20px;">加载中…</view>
+    <view class="muted empty">加载中…</view>
   </block>
 
-  <block wx:if="{{!loading && elders.length === 0}}">
-    <view class="muted" style="text-align:center; padding: 20px;">暂无老人，请先新增或在网页端添加。</view>
+  <block wx:elif="{{loadError}}">
+    <view class="muted empty">加载失败，请稍后重试。</view>
   </block>
 
-  <block wx:for="{{elders}}" wx:key="pair_id">
-    <view class="card" style="margin-bottom: 12px;">
-      <view style="display:flex; justify-content: space-between; gap: 10px;">
-        <view style="flex:1;">
-          <view style="font-weight: 700; font-size: 16px;">
-            {{item.member && item.member.name ? item.member.name : '老人'}}
-            <text class="muted" style="font-size: 12px;">{{item.member && item.member.relation ? ' · ' + item.member.relation : ''}}</text>
-          </view>
-          <view class="muted" style="margin-top: 4px;">
-            地点：{{item.location_query || item.community_code || '-'}}
-          </view>
-          <view class="muted" style="margin-top: 4px; font-size: 12px;">
-            Tmax {{item.today.temperature_max || '-'}} · Tmin {{item.today.temperature_min || '-'}}
-          </view>
-        </view>
-        <view>
-          <view wx:if="{{item.today.trigger === 'heat'}}" style="background:#fee2e2; color:#991b1b; padding:4px 8px; border-radius: 999px; font-size: 12px;">高温</view>
-          <view wx:elif="{{item.today.trigger === 'cold'}}" style="background:#dbeafe; color:#1d4ed8; padding:4px 8px; border-radius: 999px; font-size: 12px;">寒潮</view>
-          <view wx:else style="background:#f3f4f6; color:#374151; padding:4px 8px; border-radius: 999px; font-size: 12px;">正常</view>
-        </view>
-      </view>
+  <block wx:elif="{{elders.length === 0}}">
+    <view class="muted empty">暂无老人，请先新增或在网页端添加。</view>
+  </block>
 
-      <view style="display:flex; gap: 10px; margin-top: 12px; flex-wrap: wrap;">
-        <button size="mini" class="btn-outline" data-pair-id="{{item.pair_id}}" bindtap="goAlerts">预警</button>
-        <button size="mini" class="btn-outline" data-pair-id="{{item.pair_id}}" bindtap="goTemplate">话术</button>
-        <button size="mini" class="btn-outline" data-pair-id="{{item.pair_id}}" bindtap="goEdit">编辑</button>
+  <block wx:else>
+    <block wx:for="{{elders}}" wx:key="pair_id">
+      <view class="card card-item">
+        <view class="elder-head">
+          <view class="elder-head-main">
+            <view class="elder-name">
+              {{item.displayName}}
+              <text class="muted text-sm">{{item.relationText}}</text>
+            </view>
+            <view class="muted meta-line">
+              地点：{{item.locationText}}
+            </view>
+            <view class="muted text-sm meta-line">
+              Tmax {{item.tempMaxText}} · Tmin {{item.tempMinText}}
+            </view>
+            <view wx:if="{{item.badgeKind === 'normal' && item.hasOfficialWarning}}" class="muted text-sm meta-line">
+              有官方预警
+            </view>
+          </view>
+          <view>
+            <view wx:if="{{item.badgeKind === 'heat'}}" class="badge badge-heat">高温</view>
+            <view wx:elif="{{item.badgeKind === 'cold'}}" class="badge badge-cold">寒潮</view>
+            <view wx:else class="badge badge-ok">正常</view>
+          </view>
+        </view>
+
+        <view class="mini-row">
+          <button size="mini" class="btn-outline" data-pair-id="{{item.pair_id}}" bindtap="goAlerts">预警</button>
+          <button size="mini" class="btn-outline" data-pair-id="{{item.pair_id}}" bindtap="goTemplate">话术</button>
+          <button size="mini" class="btn-outline" data-pair-id="{{item.pair_id}}" bindtap="goEdit">编辑</button>
+        </view>
       </view>
-    </view>
+    </block>
   </block>
 </view>
-

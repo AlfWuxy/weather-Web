@@ -1,42 +1,55 @@
-<view style="padding: 16px;">
+<view class="page-pad">
   <view class="card">
-    <view style="font-size: 18px; font-weight: 700;">预警</view>
-    <view class="muted" style="margin-top: 6px; font-size: 12px;">
+    <view class="alert-head">
+      <view class="page-title">预警</view>
+      <view wx:if="{{thresholdKind === 'heat'}}" class="badge badge-heat">高温</view>
+      <view wx:elif="{{thresholdKind === 'cold'}}" class="badge badge-cold">寒潮</view>
+    </view>
+    <view class="muted page-lead">
       官方预警来自 QWeather；无官方预警时，页面仍会展示温度阈值信息供参考。
     </view>
-    <view class="muted" style="margin-top: 10px;">
+    <view class="muted field">
       地点：{{location.query || '-'}}
     </view>
-    <view class="muted" style="margin-top: 4px; font-size: 12px;">
-      Tmax {{weather.temperature_max || '-'}} · Tmin {{weather.temperature_min || '-'}}
+    <view class="muted text-sm meta-line">
+      Tmax {{tmaxDisplay}} · Tmin {{tminDisplay}}
     </view>
   </view>
 
-  <view style="height: 12px;"></view>
+  <view class="spacer"></view>
 
-  <block wx:if="{{loading}}">
-    <view class="muted" style="text-align:center; padding: 20px;">加载中…</view>
+  <block wx:if="{{missingPair}}">
+    <view class="muted empty">请先选择监测对象</view>
   </block>
 
-  <block wx:if="{{!loading && warnings.length === 0}}">
-    <view class="muted" style="text-align:center; padding: 20px;">暂无官方预警</view>
+  <block wx:elif="{{loading}}">
+    <view class="muted empty">加载中…</view>
   </block>
 
-  <block wx:for="{{warnings}}" wx:key="title">
-    <view class="card" style="margin-bottom: 12px;">
-      <view style="font-weight: 700;">{{item.title || '预警'}}</view>
-      <view class="muted" style="margin-top: 6px;">{{item.type || ''}} {{item.level || ''}}</view>
-      <view style="margin-top: 8px; line-height: 1.6;">{{item.text || ''}}</view>
-      <view class="muted" style="margin-top: 8px; font-size: 12px;">
-        {{item.start_time || ''}} {{item.end_time ? ('→ ' + item.end_time) : ''}}
+  <block wx:elif="{{loadError}}">
+    <view class="muted empty">加载失败</view>
+  </block>
+
+  <block wx:elif="{{warnings.length === 0}}">
+    <view class="muted empty">暂无官方预警</view>
+  </block>
+
+  <block wx:else>
+    <block wx:for="{{warnings}}" wx:key="listKey">
+      <view class="card card-item">
+        <view class="title">{{item.title || '预警'}}</view>
+        <view class="muted page-lead">{{item.type || ''}} {{item.level || ''}}</view>
+        <view class="warn-body">{{item.text || ''}}</view>
+        <view class="muted text-sm warn-time">
+          {{item.start_time || ''}} {{item.end_time ? ('→ ' + item.end_time) : ''}}
+        </view>
       </view>
-    </view>
+    </block>
   </block>
 
-  <view class="card" style="margin-top: 6px;">
-    <view class="muted" style="font-size: 12px;">
+  <view class="card card-foot">
+    <view class="muted text-sm">
       说明：本工具提供通用行动建议，不提供医疗诊断/治疗建议；如明显不适请及时就医。
     </view>
   </view>
 </view>
-

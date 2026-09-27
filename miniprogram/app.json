@@ -13,6 +13,7 @@
     "navigationBarTextStyle": "black",
     "backgroundColor": "#f5f7fb"
   },
-  "style": "v2"
+  "style": "v2",
+  "sitemapLocation": "sitemap.json"
 }
 

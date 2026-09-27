@@ -72,6 +72,11 @@ backups/
 .DS_Store
 Thumbs.db
 
+# WeChat DevTools local overlay (urlCheck and libVersion). Do not commit.
+project.private.config.json
+miniprogram/project.config.json
+miniprogram/project.private.config.json
+
 # 模型与敏感数据
 models/*.pkl
 data/research/*.xlsx

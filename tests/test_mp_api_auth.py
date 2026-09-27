@@ -112,6 +112,10 @@ def test_mp_api_invalid_bearer_rotation_cannot_bypass_ip_limit(
         assert first.status_code == 401
         assert rotated.status_code == 429
         assert separate_ip.status_code == 401
+        rotated_body = rotated.get_json()
+        assert rotated_body["success"] is False
+        assert rotated_body["error"] == "rate_limited"
+        assert rotated.content_type.startswith("application/json")
     finally:
         limiter.reset()
 
@@ -221,3 +225,73 @@ def test_mp_elders_does_not_create_trigger_from_mock_weather(app, client, db_ses
     assert alert_weather['weather_available'] is False
     assert alert_weather['temperature_max'] is None
     assert alert_weather['temperature_min'] is None
+    assert today.get('has_official_warning') is False
+    assert alerts_response.get_json()['data']['has_official_warning'] is False
+
+
+def test_mp_api_post_and_patch_without_csrf_still_json(app, client, db_session):
+    from core.usage import create_api_token
+    from core.db_models import User
+
+    with app.app_context():
+        user = User(username="mp_csrf_user", role="user")
+        user.set_password("pw123456")
+        db_session.add(user)
+        db_session.commit()
+        plain = create_api_token(user.id, name="csrf")
+
+    events = client.post(
+        "/mp/api/v1/events",
+        json={"event_type": "template_copy"},
+        headers={"Authorization": f"Bearer {plain}"},
+    )
+    me_patch = client.patch(
+        "/mp/api/v1/me",
+        json={"push_enabled": False},
+        headers={"Authorization": f"Bearer {plain}"},
+    )
+    for resp in (events, me_patch):
+        assert resp.status_code != 400
+        assert resp.is_json
+        assert resp.content_type.startswith("application/json")
+        assert isinstance(resp.get_json().get("success"), bool)
+    assert events.status_code == 200
+    assert events.get_json()["success"] is True
+    assert me_patch.status_code == 200
+    assert me_patch.get_json()["success"] is True
+
+
+def test_mp_api_429_json_body_success_false(app, client, db_session):
+    from core.db_models import User
+    from core.extensions import limiter
+    from core.usage import create_api_token
+
+    with app.app_context():
+        user = User(username="mp_429_json_user", role="user")
+        user.set_password("pw123456")
+        db_session.add(user)
+        db_session.commit()
+        plain = create_api_token(user.id, name="limit")
+
+    app.config["RATE_LIMIT_MP_READ"] = "1 per minute"
+    limiter.reset()
+    ip = {"REMOTE_ADDR": "203.0.113.30"}
+    try:
+        first = client.get(
+            "/mp/api/v1/me",
+            headers={"Authorization": f"Bearer {plain}"},
+            environ_overrides=ip,
+        )
+        second = client.get(
+            "/mp/api/v1/me",
+            headers={"Authorization": f"Bearer {plain}"},
+            environ_overrides=ip,
+        )
+        assert first.status_code == 200
+        assert second.status_code == 429
+        assert second.is_json
+        body = second.get_json()
+        assert body["success"] is False
+        assert body["error"] == "rate_limited"
+    finally:
+        limiter.reset()

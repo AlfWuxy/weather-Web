@@ -35,6 +35,55 @@ bp = Blueprint("mp_api", __name__, url_prefix="/mp/api/v1")
 MP_EVENT_META_MAX_CHARS = 2048
 
 
+def _parse_tmax_tmin(weather_data):
+    """Return (tmax, tmin) as floats, or (None, None) if missing/unparsable."""
+    if not isinstance(weather_data, dict):
+        return None, None
+    try:
+        tmax = weather_data.get("temperature_max")
+        tmin = weather_data.get("temperature_min")
+        tmax_value = float(tmax) if tmax is not None else None
+        tmin_value = float(tmin) if tmin is not None else None
+    except (AttributeError, TypeError, ValueError):
+        return None, None
+    return tmax_value, tmin_value
+
+
+def _mp_weather_available(weather_data, tmax_value, tmin_value) -> bool:
+    return (
+        is_qweather_online_weather(weather_data)
+        and tmax_value is not None
+        and tmin_value is not None
+    )
+
+
+def _warnings_for_location_code(location_code: str, cache: dict) -> list:
+    if not location_code:
+        return []
+    if location_code not in cache:
+        cache[location_code] = get_qweather_warnings(location_code) or []
+    return cache[location_code]
+
+
+def _today_summary(weather_data, warnings) -> dict:
+    tmax_value, tmin_value = _parse_tmax_tmin(weather_data)
+    weather_available = _mp_weather_available(weather_data, tmax_value, tmin_value)
+    trigger = None
+    if weather_available:
+        if tmax_value >= 35:
+            trigger = "heat"
+        elif tmin_value <= 5:
+            trigger = "cold"
+    return {
+        "trigger": trigger,
+        "temperature_max": tmax_value if weather_available else None,
+        "temperature_min": tmin_value if weather_available else None,
+        "weather_available": weather_available,
+        "is_mock": bool(weather_data.get("is_mock")) if isinstance(weather_data, dict) else False,
+        "has_official_warning": bool(warnings),
+    }
+
+
 def _bearer_token() -> str:
     auth = request.headers.get("Authorization") or ""
     auth = auth.strip()
@@ -136,33 +185,18 @@ def elders_list():
     member_map = {m.id: m for m in members}
 
     result = []
+    weather_cache = {}
+    warnings_cache = {}
     for p in pairs:
         label = (p.location_query or p.community_code or "").strip()
         resolved = resolve_location(label)
         code = resolved.get("location_code") or ""
-        weather_data, _ = get_weather_with_cache(code or label)
-        # Lightweight summary; detailed warnings via /alerts
-        trigger = None
-        tmax_value = None
-        tmin_value = None
-        try:
-            tmax = weather_data.get("temperature_max")
-            tmin = weather_data.get("temperature_min")
-            tmax_value = float(tmax) if tmax is not None else None
-            tmin_value = float(tmin) if tmin is not None else None
-        except (AttributeError, TypeError, ValueError):
-            tmax_value = None
-            tmin_value = None
-        weather_available = (
-            is_qweather_online_weather(weather_data)
-            and tmax_value is not None
-            and tmin_value is not None
-        )
-        if weather_available:
-            if tmax_value >= 35:
-                trigger = "heat"
-            elif tmin_value <= 5:
-                trigger = "cold"
+        weather_key = code or label
+        if weather_key not in weather_cache:
+            weather_cache[weather_key] = get_weather_with_cache(weather_key)
+        weather_data, _ = weather_cache[weather_key]
+        warnings = _warnings_for_location_code(code, warnings_cache)
+        today = _today_summary(weather_data, warnings)
 
         member = member_map.get(p.member_id) if p.member_id else None
         result.append(
@@ -182,13 +216,7 @@ def elders_list():
                     if member
                     else None
                 ),
-                "today": {
-                    "trigger": trigger,
-                    "temperature_max": tmax_value if weather_available else None,
-                    "temperature_min": tmin_value if weather_available else None,
-                    "weather_available": weather_available,
-                    "is_mock": bool(weather_data.get("is_mock")),
-                },
+                "today": today,
             }
         )
 
@@ -298,7 +326,21 @@ def elders_patch(pair_id: int):
         source="miniprogram",
         meta={"updated_fields": list(payload.keys())[:20]},
     )
-    return jsonify({"success": True})
+    chronic_out = []
+    if pair.member_id:
+        member = FamilyMember.query.filter_by(id=pair.member_id, user_id=g.api_user_id).first()
+        if member:
+            chronic_out = safe_json_loads(member.chronic_diseases, [])
+    return jsonify(
+        {
+            "success": True,
+            "data": {
+                "pair_id": pair.id,
+                "location_query": pair.location_query,
+                "chronic_diseases": chronic_out,
+            },
+        }
+    )
 
 
 @bp.route("/alerts", endpoint="alerts_list")
@@ -307,7 +349,7 @@ def elders_patch(pair_id: int):
 def alerts_list():
     pair_id = request.args.get("pair_id", type=int)
     if not pair_id:
-        return jsonify({"success": False, "error": "missing pair_id"}), 400
+        return jsonify({"success": False, "error": "missing_pair_id"}), 400
     pair = _pair_for_user(pair_id)
     if not pair:
         return jsonify({"success": False, "error": "not_found"}), 404
@@ -317,7 +359,7 @@ def alerts_list():
     code = resolved.get("location_code") or ""
     warnings = get_qweather_warnings(code) if code else []
     weather_data, _ = get_weather_with_cache(code or label)
-    weather_available = is_qweather_online_weather(weather_data)
+    today = _today_summary(weather_data, warnings)
 
     return jsonify(
         {
@@ -325,11 +367,13 @@ def alerts_list():
             "data": {
                 "location": {"query": label, "code": code, "provider": resolved.get("provider")},
                 "warnings": warnings,
+                "has_official_warning": bool(warnings),
                 "weather": {
-                    "temperature_max": weather_data.get("temperature_max") if weather_available else None,
-                    "temperature_min": weather_data.get("temperature_min") if weather_available else None,
-                    "weather_available": weather_available,
-                    "is_mock": bool(weather_data.get("is_mock")),
+                    "trigger": today["trigger"],
+                    "temperature_max": today["temperature_max"],
+                    "temperature_min": today["temperature_min"],
+                    "weather_available": today["weather_available"],
+                    "is_mock": today["is_mock"],
                 },
             },
         }
@@ -385,4 +429,4 @@ def events():
         source="miniprogram",
         meta=meta,
     )
-    return jsonify({"success": True})
+    return jsonify({"success": True, "data": {}})

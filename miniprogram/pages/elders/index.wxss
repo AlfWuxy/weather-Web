@@ -4,3 +4,32 @@
   justify-content: space-between;
 }
 
+.create-wrap {
+  margin-top: 12px;
+}
+
+.elder-name {
+  font-weight: 700;
+  font-size: 16px;
+}
+
+.badge {
+  padding: 4px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+}
+
+.badge-heat {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.badge-cold {
+  background: #dbeafe;
+  color: #1d4ed8;
+}
+
+.badge-ok {
+  background: #f3f4f6;
+  color: #374151;
+}

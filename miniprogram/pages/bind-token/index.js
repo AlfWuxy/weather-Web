@@ -1,4 +1,4 @@
-const { api } = require('../../utils/request');
+const { api, getToken, setToken, clearToken, handleApiError, isApiConfigured } = require('../../utils/request');
 
 Page({
   data: {
@@ -7,19 +7,26 @@ Page({
   },
 
   onLoad() {
-    const saved = wx.getStorageSync('api_token') || '';
+    const saved = getToken();
     if (saved) {
       this.setData({ tokenInput: saved });
     }
   },
 
+  onShow() {
+    const saved = getToken();
+    if (saved && isApiConfigured()) {
+      wx.reLaunch({ url: '/pages/elders/index' });
+    }
+  },
+
   onInput(e) {
-    this.setData({ tokenInput: (e.detail.value || '').trim() });
+    this.setData({ tokenInput: e.detail.value || '' });
   },
 
   onClear() {
     this.setData({ tokenInput: '' });
-    wx.removeStorageSync('api_token');
+    clearToken();
   },
 
   async onBind() {
@@ -32,13 +39,12 @@ Page({
     this.setData({ busy: true });
     try {
       await api({ method: 'GET', path: '/mp/api/v1/me', token });
-      wx.setStorageSync('api_token', token);
+      setToken(token);
       wx.reLaunch({ url: '/pages/elders/index' });
     } catch (e) {
-      wx.showToast({ title: '绑定失败：Token 无效', icon: 'none' });
+      handleApiError(e, { fallbackTitle: '绑定失败', redirectOnUnauthorized: false });
     } finally {
       this.setData({ busy: false });
     }
   },
 });
-
