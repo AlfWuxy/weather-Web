@@ -115,8 +115,10 @@ def test_daily_api_payload_in_demo_mode(authenticated_client):
     assert payload["days"][0]["base_level"] == 3
     assert payload["days"][0]["level"] == 4
     assert payload["days"][0]["hot_night"] is True
-    assert len(payload["villages"]) == 16
-    assert all(v["cell_id"] for v in payload["villages"])
+    assert len(payload["villages"]) >= 16
+    legacy = [v for v in payload["villages"] if v["id"].startswith("legacy-village:")]
+    assert len(legacy) == 16 and all(v["cell_id"] for v in legacy)
+    assert len(payload["poi_coverage"]) == 24
     assert len(payload["priority"]) == 7
     assert len(payload["priority"][0]["villages"]) == 5
     assert set(payload["action_cards"]) == {"0", "1", "2", "3", "4"}
@@ -334,8 +336,9 @@ def test_map_labels_escape_admin_entered_text():
     script = (PROJECT_ROOT / "static/js/heat-risk-workbench.js").read_text(encoding="utf-8")
     assert "function esc(value)" in script
     assert "esc(point.name)" in script
-    assert "esc(village.name)" in script
-    assert "${point.name}" not in script
+    assert "esc(entry.point.name)" in script
+    assert "esc(referenceName(point))" in script
+    assert "${point.name}<" not in script
     assert "${village.name}<" not in script
 
 

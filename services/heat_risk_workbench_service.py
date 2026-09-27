@@ -763,6 +763,8 @@ def locate_township(lon, lat, townships):
 
 def village_points(coords_gcj: dict[str, Any], community_rows: Iterable[Any] = ()) -> list[dict[str, Any]]:
     """把站内高德坐标（GCJ-02）村点换算为 WGS84，并挂接网格风险与村档案。"""
+    from services.heat_risk_poi_service import stable_legacy_id
+
     workbench = load_workbench()
     fields = workbench["cells"]
     index = {cell_id: i for i, cell_id in enumerate(fields["cell_id"])}
@@ -777,14 +779,22 @@ def village_points(coords_gcj: dict[str, Any], community_rows: Iterable[Any] = (
         i = index.get(cell_id) if cell_id else None
         profile = profiles.get(name)
         villages.append({
+            "id": stable_legacy_id(name),
             "name": name,
             "lon_wgs84": round(lon, 6),
             "lat_wgs84": round(lat, 6),
             "coordinate_source": "站内高德坐标（GCJ-02）换算",
+            "coordinate_system": "WGS84",
+            "coordinate_precision": "approximate",
+            "source_url": None,
+            "source_label": "站内原有村点",
+            "verification_status": "pending",
+            "settlement_level": "unknown",
             "cell_id": cell_id,
             "township": locate_township(lon, lat, townships),
             "static_score": fields["score"][i] if i is not None else None,
             "static_level": fields["level"][i] if i is not None else None,
+            "risk_data_status": "available" if i is not None and fields["level"][i] is not None else "no_grid_data",
             "hotspot": fields["gi_bin"][i] if i is not None else 0,
             "facility_km": fields["facility_km"][i] if i is not None else None,
             "population": getattr(profile, "population", None) if profile else None,
@@ -795,11 +805,15 @@ def village_points(coords_gcj: dict[str, Any], community_rows: Iterable[Any] = (
 
 def rank_villages(villages: list[dict[str, Any]], day: dict[str, Any] | None, limit: int = 5) -> list[dict[str, Any]]:
     """按当日风险、静态风险分、老人数排序，生成巡访优先清单。"""
+    from services.heat_risk_poi_service import priority_exclusion_reason
+
     hazard = day.get("level") if day else None
     if hazard is None:
         return []
     ranked = []
     for village in villages:
+        if priority_exclusion_reason(village) or village.get("priority_eligible") is False:
+            continue
         daily = combine_daily_level(hazard, village.get("static_level"))
         elderly = None
         if village.get("population") and village.get("elderly_ratio") is not None:
@@ -812,13 +826,13 @@ def rank_villages(villages: list[dict[str, Any]], day: dict[str, Any] | None, li
         if elderly:
             reasons.append(f"约 {elderly} 位老人")
         if village.get("facility_km") is not None and village["facility_km"] >= 3:
-            reasons.append(f"距最近医疗点 {village['facility_km']:.1f} km")
+            reasons.append(f"距可达性参考点 {village['facility_km']:.1f} km")
         ranked.append({**village, "daily_level": daily, "elderly_estimate": elderly, "reasons": reasons})
     ranked.sort(key=lambda v: (
         -v["daily_level"],
         -(v.get("static_score") or 0),
         -(v.get("elderly_estimate") or 0),
-        v["name"],
+        v["name"], v.get("id", ""),
     ))
     return ranked[:limit] if limit else ranked
 
@@ -828,6 +842,11 @@ def build_daily_payload(forecast: list[dict[str, Any]], prior_hot_days: int, vil
     workbench = load_workbench()
     threshold = workbench["metadata"]["daily"]["hot_night_tmin_c"]
     days = classify_daily_hazard(forecast, threshold, prior_hot_days)
+    priority = []
+    for day in days:
+        ranked = rank_villages(villages, day, limit=0)
+        priority.append({"date": day["date"], "villages": ranked[:5],
+                         "village_ids": [v["id"] for v in ranked if v.get("id")]})
     return {
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
         "forecast_source": source,
@@ -836,32 +855,16 @@ def build_daily_payload(forecast: list[dict[str, Any]], prior_hot_days: int, vil
         "hot_night_tmin_c": threshold,
         "days": days,
         "villages": villages,
-        "priority": [
-            {"date": day["date"], "villages": rank_villages(villages, day)}
-            for day in days
-        ],
+        "priority": priority,
         "cooling_resources": cooling,
         "action_cards": workbench["metadata"]["action_cards"],
     }
 
 
 def _cooling_points(rows) -> list[dict[str, Any]]:
-    points = []
-    for row in rows:
-        if row.latitude is None or row.longitude is None:
-            continue
-        lon, lat = gcj02_to_wgs84(float(row.longitude), float(row.latitude))
-        points.append({
-            "name": row.name,
-            "type": row.resource_type,
-            "lon_wgs84": round(lon, 6),
-            "lat_wgs84": round(lat, 6),
-            "open_hours": row.open_hours,
-            "has_ac": bool(row.has_ac),
-            "is_accessible": bool(row.is_accessible),
-            "coordinate_source": "后台录入坐标，按站内高德坐标（GCJ-02）换算",
-        })
-    return points
+    from services.heat_risk_poi_service import cooling_row_points
+
+    return cooling_row_points(rows)
 
 
 def daily_payload_for_request():
@@ -871,6 +874,7 @@ def daily_payload_for_request():
     from core.db_models import Community, CoolingResource
     from core.weather import _weather_cache_location, get_consecutive_hot_days
     from services.heat_risk_workbench_forecast import get_workbench_forecast
+    from services.heat_risk_poi_service import build_poi_payload
 
     location = _weather_cache_location(current_app.config.get("HEAT_WORKBENCH_LOCATION") or "都昌")
     forecast, status, source, notice = get_workbench_forecast(location)
@@ -890,7 +894,10 @@ def daily_payload_for_request():
     except Exception:
         cooling_rows = []
     villages = village_points(current_app.config.get("COMMUNITY_COORDS_GCJ") or {}, communities)
-    return build_daily_payload(forecast, prior, villages, _cooling_points(cooling_rows), source, status, notice)
+    points = build_poi_payload(villages, cooling_rows)
+    payload = build_daily_payload(forecast, prior, points["villages"], points["cooling_resources"], source, status, notice)
+    payload.update(points)
+    return payload
 
 
 # ---------------------------------------------------------------------------
