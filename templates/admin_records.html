@@ -98,15 +98,16 @@
                         {% for record in records.items %}
                         <tr>
                             <td>{{ record.id }}</td>
-                            <td>{{ record.patient_name }}</td>
+                            {# P12：列表仅展示脱敏姓名，完整 PHI 不进 title/DOM #}
+                            <td>{{ record.patient_name_display }}</td>
                             <td>{{ record.gender }}</td>
                             <td>{{ record.age }}</td>
                             <td>{{ record.visit_time.strftime('%Y-%m-%d %H:%M') if record.visit_time else '-' }}</td>
                             <td><span class="badge bg-info">{{ record.department or '-' }}</span></td>
-                            <td>{{ record.doctor or '-' }}</td>
+                            <td>{{ record.doctor_display }}</td>
                             <td><span class="badge bg-warning text-dark">{{ record.disease_category or '-' }}</span></td>
-                            <td class="text-truncate" style="max-width: 150px;" title="{{ record.diagnosis }}">
-                                {{ record.diagnosis or '-' }}
+                            <td class="text-truncate" style="max-width: 150px;">
+                                {{ record.diagnosis_display }}
                             </td>
                             <td>{{ record.community or '-' }}</td>
                             <td>

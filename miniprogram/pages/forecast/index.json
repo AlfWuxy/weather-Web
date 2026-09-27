@@ -1,0 +1,9 @@
+{
+  "navigationBarTitleText": "7 天宜老天气",
+  "enablePullDownRefresh": true,
+  "backgroundTextStyle": "dark",
+  "usingComponents": {
+    "status-card": "/components/status-card/index",
+    "freshness-bar": "/components/freshness-bar/index"
+  }
+}

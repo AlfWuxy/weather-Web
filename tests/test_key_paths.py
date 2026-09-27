@@ -56,6 +56,7 @@ class DummyWeatherFetcher:
                     'temperature_min': 18,
                     'temperature_mean': 22,
                     'humidity': 70,
+                    'wind_speed': 2.0,
                     'condition': '阴',
                     'data_source': 'QWeather',
                     'is_mock': False,

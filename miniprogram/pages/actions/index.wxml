@@ -1,0 +1,46 @@
+<view class="page-shell">
+  <view class="hero actions-hero">
+    <view class="hero-kicker">今日行动清单</view>
+    <view class="hero-title">一项一项做，做完就打勾。</view>
+    <view class="hero-subtitle">记录只保存在这台手机中，不上传个人行动。</view>
+  </view>
+
+  <status-card wx:if="{{loading}}" state="loading" title="正在生成今日行动" detail="天气快照 30 分钟内不会重复获取。" />
+
+  <block wx:if="{{!loading}}">
+    <freshness-bar wx:if="{{freshness.updatedText}}" updated-text="{{freshness.updatedText}}" stale="{{freshness.stale}}" source="{{freshness.source}}" refresh-deferred="{{freshness.refreshDeferred}}" refresh-started="{{freshness.refreshStarted}}" />
+    <status-card wx:if="{{generalMode}}" state="{{error ? 'error' : 'empty'}}" title="{{error ? '天气更新失败，已使用通用清单' : (freshness.stale ? '较早天气已切换为通用清单' : '当前显示通用防护')}}" detail="{{error || '天气或风险行动待更新，这些内容不代表当前风险等级。'}}" action-label="{{error ? '重新获取天气' : ''}}" bind:action="retry" />
+
+    <view class="progress-card card">
+      <view class="row-between">
+        <view>
+          <view class="small muted">今日已完成</view>
+          <view class="progress-number">{{completedCount}} / {{actions.length}}</view>
+        </view>
+        <view class="progress-percent" aria-label="已完成百分之 {{progressPercent}}">{{progressPercent}}%</view>
+      </view>
+      <progress class="action-progress" percent="{{progressPercent}}" stroke-width="10" activeColor="#b64815" backgroundColor="#f4dfd2" active="{{!reduceMotion}}" active-mode="forwards" duration="{{reduceMotion ? 0 : 320}}" aria-label="今日行动完成进度 {{progressPercent}}%" />
+    </view>
+
+    <view class="section-title">行动清单</view>
+    <button wx:for="{{actions}}" wx:key="id" class="check-card {{item.checked ? 'checked' : ''}}" data-id="{{item.id}}" bindtap="toggleAction" hover-class="button-pressed" role="checkbox" aria-role="checkbox" aria-checked="{{item.checked}}" aria-label="{{item.title}}，{{item.checked ? '已完成' : '未完成'}}">
+      <view class="check-box"><image wx:if="{{item.checked}}" src="/assets/icons/check.png" mode="aspectFit" aria-hidden="true" /></view>
+      <view class="check-copy">
+        <view class="check-title">{{item.title}}</view>
+        <view wx:if="{{item.detail}}" class="check-detail">{{item.detail}}</view>
+        <view class="check-state">{{item.checked ? '已完成' : '点一下标记完成'}}</view>
+      </view>
+    </button>
+
+    <view wx:if="{{completedCount > 0}}" class="completion-share-card card motion-enter" role="region" aria-role="region" aria-label="行动完成回执">
+      <view class="completion-share-title">我已看到，并完成一项防护准备</view>
+      <view class="completion-share-copy">由你主动回发给家人。分享内容不包含姓名、健康资料或具体行动记录。</view>
+      <button class="primary-button completion-share-button" open-type="share" data-share-kind="completion_receipt" data-share-source="family_share" hover-class="button-pressed" aria-label="回发已完成防护准备给家人"><image class="button-icon" src="/assets/icons/share.png" mode="aspectFit" aria-hidden="true" />回发给家人</button>
+    </view>
+
+    <button class="secondary-button copy-button" bindtap="copyReminder" hover-class="button-pressed">复制给家人的提醒</button>
+    <button wx:if="{{completedCount === 0}}" class="secondary-button share-button" open-type="share" data-share-source="family_share" hover-class="button-pressed" aria-label="分享今日清单给家人"><image class="button-icon" src="/assets/icons/share.png" mode="aspectFit" aria-hidden="true" />分享今日清单给家人</button>
+    <navigator class="primary-button" url="/pages/cooling/index" hover-class="button-pressed">查看避暑资源</navigator>
+    <view class="safe-note action-note">行动建议用于日常防护。慢病患者的饮水、用药和活动安排应遵循医生给出的个体要求。</view>
+  </block>
+</view>

@@ -17,7 +17,12 @@ from core.app import create_app  # noqa: E402
 from core.constants import DEFAULT_CITY_LABEL  # noqa: E402
 from core.db_models import WeatherCache, WeatherData  # noqa: E402
 from core.extensions import db  # noqa: E402
-from core.weather import normalize_location_name  # noqa: E402
+from core.weather import (  # noqa: E402
+    canonical_weather_location,
+    is_air_quality_available,
+    is_qweather_production_ready,
+    normalize_weather_observed_at,
+)
 from core.time_utils import today_local, utcnow  # noqa: E402
 from services.weather_service import WeatherService  # noqa: E402
 
@@ -30,7 +35,7 @@ def _dedupe_locations(locations):
     for loc in locations:
         if not loc:
             continue
-        normalized = normalize_location_name(loc)
+        normalized = canonical_weather_location(loc)
         if normalized in seen:
             continue
         seen.add(normalized)
@@ -56,6 +61,15 @@ def _upsert_cache(location, weather_data, fetched_at):
 
 
 def _upsert_daily(location, weather_data, target_date):
+    """只把 fresh、完整和风实况写成 quality v1 日记录。"""
+    if not is_qweather_production_ready(weather_data):
+        return None
+    observed_at = normalize_weather_observed_at(weather_data.get('observed_at'))
+    if observed_at is None:
+        return None
+    observed_at_dt = datetime.fromisoformat(observed_at)
+    air_observed_at = normalize_weather_observed_at(weather_data.get('air_observed_at'))
+    location = canonical_weather_location(location)
     record = WeatherData.query.filter_by(date=target_date, location=location).first()
     if record is None:
         record = WeatherData(date=target_date, location=location)
@@ -70,6 +84,15 @@ def _upsert_daily(location, weather_data, target_date):
     record.wind_speed = weather_data.get('wind_speed')
     record.pm25 = weather_data.get('pm25')
     record.aqi = weather_data.get('aqi')
+    record.data_source = 'QWeather'
+    record.observed_at = observed_at_dt
+    record.air_observed_at = (
+        datetime.fromisoformat(air_observed_at)
+        if air_observed_at is not None
+        else None
+    )
+    record.quality_version = 1
+    record.air_quality_available = is_air_quality_available(weather_data)
     return record
 
 
@@ -93,6 +116,8 @@ def sync_weather_cache(locations=None, update_daily=True):
         fetched_at = utcnow()
         target_date = today_local()
         updated = 0
+        daily_updated = 0
+        daily_skipped = 0
 
         for location in locations:
             try:
@@ -104,10 +129,21 @@ def sync_weather_cache(locations=None, update_daily=True):
             if not weather_data:
                 logger.warning("No weather data returned for %s", location)
                 continue
+            weather_data = dict(weather_data)
+            weather_data['location'] = canonical_weather_location(location)
+            weather_data['weather_location'] = canonical_weather_location(location)
             try:
                 _upsert_cache(location, weather_data, fetched_at)
                 if update_daily:
-                    _upsert_daily(location, weather_data, target_date)
+                    if _upsert_daily(location, weather_data, target_date) is None:
+                        daily_skipped += 1
+                        logger.info(
+                            "天气日表跳过非完整和风来源: location=%s source=%s",
+                            location,
+                            weather_data.get('data_source') or weather_data.get('source') or 'unknown',
+                        )
+                    else:
+                        daily_updated += 1
                 db.session.commit()
             except Exception as exc:
                 logger.exception("Weather cache upsert failed for %s: %s", location, exc)
@@ -117,7 +153,9 @@ def sync_weather_cache(locations=None, update_daily=True):
         return {
             'locations': len(locations),
             'updated': updated,
-            'update_daily': update_daily
+            'update_daily': update_daily,
+            'daily_updated': daily_updated,
+            'daily_skipped': daily_skipped,
         }
 
 

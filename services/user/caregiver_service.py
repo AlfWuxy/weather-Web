@@ -1,21 +1,22 @@
 # -*- coding: utf-8 -*-
 """Caregiver-related routes and helpers."""
 import logging
-import math
 from datetime import datetime, timedelta
 
-from flask import current_app, flash, redirect, render_template, request, session, url_for
+from flask import current_app, flash, jsonify, redirect, render_template, request, session, url_for
 from flask_login import current_user
 
-from core.db_models import Community, DailyStatus, Debrief, FamilyMember, Pair, PairLink
+from core.db_models import Community, DailyStatus, Debrief, FamilyMember, HelpRequest, Pair, PairLink
 from core.extensions import db
 from core.guest import is_guest_user
 from core.time_utils import today_local, utcnow, local_datetime_to_utc
 from core.weather import (
     get_consecutive_hot_days,
     get_weather_with_cache,
-    is_qweather_online_weather,
+    is_heat_action_weather_ready,
+    is_qweather_production_ready,
     normalize_location_name,
+    weather_source_label,
 )
 from core.usage import log_usage_event
 from services.heat_action_service import HeatActionService
@@ -27,6 +28,7 @@ from utils.validators import sanitize_input
 
 from ._common import (
     AUTO_ESCALATE_STAGE,
+    CARE_ROLES,
     CARE_ACTION_OPTIONS,
     HEAT_RISK_LABELS,
     RELAY_STAGE_LABELS,
@@ -48,27 +50,38 @@ from ._helpers import (
 
 logger = logging.getLogger(__name__)
 
-_REQUIRED_HEAT_WEATHER_FIELDS = (
-    'temperature',
-    'temperature_max',
-    'temperature_min',
-    'humidity',
-)
 _WEATHER_WAITING_LABEL = '天气更新中'
 
 
+def _require_care_role():
+    """照护域采用正向角色清单，避免 community 借路径写入照护数据。"""
+    return _require_roles(*CARE_ROLES)
+
+
+def _configured_location_suggestions():
+    """返回配置中的都昌地点建议，不依赖 Community 数据表。"""
+    configured = current_app.config.get('COMMUNITY_COORDS_GCJ') or {}
+    return list(configured.keys()) if isinstance(configured, dict) else []
+
+
+def _push_notice_state(pairs, channel_ready):
+    """计算照护页推送提示四态。"""
+    if not pairs:
+        return 'none'
+    if not channel_ready:
+        return 'channel_unavailable'
+    user_ready = bool(
+        (getattr(current_user, 'wxpusher_uid', None) or '').strip()
+        and getattr(current_user, 'push_enabled', False)
+    )
+    if not user_ready:
+        return 'user_setup_required'
+    return 'ready'
+
+
 def _heat_weather_available(weather_data):
-    """仅允许字段完整的真实和风天气进入热风险计算。"""
-    if not is_qweather_online_weather(weather_data):
-        return False
-    for field in _REQUIRED_HEAT_WEATHER_FIELDS:
-        try:
-            value = float(weather_data.get(field))
-        except (AttributeError, TypeError, ValueError):
-            return False
-        if not math.isfinite(value):
-            return False
-    return True
+    """基础温湿热行动允许来源明确且新鲜的和风或 Open-Meteo 实况。"""
+    return is_heat_action_weather_ready(weather_data)
 
 
 def _build_weather_waiting_message(pair, action_link):
@@ -84,6 +97,19 @@ def _build_weather_waiting_message(pair, action_link):
     return '\n'.join(lines)
 
 
+def _build_non_heat_action_message(pair, action_link):
+    """天气可用但未触发高温时，只给行动入口，不生成日常防护建议。"""
+    location = (pair.location_query or pair.community_code or '').strip()
+    lines = [
+        '【未触发高温】',
+        '当前没有高温行动阈值，不会生成高温防护建议。这条说明只含行动入口。',
+    ]
+    if location:
+        lines.append(f'地点：{location}')
+    lines.append(f'（可选）行动页：{action_link}  短码：{pair.short_code}')
+    return '\n'.join(lines)
+
+
 def _load_heat_risk(location):
     """读取真实天气并计算热风险；任一步失败都返回不可用状态。"""
     weather_data, _ = get_weather_with_cache(location)
@@ -92,7 +118,8 @@ def _load_heat_risk(location):
     try:
         consecutive_hot_days = get_consecutive_hot_days(
             location,
-            today_max=weather_data.get('temperature_max')
+            today_max=weather_data.get('temperature_max'),
+            weather_data=weather_data,
         )
         heat_result = HeatActionService().calculate_heat_risk(
             weather_data,
@@ -166,9 +193,19 @@ def _load_created_pair():
 
 
 def _build_pair_management_context(caregiver_mode=False):
+    from services.family_access import visible_pair_ids_for_user
+
     created_pair = _load_created_pair()
     status_date = today_local()
-    pairs = Pair.query.filter_by(caregiver_id=current_user.id).order_by(Pair.created_at.desc()).all()
+    visible_ids = visible_pair_ids_for_user(current_user.id)
+    if visible_ids:
+        pairs = (
+            Pair.query.filter(Pair.id.in_(visible_ids), Pair.status == 'active')
+            .order_by(Pair.created_at.desc())
+            .all()
+        )
+    else:
+        pairs = Pair.query.filter_by(caregiver_id=current_user.id, status='active').order_by(Pair.created_at.desc()).all()
     communities = Community.query.order_by(Community.name).all()
     family_members = []
     try:
@@ -229,6 +266,15 @@ def _build_pair_management_context(caregiver_mode=False):
             db.session.rollback()
             logger.warning("加载成员映射失败，已降级为空映射", exc_info=True)
 
+    open_help_by_pair = {}
+    if pairs:
+        from services.help_request_service import OPEN_STATUSES, serialize_help
+        for row in HelpRequest.query.filter(
+            HelpRequest.pair_id.in_([item.id for item in pairs]),
+            HelpRequest.status.in_(OPEN_STATUSES),
+        ).all():
+            open_help_by_pair[row.pair_id] = row
+
     heat_service = HeatActionService()
 
     for pair in pairs:
@@ -241,13 +287,15 @@ def _build_pair_management_context(caregiver_mode=False):
         weather_data = weather_by_code.get(code, {}) if code else {}
 
         weather_available = _heat_weather_available(weather_data)
+        weather_share_available = is_qweather_production_ready(weather_data)
         risk_label = _WEATHER_WAITING_LABEL
         heat_result = {}
         if weather_available:
             try:
                 consecutive_hot_days = get_consecutive_hot_days(
                     code or normalize_location_name(pair.community_code),
-                    today_max=weather_data.get('temperature_max')
+                    today_max=weather_data.get('temperature_max'),
+                    weather_data=weather_data,
                 )
                 heat_result = heat_service.calculate_heat_risk(
                     weather_data,
@@ -268,12 +316,12 @@ def _build_pair_management_context(caregiver_mode=False):
             tmin = weather_data.get('temperature_min')
             if tmax is not None and float(tmax) >= 35:
                 alert_kind = 'heat'
-                alert_label = f'高温（{float(tmax):.0f}°C）'
+                alert_label = f'高温行动阈值（{float(tmax):.0f}°C）'
             elif tmin is not None and float(tmin) <= 5:
                 alert_kind = 'cold'
-                alert_label = f'寒潮（{float(tmin):.0f}°C）'
+                alert_label = f'低温行动阈值（{float(tmin):.0f}°C）'
             else:
-                alert_label = '暂无预警'
+                alert_label = '温度未触发行动阈值'
 
         confirmed = bool(status and status.confirmed_at)
         is_overdue = bool(now >= deadline and not confirmed)
@@ -283,23 +331,28 @@ def _build_pair_management_context(caregiver_mode=False):
             relay_stage_label = RELAY_STAGE_LABELS.get(relay_stage, relay_stage)
         member = member_map.get(pair.member_id) if getattr(pair, 'member_id', None) else None
         action_link = _build_pair_action_link(pair)
-        reminder_message = (
-            _build_caregiver_message(
+        copy_heat_script = bool(weather_share_available and alert_kind == 'heat')
+        if copy_heat_script:
+            reminder_message = _build_caregiver_message(
                 pair,
                 alert_kind=alert_kind,
                 weather_data=weather_data,
                 member=member,
                 action_link=action_link
             )
-            if weather_available
-            else _build_weather_waiting_message(pair, action_link)
-        )
+        elif weather_share_available:
+            reminder_message = _build_non_heat_action_message(pair, action_link)
+        else:
+            reminder_message = _build_weather_waiting_message(pair, action_link)
         pair_cards.append({
             'pair': pair,
             'status': status,
             'risk_label': risk_label,
             'heat_result': heat_result,
             'weather_available': weather_available,
+            'weather_share_available': weather_share_available,
+            'copy_heat_script': copy_heat_script,
+            'weather_source_label': weather_source_label(weather_data) if weather_available else '',
             'alert_kind': alert_kind,
             'alert_label': alert_label,
             'location_display': display_name,
@@ -308,7 +361,12 @@ def _build_pair_management_context(caregiver_mode=False):
             'elder_name': (member.name if member else None),
             'action_link': action_link,
             'reminder_message': reminder_message,
-            'help_flag': bool(status and status.help_flag),
+            'open_help': (
+                serialize_help(open_help_by_pair[pair.id], user=current_user, pair=pair)
+                if pair.id in open_help_by_pair else None
+            ),
+            'help_flag': pair.id in open_help_by_pair,
+            'pair_detail_url': url_for('user.caregiver_pair_detail', pair_id=pair.id),
             'is_overdue': is_overdue,
             'relay_stage': relay_stage,
             'relay_stage_label': relay_stage_label
@@ -328,6 +386,8 @@ def _build_pair_management_context(caregiver_mode=False):
         'family_members': family_members,
         'status_date': status_date,
         'push_channel_ready': push_channel_ready,
+        'push_notice_state': _push_notice_state(pairs, push_channel_ready),
+        'location_suggestions': _configured_location_suggestions(),
     }
 
     if caregiver_mode:
@@ -345,6 +405,8 @@ def _build_pair_management_context(caregiver_mode=False):
 
 def pair_management():
     """照护绑定管理"""
+    if not _require_care_role():
+        return redirect(url_for('user.user_dashboard'))
     if is_guest_user(current_user):
         flash('游客模式无法创建绑定，请注册/登录正式账号', 'error')
         return redirect(url_for('user.user_dashboard'))
@@ -381,23 +443,42 @@ def pair_management():
     return render_template('pair_management.html', **context)
 
 
+def render_help_inbox(data):
+    if not _require_care_role():
+        return redirect(url_for('user.user_dashboard'))
+    if is_guest_user(current_user):
+        flash('游客模式无法查看求助。', 'error')
+        return redirect(url_for('user.user_dashboard'))
+    return render_template('help_inbox.html', data=data)
+
+
+def render_help_detail(detail):
+    if not _require_care_role():
+        return redirect(url_for('user.user_dashboard'))
+    if is_guest_user(current_user):
+        flash('游客模式无法查看求助。', 'error')
+        return redirect(url_for('user.user_dashboard'))
+    return render_template('help_detail.html', detail=detail)
+
+
 def caregiver_dashboard():
-    """照护人工作台"""
-    if not _require_roles('caregiver', 'admin'):
+    """旧照护入口，统一转向照护工作台。"""
+    if not _require_care_role():
         return redirect(url_for('user.user_dashboard'))
     if is_guest_user(current_user):
         flash('游客模式无法进入照护工作台', 'error')
         return redirect(url_for('user.user_dashboard'))
 
-    context = _build_pair_management_context(caregiver_mode=True)
-    return render_template('pair_management.html', **context)
+    return redirect(url_for('user.pair_management'))
 
 
 def caregiver_pair_create():
     """照护人创建绑定短码"""
+    if not _require_care_role():
+        return redirect(url_for('user.user_dashboard'))
     if is_guest_user(current_user):
         flash('游客模式无法创建绑定', 'error')
-        return redirect(url_for('user.caregiver_dashboard'))
+        return redirect(url_for('user.user_dashboard'))
 
     location_query = sanitize_input(request.form.get('location_query'), max_length=200)
     if not location_query:
@@ -405,7 +486,7 @@ def caregiver_pair_create():
     location_query = (location_query or '').strip()
     if not location_query:
         flash('请填写老人所在地（支持任意中文地点）', 'error')
-        return redirect(url_for('user.caregiver_dashboard'))
+        return redirect(url_for('user.pair_management'))
 
     member_id = request.form.get('member_id')
     try:
@@ -422,13 +503,13 @@ def caregiver_pair_create():
     except Exception:
         logger.warning("照护端创建绑定失败(location_query=%s)", location_query[:80], exc_info=True)
         flash('创建失败，请检查输入后重试。', 'error')
-        return redirect(url_for('user.caregiver_dashboard'))
-    return redirect(url_for('user.caregiver_dashboard', created=pair.id))
+        return redirect(url_for('user.pair_management'))
+    return redirect(url_for('user.pair_management', created=pair.id))
 
 
 def caregiver_pair_detail(pair_id):
     """照护关系详情"""
-    if not _require_roles('caregiver', 'admin'):
+    if not _require_care_role():
         return redirect(url_for('user.user_dashboard'))
     if is_guest_user(current_user):
         flash('游客模式无法查看详情', 'error')
@@ -459,6 +540,8 @@ def caregiver_pair_detail(pair_id):
     if not isinstance(actions_today, list):
         actions_today = []
     caregiver_note = status_today.caregiver_note if status_today else None
+    from services.action_events import today_state as load_today_state
+    action_state = load_today_state(pair, status_date)
 
     return render_template(
         'caregiver_pair_detail.html',
@@ -472,13 +555,21 @@ def caregiver_pair_detail(pair_id):
         wechat_template_url=wechat_template_url,
         action_options=CARE_ACTION_OPTIONS,
         actions_today=actions_today,
-        caregiver_note=caregiver_note
+        caregiver_note=caregiver_note,
+        action_state=action_state,
+        messenger_roles=['子女', '孙辈', '配偶', '邻居', '村干部', '村医', '本人'],
+        messenger_channels=[
+            {'id': 'wechat_text', 'label': '微信文字'},
+            {'id': 'wechat_voice', 'label': '微信语音'},
+            {'id': 'phone_call', 'label': '电话'},
+            {'id': 'in_person', 'label': '当面'},
+        ],
     )
 
 
 def caregiver_action_log(pair_id):
-    """照护行动记录"""
-    if not _require_roles('caregiver', 'admin'):
+    """照护行动记录；扩展 event=delivered|help_acknowledged|caregiver_verified|closed。"""
+    if not _require_care_role():
         return redirect(url_for('user.user_dashboard'))
     if is_guest_user(current_user):
         flash('游客模式无法记录行动', 'error')
@@ -488,6 +579,96 @@ def caregiver_action_log(pair_id):
     if getattr(current_user, 'role', None) != 'admin':
         query = query.filter_by(caregiver_id=current_user.id)
     pair = query.first_or_404()
+
+    payload = request.get_json(silent=True) or {}
+    if not isinstance(payload, dict):
+        payload = {}
+    event_name = (payload.get('event') or request.form.get('event') or '').strip()
+    wants_json = bool(request.is_json or 'application/json' in (request.headers.get('Accept') or ''))
+
+    if event_name in {'delivered', 'help_acknowledged', 'caregiver_verified', 'closed'}:
+        from services.action_events import InvalidTransition, record_event, today_state as load_today_state
+
+        messenger_role = sanitize_input(
+            payload.get('messenger_role') or request.form.get('messenger_role'),
+            max_length=20,
+        )
+        messenger_channel = sanitize_input(
+            payload.get('channel') or request.form.get('channel'),
+            max_length=24,
+        )
+        actor = 'community' if getattr(current_user, 'role', None) == 'community' else 'caregiver'
+        try:
+            if event_name == 'delivered':
+                event = record_event(pair, 'delivered', 'caregiver', 'manual')
+                log_usage_event(
+                    'caregiver_delivered',
+                    user_id=current_user.id,
+                    pair_id=pair.id,
+                    member_id=getattr(pair, 'member_id', None),
+                    source='web',
+                    meta={
+                        'messenger_role': messenger_role,
+                        'channel': messenger_channel,
+                        'event': 'delivered',
+                    },
+                )
+            elif event_name == 'help_acknowledged':
+                from services.help_request_service import apply_pair_help_stage
+                help_body = apply_pair_help_stage(
+                    current_user, pair, 'help_acknowledged', origin_channel='web', commit=True,
+                )
+                _refresh_community_daily(pair.community_code, today_local())
+                if wants_json:
+                    return jsonify({
+                        'ok': True,
+                        'event_id': None,
+                        'help_request': help_body,
+                        'state': load_today_state(pair, today_local()),
+                    })
+                flash('已记录照护动作。收到不等于老人已经安全。', 'success')
+                return redirect(url_for('user.caregiver_pair_detail', pair_id=pair.id))
+            elif event_name == 'caregiver_verified':
+                event = record_event(pair, 'caregiver_verified', 'caregiver', 'manual')
+            elif event_name == 'closed':
+                from services.help_request_service import apply_pair_help_stage, open_help_for_pair
+                if open_help_for_pair(pair.id):
+                    help_body = apply_pair_help_stage(
+                        current_user, pair, 'closed', origin_channel='web', commit=True,
+                    )
+                    _refresh_community_daily(pair.community_code, today_local())
+                    if wants_json:
+                        return jsonify({
+                            'ok': True,
+                            'event_id': None,
+                            'help_request': help_body,
+                            'state': load_today_state(pair, today_local()),
+                        })
+                    flash('已记录照护动作。', 'success')
+                    return redirect(url_for('user.caregiver_pair_detail', pair_id=pair.id))
+                event = record_event(pair, 'closed', actor, 'manual')
+            else:
+                event = record_event(pair, 'closed', actor, 'manual')
+        except InvalidTransition as exc:
+            db.session.rollback()
+            return exc.to_response()
+        except Exception as exc:
+            from services.help_http import handle_domain_error
+            from services.family_access import FamilyAccessError
+            from services.help_request_service import HelpRequestError
+            if isinstance(exc, (HelpRequestError, FamilyAccessError)):
+                db.session.rollback()
+                return handle_domain_error(exc)
+            raise
+        _refresh_community_daily(pair.community_code, today_local())
+        if wants_json:
+            return jsonify({
+                'ok': True,
+                'event_id': event.id,
+                'state': load_today_state(pair, today_local()),
+            })
+        flash('已记录照护动作。', 'success')
+        return redirect(url_for('user.caregiver_pair_detail', pair_id=pair.id))
 
     status_date = today_local()
     status = DailyStatus.query.filter_by(pair_id=pair.id, status_date=status_date).first()
@@ -527,12 +708,13 @@ def caregiver_action_log(pair_id):
 
 def caregiver_wechat_template():
     """照护人微信模板"""
-    if not _require_roles('caregiver', 'admin'):
+    if not _require_care_role():
         return redirect(url_for('user.user_dashboard'))
 
     short_code = sanitize_input(request.args.get('short_code'), max_length=12)
     token = sanitize_input(request.args.get('token'), max_length=200)
     community_code = sanitize_input(request.args.get('community_code'), max_length=100)
+    action_link = None
 
     if not token and short_code:
         pair_query = Pair.query.filter_by(short_code=short_code, status='active')
@@ -544,19 +726,20 @@ def caregiver_wechat_template():
             db.session.commit()
             token = action_link.rsplit('/e/', 1)[-1].split('?', 1)[0] if '/e/' in action_link else None
 
-    if token:
-        action_link = url_for(
-            'public.elder_token_entry',
-            token=token,
-            short_code=short_code,
-            _external=True
-        )
-    else:
-        action_link = url_for(
-            'public.elder_entry',
-            short_code=short_code,
-            _external=True
-        )
+    if action_link is None:
+        if token:
+            action_link = url_for(
+                'public.elder_token_entry',
+                token=token,
+                short_code=short_code,
+                _external=False,
+            )
+        else:
+            action_link = url_for(
+                'public.elder_entry',
+                short_code=short_code,
+                _external=False,
+            )
 
     risk_label = None
     actions = []
@@ -565,7 +748,10 @@ def caregiver_wechat_template():
     if community_code:
         location = normalize_location_name(community_code)
         weather_data, _heat_result, risk_label = _load_heat_risk(location)
-        weather_available = risk_label is not None
+        weather_available = (
+            risk_label is not None
+            and is_qweather_production_ready(weather_data)
+        )
         if weather_available:
             actions = _action_plan(risk_label)
 
@@ -602,6 +788,8 @@ def caregiver_wechat_template():
 
 
 def _handle_pair_escalate(pair_id, redirect_url, target_stage=None):
+    if not _require_care_role():
+        return redirect(url_for('user.user_dashboard'))
     if is_guest_user(current_user):
         flash('游客模式无法升级', 'error')
         return redirect(url_for('user.user_dashboard'))
@@ -666,25 +854,25 @@ def pair_backup_contact(pair_id):
 
 def caregiver_relay_escalate():
     """照护人升级链推进"""
-    if not _require_roles('caregiver', 'admin'):
+    if not _require_care_role():
         return redirect(url_for('user.user_dashboard'))
 
     pair_id = request.form.get('pair_id', type=int)
     if not pair_id:
         flash('缺少照护关系', 'error')
-        return redirect(url_for('user.caregiver_dashboard'))
+        return redirect(url_for('user.pair_management'))
     return _handle_pair_escalate(pair_id, url_for('user.caregiver_pair_detail', pair_id=pair_id))
 
 
 def caregiver_relay_backup():
     """照护人标记备选联系人已联系"""
-    if not _require_roles('caregiver', 'admin'):
+    if not _require_care_role():
         return redirect(url_for('user.user_dashboard'))
 
     pair_id = request.form.get('pair_id', type=int)
     if not pair_id:
         flash('缺少照护关系', 'error')
-        return redirect(url_for('user.caregiver_dashboard'))
+        return redirect(url_for('user.pair_management'))
     return _handle_pair_escalate(
         pair_id,
         url_for('user.caregiver_pair_detail', pair_id=pair_id),

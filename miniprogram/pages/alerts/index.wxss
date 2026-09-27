@@ -1,4 +1,18 @@
-.title {
-  font-weight: 700;
-}
+.alert-hero { background: linear-gradient(145deg, #9f3a12 0%, #aa371b 100%); }
+.weather-strip { display: grid; grid-template-columns: repeat(3, 1fr); text-align: center; }
+.weather-strip > view + view { border-left: 1rpx solid #efe2d8; }
+.strip-value { margin-top: 6rpx; color: #9e3e12; font-size: 38rpx; font-weight: 800; }
+.warning-card { border-left: 10rpx solid #aaa39d; }
+.warning-low { border-left-color: #4eaa72; }
+.warning-mid { border-left-color: #daa72c; }
+.warning-high { border-left-color: #d74b37; }
+.warning-title { flex: 1; min-width: 0; }
+.warning-type { margin-top: 10rpx; }
+.warning-text { margin-top: 18rpx; font-size: 14.5px; line-height: 1.72; }
+.warning-meta { display: grid; gap: 8rpx; margin-top: 18rpx; padding-top: 16rpx; border-top: 1rpx solid #efe2d8; }
+.alert-note { margin-top: 24rpx; }
 
+@media screen and (max-width: 340px) {
+  .weather-strip { grid-template-columns: 1fr; text-align: left; }
+  .weather-strip > view + view { margin-top: 16rpx; padding-top: 16rpx; border-top: 1rpx solid #efe2d8; border-left: 0; }
+}

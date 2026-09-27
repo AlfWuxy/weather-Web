@@ -8,7 +8,7 @@ import os
 from pathlib import Path
 from dotenv import load_dotenv
 import click
-from flask import Flask, current_app
+from flask import Flask, current_app, jsonify
 from sqlalchemy import inspect
 
 from core.auth import register_user_loader
@@ -17,23 +17,33 @@ from core.constants import CHRONIC_OPTIONS, DEFAULT_CITY_LABEL, GUEST_ID_PREFIX,
 from core.extensions import db, init_extensions, login_manager
 from core.hooks import register_hooks
 from core.db_models import (
+    ActionEvent,
+    AdviceContent,
     AlertDelivery,
     AuditLog,
     ApiToken,
+    CareDevice,
     Community,
     CommunityDaily,
+    CoolingFeedback,
     CoolingResource,
     DailyStatus,
     Debrief,
+    DeviceEvent,
     FamilyMember,
     FamilyMemberProfile,
+    FamilyMembership,
+    FamilySpace,
     ForecastCache,
     HealthDiary,
     HealthRiskAssessment,
+    HelpRequest,
+    HelpRequestEvent,
     MedicalRecord,
     MedicationReminder,
     LocationCache,
     Notification,
+    NotificationOutbox,
     Pair,
     PairLink,
     User,
@@ -71,6 +81,12 @@ def create_app(register_blueprints=True):
     init_extensions(app)
     register_user_loader(login_manager)
     register_hooks(app)
+
+    @app.route('/healthz', endpoint='healthz')
+    def healthz():
+        """进程存活探测；不查供应商、不读天气缓存。"""
+        return jsonify({'status': 'ok'})
+
     if register_blueprints:
         _register_blueprints(app)
     register_cli(app)
@@ -88,6 +104,9 @@ def register_blueprints(app):
     from blueprints.tools import bp as tools_bp
     from blueprints.api import bp as api_bp
     from blueprints.mp_api import bp as mp_api_bp
+    from blueprints.status import bp as status_bp
+    from blueprints.doctor import bp as doctor_bp
+    from blueprints.device_api import bp as device_api_bp
 
     app.register_blueprint(public_bp)
     app.register_blueprint(user_bp)
@@ -97,6 +116,9 @@ def register_blueprints(app):
     app.register_blueprint(tools_bp)
     app.register_blueprint(api_bp)
     app.register_blueprint(mp_api_bp)
+    app.register_blueprint(status_bp)
+    app.register_blueprint(doctor_bp)
+    app.register_blueprint(device_api_bp)
 
 
 _register_blueprints = register_blueprints
@@ -110,6 +132,26 @@ def register_cli(app):
         run_migrations(app)
         init_db(app)
         click.echo('Database initialized.')
+
+    @app.cli.command('backfill-family-help')
+    @click.option('--commit', is_flag=True, help='真正写入；默认 dry-run')
+    @click.option('--limit', type=int, default=None)
+    def backfill_family_help_command(commit, limit):
+        """把 Pair / DailyStatus.help_flag 回填为家庭空间与求助工单。"""
+        from scripts.backfill_family_help import run_backfill
+        import json as json_lib
+        with app.app_context():
+            stats = run_backfill(dry_run=not commit, limit=limit)
+        click.echo(json_lib.dumps(stats, ensure_ascii=False, indent=2))
+
+    @app.cli.command('process-help-outbox')
+    @click.option('--limit', type=int, default=20)
+    def process_help_outbox_command(limit):
+        """处理求助通知 outbox。沙盒默认不发真实推送。"""
+        from services.notification_outbox import process_outbox_batch
+        with app.app_context():
+            processed = process_outbox_batch(limit=limit)
+        click.echo(f'processed={processed}')
 
 
 # ======================== 初始化 ========================
@@ -187,13 +229,13 @@ def ensure_db_ready(app=None):
     init_db(app)
 
 
-def main():
+def main(app_instance=None):
     """Run the Flask development server."""
-    app = create_app()
-    ensure_db_ready(app)
+    target_app = app_instance if app_instance is not None else create_app()
+    ensure_db_ready(target_app)
     host = os.getenv('FLASK_HOST', '0.0.0.0')
     port = parse_int(os.getenv('FLASK_PORT'), default=5000)
-    app.run(debug=app.config.get('DEBUG', False), host=host, port=port)
+    target_app.run(debug=target_app.config.get('DEBUG', False), host=host, port=port)
 
 
 if __name__ == '__main__':

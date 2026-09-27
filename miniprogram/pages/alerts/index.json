@@ -1,4 +1,9 @@
 {
-  "navigationBarTitleText": "预警详情"
+  "navigationBarTitleText": "天气预警",
+  "enablePullDownRefresh": true,
+  "backgroundTextStyle": "dark",
+  "usingComponents": {
+    "status-card": "/components/status-card/index",
+    "freshness-bar": "/components/freshness-bar/index"
+  }
 }
-

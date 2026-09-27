@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+
+{% block title %}加入家庭 · 宜老天气通{% endblock %}
+
+{% block content %}
+<div class="container my-4" style="max-width: 32rem;">
+    <h1 class="h2">确认加入家庭</h1>
+    <p class="text-muted">查看邀请不会消耗次数。只有点确认后才会获得该家庭的照护权限。角色由服务器决定，不能自行改成管理员。</p>
+    <form method="POST" action="{{ url_for('user.family_invite_accept') }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <div class="mb-3">
+            <label class="form-label" for="inviteCode">邀请码</label>
+            <input class="form-control" id="inviteCode" name="code" value="{{ code or '' }}" maxlength="64" autocomplete="off">
+        </div>
+        {% if error %}
+            <div class="alert alert-warning">{{ error }}</div>
+        {% endif %}
+        {% if preview %}
+            <div class="alert alert-info">
+                预览：角色 <strong>{{ preview.role }}</strong>
+                {% if preview.expires_at %}，有效至 {{ preview.expires_at }}{% endif %}
+                。确认前不会加入家庭。
+            </div>
+        {% endif %}
+        <button class="btn btn-primary" type="submit">确认加入</button>
+        <a class="btn btn-outline-secondary" href="{{ url_for('user.help_inbox') }}">返回待处理</a>
+    </form>
+</div>
+{% endblock %}

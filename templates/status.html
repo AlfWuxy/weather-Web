@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+
+{% block title %}项目状态与边界 · 宜老天气通{% endblock %}
+
+{% block extra_css %}
+<meta name="robots" content="index,follow">
+{% endblock %}
+
+{% block content %}
+<div class="container" style="max-width:1180px;">
+    <section class="section-heading yl-fade-up mb-4">
+        <span class="section-kicker"><i class="bi bi-clipboard-data"></i> 项目状态与边界</span>
+        <h1 class="h2">宜老天气通现在做到哪一步</h1>
+    </section>
+
+    <div class="text-muted small p-3 rounded-3 yl-fade-up mb-4" style="background:var(--yl-orange-50); border:1px solid var(--yl-line-soft);">
+        {% for line in english_summary %}
+        <p class="mb-1{% if loop.last %} mb-0{% endif %}">{{ line }}</p>
+        {% endfor %}
+    </div>
+
+    <p class="lead yl-fade-up" style="font-size:1.05rem; line-height:1.75;">{{ one_line_zh }}</p>
+
+    <div class="row g-3 yl-fade-up mt-1">
+        <div class="col-12 col-lg-3">
+            <h2 class="h5 mb-1">已核验</h2>
+            <p class="small text-muted mb-3">VERIFIED</p>
+            {% for item in verified %}
+            <article class="card shadow-sm mb-3">
+                <div class="card-body p-3">
+                    <span class="badge text-bg-light">{{ item.stage }}</span>
+                    <h3 class="h6 mt-2 mb-1">{{ item.label }}</h3>
+                    <p class="small text-muted mb-0">{{ item.note }}</p>
+                </div>
+            </article>
+            {% endfor %}
+        </div>
+        <div class="col-12 col-lg-3">
+            <h2 class="h5 mb-1">原型中</h2>
+            <p class="small text-muted mb-3">PROTOTYPE · feasibility</p>
+            {% for item in prototype %}
+            <article class="card shadow-sm mb-3">
+                <div class="card-body p-3">
+                    <span class="badge text-bg-light">{{ item.stage }}</span>
+                    <h3 class="h6 mt-2 mb-1">{{ item.label }}</h3>
+                    <p class="small text-muted mb-0">{{ item.note }}</p>
+                </div>
+            </article>
+            {% endfor %}
+        </div>
+        <div class="col-12 col-lg-3">
+            <h2 class="h5 mb-1">未验证</h2>
+            <p class="small text-muted mb-3">UNVERIFIED · HOLD</p>
+            {% for item in unverified %}
+            <article class="card shadow-sm mb-3">
+                <div class="card-body p-3">
+                    <span class="badge text-bg-light">{{ item.stage }}</span>
+                    <h3 class="h6 mt-2 mb-1">{{ item.label }}</h3>
+                    <p class="small text-muted mb-0">{{ item.note }}</p>
+                </div>
+            </article>
+            {% endfor %}
+        </div>
+        <div class="col-12 col-lg-3">
+            <h2 class="h5 mb-1">不做</h2>
+            <p class="small text-muted mb-3">NO-GO</p>
+            {% for item in no_go %}
+            <article class="card shadow-sm mb-3">
+                <div class="card-body p-3">
+                    <span class="badge text-bg-light">{{ item.stage }}</span>
+                    <h3 class="h6 mt-2 mb-1">{{ item.label }}</h3>
+                    <p class="small text-muted mb-0">{{ item.note }}</p>
+                </div>
+            </article>
+            {% endfor %}
+        </div>
+    </div>
+
+    <section class="yl-section yl-fade-up my-4" id="data-sources">
+        <h2 class="h5">数据从哪来</h2>
+        <ul class="mb-0">
+            {% for item in data_sources %}
+            <li>{{ item }}</li>
+            {% endfor %}
+        </ul>
+    </section>
+
+    <p class="small text-muted yl-fade-up mb-3">版本 {{ version }} · 构建日期 {{ build_date }}</p>
+
+    <nav class="d-flex flex-wrap gap-3 small yl-fade-up mb-2" aria-label="状态页相关链接">
+        <a href="{{ github_url }}" rel="noopener noreferrer">GitHub</a>
+        <a href="{{ url_for('public.transparency') }}">计算方法与透明度</a>
+        <a href="{{ url_for('public.transparency') }}#privacy">隐私边界</a>
+    </nav>
+</div>
+{% endblock %}

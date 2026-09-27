@@ -1,0 +1,9 @@
+{
+  "navigationBarTitleText": "社区脆弱性",
+  "enablePullDownRefresh": true,
+  "backgroundTextStyle": "dark",
+  "usingComponents": {
+    "status-card": "/components/status-card/index",
+    "freshness-bar": "/components/freshness-bar/index"
+  }
+}

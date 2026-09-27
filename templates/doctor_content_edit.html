@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+
+{% block title %}起草内容 · 医生工作台{% endblock %}
+
+{% block content %}
+<div class="container my-4">
+    <a class="btn btn-outline-secondary btn-sm mb-3" href="{{ url_for('doctor.content_list') }}">返回列表</a>
+    <h1 class="h3">起草科普或短提醒</h1>
+    <p class="text-muted">保存为草稿后，仍需你本人审核发布。不要写停药换药、统一饮水量、未核实的电费或安全承诺。</p>
+    <form method="post" class="card shadow-sm">
+        <div class="card-body">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <div class="mb-3">
+                <label class="form-label">类型</label>
+                <select class="form-select" name="kind">
+                    <option value="template">天气触发时可复用的短提醒</option>
+                    <option value="science">平时可阅读转发的高温科普</option>
+                </select>
+            </div>
+            <div class="mb-3">
+                <label class="form-label">适用场景</label>
+                <select class="form-select" name="scenario">
+                    <option value="heat">高温</option>
+                </select>
+            </div>
+            <div class="mb-3">
+                <label class="form-label">标题</label>
+                <input class="form-control" name="title" required maxlength="160">
+            </div>
+            <div class="mb-3">
+                <label class="form-label">来源</label>
+                <input class="form-control" name="source" required maxlength="200" placeholder="例如：都昌县气象台高温预警 / 本人临床经验整理">
+            </div>
+            <div class="mb-3">
+                <label class="form-label">正文</label>
+                <textarea class="form-control" name="body" rows="8" required></textarea>
+            </div>
+            <div class="form-check mb-3">
+                <input class="form-check-input" type="checkbox" name="publish" id="publishNow">
+                <label class="form-check-label" for="publishNow">保存后由我本人审核发布（将标注为徐医生已审核）</label>
+            </div>
+            <button class="btn btn-primary">保存</button>
+        </div>
+    </form>
+</div>
+{% endblock %}

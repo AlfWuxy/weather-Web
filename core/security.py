@@ -4,8 +4,9 @@ import hashlib
 import logging
 import os
 import secrets
+from functools import wraps
 
-from flask import abort, current_app, has_app_context, jsonify, request, session
+from flask import abort, current_app, flash, has_app_context, jsonify, redirect, request, session, url_for
 
 logger = logging.getLogger(__name__)
 from flask_login import current_user
@@ -37,6 +38,16 @@ def _client_ip_for_rate_limit():
     return client_ip
 
 
+def _client_ip_rate_key():
+    """未登录与游客共用的 IP 限流键。
+
+    必须带 ``ip:`` 前缀：Flask-Limiter 按字符串分桶，
+    若未登录返回裸 IP、游客返回 ``ip:IP``，同一客户端会落两套桶
+    （匿名 weather 与 guest 会话可各刷一份配额）。
+    """
+    return f"ip:{_client_ip_for_rate_limit()}"
+
+
 def rate_limit_key():
     """按正式用户或受信客户端 IP 分桶。
 
@@ -47,7 +58,64 @@ def rate_limit_key():
     if getattr(current_user, 'is_authenticated', False) and not _is_guest_rate_limit_subject(current_user):
         uid = str(getattr(current_user, 'id', '') or '')
         return f"user:{uid}"
-    return f"ip:{_client_ip_for_rate_limit()}"
+    return _client_ip_rate_key()
+
+
+def _is_guest_subject():
+    """判断当前主体是否为游客（与 rate_limit_key 判定对齐，含兜底）。"""
+    if not getattr(current_user, 'is_authenticated', False):
+        return False
+    return _is_guest_rate_limit_subject(current_user)
+
+
+def _wants_api_error_payload():
+    """API 路径或显式要 JSON 时返回结构化 403。"""
+    if request.path.startswith('/api/'):
+        return True
+    best = request.accept_mimetypes.best_match(['application/json', 'text/html'])
+    if best == 'application/json' and (
+        request.accept_mimetypes[best] > request.accept_mimetypes['text/html']
+    ):
+        return True
+    return False
+
+
+def reject_guest(view_func):
+    """拒绝游客访问高成本/计费能力。
+
+    用法：与 @login_required 组合（推荐 @login_required 在上）：
+        @login_required
+        @reject_guest
+        def expensive_api(): ...
+
+    行为：
+    - 未登录：不拦截，交给 @login_required（或后续逻辑）
+    - 游客：API → 403 JSON；页面 → flash + 跳转 dashboard
+    - 正式用户：放行
+    """
+    @wraps(view_func)
+    def wrapped(*args, **kwargs):
+        if _is_guest_subject():
+            message = '游客不可用，请注册登录'
+            if _wants_api_error_payload():
+                return jsonify({
+                    'success': False,
+                    'error': 'guest_not_allowed',
+                    'message': message,
+                }), 403
+            flash(message, 'error')
+            try:
+                return redirect(url_for('user.user_dashboard'))
+            except Exception:
+                # 无 dashboard 端点时回退硬 403
+                abort(403)
+        return view_func(*args, **kwargs)
+
+    return wrapped
+
+
+# 别名：语义上表示「需要正式登录用户」
+real_login_required = reject_guest
 
 
 def generate_csrf_token():

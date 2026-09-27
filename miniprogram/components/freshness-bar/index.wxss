@@ -1,0 +1,19 @@
+.freshness {
+  display: flex;
+  align-items: flex-start;
+  gap: 12rpx;
+  margin: 18rpx 2rpx;
+  color: #786d65;
+  font-size: 16px;
+  line-height: 1.55;
+}
+.dot {
+  flex: 0 0 14rpx;
+  width: 14rpx;
+  height: 14rpx;
+  margin-top: 11rpx;
+  border-radius: 50%;
+  background: #3f9c68;
+}
+.dot.warn { background: #d85d19; }
+.fresh-copy { flex: 1; }

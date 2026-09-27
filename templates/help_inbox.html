@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+
+{% block title %}待处理求助 · 宜老天气通{% endblock %}
+
+{% block content %}
+<div class="container my-4" id="helpInboxRoot"
+     data-list-url="{{ url_for('api.api_v1_help_list') }}"
+     data-csrf="{{ csrf_token() }}">
+<script type="application/json" id="helpInboxInitial">{{ data|tojson }}</script>
+    <div class="d-flex flex-wrap justify-content-between align-items-center mb-3">
+        <div>
+            <h1 class="h2">待处理求助</h1>
+            <p class="text-muted mb-0">跨天未结会保留。点「接手」只表示跟进责任已明确，不表示老人已经安全。本页不是急救通道，无人接手时保持等待。</p>
+        </div>
+        <div class="d-flex gap-2 align-items-center">
+            <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('user.family_invite_accept') }}">输入邀请码</a>
+            <span class="badge bg-danger fs-6" id="inboxOpenCount">未结 {{ data.open_count or 0 }}</span>
+        </div>
+    </div>
+
+    <div id="inboxError" class="alert alert-danger d-none" role="alert">
+        无法读取待处理求助。<button type="button" class="btn btn-sm btn-outline-danger ms-2" id="inboxRetry">重试</button>
+    </div>
+    <div id="inboxStale" class="alert alert-warning d-none" role="status"></div>
+    <div id="inboxEmpty" class="alert alert-secondary {% if data.items %}d-none{% endif %}">当前没有未解决求助。</div>
+
+    <div id="inboxPending" class="mb-4">
+        <h2 class="h5">等待接手</h2>
+        <div id="pendingAckList"></div>
+    </div>
+    <div id="inboxOpen">
+        <h2 class="h5">已接手 / 处理中</h2>
+        <div id="openList"></div>
+    </div>
+</div>
+
+<template id="helpCardTpl">
+    <div class="card shadow-sm mb-3 help-card">
+        <div class="card-body">
+            <div class="d-flex justify-content-between">
+                <div>
+                    <div class="fw-semibold help-status-label"></div>
+                    <div class="small help-elder-label"></div>
+                    <div class="small text-muted help-meta"></div>
+                    <div class="small mt-1">编号 <code class="help-id"></code></div>
+                    <label class="small mt-2 d-none help-outcome-wrap">结案结果
+                        <select class="form-select form-select-sm help-outcome">
+                            <option value="">请选择具体结果</option>
+                            <option value="assisted">已协助处理</option>
+                            <option value="transferred_confirmed">已转交并确认接收</option>
+                            <option value="withdrawn">本人撤回</option>
+                            <option value="unreachable">联系不上</option>
+                            <option value="declined">暂不受理</option>
+                            <option value="false_alarm">误报</option>
+                            <option value="other">其他结果</option>
+                        </select>
+                    </label>
+                </div>
+                <div class="d-flex flex-column gap-2 help-actions"></div>
+            </div>
+            <div class="alert alert-warning mt-2 d-none help-conflict">其他人已更新状态，已加载最新进度。</div>
+        </div>
+    </div>
+</template>
+{% endblock %}
+
+{% block extra_js %}
+<script src="{{ url_for('static', filename='js/help_inbox.js') }}"></script>
+{% endblock %}

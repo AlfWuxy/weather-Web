@@ -24,20 +24,43 @@ REAL_WEATHER = {
     'temperature_max': 39.0,
     'temperature_min': 29.0,
     'humidity': 70.0,
+    'pressure': 1002.0,
+    'weather_condition': '晴',
+    'wind_speed': 2.0,
+    'aqi': 45,
+    'pm25': 20,
+    'air_quality_available': True,
     'data_source': 'QWeather',
+    'observed_at': utcnow().isoformat(),
+    'air_observed_at': utcnow().isoformat(),
+    'quality_version': 1,
     'is_mock': False,
 }
 
 
 def _login_as(client, user_id, csrf_token='test-csrf-token'):
+    from core.extensions import db
+
+    user = db.session.get(User, user_id)
+    assert user is not None
     with client.session_transaction() as session:
-        session['_user_id'] = str(user_id)
+        session['_user_id'] = user.get_id()
         session['_fresh'] = True
         session['_csrf_token'] = csrf_token
 
 
+def _session_flashes(client):
+    with client.session_transaction() as session:
+        return list(session.get('_flashes', ()))
+
+
 def _create_user(db_session, username, role, community='都昌'):
-    user = User(username=username, role=role, community=community)
+    user = User(
+        username=username,
+        role=role,
+        community=community,
+        authorized_community=community if role != 'admin' else None,
+    )
     user.set_password('weather-guard-test-password')
     db_session.add(user)
     db_session.commit()
@@ -72,7 +95,7 @@ def _patch_caregiver_location(monkeypatch):
 
 
 def test_heat_weather_guard_rejects_mock_and_missing_critical_fields():
-    """mock 与缺少任一热风险关键字段的天气都不可进入计算。"""
+    """社区和照护基础热行动接收新鲜实况，同时继续拒绝 mock。"""
     from services.user.caregiver_service import _heat_weather_available as caregiver_ready
     from services.user.community_service import _heat_weather_available as community_ready
 
@@ -80,6 +103,10 @@ def test_heat_weather_guard_rejects_mock_and_missing_critical_fields():
     assert community_ready(REAL_WEATHER) is True
     assert caregiver_ready(MOCK_WEATHER) is False
     assert community_ready(MOCK_WEATHER) is False
+
+    openmeteo_weather = dict(REAL_WEATHER, data_source='Open-Meteo')
+    assert caregiver_ready(openmeteo_weather) is True
+    assert community_ready(openmeteo_weather) is True
 
     for missing_field in ('temperature', 'temperature_max', 'temperature_min', 'humidity'):
         incomplete = dict(REAL_WEATHER)
@@ -107,9 +134,10 @@ def test_caregiver_dashboard_does_not_calculate_mock_weather(
         lambda *_args, **_kwargs: pytest.fail('mock 天气不应进入热风险计算'),
     )
 
-    response = client.get('/caregiver')
+    response = client.get('/caregiver', follow_redirects=True)
 
     assert response.status_code == 200
+    assert response.request.path == '/pairs'
     body = response.get_data(as_text=True)
     assert '天气更新中' in body
     assert '风险等级暂不显示' in body
@@ -118,6 +146,45 @@ def test_caregiver_dashboard_does_not_calculate_mock_weather(
     assert '热风险：极高' not in body
     assert '高温（39°C）' not in body
     assert DailyStatus.query.count() == 0
+
+
+def test_caregiver_dashboard_shows_openmeteo_locally_without_shareable_risk(
+    client,
+    db_session,
+    monkeypatch,
+):
+    """Open-Meteo 可供本地基础行动，复制传播仍等待 fresh QWeather。"""
+    user = _create_user(db_session, 'caregiver_openmeteo_guard', 'caregiver')
+    _create_pair(db_session, user.id, short_code='14142135')
+    _login_as(client, user.id)
+    _patch_caregiver_location(monkeypatch)
+    openmeteo_weather = dict(
+        REAL_WEATHER,
+        data_source='Open-Meteo',
+        aqi=0,
+        pm25=0,
+        air_quality_available=False,
+        aqi_estimated=True,
+    )
+    monkeypatch.setattr(
+        'services.user.caregiver_service.get_weather_with_cache',
+        lambda _location: (openmeteo_weather, False),
+    )
+    monkeypatch.setattr(
+        'services.user.caregiver_service.get_consecutive_hot_days',
+        lambda *_args, **_kwargs: 0,
+    )
+
+    response = client.get('/caregiver', follow_redirects=True)
+
+    assert response.status_code == 200
+    body = response.get_data(as_text=True)
+    assert '热风险：极高' in body
+    assert '数据来源：Open-Meteo' in body
+    assert '不代表官方预警' in body
+    assert '高温行动阈值（39°C）' in body
+    assert '<i class="bi bi-clipboard"></i> 复制行动链接说明' in body
+    assert '<i class="bi bi-clipboard"></i> 复制提醒话术' not in body
 
 
 def test_caregiver_action_log_keeps_risk_null_when_weather_is_mock(
@@ -158,6 +225,64 @@ def test_caregiver_action_log_keeps_risk_null_when_weather_is_mock(
     assert status.caregiver_note == '已电话确认'
 
 
+@pytest.mark.parametrize(
+    ('role', 'expected_path'),
+    (
+        ('caregiver', '/dashboard'),
+        ('community', '/community'),
+    ),
+)
+def test_community_announce_rejects_cross_community_for_non_admin_roles(
+    client,
+    db_session,
+    role,
+    expected_path,
+):
+    """caregiver 与 community 角色不可借 query 横向切社区。"""
+    user = _create_user(db_session, f'{role}_announce_acl_guard', role)
+    _login_as(client, user.id)
+
+    response = client.get('/community/announce?community=南昌', follow_redirects=False)
+
+    assert response.status_code == 302
+    assert response.headers['Location'].endswith(expected_path)
+    assert ('error', '无权访问该社区') in _session_flashes(client)
+
+
+@pytest.mark.parametrize(
+    ('role', 'community_name'),
+    (
+        ('caregiver', '都昌'),
+        ('admin', '南昌'),
+    ),
+)
+def test_community_announce_allows_authorized_scope(
+    client,
+    db_session,
+    monkeypatch,
+    role,
+    community_name,
+):
+    """本社区 caregiver 与任意社区 admin 仍可生成 announce。"""
+    user = _create_user(db_session, f'{role}_announce_allowed', role)
+    _login_as(client, user.id)
+    monkeypatch.setattr(
+        'services.user.community_service.get_weather_with_cache',
+        lambda _location: (dict(MOCK_WEATHER), False),
+    )
+    monkeypatch.setattr(
+        'services.user.community_service.HeatActionService.calculate_heat_risk',
+        lambda *_args, **_kwargs: pytest.fail('mock 天气不应进入社区热风险计算'),
+    )
+
+    response = client.get(f'/community/announce?community={community_name}')
+
+    assert response.status_code == 200
+    body = response.get_data(as_text=True)
+    assert '状态：天气更新中' in body
+    assert community_name in body
+
+
 def test_community_pages_do_not_generate_mock_risk_messages(
     client,
     db_session,
@@ -191,14 +316,13 @@ def test_community_pages_do_not_generate_mock_risk_messages(
 
     assert wechat.status_code == 200
     wechat_body = wechat.get_data(as_text=True)
-    assert '天气更新中' in wechat_body
-    assert '可转发提醒暂缓更新' in wechat_body
+    assert '微信群提醒待恢复' in wechat_body
     assert 'id="wechatMessage"' not in wechat_body
     assert '今日热风险：极高' not in wechat_body
 
     assert announce.status_code == 200
     announce_body = announce.get_data(as_text=True)
-    assert '状态：天气更新中' in announce_body
+    assert '公共传播内容待恢复' in announce_body
     assert 'class="btn btn-primary mt-3 copy-message"' not in announce_body
     assert '今日热风险：极高' not in announce_body
     assert DailyStatus.query.count() == 0
@@ -233,10 +357,11 @@ def test_real_qweather_still_generates_caregiver_and_community_risk(
         lambda *_args, **_kwargs: 0,
     )
 
-    caregiver = client.get('/caregiver')
+    caregiver = client.get('/caregiver', follow_redirects=True)
     community = client.get('/community')
 
     assert caregiver.status_code == 200
+    assert caregiver.request.path == '/pairs'
     caregiver_body = caregiver.get_data(as_text=True)
     assert '热风险：极高' in caregiver_body
     assert '复制提醒话术' in caregiver_body

@@ -116,6 +116,7 @@ def test_chronic_service():
         traceback.print_exc()
         pytest.fail(f"慢病风险服务测试失败: {e}")
 
+@pytest.mark.network
 def test_weather_service():
     """测试天气服务"""
     print('\n5. 测试天气服务...')

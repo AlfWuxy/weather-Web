@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% set needs_chartjs = true %}
 
-{% block title %}历史数据回溯分析 - 天气健康风险预测系统{% endblock %}
+{% block title %}历史数据回溯分析 · 宜老天气通{% endblock %}
 
 {% block extra_css %}
 <style>
@@ -300,13 +300,9 @@
         <div class="d-flex flex-wrap justify-content-between align-items-start gap-3">
             <div>
                 <h2 class="mb-1"><i class="bi bi-clock-history me-1"></i>历史数据回溯分析</h2>
-                <p>低保真线框：围绕“时间回溯 + 关系分析 + 数据可信度”重排模块。</p>
-                <p class="mb-0 small text-muted">
-                    页面版本：<code>{{ ui_version }}</code> |
-                    应用路径：<code>{{ runtime_root }}</code>
-                </p>
+                <p class="mb-0">按时间回溯天气、健康负担与数据可信度指标。</p>
             </div>
-            <span class="wf-label"><i class="bi bi-grid-3x3-gap"></i>线框预览版</span>
+            <span class="wf-label"><i class="bi bi-clock-history"></i>历史分析</span>
         </div>
     </div>
 
@@ -314,7 +310,7 @@
         <div class="card-body">
             <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
                 <h6 class="mb-0">分析控制条</h6>
-                <span class="wf-label">字段 + 快捷交互</span>
+                <span class="wf-label">筛选与快捷范围</span>
             </div>
             <form id="analysisForm" method="POST" action="{{ url_for('analysis.analysis_history') }}">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -353,7 +349,7 @@
                         </select>
                     </div>
                     <div class="col-lg-2 col-md-4">
-                        <label class="form-label">时间粒度（线框占位）</label>
+                        <label class="form-label">时间粒度（暂仅按日）</label>
                         <select class="form-select" disabled>
                             <option>按日</option>
                             <option>按周</option>

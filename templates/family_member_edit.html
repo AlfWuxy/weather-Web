@@ -35,7 +35,7 @@
                                 <div class="row">
                                     <div class="col-6 mb-3">
                                         <label class="form-label">年龄</label>
-                                        <input type="number" class="form-control" name="age" value="{{ member.age or '' }}" min="0" max="120">
+                                        <input type="number" class="form-control" name="age" value="{{ member.age or '' }}" min="1" max="150">
                                     </div>
                                     <div class="col-6 mb-3">
                                         <label class="form-label">性别</label>
@@ -46,6 +46,33 @@
                                         </select>
                                     </div>
                                 </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="accordion-item">
+                        <h2 class="accordion-header" id="editCareHeading">
+                            <button class="accordion-button" type="button" data-bs-toggle="collapse" data-bs-target="#editCare">
+                                天气照护
+                            </button>
+                        </h2>
+                        <div id="editCare" class="accordion-collapse collapse show" data-bs-parent="#editMemberAccordion">
+                            <div class="accordion-body">
+                                <p class="text-muted small">老人所在地需要单独确认，不能默认用你现在的位置。只有勾选加入天气照护后，才会建立或复用提醒关系。历史档案不会被静默全部启用。不按姓名自动合并。</p>
+                                <div class="mb-3">
+                                    <label class="form-label">老人所在地</label>
+                                    <input type="text" class="form-control" name="elder_location_query" value="{{ profile.location_query or '' }}" placeholder="例如：都昌县某某乡，不要填写门牌">
+                                </div>
+                                <div class="form-check mb-2">
+                                    <input class="form-check-input" type="checkbox" name="join_weather_care" id="join_weather_care" {% if profile.weather_care_enabled %}checked{% endif %}>
+                                    <label class="form-check-label" for="join_weather_care">加入天气照护（高温提醒发给我，由我联系老人）</label>
+                                </div>
+                                {% if not is_create_mode %}
+                                <div class="form-check">
+                                    <input class="form-check-input" type="checkbox" name="leave_weather_care" id="leave_weather_care">
+                                    <label class="form-check-label" for="leave_weather_care">停用天气照护（保留档案，撤销提醒协作）</label>
+                                </div>
+                                {% endif %}
                             </div>
                         </div>
                     </div>
@@ -236,8 +263,8 @@
                                     <select class="form-select" name="privacy_level">
                                         <option value="family" {% if profile.privacy_level == 'family' %}selected{% endif %}>家庭可见</option>
                                         <option value="private" {% if profile.privacy_level == 'private' %}selected{% endif %}>仅本人可见</option>
-                                        <option value="doctor" {% if profile.privacy_level == 'doctor' %}selected{% endif %}>授权医生可见</option>
-                                        <option value="community" {% if profile.privacy_level == 'community' %}selected{% endif %}>社区管理员可见</option>
+                                        <option value="doctor" {% if profile.privacy_level == 'doctor' %}selected{% endif %}>医生偏好记录（当前不开放查看）</option>
+                                        <option value="community" {% if profile.privacy_level == 'community' %}selected{% endif %}>社区偏好记录（当前不开放查看）</option>
                                     </select>
                                 </div>
                                 <div class="row">
@@ -260,14 +287,17 @@
                                         <input type="text" class="form-control" name="emergency_phone" value="{{ profile.contact_prefs.get('emergency_phone', '') }}">
                                     </div>
                                 </div>
+                                <div class="alert alert-secondary small" role="note">
+                                    以下选项只作偏好记录。医生不默认查看健康档案；当前没有医生或社区账号授权查看链路。
+                                </div>
                                 <div class="d-flex flex-wrap gap-3">
                                     <div class="form-check">
                                         <input class="form-check-input" type="checkbox" name="share_with_doctor" id="share_doctor_edit" {% if profile.share_with_doctor %}checked{% endif %}>
-                                        <label class="form-check-label" for="share_doctor_edit">授权医生查看</label>
+                                        <label class="form-check-label" for="share_doctor_edit">记录希望医生可看（当前未启用）</label>
                                     </div>
                                     <div class="form-check">
                                         <input class="form-check-input" type="checkbox" name="share_with_community" id="share_community_edit" {% if profile.share_with_community %}checked{% endif %}>
-                                        <label class="form-check-label" for="share_community_edit">授权社区查看</label>
+                                        <label class="form-check-label" for="share_community_edit">记录希望社区可看（当前未启用）</label>
                                     </div>
                                 </div>
                             </div>

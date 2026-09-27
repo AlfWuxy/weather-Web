@@ -6,8 +6,52 @@
 """
 import logging
 import re
+from html.parser import HTMLParser
 
 logger = logging.getLogger(__name__)
+
+
+class _PlainTextExtractor(HTMLParser):
+    """只保留 HTML 中可见的纯文本。"""
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self._chunks = []
+        self._blocked_depth = 0
+
+    def handle_starttag(self, tag, attrs):
+        del attrs
+        if tag.lower() in {'script', 'style'}:
+            self._blocked_depth += 1
+
+    def handle_startendtag(self, tag, attrs):
+        del tag, attrs
+
+    def handle_endtag(self, tag):
+        if tag.lower() in {'script', 'style'} and self._blocked_depth > 0:
+            self._blocked_depth -= 1
+
+    def handle_data(self, data):
+        if self._blocked_depth == 0:
+            self._chunks.append(data)
+
+    def text(self):
+        return ''.join(self._chunks)
+
+
+def _strip_html_to_text(text):
+    """bleach 不可用时剥离标签，返回未做 HTML 实体转义的纯文本。"""
+    cleaned = text
+    # 最多三轮可处理实体编码后的标签，同时保留“血压 < 120”这类比较文本。
+    for _ in range(3):
+        parser = _PlainTextExtractor()
+        parser.feed(cleaned)
+        parser.close()
+        parsed = parser.text()
+        if parsed == cleaned:
+            break
+        cleaned = parsed
+    return cleaned
 
 
 def validate_username(username):
@@ -22,12 +66,40 @@ def validate_username(username):
     return True, username
 
 
+def mask_patient_name(name):
+    """病历列表脱敏：保留姓/首字，其余 *。
+
+    管理端列表默认不展示完整姓名；明细查看可另开（若产品需要）。
+    """
+    text = (name or '').strip() if isinstance(name, str) else ''
+    if not text:
+        return '—'
+    if len(text) == 1:
+        return '*'
+    # 中文姓名通常 2–4 字；长名字最多遮 8 位避免撑版
+    star_count = min(len(text) - 1, 8)
+    return text[0] + ('*' * star_count)
+
+
+def mask_phi_text(value, keep=0, max_stars=12):
+    """通用短文本 PHI 遮罩（诊断/主诉等列表用）。"""
+    text = (value or '').strip() if isinstance(value, str) else ''
+    if not text:
+        return '—'
+    if keep <= 0:
+        return '***'
+    if len(text) <= keep:
+        return text[0] + '*' if len(text) > 1 else '*'
+    star_count = min(len(text) - keep, max_stars)
+    return text[:keep] + ('*' * star_count)
+
+
 def validate_password(password):
-    """验证密码：至少6位"""
+    """验证密码：至少 8 位（提高弱口令基线，配合 scrypt 哈希）。"""
     if not password or not isinstance(password, str):
         return False, '密码不能为空'
-    if len(password) < 6:
-        return False, '密码长度至少6位'
+    if len(password) < 8:
+        return False, '密码长度至少8位'
     if len(password) > 100:
         return False, '密码长度不能超过100位'
     return True, password
@@ -48,7 +120,7 @@ def validate_email(email):
 
 def validate_age(age):
     """验证年龄：1-150岁"""
-    if not age:
+    if age is None or (isinstance(age, str) and not age.strip()):
         return True, None  # 年龄可选
     try:
         age = int(age)
@@ -117,10 +189,7 @@ def sanitize_input(text, max_length=200):
         )
     except ImportError:
         logger.warning("bleach 未安装，已使用降级清理逻辑。")
-        # 兜底方案：使用 html.escape + 正则清理（不如 bleach 严格但可用）
-        import html
-        cleaned = html.escape(text)
-        # 额外移除可能的标签残留
-        cleaned = re.sub(r'<[^>]+>', '', cleaned)
+        # 返回纯文本，让模板统一完成一次上下文转义，避免实体被重复转义。
+        cleaned = _strip_html_to_text(text)
 
     return cleaned.strip()[:max_length]
