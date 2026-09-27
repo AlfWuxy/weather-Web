@@ -256,15 +256,15 @@ def test_expanded_daily_uses_one_county_forecast(authenticated_client, monkeypat
 def _public_cooling_extension():
     inventory = json.loads(poi.RESOURCE_INVENTORY_PATH.read_text(encoding="utf-8"))
     resources = json.loads(poi.RESOURCES_PATH.read_text(encoding="utf-8"))
-    preview = [row for row in inventory["records"] if row.get("public_preview")]
-    mapped = [feature for feature in resources["features"] if feature["properties"].get("public_preview")]
+    preview = [row for row in inventory["records"] if row.get("public_preview") and row["id"].startswith("official-cooling-")]
+    mapped = [feature for feature in resources["features"] if feature["properties"].get("public_preview") and any(str(record_id).startswith("official-cooling-") for record_id in feature["properties"].get("inventory_ids", []))]
     return inventory, resources, preview, mapped
 
 
 def test_public_cooling_extension_has_ten_candidates_and_no_invented_coordinates():
     inventory, resources, preview, mapped = _public_cooling_extension()
-    assert len(inventory["records"]) == 373
-    assert len({row["id"] for row in inventory["records"]}) == 373
+    assert len(inventory["records"]) == 423
+    assert len({row["id"] for row in inventory["records"]}) == 423
     assert len(preview) == 10 and len(mapped) == 7
     assert len({feature["id"] for feature in resources["features"]}) == len(resources["features"])
     mapped_inventory_ids = {item for feature in mapped for item in feature["properties"]["inventory_ids"]}
@@ -319,9 +319,9 @@ def test_public_cooling_history_does_not_become_verified_capacity():
     _, _, preview, mapped = _public_cooling_extension()
     data = poi.build_poi_payload(_legacy())
     counts = data["poi_metadata"]["counts"]
-    assert (counts["settlements"], counts["medical"], counts["cooling_candidates"], counts["cooling_verified"]) == (502, 25, 9, 0)
+    assert (counts["settlements"], counts["medical"], counts["cooling_candidates"], counts["cooling_verified"]) == (502, 25, 59, 0)
     assert counts["unmapped_resources"] == 344
-    assert data["poi_metadata"]["inventory_linked_count"] == 29
+    assert data["poi_metadata"]["inventory_linked_count"] == 79
     assert data["poi_metadata"]["rejected_points"] == 0
     assert not data["cooling_resources"]
     runtime_ids = {row["id"] for row in data["cooling_candidates"]}
@@ -365,3 +365,11 @@ def test_cooling_evidence_preserves_alias_difference_and_fan_only_history():
         assert row["official_status"] == "public_culture_facility_report"
         assert "不能据此认定" in row["facilities_hint"]
         assert row["source_date"] == "2026-05-19"
+
+
+def test_amap_inventory_sources_keep_platform_attribution():
+    data = poi.build_poi_payload(_legacy())
+    amap_sources = [source for source in data["poi_metadata"]["sources"]
+                    if source.get("url", "").startswith("https://www.amap.com/place/")]
+    assert len(amap_sources) >= 50
+    assert all("高德" in source["name"] and "官方列名" not in source["name"] for source in amap_sources)

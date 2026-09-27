@@ -116,38 +116,43 @@
     <section class="yl-section mt-4 yl-fade-up"
              aria-labelledby="coolingCandidateTitle"
              data-publication-status="candidate-only"
-             data-verification-status="pending-human-verification">
+             data-verification-status="per-location">
         <div class="d-flex flex-column flex-lg-row justify-content-between gap-3 mb-3">
             <div>
                 <span class="section-kicker">预览资料</span>
-                <h2 class="h4 mb-1" id="coolingCandidateTitle">待核验场所预览</h2>
-                <p class="text-muted mb-0">这些信息来自官方公开资料与公开 POI，仅帮助后续人工核验和联系确认。</p>
+                <h2 class="h4 mb-1" id="coolingCandidateTitle">场所地点与纳凉资料</h2>
+                <p class="text-muted mb-0">这些信息来自官方公开资料与公开 POI，地点核验、开放时间与纳凉设施分别标注。</p>
             </div>
-            <span class="badge bg-warning-subtle text-warning-emphasis align-self-start">全部待人工核验</span>
+            <a class="btn btn-outline-primary align-self-start" href="{{ url_for('user.heat_exposure_gis') }}">{{ '在县域地图查看这些地点' if current_user.is_authenticated else '登录后在县域地图查看' }}</a>
         </div>
         <div class="alert alert-warning" role="note">
-            候选场所不代表当天开放、具备空调、允许公众纳凉或已获本项目推荐。志愿服务候选也不等于可进入纳凉，请勿直接按候选信息带老人前往。
+            “地点已核验”表示名称与坐标已核对；是否已确认可前往、开放时间和纳凉设施请查看各条记录。旧的待核验场所仍需联系确认。
         </div>
         <div class="row g-3">
             {% for candidate in cooling_candidates %}
+            {% set location_verified = candidate.location_verification_status == 'verified' %}
             <div class="col-md-6 col-lg-4">
-                <article class="card h-100" data-cooling-candidate="pending">
+                <article class="card h-100" data-cooling-candidate="{{ 'location-verified' if location_verified else 'pending' }}">
                     <div class="card-body">
                         <div class="d-flex justify-content-between align-items-start gap-2 mb-2">
                             <h3 class="h6 mb-0">{{ candidate.name }}</h3>
-                            <span class="badge bg-warning-subtle text-warning-emphasis">待人工核验</span>
+                            <span class="badge {{ 'bg-success-subtle text-success-emphasis' if location_verified else 'bg-warning-subtle text-warning-emphasis' }}">{{ '地点已核验' if location_verified else '待人工核验' }}</span>
                         </div>
                         <p class="small text-muted mb-3">{{ candidate.role_label }} · {{ candidate.category_label }}</p>
                         <p class="small mb-2">
                             <strong>资料地址：</strong>{{ candidate.address or '未提供' }}
                         </p>
-                        <p class="small mb-2">
-                            <strong>原资料时段：</strong>{{ candidate.opening_hours_hint or '未提供，需电话或现场确认' }}
-                        </p>
-                        <p class="small mb-2"><strong>接待对象：</strong>{{ candidate.audience_hint or '待确认' }}</p>
-                        <p class="small mb-2"><strong>设施资料：</strong>{{ candidate.facilities_hint or '待核验' }}</p>
+                        {% if location_verified %}
+                        <p class="small mb-2"><strong>开放时间：</strong>{{ candidate.opening_hours_hint or '未提供' }}</p>
+                        <p class="small mb-2"><strong>空调：</strong>未知 · <strong>无障碍：</strong>未知</p>
+                        <p class="small text-muted mb-2"><strong>核验依据：</strong>{{ (candidate.location_verification_note or '高德名称与坐标核对；项目负责人确认可前往，未现场核验。')|replace('未现场核验，开放时间及空调等设施信息未提供。', '未现场核验。') }}{% if candidate.location_verified_at %} · {{ candidate.location_verified_at }}{% endif %}</p>
+                        {% else %}
+                        <p class="small mb-2"><strong>原资料时段：</strong>{{ candidate.opening_hours_hint or '未提供，需电话或现场确认' }}</p>
+                        {% endif %}
+                        {% if not location_verified or (candidate.audience_hint and candidate.audience_hint != '项目负责人确认地点真实、可前往；具体接待人群及无障碍条件未提供') %}<p class="small mb-2"><strong>接待对象：</strong>{{ candidate.audience_hint or '待确认' }}</p>{% endif %}
+                        {% if not location_verified or (candidate.facilities_hint and candidate.facilities_hint != '空调、饮水及无障碍设施信息未提供；不根据名称推定设备或纳凉能力') %}<p class="small mb-2"><strong>设施资料：</strong>{{ candidate.facilities_hint or '待核验' }}</p>{% endif %}
                         <p class="small mb-2"><strong>当前开放：</strong>未知，前往前须联系确认</p>
-                        <p class="small text-muted mb-2">{{ candidate.verification_note }}</p>
+                        {% if candidate.verification_note and (not location_verified or candidate.verification_note != candidate.location_verification_note) %}<p class="small text-muted mb-2">{{ candidate.verification_note }}</p>{% endif %}
                         <p class="small mb-0">
                             <strong>资料来源：</strong>
                             {% if candidate.source_url %}<a href="{{ candidate.source_url }}" target="_blank" rel="noopener noreferrer">{{ candidate.source_label or '公开资料' }}</a>{% else %}{{ candidate.source_label or '公开资料' }}{% endif %}
