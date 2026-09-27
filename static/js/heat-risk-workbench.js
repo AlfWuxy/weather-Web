@@ -24,8 +24,9 @@
         daily: '当日热风险等级',
         score: '综合热风险分（静态）',
         bivariate: '高温 × 高龄',
-        facility_km: '到最近医疗点距离'
+        facility_km: '距可达性参考点（直线）'
     };
+    const POI_KINDS = {villages: '聚落点', medical: '医疗机构', candidates: '避暑候选', cooling: '坐标已核验避暑资源'};
     const WATER_FILL = '#a9cfe3';
     const NODATA_FILL = '#c9cdc6';
     const UNKNOWN_RISK = '风险暂不可判定';
@@ -49,6 +50,21 @@
         moreLayers: document.getElementById('hrwMoreLayers'),
         search: document.getElementById('hrwSearch'),
         searchOptions: document.getElementById('hrwSearchOptions'),
+        searchNote: document.getElementById('hrwSearchNote'),
+        townFilter: document.getElementById('hrwTownFilter'),
+        poiCounts: document.getElementById('hrwPoiCounts'),
+        poiInventoryHint: document.getElementById('hrwPoiInventoryHint'),
+        poiCoverageBody: document.getElementById('hrwPoiCoverageBody'),
+        poiCoverageNote: document.getElementById('hrwPoiCoverageNote'),
+        poiDetails: document.getElementById('hrwPoiDetails'),
+        poiList: document.getElementById('hrwPoiList'),
+        poiListTitle: document.getElementById('hrwPoiListTitle'),
+        poiMore: document.getElementById('hrwPoiMore'),
+        poiSources: document.getElementById('hrwPoiSources'),
+        unmappedList: document.getElementById('hrwUnmappedList'),
+        unmappedSummary: document.getElementById('hrwUnmappedSummary'),
+        unmappedMore: document.getElementById('hrwUnmappedMore'),
+        inventoryNote: document.getElementById('hrwInventoryNote'),
         swipe: document.getElementById('hrwSwipe'),
         swipeHandle: document.getElementById('hrwSwipeHandle'),
         measure: document.getElementById('hrwMeasure'),
@@ -93,7 +109,14 @@
         daily: null,
         dayIndex: 0,
         layer: 'score',
-        overlays: {hotspot: true, townships: true, villages: true, facilities: true, cooling: true},
+        overlays: {hotspot: true, townships: true, villages: true, references: false, medical: true, candidates: true, cooling: true},
+        townFilter: '',
+        selectedPoiId: null,
+        poiById: new Map(),
+        poiMarkers: new Map(),
+        searchByLabel: new Map(),
+        poiListLimit: 20,
+        unmappedListLimit: 20,
         basemap: 'vector',
         provider: app.dataset.tiandituKey ? 'tianditu' : 'amap',
         gcj: !app.dataset.tiandituKey,
@@ -432,7 +455,7 @@
 
     function attributionText() {
         const base = state.provider === 'tianditu' ? '底图 © 天地图' : '底图 © 高德地图';
-        return `${base} · 乡镇边界 © OpenStreetMap · NASA · ASPECT · ESA · Copernicus`;
+        return `${base} · © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">OpenStreetMap contributors</a>（ODbL）· <a href="https://www.geonames.org/" target="_blank" rel="noopener noreferrer">GeoNames</a>（CC BY 4.0）· NASA · ASPECT · ESA · Copernicus`;
     }
 
     function setBasemap(mode) {
@@ -504,7 +527,7 @@
         else if (layer === 'daily') text = !isLevel(currentHazard()) ? UNKNOWN_RISK : cell.scored ? `${demoPrefix()}当日 ${combineDailyLevel(currentHazard(), cell.level)} 级 · 综合分 ${fmt(cell.score, 0)}` : '无常住人口';
         else if (layer === 'score') text = cell.scored ? `综合分 ${fmt(cell.score, 0)} · ${levelInfo(cell.level).label}` : '无常住人口';
         else if (layer === 'bivariate') text = cell.scored ? `${cell.bivariate.toUpperCase()} · 地表 ${fmt(cell.p.q3_lst_c_mean, 1)} °C · 65+ ${fmt(cell.p.age65_share_pct, 1)}%` : '无常住人口';
-        else if (layer === 'facility_km') text = `距医疗点 ${fmt(cell.facility_km, 1)} km`;
+        else if (layer === 'facility_km') text = `距可达性参考点 ${fmt(cell.facility_km, 1)} km（直线）`;
         else {
             const spec = RAW_LAYERS[layer];
             text = `${spec.label} ${fmt(cell.p[layer], spec.digits)} ${spec.unit}`;
@@ -577,35 +600,28 @@
             }).addTo(state.map);
         }
 
-        const facilityItems = [];
-        state.facilities.forEach((facility) => {
-            const position = toMap(facility.lon, facility.lat);
-            facilityItems.push(L.circle(position, {
-                radius: 3000,
-                pane: 'boundaryPane',
-                interactive: false,
-                color: '#477F42',
-                weight: 1,
-                opacity: 0.55,
-                dashArray: '2 4',
-                fill: false
-            }));
-            const marker = L.marker(position, {
+        // 旧版乡镇驻地仅为冻结模型的可达性参考，不冒充医疗机构。
+        const references = state.facilities.filter((point) => point.precision !== 'exact').map((point) => {
+            const marker = L.marker(toMap(point.lon, point.lat), {
                 pane: 'pointPane',
-                icon: L.divIcon({
-                    className: `hrw-facility-icon${facility.precision === 'exact' ? ' is-exact' : ''}`,
-                    html: '<span>+</span>',
-                    iconSize: [18, 18]
-                }),
-                title: facility.name
+                icon: L.divIcon({className: 'hrw-reference-icon', html: '<span>◇</span>', iconSize: [18, 18]}),
+                title: referenceName(point)
             });
-            marker.bindTooltip(`${esc(facility.name)}<br><small>${facility.precision === 'exact' ? 'OSM 精确位置' : '乡镇驻地近似位置'}</small>`, {direction: 'top', className: 'hrw-tooltip'});
-            facilityItems.push(marker);
+            marker.bindTooltip(`${esc(referenceName(point))}<br><small>乡镇驻地近似位置 · 非医疗机构位置</small>`, {className: 'hrw-tooltip'});
+            return marker;
         });
-        state.layers.facilities = L.layerGroup(facilityItems);
-        state.layers.villages = L.layerGroup();
-        state.layers.cooling = L.layerGroup();
+        state.layers.references = L.layerGroup(references);
+        Object.keys(POI_KINDS).forEach((kind) => { state.layers[kind] = L.layerGroup(); });
+        state.layers.poiLabels = L.layerGroup().addTo(state.map);
+        state.poiRenderer = L.canvas({padding: 0.4, tolerance: 5, pane: 'pointPane'});
         applyOverlayVisibility();
+    }
+
+    function referenceName(point) {
+        if (point.precision === 'exact') return `${point.name}（模型参考点）`;
+        const township = state.townships[point.township];
+        const name = typeof point.township === 'string' ? point.township : township ? township.properties.name_zh : '乡镇';
+        return `${name}驻地参考点`;
     }
 
     function applyOverlayVisibility() {
@@ -615,56 +631,114 @@
             if (state.overlays[key]) layer.addTo(state.map);
             else layer.remove();
         });
+        renderPoiLabels();
         renderLegend();
+    }
+
+    function poiId(point, kind) {
+        return String(point.id || `${kind}:${point.name}:${point.lon_wgs84}:${point.lat_wgs84}`);
+    }
+
+    function matchesTown(point) {
+        return !state.townFilter || (state.townFilter === '__unknown__' ? !point.township : point.township === state.townFilter);
+    }
+
+    function villageDailyLevel(point) {
+        if (point.risk_data_status === 'no_grid_data' || !isLevel(point.static_level)) return null;
+        return combineDailyLevel(currentHazard(), point.static_level);
+    }
+
+    function buildPoiCatalog() {
+        state.poiById.clear();
+        if (!state.daily) return;
+        const arrays = {villages: state.daily.villages, medical: state.daily.medical_pois,
+            candidates: state.daily.cooling_candidates, cooling: state.daily.cooling_resources};
+        Object.entries(arrays).forEach(([kind, points]) => {
+            points.forEach((point) => {
+                if (!point || !isNum(point.lon_wgs84) || !isNum(point.lat_wgs84)) return;
+                const id = poiId(point, kind);
+                // 核验过期的缓存仍可作位置参考，但不能留在坐标核验图层。
+                const expired = kind === 'cooling' && point.valid_until && String(point.valid_until).slice(0, 10) < localDate();
+                const entry = expired ? {id, kind: 'candidates', point: {...point, coordinate_verification_expired: true}} : {id, kind, point};
+                if (!state.poiById.has(id)) state.poiById.set(id, entry);
+            });
+        });
+
+    }
+
+    function poiStyle(entry) {
+        const selected = entry.id === state.selectedPoiId;
+        let color = '#46734b';
+        if (entry.kind === 'villages') {
+            const level = villageDailyLevel(entry.point);
+            color = isLevel(level) ? levelInfo(level).color : NODATA_FILL;
+        } else if (entry.kind === 'candidates') color = '#258896';
+        else if (entry.kind === 'cooling') color = '#2466b0';
+        return {
+            pane: 'pointPane', renderer: state.poiRenderer,
+            radius: selected ? 8 : entry.kind === 'villages' ? 4.5 : 6,
+            color: selected ? '#a74407' : entry.kind === 'candidates' ? color : '#fff',
+            weight: selected ? 3 : 1.8, fillColor: color,
+            fillOpacity: entry.kind === 'candidates' ? 0.15 : 0.95,
+            dashArray: entry.kind === 'candidates' ? '3 2' : null
+        };
+    }
+
+    function poiTooltip(entry) {
+        const point = entry.point;
+        let detail = POI_KINDS[entry.kind];
+        if (entry.kind === 'villages') {
+            const level = villageDailyLevel(point);
+            detail += isLevel(level) ? ` · ${demoPrefix()}当日 ${level} 级` : ` · ${!isLevel(point.static_level) ? '网格数据缺失' : UNKNOWN_RISK}`;
+        }
+        if (entry.kind === 'candidates' || entry.kind === 'cooling') detail += ' · 开放情况待核实';
+        return `${esc(point.name)}<br><small>${esc(point.township || '乡镇归属待核验')} · ${esc(detail)}</small>`;
     }
 
     function renderVillages() {
         if (!state.map || !state.daily) return;
-        const L = window.L;
-        const group = state.layers.villages;
-        group.clearLayers();
-        const hazard = currentHazard();
-        state.daily.villages.forEach((village) => {
-            const level = combineDailyLevel(hazard, village.static_level);
-            const info = isLevel(level) ? levelInfo(level) : {color: NODATA_FILL};
-            const dailyText = isLevel(level) ? `${demoPrefix()}当日 ${level} 级` : UNKNOWN_RISK;
-            const marker = L.circleMarker(toMap(village.lon_wgs84, village.lat_wgs84), {
-                pane: 'pointPane',
-                radius: 7,
-                color: '#ffffff',
-                weight: 2.5,
-                fillColor: info.color,
-                fillOpacity: 1
-            });
-            marker.bindTooltip(`${esc(village.name)}<br><small>${esc(village.township)} · ${dailyText}</small>`, {direction: 'top', className: 'hrw-tooltip'});
-            marker.on('click', () => selectVillage(village));
-            group.addLayer(marker);
-            group.addLayer(L.marker(toMap(village.lon_wgs84, village.lat_wgs84), {
-                pane: 'labelTextPane',
-                interactive: false,
-                keyboard: false,
-                icon: L.divIcon({className: 'hrw-village-label', html: `<span>${esc(village.name)}</span>`, iconSize: null})
-            }));
+        Object.keys(POI_KINDS).forEach((kind) => state.layers[kind].clearLayers());
+        state.poiMarkers.clear();
+        state.poiById.forEach((entry) => {
+            if (!matchesTown(entry.point)) return;
+            const marker = window.L.circleMarker(toMap(entry.point.lon_wgs84, entry.point.lat_wgs84), poiStyle(entry));
+            marker.bindTooltip(() => poiTooltip(entry), {direction: 'top', className: 'hrw-tooltip'});
+            marker.on('click', () => selectPoi(entry.id, {reveal: true}));
+            state.layers[entry.kind].addLayer(marker);
+            state.poiMarkers.set(entry.id, marker);
         });
+        renderPoiLabels();
+    }
 
-        const cooling = state.layers.cooling;
-        cooling.clearLayers();
-        (state.daily.cooling_resources || []).forEach((point) => {
-            const marker = L.marker(toMap(point.lon_wgs84, point.lat_wgs84), {
-                pane: 'pointPane',
-                icon: L.divIcon({className: 'hrw-cooling-icon', html: '<i class="bi bi-snow"></i>', iconSize: [20, 20]}),
-                title: point.name
-            });
-            const detail = [point.open_hours, point.has_ac ? '有空调' : '', point.is_accessible ? '无障碍' : ''].filter(Boolean).join(' · ');
-            marker.bindTooltip(`${esc(point.name)}<br><small>${esc(detail || '避暑点')}</small>`, {direction: 'top', className: 'hrw-tooltip'});
-            cooling.addLayer(marker);
+    function renderPoiLabels() {
+        if (!state.map || !state.layers.poiLabels) return;
+        state.layers.poiLabels.clearLayers();
+        if (!isNum(state.map.getZoom()) || state.map.getZoom() < 14) return;
+        const bounds = state.map.getBounds();
+        const occupied = new Set();
+        let count = 0;
+        // 只给当前视野内、已打开图层的少量点显示名称，避免数百个常驻 DOM 标签。
+        state.poiById.forEach((entry) => {
+            if (count >= 40 || !state.overlays[entry.kind] || !matchesTown(entry.point)) return;
+            const position = toMap(entry.point.lon_wgs84, entry.point.lat_wgs84);
+            if (!bounds.contains(position)) return;
+            const pixel = state.map.latLngToContainerPoint(position);
+            const slot = `${Math.floor(pixel.x / 110)}:${Math.floor(pixel.y / 28)}`;
+            if (occupied.has(slot)) return;
+            occupied.add(slot);
+            state.layers.poiLabels.addLayer(window.L.marker(position, {
+                pane: 'labelTextPane', interactive: false, keyboard: false,
+                icon: window.L.divIcon({className: 'hrw-village-label', html: `<span>${esc(entry.point.name)}</span>`, iconSize: null})
+            }));
+            count += 1;
         });
     }
 
     function drawSelection() {
-        if (!state.map || state.selected < 0) return;
+        if (!state.map) return;
         const L = window.L;
         if (state.layers.selection) state.layers.selection.remove();
+        if (state.selected < 0) return;
         state.layers.selection = L.polygon(cellLatLngs(state.cells[state.selected]), {
             pane: 'selectionPane',
             interactive: false,
@@ -719,6 +793,7 @@
             ui.readout.textContent = `${w.lon.toFixed(5)}°E · ${w.lat.toFixed(5)}°N · WGS84${state.gcj ? ' · 高德底图已纠偏' : ''}`;
         });
         state.map.on('zoomend', updateZoomClasses);
+        state.map.on('zoomend moveend', renderPoiLabels);
         state.map.on('move zoom resize', updateSwipeClip);
         state.map.on('click', onMeasureClick);
         state.map.on('dblclick', finishMeasure);
@@ -887,7 +962,7 @@
             nodes.push(wrap);
             nodes.push(el('p', 'hrw-legend-note', '右上角深色 = 又热又老'));
         } else if (state.layer === 'facility_km') {
-            nodes.push(el('div', 'hrw-legend-title', '到最近医疗点（km）'));
+            nodes.push(el('div', 'hrw-legend-title', '距可达性参考点（km，直线）'));
             FACILITY_RAMP.palette.forEach((color, k) => nodes.push(legendRow(color, FACILITY_RAMP.labels[k])));
         } else {
             const spec = state.cellMeta.layers[state.layer];
@@ -906,6 +981,10 @@
             row.append(el('i', 'is-hotspot'), el('span', null, '统计热点（实线强显著）'));
             nodes.push(row);
         }
+        if (state.overlays.medical) nodes.push(legendRow('#46734b', '已收录医疗机构（开放待核实）'));
+        if (state.overlays.candidates) nodes.push(legendRow('#cce5e7', '避暑候选（未核验开放）'));
+        if (state.overlays.cooling) nodes.push(legendRow('#2466b0', '坐标已核验避暑资源'));
+        if (state.overlays.references) nodes.push(el('p', 'hrw-legend-note', '◇ 可达性参考点，非医疗机构位置'));
         ui.legend.replaceChildren(...nodes);
     }
 
@@ -942,8 +1021,22 @@
     }
 
     function updateInspector() {
+        renderPoiDetails();
         const cell = state.cells[state.selected];
-        if (!cell) return;
+        if (!cell) {
+            ui.place.textContent = '未匹配评分网格';
+            ui.coords.textContent = '';
+            ui.score.textContent = '—';
+            ui.levelChip.textContent = '网格数据缺失';
+            ui.levelChip.style.backgroundColor = NODATA_FILL;
+            ui.levelChip.style.color = '#2A2620';
+            ui.scoreSub.textContent = '仅供县级天气参考，不据此判定该点低风险。';
+            levelChip(ui.dailyChip, null);
+            ui.breakdown.replaceChildren();
+            ui.facts.replaceChildren();
+            ui.provenance.replaceChildren();
+            return;
+        }
         const town = state.townships[cell.township];
         const near = nearestVillage(cell);
         ui.place.textContent = `${town ? town.properties.name_zh : '都昌县'}${near ? ` · ${near.village.name} 附近` : ''}`;
@@ -982,7 +1075,7 @@
             barRow('脆弱性', cell.vulnerability_pct, null),
             barRow('树荫缺口', cell.shade_deficit_pct, `树木覆盖 ${fmt(cell.p.tree_cover_pct, 0)}%`, true),
             barRow('建成区', cell.built_pct, `${fmt(cell.p.built_up_pct, 0)}%`, true),
-            barRow('医疗点距离', cell.access_pct, `${fmt(cell.facility_km, 1)} km`, true)
+            barRow('可达性参考点距离', cell.access_pct, `${fmt(cell.facility_km, 1)} km`, true)
         );
 
         ui.facts.replaceChildren();
@@ -990,7 +1083,7 @@
             : cell.gi_bin === 1 ? '显著热点（q<0.05）'
                 : cell.gi_bin <= -1 ? '显著冷点' : '不显著';
         fact(ui.facts, '统计热点', cell.scored ? `${hotspotText} · z = ${fmt(cell.gi_z, 2)}` : '—');
-        fact(ui.facts, '最近医疗点', facility ? `${facility.name} · ${fmt(cell.facility_km, 1)} km` : '—');
+        fact(ui.facts, '模型可达性参考点', facility ? `${referenceName(facility)} · ${fmt(cell.facility_km, 1)} km（直线）` : '—');
         fact(ui.facts, '近似永久水域', `${fmt(cell.p.permanent_water_pct, 1)}%`);
         fact(ui.facts, '表面高程', `${fmt(cell.p.mean_elevation_m, 0)} m`);
         fact(ui.facts, 'Q3 合格观测', `${cell.p.q3_dates} / ${cell.p.local_available_dates} 天`);
@@ -1005,6 +1098,11 @@
     function selectCell(index, options) {
         if (index < 0 || index >= state.cells.length) return;
         state.selected = index;
+        if (!options || !options.keepPoi) {
+            const previous = state.selectedPoiId;
+            state.selectedPoiId = null;
+            if (state.poiMarkers.has(previous)) state.poiMarkers.get(previous).setStyle(poiStyle(state.poiById.get(previous)));
+        }
         updateInspector();
         drawSelection();
         updateUrl();
@@ -1015,9 +1113,234 @@
     }
 
     function selectVillage(village) {
-        const index = village.cell_id ? state.cellById.get(village.cell_id) : undefined;
-        if (index !== undefined) selectCell(index, {zoom: false});
-        if (state.map) state.map.flyTo(toMap(village.lon_wgs84, village.lat_wgs84), Math.max(state.map.getZoom(), 14), {duration: 0.6});
+        selectPoi(poiId(village, 'villages'), {reveal: true});
+    }
+
+    function selectPoi(id, options = {}) {
+        const entry = state.poiById.get(id);
+        if (!entry) return;
+        const previous = state.selectedPoiId;
+        state.selectedPoiId = id;
+        syncSelectedPoi();
+        [previous, id].forEach((key) => {
+            if (state.poiMarkers.has(key)) state.poiMarkers.get(key).setStyle(poiStyle(state.poiById.get(key)));
+        });
+        updateInspector();
+        drawSelection();
+        updateUrl();
+        if (state.map && options.pan !== false) {
+            state.map.flyTo(toMap(entry.point.lon_wgs84, entry.point.lat_wgs84), Math.max(state.map.getZoom(), 14), {duration: 0.6});
+        }
+        if (options.reveal && window.matchMedia && window.matchMedia('(max-width: 1280px)').matches) {
+            ui.poiDetails.scrollIntoView({behavior: 'smooth', block: 'start'});
+        }
+    }
+
+    function syncSelectedPoi() {
+        if (!state.selectedPoiId) return;
+        const entry = state.poiById.get(state.selectedPoiId);
+        if (!entry || !matchesTown(entry.point)) {
+            state.selectedPoiId = null;
+            state.selected = -1;
+            return;
+        }
+        const point = entry.point;
+        const index = point.risk_data_status !== 'no_grid_data' && point.cell_id ? state.cellById.get(point.cell_id) : undefined;
+        state.selected = index === undefined ? -1 : index;
+    }
+
+    function safeSourceUrl(value) {
+        try {
+            const url = new URL(value);
+            return ['https:', 'http:'].includes(url.protocol) && !url.username && !url.password ? url.href : null;
+        } catch (_) { return null; }
+    }
+
+    function sourceLink(label, value) {
+        const url = safeSourceUrl(value);
+        if (!url) return el('span', null, `${label || '来源'}（链接待补充）`);
+        const link = el('a', null, label || '查看来源');
+        link.href = url;
+        link.target = '_blank';
+        link.rel = 'noopener noreferrer';
+        return link;
+    }
+
+    function renderPoiDetails() {
+        const entry = state.poiById.get(state.selectedPoiId);
+        if (!entry) {
+            ui.poiDetails.replaceChildren(el('h2', null, '点位详情'), el('p', 'hrw-empty', '点击地图点位，或搜索村、医疗机构和避暑候选，查看来源与待核验信息。'));
+            return;
+        }
+        const p = entry.point;
+        const details = el('dl', 'hrw-facts');
+        fact(details, '点位类型', POI_KINDS[entry.kind]);
+        fact(details, '乡镇归属', p.township || '待核验');
+        if (!p.township && p.source_township) fact(details, '来源中的乡镇', `${p.source_township}（归属待核验）`);
+        const precision = {mapped_point: '公开来源点位，待现场核验', building_centroid: '建筑轮廓中心近似位置', exact: '来源标注位置，仍需现场核验', approximate: '近似坐标', settlement_centroid: '聚落参考位置', unknown: '精度待核验', township_seat: '乡镇驻地近似位置'};
+        fact(details, '坐标精度', precision[p.coordinate_precision] || p.coordinate_precision || '待核验');
+        fact(details, '坐标', `${p.lon_wgs84.toFixed(5)}°E · ${p.lat_wgs84.toFixed(5)}°N（WGS84）`);
+        const verification = {publicly_listed: '公开来源收录，待现场核验', needs_review: '资料待复核', unmapped: '坐标待核验', verified: '有核验记录', unverified: '待核验', pending: '待核验', source_only: '仅来源记录，待现场核验', source_verified: '来源已核对，待现场核验'};
+        fact(details, '核验状态', verification[p.verification_status] || p.verification_status || '待核验');
+        if (p.township_warning) fact(details, '乡镇核验提示', p.township_warning);
+        if (p.verification_note) fact(details, '核验说明', p.verification_note);
+        if (entry.kind === 'villages') {
+            fact(details, '聚落级别', {administrative_village: '行政村', natural_village: '自然村', hamlet: '小聚落（行政级别待核验）', village: '村落（行政级别待核验）'}[p.settlement_level] || '行政村 / 自然村级别待核验');
+            fact(details, '人口', isNum(p.population) ? `${fmt(p.population, 0)} 人` : '待补充（未知）');
+            fact(details, '老人比例', isNum(p.elderly_ratio) ? `${fmt(p.elderly_ratio * 100, 1)}%` : '待补充（未知）');
+            fact(details, '距已收录医疗机构', isNum(p.nearest_medical_km) ? `${fmt(p.nearest_medical_km, 1)} km（直线）` : '暂无可用记录，不代表附近无机构');
+            if (!isLevel(p.static_level)) fact(details, '风险数据', '网格数据缺失，仅供县级天气参考');
+        } else {
+            fact(details, '开放情况', p.open_hours ? `来源记录时段：${p.open_hours}；当前开放情况待核实` : '开放情况待核实');
+            if (p.coordinate_verification_expired) fact(details, '坐标核验有效性', '核验已过期，已降为候选；位置与当前开放情况需重新核验');
+            if (entry.kind === 'candidates') fact(details, '使用边界', '候选场所，尚不能作为已开放避暑点安排前往');
+            fact(details, '空调', p.has_ac === true ? '来源记录有空调，使用前核实' : p.has_ac === false ? '来源记录无空调，待复核' : '待核实');
+            fact(details, '无障碍', p.is_accessible === true ? '来源记录可达，使用前核实' : p.is_accessible === false ? '来源记录不具备，待复核' : '待核实');
+        }
+        if (p.potential_duplicate) fact(details, '同名核验', '疑似同名点，暂不参与巡访排序，待核验；当前分别保留来源记录，不视为两个已核验行政村');
+        if (p.priority_eligible === false && p.priority_exclusion_reason) fact(details, '巡访排序', p.priority_exclusion_reason);
+        if (p.source_updated_at) fact(details, '来源更新时间', p.source_updated_at);
+        if (p.verified_at) fact(details, '核验记录时间', p.verified_at);
+        if (p.valid_until) fact(details, '核验有效期至', p.valid_until);
+        const source = el('p', 'hrw-poi-source');
+        source.append(sourceLink(({geonames: 'GeoNames', osm: 'OpenStreetMap', 'amap-public': '高德地图公开页面', 'baidu-public': '百度地图公开页面', 'tencent-public': '腾讯地图公开页面'})[p.source_label] || p.source_label || '点位来源', p.source_url));
+        ui.poiDetails.replaceChildren(el('span', 'hrw-pill', POI_KINDS[entry.kind]), el('h2', null, p.name), source, details);
+        const related = p.potential_duplicate_ids || p.related_ids || p.possible_duplicate_ids || p.duplicate_ids || [];
+        if (p.potential_duplicate && Array.isArray(related)) related.forEach((id) => {
+            const other = state.poiById.get(id);
+            if (!other) return;
+            const button = el('button', 'hrw-link-button', `查看同名记录：${other.point.name} · ${other.point.township || '乡镇待核验'}`);
+            button.type = 'button';
+            button.addEventListener('click', () => selectPoi(id, {reveal: true}));
+            ui.poiDetails.appendChild(button);
+        });
+    }
+
+    function coverageRows() {
+        const available = new Map((state.daily ? state.daily.poi_coverage : []).map((row) => [row.township, row]));
+        return state.townships.map((town) => {
+            const name = town.properties.name_zh;
+
+            const entries = Array.from(state.poiById.values()).filter((entry) => entry.point.township === name);
+            const count = (kind) => entries.filter((entry) => entry.kind === kind).length;
+            return {...(available.get(name) || {unmapped_medical_count: 0, unmapped_cooling_count: 0, completeness: 'unknown'}),
+                township: name, settlement_count: count('villages'), medical_count: count('medical'),
+                cooling_candidate_count: count('candidates'), cooling_verified_count: count('cooling')};
+        });
+    }
+
+    function renderPoiCoverage() {
+        const rows = coverageRows();
+        ui.townFilter.replaceChildren(el('option', null, '全县 · 24 乡镇'));
+        ui.townFilter.children[0].value = '';
+        rows.forEach((row) => {
+            const option = el('option', null, `${row.township} · ${row.settlement_count} 个聚落点`);
+            option.value = row.township;
+            ui.townFilter.appendChild(option);
+        });
+        const unknown = Array.from(state.poiById.values()).filter((entry) => !entry.point.township).length;
+        const unknownDirectory = (state.daily ? state.daily.unmapped_resources : []).filter((point) => !point.township_name).length;
+        if (unknown || unknownDirectory) {
+            const option = el('option', null, `乡镇归属待核验 · ${unknown} 地图点 / ${unknownDirectory} 条待定位资料`);
+            option.value = '__unknown__';
+            ui.townFilter.appendChild(option);
+        }
+        ui.townFilter.value = state.townFilter;
+        ui.poiCoverageBody.replaceChildren();
+        rows.forEach((row) => {
+            const tr = el('tr');
+            const cell = el('td');
+            const button = el('button', 'hrw-link-button', row.township);
+            button.type = 'button';
+            button.addEventListener('click', () => setTownFilter(row.township, true));
+            cell.appendChild(button);
+            tr.append(cell, ...['settlement_count', 'medical_count', 'cooling_candidate_count', 'cooling_verified_count', 'unmapped_medical_count', 'unmapped_cooling_count', 'needs_review_count'].map((key) => el('td', null, String(row[key] || 0))), el('td', null, '未知'));
+            ui.poiCoverageBody.appendChild(tr);
+        });
+        const metadata = state.daily && state.daily.poi_metadata;
+        ui.poiCoverageNote.textContent = `${metadata && metadata.coverage_note || '这里比较点位收录数量，不是行政村完整覆盖率。0 表示尚未收录，不代表当地没有村或机构。'}${unknown || unknownDirectory ? ` 另有 ${unknown} 个地图点、${unknownDirectory} 条待定位资料的乡镇归属待核验。` : ''}`;
+        ui.poiSources.replaceChildren();
+        (metadata && Array.isArray(metadata.sources) ? metadata.sources : []).forEach((source) => {
+            const li = el('li');
+            li.append(sourceLink(source.name || source.id, source.url), el('span', null, source.license ? ` · ${source.license}` : ''));
+            ui.poiSources.appendChild(li);
+        });
+        if (metadata && metadata.retrieved_at) ui.poiSources.appendChild(el('li', null, `资料收录时间：${metadata.retrieved_at}；不等于现场核验日期。`));
+        ui.inventoryNote.textContent = metadata && metadata.inventory_note || '待定位目录可能与地图点位重叠，不能相加作为机构总数；历史列名或拟注销记录需另行复核。';
+        renderPoiCounts();
+        renderUnmappedResources();
+    }
+
+    function renderUnmappedResources() {
+        const records = (state.daily ? state.daily.unmapped_resources : []).filter((point) => matchesTown({township: point.township_name}));
+        ui.unmappedSummary.textContent = `当前范围已收录但待定位的资源（${records.length}）`;
+        ui.unmappedList.replaceChildren();
+        if (!records.length) ui.unmappedList.appendChild(el('p', 'hrw-empty', '暂无待定位资源收录记录，不代表没有相关场所。'));
+        records.slice(0, state.unmappedListLimit).forEach((point) => {
+            const item = el('li', 'hrw-unmapped-item');
+            item.append(el('strong', null, point.name), el('span', null, `${point.township_name || '乡镇待核验'} · 坐标待核验，不上图、不计算距离`));
+            const status = {proposed_cancellation: '来源为拟注销记录，不能视为正常营业机构', listed_name_requires_review: '历史列名待复核，不能据此确认营业', historical_cooling_report: '历史避暑报道，当前开放情况待核实'}[point.official_status];
+            if (status || point.verification_status === 'needs_review') item.appendChild(el('span', 'hrw-resource-review', status || '列名资料待复核，未计入医疗机构收录数'));
+            if (point.address) {
+                const historical = point.address_status === 'historical_address_unverified_current';
+                item.appendChild(el('span', null, `${historical ? '历史地址' : '来源地址'}：${point.address}；现址待核验`));
+                item.appendChild(el('small', null, `地址资料日期：${point.address_source_date || '待补充'}（与列名日期分开）`));
+                if (point.address_source_url) item.appendChild(sourceLink('查看地址来源', point.address_source_url));
+            }
+            item.appendChild(sourceLink('查看列名来源', point.source_url));
+            if (point.source_date) item.appendChild(el('small', null, `列名资料日期：${point.source_date}；开放情况待核实`));
+            ui.unmappedList.appendChild(item);
+        });
+        ui.unmappedMore.hidden = records.length <= state.unmappedListLimit;
+    }
+
+    function renderPoiCounts() {
+        const entries = Array.from(state.poiById.values()).filter((entry) => matchesTown(entry.point));
+        ui.poiCounts.replaceChildren();
+        Object.entries(POI_KINDS).forEach(([kind, label]) => {
+            const count = entries.filter((entry) => entry.kind === kind).length;
+            const card = el('div', 'hrw-poi-count');
+            card.append(el('strong', null, String(count)), el('span', null, `${kind === 'medical' ? '地图医疗机构' : label}${count ? '' : ' · 暂未收录'}`));
+            ui.poiCounts.appendChild(card);
+        });
+        const unmapped = (state.daily ? state.daily.unmapped_resources : []).filter((point) => matchesTown({township: point.township_name}));
+        const reviewCount = unmapped.filter((point) => point.verification_status === 'needs_review').length;
+        ui.poiInventoryHint.textContent = `地图数量仅统计有坐标点位。当前范围另有 ${unmapped.length} 条待定位资料${reviewCount ? `，其中 ${reviewCount} 条列名待复核` : ''}；可能与地图点位重叠，不能相加作为机构总数。`;
+        ui.poiListTitle.textContent = `浏览当前范围点位（${entries.length}）`;
+        ui.poiList.replaceChildren();
+        const order = {medical: 0, candidates: 1, cooling: 2, villages: 3};
+        entries.sort((a, b) => order[a.kind] - order[b.kind] || a.point.name.localeCompare(b.point.name, 'zh-CN') || a.id.localeCompare(b.id));
+        entries.slice(0, state.poiListLimit).forEach((entry) => {
+            const button = el('button', 'hrw-poi-list-item');
+            button.type = 'button';
+            button.dataset.poiId = entry.id;
+            button.append(el('strong', null, entry.point.name), el('span', null, `${entry.point.township || '乡镇归属待核验'} · ${POI_KINDS[entry.kind]}${entry.kind === 'candidates' ? ' · 开放待核实' : ''}`));
+            button.addEventListener('click', () => selectPoi(entry.id, {reveal: true}));
+            ui.poiList.appendChild(button);
+        });
+        if (!entries.length) ui.poiList.appendChild(el('p', 'hrw-empty', '当前范围暂无收录点位，不代表没有村落或机构。'));
+        ui.poiMore.hidden = entries.length <= state.poiListLimit;
+    }
+
+    function setTownFilter(name, zoom) {
+        state.townFilter = name;
+        state.poiListLimit = 20;
+        state.unmappedListLimit = 20;
+        ui.townFilter.value = name;
+        syncSelectedPoi();
+        renderVillages();
+        renderPoiCounts();
+        renderUnmappedResources();
+        buildSearchOptions();
+        renderPriority();
+        updateHeader();
+        updateInspector();
+        drawSelection();
+        updateUrl();
+        if (zoom && name) {
+            const town = state.townships.find((feature) => feature.properties.name_zh === name);
+            if (town) zoomToTownship(town);
+        } else if (zoom && state.map) state.map.flyToBounds(state.countyBounds, {padding: [16, 16], duration: 0.6});
     }
 
     // ------------------------------------------------------------------
@@ -1071,16 +1394,26 @@
         if (!state.daily || !isLevel(currentHazard())) return [];
         const entry = state.daily.priority[state.dayIndex];
         if (!entry || !Array.isArray(entry.villages) || entry.date !== currentDay().date) return [];
-        return entry.villages.filter((village) => isLevel(village.daily_level));
+        const ranked = new Map(entry.villages.map((point) => [poiId(point, 'villages'), point]));
+        const ids = Array.isArray(entry.village_ids) ? entry.village_ids : Array.from(ranked.keys());
+        return ids.map((id) => {
+            const record = state.poiById.get(id);
+            const point = record ? {...ranked.get(id), ...record.point} : ranked.get(id);
+            if (!point || !matchesTown(point) || !isLevel(point.static_level) || point.potential_duplicate || point.priority_eligible === false) return null;
+            const reasons = [`静态风险分 ${fmt(point.static_score, 0)}`];
+            if (isNum(point.nearest_medical_km)) reasons.push(`距已收录医疗机构 ${fmt(point.nearest_medical_km, 1)} km（直线）`);
+            const displayReasons = Array.isArray(point.reasons) ? point.reasons.slice() : reasons;
+            return {...point, daily_level: villageDailyLevel(point), reasons: displayReasons};
+        }).filter((point) => point && isLevel(point.daily_level)).slice(0, 5);
     }
 
     function renderPriority() {
         ui.priorityList.replaceChildren();
         const villages = priorityForDay();
         const known = isLevel(currentHazard());
-        ui.priorityNote.textContent = known ? `${demoPrefix()}按当日风险、静态风险分、老人数排序` : '仅保留静态风险参考，天气恢复后生成当日巡访顺序。';
+        ui.priorityNote.textContent = known ? `${demoPrefix()}${state.townFilter && state.townFilter !== '__unknown__' ? state.townFilter + ' · ' : ''}按当日风险、静态风险分、已知老人数排序；人口未知不记为 0，疑似同名点待核验后再参与排序。` : '仅保留静态风险参考，天气恢复后生成当日巡访顺序。';
         if (!villages.length) {
-            ui.priorityList.appendChild(el('li', 'hrw-empty', !known ? UNKNOWN_RISK : '服务区村点暂未配置坐标。'));
+            ui.priorityList.appendChild(el('li', 'hrw-empty', !known ? UNKNOWN_RISK : '当前范围暂无可参与风险排序的村点；可在点位列表查看已收录资料。'));
         }
         villages.forEach((village, index) => {
             const item = el('li');
@@ -1132,7 +1465,7 @@
         ui.title.textContent = `${demoPrefix()}${when}先去哪几个村`;
         const reasons = dayReasons(day).length ? `（${dayReasons(day).join('，')}）` : '';
         if (!day.level) {
-            ui.lede.textContent = `${demoPrefix()}${when}都昌无高温（最高 ${fmt(day.temperature_max, 0)} °C），按常规随访。${top ? `静态风险最高的服务区村：${top.name}（综合分 ${fmt(top.static_score, 0)}）。` : ''}`;
+            ui.lede.textContent = `${demoPrefix()}${when}都昌无高温（最高 ${fmt(day.temperature_max, 0)} °C），按常规随访。${top ? `静态风险最高的已收录聚落点：${top.name}（综合分 ${fmt(top.static_score, 0)}）。` : ''}`;
             return;
         }
         ui.lede.textContent = `${demoPrefix()}${when}都昌热危险 ${day.level} 级 · ${day.label}${reasons}。${top ? `优先：${top.name}（当日 ${top.daily_level} 级）。` : ''}`;
@@ -1200,26 +1533,37 @@
 
     function buildSearchOptions() {
         ui.searchOptions.replaceChildren();
-        const names = [];
-        if (state.daily) state.daily.villages.forEach((v) => names.push(v.name));
-        state.townships.forEach((t) => names.push(t.properties.name_zh));
-        names.forEach((name) => {
+        state.searchByLabel.clear();
+        const entries = Array.from(state.poiById.values()).filter((entry) => matchesTown(entry.point)).sort((a, b) => a.id.localeCompare(b.id));
+        entries.forEach((entry) => {
+            let label = `${entry.point.name} · ${entry.point.township || '乡镇待核验'} · ${POI_KINDS[entry.kind]}`;
+            const base = label;
+            let suffix = 2;
+            while (state.searchByLabel.has(label)) { label = `${base}（${suffix}）`; suffix += 1; }
+            state.searchByLabel.set(label, entry.id);
             const option = el('option');
-            option.value = name;
+            option.value = label;
+            option.dataset.poiId = entry.id;
             ui.searchOptions.appendChild(option);
         });
+        state.townships.forEach((town) => {
+            const option = el('option');
+            option.value = town.properties.name_zh;
+            ui.searchOptions.appendChild(option);
+        });
+        ui.searchNote.textContent = '同名点按乡镇区分；放大地图后显示局部名称，也可从点位列表选择。';
     }
 
     function runSearch() {
         const query = ui.search.value.trim();
         if (!query) return;
-        const village = state.daily && state.daily.villages.find((v) => v.name === query || v.name.includes(query));
-        if (village) {
-            selectVillage(village);
-            return;
-        }
-        const town = state.townships.find((t) => t.properties.name_zh === query || t.properties.name_zh.includes(query));
-        if (town) zoomToTownship(town);
+        const exact = state.searchByLabel.get(query);
+        if (exact) { selectPoi(exact, {reveal: true}); return; }
+        const town = state.townships.find((feature) => feature.properties.name_zh === query);
+        if (town) { setTownFilter(query, true); return; }
+        const matches = Array.from(state.poiById.values()).filter((entry) => matchesTown(entry.point) && entry.point.name.includes(query));
+        if (matches.length === 1) { selectPoi(matches[0].id, {reveal: true}); return; }
+        ui.searchNote.textContent = matches.length ? `找到 ${matches.length} 个同名或近似点，请从建议列表选择包含乡镇的完整名称。` : '当前范围未找到；可切换全县或查看乡镇收录表。';
     }
 
     function printSheet() {
@@ -1257,6 +1601,11 @@
         url.searchParams.set('layer', state.layer);
         url.searchParams.set('day', String(state.dayIndex));
         if (state.selected >= 0) url.searchParams.set('cell', state.cells[state.selected].id);
+        else url.searchParams.delete('cell');
+        if (state.selectedPoiId) url.searchParams.set('poi', state.selectedPoiId);
+        else url.searchParams.delete('poi');
+        if (state.townFilter) url.searchParams.set('town', state.townFilter);
+        else url.searchParams.delete('town');
         window.history.replaceState({}, '', url);
     }
 
@@ -1272,6 +1621,9 @@
     }
 
     function bindEvents() {
+        ui.townFilter.addEventListener('change', () => setTownFilter(ui.townFilter.value, true));
+        ui.poiMore.addEventListener('click', () => { state.poiListLimit += 20; renderPoiCounts(); });
+        ui.unmappedMore.addEventListener('click', () => { state.unmappedListLimit += 20; renderUnmappedResources(); });
         ui.layerTabs.forEach((button) => button.addEventListener('click', () => setLayer(button.dataset.layer)));
         ui.moreLayers.addEventListener('change', () => {
             if (ui.moreLayers.value) setLayer(ui.moreLayers.value);
@@ -1349,9 +1701,21 @@
             days: Array.isArray(payload.days) ? payload.days.map((day) => day && typeof day === 'object' ? day : {}) : [],
             priority: Array.isArray(payload.priority) ? payload.priority : [],
             villages: Array.isArray(payload.villages) ? payload.villages : (previous ? previous.villages : []),
-            cooling_resources: Array.isArray(payload.cooling_resources) ? payload.cooling_resources : (previous ? previous.cooling_resources : [])
+            cooling_resources: Array.isArray(payload.cooling_resources) ? payload.cooling_resources : (previous ? previous.cooling_resources : []),
+            medical_pois: Array.isArray(payload.medical_pois) ? payload.medical_pois : (previous ? previous.medical_pois : []),
+            cooling_candidates: Array.isArray(payload.cooling_candidates) ? payload.cooling_candidates : (previous ? previous.cooling_candidates : []),
+            poi_coverage: Array.isArray(payload.poi_coverage) ? payload.poi_coverage : (previous ? previous.poi_coverage : []),
+            poi_metadata: payload.poi_metadata || (previous ? previous.poi_metadata : null),
+            unmapped_resources: Array.isArray(payload.unmapped_resources) ? payload.unmapped_resources : (previous ? previous.unmapped_resources : [])
         };
+        buildPoiCatalog();
         const firstLoad = !state.dailyLoaded;
+        if (firstLoad) {
+            const town = initialParams.get('town');
+            if (town === '__unknown__' || state.townships.some((feature) => feature.properties.name_zh === town)) state.townFilter = town;
+        }
+        syncSelectedPoi();
+        renderPoiCoverage();
         state.dailyLoaded = true;
         state.forecastDate = localDate();
         const requestedDay = firstLoad ? Number(initialParams.get('day')) : state.dayIndex;
@@ -1371,7 +1735,10 @@
             const top = priorityForDay()[0];
             if (top && top.cell_id && state.cellById.has(top.cell_id)) selectCell(state.cellById.get(top.cell_id));
         }
+        if (firstLoad && initialParams.get('poi')) selectPoi(initialParams.get('poi'), {pan: false});
         updateInspector();
+        drawSelection();
+        updateUrl();
     }
 
     function loadDaily() {
@@ -1384,7 +1751,9 @@
     function refreshAfterMidnight() {
         if (!state.dailyLoaded || state.forecastDate === localDate()) return;
         state.forecastDate = localDate();
-        // 长期开启的页面先撤下昨天结论，再读取新日期预报。
+        // 长期开启的页面先撤下昨天结论、降级过期资源，再读取新日期预报。
+        buildPoiCatalog();
+        renderPoiCoverage();
         syncDailyLayer();
         renderDays();
         renderVillages();
