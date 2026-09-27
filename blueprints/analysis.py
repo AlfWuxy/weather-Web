@@ -7,6 +7,7 @@ import logging
 import math
 from collections import defaultdict
 from datetime import timedelta
+from functools import wraps
 
 from flask import Blueprint, current_app, flash, redirect, render_template, request, send_file, url_for
 from flask_login import current_user, login_required
@@ -30,6 +31,39 @@ from core.db_models import (
 from core.time_utils import today_local, date_to_utc_start, date_to_utc_end, utc_to_local_date, utcnow
 from utils.parsers import parse_date
 from utils.validators import sanitize_input
+from services.analysis_stats import (
+    CERTAINTY_LABELS,
+    OUTCOME_LABELS,
+    SEVERITY_LABELS,
+    STRATUM_LABELS,
+    URGENCY_LABELS,
+    action_from_alert_semantics,
+    action_level,
+    alert_cap_semantics,
+    build_daily_weather,
+    build_quantile_bins,
+    certainty_level,
+    certainty_to_probability,
+    compute_contingency_scores,
+    compute_date_overlap,
+    corr_with_ci,
+    date_span,
+    find_bin,
+    format_bucket_label,
+    gini,
+    heatmap_cell_color,
+    impact_bucket_from_severity,
+    is_significant,
+    json_loads_safe,
+    lag_exposure_for_date,
+    likelihood_bucket_from_certainty,
+    percentile,
+    record_matches_stratum,
+    roc_auc_from_pairs,
+    rr_with_ci,
+    safe_int,
+    safe_ratio,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +75,18 @@ def _require_admin():
         flash('权限不足', 'error')
         return False
     return True
+
+
+def admin_route(rule, **options):
+    """注册仅管理员可访问的页面：先要求登录，非管理员提示后回到用户首页。"""
+    def decorator(view):
+        @wraps(view)
+        def guarded(*args, **kwargs):
+            if not _require_admin():
+                return redirect(url_for('user.user_dashboard'))
+            return view(*args, **kwargs)
+        return bp.route(rule, **options)(login_required(guarded))
+    return decorator
 
 
 def _default_city():
@@ -98,442 +144,26 @@ def _latest_weather_date(location):
     return latest
 
 
-def _safe_int(raw_value, default, minimum=None, maximum=None):
-    """Parse int with optional clamp."""
-    try:
-        parsed = int(raw_value)
-    except (TypeError, ValueError):
-        parsed = default
-    if minimum is not None:
-        parsed = max(minimum, parsed)
-    if maximum is not None:
-        parsed = min(maximum, parsed)
-    return parsed
+# ======================== 病例分析页共用 ========================
 
+def _text_arg(name, max_length):
+    return sanitize_input(request.values.get(name), max_length=max_length)
 
-def _normalize_gender(raw_gender):
-    if raw_gender is None:
-        return ''
-    value = str(raw_gender).strip().lower()
-    if value in {'male', 'm', 'man'}:
-        return 'male'
-    if value in {'female', 'f', 'woman'}:
-        return 'female'
-    if '男' in value and '女' not in value:
-        return 'male'
-    if '女' in value and '男' not in value:
-        return 'female'
-    return value
 
+def _stratum_arg():
+    stratum = _text_arg('stratum', 30) or 'all'
+    return stratum if stratum in STRATUM_LABELS else 'all'
 
-def _record_matches_stratum(age, gender, stratum):
-    if stratum == 'all':
-        return True
-    if stratum == 'elderly':
-        return age is not None and age >= 65
-    if stratum == 'non_elderly':
-        return age is not None and age < 65
-    normalized = _normalize_gender(gender)
-    if stratum == 'male':
-        return normalized == 'male'
-    if stratum == 'female':
-        return normalized == 'female'
-    return True
 
+def _disease_options():
+    rows = db.session.query(MedicalRecord.disease_category).filter(
+        MedicalRecord.disease_category.isnot(None)
+    ).distinct().order_by(MedicalRecord.disease_category).all()
+    return [row[0] for row in rows]
 
-def _build_daily_weather(records):
-    weather_by_date = {}
-    for row in records:
-        day = row.date
-        bucket = weather_by_date.setdefault(day, {
-            'temp_sum': 0.0,
-            'temp_n': 0,
-            'hum_sum': 0.0,
-            'hum_n': 0
-        })
-        if row.temperature is not None:
-            bucket['temp_sum'] += row.temperature
-            bucket['temp_n'] += 1
-        if row.humidity is not None:
-            bucket['hum_sum'] += row.humidity
-            bucket['hum_n'] += 1
 
-    daily_avg = {}
-    for day, values in weather_by_date.items():
-        temp = values['temp_sum'] / values['temp_n'] if values['temp_n'] else None
-        humidity = values['hum_sum'] / values['hum_n'] if values['hum_n'] else None
-        daily_avg[day] = {'temperature': temp, 'humidity': humidity}
-    return daily_avg
-
-
-def _lag_exposure_for_date(target_date, lag_window, weather_by_date):
-    temps = []
-    humidities = []
-    for offset in range(lag_window + 1):
-        day = target_date - timedelta(days=offset)
-        row = weather_by_date.get(day)
-        if not row:
-            return None
-        temp = row.get('temperature')
-        humidity = row.get('humidity')
-        if temp is None or humidity is None:
-            return None
-        temps.append(temp)
-        humidities.append(humidity)
-    return {
-        'temperature': sum(temps) / len(temps),
-        'humidity': sum(humidities) / len(humidities)
-    }
-
-
-def _find_bin(value, bins):
-    if value is None:
-        return None
-    for idx in range(len(bins) - 1):
-        left = bins[idx]
-        right = bins[idx + 1]
-        if left <= value < right:
-            return idx
-    if value >= bins[-1]:
-        return len(bins) - 2
-    return None
-
-
-def _format_bucket_label(left, right, unit):
-    def fmt(num):
-        if num is None:
-            return '--'
-        if abs(num - round(num)) < 0.05:
-            return str(int(round(num)))
-        return f"{num:.1f}"
-
-    return f"{fmt(left)}~{fmt(right)}{unit}"
-
-
-def _percentile(values, q):
-    if not values:
-        return None
-    if len(values) == 1:
-        return values[0]
-    pos = (len(values) - 1) * q
-    low = int(math.floor(pos))
-    high = int(math.ceil(pos))
-    if low == high:
-        return values[low]
-    weight = pos - low
-    return values[low] * (1 - weight) + values[high] * weight
-
-
-def _gini(values):
-    """Gini coefficient for non-negative values."""
-    valid = sorted(
-        float(value) for value in values
-        if isinstance(value, (int, float)) and math.isfinite(value) and value >= 0
-    )
-    count = len(valid)
-    if count == 0:
-        return None
-    total = sum(valid)
-    if total <= 0:
-        return 0.0
-    weighted_sum = 0.0
-    for idx, value in enumerate(valid, start=1):
-        weighted_sum += idx * value
-    gini = (2 * weighted_sum) / (count * total) - (count + 1) / count
-    return max(0.0, min(1.0, gini))
-
-
-def _roc_auc_from_pairs(pairs):
-    """基于概率-观测对计算二分类 ROC AUC（Mann-Whitney 近似）。"""
-    valid = []
-    for item in pairs or []:
-        try:
-            prob = float(item.get('probability'))
-            obs = int(item.get('observed'))
-        except (TypeError, ValueError, AttributeError):
-            continue
-        if not (0.0 <= prob <= 1.0):
-            continue
-        if obs not in (0, 1):
-            continue
-        valid.append((prob, obs))
-    if len(valid) < 2:
-        return None
-
-    pos_scores = [score for score, obs in valid if obs == 1]
-    neg_scores = [score for score, obs in valid if obs == 0]
-    n_pos = len(pos_scores)
-    n_neg = len(neg_scores)
-    if n_pos == 0 or n_neg == 0:
-        return None
-
-    wins = 0.0
-    ties = 0.0
-    for pos in pos_scores:
-        for neg in neg_scores:
-            if pos > neg:
-                wins += 1.0
-            elif pos == neg:
-                ties += 1.0
-    auc = (wins + 0.5 * ties) / (n_pos * n_neg)
-    return max(0.0, min(1.0, auc))
-
-
-def _build_quantile_bins(values, bucket_count, fallback_bins):
-    valid = sorted(
-        value for value in values
-        if isinstance(value, (int, float)) and math.isfinite(value)
-    )
-    if len(valid) < bucket_count * 3:
-        return fallback_bins
-
-    edges = []
-    for idx in range(bucket_count + 1):
-        edge = _percentile(valid, idx / bucket_count)
-        if edge is None:
-            return fallback_bins
-        edges.append(round(edge, 2))
-
-    normalized = [edges[0]]
-    for edge in edges[1:]:
-        if edge <= normalized[-1]:
-            edge = round(normalized[-1] + 0.1, 2)
-        normalized.append(edge)
-
-    if len(normalized) != len(fallback_bins):
-        return fallback_bins
-    return normalized
-
-
-def _rr_with_ci(observed, expected):
-    if expected is None or expected <= 0:
-        return None, None, None
-    if observed <= 0:
-        # Poisson 95% upper bound when observed=0 is approximately 3.0.
-        return 0.0, 0.0, 3.0 / expected
-
-    rr = observed / expected
-    se = 1.0 / math.sqrt(observed)
-    ci_low = math.exp(math.log(rr) - 1.96 * se)
-    ci_high = math.exp(math.log(rr) + 1.96 * se)
-    return rr, ci_low, ci_high
-
-
-def _corr_with_ci(xs, ys):
-    """Pearson correlation with Fisher-z 95% CI."""
-    n = len(xs)
-    if n < 2 or n != len(ys):
-        return None, None, None
-
-    corr = pearson_corr(xs, ys)
-    if corr is None or not math.isfinite(corr):
-        return None, None, None
-
-    bounded = max(-0.999999, min(0.999999, corr))
-    if n <= 3:
-        return bounded, None, None
-
-    z = 0.5 * math.log((1 + bounded) / (1 - bounded))
-    se = 1.0 / math.sqrt(max(1, n - 3))
-    z_low = z - 1.96 * se
-    z_high = z + 1.96 * se
-    corr_low = math.tanh(z_low)
-    corr_high = math.tanh(z_high)
-    return bounded, corr_low, corr_high
-
-
-def _certainty_level(days, visits, ci_low, ci_high, min_days):
-    if days < min_days:
-        return 'insufficient'
-    if ci_low is None or ci_high is None:
-        return 'low'
-    width = ci_high - ci_low
-    if days >= max(10, min_days + 6) and visits >= 12 and width <= 1.2:
-        return 'high'
-    if days >= max(5, min_days + 2) and visits >= 4 and width <= 2.0:
-        return 'medium'
-    return 'low'
-
-
-def _action_level(rr, significant, certainty, days, min_days):
-    if rr is None or days < min_days:
-        return '样本不足'
-    if rr >= 1.6 and significant and certainty == 'high':
-        return '立即行动'
-    if rr >= 1.3 and (significant or certainty in {'high', 'medium'}):
-        return '准备干预'
-    if rr <= 0.75 and significant:
-        return '观察（低风险）'
-    return '观察'
-
-
-def _heatmap_cell_color(rr, days, min_days):
-    if rr is None or days < min_days:
-        return 'rgba(148, 163, 184, 0.18)'
-    capped = max(0.4, min(2.4, rr))
-    if capped >= 1:
-        alpha = 0.18 + 0.5 * ((capped - 1.0) / 1.4)
-        return f"rgba(201, 72, 72, {alpha:.3f})"
-    alpha = 0.18 + 0.5 * ((1.0 - capped) / 0.6)
-    return f"rgba(52, 120, 189, {alpha:.3f})"
-
-
-def _json_loads_safe(raw_text, default):
-    if raw_text is None:
-        return default
-    if isinstance(raw_text, (dict, list)):
-        return raw_text
-    text = str(raw_text).strip()
-    if not text:
-        return default
-    try:
-        return json.loads(text)
-    except (TypeError, ValueError):
-        return default
-
-
-def _alert_cap_semantics(alert_level, alert_type, description):
-    level_text = str(alert_level or '')
-    type_text = str(alert_type or '')
-    desc_text = str(description or '')
-    merged_cn = f"{level_text}{type_text}{desc_text}"
-    merged_low = merged_cn.lower()
-
-    if any(token in merged_cn for token in ['红', '极端', '特别严重']) or 'extreme' in merged_low:
-        severity = 'Extreme'
-    elif any(token in merged_cn for token in ['橙', '严重']) or 'severe' in merged_low:
-        severity = 'Severe'
-    elif any(token in merged_cn for token in ['黄', '中度']) or 'moderate' in merged_low:
-        severity = 'Moderate'
-    elif any(token in merged_cn for token in ['蓝', '阈值', '提醒']) or 'minor' in merged_low:
-        severity = 'Minor'
-    else:
-        severity = 'Unknown'
-
-    if any(token in merged_cn for token in ['已发生', '正在', '实况']) or 'observed' in merged_low:
-        certainty = 'Observed'
-    elif any(token in merged_cn for token in ['预计', '将', '可能出现']) or 'likely' in merged_low:
-        certainty = 'Likely'
-    elif 'possible' in merged_low or '可能' in merged_cn:
-        certainty = 'Possible'
-    elif 'unlikely' in merged_low or '不太可能' in merged_cn:
-        certainty = 'Unlikely'
-    else:
-        certainty = 'Possible' if severity != 'Unknown' else 'Unknown'
-
-    if severity in {'Extreme', 'Severe'}:
-        urgency = 'Immediate'
-    elif certainty in {'Observed', 'Likely'}:
-        urgency = 'Expected'
-    elif severity == 'Unknown':
-        urgency = 'Future'
-    else:
-        urgency = 'Future'
-
-    return severity, certainty, urgency
-
-
-def _impact_bucket_from_severity(severity):
-    if severity in {'Extreme', 'Severe'}:
-        return 'high'
-    if severity == 'Moderate':
-        return 'medium'
-    return 'low'
-
-
-def _likelihood_bucket_from_certainty(certainty):
-    if certainty in {'Observed', 'Likely'}:
-        return 'high'
-    if certainty == 'Possible':
-        return 'medium'
-    return 'low'
-
-
-def _action_from_alert_semantics(severity, certainty, urgency):
-    if severity in {'Extreme', 'Severe'} and urgency in {'Immediate', 'Expected'} and certainty in {'Observed', 'Likely'}:
-        return '立即行动'
-    if severity in {'Moderate', 'Severe'} and certainty in {'Possible', 'Likely', 'Observed'}:
-        return '准备干预'
-    if severity == 'Minor':
-        return '加强观察'
-    return '持续观察'
-
-
-def _safe_ratio(numerator, denominator):
-    if denominator is None or denominator == 0:
-        return None
-    return numerator / denominator
-
-
-def _compute_contingency_scores(hit_count, false_alarm_count, miss_count, correct_negative_count):
-    total = hit_count + false_alarm_count + miss_count + correct_negative_count
-    pod = _safe_ratio(hit_count, hit_count + miss_count)
-    far = _safe_ratio(false_alarm_count, hit_count + false_alarm_count)
-    csi = _safe_ratio(hit_count, hit_count + false_alarm_count + miss_count)
-    accuracy = _safe_ratio(hit_count + correct_negative_count, total)
-    bias = _safe_ratio(hit_count + false_alarm_count, hit_count + miss_count)
-    pofd = _safe_ratio(false_alarm_count, false_alarm_count + correct_negative_count)
-    tss = (pod - pofd) if pod is not None and pofd is not None else None
-    f1 = _safe_ratio(2 * hit_count, 2 * hit_count + false_alarm_count + miss_count)
-
-    random_hit = None
-    ets = None
-    if total > 0:
-        random_hit = ((hit_count + false_alarm_count) * (hit_count + miss_count)) / total
-        denominator = hit_count + false_alarm_count + miss_count - random_hit
-        if denominator > 0:
-            ets = (hit_count - random_hit) / denominator
-
-    hss_denominator = (
-        (hit_count + miss_count) * (miss_count + correct_negative_count) +
-        (hit_count + false_alarm_count) * (false_alarm_count + correct_negative_count)
-    )
-    hss = None
-    if hss_denominator > 0:
-        hss = (2 * (hit_count * correct_negative_count - false_alarm_count * miss_count)) / hss_denominator
-
-    return {
-        'pod': pod,
-        'far': far,
-        'csi': csi,
-        'accuracy': accuracy,
-        'bias': bias,
-        'pofd': pofd,
-        'tss': tss,
-        'f1': f1,
-        'ets': ets,
-        'hss': hss,
-        'random_hit': random_hit
-    }
-
-
-def _certainty_to_probability(certainty):
-    mapping = {
-        'Observed': 0.95,
-        'Likely': 0.80,
-        'Possible': 0.60,
-        'Unlikely': 0.35,
-        'Unknown': 0.50
-    }
-    return mapping.get(certainty, 0.50)
-
-
-def _compute_date_overlap(start_a, end_a, start_b, end_b):
-    if not all([start_a, end_a, start_b, end_b]):
-        return None, None, False
-    overlap_start = max(start_a, start_b)
-    overlap_end = min(end_a, end_b)
-    return overlap_start, overlap_end, overlap_start <= overlap_end
-
-
-@bp.route('/analysis/history', methods=['GET', 'POST'], endpoint='analysis_history')
-@login_required
-def analysis_history():
-    """历史数据回溯分析"""
-    if not _require_admin():
-        return redirect(url_for('user.user_dashboard'))
-    community_filter = sanitize_input(request.values.get('community'), max_length=100)
-    disease_filter = sanitize_input(request.values.get('disease'), max_length=100)
+def _resolve_case_date_range(community_filter, disease_filter, window_days):
+    """解析病例分析的日期区间；未指定时自动定位到病例与天气都有数据的最近区间。"""
     start_raw = request.values.get('start_date')
     end_raw = request.values.get('end_date')
     start_date = parse_date(start_raw)
@@ -542,42 +172,294 @@ def analysis_history():
     if not start_raw and not end_raw:
         last_visit = _latest_visit_date(community_filter, disease_filter)
         default_city = _default_city()
-        weather_location = community_filter or default_city
-        last_weather = _latest_weather_date(weather_location)
+        last_weather = _latest_weather_date(community_filter or default_city)
         if not last_weather and community_filter:
             last_weather = _latest_weather_date(default_city)
         candidates = [d for d in (last_visit, last_weather) if d]
         if candidates:
             end_date = min(candidates)
-            start_date = end_date - timedelta(days=30)
+            start_date = end_date - timedelta(days=window_days)
             auto_range = True
     if not end_date:
         end_date = today_local()
     if not start_date:
-        start_date = end_date - timedelta(days=30)
+        start_date = end_date - timedelta(days=window_days)
+    return start_date, end_date, auto_range
 
-    communities = Community.query.all()
-    diseases = db.session.query(MedicalRecord.disease_category).filter(
-        MedicalRecord.disease_category.isnot(None)
-    ).distinct().order_by(MedicalRecord.disease_category).all()
-    diseases = [d[0] for d in diseases]
 
-    # 统计每日病例
-    record_query = MedicalRecord.query.filter(
+def _visit_query(start_date, end_date, community_filter=None, disease_filter=None):
+    query = MedicalRecord.query.filter(
         MedicalRecord.visit_time.isnot(None),
         MedicalRecord.visit_time >= date_to_utc_start(start_date),
         MedicalRecord.visit_time <= date_to_utc_end(end_date)
     )
     if community_filter:
-        record_query = record_query.filter(MedicalRecord.community == community_filter)
+        query = query.filter(MedicalRecord.community == community_filter)
     if disease_filter:
-        record_query = record_query.filter(MedicalRecord.disease_category == disease_filter)
+        query = query.filter(MedicalRecord.disease_category == disease_filter)
+    return query
 
-    records = record_query.all()
-    visits_by_date = {}
+
+def _daily_visits_in_stratum(query, stratum):
+    """按分层过滤病例并按本地日期计数，返回 (每日病例数, 纳入病例数)。"""
+    daily = {}
+    count = 0
+    for record in query.with_entities(MedicalRecord.visit_time, MedicalRecord.age, MedicalRecord.gender).all():
+        if not record_matches_stratum(record.age, record.gender, stratum):
+            continue
+        day = utc_to_local_date(record.visit_time)
+        daily[day] = daily.get(day, 0) + 1
+        count += 1
+    return daily, count
+
+
+def _case_data_notes(auto_range, community_filter, used_fallback, weather_source,
+                     total_visits, weather_days, overlap_days, total_days):
+    notes = []
+    if auto_range:
+        notes.append("已自动定位到最近有数据的时间区间")
+    if community_filter and used_fallback:
+        notes.append(f"社区无天气数据，已使用{weather_source}")
+    if total_visits == 0:
+        notes.append("所选区间无门诊记录")
+    if weather_days == 0:
+        notes.append(f"所选区间无{weather_source}天气数据")
+    if total_visits > 0 and weather_days > 0 and overlap_days == 0:
+        notes.append("病例与天气日期无重叠")
+    if weather_days < total_days:
+        notes.append(f"天气覆盖{weather_days}/{total_days}天")
+    return notes
+
+
+# ======================== 预警核验页共用 ========================
+
+THRESHOLD_Q_OPTIONS = [0.75, 0.80, 0.85, 0.90, 0.95]
+
+
+def _alert_filters():
+    """预警核验页的筛选参数：地点、类型、等级、跟踪天数、最少样本天数、阈值分位。"""
+    try:
+        threshold_q = float(request.values.get('threshold_q', 0.90))
+    except (TypeError, ValueError):
+        threshold_q = 0.90
+    if threshold_q not in THRESHOLD_Q_OPTIONS:
+        threshold_q = min(THRESHOLD_Q_OPTIONS, key=lambda option: abs(option - threshold_q))
+    return {
+        'location': _text_arg('location', 100),
+        'alert_type': _text_arg('alert_type', 60),
+        'alert_level': _text_arg('alert_level', 30),
+        'follow_days': safe_int(request.values.get('follow_days'), 3, minimum=1, maximum=7),
+        'min_days': safe_int(request.values.get('min_days'), 7, minimum=3, maximum=45),
+        'threshold_q': threshold_q,
+    }
+
+
+def _alert_record_coverage():
+    """全库预警与病例的时间覆盖范围及其交集。"""
+    def local_day(value):
+        return utc_to_local_date(value) if value else None
+
+    visits = MedicalRecord.query.filter(MedicalRecord.visit_time.isnot(None))
+    coverage = {
+        'alert_min': local_day(WeatherAlert.query.with_entities(db.func.min(WeatherAlert.alert_date)).scalar()),
+        'alert_max': local_day(WeatherAlert.query.with_entities(db.func.max(WeatherAlert.alert_date)).scalar()),
+        'record_min': local_day(visits.with_entities(db.func.min(MedicalRecord.visit_time)).scalar()),
+        'record_max': local_day(visits.with_entities(db.func.max(MedicalRecord.visit_time)).scalar()),
+    }
+    coverage['overlap_start'], coverage['overlap_end'], coverage['has_overlap'] = compute_date_overlap(
+        coverage['alert_min'], coverage['alert_max'], coverage['record_min'], coverage['record_max']
+    )
+    return coverage
+
+
+def _coverage_note(coverage):
+    if all(coverage[key] for key in ('alert_min', 'alert_max', 'record_min', 'record_max')) \
+            and not coverage['has_overlap']:
+        return (
+            f"预警时间范围 {coverage['alert_min']}~{coverage['alert_max']} 与病例时间范围 "
+            f"{coverage['record_min']}~{coverage['record_max']} 无重叠，命中仅可视为不可核验"
+        )
+    return None
+
+
+def _resolve_alert_date_range(auto_window_days, default_window_days):
+    """解析预警核验的日期区间；未指定时以最近一条预警为终点，起止颠倒时自动交换。"""
+    start_raw = request.values.get('start_date')
+    end_raw = request.values.get('end_date')
+    start_date = parse_date(start_raw)
+    end_date = parse_date(end_raw)
+    auto_range = False
+    date_swapped = False
+    if not start_raw and not end_raw:
+        latest_alert_utc = WeatherAlert.query.with_entities(db.func.max(WeatherAlert.alert_date)).scalar()
+        latest_alert_date = utc_to_local_date(latest_alert_utc) if latest_alert_utc else None
+        if latest_alert_date:
+            end_date = latest_alert_date
+            start_date = end_date - timedelta(days=auto_window_days)
+            auto_range = True
+    if not end_date:
+        end_date = today_local()
+    if not start_date:
+        start_date = end_date - timedelta(days=default_window_days)
+    if start_date > end_date:
+        start_date, end_date = end_date, start_date
+        date_swapped = True
+    return start_date, end_date, auto_range, date_swapped
+
+
+def _filtered_alerts(start_date, end_date, filters):
+    """返回区间内的类型/等级选项，以及按筛选条件过滤、按时间倒序的预警。"""
+    range_query = WeatherAlert.query.filter(
+        WeatherAlert.alert_date >= date_to_utc_start(start_date),
+        WeatherAlert.alert_date <= date_to_utc_end(end_date)
+    )
+
+    def distinct_values(column):
+        return [item[0] for item in range_query.with_entities(column).distinct().order_by(column).all() if item[0]]
+
+    query = range_query
+    if filters['location']:
+        query = query.filter(WeatherAlert.location.contains(filters['location']))
+    if filters['alert_type']:
+        query = query.filter(WeatherAlert.alert_type == filters['alert_type'])
+    if filters['alert_level']:
+        query = query.filter(WeatherAlert.alert_level == filters['alert_level'])
+    alert_rows = query.order_by(WeatherAlert.alert_date.desc()).all()
+    return distinct_values(WeatherAlert.alert_type), distinct_values(WeatherAlert.alert_level), alert_rows
+
+
+def _daily_visits_by_location(record_start, record_end):
+    """按社区与全局统计每日病例数，返回 (病例行, 分社区每日病例, 全局每日病例)。"""
+    records = _visit_query(record_start, record_end).with_entities(
+        MedicalRecord.community,
+        MedicalRecord.visit_time
+    ).all()
+    daily_visits = {}
+    global_daily_visits = {}
     for record in records:
-        date_key = utc_to_local_date(record.visit_time)
-        visits_by_date[date_key] = visits_by_date.get(date_key, 0) + 1
+        day = utc_to_local_date(record.visit_time)
+        if day is None:
+            continue
+        key = (record.community or '').strip() or '未知'
+        day_map = daily_visits.setdefault(key, {})
+        day_map[day] = day_map.get(day, 0) + 1
+        global_daily_visits[day] = global_daily_visits.get(day, 0) + 1
+    return records, daily_visits, global_daily_visits
+
+
+def _visit_threshold(day_map, all_days, min_days, q_value):
+    """病例超阈值判定线：观测天数不足时返回 None。返回 (阈值, 有病例天数)。"""
+    values = [day_map.get(day, 0) for day in all_days]
+    observed_days = sum(1 for value in values if value > 0)
+    if observed_days < min_days:
+        return None, observed_days
+    return percentile(sorted(values), q_value), observed_days
+
+
+def _threshold_profile(daily_visits, global_daily_visits, all_days, min_days, q_value):
+    threshold_by_location = {}
+    sample_days_by_location = {}
+    for key, day_map in daily_visits.items():
+        threshold_by_location[key], sample_days_by_location[key] = _visit_threshold(
+            day_map, all_days, min_days, q_value
+        )
+    global_threshold, global_sample_days = _visit_threshold(global_daily_visits, all_days, min_days, q_value)
+    return {
+        'threshold_by_location': threshold_by_location,
+        'sample_days_by_location': sample_days_by_location,
+        'global_threshold': global_threshold,
+        'global_sample_days': global_sample_days
+    }
+
+
+def _alert_baseline(location_key, daily_visits, global_daily_visits, profile):
+    """预警所在社区有病例时用社区基线，否则回退全局基线。
+
+    返回 (每日病例, 阈值, 有病例天数, 核验键, 基线名称, 是否全局)。
+    """
+    day_map = daily_visits.get(location_key)
+    if day_map is None:
+        return (global_daily_visits, profile['global_threshold'], profile['global_sample_days'],
+                '__GLOBAL__', '全局基线', True)
+    return (day_map, profile['threshold_by_location'].get(location_key),
+            profile['sample_days_by_location'].get(location_key, 0), location_key, location_key, False)
+
+
+def _baseline_for_key(key, daily_visits, global_daily_visits, profile):
+    """按核验键取 (每日病例, 阈值, 名称)。"""
+    if key == '__GLOBAL__':
+        return global_daily_visits, profile['global_threshold'], '全局基线'
+    return daily_visits.get(key, {}), profile['threshold_by_location'].get(key), key
+
+
+def _alert_window(alert_day, day_map, follow_days, threshold, threshold_evaluable):
+    """预警后 follow_days 天的病例轨迹，返回 (轨迹点, 峰值, 峰值日, 首次超阈值日)。"""
+    window_points = []
+    peak_visits = 0
+    peak_day = None
+    first_hit_day = None
+    if alert_day is not None:
+        for offset in range(follow_days + 1):
+            day = alert_day + timedelta(days=offset)
+            visits = day_map.get(day, 0)
+            window_points.append({'day': day.strftime('%Y-%m-%d'), 'visits': visits})
+            if visits > peak_visits:
+                peak_visits = visits
+                peak_day = day
+            if threshold_evaluable and first_hit_day is None and visits >= threshold:
+                first_hit_day = day
+    return window_points, peak_visits, peak_day, first_hit_day
+
+
+def _alert_row(alert, alert_day, location_key, threshold, threshold_evaluable, threshold_source,
+               window, outcome, semantics):
+    """两个预警核验页共用的单条预警展示字段。"""
+    window_points, peak_visits, peak_day, first_hit_day = window
+    severity, certainty, urgency = semantics
+    lead_days = (first_hit_day - alert_day).days if (first_hit_day and alert_day) else None
+    return {
+        'id': alert.id,
+        'alert_day': alert_day,
+        'alert_time_text': alert.alert_date.strftime('%Y-%m-%d %H:%M') if alert.alert_date else '--',
+        'location': location_key,
+        'alert_type': alert.alert_type or '--',
+        'alert_level': alert.alert_level or '--',
+        'description': alert.description or '--',
+        'threshold': threshold,
+        'threshold_evaluable': threshold_evaluable,
+        'threshold_source': threshold_source,
+        'peak_visits': peak_visits,
+        'peak_day_text': peak_day.strftime('%Y-%m-%d') if peak_day else '--',
+        'first_hit_day_text': first_hit_day.strftime('%Y-%m-%d') if first_hit_day else '--',
+        'lead_days': lead_days,
+        'lead_hours': lead_days * 24 if lead_days is not None else None,
+        'observed_ratio': (peak_visits / threshold) if (threshold_evaluable and threshold and threshold > 0) else None,
+        'outcome': outcome,
+        'outcome_label': OUTCOME_LABELS[outcome],
+        'severity': severity,
+        'severity_label': SEVERITY_LABELS.get(severity, severity),
+        'certainty': certainty,
+        'certainty_label': CERTAINTY_LABELS.get(certainty, certainty),
+        'urgency': urgency,
+        'urgency_label': URGENCY_LABELS.get(urgency, urgency),
+        'window_points': window_points,
+    }
+
+
+@admin_route('/analysis/history', methods=['GET', 'POST'], endpoint='analysis_history')
+def analysis_history():
+    """历史数据回溯分析"""
+    community_filter = _text_arg('community', 100)
+    disease_filter = _text_arg('disease', 100)
+    start_date, end_date, auto_range = _resolve_case_date_range(community_filter, disease_filter, 30)
+
+    communities = Community.query.all()
+    diseases = _disease_options()
+
+    # 统计每日病例
+    visits_by_date, _ = _daily_visits_in_stratum(
+        _visit_query(start_date, end_date, community_filter, disease_filter), 'all'
+    )
 
     # 天气数据（按日平均）
     weather_records, weather_location, used_fallback = _load_weather_records(
@@ -605,18 +487,11 @@ def analysis_history():
             weather_by_date[date_key]['temperature'] /= count
             weather_by_date[date_key]['humidity'] /= count
 
-    dates = []
-    visits = []
-    temperatures = []
-    humidities = []
-    cursor = start_date
-    while cursor <= end_date:
-        dates.append(cursor.strftime('%Y-%m-%d'))
-        visits.append(visits_by_date.get(cursor, 0))
-        weather = weather_by_date.get(cursor)
-        temperatures.append(weather['temperature'] if weather else None)
-        humidities.append(weather['humidity'] if weather else None)
-        cursor += timedelta(days=1)
+    days = date_span(start_date, end_date)
+    dates = [day.strftime('%Y-%m-%d') for day in days]
+    visits = [visits_by_date.get(day, 0) for day in days]
+    temperatures = [weather_by_date[day]['temperature'] if day in weather_by_date else None for day in days]
+    humidities = [weather_by_date[day]['humidity'] if day in weather_by_date else None for day in days]
 
     # 相关性
     paired_temp = [(v, t) for v, t in zip(visits, temperatures) if t is not None]
@@ -631,19 +506,8 @@ def analysis_history():
     weather_days = len(weather_by_date)
     overlap_days = len(set(visits_by_date.keys()) & set(weather_by_date.keys()))
     total_visits = sum(visits)
-    data_notes = []
-    if auto_range:
-        data_notes.append("已自动定位到最近有数据的时间区间")
-    if community_filter and used_fallback:
-        data_notes.append(f"社区无天气数据，已使用{weather_source}")
-    if total_visits == 0:
-        data_notes.append("所选区间无门诊记录")
-    if weather_days == 0:
-        data_notes.append(f"所选区间无{weather_source}天气数据")
-    if total_visits > 0 and weather_days > 0 and overlap_days == 0:
-        data_notes.append("病例与天气日期无重叠")
-    if weather_days < total_days:
-        data_notes.append(f"天气覆盖{weather_days}/{total_days}天")
+    data_notes = _case_data_notes(auto_range, community_filter, used_fallback, weather_source,
+                                  total_visits, weather_days, overlap_days, total_days)
 
     data_summary = {
         'total_days': total_days,
@@ -677,79 +541,29 @@ def analysis_history():
     )
 
 
-@bp.route('/analysis/heatmap', methods=['GET', 'POST'], endpoint='analysis_heatmap')
-@login_required
+@admin_route('/analysis/heatmap', methods=['GET', 'POST'], endpoint='analysis_heatmap')
 def analysis_heatmap():
     """天气-疾病相关性热力图（RR + 滞后 + 不确定性）"""
-    if not _require_admin():
-        return redirect(url_for('user.user_dashboard'))
-    community_filter = sanitize_input(request.values.get('community'), max_length=100)
-    disease_filter = sanitize_input(request.values.get('disease'), max_length=100)
-    stratum = sanitize_input(request.values.get('stratum'), max_length=30) or 'all'
-    if stratum not in {'all', 'elderly', 'non_elderly', 'male', 'female'}:
-        stratum = 'all'
+    community_filter = _text_arg('community', 100)
+    disease_filter = _text_arg('disease', 100)
+    stratum = _stratum_arg()
 
-    lag_window = _safe_int(request.values.get('lag_window'), 7, minimum=0, maximum=21)
+    lag_window = safe_int(request.values.get('lag_window'), 7, minimum=0, maximum=21)
     if lag_window not in {0, 3, 7, 14, 21}:
         lag_window = 7
 
-    binning = sanitize_input(request.values.get('binning'), max_length=20) or 'fixed'
+    binning = _text_arg('binning', 20) or 'fixed'
     if binning not in {'fixed', 'quantile'}:
         binning = 'fixed'
 
-    min_days = _safe_int(request.values.get('min_days'), 3, minimum=1, maximum=14)
-
-    start_raw = request.values.get('start_date')
-    end_raw = request.values.get('end_date')
-    start_date = parse_date(start_raw)
-    end_date = parse_date(end_raw)
-    auto_range = False
-    if not start_raw and not end_raw:
-        last_visit = _latest_visit_date(community_filter, disease_filter)
-        default_city = _default_city()
-        weather_location = community_filter or default_city
-        last_weather = _latest_weather_date(weather_location)
-        if not last_weather and community_filter:
-            last_weather = _latest_weather_date(default_city)
-        candidates = [d for d in (last_visit, last_weather) if d]
-        if candidates:
-            end_date = min(candidates)
-            start_date = end_date - timedelta(days=90)
-            auto_range = True
-    if not end_date:
-        end_date = today_local()
-    if not start_date:
-        start_date = end_date - timedelta(days=90)
+    min_days = safe_int(request.values.get('min_days'), 3, minimum=1, maximum=14)
+    start_date, end_date, auto_range = _resolve_case_date_range(community_filter, disease_filter, 90)
 
     communities = Community.query.all()
-    diseases = db.session.query(MedicalRecord.disease_category).filter(
-        MedicalRecord.disease_category.isnot(None)
-    ).distinct().order_by(MedicalRecord.disease_category).all()
-    diseases = [d[0] for d in diseases]
-
-    record_query = MedicalRecord.query.filter(
-        MedicalRecord.visit_time.isnot(None),
-        MedicalRecord.visit_time >= date_to_utc_start(start_date),
-        MedicalRecord.visit_time <= date_to_utc_end(end_date)
+    diseases = _disease_options()
+    daily_counts, filtered_record_count = _daily_visits_in_stratum(
+        _visit_query(start_date, end_date, community_filter, disease_filter), stratum
     )
-    if community_filter:
-        record_query = record_query.filter(MedicalRecord.community == community_filter)
-    if disease_filter:
-        record_query = record_query.filter(MedicalRecord.disease_category == disease_filter)
-
-    daily_counts = {}
-    filtered_record_count = 0
-    record_rows = record_query.with_entities(
-        MedicalRecord.visit_time,
-        MedicalRecord.age,
-        MedicalRecord.gender
-    ).all()
-    for record in record_rows:
-        if not _record_matches_stratum(record.age, record.gender, stratum):
-            continue
-        date_key = utc_to_local_date(record.visit_time)
-        daily_counts[date_key] = daily_counts.get(date_key, 0) + 1
-        filtered_record_count += 1
 
     # 为了支持 lag exposure，天气查询窗口前移 lag_window 天。
     lag_start_date = start_date - timedelta(days=lag_window)
@@ -758,31 +572,29 @@ def analysis_heatmap():
     )
     default_city = _default_city()
     weather_source = _weather_source_label(weather_location, default_city)
-    weather_by_date = _build_daily_weather(weather_records)
+    weather_by_date = build_daily_weather(weather_records)
 
     # 构建日级别分析样本（每一天一个 exposure + outcome）。
     analysis_points = []
-    cursor = start_date
-    while cursor <= end_date:
-        exposure = _lag_exposure_for_date(cursor, lag_window, weather_by_date)
+    for day in date_span(start_date, end_date):
+        exposure = lag_exposure_for_date(day, lag_window, weather_by_date)
         if exposure:
             analysis_points.append({
-                'date': cursor,
-                'visits': daily_counts.get(cursor, 0),
+                'date': day,
+                'visits': daily_counts.get(day, 0),
                 'temperature': exposure['temperature'],
                 'humidity': exposure['humidity'],
-                'month': cursor.month,
-                'weekday': cursor.weekday()
+                'month': day.month,
+                'weekday': day.weekday()
             })
-        cursor += timedelta(days=1)
 
     temp_values = [point['temperature'] for point in analysis_points]
     hum_values = [point['humidity'] for point in analysis_points]
     fixed_temp_bins = [-30, -10, 0, 10, 20, 30, 40, 55]
     fixed_hum_bins = [0, 20, 40, 60, 80, 100]
     if binning == 'quantile':
-        temp_bins = _build_quantile_bins(temp_values, len(fixed_temp_bins) - 1, fixed_temp_bins)
-        humidity_bins = _build_quantile_bins(hum_values, len(fixed_hum_bins) - 1, fixed_hum_bins)
+        temp_bins = build_quantile_bins(temp_values, len(fixed_temp_bins) - 1, fixed_temp_bins)
+        humidity_bins = build_quantile_bins(hum_values, len(fixed_hum_bins) - 1, fixed_hum_bins)
     else:
         temp_bins = fixed_temp_bins
         humidity_bins = fixed_hum_bins
@@ -815,8 +627,8 @@ def analysis_heatmap():
     ]
 
     for point in analysis_points:
-        temp_idx = _find_bin(point['temperature'], temp_bins)
-        hum_idx = _find_bin(point['humidity'], humidity_bins)
+        temp_idx = find_bin(point['temperature'], temp_bins)
+        hum_idx = find_bin(point['humidity'], humidity_bins)
         if temp_idx is None or hum_idx is None:
             continue
         cell = matrix_raw[temp_idx][hum_idx]
@@ -826,11 +638,11 @@ def analysis_heatmap():
         cell['expected'] += baseline_rate.get(key, overall_baseline_rate)
 
     temp_labels = [
-        _format_bucket_label(temp_bins[idx], temp_bins[idx + 1], '°C')
+        format_bucket_label(temp_bins[idx], temp_bins[idx + 1], '°C')
         for idx in range(len(temp_bins) - 1)
     ]
     hum_labels = [
-        _format_bucket_label(humidity_bins[idx], humidity_bins[idx + 1], '%')
+        format_bucket_label(humidity_bins[idx], humidity_bins[idx + 1], '%')
         for idx in range(len(humidity_bins) - 1)
     ]
 
@@ -845,17 +657,11 @@ def analysis_heatmap():
             days = raw_cell['days']
             expected = raw_cell['expected']
             rate = (visits / days) if days > 0 else None
-            rr, ci_low, ci_high = _rr_with_ci(visits, expected) if days > 0 else (None, None, None)
-            significant = bool(
-                rr is not None and
-                days >= min_days and
-                ci_low is not None and
-                ci_high is not None and
-                (ci_low > 1 or ci_high < 1)
-            )
-            certainty = _certainty_level(days, visits, ci_low, ci_high, min_days)
+            rr, ci_low, ci_high = rr_with_ci(visits, expected) if days > 0 else (None, None, None)
+            significant = is_significant(rr, days, min_days, ci_low, ci_high)
+            certainty = certainty_level(days, visits, ci_low, ci_high, min_days)
             certainty_counts[certainty] += 1
-            action = _action_level(rr, significant, certainty, days, min_days)
+            action = action_level(rr, significant, certainty, days, min_days)
 
             cell = {
                 'temp_idx': temp_idx,
@@ -872,7 +678,7 @@ def analysis_heatmap():
                 'significant': significant,
                 'certainty': certainty,
                 'action': action,
-                'bg_color': _heatmap_cell_color(rr, days, min_days)
+                'bg_color': heatmap_cell_color(rr, days, min_days)
             }
             row_cells.append(cell)
             if rr is not None and days >= min_days and rr >= 1.2:
@@ -905,31 +711,13 @@ def analysis_heatmap():
     ))
     missing_exposure_days = max(0, total_days - valid_exposure_days)
 
-    stratum_labels = {
-        'all': '全人群',
-        'elderly': '老年人(>=65)',
-        'non_elderly': '非老年(<65)',
-        'male': '男性',
-        'female': '女性'
-    }
     binning_labels = {
         'fixed': '固定阈值分箱',
         'quantile': '分位数分箱'
     }
 
-    data_notes = []
-    if auto_range:
-        data_notes.append("已自动定位到最近有数据的时间区间")
-    if community_filter and used_fallback:
-        data_notes.append(f"社区无天气数据，已使用{weather_source}")
-    if total_visits == 0:
-        data_notes.append("所选区间无门诊记录")
-    if weather_days == 0:
-        data_notes.append(f"所选区间无{weather_source}天气数据")
-    if total_visits > 0 and weather_days > 0 and overlap_days == 0:
-        data_notes.append("病例与天气日期无重叠")
-    if weather_days < total_days:
-        data_notes.append(f"天气覆盖{weather_days}/{total_days}天")
+    data_notes = _case_data_notes(auto_range, community_filter, used_fallback, weather_source,
+                                  total_visits, weather_days, overlap_days, total_days)
     if missing_exposure_days > 0:
         data_notes.append(f"滞后窗口为 {lag_window} 天，可用于建模的暴露样本为 {valid_exposure_days}/{total_days} 天")
     if valid_exposure_days == 0:
@@ -959,7 +747,7 @@ def analysis_heatmap():
         community_filter=community_filter,
         disease_filter=disease_filter,
         stratum=stratum,
-        stratum_labels=stratum_labels,
+        stratum_labels=STRATUM_LABELS,
         lag_window=lag_window,
         binning=binning,
         min_days=min_days,
@@ -977,69 +765,24 @@ def analysis_heatmap():
     )
 
 
-@bp.route('/analysis/lag', methods=['GET', 'POST'], endpoint='analysis_lag')
-@login_required
+@admin_route('/analysis/lag', methods=['GET', 'POST'], endpoint='analysis_lag')
 def analysis_lag():
     """滞后效应可视化（lag-response + cumulative + risk semantics）"""
-    if not _require_admin():
-        return redirect(url_for('user.user_dashboard'))
-    community_filter = sanitize_input(request.values.get('community'), max_length=100)
-    disease_filter = sanitize_input(request.values.get('disease'), max_length=100)
-    stratum = sanitize_input(request.values.get('stratum'), max_length=30) or 'all'
-    if stratum not in {'all', 'elderly', 'non_elderly', 'male', 'female'}:
-        stratum = 'all'
+    community_filter = _text_arg('community', 100)
+    disease_filter = _text_arg('disease', 100)
+    stratum = _stratum_arg()
 
-    max_lag = _safe_int(request.values.get('max_lag'), 14, minimum=7, maximum=21)
+    max_lag = safe_int(request.values.get('max_lag'), 14, minimum=7, maximum=21)
     if max_lag not in {7, 14, 21}:
         max_lag = 14
-    min_days = _safe_int(request.values.get('min_days'), 3, minimum=1, maximum=14)
+    min_days = safe_int(request.values.get('min_days'), 3, minimum=1, maximum=14)
 
     communities = Community.query.all()
-    diseases = db.session.query(MedicalRecord.disease_category).filter(
-        MedicalRecord.disease_category.isnot(None)
-    ).distinct().order_by(MedicalRecord.disease_category).all()
-    diseases = [d[0] for d in diseases]
-
-    start_raw = request.values.get('start_date')
-    end_raw = request.values.get('end_date')
-    start_date = parse_date(start_raw)
-    end_date = parse_date(end_raw)
-    auto_range = False
-    if not start_raw and not end_raw:
-        last_visit = _latest_visit_date(community_filter, disease_filter)
-        default_city = _default_city()
-        weather_location = community_filter or default_city
-        last_weather = _latest_weather_date(weather_location)
-        if not last_weather and community_filter:
-            last_weather = _latest_weather_date(default_city)
-        candidates = [d for d in (last_visit, last_weather) if d]
-        if candidates:
-            end_date = min(candidates)
-            start_date = end_date - timedelta(days=90)
-            auto_range = True
-    if not end_date:
-        end_date = today_local()
-    if not start_date:
-        start_date = end_date - timedelta(days=90)
-
-    record_query = MedicalRecord.query.filter(
-        MedicalRecord.visit_time.isnot(None),
-        MedicalRecord.visit_time >= date_to_utc_start(start_date),
-        MedicalRecord.visit_time <= date_to_utc_end(end_date)
+    diseases = _disease_options()
+    start_date, end_date, auto_range = _resolve_case_date_range(community_filter, disease_filter, 90)
+    visits_by_date, filtered_record_count = _daily_visits_in_stratum(
+        _visit_query(start_date, end_date, community_filter, disease_filter), stratum
     )
-    if community_filter:
-        record_query = record_query.filter(MedicalRecord.community == community_filter)
-    if disease_filter:
-        record_query = record_query.filter(MedicalRecord.disease_category == disease_filter)
-
-    visits_by_date = {}
-    filtered_record_count = 0
-    for record in record_query.with_entities(MedicalRecord.visit_time, MedicalRecord.age, MedicalRecord.gender).all():
-        if not _record_matches_stratum(record.age, record.gender, stratum):
-            continue
-        date_key = utc_to_local_date(record.visit_time)
-        visits_by_date[date_key] = visits_by_date.get(date_key, 0) + 1
-        filtered_record_count += 1
 
     lag_start_date = start_date - timedelta(days=max_lag)
     weather_records, weather_location, used_fallback = _load_weather_records(
@@ -1047,13 +790,9 @@ def analysis_lag():
     )
     default_city = _default_city()
     weather_source = _weather_source_label(weather_location, default_city)
-    weather_by_date = _build_daily_weather(weather_records)
+    weather_by_date = build_daily_weather(weather_records)
 
-    analysis_days = []
-    cursor = start_date
-    while cursor <= end_date:
-        analysis_days.append(cursor)
-        cursor += timedelta(days=1)
+    analysis_days = date_span(start_date, end_date)
 
     baseline_bucket = {}
     total_visits = 0
@@ -1076,8 +815,8 @@ def analysis_lag():
         for day, row in weather_by_date.items()
         if lag_start_date <= day <= end_date and row.get('temperature') is not None
     )
-    heat_threshold = _percentile(all_temps, 0.9) if all_temps else None
-    cold_threshold = _percentile(all_temps, 0.1) if all_temps else None
+    heat_threshold = percentile(all_temps, 0.9) if all_temps else None
+    cold_threshold = percentile(all_temps, 0.1) if all_temps else None
 
     lag_axis = list(range(0, max_lag + 1))
     lag_results = []
@@ -1112,19 +851,11 @@ def analysis_lag():
                 cold_exp += baseline
                 cold_days += 1
 
-        corr, corr_low, corr_high = _corr_with_ci(x_vals, y_vals)
-        heat_rr, heat_ci_low, heat_ci_high = _rr_with_ci(heat_obs, heat_exp) if heat_days else (None, None, None)
-        cold_rr, cold_ci_low, cold_ci_high = _rr_with_ci(cold_obs, cold_exp) if cold_days else (None, None, None)
-        heat_sig = bool(
-            heat_rr is not None and heat_days >= min_days and
-            heat_ci_low is not None and heat_ci_high is not None and
-            (heat_ci_low > 1 or heat_ci_high < 1)
-        )
-        cold_sig = bool(
-            cold_rr is not None and cold_days >= min_days and
-            cold_ci_low is not None and cold_ci_high is not None and
-            (cold_ci_low > 1 or cold_ci_high < 1)
-        )
+        corr, corr_low, corr_high = corr_with_ci(x_vals, y_vals)
+        heat_rr, heat_ci_low, heat_ci_high = rr_with_ci(heat_obs, heat_exp) if heat_days else (None, None, None)
+        cold_rr, cold_ci_low, cold_ci_high = rr_with_ci(cold_obs, cold_exp) if cold_days else (None, None, None)
+        heat_sig = is_significant(heat_rr, heat_days, min_days, heat_ci_low, heat_ci_high)
+        cold_sig = is_significant(cold_rr, cold_days, min_days, cold_ci_low, cold_ci_high)
 
         lag_results.append({
             'lag': lag,
@@ -1182,8 +913,8 @@ def analysis_lag():
             continue
 
         sorted_values = sorted(exposure_values)
-        w_heat_thr = _percentile(sorted_values, 0.9)
-        w_cold_thr = _percentile(sorted_values, 0.1)
+        w_heat_thr = percentile(sorted_values, 0.9)
+        w_cold_thr = percentile(sorted_values, 0.1)
 
         heat_obs = 0
         heat_exp = 0.0
@@ -1201,8 +932,8 @@ def analysis_lag():
                 cold_exp += baseline
                 cold_days += 1
 
-        heat_rr, heat_ci_low, heat_ci_high = _rr_with_ci(heat_obs, heat_exp) if heat_days else (None, None, None)
-        cold_rr, cold_ci_low, cold_ci_high = _rr_with_ci(cold_obs, cold_exp) if cold_days else (None, None, None)
+        heat_rr, heat_ci_low, heat_ci_high = rr_with_ci(heat_obs, heat_exp) if heat_days else (None, None, None)
+        cold_rr, cold_ci_low, cold_ci_high = rr_with_ci(cold_obs, cold_exp) if cold_days else (None, None, None)
 
         cumulative_results.append({
             'window': window,
@@ -1216,7 +947,7 @@ def analysis_lag():
         })
 
     temp_bins = [-30, -10, 0, 10, 20, 30, 40, 55]
-    temp_labels = [_format_bucket_label(temp_bins[i], temp_bins[i + 1], '°C') for i in range(len(temp_bins) - 1)]
+    temp_labels = [format_bucket_label(temp_bins[i], temp_bins[i + 1], '°C') for i in range(len(temp_bins) - 1)]
     matrix_raw = [
         [{'visits': 0, 'days': 0, 'expected': 0.0} for _ in lag_axis]
         for _ in range(len(temp_bins) - 1)
@@ -1228,7 +959,7 @@ def analysis_lag():
             temp = weather.get('temperature') if weather else None
             if temp is None:
                 continue
-            bin_idx = _find_bin(temp, temp_bins)
+            bin_idx = find_bin(temp, temp_bins)
             if bin_idx is None:
                 continue
             baseline = baseline_rate.get((day.month, day.weekday()), overall_baseline)
@@ -1244,14 +975,10 @@ def analysis_lag():
         for lag_idx, raw_cell in enumerate(row):
             visits = raw_cell['visits']
             days = raw_cell['days']
-            rr, ci_low, ci_high = _rr_with_ci(visits, raw_cell['expected']) if days > 0 else (None, None, None)
-            significant = bool(
-                rr is not None and days >= min_days and
-                ci_low is not None and ci_high is not None and
-                (ci_low > 1 or ci_high < 1)
-            )
-            certainty = _certainty_level(days, visits, ci_low, ci_high, min_days)
-            action = _action_level(rr, significant, certainty, days, min_days)
+            rr, ci_low, ci_high = rr_with_ci(visits, raw_cell['expected']) if days > 0 else (None, None, None)
+            significant = is_significant(rr, days, min_days, ci_low, ci_high)
+            certainty = certainty_level(days, visits, ci_low, ci_high, min_days)
+            action = action_level(rr, significant, certainty, days, min_days)
             max_heatmap_rr = max(max_heatmap_rr, rr or 0)
             cells.append({
                 'lag': lag_axis[lag_idx],
@@ -1264,7 +991,7 @@ def analysis_lag():
                 'significant': significant,
                 'certainty': certainty,
                 'action': action,
-                'bg_color': _heatmap_cell_color(rr, days, min_days)
+                'bg_color': heatmap_cell_color(rr, days, min_days)
             })
         lag_heatmap.append(cells)
 
@@ -1347,19 +1074,8 @@ def analysis_lag():
         if weather_by_date.get(day) and weather_by_date.get(day).get('temperature') is not None
     ))
 
-    data_notes = []
-    if auto_range:
-        data_notes.append("已自动定位到最近有数据的时间区间")
-    if community_filter and used_fallback:
-        data_notes.append(f"社区无天气数据，已使用{weather_source}")
-    if total_visits == 0:
-        data_notes.append("所选区间无门诊记录")
-    if weather_days == 0:
-        data_notes.append(f"所选区间无{weather_source}天气数据")
-    if total_visits > 0 and weather_days > 0 and overlap_days == 0:
-        data_notes.append("病例与天气日期无重叠")
-    if weather_days < total_days:
-        data_notes.append(f"天气覆盖{weather_days}/{total_days}天")
+    data_notes = _case_data_notes(auto_range, community_filter, used_fallback, weather_source,
+                                  total_visits, weather_days, overlap_days, total_days)
     if heat_threshold is not None and cold_threshold is not None:
         data_notes.append(f"温度分位阈值：冷暴露≤{cold_threshold:.1f}°C，热暴露≥{heat_threshold:.1f}°C")
     if filtered_record_count == 0:
@@ -1381,14 +1097,6 @@ def analysis_lag():
         'peak_rr': peak_rr
     }
 
-    stratum_labels = {
-        'all': '全人群',
-        'elderly': '老年人(>=65)',
-        'non_elderly': '非老年(<65)',
-        'male': '男性',
-        'female': '女性'
-    }
-
     return render_template(
         'analysis_lag.html',
         communities=communities,
@@ -1398,7 +1106,7 @@ def analysis_lag():
         community_filter=community_filter,
         disease_filter=disease_filter,
         stratum=stratum,
-        stratum_labels=stratum_labels,
+        stratum_labels=STRATUM_LABELS,
         max_lag=max_lag,
         min_days=min_days,
         max_lag_options=[7, 14, 21],
@@ -1414,20 +1122,15 @@ def analysis_lag():
     )
 
 
-@bp.route('/analysis/community-compare', methods=['GET', 'POST'], endpoint='analysis_community_compare')
-@login_required
+@admin_route('/analysis/community-compare', methods=['GET', 'POST'], endpoint='analysis_community_compare')
 def analysis_community_compare():
     """社区对比分析（SIR + 漏斗图 + 不平等指标）"""
-    if not _require_admin():
-        return redirect(url_for('user.user_dashboard'))
-    disease_filter = sanitize_input(request.values.get('disease'), max_length=100)
-    stratum = sanitize_input(request.values.get('stratum'), max_length=30) or 'all'
-    if stratum not in {'all', 'elderly', 'non_elderly', 'male', 'female'}:
-        stratum = 'all'
+    disease_filter = _text_arg('disease', 100)
+    stratum = _stratum_arg()
 
-    min_days = _safe_int(request.values.get('min_days'), 3, minimum=1, maximum=14)
-    smoothing_alpha = _safe_int(request.values.get('smoothing_alpha'), 5, minimum=0, maximum=30)
-    top_n = _safe_int(request.values.get('top_n'), 12, minimum=5, maximum=25)
+    min_days = safe_int(request.values.get('min_days'), 3, minimum=1, maximum=14)
+    smoothing_alpha = safe_int(request.values.get('smoothing_alpha'), 5, minimum=0, maximum=30)
+    top_n = safe_int(request.values.get('top_n'), 12, minimum=5, maximum=25)
 
     start_raw = request.values.get('start_date')
     end_raw = request.values.get('end_date')
@@ -1452,20 +1155,9 @@ def analysis_community_compare():
 
     communities = Community.query.order_by(Community.name.asc()).all()
     community_map = {item.name: item for item in communities}
-    diseases = db.session.query(MedicalRecord.disease_category).filter(
-        MedicalRecord.disease_category.isnot(None)
-    ).distinct().order_by(MedicalRecord.disease_category).all()
-    diseases = [d[0] for d in diseases]
+    diseases = _disease_options()
 
-    record_query = MedicalRecord.query.filter(
-        MedicalRecord.visit_time.isnot(None),
-        MedicalRecord.visit_time >= date_to_utc_start(start_date),
-        MedicalRecord.visit_time <= date_to_utc_end(end_date)
-    )
-    if disease_filter:
-        record_query = record_query.filter(MedicalRecord.disease_category == disease_filter)
-
-    records = record_query.with_entities(
+    records = _visit_query(start_date, end_date, disease_filter=disease_filter).with_entities(
         MedicalRecord.community,
         MedicalRecord.visit_time,
         MedicalRecord.age,
@@ -1477,7 +1169,7 @@ def analysis_community_compare():
     visit_days_by_community = {}
     filtered_record_count = 0
     for row in records:
-        if not _record_matches_stratum(row.age, row.gender, stratum):
+        if not record_matches_stratum(row.age, row.gender, stratum):
             continue
         community_name = (row.community or '').strip() or unknown_community_label
         day = utc_to_local_date(row.visit_time)
@@ -1515,7 +1207,7 @@ def analysis_community_compare():
         population = int(meta.population) if meta and meta.population and meta.population > 0 else None
         person_days = (population * total_days) if population else None
         expected = (baseline_rate * person_days) if (baseline_rate is not None and person_days) else None
-        sir, ci_low, ci_high = _rr_with_ci(observed, expected) if expected else (None, None, None)
+        sir, ci_low, ci_high = rr_with_ci(observed, expected) if expected else (None, None, None)
         smoothed_sir = None
         if expected:
             if smoothing_alpha > 0:
@@ -1523,15 +1215,9 @@ def analysis_community_compare():
             else:
                 smoothed_sir = sir
         signal_rr = smoothed_sir if smoothed_sir is not None else sir
-        significant = bool(
-            signal_rr is not None and
-            visit_days >= min_days and
-            ci_low is not None and
-            ci_high is not None and
-            (ci_low > 1 or ci_high < 1)
-        )
-        certainty = _certainty_level(visit_days, observed, ci_low, ci_high, min_days)
-        action = _action_level(signal_rr, significant, certainty, visit_days, min_days)
+        significant = is_significant(signal_rr, visit_days, min_days, ci_low, ci_high)
+        certainty = certainty_level(visit_days, observed, ci_low, ci_high, min_days)
+        action = action_level(signal_rr, significant, certainty, visit_days, min_days)
         incidence_rate = ((observed / person_days) * 10000) if person_days else None
         excess_cases = (observed - expected) if expected is not None else None
         excess_rate = ((excess_cases / person_days) * 10000) if (person_days and excess_cases is not None) else None
@@ -1605,10 +1291,10 @@ def analysis_community_compare():
         for row in stats
         if (row['smoothed_sir'] is not None or row['sir'] is not None)
     )
-    p90_rate = _percentile(valid_rates, 0.9) if valid_rates else None
-    p10_rate = _percentile(valid_rates, 0.1) if valid_rates else None
+    p90_rate = percentile(valid_rates, 0.9) if valid_rates else None
+    p10_rate = percentile(valid_rates, 0.1) if valid_rates else None
     p90_p10_ratio = (p90_rate / p10_rate) if (p90_rate is not None and p10_rate and p10_rate > 0) else None
-    gini_rate = _gini(valid_rates)
+    gini_rate = gini(valid_rates)
     max_risk = max(risk_values) if risk_values else None
     min_risk = min(risk_values) if risk_values else None
     risk_gap_ratio = (max_risk / min_risk) if (max_risk is not None and min_risk and min_risk > 0) else None
@@ -1703,13 +1389,6 @@ def analysis_community_compare():
         missing_count = len(stats) - population_known_count
         data_notes.append(f"{missing_count} 个社区缺少人口，相关指标会显示为 --")
 
-    stratum_labels = {
-        'all': '全人群',
-        'elderly': '老年人(>=65)',
-        'non_elderly': '非老年(<65)',
-        'male': '男性',
-        'female': '女性'
-    }
     funnel_flag_labels = {
         'outside_998': '超出99.8%控制限',
         'outside_95': '超出95%控制限',
@@ -1725,7 +1404,7 @@ def analysis_community_compare():
         end_date=end_date.strftime('%Y-%m-%d'),
         disease_filter=disease_filter,
         stratum=stratum,
-        stratum_labels=stratum_labels,
+        stratum_labels=STRATUM_LABELS,
         min_days=min_days,
         smoothing_alpha=smoothing_alpha,
         top_n=top_n,
@@ -1761,250 +1440,71 @@ def analysis_community_compare():
     )
 
 
-@bp.route('/alerts/history', methods=['GET', 'POST'], endpoint='alerts_history')
-@login_required
+@admin_route('/alerts/history', methods=['GET', 'POST'], endpoint='alerts_history')
 def alerts_history():
     """预警历史记录（预警-实况核验）"""
-    if not _require_admin():
-        return redirect(url_for('user.user_dashboard'))
-    location_filter = sanitize_input(request.values.get('location'), max_length=100)
-    alert_type_filter = sanitize_input(request.values.get('alert_type'), max_length=60)
-    alert_level_filter = sanitize_input(request.values.get('alert_level'), max_length=30)
-    outcome_filter = sanitize_input(request.values.get('outcome'), max_length=20) or 'all'
+    filters = _alert_filters()
+    location_filter = filters['location']
+    alert_type_filter = filters['alert_type']
+    alert_level_filter = filters['alert_level']
+    follow_days = filters['follow_days']
+    min_days = filters['min_days']
+    threshold_q = filters['threshold_q']
+    outcome_filter = _text_arg('outcome', 20) or 'all'
     if outcome_filter not in {'all', 'hit', 'false_alarm', 'insufficient'}:
         outcome_filter = 'all'
 
-    follow_days = _safe_int(request.values.get('follow_days'), 3, minimum=1, maximum=7)
-    min_days = _safe_int(request.values.get('min_days'), 7, minimum=3, maximum=45)
-    threshold_q_options = [0.75, 0.80, 0.85, 0.90, 0.95]
-    try:
-        threshold_q = float(request.values.get('threshold_q', 0.90))
-    except (TypeError, ValueError):
-        threshold_q = 0.90
-    if threshold_q not in threshold_q_options:
-        threshold_q = min(threshold_q_options, key=lambda option: abs(option - threshold_q))
-
-    alert_min_utc = WeatherAlert.query.with_entities(db.func.min(WeatherAlert.alert_date)).scalar()
-    alert_max_utc = WeatherAlert.query.with_entities(db.func.max(WeatherAlert.alert_date)).scalar()
-    record_min_utc = MedicalRecord.query.filter(MedicalRecord.visit_time.isnot(None)).with_entities(db.func.min(MedicalRecord.visit_time)).scalar()
-    record_max_utc = MedicalRecord.query.filter(MedicalRecord.visit_time.isnot(None)).with_entities(db.func.max(MedicalRecord.visit_time)).scalar()
-    alert_min_date = utc_to_local_date(alert_min_utc) if alert_min_utc else None
-    alert_max_date = utc_to_local_date(alert_max_utc) if alert_max_utc else None
-    record_min_date = utc_to_local_date(record_min_utc) if record_min_utc else None
-    record_max_date = utc_to_local_date(record_max_utc) if record_max_utc else None
-    overlap_start_all, overlap_end_all, overlap_exists_all = _compute_date_overlap(
-        alert_min_date, alert_max_date, record_min_date, record_max_date
-    )
-
-    start_raw = request.values.get('start_date')
-    end_raw = request.values.get('end_date')
-    start_date = parse_date(start_raw)
-    end_date = parse_date(end_raw)
-    auto_range = False
-    date_swapped = False
-    if not start_raw and not end_raw:
-        latest_alert_utc = WeatherAlert.query.with_entities(db.func.max(WeatherAlert.alert_date)).scalar()
-        latest_alert_date = utc_to_local_date(latest_alert_utc) if latest_alert_utc else None
-        if latest_alert_date:
-            end_date = latest_alert_date
-            start_date = end_date - timedelta(days=60)
-            auto_range = True
-    if not end_date:
-        end_date = today_local()
-    if not start_date:
-        start_date = end_date - timedelta(days=30)
-    if start_date > end_date:
-        start_date, end_date = end_date, start_date
-        date_swapped = True
-
-    range_query = WeatherAlert.query.filter(
-        WeatherAlert.alert_date >= date_to_utc_start(start_date),
-        WeatherAlert.alert_date <= date_to_utc_end(end_date)
-    )
-    alert_type_options = [item[0] for item in range_query.with_entities(WeatherAlert.alert_type).distinct().order_by(WeatherAlert.alert_type).all() if item[0]]
-    alert_level_options = [item[0] for item in range_query.with_entities(WeatherAlert.alert_level).distinct().order_by(WeatherAlert.alert_level).all() if item[0]]
-
-    query = range_query
-    if location_filter:
-        query = query.filter(WeatherAlert.location.contains(location_filter))
-    if alert_type_filter:
-        query = query.filter(WeatherAlert.alert_type == alert_type_filter)
-    if alert_level_filter:
-        query = query.filter(WeatherAlert.alert_level == alert_level_filter)
-
-    alert_rows = query.order_by(WeatherAlert.alert_date.desc()).all()
+    coverage = _alert_record_coverage()
+    start_date, end_date, auto_range, date_swapped = _resolve_alert_date_range(60, 30)
+    alert_type_options, alert_level_options, alert_rows = _filtered_alerts(start_date, end_date, filters)
 
     record_start = start_date - timedelta(days=follow_days)
     record_end = end_date + timedelta(days=follow_days)
-    records = MedicalRecord.query.filter(
-        MedicalRecord.visit_time.isnot(None),
-        MedicalRecord.visit_time >= date_to_utc_start(record_start),
-        MedicalRecord.visit_time <= date_to_utc_end(record_end)
-    ).with_entities(
-        MedicalRecord.community,
-        MedicalRecord.visit_time
-    ).all()
-
-    daily_visits = {}
-    global_daily_visits = {}
-    for record in records:
-        day = utc_to_local_date(record.visit_time)
-        if day is None:
-            continue
-        key = (record.community or '').strip() or '未知'
-        day_map = daily_visits.setdefault(key, {})
-        day_map[day] = day_map.get(day, 0) + 1
-        global_daily_visits[day] = global_daily_visits.get(day, 0) + 1
-
-    all_days = []
-    cursor = record_start
-    while cursor <= record_end:
-        all_days.append(cursor)
-        cursor += timedelta(days=1)
-
-    def build_threshold(day_map):
-        values = [day_map.get(day, 0) for day in all_days]
-        observed_days = sum(1 for value in values if value > 0)
-        if observed_days < min_days:
-            return None, observed_days
-        sorted_values = sorted(values)
-        threshold = _percentile(sorted_values, threshold_q)
-        return threshold, observed_days
-
-    threshold_by_location = {}
-    sample_days_by_location = {}
-    for key, day_map in daily_visits.items():
-        threshold, observed_days = build_threshold(day_map)
-        threshold_by_location[key] = threshold
-        sample_days_by_location[key] = observed_days
-
-    global_threshold, global_sample_days = build_threshold(global_daily_visits)
-
-    outcome_labels = {
-        'hit': '命中',
-        'false_alarm': '空报',
-        'insufficient': '样本不足'
-    }
-    severity_labels = {
-        'Extreme': '极高',
-        'Severe': '高',
-        'Moderate': '中',
-        'Minor': '低',
-        'Unknown': '未知'
-    }
-    certainty_labels = {
-        'Observed': '已发生',
-        'Likely': '较可能',
-        'Possible': '可能',
-        'Unlikely': '较不可能',
-        'Unknown': '未知'
-    }
-    urgency_labels = {
-        'Immediate': '立即',
-        'Expected': '预期',
-        'Future': '后续',
-        'Past': '已过',
-        'Unknown': '未知'
-    }
+    records, daily_visits, global_daily_visits = _daily_visits_by_location(record_start, record_end)
+    profile = _threshold_profile(
+        daily_visits, global_daily_visits, date_span(record_start, record_end), min_days, threshold_q
+    )
 
     timeline_rows = []
     pre_rows = []
     for alert in alert_rows:
         alert_day = utc_to_local_date(alert.alert_date)
         location_key = (alert.location or '').strip() or '未知'
-        location_day_map = daily_visits.get(location_key)
-        using_global = False
-        if location_day_map is None:
-            location_day_map = global_daily_visits
-            threshold = global_threshold
-            observed_days = global_sample_days
-            eval_key = '__GLOBAL__'
-            eval_label = '全局基线'
-            using_global = True
-        else:
-            threshold = threshold_by_location.get(location_key)
-            observed_days = sample_days_by_location.get(location_key, 0)
-            eval_key = location_key
-            eval_label = location_key
-
+        location_day_map, threshold, observed_days, eval_key, eval_label, using_global = _alert_baseline(
+            location_key, daily_visits, global_daily_visits, profile
+        )
         threshold_evaluable = bool(
             threshold is not None and
             threshold > 0 and
             observed_days >= min_days
         )
-
-        window_points = []
-        peak_visits = 0
-        peak_day = None
-        first_hit_day = None
-        if alert_day:
-            for offset in range(follow_days + 1):
-                day = alert_day + timedelta(days=offset)
-                visits = location_day_map.get(day, 0)
-                window_points.append({'day': day.strftime('%Y-%m-%d'), 'visits': visits})
-                if visits > peak_visits:
-                    peak_visits = visits
-                    peak_day = day
-                if threshold_evaluable and first_hit_day is None and visits >= threshold:
-                    first_hit_day = day
-
-        hit = first_hit_day is not None
-        lead_days = (first_hit_day - alert_day).days if (first_hit_day and alert_day) else None
-        lead_hours = lead_days * 24 if lead_days is not None else None
-        observed_ratio = (peak_visits / threshold) if (threshold_evaluable and threshold and threshold > 0) else None
+        window = _alert_window(alert_day, location_day_map, follow_days, threshold, threshold_evaluable)
         outcome = 'insufficient'
         if threshold_evaluable:
-            outcome = 'hit' if hit else 'false_alarm'
+            outcome = 'hit' if window[3] is not None else 'false_alarm'
 
-        severity, certainty, urgency = _alert_cap_semantics(
+        severity, certainty, urgency = alert_cap_semantics(
             alert.alert_level, alert.alert_type, alert.description
         )
-        action_text = _action_from_alert_semantics(severity, certainty, urgency)
-        impact_bucket = _impact_bucket_from_severity(severity)
-        likelihood_bucket = _likelihood_bucket_from_certainty(certainty)
-
-        affected_communities = _json_loads_safe(alert.affected_communities, [])
+        affected_communities = json_loads_safe(alert.affected_communities, [])
         if not isinstance(affected_communities, list):
             affected_communities = []
-        disease_corr = _json_loads_safe(alert.disease_correlation, {})
+        disease_corr = json_loads_safe(alert.disease_correlation, {})
         if not isinstance(disease_corr, dict):
             disease_corr = {}
 
-        row = {
-            'id': alert.id,
-            'alert_day': alert_day,
+        row = _alert_row(alert, alert_day, location_key, threshold, threshold_evaluable, eval_label,
+                         window, outcome, (severity, certainty, urgency))
+        row.update({
             'alert_time': alert.alert_date,
-            'alert_time_text': alert.alert_date.strftime('%Y-%m-%d %H:%M') if alert.alert_date else '--',
-            'location': location_key,
-            'alert_type': alert.alert_type or '--',
-            'alert_level': alert.alert_level or '--',
-            'description': alert.description or '--',
-            'threshold': threshold,
-            'threshold_evaluable': threshold_evaluable,
-            'threshold_source': eval_label,
-            'peak_visits': peak_visits,
-            'peak_day_text': peak_day.strftime('%Y-%m-%d') if peak_day else '--',
-            'first_hit_day_text': first_hit_day.strftime('%Y-%m-%d') if first_hit_day else '--',
-            'lead_days': lead_days,
-            'lead_hours': lead_hours,
-            'observed_ratio': observed_ratio,
-            'outcome': outcome,
-            'outcome_label': outcome_labels[outcome],
-            'severity': severity,
-            'severity_label': severity_labels.get(severity, severity),
-            'certainty': certainty,
-            'certainty_label': certainty_labels.get(certainty, certainty),
-            'urgency': urgency,
-            'urgency_label': urgency_labels.get(urgency, urgency),
-            'action_text': action_text,
-            'impact_bucket': impact_bucket,
-            'likelihood_bucket': likelihood_bucket,
-            'window_points': window_points,
+            'action_text': action_from_alert_semantics(severity, certainty, urgency),
+            'impact_bucket': impact_bucket_from_severity(severity),
+            'likelihood_bucket': likelihood_bucket_from_certainty(certainty),
             'affected_communities_count': len(affected_communities),
             'disease_corr': disease_corr,
             'eval_key': eval_key,
             'using_global': using_global
-        }
+        })
         pre_rows.append(row)
         timeline_rows.append({
             'date': alert_day.strftime('%Y-%m-%d') if alert_day else '--',
@@ -2047,14 +1547,7 @@ def alerts_history():
     matched_events = 0
     total_events = 0
     for key in key_set:
-        if key == '__GLOBAL__':
-            day_map = global_daily_visits
-            threshold = global_threshold
-            key_label = '全局基线'
-        else:
-            day_map = daily_visits.get(key, {})
-            threshold = threshold_by_location.get(key)
-            key_label = key
+        day_map, threshold, key_label = _baseline_for_key(key, daily_visits, global_daily_visits, profile)
         if threshold is None or threshold <= 0:
             continue
 
@@ -2184,10 +1677,8 @@ def alerts_history():
     global_fallback_count = sum(1 for row in rows if row['using_global'])
     if global_fallback_count > 0:
         data_notes.append(f"{global_fallback_count} 条预警无对应社区病例，使用全局基线核验")
-    if alert_min_date and alert_max_date and record_min_date and record_max_date and not overlap_exists_all:
-        data_notes.append(
-            f"预警时间范围 {alert_min_date}~{alert_max_date} 与病例时间范围 {record_min_date}~{record_max_date} 无重叠，命中仅可视为不可核验"
-        )
+    if _coverage_note(coverage):
+        data_notes.append(_coverage_note(coverage))
 
     return render_template(
         'alerts_history.html',
@@ -2200,7 +1691,7 @@ def alerts_history():
         follow_days=follow_days,
         min_days=min_days,
         threshold_q=threshold_q,
-        threshold_q_options=threshold_q_options,
+        threshold_q_options=THRESHOLD_Q_OPTIONS,
         follow_days_options=[1, 2, 3, 5, 7],
         min_days_options=[3, 5, 7, 14, 21],
         alert_type_options=alert_type_options,
@@ -2224,9 +1715,9 @@ def alerts_history():
             'matched_events': matched_events,
             'miss_count': miss_count,
             'pod': pod,
-            'ground_truth_overlap': overlap_exists_all,
-            'overlap_start': overlap_start_all,
-            'overlap_end': overlap_end_all
+            'ground_truth_overlap': coverage['has_overlap'],
+            'overlap_start': coverage['overlap_start'],
+            'overlap_end': coverage['overlap_end']
         },
         chart_payload={
             'outcome': {
@@ -2247,160 +1738,25 @@ def alerts_history():
     )
 
 
-@bp.route('/alerts/accuracy', methods=['GET', 'POST'], endpoint='alerts_accuracy')
-@login_required
+@admin_route('/alerts/accuracy', methods=['GET', 'POST'], endpoint='alerts_accuracy')
 def alerts_accuracy():
     """预警准确率统计（分类核验 + 可靠性 + 阈值敏感性）"""
-    if not _require_admin():
-        return redirect(url_for('user.user_dashboard'))
-    location_filter = sanitize_input(request.values.get('location'), max_length=100)
-    alert_type_filter = sanitize_input(request.values.get('alert_type'), max_length=60)
-    alert_level_filter = sanitize_input(request.values.get('alert_level'), max_length=30)
+    filters = _alert_filters()
+    follow_days = filters['follow_days']
+    min_days = filters['min_days']
+    threshold_q = filters['threshold_q']
 
-    follow_days = _safe_int(request.values.get('follow_days'), 3, minimum=1, maximum=7)
-    min_days = _safe_int(request.values.get('min_days'), 7, minimum=3, maximum=45)
-    threshold_q_options = [0.75, 0.80, 0.85, 0.90, 0.95]
-    try:
-        threshold_q = float(request.values.get('threshold_q', 0.90))
-    except (TypeError, ValueError):
-        threshold_q = 0.90
-    if threshold_q not in threshold_q_options:
-        threshold_q = min(threshold_q_options, key=lambda option: abs(option - threshold_q))
-
-    alert_min_utc = WeatherAlert.query.with_entities(db.func.min(WeatherAlert.alert_date)).scalar()
-    alert_max_utc = WeatherAlert.query.with_entities(db.func.max(WeatherAlert.alert_date)).scalar()
-    record_min_utc = MedicalRecord.query.filter(MedicalRecord.visit_time.isnot(None)).with_entities(db.func.min(MedicalRecord.visit_time)).scalar()
-    record_max_utc = MedicalRecord.query.filter(MedicalRecord.visit_time.isnot(None)).with_entities(db.func.max(MedicalRecord.visit_time)).scalar()
-    alert_min_date = utc_to_local_date(alert_min_utc) if alert_min_utc else None
-    alert_max_date = utc_to_local_date(alert_max_utc) if alert_max_utc else None
-    record_min_date = utc_to_local_date(record_min_utc) if record_min_utc else None
-    record_max_date = utc_to_local_date(record_max_utc) if record_max_utc else None
-    overlap_start_all, overlap_end_all, overlap_exists_all = _compute_date_overlap(
-        alert_min_date, alert_max_date, record_min_date, record_max_date
-    )
-
-    start_raw = request.values.get('start_date')
-    end_raw = request.values.get('end_date')
-    start_date = parse_date(start_raw)
-    end_date = parse_date(end_raw)
-    auto_range = False
-    date_swapped = False
-    if not start_raw and not end_raw:
-        latest_alert_utc = WeatherAlert.query.with_entities(db.func.max(WeatherAlert.alert_date)).scalar()
-        latest_alert_date = utc_to_local_date(latest_alert_utc) if latest_alert_utc else None
-        if latest_alert_date:
-            end_date = latest_alert_date
-            start_date = end_date - timedelta(days=90)
-            auto_range = True
-    if not end_date:
-        end_date = today_local()
-    if not start_date:
-        start_date = end_date - timedelta(days=90)
-    if start_date > end_date:
-        start_date, end_date = end_date, start_date
-        date_swapped = True
-
-    range_query = WeatherAlert.query.filter(
-        WeatherAlert.alert_date >= date_to_utc_start(start_date),
-        WeatherAlert.alert_date <= date_to_utc_end(end_date)
-    )
-    alert_type_options = [
-        item[0] for item in
-        range_query.with_entities(WeatherAlert.alert_type).distinct().order_by(WeatherAlert.alert_type).all()
-        if item[0]
-    ]
-    alert_level_options = [
-        item[0] for item in
-        range_query.with_entities(WeatherAlert.alert_level).distinct().order_by(WeatherAlert.alert_level).all()
-        if item[0]
-    ]
-
-    query = range_query
-    if location_filter:
-        query = query.filter(WeatherAlert.location.contains(location_filter))
-    if alert_type_filter:
-        query = query.filter(WeatherAlert.alert_type == alert_type_filter)
-    if alert_level_filter:
-        query = query.filter(WeatherAlert.alert_level == alert_level_filter)
-    alert_rows = query.order_by(WeatherAlert.alert_date.desc()).all()
+    coverage = _alert_record_coverage()
+    start_date, end_date, auto_range, date_swapped = _resolve_alert_date_range(90, 90)
+    alert_type_options, alert_level_options, alert_rows = _filtered_alerts(start_date, end_date, filters)
 
     record_start = start_date - timedelta(days=follow_days)
     record_end = end_date + timedelta(days=follow_days)
-    records = MedicalRecord.query.filter(
-        MedicalRecord.visit_time.isnot(None),
-        MedicalRecord.visit_time >= date_to_utc_start(record_start),
-        MedicalRecord.visit_time <= date_to_utc_end(record_end)
-    ).with_entities(
-        MedicalRecord.community,
-        MedicalRecord.visit_time
-    ).all()
-
-    daily_visits = {}
-    global_daily_visits = {}
-    for record in records:
-        day = utc_to_local_date(record.visit_time)
-        if day is None:
-            continue
-        key = (record.community or '').strip() or '未知'
-        day_map = daily_visits.setdefault(key, {})
-        day_map[day] = day_map.get(day, 0) + 1
-        global_daily_visits[day] = global_daily_visits.get(day, 0) + 1
-
-    all_days = []
-    cursor = record_start
-    while cursor <= record_end:
-        all_days.append(cursor)
-        cursor += timedelta(days=1)
-
-    def build_threshold(day_map, q_value):
-        values = [day_map.get(day, 0) for day in all_days]
-        observed_days = sum(1 for value in values if value > 0)
-        if observed_days < min_days:
-            return None, observed_days
-        threshold = _percentile(sorted(values), q_value)
-        return threshold, observed_days
-
-    threshold_profiles = {}
-    for q_value in threshold_q_options:
-        threshold_by_location = {}
-        sample_days_by_location = {}
-        for key, day_map in daily_visits.items():
-            threshold, observed_days = build_threshold(day_map, q_value)
-            threshold_by_location[key] = threshold
-            sample_days_by_location[key] = observed_days
-        global_threshold, global_sample_days = build_threshold(global_daily_visits, q_value)
-        threshold_profiles[q_value] = {
-            'threshold_by_location': threshold_by_location,
-            'sample_days_by_location': sample_days_by_location,
-            'global_threshold': global_threshold,
-            'global_sample_days': global_sample_days
-        }
-
-    outcome_labels = {
-        'hit': '命中',
-        'false_alarm': '空报',
-        'insufficient': '样本不足'
-    }
-    certainty_labels = {
-        'Observed': '已发生',
-        'Likely': '较可能',
-        'Possible': '可能',
-        'Unlikely': '较不可能',
-        'Unknown': '未知'
-    }
-    severity_labels = {
-        'Extreme': '极高',
-        'Severe': '高',
-        'Moderate': '中',
-        'Minor': '低',
-        'Unknown': '未知'
-    }
-    urgency_labels = {
-        'Immediate': '立即',
-        'Expected': '预期',
-        'Future': '后续',
-        'Past': '已过',
-        'Unknown': '未知'
+    records, daily_visits, global_daily_visits = _daily_visits_by_location(record_start, record_end)
+    all_days = date_span(record_start, record_end)
+    threshold_profiles = {
+        q_value: _threshold_profile(daily_visits, global_daily_visits, all_days, min_days, q_value)
+        for q_value in THRESHOLD_Q_OPTIONS
     }
 
     lead_bucket_labels = ['当天', '+24h', '+48h', '+72h', '>72h']
@@ -2420,10 +1776,6 @@ def alerts_accuracy():
 
     def evaluate_quantile(q_value, include_rows=False):
         profile = threshold_profiles[q_value]
-        threshold_by_location = profile['threshold_by_location']
-        sample_days_by_location = profile['sample_days_by_location']
-        global_threshold = profile['global_threshold']
-        global_sample_days = profile['global_sample_days']
 
         total_alerts = len(alert_rows)
         evaluable_alerts = 0
@@ -2447,59 +1799,28 @@ def alerts_accuracy():
         for alert in alert_rows:
             alert_day = utc_to_local_date(alert.alert_date)
             location_key = (alert.location or '').strip() or '未知'
-            location_day_map = daily_visits.get(location_key)
-            using_global = False
-            if location_day_map is None:
-                location_day_map = global_daily_visits
-                threshold = global_threshold
-                observed_days = global_sample_days
-                eval_key = '__GLOBAL__'
-                threshold_source = '全局基线'
-                using_global = True
-            else:
-                threshold = threshold_by_location.get(location_key)
-                observed_days = sample_days_by_location.get(location_key, 0)
-                eval_key = location_key
-                threshold_source = location_key
-
+            location_day_map, threshold, observed_days, eval_key, threshold_source, using_global = _alert_baseline(
+                location_key, daily_visits, global_daily_visits, profile
+            )
             threshold_evaluable = bool(
                 alert_day is not None and
                 threshold is not None and
                 threshold > 0 and
                 observed_days >= min_days
             )
-
-            window_points = []
-            peak_visits = 0
-            peak_day = None
-            first_hit_day = None
-            if alert_day is not None:
-                for offset in range(follow_days + 1):
-                    day = alert_day + timedelta(days=offset)
-                    visits = location_day_map.get(day, 0)
-                    window_points.append({
-                        'day': day.strftime('%Y-%m-%d'),
-                        'visits': visits
-                    })
-                    if visits > peak_visits:
-                        peak_visits = visits
-                        peak_day = day
-                    if threshold_evaluable and first_hit_day is None and visits >= threshold:
-                        first_hit_day = day
-
-            hit = first_hit_day is not None
+            window = _alert_window(alert_day, location_day_map, follow_days, threshold, threshold_evaluable)
+            first_hit_day = window[3]
             lead_days = (first_hit_day - alert_day).days if (first_hit_day and alert_day) else None
             lead_hours = lead_days * 24 if lead_days is not None else None
-            observed_ratio = (peak_visits / threshold) if (threshold_evaluable and threshold and threshold > 0) else None
             if threshold_evaluable:
-                outcome = 'hit' if hit else 'false_alarm'
+                outcome = 'hit' if first_hit_day is not None else 'false_alarm'
             else:
                 outcome = 'insufficient'
 
-            severity, certainty, urgency = _alert_cap_semantics(
+            severity, certainty, urgency = alert_cap_semantics(
                 alert.alert_level, alert.alert_type, alert.description
             )
-            probability = _certainty_to_probability(certainty)
+            probability = certainty_to_probability(certainty)
 
             if threshold_evaluable:
                 evaluable_alerts += 1
@@ -2538,45 +1859,23 @@ def alerts_accuracy():
                         'observed': 1 if outcome == 'hit' else 0
                     })
 
-                level_key = alert.alert_level or '--'
-                level_group = level_groups.setdefault(level_key, {
-                    'name': level_key,
-                    'alerts': 0,
-                    'hit': 0,
-                    'false_alarm': 0,
-                    'lead_sum': 0.0,
-                    'lead_n': 0
-                })
-                level_group['alerts'] += 1
-                if outcome == 'hit':
-                    level_group['hit'] += 1
-                    if lead_hours is not None:
-                        level_group['lead_sum'] += lead_hours
-                        level_group['lead_n'] += 1
-                else:
-                    level_group['false_alarm'] += 1
-
-                type_key = alert.alert_type or '--'
-                type_group = type_groups.setdefault(type_key, {
-                    'name': type_key,
-                    'alerts': 0,
-                    'hit': 0,
-                    'false_alarm': 0,
-                    'lead_sum': 0.0,
-                    'lead_n': 0
-                })
-                type_group['alerts'] += 1
-                if outcome == 'hit':
-                    type_group['hit'] += 1
-                    if lead_hours is not None:
-                        type_group['lead_sum'] += lead_hours
-                        type_group['lead_n'] += 1
-                else:
-                    type_group['false_alarm'] += 1
+                for groups, group_key in ((level_groups, alert.alert_level or '--'),
+                                          (type_groups, alert.alert_type or '--')):
+                    group = groups.setdefault(group_key, {
+                        'name': group_key, 'alerts': 0, 'hit': 0, 'false_alarm': 0, 'lead_sum': 0.0, 'lead_n': 0
+                    })
+                    group['alerts'] += 1
+                    if outcome == 'hit':
+                        group['hit'] += 1
+                        if lead_hours is not None:
+                            group['lead_sum'] += lead_hours
+                            group['lead_n'] += 1
+                    else:
+                        group['false_alarm'] += 1
 
                 certainty_group = certainty_groups.setdefault(certainty, {
                     'certainty': certainty,
-                    'label': certainty_labels.get(certainty, certainty),
+                    'label': CERTAINTY_LABELS.get(certainty, certainty),
                     'probability': probability,
                     'alerts': 0,
                     'hit': 0,
@@ -2591,34 +1890,10 @@ def alerts_accuracy():
                 insufficient_alerts += 1
 
             if include_rows:
-                rows.append({
-                    'id': alert.id,
-                    'alert_time_text': alert.alert_date.strftime('%Y-%m-%d %H:%M') if alert.alert_date else '--',
-                    'alert_day': alert_day,
-                    'location': location_key,
-                    'alert_type': alert.alert_type or '--',
-                    'alert_level': alert.alert_level or '--',
-                    'description': alert.description or '--',
-                    'threshold': threshold,
-                    'threshold_source': threshold_source,
-                    'threshold_evaluable': threshold_evaluable,
-                    'peak_visits': peak_visits,
-                    'peak_day_text': peak_day.strftime('%Y-%m-%d') if peak_day else '--',
-                    'first_hit_day_text': first_hit_day.strftime('%Y-%m-%d') if first_hit_day else '--',
-                    'lead_hours': lead_hours,
-                    'observed_ratio': observed_ratio,
-                    'outcome': outcome,
-                    'outcome_label': outcome_labels[outcome],
-                    'severity': severity,
-                    'severity_label': severity_labels.get(severity, severity),
-                    'certainty': certainty,
-                    'certainty_label': certainty_labels.get(certainty, certainty),
-                    'urgency': urgency,
-                    'urgency_label': urgency_labels.get(urgency, urgency),
-                    'probability': probability,
-                    'using_global': using_global,
-                    'window_points': window_points
-                })
+                row = _alert_row(alert, alert_day, location_key, threshold, threshold_evaluable, threshold_source,
+                                 window, outcome, (severity, certainty, urgency))
+                row.update({'probability': probability, 'using_global': using_global})
+                rows.append(row)
 
         warned_days_by_key = {}
         for key, alert_days in alert_days_by_key.items():
@@ -2640,14 +1915,7 @@ def alerts_accuracy():
         warned_events_by_day = defaultdict(int)
 
         for key, warned_days in warned_days_by_key.items():
-            if key == '__GLOBAL__':
-                day_map = global_daily_visits
-                threshold = global_threshold
-                key_label = '全局基线'
-            else:
-                day_map = daily_visits.get(key, {})
-                threshold = threshold_by_location.get(key)
-                key_label = key
+            day_map, threshold, key_label = _baseline_for_key(key, daily_visits, global_daily_visits, profile)
             if threshold is None or threshold <= 0:
                 continue
 
@@ -2690,15 +1958,15 @@ def alerts_accuracy():
             'correct_negative': correct_negative_count,
             'total': hit_count + false_alarm_count + miss_count + correct_negative_count
         }
-        scores = _compute_contingency_scores(
+        scores = compute_contingency_scores(
             hit_count=hit_count,
             false_alarm_count=false_alarm_count,
             miss_count=miss_count,
             correct_negative_count=correct_negative_count
         )
 
-        alert_hit_rate = _safe_ratio(hit_alerts, evaluable_alerts)
-        alert_far = _safe_ratio(false_alarm_alerts, evaluable_alerts)
+        alert_hit_rate = safe_ratio(hit_alerts, evaluable_alerts)
+        alert_far = safe_ratio(false_alarm_alerts, evaluable_alerts)
         avg_lead_hours = (sum(lead_hours_values) / len(lead_hours_values)) if lead_hours_values else None
 
         reliability_rows = []
@@ -2744,7 +2012,7 @@ def alerts_accuracy():
             ) / len(certainty_pairs)
             if brier_reference > 0:
                 brier_skill = 1 - (brier_score / brier_reference)
-            roc_auc = _roc_auc_from_pairs(certainty_pairs)
+            roc_auc = roc_auc_from_pairs(certainty_pairs)
 
         weekly_calibration_rows = []
         for week_key, week_item in sorted(weekly_calibration_map.items(), key=lambda kv: kv[0]):
@@ -2762,7 +2030,7 @@ def alerts_accuracy():
                 (item['probability'] - week_prob_avg) ** 2
                 for item in pairs
             ) / sample_count
-            week_auc = _roc_auc_from_pairs(pairs)
+            week_auc = roc_auc_from_pairs(pairs)
             weekly_calibration_rows.append({
                 'week_key': week_key,
                 'sample_count': sample_count,
@@ -2773,31 +2041,22 @@ def alerts_accuracy():
                 'roc_auc': week_auc
             })
 
-        level_rows = []
-        for group in level_groups.values():
-            level_rows.append({
-                'name': group['name'],
-                'alerts': group['alerts'],
-                'hit': group['hit'],
-                'false_alarm': group['false_alarm'],
-                'hit_rate': _safe_ratio(group['hit'], group['alerts']),
-                'far': _safe_ratio(group['false_alarm'], group['alerts']),
-                'avg_lead_hours': (group['lead_sum'] / group['lead_n']) if group['lead_n'] else None
-            })
-        level_rows = sorted(level_rows, key=lambda item: (item['alerts'], item['hit']), reverse=True)
+        def group_rows(groups):
+            return sorted([
+                {
+                    'name': group['name'],
+                    'alerts': group['alerts'],
+                    'hit': group['hit'],
+                    'false_alarm': group['false_alarm'],
+                    'hit_rate': safe_ratio(group['hit'], group['alerts']),
+                    'far': safe_ratio(group['false_alarm'], group['alerts']),
+                    'avg_lead_hours': (group['lead_sum'] / group['lead_n']) if group['lead_n'] else None
+                }
+                for group in groups.values()
+            ], key=lambda item: (item['alerts'], item['hit']), reverse=True)
 
-        type_rows = []
-        for group in type_groups.values():
-            type_rows.append({
-                'name': group['name'],
-                'alerts': group['alerts'],
-                'hit': group['hit'],
-                'false_alarm': group['false_alarm'],
-                'hit_rate': _safe_ratio(group['hit'], group['alerts']),
-                'far': _safe_ratio(group['false_alarm'], group['alerts']),
-                'avg_lead_hours': (group['lead_sum'] / group['lead_n']) if group['lead_n'] else None
-            })
-        type_rows = sorted(type_rows, key=lambda item: (item['alerts'], item['hit']), reverse=True)
+        level_rows = group_rows(level_groups)
+        type_rows = group_rows(type_groups)
 
         certainty_rows = []
         for group in certainty_groups.values():
@@ -2808,7 +2067,7 @@ def alerts_accuracy():
                 'alerts': group['alerts'],
                 'hit': group['hit'],
                 'false_alarm': group['false_alarm'],
-                'observed_rate': _safe_ratio(group['hit'], group['alerts'])
+                'observed_rate': safe_ratio(group['hit'], group['alerts'])
             })
         certainty_rows = sorted(certainty_rows, key=lambda item: item['probability'], reverse=True)
 
@@ -2890,7 +2149,7 @@ def alerts_accuracy():
         }
 
     evaluations = {}
-    for q_value in threshold_q_options:
+    for q_value in THRESHOLD_Q_OPTIONS:
         evaluations[q_value] = evaluate_quantile(
             q_value,
             include_rows=(q_value == threshold_q)
@@ -2901,7 +2160,7 @@ def alerts_accuracy():
         return (value * 100.0) if value is not None else None
 
     sensitivity_rows = []
-    for q_value in threshold_q_options:
+    for q_value in THRESHOLD_Q_OPTIONS:
         result = evaluations[q_value]
         sensitivity_rows.append({
             'quantile': q_value,
@@ -2994,24 +2253,22 @@ def alerts_accuracy():
         data_notes.append(f"{selected['global_fallback_count']} 条预警无对应社区病例，已回退到全局基线")
     if contingency['total'] == 0 and selected['evaluable_alerts'] > 0:
         data_notes.append("当前评估窗口未形成可用于日级混淆矩阵的样本网格")
-    if alert_min_date and alert_max_date and record_min_date and record_max_date and not overlap_exists_all:
-        data_notes.append(
-            f"预警时间范围 {alert_min_date}~{alert_max_date} 与病例时间范围 {record_min_date}~{record_max_date} 无重叠，命中仅可视为不可核验"
-        )
+    if _coverage_note(coverage):
+        data_notes.append(_coverage_note(coverage))
 
     return render_template(
         'alerts_accuracy.html',
         start_date=start_date.strftime('%Y-%m-%d'),
         end_date=end_date.strftime('%Y-%m-%d'),
-        location_filter=location_filter,
-        alert_type_filter=alert_type_filter,
-        alert_level_filter=alert_level_filter,
+        location_filter=filters['location'],
+        alert_type_filter=filters['alert_type'],
+        alert_level_filter=filters['alert_level'],
         follow_days=follow_days,
         min_days=min_days,
         threshold_q=threshold_q,
         follow_days_options=[1, 2, 3, 5, 7],
         min_days_options=[3, 5, 7, 14, 21],
-        threshold_q_options=threshold_q_options,
+        threshold_q_options=THRESHOLD_Q_OPTIONS,
         alert_type_options=alert_type_options,
         alert_level_options=alert_level_options,
         rows=selected['rows'],
@@ -3030,32 +2287,26 @@ def alerts_accuracy():
         chart_payload=chart_payload
         ,
         overlap_meta={
-            'has_overlap': overlap_exists_all,
-            'overlap_start': overlap_start_all,
-            'overlap_end': overlap_end_all,
-            'alert_min': alert_min_date,
-            'alert_max': alert_max_date,
-            'record_min': record_min_date,
-            'record_max': record_max_date
+            'has_overlap': coverage['has_overlap'],
+            'overlap_start': coverage['overlap_start'],
+            'overlap_end': coverage['overlap_end'],
+            'alert_min': coverage['alert_min'],
+            'alert_max': coverage['alert_max'],
+            'record_min': coverage['record_min'],
+            'record_max': coverage['record_max']
         }
     )
 
 
-@bp.route('/reports', endpoint='reports_center')
-@login_required
+@admin_route('/reports', endpoint='reports_center')
 def reports_center():
     """报告导出"""
-    if not _require_admin():
-        return redirect(url_for('user.user_dashboard'))
     return render_template('reports.html')
 
 
-@bp.route('/reports/export', methods=['POST'], endpoint='reports_export')
-@login_required
+@admin_route('/reports/export', methods=['POST'], endpoint='reports_export')
 def reports_export():
     """导出周报/月报"""
-    if not _require_admin():
-        return redirect(url_for('user.user_dashboard'))
     report_type = request.form.get('report_type', 'weekly')
     report_format = request.form.get('format', 'excel')
 
@@ -3075,11 +2326,7 @@ def reports_export():
 
     summary = {
         'period': f"{start_date} ~ {end_date}",
-        'total_visits': MedicalRecord.query.filter(
-            MedicalRecord.visit_time.isnot(None),
-            MedicalRecord.visit_time >= date_to_utc_start(start_date),
-            MedicalRecord.visit_time <= date_to_utc_end(end_date)
-        ).count(),
+        'total_visits': _visit_query(start_date, end_date).count(),
         'total_alerts': WeatherAlert.query.filter(
             WeatherAlert.alert_date >= date_to_utc_start(start_date),
             WeatherAlert.alert_date <= date_to_utc_end(end_date)
@@ -3221,13 +2468,9 @@ def annual_report():
     )
 
 
-@bp.route('/analysis/pilot', endpoint='pilot_dashboard')
-@login_required
+@admin_route('/analysis/pilot', endpoint='pilot_dashboard')
 def pilot_dashboard():
     """试点数据看板（管理员）"""
-    if not _require_admin():
-        return redirect(url_for('user.user_dashboard'))
-
     days = request.args.get('days', default=30, type=int)
     days = max(1, min(days, 365))
 
@@ -3304,13 +2547,9 @@ def pilot_dashboard():
     )
 
 
-@bp.route('/analysis/pilot/export.csv', endpoint='pilot_export_csv')
-@login_required
+@admin_route('/analysis/pilot/export.csv', endpoint='pilot_export_csv')
 def pilot_export_csv():
     """导出试点埋点（CSV）"""
-    if not _require_admin():
-        return redirect(url_for('user.user_dashboard'))
-
     days = request.args.get('days', default=30, type=int)
     days = max(1, min(days, 365))
     start_ts = utcnow() - timedelta(days=days)
@@ -3342,13 +2581,9 @@ def pilot_export_csv():
     )
 
 
-@bp.route('/analysis/model-quality', endpoint='model_quality')
-@login_required
+@admin_route('/analysis/model-quality', endpoint='model_quality')
 def model_quality():
     """模型可靠性（护栏 + 回测报告）"""
-    if not _require_admin():
-        return redirect(url_for('user.user_dashboard'))
-
     from pathlib import Path
 
     base_dir = Path(__file__).resolve().parents[1]
