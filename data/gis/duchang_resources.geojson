@@ -1,0 +1,2157 @@
+{
+  "type": "FeatureCollection",
+  "schema_version": "1.0",
+  "retrieved_at": "2026-09-27",
+  "coordinate_reference_system": "WGS84",
+  "coverage_note": "公开地图的部分机构点，非全县完整名录。医疗地图收录不等于当前营业核实；北山/阳峰仅取得具体科室点。鸣山未定位；汪墩院址证据冲突暂排除。文化中心仅为候选，未确认开放避暑。",
+  "sources": [
+    {
+      "id": "osm",
+      "name": "OpenStreetMap 公开地图对象",
+      "url": "https://www.openstreetmap.org/copyright",
+      "license": "Open Data Commons Open Database License (ODbL) 1.0；© OpenStreetMap contributors"
+    },
+    {
+      "id": "baidu-public",
+      "name": "百度地图普通公开机构详情及导航目标参数",
+      "url": "https://map.baidu.com/",
+      "license": "百度地图及数据提供者版权所有；非开放数据库许可。仅记录本轮公开机构事实及来源，不附底图或评价。"
+    },
+    {
+      "id": "amap-public",
+      "name": "高德地图公开机构条目",
+      "url": "https://ditu.amap.com/place/B03180099C",
+      "license": "高德及数据提供者版权所有；非开放数据库许可。仅记录公开机构事实及来源。"
+    },
+    {
+      "id": "tencent-public",
+      "name": "腾讯地图公开机构详情",
+      "url": "https://map.qq.com/poi/?sm=4749403447891313513&keyfrom=1",
+      "license": "腾讯及数据提供者版权所有；非开放数据库许可。仅记录公开机构事实及来源。"
+    },
+    {
+      "id": "duchang-official-medical-2026",
+      "name": "都昌县医保局2026年定点医疗机构公示",
+      "url": "https://www.duchang.gov.cn/zwgk/zfxxgkzl/bmxxgk/ybj/fgzc/zcwj/202606/t20260618_7255873.html",
+      "license": "政府公开信息，未标注开放数据许可证；保留来源与公示日期。"
+    },
+    {
+      "id": "duchang-library-cooling-2025",
+      "name": "2025年都昌县图书馆暑期纳凉报道",
+      "url": "https://www.duchang.gov.cn/zwzx/sqcz/202507/t20250718_6973904.html",
+      "license": "政府公开信息，未标注开放数据许可证；保留来源与发布日期。"
+    }
+  ],
+  "features": [
+    {
+      "type": "Feature",
+      "id": "osm-way-618453861",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          116.1833178,
+          29.2519204
+        ]
+      },
+      "properties": {
+        "id": "osm-way-618453861",
+        "name": "文化中心",
+        "kind": "cooling_candidate",
+        "township_name": "都昌镇",
+        "source_url": "https://www.openstreetmap.org/way/618453861",
+        "source_id": "way/618453861",
+        "source_type": "osm",
+        "source_updated_at": "2018-08-21T07:10:39Z",
+        "retrieved_at": "2026-09-27",
+        "coordinate_source": "OSM API WGS84闭合面几何质心",
+        "coordinate_precision": "building_centroid",
+        "verification_status": "publicly_listed",
+        "settlement_level": null,
+        "population": null,
+        "elderly_ratio": null,
+        "type": "library",
+        "open_hours": null,
+        "has_ac": null,
+        "is_accessible": null,
+        "verified_at": null,
+        "valid_until": null,
+        "cooling_status": "candidate",
+        "current_opening_status": "unknown",
+        "inventory_ids": [],
+        "source_coordinate_system": "WGS84",
+        "osm_tags": {
+          "amenity": "library",
+          "building": "yes",
+          "name": "文化中心"
+        },
+        "sources": [
+          {
+            "id": "osm",
+            "url": "https://www.openstreetmap.org/way/618453861",
+            "object_id": "way/618453861"
+          }
+        ],
+        "cooling_note": "OSM标为library的文化中心建筑；仅为待现场核对的避暑候选，未证实空调、开放时段、可进入性，也未确认与官方纳凉报道中的图书馆为同一建筑。 与本版百度都昌县图书馆点相距约83米，可能属于同一设施群，未确认同楼或独立场所。",
+        "related_ids": [
+          "baidu-f4351cb56a957914b05c6aba"
+        ],
+        "verification_note": "县图书馆与OSM文化中心地图点相距约83米，可能同一设施或相邻建筑，尚不能计为两个独立纳凉站。县图书馆曾获2025-07-18官方纳凉报道；两点当前开放、空调运行及公众可进入性均待核验。"
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "baidu-f4351cb56a957914b05c6aba",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          116.1825116,
+          29.2521802
+        ]
+      },
+      "properties": {
+        "id": "baidu-f4351cb56a957914b05c6aba",
+        "name": "都昌县图书馆",
+        "kind": "cooling_candidate",
+        "township_name": "都昌镇",
+        "source_url": "https://map.baidu.com/poi/都昌县图书馆/?uid=f4351cb56a957914b05c6aba",
+        "source_id": "f4351cb56a957914b05c6aba",
+        "source_type": "baidu-public",
+        "source_updated_at": null,
+        "retrieved_at": "2026-09-27",
+        "coordinate_source": "projzh@1.0.0 BD09MC -> BD09 -> GCJ02 -> approximate WGS84",
+        "coordinate_precision": "approximate",
+        "verification_status": "publicly_listed",
+        "settlement_level": null,
+        "population": null,
+        "elderly_ratio": null,
+        "type": "library",
+        "address": "九江市沿湖路85号",
+        "open_hours": null,
+        "has_ac": null,
+        "is_accessible": null,
+        "verified_at": null,
+        "valid_until": null,
+        "cooling_status": "candidate",
+        "current_opening_status": "unknown",
+        "inventory_ids": [
+          "official-cooling-county-library"
+        ],
+        "source_coordinate_system": "BD09MC",
+        "source_coordinates": [
+          12934801.490056,
+          3387137.456029
+        ],
+        "coordinate_conversion": {
+          "library": "projzh@1.0.0",
+          "source_url": "https://github.com/tschaub/projzh",
+          "license": "MIT",
+          "bd09": [
+            116.19403445459292,
+            29.25553346721489
+          ],
+          "gcj02": [
+            116.1875651401889,
+            29.249493475257406
+          ],
+          "mathematical_roundtrip_error_m": 1.9219,
+          "note": "离线近似换算；往返误差不是实地位置精度。"
+        },
+        "coordinate_evidence": {
+          "public_route_parameter": "en",
+          "public_route_uid": "f4351cb56a957914b05c6aba",
+          "public_route_coordinate_text": "12934801.490056,3387137.456029"
+        },
+        "historical_cooling_evidence": [
+          {
+            "source_url": "https://www.duchang.gov.cn/zwzx/sqcz/202507/t20250718_6973904.html",
+            "source_date": "2025-07-18",
+            "summary": "县政府报道图书馆在2025年暑期提供空调降温和避暑药；不代表2026年当前开放核实。"
+          }
+        ],
+        "cooling_note": "2025年有官方纳凉报道，2026年当前开放时段、可进入性和空调运行未知；与附近OSM文化中心点可能属于同一设施群，尚未确认同楼或别名。",
+        "sources": [
+          {
+            "id": "baidu-public",
+            "url": "https://map.baidu.com/poi/都昌县图书馆/?uid=f4351cb56a957914b05c6aba",
+            "object_id": "f4351cb56a957914b05c6aba"
+          },
+          {
+            "id": "duchang-library-cooling-2025",
+            "url": "https://www.duchang.gov.cn/zwzx/sqcz/202507/t20250718_6973904.html",
+            "source_date": "2025-07-18",
+            "record_id": "official-cooling-county-library"
+          }
+        ],
+        "related_ids": [
+          "osm-way-618453861"
+        ],
+        "verification_note": "县图书馆与OSM文化中心地图点相距约83米，可能同一设施或相邻建筑，尚不能计为两个独立纳凉站。县图书馆曾获2025-07-18官方纳凉报道；两点当前开放、空调运行及公众可进入性均待核验。"
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "baidu-a2d113fe0d16c33be6e9656f",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          116.5130542,
+          29.2458277
+        ]
+      },
+      "properties": {
+        "id": "baidu-a2d113fe0d16c33be6e9656f",
+        "name": "万户卫生院",
+        "kind": "medical",
+        "township_name": "万户镇",
+        "source_url": "https://map.baidu.com/poi/%E4%B8%87%E6%88%B7%E5%8D%AB%E7%94%9F%E9%99%A2/?uid=a2d113fe0d16c33be6e9656f",
+        "source_id": "a2d113fe0d16c33be6e9656f",
+        "source_type": "baidu-public",
+        "source_updated_at": null,
+        "retrieved_at": "2026-09-27",
+        "coordinate_source": "projzh@1.0.0 BD09MC -> BD09 -> GCJ02 -> approximate WGS84",
+        "coordinate_precision": "approximate",
+        "verification_status": "publicly_listed",
+        "settlement_level": null,
+        "population": null,
+        "elderly_ratio": null,
+        "type": "health_centre",
+        "open_hours": null,
+        "has_ac": null,
+        "is_accessible": null,
+        "verified_at": null,
+        "valid_until": null,
+        "cooling_status": null,
+        "current_opening_status": "unknown",
+        "inventory_ids": [
+          "official-medical-H36042800836"
+        ],
+        "address": "九江市都昌县长山街",
+        "source_coordinate_system": "BD09MC",
+        "source_coordinates": [
+          12971569.962209,
+          3386354.470347
+        ],
+        "coordinate_conversion": {
+          "library": "projzh@1.0.0",
+          "source_url": "https://github.com/tschaub/projzh",
+          "license": "MIT",
+          "bd09": [
+            116.52432766576891,
+            29.249364989221892
+          ],
+          "gcj02": [
+            116.51793306795335,
+            29.243022271995336
+          ],
+          "mathematical_roundtrip_error_m": 2.7498,
+          "note": "离线近似换算；往返误差不是实地位置精度。"
+        },
+        "coordinate_evidence": {
+          "public_route_parameter": "en",
+          "public_route_uid": "a2d113fe0d16c33be6e9656f",
+          "public_route_coordinate_text": "12971569.962209,3386354.470347"
+        },
+        "sources": [
+          {
+            "id": "baidu-public",
+            "url": "https://map.baidu.com/poi/%E4%B8%87%E6%88%B7%E5%8D%AB%E7%94%9F%E9%99%A2/?uid=a2d113fe0d16c33be6e9656f",
+            "object_id": "a2d113fe0d16c33be6e9656f"
+          },
+          {
+            "id": "duchang-official-medical-2026",
+            "url": "https://www.duchang.gov.cn/zwgk/zfxxgkzl/bmxxgk/ybj/fgzc/zcwj/202606/t20260618_7255873.html",
+            "record_id": "official-medical-H36042800836",
+            "source_date": "2026-06-18"
+          }
+        ],
+        "official_name": "都昌县万户镇卫生院",
+        "aliases": [
+          "都昌县万户镇卫生院"
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "baidu-cdef4edf6dc41d4e28d7ab65",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          116.3958913,
+          29.2775438
+        ]
+      },
+      "properties": {
+        "id": "baidu-cdef4edf6dc41d4e28d7ab65",
+        "name": "三汊港卫生院",
+        "kind": "medical",
+        "township_name": "三汊港镇",
+        "source_url": "https://map.baidu.com/poi/%E4%B8%89%E6%B1%8A%E6%B8%AF%E5%8D%AB%E7%94%9F%E9%99%A2/?uid=cdef4edf6dc41d4e28d7ab65",
+        "source_id": "cdef4edf6dc41d4e28d7ab65",
+        "source_type": "baidu-public",
+        "source_updated_at": null,
+        "retrieved_at": "2026-09-27",
+        "coordinate_source": "projzh@1.0.0 BD09MC -> BD09 -> GCJ02 -> approximate WGS84",
+        "coordinate_precision": "approximate",
+        "verification_status": "publicly_listed",
+        "settlement_level": null,
+        "population": null,
+        "elderly_ratio": null,
+        "type": "health_centre",
+        "open_hours": null,
+        "has_ac": null,
+        "is_accessible": null,
+        "verified_at": null,
+        "valid_until": null,
+        "cooling_status": null,
+        "current_opening_status": "unknown",
+        "inventory_ids": [
+          "official-medical-H36042800839"
+        ],
+        "address": "九江市都昌县251县道",
+        "source_coordinate_system": "BD09MC",
+        "source_coordinates": [
+          12958558.978601,
+          3390414.375271
+        ],
+        "coordinate_conversion": {
+          "library": "projzh@1.0.0",
+          "source_url": "https://github.com/tschaub/projzh",
+          "license": "MIT",
+          "bd09": [
+            116.40744928315453,
+            29.28134544750856
+          ],
+          "gcj02": [
+            116.40104168057647,
+            29.274997852916716
+          ],
+          "mathematical_roundtrip_error_m": 0.122,
+          "note": "离线近似换算；往返误差不是实地位置精度。"
+        },
+        "coordinate_evidence": {
+          "public_route_parameter": "en",
+          "public_route_uid": "cdef4edf6dc41d4e28d7ab65",
+          "public_route_coordinate_text": "12958558.978601,3390414.375271"
+        },
+        "sources": [
+          {
+            "id": "baidu-public",
+            "url": "https://map.baidu.com/poi/%E4%B8%89%E6%B1%8A%E6%B8%AF%E5%8D%AB%E7%94%9F%E9%99%A2/?uid=cdef4edf6dc41d4e28d7ab65",
+            "object_id": "cdef4edf6dc41d4e28d7ab65"
+          },
+          {
+            "id": "duchang-official-medical-2026",
+            "url": "https://www.duchang.gov.cn/zwgk/zfxxgkzl/bmxxgk/ybj/fgzc/zcwj/202606/t20260618_7255873.html",
+            "record_id": "official-medical-H36042800839",
+            "source_date": "2026-06-18"
+          }
+        ],
+        "official_name": "都昌县三汊港镇中心卫生院",
+        "aliases": [
+          "都昌县三汊港镇中心卫生院"
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "baidu-53349ee3b9c4f56e22026264",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          116.5386524,
+          29.3814746
+        ]
+      },
+      "properties": {
+        "id": "baidu-53349ee3b9c4f56e22026264",
+        "name": "中馆卫生院",
+        "kind": "medical",
+        "township_name": "中馆镇",
+        "source_url": "https://map.baidu.com/poi/%E4%B8%AD%E9%A6%86%E5%8D%AB%E7%94%9F%E9%99%A2/?uid=53349ee3b9c4f56e22026264",
+        "source_id": "53349ee3b9c4f56e22026264",
+        "source_type": "baidu-public",
+        "source_updated_at": null,
+        "retrieved_at": "2026-09-27",
+        "coordinate_source": "projzh@1.0.0 BD09MC -> BD09 -> GCJ02 -> approximate WGS84",
+        "coordinate_precision": "approximate",
+        "verification_status": "publicly_listed",
+        "settlement_level": null,
+        "population": null,
+        "elderly_ratio": null,
+        "type": "health_centre",
+        "open_hours": null,
+        "has_ac": null,
+        "is_accessible": null,
+        "verified_at": null,
+        "valid_until": null,
+        "cooling_status": null,
+        "current_opening_status": "unknown",
+        "inventory_ids": [
+          "official-medical-H36042800852"
+        ],
+        "address": "九江市都昌县中馆镇306省道附近",
+        "source_coordinate_system": "BD09MC",
+        "source_coordinates": [
+          12974419.144291,
+          3403557.31026
+        ],
+        "coordinate_conversion": {
+          "library": "projzh@1.0.0",
+          "source_url": "https://github.com/tschaub/projzh",
+          "license": "MIT",
+          "bd09": [
+            116.54992202539238,
+            29.384804876059725
+          ],
+          "gcj02": [
+            116.54346915343403,
+            29.378691200807378
+          ],
+          "mathematical_roundtrip_error_m": 2.064,
+          "note": "离线近似换算；往返误差不是实地位置精度。"
+        },
+        "coordinate_evidence": {
+          "public_route_parameter": "en",
+          "public_route_uid": "53349ee3b9c4f56e22026264",
+          "public_route_coordinate_text": "12974419.144291,3403557.31026"
+        },
+        "sources": [
+          {
+            "id": "baidu-public",
+            "url": "https://map.baidu.com/poi/%E4%B8%AD%E9%A6%86%E5%8D%AB%E7%94%9F%E9%99%A2/?uid=53349ee3b9c4f56e22026264",
+            "object_id": "53349ee3b9c4f56e22026264"
+          },
+          {
+            "id": "duchang-official-medical-2026",
+            "url": "https://www.duchang.gov.cn/zwgk/zfxxgkzl/bmxxgk/ybj/fgzc/zcwj/202606/t20260618_7255873.html",
+            "record_id": "official-medical-H36042800852",
+            "source_date": "2026-06-18"
+          }
+        ],
+        "official_name": "都昌县中馆镇中心卫生院",
+        "aliases": [
+          "都昌县中馆镇中心卫生院"
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "baidu-2b5fa11401378a50f02d8382",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          116.1912813,
+          29.2922788
+        ]
+      },
+      "properties": {
+        "id": "baidu-2b5fa11401378a50f02d8382",
+        "name": "北山乡卫生院-预防接种门诊",
+        "kind": "medical",
+        "township_name": "北山乡",
+        "source_url": "https://map.baidu.com/poi/%E5%8C%97%E5%B1%B1%E4%B9%A1%E5%8D%AB%E7%94%9F%E9%99%A2-%E9%A2%84%E9%98%B2%E6%8E%A5%E7%A7%8D%E9%97%A8%E8%AF%8A/?uid=2b5fa11401378a50f02d8382",
+        "source_id": "2b5fa11401378a50f02d8382",
+        "source_type": "baidu-public",
+        "source_updated_at": null,
+        "retrieved_at": "2026-09-27",
+        "coordinate_source": "projzh@1.0.0 BD09MC -> BD09 -> GCJ02 -> approximate WGS84",
+        "coordinate_precision": "approximate",
+        "verification_status": "publicly_listed",
+        "settlement_level": null,
+        "population": null,
+        "elderly_ratio": null,
+        "type": "vaccination_clinic",
+        "open_hours": null,
+        "has_ac": null,
+        "is_accessible": null,
+        "verified_at": null,
+        "valid_until": null,
+        "cooling_status": null,
+        "current_opening_status": "unknown",
+        "inventory_ids": [],
+        "address": "九江市都昌县S214北山卫生院西侧",
+        "source_coordinate_system": "BD09MC",
+        "source_coordinates": [
+          12935783.498093,
+          3392210.83034
+        ],
+        "coordinate_conversion": {
+          "library": "projzh@1.0.0",
+          "source_url": "https://github.com/tschaub/projzh",
+          "license": "MIT",
+          "bd09": [
+            116.2028558868948,
+            29.29549315794172
+          ],
+          "gcj02": [
+            116.19631793396053,
+            29.28960470552535
+          ],
+          "mathematical_roundtrip_error_m": 1.8953,
+          "note": "离线近似换算；往返误差不是实地位置精度。"
+        },
+        "coordinate_evidence": {
+          "public_route_parameter": "en",
+          "public_route_uid": "2b5fa11401378a50f02d8382",
+          "public_route_coordinate_text": "12935783.498093,3392210.83034"
+        },
+        "sources": [
+          {
+            "id": "baidu-public",
+            "url": "https://map.baidu.com/poi/%E5%8C%97%E5%B1%B1%E4%B9%A1%E5%8D%AB%E7%94%9F%E9%99%A2-%E9%A2%84%E9%98%B2%E6%8E%A5%E7%A7%8D%E9%97%A8%E8%AF%8A/?uid=2b5fa11401378a50f02d8382",
+            "object_id": "2b5fa11401378a50f02d8382"
+          }
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "baidu-a5097bfa0b806063f03cba65",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          116.5620994,
+          29.2650403
+        ]
+      },
+      "properties": {
+        "id": "baidu-a5097bfa0b806063f03cba65",
+        "name": "南峰卫生院",
+        "kind": "medical",
+        "township_name": "南峰镇",
+        "source_url": "https://map.baidu.com/poi/%E5%8D%97%E5%B3%B0%E5%8D%AB%E7%94%9F%E9%99%A2/?uid=a5097bfa0b806063f03cba65",
+        "source_id": "a5097bfa0b806063f03cba65",
+        "source_type": "baidu-public",
+        "source_updated_at": null,
+        "retrieved_at": "2026-09-27",
+        "coordinate_source": "projzh@1.0.0 BD09MC -> BD09 -> GCJ02 -> approximate WGS84",
+        "coordinate_precision": "approximate",
+        "verification_status": "publicly_listed",
+        "settlement_level": null,
+        "population": null,
+        "elderly_ratio": null,
+        "type": "health_centre",
+        "open_hours": null,
+        "has_ac": null,
+        "is_accessible": null,
+        "verified_at": null,
+        "valid_until": null,
+        "cooling_status": null,
+        "current_opening_status": "unknown",
+        "inventory_ids": [
+          "official-medical-H36042800838"
+        ],
+        "address": "九江市都昌县南峰镇南峰街",
+        "source_coordinate_system": "BD09MC",
+        "source_coordinates": [
+          12977034.2551,
+          3388702.7733
+        ],
+        "coordinate_conversion": {
+          "library": "projzh@1.0.0",
+          "source_url": "https://github.com/tschaub/projzh",
+          "license": "MIT",
+          "bd09": [
+            116.5734137098739,
+            29.267864143451536
+          ],
+          "gcj02": [
+            116.56686151176449,
+            29.262138874623012
+          ],
+          "mathematical_roundtrip_error_m": 1.4767,
+          "note": "离线近似换算；往返误差不是实地位置精度。"
+        },
+        "coordinate_evidence": {
+          "public_route_parameter": "en",
+          "public_route_uid": "a5097bfa0b806063f03cba65",
+          "public_route_coordinate_text": "12977034.2551,3388702.7733"
+        },
+        "sources": [
+          {
+            "id": "baidu-public",
+            "url": "https://map.baidu.com/poi/%E5%8D%97%E5%B3%B0%E5%8D%AB%E7%94%9F%E9%99%A2/?uid=a5097bfa0b806063f03cba65",
+            "object_id": "a5097bfa0b806063f03cba65"
+          },
+          {
+            "id": "duchang-official-medical-2026",
+            "url": "https://www.duchang.gov.cn/zwgk/zfxxgkzl/bmxxgk/ybj/fgzc/zcwj/202606/t20260618_7255873.html",
+            "record_id": "official-medical-H36042800838",
+            "source_date": "2026-06-18"
+          }
+        ],
+        "official_name": "都昌县南峰中心卫生院",
+        "aliases": [
+          "都昌县南峰中心卫生院"
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "baidu-35debf293378e844a6da396a",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          116.3908112,
+          29.1862411
+        ]
+      },
+      "properties": {
+        "id": "baidu-35debf293378e844a6da396a",
+        "name": "周溪卫生院",
+        "kind": "medical",
+        "township_name": "周溪镇",
+        "source_url": "https://map.baidu.com/poi/%E5%91%A8%E6%BA%AA%E5%8D%AB%E7%94%9F%E9%99%A2/?uid=35debf293378e844a6da396a",
+        "source_id": "35debf293378e844a6da396a",
+        "source_type": "baidu-public",
+        "source_updated_at": null,
+        "retrieved_at": "2026-09-27",
+        "coordinate_source": "projzh@1.0.0 BD09MC -> BD09 -> GCJ02 -> approximate WGS84",
+        "coordinate_precision": "approximate",
+        "verification_status": "publicly_listed",
+        "settlement_level": null,
+        "population": null,
+        "elderly_ratio": null,
+        "type": "health_centre",
+        "open_hours": null,
+        "has_ac": null,
+        "is_accessible": null,
+        "verified_at": null,
+        "valid_until": null,
+        "cooling_status": null,
+        "current_opening_status": "unknown",
+        "inventory_ids": [
+          "official-medical-H36042800670"
+        ],
+        "address": "九江市都昌县周溪新街与257县道交叉口东北100米",
+        "source_coordinate_system": "BD09MC",
+        "source_coordinates": [
+          12957995.3678,
+          3378818.18531
+        ],
+        "coordinate_conversion": {
+          "library": "projzh@1.0.0",
+          "source_url": "https://github.com/tschaub/projzh",
+          "license": "MIT",
+          "bd09": [
+            116.402386336276,
+            29.189973804554793
+          ],
+          "gcj02": [
+            116.39595342282185,
+            29.183628061617203
+          ],
+          "mathematical_roundtrip_error_m": 0.2008,
+          "note": "离线近似换算；往返误差不是实地位置精度。"
+        },
+        "coordinate_evidence": {
+          "public_route_parameter": "en",
+          "public_route_uid": "35debf293378e844a6da396a",
+          "public_route_coordinate_text": "12957995.3678,3378818.18531"
+        },
+        "sources": [
+          {
+            "id": "baidu-public",
+            "url": "https://map.baidu.com/poi/%E5%91%A8%E6%BA%AA%E5%8D%AB%E7%94%9F%E9%99%A2/?uid=35debf293378e844a6da396a",
+            "object_id": "35debf293378e844a6da396a"
+          },
+          {
+            "id": "duchang-official-medical-2026",
+            "url": "https://www.duchang.gov.cn/zwgk/zfxxgkzl/bmxxgk/ybj/fgzc/zcwj/202606/t20260618_7255873.html",
+            "record_id": "official-medical-H36042800670",
+            "source_date": "2026-06-18"
+          }
+        ],
+        "official_name": "都昌县周溪镇中心卫生院",
+        "aliases": [
+          "都昌县周溪镇中心卫生院"
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "baidu-750ec165da81b6554c3a591a",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          116.2893429,
+          29.2351437
+        ]
+      },
+      "properties": {
+        "id": "baidu-750ec165da81b6554c3a591a",
+        "name": "和合乡卫生院",
+        "kind": "medical",
+        "township_name": "和合乡",
+        "source_url": "https://map.baidu.com/poi/%E5%92%8C%E5%90%88%E4%B9%A1%E5%8D%AB%E7%94%9F%E9%99%A2/?uid=750ec165da81b6554c3a591a",
+        "source_id": "750ec165da81b6554c3a591a",
+        "source_type": "baidu-public",
+        "source_updated_at": null,
+        "retrieved_at": "2026-09-27",
+        "coordinate_source": "projzh@1.0.0 BD09MC -> BD09 -> GCJ02 -> approximate WGS84",
+        "coordinate_precision": "approximate",
+        "verification_status": "publicly_listed",
+        "settlement_level": null,
+        "population": null,
+        "elderly_ratio": null,
+        "type": "health_centre",
+        "open_hours": null,
+        "has_ac": null,
+        "is_accessible": null,
+        "verified_at": null,
+        "valid_until": null,
+        "cooling_status": null,
+        "current_opening_status": "unknown",
+        "inventory_ids": [
+          "official-medical-H36042800837"
+        ],
+        "address": "江西省九江市都昌县和合乡619乡道东50米",
+        "source_coordinate_system": "BD09MC",
+        "source_coordinates": [
+          12946681.836038,
+          3384996.936022
+        ],
+        "coordinate_conversion": {
+          "library": "projzh@1.0.0",
+          "source_url": "https://github.com/tschaub/projzh",
+          "license": "MIT",
+          "bd09": [
+            116.30075625711842,
+            29.23866924081548
+          ],
+          "gcj02": [
+            116.29433257975066,
+            29.23241612813872
+          ],
+          "mathematical_roundtrip_error_m": 1.0323,
+          "note": "离线近似换算；往返误差不是实地位置精度。"
+        },
+        "coordinate_evidence": {
+          "public_route_parameter": "en",
+          "public_route_uid": "750ec165da81b6554c3a591a",
+          "public_route_coordinate_text": "12946681.836038,3384996.936022"
+        },
+        "sources": [
+          {
+            "id": "baidu-public",
+            "url": "https://map.baidu.com/poi/%E5%92%8C%E5%90%88%E4%B9%A1%E5%8D%AB%E7%94%9F%E9%99%A2/?uid=750ec165da81b6554c3a591a",
+            "object_id": "750ec165da81b6554c3a591a"
+          },
+          {
+            "id": "duchang-official-medical-2026",
+            "url": "https://www.duchang.gov.cn/zwgk/zfxxgkzl/bmxxgk/ybj/fgzc/zcwj/202606/t20260618_7255873.html",
+            "record_id": "official-medical-H36042800837",
+            "source_date": "2026-06-18"
+          }
+        ],
+        "official_name": "都昌县和合乡卫生院",
+        "aliases": [
+          "都昌县和合乡卫生院"
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "baidu-49d959384c879743c61e5164",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          116.4132286,
+          29.3689432
+        ]
+      },
+      "properties": {
+        "id": "baidu-49d959384c879743c61e5164",
+        "name": "土塘卫生院",
+        "kind": "medical",
+        "township_name": "土塘镇",
+        "source_url": "https://map.baidu.com/poi/%E5%9C%9F%E5%A1%98%E5%8D%AB%E7%94%9F%E9%99%A2/?uid=49d959384c879743c61e5164",
+        "source_id": "49d959384c879743c61e5164",
+        "source_type": "baidu-public",
+        "source_updated_at": null,
+        "retrieved_at": "2026-09-27",
+        "coordinate_source": "projzh@1.0.0 BD09MC -> BD09 -> GCJ02 -> approximate WGS84",
+        "coordinate_precision": "approximate",
+        "verification_status": "publicly_listed",
+        "settlement_level": null,
+        "population": null,
+        "elderly_ratio": null,
+        "type": "health_centre",
+        "open_hours": null,
+        "has_ac": null,
+        "is_accessible": null,
+        "verified_at": null,
+        "valid_until": null,
+        "cooling_status": null,
+        "current_opening_status": "unknown",
+        "inventory_ids": [
+          "official-medical-H36042800668"
+        ],
+        "address": "九江市都昌县土塘街土塘镇防保所",
+        "source_coordinate_system": "BD09MC",
+        "source_coordinates": [
+          12960491.498471,
+          3402012.064762
+        ],
+        "coordinate_conversion": {
+          "library": "projzh@1.0.0",
+          "source_url": "https://github.com/tschaub/projzh",
+          "license": "MIT",
+          "bd09": [
+            116.42480921562243,
+            29.37264641328684
+          ],
+          "gcj02": [
+            116.4183789329363,
+            29.366450544262577
+          ],
+          "mathematical_roundtrip_error_m": 0.6569,
+          "note": "离线近似换算；往返误差不是实地位置精度。"
+        },
+        "coordinate_evidence": {
+          "public_route_parameter": "en",
+          "public_route_uid": "49d959384c879743c61e5164",
+          "public_route_coordinate_text": "12960491.498471,3402012.064762"
+        },
+        "sources": [
+          {
+            "id": "baidu-public",
+            "url": "https://map.baidu.com/poi/%E5%9C%9F%E5%A1%98%E5%8D%AB%E7%94%9F%E9%99%A2/?uid=49d959384c879743c61e5164",
+            "object_id": "49d959384c879743c61e5164"
+          },
+          {
+            "id": "duchang-official-medical-2026",
+            "url": "https://www.duchang.gov.cn/zwgk/zfxxgkzl/bmxxgk/ybj/fgzc/zcwj/202606/t20260618_7255873.html",
+            "record_id": "official-medical-H36042800668",
+            "source_date": "2026-06-18"
+          }
+        ],
+        "official_name": "都昌县土塘中心卫生院",
+        "aliases": [
+          "都昌县土塘中心卫生院"
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "baidu-3dc9befdbfee4016bea24064",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          116.1271268,
+          29.4033566
+        ]
+      },
+      "properties": {
+        "id": "baidu-3dc9befdbfee4016bea24064",
+        "name": "多宝卫生院",
+        "kind": "medical",
+        "township_name": "多宝乡",
+        "source_url": "https://map.baidu.com/poi/%E5%A4%9A%E5%AE%9D%E5%8D%AB%E7%94%9F%E9%99%A2/?uid=3dc9befdbfee4016bea24064",
+        "source_id": "3dc9befdbfee4016bea24064",
+        "source_type": "baidu-public",
+        "source_updated_at": null,
+        "retrieved_at": "2026-09-27",
+        "coordinate_source": "projzh@1.0.0 BD09MC -> BD09 -> GCJ02 -> approximate WGS84",
+        "coordinate_precision": "approximate",
+        "verification_status": "publicly_listed",
+        "settlement_level": null,
+        "population": null,
+        "elderly_ratio": null,
+        "type": "health_centre",
+        "open_hours": null,
+        "has_ac": null,
+        "is_accessible": null,
+        "verified_at": null,
+        "valid_until": null,
+        "cooling_status": null,
+        "current_opening_status": "unknown",
+        "inventory_ids": [
+          "official-medical-H36042800840"
+        ],
+        "address": "九江市都昌县多宝乡西山路",
+        "source_coordinate_system": "BD09MC",
+        "source_coordinates": [
+          12928654.1074,
+          3406366.47705
+        ],
+        "coordinate_conversion": {
+          "library": "projzh@1.0.0",
+          "source_url": "https://github.com/tschaub/projzh",
+          "license": "MIT",
+          "bd09": [
+            116.13881217749288,
+            29.406904497341475
+          ],
+          "gcj02": [
+            116.13232191183481,
+            29.40086218913262
+          ],
+          "mathematical_roundtrip_error_m": 1.4487,
+          "note": "离线近似换算；往返误差不是实地位置精度。"
+        },
+        "coordinate_evidence": {
+          "public_route_parameter": "en",
+          "public_route_uid": "3dc9befdbfee4016bea24064",
+          "public_route_coordinate_text": "12928654.1074,3406366.47705"
+        },
+        "sources": [
+          {
+            "id": "baidu-public",
+            "url": "https://map.baidu.com/poi/%E5%A4%9A%E5%AE%9D%E5%8D%AB%E7%94%9F%E9%99%A2/?uid=3dc9befdbfee4016bea24064",
+            "object_id": "3dc9befdbfee4016bea24064"
+          },
+          {
+            "id": "duchang-official-medical-2026",
+            "url": "https://www.duchang.gov.cn/zwgk/zfxxgkzl/bmxxgk/ybj/fgzc/zcwj/202606/t20260618_7255873.html",
+            "record_id": "official-medical-H36042800840",
+            "source_date": "2026-06-18"
+          }
+        ],
+        "official_name": "都昌县多宝乡卫生院",
+        "aliases": [
+          "都昌县多宝乡卫生院"
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "baidu-28fb83afdbde55044251c0a7",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          116.1142354,
+          29.3860216
+        ]
+      },
+      "properties": {
+        "id": "baidu-28fb83afdbde55044251c0a7",
+        "name": "都昌县多宝乡寺前村卫生院",
+        "kind": "medical",
+        "township_name": "多宝乡",
+        "source_url": "https://map.baidu.com/poi/%E9%83%BD%E6%98%8C%E5%8E%BF%E5%A4%9A%E5%AE%9D%E4%B9%A1%E5%AF%BA%E5%89%8D%E6%9D%91%E5%8D%AB%E7%94%9F%E9%99%A2/?uid=28fb83afdbde55044251c0a7",
+        "source_id": "28fb83afdbde55044251c0a7",
+        "source_type": "baidu-public",
+        "source_updated_at": null,
+        "retrieved_at": "2026-09-27",
+        "coordinate_source": "projzh@1.0.0 BD09MC -> BD09 -> GCJ02 -> approximate WGS84",
+        "coordinate_precision": "approximate",
+        "verification_status": "publicly_listed",
+        "settlement_level": null,
+        "population": null,
+        "elderly_ratio": null,
+        "type": "clinic",
+        "open_hours": null,
+        "has_ac": null,
+        "is_accessible": null,
+        "verified_at": null,
+        "valid_until": null,
+        "cooling_status": null,
+        "current_opening_status": "unknown",
+        "inventory_ids": [],
+        "address": "江西省九江市都昌县多宝乡",
+        "source_coordinate_system": "BD09MC",
+        "source_coordinates": [
+          12927225.75,
+          3404134.39
+        ],
+        "coordinate_conversion": {
+          "library": "projzh@1.0.0",
+          "source_url": "https://github.com/tschaub/projzh",
+          "license": "MIT",
+          "bd09": [
+            116.12598116427074,
+            29.389345139038788
+          ],
+          "gcj02": [
+            116.11944987679085,
+            29.38353120510943
+          ],
+          "mathematical_roundtrip_error_m": 1.0159,
+          "note": "离线近似换算；往返误差不是实地位置精度。"
+        },
+        "coordinate_evidence": {
+          "public_route_parameter": "en",
+          "public_route_uid": "28fb83afdbde55044251c0a7",
+          "public_route_coordinate_text": "12927225.75,3404134.39"
+        },
+        "sources": [
+          {
+            "id": "baidu-public",
+            "url": "https://map.baidu.com/poi/%E9%83%BD%E6%98%8C%E5%8E%BF%E5%A4%9A%E5%AE%9D%E4%B9%A1%E5%AF%BA%E5%89%8D%E6%9D%91%E5%8D%AB%E7%94%9F%E9%99%A2/?uid=28fb83afdbde55044251c0a7",
+            "object_id": "28fb83afdbde55044251c0a7"
+          }
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "baidu-be54cde93dbcc75878f79665",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          116.2537178,
+          29.2775524
+        ]
+      },
+      "properties": {
+        "id": "baidu-be54cde93dbcc75878f79665",
+        "name": "大树卫生院",
+        "kind": "medical",
+        "township_name": "大树乡",
+        "source_url": "https://map.baidu.com/poi/%E5%A4%A7%E6%A0%91%E5%8D%AB%E7%94%9F%E9%99%A2/?uid=be54cde93dbcc75878f79665",
+        "source_id": "be54cde93dbcc75878f79665",
+        "source_type": "baidu-public",
+        "source_updated_at": null,
+        "retrieved_at": "2026-09-27",
+        "coordinate_source": "projzh@1.0.0 BD09MC -> BD09 -> GCJ02 -> approximate WGS84",
+        "coordinate_precision": "approximate",
+        "verification_status": "publicly_listed",
+        "settlement_level": null,
+        "population": null,
+        "elderly_ratio": null,
+        "type": "health_centre",
+        "open_hours": null,
+        "has_ac": null,
+        "is_accessible": null,
+        "verified_at": null,
+        "valid_until": null,
+        "cooling_status": null,
+        "current_opening_status": "unknown",
+        "inventory_ids": [
+          "official-medical-H36042800813"
+        ],
+        "address": "九江市都昌县大树乡209省道(大客隆超市对面)",
+        "source_coordinate_system": "BD09MC",
+        "source_coordinates": [
+          12942716.7026,
+          3390366.93948
+        ],
+        "coordinate_conversion": {
+          "library": "projzh@1.0.0",
+          "source_url": "https://github.com/tschaub/projzh",
+          "license": "MIT",
+          "bd09": [
+            116.26513724497865,
+            29.280971847278696
+          ],
+          "gcj02": [
+            116.25868067043338,
+            29.27482070800292
+          ],
+          "mathematical_roundtrip_error_m": 0.1732,
+          "note": "离线近似换算；往返误差不是实地位置精度。"
+        },
+        "coordinate_evidence": {
+          "public_route_parameter": "en",
+          "public_route_uid": "be54cde93dbcc75878f79665",
+          "public_route_coordinate_text": "12942716.7026,3390366.93948"
+        },
+        "sources": [
+          {
+            "id": "baidu-public",
+            "url": "https://map.baidu.com/poi/%E5%A4%A7%E6%A0%91%E5%8D%AB%E7%94%9F%E9%99%A2/?uid=be54cde93dbcc75878f79665",
+            "object_id": "be54cde93dbcc75878f79665"
+          },
+          {
+            "id": "duchang-official-medical-2026",
+            "url": "https://www.duchang.gov.cn/zwgk/zfxxgkzl/bmxxgk/ybj/fgzc/zcwj/202606/t20260618_7255873.html",
+            "record_id": "official-medical-H36042800813",
+            "source_date": "2026-06-18"
+          }
+        ],
+        "official_name": "都昌县大树乡卫生院",
+        "aliases": [
+          "都昌县大树乡卫生院"
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "tencent-4749403447891313513",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          116.216278,
+          29.2824566
+        ]
+      },
+      "properties": {
+        "id": "tencent-4749403447891313513",
+        "name": "都昌县中医院",
+        "kind": "medical",
+        "township_name": "大树乡",
+        "source_url": "https://map.qq.com/poi/?sm=4749403447891313513&keyfrom=1",
+        "source_id": "4749403447891313513",
+        "source_type": "tencent-public",
+        "source_updated_at": null,
+        "retrieved_at": "2026-09-27",
+        "coordinate_source": "腾讯公开GCJ-02点，经项目gcj02_to_wgs84迭代近似反算",
+        "coordinate_precision": "approximate",
+        "verification_status": "publicly_listed",
+        "settlement_level": null,
+        "population": null,
+        "elderly_ratio": null,
+        "type": "hospital",
+        "open_hours": null,
+        "has_ac": null,
+        "is_accessible": null,
+        "verified_at": null,
+        "valid_until": null,
+        "cooling_status": null,
+        "current_opening_status": "unknown",
+        "inventory_ids": [
+          "official-medical-H36042800635"
+        ],
+        "address": "东风大道968号大转盘处人民广场南侧",
+        "source_coordinate_system": "GCJ-02",
+        "source_coordinates": [
+          116.221275,
+          29.279749
+        ],
+        "coordinate_evidence": "详情页的周边搜索链接where=116.221275,29.279749；小地图查看此区域链接center相同",
+        "coordinate_system_source": "https://lbs.qq.com/faq/latlngFaq",
+        "official_name": "都昌县中医院",
+        "sources": [
+          {
+            "id": "tencent-public",
+            "url": "https://map.qq.com/poi/?sm=4749403447891313513&keyfrom=1",
+            "object_id": "4749403447891313513"
+          },
+          {
+            "id": "duchang-official-medical-2026",
+            "url": "https://www.duchang.gov.cn/zwgk/zfxxgkzl/bmxxgk/ybj/fgzc/zcwj/202606/t20260618_7255873.html",
+            "record_id": "official-medical-H36042800635",
+            "source_date": "2026-06-18"
+          }
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "baidu-cde9e2c7ea9f76b4e81e9765",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          116.3332719,
+          29.2678813
+        ]
+      },
+      "properties": {
+        "id": "baidu-cde9e2c7ea9f76b4e81e9765",
+        "name": "大沙镇卫生院",
+        "kind": "medical",
+        "township_name": "大沙镇",
+        "source_url": "https://map.baidu.com/poi/%E5%A4%A7%E6%B2%99%E9%95%87%E5%8D%AB%E7%94%9F%E9%99%A2/?uid=cde9e2c7ea9f76b4e81e9765",
+        "source_id": "cde9e2c7ea9f76b4e81e9765",
+        "source_type": "baidu-public",
+        "source_updated_at": null,
+        "retrieved_at": "2026-09-27",
+        "coordinate_source": "projzh@1.0.0 BD09MC -> BD09 -> GCJ02 -> approximate WGS84",
+        "coordinate_precision": "approximate",
+        "verification_status": "publicly_listed",
+        "settlement_level": null,
+        "population": null,
+        "elderly_ratio": null,
+        "type": "health_centre",
+        "open_hours": null,
+        "has_ac": null,
+        "is_accessible": null,
+        "verified_at": null,
+        "valid_until": null,
+        "cooling_status": null,
+        "current_opening_status": "unknown",
+        "inventory_ids": [
+          "official-medical-H36042800846"
+        ],
+        "address": "九江市都昌县S209(大沙街)",
+        "source_coordinate_system": "BD09MC",
+        "source_coordinates": [
+          12951598.167822,
+          3389088.813494
+        ],
+        "coordinate_conversion": {
+          "library": "projzh@1.0.0",
+          "source_url": "https://github.com/tschaub/projzh",
+          "license": "MIT",
+          "bd09": [
+            116.34491993640829,
+            29.270904916877196
+          ],
+          "gcj02": [
+            116.33834622443138,
+            29.265256205404192
+          ],
+          "mathematical_roundtrip_error_m": 1.4408,
+          "note": "离线近似换算；往返误差不是实地位置精度。"
+        },
+        "coordinate_evidence": {
+          "public_route_parameter": "en",
+          "public_route_uid": "cde9e2c7ea9f76b4e81e9765",
+          "public_route_coordinate_text": "12951598.167822,3389088.813494"
+        },
+        "sources": [
+          {
+            "id": "baidu-public",
+            "url": "https://map.baidu.com/poi/%E5%A4%A7%E6%B2%99%E9%95%87%E5%8D%AB%E7%94%9F%E9%99%A2/?uid=cde9e2c7ea9f76b4e81e9765",
+            "object_id": "cde9e2c7ea9f76b4e81e9765"
+          },
+          {
+            "id": "duchang-official-medical-2026",
+            "url": "https://www.duchang.gov.cn/zwgk/zfxxgkzl/bmxxgk/ybj/fgzc/zcwj/202606/t20260618_7255873.html",
+            "record_id": "official-medical-H36042800846",
+            "source_date": "2026-06-18"
+          }
+        ],
+        "official_name": "都昌县大沙镇卫生院",
+        "aliases": [
+          "都昌县大沙镇卫生院"
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "baidu-30f875a0ec21e0db45e27466",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          116.4802937,
+          29.5463361
+        ]
+      },
+      "properties": {
+        "id": "baidu-30f875a0ec21e0db45e27466",
+        "name": "都昌县大港镇卫生院",
+        "kind": "medical",
+        "township_name": "大港镇",
+        "source_url": "https://map.baidu.com/poi/%E9%83%BD%E6%98%8C%E5%8E%BF%E5%A4%A7%E6%B8%AF%E9%95%87%E5%8D%AB%E7%94%9F%E9%99%A2/?uid=30f875a0ec21e0db45e27466",
+        "source_id": "30f875a0ec21e0db45e27466",
+        "source_type": "baidu-public",
+        "source_updated_at": null,
+        "retrieved_at": "2026-09-27",
+        "coordinate_source": "projzh@1.0.0 BD09MC -> BD09 -> GCJ02 -> approximate WGS84",
+        "coordinate_precision": "approximate",
+        "verification_status": "publicly_listed",
+        "settlement_level": null,
+        "population": null,
+        "elderly_ratio": null,
+        "type": "health_centre",
+        "open_hours": null,
+        "has_ac": null,
+        "is_accessible": null,
+        "verified_at": null,
+        "valid_until": null,
+        "cooling_status": null,
+        "current_opening_status": "unknown",
+        "inventory_ids": [
+          "official-medical-H36042800667"
+        ],
+        "address": "九江市都昌县大正路都昌县大港镇人民政府北侧约150米",
+        "source_coordinate_system": "BD09MC",
+        "source_coordinates": [
+          12967953.962602,
+          3424534.777675
+        ],
+        "coordinate_conversion": {
+          "library": "projzh@1.0.0",
+          "source_url": "https://github.com/tschaub/projzh",
+          "license": "MIT",
+          "bd09": [
+            116.49184494206919,
+            29.54971662817353
+          ],
+          "gcj02": [
+            116.48530520604515,
+            29.54379630996284
+          ],
+          "mathematical_roundtrip_error_m": 2.6653,
+          "note": "离线近似换算；往返误差不是实地位置精度。"
+        },
+        "coordinate_evidence": {
+          "public_route_parameter": "en",
+          "public_route_uid": "30f875a0ec21e0db45e27466",
+          "public_route_coordinate_text": "12967953.962602,3424534.777675"
+        },
+        "sources": [
+          {
+            "id": "baidu-public",
+            "url": "https://map.baidu.com/poi/%E9%83%BD%E6%98%8C%E5%8E%BF%E5%A4%A7%E6%B8%AF%E9%95%87%E5%8D%AB%E7%94%9F%E9%99%A2/?uid=30f875a0ec21e0db45e27466",
+            "object_id": "30f875a0ec21e0db45e27466"
+          },
+          {
+            "id": "duchang-official-medical-2026",
+            "url": "https://www.duchang.gov.cn/zwgk/zfxxgkzl/bmxxgk/ybj/fgzc/zcwj/202606/t20260618_7255873.html",
+            "record_id": "official-medical-H36042800667",
+            "source_date": "2026-06-18"
+          }
+        ],
+        "official_name": "都昌县大港镇卫生院",
+        "aliases": [
+          "都昌县大港镇卫生院"
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "baidu-d146b388cd8193de74026964",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          116.2015048,
+          29.4257891
+        ]
+      },
+      "properties": {
+        "id": "baidu-d146b388cd8193de74026964",
+        "name": "左里卫生院",
+        "kind": "medical",
+        "township_name": "左里镇",
+        "source_url": "https://map.baidu.com/poi/%E5%B7%A6%E9%87%8C%E5%8D%AB%E7%94%9F%E9%99%A2/?uid=d146b388cd8193de74026964",
+        "source_id": "d146b388cd8193de74026964",
+        "source_type": "baidu-public",
+        "source_updated_at": null,
+        "retrieved_at": "2026-09-27",
+        "coordinate_source": "projzh@1.0.0 BD09MC -> BD09 -> GCJ02 -> approximate WGS84",
+        "coordinate_precision": "approximate",
+        "verification_status": "publicly_listed",
+        "settlement_level": null,
+        "population": null,
+        "elderly_ratio": null,
+        "type": "health_centre",
+        "open_hours": null,
+        "has_ac": null,
+        "is_accessible": null,
+        "verified_at": null,
+        "valid_until": null,
+        "cooling_status": null,
+        "current_opening_status": "unknown",
+        "inventory_ids": [
+          "official-medical-H36042800841"
+        ],
+        "address": "九江市都昌县左里镇左里街",
+        "source_coordinate_system": "BD09MC",
+        "source_coordinates": [
+          12936925.703176,
+          3409165.330859
+        ],
+        "coordinate_conversion": {
+          "library": "projzh@1.0.0",
+          "source_url": "https://github.com/tschaub/projzh",
+          "license": "MIT",
+          "bd09": [
+            116.21311637808725,
+            29.428918160645026
+          ],
+          "gcj02": [
+            116.20653083914166,
+            29.423180052494963
+          ],
+          "mathematical_roundtrip_error_m": 1.698,
+          "note": "离线近似换算；往返误差不是实地位置精度。"
+        },
+        "coordinate_evidence": {
+          "public_route_parameter": "en",
+          "public_route_uid": "d146b388cd8193de74026964",
+          "public_route_coordinate_text": "12936925.703176,3409165.330859"
+        },
+        "sources": [
+          {
+            "id": "baidu-public",
+            "url": "https://map.baidu.com/poi/%E5%B7%A6%E9%87%8C%E5%8D%AB%E7%94%9F%E9%99%A2/?uid=d146b388cd8193de74026964",
+            "object_id": "d146b388cd8193de74026964"
+          },
+          {
+            "id": "duchang-official-medical-2026",
+            "url": "https://www.duchang.gov.cn/zwgk/zfxxgkzl/bmxxgk/ybj/fgzc/zcwj/202606/t20260618_7255873.html",
+            "record_id": "official-medical-H36042800841",
+            "source_date": "2026-06-18"
+          }
+        ],
+        "official_name": "都昌县左里镇中心卫生院",
+        "aliases": [
+          "都昌县左里镇中心卫生院"
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "baidu-08f1f1f5f0b90fca88db7364",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          116.3161534,
+          29.46641
+        ]
+      },
+      "properties": {
+        "id": "baidu-08f1f1f5f0b90fca88db7364",
+        "name": "徐埠中心卫生院",
+        "kind": "medical",
+        "township_name": "徐埠镇",
+        "source_url": "https://map.baidu.com/poi/%E5%BE%90%E5%9F%A0%E4%B8%AD%E5%BF%83%E5%8D%AB%E7%94%9F%E9%99%A2/?uid=08f1f1f5f0b90fca88db7364",
+        "source_id": "08f1f1f5f0b90fca88db7364",
+        "source_type": "baidu-public",
+        "source_updated_at": null,
+        "retrieved_at": "2026-09-27",
+        "coordinate_source": "projzh@1.0.0 BD09MC -> BD09 -> GCJ02 -> approximate WGS84",
+        "coordinate_precision": "approximate",
+        "verification_status": "publicly_listed",
+        "settlement_level": null,
+        "population": null,
+        "elderly_ratio": null,
+        "type": "health_centre",
+        "open_hours": null,
+        "has_ac": null,
+        "is_accessible": null,
+        "verified_at": null,
+        "valid_until": null,
+        "cooling_status": null,
+        "current_opening_status": "unknown",
+        "inventory_ids": [
+          "official-medical-H36042800662"
+        ],
+        "address": "九江市都昌县徐埠镇徐埠街工商行政管理局徐埠分局",
+        "source_coordinate_system": "BD09MC",
+        "source_coordinates": [
+          12949687.36,
+          3414348.93
+        ],
+        "coordinate_conversion": {
+          "library": "projzh@1.0.0",
+          "source_url": "https://github.com/tschaub/projzh",
+          "license": "MIT",
+          "bd09": [
+            116.32775504446384,
+            29.469675693741042
+          ],
+          "gcj02": [
+            116.32120962581365,
+            29.463870583525498
+          ],
+          "mathematical_roundtrip_error_m": 1.4713,
+          "note": "离线近似换算；往返误差不是实地位置精度。"
+        },
+        "coordinate_evidence": {
+          "public_route_parameter": "en",
+          "public_route_uid": "08f1f1f5f0b90fca88db7364",
+          "public_route_coordinate_text": "12949687.36,3414348.93"
+        },
+        "sources": [
+          {
+            "id": "baidu-public",
+            "url": "https://map.baidu.com/poi/%E5%BE%90%E5%9F%A0%E4%B8%AD%E5%BF%83%E5%8D%AB%E7%94%9F%E9%99%A2/?uid=08f1f1f5f0b90fca88db7364",
+            "object_id": "08f1f1f5f0b90fca88db7364"
+          },
+          {
+            "id": "duchang-official-medical-2026",
+            "url": "https://www.duchang.gov.cn/zwgk/zfxxgkzl/bmxxgk/ybj/fgzc/zcwj/202606/t20260618_7255873.html",
+            "record_id": "official-medical-H36042800662",
+            "source_date": "2026-06-18"
+          }
+        ],
+        "official_name": "都昌县徐埠镇中心卫生院",
+        "aliases": [
+          "都昌县徐埠镇中心卫生院"
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "baidu-05dd7d5f6c768b01ad080f64",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          116.285492,
+          29.5396299
+        ]
+      },
+      "properties": {
+        "id": "baidu-05dd7d5f6c768b01ad080f64",
+        "name": "春桥卫生院",
+        "kind": "medical",
+        "township_name": "春桥乡",
+        "source_url": "https://map.baidu.com/poi/%E6%98%A5%E6%A1%A5%E5%8D%AB%E7%94%9F%E9%99%A2/?uid=05dd7d5f6c768b01ad080f64",
+        "source_id": "05dd7d5f6c768b01ad080f64",
+        "source_type": "baidu-public",
+        "source_updated_at": null,
+        "retrieved_at": "2026-09-27",
+        "coordinate_source": "projzh@1.0.0 BD09MC -> BD09 -> GCJ02 -> approximate WGS84",
+        "coordinate_precision": "approximate",
+        "verification_status": "publicly_listed",
+        "settlement_level": null,
+        "population": null,
+        "elderly_ratio": null,
+        "type": "health_centre",
+        "open_hours": null,
+        "has_ac": null,
+        "is_accessible": null,
+        "verified_at": null,
+        "valid_until": null,
+        "cooling_status": null,
+        "current_opening_status": "unknown",
+        "inventory_ids": [
+          "official-medical-H36042800665"
+        ],
+        "address": "九江市都昌县254县道附近",
+        "source_coordinate_system": "BD09MC",
+        "source_coordinates": [
+          12946257.069775,
+          3423727.114602
+        ],
+        "coordinate_conversion": {
+          "library": "projzh@1.0.0",
+          "source_url": "https://github.com/tschaub/projzh",
+          "license": "MIT",
+          "bd09": [
+            116.29694055837462,
+            29.543372303070473
+          ],
+          "gcj02": [
+            116.29050095646598,
+            29.537070389397286
+          ],
+          "mathematical_roundtrip_error_m": 1.0536,
+          "note": "离线近似换算；往返误差不是实地位置精度。"
+        },
+        "coordinate_evidence": {
+          "public_route_parameter": "en",
+          "public_route_uid": "05dd7d5f6c768b01ad080f64",
+          "public_route_coordinate_text": "12946257.069775,3423727.114602"
+        },
+        "sources": [
+          {
+            "id": "baidu-public",
+            "url": "https://map.baidu.com/poi/%E6%98%A5%E6%A1%A5%E5%8D%AB%E7%94%9F%E9%99%A2/?uid=05dd7d5f6c768b01ad080f64",
+            "object_id": "05dd7d5f6c768b01ad080f64"
+          },
+          {
+            "id": "duchang-official-medical-2026",
+            "url": "https://www.duchang.gov.cn/zwgk/zfxxgkzl/bmxxgk/ybj/fgzc/zcwj/202606/t20260618_7255873.html",
+            "record_id": "official-medical-H36042800665",
+            "source_date": "2026-06-18"
+          }
+        ],
+        "official_name": "都昌县春桥乡卫生院",
+        "aliases": [
+          "都昌县春桥乡卫生院"
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "baidu-4edf9fbf1f892694cc06a465",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          116.4869151,
+          29.3311883
+        ]
+      },
+      "properties": {
+        "id": "baidu-4edf9fbf1f892694cc06a465",
+        "name": "都昌县狮山医院",
+        "kind": "medical",
+        "township_name": "狮山乡",
+        "source_url": "https://map.baidu.com/poi/%E9%83%BD%E6%98%8C%E5%8E%BF%E7%8B%AE%E5%B1%B1%E5%8C%BB%E9%99%A2/?uid=4edf9fbf1f892694cc06a465",
+        "source_id": "4edf9fbf1f892694cc06a465",
+        "source_type": "baidu-public",
+        "source_updated_at": null,
+        "retrieved_at": "2026-09-27",
+        "coordinate_source": "projzh@1.0.0 BD09MC -> BD09 -> GCJ02 -> approximate WGS84",
+        "coordinate_precision": "approximate",
+        "verification_status": "publicly_listed",
+        "settlement_level": null,
+        "population": null,
+        "elderly_ratio": null,
+        "type": "hospital",
+        "open_hours": null,
+        "has_ac": null,
+        "is_accessible": null,
+        "verified_at": null,
+        "valid_until": null,
+        "cooling_status": null,
+        "current_opening_status": "unknown",
+        "inventory_ids": [],
+        "address": "九江市都昌县251县道附近",
+        "source_coordinate_system": "BD09MC",
+        "source_coordinates": [
+          12968682.507046,
+          3397172.227146
+        ],
+        "coordinate_conversion": {
+          "library": "projzh@1.0.0",
+          "source_url": "https://github.com/tschaub/projzh",
+          "license": "MIT",
+          "bd09": [
+            116.49838949695011,
+            29.33455560180102
+          ],
+          "gcj02": [
+            116.49188724877129,
+            29.328518329222938
+          ],
+          "mathematical_roundtrip_error_m": 2.8224,
+          "note": "离线近似换算；往返误差不是实地位置精度。"
+        },
+        "coordinate_evidence": {
+          "public_route_parameter": "en",
+          "public_route_uid": "4edf9fbf1f892694cc06a465",
+          "public_route_coordinate_text": "12968682.507046,3397172.227146"
+        },
+        "sources": [
+          {
+            "id": "baidu-public",
+            "url": "https://map.baidu.com/poi/%E9%83%BD%E6%98%8C%E5%8E%BF%E7%8B%AE%E5%B1%B1%E5%8C%BB%E9%99%A2/?uid=4edf9fbf1f892694cc06a465",
+            "object_id": "4edf9fbf1f892694cc06a465"
+          }
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "baidu-7c1699ef85046272c6f02583",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          116.5460445,
+          29.2400648
+        ]
+      },
+      "properties": {
+        "id": "baidu-7c1699ef85046272c6f02583",
+        "name": "都昌县芗溪乡卫生院",
+        "kind": "medical",
+        "township_name": "芗溪乡",
+        "source_url": "https://map.baidu.com/poi/%E9%83%BD%E6%98%8C%E5%8E%BF%E8%8A%97%E6%BA%AA%E4%B9%A1%E5%8D%AB%E7%94%9F%E9%99%A2/?uid=7c1699ef85046272c6f02583",
+        "source_id": "7c1699ef85046272c6f02583",
+        "source_type": "baidu-public",
+        "source_updated_at": null,
+        "retrieved_at": "2026-09-27",
+        "coordinate_source": "projzh@1.0.0 BD09MC -> BD09 -> GCJ02 -> approximate WGS84",
+        "coordinate_precision": "approximate",
+        "verification_status": "publicly_listed",
+        "settlement_level": null,
+        "population": null,
+        "elderly_ratio": null,
+        "type": "health_centre",
+        "open_hours": null,
+        "has_ac": null,
+        "is_accessible": null,
+        "verified_at": null,
+        "valid_until": null,
+        "cooling_status": null,
+        "current_opening_status": "unknown",
+        "inventory_ids": [
+          "official-medical-H36042800664"
+        ],
+        "address": "九江市都昌县芗溪乡芗溪村家佳悦生活超市西侧",
+        "source_coordinate_system": "BD09MC",
+        "source_coordinates": [
+          12975242.874428,
+          3385566.133362
+        ],
+        "coordinate_conversion": {
+          "library": "projzh@1.0.0",
+          "source_url": "https://github.com/tschaub/projzh",
+          "license": "MIT",
+          "bd09": [
+            116.55732163859795,
+            29.243153973238968
+          ],
+          "gcj02": [
+            116.55083304008095,
+            29.237172817347297
+          ],
+          "mathematical_roundtrip_error_m": 1.9308,
+          "note": "离线近似换算；往返误差不是实地位置精度。"
+        },
+        "coordinate_evidence": {
+          "public_route_parameter": "en",
+          "public_route_uid": "7c1699ef85046272c6f02583",
+          "public_route_coordinate_text": "12975242.874428,3385566.133362"
+        },
+        "sources": [
+          {
+            "id": "baidu-public",
+            "url": "https://map.baidu.com/poi/%E9%83%BD%E6%98%8C%E5%8E%BF%E8%8A%97%E6%BA%AA%E4%B9%A1%E5%8D%AB%E7%94%9F%E9%99%A2/?uid=7c1699ef85046272c6f02583",
+            "object_id": "7c1699ef85046272c6f02583"
+          },
+          {
+            "id": "duchang-official-medical-2026",
+            "url": "https://www.duchang.gov.cn/zwgk/zfxxgkzl/bmxxgk/ybj/fgzc/zcwj/202606/t20260618_7255873.html",
+            "record_id": "official-medical-H36042800664",
+            "source_date": "2026-06-18"
+          }
+        ],
+        "official_name": "都昌县芗溪乡卫生院",
+        "aliases": [
+          "都昌县芗溪乡卫生院"
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "baidu-f9fd6062bb81bd1f0f0e6b64",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          116.207468,
+          29.5008731
+        ]
+      },
+      "properties": {
+        "id": "baidu-f9fd6062bb81bd1f0f0e6b64",
+        "name": "苏山乡卫生院",
+        "kind": "medical",
+        "township_name": "苏山乡",
+        "source_url": "https://map.baidu.com/poi/%E8%8B%8F%E5%B1%B1%E4%B9%A1%E5%8D%AB%E7%94%9F%E9%99%A2/?uid=f9fd6062bb81bd1f0f0e6b64",
+        "source_id": "f9fd6062bb81bd1f0f0e6b64",
+        "source_type": "baidu-public",
+        "source_updated_at": null,
+        "retrieved_at": "2026-09-27",
+        "coordinate_source": "projzh@1.0.0 BD09MC -> BD09 -> GCJ02 -> approximate WGS84",
+        "coordinate_precision": "approximate",
+        "verification_status": "publicly_listed",
+        "settlement_level": null,
+        "population": null,
+        "elderly_ratio": null,
+        "type": "health_centre",
+        "open_hours": null,
+        "has_ac": null,
+        "is_accessible": null,
+        "verified_at": null,
+        "valid_until": null,
+        "cooling_status": null,
+        "current_opening_status": "unknown",
+        "inventory_ids": [
+          "official-medical-H36042800842"
+        ],
+        "address": "江西省九江市都昌县717乡道与994乡道交叉口南100米",
+        "source_coordinate_system": "BD09MC",
+        "source_coordinates": [
+          12937586.589,
+          3418711.58919
+        ],
+        "coordinate_conversion": {
+          "library": "projzh@1.0.0",
+          "source_url": "https://github.com/tschaub/projzh",
+          "license": "MIT",
+          "bd09": [
+            116.21905315185694,
+            29.50396552990593
+          ],
+          "gcj02": [
+            116.2124890232893,
+            29.498292497817836
+          ],
+          "mathematical_roundtrip_error_m": 1.5055,
+          "note": "离线近似换算；往返误差不是实地位置精度。"
+        },
+        "coordinate_evidence": {
+          "public_route_parameter": "en",
+          "public_route_uid": "f9fd6062bb81bd1f0f0e6b64",
+          "public_route_coordinate_text": "12937586.589,3418711.58919"
+        },
+        "sources": [
+          {
+            "id": "baidu-public",
+            "url": "https://map.baidu.com/poi/%E8%8B%8F%E5%B1%B1%E4%B9%A1%E5%8D%AB%E7%94%9F%E9%99%A2/?uid=f9fd6062bb81bd1f0f0e6b64",
+            "object_id": "f9fd6062bb81bd1f0f0e6b64"
+          },
+          {
+            "id": "duchang-official-medical-2026",
+            "url": "https://www.duchang.gov.cn/zwgk/zfxxgkzl/bmxxgk/ybj/fgzc/zcwj/202606/t20260618_7255873.html",
+            "record_id": "official-medical-H36042800842",
+            "source_date": "2026-06-18"
+          }
+        ],
+        "official_name": "都昌县苏山乡卫生院",
+        "aliases": [
+          "都昌县苏山乡卫生院"
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "osm-way-1485918607",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          116.3934832,
+          29.4802678
+        ]
+      },
+      "properties": {
+        "id": "osm-way-1485918607",
+        "name": "都昌县蔡岭中心卫生院",
+        "kind": "medical",
+        "township_name": "蔡岭镇",
+        "source_url": "https://www.openstreetmap.org/way/1485918607",
+        "source_id": "way/1485918607",
+        "source_type": "osm",
+        "source_updated_at": "2026-03-06T07:05:08Z",
+        "retrieved_at": "2026-09-27",
+        "coordinate_source": "OSM API WGS84闭合面几何质心",
+        "coordinate_precision": "approximate",
+        "verification_status": "publicly_listed",
+        "settlement_level": null,
+        "population": null,
+        "elderly_ratio": null,
+        "type": "health_centre",
+        "open_hours": null,
+        "has_ac": null,
+        "is_accessible": null,
+        "verified_at": null,
+        "valid_until": null,
+        "cooling_status": null,
+        "current_opening_status": "unknown",
+        "inventory_ids": [
+          "official-medical-H36042800669"
+        ],
+        "source_coordinate_system": "WGS84",
+        "osm_tags": {
+          "amenity": "hospital",
+          "healthcare": "hospital",
+          "name": "都昌县蔡岭中心卫生院"
+        },
+        "sources": [
+          {
+            "id": "osm",
+            "url": "https://www.openstreetmap.org/way/1485918607",
+            "object_id": "way/1485918607"
+          },
+          {
+            "id": "baidu-public",
+            "url": "https://map.baidu.com/poi/%E9%83%BD%E6%98%8C%E5%8E%BF%E8%94%A1%E5%B2%AD%E4%B8%AD%E5%BF%83%E5%8D%AB%E7%94%9F%E9%99%A2/?uid=49fdffefb8268e5c4007c17e",
+            "object_id": "49fdffefb8268e5c4007c17e",
+            "source_coordinates": [
+              12958374.211867,
+              3416138.3045
+            ],
+            "source_coordinate_system": "BD09MC"
+          },
+          {
+            "id": "duchang-official-medical-2026",
+            "url": "https://www.duchang.gov.cn/zwgk/zfxxgkzl/bmxxgk/ybj/fgzc/zcwj/202606/t20260618_7255873.html",
+            "record_id": "official-medical-H36042800669",
+            "source_date": "2026-06-18"
+          }
+        ],
+        "official_name": "都昌县蔡岭镇中心卫生院",
+        "aliases": [
+          "都昌县蔡岭镇中心卫生院"
+        ],
+        "address": "光荣路28号",
+        "coordinate_note": "OSM院区几何质心，不能当作入口；百度公开点相距约87米。"
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "baidu-9f97b1c531ae2107b64f5459",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          116.4232279,
+          29.2155912
+        ]
+      },
+      "properties": {
+        "id": "baidu-9f97b1c531ae2107b64f5459",
+        "name": "西源卫生院",
+        "kind": "medical",
+        "township_name": "西源乡",
+        "source_url": "https://map.baidu.com/poi/%E8%A5%BF%E6%BA%90%E5%8D%AB%E7%94%9F%E9%99%A2/?uid=9f97b1c531ae2107b64f5459",
+        "source_id": "9f97b1c531ae2107b64f5459",
+        "source_type": "baidu-public",
+        "source_updated_at": null,
+        "retrieved_at": "2026-09-27",
+        "coordinate_source": "projzh@1.0.0 BD09MC -> BD09 -> GCJ02 -> approximate WGS84",
+        "coordinate_precision": "approximate",
+        "verification_status": "publicly_listed",
+        "settlement_level": null,
+        "population": null,
+        "elderly_ratio": null,
+        "type": "health_centre",
+        "open_hours": null,
+        "has_ac": null,
+        "is_accessible": null,
+        "verified_at": null,
+        "valid_until": null,
+        "cooling_status": null,
+        "current_opening_status": "unknown",
+        "inventory_ids": [
+          "official-medical-H36042800666"
+        ],
+        "address": "九江市都昌县西源乡福缘村616乡道",
+        "source_coordinate_system": "BD09MC",
+        "source_coordinates": [
+          12961609.681564,
+          3382503.077503
+        ],
+        "coordinate_conversion": {
+          "library": "projzh@1.0.0",
+          "source_url": "https://github.com/tschaub/projzh",
+          "license": "MIT",
+          "bd09": [
+            116.43485391595517,
+            29.219017672828603
+          ],
+          "gcj02": [
+            116.42835452499611,
+            29.212985865554767
+          ],
+          "mathematical_roundtrip_error_m": 1.173,
+          "note": "离线近似换算；往返误差不是实地位置精度。"
+        },
+        "coordinate_evidence": {
+          "public_route_parameter": "en",
+          "public_route_uid": "9f97b1c531ae2107b64f5459",
+          "public_route_coordinate_text": "12961609.681564,3382503.077503"
+        },
+        "sources": [
+          {
+            "id": "baidu-public",
+            "url": "https://map.baidu.com/poi/%E8%A5%BF%E6%BA%90%E5%8D%AB%E7%94%9F%E9%99%A2/?uid=9f97b1c531ae2107b64f5459",
+            "object_id": "9f97b1c531ae2107b64f5459"
+          },
+          {
+            "id": "duchang-official-medical-2026",
+            "url": "https://www.duchang.gov.cn/zwgk/zfxxgkzl/bmxxgk/ybj/fgzc/zcwj/202606/t20260618_7255873.html",
+            "record_id": "official-medical-H36042800666",
+            "source_date": "2026-06-18"
+          }
+        ],
+        "official_name": "都昌县西源乡卫生院",
+        "aliases": [
+          "都昌县西源乡卫生院"
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "amap-B03180099C",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          116.1929894,
+          29.2705595
+        ]
+      },
+      "properties": {
+        "id": "amap-B03180099C",
+        "name": "都昌县人民医院",
+        "kind": "medical",
+        "township_name": "都昌镇",
+        "source_url": "https://ditu.amap.com/place/B03180099C",
+        "source_id": "B03180099C",
+        "source_type": "amap-public",
+        "source_updated_at": null,
+        "retrieved_at": "2026-09-27",
+        "coordinate_source": "高德公开GCJ-02点，经项目gcj02_to_wgs84迭代近似反算",
+        "coordinate_precision": "approximate",
+        "verification_status": "publicly_listed",
+        "settlement_level": null,
+        "population": null,
+        "elderly_ratio": null,
+        "type": "hospital",
+        "open_hours": null,
+        "has_ac": null,
+        "is_accessible": null,
+        "verified_at": null,
+        "valid_until": null,
+        "cooling_status": null,
+        "current_opening_status": "unknown",
+        "inventory_ids": [
+          "official-medical-H36042800622"
+        ],
+        "address": "高德条目：东风大道75号；百度及2022官方名录：东风大道96号",
+        "source_coordinate_system": "GCJ-02",
+        "source_coordinates": [
+          116.198032,
+          29.267878
+        ],
+        "coordinate_system_source": "https://lbs.amap.com/faq/advisory/others/39838",
+        "official_name": "江西省都昌县人民医院",
+        "aliases": [
+          "江西省都昌县人民医院"
+        ],
+        "sources": [
+          {
+            "id": "amap-public",
+            "url": "https://ditu.amap.com/place/B03180099C",
+            "object_id": "B03180099C"
+          },
+          {
+            "id": "baidu-public",
+            "url": "https://map.baidu.com/poi/%E9%83%BD%E6%98%8C%E5%8E%BF%E4%BA%BA%E6%B0%91%E5%8C%BB%E9%99%A2/?uid=9146753a871da2d19d82ea7e",
+            "object_id": "9146753a871da2d19d82ea7e",
+            "source_coordinates": [
+              12936069.66504,
+              3389359.810971
+            ],
+            "source_coordinate_system": "BD09MC"
+          },
+          {
+            "id": "duchang-official-medical-2026",
+            "url": "https://www.duchang.gov.cn/zwgk/zfxxgkzl/bmxxgk/ybj/fgzc/zcwj/202606/t20260618_7255873.html",
+            "record_id": "official-medical-H36042800622",
+            "source_date": "2026-06-18"
+          }
+        ],
+        "coordinate_note": "两个公开地图代表点相距约113米，门牌写法不同；本图不确定具体入口、当前门牌或当前营业状态。"
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "baidu-92b9f9b856a09834d13ce3a1",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          116.2005564,
+          29.2750432
+        ]
+      },
+      "properties": {
+        "id": "baidu-92b9f9b856a09834d13ce3a1",
+        "name": "都昌镇卫生院",
+        "kind": "medical",
+        "township_name": "都昌镇",
+        "source_url": "https://map.baidu.com/poi/%E9%83%BD%E6%98%8C%E9%95%87%E5%8D%AB%E7%94%9F%E9%99%A2/?uid=92b9f9b856a09834d13ce3a1",
+        "source_id": "92b9f9b856a09834d13ce3a1",
+        "source_type": "baidu-public",
+        "source_updated_at": null,
+        "retrieved_at": "2026-09-27",
+        "coordinate_source": "projzh@1.0.0 BD09MC -> BD09 -> GCJ02 -> approximate WGS84",
+        "coordinate_precision": "approximate",
+        "verification_status": "publicly_listed",
+        "settlement_level": null,
+        "population": null,
+        "elderly_ratio": null,
+        "type": "health_centre",
+        "open_hours": null,
+        "has_ac": null,
+        "is_accessible": null,
+        "verified_at": null,
+        "valid_until": null,
+        "cooling_status": null,
+        "current_opening_status": "unknown",
+        "inventory_ids": [
+          "official-medical-H36042800956"
+        ],
+        "address": "江西省九江市都昌县县府南路184号",
+        "source_coordinate_system": "BD09MC",
+        "source_coordinates": [
+          12936815.716038,
+          3390000.57429
+        ],
+        "coordinate_conversion": {
+          "library": "projzh@1.0.0",
+          "source_url": "https://github.com/tschaub/projzh",
+          "license": "MIT",
+          "bd09": [
+            116.21212835756666,
+            29.278086339909002
+          ],
+          "gcj02": [
+            116.20557206093507,
+            29.272342791549217
+          ],
+          "mathematical_roundtrip_error_m": 1.7499,
+          "note": "离线近似换算；往返误差不是实地位置精度。"
+        },
+        "coordinate_evidence": {
+          "public_route_parameter": "en",
+          "public_route_uid": "92b9f9b856a09834d13ce3a1",
+          "public_route_coordinate_text": "12936815.716038,3390000.57429"
+        },
+        "sources": [
+          {
+            "id": "baidu-public",
+            "url": "https://map.baidu.com/poi/%E9%83%BD%E6%98%8C%E9%95%87%E5%8D%AB%E7%94%9F%E9%99%A2/?uid=92b9f9b856a09834d13ce3a1",
+            "object_id": "92b9f9b856a09834d13ce3a1"
+          },
+          {
+            "id": "duchang-official-medical-2026",
+            "url": "https://www.duchang.gov.cn/zwgk/zfxxgkzl/bmxxgk/ybj/fgzc/zcwj/202606/t20260618_7255873.html",
+            "record_id": "official-medical-H36042800956",
+            "source_date": "2026-06-18"
+          }
+        ],
+        "official_name": "都昌县都昌镇卫生院",
+        "aliases": [
+          "都昌县都昌镇卫生院"
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "baidu-17f2add11de2d0f990114c1d",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          116.3810012,
+          29.2907521
+        ]
+      },
+      "properties": {
+        "id": "baidu-17f2add11de2d0f990114c1d",
+        "name": "阳峰乡卫生院-发热门诊",
+        "kind": "medical",
+        "township_name": "阳峰乡",
+        "source_url": "https://map.baidu.com/poi/%E9%98%B3%E5%B3%B0%E4%B9%A1%E5%8D%AB%E7%94%9F%E9%99%A2-%E5%8F%91%E7%83%AD%E9%97%A8%E8%AF%8A/?uid=17f2add11de2d0f990114c1d",
+        "source_id": "17f2add11de2d0f990114c1d",
+        "source_type": "baidu-public",
+        "source_updated_at": null,
+        "retrieved_at": "2026-09-27",
+        "coordinate_source": "projzh@1.0.0 BD09MC -> BD09 -> GCJ02 -> approximate WGS84",
+        "coordinate_precision": "approximate",
+        "verification_status": "publicly_listed",
+        "settlement_level": null,
+        "population": null,
+        "elderly_ratio": null,
+        "type": "fever_clinic",
+        "open_hours": null,
+        "has_ac": null,
+        "is_accessible": null,
+        "verified_at": null,
+        "valid_until": null,
+        "cooling_status": null,
+        "current_opening_status": "unknown",
+        "inventory_ids": [],
+        "address": "都昌县阳丰乡龙山村卢家坂",
+        "source_coordinate_system": "BD09MC",
+        "source_coordinates": [
+          12956904.869742,
+          3392081.199804
+        ],
+        "coordinate_conversion": {
+          "library": "projzh@1.0.0",
+          "source_url": "https://github.com/tschaub/projzh",
+          "license": "MIT",
+          "bd09": [
+            116.39259033213801,
+            29.294472338519093
+          ],
+          "gcj02": [
+            116.38614758139175,
+            29.28820966631688
+          ],
+          "mathematical_roundtrip_error_m": 0.5168,
+          "note": "离线近似换算；往返误差不是实地位置精度。"
+        },
+        "coordinate_evidence": {
+          "public_route_parameter": "en",
+          "public_route_uid": "17f2add11de2d0f990114c1d",
+          "public_route_coordinate_text": "12956904.869742,3392081.199804"
+        },
+        "sources": [
+          {
+            "id": "baidu-public",
+            "url": "https://map.baidu.com/poi/%E9%98%B3%E5%B3%B0%E4%B9%A1%E5%8D%AB%E7%94%9F%E9%99%A2-%E5%8F%91%E7%83%AD%E9%97%A8%E8%AF%8A/?uid=17f2add11de2d0f990114c1d",
+            "object_id": "17f2add11de2d0f990114c1d"
+          }
+        ]
+      }
+    }
+  ]
+}

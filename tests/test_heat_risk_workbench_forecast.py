@@ -39,7 +39,7 @@ def test_all_real_sources_fail_reports_unknown(production_forecasts, authenticat
     assert payload["forecast_source"] == "预报暂不可用"
     assert payload["forecast_notice"] == "风险暂不可判定；地图仅供静态参考"
     assert payload["days"] == payload["priority"] == []
-    assert len(payload["villages"]) == 16
+    assert len([v for v in payload["villages"] if v["id"].startswith("legacy-village:")]) == 16
     assert "cooling_resources" in payload
 
 
