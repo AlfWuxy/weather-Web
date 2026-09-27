@@ -20,7 +20,7 @@ import csv
 import hashlib
 import json
 import math
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Iterable
@@ -73,18 +73,18 @@ ACTION_CARDS = {
     0: {
         "title": "常规随访",
         "doctor": ["按常规随访计划执行", "核对高龄独居老人联系方式是否有效"],
-        "caregiver": ["保持日常饮水", "留意天气预报变化"],
+        "caregiver": ["按个人医嘱补水；心衰、肾病或已限水者先与医生确认饮水量", "留意天气预报变化"],
     },
     1: {
         "title": "提醒关注",
-        "doctor": ["电话提醒高龄、慢病老人午间避暑", "确认降压药、利尿剂使用者知道补水要点"],
-        "caregiver": ["11–15 时减少户外劳作", "每天主动饮水 1.5–2 升，不等口渴"],
+        "doctor": ["电话提醒高龄、慢病老人午间避暑", "核对降压药、利尿剂使用者的个体补水计划，心衰、肾病及限水患者遵个人医嘱"],
+        "caregiver": ["11–15 时减少户外劳作", "主动少量多次补水；心衰、肾病或已限水者遵个人医嘱，不自行增加饮水量"],
     },
     2: {
         "title": "重点电话随访",
         "doctor": [
             "当天电话联系名单内全部 75 岁以上独居老人",
-            "对心脑血管、肾病、糖尿病患者提示用药与补水",
+            "对心脑血管、肾病、糖尿病患者核对用药与补水医嘱，限水患者不自行增加饮水量",
             "确认最近避暑点开放时间",
         ],
         "caregiver": ["每天至少两次查看老人（中午、傍晚）", "室温超过 32 °C 时陪同去阴凉处或避暑点"],
@@ -94,7 +94,7 @@ ACTION_CARDS = {
         "doctor": [
             "优先上门巡访清单前列村庄的高龄、失能、独居老人",
             "携带口服补液盐与电子体温计",
-            "发现意识模糊、体温 ≥ 39 °C、停止出汗时立即按中暑急救处理并转诊",
+            "出现意识模糊、昏厥等疑似热射病表现，立即拨打 120 并降温；有汗也可能发生，不等待体温或出汗变化",
         ],
         "caregiver": ["中午和夜间都要查看老人", "夜间室温高时安排去有空调的亲友家或避暑点"],
     },
@@ -571,7 +571,7 @@ def build_workbench_data(
 
 def _to_float(value):
     try:
-        if value is None or value == "":
+        if value is None or value == "" or isinstance(value, bool):
             return None
         result = float(value)
         return result if math.isfinite(result) else None
@@ -579,9 +579,10 @@ def _to_float(value):
         return None
 
 
-def base_hazard_level(tmax: float | None) -> int:
+def base_hazard_level(tmax: float | None) -> int | None:
+    tmax = _to_float(tmax)
     if tmax is None:
-        return 0
+        return None
     if tmax >= 40:
         return 4
     if tmax >= 37:
@@ -607,6 +608,17 @@ def classify_daily_hazard(
     for entry in forecast:
         tmax = _to_float(entry.get("temperature_max"))
         tmin = _to_float(entry.get("temperature_min"))
+        if tmax is None or tmin is None or tmax < tmin:
+            run = 0
+            results.append({
+                "date": str(entry.get("forecast_date") or entry.get("date") or ""),
+                "temperature_max": tmax, "temperature_min": tmin,
+                "humidity": _to_float(entry.get("humidity")),
+                "base_level": None, "level": None, "label": "风险暂不可判定",
+                "hot_night": None, "hot_day_run": None, "escalated": False,
+                "reasons": ["预报温度不完整或无效"],
+            })
+            continue
         run = run + 1 if tmax is not None and tmax >= HOT_DAY_C else 0
         base = base_hazard_level(tmax)
         reasons = []
@@ -637,8 +649,10 @@ def classify_daily_hazard(
     return results
 
 
-def combine_daily_level(hazard_level: int, static_level: int | None) -> int:
+def combine_daily_level(hazard_level: int | None, static_level: int | None) -> int | None:
     """逐日风险矩阵：危险等级 × 静态风险等级。"""
+    if hazard_level is None:
+        return None
     if not hazard_level:
         return 0
     if static_level is None:
@@ -682,16 +696,61 @@ def cell_centers() -> dict[str, Any]:
     return _cell_centers(path.stat().st_mtime)
 
 
-def locate_cell(lon: float, lat: float, max_km: float = 0.75) -> str | None:
-    """返回中心点距离最近且在 max_km 内的网格。"""
-    best_id, best_km = None, None
-    for cell_id, (c_lon, c_lat) in cell_centers().items():
-        if abs(c_lon - lon) > 0.02 or abs(c_lat - lat) > 0.02:
+def _ring_relation(lon, lat, ring):
+    """返回点与环的位置：边界为 0，内部为 1，外部为 -1。"""
+    inside = False
+    for start, end in zip(ring, ring[1:] + ring[:1]):
+        ax, ay = start[:2]
+        bx, by = end[:2]
+        cross = (lon - ax) * (by - ay) - (lat - ay) * (bx - ax)
+        if abs(cross) <= 1e-12 and min(ax, bx) - 1e-10 <= lon <= max(ax, bx) + 1e-10 and min(ay, by) - 1e-10 <= lat <= max(ay, by) + 1e-10:
+            return 0
+        if (ay > lat) != (by > lat) and lon < (bx - ax) * (lat - ay) / (by - ay) + ax:
+            inside = not inside
+    return 1 if inside else -1
+
+
+def _geometry_covers(lon, lat, geometry):
+    """多边形包含边界，排除孔洞内部；同时支持 MultiPolygon。"""
+    polygons = [geometry["coordinates"]] if geometry["type"] == "Polygon" else geometry["coordinates"]
+    for polygon in polygons:
+        if _ring_relation(lon, lat, polygon[0]) >= 0 and not any(
+            _ring_relation(lon, lat, hole) > 0 for hole in polygon[1:]
+        ):
+            return True
+    return False
+
+
+@lru_cache(maxsize=4)
+def _cell_polygons(mtime):
+    collection = json.loads(static_asset_path(CELLS_GEOJSON_FILENAME).read_text(encoding="utf-8"))
+    cells = []
+    for feature in collection["features"]:
+        if feature["properties"].get("feature_type") != "modis_cell":
             continue
-        km = haversine_km(lon, lat, c_lon, c_lat)
-        if best_km is None or km < best_km:
-            best_id, best_km = cell_id, km
-    return best_id if best_km is not None and best_km <= max_km else None
+        geometry = feature["geometry"]
+        polygons = [geometry["coordinates"]] if geometry["type"] == "Polygon" else geometry["coordinates"]
+        points = [point for polygon in polygons for point in polygon[0]]
+        bounds = (min(p[0] for p in points), min(p[1] for p in points), max(p[0] for p in points), max(p[1] for p in points))
+        cells.append((feature["properties"]["cell_id"], bounds, geometry))
+    return sorted(cells, key=lambda cell: cell[0])
+
+
+def locate_cell(lon: float, lat: float) -> str | None:
+    """按发布网格实际多边形落格；共边点取字典序首格，范围外返回空。"""
+    path = static_asset_path(CELLS_GEOJSON_FILENAME)
+    for cell_id, (west, south, east, north), geometry in _cell_polygons(path.stat().st_mtime):
+        if west - 1e-10 <= lon <= east + 1e-10 and south - 1e-10 <= lat <= north + 1e-10 and _geometry_covers(lon, lat, geometry):
+            return cell_id
+    return None
+
+
+def locate_township(lon, lat, townships):
+    """村乡镇按村点落界；边界按名称确定，缝隙不猜测行政归属。"""
+    for feature in sorted(townships, key=lambda item: item["properties"]["name_zh"]):
+        if _geometry_covers(lon, lat, feature["geometry"]):
+            return feature["properties"]["name_zh"]
+    return None
 
 
 def village_points(coords_gcj: dict[str, Any], community_rows: Iterable[Any] = ()) -> list[dict[str, Any]]:
@@ -715,7 +774,7 @@ def village_points(coords_gcj: dict[str, Any], community_rows: Iterable[Any] = (
             "lat_wgs84": round(lat, 6),
             "coordinate_source": "站内高德坐标（GCJ-02）换算",
             "cell_id": cell_id,
-            "township": townships[fields["township"][i]]["properties"]["name_zh"] if i is not None else None,
+            "township": locate_township(lon, lat, townships),
             "static_score": fields["score"][i] if i is not None else None,
             "static_level": fields["level"][i] if i is not None else None,
             "hotspot": fields["gi_bin"][i] if i is not None else 0,
@@ -728,7 +787,9 @@ def village_points(coords_gcj: dict[str, Any], community_rows: Iterable[Any] = (
 
 def rank_villages(villages: list[dict[str, Any]], day: dict[str, Any] | None, limit: int = 5) -> list[dict[str, Any]]:
     """按当日风险、静态风险分、老人数排序，生成巡访优先清单。"""
-    hazard = day["level"] if day else 0
+    hazard = day.get("level") if day else None
+    if hazard is None:
+        return []
     ranked = []
     for village in villages:
         daily = combine_daily_level(hazard, village.get("static_level"))
@@ -754,13 +815,16 @@ def rank_villages(villages: list[dict[str, Any]], day: dict[str, Any] | None, li
     return ranked[:limit] if limit else ranked
 
 
-def build_daily_payload(forecast: list[dict[str, Any]], prior_hot_days: int, villages, cooling, source: str):
+def build_daily_payload(forecast: list[dict[str, Any]], prior_hot_days: int, villages, cooling, source: str,
+                        status: str = "ok", notice: str = ""):
     workbench = load_workbench()
     threshold = workbench["metadata"]["daily"]["hot_night_tmin_c"]
     days = classify_daily_hazard(forecast, threshold, prior_hot_days)
     return {
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
         "forecast_source": source,
+        "forecast_status": status,
+        "forecast_notice": notice,
         "hot_night_tmin_c": threshold,
         "days": days,
         "villages": villages,
@@ -797,17 +861,16 @@ def daily_payload_for_request():
     from flask import current_app
 
     from core.db_models import Community, CoolingResource
-    from core.time_utils import today_local
-    from core.weather import get_consecutive_hot_days, get_forecast_with_cache, is_demo_mode
+    from core.weather import _weather_cache_location, get_consecutive_hot_days
+    from services.heat_risk_workbench_forecast import get_workbench_forecast
 
-    location = current_app.config.get("HEAT_WORKBENCH_LOCATION") or "都昌"
-    forecast, _ = get_forecast_with_cache(location, days=7)
-    forecast = list(forecast or [])
+    location = _weather_cache_location(current_app.config.get("HEAT_WORKBENCH_LOCATION") or "都昌")
+    forecast, status, source, notice = get_workbench_forecast(location)
     prior = 0
     try:
-        if not is_demo_mode():
-            yesterday_run = get_consecutive_hot_days(location, target_date=today_local())
-            prior = max(int(yesterday_run) - 1, 0) if yesterday_run else 0
+        if forecast and status != "demo":
+            previous_day = date.fromisoformat(forecast[0]["forecast_date"]) - timedelta(days=1)
+            prior = max(int(get_consecutive_hot_days(location, target_date=previous_day, threshold=HOT_DAY_C) or 0), 0)
     except Exception:
         prior = 0
     try:
@@ -819,10 +882,7 @@ def daily_payload_for_request():
     except Exception:
         cooling_rows = []
     villages = village_points(current_app.config.get("COMMUNITY_COORDS_GCJ") or {}, communities)
-    source = "演示数据" if is_demo_mode() else "站内 7 天预报"
-    if forecast and forecast[0].get("is_mock"):
-        source = "演示数据"
-    return build_daily_payload(forecast, prior, villages, _cooling_points(cooling_rows), source)
+    return build_daily_payload(forecast, prior, villages, _cooling_points(cooling_rows), source, status, notice)
 
 
 # ---------------------------------------------------------------------------
@@ -857,6 +917,8 @@ def render_heat_risk_workbench():
         "heat_risk_workbench.html",
         gis_data_url=_versioned_static(CELLS_GEOJSON_FILENAME),
         workbench_data_url=_versioned_static(WORKBENCH_FILENAME),
+        workbench_js_url=_versioned_static("js/heat-risk-workbench.js"),
+        workbench_css_url=_versioned_static("css/heat-risk-workbench.css"),
         daily_url=url_for("user.heat_exposure_gis_daily"),
         default_cell_id=DEFAULT_CELL_ID,
         tianditu_key=current_app.config.get("TIANDITU_TK") or "",

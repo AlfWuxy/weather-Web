@@ -33,6 +33,8 @@ v1.2 科研版回答“数据是什么”。v2.0 工作台回答“今天先去�
 
 坐标读数始终换算回 WGS84 显示。站内村点（`config.COMMUNITY_COORDS_GCJ`）与后台录入的避暑点按 GCJ-02 处理，服务端先反算为 WGS84 再落格（该区域偏移约 500 m，不纠偏会落错格）。
 
+村点按已发布 GeoJSON 的原生网格多边形包含关系落格，不以最近网格中心代替。共边点按 `cell_id` 字典序取首格，范围外不匹配。村所属乡镇按村点落入 OSM 乡镇多边形确定，边界按乡镇名称排序确定，缝隙标为未知；网格汇总仍沿用格中心的乡镇归属。
+
 天地图 key 在 <https://console.tianditu.gov.cn/api/key> 申请，类型选“浏览器端”。浏览器端 key 会出现在页面源码中，属于正常用法，建议在天地图控制台配置域名白名单。
 
 ## 4. 综合热风险分
@@ -72,7 +74,11 @@ OSM 精确点优先（目前只有蔡岭中心卫生院）。其余按“一乡�
 
 ### 5.1 危险等级
 
-预报来自站内 7 天预报链路（`core.weather.get_forecast_with_cache`，地点 `HEAT_WORKBENCH_LOCATION`，默认“都昌”）。
+工作台优先使用和风天气真实预报（`core.weather.get_qweather_forecast_with_cache`），失败时启用独立的 Open-Meteo 7 天真实预报。地点由 `HEAT_WORKBENCH_LOCATION`（默认“都昌”）经站内规范化后取得，备用源复用主源的坐标解析。此备用仅用于工作台巡访参考，不更改全站正式健康风险计算的天气来源门禁。
+
+两个来源都必须满足：明确真实来源、最高与最低温为有限数且最高不低于最低、本地今日起连续 7 天。缺值不填默认温度。主源标记陈旧或已过期时拒绝使用；备用预报按 `FORECAST_CACHE_TTL_MINUTES`（默认 20 分钟）存储于独立缓存，每次读取仍检查日期，跨午夜不复用昨日开头的缓存。
+
+接口 `forecast_status` 为 `ok`（主源）、`fallback`（备用）、`unavailable`（均不可用）或 `demo`（显式演示），并返回 `forecast_source` 与 `forecast_notice`。备用来源标注“Open-Meteo（备用预报）”；均不可用时返回空 `days`、空 `priority` 及“风险暂不可判定；地图仅供静态参考”，保留村点和避暑点，不生成低风险等级或天气驱动行动卡。只有显式演示模式使用演示数据。
 
 | 最高气温 | 基础等级 |
 | --- | --- |
@@ -85,7 +91,7 @@ OSM 精确点优先（目前只有蔡岭中心卫生院）。其余按“一乡�
 基础等级 ≥ 1 时，满足下列任一条件则上调一级（最高 4 级）：
 
 - 热夜：最低气温 ≥ 26.5 °C。该阈值为都昌全年日最低气温第 95 百分位，由 `data/raw/逐日数据.csv`（2022-12 至 2025-10，1,036 天）在构建时计算。
-- 热浪：连续第 3 个及以上最高气温 ≥ 35 °C 的日子，预报首日会接上已观测的连续高温日数。
+- 热浪：连续第 3 个及以上最高气温 ≥ 35 °C 的日子。从预报首日前一天查询同一规范化地点的已观测连续高温日数，再接上预报日，不要求今日观测已入库，也不额外减一天。
 
 ### 5.2 逐日矩阵
 
@@ -94,6 +100,8 @@ OSM 精确点优先（目前只有蔡岭中心卫生院）。其余按“一乡�
 ### 5.3 优先清单
 
 按当日风险、静态综合分、估计老人数（村档案人口 × 老年比例）降序排列，取前 5。行动卡取清单首位村的当日等级。无高温日时地图默认显示静态综合风险。
+
+行动卡补水建议遵循个人医嘱，心衰、肾病或已有饮水限制者先与医生确认饮水量，不统一给定每日升数。疑似热射病立即求助与降温，不把停止出汗作为必要条件。依据：[CDC 心血管疾病与高温临床指导](https://www.cdc.gov/heat-health/hcp/clinical-overview/heat-and-people-with-cardiovascular-disease.html)、[CDC 热相关疾病说明](https://www.cdc.gov/niosh/heat-stress/about/illnesses.html)。
 
 ## 6. 局限
 
@@ -145,6 +153,7 @@ python -m services.heat_risk_workbench_service build
 | 文件 | 说明 |
 | --- | --- |
 | `services/heat_risk_workbench_service.py` | 构建器、逐日分级、村点换算、页面渲染 |
+| `services/heat_risk_workbench_forecast.py` | 工作台真实预报校验、备用源及独立缓存 |
 | `templates/heat_risk_workbench.html` | 工作台模板 |
 | `static/js/heat-risk-workbench.js` | 地图与交互 |
 | `static/css/heat-risk-workbench.css` | 样式（含打印版） |
