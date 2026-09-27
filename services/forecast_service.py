@@ -1083,28 +1083,6 @@ class ForecastService:
         
         return recommendations
     
-    def calculate_forecast_accuracy(self, forecast_date, actual_visits):
-        """
-        回测：计算预报准确性
-        
-        参数:
-        - forecast_date: 预报日期
-        - actual_visits: 实际门诊量
-        
-        返回:
-        - metrics: 评估指标
-        """
-        # 这里可以存储历史预报与实际值的对比
-        # 计算MAE, RMSE, Brier Score等
-        
-        metrics = {
-            'mae': None,  # Mean Absolute Error
-            'rmse': None,  # Root Mean Square Error
-            'brier_score': None,  # 概率预报校准度
-            'reliability': None  # 可靠性
-        }
-        
-        return metrics
     
     def get_service_status(self):
         """获取服务状态"""

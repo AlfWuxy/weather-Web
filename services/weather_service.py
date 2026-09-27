@@ -1299,43 +1299,6 @@ class WeatherService:
             'conditions': extreme_conditions
         }
     
-    def analyze_weather_disease_correlation(self, weather_conditions, disease_records):
-        """
-        分析天气与疾病的相关性
-        基于历史数据进行统计分析
-        """
-        correlations = {}
-        
-        # 呼吸道疾病与天气关系
-        correlations['呼吸道疾病'] = {
-            '低温': 0.75,  # 相关系数
-            '高湿度': 0.65,
-            '空气污染': 0.85,
-            '温差大': 0.70
-        }
-        
-        # 心血管疾病与天气关系
-        correlations['心血管疾病'] = {
-            '高温': 0.72,
-            '低温': 0.68,
-            '气压变化': 0.60,
-            '温差大': 0.65
-        }
-        
-        # 关节炎与天气关系
-        correlations['关节炎'] = {
-            '高湿度': 0.78,
-            '低温': 0.70,
-            '气压低': 0.62
-        }
-        
-        # 消化系统疾病与天气关系
-        correlations['消化系统疾病'] = {
-            '高温': 0.55,
-            '湿度变化': 0.45
-        }
-        
-        return correlations
     
     def generate_weather_alert(self, location, weather_data):
         """
@@ -1398,50 +1361,5 @@ class WeatherService:
             recommendations.append('呼吸道疾病患者应谨慎外出')
         
         return recommendations
-    
-    def calculate_risk_index(self, weather_data, user_health_profile):
-        """
-        计算个人天气健康风险指数
-        综合考虑天气因素和个人健康状况
-        """
-        risk_score = 0
-        
-        # 基础天气风险
-        extreme_result = self.identify_extreme_weather(weather_data)
-        if extreme_result['is_extreme']:
-            risk_score += len(extreme_result['conditions']) * 20
-        
-        # 根据个人健康状况调整
-        if user_health_profile.get('age', 0) > 65:
-            risk_score += 15  # 老年人风险增加
-        
-        if user_health_profile.get('has_chronic_disease'):
-            risk_score += 25  # 慢性病患者风险增加
-        
-        # 特定疾病与天气的关联
-        chronic_diseases = user_health_profile.get('chronic_diseases', [])
-        for disease in chronic_diseases:
-            if '呼吸' in disease and (self._safe_float(weather_data.get('aqi'), 0.0) > 100):
-                risk_score += 20
-            if '心血管' in disease and abs(weather_data.get('temperature', 20) - 20) > 10:
-                risk_score += 20
-            if '关节' in disease and weather_data.get('humidity', 0) > 80:
-                risk_score += 15
-        
-        # 标准化到0-100
-        risk_score = min(risk_score, 100)
-        
-        # 确定风险等级
-        if risk_score < 30:
-            risk_level = '低风险'
-        elif risk_score < 60:
-            risk_level = '中风险'
-        else:
-            risk_level = '高风险'
-        
-        return {
-            'risk_score': risk_score,
-            'risk_level': risk_level
-        }
 
-  
+

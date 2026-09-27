@@ -1004,24 +1004,6 @@ class DLNMRiskService:
         
         return total_rr
     
-    def calculate_attributable_fraction(self, temperature, baseline_temp=None):
-        """
-        计算可归因分数 (Attributable Fraction)
-        AF = (RR - 1) / RR
-        """
-        if baseline_temp is None:
-            baseline_temp = self.mmt
-        
-        rr_t, _ = self.calculate_rr(temperature)
-        rr_b, _ = self.calculate_rr(baseline_temp) if baseline_temp is not None else (1.0, {})
-        rr = (rr_t / rr_b) if (rr_b and rr_b > 0) else rr_t
-        af = (rr - 1) / rr if rr > 1 else 0
-        
-        return {
-            'af': af,
-            'rr': rr,
-            'interpretation': f'{af*100:.1f}% 的门诊量可归因于温度偏离最优温度'
-        }
     
     def get_risk_thresholds(self):
         """获取风险阈值"""

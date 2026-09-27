@@ -100,7 +100,6 @@
 │   ├── ai_question_service.py       # AI 问答服务
 │   ├── community_risk_service.py    # 社区风险评估
 │   ├── emergency_triage.py          # 紧急分诊
-│   ├── user_service.py              # 兼容层 (转发到 user/)
 │   │
 │   ├── user/                        # 用户服务模块 (重构后)
 │   │   ├── __init__.py              # 统一导出

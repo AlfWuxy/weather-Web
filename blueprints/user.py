@@ -5,7 +5,7 @@ from flask_login import login_required
 
 from core.extensions import limiter
 from core.security import rate_limit_key
-from services import user_service
+from services import user as user_service
 
 bp = Blueprint('user', __name__)
 
