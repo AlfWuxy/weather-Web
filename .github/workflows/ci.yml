@@ -84,3 +84,16 @@ jobs:
 
       - name: 运行手工契约测试
         run: python -m pytest -q -m manual
+
+      - name: 行为锁、限流锁与模板展开证明（与基线分支逐字对比）
+        # 有意改变页面或接口输出的 PR，加上 behavior-change 标签即可跳过
+        if: github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'behavior-change')
+        run: |
+          python scripts/template_expand_check.py --base "origin/${GITHUB_BASE_REF}"
+          git worktree add /tmp/behavior-base "origin/${GITHUB_BASE_REF}"
+          python scripts/behavior_lock.py record --root /tmp/behavior-base --out /tmp/behavior-base.json
+          python scripts/behavior_lock.py record --root . --out /tmp/behavior-head.json
+          python scripts/behavior_lock.py diff /tmp/behavior-base.json /tmp/behavior-head.json
+          python scripts/ratelimit_lock.py record --root /tmp/behavior-base --out /tmp/ratelimit-base.json
+          python scripts/ratelimit_lock.py record --root . --out /tmp/ratelimit-head.json
+          python scripts/ratelimit_lock.py diff /tmp/ratelimit-base.json /tmp/ratelimit-head.json
