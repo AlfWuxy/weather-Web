@@ -12,7 +12,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 AMAP_CANDIDATES_PATH = PROJECT_ROOT / "data/cooling_resource_candidates.json"
 GIS_INVENTORY_PATH = PROJECT_ROOT / "data/gis/duchang_resource_inventory.json"
 GIS_RESOURCES_PATH = PROJECT_ROOT / "data/gis/duchang_resources.geojson"
-PUBLIC_CANDIDATE_LIMIT = 60
+PUBLIC_CANDIDATE_LIMIT = 200
 ROLE_LABELS = {"cooling_candidate": "候选公共纳凉场所", "service_candidate": "候选志愿服务点"}
 CATEGORY_LABELS = {"public_culture": "公共文化场所", "community_service": "社区服务场所", "volunteer_service": "志愿服务组织"}
 logger = logging.getLogger(__name__)
@@ -77,6 +77,19 @@ def _valid_coordinates(lon, lat):
     return (lon, lat) if haversine_km(lon, lat, 116.20, 29.27) <= 80 else None
 
 
+def _location_verification(row):
+    """地点核验只说明位置与项目负责人确认，不授予空调、营业时段或人工核验有效期。"""
+    verified = (row.get("location_verification_status") == "verified"
+                and row.get("location_verification_method") == "amap_poi_and_user_confirmation")
+    return {
+        "location_verification_status": "verified" if verified else "pending",
+        "location_verification_method": "amap_poi_and_user_confirmation" if verified else None,
+        "location_verified_at": _text(row.get("location_verified_at"), 32) if verified else None,
+        "location_verification_note": _text(row.get("location_verification_note")) if verified else "",
+        "public_access_confirmation": "user_confirmed" if verified and row.get("public_access_confirmation") == "user_confirmed" else None,
+    }
+
+
 def _legacy_items(payload):
     if payload.get("publication_status") != "candidate_only" or payload.get("coordinate_system") != "GCJ-02":
         return []
@@ -97,7 +110,8 @@ def _legacy_items(payload):
                 "longitude": coords[0] if coords else None, "latitude": coords[1] if coords else None,
                 "coordinate_system": "GCJ-02" if coords else None,
                 "coordinate_source": f"高德 Place Text API v5 候选 {row['source_id']}，仍需管理员现场或电话人工核验" if coords else "",
-                "prefill_open_hours": _text(row.get("opening_hours_hint"), 160), "catalog_origin": "amap"}
+                "prefill_open_hours": _text(row.get("opening_hours_hint"), 160), "catalog_origin": "amap",
+                **_location_verification(row)}
         items.append(item)
     return items
 
@@ -163,11 +177,13 @@ def load_cooling_candidate_catalog(amap_path=None):
                       "current_opening_status": "unknown", "verification_status": "pending_human_verification", "is_active": False,
                       "has_ac": None, "is_accessible": None, "latitude": None, "longitude": None, "coordinate_system": None,
                       "coordinate_source": "", "prefill_open_hours": "", "catalog_origin": "official_inventory",
-                      **mapped.get(record_id, {})})
-    items.extend(_legacy_items(legacy))
+                      **mapped.get(record_id, {}), **_location_verification(row)})
+    # 新目录复用旧高德 ID 时保留新核验记录，避免旧预览覆盖或重复展示。
+    inventory_ids = {item["source_id"] for item in items}
+    items.extend(item for item in _legacy_items(legacy) if item["source_id"] not in inventory_ids)
     return {"publication_status": "candidate_only", "coordinate_system": "GCJ-02（仅有坐标的管理预填）",
             "generated_at": inventory.get("collected_at") or legacy.get("generated_at"),
-            "notice": "候选仅供核验，不代表当前开放、配有空调、允许公众纳凉或已正式发布。",
+            "notice": "地点核验与纳凉设施核验分别记录；已核验地点保留高德来源及项目负责人确认，开放时间、空调和无障碍条件以各条记录为准。",
             "items": list({item["source_id"]: item for item in items}.values())}
 
 
@@ -188,5 +204,5 @@ def public_candidate_previews(payload):
                        "source_label": item.get("source_label"), "source_url": _source_url(item.get("source_url")),
                        "source_date": item.get("source_date"), "audience_hint": item.get("audience_hint"),
                        "facilities_hint": item.get("facilities_hint"), "verification_note": item.get("verification_note"),
-                       "current_opening_status": "unknown"})
+                       "current_opening_status": "unknown", **_location_verification(item)})
     return result[:PUBLIC_CANDIDATE_LIMIT]

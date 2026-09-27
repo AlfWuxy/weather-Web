@@ -2,11 +2,11 @@
 
 采集日期：2026-09-27。文件为 `data/gis/duchang_resources.geojson`，并与 `duchang_resource_inventory.json` 的官方机构表分开保存。
 
-本版有 **25 个医疗点、9 条避暑候选地图记录、0 个已确认当前开放避暑点**。医疗点按现有 OSM 乡界落入 **22 个乡镇**；鸣山未找到可信机构坐标，汪墩存在同名机构地点冲突，均没有用乡政府或乡镇中心代替。点位不是全县医疗机构普查，更不是当前营业或急救接诊能力的确认。
+本版有 **25 个医疗点、59 条纳凉设施候选地图记录**。其中 **50 条地点已核验**，依据为高德名称与坐标核对及项目负责人确认真实、可前往；未作现场勘验，开放时段和空调等条件未提供，纳凉设施功能仍未核验。医疗点按现有 OSM 乡界落入 **22 个乡镇**；鸣山未找到可信机构坐标，汪墩存在同名机构地点冲突，均没有用乡政府或乡镇中心代替。点位不是全县医疗机构普查，更不是当前营业或急救接诊能力的确认。
 
 ## 字段及事实边界
 
-- `verification_status=publicly_listed` 仅表示在公开地图可查到该机构条目，不表示实地核验、仍在营业或保证可以接诊；全部 `current_opening_status=unknown`。
+- `verification_status=publicly_listed` 表示公开地图设施条目。新增 50 条另以 `location_verification_status=verified` 记录地点核验、以 `public_access_confirmation=user_confirmed` 记录项目负责人确认可前往；这与空调、无障碍、运营时段或医疗接诊能力核验分开。兼容字段 `current_opening_status` 未用于表达本轮用户确认。
 - 百度点保留具体门诊名：**北山乡卫生院-预防接种门诊**和**阳峰乡卫生院-发热门诊**。两者 `inventory_ids=[]`，不将科室点升级为整个卫生院，不从待定位表移除主院。
 - **都昌县狮山医院**和**都昌县多宝乡寺前村卫生院**为地图原名。官方表分别有狮山乡卫生院、寺前村卫生所，但目前没有足够别名证据确认同一机构；这两点也未关联官方 ID。
 - 其余 21 个医疗点使用逐项显式 `inventory_ids` 关联官方机构全称。匹配依据为公开名称、对应乡镇和可用地址；没有自动模糊字符串合并，也没有改写官方原表。该关联只用于同机构条目去重，不把 2026 医保公示日期当作坐标核验日期。
@@ -46,12 +46,12 @@
 
 [2026-06-18 都昌县医保局定点医疗机构公示](https://www.duchang.gov.cn/zwgk/zfxxgkzl/bmxxgk/ybj/fgzc/zcwj/202606/t20260618_7255873.html)用于机构收录与明确 ID 关联，不能证明当前营业。地址补充来自[2022-12-16 发热门诊公示](https://www.duchang.gov.cn/zwzx/gsgg/202212/t20221216_5885213.html)，并保留其历史日期。
 
-官方/机构库存共 373 条，其中 17 条为避暑候选资料：12 条有历史纳凉报道，另 5 条只证明公共服务或文化设施存在。本轮公开展示 10 条指定候选，复用蓝海、西街图书驿站、人民广场爱心驿站的原 ID，新增 7 条；其中 7 条取得高德具体设施坐标、3 条继续无坐标。此前县图书馆的百度点及 OSM 文化中心候选仍保留。合计 9 条地图候选记录，不能据此声称有 9 处独立或当前开放的纳凉场所。历史新闻只能支持报道当年的事实，不能用广场、社区或村中心代替设施坐标。
+库存现共 423 条，其中 67 条为纳凉设施候选资料：12 条有历史纳凉报道，其余为公共服务、文化设施或高德具体设施资料。第一批公开展示的 10 条保持原有 ID 与来源，其中 7 条有坐标、3 条无坐标；本次再加入 50 条地点已核验的资料，复用 5 个原高德候选 ID，另 45 条使用 `amap-cooling-<POI ID>`。此前县图书馆的百度点及 OSM 文化中心候选仍保留。共 59 条地图记录，不能把记录数等同独立设施容量。历史新闻只支持报道当年的事实，不能用广场、社区或村中心代替设施坐标。
 
 县图书馆的百度点距 OSM 文化中心 library 建筑质心约 83 米。两条来源暂保留为候选地图点，可能同属一处文化设施群；**不能据此声称有两处独立纳凉场所**。图书馆的2025年报道仅记在历史证据字段，当前空调、可进入性和开放时间仍为未知。
 
 
-### 本轮高德避暑候选扩展（2026-09-27）
+### 第一批高德避暑候选扩展（2026-09-27）
 
 用户指定采用高德地图定位。7 条坐标均取具体设施的官方 Web Service v5 POI 回执（`region=360428`、`city_limit=true`），普通网页详情辅助核对名称和地址。未保存密钥或私人评论。原始 GCJ-02、POI ID、高德原名、查询词及准确查询时间逐点保留；由项目 `gcj02_to_wgs84` 迭代近似反算为 WGS84，保留 7 位小数。数学往返误差最大约 **0.006 米**，只验证转换链，**不是设施的实地定位精度**，全部精度仍标为 `approximate`。高德及数据提供者保留权利，不声明开放数据库许可。
 
@@ -119,7 +119,7 @@
 
 ## 复核与原始证据
 
-本轮检查：所有发布点均为有限 WGS84 坐标并落入县域乡镇几何；feature ID 唯一；21 个医疗及 8 个文化/驿站库存 ID 均存在且唯一关联；科室没有主院关联；所有空调、公共可进入及当前开放字段均未知；0 个 `cooling_verified`。原始 OSM XML、百度 26 条医疗 MC 记录及 1 条县图书馆 MC 记录、高德 7 条具体设施回执和分步转换、跨源检查另存本地研究归档，不作运行依赖。
+本轮检查：所有发布点均为有限 WGS84 坐标并落入县域乡镇几何；feature ID 唯一；21 个医疗及 58 个文化/驿站库存 ID 均存在且唯一关联；科室没有主院关联；空调、无障碍和开放时段未作补填；50 条单独记录地点核验及用户确认可前往，0 个 `cooling_verified`（纳凉设施功能核验）。原始 OSM XML、百度 26 条医疗 MC 记录及 1 条县图书馆 MC 记录、高德 7 条具体设施回执和分步转换、跨源检查另存本地研究归档，不作运行依赖。
 
 主要文件：`baidu-records.json`、`baidu-records-converted.json`、`conversion-checks.json`、`resources-excluded-and-checks.json`、`osm-county-map-0.xml`、`osm-county-map-3.xml`、`library-final-raw.json`、`library-final-converted.json`。每个发布点同时将必要的原坐标、对象 ID 和来源保存在 GeoJSON，避免只依赖临时文件。数据许可按各来源逐项保留，与项目代码许可分开。
 
@@ -132,3 +132,72 @@
 | `library-final-raw.json` | `57bf1e48cc8a19ce76b760a379c417ff7753080f054146eb374f4f9cfa4ce354` |
 | `library-final-converted.json` | `a812a9ca78b875708efbf932e6c53ddc6b99abde88564754c5e6ff5689a93594` |
 | `conversion-checks.json` | `62f70c88caf07d8768b48c749eb07ab81bbc6e802520b64ef921f04637f9c246` |
+
+
+## 第二批 50 条地点核验与坐标接入（2026-09-27）
+
+本批研究进行了 16 次高德关键词查询，每次取第一页最多 25 条，不是全县设施普查。纳入 20 条驿站、30 条文化/社区设施，共 50 个具体 POI；其中 5 个原候选坐标经本次查询确认与旧记录相同，复用原 B 开头 ID，保留来源日期差异，不生成第二条公开候选。新增 45 条使用 `amap-cooling-<B ID>` 库存 ID；所有地图 ID 为 `amap-<B ID>`。高德来源分类保留在 `source_category`，不能用 `community_service` 代替驿站统计，因为该类别也包括党群服务中心。
+
+地点核验使用独立字段：`location_verification_status=verified`、`location_verification_method=amap_poi_and_user_confirmation`、`location_verified_at=2026-09-27`、`public_access_confirmation=user_confirmed`。说明为“高德名称与坐标已核对；项目负责人确认地点真实、可前往。未现场核验，开放时间及空调等设施信息未提供。”本轮没有把这一确认扩展为冷气纳凉、无障碍或固定营业时段的保证；`kind=cooling_candidate` / `cooling_status=candidate` 表示纳凉设施功能尚未核验。`has_ac`、`is_accessible`、`open_hours`、`verified_at`、`valid_until` 均为 `null`，未新增数据库正式资源或运营有效期，`opening_hours_hint` 为空。
+
+原始 GCJ-02 与项目算法转换的 WGS84 坐标逐点保留，公开 POI ID、查询词、查询日期及转换方法可追溯。数学往返误差和小数位只用于转换一致性检查，不能解释为实地测量精度。
+
+**蔡岭镇综合文化站（B0HAUZPGP9）**保留原 GCJ-02 `[116.406636,29.477729]`，对应 WGS84 `[116.40146866,29.48015564]`。该点在都昌县县界内，但落在现有乡界数据的缝隙；地图照常展示，来源乡名保持蔡岭镇，运行时 `township=None` 并提示归属待核验，不移点、不扩边界、不计入任何乡镇汇总。因而地图共 59 条候选，24 乡镇候选计数之和为 58；另外 1 条为县内乡界待复核点。这与“地点已核验”互不替代。
+
+6 组 100 米内的相邻记录均保留 `related_ids` 与具体距离、可能共址说明；建行两组还保留门牌不一致提示。人民广场蒲公英与原爱心驿站约 183 米、智能化工会站与景程东湖社区站约 134 米的跨批相邻线索也保留。地点真实并不证明这些记录对应独立建筑、独立入口或可累加的纳凉容量。未取得身份匹配的汪墩“活动中心”、六处历史爱心驿站和此前三处无坐标候选仍不补造设施坐标。
+
+| 设施名称 | 高德 POI / 坐标来源 | 库存 ID | 几何归属 |
+| --- | --- | --- | --- |
+| 农情暖域工会驿站(农行都昌中馆支行) | [B0JKZ7QJFT](https://www.amap.com/place/B0JKZ7QJFT) | `amap-cooling-B0JKZ7QJFT` | 中馆镇 |
+| 大树乡政府爱心驿站(工会驿站) | [B0J05RX596](https://www.amap.com/place/B0J05RX596) | `amap-cooling-B0J05RX596` | 大树乡 |
+| 都昌县红色蒲公英驿站(人民广场站) | [B0KGRZGICR](https://www.amap.com/place/B0KGRZGICR) | `amap-cooling-B0KGRZGICR` | 大树乡 |
+| 农情暖域工会驿站(农行都昌蔡岭支行) | [B0JKMM40AL](https://www.amap.com/place/B0JKMM40AL) | `amap-cooling-B0JKMM40AL` | 蔡岭镇 |
+| 三公里建设银行爱心驿站(工会驿站) | [B0JR3LFQTI](https://www.amap.com/place/B0JR3LFQTI) | `amap-cooling-B0JR3LFQTI` | 都昌镇 |
+| 东湖建设银行爱心驿站(工会驿站) | [B0J3R71OYY](https://www.amap.com/place/B0J3R71OYY) | `amap-cooling-B0J3R71OYY` | 都昌镇 |
+| 农情暖域工会驿站(农行都昌金都支行) | [B0JKG7EDM2](https://www.amap.com/place/B0JKG7EDM2) | `amap-cooling-B0JKG7EDM2` | 都昌镇 |
+| 红色蒲公英驿站(东街社区站) | [B0J1J7YSDT](https://www.amap.com/place/B0J1J7YSDT) | `amap-cooling-B0J1J7YSDT` | 都昌镇 |
+| 红色蒲公英驿站(工商银行都昌支行站) | [B0KG7H9V9G](https://www.amap.com/place/B0KG7H9V9G) | `amap-cooling-B0KG7H9V9G` | 都昌镇 |
+| 红色蒲公英驿站(建设银行支行站) | [B0J1JUR9L3](https://www.amap.com/place/B0J1JUR9L3) | `amap-cooling-B0J1JUR9L3` | 都昌镇 |
+| 芙蓉社区爱心驿站(工会驿站) | [B0JK9UDWR1](https://www.amap.com/place/B0JK9UDWR1) | `amap-cooling-B0JK9UDWR1` | 都昌镇 |
+| 西湖社区爱心驿站(工会驿站) | [B0JK1CJZ7O](https://www.amap.com/place/B0JK1CJZ7O) | `amap-cooling-B0JK1CJZ7O` | 都昌镇 |
+| 都昌县智能化工会户外劳动者驿站 | [B0J3R71OZC](https://www.amap.com/place/B0J3R71OZC) | `amap-cooling-B0J3R71OZC` | 都昌镇 |
+| 都昌县红色蒲公英驿站(幸福社区站) | [B0KGRZFVJR](https://www.amap.com/place/B0KGRZFVJR) | `amap-cooling-B0KGRZFVJR` | 都昌镇 |
+| 都昌县红色蒲公英驿站(惠民社区站) | [B0KGRZCRWB](https://www.amap.com/place/B0KGRZCRWB) | `amap-cooling-B0KGRZCRWB` | 都昌镇 |
+| 都昌县红色蒲公英驿站(西区社区站) | [B0KGRZCHCP](https://www.amap.com/place/B0KGRZCHCP) | `amap-cooling-B0KGRZCHCP` | 都昌镇 |
+| 都昌县红色蒲公英驿站(长岭社区站) | [B0J2BRSA93](https://www.amap.com/place/B0J2BRSA93) | `amap-cooling-B0J2BRSA93` | 都昌镇 |
+| 都昌红色蒲公英驿站(建设银行东风大道支行站) | [B0J1JCM7T9](https://www.amap.com/place/B0J1JCM7T9) | `amap-cooling-B0J1JCM7T9` | 都昌镇 |
+| 都昌红色蒲公英驿站白洋垅社区站 | [B0J1JCYY0R](https://www.amap.com/place/B0J1JCYY0R) | `amap-cooling-B0J1JCYY0R` | 都昌镇 |
+| 七里桥村爱心驿站(工会驿站) | [B0J05RXXXW](https://www.amap.com/place/B0J05RXXXW) | `amap-cooling-B0J05RXXXW` | 鸣山乡 |
+| 蔡岭镇综合文化站 | [B0HAUZPGP9](https://www.amap.com/place/B0HAUZPGP9) | `B0HAUZPGP9` | 县内乡界待复核（来源蔡岭镇） |
+| 中馆镇刘山村综合文化服务中心 | [B0JD45KUB8](https://www.amap.com/place/B0JD45KUB8) | `amap-cooling-B0JD45KUB8` | 中馆镇 |
+| 段家洲文体中心 | [B03180SMPJ](https://www.amap.com/place/B03180SMPJ) | `amap-cooling-B03180SMPJ` | 中馆镇 |
+| 北山乡跑马巷村综合文化服务中心 | [B0JDY51J1S](https://www.amap.com/place/B0JDY51J1S) | `amap-cooling-B0JDY51J1S` | 北山乡 |
+| 夏家山村委会周家山自然村文化活动中心 | [B0MDN6DWSM](https://www.amap.com/place/B0MDN6DWSM) | `amap-cooling-B0MDN6DWSM` | 北山乡 |
+| 阮垅吴村文化活动中心 | [B0FFK8C8TF](https://www.amap.com/place/B0FFK8C8TF) | `amap-cooling-B0FFK8C8TF` | 北山乡 |
+| 都昌县和合乡双峰村文化站 | [B0JDZ5JAVZ](https://www.amap.com/place/B0JDZ5JAVZ) | `amap-cooling-B0JDZ5JAVZ` | 和合乡 |
+| 冯家坊村文化活动中心 | [B0FFHSTED9](https://www.amap.com/place/B0FFHSTED9) | `amap-cooling-B0FFHSTED9` | 土塘镇 |
+| 刘家嘴群众文化活动中心 | [B031802CXQ](https://www.amap.com/place/B031802CXQ) | `amap-cooling-B031802CXQ` | 土塘镇 |
+| 多宝乡团子口村综合文化服务中心 | [B0HDPMJLVX](https://www.amap.com/place/B0HDPMJLVX) | `amap-cooling-B0HDPMJLVX` | 多宝乡 |
+| 多宝乡长平居委会综合文化服务中心 | [B0JDYHYVCA](https://www.amap.com/place/B0JDYHYVCA) | `amap-cooling-B0JDYHYVCA` | 多宝乡 |
+| 都昌县多宝乡综合文化站 | [B0KG5SDIJN](https://www.amap.com/place/B0KG5SDIJN) | `B0KG5SDIJN` | 多宝乡 |
+| 都昌县大树乡东山村委会综合文化站 | [B0JDBUGOLH](https://www.amap.com/place/B0JDBUGOLH) | `amap-cooling-B0JDBUGOLH` | 大树乡 |
+| 大港镇大田村文化中心 | [B0JDBH8480](https://www.amap.com/place/B0JDBH8480) | `amap-cooling-B0JDBH8480` | 大港镇 |
+| 都昌县大港镇邻波村文化活动中心 | [B0JDBUHBHB](https://www.amap.com/place/B0JDBUHBHB) | `amap-cooling-B0JDBUHBHB` | 大港镇 |
+| 徐埠镇子云村文化活动中心 | [B0JDKZ6H1X](https://www.amap.com/place/B0JDKZ6H1X) | `amap-cooling-B0JDKZ6H1X` | 徐埠镇 |
+| 徐埠镇平塘村文化活动中心 | [B0JDGZYYPI](https://www.amap.com/place/B0JDGZYYPI) | `amap-cooling-B0JDGZYYPI` | 徐埠镇 |
+| 徐埠镇莲花村文化活动中心 | [B0JDYSZ24F](https://www.amap.com/place/B0JDYSZ24F) | `amap-cooling-B0JDYSZ24F` | 徐埠镇 |
+| 狮山乡斗山村居委会文化活动中心 | [B0JDB7JDDC](https://www.amap.com/place/B0JDB7JDDC) | `amap-cooling-B0JDB7JDDC` | 狮山乡 |
+| 江西省九江市都昌县芗溪乡新丰村综合文化服务中心 | [B0JDBZGRSC](https://www.amap.com/place/B0JDBZGRSC) | `amap-cooling-B0JDBZGRSC` | 芗溪乡 |
+| 芗溪乡井头村文化活动中心 | [B0JDMM1ZSN](https://www.amap.com/place/B0JDMM1ZSN) | `amap-cooling-B0JDMM1ZSN` | 芗溪乡 |
+| 杜家文化活动中心 | [B0K16DQGTT](https://www.amap.com/place/B0K16DQGTT) | `amap-cooling-B0K16DQGTT` | 西源乡 |
+| 西源乡中塘村综合文化服务中心 | [B0JDBH9M6L](https://www.amap.com/place/B0JDBH9M6L) | `amap-cooling-B0JDBH9M6L` | 西源乡 |
+| 西源乡塘口村文化活动中心 | [B0JDYSZ28E](https://www.amap.com/place/B0JDYSZ28E) | `amap-cooling-B0JDYSZ28E` | 西源乡 |
+| 惠民社区文化活动中心 | [B0JDBSJ4D6](https://www.amap.com/place/B0JDBSJ4D6) | `amap-cooling-B0JDBSJ4D6` | 都昌镇 |
+| 都昌县文化馆(东风大道) | [B03180SKW0](https://www.amap.com/place/B03180SKW0) | `B03180SKW0` | 都昌镇 |
+| 都昌镇幸福社区党群服务中心 | [B0JABMV4AM](https://www.amap.com/place/B0JABMV4AM) | `B0JABMV4AM` | 都昌镇 |
+| 都昌镇星火社区文化活动中心 | [B0LGLH6T95](https://www.amap.com/place/B0LGLH6T95) | `amap-cooling-B0LGLH6T95` | 都昌镇 |
+| 都昌镇芙蓉社区党群服务中心 | [B0K1GUQA52](https://www.amap.com/place/B0K1GUQA52) | `B0K1GUQA52` | 都昌镇 |
+| 阳峰乡屏峰村综合文化服务中心 | [B0JDMR4DKE](https://www.amap.com/place/B0JDMR4DKE) | `amap-cooling-B0JDMR4DKE` | 阳峰乡 |
+
+
+本批研究归档文件为 `更多候选坐标.json`，SHA-256：`2f9815021df4c803d5976afdc8581b3205b2b37a7c2a15b9620d1b32a1551c08`；原始 API 回执保存在同次本地研究目录，不含密钥。运行所需原坐标、来源及状态均已写入数据文件，不依赖本地临时路径。接入后库存 423 条、明确关联 79 条、待定位/复核 344 条；聚落和医疗数量不变。
