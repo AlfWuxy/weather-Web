@@ -335,3 +335,14 @@ def test_map_labels_escape_admin_entered_text():
     assert "esc(village.name)" in script
     assert "${point.name}" not in script
     assert "${village.name}<" not in script
+
+
+def test_tied_scores_share_rank():
+    # 并列分值必须得到相同的“前 x%”，排名不能依赖排序算法对并列值的处理顺序。
+    cells = _workbench()["cells"]
+    by_score = {}
+    for i, scored in enumerate(cells["scored"]):
+        if scored:
+            by_score.setdefault(cells["score"][i], set()).add(cells["top_pct"][i])
+    assert any(len(v) == 1 for v in by_score.values())
+    assert all(len(v) == 1 for v in by_score.values())
