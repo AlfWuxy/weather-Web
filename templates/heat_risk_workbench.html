@@ -40,6 +40,22 @@
         <div class="hrw-days" id="hrwDays" role="tablist" aria-label="选择日期"></div>
     </section>
 
+    <section class="hrw-poi-overview" aria-label="全县点位收录与乡镇筛选">
+        <div class="hrw-poi-filter">
+            <label for="hrwTownFilter">查看范围</label>
+            <select id="hrwTownFilter" class="hrw-select"><option value="">全县 · 24 乡镇</option></select>
+            <span>筛选点位与巡访清单；全县风险网格保留。</span>
+        </div>
+        <div id="hrwPoiCounts" class="hrw-poi-counts" aria-live="polite"></div>
+        <p id="hrwPoiInventoryHint" class="hrw-panel-note"></p>
+        <p class="hrw-panel-note">以下为已收录点位数量，行政村完整覆盖率仍未知。避暑候选未核验开放，出发前需联系确认。</p>
+        <details class="hrw-poi-browser">
+            <summary id="hrwPoiListTitle">浏览当前范围点位</summary>
+            <div id="hrwPoiList" class="hrw-poi-list"></div>
+            <button type="button" id="hrwPoiMore" class="hrw-tool" hidden>再显示 20 个</button>
+        </details>
+    </section>
+
     <section class="hrw-workspace" aria-label="热风险地图工作区">
         <aside class="hrw-panel hrw-priority" aria-labelledby="hrwPriorityTitle">
             <div class="hrw-panel-head">
@@ -62,7 +78,7 @@
                     <label class="visually-hidden" for="hrwMoreLayers">更多图层</label>
                     <select id="hrwMoreLayers" class="hrw-select">
                         <option value="">更多图层…</option>
-                        <option value="facility_km">到医疗点距离</option>
+                        <option value="facility_km">距可达性参考点（直线）</option>
                         <option value="tree_cover_pct">树木覆盖</option>
                         <option value="built_up_pct">建成区</option>
                         <option value="mean_elevation_m">表面高程</option>
@@ -71,8 +87,8 @@
                 </div>
                 <div class="hrw-tool-row">
                     <div class="hrw-search">
-                        <label class="visually-hidden" for="hrwSearch">搜索村或乡镇</label>
-                        <input id="hrwSearch" type="search" list="hrwSearchOptions" placeholder="搜索村 / 乡镇" autocomplete="off">
+                        <label class="visually-hidden" for="hrwSearch">搜索村、机构或乡镇</label>
+                        <input id="hrwSearch" type="search" list="hrwSearchOptions" placeholder="村 / 机构 / 乡镇" autocomplete="off">
                         <datalist id="hrwSearchOptions"></datalist>
                     </div>
                     <button type="button" class="hrw-tool" id="hrwSwipe" aria-pressed="false" title="左右卷帘对比地表温度与 65+ 比例"><i class="bi bi-layout-split" aria-hidden="true"></i>卷帘</button>
@@ -80,6 +96,7 @@
                     <button type="button" class="hrw-tool" id="hrwReset" title="恢复县域视图"><i class="bi bi-fullscreen-exit" aria-hidden="true"></i>全县</button>
                     <button type="button" class="hrw-tool hrw-controls-toggle" id="hrwControlsToggle" aria-expanded="false" aria-controls="hrwMapControls"><i class="bi bi-sliders" aria-hidden="true"></i>图层设置</button>
                 </div>
+                <p id="hrwSearchNote" class="hrw-search-note" aria-live="polite">同名点按乡镇区分；放大地图查看局部名称。</p>
             </div>
 
             <div class="hrw-map-stage">
@@ -107,8 +124,10 @@
                         <label><input type="checkbox" data-overlay="hotspot" checked> 统计热点 {{ metric_info('gis_hotspot') }}</label>
                         <label><input type="checkbox" data-overlay="townships" checked> 乡镇边界</label>
                         <label><input type="checkbox" data-overlay="villages" checked> 村点</label>
-                        <label><input type="checkbox" data-overlay="facilities" checked> 医疗点与 3 km 圈 {{ metric_info('gis_facility_access') }}</label>
-                        <label><input type="checkbox" data-overlay="cooling" checked> 避暑点</label>
+                        <label><input type="checkbox" data-overlay="medical" checked> 已收录医疗机构</label>
+                        <label><input type="checkbox" data-overlay="candidates" checked> 避暑候选（开放待核实）</label>
+                        <label><input type="checkbox" data-overlay="cooling" checked> 坐标已核验避暑资源</label>
+                        <label><input type="checkbox" data-overlay="references"> 模型可达性参考点 {{ metric_info('gis_facility_access') }}</label>
                     </div>
                 </div>
                 <div class="hrw-legend" id="hrwLegend" role="button" tabindex="0" aria-expanded="true" aria-label="图例，点击展开或收起"></div>
@@ -118,9 +137,10 @@
         </div>
 
         <aside class="hrw-panel hrw-inspector" aria-labelledby="hrwInspectorTitle">
+            <section id="hrwPoiDetails" class="hrw-poi-details" aria-live="polite"><h2>点位详情</h2><p class="hrw-empty">点击地图点位，或搜索村和机构。</p></section>
             <div class="hrw-panel-head">
                 <span class="hrw-pill">网格详情</span>
-                <h2 id="hrwInspectorTitle">选中位置</h2>
+                <h2 id="hrwInspectorTitle">位置的网格参考</h2>
                 <p class="hrw-place" id="hrwPlace">—</p>
                 <p class="hrw-coords" id="hrwCoords">—</p>
             </div>
@@ -145,6 +165,20 @@
                 <dl id="hrwProvenance"></dl>
             </details>
         </aside>
+    </section>
+
+    <section class="hrw-section" aria-label="乡镇收录数量比较">
+        <details class="hrw-poi-coverage">
+            <summary>比较 24 乡镇点位收录数量</summary>
+            <p id="hrwPoiCoverageNote" class="hrw-panel-note">0 表示尚未收录，不代表当地没有村落或机构；完整覆盖率未知。</p>
+            <div class="hrw-table-wrap"><table class="hrw-table">
+                <thead><tr><th scope="col">乡镇（点击筛选）</th><th scope="col">聚落点</th><th scope="col">医疗机构</th><th scope="col">避暑候选</th><th scope="col">坐标已核验避暑资源</th><th scope="col">医疗待定位</th><th scope="col">避暑待定位</th><th scope="col">列名待复核</th><th scope="col">行政村完整覆盖率</th></tr></thead>
+                <tbody id="hrwPoiCoverageBody"></tbody>
+            </table></div>
+        </details>
+        <details class="hrw-poi-coverage"><summary id="hrwUnmappedSummary">已收录但待定位的资源</summary><p id="hrwInventoryNote" class="hrw-panel-note"></p><ul id="hrwUnmappedList" class="hrw-unmapped-list"></ul><button type="button" id="hrwUnmappedMore" class="hrw-tool" hidden>再显示 20 条待定位记录</button></details>
+        <p class="hrw-panel-note">点位与边界：© <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">OpenStreetMap contributors</a>（ODbL）；<a href="https://www.geonames.org/" target="_blank" rel="noopener noreferrer">GeoNames</a>（CC BY 4.0）。来源记录和收录时间不等于现场核验。</p>
+        <ul id="hrwPoiSources" class="hrw-poi-sources"></ul>
     </section>
 
     <section class="hrw-section" aria-labelledby="hrwTownTitle">
@@ -183,7 +217,7 @@
         <div class="hrw-method-grid">
             <article>
                 <h3>1. 综合热风险分 {{ metric_info('gis_risk_score') }}</h3>
-                <p>风险 = 危险性 × 暴露 × 脆弱性（IPCC AR6）。危险性为 2020–2024 夏季 Aqua 白天晴空地表温度，暴露为 ASPECT 65 岁及以上人口比例，脆弱性由树荫缺口、建成区比例与到最近医疗点距离合成。三项在有人居住的陆地网格中取百分位，等权几何平均后乘 100。</p>
+                <p>风险 = 危险性 × 暴露 × 脆弱性（IPCC AR6）。危险性为 2020–2024 夏季 Aqua 白天晴空地表温度，暴露为 ASPECT 65 岁及以上人口比例，脆弱性由树荫缺口、建成区比例与距可达性参考点的直线距离合成。三项在有人居住的陆地网格中取百分位，等权几何平均后乘 100。</p>
             </article>
             <article>
                 <h3>2. 湖面屏蔽与双变量 {{ metric_info('gis_bivariate') }}</h3>
@@ -208,7 +242,7 @@
         <div class="hrw-sources">
             <h3>文献与数据</h3>
             <ul id="hrwSources"></ul>
-            <p class="hrw-limitations"><strong>使用边界：</strong>地表温度不等于 2 米气温；65+ 为模型化比例；医疗点多为乡镇驻地近似位置；排序尚未用本地就诊结局验证，需结合实地情况判断。</p>
+            <p class="hrw-limitations"><strong>使用边界：</strong>地表温度不等于 2 米气温；65+ 为模型化比例；冻结评分中的可达性参考点多为乡镇驻地近似位置，不代表真实医疗机构；真实机构距离另列，仅限已收录点；排序尚未用本地就诊结局验证，需结合实地情况判断。</p>
             <div class="hrw-downloads">
                 <a href="{{ gis_data_url }}" download="duchang_heat_exposure_cells.geojson"><i class="bi bi-download" aria-hidden="true"></i>网格 GeoJSON</a>
                 <a href="{{ workbench_data_url }}" download="duchang_heat_risk_workbench.json"><i class="bi bi-download" aria-hidden="true"></i>风险分 JSON</a>
