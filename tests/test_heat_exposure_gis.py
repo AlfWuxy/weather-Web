@@ -29,7 +29,7 @@ def test_heat_exposure_gis_page_has_academic_contract(app, authenticated_client)
     app.config["AMAP_JS_API_KEY"] = "j" * 32
     app.config["AMAP_SECURITY_JS_CODE"] = "s" * 32
     app.config["AMAP_WEB_SERVICE_KEY"] = "server-key-must-stay-private"
-    response = authenticated_client.get("/heat-exposure-gis")
+    response = authenticated_client.get("/heat-exposure-gis?ui=legacy")
     assert response.status_code == 200
 
     html = response.get_data(as_text=True)
@@ -87,7 +87,7 @@ def test_heat_exposure_gis_page_has_academic_contract(app, authenticated_client)
 
 
 def test_heat_exposure_gis_uses_shared_metric_info_contract(authenticated_client):
-    html = authenticated_client.get("/heat-exposure-gis").get_data(as_text=True)
+    html = authenticated_client.get("/heat-exposure-gis?ui=legacy").get_data(as_text=True)
 
     expected_keys = {
         "gis_native_grid",
@@ -111,7 +111,7 @@ def test_heat_exposure_gis_uses_shared_metric_info_contract(authenticated_client
 def test_heat_exposure_gis_can_be_disabled_without_affecting_login(app, authenticated_client):
     app.config["FEATURE_HEAT_EXPOSURE_GIS"] = False
 
-    response = authenticated_client.get("/heat-exposure-gis")
+    response = authenticated_client.get("/heat-exposure-gis?ui=legacy")
     navigation = authenticated_client.get("/").get_data(as_text=True)
 
     assert response.status_code == 404
@@ -351,7 +351,7 @@ def test_heat_exposure_publish_gate_accepts_zero_hard_failures():
 
 
 def test_logged_in_navigation_places_heat_exposure_gis_inside_more(authenticated_client):
-    html = authenticated_client.get("/heat-exposure-gis").get_data(as_text=True)
+    html = authenticated_client.get("/heat-exposure-gis?ui=legacy").get_data(as_text=True)
     desktop_primary = html.split('class="app-desktop-nav', 1)[1].split('class="app-more-menu"', 1)[0]
     mega_menu = html.split('id="appMegaMenu"', 1)[1].split('data-bs-toggle="offcanvas"', 1)[0]
     drawer = html.split('id="appNavDrawer"', 1)[1]
@@ -373,7 +373,7 @@ def test_heat_exposure_gis_without_browser_key_keeps_data_fallback(
     app.config["AMAP_SECURITY_JS_CODE"] = ""
     app.config["AMAP_WEB_SERVICE_KEY"] = "server-key-must-stay-private"
 
-    html = authenticated_client.get("/heat-exposure-gis").get_data(as_text=True)
+    html = authenticated_client.get("/heat-exposure-gis?ui=legacy").get_data(as_text=True)
 
     assert 'data-has-map-key="0"' in html
     assert "https://webapi.amap.com/maps" not in html

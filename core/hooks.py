@@ -65,6 +65,7 @@ FORMAL_WEB_ALLOWED_USER_ENDPOINTS = frozenset({
     'user.community_announce',
     'user.community_risk',
     'user.heat_exposure_gis',
+    'user.heat_exposure_gis_daily',
 })
 
 FORMAL_WEB_ALLOWED_ANALYSIS_ENDPOINTS = frozenset({

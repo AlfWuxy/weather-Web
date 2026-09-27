@@ -183,6 +183,7 @@ def test_formal_web_gate_preserves_public_aggregate_and_admin_inventory(app):
         "user.community_dashboard",
         "user.community_risk",
         "user.heat_exposure_gis",
+        "user.heat_exposure_gis_daily",
         "analysis.reports_center",
         "analysis.pilot_dashboard",
         "api.api_v1_current_weather",
@@ -318,3 +319,26 @@ def test_dual_runtime_authenticated_private_api_reaches_service(
     assert authenticated.status_code == 200
     assert authenticated.get_json() == {"success": True}
     assert called == [True]
+
+
+def test_formal_workbench_daily_preserves_gis_auth_and_flag(app, authenticated_client):
+    """正式态允许工作台聚合预报，仍保留页面登录和功能开关。"""
+    app.config["WECHAT_FORMAL_RUNTIME"] = True
+    app.config["WEB_PRIVATE_FEATURES_ENABLED"] = False
+    app.config["FEATURE_HEAT_EXPOSURE_GIS"] = True
+    response = authenticated_client.get("/heat-exposure-gis/daily.json")
+    assert response.status_code == 200
+    assert response.is_json
+    assert response.get_json()["forecast_status"] == "demo"
+    app.config["FEATURE_HEAT_EXPOSURE_GIS"] = False
+    assert authenticated_client.get("/heat-exposure-gis/daily.json").status_code == 404
+
+
+def test_formal_workbench_daily_requires_login(app, client):
+    """聚合预报仍由路由登录守卫保护。"""
+    app.config["WECHAT_FORMAL_RUNTIME"] = True
+    app.config["WEB_PRIVATE_FEATURES_ENABLED"] = False
+    app.config["FEATURE_HEAT_EXPOSURE_GIS"] = True
+    response = client.get("/heat-exposure-gis/daily.json")
+    assert response.status_code == 302
+    assert "/login" in response.headers["Location"]
