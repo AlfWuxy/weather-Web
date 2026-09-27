@@ -1773,11 +1773,7 @@ def render_cooling_resources_page(
     ).all()
     all_resources = CoolingResource.query.filter_by(is_active=True).all()
     cooling_filters_enabled = bool(all_resources)
-    candidate_preview = (
-        list(cooling_candidates or [])
-        if not all_resources
-        else []
-    )
+    candidate_preview = list(cooling_candidates or [])
     communities = sorted({item.community_code for item in all_resources if item.community_code})
     resource_types = sorted({item.resource_type for item in all_resources if item.resource_type})
     grouped = {}

@@ -835,7 +835,9 @@ def test_cooling_page_empty_database_renders_safe_candidate_preview(
     assert '29.249263' not in body
     assert 'data-publication-status="candidate-only"' in body
     assert 'data-verification-status="pending-human-verification"' in body
-    assert body.count('data-cooling-candidate="pending"') == 7
+    from blueprints.public import _public_cooling_candidates
+
+    assert body.count('data-cooling-candidate="pending"') == len(_public_cooling_candidates())
     assert '筛选将在人工核验发布后开放，待核验预览不参与筛选' in body
     assert re.search(r'id="coolingCommunity"[^>]*\sdisabled(?:\s|>)', body)
     assert re.search(r'id="coolingResourceType"[^>]*\sdisabled(?:\s|>)', body)
@@ -853,7 +855,7 @@ def test_cooling_page_empty_database_renders_safe_candidate_preview(
     assert json.loads(match.group(1)) == []
 
 
-def test_cooling_page_renders_real_resources_only(client, db_session, monkeypatch):
+def test_cooling_page_keeps_formal_resources_separate_from_candidates(client, db_session, monkeypatch):
     import re
 
     from core.db_models import CoolingResource
@@ -886,9 +888,9 @@ def test_cooling_page_renders_real_resources_only(client, db_session, monkeypatc
     assert '服务台登记' in body
     assert '仅展示真实录入信息' in body
     assert '距你' not in body
-    assert '都昌县图书馆' not in body
+    assert '都昌县图书馆' in body
     assert '万达广场' not in body
-    assert '待核验场所预览' not in body
+    assert '待核验场所预览' in body
     assert '筛选将在人工核验发布后开放，待核验预览不参与筛选' not in body
     assert not re.search(r'id="coolingCommunity"[^>]*\sdisabled(?:\s|>)', body)
     assert not re.search(r'id="coolingResourceType"[^>]*\sdisabled(?:\s|>)', body)
@@ -920,6 +922,7 @@ def test_public_cooling_candidates_reject_unapproved_category(
     monkeypatch,
 ):
     from blueprints import public as public_blueprint
+    from services import cooling_candidate_catalog
 
     payload = {
         'publication_status': 'candidate_only',
@@ -935,9 +938,9 @@ def test_public_cooling_candidates_reject_unapproved_category(
         }],
     }
     monkeypatch.setattr(
-        public_blueprint,
-        '_read_versioned_public_json',
-        lambda _path: payload,
+        cooling_candidate_catalog,
+        'load_cooling_candidate_catalog',
+        lambda **_kwargs: payload,
     )
 
     assert public_blueprint._public_cooling_candidates() == []

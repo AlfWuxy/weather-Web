@@ -61,8 +61,8 @@ def test_candidate_preview_is_read_only_for_admin(admin_client):
 
     assert response.status_code == 200
     html = response.get_data(as_text=True)
-    assert "高德资源候选预览" in html
-    assert "这些点位尚未公开" in html
+    assert "避暑资源候选预览" in html
+    assert "这些点位尚未作为正式资源发布" in html
     assert "都昌县图书馆" in html
     assert "医疗支持" in html
     assert "待人工核验" in html

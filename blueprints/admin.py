@@ -95,32 +95,9 @@ def _community_name_reference_counts(community_name):
 
 def _load_cooling_candidates():
     """读取只读候选库；异常数据不会进入正式资源表。"""
-    try:
-        payload = json.loads(COOLING_CANDIDATE_PATH.read_text(encoding='utf-8'))
-        if (
-            not isinstance(payload, dict)
-            or payload.get('publication_status') != 'candidate_only'
-            or payload.get('coordinate_system') != 'GCJ-02'
-            or not isinstance(payload.get('items'), list)
-        ):
-            raise ValueError('candidate_contract_invalid')
-        items = [
-            item for item in payload['items']
-            if (
-                isinstance(item, dict)
-                and item.get('verification_status') == 'pending_human_verification'
-                and item.get('is_active') is False
-            )
-        ]
-        return {**payload, 'items': items}
-    except (OSError, ValueError, json.JSONDecodeError):
-        logger.exception('避暑资源候选库读取失败')
-        return {
-            'publication_status': 'candidate_only',
-            'coordinate_system': 'GCJ-02',
-            'notice': '候选库暂时无法读取。',
-            'items': [],
-        }
+    from services.cooling_candidate_catalog import load_cooling_candidate_catalog
+
+    return load_cooling_candidate_catalog(amap_path=COOLING_CANDIDATE_PATH)
 
 
 def _coordinate_distance_km(latitude, longitude):
@@ -1034,7 +1011,7 @@ def admin_cooling_resources():
 @bp.route('/admin/cooling/candidates', endpoint='admin_cooling_candidates')
 @login_required
 def admin_cooling_candidates():
-    """展示高德候选点，必须人工核验后再转录到正式资源表。"""
+    """展示公开资料候选点，必须人工核验后再转录到正式资源表。"""
     if current_user.role != 'admin':
         flash('权限不足', 'error')
         return redirect(url_for('user.user_dashboard'))
@@ -1126,12 +1103,9 @@ def admin_add_cooling_resource():
             'address_hint': candidate.get('address') or '',
             'latitude': candidate.get('latitude'),
             'longitude': candidate.get('longitude'),
-            'coordinate_system': 'GCJ-02',
-            'coordinate_source': (
-                f"高德 Place Text API v5 候选 {candidate['source_id']}，"
-                "仍需管理员现场或电话人工核验"
-            ),
-            'open_hours': candidate.get('opening_hours_hint') or '',
+            'coordinate_system': candidate.get('coordinate_system') or '',
+            'coordinate_source': candidate.get('coordinate_source') or '',
+            'open_hours': candidate.get('prefill_open_hours') or '',
         }
     return render_template(
         'admin_add_cooling_resource.html',

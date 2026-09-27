@@ -209,49 +209,14 @@ def _public_heat_preview_summary():
 
 def _public_cooling_candidates():
     """公开候选预览只保留非医疗公共场所，并删除坐标与来源查询字段。"""
-    try:
-        payload = _read_versioned_public_json(PUBLIC_COOLING_CANDIDATE_PATH)
-        if (
-            payload.get('publication_status') != 'candidate_only'
-            or payload.get('coordinate_system') != 'GCJ-02'
-        ):
-            raise ValueError('public_cooling_candidate_contract_invalid')
-        role_labels = {
-            'cooling_candidate': '候选公共纳凉场所',
-            'service_candidate': '候选志愿服务点',
-        }
-        category_labels = {
-            'public_culture': '公共文化场所',
-            'community_service': '社区服务场所',
-            'volunteer_service': '志愿服务组织',
-        }
-        candidates = []
-        for item in payload.get('items') or []:
-            if not isinstance(item, dict):
-                continue
-            role = item.get('public_role')
-            category = item.get('category')
-            if (
-                role not in role_labels
-                or category not in category_labels
-                or item.get('verification_status')
-                != 'pending_human_verification'
-                or item.get('is_active') is not False
-            ):
-                continue
-            candidates.append({
-                'name': str(item.get('name') or '').strip()[:80],
-                'address': str(item.get('address') or '').strip()[:160],
-                'opening_hours_hint': str(
-                    item.get('opening_hours_hint') or ''
-                ).strip()[:160],
-                'role_label': role_labels[role],
-                'category_label': category_labels[category],
-            })
-        return [item for item in candidates if item['name']][:12]
-    except (OSError, TypeError, ValueError, json.JSONDecodeError):
-        logger.exception('公开避暑候选预览读取失败')
-        return []
+    from services.cooling_candidate_catalog import (
+        load_cooling_candidate_catalog,
+        public_candidate_previews,
+    )
+
+    return public_candidate_previews(
+        load_cooling_candidate_catalog(amap_path=PUBLIC_COOLING_CANDIDATE_PATH)
+    )
 
 
 def _push_tracking_ttl_days():
