@@ -7,7 +7,7 @@
 
 {% block extra_css %}
 <link rel="stylesheet" href="{{ url_for('static', filename='vendor/leaflet/dist/leaflet.css') }}">
-<link rel="stylesheet" href="{{ url_for('static', filename='css/heat-risk-workbench.css') }}">
+<link rel="stylesheet" href="{{ workbench_css_url | default(url_for('static', filename='css/heat-risk-workbench.css')) }}">
 {% endblock %}
 
 {% block content %}
@@ -21,12 +21,12 @@
 
     <header class="hrw-header">
         <div>
-            <div class="hrw-meta-line"><span>热风险工作台</span><span id="hrwMetaDay">今天</span><span>都昌</span></div>
-            <h1 id="hrwTitle">今天先去哪几个村</h1>
+            <div class="hrw-meta-line"><span>热风险工作台</span><span id="hrwMetaDay">预报载入中</span><span>都昌</span></div>
+            <h1 id="hrwTitle">风险暂不可判定</h1>
             <p class="hrw-lede" id="hrwLede">正在读取 7 天预报与全县 1 km 综合风险分…</p>
         </div>
         <div class="hrw-header-actions">
-            <button type="button" class="btn btn-primary hrw-button" id="hrwPrint"><i class="bi bi-printer" aria-hidden="true"></i>打印今日巡访单</button>
+            <button type="button" class="btn btn-primary hrw-button" id="hrwPrint"><i class="bi bi-printer" aria-hidden="true"></i>打印巡访单</button>
             <a class="btn btn-outline-secondary hrw-button" href="{{ legacy_url }}"><i class="bi bi-journal-text" aria-hidden="true"></i>科研版视图</a>
         </div>
     </header>
@@ -54,8 +54,8 @@
         <div class="hrw-map-column">
             <div class="hrw-toolbar" aria-label="图层与工具">
                 <div class="hrw-layer-tabs" role="group" aria-label="主题图层" id="hrwLayerTabs">
-                    <button type="button" data-layer="daily" aria-pressed="true">当日风险</button>
-                    <button type="button" data-layer="score" aria-pressed="false">综合风险</button>
+                    <button type="button" data-layer="daily" aria-pressed="false" disabled>当日风险</button>
+                    <button type="button" data-layer="score" aria-pressed="true">综合风险</button>
                     <button type="button" data-layer="bivariate" aria-pressed="false">高温×高龄</button>
                     <button type="button" data-layer="q3_lst_c_mean" aria-pressed="false">地表温度</button>
                     <button type="button" data-layer="age65_share_pct" aria-pressed="false">65+ 比例</button>
@@ -135,7 +135,7 @@
                 <p class="hrw-score-sub" id="hrwScoreSub"></p>
                 <div class="hrw-daily-row">
                     <span>所选日期风险</span>
-                    <span class="hrw-level-chip hrw-level-chip--small" id="hrwDailyChip">—</span>
+                    <span class="hrw-level-chip hrw-level-chip--small" id="hrwDailyChip">风险暂不可判定</span>
                 </div>
             </div>
             <div class="hrw-breakdown" id="hrwBreakdown" aria-label="风险分构成"></div>
@@ -224,5 +224,5 @@
 
 {% block extra_js %}
 <script src="{{ url_for('static', filename='vendor/leaflet/dist/leaflet.js') }}"></script>
-<script src="{{ url_for('static', filename='js/heat-risk-workbench.js') }}"></script>
+<script src="{{ workbench_js_url | default(url_for('static', filename='js/heat-risk-workbench.js')) }}"></script>
 {% endblock %}
