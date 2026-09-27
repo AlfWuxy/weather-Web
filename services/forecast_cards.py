@@ -42,6 +42,18 @@ def forecast_temp(value):
     return round(parsed, 1)
 
 
+def _finite_float(value):
+    """风险展示字段只接受有限数值。"""
+    parsed = parse_float(value)
+    if parsed is None or not math.isfinite(parsed):
+        return None
+    return parsed
+
+
+def _dict_or_empty(value):
+    return value if isinstance(value, dict) else {}
+
+
 def forecast_day_labels(day, start_date):
     """生成卡片用的“今/明/周几”标签。"""
     delta = (day - start_date).days
@@ -59,10 +71,12 @@ def build_forecast_cards(qweather_days, health_forecasts, start_date):
     for entry in entries:
         if not isinstance(entry, dict):
             return []
-        for field in ('temperature_max', 'temperature_min', 'humidity'):
+        for field in ('temperature_max', 'temperature_min', 'humidity', 'wind_speed'):
             value = parse_float(entry.get(field))
             if value is None or not math.isfinite(value):
                 return []
+        if not str(entry.get('condition') or '').strip():
+            return []
 
     health_by_date = {
         item.get('date'): item
@@ -75,30 +89,32 @@ def build_forecast_cards(qweather_days, health_forecasts, start_date):
         if not day:
             continue
         dow, date_label = forecast_day_labels(day, start_date)
-        health = health_by_date.get(day.strftime('%Y-%m-%d'), {})
-        composite = health.get('composite_exposure') or {}
-        components = composite.get('components') or {}
-        composite_inputs = composite.get('inputs') or {}
-        temperature_input = composite_inputs.get('temperature') or {}
-        temp_min_input = composite_inputs.get('temp_min') or {}
-        humidity_input = composite_inputs.get('humidity') or {}
-        pm25_input = composite_inputs.get('pm25') or {}
-        visits = health.get('visits') or {}
-        predictability = health.get('predictability') or {}
-        predictability_inputs = predictability.get('inputs') or {}
-        score = parse_float(composite.get('final_score'))
+        health = _dict_or_empty(health_by_date.get(day.strftime('%Y-%m-%d')))
+        composite = _dict_or_empty(health.get('composite_exposure'))
+        components = _dict_or_empty(composite.get('components'))
+        composite_inputs = _dict_or_empty(composite.get('inputs'))
+        temperature_input = _dict_or_empty(composite_inputs.get('temperature'))
+        temp_min_input = _dict_or_empty(composite_inputs.get('temp_min'))
+        humidity_input = _dict_or_empty(composite_inputs.get('humidity'))
+        pm25_input = _dict_or_empty(composite_inputs.get('pm25'))
+        visits = _dict_or_empty(health.get('visits'))
+        predictability = _dict_or_empty(health.get('predictability'))
+        predictability_inputs = _dict_or_empty(predictability.get('inputs'))
+        score = _finite_float(composite.get('final_score'))
         if score is None:
-            score = parse_float(composite.get('score'))
+            score = _finite_float(composite.get('score'))
         risk_available = score is not None
         if risk_available:
             score = max(0, min(100, int(round(score))))
         cards.append({
+            'data_source': 'QWeather',
             'dow': dow,
             'date': date_label,
             'full_date': day.strftime('%Y-%m-%d'),
             'temp_high': forecast_temp(entry.get('temperature_max')),
             'temp_low': forecast_temp(entry.get('temperature_min')),
             'condition': entry.get('condition') or entry.get('condition_night') or '未知',
+            'precip_probability': parse_float(entry.get('precip_probability')),
             'risk_level': level_bucket(score) if risk_available else 'unknown',
             'risk_score': score,
             'risk_label': score_level(score) if risk_available else '待计算',
@@ -147,5 +163,93 @@ def build_forecast_cards(qweather_days, health_forecasts, start_date):
             'predictability_model_count': predictability_inputs.get('model_count'),
             'predictability_lead_penalty': parse_float(predictability_inputs.get('lead_penalty')),
             'predictability_model_bonus': parse_float(predictability_inputs.get('model_bonus')),
+        })
+    return cards
+
+
+def build_weather_only_forecast_cards(openmeteo_days, start_date):
+    """构造 Open-Meteo 天气卡，不生成或插补任何健康风险字段。"""
+    cards = []
+    for entry in list(openmeteo_days or []):
+        if not isinstance(entry, dict):
+            return []
+        if entry.get('is_mock') or entry.get('is_demo') or entry.get('data_source') != 'Open-Meteo':
+            return []
+        day = forecast_date(entry.get('date') or entry.get('forecast_date'))
+        tmax = forecast_temp(entry.get('temperature_max'))
+        tmin = forecast_temp(entry.get('temperature_min'))
+        precipitation = parse_float(entry.get('precip_probability'))
+        condition = str(entry.get('condition') or '').strip()
+        if (
+            day is None
+            or tmax is None
+            or tmin is None
+            or not -90 <= tmin <= 60
+            or not -90 <= tmax <= 60
+            or tmax < tmin
+            or precipitation is None
+            or not math.isfinite(precipitation)
+            or not 0 <= precipitation <= 100
+            or not condition
+        ):
+            return []
+        dow, date_label = forecast_day_labels(day, start_date)
+        cards.append({
+            'data_source': 'Open-Meteo',
+            'dow': dow,
+            'date': date_label,
+            'full_date': day.strftime('%Y-%m-%d'),
+            'temp_high': tmax,
+            'temp_low': tmin,
+            'condition': condition,
+            'precip_probability': round(precipitation, 1),
+            'risk_level': 'unknown',
+            'risk_score': None,
+            'risk_label': '健康风险待计算',
+            'risk_available': False,
+            'risk_components': {
+                'heat': None,
+                'pm25': None,
+                'humidity': None,
+                'hot_night': None,
+            },
+            'composite_pre_clip_score': None,
+            'composite_final_score': None,
+            'composite_synergy_bonus': None,
+            'temperature_used': None,
+            'temperature_imputed': None,
+            'temp_min_used': None,
+            'temp_min_imputed': None,
+            'temp_min_source': None,
+            'humidity_used': None,
+            'humidity_imputed': None,
+            'humidity_source': None,
+            'pm25_used': None,
+            'pm25_imputed': None,
+            'pm25_source': None,
+            'pm25_detail_source': None,
+            'pm25_aqi_used': None,
+            'pm25_proxy': None,
+            'probability_high_visits': None,
+            'visit_point_estimate': None,
+            'visit_raw_point_estimate': None,
+            'visit_rr': None,
+            'visit_baseline': None,
+            'visit_dow_factor': None,
+            'visit_threshold_p90': None,
+            'visit_std_estimate': None,
+            'visit_probability_method': None,
+            'visit_guardrail_cap': None,
+            'visit_guardrail_applied': None,
+            'predictability_score': None,
+            'predictability_label': None,
+            'predictability_branch': None,
+            'predictability_raw_score': None,
+            'predictability_external_score': None,
+            'predictability_lead_day': None,
+            'predictability_model_spread': None,
+            'predictability_model_count': None,
+            'predictability_lead_penalty': None,
+            'predictability_model_bonus': None,
         })
     return cards

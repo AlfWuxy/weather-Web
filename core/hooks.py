@@ -111,6 +111,18 @@ def register_hooks(app):
             logger.debug("结构化日志失败: %s", exc)
         return response
 
+    @app.after_request
+    def add_security_headers(response):
+        """为所有页面补充低风险的浏览器安全边界。"""
+        response.headers.setdefault('X-Content-Type-Options', 'nosniff')
+        response.headers.setdefault('X-Frame-Options', 'DENY')
+        response.headers.setdefault('Referrer-Policy', 'no-referrer')
+        response.headers.setdefault(
+            'Permissions-Policy',
+            'camera=(), microphone=(), geolocation=()',
+        )
+        return response
+
     @app.template_filter('from_json')
     def from_json_filter(value):
         """将JSON字符串转换为Python对象"""
@@ -156,12 +168,15 @@ def register_hooks(app):
     def inject_now():
         """注入当前时间到模板"""
         current_location = normalize_location_name(get_user_location_value())
+        allowed_ai_models = app.config.get('AI_ALLOWED_MODELS', []) or []
+        ai_api_key = (app.config.get('SILICONFLOW_API_KEY') or '').strip()
         payload = {
             'now': lambda: datetime.now(tz=__import__('zoneinfo').ZoneInfo('Asia/Shanghai')),
             'csrf_token': generate_csrf_token,
             'current_location': current_location,
             'location_options': get_location_options(),
-            'ai_models': app.config.get('AI_ALLOWED_MODELS', []),
+            'ai_models': allowed_ai_models,
+            'ai_available': bool(ai_api_key and allowed_ai_models),
             'metric_explanations': get_metric_explanations(),
             'metric_explanation_groups': get_metric_explanation_groups(),
             'feature_flags': {

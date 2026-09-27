@@ -4,7 +4,7 @@ from flask import Blueprint, current_app
 from flask_login import login_required
 
 from core.extensions import limiter
-from core.security import rate_limit_key
+from core.security import rate_limit_key, reject_guest
 from services import api_service
 
 bp = Blueprint('api', __name__)
@@ -71,6 +71,7 @@ def api_disease_weather_stats():
 
 @bp.route('/api/v1/ml/predict', methods=['POST'], endpoint='api_v1_ml_predict')
 @login_required
+@reject_guest  # 高成本：游客烧配额
 @limiter.limit(lambda: current_app.config.get('RATE_LIMIT_ML', '60 per minute'), key_func=rate_limit_key)
 def api_v1_ml_predict():
     """使用机器学习模型进行疾病风险预测（v1）"""
@@ -85,6 +86,7 @@ def api_ml_predict():
 
 @bp.route('/api/v1/ml/predict-community', methods=['POST'], endpoint='api_v1_ml_predict_community')
 @login_required
+@reject_guest  # 高成本：游客烧配额
 @limiter.limit(lambda: current_app.config.get('RATE_LIMIT_ML', '60 per minute'), key_func=rate_limit_key)
 def api_v1_ml_predict_community():
     """使用机器学习模型进行社区风险预测（v1）"""
@@ -113,6 +115,7 @@ def api_ml_status():
 
 @bp.route('/api/v1/dlnm/risk', methods=['POST'], endpoint='api_v1_dlnm_risk')
 @login_required
+@reject_guest  # 高成本：游客烧配额
 def api_v1_dlnm_risk():
     """DLNM风险函数计算（v1）"""
     return api_service._api_dlnm_risk()
@@ -140,6 +143,7 @@ def api_dlnm_summary():
 
 @bp.route('/api/v1/forecast/7day', methods=['POST'], endpoint='api_v1_forecast_7day')
 @login_required
+@reject_guest  # 高成本：和风/算力
 @limiter.limit(lambda: current_app.config.get('RATE_LIMIT_FORECAST', '60 per minute'), key_func=rate_limit_key)
 def api_v1_forecast_7day():
     """获取未来7天健康预测（v1）"""
@@ -154,6 +158,7 @@ def api_forecast_7day():
 
 @bp.route('/api/v1/forecast/daily', methods=['POST'], endpoint='api_v1_forecast_daily')
 @login_required
+@reject_guest  # 高成本：游客烧配额
 @limiter.limit(lambda: current_app.config.get('RATE_LIMIT_FORECAST', '60 per minute'), key_func=rate_limit_key)
 def api_v1_forecast_daily():
     """获取单日门诊预测（v1）"""
@@ -170,6 +175,7 @@ def api_forecast_daily():
 
 @bp.route('/api/v1/community/risk-map-v2', methods=['POST'], endpoint='api_v1_community_risk_map_v2')
 @login_required
+@reject_guest  # 计算接口：正式用户
 def api_v1_community_risk_map_v2():
     """获取社区风险地图数据（改进版v1）"""
     return api_service._api_community_risk_map_v2()
@@ -209,6 +215,7 @@ def api_community_list():
 
 @bp.route('/api/v1/chronic/individual', methods=['POST'], endpoint='api_v1_chronic_individual')
 @login_required
+@reject_guest  # 高成本：游客烧配额
 @limiter.limit(lambda: current_app.config.get('RATE_LIMIT_CHRONIC', '60 per minute'), key_func=rate_limit_key)
 def api_v1_chronic_individual():
     """个体慢病风险预测（v1）"""
@@ -223,6 +230,7 @@ def api_chronic_individual():
 
 @bp.route('/api/v1/chronic/population', methods=['POST'], endpoint='api_v1_chronic_population')
 @login_required
+@reject_guest  # 高成本：游客烧配额
 def api_v1_chronic_population():
     """人群分层慢病风险预测（v1）"""
     return api_service._api_chronic_population()
@@ -238,6 +246,7 @@ def api_chronic_population():
 
 @bp.route('/api/v1/ai/ask', methods=['POST'], endpoint='api_v1_ai_ask')
 @login_required
+@reject_guest  # 付费上游：硅基流动
 @limiter.limit(lambda: current_app.config.get('RATE_LIMIT_AI', '30 per hour'), key_func=rate_limit_key)
 def api_v1_ai_ask():
     """AI问答接口（v1）"""
@@ -266,6 +275,7 @@ def api_chronic_rules_version():
 
 @bp.route('/api/v1/alert/comprehensive', methods=['POST'], endpoint='api_v1_comprehensive_alert')
 @login_required
+@reject_guest  # 高成本：多次和风 + 计算
 @limiter.limit(lambda: current_app.config.get('RATE_LIMIT_FORECAST', '60 per minute'), key_func=rate_limit_key)
 def api_v1_comprehensive_alert():
     """获取综合健康预警（v1）"""
@@ -282,6 +292,7 @@ def api_comprehensive_alert():
 
 @bp.route('/api/v1/events', methods=['POST'], endpoint='api_v1_events')
 @login_required
+@reject_guest  # 写库埋点：与 login_required 写接口一致，拒游客污染 usage_events
 def api_v1_events():
     """写入试点埋点事件（v1）"""
     return api_service._api_usage_event()

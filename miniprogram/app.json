@@ -2,6 +2,7 @@
   "pages": [
     "pages/bind-token/index",
     "pages/elders/index",
+    "pages/pending/index",
     "pages/elder-edit/index",
     "pages/alerts/index",
     "pages/template/index",
@@ -13,6 +14,25 @@
     "navigationBarTextStyle": "black",
     "backgroundColor": "#f5f7fb"
   },
+  "tabBar": {
+    "color": "#6b7280",
+    "selectedColor": "#16a34a",
+    "backgroundColor": "#ffffff",
+    "borderStyle": "black",
+    "list": [
+      {
+        "pagePath": "pages/elders/index",
+        "text": "监测",
+        "iconPath": "images/tab-elders.png",
+        "selectedIconPath": "images/tab-elders-active.png"
+      },
+      {
+        "pagePath": "pages/pending/index",
+        "text": "待处理",
+        "iconPath": "images/tab-pending.png",
+        "selectedIconPath": "images/tab-pending-active.png"
+      }
+    ]
+  },
   "style": "v2"
 }
-

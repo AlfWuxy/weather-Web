@@ -11,14 +11,51 @@ from core.extensions import db
 from core.audit import log_audit
 from core.db_models import Community, CoolingResource, HealthRiskAssessment, MedicalRecord, User, WeatherAlert
 from core.time_utils import utcnow
+from services.cooling_service import (
+    ALERT_OPEN_NOTE_CODES,
+    OPEN_DURING_ALERT_CODES,
+    TRANSPORT_CODES,
+    VERIFY_METHODS,
+    compute_verify_status,
+    record_verification,
+)
+from utils.audit_log import log_security_event
 from utils.parsers import parse_bool, parse_float, parse_int
 from utils.validators import (
-    sanitize_input, validate_age, validate_email, validate_gender, validate_password, validate_username
+    mask_patient_name,
+    mask_phi_text,
+    sanitize_input,
+    validate_age,
+    validate_email,
+    validate_gender,
+    validate_password,
+    validate_username,
 )
 
 logger = logging.getLogger(__name__)
 
 bp = Blueprint('admin', __name__)
+
+
+def _count_admin_users():
+    """当前 role=admin 的用户数（含待编辑对象）。"""
+    return User.query.filter_by(role='admin').count()
+
+
+def _is_last_remaining_admin(user):
+    """该用户是否为系统中唯一管理员。"""
+    if not user or (getattr(user, 'role', None) or '') != 'admin':
+        return False
+    return _count_admin_users() <= 1
+
+
+def _would_demote_last_admin(user, new_role):
+    """若将唯一 admin 改为非 admin，则返回 True（禁止）。"""
+    if (getattr(user, 'role', None) or '') != 'admin':
+        return False
+    if new_role == 'admin':
+        return False
+    return _is_last_remaining_admin(user)
 
 
 @bp.route('/admin', endpoint='admin_dashboard')
@@ -152,6 +189,12 @@ def admin_records():
     records = query.order_by(
         MedicalRecord.visit_time.desc()
     ).paginate(page=page, per_page=20, error_out=False)
+
+    # P12：列表脱敏 —— 模板只渲染遮罩字段，完整姓名不进 HTML
+    for rec in records.items:
+        rec.patient_name_display = mask_patient_name(rec.patient_name)
+        rec.doctor_display = mask_patient_name(rec.doctor) if rec.doctor else '—'
+        rec.diagnosis_display = mask_phi_text(rec.diagnosis, keep=0)
 
     # 获取所有科室列表（用于下拉）
     departments = db.session.query(MedicalRecord.department).filter(
@@ -467,13 +510,38 @@ def admin_delete_user(user_id):
 
     user = User.query.get_or_404(user_id)
     if user.role == 'admin':
+        # 禁止删除任意 admin（含多 admin 场景），避免误删与自锁
         flash('不能删除管理员账户', 'error')
+        log_security_event(
+            'admin_delete_blocked',
+            actor_id=current_user.id,
+            actor_role=getattr(current_user, 'role', None),
+            resource_type='user',
+            resource_id=str(user.id),
+            extra_data={'target_username': user.username, 'reason': 'role_admin'},
+        )
         return redirect(url_for('admin.admin_users'))
 
+    target_username = user.username
+    target_id = user.id
     try:
         db.session.delete(user)
         db.session.commit()
-        flash(f'用户 {user.username} 已删除', 'success')
+        flash(f'用户 {target_username} 已删除', 'success')
+        log_security_event(
+            'admin_user_deleted',
+            actor_id=current_user.id,
+            actor_role=getattr(current_user, 'role', None),
+            resource_type='user',
+            resource_id=str(target_id),
+            extra_data={'target_username': target_username},
+        )
+        log_audit(
+            'admin_user_deleted',
+            resource_type='user',
+            resource_id=target_id,
+            metadata={'target_username': target_username},
+        )
     except Exception:
         db.session.rollback()
         flash('删除失败：该用户仍有关联数据，请先清理相关记录', 'error')
@@ -526,27 +594,100 @@ def admin_edit_user(user_id):
         gender = result
 
         community = sanitize_input(request.form.get('community'), max_length=100)
+        # P10：管辖社区仅 admin 表单可写（普通 profile 不可见/不可提交生效）
+        authorized_community = sanitize_input(
+            request.form.get('authorized_community'), max_length=100
+        )
+        if authorized_community is None:
+            authorized_community = ''
+        authorized_community = authorized_community.strip()
+
+        # 角色先解析并做 last-admin 拦截，再改密码/写字段，避免拒绝路径留下脏会话对象
+        old_role = user.role or 'user'
+        role = request.form.get('role', old_role)
+        if role not in ['admin', 'user', 'caregiver', 'community']:
+            role = old_role
+
+        # P9：禁止把「最后一个 admin」降为非 admin（含自降级）
+        if _would_demote_last_admin(user, role):
+            flash('不能降级最后一个管理员，请先指定其他管理员', 'error')
+            log_security_event(
+                'admin_last_admin_demote_blocked',
+                actor_id=current_user.id,
+                actor_role=getattr(current_user, 'role', None),
+                resource_type='user',
+                resource_id=str(user.id),
+                extra_data={
+                    'target_username': user.username,
+                    'old_role': old_role,
+                    'attempted_role': role,
+                },
+            )
+            return redirect(url_for('admin.admin_edit_user', user_id=user_id))
 
         new_password = request.form.get('password')
+        password_changed = False
         if new_password:
             valid, result = validate_password(new_password)
             if not valid:
                 flash(result, 'error')
                 return redirect(url_for('admin.admin_edit_user', user_id=user_id))
             user.set_password(result)
+            password_changed = True
 
-        role = request.form.get('role', user.role or 'user')
-        if role not in ['admin', 'user', 'caregiver', 'community']:
-            role = user.role or 'user'
-
-        user.username = username
+        # 用户名 UI 只读；后端亦钉死，防改 POST 偷改登录名
+        # user.username 保持不变
         user.email = email
         user.age = age
         user.gender = gender
         user.community = community
+        # 升为 community 且未填授权村时，用 community 兜底，避免 ACL 空窗
+        if role == 'community' and not authorized_community:
+            authorized_community = (community or '').strip()
+        user.authorized_community = authorized_community or None
         user.role = role
 
         db.session.commit()
+
+        role_changed = role != old_role
+        if role_changed:
+            log_security_event(
+                'admin_role_change',
+                actor_id=current_user.id,
+                actor_role=getattr(current_user, 'role', None),
+                resource_type='user',
+                resource_id=str(user.id),
+                extra_data={
+                    'target_username': user.username,
+                    'old_role': old_role,
+                    'new_role': role,
+                },
+            )
+            log_audit(
+                'admin_role_change',
+                resource_type='user',
+                resource_id=user.id,
+                metadata={'old_role': old_role, 'new_role': role, 'target_username': user.username},
+            )
+        if password_changed:
+            log_security_event(
+                'admin_password_reset',
+                actor_id=current_user.id,
+                actor_role=getattr(current_user, 'role', None),
+                resource_type='user',
+                resource_id=str(user.id),
+                extra_data={
+                    'target_username': user.username,
+                    'self_reset': int(current_user.id) == int(user.id),
+                },
+            )
+            log_audit(
+                'admin_password_reset',
+                resource_type='user',
+                resource_id=user.id,
+                metadata={'target_username': user.username},
+            )
+
         flash('用户信息更新成功', 'success')
         return redirect(url_for('admin.admin_users'))
 
@@ -599,9 +740,19 @@ def admin_add_user():
         gender = result
 
         community = sanitize_input(request.form.get('community'), max_length=100)
+        # P10：新建 community 角色必须钉死 ACL，避免空 authorized 回退 community 再开横向越权
+        authorized_community = sanitize_input(
+            request.form.get('authorized_community'), max_length=100
+        )
+        if authorized_community is None:
+            authorized_community = ''
+        authorized_community = authorized_community.strip()
+
         role = request.form.get('role', 'user')
         if role not in ['admin', 'user', 'caregiver', 'community']:
             role = 'user'
+        if role == 'community' and not authorized_community:
+            authorized_community = (community or '').strip()
 
         if User.query.filter_by(username=username).first():
             flash('用户名已存在', 'error')
@@ -617,6 +768,7 @@ def admin_add_user():
             age=age,
             gender=gender,
             community=community,
+            authorized_community=authorized_community or None,
             role=role
         )
         user.set_password(password)
@@ -743,12 +895,19 @@ def admin_cooling_resources():
         CoolingResource.community_code,
         CoolingResource.name
     ).all()
+    now = utcnow()
+    for item in resources:
+        item.display_verify_status = compute_verify_status(item, now)
     communities = Community.query.order_by(Community.name).all()
     return render_template(
         'admin_cooling_resources.html',
         resources=resources,
         communities=communities,
-        selected_community=community or ''
+        selected_community=community or '',
+        verify_methods=sorted(VERIFY_METHODS),
+        open_during_alert_codes=sorted(OPEN_DURING_ALERT_CODES),
+        alert_open_note_codes=sorted(ALERT_OPEN_NOTE_CODES),
+        transport_codes=sorted(TRANSPORT_CODES),
     )
 
 
@@ -829,3 +988,37 @@ def admin_edit_cooling_resource(resource_id):
         resource=resource,
         communities=communities
     )
+
+
+@bp.route('/admin/cooling/<int:resource_id>/verify', methods=['POST'], endpoint='admin_verify_cooling_resource')
+@login_required
+def admin_verify_cooling_resource(resource_id):
+    """管理员记录一次核验（封闭码，无自由文本）。"""
+    if current_user.role != 'admin':
+        flash('权限不足', 'error')
+        return redirect(url_for('user.user_dashboard'))
+
+    resource = CoolingResource.query.get_or_404(resource_id)
+    amenities = {
+        'ac': parse_bool(request.form.get('amenity_ac'), default=False),
+        'water': parse_bool(request.form.get('amenity_water'), default=False),
+        'seats': parse_bool(request.form.get('amenity_seats'), default=False),
+        'toilet': parse_bool(request.form.get('amenity_toilet'), default=False),
+        'step_free': parse_bool(request.form.get('amenity_step_free'), default=False),
+        'shade': parse_bool(request.form.get('amenity_shade'), default=False),
+    }
+    try:
+        record_verification(
+            resource,
+            sanitize_input(request.form.get('method'), max_length=16),
+            sanitize_input(request.form.get('open_during_alert'), max_length=16),
+            sanitize_input(request.form.get('alert_open_note_code'), max_length=32),
+            amenities,
+            sanitize_input(request.form.get('transport_need'), max_length=16),
+            'admin',
+        )
+    except ValueError:
+        flash('核验字段无效', 'error')
+        return redirect(url_for('admin.admin_cooling_resources'))
+    flash('核验已记录', 'success')
+    return redirect(url_for('admin.admin_cooling_resources'))

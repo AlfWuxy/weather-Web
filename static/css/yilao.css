@@ -956,6 +956,15 @@ a:hover { color: var(--yl-orange-500); }
         radial-gradient(circle at 12% 16%, rgba(238,126,45,.16), transparent 34%),
         linear-gradient(135deg, rgba(255,255,255,.92), rgba(255,247,238,.88));
 }
+.yl-cooling-unverified {
+    background: #f3f3f3;
+    color: #6c757d;
+    opacity: .82;
+    filter: grayscale(.45);
+}
+.yl-cooling-unverified .card-body {
+    color: #6c757d;
+}
 .yl-temp-status {
     display: inline-flex;
     align-items: center;

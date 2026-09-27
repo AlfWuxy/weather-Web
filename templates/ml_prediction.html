@@ -1,11 +1,11 @@
 {% extends "base.html" %}
 {% from "partials/metric_info.html" import metric_info with context %}
-{% block title %}AI 疾病类别线索 · 宜老天气通{% endblock %}
+{% block title %}健康关注线索 · 宜老天气通{% endblock %}
 
 {% block content %}
 <div class="container" style="max-width:1100px;">
     <section class="section-heading yl-fade-up">
-        <span class="section-kicker"><i class="bi bi-cpu"></i> AI 疾病类别线索</span>
+        <span class="section-kicker"><i class="bi bi-cpu"></i> 健康关注线索</span>
         <h2>基于年龄、性别与当前天气的类别排序</h2>
         <p>根据年龄、性别和当前天气，整理需要优先关注的健康类别。分数用于安排日常观察，不代表发病概率，也不能用于诊断。</p>
     </section>
@@ -15,6 +15,11 @@
             <form method="POST" action="{{ url_for('tools.ml_prediction') }}" class="yl-section yl-fade-up yl-fade-up-d1">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <h4 style="font-size:1.05rem;">输入信息</h4>
+                {% if guest_demo %}
+                <div class="alert alert-warning small mt-3 mb-0" role="note">
+                    游客可预览本页；生成关注线索需注册或登录正式账号。
+                </div>
+                {% endif %}
 
                 <div class="mb-3 mt-3">
                     <label class="form-label">对象</label>
@@ -37,7 +42,7 @@
                 <div class="alert alert-light border small" role="note">
                     慢病档案不会参与这项类别排序。需要查看慢病与天气的关系，请使用“慢病风险评估”。
                 </div>
-                <button type="submit" class="btn btn-primary w-100"><i class="bi bi-magic me-1"></i>生成类别线索</button>
+                <button type="submit" class="btn btn-primary w-100" {% if guest_demo %}disabled aria-disabled="true"{% endif %}><i class="bi bi-magic me-1"></i>生成类别线索</button>
             </form>
         </div>
 
@@ -76,7 +81,7 @@
             {% else %}
             <div class="yl-section text-center yl-fade-up yl-fade-up-d2" style="padding:56px 30px;">
                 <div style="font-size:3rem; color:var(--yl-orange-400);"><i class="bi bi-graph-up-arrow"></i></div>
-                <h4 class="mt-3">填写左侧信息后查看类别线索</h4>
+                <h4 class="mt-3">填写信息后查看类别线索</h4>
                 <p class="text-muted mb-0">填写所在地和年龄后，可查看需要优先留意的健康类别。</p>
             </div>
             {% endif %}

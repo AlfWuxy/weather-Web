@@ -16,7 +16,7 @@ from core.constants import DEFAULT_CITY_LABEL  # noqa: E402
 from core.time_utils import today_local  # noqa: E402
 from core.weather import (  # noqa: E402
     get_weather_with_cache,
-    is_qweather_online_weather,
+    is_qweather_production_ready,
     normalize_location_name,
     weather_source_label,
 )
@@ -101,6 +101,8 @@ def precompute_community_risk(app=None, locations=None, window_days_list=None, d
         window_days_list = _resolve_window_days_list(window_days_list)
         disease_filters = _resolve_disease_filters(disease_filters)
         community_service = get_community_service()
+        signature_builder = getattr(community_service, 'get_ranking_input_signature', None)
+        ranking_input_signature = signature_builder() if callable(signature_builder) else ''
 
         summary = {
             'analysis_date': str(target_date),
@@ -109,6 +111,7 @@ def precompute_community_risk(app=None, locations=None, window_days_list=None, d
             'disease_filters': disease_filters,
             'weather_cache_hits': 0,
             'weather_skipped': 0,
+            'screening_only': 0,
             'risk_cache_hits': 0,
             'computed': 0,
             'combinations': 0,
@@ -116,15 +119,16 @@ def precompute_community_risk(app=None, locations=None, window_days_list=None, d
 
         for location in locations:
             weather_data, weather_from_cache = get_weather_with_cache(location)
-            if not is_qweather_online_weather(weather_data):
+            screening_only = not is_qweather_production_ready(weather_data)
+            if screening_only:
                 summary['weather_skipped'] += 1
                 logger.warning(
-                    "跳过社区风险预计算：非和风真实天气 location=%s source=%s is_mock=%s",
+                    "和风实况不满足生产门，改为预计算公开 GIS 筛查 location=%s source=%s is_mock=%s",
                     location,
                     weather_source_label(weather_data),
                     weather_data.get('is_mock') if isinstance(weather_data, dict) else None,
                 )
-                continue
+                summary['screening_only'] += 1
             if weather_from_cache:
                 summary['weather_cache_hits'] += 1
 
@@ -136,10 +140,25 @@ def precompute_community_risk(app=None, locations=None, window_days_list=None, d
                         window_days=window_days,
                         disease_filter=disease_filter,
                         city=location,
-                        weather_data=weather_data,
+                        weather_data=None if screening_only else weather_data,
+                        ranking_path='exploratory_only' if screening_only else 'auto',
+                        input_signature=ranking_input_signature,
                     )
 
                     def _build_result():
+                        if screening_only:
+                            screening_builder = getattr(
+                                community_service,
+                                'generate_exploratory_geospatial_screening',
+                                None,
+                            )
+                            if not callable(screening_builder):
+                                return None
+                            return screening_builder(
+                                target_date=target_date,
+                                window_days=window_days,
+                                disease_filter=disease_filter,
+                            )
                         return community_service.generate_community_risk_map(
                             weather_data,
                             target_date=target_date,

@@ -34,7 +34,7 @@
             地点：{{item.location_query || item.community_code || '-'}}
           </view>
           <view class="muted" style="margin-top: 4px; font-size: 12px;">
-            Tmax {{item.today.temperature_max || '-'}} · Tmin {{item.today.temperature_min || '-'}}
+            Tmax {{item.today.temperature_max === 0 ? 0 : (item.today.temperature_max || '-')}} · Tmin {{item.today.temperature_min === 0 ? 0 : (item.today.temperature_min || '-')}}
           </view>
         </view>
         <view>
@@ -52,4 +52,3 @@
     </view>
   </block>
 </view>
-

@@ -8,8 +8,8 @@
     <div class="row mb-4">
         <div class="col-12 d-flex align-items-center justify-content-between">
             <div>
-                <h2><i class="bi bi-person-badge"></i> {{ member.name }} · {{ member.relation or '关系未填' }}</h2>
-                <p class="text-muted">成员健康画像与预警订阅概览</p>
+                <h1 class="h2"><i class="bi bi-person-badge"></i> {{ member.name }} · {{ member.relation or '关系未填' }}</h1>
+                <p class="text-muted">家人档案、关注等级与天气阈值概览</p>
             </div>
             <div class="d-flex gap-2">
                 <a class="btn btn-outline-secondary" href="{{ url_for('health.family_members') }}">返回列表</a>
@@ -27,18 +27,18 @@
                             <h5 class="mb-1">基础信息</h5>
                             <div class="text-muted">{{ member.gender or '-' }} · {{ member.age or '-' }}岁</div>
                         </div>
-                        <span class="badge risk-badge risk-{{ risk.level }}">{{ risk.label }}</span>
+                        <span class="badge risk-badge risk-{{ risk.level }}">{{ {'high': '高关注', 'medium': '中关注', 'low': '常规关注'}.get(risk.level, '待完善') }}</span>
                         {{ metric_info('member_risk_score', {'本次得分': risk.score, '原因': risk.reasons|join('、') if risk.reasons else '暂无加分原因'}) }}
                     </div>
                     <div class="mt-3">
-                        <div class="text-muted small mb-1">风险原因</div>
+                        <div class="text-muted small mb-1">关注原因</div>
                         <div class="d-flex flex-wrap gap-2">
                             {% if risk.reasons %}
                                 {% for reason in risk.reasons %}
                                     <span class="badge bg-warning-subtle text-dark border">{{ reason }}</span>
                                 {% endfor %}
                             {% else %}
-                                <span class="text-muted small">暂无明显风险标签</span>
+                                <span class="text-muted small">暂无明显关注标签</span>
                             {% endif %}
                         </div>
                     </div>
@@ -55,7 +55,7 @@
                         </div>
                     </div>
                     <div class="mt-3">
-                        <div class="text-muted small mb-1">风险标签</div>
+                        <div class="text-muted small mb-1">档案关注标签</div>
                         <div class="d-flex flex-wrap gap-2">
                             {% if profile.risk_tags %}
                                 {% for tag in profile.risk_tags %}
@@ -78,16 +78,31 @@
                     </div>
                     <div class="text-muted small">{{ completion.percent }}% · 已完善 {{ completion.filled }}/{{ completion.total }}</div>
                     <div class="mt-3">
-                        <h6 class="mb-2">今日预警状态</h6>
+                        <h6 class="mb-2">今日阈值状态</h6>
                         {% if not weather_available %}
                             <span class="badge bg-warning-subtle text-warning-emphasis border">天气更新中</span>
                         {% elif alerts %}
-                            <span class="badge bg-danger">触发：{{ alerts|join('、') }}</span>
+                            <span class="badge bg-danger">达到：{{ alerts|join('、') }}</span>
+                        {% elif heat_action_weather_ready and air_quality_available %}
+                            <span class="badge bg-success-subtle text-success border">当前可用指标未达到</span>
+                        {% elif heat_action_weather_ready %}
+                            <span class="badge bg-secondary-subtle text-secondary border">温湿度阈值未达到，AQI 暂不可判断</span>
+                        {% elif air_quality_available %}
+                            <span class="badge bg-secondary-subtle text-secondary border">AQI 阈值未达到，温湿度暂不可判断</span>
                         {% else %}
-                            <span class="badge bg-success-subtle text-success border">未触发</span>
+                            <span class="badge bg-warning-subtle text-warning-emphasis border">阈值数据不足，暂不判断</span>
                         {% endif %}
                         {% if weather_available and weather %}
-                            <div class="text-muted small mt-2">天气：{{ weather.temperature|round(1) }}°C / 湿度 {{ weather.humidity|round(0) }}% / AQI {{ weather.aqi or '--' }}</div>
+                            {% set current_humidity = weather.humidity if weather.humidity is defined and weather.humidity is not none else none %}
+                            <div class="text-muted small mt-2">
+                                当前查询地：{{ weather_location or '未设置' }} · 来源：{{ weather_source_label or '未标明' }} · 天气 {{ weather.temperature|round(1) }}°C / 湿度 {{ (current_humidity|round(0)) ~ '%' if current_humidity is not none else '--' }} / AQI {{ weather.aqi if air_quality_available else '--' }}
+                            </div>
+                            {% if not air_quality_available %}
+                                <div class="text-muted small mt-1">AQI 暂不可判断：需要新鲜、非估算且同时含 PM2.5 的和风实况。</div>
+                            {% endif %}
+                            {% if not heat_action_weather_ready %}
+                                <div class="text-muted small mt-1">温湿度阈值暂不可判断：基础温热字段不完整。</div>
+                            {% endif %}
                         {% else %}
                             <div class="text-muted small mt-2">风险提醒将在天气更新后显示。现在可先查看档案和日常防护建议。</div>
                         {% endif %}
@@ -113,17 +128,17 @@
         <div class="col-lg-6">
             <div class="card shadow-sm h-100">
                 <div class="card-body">
-                    <h6 class="mb-3">预警与通知</h6>
-                    <p class="mb-2"><strong>预警开关：</strong>{{ '启用' if profile.alert_enabled else '已暂停' }}</p>
-                    <p class="mb-2"><strong>高温触发：</strong>{{ profile.weather_thresholds.get('high_temp', '未设置') }}</p>
-                    <p class="mb-2"><strong>低温触发：</strong>{{ profile.weather_thresholds.get('low_temp', '未设置') }}</p>
-                    <p class="mb-2"><strong>湿度触发：</strong>{{ profile.weather_thresholds.get('high_humidity', '未设置') }}</p>
-                    <p class="mb-2"><strong>AQI触发：</strong>{{ profile.weather_thresholds.get('high_aqi', '未设置') }}</p>
-                    <p class="mb-2"><strong>通知渠道：</strong>{{ profile.contact_prefs.get('channels', [])|join('、') if profile.contact_prefs.get('channels') else '未设置' }}</p>
-                    <p class="mb-2"><strong>通知频率：</strong>{{ profile.contact_prefs.get('frequency', '未设置') }}</p>
-                    <p class="mb-2"><strong>同步通知家属：</strong>{{ '是' if profile.contact_prefs.get('notify_family') else '否' }}</p>
+                    <h6 class="mb-3">阈值与通知偏好</h6>
+                    <p class="mb-2"><strong>阈值检查：</strong>{{ '启用' if profile.alert_enabled else '已暂停' }}</p>
+                    <p class="mb-2"><strong>高温阈值：</strong>{{ profile.weather_thresholds.get('high_temp', '未设置') }}</p>
+                    <p class="mb-2"><strong>低温阈值：</strong>{{ profile.weather_thresholds.get('low_temp', '未设置') }}</p>
+                    <p class="mb-2"><strong>湿度阈值：</strong>{{ profile.weather_thresholds.get('high_humidity', '未设置') }}</p>
+                    <p class="mb-2"><strong>AQI 阈值：</strong>{{ profile.weather_thresholds.get('high_aqi', '未设置') }}</p>
+                    <p class="mb-2"><strong>记录的通知偏好：</strong>{{ profile.contact_prefs.get('channels', [])|join('、') if profile.contact_prefs.get('channels') else '未设置' }}</p>
+                    <p class="mb-2"><strong>记录的频率偏好：</strong>{{ profile.contact_prefs.get('frequency', '未设置') }}</p>
+                    <p class="mb-2"><strong>希望同步家属：</strong>{{ '是' if profile.contact_prefs.get('notify_family') else '否' }}</p>
                     {% set escalation_days = profile.contact_prefs.get('escalation_days') %}
-                    <p class="mb-2"><strong>高风险升级：</strong>{{ escalation_days ~ '天' if escalation_days else '未设置' }}</p>
+                    <p class="mb-2"><strong>连续关注天数：</strong>{{ escalation_days ~ '天' if escalation_days else '未设置' }}</p>
                     <p class="mb-0"><strong>静默时段：</strong>{{ profile.quiet_hours or '未设置' }}</p>
                 </div>
             </div>
@@ -135,10 +150,10 @@
             <div class="card shadow-sm h-100">
                 <div class="card-body">
                     <h6 class="mb-3">隐私与共享</h6>
-                    {% set privacy_map = {'family': '家庭可见', 'private': '仅本人可见', 'doctor': '授权医生可见', 'community': '社区管理员可见'} %}
-                    <p class="mb-2"><strong>隐私级别：</strong>{{ privacy_map.get(profile.privacy_level, profile.privacy_level) }}</p>
-                    <p class="mb-2"><strong>授权医生查看：</strong>{{ '是' if profile.share_with_doctor else '否' }}</p>
-                    <p class="mb-2"><strong>授权社区查看：</strong>{{ '是' if profile.share_with_community else '否' }}</p>
+                    <div class="alert alert-secondary small" role="note">
+                        外部共享当前未启用。本页没有医生或社区账号授权查看链路；历史表单中的共享偏好只作记录，不代表资料已经共享。
+                    </div>
+                    <p class="mb-2"><strong>当前可见范围：</strong>当前家庭照护账号</p>
                     <p class="mb-2"><strong>联系人电话：</strong>{{ profile.contact_prefs.get('phone', '未填写') }}</p>
                     <p class="mb-2"><strong>微信号：</strong>{{ profile.contact_prefs.get('wechat', '未填写') }}</p>
                     <p class="mb-2"><strong>紧急联系人：</strong>{{ profile.contact_prefs.get('emergency_name', '未填写') }}</p>

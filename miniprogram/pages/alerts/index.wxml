@@ -8,7 +8,7 @@
       地点：{{location.query || '-'}}
     </view>
     <view class="muted" style="margin-top: 4px; font-size: 12px;">
-      Tmax {{weather.temperature_max || '-'}} · Tmin {{weather.temperature_min || '-'}}
+      Tmax {{weather.temperature_max === 0 ? 0 : (weather.temperature_max || '-')}} · Tmin {{weather.temperature_min === 0 ? 0 : (weather.temperature_min || '-')}}
     </view>
   </view>
 
@@ -39,4 +39,3 @@
     </view>
   </view>
 </view>
-

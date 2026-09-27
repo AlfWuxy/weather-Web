@@ -7,12 +7,16 @@ Endpoints:
 - POST /mp/api/v1/elders
 - PATCH /mp/api/v1/elders/<pair_id>
 - GET  /mp/api/v1/alerts?pair_id=...
+- GET  /mp/api/v1/pending
+- POST /mp/api/v1/pairs/<pair_id>/events
 - POST /mp/api/v1/events
 """
 
 from __future__ import annotations
 
 import json
+import math
+import re
 from functools import wraps
 
 from flask import Blueprint, current_app, g, jsonify, request
@@ -23,8 +27,8 @@ from core.extensions import db, limiter
 from core.security import hash_identifier
 from core.time_utils import utcnow
 from core.usage import log_usage_event, verify_api_token
-from core.weather import get_weather_with_cache, is_qweather_online_weather
-from services.api_service import PILOT_EVENT_TYPES
+from core.weather import get_weather_with_cache, is_qweather_production_ready
+from services.action_events import InvalidTransition, record_event, today_state
 from services.location_resolver import resolve_location
 from services.warning_service import get_qweather_warnings
 from services.user._common import _create_pair_record
@@ -33,6 +37,47 @@ from utils.validators import sanitize_input
 
 bp = Blueprint("mp_api", __name__, url_prefix="/mp/api/v1")
 MP_EVENT_META_MAX_CHARS = 2048
+MP_CHRONIC_DISEASES_MAX_ITEMS = 20
+MP_CLIENT_EVENT_TYPES = frozenset(
+    {
+        "template_view",
+        "template_copy",
+        "feedback_submitted",
+    }
+)
+MP_CAREGIVER_STAGES = frozenset(
+    {
+        "delivered",
+        "help_acknowledged",
+        "caregiver_verified",
+        "closed",
+    }
+)
+MP_PENDING_TODAY_KEYS = (
+    "delivered",
+    "seen",
+    "understood",
+    "self_reported",
+    "help_requested",
+    "help_acknowledged",
+    "caregiver_verified",
+    "closed",
+)
+TEMPLATE_COPY_META_FIELDS = (
+    "script_version",
+    "messenger_role",
+    "channel",
+    "scenario",
+)
+_GENDER_ALIASES = {
+    "男": "男性",
+    "男性": "男性",
+    "女": "女性",
+    "女性": "女性",
+    "其他": "其他",
+    "未知": "未知",
+}
+_MISSING = object()
 
 
 def _bearer_token() -> str:
@@ -71,10 +116,131 @@ def require_api_token(fn):
 
 
 def _pair_for_user(pair_id: int):
-    q = Pair.query.filter_by(id=pair_id)
+    q = Pair.query.filter_by(id=pair_id, status="active")
     # admin token is not supported in pilot; restrict to owner
     q = q.filter_by(caregiver_id=g.api_user_id)
     return q.first()
+
+
+def _parse_strict_bool(value) -> bool:
+    """严格解析布尔值，同时兼容小程序可能提交的字符串形式。"""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized == "true":
+            return True
+        if normalized == "false":
+            return False
+    raise ValueError("push_enabled must be a boolean")
+
+
+def _parse_optional_age(value):
+    """严格解析可选年龄，拒绝布尔值、小数和越界值。"""
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return None
+    if isinstance(value, bool):
+        raise ValueError("invalid_age")
+    if isinstance(value, int):
+        age = value
+    elif isinstance(value, str) and re.fullmatch(r"\d{1,3}", value.strip()):
+        age = int(value.strip())
+    else:
+        raise ValueError("invalid_age")
+    if age < 1 or age > 150:
+        raise ValueError("invalid_age")
+    return age
+
+
+def _parse_optional_gender(value):
+    """严格解析可选性别，并归一化为数据库现有枚举。"""
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return None
+    if not isinstance(value, str):
+        raise ValueError("invalid_gender")
+    normalized = _GENDER_ALIASES.get(value.strip())
+    if not normalized:
+        raise ValueError("invalid_gender")
+    return normalized
+
+
+def _parse_chronic_diseases(value):
+    """严格解析慢病类别列表，避免错误类型被静默当成清空。"""
+    if value is None:
+        return []
+    if not isinstance(value, list) or len(value) > MP_CHRONIC_DISEASES_MAX_ITEMS:
+        raise ValueError("invalid_chronic_diseases")
+
+    result = []
+    seen = set()
+    for item in value:
+        if not isinstance(item, str):
+            raise ValueError("invalid_chronic_diseases")
+        raw = item.strip()
+        if not raw or len(raw) > 50:
+            raise ValueError("invalid_chronic_diseases")
+        cleaned = sanitize_input(raw, max_length=50)
+        if not cleaned:
+            raise ValueError("invalid_chronic_diseases")
+        if cleaned not in seen:
+            seen.add(cleaned)
+            result.append(cleaned)
+    return result
+
+
+def _parse_required_location(value):
+    """严格解析必填地点，拒绝空字符串和非文本值。"""
+    if not isinstance(value, str):
+        raise ValueError("invalid_location_query")
+    location = sanitize_input(value, max_length=200)
+    location = location.strip() if isinstance(location, str) else ""
+    if not location:
+        raise ValueError("invalid_location_query")
+    return location
+
+
+def _parse_positive_id(value, error_code):
+    """严格解析客户端提交的正整数关联 ID。"""
+    if isinstance(value, bool):
+        raise ValueError(error_code)
+    if isinstance(value, int):
+        parsed = value
+    elif isinstance(value, str) and re.fullmatch(r"[1-9]\d*", value.strip()):
+        parsed = int(value.strip())
+    else:
+        raise ValueError(error_code)
+    if parsed <= 0:
+        raise ValueError(error_code)
+    return parsed
+
+
+def _elder_label(member):
+    """家属自设称呼（relation），绝不返回档案姓名。"""
+    if member is None:
+        return ""
+    relation = getattr(member, "relation", None)
+    if not isinstance(relation, str):
+        return ""
+    return relation.strip()
+
+
+def _pending_today(state):
+    source = state or {}
+    return {key: bool(source.get(key)) for key in MP_PENDING_TODAY_KEYS}
+
+
+def _template_copy_meta_invalid(meta):
+    if not isinstance(meta, dict):
+        return True
+    for key in TEMPLATE_COPY_META_FIELDS:
+        value = meta.get(key)
+        if value is None:
+            return True
+        if isinstance(value, bool):
+            return True
+        if not str(value).strip():
+            return True
+    return False
 
 
 @bp.route("/me", endpoint="me")
@@ -105,22 +271,44 @@ def me_patch():
     user = db.session.get(User, g.api_user_id)
     if not user:
         return jsonify({"success": False, "error": "user_not_found"}), 404
-    payload = request.get_json(silent=True) or {}
-    wx_uid = sanitize_input(payload.get("wxpusher_uid"), max_length=80)
-    wx_uid = (wx_uid.strip() if isinstance(wx_uid, str) else None) or None
-    push_enabled = bool(payload.get("push_enabled"))
-    if push_enabled and not wx_uid:
-        push_enabled = False
+    payload = request.get_json(silent=True)
+    if payload is None:
+        payload = {}
+    if not isinstance(payload, dict):
+        return jsonify({"success": False, "error": "invalid_payload"}), 400
 
-    user.wxpusher_uid = wx_uid
-    user.push_enabled = bool(push_enabled)
-    db.session.commit()
-    log_usage_event(
-        "settings_updated",
-        user_id=user.id,
-        source="miniprogram",
-        meta={"fields": ["wxpusher_uid", "push_enabled"]},
-    )
+    updated_fields = []
+    wx_uid = user.wxpusher_uid
+    push_enabled = bool(user.push_enabled)
+
+    if "wxpusher_uid" in payload:
+        wx_uid = sanitize_input(payload.get("wxpusher_uid"), max_length=80)
+        wx_uid = (wx_uid.strip() if isinstance(wx_uid, str) else None) or None
+        updated_fields.append("wxpusher_uid")
+
+    if "push_enabled" in payload:
+        try:
+            push_enabled = _parse_strict_bool(payload.get("push_enabled"))
+        except ValueError:
+            return jsonify({"success": False, "error": "invalid_push_enabled"}), 400
+        updated_fields.append("push_enabled")
+
+    # UID 被移除时必须关闭推送，避免保留无法投递的开启状态。
+    if not wx_uid:
+        push_enabled = False
+        if "wxpusher_uid" in updated_fields and "push_enabled" not in updated_fields:
+            updated_fields.append("push_enabled")
+
+    if updated_fields:
+        user.wxpusher_uid = wx_uid
+        user.push_enabled = push_enabled
+        db.session.commit()
+        log_usage_event(
+            "settings_updated",
+            user_id=user.id,
+            source="miniprogram",
+            meta={"fields": updated_fields},
+        )
     return jsonify({"success": True, "data": {"wxpusher_uid": user.wxpusher_uid, "push_enabled": bool(user.push_enabled)}})
 
 
@@ -154,9 +342,11 @@ def elders_list():
             tmax_value = None
             tmin_value = None
         weather_available = (
-            is_qweather_online_weather(weather_data)
+            is_qweather_production_ready(weather_data)
             and tmax_value is not None
             and tmin_value is not None
+            and math.isfinite(tmax_value)
+            and math.isfinite(tmin_value)
         )
         if weather_available:
             if tmax_value >= 35:
@@ -188,6 +378,8 @@ def elders_list():
                     "temperature_min": tmin_value if weather_available else None,
                     "weather_available": weather_available,
                     "is_mock": bool(weather_data.get("is_mock")),
+                    "location": weather_data.get("location"),
+                    "observed_at": weather_data.get("observed_at") if weather_available else None,
                 },
             }
         )
@@ -199,23 +391,24 @@ def elders_list():
 @limiter.limit(lambda: current_app.config.get("RATE_LIMIT_MP_WRITE", "30 per minute"), key_func=_mp_rate_limit_key)
 @require_api_token
 def elders_create():
-    payload = request.get_json(silent=True) or {}
+    payload = request.get_json(silent=True)
+    if payload is None:
+        payload = {}
+    if not isinstance(payload, dict):
+        return jsonify({"success": False, "error": "invalid_payload"}), 400
+
     name = sanitize_input(payload.get("name"), max_length=50) or ""
     relation = sanitize_input(payload.get("relation"), max_length=20) or ""
-    location_query = sanitize_input(payload.get("location_query"), max_length=200) or ""
-    if not name or not location_query:
+    if not name:
         return jsonify({"success": False, "error": "missing_fields"}), 400
 
-    age = payload.get("age")
     try:
-        age = int(age) if age is not None and str(age).strip() else None
-    except Exception:
-        age = None
-    gender = sanitize_input(payload.get("gender"), max_length=10)
-    chronic = payload.get("chronic_diseases")
-    chronic = chronic if isinstance(chronic, list) else []
-    chronic = [sanitize_input(item, max_length=50) for item in chronic if item]
-    chronic = [c for c in chronic if c]
+        location_query = _parse_required_location(payload.get("location_query"))
+        age = _parse_optional_age(payload.get("age"))
+        gender = _parse_optional_gender(payload.get("gender"))
+        chronic = _parse_chronic_diseases(payload.get("chronic_diseases"))
+    except ValueError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
 
     try:
         member = FamilyMember(
@@ -273,20 +466,45 @@ def elders_patch(pair_id: int):
     if not pair:
         return jsonify({"success": False, "error": "not_found"}), 404
 
-    payload = request.get_json(silent=True) or {}
-    location_query = sanitize_input(payload.get("location_query"), max_length=200)
-    if location_query is not None:
-        pair.location_query = location_query
-        if location_query:
-            pair.community_code = location_query[:100]
+    payload = request.get_json(silent=True)
+    if payload is None:
+        payload = {}
+    if not isinstance(payload, dict):
+        return jsonify({"success": False, "error": "invalid_payload"}), 400
 
-    chronic = payload.get("chronic_diseases")
-    if chronic is not None and pair.member_id:
-        chronic = chronic if isinstance(chronic, list) else []
-        chronic = [sanitize_input(item, max_length=50) for item in chronic if item]
-        chronic = [c for c in chronic if c]
+    location_query = _MISSING
+    age = _MISSING
+    gender = _MISSING
+    chronic = _MISSING
+    try:
+        if "location_query" in payload:
+            location_query = _parse_required_location(payload.get("location_query"))
+        if "age" in payload:
+            age = _parse_optional_age(payload.get("age"))
+        if "gender" in payload:
+            gender = _parse_optional_gender(payload.get("gender"))
+        if "chronic_diseases" in payload:
+            chronic = _parse_chronic_diseases(payload.get("chronic_diseases"))
+    except ValueError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
+
+    member = None
+    if age is not _MISSING or gender is not _MISSING or chronic is not _MISSING:
         member = FamilyMember.query.filter_by(id=pair.member_id, user_id=g.api_user_id).first()
-        if member:
+        if not member:
+            return jsonify({"success": False, "error": "member_not_found"}), 404
+
+    # 所有字段校验完成后才写入 ORM，避免后续失败留下部分更新。
+    if location_query is not _MISSING:
+        pair.location_query = location_query
+        pair.community_code = location_query[:100]
+
+    if member:
+        if age is not _MISSING:
+            member.age = age
+        if gender is not _MISSING:
+            member.gender = gender
+        if chronic is not _MISSING:
             member.chronic_diseases = json.dumps(chronic, ensure_ascii=False) if chronic else None
 
     db.session.commit()
@@ -317,7 +535,7 @@ def alerts_list():
     code = resolved.get("location_code") or ""
     warnings = get_qweather_warnings(code) if code else []
     weather_data, _ = get_weather_with_cache(code or label)
-    weather_available = is_qweather_online_weather(weather_data)
+    weather_available = is_qweather_production_ready(weather_data)
 
     return jsonify(
         {
@@ -330,6 +548,8 @@ def alerts_list():
                     "temperature_min": weather_data.get("temperature_min") if weather_available else None,
                     "weather_available": weather_available,
                     "is_mock": bool(weather_data.get("is_mock")),
+                    "location": weather_data.get("location"),
+                    "observed_at": weather_data.get("observed_at") if weather_available else None,
                 },
             },
         }
@@ -340,13 +560,19 @@ def alerts_list():
 @limiter.limit(lambda: current_app.config.get("RATE_LIMIT_MP_EVENTS", "60 per minute"), key_func=_mp_rate_limit_key)
 @require_api_token
 def events():
-    payload = request.get_json(silent=True) or {}
+    payload = request.get_json(silent=True)
+    if payload is None:
+        payload = {}
+    if not isinstance(payload, dict):
+        return jsonify({"success": False, "error": "invalid_payload"}), 400
+
     event_type = sanitize_input(payload.get("event_type"), max_length=50) or ""
-    if event_type not in PILOT_EVENT_TYPES:
+    if event_type not in MP_CLIENT_EVENT_TYPES:
         return jsonify({"success": False, "error": "invalid_event_type"}), 400
-    pair_id = payload.get("pair_id")
-    member_id = payload.get("member_id")
-    meta = payload.get("meta") if isinstance(payload.get("meta"), (dict, list)) else None
+
+    if "meta" in payload and payload.get("meta") is not None and not isinstance(payload.get("meta"), (dict, list)):
+        return jsonify({"success": False, "error": "invalid_meta"}), 400
+    meta = payload.get("meta")
     if meta is not None:
         try:
             meta_json = json.dumps(meta, ensure_ascii=False)
@@ -355,29 +581,38 @@ def events():
         if len(meta_json) > MP_EVENT_META_MAX_CHARS:
             return jsonify({"success": False, "error": "meta_too_large"}), 400
 
+    if event_type == "template_copy" and "meta" in payload:
+        if _template_copy_meta_invalid(meta):
+            return jsonify({"success": False, "error": "invalid_meta"}), 400
+
+    pair = None
     resolved_pair_id = None
-    if pair_id is not None:
+    if "pair_id" in payload:
         try:
-            pair_id_int = int(pair_id)
-        except Exception:
-            pair_id_int = None
-        if pair_id_int:
-            pair = _pair_for_user(pair_id_int)
-            if pair:
-                resolved_pair_id = pair.id
+            pair_id = _parse_positive_id(payload.get("pair_id"), "invalid_pair_id")
+        except ValueError as exc:
+            return jsonify({"success": False, "error": str(exc)}), 400
+        pair = _pair_for_user(pair_id)
+        if not pair:
+            return jsonify({"success": False, "error": "not_found"}), 404
+        resolved_pair_id = pair.id
 
+    member = None
     resolved_member_id = None
-    if member_id is not None:
+    if "member_id" in payload:
         try:
-            member_id_int = int(member_id)
-        except Exception:
-            member_id_int = None
-        if member_id_int:
-            member = FamilyMember.query.filter_by(id=member_id_int, user_id=g.api_user_id).first()
-            if member:
-                resolved_member_id = member.id
+            member_id = _parse_positive_id(payload.get("member_id"), "invalid_member_id")
+        except ValueError as exc:
+            return jsonify({"success": False, "error": str(exc)}), 400
+        member = FamilyMember.query.filter_by(id=member_id, user_id=g.api_user_id).first()
+        if not member:
+            return jsonify({"success": False, "error": "member_not_found"}), 404
+        resolved_member_id = member.id
 
-    log_usage_event(
+    if pair and member and pair.member_id != member.id:
+        return jsonify({"success": False, "error": "pair_member_mismatch"}), 400
+
+    event = log_usage_event(
         event_type,
         user_id=g.api_user_id,
         pair_id=resolved_pair_id,
@@ -385,4 +620,91 @@ def events():
         source="miniprogram",
         meta=meta,
     )
+    if event is None:
+        return jsonify({"success": False, "error": "event_write_failed"}), 503
     return jsonify({"success": True})
+
+
+@bp.route("/pending", endpoint="pending")
+@limiter.limit(lambda: current_app.config.get("RATE_LIMIT_MP_READ", "120 per minute"), key_func=_mp_rate_limit_key)
+@require_api_token
+def pending():
+    pairs = (
+        Pair.query.filter_by(caregiver_id=g.api_user_id, status="active")
+        .order_by(Pair.created_at.desc())
+        .all()
+    )
+    member_ids = [p.member_id for p in pairs if p.member_id]
+    members = FamilyMember.query.filter(FamilyMember.id.in_(member_ids)).all() if member_ids else []
+    member_map = {m.id: m for m in members}
+
+    items = []
+    for pair in pairs:
+        member = member_map.get(pair.member_id) if pair.member_id else None
+        items.append(
+            {
+                "pair_id": pair.id,
+                "elder_label": _elder_label(member),
+                "today": _pending_today(today_state(pair)),
+            }
+        )
+
+    payload = {"pairs": items}
+    return jsonify({"success": True, "data": payload, "pairs": items})
+
+
+@bp.route("/pairs/<int:pair_id>/events", methods=["POST"], endpoint="pair_events")
+@limiter.limit(lambda: current_app.config.get("RATE_LIMIT_MP_WRITE", "30 per minute"), key_func=_mp_rate_limit_key)
+@require_api_token
+def pair_events(pair_id: int):
+    payload = request.get_json(silent=True)
+    if payload is None:
+        payload = {}
+    if not isinstance(payload, dict):
+        return jsonify({"success": False, "error": "invalid_payload"}), 400
+
+    pair = _pair_for_user(pair_id)
+    if not pair:
+        return jsonify({"success": False, "error": "not_found"}), 404
+
+    stage = sanitize_input(payload.get("stage"), max_length=32) or ""
+    if stage not in MP_CAREGIVER_STAGES:
+        return jsonify({"success": False, "error": "forbidden"}), 403
+
+    messenger_role = sanitize_input(payload.get("messenger_role"), max_length=20)
+    messenger_channel = sanitize_input(payload.get("channel"), max_length=24)
+    script_version = sanitize_input(payload.get("script_version"), max_length=16)
+
+    try:
+        event = record_event(
+            pair,
+            stage,
+            "caregiver",
+            "miniprogram",
+            script_version=script_version,
+        )
+    except InvalidTransition as exc:
+        db.session.rollback()
+        return exc.to_response()
+
+    if stage == "delivered":
+        log_usage_event(
+            "caregiver_delivered",
+            user_id=g.api_user_id,
+            pair_id=pair.id,
+            member_id=getattr(pair, "member_id", None),
+            source="miniprogram",
+            meta={
+                "messenger_role": messenger_role,
+                "channel": messenger_channel,
+                "event": "delivered",
+            },
+        )
+
+    state = _pending_today(today_state(pair))
+    return jsonify(
+        {
+            "success": True,
+            "data": {"event_id": event.id, "state": state},
+        }
+    )

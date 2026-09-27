@@ -45,10 +45,10 @@
                     <h4 class="mt-2 mb-0" style="font-size:1.15rem;">5 分钟完成第一条家庭提醒。</h4>
                     <ol class="auth-quicklist">
                         <li>登录或创建账号。</li>
-                        <li>进入"照护工作台",添加需要关注的家人。</li>
-                        <li>设置所在地和慢病类别(慢病可选)。</li>
-                        <li>在“个人设置”中绑定消息接收码并开启提醒。</li>
-                        <li>收到提醒后复制话术,并记录后续反馈。</li>
+                        <li>进入“照护工作台”，添加需要关注的家人。</li>
+                        <li>设置所在地和慢病类别（慢病可选）。</li>
+                        <li>如有需要，可在“个人设置”中选填微信接收码；通道可用并开启后才会自动推送。</li>
+                        <li>收到提醒后复制话术，并记录后续反馈。</li>
                     </ol>
                 </div>
 
@@ -97,9 +97,10 @@
                             <div class="d-grid mb-3">
                                 <a href="{{ url_for('public.guest_login') }}" class="btn btn-outline-primary">游客体验</a>
                             </div>
+                            <p class="text-muted small text-center">未配置消息通道时，仍可在照护工作台复制提醒话术手动发送。</p>
 
                             <div class="text-center">
-                                <span class="text-muted" style="font-size:.88rem;">还没有账号?</span>
+                                <span class="text-muted" style="font-size:.88rem;">还没有账号？</span>
                                 <a href="{{ url_for('public.register') }}" class="text-decoration-none fw-semibold" style="font-size:.88rem;">立即注册</a>
                             </div>
                         </form>

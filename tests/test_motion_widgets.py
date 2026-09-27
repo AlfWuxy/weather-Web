@@ -4,10 +4,33 @@ import json
 from datetime import timedelta
 from pathlib import Path
 
-from core.time_utils import today_local
+from core.time_utils import today_local, utcnow
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+
+def _production_weather(**overrides):
+    """生成通过生产与空气质量门的实时和风天气。"""
+    payload = {
+        'temperature': 27.5,
+        'temperature_max': 30,
+        'temperature_min': 22,
+        'humidity': 64,
+        'pressure': 1008,
+        'weather_condition': '多云',
+        'wind_speed': 2.5,
+        'aqi': 42,
+        'pm25': 18,
+        'air_quality_available': True,
+        'data_source': 'QWeather',
+        'observed_at': utcnow().isoformat(),
+        'air_observed_at': utcnow().isoformat(),
+        'quality_version': 1,
+        'is_mock': False,
+    }
+    payload.update(overrides)
+    return payload
 
 
 def _relative_luminance(hex_color):
@@ -33,8 +56,13 @@ def _contrast_ratio(first, second):
 
 
 def _login_as(client, user_id, csrf_token='test-csrf-token'):
+    from core.db_models import User
+    from core.extensions import db
+
+    user = db.session.get(User, user_id)
+    assert user is not None
     with client.session_transaction() as session:
-        session['_user_id'] = str(user_id)
+        session['_user_id'] = user.get_id()
         session['_fresh'] = True
         session['_csrf_token'] = csrf_token
 
@@ -62,18 +90,7 @@ def test_dashboard_renders_temperature_and_registered_metric_widgets(client, db_
     _login_as(client, user.id)
     monkeypatch.setattr(
         'services.user.dashboard_service.get_weather_with_cache',
-        lambda location: ({
-            'temperature': 27.5,
-            'temperature_max': 30,
-            'temperature_min': 22,
-            'humidity': 64,
-            'pressure': 1008,
-            'weather_condition': '多云',
-            'wind_speed': 2.5,
-            'aqi': 42,
-            'is_mock': False,
-            'data_source': 'QWeather',
-        }, False),
+        lambda location: (_production_weather(), False),
         raising=False,
     )
     monkeypatch.setattr(
@@ -91,6 +108,76 @@ def test_dashboard_renders_temperature_and_registered_metric_widgets(client, db_
     assert 'data-fx="sparkline"' in body
     assert '父亲 · 当前登记' in body
     assert '橙线 = 当前登记值定位' in body
+
+
+def test_dashboard_labels_openmeteo_as_basic_non_official_reference(
+    client,
+    db_session,
+    monkeypatch,
+):
+    from core.db_models import User
+
+    user = User(username='dashboard_openmeteo_copy', role='caregiver', community='都昌县')
+    user.set_password('testpass')
+    db_session.add(user)
+    db_session.commit()
+    _login_as(client, user.id)
+
+    openmeteo_weather = _production_weather(
+        data_source='Open-Meteo',
+        aqi=None,
+        pm25=None,
+        air_quality_available=False,
+    )
+    openmeteo_days = [
+        {
+            'date': (today_local() + timedelta(days=index)).isoformat(),
+            'temperature_max': 30 + index,
+            'temperature_min': 22 + index,
+            'condition': '多云',
+            'precip_probability': 20,
+            'data_source': 'Open-Meteo',
+            'is_mock': False,
+        }
+        for index in range(7)
+    ]
+    monkeypatch.setattr(
+        'services.user.dashboard_service.get_weather_with_cache',
+        lambda _location: (openmeteo_weather, False),
+    )
+    monkeypatch.setattr(
+        'services.user.dashboard_service.get_qweather_forecast_with_cache',
+        lambda _location, days=7: ([], False, {'error': 'qweather_unavailable'}),
+    )
+    monkeypatch.setattr(
+        'services.user.dashboard_service.get_openmeteo_forecast_with_cache',
+        lambda _location, days=7: (
+            openmeteo_days[:days],
+            False,
+            {'source': 'Open-Meteo'},
+        ),
+    )
+
+    response = client.get('/dashboard')
+    elder_response = client.get('/elder-mode')
+
+    assert response.status_code == 200
+    body = response.get_data(as_text=True)
+    assert '今日温湿热行动参考为' in body
+    assert '数据来源：Open-Meteo（都昌县）' in body
+    assert '基于气温和湿度的行动参考，不代表官方预警' in body
+    assert '7 日天气趋势' in body
+    assert '预报来源：Open-Meteo' in body
+    assert '当前仅展示天气，不生成健康风险评分' in body
+    assert '仅天气预报' in body
+    assert '接下来一周的风险趋势' not in body
+    assert elder_response.status_code == 200
+    elder_body = elder_response.get_data(as_text=True)
+    assert '数据来源：Open-Meteo（都昌县）' in elder_body
+    assert '基于气温和湿度的行动参考，不代表官方预警' in elder_body
+    assert '空气质量暂无可用观测' in body
+    assert '温湿热参考' in body
+    assert '今日天气健康风险为' not in body
 
 
 def test_dashboard_forecast_uses_qweather_cards(client, db_session, monkeypatch):
@@ -113,6 +200,7 @@ def test_dashboard_forecast_uses_qweather_cards(client, db_session, monkeypatch)
             'temperature_mean': 18 + idx,
             'condition': '多云',
             'humidity': 64,
+            'wind_speed': 2.5,
             'data_source': 'QWeather',
             'is_mock': False,
         })
@@ -147,16 +235,7 @@ def test_dashboard_forecast_uses_qweather_cards(client, db_session, monkeypatch)
     )
     monkeypatch.setattr(
         'services.user.dashboard_service.get_weather_with_cache',
-        lambda _location: ({
-            'temperature': 27,
-            'temperature_max': 30,
-            'temperature_min': 22,
-            'humidity': 64,
-            'pm25': 18,
-            'aqi': 42,
-            'data_source': 'QWeather',
-            'is_mock': False,
-        }, False),
+        lambda _location: (_production_weather(temperature=27), False),
         raising=False,
     )
     monkeypatch.setattr(
@@ -197,7 +276,7 @@ def test_dashboard_forecast_failure_does_not_render_demo_heat(client, db_session
 
     assert response.status_code == 200
     body = response.get_data(as_text=True)
-    assert '暂无实时 7 日预报' in body
+    assert '暂无最新可用的 7 日预报' in body
     assert '演示风险' not in body
     assert '34°/26°' not in body
 
@@ -222,6 +301,7 @@ def test_dashboard_forecast_generation_failure_marks_risk_unknown(client, db_ses
                 'temperature_mean': 20,
                 'humidity': 70,
                 'condition': '阴',
+                'wind_speed': 2.5,
             'data_source': 'QWeather',
             'is_mock': False,
         })
@@ -245,7 +325,7 @@ def test_dashboard_forecast_generation_failure_marks_risk_unknown(client, db_ses
 
     assert response.status_code == 200
     body = response.get_data(as_text=True)
-    assert '待计算' in body
+    assert '未生成健康风险' in body
     assert '风险 低风险 · 阴 · 24°/16°' not in body
 
 
@@ -296,8 +376,10 @@ def test_dashboard_missing_critical_qweather_fields_stays_unavailable_and_does_n
     db_session,
     monkeypatch,
 ):
-    """来源虽为 QWeather，关键字段缺失时仍不能显示或写入默认观测。"""
+    """缺少最低温时只展示 fresh 实况，风险链与落库保持关闭。"""
     from core.db_models import User, WeatherData
+    from core.weather import is_heat_action_weather_ready, is_qweather_production_ready
+    from services.user.dashboard_service import _dashboard_weather_available
 
     user = User(username='dashboard_missing_weather_fields', role='user', community='都昌')
     user.set_password('testpass')
@@ -305,20 +387,28 @@ def test_dashboard_missing_critical_qweather_fields_stays_unavailable_and_does_n
     db_session.commit()
     _login_as(client, user.id)
 
+    weather_payload = {
+        'temperature': 36.5,
+        'temperature_max': 39,
+        'temperature_min': None,
+        'humidity': 80,
+        'pressure': 1000,
+        'weather_condition': '晴',
+        'wind_speed': 2,
+        'aqi': 88,
+        'observed_at': utcnow().isoformat(),
+        'quality_version': 1,
+        'air_quality_available': False,
+        'is_mock': False,
+        'data_source': 'QWeather',
+    }
+    assert _dashboard_weather_available(weather_payload) is True
+    assert is_heat_action_weather_ready(weather_payload) is False
+    assert is_qweather_production_ready(weather_payload) is False
+
     monkeypatch.setattr(
         'services.user.dashboard_service.get_weather_with_cache',
-        lambda location: ({
-            'temperature': 36.5,
-            'temperature_max': 39,
-            'temperature_min': None,
-            'humidity': 80,
-            'pressure': 1000,
-            'weather_condition': '晴',
-            'wind_speed': 2,
-            'aqi': 88,
-            'is_mock': False,
-            'data_source': 'QWeather',
-        }, False),
+        lambda location: (weather_payload, False),
         raising=False,
     )
     monkeypatch.setattr(
@@ -332,17 +422,17 @@ def test_dashboard_missing_critical_qweather_fields_stays_unavailable_and_does_n
 
     assert response.status_code == 200
     body = response.get_data(as_text=True)
-    assert '天气正在更新，风险等级暂不显示' in body
-    assert '附近避暑资源' in body
-    assert '36.5' not in body
-    assert '39°' not in body
+    assert '当前天气为 晴' in body
+    assert '计算今日热风险所需的数据还不完整' in body
+    assert '36.5' in body
+    assert '今天风险较低' not in body
     assert WeatherData.query.filter_by(date=today_local(), location='都昌').count() == 0
 
     assert elder_response.status_code == 200
     elder_body = elder_response.get_data(as_text=True)
-    assert '天气更新中' in elder_body
-    assert '补水、通风并避免暴晒' in elder_body
-    assert '36.5' not in elder_body
+    assert '风险数据还不完整' in elder_body
+    assert '当前天气可以查看' in elder_body
+    assert '可以按平常来' not in elder_body
 
 
 def test_cooling_page_uses_real_weather_for_thermometer(client, db_session, monkeypatch):
@@ -352,6 +442,7 @@ def test_cooling_page_uses_real_weather_for_thermometer(client, db_session, monk
             'weather_condition': '多云',
             'is_mock': False,
             'data_source': 'QWeather',
+            'observed_at': utcnow().isoformat(),
         }, False)
 
     monkeypatch.setattr('services.public_service.get_weather_with_cache', fake_weather)
@@ -421,7 +512,11 @@ def test_apple_polish_uses_accessible_action_and_muted_colors(client):
     assert 'animation: none;' in css
 
 
-def test_home_loads_polish_layer_and_accessible_chat_markup(client):
+def test_home_chat_requires_configured_formal_user_and_keeps_markup_accessible(
+    client,
+    app,
+    db_session,
+):
     response = client.get('/')
 
     assert response.status_code == 200
@@ -429,13 +524,53 @@ def test_home_loads_polish_layer_and_accessible_chat_markup(client):
     assert '/static/css/apple-polish.css' in body
     assert 'class="visually-hidden-focusable skip-link"' in body
     assert 'href="#main-content"' in body
-    assert 'id="ai-chat-window"' in body
-    assert 'role="dialog"' in body
-    assert 'aria-labelledby="ai-chat-title"' in body
-    assert 'aria-hidden="true"' in body
-    assert 'aria-controls="ai-chat-window"' in body
-    assert 'aria-expanded="false"' in body
-    assert 'role="log"' in body
+    assert 'id="ai-chat-window"' not in body
+
+    app.config['SILICONFLOW_API_KEY'] = 'configured-for-markup-test'
+    app.config['AI_ALLOWED_MODELS'] = ['deepseek-ai/DeepSeek-V3.2']
+    anonymous_body = client.get('/').get_data(as_text=True)
+    assert 'id="ai-chat-window"' not in anonymous_body
+
+    from core.db_models import User
+
+    user = User(username='motion_ai_formal_user', role='user')
+    user.set_password('testpass')
+    db_session.add(user)
+    db_session.commit()
+    csrf_token = 'motion-ai-csrf'
+    with client.session_transaction() as session:
+        session.clear()
+        session['_csrf_token'] = csrf_token
+    login_response = client.post(
+        '/login',
+        data={
+            'username': user.username,
+            'password': 'testpass',
+            'csrf_token': csrf_token,
+        },
+        follow_redirects=False,
+    )
+    assert login_response.status_code == 302
+
+    configured_body = client.get('/').get_data(as_text=True)
+    assert 'id="ai-chat-window"' in configured_body
+    assert 'role="dialog"' in configured_body
+    assert 'aria-labelledby="ai-chat-title"' in configured_body
+    assert 'aria-hidden="true"' in configured_body
+    assert 'aria-controls="ai-chat-window"' in configured_body
+    assert 'aria-expanded="false"' in configured_body
+    assert 'role="log"' in configured_body
+
+    # GuestUser 即使服务已配置，也不能看到浮窗入口。
+    logout_response = client.post(
+        '/logout',
+        data={'csrf_token': csrf_token},
+        follow_redirects=False,
+    )
+    assert logout_response.status_code == 302
+    assert client.get('/guest').status_code == 302
+    guest_body = client.get('/').get_data(as_text=True)
+    assert 'id="ai-chat-window"' not in guest_body
 
 
 def test_ai_chat_script_keeps_aria_and_focus_state_in_sync():

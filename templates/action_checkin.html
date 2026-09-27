@@ -2,14 +2,18 @@
 {% from "partials/metric_info.html" import metric_info with context %}
 {% set needs_chartjs = true %}
 
-{% block title %}行动打卡 - 天气健康风险预测系统{% endblock %}
+{% block title %}行动短码 · 宜老天气通{% endblock %}
 
 {% block content %}
 <div class="container my-4">
     <div class="row mb-3">
         <div class="col-12">
-            <h2><i class="bi bi-clipboard-check"></i> 行动型热健康预警</h2>
-            <p class="text-muted mb-0">输入短码即可完成今日确认或求助（不含医疗诊断/治疗建议）。</p>
+            <h1 class="h2"><i class="bi bi-clipboard-check"></i> 行动短码</h1>
+            <p class="text-muted mb-0">输入家属提供的短码，可记录今日行动或求助。本页不提供医疗诊断或治疗建议。</p>
+            <p class="mt-2 mb-0">
+                只想用大字查看今天的天气和行动？
+                <a href="{{ url_for('user.elder_dashboard') if current_user.is_authenticated else url_for('public.guest_login', next=url_for('user.elder_dashboard')) }}">打开大字今日页</a>。
+            </p>
         </div>
     </div>
 
@@ -142,7 +146,7 @@
                         {% else %}
                         <div class="alert alert-warning mb-3" role="status">
                             <strong>天气正在更新。</strong>
-                            风险等级暂不显示。你仍可完成安全确认、发出求助或查看避暑资源。
+                            风险等级暂不显示。你仍可记录行动、发出求助或查看避暑资源。
                         </div>
                         <div class="d-flex flex-wrap gap-2">
                             <a class="btn btn-outline-primary" href="{{ url_for('public.cooling_resources') }}">
@@ -154,45 +158,10 @@
                         </div>
                         {% endif %}
                         <hr>
-                        <form method="POST" action="{{ confirm_action or url_for('public.action_confirm') }}">
-                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                            <input type="hidden" name="short_code" value="{{ pair.short_code }}">
-                            <div class="mb-3">
-                                {% if actions %}
-                                    <h6 class="mb-2">3步行动清单</h6>
-                                    {% for item in actions %}
-                                        <div class="form-check">
-                                            <input class="form-check-input" type="checkbox" name="actions_done" value="{{ item.id }}" id="action-{{ item.id }}">
-                                            <label class="form-check-label" for="action-{{ item.id }}">
-                                                <span class="badge bg-light text-dark me-2">{{ loop.index }}</span>
-                                                <strong>{{ item.title }}</strong>
-                                                <span class="text-muted small"> - {{ item.detail }}</span>
-                                            </label>
-                                        </div>
-                                    {% endfor %}
-                                {% else %}
-                                    <h6 class="mb-2">安全确认</h6>
-                                    <div class="text-muted small">天气风险清单已暂停；你仍可完成安全确认或直接发出求助。</div>
-                                {% endif %}
-                            </div>
-                            <div class="d-flex flex-wrap gap-2 align-items-center">
-                                <button class="btn btn-success btn-lg" type="submit">
-                                    <i class="bi bi-check-circle"></i> 我很安全
-                                </button>
-                                <span class="text-muted small">确认后记录今日完成情况。</span>
-                            </div>
-                        </form>
-                        <hr>
-                        <form method="POST" action="{{ help_action or url_for('public.action_help') }}">
-                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                            <input type="hidden" name="short_code" value="{{ pair.short_code }}">
-                            <div class="d-flex flex-wrap gap-2 align-items-center">
-                                <button class="btn btn-danger btn-lg" type="submit">
-                                    <i class="bi bi-life-preserver"></i> 我需要帮助
-                                </button>
-                                <span class="text-muted small">仅用于触发协助流程，不包含医疗处置。</span>
-                            </div>
-                        </form>
+                        {% include "partials/elder_three_buttons.html" %}
+                        <p class="mt-3 mb-0">
+                            <a class="text-muted small" href="#debrief-section">可选：填写今日复盘</a>
+                        </p>
                     </div>
                 </div>
 
@@ -211,7 +180,7 @@
 
                 <div class="card shadow-sm" id="debrief-section">
                     <div class="card-header bg-light">
-                        <h5 class="mb-0"><i class="bi bi-chat-square-text"></i> 今日复盘（可选）</h5>
+                        <h5 class="mb-0 text-muted"><i class="bi bi-chat-square-text"></i> 今日复盘（可选）</h5>
                     </div>
                     <div class="card-body">
                         <form method="POST" action="{{ debrief_action or url_for('public.action_debrief') }}">
@@ -288,8 +257,8 @@
 
                 <div class="card shadow-sm" id="cooling-resources">
                     <div class="card-header bg-light d-flex align-items-center justify-content-between">
-                        <h6 class="mb-0"><i class="bi bi-sunrise"></i> 附近避暑点</h6>
-                        <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('public.cooling_resources') }}">全部资源</a>
+                        <h6 class="mb-0"><i class="bi bi-sunrise"></i> 本地已录入避暑点</h6>
+                        <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('public.cooling_resources') }}">查看资源</a>
                     </div>
                     <div class="card-body">
                         {% if resources and resources|length > 0 %}
@@ -313,7 +282,7 @@
                                 {% endfor %}
                             </ul>
                         {% else %}
-                            <div class="text-muted">暂无避暑点数据，可由社区管理员维护。</div>
+                            <div class="text-muted">该所在地暂无已录入避暑点，可由社区管理员维护。</div>
                         {% endif %}
                     </div>
                 </div>
@@ -328,7 +297,23 @@ document.addEventListener('DOMContentLoaded', function () {
     const phoneInput = document.getElementById('localContactPhone');
     const saveBtn = document.getElementById('saveLocalContact');
     if (nameInput && phoneInput && saveBtn) {
-        const stored = JSON.parse(localStorage.getItem('heat_action_contact') || '{}');
+        const contactStorageKey = 'heat_action_contact';
+        let stored = {};
+        try {
+            const storedContact = JSON.parse(localStorage.getItem(contactStorageKey) || '{}');
+            const hasValidShape = storedContact
+                && typeof storedContact === 'object'
+                && !Array.isArray(storedContact)
+                && (storedContact.name === undefined || typeof storedContact.name === 'string')
+                && (storedContact.phone === undefined || typeof storedContact.phone === 'string');
+            if (hasValidShape) {
+                stored = storedContact;
+            } else {
+                localStorage.removeItem(contactStorageKey);
+            }
+        } catch (error) {
+            localStorage.removeItem(contactStorageKey);
+        }
         if (stored.name) nameInput.value = stored.name;
         if (stored.phone) phoneInput.value = stored.phone;
         saveBtn.addEventListener('click', function () {
@@ -336,7 +321,7 @@ document.addEventListener('DOMContentLoaded', function () {
                 name: nameInput.value || '',
                 phone: phoneInput.value || ''
             };
-            localStorage.setItem('heat_action_contact', JSON.stringify(payload));
+            localStorage.setItem(contactStorageKey, JSON.stringify(payload));
             saveBtn.classList.add('btn-success');
             saveBtn.textContent = '已保存';
             setTimeout(() => {
