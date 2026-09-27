@@ -348,49 +348,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
     const adjustContainer = document.getElementById('heatRiskAdjust');
     if (adjustContainer) {
-        const storageKey = 'heat_threshold_adjust';
-        const score = parseFloat(adjustContainer.dataset.heatRiskScore || '0');
-        const badge = document.getElementById('heatAdjustedBadge');
-        const inputs = adjustContainer.querySelectorAll('[data-heat-adjust]');
-        const badgeClass = {
-            '低风险': 'bg-success',
-            '中风险': 'bg-warning text-dark',
-            '高风险': 'bg-danger',
-            '极高': 'bg-dark'
-        };
-        const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
-        const computeLevel = (scoreValue, adjust) => {
-            const norm = scoreValue / 100;
-            const t1 = clamp(0.35 + adjust, 0.05, 0.9);
-            const t2 = clamp(0.55 + adjust, t1 + 0.05, 0.95);
-            const t3 = clamp(0.75 + adjust, t2 + 0.05, 0.98);
-            if (norm >= t3) return '极高';
-            if (norm >= t2) return '高风险';
-            if (norm >= t1) return '中风险';
-            return '低风险';
-        };
-        const applyAdjust = (adjust) => {
-            const level = computeLevel(score, adjust);
-            if (badge) {
-                badge.textContent = level;
-                badge.className = `badge ${badgeClass[level] || 'bg-secondary'}`;
-            }
-        };
-        let storedAdjust = parseFloat(localStorage.getItem(storageKey) || '0');
-        if (![-0.1, 0, 0.1].includes(storedAdjust)) {
-            storedAdjust = 0;
-        }
-        inputs.forEach(input => {
-            if (parseFloat(input.value) === storedAdjust) {
-                input.checked = true;
-            }
-            input.addEventListener('change', () => {
-                const value = parseFloat(input.value);
-                localStorage.setItem(storageKey, value);
-                applyAdjust(value);
-            });
-        });
-        applyAdjust(storedAdjust);
+{% filter indent(4, first=True) %}{% include 'partials/scripts/heat_threshold_adjust.html' %}{% endfilter %}
     }
 
     const recentSeries = {{ recent_series|default([])|tojson }};
@@ -400,64 +358,7 @@ document.addEventListener('DOMContentLoaded', function () {
         const labels = recentSeries.map(item => item.date);
         const riskValues = recentSeries.map(item => item.risk_value || 0);
         const confirmedValues = recentSeries.map(item => item.confirmed || 0);
-        const hasData = riskValues.some(v => v > 0) || confirmedValues.some(v => v > 0);
-        if (!hasData) {
-            chartCanvas.style.display = 'none';
-        } else {
-            if (emptyState) {
-                emptyState.style.display = 'none';
-            }
-            new Chart(chartCanvas.getContext('2d'), {
-                data: {
-                    labels: labels,
-                    datasets: [
-                        {
-                            type: 'line',
-                            label: '风险等级',
-                            data: riskValues,
-                            borderColor: '#dc2626',
-                            backgroundColor: 'rgba(220, 38, 38, 0.15)',
-                            tension: 0.3,
-                            yAxisID: 'y'
-                        },
-                        {
-                            type: 'bar',
-                            label: '确认',
-                            data: confirmedValues,
-                            backgroundColor: 'rgba(14, 159, 110, 0.6)',
-                            yAxisID: 'y1'
-                        }
-                    ]
-                },
-                options: {
-                    responsive: true,
-                    plugins: {
-                        legend: { position: 'top' }
-                    },
-                    scales: {
-                        y: {
-                            min: 0,
-                            max: 4,
-                            ticks: {
-                                stepSize: 1,
-                                callback: value => ({0: '', 1: '低', 2: '中', 3: '高', 4: '极'}[value] || '')
-                            }
-                        },
-                        y1: {
-                            min: 0,
-                            max: 1,
-                            position: 'right',
-                            grid: { drawOnChartArea: false },
-                            ticks: {
-                                stepSize: 1,
-                                callback: value => (value === 1 ? '已确认' : '')
-                            }
-                        }
-                    }
-                }
-            });
-        }
-    }
+{% include 'partials/scripts/recent_risk_chart.html' %}
     {% if focus_debrief %}
     const debriefSection = document.getElementById('debrief-section');
     if (debriefSection) {

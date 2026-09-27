@@ -36,21 +36,5 @@
     </div>
 </div>
 
-<script>
-document.addEventListener('DOMContentLoaded', function () {
-    const btn = document.getElementById('copyMessage');
-    const textarea = document.getElementById('wechatMessage');
-    if (!btn || !textarea) return;
-    btn.addEventListener('click', function () {
-        textarea.select();
-        document.execCommand('copy');
-        btn.classList.add('btn-success');
-        btn.textContent = '已复制';
-        setTimeout(() => {
-            btn.classList.remove('btn-success');
-            btn.innerHTML = '<i class="bi bi-clipboard"></i> 复制文本';
-        }, 1200);
-    });
-});
-</script>
+{% include 'partials/scripts/copy_message.html' %}
 {% endblock %}

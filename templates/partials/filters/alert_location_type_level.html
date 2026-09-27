@@ -1,0 +1,22 @@
+                    <div class="col-xl-2 col-md-4">
+                        <label class="form-label">地点检索</label>
+                        <input type="text" class="form-control" name="location" value="{{ location_filter }}" placeholder="支持模糊匹配">
+                    </div>
+                    <div class="col-xl-2 col-md-4">
+                        <label class="form-label">预警类型</label>
+                        <select class="form-select" name="alert_type">
+                            <option value="">全部</option>
+                            {% for item in alert_type_options %}
+                                <option value="{{ item }}" {% if alert_type_filter == item %}selected{% endif %}>{{ item }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-xl-2 col-md-4">
+                        <label class="form-label">预警等级</label>
+                        <select class="form-select" name="alert_level">
+                            <option value="">全部</option>
+                            {% for item in alert_level_options %}
+                                <option value="{{ item }}" {% if alert_level_filter == item %}selected{% endif %}>{{ item }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>

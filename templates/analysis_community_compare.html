@@ -178,33 +178,8 @@
             <form method="POST" action="{{ url_for('analysis.analysis_community_compare') }}">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <div class="row g-3">
-                    <div class="col-xl-2 col-md-4">
-                        <label class="form-label">开始日期</label>
-                        <input type="date" class="form-control" name="start_date" value="{{ start_date }}">
-                    </div>
-                    <div class="col-xl-2 col-md-4">
-                        <label class="form-label">结束日期</label>
-                        <input type="date" class="form-control" name="end_date" value="{{ end_date }}">
-                    </div>
-                    <div class="col-xl-2 col-md-4">
-                        <label class="form-label">疾病分类</label>
-                        <select class="form-select" name="disease">
-                            <option value="">全部</option>
-                            {% for disease in diseases %}
-                                <option value="{{ disease }}" {% if disease_filter == disease %}selected{% endif %}>{{ disease }}</option>
-                            {% endfor %}
-                        </select>
-                    </div>
-                    <div class="col-xl-2 col-md-4">
-                        <label class="form-label">人群分层</label>
-                        <select class="form-select" name="stratum">
-                            <option value="all" {% if stratum == 'all' %}selected{% endif %}>全人群</option>
-                            <option value="elderly" {% if stratum == 'elderly' %}selected{% endif %}>老年人(>=65)</option>
-                            <option value="non_elderly" {% if stratum == 'non_elderly' %}selected{% endif %}>非老年(&lt;65)</option>
-                            <option value="male" {% if stratum == 'male' %}selected{% endif %}>男性</option>
-                            <option value="female" {% if stratum == 'female' %}selected{% endif %}>女性</option>
-                        </select>
-                    </div>
+{% include 'partials/filters/date_range.html' %}
+{% include 'partials/filters/disease_stratum.html' %}
                     <div class="col-xl-2 col-md-4">
                         <label class="form-label">最小样本天数</label>
                         <select class="form-select" name="min_days">

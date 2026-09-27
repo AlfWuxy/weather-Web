@@ -113,49 +113,7 @@ document.addEventListener('DOMContentLoaded', function () {
     if (!adjustContainer) {
         return;
     }
-    const storageKey = 'heat_threshold_adjust';
-    const score = parseFloat(adjustContainer.dataset.heatRiskScore || '0');
-    const badge = document.getElementById('heatAdjustedBadge');
-    const inputs = adjustContainer.querySelectorAll('[data-heat-adjust]');
-    const badgeClass = {
-        '低风险': 'bg-success',
-        '中风险': 'bg-warning text-dark',
-        '高风险': 'bg-danger',
-        '极高': 'bg-dark'
-    };
-    const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
-    const computeLevel = (scoreValue, adjust) => {
-        const norm = scoreValue / 100;
-        const t1 = clamp(0.35 + adjust, 0.05, 0.9);
-        const t2 = clamp(0.55 + adjust, t1 + 0.05, 0.95);
-        const t3 = clamp(0.75 + adjust, t2 + 0.05, 0.98);
-        if (norm >= t3) return '极高';
-        if (norm >= t2) return '高风险';
-        if (norm >= t1) return '中风险';
-        return '低风险';
-    };
-    const applyAdjust = (adjust) => {
-        const level = computeLevel(score, adjust);
-        if (badge) {
-            badge.textContent = level;
-            badge.className = `badge ${badgeClass[level] || 'bg-secondary'}`;
-        }
-    };
-    let storedAdjust = parseFloat(localStorage.getItem(storageKey) || '0');
-    if (![-0.1, 0, 0.1].includes(storedAdjust)) {
-        storedAdjust = 0;
-    }
-    inputs.forEach(input => {
-        if (parseFloat(input.value) === storedAdjust) {
-            input.checked = true;
-        }
-        input.addEventListener('change', () => {
-            const value = parseFloat(input.value);
-            localStorage.setItem(storageKey, value);
-            applyAdjust(value);
-        });
-    });
-    applyAdjust(storedAdjust);
+{% include 'partials/scripts/heat_threshold_adjust.html' %}
 });
 </script>
 {% endblock %}
