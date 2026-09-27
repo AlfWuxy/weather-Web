@@ -21,19 +21,19 @@
 
     <header class="hrw-header">
         <div>
-            <div class="hrw-eyebrow">都昌县 · 热风险医生工作台</div>
+            <div class="hrw-meta-line"><span>热风险工作台</span><span id="hrwMetaDay">今天</span><span>都昌</span></div>
             <h1 id="hrwTitle">今天先去哪几个村</h1>
             <p class="hrw-lede" id="hrwLede">正在读取 7 天预报与全县 1 km 综合风险分…</p>
         </div>
         <div class="hrw-header-actions">
-            <button type="button" class="hrw-button" id="hrwPrint"><i class="bi bi-printer" aria-hidden="true"></i>打印今日巡访单</button>
-            <a class="hrw-button hrw-button--quiet" href="{{ legacy_url }}"><i class="bi bi-journal-text" aria-hidden="true"></i>科研版视图</a>
+            <button type="button" class="btn btn-primary hrw-button" id="hrwPrint"><i class="bi bi-printer" aria-hidden="true"></i>打印今日巡访单</button>
+            <a class="btn btn-outline-secondary hrw-button" href="{{ legacy_url }}"><i class="bi bi-journal-text" aria-hidden="true"></i>科研版视图</a>
         </div>
     </header>
 
     <section class="hrw-daystrip" aria-label="未来 7 天热危险等级">
         <div class="hrw-daystrip-head">
-            <span class="hrw-kicker">7 天热危险等级</span>
+            <span class="hrw-pill">7 天热危险等级</span>
             {{ metric_info('gis_daily_level') }}
             <span class="hrw-daystrip-source" id="hrwForecastSource"></span>
         </div>
@@ -43,7 +43,7 @@
     <section class="hrw-workspace" aria-label="热风险地图工作区">
         <aside class="hrw-panel hrw-priority" aria-labelledby="hrwPriorityTitle">
             <div class="hrw-panel-head">
-                <span class="hrw-kicker">PRIORITY VISITS</span>
+                <span class="hrw-pill">今日行动</span>
                 <h2 id="hrwPriorityTitle">巡访优先清单</h2>
                 <p class="hrw-panel-note" id="hrwPriorityNote">按当日风险、静态风险分、老人数排序</p>
             </div>
@@ -78,6 +78,7 @@
                     <button type="button" class="hrw-tool" id="hrwSwipe" aria-pressed="false" title="左右卷帘对比地表温度与 65+ 比例"><i class="bi bi-layout-split" aria-hidden="true"></i>卷帘</button>
                     <button type="button" class="hrw-tool" id="hrwMeasure" aria-pressed="false" title="点击地图逐段测距，双击结束"><i class="bi bi-rulers" aria-hidden="true"></i>测距</button>
                     <button type="button" class="hrw-tool" id="hrwReset" title="恢复县域视图"><i class="bi bi-fullscreen-exit" aria-hidden="true"></i>全县</button>
+                    <button type="button" class="hrw-tool hrw-controls-toggle" id="hrwControlsToggle" aria-expanded="false" aria-controls="hrwMapControls"><i class="bi bi-sliders" aria-hidden="true"></i>图层设置</button>
                 </div>
             </div>
 
@@ -90,7 +91,7 @@
                     <span class="hrw-swipe-grip" aria-hidden="true"></span>
                     <span class="hrw-swipe-label hrw-swipe-label--right">65+ 比例</span>
                 </div>
-                <div class="hrw-map-controls">
+                <div class="hrw-map-controls" id="hrwMapControls">
                     <div class="hrw-control-card">
                         <span class="hrw-control-title">底图</span>
                         <div class="hrw-seg" role="group" aria-label="底图" id="hrwBasemap">
@@ -110,7 +111,7 @@
                         <label><input type="checkbox" data-overlay="cooling" checked> 避暑点</label>
                     </div>
                 </div>
-                <div class="hrw-legend" id="hrwLegend" aria-label="图例"></div>
+                <div class="hrw-legend" id="hrwLegend" role="button" tabindex="0" aria-expanded="true" aria-label="图例，点击展开或收起"></div>
                 <div class="hrw-readout" id="hrwReadout">WGS84</div>
                 <div class="hrw-basemap-note" id="hrwBasemapNote" hidden></div>
             </div>
@@ -118,7 +119,7 @@
 
         <aside class="hrw-panel hrw-inspector" aria-labelledby="hrwInspectorTitle">
             <div class="hrw-panel-head">
-                <span class="hrw-kicker">SELECTED PLACE</span>
+                <span class="hrw-pill">网格详情</span>
                 <h2 id="hrwInspectorTitle">选中位置</h2>
                 <p class="hrw-place" id="hrwPlace">—</p>
                 <p class="hrw-coords" id="hrwCoords">—</p>
@@ -149,7 +150,7 @@
     <section class="hrw-section" aria-labelledby="hrwTownTitle">
         <div class="hrw-section-head">
             <div>
-                <span class="hrw-kicker">TOWNSHIP SUMMARY</span>
+                <span class="hrw-pill">全县概览</span>
                 <h2 id="hrwTownTitle">乡镇汇总</h2>
                 <p>按乡镇内评分网格的第 90 百分位排序，点击乡镇名在地图上定位。边界来自 OpenStreetMap，不作为法定行政边界凭证。</p>
             </div>
@@ -174,7 +175,7 @@
     <section class="hrw-section hrw-method" aria-labelledby="hrwMethodTitle">
         <div class="hrw-section-head">
             <div>
-                <span class="hrw-kicker">METHOD & SOURCES</span>
+                <span class="hrw-pill">可追溯</span>
                 <h2 id="hrwMethodTitle">方法与来源</h2>
                 <p>综合风险分、逐日等级和巡访排序全部可追溯到公开数据与公式。科研版视图保留原始七个图层、原生几何与 SHA-256 指纹。</p>
             </div>
