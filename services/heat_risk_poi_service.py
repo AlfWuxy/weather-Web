@@ -284,7 +284,7 @@ def _static_catalog(settlement_stamp, resource_stamp, inventory_stamp, signature
                and row.get("name") and _safe_url(row.get("source_url"))]
     if isinstance(inventory, dict):
         inventory_sources = [{"id": "inventory:" + hashlib.sha256(row["source_url"].encode("utf-8")).hexdigest()[:12],
-                              "name": "官方列名资源目录", "url": row["source_url"], "license": None}
+                              "name": str(row.get("source_label") or "公开列名资源目录"), "url": row["source_url"], "license": None}
                              for row in unmapped]
         metadata["sources"] = list({str(source.get("url") or source.get("id")): source
                                     for source in [*sources, *inventory.get("sources", []), *inventory_sources]}.values())

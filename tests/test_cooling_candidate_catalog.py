@@ -197,7 +197,7 @@ def test_unhashable_classification_is_rejected_without_breaking_preview(candidat
 
 def test_committed_official_ten_keep_seven_mapped_three_unmapped():
     payload = catalog.load_cooling_candidate_catalog()
-    official = [item for item in payload["items"] if item["catalog_origin"] == "official_inventory"]
+    official = [item for item in payload["items"] if item["catalog_origin"] == "official_inventory" and item["source_id"].startswith("official-cooling-")]
     assert len(official) == 10
     assert sum(item["latitude"] is not None for item in official) == 7
     assert sum(item["latitude"] is None and item["longitude"] is None for item in official) == 3
@@ -261,9 +261,14 @@ def test_candidate_save_without_activation_stays_inactive(candidate_catalog, adm
     assert "仅保存待核验资料" not in admin_client.get("/cooling").get_data(as_text=True)
 
 
-def test_committed_main_catalog_has_ten_public_previews_and_no_legacy_file():
+def test_committed_main_catalog_has_sixty_public_previews_and_no_legacy_file():
     assert not catalog.AMAP_CANDIDATES_PATH.exists()
-    assert len(catalog.public_candidate_previews(catalog.load_cooling_candidate_catalog())) == 10
+    payload = catalog.load_cooling_candidate_catalog()
+    previews = catalog.public_candidate_previews(payload)
+    assert len(previews) == 60
+    assert sum(item["location_verification_status"] == "verified" for item in previews) == 50
+    assert {"B0HAUZPGP9", "B0KG5SDIJN", "B03180SKW0", "B0JABMV4AM", "B0K1GUQA52"} <= {
+        item["source_id"] for item in payload["items"]}
 
 
 @pytest.mark.parametrize("initial_active", [False, True])
@@ -295,3 +300,61 @@ def test_edit_missing_resource_returns_404(admin_client, method):
                                  data={"csrf_token": token})
     assert response.status_code == 404
     assert CoolingResource.query.count() == 0
+
+
+def test_location_verification_does_not_invent_hours_or_activate_resources(candidate_catalog, client, db_session, rendered_context):
+    from core.db_models import CoolingResource
+
+    records, path, _ = candidate_catalog
+    records[0].update(location_verification_status="verified",
+                      location_verification_method="amap_poi_and_user_confirmation",
+                      location_verified_at="2026-09-27", public_access_confirmation="user_confirmed",
+                      location_verification_note="高德位置已核对；运营方确认可前往，未现场核验。",
+                      opening_hours_hint="")
+    path.write_text(json.dumps({"records": records}), encoding="utf-8")
+    payload = catalog.load_cooling_candidate_catalog()
+    point = next(item for item in payload["items"] if item["source_id"] == records[0]["id"])
+    assert point["location_verification_status"] == "verified"
+    assert point["current_opening_status"] == "unknown"
+    assert point["prefill_open_hours"] == "" and point["has_ac"] is None
+    assert point["is_active"] is False
+    public = catalog.public_candidate_previews(payload)
+    assert public[0]["location_verification_status"] == "verified"
+    assert public[0]["public_access_confirmation"] == "user_confirmed"
+    assert public[1]["location_verification_status"] == "pending"
+    html = client.get("/cooling").get_data(as_text=True)
+    assert "地点已核验" in html
+    assert rendered_context[-1]["map_points"] == []
+    assert rendered_context[-1]["total"] == 0
+    assert CoolingResource.query.count() == 0
+
+
+def test_new_inventory_record_wins_over_same_legacy_poi(candidate_catalog):
+    records, path, _ = candidate_catalog
+    # main 不附带生产旧候选文件，构造一个旧 POI 验证同 ID 覆盖次序。
+    old = {"source_id": "B0HAUZPGP9", "name": "旧文化站资料", "category": "public_culture",
+           "public_role": "cooling_candidate", "verification_status": "pending_human_verification",
+           "is_active": False, "longitude": 116.406636, "latitude": 29.477729}
+    catalog.AMAP_CANDIDATES_PATH.write_text(json.dumps({
+        "publication_status": "candidate_only", "coordinate_system": "GCJ-02", "items": [old]
+    }), encoding="utf-8")
+    records[0].update(id=old["source_id"], name="本轮更新地点",
+                      location_verification_status="verified",
+                      location_verification_method="amap_poi_and_user_confirmation")
+    path.write_text(json.dumps({"records": records}), encoding="utf-8")
+    matches = [item for item in catalog.load_cooling_candidate_catalog()["items"] if item["source_id"] == old["source_id"]]
+    assert len(matches) == 1
+    assert matches[0]["name"] == "本轮更新地点"
+    assert matches[0]["location_verification_status"] == "verified"
+
+
+def test_public_preview_includes_all_62_entries_without_sixty_item_cutoff(candidate_catalog):
+    records, path, _ = candidate_catalog
+    expanded = [{**records[0], "id": f"expansion-{i}", "name": f"完整目录地点{i}"} for i in range(62)]
+    path.write_text(json.dumps({"records": expanded}), encoding="utf-8")
+    previews = catalog.public_candidate_previews(catalog.load_cooling_candidate_catalog())
+    assert {row["name"] for row in expanded} <= {row["name"] for row in previews}
+
+
+def test_unrecognized_location_verification_method_does_not_claim_verified():
+    assert catalog._location_verification({"location_verification_status": "verified", "location_verification_method": "unknown"})["location_verification_status"] == "pending"

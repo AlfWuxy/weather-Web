@@ -302,7 +302,7 @@ test('24乡镇只比较收录数，待定位机构不上图、不混入医疗计
     assert.match(h.ui.poiCoverageNote.textContent, /不是完整覆盖率/);
     assert.equal(h.state.poiById.size, 4);
     assert.match(h.ui.unmappedList.textContent, /官方列名医院.*坐标待核验，不上图、不计算距离/);
-    assert.match(h.ui.poiCounts.textContent, /0坐标已核验避暑资源 · 暂未收录/);
+    assert.match(h.ui.poiCounts.textContent, /0已发布避暑资源 · 暂未收录/);
     assert.match(h.ui.poiSources.textContent, /不等于现场核验日期/);
 });
 
@@ -499,7 +499,7 @@ test('坐标核验不代表开放，跨午夜断网后过期资源降为候选',
         cooling_status: 'verified', verification_status: 'verified', valid_until: '2026-09-27'}];
     h.applyDaily(data);
     h.selectPoi('cooling:verified', {pan: false});
-    assert.match(h.ui.poiDetails.textContent, /坐标已核验避暑资源/);
+    assert.match(h.ui.poiDetails.textContent, /已发布避暑资源/);
     assert.match(h.ui.poiDetails.textContent, /来源记录时段：08:00–18:00；当前开放情况待核实/);
     h.advance('2026-09-27T16:05:00Z');
     h.refreshAfterMidnight();
@@ -507,7 +507,7 @@ test('坐标核验不代表开放，跨午夜断网后过期资源降为候选',
     h.applyDaily(null);
     assert.equal(h.state.poiById.get('cooling:verified').kind, 'candidates');
     assert.match(h.ui.poiDetails.textContent, /核验已过期，已降为候选/);
-    assert.match(h.ui.poiCounts.textContent, /0坐标已核验避暑资源 · 暂未收录/);
+    assert.match(h.ui.poiCounts.textContent, /0已发布避暑资源 · 暂未收录/);
 });
 
 
@@ -610,4 +610,82 @@ test('新增资源证据只渲染文字，官方和坐标来源分别拦截危�
         assert.match(container.textContent, /坐标来源.*（链接待补充）/);
         assert.doesNotMatch(container.textContent, /\[object Object\]/);
     }
+});
+
+
+function verifiedLocationEvidence() {
+    return {
+        location_verification_status: 'verified',
+        location_verification_method: 'amap_poi_and_user_confirmation',
+        location_verified_at: '2026-09-27', public_access_confirmation: 'user_confirmed',
+        location_verification_note: '高德名称与坐标已核对；项目负责人确认地点真实、可前往。未现场核验，开放时间及空调等设施信息未提供。',
+        open_hours: null, has_ac: null, is_accessible: null
+    };
+}
+
+test('地点已核验独立于开放和设施核验，旧候选使用边界不变', async () => {
+    const h = await page();
+    addMarkerLayer(h);
+    const data = poiPayload();
+    data.cooling_candidates.push({...data.cooling_candidates[0], id: 'candidate:old'});
+    Object.assign(data.cooling_candidates[0], verifiedLocationEvidence());
+    h.applyDaily(data);
+    h.selectPoi('candidate:one', {pan: false});
+    const text = h.ui.poiDetails.textContent;
+    assert.match(text, /核验状态地点已核验/);
+    assert.match(text, /坐标精度高德设施点（平台坐标）/);
+    assert.match(text, /高德名称与坐标已核对；项目负责人确认地点真实、可前往。未现场核验。/);
+    assert.match(text, /地点核验日期2026-09-27/);
+    assert.match(text, /开放时间未提供/);
+    assert.match(text, /空调未知/);
+    assert.match(text, /无障碍未知/);
+    assert.match(text, /地点已核验，开放时间与纳凉设施信息待补充/);
+    assert.doesNotMatch(text, /尚不能作为已开放避暑点/);
+    assert.equal(h.state.poiById.get('candidate:one').kind, 'candidates');
+    assert.equal(h.state.layers.cooling.items.length, 0);
+    assert.match(h.state.poiMarkers.get('candidate:one').tooltip(), /地点已核验/);
+    h.selectPoi('candidate:old', {pan: false});
+    assert.match(h.ui.poiDetails.textContent, /尚不能作为已开放避暑点/);
+    assert.doesNotMatch(h.ui.poiDetails.textContent, /地点已核验/);
+});
+
+test('50处核验地点全部上候选层且能展开列表，不增加运营核验计数', async () => {
+    const h = await page();
+    addMarkerLayer(h);
+    const data = poiPayload();
+    const point = data.cooling_candidates[0];
+    data.villages = []; data.medical_pois = [];
+    data.cooling_candidates = Array.from({length: 50}, (_, index) => ({...point,
+        ...verifiedLocationEvidence(), id: `location:${index}`, name: `地点${index}`,
+        township: index < 25 ? point.township : workbench.townships.features[1].properties.name_zh}));
+    h.applyDaily(data);
+    assert.equal(h.state.layers.candidates.items.length, 50);
+    assert.match(h.ui.poiCounts.textContent, /其中 50 地点已核验/);
+    assert.match(h.ui.poiCounts.textContent, /0已发布避暑资源/);
+    assert.equal(h.state.layers.cooling.items.length, 0);
+    assert.equal(h.ui.poiList.children.length, 20);
+    assert.equal(h.ui.poiMore.hidden, false);
+    h.ui.poiMore.listeners.click();
+    h.ui.poiMore.listeners.click();
+    assert.equal(h.ui.poiList.children.length, 50);
+    assert.equal(h.ui.poiMore.hidden, true);
+    assert.match(h.ui.poiList.textContent, /地点49.*地点已核验/);
+    h.selectPoi('location:49', {pan: false});
+    assert.match(h.ui.poiDetails.textContent, /地点49/);
+    h.setTownFilter(point.township, false);
+    assert.match(h.ui.poiCounts.textContent, /其中 25 地点已核验/);
+    assert.equal(h.state.layers.candidates.items.length, 25);
+});
+
+test('地点核验说明仍通过文字节点输出，不能注入HTML', async () => {
+    const h = await page();
+    const data = poiPayload();
+    const malicious = '<img src=x onerror="alert(1)">';
+    Object.assign(data.cooling_candidates[0], verifiedLocationEvidence(), {
+        location_verification_note: malicious, location_verified_at: malicious
+    });
+    h.applyDaily(data);
+    h.selectPoi('candidate:one', {pan: false});
+    assert.ok(h.ui.poiDetails.textContent.includes(malicious));
+    assert.equal(descendantNodes(h.ui.poiDetails).some((node) => node.tagName === 'img'), false);
 });
