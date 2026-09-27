@@ -528,3 +528,86 @@ test('疑似同名或明确不具备条件的点保留地图，但不能通过�
     h.selectPoi('test:second', {pan: false});
     assert.match(h.ui.poiDetails.textContent, /巡访排序网格数据缺失/);
 });
+
+function descendantNodes(node) {
+    return [node, ...node.children.flatMap(descendantNodes)];
+}
+
+function historicalCoolingEvidence() {
+    return {
+        audience_hint: '户外劳动者，服务范围待确认',
+        facilities_hint: '历史报道列有风扇、饮水机；未提供空调证据',
+        source_date: '2024-08-14', official_source_date: '2025-07-18',
+        official_source_url: 'https://example.org/official-cooling',
+        coordinate_source_url: 'https://ditu.amap.com/place/TEST',
+        coordinate_checked_at: '2026-09-27', source_label: 'amap-public',
+        source_url: 'https://example.org/official-cooling',
+        verification_note: '劳动者服务点，公众进入条件待核实',
+        notes: ['历史设施不代表当前运行', '劳动者服务点，公众进入条件待核实'],
+        current_opening_status: 'unknown', has_ac: null, is_accessible: null
+    };
+}
+
+test('候选详情分别呈现劳动者服务对象、历史风扇证据和当前设施未知', async () => {
+    const h = await page();
+    const data = poiPayload();
+    Object.assign(data.cooling_candidates[0], historicalCoolingEvidence());
+    h.applyDaily(data);
+    h.selectPoi('candidate:one', {pan: false});
+    const text = h.ui.poiDetails.textContent;
+    assert.match(text, /服务对象（历史资料）户外劳动者.*当前接待对象及进入条件待核实/);
+    assert.match(text, /历史设施（不代表当前可用）历史报道列有风扇、饮水机；未提供空调证据/);
+    assert.match(text, /服务\/设施资料日期2025-07-18/);
+    assert.match(text, /坐标来源查询日期2026-09-27（资料查询，非现场核验）/);
+    assert.match(text, /空调待核实/);
+    assert.match(text, /当前开放情况待核实/);
+    assert.match(text, /尚不能作为已开放避暑点/);
+    assert.match(text, /资料补充说明历史设施不代表当前运行/);
+    assert.equal(text.split('劳动者服务点，公众进入条件待核实').length - 1, 1);
+    const links = descendantNodes(h.ui.poiDetails).filter((node) => node.tagName === 'a');
+    assert.ok(links.some((link) => link.textContent === '官方服务报道来源' && link.href === 'https://example.org/official-cooling'));
+    assert.ok(links.some((link) => link.textContent === '坐标来源 · 高德地图公开页面' && link.href === 'https://ditu.amap.com/place/TEST'));
+});
+
+test('待定位避暑目录保留服务限制、历史无空调资料、说明和独立证据日期', async () => {
+    const h = await page();
+    const data = poiPayload();
+    Object.assign(data.unmapped_resources[0], historicalCoolingEvidence(), {
+        kind: 'cooling', name: '劳动者驿站待定位', facilities_hint: '旧报道明确未配空调，仅有电风扇',
+        official_source_date: null, coordinate_source_url: null, coordinate_checked_at: null
+    });
+    h.applyDaily(data);
+    const text = h.ui.unmappedList.textContent;
+    assert.match(text, /户外劳动者.*当前接待对象及进入条件待核实/);
+    assert.match(text, /历史设施（不代表当前可用）：旧报道明确未配空调，仅有电风扇/);
+    assert.match(text, /官方服务\/设施资料日期：2024-08-14；当前开放情况待核实/);
+    assert.match(text, /核验说明：劳动者服务点，公众进入条件待核实/);
+    assert.match(text, /资料补充说明：历史设施不代表当前运行/);
+    assert.match(text, /坐标待核验，不上图、不计算距离/);
+    const link = descendantNodes(h.ui.unmappedList).find((node) => node.tagName === 'a' && node.textContent === '官方服务报道来源');
+    assert.equal(link.href, 'https://example.org/official-cooling');
+    assert.equal(link.rel, 'noopener noreferrer');
+});
+
+test('新增资源证据只渲染文字，官方和坐标来源分别拦截危险URL', async () => {
+    const h = await page();
+    const data = poiPayload();
+    const html = '<img src=x onerror="globalThis.__unsafe=1">';
+    const evidence = {...historicalCoolingEvidence(), audience_hint: html, facilities_hint: html,
+        notes: [html, null, {html}], verification_note: html,
+        official_source_date: html, official_source_url: 'javascript:alert(1)',
+        coordinate_source_url: 'https://user:pass@example.org/'};
+    Object.assign(data.cooling_candidates[0], evidence);
+    Object.assign(data.unmapped_resources[0], evidence);
+    h.applyDaily(data);
+    h.selectPoi('candidate:one', {pan: false});
+    for (const container of [h.ui.poiDetails, h.ui.unmappedList]) {
+        assert.ok(container.textContent.includes(html));
+        const nodes = descendantNodes(container);
+        assert.equal(nodes.some((node) => node.tagName === 'img'), false);
+        assert.equal(nodes.some((node) => node.href && /javascript:|user:pass/.test(node.href)), false);
+        assert.match(container.textContent, /官方服务报道来源（链接待补充）/);
+        assert.match(container.textContent, /坐标来源.*（链接待补充）/);
+        assert.doesNotMatch(container.textContent, /\[object Object\]/);
+    }
+});

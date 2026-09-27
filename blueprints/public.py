@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """Public and auth routes."""
 import logging
+from pathlib import Path
 from urllib.parse import parse_qsl
 
 import requests
@@ -209,6 +210,21 @@ def transparency():
     return render_template('transparency.html')
 
 
+PUBLIC_COOLING_CANDIDATE_PATH = Path(__file__).resolve().parents[1] / 'data/cooling_resource_candidates.json'
+
+
+def _public_cooling_candidates():
+    """公开候选预览只保留非医疗公共场所，并删除坐标与来源查询字段。"""
+    from services.cooling_candidate_catalog import (
+        load_cooling_candidate_catalog,
+        public_candidate_previews,
+    )
+
+    return public_candidate_previews(
+        load_cooling_candidate_catalog(amap_path=PUBLIC_COOLING_CANDIDATE_PATH)
+    )
+
+
 @bp.route('/cooling', endpoint='cooling_resources')
 def cooling_resources():
     """避暑资源公开页"""
@@ -229,7 +245,8 @@ def cooling_resources():
         resource_type=resource_type,
         has_ac_raw=has_ac_raw,
         is_accessible_raw=is_accessible_raw,
-        open_only=open_only
+        open_only=open_only,
+        cooling_candidates=_public_cooling_candidates(),
     )
 
 

@@ -2,7 +2,7 @@
   "schema_version": 1,
   "collected_at": "2026-09-27",
   "coverage_scope": "都昌县全县24乡镇公开官方名录；不声明全部实际执业机构或全部纳凉场所完整覆盖。",
-  "coordinate_policy": "所有记录均无坐标；地址不转换为推测坐标。与外部地图匹配须另存坐标来源、CRS、匹配证据。",
+  "coordinate_policy": "名录本身不存坐标；可信高德设施坐标另存duchang_resources.geojson并显式关联。未取得设施匹配时保留无坐标，地址不转换为推测坐标。mapped_records仅统计名录内坐标数。",
   "admin_reference": {
     "source_url": "https://www.duchang.gov.cn/zwzx/gsgg/202607/t20260709_7271215.html",
     "source_date": "2026-07-09",
@@ -11,8 +11,13 @@
   "summary": {
     "official_designated_medical_records": 352,
     "proposed_cancellation_records": 4,
-    "historical_cooling_candidates": 10,
-    "mapped_records": 0
+    "historical_cooling_candidates": 12,
+    "mapped_records": 0,
+    "total_records": 373,
+    "cooling_candidate_records": 17,
+    "public_cooling_preview_records": 10,
+    "public_cooling_preview_located_records": 7,
+    "public_cooling_preview_unmapped_records": 3
   },
   "records": [
     {
@@ -6202,36 +6207,83 @@
     },
     {
       "id": "official-cooling-lanhai-reading-room",
-      "kind": "cooling_candidate",
-      "name": "蓝海城市书房",
-      "township_name": null,
+      "name": "蓝海（墨韵拾光）城市书房",
+      "category": "public_culture",
+      "type": "library",
       "source_url": "https://www.duchang.gov.cn/zwzx/sqcz/202507/t20250723_6978323.html",
       "source_date": "2025-07-23",
-      "address": "东湖文化广场",
+      "source_label": "都昌县政府书香纳凉报道",
+      "official_status": "historical_cooling_report",
+      "audience_hint": "2025年报道面向阅读、自习居民免费提供纳凉；当前进入条件待核实",
+      "facilities_hint": "2025年报道有空调、免费阅读及自习服务；当前设施运行未确认",
+      "opening_hours_hint": "当前开放时段未知，请先向运营方确认",
+      "notes": [
+        "2026-01-14县政府报道明确蓝海（墨韵拾光）城市书房别名，但高德原名为“墨韵抬光城市书房”，保留“拾/抬”差异。",
+        "按官方别名、东湖位置及具体书房POI匹配；未把东湖社区城市书房另行生成重复点。"
+      ],
+      "kind": "cooling_candidate",
+      "public_role": "cooling_candidate",
+      "public_preview": true,
+      "township_name": "都昌镇",
+      "address": "九江市都昌县东湖路与县府南路交叉口西北180米",
       "status": "unmapped",
       "verification_status": "unmapped",
-      "official_status": "historical_cooling_report",
-      "notes": [
-        "官方报道记载空调、免费纳凉阅读。",
-        "仅为历史纳凉开放证据，2026年开放时间、适用人群、容量和现址未复核；未标为当前已开放避暑点。",
-        "无可核实坐标，未计入地图避暑点或距离计算。"
-      ]
+      "current_opening_status": "unknown",
+      "official_source_url": "https://www.duchang.gov.cn/zwzx/sqcz/202507/t20250723_6978323.html",
+      "official_source_date": "2025-07-23",
+      "open_hours": null,
+      "has_ac": null,
+      "is_accessible": null,
+      "verified_at": null,
+      "valid_until": null,
+      "coordinate_status": "located_in_resource_catalog",
+      "verification_note": "2026-01-14县政府报道明确蓝海（墨韵拾光）城市书房别名，但高德原名为“墨韵抬光城市书房”，保留“拾/抬”差异。；按官方别名、东湖位置及具体书房POI匹配；未把东湖社区城市书房另行生成重复点。；仅为候选资料，当前开放、接待对象及设施运行均待核验。",
+      "mapped_resource_ids": [
+        "amap-B0L3FD628U"
+      ],
+      "coordinate_source_url": "https://www.amap.com/place/B0L3FD628U",
+      "coordinate_checked_at": "2026-09-27"
     },
     {
       "id": "official-cooling-xijie-library-station",
-      "kind": "cooling_candidate",
       "name": "西街社区城市图书驿站",
-      "township_name": null,
+      "category": "public_culture",
+      "type": "library",
       "source_url": "https://www.duchang.gov.cn/zwzx/sqcz/202507/t20250723_6978323.html",
       "source_date": "2025-07-23",
-      "address": "西街社区",
+      "source_label": "都昌县政府书香纳凉报道",
+      "official_status": "historical_cooling_report",
+      "audience_hint": "2025年报道有社区居民、学生阅读纳凉；当前进入条件待核实",
+      "facilities_hint": "2025年报道有图书阅读和歇脚纳凉服务；当前空调运行、无障碍情况未知",
+      "opening_hours_hint": "当前开放时段未知，请先向社区或运营方确认",
+      "notes": [
+        "高德原名西街阅读驿站，与官方名称有简写差异；根据具体设施名称、类别及西街地址匹配，现址入口仍待核对。",
+        "与西街社区红色蒲公英驿站相距约8米，可能同楼不同空间，不能相加为两处独立容量。"
+      ],
+      "kind": "cooling_candidate",
+      "public_role": "cooling_candidate",
+      "public_preview": true,
+      "township_name": "都昌镇",
+      "address": "邵家街与沿湖路交叉口东60米",
       "status": "unmapped",
       "verification_status": "unmapped",
-      "official_status": "historical_cooling_report",
-      "notes": [
-        "官方报道记载社区学生可歇脚纳凉、阅读。",
-        "仅为历史纳凉开放证据，2026年开放时间、适用人群、容量和现址未复核；未标为当前已开放避暑点。",
-        "无可核实坐标，未计入地图避暑点或距离计算。"
+      "current_opening_status": "unknown",
+      "official_source_url": "https://www.duchang.gov.cn/zwzx/sqcz/202507/t20250723_6978323.html",
+      "official_source_date": "2025-07-23",
+      "open_hours": null,
+      "has_ac": null,
+      "is_accessible": null,
+      "verified_at": null,
+      "valid_until": null,
+      "coordinate_status": "located_in_resource_catalog",
+      "verification_note": "高德原名西街阅读驿站，与官方名称有简写差异；根据具体设施名称、类别及西街地址匹配，现址入口仍待核对。；与西街社区红色蒲公英驿站相距约8米，可能同楼不同空间，不能相加为两处独立容量。；仅为候选资料，当前开放、接待对象及设施运行均待核验。",
+      "mapped_resource_ids": [
+        "amap-B0J0T6UGOA"
+      ],
+      "coordinate_source_url": "https://www.amap.com/place/B0J0T6UGOA",
+      "coordinate_checked_at": "2026-09-27",
+      "related_ids": [
+        "amap-B0KG7H9VA3"
       ]
     },
     {
@@ -6287,20 +6339,41 @@
     },
     {
       "id": "official-cooling-caring-station-renmin",
-      "kind": "cooling_candidate",
       "name": "人民广场爱心驿站",
-      "township_name": null,
-      "source_url": "https://www.duchang.gov.cn/zwzx/sqcz/202408/t20240814_6646505.html",
-      "source_date": "2024-08-14",
-      "address": "人民广场",
+      "category": "community_service",
+      "type": "community_center",
+      "source_url": "https://www.duchang.gov.cn/zwzx/bmdt/202507/t20250723_6978338.html",
+      "source_date": "2025-07-23",
+      "source_label": "都昌县政府爱心驿站纳凉报道",
+      "official_status": "historical_cooling_report",
+      "audience_hint": "2025年报道面向环卫工人等户外劳动者；普通居民和老人是否可进入未确认",
+      "facilities_hint": "2025年报道提供纳凉、饮水和休息服务；当前设施运行未确认",
+      "opening_hours_hint": "高德曾列周一至周五08:30–12:00、14:30–17:00；平台资料未获运营方确认，请勿据此保证开放",
+      "notes": [
+        "高德另有红色蒲公英驿站(人民广场站)B0KGRZGICR，距离约183米；未确认同一设施，不将两者当作别名。"
+      ],
+      "kind": "cooling_candidate",
+      "public_role": "cooling_candidate",
+      "public_preview": true,
+      "township_name": "都昌镇",
+      "address": "东风大道982号",
       "status": "unmapped",
       "verification_status": "unmapped",
-      "official_status": "historical_cooling_report",
-      "notes": [
-        "官方报道将该址列入7座爱心驿站，供环卫工人、户外劳动者避暑歇脚；设施条件不可逐址一概承诺。",
-        "仅为历史纳凉开放证据，2026年开放时间、适用人群、容量和现址未复核；未标为当前已开放避暑点。",
-        "无可核实坐标，未计入地图避暑点或距离计算。"
-      ]
+      "current_opening_status": "unknown",
+      "official_source_url": "https://www.duchang.gov.cn/zwzx/bmdt/202507/t20250723_6978338.html",
+      "official_source_date": "2025-07-23",
+      "open_hours": null,
+      "has_ac": null,
+      "is_accessible": null,
+      "verified_at": null,
+      "valid_until": null,
+      "coordinate_status": "located_in_resource_catalog",
+      "verification_note": "高德另有红色蒲公英驿站(人民广场站)B0KGRZGICR，距离约183米；未确认同一设施，不将两者当作别名。；仅为候选资料，当前开放、接待对象及设施运行均待核验。",
+      "mapped_resource_ids": [
+        "amap-B0J057S1T0"
+      ],
+      "coordinate_source_url": "https://www.amap.com/place/B0J057S1T0",
+      "coordinate_checked_at": "2026-09-27"
     },
     {
       "id": "official-cooling-caring-station-jiexin",
@@ -6369,6 +6442,293 @@
         "仅为历史纳凉开放证据，2026年开放时间、适用人群、容量和现址未复核；未标为当前已开放避暑点。",
         "无可核实坐标，未计入地图避暑点或距离计算。"
       ]
+    },
+    {
+      "id": "official-cooling-caring-station-jingcheng",
+      "name": "景程新天地爱心驿站",
+      "category": "community_service",
+      "type": "community_center",
+      "source_url": "https://www.duchang.gov.cn/zwzx/bmdt/202507/t20250723_6978338.html",
+      "source_date": "2025-07-23",
+      "source_label": "都昌县政府爱心驿站纳凉报道",
+      "official_status": "historical_cooling_report",
+      "audience_hint": "2025年报道面向环卫工人等户外劳动者；普通居民和老人是否可进入未确认",
+      "facilities_hint": "2025年报道有空调、免费饮水、休息座椅及充电服务；当前运行未确认",
+      "opening_hours_hint": "当前开放时段未知，请先向运营方确认",
+      "notes": [
+        "高德具体设施为东湖社区站，地址景程新天地广场内，未使用商场中心点。",
+        "2025年11月官方另列景程新天地红色蒲公英驿站；两品牌挂牌是否共址未现场核验，本条保留名称匹配说明。",
+        "东湖社区站与东湖广场中心站为不同地点，不作别名合并。"
+      ],
+      "kind": "cooling_candidate",
+      "public_role": "cooling_candidate",
+      "public_preview": true,
+      "township_name": "都昌镇",
+      "address": "景程新天地广场内",
+      "status": "unmapped",
+      "verification_status": "unmapped",
+      "current_opening_status": "unknown",
+      "official_source_url": "https://www.duchang.gov.cn/zwzx/bmdt/202507/t20250723_6978338.html",
+      "official_source_date": "2025-07-23",
+      "open_hours": null,
+      "has_ac": null,
+      "is_accessible": null,
+      "verified_at": null,
+      "valid_until": null,
+      "coordinate_status": "located_in_resource_catalog",
+      "verification_note": "高德具体设施为东湖社区站，地址景程新天地广场内，未使用商场中心点。；2025年11月官方另列景程新天地红色蒲公英驿站；两品牌挂牌是否共址未现场核验，本条保留名称匹配说明。；东湖社区站与东湖广场中心站为不同地点，不作别名合并。；仅为候选资料，当前开放、接待对象及设施运行均待核验。",
+      "mapped_resource_ids": [
+        "amap-B0KG7HA2PR"
+      ],
+      "coordinate_source_url": "https://www.amap.com/place/B0KG7HA2PR",
+      "coordinate_checked_at": "2026-09-27"
+    },
+    {
+      "id": "official-cooling-pugongying-xijie",
+      "name": "西街社区红色蒲公英驿站",
+      "category": "community_service",
+      "type": "community_center",
+      "source_url": "https://www.duchang.gov.cn/zwzx/bmdt/202511/t20251113_7059814.html",
+      "source_date": "2025-11-13",
+      "source_label": "都昌县政府红色蒲公英驿站报道",
+      "official_status": "public_service_facility_report",
+      "audience_hint": "2025年报道主要服务外卖骑手等新就业群体及户外工作者；普通公众进入条件未知",
+      "facilities_hint": "2025年西街实访记载饮水器、充电插座、应急医药箱和休息座椅；未确认空调及当前可用性",
+      "opening_hours_hint": "当前开放时段未知，请先向运营方确认",
+      "notes": [
+        "高德原始地址为“信华盛世学院实验小学南门”，保留平台文本，具体入口待核对。",
+        "与西街阅读驿站相距约8米，可能同楼不同空间，不能相加为两处独立容量。"
+      ],
+      "kind": "cooling_candidate",
+      "public_role": "cooling_candidate",
+      "public_preview": true,
+      "township_name": "都昌镇",
+      "address": "信华盛世学院实验小学南门",
+      "status": "unmapped",
+      "verification_status": "unmapped",
+      "current_opening_status": "unknown",
+      "official_source_url": "https://www.duchang.gov.cn/zwzx/bmdt/202511/t20251113_7059814.html",
+      "official_source_date": "2025-11-13",
+      "open_hours": null,
+      "has_ac": null,
+      "is_accessible": null,
+      "verified_at": null,
+      "valid_until": null,
+      "coordinate_status": "located_in_resource_catalog",
+      "verification_note": "高德原始地址为“信华盛世学院实验小学南门”，保留平台文本，具体入口待核对。；与西街阅读驿站相距约8米，可能同楼不同空间，不能相加为两处独立容量。；仅为候选资料，当前开放、接待对象及设施运行均待核验。",
+      "mapped_resource_ids": [
+        "amap-B0KG7H9VA3"
+      ],
+      "coordinate_source_url": "https://www.amap.com/place/B0KG7H9VA3",
+      "coordinate_checked_at": "2026-09-27",
+      "related_ids": [
+        "amap-B0J0T6UGOA"
+      ]
+    },
+    {
+      "id": "official-cooling-pugongying-donghu",
+      "name": "东湖广场红色蒲公英驿站",
+      "category": "community_service",
+      "type": "community_center",
+      "source_url": "https://www.duchang.gov.cn/zwzx/bmdt/202511/t20251113_7059814.html",
+      "source_date": "2025-11-13",
+      "source_label": "都昌县政府红色蒲公英驿站报道",
+      "official_status": "public_service_facility_report",
+      "audience_hint": "2025年报道主要服务外卖骑手等新就业群体及户外工作者；普通公众进入条件未知",
+      "facilities_hint": "2025年官方确认该站已设立；逐站设施、空调及当前可用性未确认",
+      "opening_hours_hint": "当前开放时段未知，请先向运营方确认",
+      "notes": [
+        "高德具体设施为红色蒲公英驿站(中心站)，地址东湖广场老年大学一楼；不是广场中心替代坐标。",
+        "与景程新天地的东湖社区站不同，不能混同。"
+      ],
+      "kind": "cooling_candidate",
+      "public_role": "cooling_candidate",
+      "public_preview": true,
+      "township_name": "都昌镇",
+      "address": "县府南路东湖广场老年大学一楼",
+      "status": "unmapped",
+      "verification_status": "unmapped",
+      "current_opening_status": "unknown",
+      "official_source_url": "https://www.duchang.gov.cn/zwzx/bmdt/202511/t20251113_7059814.html",
+      "official_source_date": "2025-11-13",
+      "open_hours": null,
+      "has_ac": null,
+      "is_accessible": null,
+      "verified_at": null,
+      "valid_until": null,
+      "coordinate_status": "located_in_resource_catalog",
+      "verification_note": "高德具体设施为红色蒲公英驿站(中心站)，地址东湖广场老年大学一楼；不是广场中心替代坐标。；与景程新天地的东湖社区站不同，不能混同。；仅为候选资料，当前开放、接待对象及设施运行均待核验。",
+      "mapped_resource_ids": [
+        "amap-B0J1UG0JK1"
+      ],
+      "coordinate_source_url": "https://www.amap.com/place/B0J1UG0JK1",
+      "coordinate_checked_at": "2026-09-27"
+    },
+    {
+      "id": "official-cooling-liushan-culture-center",
+      "name": "万户镇刘钐村文化活动中心",
+      "category": "public_culture",
+      "type": "community_center",
+      "source_url": "https://www.ncu.edu.cn/info/1052/27621.htm",
+      "source_date": "2023-07-11",
+      "source_label": "南昌大学刘钐村奇山夏日影院报道",
+      "official_status": "historical_cooling_report",
+      "audience_hint": "2023年报道村内老人结伴纳凉观影；当前进入条件待核实",
+      "facilities_hint": "2023年活动配置大型风扇、饮水及公益电影；属于风扇纳凉，不能标为空调场所",
+      "opening_hours_hint": "历史报道为夏日影院活动；是否常态开放及当前时段未知",
+      "notes": [
+        "高德未取得目标文化活动中心的可信匹配，不使用刘钐村或万户镇中心代替设施坐标。"
+      ],
+      "kind": "cooling_candidate",
+      "public_role": "cooling_candidate",
+      "public_preview": true,
+      "township_name": "万户镇",
+      "address": "万户镇刘钐村（仅官方文字位置，不作为设施坐标）",
+      "status": "unmapped",
+      "verification_status": "unmapped",
+      "current_opening_status": "unknown",
+      "official_source_url": "https://www.ncu.edu.cn/info/1052/27621.htm",
+      "official_source_date": "2023-07-11",
+      "open_hours": null,
+      "has_ac": null,
+      "is_accessible": null,
+      "verified_at": null,
+      "valid_until": null,
+      "coordinate_status": "unmapped",
+      "verification_note": "高德未取得目标文化活动中心的可信匹配，不使用刘钐村或万户镇中心代替设施坐标。；仅为候选资料，当前开放、接待对象及设施运行均待核验。",
+      "coordinate_search": {
+        "provider": "高德地图",
+        "queried_at": "2026-09-27T09:52:48.077321+00:00",
+        "queries": [
+          "都昌县万户镇刘钐村文化活动中心",
+          "都昌县奇山夏日影院",
+          "刘钐",
+          "奇山夏日影院"
+        ],
+        "result": "刘钐精确查询返回0条；奇山夏日影院仅返回城区商业影院，先前全称查询仅返回其他村文化中心。无目标设施匹配，不采用万户镇或刘钐村中心坐标。"
+      }
+    },
+    {
+      "id": "official-cooling-yangfeng-culture-station",
+      "name": "阳峰乡综合文化站",
+      "category": "public_culture",
+      "type": "community_center",
+      "source_url": "https://www.duchang.gov.cn/zwgk/zfxxgkzl/bmxxgk/whgdxwcblyj/ghxx/zxgh/202605/t20260519_7240280.html",
+      "source_date": "2026-05-19",
+      "source_label": "都昌县文旅局公共文化设施资料",
+      "official_status": "public_culture_facility_report",
+      "audience_hint": "现有资料未说明纳凉服务对象或公众进入条件",
+      "facilities_hint": "2026年文旅资料确认文化站及等级；不能据此认定有空调、饮水或纳凉服务",
+      "opening_hours_hint": "当前开放时段及纳凉安排未知",
+      "notes": [
+        "高德返回村级文化活动设施，未匹配阳峰乡综合文化站；不以金星村、屏峰村等村级设施代替乡站。"
+      ],
+      "kind": "cooling_candidate",
+      "public_role": "cooling_candidate",
+      "public_preview": true,
+      "township_name": "阳峰乡",
+      "address": null,
+      "status": "unmapped",
+      "verification_status": "unmapped",
+      "current_opening_status": "unknown",
+      "official_source_url": "https://www.duchang.gov.cn/zwgk/zfxxgkzl/bmxxgk/whgdxwcblyj/ghxx/zxgh/202605/t20260519_7240280.html",
+      "official_source_date": "2026-05-19",
+      "open_hours": null,
+      "has_ac": null,
+      "is_accessible": null,
+      "verified_at": null,
+      "valid_until": null,
+      "coordinate_status": "unmapped",
+      "verification_note": "高德返回村级文化活动设施，未匹配阳峰乡综合文化站；不以金星村、屏峰村等村级设施代替乡站。；仅为候选资料，当前开放、接待对象及设施运行均待核验。",
+      "coordinate_search": {
+        "provider": "高德地图",
+        "queried_at": "2026-09-27T09:52:42.183016+00:00",
+        "queries": [
+          "都昌县阳峰乡综合文化站",
+          "阳峰乡文化站"
+        ],
+        "result": "仅返回阳峰乡金星村、屏峰村及老屋村的村级文化活动设施；无名称相符的乡综合文化站，不以村级站替代。"
+      }
+    },
+    {
+      "id": "official-cooling-dagang-culture-station",
+      "name": "大港镇综合文化站",
+      "category": "public_culture",
+      "type": "community_center",
+      "source_url": "https://www.duchang.gov.cn/zwgk/zfxxgkzl/bmxxgk/whgdxwcblyj/ghxx/zxgh/202605/t20260519_7240280.html",
+      "source_date": "2026-05-19",
+      "source_label": "都昌县文旅局公共文化设施资料",
+      "official_status": "public_culture_facility_report",
+      "audience_hint": "现有资料未说明纳凉服务对象或公众进入条件",
+      "facilities_hint": "2026年文旅资料确认文化站及等级；不能据此认定有空调、饮水或纳凉服务",
+      "opening_hours_hint": "当前开放时段及纳凉安排未知",
+      "notes": [
+        "高德仅取得大田村、邻波村等文化设施，没有可信的大港镇综合文化站匹配；不以村级设施代替镇站。"
+      ],
+      "kind": "cooling_candidate",
+      "public_role": "cooling_candidate",
+      "public_preview": true,
+      "township_name": "大港镇",
+      "address": null,
+      "status": "unmapped",
+      "verification_status": "unmapped",
+      "current_opening_status": "unknown",
+      "official_source_url": "https://www.duchang.gov.cn/zwgk/zfxxgkzl/bmxxgk/whgdxwcblyj/ghxx/zxgh/202605/t20260519_7240280.html",
+      "official_source_date": "2026-05-19",
+      "open_hours": null,
+      "has_ac": null,
+      "is_accessible": null,
+      "verified_at": null,
+      "valid_until": null,
+      "coordinate_status": "unmapped",
+      "verification_note": "高德仅取得大田村、邻波村等文化设施，没有可信的大港镇综合文化站匹配；不以村级设施代替镇站。；仅为候选资料，当前开放、接待对象及设施运行均待核验。",
+      "coordinate_search": {
+        "provider": "高德地图",
+        "queried_at": "2026-09-27T09:52:43.685070+00:00",
+        "queries": [
+          "都昌县大港镇综合文化站",
+          "大港镇综合文化站"
+        ],
+        "result": "共享节流后成功查询；大港相关结果仅大田村文化中心、邻波村文化活动中心，其他结果为不同乡镇或村级站，没有大港镇综合文化站。"
+      }
+    },
+    {
+      "id": "official-cooling-xubu-culture-station",
+      "name": "徐埠镇综合文化站",
+      "category": "public_culture",
+      "type": "community_center",
+      "source_url": "https://www.duchang.gov.cn/zwgk/zfxxgkzl/bmxxgk/whgdxwcblyj/ghxx/zxgh/202605/t20260519_7240280.html",
+      "source_date": "2026-05-19",
+      "source_label": "都昌县文旅局公共文化设施资料",
+      "official_status": "public_culture_facility_report",
+      "audience_hint": "现有资料未说明纳凉服务对象或公众进入条件",
+      "facilities_hint": "2026年文旅资料确认其为一级文化站；不能据此认定有空调、饮水或纳凉服务",
+      "opening_hours_hint": "当前开放时段及纳凉安排未知",
+      "notes": [
+        "高德具体设施名、都昌县编码和徐埠镇地址匹配；设施存在不等于正在开放纳凉。"
+      ],
+      "kind": "cooling_candidate",
+      "public_role": "cooling_candidate",
+      "public_preview": true,
+      "township_name": "徐埠镇",
+      "address": "徐埠镇埠东新城西区",
+      "status": "unmapped",
+      "verification_status": "unmapped",
+      "current_opening_status": "unknown",
+      "official_source_url": "https://www.duchang.gov.cn/zwgk/zfxxgkzl/bmxxgk/whgdxwcblyj/ghxx/zxgh/202605/t20260519_7240280.html",
+      "official_source_date": "2026-05-19",
+      "open_hours": null,
+      "has_ac": null,
+      "is_accessible": null,
+      "verified_at": null,
+      "valid_until": null,
+      "coordinate_status": "located_in_resource_catalog",
+      "verification_note": "高德具体设施名、都昌县编码和徐埠镇地址匹配；设施存在不等于正在开放纳凉。；仅为候选资料，当前开放、接待对象及设施运行均待核验。",
+      "mapped_resource_ids": [
+        "amap-B0JAJMNSE0"
+      ],
+      "coordinate_source_url": "https://www.amap.com/place/B0JAJMNSE0",
+      "coordinate_checked_at": "2026-09-27"
     }
   ]
 }

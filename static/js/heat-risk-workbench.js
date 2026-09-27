@@ -1166,6 +1166,30 @@
         return link;
     }
 
+    function resourceEvidenceRows(point, includeDate = true) {
+        // 历史报道只能说明当时的服务对象和设施，不能替代当前开放或空调核验。
+        const rows = [];
+        if (point.audience_hint) rows.push(['服务对象（历史资料）', `${point.audience_hint}；当前接待对象及进入条件待核实`]);
+        if (point.facilities_hint) rows.push(['历史设施（不代表当前可用）', point.facilities_hint]);
+        const date = point.official_source_date || point.source_date;
+        if (includeDate && date) rows.push(['服务/设施资料日期', date]);
+        const notes = (Array.isArray(point.notes) ? point.notes : [point.notes])
+            .filter((note) => typeof note === 'string' && note.trim() && note !== point.verification_note);
+        if (notes.length) rows.push(['资料补充说明', notes.join('；')]);
+        return rows;
+    }
+
+    function appendResourceSources(target, point, fallbackLabel) {
+        const append = (label, url) => {
+            if (target.children.length) target.appendChild(el('span', null, ' · '));
+            target.appendChild(sourceLink(label, url));
+        };
+        if (point.official_source_url) append('官方服务报道来源', point.official_source_url);
+        const coordinateUrl = point.coordinate_source_url || (point.official_source_url && point.source_url !== point.official_source_url ? point.source_url : null);
+        if (coordinateUrl) append(`坐标来源 · ${!fallbackLabel || fallbackLabel === '查看列名来源' ? '公开地图' : fallbackLabel}`, coordinateUrl);
+        else if (!point.official_source_url) append(fallbackLabel || '查看列名来源', point.source_url);
+    }
+
     function renderPoiDetails() {
         const entry = state.poiById.get(state.selectedPoiId);
         if (!entry) {
@@ -1194,16 +1218,18 @@
             fact(details, '开放情况', p.open_hours ? `来源记录时段：${p.open_hours}；当前开放情况待核实` : '开放情况待核实');
             if (p.coordinate_verification_expired) fact(details, '坐标核验有效性', '核验已过期，已降为候选；位置与当前开放情况需重新核验');
             if (entry.kind === 'candidates') fact(details, '使用边界', '候选场所，尚不能作为已开放避暑点安排前往');
+            resourceEvidenceRows(p).forEach(([label, value]) => fact(details, label, value));
             fact(details, '空调', p.has_ac === true ? '来源记录有空调，使用前核实' : p.has_ac === false ? '来源记录无空调，待复核' : '待核实');
             fact(details, '无障碍', p.is_accessible === true ? '来源记录可达，使用前核实' : p.is_accessible === false ? '来源记录不具备，待复核' : '待核实');
         }
         if (p.potential_duplicate) fact(details, '同名核验', '疑似同名点，暂不参与巡访排序，待核验；当前分别保留来源记录，不视为两个已核验行政村');
         if (p.priority_eligible === false && p.priority_exclusion_reason) fact(details, '巡访排序', p.priority_exclusion_reason);
         if (p.source_updated_at) fact(details, '来源更新时间', p.source_updated_at);
+        if (p.coordinate_checked_at) fact(details, '坐标来源查询日期', `${p.coordinate_checked_at}（资料查询，非现场核验）`);
         if (p.verified_at) fact(details, '核验记录时间', p.verified_at);
         if (p.valid_until) fact(details, '核验有效期至', p.valid_until);
         const source = el('p', 'hrw-poi-source');
-        source.append(sourceLink(({geonames: 'GeoNames', osm: 'OpenStreetMap', 'amap-public': '高德地图公开页面', 'baidu-public': '百度地图公开页面', 'tencent-public': '腾讯地图公开页面'})[p.source_label] || p.source_label || '点位来源', p.source_url));
+        appendResourceSources(source, p, ({geonames: 'GeoNames', osm: 'OpenStreetMap', 'amap-public': '高德地图公开页面', 'baidu-public': '百度地图公开页面', 'tencent-public': '腾讯地图公开页面'})[p.source_label] || p.source_label || '点位来源');
         ui.poiDetails.replaceChildren(el('span', 'hrw-pill', POI_KINDS[entry.kind]), el('h2', null, p.name), source, details);
         const related = p.potential_duplicate_ids || p.related_ids || p.possible_duplicate_ids || p.duplicate_ids || [];
         if (p.potential_duplicate && Array.isArray(related)) related.forEach((id) => {
@@ -1281,14 +1307,21 @@
             item.append(el('strong', null, point.name), el('span', null, `${point.township_name || '乡镇待核验'} · 坐标待核验，不上图、不计算距离`));
             const status = {proposed_cancellation: '来源为拟注销记录，不能视为正常营业机构', listed_name_requires_review: '历史列名待复核，不能据此确认营业', historical_cooling_report: '历史避暑报道，当前开放情况待核实'}[point.official_status];
             if (status || point.verification_status === 'needs_review') item.appendChild(el('span', 'hrw-resource-review', status || '列名资料待复核，未计入医疗机构收录数'));
+            resourceEvidenceRows(point, false).forEach(([label, value]) => item.appendChild(el('span', null, `${label}：${value}`)));
+            if (point.verification_note) item.appendChild(el('span', null, `核验说明：${point.verification_note}`));
             if (point.address) {
                 const historical = point.address_status === 'historical_address_unverified_current';
                 item.appendChild(el('span', null, `${historical ? '历史地址' : '来源地址'}：${point.address}；现址待核验`));
                 item.appendChild(el('small', null, `地址资料日期：${point.address_source_date || '待补充'}（与列名日期分开）`));
                 if (point.address_source_url) item.appendChild(sourceLink('查看地址来源', point.address_source_url));
             }
-            item.appendChild(sourceLink('查看列名来源', point.source_url));
-            if (point.source_date) item.appendChild(el('small', null, `列名资料日期：${point.source_date}；开放情况待核实`));
+            const source = el('span', 'hrw-poi-source');
+            appendResourceSources(source, point, point.coordinate_source_url ? '公开地图' : '查看列名来源');
+            item.appendChild(source);
+            const evidenceDate = point.official_source_date || point.source_date;
+            if (evidenceDate) item.appendChild(el('small', null, `${point.official_source_url ? '官方服务/设施资料日期' : '列名资料日期'}：${evidenceDate}；当前开放情况待核实`));
+            else item.appendChild(el('small', null, '资料日期待补充；当前开放情况待核实'));
+            if (point.coordinate_checked_at) item.appendChild(el('small', null, `坐标来源查询日期：${point.coordinate_checked_at}（资料查询，非现场核验）`));
             ui.unmappedList.appendChild(item);
         });
         ui.unmappedMore.hidden = records.length <= state.unmappedListLimit;
