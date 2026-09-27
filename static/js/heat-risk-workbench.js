@@ -26,7 +26,7 @@
         bivariate: '高温 × 高龄',
         facility_km: '距可达性参考点（直线）'
     };
-    const POI_KINDS = {villages: '聚落点', medical: '医疗机构', candidates: '避暑候选', cooling: '坐标已核验避暑资源'};
+    const POI_KINDS = {villages: '聚落点', medical: '医疗机构', candidates: '避暑候选', cooling: '已发布避暑资源'};
     const WATER_FILL = '#a9cfe3';
     const NODATA_FILL = '#c9cdc6';
     const UNKNOWN_RISK = '风险暂不可判定';
@@ -691,6 +691,7 @@
             const level = villageDailyLevel(point);
             detail += isLevel(level) ? ` · ${demoPrefix()}当日 ${level} 级` : ` · ${!isLevel(point.static_level) ? '网格数据缺失' : UNKNOWN_RISK}`;
         }
+        if (point.location_verification_status === 'verified') detail += ' · 地点已核验';
         if (entry.kind === 'candidates' || entry.kind === 'cooling') detail += ' · 开放情况待核实';
         return `${esc(point.name)}<br><small>${esc(point.township || '乡镇归属待核验')} · ${esc(detail)}</small>`;
     }
@@ -983,7 +984,7 @@
         }
         if (state.overlays.medical) nodes.push(legendRow('#46734b', '已收录医疗机构（开放待核实）'));
         if (state.overlays.candidates) nodes.push(legendRow('#cce5e7', '避暑候选（未核验开放）'));
-        if (state.overlays.cooling) nodes.push(legendRow('#2466b0', '坐标已核验避暑资源'));
+        if (state.overlays.cooling) nodes.push(legendRow('#2466b0', '已发布避暑资源'));
         if (state.overlays.references) nodes.push(el('p', 'hrw-legend-note', '◇ 可达性参考点，非医疗机构位置'));
         ui.legend.replaceChildren(...nodes);
     }
@@ -1169,12 +1170,12 @@
     function resourceEvidenceRows(point, includeDate = true) {
         // 历史报道只能说明当时的服务对象和设施，不能替代当前开放或空调核验。
         const rows = [];
-        if (point.audience_hint) rows.push(['服务对象（历史资料）', `${point.audience_hint}；当前接待对象及进入条件待核实`]);
-        if (point.facilities_hint) rows.push(['历史设施（不代表当前可用）', point.facilities_hint]);
+        if (point.audience_hint && point.audience_hint !== '项目负责人确认地点真实、可前往；具体接待人群及无障碍条件未提供') rows.push(point.location_verification_status === 'verified' ? ['服务对象资料', point.audience_hint] : ['服务对象（历史资料）', `${point.audience_hint}；当前接待对象及进入条件待核实`]);
+        if (point.facilities_hint && point.facilities_hint !== '空调、饮水及无障碍设施信息未提供；不根据名称推定设备或纳凉能力') rows.push(['历史设施（不代表当前可用）', point.facilities_hint]);
         const date = point.official_source_date || point.source_date;
         if (includeDate && date) rows.push(['服务/设施资料日期', date]);
         const notes = (Array.isArray(point.notes) ? point.notes : [point.notes])
-            .filter((note) => typeof note === 'string' && note.trim() && note !== point.verification_note);
+            .filter((note) => typeof note === 'string' && note.trim() && note !== point.verification_note && note !== '地点已由高德资料与项目负责人确认；空调、无障碍及纳凉设施能力未核验，开放时段不填写。');
         if (notes.length) rows.push(['资料补充说明', notes.join('；')]);
         return rows;
     }
@@ -1202,12 +1203,19 @@
         fact(details, '乡镇归属', p.township || '待核验');
         if (!p.township && p.source_township) fact(details, '来源中的乡镇', `${p.source_township}（归属待核验）`);
         const precision = {mapped_point: '公开来源点位，待现场核验', building_centroid: '建筑轮廓中心近似位置', exact: '来源标注位置，仍需现场核验', approximate: '近似坐标', settlement_centroid: '聚落参考位置', unknown: '精度待核验', township_seat: '乡镇驻地近似位置'};
-        fact(details, '坐标精度', precision[p.coordinate_precision] || p.coordinate_precision || '待核验');
+        fact(details, '坐标精度', p.coordinate_precision === 'facility_poi' || (p.location_verification_status === 'verified' && p.location_verification_method === 'amap_poi_and_user_confirmation') ? '高德设施点（平台坐标）' : precision[p.coordinate_precision] || p.coordinate_precision || '待核验');
         fact(details, '坐标', `${p.lon_wgs84.toFixed(5)}°E · ${p.lat_wgs84.toFixed(5)}°N（WGS84）`);
         const verification = {publicly_listed: '公开来源收录，待现场核验', needs_review: '资料待复核', unmapped: '坐标待核验', verified: '有核验记录', unverified: '待核验', pending: '待核验', source_only: '仅来源记录，待现场核验', source_verified: '来源已核对，待现场核验'};
-        fact(details, '核验状态', verification[p.verification_status] || p.verification_status || '待核验');
+        const locationVerified = p.location_verification_status === 'verified';
+        fact(details, '核验状态', locationVerified ? '地点已核验' : verification[p.verification_status] || p.verification_status || '待核验');
+        if (locationVerified) {
+            // 地点确认不能替代当前开放和纳凉设施核验。
+            const note = p.location_verification_note || '高德名称与坐标核对；项目负责人确认可前往，未现场核验。';
+            fact(details, '地点核验依据', note.replace('未现场核验，开放时间及空调等设施信息未提供。', '未现场核验。'));
+            if (p.location_verified_at) fact(details, '地点核验日期', p.location_verified_at);
+        }
         if (p.township_warning) fact(details, '乡镇核验提示', p.township_warning);
-        if (p.verification_note) fact(details, '核验说明', p.verification_note);
+        if (p.verification_note && (!locationVerified || p.verification_note !== p.location_verification_note)) fact(details, '核验说明', p.verification_note);
         if (entry.kind === 'villages') {
             fact(details, '聚落级别', {administrative_village: '行政村', natural_village: '自然村', hamlet: '小聚落（行政级别待核验）', village: '村落（行政级别待核验）'}[p.settlement_level] || '行政村 / 自然村级别待核验');
             fact(details, '人口', isNum(p.population) ? `${fmt(p.population, 0)} 人` : '待补充（未知）');
@@ -1215,12 +1223,13 @@
             fact(details, '距已收录医疗机构', isNum(p.nearest_medical_km) ? `${fmt(p.nearest_medical_km, 1)} km（直线）` : '暂无可用记录，不代表附近无机构');
             if (!isLevel(p.static_level)) fact(details, '风险数据', '网格数据缺失，仅供县级天气参考');
         } else {
+            if (locationVerified) fact(details, '开放时间', p.open_hours || '未提供');
             fact(details, '开放情况', p.open_hours ? `来源记录时段：${p.open_hours}；当前开放情况待核实` : '开放情况待核实');
             if (p.coordinate_verification_expired) fact(details, '坐标核验有效性', '核验已过期，已降为候选；位置与当前开放情况需重新核验');
-            if (entry.kind === 'candidates') fact(details, '使用边界', '候选场所，尚不能作为已开放避暑点安排前往');
+            if (entry.kind === 'candidates') fact(details, '使用边界', locationVerified ? '地点已核验，开放时间与纳凉设施信息待补充' : '候选场所，尚不能作为已开放避暑点安排前往');
             resourceEvidenceRows(p).forEach(([label, value]) => fact(details, label, value));
-            fact(details, '空调', p.has_ac === true ? '来源记录有空调，使用前核实' : p.has_ac === false ? '来源记录无空调，待复核' : '待核实');
-            fact(details, '无障碍', p.is_accessible === true ? '来源记录可达，使用前核实' : p.is_accessible === false ? '来源记录不具备，待复核' : '待核实');
+            fact(details, '空调', p.has_ac === true ? '来源记录有空调，使用前核实' : p.has_ac === false ? '来源记录无空调，待复核' : locationVerified ? '未知' : '待核实');
+            fact(details, '无障碍', p.is_accessible === true ? '来源记录可达，使用前核实' : p.is_accessible === false ? '来源记录不具备，待复核' : locationVerified ? '未知' : '待核实');
         }
         if (p.potential_duplicate) fact(details, '同名核验', '疑似同名点，暂不参与巡访排序，待核验；当前分别保留来源记录，不视为两个已核验行政村');
         if (p.priority_eligible === false && p.priority_exclusion_reason) fact(details, '巡访排序', p.priority_exclusion_reason);
@@ -1334,6 +1343,10 @@
             const count = entries.filter((entry) => entry.kind === kind).length;
             const card = el('div', 'hrw-poi-count');
             card.append(el('strong', null, String(count)), el('span', null, `${kind === 'medical' ? '地图医疗机构' : label}${count ? '' : ' · 暂未收录'}`));
+            if (kind === 'candidates') {
+                const verifiedCount = entries.filter((entry) => entry.kind === kind && entry.point.location_verification_status === 'verified').length;
+                card.appendChild(el('small', null, `其中 ${verifiedCount} 地点已核验`));
+            }
             ui.poiCounts.appendChild(card);
         });
         const unmapped = (state.daily ? state.daily.unmapped_resources : []).filter((point) => matchesTown({township: point.township_name}));
@@ -1347,7 +1360,7 @@
             const button = el('button', 'hrw-poi-list-item');
             button.type = 'button';
             button.dataset.poiId = entry.id;
-            button.append(el('strong', null, entry.point.name), el('span', null, `${entry.point.township || '乡镇归属待核验'} · ${POI_KINDS[entry.kind]}${entry.kind === 'candidates' ? ' · 开放待核实' : ''}`));
+            button.append(el('strong', null, entry.point.name), el('span', null, `${entry.point.township || '乡镇归属待核验'} · ${POI_KINDS[entry.kind]}${entry.point.location_verification_status === 'verified' ? ' · 地点已核验' : ''}${entry.kind === 'candidates' ? ' · 开放待核实' : ''}`));
             button.addEventListener('click', () => selectPoi(entry.id, {reveal: true}));
             ui.poiList.appendChild(button);
         });

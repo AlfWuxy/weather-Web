@@ -10,8 +10,8 @@
             <p class="text-muted">资料汇总日期 {{ candidate_payload.generated_at or '未知' }} · 坐标系 {{ candidate_payload.coordinate_system }}</p>
             <div class="alert alert-warning" role="alert">
                 <strong>这些点位尚未作为正式资源发布。</strong>
-                {{ candidate_payload.notice }}
-                点击“带入录入表单”只会预填字段，仍需逐项确认开放时间、空调、无障碍、接待条件与坐标，再手动勾选核验和启用。
+                地点核验与当前开放、纳凉设施核验分别记录。
+                点击“带入录入表单”只会预填字段，开放时间、空调、无障碍和接待条件仍需补充；入库时保留坐标核验记录，再按实际情况启用。
             </div>
             <a class="btn btn-outline-secondary" href="{{ url_for('admin.admin_cooling_resources') }}">返回正式资源管理</a>
         </div>
@@ -33,7 +33,8 @@
                     </thead>
                     <tbody>
                         {% for item in candidates %}
-                        <tr>
+                        {% set location_verified = item.location_verification_status == 'verified' %}
+                        <tr data-location-status="{{ 'verified' if location_verified else 'pending' }}">
                             <td>
                                 <strong>{{ item.name }}</strong>
                                 <div class="small text-muted">{{ item.source_id }}</div>
@@ -51,13 +52,17 @@
                             <td>
                                 {% if item.source_url %}<a href="{{ item.source_url }}" target="_blank" rel="noopener noreferrer">{{ item.source_label }}</a>{% else %}{{ item.source_label }}{% endif %}
                                 {% if item.source_date %}<div class="small text-muted">{{ item.source_date }}</div>{% endif %}
-                                <div class="small">原资料时段：{{ item.opening_hours_hint or '未提供' }}</div>
-                                <div class="small">接待对象：{{ item.audience_hint or '待确认' }}</div>
-                                <div class="small">设施资料：{{ item.facilities_hint or '待核验' }}</div>
-                                <div class="small text-muted">{{ item.verification_note }}</div>
+                                <div class="small">{{ '开放时间' if location_verified else '原资料时段' }}：{{ item.opening_hours_hint or '未提供' }}</div>
+                                {% if not location_verified or (item.audience_hint and item.audience_hint != '项目负责人确认地点真实、可前往；具体接待人群及无障碍条件未提供') %}<div class="small">接待对象：{{ item.audience_hint or '待确认' }}</div>{% endif %}
+                                {% if not location_verified or (item.facilities_hint and item.facilities_hint != '空调、饮水及无障碍设施信息未提供；不根据名称推定设备或纳凉能力') %}<div class="small">设施资料：{{ item.facilities_hint or '待核验' }}</div>{% endif %}
+                                <div class="small text-muted">{{ item.location_verification_note if location_verified else item.verification_note }}</div>
                             </td>
                             <td>
-                                <span class="badge bg-secondary">待人工核验</span>
+                                <span class="badge {{ 'bg-success' if location_verified else 'bg-secondary' }}">{{ '地点已核验' if location_verified else '待人工核验' }}</span>
+                                {% if location_verified %}
+                                {% if item.location_verified_at %}<div class="small">地点核验日期：{{ item.location_verified_at }}</div>{% endif %}
+                                <div class="small">空调未知 · 无障碍未知</div>
+                                {% endif %}
                                 <div class="small">当前开放未知</div>
                                 {% if item.latitude is none or item.longitude is none %}<div class="small text-muted">坐标待核验，仅文字资料</div>{% endif %}
                             </td>

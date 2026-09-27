@@ -821,11 +821,12 @@ def test_cooling_page_empty_database_renders_safe_candidate_preview(
     body = response.get_data(as_text=True)
     assert CoolingResource.query.count() == 0
     assert '暂无已发布且完成核验的避暑资源' in body
-    assert '待核验场所预览' in body
+    assert '场所地点与纳凉资料' in body
     assert '都昌县图书馆' in body
     assert '都昌志愿服务联合会' in body
     assert '待人工核验' in body
-    assert '不代表当天开放、具备空调、允许公众纳凉或已获本项目推荐' in body
+    assert '地点已核验' in body
+    assert '旧的待核验场所仍需联系确认' in body
     assert '都昌县人民医院' not in body
     assert '左里中心卫生院' not in body
     assert '万达广场' not in body
@@ -834,11 +835,14 @@ def test_cooling_page_empty_database_renders_safe_candidate_preview(
     assert '116.187665' not in body
     assert '29.249263' not in body
     assert 'data-publication-status="candidate-only"' in body
-    assert 'data-verification-status="pending-human-verification"' in body
+    assert 'data-verification-status="per-location"' in body
     from blueprints.public import _public_cooling_candidates
 
-    assert body.count('data-cooling-candidate="pending"') == len(_public_cooling_candidates())
-    assert '筛选将在人工核验发布后开放，待核验预览不参与筛选' in body
+    candidates = _public_cooling_candidates()
+    verified_count = sum(item.get('location_verification_status') == 'verified' for item in candidates)
+    assert body.count('data-cooling-candidate="location-verified"') == verified_count
+    assert body.count('data-cooling-candidate="pending"') == len(candidates) - verified_count
+    assert '筛选将在正式资源发布后开放，候选资料不参与正式资源筛选' in body
     assert re.search(r'id="coolingCommunity"[^>]*\sdisabled(?:\s|>)', body)
     assert re.search(r'id="coolingResourceType"[^>]*\sdisabled(?:\s|>)', body)
     assert re.search(r'id="coolingFilterSubmit"[^>]*\sdisabled(?:\s|>)', body)
@@ -890,8 +894,8 @@ def test_cooling_page_keeps_formal_resources_separate_from_candidates(client, db
     assert '距你' not in body
     assert '都昌县图书馆' in body
     assert '万达广场' not in body
-    assert '待核验场所预览' in body
-    assert '筛选将在人工核验发布后开放，待核验预览不参与筛选' not in body
+    assert '场所地点与纳凉资料' in body
+    assert '筛选将在正式资源发布后开放，候选资料不参与正式资源筛选' not in body
     assert not re.search(r'id="coolingCommunity"[^>]*\sdisabled(?:\s|>)', body)
     assert not re.search(r'id="coolingResourceType"[^>]*\sdisabled(?:\s|>)', body)
     assert not re.search(r'id="coolingFilterSubmit"[^>]*\sdisabled(?:\s|>)', body)
