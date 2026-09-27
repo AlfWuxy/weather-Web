@@ -1123,7 +1123,7 @@ def handle_register():
     return render_template('register.html', communities=communities)
 
 
-def render_cooling_resources_page(community, resource_type, has_ac_raw, is_accessible_raw, open_only):
+def render_cooling_resources_page(community, resource_type, has_ac_raw, is_accessible_raw, open_only, cooling_candidates=None):
     open_only_flag = parse_bool(open_only, default=False)
     location_query = sanitize_input(request.args.get('location'), max_length=100)
     weather_location = normalize_location_name(community or location_query or None)
@@ -1189,6 +1189,7 @@ def render_cooling_resources_page(community, resource_type, has_ac_raw, is_acces
     return render_template(
         'cooling.html',
         resources_by_community=grouped,
+        cooling_candidates=list(cooling_candidates or []),
         total=len(resources),
         communities=communities,
         resource_types=resource_types,

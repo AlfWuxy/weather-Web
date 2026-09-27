@@ -8,7 +8,7 @@
 | --- | --- |
 | `data/gis/duchang_settlements.geojson` | 公开地名库与地图中的村落、聚落点 |
 | `data/gis/duchang_resources.geojson` | 已收录医疗机构与纳凉资源候选 |
-| `data/gis/duchang_resource_inventory.json` | 官方列名但尚待定位或复核的机构及历史纳凉场所 |
+| `data/gis/duchang_resource_inventory.json` | 官方/机构列名及尚待定位或复核的资源，含公开候选资料 |
 | `scripts/gis/build_public_settlements.py` | 离线复建公开聚落数据，显式传入原始下载，不联网 |
 | 对应的 `*_sources.md` | 来源、筛选、去重、精度及未解决的问题 |
 | `services/heat_risk_poi_service.py` | 数据校验、空间归属、去重与收录数汇总 |
@@ -54,3 +54,15 @@
 6. 数据扩充不增加天气 API 调用，不改变已发布静态评分。
 
 原始下载与一次性研究报告放本地归档；运行数据、来源说明和必要测试放主仓库。公开数据集保留 OpenStreetMap 与 GeoNames 署名及各自许可；来源方不为本项目的风险判断或机构开放状态背书。
+
+## 2026-09-27 避暑候选扩展
+
+本轮指定的 10 条资料全部以候选身份加入，7 条取得高德具体设施位置、3 条无可信匹配仅在列表展示。库存现有 373 条，避暑候选资料 17 条；运行时医疗 25 点、避暑候选地图记录 9 条、当前已核验开放避暑点 0 条。29 个库存 ID 已明确关联地图，尚待定位/复核 344 条。村落仍为 502 个，天气请求、冻结网格和风险权重均不因本次资源扩充而变化。
+
+`public_preview=true` 只用于标识本轮允许公开展示的 10 条候选；不表示运营核验。`kind` 与 `public_role` 为 `cooling_candidate`，`current_opening_status=unknown`。库存只保留资料和地图关联 ID，WGS84 坐标由独立 GeoJSON 保存。3 条无坐标记录不得用乡政府、村中心、同类文化设施或零坐标代替。
+
+`official_source_url` / `official_source_date` 记录服务或设施报道，`coordinate_source_url` / `coordinate_checked_at` 记录地图证据与查询日期。`audience_hint`、`facilities_hint` 和 `opening_hours_hint` 只描述对应时间的历史资料或平台展示，不能写进当前 `has_ac`、`is_accessible`、`open_hours`。当前运行、进入条件、无障碍和有效期尚未核验时保持 `null`；文化站存在或等级不能当作提供纳凉的证明。
+
+高德原始 GCJ-02、POI ID、原名、查询时间、转换方法及数学往返误差逐点保留，源坐标绝不直接当作 WGS84。蓝海官方“墨韵拾光”与高德“墨韵抬光”差异明确展示；西街图书驿站与蒲公英驿站约 8 米的可能共址通过 `related_ids` 和说明保留，不能把地图记录数解释为独立容量。刘钐村历史资料只支持风扇纳凉，不标为空调场所。
+
+当前 main 未包含旧高德候选 JSON，公开候选预览为本轮 10 条；已部署分支另合并 7 条旧候选，公开预览为 17 条。缺少旧文件不影响新资料展示。main 管理录入只预填名称、类型与地址，坐标和当前开放时间保持空白，空调、无障碍与启用均不预选；旧分支的坐标核验模型不随本轮移植。

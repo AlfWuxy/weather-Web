@@ -251,3 +251,117 @@ def test_expanded_daily_uses_one_county_forecast(authenticated_client, monkeypat
     assert len(ids) == len(payload["villages"])
     assert all(set(day["village_ids"]) <= ids for day in payload["priority"])
     assert all(len(day["villages"]) <= 5 for day in payload["priority"])
+
+
+def _public_cooling_extension():
+    inventory = json.loads(poi.RESOURCE_INVENTORY_PATH.read_text(encoding="utf-8"))
+    resources = json.loads(poi.RESOURCES_PATH.read_text(encoding="utf-8"))
+    preview = [row for row in inventory["records"] if row.get("public_preview")]
+    mapped = [feature for feature in resources["features"] if feature["properties"].get("public_preview")]
+    return inventory, resources, preview, mapped
+
+
+def test_public_cooling_extension_has_ten_candidates_and_no_invented_coordinates():
+    inventory, resources, preview, mapped = _public_cooling_extension()
+    assert len(inventory["records"]) == 373
+    assert len({row["id"] for row in inventory["records"]}) == 373
+    assert len(preview) == 10 and len(mapped) == 7
+    assert len({feature["id"] for feature in resources["features"]}) == len(resources["features"])
+    mapped_inventory_ids = {item for feature in mapped for item in feature["properties"]["inventory_ids"]}
+    assert mapped_inventory_ids <= {row["id"] for row in preview}
+    missing = {row["id"] for row in preview} - mapped_inventory_ids
+    assert missing == {"official-cooling-liushan-culture-center", "official-cooling-yangfeng-culture-station",
+                       "official-cooling-dagang-culture-station"}
+    # 全部原始名录保持无坐标；乡镇和村中心不能冒充具体场所位置。
+    assert all(not any(key in row for key in ("coordinates", "longitude", "latitude", "geometry")) for row in preview)
+    for row in preview:
+        assert row["kind"] == row["public_role"] == "cooling_candidate"
+        assert row["current_opening_status"] == "unknown"
+        assert all(row.get(key) is None for key in ("has_ac", "is_accessible", "verified_at", "valid_until", "open_hours"))
+        assert all(row.get(key) for key in ("source_label", "source_url", "source_date", "audience_hint",
+                                          "facilities_hint", "opening_hours_hint", "verification_note"))
+        if row["id"] in missing:
+            assert row["coordinate_status"] == "unmapped" and not row.get("mapped_resource_ids")
+            assert row["coordinate_search"]["provider"] == "高德地图"
+
+
+def test_public_cooling_amap_coordinates_are_converted_and_inside_county():
+    _, _, _, mapped = _public_cooling_extension()
+    expected = {
+        "B0KG7HA2PR": [116.201836, 29.270071], "B0J057S1T0": [116.221689, 29.281885],
+        "B0J0T6UGOA": [116.189982, 29.263534], "B0KG7H9VA3": [116.190058, 29.263556],
+        "B0J1UG0JK1": [116.206436, 29.269909], "B0L3FD628U": [116.205125, 29.268475],
+        "B0JAJMNSE0": [116.334872, 29.457898],
+    }
+    assert {feature["properties"]["source_id"] for feature in mapped} == set(expected)
+    for feature in mapped:
+        props = feature["properties"]
+        raw = expected[props["source_id"]]
+        point = feature["geometry"]["coordinates"]
+        assert feature["geometry"]["type"] == "Point"
+        assert props["source_coordinate_system"] == "GCJ-02" and props["coordinate_system"] == "WGS84"
+        assert props["source_coordinates"] == raw and point != raw
+        assert point == pytest.approx(workbench.gcj02_to_wgs84(*raw), abs=5.1e-8)
+        converted = workbench.wgs84_to_gcj02(*point)
+        error_m = workbench.haversine_km(*raw, *converted) * 1000
+        assert error_m < 0.02
+        assert props["coordinate_conversion"]["mathematical_roundtrip_error_m"] == pytest.approx(error_m, abs=1e-6)
+        assert "不代表" in props["coordinate_conversion"]["note"]
+        match = poi._match_point(*point, poi._spatial_signature())
+        assert match and match["township"] == props["township_name"]
+        assert props["coordinate_evidence"]["region"] == "360428"
+        assert props["coordinate_evidence"]["queried_at"].startswith("2026-09-27T")
+        assert props["coordinate_source_url"] == f"https://www.amap.com/place/{props['source_id']}"
+        assert props["official_source_url"] != props["coordinate_source_url"]
+
+
+def test_public_cooling_history_does_not_become_verified_capacity():
+    _, _, preview, mapped = _public_cooling_extension()
+    data = poi.build_poi_payload(_legacy())
+    counts = data["poi_metadata"]["counts"]
+    assert (counts["settlements"], counts["medical"], counts["cooling_candidates"], counts["cooling_verified"]) == (502, 25, 9, 0)
+    assert counts["unmapped_resources"] == 344
+    assert data["poi_metadata"]["inventory_linked_count"] == 29
+    assert data["poi_metadata"]["rejected_points"] == 0
+    assert not data["cooling_resources"]
+    runtime_ids = {row["id"] for row in data["cooling_candidates"]}
+    assert {feature["id"] for feature in mapped} <= runtime_ids
+    missing = {row["id"] for row in preview if row["coordinate_status"] == "unmapped"}
+    assert missing <= {row["id"] for row in data["unmapped_resources"]}
+    for row in data["cooling_candidates"]:
+        assert row["kind"] == "cooling_candidate" and row["cooling_status"] == "candidate"
+        assert row["current_opening_status"] == "unknown"
+        assert all(row.get(key) is None for key in ("has_ac", "is_accessible", "verified_at", "valid_until"))
+
+
+def test_cooling_colocated_xijie_records_retain_cross_references():
+    _, _, _, mapped = _public_cooling_extension()
+    features = {feature["id"]: feature for feature in mapped}
+    library_id, station_id = "amap-B0J0T6UGOA", "amap-B0KG7H9VA3"
+    for this_id, other_id in ((library_id, station_id), (station_id, library_id)):
+        props = features[this_id]["properties"]
+        assert props["related_ids"] == [other_id]
+        assert "不能相加为两处独立容量" in props["verification_note"]
+    distance = workbench.haversine_km(*features[library_id]["geometry"]["coordinates"],
+                                     *features[station_id]["geometry"]["coordinates"]) * 1000
+    assert 5 < distance < 15
+    renmin = features["amap-B0J057S1T0"]["properties"]
+    assert "183米" in renmin["verification_note"] and "不将两者当作别名" in renmin["verification_note"]
+    assert "都昌县红色蒲公英驿站(人民广场站)" not in renmin["aliases"]
+
+
+def test_cooling_evidence_preserves_alias_difference_and_fan_only_history():
+    _, _, preview, mapped = _public_cooling_extension()
+    by_id = {row["id"]: row for row in preview}
+    lanhai = next(f["properties"] for f in mapped if f["id"] == "amap-B0L3FD628U")
+    assert lanhai["amap_name"] == "墨韵抬光城市书房"
+    assert "墨韵拾光" in lanhai["name"]
+    assert any(source.get("source_date") == "2026-01-14" for source in lanhai["sources"])
+    liushan = by_id["official-cooling-liushan-culture-center"]
+    assert liushan["source_date"] == "2023-07-11"
+    assert "风扇纳凉，不能标为空调场所" in liushan["facilities_hint"]
+    for station in ("yangfeng", "dagang", "xubu"):
+        row = by_id[f"official-cooling-{station}-culture-station"]
+        assert row["official_status"] == "public_culture_facility_report"
+        assert "不能据此认定" in row["facilities_hint"]
+        assert row["source_date"] == "2026-05-19"

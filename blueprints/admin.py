@@ -2,6 +2,7 @@
 """Admin routes."""
 import json
 import logging
+from pathlib import Path
 from datetime import datetime, timedelta
 
 from flask import Blueprint, current_app, flash, redirect, render_template, request, url_for
@@ -19,6 +20,14 @@ from utils.validators import (
 logger = logging.getLogger(__name__)
 
 bp = Blueprint('admin', __name__)
+COOLING_CANDIDATE_PATH = Path(__file__).resolve().parents[1] / 'data/cooling_resource_candidates.json'
+
+
+def _load_cooling_candidates():
+    """只读候选目录，不在预览时写入正式资源。"""
+    from services.cooling_candidate_catalog import load_cooling_candidate_catalog
+
+    return load_cooling_candidate_catalog(amap_path=COOLING_CANDIDATE_PATH)
 
 
 @bp.route('/admin', endpoint='admin_dashboard')
@@ -752,6 +761,22 @@ def admin_cooling_resources():
     )
 
 
+@bp.route('/admin/cooling/candidates', endpoint='admin_cooling_candidates')
+@login_required
+def admin_cooling_candidates():
+    """展示公开资料候选点，必须人工核验后再转录到正式资源表。"""
+    if current_user.role != 'admin':
+        flash('权限不足', 'error')
+        return redirect(url_for('user.user_dashboard'))
+
+    payload = _load_cooling_candidates()
+    return render_template(
+        'admin_cooling_candidates.html',
+        candidate_payload=payload,
+        candidates=payload['items'],
+    )
+
+
 @bp.route('/admin/cooling/add', methods=['GET', 'POST'], endpoint='admin_add_cooling_resource')
 @login_required
 def admin_add_cooling_resource():
@@ -779,7 +804,7 @@ def admin_add_cooling_resource():
             is_accessible=parse_bool(request.form.get('is_accessible'), default=False),
             contact_hint=sanitize_input(request.form.get('contact_hint'), max_length=100),
             notes=sanitize_input(request.form.get('notes'), max_length=500),
-            is_active=parse_bool(request.form.get('is_active'), default=True)
+            is_active=parse_bool(request.form.get('is_active'), default=False)
         )
         db.session.add(resource)
         db.session.commit()
@@ -787,7 +812,22 @@ def admin_add_cooling_resource():
         return redirect(url_for('admin.admin_cooling_resources'))
 
     communities = Community.query.order_by(Community.name).all()
-    return render_template('admin_add_cooling_resource.html', communities=communities)
+    candidate_id = sanitize_input(request.args.get('candidate'), max_length=64)
+    candidate = next((item for item in _load_cooling_candidates()['items']
+                      if item.get('source_id') == candidate_id), None) if candidate_id else None
+    if candidate_id and candidate is None:
+        flash('候选资料已变更或不存在，请重新选择', 'warning')
+        return redirect(url_for('admin.admin_cooling_candidates'))
+    prefill = {}
+    if candidate:
+        # 当前模型没有坐标核验字段，仅预填文字，历史时段不作为当前开放时间。
+        prefill = {
+            'name': candidate.get('name') or '',
+            'resource_type': '待核验志愿服务' if candidate.get('public_role') == 'service_candidate' else '待核验公共避暑资源',
+            'address_hint': candidate.get('address') or '',
+        }
+    return render_template('admin_add_cooling_resource.html', communities=communities,
+                           candidate=candidate, prefill=prefill)
 
 
 @bp.route('/admin/cooling/<int:resource_id>/edit', methods=['GET', 'POST'], endpoint='admin_edit_cooling_resource')
@@ -817,7 +857,7 @@ def admin_edit_cooling_resource(resource_id):
         resource.is_accessible = parse_bool(request.form.get('is_accessible'), default=False)
         resource.contact_hint = sanitize_input(request.form.get('contact_hint'), max_length=100)
         resource.notes = sanitize_input(request.form.get('notes'), max_length=500)
-        resource.is_active = parse_bool(request.form.get('is_active'), default=True)
+        resource.is_active = parse_bool(request.form.get('is_active'), default=False)
 
         db.session.commit()
         flash('避暑资源已更新', 'success')

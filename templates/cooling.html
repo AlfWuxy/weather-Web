@@ -5,8 +5,8 @@
 <div class="container" style="max-width:1160px;">
     <section class="section-heading yl-fade-up">
         <span class="section-kicker"><i class="bi bi-snow2"></i> 避暑资源</span>
-        <h2>离你最近的纳凉点</h2>
-        <p>高温天,可以带老人去这些地方避暑。多数免费开放,部分需登记身份证。</p>
+        <h2>避暑资源与待核验场所</h2>
+        <p>正式录入资源与候选资料分别展示，当前开放和接待条件请在前往前联系确认。</p>
     </section>
 
     {% if outdoor_temp is not none %}
@@ -111,6 +111,55 @@
         </div>
         {% endif %}
     </div>
+
+    {% if cooling_candidates %}
+    <section class="yl-section mt-4 yl-fade-up"
+             aria-labelledby="coolingCandidateTitle"
+             data-publication-status="candidate-only"
+             data-verification-status="pending-human-verification">
+        <div class="d-flex flex-column flex-lg-row justify-content-between gap-3 mb-3">
+            <div>
+                <span class="section-kicker">预览资料</span>
+                <h2 class="h4 mb-1" id="coolingCandidateTitle">待核验场所预览</h2>
+                <p class="text-muted mb-0">这些信息来自官方公开资料与公开 POI，仅帮助后续人工核验和联系确认。</p>
+            </div>
+            <span class="badge bg-warning-subtle text-warning-emphasis align-self-start">全部待人工核验</span>
+        </div>
+        <div class="alert alert-warning" role="note">
+            候选场所不代表当天开放、具备空调、允许公众纳凉或已获本项目推荐。志愿服务候选也不等于可进入纳凉，请勿直接按候选信息带老人前往。
+        </div>
+        <div class="row g-3">
+            {% for candidate in cooling_candidates %}
+            <div class="col-md-6 col-lg-4">
+                <article class="card h-100" data-cooling-candidate="pending">
+                    <div class="card-body">
+                        <div class="d-flex justify-content-between align-items-start gap-2 mb-2">
+                            <h3 class="h6 mb-0">{{ candidate.name }}</h3>
+                            <span class="badge bg-warning-subtle text-warning-emphasis">待人工核验</span>
+                        </div>
+                        <p class="small text-muted mb-3">{{ candidate.role_label }} · {{ candidate.category_label }}</p>
+                        <p class="small mb-2">
+                            <strong>资料地址：</strong>{{ candidate.address or '未提供' }}
+                        </p>
+                        <p class="small mb-2">
+                            <strong>原资料时段：</strong>{{ candidate.opening_hours_hint or '未提供，需电话或现场确认' }}
+                        </p>
+                        <p class="small mb-2"><strong>接待对象：</strong>{{ candidate.audience_hint or '待确认' }}</p>
+                        <p class="small mb-2"><strong>设施资料：</strong>{{ candidate.facilities_hint or '待核验' }}</p>
+                        <p class="small mb-2"><strong>当前开放：</strong>未知，前往前须联系确认</p>
+                        <p class="small text-muted mb-2">{{ candidate.verification_note }}</p>
+                        <p class="small mb-0">
+                            <strong>资料来源：</strong>
+                            {% if candidate.source_url %}<a href="{{ candidate.source_url }}" target="_blank" rel="noopener noreferrer">{{ candidate.source_label or '公开资料' }}</a>{% else %}{{ candidate.source_label or '公开资料' }}{% endif %}
+                            {% if candidate.source_date %} · {{ candidate.source_date }}{% endif %}
+                        </p>
+                    </div>
+                </article>
+            </div>
+            {% endfor %}
+        </div>
+    </section>
+    {% endif %}
 
     <section class="alert alert-primary mt-4 yl-fade-up">
         <i class="bi bi-info-circle me-1"></i>

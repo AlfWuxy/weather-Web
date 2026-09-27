@@ -622,7 +622,7 @@ def test_cooling_page_empty_database_does_not_render_default_resources(client, d
     assert response.status_code == 200
     body = response.get_data(as_text=True)
     assert '暂无录入的避暑资源' in body
-    assert '都昌县图书馆' not in body
+    assert '都昌县图书馆' not in body.split('data-publication-status=')[0]
     assert '万达广场' not in body
     assert '人民公园纳凉亭' not in body
 
@@ -658,7 +658,7 @@ def test_cooling_page_renders_real_resources_only(client, db_session, monkeypatc
     assert '服务台登记' in body
     assert '仅展示真实录入信息' in body
     assert '距你' not in body
-    assert '都昌县图书馆' not in body
+    assert '都昌县图书馆' not in body.split('data-publication-status=')[0]
     assert '万达广场' not in body
 
 
