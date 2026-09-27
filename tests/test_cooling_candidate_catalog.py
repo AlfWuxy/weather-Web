@@ -218,14 +218,16 @@ def test_optional_legacy_catalog_can_add_seven_previews(candidate_catalog):
 
 
 def test_candidate_admin_requires_authentication(candidate_catalog, client, db_session):
-    for url in ("/admin/cooling/candidates", "/admin/cooling/add?candidate=official-cooling-0"):
+    for url in ("/admin/cooling/candidates", "/admin/cooling/add?candidate=official-cooling-0",
+                "/admin/cooling/999999/edit"):
         response = client.get(url)
         assert response.status_code == 302
         assert "/login" in response.location
 
 
 def test_candidate_admin_rejects_non_admin(candidate_catalog, authenticated_client):
-    for url in ("/admin/cooling/candidates", "/admin/cooling/add?candidate=official-cooling-0"):
+    for url in ("/admin/cooling/candidates", "/admin/cooling/add?candidate=official-cooling-0",
+                "/admin/cooling/999999/edit"):
         response = authenticated_client.get(url)
         assert response.status_code == 302
         assert "/dashboard" in response.location
@@ -280,3 +282,16 @@ def test_edit_without_activation_keeps_or_makes_resource_inactive(candidate_cata
     db_session.refresh(resource)
     assert resource.is_active is False
     assert "编辑时未启用" not in admin_client.get("/cooling").get_data(as_text=True)
+
+
+@pytest.mark.parametrize("method", ["GET", "POST"])
+def test_edit_missing_resource_returns_404(admin_client, method):
+    from core.db_models import CoolingResource
+
+    assert CoolingResource.query.count() == 0
+    with admin_client.session_transaction() as session:
+        token = session["_csrf_token"]
+    response = admin_client.open("/admin/cooling/999999/edit", method=method,
+                                 data={"csrf_token": token})
+    assert response.status_code == 404
+    assert CoolingResource.query.count() == 0

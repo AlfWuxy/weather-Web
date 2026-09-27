@@ -838,7 +838,7 @@ def admin_edit_cooling_resource(resource_id):
         flash('权限不足', 'error')
         return redirect(url_for('user.user_dashboard'))
 
-    resource = CoolingResource.query.get_or_404(resource_id)
+    resource = db.get_or_404(CoolingResource, resource_id)
     if request.method == 'POST':
         community_code = sanitize_input(request.form.get('community_code'), max_length=100)
         name = sanitize_input(request.form.get('name'), max_length=120)
