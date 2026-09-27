@@ -23,7 +23,6 @@ case-weather/
 │   ├── weather_cache_sync.sh       # 天气缓存同步脚本
 │   ├── quick_fix.sh                # 快速修复脚本
 │   ├── complete_manual_fixes.sh    # 手动修复辅助脚本
-│   ├── apply_security_fixes.py     # 自动化修复脚本
 │   ├── test_fixes.py               # 修复验证脚本
 │   └── test_config_validation.py   # 配置验证测试脚本
 ├── import_data.py                  # 数据导入脚本 [SCRIPT]
