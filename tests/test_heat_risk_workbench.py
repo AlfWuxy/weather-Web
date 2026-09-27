@@ -39,14 +39,15 @@ def test_workbench_is_default_view(authenticated_client):
     html = response.get_data(as_text=True)
 
     assert 'id="heatRiskWorkbench"' in html
-    assert "今天先去哪几个村" in html
+    assert "风险暂不可判定" in html
     assert "巡访优先清单" in html
     assert "/static/data/gis/duchang_heat_risk_workbench.json?v=" in html
     assert "/static/data/gis/duchang_heat_exposure_cells.geojson?v=" in html
     assert 'data-daily-url="/heat-exposure-gis/daily.json"' in html
     assert 'data-tianditu-key=""' in html
     assert "/heat-exposure-gis?ui=legacy" in html
-    assert "/static/js/heat-risk-workbench.js" in html
+    assert "/static/js/heat-risk-workbench.js?v=" in html
+    assert "/static/css/heat-risk-workbench.css?v=" in html
     assert "/static/vendor/leaflet/dist/leaflet.js" in html
     assert "unpkg.com" not in html
     for key in ("gis_risk_score", "gis_daily_level", "gis_hotspot", "gis_rank_stability", "gis_bivariate", "gis_facility_access"):
@@ -107,6 +108,7 @@ def test_daily_api_payload_in_demo_mode(authenticated_client):
     payload = response.get_json()
 
     assert payload["forecast_source"] == "演示数据"
+    assert payload["forecast_status"] == "demo"
     assert payload["hot_night_tmin_c"] == 26.5
     assert len(payload["days"]) == 7
     # 演示天气：最高 39 °C、最低 29 °C → 基础 3 级，热夜上调为 4 级。
@@ -130,7 +132,7 @@ def _days(*pairs):
 
 @pytest.mark.parametrize(
     ("tmax", "expected"),
-    [(None, 0), (32.9, 0), (33.0, 1), (34.9, 1), (35.0, 2), (36.9, 2), (37.0, 3), (39.9, 3), (40.0, 4)],
+    [(None, None), (32.9, 0), (33.0, 1), (34.9, 1), (35.0, 2), (36.9, 2), (37.0, 3), (39.9, 3), (40.0, 4)],
 )
 def test_base_hazard_thresholds(tmax, expected):
     day = classify_daily_hazard([{"temperature_max": tmax, "temperature_min": 20}], hot_night_tmin_c=26.5)[0]
@@ -164,7 +166,7 @@ def test_escalation_caps_at_level_four():
 @pytest.mark.parametrize(
     ("hazard", "static", "expected"),
     [
-        (0, 4, 0), (0, None, 0),
+        (None, 4, None), (0, 4, 0), (0, None, 0),
         (1, 0, 1), (1, 2, 1), (1, 3, 2),
         (2, 1, 1), (2, 2, 2), (2, 4, 3),
         (3, 0, 2), (3, 3, 4),
@@ -177,7 +179,7 @@ def test_daily_matrix(hazard, static, expected):
 
 def test_js_matrix_mirrors_python_rule():
     script = (PROJECT_ROOT / "static/js/heat-risk-workbench.js").read_text(encoding="utf-8")
-    assert "if (!hazard) return 0;" in script
+    assert "if (hazard === 0) return 0;" in script
     assert "if (staticLevel <= 1) adjust = -1;" in script
     assert "else if (staticLevel >= 3) adjust = 1;" in script
     assert "return Math.max(1, Math.min(4, hazard + adjust));" in script
