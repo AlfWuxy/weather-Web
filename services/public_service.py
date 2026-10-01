@@ -13,7 +13,14 @@ from sqlalchemy import or_
 
 from core.constants import GUEST_ID_PREFIX
 from core.extensions import db
-from core.security import hash_identifier, hash_pair_token, hash_short_code, rate_limit_key, verify_pair_token
+from core.security import (
+    hash_identifier,
+    hash_pair_token,
+    hash_short_code,
+    mark_register_limit_countable,
+    rate_limit_key,
+    verify_pair_token,
+)
 from core.time_utils import today_local, utcnow, ensure_utc_aware
 from core.usage import log_usage_event
 from core.weather import (
@@ -1062,8 +1069,8 @@ def handle_register():
             return redirect(url_for('public.register'))
         username = result
 
-        # 验证密码
-        valid, result = validate_password(request.form.get('password'))
+        # 验证密码（仅注册路径要求 12 位；全局默认仍为 6）
+        valid, result = validate_password(request.form.get('password'), min_length=12)
         if not valid:
             flash(result, 'error')
             return redirect(url_for('public.register'))
@@ -1089,6 +1096,9 @@ def handle_register():
             flash(result, 'error')
             return redirect(url_for('public.register'))
         gender = result
+
+        # 全部 validate_* 通过后才扣专用配额；用户名/邮箱已占用也扣，反枚举。
+        mark_register_limit_countable()
 
         # 社区信息
         community = sanitize_input(request.form.get('community'), max_length=100)
