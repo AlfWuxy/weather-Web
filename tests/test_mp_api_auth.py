@@ -111,6 +111,11 @@ def test_mp_api_invalid_bearer_rotation_cannot_bypass_ip_limit(
 
         assert first.status_code == 401
         assert rotated.status_code == 429
+        assert rotated.is_json
+        body = rotated.get_json()
+        assert body['success'] is False
+        assert body['error'] == 'rate_limited'
+        assert '先看今日公开风险' not in rotated.get_data(as_text=True)
         assert separate_ip.status_code == 401
     finally:
         limiter.reset()

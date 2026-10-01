@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+
+{% block title %}请求过于频繁 · 宜老天气通{% endblock %}
+
+{% block content %}
+<div class="container my-4">
+    <div class="row justify-content-center">
+        <div class="col-lg-7">
+            <section class="card shadow-sm yl-fade-up" aria-labelledby="rate-limit-title">
+                <div class="card-body p-4 p-md-5">
+                    <span class="section-kicker">稍后再试</span>
+                    <h1 id="rate-limit-title" class="mt-2 mb-3">请求过于频繁</h1>
+                    <p class="text-muted mb-3">
+                        为了保护服务稳定，请稍等片刻再继续。倒计时结束只表示可以重试，本页不会自动刷新。
+                    </p>
+                    <p class="mb-4">
+                        约 <strong id="retry-after-count">{{ retry_after }}</strong> 秒后可以重试。
+                        <span id="retry-hint" class="d-block mt-2"></span>
+                    </p>
+                    {% if request_method and request_method|upper != 'GET' %}
+                    <p class="small text-muted mb-4">请返回上一页后重新提交，不要刷新本页，以免再次提交刚才的操作。</p>
+                    {% endif %}
+                    <div class="d-flex flex-wrap gap-2">
+                        <a class="btn btn-primary" href="{{ risk_url }}">先看今日公开风险</a>
+                        <a class="btn btn-outline-secondary" href="{{ elder_mode_url }}">进入老人模式</a>
+                    </div>
+                </div>
+            </section>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    (function() {
+        var remaining = {{ retry_after|int }};
+        var countEl = document.getElementById('retry-after-count');
+        var hintEl = document.getElementById('retry-hint');
+        if (!countEl) return;
+
+        function showReady() {
+            countEl.textContent = '0';
+            if (hintEl) hintEl.textContent = '可以重试了';
+        }
+
+        function tick() {
+            if (remaining <= 0) {
+                showReady();
+                return;
+            }
+            countEl.textContent = String(remaining);
+            remaining -= 1;
+            window.setTimeout(tick, 1000);
+        }
+
+        tick();
+    })();
+</script>
+{% endblock %}
