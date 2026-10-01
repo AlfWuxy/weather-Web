@@ -1835,6 +1835,71 @@ body.elder-focus-page {
 body.elder-focus-page main.page-shell {
     padding-top: clamp(14px, 2vw, 24px) !important;
 }
+
+/* 顶部 120 卡：sticky 贴在导航下，低于 navbar 1020 与 AI 1030。 */
+body.elder-focus-page .yl-elder-sos {
+    position: sticky;
+    top: 4.5rem;
+    z-index: 1010;
+    margin-bottom: 18px;
+    padding: clamp(16px, 3vw, 24px);
+    border-radius: 22px;
+    background: #FFFFFF;
+    border: 1px solid #F0D4CC;
+    box-shadow: 0 10px 28px rgba(199, 71, 46, .08);
+}
+body.elder-focus-page .yl-elder-sos-actions {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 12px;
+}
+body.elder-focus-page .yl-elder-sos-actions.has-family {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+body.elder-focus-page .yl-elder-sos-120,
+body.elder-focus-page .yl-elder-sos-family,
+body.elder-focus-page .yl-elder-120-confirm {
+    width: 100%;
+    justify-content: center;
+    min-height: 68px;
+    font-size: 1.2rem;
+}
+body.elder-focus-page .yl-elder-sos-hint {
+    margin: 12px 0 0;
+    color: #39454F;
+    font-size: 1.12rem;
+    line-height: 1.55;
+}
+body.elder-focus-page .yl-elder-sos-register {
+    display: inline-block;
+    margin-top: 6px;
+    font-size: 1.08rem;
+    font-weight: 600;
+}
+body.elder-focus-page .yl-elder-120-dialog {
+    border: none;
+    border-radius: 22px;
+    padding: clamp(22px, 4vw, 32px);
+    width: min(32rem, calc(100vw - 32px));
+    box-shadow: 0 24px 50px rgba(33, 22, 11, .18);
+}
+body.elder-focus-page .yl-elder-120-dialog::backdrop {
+    background: rgba(20, 16, 12, .45);
+}
+body.elder-focus-page .yl-elder-120-dialog h2 {
+    font-size: clamp(1.55rem, 3vw, 2.1rem);
+    margin-bottom: 10px;
+}
+body.elder-focus-page .yl-elder-120-dialog p {
+    color: #39454F;
+    font-size: 1.12rem;
+    line-height: 1.65;
+    margin-bottom: 18px;
+}
+body.elder-focus-page .yl-elder-120-dialog-actions {
+    display: grid;
+    gap: 12px;
+}
 .yl-elder-shell {
     max-width: 1040px;
     margin: 0 auto;
@@ -2048,6 +2113,12 @@ body.elder-focus-page main.page-shell {
     }
     .yl-elder-status h1 {
         font-size: clamp(2.4rem, 14vw, 3.6rem);
+    }
+    body.elder-focus-page .yl-elder-sos {
+        border-radius: 18px;
+    }
+    body.elder-focus-page .yl-elder-sos-actions.has-family {
+        grid-template-columns: minmax(0, 1fr);
     }
 }
 
