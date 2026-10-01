@@ -1,9 +1,11 @@
 const { api } = require('../../utils/request');
+const { WEB_ACTION_URL } = require('../../config');
 
 Page({
   data: {
     tokenInput: '',
     busy: false,
+    webActionUrl: WEB_ACTION_URL || '/action',
   },
 
   onLoad() {
@@ -39,6 +41,11 @@ Page({
     } finally {
       this.setData({ busy: false });
     }
+  },
+
+  copyWebAction() {
+    const url = (this.data.webActionUrl || '/action').trim();
+    wx.setClipboardData({ data: url });
   },
 });
 

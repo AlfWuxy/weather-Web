@@ -23,5 +23,18 @@
       注意：小程序请求域名必须配置 HTTPS 合法域名，且与后端一致。
     </view>
   </view>
+
+  <view style="height: 12px;"></view>
+
+  <view class="card">
+    <view style="font-weight: 700; font-size: 16px;">网页也能打卡</view>
+    <view class="muted" style="margin-top: 6px; font-size: 12px;">
+      扫码进入本页是为了绑定 Token。老人确认仍在网页短码页完成，小程序本批没有打卡。
+    </view>
+    <view style="margin-top: 8px; font-size: 13px;">{{webActionUrl}}</view>
+    <view style="margin-top: 12px;">
+      <button class="btn-outline" bindtap="copyWebAction">复制网页打卡地址</button>
+    </view>
+  </view>
 </view>
 

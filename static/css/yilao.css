@@ -2265,3 +2265,68 @@ body.elder-focus-page main.page-shell {
         grid-template-columns: minmax(0, 1fr);
     }
 }
+
+/* 打卡页：网页 ↔ 小程序入口（CSS 编号三步） */
+.yl-mp-bridge__layout {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    gap: 1rem;
+}
+
+.yl-mp-bridge__qr-wrap {
+    flex: 0 0 auto;
+}
+
+.yl-mp-bridge__qr {
+    display: block;
+    width: 144px;
+    height: 144px;
+    object-fit: contain;
+    border: 1px solid var(--yl-line, #ece3d6);
+    border-radius: var(--yl-radius-sm, 10px);
+    background: #fff;
+}
+
+.yl-mp-bridge__copy {
+    flex: 1 1 12rem;
+    min-width: 0;
+}
+
+.yl-mp-bridge__name {
+    margin-bottom: .35rem;
+}
+
+.yl-mp-bridge__steps {
+    list-style: none;
+    counter-reset: yl-mp-step;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: .55rem;
+}
+
+.yl-mp-bridge__steps > li {
+    counter-increment: yl-mp-step;
+    display: flex;
+    align-items: flex-start;
+    gap: .65rem;
+    color: var(--yl-ink, #2a2620);
+    font-size: .92rem;
+    line-height: 1.45;
+}
+
+.yl-mp-bridge__steps > li::before {
+    content: counter(yl-mp-step);
+    flex: 0 0 1.6rem;
+    width: 1.6rem;
+    height: 1.6rem;
+    border-radius: 999px;
+    background: var(--yl-orange-500, #ee7e2d);
+    color: #fff;
+    font-size: .82rem;
+    font-weight: 700;
+    line-height: 1.6rem;
+    text-align: center;
+}
