@@ -184,6 +184,12 @@ jobs:
       - name: 运行 Web 地图真实行为测试
         run: node --test tests/*.test.js tests/js/*.test.mjs
 
+      - name: 验证小程序授权与分页兼容
+        run: node --test miniprogram/tests/*.test.js
+
+      - name: 验证公开发现路由
+        run: node --test cloudflare/ai-discovery-worker/tests/index.test.mjs
+
   release-proof:
     name: 可发布提交证明
     needs:

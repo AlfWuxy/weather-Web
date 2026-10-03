@@ -25,6 +25,8 @@ from core.weather import (
 from core.db_models import Community, ForecastCache
 from core.extensions import db
 from core.usage import WEB_CLIENT_PILOT_EVENT_TYPES, log_usage_event
+from core.input_limits import validate_event_meta
+from core.resource_budget import ResourceLimitError, ResourceBudgetUnavailable
 from utils.parsers import parse_date, parse_int, safe_json_loads
 from utils.error_handlers import handle_api_exception
 from utils.validators import sanitize_input
@@ -756,6 +758,10 @@ def api_forecast_daily():
 
 def _api_community_risk_map_v2():
     """获取社区风险地图数据（改进版）"""
+    from core.community_access import patient_community_scope
+    community_scope = patient_community_scope()
+    if community_scope == ():
+        return jsonify({'success': False, 'error': 'forbidden'}), 403
     try:
         from services.community_risk_service import get_community_service
         from services.community_risk_cache import (
@@ -815,6 +821,7 @@ def _api_community_risk_map_v2():
             weather_data=None if screening_only else weather_data,
             ranking_path='exploratory_only' if screening_only else 'auto',
             input_signature=ranking_input_signature,
+            community_scope=community_scope,
         )
 
         def _build_result():
@@ -835,7 +842,8 @@ def _api_community_risk_map_v2():
                 weather_data,
                 target_date=target_date,
                 window_days=window_days,
-                disease_filter=disease_filter
+                disease_filter=disease_filter,
+                **({'community_scope': community_scope} if community_scope is not None else {})
             )
 
         result, cache_hit = get_or_build_community_risk_result(cache_params, _build_result)
@@ -1078,7 +1086,7 @@ def _api_ai_ask():
             retries=current_app.config.get('AI_REQUEST_RETRIES', 1),
             max_tokens=current_app.config.get('AI_MAX_TOKENS', 800)
         )
-        answer = service.ask(question, model)
+        answer = service.ask(question, model, user_id=current_user.id)
         triage = None
         if current_app.config.get('FEATURE_EMERGENCY_TRIAGE'):
             from services.emergency_triage import triage_symptoms
@@ -1097,6 +1105,10 @@ def _api_ai_ask():
         if triage is not None:
             payload['triage'] = triage
         return jsonify(payload)
+    except ResourceLimitError:
+        return jsonify({'success': False, 'error': '服务额度已用完，请稍后再试'}), 429
+    except ResourceBudgetUnavailable:
+        return jsonify({'success': False, 'error': '服务暂不可用'}), 503
     except API_EXCEPTIONS as exc:
         return handle_api_exception(exc, "AI问答失败", log=logger)
 
@@ -1141,6 +1153,10 @@ def api_chronic_rules_version():
 
 def _api_comprehensive_alert():
     """获取综合健康预警"""
+    from core.community_access import patient_community_scope
+    community_scope = patient_community_scope()
+    if community_scope == ():
+        return jsonify({'success': False, 'error': 'forbidden'}), 403
     try:
         from services.dlnm_risk_service import get_dlnm_service
         from services.forecast_service import get_forecast_service
@@ -1202,7 +1218,10 @@ def _api_comprehensive_alert():
         )
 
         # 社区风险
-        community_result = community_service.generate_community_risk_map(current_weather)
+        community_result = community_service.generate_community_risk_map(
+            current_weather,
+            **({'community_scope': community_scope} if community_scope is not None else {})
+        )
 
         # RR 与门诊高负荷天数尚未完成预警校准，不生成模型红橙黄等级。
         alert_level = 'unavailable'
@@ -1254,7 +1273,10 @@ def _api_usage_event():
         raw_meta = payload.get('meta')
         if raw_meta is not None and not isinstance(raw_meta, dict):
             return jsonify({'success': False, 'error': 'invalid_meta'}), 400
-        meta = raw_meta
+        try:
+            meta = validate_event_meta(raw_meta)
+        except ValueError as exc:
+            return jsonify({'success': False, 'error': str(exc)}), 400
 
         event = log_usage_event(
             event_type,

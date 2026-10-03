@@ -21,6 +21,13 @@ def test_location_resolver_amap_mock_and_cache(app, db_session, monkeypatch):
     class FakeResp:
         status_code = 200
 
+        def iter_content(self, chunk_size):
+            import json
+            yield json.dumps(self.json()).encode()
+
+        def close(self):
+            pass
+
         def json(self):
             return {
                 "status": "1",
@@ -34,7 +41,7 @@ def test_location_resolver_amap_mock_and_cache(app, db_session, monkeypatch):
 
     calls = {"n": 0, "keys": []}
 
-    def fake_get(url, params=None, timeout=None):
+    def fake_get(url, params=None, timeout=None, stream=None):
         calls["n"] += 1
         calls["keys"].append((params or {}).get("key"))
         return FakeResp()

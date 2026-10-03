@@ -322,7 +322,7 @@ test('老人资料前台保存成功后返回家庭页会重新读取当前账�
       postCalls += 1;
       return { pair_id: 9 };
     }
-    if (options.method === 'GET' && options.path === '/mp/api/v1/elders') {
+    if (options.method === 'GET' && options.path.split('?')[0] === '/mp/api/v1/elders') {
       getCalls += 1;
       return {
         items: [{ pair_id: 9, member: { name: '外婆', relation: '祖母', age: 76 } }],

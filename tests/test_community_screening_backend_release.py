@@ -299,7 +299,7 @@ def test_service_input_signature_changes_with_display_coordinates(
 
 
 def test_api_serves_screening_without_weather_and_valid_empty_result_is_503(
-    authenticated_client,
+    admin_client,
     monkeypatch,
 ):
     from services.community_risk_cache import clear_local_community_risk_cache
@@ -330,12 +330,12 @@ def test_api_serves_screening_without_weather_and_valid_empty_result_is_503(
     headers = {"X-CSRF-Token": "test-csrf-token"}
     request_json = {"analysis_date": "2026-08-29", "window_days": 30, "city": "都昌"}
 
-    first = authenticated_client.post(
+    first = admin_client.post(
         "/api/community/risk-map-v2",
         json=request_json,
         headers=headers,
     )
-    second = authenticated_client.post(
+    second = admin_client.post(
         "/api/community/risk-map-v2",
         json=request_json,
         headers=headers,
@@ -364,7 +364,7 @@ def test_api_serves_screening_without_weather_and_valid_empty_result_is_503(
         "services.community_risk_service.get_community_service",
         lambda: EmptyFormalService(),
     )
-    unavailable = authenticated_client.post(
+    unavailable = admin_client.post(
         "/api/community/risk-map-v2",
         json=request_json,
         headers=headers,
@@ -376,7 +376,7 @@ def test_api_serves_screening_without_weather_and_valid_empty_result_is_503(
 
 
 def test_real_api_with_valid_weather_and_empty_community_table_returns_sixteen_rows(
-    authenticated_client,
+    admin_client,
     monkeypatch,
 ):
     """有效天气也不能让空 Community 表提前截断静态筛查。"""
@@ -390,7 +390,7 @@ def test_real_api_with_valid_weather_and_empty_community_table_returns_sixteen_r
     )
     monkeypatch.setattr(risk_module, "_community_service", None)
 
-    response = authenticated_client.post(
+    response = admin_client.post(
         "/api/community/risk-map-v2",
         json={"analysis_date": "2026-08-29", "window_days": 30, "city": "都昌"},
         headers={"X-CSRF-Token": "test-csrf-token"},

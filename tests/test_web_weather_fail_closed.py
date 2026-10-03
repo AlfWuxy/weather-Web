@@ -66,14 +66,12 @@ def _create_pair(db_session, user_id, short_code='90909091'):
     return pair
 
 
-def _patch_caregiver_location(monkeypatch):
-    monkeypatch.setattr(
-        'services.user.caregiver_service.resolve_location',
-        lambda _label: {
-            'location_code': '101240201',
-            'display_name': '都昌',
-        },
-    )
+def _patch_caregiver_location(monkeypatch, owner_id):
+    def resolve_for_owner(_label, *, user_id):
+        assert user_id == owner_id
+        return {'location_code': '101240201', 'display_name': '都昌'}
+
+    monkeypatch.setattr('services.user.caregiver_service.resolve_location', resolve_for_owner)
 
 
 def test_heat_weather_guard_rejects_mock_and_missing_critical_fields():
@@ -102,7 +100,7 @@ def test_caregiver_dashboard_does_not_calculate_mock_weather(
     user = _create_user(db_session, 'caregiver_mock_guard', 'caregiver')
     pair = _create_pair(db_session, user.id)
     _login_as(client, user.id)
-    _patch_caregiver_location(monkeypatch)
+    _patch_caregiver_location(monkeypatch, user.id)
     monkeypatch.setattr(
         'services.user.caregiver_service.get_weather_with_cache',
         lambda _location: (dict(MOCK_WEATHER), False),
@@ -400,7 +398,7 @@ def test_real_qweather_still_generates_caregiver_and_community_risk(
     db_session.add(Community(name='都昌', population=800, elderly_ratio=0.35))
     db_session.commit()
     _login_as(client, user.id)
-    _patch_caregiver_location(monkeypatch)
+    _patch_caregiver_location(monkeypatch, user.id)
     monkeypatch.setattr(
         'services.user.caregiver_service.get_weather_with_cache',
         lambda _location: (dict(REAL_WEATHER), False),

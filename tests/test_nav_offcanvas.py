@@ -132,7 +132,7 @@ def test_mobile_navigation_keeps_community_risk_available(client, db_session, ro
 
     body = client.get('/').get_data(as_text=True)
     drawer = body.split('id="appNavDrawer"', 1)[1]
-    expected_path = '/risk' if role == 'guest' else '/community-risk'
+    expected_path = '/community-risk' if role in ('community', 'admin') else '/risk'
     assert f'href="{expected_path}" data-nav-key="community-risk"' in drawer
     if role == 'guest':
         assert 'href="/community-risk" data-nav-key="community-risk"' not in drawer
@@ -141,8 +141,8 @@ def test_mobile_navigation_keeps_community_risk_available(client, db_session, ro
 @pytest.mark.parametrize(
     ('role', 'family_target', 'community_target', 'community_label'),
     [
-        ('user', '/pairs', '/community-risk', '查看社区风险'),
-        ('caregiver', '/pairs', '/community-risk', '查看社区风险'),
+        ('user', '/pairs', '/risk', '查看公开风险'),
+        ('caregiver', '/pairs', '/risk', '查看公开风险'),
         ('community', '/entry', '/community', '进入社区工作台'),
         ('admin', '/pairs', '/community', '进入社区工作台'),
     ],
@@ -228,8 +228,8 @@ def test_care_destination_is_role_aware(client, db_session, role, destination):
 @pytest.mark.parametrize(
     ('role', 'expected_target', 'expected_label'),
     [
-        ('user', '/community-risk', '查看社区风险'),
-        ('caregiver', '/community-risk', '查看社区风险'),
+        ('user', '/risk', '查看公开风险'),
+        ('caregiver', '/risk', '查看公开风险'),
         ('community', '/community', '进入社区看板'),
         ('admin', '/community', '进入社区看板'),
     ],

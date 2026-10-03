@@ -98,6 +98,7 @@ def build_community_risk_cache_params(
     weather_data=None,
     ranking_path='auto',
     input_signature='',
+    community_scope=None,
 ):
     """统一生成 API 与预计算任务共享的社区风险缓存参数。"""
     if hasattr(analysis_date, 'isoformat'):
@@ -109,6 +110,8 @@ def build_community_risk_cache_params(
 
     return {
         'ranking_contract': RANKING_METHOD_VERSION,
+        'patient_access_version': 1,
+        'community_scope': None if community_scope is None else sorted(set(community_scope)),
         'analysis_date': analysis_date,
         'window_days': _normalize_window_days(window_days),
         'disease_filter': _normalize_disease_filter(disease_filter),

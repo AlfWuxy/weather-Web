@@ -30,6 +30,7 @@ from services.care_action_service import (
 )
 from services.heat_action_service import HeatActionService
 from services.location_resolver import resolve_location
+from core.resource_budget import ResourceLimitError, setting
 from services.user.owner_write_guard import OwnerInactiveError, owner_write_guard
 from utils.audit_log import log_security_event
 from utils.database import atomic_transaction
@@ -300,10 +301,21 @@ def _build_active_pair_action_links(owner_user_id, pair_ids):
 def _build_pair_management_context(caregiver_mode=False):
     created_pair = _load_created_pair()
     status_date = today_local()
+    page_size = min(50, max(1, setting("PAIR_LIST_PAGE_SIZE", 20)))
+    page = max(1, min(request.args.get("page", 1, type=int), 10000))
     pairs = Pair.query.filter_by(
         caregiver_id=current_user.id,
         status='active',
-    ).order_by(Pair.created_at.desc()).all()
+    ).order_by(Pair.created_at.desc(), Pair.id.desc()).offset((page - 1) * page_size).limit(page_size + 1).all()
+    has_more = len(pairs) > page_size
+    pairs = pairs[:page_size]
+    # 在 owner/token 写入前解析地点，跨请求预算使用独立短事务。
+    resolved_by_label = {}
+    for pair in pairs:
+        label = (pair.location_query or pair.community_code or '').strip()
+        if label not in resolved_by_label:
+            resolved_by_label[label] = resolve_location(label, user_id=current_user.id)
+
     communities = Community.query.order_by(Community.name).all()
     family_members = []
     try:
@@ -334,7 +346,7 @@ def _build_pair_management_context(caregiver_mode=False):
     if pairs:
         for pair in pairs:
             label = (pair.location_query or pair.community_code or '').strip()
-            resolved = resolve_location(label)
+            resolved = resolved_by_label[label]
             code = resolved.get('location_code') or ''
             if not code:
                 continue
@@ -344,9 +356,9 @@ def _build_pair_management_context(caregiver_mode=False):
             try:
                 weather_data, _ = get_weather_with_cache(code)
                 weather_by_code[code] = weather_data or {}
-            except Exception:
+            except Exception as exc:
                 weather_by_code[code] = {}
-                logger.warning("加载天气缓存失败，code=%s", code, exc_info=True)
+                logger.warning("加载天气缓存失败，异常类型=%s", type(exc).__name__)
 
     pair_cards = []
     now = utcnow()
@@ -372,7 +384,7 @@ def _build_pair_management_context(caregiver_mode=False):
         status = status_map.get(pair.id)
 
         label = (pair.location_query or pair.community_code or '').strip()
-        resolved = resolve_location(label)
+        resolved = resolved_by_label[label]
         code = resolved.get('location_code') or ''
         display_name = resolved.get('display_name') or label or code
         weather_data = weather_by_code.get(code, {}) if code else {}
@@ -480,6 +492,8 @@ def _build_pair_management_context(caregiver_mode=False):
         'status_date': status_date,
         'wxpusher_feature_enabled': wxpusher_feature_enabled,
         'push_channel_ready': push_channel_ready,
+        'pair_page': page,
+        'pair_has_more': has_more,
         'location_suggestions': _configured_location_suggestions(),
     }
 
@@ -521,15 +535,17 @@ def pair_management():
             member_id = None
         try:
             pair_id = _create_pair(location_query, member_id=member_id)
+        except ResourceLimitError as exc:
+            flash(str(exc), 'error')
+            return redirect(url_for('user.pair_management'))
         except OwnerInactiveError:
             flash('账号已失效，请重新登录。', 'error')
             return redirect(url_for('public.login'))
-        except Exception:
+        except Exception as exc:
             logger.warning(
-                "创建绑定失败(owner_user_id=%s location_len=%s)",
+                "创建绑定失败(owner_user_id=%s 异常类型=%s)",
                 getattr(current_user, 'id', None),
-                len(location_query),
-                exc_info=True,
+                type(exc).__name__,
             )
             flash('创建失败，请检查输入后重试。', 'error')
             return redirect(url_for('user.pair_management'))
@@ -573,15 +589,17 @@ def caregiver_pair_create():
         member_id = None
     try:
         pair_id = _create_pair(location_query, member_id=member_id)
+    except ResourceLimitError as exc:
+        flash(str(exc), 'error')
+        return redirect(url_for('user.pair_management'))
     except OwnerInactiveError:
         flash('账号已失效，请重新登录。', 'error')
         return redirect(url_for('public.login'))
-    except Exception:
+    except Exception as exc:
         logger.warning(
-            "照护端创建绑定失败(owner_user_id=%s location_len=%s)",
+            "照护端创建绑定失败(owner_user_id=%s 异常类型=%s)",
             getattr(current_user, 'id', None),
-            len(location_query),
-            exc_info=True,
+            type(exc).__name__,
         )
         flash('创建失败，请检查输入后重试。', 'error')
         return redirect(url_for('user.pair_management'))

@@ -30,6 +30,7 @@ require.cache[careSessionPath] = {
     authApi: (options) => authApiImpl(options),
     finishHealthMutation: () => {},
     getSnapshot: () => snapshotImpl(),
+    guardHealthSensitivePage: async (_page, load) => load(),
     requireToken: () => 'session-token',
     resumeHealthMutation: async () => ({ resumed: false, ok: false }),
     suspendHealthMutation: () => false,
@@ -141,7 +142,7 @@ test('健康日记首错持久呈现，刷新失败保留上次成功数据且�
 
   authApiImpl = async (options) => {
     requests.push(options);
-    if (options.path === '/mp/api/v1/elders') {
+    if (options.path.split('?')[0] === '/mp/api/v1/elders') {
       return { items: [{ pair_id: 7, member: { name: '奶奶' } }] };
     }
     return { items: [{ id: 12, entry_date: '2026-07-18', severity: '轻微', symptoms: '状态正常' }] };
@@ -186,7 +187,7 @@ test('用药记录首错、较早数据和删除后刷新失败均保持真实�
   assert.match(page.data.loadError, /重试/);
 
   authApiImpl = async (options) => {
-    if (options.path === '/mp/api/v1/elders') {
+    if (options.path.split('?')[0] === '/mp/api/v1/elders') {
       return { items: [{ pair_id: 7, member: { name: '爷爷' } }] };
     }
     return {
@@ -320,4 +321,38 @@ test('家庭照护的查看预警跳转不再携带老人标识', () => {
   const warningButton = view.match(/<button[^>]*bindtap="goAlerts"[^>]*>/);
   assert.ok(warningButton);
   assert.doesNotMatch(warningButton[0], /data-pair-id/);
+});
+
+test('家庭照护分页保留历史老人，失败不前移游标且旧页面结果不回写', async () => {
+  const page = makePage(loadPage('../pages/elders/index'));
+  const paths = [];
+  let fail = false;
+  snapshotImpl = async () => ({});
+  authApiImpl = async (options) => {
+    paths.push(options.path);
+    assert.equal(options.includeMeta, true);
+    if (fail) throw new Error('offline');
+    const next = options.path.includes('page=2');
+    return { data: [{ pair_id: next ? 2 : 1, member: { name: '家人', age: 70 } }], page: next ? 2 : 1, has_more: !next };
+  };
+  await page.loadCareHome();
+  assert.equal(page.data.eldersHasMore, true);
+  fail = true;
+  await page.loadMoreElders();
+  assert.equal(page.data.eldersPage, 1);
+  assert.equal(page.data.elders.length, 1);
+  fail = false;
+  await page.loadMoreElders();
+  assert.equal(page.data.elders.length, 2);
+  assert.equal(page.data.eldersPage, 2);
+  assert.equal(page.data.eldersHasMore, false);
+  assert.deepEqual(paths, ['/mp/api/v1/elders', '/mp/api/v1/elders?page=2', '/mp/api/v1/elders?page=2']);
+  const pending = deferred();
+  authApiImpl = () => pending.promise;
+  page.data.eldersHasMore = true;
+  const loading = page.loadMoreElders();
+  page.onHide();
+  pending.resolve({ data: [{ pair_id: 3 }], page: 3, has_more: false });
+  await loading;
+  assert.equal(page.data.elders.length, 2);
 });

@@ -91,7 +91,7 @@ Page({
     });
     try {
       const [elderData, snapshot] = await Promise.all([
-        authApi({ method: 'GET', path: '/mp/api/v1/elders' }),
+        authApi({ method: 'GET', path: `/mp/api/v1/elders?pair_id=${pairId}` }),
         getSnapshot().catch(() => ({})),
       ]);
       const item = normalizeList(elderData, ['items', 'elders'])

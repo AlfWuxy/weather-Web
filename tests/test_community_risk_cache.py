@@ -21,11 +21,11 @@ def _trusted_weather(temperature=30.0, **overrides):
     return payload
 
 
-def test_community_risk_api_reuses_cached_result(authenticated_client, monkeypatch):
+def test_community_risk_api_reuses_cached_result(admin_client, monkeypatch):
     from services.community_risk_cache import clear_local_community_risk_cache
 
     clear_local_community_risk_cache()
-    app = authenticated_client.application
+    app = admin_client.application
     app.config['COMMUNITY_RISK_CACHE_TTL_SECONDS'] = 600
 
     calls = {'risk': 0}
@@ -59,8 +59,8 @@ def test_community_risk_api_reuses_cached_result(authenticated_client, monkeypat
     }
     headers = {'X-CSRF-Token': 'test-csrf-token'}
 
-    response1 = authenticated_client.post('/api/community/risk-map-v2', json=payload, headers=headers)
-    response2 = authenticated_client.post('/api/community/risk-map-v2', json=payload, headers=headers)
+    response1 = admin_client.post('/api/community/risk-map-v2', json=payload, headers=headers)
+    response2 = admin_client.post('/api/community/risk-map-v2', json=payload, headers=headers)
 
     assert response1.status_code == 200
     assert response2.status_code == 200
@@ -71,7 +71,7 @@ def test_community_risk_api_reuses_cached_result(authenticated_client, monkeypat
     clear_local_community_risk_cache()
 
 
-def test_community_risk_api_recomputes_for_different_payload(authenticated_client, monkeypatch):
+def test_community_risk_api_recomputes_for_different_payload(admin_client, monkeypatch):
     from services.community_risk_cache import clear_local_community_risk_cache
 
     clear_local_community_risk_cache()
@@ -103,8 +103,8 @@ def test_community_risk_api_recomputes_for_different_payload(authenticated_clien
     payload_a = {'analysis_date': '2025-10-30', 'window_days': 30, 'disease': '呼吸系统', 'city': '都昌'}
     payload_b = {'analysis_date': '2025-10-30', 'window_days': 30, 'disease': '循环系统', 'city': '都昌'}
 
-    response_a = authenticated_client.post('/api/community/risk-map-v2', json=payload_a, headers=headers)
-    response_b = authenticated_client.post('/api/community/risk-map-v2', json=payload_b, headers=headers)
+    response_a = admin_client.post('/api/community/risk-map-v2', json=payload_a, headers=headers)
+    response_b = admin_client.post('/api/community/risk-map-v2', json=payload_b, headers=headers)
 
     assert response_a.status_code == 200
     assert response_b.status_code == 200
@@ -113,12 +113,12 @@ def test_community_risk_api_recomputes_for_different_payload(authenticated_clien
     clear_local_community_risk_cache()
 
 
-def test_precompute_cache_is_reused_by_risk_map_api(authenticated_client, monkeypatch):
+def test_precompute_cache_is_reused_by_risk_map_api(admin_client, monkeypatch):
     from services.community_risk_cache import clear_local_community_risk_cache
     from services.pipelines.precompute_community_risk import precompute_community_risk
 
     clear_local_community_risk_cache()
-    app = authenticated_client.application
+    app = admin_client.application
     app.config['COMMUNITY_RISK_CACHE_TTL_SECONDS'] = 600
 
     calls = {'risk': 0}
@@ -155,7 +155,7 @@ def test_precompute_cache_is_reused_by_risk_map_api(authenticated_client, monkey
         analysis_date=date(2025, 10, 30),
     )
 
-    response = authenticated_client.post(
+    response = admin_client.post(
         '/api/community/risk-map-v2',
         json={'analysis_date': '2025-10-30', 'window_days': 30, 'disease': '呼吸系统', 'city': '都昌'},
         headers={'X-CSRF-Token': 'test-csrf-token'}
@@ -168,7 +168,7 @@ def test_precompute_cache_is_reused_by_risk_map_api(authenticated_client, monkey
     clear_local_community_risk_cache()
 
 
-def test_community_risk_api_recomputes_for_different_canonical_lag_temperatures(authenticated_client, monkeypatch):
+def test_community_risk_api_recomputes_for_different_canonical_lag_temperatures(admin_client, monkeypatch):
     from services.community_risk_cache import clear_local_community_risk_cache
 
     clear_local_community_risk_cache()
@@ -207,12 +207,12 @@ def test_community_risk_api_recomputes_for_different_canonical_lag_temperatures(
         'city': '都昌',
     }
 
-    response_a = authenticated_client.post(
+    response_a = admin_client.post(
         '/api/community/risk-map-v2',
         json=base_payload,
         headers=headers
     )
-    response_b = authenticated_client.post(
+    response_b = admin_client.post(
         '/api/community/risk-map-v2',
         json=base_payload,
         headers=headers
@@ -225,8 +225,8 @@ def test_community_risk_api_recomputes_for_different_canonical_lag_temperatures(
     clear_local_community_risk_cache()
 
 
-def test_community_risk_api_rejects_client_weather(authenticated_client):
-    response = authenticated_client.post(
+def test_community_risk_api_rejects_client_weather(admin_client):
+    response = admin_client.post(
         '/api/community/risk-map-v2',
         json={
             'analysis_date': '2025-10-30',
@@ -243,7 +243,7 @@ def test_community_risk_api_rejects_client_weather(authenticated_client):
 
 
 def test_community_risk_api_serves_static_screening_for_mock_weather(
-    authenticated_client,
+    admin_client,
     monkeypatch,
 ):
     from services.community_risk_cache import clear_local_community_risk_cache
@@ -254,7 +254,7 @@ def test_community_risk_api_serves_static_screening_for_mock_weather(
         lambda city: ({'temperature': 37, 'humidity': 70, 'aqi': 90, 'is_mock': True, 'data_source': 'Demo'}, False),
     )
 
-    response = authenticated_client.post(
+    response = admin_client.post(
         '/api/community/risk-map-v2',
         json={'analysis_date': '2025-10-30', 'window_days': 30, 'disease': '', 'city': '都昌'},
         headers={'X-CSRF-Token': 'test-csrf-token'}
@@ -275,7 +275,7 @@ def test_community_risk_api_serves_static_screening_for_mock_weather(
 
 
 def test_community_risk_api_keeps_503_when_formal_service_returns_none(
-    authenticated_client,
+    admin_client,
     monkeypatch,
 ):
     from services.community_risk_cache import clear_local_community_risk_cache
@@ -304,7 +304,7 @@ def test_community_risk_api_keeps_503_when_formal_service_returns_none(
         lambda: UnavailableCommunityService(),
     )
 
-    response = authenticated_client.post(
+    response = admin_client.post(
         '/api/community/risk-map-v2',
         json={'analysis_date': '2025-10-30', 'window_days': 30, 'disease': '', 'city': '都昌'},
         headers={'X-CSRF-Token': 'test-csrf-token'},

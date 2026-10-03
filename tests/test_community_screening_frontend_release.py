@@ -24,8 +24,8 @@ def _source_between(source: str, start: str, end: str) -> str:
     return source[start_index:end_index]
 
 
-def test_pending_shell_hides_both_tracks_and_has_no_clinical_leak(authenticated_client):
-    response = authenticated_client.get("/community-risk")
+def test_pending_shell_hides_both_tracks_and_has_no_clinical_leak(admin_client):
+    response = admin_client.get("/community-risk")
     assert response.status_code == 200
     html = response.get_data(as_text=True)
 
@@ -69,8 +69,8 @@ def test_pending_shell_hides_both_tracks_and_has_no_clinical_leak(authenticated_
     assert "no-loading" in refresh_button.group(0)
 
 
-def test_screening_mode_contract_and_amap_independent_startup(authenticated_client):
-    html = authenticated_client.get("/community-risk").get_data(as_text=True)
+def test_screening_mode_contract_and_amap_independent_startup(admin_client):
+    html = admin_client.get("/community-risk").get_data(as_text=True)
     javascript = "\n".join(
         re.findall(r"<script(?:\s[^>]*)?>(.*?)</script>", html, flags=re.DOTALL)
     )
@@ -121,8 +121,8 @@ def test_screening_mode_contract_and_amap_independent_startup(authenticated_clie
     assert "Q4：相对脆弱性较高" not in html
 
 
-def test_screening_metrics_have_visible_explanations_and_metric_details(authenticated_client):
-    html = authenticated_client.get("/community-risk").get_data(as_text=True)
+def test_screening_metrics_have_visible_explanations_and_metric_details(admin_client):
+    html = admin_client.get("/community-risk").get_data(as_text=True)
 
     assert "这些指标怎么读" in html
     assert '<h3 class="h6 mb-0"><i class="bi bi-info-circle"></i> 这些指标怎么读</h3>' in html

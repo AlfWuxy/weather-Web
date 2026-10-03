@@ -35,6 +35,7 @@ from services.push.dispatch import (
     normalize_delivery_attempt_count,
 )
 from utils.parsers import parse_date
+from utils.csv_export import spreadsheet_cell
 from utils.validators import sanitize_input
 
 logger = logging.getLogger(__name__)
@@ -3552,7 +3553,7 @@ def pilot_export_csv():
     writer = csv.writer(out)
     writer.writerow(['local_date', 'event_type', 'source', 'event_count'])
     for (local_date, event_type, source), count in sorted(buckets.items()):
-        writer.writerow([local_date, event_type, source, count])
+        writer.writerow([spreadsheet_cell(value) for value in [local_date, event_type, source, count]])
 
     data = out.getvalue().encode('utf-8-sig')  # Excel-friendly
     return send_file(

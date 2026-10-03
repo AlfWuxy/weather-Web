@@ -60,6 +60,8 @@ from core.weather import (
     normalize_health_model_weather,
 )
 from services.location_resolver import resolve_location
+from core.resource_budget import ResourceLimitError, setting
+from core.input_limits import validate_event_meta
 from services.warning_service import get_qweather_warnings
 from services.user._common import _create_pair_record
 from services.care_action_service import (
@@ -99,7 +101,6 @@ from utils.parsers import safe_json_loads
 from utils.validators import sanitize_input
 
 bp = Blueprint("mp_api", __name__, url_prefix="/mp/api/v1")
-MP_EVENT_META_MAX_CHARS = 2048
 MAX_PAGE_SIZE = 50
 ACQUISITION_SOURCE_FAMILY_SHARE = "family_share"
 CREDENTIAL_LAST_USED_INTERVAL = timedelta(minutes=30)
@@ -397,8 +398,11 @@ def require_api_token(fn):
                 db.session.rollback()
                 return _error("unauthorized", "账号已失效或已注销。", 401)
         g.api_user = active_user
+        # 撤销自身凭证不读取或更改业务数据，无需重新同意隐私条款或授予写权限。
+        self_revocation = request.endpoint == "mp_api.wechat_logout"
         if (
             g.auth_kind == "api_token"
+            and not self_revocation
             and g.api_token.privacy_consent_version != current_privacy_version()
         ):
             return _error(
@@ -409,6 +413,7 @@ def require_api_token(fn):
             )
         if (
             g.auth_kind == "api_token"
+            and not self_revocation
             and request.method in {"POST", "PUT", "PATCH", "DELETE"}
             and not api_token_has_scope(g.api_token, "miniprogram:write")
         ):
@@ -792,10 +797,8 @@ def link_account():
 @limiter.limit(lambda: current_app.config.get("RATE_LIMIT_MP_WRITE", "30 per minute"), key_func=_mp_rate_limit_key)
 @require_api_token
 def wechat_logout():
-    if getattr(g, "auth_kind", None) != "miniprogram_session":
-        return _error("miniprogram_session_required", "该操作仅支持微信小程序会话。", 403)
-    session_record = g.mp_session
-    session_record.revoked_at = utcnow()
+    credential = g.mp_session if g.auth_kind == "miniprogram_session" else g.api_token
+    credential.revoked_at = utcnow()
     db.session.commit()
     return _success({"revoked": True})
 
@@ -1385,7 +1388,20 @@ def me_delete():
 @require_api_scope("miniprogram:sensitive")
 @require_health_sensitive_consent
 def elders_list():
-    pairs = Pair.query.filter_by(caregiver_id=g.api_user_id, status="active").order_by(Pair.created_at.desc()).all()
+    page = max(1, min(request.args.get("page", 1, type=int), 10000))
+    page_size = min(50, max(1, setting("PAIR_LIST_PAGE_SIZE", 20)))
+    query = Pair.query.filter_by(caregiver_id=g.api_user_id, status="active")
+    if "pair_id" in request.args:
+        pair_id = request.args.get("pair_id", type=int)
+        if pair_id is None or not 0 < pair_id <= 9223372036854775807:
+            return _error("invalid_pair_id", "家人信息无效。", 400)
+        # 详情读取仍受同一 owner、active、scope 与健康同意边界约束。
+        query = query.filter(Pair.id == pair_id)
+        page = 1
+    pairs = query.order_by(Pair.created_at.desc(), Pair.id.desc()).offset(
+        (page - 1) * page_size).limit(page_size + 1).all()
+    has_more = len(pairs) > page_size
+    pairs = pairs[:page_size]
     status_date = today_local()
     pair_ids = [pair.id for pair in pairs]
     statuses = (
@@ -1487,7 +1503,7 @@ def elders_list():
             }
         )
 
-    return jsonify({"success": True, "data": result})
+    return jsonify({"success": True, "data": result, "page": page, "has_more": has_more})
 
 
 @bp.route("/elders", methods=["POST"], endpoint="elders_create")
@@ -1538,6 +1554,9 @@ def elders_create():
             flush=True
         )
         db.session.commit()
+    except ResourceLimitError:
+        db.session.rollback()
+        return _error("pair_limit_reached", "照护绑定数量已达到上限。", 429)
     except Exception:
         db.session.rollback()
         return jsonify({"success": False, "error": "create_failed"}), 500
@@ -2208,14 +2227,10 @@ def events():
     raw_meta = payload.get("meta")
     if raw_meta is not None and not isinstance(raw_meta, dict):
         return jsonify({"success": False, "error": "invalid_meta"}), 400
-    meta = raw_meta
-    if meta is not None:
-        try:
-            meta_json = json.dumps(meta, ensure_ascii=False)
-        except (TypeError, ValueError):
-            return jsonify({"success": False, "error": "invalid_meta"}), 400
-        if len(meta_json) > MP_EVENT_META_MAX_CHARS:
-            return jsonify({"success": False, "error": "meta_too_large"}), 400
+    try:
+        meta = validate_event_meta(raw_meta)
+    except ValueError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
 
     event = log_usage_event(
         event_type,

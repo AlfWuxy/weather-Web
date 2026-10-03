@@ -14,7 +14,7 @@ from sqlalchemy.schema import CreateIndex
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
-HEAD_REVISION = "0033_institution_data_pilot"
+HEAD_REVISION = "0034_security_budgets"
 PREVIOUS_REVISION = "0026_cooling_coordinate_verify"
 
 

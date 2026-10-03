@@ -923,7 +923,6 @@ def test_read_only_api_token_cannot_reach_any_authenticated_write_route(
     )
     headers = {"Authorization": f"Bearer {plain}"}
     write_routes = (
-        ("post", "/mp/api/v1/auth/logout"),
         ("delete", "/mp/api/v1/health-consent"),
         ("patch", "/mp/api/v1/me"),
         ("delete", "/mp/api/v1/me"),

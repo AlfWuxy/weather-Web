@@ -1953,8 +1953,9 @@ def test_deploy_script_requires_https_public_base_url():
     content = _load_deploy_script()
 
     assert 'ALLOW_INSECURE_PUBLIC_BASE_URL' in content
-    assert 'PUBLIC_BASE_URL=https://yilaoweather.org' in content
-    assert 'remote_env_update "PUBLIC_BASE_URL" "https://yilaoweather.org" "always"' in content
+    assert 'PUBLIC_DEPLOY_ORIGIN="https://yilaoweather.org"' in content
+    assert 'PUBLIC_BASE_URL=$PUBLIC_DEPLOY_ORIGIN' in content
+    assert 'remote_env_update "PUBLIC_BASE_URL" "$PUBLIC_DEPLOY_ORIGIN" "always"' in content
     assert 'remote_env_update "ALLOW_INSECURE_PUBLIC_BASE_URL" "" "always"' in content
     assert 'DEFAULT_PUBLIC_BASE_URL="http://$SERVER:5000"' not in content
     assert 'scripts/validate_release_env.py --file $STAGED_ENV_FILE' in content
@@ -2320,7 +2321,7 @@ def test_qweather_jwt_private_key_source_is_local_only_and_uses_file_stdin():
     assert 'remote_exec_with_file_stdin' in runner
     assert '"$LOCAL_QWEATHER_JWT_PRIVATE_KEY_SNAPSHOT"' in runner
     assert 'remote_exec_with_file_stdin "$LOCAL_QWEATHER_JWT_PRIVATE_KEY_SOURCE"' not in content
-    assert 'ssh $SSH_OPTS "$USER@$SERVER" "$remote_command" < "$local_file"' in content
+    assert 'ssh "${SSH_ARGS[@]}" "$USER@$SERVER" "$remote_command" < "$local_file"' in content
     assert 'QWEATHER_JWT_PRIVATE_KEY_PATH 必须位于 DEPLOY_PROJECT_DIR/private/' in content
     assert 'QWEATHER_JWT_PRIVATE_KEY_PATH 必须是 DEPLOY_PROJECT_DIR/private/ 下的直接文件' in content
 
@@ -3295,6 +3296,9 @@ def test_explicit_web_backend_mode_reaches_remote_without_wechat_form(
         fake_bin / 'ssh',
         '''#!/bin/bash
 set -euo pipefail
+for argument in "$@"; do
+    if [ "$argument" = -G ]; then exec "$REAL_DEPLOY_SSH" "$@"; fi
+done
 {
     printf 'COMMAND'
     printf ' <%s>' "$@"
@@ -3303,6 +3307,14 @@ set -euo pipefail
 exit 73
 ''',
     )
+    key = tmp_path / 'fixture-key'
+    subprocess.run(['ssh-keygen', '-q', '-t', 'ed25519', '-N', '', '-f', str(key)], check=True)
+    known = tmp_path / 'known_hosts'
+    known.write_text('fake.example ' + key.with_suffix('.pub').read_text())
+    known.chmod(0o600)
+    config = tmp_path / 'ssh-config'
+    config.write_text('Host *\n    IdentityAgent none\n')
+    config.chmod(0o600)
     missing_form = tmp_path / 'missing-wechat-release.env'
     deploy_env = tmp_path / 'web-backend.env'
     deploy_env.write_text(
@@ -3323,6 +3335,8 @@ WECHAT_RELEASE_FORM_FILE={missing_form}
     environment.update(
         {
             'ENV_FILE': str(deploy_env),
+            'REAL_DEPLOY_SSH': shutil.which('ssh'),
+            'SSH_OPTS': f'-F {config} -o UserKnownHostsFile={known}',
             'FAKE_DEPLOY_LOG': str(remote_log),
             'PATH': f"{fake_bin}:{environment['PATH']}",
         }

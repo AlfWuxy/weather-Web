@@ -432,6 +432,46 @@ test('设置页确认退出后不等待远端请求就清空私人数据', async
   await pendingLogout;
 });
 
+for (const pageName of ['settings', 'account']) {
+  for (const failureKind of ['sync', 'async', 'none']) {
+    test(`${pageName} 退出在 ${failureKind} 请求结果下如实提示撤销状态`, async (t) => {
+      const modals = [];
+      let clearCount = 0;
+      let relaunched = false;
+      const originalShowModal = global.wx.showModal;
+      const originalReLaunch = global.wx.reLaunch;
+      t.after(() => {
+        global.wx.showModal = originalShowModal;
+        global.wx.reLaunch = originalReLaunch;
+        clearImpl = () => {};
+        tokenApiImpl = async () => ({});
+      });
+      global.wx.showModal = (options) => { modals.push(options); };
+      global.wx.reLaunch = () => { relaunched = true; };
+      clearImpl = () => { clearCount += 1; };
+      tokenApiImpl = () => {
+        if (failureKind === 'sync') throw new Error('offline');
+        if (failureKind === 'async') return Promise.reject(new Error('offline'));
+        return Promise.resolve({ ok: true });
+      };
+      const page = makePage(loadPage(`../pages/${pageName}/index`));
+      page.logout.call(page);
+      const pending = modals[0].success({ confirm: true });
+      assert.equal(clearCount, 1);
+      assert.equal(relaunched, true);
+      await pending;
+      assert.equal(clearCount, 1);
+      if (failureKind === 'none') {
+        assert.equal(modals.length, 1);
+      } else {
+        assert.equal(modals.length, 2);
+        assert.match(modals[1].content, /服务端会话撤销未确认/);
+        assert.equal(modals[1].showCancel, false);
+      }
+    });
+  }
+}
+
 test('账号页确认退出后立即清理并跳转，远端失败不回滚', async (t) => {
   let modalSuccess;
   let rejectLogout;

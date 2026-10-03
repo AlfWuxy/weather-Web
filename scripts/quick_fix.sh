@@ -1,83 +1,16 @@
 #!/bin/bash
-# Quick fix script for critical issues
-
+# 补齐本地安全配置，不打印密钥或改变已有有效密钥。
+set -euo pipefail
+umask 077
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$ROOT_DIR"
-
-echo "======================================"
-echo "Starting quick fixes"
-echo "======================================"
-
-# 1. Ensure database directory exists
-echo ""
-echo "[1/4] Checking database directory..."
-mkdir -p instance
-
-if [ -f instance/health_weather.db ]; then
-    echo "✅ instance/health_weather.db exists"
+# 原子发布目录通过链接复用持久化状态，已有目标权限由部署流程管理。
+if [ -L instance ]; then
+    [ -d instance ] || { echo 'instance 链接目标不是有效目录' >&2; exit 1; }
 else
-    echo "⚠️  No existing database found"
+    mkdir -p instance
+    chmod 700 instance
 fi
-
-# 2. Configure PAIR_TOKEN_PEPPER
-echo ""
-echo "[2/4] Checking PAIR_TOKEN_PEPPER..."
-if [ ! -f .env ]; then
-    touch .env
-fi
-
-if ! grep -q "^PAIR_TOKEN_PEPPER=" .env 2>/dev/null; then
-    PEPPER=$(python3 -c 'import secrets; print(secrets.token_hex(32))')
-    echo "PAIR_TOKEN_PEPPER=$PEPPER" >> .env
-    echo "✅ PAIR_TOKEN_PEPPER configured"
-else
-    echo "✅ PAIR_TOKEN_PEPPER exists"
-fi
-
-# 3. Check SECRET_KEY
-echo ""
-echo "[3/4] Checking SECRET_KEY..."
-if ! grep -q "^SECRET_KEY=" .env 2>/dev/null; then
-    SECRET=$(python3 -c 'import secrets; print(secrets.token_hex(32))')
-    echo "SECRET_KEY=$SECRET" >> .env
-    echo "✅ SECRET_KEY configured"
-else
-    echo "✅ SECRET_KEY exists"
-fi
-
-echo ""
-echo "[4/4] Verifying security config..."
-python3 - <<'PY'
-from pathlib import Path
-
-def load_env(path):
-    data = {}
-    if not Path(path).exists():
-        return data
-    for line in Path(path).read_text(encoding='utf-8').splitlines():
-        line = line.strip()
-        if not line or line.startswith('#') or '=' not in line:
-            continue
-        key, val = line.split('=', 1)
-        data[key.strip()] = val.strip()
-    return data
-
-env = load_env('.env')
-issues = []
-for key in ('SECRET_KEY', 'PAIR_TOKEN_PEPPER'):
-    val = env.get(key, '')
-    if not val:
-        issues.append(f\"{key} missing\")
-    elif len(val) < 32:
-        issues.append(f\"{key} too short\")
-if issues:
-    print(\"⚠️  Config check issues:\", \", \".join(issues))
-else:
-    print(\"✅ Security config looks good\")
-PY
-
-echo ""
-echo "======================================"
-echo "Fixes completed!"
-echo "======================================"
+python3 "$SCRIPT_DIR/secure_environment.py" defaults .env
+echo '安全配置已补齐，环境文件权限为0600；已有密钥保持不变。'

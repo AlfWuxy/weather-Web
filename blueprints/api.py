@@ -245,7 +245,7 @@ def api_chronic_population():
 
 @bp.route('/api/v1/ai/ask', methods=['POST'], endpoint='api_v1_ai_ask')
 @login_required
-@limiter.limit(lambda: current_app.config.get('RATE_LIMIT_AI', '30 per hour'), key_func=rate_limit_key)
+@limiter.shared_limit(lambda: current_app.config.get('RATE_LIMIT_AI', '30 per hour'), scope='ai', key_func=rate_limit_key)
 def api_v1_ai_ask():
     """AI问答接口（v1）"""
     return api_service._api_ai_ask()

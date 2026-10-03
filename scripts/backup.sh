@@ -2,6 +2,7 @@
 # 数据库自动备份脚本
 # 每天保留30天的备份
 set -euo pipefail
+umask 077
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -123,7 +124,7 @@ parse_sqlite_path() {
         sqlite+pysqlite:///*) path="${uri#sqlite+pysqlite:///}" ;;
         sqlite:///*) path="${uri#sqlite:///}" ;;
         *)
-            echo "仅支持 sqlite 或 sqlite+pysqlite DATABASE_URI: $uri" >&2
+            echo "仅支持 sqlite 或 sqlite+pysqlite DATABASE_URI" >&2
             return 2
             ;;
     esac
@@ -149,6 +150,11 @@ parse_sqlite_path() {
         path="${parent_dir%/}/$file_name"
     fi
     printf '%s\n' "$path"
+}
+
+protect_backup_directory() {
+    # 所有归档须归执行账号所有；同时纠正已有宽权限，拒绝链接。
+    python3 "$SCRIPT_DIR/backup_privacy.py" "$BACKUP_DIR"
 }
 
 usage() {
@@ -261,6 +267,10 @@ main() {
         fi
     fi
 
+    if [ -e "$BACKUP_DIR" ] || [ -L "$BACKUP_DIR" ]; then
+        protect_backup_directory
+    fi
+
     if [ ! -f "$DB_FILE" ]; then
         if [ "$if_present" -eq 1 ]; then
             echo "未发现源数据库，按 --if-present 跳过备份: $DB_FILE"
@@ -279,14 +289,26 @@ main() {
         return 127
     }
 
-    # 创建备份目录
-    mkdir -p "$BACKUP_DIR"
+    protect_backup_directory
+    # 备份执行账号独占创建最终路径，保留runuser隔离暂存流程。
+    BACKUP_FILE="$(python3 - "$BACKUP_DIR" "$DATE" <<'PRIVATE_BACKUP'
+import os
+import sys
+import tempfile
+fd, path = tempfile.mkstemp(prefix='health_weather_' + sys.argv[2] + '_', suffix='.db', dir=sys.argv[1])
+os.fchmod(fd, 0o600)
+os.close(fd)
+print(path)
+PRIVATE_BACKUP
+)"
 
     # 使用 SQLite 在线备份保证一致性，源连接始终保持只读。
     create_sqlite_backup "$(command -v "$SQLITE3_BIN")"
+    chmod 600 "$BACKUP_FILE"
 
     # 压缩备份
     gzip "$BACKUP_FILE"
+    chmod 600 "${BACKUP_FILE}.gz"
 
     echo "[$(date)] 备份完成: ${BACKUP_FILE}.gz"
 

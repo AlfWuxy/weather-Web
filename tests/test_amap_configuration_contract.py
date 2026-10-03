@@ -93,6 +93,13 @@ def test_location_resolver_uses_server_key_instead_of_browser_key(
     class FakeResponse:
         status_code = 200
 
+        def iter_content(self, chunk_size):
+            import json
+            yield json.dumps(self.json()).encode()
+
+        def close(self):
+            pass
+
         @staticmethod
         def json():
             return {
@@ -103,7 +110,7 @@ def test_location_resolver_uses_server_key_instead_of_browser_key(
                 }],
             }
 
-    def fake_get(url, params=None, timeout=None):
+    def fake_get(url, params=None, timeout=None, stream=None):
         captured['url'] = url
         captured['params'] = params
         captured['timeout'] = timeout
@@ -122,7 +129,7 @@ def test_location_resolver_uses_server_key_instead_of_browser_key(
 
     assert result['provider'] == 'amap'
     assert captured['params']['key'] == 'server-key-used-for-geocode'
-    assert captured['timeout'] == 10
+    assert captured['timeout'] == (3, 10)
 
 
 def test_location_resolver_ignores_legacy_key(
@@ -151,3 +158,11 @@ def test_location_resolver_ignores_legacy_key(
 
     assert result['provider'] == 'fallback'
     assert called is False
+
+
+def test_identical_browser_and_service_keys_are_rejected(monkeypatch):
+    import pytest
+    monkeypatch.setenv('AMAP_JS_API_KEY', 'same-key-xxxxxxxxxxxxxxxxxxxx')
+    monkeypatch.setenv('AMAP_WEB_SERVICE_KEY', 'same-key-xxxxxxxxxxxxxxxxxxxx')
+    with pytest.raises(RuntimeError, match='不同用途'):
+        _configure_test_app(monkeypatch)

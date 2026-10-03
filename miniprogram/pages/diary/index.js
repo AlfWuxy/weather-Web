@@ -204,7 +204,7 @@ Page({
     this.setData({ loading: true, loadError: '', dataStale: false });
     try {
       const [elderData, diaryData] = await Promise.all([
-        authApi({ method: 'GET', path: '/mp/api/v1/elders' }),
+        authApi({ method: 'GET', path: `/mp/api/v1/elders?pair_id=${pairId}` }),
         authApi({ method: 'GET', path: `/mp/api/v1/health/diary?pair_id=${pairId}&limit=30` }),
       ]);
       const elder = normalizeList(elderData, ['items', 'elders'])
