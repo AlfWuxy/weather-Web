@@ -47,7 +47,7 @@ Page({
       return;
     }
     try {
-      const elders = await api({ method: 'GET', path: '/mp/api/v1/elders', token });
+      const elders = await api({ method: 'GET', path: `/mp/api/v1/elders?pair_id=${pairId}`, token });
       const item = (elders || []).find((x) => x.pair_id === pairId);
       if (!item) {
         wx.showToast({ title: '未找到该老人', icon: 'none' });
