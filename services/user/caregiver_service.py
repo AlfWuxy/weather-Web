@@ -344,9 +344,9 @@ def _build_pair_management_context(caregiver_mode=False):
             try:
                 weather_data, _ = get_weather_with_cache(code)
                 weather_by_code[code] = weather_data or {}
-            except Exception:
+            except Exception as exc:
                 weather_by_code[code] = {}
-                logger.warning("加载天气缓存失败，code=%s", code, exc_info=True)
+                logger.warning("加载天气缓存失败，异常类型=%s", type(exc).__name__)
 
     pair_cards = []
     now = utcnow()
@@ -524,12 +524,11 @@ def pair_management():
         except OwnerInactiveError:
             flash('账号已失效，请重新登录。', 'error')
             return redirect(url_for('public.login'))
-        except Exception:
+        except Exception as exc:
             logger.warning(
-                "创建绑定失败(owner_user_id=%s location_len=%s)",
+                "创建绑定失败(owner_user_id=%s 异常类型=%s)",
                 getattr(current_user, 'id', None),
-                len(location_query),
-                exc_info=True,
+                type(exc).__name__,
             )
             flash('创建失败，请检查输入后重试。', 'error')
             return redirect(url_for('user.pair_management'))
@@ -576,12 +575,11 @@ def caregiver_pair_create():
     except OwnerInactiveError:
         flash('账号已失效，请重新登录。', 'error')
         return redirect(url_for('public.login'))
-    except Exception:
+    except Exception as exc:
         logger.warning(
-            "照护端创建绑定失败(owner_user_id=%s location_len=%s)",
+            "照护端创建绑定失败(owner_user_id=%s 异常类型=%s)",
             getattr(current_user, 'id', None),
-            len(location_query),
-            exc_info=True,
+            type(exc).__name__,
         )
         flash('创建失败，请检查输入后重试。', 'error')
         return redirect(url_for('user.pair_management'))

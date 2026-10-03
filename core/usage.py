@@ -281,7 +281,7 @@ def log_usage_event(event_type, user_id=None, pair_id=None, member_id=None, sour
         db.session.commit()
         return event
     except Exception as exc:
-        logger.debug("usage event write failed: %s", exc)
+        logger.debug("埋点写入失败，异常类型=%s", type(exc).__name__)
         db.session.rollback()
         return None
 
