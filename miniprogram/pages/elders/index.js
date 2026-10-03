@@ -52,6 +52,8 @@ Page({
     loading: true,
     loadError: '',
     busyPairId: 0,
+    eldersPage: 0,
+    eldersHasMore: false,
     fixedLocation: FIXED_LOCATION,
   },
 
@@ -97,6 +99,8 @@ Page({
       loading: true,
       loadError: '',
       busyPairId: 0,
+      eldersPage: 0,
+      eldersHasMore: false,
     });
   },
 
@@ -111,6 +115,8 @@ Page({
       loading: true,
       loadError: '',
       busyPairId: 0,
+      eldersPage: 0,
+      eldersHasMore: false,
     });
   },
 
@@ -121,6 +127,8 @@ Page({
       loading: false,
       loadError: '健康资料授权状态暂时没有核验成功，请检查网络后重试。',
       busyPairId: 0,
+      eldersPage: 0,
+      eldersHasMore: false,
     });
   },
 
@@ -141,19 +149,21 @@ Page({
     }
   },
 
-  async loadCareHome() {
-    if (this._unloaded || this._hidden) return;
+  async loadCareHome(append = false) {
+    if (this._unloaded || this._hidden || (append && this.data.loading)) return;
+    const pageNumber = append ? this.data.eldersPage + 1 : 1;
     const request = beginLoad(this);
     this.setData({ loading: true, loadError: '' });
     try {
       // 都昌县天气只读取共享 30 分钟快照，不按老人重复请求。
       const [elderData, snapshot] = await Promise.all([
-        authApi({ method: 'GET', path: '/mp/api/v1/elders' }),
+        authApi({ method: 'GET', path: pageNumber === 1 ? '/mp/api/v1/elders' : `/mp/api/v1/elders?page=${pageNumber}`, includeMeta: true }),
         getSnapshot().catch(() => null),
       ]);
       if (!loadIsActive(this, request)) return;
       const weather = snapshot ? normalizeSnapshot(snapshot) : markSnapshotStale(this.data.weather);
-      const elders = normalizeList(elderData, ['items', 'elders']).map((item) => {
+      const rows = elderData && elderData.data !== undefined ? elderData.data : elderData;
+      const elders = normalizeList(rows, ['items', 'elders']).map((item) => {
         // 列表页不渲染当天私有记录，避免把完整状态重复写入视图层。
         const { today: _unusedToday, ...elder } = item;
         return {
@@ -168,7 +178,13 @@ Page({
           miniprogramSupported: item.miniprogram_supported !== false,
         };
       });
-      this.setData({ elders, weather });
+      const previous = append ? this.data.elders : [];
+      const seen = new Set(previous.map((item) => item.pair_id));
+      this.setData({
+        elders: previous.concat(elders.filter((item) => !seen.has(item.pair_id))), weather,
+        eldersPage: Number(elderData && elderData.page) || pageNumber,
+        eldersHasMore: Boolean(elderData && elderData.has_more),
+      });
     } catch (error) {
       if (!loadIsActive(this, request)) return;
       const loadError = this.data.elders.length
@@ -179,6 +195,11 @@ Page({
     } finally {
       if (loadIsActive(this, request)) this.setData({ loading: false });
     }
+  },
+
+  async loadMoreElders() {
+    if (!this.data.eldersHasMore || this.data.loading || !requireToken()) return;
+    await guardHealthSensitivePage(this, () => this.loadCareHome(true));
   },
 
   goCreate() {

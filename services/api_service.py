@@ -25,6 +25,8 @@ from core.weather import (
 from core.db_models import Community, ForecastCache
 from core.extensions import db
 from core.usage import WEB_CLIENT_PILOT_EVENT_TYPES, log_usage_event
+from core.input_limits import validate_event_meta
+from core.resource_budget import ResourceLimitError, ResourceBudgetUnavailable
 from utils.parsers import parse_date, parse_int, safe_json_loads
 from utils.error_handlers import handle_api_exception
 from utils.validators import sanitize_input
@@ -1084,7 +1086,7 @@ def _api_ai_ask():
             retries=current_app.config.get('AI_REQUEST_RETRIES', 1),
             max_tokens=current_app.config.get('AI_MAX_TOKENS', 800)
         )
-        answer = service.ask(question, model)
+        answer = service.ask(question, model, user_id=current_user.id)
         triage = None
         if current_app.config.get('FEATURE_EMERGENCY_TRIAGE'):
             from services.emergency_triage import triage_symptoms
@@ -1103,6 +1105,10 @@ def _api_ai_ask():
         if triage is not None:
             payload['triage'] = triage
         return jsonify(payload)
+    except ResourceLimitError:
+        return jsonify({'success': False, 'error': '服务额度已用完，请稍后再试'}), 429
+    except ResourceBudgetUnavailable:
+        return jsonify({'success': False, 'error': '服务暂不可用'}), 503
     except API_EXCEPTIONS as exc:
         return handle_api_exception(exc, "AI问答失败", log=logger)
 
@@ -1267,7 +1273,10 @@ def _api_usage_event():
         raw_meta = payload.get('meta')
         if raw_meta is not None and not isinstance(raw_meta, dict):
             return jsonify({'success': False, 'error': 'invalid_meta'}), 400
-        meta = raw_meta
+        try:
+            meta = validate_event_meta(raw_meta)
+        except ValueError as exc:
+            return jsonify({'success': False, 'error': str(exc)}), 400
 
         event = log_usage_event(
             event_type,

@@ -265,17 +265,8 @@ def _ensure_demo_statuses(community_code, status_date, caregiver_id=None, pair_c
         if caregiver_id is None:
             caregiver_id = current_user.id
         for _ in range(pair_count):
-            short_code = _generate_short_code()
-            pair = Pair(
-                caregiver_id=caregiver_id,
-                community_code=community_code,
-                elder_code=_generate_elder_code(),
-                short_code=short_code,
-                short_code_hash=hash_short_code(short_code),
-                status='active',
-                last_active_at=utcnow()
-            )
-            db.session.add(pair)
+            from services.user._common import _create_pair_record
+            pair = _create_pair_record(caregiver_id, community_code)
             pairs.append(pair)
         db.session.flush()
 

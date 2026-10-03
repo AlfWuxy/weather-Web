@@ -52,7 +52,7 @@ function request({ method, path, token, data, timeout }) {
   return pending;
 }
 
-async function api({ method, path, token, data, timeout }) {
+async function api({ method, path, token, data, timeout, includeMeta = false }) {
   const response = await request({ method, path, token, data, timeout });
   if (response.statusCode < 200 || response.statusCode >= 300) {
     throw createApiError(response);
@@ -61,7 +61,7 @@ async function api({ method, path, token, data, timeout }) {
   if (!body.success) {
     throw createApiError(response, 'request_failed');
   }
-  return body.data;
+  return includeMeta ? body : body.data;
 }
 
 function createApiError(response, fallbackCode) {

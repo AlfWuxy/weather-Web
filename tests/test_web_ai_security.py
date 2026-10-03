@@ -40,7 +40,7 @@ def test_ai_service_rejects_nonofficial_api_base(api_base):
         AIQuestionService('secret', api_base, ['model'])
 
 
-def test_ai_service_disables_redirect_following(monkeypatch):
+def test_ai_service_disables_redirect_following(app, db_session, monkeypatch):
     from services import ai_question_service as module
 
     calls = []

@@ -85,5 +85,7 @@
     </view>
   </block>
 
+  <button wx:if="{{eldersHasMore}}" loading="{{loading}}" disabled="{{loading || busyPairId !== 0}}" bindtap="loadMoreElders">加载更多老人</button>
+
   <view class="medical-note">健康功能用于行动筛查和日常记录，不作医疗诊断。若出现胸痛、呼吸困难、意识异常等严重症状，请及时就医或求助。</view>
 </view>

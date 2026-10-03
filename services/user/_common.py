@@ -8,7 +8,8 @@ from flask import current_app, flash, has_app_context, url_for
 from flask_login import current_user
 
 from core.extensions import db
-from core.db_models import FamilyMember, Pair, PairActionToken, PairLink
+from core.db_models import FamilyMember, Pair, PairActionToken, PairLink, User
+from core.resource_budget import ResourceLimitError, setting
 from core.security import hash_identifier, hash_pair_token, hash_short_code
 from core.time_utils import utcnow
 from utils.validators import sanitize_input
@@ -144,6 +145,14 @@ def _create_pair_record(caregiver_id, location_query, member_id=None, flush=Fals
     if not location_query:
         raise ValueError('location_query is required')
 
+    # 与 owner 守卫和调用方成员创建共用 session，避免独立连接与已 flush 写事务自锁。
+    locked = db.session.query(User).filter(User.id == caregiver_id, User.deleted_at.is_(None)).update(
+        {User.id: User.id}, synchronize_session=False)
+    if locked != 1:
+        raise ValueError('caregiver not found')
+    if Pair.query.filter_by(caregiver_id=caregiver_id).count() >= setting('PAIR_MAX_PER_USER', 20):
+        raise ResourceLimitError('照护绑定数量已达到上限')
+
     # 共用写入口必须自行验证归属，避免调用方遗漏校验后形成跨账号脏关联。
     if member_id not in (None, ''):
         owned_member = FamilyMember.query.filter_by(
@@ -169,8 +178,7 @@ def _create_pair_record(caregiver_id, location_query, member_id=None, flush=Fals
         created_at=utcnow(),
     )
     db.session.add(pair)
-    if flush:
-        db.session.flush()
+    db.session.flush()  # 同事务内的后续创建也须计入总量，提交仍由调用方控制。
     return pair
 
 

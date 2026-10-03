@@ -169,6 +169,27 @@ def _trusted_seo_base_url(config):
 
 def register_hooks(app):
     """Register app hooks, filters, and context processors."""
+    @app.errorhandler(413)
+    def request_too_large(_error):
+        return jsonify({'success': False, 'error': 'request_too_large'}), 413
+
+    @app.before_request
+    def enforce_request_body_limit():
+        # 先检查长度，CSRF 或业务代码不得先解析超大请求体。
+        maximum = request.max_content_length or app.config.get('MAX_CONTENT_LENGTH', 1024 * 1024)
+        if request.content_length is not None and request.content_length > maximum:
+            from werkzeug.exceptions import RequestEntityTooLarge
+            raise RequestEntityTooLarge()
+        if request.environ.get('wsgi.input_terminated') and not request.environ.get('CONTENT_LENGTH'):
+            # 分块上传无 Content-Length，额外读取一个哨兵字节区分恰好上限与超限。
+            import io
+            from werkzeug.exceptions import RequestEntityTooLarge
+            body = request.environ['wsgi.input'].read(maximum + 1)
+            if len(body) > maximum:
+                raise RequestEntityTooLarge()
+            request.environ['wsgi.input'] = io.BytesIO(body)
+            request.environ['CONTENT_LENGTH'] = str(len(body))
+
     @app.before_request
     def init_request_context():
         """初始化请求上下文（结构化日志使用）"""

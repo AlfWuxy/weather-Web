@@ -18,6 +18,8 @@ from core.config import configure_app
 from core.constants import CHRONIC_OPTIONS, DEFAULT_CITY_LABEL, GUEST_ID_PREFIX, RISK_TAG_OPTIONS
 from core.extensions import db, init_extensions, login_manager
 from core.hooks import register_hooks
+from core.input_limits import SafeJSONProvider
+from core.resource_budget import ResourceBudget, ResourceLease
 from core.logging_privacy import install_formal_logging_privacy
 from core.security import register_rate_limit_error_handler
 from core.db_models import (
@@ -101,6 +103,7 @@ def create_app(register_blueprints=True):
         template_folder=str(PROJECT_ROOT / 'templates'),
         static_folder=str(PROJECT_ROOT / 'static')
     )
+    app.json = SafeJSONProvider(app)
     configure_app(app, logger)
     install_formal_logging_privacy(app.config.get('WECHAT_FORMAL_RUNTIME'))
     init_extensions(app)

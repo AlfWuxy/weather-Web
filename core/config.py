@@ -512,6 +512,8 @@ def configure_app(app, logger):
     legacy_amap_key = _normalized_env_value('AMAP_KEY', '')
     amap_js_api_key = _normalized_env_value('AMAP_JS_API_KEY', '')
     amap_web_service_key = _normalized_env_value('AMAP_WEB_SERVICE_KEY', '')
+    if amap_js_api_key and amap_web_service_key and amap_js_api_key == amap_web_service_key:
+        raise RuntimeError('AMAP_JS_API_KEY 与 AMAP_WEB_SERVICE_KEY 必须使用不同用途的密钥。')
     amap_security_js_code = _normalized_env_value('AMAP_SECURITY_JS_CODE', '')
     siliconflow_key = _normalized_env_value('SILICONFLOW_API_KEY', '')
     siliconflow_base = _normalized_env_value('SILICONFLOW_API_BASE', SILICONFLOW_API_BASE_DEFAULT)
@@ -707,6 +709,17 @@ def configure_app(app, logger):
             8 * 1024 * 1024,
         ),
     )
+    # 预算为跨进程数据库硬限制，0 表示拒绝而非无限制。
+    for name, default in {
+        'EVENT_META_MAX_BYTES': 2048, 'EVENT_META_MAX_DEPTH': 5, 'EVENT_META_MAX_FIELDS': 64,
+        'PAIR_MAX_PER_USER': 20, 'PAIR_LIST_PAGE_SIZE': 20,
+        'AI_USER_DAILY_LIMIT': 60, 'AI_DAILY_LIMIT': 300, 'AI_MONTHLY_LIMIT': 5000,
+        'AI_USER_DAILY_TOKEN_LIMIT': 200000, 'AI_DAILY_TOKEN_LIMIT': 1200000,
+        'AI_MONTHLY_TOKEN_LIMIT': 20000000,
+        'GEOCODE_USER_DAILY_LIMIT': 20, 'GEOCODE_DAILY_LIMIT': 200, 'GEOCODE_MONTHLY_LIMIT': 3000,
+        'LOCATION_CACHE_MAX_ROWS': 1000, 'GEOCODE_RESPONSE_MAX_BYTES': 65536,
+    }.items():
+        app.config[name] = max(0, parse_int(os.getenv(name, str(default)), default=default))
     app.config['AI_ALLOWED_MODELS'] = AI_ALLOWED_MODELS
     app.config['DEFAULT_CITY'] = default_city or DEFAULT_CITY_LABEL
     app.config['DEFAULT_LOCATION'] = default_location or DEFAULT_LOCATION
@@ -822,7 +835,7 @@ def configure_app(app, logger):
     app.config.setdefault('RATE_LIMIT_FORECAST', os.getenv('RATE_LIMIT_FORECAST', app.config['RATE_LIMITS']))
     app.config.setdefault('RATE_LIMIT_CHRONIC', os.getenv('RATE_LIMIT_CHRONIC', app.config['RATE_LIMITS']))
     app.config.setdefault('RATE_LIMIT_ML', os.getenv('RATE_LIMIT_ML', app.config['RATE_LIMITS']))
-    app.config.setdefault('RATE_LIMIT_AI', os.getenv('RATE_LIMIT_AI', '20 per minute'))
+    app.config.setdefault('RATE_LIMIT_AI', os.getenv('RATE_LIMIT_AI', '30 per hour'))
     app.config.setdefault('RATE_LIMIT_LOGIN', os.getenv('RATE_LIMIT_LOGIN', '5 per 5 minutes'))
     app.config.setdefault('RATE_LIMIT_REGISTER', os.getenv('RATE_LIMIT_REGISTER', '5 per hour'))
     app.config.setdefault(

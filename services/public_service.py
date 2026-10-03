@@ -495,41 +495,33 @@ def _resolve_pair(short_code, token):
     if hasattr(link, 'pair_id') and link.pair_id:
         pair = Pair.query.filter_by(id=link.pair_id).first()
 
-    with atomic_transaction():
-        if not pair:
-            elder_code = None
-            while not elder_code:
-                candidate = secrets.token_urlsafe(8)
-                if not Pair.query.filter_by(elder_code=candidate).first():
-                    elder_code = candidate
-            pair = Pair(
-                caregiver_id=link.caregiver_id,
-                community_code=link.community_code,
-                elder_code=elder_code,
-                short_code=link.short_code,
-                short_code_hash=link.short_code_hash or short_code_hash,
-                short_code_expires_at=_short_code_expires_at(),
-                status='active',
-                last_active_at=utcnow()
-            )
-            db.session.add(pair)
-            db.session.flush()
-            link.pair_id = pair.id
-
-        link.status = 'redeemed'
-        if not link.redeemed_at:
+    from core.resource_budget import ResourceLimitError
+    from services.user._common import _create_pair_record
+    try:
+        with atomic_transaction():
+            # 消费短码与创建受限绑定必须同事务；并发兑换不能重复消费。
+            claimed = PairLink.query.filter_by(id=link.id, status='active', redeemed_at=None).update(
+                {'status': 'redeeming'}, synchronize_session=False)
+            if claimed != 1:
+                raise ResourceLimitError('短码已被使用，请重新获取')
+            if not pair:
+                pair = _create_pair_record(link.caregiver_id, link.community_code, flush=True)
+                pair.short_code = link.short_code
+                pair.short_code_hash = link.short_code_hash or short_code_hash
+                db.session.flush()
+                link.pair_id = pair.id
+            link.status = 'redeemed'
             link.redeemed_at = utcnow()
-        log_security_event(
-            action='short_code_redeemed',
-            actor_id=getattr(current_user, 'id', None) if current_user.is_authenticated else None,
-            actor_role=getattr(current_user, 'role', None) if current_user.is_authenticated else None,
-            resource_type='pair_link',
-            resource_id=str(link.id),
-            extra_data={
-                'pair_id': pair.id if pair else None,
-                'short_code_hash': link.short_code_hash or short_code_hash
-            }
-        )
+            log_security_event(
+                action='short_code_redeemed',
+                actor_id=getattr(current_user, 'id', None) if current_user.is_authenticated else None,
+                actor_role=getattr(current_user, 'role', None) if current_user.is_authenticated else None,
+                resource_type='pair_link',
+                resource_id=str(link.id),
+                extra_data={'pair_id': pair.id, 'short_code_hash': link.short_code_hash or short_code_hash},
+            )
+    except ResourceLimitError as exc:
+        return None, str(exc)
     return pair, None
 
 

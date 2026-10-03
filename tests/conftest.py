@@ -53,6 +53,8 @@ def setup_test_environment(tmp_path_factory):
         'QWEATHER_JWT_PROJECT_ID': '',
         'QWEATHER_JWT_PRIVATE_KEY_PATH': '',
         'AMAP_KEY': '',
+        'AMAP_JS_API_KEY': '',
+        'AMAP_WEB_SERVICE_KEY': '',
         'SILICONFLOW_API_KEY': '',
         'DEMO_MODE': '1',  # 启用演示模式，使用 mock 数据
         'FEATURE_HEAT_EXPOSURE_GIS': '1',

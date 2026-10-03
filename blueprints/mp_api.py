@@ -60,6 +60,8 @@ from core.weather import (
     normalize_health_model_weather,
 )
 from services.location_resolver import resolve_location
+from core.resource_budget import ResourceLimitError, setting
+from core.input_limits import validate_event_meta
 from services.warning_service import get_qweather_warnings
 from services.user._common import _create_pair_record
 from services.care_action_service import (
@@ -99,7 +101,6 @@ from utils.parsers import safe_json_loads
 from utils.validators import sanitize_input
 
 bp = Blueprint("mp_api", __name__, url_prefix="/mp/api/v1")
-MP_EVENT_META_MAX_CHARS = 2048
 MAX_PAGE_SIZE = 50
 ACQUISITION_SOURCE_FAMILY_SHARE = "family_share"
 CREDENTIAL_LAST_USED_INTERVAL = timedelta(minutes=30)
@@ -1387,7 +1388,12 @@ def me_delete():
 @require_api_scope("miniprogram:sensitive")
 @require_health_sensitive_consent
 def elders_list():
-    pairs = Pair.query.filter_by(caregiver_id=g.api_user_id, status="active").order_by(Pair.created_at.desc()).all()
+    page = max(1, min(request.args.get("page", 1, type=int), 10000))
+    page_size = min(50, max(1, setting("PAIR_LIST_PAGE_SIZE", 20)))
+    pairs = Pair.query.filter_by(caregiver_id=g.api_user_id, status="active").order_by(
+        Pair.created_at.desc(), Pair.id.desc()).offset((page - 1) * page_size).limit(page_size + 1).all()
+    has_more = len(pairs) > page_size
+    pairs = pairs[:page_size]
     status_date = today_local()
     pair_ids = [pair.id for pair in pairs]
     statuses = (
@@ -1489,7 +1495,7 @@ def elders_list():
             }
         )
 
-    return jsonify({"success": True, "data": result})
+    return jsonify({"success": True, "data": result, "page": page, "has_more": has_more})
 
 
 @bp.route("/elders", methods=["POST"], endpoint="elders_create")
@@ -1540,6 +1546,9 @@ def elders_create():
             flush=True
         )
         db.session.commit()
+    except ResourceLimitError:
+        db.session.rollback()
+        return _error("pair_limit_reached", "照护绑定数量已达到上限。", 429)
     except Exception:
         db.session.rollback()
         return jsonify({"success": False, "error": "create_failed"}), 500
@@ -2210,14 +2219,10 @@ def events():
     raw_meta = payload.get("meta")
     if raw_meta is not None and not isinstance(raw_meta, dict):
         return jsonify({"success": False, "error": "invalid_meta"}), 400
-    meta = raw_meta
-    if meta is not None:
-        try:
-            meta_json = json.dumps(meta, ensure_ascii=False)
-        except (TypeError, ValueError):
-            return jsonify({"success": False, "error": "invalid_meta"}), 400
-        if len(meta_json) > MP_EVENT_META_MAX_CHARS:
-            return jsonify({"success": False, "error": "meta_too_large"}), 400
+    try:
+        meta = validate_event_meta(raw_meta)
+    except ValueError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
 
     event = log_usage_event(
         event_type,

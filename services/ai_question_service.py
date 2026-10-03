@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import time
+from core.resource_budget import reserve
 from urllib.parse import urlsplit
 from services.external_api import record_external_api_timing as _record_external_api_timing
 try:
@@ -28,8 +29,8 @@ class AIQuestionService:
         self.logger = logging.getLogger(__name__)
         self.connect_timeout = self._safe_number(connect_timeout, 8.0, is_int=False)
         self.read_timeout = self._safe_number(read_timeout, 60.0, is_int=False)
-        self.retries = int(self._safe_number(retries, 1, is_int=True))
-        self.max_tokens = int(self._safe_number(max_tokens, 800, is_int=True))
+        self.retries = min(2, max(0, int(retries or 0)))
+        self.max_tokens = min(4096, int(self._safe_number(max_tokens, 800, is_int=True)))
 
     @classmethod
     def _validate_api_base(cls, api_base):
@@ -62,7 +63,7 @@ class AIQuestionService:
             return default
         return number
 
-    def ask(self, question, model):
+    def ask(self, question, model, user_id=None):
         """向模型提问"""
         if requests is None:
             raise RuntimeError("缺少requests依赖，请安装requirements.txt")
@@ -72,6 +73,8 @@ class AIQuestionService:
             raise ValueError("不支持的模型")
         if not question or not isinstance(question, str):
             raise ValueError("问题不能为空")
+        if len(question) > 800:
+            raise ValueError("问题过长")
 
         url = f"{self.api_base}/chat/completions"
         headers = {
@@ -93,8 +96,14 @@ class AIQuestionService:
             'max_tokens': self.max_tokens
         }
 
+        # 按 UTF-8 字节保守预留输入、模板余量与最大输出；失败和重试不退款。
+        input_bytes = len(json.dumps(payload['messages'], ensure_ascii=False).encode('utf-8'))
+        if input_bytes > 32768:
+            raise ValueError('知识上下文过长')
+        reserved_tokens = input_bytes + 4096 + self.max_tokens
         attempts = max(1, self.retries + 1)
         for attempt in range(attempts):
+            reserve('AI', units=reserved_tokens, user_id=user_id)
             try:
                 start_ts = time.perf_counter()
                 response = requests.post(
