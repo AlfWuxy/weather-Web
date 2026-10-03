@@ -372,7 +372,7 @@ def test_forecast_api_rejects_stale_qweather_forecast(client, db_session, monkey
 
 
 def test_comprehensive_alert_rejects_mock_current_weather(client, db_session, monkeypatch):
-    user = _create_user(db_session, username='alert_mock_weather_user')
+    user = _create_user(db_session, username='alert_mock_weather_user', role='admin')
     _login_as(client, user.id)
 
     monkeypatch.setattr(
@@ -396,7 +396,7 @@ def test_comprehensive_alert_rejects_mock_current_weather(client, db_session, mo
 
 
 def test_comprehensive_alert_rejects_incomplete_qweather_forecast(client, db_session, monkeypatch):
-    user = _create_user(db_session, username='alert_incomplete_forecast_user')
+    user = _create_user(db_session, username='alert_incomplete_forecast_user', role='admin')
     _login_as(client, user.id)
 
     monkeypatch.setattr(
@@ -432,7 +432,7 @@ def test_comprehensive_alert_uses_qweather_forecast_with_today_start(client, db_
 
     from core.time_utils import today_local
 
-    user = _create_user(db_session, username='alert_qweather_user')
+    user = _create_user(db_session, username='alert_qweather_user', role='admin')
     _login_as(client, user.id)
     start = today_local()
     qweather_days = [

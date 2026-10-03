@@ -98,7 +98,8 @@
         {% set nav_drawer_today_active = nav_endpoint in ['user.user_dashboard', 'user.elder_dashboard'] %}
     {% endif %}
     {% set nav_is_guest = current_user.is_authenticated and current_user.role == 'guest' %}
-    {% if nav_is_guest or not current_user.is_authenticated %}
+    {% set nav_patient_authorized = current_user.is_authenticated and (current_user.role == 'admin' or (current_user.role == 'community' and current_user.authorized_community)) %}
+    {% if not nav_patient_authorized %}
         {% set nav_community_risk_url = url_for('public.public_risk') %}
         {% set nav_community_risk_endpoint = 'public.public_risk' %}
     {% else %}

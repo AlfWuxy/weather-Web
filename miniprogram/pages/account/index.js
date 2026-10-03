@@ -118,8 +118,14 @@ Page({
         publicHome();
         try {
           if (logoutRequest) await logoutRequest;
+          else if (sessionToken) throw new Error('logout_request_not_started');
         } catch (error) {
           // 远端注销失败时，本机私人数据仍已立即清除。
+          wx.showModal({
+            title: '本机已退出',
+            content: '本机私人数据已清除，但服务端会话撤销未确认。会话将在有效期结束后失效；也可在网页修改密码撤销其他会话。',
+            showCancel: false,
+          });
         }
       },
     });

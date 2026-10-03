@@ -96,8 +96,8 @@ def _trusted_weather(temperature=30.0, **overrides):
     return payload
 
 
-def test_community_risk_page_has_academic_sections(authenticated_client):
-    response = authenticated_client.get('/community-risk')
+def test_community_risk_page_has_academic_sections(admin_client):
+    response = admin_client.get('/community-risk')
     assert response.status_code == 200
 
     html = response.get_data(as_text=True)
@@ -128,7 +128,7 @@ def test_community_risk_page_has_academic_sections(authenticated_client):
 
 
 def test_community_risk_api_routes_incomplete_profiles_to_static_screening(
-    authenticated_client,
+    admin_client,
     db_session,
     monkeypatch,
 ):
@@ -143,7 +143,7 @@ def test_community_risk_api_routes_incomplete_profiles_to_static_screening(
     )
     clear_local_community_risk_cache()
 
-    response = authenticated_client.post(
+    response = admin_client.post(
         '/api/community/risk-map-v2',
         json={
             'analysis_date': '2025-10-30',
@@ -188,7 +188,7 @@ def test_community_risk_api_routes_incomplete_profiles_to_static_screening(
 
 
 def test_all_unmatched_records_keep_historical_component_unavailable(
-    authenticated_client,
+    admin_client,
     db_session,
     monkeypatch,
 ):
@@ -247,7 +247,7 @@ def test_all_unmatched_records_keep_historical_component_unavailable(
     )
     clear_local_community_risk_cache()
 
-    response = authenticated_client.post(
+    response = admin_client.post(
         '/api/community/risk-map-v2',
         json={
             'analysis_date': '2026-01-10',

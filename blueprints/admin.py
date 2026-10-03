@@ -636,6 +636,7 @@ def admin_delete_user(user_id):
         # 显式清理可兼容未启用外键的旧 SQLite；新数据库同时有 CASCADE 兜底。
         MiniProgramSession.query.filter_by(user_id=user.id).delete(synchronize_session=False)
         MiniProgramIdentity.query.filter_by(user_id=user.id).delete(synchronize_session=False)
+        ApiToken.query.filter_by(user_id=user.id).delete(synchronize_session=False)
         db.session.delete(user)
         db.session.commit()
         flash(f'用户 {user.username} 已删除', 'success')

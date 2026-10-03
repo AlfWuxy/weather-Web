@@ -383,11 +383,20 @@ def community_announce():
 
 def community_risk():
     """社区风险地图"""
+    from core.community_access import patient_community_scope
+    community_scope = patient_community_scope()
+    if community_scope == ():
+        return render_template('community_access_denied.html'), 403
     coords_map = current_app.config.get('COMMUNITY_COORDS_GCJ', {})
-    communities = Community.query.all()
+    communities_query = Community.query
+    disease_query = MedicalRecord.query.with_entities(MedicalRecord.disease_category)
+    if community_scope is not None:
+        communities_query = communities_query.filter(Community.name.in_(community_scope))
+        disease_query = disease_query.filter(MedicalRecord.community.in_(community_scope))
+    communities = communities_query.all()
     disease_options = [
         row[0] for row in (
-            MedicalRecord.query.with_entities(MedicalRecord.disease_category)
+            disease_query
             .filter(MedicalRecord.disease_category.isnot(None))
             .distinct()
             .order_by(MedicalRecord.disease_category)

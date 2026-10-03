@@ -397,8 +397,11 @@ def require_api_token(fn):
                 db.session.rollback()
                 return _error("unauthorized", "账号已失效或已注销。", 401)
         g.api_user = active_user
+        # 撤销自身凭证不读取或更改业务数据，无需重新同意隐私条款或授予写权限。
+        self_revocation = request.endpoint == "mp_api.wechat_logout"
         if (
             g.auth_kind == "api_token"
+            and not self_revocation
             and g.api_token.privacy_consent_version != current_privacy_version()
         ):
             return _error(
@@ -409,6 +412,7 @@ def require_api_token(fn):
             )
         if (
             g.auth_kind == "api_token"
+            and not self_revocation
             and request.method in {"POST", "PUT", "PATCH", "DELETE"}
             and not api_token_has_scope(g.api_token, "miniprogram:write")
         ):
@@ -792,10 +796,8 @@ def link_account():
 @limiter.limit(lambda: current_app.config.get("RATE_LIMIT_MP_WRITE", "30 per minute"), key_func=_mp_rate_limit_key)
 @require_api_token
 def wechat_logout():
-    if getattr(g, "auth_kind", None) != "miniprogram_session":
-        return _error("miniprogram_session_required", "该操作仅支持微信小程序会话。", 403)
-    session_record = g.mp_session
-    session_record.revoked_at = utcnow()
+    credential = g.mp_session if g.auth_kind == "miniprogram_session" else g.api_token
+    credential.revoked_at = utcnow()
     db.session.commit()
     return _success({"revoked": True})
 

@@ -21,7 +21,7 @@ from core.db_models import (
 from core.extensions import db
 from core.guest import build_guest_profile, get_guest_assessment, is_guest_user
 from core.notifications import create_notification
-from core.time_utils import utc_to_local_datetime, utcnow
+from core.time_utils import ensure_utc_aware, utc_to_local_datetime, utcnow
 from core.usage import create_api_token
 from core.weather import (
     compact_assessment_weather_condition,
@@ -280,6 +280,29 @@ def profile():
         return redirect(url_for('user.user_dashboard'))
     if request.method == 'POST':
         form_id = sanitize_input(request.form.get('form_id'), max_length=30) or 'basic'
+
+        if form_id in ('revoke_api_token', 'revoke_all_api_tokens'):
+            token_id = request.form.get('token_id', type=int)
+            if form_id == 'revoke_api_token' and token_id is None:
+                flash('凭证不存在', 'error')
+                return redirect(url_for('user.profile'))
+            try:
+                with owner_write_guard(int(current_user.id)):
+                    query = ApiToken.query.filter_by(user_id=current_user.id, revoked_at=None)
+                    if form_id == 'revoke_api_token':
+                        query = query.filter_by(id=token_id)
+                    query.update({ApiToken.revoked_at: utcnow()}, synchronize_session=False)
+                    db.session.commit()
+                session.pop('last_api_token_plain', None)
+                flash('旧版绑定凭证已撤销', 'success')
+            except OwnerInactiveError:
+                flash('账号已失效，请重新登录。', 'error')
+                return redirect(url_for('public.login'))
+            except (OSError, RuntimeError, ValueError):
+                db.session.rollback()
+                logger.exception('凭证撤销锁不可用，撤销未完成')
+                flash('凭证暂时无法撤销，请稍后重试。', 'error')
+            return redirect(url_for('user.profile'))
 
         if form_id == 'api_token':
             token_name = sanitize_input(request.form.get('token_name'), max_length=80)
@@ -574,6 +597,11 @@ def profile():
     chronic_diseases_list = safe_json_loads(current_user.chronic_diseases, [])
 
     last_api_token_plain = session.pop('last_api_token_plain', None)
+    api_tokens = ApiToken.query.filter_by(user_id=current_user.id).order_by(ApiToken.created_at.desc()).all()
+    active_token_ids = {
+        token.id for token in api_tokens
+        if not token.revoked_at and token.expires_at and ensure_utc_aware(token.expires_at) > utcnow()
+    }
     wxpusher_feature_enabled = bool(
         current_app.config.get('FEATURE_WXPUSHER', False)
     )
@@ -585,6 +613,8 @@ def profile():
         created_at_local=utc_to_local_datetime(current_user.created_at),
         last_login_local=utc_to_local_datetime(current_user.last_login),
         last_api_token_plain=last_api_token_plain,
+        api_tokens=api_tokens,
+        active_token_ids=active_token_ids,
         wxpusher_feature_enabled=wxpusher_feature_enabled,
         wxpusher_available=bool(
             wxpusher_feature_enabled
