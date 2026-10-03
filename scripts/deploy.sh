@@ -44,6 +44,7 @@ LOCAL_FEATURE_STRUCTURED_LOGS=""
 LOCAL_FEATURE_WXPUSHER=""
 LOCAL_WXPUSHER_APP_TOKEN=""
 LOCAL_FEATURE_HEAT_EXPOSURE_GIS=""
+PUBLIC_DEPLOY_ORIGIN="https://yilaoweather.org"
 LOCAL_PUBLIC_BASE_URL=""
 LOCAL_ALLOW_INSECURE_PUBLIC_BASE_URL="${ALLOW_INSECURE_PUBLIC_BASE_URL:-}"
 LOCAL_WX_MINIPROGRAM_APPID=""
@@ -417,6 +418,21 @@ require_env_value() {
 require_env_value "DEPLOY_SERVER" "$SERVER"
 require_env_value "DEPLOY_USER" "$USER"
 require_env_value "ML_MODEL_ARTIFACT_DIR" "$LOCAL_ML_MODEL_ARTIFACT_DIR"
+
+# 调用参数不允许绕过固定公网 origin；网页模式也必须通过相同传输边界。
+if { [ -n "$LOCAL_PUBLIC_BASE_URL" ] && [ "$LOCAL_PUBLIC_BASE_URL" != "$PUBLIC_DEPLOY_ORIGIN" ]; } \
+    || [[ ! "$LOCAL_ALLOW_INSECURE_PUBLIC_BASE_URL" =~ ^(0|false|False|FALSE)?$ ]]; then
+    echo "发布不接受明文公网入口或偏离固定 HTTPS origin。" >&2
+    exit 64
+fi
+SSH_ARGUMENTS_FILE="$LOCAL_DEPLOY_TEMP_DIR/ssh-arguments"
+(umask 077; printf '%s' "$SSH_OPTS" | python3 "$SCRIPT_DIR/deployment_boundary.py" ssh-options \
+    --target "$USER@$SERVER" --control-dir "$LOCAL_DEPLOY_TEMP_DIR" > "$SSH_ARGUMENTS_FILE")
+SSH_ARGS=()
+while IFS= read -r -d '' argument; do
+    SSH_ARGS+=("$argument")
+done < "$SSH_ARGUMENTS_FILE"
+RSYNC_RSH="$(python3 "$SCRIPT_DIR/deployment_boundary.py" ssh-rsh < "$SSH_ARGUMENTS_FILE")"
 
 # 私钥算法校验只读取已固定到本轮私有临时目录的快照。
 validate_qweather_jwt_private_key_snapshot() {
@@ -870,7 +886,7 @@ echo "=== 开始部署 case-weather 项目 ==="
 
 remote_exec() {
     if use_sshpass && [ -n "${SSHPASS:-}" ]; then
-        SSHPASS="${SSHPASS:-$PASSWORD}" sshpass -e ssh $SSH_OPTS "$USER@$SERVER" "$1"
+        SSHPASS="${SSHPASS:-$PASSWORD}" sshpass -e ssh "${SSH_ARGS[@]}" "$USER@$SERVER" "$1"
         return
     fi
 
@@ -879,7 +895,7 @@ remote_exec() {
         return 64
     fi
 
-    ssh $SSH_OPTS "$USER@$SERVER" "$1"
+    ssh "${SSH_ARGS[@]}" "$USER@$SERVER" "$1"
 }
 
 # 通过标准输入传递敏感值，避免密钥出现在 ssh 命令参数和进程列表中。
@@ -888,7 +904,7 @@ remote_exec_with_stdin() {
     local remote_command="$2"
 
     if use_sshpass && [ -n "${SSHPASS:-}" ]; then
-        printf '%s' "$payload" | SSHPASS="${SSHPASS:-$PASSWORD}" sshpass -e ssh $SSH_OPTS "$USER@$SERVER" "$remote_command"
+        printf '%s' "$payload" | SSHPASS="${SSHPASS:-$PASSWORD}" sshpass -e ssh "${SSH_ARGS[@]}" "$USER@$SERVER" "$remote_command"
         return
     fi
 
@@ -897,7 +913,7 @@ remote_exec_with_stdin() {
         return 64
     fi
 
-    printf '%s' "$payload" | ssh $SSH_OPTS "$USER@$SERVER" "$remote_command"
+    printf '%s' "$payload" | ssh "${SSH_ARGS[@]}" "$USER@$SERVER" "$remote_command"
 }
 
 # 文件内容直接作为 SSH stdin，避免私钥进入 shell 变量、命令参数或日志。
@@ -906,7 +922,7 @@ remote_exec_with_file_stdin() {
     local remote_command="$2"
 
     if use_sshpass && [ -n "${SSHPASS:-}" ]; then
-        SSHPASS="${SSHPASS:-$PASSWORD}" sshpass -e ssh $SSH_OPTS "$USER@$SERVER" "$remote_command" < "$local_file"
+        SSHPASS="${SSHPASS:-$PASSWORD}" sshpass -e ssh "${SSH_ARGS[@]}" "$USER@$SERVER" "$remote_command" < "$local_file"
         return
     fi
 
@@ -915,7 +931,7 @@ remote_exec_with_file_stdin() {
         return 64
     fi
 
-    ssh $SSH_OPTS "$USER@$SERVER" "$remote_command" < "$local_file"
+    ssh "${SSH_ARGS[@]}" "$USER@$SERVER" "$remote_command" < "$local_file"
 }
 
 # 发布收据只通过 stdin 进入新 release 的 root 私有 metadata。
@@ -2689,7 +2705,7 @@ upload_files() {
             --exclude 'output' \
             --exclude 'blueprints/tools 2.py' \
             "${release_excludes[@]}" \
-            -e "ssh $SSH_OPTS" "$RELEASE_SOURCE_DIR/" "$USER@$SERVER:$remote_target/"
+            -e "$RSYNC_RSH" "$RELEASE_SOURCE_DIR/" "$USER@$SERVER:$remote_target/"
         return
     fi
 
@@ -2698,7 +2714,7 @@ upload_files() {
         return 64
     fi
 
-    rsync -avz --exclude '__pycache__' --exclude '*.pyc' --exclude 'instance' --exclude 'storage' --exclude 'health_weather.db' --exclude 'data/research/*.xlsx' --exclude 'data/research/*.xls' --exclude 'models/*.pkl' --exclude '.git' --exclude '.claude' --exclude 'venv' --exclude '.venv2' --exclude '.env*' --exclude '.secrets/' --exclude '*.pem' --exclude '*.key' --exclude 'project.private.config.json' --exclude '.superpowers' --exclude '.pytest_cache' --exclude '.playwright-cli' --exclude '.vscode' --exclude '.DS_Store' --exclude 'backups' --exclude 'tmp' --exclude 'output' --exclude 'blueprints/tools 2.py' "${release_excludes[@]}" -e "ssh $SSH_OPTS" "$RELEASE_SOURCE_DIR/" "$USER@$SERVER:$remote_target/"
+    rsync -avz --exclude '__pycache__' --exclude '*.pyc' --exclude 'instance' --exclude 'storage' --exclude 'health_weather.db' --exclude 'data/research/*.xlsx' --exclude 'data/research/*.xls' --exclude 'models/*.pkl' --exclude '.git' --exclude '.claude' --exclude 'venv' --exclude '.venv2' --exclude '.env*' --exclude '.secrets/' --exclude '*.pem' --exclude '*.key' --exclude 'project.private.config.json' --exclude '.superpowers' --exclude '.pytest_cache' --exclude '.playwright-cli' --exclude '.vscode' --exclude '.DS_Store' --exclude 'backups' --exclude 'tmp' --exclude 'output' --exclude 'blueprints/tools 2.py' "${release_excludes[@]}" -e "$RSYNC_RSH" "$RELEASE_SOURCE_DIR/" "$USER@$SERVER:$remote_target/"
 }
 
 upload_model_artifacts() {
@@ -2736,8 +2752,19 @@ chmod 0600 \"\$TARGET\""
         --manifest $RELEASE_APP/models/feature_config.json"
 }
 
+verify_deployment_boundary() {
+    local evidence
+    # 流式运行本轮本机校验器，不写服务器文件、不读取配置秘密或 TLS 私钥。
+    evidence="$(remote_exec_with_file_stdin "$SCRIPT_DIR/deployment_boundary.py" "python3 - origin")" || return 1
+    printf '%s' "$evidence" | python3 "$SCRIPT_DIR/deployment_boundary.py" public \
+        --origin "$PUBLIC_DEPLOY_ORIGIN" --with-origin-evidence
+}
+
 echo "步骤1: 测试服务器连接..."
 remote_exec "echo '连接成功'"
+
+echo "步骤1.1: 只读验证现有公网 HTTPS 与源站边界..."
+verify_deployment_boundary
 
 echo ""
 echo "步骤2: 检查服务器依赖（常规发布不修改全局软件）..."
@@ -2838,7 +2865,7 @@ WX_MINIPROGRAM_OPENID_PEPPER=
 WX_MINIPROGRAM_SESSION_SECRET=
 ACCOUNT_LINK_CODE_PEPPER=
 WX_MINIPROGRAM_PRIVACY_VERSION=2026-07-21
-PUBLIC_BASE_URL=https://yilaoweather.org
+PUBLIC_BASE_URL=$PUBLIC_DEPLOY_ORIGIN
 ALLOW_INSECURE_PUBLIC_BASE_URL=
 EOF
 chmod 0600 $PROJECT_DIR/.env
@@ -2876,7 +2903,7 @@ remote_env_update "WX_MINIPROGRAM_PRIVACY_VERSION" "2026-07-21" "if-empty"
 echo ""
 echo "步骤4.2: 安全写入显式提供的发布配置..."
 # 正式入口与第三方凭证接收端每次部署都收敛到固定 origin。
-remote_env_update "PUBLIC_BASE_URL" "https://yilaoweather.org" "always"
+remote_env_update "PUBLIC_BASE_URL" "$PUBLIC_DEPLOY_ORIGIN" "always"
 remote_env_update "ALLOW_INSECURE_PUBLIC_BASE_URL" "" "always"
 
 if [ "$DEPLOY_MODE" = "wechat_formal" ] \
@@ -3650,6 +3677,11 @@ echo ""
 echo "步骤8: 服务、timer、OnSuccess、current 链接与健康检查已在原子激活事务内通过。"
 
 echo ""
+# 激活事务已经提交；验收失败不重跑回滚，保留原有恢复材料供显式恢复。
+if ! verify_deployment_boundary; then
+    echo "原子激活已完成，但公网与运行身份安全验收失败；未执行二次回滚，恢复材料已保留。" >&2
+    exit 78
+fi
 echo "=== 部署完成 ==="
 echo "发布版本: $RELEASE_ID"
 echo "持久化目录: $PROJECT_DIR"
