@@ -142,7 +142,7 @@ test('健康日记首错持久呈现，刷新失败保留上次成功数据且�
 
   authApiImpl = async (options) => {
     requests.push(options);
-    if (options.path === '/mp/api/v1/elders') {
+    if (options.path.split('?')[0] === '/mp/api/v1/elders') {
       return { items: [{ pair_id: 7, member: { name: '奶奶' } }] };
     }
     return { items: [{ id: 12, entry_date: '2026-07-18', severity: '轻微', symptoms: '状态正常' }] };
@@ -187,7 +187,7 @@ test('用药记录首错、较早数据和删除后刷新失败均保持真实�
   assert.match(page.data.loadError, /重试/);
 
   authApiImpl = async (options) => {
-    if (options.path === '/mp/api/v1/elders') {
+    if (options.path.split('?')[0] === '/mp/api/v1/elders') {
       return { items: [{ pair_id: 7, member: { name: '爷爷' } }] };
     }
     return {

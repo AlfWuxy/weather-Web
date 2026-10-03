@@ -99,7 +99,7 @@ test('日记 POST 缺少记录时回退两个并行 GET', async () => {
   authApiImpl = async (options) => {
     requests.push(options);
     if (options.method === 'POST') return { ok: true };
-    if (options.path === '/mp/api/v1/elders') {
+    if (options.path.split('?')[0] === '/mp/api/v1/elders') {
       return { items: [{ pair_id: 7, member: { name: '奶奶' } }] };
     }
     return { items: [{ id: 23, entry_date: '2026-07-18', severity: '轻微', symptoms: '已同步' }] };
@@ -174,7 +174,7 @@ test('用药新增或删除缺少权威结果时回退重新加载', async () =>
   authApiImpl = async (options) => {
     requests.push(options);
     if (options.method === 'POST' || options.method === 'DELETE') return { ok: true };
-    if (options.path === '/mp/api/v1/elders') {
+    if (options.path.split('?')[0] === '/mp/api/v1/elders') {
       return { items: [{ pair_id: 7, member: { name: '奶奶' } }] };
     }
     const deleteStarted = requests.some((item) => item.method === 'DELETE');
@@ -224,7 +224,7 @@ test('指定家人的筛查页并行请求列表和最近结果', async () => {
   const requests = [];
   authApiImpl = (options) => {
     requests.push(options);
-    return options.path === '/mp/api/v1/elders' ? eldersGate.promise : latestGate.promise;
+    return options.path.split('?')[0] === '/mp/api/v1/elders' ? eldersGate.promise : latestGate.promise;
   };
   const definition = loadPage('../pages/health-assessment/index');
   const page = makePage(definition);
@@ -238,7 +238,7 @@ test('指定家人的筛查页并行请求列表和最近结果', async () => {
   await Promise.resolve();
   assert.equal(requests.length, 2);
   assert.deepEqual(new Set(requests.map((item) => item.path)), new Set([
-    '/mp/api/v1/elders',
+    '/mp/api/v1/elders?pair_id=7',
     '/mp/api/v1/health/assessment?pair_id=7',
   ]));
 
@@ -264,7 +264,7 @@ test('并行历史请求失败不阻断筛查，卸载后结果不回写', async
   page._submitRequestToken = 0;
   page.requestedPairId = 7;
   authApiImpl = async (options) => {
-    if (options.path === '/mp/api/v1/elders') {
+    if (options.path.split('?')[0] === '/mp/api/v1/elders') {
       return { items: [{ pair_id: 7, member: { name: '奶奶' } }] };
     }
     throw new Error('history_offline');
@@ -278,7 +278,7 @@ test('并行历史请求失败不阻断筛查，卸载后结果不回写', async
   const eldersGate = deferred();
   const latestGate = deferred();
   authApiImpl = (options) => (
-    options.path === '/mp/api/v1/elders' ? eldersGate.promise : latestGate.promise
+    options.path.split('?')[0] === '/mp/api/v1/elders' ? eldersGate.promise : latestGate.promise
   );
   const pending = page.loadPage.call(page);
   await Promise.resolve();

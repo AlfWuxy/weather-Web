@@ -314,7 +314,7 @@ def _build_pair_management_context(caregiver_mode=False):
     for pair in pairs:
         label = (pair.location_query or pair.community_code or '').strip()
         if label not in resolved_by_label:
-            resolved_by_label[label] = resolve_location(label)
+            resolved_by_label[label] = resolve_location(label, user_id=current_user.id)
 
     communities = Community.query.order_by(Community.name).all()
     family_members = []

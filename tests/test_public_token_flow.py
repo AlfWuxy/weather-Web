@@ -1250,11 +1250,11 @@ def test_caregiver_get_creates_token_only_for_active_pair(
     db_session.commit()
     active_pair, inactive_pair = pairs
     _login(client, user.username, "caregiver-get-token-pass")
-    monkeypatch.setattr(
-        caregiver_service,
-        "resolve_location",
-        lambda label: {"location_code": "", "display_name": label},
-    )
+    def resolve_for_owner(label, *, user_id):
+        assert user_id == user.id
+        return {"location_code": "", "display_name": label}
+
+    monkeypatch.setattr(caregiver_service, "resolve_location", resolve_for_owner)
 
     inactive_detail = client.get(f"/caregiver/pair/{inactive_pair.id}")
     active_detail_first = client.get(f"/caregiver/pair/{active_pair.id}")

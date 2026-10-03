@@ -54,17 +54,14 @@ def _create_confirmed_pair(db_session, suffix, confirmed_at=FIXED_UTC_NAIVE):
     return user, pair
 
 
-def _patch_caregiver_weather(monkeypatch):
+def _patch_caregiver_weather(monkeypatch, owner_id):
     from services.user import caregiver_service
 
-    monkeypatch.setattr(
-        caregiver_service,
-        'resolve_location',
-        lambda _label: {
-            'location_code': '101240201',
-            'display_name': '都昌',
-        },
-    )
+    def resolve_for_owner(_label, *, user_id):
+        assert user_id == owner_id
+        return {'location_code': '101240201', 'display_name': '都昌'}
+
+    monkeypatch.setattr(caregiver_service, 'resolve_location', resolve_for_owner)
     monkeypatch.setattr(
         caregiver_service,
         'get_weather_with_cache',
@@ -141,7 +138,7 @@ def test_caregiver_dashboard_displays_confirmed_at_in_app_timezone(
         confirmed_at=confirmed_at,
     )
     _login_as(client, user.id)
-    _patch_caregiver_weather(monkeypatch)
+    _patch_caregiver_weather(monkeypatch, user.id)
 
     response = client.get('/caregiver', follow_redirects=True)
 

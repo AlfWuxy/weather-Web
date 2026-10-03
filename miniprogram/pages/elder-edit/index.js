@@ -234,7 +234,7 @@ Page({
       loading: true,
     });
     try {
-      const data = await authApi({ method: 'GET', path: '/mp/api/v1/elders' });
+      const data = await authApi({ method: 'GET', path: `/mp/api/v1/elders?pair_id=${pairId}` });
       if (!loadIsActive(this, request)) return;
       const item = normalizeList(data, ['items', 'elders']).find((elder) => Number(elder.pair_id) === pairId);
       if (!item) throw new Error('not_found');

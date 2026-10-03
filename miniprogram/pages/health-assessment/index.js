@@ -275,7 +275,7 @@ Page({
         : Promise.resolve(null);
       // 路由已携带家人 ID 时，家人列表和最近筛查互不依赖，同步发起可节省一次 RTT。
       const [elderData, prefetchedLatest] = await Promise.all([
-        authApi({ method: 'GET', path: '/mp/api/v1/elders' }),
+        authApi({ method: 'GET', path: requestedPairId ? `/mp/api/v1/elders?pair_id=${requestedPairId}` : '/mp/api/v1/elders' }),
         latestRequest,
       ]);
       if (this._unloaded || this._hidden || pageToken !== this._pageRequestToken) return;

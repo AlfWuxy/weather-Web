@@ -1390,8 +1390,16 @@ def me_delete():
 def elders_list():
     page = max(1, min(request.args.get("page", 1, type=int), 10000))
     page_size = min(50, max(1, setting("PAIR_LIST_PAGE_SIZE", 20)))
-    pairs = Pair.query.filter_by(caregiver_id=g.api_user_id, status="active").order_by(
-        Pair.created_at.desc(), Pair.id.desc()).offset((page - 1) * page_size).limit(page_size + 1).all()
+    query = Pair.query.filter_by(caregiver_id=g.api_user_id, status="active")
+    if "pair_id" in request.args:
+        pair_id = request.args.get("pair_id", type=int)
+        if pair_id is None or not 0 < pair_id <= 9223372036854775807:
+            return _error("invalid_pair_id", "家人信息无效。", 400)
+        # 详情读取仍受同一 owner、active、scope 与健康同意边界约束。
+        query = query.filter(Pair.id == pair_id)
+        page = 1
+    pairs = query.order_by(Pair.created_at.desc(), Pair.id.desc()).offset(
+        (page - 1) * page_size).limit(page_size + 1).all()
     has_more = len(pairs) > page_size
     pairs = pairs[:page_size]
     status_date = today_local()

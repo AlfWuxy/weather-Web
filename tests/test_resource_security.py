@@ -66,7 +66,7 @@ def test_web_pair_limit_and_pagination(app, authenticated_client, db_session, mo
     app.config.update(PAIR_LIST_PAGE_SIZE=2, PAIR_MAX_PER_USER=3)
     calls = []
     monkeypatch.setattr('services.user.caregiver_service.resolve_location',
-                        lambda label: calls.append(label) or {'location_code': '', 'display_name': label})
+                        lambda label, user_id: calls.append(label) or {'location_code': '', 'display_name': label})
     first = authenticated_client.get('/pairs')
     assert first.status_code == 200 and len(calls) == 2
     assert '下一页' in first.get_data(as_text=True)
@@ -350,3 +350,89 @@ def test_geocode_daily_quota_and_backend_fail_closed(app, db_session, monkeypatc
     ResourceBudget.__table__.drop(db.engine)
     assert resolve_location('地点丙', user_id=2)['provider'] == 'fallback'
     assert len(calls) == 1
+
+
+def test_mp_exact_pair_filter_keeps_pagination_owner_scope_and_consent(app, client, db_session, monkeypatch):
+    from core.db_models import Pair, User
+    from core.usage import create_api_token
+    from services.user._common import _create_pair_record
+    users = [User(username=f'filter-owner-{i}', role='user', password_hash='disabled-test-login') for i in range(2)]
+    db_session.add_all(users)
+    db_session.commit()
+    app.config['PAIR_MAX_PER_USER'] = 30
+    pairs = [_create_pair_record(users[0].id, '九江') for _ in range(21)]
+    other = _create_pair_record(users[1].id, '九江')
+    inactive = _create_pair_record(users[0].id, '九江')
+    inactive.status = 'inactive'
+    db_session.commit()
+    target_id = pairs[0].id
+    other_id, inactive_id = other.id, inactive.id
+    monkeypatch.setattr('blueprints.mp_api.get_bootstrap_payload', lambda: {})
+    token = create_api_token(users[0].id)
+    headers = {'Authorization': f'Bearer {token}'}
+    route = f'/mp/api/v1/elders?pair_id={target_id}'
+    assert client.get(route, headers=headers).status_code == 428
+    assert client.post('/mp/api/v1/health-consent', headers=headers, json={
+        'consent': True, 'health_consent_version': app.config['WX_MINIPROGRAM_PRIVACY_VERSION'],
+    }).status_code == 200
+    first = client.get('/mp/api/v1/elders', headers=headers).get_json()
+    assert first['has_more'] and len(first['data']) == 20
+    assert target_id not in [row['pair_id'] for row in first['data']]
+    second = client.get('/mp/api/v1/elders?page=2', headers=headers).get_json()
+    assert [row['pair_id'] for row in second['data']] == [target_id]
+    exact = client.get(route + '&page=999', headers=headers).get_json()
+    assert exact['page'] == 1 and not exact['has_more']
+    assert [row['pair_id'] for row in exact['data']] == [target_id]
+    absent = [client.get(f'/mp/api/v1/elders?pair_id={value}', headers=headers).get_json()
+              for value in (other_id, inactive_id, 999999)]
+    assert all(body == absent[0] for body in absent)
+    assert absent[0]['data'] == []
+    for invalid in ('', '0', '-1', 'abc', '1.2', str(2 ** 63)):
+        rejected = client.get(f'/mp/api/v1/elders?pair_id={invalid}', headers=headers)
+        assert rejected.status_code == 400
+        assert rejected.get_json()['error'] == 'invalid_pair_id'
+    narrow = create_api_token(users[0].id, name='filter-read-only', scopes=['miniprogram:read'])
+    assert client.get(route, headers={'Authorization': f'Bearer {narrow}'}).status_code == 403
+
+
+def test_caregiver_geocode_budget_isolated_by_logged_in_owner(app, authenticated_client, db_session, monkeypatch):
+    from core.db_models import User
+    from core.resource_budget import ResourceBudget
+    from services.user._common import _create_pair_record
+    first = User.query.filter_by(username='testuser').one()
+    second = User(username='geocode-second', role='user')
+    second.set_password('testpass')
+    db_session.add(second)
+    db_session.commit()
+    owner_ids = [first.id, second.id]
+    for owner in owner_ids:
+        for index in range(2):
+            _create_pair_record(owner, f'预算测试地址{owner}-{index}')
+    db_session.commit()
+    app.config.update(AMAP_WEB_SERVICE_KEY='test-service-key', GEOCODE_USER_DAILY_LIMIT=1,
+                      CITY_LOCATION_MAP={})
+    calls = []
+    monkeypatch.setattr('services.location_resolver.requests.get',
+                        lambda *a, **kw: calls.append(kw) or FakeGeocode())
+    monkeypatch.setattr('services.user.caregiver_service.get_weather_with_cache', lambda code: ({}, None))
+    with app.app_context():
+        assert authenticated_client.get('/pairs').status_code == 200
+    assert len(calls) == 1
+    other_client = app.test_client()
+    with other_client.session_transaction() as session:
+        session['_csrf_token'] = 'second-csrf'
+    # fixture 持有外层 app context；各浏览器请求需独立 g，避免复用其用户缓存。
+    with app.app_context():
+        assert other_client.post('/login', data={
+            'username': 'geocode-second', 'password': 'testpass', 'csrf_token': 'second-csrf',
+        }).status_code == 302
+    with app.app_context():
+        assert other_client.get('/pairs').status_code == 200
+    assert len(calls) == 2
+    with app.app_context():
+        assert authenticated_client.get('/pairs').status_code == 200
+    assert len(calls) == 2
+    rows = ResourceBudget.query.filter(ResourceBudget.key.like('GEOCODE:user:%')).all()
+    assert len(rows) == 2
+    assert {row.key.split(':')[2] for row in rows} == {str(owner) for owner in owner_ids}
+    assert all(row.used == 1 for row in rows)

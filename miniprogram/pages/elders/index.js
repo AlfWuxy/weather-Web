@@ -199,6 +199,8 @@ Page({
 
   async loadMoreElders() {
     if (!this.data.eldersHasMore || this.data.loading || !requireToken()) return;
+    // 授权守卫会跳过已完成的首屏加载，分页操作须明确请求下一次读取。
+    this._healthConsentReloadPending = true;
     await guardHealthSensitivePage(this, () => this.loadCareHome(true));
   },
 
