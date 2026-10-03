@@ -919,12 +919,12 @@ def render_role_entry():
             community_target = community_next
             community_action_label = '进入社区看板'
         else:
-            community_target = url_for('user.community_risk')
-            community_action_label = '查看社区风险'
+            community_target = url_for('public.cooling_resources')
+            community_action_label = '查看避暑资源'
         community_requires_login = False
     elif is_guest:
-        community_target = url_for('user.community_risk')
-        community_action_label = '查看社区风险'
+        community_target = url_for('public.cooling_resources')
+        community_action_label = '查看避暑资源'
         community_requires_login = False
     else:
         community_target = url_for('public.login', next=community_next)

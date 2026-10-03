@@ -354,7 +354,7 @@ class CommunityRiskService:
             color = '#16a34a'
         return level, label, color
 
-    def _collect_medical_counts(self, end_date, window_days, disease_filter=''):
+    def _collect_medical_counts(self, end_date, window_days, disease_filter='', community_scope=None):
         """拉取窗口期社区病例计数，用于 SIR 与不确定性估计。"""
         window_days = max(1, int(window_days))
         start_date = end_date - timedelta(days=window_days - 1)
@@ -384,6 +384,8 @@ class CommunityRiskService:
         if disease_filter:
             query = query.filter(MedicalRecord.disease_category == disease_filter)
 
+        if community_scope is not None:
+            query = query.filter(MedicalRecord.community.in_(community_scope))
         rows = query.with_entities(MedicalRecord.community).all()
         counts = {}
         total_records = 0
@@ -666,7 +668,7 @@ class CommunityRiskService:
             'expected_excess_visits': round(excess_risk_score, 1)
         }
     
-    def generate_community_risk_map(self, weather_data, target_date=None, window_days=30, disease_filter=''):
+    def generate_community_risk_map(self, weather_data, target_date=None, window_days=30, disease_filter='', community_scope=None):
         """
         生成社区风险地图数据（学术增强版）。
 
@@ -708,6 +710,8 @@ class CommunityRiskService:
         # 2) 计算天气驱动风险底图
         community_risks = []
         for name, profile in self.community_profiles.items():
+            if community_scope is not None and name not in community_scope:
+                continue
             risk = self.calculate_community_risk_score(name, macro_rr, target_date)
             risk['latitude'] = profile.get('latitude', 29.35)
             risk['longitude'] = profile.get('longitude', 116.37)
@@ -776,7 +780,7 @@ class CommunityRiskService:
             item['percentile_rank'] = round(raw_percentiles.get(item['community'], 0.0), 1)
 
         # 4) 历史病例窗口，做 SIR / CI / 不确定性
-        medical_summary = self._collect_medical_counts(target_date, window_days, disease_filter=disease_filter)
+        medical_summary = self._collect_medical_counts(target_date, window_days, disease_filter=disease_filter, community_scope=community_scope)
         counts_by_community = medical_summary['counts_by_community']
         analysis_days = max(1, int(medical_summary['window_days']))
 

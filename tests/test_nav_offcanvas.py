@@ -8,7 +8,8 @@ def _set_logged_in_user(client, db_session, *, username, role):
     """建立指定角色的测试会话。"""
     from core.db_models import User
 
-    user = User(username=username, role=role, community='朝阳社区')
+    user = User(username=username, role=role, community='朝阳社区',
+                authorized_community='朝阳社区' if role == 'community' else None)
     user.set_password('testpass')
     db_session.add(user)
     db_session.commit()
@@ -89,8 +90,8 @@ def test_guest_navigation_only_offers_available_destinations(client):
 
 
 @pytest.mark.parametrize('role', ['guest', 'user', 'caregiver', 'community', 'admin'])
-def test_mobile_navigation_keeps_community_risk_available(client, db_session, role):
-    """所有身份都能从移动抽屉进入社区风险页。"""
+def test_mobile_navigation_requires_patient_data_authorization(client, db_session, role):
+    """患者统计入口仅向管理员和已授权社区人员展示。"""
     if role == 'guest':
         assert client.get('/guest').status_code == 302
     else:
@@ -98,14 +99,14 @@ def test_mobile_navigation_keeps_community_risk_available(client, db_session, ro
 
     body = client.get('/').get_data(as_text=True)
     drawer = body.split('id="appNavDrawer"', 1)[1]
-    assert 'href="/community-risk" data-nav-key="community-risk"' in drawer
+    assert ('href="/community-risk" data-nav-key="community-risk"' in drawer) == (role in ('community', 'admin'))
 
 
 @pytest.mark.parametrize(
     ('role', 'family_target', 'community_target', 'community_label'),
     [
-        ('user', '/pairs', '/community-risk', '查看社区风险'),
-        ('caregiver', '/caregiver', '/community-risk', '查看社区风险'),
+        ('user', '/pairs', '/cooling', '查看避暑资源'),
+        ('caregiver', '/caregiver', '/cooling', '查看避暑资源'),
         ('community', '/pairs', '/community', '进入社区工作台'),
         ('admin', '/caregiver', '/community', '进入社区工作台'),
     ],
@@ -191,8 +192,8 @@ def test_care_destination_is_role_aware(client, db_session, role, destination):
 @pytest.mark.parametrize(
     ('role', 'expected_target', 'expected_label'),
     [
-        ('user', '/community-risk', '查看社区风险'),
-        ('caregiver', '/community-risk', '查看社区风险'),
+        ('user', '/cooling', '查看避暑资源'),
+        ('caregiver', '/cooling', '查看避暑资源'),
         ('community', '/community', '进入社区看板'),
         ('admin', '/community', '进入社区看板'),
     ],

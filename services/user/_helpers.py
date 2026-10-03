@@ -292,7 +292,9 @@ def _ensure_demo_statuses(community_code, status_date, caregiver_id=None, pair_c
 def _community_access_allowed(community_code):
     if getattr(current_user, 'role', None) == 'admin':
         return True
-    user_code = _normalize_code(getattr(current_user, 'community', None))
+    if getattr(current_user, 'role', None) != 'community':
+        return False
+    user_code = _normalize_code(getattr(current_user, 'authorized_community', None))
     return bool(user_code) and user_code == community_code
 
 

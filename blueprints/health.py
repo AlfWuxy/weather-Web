@@ -318,6 +318,10 @@ def family_member_delete(member_id):
 
     member = FamilyMember.query.filter_by(id=member_id, user_id=current_user.id).first_or_404()
     try:
+        from core.db_models import Notification, Pair, UsageEvent
+        # 保留照护关系和历史事件，但移除已删除家庭档案的可空引用。
+        for model in (Notification, Pair, UsageEvent):
+            model.query.filter_by(member_id=member.id).update({'member_id': None}, synchronize_session='fetch')
         # 先清理关联的健康日记和用药提醒
         HealthDiary.query.filter_by(member_id=member.id, user_id=current_user.id).delete()
         MedicationReminder.query.filter_by(member_id=member.id, user_id=current_user.id).delete()

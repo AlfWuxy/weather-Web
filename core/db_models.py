@@ -31,6 +31,7 @@ class User(UserMixin, db.Model):
     age = db.Column(db.Integer)
     gender = db.Column(db.String(10))
     community = db.Column(db.String(100))  # 所属社区
+    authorized_community = db.Column(db.String(100))  # 管理员指派的管辖社区，与个人定位独立
     has_chronic_disease = db.Column(db.Boolean, default=False)
     chronic_diseases = db.Column(db.Text)  # JSON格式存储多个慢性病
 
@@ -40,6 +41,9 @@ class User(UserMixin, db.Model):
 
     def set_password(self, password):
         self.password_hash = generate_password_hash(password)
+        if self.id is not None:
+            from core.usage import revoke_api_tokens
+            revoke_api_tokens(self.id)
 
     def check_password(self, password):
         return check_password_hash(self.password_hash, password)
@@ -453,11 +457,16 @@ class ApiToken(db.Model):
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
     last_used_at = db.Column(db.DateTime)
     revoked_at = db.Column(db.DateTime)
+    expires_at = db.Column(db.DateTime)
 
     __table_args__ = (
         db.Index('ix_api_tokens_user_id', 'user_id'),
         db.Index('ix_api_tokens_token_hash', 'token_hash'),
     )
+
+    @property
+    def is_active(self):
+        return not self.revoked_at and bool(self.expires_at) and ensure_utc_aware(self.expires_at) > utcnow()
 
 
 class UsageEvent(db.Model):

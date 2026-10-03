@@ -386,6 +386,7 @@ def configure_app(app, logger):
     app.config.setdefault('RATE_LIMIT_MP_ALERTS', os.getenv('RATE_LIMIT_MP_ALERTS', '30 per minute'))
     app.config.setdefault('RATE_LIMIT_MP_EVENTS', os.getenv('RATE_LIMIT_MP_EVENTS', '60 per minute'))
     app.config.setdefault('PAIR_ACTION_TOKEN_TTL_DAYS', parse_int(os.getenv('PAIR_ACTION_TOKEN_TTL_DAYS', '90'), default=90))
+    app.config.setdefault('API_TOKEN_TTL_DAYS', parse_int(os.getenv('API_TOKEN_TTL_DAYS', '30'), default=30))
     app.config.setdefault('SHORT_CODE_TTL_DAYS', parse_int(os.getenv('SHORT_CODE_TTL_DAYS', '90'), default=90))
 
     if not app.config['DEBUG'] and app.config['RATE_LIMIT_STORAGE_URI'].startswith('memory://'):

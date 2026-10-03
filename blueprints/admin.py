@@ -474,12 +474,16 @@ def admin_delete_user(user_id):
         flash('权限不足', 'error')
         return redirect(url_for('user.user_dashboard'))
 
-    user = User.query.get_or_404(user_id)
+    user = db.get_or_404(User, user_id)
     if user.role == 'admin':
         flash('不能删除管理员账户', 'error')
         return redirect(url_for('admin.admin_users'))
 
     try:
+        from core.db_models import ApiToken, UsageEvent
+        # 凭证与账号同事务删除；历史埋点去关联，业务关联仍由外键保护。
+        ApiToken.query.filter_by(user_id=user.id).delete(synchronize_session='fetch')
+        UsageEvent.query.filter_by(user_id=user.id).update({'user_id': None}, synchronize_session='fetch')
         db.session.delete(user)
         db.session.commit()
         flash(f'用户 {user.username} 已删除', 'success')
@@ -497,7 +501,7 @@ def admin_edit_user(user_id):
         flash('权限不足', 'error')
         return redirect(url_for('user.user_dashboard'))
 
-    user = User.query.get_or_404(user_id)
+    user = db.get_or_404(User, user_id)
 
     if request.method == 'POST':
         # 验证用户名
@@ -554,6 +558,15 @@ def admin_edit_user(user_id):
         user.gender = gender
         user.community = community
         user.role = role
+        if 'authorized_community' in request.form:
+            authorized = sanitize_input(request.form.get('authorized_community'), max_length=100) or None
+            if authorized and not Community.query.filter_by(name=authorized).first():
+                db.session.rollback()
+                flash('授权社区不存在', 'error')
+                return redirect(url_for('admin.admin_edit_user', user_id=user_id))
+            user.authorized_community = authorized if role == 'community' else None
+        elif role != 'community':
+            user.authorized_community = None
 
         db.session.commit()
         flash('用户信息更新成功', 'success')
@@ -629,6 +642,12 @@ def admin_add_user():
             role=role
         )
         user.set_password(password)
+
+        authorized = sanitize_input(request.form.get('authorized_community'), max_length=100) or None
+        if authorized and not Community.query.filter_by(name=authorized).first():
+            flash('授权社区不存在', 'error')
+            return redirect(url_for('admin.admin_add_user'))
+        user.authorized_community = authorized if role == 'community' else None
 
         db.session.add(user)
         db.session.commit()

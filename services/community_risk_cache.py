@@ -94,6 +94,7 @@ def build_community_risk_cache_params(
     disease_filter='',
     city='',
     weather_data=None,
+    community_scope=None,
 ):
     """统一生成 API 与预计算任务共享的社区风险缓存参数。"""
     if hasattr(analysis_date, 'isoformat'):
@@ -104,6 +105,8 @@ def build_community_risk_cache_params(
         analysis_date = str(analysis_date)
 
     return {
+        'privacy_version': 2,
+        'community_scope': None if community_scope is None else sorted(set(community_scope)),
         'analysis_date': analysis_date,
         'window_days': _normalize_window_days(window_days),
         'disease_filter': _normalize_disease_filter(disease_filter),

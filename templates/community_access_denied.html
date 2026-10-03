@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block title %}需要社区授权 · 宜老天气通{% endblock %}
+{% block content %}
+<div class="container py-4">
+    <div class="card shadow-sm"><div class="card-body">
+        <h1 class="h4">此页面需要社区数据授权</h1>
+        <p>社区病例统计仅向管理员和获授权的社区人员开放。社区工作人员请联系管理员分配管辖社区。</p>
+        <p class="text-muted">您仍可查看天气、风险说明和公共避暑资源。</p>
+        <a class="btn btn-primary" href="{{ url_for('tools.forecast_7day') }}">查看天气预报</a>
+        <a class="btn btn-outline-primary" href="{{ url_for('public.cooling_resources') }}">查看避暑资源</a>
+    </div></div>
+</div>
+{% endblock %}

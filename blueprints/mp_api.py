@@ -77,6 +77,16 @@ def _pair_for_user(pair_id: int):
     return q.first()
 
 
+@bp.route('/token/revoke', methods=['POST'], endpoint='revoke_token')
+@limiter.limit(lambda: current_app.config.get('RATE_LIMIT_MP_WRITE', '30 per minute'), key_func=_mp_rate_limit_key)
+@require_api_token
+def revoke_token():
+    """退出绑定时在服务端撤销当前凭证。"""
+    g.api_token.revoked_at = utcnow()
+    db.session.commit()
+    return jsonify({'success': True, 'data': {'revoked': True}})
+
+
 @bp.route("/me", endpoint="me")
 @limiter.limit(lambda: current_app.config.get("RATE_LIMIT_MP_READ", "120 per minute"), key_func=_mp_rate_limit_key)
 @require_api_token
