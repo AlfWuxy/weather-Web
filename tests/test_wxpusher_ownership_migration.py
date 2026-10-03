@@ -464,7 +464,7 @@ def test_wxpusher_ownership_migration_revokes_unproven_history(
         revision = connection.execute(
             'SELECT version_num FROM alembic_version'
         ).fetchone()[0]
-        assert revision == '0033_institution_data_pilot'
+        assert revision == '0034_security_budgets'
         columns = {
             row[1]
             for row in connection.execute('PRAGMA table_info(users)')

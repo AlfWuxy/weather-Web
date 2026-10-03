@@ -13,7 +13,7 @@ from sqlalchemy import inspect
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
-HEAD_REVISION = '0033_institution_data_pilot'
+HEAD_REVISION = '0034_security_budgets'
 BASE_REVISION = '0029_wxpusher_uid_ownership'
 
 
