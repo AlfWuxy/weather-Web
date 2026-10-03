@@ -259,7 +259,6 @@ def elders_create():
         pair_id=pair.id,
         member_id=member.id,
         source="miniprogram",
-        meta={"location_query": location_query},
     )
 
     return jsonify({"success": True, "data": {"pair_id": pair.id, "member_id": member.id}})

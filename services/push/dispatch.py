@@ -237,7 +237,7 @@ def dispatch_alerts(now=None, dedupe_hours: int = 6) -> Dict[str, Any]:
         query = (pair.location_query or pair.community_code or "").strip()
         resolved = resolve_location(query)
         if query and resolved.get("provider") == "fallback":
-            logger.warning("跳过未成功解析地点的推送分组，pair_id=%s query=%s", getattr(pair, "id", None), query)
+            logger.warning("跳过未成功解析地点的推送分组，pair_id=%s", getattr(pair, "id", None))
             continue
         code = resolved.get("location_code") or ""
         if not code:
@@ -346,7 +346,6 @@ def dispatch_alerts(now=None, dedupe_hours: int = 6) -> Dict[str, Any]:
                         "channel": "wxpusher",
                         "alert_id": weather_alert.id,
                         "alert_type": alert_type,
-                        "location_code": location_code,
                     },
                 )
             else:
@@ -361,8 +360,6 @@ def dispatch_alerts(now=None, dedupe_hours: int = 6) -> Dict[str, Any]:
                         "channel": "wxpusher",
                         "alert_id": weather_alert.id,
                         "alert_type": alert_type,
-                        "location_code": location_code,
-                        "error": result.get("error") or "",
                     },
                 )
 

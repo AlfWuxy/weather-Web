@@ -151,7 +151,6 @@ def _create_pair(location_query, member_id=None):
         pair_id=pair.id,
         member_id=member_id,
         source='web',
-        meta={'location_query': location_query},
     )
     return pair
 
@@ -207,9 +206,9 @@ def _build_pair_management_context(caregiver_mode=False):
             try:
                 weather_data, _ = get_weather_with_cache(code)
                 weather_by_code[code] = weather_data or {}
-            except Exception:
+            except Exception as exc:
                 weather_by_code[code] = {}
-                logger.warning("加载天气缓存失败，code=%s", code, exc_info=True)
+                logger.warning("加载天气缓存失败，异常类型=%s", type(exc).__name__)
 
     pair_cards = []
     now = utcnow()
@@ -371,8 +370,8 @@ def pair_management():
 
         try:
             pair = _create_pair(location_query, member_id=member_id)
-        except Exception:
-            logger.warning("创建绑定失败(location_query=%s)", location_query[:80], exc_info=True)
+        except Exception as exc:
+            logger.warning("创建绑定失败，异常类型=%s", type(exc).__name__)
             flash('创建失败，请检查输入后重试。', 'error')
             return redirect(url_for('user.pair_management'))
         return redirect(url_for('user.pair_management', created=pair.id))
@@ -419,8 +418,8 @@ def caregiver_pair_create():
 
     try:
         pair = _create_pair(location_query, member_id=member_id)
-    except Exception:
-        logger.warning("照护端创建绑定失败(location_query=%s)", location_query[:80], exc_info=True)
+    except Exception as exc:
+        logger.warning("照护端创建绑定失败，异常类型=%s", type(exc).__name__)
         flash('创建失败，请检查输入后重试。', 'error')
         return redirect(url_for('user.caregiver_dashboard'))
     return redirect(url_for('user.caregiver_dashboard', created=pair.id))

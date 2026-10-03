@@ -10,6 +10,7 @@ import logging
 import secrets
 
 from core.db_models import ApiToken, UsageEvent
+from core.analytics_privacy import sanitize_analytics_meta
 from core.extensions import db
 from core.security import hash_identifier
 from core.time_utils import utcnow
@@ -57,8 +58,9 @@ def log_usage_event(event_type, user_id=None, pair_id=None, member_id=None, sour
         return None
     try:
         payload = None
-        if meta is not None:
-            payload = json.dumps(meta, ensure_ascii=False)
+        safe_meta = sanitize_analytics_meta(event_type, meta)
+        if safe_meta is not None:
+            payload = json.dumps(safe_meta, ensure_ascii=False)
         event = UsageEvent(
             user_id=user_id,
             pair_id=pair_id,
@@ -72,7 +74,6 @@ def log_usage_event(event_type, user_id=None, pair_id=None, member_id=None, sour
         db.session.commit()
         return event
     except Exception as exc:
-        logger.debug("usage event write failed: %s", exc)
+        logger.debug("埋点写入失败，异常类型=%s", type(exc).__name__)
         db.session.rollback()
         return None
-

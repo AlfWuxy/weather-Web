@@ -1097,7 +1097,7 @@ def _api_usage_event():
 
         pair_id = payload.get('pair_id')
         member_id = payload.get('member_id')
-        source = sanitize_input(payload.get('source'), max_length=20) or 'web'
+        source = 'web'
         meta = payload.get('meta') if isinstance(payload.get('meta'), (dict, list)) else None
 
         resolved_pair_id = None
