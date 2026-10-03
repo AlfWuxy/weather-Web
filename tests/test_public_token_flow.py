@@ -1276,7 +1276,7 @@ def test_auth_and_caregiver_logs_do_not_include_raw_canaries(
     monkeypatch,
     caplog,
 ):
-    """认证用户名与自由地点只能以 ID 或长度进入日志。"""
+    """认证用户名与自由地点不得进入日志，绑定失败仅记录属主与异常类型。"""
     from services.user import caregiver_service
 
     username_canary = "raw-username-canary-7429"
@@ -1320,7 +1320,9 @@ def test_auth_and_caregiver_logs_do_not_include_raw_canaries(
     assert username_canary not in caplog.text
     assert location_canary not in caplog.text
     assert "identifier_len=" in caplog.text
-    assert "location_len=" in caplog.text
+    assert f"owner_user_id={user.id}" in caplog.text
+    assert "异常类型=RuntimeError" in caplog.text
+    assert "canary failure" not in caplog.text
 
 
 def test_help_does_not_count_as_confirmation(app, client):
