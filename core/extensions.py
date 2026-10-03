@@ -3,6 +3,20 @@
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager
 from flask_limiter import Limiter
+from sqlite3 import Connection as SQLiteConnection
+from sqlalchemy import event
+from sqlalchemy.engine import Engine
+
+
+@event.listens_for(Engine, 'connect')
+def _enable_sqlite_foreign_keys(connection, _record):
+    """每个 SQLite 连接都执行外键约束，阻止新孤儿记录。"""
+    if isinstance(connection, SQLiteConnection):
+        cursor = connection.cursor()
+        try:
+            cursor.execute('PRAGMA foreign_keys=ON')
+        finally:
+            cursor.close()
 
 db = SQLAlchemy()
 # SQLAlchemy 连接池配置（在 core/config.py 的 configure_app 中设置）

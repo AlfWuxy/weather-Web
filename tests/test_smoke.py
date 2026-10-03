@@ -76,7 +76,7 @@ def test_authenticated_pages(client):
     _login_as_guest(client)
     assert client.get("/dashboard").status_code == 200
     assert client.get("/health-assessment").status_code == 200
-    assert client.get("/community-risk").status_code == 200
+    assert client.get("/community-risk").status_code == 403
     ai_response = client.get("/ai-qa")
     assert ai_response.status_code == 200
     ai_body = ai_response.get_data(as_text=True)

@@ -9,12 +9,12 @@ from flask import current_app, flash, redirect, render_template, request, sessio
 from flask_login import current_user
 
 from core.analytics import get_high_risk_streak
-from core.db_models import Community, HealthRiskAssessment
+from core.db_models import ApiToken, Community, HealthRiskAssessment
 from core.extensions import db
 from core.guest import build_guest_profile, get_guest_assessment, is_guest_user
 from core.notifications import create_notification
 from core.time_utils import utcnow
-from core.usage import create_api_token
+from core.usage import api_token_ttl_days, create_api_token, revoke_api_tokens
 from core.weather import (
     ensure_user_location_valid,
     get_weather_with_cache,
@@ -223,6 +223,17 @@ def profile():
     if request.method == 'POST':
         form_id = sanitize_input(request.form.get('form_id'), max_length=30) or 'basic'
 
+        if form_id in ('revoke_api_token', 'revoke_all_api_tokens'):
+            token_id = request.form.get('token_id', type=int)
+            if form_id == 'revoke_api_token' and token_id is None:
+                flash('凭证不存在', 'error')
+                return redirect(url_for('user.profile'))
+            revoke_api_tokens(current_user.id, token_id if form_id == 'revoke_api_token' else None)
+            db.session.commit()
+            session.pop('last_api_token_plain', None)
+            flash('绑定凭证已撤销', 'success')
+            return redirect(url_for('user.profile'))
+
         if form_id == 'api_token':
             token_name = sanitize_input(request.form.get('token_name'), max_length=80)
             try:
@@ -250,7 +261,8 @@ def profile():
                     return redirect(url_for('user.profile'))
                 current_user.set_password(result)
                 db.session.commit()
-                flash('密码已更新', 'success')
+                session.pop('last_api_token_plain', None)
+                flash('密码已更新，所有小程序绑定凭证已撤销', 'success')
             else:
                 flash('未填写新密码', 'info')
             return redirect(url_for('user.profile'))
@@ -318,7 +330,9 @@ def profile():
         'profile.html',
         communities=communities,
         chronic_diseases_list=chronic_diseases_list,
-        last_api_token_plain=last_api_token_plain
+        last_api_token_plain=last_api_token_plain,
+        api_token_ttl_days=api_token_ttl_days(),
+        api_tokens=ApiToken.query.filter_by(user_id=current_user.id).order_by(ApiToken.created_at.desc()).all()
     )
 
 

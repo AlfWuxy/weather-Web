@@ -7,7 +7,7 @@ import secrets
 import time
 from datetime import datetime
 
-from flask import g, request, session, url_for as flask_url_for
+from flask import g, jsonify, request, session, url_for as flask_url_for
 from flask_login import current_user
 
 from core.metric_explanations import (
@@ -62,6 +62,27 @@ def _valid_key_length(value):
 
 def register_hooks(app):
     """Register app hooks, filters, and context processors."""
+    @app.errorhandler(413)
+    def request_too_large(_error):
+        return jsonify({'success': False, 'error': 'request_too_large'}), 413
+
+    @app.before_request
+    def enforce_request_body_limit():
+        # 先检查长度，CSRF 或业务代码不得先解析超大请求体。
+        maximum = app.config.get('MAX_CONTENT_LENGTH', 1024 * 1024)
+        if request.content_length is not None and request.content_length > maximum:
+            from werkzeug.exceptions import RequestEntityTooLarge
+            raise RequestEntityTooLarge()
+        if request.environ.get('wsgi.input_terminated') and not request.environ.get('CONTENT_LENGTH'):
+            # 分块上传无 Content-Length，额外读取一个哨兵字节区分恰好上限与超限。
+            import io
+            from werkzeug.exceptions import RequestEntityTooLarge
+            body = request.environ['wsgi.input'].read(maximum + 1)
+            if len(body) > maximum:
+                raise RequestEntityTooLarge()
+            request.environ['wsgi.input'] = io.BytesIO(body)
+            request.environ['CONTENT_LENGTH'] = str(len(body))
+
     @app.before_request
     def init_request_context():
         """初始化请求上下文（结构化日志使用）"""
@@ -176,12 +197,12 @@ def register_hooks(app):
         map_paths = {'/community-risk', '/cooling'}
         needs_map_keys = request.endpoint in map_endpoints or request.path in map_paths
         if needs_map_keys:
-            amap_key = app.config.get('AMAP_KEY', '')
+            amap_key = app.config.get('AMAP_JS_API_KEY', '')
             amap_code = app.config.get('AMAP_SECURITY_JS_CODE', '')
             if _valid_key_length(amap_key):
                 payload['amap_key'] = amap_key
             elif amap_key:
-                logger.warning("Invalid AMAP_KEY length; skipping template injection")
+                logger.warning("Invalid AMAP_JS_API_KEY length; skipping template injection")
             if _valid_key_length(amap_code):
                 payload['amap_security_js_code'] = amap_code
             elif amap_code:

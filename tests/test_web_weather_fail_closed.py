@@ -37,7 +37,8 @@ def _login_as(client, user_id, csrf_token='test-csrf-token'):
 
 
 def _create_user(db_session, username, role, community='都昌'):
-    user = User(username=username, role=role, community=community)
+    user = User(username=username, role=role, community=community,
+                authorized_community=community if role == 'community' else None)
     user.set_password('weather-guard-test-password')
     db_session.add(user)
     db_session.commit()

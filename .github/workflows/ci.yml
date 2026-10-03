@@ -84,3 +84,11 @@ jobs:
 
       - name: 运行手工契约测试
         run: python -m pytest -q -m manual
+
+      - name: 配置 Node.js 20
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: "20"
+
+      - name: 运行前端与小程序安全回归
+        run: node --test tests/test_heat_risk_workbench_frontend.js tests/test_miniprogram_elders_paging.js tests/test_miniprogram_token_lifecycle.js

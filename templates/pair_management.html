@@ -252,6 +252,11 @@
                             {% endfor %}
                         </div>
                         <div class="text-muted small mt-3">升级链仅记录状态，请结合实际情况与社区沟通。</div>
+                        <nav class="d-flex gap-3 mt-3" aria-label="监测对象分页">
+                            {% if pair_page > 1 %}<a href="{{ url_for(request.endpoint, page=pair_page - 1) }}">上一页</a>{% endif %}
+                            <span>第 {{ pair_page }} 页</span>
+                            {% if pair_has_more %}<a href="{{ url_for(request.endpoint, page=pair_page + 1) }}">下一页</a>{% endif %}
+                        </nav>
                     {% else %}
                         <div class="text-muted">暂无监测对象，请先在左侧添加老人并设置所在地。</div>
                     {% endif %}

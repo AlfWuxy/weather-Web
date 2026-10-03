@@ -74,6 +74,16 @@
                             <small class="text-muted">留空表示不修改密码</small>
                         </div>
 
+                        <div class="mb-3">
+                            <label for="authorized_community" class="form-label">管辖社区（管理员授权）</label>
+                            <select class="form-select" id="authorized_community" name="authorized_community">
+                                <option value="">未授权</option>
+                                {% for comm in communities %}
+                                <option value="{{ comm.name }}" {% if user.authorized_community == comm.name %}selected{% endif %}>{{ comm.name }}</option>
+                                {% endfor %}
+                            </select>
+                            <small class="text-muted">仅对社区人员生效，个人定位修改不会改变此授权。</small>
+                        </div>
                         <hr>
 
                         <div class="d-flex gap-2">
@@ -89,7 +99,6 @@
     </div>
 </div>
 {% endblock %}
-
 
 
 

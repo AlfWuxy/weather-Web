@@ -245,7 +245,7 @@ def test_dispatch_minimizes_identity_data_sent_to_third_party(app, db_session, m
         monkeypatch.setattr(
             dispatch_mod,
             "resolve_location",
-            lambda _query: {
+            lambda _query, **_kwargs: {
                 "location_code": "101240201",
                 "provider": "amap",
                 "display_name": "都昌某路123号",

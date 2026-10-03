@@ -51,5 +51,6 @@
       </view>
     </view>
   </block>
+  <button wx:if="{{hasMore}}" class="btn-outline" loading="{{loading}}" disabled="{{loading}}" bindtap="loadMore">加载更多老人</button>
 </view>
 

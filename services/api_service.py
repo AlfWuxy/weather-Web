@@ -22,6 +22,8 @@ from core.weather import (
 from core.db_models import Community, FamilyMember, Pair
 from core.extensions import db
 from core.usage import log_usage_event
+from core.input_limits import validate_event_meta
+from core.resource_budget import ResourceLimitError, ResourceBudgetUnavailable
 from utils.parsers import parse_date, parse_int, safe_json_loads
 from utils.error_handlers import handle_api_exception
 from utils.validators import sanitize_input
@@ -645,6 +647,10 @@ def api_forecast_daily():
 
 def _api_community_risk_map_v2():
     """获取社区风险地图数据（改进版）"""
+    from core.community_access import patient_community_scope
+    community_scope = patient_community_scope()
+    if community_scope == ():
+        return jsonify({'success': False, 'error': 'forbidden'}), 403
     try:
         from services.community_risk_service import get_community_service
         from services.community_risk_cache import (
@@ -689,6 +695,7 @@ def _api_community_risk_map_v2():
             disease_filter=disease_filter,
             city=city,
             weather_data=weather_data,
+            community_scope=community_scope,
         )
 
         def _build_result():
@@ -696,7 +703,8 @@ def _api_community_risk_map_v2():
                 weather_data,
                 target_date=target_date,
                 window_days=window_days,
-                disease_filter=disease_filter
+                disease_filter=disease_filter,
+                **({'community_scope': community_scope} if community_scope is not None else {})
             )
 
         result, cache_hit = get_or_build_community_risk_result(cache_params, _build_result)
@@ -926,7 +934,7 @@ def _api_ai_ask():
             retries=current_app.config.get('AI_REQUEST_RETRIES', 1),
             max_tokens=current_app.config.get('AI_MAX_TOKENS', 800)
         )
-        answer = service.ask(question, model)
+        answer = service.ask(question, model, user_id=current_user.id)
         triage = None
         if current_app.config.get('FEATURE_EMERGENCY_TRIAGE'):
             from services.emergency_triage import triage_symptoms
@@ -945,6 +953,10 @@ def _api_ai_ask():
         if triage is not None:
             payload['triage'] = triage
         return jsonify(payload)
+    except ResourceLimitError:
+        return jsonify({'success': False, 'error': '服务额度已用完，请稍后再试'}), 429
+    except ResourceBudgetUnavailable:
+        return jsonify({'success': False, 'error': '服务暂不可用'}), 503
     except API_EXCEPTIONS as exc:
         return handle_api_exception(exc, "AI问答失败", log=logger)
 
@@ -989,6 +1001,10 @@ def api_chronic_rules_version():
 
 def _api_comprehensive_alert():
     """获取综合健康预警"""
+    from core.community_access import patient_community_scope
+    community_scope = patient_community_scope()
+    if community_scope == ():
+        return jsonify({'success': False, 'error': 'forbidden'}), 403
     try:
         from services.dlnm_risk_service import get_dlnm_service
         from services.forecast_service import get_forecast_service
@@ -1043,7 +1059,10 @@ def _api_comprehensive_alert():
         )
 
         # 社区风险
-        community_result = community_service.generate_community_risk_map(current_weather)
+        community_result = community_service.generate_community_risk_map(
+            current_weather,
+            **({'community_scope': community_scope} if community_scope is not None else {})
+        )
 
         # 综合预警级别（蓝/黄/橙/红）
         if rr >= 1.4 or summary['high_risk_days'] >= 3:
@@ -1091,14 +1110,19 @@ def _api_usage_event():
     """Write pilot usage event (server-side validation, CSRF-protected)."""
     try:
         payload = request.get_json(silent=True) or {}
+        if not isinstance(payload, dict):
+            return jsonify({'success': False, 'error': 'invalid_payload'}), 400
         event_type = sanitize_input(payload.get('event_type'), max_length=50) or ''
         if event_type not in _PILOT_EVENT_TYPES:
             return jsonify({'success': False, 'error': 'invalid event_type'}), 400
 
         pair_id = payload.get('pair_id')
         member_id = payload.get('member_id')
-        source = sanitize_input(payload.get('source'), max_length=20) or 'web'
-        meta = payload.get('meta') if isinstance(payload.get('meta'), (dict, list)) else None
+        source = 'web'
+        try:
+            meta = validate_event_meta(payload.get('meta'))
+        except ValueError as exc:
+            return jsonify({'success': False, 'error': str(exc)}), 400
 
         resolved_pair_id = None
         if pair_id is not None:
@@ -1134,6 +1158,8 @@ def _api_usage_event():
             meta=meta,
         )
         return jsonify({'success': True})
+    except RecursionError:
+        return jsonify({'success': False, 'error': 'meta_too_deep'}), 400
     except INPUT_EXCEPTIONS as exc:
         return handle_api_exception(exc, "usage event 参数错误", log=logger, status_code=400)
     except SERVICE_EXCEPTIONS as exc:

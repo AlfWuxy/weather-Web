@@ -29,6 +29,7 @@ from core.db_models import (
 )
 from core.time_utils import today_local, date_to_utc_start, date_to_utc_end, utc_to_local_date, utcnow
 from utils.parsers import parse_date
+from utils.csv_export import spreadsheet_cell
 from utils.validators import sanitize_input
 
 logger = logging.getLogger(__name__)
@@ -3323,7 +3324,7 @@ def pilot_export_csv():
     writer = csv.writer(out)
     writer.writerow(['created_at', 'event_type', 'user_id', 'pair_id', 'member_id', 'source', 'meta_json'])
     for e in events:
-        writer.writerow([
+        writer.writerow([spreadsheet_cell(value) for value in [
             e.created_at.isoformat() if e.created_at else '',
             e.event_type or '',
             e.user_id or '',
@@ -3331,7 +3332,7 @@ def pilot_export_csv():
             e.member_id or '',
             e.source or '',
             e.meta_json or '',
-        ])
+        ]])
 
     data = out.getvalue().encode('utf-8-sig')  # Excel-friendly
     return send_file(

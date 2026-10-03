@@ -2,6 +2,7 @@
 # 数据库自动备份脚本
 # 每天保留30天的备份
 set -euo pipefail
+umask 077
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -95,7 +96,7 @@ parse_sqlite_path() {
         sqlite+pysqlite:///*) path="${uri#sqlite+pysqlite:///}" ;;
         sqlite:///*) path="${uri#sqlite:///}" ;;
         *)
-            echo "仅支持 sqlite 或 sqlite+pysqlite DATABASE_URI: $uri" >&2
+            echo "仅支持 sqlite 或 sqlite+pysqlite DATABASE_URI" >&2
             return 2
             ;;
     esac
@@ -113,6 +114,11 @@ parse_sqlite_path() {
         fi
     fi
     printf '%s\n' "$path"
+}
+
+protect_backup_directory() {
+    # 执行账号必须拥有整个备份树；已有不安全权限会在写入前纠正。
+    python3 "$SCRIPT_DIR/backup_privacy.py" "$BACKUP_DIR"
 }
 
 usage() {
@@ -155,6 +161,10 @@ main() {
         fi
     fi
 
+    if [ -e "$BACKUP_DIR" ] || [ -L "$BACKUP_DIR" ]; then
+        protect_backup_directory
+    fi
+
     if [ ! -f "$DB_FILE" ]; then
         if [ "$if_present" -eq 1 ]; then
             echo "未发现源数据库，按 --if-present 跳过备份: $DB_FILE"
@@ -173,14 +183,27 @@ main() {
         return 127
     }
 
-    # 创建备份目录
-    mkdir -p "$BACKUP_DIR"
+    protect_backup_directory
+
+    # 随机独占文件避免并发备份碰撞，创建时即为0600。
+    BACKUP_FILE="$(python3 - "$BACKUP_DIR" "$DATE" <<'PY'
+import os
+import sys
+import tempfile
+fd, path = tempfile.mkstemp(prefix='health_weather_' + sys.argv[2] + '_', suffix='.db', dir=sys.argv[1])
+os.fchmod(fd, 0o600)
+os.close(fd)
+print(path)
+PY
+)"
 
     # 创建备份（使用SQLite的.backup命令保证一致性）
     sqlite3 "$DB_FILE" ".backup '$BACKUP_FILE'"
+    chmod 600 "$BACKUP_FILE"
 
     # 压缩备份
     gzip "$BACKUP_FILE"
+    chmod 600 "${BACKUP_FILE}.gz"
 
     echo "[$(date)] 备份完成: ${BACKUP_FILE}.gz"
 

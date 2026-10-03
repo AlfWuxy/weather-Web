@@ -1,7 +1,8 @@
 #!/bin/bash
 # 完成手动修复步骤的辅助脚本
 
-set -e
+set -euo pipefail
+umask 077
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -10,7 +11,7 @@ ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 RED='\033[0;31m'
-NC='\033[0m' # No Color
+NC='\033[0m' # 重置颜色
 
 trim_whitespace() {
     local value="${1:-}"
@@ -83,32 +84,8 @@ write_env_value() {
     local key="$1"
     local value="$2"
     local env_file="$3"
-    local tmp_file="${env_file}.tmp"
-    awk -v wanted="$key" -v replacement="$key=$value" '
-        BEGIN { updated = 0 }
-        {
-            line = $0
-            trimmed = line
-            sub(/^[[:space:]]*/, "", trimmed)
-            if (trimmed !~ /^#/ && index(trimmed, "=") > 0) {
-                candidate = substr(trimmed, 1, index(trimmed, "=") - 1)
-                gsub(/[[:space:]]/, "", candidate)
-                if (candidate == wanted) {
-                    if (!updated) {
-                        print replacement
-                        updated = 1
-                    }
-                    # 后续重复键直接丢弃，确保最终配置只有一个有效值。
-                    next
-                }
-            }
-            print line
-        }
-        END { if (!updated) print replacement }
-    ' "$env_file" > "$tmp_file"
-    # 新文件固定为仅当前用户可读写，避免密钥轮换时放宽原有权限。
-    chmod 600 "$tmp_file"
-    mv "$tmp_file" "$env_file"
+    # 秘密不放入子进程参数；辅助程序使用0600随机临时文件原子替换。
+    printf '%s' "$value" | python3 "$SCRIPT_DIR/secure_environment.py" set "$env_file" "$key"
 }
 
 check_or_generate_secret() {
@@ -145,6 +122,7 @@ if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then
 fi
 
 cd "$ROOT_DIR"
+[ ! -e .env ] || python3 "$SCRIPT_DIR/secure_environment.py" protect .env
 
 echo "============================================================"
 echo "安全修复 - 手动步骤辅助脚本"
@@ -158,14 +136,17 @@ if [ ! -f .env ]; then
         read -p "是否从 .env.backup 恢复? (y/n) " -n 1 -r
         echo
         if [[ $REPLY =~ ^[Yy]$ ]]; then
-            cp .env.backup .env
+            python3 "$SCRIPT_DIR/secure_environment.py" protect .env.backup
+            python3 "$SCRIPT_DIR/secure_environment.py" protect .env
+            install -m 0600 .env.backup .env
             echo -e "${GREEN}✅ 已从 .env.backup 恢复${NC}"
         fi
     elif [ -f .env.example ]; then
         read -p "是否从 .env.example 创建新的? (y/n) " -n 1 -r
         echo
         if [[ $REPLY =~ ^[Yy]$ ]]; then
-            cp .env.example .env
+            python3 "$SCRIPT_DIR/secure_environment.py" protect .env
+            install -m 0600 .env.example .env
             echo -e "${YELLOW}⚠️  已创建 .env，请手动编辑填入真实密钥${NC}"
         fi
     fi

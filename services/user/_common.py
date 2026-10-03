@@ -7,7 +7,8 @@ from flask import current_app, flash, has_app_context, url_for
 from flask_login import current_user
 
 from core.extensions import db
-from core.db_models import Pair, PairActionToken, PairLink
+from core.db_models import Pair, PairActionToken, PairLink, User
+from core.resource_budget import ResourceLimitError, setting
 from core.security import hash_identifier, hash_pair_token, hash_short_code
 from core.time_utils import utcnow
 from utils.validators import sanitize_input
@@ -140,6 +141,14 @@ def _create_pair_record(caregiver_id, location_query, member_id=None, flush=Fals
     if not location_query:
         raise ValueError('location_query is required')
 
+    # 同一事务内先取写锁再计数；SQLite 写锁与 PostgreSQL 行锁均跨 worker 生效。
+    # 必须使用调用方 session，避免小程序已 flush 的成员记录与独立连接自锁。
+    locked = db.session.query(User).filter(User.id == caregiver_id).update(
+        {User.id: User.id}, synchronize_session=False)
+    if locked != 1:
+        raise ValueError('caregiver not found')
+    if Pair.query.filter_by(caregiver_id=caregiver_id).count() >= setting('PAIR_MAX_PER_USER', 20):
+        raise ResourceLimitError('照护绑定数量已达到上限')
     short_code = _generate_short_code()
     pair = Pair(
         caregiver_id=caregiver_id,
@@ -155,8 +164,8 @@ def _create_pair_record(caregiver_id, location_query, member_id=None, flush=Fals
         created_at=utcnow(),
     )
     db.session.add(pair)
-    if flush:
-        db.session.flush()
+    # flush 使同事务内后续创建也纳入数量约束；提交仍由调用方控制。
+    db.session.flush()
     return pair
 
 

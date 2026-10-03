@@ -16,7 +16,7 @@
 
     <view style="display:flex; gap: 10px; margin-top: 14px;">
       <button class="btn-primary" style="flex:1;" bindtap="onBind">绑定并进入</button>
-      <button class="btn-outline" style="flex:1;" bindtap="onClear">清空</button>
+      <button class="btn-outline" style="flex:1;" bindtap="onClear">清空并解除绑定</button>
     </view>
 
     <view class="muted" style="margin-top: 10px; font-size: 12px;">
@@ -24,4 +24,3 @@
     </view>
   </view>
 </view>
-

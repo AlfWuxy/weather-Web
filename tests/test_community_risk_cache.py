@@ -2,11 +2,11 @@
 from datetime import date
 
 
-def test_community_risk_api_reuses_cached_result(authenticated_client, monkeypatch):
+def test_community_risk_api_reuses_cached_result(admin_client, monkeypatch):
     from services.community_risk_cache import clear_local_community_risk_cache
 
     clear_local_community_risk_cache()
-    app = authenticated_client.application
+    app = admin_client.application
     app.config['COMMUNITY_RISK_CACHE_TTL_SECONDS'] = 600
 
     calls = {'risk': 0}
@@ -40,8 +40,8 @@ def test_community_risk_api_reuses_cached_result(authenticated_client, monkeypat
     }
     headers = {'X-CSRF-Token': 'test-csrf-token'}
 
-    response1 = authenticated_client.post('/api/community/risk-map-v2', json=payload, headers=headers)
-    response2 = authenticated_client.post('/api/community/risk-map-v2', json=payload, headers=headers)
+    response1 = admin_client.post('/api/community/risk-map-v2', json=payload, headers=headers)
+    response2 = admin_client.post('/api/community/risk-map-v2', json=payload, headers=headers)
 
     assert response1.status_code == 200
     assert response2.status_code == 200
@@ -52,7 +52,7 @@ def test_community_risk_api_reuses_cached_result(authenticated_client, monkeypat
     clear_local_community_risk_cache()
 
 
-def test_community_risk_api_recomputes_for_different_payload(authenticated_client, monkeypatch):
+def test_community_risk_api_recomputes_for_different_payload(admin_client, monkeypatch):
     from services.community_risk_cache import clear_local_community_risk_cache
 
     clear_local_community_risk_cache()
@@ -84,8 +84,8 @@ def test_community_risk_api_recomputes_for_different_payload(authenticated_clien
     payload_a = {'analysis_date': '2025-10-30', 'window_days': 30, 'disease': '呼吸系统', 'city': '都昌'}
     payload_b = {'analysis_date': '2025-10-30', 'window_days': 30, 'disease': '循环系统', 'city': '都昌'}
 
-    response_a = authenticated_client.post('/api/community/risk-map-v2', json=payload_a, headers=headers)
-    response_b = authenticated_client.post('/api/community/risk-map-v2', json=payload_b, headers=headers)
+    response_a = admin_client.post('/api/community/risk-map-v2', json=payload_a, headers=headers)
+    response_b = admin_client.post('/api/community/risk-map-v2', json=payload_b, headers=headers)
 
     assert response_a.status_code == 200
     assert response_b.status_code == 200
@@ -94,12 +94,12 @@ def test_community_risk_api_recomputes_for_different_payload(authenticated_clien
     clear_local_community_risk_cache()
 
 
-def test_precompute_cache_is_reused_by_risk_map_api(authenticated_client, monkeypatch):
+def test_precompute_cache_is_reused_by_risk_map_api(admin_client, monkeypatch):
     from services.community_risk_cache import clear_local_community_risk_cache
     from services.pipelines.precompute_community_risk import precompute_community_risk
 
     clear_local_community_risk_cache()
-    app = authenticated_client.application
+    app = admin_client.application
     app.config['COMMUNITY_RISK_CACHE_TTL_SECONDS'] = 600
 
     calls = {'risk': 0}
@@ -143,7 +143,7 @@ def test_precompute_cache_is_reused_by_risk_map_api(authenticated_client, monkey
         analysis_date=date(2025, 10, 30),
     )
 
-    response = authenticated_client.post(
+    response = admin_client.post(
         '/api/community/risk-map-v2',
         json={'analysis_date': '2025-10-30', 'window_days': 30, 'disease': '呼吸系统', 'city': '都昌'},
         headers={'X-CSRF-Token': 'test-csrf-token'}
@@ -156,7 +156,7 @@ def test_precompute_cache_is_reused_by_risk_map_api(authenticated_client, monkey
     clear_local_community_risk_cache()
 
 
-def test_community_risk_api_recomputes_for_different_lag_temperatures(authenticated_client, monkeypatch):
+def test_community_risk_api_recomputes_for_different_lag_temperatures(admin_client, monkeypatch):
     from services.community_risk_cache import clear_local_community_risk_cache
 
     clear_local_community_risk_cache()
@@ -187,12 +187,12 @@ def test_community_risk_api_recomputes_for_different_lag_temperatures(authentica
         'city': '都昌',
     }
 
-    response_a = authenticated_client.post(
+    response_a = admin_client.post(
         '/api/community/risk-map-v2',
         json={**base_payload, 'weather': {'temperature': 30, 'humidity': 60, 'aqi': 40, 'lag_temperatures': [30, 29, 28], 'data_source': 'QWeather', 'is_mock': False}},
         headers=headers
     )
-    response_b = authenticated_client.post(
+    response_b = admin_client.post(
         '/api/community/risk-map-v2',
         json={**base_payload, 'weather': {'temperature': 30, 'humidity': 60, 'aqi': 40, 'lag_temperatures': [30, 12, 10], 'data_source': 'QWeather', 'is_mock': False}},
         headers=headers
@@ -205,13 +205,13 @@ def test_community_risk_api_recomputes_for_different_lag_temperatures(authentica
     clear_local_community_risk_cache()
 
 
-def test_community_risk_api_rejects_mock_weather(authenticated_client, monkeypatch):
+def test_community_risk_api_rejects_mock_weather(admin_client, monkeypatch):
     monkeypatch.setattr(
         'services.api_service.get_weather_with_cache',
         lambda city: ({'temperature': 37, 'humidity': 70, 'aqi': 90, 'is_mock': True, 'data_source': 'Demo'}, False),
     )
 
-    response = authenticated_client.post(
+    response = admin_client.post(
         '/api/community/risk-map-v2',
         json={'analysis_date': '2025-10-30', 'window_days': 30, 'disease': '', 'city': '都昌'},
         headers={'X-CSRF-Token': 'test-csrf-token'}

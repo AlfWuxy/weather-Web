@@ -68,9 +68,24 @@ Page({
     }
   },
 
-  logout() {
-    wx.removeStorageSync('api_token');
-    wx.reLaunch({ url: '/pages/bind-token/index' });
+  async logout() {
+    if (this.data.busy) return;
+    const token = this.getToken();
+    this.setData({ busy: true });
+    try {
+      if (token) await api({ method: 'POST', path: '/mp/api/v1/token/revoke', token });
+      wx.removeStorageSync('api_token');
+      wx.reLaunch({ url: '/pages/bind-token/index' });
+    } catch (e) {
+      if (e.message === 'unauthorized') {
+        wx.removeStorageSync('api_token');
+        wx.reLaunch({ url: '/pages/bind-token/index' });
+      } else {
+        // 撤销未获服务端确认时保留凭证，以便重试或从网页撤销。
+        wx.showModal({ title: '尚未退出绑定', content: '服务端撤销未完成。请检查网络后重试，或在网页个人设置中撤销此凭证。', showCancel: false });
+      }
+    } finally {
+      this.setData({ busy: false });
+    }
   },
 });
-
