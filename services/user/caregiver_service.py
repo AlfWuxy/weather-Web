@@ -18,6 +18,7 @@ from core.weather import (
     normalize_location_name,
 )
 from core.usage import log_usage_event
+from core.resource_budget import ResourceLimitError, setting
 from services.heat_action_service import HeatActionService
 from services.location_resolver import resolve_location
 from utils.audit_log import log_security_event
@@ -167,7 +168,18 @@ def _load_created_pair():
 def _build_pair_management_context(caregiver_mode=False):
     created_pair = _load_created_pair()
     status_date = today_local()
-    pairs = Pair.query.filter_by(caregiver_id=current_user.id).order_by(Pair.created_at.desc()).all()
+    page_size = min(50, max(1, setting("PAIR_LIST_PAGE_SIZE", 20)))
+    page = max(1, min(request.args.get("page", 1, type=int), 10000))
+    pairs = Pair.query.filter_by(caregiver_id=current_user.id).order_by(
+        Pair.created_at.desc(), Pair.id.desc()).offset((page - 1) * page_size).limit(page_size + 1).all()
+    has_more = len(pairs) > page_size
+    pairs = pairs[:page_size]
+    # 地点解析使用独立短事务，必须发生在行动 token 等页面写操作之前。
+    resolved_by_label = {}
+    for pair in pairs:
+        label = (pair.location_query or pair.community_code or '').strip()
+        if label not in resolved_by_label:
+            resolved_by_label[label] = resolve_location(label)
     communities = Community.query.order_by(Community.name).all()
     family_members = []
     try:
@@ -196,7 +208,7 @@ def _build_pair_management_context(caregiver_mode=False):
     if pairs:
         for pair in pairs:
             label = (pair.location_query or pair.community_code or '').strip()
-            resolved = resolve_location(label)
+            resolved = resolved_by_label[label]
             code = resolved.get('location_code') or ''
             if not code:
                 continue
@@ -234,7 +246,7 @@ def _build_pair_management_context(caregiver_mode=False):
         status = status_map.get(pair.id)
 
         label = (pair.location_query or pair.community_code or '').strip()
-        resolved = resolve_location(label)
+        resolved = resolved_by_label[label]
         code = resolved.get('location_code') or ''
         display_name = resolved.get('display_name') or label or code
         weather_data = weather_by_code.get(code, {}) if code else {}
@@ -327,6 +339,8 @@ def _build_pair_management_context(caregiver_mode=False):
         'family_members': family_members,
         'status_date': status_date,
         'push_channel_ready': push_channel_ready,
+        'pair_page': page,
+        'pair_has_more': has_more,
     }
 
     if caregiver_mode:
@@ -370,6 +384,9 @@ def pair_management():
 
         try:
             pair = _create_pair(location_query, member_id=member_id)
+        except ResourceLimitError as exc:
+            flash(str(exc), 'error')
+            return redirect(url_for('user.pair_management'))
         except Exception as exc:
             logger.warning("创建绑定失败，异常类型=%s", type(exc).__name__)
             flash('创建失败，请检查输入后重试。', 'error')
@@ -418,6 +435,9 @@ def caregiver_pair_create():
 
     try:
         pair = _create_pair(location_query, member_id=member_id)
+    except ResourceLimitError as exc:
+        flash(str(exc), 'error')
+        return redirect(url_for('user.caregiver_dashboard'))
     except Exception as exc:
         logger.warning("照护端创建绑定失败，异常类型=%s", type(exc).__name__)
         flash('创建失败，请检查输入后重试。', 'error')

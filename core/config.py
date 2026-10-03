@@ -233,7 +233,10 @@ def configure_app(app, logger):
     qweather_jwt_kid = _normalized_env_value('QWEATHER_JWT_KID', '')
     qweather_jwt_project_id = _normalized_env_value('QWEATHER_JWT_PROJECT_ID', '')
     qweather_jwt_private_key_path = _normalized_env_value('QWEATHER_JWT_PRIVATE_KEY_PATH', '')
-    amap_key = _normalized_env_value('AMAP_KEY', '')
+    amap_js_key = _normalized_env_value('AMAP_JS_API_KEY', '')
+    amap_service_key = _normalized_env_value('AMAP_WEB_SERVICE_KEY', '')
+    if amap_js_key and amap_service_key and amap_js_key == amap_service_key:
+        raise RuntimeError('AMAP_JS_API_KEY 与 AMAP_WEB_SERVICE_KEY 必须使用不同用途的密钥。')
     amap_security_js_code = _normalized_env_value('AMAP_SECURITY_JS_CODE', '')
     siliconflow_key = _normalized_env_value('SILICONFLOW_API_KEY', '')
     siliconflow_base = _normalized_env_value('SILICONFLOW_API_BASE', SILICONFLOW_API_BASE_DEFAULT)
@@ -266,6 +269,18 @@ def configure_app(app, logger):
         logger.warning("SECRET_KEY 未配置，已使用临时随机值；生产环境请设置 SECRET_KEY。")
 
     app.config['SECRET_KEY'] = secret_key
+    # 请求体限制由 Werkzeug 在读取流时执行，覆盖 JSON 和表单。
+    for name, default in {
+        'MAX_CONTENT_LENGTH': 1024 * 1024,
+        'EVENT_META_MAX_BYTES': 2048, 'EVENT_META_MAX_DEPTH': 5, 'EVENT_META_MAX_FIELDS': 64,
+        'PAIR_MAX_PER_USER': 20, 'PAIR_LIST_PAGE_SIZE': 20,
+        'AI_USER_DAILY_LIMIT': 60, 'AI_DAILY_LIMIT': 300, 'AI_MONTHLY_LIMIT': 5000,
+        'AI_USER_DAILY_TOKEN_LIMIT': 200000, 'AI_DAILY_TOKEN_LIMIT': 1200000,
+        'AI_MONTHLY_TOKEN_LIMIT': 20000000,
+        'GEOCODE_USER_DAILY_LIMIT': 20, 'GEOCODE_DAILY_LIMIT': 200, 'GEOCODE_MONTHLY_LIMIT': 3000,
+        'LOCATION_CACHE_MAX_ROWS': 1000, 'GEOCODE_RESPONSE_MAX_BYTES': 65536,
+    }.items():
+        app.config[name] = max(0, parse_int(os.getenv(name, str(default)), default=default))
     app.config['QWEATHER_KEY'] = qweather_key
     app.config['QWEATHER_API_BASE'] = qweather_api_base
     app.config['QWEATHER_AUTH_MODE'] = qweather_auth_mode
@@ -273,7 +288,10 @@ def configure_app(app, logger):
     app.config['QWEATHER_JWT_PROJECT_ID'] = qweather_jwt_project_id
     app.config['QWEATHER_JWT_PRIVATE_KEY_PATH'] = qweather_jwt_private_key_path
     app.config['QWEATHER_CANONICAL_LOCATION'] = qweather_canonical_location
-    app.config['AMAP_KEY'] = amap_key
+    app.config['AMAP_JS_API_KEY'] = amap_js_key
+    app.config['AMAP_WEB_SERVICE_KEY'] = amap_service_key
+    # 旧密钥用途不明，不能自动注入浏览器或当作服务端密钥。
+    app.config['AMAP_KEY'] = ''
     app.config['AMAP_SECURITY_JS_CODE'] = amap_security_js_code
     app.config['SILICONFLOW_API_KEY'] = siliconflow_key
     app.config['SILICONFLOW_API_BASE'] = siliconflow_base
@@ -372,7 +390,7 @@ def configure_app(app, logger):
     app.config.setdefault('RATE_LIMIT_FORECAST', os.getenv('RATE_LIMIT_FORECAST', app.config['RATE_LIMITS']))
     app.config.setdefault('RATE_LIMIT_CHRONIC', os.getenv('RATE_LIMIT_CHRONIC', app.config['RATE_LIMITS']))
     app.config.setdefault('RATE_LIMIT_ML', os.getenv('RATE_LIMIT_ML', app.config['RATE_LIMITS']))
-    app.config.setdefault('RATE_LIMIT_AI', os.getenv('RATE_LIMIT_AI', '20 per minute'))
+    app.config.setdefault('RATE_LIMIT_AI', os.getenv('RATE_LIMIT_AI', '30 per hour'))
     app.config.setdefault('RATE_LIMIT_LOGIN', os.getenv('RATE_LIMIT_LOGIN', '5 per 5 minutes'))
     app.config.setdefault('LOGIN_MAX_FAILURES', parse_int(os.getenv('LOGIN_MAX_FAILURES', '5'), default=5))
     app.config.setdefault('LOGIN_LOCKOUT_SECONDS', parse_int(os.getenv('LOGIN_LOCKOUT_SECONDS', '300'), default=300))
@@ -452,8 +470,10 @@ def configure_app(app, logger):
 
     if qweather_auth_mode == 'disabled':
         logger.warning("QWeather 已禁用，天气API将使用 Open-Meteo 或规则兜底。")
-    if not amap_key:
-        logger.warning("AMAP_KEY 未配置，地图API将无法使用")
+    if not amap_js_key:
+        logger.warning("AMAP_JS_API_KEY 未配置，浏览器地图已禁用")
+    if not amap_service_key:
+        logger.warning("AMAP_WEB_SERVICE_KEY 未配置，地理编码已禁用")
     if not amap_security_js_code:
         logger.warning("AMAP_SECURITY_JS_CODE 未配置，地图安全密钥将无法使用")
     if not siliconflow_key:

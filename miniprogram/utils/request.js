@@ -20,7 +20,7 @@ function request({ method, path, token, data }) {
   });
 }
 
-async function api({ method, path, token, data }) {
+async function api({ method, path, token, data, includeMeta = false }) {
   const res = await request({ method, path, token, data });
   if (res.statusCode === 401) {
     throw new Error('unauthorized');
@@ -30,7 +30,7 @@ async function api({ method, path, token, data }) {
     const msg = body.error || body.message || 'request_failed';
     throw new Error(msg);
   }
-  return body.data;
+  return includeMeta ? body : body.data;
 }
 
 module.exports = { api };

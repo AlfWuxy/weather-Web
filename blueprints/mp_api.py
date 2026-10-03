@@ -23,6 +23,8 @@ from core.extensions import db, limiter
 from core.security import hash_identifier
 from core.time_utils import utcnow
 from core.usage import log_usage_event, verify_api_token
+from core.input_limits import validate_event_meta
+from core.resource_budget import ResourceLimitError, setting
 from core.weather import get_weather_with_cache, is_qweather_online_weather
 from services.api_service import PILOT_EVENT_TYPES
 from services.location_resolver import resolve_location
@@ -32,7 +34,6 @@ from utils.parsers import safe_json_loads
 from utils.validators import sanitize_input
 
 bp = Blueprint("mp_api", __name__, url_prefix="/mp/api/v1")
-MP_EVENT_META_MAX_CHARS = 2048
 
 
 def _bearer_token() -> str:
@@ -138,7 +139,12 @@ def me_patch():
 @limiter.limit(lambda: current_app.config.get("RATE_LIMIT_MP_READ", "120 per minute"), key_func=_mp_rate_limit_key)
 @require_api_token
 def elders_list():
-    pairs = Pair.query.filter_by(caregiver_id=g.api_user_id, status="active").order_by(Pair.created_at.desc()).all()
+    page = max(1, min(request.args.get("page", 1, type=int), 10000))
+    page_size = min(50, max(1, setting("PAIR_LIST_PAGE_SIZE", 20)))
+    pairs = Pair.query.filter_by(caregiver_id=g.api_user_id, status="active").order_by(
+        Pair.created_at.desc(), Pair.id.desc()).offset((page - 1) * page_size).limit(page_size + 1).all()
+    has_more = len(pairs) > page_size
+    pairs = pairs[:page_size]
     member_ids = [p.member_id for p in pairs if p.member_id]
     members = (
         FamilyMember.query.filter(FamilyMember.id.in_(member_ids)).all() if member_ids else []
@@ -202,7 +208,7 @@ def elders_list():
             }
         )
 
-    return jsonify({"success": True, "data": result})
+    return jsonify({"success": True, "data": result, "page": page, "has_more": has_more})
 
 
 @bp.route("/elders", methods=["POST"], endpoint="elders_create")
@@ -252,6 +258,9 @@ def elders_create():
             flush=True
         )
         db.session.commit()
+    except ResourceLimitError:
+        db.session.rollback()
+        return jsonify({"success": False, "error": "pair_limit_reached"}), 429
     except Exception:
         db.session.rollback()
         return jsonify({"success": False, "error": "create_failed"}), 500
@@ -349,20 +358,21 @@ def alerts_list():
 @limiter.limit(lambda: current_app.config.get("RATE_LIMIT_MP_EVENTS", "60 per minute"), key_func=_mp_rate_limit_key)
 @require_api_token
 def events():
-    payload = request.get_json(silent=True) or {}
+    try:
+        payload = request.get_json(silent=True) or {}
+    except RecursionError:
+        return jsonify({'success': False, 'error': 'meta_too_deep'}), 400
+    if not isinstance(payload, dict):
+        return jsonify({'success': False, 'error': 'invalid_payload'}), 400
     event_type = sanitize_input(payload.get("event_type"), max_length=50) or ""
     if event_type not in PILOT_EVENT_TYPES:
         return jsonify({"success": False, "error": "invalid_event_type"}), 400
     pair_id = payload.get("pair_id")
     member_id = payload.get("member_id")
-    meta = payload.get("meta") if isinstance(payload.get("meta"), (dict, list)) else None
-    if meta is not None:
-        try:
-            meta_json = json.dumps(meta, ensure_ascii=False)
-        except (TypeError, ValueError):
-            return jsonify({"success": False, "error": "invalid_meta"}), 400
-        if len(meta_json) > MP_EVENT_META_MAX_CHARS:
-            return jsonify({"success": False, "error": "meta_too_large"}), 400
+    try:
+        meta = validate_event_meta(payload.get("meta"))
+    except ValueError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
 
     resolved_pair_id = None
     if pair_id is not None:

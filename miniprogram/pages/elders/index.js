@@ -4,6 +4,8 @@ Page({
   data: {
     elders: [],
     loading: false,
+    page: 0,
+    hasMore: false,
   },
 
   async onShow() {
@@ -14,7 +16,8 @@ Page({
     return (wx.getStorageSync('api_token') || '').trim();
   },
 
-  async loadElders() {
+  async loadElders(reset = true) {
+    if (this.data.loading) return;
     const token = this.getToken();
     if (!token) {
       wx.reLaunch({ url: '/pages/bind-token/index' });
@@ -22,8 +25,16 @@ Page({
     }
     this.setData({ loading: true });
     try {
-      const data = await api({ method: 'GET', path: '/mp/api/v1/elders', token });
-      this.setData({ elders: data || [] });
+      const page = reset ? 1 : this.data.page + 1;
+      const body = await api({ method: 'GET', path: `/mp/api/v1/elders?page=${page}`, token, includeMeta: true });
+      const rows = body.data || [];
+      const existing = reset ? [] : this.data.elders;
+      const seen = new Set(existing.map((item) => item.pair_id));
+      this.setData({
+        elders: existing.concat(rows.filter((item) => !seen.has(item.pair_id))),
+        page: body.page || page,
+        hasMore: Boolean(body.has_more),
+      });
     } catch (e) {
       if (String(e && e.message) === 'unauthorized') {
         wx.removeStorageSync('api_token');
@@ -34,6 +45,10 @@ Page({
     } finally {
       this.setData({ loading: false });
     }
+  },
+
+  async loadMore() {
+    if (this.data.hasMore && !this.data.loading) await this.loadElders(false);
   },
 
   goAlerts(e) {

@@ -21,6 +21,13 @@ def test_location_resolver_amap_mock_and_cache(app, db_session, monkeypatch):
     class FakeResp:
         status_code = 200
 
+        def iter_content(self, chunk_size):
+            import json
+            yield json.dumps(self.json()).encode()
+
+        def close(self):
+            pass
+
         def json(self):
             return {
                 "status": "1",
@@ -34,14 +41,14 @@ def test_location_resolver_amap_mock_and_cache(app, db_session, monkeypatch):
 
     calls = {"n": 0}
 
-    def fake_get(url, params=None, timeout=None):
+    def fake_get(url, params=None, timeout=None, stream=None):
         calls["n"] += 1
         return FakeResp()
 
     monkeypatch.setattr("services.location_resolver.requests.get", fake_get)
 
     with app.app_context():
-        app.config["AMAP_KEY"] = "fake-key"
+        app.config["AMAP_WEB_SERVICE_KEY"] = "fake-service-key"
         app.config["CITY_LOCATION_MAP"] = {}
 
         result1 = resolve_location("杭州市测试地")
