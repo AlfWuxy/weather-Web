@@ -193,3 +193,22 @@ def test_usage_error_does_not_log_sql_parameters(app, db_session, monkeypatch, c
         monkeypatch.setattr(db.session, 'commit', fail)
         assert log_usage_event('pair_created', meta={'location_query': ADDRESS}) is None
     assert ADDRESS not in caplog.text
+
+
+def test_real_pair_transaction_failure_does_not_log_address(app, db_session, monkeypatch, caplog):
+    from core.db_models import User
+    from flask_login import login_user
+    from services.user.caregiver_service import _create_pair
+    from sqlalchemy.exc import IntegrityError
+
+    with app.test_request_context('/pairs'):
+        user = User(username='privacy-transaction', password_hash='not-a-login-secret', role='caregiver')
+        db_session.add(user)
+        db_session.commit()
+        login_user(user)
+        def fail(*args, **kwargs):
+            raise IntegrityError('INSERT INTO pairs VALUES (?)', (ADDRESS,), RuntimeError('synthetic failure'))
+        monkeypatch.setattr(db_session, 'flush', fail)
+        with caplog.at_level(logging.DEBUG), pytest.raises(IntegrityError):
+            _create_pair(ADDRESS)
+        assert ADDRESS not in caplog.text

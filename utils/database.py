@@ -22,7 +22,8 @@ def atomic_transaction(session=None):
     try:
         yield active_session
         active_session.commit()
-    except Exception:
+    except Exception as exc:
         active_session.rollback()
-        logger.exception("Transaction rolled back")
+        # SQLAlchemy 异常正文和堆栈可能包含地址、凭证等绑定参数。
+        logger.error("事务已回滚，异常类型=%s", type(exc).__name__)
         raise
