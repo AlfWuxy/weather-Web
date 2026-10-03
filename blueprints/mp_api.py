@@ -141,8 +141,16 @@ def me_patch():
 def elders_list():
     page = max(1, min(request.args.get("page", 1, type=int), 10000))
     page_size = min(50, max(1, setting("PAIR_LIST_PAGE_SIZE", 20)))
-    pairs = Pair.query.filter_by(caregiver_id=g.api_user_id, status="active").order_by(
-        Pair.created_at.desc(), Pair.id.desc()).offset((page - 1) * page_size).limit(page_size + 1).all()
+    query = Pair.query.filter_by(caregiver_id=g.api_user_id, status="active")
+    if "pair_id" in request.args:
+        pair_id = request.args.get("pair_id", type=int)
+        if pair_id is None or not 0 < pair_id <= 9223372036854775807:
+            return jsonify({"success": False, "error": "invalid_pair_id"}), 400
+        # 详情查询继续使用本人名下的有效绑定，避免依赖列表所在页。
+        query = query.filter(Pair.id == pair_id)
+        page = 1
+    pairs = query.order_by(Pair.created_at.desc(), Pair.id.desc()).offset(
+        (page - 1) * page_size).limit(page_size + 1).all()
     has_more = len(pairs) > page_size
     pairs = pairs[:page_size]
     member_ids = [p.member_id for p in pairs if p.member_id]

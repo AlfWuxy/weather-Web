@@ -54,3 +54,35 @@ test('request 辅助函数仅在显式请求时返回分页元数据', async () 
   assert.equal(result.has_more, true);
   assert.equal(result.data.length, 1);
 });
+
+for (const pageName of ['elder-edit', 'template']) {
+  test(`${pageName} 可通过真实请求辅助函数定位第一页之外的家人`, async () => {
+    let page;
+    const calls = [];
+    const elders = Array.from({ length: 25 }, (_, index) => ({
+      pair_id: 25 - index, community_code: '九江',
+      member: { name: `家人${25 - index}` }, today: {},
+    }));
+    const wxMock = {
+      getStorageSync: () => 'test-token',
+      showToast: () => assert.fail('有效详情不应显示加载失败'),
+      request: (options) => {
+        calls.push(options);
+        const url = new URL(options.url);
+        const target = Number(url.searchParams.get('pair_id'));
+        const rows = target ? elders.filter((item) => item.pair_id === target) : elders.slice(0, 20);
+        options.success({ statusCode: 200, data: { success: true, data: rows, page: 1, has_more: !target } });
+      },
+    };
+    const requestContext = { require: () => ({ API_BASE_URL: 'https://example.invalid' }), module: { exports: {} }, wx: wxMock };
+    vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../miniprogram/utils/request.js'), 'utf8'), requestContext);
+    const context = { require: () => requestContext.module.exports, Page: (value) => { page = value; }, wx: wxMock };
+    vm.runInNewContext(fs.readFileSync(path.join(__dirname, `../miniprogram/pages/${pageName}/index.js`), 'utf8'), context);
+    page.setData = (data) => Object.assign(page.data, data);
+    await page.onLoad({ pair_id: '1' });
+    assert.equal(calls.length, 1);
+    assert.equal(new URL(calls[0].url).searchParams.get('pair_id'), '1');
+    assert.equal(calls[0].header.Authorization, 'Bearer test-token');
+    assert.equal(pageName === 'elder-edit' ? page.data.name : page.data.elderName, '家人1');
+  });
+}

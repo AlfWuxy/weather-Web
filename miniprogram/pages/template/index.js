@@ -68,7 +68,7 @@ Page({
     }
     this.setData({ loading: true });
     try {
-      const elders = await api({ method: 'GET', path: '/mp/api/v1/elders', token });
+      const elders = await api({ method: 'GET', path: `/mp/api/v1/elders?pair_id=${pairId}`, token });
       const item = (elders || []).find((x) => x.pair_id === pairId);
       if (!item) throw new Error('not_found');
       const elderName = item.member && item.member.name ? item.member.name : '';
