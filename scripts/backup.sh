@@ -117,25 +117,8 @@ parse_sqlite_path() {
 }
 
 protect_backup_directory() {
-    # 先纠正既有目录和文件的权限，且拒绝跟随链接，防止备份落入共享位置。
-    python3 - "$BACKUP_DIR" <<'PY'
-import os
-from pathlib import Path
-import stat
-import sys
-root = Path(sys.argv[1])
-if root.is_symlink():
-    raise SystemExit('备份目录不得为链接')
-root.mkdir(mode=0o700, parents=True, exist_ok=True)
-for directory, dirs, files in os.walk(root, followlinks=False):
-    os.chmod(directory, 0o700)
-    for name in dirs + files:
-        path = Path(directory) / name
-        info = path.lstat()
-        if stat.S_ISLNK(info.st_mode) or not (stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode)) or (stat.S_ISREG(info.st_mode) and info.st_nlink != 1):
-            raise SystemExit('备份目录存在链接或非普通文件，拒绝继续')
-        os.chmod(path, 0o700 if stat.S_ISDIR(info.st_mode) else 0o600)
-PY
+    # 执行账号必须拥有整个备份树；已有不安全权限会在写入前纠正。
+    python3 "$SCRIPT_DIR/backup_privacy.py" "$BACKUP_DIR"
 }
 
 usage() {

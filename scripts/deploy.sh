@@ -15,7 +15,7 @@ check_remote_unit_active() {
 }
 
 # 配置完整性、预置证书和专用账号先检查，不能以公开明文充当部署兜底。
-remote_exec "set -eu; test \"\$(id -u)\" = 0; test -s '$DEPLOY_TLS_CERT_FILE'; test -s '$DEPLOY_TLS_KEY_FILE'; openssl x509 -in '$DEPLOY_TLS_CERT_FILE' -checkend 86400 -noout"
+remote_exec "set -eu; test \"\$(id -u)\" = 0; case \"\$(realpath -m '$PROJECT_DIR')\" in /home|/home/*|/root|/root/*|/run/user|/run/user/*) echo '项目实际路径会被ProtectHome隐藏' >&2; exit 1;; esac; test -s '$DEPLOY_TLS_CERT_FILE'; test -s '$DEPLOY_TLS_KEY_FILE'; openssl x509 -in '$DEPLOY_TLS_CERT_FILE' -checkend 86400 -noout"
 remote_exec "set -eu; if ! id '$APP_USER' >/dev/null 2>&1; then useradd --system --user-group --home-dir '$PROJECT_DIR' --shell /usr/sbin/nologin '$APP_USER'; fi; test \"\$(id -u '$APP_USER')\" != 0"
 remote_exec "apt-get update && apt-get install -y python3 python3-pip python3-venv rsync redis-server sqlite3 nginx curl"
 remote_exec "systemctl enable --now redis-server"
@@ -44,7 +44,8 @@ python3 "$SCRIPT_DIR/secure_environment.py" payload "$ENV_FILE" | \
     remote_exec "python3 '$PROJECT_DIR/scripts/secure_environment.py' merge '$PROJECT_DIR/.env'"
 remote_exec "set -eu; for name in instance storage logs; do test ! -L '$PROJECT_DIR'/\$name; install -d -o '$APP_USER' -g '$APP_USER' -m 0700 '$PROJECT_DIR'/\$name; done"
 remote_exec "cd '$PROJECT_DIR' && PROJECT_DIR='$PROJECT_DIR' ENV_FILE='$PROJECT_DIR/.env' bash scripts/backup.sh --if-present"
-remote_exec "systemctl stop case-weather.service case-weather-cache.timer case-weather-dispatch.timer case-weather-risk-precompute.timer 2>/dev/null || test \"\$(systemctl is-active case-weather.service)\" = inactive"
+# 停timer不会停止已触发的oneshot，必须逐一静默所有写入者后才能迁移。
+remote_exec "set -eu; for unit in case-weather-cache.timer case-weather-dispatch.timer case-weather-risk-precompute.timer case-weather.service case-weather-cache.service case-weather-dispatch.service case-weather-risk-precompute.service; do if [ \"\$(systemctl show \"\$unit\" --property=LoadState --value)\" != not-found ]; then systemctl stop \"\$unit\"; test \"\$(systemctl show \"\$unit\" --property=ActiveState --value)\" = inactive; case \"\$unit\" in *.service) test \"\$(systemctl show \"\$unit\" --property=MainPID --value)\" = 0; test \"\$(systemctl show \"\$unit\" --property=ControlPID --value)\" = 0;; esac; fi; done"
 remote_exec "cd '$PROJECT_DIR' && VENV_PY='$VENV_DIR/bin/python' bash scripts/server_migrate.sh"
 remote_exec "cd '$PROJECT_DIR' && '$VENV_DIR/bin/python' -m pytest -q"
 

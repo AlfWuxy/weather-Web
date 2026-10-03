@@ -110,7 +110,8 @@ def run(*args):
 def verify_origin(project, user, url, cert, key):
     if user == "root" or not user:
         raise ValueError("应用不得使用 root")
-    if run("id", "-u", user).strip() == "0":
+    expected_uid = run("id", "-u", user).strip()
+    if expected_uid == "0":
         raise ValueError("应用账号实际 UID 不得为零")
     expected = nginx_config(url, cert, key)
     conf = Path("/etc/nginx/conf.d/case-weather.conf")
@@ -123,6 +124,23 @@ def verify_origin(project, user, url, cert, key):
         effective_user = run("systemctl", "show", f"{name}.service", "--property=User", "--value").strip()
         if effective_user != user:
             raise ValueError("服务未使用预期的专用账号")
+        # 配置中的User不能证明已经运行的旧进程身份，核对活动PID的真实凭据。
+        for prop in ("MainPID", "ControlPID"):
+            pid = run("systemctl", "show", f"{name}.service", f"--property={prop}", "--value").strip()
+            if not pid.isdecimal():
+                raise ValueError("无法读取服务活动PID")
+            if name == "case-weather" and prop == "MainPID" and pid == "0":
+                raise ValueError("主服务没有活动进程")
+            if pid != "0":
+                try:
+                    process_status = Path(f"/proc/{pid}/status").read_text()
+                except FileNotFoundError:
+                    if run("systemctl", "show", f"{name}.service", f"--property={prop}", "--value").strip() == "0":
+                        continue
+                    raise ValueError("服务进程身份检查期间发生变化")
+                identities = next((line.split()[1:] for line in process_status.splitlines() if line.startswith("Uid:")), [])
+                if len(identities) != 4 or set(identities) != {expected_uid}:
+                    raise ValueError("服务实际进程身份不是专用非root账号")
         for prop, expected_value in (("ProtectSystem", "strict"), ("ProtectHome", "yes"), ("NoNewPrivileges", "yes"), ("UMask", "0077")):
             if run("systemctl", "show", f"{name}.service", f"--property={prop}", "--value").strip() != expected_value:
                 raise ValueError("服务缺少只读文件系统或私有权限隔离")

@@ -40,7 +40,7 @@ initialize_deploy_security() {
     for path in "$PROJECT_DIR" "$DEPLOY_TLS_CERT_FILE" "$DEPLOY_TLS_KEY_FILE"; do
         [[ "$path" =~ ^/[a-zA-Z0-9_./-]+$ && "$path" != *'..'* && "$path" != *'//'* ]] || { echo '远端路径必须为无空白的绝对路径' >&2; return 1; }
     done
-    [[ "$PROJECT_DIR" == /*/* && "$PROJECT_DIR" != /etc/* && "$PROJECT_DIR" != /usr/* && "$PROJECT_DIR" != /root/* ]] || { echo '项目目录不允许覆盖系统目录' >&2; return 1; }
+    [[ "$PROJECT_DIR" == /*/* && "$PROJECT_DIR" != /etc/* && "$PROJECT_DIR" != /usr/* && "$PROJECT_DIR" != /root/* && "$PROJECT_DIR" != /home/* && "$PROJECT_DIR" != /run/user && "$PROJECT_DIR" != /run/user/* ]] || { echo '项目目录不允许使用系统目录或ProtectHome隐藏的路径' >&2; return 1; }
     python3 "$SCRIPT_DIR/deployment_security.py" validate-url "$PUBLIC_BASE_URL"
     # 禁止旧的任意 SSH 参数、密码回退与自动接受新主机密钥路径。
     if [ -n "${SSH_OPTS:-}${DEFAULT_SSH_OPTS:-}${DEPLOY_PASSWORD:-}${SSHPASS:-}" ]; then

@@ -150,7 +150,7 @@ def run_script(name):
     return subprocess.run(["bash", str(ROOT / "scripts" / name)], text=True, capture_output=True)
 
 
-@pytest.mark.parametrize("key,value", [("PUBLIC_BASE_URL", "http://site.example"), ("DEPLOY_APP_USER", "root"), ("SSH_OPTS", "-o StrictHostKeyChecking=no"), ("DEFAULT_SSH_OPTS", "-o StrictHostKeyChecking=accept-new"), ("CW_SSH_KNOWN_HOSTS", "/dev/null")])
+@pytest.mark.parametrize("key,value", [("PUBLIC_BASE_URL", "http://site.example"), ("DEPLOY_APP_USER", "root"), ("DEPLOY_PROJECT_DIR", "/home/service/weather"), ("DEPLOY_PROJECT_DIR", "/run/user/1000/weather"), ("SSH_OPTS", "-o StrictHostKeyChecking=no"), ("DEFAULT_SSH_OPTS", "-o StrictHostKeyChecking=accept-new"), ("CW_SSH_KNOWN_HOSTS", "/dev/null")])
 def test_unsafe_deploy_settings_fail_before_ssh(tmp_path, monkeypatch, key, value):
     log, _ = deploy_fixture(tmp_path, monkeypatch)
     monkeypatch.setenv(key, value)
@@ -190,6 +190,68 @@ def test_deploy_uses_private_stdin_and_nonroot_loopback_units(tmp_path, monkeypa
     assert "--exclude=/analysis/" in transfers[0]
     for excluded in (".env*", "backups", "storage", "instance", ".claude", ".superpowers"):
         assert excluded in transfers[0]
+
+
+def test_runtime_payload_carries_split_keys_and_budgets_without_deploy_credentials(tmp_path, monkeypatch):
+    log, payload = deploy_fixture(tmp_path, monkeypatch)
+    config = Path(os.environ["ENV_FILE"])
+    config.write_text(config.read_text() + "AMAP_JS_API_KEY=browser-key\nAMAP_WEB_SERVICE_KEY=server-key\nAMAP_KEY=legacy-key\nAI_DAILY_LIMIT=25\nGEOCODE_MONTHLY_LIMIT=500\nAPI_TOKEN_TTL_DAYS=9\nDEPLOY_PASSWORD=must-not-forward\n")
+    for name in ("AMAP_JS_API_KEY", "AMAP_WEB_SERVICE_KEY", "AI_DAILY_LIMIT", "GEOCODE_MONTHLY_LIMIT", "API_TOKEN_TTL_DAYS"):
+        monkeypatch.delenv(name, raising=False)
+    result = run_script("deploy.sh")
+    assert result.returncode == 0, result.stderr
+    actual = json.loads(payload.read_text())
+    assert actual["AMAP_JS_API_KEY"] == "browser-key"
+    assert actual["AMAP_WEB_SERVICE_KEY"] == "server-key"
+    assert actual["AI_DAILY_LIMIT"] == "25"
+    assert actual["GEOCODE_MONTHLY_LIMIT"] == "500"
+    assert actual["API_TOKEN_TTL_DAYS"] == "9"
+    assert "AMAP_KEY" not in actual and "DEPLOY_PASSWORD" not in actual
+    remote = tmp_path / "remote.env"
+    remote.write_text("AI_DAILY_LIMIT=100\nSECRET_KEY=existing-identity\n")
+    merge = subprocess.run([sys.executable, str(ROOT / "scripts/secure_environment.py"), "merge", str(remote)], input=json.dumps(actual), text=True, capture_output=True)
+    assert merge.returncode == 0, merge.stderr
+    values = module("secure_environment").read_values(remote)[1]
+    assert values["AI_DAILY_LIMIT"] == "25"
+    assert values["AMAP_WEB_SERVICE_KEY"] == "server-key"
+    assert values["API_TOKEN_TTL_DAYS"] == "9"
+    assert values["SECRET_KEY"] == "existing-identity"
+    assert values["DEBUG"] == "false"
+
+
+def test_deploy_stops_inflight_oneshots_before_migrating(tmp_path, monkeypatch):
+    log, _ = deploy_fixture(tmp_path, monkeypatch)
+    result = run_script("deploy.sh")
+    assert result.returncode == 0, result.stderr
+    commands = [json.loads(line)[-1] for line in log.read_text().splitlines()]
+    stopping = next(command for command in commands if 'systemctl stop "$unit"' in command)
+    for unit in ("case-weather-cache.service", "case-weather-dispatch.service", "case-weather-risk-precompute.service"):
+        assert unit in stopping
+    assert "--property=MainPID" in stopping and "--property=ControlPID" in stopping
+    migration = next(command for command in commands if "bash scripts/server_migrate.sh" in command)
+    assert commands.index(stopping) < commands.index(migration)
+    # 真正执行捕获的远端停机命令，但systemctl只操作临时状态。
+    state = tmp_path / "unit-state.json"
+    state.write_text("{}")
+    binary = tmp_path / "bin" / "systemctl"
+    binary.write_text(f"#!{sys.executable}\n" + """import json,os,sys
+from pathlib import Path
+p=Path(os.environ['UNIT_STATE']); states=json.loads(p.read_text()); args=sys.argv[1:]
+unit=args[1]
+if args[0]=='stop':
+ states[unit]='inactive';p.write_text(json.dumps(states));sys.exit(0)
+prop=args[2].split('=',1)[1]
+if prop=='LoadState': print('loaded')
+elif prop=='ActiveState': print(states.get(unit,'active'))
+elif unit.endswith('.service'): print('0' if states.get(unit)=='inactive' else '987')
+else: print('')
+""")
+    binary.chmod(0o755)
+    monkeypatch.setenv("UNIT_STATE", str(state))
+    stopped = subprocess.run(["bash", "-c", stopping], text=True, capture_output=True)
+    assert stopped.returncode == 0, stopped.stderr
+    statuses = json.loads(state.read_text())
+    assert len(statuses) == 7 and set(statuses.values()) == {"inactive"}
 
 
 def test_sync_upload_failure_never_restarts_service(tmp_path, monkeypatch):
@@ -243,6 +305,26 @@ def test_backup_repairs_existing_permissions_even_when_database_is_absent(tmp_pa
     assert old.stat().st_mode & 0o777 == 0o600
 
 
+@pytest.mark.parametrize("wrong_owner", ["directory", "archive"])
+def test_backup_refuses_other_accounts_owned_directory_or_archive(tmp_path, monkeypatch, wrong_owner):
+    helper = module("backup_privacy")
+    root = tmp_path / "backups"
+    root.mkdir()
+    archive = root / "existing.db.gz"
+    archive.write_bytes(b"fixture")
+    target = root if wrong_owner == "directory" else archive
+    original = Path.lstat
+    def lstat(path):
+        info = original(path)
+        if path == target:
+            return SimpleNamespace(st_uid=os.geteuid() + 1000, st_mode=info.st_mode, st_nlink=info.st_nlink)
+        return info
+    monkeypatch.setattr(helper.Path, "lstat", lstat)
+    with pytest.raises(ValueError, match="属主"):
+        helper.protect_directory(root)
+    assert archive.read_bytes() == b"fixture"
+
+
 def test_secure_tree_limits_writes_and_protects_env_backups(tmp_path, monkeypatch):
     helper = module("deployment_security")
     account = SimpleNamespace(pw_uid=501, pw_gid=502)
@@ -261,14 +343,15 @@ def test_secure_tree_limits_writes_and_protects_env_backups(tmp_path, monkeypatc
     assert (tmp_path / ".env.backup").stat().st_mode & 0o777 == 0o600
 
 
-@pytest.mark.parametrize("violation", ["public-listener", "root-uid", "writable-code", "missing-sandbox", None])
+@pytest.mark.parametrize("violation", ["public-listener", "root-uid", "root-process", "writable-code", "missing-sandbox", None])
 def test_origin_boundary_checks_effective_service_and_socket_state(monkeypatch, violation):
     helper = module("deployment_security")
     url, cert, key = "https://site.example", "/etc/certs/fullchain.pem", "/etc/certs/privkey.pem"
     config = helper.nginx_config(url, cert, key)
-    monkeypatch.setattr(helper.Path, "read_text", lambda path: config)
+    process_status = "Uid:\t0\t0\t0\t0\n" if violation == "root-process" else "Uid:\t501\t501\t501\t501\n"
+    monkeypatch.setattr(helper.Path, "read_text", lambda path: process_status if str(path).startswith("/proc/") else config)
     monkeypatch.setattr(helper.subprocess, "run", lambda *args, **kwargs: SimpleNamespace(stdout=config, stderr=""))
-    values = {"User": "case-weather", "ProtectSystem": "strict", "ProtectHome": "yes", "NoNewPrivileges": "yes", "UMask": "0077", "ReadWritePaths": "/srv/example/instance /srv/example/storage /srv/example/logs"}
+    values = {"User": "case-weather", "MainPID": "999", "ControlPID": "0", "ProtectSystem": "strict", "ProtectHome": "yes", "NoNewPrivileges": "yes", "UMask": "0077", "ReadWritePaths": "/srv/example/instance /srv/example/storage /srv/example/logs"}
     if violation == "writable-code": values["ReadWritePaths"] += " /srv/example"
     if violation == "missing-sandbox": values["ProtectSystem"] = "no"
     def run(*args):
