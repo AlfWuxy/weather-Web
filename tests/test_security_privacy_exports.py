@@ -127,7 +127,7 @@ def test_push_fallback_does_not_log_address(app, db_session, monkeypatch, caplog
                             short_code='12348765', short_code_hash=hash_short_code('12348765'),
                             status='active', last_active_at=utcnow()))
         db_session.commit()
-        monkeypatch.setattr(dispatch, 'resolve_location', lambda value: {'provider': 'fallback'})
+        monkeypatch.setattr(dispatch, 'resolve_location', lambda value, **kwargs: {'provider': 'fallback'})
         with caplog.at_level(logging.WARNING):
             dispatch.dispatch_alerts()
         assert ADDRESS not in caplog.text

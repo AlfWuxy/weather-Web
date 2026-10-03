@@ -235,7 +235,7 @@ def dispatch_alerts(now=None, dedupe_hours: int = 6) -> Dict[str, Any]:
     groups: Dict[str, Dict[str, Any]] = {}
     for pair in eligible_pairs:
         query = (pair.location_query or pair.community_code or "").strip()
-        resolved = resolve_location(query)
+        resolved = resolve_location(query, user_id=pair.caregiver_id)
         if query and resolved.get("provider") == "fallback":
             logger.warning("跳过未成功解析地点的推送分组，pair_id=%s", getattr(pair, "id", None))
             continue
