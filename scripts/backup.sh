@@ -2,6 +2,7 @@
 # 数据库自动备份脚本
 # 每天保留30天的备份
 set -euo pipefail
+umask 077
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -95,7 +96,7 @@ parse_sqlite_path() {
         sqlite+pysqlite:///*) path="${uri#sqlite+pysqlite:///}" ;;
         sqlite:///*) path="${uri#sqlite:///}" ;;
         *)
-            echo "仅支持 sqlite 或 sqlite+pysqlite DATABASE_URI: $uri" >&2
+            echo "仅支持 sqlite 或 sqlite+pysqlite DATABASE_URI" >&2
             return 2
             ;;
     esac
@@ -113,6 +114,28 @@ parse_sqlite_path() {
         fi
     fi
     printf '%s\n' "$path"
+}
+
+protect_backup_directory() {
+    # 先纠正既有目录和文件的权限，且拒绝跟随链接，防止备份落入共享位置。
+    python3 - "$BACKUP_DIR" <<'PY'
+import os
+from pathlib import Path
+import stat
+import sys
+root = Path(sys.argv[1])
+if root.is_symlink():
+    raise SystemExit('备份目录不得为链接')
+root.mkdir(mode=0o700, parents=True, exist_ok=True)
+for directory, dirs, files in os.walk(root, followlinks=False):
+    os.chmod(directory, 0o700)
+    for name in dirs + files:
+        path = Path(directory) / name
+        info = path.lstat()
+        if stat.S_ISLNK(info.st_mode) or not (stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode)) or (stat.S_ISREG(info.st_mode) and info.st_nlink != 1):
+            raise SystemExit('备份目录存在链接或非普通文件，拒绝继续')
+        os.chmod(path, 0o700 if stat.S_ISDIR(info.st_mode) else 0o600)
+PY
 }
 
 usage() {
@@ -155,6 +178,10 @@ main() {
         fi
     fi
 
+    if [ -e "$BACKUP_DIR" ] || [ -L "$BACKUP_DIR" ]; then
+        protect_backup_directory
+    fi
+
     if [ ! -f "$DB_FILE" ]; then
         if [ "$if_present" -eq 1 ]; then
             echo "未发现源数据库，按 --if-present 跳过备份: $DB_FILE"
@@ -173,14 +200,27 @@ main() {
         return 127
     }
 
-    # 创建备份目录
-    mkdir -p "$BACKUP_DIR"
+    protect_backup_directory
+
+    # 随机独占文件避免并发备份碰撞，创建时即为0600。
+    BACKUP_FILE="$(python3 - "$BACKUP_DIR" "$DATE" <<'PY'
+import os
+import sys
+import tempfile
+fd, path = tempfile.mkstemp(prefix='health_weather_' + sys.argv[2] + '_', suffix='.db', dir=sys.argv[1])
+os.fchmod(fd, 0o600)
+os.close(fd)
+print(path)
+PY
+)"
 
     # 创建备份（使用SQLite的.backup命令保证一致性）
     sqlite3 "$DB_FILE" ".backup '$BACKUP_FILE'"
+    chmod 600 "$BACKUP_FILE"
 
     # 压缩备份
     gzip "$BACKUP_FILE"
+    chmod 600 "${BACKUP_FILE}.gz"
 
     echo "[$(date)] 备份完成: ${BACKUP_FILE}.gz"
 

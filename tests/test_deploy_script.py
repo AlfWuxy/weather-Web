@@ -9,6 +9,10 @@ def _load_deploy_script():
     return script_path.read_text(encoding="utf-8")
 
 
+def _load_transport_helper():
+    return (Path(__file__).resolve().parents[1] / "scripts" / "deployment_security.sh").read_text(encoding="utf-8")
+
+
 def _load_precompute_script():
     script_path = Path(__file__).resolve().parents[1] / "scripts" / "community_risk_precompute.sh"
     return script_path.read_text(encoding="utf-8")
@@ -38,8 +42,8 @@ def test_deploy_script_pins_duchang_cache_to_free_tier_budget():
     assert 'WEATHER_SYNC_LOCATIONS=都昌县' in content
     assert 'QWEATHER_CANONICAL_LOCATION=116.20,29.27' in content
     assert 'QWEATHER_MONTHLY_REQUEST_LIMIT=40000' in content
-    assert 'OnUnitActiveSec=30min' in content
-    assert 'ExecStart=/bin/bash $PROJECT_DIR/scripts/weather_cache_sync.sh' in content
+    assert "'cache 30min 2min'" in content
+    assert 'START="/bin/bash $PROJECT_DIR/scripts/weather_cache_sync.sh"' in content
 
 
 def test_deploy_script_sets_precompute_python_path():
@@ -59,7 +63,7 @@ def test_deploy_script_uses_shared_database_backup_resolver():
 
 
 def test_deploy_script_excludes_local_design_drafts():
-    content = _load_deploy_script()
+    content = _load_transport_helper()
 
     assert "--exclude '.claude'" in content
     assert "--exclude '.superpowers'" in content
@@ -71,14 +75,14 @@ def test_deploy_script_excludes_local_design_drafts():
 
 
 def test_deploy_script_excludes_root_analysis_dir():
-    content = _load_deploy_script()
+    content = _load_transport_helper()
     flag = "--exclude=/analysis/"
 
-    assert content.count(flag) == 3
+    assert content.count(flag) == 1
     assert "--exclude '/analysis/'" not in content
 
     rsync_starts = [idx for idx in range(len(content)) if content.startswith("rsync -avz", idx)]
-    assert len(rsync_starts) == 3
+    assert len(rsync_starts) == 1
     for start in rsync_starts:
         end = content.find("$PROJECT_DIR/", start)
         assert end != -1
@@ -88,10 +92,9 @@ def test_deploy_script_excludes_root_analysis_dir():
 def test_deploy_script_requires_https_public_base_url():
     content = _load_deploy_script()
 
-    assert 'ALLOW_INSECURE_PUBLIC_BASE_URL' in content
-    assert 'PUBLIC_BASE_URL 必须使用 HTTPS' in content
-    assert 'ALLOW_INSECURE_PUBLIC_BASE_URL=1' in content
-    assert 'DEFAULT_PUBLIC_BASE_URL="http://$SERVER:5000"' in content
+    assert 'verify_deployment_boundary' in content
+    assert 'initialize_deploy_security' in content
+    assert 'http://$SERVER:5000' not in content
 
 
 def test_precompute_script_respects_deploy_venv_dir():

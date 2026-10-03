@@ -48,9 +48,13 @@ def test_manual_fix_script_accepts_quoted_real_value_with_comment(tmp_path):
     assert _classify_value(env_file, "SECRET_KEY") == "configured"
 
 
-def test_manual_fix_script_keeps_generated_env_private():
-    content = SCRIPT_PATH.read_text(encoding="utf-8")
-    assert 'chmod 600 "$tmp_file"' in content
+def test_manual_fix_script_corrects_existing_env_permissions(tmp_path):
+    env_file = tmp_path / ".env"
+    env_file.write_text("SECRET_KEY=old\n")
+    env_file.chmod(0o666)
+    command = f"source '{SCRIPT_PATH}'; write_env_value SECRET_KEY replacement '{env_file}'"
+    subprocess.run(["bash", "-c", command], check=True)
+    assert env_file.stat().st_mode & 0o777 == 0o600
 
 
 def test_manual_fix_script_replaces_and_deduplicates_secret_keys(tmp_path):
