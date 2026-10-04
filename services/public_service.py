@@ -45,7 +45,7 @@ from core.weather import (
     normalize_location_name,
     weather_source_label,
 )
-from core.guest import GuestUser, is_guest_user
+from core.guest import GuestUser, guest_experience_error_response, is_guest_user
 from core.db_models import (
     Community,
     CoolingResource,
@@ -69,6 +69,11 @@ from services.community_daily_service import (
     refresh_community_daily_best_effort as _refresh_community_daily_best_effort,
 )
 from services.heat_action_service import HeatActionService
+from services.guest_experience import (
+    GuestExperienceError,
+    delete_experience,
+    get_experience,
+)
 from services.miniprogram_service import get_bootstrap_payload
 from services.cross_platform_identity import (
     AccountLinkError,
@@ -156,6 +161,13 @@ def _clear_pair_token():
 
 def _clear_identity_scoped_session():
     """只清理绑定到旧身份的数据，保留 CSRF、flash 与其他匿名偏好。"""
+    guest_id = session.get('guest_id') or session.get('_user_id')
+    if isinstance(guest_id, str) and guest_id.startswith(GUEST_ID_PREFIX):
+        try:
+            delete_experience(guest_id)
+        except GuestExperienceError:
+            # 缓存不可用不能阻止退出；剩余临时数据仍受原定过期时间约束。
+            logger.warning('游客临时数据暂未清除，将由到期机制清理')
     for key in IDENTITY_SCOPED_SESSION_KEYS:
         session.pop(key, None)
     # 未勾选“记住我”的新身份不能继承旧账号的长期登录 cookie。
@@ -1174,8 +1186,8 @@ def render_role_entry():
     community_next = url_for('user.community_dashboard')
 
     if is_guest:
-        caregiver_target = url_for('public.register')
-        caregiver_action_label = '注册开启照护'
+        caregiver_target = url_for('guest_experience.page', view='overview')
+        caregiver_action_label = '体验家庭照护'
         caregiver_requires_login = False
     elif is_real_user and role in {'user', 'caregiver', 'admin'}:
         caregiver_target = caregiver_next
@@ -1186,9 +1198,12 @@ def render_role_entry():
         caregiver_action_label = '请使用家庭账号'
         caregiver_requires_login = False
     else:
-        caregiver_target = url_for('public.login', next=default_caregiver_next)
-        caregiver_action_label = '进入照护工作台'
-        caregiver_requires_login = True
+        caregiver_target = url_for(
+            'public.guest_login',
+            next=url_for('guest_experience.page', view='overview'),
+        )
+        caregiver_action_label = '体验家庭照护'
+        caregiver_requires_login = False
 
     if is_real_user:
         if role in ('community', 'admin'):
@@ -1848,21 +1863,18 @@ def handle_guest_login(next_url=None):
             url_for(_role_landing_endpoint(getattr(current_user, 'role', None)))
         )
 
-    _clear_identity_scoped_session()
-    session['guest_profile'] = {
-        'username': '游客',
-        'age': None,
-        'gender': '未知',
-        'community': DEFAULT_CITY_LABEL,
-        'has_chronic_disease': False,
-        'chronic_diseases': None
-    }
-    session.pop('guest_assessment', None)
     guest_id = f"{GUEST_ID_PREFIX}{secrets.token_urlsafe(12)}"
+    try:
+        state = get_experience(guest_id)
+    except GuestExperienceError as exc:
+        return guest_experience_error_response(exc)
+
+    _clear_identity_scoped_session()
     session['guest_id'] = guest_id
-    guest_user = GuestUser(guest_id, session['guest_profile'])
+    guest_user = GuestUser(guest_id, state['profile'])
+    guest_user.experience_version = state['version']
     login_user(guest_user)
-    flash('已进入游客模式（数据不会保存）', 'success')
+    flash('已进入游客体验：示例资料和操作仅临时保留两小时，不会发送真实提醒。', 'success')
     safe_next = _safe_next_url(next_url)
     return redirect(safe_next or url_for('user.user_dashboard'))
 

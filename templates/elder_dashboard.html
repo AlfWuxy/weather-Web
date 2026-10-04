@@ -138,9 +138,9 @@
                     <i class="bi bi-telephone-fill"></i> 准备联系家人
                 </button>
             {% else %}
-                <p>还没有设置紧急联系人。</p>
-                <a class="btn btn-outline-secondary btn-lg" href="{{ url_for('public.register') if current_user.role == 'guest' else url_for('health.family_members') }}">
-                    {% if current_user.role == 'guest' %}注册后设置{% else %}去设置联系人{% endif %}
+                <p>{% if current_user.role == 'guest' %}当前为示例资料，可以体验家人档案。{% else %}还没有设置紧急联系人。{% endif %}</p>
+                <a class="btn btn-outline-secondary btn-lg" href="{{ url_for('guest_experience.page', view='family') if current_user.role == 'guest' else url_for('health.family_members') }}">
+                    {% if current_user.role == 'guest' %}体验家人档案{% else %}去设置联系人{% endif %}
                 </a>
             {% endif %}
             <button class="btn btn-outline-danger btn-lg"

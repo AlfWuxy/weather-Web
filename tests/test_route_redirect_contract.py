@@ -169,7 +169,7 @@ def test_authenticated_web_route_matrix_never_collapses_to_forecast(
     ("path", "dual_expected"),
     (
         ("/forecast-7day", "page"),
-        ("/profile", "dashboard"),
+        ("/profile", "experience_profile"),
         ("/dashboard", "page"),
     ),
 )
@@ -190,9 +190,9 @@ def test_guest_web_route_matrix_never_uses_forecast_as_fallback(
     if mode == "mini_only":
         assert response.status_code == 303
         assert location.endswith("/action")
-    elif dual_expected == "dashboard":
+    elif dual_expected == "experience_profile":
         assert response.status_code in (301, 302, 303)
-        assert location.endswith("/dashboard")
+        assert location.endswith("/experience/profile")
     else:
         assert response.status_code == 200
         assert location == ""

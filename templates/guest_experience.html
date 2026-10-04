@@ -98,7 +98,7 @@
     <aside class="guest-mode-notice" aria-label="游客体验说明">
         <span class="guest-mode-badge"><i class="bi bi-stars" aria-hidden="true"></i> 体验模式</span>
         <p>示例资料自体验开始 <strong>2 小时后清除</strong>，<strong>不会发送真实提醒</strong>。</p>
-        {% if expires_label %}<span class="guest-expiry">{{ expires_label }}</span>{% endif %}
+        {% if expires_label %}<span class="guest-expiry">{{ expires_label }} 到期</span>{% endif %}
     </aside>
 
     <header class="guest-heading">
@@ -192,7 +192,7 @@
                     <div class="guest-field-wide"><label for="profile-username" class="form-label">体验昵称</label><input id="profile-username" name="username" class="form-control" value="{{ profile.username }}" maxlength="30" autocomplete="off" required></div>
                     <div><label for="profile-age" class="form-label">年龄</label><input id="profile-age" name="age" type="number" class="form-control" value="{{ profile.age }}" min="18" max="110" inputmode="numeric" required></div>
                     <div><label for="profile-gender" class="form-label">性别</label><select id="profile-gender" name="gender" class="form-select">{% for gender in ['男', '女', '未知'] %}<option value="{{ gender }}" {% if profile.gender == gender %}selected{% endif %}>{{ gender }}</option>{% endfor %}</select></div>
-                    <div class="guest-field-wide"><label for="profile-community" class="form-label">示例社区 <span class="guest-optional">（选填）</span></label><input id="profile-community" name="community" class="form-control" value="{{ profile.community or '' }}" maxlength="60" placeholder="例如：示例社区" aria-describedby="community-hint" autocomplete="off"><p id="community-hint" class="guest-field-hint">无需填写真实住址。</p></div>
+                    <div class="guest-field-wide"><label for="profile-community" class="form-label">示例社区</label><input id="profile-community" name="community" required class="form-control" value="{{ profile.community or '' }}" maxlength="60" placeholder="例如：示例社区" aria-describedby="community-hint" autocomplete="off"><p id="community-hint" class="guest-field-hint">无需填写真实住址。</p></div>
                     <fieldset class="guest-field-wide"><legend class="form-label">慢病情况</legend><div class="guest-choice"><input id="profile-has-chronic" name="has_chronic_disease" type="checkbox" class="form-check-input" value="1" {% if profile.has_chronic_disease %}checked{% endif %}><label for="profile-has-chronic">这份示例资料有慢病</label></div><p class="guest-field-hint">勾选后，可在下面选择相应的慢病。</p><div class="guest-choice-grid">{% for disease in chronic_options %}<div class="guest-choice"><input id="profile-chronic-{{ loop.index }}" name="chronic_diseases" type="checkbox" class="form-check-input" value="{{ disease }}" {% if disease in profile.chronic_diseases %}checked{% endif %}><label for="profile-chronic-{{ loop.index }}">{{ disease }}</label></div>{% endfor %}</div></fieldset>
                 </div>
                 <div class="guest-form-actions"><button class="btn btn-primary" type="submit">保存示例资料</button></div>

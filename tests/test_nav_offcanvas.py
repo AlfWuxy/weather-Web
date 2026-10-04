@@ -113,8 +113,8 @@ def test_guest_navigation_only_offers_available_destinations(client):
     assert client.get('/guest').status_code == 302
     body = client.get('/').get_data(as_text=True)
 
-    assert 'href="/register" data-nav-key="care"' in body
-    assert '注册开启照护' in body
+    assert 'href="/experience/" data-nav-key="care"' in body
+    assert '体验家庭照护' in body
     assert 'href="/family-members"' not in body
     assert 'href="/health-diary"' not in body
     assert 'href="/medication-reminders"' not in body
@@ -275,12 +275,12 @@ def test_community_role_entry_does_not_offer_family_care_route(client, db_sessio
     assert '当前是社区账号。家庭照护需使用家庭账号登录。' in body
 
 
-def test_guest_role_entry_offers_registration_instead_of_restricted_care(client):
+def test_guest_role_entry_offers_isolated_care_experience(client):
     assert client.get('/guest').status_code == 302
     body = client.get('/entry').get_data(as_text=True)
 
-    assert 'data-entry-key="care" href="/register"' in body
-    assert '注册开启照护' in body
+    assert 'data-entry-key="care" href="/experience/"' in body
+    assert '体验家庭照护' in body
 
 
 def test_flash_categories_keep_their_visual_severity(client):

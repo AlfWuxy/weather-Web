@@ -106,13 +106,15 @@
         {% set nav_community_risk_url = url_for('user.community_risk') %}
         {% set nav_community_risk_endpoint = 'user.community_risk' %}
     {% endif %}
-    {% set nav_family_active = 'family_member' in nav_endpoint %}
+    {% set nav_experience_view = request.view_args.get('view') if request.view_args else '' %}
+    {% set nav_family_active = 'family_member' in nav_endpoint or (nav_endpoint == 'guest_experience.page' and nav_experience_view == 'family') %}
+    {% set nav_action_url = url_for('guest_experience.page', view='checkin') if nav_is_guest else url_for('public.action_check') %}
     {% set nav_community_workspace_active = nav_endpoint in ['user.community_dashboard', 'user.community_detail', 'user.community_wechat', 'user.community_announce'] %}
     {% set nav_more_active = (current_user.is_authenticated and current_user.role == 'admin' and nav_community_workspace_active) or nav_endpoint == 'user.heat_exposure_gis' %}
     {% if nav_is_guest or not current_user.is_authenticated %}
-        {% set nav_care_url = url_for('public.register') %}
-        {% set nav_care_label = '注册开启照护' %}
-        {% set nav_care_primary_active = nav_endpoint == 'public.register' %}
+        {% set nav_care_url = url_for('guest_experience.page', view='overview') if nav_is_guest else url_for('public.guest_login', next=url_for('guest_experience.page', view='overview')) %}
+        {% set nav_care_label = '体验家庭照护' %}
+        {% set nav_care_primary_active = nav_endpoint == 'guest_experience.page' %}
     {% elif current_user.role == 'community' %}
         {% set nav_care_url = url_for('user.community_dashboard') %}
         {% set nav_care_label = '社区工作台' %}
@@ -186,7 +188,7 @@
                                            data-nav-key="heat-exposure-gis"
                                            {% if nav_endpoint == 'user.heat_exposure_gis' %}aria-current="page"{% endif %}>热暴露 GIS</a>
                                     {% endif %}
-                                    <a class="app-mega-link" href="{{ url_for('public.action_check') }}">行动打卡</a>
+                                    <a class="app-mega-link" href="{{ nav_action_url }}">行动打卡</a>
                                 </section>
 
                                 {% if current_user.role != 'community' %}
@@ -196,6 +198,10 @@
                                     {% if not nav_is_guest %}
                                         <a class="app-mega-link" href="{{ url_for('health.health_diary') }}">健康日记</a>
                                         <a class="app-mega-link" href="{{ url_for('health.medication_reminders') }}">用药提醒</a>
+                                    {% else %}
+                                        <a class="app-mega-link" href="{{ url_for('guest_experience.page', view='family') }}">体验家人档案</a>
+                                        <a class="app-mega-link" href="{{ url_for('guest_experience.page', view='diary') }}">体验健康日记</a>
+                                        <a class="app-mega-link" href="{{ url_for('guest_experience.page', view='medications') }}">用药提醒预览</a>
                                     {% endif %}
                                     {% if current_user.role == 'admin' %}
                                         <a class="app-mega-link" href="{{ url_for('tools.ml_prediction') }}">健康关注线索</a>
@@ -229,6 +235,7 @@
                                             <a class="app-mega-link" href="{{ url_for('user.elder_dashboard') }}">老人模式</a>
                                         {% endif %}
                                     {% else %}
+                                        <a class="app-mega-link" href="{{ url_for('guest_experience.page', view='profile') }}">体验个人资料</a>
                                         <a class="app-mega-link" href="{{ url_for('public.register') }}">注册账号</a>
                                     {% endif %}
                                 </section>
@@ -302,8 +309,10 @@
                     <a class="nav-link {% if nav_care_primary_active %}active{% endif %}" href="{{ nav_care_url }}" data-nav-key="care" {% if nav_care_primary_active %}aria-current="page"{% endif %}><i class="bi bi-people me-2"></i>{{ nav_care_label }}</a>
                     {% if not nav_is_guest and current_user.role != 'community' %}
                         <a class="nav-link {% if nav_family_active %}active{% endif %}" href="{{ url_for('health.family_members') }}" data-nav-key="family" {% if nav_family_active %}aria-current="page"{% endif %}><i class="bi bi-person-vcard me-2"></i>家人档案</a>
+                    {% elif nav_is_guest %}
+                        <a class="nav-link" href="{{ url_for('guest_experience.page', view='family') }}" data-nav-key="family"><i class="bi bi-person-vcard me-2"></i>体验家人档案</a>
                     {% endif %}
-                    <a class="nav-link {% if nav_endpoint == 'public.action_check' %}active{% endif %}" href="{{ url_for('public.action_check') }}" data-nav-key="action" {% if nav_endpoint == 'public.action_check' %}aria-current="page"{% endif %}><i class="bi bi-clipboard-check me-2"></i>行动打卡</a>
+                    <a class="nav-link {% if nav_endpoint == 'public.action_check' %}active{% endif %}" href="{{ nav_action_url }}" data-nav-key="action" {% if nav_endpoint == 'public.action_check' %}aria-current="page"{% endif %}><i class="bi bi-clipboard-check me-2"></i>行动打卡</a>
             </nav>
             {% endif %}
 
@@ -329,6 +338,9 @@
                 {% if not nav_is_guest %}
                     <a class="nav-link {% if nav_endpoint == 'health.health_diary' %}active{% endif %}" href="{{ url_for('health.health_diary') }}" data-nav-key="health-diary" {% if nav_endpoint == 'health.health_diary' %}aria-current="page"{% endif %}><i class="bi bi-journal me-2"></i>健康日记</a>
                     <a class="nav-link {% if nav_endpoint == 'health.medication_reminders' %}active{% endif %}" href="{{ url_for('health.medication_reminders') }}" data-nav-key="medication" {% if nav_endpoint == 'health.medication_reminders' %}aria-current="page"{% endif %}><i class="bi bi-capsule me-2"></i>用药提醒</a>
+                {% else %}
+                    <a class="nav-link" href="{{ url_for('guest_experience.page', view='diary') }}" data-nav-key="health-diary"><i class="bi bi-journal me-2"></i>体验健康日记</a>
+                    <a class="nav-link" href="{{ url_for('guest_experience.page', view='medications') }}" data-nav-key="medication"><i class="bi bi-capsule me-2"></i>用药提醒预览</a>
                 {% endif %}
                 {% if current_user.role == 'admin' %}
                     <a class="nav-link {% if nav_endpoint == 'tools.ml_prediction' %}active{% endif %}" href="{{ url_for('tools.ml_prediction') }}" data-nav-key="ml-prediction" {% if nav_endpoint == 'tools.ml_prediction' %}aria-current="page"{% endif %}><i class="bi bi-cpu me-2"></i>健康关注线索</a>
@@ -409,6 +421,7 @@
                         </div>
                     {% endif %}
                 {% else %}
+                    <a class="nav-link" href="{{ url_for('guest_experience.page', view='profile') }}"><i class="bi bi-gear me-2"></i>体验个人资料</a>
                     <a class="nav-link" href="{{ url_for('public.register') }}"><i class="bi bi-person-plus me-2"></i>注册账号</a>
                 {% endif %}
                 <a class="btn btn-outline-secondary btn-sm w-100 mt-2"
@@ -440,6 +453,13 @@
 
     {# ===================== Content ===================== #}
     <main class="page-shell container-fluid py-4" id="main-content" tabindex="-1">
+        {% if nav_is_guest and nav_endpoint != 'guest_experience.page' %}
+        <aside class="alert alert-light border d-flex flex-wrap align-items-center gap-2" aria-label="游客体验资料">
+            <span><strong>游客体验</strong> · {{ current_user.username }}，{{ current_user.age }} 岁 · 资料临时保留 2 小时</span>
+            <a href="{{ url_for('guest_experience.page', view='profile') }}">调整示例资料</a>
+            <a href="{{ url_for('guest_experience.page', view='overview') }}">体验家庭照护</a>
+        </aside>
+        {% endif %}
         {% block content %}{% endblock %}
     </main>
 

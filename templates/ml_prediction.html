@@ -32,7 +32,8 @@
                 </div>
                 <div class="mb-3">
                     <label class="form-label">年龄</label>
-                    <input type="number" class="form-control" name="age" value="{{ form_state.age if form_state else (age or 65) }}" min="1" max="120">
+                    <input type="number" class="form-control" name="age" value="{{ form_state.age if form_state else (age or 65) }}" min="1" max="120" {% if current_user.role == 'guest' %}readonly{% endif %}>
+                    {% if current_user.role == 'guest' %}<p class="form-text">使用统一的体验资料；<a href="{{ url_for('guest_experience.page', view='profile') }}">修改示例年龄</a>。</p>{% endif %}
                 </div>
                 <div class="alert alert-light border small" role="note">
                     慢病档案不会参与这项类别排序。需要查看慢病与天气的关系，请使用“慢病风险评估”。
