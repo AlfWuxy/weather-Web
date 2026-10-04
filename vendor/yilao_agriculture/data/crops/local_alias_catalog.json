@@ -1,0 +1,459 @@
+{
+  "schema_id": "yilao.crop_alias_resolver.v0.1",
+  "contract_version": "0.1.0",
+  "catalog_id": "yilao.crop_alias_library",
+  "catalog_version": "2026-09-16.1",
+  "effective_from": "2026-09-16",
+  "supersedes": "0.1.0",
+  "task_id": "R11-A07",
+  "accepted_source_hash": "a8c0f2f97a603aa937f95436d1f05d6cb2998565d98415eb4f3ac632003df4d9",
+  "interface_version": "docs/接口约定.md schema 1.0",
+  "auto_select": false,
+  "recommendation_enabled_default": false,
+  "recommendation_gate": {
+    "open": false,
+    "requires": ["agronomy_available", "local_reviewed", "field_validated"],
+    "note": "收录（catalog_included）≠可推荐（recommendation_enabled）；本版 open=false。"
+  },
+  "note": "目录覆盖不等于已验证。FOC 标准中文名不是都昌现场鉴定。菜瓜/芝麻/高杆保持 IDENTITY_HOLD。",
+  "regions": [
+    {
+      "region_id": "CN-JX-duchang",
+      "kind": "intended_local",
+      "label": "江西省都昌县（先行适用地，尚无田块实地清单）"
+    },
+    {
+      "region_id": "national_candidate",
+      "kind": "national_candidate",
+      "label": "全国候选，非某县种植证明"
+    },
+    {
+      "region_id": "duchang_demonstration",
+      "kind": "demonstration",
+      "label": "合成演示 region_id，不是现场确认"
+    }
+  ],
+  "aliases": [
+    {
+      "alias_id": "ALIAS-V07-CAIGUA",
+      "surface_form": "菜瓜",
+      "lang": "zh",
+      "region_id": "CN-JX-duchang",
+      "target_crop_id": null,
+      "match": "unresolved",
+      "status": "IDENTITY_HOLD",
+      "local_confirmed": false,
+      "lock_blocked": true,
+      "recommendation_enabled": false,
+      "placeholder_crop_id": "yl.local.duchang.caigua",
+      "candidates": [
+        {
+          "crop_id": "CROP-V07-012",
+          "label": "Cucumis melo subsp. agrestis / Conomon Group",
+          "why": "Flora of China 标准中文名菜瓜；不是都昌照片鉴定",
+          "status": "botanical_standard_not_local_proof"
+        },
+        {
+          "crop_id": "CROP-V07-007",
+          "label": "Luffa aegyptiaca",
+          "why": "部分汉语材料称丝瓜为 tsai gua，与菜瓜同音",
+          "status": "regional_homonym"
+        },
+        {
+          "crop_id": "CROP-V07-008",
+          "label": "Luffa acutangula",
+          "why": "棱角丝瓜同为食用丝瓜",
+          "status": "regional_homonym"
+        },
+        {
+          "crop_id": "CROP-V07-013",
+          "label": "Cucumis melo Flexuosus Group",
+          "why": "蛇甜瓜作黄瓜状蔬菜，俗名与 conomon 交叉",
+          "status": "lookalike_vegetable_melon"
+        },
+        {
+          "crop_id": "CROP-V07-010",
+          "label": "Lagenaria siceraria",
+          "why": "嫩果作蔬菜；FOC 名葫芦而非菜瓜",
+          "status": "possible_confusion"
+        },
+        {
+          "crop_id": "CROP-V07-006",
+          "label": "Cucurbita pepo",
+          "why": "西葫芦有时被口语称作菜用瓜",
+          "status": "possible_confusion"
+        },
+        {
+          "crop_id": "CROP-V07-002",
+          "label": "Cucumis sativus",
+          "why": "黄瓜状果实的宽松叫法",
+          "status": "possible_loose_use"
+        }
+      ],
+      "sources": ["SRC-FOC-AGRESTIS", "SRC-R06-A04", "SRC-USER-MENTION"]
+    },
+    {
+      "alias_id": "ALIAS-V07-NANGUA",
+      "surface_form": "南瓜",
+      "lang": "zh",
+      "region_id": "national_candidate",
+      "target_crop_id": null,
+      "match": "unresolved",
+      "status": "CATALOG_ONLY",
+      "local_confirmed": false,
+      "lock_blocked": false,
+      "recommendation_enabled": false,
+      "candidates": [
+        {
+          "crop_id": "CROP-V07-004",
+          "label": "Cucurbita moschata",
+          "why": "FOC 南瓜",
+          "status": "national_candidate"
+        },
+        {
+          "crop_id": "CROP-V07-005",
+          "label": "Cucurbita maxima",
+          "why": "FOC 笋瓜，地方或统称南瓜",
+          "status": "national_candidate"
+        },
+        {
+          "crop_id": "CROP-V07-006",
+          "label": "Cucurbita pepo",
+          "why": "部分 C. pepo 南瓜类型",
+          "status": "national_candidate"
+        }
+      ],
+      "sources": ["SRC-R06-A04"]
+    },
+    {
+      "alias_id": "ALIAS-V07-SIGUA",
+      "surface_form": "丝瓜",
+      "lang": "zh",
+      "region_id": "national_candidate",
+      "target_crop_id": null,
+      "match": "unresolved",
+      "status": "CATALOG_ONLY",
+      "local_confirmed": false,
+      "lock_blocked": false,
+      "recommendation_enabled": false,
+      "candidates": [
+        {
+          "crop_id": "CROP-V07-007",
+          "label": "Luffa aegyptiaca",
+          "why": "FOC 丝瓜",
+          "status": "national_candidate"
+        },
+        {
+          "crop_id": "CROP-V07-008",
+          "label": "Luffa acutangula",
+          "why": "FOC 广东丝瓜",
+          "status": "national_candidate"
+        }
+      ],
+      "sources": ["SRC-R06-A04"]
+    },
+    {
+      "alias_id": "ALIAS-V01-YOUMAI-NATIONAL",
+      "surface_form": "油麦菜",
+      "lang": "zh",
+      "region_id": "national_candidate",
+      "target_crop_id": null,
+      "match": "unresolved",
+      "status": "UNRESOLVED",
+      "local_confirmed": false,
+      "lock_blocked": false,
+      "recommendation_enabled": false,
+      "candidates": [
+        {
+          "crop_id": "yilao.crop.V01.lactuca_sativa",
+          "label": "Lactuca sativa",
+          "why": "叶用莴苣可能包括油麦菜类型",
+          "status": "identity_uncertain"
+        },
+        {
+          "crop_id": "cg.V01.lettuce.leaf",
+          "label": "leaf lettuce cultivar group",
+          "why": "散叶类型占位，不是已锁品种",
+          "status": "identity_uncertain"
+        },
+        {
+          "crop_id": "yilao.crop.V01.lactuca_indica",
+          "label": "Lactuca indica",
+          "why": "印度莴苣有时与油麦菜混淆",
+          "status": "identity_uncertain"
+        }
+      ],
+      "sources": ["SRC-R06-A01"]
+    },
+    {
+      "alias_id": "ALIAS-V01-YOUMAI-DUCHANG",
+      "surface_form": "油麦菜",
+      "lang": "zh",
+      "region_id": "CN-JX-duchang",
+      "target_crop_id": null,
+      "match": "not_mentioned",
+      "status": "HOLD",
+      "local_confirmed": false,
+      "lock_blocked": true,
+      "recommendation_enabled": false,
+      "candidates": [],
+      "sources": ["SRC-R06-A01"]
+    },
+    {
+      "alias_id": "ALIAS-V01-LETTUCE-DUCHANG",
+      "surface_form": "生菜",
+      "lang": "zh",
+      "region_id": "CN-JX-duchang",
+      "target_crop_id": "yilao.crop.V01.lactuca_sativa",
+      "match": "oral_mention_untyped",
+      "status": "LOCAL_ORAL_MENTION",
+      "local_confirmed": false,
+      "lock_blocked": false,
+      "recommendation_enabled": false,
+      "candidates": [
+        {
+          "crop_id": "yilao.crop.V01.lactuca_sativa",
+          "label": "Lactuca sativa",
+          "why": "本人提及生菜；散叶或结球未区分",
+          "status": "oral_mention_untyped"
+        }
+      ],
+      "sources": ["SRC-USER-MENTION", "SRC-R06-A01"]
+    },
+    {
+      "alias_id": "ALIAS-V01-LETTUCE-NATIONAL",
+      "surface_form": "生菜",
+      "lang": "zh",
+      "region_id": "national_candidate",
+      "target_crop_id": "yilao.crop.V01.lactuca_sativa",
+      "match": "entity",
+      "status": "CATALOG_ONLY",
+      "local_confirmed": false,
+      "lock_blocked": false,
+      "recommendation_enabled": false,
+      "candidates": [
+        {
+          "crop_id": "yilao.crop.V01.lactuca_sativa",
+          "label": "Lactuca sativa",
+          "why": "全国候选名",
+          "status": "catalog_only"
+        }
+      ],
+      "sources": ["SRC-R06-A01"]
+    },
+    {
+      "alias_id": "ALIAS-V06-PEPPER-DUCHANG",
+      "surface_form": "辣椒",
+      "lang": "zh",
+      "region_id": "CN-JX-duchang",
+      "target_crop_id": null,
+      "match": "oral_mention_untyped",
+      "status": "LOCAL_ORAL_MENTION",
+      "local_confirmed": false,
+      "lock_blocked": false,
+      "recommendation_enabled": false,
+      "candidates": [
+        {
+          "crop_id": "V06-CPSAN",
+          "label": "Capsicum annuum",
+          "why": "本人提及辣椒；辣/甜未区分，地方别名未知",
+          "status": "oral_mention_untyped"
+        }
+      ],
+      "sources": ["SRC-USER-MENTION", "SRC-R06-A03"]
+    },
+    {
+      "alias_id": "ALIAS-V07-WATERMELON-DUCHANG",
+      "surface_form": "西瓜",
+      "lang": "zh",
+      "region_id": "CN-JX-duchang",
+      "target_crop_id": "CROP-V07-001",
+      "match": "oral_mention_untyped",
+      "status": "LOCAL_ORAL_MENTION",
+      "local_confirmed": false,
+      "lock_blocked": false,
+      "recommendation_enabled": false,
+      "candidates": [
+        {
+          "crop_id": "CROP-V07-001",
+          "label": "Citrullus lanatus",
+          "why": "本人提及西瓜；爬地/上架未确认",
+          "status": "oral_mention_untyped"
+        }
+      ],
+      "sources": ["SRC-USER-MENTION", "SRC-R06-A04"]
+    },
+    {
+      "alias_id": "ALIAS-RICE-DUCHANG",
+      "surface_form": "水稻",
+      "lang": "zh",
+      "region_id": "CN-JX-duchang",
+      "target_crop_id": "CROP-ENT-RICE",
+      "match": "oral_mention_untyped",
+      "status": "LOCAL_ORAL_MENTION",
+      "local_confirmed": false,
+      "lock_blocked": false,
+      "recommendation_enabled": false,
+      "candidates": [
+        {
+          "crop_id": "CROP-ENT-RICE",
+          "label": "Oryza sativa",
+          "why": "本人提及水稻；水层与品种未确认",
+          "status": "oral_mention_untyped"
+        }
+      ],
+      "sources": ["SRC-USER-MENTION"]
+    },
+    {
+      "alias_id": "ALIAS-ZHIMA-DUCHANG",
+      "surface_form": "芝麻",
+      "lang": "zh",
+      "region_id": "CN-JX-duchang",
+      "target_crop_id": null,
+      "match": "unresolved",
+      "status": "IDENTITY_HOLD",
+      "local_confirmed": false,
+      "lock_blocked": true,
+      "recommendation_enabled": false,
+      "placeholder_crop_id": "yl.local.duchang.zhima",
+      "candidates": [
+        {
+          "crop_id": "yl.crop.g04.sesame",
+          "label": "Sesamum indicum",
+          "why": "常见对应，未做形态核对",
+          "status": "unverified"
+        },
+        {
+          "crop_id": "yl.crop.g04.linseed",
+          "label": "Linum usitatissimum",
+          "why": "亚麻籽油料可能被口语混称",
+          "status": "possible_confusion"
+        }
+      ],
+      "sources": ["SRC-R06-A10"]
+    },
+    {
+      "alias_id": "ALIAS-TALLSTALK-DUCHANG",
+      "surface_form": "高杆作物",
+      "lang": "zh",
+      "region_id": "CN-JX-duchang",
+      "target_crop_id": null,
+      "match": "unresolved",
+      "status": "IDENTITY_HOLD",
+      "local_confirmed": false,
+      "lock_blocked": true,
+      "recommendation_enabled": false,
+      "placeholder_crop_id": "yl.local.duchang.tall_stalk",
+      "candidates": [
+        {
+          "crop_id": "yl.crop.g04.sesame",
+          "label": "Sesamum indicum",
+          "why": "是否与所称芝麻同一植物未确认",
+          "status": "unverified"
+        },
+        {
+          "crop_id": "yl.crop.g04.sunflower",
+          "label": "Helianthus annuus",
+          "why": "高杆油料候选",
+          "status": "unverified"
+        },
+        {
+          "crop_id": "yl.crop.g04.castor",
+          "label": "Ricinus communis",
+          "why": "高杆油料候选",
+          "status": "unverified"
+        },
+        {
+          "crop_id": "CROP-ENT-MAIZE",
+          "label": "Zea mays",
+          "why": "都昌是否种植玉米未确认",
+          "status": "unconfirmed_presence"
+        },
+        {
+          "crop_id": "yl.crop.g02.sorghum_pointer",
+          "label": "Sorghum bicolor pointer",
+          "why": "高杆禾本科候选",
+          "status": "unverified"
+        }
+      ],
+      "sources": ["SRC-R06-A10"]
+    },
+    {
+      "alias_id": "ALIAS-MAIZE-DUCHANG",
+      "surface_form": "玉米",
+      "lang": "zh",
+      "region_id": "CN-JX-duchang",
+      "target_crop_id": null,
+      "match": "unresolved",
+      "status": "UNCONFIRMED_PRESENCE",
+      "local_confirmed": false,
+      "lock_blocked": false,
+      "recommendation_enabled": false,
+      "candidates": [
+        {
+          "crop_id": "CROP-ENT-MAIZE",
+          "label": "Zea mays",
+          "why": "都昌是否种植未确认；不得写成已种植或未种植",
+          "status": "unconfirmed_presence"
+        }
+      ],
+      "sources": ["SRC-USER-MENTION", "SRC-R10-A02"]
+    },
+    {
+      "alias_id": "ALIAS-SPINACH-DUCHANG",
+      "surface_form": "菠菜",
+      "lang": "zh",
+      "region_id": "CN-JX-duchang",
+      "target_crop_id": null,
+      "match": "not_mentioned",
+      "status": "NOT_MENTIONED",
+      "local_confirmed": false,
+      "lock_blocked": false,
+      "recommendation_enabled": false,
+      "candidates": [],
+      "sources": ["SRC-R06-A01"]
+    },
+    {
+      "alias_id": "ALIAS-LEGACY-PEPPER",
+      "surface_form": "pepper",
+      "lang": "en",
+      "region_id": "duchang_demonstration",
+      "target_crop_id": null,
+      "match": "legacy_unbound",
+      "status": "LEGACY_UNBOUND",
+      "local_confirmed": false,
+      "lock_blocked": false,
+      "recommendation_enabled": false,
+      "candidates": [
+        {
+          "crop_id": "V06-CPSAN",
+          "label": "Capsicum annuum",
+          "why": "schema 1.0 演示 crop_id，不得标成都昌已确认",
+          "status": "legacy_unbound"
+        }
+      ],
+      "sources": ["SRC-R10-A02"]
+    },
+    {
+      "alias_id": "ALIAS-LEGACY-LETTUCE",
+      "surface_form": "lettuce",
+      "lang": "en",
+      "region_id": "duchang_demonstration",
+      "target_crop_id": null,
+      "match": "legacy_unbound",
+      "status": "LEGACY_UNBOUND",
+      "local_confirmed": false,
+      "lock_blocked": false,
+      "recommendation_enabled": false,
+      "candidates": [
+        {
+          "crop_id": "yilao.crop.V01.lactuca_sativa",
+          "label": "Lactuca sativa",
+          "why": "schema 1.0 演示 crop_id，不得标成都昌已确认",
+          "status": "legacy_unbound"
+        }
+      ],
+      "sources": ["SRC-R10-A02"]
+    }
+  ]
+}

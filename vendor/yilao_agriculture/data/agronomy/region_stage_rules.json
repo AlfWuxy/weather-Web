@@ -1,0 +1,369 @@
+{
+  "schema_id": "yilao.region_stage_rules.v0.1",
+  "contract_version": "0.1.0",
+  "task_id": "R14-A02",
+  "requirement_id": "U10",
+  "accepted_source_hash": "0366264ec06dd3e58ba08891f6d00980fbbc753a87345ec0be10cd4223a2cc2c",
+  "interface_version": "docs/接口约定.md schema 1.0",
+  "algorithm_version": "0.1.0",
+  "engine_loads": false,
+  "auto_select": false,
+  "recommendation_enabled_default": false,
+  "note": "农艺规则按 region_id 隔离匹配：地区、作物实体、种植方式、物候阶段四项都要对上才命中。未命中即关闭，不得用其他地区规则代替。所有数值参数保持 null。",
+  "region_key_order": ["region_id", "crop_id", "cultivar_group", "growing_system", "stage_id"],
+  "regions": [
+    {
+      "region_id": "CN-JX-duchang",
+      "kind": "intended_local",
+      "label": "江西省都昌县（先行适用地，尚无田块实地清单）",
+      "evidence_status": "oral_mention",
+      "inherits_agronomy_from": [],
+      "coordinates_assign_region": false
+    },
+    {
+      "region_id": "duchang_demonstration",
+      "kind": "demonstration",
+      "label": "合成演示 region_id，不是现场确认",
+      "evidence_status": "illustrative",
+      "inherits_agronomy_from": [],
+      "coordinates_assign_region": false
+    },
+    {
+      "region_id": "national_candidate",
+      "kind": "national_candidate",
+      "label": "全国候选，非某县种植证明",
+      "evidence_status": "catalog_only",
+      "inherits_agronomy_from": [],
+      "coordinates_assign_region": false
+    },
+    {
+      "region_id": "IRRI-generic",
+      "kind": "foreign_citation",
+      "label": "IRRI Rice Knowledge Bank 结构引用，非都昌水层制度",
+      "evidence_status": "catalog_only",
+      "inherits_agronomy_from": [],
+      "coordinates_assign_region": false
+    }
+  ],
+  "growing_systems": ["dryland", "paddy", "greenhouse", "unknown"],
+  "non_phenology_stage_families": {
+    "farm_operation": {
+      "prefix": "YL.STAGE.",
+      "binds_to": "tasks.operation（U09 十八农事环节）",
+      "note": "农事环节是劳动过程目录，不是作物物候，不得当作 stage_id 参与规则匹配"
+    },
+    "kc_water": {
+      "prefix": "fao56.kc.",
+      "binds_to": "FAO-56 Kc 需水阶段（引用用）",
+      "note": "Kc 阶段不是物候，不得当作 stage_id"
+    }
+  },
+  "crop_vocab": {
+    "V06-CPSAN": "pheno.solanaceous.v0",
+    "yilao.crop.V01.lactuca_sativa": "pheno.lettuce.v0",
+    "CROP-V07-001": "pheno.cucurbit.v0",
+    "CROP-ENT-RICE": "pheno.rice.ses.v0",
+    "CROP-ENT-MAIZE": "pheno.maize.v0",
+    "yl.local.duchang.caigua": "pheno.unknown.v0",
+    "yl.local.duchang.zhima": "pheno.unknown.v0",
+    "yl.local.duchang.tall_stalk": "pheno.unknown.v0"
+  },
+  "identity_hold_crop_ids": [
+    "yl.local.duchang.caigua",
+    "yl.local.duchang.zhima",
+    "yl.local.duchang.tall_stalk"
+  ],
+  "phenology_vocabularies": {
+    "pheno.unknown.v0": {
+      "applies_when": "身份 HOLD",
+      "stages": ["pheno.unknown.unknown"]
+    },
+    "pheno.solanaceous.v0": {
+      "stages": [
+        "pheno.solanaceous.unknown",
+        "pheno.solanaceous.nursery",
+        "pheno.solanaceous.vegetative",
+        "pheno.solanaceous.flowering_fruit_set",
+        "pheno.solanaceous.harvest",
+        "pheno.solanaceous.clearance"
+      ]
+    },
+    "pheno.lettuce.v0": {
+      "stages": [
+        "pheno.lettuce.unknown",
+        "pheno.lettuce.nursery",
+        "pheno.lettuce.vegetative",
+        "pheno.lettuce.heading",
+        "pheno.lettuce.harvest",
+        "pheno.lettuce.clearance"
+      ]
+    },
+    "pheno.cucurbit.v0": {
+      "stages": [
+        "pheno.cucurbit.unknown",
+        "pheno.cucurbit.vegetative",
+        "pheno.cucurbit.flowering",
+        "pheno.cucurbit.fruit_fill",
+        "pheno.cucurbit.harvest",
+        "pheno.cucurbit.clearance"
+      ]
+    },
+    "pheno.rice.ses.v0": {
+      "stages": [
+        "pheno.rice.unknown",
+        "STAGE-RICE-SES-1",
+        "STAGE-RICE-SES-2",
+        "STAGE-RICE-SES-3",
+        "STAGE-RICE-SES-4",
+        "STAGE-RICE-SES-5",
+        "STAGE-RICE-SES-6",
+        "STAGE-RICE-FLOWERING",
+        "STAGE-RICE-SES-7",
+        "STAGE-RICE-SES-8",
+        "STAGE-RICE-SES-9"
+      ]
+    },
+    "pheno.maize.v0": {
+      "stages": [
+        "pheno.maize.unknown",
+        "pheno.maize.vegetative",
+        "pheno.maize.reproductive",
+        "pheno.maize.maturity"
+      ]
+    }
+  },
+  "rules": [
+    {
+      "rule_id": "RULE-DUCHANG-RICE-PADDY-SES3",
+      "region_id": "CN-JX-duchang",
+      "crop_id": "CROP-ENT-RICE",
+      "cultivar_group": null,
+      "growing_system": "paddy",
+      "stage_id": "STAGE-RICE-SES-3",
+      "stage_status": "unknown",
+      "bound_operation_ids": ["YL.OP.11.WEED_PADDY_HAND"],
+      "params": {
+        "rates": null,
+        "load_per_trip_kg": null,
+        "doses": null,
+        "windows": null,
+        "water_rule_id": "WATER-RICE-PADDY-GENERIC",
+        "weather_limits": {
+          "max_temperature_c": null,
+          "min_temperature_c": null,
+          "max_precipitation_mm": null,
+          "max_wind_m_s": null
+        }
+      },
+      "evidence_status": "hold",
+      "review_status": "unknown",
+      "sources": ["SRC-IRRI-HAND", "SRC-DISC-CATALOG"],
+      "recommendation_enabled": false,
+      "transfer_allowed_to_duchang": false,
+      "note": "都昌水稻秧田/水层制度未核实；只绑定水层规则占位符，水深与灌溉制度保持 null。"
+    },
+    {
+      "rule_id": "RULE-DEMO-RICE-PADDY-SES3",
+      "region_id": "duchang_demonstration",
+      "crop_id": "CROP-ENT-RICE",
+      "cultivar_group": null,
+      "growing_system": "paddy",
+      "stage_id": "STAGE-RICE-SES-3",
+      "stage_status": "illustrative",
+      "bound_operation_ids": ["YL.OP.11.WEED_PADDY_HAND"],
+      "params": {
+        "rates": null,
+        "load_per_trip_kg": null,
+        "doses": null,
+        "windows": null,
+        "water_rule_id": "WATER-RICE-PADDY-GENERIC",
+        "weather_limits": {
+          "max_temperature_c": null,
+          "min_temperature_c": null,
+          "max_precipitation_mm": null,
+          "max_wind_m_s": null
+        }
+      },
+      "evidence_status": "illustrative",
+      "review_status": "illustrative",
+      "sources": ["SYNTHETIC-DEMO"],
+      "recommendation_enabled": false,
+      "transfer_allowed_to_duchang": false,
+      "note": "合成演示规则，不是现场确认；不得当作 CN-JX-duchang 规则使用。"
+    },
+    {
+      "rule_id": "RULE-DUCHANG-LETTUCE-VEG",
+      "region_id": "CN-JX-duchang",
+      "crop_id": "yilao.crop.V01.lactuca_sativa",
+      "cultivar_group": null,
+      "growing_system": "unknown",
+      "stage_id": "pheno.lettuce.vegetative",
+      "stage_status": "unknown",
+      "bound_operation_ids": ["YL.OP.11.WEED_HAND_PULL"],
+      "params": {
+        "rates": null,
+        "load_per_trip_kg": null,
+        "doses": null,
+        "windows": null,
+        "water_rule_id": null,
+        "weather_limits": {
+          "max_temperature_c": null,
+          "min_temperature_c": null,
+          "max_precipitation_mm": null,
+          "max_wind_m_s": null
+        }
+      },
+      "evidence_status": "oral_mention",
+      "review_status": "unknown",
+      "sources": ["SRC-DISC-CATALOG"],
+      "recommendation_enabled": false,
+      "transfer_allowed_to_duchang": false,
+      "note": "生菜在都昌的栽培方式（露地/设施）未确认，故 growing_system=unknown；只有查询同样声明 unknown 时才命中。"
+    },
+    {
+      "rule_id": "RULE-NATIONAL-MAIZE-VEG",
+      "region_id": "national_candidate",
+      "crop_id": "CROP-ENT-MAIZE",
+      "cultivar_group": null,
+      "growing_system": "dryland",
+      "stage_id": "pheno.maize.vegetative",
+      "stage_status": "unknown",
+      "bound_operation_ids": ["YL.OP.11.WEED_HAND_PULL"],
+      "params": {
+        "rates": null,
+        "load_per_trip_kg": null,
+        "doses": null,
+        "windows": null,
+        "water_rule_id": null,
+        "weather_limits": {
+          "max_temperature_c": null,
+          "min_temperature_c": null,
+          "max_precipitation_mm": null,
+          "max_wind_m_s": null
+        }
+      },
+      "evidence_status": "catalog_only",
+      "review_status": "unknown",
+      "sources": ["SRC-DISC-CATALOG"],
+      "recommendation_enabled": false,
+      "transfer_allowed_to_duchang": false,
+      "note": "玉米在都昌是否种植未确认；本条只作全国候选占位。"
+    },
+    {
+      "rule_id": "RULE-NATIONAL-WATERMELON-VEG",
+      "region_id": "national_candidate",
+      "crop_id": "CROP-V07-001",
+      "cultivar_group": null,
+      "growing_system": "unknown",
+      "stage_id": "pheno.cucurbit.vegetative",
+      "stage_status": "unknown",
+      "bound_operation_ids": ["YL.OP.12.LAY_VINE"],
+      "params": {
+        "rates": null,
+        "load_per_trip_kg": null,
+        "doses": null,
+        "windows": null,
+        "water_rule_id": null,
+        "weather_limits": {
+          "max_temperature_c": null,
+          "min_temperature_c": null,
+          "max_precipitation_mm": null,
+          "max_wind_m_s": null
+        }
+      },
+      "evidence_status": "catalog_only",
+      "review_status": "unknown",
+      "sources": ["SRC-NCSU-WM-WEED"],
+      "recommendation_enabled": false,
+      "transfer_allowed_to_duchang": false,
+      "note": "不限定品种的全国候选行；爬地/上架方式都昌未确认。"
+    },
+    {
+      "rule_id": "RULE-NATIONAL-WM-CVG8424-VEG",
+      "region_id": "national_candidate",
+      "crop_id": "CROP-V07-001",
+      "cultivar_group": "CVG-WM-8424",
+      "growing_system": "unknown",
+      "stage_id": "pheno.cucurbit.vegetative",
+      "stage_status": "unknown",
+      "bound_operation_ids": ["YL.OP.12.LAY_VINE"],
+      "params": {
+        "rates": null,
+        "load_per_trip_kg": null,
+        "doses": null,
+        "windows": null,
+        "water_rule_id": null,
+        "weather_limits": {
+          "max_temperature_c": null,
+          "min_temperature_c": null,
+          "max_precipitation_mm": null,
+          "max_wind_m_s": null
+        }
+      },
+      "evidence_status": "catalog_only",
+      "review_status": "unknown",
+      "sources": ["SRC-NCSU-WM-WEED"],
+      "recommendation_enabled": false,
+      "transfer_allowed_to_duchang": false,
+      "note": "品种限定行：只有查询显式给出同一 cultivar_group 才命中；无品种不得套用。"
+    },
+    {
+      "rule_id": "RULE-NATIONAL-WM-FLOWERING-POLLINATE",
+      "region_id": "national_candidate",
+      "crop_id": "CROP-V07-001",
+      "cultivar_group": null,
+      "growing_system": "unknown",
+      "stage_id": "pheno.cucurbit.flowering",
+      "stage_status": "unknown",
+      "bound_operation_ids": ["YL.OP.13.POLLINATE_HAND", "YL.OP.13.THIN_FRUIT", "YL.OP.13.PROTECT_FRUIT"],
+      "params": {
+        "rates": null,
+        "load_per_trip_kg": null,
+        "doses": null,
+        "windows": null,
+        "water_rule_id": null,
+        "weather_limits": {
+          "max_temperature_c": null,
+          "min_temperature_c": null,
+          "max_precipitation_mm": null,
+          "max_wind_m_s": null
+        }
+      },
+      "evidence_status": "catalog_only",
+      "review_status": "unknown",
+      "sources": ["SRC-DISC-CATALOG"],
+      "recommendation_enabled": false,
+      "transfer_allowed_to_duchang": false,
+      "note": "开花结果与产品管理绑定行；人工授粉/疏果/护果在都昌均为 unknown，不得自动创建任务。"
+    },
+    {
+      "rule_id": "RULE-IRRI-RICE-PADDY-SES3",
+      "region_id": "IRRI-generic",
+      "crop_id": "CROP-ENT-RICE",
+      "cultivar_group": null,
+      "growing_system": "paddy",
+      "stage_id": "STAGE-RICE-SES-3",
+      "stage_status": "unknown",
+      "bound_operation_ids": ["YL.OP.11.WEED_PADDY_HAND"],
+      "params": {
+        "rates": null,
+        "load_per_trip_kg": null,
+        "doses": null,
+        "windows": null,
+        "water_rule_id": "WATER-RICE-PADDY-GENERIC",
+        "weather_limits": {
+          "max_temperature_c": null,
+          "min_temperature_c": null,
+          "max_precipitation_mm": null,
+          "max_wind_m_s": null
+        }
+      },
+      "evidence_status": "catalog_only",
+      "review_status": "unknown",
+      "sources": ["SRC-IRRI-HAND"],
+      "recommendation_enabled": false,
+      "transfer_allowed_to_duchang": false,
+      "note": "外地引用行。即使与都昌水稻同作物同阶段同方式，也不得静默命中都昌查询。"
+    }
+  ]
+}

@@ -1,0 +1,50 @@
+{
+  "schema_version": "1.0",
+  "checked_on": "2026-09-12",
+  "purpose": "登记环境算法来源和适用边界；不提供个人疾病系数或默认安全阈值。",
+  "sources": [
+    {
+      "id": "noaa-wpc-heat-index-equation",
+      "publisher": "NOAA National Weather Service Weather Prediction Center",
+      "title": "The Heat Index Equation",
+      "url": "https://www.wpc.ncep.noaa.gov/html/heatindex_equationbody.html",
+      "published_at": null,
+      "underlying_method_year": 1990,
+      "access": "2026-09-12 官方原站搜索索引完整公式；原说明页直接打开返回 403。",
+      "used_for": ["NOAA 简单分支与 Rothfusz 回归", "低湿和高湿修正", "华氏计算后转回摄氏"],
+      "limitations": ["极端温湿条件超出原数据范围时回归不适用", "不能产生个人发病概率或安全劳动分钟", "不作为 WBGT 替代"]
+    },
+    {
+      "id": "nws-ddc-heat-index-table",
+      "publisher": "NOAA National Weather Service Dodge City",
+      "title": "DDC Heat Index",
+      "url": "https://www.weather.gov/ddc/heat_index",
+      "published_at": null,
+      "access": "2026-09-12 官方原站搜索索引表格。",
+      "used_for": ["公开 HI 图表的数值交叉检查", "80–110°F、40–100% RH 内非空图表区域的保守计算子域"],
+      "limitations": ["非网格点采用较热相邻行的湿度上界，主动缩小而不外推范围", "80°F、100% RH 的表格值为 87°F，WPC 完整公式含高湿修正计算约为 89.29°F；本实现采用 WPC 公式，不能声称逐格复现该整数表", "该子域是程序显示范围，不是个人安全阈值", "没有把图表风险等级用于农活批准"]
+    },
+    {
+      "id": "osha-heat-hazard-recognition",
+      "publisher": "US Occupational Safety and Health Administration",
+      "title": "Heat Hazard Recognition",
+      "url": "https://www.osha.gov/heat-exposure/hazards",
+      "published_at": null,
+      "access": "2026-09-12 官方原站搜索索引；直接打开返回 403。",
+      "used_for": ["区分 WBGT 与 Heat Index", "区分天气站与具体劳动场所", "保留日晒、湿度、风、衣着和实际劳动负荷的边界"],
+      "limitations": ["仅使用明确来源和方法的输入 WBGT，不用温湿两项伪造 WBGT", "不把通用职业标准直接升级为老年慢病人群安全保证", "程序未实现医学风险乘数或通用工休分钟表"]
+    }
+  ],
+  "project_design": {
+    "temperature_degree_minutes": "对完整区间按分段常数气温积分，单位摄氏度×分钟；不是超阈值剂量，也不是生理负担。",
+    "wbgt_degree_minutes": "仅在完整区间每段都有来源和统一声明方法的 WBGT 时积分；缺失返回 null。",
+    "positive_degree_minutes": "temperature_positive_degree_minutes 与 wbgt_positive_degree_minutes 分别逐段积分 max(0,摄氏值)×分钟，完整性规则与各自原积分相同。0 只是暖热排序的算术下界，不是舒适或安全阈值；低温风险仍需有依据的最低温限制，原有符号积分继续报告。",
+    "spatial_proxy": "区间天气对应所声明的田块；往返路线和休息处环境若不同，当前指标不代表个体实际全程暴露。",
+    "precipitation_limits": "比较来源记录期间的原降水量，不将小时总量按短作业分钟缩小后放行。",
+    "thresholds": "所有策略及农艺阈值来自有来源和审核状态的输入；程序不从上述来源自动配置阈值。",
+    "required_screening": "shadow/assistance 策略须明确提供 max_temperature_c 或 max_wbgt_c；两者都缺少时阻断。演示可只做环境比较，但必须标明没有热筛查规则。实际负重大于零而未提供个人 max_load_kg 时阻断；程序不生成任何默认上限。",
+    "hazards": "任何非空危险天气标记都阻断。策略列出的标记给出 BLOCKED_HAZARD，其余给出 UNREVIEWED_HAZARD；空策略列表不是忽略危险标记的许可。",
+    "source_placeholders": "来源仅做可辨识性核查；unknown、未知、待确认、TBD、TODO 等精确占位不算有效来源，非占位文字也不等于来源已经由程序认证。",
+    "passed_constraints": "allowed 表示当前输入下未发现违反已声明规则的原因，不证明个人健康安全。"
+  }
+}

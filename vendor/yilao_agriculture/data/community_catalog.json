@@ -1,0 +1,3614 @@
+{
+  "schema_version": "1.0",
+  "catalog_version": "2026-09-19.1",
+  "claim": "全国可扩展的查找与记录目录；非全国农技规则或个人劳动安全认证",
+  "source_design": "作物与农事覆盖清单_讨论版.md（2026-09-10）；未新增地方播种历或通用劳动系数",
+  "categories": [
+    {
+      "id": "V01",
+      "name": "普通叶菜",
+      "kind": "vegetable_and_adjacent",
+      "status": "catalog_only"
+    },
+    {
+      "id": "V02",
+      "name": "白菜与叶用芥菜",
+      "kind": "vegetable_and_adjacent",
+      "status": "catalog_only"
+    },
+    {
+      "id": "V03",
+      "name": "叶球及嫩叶甘蓝",
+      "kind": "vegetable_and_adjacent",
+      "status": "catalog_only"
+    },
+    {
+      "id": "V04",
+      "name": "嫩茎、叶柄与嫩梢菜",
+      "kind": "vegetable_and_adjacent",
+      "status": "catalog_only"
+    },
+    {
+      "id": "V05",
+      "name": "花球及食用花器",
+      "kind": "vegetable_and_adjacent",
+      "status": "catalog_only"
+    },
+    {
+      "id": "V06",
+      "name": "茄果类",
+      "kind": "vegetable_and_adjacent",
+      "status": "catalog_only"
+    },
+    {
+      "id": "V07",
+      "name": "瓜类",
+      "kind": "vegetable_and_adjacent",
+      "status": "catalog_only"
+    },
+    {
+      "id": "V08",
+      "name": "鲜豆及食荚豆类",
+      "kind": "vegetable_and_adjacent",
+      "status": "catalog_only"
+    },
+    {
+      "id": "V09",
+      "name": "葱蒜与韭类",
+      "kind": "vegetable_and_adjacent",
+      "status": "catalog_only"
+    },
+    {
+      "id": "V10",
+      "name": "肉质根菜",
+      "kind": "vegetable_and_adjacent",
+      "status": "catalog_only"
+    },
+    {
+      "id": "V11",
+      "name": "薯芋及其他地下贮藏器官作物",
+      "kind": "vegetable_and_adjacent",
+      "status": "catalog_only"
+    },
+    {
+      "id": "V12",
+      "name": "水生蔬菜",
+      "kind": "vegetable_and_adjacent",
+      "status": "catalog_only"
+    },
+    {
+      "id": "V13",
+      "name": "多年生及特色蔬菜",
+      "kind": "vegetable_and_adjacent",
+      "status": "catalog_only"
+    },
+    {
+      "id": "V14",
+      "name": "香辛及调味叶菜",
+      "kind": "vegetable_and_adjacent",
+      "status": "catalog_only"
+    },
+    {
+      "id": "V15",
+      "name": "食用菌邻近模块",
+      "kind": "vegetable_and_adjacent",
+      "status": "catalog_only"
+    },
+    {
+      "id": "G01",
+      "name": "水稻",
+      "kind": "grain_oil",
+      "status": "catalog_only"
+    },
+    {
+      "id": "G02",
+      "name": "其他谷物",
+      "kind": "grain_oil",
+      "status": "catalog_only"
+    },
+    {
+      "id": "G03",
+      "name": "成熟豆类与粮油兼用作物",
+      "kind": "grain_oil",
+      "status": "catalog_only"
+    },
+    {
+      "id": "G04",
+      "name": "油料",
+      "kind": "grain_oil",
+      "status": "catalog_only"
+    },
+    {
+      "id": "G05",
+      "name": "薯类粮食用途",
+      "kind": "grain_oil",
+      "status": "catalog_only"
+    }
+  ],
+  "crops": [
+    {
+      "id": "lettuce",
+      "name": "生菜/叶用莴苣",
+      "category_ids": [
+        "V01"
+      ],
+      "aliases": [
+        "油麦菜",
+        "散叶生菜",
+        "结球生菜"
+      ],
+      "catalog_status": "national_candidate",
+      "local_status": "oral_mention",
+      "identity_status": "cultivar_and_local_name_to_confirm",
+      "agronomy_status": "needs_local_review",
+      "recommendation_enabled": false,
+      "sowing_calendar": null,
+      "personal_rate": null,
+      "confirmation_questions": [
+        "确认当地名称、品种、目标产品与栽培方式",
+        "确认实际田块、阶段、工具与本次工作量",
+        "油麦菜等名称须核对当地实际所指；散叶或结球、整株收或分次摘叶待确认"
+      ],
+      "shared_botanical_group": "lettuce_group"
+    },
+    {
+      "id": "spinach",
+      "name": "菠菜",
+      "category_ids": [
+        "V01"
+      ],
+      "aliases": [],
+      "catalog_status": "national_candidate",
+      "local_status": "not_reported",
+      "identity_status": "cultivar_and_local_name_to_confirm",
+      "agronomy_status": "needs_local_review",
+      "recommendation_enabled": false,
+      "sowing_calendar": null,
+      "personal_rate": null,
+      "confirmation_questions": [
+        "确认当地名称、品种、目标产品与栽培方式",
+        "确认实际田块、阶段、工具与本次工作量"
+      ]
+    },
+    {
+      "id": "amaranth",
+      "name": "苋菜",
+      "category_ids": [
+        "V01"
+      ],
+      "aliases": [],
+      "catalog_status": "national_candidate",
+      "local_status": "not_reported",
+      "identity_status": "cultivar_and_local_name_to_confirm",
+      "agronomy_status": "needs_local_review",
+      "recommendation_enabled": false,
+      "sowing_calendar": null,
+      "personal_rate": null,
+      "confirmation_questions": [
+        "确认当地名称、品种、目标产品与栽培方式",
+        "确认实际田块、阶段、工具与本次工作量"
+      ]
+    },
+    {
+      "id": "garland_chrysanthemum",
+      "name": "茼蒿",
+      "category_ids": [
+        "V01"
+      ],
+      "aliases": [],
+      "catalog_status": "national_candidate",
+      "local_status": "not_reported",
+      "identity_status": "cultivar_and_local_name_to_confirm",
+      "agronomy_status": "needs_local_review",
+      "recommendation_enabled": false,
+      "sowing_calendar": null,
+      "personal_rate": null,
+      "confirmation_questions": [
+        "确认当地名称、品种、目标产品与栽培方式",
+        "确认实际田块、阶段、工具与本次工作量"
+      ]
+    },
+    {
+      "id": "malabar_spinach",
+      "name": "木耳菜",
+      "category_ids": [
+        "V01"
+      ],
+      "aliases": [
+        "木耳菜"
+      ],
+      "catalog_status": "national_candidate",
+      "local_status": "not_reported",
+      "identity_status": "cultivar_and_local_name_to_confirm",
+      "agronomy_status": "needs_local_review",
+      "recommendation_enabled": false,
+      "sowing_calendar": null,
+      "personal_rate": null,
+      "confirmation_questions": [
+        "确认当地名称、品种、目标产品与栽培方式",
+        "确认实际田块、阶段、工具与本次工作量"
+      ]
+    },
+    {
+      "id": "new_zealand_spinach",
+      "name": "番杏",
+      "category_ids": [
+        "V01"
+      ],
+      "aliases": [],
+      "catalog_status": "national_candidate",
+      "local_status": "not_reported",
+      "identity_status": "cultivar_and_local_name_to_confirm",
+      "agronomy_status": "needs_local_review",
+      "recommendation_enabled": false,
+      "sowing_calendar": null,
+      "personal_rate": null,
+      "confirmation_questions": [
+        "确认当地名称、品种、目标产品与栽培方式",
+        "确认实际田块、阶段、工具与本次工作量"
+      ]
+    },
+    {
+      "id": "chinese_cabbage",
+      "name": "大白菜",
+      "category_ids": [
+        "V02"
+      ],
+      "aliases": [],
+      "catalog_status": "national_candidate",
+      "local_status": "not_reported",
+      "identity_status": "cultivar_and_local_name_to_confirm",
+      "agronomy_status": "needs_local_review",
+      "recommendation_enabled": false,
+      "sowing_calendar": null,
+      "personal_rate": null,
+      "confirmation_questions": [
+        "确认当地名称、品种、目标产品与栽培方式",
+        "确认实际田块、阶段、工具与本次工作量"
+      ]
+    },
+    {
+      "id": "bok_choy",
+      "name": "小白菜",
+      "category_ids": [
+        "V02"
+      ],
+      "aliases": [
+        "青梗菜",
+        "上海青"
+      ],
+      "catalog_status": "national_candidate",
+      "local_status": "not_reported",
+      "identity_status": "cultivar_and_local_name_to_confirm",
+      "agronomy_status": "needs_local_review",
+      "recommendation_enabled": false,
+      "sowing_calendar": null,
+      "personal_rate": null,
+      "confirmation_questions": [
+        "确认当地名称、品种、目标产品与栽培方式",
+        "确认实际田块、阶段、工具与本次工作量"
+      ]
+    },
+    {
+      "id": "leaf_mustard",
+      "name": "叶用芥菜",
+      "category_ids": [
+        "V02"
+      ],
+      "aliases": [
+        "雪里蕻"
+      ],
+      "catalog_status": "national_candidate",
+      "local_status": "not_reported",
+      "identity_status": "cultivar_and_local_name_to_confirm",
+      "agronomy_status": "needs_local_review",
+      "recommendation_enabled": false,
+      "sowing_calendar": null,
+      "personal_rate": null,
+      "confirmation_questions": [
+        "确认当地名称、品种、目标产品与栽培方式",
+        "确认实际田块、阶段、工具与本次工作量"
+      ]
+    },
+    {
+      "id": "shepherds_purse",
+      "name": "荠菜",
+      "category_ids": [
+        "V02"
+      ],
+      "aliases": [],
+      "catalog_status": "national_candidate",
+      "local_status": "not_reported",
+      "identity_status": "cultivar_and_local_name_to_confirm",
+      "agronomy_status": "needs_local_review",
+      "recommendation_enabled": false,
+      "sowing_calendar": null,
+      "personal_rate": null,
+      "confirmation_questions": [
+        "确认当地名称、品种、目标产品与栽培方式",
+        "确认实际田块、阶段、工具与本次工作量"
+      ]
+    },
+    {
+      "id": "cabbage",
+      "name": "结球甘蓝",
+      "category_ids": [
+        "V03"
+      ],
+      "aliases": [
+        "包菜",
+        "卷心菜"
+      ],
+      "catalog_status": "national_candidate",
+      "local_status": "not_reported",
+      "identity_status": "cultivar_and_local_name_to_confirm",
+      "agronomy_status": "needs_local_review",
+      "recommendation_enabled": false,
+      "sowing_calendar": null,
+      "personal_rate": null,
+      "confirmation_questions": [
+        "确认当地名称、品种、目标产品与栽培方式",
+        "确认实际田块、阶段、工具与本次工作量"
+      ]
+    },
+    {
+      "id": "kale",
+      "name": "羽衣甘蓝",
+      "category_ids": [
+        "V03"
+      ],
+      "aliases": [],
+      "catalog_status": "national_candidate",
+      "local_status": "not_reported",
+      "identity_status": "cultivar_and_local_name_to_confirm",
+      "agronomy_status": "needs_local_review",
+      "recommendation_enabled": false,
+      "sowing_calendar": null,
+      "personal_rate": null,
+      "confirmation_questions": [
+        "确认当地名称、品种、目标产品与栽培方式",
+        "确认实际田块、阶段、工具与本次工作量"
+      ]
+    },
+    {
+      "id": "brussels_sprout",
+      "name": "抱子甘蓝",
+      "category_ids": [
+        "V03"
+      ],
+      "aliases": [],
+      "catalog_status": "national_candidate",
+      "local_status": "not_reported",
+      "identity_status": "cultivar_and_local_name_to_confirm",
+      "agronomy_status": "needs_local_review",
+      "recommendation_enabled": false,
+      "sowing_calendar": null,
+      "personal_rate": null,
+      "confirmation_questions": [
+        "确认当地名称、品种、目标产品与栽培方式",
+        "确认实际田块、阶段、工具与本次工作量"
+      ]
+    },
+    {
+      "id": "stem_lettuce",
+      "name": "莴笋",
+      "category_ids": [
+        "V04"
+      ],
+      "aliases": [
+        "茎用莴苣"
+      ],
+      "catalog_status": "national_candidate",
+      "local_status": "not_reported",
+      "identity_status": "cultivar_and_local_name_to_confirm",
+      "agronomy_status": "needs_local_review",
+      "recommendation_enabled": false,
+      "sowing_calendar": null,
+      "personal_rate": null,
+      "confirmation_questions": [
+        "确认当地名称、品种、目标产品与栽培方式",
+        "确认实际田块、阶段、工具与本次工作量"
+      ],
+      "shared_botanical_group": "lettuce_group"
+    },
+    {
+      "id": "celery",
+      "name": "芹菜",
+      "category_ids": [
+        "V04"
+      ],
+      "aliases": [],
+      "catalog_status": "national_candidate",
+      "local_status": "not_reported",
+      "identity_status": "cultivar_and_local_name_to_confirm",
+      "agronomy_status": "needs_local_review",
+      "recommendation_enabled": false,
+      "sowing_calendar": null,
+      "personal_rate": null,
+      "confirmation_questions": [
+        "确认当地名称、品种、目标产品与栽培方式",
+        "确认实际田块、阶段、工具与本次工作量"
+      ]
+    },
+    {
+      "id": "choy_sum",
+      "name": "菜心",
+      "category_ids": [
+        "V04"
+      ],
+      "aliases": [],
+      "catalog_status": "national_candidate",
+      "local_status": "not_reported",
+      "identity_status": "cultivar_and_local_name_to_confirm",
+      "agronomy_status": "needs_local_review",
+      "recommendation_enabled": false,
+      "sowing_calendar": null,
+      "personal_rate": null,
+      "confirmation_questions": [
+        "确认当地名称、品种、目标产品与栽培方式",
+        "确认实际田块、阶段、工具与本次工作量"
+      ]
+    },
+    {
+      "id": "chinese_kale",
+      "name": "芥蓝",
+      "category_ids": [
+        "V04"
+      ],
+      "aliases": [],
+      "catalog_status": "national_candidate",
+      "local_status": "not_reported",
+      "identity_status": "cultivar_and_local_name_to_confirm",
+      "agronomy_status": "needs_local_review",
+      "recommendation_enabled": false,
+      "sowing_calendar": null,
+      "personal_rate": null,
+      "confirmation_questions": [
+        "确认当地名称、品种、目标产品与栽培方式",
+        "确认实际田块、阶段、工具与本次工作量"
+      ]
+    },
+    {
+      "id": "water_spinach",
+      "name": "空心菜",
+      "category_ids": [
+        "V04"
+      ],
+      "aliases": [
+        "蕹菜"
+      ],
+      "catalog_status": "national_candidate",
+      "local_status": "not_reported",
+      "identity_status": "cultivar_and_local_name_to_confirm",
+      "agronomy_status": "needs_local_review",
+      "recommendation_enabled": false,
+      "sowing_calendar": null,
+      "personal_rate": null,
+      "confirmation_questions": [
+        "确认当地名称、品种、目标产品与栽培方式",
+        "确认实际田块、阶段、工具与本次工作量"
+      ]
+    },
+    {
+      "id": "sweet_potato",
+      "name": "甘薯",
+      "category_ids": [
+        "V04",
+        "V11",
+        "G05"
+      ],
+      "aliases": [
+        "红薯",
+        "番薯",
+        "红薯叶"
+      ],
+      "catalog_status": "national_candidate",
+      "local_status": "not_reported",
+      "identity_status": "cultivar_and_local_name_to_confirm",
+      "agronomy_status": "needs_local_review",
+      "recommendation_enabled": false,
+      "sowing_calendar": null,
+      "personal_rate": null,
+      "confirmation_questions": [
+        "确认当地名称、品种、目标产品与栽培方式",
+        "确认实际田块、阶段、工具与本次工作量"
+      ]
+    },
+    {
+      "id": "cauliflower",
+      "name": "花椰菜",
+      "category_ids": [
+        "V05"
+      ],
+      "aliases": [
+        "花菜",
+        "菜花"
+      ],
+      "catalog_status": "national_candidate",
+      "local_status": "not_reported",
+      "identity_status": "cultivar_and_local_name_to_confirm",
+      "agronomy_status": "needs_local_review",
+      "recommendation_enabled": false,
+      "sowing_calendar": null,
+      "personal_rate": null,
+      "confirmation_questions": [
+        "确认当地名称、品种、目标产品与栽培方式",
+        "确认实际田块、阶段、工具与本次工作量"
+      ]
+    },
+    {
+      "id": "broccoli",
+      "name": "西兰花",
+      "category_ids": [
+        "V05"
+      ],
+      "aliases": [],
+      "catalog_status": "national_candidate",
+      "local_status": "not_reported",
+      "identity_status": "cultivar_and_local_name_to_confirm",
+      "agronomy_status": "needs_local_review",
+      "recommendation_enabled": false,
+      "sowing_calendar": null,
+      "personal_rate": null,
+      "confirmation_questions": [
+        "确认当地名称、品种、目标产品与栽培方式",
+        "确认实际田块、阶段、工具与本次工作量"
+      ]
+    },
+    {
+      "id": "daylily",
+      "name": "食用黄花菜",
+      "category_ids": [
+        "V05"
+      ],
+      "aliases": [],
+      "catalog_status": "national_candidate",
+      "local_status": "not_reported",
+      "identity_status": "cultivar_and_local_name_to_confirm",
+      "agronomy_status": "needs_local_review",
+      "recommendation_enabled": false,
+      "sowing_calendar": null,
+      "personal_rate": null,
+      "confirmation_questions": [
+        "确认当地名称、品种、目标产品与栽培方式",
+        "确认实际田块、阶段、工具与本次工作量"
+      ]
+    },
+    {
+      "id": "pepper",
+      "name": "辣椒",
+      "category_ids": [
+        "V06"
+      ],
+      "aliases": [
+        "甜椒"
+      ],
+      "catalog_status": "national_candidate",
+      "local_status": "oral_mention",
+      "identity_status": "cultivar_and_local_name_to_confirm",
+      "agronomy_status": "needs_local_review",
+      "recommendation_enabled": false,
+      "sowing_calendar": null,
+      "personal_rate": null,
+      "confirmation_questions": [
+        "确认当地名称、品种、目标产品与栽培方式",
+        "确认实际田块、阶段、工具与本次工作量"
+      ]
+    },
+    {
+      "id": "eggplant",
+      "name": "茄子",
+      "category_ids": [
+        "V06"
+      ],
+      "aliases": [],
+      "catalog_status": "national_candidate",
+      "local_status": "not_reported",
+      "identity_status": "cultivar_and_local_name_to_confirm",
+      "agronomy_status": "needs_local_review",
+      "recommendation_enabled": false,
+      "sowing_calendar": null,
+      "personal_rate": null,
+      "confirmation_questions": [
+        "确认当地名称、品种、目标产品与栽培方式",
+        "确认实际田块、阶段、工具与本次工作量"
+      ]
+    },
+    {
+      "id": "tomato",
+      "name": "番茄",
+      "category_ids": [
+        "V06"
+      ],
+      "aliases": [
+        "西红柿"
+      ],
+      "catalog_status": "national_candidate",
+      "local_status": "not_reported",
+      "identity_status": "cultivar_and_local_name_to_confirm",
+      "agronomy_status": "needs_local_review",
+      "recommendation_enabled": false,
+      "sowing_calendar": null,
+      "personal_rate": null,
+      "confirmation_questions": [
+        "确认当地名称、品种、目标产品与栽培方式",
+        "确认实际田块、阶段、工具与本次工作量"
+      ]
+    },
+    {
+      "id": "cucumber",
+      "name": "黄瓜",
+      "category_ids": [
+        "V07"
+      ],
+      "aliases": [],
+      "catalog_status": "national_candidate",
+      "local_status": "not_reported",
+      "identity_status": "cultivar_and_local_name_to_confirm",
+      "agronomy_status": "needs_local_review",
+      "recommendation_enabled": false,
+      "sowing_calendar": null,
+      "personal_rate": null,
+      "confirmation_questions": [
+        "确认当地名称、品种、目标产品与栽培方式",
+        "确认实际田块、阶段、工具与本次工作量"
+      ]
+    },
+    {
+      "id": "winter_melon",
+      "name": "冬瓜",
+      "category_ids": [
+        "V07"
+      ],
+      "aliases": [],
+      "catalog_status": "national_candidate",
+      "local_status": "not_reported",
+      "identity_status": "cultivar_and_local_name_to_confirm",
+      "agronomy_status": "needs_local_review",
+      "recommendation_enabled": false,
+      "sowing_calendar": null,
+      "personal_rate": null,
+      "confirmation_questions": [
+        "确认当地名称、品种、目标产品与栽培方式",
+        "确认实际田块、阶段、工具与本次工作量"
+      ]
+    },
+    {
+      "id": "pumpkin",
+      "name": "南瓜",
+      "category_ids": [
+        "V07"
+      ],
+      "aliases": [],
+      "catalog_status": "national_candidate",
+      "local_status": "not_reported",
+      "identity_status": "cultivar_and_local_name_to_confirm",
+      "agronomy_status": "needs_local_review",
+      "recommendation_enabled": false,
+      "sowing_calendar": null,
+      "personal_rate": null,
+      "confirmation_questions": [
+        "确认当地名称、品种、目标产品与栽培方式",
+        "确认实际田块、阶段、工具与本次工作量"
+      ]
+    },
+    {
+      "id": "zucchini",
+      "name": "西葫芦",
+      "category_ids": [
+        "V07"
+      ],
+      "aliases": [],
+      "catalog_status": "national_candidate",
+      "local_status": "not_reported",
+      "identity_status": "cultivar_and_local_name_to_confirm",
+      "agronomy_status": "needs_local_review",
+      "recommendation_enabled": false,
+      "sowing_calendar": null,
+      "personal_rate": null,
+      "confirmation_questions": [
+        "确认当地名称、品种、目标产品与栽培方式",
+        "确认实际田块、阶段、工具与本次工作量"
+      ]
+    },
+    {
+      "id": "luffa",
+      "name": "丝瓜",
+      "category_ids": [
+        "V07"
+      ],
+      "aliases": [],
+      "catalog_status": "national_candidate",
+      "local_status": "not_reported",
+      "identity_status": "cultivar_and_local_name_to_confirm",
+      "agronomy_status": "needs_local_review",
+      "recommendation_enabled": false,
+      "sowing_calendar": null,
+      "personal_rate": null,
+      "confirmation_questions": [
+        "确认当地名称、品种、目标产品与栽培方式",
+        "确认实际田块、阶段、工具与本次工作量"
+      ]
+    },
+    {
+      "id": "bitter_melon",
+      "name": "苦瓜",
+      "category_ids": [
+        "V07"
+      ],
+      "aliases": [],
+      "catalog_status": "national_candidate",
+      "local_status": "not_reported",
+      "identity_status": "cultivar_and_local_name_to_confirm",
+      "agronomy_status": "needs_local_review",
+      "recommendation_enabled": false,
+      "sowing_calendar": null,
+      "personal_rate": null,
+      "confirmation_questions": [
+        "确认当地名称、品种、目标产品与栽培方式",
+        "确认实际田块、阶段、工具与本次工作量"
+      ]
+    },
+    {
+      "id": "bottle_gourd",
+      "name": "瓠瓜",
+      "category_ids": [
+        "V07"
+      ],
+      "aliases": [
+        "葫芦"
+      ],
+      "catalog_status": "national_candidate",
+      "local_status": "not_reported",
+      "identity_status": "cultivar_and_local_name_to_confirm",
+      "agronomy_status": "needs_local_review",
+      "recommendation_enabled": false,
+      "sowing_calendar": null,
+      "personal_rate": null,
+      "confirmation_questions": [
+        "确认当地名称、品种、目标产品与栽培方式",
+        "确认实际田块、阶段、工具与本次工作量"
+      ]
+    },
+    {
+      "id": "watermelon",
+      "name": "西瓜",
+      "category_ids": [
+        "V07"
+      ],
+      "aliases": [],
+      "catalog_status": "national_candidate",
+      "local_status": "oral_mention",
+      "identity_status": "cultivar_and_local_name_to_confirm",
+      "agronomy_status": "needs_local_review",
+      "recommendation_enabled": false,
+      "sowing_calendar": null,
+      "personal_rate": null,
+      "confirmation_questions": [
+        "确认当地名称、品种、目标产品与栽培方式",
+        "确认实际田块、阶段、工具与本次工作量"
+      ]
+    },
+    {
+      "id": "melon",
+      "name": "甜瓜",
+      "category_ids": [
+        "V07"
+      ],
+      "aliases": [],
+      "catalog_status": "national_candidate",
+      "local_status": "not_reported",
+      "identity_status": "cultivar_and_local_name_to_confirm",
+      "agronomy_status": "needs_local_review",
+      "recommendation_enabled": false,
+      "sowing_calendar": null,
+      "personal_rate": null,
+      "confirmation_questions": [
+        "确认当地名称、品种、目标产品与栽培方式",
+        "确认实际田块、阶段、工具与本次工作量"
+      ]
+    },
+    {
+      "id": "cowpea",
+      "name": "豇豆",
+      "category_ids": [
+        "V08"
+      ],
+      "aliases": [
+        "长豆角"
+      ],
+      "catalog_status": "national_candidate",
+      "local_status": "not_reported",
+      "identity_status": "cultivar_and_local_name_to_confirm",
+      "agronomy_status": "needs_local_review",
+      "recommendation_enabled": false,
+      "sowing_calendar": null,
+      "personal_rate": null,
+      "confirmation_questions": [
+        "确认当地名称、品种、目标产品与栽培方式",
+        "确认实际田块、阶段、工具与本次工作量"
+      ]
+    },
+    {
+      "id": "common_bean",
+      "name": "菜豆",
+      "category_ids": [
+        "V08"
+      ],
+      "aliases": [
+        "四季豆",
+        "芸豆"
+      ],
+      "catalog_status": "national_candidate",
+      "local_status": "not_reported",
+      "identity_status": "cultivar_and_local_name_to_confirm",
+      "agronomy_status": "needs_local_review",
+      "recommendation_enabled": false,
+      "sowing_calendar": null,
+      "personal_rate": null,
+      "confirmation_questions": [
+        "确认当地名称、品种、目标产品与栽培方式",
+        "确认实际田块、阶段、工具与本次工作量"
+      ]
+    },
+    {
+      "id": "pea",
+      "name": "豌豆",
+      "category_ids": [
+        "V08"
+      ],
+      "aliases": [
+        "豌豆苗"
+      ],
+      "catalog_status": "national_candidate",
+      "local_status": "not_reported",
+      "identity_status": "cultivar_and_local_name_to_confirm",
+      "agronomy_status": "needs_local_review",
+      "recommendation_enabled": false,
+      "sowing_calendar": null,
+      "personal_rate": null,
+      "confirmation_questions": [
+        "确认当地名称、品种、目标产品与栽培方式",
+        "确认实际田块、阶段、工具与本次工作量"
+      ]
+    },
+    {
+      "id": "broad_bean",
+      "name": "蚕豆",
+      "category_ids": [
+        "V08",
+        "G03"
+      ],
+      "aliases": [],
+      "catalog_status": "national_candidate",
+      "local_status": "not_reported",
+      "identity_status": "cultivar_and_local_name_to_confirm",
+      "agronomy_status": "needs_local_review",
+      "recommendation_enabled": false,
+      "sowing_calendar": null,
+      "personal_rate": null,
+      "confirmation_questions": [
+        "确认当地名称、品种、目标产品与栽培方式",
+        "确认实际田块、阶段、工具与本次工作量"
+      ]
+    },
+    {
+      "id": "soybean",
+      "name": "大豆",
+      "category_ids": [
+        "V08",
+        "G03"
+      ],
+      "aliases": [
+        "毛豆"
+      ],
+      "catalog_status": "national_candidate",
+      "local_status": "not_reported",
+      "identity_status": "cultivar_and_local_name_to_confirm",
+      "agronomy_status": "needs_local_review",
+      "recommendation_enabled": false,
+      "sowing_calendar": null,
+      "personal_rate": null,
+      "confirmation_questions": [
+        "确认当地名称、品种、目标产品与栽培方式",
+        "确认实际田块、阶段、工具与本次工作量"
+      ]
+    },
+    {
+      "id": "welsh_onion",
+      "name": "大葱",
+      "category_ids": [
+        "V09"
+      ],
+      "aliases": [],
+      "catalog_status": "national_candidate",
+      "local_status": "not_reported",
+      "identity_status": "cultivar_and_local_name_to_confirm",
+      "agronomy_status": "needs_local_review",
+      "recommendation_enabled": false,
+      "sowing_calendar": null,
+      "personal_rate": null,
+      "confirmation_questions": [
+        "确认当地名称、品种、目标产品与栽培方式",
+        "确认实际田块、阶段、工具与本次工作量"
+      ]
+    },
+    {
+      "id": "shallot",
+      "name": "小葱",
+      "category_ids": [
+        "V09"
+      ],
+      "aliases": [],
+      "catalog_status": "national_candidate",
+      "local_status": "not_reported",
+      "identity_status": "cultivar_and_local_name_to_confirm",
+      "agronomy_status": "needs_local_review",
+      "recommendation_enabled": false,
+      "sowing_calendar": null,
+      "personal_rate": null,
+      "confirmation_questions": [
+        "确认当地名称、品种、目标产品与栽培方式",
+        "确认实际田块、阶段、工具与本次工作量"
+      ]
+    },
+    {
+      "id": "onion",
+      "name": "洋葱",
+      "category_ids": [
+        "V09"
+      ],
+      "aliases": [],
+      "catalog_status": "national_candidate",
+      "local_status": "not_reported",
+      "identity_status": "cultivar_and_local_name_to_confirm",
+      "agronomy_status": "needs_local_review",
+      "recommendation_enabled": false,
+      "sowing_calendar": null,
+      "personal_rate": null,
+      "confirmation_questions": [
+        "确认当地名称、品种、目标产品与栽培方式",
+        "确认实际田块、阶段、工具与本次工作量"
+      ]
+    },
+    {
+      "id": "garlic",
+      "name": "大蒜",
+      "category_ids": [
+        "V09"
+      ],
+      "aliases": [
+        "蒜苗",
+        "蒜薹",
+        "蒜头"
+      ],
+      "catalog_status": "national_candidate",
+      "local_status": "not_reported",
+      "identity_status": "cultivar_and_local_name_to_confirm",
+      "agronomy_status": "needs_local_review",
+      "recommendation_enabled": false,
+      "sowing_calendar": null,
+      "personal_rate": null,
+      "confirmation_questions": [
+        "确认当地名称、品种、目标产品与栽培方式",
+        "确认实际田块、阶段、工具与本次工作量"
+      ]
+    },
+    {
+      "id": "chinese_chive",
+      "name": "韭菜",
+      "category_ids": [
+        "V09"
+      ],
+      "aliases": [],
+      "catalog_status": "national_candidate",
+      "local_status": "not_reported",
+      "identity_status": "cultivar_and_local_name_to_confirm",
+      "agronomy_status": "needs_local_review",
+      "recommendation_enabled": false,
+      "sowing_calendar": null,
+      "personal_rate": null,
+      "confirmation_questions": [
+        "确认当地名称、品种、目标产品与栽培方式",
+        "确认实际田块、阶段、工具与本次工作量"
+      ]
+    },
+    {
+      "id": "leek",
+      "name": "韭葱",
+      "category_ids": [
+        "V09"
+      ],
+      "aliases": [],
+      "catalog_status": "national_candidate",
+      "local_status": "not_reported",
+      "identity_status": "cultivar_and_local_name_to_confirm",
+      "agronomy_status": "needs_local_review",
+      "recommendation_enabled": false,
+      "sowing_calendar": null,
+      "personal_rate": null,
+      "confirmation_questions": [
+        "确认当地名称、品种、目标产品与栽培方式",
+        "确认实际田块、阶段、工具与本次工作量"
+      ]
+    },
+    {
+      "id": "radish",
+      "name": "萝卜",
+      "category_ids": [
+        "V10"
+      ],
+      "aliases": [],
+      "catalog_status": "national_candidate",
+      "local_status": "not_reported",
+      "identity_status": "cultivar_and_local_name_to_confirm",
+      "agronomy_status": "needs_local_review",
+      "recommendation_enabled": false,
+      "sowing_calendar": null,
+      "personal_rate": null,
+      "confirmation_questions": [
+        "确认当地名称、品种、目标产品与栽培方式",
+        "确认实际田块、阶段、工具与本次工作量"
+      ]
+    },
+    {
+      "id": "carrot",
+      "name": "胡萝卜",
+      "category_ids": [
+        "V10"
+      ],
+      "aliases": [],
+      "catalog_status": "national_candidate",
+      "local_status": "not_reported",
+      "identity_status": "cultivar_and_local_name_to_confirm",
+      "agronomy_status": "needs_local_review",
+      "recommendation_enabled": false,
+      "sowing_calendar": null,
+      "personal_rate": null,
+      "confirmation_questions": [
+        "确认当地名称、品种、目标产品与栽培方式",
+        "确认实际田块、阶段、工具与本次工作量"
+      ]
+    },
+    {
+      "id": "turnip",
+      "name": "芜菁",
+      "category_ids": [
+        "V10"
+      ],
+      "aliases": [],
+      "catalog_status": "national_candidate",
+      "local_status": "not_reported",
+      "identity_status": "cultivar_and_local_name_to_confirm",
+      "agronomy_status": "needs_local_review",
+      "recommendation_enabled": false,
+      "sowing_calendar": null,
+      "personal_rate": null,
+      "confirmation_questions": [
+        "确认当地名称、品种、目标产品与栽培方式",
+        "确认实际田块、阶段、工具与本次工作量"
+      ]
+    },
+    {
+      "id": "beet",
+      "name": "根用甜菜",
+      "category_ids": [
+        "V10"
+      ],
+      "aliases": [],
+      "catalog_status": "national_candidate",
+      "local_status": "not_reported",
+      "identity_status": "cultivar_and_local_name_to_confirm",
+      "agronomy_status": "needs_local_review",
+      "recommendation_enabled": false,
+      "sowing_calendar": null,
+      "personal_rate": null,
+      "confirmation_questions": [
+        "确认当地名称、品种、目标产品与栽培方式",
+        "确认实际田块、阶段、工具与本次工作量"
+      ]
+    },
+    {
+      "id": "potato",
+      "name": "马铃薯",
+      "category_ids": [
+        "V11",
+        "G05"
+      ],
+      "aliases": [
+        "土豆"
+      ],
+      "catalog_status": "national_candidate",
+      "local_status": "not_reported",
+      "identity_status": "cultivar_and_local_name_to_confirm",
+      "agronomy_status": "needs_local_review",
+      "recommendation_enabled": false,
+      "sowing_calendar": null,
+      "personal_rate": null,
+      "confirmation_questions": [
+        "确认当地名称、品种、目标产品与栽培方式",
+        "确认实际田块、阶段、工具与本次工作量"
+      ]
+    },
+    {
+      "id": "yam",
+      "name": "山药",
+      "category_ids": [
+        "V11"
+      ],
+      "aliases": [],
+      "catalog_status": "national_candidate",
+      "local_status": "not_reported",
+      "identity_status": "cultivar_and_local_name_to_confirm",
+      "agronomy_status": "needs_local_review",
+      "recommendation_enabled": false,
+      "sowing_calendar": null,
+      "personal_rate": null,
+      "confirmation_questions": [
+        "确认当地名称、品种、目标产品与栽培方式",
+        "确认实际田块、阶段、工具与本次工作量"
+      ]
+    },
+    {
+      "id": "taro",
+      "name": "芋",
+      "category_ids": [
+        "V11"
+      ],
+      "aliases": [
+        "芋头"
+      ],
+      "catalog_status": "national_candidate",
+      "local_status": "not_reported",
+      "identity_status": "cultivar_and_local_name_to_confirm",
+      "agronomy_status": "needs_local_review",
+      "recommendation_enabled": false,
+      "sowing_calendar": null,
+      "personal_rate": null,
+      "confirmation_questions": [
+        "确认当地名称、品种、目标产品与栽培方式",
+        "确认实际田块、阶段、工具与本次工作量"
+      ]
+    },
+    {
+      "id": "ginger",
+      "name": "姜",
+      "category_ids": [
+        "V11"
+      ],
+      "aliases": [
+        "生姜"
+      ],
+      "catalog_status": "national_candidate",
+      "local_status": "not_reported",
+      "identity_status": "cultivar_and_local_name_to_confirm",
+      "agronomy_status": "needs_local_review",
+      "recommendation_enabled": false,
+      "sowing_calendar": null,
+      "personal_rate": null,
+      "confirmation_questions": [
+        "确认当地名称、品种、目标产品与栽培方式",
+        "确认实际田块、阶段、工具与本次工作量"
+      ]
+    },
+    {
+      "id": "lotus",
+      "name": "莲藕",
+      "category_ids": [
+        "V12"
+      ],
+      "aliases": [],
+      "catalog_status": "national_candidate",
+      "local_status": "not_reported",
+      "identity_status": "cultivar_and_local_name_to_confirm",
+      "agronomy_status": "needs_local_review",
+      "recommendation_enabled": false,
+      "sowing_calendar": null,
+      "personal_rate": null,
+      "confirmation_questions": [
+        "确认当地名称、品种、目标产品与栽培方式",
+        "确认实际田块、阶段、工具与本次工作量"
+      ]
+    },
+    {
+      "id": "water_bamboo",
+      "name": "茭白",
+      "category_ids": [
+        "V12"
+      ],
+      "aliases": [],
+      "catalog_status": "national_candidate",
+      "local_status": "not_reported",
+      "identity_status": "cultivar_and_local_name_to_confirm",
+      "agronomy_status": "needs_local_review",
+      "recommendation_enabled": false,
+      "sowing_calendar": null,
+      "personal_rate": null,
+      "confirmation_questions": [
+        "确认当地名称、品种、目标产品与栽培方式",
+        "确认实际田块、阶段、工具与本次工作量"
+      ]
+    },
+    {
+      "id": "water_chestnut",
+      "name": "荸荠",
+      "category_ids": [
+        "V12"
+      ],
+      "aliases": [],
+      "catalog_status": "national_candidate",
+      "local_status": "not_reported",
+      "identity_status": "cultivar_and_local_name_to_confirm",
+      "agronomy_status": "needs_local_review",
+      "recommendation_enabled": false,
+      "sowing_calendar": null,
+      "personal_rate": null,
+      "confirmation_questions": [
+        "确认当地名称、品种、目标产品与栽培方式",
+        "确认实际田块、阶段、工具与本次工作量"
+      ]
+    },
+    {
+      "id": "water_caltrop",
+      "name": "菱",
+      "category_ids": [
+        "V12"
+      ],
+      "aliases": [],
+      "catalog_status": "national_candidate",
+      "local_status": "not_reported",
+      "identity_status": "cultivar_and_local_name_to_confirm",
+      "agronomy_status": "needs_local_review",
+      "recommendation_enabled": false,
+      "sowing_calendar": null,
+      "personal_rate": null,
+      "confirmation_questions": [
+        "确认当地名称、品种、目标产品与栽培方式",
+        "确认实际田块、阶段、工具与本次工作量"
+      ]
+    },
+    {
+      "id": "gorgon",
+      "name": "芡实",
+      "category_ids": [
+        "V12"
+      ],
+      "aliases": [],
+      "catalog_status": "national_candidate",
+      "local_status": "not_reported",
+      "identity_status": "cultivar_and_local_name_to_confirm",
+      "agronomy_status": "needs_local_review",
+      "recommendation_enabled": false,
+      "sowing_calendar": null,
+      "personal_rate": null,
+      "confirmation_questions": [
+        "确认当地名称、品种、目标产品与栽培方式",
+        "确认实际田块、阶段、工具与本次工作量"
+      ]
+    },
+    {
+      "id": "water_celery",
+      "name": "水芹",
+      "category_ids": [
+        "V12"
+      ],
+      "aliases": [],
+      "catalog_status": "national_candidate",
+      "local_status": "not_reported",
+      "identity_status": "cultivar_and_local_name_to_confirm",
+      "agronomy_status": "needs_local_review",
+      "recommendation_enabled": false,
+      "sowing_calendar": null,
+      "personal_rate": null,
+      "confirmation_questions": [
+        "确认当地名称、品种、目标产品与栽培方式",
+        "确认实际田块、阶段、工具与本次工作量"
+      ]
+    },
+    {
+      "id": "asparagus",
+      "name": "芦笋",
+      "category_ids": [
+        "V13"
+      ],
+      "aliases": [],
+      "catalog_status": "national_candidate",
+      "local_status": "not_reported",
+      "identity_status": "cultivar_and_local_name_to_confirm",
+      "agronomy_status": "needs_local_review",
+      "recommendation_enabled": false,
+      "sowing_calendar": null,
+      "personal_rate": null,
+      "confirmation_questions": [
+        "确认当地名称、品种、目标产品与栽培方式",
+        "确认实际田块、阶段、工具与本次工作量"
+      ]
+    },
+    {
+      "id": "bamboo_shoot",
+      "name": "竹笋",
+      "category_ids": [
+        "V13"
+      ],
+      "aliases": [],
+      "catalog_status": "national_candidate",
+      "local_status": "not_reported",
+      "identity_status": "cultivar_and_local_name_to_confirm",
+      "agronomy_status": "needs_local_review",
+      "recommendation_enabled": false,
+      "sowing_calendar": null,
+      "personal_rate": null,
+      "confirmation_questions": [
+        "确认当地名称、品种、目标产品与栽培方式",
+        "确认实际田块、阶段、工具与本次工作量"
+      ]
+    },
+    {
+      "id": "chinese_toon",
+      "name": "香椿",
+      "category_ids": [
+        "V13"
+      ],
+      "aliases": [],
+      "catalog_status": "national_candidate",
+      "local_status": "not_reported",
+      "identity_status": "cultivar_and_local_name_to_confirm",
+      "agronomy_status": "needs_local_review",
+      "recommendation_enabled": false,
+      "sowing_calendar": null,
+      "personal_rate": null,
+      "confirmation_questions": [
+        "确认当地名称、品种、目标产品与栽培方式",
+        "确认实际田块、阶段、工具与本次工作量"
+      ]
+    },
+    {
+      "id": "lily",
+      "name": "食用百合",
+      "category_ids": [
+        "V13"
+      ],
+      "aliases": [],
+      "catalog_status": "national_candidate",
+      "local_status": "not_reported",
+      "identity_status": "cultivar_and_local_name_to_confirm",
+      "agronomy_status": "needs_local_review",
+      "recommendation_enabled": false,
+      "sowing_calendar": null,
+      "personal_rate": null,
+      "confirmation_questions": [
+        "确认当地名称、品种、目标产品与栽培方式",
+        "确认实际田块、阶段、工具与本次工作量"
+      ]
+    },
+    {
+      "id": "coriander",
+      "name": "香菜",
+      "category_ids": [
+        "V14"
+      ],
+      "aliases": [
+        "芫荽"
+      ],
+      "catalog_status": "national_candidate",
+      "local_status": "not_reported",
+      "identity_status": "cultivar_and_local_name_to_confirm",
+      "agronomy_status": "needs_local_review",
+      "recommendation_enabled": false,
+      "sowing_calendar": null,
+      "personal_rate": null,
+      "confirmation_questions": [
+        "确认当地名称、品种、目标产品与栽培方式",
+        "确认实际田块、阶段、工具与本次工作量"
+      ]
+    },
+    {
+      "id": "mint",
+      "name": "薄荷",
+      "category_ids": [
+        "V14"
+      ],
+      "aliases": [],
+      "catalog_status": "national_candidate",
+      "local_status": "not_reported",
+      "identity_status": "cultivar_and_local_name_to_confirm",
+      "agronomy_status": "needs_local_review",
+      "recommendation_enabled": false,
+      "sowing_calendar": null,
+      "personal_rate": null,
+      "confirmation_questions": [
+        "确认当地名称、品种、目标产品与栽培方式",
+        "确认实际田块、阶段、工具与本次工作量"
+      ]
+    },
+    {
+      "id": "perilla",
+      "name": "紫苏",
+      "category_ids": [
+        "V14"
+      ],
+      "aliases": [],
+      "catalog_status": "national_candidate",
+      "local_status": "not_reported",
+      "identity_status": "cultivar_and_local_name_to_confirm",
+      "agronomy_status": "needs_local_review",
+      "recommendation_enabled": false,
+      "sowing_calendar": null,
+      "personal_rate": null,
+      "confirmation_questions": [
+        "确认当地名称、品种、目标产品与栽培方式",
+        "确认实际田块、阶段、工具与本次工作量"
+      ]
+    },
+    {
+      "id": "basil",
+      "name": "罗勒",
+      "category_ids": [
+        "V14"
+      ],
+      "aliases": [],
+      "catalog_status": "national_candidate",
+      "local_status": "not_reported",
+      "identity_status": "cultivar_and_local_name_to_confirm",
+      "agronomy_status": "needs_local_review",
+      "recommendation_enabled": false,
+      "sowing_calendar": null,
+      "personal_rate": null,
+      "confirmation_questions": [
+        "确认当地名称、品种、目标产品与栽培方式",
+        "确认实际田块、阶段、工具与本次工作量"
+      ]
+    },
+    {
+      "id": "fennel",
+      "name": "茴香菜",
+      "category_ids": [
+        "V14"
+      ],
+      "aliases": [],
+      "catalog_status": "national_candidate",
+      "local_status": "not_reported",
+      "identity_status": "cultivar_and_local_name_to_confirm",
+      "agronomy_status": "needs_local_review",
+      "recommendation_enabled": false,
+      "sowing_calendar": null,
+      "personal_rate": null,
+      "confirmation_questions": [
+        "确认当地名称、品种、目标产品与栽培方式",
+        "确认实际田块、阶段、工具与本次工作量"
+      ]
+    },
+    {
+      "id": "shiitake",
+      "name": "香菇",
+      "category_ids": [
+        "V15"
+      ],
+      "aliases": [],
+      "catalog_status": "national_candidate",
+      "local_status": "not_reported",
+      "identity_status": "cultivar_and_local_name_to_confirm",
+      "agronomy_status": "needs_local_review",
+      "recommendation_enabled": false,
+      "sowing_calendar": null,
+      "personal_rate": null,
+      "confirmation_questions": [
+        "确认当地名称、品种、目标产品与栽培方式",
+        "确认实际田块、阶段、工具与本次工作量"
+      ]
+    },
+    {
+      "id": "oyster_mushroom",
+      "name": "平菇",
+      "category_ids": [
+        "V15"
+      ],
+      "aliases": [],
+      "catalog_status": "national_candidate",
+      "local_status": "not_reported",
+      "identity_status": "cultivar_and_local_name_to_confirm",
+      "agronomy_status": "needs_local_review",
+      "recommendation_enabled": false,
+      "sowing_calendar": null,
+      "personal_rate": null,
+      "confirmation_questions": [
+        "确认当地名称、品种、目标产品与栽培方式",
+        "确认实际田块、阶段、工具与本次工作量"
+      ]
+    },
+    {
+      "id": "wood_ear",
+      "name": "木耳",
+      "category_ids": [
+        "V15"
+      ],
+      "aliases": [],
+      "catalog_status": "national_candidate",
+      "local_status": "not_reported",
+      "identity_status": "cultivar_and_local_name_to_confirm",
+      "agronomy_status": "needs_local_review",
+      "recommendation_enabled": false,
+      "sowing_calendar": null,
+      "personal_rate": null,
+      "confirmation_questions": [
+        "确认当地名称、品种、目标产品与栽培方式",
+        "确认实际田块、阶段、工具与本次工作量"
+      ]
+    },
+    {
+      "id": "button_mushroom",
+      "name": "双孢蘑菇",
+      "category_ids": [
+        "V15"
+      ],
+      "aliases": [],
+      "catalog_status": "national_candidate",
+      "local_status": "not_reported",
+      "identity_status": "cultivar_and_local_name_to_confirm",
+      "agronomy_status": "needs_local_review",
+      "recommendation_enabled": false,
+      "sowing_calendar": null,
+      "personal_rate": null,
+      "confirmation_questions": [
+        "确认当地名称、品种、目标产品与栽培方式",
+        "确认实际田块、阶段、工具与本次工作量"
+      ]
+    },
+    {
+      "id": "rice",
+      "name": "水稻",
+      "category_ids": [
+        "G01"
+      ],
+      "aliases": [],
+      "catalog_status": "national_candidate",
+      "local_status": "oral_mention",
+      "identity_status": "cultivar_and_local_name_to_confirm",
+      "agronomy_status": "needs_local_review",
+      "recommendation_enabled": false,
+      "sowing_calendar": null,
+      "personal_rate": null,
+      "confirmation_questions": [
+        "确认当地名称、品种、目标产品与栽培方式",
+        "确认实际田块、阶段、工具与本次工作量",
+        "确认直播或育秧移栽、手插或机插、田水观察、实际参与环节；不由全国统一月份猜阶段"
+      ]
+    },
+    {
+      "id": "maize",
+      "name": "玉米",
+      "category_ids": [
+        "G02"
+      ],
+      "aliases": [],
+      "catalog_status": "national_candidate",
+      "local_status": "planting_unconfirmed",
+      "identity_status": "cultivar_and_local_name_to_confirm",
+      "agronomy_status": "needs_local_review",
+      "recommendation_enabled": false,
+      "sowing_calendar": null,
+      "personal_rate": null,
+      "confirmation_questions": [
+        "确认当地名称、品种、目标产品与栽培方式",
+        "确认实际田块、阶段、工具与本次工作量"
+      ]
+    },
+    {
+      "id": "wheat",
+      "name": "小麦",
+      "category_ids": [
+        "G02"
+      ],
+      "aliases": [],
+      "catalog_status": "national_candidate",
+      "local_status": "not_reported",
+      "identity_status": "cultivar_and_local_name_to_confirm",
+      "agronomy_status": "needs_local_review",
+      "recommendation_enabled": false,
+      "sowing_calendar": null,
+      "personal_rate": null,
+      "confirmation_questions": [
+        "确认当地名称、品种、目标产品与栽培方式",
+        "确认实际田块、阶段、工具与本次工作量"
+      ]
+    },
+    {
+      "id": "barley",
+      "name": "大麦",
+      "category_ids": [
+        "G02"
+      ],
+      "aliases": [],
+      "catalog_status": "national_candidate",
+      "local_status": "not_reported",
+      "identity_status": "cultivar_and_local_name_to_confirm",
+      "agronomy_status": "needs_local_review",
+      "recommendation_enabled": false,
+      "sowing_calendar": null,
+      "personal_rate": null,
+      "confirmation_questions": [
+        "确认当地名称、品种、目标产品与栽培方式",
+        "确认实际田块、阶段、工具与本次工作量"
+      ]
+    },
+    {
+      "id": "sorghum",
+      "name": "高粱",
+      "category_ids": [
+        "G02"
+      ],
+      "aliases": [],
+      "catalog_status": "national_candidate",
+      "local_status": "not_reported",
+      "identity_status": "cultivar_and_local_name_to_confirm",
+      "agronomy_status": "needs_local_review",
+      "recommendation_enabled": false,
+      "sowing_calendar": null,
+      "personal_rate": null,
+      "confirmation_questions": [
+        "确认当地名称、品种、目标产品与栽培方式",
+        "确认实际田块、阶段、工具与本次工作量"
+      ]
+    },
+    {
+      "id": "foxtail_millet",
+      "name": "谷子",
+      "category_ids": [
+        "G02"
+      ],
+      "aliases": [],
+      "catalog_status": "national_candidate",
+      "local_status": "not_reported",
+      "identity_status": "cultivar_and_local_name_to_confirm",
+      "agronomy_status": "needs_local_review",
+      "recommendation_enabled": false,
+      "sowing_calendar": null,
+      "personal_rate": null,
+      "confirmation_questions": [
+        "确认当地名称、品种、目标产品与栽培方式",
+        "确认实际田块、阶段、工具与本次工作量"
+      ]
+    },
+    {
+      "id": "mung_bean",
+      "name": "绿豆",
+      "category_ids": [
+        "G03"
+      ],
+      "aliases": [],
+      "catalog_status": "national_candidate",
+      "local_status": "not_reported",
+      "identity_status": "cultivar_and_local_name_to_confirm",
+      "agronomy_status": "needs_local_review",
+      "recommendation_enabled": false,
+      "sowing_calendar": null,
+      "personal_rate": null,
+      "confirmation_questions": [
+        "确认当地名称、品种、目标产品与栽培方式",
+        "确认实际田块、阶段、工具与本次工作量"
+      ]
+    },
+    {
+      "id": "adzuki_bean",
+      "name": "红小豆",
+      "category_ids": [
+        "G03"
+      ],
+      "aliases": [],
+      "catalog_status": "national_candidate",
+      "local_status": "not_reported",
+      "identity_status": "cultivar_and_local_name_to_confirm",
+      "agronomy_status": "needs_local_review",
+      "recommendation_enabled": false,
+      "sowing_calendar": null,
+      "personal_rate": null,
+      "confirmation_questions": [
+        "确认当地名称、品种、目标产品与栽培方式",
+        "确认实际田块、阶段、工具与本次工作量"
+      ]
+    },
+    {
+      "id": "sesame",
+      "name": "芝麻",
+      "category_ids": [
+        "G04"
+      ],
+      "aliases": [],
+      "catalog_status": "national_candidate",
+      "local_status": "identity_hold",
+      "identity_status": "cultivar_and_local_name_to_confirm",
+      "agronomy_status": "needs_local_review",
+      "recommendation_enabled": false,
+      "sowing_calendar": null,
+      "personal_rate": null,
+      "confirmation_questions": [
+        "确认当地名称、品种、目标产品与栽培方式",
+        "确认实际田块、阶段、工具与本次工作量",
+        "“芝麻”与所说高杆作物是否同一植物；鉴定前禁用芝麻专属规则"
+      ]
+    },
+    {
+      "id": "oilseed_rape",
+      "name": "油料油菜",
+      "category_ids": [
+        "G04"
+      ],
+      "aliases": [],
+      "catalog_status": "national_candidate",
+      "local_status": "not_reported",
+      "identity_status": "cultivar_and_local_name_to_confirm",
+      "agronomy_status": "needs_local_review",
+      "recommendation_enabled": false,
+      "sowing_calendar": null,
+      "personal_rate": null,
+      "confirmation_questions": [
+        "确认当地名称、品种、目标产品与栽培方式",
+        "确认实际田块、阶段、工具与本次工作量"
+      ]
+    },
+    {
+      "id": "peanut",
+      "name": "花生",
+      "category_ids": [
+        "G04"
+      ],
+      "aliases": [],
+      "catalog_status": "national_candidate",
+      "local_status": "not_reported",
+      "identity_status": "cultivar_and_local_name_to_confirm",
+      "agronomy_status": "needs_local_review",
+      "recommendation_enabled": false,
+      "sowing_calendar": null,
+      "personal_rate": null,
+      "confirmation_questions": [
+        "确认当地名称、品种、目标产品与栽培方式",
+        "确认实际田块、阶段、工具与本次工作量"
+      ]
+    },
+    {
+      "id": "sunflower",
+      "name": "向日葵",
+      "category_ids": [
+        "G04"
+      ],
+      "aliases": [],
+      "catalog_status": "national_candidate",
+      "local_status": "not_reported",
+      "identity_status": "cultivar_and_local_name_to_confirm",
+      "agronomy_status": "needs_local_review",
+      "recommendation_enabled": false,
+      "sowing_calendar": null,
+      "personal_rate": null,
+      "confirmation_questions": [
+        "确认当地名称、品种、目标产品与栽培方式",
+        "确认实际田块、阶段、工具与本次工作量"
+      ]
+    }
+  ],
+  "lifecycle": [
+    {
+      "id": "L01",
+      "name": "田块与种植计划",
+      "sequence_is_mandatory": false,
+      "applicability": "to_confirm"
+    },
+    {
+      "id": "L02",
+      "name": "种苗与物料准备",
+      "sequence_is_mandatory": false,
+      "applicability": "to_confirm"
+    },
+    {
+      "id": "L03",
+      "name": "有机肥及农资搬运",
+      "sequence_is_mandatory": false,
+      "applicability": "to_confirm"
+    },
+    {
+      "id": "L04",
+      "name": "整地与田间设施",
+      "sequence_is_mandatory": false,
+      "applicability": "to_confirm"
+    },
+    {
+      "id": "L05",
+      "name": "基肥与土壤改良",
+      "sequence_is_mandatory": false,
+      "applicability": "to_confirm"
+    },
+    {
+      "id": "L06",
+      "name": "种子与育苗育秧",
+      "sequence_is_mandatory": false,
+      "applicability": "to_confirm"
+    },
+    {
+      "id": "L07",
+      "name": "播种与移栽",
+      "sequence_is_mandatory": false,
+      "applicability": "to_confirm"
+    },
+    {
+      "id": "L08",
+      "name": "出苗与成苗管理",
+      "sequence_is_mandatory": false,
+      "applicability": "to_confirm"
+    },
+    {
+      "id": "L09",
+      "name": "灌溉与排水",
+      "sequence_is_mandatory": false,
+      "applicability": "to_confirm"
+    },
+    {
+      "id": "L10",
+      "name": "追肥与分阶段养分管理",
+      "sequence_is_mandatory": false,
+      "applicability": "to_confirm"
+    },
+    {
+      "id": "L11",
+      "name": "除草与中耕培土",
+      "sequence_is_mandatory": false,
+      "applicability": "to_confirm"
+    },
+    {
+      "id": "L12",
+      "name": "支架及植株整理",
+      "sequence_is_mandatory": false,
+      "applicability": "to_confirm"
+    },
+    {
+      "id": "L13",
+      "name": "开花结果与产品管理",
+      "sequence_is_mandatory": false,
+      "applicability": "to_confirm"
+    },
+    {
+      "id": "L14",
+      "name": "病虫与异常巡查处理",
+      "sequence_is_mandatory": false,
+      "applicability": "to_confirm"
+    },
+    {
+      "id": "L15",
+      "name": "收获",
+      "sequence_is_mandatory": false,
+      "applicability": "to_confirm"
+    },
+    {
+      "id": "L16",
+      "name": "田间搬运与初处理",
+      "sequence_is_mandatory": false,
+      "applicability": "to_confirm"
+    },
+    {
+      "id": "L17",
+      "name": "干燥储藏与收尾",
+      "sequence_is_mandatory": false,
+      "applicability": "to_confirm"
+    },
+    {
+      "id": "L18",
+      "name": "极端天气前后处理",
+      "sequence_is_mandatory": false,
+      "applicability": "to_confirm"
+    }
+  ],
+  "tasks": [
+    {
+      "code": "plot_inspection",
+      "lifecycle_id": "L01",
+      "name": "看地与种植确认",
+      "valid_units": [
+        "m",
+        "sqm",
+        "mu"
+      ],
+      "methods": [
+        "walk_observe"
+      ],
+      "scope": "net_work",
+      "quantity_basis": "本次要完成的真实剩余工作量；不是默认整块田面积",
+      "difficulty": {
+        "rating": null,
+        "status": "needs_observation",
+        "basis": "步行距离、路面、坡度与驻足时间",
+        "numeric_multiplier": null
+      },
+      "required_context": [
+        "method",
+        "tool",
+        "posture",
+        "field_condition"
+      ],
+      "support_level": "conditional_planning",
+      "hazard_boundary": "一般步行巡查仍需现场可进入",
+      "agronomy_status": "needs_local_review",
+      "personal_minutes_per_unit": null,
+      "operation": "plot_inspection",
+      "method": "walk_observe",
+      "recording_units": [
+        "m",
+        "sqm",
+        "mu"
+      ],
+      "scheduler_units": [
+        "m",
+        "sqm",
+        "mu"
+      ],
+      "units": [
+        "m",
+        "sqm",
+        "mu"
+      ],
+      "engine_schedulable": true,
+      "method_labels": {
+        "walk_observe": "步行观察"
+      }
+    },
+    {
+      "code": "materials_prepare",
+      "lifecycle_id": "L02",
+      "name": "种苗物料准备",
+      "valid_units": [
+        "plant",
+        "kg"
+      ],
+      "methods": [
+        "sort_prepare"
+      ],
+      "scope": "net_work",
+      "quantity_basis": "本次要完成的真实剩余工作量；不是默认整块田面积",
+      "difficulty": {
+        "rating": null,
+        "status": "needs_observation",
+        "basis": "分装精细程度、取放高度、袋重",
+        "numeric_multiplier": null
+      },
+      "required_context": [
+        "method",
+        "tool",
+        "posture",
+        "field_condition"
+      ],
+      "support_level": "conditional_planning",
+      "hazard_boundary": "搬运另计",
+      "agronomy_status": "needs_local_review",
+      "personal_minutes_per_unit": null,
+      "operation": "materials_prepare",
+      "method": "sort_prepare",
+      "recording_units": [
+        "plant",
+        "kg"
+      ],
+      "scheduler_units": [
+        "kg"
+      ],
+      "units": [
+        "plant",
+        "kg"
+      ],
+      "engine_schedulable": true,
+      "method_labels": {
+        "sort_prepare": "分装与整理"
+      }
+    },
+    {
+      "code": "haul_material",
+      "lifecycle_id": "L03",
+      "name": "挑粪及农资搬运",
+      "valid_units": [
+        "trip"
+      ],
+      "methods": [
+        "carry",
+        "wheelbarrow"
+      ],
+      "scope": "net_work",
+      "quantity_basis": "实际剩余整数趟数；同时记录每趟负重、单程距离、道路和工具；不从亩或公斤自动推趟数",
+      "difficulty": {
+        "rating": null,
+        "status": "needs_observation",
+        "basis": "每趟负重、单程距离、坡度、泥泞及工具",
+        "numeric_multiplier": null
+      },
+      "required_context": [
+        "method",
+        "tool",
+        "posture",
+        "field_condition",
+        "load_kg_per_trip",
+        "distance_m"
+      ],
+      "support_level": "conditional_planning",
+      "hazard_boundary": "仅记录运输；粪污处理与卫生要求另需专业确认",
+      "agronomy_status": "needs_local_review",
+      "personal_minutes_per_unit": null,
+      "operation": "haul_material",
+      "method": "carry",
+      "recording_units": [
+        "trip",
+        "kg"
+      ],
+      "scheduler_units": [
+        "trip"
+      ],
+      "units": [
+        "trip"
+      ],
+      "engine_schedulable": true,
+      "method_labels": {
+        "carry": "手提或肩挑（具体方式另记）",
+        "wheelbarrow": "推车"
+      }
+    },
+    {
+      "code": "tillage",
+      "lifecycle_id": "L04",
+      "name": "翻耕碎土作畦",
+      "valid_units": [
+        "sqm",
+        "mu"
+      ],
+      "methods": [
+        "hoe",
+        "spade"
+      ],
+      "scope": "net_work",
+      "quantity_basis": "本次要完成的真实剩余工作量；不是默认整块田面积",
+      "difficulty": {
+        "rating": null,
+        "status": "needs_observation",
+        "basis": "土壤干湿硬度、根石、坡度、持续姿势",
+        "numeric_multiplier": null
+      },
+      "required_context": [
+        "method",
+        "tool",
+        "posture",
+        "field_condition"
+      ],
+      "support_level": "conditional_planning",
+      "hazard_boundary": "机械操作转专业协助",
+      "agronomy_status": "needs_local_review",
+      "personal_minutes_per_unit": null,
+      "operation": "tillage",
+      "method": "hoe",
+      "recording_units": [
+        "sqm",
+        "mu"
+      ],
+      "scheduler_units": [
+        "sqm",
+        "mu"
+      ],
+      "units": [
+        "sqm",
+        "mu"
+      ],
+      "engine_schedulable": true,
+      "method_labels": {
+        "hoe": "用锄",
+        "spade": "用铲"
+      }
+    },
+    {
+      "code": "ditch_maintain",
+      "lifecycle_id": "L04",
+      "name": "开沟与修田埂",
+      "valid_units": [
+        "m"
+      ],
+      "methods": [
+        "hoe",
+        "spade"
+      ],
+      "scope": "net_work",
+      "quantity_basis": "本次要完成的真实剩余工作量；不是默认整块田面积",
+      "difficulty": {
+        "rating": null,
+        "status": "needs_observation",
+        "basis": "断面、土壤和搬土距离",
+        "numeric_multiplier": null
+      },
+      "required_context": [
+        "method",
+        "tool",
+        "posture",
+        "field_condition"
+      ],
+      "support_level": "conditional_planning",
+      "hazard_boundary": "未知深水、电力、塌陷现场停止自动安排",
+      "agronomy_status": "needs_local_review",
+      "personal_minutes_per_unit": null,
+      "operation": "ditch_maintain",
+      "method": "hoe",
+      "recording_units": [
+        "m"
+      ],
+      "scheduler_units": [
+        "m"
+      ],
+      "units": [
+        "m"
+      ],
+      "engine_schedulable": true,
+      "method_labels": {
+        "hoe": "用锄",
+        "spade": "用铲"
+      }
+    },
+    {
+      "code": "basal_fertilize",
+      "lifecycle_id": "L05",
+      "name": "基肥施入",
+      "valid_units": [
+        "sqm",
+        "mu",
+        "plant",
+        "kg"
+      ],
+      "methods": [
+        "broadcast",
+        "hole",
+        "furrow"
+      ],
+      "scope": "net_work",
+      "quantity_basis": "本次要完成的真实剩余工作量；不是默认整块田面积",
+      "difficulty": {
+        "rating": null,
+        "status": "needs_observation",
+        "basis": "材料形态、施入方式、弯腰、覆土",
+        "numeric_multiplier": null
+      },
+      "required_context": [
+        "method",
+        "tool",
+        "posture",
+        "field_condition"
+      ],
+      "support_level": "conditional_planning",
+      "hazard_boundary": "不提供材料量、剂量或全国通用处方",
+      "agronomy_status": "needs_local_review",
+      "personal_minutes_per_unit": null,
+      "operation": "basal_fertilize",
+      "method": "broadcast",
+      "recording_units": [
+        "sqm",
+        "mu",
+        "plant",
+        "kg"
+      ],
+      "scheduler_units": [
+        "sqm",
+        "mu",
+        "plant"
+      ],
+      "units": [
+        "sqm",
+        "mu",
+        "plant",
+        "kg"
+      ],
+      "engine_schedulable": true,
+      "method_labels": {
+        "broadcast": "撒施",
+        "hole": "穴施",
+        "furrow": "沟施"
+      }
+    },
+    {
+      "code": "seedling",
+      "lifecycle_id": "L06",
+      "name": "育苗育秧与苗床管理",
+      "valid_units": [
+        "plant",
+        "sqm"
+      ],
+      "methods": [
+        "tray",
+        "nursery_bed"
+      ],
+      "scope": "net_work",
+      "quantity_basis": "本次要完成的真实剩余工作量；不是默认整块田面积",
+      "difficulty": {
+        "rating": null,
+        "status": "needs_observation",
+        "basis": "盘数需折算且核实株数、细致程度、搬盘",
+        "numeric_multiplier": null
+      },
+      "required_context": [
+        "method",
+        "tool",
+        "posture",
+        "field_condition"
+      ],
+      "support_level": "conditional_planning",
+      "hazard_boundary": "浸种药剂处理不自动推荐",
+      "agronomy_status": "needs_local_review",
+      "personal_minutes_per_unit": null,
+      "operation": "seedling",
+      "method": "tray",
+      "recording_units": [
+        "plant",
+        "sqm"
+      ],
+      "scheduler_units": [
+        "plant",
+        "sqm"
+      ],
+      "units": [
+        "plant",
+        "sqm"
+      ],
+      "engine_schedulable": true,
+      "method_labels": {
+        "tray": "育苗盘",
+        "nursery_bed": "苗床"
+      }
+    },
+    {
+      "code": "sow",
+      "lifecycle_id": "L07",
+      "name": "播种",
+      "valid_units": [
+        "sqm",
+        "mu",
+        "plant"
+      ],
+      "methods": [
+        "direct",
+        "row",
+        "hill"
+      ],
+      "scope": "net_work",
+      "quantity_basis": "本次要完成的真实剩余工作量；不是默认整块田面积",
+      "difficulty": {
+        "rating": null,
+        "status": "needs_observation",
+        "basis": "播法、行距、工具与弯腰程度",
+        "numeric_multiplier": null
+      },
+      "required_context": [
+        "method",
+        "tool",
+        "posture",
+        "field_condition"
+      ],
+      "support_level": "conditional_planning",
+      "hazard_boundary": "先确认作物适用方式与当地条件",
+      "agronomy_status": "needs_local_review",
+      "personal_minutes_per_unit": null,
+      "operation": "sow",
+      "method": "direct",
+      "recording_units": [
+        "sqm",
+        "mu",
+        "plant"
+      ],
+      "scheduler_units": [
+        "sqm",
+        "mu",
+        "plant"
+      ],
+      "units": [
+        "sqm",
+        "mu",
+        "plant"
+      ],
+      "engine_schedulable": true,
+      "method_labels": {
+        "direct": "直播",
+        "row": "条播",
+        "hill": "点播"
+      }
+    },
+    {
+      "code": "transplant",
+      "lifecycle_id": "L07",
+      "name": "定植与插秧",
+      "valid_units": [
+        "plant",
+        "sqm",
+        "mu"
+      ],
+      "methods": [
+        "hand",
+        "rice_hand"
+      ],
+      "scope": "net_work",
+      "quantity_basis": "本次要完成的真实剩余工作量；不是默认整块田面积",
+      "difficulty": {
+        "rating": null,
+        "status": "needs_observation",
+        "basis": "株数、株行距、土壤或泥水、反复弯腰",
+        "numeric_multiplier": null
+      },
+      "required_context": [
+        "method",
+        "tool",
+        "posture",
+        "field_condition"
+      ],
+      "support_level": "conditional_planning",
+      "hazard_boundary": "水稻另确认栽培方式及进出路径",
+      "agronomy_status": "needs_local_review",
+      "personal_minutes_per_unit": null,
+      "operation": "transplant",
+      "method": "hand",
+      "recording_units": [
+        "plant",
+        "sqm",
+        "mu"
+      ],
+      "scheduler_units": [
+        "plant"
+      ],
+      "units": [
+        "plant",
+        "sqm",
+        "mu"
+      ],
+      "engine_schedulable": true,
+      "method_labels": {
+        "hand": "手工移栽",
+        "rice_hand": "手工插秧"
+      }
+    },
+    {
+      "code": "seedling_check",
+      "lifecycle_id": "L08",
+      "name": "查苗间苗补苗",
+      "valid_units": [
+        "plant",
+        "sqm",
+        "mu"
+      ],
+      "methods": [
+        "observe",
+        "thin",
+        "replace"
+      ],
+      "scope": "net_work",
+      "quantity_basis": "本次要完成的真实剩余工作量；不是默认整块田面积",
+      "difficulty": {
+        "rating": null,
+        "status": "needs_observation",
+        "basis": "缺株分布、观察与拔补动作",
+        "numeric_multiplier": null
+      },
+      "required_context": [
+        "method",
+        "tool",
+        "posture",
+        "field_condition"
+      ],
+      "support_level": "conditional_planning",
+      "hazard_boundary": "不自动创建未发生的步骤",
+      "agronomy_status": "needs_local_review",
+      "personal_minutes_per_unit": null,
+      "operation": "seedling_check",
+      "method": "observe",
+      "recording_units": [
+        "plant",
+        "sqm",
+        "mu"
+      ],
+      "scheduler_units": [
+        "plant",
+        "sqm",
+        "mu"
+      ],
+      "units": [
+        "plant",
+        "sqm",
+        "mu"
+      ],
+      "engine_schedulable": true,
+      "method_labels": {
+        "observe": "观察",
+        "thin": "间除",
+        "replace": "补苗"
+      }
+    },
+    {
+      "code": "irrigate",
+      "lifecycle_id": "L09",
+      "name": "浇水与灌溉操作",
+      "valid_units": [
+        "plant",
+        "m3",
+        "sqm",
+        "mu"
+      ],
+      "methods": [
+        "hose",
+        "gate",
+        "watering_can"
+      ],
+      "scope": "net_work",
+      "quantity_basis": "本次要完成的真实剩余工作量；不是默认整块田面积",
+      "difficulty": {
+        "rating": null,
+        "status": "needs_observation",
+        "basis": "水源与工具、拖管距离、操作与等待分开",
+        "numeric_multiplier": null
+      },
+      "required_context": [
+        "method",
+        "tool",
+        "posture",
+        "field_condition"
+      ],
+      "support_level": "conditional_planning",
+      "hazard_boundary": "挑水另计；泵机与电路不作老人自助指令",
+      "agronomy_status": "needs_local_review",
+      "personal_minutes_per_unit": null,
+      "operation": "irrigate",
+      "method": "hose",
+      "recording_units": [
+        "plant",
+        "m3",
+        "sqm",
+        "mu"
+      ],
+      "scheduler_units": [
+        "m3"
+      ],
+      "units": [
+        "plant",
+        "m3",
+        "sqm",
+        "mu"
+      ],
+      "engine_schedulable": true,
+      "method_labels": {
+        "hose": "水管",
+        "gate": "开闸控水",
+        "watering_can": "水壶浇灌"
+      }
+    },
+    {
+      "code": "drain",
+      "lifecycle_id": "L09",
+      "name": "排水与沟渠清理",
+      "valid_units": [
+        "m",
+        "sqm",
+        "mu"
+      ],
+      "methods": [
+        "clear_channel"
+      ],
+      "scope": "net_work",
+      "quantity_basis": "本次要完成的真实剩余工作量；不是默认整块田面积",
+      "difficulty": {
+        "rating": null,
+        "status": "needs_observation",
+        "basis": "积水深度、淤泥、路线、工具",
+        "numeric_multiplier": null
+      },
+      "required_context": [
+        "method",
+        "tool",
+        "posture",
+        "field_condition"
+      ],
+      "support_level": "conditional_planning",
+      "hazard_boundary": "深水、电力隐患或灾后未知状态需专业协助",
+      "agronomy_status": "needs_local_review",
+      "personal_minutes_per_unit": null,
+      "operation": "drain",
+      "method": "clear_channel",
+      "recording_units": [
+        "m",
+        "sqm",
+        "mu"
+      ],
+      "scheduler_units": [
+        "m",
+        "sqm",
+        "mu"
+      ],
+      "units": [
+        "m",
+        "sqm",
+        "mu"
+      ],
+      "engine_schedulable": true,
+      "method_labels": {
+        "clear_channel": "清理沟渠"
+      }
+    },
+    {
+      "code": "topdress",
+      "lifecycle_id": "L10",
+      "name": "追肥施入",
+      "valid_units": [
+        "plant",
+        "sqm",
+        "mu",
+        "kg"
+      ],
+      "methods": [
+        "broadcast",
+        "furrow",
+        "fertigation"
+      ],
+      "scope": "net_work",
+      "quantity_basis": "本次要完成的真实剩余工作量；不是默认整块田面积",
+      "difficulty": {
+        "rating": null,
+        "status": "needs_observation",
+        "basis": "施用方法、已有投入、材料搬运另记",
+        "numeric_multiplier": null
+      },
+      "required_context": [
+        "method",
+        "tool",
+        "posture",
+        "field_condition"
+      ],
+      "support_level": "conditional_planning",
+      "hazard_boundary": "需农技来源确认阶段与施用条件",
+      "agronomy_status": "needs_local_review",
+      "personal_minutes_per_unit": null,
+      "operation": "topdress",
+      "method": "broadcast",
+      "recording_units": [
+        "plant",
+        "sqm",
+        "mu",
+        "kg"
+      ],
+      "scheduler_units": [
+        "plant",
+        "sqm",
+        "mu"
+      ],
+      "units": [
+        "plant",
+        "sqm",
+        "mu",
+        "kg"
+      ],
+      "engine_schedulable": true,
+      "method_labels": {
+        "broadcast": "撒施",
+        "furrow": "沟施",
+        "fertigation": "水肥配合作业"
+      }
+    },
+    {
+      "code": "weed_hand",
+      "lifecycle_id": "L11",
+      "name": "拔草锄草与中耕",
+      "valid_units": [
+        "sqm",
+        "mu",
+        "plant"
+      ],
+      "methods": [
+        "hand_pull",
+        "hoe"
+      ],
+      "scope": "net_work",
+      "quantity_basis": "本次要完成的真实剩余工作量；不是默认整块田面积",
+      "difficulty": {
+        "rating": null,
+        "status": "needs_observation",
+        "basis": "草密度草龄、干湿、行距、工具和持续姿势",
+        "numeric_multiplier": null
+      },
+      "required_context": [
+        "method",
+        "tool",
+        "posture",
+        "field_condition"
+      ],
+      "support_level": "conditional_planning",
+      "hazard_boundary": "喷施除草剂走施药支持边界",
+      "agronomy_status": "needs_local_review",
+      "personal_minutes_per_unit": null,
+      "operation": "weed_hand",
+      "method": "hand_pull",
+      "recording_units": [
+        "sqm",
+        "mu",
+        "plant"
+      ],
+      "scheduler_units": [
+        "sqm",
+        "mu"
+      ],
+      "units": [
+        "sqm",
+        "mu",
+        "plant"
+      ],
+      "engine_schedulable": true,
+      "method_labels": {
+        "hand_pull": "手拔",
+        "hoe": "用锄"
+      }
+    },
+    {
+      "code": "mulch",
+      "lifecycle_id": "L11",
+      "name": "铺盖抑草材料",
+      "valid_units": [
+        "sqm",
+        "mu",
+        "m"
+      ],
+      "methods": [
+        "lay_cover"
+      ],
+      "scope": "net_work",
+      "quantity_basis": "本次要完成的真实剩余工作量；不是默认整块田面积",
+      "difficulty": {
+        "rating": null,
+        "status": "needs_observation",
+        "basis": "材料宽重、搬运、铺展与固定动作",
+        "numeric_multiplier": null
+      },
+      "required_context": [
+        "method",
+        "tool",
+        "posture",
+        "field_condition"
+      ],
+      "support_level": "conditional_planning",
+      "hazard_boundary": "无统一增减难度系数",
+      "agronomy_status": "needs_local_review",
+      "personal_minutes_per_unit": null,
+      "operation": "mulch",
+      "method": "lay_cover",
+      "recording_units": [
+        "sqm",
+        "mu",
+        "m"
+      ],
+      "scheduler_units": [
+        "sqm",
+        "mu",
+        "m"
+      ],
+      "units": [
+        "sqm",
+        "mu",
+        "m"
+      ],
+      "engine_schedulable": true,
+      "method_labels": {
+        "lay_cover": "铺覆盖物"
+      }
+    },
+    {
+      "code": "support",
+      "lifecycle_id": "L12",
+      "name": "搭架绑蔓",
+      "valid_units": [
+        "plant",
+        "m"
+      ],
+      "methods": [
+        "ground_tie"
+      ],
+      "scope": "net_work",
+      "quantity_basis": "本次要完成的真实剩余工作量；不是默认整块田面积",
+      "difficulty": {
+        "rating": null,
+        "status": "needs_observation",
+        "basis": "架高、杆重、抬臂、固定精细程度",
+        "numeric_multiplier": null
+      },
+      "required_context": [
+        "method",
+        "tool",
+        "posture",
+        "field_condition"
+      ],
+      "support_level": "conditional_planning",
+      "hazard_boundary": "攀爬或高处搭架由专业协助处理",
+      "agronomy_status": "needs_local_review",
+      "personal_minutes_per_unit": null,
+      "operation": "support",
+      "method": "ground_tie",
+      "recording_units": [
+        "plant",
+        "m"
+      ],
+      "scheduler_units": [
+        "plant",
+        "m"
+      ],
+      "units": [
+        "plant",
+        "m"
+      ],
+      "engine_schedulable": true,
+      "method_labels": {
+        "ground_tie": "地面绑扎"
+      }
+    },
+    {
+      "code": "prune",
+      "lifecycle_id": "L12",
+      "name": "植株整理",
+      "valid_units": [
+        "plant"
+      ],
+      "methods": [
+        "hand_tool"
+      ],
+      "scope": "net_work",
+      "quantity_basis": "本次要完成的真实剩余工作量；不是默认整块田面积",
+      "difficulty": {
+        "rating": null,
+        "status": "needs_observation",
+        "basis": "高度、精细动作、工具、枝蔓量",
+        "numeric_multiplier": null
+      },
+      "required_context": [
+        "method",
+        "tool",
+        "posture",
+        "field_condition"
+      ],
+      "support_level": "conditional_planning",
+      "hazard_boundary": "品种和农技规则待确认，不普遍建议修剪",
+      "agronomy_status": "needs_local_review",
+      "personal_minutes_per_unit": null,
+      "operation": "prune",
+      "method": "hand_tool",
+      "recording_units": [
+        "plant"
+      ],
+      "scheduler_units": [
+        "plant"
+      ],
+      "units": [
+        "plant"
+      ],
+      "engine_schedulable": true,
+      "method_labels": {
+        "hand_tool": "手工具整理"
+      }
+    },
+    {
+      "code": "pollinate",
+      "lifecycle_id": "L13",
+      "name": "人工授粉",
+      "valid_units": [
+        "plant"
+      ],
+      "methods": [
+        "manual"
+      ],
+      "scope": "net_work",
+      "quantity_basis": "本次要完成的真实剩余工作量；不是默认整块田面积",
+      "difficulty": {
+        "rating": null,
+        "status": "needs_observation",
+        "basis": "花数另记、适用窗口、细致程度",
+        "numeric_multiplier": null
+      },
+      "required_context": [
+        "method",
+        "tool",
+        "posture",
+        "field_condition"
+      ],
+      "support_level": "conditional_planning",
+      "hazard_boundary": "只在已确认需要的作物环节建立任务",
+      "agronomy_status": "needs_local_review",
+      "personal_minutes_per_unit": null,
+      "operation": "pollinate",
+      "method": "manual",
+      "recording_units": [
+        "plant"
+      ],
+      "scheduler_units": [
+        "plant"
+      ],
+      "units": [
+        "plant"
+      ],
+      "engine_schedulable": true,
+      "method_labels": {
+        "manual": "人工授粉"
+      }
+    },
+    {
+      "code": "fruit_manage",
+      "lifecycle_id": "L13",
+      "name": "疏果护果与套袋",
+      "valid_units": [
+        "plant"
+      ],
+      "methods": [
+        "thin",
+        "bag",
+        "support_fruit"
+      ],
+      "scope": "net_work",
+      "quantity_basis": "本次要完成的真实剩余工作量；不是默认整块田面积",
+      "difficulty": {
+        "rating": null,
+        "status": "needs_observation",
+        "basis": "每株果数、果重、高度与精细动作",
+        "numeric_multiplier": null
+      },
+      "required_context": [
+        "method",
+        "tool",
+        "posture",
+        "field_condition"
+      ],
+      "support_level": "conditional_planning",
+      "hazard_boundary": "采收或搬运另建任务",
+      "agronomy_status": "needs_local_review",
+      "personal_minutes_per_unit": null,
+      "operation": "fruit_manage",
+      "method": "thin",
+      "recording_units": [
+        "plant"
+      ],
+      "scheduler_units": [
+        "plant"
+      ],
+      "units": [
+        "plant"
+      ],
+      "engine_schedulable": true,
+      "method_labels": {
+        "thin": "间除",
+        "bag": "套袋",
+        "support_fruit": "托果"
+      }
+    },
+    {
+      "code": "pest_scout",
+      "lifecycle_id": "L14",
+      "name": "病虫异常巡查",
+      "valid_units": [
+        "plant",
+        "sqm",
+        "mu",
+        "m"
+      ],
+      "methods": [
+        "observe_record"
+      ],
+      "scope": "net_work",
+      "quantity_basis": "本次要完成的真实剩余工作量；不是默认整块田面积",
+      "difficulty": {
+        "rating": null,
+        "status": "needs_observation",
+        "basis": "巡查密度、翻叶、路径",
+        "numeric_multiplier": null
+      },
+      "required_context": [
+        "method",
+        "tool",
+        "posture",
+        "field_condition"
+      ],
+      "support_level": "conditional_planning",
+      "hazard_boundary": "辅助记录，不把识别结果当确定诊断",
+      "agronomy_status": "needs_local_review",
+      "personal_minutes_per_unit": null,
+      "operation": "pest_scout",
+      "method": "observe_record",
+      "recording_units": [
+        "plant",
+        "sqm",
+        "mu",
+        "m"
+      ],
+      "scheduler_units": [
+        "plant",
+        "sqm",
+        "mu",
+        "m"
+      ],
+      "units": [
+        "plant",
+        "sqm",
+        "mu",
+        "m"
+      ],
+      "engine_schedulable": true,
+      "method_labels": {
+        "observe_record": "观察记录"
+      }
+    },
+    {
+      "code": "pest_physical",
+      "lifecycle_id": "L14",
+      "name": "已确认的物理防治",
+      "valid_units": [
+        "plant",
+        "sqm",
+        "mu"
+      ],
+      "methods": [
+        "remove_affected",
+        "place_trap"
+      ],
+      "scope": "net_work",
+      "quantity_basis": "本次要完成的真实剩余工作量；不是默认整块田面积",
+      "difficulty": {
+        "rating": null,
+        "status": "needs_observation",
+        "basis": "高度、工具与受害分布",
+        "numeric_multiplier": null
+      },
+      "required_context": [
+        "method",
+        "tool",
+        "posture",
+        "field_condition"
+      ],
+      "support_level": "conditional_planning",
+      "hazard_boundary": "需要诊断及当地农技依据",
+      "agronomy_status": "needs_local_review",
+      "personal_minutes_per_unit": null,
+      "operation": "pest_physical",
+      "method": "remove_affected",
+      "recording_units": [
+        "plant",
+        "sqm",
+        "mu"
+      ],
+      "scheduler_units": [
+        "plant",
+        "sqm",
+        "mu"
+      ],
+      "units": [
+        "plant",
+        "sqm",
+        "mu"
+      ],
+      "engine_schedulable": true,
+      "method_labels": {
+        "remove_affected": "摘除受害部位",
+        "place_trap": "布置物理设施"
+      }
+    },
+    {
+      "code": "pesticide_application",
+      "lifecycle_id": "L14",
+      "name": "农药配制与喷施",
+      "valid_units": [
+        "sqm",
+        "mu"
+      ],
+      "methods": [
+        "licensed_service"
+      ],
+      "scope": "net_work",
+      "quantity_basis": "本次要完成的真实剩余工作量；不是默认整块田面积",
+      "difficulty": {
+        "rating": null,
+        "status": "needs_observation",
+        "basis": "药剂、设备、飘移与重新入田限制",
+        "numeric_multiplier": null
+      },
+      "required_context": [
+        "method",
+        "tool",
+        "posture",
+        "field_condition"
+      ],
+      "support_level": "record_and_professional_help_only",
+      "hazard_boundary": "只记录专业协助与入田限制；不生成配药剂量或自主操作安排",
+      "agronomy_status": "needs_local_review",
+      "personal_minutes_per_unit": null,
+      "operation": "pesticide_application",
+      "method": "licensed_service",
+      "recording_units": [
+        "sqm",
+        "mu"
+      ],
+      "scheduler_units": [
+        "sqm",
+        "mu"
+      ],
+      "units": [
+        "sqm",
+        "mu"
+      ],
+      "engine_schedulable": false,
+      "method_labels": {
+        "licensed_service": "有资质人员服务"
+      }
+    },
+    {
+      "code": "harvest_pick",
+      "lifecycle_id": "L15",
+      "name": "分批摘叶摘果",
+      "valid_units": [
+        "kg",
+        "plant"
+      ],
+      "methods": [
+        "hand_pick"
+      ],
+      "scope": "net_work",
+      "quantity_basis": "本次要完成的真实剩余工作量；不是默认整块田面积",
+      "difficulty": {
+        "rating": null,
+        "status": "needs_observation",
+        "basis": "成熟分布、单株产量、采摘高度、果重",
+        "numeric_multiplier": null
+      },
+      "required_context": [
+        "method",
+        "tool",
+        "posture",
+        "field_condition"
+      ],
+      "support_level": "conditional_planning",
+      "hazard_boundary": "面积不能替代本次可采批量；搬运另计",
+      "agronomy_status": "needs_local_review",
+      "personal_minutes_per_unit": null,
+      "operation": "harvest_pick",
+      "method": "hand_pick",
+      "recording_units": [
+        "kg",
+        "plant"
+      ],
+      "scheduler_units": [
+        "kg",
+        "plant"
+      ],
+      "units": [
+        "kg",
+        "plant"
+      ],
+      "engine_schedulable": true,
+      "method_labels": {
+        "hand_pick": "手工采摘"
+      }
+    },
+    {
+      "code": "harvest_cut",
+      "lifecycle_id": "L15",
+      "name": "割收与整株收获",
+      "valid_units": [
+        "plant",
+        "kg"
+      ],
+      "methods": [
+        "hand_cut"
+      ],
+      "scope": "net_work",
+      "quantity_basis": "本次可采成熟批量，使用公斤或株；面积只作田块背景，不作采收剩余量",
+      "difficulty": {
+        "rating": null,
+        "status": "needs_observation",
+        "basis": "成熟一致性、密度、株重、工具",
+        "numeric_multiplier": null
+      },
+      "required_context": [
+        "method",
+        "tool",
+        "posture",
+        "field_condition"
+      ],
+      "support_level": "conditional_planning",
+      "hazard_boundary": "面积估时仅适用于明确整片一次割收且实际速率同口径",
+      "agronomy_status": "needs_local_review",
+      "personal_minutes_per_unit": null,
+      "operation": "harvest_cut",
+      "method": "hand_cut",
+      "recording_units": [
+        "sqm",
+        "mu",
+        "plant",
+        "kg"
+      ],
+      "scheduler_units": [
+        "plant",
+        "kg"
+      ],
+      "units": [
+        "plant",
+        "kg"
+      ],
+      "engine_schedulable": true,
+      "method_labels": {
+        "hand_cut": "手工割收"
+      }
+    },
+    {
+      "code": "harvest_dig",
+      "lifecycle_id": "L15",
+      "name": "拔收挖收",
+      "valid_units": [
+        "kg",
+        "plant"
+      ],
+      "methods": [
+        "pull",
+        "dig"
+      ],
+      "scope": "net_work",
+      "quantity_basis": "本次可采成熟批量，使用公斤或株；面积只作田块背景，不作采收剩余量",
+      "difficulty": {
+        "rating": null,
+        "status": "needs_observation",
+        "basis": "土壤、埋深、单株产量、去泥",
+        "numeric_multiplier": null
+      },
+      "required_context": [
+        "method",
+        "tool",
+        "posture",
+        "field_condition"
+      ],
+      "support_level": "conditional_planning",
+      "hazard_boundary": "面积估时需明确同田块方法与作物批量",
+      "agronomy_status": "needs_local_review",
+      "personal_minutes_per_unit": null,
+      "operation": "harvest_dig",
+      "method": "pull",
+      "recording_units": [
+        "kg",
+        "plant",
+        "sqm",
+        "mu"
+      ],
+      "scheduler_units": [
+        "kg",
+        "plant"
+      ],
+      "units": [
+        "kg",
+        "plant"
+      ],
+      "engine_schedulable": true,
+      "method_labels": {
+        "pull": "拔收",
+        "dig": "挖收"
+      }
+    },
+    {
+      "code": "harvest_machine",
+      "lifecycle_id": "L15",
+      "name": "农机收获服务",
+      "valid_units": [
+        "sqm",
+        "mu"
+      ],
+      "methods": [
+        "service"
+      ],
+      "scope": "net_work",
+      "quantity_basis": "本次要完成的真实剩余工作量；不是默认整块田面积",
+      "difficulty": {
+        "rating": null,
+        "status": "needs_observation",
+        "basis": "机器可达性、转弯、田块零碎与服务等待",
+        "numeric_multiplier": null
+      },
+      "required_context": [
+        "method",
+        "tool",
+        "posture",
+        "field_condition"
+      ],
+      "support_level": "record_and_professional_help_only",
+      "hazard_boundary": "只安排服务与协助，不指导老人操机",
+      "agronomy_status": "needs_local_review",
+      "personal_minutes_per_unit": null,
+      "operation": "harvest_machine",
+      "method": "service",
+      "recording_units": [
+        "sqm",
+        "mu"
+      ],
+      "scheduler_units": [],
+      "units": [
+        "sqm",
+        "mu"
+      ],
+      "engine_schedulable": false,
+      "method_labels": {
+        "service": "专业或农机服务"
+      }
+    },
+    {
+      "code": "haul_produce",
+      "lifecycle_id": "L16",
+      "name": "装筐与收获物搬运",
+      "valid_units": [
+        "trip"
+      ],
+      "methods": [
+        "carry",
+        "wheelbarrow"
+      ],
+      "scope": "net_work",
+      "quantity_basis": "实际剩余整数趟数；同时记录每趟负重、单程距离、道路和工具；不从亩或公斤自动推趟数",
+      "difficulty": {
+        "rating": null,
+        "status": "needs_observation",
+        "basis": "筐重、趟数、单程距离、道路",
+        "numeric_multiplier": null
+      },
+      "required_context": [
+        "method",
+        "tool",
+        "posture",
+        "field_condition",
+        "load_kg_per_trip",
+        "distance_m"
+      ],
+      "support_level": "conditional_planning",
+      "hazard_boundary": "采摘净用时不能隐含运输",
+      "agronomy_status": "needs_local_review",
+      "personal_minutes_per_unit": null,
+      "operation": "haul_produce",
+      "method": "carry",
+      "recording_units": [
+        "kg",
+        "trip"
+      ],
+      "scheduler_units": [
+        "trip"
+      ],
+      "units": [
+        "trip"
+      ],
+      "engine_schedulable": true,
+      "method_labels": {
+        "carry": "手提或肩挑（具体方式另记）",
+        "wheelbarrow": "推车"
+      }
+    },
+    {
+      "code": "postprocess",
+      "lifecycle_id": "L16",
+      "name": "分拣清洗与手工初处理",
+      "valid_units": [
+        "kg"
+      ],
+      "methods": [
+        "sort",
+        "wash",
+        "manual_clean"
+      ],
+      "scope": "net_work",
+      "quantity_basis": "本次要完成的真实剩余工作量；不是默认整块田面积",
+      "difficulty": {
+        "rating": null,
+        "status": "needs_observation",
+        "basis": "杂质、清洗条件、取放与反复操作",
+        "numeric_multiplier": null
+      },
+      "required_context": [
+        "method",
+        "tool",
+        "posture",
+        "field_condition"
+      ],
+      "support_level": "conditional_planning",
+      "hazard_boundary": "机械脱粒需单独专业服务",
+      "agronomy_status": "needs_local_review",
+      "personal_minutes_per_unit": null,
+      "operation": "postprocess",
+      "method": "sort",
+      "recording_units": [
+        "kg"
+      ],
+      "scheduler_units": [
+        "kg"
+      ],
+      "units": [
+        "kg"
+      ],
+      "engine_schedulable": true,
+      "method_labels": {
+        "sort": "分拣",
+        "wash": "清洗",
+        "manual_clean": "手工去杂"
+      }
+    },
+    {
+      "code": "thresh_service",
+      "lifecycle_id": "L16",
+      "name": "脱粒机械服务",
+      "valid_units": [
+        "kg"
+      ],
+      "methods": [
+        "service"
+      ],
+      "scope": "net_work",
+      "quantity_basis": "本次要完成的真实剩余工作量；不是默认整块田面积",
+      "difficulty": {
+        "rating": null,
+        "status": "needs_observation",
+        "basis": "原料水分、设备、批量与等待",
+        "numeric_multiplier": null
+      },
+      "required_context": [
+        "method",
+        "tool",
+        "posture",
+        "field_condition"
+      ],
+      "support_level": "record_and_professional_help_only",
+      "hazard_boundary": "只登记服务，机械清堵维护不自动安排",
+      "agronomy_status": "needs_local_review",
+      "personal_minutes_per_unit": null,
+      "operation": "thresh_service",
+      "method": "service",
+      "recording_units": [
+        "kg"
+      ],
+      "scheduler_units": [],
+      "units": [
+        "kg"
+      ],
+      "engine_schedulable": false,
+      "method_labels": {
+        "service": "专业或农机服务"
+      }
+    },
+    {
+      "code": "dry_store",
+      "lifecycle_id": "L17",
+      "name": "晾晒翻晒与入库",
+      "valid_units": [
+        "kg",
+        "sqm"
+      ],
+      "methods": [
+        "spread",
+        "turn",
+        "store"
+      ],
+      "scope": "net_work",
+      "quantity_basis": "本次要完成的真实剩余工作量；不是默认整块田面积",
+      "difficulty": {
+        "rating": null,
+        "status": "needs_observation",
+        "basis": "摊层、场地、搬运、降雨前回收",
+        "numeric_multiplier": null
+      },
+      "required_context": [
+        "method",
+        "tool",
+        "posture",
+        "field_condition"
+      ],
+      "support_level": "conditional_planning",
+      "hazard_boundary": "公斤与摊晒面积不互换；干燥条件需作物规则",
+      "agronomy_status": "needs_local_review",
+      "personal_minutes_per_unit": null,
+      "operation": "dry_store",
+      "method": "spread",
+      "recording_units": [
+        "kg",
+        "sqm"
+      ],
+      "scheduler_units": [
+        "kg"
+      ],
+      "units": [
+        "kg",
+        "sqm"
+      ],
+      "engine_schedulable": true,
+      "method_labels": {
+        "spread": "摊晒",
+        "turn": "翻晒",
+        "store": "入库整理"
+      }
+    },
+    {
+      "code": "field_cleanup",
+      "lifecycle_id": "L17",
+      "name": "清田与下茬准备",
+      "valid_units": [
+        "sqm",
+        "mu",
+        "kg"
+      ],
+      "methods": [
+        "collect_residue"
+      ],
+      "scope": "net_work",
+      "quantity_basis": "本次要完成的真实剩余工作量；不是默认整块田面积",
+      "difficulty": {
+        "rating": null,
+        "status": "needs_observation",
+        "basis": "残体量、弯腰、垃圾分类、搬出距离",
+        "numeric_multiplier": null
+      },
+      "required_context": [
+        "method",
+        "tool",
+        "posture",
+        "field_condition"
+      ],
+      "support_level": "conditional_planning",
+      "hazard_boundary": "病残体处理按当地规则；不得露天焚烧指令",
+      "agronomy_status": "needs_local_review",
+      "personal_minutes_per_unit": null,
+      "operation": "field_cleanup",
+      "method": "collect_residue",
+      "recording_units": [
+        "sqm",
+        "mu",
+        "kg"
+      ],
+      "scheduler_units": [
+        "sqm",
+        "mu"
+      ],
+      "units": [
+        "sqm",
+        "mu",
+        "kg"
+      ],
+      "engine_schedulable": true,
+      "method_labels": {
+        "collect_residue": "清理残体"
+      }
+    },
+    {
+      "code": "weather_recovery",
+      "lifecycle_id": "L18",
+      "name": "极端天气前后检查",
+      "valid_units": [
+        "m",
+        "sqm",
+        "mu"
+      ],
+      "methods": [
+        "observe_from_accessible_area"
+      ],
+      "scope": "net_work",
+      "quantity_basis": "本次要完成的真实剩余工作量；不是默认整块田面积",
+      "difficulty": {
+        "rating": null,
+        "status": "needs_observation",
+        "basis": "现场进出、电路、设施稳定性、水位",
+        "numeric_multiplier": null
+      },
+      "required_context": [
+        "method",
+        "tool",
+        "posture",
+        "field_condition"
+      ],
+      "support_level": "record_and_professional_help_only",
+      "hazard_boundary": "危险或未知现场仅提示暂缓与求助，不派入场任务",
+      "agronomy_status": "needs_local_review",
+      "personal_minutes_per_unit": null,
+      "operation": "weather_recovery",
+      "method": "observe_from_accessible_area",
+      "recording_units": [
+        "m",
+        "sqm",
+        "mu"
+      ],
+      "scheduler_units": [
+        "m",
+        "sqm",
+        "mu"
+      ],
+      "units": [
+        "m",
+        "sqm",
+        "mu"
+      ],
+      "engine_schedulable": false,
+      "method_labels": {
+        "observe_from_accessible_area": "从可安全到达处观察"
+      }
+    }
+  ],
+  "local_observations": [
+    {
+      "local_name": "辣椒",
+      "crop_id": "pepper",
+      "status": "oral_mention",
+      "evidence": "本人在讨论中提及；不等于现场鉴定或实测",
+      "rule_enabled": false
+    },
+    {
+      "local_name": "生菜",
+      "crop_id": "lettuce",
+      "status": "oral_mention",
+      "evidence": "本人在讨论中提及；不等于现场鉴定或实测",
+      "rule_enabled": false
+    },
+    {
+      "local_name": "西瓜",
+      "crop_id": "watermelon",
+      "status": "oral_mention",
+      "evidence": "本人在讨论中提及；不等于现场鉴定或实测",
+      "rule_enabled": false
+    },
+    {
+      "local_name": "水稻",
+      "crop_id": "rice",
+      "status": "oral_mention",
+      "evidence": "本人在讨论中提及；不等于现场鉴定或实测",
+      "rule_enabled": false
+    },
+    {
+      "local_name": "菜瓜",
+      "crop_id": null,
+      "candidate_crop_ids": [],
+      "status": "identity_hold",
+      "evidence": "本人描述仍待补充",
+      "rule_enabled": false
+    },
+    {
+      "local_name": "芝麻及高杆作物",
+      "crop_id": null,
+      "candidate_crop_ids": [
+        "sesame"
+      ],
+      "status": "identity_hold",
+      "evidence": "本人描述仍待补充",
+      "rule_enabled": false
+    },
+    {
+      "local_name": "玉米",
+      "crop_id": null,
+      "candidate_crop_ids": [
+        "maize"
+      ],
+      "status": "planting_unconfirmed",
+      "evidence": "本人描述仍待补充",
+      "rule_enabled": false
+    }
+  ],
+  "ambiguous_names": {
+    "菜瓜": [],
+    "芝麻及高杆作物": [
+      "sesame"
+    ],
+    "高杆作物": [],
+    "青菜": [
+      "bok_choy",
+      "leaf_mustard"
+    ],
+    "油菜": [
+      "bok_choy",
+      "leaf_mustard",
+      "oilseed_rape"
+    ],
+    "莴苣": [
+      "lettuce",
+      "stem_lettuce"
+    ]
+  },
+  "coverage_limits": [
+    "15类实用分组及5粮油模块不构成所有物种和品种的穷尽表",
+    "果树、茶、棉麻、饲草、花卉、畜禽、水产尚未实现专属模块",
+    "食用菌为独立邻近模块，不套用植物大田生育期",
+    "地方身份确认、农技审核、实测验证分别记录，不由目录自动升级",
+    "难度因素是观察清单，没有经验证的个人系数或临床安全含义"
+  ],
+  "unit_labels": {
+    "mu": "亩",
+    "sqm": "平方米",
+    "trip": "趟",
+    "kg": "公斤",
+    "plant": "株",
+    "m": "米",
+    "m3": "立方米"
+  }
+}
