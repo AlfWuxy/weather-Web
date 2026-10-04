@@ -5,7 +5,7 @@ import logging
 import os
 import secrets
 
-from flask import abort, current_app, has_app_context, jsonify, request, session
+from flask import abort, current_app, g, has_app_context, jsonify, request, session
 
 logger = logging.getLogger(__name__)
 from flask_login import current_user
@@ -134,3 +134,25 @@ def hash_identifier(value):
 def hash_short_code(value):
     """Hash short code before persistence."""
     return hash_identifier(value)
+
+
+def register_rate_limit_key():
+    """注册专用桶：受信客户端 IP + 用户名哈希。禁止复用 rate_limit_key。"""
+    username = (request.form.get('username') or '').strip()
+    digest = hash_identifier(username) or 'empty'
+    return f"register:{_client_ip_for_rate_limit()}:{digest}"
+
+
+def mark_register_limit_countable():
+    """标记本次注册请求应扣除专用配额。"""
+    g.register_limit_countable = True
+
+
+def register_limit_should_deduct(response):
+    """deduct_when：校验通过才扣；成功与失败都是 302，不能看 status。"""
+    return bool(getattr(g, 'register_limit_countable', False))
+
+
+def register_limit_is_exempt():
+    """GET 不走注册专用限额；POST 仍受全局 200/min。"""
+    return request.method != 'POST'
