@@ -22,7 +22,8 @@ from core.weather import (
     is_qweather_online_weather,
     normalize_location_name,
 )
-from core.guest import GuestUser, is_guest_user
+from core.guest import GuestUser, guest_experience_error_response, is_guest_user
+from services.guest_experience import GuestExperienceError, delete_experience, get_experience
 from core.db_models import (
     Community,
     CoolingResource,
@@ -57,6 +58,21 @@ HEAT_RISK_LABELS = {
 }
 
 PAIR_TOKEN_SESSION_KEY = 'pair_token'
+IDENTITY_SCOPED_SESSION_KEYS = frozenset({
+    'pair_session_id',
+    'pair_session_code',
+    PAIR_TOKEN_SESSION_KEY,
+    'last_api_token_plain',
+    'last_mini_link_code',
+    'last_mini_link_expires_at',
+    'pair_link_token',
+    'pair_link_id',
+    'created_pair_id',
+    'demo_mode',
+    'guest_profile',
+    'guest_assessment',
+    'guest_id',
+})
 
 _HEAT_RISK_WEATHER_FIELDS = (
     'temperature',
@@ -85,6 +101,24 @@ def _get_pair_token():
 
 def _clear_pair_token():
     session.pop(PAIR_TOKEN_SESSION_KEY, None)
+
+
+def _clear_identity_scoped_session():
+    """只清理绑定到旧身份的数据，保留 CSRF、flash 与其他匿名偏好。"""
+    guest_id = session.get('guest_id') or session.get('_user_id')
+    if isinstance(guest_id, str) and guest_id.startswith(GUEST_ID_PREFIX):
+        try:
+            delete_experience(guest_id)
+        except GuestExperienceError:
+            # 缓存不可用不能阻止退出；剩余临时数据仍受原定过期时间约束。
+            logger.warning('游客临时数据暂未清除，将由到期机制清理')
+    for key in IDENTITY_SCOPED_SESSION_KEYS:
+        session.pop(key, None)
+    # 未勾选“记住我”的新身份不能继承旧账号的长期登录 cookie。
+    remember_cookie = current_app.config.get('REMEMBER_COOKIE_NAME', 'remember_token')
+    if request.cookies.get(remember_cookie):
+        session['_remember'] = 'clear'
+    session.pop('_remember_seconds', None)
 
 
 def _safe_next_url(next_url):
@@ -894,17 +928,17 @@ def render_role_entry():
     community_next = url_for('user.community_dashboard')
 
     if is_guest:
-        caregiver_target = url_for('public.register')
-        caregiver_action_label = '注册开启照护'
+        caregiver_target = url_for('guest_experience.page', view='overview')
+        caregiver_action_label = '体验家庭照护'
         caregiver_requires_login = False
     elif is_real_user:
         caregiver_target = caregiver_next
         caregiver_action_label = '进入照护工作台'
         caregiver_requires_login = False
     else:
-        caregiver_target = url_for('public.login', next=default_caregiver_next)
-        caregiver_action_label = '进入照护工作台'
-        caregiver_requires_login = True
+        caregiver_target = url_for('public.guest_login', next=url_for('guest_experience.page', view='overview'))
+        caregiver_action_label = '体验家庭照护'
+        caregiver_requires_login = False
 
     if is_real_user:
         if role in ('community', 'admin'):
@@ -1002,6 +1036,7 @@ def handle_login(next_url):
                     _clear_login_failures_db(normalized_username)
                 except Exception:
                     logger.warning("数据库清除失败计数失败", exc_info=True)
+            _clear_identity_scoped_session()
             login_user(
                 user,
                 remember=remember_flag,
@@ -1107,6 +1142,9 @@ def handle_register():
         db.session.add(user)
         db.session.commit()
 
+        _clear_identity_scoped_session()
+        if is_guest_user(current_user):
+            logout_user()
         logger.info("新用户注册: %s", username)
         flash('注册成功，请登录', 'success')
         return redirect(url_for('public.login'))
@@ -1240,28 +1278,23 @@ def handle_guest_login(next_url=None):
     if current_user.is_authenticated and not is_guest_user(current_user):
         return redirect(url_for('user.user_dashboard'))
 
-    session['guest_profile'] = {
-        'username': '游客',
-        'age': None,
-        'gender': '未知',
-        'community': '朝阳社区',
-        'has_chronic_disease': False,
-        'chronic_diseases': None
-    }
-    session.pop('guest_assessment', None)
     guest_id = f"{GUEST_ID_PREFIX}{secrets.token_urlsafe(12)}"
+    try:
+        state = get_experience(guest_id)
+    except GuestExperienceError as exc:
+        return guest_experience_error_response(exc)
+
+    _clear_identity_scoped_session()
     session['guest_id'] = guest_id
-    guest_user = GuestUser(guest_id, session['guest_profile'])
+    guest_user = GuestUser(guest_id, state['profile'])
+    guest_user.experience_version = state['version']
     login_user(guest_user)
-    flash('已进入游客模式（数据不会保存）', 'success')
+    flash('已进入游客体验：示例资料和操作仅临时保留两小时，不会发送真实提醒。', 'success')
     safe_next = _safe_next_url(next_url)
     return redirect(safe_next or url_for('user.user_dashboard'))
 
 
 def handle_logout():
-    if is_guest_user(current_user):
-        session.pop('guest_profile', None)
-        session.pop('guest_assessment', None)
-        session.pop('guest_id', None)
+    _clear_identity_scoped_session()
     logout_user()
     return redirect(url_for('public.index'))

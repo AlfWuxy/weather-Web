@@ -5,8 +5,8 @@
 
 {% block content %}
 {% if not current_user.is_authenticated or current_user.role == 'guest' %}
-    {% set workspace_url = url_for('public.register') %}
-    {% set workspace_label = '注册开启照护' %}
+    {% set workspace_url = url_for('guest_experience.page', view='overview') if current_user.is_authenticated else url_for('public.guest_login', next=url_for('guest_experience.page', view='overview')) %}
+    {% set workspace_label = '体验家庭照护' %}
 {% elif current_user.role == 'community' %}
     {% set workspace_url = url_for('user.community_dashboard') %}
     {% set workspace_label = '进入社区工作台' %}
@@ -28,7 +28,7 @@
     {% set community_cta = '社区人员登录' %}
 {% endif %}
 {% if not current_user.is_authenticated or current_user.role == 'guest' %}
-    {% set family_role_url = url_for('public.register') %}
+    {% set family_role_url = workspace_url %}
 {% elif current_user.role in ['caregiver', 'admin'] %}
     {% set family_role_url = url_for('user.caregiver_dashboard') %}
 {% else %}
@@ -49,7 +49,7 @@
             {% if not current_user.is_authenticated %}
                 <div class="hero-actions">
                     <a href="{{ url_for('public.guest_login') }}" class="btn btn-primary btn-lg">先体验今天怎么用</a>
-                    <a href="{{ url_for('public.register') }}" class="btn btn-outline-secondary btn-lg">为家人建立照护</a>
+                    <a href="{{ workspace_url }}" class="btn btn-outline-secondary btn-lg">体验家庭照护</a>
                 </div>
             {% else %}
                 <div class="hero-actions">

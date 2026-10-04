@@ -7,6 +7,7 @@ from flask import current_app, jsonify, request
 from flask_login import current_user, login_required
 
 from core.constants import DEFAULT_CITY_LABEL
+from core.guest import is_guest_user
 from core.notifications import create_notification
 from core.security import csrf_failure_response, validate_csrf
 from core.time_utils import now_local, today_local
@@ -265,8 +266,8 @@ def _api_ml_predict():
 
         # 获取用户信息
         user_info = {
-            'age': data.get('age') or current_user.age or 40,
-            'gender': data.get('gender') or current_user.gender or '男'
+            'age': current_user.age if is_guest_user(current_user) else data.get('age') or current_user.age or 40,
+            'gender': current_user.gender if is_guest_user(current_user) else data.get('gender') or current_user.gender or '男'
         }
 
         sunshine_seconds = _normalize_sunshine_seconds(data)
@@ -805,9 +806,9 @@ def _api_chronic_individual():
 
         # 用户信息
         user_info = {
-            'age': data.get('age') or current_user.age or 50,
-            'gender': data.get('gender') or current_user.gender or '未知',
-            'chronic_diseases': data.get('chronic_diseases') or (
+            'age': current_user.age if is_guest_user(current_user) else data.get('age') or current_user.age or 50,
+            'gender': current_user.gender if is_guest_user(current_user) else data.get('gender') or current_user.gender or '未知',
+            'chronic_diseases': safe_json_loads(current_user.chronic_diseases, []) if is_guest_user(current_user) else data.get('chronic_diseases') or (
                 safe_json_loads(current_user.chronic_diseases, [])
             )
         }

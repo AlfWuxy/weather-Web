@@ -7,11 +7,11 @@
 {% block content %}
 {% set weather_available = weather and weather_available %}
 {% if current_user.role == 'guest' %}
-    {% set dashboard_care_url = url_for('public.register') %}
-    {% set dashboard_care_title = '注册开启照护' %}
-    {% set dashboard_care_detail = '保存家人档案与提醒' %}
+    {% set dashboard_care_url = url_for('guest_experience.page', view='overview') %}
+    {% set dashboard_care_title = '体验家庭照护' %}
+    {% set dashboard_care_detail = '试用家人档案、打卡与确认' %}
     {% set dashboard_care_icon = 'person-plus' %}
-    {% set dashboard_family_url = url_for('public.register') %}
+    {% set dashboard_family_url = url_for('guest_experience.page', view='family') %}
 {% elif current_user.role == 'community' %}
     {% set dashboard_care_url = url_for('user.community_dashboard') %}
     {% set dashboard_care_title = '社区工作台' %}
@@ -82,7 +82,7 @@
                 </p>
 
                 <div class="yl-academic-actions">
-                    <a class="btn btn-primary" href="{{ url_for('public.action_check') }}">记录今天是否做到</a>
+                    <a class="btn btn-primary" href="{{ nav_action_url }}">记录今天是否做到</a>
                     <a class="btn btn-outline-secondary" href="{{ url_for('tools.forecast_7day') }}">看 7 天趋势</a>
                 </div>
 
@@ -177,7 +177,7 @@
             <strong>{{ heat_actions[0].title }}</strong>
             <p>{{ heat_actions[0].detail }}</p>
         </div>
-        <a class="btn btn-sm btn-outline-primary" href="{{ url_for('public.action_check') }}">去打卡 <i class="bi bi-arrow-right"></i></a>
+        <a class="btn btn-sm btn-outline-primary" href="{{ nav_action_url }}">去打卡 <i class="bi bi-arrow-right"></i></a>
     </section>
     {% endif %}
 
@@ -216,7 +216,7 @@
                         <img src="{{ url_for('static', filename='illustrations/dashboard/today-actions.png') }}" alt="" width="1254" height="1254" loading="lazy" decoding="async">
                     </div>
                 </div>
-                <a class="btn btn-sm btn-outline-primary" href="{{ url_for('public.action_check') }}">打卡 <i class="bi bi-arrow-right"></i></a>
+                <a class="btn btn-sm btn-outline-primary" href="{{ nav_action_url }}">打卡 <i class="bi bi-arrow-right"></i></a>
             </div>
             <div class="yl-action-list mt-3">
                 {% if not weather_available %}
@@ -326,10 +326,10 @@
             <div class="yl-empty-micro mt-3">
                 <i class="bi bi-clipboard2-pulse"></i>
                 <div>
-                    <strong>暂无家庭成员健康指标</strong>
-                    <p>添加血压、心率或血糖后，这里会显示精简动效卡。</p>
+                    <strong>{% if current_user.role == 'guest' %}试着建立一份家人档案{% else %}暂无家庭成员健康指标{% endif %}</strong>
+                    <p>{% if current_user.role == 'guest' %}添加示例家人，体验行动打卡与家属确认。{% else %}添加血压、心率或血糖后，这里会显示精简动效卡。{% endif %}</p>
                 </div>
-                <a class="btn btn-sm btn-outline-primary" href="{{ dashboard_family_url }}">{% if current_user.role == 'guest' %}注册后补充{% else %}去补充{% endif %}</a>
+                <a class="btn btn-sm btn-outline-primary" href="{{ dashboard_family_url }}">{% if current_user.role == 'guest' %}体验家人档案{% else %}去补充{% endif %}</a>
             </div>
             {% endif %}
         </section>

@@ -91,6 +91,7 @@ def register_blueprints(app):
     from blueprints.tools import bp as tools_bp
     from blueprints.api import bp as api_bp
     from blueprints.mp_api import bp as mp_api_bp
+    from blueprints.guest_experience import bp as guest_experience_bp
 
     app.register_blueprint(public_bp)
     app.register_blueprint(user_bp)
@@ -100,6 +101,7 @@ def register_blueprints(app):
     app.register_blueprint(tools_bp)
     app.register_blueprint(api_bp)
     app.register_blueprint(mp_api_bp)
+    app.register_blueprint(guest_experience_bp)
 
 
 _register_blueprints = register_blueprints
