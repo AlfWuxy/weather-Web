@@ -161,6 +161,7 @@
                             <div class="app-mega-grid">
                                 <section class="app-mega-group">
                                     <div class="app-mega-kicker">天气与行动</div>
+                                    <a class="app-mega-link" href="https://heatwave-atlas-lab.yilaoweather.org/#replay?case=chongqing2022" target="_blank" rel="noopener noreferrer" data-nav-key="heatwave-atlas">热浪形成与回放 ↗</a>
                                     <a class="app-mega-link" href="{{ url_for('public.public_risk') }}">风险说明</a>
                                     <a class="app-mega-link" href="{{ url_for('public.cooling_resources') }}">避暑资源</a>
                                     <a class="app-mega-link" href="{{ url_for('public.transparency') }}">透明度</a>
@@ -287,6 +288,7 @@
             {# ----- 天气 ----- #}
             <div class="mb-2" style="font-size:.72rem; color:var(--yl-muted); text-transform:uppercase; letter-spacing:.05em; padding:0 4px;">天气</div>
             <nav class="nav flex-column mb-3" aria-label="天气">
+                <a class="nav-link" href="https://heatwave-atlas-lab.yilaoweather.org/#replay?case=chongqing2022" target="_blank" rel="noopener noreferrer" data-nav-key="heatwave-atlas"><i class="bi bi-thermometer-sun me-2"></i>热浪形成与回放 ↗</a>
                 <a class="nav-link {% if nav_endpoint == 'public.public_risk' %}active{% endif %}" href="{{ url_for('public.public_risk') }}" {% if nav_endpoint == 'public.public_risk' %}aria-current="page"{% endif %}><i class="bi bi-thermometer-sun me-2"></i>风险说明</a>
                 <a class="nav-link {% if nav_endpoint == 'public.cooling_resources' %}active{% endif %}" href="{{ url_for('public.cooling_resources') }}" {% if nav_endpoint == 'public.cooling_resources' %}aria-current="page"{% endif %}><i class="bi bi-geo-alt me-2"></i>避暑资源</a>
                 {% if nav_can_view_patient_data %}
@@ -417,6 +419,7 @@
     <footer class="site-footer text-center py-4 mt-5" style="color:var(--yl-muted); border-top:1px solid var(--yl-line-soft);">
         <div class="container">
             <nav class="d-flex flex-wrap justify-content-center gap-3 mb-2 small" aria-label="页脚导航">
+                <a href="https://heatwave-atlas-lab.yilaoweather.org/#replay?case=chongqing2022" target="_blank" rel="noopener noreferrer" data-nav-key="heatwave-atlas">热浪形成与回放 ↗</a>
                 <a href="{{ url_for('public.public_risk') }}">风险说明</a>
                 <a href="{{ url_for('public.cooling_resources') }}">避暑资源</a>
                 <a href="{{ url_for('public.transparency') }}">计算与透明度</a>
