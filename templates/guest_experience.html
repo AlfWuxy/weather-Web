@@ -1,0 +1,258 @@
+{% extends "base.html" %}
+{% set active_view = view|default('overview', true) %}
+{% set tabs = [('overview', '体验概览'), ('profile', '个人资料'), ('family', '家人档案'), ('checkin', '行动与确认'), ('diary', '健康日记'), ('medications', '用药记录')] %}
+{% set titles = dict(tabs) %}
+{% block title %}{{ titles.get(active_view, '体验概览') }} · 游客体验 · 宜老天气通{% endblock %}
+{% block body_class %}guest-experience-page{% endblock %}
+{% block extra_css %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/guest-experience.css') }}">
+{% endblock %}
+
+{# 所有写入仅提交到游客体验接口，使用版本号防止旧页面覆盖新记录。 #}
+{% macro form_tokens(operation, item_id=none) -%}
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+<input type="hidden" name="version" value="{{ state.version }}">
+<input type="hidden" name="operation" value="{{ operation }}">
+{% if item_id is not none %}<input type="hidden" name="id" value="{{ item_id }}">{% endif %}
+{%- endmacro %}
+
+{% macro member_select(field_id, selected=none) -%}
+<label for="{{ field_id }}" class="form-label">记录对象</label>
+<select id="{{ field_id }}" name="member_id" class="form-select" required>
+    <option value="" {% if not selected %}selected{% endif %} disabled>选择一位示例家人</option>
+    {% for member in state.members %}
+    <option value="{{ member.id }}" {% if selected == member.id %}selected{% endif %}>{{ member.name }} · {{ member.relationship }}</option>
+    {% endfor %}
+</select>
+{%- endmacro %}
+
+{% macro member_name(member_id) -%}
+{% set match = namespace(name='已移除的示例家人') %}
+{% for member in state.members %}{% if member.id == member_id %}{% set match.name = member.name %}{% endif %}{% endfor %}
+{{ match.name }}
+{%- endmacro %}
+
+{% macro family_fields(prefix, member=none) -%}
+<div class="guest-form-grid">
+    <div class="guest-field-wide">
+        <label for="{{ prefix }}-name" class="form-label">家人昵称</label>
+        <input id="{{ prefix }}-name" name="name" class="form-control" value="{{ member.name if member else '' }}" maxlength="30" placeholder="例如：林奶奶（虚构）" autocomplete="off" required>
+    </div>
+    <div>
+        <label for="{{ prefix }}-age" class="form-label">年龄</label>
+        <input id="{{ prefix }}-age" name="age" type="number" class="form-control" value="{{ member.age if member else '' }}" min="18" max="110" inputmode="numeric" required>
+    </div>
+    <div>
+        <label for="{{ prefix }}-relationship" class="form-label">与我的关系</label>
+        <input id="{{ prefix }}-relationship" name="relationship" class="form-control" value="{{ member.relationship if member else '' }}" maxlength="20" placeholder="例如：奶奶" autocomplete="off" required>
+    </div>
+</div>
+{%- endmacro %}
+
+{% macro diary_fields(prefix, entry=none) -%}
+<div class="guest-form-grid">
+    <div>{{ member_select(prefix ~ '-member', entry.member_id if entry else none) }}</div>
+    <div>
+        <label for="{{ prefix }}-date" class="form-label">记录日期</label>
+        <input id="{{ prefix }}-date" name="date" type="date" class="form-control" value="{{ entry.date if entry else '' }}" required>
+    </div>
+    <div class="guest-field-wide">
+        <label for="{{ prefix }}-symptoms" class="form-label">今天的感受</label>
+        <input id="{{ prefix }}-symptoms" name="symptoms" class="form-control" value="{{ entry.symptoms if entry else '' }}" maxlength="500" placeholder="例如：午后有些疲倦（示例）" required>
+    </div>
+    <div class="guest-field-wide">
+        <label for="{{ prefix }}-severity" class="form-label">不适程度</label>
+        <select id="{{ prefix }}-severity" name="severity" class="form-select" required>
+            {% for severity in ['轻微', '中等', '明显'] %}
+            <option value="{{ severity }}" {% if entry and entry.severity == severity %}selected{% endif %}>{{ severity }}</option>
+            {% endfor %}
+        </select>
+    </div>
+    <div class="guest-field-wide">
+        <label for="{{ prefix }}-notes" class="form-label">补充说明 <span class="guest-optional">（选填）</span></label>
+        <textarea id="{{ prefix }}-notes" name="notes" class="form-control" rows="3" maxlength="1000" placeholder="试着记下当时在做什么">{{ entry.notes if entry else '' }}</textarea>
+    </div>
+</div>
+{%- endmacro %}
+
+{% macro medication_fields(prefix, entry=none) -%}
+<div class="guest-form-grid">
+    <div class="guest-field-wide">{{ member_select(prefix ~ '-member', entry.member_id if entry else none) }}</div>
+    <div>
+        <label for="{{ prefix }}-name" class="form-label">示例药品名称</label>
+        <input id="{{ prefix }}-name" name="name" class="form-control" value="{{ entry.name if entry else '' }}" maxlength="80" placeholder="例如：示例药品 A" autocomplete="off" required>
+    </div>
+    <div>
+        <label for="{{ prefix }}-time" class="form-label">记录时间</label>
+        <input id="{{ prefix }}-time" name="time" type="time" class="form-control" value="{{ entry.time if entry else '' }}" required>
+    </div>
+    <div class="guest-field-wide">
+        <label for="{{ prefix }}-note" class="form-label">备注 <span class="guest-optional">（选填）</span></label>
+        <textarea id="{{ prefix }}-note" name="note" class="form-control" rows="3" maxlength="500" placeholder="仅供体验记录流程">{{ entry.note if entry else '' }}</textarea>
+    </div>
+</div>
+{%- endmacro %}
+
+{% block content %}
+<div class="guest-shell container">
+    <aside class="guest-mode-notice" aria-label="游客体验说明">
+        <span class="guest-mode-badge"><i class="bi bi-stars" aria-hidden="true"></i> 体验模式</span>
+        <p>示例资料自体验开始 <strong>2 小时后清除</strong>，<strong>不会发送真实提醒</strong>。</p>
+        {% if expires_label %}<span class="guest-expiry">{{ expires_label }} 到期</span>{% endif %}
+    </aside>
+
+    <header class="guest-heading">
+        <div>
+            <p class="section-kicker">宜老天气通 · 游客体验</p>
+            <h1>{{ titles.get(active_view, '体验概览') }}</h1>
+            <p class="guest-lead">从了解天气，到记下一次关心，试一试个人与家庭照护流程。</p>
+        </div>
+        <a href="{{ url_for('user.user_dashboard') }}" class="guest-back-link"><i class="bi bi-arrow-up-right" aria-hidden="true"></i> 查看今天的天气</a>
+    </header>
+
+    <nav class="guest-tabs" aria-label="游客体验功能">
+        {% for key, label in tabs %}
+        <a href="{{ url_for('guest_experience.page', view=key) }}" {% if active_view == key %}aria-current="page"{% endif %}>{{ label }}</a>
+        {% endfor %}
+    </nav>
+
+    {% if error %}
+    <div class="alert alert-danger guest-error" role="alert"><strong>这次操作未完成。</strong> {{ error }}</div>
+    {% endif %}
+
+    {% if not state %}
+    <section class="guest-panel guest-empty" aria-labelledby="unavailable-title">
+        <i class="bi bi-hourglass-split guest-empty-icon" aria-hidden="true"></i>
+        <h2 id="unavailable-title">体验暂时不可用</h2>
+        <p>暂时无法保存示例记录。你可以稍后重试，或先看看公开天气。</p>
+        <a class="btn btn-outline-primary" href="{{ url_for('tools.forecast_7day') }}">查看 7 天天气预报</a>
+    </section>
+    {% else %}
+    {% set profile = state.profile %}
+    {% set actions = action_options|default([('drink_water', '补水'), ('rest', '休息'), ('contact', '联系家人')], true) %}
+
+    {% if active_view == 'overview' %}
+    <section class="guest-intro guest-panel" aria-labelledby="intro-title">
+        <div>
+            <span class="guest-eyebrow">先体验，再决定</span>
+            <h2 id="intro-title">把天气里的提醒，<br>变成看得见的关心。</h2>
+            <p>用一份虚构资料了解健康评估，再为示例家人记录行动、尝试家属确认。无需填写手机号或真实住址。</p>
+            <div class="guest-button-row">
+                <a class="btn btn-primary" href="{{ url_for('guest_experience.page', view='profile') }}">从个人资料开始 <i class="bi bi-arrow-right" aria-hidden="true"></i></a>
+                <a class="btn btn-outline-secondary" href="{{ url_for('guest_experience.page', view='family') }}">看看示例家人</a>
+            </div>
+        </div>
+        <div class="guest-profile-preview">
+            <span class="guest-avatar" aria-hidden="true">{{ (profile.username or '我')[:1] }}</span>
+            <p class="guest-eyebrow">当前示例资料</p>
+            <h3>{{ profile.username or '体验访客' }}</h3>
+            <p>{{ profile.age }} 岁 · {{ profile.gender or '未知' }}</p>
+            <p>{{ profile.community or '尚未填写社区' }}</p>
+            <a href="{{ url_for('guest_experience.page', view='profile') }}">编辑示例资料 <i class="bi bi-arrow-right" aria-hidden="true"></i></a>
+        </div>
+    </section>
+
+    <section class="guest-section" aria-labelledby="steps-title">
+        <div class="guest-section-heading"><h2 id="steps-title">按自己的节奏，走一遍</h2><p>每一步都可以回来修改。</p></div>
+        <ol class="guest-step-grid">
+            <li><span class="guest-step-number">01</span><h3>填一份示例资料</h3><p>选择年龄与慢病情况，看看不同资料如何参与评估。</p><a href="{{ url_for('guest_experience.page', view='profile') }}">编辑资料 <i class="bi bi-arrow-right" aria-hidden="true"></i></a></li>
+            <li><span class="guest-step-number">02</span><h3>了解今天的风险</h3><p>使用这份个人资料，结合当前可用天气完成健康评估。</p><a href="{{ url_for('user.health_assessment') }}">进入健康评估 <i class="bi bi-arrow-right" aria-hidden="true"></i></a></li>
+            <li><span class="guest-step-number">03</span><h3>记录家人的行动</h3><p>为示例家人勾选补水、休息或联系家人，体验记录过程。</p><a href="{{ url_for('guest_experience.page', view='checkin') }}">试试行动打卡 <i class="bi bi-arrow-right" aria-hidden="true"></i></a></li>
+            <li><span class="guest-step-number">04</span><h3>从家属视角确认</h3><p>查看刚才的记录，再体验一次家属确认。</p><a href="{{ url_for('guest_experience.page', view='checkin') }}#family-review">查看待确认记录 <i class="bi bi-arrow-right" aria-hidden="true"></i></a></li>
+        </ol>
+    </section>
+
+    <section class="guest-section" aria-labelledby="overview-family-title">
+        <div class="guest-section-heading"><div><h2 id="overview-family-title">示例家庭的行动记录</h2><p>这里的状态只表示演示操作，不代表真实照护已经发生。</p></div><a href="{{ url_for('guest_experience.page', view='family') }}">管理示例家人</a></div>
+        {% if state.members %}
+        <div class="guest-member-grid">
+            {% for member in state.members %}
+            {% set checkin = state.checkins.get(member.id) %}
+            <article class="guest-panel guest-member-card">
+                <div class="guest-card-heading"><span class="guest-avatar guest-avatar-small" aria-hidden="true">{{ member.name[:1] }}</span><div><h3>{{ member.name }}</h3><p>{{ member.age }} 岁 · {{ member.relationship }}</p></div></div>
+                {% if checkin and checkin.reviewed %}<span class="guest-status guest-status-reviewed"><i class="bi bi-check2-all" aria-hidden="true"></i> 演示已确认</span>
+                {% elif checkin and checkin.actions %}<span class="guest-status guest-status-recorded"><i class="bi bi-check2" aria-hidden="true"></i> 演示已记录 · 待确认</span>
+                {% else %}<span class="guest-status">尚无演示行动</span>{% endif %}
+                <a href="{{ url_for('guest_experience.page', view='checkin') }}">查看行动与确认 <i class="bi bi-arrow-right" aria-hidden="true"></i></a>
+            </article>
+            {% endfor %}
+        </div>
+        {% else %}
+        <div class="guest-panel guest-empty"><h3>先添加一位示例家人</h3><p>使用虚构昵称，就可以体验家庭行动记录。</p><a class="btn btn-outline-primary" href="{{ url_for('guest_experience.page', view='family') }}">添加示例家人</a></div>
+        {% endif %}
+    </section>
+
+    {% elif active_view == 'profile' %}
+    <div class="guest-workspace">
+        <section class="guest-panel" aria-labelledby="profile-title">
+            <div class="guest-section-heading"><div><h2 id="profile-title">我的示例资料</h2><p>请使用虚构昵称和示例信息。</p></div></div>
+            <form method="post" action="{{ url_for('guest_experience.page', view='profile') }}">
+                {{ form_tokens('profile') }}
+                <div class="guest-form-grid">
+                    <div class="guest-field-wide"><label for="profile-username" class="form-label">体验昵称</label><input id="profile-username" name="username" class="form-control" value="{{ profile.username }}" maxlength="30" autocomplete="off" required></div>
+                    <div><label for="profile-age" class="form-label">年龄</label><input id="profile-age" name="age" type="number" class="form-control" value="{{ profile.age }}" min="18" max="110" inputmode="numeric" required></div>
+                    <div><label for="profile-gender" class="form-label">性别</label><select id="profile-gender" name="gender" class="form-select">{% for gender in ['男', '女', '未知'] %}<option value="{{ gender }}" {% if profile.gender == gender %}selected{% endif %}>{{ gender }}</option>{% endfor %}</select></div>
+                    <div class="guest-field-wide"><label for="profile-community" class="form-label">示例社区</label><input id="profile-community" name="community" required class="form-control" value="{{ profile.community or '' }}" maxlength="60" placeholder="例如：示例社区" aria-describedby="community-hint" autocomplete="off"><p id="community-hint" class="guest-field-hint">无需填写真实住址。</p></div>
+                    <fieldset class="guest-field-wide"><legend class="form-label">慢病情况</legend><div class="guest-choice"><input id="profile-has-chronic" name="has_chronic_disease" type="checkbox" class="form-check-input" value="1" {% if profile.has_chronic_disease %}checked{% endif %}><label for="profile-has-chronic">这份示例资料有慢病</label></div><p class="guest-field-hint">勾选后，可在下面选择相应的慢病。</p><div class="guest-choice-grid">{% for disease in chronic_options %}<div class="guest-choice"><input id="profile-chronic-{{ loop.index }}" name="chronic_diseases" type="checkbox" class="form-check-input" value="{{ disease }}" {% if disease in profile.chronic_diseases %}checked{% endif %}><label for="profile-chronic-{{ loop.index }}">{{ disease }}</label></div>{% endfor %}</div></fieldset>
+                </div>
+                <div class="guest-form-actions"><button class="btn btn-primary" type="submit">保存示例资料</button></div>
+            </form>
+        </section>
+        <aside class="guest-panel guest-side-note"><span class="guest-note-icon"><i class="bi bi-clipboard2-pulse" aria-hidden="true"></i></span><h2>接着，做一次健康评估</h2><p>保存后，健康评估会使用这份个人资料。你可以更改示例年龄与慢病情况，再次尝试。</p><a class="btn btn-outline-primary" href="{{ url_for('user.health_assessment') }}">进入健康评估</a><p class="guest-field-hint">评估使用当前可用天气；天气暂不可用时，页面会提示。</p></aside>
+    </div>
+
+    {% elif active_view == 'family' %}
+    <div class="guest-workspace">
+        <section aria-labelledby="family-title"><div class="guest-section-heading"><div><h2 id="family-title">我的示例家人</h2><p>添加后，就能为家人试记行动、日记与用药。</p></div><span class="guest-count">{{ state.members|length }} 位</span></div>
+            <div class="guest-record-list">
+                {% for member in state.members %}
+                <article class="guest-panel">
+                    <div class="guest-card-heading"><span class="guest-avatar guest-avatar-small" aria-hidden="true">{{ member.name[:1] }}</span><div><h3>{{ member.name }}</h3><p>{{ member.age }} 岁 · {{ member.relationship }}</p></div></div>
+                    <details class="guest-edit"><summary>编辑 {{ member.name }} 的示例档案</summary><form method="post" action="{{ url_for('guest_experience.page', view='family') }}">{{ form_tokens('member_save', member.id) }}{{ family_fields('member-' ~ loop.index, member) }}<div class="guest-form-actions"><button type="submit" class="btn btn-primary">保存家人修改</button></div></form></details>
+                    <details class="guest-delete"><summary>删除这位示例家人</summary><p>这位家人的行动、日记和用药记录也会清除。</p><form method="post" action="{{ url_for('guest_experience.page', view='family') }}">{{ form_tokens('member_delete', member.id) }}<button type="submit" class="btn btn-outline-danger">确认删除 {{ member.name }}</button></form></details>
+                </article>
+                {% else %}<div class="guest-panel guest-empty"><i class="bi bi-people guest-empty-icon" aria-hidden="true"></i><h3>还没有示例家人</h3><p>从一个虚构昵称开始，添加一位你想体验照护的家人。</p></div>{% endfor %}
+            </div>
+        </section>
+        <section class="guest-panel guest-add-panel" aria-labelledby="member-add-title"><h2 id="member-add-title">添加示例家人</h2><p>请使用虚构昵称。</p><form method="post" action="{{ url_for('guest_experience.page', view='family') }}">{{ form_tokens('member_save') }}{{ family_fields('new-member') }}<div class="guest-form-actions"><button type="submit" class="btn btn-primary">添加示例家人</button></div></form></section>
+    </div>
+
+    {% elif active_view == 'checkin' %}
+    <div class="guest-workspace">
+        <section class="guest-panel" aria-labelledby="checkin-title"><h2 id="checkin-title">试着记下一次行动</h2><p>选择示例家人，勾选想要演示的行动。提交后可体验家属确认。</p>
+            {% if state.members %}
+            <form method="post" action="{{ url_for('guest_experience.page', view='checkin') }}">{{ form_tokens('checkin') }}<div class="guest-form-grid"><div class="guest-field-wide">{{ member_select('checkin-member') }}</div><fieldset class="guest-field-wide"><legend class="form-label">本次演示行动</legend><div class="guest-action-options">{% for value, label in actions %}<div class="guest-choice"><input id="checkin-action-{{ value }}" name="actions" type="checkbox" class="form-check-input" value="{{ value }}"><label for="checkin-action-{{ value }}">{{ label }}</label></div>{% endfor %}</div><p class="guest-field-hint">至少选择一项。重新提交会替换这位家人上一次的演示行动，并等待重新确认。</p></fieldset></div><div class="guest-form-actions"><button class="btn btn-primary" type="submit">记录演示行动</button></div></form>
+            {% else %}<div class="guest-empty"><h3>先添加一位示例家人</h3><p>有了记录对象，才能开始行动打卡。</p><a class="btn btn-outline-primary" href="{{ url_for('guest_experience.page', view='family') }}">添加示例家人</a></div>{% endif %}
+        </section>
+        <aside class="guest-panel guest-side-note"><span class="guest-note-icon"><i class="bi bi-chat-heart" aria-hidden="true"></i></span><h2>确认，让关心有回应</h2><p>打卡表示记录了一次行动；家属确认是另一个步骤。你可以在下面切换到家属视角，体验这两个状态的区别。</p><p class="guest-field-hint">“联系家人”仅记录演示选项，不会拨打电话或发消息。</p></aside>
+    </div>
+    <section id="family-review" class="guest-section guest-review-section" aria-labelledby="review-title"><div class="guest-section-heading"><div><h2 id="review-title">家属视角 · 确认演示记录</h2><p>演示确认只改变当前体验中的状态，不代表真实照护已完成。</p></div></div><div class="guest-member-grid">
+        {% for member in state.members %}
+        {% set checkin = state.checkins.get(member.id) %}
+        <article class="guest-panel guest-review-card"><div class="guest-card-heading"><span class="guest-avatar guest-avatar-small" aria-hidden="true">{{ member.name[:1] }}</span><div><h3>{{ member.name }}</h3><p>{{ member.relationship }}</p></div></div>
+            {% if checkin and checkin.actions %}
+            <ul class="guest-action-list">{% for value, label in actions %}{% if value in checkin.actions %}<li><i class="bi bi-check2" aria-hidden="true"></i> {{ label }}</li>{% endif %}{% endfor %}</ul>
+            {% if checkin.reviewed %}<span class="guest-status guest-status-reviewed"><i class="bi bi-check2-all" aria-hidden="true"></i> 演示已确认</span><p class="guest-field-hint">已完成这次演示的家属确认。</p>
+            {% else %}<span class="guest-status guest-status-recorded">演示已记录 · 待家属确认</span><form method="post" action="{{ url_for('guest_experience.page', view='checkin') }}">{{ form_tokens('review') }}<input type="hidden" name="member_id" value="{{ member.id }}"><button class="btn btn-outline-primary" type="submit">演示确认 {{ member.name }} 的记录</button></form>{% endif %}
+            {% else %}<span class="guest-status">尚无演示行动</span><p>先在上方记录一次行动，就能在这里体验确认。</p>{% endif %}
+        </article>
+        {% else %}<div class="guest-panel guest-empty"><h3>这里会显示家人的行动记录</h3><p>添加示例家人并完成一次打卡后，再来体验确认。</p></div>{% endfor %}
+    </div></section>
+
+    {% elif active_view == 'diary' %}
+    <div class="guest-workspace"><section aria-labelledby="diary-title"><div class="guest-section-heading"><div><h2 id="diary-title">健康日记</h2><p>试着记下示例家人今天的感受。</p></div><span class="guest-count">{{ state.diaries|length }} 条</span></div><div class="guest-record-list">
+        {% for entry in state.diaries %}<article class="guest-panel"><div class="guest-record-heading"><div><p class="guest-record-date">{{ entry.date }} · {{ member_name(entry.member_id) }}</p><h3>{{ entry.symptoms }}</h3></div><span class="guest-status">{{ entry.severity }}</span></div>{% if entry.notes %}<p class="guest-record-text">{{ entry.notes }}</p>{% endif %}<details class="guest-edit"><summary>编辑这条示例日记</summary><form method="post" action="{{ url_for('guest_experience.page', view='diary') }}">{{ form_tokens('diary_save', entry.id) }}{{ diary_fields('diary-' ~ loop.index, entry) }}<div class="guest-form-actions"><button type="submit" class="btn btn-primary">保存日记修改</button></div></form></details><details class="guest-delete"><summary>删除这条示例日记</summary><form method="post" action="{{ url_for('guest_experience.page', view='diary') }}">{{ form_tokens('diary_delete', entry.id) }}<button type="submit" class="btn btn-outline-danger">确认删除日记</button></form></details></article>
+        {% else %}<div class="guest-panel guest-empty"><i class="bi bi-journal-text guest-empty-icon" aria-hidden="true"></i><h3>还没有示例日记</h3><p>写下一条虚构记录，试试保存和修改。</p></div>{% endfor %}
+    </div></section><section class="guest-panel guest-add-panel" aria-labelledby="diary-add-title"><h2 id="diary-add-title">写一条示例日记</h2><p>请填写虚构内容。</p>{% if state.members %}<form method="post" action="{{ url_for('guest_experience.page', view='diary') }}">{{ form_tokens('diary_save') }}{{ diary_fields('new-diary') }}<div class="guest-form-actions"><button type="submit" class="btn btn-primary">保存示例日记</button></div></form>{% else %}<p>先添加一位示例家人，再开始记录。</p><a class="btn btn-outline-primary" href="{{ url_for('guest_experience.page', view='family') }}">添加示例家人</a>{% endif %}</section></div>
+
+    {% elif active_view == 'medications' %}
+    <div class="guest-workspace"><section aria-labelledby="medications-title"><div class="guest-section-heading"><div><h2 id="medications-title">用药记录</h2><p>体验记录药品名称与时间，不会发送服药提醒。</p></div><span class="guest-count">{{ state.medications|length }} 条</span></div><div class="guest-record-list">
+        {% for entry in state.medications %}<article class="guest-panel"><div class="guest-record-heading"><div><p class="guest-record-date">{{ member_name(entry.member_id) }} · 示例记录</p><h3>{{ entry.name }}</h3></div><span class="guest-time"><i class="bi bi-clock" aria-hidden="true"></i> {{ entry.time }}</span></div>{% if entry.note %}<p class="guest-record-text">{{ entry.note }}</p>{% endif %}<details class="guest-edit"><summary>编辑这条示例用药记录</summary><form method="post" action="{{ url_for('guest_experience.page', view='medications') }}">{{ form_tokens('medication_save', entry.id) }}{{ medication_fields('medication-' ~ loop.index, entry) }}<div class="guest-form-actions"><button type="submit" class="btn btn-primary">保存用药记录修改</button></div></form></details><details class="guest-delete"><summary>删除这条示例用药记录</summary><form method="post" action="{{ url_for('guest_experience.page', view='medications') }}">{{ form_tokens('medication_delete', entry.id) }}<button type="submit" class="btn btn-outline-danger">确认删除用药记录</button></form></details></article>
+        {% else %}<div class="guest-panel guest-empty"><i class="bi bi-capsule guest-empty-icon" aria-hidden="true"></i><h3>还没有示例用药记录</h3><p>使用“示例药品 A”等虚构名称体验即可。</p></div>{% endfor %}
+    </div></section><section class="guest-panel guest-add-panel" aria-labelledby="medication-add-title"><h2 id="medication-add-title">添加示例用药记录</h2><p>此处仅体验记录流程，不提供用药建议。</p>{% if state.members %}<form method="post" action="{{ url_for('guest_experience.page', view='medications') }}">{{ form_tokens('medication_save') }}{{ medication_fields('new-medication') }}<div class="guest-form-actions"><button type="submit" class="btn btn-primary">保存示例用药记录</button></div></form>{% else %}<p>先添加一位示例家人，再开始记录。</p><a class="btn btn-outline-primary" href="{{ url_for('guest_experience.page', view='family') }}">添加示例家人</a>{% endif %}</section></div>
+    {% endif %}
+
+    <section class="guest-finish guest-panel" aria-labelledby="finish-title"><div><h2 id="finish-title">想继续使用？</h2><p>可以注册正式账户。示例不会自动存入正式账户，请在注册后自行填写真实资料。</p><a href="{{ url_for('public.register') }}" class="btn btn-outline-primary">注册正式账户</a></div><details class="guest-reset"><summary>清除并重新开始体验</summary><p>当前体验中的资料、家人和记录都会清除，再恢复初始示例。</p><form method="post" action="{{ url_for('guest_experience.page', view=active_view) }}">{{ form_tokens('reset') }}<button class="btn btn-outline-danger" type="submit">确认重置体验</button></form></details></section>
+    {% endif %}
+</div>
+{% endblock %}

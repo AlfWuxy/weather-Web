@@ -1,7 +1,9 @@
 # -*- coding: utf-8 -*-
 """User-facing routes."""
 from flask import Blueprint, abort, current_app
-from flask_login import login_required
+from flask_login import current_user, login_required
+
+from core.guest import is_guest_user
 
 from core.extensions import limiter
 from core.security import rate_limit_key
@@ -128,6 +130,8 @@ def community_announce():
 
 @bp.route('/health-assessment', methods=['GET', 'POST'], endpoint='health_assessment')
 @login_required
+@limiter.limit('10 per hour', methods=['POST'], key_func=rate_limit_key,
+               exempt_when=lambda: not is_guest_user(current_user))
 def health_assessment():
     """健康风险评估"""
     return user_service.health_assessment()

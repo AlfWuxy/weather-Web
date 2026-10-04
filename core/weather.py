@@ -246,10 +246,6 @@ def get_user_location_value():
     """获取用户当前定位（不写入）"""
     default_city = current_app.config.get('DEFAULT_CITY', DEFAULT_CITY_LABEL) or DEFAULT_CITY_LABEL
     if current_user.is_authenticated:
-        if is_guest_user(current_user):
-            from core.guest import build_guest_profile
-            profile = build_guest_profile()
-            return profile.get('community') or default_city
         return current_user.community or default_city
     return default_city
 
@@ -298,10 +294,8 @@ def ensure_user_location_valid():
     normalized = normalize_location_name(location)
     if normalized != location and current_user.is_authenticated:
         if is_guest_user(current_user):
-            from core.guest import build_guest_profile
-            profile = build_guest_profile()
-            profile['community'] = normalized
-            session['guest_profile'] = profile
+            # 游客定位仅在显式提交时写入临时存储。
+            return normalized
         else:
             # 仅修改模型属性，仅在安全场景下显式提交，避免误提交其他修改
             try:

@@ -261,7 +261,7 @@ def ml_prediction():
         form_state = {
             'member_id': str(selected_member.id) if selected_member else '',
             'location': _normalized_location(request.form.get('location')),
-            'age': _coerce_age(request.form.get('age'), default_age),
+            'age': default_age if current_user.role == 'guest' else _coerce_age(request.form.get('age'), default_age),
         }
 
         weather_info, _ = get_weather_with_cache(form_state['location'])

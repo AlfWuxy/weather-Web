@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>游客体验暂不可用 · 宜老天气通</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='vendor/bootstrap/bootstrap.min.css') }}">
+</head>
+<body>
+<main class="container py-5">
+    <h1>游客体验{{ '已结束' if error.status_code == 409 else '暂不可用' }}</h1>
+    <p>{{ error }}</p>
+    <p>这次操作未保存。可以重新开始体验，或稍后重试。</p>
+    <a class="btn btn-primary" href="{{ url_for('public.guest_login', next=url_for('guest_experience.page', view='overview')) }}">重新开始游客体验</a>
+    <a class="btn btn-outline-secondary" href="{{ url_for('public.logout') }}">退出游客模式</a>
+</main>
+</body>
+</html>
