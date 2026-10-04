@@ -10,7 +10,6 @@ from flask import current_app, session, has_app_context, has_request_context, re
 from flask_login import current_user
 
 from core.constants import DEFAULT_CITY_LABEL, WEATHER_CACHE_TTL_MINUTES
-from core.guest import is_guest_user
 from core.extensions import db
 from core.db_models import Community, ForecastCache, WeatherCache, WeatherData
 from core.time_utils import (
@@ -522,10 +521,6 @@ def get_user_location_value():
     """获取用户当前定位（不写入）"""
     default_city = current_app.config.get('DEFAULT_CITY', DEFAULT_CITY_LABEL) or DEFAULT_CITY_LABEL
     if current_user.is_authenticated:
-        if is_guest_user(current_user):
-            from core.guest import build_guest_profile
-            profile = build_guest_profile()
-            return profile.get('community') or default_city
         return current_user.community or default_city
     return default_city
 
@@ -565,19 +560,10 @@ def normalize_location_name(location):
 def ensure_user_location_valid():
     """返回规范化定位；普通请求不在读取路径中隐式修改账号。
 
-    注意：
-    - 游客定位继续保存在当前浏览器会话
-    - 正式账号只通过显式的定位更新入口持久化，避免与账号注销并发后恢复数据
+    游客和正式账号都只通过显式更新入口保存定位，避免读取触发写入。
     """
     location = get_user_location_value()
-    normalized = normalize_location_name(location)
-    if normalized != location and current_user.is_authenticated:
-        if is_guest_user(current_user):
-            from core.guest import build_guest_profile
-            profile = build_guest_profile()
-            profile['community'] = normalized
-            session['guest_profile'] = profile
-    return normalized
+    return normalize_location_name(location)
 
 
 def resolve_weather_city_label(location):

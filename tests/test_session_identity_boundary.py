@@ -58,7 +58,7 @@ def _assert_identity_state_removed(flask_session, *, guest_recreated=False):
     for key in IDENTITY_SCOPED_KEYS:
         assert key not in flask_session
     if guest_recreated:
-        assert flask_session["guest_profile"]["username"] == "游客"
+        assert "guest_profile" not in flask_session
         assert flask_session["guest_id"] != "guest-stale"
         assert "guest_assessment" not in flask_session
     else:

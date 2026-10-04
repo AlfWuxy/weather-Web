@@ -19,7 +19,12 @@ from core.db_models import (
     User,
 )
 from core.extensions import db
-from core.guest import build_guest_profile, get_guest_assessment, is_guest_user
+from core.guest import (
+    get_guest_assessment,
+    guest_experience_error_response,
+    is_guest_user,
+    update_guest_profile,
+)
 from core.notifications import create_notification
 from core.time_utils import ensure_utc_aware, utc_to_local_datetime, utcnow
 from core.usage import create_api_token
@@ -41,6 +46,7 @@ from utils.validators import (
 )
 from services.user.owner_write_guard import OwnerInactiveError, owner_write_guard
 from services.miniprogram_auth import current_privacy_version
+from services.guest_experience import GuestExperienceError, save_guest_assessment
 
 logger = logging.getLogger(__name__)
 
@@ -129,6 +135,10 @@ def health_assessment():
             # 执行风险评估（多路径融合版）
             from services.health_risk_service import HealthRiskService
 
+            # 计算期间资料发生变化时，禁止把旧资料的评估写回新的体验状态。
+            guest_assessment_version = (
+                current_user.experience_version if is_guest_user(current_user) else None
+            )
             user_location = ensure_user_location_valid()
             weather_data, _ = get_weather_with_cache(user_location)
             if not _personal_weather_available(weather_data):
@@ -182,14 +192,19 @@ def health_assessment():
             }
 
             if is_guest_user(current_user):
-                session['guest_assessment'] = {
+                assessment_payload = {
                     'assessment_date': utcnow().isoformat(),
                     'risk_score': risk_result['risk_score'],
                     'risk_level': risk_result['risk_level'],
                     'recommendations': json.dumps(recommendations, ensure_ascii=False),
                     'explain': json_or_none(explain_payload)
                 }
-                flash('健康风险评估完成（游客模式不保存记录）', 'success')
+                save_guest_assessment(
+                    current_user.id,
+                    assessment_payload,
+                    expected_version=guest_assessment_version,
+                )
+                flash('体验评估已完成，结果在本次两小时体验期间临时保留。', 'success')
             else:
                 owner_user_id = int(current_user.id)
                 with owner_write_guard(owner_user_id):
@@ -232,6 +247,8 @@ def health_assessment():
                     db.session.commit()
 
                 flash('健康风险评估完成', 'success')
+        except GuestExperienceError as exc:
+            return guest_experience_error_response(exc)
         except OwnerInactiveError:
             flash('账号已失效，请重新登录。', 'error')
         except Exception:
@@ -242,7 +259,10 @@ def health_assessment():
 
     latest_assessment = None
     if is_guest_user(current_user):
-        latest_assessment = get_guest_assessment()
+        try:
+            latest_assessment = get_guest_assessment()
+        except GuestExperienceError as exc:
+            return guest_experience_error_response(exc)
     else:
         latest_assessment = HealthRiskAssessment.query.filter_by(
             user_id=current_user.id
@@ -276,8 +296,7 @@ def health_assessment():
 def profile():
     """个人设置"""
     if is_guest_user(current_user):
-        flash('游客模式无法修改个人信息，请注册/登录正式账号', 'error')
-        return redirect(url_for('user.user_dashboard'))
+        return redirect(url_for('guest_experience.page', view='profile'))
     if request.method == 'POST':
         form_id = sanitize_input(request.form.get('form_id'), max_length=30) or 'basic'
 
@@ -644,9 +663,10 @@ def update_location():
         flash(f'未识别的地点，已自动调整为 {normalized}', 'error')
 
     if is_guest_user(current_user):
-        profile = build_guest_profile()
-        profile['community'] = normalized
-        session['guest_profile'] = profile
+        try:
+            update_guest_profile({'community': normalized})
+        except GuestExperienceError as exc:
+            return guest_experience_error_response(exc)
     else:
         try:
             owner_user_id = int(current_user.id)

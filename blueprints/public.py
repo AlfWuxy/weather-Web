@@ -675,6 +675,7 @@ def public_risk():
 
 
 @bp.route('/guest', endpoint='guest_login')
+@limiter.limit('10 per hour', key_func=rate_limit_key)
 def guest_login():
     """游客模式入口"""
     raw_next = request.args.get('next')
