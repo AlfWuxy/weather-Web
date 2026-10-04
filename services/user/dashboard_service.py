@@ -451,17 +451,22 @@ def user_dashboard(force_elder=False):
         elder_actions = elder_actions[:3]
 
         emergency_contact = None
+        family_contact = None
         if not is_guest:
             profiles = FamilyMemberProfile.query.join(FamilyMember).filter(
                 FamilyMember.user_id == current_user.id
             ).all()
             for profile in profiles:
                 contact = safe_json_loads(profile.contact_prefs, {})
-                if contact.get('emergency_phone'):
+                if emergency_contact is None and contact.get('emergency_phone'):
                     emergency_contact = {
                         'name': contact.get('emergency_name') or '紧急联系人',
                         'phone': contact.get('emergency_phone')
                     }
+                family_phone = str(contact.get('phone') or '').strip()
+                if family_contact is None and family_phone:
+                    family_contact = {'phone': family_phone}
+                if emergency_contact and family_contact:
                     break
 
         return render_template(
@@ -475,6 +480,7 @@ def user_dashboard(force_elder=False):
             assessment_explain=assessment_explain,
             elder_actions=elder_actions,
             emergency_contact=emergency_contact,
+            family_contact=family_contact,
             heat_result=heat_result,
             heat_risk_label=heat_risk_label,
             heat_actions=heat_actions,

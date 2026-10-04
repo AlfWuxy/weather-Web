@@ -17,6 +17,32 @@
 } %}
 
 <div class="yl-elder-shell">
+    <aside class="yl-elder-sos" aria-label="紧急求助">
+        <div class="yl-elder-sos-actions{% if family_contact and family_contact.phone %} has-family{% endif %}">
+            <button type="button" class="btn btn-danger btn-lg yl-elder-sos-120" data-yl-open-120 aria-haspopup="dialog" aria-controls="yl-elder-120-dialog">
+                <i class="bi bi-telephone-fill" aria-hidden="true"></i> 拨打 120
+            </button>
+            {% if family_contact and family_contact.phone %}
+                <a class="btn btn-outline-secondary btn-lg yl-elder-sos-family" href="tel:{{ family_contact.phone }}">
+                    <i class="bi bi-person-heart" aria-hidden="true"></i> 联系家属
+                </a>
+            {% endif %}
+        </div>
+        {% if is_guest %}
+            <p class="yl-elder-sos-hint">请让身边人联系家属或社区</p>
+            <a class="yl-elder-sos-register" href="{{ url_for('public.register') }}">去注册</a>
+        {% endif %}
+    </aside>
+
+    <dialog id="yl-elder-120-dialog" class="yl-elder-120-dialog" aria-labelledby="yl-elder-120-title">
+        <h2 id="yl-elder-120-title">确认拨打 120？</h2>
+        <p>仅在突发急病、昏迷、胸痛等紧急情况时拨打急救电话。</p>
+        <div class="yl-elder-120-dialog-actions">
+            <a class="btn btn-danger btn-lg yl-elder-120-confirm" href="tel:120">确认拨打 120</a>
+            <button type="button" class="btn btn-outline-secondary btn-lg" data-yl-close-120>取消</button>
+        </div>
+    </dialog>
+
     <section class="yl-elder-hero yl-fade-up" aria-label="今日健康小结">
         <div class="yl-elder-status">
             <span>今天</span>
@@ -137,4 +163,27 @@
 
     <p class="yl-elder-disclaimer">提示只用于日常行动参考，身体明显不舒服时请及时寻求专业帮助。</p>
 </div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+    var dialog = document.getElementById('yl-elder-120-dialog');
+    var openBtn = document.querySelector('[data-yl-open-120]');
+    var closeBtn = document.querySelector('[data-yl-close-120]');
+    if (!dialog || !openBtn) {
+        return;
+    }
+    openBtn.addEventListener('click', function () {
+        if (typeof dialog.showModal === 'function') {
+            dialog.showModal();
+        }
+    });
+    if (closeBtn) {
+        closeBtn.addEventListener('click', function () {
+            dialog.close();
+        });
+    }
+});
+</script>
 {% endblock %}
