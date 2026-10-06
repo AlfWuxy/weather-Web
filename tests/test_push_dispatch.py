@@ -1158,6 +1158,10 @@ def test_dispatch_respects_member_alert_and_privacy_settings(app, db_session, mo
 
         disabled_member = FamilyMember(user_id=user.id, name="关闭预警成员")
         private_member = FamilyMember(user_id=user.id, name="私密成员")
+        from services.miniprogram_auth import current_privacy_version
+        for member in (disabled_member, private_member):
+            member.health_sensitive_consented_at = utcnow()
+            member.health_sensitive_consent_version = current_privacy_version()
         db_session.add_all([disabled_member, private_member])
         db_session.flush()
         db_session.add_all([
@@ -1644,3 +1648,28 @@ def test_threshold_alert_keeps_rolling_dedupe_across_hash_window_boundary(
 
         assert first.id == repeated.id
         assert WeatherAlert.query.count() == 1
+
+
+def test_public_push_ignores_unconsented_legacy_health_profile(app, db_session):
+    from types import SimpleNamespace
+    from core.db_models import User, FamilyMember, FamilyMemberProfile
+    from services.account_service import grant_health_consent
+    from services.push.dispatch import _load_family_member_profile_map, _pair_allows_family_push
+    user = User(username='public-push-without-health', role='user')
+    user.set_password('LongPassword123!')
+    db_session.add(user)
+    db_session.flush()
+    member = FamilyMember(user_id=user.id, name='未填健康档案')
+    db_session.add(member)
+    db_session.flush()
+    db_session.add(FamilyMemberProfile(member_id=member.id, alert_enabled=False, privacy_level='private'))
+    db_session.commit()
+    pair = SimpleNamespace(member_id=member.id)
+    profiles = _load_family_member_profile_map([pair])
+    assert profiles == {}
+    assert _pair_allows_family_push(pair, profiles) is True
+    grant_health_consent(member, user)
+    db_session.commit()
+    profiles = _load_family_member_profile_map([pair])
+    assert member.id in profiles
+    assert _pair_allows_family_push(pair, profiles) is False

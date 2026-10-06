@@ -3,6 +3,7 @@
 {% block title %}慢病风险评估 · 宜老天气通{% endblock %}
 
 {% block content %}
+{% if current_user.role == "guest" %}<div class="alert alert-info" role="note">游客演示样例：健康资料仅保存在本次临时体验中，不进入正式用户档案或实际风险报告。</div>{% endif %}
 <div class="container" style="max-width:1100px;">
     <section class="section-heading yl-fade-up">
         <span class="section-kicker"><i class="bi bi-heart-pulse"></i> 慢病风险评估</span>
@@ -10,6 +11,7 @@
         <p>填写近 7 天血压、血糖和当前状态，结合天气查看今天需要留意的事项。结果只用于日常照护参考。</p>
     </section>
 
+    {% if health_consent %}
     <form method="POST" action="{{ url_for('tools.chronic_risk') }}" class="yl-section mb-4 yl-fade-up yl-fade-up-d1">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 
@@ -48,6 +50,9 @@
             </div>
         </div>
     </form>
+    {% else %}
+    <div class="alert alert-secondary" role="status">填写健康资料前，请先单独同意健康信息处理。<a href="{{ url_for('public.login') if guest_demo else url_for('public.account_security') }}">前往同意设置</a></div>
+    {% endif %}
 
     {% if risk_error %}
     <div class="alert alert-warning yl-fade-up yl-fade-up-d2" role="status">

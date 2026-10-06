@@ -187,7 +187,8 @@ def _build_caregiver_message(pair, alert_kind=None, weather_data=None, member=No
     if location:
         lines.append(f'地点：{location}')
 
-    chronic_diseases = safe_json_loads(getattr(member, 'chronic_diseases', None), []) if member else []
+    from services.account_service import has_health_consent
+    chronic_diseases = safe_json_loads(getattr(member, 'chronic_diseases', None), []) if has_health_consent(member) else []
     lines.extend(_personalized_care_notes(chronic_diseases))
 
     lines.append('说明：这是行动提醒，不提供医疗诊断/治疗建议；如明显不适请及时就医。')

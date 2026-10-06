@@ -96,22 +96,22 @@ def reminder_triggered(reminder, weather):
         return False, None
 
     reasons = []
-    temp = weather.temperature or 0
-    humidity = weather.humidity or 0
-    aqi = weather.aqi or 0
+    temp = weather.temperature
+    humidity = weather.humidity
+    aqi = weather.aqi
 
     high_temp = triggers.get('high_temp')
     low_temp = triggers.get('low_temp')
     high_humidity = triggers.get('high_humidity')
     high_aqi = triggers.get('high_aqi')
 
-    if high_temp is not None and temp >= high_temp:
+    if high_temp is not None and temp is not None and temp >= high_temp:
         reasons.append(f"高温≥{high_temp}°C")
-    if low_temp is not None and temp <= low_temp:
+    if low_temp is not None and temp is not None and temp <= low_temp:
         reasons.append(f"低温≤{low_temp}°C")
-    if high_humidity is not None and humidity >= high_humidity:
+    if high_humidity is not None and humidity is not None and humidity >= high_humidity:
         reasons.append(f"高湿度≥{high_humidity}%")
-    if high_aqi is not None and aqi >= high_aqi:
+    if high_aqi is not None and aqi is not None and aqi >= high_aqi:
         reasons.append(f"AQI≥{high_aqi}")
 
     return bool(reasons), '、'.join(reasons) if reasons else None
@@ -125,28 +125,31 @@ def member_weather_triggered(profile, weather):
     if not thresholds:
         return []
     reasons = []
-    temp = getattr(weather, 'temperature', None) or 0
-    humidity = getattr(weather, 'humidity', None) or 0
-    aqi = getattr(weather, 'aqi', None) or 0
+    temp = getattr(weather, 'temperature', None)
+    humidity = getattr(weather, 'humidity', None)
+    aqi = getattr(weather, 'aqi', None)
 
     high_temp = thresholds.get('high_temp')
     low_temp = thresholds.get('low_temp')
     high_humidity = thresholds.get('high_humidity')
     high_aqi = thresholds.get('high_aqi')
 
-    if high_temp is not None and temp >= high_temp:
+    if high_temp is not None and temp is not None and temp >= high_temp:
         reasons.append(f"高温≥{high_temp}°C")
-    if low_temp is not None and temp <= low_temp:
+    if low_temp is not None and temp is not None and temp <= low_temp:
         reasons.append(f"低温≤{low_temp}°C")
-    if high_humidity is not None and humidity >= high_humidity:
+    if high_humidity is not None and humidity is not None and humidity >= high_humidity:
         reasons.append(f"高湿度≥{high_humidity}%")
-    if high_aqi is not None and aqi >= high_aqi:
+    if high_aqi is not None and aqi is not None and aqi >= high_aqi:
         reasons.append(f"AQI≥{high_aqi}")
     return reasons
 
 
 def compute_member_risk(member, profile):
     """估算成员健康风险"""
+    from services.account_service import has_health_consent
+    consented = has_health_consent(member)
+    profile = profile if consented else None
     score = 15
     reasons = []
 
@@ -163,7 +166,7 @@ def compute_member_risk(member, profile):
     elif age >= 50:
         score += 10
 
-    diseases = safe_json_loads(member.chronic_diseases, [])
+    diseases = safe_json_loads(member.chronic_diseases, []) if consented else []
     if diseases:
         score += min(30, 8 * len(diseases))
         reasons.append('慢性病')
@@ -229,34 +232,50 @@ def compute_member_risk(member, profile):
         level = 'low'
         label = '低风险'
 
+    completion = compute_profile_completion(member, profile)
+    unknown = completion['percent'] < 60 or bool(completion['critical_missing'])
+    if unknown:
+        reasons.append('资料不足，需补充并回访')
     return {
-        'score': score,
-        'level': level,
-        'label': label,
+        'score': None if unknown else score,
+        'observed_score': score,
+        'status': 'unknown' if unknown else 'complete',
+        'completeness': completion,
+        'requires_followup': unknown,
+        'followup_priority': ('high' if score >= 70 else 'medium') if unknown else level,
+        'level': 'unknown' if unknown else level,
+        'label': '风险未知' if unknown else label,
         'reasons': list(dict.fromkeys(reasons))
     }
 
 
 def compute_profile_completion(member, profile):
     """计算档案完善度"""
-    fields = []
-    fields.append(bool(member.relation))
-    fields.append(bool(member.age))
-    fields.append(bool(member.gender))
-    fields.append(bool(safe_json_loads(member.chronic_diseases, [])))
-    if profile:
-        fields.append(bool(profile.allergies))
-        fields.append(bool(profile.medications))
-        metrics = safe_json_loads(profile.metrics, {})
-        fields.append(bool(metrics))
-        fields.append(bool(safe_json_loads(profile.risk_tags, [])))
-        fields.append(bool(safe_json_loads(profile.weather_thresholds, {})))
-        contact = safe_json_loads(profile.contact_prefs, {})
-        fields.append(bool(contact))
-    total = len(fields)
-    filled = sum(1 for f in fields if f)
-    percent = int(round((filled / total) * 100)) if total else 0
-    return {'filled': filled, 'total': total, 'percent': percent}
+    # 分母固定；明确填写“无”（空列表）与从未回答（null）分开。
+    from services.account_service import has_health_consent
+    consented = has_health_consent(member)
+    profile = profile if consented else None
+    age = getattr(member, 'age', None)
+    diseases = safe_json_loads(getattr(member, 'chronic_diseases', None), None) if consented else None
+    fields = {
+        'relation': bool(getattr(member, 'relation', None)),
+        'age': isinstance(age, (int, float)) and not isinstance(age, bool) and 1 <= age <= 150,
+        'gender': getattr(member, 'gender', None) in ('男', '女', '男性', '女性'),
+        'chronic_diseases': isinstance(diseases, list),
+    }
+    for name in ('allergies', 'medications', 'metrics', 'risk_tags', 'weather_thresholds', 'contact_prefs'):
+        raw = getattr(profile, name, None) if profile else None
+        fields[name] = raw is not None and raw != ''
+    filled = sum(fields.values())
+    missing = [name for name, present in fields.items() if not present]
+    return {
+        'filled': filled, 'total': len(fields), 'percent': int(round(filled / len(fields) * 100)),
+        'missing_fields': missing,
+        'critical_missing': [name for name in ('age', 'chronic_diseases') if not fields[name]],
+        'threshold': 60,
+        'health_consent': consented,
+    }
+
 
 
 def profile_to_context(profile):

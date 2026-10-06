@@ -775,8 +775,13 @@ def _load_family_member_profile_map(pairs: List[Pair]) -> Dict[int, FamilyMember
     member_ids = sorted({p.member_id for p in pairs if getattr(p, "member_id", None)})
     if not member_ids:
         return {}
-    rows = FamilyMemberProfile.query.filter(
-        FamilyMemberProfile.member_id.in_(member_ids)
+    from core.db_models import FamilyMember
+    from services.miniprogram_auth import current_privacy_version
+    # 未同意的遗留画像不进入推送决策；县级公开预警仍由第三方传输同意控制。
+    rows = FamilyMemberProfile.query.join(FamilyMember, FamilyMember.id == FamilyMemberProfile.member_id).filter(
+        FamilyMemberProfile.member_id.in_(member_ids),
+        FamilyMember.health_sensitive_consented_at.isnot(None),
+        FamilyMember.health_sensitive_consent_version == current_privacy_version(),
     ).all()
     return {profile.member_id: profile for profile in rows}
 

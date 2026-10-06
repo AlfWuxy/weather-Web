@@ -39,6 +39,8 @@ def _seed_health_assessment_user(db_session):
         risk_level='中'
     ))
     user = User.query.filter_by(username='testuser').first()
+    from services.account_service import grant_health_consent
+    grant_health_consent(user, user)
     user.age = 72
     user.gender = '男'
     user.community = '测试社区'

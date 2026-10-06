@@ -567,8 +567,10 @@ def test_elder_delete_rechecks_health_consent_and_scope_after_owner_lock(
 
     @contextmanager
     def paused_owner_lock(_user_id):
-        entered_owner_lock.set()
-        assert continue_delete.wait(timeout=5)
+        from flask import request
+        if request.endpoint == 'mp_api.elders_delete':
+            entered_owner_lock.set()
+            assert continue_delete.wait(timeout=5)
         yield
 
     monkeypatch.setattr(mp_api, "push_owner_lock", paused_owner_lock)

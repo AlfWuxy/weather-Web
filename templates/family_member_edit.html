@@ -279,7 +279,7 @@
                     <button class="btn btn-primary">{{ submit_label or '保存' }}</button>
                     <a class="btn btn-outline-secondary" href="{{ url_for('health.family_members') }}">取消</a>
                 </div>
-            </form>
+            <div class="form-check my-3"><input type="checkbox" name="member_health_consent" id="member_health_consent" class="form-check-input"><label for="member_health_consent">我已向该成员本人（或法定监护人）说明处理目的，并获得其对健康信息的单独授权。<a href="{{ url_for('public.privacy') }}">健康信息处理说明</a></label></div></form>
         </div>
     </div>
 </div>

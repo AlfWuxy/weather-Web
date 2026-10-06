@@ -73,9 +73,10 @@
                 <label class="form-label">风险等级</label>
                 <select name="risk_level" class="form-select">
                     <option value="">全部</option>
-                    <option value="high" {% if risk_filter == 'high' %}selected{% endif %}>高风险</option>
-                    <option value="medium" {% if risk_filter == 'medium' %}selected{% endif %}>中等</option>
-                    <option value="low" {% if risk_filter == 'low' %}selected{% endif %}>低风险</option>
+                    <option value="unknown" {% if risk_filter == 'unknown' %}selected{% endif %}>风险未知 · 待回访</option>
+                    <option value="high" {% if risk_filter == 'high' %}selected{% endif %}>高关注</option>
+                    <option value="medium" {% if risk_filter == 'medium' %}selected{% endif %}>中关注</option>
+                    <option value="low" {% if risk_filter == 'low' %}selected{% endif %}>常规关注</option>
                 </select>
             </div>
             <div class="col-md-2 d-grid">
@@ -94,6 +95,7 @@
     {% if family_members %}
         <div class="row g-3 yl-fade-up yl-fade-up-d2">
             {% for m in family_members %}
+            {% set attention_label = {'high': '高关注', 'medium': '中关注', 'low': '常规关注', 'unknown': '风险未知 · 待回访'}.get(m.risk_level, '待完善') %}
             <div class="col-md-6 col-xl-4">
                 <div class="card member-card risk-{{ m.risk_level or 'low' }} h-100">
                     <div class="card-body">
@@ -105,8 +107,9 @@
                                     {{ m.age }}岁 · {{ m.gender or '—' }} · 与我的关系:{{ m.relation or '—' }}
                                 </div>
                             </div>
-                            <span class="risk-badge risk-{{ m.risk_level or 'low' }} badge">{{ m.risk_label or '低风险' }}</span>
-                            {{ metric_info('member_risk_score', {'成员': m.name, '本次得分': m.risk.score if m.risk else '--', '原因': m.risk.reasons|join('、') if m.risk and m.risk.reasons else '暂无加分原因'}) }}
+                            <span class="risk-badge risk-{{ m.risk_level or 'low' }} badge">{{ attention_label }}</span>
+                            {% if m.risk.requires_followup %}<span class="badge bg-warning text-dark">回访补充资料 · 至少中关注</span>{% endif %}
+                            {{ metric_info('member_risk_score', {'成员': m.name, '本次得分': m.risk.score if m.risk else '--', '原因': m.risk.reasons|join('、') if m.risk and m.risk.reasons else '资料不足或暂无已知因素'}) }}
                         </div>
 
                         <div class="d-flex flex-wrap gap-2 mb-3" style="font-size:.85rem;">

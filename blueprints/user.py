@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """User-facing routes."""
-from flask import Blueprint, abort, current_app, redirect, url_for
+from flask import Blueprint, abort, current_app, redirect, request, url_for
 from flask_login import current_user, login_required
 
 from core.extensions import limiter
@@ -19,9 +19,11 @@ def user_dashboard():
 
 
 @bp.route('/elder-mode', endpoint='elder_dashboard')
-@login_required
 def elder_dashboard():
     """极简老人模式入口"""
+    if not current_user.is_authenticated:
+        from services.public_service import render_public_risk_page
+        return render_public_risk_page(request.args.get('location'), elder_mode=True)
     return user_service.elder_dashboard()
 
 
@@ -179,6 +181,7 @@ def heat_exposure_gis_daily():
 
 @bp.route('/profile', methods=['GET', 'POST'], endpoint='profile')
 @login_required
+@limiter.limit('10 per hour', methods=['POST'], key_func=rate_limit_key)
 def profile():
     """个人设置"""
     return user_service.profile()

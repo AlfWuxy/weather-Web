@@ -352,16 +352,15 @@ def test_guest_profile_age_and_diseases_reach_tools_and_prediction_apis(experien
     monkeypatch.setattr('services.chronic_risk_service.get_chronic_service', lambda: predictor)
     response = client.get('/ml-prediction')
     assert response.status_code == 200
-    assert any(item.get('name') == 'age' and item.get('value') == '77'
-               for item in _Page(response.get_data(as_text=True)).inputs)
+    assert 'RF 已退出生产预测' in response.get_data(as_text=True)
     csrf = _tokens(client, '/experience/profile', 'profile')['csrf_token']
     assert client.post('/ml-prediction', data={'csrf_token': csrf, 'location': '都昌', 'age': '18'}).status_code == 200
     assert client.post('/api/v1/ml/predict', json={'age': 18, 'gender': '男'},
-                       headers={'X-CSRF-Token': csrf}).status_code == 200
+                       headers={'X-CSRF-Token': csrf}).status_code == 410
     chronic = client.post('/api/v1/chronic/individual', json={'age': 18, 'gender': '男', 'chronic_diseases': ['糖尿病']},
                           headers={'X-CSRF-Token': csrf})
     assert chronic.status_code == 200 and chronic.json['success'] is True
-    assert len(seen_ml) == 2 and all(item['age'] == 77 and item['gender'] == '女' for item in seen_ml)
+    assert seen_ml == []
     assert seen_chronic == [{'age': 77, 'gender': '女', 'chronic_diseases': ['高血压']}]
 
 

@@ -229,6 +229,9 @@ def test_profile_delete_first_blocks_all_profile_private_writes(
     from services.user.owner_write_guard import owner_write_guard as real_guard
 
     owner = _new_owner(db_session, f"profile-delete-first-{path.rsplit('/', 1)[-1]}")
+    from services.account_service import grant_health_consent
+    grant_health_consent(owner, owner)
+    db_session.commit()
     owner_id = int(owner.id)
     original_password_hash = owner.password_hash
     app.config["FEATURE_NOTIFICATIONS"] = False

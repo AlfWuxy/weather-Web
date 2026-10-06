@@ -307,8 +307,12 @@ class ChronicRiskService:
         - risks: 各病种风险
         - recommendations: 个性化建议
         """
+        from services.health_input_policy import health_input_states, health_input_quality, unknown_health_result
+        quality = health_input_quality(health_input_states(user_info, weather_data))
+        if quality['requires_followup']:
+            return unknown_health_result(quality)
         from services.dlnm_risk_service import get_dlnm_service
-        
+
         dlnm = get_dlnm_service()
         
         # 安全获取和转换年龄
@@ -466,6 +470,9 @@ class ChronicRiskService:
         overall_level = self._get_score_risk_level(overall_score)
         
         return {
+            'status': 'complete',
+            'data_quality': quality,
+            'input_states': quality['input_states'],
             'user_profile': {
                 'age': age,
                 'age_group': self._get_age_group_name(age),
@@ -688,11 +695,18 @@ class ChronicRiskService:
         - stratified_risks: 分层风险
         - high_risk_groups: 高危人群识别
         """
-        from services.dlnm_risk_service import get_dlnm_service
-        
-        dlnm = get_dlnm_service()
-        temperature = weather_data.get('temperature', 20)
-        
+        from services.health_input_policy import health_input_states, health_input_quality, unknown_health_result
+        states = health_input_states({'age': 65, 'chronic_diseases': []}, weather_data)
+        # 人群分层年龄和病种是定义，不冒充实测人口档案。
+        states = {key: state for key, state in states.items() if key not in ('age', 'chronic_diseases')}
+        quality = health_input_quality(states)
+        if quality['requires_followup']:
+            result = unknown_health_result(quality)
+            result.update(stratified_risks={}, high_risk_groups=[], overall_summary={
+                'highest_risk_group': None, 'highest_rr': None, 'high_risk_count': None})
+            return result
+        temperature = weather_data['temperature']
+
         # 定义人群分层
         strata = {
             'elderly_respiratory': {

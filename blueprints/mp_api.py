@@ -599,6 +599,24 @@ def _resolve_owned_member(*, payload=None, required=False):
     return pair, member
 
 
+def _member_health_consent_error(member):
+    from services.account_service import has_health_consent
+    if member is not None and not has_health_consent(member):
+        return _error('member_health_consent_required', '请先在家人资料中确认该成员的独立健康授权。', 428)
+    return None
+
+
+def _consented_health_query(model):
+    # 不指定成员时也只能返回本人及已有独立同意的成员记录。
+    member_ids = db.session.query(FamilyMember.id).filter(
+        FamilyMember.user_id == g.api_user_id,
+        FamilyMember.health_sensitive_consented_at.isnot(None),
+        FamilyMember.health_sensitive_consent_version == current_privacy_version(),
+    )
+    return model.query.filter(model.user_id == g.api_user_id, db.or_(
+        model.member_id.is_(None), model.member_id.in_(member_ids)))
+
+
 def _adult_profile_incomplete(member) -> bool:
     """历史档案继续可见，但健康功能只接受 18 至 120 岁成年人。"""
     if member is None or isinstance(getattr(member, "age", None), bool):
@@ -958,12 +976,18 @@ def health_consent_post():
 @require_api_token
 @require_api_scope("miniprogram:sensitive")
 def health_consent_delete():
-    """撤回只清空回执并停止后续访问，已有私密资料继续保留。"""
+    """撤回同意与健康资料清理在同一 owner 锁内完成。"""
+    owner_user_id = int(g.api_user_id)
+    db.session.rollback()
     try:
-        user = g.api_user
-        user.health_sensitive_consent_version = None
-        user.health_sensitive_consented_at = None
-        db.session.commit()
+        with push_owner_lock(owner_user_id):
+            authorization_error = _reauthorize_locked_api_user()
+            if authorization_error is not None:
+                return authorization_error
+            user = g.api_user
+            from services.account_service import withdraw_health
+            withdraw_health(user)
+            db.session.commit()
     except Exception:
         db.session.rollback()
         current_app.logger.exception("健康敏感信息同意撤回失败")
@@ -1157,6 +1181,8 @@ def me_patch():
 def _anonymize_miniprogram_owner(user):
     """在 owner 文件锁与数据库写事务内清理账号数据。"""
     user_id = int(user.id)
+    from services.account_service import prepare_account_deletion
+    prepare_account_deletion(user)
     user.deleted_at = utcnow()
     db.session.flush()
 
@@ -1388,6 +1414,7 @@ def me_delete():
 @require_api_scope("miniprogram:sensitive")
 @require_health_sensitive_consent
 def elders_list():
+    from services.account_service import has_health_consent
     page = max(1, min(request.args.get("page", 1, type=int), 10000))
     page_size = min(50, max(1, setting("PAIR_LIST_PAGE_SIZE", 20)))
     query = Pair.query.filter_by(caregiver_id=g.api_user_id, status="active")
@@ -1462,7 +1489,7 @@ def elders_list():
                         "relation": member.relation,
                         "age": member.age,
                         "gender": member.gender,
-                        "chronic_diseases": safe_json_loads(member.chronic_diseases, []),
+                        "chronic_diseases": safe_json_loads(member.chronic_diseases, []) if has_health_consent(member) else None,
                     }
                     if member
                     else None
@@ -1529,6 +1556,9 @@ def elders_create():
 
     location_query = CANONICAL_LOCATION_NAME
 
+    if chronic and payload.get("member_health_consent") is not True:
+        return jsonify({"success": False, "error": "member_health_consent_required"}), 403
+
     try:
         member = FamilyMember(
             user_id=g.api_user_id,
@@ -1536,15 +1566,18 @@ def elders_create():
             relation=relation,
             age=age,
             gender=gender,
-            chronic_diseases=(json.dumps(chronic, ensure_ascii=False) if chronic else None),
+            chronic_diseases=(json.dumps(chronic, ensure_ascii=False) if payload.get("member_health_consent") is True else None),
             created_at=utcnow(),
         )
         db.session.add(member)
         db.session.flush()  # 获取 member.id，但不提交
+        from services.account_service import grant_health_consent
+        if payload.get("member_health_consent") is True:
+            grant_health_consent(member, db.session.get(User, g.api_user_id))
 
         profile = FamilyMemberProfile.query.filter_by(member_id=member.id).first()
         if not profile:
-            profile = FamilyMemberProfile(member_id=member.id, alert_enabled=True)
+            profile = FamilyMemberProfile(member_id=member.id, alert_enabled=payload.get("member_health_consent") is True)
             db.session.add(profile)
 
         pair = _create_pair_record(
@@ -1596,6 +1629,12 @@ def elders_patch(pair_id: int):
         payload = _json_payload()
         member = FamilyMember.query.filter_by(id=pair.member_id, user_id=g.api_user_id).first()
         if member:
+            from services.account_service import has_health_consent, grant_health_consent
+            if "chronic_diseases" in payload and not has_health_consent(member) and payload.get("member_health_consent") is not True:
+                db.session.rollback()
+                return _error("member_health_consent_required", "请先确认成员的独立健康授权。", 403)
+            if payload.get("member_health_consent") is True:
+                grant_health_consent(member, g.api_user)
             candidate_age = payload.get("age") if "age" in payload else member.age
             validated_age = _adult_age_value(candidate_age)
             if "name" in payload:
@@ -1613,7 +1652,7 @@ def elders_patch(pair_id: int):
                     max_items=20,
                     item_max_length=50,
                 )
-                member.chronic_diseases = json.dumps(chronic, ensure_ascii=False) if chronic else None
+                member.chronic_diseases = json.dumps(chronic, ensure_ascii=False)
         db.session.commit()
     except ValueError as exc:
         db.session.rollback()
@@ -1687,6 +1726,9 @@ def health_diary():
     if request.method == "GET":
         try:
             _pair, member = _resolve_owned_member()
+            consent_error = _member_health_consent_error(member)
+            if consent_error is not None:
+                return consent_error
             limit = _int_value(
                 request.args.get("limit", 20),
                 minimum=1,
@@ -1698,7 +1740,7 @@ def health_diary():
             return _unsupported_pair_error()
         except (ValueError, LookupError) as exc:
             return _error(str(exc), "查询条件无效或资源不属于当前用户。", 400)
-        query = HealthDiary.query.filter_by(user_id=g.api_user_id)
+        query = _consented_health_query(HealthDiary)
         if member is not None:
             query = query.filter_by(member_id=member.id)
         records = query.order_by(HealthDiary.entry_date.desc(), HealthDiary.id.desc()).limit(limit).all()
@@ -1707,6 +1749,9 @@ def health_diary():
     try:
         payload = _json_payload()
         pair, member = _resolve_owned_member(payload=payload)
+        consent_error = _member_health_consent_error(member)
+        if consent_error is not None:
+            return consent_error
         if member is not None:
             adult_error = _adult_profile_required_error(
                 member,
@@ -1766,6 +1811,9 @@ def medications():
     if request.method == "GET":
         try:
             _pair, member = _resolve_owned_member()
+            consent_error = _member_health_consent_error(member)
+            if consent_error is not None:
+                return consent_error
             limit = _int_value(
                 request.args.get("limit", 50),
                 minimum=1,
@@ -1777,7 +1825,7 @@ def medications():
             return _unsupported_pair_error()
         except (ValueError, LookupError) as exc:
             return _error(str(exc), "查询条件无效或资源不属于当前用户。", 400)
-        query = MedicationReminder.query.filter_by(user_id=g.api_user_id)
+        query = _consented_health_query(MedicationReminder)
         if member is not None:
             query = query.filter_by(member_id=member.id)
         items = query.order_by(MedicationReminder.id.desc()).limit(limit).all()
@@ -1804,6 +1852,9 @@ def medications():
     try:
         payload = _json_payload()
         pair, member = _resolve_owned_member(payload=payload)
+        consent_error = _member_health_consent_error(member)
+        if consent_error is not None:
+            return consent_error
         if member is not None:
             adult_error = _adult_profile_required_error(
                 member,
@@ -1880,6 +1931,9 @@ def health_assessment():
     try:
         payload = _json_payload() if request.method == "POST" else {}
         pair, member = _resolve_owned_member(payload=payload)
+        consent_error = _member_health_consent_error(member)
+        if consent_error is not None:
+            return consent_error
         if request.method == "POST" and member is not None:
             adult_error = _adult_profile_required_error(
                 member,
@@ -1894,7 +1948,7 @@ def health_assessment():
     except ValueError as exc:
         return _error(str(exc), "评估对象无效。", 400)
 
-    query = HealthRiskAssessment.query.filter_by(user_id=g.api_user_id)
+    query = _consented_health_query(HealthRiskAssessment)
     if member is not None:
         query = query.filter_by(member_id=member.id)
     elif request.method == "GET" and (request.args.get("pair_id") or request.args.get("member_id")):
@@ -1935,7 +1989,7 @@ def health_assessment():
             )
         user = db.session.get(User, g.api_user_id)
         profile = {
-            "age": member.age if member and member.age is not None else (user.age or 45),
+            "age": member.age if member else user.age,
             "gender": member.gender if member else (user.gender or "未知"),
             "community": CANONICAL_LOCATION_NAME,
             "has_chronic_disease": bool(
@@ -1943,7 +1997,7 @@ def health_assessment():
             ),
             "chronic_diseases": safe_json_loads(
                 member.chronic_diseases if member else user.chronic_diseases,
-                [],
+                None,
             ),
         }
         from services.health_risk_service import HealthRiskService
@@ -1955,6 +2009,9 @@ def health_assessment():
         )
         explain = {
             "snapshot_id": snapshot.get("snapshot_id"),
+            "data_quality": result.get("data_quality") or {},
+            "requires_followup": result.get("requires_followup", False),
+            "followup_priority": result.get("followup_priority"),
             "screening": screening,
             "explain": result.get("explain") or {},
             "risk_interval": result.get("risk_interval") or {},

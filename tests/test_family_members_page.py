@@ -35,6 +35,9 @@ def test_family_members_page_uses_new_route_and_renders_member_alerts(client, db
         gender='女性',
         chronic_diseases=json.dumps(['高血压'], ensure_ascii=False),
     )
+    from services.miniprogram_auth import current_privacy_version
+    member.health_sensitive_consented_at = utcnow()
+    member.health_sensitive_consent_version = current_privacy_version()
     db_session.add(member)
     db_session.flush()
     db_session.add(FamilyMemberProfile(
@@ -83,6 +86,9 @@ def test_family_members_page_does_not_trigger_alerts_from_mock_weather(client, d
 
     user = _create_user(db_session, username='family_mock_weather_user')
     member = FamilyMember(user_id=user.id, name='父亲', relation='父亲', age=75, gender='男性')
+    from services.miniprogram_auth import current_privacy_version
+    member.health_sensitive_consented_at = utcnow()
+    member.health_sensitive_consent_version = current_privacy_version()
     db_session.add(member)
     db_session.flush()
     db_session.add(FamilyMemberProfile(
@@ -124,6 +130,7 @@ def test_family_member_new_page_supports_post_create(client, db_session):
             'age': '73',
             'gender': '男性',
             'chronic_diseases': ['糖尿病'],
+            'member_health_consent': 'on',
             'csrf_token': 'test-csrf-token',
         },
         follow_redirects=True,
@@ -158,6 +165,9 @@ def test_family_member_edit_prefills_existing_chronic_diseases(client, db_sessio
         gender='女性',
         chronic_diseases=json.dumps(['高血压'], ensure_ascii=False),
     )
+    from services.miniprogram_auth import current_privacy_version
+    member.health_sensitive_consented_at = utcnow()
+    member.health_sensitive_consent_version = current_privacy_version()
     db_session.add(member)
     db_session.commit()
     _login_as(client, user.id)

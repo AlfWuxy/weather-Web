@@ -51,6 +51,7 @@ from services.guest_experience import GuestExperienceError, save_guest_assessmen
 logger = logging.getLogger(__name__)
 
 _ACADEMIC_MAPPING_FIELDS = (
+    'data_quality',
     'risk_interval',
     'risk_probabilities',
     'cap_semantics',
@@ -114,7 +115,11 @@ def _safe_referrer_or_dashboard():
 
 def health_assessment():
     """健康风险评估"""
+    from services.account_service import has_health_consent
     if request.method == 'POST':
+        if not is_guest_user(current_user) and not has_health_consent(current_user):
+            flash('填写健康筛查前，请先登录正式账号并单独同意健康信息处理。', 'warning')
+            return redirect(url_for('public.account_security') if not is_guest_user(current_user) else url_for('public.login'))
         screening_options = {
             'outdoor_exposure': {'low', 'medium', 'high'},
             'symptom_level': {'none', 'mild', 'moderate', 'severe'},
@@ -152,11 +157,11 @@ def health_assessment():
 
             # 构建用户健康档案
             user_health_profile = {
-                'age': current_user.age or 30,
+                'age': current_user.age,
                 'gender': current_user.gender or '未知',
                 'community': current_user.community or '',
-                'has_chronic_disease': current_user.has_chronic_disease or False,
-                'chronic_diseases': safe_json_loads(current_user.chronic_diseases, [])
+                'has_chronic_disease': current_user.has_chronic_disease if (is_guest_user(current_user) or has_health_consent(current_user)) else None,
+                'chronic_diseases': safe_json_loads(current_user.chronic_diseases, None) if (is_guest_user(current_user) or has_health_consent(current_user)) else None
             }
 
             risk_result = health_service.assess_personal_weather_health_risk(
@@ -173,6 +178,9 @@ def health_assessment():
                 'rule_version': risk_result.get('rule_version'),
                 'triggered_rules': risk_result.get('triggered_rules', []),
                 'academic_profile': {
+                    'data_quality': risk_result.get('data_quality', {}),
+                    'requires_followup': risk_result.get('requires_followup', False),
+                    'followup_priority': risk_result.get('followup_priority'),
                     'model_version': risk_result.get('model_version'),
                     'risk_interval': risk_result.get('risk_interval', {}),
                     'risk_probabilities': risk_result.get('risk_probabilities', {}),
@@ -207,7 +215,11 @@ def health_assessment():
                 flash('体验评估已完成，结果在本次两小时体验期间临时保留。', 'success')
             else:
                 owner_user_id = int(current_user.id)
-                with owner_write_guard(owner_user_id):
+                with owner_write_guard(owner_user_id) as locked_user:
+                    if not has_health_consent(locked_user):
+                        db.session.rollback()
+                        flash('健康同意已撤回，本次评估未保存。', 'warning')
+                        return redirect(url_for('public.account_security'))
                     # 评估、通知与账号状态在同一受保护事务内落库。
                     assessment = HealthRiskAssessment(
                         user_id=owner_user_id,
@@ -263,7 +275,7 @@ def health_assessment():
             latest_assessment = get_guest_assessment()
         except GuestExperienceError as exc:
             return guest_experience_error_response(exc)
-    else:
+    elif has_health_consent(current_user):
         latest_assessment = HealthRiskAssessment.query.filter_by(
             user_id=current_user.id
         ).order_by(HealthRiskAssessment.assessment_date.desc()).first()
@@ -286,6 +298,8 @@ def health_assessment():
 
     return render_template(
         'health_assessment.html',
+        health_consent=is_guest_user(current_user) or has_health_consent(current_user),
+        health_consent_url=url_for('public.login') if is_guest_user(current_user) else url_for('public.account_security'),
         assessment=latest_assessment,
         assessment_explain=explain_data,
         assessment_disease_risks=disease_risks_data,
@@ -387,30 +401,9 @@ def profile():
                             flash('当前密码不正确', 'error')
                             return redirect(url_for('user.profile'))
                         locked_user.set_password(result)
-                        locked_user.auth_version = int(locked_user.auth_version) + 1
-                        now = utcnow()
-                        ApiToken.query.filter(
-                            ApiToken.user_id == owner_user_id,
-                            ApiToken.revoked_at.is_(None),
-                        ).update(
-                            {ApiToken.revoked_at: now},
-                            synchronize_session=False,
-                        )
-                        MiniProgramSession.query.filter(
-                            MiniProgramSession.user_id == owner_user_id,
-                            MiniProgramSession.revoked_at.is_(None),
-                        ).update(
-                            {MiniProgramSession.revoked_at: now},
-                            synchronize_session=False,
-                        )
-                        MiniProgramLinkChallenge.query.filter(
-                            MiniProgramLinkChallenge.user_id == owner_user_id,
-                            MiniProgramLinkChallenge.consumed_at.is_(None),
-                            MiniProgramLinkChallenge.revoked_at.is_(None),
-                        ).update(
-                            {MiniProgramLinkChallenge.revoked_at: now},
-                            synchronize_session=False,
-                        )
+                        from services.account_service import revoke_tokens, audit
+                        revoke_tokens(locked_user)
+                        audit(locked_user, 'password_changed', locked_user)
                         db.session.commit()
                         # 当前浏览器已再次验证密码，签发新版本会话并按需轮换记住登录。
                         login_user(
@@ -561,13 +554,24 @@ def profile():
                         flash('推送传输说明已更新，请刷新页面后重新确认。', 'error')
                         return redirect(url_for('user.profile'))
 
+                from services.account_service import has_health_consent, grant_health_consent
+                if request.form.get('health_consent') == 'on':
+                    grant_health_consent(locked_user, locked_user)
+                if (request.form.get('has_chronic_disease') == 'on' or request.form.getlist('chronic_diseases')) and not has_health_consent(locked_user):
+                    db.session.rollback()
+                    flash('保存健康信息前需单独同意', 'error')
+                    return redirect(url_for('user.profile'))
+                if (locked_user.email or '').lower() != (email or '').lower():
+                    from core.db_models import AccountEmailToken
+                    locked_user.email_verified_at = None
+                    AccountEmailToken.query.filter_by(user_id=locked_user.id, used_at=None).update({'used_at': utcnow()})
                 locked_user.age = age
                 locked_user.gender = gender
                 locked_user.community = community
                 locked_user.email = email
 
                 has_chronic = request.form.get('has_chronic_disease') == 'on'
-                locked_user.has_chronic_disease = has_chronic
+                locked_user.has_chronic_disease = has_chronic if has_health_consent(locked_user) else None
                 if has_chronic:
                     chronic_diseases = request.form.getlist('chronic_diseases')
                     chronic_diseases = [
@@ -577,7 +581,7 @@ def profile():
                     ]
                     locked_user.chronic_diseases = json.dumps(chronic_diseases)
                 else:
-                    locked_user.chronic_diseases = None
+                    locked_user.chronic_diseases = '[]' if has_health_consent(locked_user) else None
 
                 if wxpusher_feature_enabled:
                     if wx_uid_field_present:
@@ -612,8 +616,9 @@ def profile():
         flash('个人信息更新成功', 'success')
         return redirect(url_for('user.profile'))
 
+    from services.account_service import has_health_consent
     communities = Community.query.all()
-    chronic_diseases_list = safe_json_loads(current_user.chronic_diseases, [])
+    chronic_diseases_list = safe_json_loads(current_user.chronic_diseases, []) if has_health_consent(current_user) else []
 
     last_api_token_plain = session.pop('last_api_token_plain', None)
     api_tokens = ApiToken.query.filter_by(user_id=current_user.id).order_by(ApiToken.created_at.desc()).all()
@@ -627,6 +632,7 @@ def profile():
     required_wxpusher_version = current_privacy_version()
     return render_template(
         'profile.html',
+        health_consent=has_health_consent(current_user),
         communities=communities,
         chronic_diseases_list=chronic_diseases_list,
         created_at_local=utc_to_local_datetime(current_user.created_at),

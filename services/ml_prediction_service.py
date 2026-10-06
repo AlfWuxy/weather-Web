@@ -41,7 +41,8 @@ def _is_sklearn_compatible(runtime_version, expected_version):
 class MLPredictionService:
     """基于机器学习模型的多分类预测服务"""
     
-    def __init__(self):
+    def __init__(self, *, research_mode=False):
+        self.research_mode = bool(research_mode)
         self.model = None
         self.scaler = None
         self.label_encoder = None
@@ -73,7 +74,8 @@ class MLPredictionService:
         }
         
         # 加载模型
-        self._load_model()
+        if self.research_mode:
+            self._load_model()
     
     def _load_model(self):
         """加载训练好的模型"""
@@ -198,6 +200,9 @@ class MLPredictionService:
         返回:
         - 多分类预测结果
         """
+        if not getattr(self, 'research_mode', False):
+            return {'success': False, 'status': 'research_only', 'production_enabled': False,
+                    'error': 'RF 尚无时间外验证，已退出生产预测。', 'predictions': []}
         if not self.model_loaded:
             return {
                 'success': False,
@@ -768,6 +773,9 @@ class MLPredictionService:
         """
         预测社区健康风险（多分类版本）
         """
+        if not getattr(self, 'research_mode', False):
+            return {'success': False, 'status': 'research_only', 'production_enabled': False,
+                    'error': 'RF 尚无时间外验证，已退出生产预测。', 'predictions': []}
         if not self.model_loaded:
             return {
                 'success': False,
@@ -970,7 +978,11 @@ class MLPredictionService:
             'loaded': self.model_loaded,  # 保持向后兼容
             'model_name': self.model_info.get('model_name', 'Unknown'),
             'model_type': self.model_info.get('model_type', 'unknown'),
-            'accuracy': self.model_info.get('accuracy', 0),
+            'production_enabled': False,
+            'status': 'research_only',
+            'validation_status': 'no_out_of_time_validation',
+            'training_accuracy': self.model_info.get('accuracy'),
+            'accuracy': None,
             'f1_score': self.model_info.get('f1_score', 0),
             'classes': self.model_info.get('classes', []),
             'feature_cols': self.model_info.get('feature_cols', []),

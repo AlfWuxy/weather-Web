@@ -46,6 +46,8 @@
       <textarea class="text-area" maxlength="300" value="{{chronicText}}" disabled="{{busy}}" bindinput="onChronic" placeholder="例如：高血压、糖尿病。请勿填写病历号或身份证号。" aria-label="这位家人的慢病类别" />
     </view>
 
+    <checkbox-group bindchange="onHealthConsent"><label><checkbox value="consent" checked="{{healthConsent}}" disabled="{{busy}}" />我已向成员本人或法定监护人说明用途，获得其对选填健康信息的单独授权。</label></checkbox-group>
+    <view class="field-hint">拒绝不影响公开天气。可在网站账号设置撤回并清理健康资料。</view>
     <view class="button-row">
       <button class="primary-button row-button" loading="{{busy}}" disabled="{{busy}}" bindtap="onSave">{{mode === 'create' ? '确认添加' : '保存修改'}}</button>
       <button class="secondary-button row-button" disabled="{{busy}}" bindtap="onCancel">取消</button>
