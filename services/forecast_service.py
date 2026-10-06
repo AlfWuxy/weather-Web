@@ -4,7 +4,7 @@
 
 功能：
 B1. 天气预报输入（CMA/和风天气API）
-B2. 预报后处理（Quantile Mapping / EMOS）
+B2. 原始预报保留与未校准情景区间
 B3. Lag拼接（过去7天观测 + 未来预报）
 B4. 健康预测（探索性点预测；概率与模型预警待校准）
 B5. 回测评估
@@ -18,6 +18,7 @@ from pathlib import Path
 import os
 import logging
 from core.time_utils import today_local, now_local
+from services.missing_policy import input_state, weighted_known_risk, risk_floor
 
 
 class ForecastService:
@@ -139,10 +140,11 @@ class ForecastService:
             
         except Exception as e:
             logging.getLogger(__name__).warning("Visit thresholds calculation failed: %s", e)
-            self.visit_threshold_p90 = 15
-            self.visit_mean = 10
-            self.visit_std = 5
-            self.max_observed_daily_visits = 30
+            self.visit_threshold_p90 = None
+            self.visit_threshold_p75 = None
+            self.visit_mean = None
+            self.visit_std = None
+            self.max_observed_daily_visits = None
 
     def _safe_float(self, value, default=None):
         try:
@@ -158,7 +160,7 @@ class ForecastService:
         - 兼容含 ensemble 字段的 dict
         """
         base = {
-            'temp': 15.0,
+            'temp': None,
             'temp_min': None,
             'temp_max': None,
             'temperature_p10': None,
@@ -181,7 +183,7 @@ class ForecastService:
             base['temp'] = parsed_temp
             return base
         if not isinstance(entry, dict):
-            return base
+            raise ValueError("forecast entry must contain a finite temperature")
 
         p10 = self._safe_float(entry.get('temperature_ensemble_p10'))
         p50 = None
@@ -204,7 +206,9 @@ class ForecastService:
             if tmax is not None and tmin is not None:
                 temp = (tmax + tmin) / 2.0
 
-        base['temp'] = self._safe_float(temp, 15.0)
+        if temp is None:
+            raise ValueError('forecast temperature unavailable')
+        base['temp'] = temp
         base['temp_min'] = tmin
         base['temp_max'] = tmax
         base['temperature_p10'] = p10
@@ -213,6 +217,8 @@ class ForecastService:
         base['humidity'] = self._safe_float(entry.get('humidity'))
         base['aqi'] = self._safe_float(entry.get('aqi'))
         base['pm25'] = self._safe_float(entry.get('pm25'))
+        for key in ('aqi_standard', 'primary_pollutant', 'aqi_averaging_hours'):
+            base[key] = entry.get(key)
         base['precip_probability'] = self._safe_float(
             entry.get('precip_probability', entry.get('precipitation_probability'))
         )
@@ -231,147 +237,90 @@ class ForecastService:
             base['model_count'] = int(self._safe_float(entry.get('model_count'), len(model_names) or 1))
         else:
             base['model_count'] = max(1, len(model_names))
-        base['predictability_score'] = self._safe_float(entry.get('predictability_score'), None)
+        base['predictability_score'] = entry.get('predictability_score')
+        base['predictability_source'] = entry.get('predictability_source')
+        base['predictability_method'] = entry.get('predictability_method')
         base['source'] = str(entry.get('data_source') or '')
         return base
 
     def _composite_exposure_risk(
-        self,
-        temperature,
-        temp_min,
-        humidity,
-        pm25=None,
-        aqi=None,
-        *,
-        temp_min_fallback=None,
-        pm25_origin=None,
-        aqi_origin=None,
+        self, temperature, temp_min, humidity, pm25=None, aqi=None, *,
+        temp_min_fallback=None, pm25_origin=None, aqi_origin=None,
+        aqi_standard=None, primary_pollutant=None, aqi_averaging_hours=None,
     ):
-        """
-        复合暴露风险：热 + PM2.5 + 湿度 + 热夜（学术实践增强版简化实现）。
-        输出 0-100 及分项贡献。
-        """
-        temp_input = self._safe_float(temperature, None)
-        temp_imputed = temp_input is None
-        temp = 20.0 if temp_imputed else temp_input
+        """仅对有依据的暴露计算分值，并保留未知分项与插补来源。"""
+        temp = self._safe_float(temperature)
+        tmin = self._safe_float(temp_min)
+        hum = self._safe_float(humidity)
+        pm = self._safe_float(pm25)
+        if hum is not None and not 0 <= hum <= 100:
+            hum = None
+        if pm is not None and pm < 0:
+            pm = None
+        pm_source = 'direct' if pm is not None else 'unknown'
+        # 今天的实况不能冒充未来日预报。
+        if pm25_origin == 'current_weather_context':
+            pm = None
+            pm_source = 'unknown'
+        aqi_value = self._safe_float(aqi)
+        inverse_method = None
+        # 旧标准只允许有明确版本和日均口径的数据；不猜测当前 cn-mee 的标准版本。
+        if (pm is None and aqi_origin != 'current_weather_context'
+                and aqi_standard == 'HJ633-2012' and aqi_averaging_hours == 24
+                and str(primary_pollutant).lower() in {'pm2.5', 'pm2p5', 'pm25'}
+                and aqi_value is not None and 0 <= aqi_value <= 500):
+            pm = float(np.interp(aqi_value, [0, 50, 100, 150, 200, 300, 400, 500],
+                                 [0, 35, 75, 115, 150, 250, 350, 500]))
+            pm_source = 'hj633_2012_inverse'
+            inverse_method = 'HJ633-2012_PM2.5_24h_piecewise_inverse'
 
-        tmin_input = self._safe_float(temp_min, None)
-        temp_min_imputed = tmin_input is None
-        if temp_min_imputed:
-            fallback_value = self._safe_float(temp_min_fallback, None)
-            if fallback_value is None:
-                tmin = temp - 4.0
-                temp_min_source = 'temperature_minus_4'
-            else:
-                tmin = fallback_value
-                temp_min_source = 'temperature_uncertainty_lower'
-        else:
-            tmin = tmin_input
-            temp_min_source = 'direct'
-
-        humidity_input = self._safe_float(humidity, None)
-        humidity_imputed = humidity_input is None
-        hum = 60.0 if humidity_imputed else humidity_input
-
-        pm = self._safe_float(pm25, None)
-        aqi_used = None
-        aqi_imputed = False
-        if pm is None:
-            aqi_input = self._safe_float(aqi, None)
-            aqi_imputed = aqi_input is None
-            aqi_v = 50.0 if aqi_imputed else aqi_input
-            # AQI 到 PM2.5 的保守近似（用于无PM预报时）
-            pm = max(5.0, min(220.0, aqi_v * 0.65))
-            if aqi_imputed:
-                pm25_source = 'default_aqi_50'
-                pm25_detail_source = 'default_aqi_50'
-            elif aqi_origin == 'current_weather_context':
-                pm25_source = 'current_observation_aqi_proxy'
-                pm25_detail_source = 'current_weather_context'
-            else:
-                pm25_source = 'aqi_proxy'
-                pm25_detail_source = 'day_aqi_input'
-            aqi_used = aqi_v
-        elif pm25_origin == 'current_weather_context':
-            # 未来日没有污染物预报时复用当前实况，必须与未来日直接预报区分。
-            pm25_source = 'current_observation_reuse'
-            pm25_detail_source = 'current_weather_context'
-        else:
-            pm25_source = 'direct'
-            pm25_detail_source = pm25_origin or 'forecast_input'
-
-        heat_score = float(np.clip((temp - 28.0) * 6.0, 0.0, 100.0))
-        pollution_score = float(np.clip((pm - 35.0) * 1.8, 0.0, 100.0))
-        humidity_score = float(np.clip((hum - 70.0) * 2.4, 0.0, 100.0))
-        hot_night_score = 100.0 if tmin >= 26 else 72.0 if tmin >= 24 else 45.0 if tmin >= 22 else 8.0
-
-        synergy_bonus = 0.0
-        if heat_score >= 45 and pollution_score >= 40:
-            synergy_bonus += 8.0
-        if heat_score >= 45 and humidity_score >= 40:
-            synergy_bonus += 6.0
-        if hot_night_score >= 70 and pollution_score >= 35:
-            synergy_bonus += 4.0
-
-        pre_clip_score = (
-            0.34 * heat_score
-            + 0.28 * pollution_score
-            + 0.18 * humidity_score
-            + 0.20 * hot_night_score
-            + synergy_bonus
-        )
-        final_score = float(np.clip(pre_clip_score, 0.0, 100.0))
-        if final_score >= 70:
-            level = '高'
-        elif final_score >= 45:
-            level = '中'
-        else:
-            level = '低'
-
+        components = {
+            'heat': float(np.clip((temp - 28) * 6, 0, 100)) if temp is not None else None,
+            'pm25': float(np.clip((pm - 35) * 1.8, 0, 100)) if pm is not None else None,
+            'humidity': float(np.clip((hum - 70) * 2.4, 0, 100)) if hum is not None else None,
+            'hot_night': (100.0 if tmin >= 26 else 72.0 if tmin >= 24 else 45.0 if tmin >= 22 else 8.0) if tmin is not None else None,
+        }
+        weights = {'heat': .34, 'pm25': .28, 'humidity': .18, 'hot_night': .20}
+        known = weighted_known_risk(components, weights)
+        synergy = 0.0
+        heat, pollution, humid, night = (components[k] for k in weights)
+        if heat is not None and pollution is not None and heat >= 45 and pollution >= 40:
+            synergy += 8
+        if heat is not None and humid is not None and heat >= 45 and humid >= 40:
+            synergy += 6
+        if night is not None and pollution is not None and night >= 70 and pollution >= 35:
+            synergy += 4
+        score = known['score']
+        # 高温筛查必须有温度证据；其他分项不能单独给出总体低风险。
+        missing_required_inputs = ['temperature'] if temp is None else []
+        pre_clip = score + synergy if score is not None and not missing_required_inputs else None
+        if inverse_method:
+            # 补入较低污染分项不能稀释已知天气风险。
+            baseline = self._composite_exposure_risk(temperature, temp_min, humidity)['score']
+            pre_clip = risk_floor(pre_clip, baseline, status='imputed')
+        final = float(np.clip(pre_clip, 0, 100)) if pre_clip is not None else None
+        inputs = {
+            'temperature': input_state(temp, source='corrected_forecast'),
+            'temp_min': input_state(tmin, source='forecast_input'),
+            'humidity': input_state(hum, source='forecast_input'),
+            'pm25': input_state(pm, source=pm_source, method=inverse_method,
+                                reason='no_valid_daily_pollutant_forecast' if pm is None else None),
+        }
+        inputs['pm25'].update({'detail_source': pm25_origin or 'forecast_input',
+                              'aqi_used': aqi_value if inverse_method else None, 'aqi_imputed': False})
+        rounded = lambda value: round(value, 1) if value is not None else None
         return {
-            # score 保留为兼容字段，final_score 明确表示经过 0-100 限幅后的结果。
-            'score': round(final_score, 1),
-            'pre_clip_score': round(pre_clip_score, 1),
-            'final_score': round(final_score, 1),
-            'synergy_bonus': round(synergy_bonus, 1),
-            'level': level,
+            'score': rounded(final), 'pre_clip_score': rounded(pre_clip), 'final_score': rounded(final),
+            'synergy_bonus': synergy,
             'threshold_semantics': 'action_communication_interface',
             'warning_calibrated': False,
-            'components': {
-                'heat': round(heat_score, 1),
-                'pm25': round(pollution_score, 1),
-                'humidity': round(humidity_score, 1),
-                'hot_night': round(hot_night_score, 1)
-            },
-            'hot_night': bool(tmin >= 22),
-            # pm25_proxy 保留旧接口语义；来源请以 pm25_source 为准。
-            'pm25_proxy': round(pm, 1),
-            'pm25_source': pm25_source,
-            'inputs': {
-                'temperature': {
-                    'used_value': round(temp, 1),
-                    'imputed': temp_imputed,
-                    'source': 'default_20' if temp_imputed else 'corrected_forecast',
-                },
-                'temp_min': {
-                    'used_value': round(tmin, 1),
-                    'imputed': temp_min_imputed,
-                    'source': temp_min_source,
-                },
-                'humidity': {
-                    'used_value': round(hum, 1),
-                    'imputed': humidity_imputed,
-                    'source': 'default_60' if humidity_imputed else 'forecast_input',
-                },
-                'pm25': {
-                    'used_value': round(pm, 1),
-                    'imputed': pm25_source != 'direct',
-                    'source': pm25_source,
-                    'detail_source': pm25_detail_source,
-                    'aqi_used': round(aqi_used, 1) if aqi_used is not None else None,
-                    'aqi_imputed': aqi_imputed,
-                },
-            },
+            'level': '未知' if final is None else '高' if final >= 70 else '中' if final >= 45 else '低',
+            'status': known['status'] if final is not None else 'unknown', 'unknown_components': known['unknown_components'],
+            'effective_weights': known['effective_weights'],
+            'missing_required_inputs': missing_required_inputs,
+            'components': {k: rounded(v) for k, v in components.items()},
+            'hot_night': tmin >= 22 if tmin is not None else None,
+            'pm25_proxy': rounded(pm), 'pm25_source': pm_source, 'inputs': inputs,
         }
 
     def _cap_semantics_for_forecast(self, prob_high_percent, composite_level):
@@ -429,45 +378,54 @@ class ForecastService:
             'community': community_cards
         }
 
-    def _calculate_predictability(self, lead_day, model_spread=None, model_count=1, external_score=None):
-        """
-        计算可预报性分数（0-100）并分级。
-        - 模型离散度越大，分数越低
-        - 提前期越长，分数越低
-        - 模型成员数越多，分数略有提升（信息增益）
-        """
-        spread = max(0.0, float(model_spread)) if model_spread is not None else 0.0
-        lead_penalty = max(0, int(lead_day) - 1) * 3.0
-        model_bonus = min(8.0, max(0, int(model_count) - 1) * 2.0)
-        if external_score is not None:
-            branch = 'external'
-            raw_score = float(external_score)
-            score = max(0.0, min(100.0, raw_score))
+    def _calculate_predictability(
+        self, lead_day, model_spread=None, model_count=1, external_score=None, *,
+        external_source=None, external_method=None,
+    ):
+        """区分上游评分与本地启发式；任何分数均不宣称实测准确率。"""
+        reported_spread = self._safe_float(model_spread)
+        count = max(1, int(self._safe_float(model_count, 1)))
+        spread = reported_spread if reported_spread is not None and reported_spread >= 0 and count >= 2 else None
+        lead = max(1, int(lead_day))
+        penalty = (lead - 1) * 3.0
+        external = self._safe_float(external_score) if not isinstance(external_score, bool) else None
+        external_valid = external is not None and 0 <= external <= 100
+        external_status = 'valid' if external_valid else 'missing' if external_score is None else 'invalid'
+        # 本服务上游产生的同一启发式不冒充第三方提供的独立评分。
+        local_upstream = (external_source == 'local_weather_service'
+                          and external_method in {'lead_only', 'ensemble_spread_heuristic'})
+        if external_valid and not local_upstream:
+            branch, raw, score = 'external', external, external
+            source = str(external_source or 'upstream_unspecified')
+            method = str(external_method or 'upstream_method_unspecified')
+            note = '采用上游参考分；校准方法未验证，非实测准确率'
+            if spread is None:
+                note += '；无多模型信息，无法用离散度交叉核对'
+        elif spread is None:
+            branch, raw = 'lead_only', 60.0 - penalty
+            score = max(5.0, min(60.0, raw))
+            source, method = 'local_forecast_service', 'lead_only'
+            note = '无多模型信息；仅按提前期的启发式评分，非实测准确率'
         else:
-            branch = 'derived'
-            raw_score = 100.0 - spread * 16.0 - lead_penalty + model_bonus
-            score = max(5.0, min(99.0, raw_score))
-
-        if score >= 75:
-            label = '高'
-        elif score >= 50:
-            label = '中'
-        else:
-            label = '低'
+            branch, raw = 'derived', 100.0 - spread * 16 - penalty
+            score = max(5.0, min(99.0, raw))
+            source, method = 'local_forecast_service', 'ensemble_spread_heuristic'
+            note = '多模型离散度启发式评分，非实测准确率'
+        if external_status == 'invalid':
+            note += '；上游分数无效，已回退本地评分'
         return {
-            'score': round(score, 1),
-            'label': label,
-            'branch': branch,
-            'raw_score': round(raw_score, 1),
-            'inputs': {
-                'external_score': round(float(external_score), 1) if external_score is not None else None,
-                'lead_day': int(lead_day),
-                'model_spread': round(spread, 3),
-                'model_count': max(1, int(model_count)),
-                # 外部分支不会应用下面两个调整，保留输入便于解释分支差异。
-                'lead_penalty': round(lead_penalty, 1) if branch == 'derived' else None,
-                'model_bonus': round(model_bonus, 1) if branch == 'derived' else None,
-            },
+            'score': round(score, 1), 'label': '高' if score >= 75 else '中' if score >= 50 else '低',
+            'branch': branch, 'raw_score': round(raw, 1), 'validated': False,
+            'source': source, 'method': method, 'calibration_status': 'unvalidated',
+            'multimodel_information_available': spread is not None,
+            'limitations': ['未验证与实际预报误差的关系', '不代表健康模型准确率'],
+            'note': note,
+            'inputs': {'external_score': external, 'external_score_status': external_status,
+                       'external_score_rejection': 'expected_finite_score_0_100' if external_status == 'invalid' else None,
+                       'external_source': external_source, 'external_method': external_method,
+                       'lead_day': lead, 'model_spread': spread, 'reported_model_spread': reported_spread,
+                       'model_count': count, 'lead_penalty': penalty if branch != 'external' else None,
+                       'model_bonus': None},
         }
 
     def _build_impact_likelihood_matrix(self, forecasts):
@@ -482,67 +440,22 @@ class ForecastService:
         }
 
     def quantile_mapping(self, forecast_temp, lead_day=1, model_spread=None):
-        """
-        Quantile Mapping后处理
-        
-        将预报温度校正到"像观测"的分布
-        
-        参数:
-        - forecast_temp: 预报温度
-        - lead_day: 预报提前天数（1-7）
-        
-        返回:
-        - corrected_temp: 校正后的温度
-        - uncertainty: 不确定性范围
-        """
+        """兼容旧调用名；没有配对回测校准参数时保留原预报值。"""
         forecast_temp = self._safe_float(forecast_temp)
         if forecast_temp is None:
             raise ValueError("forecast temperature must be finite")
-
-        if not self.qm_params:
-            spread = self._safe_float(model_spread, 0.0) or 0.0
-            width = 2.0 + min(3.0, spread * 0.6)
-            return forecast_temp, {
-                'lower': forecast_temp - width,
-                'upper': forecast_temp + width,
-                'std': width / 1.96,
-                'lead_day': lead_day,
-                'original_temp': forecast_temp,
-                'bias_correction': 0.0,
-                'model_spread': spread
-            }
-        
-        # 计算预报温度在分布中的分位数
-        forecast_percentile = stats.percentileofscore(
-            self.qm_params['temp_values'], 
-            forecast_temp
-        )
-        
-        # 应用偏差校正（根据lead_day增加不确定性）
-        lead_bias = 0.5 * (lead_day - 1)  # 预报越远偏差越大
-        corrected_temp = forecast_temp - lead_bias
-        
-        # 确保在历史范围内
-        corrected_temp = max(self.qm_params['min'] - 5, 
-                            min(self.qm_params['max'] + 5, corrected_temp))
-        
-        # 计算不确定性范围（随lead_day增加）
-        base_uncertainty = 1.5
-        uncertainty_factor = 1 + 0.3 * (lead_day - 1)
-        model_spread_v = self._safe_float(model_spread, 0.0) or 0.0
-        spread_uncertainty = min(4.0, model_spread_v * 0.6)
-        uncertainty = base_uncertainty * uncertainty_factor + spread_uncertainty
-        
-        return corrected_temp, {
-            'lower': corrected_temp - uncertainty,
-            'upper': corrected_temp + uncertainty,
-            'std': uncertainty / 1.96,  # 95%置信区间
-            'lead_day': lead_day,
-            'original_temp': forecast_temp,
-            'bias_correction': lead_bias,
-            'model_spread': model_spread_v
+        spread = self._safe_float(model_spread)
+        if spread is not None and spread < 0:
+            spread = None
+        # 区间仅供情景探索，不声称为经过覆盖率验证的置信区间。
+        width = 2.0 * (1 + .3 * max(0, int(lead_day) - 1)) + min(4.0, (spread or 0) * .6)
+        return forecast_temp, {
+            'lower': forecast_temp - width, 'upper': forecast_temp + width,
+            'std': width / 1.96, 'lead_day': lead_day, 'original_temp': forecast_temp,
+            'bias_correction': 0.0, 'model_spread': spread,
+            'calibration_status': 'unvalidated', 'interval_method': 'heuristic_scenario',
         }
-    
+
     def get_lag_temperature_profile(self, target_date, forecast_temps=None):
         """
         获取目标日期的滞后温度profile
@@ -603,21 +516,21 @@ class ForecastService:
                     data_sources.append('forecast')
                     continue
             
-            # 如果都没有，使用气候态平均值
-            if self.qm_params and 'mean' in self.qm_params:
-                climatology_temp = self._safe_float(self.qm_params['mean'])
-                if climatology_temp is not None:
-                    lag_profile.append(climatology_temp)
-                    data_sources.append('climatology')
-                else:
-                    lag_profile.append(15.0)
-                    data_sources.append('default')
-            else:
-                lag_profile.append(15.0)  # 默认值
-                data_sources.append('default')
+            # 不能用气候态或固定15℃替代缺失实况并降低风险。
+            lag_profile.append(None)
+            data_sources.append('unknown')
         
         return lag_profile, data_sources
     
+    @staticmethod
+    def _unknown_visit_prediction(missing_inputs):
+        """缺少研究输入时门诊量与概率保持未知，独立的暴露评分仍可使用。"""
+        keys = ('point_estimate', 'lower_bound', 'upper_bound', 'p10', 'p50', 'p90',
+                'probability_exceed_p90', 'probability_exceed_p75', 'rr', 'baseline',
+                'dow_factor', 'raw_point_estimate', 'visit_threshold_p90', 'std_estimate')
+        return {**dict.fromkeys(keys), 'status': 'unknown', 'missing_inputs': missing_inputs,
+                'probability_method': 'unavailable', 'guardrail_applied': False, 'guardrail_cap': None}
+
     def predict_daily_visits(self, temperature, lag_temps=None, month=None, dow=None):
         """
         预测日门诊量
@@ -633,6 +546,16 @@ class ForecastService:
         - interval: 固定离散参数下的探索性范围
         - probability_high: 未校准，固定返回 None
         """
+        missing = []
+        if self._safe_float(temperature) is None:
+            missing.append('temperature')
+        if not lag_temps or any(self._safe_float(value) is None for value in lag_temps):
+            missing.append('lag_temperatures')
+        threshold = self._safe_float(self.visit_threshold_p90)
+        if threshold is None or threshold <= 0:
+            missing.append('historical_visit_threshold')
+        if missing:
+            return self._unknown_visit_prediction(missing)
         from services.dlnm_risk_service import get_dlnm_service
         
         dlnm = get_dlnm_service()
@@ -646,6 +569,10 @@ class ForecastService:
         else:
             baseline = self.visit_mean
         
+        baseline = self._safe_float(baseline)
+        if baseline is None or baseline <= 0:
+            return self._unknown_visit_prediction(['historical_visit_baseline'])
+
         # 星期效应
         dow_factor = 1.0
         if dow is not None:
@@ -775,10 +702,8 @@ class ForecastService:
         composite_high_days = 0
 
         # 获取温度列表用于备选
-        temp_values = [entry.get('temp', 15.0) for entry in forecast_temps_dict.values()]
+        temp_values = [entry.get('temp') for entry in forecast_temps_dict.values()]
         context = context or {}
-        context_aqi = self._safe_float(context.get('aqi'))
-        context_pm25 = self._safe_float(context.get('pm25'))
         
         for lead_day in range(1, 8):
             target_date = start_date + timedelta(days=lead_day - 1)
@@ -791,7 +716,7 @@ class ForecastService:
                 selected_entry = self._normalize_forecast_entry(temp_values[lead_day - 1])
             else:
                 raise ValueError(f"insufficient forecast data for day {lead_day}")
-            raw_temp = selected_entry.get('temp', 15.0)
+            raw_temp = selected_entry.get('temp')
             model_spread = selected_entry.get('model_spread')
             model_count = selected_entry.get('model_count', 1)
             model_names = selected_entry.get('model_names', []) or []
@@ -801,13 +726,6 @@ class ForecastService:
             pm25_origin = 'forecast_input' if pm25 is not None else None
             aqi = selected_entry.get('aqi')
             aqi_origin = 'forecast_input' if aqi is not None else None
-            if pm25 is None:
-                pm25 = context_pm25
-                if pm25 is not None:
-                    pm25_origin = 'current_weather_context'
-            if pm25 is None and aqi is None and context_aqi is not None:
-                aqi = context_aqi
-                aqi_origin = 'current_weather_context'
             if selected_entry.get('source'):
                 model_sources.add(selected_entry.get('source'))
             
@@ -820,9 +738,9 @@ class ForecastService:
             
             # 获取滞后温度profile
             past_temp_map = {
-                d: (e.get('temp', 15.0) if isinstance(e, dict) else float(e))
+                d: (e.get('temp') if isinstance(e, dict) else float(e))
                 for d, e in forecast_temps_dict.items()
-                if d < target_date
+                if d <= target_date
             }
             lag_temps, sources = self.get_lag_temperature_profile(
                 target_date, 
@@ -853,7 +771,9 @@ class ForecastService:
                 lead_day=lead_day,
                 model_spread=model_spread,
                 model_count=model_count,
-                external_score=selected_entry.get('predictability_score')
+                external_score=selected_entry.get('predictability_score'),
+                external_source=selected_entry.get('predictability_source'),
+                external_method=selected_entry.get('predictability_method'),
             )
             predictability_scores.append(predictability['score'])
             confidence = 'high' if predictability['score'] >= 75 else 'medium' if predictability['score'] >= 50 else 'low'
@@ -868,6 +788,9 @@ class ForecastService:
                 temp_min_fallback=uncertainty.get('lower'),
                 pm25_origin=pm25_origin,
                 aqi_origin=aqi_origin,
+                aqi_standard=selected_entry.get('aqi_standard'),
+                primary_pollutant=selected_entry.get('primary_pollutant'),
+                aqi_averaging_hours=selected_entry.get('aqi_averaging_hours'),
             )
             composite_scores.append(self._safe_float(composite_exposure.get('score'), 0.0) or 0.0)
             if composite_exposure.get('level') == '高':
@@ -889,7 +812,9 @@ class ForecastService:
                     'corrected': round(corrected_temp, 1),
                     'uncertainty_lower': round(uncertainty['lower'], 1),
                     'uncertainty_upper': round(uncertainty['upper'], 1),
-                    'input_spread': round(uncertainty.get('model_spread', 0.0), 3),
+                    'input_spread': round(model_spread, 3) if model_spread is not None else None,
+                    'calibration_status': uncertainty.get('calibration_status', 'unvalidated'),
+                    'interval_method': uncertainty.get('interval_method', 'heuristic_scenario'),
                     'p10': round(selected_entry.get('temperature_p10'), 1) if selected_entry.get('temperature_p10') is not None else None,
                     'p50': round(selected_entry.get('temperature_p50'), 1) if selected_entry.get('temperature_p50') is not None else round(corrected_temp, 1),
                     'p90': round(selected_entry.get('temperature_p90'), 1) if selected_entry.get('temperature_p90') is not None else None,
@@ -909,6 +834,7 @@ class ForecastService:
                 'risk_color': risk_color,
                 'probability_high_visits': None,
                 'model_warning_status': 'disabled_uncalibrated',
+                'lag_input_states': [input_state(value, source=source) for value, source in zip(lag_temps, sources)],
                 
                 # 极端天气
                 'extreme_events': extreme_events,
@@ -931,6 +857,8 @@ class ForecastService:
             total_optimistic_visits += self._safe_float(prediction.get('p10'), 0.0) or 0.0
             total_worst_case_visits += self._safe_float(prediction.get('p90'), 0.0) or 0.0
         
+        unknown_health_days = sum(1 for row in forecasts if row['visits'].get('point_estimate') is None)
+        visits_complete = unknown_health_days == 0
         # 生成建议
         recommendations = self._generate_forecast_recommendations(forecasts, None)
         avg_predictability = round(sum(predictability_scores) / len(predictability_scores), 1) if predictability_scores else None
@@ -941,19 +869,20 @@ class ForecastService:
                 'start': start_date.strftime('%Y-%m-%d'),
                 'end': (start_date + timedelta(days=6)).strftime('%Y-%m-%d')
             },
-            'total_expected_visits': round(total_expected_visits, 0),
+            'total_expected_visits': round(total_expected_visits, 0) if visits_complete else None,
             'high_risk_days': None,
-            'average_daily_visits': round(total_expected_visits / 7, 1),
-            'visit_projection_status': 'exploratory_uncalibrated',
+            'unknown_health_days': unknown_health_days,
+            'average_daily_visits': round(total_expected_visits / 7, 1) if visits_complete else None,
+            'visit_projection_status': 'exploratory_uncalibrated' if visits_complete else 'unknown',
             'overall_risk': 'unavailable',
             'model_warning_status': 'disabled_uncalibrated',
             'recommendations': recommendations,
             'scenario_totals': {
                 'status': 'exploratory_fixed_theta_not_calibrated',
-                'optimistic_total': round(total_optimistic_visits, 1),
-                'baseline_total': round(total_expected_visits, 1),
-                'worst_case_total': round(total_worst_case_visits, 1),
-                'worst_case_extra': round(max(0.0, total_worst_case_visits - total_expected_visits), 1)
+                'optimistic_total': round(total_optimistic_visits, 1) if visits_complete else None,
+                'baseline_total': round(total_expected_visits, 1) if visits_complete else None,
+                'worst_case_total': round(total_worst_case_visits, 1) if visits_complete else None,
+                'worst_case_extra': round(max(0.0, total_worst_case_visits - total_expected_visits), 1) if visits_complete else None
             },
             'probability_products': {
                 'available': False,

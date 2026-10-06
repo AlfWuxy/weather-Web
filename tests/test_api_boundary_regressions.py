@@ -468,7 +468,7 @@ def test_forecast_daily_api_rejects_nonfinite_temperatures_before_prediction(
     assert response.get_json()["error"] == expected_error
 
 
-def test_forecast_daily_api_preserves_legacy_lag_fallback_values(
+def test_forecast_daily_api_rejects_invalid_temperature_before_prediction(
     authenticated_client,
     monkeypatch,
 ):
@@ -496,9 +496,9 @@ def test_forecast_daily_api_preserves_legacy_lag_fallback_values(
         headers={"X-CSRF-Token": "forecast-daily-compatibility-csrf"},
     )
 
-    assert response.status_code == 200
-    assert captured["temperature"] == "bad"
-    assert captured["lag_temps"] == [20, None, "bad"]
+    assert response.status_code == 400
+    assert response.get_json()["error"] == "temperature_unknown"
+    assert captured == {}
 
 
 @pytest.mark.parametrize(
@@ -556,14 +556,14 @@ def test_forecast_normalization_never_propagates_nonfinite_optional_values():
     service = ForecastService.__new__(ForecastService)
     normalized = service._normalize_forecast_entry(
         {
-            "temperature": float("nan"),
+            "temperature": 0,
             "temperature_max": float("inf"),
             "temperature_min": float("-inf"),
             "humidity": float("nan"),
         }
     )
 
-    assert math.isfinite(normalized["temp"])
+    assert normalized["temp"] == 0
     assert normalized["temp_max"] is None
     assert normalized["temp_min"] is None
     assert normalized["humidity"] is None

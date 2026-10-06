@@ -34,64 +34,27 @@ def test_composite_exposure_returns_score_stages_and_input_trace():
         temp_min_fallback=26,
     )
 
-    assert result['synergy_bonus'] == 12.0
-    assert result['pre_clip_score'] == 63.4
-    assert result['final_score'] == 63.4
+    assert result['synergy_bonus'] == 0.0
+    assert result['score'] == 48.0
     assert result['score'] == result['final_score']
     assert result['threshold_semantics'] == 'action_communication_interface'
     assert result['warning_calibrated'] is False
-    assert result['pm25_source'] == 'aqi_proxy'
-    assert result['inputs']['pm25'] == {
-        'used_value': 65.0,
-        'imputed': True,
-        'source': 'aqi_proxy',
-        'detail_source': 'day_aqi_input',
-        'aqi_used': 100.0,
-        'aqi_imputed': False,
-    }
-    assert result['inputs']['humidity']['used_value'] == 60.0
-    assert result['inputs']['humidity']['imputed'] is True
-    assert result['inputs']['temp_min'] == {
-        'used_value': 26.0,
-        'imputed': True,
-        'source': 'temperature_uncertainty_lower',
-    }
+    assert result['pm25_source'] == 'unknown'
+    assert result['inputs']['pm25']['used_value'] is None
+    assert result['inputs']['pm25']['status'] == 'unknown'
+    assert result['inputs']['humidity']['used_value'] is None
+    assert result['inputs']['temp_min']['used_value'] is None
+    assert result['effective_weights']['heat'] == 1.0
+    assert set(result['unknown_components']) == {'pm25', 'humidity', 'hot_night'}
 
-    reused_observation_result = service._composite_exposure_risk(
-        temperature=32,
-        temp_min=24,
-        humidity=80,
-        pm25=42,
-        aqi=120,
-        pm25_origin='current_weather_context',
+    reused_observation = service._composite_exposure_risk(
+        32, 24, 80, pm25=42, aqi=120, pm25_origin='current_weather_context',
     )
-    assert reused_observation_result['pm25_source'] == 'current_observation_reuse'
-    assert reused_observation_result['inputs']['pm25']['used_value'] == 42.0
-    assert reused_observation_result['inputs']['pm25']['imputed'] is True
-    assert reused_observation_result['inputs']['pm25']['source'] == 'current_observation_reuse'
-    assert reused_observation_result['inputs']['pm25']['detail_source'] == 'current_weather_context'
-
-    current_aqi_result = service._composite_exposure_risk(
-        temperature=32,
-        temp_min=24,
-        humidity=80,
-        pm25=None,
-        aqi=80,
-        aqi_origin='current_weather_context',
-    )
-    assert current_aqi_result['pm25_source'] == 'current_observation_aqi_proxy'
-    assert current_aqi_result['inputs']['pm25']['detail_source'] == 'current_weather_context'
-    assert current_aqi_result['inputs']['pm25']['aqi_used'] == 80.0
-
-    default_aqi_result = service._composite_exposure_risk(
-        temperature=32,
-        temp_min=24,
-        humidity=80,
-    )
-    assert default_aqi_result['pm25_source'] == 'default_aqi_50'
-    assert default_aqi_result['inputs']['pm25']['source'] == 'default_aqi_50'
-    assert default_aqi_result['inputs']['pm25']['aqi_used'] == 50.0
-    assert default_aqi_result['inputs']['pm25']['aqi_imputed'] is True
+    assert reused_observation['pm25_source'] == 'unknown'
+    assert reused_observation['inputs']['pm25']['used_value'] is None
+    default = service._composite_exposure_risk(32, 24, 80)
+    assert default['inputs']['pm25']['aqi_used'] is None
+    assert default['inputs']['pm25']['status'] == 'unknown'
 
 
 @pytest.mark.parametrize(
@@ -267,10 +230,10 @@ def test_predictability_reports_external_and_derived_branches():
     assert external['inputs']['model_bonus'] is None
 
     assert derived['branch'] == 'derived'
-    assert derived['raw_score'] == 74.0
-    assert derived['score'] == 74.0
+    assert derived['raw_score'] == 70.0
+    assert derived['score'] == 70.0
     assert derived['inputs']['lead_penalty'] == 6.0
-    assert derived['inputs']['model_bonus'] == 4.0
+    assert derived['inputs']['model_bonus'] is None
 
 
 def test_forecast_cards_do_not_substitute_visit_probability_for_composite_score():
@@ -512,7 +475,7 @@ def test_forecast_page_embeds_recalculation_context(authenticated_client, monkey
     assert exposure_context['限幅前评分'] == 72.0
     assert exposure_context['协同加分'] == 12.0
     assert exposure_context['PM2.5来源'] == '当前实况复用（非未来预报）'
-    assert contexts_by_metric['forecast_exposure_score'][1]['PM2.5来源'] == '未来日AQI×0.65代理'
+    assert contexts_by_metric['forecast_exposure_score'][1]['PM2.5来源'] == '空气质量未知'
     assert 'forecast_visit_probability' not in contexts_by_metric
     assert '门诊高负荷概率与模型预警尚未完成校准，当前不启用' in body
     assert predictability_context['计算分支'] == '上游外部分数'

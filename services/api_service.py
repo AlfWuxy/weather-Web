@@ -308,60 +308,9 @@ def api_disease_weather_stats():
 # ======================== ML预测API ========================
 
 def _api_ml_predict():
-    """使用机器学习模型进行疾病风险预测（多分类版本）"""
-    try:
-        from services.ml_prediction_service import get_ml_service
-        ml_service = get_ml_service()
-
-        data = request.get_json() or {}
-
-        # 获取用户信息
-        user_info = {
-            'age': current_user.age if is_guest_user(current_user) else data.get('age') or current_user.age or 40,
-            'gender': current_user.gender if is_guest_user(current_user) else data.get('gender') or current_user.gender or '男'
-        }
-
-        sunshine_seconds = _normalize_sunshine_seconds(data)
-        # 获取天气信息（扩展版本，支持更多天气因素）
-        weather_info = {
-            # 温度相关
-            'temperature': data.get('temperature', 20),
-            'tmean': data.get('tmean', data.get('temperature', 20)),
-            'tmin': data.get('tmin', data.get('temperature', 20) - 5),
-            'tmax': data.get('tmax', data.get('temperature', 20) + 5),
-            'feels_like': data.get('feels_like'),  # 体感温度，可选
-            # 湿度
-            'humidity': data.get('humidity', 70),
-            # 风速
-            'wind_speed': data.get('wind_speed', 2.5),
-            # 降水量
-            'precipitation': data.get('precipitation', 0),
-            # 训练特征沿用 sunshine_hours 字段名，但单位统一为秒
-            'sunshine_hours': sunshine_seconds,
-            'sunshine_duration_seconds': sunshine_seconds,
-            # 空气质量
-            'aqi': data.get('aqi', 50),
-            # 时间
-            'month': data.get('month', now_local().month)
-        }
-
-        # 执行预测
-        result = ml_service.predict_disease_risk(user_info, weather_info)
-
-        if not current_app.config.get('FEATURE_EXPLAIN_OUTPUT'):
-            if isinstance(result, dict):
-                result.pop('explain', None)
-                result.pop('rule_version', None)
-                result.pop('triggered_rules', None)
-
-        return jsonify(result)
-
-    except INPUT_EXCEPTIONS as exc:
-        # 输入参数错误或数据格式问题
-        return handle_api_exception(exc, "ML疾病风险预测参数错误", log=logger, status_code=400)
-    except SERVICE_EXCEPTIONS as exc:
-        # 运行或依赖异常
-        return handle_api_exception(exc, "ML疾病风险预测失败", log=logger)
+    """未经时间外验证的分类器停止生产推理。"""
+    return jsonify({'success': False, 'error': 'research_only',
+                    'message': 'RandomForest 已退出生产预测，尚无时间外验证。'}), 410
 
 
 @login_required
@@ -376,65 +325,9 @@ def api_ml_predict():
 
 
 def _api_ml_predict_community():
-    """使用机器学习模型进行社区风险预测（多分类版本）"""
-    try:
-        from services.ml_prediction_service import get_ml_service
-        ml_service = get_ml_service()
-
-        data = request.get_json() or {}
-
-        # 获取社区信息
-        community_id = data.get('community_id')
-        if community_id:
-            community = db.session.get(Community, community_id)
-            if community:
-                community_info = {
-                    'name': community.name,
-                    'elderly_ratio': community.elderly_ratio,
-                    'chronic_disease_ratio': community.chronic_disease_ratio,
-                    'population': community.population
-                }
-            else:
-                return jsonify({'success': False, 'error': '社区不存在'})
-        else:
-            community_info = {
-                'name': data.get('name', '未知社区'),
-                'elderly_ratio': data.get('elderly_ratio', 0.2),
-                'chronic_disease_ratio': data.get('chronic_disease_ratio', 0.1),
-                'population': data.get('population', 100)
-            }
-
-        sunshine_seconds = _normalize_sunshine_seconds(data)
-        # 获取天气信息（扩展版本）
-        weather_info = {
-            # 温度相关
-            'temperature': data.get('temperature', 20),
-            'tmean': data.get('tmean', data.get('temperature', 20)),
-            'tmin': data.get('tmin', data.get('temperature', 20) - 5),
-            'tmax': data.get('tmax', data.get('temperature', 20) + 5),
-            'feels_like': data.get('feels_like'),
-            # 湿度
-            'humidity': data.get('humidity', 70),
-            # 风速
-            'wind_speed': data.get('wind_speed', 2.5),
-            # 降水量
-            'precipitation': data.get('precipitation', 0),
-            # 日照时长（秒）
-            'sunshine_hours': sunshine_seconds,
-            'sunshine_duration_seconds': sunshine_seconds,
-            # 空气质量
-            'aqi': data.get('aqi', 50),
-            # 时间
-            'month': data.get('month', now_local().month)
-        }
-
-        # 执行预测
-        result = ml_service.predict_community_risk(community_info, weather_info)
-
-        return jsonify(result)
-
-    except API_EXCEPTIONS as exc:
-        return handle_api_exception(exc, "ML社区风险预测失败", log=logger)
+    """未经时间外验证的分类器停止生产推理。"""
+    return jsonify({'success': False, 'error': 'research_only',
+                    'message': 'RandomForest 已退出生产预测，尚无时间外验证。'}), 410
 
 
 @login_required
@@ -453,7 +346,30 @@ def _api_ml_status():
     try:
         from services.ml_prediction_service import get_ml_service
         ml_service = get_ml_service()
-        status = ml_service.get_model_status()
+        raw_status = ml_service.get_model_status()
+        raw_status = raw_status if isinstance(raw_status, dict) else {}
+        public_fields = (
+            'model_loaded',
+            'loaded',
+            'model_name',
+            'model_type',
+            'accuracy',
+            'f1_score',
+            'classes',
+            'description',
+            'sklearn_compatible',
+            'production_enabled',
+            'validation_status',
+            'training_accuracy',
+        )
+        status = {
+            field: raw_status.get(field)
+            for field in public_fields
+            if field in raw_status
+        }
+        status['availability'] = 'research_only'
+        status['production_enabled'] = False
+        status['accuracy'] = None
         return jsonify({'success': True, 'status': status})
     except API_EXCEPTIONS as exc:
         return handle_api_exception(exc, "ML模型状态获取失败", log=logger)
@@ -480,9 +396,10 @@ def _api_dlnm_risk():
 
         # 安全的参数获取和类型转换
         try:
-            temperature = float(data.get('temperature', 20))
+            temperature = float(data.get('temperature'))
         except (TypeError, ValueError):
-            temperature = 20.0
+            return jsonify({'success': False, 'error': 'temperature_unknown',
+                            'message': 'temperature 缺失或无效，无法计算风险'}), 400
         if not math.isfinite(temperature):
             return jsonify({
                 'success': False,
@@ -626,16 +543,13 @@ def _api_forecast_7day():
                         'error': 'forecast_stale',
                         'message': '健康预测需要新鲜和风预报，请稍后重试'
                     }), 503
-                # 当前空气质量作为复合暴露的背景场（小时级无稳定AQI预报时）
+                # 未来空气项只能使用对应日资料，不复用当前实况。
                 current_weather, _ = get_weather_with_cache(city)
                 invalid_weather_response = _validate_qweather_for_risk(current_weather, 'forecast_7day')
                 if invalid_weather_response:
                     return invalid_weather_response
                 current_weather = normalize_health_model_weather(current_weather)
-                forecast_context = {
-                    'aqi': current_weather.get('aqi'),
-                    'pm25': current_weather.get('pm25')
-                }
+                forecast_context = {}
                 forecast_temps = [f for f in weather_forecast if isinstance(f, dict)]
                 forecast_start_date = today_local()
             except (ValueError, TypeError, RuntimeError, OSError) as exc:
@@ -693,11 +607,12 @@ def _api_forecast_daily():
 
         data = request.get_json() or {}
 
-        temperature = data.get('temperature', 20)
+        temperature = data.get('temperature')
         try:
             parsed_temperature = float(temperature)
         except (TypeError, ValueError):
-            pass
+            return jsonify({'success': False, 'error': 'temperature_unknown',
+                            'message': 'temperature 缺失或无效，无法计算风险'}), 400
         else:
             if not math.isfinite(parsed_temperature):
                 return jsonify({
@@ -1182,7 +1097,7 @@ def _api_comprehensive_alert():
         if invalid_weather_response:
             return invalid_weather_response
         current_weather = normalize_health_model_weather(current_weather)
-        temperature = current_weather.get('temperature', 20)
+        temperature = current_weather.get('temperature')
 
         # 计算当前风险
         rr, _ = dlnm.calculate_rr(temperature)
@@ -1212,10 +1127,7 @@ def _api_comprehensive_alert():
         forecasts, summary = forecast_service.generate_7day_forecast(
             forecast_temps,
             start_date=today_local(),
-            context={
-                'aqi': current_weather.get('aqi'),
-                'pm25': current_weather.get('pm25'),
-            },
+            context={},
         )
 
         # 社区风险
@@ -1236,6 +1148,8 @@ def _api_comprehensive_alert():
                 'text': alert_text,
                 'status': 'disabled_unvalidated',
                 'message': '模型综合预警未启用，请查看独立的官方天气预警。',
+                'is_official': False,
+                'scope': 'model_health_screening',
                 'rr': round(rr, 3),
                 'extreme_events': extreme_events
             },
