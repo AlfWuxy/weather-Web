@@ -768,7 +768,11 @@ def public_communities_payload() -> dict:
 
 
 def _public_cooling_coordinates(record):
-    """只公开具备 GCJ-02 人工核验回执的有效坐标。"""
+    """服务核验未过期且坐标核验有效时，才公开地图点。"""
+    from services.cooling_service import compute_verify_status
+
+    if compute_verify_status(record, now=utcnow()) != 'verified':
+        return None, None, None
     if (
         record.coordinate_verified_at is None
         or record.coordinate_system != 'GCJ-02'
