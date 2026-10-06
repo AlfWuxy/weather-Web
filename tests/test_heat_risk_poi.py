@@ -260,8 +260,9 @@ def test_expanded_daily_uses_one_county_forecast(authenticated_client, monkeypat
     assert len(payload["poi_coverage"]) == 24
     ids = {v["id"] for v in payload["villages"]}
     assert len(ids) == len(payload["villages"])
-    assert all(set(day["village_ids"]) <= ids for day in payload["priority"])
-    assert all(len(day["villages"]) <= 5 for day in payload["priority"])
+    assert payload["priority"] == []
+    assert set(payload["structural_priority"]["village_ids"]) <= ids
+    assert len(payload["structural_priority"]["villages"]) <= 5
 
 
 def _public_cooling_extension():

@@ -22,7 +22,7 @@
     };
     const LAYER_TITLES = {
         daily: '当日热风险等级',
-        score: '综合热风险分（静态）',
+        score: '历史结构脆弱性分（静态）',
         bivariate: '高温 × 高龄',
         facility_km: '距可达性参考点（直线）'
     };
@@ -227,16 +227,9 @@
         return 2 * 6371.0088 * Math.asin(Math.min(1, Math.sqrt(h)));
     }
 
-    // 逐日风险矩阵（与服务端 combine_daily_level 同一规则）。
+    // 旧接口保留未知返回，禁止把县级天气合成为网格风险。
     function combineDailyLevel(hazard, staticLevel) {
-        if (!isLevel(hazard)) return null;
-        if (hazard === 0) return 0;
-        let adjust = 0;
-        if (isNum(staticLevel)) {
-            if (staticLevel <= 1) adjust = -1;
-            else if (staticLevel >= 3) adjust = 1;
-        }
-        return Math.max(1, Math.min(4, hazard + adjust));
+        return null;
     }
 
     function levelInfo(level) {
@@ -524,7 +517,7 @@
         wrapper.appendChild(el('strong', null, town ? town.properties.name_zh : '都昌县'));
         let text;
         if (!cell.land) text = '湖面（不评分）';
-        else if (layer === 'daily') text = !isLevel(currentHazard()) ? UNKNOWN_RISK : cell.scored ? `${demoPrefix()}当日 ${combineDailyLevel(currentHazard(), cell.level)} 级 · 综合分 ${fmt(cell.score, 0)}` : '无常住人口';
+        else if (layer === 'daily') text = `${UNKNOWN_RISK}：实时风险只在县级展示`;
         else if (layer === 'score') text = cell.scored ? `综合分 ${fmt(cell.score, 0)} · ${levelInfo(cell.level).label}` : '无常住人口';
         else if (layer === 'bivariate') text = cell.scored ? `${cell.bivariate.toUpperCase()} · 地表 ${fmt(cell.p.q3_lst_c_mean, 1)} °C · 65+ ${fmt(cell.p.age65_share_pct, 1)}%` : '无常住人口';
         else if (layer === 'facility_km') text = `距可达性参考点 ${fmt(cell.facility_km, 1)} km（直线）`;
@@ -645,7 +638,7 @@
 
     function villageDailyLevel(point) {
         if (point.risk_data_status === 'no_grid_data' || !isLevel(point.static_level)) return null;
-        return combineDailyLevel(currentHazard(), point.static_level);
+        return point.static_level;
     }
 
     function buildPoiCatalog() {
@@ -689,7 +682,7 @@
         let detail = POI_KINDS[entry.kind];
         if (entry.kind === 'villages') {
             const level = villageDailyLevel(point);
-            detail += isLevel(level) ? ` · ${demoPrefix()}当日 ${level} 级` : ` · ${!isLevel(point.static_level) ? '网格数据缺失' : UNKNOWN_RISK}`;
+            detail += isLevel(level) ? ` · 历史结构 ${level} 级` : ` · ${!isLevel(point.static_level) ? '网格数据缺失' : UNKNOWN_RISK}`;
         }
         if (point.location_verification_status === 'verified') detail += ' · 地点已核验';
         if (entry.kind === 'candidates' || entry.kind === 'cooling') detail += ' · 开放情况待核实';
@@ -940,7 +933,7 @@
             nodes.push(el('p', 'hrw-legend-note', '左：晴空地表温度；右：65+ 人口比例。拖动中线比较。'));
         } else if (state.layer === 'daily' || state.layer === 'score') {
             const day = currentDay();
-            nodes.push(el('div', 'hrw-legend-title', state.layer === 'daily' ? `当日风险 · ${day ? dayLabel(day.date) : '预报不可用'}` : '综合热风险分'));
+            nodes.push(el('div', 'hrw-legend-title', state.layer === 'daily' ? `当日风险 · ${day ? dayLabel(day.date) : '预报不可用'}` : '历史结构脆弱性分'));
             state.meta.score_method.levels.slice().reverse().forEach((info) => {
                 const range = state.layer === 'score'
                     ? ['< 20', '20–40', '40–60', '60–80', '≥ 80'][info.level]
@@ -1032,7 +1025,7 @@
             ui.levelChip.style.backgroundColor = NODATA_FILL;
             ui.levelChip.style.color = '#2A2620';
             ui.scoreSub.textContent = '仅供县级天气参考，不据此判定该点低风险。';
-            levelChip(ui.dailyChip, null);
+            ui.dailyChip.textContent = '仅县级展示';
             ui.breakdown.replaceChildren();
             ui.facts.replaceChildren();
             ui.provenance.replaceChildren();
@@ -1065,7 +1058,9 @@
             const span = cell.top_pct_p95 - cell.top_pct_p05;
             const stable = span <= state.meta.stability.stable_span_pct;
             ui.scoreSub.textContent = `全县前 ${fmt(cell.top_pct, 0)}%；权重扰动区间 前 ${fmt(cell.top_pct_p05, 0)}–${fmt(cell.top_pct_p95, 0)}%，${stable ? '排名稳定' : '排名对权重较敏感'}`;
-            levelChip(ui.dailyChip, combineDailyLevel(currentHazard(), cell.level), demoPrefix());
+            ui.dailyChip.textContent = '仅县级展示';
+            ui.dailyChip.style.backgroundColor = '';
+            ui.dailyChip.style.color = '';
         }
 
         const facility = state.facilities[cell.facility];
@@ -1437,36 +1432,36 @@
     }
 
     function priorityForDay() {
-        if (!state.daily || !isLevel(currentHazard())) return [];
-        const entry = state.daily.priority[state.dayIndex];
-        if (!entry || !Array.isArray(entry.villages) || entry.date !== currentDay().date) return [];
+        if (!state.daily) return [];
+        const entry = state.daily.structural_priority;
+        if (!entry || entry.basis !== 'historical_structure_only' || entry.weather_used !== false || !Array.isArray(entry.villages)) return [];
         const ranked = new Map(entry.villages.map((point) => [poiId(point, 'villages'), point]));
         const ids = Array.isArray(entry.village_ids) ? entry.village_ids : Array.from(ranked.keys());
         return ids.map((id) => {
             const record = state.poiById.get(id);
             const point = record ? {...ranked.get(id), ...record.point} : ranked.get(id);
             if (!point || !matchesTown(point) || !isLevel(point.static_level) || point.potential_duplicate || point.priority_eligible === false) return null;
-            const reasons = [`静态风险分 ${fmt(point.static_score, 0)}`];
+            const reasons = [`历史结构分 ${fmt(point.static_score, 0)}`];
             if (isNum(point.nearest_medical_km)) reasons.push(`距已收录医疗机构 ${fmt(point.nearest_medical_km, 1)} km（直线）`);
             const displayReasons = Array.isArray(point.reasons) ? point.reasons.slice() : reasons;
-            return {...point, daily_level: villageDailyLevel(point), reasons: displayReasons};
-        }).filter((point) => point && isLevel(point.daily_level)).slice(0, 5);
+            return {...point, structural_level: villageDailyLevel(point), reasons: displayReasons};
+        }).filter((point) => point && isLevel(point.structural_level)).slice(0, 5);
     }
 
     function renderPriority() {
         ui.priorityList.replaceChildren();
         const villages = priorityForDay();
         const known = isLevel(currentHazard());
-        ui.priorityNote.textContent = known ? `${demoPrefix()}${state.townFilter && state.townFilter !== '__unknown__' ? state.townFilter + ' · ' : ''}按当日风险、静态风险分、已知老人数排序；人口未知不记为 0，疑似同名点待核验后再参与排序。` : '仅保留静态风险参考，天气恢复后生成当日巡访顺序。';
+        ui.priorityNote.textContent = '按历史结构分排序；县级天气不参与，不能作为村级实时风险或逐户健康判断。';
         if (!villages.length) {
-            ui.priorityList.appendChild(el('li', 'hrw-empty', !known ? UNKNOWN_RISK : '当前范围暂无可参与风险排序的村点；可在点位列表查看已收录资料。'));
+            ui.priorityList.appendChild(el('li', 'hrw-empty', '当前范围暂无可参与结构筛查的村点；可在点位列表查看已收录资料。'));
         }
         villages.forEach((village, index) => {
             const item = el('li');
             const button = el('button', 'hrw-priority-item');
             button.type = 'button';
             const chip = el('span', 'hrw-level-chip hrw-level-chip--small');
-            levelChip(chip, village.daily_level, demoPrefix());
+            levelChip(chip, village.structural_level, '结构 ');
             const head = el('div', 'hrw-priority-head');
             head.append(el('span', 'hrw-rank', String(index + 1)), el('strong', null, village.name), chip);
             button.append(head, el('span', 'hrw-priority-town', village.township || ''), el('span', 'hrw-priority-reasons', (village.reasons || []).join(' · ')));
@@ -1474,7 +1469,7 @@
             item.appendChild(button);
             ui.priorityList.appendChild(item);
         });
-        renderActionCard(villages.length ? villages[0].daily_level : currentHazard());
+        renderActionCard(currentHazard());
     }
 
     function renderActionCard(level) {
@@ -1483,14 +1478,14 @@
         if (!card) {
             ui.actionCard.replaceChildren(
                 el('div', 'hrw-action-title', UNKNOWN_RISK),
-                el('p', 'hrw-empty', '有效天气预报恢复前，暂不生成当日分级行动卡。静态风险、村点和避暑点仍可查阅。')
+                el('p', 'hrw-empty', '有效天气预报恢复前，暂不生成当日分级行动卡。历史结构、村点和避暑点仍可查阅。')
             );
             return;
         }
         const title = el('div', 'hrw-action-title');
         const chip = el('span', 'hrw-level-chip hrw-level-chip--small');
         levelChip(chip, level, demoPrefix());
-        title.append(el('strong', null, `行动卡 · ${card.title}`), chip);
+        title.append(el('strong', null, `县级行动卡 · ${card.title}`), chip);
         const doctor = el('ul');
         card.doctor.forEach((line) => doctor.appendChild(el('li', null, line)));
         const caregiver = el('ul');
@@ -1503,18 +1498,18 @@
         if (ui.metaDay) ui.metaDay.textContent = day ? dayLabel(day.date) : '预报不可用';
         if (!isLevel(currentHazard())) {
             ui.title.textContent = UNKNOWN_RISK;
-            ui.lede.textContent = '有效天气预报暂不可用，地图显示静态综合热风险分；暂不生成当日等级和巡访顺序。';
+            ui.lede.textContent = '县级天气暂不可用；历史结构地图与核实清单仍可查阅，网格不叠加天气。';
             return;
         }
         const top = priorityForDay()[0];
         const when = day.date === localDate() ? '今天' : dayLabel(day.date);
-        ui.title.textContent = `${demoPrefix()}${when}先去哪几个村`;
+        ui.title.textContent = `${demoPrefix()}${when}都昌县级高温天气`;
         const reasons = dayReasons(day).length ? `（${dayReasons(day).join('，')}）` : '';
         if (!day.level) {
-            ui.lede.textContent = `${demoPrefix()}${when}都昌无高温（最高 ${fmt(day.temperature_max, 0)} °C），按常规随访。${top ? `静态风险最高的已收录聚落点：${top.name}（综合分 ${fmt(top.static_score, 0)}）。` : ''}`;
+            ui.lede.textContent = `${demoPrefix()}${when}都昌无高温（最高 ${fmt(day.temperature_max, 0)} °C），按常规随访。${top ? `历史结构最高的已收录聚落点：${top.name}（综合分 ${fmt(top.static_score, 0)}）。` : ''}`;
             return;
         }
-        ui.lede.textContent = `${demoPrefix()}${when}都昌热危险 ${day.level} 级 · ${day.label}${reasons}。${top ? `优先：${top.name}（当日 ${top.daily_level} 级）。` : ''}`;
+        ui.lede.textContent = `${demoPrefix()}${when}都昌热危险 ${day.level} 级 · ${day.label}${reasons}。地图与核实清单仅反映历史结构。`;
     }
 
     // ------------------------------------------------------------------
@@ -1551,19 +1546,6 @@
     }
 
     function renderMethod() {
-        ui.matrixBody.replaceChildren();
-        state.meta.daily.hazard_levels.forEach((hazard) => {
-            const tr = el('tr');
-            tr.appendChild(el('th', null, `${hazard.level} ${hazard.label}`));
-            [1, 2, 3].forEach((staticLevel) => {
-                const level = combineDailyLevel(hazard.level, staticLevel);
-                const td = el('td', null, `${level} 级`);
-                td.style.backgroundColor = levelInfo(level).color;
-                td.style.color = level >= 3 ? '#fff' : '#2A2620';
-                tr.appendChild(td);
-            });
-            ui.matrixBody.appendChild(tr);
-        });
         ui.sources.replaceChildren();
         state.meta.sources.forEach((source) => {
             const li = el('li');
@@ -1619,20 +1601,20 @@
         const villages = priorityForDay();
         const sheet = ui.printSheet;
         sheet.replaceChildren();
-        sheet.appendChild(el('h1', null, `都昌县热风险巡访单 · ${day ? dayLabel(day.date) : '静态风险'}`));
+        sheet.appendChild(el('h1', null, `都昌县热风险巡访单 · ${day ? dayLabel(day.date) : '历史结构'}`));
         if (isLevel(currentHazard())) {
             sheet.appendChild(el('p', null, `${demoPrefix()}热危险 ${day.level} 级 ${day.label}；最高 ${fmt(day.temperature_max, 0)} °C，最低 ${fmt(day.temperature_min, 0)} °C。${dayReasons(day).join('；')}`));
         } else {
-            sheet.appendChild(el('p', null, `${UNKNOWN_RISK}，暂不生成当日等级和巡访顺序。`));
+            sheet.appendChild(el('p', null, `${UNKNOWN_RISK}，仅保留历史结构核实清单。`));
         }
         sheet.appendChild(el('p', null, forecastSourceText()));
         const table = el('table');
         const head = el('tr');
-        ['序号', '村', '乡镇', '当日等级', '理由', '已巡访 / 备注'].forEach((h) => head.appendChild(el('th', null, h)));
+        ['序号', '村', '乡镇', '历史结构等级', '理由', '已巡访 / 备注'].forEach((h) => head.appendChild(el('th', null, h)));
         table.appendChild(head);
         villages.forEach((village, index) => {
             const tr = el('tr');
-            [String(index + 1), village.name, village.township || '', `${village.daily_level} 级`, village.reasons.join('；'), ''].forEach((text) => tr.appendChild(el('td', null, text)));
+            [String(index + 1), village.name, village.township || '', `${village.structural_level} 级`, village.reasons.join('；'), ''].forEach((text) => tr.appendChild(el('td', null, text)));
             table.appendChild(tr);
         });
         sheet.appendChild(table);
@@ -1656,7 +1638,7 @@
     }
 
     function setLayer(layer) {
-        if (layer === 'daily' && !isLevel(currentHazard())) layer = 'score';
+        if (layer === 'daily') layer = 'score';
         state.layer = layer;
         ui.layerTabs.forEach((button) => button.setAttribute('aria-pressed', String(button.dataset.layer === layer)));
         ui.moreLayers.value = ui.layerTabs.some((b) => b.dataset.layer === layer) ? '' : layer;
@@ -1731,9 +1713,9 @@
     }
 
     function syncDailyLayer() {
-        const unavailable = !isLevel(currentHazard());
-        ui.layerTabs.find((button) => button.dataset.layer === 'daily').disabled = unavailable;
-        if (unavailable && state.layer === 'daily') setLayer('score');
+        const oldButton = ui.layerTabs.find((button) => button.dataset.layer === 'daily');
+        if (oldButton) oldButton.disabled = true;
+        if (state.layer === 'daily') setLayer('score');
     }
 
     function applyDaily(daily) {
@@ -1745,7 +1727,8 @@
         state.daily = {
             ...payload,
             days: Array.isArray(payload.days) ? payload.days.map((day) => day && typeof day === 'object' ? day : {}) : [],
-            priority: Array.isArray(payload.priority) ? payload.priority : [],
+            priority: [],
+            structural_priority: payload.structural_priority || (previous ? previous.structural_priority : null),
             villages: Array.isArray(payload.villages) ? payload.villages : (previous ? previous.villages : []),
             cooling_resources: Array.isArray(payload.cooling_resources) ? payload.cooling_resources : (previous ? previous.cooling_resources : []),
             medical_pois: Array.isArray(payload.medical_pois) ? payload.medical_pois : (previous ? previous.medical_pois : []),
@@ -1768,7 +1751,7 @@
         state.dayIndex = Number.isInteger(requestedDay) && requestedDay >= 0 && requestedDay < state.daily.days.length ? requestedDay : 0;
         syncDailyLayer();
         if (firstLoad && isLevel(currentHazard()) && (!initialParams.get('layer') || initialParams.get('layer') === 'daily')) {
-            setLayer(initialParams.get('layer') === 'daily' || currentHazard() > 0 ? 'daily' : 'score');
+            setLayer('score');
         }
         renderDays();
         renderVillages();

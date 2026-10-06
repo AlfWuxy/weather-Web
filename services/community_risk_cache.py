@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 _LOCAL_COMMUNITY_RISK_CACHE = {}
 _LOCAL_CACHE_MAX_ITEMS = 128
-_CACHE_NAMESPACE = 'community_risk:v5'
+_CACHE_NAMESPACE = 'community_risk:v7'
 _WEATHER_SIGNATURE_KEYS = (
     'temperature',
     'temperature_max',

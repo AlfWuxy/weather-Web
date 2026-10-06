@@ -25,6 +25,7 @@ from datetime import datetime, timedelta
 import json
 import os
 from flask import current_app, has_app_context
+from services.missing_policy import input_state
 
 
 class CommunityRiskService:
@@ -40,6 +41,7 @@ class CommunityRiskService:
         'heat_island_index',
         'medical_accessibility',
         'baseline_visits',
+        'baseline_period_days',
     )
     PROFILE_FIELD_LABELS = {
         'population': '人口',
@@ -49,12 +51,14 @@ class CommunityRiskService:
         'heat_island_index': '热岛指数',
         'medical_accessibility': '医疗可达性',
         'baseline_visits': '实测基线门诊量',
+        'baseline_period_days': '基线统计天数',
+        'baseline_population_scope': '基线人口口径',
     }
 
     def __init__(self):
-        # 风险分数归一化参数（使用“超额风险”避免全量顶格）
+        # 归一尺度单位为人次/千居民/日；不复用旧人次尺度环境变量。
         self.excess_score_efold = self._read_float_env(
-            'COMMUNITY_RISK_EXCESS_EFOLD',
+            'COMMUNITY_RISK_EXCESS_RATE_EFOLD',
             default=10.0,
             min_value=0.1
         )
@@ -92,6 +96,23 @@ class CommunityRiskService:
         # 加载社区数据
         self._load_community_profiles()
 
+    @staticmethod
+    def _confidence_assessment(item, risk_index):
+        """置信度只描述资料充分性，不是模型校准概率，也不改变风险分。"""
+        uncertainty = item.get('uncertainty_index')
+        low = (not item.get('historical_component_available')
+               or item.get('certainty') in ('low', 'unavailable')
+               or uncertainty is None or float(uncertainty) >= 70)
+        confidence = 'low' if low else ('medium' if item.get('certainty') == 'medium' else 'high')
+        priority = low and risk_index >= 60
+        return {
+            'confidence': confidence,
+            'confidence_label': {'low': '低', 'medium': '中', 'high': '高'}[confidence],
+            'confidence_basis': '历史样本与区间宽度；不代表模型预测可靠性',
+            'verification_priority': priority,
+            'review_status': '优先核实' if priority else ('待补资料' if low else '常规复核'),
+        }
+
     def _read_float_env(self, key, default, min_value=None):
         """读取浮点型环境变量并做基础范围保护。"""
         raw = os.getenv(key)
@@ -102,6 +123,8 @@ class CommunityRiskService:
                 value = float(raw)
             except (TypeError, ValueError):
                 value = float(default)
+        if not math.isfinite(value):
+            value = float(default)
         if min_value is not None:
             value = max(float(min_value), value)
         return value
@@ -133,7 +156,9 @@ class CommunityRiskService:
                 invalid_fields.append(field_name)
                 continue
 
-            if field_name in {'population', 'baseline_visits'} and number <= 0:
+            if field_name in {'population', 'baseline_period_days'} and number <= 0:
+                invalid_fields.append(field_name)
+            elif field_name == 'baseline_visits' and number < 0:
                 invalid_fields.append(field_name)
             elif field_name in {
                 'elderly_ratio',
@@ -143,6 +168,17 @@ class CommunityRiskService:
                 'medical_accessibility',
             } and not 0.0 <= number <= 1.0:
                 invalid_fields.append(field_name)
+
+        scope = profile.get('baseline_population_scope')
+        if not scope:
+            missing_fields.append('baseline_population_scope')
+        elif scope != 'all_residents':
+            invalid_fields.append('baseline_population_scope')
+
+        if not missing_fields and not invalid_fields:
+            daily_rate = float(profile['baseline_visits']) / float(profile['baseline_period_days']) / float(profile['population']) * 1000
+            if not math.isfinite(daily_rate):
+                invalid_fields.append('baseline_visits')
 
         uses_proxy_values = bool(profile.get('uses_proxy_values'))
         ready = not missing_fields and not invalid_fields and not uses_proxy_values
@@ -548,6 +584,57 @@ class CommunityRiskService:
         return summary
     
     def _load_community_profiles(self):
+        """默认读取数据库；显式配置时补充提供方声明核验的同名社区汇总。"""
+        self._load_database_community_profiles()
+        path = ((current_app.config.get('COMMUNITY_RISK_PROFILE_PATH') if has_app_context() else None)
+                or os.getenv('COMMUNITY_RISK_PROFILE_PATH'))
+        if not path:
+            return
+        try:
+            if not has_app_context():
+                raise ValueError('正式汇总须绑定数据库中已登记的社区')
+            from pathlib import Path
+            payload = json.loads(Path(path).read_text(encoding='utf-8'))
+            if (not isinstance(payload, dict) or payload.get('schema_version') != 1
+                    or payload.get('source_kind') != 'observed_aggregate'
+                    or not isinstance(payload.get('source'), str) or not payload['source'].strip()
+                    or not isinstance(payload.get('reviewed_at'), str)):
+                raise ValueError('汇总来源及审核信息不完整')
+            datetime.fromisoformat(payload['reviewed_at'].replace('Z', '+00:00'))
+            rows = payload.get('profiles')
+            if not isinstance(rows, list) or not rows:
+                raise ValueError('汇总社区列表为空')
+            loaded = {}
+            for row in rows:
+                if not isinstance(row, dict):
+                    raise ValueError('汇总档案无效')
+                name = row.get('name')
+                if name not in self.community_profiles or name in loaded or row.get('uses_proxy_values') is not False:
+                    raise ValueError('社区须在数据库已登记且不可使用代理值')
+                fields = self.REQUIRED_RISK_PROFILE_FIELDS + ('baseline_population_scope',)
+                profile = {**self.community_profiles[name], **{key: row.get(key) for key in fields},
+                           'uses_proxy_values': False, 'aggregate_source': payload['source'],
+                           'aggregate_reviewed_at': payload['reviewed_at']}
+                readiness = self._profile_readiness(profile)
+                if not readiness['ready']:
+                    raise ValueError('汇总档案缺少有效分母、时间或全居民基线口径')
+                profile['profile_readiness'] = readiness
+                loaded[name] = profile
+            self.community_profiles.update(loaded)
+            self.community_profile_status = {
+                'available': True, 'code': 'available', 'source': 'reviewed_community_aggregate',
+                'message': '已加载提供方声明核验的社区汇总（程序仅校验格式与口径）；排名采用每千居民每日超额就诊率。',
+                'total_count': len(self.community_profiles), 'eligible_count': len(loaded),
+            }
+        except (OSError, ValueError, TypeError, KeyError):
+            # 已显式指定的来源失败时不悄悄退回旧口径结果，也不暴露文件内容。
+            self.community_profiles = {}
+            self.community_profile_status = {
+                'available': False, 'code': 'aggregate_profile_invalid', 'source': 'reviewed_community_aggregate',
+                'message': '配置的社区汇总缺少可核验口径，未生成临床排名。',
+            }
+
+    def _load_database_community_profiles(self):
         """加载社区档案数据。
 
         Flask 应用上下文中只信任 Community 表。空表或查询失败时保持空集，
@@ -605,6 +692,8 @@ class CommunityRiskService:
                     'heat_island_index': getattr(comm, 'heat_island_index', None),
                     'medical_accessibility': getattr(comm, 'medical_accessibility', None),
                     'baseline_visits': getattr(comm, 'baseline_visits', None),
+                    'baseline_period_days': getattr(comm, 'baseline_period_days', None),
+                    'baseline_population_scope': getattr(comm, 'baseline_population_scope', None),
                     'uses_proxy_values': False,
                 }
                 profile['profile_readiness'] = self._profile_readiness(profile)
@@ -783,7 +872,7 @@ class CommunityRiskService:
         """
         计算社区风险得分
         
-        公式: RiskScore_c(t) = MacroRR(t) × VI_c × BaselineRate_c
+        公式: RiskScore = max(RR-1,0) × 基线人次 / 统计天数 / 居民数 × 1000
         
         参数:
         - community_name: 社区名称
@@ -801,6 +890,20 @@ class CommunityRiskService:
 
         # 计算VI
         vi_result = self.calculate_vulnerability_index(profile)
+        weather_rr = self._finite_number(weather_rr)
+        if weather_rr is None or weather_rr <= 0:
+            vi_result = {**vi_result, 'ranking_eligible': False,
+                         'data_status': 'weather_rr_unknown',
+                         'data_message': '天气相对风险不可用，风险未知。',
+                         'missing_fields': ['weather_rr']}
+        if vi_result.get('ranking_eligible'):
+            daily_baseline = float(profile['baseline_visits']) / float(profile['baseline_period_days'])
+            candidate_count = max(weather_rr - 1.0, 0.0) * daily_baseline
+            candidate_rate = candidate_count / float(profile['population']) * 1000
+            if not math.isfinite(candidate_count) or not math.isfinite(candidate_rate):
+                vi_result = {**vi_result, 'ranking_eligible': False, 'data_status': 'risk_rate_unavailable',
+                             'data_message': '超额率计算超出有限数值范围，风险未知。',
+                             'invalid_fields': ['derived_excess_rate']}
         if not vi_result.get('ranking_eligible'):
             return {
                 'community': community_name,
@@ -826,37 +929,39 @@ class CommunityRiskService:
                 'elderly_ratio': profile.get('elderly_ratio'),
                 'chronic_disease_ratio': profile.get('chronic_disease_ratio'),
                 'expected_excess_visits': None,
+                'excess_rate_per_1000_residents_day': None,
+                'rate_unit': '人次/千居民/日',
+                'count_unit': '人次/日',
             }
         vi = vi_result['vulnerability_index']
 
-        # 基线门诊量已通过完整性门，只读取实测值。
-        baseline_rate = float(profile['baseline_visits'])
-
-        # 标准化输入RR，避免非数值污染
-        try:
-            weather_rr = float(weather_rr)
-        except (TypeError, ValueError):
-            weather_rr = 1.0
-        weather_rr = max(0.01, weather_rr)
-
-        # 计算风险得分（总量）与超额风险（天气导致增量）
-        risk_score = weather_rr * vi * baseline_rate
-        excess_risk_score = max(weather_rr - 1.0, 0.0) * vi * baseline_rate
-
-        # 标准化到0-100（超额风险映射，保留跨天可比性）
+        # 全居民基线与分母必须同口径；未知年龄/统计时长不能假装老人日率。
+        population = float(profile['population'])
+        period_days = float(profile['baseline_period_days'])
+        baseline_visits = float(profile['baseline_visits'])
+        baseline_daily_visits = baseline_visits / period_days
+        baseline_rate = baseline_daily_visits / population * 1000.0
+        excess_risk_score = max(weather_rr - 1.0, 0.0) * baseline_rate
+        expected_excess_visits = max(weather_rr - 1.0, 0.0) * baseline_daily_visits
+        risk_score = excess_risk_score
         normalized_score = self._normalize_excess_risk(excess_risk_score)
 
-        # 保留本次计算使用的原始浮点值，供 API 使用者独立回算。
-        # 页面展示时可以四舍五入，计算对象本身不做提前截断。
         hazard_formula = {
             'expression': (
-                'Excess=max(WeatherRR-1,0)×VI×BaselineVisits; '
-                'Hazard=clip((1-exp(-Excess/Efold))×100,0,100)'
+                'ExcessRate=max(WeatherRR-1,0)×BaselineVisits/BaselineDays/Population×1000; '
+                'Hazard=clip((1-exp(-ExcessRate/Efold))×100,0,100)'
             ),
             'weather_rr': weather_rr,
-            'vi': vi,
-            'baseline_visits': baseline_rate,
+            'baseline_visits': baseline_visits,
+            'baseline_period_days': period_days,
+            'population': population,
+            'population_scope': 'all_residents',
+            'baseline_rate_per_1000_residents_day': baseline_rate,
             'excess': excess_risk_score,
+            'excess_rate_per_1000_residents_day': excess_risk_score,
+            'expected_excess_visits_per_day': expected_excess_visits,
+            'rate_unit': '人次/千居民/日',
+            'count_unit': '人次/日',
             'efold': self.excess_score_efold,
             'hazard': normalized_score,
         }
@@ -880,7 +985,10 @@ class CommunityRiskService:
             'missing_fields': [],
             'invalid_fields': [],
             'uses_proxy_values': False,
-            'risk_score': round(risk_score, 2),
+            'risk_score': risk_score,
+            'excess_rate_per_1000_residents_day': excess_risk_score,
+            'rate_unit': '人次/千居民/日',
+            'count_unit': '人次/日',
             'normalized_score': round(normalized_score, 1),
             'risk_level': risk_level,
             'color': color,
@@ -895,7 +1003,7 @@ class CommunityRiskService:
             'population': profile['population'],
             'elderly_ratio': profile['elderly_ratio'],
             'chronic_disease_ratio': profile['chronic_disease_ratio'],
-            'expected_excess_visits': round(excess_risk_score, 1)
+            'expected_excess_visits': expected_excess_visits
         }
 
     @staticmethod
@@ -978,6 +1086,7 @@ class CommunityRiskService:
             else {}
         ) or {}
         profile_fields = self.REQUIRED_RISK_PROFILE_FIELDS + (
+            'baseline_population_scope', 'aggregate_source', 'aggregate_reviewed_at',
             'vulnerability_index',
             'risk_level',
         )
@@ -991,6 +1100,7 @@ class CommunityRiskService:
 
         exploratory_communities = self._exploratory_community_names()
         signature_payload = {
+            'rate_method': {'version': 'resident_daily_rate_v1', 'efold': self.excess_score_efold},
             'profiles': profiles,
             'exploratory_communities': exploratory_communities,
             'evidence_coordinates_wgs84': {
@@ -1485,6 +1595,27 @@ class CommunityRiskService:
             'management_suggestions': [],
         }
 
+    def _unknown_weather_result(self, reason, temperature=None, community_scope=None):
+        """未知传到最终输出，不给社区生成低风险或零风险。"""
+        message = '天气或天气风险模型不可用，社区风险未知。'
+        profile_count = sum(1 for name in self.community_profiles
+                            if community_scope is None or name in community_scope)
+        return {
+            'data_available': False,
+            'data_status': {'available': False, 'code': reason, 'message': message},
+            'input_states': {'temperature': input_state(temperature, source='county_weather'),
+                             'weather_rr': input_state(None, source='dlnm', reason=reason)},
+            'rankings': [],
+            'map_data': {'type': 'FeatureCollection', 'features': []},
+            'summary': {'data_available': False, 'data_status': reason, 'data_message': message,
+                        'ranked_communities': 0, 'unranked_communities': profile_count,
+                        'total_communities': profile_count, 'total_expected_excess': None},
+            'macro_weather': {'available': False, 'temperature': temperature, 'rr': None},
+            'layers': {'risk_index': [], 'vulnerability': [], 'uncertainty': [], 'hotspot': []},
+            'management_suggestions': [],
+            'methodology': [message],
+        }
+
     def generate_community_risk_map(self, weather_data, target_date=None, window_days=30, disease_filter='', community_scope=None):
         """
         生成社区风险地图数据（学术增强版）。
@@ -1528,20 +1659,26 @@ class CommunityRiskService:
             if exploratory_result is not None:
                 return exploratory_result
 
-        from services.dlnm_risk_service import get_dlnm_service
-
-        dlnm = get_dlnm_service()
-
-        # 1) 天气宏观风险（DLNM）
-        try:
-            temperature = float(weather_data.get('temperature', 20))
-        except (TypeError, ValueError):
-            temperature = 20.0
+        # 1) 天气宏观风险（DLNM）；缺失输入不再默认为 20℃。
+        weather_data = weather_data if isinstance(weather_data, dict) else {}
+        temperature = self._finite_number(weather_data.get('temperature'))
+        if weather_data.get('is_mock') or weather_data.get('data_available') is False:
+            temperature = None
+        if temperature is None:
+            return self._unknown_weather_result('temperature_unknown', temperature, community_scope=community_scope)
         lag_temperatures = self._extract_lag_temperatures(weather_data, temperature)
-        if lag_temperatures:
-            macro_rr, _ = dlnm.calculate_rr(temperature, lag_temperatures=lag_temperatures)
-        else:
-            macro_rr, _ = dlnm.calculate_rr(temperature)
+        try:
+            from services.dlnm_risk_service import get_dlnm_service
+            dlnm = get_dlnm_service()
+            if lag_temperatures:
+                macro_rr, _ = dlnm.calculate_rr(temperature, lag_temperatures=lag_temperatures)
+            else:
+                macro_rr, _ = dlnm.calculate_rr(temperature)
+            macro_rr = self._finite_number(macro_rr)
+            if macro_rr is None or macro_rr <= 0:
+                return self._unknown_weather_result('weather_rr_unknown', temperature, community_scope=community_scope)
+        except Exception:
+            return self._unknown_weather_result('weather_model_unavailable', temperature, community_scope=community_scope)
 
         # 2) 计算天气驱动风险底图
         community_risks = []
@@ -1801,9 +1938,7 @@ class CommunityRiskService:
             if historical_component_available:
                 burden = burden_pct.get(name, 50.0)
                 risk_weights = {'weather': 0.45, 'svi': 0.35, 'burden': 0.20}
-                uncertainty_penalty = (
-                    0.93 if float(item.get('uncertainty_index') or 0.0) >= 70 else 1.0
-                )
+                uncertainty_penalty = 1.0  # 兼容字段；资料不足不得降低风险分。
             else:
                 # 历史分量缺失时，把可用权重 0.45/0.35 重新归一化到总和 1。
                 burden = None
@@ -1814,22 +1949,16 @@ class CommunityRiskService:
             svi_contribution = risk_weights['svi'] * svi_percentile
             burden_contribution = risk_weights['burden'] * (burden or 0.0)
             pre_penalty_total = weather_contribution + svi_contribution + burden_contribution
-            risk_index = pre_penalty_total * uncertainty_penalty
+            risk_index = pre_penalty_total
             risk_index = float(np.clip(risk_index, 0.0, 100.0))
 
             heatrisk_level, heatrisk_label, heatrisk_color = self._heatrisk_level_from_index(risk_index)
 
-            impact_score = min(
-                100.0,
-                risk_index * 0.75 + float(item.get('expected_excess_visits') or 0.0) * 6.0
-            )
+            # 影响矩阵同样按率评分；总人次仅服务资源配置，不回流风险分。
+            impact_score = risk_index
             impact_bucket = self._to_four_level_bucket(impact_score)
             if historical_component_available:
                 likelihood_score = float(item['probability_exceed_baseline']) * 100.0
-                if item.get('certainty') == 'high':
-                    likelihood_score += 10.0
-                elif item.get('certainty') == 'low':
-                    likelihood_score -= 10.0
                 likelihood_score = float(np.clip(likelihood_score, 0.0, 100.0))
                 likelihood_bucket = self._to_four_level_bucket(likelihood_score)
                 matrix_counts[impact_bucket][likelihood_bucket] += 1
@@ -1856,6 +1985,7 @@ class CommunityRiskService:
                 'before_penalty': round(pre_penalty_total, 2),
                 'after_penalty': round(risk_index, 2),
             }
+            item.update(self._confidence_assessment(item, risk_index))
             item['risk_index'] = round(risk_index, 1)
             item['heatrisk_level'] = heatrisk_level
             item['heatrisk_label'] = heatrisk_label
@@ -1906,8 +2036,11 @@ class CommunityRiskService:
             key=lambda row: float(row['risk_index']),
             reverse=True
         )
+        previous_score, previous_rank = None, None
         for idx, row in enumerate(ranked_rows, start=1):
-            row['rank'] = idx
+            score = row['risk_index']
+            row['rank'] = previous_rank if score == previous_score else idx
+            previous_score, previous_rank = score, row['rank']
         unranked_rows = sorted(ineligible_risks, key=lambda row: row['community'])
         for row in unranked_rows:
             row['rank'] = None
@@ -1939,9 +2072,17 @@ class CommunityRiskService:
                     'historical_component_available': row.get('historical_component_available', False),
                     'burden_percentile': row.get('burden_percentile'),
                     'uncertainty_penalty': row.get('uncertainty_penalty', 1.0),
+                    'confidence': row.get('confidence', 'unavailable'),
+                    'confidence_label': row.get('confidence_label', '资料不足'),
+                    'confidence_basis': row.get('confidence_basis', '资料不足；不是模型校准概率'),
+                    'verification_priority': row.get('verification_priority', False),
+                    'review_status': row.get('review_status', '资料不足'),
                     'risk_weights': row.get('risk_weights', {}),
                     'risk_contributions': row.get('risk_contributions', {}),
                     'hazard_formula': row.get('hazard_formula', {}),
+                    'excess_rate_per_1000_residents_day': row.get('excess_rate_per_1000_residents_day'),
+                    'rate_unit': '人次/千居民/日',
+                    'count_unit': '人次/日',
                     'heatrisk_level': row.get('heatrisk_level', 0),
                     'uncertainty_index': row.get('uncertainty_index'),
                     'hotspot_category': row.get('hotspot_category', '数据不足')
@@ -2054,10 +2195,12 @@ class CommunityRiskService:
 
         priority_candidates = [
             row for row in ranked_rows
-            if float(row.get('svi_percentile') or 0.0) >= 75.0
-            and (
-                float(row.get('risk_index') or 0.0) >= 60.0
-                or int(row.get('heatrisk_level') or 0) >= 3
+            if row.get('verification_priority') or (
+                float(row.get('svi_percentile') or 0.0) >= 75.0
+                and (
+                    float(row.get('risk_index') or 0.0) >= 60.0
+                    or int(row.get('heatrisk_level') or 0) >= 3
+                )
             )
         ]
         if not priority_candidates:
@@ -2071,8 +2214,11 @@ class CommunityRiskService:
             )[:5]
 
         priority_rows = []
+        priority_candidates.sort(key=lambda row: (bool(row.get('verification_priority')), float(row.get('risk_index') or 0)), reverse=True)
         for row in priority_candidates[:8]:
-            if int(row.get('heatrisk_level') or 0) >= 3:
+            if row.get('verification_priority'):
+                action = '优先核实：高风险且资料置信度低，安排联系与数据补全，同时保留高温防护。'
+            elif int(row.get('heatrisk_level') or 0) >= 3:
                 action = '优先安排巡访与高风险人群随访，必要时增加临时接诊能力。'
             elif float(row.get('uncertainty_index') or 0.0) >= 70:
                 action = '优先补全数据与病例核验，避免高脆弱社区因样本不足低估风险。'
@@ -2108,13 +2254,16 @@ class CommunityRiskService:
         missing_coordinate_count = sum(
             1 for row in rankings if row.get('coordinate_available') is not True
         )
+        profile_source = getattr(self, 'community_profile_status', {}).get('source', 'community_table')
+        if profile_source == 'reviewed_community_aggregate':
+            data_message += ' 来源由提供方声明核验，程序仅检查格式与口径，不代表外部验证。'
 
         return {
             'data_available': bool(ranked_rows),
             'data_status': {
                 'available': bool(ranked_rows),
                 'code': data_status_code,
-                'source': 'community_table',
+                'source': profile_source,
                 'message': data_message,
             },
             'map_data': map_data,
@@ -2148,9 +2297,17 @@ class CommunityRiskService:
                     'historical_component_available': row.get('historical_component_available', False),
                     'burden_percentile': row.get('burden_percentile'),
                     'uncertainty_penalty': row.get('uncertainty_penalty'),
+                    'confidence': row.get('confidence', 'unavailable'),
+                    'confidence_label': row.get('confidence_label', '资料不足'),
+                    'confidence_basis': row.get('confidence_basis', '资料不足；不是模型校准概率'),
+                    'verification_priority': row.get('verification_priority', False),
+                    'review_status': row.get('review_status', '资料不足'),
                     'risk_weights': row.get('risk_weights', {}),
                     'risk_contributions': row.get('risk_contributions', {}),
                     'hazard_formula': row.get('hazard_formula'),
+                    'excess_rate_per_1000_residents_day': row.get('excess_rate_per_1000_residents_day'),
+                    'rate_unit': '人次/千居民/日',
+                    'count_unit': '人次/日',
                     'heatrisk_level': row.get('heatrisk_level'),
                     'heatrisk_label': row.get('heatrisk_label', '数据不足'),
                     'heatrisk_color': row.get('heatrisk_color', '#94a3b8'),
@@ -2194,6 +2351,8 @@ class CommunityRiskService:
                     if ranked_rows else None
                 ),
                 'analysis_date': str(target_date),
+                'hazard_rate_unit': '人次/千居民/日',
+                'resource_count_unit': '人次/日',
                 'window_days': analysis_days,
                 'disease_filter': disease_filter or '',
                 'matched_records': matched_records,
@@ -2207,7 +2366,8 @@ class CommunityRiskService:
                 'median_uncertainty_index': round(median_uncertainty, 1) if median_uncertainty is not None else None,
                 'heatrisk_counts': heatrisk_counts,
                 'hotspot_counts': hotspot_counts,
-                'equity_priority_count': equity_priority_count
+                'equity_priority_count': equity_priority_count,
+                'verification_priority_count': sum(bool(row.get('verification_priority')) for row in ranked_rows)
             },
             'macro_weather': {
                 'temperature': temperature,
@@ -2229,23 +2389,24 @@ class CommunityRiskService:
                 data_message,
                 (
                     '完整性门：人口、老龄率、慢病率、绿地率、热岛指数、'
-                    '医疗可达性与实测基线门诊量任一缺失，该社区即不计算、不排名、'
+                    '医疗可达性、实测基线门诊量、基线统计天数与全居民口径任一缺失，该社区即不计算、不排名、'
                     '不生成预计就诊或行动优先级。'
                 ),
                 (
-                    '天气危险度上游公式：Excess=max(Weather RR-1, 0)×VI×BaselineVisits；'
-                    'Hazard=clip((1-exp(-Excess/Efold))×100, 0, 100)。'
+                    '天气危险度上游公式：ExcessRate=max(Weather RR-1,0)×BaselineVisits/BaselineDays/Population×1000；'
+                    'Hazard=clip((1-exp(-ExcessRate/Efold))×100,0,100)，单位为人次/千居民/日。'
+                    '预计额外人次/日单独用于资源配置，不参与风险排名或影响矩阵。'
                     '仅对通过完整性门的社区计算。'
                     if ranked_rows else
                     '本次无社区通过完整性门，未执行风险与预计就诊计算。'
                 ),
                 (
                     '社区风险=天气危险度(45%)+SVI-like脆弱性(35%)+历史负担(20%)，'
-                    '并对高不确定性样本执行惩罚。'
+                    '脆弱性仅经 SVI 计入一次；风险与置信度分别输出，高风险低置信标记优先核实。'
                     if historical_component_available else
                     (
                         '本次没有可匹配的历史病例分量；已过门社区使用天气危险度'
-                        '(56.25%)+SVI-like脆弱性(43.75%)，不使用历史不确定性惩罚。'
+                        '(56.25%)+SVI-like脆弱性(43.75%)，置信度标为低，不折减风险。'
                         if ranked_rows else
                         '由于无社区通过完整性门，本次不生成综合风险权重结果。'
                     )
@@ -2330,7 +2491,7 @@ class CommunityRiskService:
             suggestions.append({
                 'category': '门诊准备',
                 'priority': 'medium',
-                'advice': f'预计高风险社区额外增加约 {total_excess:.0f} 人次就诊，建议门诊做好准备',
+                'advice': f'预计高风险社区每日额外增加约 {total_excess:.0f} 人次就诊，仅供资源准备参考',
                 'target_communities': [c['community'] for c in high_risk_communities]
             })
         

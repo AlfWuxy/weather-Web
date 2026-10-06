@@ -206,6 +206,8 @@ def test_complete_profile_keeps_formal_risk_track(app, db_session, monkeypatch):
             "heat_island_index": 0.5,
             "medical_accessibility": 0.6,
             "baseline_visits": 5.0,
+            "baseline_period_days": 1,
+            "baseline_population_scope": "all_residents",
             "uses_proxy_values": False,
         }
     }

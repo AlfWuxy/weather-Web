@@ -655,20 +655,8 @@ def classify_daily_hazard(
 
 
 def combine_daily_level(hazard_level: int | None, static_level: int | None) -> int | None:
-    """逐日风险矩阵：危险等级 × 静态风险等级。"""
-    if hazard_level is None:
-        return None
-    if not hazard_level:
-        return 0
-    if static_level is None:
-        adjust = 0
-    elif static_level <= 1:
-        adjust = -1
-    elif static_level == 2:
-        adjust = 0
-    else:
-        adjust = 1
-    return max(1, min(4, hazard_level + adjust))
+    """兼容旧调用：县级天气不能推算网格或村级实时风险。"""
+    return None
 
 
 def static_asset_path(filename: str) -> Path:
@@ -804,34 +792,29 @@ def village_points(coords_gcj: dict[str, Any], community_rows: Iterable[Any] = (
 
 
 def rank_villages(villages: list[dict[str, Any]], day: dict[str, Any] | None, limit: int = 5) -> list[dict[str, Any]]:
-    """按当日风险、静态风险分、老人数排序，生成巡访优先清单。"""
+    """只按历史结构评分生成核实清单，天气与人口总量不参与排序。"""
     from services.heat_risk_poi_service import priority_exclusion_reason
 
-    hazard = day.get("level") if day else None
-    if hazard is None:
-        return []
     ranked = []
     for village in villages:
         if priority_exclusion_reason(village) or village.get("priority_eligible") is False:
             continue
-        daily = combine_daily_level(hazard, village.get("static_level"))
         elderly = None
         if village.get("population") and village.get("elderly_ratio") is not None:
             elderly = round(village["population"] * village["elderly_ratio"])
         reasons = []
         if village.get("static_score") is not None:
-            reasons.append(f"静态风险分 {village['static_score']:.0f}")
+            reasons.append(f"历史结构分 {village['static_score']:.0f}")
         if village.get("hotspot", 0) > 0:
             reasons.append("位于统计显著热点")
         if elderly:
             reasons.append(f"约 {elderly} 位老人")
         if village.get("facility_km") is not None and village["facility_km"] >= 3:
             reasons.append(f"距可达性参考点 {village['facility_km']:.1f} km")
-        ranked.append({**village, "daily_level": daily, "elderly_estimate": elderly, "reasons": reasons})
+        ranked.append({**village, "daily_level": None, "structural_level": village.get("static_level"),
+                       "elderly_estimate": elderly, "reasons": reasons, "ranking_basis": "historical_structure_only"})
     ranked.sort(key=lambda v: (
-        -v["daily_level"],
         -(v.get("static_score") or 0),
-        -(v.get("elderly_estimate") or 0),
         v["name"], v.get("id", ""),
     ))
     return ranked[:limit] if limit else ranked
@@ -842,11 +825,9 @@ def build_daily_payload(forecast: list[dict[str, Any]], prior_hot_days: int, vil
     workbench = load_workbench()
     threshold = workbench["metadata"]["daily"]["hot_night_tmin_c"]
     days = classify_daily_hazard(forecast, threshold, prior_hot_days)
-    priority = []
-    for day in days:
-        ranked = rank_villages(villages, day, limit=0)
-        priority.append({"date": day["date"], "villages": ranked[:5],
-                         "village_ids": [v["id"] for v in ranked if v.get("id")]})
+    ranked = rank_villages(villages, None, limit=0)
+    structural_priority = {"villages": ranked[:5], "village_ids": [v["id"] for v in ranked if v.get("id")],
+                           "basis": "historical_structure_only", "weather_used": False}
     return {
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
         "forecast_source": source,
@@ -855,7 +836,10 @@ def build_daily_payload(forecast: list[dict[str, Any]], prior_hot_days: int, vil
         "hot_night_tmin_c": threshold,
         "days": days,
         "villages": villages,
-        "priority": priority,
+        "priority": [],  # 旧逐日村级接口明确为空，避免旧客户端误读。
+        "structural_priority": structural_priority,
+        "realtime_risk_spatial_scale": "county",
+        "grid_weather_used": False,
         "cooling_resources": cooling,
         "action_cards": workbench["metadata"]["action_cards"],
     }

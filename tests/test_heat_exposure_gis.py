@@ -33,7 +33,7 @@ def test_heat_exposure_gis_page_has_academic_contract(app, authenticated_client)
     assert response.status_code == 200
 
     html = response.get_data(as_text=True)
-    assert "都昌县 1 km 网格级热暴露 GIS" in html
+    assert "都昌县 1 km 结构脆弱性 GIS" in html
     assert "独立复核程序通过" in html
     assert "模型化人口与 Aqua 白天晴空地表温度" in html
     assert "结果不代表个人健康风险、2 米气温、室内温度或因果效应" in html

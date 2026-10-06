@@ -116,7 +116,7 @@ ASPECT 下载数据集的 Figshare 记录 DOI 为 `10.6084/m9.figshare.27323106.
 
 整体证据失败仍返回显式的 `ranking_mode=exploratory_geospatial_screening`、`ranking_status=unavailable` 和具体 `reason_code`。页面不会把证据包损坏、schema 失败或空间匹配失败重新解释为七个临床画像字段缺失。
 
-缓存命名空间为 `community_risk:v5`。缓存键同时绑定排名路径、方法版本、社区画像、规范社区集合、展示坐标和冻结 GeoJSON SHA-256。实时天气缺失的纯筛查与正式天气风险使用不同缓存路径；社区、坐标或证据包变化后会生成新键。
+缓存命名空间为 `community_risk:v7`。缓存键同时绑定排名路径、方法版本、社区画像、规范社区集合、展示坐标和冻结 GeoJSON SHA-256。实时天气缺失的纯筛查与正式天气风险使用不同缓存路径；社区、坐标或证据包变化后会生成新键。
 
 ## 9. 版本与未来升级门
 

@@ -313,3 +313,48 @@ def test_community_risk_api_keeps_503_when_formal_service_returns_none(
     assert response.status_code == 503
     assert response.get_json()['error'] == 'community_risk_unavailable'
     clear_local_community_risk_cache()
+
+
+def test_community_risk_cache_namespace_is_v7():
+    """输入指纹与无天气筛查上线后不得复用旧结果。"""
+    from services.community_risk_cache import _build_cache_key
+
+    cache_key = _build_cache_key({
+        'analysis_date': '2025-10-30',
+        'window_days': 30,
+        'disease_filter': '',
+        'city': '都昌',
+        'weather': {'temperature': 30.0},
+    })
+
+    assert cache_key.startswith('community_risk:v7:')
+
+
+def test_community_risk_cache_separates_ranking_path_and_input_signature():
+    """天气轨道、社区画像或证据包变化时必须生成不同缓存键。"""
+    from services.community_risk_cache import _build_cache_key
+
+    base = {
+        'analysis_date': '2025-10-30',
+        'window_days': 30,
+        'disease_filter': '',
+        'city': '都昌',
+        'weather': {},
+    }
+    auto_key = _build_cache_key({
+        **base,
+        'ranking_path': 'auto',
+        'input_signature': 'bundle-a-profiles-a',
+    })
+    screening_key = _build_cache_key({
+        **base,
+        'ranking_path': 'exploratory_only',
+        'input_signature': 'bundle-a-profiles-a',
+    })
+    changed_input_key = _build_cache_key({
+        **base,
+        'ranking_path': 'exploratory_only',
+        'input_signature': 'bundle-b-profiles-a',
+    })
+
+    assert len({auto_key, screening_key, changed_input_key}) == 3

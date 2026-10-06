@@ -127,7 +127,7 @@ function payload(options = {}) {
     };
     return {
         forecast_status: 'ok', forecast_source: '和风天气 7 天预报', forecast_notice: '', hot_night_tmin_c: 26,
-        days: [day], priority: [{date: day.date, villages: [village]}], villages: [village],
+        days: [day], priority: [], structural_priority: {villages: [village], basis: "historical_structure_only", weather_used: false}, villages: [village],
         cooling_resources: [{name: '测试避暑点', lon_wgs84: 116.2, lat_wgs84: 29.3}],
         action_cards: workbench.metadata.action_cards, ...options.payload
     };
@@ -136,7 +136,7 @@ function payload(options = {}) {
 function assertUnknown(h) {
     assert.equal(h.currentHazard(), null);
     assert.equal(h.ui.title.textContent, unknown);
-    assert.equal(h.ui.dailyChip.textContent, unknown);
+    assert.equal(h.ui.dailyChip.textContent, "仅县级展示");
     assert.match(h.ui.actionCard.textContent, /风险暂不可判定/);
     assert.doesNotMatch(h.ui.actionCard.textContent, /常规随访|0 级/);
     assert.doesNotMatch(h.ui.lede.textContent, /无高温|常规随访/);
@@ -176,7 +176,7 @@ test('空预报保留村点与避暑点，同时清理全部天气判断和打�
     assert.match(h.ui.forecastSource.textContent, /天气源全部不可用/);
     assert.equal(h.state.layers.villages.items.length, 1);
     assert.equal(h.state.layers.cooling.items.length, 1);
-    assert.match(h.state.layers.villages.items[0].tooltip(), /风险暂不可判定/);
+    assert.match(h.state.layers.villages.items[0].tooltip(), /历史结构 3 级/);
     assert.doesNotMatch(h.state.layers.villages.items[0].tooltip(), /当日 0 级/);
     assert.ok(h.ui.searchOptions.children.some((option) => option.value.startsWith('测试村 ·') && option.dataset.poiId === 'test:village'));
 });
@@ -210,12 +210,12 @@ test('真实 0 级保持无高温与常规随访，旧版有效 payload 仍兼�
     delete data.forecast_status;
     h.applyDaily(data);
     assert.equal(h.currentHazard(), 0);
-    assert.match(h.ui.dailyChip.textContent, /0 级/);
+    assert.equal(h.ui.dailyChip.textContent, "仅县级展示");
     assert.match(h.ui.actionCard.textContent, /常规随访/);
     assert.match(h.ui.lede.textContent, /无高温/);
-    assert.equal(h.ui.layerTabs[0].disabled, false);
+    assert.equal(h.ui.layerTabs[0].disabled, true);
     h.setLayer('daily');
-    assert.equal(h.state.layer, 'daily');
+    assert.equal(h.state.layer, 'score');
 });
 
 test('备用预报和演示数据在页面与打印中明确标记', async () => {
@@ -226,7 +226,7 @@ test('备用预报和演示数据在页面与打印中明确标记', async () =>
     assert.match(h.ui.printSheet.textContent, /Open-Meteo.*主预报暂不可用/);
     h.applyDaily(payload({payload: {forecast_status: 'demo', forecast_notice: '此处为演示预报'}}));
     assert.match(h.ui.forecastSource.textContent, /演示数据，仅供演示/);
-    for (const node of [h.ui.title, h.ui.lede, h.ui.dailyChip, h.ui.days, h.ui.actionCard]) assert.match(node.textContent, /演示/);
+    for (const node of [h.ui.title, h.ui.lede, h.ui.days, h.ui.actionCard]) assert.match(node.textContent, /演示/);
     h.printSheet();
     assert.match(h.ui.printSheet.textContent, /演示数据，仅供演示/);
 });
@@ -269,10 +269,10 @@ test('null 日期项和错误来源状态按不可判定处理', async () => {
     assertUnknown(h);
 });
 
-test('正常 0–4 级组合矩阵保持不变', async () => {
+test('任意县级天气与结构级别都不生成村级实时等级', async () => {
     const h = await page();
     const expected = [[0, 0, 0, 0, 0], [1, 1, 1, 2, 2], [1, 1, 2, 3, 3], [2, 2, 3, 4, 4], [3, 3, 4, 4, 4]];
-    expected.forEach((row, hazard) => row.forEach((level, staticLevel) => assert.equal(h.combineDailyLevel(hazard, staticLevel), level)));
+    expected.forEach((row, hazard) => row.forEach((level, staticLevel) => assert.equal(h.combineDailyLevel(hazard, staticLevel), null)));
 });
 
 
@@ -285,8 +285,8 @@ function poiPayload() {
         coordinate_precision: 'approximate', settlement_level: 'unknown', verification_status: 'unverified',
         source_updated_at: '2021-06-01', potential_duplicate: false};
     data.villages = [village, {...village, id: 'test:second', township: towns[1], lon_wgs84: 116.25}];
-    data.priority[0].villages = [{...village, daily_level: 0, reasons: []}];
-    data.priority[0].village_ids = ['test:village', 'test:second'];
+    data.structural_priority.villages = [{...village, structural_level: 3, reasons: []}];
+    data.structural_priority.village_ids = ['test:village', 'test:second'];
     data.medical_pois = [{...village, id: 'medical:one', name: '真实来源医疗机构', source_url: 'https://www.openstreetmap.org/node/123'}];
     data.cooling_candidates = [{...village, id: 'candidate:one', name: '候选场所', cooling_status: 'candidate', open_hours: '08:00–18:00', has_ac: null, is_accessible: null}];
     data.cooling_resources = [];
@@ -357,7 +357,7 @@ test('村点无网格数据时不伪造0级，实际机构无网格时清除旧�
     h.applyDaily(data);
     h.selectPoi('test:second', {pan: false});
     assert.match(h.ui.poiDetails.textContent, /网格数据缺失，仅供县级天气参考/);
-    assert.equal(h.ui.dailyChip.textContent, unknown);
+    assert.equal(h.ui.dailyChip.textContent, "仅县级展示");
     assert.equal(h.ui.score.textContent, '—');
     h.selectPoi('medical:one', {pan: false});
     assert.equal(h.ui.score.textContent, '—');
@@ -520,7 +520,7 @@ test('疑似同名或明确不具备条件的点保留地图，但不能通过�
     h.applyDaily(data);
     assert.equal(h.state.poiById.has('test:village'), true);
     assert.equal(h.priorityForDay().length, 0);
-    delete data.priority[0].village_ids;
+    delete data.structural_priority.village_ids;
     h.applyDaily(data);
     assert.equal(h.priorityForDay().length, 0);
     h.selectPoi('test:village', {pan: false});
@@ -688,4 +688,26 @@ test('地点核验说明仍通过文字节点输出，不能注入HTML', async (
     h.selectPoi('candidate:one', {pan: false});
     assert.ok(h.ui.poiDetails.textContent.includes(malicious));
     assert.equal(descendantNodes(h.ui.poiDetails).some((node) => node.tagName === 'img'), false);
+});
+
+
+test('切换县级天气不改变网格着色、村点等级或历史结构核实顺序', async () => {
+    const h = await page();
+    addMarkerLayer(h);
+    const data = poiPayload();
+    data.days = [data.days[0], {...data.days[0], date: '2026-09-28', level: 4, temperature_max: 40}];
+    h.applyDaily(data);
+    const cell = h.state.cells[h.state.selected];
+    const fill = JSON.stringify(h.fillFor(cell, 'score'));
+    const ranking = JSON.stringify(h.priorityForDay());
+    const marker = h.state.layers.villages.items[0].tooltip();
+    h.setDay(1);
+    assert.equal(JSON.stringify(h.fillFor(cell, 'score')), fill);
+    assert.equal(JSON.stringify(h.priorityForDay()), ranking);
+    assert.equal(h.state.layers.villages.items[0].tooltip(), marker);
+    assert.match(h.ui.actionCard.textContent, /县级行动卡/);
+    assert.doesNotMatch(h.ui.priorityList.textContent, /当日/);
+    assert.equal(h.ui.dailyChip.textContent, '仅县级展示');
+    h.setLayer('daily');
+    assert.equal(h.state.layer, 'score');
 });
