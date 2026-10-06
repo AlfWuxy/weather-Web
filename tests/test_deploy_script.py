@@ -3502,3 +3502,27 @@ DEPLOY_REQUIRE_WECHAT_READY=0
     assert result.returncode == 64
     assert 'Git 工作树保持干净' in result.stderr
     assert not remote_log.exists()
+
+
+@pytest.mark.parametrize('interface', ['', 'en0'])
+def test_deploy_origin_interface_is_only_local_probe_argument(interface):
+    content = _load_deploy_script()
+    assert 'DEPLOY_ORIGIN_PROBE_INTERFACE|' in content
+    start = content.index('verify_deployment_boundary() {')
+    end = content.index('\necho "步骤1:', start)
+    function = content[start:end]
+    prefix = '''set -eu
+SCRIPT_DIR=/fixture
+PUBLIC_DEPLOY_ORIGIN=https://site.example
+remote_exec_with_file_stdin() { printf 'remote:%s\\n' "$*" >&2; printf '{}'; }
+python3() { printf 'local:%s\\n' "$*"; cat >/dev/null; }
+'''
+    result = subprocess.run(['bash', '-c', prefix + function + '\nverify_deployment_boundary'],
+                            env={**os.environ, 'DEPLOY_ORIGIN_PROBE_INTERFACE': interface},
+                            text=True, capture_output=True)
+    assert result.returncode == 0, result.stderr
+    assert result.stderr == 'remote:/fixture/deployment_boundary.py python3 - origin\n'
+    expected = 'local:/fixture/deployment_boundary.py public --origin https://site.example --with-origin-evidence'
+    if interface:
+        expected += ' --origin-probe-interface en0'
+    assert result.stdout.strip() == expected

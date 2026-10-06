@@ -230,17 +230,68 @@ def origin_evidence():
     return {"schema": 1, "uid": uid, "pid": pid, "loopback_ports": [5000, 8080], "families": [4, 6], "addresses": sorted(addresses)}
 
 
-def verify_origin_ports(evidence):
+def origin_probe_interface_index(interface):
+    """仅允许显式选择 Darwin 上活动的 en 网卡，不修改路由或代理。"""
+    if sys.platform != 'darwin' or not re.fullmatch(r'en[0-9]+', interface):
+        raise BoundaryError("源站探测网卡仅支持 Darwin 上的 en 数字接口")
+    try:
+        index = socket.if_nametoindex(interface)
+        details = run(['/sbin/ifconfig', interface])
+    except (OSError, subprocess.SubprocessError) as error:
+        raise BoundaryError("无法核实源站探测网卡") from error
+    if index <= 0 or not re.search(r'^' + re.escape(interface) + r':', details, re.M):
+        raise BoundaryError("源站探测网卡不存在或证据不匹配")
+    if not re.search(r'^\s*status:\s*active\s*$', details, re.M):
+        raise BoundaryError("源站探测网卡未处于活动状态")
+    addresses = re.findall(r'^\s*inet\s+(\S+)', details, re.M)
+    try:
+        usable = [ipaddress.IPv4Address(value) for value in addresses]
+    except ValueError as error:
+        raise BoundaryError("源站探测网卡 IPv4 证据无效") from error
+    if not any(not value.is_loopback and not value.is_unspecified for value in usable):
+        raise BoundaryError("源站探测网卡缺少有效 IPv4 地址")
+    return index
+
+
+def verify_bound_origin_port(address, port, interface_index):
+    """IP_BOUND_IF 只约束当前 IPv4 socket；未知连接结果不能作为关闭证据。"""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+            # Darwin 的 IP_BOUND_IF 为 25；Python 不一定导出该常量。
+            # 官方定义：https://github.com/apple-oss-distributions/xnu/blob/main/bsd/netinet/in.h
+            probe.setsockopt(socket.IPPROTO_IP, 25, interface_index)
+            probe.settimeout(4)
+            try:
+                probe.connect((str(address), port))
+            except OSError as error:
+                if error.errno == errno.ECONNREFUSED:
+                    return
+                raise BoundaryError("指定网卡端口探测网络不可达或结果未知") from error
+            raise BoundaryError("源站应用端口可以从外部直接连接")
+    except OSError as error:
+        # 绑定失败不能与连接被拒绝混为一谈，即使 errno 相同也不得放行。
+        raise BoundaryError("无法创建或绑定指定网卡探测 socket") from error
+
+
+def verify_origin_ports(evidence, probe_interface=None):
     if (evidence.get("schema") != 1 or type(evidence.get("uid")) is not int or evidence["uid"] <= 0
             or type(evidence.get("pid")) is not int or evidence["pid"] <= 0
             or evidence.get("loopback_ports") != [5000, 8080] or evidence.get("families") != [4, 6]
             or not evidence.get("addresses")):
         raise BoundaryError("源站运行证据不完整")
+    interface_index = None
+    if probe_interface is not None:
+        interface_index = origin_probe_interface_index(probe_interface)
+        if any(ipaddress.ip_address(value).version != 4 for value in evidence['addresses']):
+            raise BoundaryError("指定网卡模式尚不支持 IPv6 源站，不能宣称已核验")
     for value in evidence["addresses"]:
         address = ipaddress.ip_address(value)
         if not address.is_global:
             raise BoundaryError("源站公网地址证据无效")
         for port in (5000, 8080):
+            if interface_index is not None:
+                verify_bound_origin_port(address, port, interface_index)
+                continue
             try:
                 with socket.create_connection((str(address), port), timeout=4):
                     raise BoundaryError("源站应用端口可以从外部直接连接")
@@ -261,6 +312,7 @@ def main():
     public = sub.add_parser("public")
     public.add_argument("--origin", required=True)
     public.add_argument("--with-origin-evidence", action="store_true")
+    public.add_argument("--origin-probe-interface", "--probe-interface", dest="probe_interface")
     sub.add_parser("origin")
     args = parser.parse_args()
     if args.mode == "ssh-options":
@@ -272,10 +324,12 @@ def main():
     elif args.mode == "origin":
         print(json.dumps(origin_evidence(), sort_keys=True))
     else:
+        if args.probe_interface is not None and not args.with_origin_evidence:
+            raise BoundaryError("指定探测网卡必须同时提供源站证据")
         verify_https(args.origin)
         verify_http_redirect(args.origin)
         if args.with_origin_evidence:
-            verify_origin_ports(json.load(sys.stdin))
+            verify_origin_ports(json.load(sys.stdin), probe_interface=args.probe_interface)
         print("公网 HTTPS 与所请求的源站边界核验通过")
 
 

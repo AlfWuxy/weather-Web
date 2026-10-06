@@ -241,3 +241,142 @@ def test_http_requires_explicit_same_host_https_redirect(status, location, succe
         server.shutdown()
         server.server_close()
         thread.join()
+
+
+@pytest.fixture
+def bound_probe(monkeypatch):
+    spec = importlib.util.spec_from_file_location('bound_boundary', HELPER)
+    boundary = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(boundary)
+    monkeypatch.setattr(boundary.sys, 'platform', 'darwin')
+    monkeypatch.setattr(boundary.socket, 'if_nametoindex', lambda name: 4)
+    commands = []
+    def ifconfig(args):
+        commands.append(args)
+        return 'en0: flags=8863<UP,BROADCAST,RUNNING>\n\tinet 192.168.1.2 netmask 0xffffff00\n\tstatus: active\n'
+    monkeypatch.setattr(boundary, 'run', ifconfig)
+    events = []
+    class Probe:
+        def __enter__(self): return self
+        def __exit__(self, *args): events.append(('close',))
+        def setsockopt(self, *args): events.append(('bind', *args))
+        def settimeout(self, value): events.append(('timeout', value))
+        def connect(self, target):
+            events.append(('connect', target))
+            raise ConnectionRefusedError(boundary.errno.ECONNREFUSED, 'refused')
+    def socket_factory(*args):
+        events.append(('socket', *args))
+        return Probe()
+    monkeypatch.setattr(boundary.socket, 'socket', socket_factory)
+    evidence = {'schema': 1, 'uid': 1001, 'pid': 42, 'loopback_ports': [5000, 8080],
+                'families': [4, 6], 'addresses': ['93.184.216.34']}
+    return boundary, evidence, Probe, events, commands
+
+
+def test_bound_origin_refused_requires_binding_each_socket(bound_probe):
+    boundary, evidence, _, events, commands = bound_probe
+    boundary.verify_origin_ports(evidence, 'en0')
+    assert commands == [['/sbin/ifconfig', 'en0']]
+    assert events == [event for port in (5000, 8080) for event in (
+        ('socket', boundary.socket.AF_INET, boundary.socket.SOCK_STREAM),
+        ('bind', boundary.socket.IPPROTO_IP, 25, 4), ('timeout', 4),
+        ('connect', ('93.184.216.34', port)), ('close',))]
+
+
+@pytest.mark.parametrize('outcome', ['open', 'unreachable', 'timeout'])
+def test_bound_origin_open_or_unknown_connection_fails(bound_probe, monkeypatch, outcome):
+    boundary, evidence, probe, events, _ = bound_probe
+    def connect(self, target):
+        if outcome == 'unreachable':
+            raise OSError(boundary.errno.ENETUNREACH, 'unreachable')
+        if outcome == 'timeout':
+            raise TimeoutError('timeout')
+    monkeypatch.setattr(probe, 'connect', connect)
+    with pytest.raises(boundary.BoundaryError):
+        boundary.verify_origin_ports(evidence, 'en0')
+    assert events[-1] == ('close',)
+
+
+@pytest.mark.parametrize('stage', ['if_nametoindex', 'ifconfig', 'socket', 'setsockopt', 'settimeout'])
+@pytest.mark.parametrize('failure', [ConnectionRefusedError, TimeoutError])
+def test_bound_origin_setup_errors_never_count_as_closed(bound_probe, monkeypatch, stage, failure):
+    boundary, evidence, probe, events, _ = bound_probe
+    def fail(*args):
+        raise failure(boundary.errno.ECONNREFUSED, 'setup failed')
+    if stage == 'ifconfig':
+        monkeypatch.setattr(boundary, 'run', fail)
+    elif stage in ('if_nametoindex', 'socket'):
+        monkeypatch.setattr(boundary.socket, stage, fail)
+    else:
+        monkeypatch.setattr(probe, stage, fail)
+    with pytest.raises(boundary.BoundaryError):
+        boundary.verify_origin_ports(evidence, 'en0')
+    assert not any(event[0] == 'connect' for event in events)
+
+
+@pytest.mark.parametrize('interface', ['lo0', 'utun1024', 'eth0', 'en0;echo', '', 'en999'])
+def test_bound_origin_rejects_unapproved_or_unknown_interfaces(bound_probe, monkeypatch, interface):
+    boundary, evidence, _, events, _ = bound_probe
+    def lookup(name):
+        raise OSError('unknown interface')
+    monkeypatch.setattr(boundary.socket, 'if_nametoindex', lookup)
+    with pytest.raises(boundary.BoundaryError):
+        boundary.verify_origin_ports(evidence, interface)
+    assert events == []
+
+
+@pytest.mark.parametrize('details', [
+    'en0: flags=1\n inet 192.168.1.2\n status: inactive\n',
+    'en1: flags=1\n inet 192.168.1.2\n status: active\n',
+    'en0: flags=1\n inet 127.0.0.1\n status: active\n',
+    'en0: flags=1\n inet 0.0.0.0\n status: active\n',
+    'en0: flags=1\n inet6 fe80::1\n status: active\n',
+    'en0: flags=1\n inet invalid\n status: active\n',
+])
+def test_bound_origin_requires_active_interface_ipv4(bound_probe, monkeypatch, details):
+    boundary, evidence, _, events, _ = bound_probe
+    monkeypatch.setattr(boundary, 'run', lambda args: details)
+    with pytest.raises(boundary.BoundaryError):
+        boundary.verify_origin_ports(evidence, 'en0')
+    assert events == []
+
+
+def test_bound_origin_rejects_other_platform_and_ipv6(bound_probe, monkeypatch):
+    boundary, evidence, _, events, _ = bound_probe
+    monkeypatch.setattr(boundary.sys, 'platform', 'linux')
+    with pytest.raises(boundary.BoundaryError):
+        boundary.verify_origin_ports(evidence, 'en0')
+    monkeypatch.setattr(boundary.sys, 'platform', 'darwin')
+    evidence['addresses'].append('2606:4700:4700::1111')
+    with pytest.raises(boundary.BoundaryError, match='IPv6'):
+        boundary.verify_origin_ports(evidence, 'en0')
+    assert events == []
+
+
+@pytest.mark.parametrize('failure', [ConnectionRefusedError, TimeoutError])
+def test_default_origin_probe_keeps_existing_connection_path(bound_probe, monkeypatch, failure):
+    boundary, evidence, _, events, commands = bound_probe
+    calls = []
+    def refused(target, timeout):
+        calls.append((target, timeout))
+        raise failure('existing behavior')
+    monkeypatch.setattr(boundary.socket, 'create_connection', refused)
+    boundary.verify_origin_ports(evidence)
+    assert calls == [(('93.184.216.34', port), 4) for port in (5000, 8080)]
+    assert events == commands == []
+
+
+@pytest.mark.parametrize('option', ['--origin-probe-interface', '--probe-interface'])
+def test_public_cli_passes_probe_interface_only_to_local_port_probe(bound_probe, monkeypatch, option):
+    import io
+    boundary, evidence, _, _, _ = bound_probe
+    calls = []
+    monkeypatch.setattr(boundary, 'verify_https', lambda origin: calls.append(('https', origin)))
+    monkeypatch.setattr(boundary, 'verify_http_redirect', lambda origin: calls.append(('http', origin)))
+    monkeypatch.setattr(boundary, 'verify_origin_ports', lambda data, **kw: calls.append(('ports', data, kw)))
+    monkeypatch.setattr(boundary.sys, 'stdin', io.StringIO(json.dumps(evidence)))
+    monkeypatch.setattr(boundary.sys, 'argv', ['boundary', 'public', '--origin', 'https://site.example',
+                                            '--with-origin-evidence', option, 'en0'])
+    boundary.main()
+    assert calls == [('https', 'https://site.example'), ('http', 'https://site.example'),
+                     ('ports', evidence, {'probe_interface': 'en0'})]

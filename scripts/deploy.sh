@@ -64,7 +64,7 @@ load_deploy_env() {
     while IFS='=' read -r key value; do
         case "$key" in
             ''|\#*) continue ;;
-            DEPLOY_SERVER|DEPLOY_USER|DEPLOY_PASSWORD|DEPLOY_PROJECT_DIR|DEPLOY_LOCAL_DIR|DEPLOY_RELEASE_ROOT|DEPLOY_RELEASE_ID|DEPLOY_MODE|DEPLOY_REQUIRE_WECHAT_READY|DEPLOY_RECOVERY_ACKNOWLEDGED_TRANSACTION|WECHAT_RELEASE_FORM_FILE|ML_MODEL_ARTIFACT_DIR|SSHPASS)
+            DEPLOY_SERVER|DEPLOY_USER|DEPLOY_PASSWORD|DEPLOY_PROJECT_DIR|DEPLOY_LOCAL_DIR|DEPLOY_RELEASE_ROOT|DEPLOY_RELEASE_ID|DEPLOY_MODE|DEPLOY_REQUIRE_WECHAT_READY|DEPLOY_RECOVERY_ACKNOWLEDGED_TRANSACTION|DEPLOY_ORIGIN_PROBE_INTERFACE|WECHAT_RELEASE_FORM_FILE|ML_MODEL_ARTIFACT_DIR|SSHPASS)
                 normalize_env_value "$value"
                 value="$NORMALIZED_ENV_VALUE"
                 if [ "$key" = "DEPLOY_MODE" ] \
@@ -2757,10 +2757,15 @@ chmod 0600 \"\$TARGET\""
 
 verify_deployment_boundary() {
     local evidence
+    local probe_args=(--origin "$PUBLIC_DEPLOY_ORIGIN" --with-origin-evidence)
+    # 只传给本机 TCP 检查，不进入远端环境或 SSH 源站证据命令。
+    if [ -n "${DEPLOY_ORIGIN_PROBE_INTERFACE:-}" ]; then
+        probe_args+=(--origin-probe-interface "$DEPLOY_ORIGIN_PROBE_INTERFACE")
+    fi
     # 流式运行本轮本机校验器，不写服务器文件、不读取配置秘密或 TLS 私钥。
     evidence="$(remote_exec_with_file_stdin "$SCRIPT_DIR/deployment_boundary.py" "python3 - origin")" || return 1
     printf '%s' "$evidence" | python3 "$SCRIPT_DIR/deployment_boundary.py" public \
-        --origin "$PUBLIC_DEPLOY_ORIGIN" --with-origin-evidence
+        "${probe_args[@]}"
 }
 
 echo "步骤1: 测试服务器连接..."
