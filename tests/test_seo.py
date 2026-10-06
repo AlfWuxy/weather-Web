@@ -152,7 +152,7 @@ def test_home_has_search_metadata_canonical_and_valid_json_ld(client):
         'href="/duchang-heat-vulnerability-map"'
         in body
     )
-    assert "查看热暴露与老年人口地图" in body
+    assert "查看结构脆弱性地图（2020 年底数）" in body
 
 
 def test_public_pages_link_back_to_heat_vulnerability_map(client):

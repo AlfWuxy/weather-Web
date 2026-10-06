@@ -628,6 +628,7 @@ def user_dashboard(force_elder=False):
             heat_result=heat_result,
             heat_risk_label=heat_risk_label,
             heat_actions=heat_actions,
+            alerts=[_dashboard_alert_card(alert, now=alert_now) for alert in alerts],
             is_guest=is_guest
         )
 

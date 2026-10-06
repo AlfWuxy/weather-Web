@@ -1,0 +1,13 @@
+{# 高温卡之外的三类信息，官方预警始终先于热评分。 #}
+<section class="card mb-3" data-hazard-card="official">
+    <div class="card-body"><h2 class="h4">官方预警</h2>
+    {% set official = alerts|default([])|selectattr('is_official')|list %}
+    {% for alert in official %}
+        <div class="alert alert-warning mb-2"><strong>{{ alert.alert_type }} · {{ alert.alert_level }}</strong><p>{{ alert.description }}</p><small>{{ alert.source_label }} · {{ alert.validity_label }}</small></div>
+    {% else %}<p class="mb-0">暂无已获取且有效的官方预警，不代表当前没有预警。请同时留意当地气象部门通知。</p>{% endfor %}
+    </div>
+</section>
+<div class="row g-3 mb-3">
+    <div class="col-md-6">{% include 'partials/rainfall_card.html' %}</div>
+    <section class="col-md-6" data-hazard-card="cold"><div class="card h-100"><div class="card-body"><h2 class="h4">寒冷 · 研究中</h2><p>尚未提供经验证的寒冷健康评分，请查看官方寒潮预警并及时保暖。</p></div></div></section>
+</div>

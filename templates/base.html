@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <meta name="csrf-token" content="{{ csrf_token() }}">
-    <script>
+    <script{% if agriculture_nonce is defined %} nonce="{{ agriculture_nonce }}"{% endif %}>
         (function() {
             const root = document.documentElement;
             const tightViewport = window.matchMedia('(max-width: 680px)');
@@ -81,12 +81,12 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='css/yilao-data-fx-extra.css') }}">
     {% endif %}
 
-    <noscript><style>[data-motion] .yl-fade-up,[data-motion] .yl-section,[data-motion] .narrative-step,[data-motion] [data-animate-in]{opacity:1 !important;transform:none !important;}</style></noscript>
+    <noscript><style{% if agriculture_nonce is defined %} nonce="{{ agriculture_nonce }}"{% endif %}>[data-motion] .yl-fade-up,[data-motion] .yl-section,[data-motion] .narrative-step,[data-motion] [data-animate-in]{opacity:1 !important;transform:none !important;}</style></noscript>
     {% block extra_css %}{% endblock %}
     <link rel="stylesheet" href="{{ url_for('static', filename='css/apple-polish.css', v='5927afd3418d') }}">
 </head>
 <body class="{% block body_class %}{% endblock %}" data-viewport-tier="wide" data-motion="m1 m2 m4 m5">
-    <script>window.__syncViewportTier();</script>
+    <script{% if agriculture_nonce is defined %} nonce="{{ agriculture_nonce }}"{% endif %}>window.__syncViewportTier();</script>
     {% set nav_endpoint = request.endpoint or '' %}
     {% if current_user.is_authenticated and current_user.role == 'community' %}
         {% set nav_today_url = url_for('user.community_risk') %}
@@ -151,6 +151,12 @@
                        href="{{ nav_care_url }}" data-nav-key="care"
                        {% if nav_care_active %}aria-current="page"{% endif %}>{{ nav_care_label }}</a>
 
+                    {% if config.get('YILAO_AGRICULTURE_WORKBENCH_ENABLED') and current_user.role != 'guest' %}
+                        <a class="nav-link {% if nav_endpoint.startswith('yilao_community_workbench.') %}active{% endif %}"
+                           href="{{ url_for('yilao_community_workbench.page') }}" data-nav-key="agriculture"
+                           {% if nav_endpoint.startswith('yilao_community_workbench.') %}aria-current="page"{% endif %}>宜老农业</a>
+                    {% endif %}
+
                     <a class="nav-link {% if request.endpoint == 'tools.forecast_7day' %}active{% endif %}"
                        href="{{ url_for('tools.forecast_7day') }}" data-nav-key="forecast"
                        {% if request.endpoint == 'tools.forecast_7day' %}aria-current="page"{% endif %}>7 天预报</a>
@@ -204,7 +210,7 @@
                                         <a class="app-mega-link" href="{{ url_for('guest_experience.page', view='medications') }}">用药提醒预览</a>
                                     {% endif %}
                                     {% if current_user.role == 'admin' %}
-                                        <a class="app-mega-link" href="{{ url_for('tools.ml_prediction') }}">健康关注线索</a>
+                                        <span class="nav-link text-muted">机器学习分类 · 已停用（待时间外验证）</span>
                                         <a class="app-mega-link" href="{{ url_for('tools.chronic_risk') }}">慢病风险评估</a>
                                         <a class="app-mega-link" href="{{ url_for('analysis.annual_report') }}">年度健康报告</a>
                                         {% if config.get('FEATURE_WEB_AI') and config.get('SILICONFLOW_API_KEY') %}
@@ -319,6 +325,9 @@
             {# ----- 天气 ----- #}
             <div class="mb-2" style="font-size:.72rem; color:var(--yl-muted); text-transform:uppercase; letter-spacing:.05em; padding:0 4px;">天气</div>
             <nav class="nav flex-column mb-3" aria-label="天气">
+                {% if config.get('YILAO_AGRICULTURE_WORKBENCH_ENABLED') and current_user.is_authenticated and current_user.role != 'guest' %}
+                    <a class="nav-link {% if nav_endpoint.startswith('yilao_community_workbench.') %}active{% endif %}" href="{{ url_for('yilao_community_workbench.page') }}" data-nav-key="agriculture" {% if nav_endpoint.startswith('yilao_community_workbench.') %}aria-current="page"{% endif %}><i class="bi bi-flower1 me-2"></i>宜老农业</a>
+                {% endif %}
                 <a class="nav-link {% if nav_endpoint == 'public.public_risk' %}active{% endif %}" href="{{ url_for('public.public_risk') }}" {% if nav_endpoint == 'public.public_risk' %}aria-current="page"{% endif %}><i class="bi bi-thermometer-sun me-2"></i>风险说明</a>
                 <a class="nav-link {% if nav_endpoint == 'public.cooling_resources' %}active{% endif %}" href="{{ url_for('public.cooling_resources') }}" {% if nav_endpoint == 'public.cooling_resources' %}aria-current="page"{% endif %}><i class="bi bi-geo-alt me-2"></i>避暑资源</a>
                 <a class="nav-link {% if nav_endpoint == nav_community_risk_endpoint %}active{% endif %}" href="{{ nav_community_risk_url }}" data-nav-key="community-risk" {% if nav_endpoint == nav_community_risk_endpoint %}aria-current="page"{% endif %}><i class="bi bi-map me-2"></i>社区风险</a>
@@ -343,7 +352,7 @@
                     <a class="nav-link" href="{{ url_for('guest_experience.page', view='medications') }}" data-nav-key="medication"><i class="bi bi-capsule me-2"></i>用药提醒预览</a>
                 {% endif %}
                 {% if current_user.role == 'admin' %}
-                    <a class="nav-link {% if nav_endpoint == 'tools.ml_prediction' %}active{% endif %}" href="{{ url_for('tools.ml_prediction') }}" data-nav-key="ml-prediction" {% if nav_endpoint == 'tools.ml_prediction' %}aria-current="page"{% endif %}><i class="bi bi-cpu me-2"></i>健康关注线索</a>
+                    <span class="nav-link text-muted">机器学习分类 · 已停用（待时间外验证）</span>
                     <a class="nav-link {% if nav_endpoint == 'tools.chronic_risk' %}active{% endif %}" href="{{ url_for('tools.chronic_risk') }}" data-nav-key="chronic-risk" {% if nav_endpoint == 'tools.chronic_risk' %}aria-current="page"{% endif %}><i class="bi bi-heart-pulse me-2"></i>慢病风险评估</a>
                     <a class="nav-link {% if nav_endpoint == 'analysis.annual_report' %}active{% endif %}" href="{{ url_for('analysis.annual_report') }}" data-nav-key="annual-report" {% if nav_endpoint == 'analysis.annual_report' %}aria-current="page"{% endif %}><i class="bi bi-journal-text me-2"></i>年度健康报告</a>
                     {% if config.get('FEATURE_WEB_AI') and config.get('SILICONFLOW_API_KEY') %}
@@ -487,13 +496,13 @@
 
     <script src="{{ url_for('static', filename='vendor/bootstrap/bootstrap.bundle.min.js') }}"></script>
     {% if request.endpoint != 'public.index' %}
-    <script id="metricExplanationCatalog" type="application/json">{{ metric_explanations|tojson }}</script>
+    <script{% if agriculture_nonce is defined %} nonce="{{ agriculture_nonce }}"{% endif %} id="metricExplanationCatalog" type="application/json">{{ metric_explanations|tojson }}</script>
     {% endif %}
     {% if needs_chartjs %}
         <script src="{{ url_for('static', filename='vendor/chartjs/chart.umd.min.js') }}"></script>
     {% endif %}
 
-    <script>
+    <script{% if agriculture_nonce is defined %} nonce="{{ agriculture_nonce }}"{% endif %}>
         document.addEventListener('DOMContentLoaded', function() {
             document.querySelectorAll('form').forEach(form => {
                 form.addEventListener('submit', function() {
@@ -509,7 +518,7 @@
         });
     </script>
 
-    <script>
+    <script{% if agriculture_nonce is defined %} nonce="{{ agriculture_nonce }}"{% endif %}>
         (function() {
             const elderMode = localStorage.getItem('elderMode') === '1';
             if (elderMode) document.body.classList.add('elder-mode');
@@ -534,7 +543,7 @@
         })();
     </script>
 
-    <script>
+    <script{% if agriculture_nonce is defined %} nonce="{{ agriculture_nonce }}"{% endif %}>
         (function() {
             const menuRoot = document.getElementById('appMoreMenu');
             if (!menuRoot) return;
@@ -649,7 +658,7 @@
         })();
     </script>
 
-    <script>
+    <script{% if agriculture_nonce is defined %} nonce="{{ agriculture_nonce }}"{% endif %}>
         (function() {
             const meta = document.querySelector('meta[name="csrf-token"]');
             if (!meta) return;
@@ -702,7 +711,7 @@
         <div class="ms-meta">流程卡片分步叙事动画</div>
         <div class="ms-row" data-combo="m1 m2 m3 m4 m5"><i class="bi bi-asterisk"></i><span>全部叠加</span></div>
     </div>
-    <script>
+    <script{% if agriculture_nonce is defined %} nonce="{{ agriculture_nonce }}"{% endif %}>
         (function() {
             const trigger = document.getElementById('motionTrigger');
             const switcher = document.getElementById('motionSwitcher');

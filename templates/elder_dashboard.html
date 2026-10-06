@@ -20,25 +20,26 @@
 } %}
 
 <div class="yl-elder-shell">
-    <section class="yl-elder-hero yl-fade-up" aria-label="今日健康小结">
+    {% include 'partials/dashboard_hazards.html' %}
+    <section class="yl-elder-hero yl-fade-up" aria-label="今日高温健康小结" data-hazard-card="heat">
         <div class="yl-elder-status">
-            <span>今天{% if weather_available %} · {{ heat_risk_label or '风险待计算' }}{% endif %}</span>
+            <span>今天高温健康{% if weather_available %} · {{ heat_risk_label or '风险待计算' }}{% endif %}</span>
             <h1>
                 {% if risk_level in ['high', 'extreme'] %}
                     先别急着出门
                 {% elif risk_level == 'medium' %}
                     出门前先准备好
-                {% elif not weather_available %}
+                {% elif not weather_available or not heat_result %}
                     天气更新中
                 {% else %}
-                    可以按平常来
+                    高温风险较低，仍要留意其他天气
                 {% endif %}
             </h1>
             <p>
                 {% if weather_available %}
                     {{ weather.weather_condition if weather.weather_condition else '天气未知' }},
                     当前 {{ weather.temperature|round(0) if weather.temperature is not none else '--' }}°C,
-                    {{ heat_risk_label or '风险待计算' }}。
+                    高温健康{{ heat_risk_label or '风险待计算' }}。
                 {% else %}
                     先补水、通风并避免暴晒，不舒服时及时联系家人。
                 {% endif %}
@@ -46,7 +47,7 @@
         </div>
 
         <div class="yl-elder-risk-card">
-            <span>今日风险等级</span>
+            <span>今日高温健康风险</span>
             <strong class="yl-elder-risk-label">
                 {% if weather_available %}{{ heat_risk_label or '暂无评估' }}{% else %}天气更新中{% endif %}
             </strong>

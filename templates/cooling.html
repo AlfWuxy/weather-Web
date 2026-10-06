@@ -89,7 +89,7 @@
         <div class="cooling-map-toolbar">
             <div>
                 <h2 class="cooling-map-title">地图查看避暑资源</h2>
-                <p class="cooling-map-copy mb-0">地图只接收已核验的公开资源点。只有你点击按钮后，浏览器才会申请一次位置权限；精确位置仅在本页内存计算距离，不上传至本项目服务器或保存，也不会用于地图打点。</p>
+                <p class="cooling-map-copy mb-0">地图只接收服务核验未超过 30 天且坐标核验仍有效的公开资源点。只有你点击按钮后，浏览器才会申请一次位置权限；精确位置仅在本页内存计算距离，不上传至本项目服务器或保存，也不会用于地图打点。</p>
             </div>
             <button type="button"
                     class="btn btn-outline-primary cooling-locate-button"
@@ -137,6 +137,7 @@
                         <h5 class="mb-0" style="font-size:1.05rem;">{{ r.name }}</h5>
                         <span class="badge {% if r.has_ac %}bg-success-subtle{% else %}bg-secondary-subtle{% endif %}">{{ '有空调' if r.has_ac else '未标注空调' }}</span>
                     </div>
+                    <div class="small text-success mb-2">{{ r.status_label }} · {{ r.last_verified_label }}</div>
                     <div class="text-muted" style="font-size:.85rem;">{{ r.resource_type or '避暑资源' }} · {{ community }}</div>
 
                     <div class="mt-3" style="font-size:.88rem; color:var(--yl-ink-soft);">
@@ -184,6 +185,18 @@
         {% endif %}
     </div>
 
+    {% if pending_cards %}
+    <section class="yl-section mt-4" data-resource-status="pending" aria-labelledby="pendingCoolingTitle">
+        <h2 class="h4" id="pendingCoolingTitle">待核实线索</h2>
+        <p>以下资源未完成有效核验或已有关闭反馈，不在地图推荐为可用去处。请先联系确认。</p>
+        <div class="row g-3">{% for card in pending_cards %}<div class="col-md-6"><article class="card h-100"><div class="card-body">
+            <h3 class="h5">{{ card.name }}</h3><p>{{ card.status_label }}</p>
+            <p class="mb-1">{{ card.address_hint or '地址待确认' }} · {{ card.open_hours or '开放时间待确认' }}</p>
+            {% if card.last_verified_label %}<p class="small text-muted">{{ card.last_verified_label }}</p>{% endif %}
+        </div></article></div>{% endfor %}</div>
+    </section>
+    {% endif %}
+
     {% if cooling_candidates %}
     <section class="yl-section mt-4 yl-fade-up"
              aria-labelledby="coolingCandidateTitle"
@@ -192,7 +205,7 @@
         <div class="d-flex flex-column flex-lg-row justify-content-between gap-3 mb-3">
             <div>
                 <span class="section-kicker">预览资料</span>
-                <h2 class="h4 mb-1" id="coolingCandidateTitle">场所地点与纳凉资料</h2>
+                <h2 class="h4 mb-1" id="coolingCandidateTitle">待核实线索 · 场所地点与纳凉资料</h2>
                 <p class="text-muted mb-0">这些信息来自官方公开资料与公开 POI，地点核验、开放时间与纳凉设施分别标注。</p>
             </div>
             <a class="btn btn-outline-primary align-self-start" href="{{ url_for('user.heat_exposure_gis') }}">{{ '在县域地图查看这些地点' if current_user.is_authenticated else '登录后在县域地图查看' }}</a>

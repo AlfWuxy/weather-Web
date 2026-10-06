@@ -190,7 +190,7 @@ def test_elder_page_prioritizes_risk_and_confirms_calls(
 
     body = response.get_data(as_text=True)
     assert response.status_code == 200
-    assert '今日风险等级' in body
+    assert '今日高温健康风险' in body
     assert re.search(r'\d+(?:\.0)?\s*分\s*</span>', body)
     assert 'type="button"' in body
     assert 'data-bs-target="#contactCallConfirm"' in body
