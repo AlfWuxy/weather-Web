@@ -1180,10 +1180,9 @@ if ':5001/' in url:
         if failure == 'ml':
             print('{"success":true,"status":{"model_loaded":false}}')
         else:
-            print('{"success":true,"status":{"model_loaded":true,'
-                  '"runtime_sklearn_version":"1.7.2",'
-                  '"expected_sklearn_version":"1.7.2",'
-                  '"sklearn_compatible":true}}')
+            print('{"success":true,"status":{"model_loaded":false,'
+                  '"availability":"research_only",'
+                  '"production_enabled":false,"accuracy":null}}')
     elif url.endswith('/mp/api/v1/bootstrap'):
         smoke_counter = os.environ.get('FAKE_FORMAL_SMOKE_COUNTER', '')
         smoke_completed = not smoke_counter or Path(smoke_counter).is_file()
@@ -3572,7 +3571,7 @@ def test_candidate_ml_contract_failure_rolls_back_before_link_switch(tmp_path):
     result = _run_activation(transaction)
 
     assert result.returncode != 0
-    assert 'ML 运行态版本或模型状态异常' in result.stderr
+    assert 'RF 未明确停用或仍宣称生产准确率' in result.stderr
     assert transaction['current_link'].resolve() == transaction['old_release'].resolve()
     assert _database_value(transaction['database_file']) == 'old'
     assert 'RELEASE_VALUE=old' in (
@@ -6776,3 +6775,55 @@ def test_completed_receipt_with_expired_snapshot_fails_closed_without_request(tm
     )
     assert len(rollback_markers) == 1
     assert rollback_markers[0].read_text(encoding='utf-8').strip() == 'pre-mutation'
+
+
+@pytest.mark.parametrize('model_loaded', [False, True])
+def test_candidate_rf_research_contract_accepts_archived_model_state(tmp_path, model_loaded):
+    result = _run_candidate_rf_contract(tmp_path, json.dumps({
+        'success': True, 'status': {
+            'availability': 'research_only', 'production_enabled': False,
+            'accuracy': None, 'model_loaded': model_loaded,
+        },
+    }))
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize('body', [
+    '{"success":true,"status":{"model_loaded":true,"runtime_sklearn_version":"1.7.2","expected_sklearn_version":"1.7.2","sklearn_compatible":true}}',
+    '{"success":true,"status":{"availability":"production","production_enabled":false,"accuracy":null}}',
+    '{"success":true,"status":{"availability":"research_only","production_enabled":true,"accuracy":null}}',
+    '{"success":true,"status":{"availability":"research_only","production_enabled":0,"accuracy":null}}',
+    '{"success":true,"status":{"availability":"research_only","production_enabled":"false","accuracy":null}}',
+    '{"success":true,"status":{"availability":"research_only","production_enabled":false,"accuracy":65.3}}',
+    '{"success":true,"status":{"availability":"research_only","production_enabled":false}}',
+    '{"success":false,"status":{"availability":"research_only","production_enabled":false,"accuracy":null}}',
+    '{"success":true,"status":null}',
+    '[]',
+    'null',
+    'invalid-json',
+])
+def test_candidate_rf_research_contract_rejects_active_or_ambiguous_status(tmp_path, body):
+    result = _run_candidate_rf_contract(tmp_path, body)
+    assert result.returncode != 0
+    assert 'RF 未明确停用或仍宣称生产准确率' in result.stderr
+
+
+def _run_candidate_rf_contract(tmp_path, body):
+    # 执行真实候选门禁函数，隔离数据库切换与服务管理以覆盖接口边界。
+    source = ACTIVATE_SCRIPT.read_text(encoding='utf-8')
+    function = source.split('validate_candidate_ml_contract() {', 1)[1].split(
+        '\nvalidate_candidate_weather_contracts() {', 1)[0]
+    function = 'validate_candidate_ml_contract() {' + function
+    fake_curl = tmp_path / 'curl'
+    _write_executable(fake_curl, '#!/usr/bin/env python3\nimport os\nprint(os.environ["RF_STATUS_BODY"])\n')
+    venv_bin = tmp_path / 'venv' / 'bin'
+    venv_bin.mkdir(parents=True)
+    (venv_bin / 'python').symlink_to(sys.executable)
+    env = os.environ.copy()
+    env.update(CURL_BIN=str(fake_curl), VENV_DIR=str(venv_bin.parent),
+               CANDIDATE_BIND='127.0.0.1:5001', RF_STATUS_BODY=body)
+    return subprocess.run(
+        ['bash', '-c', 'fail() { echo "$*" >&2; return 1; }\n' + function +
+         '\nvalidate_candidate_ml_contract'],
+        capture_output=True, text=True, env=env, check=False,
+    )

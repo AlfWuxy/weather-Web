@@ -4338,6 +4338,7 @@ wait_for_health() {
     fail "应用健康检查失败: $url"
 }
 
+# RF 已退出生产；历史 pickle 制品仍由快照校验，本门禁验证公开停用契约。
 validate_candidate_ml_contract() {
     local base_url="http://$CANDIDATE_BIND"
     local ml_body
@@ -4356,16 +4357,17 @@ import sys
 payload = json.load(sys.stdin)
 status = payload.get("status") if isinstance(payload, dict) else None
 valid = (
-    payload.get("success") is True
+    isinstance(payload, dict)
+    and payload.get("success") is True
     and isinstance(status, dict)
-    and status.get("model_loaded") is True
-    and status.get("runtime_sklearn_version") == "1.7.2"
-    and status.get("expected_sklearn_version") == "1.7.2"
-    and status.get("sklearn_compatible") is True
+    and status.get("availability") == "research_only"
+    and status.get("production_enabled") is False
+    and "accuracy" in status
+    and status["accuracy"] is None
 )
 raise SystemExit(0 if valid else 1)
 '; then
-        fail "候选应用 ML 运行态版本或模型状态异常"
+        fail "候选应用 RF 未明确停用或仍宣称生产准确率"
         return 1
     fi
 }
