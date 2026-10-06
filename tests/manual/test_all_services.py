@@ -5,6 +5,7 @@
 import sys
 import traceback
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -52,9 +53,25 @@ def test_forecast_service():
         
         # 测试7天预测
         forecast_temps = [20, 22, 25, 23, 21, 19, 18]
-        forecasts, summary = fs.generate_7day_forecast(forecast_temps)
+        # 显式演练缺少真实门诊阈值，避免依赖本机私有研究文件。
+        with patch.object(fs, 'visit_threshold_p90', None):
+            forecasts, summary = fs.generate_7day_forecast(forecast_temps)
+        assert len(forecasts) == 7
+        assert summary['total_expected_visits'] is None
+        assert summary['average_daily_visits'] is None
+        assert summary['unknown_health_days'] == 7
+        assert summary['visit_projection_status'] == 'unknown'
+        assert summary['high_risk_days'] is None
+        assert summary['model_warning_status'] == 'disabled_uncalibrated'
+        assert summary['probability_products']['available'] is False
+        for row in forecasts:
+            assert row['visits']['status'] == 'unknown'
+            assert 'historical_visit_threshold' in row['visits']['missing_inputs']
+            assert row['visits']['point_estimate'] is None
+            assert row['probability_high_visits'] is None
+            assert row['risk_level'] is None
         print(f'   ✅ 7天预测成功: 高风险天数={summary["high_risk_days"]}')
-        print(f'   预计总门诊: {summary["total_expected_visits"]:.0f}人次')
+        print('   预计总门诊: 未知（缺少真实门诊阈值，不生成伪零）')
         
         return
     except Exception as e:
@@ -107,11 +124,24 @@ def test_chronic_service():
             {'temperature': 35, 'aqi': 100}
         )
         print(f'   ✅ 个体风险预测: 等级={result["overall_risk"]["level"]}')
-        print(f'   RR={result["overall_risk"]["rr"]:.2f}')
+        assert result['overall_risk']['rr'] is None
+        assert result['overall_risk']['score'] is None
+        assert result['overall_risk']['level'] == '风险未知'
+        assert result['data_quality']['missing_fields'] == ['humidity']
+        assert result['input_states']['humidity']['status'] == 'unknown'
+        assert result['requires_followup'] is True
+        assert result['followup_priority'] == 'medium'
+        print('   RR=未知（湿度缺失，进入回访）')
         print(f'   建议数: {len(result["recommendations"])}')
         
         # 测试人群风险预测
         pop_result = cr.predict_population_risk({}, {'temperature': 35})
+        assert pop_result['status'] == 'unknown'
+        assert set(pop_result['data_quality']['missing_fields']) == {'aqi', 'humidity'}
+        assert pop_result['overall_summary']['highest_risk_group'] is None
+        assert pop_result['overall_summary']['high_risk_count'] is None
+        assert pop_result['overall_summary']['highest_rr'] is None
+        assert pop_result['requires_followup'] is True
         print(f'   ✅ 人群风险预测: 最高风险群体={pop_result["overall_summary"]["highest_risk_group"]}')
         
         return
