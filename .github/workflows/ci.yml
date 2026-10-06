@@ -182,7 +182,7 @@ jobs:
           node --check static/js/heat-exposure-gis.js
 
       - name: 运行 Web 地图真实行为测试
-        run: node --test tests/*.test.js tests/js/*.test.mjs
+        run: node --test tests/*.test.js tests/*.test.cjs tests/js/*.test.mjs
 
       - name: 验证小程序授权与分页兼容
         run: node --test miniprogram/tests/*.test.js
