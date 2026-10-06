@@ -3571,16 +3571,5 @@ def model_quality():
     if not _require_admin():
         return redirect(url_for('user.user_dashboard'))
 
-    from pathlib import Path
-
-    base_dir = Path(__file__).resolve().parents[1]
-    report_path = base_dir / 'tmp' / 'backtest_report.json'
-
-    report = None
-    if report_path.exists():
-        try:
-            report = json.loads(report_path.read_text(encoding='utf-8'))
-        except Exception:
-            report = None
-
-    return render_template('analysis_model_quality.html', report=report, report_path=str(report_path))
+    from services.model_validation_service import get_validation_scorecard
+    return render_template('analysis_model_quality.html', validation_scorecard=get_validation_scorecard())

@@ -1,0 +1,34 @@
+{% set exploration = validation_scorecard.exploratory %}
+<div class="card border-warning mb-4" id="retrospective-exploratory">
+  <div class="card-body">
+    <h3 class="h4">回顾性探索成绩单</h3>
+    <div class="alert alert-warning" role="note"><strong>{{ exploration.headline }}</strong><p class="mb-0">这不是网站生产 DLNM 的验证，也不代表真实前瞻预测能力。数据只有一个夏季，逐日覆盖、重复记录与零值含义尚未裁决。</p></div>
+    <p>口径：{{ exploration.outcome_label }}。测试期：{{ exploration.test_period.start }} 至 {{ exploration.test_period.end }}；两种方法比较同一组 {{ exploration.n }} 个目标日。</p>
+    <p class="small">固定候选使用星期和过去计数；不使用目标日实测天气或历史预报。每日起点重新训练，假设此前记录已在日终可用；这一可用时间尚无证据。先保留 {{ exploration.design.min_train_rows }} 个特征完整训练样本，再积累 {{ exploration.design.interval_calibration_origins }} 个历史滚动残差起点用于区间校准。</p>
+    <p class="small text-muted d-md-none mb-1">左右滑动表格，查看完整指标。</p>
+    <div class="table-responsive" tabindex="0" role="region" aria-label="回顾性主要结果，可横向滚动"><table class="table table-sm" style="min-width: 760px;">
+      <caption>主要结果：固定旧快照全部可评分目标日；误差单位为记录数/日。区间是经验预测区间。</caption>
+      <thead><tr><th style="min-width: 190px;">方法</th><th>n</th><th>MAE</th><th>RMSE</th><th>80% 覆盖率</th><th>95% 覆盖率</th></tr></thead>
+      <tbody>{% for name, item in [(exploration.candidate_name, exploration.metrics), (exploration.baseline.name, exploration.baseline)] %}
+      <tr><th>{{ name }}</th><td>{{ item.n }}</td><td>{{ item.mae }}</td><td>{{ item.rmse }}</td>{% for level in [80,95] %}<td>{{ (item['coverage_' ~ level]*100)|round(1) }}%（n={{ item['coverage_' ~ level ~ '_n'] }}；平均宽度 {{ item['mean_interval_width_' ~ level] }}）</td>{% endfor %}</tr>
+      {% endfor %}</tbody>
+    </table></div>
+    <p>相对季节朴素基线 MAE 改善：{% if exploration.mae_improvement_vs_baseline is not none %}{{ (exploration.mae_improvement_vs_baseline*100)|round(1) }}%{% else %}基线 MAE 为零，无法计算{% endif %}。负数表示候选更差；不据此更换生产模型。</p>
+    {% set sensitivity = exploration.sensitivity_exclude_no_record_targets %}
+    <h4 class="h6">同时报告的敏感性结果：排除全部年龄无记录的目标日</h4>
+    <p class="small">{{ sensitivity.description }} 从主要结果排除 {{ sensitivity.excluded_target_days }} 日，保留 {{ sensitivity.n }} 日；不按结果好坏选择展示。</p>
+    {% if sensitivity.n %}<div class="table-responsive" tabindex="0" role="region" aria-label="敏感性结果，可横向滚动"><table class="table table-sm" style="min-width: 600px;">
+      <thead><tr><th>方法</th><th>MAE</th><th>RMSE</th><th>80% 覆盖率</th><th>95% 覆盖率</th></tr></thead>
+      <tbody>{% for name, item in [('同一候选', sensitivity.metrics), ('同一季节朴素基线', sensitivity.baseline)] %}
+      <tr><th>{{ name }}</th><td>{{ item.mae }}</td><td>{{ item.rmse }}</td>{% for level in [80,95] %}<td>{{ (item['coverage_' ~ level]*100)|round(1) }}%（n={{ item['coverage_' ~ level ~ '_n'] }}）</td>{% endfor %}</tr>
+      {% endfor %}</tbody>
+    </table></div>{% else %}<p>该敏感性集合无可评分样本。</p>{% endif %}
+    <details><summary>数据来源、排除数量与限制</summary>
+      <p class="small mt-2">输入 {{ exploration.input_summary.start }} 至 {{ exploration.input_summary.end }}，{{ exploration.input_summary.n }} 日；60+零记录 {{ exploration.input_summary.zero_outcome_days }} 日，全部年龄无记录 {{ exploration.input_summary.no_record_days }} 日。未计分 {{ exploration.exclusions.total_not_scored }} 日（特征热身 {{ exploration.exclusions.feature_warmup_days }}、初始训练 {{ exploration.exclusions.initial_training_rows }}、区间校准 {{ exploration.exclusions.calibration_only_origins }}）。主要测试集仍含 {{ exploration.exclusions.scored_no_record_days }} 个全部年龄无记录目标日。</p>
+      <p class="small">候选版本 {{ exploration.model_version }}；生成于 {{ exploration.generated_at }}。逐日原始计数不在公开报告中输出。</p>
+      <p class="small text-break">输入 SHA-256：<code>{{ exploration.provenance.daily_sha256 }}</code></p>
+      <ul class="small">{% for limitation in exploration.limitations %}<li>{{ limitation }}</li>{% endfor %}</ul>
+    </details>
+    <a class="small" href="{{ url_for('static', filename='data/retrospective_exploratory.json') }}">查看去敏聚合 JSON</a>
+  </div>
+</div>
