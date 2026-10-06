@@ -812,8 +812,11 @@ prepare_release_source() {
     esac
     LOCAL_RELEASE_EXPORT_DIR="$LOCAL_DEPLOY_TEMP_DIR/release-source"
     mkdir -m 0700 "$LOCAL_RELEASE_EXPORT_DIR"
-    git -C "$LOCAL_DIR" archive --format=tar "$VERIFIED_COMMIT" \
-        | tar -xf - -C "$LOCAL_RELEASE_EXPORT_DIR"
+    # BSD tar 可能在尾部填充读取完之前退出，管道会让 git 收到 SIGPIPE。
+    # 先完整保存归档，分别检查导出和解包状态，任何失败均不得进入上传。
+    git -C "$LOCAL_DIR" archive --format=tar \
+        --output="$LOCAL_DEPLOY_TEMP_DIR/release-source.tar" "$VERIFIED_COMMIT"
+    tar -xf "$LOCAL_DEPLOY_TEMP_DIR/release-source.tar" -C "$LOCAL_RELEASE_EXPORT_DIR"
     RELEASE_SOURCE_DIR="$LOCAL_RELEASE_EXPORT_DIR"
 }
 

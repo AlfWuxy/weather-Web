@@ -1671,7 +1671,9 @@ def test_formal_deploy_uploads_verified_commit_snapshot_instead_of_live_tree():
         in content
     )
     assert 'IFS= read -r VERIFIED_COMMIT < "$VERIFIED_COMMIT_FILE"' in content
-    assert 'git -C "$LOCAL_DIR" archive --format=tar "$VERIFIED_COMMIT"' in content
+    assert 'git -C "$LOCAL_DIR" archive --format=tar' in content
+    assert '--output="$LOCAL_DEPLOY_TEMP_DIR/release-source.tar" "$VERIFIED_COMMIT"' in content
+    assert 'tar -xf "$LOCAL_DEPLOY_TEMP_DIR/release-source.tar" -C "$LOCAL_RELEASE_EXPORT_DIR"' in content
     assert 'RELEASE_SOURCE_DIR="$LOCAL_RELEASE_EXPORT_DIR"' in content
     assert '$NEW_RELEASE/private-metadata/source-commit.txt' in content
     assert (
