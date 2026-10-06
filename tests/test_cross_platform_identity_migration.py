@@ -8,13 +8,14 @@ from types import SimpleNamespace
 
 from alembic import command
 from alembic.config import Config
+from alembic.script import ScriptDirectory
 import pytest
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.schema import CreateIndex
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
-HEAD_REVISION = "0034_security_budgets"
+HEAD_REVISION = ScriptDirectory(str(ROOT_DIR / 'migrations')).get_current_head()
 PREVIOUS_REVISION = "0026_cooling_coordinate_verify"
 
 

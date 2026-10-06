@@ -108,7 +108,8 @@ def test_candidates_stay_visible_beside_verified_formal_resources(candidate_cata
 
     db_session.add(CoolingResource(community_code="都昌", name="正式核验资源", is_active=True,
                                   latitude=29.27, longitude=116.20, coordinate_system="GCJ-02",
-                                  coordinate_source="人工现场核验", coordinate_verified_at=utcnow()))
+                                  coordinate_source="人工现场核验", coordinate_verified_at=utcnow(),
+                                  last_verified_at=utcnow(), verify_method="onsite"))
     db_session.commit()
     html = client.get("/cooling").get_data(as_text=True)
     assert html.count('data-cooling-candidate="pending"') == 17

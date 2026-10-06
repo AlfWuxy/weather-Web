@@ -6,11 +6,13 @@ import sqlite3
 
 from alembic import command
 from alembic.config import Config
+from alembic.script import ScriptDirectory
 import pytest
 from sqlalchemy import inspect
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
+HEAD_REVISION = ScriptDirectory(str(ROOT_DIR / 'migrations')).get_current_head()
 INDEX_SPECS = {
     'health_diary': (
         'ix_health_diary_owner_member_date_id',
@@ -187,7 +189,7 @@ def test_private_health_index_migration_is_idempotent_and_used_by_queries(
         revision = connection.execute(
             'SELECT version_num FROM alembic_version'
         ).fetchone()[0]
-    assert revision == '0034_security_budgets'
+    assert revision == HEAD_REVISION
 
 
 def test_private_health_index_migration_rejects_missing_table_before_mutation(

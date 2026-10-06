@@ -12,6 +12,7 @@ from sqlalchemy import inspect
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
+HEAD_REVISION = ScriptDirectory(str(ROOT_DIR / 'migrations')).get_current_head()
 
 
 def _alembic_config(app):
@@ -166,7 +167,7 @@ def test_cooling_coordinate_verification_migration_is_idempotent_and_resets_hist
         'coordinate_verified_at',
     } <= set(columns)
     assert verification == (None, None, None)
-    assert revision == '0034_security_budgets'
+    assert revision == HEAD_REVISION
 
     with sqlite3.connect(database_path) as connection:
         connection.execute(
@@ -187,7 +188,7 @@ def test_cooling_coordinate_verification_migration_is_idempotent_and_resets_hist
         protected_columns = {
             row[1] for row in connection.execute('PRAGMA table_info(cooling_resources)')
         }
-    assert protected_revision == '0034_security_budgets'
+    assert protected_revision == HEAD_REVISION
     assert set(COLUMN for COLUMN in (
         'coordinate_system',
         'coordinate_source',
@@ -1025,7 +1026,7 @@ def test_head_downgrade_preflight_preserves_newer_columns_for_opted_out_pair(
     assert 'elder_actions' in daily_status_columns
     assert 'dedupe_key' in weather_alert_columns
     assert kept == [(owner_id, pair_id, None, 'head 降级前已关闭关联')]
-    assert revision == '0034_security_budgets'
+    assert revision == HEAD_REVISION
 
 
 def test_head_to_0017_round_trip_succeeds_for_representable_debrief(
@@ -1120,7 +1121,7 @@ def test_head_to_0017_round_trip_succeeds_for_representable_debrief(
         ).fetchone()[0]
 
     assert restored == [(owner_id, pair_id, pair_id, '可以由旧结构表达')]
-    assert restored_revision == '0034_security_budgets'
+    assert restored_revision == HEAD_REVISION
 
 
 def test_elder_actions_migration_keeps_caregiver_actions_separate(
@@ -1198,7 +1199,7 @@ def test_elder_actions_migration_keeps_caregiver_actions_separate(
 
     assert 'elder_actions' in guarded_columns
     assert guarded_values == ('["remind"]', '["drink_water"]')
-    assert guarded_revision == '0034_security_budgets'
+    assert guarded_revision == HEAD_REVISION
 
     command.downgrade(alembic_config, '0018_debrief_owner_scope')
     with sqlite3.connect(database_path) as connection:

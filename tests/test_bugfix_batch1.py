@@ -672,8 +672,12 @@ class TestSunshineInputNormalization:
         with pytest.raises(ValueError):
             _normalize_sunshine_seconds({'sunshine_hours': 30})
 
-    def test_ml_predict_api_rejects_ambiguous_legacy_sunshine_hours(self, app, client):
+    def test_ml_predict_api_rejects_ambiguous_legacy_sunshine_hours(self, app, client, monkeypatch):
         from core.extensions import db
+        # RF 停用先于任何天气字段解析，所有输入都不能恢复生产推理。
+        def forbidden(*_args, **_kwargs):
+            pytest.fail('停用的 RF API 不得加载模型')
+        monkeypatch.setattr('services.ml_prediction_service.get_ml_service', forbidden)
         with app.app_context():
             db.create_all()
             _make_user(db.session, 'sunapiuser', 'SunPass123!')
@@ -685,7 +689,10 @@ class TestSunshineInputNormalization:
                 content_type='application/json',
                 headers={'X-CSRF-Token': csrf}
             )
-            assert resp.status_code == 400
+            assert resp.status_code == 410
+            assert resp.json['success'] is False
+            assert resp.json['error'] == 'research_only'
+            assert '尚无时间外验证' in resp.json['message']
 
 
 # ====================================================================

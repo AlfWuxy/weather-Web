@@ -3251,7 +3251,9 @@ def test_sync_cycle_calls_each_qweather_endpoint_at_most_once_and_enriches_forec
     public_risk = client.get("/risk")
     public_risk_body = public_risk.get_data(as_text=True)
     assert public_risk.status_code == 200
-    assert "当前风险：" in public_risk_body
+    assert "高温健康：" in public_risk_body
+    assert 'data-hazard-card="heat"' in public_risk_body
+    assert "当前风险：" not in public_risk_body
     assert "天气更新中" not in public_risk_body
 
     calls["nowcast"].clear()

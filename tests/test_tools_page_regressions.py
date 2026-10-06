@@ -344,7 +344,9 @@ def test_forecast_api_default_uses_qweather_only_data(client, db_session, monkey
     assert captured['days'] == 7
     assert captured['forecast_temps'] == qweather_days
     assert captured['start_date'] == start
-    assert captured['context'] == {'aqi': 42, 'pm25': 18}
+    # 当前空气实况不能冒充未来七天的空气预报；逐日原始资料仍原样传入。
+    assert captured['context'] == {}
+    assert all('pm25' not in day for day in captured['forecast_temps'])
 
 
 def test_forecast_api_rejects_stale_qweather_forecast(client, db_session, monkeypatch):
@@ -515,7 +517,9 @@ def test_comprehensive_alert_uses_qweather_forecast_with_today_start(client, db_
     assert '官方天气预警' in payload['alert']['message']
     assert captured['forecast_temps'] == qweather_days
     assert captured['start_date'] == start
-    assert captured['context'] == {'aqi': 38, 'pm25': 14}
+    # 综合预警同样不能将当前 PM2.5 插补到未来每天。
+    assert captured['context'] == {}
+    assert all('pm25' not in day for day in captured['forecast_temps'])
 
 
 def test_authenticated_nav_uses_desktop_mega_menu(client, db_session):
@@ -537,113 +541,60 @@ def test_authenticated_nav_uses_desktop_mega_menu(client, db_session):
     assert '家庭成员' in body
 
 
-def test_ml_prediction_post_renders_result_and_preserves_form(client, db_session, monkeypatch):
-    user = _create_user(db_session, username='ml_user')
+@pytest.mark.parametrize('method', ['get', 'post'])
+def test_ml_prediction_page_is_research_only_without_loading_or_weather(client, db_session, monkeypatch, method):
+    user = _create_user(db_session, username='ml_retired_user')
     _login_as(client, user.id)
-    captured = {}
 
-    class FakeMLService:
-        def predict_disease_risk(self, user_info, weather_info=None):
-            captured['user_info'] = user_info
-            return {
-                'success': True,
-                'predictions': [
-                    {'disease': '高血压', 'probability': 0.812, 'original_probability': 0.70, 'weather_multiplier': 1.16},
-                    {'disease': '支气管炎', 'probability': 0.421, 'original_probability': 0.40, 'weather_multiplier': 1.0525},
-                ],
-                'risk_factors': [
-                    '高温天气增加心血管负担',
-                    '湿度偏高可能放大呼吸系统不适',
-                ],
-            }
+    def forbidden(*_args, **_kwargs):
+        pytest.fail('已退出生产的 RF 页面不得读取天气或加载模型')
 
-    monkeypatch.setattr(
-        'blueprints.tools.get_weather_with_cache',
-        lambda _location: (_trusted_qweather_current(31, 68), False),
-    )
-    monkeypatch.setattr('blueprints.tools.get_ml_service', lambda: FakeMLService())
-
-    response = client.post(
-        '/ml-prediction',
-        data={
-            'location': '都昌',
-            'age': '72',
-            'chronic': ['高血压', '糖尿病'],
-            'csrf_token': 'test-csrf-token',
-        },
-        follow_redirects=True,
-    )
-
+    monkeypatch.setattr('blueprints.tools.get_weather_with_cache', forbidden)
+    monkeypatch.setattr('blueprints.tools.get_ml_service', forbidden)
+    response = getattr(client, method)('/ml-prediction', data={
+        'location': '都昌', 'age': '72', 'chronic': ['高血压'],
+        'csrf_token': 'test-csrf-token',
+    })
     assert response.status_code == 200
     body = response.get_data(as_text=True)
-    assert '本次天气调整关注分' in body
-    assert '关注排序第 1' in body
-    assert '81.2/100' in body
-    assert 'data-metric-context=' in body
-    assert '70.0%' in body
-    assert '高血压' in body
-    assert 'Method Not Allowed' not in body
-    assert 'value="72"' in body
-    assert 'value="都昌"' in body
+    assert 'RF 已退出生产预测' in body
+    assert '尚无时间外测试' in body
+    assert '只有训练集表现' in body
+    assert '本次天气调整关注分' not in body
+    assert 'name="age"' not in body
     assert 'name="chronic"' not in body
-    assert '慢病档案不会参与这项类别排序' in body
-    assert captured['user_info'] == {'age': 72, 'gender': '男'}
+    assert '关注排序第 1' not in body
 
 
-def test_ml_prediction_selected_member_uses_age_and_gender_only(client, db_session, monkeypatch):
-    import json
+def test_ml_prediction_member_submission_does_not_read_private_profile(client, db_session, monkeypatch):
     from core.db_models import FamilyMember
-
-    user = _create_user(db_session, username='ml_member_user')
-    member = FamilyMember(
-        user_id=user.id,
-        name='母亲',
-        relation='母亲',
-        age=74,
-        gender='女',
-        chronic_diseases=json.dumps(['慢性阻塞性肺病', '脑卒中史', '关节炎'], ensure_ascii=False),
-    )
+    user = _create_user(db_session, username='ml_retired_member_user')
+    member = FamilyMember(user_id=user.id, name='母亲', age=74, gender='女',
+                          chronic_diseases='["不得展示的健康资料"]')
     db_session.add(member)
     db_session.commit()
     _login_as(client, user.id)
-    captured = {}
 
-    class FakeMLService:
-        def predict_disease_risk(self, user_info, weather_info=None):
-            captured['user_info'] = user_info
-            return {
-                'success': True,
-                'predictions': [{'disease': '支气管炎', 'probability': 0.52}],
-                'risk_factors': ['高温天气增加呼吸负担'],
-            }
+    def forbidden(*_args, **_kwargs):
+        pytest.fail('RF 停用后不得按提交的 member_id 读取健康档案或推理')
 
-    monkeypatch.setattr(
-        'blueprints.tools.get_weather_with_cache',
-        lambda _location: (_trusted_qweather_current(30, 66), False),
-    )
-    monkeypatch.setattr('blueprints.tools.get_ml_service', lambda: FakeMLService())
-
-    response = client.post(
-        '/ml-prediction',
-        data={
-            'member_id': str(member.id),
-            'location': '都昌',
-            'age': '',
-            'csrf_token': 'test-csrf-token',
-        },
-        follow_redirects=True,
-    )
-
+    monkeypatch.setattr('blueprints.tools._selected_member', forbidden)
+    monkeypatch.setattr('blueprints.tools._tool_family_members', forbidden)
+    monkeypatch.setattr('blueprints.tools.get_ml_service', forbidden)
+    response = client.post('/ml-prediction', data={
+        'member_id': str(member.id), 'age': '', 'csrf_token': 'test-csrf-token'})
     assert response.status_code == 200
-    body = response.get_data(as_text=True)
-    assert 'value="74"' in body
-    assert f'<option value="{member.id}" selected>' in body
-    assert 'name="chronic"' not in body
-    assert captured['user_info'] == {'age': 74, 'gender': '女'}
+    assert 'RF 已退出生产预测' in response.text
+    assert '不得展示的健康资料' not in response.text
+    assert 'name="member_id"' not in response.text
+    assert 'value="74"' not in response.text
 
 
 def test_chronic_risk_post_no_longer_returns_405(client, db_session, monkeypatch):
     user = _create_user(db_session, username='chronic_user')
+    from services.account_service import grant_health_consent
+    grant_health_consent(user, user)
+    db_session.commit()
     _login_as(client, user.id)
     captured = {}
 
@@ -725,6 +676,9 @@ def test_chronic_risk_post_no_longer_returns_405(client, db_session, monkeypatch
 
 def test_ml_and_chronic_pages_reject_mock_weather(client, db_session, monkeypatch):
     user = _create_user(db_session, username='tool_mock_weather_user')
+    from services.account_service import grant_health_consent
+    grant_health_consent(user, user)
+    db_session.commit()
     _login_as(client, user.id)
 
     monkeypatch.setattr(
@@ -752,7 +706,7 @@ def test_ml_and_chronic_pages_reject_mock_weather(client, db_session, monkeypatc
 
     assert ml_response.status_code == 200
     assert chronic_response.status_code == 200
-    assert '健康关注线索暂时无法生成' in ml_response.get_data(as_text=True)
+    assert 'RF 已退出生产预测' in ml_response.get_data(as_text=True)
     assert '天气正在更新，本次提醒暂未生成' in chronic_response.get_data(as_text=True)
     assert '模拟值不会进入' not in ml_response.get_data(as_text=True)
     assert '模拟值不会进入' not in chronic_response.get_data(as_text=True)
@@ -762,6 +716,9 @@ def test_ml_and_chronic_pages_reject_mock_weather(client, db_session, monkeypatc
 
 def test_chronic_risk_get_shows_empty_state_without_synthetic_result(client, db_session):
     user = _create_user(db_session, username='chronic_empty_user')
+    from services.account_service import grant_health_consent
+    grant_health_consent(user, user)
+    db_session.commit()
     _login_as(client, user.id)
 
     response = client.get('/chronic-risk')
@@ -863,6 +820,7 @@ def test_cooling_page_keeps_formal_resources_separate_from_candidates(client, db
     import re
 
     from core.db_models import CoolingResource
+    from core.time_utils import utcnow
 
     monkeypatch.setattr(
         'services.public_service.get_weather_with_cache',
@@ -879,6 +837,8 @@ def test_cooling_page_keeps_formal_resources_separate_from_candidates(client, db
         contact_hint='服务台登记',
         notes='仅展示真实录入信息',
         is_active=True,
+        last_verified_at=utcnow(),
+        verify_method="onsite",
     ))
     db_session.commit()
 
@@ -990,6 +950,8 @@ def test_cooling_map_only_serializes_current_verified_gcj02_points(
             coordinate_source='管理员现场使用微信地图人工核对',
             coordinate_verified_at=utcnow() - timedelta(days=1),
             is_active=True,
+            last_verified_at=utcnow(),
+            verify_method="onsite",
         ),
         CoolingResource(
             community_code='都昌',
@@ -1002,6 +964,8 @@ def test_cooling_map_only_serializes_current_verified_gcj02_points(
             coordinate_source='一年前的人工核验记录',
             coordinate_verified_at=utcnow() - timedelta(days=366),
             is_active=True,
+            last_verified_at=utcnow(),
+            verify_method="onsite",
         ),
         CoolingResource(
             community_code='都昌',
@@ -1012,6 +976,8 @@ def test_cooling_map_only_serializes_current_verified_gcj02_points(
             coordinate_system='GCJ-02',
             coordinate_verified_at=utcnow(),
             is_active=True,
+            last_verified_at=utcnow(),
+            verify_method="onsite",
         ),
     ])
     db_session.commit()
@@ -1103,7 +1069,7 @@ def test_cooling_page_explains_local_only_location_boundary(
     body = response.get_data(as_text=True)
 
     assert response.status_code == 200
-    assert '地图只接收已核验的公开资源点' in body
+    assert '地图只接收服务核验未超过 30 天且坐标核验仍有效的公开资源点' in body
     assert '精确位置仅在本页内存计算距离' in body
     assert '不上传至本项目服务器或保存' in body
     assert '也不会用于地图打点' in body

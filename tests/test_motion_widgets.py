@@ -50,6 +50,8 @@ def test_dashboard_renders_temperature_and_registered_metric_widgets(client, db_
     member = FamilyMember(user_id=user.id, name='父亲', relation='父亲', age=72)
     db_session.add(member)
     db_session.flush()
+    from services.account_service import grant_health_consent
+    grant_health_consent(member, user)
     db_session.add(FamilyMemberProfile(
         member_id=member.id,
         metrics=json.dumps({
@@ -487,8 +489,8 @@ def test_action_checkin_distinguishes_current_risk_from_daily_peak():
     """行动页不能把当前快照风险与当日已观察峰值混成同一字段。"""
     template = (PROJECT_ROOT / 'templates/action_checkin.html').read_text(encoding='utf-8')
 
-    assert '当前快照风险等级' in template
-    assert '今日已观察最高风险' in template
+    assert '当前高温健康风险等级' in template
+    assert '今日已观察最高高温风险' in template
     assert 'status.risk_level' in template
 
 
