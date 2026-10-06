@@ -154,6 +154,8 @@ def test_elder_page_prioritizes_risk_and_confirms_calls(
     member = FamilyMember(user_id=user.id, name='父亲', relation='父亲', age=76)
     db_session.add(member)
     db_session.flush()
+    from services.account_service import grant_health_consent
+    grant_health_consent(member, user)
     db_session.add(FamilyMemberProfile(
         member_id=member.id,
         contact_prefs=json.dumps({
