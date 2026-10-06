@@ -117,6 +117,7 @@ def withdraw_member(member, actor):
     FamilyMemberProfile.query.filter_by(member_id=member.id).delete(synchronize_session=False)
     HealthDiary.query.filter_by(member_id=member.id).delete(synchronize_session=False)
     MedicationReminder.query.filter_by(member_id=member.id).delete(synchronize_session=False)
+    HealthRiskAssessment.query.filter_by(member_id=member.id).delete(synchronize_session=False)
     audit(actor, 'member_health_consent_withdrawn', member)
 
 

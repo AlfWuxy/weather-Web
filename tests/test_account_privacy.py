@@ -125,3 +125,35 @@ def test_forgot_password_reports_no_mail_channel(client, db_session):
     response = client.get('/forgot-password')
     assert response.status_code == 200
     assert '不会发送重置邮件' in response.text
+
+
+def test_member_withdrawal_deletes_only_its_assessments_in_formal_web(app, client, db_session):
+    """正式双端模式撤回指定成员，不清除本人或其他成员的历史评估。"""
+    from core.db_models import FamilyMember, HealthRiskAssessment
+    from services.account_service import grant_health_consent, has_health_consent
+    owner, _, _ = users(db_session)
+    selected = FamilyMember(user_id=owner.id, name='待撤回成员')
+    other = FamilyMember(user_id=owner.id, name='其他成员')
+    db_session.add_all([selected, other])
+    db_session.flush()
+    for subject in (owner, selected, other):
+        grant_health_consent(subject, owner)
+    own_assessment = HealthRiskAssessment(user_id=owner.id, recommendations='本人评估')
+    selected_assessment = HealthRiskAssessment(user_id=owner.id, member_id=selected.id, recommendations='指定成员评估')
+    other_assessment = HealthRiskAssessment(user_id=owner.id, member_id=other.id, recommendations='其他成员评估')
+    db_session.add_all([own_assessment, selected_assessment, other_assessment])
+    db_session.commit()
+    selected_id = selected.id
+    kept_ids = {own_assessment.id, other_assessment.id}
+    app.config.update(WECHAT_FORMAL_RUNTIME=True, WEB_PRIVATE_FEATURES_ENABLED=True)
+    login(client, owner)
+    response = post(client, action='withdraw_member', member_id=selected_id)
+    assert response.status_code == 302
+    assert not has_health_consent(selected)
+    assert has_health_consent(owner) and has_health_consent(other)
+    assert HealthRiskAssessment.query.filter_by(member_id=selected_id).count() == 0
+    assert {row.id for row in HealthRiskAssessment.query.all()} == kept_ids
+    # 重新同意也不能恢复已撤回并删除的敏感评估。
+    grant_health_consent(selected, owner)
+    db_session.commit()
+    assert HealthRiskAssessment.query.filter_by(member_id=selected_id).count() == 0
