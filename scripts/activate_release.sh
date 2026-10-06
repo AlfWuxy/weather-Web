@@ -4374,7 +4374,7 @@ raise SystemExit(0 if valid else 1)
 
 validate_candidate_weather_contracts() {
     local base_url="http://$CANDIDATE_BIND"
-    local bootstrap_body risk_body
+    local bootstrap_body risk_body hazard
 
     bootstrap_body="$(
         "$CURL_BIN" --fail --silent --show-error --max-time 5 \
@@ -4438,10 +4438,20 @@ raise SystemExit(0 if valid else 1)
             return 1
             ;;
     esac
+    # 四灾种分别呈现；降雨未知、寒冷研究中和暂无官方预警均不冒充高温结果。
+    for hazard in heat rain cold official; do
+        case "$risk_body" in
+            *"data-hazard-card=\"$hazard\""*) ;;
+            *)
+                fail "候选应用公开风险页缺少灾种卡片: $hazard"
+                return 1
+                ;;
+        esac
+    done
     case "$risk_body" in
-        *当前风险：*) ;;
+        *高温健康：低风险*|*高温健康：中风险*|*高温健康：高风险*|*高温健康：极高*) ;;
         *)
-            fail "候选应用公开风险页缺少已生成的风险结果"
+            fail "候选应用公开风险页缺少已生成的高温健康结果"
             return 1
             ;;
     esac

@@ -1198,7 +1198,10 @@ if ':5001/' in url:
         if failure == 'risk':
             print('<h5>天气更新中</h5>' + padding)
         else:
-            print('<h5>当前风险：中风险</h5>' + padding)
+            print('<section data-hazard-card="heat"><h5>高温健康：中风险</h5></section>'
+                  '<section data-hazard-card="rain">降雨出行：未知</section>'
+                  '<section data-hazard-card="cold">寒冷 · 研究中</section>'
+                  '<section data-hazard-card="official">官方预警：暂无已获取预警</section>' + padding)
     else:
         print('{"status":"unavailable"}')
 else:
@@ -6827,3 +6830,74 @@ def _run_candidate_rf_contract(tmp_path, body):
          '\nvalidate_candidate_ml_contract'],
         capture_output=True, text=True, env=env, check=False,
     )
+
+
+def _run_candidate_weather_contract(tmp_path, body):
+    # 仅执行真实展示门禁，覆盖四卡语义而不运行迁移、上游请求或服务切换。
+    source = ACTIVATE_SCRIPT.read_text(encoding='utf-8')
+    function = 'validate_candidate_weather_contracts() {' + source.split(
+        'validate_candidate_weather_contracts() {', 1)[1].split('\nstop_candidate_release() {', 1)[0]
+    fake_curl = tmp_path / 'curl-weather-contract'
+    _write_executable(fake_curl, '''#!/usr/bin/env python3
+import json, os, sys
+if sys.argv[-1].endswith('/risk'):
+    print(os.environ['RISK_CONTRACT_BODY'])
+else:
+    print(json.dumps({'success': True, 'data': {
+        'available': True, 'stale': False, 'snapshot_id': 'snapshot-test',
+        'current': {'data_source': 'QWeather'},
+        'risk': {'score': 56, 'summary': '天气较热'},
+        'source_status': {'weather': {'provider': 'QWeather'}}}}))
+''')
+    venv_bin = tmp_path / 'venv' / 'bin'
+    venv_bin.mkdir(parents=True)
+    (venv_bin / 'python').symlink_to(sys.executable)
+    env = dict(os.environ, CURL_BIN=str(fake_curl), VENV_DIR=str(venv_bin.parent),
+               CANDIDATE_BIND='127.0.0.1:5001', RISK_CONTRACT_BODY=body)
+    return subprocess.run(['bash', '-c', 'set -euo pipefail\nfail() { echo "$*" >&2; return 1; }\n' +
+                           function + '\nvalidate_candidate_weather_contracts'],
+                          text=True, capture_output=True, env=env)
+
+
+def _four_hazard_contract_html(label='中风险'):
+    return (f'<section data-hazard-card="heat"><h5>高温健康：{label}</h5></section>'
+            '<section data-hazard-card="rain">降雨出行：未知</section>'
+            '<section data-hazard-card="cold">寒冷 · 研究中</section>'
+            '<section data-hazard-card="official">官方预警：暂无已获取预警</section>')
+
+
+@pytest.mark.parametrize('label', ['低风险', '中风险', '高风险', '极高'])
+def test_candidate_four_hazard_contract_accepts_generated_heat_and_unknown_other_hazards(tmp_path, label):
+    result = _run_candidate_weather_contract(tmp_path, _four_hazard_contract_html(label))
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize('hazard', ['heat', 'rain', 'cold', 'official'])
+def test_candidate_four_hazard_contract_rejects_missing_card(tmp_path, hazard):
+    body = re.sub(r'<section data-hazard-card="' + hazard + r'">.*?</section>',
+                  '', _four_hazard_contract_html())
+    result = _run_candidate_weather_contract(tmp_path, body)
+    assert result.returncode != 0
+    assert f'缺少灾种卡片: {hazard}' in result.stderr
+
+
+@pytest.mark.parametrize('label', ['', '待计算', '风险未知', '天气更新中', '风险待刷新'])
+def test_candidate_four_hazard_contract_rejects_missing_or_pending_heat_result(tmp_path, label):
+    result = _run_candidate_weather_contract(tmp_path, _four_hazard_contract_html(label))
+    assert result.returncode != 0
+    assert '候选应用公开风险页' in result.stderr
+
+
+def test_candidate_four_hazard_contract_rejects_old_global_risk_page(tmp_path):
+    result = _run_candidate_weather_contract(tmp_path, '<h5>当前风险：中风险</h5>')
+    assert result.returncode != 0
+
+
+def test_candidate_four_hazard_contract_markers_match_product_templates():
+    risk = (ROOT / 'templates/risk.html').read_text(encoding='utf-8')
+    rain = (ROOT / 'templates/partials/rainfall_card.html').read_text(encoding='utf-8')
+    for hazard in ('heat', 'cold', 'official'):
+        assert f'data-hazard-card="{hazard}"' in risk
+    assert "include 'partials/rainfall_card.html'" in risk
+    assert 'data-hazard-card="rain"' in rain
+    assert '高温健康：{{ risk_label }}' in risk
