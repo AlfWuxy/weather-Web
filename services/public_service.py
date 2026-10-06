@@ -1664,6 +1664,9 @@ def handle_register():
 
         try:
             db.session.add(user)
+            if request.form.get('health_consent') == 'on':
+                from services.account_service import grant_health_consent
+                grant_health_consent(user, user)
             db.session.commit()
         except IntegrityError:
             # 用户名与邮箱唯一索引负责处理并发注册竞争。

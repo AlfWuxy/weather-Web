@@ -62,6 +62,7 @@ class User(UserMixin, db.Model):
     username = db.Column(db.String(80), unique=True, nullable=False)
     password_hash = db.Column(db.String(200), nullable=False)
     email = db.Column(db.String(120), unique=True)
+    email_verified_at = db.Column(db.DateTime)
     # 账号来源由服务端写入，不能依赖用户可控的用户名判断系统占位账号。
     account_origin = db.Column(
         db.String(32),
@@ -127,6 +128,10 @@ class User(UserMixin, db.Model):
             postgresql_where=db.text('phone_verified_at IS NOT NULL'),
         ),
     )
+
+    @property
+    def is_active(self):
+        return self.deleted_at is None
 
     def set_password(self, password):
         self.password_hash = generate_password_hash(password)
@@ -323,6 +328,8 @@ class FamilyMember(db.Model):
     age = db.Column(db.Integer)
     gender = db.Column(db.String(10))
     chronic_diseases = db.Column(db.Text)  # JSON
+    health_sensitive_consent_version = db.Column(db.String(64))
+    health_sensitive_consented_at = db.Column(db.DateTime)
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
 
@@ -604,6 +611,15 @@ class CoolingResource(db.Model):
     __table_args__ = (
         db.Index('ix_cooling_resources_community', 'community_code'),
     )
+
+    last_verified_at = db.Column(db.DateTime)
+    verified_by_role = db.Column(db.String(16))
+    verify_method = db.Column(db.String(16))
+    open_during_alert = db.Column(db.String(16))
+    alert_open_note_code = db.Column(db.String(32))
+    amenities_json = db.Column(db.Text)
+    transport_need = db.Column(db.String(16))
+    verify_status = db.Column(db.String(16))
 
 
 class Debrief(db.Model):
@@ -896,3 +912,45 @@ class MiniProgramSession(db.Model):
         db.Index('ix_miniprogram_sessions_token_hash', 'token_hash'),
         db.Index('ix_miniprogram_sessions_expires_at', 'expires_at'),
     )
+
+
+class CoolingFeedback(db.Model):
+    """避暑资源反馈（append-only，只存封闭码，不存自由文本）。"""
+    __tablename__ = 'cooling_feedback'
+    id = db.Column(db.Integer, primary_key=True)
+    resource_id = db.Column(db.Integer, db.ForeignKey('cooling_resources.id'), nullable=False)
+    pair_id = db.Column(db.Integer, db.ForeignKey('pairs.id'))
+    code = db.Column(db.String(16), nullable=False)
+    channel = db.Column(db.String(24))
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+
+    __table_args__ = (
+        db.Index('ix_cooling_feedback_resource_id', 'resource_id'),
+        db.Index('ix_cooling_feedback_pair_id', 'pair_id'),
+        db.Index('ix_cooling_feedback_code', 'code'),
+        db.Index('ix_cooling_feedback_created_at', 'created_at'),
+    )
+
+
+class RecoveryDelegate(db.Model):
+    """本人通过密码确认授权的账号找回家属；家庭档案不自动成为授权。"""
+    __tablename__ = 'recovery_delegates'
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    delegate_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    verified_at = db.Column(db.DateTime, nullable=False)
+    revoked_at = db.Column(db.DateTime)
+    __table_args__ = (db.UniqueConstraint('user_id', 'delegate_id', name='uq_recovery_delegate'),)
+
+
+class AccountEmailToken(db.Model):
+    """邮箱确认/找回单次令牌，仅存摘要且绑定邮箱与改密版本。"""
+    __tablename__ = 'account_email_tokens'
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, index=True)
+    purpose = db.Column(db.String(16), nullable=False)
+    token_hash = db.Column(db.String(64), unique=True, nullable=False)
+    email_hash = db.Column(db.String(64), nullable=False)
+    password_stamp = db.Column(db.String(64), nullable=False)
+    expires_at = db.Column(db.DateTime, nullable=False)
+    used_at = db.Column(db.DateTime)

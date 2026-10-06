@@ -71,7 +71,8 @@
 
                 <div class="card auth-form-card">
                     <div class="card-body p-4">
-                        <form method="POST" action="{{ url_for('public.login') }}">
+                        <p><a href="{{ url_for('public.forgot_password') }}">忘记密码 / 家属帮助找回</a></p>
+<form method="POST" action="{{ url_for('public.login') }}">
                             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                             {% if next %}<input type="hidden" name="next" value="{{ next }}">{% endif %}
 

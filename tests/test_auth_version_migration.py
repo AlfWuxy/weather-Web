@@ -11,7 +11,8 @@ import pytest
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
-HEAD_REVISION = '0034_security_budgets'
+from alembic.script import ScriptDirectory
+HEAD_REVISION = ScriptDirectory(str(ROOT_DIR / 'migrations')).get_current_head()
 PREVIOUS_REVISION = '0022_private_health_indexes'
 
 
@@ -447,7 +448,8 @@ def test_wxpusher_relative_twelve_step_downgrade_runs_auth_guard(
     _dispose(app)
 
     with pytest.raises(RuntimeError, match='auth_version_count=1'):
-        command.downgrade(config, '-12')
+        distance = sum(1 for _ in ScriptDirectory.from_config(config).iterate_revisions(HEAD_REVISION, PREVIOUS_REVISION))
+        command.downgrade(config, f'-{distance}')
 
     revision, columns = _revision_and_columns(database_path)
     assert revision == HEAD_REVISION

@@ -22,6 +22,8 @@
             <div class="card shadow-sm">
                 <div class="card-body">
                     <form method="POST" action="{{ url_for('admin.admin_edit_user', user_id=user.id) }}">
+<label>管理员当前密码（重置密码时必填）<input class="form-control" type="password" name="current_password" autocomplete="current-password"></label>
+
                         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                         <div class="row">
                             <div class="col-md-6 mb-3">
