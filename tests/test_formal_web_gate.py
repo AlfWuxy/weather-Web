@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 """正式微信运行态的 Web 私密入口中央门禁回归测试。"""
 
+import pytest
+
 from sqlalchemy import event
 
 from core.hooks import (
@@ -342,3 +344,78 @@ def test_formal_workbench_daily_requires_login(app, client):
     response = client.get("/heat-exposure-gis/daily.json")
     assert response.status_code == 302
     assert "/login" in response.headers["Location"]
+
+
+@pytest.mark.parametrize('private_enabled', [False, True])
+@pytest.mark.parametrize('method', ['GET', 'HEAD'])
+def test_formal_anonymous_elder_read_only_page_is_public_without_guest_identity(
+    app, client, db_session, monkeypatch, private_enabled, method,
+):
+    """正式态两种私密开关均可匿名查看县级四卡，不能进入个人仪表盘。"""
+    from services import public_service, user_service
+    app.config.update(WECHAT_FORMAL_RUNTIME=True, WEB_PRIVATE_FEATURES_ENABLED=private_enabled)
+    monkeypatch.setattr(public_service, 'get_bootstrap_payload', lambda: {
+        'location': {'name': '都昌县'}, 'risk': {'available': False},
+    })
+    def forbidden_private_dashboard(*_args, **_kwargs):
+        pytest.fail('匿名大字页不得进入个人或游客仪表盘')
+    monkeypatch.setattr(user_service, 'elder_dashboard', forbidden_private_dashboard)
+    rendered = []
+    original = public_service.render_public_risk_page
+    def public_renderer(location, elder_mode=False):
+        assert elder_mode is True
+        body = original(location, elder_mode=elder_mode)
+        rendered.append(body)
+        return body
+    monkeypatch.setattr(public_service, 'render_public_risk_page', public_renderer)
+    response = client.open('/elder-mode', method=method, follow_redirects=False)
+    assert response.status_code == 200
+    assert len(rendered) == 1
+    body = rendered[0]
+    assert 'public-elder' in body and '大字版' in body
+    for hazard in ('official', 'heat', 'rain', 'cold'):
+        assert body.count(f'data-hazard-card="{hazard}"') == 1
+    assert '时段雨量预报：未知' in body
+    if method == 'HEAD':
+        assert response.data == b''
+    with client.session_transaction() as session_record:
+        assert '_user_id' not in session_record and 'guest_id' not in session_record
+
+
+@pytest.mark.parametrize('method', ['GET', 'HEAD'])
+def test_formal_authenticated_elder_keeps_disabled_private_gate(
+    app, authenticated_client, monkeypatch, method,
+):
+    from services import public_service, user_service
+    app.config.update(WECHAT_FORMAL_RUNTIME=True, WEB_PRIVATE_FEATURES_ENABLED=False)
+    def forbidden(*_args, **_kwargs):
+        pytest.fail('已登录大字页不得绕过关闭的私密开关')
+    monkeypatch.setattr(user_service, 'elder_dashboard', forbidden)
+    monkeypatch.setattr(public_service, 'render_public_risk_page', forbidden)
+    response = authenticated_client.open('/elder-mode', method=method, follow_redirects=False)
+    assert response.status_code == 303
+    assert response.headers['Location'].endswith('/action')
+    assert response.headers['Cache-Control'] == 'no-store, private, max-age=0'
+
+
+@pytest.mark.parametrize('private_enabled', [False, True])
+def test_elder_public_exception_does_not_open_other_user_routes(app, client, monkeypatch, private_enabled):
+    from services import user_service
+    app.config.update(WECHAT_FORMAL_RUNTIME=True, WEB_PRIVATE_FEATURES_ENABLED=private_enabled)
+    def forbidden(*_args, **_kwargs):
+        pytest.fail('匿名公开例外不得放开家庭仪表盘')
+    monkeypatch.setattr(user_service, 'user_dashboard', forbidden)
+    response = client.get('/dashboard', follow_redirects=False)
+    assert response.status_code == (302 if private_enabled else 303)
+    assert ('/login' if private_enabled else '/action') in response.headers['Location']
+
+
+@pytest.mark.parametrize('private_enabled', [False, True])
+def test_elder_public_exception_never_allows_future_write_method(app, client, private_enabled):
+    """即使未来误加同名端点写路由，GET/HEAD例外也不能覆盖写请求。"""
+    app.config.update(WECHAT_FORMAL_RUNTIME=True, WEB_PRIVATE_FEATURES_ENABLED=private_enabled)
+    app.add_url_rule('/elder-mode-test-write', endpoint='user.elder_dashboard',
+                     view_func=app.view_functions['user.elder_dashboard'], methods=['POST'])
+    response = client.post('/elder-mode-test-write', follow_redirects=False)
+    assert response.status_code == (302 if private_enabled else 303)
+    assert ('/login' if private_enabled else '/action') in response.headers['Location']
