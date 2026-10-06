@@ -311,6 +311,8 @@ class TestMemberIdOwnership:
             user = _make_user(db.session, 'userC', 'PassC123!')
             member = FamilyMember(user_id=user.id, name='老人C', relation='母亲')
             db.session.add(member)
+            from services.account_service import grant_health_consent
+            grant_health_consent(member, user)
             db.session.commit()
 
             csrf, _ = _login(client, 'userC', 'PassC123!')

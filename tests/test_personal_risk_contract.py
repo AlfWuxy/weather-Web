@@ -47,10 +47,9 @@ def test_chronic_risk_uses_exactly_one_personal_age_layer(monkeypatch):
 def test_missing_aqi_is_preserved_and_never_triggers_air_quality_rules(monkeypatch):
     from services.chronic_risk_service import ChronicRiskService
 
-    monkeypatch.setattr(
-        'services.dlnm_risk_service.get_dlnm_service',
-        lambda: RecordingDLNM(),
-    )
+    def forbidden_dlnm():
+        pytest.fail('必需 AQI 未知时不得继续 RR 计算')
+    monkeypatch.setattr('services.dlnm_risk_service.get_dlnm_service', forbidden_dlnm)
 
     result = ChronicRiskService().predict_individual_risk(
         {'age': 70, 'gender': '男', 'chronic_diseases': ['高血压']},
@@ -58,9 +57,16 @@ def test_missing_aqi_is_preserved_and_never_triggers_air_quality_rules(monkeypat
         target_diseases=['cardiovascular'],
     )
 
-    assert result['weather']['aqi'] is None
-    assert result['weather']['aqi_available'] is False
-    assert all(not item['rule_id'].startswith('aqi_') for item in result['triggered_rules'])
+    assert result['status'] == 'unknown'
+    assert result['risk_score'] is None
+    assert result['overall_risk']['rr'] is None
+    assert result['risk_level'] == '风险未知'
+    assert result['input_states']['aqi']['status'] == 'unknown'
+    assert result['input_states']['aqi']['used_value'] is None
+    assert result['requires_followup'] is True
+    assert result['followup_priority'] == 'medium'
+    assert result['disease_risks'] == {}
+    assert result.get('triggered_rules', []) == []
     assert isinstance(result['explain']['escalation'], list)
 
 

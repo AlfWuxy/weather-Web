@@ -2,7 +2,11 @@
 """未校准个人概率与 Likelihood 矩阵停用回归测试。"""
 
 
-def test_personal_probability_and_likelihood_matrix_are_disabled(monkeypatch):
+import pytest
+
+
+@pytest.mark.parametrize('missing_input', [None, 'aqi', 'screening', 'chronic_diseases'])
+def test_personal_probability_and_likelihood_matrix_are_disabled(monkeypatch, missing_input):
     from services.health_risk_service import HealthRiskService
 
     ages = []
@@ -43,19 +47,34 @@ def test_personal_probability_and_likelihood_matrix_are_disabled(monkeypatch):
         },
     )
 
-    result = service.assess_personal_weather_health_risk(
-        {
-            'age': 75,
-            'gender': '女',
-            'community': '测试社区',
-            'chronic_diseases': ['高血压'],
-        },
-        {'temperature': 32, 'humidity': 60, 'aqi': None},
-    )
+    profile = {
+        'age': 75, 'gender': '女', 'community': '测试社区',
+        'chronic_diseases': ['高血压'] if missing_input != 'chronic_diseases' else None,
+    }
+    weather = {'temperature': 32, 'humidity': 60, 'aqi': None if missing_input == 'aqi' else 50}
+    screening = {
+        'outdoor_exposure': 'low', 'symptom_level': 'none', 'hydration': 'good',
+        'medication_adherence': 'good', 'sleep_quality': 'good',
+    } if missing_input != 'screening' else None
+    result = service.assess_personal_weather_health_risk(profile, weather, screening=screening)
+
+    if missing_input:
+        assert ages == []
+        assert result['status'] == 'unknown'
+        assert result['risk_score'] is None
+        assert result['risk_level'] == '风险未知'
+        assert result['risk_probabilities'] is None
+        assert result['requires_followup'] is True
+        assert result['followup_priority'] == 'medium'
+        missing_field = 'symptom_level' if missing_input == 'screening' else missing_input
+        assert result['input_states'][missing_field]['status'] == 'unknown'
+        assert result['input_states'][missing_field]['used_value'] is None
+        return
 
     assert ages == [None]
-    assert result['weather']['aqi'] is None
-    assert result['weather']['aqi_available'] is False
+    assert result['status'] == 'complete'
+    assert result['weather']['aqi'] == 50
+    assert result['weather']['aqi_available'] is True
     assert result['probability_status'] == 'disabled_uncalibrated'
     assert result['risk_probabilities'] == {'low': None, 'medium': None, 'high': None}
     assert result['high_risk_probability'] is None

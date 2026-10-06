@@ -102,6 +102,7 @@ def test_forecast_page_uses_qweather_only_data(client, db_session, monkeypatch):
 
     class FakeForecastService:
         def generate_7day_forecast(self, forecast_temps, start_date=None, context=None):
+            captured['forecast_temps'] = forecast_temps
             captured['start_date'] = start_date
             captured['context'] = context
             forecasts = []
@@ -132,7 +133,10 @@ def test_forecast_page_uses_qweather_only_data(client, db_session, monkeypatch):
     assert captured['location'] == '都昌'
     assert captured['days'] == 7
     assert captured['start_date'] == start
-    assert captured['context'] == {'pm25': 18.0, 'aqi': 42.0}
+    # 页面与 API 保持同一口径：当前空气实况不能复制为未来七天空气资料。
+    assert captured['context'] == {}
+    assert captured['forecast_temps'] == qweather_days
+    assert all('pm25' not in day and 'aqi' not in day for day in captured['forecast_temps'])
     assert '26° / 18°' in body
     assert '来源：和风天气' in body
     assert '2026-04-26 19:43' in body

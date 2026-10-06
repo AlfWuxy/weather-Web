@@ -42,11 +42,14 @@ def chronic_service(monkeypatch):
 
 
 def _predict(service, weather_data):
-    return service.predict_individual_risk(
+    # 热夜边界只改变夜温；其余必需输入在夹具中明确给出。
+    result = service.predict_individual_risk(
         USER,
-        weather_data,
+        {'humidity': 60, 'aqi': 45, **weather_data},
         target_diseases=['cardiovascular'],
     )
+    assert result['status'] == 'complete'
+    return result
 
 
 def _rule_ids(result):
