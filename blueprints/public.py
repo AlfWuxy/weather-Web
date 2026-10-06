@@ -313,7 +313,7 @@ def llms_txt():
         ('主页', '/'),
         ('公开天气风险与行动建议', '/risk'),
         ('已核验避暑资源', '/cooling'),
-        ('都昌县热暴露与老年人口脆弱性聚合地图',
+        ('都昌县历史结构脆弱性地图',
          '/duchang-heat-vulnerability-map'),
         ('指标透明度', '/transparency'),
         ('信任网络说明', '/about/trust-network'),
@@ -336,7 +336,11 @@ def llms_txt():
         '- 不抓取登录后页面、管理后台、API、家庭与照护关系、'
         '社区私密工作区、手机号、微信身份、绑定码或用户精确位置。\n'
         '- 地表温度不是气温、体感温度或个人医疗风险评分；'
-        '候选地点必须完成人工核验后才会进入正式资源页。\n\n'
+        '候选地点必须完成人工核验后才会进入正式资源页。\n'
+        '- 网格展示历史结构脆弱性（人口与地表底数为 2020 年，地表温度为 2020–2024 年）；'
+        '实时天气风险仅在县级展示，不据此生成实时村庄或网格风险。\n'
+        '- 透明度页区分回顾性探索回测与前瞻验证；现有回顾性样本仅覆盖一个夏季，'
+        '不代表生产 DLNM 或个人健康预测已获验证。\n\n'
         'English note: The map contains de-identified, modeled ~1 km '
         'research grids within Duchang County, not county-level totals '
         'or household records. Private user and community data must not '
